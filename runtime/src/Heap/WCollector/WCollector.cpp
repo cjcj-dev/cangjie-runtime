@@ -96,6 +96,15 @@ struct CopierRouteMint {
 
 static_assert(sizeof(RefField<false>) == 8, "RefField colour layout must preserve the 64-bit ABI");
 
+static bool MinorYoungFlipOff()
+{
+    static const bool off = []() {
+        const char* value = std::getenv("MRT_GCV2_MINOR_YOUNG_FLIP");
+        return value != nullptr && std::strcmp(value, "0") == 0;
+    }();
+    return off;
+}
+
 // Frame-colour census after relocate-start flip. Compile-time off; no MRT_GCV2_ env.
 //
 // It answered its question and the answer is stable: across 550 flips the stack roots held
@@ -5490,10 +5499,7 @@ void WCollector::EvacuateYoungRegions(const std::vector<BaseObject*>& reachableV
     // Flip is the trap that makes mutator loads take the self-heal / relocate_object
     // path; without it, concurrent copy is the empty window concreffix measured.
     // MRT_GCV2_MINOR_YOUNG_FLIP=0 rolls back to the all-STW evacuate.
-    static const bool youngFlipOff = []() {
-        const char* v = std::getenv("MRT_GCV2_MINOR_YOUNG_FLIP");
-        return v != nullptr && std::strcmp(v, "0") == 0;
-    }();
+    const bool youngFlipOff = MinorYoungFlipOff();
     const bool concRelocate = stw != nullptr && *stw != nullptr && !youngFlipOff;
     // Concurrent copy is opt-in, not default. REPORT-zpublish measured it drifting the
     // survival_dense checksum 1 run in 5 (368685912892819 vs golden 368685940367600)
@@ -6877,16 +6883,16 @@ void WCollector::DoYoungGarbageCollection()
         while (!markEndDone) {
         stw = std::make_unique<ScopedStopTheWorld>("young post-mark", true,
                                                    GCPhase::GC_PHASE_CLEAR_SATB_BUFFER);
-        // youngmiss / youngconc M1: concurrent-window remset edges are NEW greys. Under FYS,
-        // RescanRememberedSet filters by reachableSlots — a slot written after its holder was
-        // scanned is often absent, so the edge was silently dropped (mark + evac fixup ledger).
+        // youngmiss / youngconc M1: the write barrier marks concurrent-window targets before it
+        // records their slots. Keep those slots on current, as ZGC does, instead of consuming the
+        // same edge into this collection's marking work a second time at mark end.
         //
         // ZGC shape (zGeneration.cpp:542-558 mark_end re-enter): under STW2 mutators are frozen,
-        // so remset is drained **once** then roots+SATB+field-rescan loop to a quiet fixpoint.
-        // Re-DrainForMinor each iter is wrong: under STW nothing mutator-side is added, and a
-        // non-empty active face from GC-side Record can force NON_CONVERGED forever (youngmiss2).
+        // so roots+SATB+field-rescan loop to a quiet fixpoint; there is no current-face drain.
+        // The all-STW relocation rollback is the exception because it has no later active-face
+        // Snapshot for same-cycle reference fixing.
         //
-        // (1) drain concurrent remset once, rescan with fullYoungScan=false + force-admit slots
+        // (1) flush current; defer it, or drain only for the all-STW rollback
         // (2) fixpoint: roots + retired SATB + reachableVec field rescan (young→young)
         // (3) quiet = no new greys this iter (work empty, no field extra, reachableVec stable)
         {
@@ -6899,32 +6905,45 @@ void WCollector::DoYoungGarbageCollection()
             // whole reachableVec on every fixpoint iteration.
             size_t fieldScanCursor = reachableVec.size();
             size_t totalConcRemset = 0;
+            size_t deferredCurrentRemset = 0;
             {
                 MinorSlotSet concurrentRemset;
-                StoreBarrierBuffer::FlushAll(Heap::GetHeap().GetRememberedSet());
-                totalConcRemset = Heap::GetHeap().GetRememberedSet().DrainForMinor(concurrentRemset);
-                // Observe-only: classify current-face targets against water/mark/SATB/alloc-black
-                // BEFORE MergeYoungAllocBlack / GetRetiredObjects consume those ledgers.
-                // Does not push workStack (zGeneration.cpp:897-916 pause_mark_end has no drain).
-                Stw2CurrentAudit::Census(concurrentRemset, &theAllocator);
-                if (totalConcRemset != 0) {
-                    rememberedSlots.insert(concurrentRemset.begin(), concurrentRemset.end());
-                    remsetStats.recorded = rememberedSlots.size();
-                    // Do NOT pass product fullYoungScan: that path drops slots missing from
-                    // reachableSlots. Concurrent edges are the authority for new greys.
-                    RescanRememberedSet(workStack, concurrentRemset, reachableSlots, weakSlots,
-                                        /*fullYoungScan=*/false, &consumedSlots, &remsetStats,
-                                        &remsetInteriorBases, stw.get());
-                    for (MAddress slot : concurrentRemset) {
-                        if (!Heap::IsHeapAddress(slot)) {
-                            continue;
+                RememberedSet& rememberedSet = Heap::GetHeap().GetRememberedSet();
+                StoreBarrierBuffer::FlushAll(rememberedSet);
+                if (MinorYoungFlipOff()) {
+                    // The all-STW rollback has no post-relocate active-face Snapshot(), so it
+                    // still needs current slots in this collection's consumedSlots/ref-fix set.
+                    totalConcRemset = rememberedSet.DrainForMinor(concurrentRemset);
+                    // Observe-only: classify current-face targets against water/mark/SATB/alloc-black
+                    // BEFORE MergeYoungAllocBlack / GetRetiredObjects consume those ledgers.
+                    // Does not push workStack (zGeneration.cpp:897-916 pause_mark_end has no drain).
+                    Stw2CurrentAudit::Census(concurrentRemset, &theAllocator);
+                    if (totalConcRemset != 0) {
+                        rememberedSlots.insert(concurrentRemset.begin(), concurrentRemset.end());
+                        remsetStats.recorded = rememberedSlots.size();
+                        // Do NOT pass product fullYoungScan: that path drops slots missing from
+                        // reachableSlots. Concurrent edges are the authority for new greys.
+                        RescanRememberedSet(workStack, concurrentRemset, reachableSlots, weakSlots,
+                                            /*fullYoungScan=*/false, &consumedSlots, &remsetStats,
+                                            &remsetInteriorBases, stw.get());
+                        for (MAddress slot : concurrentRemset) {
+                            if (!Heap::IsHeapAddress(slot)) {
+                                continue;
+                            }
+                            (void)LedgerInsert(reachableSlots, slot);
                         }
-                        (void)LedgerInsert(reachableSlots, slot);
+                        if (!workStack.empty()) {
+                            TraceYoungClosure(workStack, fullYoungScan, reachableObjects, reachableVec,
+                                              reachableSlots, weakSlots, useBitmapLedger);
+                        }
                     }
-                    if (!workStack.empty()) {
-                        TraceYoungClosure(workStack, fullYoungScan, reachableObjects, reachableVec, reachableSlots,
-                                          weakSlots, useBitmapLedger);
-                    }
+                } else {
+                    // ZGC keeps a young target on current for the next young collection
+                    // (zRemembered.cpp:561-576).  Barrier producers have already marked the
+                    // new target; this collection's relocation fixes active slots via the
+                    // STW3 Snapshot() below, and the next STW1 consumes them after
+                    // FlipForMinor/ScanPreviousForMinor (RememberedSet.cpp:162-228).
+                    deferredCurrentRemset = rememberedSet.Size();
                 }
             }
             // youngconc Ⅱ: TRACE-window allocate-black greys (painted at alloc). Claim skip in
@@ -7141,10 +7160,10 @@ void WCollector::DoYoungGarbageCollection()
                 (void)rootExtraN;
             }
             VLOG(REPORT,
-                 "[GCV2][youngconc] stw2_fixpoint iters=%zu conc_remset_total=%zu field_extra_total=%zu "
-                 "alloc_black=%zu reachable=%zu converged=%d",
-                 iters + 1, totalConcRemset, totalFieldExtra, allocBlackN, reachableVec.size(),
-                 static_cast<int>(converged));
+                 "[GCV2][youngconc] stw2_fixpoint iters=%zu conc_remset_total=%zu "
+                 "deferred_current=%zu field_extra_total=%zu alloc_black=%zu reachable=%zu converged=%d",
+                 iters + 1, totalConcRemset, deferredCurrentRemset, totalFieldExtra, allocBlackN,
+                 reachableVec.size(), static_cast<int>(converged));
             // ZGC mark_end(): true = terminated, fall through to relocate; false = go back to
             // concurrent mark. FORCE_REENTER makes the first n ends answer false, so the edge
             // has a positive control on a workload that converges in one pass every time --

@@ -18,6 +18,7 @@
 #include "Common/ColourPredicates.h"
 #include "Common/StateWord.h"
 #include "Heap/Allocator/RegionInfo.h"
+#include "Heap/Allocator/RegionSpace.h"
 #include "Heap/Collector/ManagedObjectGate.h"
 #include "Heap/Heap.h"
 #include "Mutator/Mutator.h"
