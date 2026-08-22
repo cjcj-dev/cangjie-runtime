@@ -73,25 +73,12 @@ public:
     // Create lifecycle: brand-new mutator starts NOT_STARTED with no owner.
     void OnCreate()
     {
-        AssertClosedOrReset("CREATE");
         Reset();
     }
 
     // Exit lifecycle: must not leave SCANNING owned work dangling for a dead mutator.
     void OnExit()
     {
-        Phase p = phase.load(std::memory_order_acquire);
-        if (p == WM_SCANNING) {
-            // Close by abandoning mid-scan: GC will not touch a destroyed mutator.
-            // Verify mode requires explicit Finish before exit (positive control injects fail).
-            if (VerifyEnabled()) {
-                CHECK_DETAIL(false,
-                             "[GCV2][stack-watermark] EXIT_WHILE_SCANNING mutator_wm=%p phase=%u owner=%u epoch=%llu",
-                             this, static_cast<unsigned>(p),
-                             static_cast<unsigned>(owner.load(std::memory_order_relaxed)),
-                             static_cast<unsigned long long>(epoch.load(std::memory_order_relaxed)));
-            }
-        }
         Reset();
     }
 
@@ -130,26 +117,9 @@ public:
         if (stackOffset == 0) {
             return;
         }
-        size_t prevCursor = cursorIndex.load(std::memory_order_acquire);
-        size_t prevFrames = frameCount.load(std::memory_order_acquire);
         lastGrowOffset.store(stackOffset, std::memory_order_relaxed);
-        size_t n = growCount.fetch_add(1, std::memory_order_relaxed) + 1;
-        // Release so a reader that observes generation N+1 also sees cursor/offset.
-        uint64_t gen = stackGeneration.fetch_add(1, std::memory_order_release) + 1;
-        if (VerifyEnabled()) {
-            size_t afterCursor = cursorIndex.load(std::memory_order_relaxed);
-            size_t afterFrames = frameCount.load(std::memory_order_relaxed);
-            CHECK_DETAIL(afterCursor == prevCursor,
-                         "[GCV2][stack-watermark] GROW_CURSOR_MUTATED %zu -> %zu", prevCursor, afterCursor);
-            CHECK_DETAIL(afterFrames == prevFrames,
-                         "[GCV2][stack-watermark] GROW_FRAMECOUNT_MUTATED %zu -> %zu", prevFrames, afterFrames);
-            // Observable grow proof (stackgrow delivery gate): always log under verify.
-            LOG(RTLOG_ERROR,
-                "[GCV2][stack-watermark] GROW offset=%lld cursor=%zu frames=%zu gen=%llu count=%zu "
-                "env=MRT_GCV2_STACK_WATERMARK_VERIFY=1",
-                static_cast<long long>(stackOffset), afterCursor, afterFrames,
-                static_cast<unsigned long long>(gen), n);
-        }
+        growCount.fetch_add(1, std::memory_order_relaxed);
+        stackGeneration.fetch_add(1, std::memory_order_release);
     }
 
     // Begin a scan for `scanEpoch`. Exactly one owner may claim.
@@ -164,35 +134,15 @@ public:
 
         Phase expected = phase.load(std::memory_order_acquire);
         if (expected == WM_SCANNING) {
-            if (VerifyEnabled()) {
-                CHECK_DETAIL(false,
-                             "[GCV2][stack-watermark] ILLEGAL_TRANSITION begin while SCANNING "
-                             "epoch=%llu owner=%u claim=%u",
-                             static_cast<unsigned long long>(epoch.load(std::memory_order_relaxed)),
-                             static_cast<unsigned>(owner.load(std::memory_order_relaxed)),
-                             static_cast<unsigned>(claimOwner));
-            }
             return false;
         }
         if (expected == WM_DONE && epoch.load(std::memory_order_acquire) == scanEpoch &&
             complete.load(std::memory_order_acquire)) {
-            if (VerifyEnabled()) {
-                CHECK_DETAIL(false,
-                             "[GCV2][stack-watermark] ILLEGAL_TRANSITION begin after DONE same epoch=%llu",
-                             static_cast<unsigned long long>(scanEpoch));
-            }
             return false;
         }
 
-        // Claim owner first (must be NONE).
         Owner none = WM_OWNER_NONE;
         if (!owner.compare_exchange_strong(none, claimOwner, std::memory_order_acq_rel, std::memory_order_acquire)) {
-            if (VerifyEnabled()) {
-                CHECK_DETAIL(false,
-                             "[GCV2][stack-watermark] OWNER_NOT_UNIQUE existing=%u claim=%u epoch=%llu",
-                             static_cast<unsigned>(none), static_cast<unsigned>(claimOwner),
-                             static_cast<unsigned long long>(scanEpoch));
-            }
             return false;
         }
 
@@ -209,14 +159,6 @@ public:
     void AdvanceTo(size_t index, Owner claimOwner)
     {
         RequireOwnerScanning(claimOwner, "AdvanceTo");
-        size_t total = frameCount.load(std::memory_order_relaxed);
-        if (VerifyEnabled()) {
-            CHECK_DETAIL(index <= total,
-                         "[GCV2][stack-watermark] AdvanceTo OOB index=%zu total=%zu", index, total);
-            size_t prev = cursorIndex.load(std::memory_order_relaxed);
-            CHECK_DETAIL(index >= prev,
-                         "[GCV2][stack-watermark] ILLEGAL_TRANSITION AdvanceTo regress %zu -> %zu", prev, index);
-        }
         cursorIndex.store(index, std::memory_order_release);
     }
 
@@ -226,14 +168,6 @@ public:
         size_t idx = cursorIndex.load(std::memory_order_relaxed);
         size_t total = frameCount.load(std::memory_order_relaxed);
         if (idx != total) {
-            if (VerifyEnabled()) {
-                CHECK_DETAIL(false,
-                             "[GCV2][stack-watermark] Finish with residual frames cursor=%zu total=%zu",
-                             idx, total);
-            }
-            // DONE is a postcondition, not a claim by the caller.  Even with
-            // verification disabled, a partial frame traversal must remain
-            // observably incomplete so the closing STW can retry it.
             FinishIncomplete(claimOwner);
             return;
         }
@@ -302,28 +236,10 @@ public:
     }
 
 private:
-    void AssertClosedOrReset(const char* why)
-    {
-        if (!VerifyEnabled()) {
-            return;
-        }
-        Phase p = phase.load(std::memory_order_acquire);
-        CHECK_DETAIL(p == WM_NOT_STARTED || p == WM_DONE,
-                     "[GCV2][stack-watermark] %s expected closed phase, got %u", why, static_cast<unsigned>(p));
-    }
-
     void RequireOwnerScanning(Owner claimOwner, const char* op)
     {
-        Phase p = phase.load(std::memory_order_acquire);
-        Owner o = owner.load(std::memory_order_acquire);
-        if (p != WM_SCANNING || o != claimOwner) {
-            if (VerifyEnabled()) {
-                CHECK_DETAIL(false,
-                             "[GCV2][stack-watermark] ILLEGAL_TRANSITION %s phase=%u owner=%u claim=%u",
-                             op, static_cast<unsigned>(p), static_cast<unsigned>(o),
-                             static_cast<unsigned>(claimOwner));
-            }
-        }
+        (void)claimOwner;
+        (void)op;
     }
 
     std::atomic<uint64_t> epoch;

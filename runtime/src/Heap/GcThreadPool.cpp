@@ -11,7 +11,6 @@
 #include <sys/resource.h>
 #endif
 #include <sched.h>
-#include <cstdlib>
 
 #include "Base/Log.h"
 #include "Base/Panic.h"
@@ -56,30 +55,7 @@ void GCPoolThread::SetThreadPriority(pid_t tid, int32_t priority)
 }
 #endif
 
-#if defined(CANGJIE_TSAN_SUPPORT)
-// Positive control: two GC workers race a plain store so TSan must report.
-// Enabled only when MRT_GCV2_TSAN_POSCTRL=1 (T2 of tsanworker lane).
-static volatile uint64_t g_tsanPosCtrlWord = 0;
-static std::atomic<int> g_tsanPosCtrlDone{0};
 
-static void TsanPosCtrlMaybeRace(size_t workerId)
-{
-    const char* flag = static_cast<const char*>(nullptr) /* pinned-off:MRT_GCV2_TSAN_POSCTRL */;
-    if (flag == nullptr || flag[0] != '1') {
-        return;
-    }
-    // Only two workers participate; spin-write the same non-atomic word.
-    if (workerId != 1 && workerId != 2) {
-        return;
-    }
-    for (int i = 0; i < 10000; ++i) {
-        g_tsanPosCtrlWord = static_cast<uint64_t>(workerId) + static_cast<uint64_t>(i);
-        Sanitizer::TsanWriteMemory(const_cast<uint64_t*>(
-            reinterpret_cast<volatile uint64_t*>(&g_tsanPosCtrlWord)), sizeof(uint64_t));
-    }
-    g_tsanPosCtrlDone.fetch_add(1, std::memory_order_relaxed);
-}
-#endif
 
 void* GCPoolThread::WorkerFunc(void* param)
 {
@@ -101,9 +77,7 @@ void* GCPoolThread::WorkerFunc(void* param)
 #endif
 
 #if defined(CANGJIE_TSAN_SUPPORT)
-    // Eager try: no-op if primary TsanInitialize has not run yet (bootstrap).
     Sanitizer::TsanAttachNativeThread();
-    TsanPosCtrlMaybeRace(thread->id);
 #endif
 
     while (!pool->IsExited()) {

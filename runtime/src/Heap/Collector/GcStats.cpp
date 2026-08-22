@@ -7,9 +7,6 @@
 
 #include "GcStats.h"
 
-#include <cstdlib>
-#include <cstring>
-
 #include "Base/GcLog.h"
 #include "Base/LogFile.h"
 #include "Heap/Collector/GcTrigger.h"
@@ -96,22 +93,12 @@ void GCStats::Init()
     g_youngReclaimedSeq.reset();
     g_oldReclaimedSeq.reset();
 
-    const char* jvmIhopEnv = static_cast<const char*>(nullptr) /* pinned-off:MRT_GCV2_JVM_IHOP */;
-    const bool useJvmIhop = jvmIhopEnv != nullptr && std::strcmp(jvmIhopEnv, "1") == 0;
     size_t maxCapacity = Heap::GetHeap().GetMaxCapacity();
-    if (useJvmIhop) {
-        // Modern G1 uses 45% only as its initial IHOP; UpdateGCStats remains the adaptive controller here.
-        constexpr size_t initialHeapOccupancyPercent = 45;
-        heapThreshold.store(maxCapacity * initialHeapOccupancyPercent / 100, std::memory_order_relaxed);
-    } else {
-        // 20 MB:set 20 MB as intial value
-        size_t threshold = std::min(CangjieRuntime::GetGCParam().gcThreshold, 20 * MB);
-        // 0.2:set 20% heap size as intial value
-        threshold = std::min(static_cast<size_t>(maxCapacity * 0.2), threshold);
-        heapThreshold.store(threshold, std::memory_order_relaxed);
-    }
-    VLOG(REPORT, "[GCV2][jvm-ihop] enabled=%d initial-threshold=%zu max-capacity=%zu adaptive-update=1",
-         useJvmIhop, heapThreshold.load(std::memory_order_relaxed), maxCapacity);
+    size_t threshold = std::min(CangjieRuntime::GetGCParam().gcThreshold, 20 * MB);
+    threshold = std::min(static_cast<size_t>(maxCapacity * 0.2), threshold);
+    heapThreshold.store(threshold, std::memory_order_relaxed);
+    VLOG(REPORT, "[GCV2][jvm-ihop] enabled=0 initial-threshold=%zu max-capacity=%zu adaptive-update=1",
+         heapThreshold.load(std::memory_order_relaxed), maxCapacity);
 }
 
 GCStats::YoungHeuThrottleDecision GCStats::RecordYoungGCFinish(uint64_t timestamp, size_t allocatedAfter,

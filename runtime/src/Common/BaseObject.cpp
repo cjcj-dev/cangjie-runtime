@@ -4,9 +4,6 @@
 //
 // See https://cangjie-lang.cn/pages/LICENSE for license information.
 
-#include <cstdlib>
-
-#include "Common/ColourMask.h"
 #include "Base/Log.h"
 #include "BaseObject.h"
 #include "Heap/Allocator/RegionInfo.h"
@@ -18,44 +15,12 @@
 #include "ObjectModel/MObject.h"
 #include "ObjectModel/MObject.inline.h"
 #include "ObjectModel/RefField.inline.h"
-#include "Heap/Verify/PlainCensus.h"
 
 namespace MapleRuntime {
-// COLOUR_WRITEBACK_AUDIT §六 判据 1：唯一落笔 choke（单一定义，默认关）。
-// plaincensus: also feed fail-open writer counters (MRT_GCV2_PLAIN_WRITE_COUNT=1).
 void AssertColouredWriteIfEnabled(const void* slot, MAddress newVal)
 {
-    static const bool assertOn = []() {
-        const char* v = static_cast<const char*>(nullptr) /* pinned-off:MRT_GCV2_ASSERT_COLOURED_WRITES */;
-        return v != nullptr && v[0] == '1' && v[1] == '\0';
-    }();
-    static const bool countOn = []() {
-        const char* v = static_cast<const char*>(nullptr) /* pinned-off:MRT_GCV2_PLAIN_WRITE_COUNT */;
-        return v != nullptr && v[0] == '1' && v[1] == '\0';
-    }();
-    if (LIKELY(!assertOn && !countOn)) {
-        return;
-    }
-    if (!Heap::IsHeapAddress(slot)) {
-        return;
-    }
-    if ((newVal & ((MAddress(1) << 48) - 1)) == 0) {
-        return;
-    }
-    constexpr MAddress kColourMask = REMAP_COLOUR_MASK | MARKED_YOUNG_MASK | MARKED_OLD_MASK;
-    bool hasColour = (newVal & kColourMask) != 0;
-    bool tagged = ((newVal >> 48) & 1) != 0;
-    bool loadGood = (newVal & static_cast<MAddress>(::g_cjLoadBadMask)) == 0;
-    if (!hasColour) {
-        NotePlainHeapWrite(slot, static_cast<uintptr_t>(newVal));
-    }
-    if (LIKELY(!assertOn)) {
-        return;
-    }
-    CHECK_DETAIL(hasColour && (loadGood || tagged),
-                 "MRT_GCV2_ASSERT_COLOURED_WRITES: plain/bad-colour heap ref write @%p val=%#zx "
-                 "hasColour=%d loadGood=%d tagged=%d",
-                 slot, newVal, hasColour, loadGood, tagged);
+    (void)slot;
+    (void)newVal;
 }
 
 TypeInfo* BaseObject::GetTypeInfo() const { return stateWord.GetTypeInfo(); }

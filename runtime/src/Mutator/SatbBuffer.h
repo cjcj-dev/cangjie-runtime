@@ -21,11 +21,6 @@ public:
     static constexpr size_t INITIAL_PAGES = 64;    // 64 pages of initial satb buffer
     static constexpr size_t CACHE_LINE_ALIGN = 64; // for most hardware platfrom, the cache line is 64-byte aigned.
     static SatbBuffer& Instance() noexcept;
-    static void MaybeInjectCarryProbe(BaseObject*& target, BaseObject*& knownBase);
-    static void NoteInteriorEnqueued(const BaseObject* target, const BaseObject* knownBase);
-    static void NoteInteriorRetained(const BaseObject* knownBase);
-    static void NoteHostDequeued(const BaseObject* knownBase);
-    static void ReportCarryProbe();
     class Node {
         friend class SatbBuffer;
 
@@ -59,9 +54,6 @@ public:
                 Entry& entry = entryContainer[index++];
                 BaseObject* objectToMark = entry.knownBase != nullptr ? entry.knownBase : entry.target;
                 NwDropAudit::NoteSatbObj(objectToMark);
-                if (entry.knownBase != nullptr) {
-                    SatbBuffer::NoteHostDequeued(entry.knownBase);
-                }
                 stack.push_back(objectToMark);
                 entry = { nullptr, nullptr };
             }
