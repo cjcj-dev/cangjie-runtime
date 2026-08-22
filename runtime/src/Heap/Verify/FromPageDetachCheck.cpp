@@ -149,18 +149,19 @@ bool FromPageDetachCheck(const RegionInfo* region, Site site, Action action)
     const bool otherEvidence = routeDestHeld || forwardingReaders || forwardingClaimActive || copyInflight ||
         txnEvidence;
     const bool closeAuthority = GateEnabled() || RelocationSetTxn::Enabled();
-    // zRelocate.cpp:1024-1047: after release_page, detach_page waits for
-    // ref_count==0 then free_page. ZGC has no retired-table second wait
-    // (zPageAllocator.cpp:2253-2266). Gate already covers live readers/copy;
-    // a covering retired table with ref_count==0 is the same closure, so it
-    // must not bounce take_garbage (RegionManager.h:1056) back into quarantine.
+    // zRelocate.cpp:1024-1047 free_page after detach_page (ref_count==0).
+    // zGeneration.cpp:276-284 keeps forwarding until reset_relocation_set —
+    // ZGC does not destroy answers when it returns the page
+    // (zPageAllocator.cpp:2253-2266). Retired tables are that leftover answer
+    // (FindRetiredTo). Gate already waits for retain/copy; once ref_count==0
+    // they must not block take_garbage, but MAJOR_CLOSE is the only site that
+    // may drop them.
     const bool detachReady = refCount == 0 && !otherEvidence;
-    if (closeAuthority && retiredTable && detachReady) {
+    if (action == Action::MAJOR_CLOSE && closeAuthority && retiredTable && detachReady) {
         ForwardingTable::DropRetiredCovering(start, size, true);
         retiredTable = ForwardingTable::RetiredCovers(start, size);
     }
-    (void)action;
-    const bool any = retiredTable || otherEvidence;
+    const bool any = otherEvidence || (retiredTable && !detachReady);
 
     out.withEvidence.fetch_add(any ? 1 : 0, std::memory_order_relaxed);
     // Phase-2 transactions make their own detach evidence authoritative even
