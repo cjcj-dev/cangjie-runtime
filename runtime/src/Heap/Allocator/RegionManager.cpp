@@ -997,6 +997,7 @@ size_t FreeRegionManager::ReleaseDetachQuarantineAfterMajor(FromPageDetach::Site
             } else {
                 regionManager.ReclaimRegion(region);
             }
+            releasedUnits += entry.num;
             FromPageDetach::NoteQuarantineReleased();
             continue;
         }
