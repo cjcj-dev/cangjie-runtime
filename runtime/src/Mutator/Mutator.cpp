@@ -439,12 +439,31 @@ void Mutator::VisitStackRoots(const RootVisitor& func)
 void Mutator::VisitExceptionRoots(const RootVisitor& func)
 {
     // ExceptionRef is a legacy ABI word owned by ExceptionWrapper; metadata classifies it as a root.
-    func(RootSlotAt(&exceptionWrapper.GetExceptionRef()));
+    RootSlot& root = RootSlotAt(&exceptionWrapper.GetExceptionRef());
+    if (VerifyRoots::Enabled()) {
+        RootVerifyContext ctx;
+        ctx.phase = "VisitExceptionRoots";
+        ctx.kind = RootKind::RUNTIME_ROOT;
+        ctx.rawValue = raw(root.LoadPlain());
+        ctx.hasRawValue = true;
+        ctx.ownerMutator = this;
+        VerifyRoots::VerifyRootPayload(ctx, &root, nullptr);
+    }
+    func(root);
 }
 
 void Mutator::VisitRawObjects(const RootVisitor& func)
 {
     if (!is_null(rawObject.LoadPlain())) {
+        if (VerifyRoots::Enabled()) {
+            RootVerifyContext ctx;
+            ctx.phase = "VisitRawObjects";
+            ctx.kind = RootKind::RUNTIME_ROOT;
+            ctx.rawValue = raw(rawObject.LoadPlain());
+            ctx.hasRawValue = true;
+            ctx.ownerMutator = this;
+            VerifyRoots::VerifyRootPayload(ctx, &rawObject, nullptr);
+        }
         func(rawObject);
     }
 }
@@ -643,6 +662,7 @@ void Mutator::RecordStackPtrs(std::set<RootSlot*>& rootSlots,
             RootVerifyContext vctx;
             vctx.phase = "RecordStackPtrs";
             vctx.kind = RootKind::STACK_OBJECT;
+            vctx.ownerMutator = this;
             VerifyRoots::VerifyRootPayload(vctx, objSlot, obj);
         }
         TypeInfo* tip = obj->GetTypeInfo();
@@ -812,7 +832,8 @@ static bool IsHeaderedStackObject(BaseObject* obj)
     return tip->IsVaildType();
 }
 
-inline void CheckAndPush(BaseObject* obj, std::set<BaseObject*>& rootSet, std::stack<BaseObject*>& rootStack)
+inline void CheckAndPush(BaseObject* obj, std::set<BaseObject*>& rootSet, std::stack<BaseObject*>& rootStack,
+                         Mutator* ownerMutator)
 {
     if (!IsHeaderedStackObject(obj)) {
         return;
@@ -820,7 +841,13 @@ inline void CheckAndPush(BaseObject* obj, std::set<BaseObject*>& rootSet, std::s
     if (!rootSet.insert(obj).second) {
         return;
     }
-    VerifyRoots::BeforeCheckAndPush(obj);
+    if (VerifyRoots::Enabled()) {
+        RootVerifyContext ctx;
+        ctx.phase = "CheckAndPush";
+        ctx.kind = RootKind::STACK_OBJECT;
+        ctx.ownerMutator = ownerMutator;
+        VerifyRoots::VerifyRootPayload(ctx, nullptr, obj);
+    }
     if (obj->HasRefField()) {
         rootStack.push(obj);
     }
@@ -1016,7 +1043,7 @@ bool Mutator::GcPhaseEnum(GCPhase newPhase, uint64_t stackScanEpoch, bool bySelf
             DLOG(ENUM, "enum stack root HeapSlot @%p: %p", &refFieldAddr, obj);
         } else if (IsStackAddr(reinterpret_cast<uintptr_t>(obj))) {
             if (IsHeaderedStackObject(obj)) {
-                CheckAndPush(obj, rootSet, rootStack);
+                CheckAndPush(obj, rootSet, rootStack, this);
             } else {
                 PushHeaderlessRecordField(obj, "GcPhaseEnum.ref.headerless");
             }
@@ -1035,7 +1062,7 @@ bool Mutator::GcPhaseEnum(GCPhase newPhase, uint64_t stackScanEpoch, bool bySelf
             DLOG(ENUM, "enum stack root @%p: %p", &root, obj);
         } else if (IsStackAddr(reinterpret_cast<uintptr_t>(obj))) {
             if (IsHeaderedStackObject(obj)) {
-                CheckAndPush(obj, rootSet, rootStack);
+                CheckAndPush(obj, rootSet, rootStack, this);
             } else {
                 PushHeaderlessRecordField(obj, "GcPhaseEnum.root.headerless");
             }
@@ -1132,7 +1159,7 @@ inline void Mutator::GCPhasePreForward(GCPhase newPhase)
             }
         } else if (IsStackAddr(reinterpret_cast<uintptr_t>(oldObj))) {
             if (IsHeaderedStackObject(oldObj)) {
-                CheckAndPush(oldObj, rootSet, rootStack);
+                CheckAndPush(oldObj, rootSet, rootStack, this);
             } else {
                 PreForwardHeaderlessRecord(oldObj, collector, rootFieldSet);
             }
@@ -1170,7 +1197,7 @@ inline void Mutator::GCPhasePreForward(GCPhase newPhase)
             }
         } else if (IsStackAddr(reinterpret_cast<uintptr_t>(oldObj))) {
             if (IsHeaderedStackObject(oldObj)) {
-                CheckAndPush(oldObj, rootSet, rootStack);
+                CheckAndPush(oldObj, rootSet, rootStack, this);
             } else {
                 PreForwardHeaderlessRecord(oldObj, collector, rootFieldSet);
             }

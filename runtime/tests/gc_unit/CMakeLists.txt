@@ -52,6 +52,7 @@ set(GC_UNIT_SOURCES
     test_fnlz_roots.cpp
     test_mark_stack_entry.cpp
     test_partial_array.cpp
+    test_verify_roots.cpp
 )
 
 add_executable(cj_gc_unit ${GC_UNIT_SOURCES})
