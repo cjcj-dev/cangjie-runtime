@@ -10,6 +10,7 @@
 #include "Base/Macros.h"
 #include "Common/ScopedObjectAccess.h"
 #include "ExceptionManager.inline.h"
+#include "Heap/Allocator/HeapFiller.h"
 #include "Heap/Heap.h"
 #include "Mutator/Mutator.h"
 #include "ObjectModel/MObject.h"
@@ -213,6 +214,10 @@ void FinalizerProcessor::EnqueueFinalizables(const std::function<bool(BaseObject
     while (it != finalizers.end() && countLimit != 0) {
         BaseObject* obj = LoadFinalizerGood(*it);
         --countLimit;
+        if (obj == nullptr || HeapFiller::IsFiller(obj)) {
+            it = finalizers.erase(it);
+            continue;
+        }
         if (finalizable(obj)) {
             finalizables.push_back(*it);
             it = finalizers.erase(it);
@@ -239,6 +244,11 @@ void FinalizerProcessor::ProcessFinalizableList()
         ScopedObjectAccess soa;
         CHECK_DETAIL(ExceptionManager::GetPendingException() == nullptr, "should not exist pending exception");
         BaseObject* finalizeObjAddr = LoadFinalizerGood(*itor);
+        if (finalizeObjAddr == nullptr || HeapFiller::IsFiller(finalizeObjAddr)) {
+            std::lock_guard<std::mutex> l(listLock);
+            itor = workingFinalizables.erase(itor);
+            continue;
+        }
 
         TypeInfo* classInfo = reinterpret_cast<MObject*>(finalizeObjAddr)->GetTypeInfo();
         FuncRef finalizerMethod = classInfo->GetFinalizeMethod();
