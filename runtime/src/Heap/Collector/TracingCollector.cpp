@@ -77,7 +77,7 @@ const bool STRICT_STACKMAP_ENABLED = []() {
 }();
 
 const bool ROOTMAP_MISS_COUNT_ENABLED = []() {
-    const char* value = static_cast<const char*>(nullptr) /* pinned-off:MRT_GCV2_ROOTMAP_MISS */;
+    const char* value = std::getenv("MRT_GCV2_ROOTMAP_MISS");
     return value != nullptr && std::strcmp(value, "1") == 0;
 }();
 
@@ -85,6 +85,54 @@ const bool ROOTMAP_MISS_FATAL_ENABLED = []() {
     const char* value = static_cast<const char*>(nullptr) /* pinned-off:MRT_GCV2_ROOTMAP_MISS_FATAL */;
     return value != nullptr && std::strcmp(value, "1") == 0;
 }();
+
+const bool CONS_ON_ZERO_ENTRIES = []() {
+    const char* value = std::getenv("MRT_GCV2_CONS_ON_ZERO_ENTRIES");
+    return value != nullptr && std::strcmp(value, "1") == 0;
+}();
+
+std::atomic<size_t> g_consZeroFrames{ 0 };
+std::atomic<size_t> g_consZeroWords{ 0 };
+std::atomic<size_t> g_consZeroAccepted{ 0 };
+
+void ConservativeScanZeroEntries(uintptr_t fa, const RootVisitor& visitor)
+{
+    if (fa == 0) {
+        return;
+    }
+    uintptr_t callerFa = 0;
+    std::memcpy(&callerFa, reinterpret_cast<void*>(fa), sizeof(callerFa));
+    uintptr_t lo = fa < callerFa ? fa : callerFa;
+    uintptr_t hi = fa < callerFa ? callerFa : fa;
+    if (hi < lo || hi - lo > 65536) {
+        hi = lo + 65536;
+    }
+    size_t words = 0;
+    size_t accepted = 0;
+    for (uintptr_t p = lo; p + sizeof(uintptr_t) <= hi; p += sizeof(uintptr_t)) {
+        ++words;
+        uintptr_t bits = 0;
+        std::memcpy(&bits, reinterpret_cast<void*>(p), sizeof(bits));
+        auto* obj = reinterpret_cast<BaseObject*>(bits);
+        if (obj == nullptr || !Heap::IsHeapAddress(obj)) {
+            continue;
+        }
+        if (!Collector::PlausibleManagedObjectGate("cons.zero_entries", obj)) {
+            BaseObject* host = Collector::TryRecoverInteriorBase(obj);
+            if (host == nullptr) {
+                continue;
+            }
+            obj = host;
+        }
+        ++accepted;
+        ObjectRef ref;
+        StorePlain(ref, from_object(obj));
+        visitor(ref);
+    }
+    g_consZeroFrames.fetch_add(1, std::memory_order_relaxed);
+    g_consZeroWords.fetch_add(words, std::memory_order_relaxed);
+    g_consZeroAccepted.fetch_add(accepted, std::memory_order_relaxed);
+}
 
 const char* StackMapInvalidReasonName(StackMapInvalidReason reason)
 {
@@ -109,6 +157,9 @@ void ResetSkippedStackMapCounts()
     g_rootMapMissCounts.zeroEntries.store(0, std::memory_order_relaxed);
     g_rootMapMissCounts.pcMiss.store(0, std::memory_order_relaxed);
     g_rootMapMissCounts.zeroRootIndices.store(0, std::memory_order_relaxed);
+    g_consZeroFrames.store(0, std::memory_order_relaxed);
+    g_consZeroWords.store(0, std::memory_order_relaxed);
+    g_consZeroAccepted.store(0, std::memory_order_relaxed);
 }
 
 void RecordRootMapMiss(StackMapInvalidReason reason, const FrameInfo& frame, uintptr_t startIP, uintptr_t frameIP,
@@ -166,7 +217,7 @@ ATTR_NO_INLINE void RecordSkippedStackMap(StackMapInvalidReason reason, const Fr
     // SKIPPED_PC_MISS is not just a counter. Gate detail volume with env.
     {
         size_t maxWho = 16;
-        const char* maxEnv = static_cast<const char*>(nullptr) /* pinned-off:MRT_GCV2_SKIPPED_WHO_MAX */;
+        const char* maxEnv = std::getenv("MRT_GCV2_SKIPPED_WHO_MAX");
         if (maxEnv != nullptr && maxEnv[0] != '\0') {
             char* end = nullptr;
             unsigned long parsed = std::strtoul(maxEnv, &end, 10);
@@ -219,6 +270,13 @@ void ReportSkippedStackMapCounts()
             "[GCV2][rootmap-miss] zero_entries=%zu pc_miss=%zu other=%zu total=%zu "
             "env=MRT_GCV2_ROOTMAP_MISS=1",
             rootZeroEntries, rootPcMiss, rootOther, rootZeroEntries + rootPcMiss + rootOther);
+    }
+    if (CONS_ON_ZERO_ENTRIES) {
+        LOG(RTLOG_ERROR,
+            "[GCV2][cons-zero] frames=%zu words=%zu accepted=%zu env=MRT_GCV2_CONS_ON_ZERO_ENTRIES=1",
+            g_consZeroFrames.load(std::memory_order_relaxed),
+            g_consZeroWords.load(std::memory_order_relaxed),
+            g_consZeroAccepted.load(std::memory_order_relaxed));
     }
 }
 } // namespace
@@ -545,6 +603,11 @@ void TracingCollector::VisitStackRoots(const RootVisitor& visitor, RegSlotsMap& 
         heapMap.VisitDerivedPtr(derivedMark, nullptr, regSlotsMap);
     } else {
         RecordRootMapMiss(builder.GetInvalidReason(), frame, startIP, frameIP, mutator);
+        RecordSkippedStackMap(builder.GetInvalidReason(), frame, startIP, frameIP);
+        if (CONS_ON_ZERO_ENTRIES &&
+            builder.GetInvalidReason() == StackMapInvalidReason::ZERO_ENTRIES) {
+            ConservativeScanZeroEntries(frameAddress, visitor);
+        }
     }
 #if defined(GCINFO_DEBUG) && GCINFO_DEBUG
     mutator.PushFrameInfoForTrace(gcInfo);
@@ -666,6 +729,10 @@ void TracingCollector::VisitHeapReferencesOnStack(const RootVisitor& regRootVisi
         heapMap.VisitDerivedPtr(attestDerivedVisitor, derivedPtrDebugFunc, regSlotsMap);
     } else {
         RecordSkippedStackMap(builder.GetInvalidReason(), frame, startIP, frameIP);
+        if (CONS_ON_ZERO_ENTRIES &&
+            builder.GetInvalidReason() == StackMapInvalidReason::ZERO_ENTRIES) {
+            ConservativeScanZeroEntries(frameAddress, attestSlotVisitor);
+        }
     }
 #if defined(GCINFO_DEBUG) && GCINFO_DEBUG
     mutator.PushFrameInfoForFix(infoNode);
