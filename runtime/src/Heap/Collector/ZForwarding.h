@@ -16,6 +16,7 @@
 #include "Heap/Allocator/ForwardingEntry.h"
 #include "Heap/Allocator/ZAttachedArray.h"
 #include "Heap/Collector/ZForwardingLife.h"
+#include "Heap/Collector/RegionLifeClock.h"
 
 namespace MapleRuntime {
 
@@ -46,14 +47,14 @@ public:
     }
 
     static ZForwarding* alloc(uint32_t liveObjects, MAddress start, MAddress heapBase, size_t regionSize,
-                              RegionInfo* page)
+                              RegionInfo* page, RegionLifeId pageLifeId = 0)
     {
         const uint32_t n = nentries(liveObjects);
         void* const addr = AttachedArray::alloc(n);
         if (addr == nullptr) {
             return nullptr;
         }
-        return ::new (addr) ZForwarding(page, start, heapBase, regionSize, n);
+        return ::new (addr) ZForwarding(page, start, heapBase, regionSize, n, pageLifeId);
     }
 
     // Kept name so existing tests / ClearEntries continue to compile.
@@ -72,6 +73,8 @@ public:
     size_t size() const { return _size; }
     size_t regionSize() const { return _size; }
     RegionInfo* page() { return _page; }
+    RegionLifeId page_life_id() const { return _page_life_id; }
+    bool page_life_current(RegionLifeClock::Carrier carrier) const;
     uint32_t length() const { return static_cast<uint32_t>(_entries.length()); }
 
     // zPage.inline.hpp:176-185 seqnum bounds livemap/forwarding to one page life.
@@ -214,12 +217,14 @@ public:
 
 private:
     // zForwarding.inline.hpp:59-76
-    ZForwarding(RegionInfo* page, MAddress start, MAddress heapBase, size_t regionSize, size_t nentries)
+    ZForwarding(RegionInfo* page, MAddress start, MAddress heapBase, size_t regionSize, size_t nentries,
+                RegionLifeId pageLifeId)
         : _start(start),
           _size(regionSize),
           _heapBase(heapBase),
           _entries(nentries),
           _page(page),
+          _page_life_id(pageLifeId),
           _claimed(false),
           _ref_lock(),
           _ref_count(1),
@@ -237,13 +242,15 @@ private:
     const MAddress _heapBase;
     const AttachedArray _entries;
     RegionInfo* const _page;
+    const RegionLifeId _page_life_id;
     std::atomic<bool> _claimed;
     mutable std::mutex _ref_lock;
     std::atomic<int32_t> _ref_count;
     std::atomic<bool> _done;
     struct ToLife {
         MAddress start;
-        uint8_t seq;
+        uint8_t legacySeq;
+        RegionLifeId lifeId;
     };
     ToLife _to_lives[3];
     uint8_t _to_life_n;

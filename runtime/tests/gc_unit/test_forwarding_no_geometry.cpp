@@ -29,8 +29,7 @@ GC_TEST(ForwardingNoGeometry, ArmedMissIsNullNotGeometry)
     RegionBitmap* bm = fx.PlantMarkBitmap(live, regionSize);
     size_t offset = fx.region0->GetAddressOffset(reinterpret_cast<MAddress>(fx.obj0));
     (void)bm->MarkBits(offset, 8, regionSize);
-    fx.region0->metadata.liveInfo0 = live;
-    fx.region0->metadata.regionEnd0 = fx.region0->GetRegionEnd();
+    fx.region0->BindLiveInfo0FromLiveIfNull();
 
     const MAddress from = reinterpret_cast<MAddress>(fx.obj0);
     GC_EXPECT_TRUE(ForwardingTable::EntriesArmed(from));

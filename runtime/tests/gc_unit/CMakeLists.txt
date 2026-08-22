@@ -38,6 +38,7 @@ set(GC_UNIT_SOURCES
     test_mutator_relocate.cpp
     test_expire_kept.cpp
     test_receipt_life.cpp
+    test_lifeclock.cpp
     test_exempt_unlock.cpp
     test_heal_coverage.cpp
     test_diag_gate.cpp

@@ -85,9 +85,8 @@ GC_TEST(DefectRegress, PregrantBeforeRouteDomainFreeze)
     RegionBitmap* bm = fx.PlantMarkBitmap(ghost, regionSize);
     size_t offA = region->GetAddressOffset(reinterpret_cast<MAddress>(objA));
     (void)bm->MarkBits(offA, 8, regionSize);
-    // Freeze domain face the way PrepareForwardable does (pointer share).
-    region->metadata.liveInfo0 = ghost;
-    region->metadata.regionEnd0 = region->GetRegionEnd();
+    // Freeze domain face through the product publisher (pointer share + life stamp).
+    region->BindLiveInfo0FromLiveIfNull();
     region->SetRouteInfo(0x20000000u, 4096);
     region->SetRouteState(RegionInfo::RouteState::ROUTED);
 
