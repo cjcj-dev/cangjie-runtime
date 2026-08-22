@@ -271,20 +271,21 @@ public:
                 break;
             }
             // get next object from work stack.
-            BaseObject* obj = workStack.back();
+            const MarkStackEntry entry = workStack.back();
             workStack.pop_back();
             // A partial-array chunk is a continuation of an array that was
             // already marked, so it skips MarkObject entirely -- same order as
             // ZGC's ZMark::mark_and_follow (zMark.cpp:392-400), which dispatches
             // on the partial_array flag before the mark step. Forking still runs
             // below, which is the point: the chunk makes the tail stealable.
-            if (UNLIKELY(MarkPartialArray::IsPartialArrayEntry(obj))) {
-                collector.FollowPartialArray(obj, workStack);
+            if (UNLIKELY(MarkPartialArray::IsPartialArrayEntry(entry))) {
+                collector.FollowPartialArray(entry, workStack);
                 if (threadPool != nullptr) {
                     TryForkTask();
                 }
                 continue;
             }
+            BaseObject* obj = entry.object();
             if (!Collector::PlausibleManagedObjectGate("ConcurrentMarkingWork.pop", obj)) {
                 BaseObject* host = Collector::TryRecoverInteriorBase(obj);
                 if (host == nullptr || host == obj ||
@@ -293,9 +294,17 @@ public:
                 }
                 obj = host;
             }
-            bool wasMarked = collector.MarkObject(obj);
-            if (!wasMarked) {
-                nNewlyMarked++;
+            bool wasMarked = false;
+            if (entry.mark()) {
+                // MarkObject owns live-byte accounting in this collector, so
+                // incLive attests the operation instead of causing a second
+                // increment after a successful claim.
+                wasMarked = collector.MarkObject(obj);
+            }
+            if ((!entry.mark() || !wasMarked) && entry.follow()) {
+                if (entry.mark()) {
+                    nNewlyMarked++;
+                }
                 if (!obj->HasRefField()) {
                     continue;
                 }
@@ -314,7 +323,7 @@ public:
                 } else {
                     collector.TraceObjectRefFields(obj, workStack);
                 }
-            } else {
+            } else if (entry.mark() && wasMarked) {
                 SurvNodeDiag::NoteFollowHolder(obj, SurvNodeDiag::FOLLOW_SKIP_MARKED);
                 if (UNLIKELY(HealPairDiag::YoungClaimEnabled())) {
                     HealPairDiag::NoteMajorWasMarked(obj);
@@ -348,8 +357,9 @@ public:
                 break;
             }
             // get next object from work stack.
-            BaseObject* obj = workStack.back();
+            const MarkStackEntry entry = workStack.back();
             workStack.pop_back();
+            BaseObject* obj = entry.object();
             bool wasMarked = collector.MarkObject(obj);
             if (!wasMarked) {
                 collector.DFSTraceExportObject(obj);
@@ -827,7 +837,7 @@ bool TracingCollector::MarkSatbBuffer(WorkStack& workStack)
         SatbBuffer::Instance().GetRetiredObjects(remarkStack);
 
         while (!remarkStack.empty()) {
-            BaseObject* obj = remarkStack.back();
+            BaseObject* obj = remarkStack.back().object();
             remarkStack.pop_back();
             ++satbSeen;
             if (Heap::IsHeapAddress(obj) && !this->IsMarkedObject<Generation::Old>(obj)) {
@@ -937,15 +947,16 @@ void TracingCollector::DoResurrection(WorkStack& workStack)
 
     size_t resurrectdObjects = 0;
     while (!workStack.empty()) {
-        BaseObject* obj = workStack.back();
+        const MarkStackEntry entry = workStack.back();
         workStack.pop_back();
 
         // TraceObjectRefFields below can push partial-array chunks onto this
         // stack too, so this loop has to decode them as well.
-        if (UNLIKELY(MarkPartialArray::IsPartialArrayEntry(obj))) {
-            FollowPartialArray(obj, workStack);
+        if (UNLIKELY(MarkPartialArray::IsPartialArrayEntry(entry))) {
+            FollowPartialArray(entry, workStack);
             continue;
         }
+        BaseObject* obj = entry.object();
 
         // skip if the object already marked.
         RegionInfo* regionInfo = RegionInfo::GetRegionInfoAt(reinterpret_cast<MAddress>(obj));
@@ -1135,7 +1146,7 @@ void TracingCollector::DFSTraceExportObject(BaseObject *exportObj)
     workStack.push_back(exportObj);
     std::list<BaseObject*> externObjs;
     while (!workStack.empty()) {
-        BaseObject* obj = workStack.back();
+        BaseObject* obj = workStack.back().object();
         workStack.pop_back();
         obj->ForEachRefField([&workStack, obj, this, &externObjs](RefField<>& field) {
             (void)obj;

@@ -102,7 +102,7 @@ public:
     void EnumRefFieldRoot(RefField<>& ref, RootSet& rootSet) const override;
     void TraceRefField(BaseObject* obj, RefField<>& ref, WorkStack& workStack) const;
     void TraceObjectRefFields(BaseObject* obj, WorkStack& workStack) override;
-    void FollowPartialArray(BaseObject* entry, WorkStack& workStack) override;
+    void FollowPartialArray(const MarkStackEntry& entry, WorkStack& workStack) override;
     BaseObject* GetAndTryTagObj(RefSlotKind kind, BaseObject* obj, RefField<>& field) override;
     BaseObject* ForwardObject(BaseObject* fromVersion) override;
     BaseObject* ResolveStoreValue(BaseObject* ref) const override;

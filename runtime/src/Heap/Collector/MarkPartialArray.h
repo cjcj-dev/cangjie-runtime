@@ -11,6 +11,7 @@
 #include <cstdint>
 
 #include "Common/TypeDef.h"
+#include "Heap/Collector/MarkStackEntry.h"
 
 namespace MapleRuntime {
 class BaseObject;
@@ -39,41 +40,24 @@ constexpr size_t MIN_SIZE_SHIFT = 12; // 4K
 constexpr size_t MIN_SIZE = static_cast<size_t>(1) << MIN_SIZE_SHIFT;
 constexpr size_t MIN_LENGTH = MIN_SIZE / sizeof(MAddress);
 
-// Work-stack entry encoding.
-//
-// ZGC carries a dedicated tagged entry type (ZMarkStackEntry) on its mark
-// stack. Our WorkStack is MarkStack<BaseObject*>, so a chunk has to travel
-// inside a BaseObject* slot instead. Ordinary entries are heap object
-// pointers and therefore 8-byte aligned, which leaves bit 0 free as the
-// discriminator; the remaining fields mirror ZGC's partial-array layout
-// (zMarkStackEntry.hpp:56-71) -- a heap-relative address in MIN_SIZE units
-// plus an element count.
-//
-//   bit     0    partial-array tag (1 = chunk, 0 = ordinary object pointer)
-//   bits  1-31   chunk length, in elements
-//   bits 32-63   chunk start, as (addr - heapStartAddr) >> MIN_SIZE_SHIFT
-constexpr uintptr_t TAG_MASK = 1u;
-constexpr unsigned LENGTH_SHIFT = 1;
-constexpr unsigned LENGTH_BITS = 31;
-constexpr unsigned OFFSET_SHIFT = 32;
-constexpr unsigned OFFSET_BITS = 32;
-constexpr size_t MAX_LENGTH = (static_cast<size_t>(1) << LENGTH_BITS) - 1;
-constexpr size_t MAX_OFFSET = (static_cast<size_t>(1) << OFFSET_BITS) - 1;
+// Partial-array payload bounds come from the typed MarkStackEntry layout.
+constexpr size_t MAX_LENGTH = static_cast<size_t>(MarkStackEntry::MAX_PARTIAL_ARRAY_LENGTH);
+constexpr size_t MAX_OFFSET = static_cast<size_t>(MarkStackEntry::MAX_PARTIAL_ARRAY_OFFSET);
 
 bool Enabled();
 
 // Hot path: runs on every work-stack pop.
-inline bool IsPartialArrayEntry(const BaseObject* entry)
+inline bool IsPartialArrayEntry(const MarkStackEntry& entry)
 {
-    return (reinterpret_cast<uintptr_t>(entry) & TAG_MASK) != 0;
+    return entry.partialArray();
 }
 
 // Encodable() must hold before Encode(). A heap wider than
 // MAX_OFFSET * MIN_SIZE, or an array longer than MAX_LENGTH, cannot be
 // expressed in one word; callers then trace the array inline as before.
 bool Encodable(const void* chunkStart, size_t length);
-BaseObject* Encode(const void* chunkStart, size_t length);
-void Decode(const BaseObject* entry, MAddress& chunkStart, size_t& length);
+MarkStackEntry Encode(const void* chunkStart, size_t length, bool finalizable = false);
+void Decode(const MarkStackEntry& entry, MAddress& chunkStart, size_t& length);
 
 // Positive control: shows whether chunking actually happened.
 void NoteArraySplit();
