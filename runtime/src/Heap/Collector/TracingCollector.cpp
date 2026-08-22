@@ -409,6 +409,7 @@ void TracingCollector::VisitStackRoots(const RootVisitor& visitor, RegSlotsMap& 
         vctx.startIP = startIP;
         vctx.frameIP = frameIP;
         vctx.frameFA = frameAddress;
+        vctx.ownerMutator = &mutator;
         static thread_local char gcvrootNameBuf[256];
         gcvrootNameBuf[0] = '\0';
         CString fname = frame.GetFuncName();
@@ -648,13 +649,33 @@ void TracingCollector::RecordStubAllRegister(RegSlotsMap& regSlotsMap, Uptr fp)
 
 void TracingCollector::EnumConcurrencyModelRoots(RootSet& rootSet) const
 {
-    RootVisitor visitor = [&rootSet, this](ObjectRef& root) { EnumAndTagRawRoot(root, rootSet); };
+    RootVisitor visitor = [&rootSet, this](ObjectRef& root) {
+        if (VerifyRoots::Enabled()) {
+            RootVerifyContext ctx;
+            ctx.phase = "EnumConcurrencyModelRoots";
+            ctx.kind = RootKind::RUNTIME_ROOT;
+            ctx.rawValue = raw(root.LoadPlain());
+            ctx.hasRawValue = true;
+            VerifyRoots::VerifyRootPayload(ctx, &root, nullptr);
+        }
+        EnumAndTagRawRoot(root, rootSet);
+    };
     Runtime::Current().GetConcurrencyModel().VisitGCRoots(&visitor);
 }
 
 void TracingCollector::EnumStaticRoots(RootSet& rootSet) const
 {
-    const RootSlotVisitor& visitor = [&rootSet, this](RootSlot& root) { EnumAndTagRawRoot(root, rootSet); };
+    const RootSlotVisitor& visitor = [&rootSet, this](RootSlot& root) {
+        if (VerifyRoots::Enabled()) {
+            RootVerifyContext ctx;
+            ctx.phase = "EnumStaticRoots";
+            ctx.kind = RootKind::STATIC_ROOT;
+            ctx.rawValue = raw(root.LoadPlain());
+            ctx.hasRawValue = true;
+            VerifyRoots::VerifyRootPayload(ctx, &root, nullptr);
+        }
+        EnumAndTagRawRoot(root, rootSet);
+    };
     VisitStaticRoots(visitor);
 }
 
@@ -670,6 +691,14 @@ void TracingCollector::MergeMutatorRoots(WorkStack& workStack)
 void TracingCollector::EnumAllExportRoots(RootSet &foreignRootsSet)
 {
     Heap::GetHeap().VisitAllExportRoots([&foreignRootsSet, this](ObjectRef& root) {
+        if (VerifyRoots::Enabled()) {
+            RootVerifyContext ctx;
+            ctx.phase = "EnumAllExportRoots";
+            ctx.kind = RootKind::RUNTIME_ROOT;
+            ctx.rawValue = raw(root.LoadPlain());
+            ctx.hasRawValue = true;
+            VerifyRoots::VerifyRootPayload(ctx, &root, nullptr);
+        }
         EnumAndTagRawRoot(root, foreignRootsSet);
     });
 }
@@ -986,7 +1015,17 @@ void TracingCollector::Fini() { Collector::Fini(); }
 // VisitRawPointers. Only queued/running finalizables are strong mark roots.
 void TracingCollector::EnumFinalizerProcessorRoots(RootSet& rootSet) const
 {
-    RootVisitor visitor = [this, &rootSet](ObjectRef& root) { EnumAndTagRawRoot(root, rootSet); };
+    RootVisitor visitor = [this, &rootSet](ObjectRef& root) {
+        if (VerifyRoots::Enabled()) {
+            RootVerifyContext ctx;
+            ctx.phase = "EnumFinalizerProcessorRoots";
+            ctx.kind = RootKind::RUNTIME_ROOT;
+            ctx.rawValue = raw(root.LoadPlain());
+            ctx.hasRawValue = true;
+            VerifyRoots::VerifyRootPayload(ctx, &root, nullptr);
+        }
+        EnumAndTagRawRoot(root, rootSet);
+    };
     collectorResources.GetFinalizerProcessor().VisitGCRoots(visitor);
 }
 

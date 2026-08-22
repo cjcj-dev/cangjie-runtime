@@ -928,12 +928,6 @@ void WCollector::EnumAndTagRawRoot(ObjectRef& ref, RootSet& rootSet) const
         }
         return;
     }
-    if (VerifyRoots::Enabled()) {
-        RootVerifyContext vctx;
-        vctx.phase = "EnumAndTagRawRoot.plain";
-        vctx.kind = RootKind::RUNTIME_ROOT;
-        VerifyRoots::VerifyRootPayload(vctx, &ref, root);
-    }
     CHECK_DETAIL(root->IsValidObject(), "Enum and tag runtime root %p(%p) encounters invalid object", root, &ref);
     HealRootWriteback(ref, root, HealSite::WCollectorEnumRawRoot);
     rootSet.push_back(root);
