@@ -6191,164 +6191,8 @@ void WCollector::EvacuateYoungRegions(const std::vector<BaseObject*>& reachableV
 
 void WCollector::ValidateMinorReferences(const char* point, const std::vector<BaseObject*>* reachableVec)
 {
-    const char* enabled = std::getenv("MRT_GCV2_STALE_REFERENCE_VALIDATOR");
-    if (enabled == nullptr || std::strcmp(enabled, "1") != 0) {
-        return;
-    }
-
-    constexpr size_t categoryCount = 12;
-    constexpr size_t sampleCount = 3;
-    const std::array<const char*, categoryCount> categoryNames = {
-        "stack", "register", "derived", "static", "heap", "weak", "finalizer", "export",
-        "concurrency", "external_resurrection", "exception", "raw_object"
-    };
-    std::array<size_t, categoryCount> counts{};
-    std::array<std::array<const void*, sampleCount>, categoryCount> slots{};
-    std::array<std::array<BaseObject*, sampleCount>, categoryCount> holders{};
-    std::array<std::array<BaseObject*, sampleCount>, categoryCount> targets{};
-    std::array<std::array<uint8_t, sampleCount>, categoryCount> regionTypes{};
-    std::array<std::array<uint8_t, sampleCount>, categoryCount> objectStates{};
-    std::array<std::array<uint16_t, sampleCount>, categoryCount> tags{};
-    WorkStack pending = NewWorkStack();
-    MinorObjectSet visited;
-    bool buildReachableClosure = reachableVec == nullptr;
-
-    auto record = [this, &counts, &slots, &holders, &targets, &regionTypes, &objectStates, &tags](
-                      size_t category, const void* slot, BaseObject* holder, BaseObject* target, uint16_t tag) {
-        if (!Heap::IsHeapAddress(target) || !IsGhostFromObject(target) || IsUnmovableFromObject(target)) {
-            return false;
-        }
-        RegionInfo* region = RegionInfo::TryGetRegionInfoAt(reinterpret_cast<MAddress>(target));
-        bool regionReturned = region == nullptr || region->IsGarbageRegion() || region->IsFreeRegion();
-        ObjectState::ObjectStateCode state = target->GetStateWord().GetStateCode();
-        if (!regionReturned && state != ObjectState::FORWARDED) {
-            return false;
-        }
-        size_t sample = counts[category]++;
-        if (sample < sampleCount) {
-            slots[category][sample] = slot;
-            holders[category][sample] = holder;
-            targets[category][sample] = target;
-            regionTypes[category][sample] =
-                region == nullptr ? std::numeric_limits<uint8_t>::max() : static_cast<uint8_t>(region->GetRegionType());
-            objectStates[category][sample] = static_cast<uint8_t>(state);
-            tags[category][sample] = tag;
-        }
-        return true;
-    };
-    auto inspectTarget = [&record, &pending, buildReachableClosure](
-                             size_t category, const void* slot, BaseObject* holder, BaseObject* target, uint16_t tag) {
-        if (record(category, slot, holder, target, tag)) {
-            return;
-        }
-        if (!buildReachableClosure || !Heap::IsHeapAddress(target)) {
-            return;
-        }
-        RegionInfo* region = RegionInfo::TryGetRegionInfoAt(reinterpret_cast<MAddress>(target));
-        if (region != nullptr && !region->IsGarbageRegion() && !region->IsFreeRegion() && target->IsValidObject()) {
-            pending.push_back(target);
-        }
-    };
-    auto recordRawRoot = [this, &inspectTarget](size_t category) {
-        return RootVisitor([this, category, &inspectTarget](ObjectRef& root) {
-            HeapSlot<> value(to_zpointer(raw(root.LoadPlain())));
-            uint16_t tag = IsLoadBad(value) ? 1 : std::numeric_limits<uint16_t>::max();
-            inspectTarget(category, &root, nullptr, to_object(value.GetTargetObject()), tag);
-        });
-    };
-    auto recordField = [this, &inspectTarget](size_t category, BaseObject* holder, RefField<>& field) {
-        RefField<> value(field);
-        uint16_t tag = IsLoadBad(value) ? 1 : std::numeric_limits<uint16_t>::max();
-        inspectTarget(category, &field, holder, to_object(value.GetTargetObject()), tag);
-    };
-
-    RootVisitor stackVisitor = recordRawRoot(0);
-    RootVisitor registerVisitor = recordRawRoot(1);
-    DerivedPtrVisitor derivedVisitor = [&inspectTarget](BasePtrType basePtr, DerivedSlot& derivedPtr) {
-        inspectTarget(2, &derivedPtr, nullptr, from_native_ref(raw(basePtr)),
-                      std::numeric_limits<uint16_t>::max());
-    };
-    RootVisitor exceptionVisitor = recordRawRoot(10);
-    RootVisitor rawObjectVisitor = recordRawRoot(11);
-    MutatorManager::Instance().VisitAllMutators(
-        [&registerVisitor, &stackVisitor, &derivedVisitor, &exceptionVisitor, &rawObjectVisitor](Mutator& mutator) {
-            mutator.VisitHeapReferences(
-                registerVisitor, stackVisitor, derivedVisitor, exceptionVisitor, rawObjectVisitor);
-        });
-
-    Heap::GetHeap().VisitStaticRoots(recordRawRoot(3));
-    collectorResources.GetFinalizerProcessor().VisitRawPointers(recordRawRoot(6));
-    Heap::GetHeap().VisitAllExportRoots(recordRawRoot(7));
-    RootVisitor concurrencyVisitor = recordRawRoot(8);
-    Runtime::Current().GetConcurrencyModel().VisitGCRoots(&concurrencyVisitor);
-
-    {
-        std::lock_guard<std::mutex> lock(resurrectExportMtx);
-        for (BaseObject* const& object : resurrectedExportObjectes) {
-            inspectTarget(9, &object, nullptr, object, std::numeric_limits<uint16_t>::max());
-        }
-        for (BaseObject* const& object : resurrectedExportObjectesForwardPhase) {
-            inspectTarget(9, &object, nullptr, object, std::numeric_limits<uint16_t>::max());
-        }
-    }
-    {
-        std::lock_guard<std::mutex> lock(cycleWorkStackMtx);
-        for (const auto& entry : cycleRefWorkStack) {
-            inspectTarget(9, &entry.first, nullptr, entry.first, std::numeric_limits<uint16_t>::max());
-            for (BaseObject* const& object : entry.second) {
-                inspectTarget(9, &object, nullptr, object, std::numeric_limits<uint16_t>::max());
-            }
-        }
-    }
-
-    auto visitObject = [this, &recordField](BaseObject* object) {
-        BaseObject* holder = object;
-        if (IsGhostFromObject(holder) && !IsUnmovableFromObject(holder) &&
-            holder->GetStateWord().GetStateCode() == ObjectState::FORWARDED) {
-            holder = FindLatestVersion(holder);
-        }
-        if (holder == nullptr || IsGhostFromObject(holder) || !holder->IsValidObject() || !holder->HasRefField()) {
-            return;
-        }
-        size_t category = holder->IsWeakRef() ? 5 : 4;
-        holder->ForEachRefField(
-            [category, holder, &recordField](RefField<>& field) { recordField(category, holder, field); });
-    };
-    if (reachableVec != nullptr) {
-        for (BaseObject* object : *reachableVec) {
-            visitObject(object);
-        }
-    } else {
-        while (!pending.empty()) {
-            BaseObject* object = pending.back();
-            pending.pop_back();
-            if (visited.insert(object).second) {
-                visitObject(object);
-            }
-        }
-    }
-
-    size_t total = 0;
-    for (size_t category = 0; category < categoryCount; ++category) {
-        total += counts[category];
-        VLOG(REPORT,
-             "[GCV2Minor] STALE_SLOT_CATEGORY_%s point=%s count=%zu "
-             "samples=[%p/%p/%p/type=%u/state=%u/tag=%u,%p/%p/%p/type=%u/state=%u/tag=%u,"
-             "%p/%p/%p/type=%u/state=%u/tag=%u]",
-             categoryNames[category], point, counts[category], slots[category][0], holders[category][0],
-             targets[category][0], static_cast<unsigned>(regionTypes[category][0]),
-             static_cast<unsigned>(objectStates[category][0]), static_cast<unsigned>(tags[category][0]),
-             slots[category][1], holders[category][1], targets[category][1],
-             static_cast<unsigned>(regionTypes[category][1]), static_cast<unsigned>(objectStates[category][1]),
-             static_cast<unsigned>(tags[category][1]), slots[category][2], holders[category][2], targets[category][2],
-             static_cast<unsigned>(regionTypes[category][2]), static_cast<unsigned>(objectStates[category][2]),
-             static_cast<unsigned>(tags[category][2]));
-    }
-    VLOG(REPORT, "[GCV2Minor] VALIDATOR_GATED_BY_MRT_GCV2_STALE_REFERENCE_VALIDATOR point=%s total=%zu",
-         point, total);
-    if (std::strcmp(point, "round2-start") == 0) {
-        VLOG(REPORT, "[GCV2Minor] STALE_SLOT_AT_ROUND2_START_%zu", total);
-    }
+    (void)point;
+    (void)reachableVec;
 }
 
 void WCollector::VerifyRegionSets(const char* point)
@@ -7618,16 +7462,6 @@ void WCollector::DoYoungGarbageCollection()
         }
     }
     EatArmDiag::DumpMinorSummary(minorTotalRuns + 1);
-    static const bool verifyRemsetEnabled = []() {
-        const char* value = std::getenv("MRT_GCV2_VERIFY_REMSET");
-        return value != nullptr && std::strcmp(value, "1") == 0;
-    }();
-    static const bool verifyHeapEnabled = []() {
-        const char* value = std::getenv("MRT_GCV2_VERIFY_HEAP");
-        return value != nullptr && std::strcmp(value, "1") == 0;
-    }();
-    std::unordered_set<BaseObject*> rootReachableForVerify;
-    const bool needRootReachable = verifyRemsetEnabled || verifyHeapEnabled;
     {
         size_t runIndex = minorTotalRuns + 1;
         auto visitRoots = [this, &allocationRoots](const std::function<void(BaseObject*)>& visitor) {
@@ -7637,16 +7471,9 @@ void WCollector::DoYoungGarbageCollection()
             VisitMinorRoots(visitor);
         };
         auto resolveField = [this](RefField<>& field) -> BaseObject* { return ResolveMinorReference(field); };
-        if (needRootReachable) {
-            RunDiffPathExplainer(runIndex, visitRoots, resolveField, rememberedSlots, consumedSlots,
-                                 &minorCandidateRegions, remsetStats, &rootReachableForVerify);
-            VerifyRememberedSetInvariant("pre-evacuate", rememberedSlots, false,
-                                         verifyRemsetEnabled ? &rootReachableForVerify : nullptr);
-        } else {
-            RunDiffPathExplainer(runIndex, visitRoots, resolveField, rememberedSlots, consumedSlots,
-                                 &minorCandidateRegions, remsetStats, nullptr);
-            VerifyRememberedSetInvariant("pre-evacuate", rememberedSlots, false, nullptr);
-        }
+        RunDiffPathExplainer(runIndex, visitRoots, resolveField, rememberedSlots, consumedSlots,
+                             &minorCandidateRegions, remsetStats, nullptr);
+        VerifyRememberedSetInvariant("pre-evacuate", rememberedSlots, false, nullptr);
     }
     if (UNLIKELY(YyEdgeDiag::Enabled())) {
         YyEdgeDiag::PublishProductVec(reachableVec);
@@ -7657,10 +7484,10 @@ void WCollector::DoYoungGarbageCollection()
     // does not require global VERIFY_HEAP.
     if (kVerifyPostEvac) {
         VLOG(REPORT, "[GCV2][verify][post-evac] enter point=post-mark run=%zu", minorTotalRuns + 1);
-        VerifyHeapObjects("post-mark", true, verifyHeapEnabled ? &rootReachableForVerify : nullptr);
+        VerifyHeapObjects("post-mark", true, nullptr);
         VLOG(REPORT, "[GCV2][verify][post-evac] point=post-mark run=%zu", minorTotalRuns + 1);
     } else {
-        VerifyHeapObjects("pre-evacuate", false, verifyHeapEnabled ? &rootReachableForVerify : nullptr);
+        VerifyHeapObjects("pre-evacuate", false, nullptr);
     }
 
     size_t liveBytes = 0;
