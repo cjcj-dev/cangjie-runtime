@@ -2488,12 +2488,19 @@ void WCollector::InvalidateOldTaggedRefs(bool requireSurvivedMark)
         const char* value = static_cast<const char*>(nullptr) /* pinned-off:MRT_GCV2_PREFLIP_VERIFY_INJECT */;
         return value != nullptr && std::strcmp(value, "1") == 0;
     }();
+    // hapillar: count the population of the existing post-flip walk without adding a
+    // second heap traversal.  The legacy env is measurement-only and defaults off;
+    // the unified token keeps the probe discoverable with the other GC instruments.
+    static const bool postflipCensusEnv =
+        DiagGate::LegacyOrToken("MRT_GCV2_HAPILLAR_CENSUS", "hapillar");
     // Locals for lambda capture (static const cannot be captured under -std=gnu++14).
     const bool account = accountEnv;
     const bool preflipVerify = preflipVerifyEnv;
     const bool preflipInject = preflipInjectEnv;
+    const bool postflipCensus = !requireSurvivedMark && postflipCensusEnv;
+    const bool census = account || postflipCensus;
     // VERIFY always needs fixed counts so a non-zero residue can fail loud.
-    const bool trackFixed = account || (requireSurvivedMark && preflipVerify);
+    const bool trackFixed = census || (requireSurvivedMark && preflipVerify);
 
     constexpr size_t regionTypeCount = static_cast<size_t>(RegionInfo::RegionType::GARBAGE_REGION) + 1;
     // CHUNK = 256 units × UNIT_SIZE (16MiB @ 64KB unit). Spec §六 T1.
@@ -2545,10 +2552,10 @@ void WCollector::InvalidateOldTaggedRefs(bool requireSurvivedMark)
         };
     };
 
-    auto processObject = [this, requireSurvivedMark, rebuildRemset, account, trackFixed,
+    auto processObject = [this, requireSurvivedMark, rebuildRemset, census, trackFixed,
                           &stw](BaseObject* obj, HeapAccount& acc) {
         RegionInfo* accountRegion = nullptr;
-        if (account) {
+        if (census) {
             ++acc.processedObjects;
             if (obj != nullptr) {
                 accountRegion = RegionInfo::TryGetRegionInfoAt(reinterpret_cast<MAddress>(obj));
@@ -2557,26 +2564,26 @@ void WCollector::InvalidateOldTaggedRefs(bool requireSurvivedMark)
             // worker (region-head ownership), so summing processedRegions is exact.
         }
         if (obj == nullptr || !obj->IsValidObject()) {
-            if (account) {
+            if (census) {
                 ++acc.invalidObjects;
             }
             return;
         }
         if (requireSurvivedMark) {
             if (!IsSurvivedObject<Generation::Old>(obj)) {
-                if (account) {
+                if (census) {
                     ++acc.filteredObjects;
                 }
                 return;
             }
-            if (account && accountRegion != nullptr && accountRegion->IsFromRegion()) {
+            if (census && accountRegion != nullptr && accountRegion->IsFromRegion()) {
                 ++acc.fromLiveObjects;
             }
         }
         if (!obj->HasRefField()) {
             return;
         }
-        if (account) {
+        if (census) {
             ++acc.refHolders;
         }
         bool recordCrossGen = false;
@@ -2585,9 +2592,9 @@ void WCollector::InvalidateOldTaggedRefs(bool requireSurvivedMark)
             recordCrossGen = holderRegion != nullptr && !holderRegion->IsYoungRegion() &&
                              !holderRegion->IsGarbageRegion() && !holderRegion->IsFreeRegion();
         }
-        bool forwardHolder = account && requireSurvivedMark && accountRegion != nullptr &&
+        bool forwardHolder = census && requireSurvivedMark && accountRegion != nullptr &&
                              accountRegion->IsFromRegion();
-        obj->ForEachRefField([this, obj, recordCrossGen, rebuildRemset, forwardHolder, account, trackFixed,
+        obj->ForEachRefField([this, obj, recordCrossGen, rebuildRemset, forwardHolder, census, trackFixed,
                               &acc, &stw](RefField<>& field) {
             uintptr_t oldValue = raw(field.GetFieldValue());
             bool oldTagged = trackFixed && IsOldPointer(field);
@@ -2613,7 +2620,7 @@ void WCollector::InvalidateOldTaggedRefs(bool requireSurvivedMark)
             }
             RegionInfo* targetRegion = RegionInfo::GetRegionInfoAt(reinterpret_cast<MAddress>(target));
             if (targetRegion != nullptr && targetRegion->IsYoungRegion()) {
-                if (account) {
+                if (census) {
                     ++acc.youngTargetSlots;
                 }
                 rebuildRemset->Record(reinterpret_cast<MAddress>(&field));
@@ -2624,7 +2631,7 @@ void WCollector::InvalidateOldTaggedRefs(bool requireSurvivedMark)
 
     // Region-head-ownership walk over [rangeStart, rangeEnd). H6: carry transient-extent
     // guard verbatim. Spec §六 T1: first-step correction if region head is before rangeStart.
-    auto walkRange = [&processObject, requireSurvivedMark, account](uintptr_t rangeStart, uintptr_t rangeEnd,
+    auto walkRange = [&processObject, requireSurvivedMark, census](uintptr_t rangeStart, uintptr_t rangeEnd,
                                                                     uintptr_t inactive, HeapAccount& acc) {
         if (rangeStart >= rangeEnd || rangeStart >= inactive) {
             return;
@@ -2659,7 +2666,7 @@ void WCollector::InvalidateOldTaggedRefs(bool requireSurvivedMark)
                 if (region->IsValidRegion() && !region->IsFreeRegion() && !region->IsGarbageRegion() &&
                     !(requireSurvivedMark &&
                       region->IsKnownEmpty(region->GetMarkView<Generation::Old>()))) {
-                    if (account && region != lastProcessedRegion) {
+                    if (census && region != lastProcessedRegion) {
                         lastProcessedRegion = region;
                         ++acc.processedRegions;
                     }
@@ -2908,6 +2915,17 @@ void WCollector::InvalidateOldTaggedRefs(bool requireSurvivedMark)
     ReportF3DeadarmCounts(requireSurvivedMark ? "preflip" : "postflip");
     F3Why2Diag::Report(requireSurvivedMark ? "preflip" : "postflip");
     GarbRegionDiag::Report(requireSurvivedMark ? "preflip" : "postflip");
+    if (postflipCensus) {
+        VLOG(REPORT,
+             "[GCV2][hapillar][postflip] rangeBytes=%zu chunks=%zu processedRegions=%zu "
+             "processedObjects=%zu invalid=%zu refHolders=%zu fields=%zu oldTagged=%zu fixed=%zu "
+             "rootSlots=%zu oldTaggedRoots=%zu fixedRoots=%zu youngTargets=%zu rebuilt=%zu",
+             static_cast<size_t>(inactiveZone - heapStart), heapTotals.chunksTaken,
+             heapTotals.processedRegions, heapTotals.processedObjects, heapTotals.invalidObjects,
+             heapTotals.refHolders, heapTotals.fields, heapTotals.oldTaggedSlots, heapTotals.fixedSlots,
+             rootTotals.rootSlots, rootTotals.oldTaggedRootSlots, rootTotals.fixedRootSlots,
+             heapTotals.youngTargetSlots, heapTotals.rebuilt);
+    }
     if (account) {
         VLOG(REPORT,
              "[GCV2][preflip-account] phase=%s regions=%zu knownEmptyRegions=%zu objects=%zu "
