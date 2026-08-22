@@ -65,6 +65,23 @@ std::atomic<uintptr_t> g_slotWatchAddress{ 0 };
 std::atomic<uintptr_t> g_slotWatchHolder{ 0 };
 std::atomic<uint64_t> g_slotWatchDeclared{ 0 };
 std::atomic<uint32_t> g_slotWatchVisitedGc{ std::numeric_limits<uint32_t>::max() };
+std::atomic<uintptr_t> g_slotWatchTarget{ 0 };
+std::atomic<uint32_t> g_slotWatchMarkedGc{ std::numeric_limits<uint32_t>::max() };
+std::atomic<uintptr_t> g_slotWatchMarkedCarrier{ 0 };
+std::atomic<uintptr_t> g_slotWatchMarkedBitmap{ 0 };
+std::atomic<uint64_t> g_slotWatchMarkedEpoch{ 0 };
+std::atomic<uint64_t> g_slotWatchMarkedWord8{ 0 };
+std::atomic<uintptr_t> g_slotWatchMarkedRegion{ 0 };
+std::atomic<size_t> g_slotWatchMarkedOffset{ 0 };
+
+uint64_t WatchObjectId()
+{
+    static const uint64_t id = []() {
+        const char* value = std::getenv("MRT_GCV2_WATCH_ID");
+        return value == nullptr || value[0] == '\0' ? 0 : std::strtoull(value, nullptr, 10);
+    }();
+    return id;
+}
 
 const char* RegionKindName(RegionInfo::RegionType type)
 {
@@ -252,6 +269,23 @@ void ReportSlotWatch(BaseObject* holder, uint64_t declared, uint64_t index, uint
         regionSeq = static_cast<unsigned>(region->GetRegionLifeSeq());
         regionKind = static_cast<unsigned>(region->GetRegionType());
         regionKindName = RegionKindName(region->GetRegionType());
+        if (walkVisited) {
+            LiveInfo* carrier = region->GetLiveInfo();
+            uintptr_t bitmapAddress = 0;
+            region->ReadMarkFaceActual<Generation::Old>(carrier, offset, bitmapAddress,
+                                                        bitmapBitActual, bitmapPresent, bitmapEpoch);
+            g_slotWatchTarget.store(reinterpret_cast<uintptr_t>(target), std::memory_order_relaxed);
+            g_slotWatchMarkedCarrier.store(reinterpret_cast<uintptr_t>(carrier), std::memory_order_relaxed);
+            g_slotWatchMarkedBitmap.store(bitmapAddress, std::memory_order_relaxed);
+            g_slotWatchMarkedEpoch.store(bitmapEpoch, std::memory_order_relaxed);
+            g_slotWatchMarkedRegion.store(reinterpret_cast<uintptr_t>(region), std::memory_order_relaxed);
+            g_slotWatchMarkedOffset.store(offset, std::memory_order_relaxed);
+            g_slotWatchMarkedWord8.store(
+                __atomic_load_n(reinterpret_cast<const uint64_t*>(reinterpret_cast<uintptr_t>(target) + 8),
+                                __ATOMIC_RELAXED),
+                std::memory_order_relaxed);
+            g_slotWatchMarkedGc.store(gc, std::memory_order_release);
+        }
     }
     std::fprintf(stderr,
                  "[GCV2][slotwatch] gc=%u phase=%s phaseId=%u holder=%p declared=%llu index=%llu "
@@ -268,6 +302,143 @@ void ReportSlotWatch(BaseObject* holder, uint64_t declared, uint64_t index, uint
                  static_cast<unsigned long long>(markEpoch), static_cast<unsigned long long>(bitmapEpoch),
                  allocatedAfterMarkStart ? 1u : 0u);
     std::fflush(stderr);
+}
+
+void RefreshSlotWatchTarget(const char* point)
+{
+    if (!SlotWatchEnabled()) {
+        return;
+    }
+    const uintptr_t slotAddress = g_slotWatchAddress.load(std::memory_order_acquire);
+    if (slotAddress == 0) {
+        return;
+    }
+    const uint64_t slotValue = __atomic_load_n(reinterpret_cast<const uint64_t*>(slotAddress), __ATOMIC_ACQUIRE);
+    HeapSlot<> snapshot(to_zpointer(slotValue));
+    BaseObject* target = to_object(snapshot.GetTargetObject());
+    const uintptr_t prior = g_slotWatchTarget.exchange(reinterpret_cast<uintptr_t>(target),
+                                                        std::memory_order_acq_rel);
+    std::fprintf(stderr,
+                 "[GCV2][twobitmaps][refresh] gc=%u phase=%s point=%s slot=%p slotValue=%#llx "
+                 "priorTarget=%p target=%p markedGc=%u markedWord8=%#llx "
+                 "markedCarrier=%p markedBitmap=%p markedEpoch=%llu\n",
+                 static_cast<unsigned>(g_gcCount.load(std::memory_order_relaxed)),
+                 Collector::GetGCPhaseName(Heap::GetHeap().GetGCPhase()), point == nullptr ? "?" : point,
+                 reinterpret_cast<void*>(slotAddress), static_cast<unsigned long long>(slotValue),
+                 reinterpret_cast<void*>(prior), static_cast<void*>(target),
+                 g_slotWatchMarkedGc.load(std::memory_order_acquire),
+                 static_cast<unsigned long long>(g_slotWatchMarkedWord8.load(std::memory_order_relaxed)),
+                 reinterpret_cast<void*>(g_slotWatchMarkedCarrier.load(std::memory_order_relaxed)),
+                 reinterpret_cast<void*>(g_slotWatchMarkedBitmap.load(std::memory_order_relaxed)),
+                 static_cast<unsigned long long>(g_slotWatchMarkedEpoch.load(std::memory_order_relaxed)));
+    std::fflush(stderr);
+}
+
+void ReportCompactDecision(RegionInfo* region, BaseObject* object, size_t offset, size_t objectSize,
+                           bool survived)
+{
+    if (!SlotWatchEnabled() || region == nullptr || object == nullptr) {
+        return;
+    }
+    const uint64_t payloadWord = objectSize >= 16
+        ? __atomic_load_n(reinterpret_cast<const uint64_t*>(reinterpret_cast<uintptr_t>(object) + 8),
+                          __ATOMIC_RELAXED)
+        : 0;
+    const bool addressMatch = g_slotWatchTarget.load(std::memory_order_acquire) ==
+        reinterpret_cast<uintptr_t>(object);
+    const uint64_t markedWord8 = g_slotWatchMarkedWord8.load(std::memory_order_acquire);
+    const bool wordMatch = objectSize >= 16 && markedWord8 != 0 && payloadWord == markedWord8;
+    const uint64_t watchId = WatchObjectId();
+    const bool idMatch = objectSize >= 16 && watchId != 0 && payloadWord == watchId;
+    const bool coordinateMatch = g_slotWatchMarkedRegion.load(std::memory_order_acquire) ==
+            reinterpret_cast<uintptr_t>(region) &&
+        g_slotWatchMarkedOffset.load(std::memory_order_relaxed) == offset;
+    if (!addressMatch && !wordMatch && !idMatch && !coordinateMatch) {
+        return;
+    }
+    if (!addressMatch) {
+        g_slotWatchTarget.store(reinterpret_cast<uintptr_t>(object), std::memory_order_release);
+    }
+    LiveInfo* current = region->GetLiveInfo();
+    LiveInfo* ghost = region->GetLiveInfo0ForProbe();
+    uintptr_t currentYoungBitmap = 0;
+    uintptr_t currentOldBitmap = 0;
+    uintptr_t ghostYoungBitmap = 0;
+    uintptr_t ghostOldBitmap = 0;
+    bool currentYoungBit = false;
+    bool currentOldBit = false;
+    bool ghostYoungBit = false;
+    bool ghostOldBit = false;
+    bool present = false;
+    uint64_t currentYoungEpoch = 0;
+    uint64_t currentOldEpoch = 0;
+    uint64_t ghostYoungEpoch = 0;
+    uint64_t ghostOldEpoch = 0;
+    region->ReadMarkFaceActual<Generation::Young>(current, offset, currentYoungBitmap,
+                                                  currentYoungBit, present, currentYoungEpoch);
+    region->ReadMarkFaceActual<Generation::Old>(current, offset, currentOldBitmap,
+                                                currentOldBit, present, currentOldEpoch);
+    region->ReadMarkFaceActual<Generation::Young>(ghost, offset, ghostYoungBitmap,
+                                                  ghostYoungBit, present, ghostYoungEpoch);
+    region->ReadMarkFaceActual<Generation::Old>(ghost, offset, ghostOldBitmap,
+                                                ghostOldBit, present, ghostOldEpoch);
+    const Generation routeGeneration = region->GetRouteMarkGeneration();
+    std::fprintf(stderr,
+                 "[GCV2][twobitmaps][compact] gc=%u phase=%s obj=%p word8=%#llx size=%zu region=%p "
+                 "kind=%s kindId=%u youngRegion=%u life=%llu seq=%u offset=%zu survived=%u afterMark=%u "
+                 "routeGen=%s routeEpoch=%llu current=%p ghost=%p "
+                 "currentYoung=[bm=%p epoch=%llu bit=%u] currentOld=[bm=%p epoch=%llu bit=%u] "
+                 "ghostYoung=[bm=%p epoch=%llu bit=%u] ghostOld=[bm=%p epoch=%llu bit=%u] "
+                 "markedGc=%u markedWord8=%#llx match=%s markedCarrier=%p markedBitmap=%p markedEpoch=%llu "
+                 "markedRegion=%p markedOffset=%zu sameCarrier=%u sameBitmap=%u\n",
+                 static_cast<unsigned>(g_gcCount.load(std::memory_order_relaxed)),
+                 Collector::GetGCPhaseName(Heap::GetHeap().GetGCPhase()), static_cast<void*>(object),
+                 static_cast<unsigned long long>(payloadWord), objectSize, static_cast<void*>(region),
+                 RegionKindName(region->GetRegionType()), static_cast<unsigned>(region->GetRegionType()),
+                 region->IsYoungRegion() ? 1u : 0u,
+                 static_cast<unsigned long long>(region->GetRegionLifeId()),
+                 static_cast<unsigned>(region->GetRegionLifeSeq()), offset, survived ? 1u : 0u,
+                 region->AllocatedAfterMarkStart(offset) ? 1u : 0u,
+                 routeGeneration == Generation::Young ? "Young" : "Old",
+                 static_cast<unsigned long long>(region->GetRouteMarkSnapshotEpoch()),
+                 static_cast<void*>(current), static_cast<void*>(ghost),
+                 reinterpret_cast<void*>(currentYoungBitmap), static_cast<unsigned long long>(currentYoungEpoch),
+                 currentYoungBit ? 1u : 0u,
+                 reinterpret_cast<void*>(currentOldBitmap), static_cast<unsigned long long>(currentOldEpoch),
+                 currentOldBit ? 1u : 0u,
+                 reinterpret_cast<void*>(ghostYoungBitmap), static_cast<unsigned long long>(ghostYoungEpoch),
+                 ghostYoungBit ? 1u : 0u,
+                 reinterpret_cast<void*>(ghostOldBitmap), static_cast<unsigned long long>(ghostOldEpoch),
+                 ghostOldBit ? 1u : 0u,
+                 g_slotWatchMarkedGc.load(std::memory_order_acquire),
+                 static_cast<unsigned long long>(markedWord8),
+                 addressMatch ? "address" : (wordMatch ? "word8" : (idMatch ? "watch-id" : "region-offset")),
+                 reinterpret_cast<void*>(g_slotWatchMarkedCarrier.load(std::memory_order_relaxed)),
+                 reinterpret_cast<void*>(g_slotWatchMarkedBitmap.load(std::memory_order_relaxed)),
+                 static_cast<unsigned long long>(g_slotWatchMarkedEpoch.load(std::memory_order_relaxed)),
+                 reinterpret_cast<void*>(g_slotWatchMarkedRegion.load(std::memory_order_relaxed)),
+                 g_slotWatchMarkedOffset.load(std::memory_order_relaxed),
+                 reinterpret_cast<uintptr_t>(ghost) == g_slotWatchMarkedCarrier.load(std::memory_order_relaxed)
+                     ? 1u : 0u,
+                 (routeGeneration == Generation::Young ? ghostYoungBitmap : ghostOldBitmap) ==
+                         g_slotWatchMarkedBitmap.load(std::memory_order_relaxed)
+                     ? 1u : 0u);
+    std::fflush(stderr);
+}
+
+void NoteCompactMove(BaseObject* from, BaseObject* to)
+{
+    if (!SlotWatchEnabled() || from == nullptr || to == nullptr) {
+        return;
+    }
+    uintptr_t expected = reinterpret_cast<uintptr_t>(from);
+    if (g_slotWatchTarget.compare_exchange_strong(expected, reinterpret_cast<uintptr_t>(to),
+                                                  std::memory_order_acq_rel)) {
+        std::fprintf(stderr, "[GCV2][twobitmaps][move] gc=%u from=%p to=%p\n",
+                     static_cast<unsigned>(g_gcCount.load(std::memory_order_relaxed)),
+                     static_cast<void*>(from), static_cast<void*>(to));
+        std::fflush(stderr);
+    }
 }
 
 void ReportSlotWatchCycleEnd()

@@ -41,6 +41,7 @@
 #include "Heap/Verify/OffpastDiag.h"
 #include "Heap/Verify/CsetEmptyWho.h"
 #include "Heap/Verify/TraceClear.h"
+#include "Heap/Verify/ArrayWalkDiag.h"
 #include "Heap/Verify/FillerZeroDiag.h"
 #include "Heap/Verify/HoleWhoDiag.h"
 #include "Heap/Allocator/HeapFiller.h"
@@ -1527,6 +1528,9 @@ void RegionManager::AssemblePinnedGarbageCandidates(bool collectAll)
 
 YoungCollectionStats RegionManager::PrepareYoungGarbageCandidates(const std::function<void(RegionInfo*)>& visitor)
 {
+    // twobitmaps: refresh through the watched root after any previous-cycle forwarding,
+    // immediately before the young collection chooses and clears its candidate faces.
+    ArrayWalkDiag::RefreshSlotWatchTarget("prepare-young");
     YoungCollectionStats stats;
     RegionInfo* oldRegion = fromRegionList.GetHeadRegion();
     while (oldRegion != nullptr) {
@@ -3183,7 +3187,9 @@ void RegionManager::CompactRegion(RegionInfo* region)
         }
         size_t size = currentObj->GetSize();
         size_t offset = currentPtr - regionStart;
-        if (survivedAt(offset)) {
+        const bool survived = survivedAt(offset);
+        ArrayWalkDiag::ReportCompactDecision(region, currentObj, offset, size, survived);
+        if (survived) {
             MAddress toAddress = region->Alloc(size);
             BaseObject* toObj = from_region_addr(toAddress);
             DLOG(FORWARD, "compact obj %p<%p>(%zu) to %p", currentObj, currentObj->GetTypeInfo(), size, toObj);
@@ -3198,6 +3204,7 @@ void RegionManager::CompactRegion(RegionInfo* region)
                 O2ORemsetDiag::NoteCompactRemsetInFrom(remIn);
             }
             collector.CopyObject(*currentObj, *toObj, size);
+            ArrayWalkDiag::NoteCompactMove(currentObj, toObj);
             toObj->SetStateCode(ObjectState::NORMAL);
             std::atomic_thread_fence(std::memory_order_release);
             ForwardingTable::InsertMapping(currentPtr, toAddress);
@@ -3315,7 +3322,9 @@ void RegionManager::CompactRegion(RegionInfo* region, RegionInfo* toRegion1)
             break;
         }
         size_t size = currentObj->GetSize();
-        if (survivedAt(offset)) {
+        const bool survived = survivedAt(offset);
+        ArrayWalkDiag::ReportCompactDecision(region, currentObj, offset, size, survived);
+        if (survived) {
             MAddress toAddress = toRegion1->Alloc(size);
             if (toAddress == 0) {
                 break;
@@ -3333,6 +3342,7 @@ void RegionManager::CompactRegion(RegionInfo* region, RegionInfo* toRegion1)
                 O2ORemsetDiag::NoteCompactRemsetInFrom(remIn);
             }
             collector.CopyObject(*currentObj, *toObj, size);
+            ArrayWalkDiag::NoteCompactMove(currentObj, toObj);
             toObj->SetStateCode(ObjectState::NORMAL);
             std::atomic_thread_fence(std::memory_order_release);
             ForwardingTable::InsertMapping(currentPtr, toAddress);
@@ -3355,7 +3365,9 @@ void RegionManager::CompactRegion(RegionInfo* region, RegionInfo* toRegion1)
             break;
         }
         size_t size = currentObj->GetSize();
-        if (survivedAt(offset)) {
+        const bool survived = survivedAt(offset);
+        ArrayWalkDiag::ReportCompactDecision(region, currentObj, offset, size, survived);
+        if (survived) {
             MAddress toAddress = region->Alloc(size);
             BaseObject* toObj = from_region_addr(toAddress);
             DLOG(FORWARD, "compact obj %p<%p>(%zu) to %p", currentObj, currentObj->GetTypeInfo(), size, toObj);
@@ -3370,6 +3382,7 @@ void RegionManager::CompactRegion(RegionInfo* region, RegionInfo* toRegion1)
                 O2ORemsetDiag::NoteCompactRemsetInFrom(remIn);
             }
             collector.CopyObject(*currentObj, *toObj, size);
+            ArrayWalkDiag::NoteCompactMove(currentObj, toObj);
             toObj->SetStateCode(ObjectState::NORMAL);
             std::atomic_thread_fence(std::memory_order_release);
             ForwardingTable::InsertMapping(currentPtr, toAddress);

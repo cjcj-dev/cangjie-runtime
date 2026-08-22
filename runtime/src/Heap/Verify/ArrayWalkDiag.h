@@ -6,6 +6,7 @@
 
 namespace MapleRuntime {
 class BaseObject;
+class RegionInfo;
 class TypeInfo;
 
 namespace ArrayWalkDiag {
@@ -27,6 +28,10 @@ void ReportSlotWatch(BaseObject* holder, uint64_t declared, uint64_t index, uint
                      uint64_t slotValue, BaseObject* target, bool walkVisited, bool pushed,
                      const char* skipReason, int isMarkedObject);
 void ReportSlotWatchCycleEnd();
+void RefreshSlotWatchTarget(const char* point);
+void ReportCompactDecision(RegionInfo* region, BaseObject* object, size_t offset, size_t objectSize,
+                           bool survived);
+void NoteCompactMove(BaseObject* from, BaseObject* to);
 void End();
 void Report(const char* point);
 

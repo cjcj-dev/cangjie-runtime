@@ -1454,6 +1454,31 @@ public:
         bit = bitmap->IsMarked(offset);
     }
 
+    // twobitmaps: name both the carrier and the physical bitmap used by a face.
+    // Unlike GetMarkBitmap, this deliberately performs no view/epoch validation: the
+    // caller is comparing identities at the mark and compact decision edges.
+    template<Generation G>
+    void ReadMarkFaceActual(LiveInfo* carrier, size_t offset, uintptr_t& bitmapAddress,
+                            bool& bit, bool& bitmapPresent, uint64_t& faceEpoch)
+    {
+        bitmapAddress = 0;
+        bit = false;
+        bitmapPresent = false;
+        faceEpoch = 0;
+        if (carrier == nullptr || reinterpret_cast<MAddress>(carrier) == LiveInfo::TEMPORARY_PTR) {
+            return;
+        }
+        LiveInfo::MarkFace& face = carrier->GetMarkFace<G>();
+        faceEpoch = face.epoch.load(std::memory_order_acquire);
+        RegionBitmap* bitmap = __atomic_load_n(&face.bitmap, std::memory_order_acquire);
+        if (bitmap == nullptr || reinterpret_cast<MAddress>(bitmap) == LiveInfo::TEMPORARY_PTR) {
+            return;
+        }
+        bitmapAddress = reinterpret_cast<uintptr_t>(bitmap);
+        bitmapPresent = true;
+        bit = bitmap->IsMarked(offset);
+    }
+
     template<Generation G>
     bool IsMarkedObject(MarkView<G> view, size_t offset)
     {
