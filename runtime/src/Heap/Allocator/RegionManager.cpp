@@ -3077,6 +3077,30 @@ void RegionManager::CompactRegion(RegionInfo* region)
         }
         size_t size = currentObj->GetSize();
         size_t offset = currentPtr - regionStart;
+        static const uint64_t watchId = []() {
+            const char* v = std::getenv("MRT_GCV2_WATCH_ID");
+            return (v != nullptr && v[0] != '\0') ? std::strtoull(v, nullptr, 10) : 0ULL;
+        }();
+        if (watchId != 0 && Heap::IsHeapAddress(currentObj)) {
+            const uint64_t fieldId =
+                *reinterpret_cast<const uint64_t*>(reinterpret_cast<const char*>(currentObj) + 8);
+            if (fieldId == watchId) {
+                const bool survived = survivedAt(offset);
+                const bool afterMark = region->AllocatedAfterMarkStart(offset);
+                std::fprintf(stderr,
+                             "[WATCH] compact id=%llu obj=%p start=%#zx off=%zu size=%zu survived=%u afterMark=%u "
+                             "young=%u type=%u life=%llu routeMarkGen=%u liveBytes=%zu allocPtr=%#zx limit=%#zx\n",
+                             static_cast<unsigned long long>(watchId), static_cast<void*>(currentObj),
+                             static_cast<size_t>(regionStart), offset, size, survived ? 1U : 0U,
+                             afterMark ? 1U : 0U, youngRegion ? 1U : 0U,
+                             static_cast<unsigned>(region->GetRegionType()),
+                             static_cast<unsigned long long>(region->GetRegionLifeId()),
+                             static_cast<unsigned>(region->GetRouteMarkGeneration()),
+                             region->GetLiveByteCount(), static_cast<size_t>(region->GetRegionAllocPtr()),
+                             static_cast<size_t>(regionLimit));
+                std::fflush(stderr);
+            }
+        }
         if (survivedAt(offset)) {
             MAddress toAddress = region->Alloc(size);
             BaseObject* toObj = from_region_addr(toAddress);

@@ -7,6 +7,9 @@
 
 #include "Barrier.inline.h"
 #include "Base/Macros.h"
+
+#include <cstdio>
+#include <cstdlib>
 #include "Heap/Allocator/AllocBuffer.h"
 #include "Heap/Barrier/StoreBarrierBuffer.h"
 #include "Heap/Allocator/RegionInfo.h"
@@ -571,6 +574,27 @@ void Barrier::WriteReference(BaseObject* obj, RefField<false>& field, BaseObject
     NoteW1HolderStore(theCollector, obj);
     RefField<> prev(field.GetFieldValue());
     const bool prevStoreGood = PrevIsStoreGoodForTarget(theCollector, prev, ref);
+    static const uint64_t watchIdWrite = []() {
+        const char* v = std::getenv("MRT_GCV2_WATCH_ID");
+        return (v != nullptr && v[0] != '\0') ? std::strtoull(v, nullptr, 10) : 0ULL;
+    }();
+    if (watchIdWrite != 0 && ref != nullptr && Heap::IsHeapAddress(ref)) {
+        const uint64_t fieldId = *reinterpret_cast<const uint64_t*>(reinterpret_cast<const char*>(ref) + 8);
+        if (fieldId == watchIdWrite) {
+            RegionInfo* href = (obj != nullptr && Heap::IsHeapAddress(obj))
+                ? RegionInfo::TryGetRegionInfoAt(reinterpret_cast<MAddress>(obj))
+                : nullptr;
+            std::fprintf(stderr,
+                         "[WATCH] write id=%llu slot=%p holder=%p holderYoung=%d holderType=%d "
+                         "prevStoreGood=%u slowRemset=%u\n",
+                         static_cast<unsigned long long>(watchIdWrite), static_cast<void*>(&field),
+                         static_cast<void*>(obj),
+                         href == nullptr ? -1 : static_cast<int>(href->IsYoungRegion()),
+                         href == nullptr ? -1 : static_cast<int>(href->GetRegionType()),
+                         prevStoreGood ? 1U : 0U, prevStoreGood ? 0U : 1U);
+            std::fflush(stderr);
+        }
+    }
     WriteReferenceImpl(obj, field, ref);
     SurvNodeDiag::NoteStore(&field, to_object(prev.GetTargetObject()), ref, SurvNodeDiag::STORE_WRITE_REF);
     NoteInstalledSlot(field, theCollector, static_cast<uint8_t>(phase));
@@ -1724,6 +1748,31 @@ void Barrier::RecordCrossGenEdge(BaseObject* obj, MAddress fieldAddress, BaseObj
     // constant false branch unless REMAPDOMAIN_AUDIT/CJRT_REMAP_DOMAIN is on.
     (void)DeferredRemapDomain::Capture(fieldAddress, ref,
                                        DeferredRemapDomain::Producer::WriteBarrier);
+    static const uint64_t watchId = []() {
+        const char* v = std::getenv("MRT_GCV2_WATCH_ID");
+        return (v != nullptr && v[0] != '\0') ? std::strtoull(v, nullptr, 10) : 0ULL;
+    }();
+    if (watchId != 0 && ref != nullptr && Heap::IsHeapAddress(ref)) {
+        const uint64_t fieldId = *reinterpret_cast<const uint64_t*>(reinterpret_cast<const char*>(ref) + 8);
+        if (fieldId == watchId) {
+            RegionInfo* href = (obj != nullptr && Heap::IsHeapAddress(obj))
+                ? RegionInfo::TryGetRegionInfoAt(reinterpret_cast<MAddress>(obj))
+                : nullptr;
+            RegionInfo* tref = RegionInfo::TryGetRegionInfoAt(reinterpret_cast<MAddress>(ref));
+            std::fprintf(stderr,
+                         "[WATCH] store id=%llu slot=%#zx holder=%p holderYoung=%d holderType=%d "
+                         "target=%p targetYoung=%d targetType=%d phase=%u\n",
+                         static_cast<unsigned long long>(watchId), static_cast<size_t>(fieldAddress),
+                         static_cast<void*>(obj),
+                         href == nullptr ? -1 : static_cast<int>(href->IsYoungRegion()),
+                         href == nullptr ? -1 : static_cast<int>(href->GetRegionType()),
+                         static_cast<void*>(ref),
+                         tref == nullptr ? -1 : static_cast<int>(tref->IsYoungRegion()),
+                         tref == nullptr ? -1 : static_cast<int>(tref->GetRegionType()),
+                         static_cast<unsigned>(this->phase));
+            std::fflush(stderr);
+        }
+    }
     // promoteedge gen codes: 0=unknown 1=young 2=old 3=nonheap
     constexpr uint8_t kGenUnknown = 0;
     constexpr uint8_t kGenYoung = 1;
