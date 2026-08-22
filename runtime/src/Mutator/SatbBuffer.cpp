@@ -10,6 +10,7 @@
 #include "Heap/Collector/CollectorResources.h"
 #include "Heap/Allocator/RegionSpace.h"
 #include "Heap/Heap.h"
+#include "Heap/Verify/AFamilyDiag.h"
 #include "Heap/Verify/MarkCompleteVerify.h"
 
 #include "Base/ImmortalWrapper.h"
@@ -197,6 +198,7 @@ void SatbBuffer::NoteFilterDrop(BaseObject* obj)
     }
     if (region->IsTraceRegion()) {
         g_filterDropTraceRegion.fetch_add(1, std::memory_order_relaxed);
+        AFamilyDiag::NoteClaim(obj, AFamilyDiag::CH_TRACE_REGION);
         return;
     }
     if (RegionSpace::IsMarkedObject<Generation::Old>(obj)) {

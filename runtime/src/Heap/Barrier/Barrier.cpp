@@ -15,6 +15,7 @@
 #include "Heap/Collector/Collector.h"
 #include "Heap/Collector/CollectorResources.h"
 #include "Heap/Heap.h"
+#include "Heap/Verify/AFamilyDiag.h"
 #include "Heap/Verify/HealPairDiag.h"
 #include "Heap/Verify/IdleEdgeDiag.h"
 #include "Heap/Verify/SurvNodeDiag.h"
@@ -505,6 +506,9 @@ static inline void NoteValueSideStore(BaseObject* ref, uint8_t phase)
     }
     LOG(RTLOG_ERROR, "[VALSIDE] bad=%lu of total=%lu ref=%p sc=%u typeInfo=0x%lx phase=%u family=%s", bad, total,
         static_cast<void*>(ref), stateCode, typeInfo, phase, (typeInfo == 0) ? "A-zeroed" : "B-forwarded");
+    if (typeInfo == 0) {
+        AFamilyDiag::OnAZeroed(ref, nullptr, nullptr, phase, 0);
+    }
 }
 
 // The value side alone is not yet a defect: our encoding is two-state (RefField carries a tag
@@ -543,6 +547,9 @@ static inline void NoteInstalledSlot(const RefField<false>& field, const Collect
     LOG(RTLOG_ERROR, "[VALSIDE][installed] bad=%lu slot=%p target=%p sc=%u typeInfo=0x%lx phase=%u family=%s", bad,
         static_cast<const void*>(&field), static_cast<void*>(target), stateCode, typeInfo, phase,
         (typeInfo == 0) ? "A-zeroed" : "B-forwarded");
+    if (typeInfo == 0) {
+        AFamilyDiag::OnAZeroed(target, nullptr, static_cast<const void*>(&field), phase, 0);
+    }
 }
 
 void Barrier::WriteI8(BaseObject* obj, Field<int8_t>& field, int8_t val) const { field.SetFieldValue(obj, val); }
@@ -900,6 +907,9 @@ static inline void NoteHandedOut(BaseObject* target, BaseObject* holder, const R
     LOG(RTLOG_ERROR, "[VALSIDE][handedout] bad=%lu target=%p sc=%u typeInfo=0x%lx phase=%u family=%s hasTo=%d unmov=%d slotGood=%d slotRemap=%#zx loadBad=%#zx afterFlip=%u ghost=%d from=%d inRemset=%d holderGen=%d targetGen=%d holderMarked=%d healedFp=%u", bad,
         static_cast<void*>(target), stateCode, typeInfo, phase, (typeInfo == 0) ? "A-zeroed" : "B-forwarded",
         hasTo ? 1 : 0, unmov ? 1 : 0, slotGood ? 1 : 0, slotRemap, loadBad, paintedAfterFlip, isGhost ? 1 : 0, isFrom ? 1 : 0, inRemset ? 1 : 0, holderGen, targetGen, holderMarked, healedFp);
+    if (typeInfo == 0) {
+        AFamilyDiag::OnAZeroed(target, holder, static_cast<const void*>(&field), phase, hasTo ? 1 : 0);
+    }
 }
 
 // staleguard: a colour is not proof that a target is current.

@@ -72,6 +72,7 @@
 #include "Heap/Verify/HealPairDiag.h"
 #include "Heap/Verify/GateDropDiag.h"
 #include "Heap/Verify/NoTracedDiag.h"
+#include "Heap/Verify/AFamilyDiag.h"
 #include "Heap/Verify/SurvNodeDiag.h"
 #include "Heap/Verify/HeldFreeDiag.h"
 #include "Heap/Verify/YyEdgeDiag.h"
@@ -4865,6 +4866,7 @@ void WCollector::TraceYoungClosureSerial(WorkStack& workStack, bool fullYoungSca
                     ++g_markInternalCost.claimYoungN;
                 }
                 reachableVec.push_back(object);
+                AFamilyDiag::NoteClaim(object, AFamilyDiag::CH_TRACE);
             } else {
                 continue;
             }
@@ -4915,6 +4917,7 @@ void WCollector::TraceYoungClosureSerial(WorkStack& workStack, bool fullYoungSca
                 continue;
             }
             reachableVec.push_back(object);
+            AFamilyDiag::NoteClaim(object, AFamilyDiag::CH_TRACE);
         }
 
         if (!object->HasRefField()) {

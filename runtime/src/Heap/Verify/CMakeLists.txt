@@ -10,6 +10,7 @@ set(SRC_LIST
     "VerifyHeap.cpp"
     "MarkCompleteVerify.cpp"
     "SurvNodeDiag.cpp"
+    "AFamilyDiag.cpp"
     "VerifyOption.cpp"
     "Zap.cpp"
     "VerifyRegions.cpp"

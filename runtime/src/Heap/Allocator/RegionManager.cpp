@@ -33,6 +33,7 @@
 #include "Heap.h"
 #include "Heap/Barrier/RememberedSet.h"
 #include "Heap/HeapWork.h"
+#include "Heap/Verify/AFamilyDiag.h"
 #include "Heap/Verify/DiagGate.h"
 #include "Heap/Verify/F3Why2Diag.h"
 #include "Heap/Verify/FlipPromoDiag.h"
@@ -3132,6 +3133,7 @@ void RegionManager::CompactRegion(RegionInfo* region)
                 O2ORemsetDiag::NoteCompactRemsetInFrom(remIn);
             }
             collector.CopyObject(*currentObj, *toObj, size);
+            AFamilyDiag::NoteClaim(toObj, AFamilyDiag::CH_COMPACT);
             toObj->SetStateCode(ObjectState::NORMAL);
             std::atomic_thread_fence(std::memory_order_release);
             ForwardingTable::InsertMapping(currentPtr, toAddress);
@@ -3267,6 +3269,7 @@ void RegionManager::CompactRegion(RegionInfo* region, RegionInfo* toRegion1)
                 O2ORemsetDiag::NoteCompactRemsetInFrom(remIn);
             }
             collector.CopyObject(*currentObj, *toObj, size);
+            AFamilyDiag::NoteClaim(toObj, AFamilyDiag::CH_COMPACT);
             toObj->SetStateCode(ObjectState::NORMAL);
             std::atomic_thread_fence(std::memory_order_release);
             ForwardingTable::InsertMapping(currentPtr, toAddress);
@@ -3304,6 +3307,7 @@ void RegionManager::CompactRegion(RegionInfo* region, RegionInfo* toRegion1)
                 O2ORemsetDiag::NoteCompactRemsetInFrom(remIn);
             }
             collector.CopyObject(*currentObj, *toObj, size);
+            AFamilyDiag::NoteClaim(toObj, AFamilyDiag::CH_COMPACT);
             toObj->SetStateCode(ObjectState::NORMAL);
             std::atomic_thread_fence(std::memory_order_release);
             ForwardingTable::InsertMapping(currentPtr, toAddress);

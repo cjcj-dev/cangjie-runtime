@@ -21,6 +21,7 @@
 #include "Heap/Verify/MarkCompleteVerify.h"
 #include "Heap/Verify/MarkFaceSnap.h"
 #include "Heap/Verify/NoTracedDiag.h"
+#include "Heap/Verify/AFamilyDiag.h"
 #include "Heap/Verify/SurvNodeDiag.h"
 #include "Heap/Verify/StackRootSlotAttest.h"
 #include "Heap/Verify/VerifyRoots.h"
@@ -367,6 +368,7 @@ public:
             bool wasMarked = collector.MarkObject(obj);
             if (!wasMarked) {
                 nNewlyMarked++;
+                AFamilyDiag::NoteClaim(obj, AFamilyDiag::CH_TRACE);
                 if (!obj->HasRefField()) {
                     continue;
                 }

@@ -16,8 +16,10 @@
 #if defined(CANGJIE_SANITIZER_SUPPORT) || defined(CANGJIE_GWPASAN_SUPPORT)
 #include "Sanitizer/SanitizerInterface.h"
 #endif
+#include "Common/ColourTypes.h"
 #include "Common/ScopedObjectAccess.h"
 #include "Heap.h"
+#include "Heap/Verify/AFamilyDiag.h"
 #include "Heap/Verify/AllocPhaseDiag.h"
 #include "Heap/Verify/MinorGCALot.h"
 #include "Heap/Verify/SealCheck.h"
@@ -261,6 +263,20 @@ MAddress AllocBuffer::Allocate(size_t totalSize, AllocType allocType)
     // gcvroot Z3: poison new object bytes before header install (MRT_GCV2_ZAP_ALLOC=1).
     if (addr != 0) {
         HeapZap::ZapAllocated(addr, totalSize);
+        if (AFamilyDiag::Enabled()) {
+            RegionInfo* claimReg = (tlRegion != nullptr && tlRegion != RegionInfo::NullRegion())
+                ? tlRegion
+                : RegionInfo::TryGetRegionInfoAt(addr);
+            if (claimReg != nullptr) {
+                BaseObject* newborn = from_region_addr(addr);
+                size_t off = claimReg->GetAddressOffset(addr);
+                if (claimReg->IsTraceRegion()) {
+                    AFamilyDiag::NoteClaim(newborn, AFamilyDiag::CH_TRACE_REGION);
+                } else if (claimReg->AllocatedAfterMarkStart(off)) {
+                    AFamilyDiag::NoteClaim(newborn, AFamilyDiag::CH_ALLOC_WATER);
+                }
+            }
+        }
         RegionInfo* reg = nullptr;
         if (tlRegion != nullptr && tlRegion != RegionInfo::NullRegion()) {
             reg = tlRegion;
