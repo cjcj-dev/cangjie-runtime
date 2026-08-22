@@ -6894,6 +6894,7 @@ void WCollector::DoYoungGarbageCollection()
     MinorObjectSet allocationRoots;
     MinorSlotSet reachableSlots;
     MinorSlotSet weakSlots;
+    const bool youngWideDiag = AllocBuffer::YoungWideDiagEnabled();
     if (remsetHashOptRequested && fullYoungScan) {
         // Runtime lower bound only: if holder closure covers the remset, this
         // avoids growth rehashes; if it does not, unordered_set still grows
@@ -6907,12 +6908,84 @@ void WCollector::DoYoungGarbageCollection()
         theAllocator.VisitAllocBuffers([&enumRoots](AllocBuffer& buffer) { buffer.MergeRoots(enumRoots); });
         // h3seed2 甲: merge y2y dirty holders (object seeds) before VisitMinorRoots.
         size_t y2yDirtyN = 0;
-        theAllocator.VisitAllocBuffers([&enumRoots, &y2yDirtyN](AllocBuffer& buffer) {
-            y2yDirtyN += buffer.Y2yDirtyHolderCount();
+        std::unordered_set<BaseObject*> youngWideSeeds;
+        std::unordered_set<BaseObject*> youngWideYoungTargets;
+        std::unordered_set<BaseObject*> youngWideOldTargets;
+        if (youngWideDiag) {
+            theAllocator.VisitAllocBuffers([&y2yDirtyN](AllocBuffer& buffer) {
+                y2yDirtyN += buffer.Y2yDirtyHolderCount();
+            });
+            youngWideSeeds.reserve(y2yDirtyN);
+            youngWideYoungTargets.reserve(y2yDirtyN);
+            youngWideOldTargets.reserve(y2yDirtyN);
+            theAllocator.VisitAllocBuffers(
+                [&youngWideSeeds, &youngWideYoungTargets, &youngWideOldTargets](AllocBuffer& buffer) {
+                    buffer.VisitY2yDirtyHolders(
+                        [&youngWideSeeds](BaseObject* object) { youngWideSeeds.insert(object); });
+                    buffer.VisitYoungWideYoungTargetHolders(
+                        [&youngWideYoungTargets](BaseObject* object) { youngWideYoungTargets.insert(object); });
+                    buffer.VisitYoungWideOldTargetHolders(
+                        [&youngWideOldTargets](BaseObject* object) { youngWideOldTargets.insert(object); });
+                });
+        }
+        theAllocator.VisitAllocBuffers([&enumRoots, &y2yDirtyN, youngWideDiag](AllocBuffer& buffer) {
+            if (!youngWideDiag) {
+                y2yDirtyN += buffer.Y2yDirtyHolderCount();
+            }
             buffer.MergeY2yDirtyHolders(enumRoots);
         });
         if (y2yDirtyN != 0) {
             VLOG(REPORT, "[GCV2Minor] y2yDirtyHolders=%zu (h3seed2 object seeds, not field remset)", y2yDirtyN);
+        }
+        if (youngWideDiag) {
+            size_t seedYoung = 0;
+            size_t seedOld = 0;
+            size_t seedUnknown = 0;
+            size_t targetYoungOnly = 0;
+            size_t targetOldOnly = 0;
+            size_t targetBoth = 0;
+            size_t targetUnclassified = 0;
+            std::array<size_t, kPageAgeCount> seedAgeObjects{};
+            for (BaseObject* object : youngWideSeeds) {
+                RegionInfo* region = object == nullptr ? nullptr :
+                    RegionInfo::TryGetRegionInfoAt(reinterpret_cast<MAddress>(object));
+                if (region == nullptr) {
+                    ++seedUnknown;
+                } else if (region->IsYoungRegion()) {
+                    ++seedYoung;
+                    uint32_t age = region->GetYoungAge();
+                    if (age >= kPageAgeCount) {
+                        age = untype(PageAge::survivor14);
+                    }
+                    ++seedAgeObjects[age];
+                } else {
+                    ++seedOld;
+                }
+                const bool sawYoungTarget = youngWideYoungTargets.count(object) != 0;
+                const bool sawOldTarget = youngWideOldTargets.count(object) != 0;
+                if (sawYoungTarget && sawOldTarget) {
+                    ++targetBoth;
+                } else if (sawYoungTarget) {
+                    ++targetYoungOnly;
+                } else if (sawOldTarget) {
+                    ++targetOldOnly;
+                } else {
+                    ++targetUnclassified;
+                }
+            }
+            std::string seedAge;
+            for (size_t count : seedAgeObjects) {
+                if (!seedAge.empty()) {
+                    seedAge += ',';
+                }
+                seedAge += std::to_string(count);
+            }
+            VLOG(REPORT,
+                 "[GCV2][youngwide][seeds] raw=%zu unique=%zu duplicate=%zu young=%zu old=%zu unknown=%zu "
+                 "target_young_only=%zu target_old_only=%zu target_both=%zu target_unclassified=%zu "
+                 "age_objects=[%s]",
+                 y2yDirtyN, youngWideSeeds.size(), y2yDirtyN - youngWideSeeds.size(), seedYoung, seedOld,
+                 seedUnknown, targetYoungOnly, targetOldOnly, targetBoth, targetUnclassified, seedAge.c_str());
         }
         if (stackScanEpoch != 0) {
             SatbBuffer::Instance().GetRetiredObjects(enumRoots);
@@ -7654,6 +7727,7 @@ void WCollector::DoYoungGarbageCollection()
 
     size_t liveBytes = 0;
     TenuringInputs tenuringIn;
+    std::array<size_t, kPageAgeCount> candidateAgeRegions{};
     tenuringIn.softMaxCapacity = Heap::GetHeap().GetMaxCapacity();
     tenuringIn.youngAllocated = stats.candidateBytes;
     for (RegionInfo* region : minorCandidateRegions) {
@@ -7664,6 +7738,7 @@ void WCollector::DoYoungGarbageCollection()
             age = untype(PageAge::survivor14);
         }
         tenuringIn.liveByAge[age] += live;
+        ++candidateAgeRegions[age];
     }
     tenuringIn.youngGarbage = stats.candidateBytes > liveBytes ? (stats.candidateBytes - liveBytes) : 0;
     GCStats& gcStats = GetGCStats();
@@ -7676,6 +7751,55 @@ void WCollector::DoYoungGarbageCollection()
     VLOG(REPORT, "[GCV2][pageage] threshold=%u live0=%zu live1=%zu garbage=%zu allocated=%zu",
          gcStats.tenuringThreshold, tenuringIn.liveByAge[0], tenuringIn.liveByAge[1],
          tenuringIn.youngGarbage, tenuringIn.youngAllocated);
+    if (youngWideDiag) {
+        size_t closureYoung = 0;
+        size_t closureOld = 0;
+        size_t closureUnknown = 0;
+        std::unordered_set<BaseObject*> closureUnique;
+        closureUnique.reserve(reachableVec.size());
+        std::array<size_t, kPageAgeCount> closureAgeObjects{};
+        for (BaseObject* object : reachableVec) {
+            closureUnique.insert(object);
+            RegionInfo* region = object == nullptr ? nullptr :
+                RegionInfo::TryGetRegionInfoAt(reinterpret_cast<MAddress>(object));
+            if (region == nullptr) {
+                ++closureUnknown;
+            } else if (region->IsYoungRegion()) {
+                ++closureYoung;
+                uint32_t age = region->GetYoungAge();
+                if (age >= kPageAgeCount) {
+                    age = untype(PageAge::survivor14);
+                }
+                ++closureAgeObjects[age];
+            } else {
+                ++closureOld;
+            }
+        }
+        auto joinCounts = [](const auto& counts) {
+            std::string value;
+            for (size_t count : counts) {
+                if (!value.empty()) {
+                    value += ',';
+                }
+                value += std::to_string(count);
+            }
+            return value;
+        };
+        const std::string closureAge = joinCounts(closureAgeObjects);
+        const std::string candidateRegions = joinCounts(candidateAgeRegions);
+        std::array<size_t, kPageAgeCount> candidateLiveBytes{};
+        for (size_t i = 0; i < kPageAgeCount; ++i) {
+            candidateLiveBytes[i] = tenuringIn.liveByAge[i];
+        }
+        const std::string candidateLive = joinCounts(candidateLiveBytes);
+        VLOG(REPORT,
+             "[GCV2][youngwide][closure] entries=%zu unique=%zu duplicate=%zu young=%zu old=%zu unknown=%zu "
+             "walked_old=%zu age_objects=[%s] candidate_age_regions=[%s] candidate_live_bytes=[%s] "
+             "threshold=%u",
+             reachableVec.size(), closureUnique.size(), reachableVec.size() - closureUnique.size(), closureYoung,
+             closureOld, closureUnknown, closureOld, closureAge.c_str(), candidateRegions.c_str(),
+             candidateLive.c_str(), gcStats.tenuringThreshold);
+    }
     if (fullYoungScan) {
         // Run structural verify before mark-equivalence CHECK (may abort).
         VerifyRegionSets("after-young-mark");

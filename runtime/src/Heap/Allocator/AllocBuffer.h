@@ -8,6 +8,8 @@
 #ifndef MRT_ALLOC_BUFFER_H
 #define MRT_ALLOC_BUFFER_H
 
+#include <cstdlib>
+#include <cstring>
 #include <functional>
 #include <unordered_set>
 
@@ -103,6 +105,54 @@ public:
         }
     }
 
+    // youngwide: the product ledger above only says that the holder's slot lived
+    // on a young page.  Record, behind a true getenv gate, whether the value was
+    // young or old at the write so the misleading "y2y" name is measurable.
+    static bool YoungWideDiagEnabled()
+    {
+        static const bool enabled = []() {
+            const char* value = std::getenv("MRT_GCV2_YOUNGWIDE");
+            return value != nullptr && std::strcmp(value, "1") == 0;
+        }();
+        return enabled;
+    }
+
+    void NoteYoungWideTarget(BaseObject* obj, bool targetYoung)
+    {
+        if (obj == nullptr || !YoungWideDiagEnabled()) {
+            return;
+        }
+        if (targetYoung) {
+            youngWideYoungTargetHolders.insert(obj);
+        } else {
+            youngWideOldTargetHolders.insert(obj);
+        }
+    }
+
+    template<class Visitor>
+    inline void VisitY2yDirtyHolders(Visitor&& visitor) const
+    {
+        for (BaseObject* obj : y2yDirtyHolders) {
+            visitor(obj);
+        }
+    }
+
+    template<class Visitor>
+    inline void VisitYoungWideYoungTargetHolders(Visitor&& visitor) const
+    {
+        for (BaseObject* obj : youngWideYoungTargetHolders) {
+            visitor(obj);
+        }
+    }
+
+    template<class Visitor>
+    inline void VisitYoungWideOldTargetHolders(Visitor&& visitor) const
+    {
+        for (BaseObject* obj : youngWideOldTargetHolders) {
+            visitor(obj);
+        }
+    }
+
     template<class WorkStack>
     inline void MergeY2yDirtyHolders(WorkStack& workStack)
     {
@@ -113,6 +163,8 @@ public:
             workStack.push_back(obj);
         }
         y2yDirtyHolders.clear();
+        youngWideYoungTargetHolders.clear();
+        youngWideOldTargetHolders.clear();
     }
 
     size_t Y2yDirtyHolderCount() const { return y2yDirtyHolders.size(); }
@@ -142,6 +194,9 @@ private:
     std::list<BaseObject*> youngAllocBlack;
     // h3seed2: mutator-local young→young dirty holders (see PushY2yDirtyHolder)
     std::unordered_set<BaseObject*> y2yDirtyHolders;
+    // youngwide: diagnostic-only holder cohorts by target generation at write time.
+    std::unordered_set<BaseObject*> youngWideYoungTargetHolders;
+    std::unordered_set<BaseObject*> youngWideOldTargetHolders;
     StoreBarrierBuffer storeBarrierBuffer;
 };
 } // namespace MapleRuntime

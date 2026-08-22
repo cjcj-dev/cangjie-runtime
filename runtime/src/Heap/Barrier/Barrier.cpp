@@ -1828,6 +1828,7 @@ void Barrier::RecordCrossGenEdge(BaseObject* obj, MAddress fieldAddress, BaseObj
                 AllocBuffer* buffer = AllocBuffer::GetAllocBuffer();
                 if (buffer != nullptr) {
                     buffer->PushY2yDirtyHolder(obj);
+                    buffer->NoteYoungWideTarget(obj, targetRegion->IsYoungRegion());
                 }
             }
             if (UNLIKELY(YyEdgeDiag::RecordEnabled())) {
