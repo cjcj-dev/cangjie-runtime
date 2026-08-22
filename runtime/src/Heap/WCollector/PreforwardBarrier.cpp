@@ -33,9 +33,8 @@ BaseObject* PreforwardBarrier::ReadReference(BaseObject* obj, RefField<false>& f
                 return resolved;
             }
             RefField<> goodField = theCollector.GetAndTryTagRefField(resolved);
-            ZgcSelfHealLoadGood(field, oldField.GetFieldValue(), goodField.GetFieldValue(),
-                                HealSite::PreforwardReadReference);
-            return resolved;
+            return ZgcSelfHealLoadGood(field, oldField.GetFieldValue(), goodField.GetFieldValue(),
+                                       HealSite::PreforwardReadReference);
         }
 
         BaseObject* loadGood = oldTarget;
@@ -63,9 +62,8 @@ BaseObject* PreforwardBarrier::ReadReference(BaseObject* obj, RefField<false>& f
         RefField<> goodField = theCollector.GetAndTryTagRefField(loadGood);
         // OpenJDK ZBarrier::self_heal (zBarrier.inline.hpp:72-107): retain the exact
         // observed value as the CAS expected value and retry after a concurrent update.
-        ZgcSelfHealLoadGood(field, oldField.GetFieldValue(), goodField.GetFieldValue(),
-                            HealSite::PreforwardReadReference);
-        return loadGood;
+        return ZgcSelfHealLoadGood(field, oldField.GetFieldValue(), goodField.GetFieldValue(),
+                                   HealSite::PreforwardReadReference);
     }
 }
 
@@ -140,9 +138,8 @@ BaseObject* PreforwardBarrier::AtomicReadReference(BaseObject* obj, RefField<tru
         RefField<> goodField = theCollector.GetAndTryTagRefField(loadGood);
         // Replaces the old "not old-tag" assertion with the colour-era self-heal invariant.
         CHECK(theCollector.is_load_good(goodField));
-        ZgcSelfHealLoadGood(field, oldField.GetFieldValue(), goodField.GetFieldValue(),
-                            HealSite::PreforwardAtomicReadReference);
-        return loadGood;
+        return ZgcSelfHealLoadGood(field, oldField.GetFieldValue(), goodField.GetFieldValue(),
+                                   HealSite::PreforwardAtomicReadReference);
     }
 }
 

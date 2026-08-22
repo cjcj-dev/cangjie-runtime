@@ -49,6 +49,7 @@ set(GC_UNIT_SOURCES
     test_current_object_ref.cpp
     test_fillerobj.cpp
     test_i2_readref.cpp
+    test_fwdreturn.cpp
     test_fnlz_roots.cpp
     test_mark_stack_entry.cpp
     test_partial_array.cpp

@@ -7,6 +7,7 @@
 #include "Heap/Verify/ZgcInvariants.h"
 
 #include <atomic>
+#include <cstdlib>
 #include <cstring>
 
 #include "Base/Log.h"
@@ -94,8 +95,26 @@ void CheckLoadGoodTarget(BaseObject* target, const Collector& collector, uint8_t
 static std::atomic<uint64_t> g_census[1u << 13] = {};
 static std::atomic<uint64_t> g_censusTotal{ 0 };
 static std::atomic<uint64_t> g_illegalHits{ 0 };
+static std::atomic<uint64_t> g_illegalByPhase[7] = {};
+static std::atomic<uint64_t> g_healReturnChecked{ 0 };
+static std::atomic<uint64_t> g_healReturnFailures{ 0 };
+static std::atomic<bool> g_summaryRegistered{ false };
 uint64_t WCollectorFlipSeqForProbe();
 BaseObject* ProbeFindToVersion(BaseObject* obj);
+
+static const char* PhaseName(uint8_t phase)
+{
+    static constexpr const char* kNames[] = { "stw", "idle", "enum", "trace", "post-trace", "preforward", "forward" };
+    return phase < (sizeof(kNames) / sizeof(kNames[0])) ? kNames[phase] : "unknown";
+}
+
+static void EnsureSummaryAtExit()
+{
+    bool expected = false;
+    if (g_summaryRegistered.compare_exchange_strong(expected, true, std::memory_order_relaxed)) {
+        (void)std::atexit([]() { DumpSummary("atexit"); });
+    }
+}
 
 static unsigned ColourIndex(uint64_t remapBits)
 {
@@ -111,11 +130,13 @@ static unsigned ColourIndex(uint64_t remapBits)
     return (idx & 0x3u) + 1u; // 1..4, leaving 0 for "plain / no colour"
 }
 
-void NoteState(uintptr_t slotRaw, uintptr_t slotRawSecondRead, uintptr_t goodMask, BaseObject* target)
+static void NoteStateImpl(uintptr_t slotRaw, uintptr_t slotRawSecondRead, uintptr_t goodMask, BaseObject* target,
+                          uint8_t phase, bool probeToVersion)
 {
     if (!kInvariantsOn || target == nullptr || !Heap::IsHeapAddress(target)) {
         return;
     }
+    EnsureSummaryAtExit();
     const uint64_t hdr = __atomic_load_n(reinterpret_cast<const uint64_t*>(target), __ATOMIC_RELAXED);
     const unsigned stateCode = static_cast<unsigned>((hdr >> 48) & 0x3u);
     RegionInfo* region = RegionInfo::TryGetRegionInfoAt(reinterpret_cast<MAddress>(target));
@@ -133,32 +154,28 @@ void NoteState(uintptr_t slotRaw, uintptr_t slotRawSecondRead, uintptr_t goodMas
     // at flipSeq < 2 proves the slot was painted *after* the target had already moved.
     if (slotC == goodC && stateCode == 3u && ghost == 1u) {
         const uint64_t n = g_illegalHits.fetch_add(1, std::memory_order_relaxed) + 1;
-        // The slot value and the handed-out pointer disagreed in 54 of 68 hits, which would mean the
-        // barrier healed the slot to one object and returned another -- a contract ZGC does not
-        // allow (ZBarrier::barrier computes one zaddress, colours it into the slot, and returns that
-        // same zaddress).  Before believing that, rule out the mundane reading: the slot is shared,
-        // and this probe reads it *after* the barrier returned, so another thread may simply have
-        // written it in between.  slotRaw2 is a second read; if it differs from the first, the
-        // disagreement is a race in the observation, not in the barrier.
+        if (phase < (sizeof(g_illegalByPhase) / sizeof(g_illegalByPhase[0]))) {
+            g_illegalByPhase[phase].fetch_add(1, std::memory_order_relaxed);
+        }
+        // A pre-kStaleGuard measurement recorded slot/return disagreement in 54 of 68 hits.  This
+        // post-return observation cannot prove the barrier wrote that slot value: another writer
+        // may finish before both reads.  ZBarrier avoids the ambiguity structurally by deriving the
+        // healing pointer and return value from one good address; AssertHealMatchesReturn checks
+        // that direct data-flow contract at this runtime's write-back boundary.
         const uintptr_t slotRaw2 = slotRawSecondRead;
-        // Two stable reads that disagree with the returned pointer rule out an observation race, so
-        // the barrier really did hand back something other than what it wrote.  The shape suggests
-        // which way round: the returned object carries FORWARDED and sits in a ghost-from region,
-        // i.e. it is the *from* copy, while the slot holds a different address entirely.  If that
-        // other address is this object's to-version, then the heal was correct and only the return
-        // value is stale -- a local defect, not the cross-cycle staleness story.
-        // ZGC cannot express this: ZBarrier::barrier computes one zaddress, colours it into the
-        // slot, and returns that same zaddress.
-        BaseObject* toVer = ProbeFindToVersion(target);
+        // Two stable reads exclude only a write between the two probe loads.  Keep to-version
+        // classification for historical compatibility, but do not infer who wrote the slot.
+        BaseObject* toVer = probeToVersion ? ProbeFindToVersion(target) : nullptr;
         const unsigned slotIsToVersion =
             (toVer != nullptr &&
              (reinterpret_cast<uintptr_t>(toVer) & 0xffffffffffffull) == (slotRaw & 0xffffffffffffull))
             ? 1u : 0u;
         if (n <= 24) {
             LOG(RTLOG_ERROR,
-                "[ZGCINV][illegal] n=%lu flipSeq=%lu target=%p slotRaw=%#lx slotRaw2=%#lx addrMatch=%u "
-                "toVer=%p slotIsToVersion=%u route=%u young=%u",
-                n, WCollectorFlipSeqForProbe(), static_cast<void*>(target), static_cast<unsigned long>(slotRaw),
+                "[ZGCINV][illegal] n=%lu phase=%u barrier=%s flipSeq=%lu target=%p slotRaw=%#lx slotRaw2=%#lx "
+                "addrMatch=%u toVer=%p slotIsToVersion=%u route=%u young=%u",
+                n, phase, PhaseName(phase), WCollectorFlipSeqForProbe(), static_cast<void*>(target),
+                static_cast<unsigned long>(slotRaw),
                 static_cast<unsigned long>(slotRaw2),
                 ((slotRaw & 0xffffffffffffull) == (reinterpret_cast<uintptr_t>(target) & 0xffffffffffffull)) ? 1u : 0u,
                 static_cast<void*>(toVer), slotIsToVersion, routeState, young);
@@ -168,6 +185,36 @@ void NoteState(uintptr_t slotRaw, uintptr_t slotRawSecondRead, uintptr_t goodMas
     if ((n & (n - 1)) == 0 && n >= (1u << 22)) {
         DumpCensus("periodic");
     }
+}
+
+void NoteState(uintptr_t slotRaw, uintptr_t slotRawSecondRead, uintptr_t goodMask, BaseObject* target, uint8_t phase)
+{
+    NoteStateImpl(slotRaw, slotRawSecondRead, goodMask, target, phase, true);
+}
+
+uint64_t IllegalHitCount() { return g_illegalHits.load(std::memory_order_relaxed); }
+
+uint64_t InjectIllegalTupleForTest(uintptr_t slotRaw, uintptr_t goodMask, BaseObject* target, uint8_t phase)
+{
+    const uint64_t before = IllegalHitCount();
+    NoteStateImpl(slotRaw, slotRaw, goodMask, target, phase, false);
+    return IllegalHitCount() - before;
+}
+
+void AssertHealMatchesReturn(uintptr_t healRaw, BaseObject* returned, uint16_t site)
+{
+    EnsureSummaryAtExit();
+    g_healReturnChecked.fetch_add(1, std::memory_order_relaxed);
+    constexpr uintptr_t kAddressMask = (uintptr_t(1) << 48) - 1u;
+    const uintptr_t healAddress = healRaw & kAddressMask;
+    const uintptr_t returnAddress = reinterpret_cast<uintptr_t>(returned);
+    if (UNLIKELY(healAddress != returnAddress)) {
+        g_healReturnFailures.fetch_add(1, std::memory_order_relaxed);
+    }
+    CHECK_DETAIL(healAddress == returnAddress,
+                 "[ZGCINV][heal-return] site=%u healRaw=%#lx healAddress=%#lx returned=%p",
+                 static_cast<unsigned>(site), static_cast<unsigned long>(healRaw),
+                 static_cast<unsigned long>(healAddress), static_cast<void*>(returned));
 }
 
 static std::atomic<uint64_t> g_fastAcceptBad{ 0 };
@@ -333,10 +380,18 @@ void DumpSummary(const char* why)
     if (!kInvariantsOn) {
         return;
     }
-    LOG(RTLOG_ERROR, "[ZGCINV][summary] why=%s i1_checked=%lu i1_violations=%lu i1_forwarded=%lu i1_zero_header=%lu",
+    LOG(RTLOG_ERROR,
+        "[ZGCINV][summary] why=%s i1_checked=%lu i1_violations=%lu i1_forwarded=%lu i1_zero_header=%lu "
+        "illegal=%lu stw=%lu idle=%lu enum=%lu trace=%lu post_trace=%lu preforward=%lu forward=%lu "
+        "heal_return_checked=%lu heal_return_failures=%lu",
         why == nullptr ? "?" : why, g_i1Checked.load(std::memory_order_relaxed),
         g_i1Violations.load(std::memory_order_relaxed), g_i1Forwarded.load(std::memory_order_relaxed),
-        g_i1ZeroHeader.load(std::memory_order_relaxed));
+        g_i1ZeroHeader.load(std::memory_order_relaxed), g_illegalHits.load(std::memory_order_relaxed),
+        g_illegalByPhase[0].load(std::memory_order_relaxed), g_illegalByPhase[1].load(std::memory_order_relaxed),
+        g_illegalByPhase[2].load(std::memory_order_relaxed), g_illegalByPhase[3].load(std::memory_order_relaxed),
+        g_illegalByPhase[4].load(std::memory_order_relaxed), g_illegalByPhase[5].load(std::memory_order_relaxed),
+        g_illegalByPhase[6].load(std::memory_order_relaxed), g_healReturnChecked.load(std::memory_order_relaxed),
+        g_healReturnFailures.load(std::memory_order_relaxed));
 }
 
 } // namespace ZgcInvariants

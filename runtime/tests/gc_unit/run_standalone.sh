@@ -82,6 +82,7 @@ $CXX -std=gnu++17 -O0 -g -Wall -Wextra -pthread -fno-rtti \
      "$SRC/test_current_object_ref.cpp" \
      "$SRC/test_fillerobj.cpp" \
     "$SRC/test_i2_readref.cpp" \
+    "$SRC/test_fwdreturn.cpp" \
     "$SRC/test_fnlz_roots.cpp" \
     "$SRC/test_mark_stack_entry.cpp" \
     "$SRC/test_partial_array.cpp" \
