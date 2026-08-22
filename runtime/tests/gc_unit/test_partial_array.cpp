@@ -65,7 +65,7 @@ void FollowLarge(std::set<size_t>& out, Slot* addr, size_t length, Slot* base)
     FollowSmall(out, static_cast<size_t>(start - base), static_cast<size_t>(middleStart - start));
     for (auto& chunk : pushed) {
         if (MarkPartialArray::Encodable(chunk.first, chunk.second)) {
-            BaseObject* entry = MarkPartialArray::Encode(chunk.first, chunk.second);
+            MarkStackEntry entry = MarkPartialArray::Encode(chunk.first, chunk.second);
             GC_EXPECT_TRUE(MarkPartialArray::IsPartialArrayEntry(entry));
             MAddress decoded = 0;
             size_t decodedLen = 0;
@@ -164,7 +164,7 @@ GC_TEST(PartialArray, EncodeDecodeRoundtrip)
     Heap::OnHeapCreated(reinterpret_cast<MAddress>(buf.slots));
     Heap::OnHeapExtended(reinterpret_cast<MAddress>(buf.slots) + buf.bytes);
     GC_EXPECT_TRUE(MarkPartialArray::Encodable(buf.slots, MarkPartialArray::MIN_LENGTH));
-    BaseObject* entry = MarkPartialArray::Encode(buf.slots, MarkPartialArray::MIN_LENGTH);
+    MarkStackEntry entry = MarkPartialArray::Encode(buf.slots, MarkPartialArray::MIN_LENGTH);
     GC_EXPECT_TRUE(MarkPartialArray::IsPartialArrayEntry(entry));
     MAddress start = 0;
     size_t length = 0;

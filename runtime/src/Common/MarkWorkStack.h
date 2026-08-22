@@ -110,7 +110,7 @@ public:
     T back()
     {
         if (this->t == nullptr) {
-            return nullptr;
+            return T{};
         }
         return this->t->back();
     }
