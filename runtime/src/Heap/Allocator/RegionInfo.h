@@ -1431,6 +1431,29 @@ public:
         return markBitmap->IsMarked(offset);
     }
 
+    // slotwatch: read the physical bit and its owning face directly.  Deliberately
+    // bypasses IsMarkedObject, including its allocation-watermark shortcut and
+    // current-epoch validation, so the diagnostic can distinguish those answers.
+    template<Generation G>
+    void ReadMarkBitActual(size_t offset, bool& bit, bool& bitmapPresent, uint64_t& faceEpoch)
+    {
+        bit = false;
+        bitmapPresent = false;
+        faceEpoch = 0;
+        LiveInfo* liveInfo = GetLiveInfo();
+        if (liveInfo == nullptr) {
+            return;
+        }
+        LiveInfo::MarkFace& face = liveInfo->GetMarkFace<G>();
+        faceEpoch = face.epoch.load(std::memory_order_acquire);
+        RegionBitmap* bitmap = __atomic_load_n(&face.bitmap, std::memory_order_acquire);
+        if (bitmap == nullptr || reinterpret_cast<MAddress>(bitmap) == LiveInfo::TEMPORARY_PTR) {
+            return;
+        }
+        bitmapPresent = true;
+        bit = bitmap->IsMarked(offset);
+    }
+
     template<Generation G>
     bool IsMarkedObject(MarkView<G> view, size_t offset)
     {

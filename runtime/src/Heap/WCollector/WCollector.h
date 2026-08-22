@@ -1065,6 +1065,9 @@ protected:
     void EnumAndTagRawRoot(ObjectRef& ref, RootSet& rootSet) const override;
 
 private:
+    template<bool SlotWatch>
+    void TraceRefFieldImpl(BaseObject* obj, RefField<>& ref, WorkStack& workStack,
+                           uint64_t watchDeclared = 0) const;
     using MinorObjectSet = std::unordered_set<BaseObject*>;
     using MinorRegionSet = std::unordered_set<RegionInfo*>;
     using MinorSlotSet = std::unordered_set<MAddress>;

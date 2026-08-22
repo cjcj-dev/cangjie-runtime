@@ -1811,9 +1811,19 @@ void WCollector::EnumAndTagRawRoot(ObjectRef& ref, RootSet& rootSet) const
 }
 
 // note each ref-field will not be traced twice, so each old pointer the tracer meets must come from previous gc.
-void WCollector::TraceRefField(BaseObject* obj, RefField<>& field, WorkStack& workStack) const
+template<bool SlotWatch>
+void WCollector::TraceRefFieldImpl(BaseObject* obj, RefField<>& field, WorkStack& workStack,
+                                   uint64_t watchDeclared) const
 {
     RefField<> oldField(field);
+    const uint64_t slotValue = SlotWatch ? static_cast<uint64_t>(raw(oldField.GetFieldValue())) : 0;
+    auto watch = [&](BaseObject* target, bool pushed, const char* reason, int marked) {
+        if constexpr (SlotWatch) {
+            ArrayWalkDiag::ReportSlotWatch(obj, watchDeclared, ArrayWalkDiag::SlotWatchIndex(),
+                                           reinterpret_cast<uintptr_t>(&field), slotValue, target,
+                                           true, pushed, reason, marked);
+        }
+    };
     // markstale: the mark-good fast path returns without healing, which is only safe if mark-good
     // implies "target is current".  It does not here.  mark-good is a superset of load-good, the
     // remap space is four values and a flip is an xor, so a colour published at N is published
@@ -1858,7 +1868,8 @@ void WCollector::TraceRefField(BaseObject* obj, RefField<>& field, WorkStack& wo
             }
             SurvNodeDiag::NoteTraceVisit(&field, targetObj, SurvNodeDiag::TRACE_SKIP_GATE);
             ArrayWalkDiag::NoteVisit();
-            ArrayWalkDiag::NoteSkipGate();
+            ArrayWalkDiag::NoteSkipGateMarkGood();
+            watch(targetObj, false, "gate-markgood", -1);
             return;
         }
         // markfloor: skip interiors (RawArray+8 etc.) before IsValidObject/GetSize.
@@ -1873,7 +1884,8 @@ void WCollector::TraceRefField(BaseObject* obj, RefField<>& field, WorkStack& wo
                 }
                 SurvNodeDiag::NoteTraceVisit(&field, targetObj, SurvNodeDiag::TRACE_SKIP_GATE);
                 ArrayWalkDiag::NoteVisit();
-                ArrayWalkDiag::NoteSkipGate();
+                ArrayWalkDiag::NoteSkipGatePlausible();
+                watch(targetObj, false, "gate-plausible", -1);
                 return;
             }
         }
@@ -1894,10 +1906,12 @@ void WCollector::TraceRefField(BaseObject* obj, RefField<>& field, WorkStack& wo
             ArrayWalkDiag::NoteVisit();
             ArrayWalkDiag::NotePush();
             workStack.push_back(targetObj);
+            watch(targetObj, true, "none", 0);
         } else {
             SurvNodeDiag::NoteTraceVisit(&field, targetObj, SurvNodeDiag::TRACE_SKIP_MARKED);
             ArrayWalkDiag::NoteVisit();
             ArrayWalkDiag::NoteSkipMarkedTarget(targetObj);
+            watch(targetObj, false, "marked", 1);
         }
         return;
     }
@@ -1908,6 +1922,7 @@ void WCollector::TraceRefField(BaseObject* obj, RefField<>& field, WorkStack& wo
     if (!Heap::IsHeapAddress(latest)) {
         ArrayWalkDiag::NoteVisit();
         ArrayWalkDiag::NoteSkipNull();
+        watch(latest, false, "other", -1);
         return;
     }
     if (!Collector::PlausibleManagedObjectGate("TraceRefField.slow", latest)) {
@@ -1921,7 +1936,8 @@ void WCollector::TraceRefField(BaseObject* obj, RefField<>& field, WorkStack& wo
             }
             SurvNodeDiag::NoteTraceVisit(&field, latest, SurvNodeDiag::TRACE_SKIP_GATE);
             ArrayWalkDiag::NoteVisit();
-            ArrayWalkDiag::NoteSkipGate();
+            ArrayWalkDiag::NoteSkipGatePlausible();
+            watch(latest, false, "gate-plausible", -1);
             return;
         }
     }
@@ -1957,11 +1973,18 @@ void WCollector::TraceRefField(BaseObject* obj, RefField<>& field, WorkStack& wo
         ArrayWalkDiag::NoteVisit();
         ArrayWalkDiag::NotePush();
         workStack.push_back(latest);
+        watch(latest, true, "none", 0);
     } else {
         SurvNodeDiag::NoteTraceVisit(&field, latest, SurvNodeDiag::TRACE_SKIP_MARKED);
         ArrayWalkDiag::NoteVisit();
         ArrayWalkDiag::NoteSkipMarkedTarget(latest);
+        watch(latest, false, "marked", 1);
     }
+}
+
+void WCollector::TraceRefField(BaseObject* obj, RefField<>& field, WorkStack& workStack) const
+{
+    TraceRefFieldImpl<false>(obj, field, workStack);
 }
 
 // Ported from ZGC ZMark::push_partial_array (zMark.cpp:185-196). ZGC pushes a
@@ -2090,6 +2113,21 @@ void WCollector::TraceObjectRefFields(BaseObject* obj, WorkStack& workStack)
         } else if (componentTypeInfo->IsObjectType() || componentTypeInfo->IsArrayType() ||
                    componentTypeInfo->IsInterface()) {
             HeapSlot<>* arrayContent = &HeapSlotAt<>(array->ConvertToCArray());
+            const bool slotWatch = UNLIKELY(ArrayWalkDiag::SlotWatchEnabled()) &&
+                ArrayWalkDiag::SlotWatchIndex() < static_cast<uint64_t>(arrayLength);
+            if (slotWatch) {
+                const size_t watchIndex = static_cast<size_t>(ArrayWalkDiag::SlotWatchIndex());
+                for (size_t i = 0; i < watchIndex; ++i) {
+                    visitor(arrayContent[i]);
+                }
+                TraceRefFieldImpl<true>(obj, arrayContent[watchIndex], workStack,
+                                        static_cast<uint64_t>(arrayLength));
+                for (size_t i = watchIndex + 1; i < static_cast<size_t>(arrayLength); ++i) {
+                    visitor(arrayContent[i]);
+                }
+                ArrayWalkDiag::End();
+                return;
+            }
             // This is ZGC's objArrayOop case (zMark.cpp:346-369 follow_array_object):
             // a flat run of reference slots, the only shape it chunks. The struct
             // -component branch above has no ZGC counterpart and is left alone.
@@ -9825,6 +9863,7 @@ void WCollector::DoGarbageCollection()
     if (gcReason == GC_REASON_YOUNG) {
         DoYoungGarbageCollection();
         Collector::ReportMarkGoodHeapGateCounts();
+        ArrayWalkDiag::ReportSlotWatchCycleEnd();
         return;
     }
     // oracleblack: a major is young + old, as in ZGC (zGeneration.cpp ZGenerationOld
@@ -9901,6 +9940,7 @@ void WCollector::DoGarbageCollection()
     ForwardDataManager::GetForwardDataManager().UnbindPreviousLiveInfo();
     Collector::ReportMarkGoodHeapGateCounts();
     O2ORemsetDiag::DumpAndMaybeReset("post-major", /*reset*/ true);
+    ArrayWalkDiag::ReportSlotWatchCycleEnd();
 }
 
 void WCollector::MarkNewObject(BaseObject* obj)
