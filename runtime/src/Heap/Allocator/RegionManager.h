@@ -54,6 +54,14 @@ struct YoungCollectionStats {
     size_t reclaimedBytes = 0;
 };
 
+// recent-full is a lifecycle queue, not a liveness root. Account at ownership
+// transitions so retained inventory can be separated from ordinary heap growth.
+namespace RecentFullAccounting {
+void Enqueue(size_t regions, size_t units);
+void Dequeue(size_t regions, size_t units);
+void Report(size_t listRegions, size_t listBytes);
+}
+
 struct FreePinnedSlotLists {
     static constexpr size_t ATOMIC_OBJECT_SIZE = 16;
     static constexpr size_t SYNC_OBJECT_SIZE = CJFuture::SYNC_OBJECT_SIZE;
@@ -178,6 +186,9 @@ public:
     size_t RecordPinnedCrossGenEdges();
     void StampCensusBoundaries();
     void PromoteAllRegions();
+    // CompactRegion's list-ownership tail. A concurrent stay-young path may
+    // already have moved the region to recent-full; never steal its links.
+    void EnlistCompactedRegionForAllocator(RegionInfo* region);
     // Put a region the forward path finished with in place back where a collection-set builder
     // will find it; CompactRegion leaves it on tlRegionList, which no builder walks.
     void RehomeCompactedInPlaceRegion(RegionInfo* region);
@@ -327,11 +338,13 @@ public:
         if (region->IsTraceRegion()) {
             if (!fullTraceRegions.TryPrependRegion(region, RegionInfo::RegionType::RECENT_FULL_REGION)) {
                 recentFullRegionList.PrependRegion(region, RegionInfo::RegionType::RECENT_FULL_REGION);
+                RecentFullAccounting::Enqueue(1, region->GetUnitCount());
                 region->SetTraceRegionFlag(0);
             }
             return;
         }
         recentFullRegionList.PrependRegion(region, RegionInfo::RegionType::RECENT_FULL_REGION);
+        RecentFullAccounting::Enqueue(1, region->GetUnitCount());
     }
 
     void RemoveThreadLocalRegion(RegionInfo* region) noexcept
@@ -653,7 +666,10 @@ public:
 
     void MergeRawPointerRegions(RegionList& smallSizeRegionList, RegionList& largeSizeRegionList)
     {
+        const size_t smallRegions = smallSizeRegionList.GetRegionCount();
+        const size_t smallUnits = smallSizeRegionList.GetUnitCount();
         recentFullRegionList.MergeRegionList(smallSizeRegionList, RegionInfo::RegionType::RECENT_FULL_REGION);
+        RecentFullAccounting::Enqueue(smallRegions, smallUnits);
         recentLargeRegionList.MergeRegionList(largeSizeRegionList, RegionInfo::RegionType::RECENT_LARGE_REGION);
     }
 
@@ -665,7 +681,10 @@ public:
     void HandleTraceRegions()
     {
         fullTraceRegions.DeactivateRegionCache();
+        const size_t traceRegions = fullTraceRegions.GetRegionCount();
+        const size_t traceUnits = fullTraceRegions.GetUnitCount();
         recentFullRegionList.MergeRegionList(fullTraceRegions, RegionInfo::RegionType::RECENT_FULL_REGION);
+        RecentFullAccounting::Enqueue(traceRegions, traceUnits);
 
         largeTraceRegions.DeactivateRegionCache();
         recentLargeRegionList.MergeRegionList(largeTraceRegions, RegionInfo::RegionType::RECENT_LARGE_REGION);

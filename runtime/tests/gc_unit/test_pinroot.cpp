@@ -42,6 +42,10 @@ struct PinRootTestAccess {
         });
         return found;
     }
+    static size_t RecentFullCount(const RegionManager& manager)
+    {
+        return manager.recentFullRegionList.GetRegionCount();
+    }
     static bool OnThreadLocal(RegionManager& manager, const RegionInfo* region)
     {
         bool found = false;
@@ -150,4 +154,72 @@ GC_TEST(RegionRetirement, CompactInPlaceLeavesRegionOnAListACollectorWalks)
 
     GC_EXPECT_TRUE(PinRootTestAccess::OnRecentFull(manager, region));
     GC_EXPECT_TRUE(!PinRootTestAccess::OnThreadLocal(manager, region));
+}
+
+// RouteRegion can compact in place and re-home before ForwardRegion reaches its
+// stay-young arm. The latter must recognize that ownership is already complete;
+// prepending the same head again makes both next and prev point to itself.
+GC_TEST(RegionRetirement, StayYoungAfterCompactInPlaceDoesNotRelinkRecentFull)
+{
+    GcHeapFixture fx;
+    RegionManager manager;
+    RegionInfo* region = fx.region0;
+    region->SetYoungRegionFlag(1);
+    // Minimal ghost geometry normally installed by PrepareForwardableRegion;
+    // the unit fixture has no CollectorProxy, so plant only the state consumed
+    // by FinishStayYoungInPlace/DispelGhostFromRegion.
+    region->metadata.regionEnd0 = region->GetRegionEnd();
+    region->SetInGhostRegion(1);
+    region->SetRouteState(RegionInfo::RouteState::COMPACTED);
+
+    PinRootTestAccess::ParkOnThreadLocal(manager, region);
+    manager.RehomeCompactedInPlaceRegion(region);
+    manager.EnlistStayYoungSurvivor(region);
+
+    GC_EXPECT_EQ(PinRootTestAccess::RecentFullCount(manager), 1u);
+    GC_EXPECT_TRUE(PinRootTestAccess::OnRecentFull(manager, region));
+    GC_EXPECT_TRUE(region->GetPrevRegion() == nullptr);
+    GC_EXPECT_TRUE(region->GetNextRegion() == nullptr);
+}
+
+// The opposite ordering is valid too: CompactRegion may finish linking the
+// node on tlRegionList before the stay-young path takes ownership.
+GC_TEST(RegionRetirement, StayYoungTransfersCompletedCompactTailFromThreadLocal)
+{
+    GcHeapFixture fx;
+    RegionManager manager;
+    RegionInfo* region = fx.region0;
+    region->SetYoungRegionFlag(1);
+    region->metadata.regionEnd0 = region->GetRegionEnd();
+    region->SetInGhostRegion(1);
+    region->SetRouteState(RegionInfo::RouteState::COMPACTED);
+
+    PinRootTestAccess::ParkOnThreadLocal(manager, region);
+    manager.EnlistStayYoungSurvivor(region);
+
+    GC_EXPECT_EQ(PinRootTestAccess::RecentFullCount(manager), 1u);
+    GC_EXPECT_TRUE(PinRootTestAccess::OnRecentFull(manager, region));
+    GC_EXPECT_TRUE(!PinRootTestAccess::OnThreadLocal(manager, region));
+    GC_EXPECT_TRUE(region->GetPrevRegion() == nullptr);
+    GC_EXPECT_TRUE(region->GetNextRegion() == nullptr);
+}
+
+// GC-main may finish stay-young while a mutator is still returning from
+// CompactRegion. If recent-full won, the compact tail must not overwrite that
+// list's links by unconditionally prepending the same node to tlRegionList.
+GC_TEST(RegionRetirement, CompactTailDoesNotStealConcurrentRecentFullNode)
+{
+    GcHeapFixture fx;
+    RegionManager manager;
+    RegionInfo* region = fx.region0;
+
+    PinRootTestAccess::ParkOnThreadLocal(manager, region);
+    manager.RehomeCompactedInPlaceRegion(region);
+    manager.EnlistCompactedRegionForAllocator(region);
+
+    GC_EXPECT_EQ(PinRootTestAccess::RecentFullCount(manager), 1u);
+    GC_EXPECT_TRUE(PinRootTestAccess::OnRecentFull(manager, region));
+    GC_EXPECT_TRUE(!PinRootTestAccess::OnThreadLocal(manager, region));
+    GC_EXPECT_TRUE(region->GetPrevRegion() == nullptr);
+    GC_EXPECT_TRUE(region->GetNextRegion() == nullptr);
 }
