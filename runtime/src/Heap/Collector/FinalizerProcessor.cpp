@@ -10,12 +10,24 @@
 #include "Base/Macros.h"
 #include "Common/ScopedObjectAccess.h"
 #include "ExceptionManager.inline.h"
+#include "Heap/Heap.h"
 #include "Mutator/Mutator.h"
 #include "ObjectModel/MObject.h"
 #include "CjScheduler.h"
 
 namespace MapleRuntime {
 constexpr U32 DEFAULT_FINALIZER_TIMEOUT_MS = 2000;
+
+static BaseObject* LoadFinalizerGood(RootSlot& slot)
+{
+    Collector& collector = Heap::GetHeap().GetCollector();
+    HeapSlot<> tmp(to_zpointer(raw(slot.LoadPlain())));
+    BaseObject* obj = collector.make_load_good(tmp);
+    if (obj != nullptr && raw(slot.LoadPlain()) != reinterpret_cast<MAddress>(obj)) {
+        HealRoot(slot, from_object(obj), HealSite::TracingCollectorResurrectFinalizer);
+    }
+    return obj;
+}
 
 // Note: can only be called by FinalizerProcessor thread
 extern "C" MRT_EXPORT void* MRT_ProcessFinalizers(void* arg)
@@ -199,9 +211,7 @@ void FinalizerProcessor::EnqueueFinalizables(const std::function<bool(BaseObject
     std::lock_guard<std::mutex> l(listLock);
     auto it = finalizers.begin();
     while (it != finalizers.end() && countLimit != 0) {
-        // finalizers is visited as a GC root while listLock is held, so its
-        // plain value names a live object for this locked inspection.
-        BaseObject* obj = to_object(safe(it->LoadPlain()));
+        BaseObject* obj = LoadFinalizerGood(*it);
         --countLimit;
         if (finalizable(obj)) {
             finalizables.push_back(*it);
@@ -228,9 +238,7 @@ void FinalizerProcessor::ProcessFinalizableList()
         // keep GC thread from visiting roots when workingFinalizables list is updating
         ScopedObjectAccess soa;
         CHECK_DETAIL(ExceptionManager::GetPendingException() == nullptr, "should not exist pending exception");
-        // workingFinalizables remains a registered GC root; ScopedObjectAccess
-        // prevents a moving collection while this plain value is consumed.
-        BaseObject* finalizeObjAddr = to_object(safe(itor->LoadPlain()));
+        BaseObject* finalizeObjAddr = LoadFinalizerGood(*itor);
 
         TypeInfo* classInfo = reinterpret_cast<MObject*>(finalizeObjAddr)->GetTypeInfo();
         FuncRef finalizerMethod = classInfo->GetFinalizeMethod();
