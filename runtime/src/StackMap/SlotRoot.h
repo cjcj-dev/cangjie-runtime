@@ -52,7 +52,7 @@ public:
     void VisitGCRoots(const RootVisitor& visitor, const SlotDebugVisitor& debugFunc, uintptr_t base,
                       std::list<BasePtrType>* rootsList = nullptr) const
     {
-        if (slotFormat != PURE_COMPRESSED_STACKMAP) {
+        if (StackMapIsCompressed(slotFormat)) {
             VisitWAHGCRoots(visitor, debugFunc, base, rootsList);
             return;
         }
@@ -78,7 +78,7 @@ public:
     size_t CountRootSlots() const
     {
         size_t count = 0;
-        if (slotFormat == PURE_COMPRESSED_STACKMAP) {
+        if (!StackMapIsCompressed(slotFormat)) {
             for (SlotBits bits : slotBits) {
                 while (bits != 0) {
                     count += bits & LOWEST_BIT;

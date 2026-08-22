@@ -86,6 +86,24 @@ public:
         return SlotRoot(slotTable.GetBaseOffset(idx - 1), slotTable.GetSlotBitMap(idx - 1), slotTable.slotFormat);
     }
 
+    SlotRoot BuildOopSlotRoot() const
+    {
+        U32 idx = idxSet.oopSlotIdx;
+        if (idx == 0) {
+            return SlotRoot();
+        }
+        return SlotRoot(slotTable.GetBaseOffset(idx - 1), slotTable.GetSlotBitMap(idx - 1), slotTable.slotFormat);
+    }
+
+    RegRoot BuildOopRegRoot() const
+    {
+        U32 idx = idxSet.oopRegIdx;
+        if (idx == 0) {
+            return RegRoot();
+        }
+        return RegRoot(regTable.GetActiveRegBits(idx - 1));
+    }
+
     RegRoot BuildStackRegRoot() const
     {
         U32 idx = idxSet.stackRegIdx;
@@ -140,7 +158,7 @@ public:
 
     CompressedStackMapEntry GetStackMapEntry(Uptr startPC, Uptr framePC, bool countDerivedRows = false) const
     {
-        StackMapTable stackMapTable(prologue.GetNextTable());
+        StackMapTable stackMapTable(prologue.GetNextTable(), slotFormat);
         if (stackMapTable.GetLookupResult(startPC, framePC) != StackMapLookupResult::FOUND) {
             return CompressedStackMapEntry(false);
         }
@@ -158,7 +176,7 @@ public:
 
     StackMapInvalidReason GetInvalidReason(Uptr startPC, Uptr framePC) const
     {
-        StackMapTable stackMapTable(prologue.GetNextTable());
+        StackMapTable stackMapTable(prologue.GetNextTable(), slotFormat);
         switch (stackMapTable.GetLookupResult(startPC, framePC)) {
             case StackMapLookupResult::ZERO_ENTRIES:
                 return StackMapInvalidReason::ZERO_ENTRIES;
