@@ -14,6 +14,7 @@
 #include "Base/GcLog.h"
 #include "Allocator/RegionSpace.h"
 #include "Heap/Collector/GcTrigger.h"
+#include "Heap/Collector/DeferredRemapDomain.h"
 #include "Heap/Verify/GarbRegionDiag.h"
 #include "Heap/Verify/HealPairDiag.h"
 #include "Heap/Verify/NoTracedDiag.h"
@@ -63,6 +64,13 @@ void CopyCollector::CopyObject(const BaseObject& fromObj, BaseObject& toObj, siz
     if (UNLIKELY(NoTracedDiag::Enabled())) {
         NoTracedDiag::NoteCopy(reinterpret_cast<const void*>(from), reinterpret_cast<const void*>(to), size, 1);
     }
+    // ZGC containing-field transfer (zRelocate.cpp:652-730): every holder
+    // copy path, including preforward and in-place compact, moves existing
+    // deferred tickets by exact offset. No field-image re-capture here: the
+    // to-object header is not necessarily initialized when CopyObject runs,
+    // and fresh obligations are minted by the old-mark visit and the write
+    // barrier once the copy is published.
+    (void)DeferredRemapDomain::TransferObjectSlots(from, to, size);
 }
 
 void CopyCollector::RunGarbageCollection(uint64_t gcIndex, GCReason reason)

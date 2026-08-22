@@ -18,6 +18,7 @@ set(SRC_LIST
     "CopyCollector.cpp"
     "LiveInfo.cpp"
     "ForwardDataManager.cpp"
+    "DeferredRemapDomain.cpp"
     "PromotedRegionDomain.cpp"
     "ZForwardingLife.cpp"
 )
