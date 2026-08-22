@@ -564,10 +564,15 @@ void Barrier::WriteF64(BaseObject* obj, Field<double>& field, double val) const 
 void Barrier::WriteReference(BaseObject* obj, RefField<false>& field, BaseObject* ref) const
 {
     // OpenJDK zBarrier.inline.hpp:695-706 store_barrier_on_heap_oop_field:
-    // fast path = is_store_good(prev); slow path = remset/SATB work then color_store_good.
-    // Our colour is applied by WriteReferenceImpl (GetAndTryTagRefField → store-good colour).
-    // If the pre-store slot is already store-good for the same target, skip remset work
-    // (second write of a registered edge must not re-enter RecordCrossGenEdge).
+    // fast path = is_store_good(prev) skips heap_store_slow_path, which is also
+    // where remember(p) lives (zBarrier.cpp:253-261). That skip is safe in ZGC
+    // because scanning the previous remset face re-remembers slots that still
+    // hold a young pointer (zRemembered.cpp:347-387 / store buffer
+    // on_new_phase_remember :170-187). Our drain clears the bit without
+    // re-arming current, so a later store-good write of a *new* young into an
+    // old slot is invisible to young mark (REPORT-selfheal4 id=23992773).
+    // remember(p) keys on is_old(p) (zBarrier.inline.hpp:729-733), not prev
+    // colour. Always RecordCrossGenEdge; it already no-ops young holders.
     ref = theCollector.ResolveStoreValue(ref);
     NoteValueSideStore(ref, static_cast<uint8_t>(phase));
     NoteW1GhostFromStore(theCollector, ref);
@@ -602,12 +607,12 @@ void Barrier::WriteReference(BaseObject* obj, RefField<false>& field, BaseObject
     // heap store, not only the remset slow path. A store-good rewrite of a
     // different object still needs keep-alive (survnode visitSame=0).
     MarkAndRememberNewValue(this->phase, ref);
-    if (!prevStoreGood) {
-        NoteStoreSlowPath();
-        RecordCrossGenEdge(obj, reinterpret_cast<MAddress>(&field), to_object(field.GetTargetObject()));
-    } else {
+    if (prevStoreGood) {
         NoteStoreFastPath();
+    } else {
+        NoteStoreSlowPath();
     }
+    RecordCrossGenEdge(obj, reinterpret_cast<MAddress>(&field), to_object(field.GetTargetObject()));
     // edgemiss: narrow log when installed target is large (default-off, self-gates).
     if (ref != nullptr) {
         uint8_t bk = 0;
@@ -1112,12 +1117,12 @@ void Barrier::AtomicWriteReference(BaseObject* obj, RefField<true>& field, BaseO
     AtomicWriteReferenceImpl(obj, field, ref, order);
     SurvNodeDiag::NoteStore(&field, to_object(prev.GetTargetObject()), ref, SurvNodeDiag::STORE_ATOMIC_WRITE);
     MarkAndRememberNewValue(this->phase, ref);
-    if (!prevStoreGood) {
-        NoteStoreSlowPath();
-        RecordCrossGenEdge(obj, reinterpret_cast<MAddress>(&field), to_object(field.GetTargetObject()));
-    } else {
+    if (prevStoreGood) {
         NoteStoreFastPath();
+    } else {
+        NoteStoreSlowPath();
     }
+    RecordCrossGenEdge(obj, reinterpret_cast<MAddress>(&field), to_object(field.GetTargetObject()));
 }
 
 void Barrier::AtomicWriteReferenceImpl(BaseObject* obj, RefField<true>& field, BaseObject* ref, MemoryOrder order) const
@@ -1151,12 +1156,12 @@ BaseObject* Barrier::AtomicSwapReference(BaseObject* obj, RefField<true>& field,
     const bool prevStoreGood = PrevIsStoreGoodForTarget(theCollector, prev, newRef);
     BaseObject* oldRef = AtomicSwapReferenceImpl(obj, field, newRef, order);
     SurvNodeDiag::NoteStore(&field, oldRef, newRef, SurvNodeDiag::STORE_SWAP);
-    if (!prevStoreGood) {
-        NoteStoreSlowPath();
-        RecordCrossGenEdge(obj, reinterpret_cast<MAddress>(&field), to_object(field.GetTargetObject()));
-    } else {
+    if (prevStoreGood) {
         NoteStoreFastPath();
+    } else {
+        NoteStoreSlowPath();
     }
+    RecordCrossGenEdge(obj, reinterpret_cast<MAddress>(&field), to_object(field.GetTargetObject()));
     return oldRef;
 }
 
@@ -1223,12 +1228,12 @@ bool Barrier::CompareAndSwapReference(BaseObject* obj, RefField<true>& field, Ba
     bool success = CompareAndSwapReferenceImpl(obj, field, oldRef, newRef, succOrder, failOrder);
     if (success) {
         SurvNodeDiag::NoteStore(&field, oldRef, newRef, SurvNodeDiag::STORE_CAS);
-        if (!prevStoreGood) {
-            NoteStoreSlowPath();
-            RecordCrossGenEdge(obj, reinterpret_cast<MAddress>(&field), to_object(field.GetTargetObject()));
-        } else {
+        if (prevStoreGood) {
             NoteStoreFastPath();
+        } else {
+            NoteStoreSlowPath();
         }
+        RecordCrossGenEdge(obj, reinterpret_cast<MAddress>(&field), to_object(field.GetTargetObject()));
     }
     return success;
 }
