@@ -20,6 +20,7 @@
 #include "Common/ColourPredicates.h"
 #include "Common/StateWord.h"
 #include "Heap/Allocator/RegionInfo.h"
+#include "Heap/Allocator/RegionSpace.h"
 #include "Heap/Collector/ManagedObjectGate.h"
 #include "Heap/Heap.h"
 #include "Mutator/Mutator.h"
@@ -65,6 +66,26 @@ std::atomic<size_t> g_plausibleObjGateBySite[16]{ {} };
 //   索引：0=非内点 · 1=off8 · 2=off16 · 3=off24 · 4=off32
 std::atomic<size_t> g_plausibleObjGateByIntOff[5]{ {} };
 
+// gatebase: exact accounting for the mark-and-remember reject slow path.  The
+// existing gate census is process-wide and groups this site into "other"; it
+// cannot answer whether a single minor rejected recoverable interiors or bad
+// payload words.  This census is still behind MRT_GCV2_MARKFLOOR_OBJ_GATE=1,
+// so the default write-barrier path pays nothing.
+enum GateBaseRejectReason : unsigned {
+    GATEBASE_NON_HEAP,
+    GATEBASE_DEAD_REGION,
+    GATEBASE_NULL_TIP,
+    GATEBASE_SMALL_INT,
+    GATEBASE_MISALIGNED,
+    GATEBASE_4G_ALIGNED,
+    GATEBASE_TIP_IN_HEAP,
+    GATEBASE_NOT_RESIDENT,
+    GATEBASE_CROSS_END,
+    GATEBASE_REASON_COUNT,
+};
+std::atomic<size_t> g_gateBaseRejectByReason[GATEBASE_REASON_COUNT]{ {} };
+std::atomic<size_t> g_gateBaseInteriorByOffset[9]{ {} }; // 0=not interior; 1..8 => +8..+64
+
 // The sample budget is per GC cycle, not per process.
 //
 // It used to be a plain global that only ever counted up, so the gate printed at most 48
@@ -98,7 +119,7 @@ bool MarkGoodHeapGateAccountOn()
 bool PlausibleObjGateAccountOn()
 {
     static const bool on = []() {
-        const char* v = static_cast<const char*>(nullptr) /* pinned-off:MRT_GCV2_MARKFLOOR_OBJ_GATE */;
+        const char* v = std::getenv("MRT_GCV2_MARKFLOOR_OBJ_GATE");
         return v != nullptr && std::strcmp(v, "1") == 0;
     }();
     return on;
@@ -336,6 +357,37 @@ BaseObject* RecoverInteriorBaseImpl(BaseObject* obj, BaseObject* knownBase)
     return base;
 }
 
+void NoteGateBaseReject(const char* site, BaseObject* obj, GateBaseRejectReason reason)
+{
+    if (site == nullptr || std::strcmp(site, "mark_and_remember") != 0) {
+        return;
+    }
+    g_gateBaseRejectByReason[reason].fetch_add(1, std::memory_order_relaxed);
+
+    BaseObject* base = RecoverInteriorBaseImpl(obj, nullptr);
+    if (base == nullptr || base == obj || !Heap::IsHeapAddress(base)) {
+        g_gateBaseInteriorByOffset[0].fetch_add(1, std::memory_order_relaxed);
+        return;
+    }
+    RegionInfo* objectRegion = RegionInfo::TryGetRegionInfoAt(reinterpret_cast<MAddress>(obj));
+    RegionInfo* baseRegion = RegionInfo::TryGetRegionInfoAt(reinterpret_cast<MAddress>(base));
+    uintptr_t objectAddress = reinterpret_cast<uintptr_t>(obj);
+    uintptr_t baseAddress = reinterpret_cast<uintptr_t>(base);
+    if (objectRegion == nullptr || objectRegion != baseRegion || baseAddress >= objectAddress ||
+        !TipWordLooksLikeTypeInfo(reinterpret_cast<uintptr_t>(base->GetTypeInfo())) ||
+        !TypeInfoManager::GetTypeInfoManager().ContainsTypeInfo(base->GetTypeInfo())) {
+        g_gateBaseInteriorByOffset[0].fetch_add(1, std::memory_order_relaxed);
+        return;
+    }
+    size_t offset = objectAddress - baseAddress;
+    size_t allocSize = RegionSpace::GetAllocSize(*base);
+    if (offset == 0 || offset >= allocSize || offset > 64 || (offset % 8) != 0) {
+        g_gateBaseInteriorByOffset[0].fetch_add(1, std::memory_order_relaxed);
+        return;
+    }
+    g_gateBaseInteriorByOffset[offset / 8].fetch_add(1, std::memory_order_relaxed);
+}
+
 unsigned SiteBucket(const char* site)
 {
     if (site == nullptr) {
@@ -547,6 +599,7 @@ bool PlausibleManagedObjectGate(const char* site, BaseObject* obj)
     if (!Heap::IsHeapAddress(obj)) {
         product = false;
         if (account) {
+            NoteGateBaseReject(site, obj, GATEBASE_NON_HEAP);
             size_t n = g_plausibleObjGateReject.fetch_add(1, std::memory_order_relaxed) + 1;
             g_plausibleObjGateBySite[SiteBucket(site)].fetch_add(1, std::memory_order_relaxed);
             if (PlausibleObjGateSampleAllowed(32)) {
@@ -571,6 +624,7 @@ bool PlausibleManagedObjectGate(const char* site, BaseObject* obj)
             region->GetRegionType() == RegionInfo::RegionType::FREE_REGION) {
             product = false;
             if (account) {
+                NoteGateBaseReject(site, obj, GATEBASE_DEAD_REGION);
                 size_t n = g_plausibleObjGateReject.fetch_add(1, std::memory_order_relaxed) + 1;
                 g_plausibleObjGateBySite[SiteBucket(site)].fetch_add(1, std::memory_order_relaxed);
                 if (PlausibleObjGateSampleAllowed(48)) {
@@ -626,6 +680,21 @@ bool PlausibleManagedObjectGate(const char* site, BaseObject* obj)
                     }
                 }
                 if (account) {
+                    GateBaseRejectReason gateBaseReason = GATEBASE_NOT_RESIDENT;
+                    if (std::strcmp(reason, "null-tip") == 0) {
+                        gateBaseReason = GATEBASE_NULL_TIP;
+                    } else if (std::strcmp(reason, "tip-small-int") == 0) {
+                        gateBaseReason = GATEBASE_SMALL_INT;
+                    } else if (std::strcmp(reason, "tip-misaligned") == 0) {
+                        gateBaseReason = GATEBASE_MISALIGNED;
+                    } else if (std::strcmp(reason, "tip-4g-aligned") == 0) {
+                        gateBaseReason = GATEBASE_4G_ALIGNED;
+                    } else if (std::strcmp(reason, "tip-in-heap") == 0) {
+                        gateBaseReason = GATEBASE_TIP_IN_HEAP;
+                    } else if (std::strcmp(reason, "geom-cross-end") == 0) {
+                        gateBaseReason = GATEBASE_CROSS_END;
+                    }
+                    NoteGateBaseReject(site, obj, gateBaseReason);
                     size_t n = g_plausibleObjGateReject.fetch_add(1, std::memory_order_relaxed) + 1;
                     g_plausibleObjGateBySite[SiteBucket(site)].fetch_add(1, std::memory_order_relaxed);
                     // ⭐ 先无条件（诊断模式下）记 offset，⛔ 再谈采样 —— ⭐ 判据不能建在采样输出上
@@ -699,6 +768,32 @@ void Collector::ReportPlausibleManagedObjectGateCounts()
     if (!PlausibleObjGateAccountOn()) {
         return;
     }
+    size_t gateBaseReason[GATEBASE_REASON_COUNT] = {};
+    size_t gateBaseOffset[9] = {};
+    size_t gateBaseTotal = 0;
+    size_t gateBaseInterior = 0;
+    for (unsigned i = 0; i < GATEBASE_REASON_COUNT; ++i) {
+        gateBaseReason[i] = g_gateBaseRejectByReason[i].exchange(0, std::memory_order_relaxed);
+        gateBaseTotal += gateBaseReason[i];
+    }
+    for (unsigned i = 0; i < 9; ++i) {
+        gateBaseOffset[i] = g_gateBaseInteriorByOffset[i].exchange(0, std::memory_order_relaxed);
+        if (i != 0) {
+            gateBaseInterior += gateBaseOffset[i];
+        }
+    }
+    LOG(RTLOG_ERROR,
+        "[GCV2][gatebase] reject=%zu interior=%zu bad=%zu "
+        "reason=[nonheap:%zu,dead:%zu,null:%zu,small:%zu,misalign:%zu,4g:%zu,inheap:%zu,resident:%zu,cross:%zu] "
+        "offset=[none:%zu,8:%zu,16:%zu,24:%zu,32:%zu,40:%zu,48:%zu,56:%zu,64:%zu]",
+        gateBaseTotal, gateBaseInterior, gateBaseTotal - gateBaseInterior,
+        gateBaseReason[GATEBASE_NON_HEAP], gateBaseReason[GATEBASE_DEAD_REGION],
+        gateBaseReason[GATEBASE_NULL_TIP], gateBaseReason[GATEBASE_SMALL_INT],
+        gateBaseReason[GATEBASE_MISALIGNED], gateBaseReason[GATEBASE_4G_ALIGNED],
+        gateBaseReason[GATEBASE_TIP_IN_HEAP], gateBaseReason[GATEBASE_NOT_RESIDENT],
+        gateBaseReason[GATEBASE_CROSS_END], gateBaseOffset[0], gateBaseOffset[1], gateBaseOffset[2],
+        gateBaseOffset[3], gateBaseOffset[4], gateBaseOffset[5], gateBaseOffset[6], gateBaseOffset[7],
+        gateBaseOffset[8]);
     LOG(RTLOG_ERROR, "[GCV2][markfloor-obj-gate] reject=%zu geom_cross_end=%zu env=MRT_GCV2_MARKFLOOR_OBJ_GATE=1",
         g_plausibleObjGateReject.load(std::memory_order_relaxed),
         g_geomCrossEndReject.load(std::memory_order_relaxed));
