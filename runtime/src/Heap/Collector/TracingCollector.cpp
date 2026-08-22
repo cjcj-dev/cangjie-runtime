@@ -971,7 +971,8 @@ void TracingCollector::Init() {}
 
 void TracingCollector::Fini() { Collector::Fini(); }
 
-// VisitGCRoots walks finalizers + finalizables + workingFinalizables (relocatable roots).
+// Registered finalizers are discovered by DoResurrection and fixed by
+// VisitRawPointers. Only queued/running finalizables are strong mark roots.
 void TracingCollector::EnumFinalizerProcessorRoots(RootSet& rootSet) const
 {
     RootVisitor visitor = [this, &rootSet](ObjectRef& root) { EnumAndTagRawRoot(root, rootSet); };
