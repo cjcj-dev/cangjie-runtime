@@ -21,11 +21,8 @@ class BaseObject;
 //   H3  each ref field is null or points at an object that itself satisfies H1+H2+H4
 //   H4  holder (and H3 target) region is not free/garbage
 //
-// Gate (default off):  MRT_GCV2_VERIFY_HEAP=1
-// Cost control:        MRT_GCV2_VERIFY_HEAP_START_AT=<N>   (1-based invoke count)
-//                      MRT_GCV2_VERIFY_HEAP_EVERY=<N>
-// Failure cap:         MRT_GCV2_VERIFY_HEAP_MAX_FAILURES=<N>  (default 20; HotSpot G1MaxVerifyFailures)
-// Report-only; optional abort: MRT_GCV2_VERIFY_HEAP_FATAL=1
+// Gate (default off): MRT_GCV2_VERIFY_HEAP=1. Report-only, every invocation,
+// with the historical failure cap fixed at its default of 20 (HotSpot G1MaxVerifyFailures).
 //
 // Enumeration is independent of minor reachableObjects / TraceYoungClosure / remset.
 // force=true: run even when MRT_GCV2_VERIFY_HEAP is unset (post-evac hook uses this).

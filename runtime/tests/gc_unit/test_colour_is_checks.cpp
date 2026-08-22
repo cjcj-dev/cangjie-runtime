@@ -53,7 +53,7 @@ enum class YoungRemap { Absent, Y0, Y1 };
 enum class OldRemap { Absent, O0, O1 };
 enum class YoungMark { Absent, M0, M1 };
 enum class OldMark { Absent, M0, M1 };
-enum class Remember { Absent, R0, R1 };
+enum class Remember { Absent, R0, R1, Both };
 
 // The epoch words WCollector holds, mirrored so the test can flip them the way the product does
 // (WCollector.h flip_young_relocate_start / flip_old_relocate_start / flip_young_mark_start /
@@ -100,7 +100,10 @@ uintptr_t MarkOldBitFor(OldMark m)
 }
 uintptr_t RememberBitFor(Remember r)
 {
-    return r == Remember::Absent ? 0 : (r == Remember::R0 ? REMEMBERED_0 : REMEMBERED_1);
+    return r == Remember::Absent ? 0
+        : r == Remember::R0 ? REMEMBERED_0
+        : r == Remember::R1 ? REMEMBERED_1
+                            : REMEMBERED_MASK;
 }
 
 // zAddress test's valid_value: any non-zero address payload. LogMinObjectAlignment there; here the
@@ -130,17 +133,29 @@ void CheckOneColour(const Epoch& epoch, uintptr_t address, Colour c)
     const uintptr_t value = Paint(address, c);
 
     const uintptr_t remapBit = RemapBitFor(c.y, c.o);
+    const uintptr_t youngMarkBit = MarkYoungBitFor(c.my);
+    const uintptr_t oldMarkBit = MarkOldBitFor(c.mo);
+    const uintptr_t rememberBit = RememberBitFor(c.rm);
     const bool sameYoungRemap = (remapBit & epoch.e.remappedYoungMask) != 0;
     const bool sameOldRemap = (remapBit & epoch.e.remappedOldMask) != 0;
-    const bool sameYoungMark = MarkYoungBitFor(c.my) == epoch.e.markedYoung;
-    const bool sameOldMark = MarkOldBitFor(c.mo) == epoch.e.markedOld;
-    const bool sameRemembered = RememberBitFor(c.rm) == epoch.e.remembered;
+    const bool sameYoungMark = youngMarkBit == epoch.e.markedYoung;
+    const bool sameOldMark = oldMarkBit == epoch.e.markedOld;
+    const bool sameRemembered = rememberBit == epoch.e.remembered;
     const bool hasAddress = address != 0;
 
     const bool expectLoadGood = hasAddress && sameYoungRemap && sameOldRemap;
     const bool expectMarkGood = expectLoadGood && sameYoungMark && sameOldMark;
     const bool expectStoreGood = expectMarkGood && sameRemembered;
+    const bool expectLoadBad = remapBit != 0 && !(sameYoungRemap && sameOldRemap);
+    const bool expectMarkBad = expectLoadBad || (youngMarkBit != 0 && !sameYoungMark) ||
+        (oldMarkBit != 0 && !sameOldMark);
+    const bool expectStoreBad = expectMarkBad || (rememberBit != 0 && !sameRemembered);
 
+    GC_EXPECT_EQ(ColourPredicates::is_marked_finalizable(value, m.markBad), false);
+    GC_EXPECT_EQ(ColourPredicates::is_marked_any_old(value, m.markBad), sameOldMark);
+    GC_EXPECT_EQ(ColourPredicates::is_marked_old(value, m.markBad), sameOldMark);
+    GC_EXPECT_EQ(ColourPredicates::is_marked_young(value, m.markBad), sameYoungMark);
+    GC_EXPECT_EQ(ColourPredicates::is_remapped(value, m.loadBad), sameYoungRemap && sameOldRemap);
     GC_EXPECT_EQ(ColourPredicates::is_load_good(value, m.loadBad), expectLoadGood);
     GC_EXPECT_EQ(ColourPredicates::is_mark_good(value, m.loadBad, m.markBad), expectMarkGood);
     GC_EXPECT_EQ(ColourPredicates::is_store_good(value, m.loadBad, m.storeBad), expectStoreGood);
@@ -152,9 +167,9 @@ void CheckOneColour(const Epoch& epoch, uintptr_t address, Colour c)
     // Bad is "carries a colour of this family that is not the current one" -- a value carrying no
     // colour at all is not bad, it is unexamined.  That asymmetry is the whole point of the
     // Absent arm.
-    const bool expectLoadBad = remapBit != 0 && !(sameYoungRemap && sameOldRemap);
     GC_EXPECT_EQ(ColourPredicates::is_load_bad(value, m.loadBad), expectLoadBad);
-
+    GC_EXPECT_EQ(ColourPredicates::is_mark_bad(value, m.markBad), expectMarkBad);
+    GC_EXPECT_EQ(ColourPredicates::is_store_bad(value, m.storeBad), expectStoreBad);
     // *_or_null differ from the plain form only at raw zero, and a coloured null is not raw zero.
     GC_EXPECT_EQ(ColourPredicates::is_load_good_or_null(value, m.loadBad), value == 0 || expectLoadGood);
     GC_EXPECT_EQ(ColourPredicates::is_mark_good_or_null(value, m.loadBad, m.markBad),
@@ -169,7 +184,7 @@ void CheckAllColours(const Epoch& epoch)
     const OldRemap os[] = { OldRemap::Absent, OldRemap::O0, OldRemap::O1 };
     const YoungMark mys[] = { YoungMark::Absent, YoungMark::M0, YoungMark::M1 };
     const OldMark mos[] = { OldMark::Absent, OldMark::M0, OldMark::M1 };
-    const Remember rms[] = { Remember::Absent, Remember::R0, Remember::R1 };
+    const Remember rms[] = { Remember::Absent, Remember::R0, Remember::R1, Remember::Both };
 
     for (YoungRemap y : ys) {
         for (OldRemap o : os) {
@@ -188,8 +203,9 @@ void CheckAllColours(const Epoch& epoch)
 
 } // namespace
 
-// 3 remap-young x 3 remap-old x 3 mark-young x 3 mark-old x 3 remembered x 2 addresses = 486 values
-// (three = absent plus the two epochs), each checked against 7 predicates, at the starting epoch.
+// 3 remap-young x 3 remap-old x 3 mark-young x 3 mark-old x 4 remembered x 2 addresses = 648 values
+// (three = absent plus the two epochs; remembered also includes ZGC's illegal 11 value), each
+// checked against all fourteen corresponding ZPointer predicates, at the starting epoch.
 GC_TEST(ColourIsChecks, EveryColourAtTheStartingEpoch)
 {
     Epoch epoch;

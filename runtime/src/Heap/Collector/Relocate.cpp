@@ -690,7 +690,7 @@ void EnsureRouteDomainMembership(WCollector* collector, BaseObject* obj)
     }
     LiveInfo* live = region->GetLiveInfo();
     LiveInfo* ghost = region->GetLiveInfo0ForProbe();
-    RegionBitmap* ghostBitmap = ghost == nullptr ? nullptr : region->GetRouteMarkBitmap(ghost);
+    RegionBitmap* ghostBitmap = ghost == nullptr ? nullptr : region->GetOwnerMarkBitmap(ghost);
     if (ghost != nullptr && ghost != live && ghostBitmap != nullptr) {
         size_t objSize = 0;
         if (Collector::PlausibleManagedObjectGate("EnsureRouteDomain.size", obj)) {
@@ -756,7 +756,7 @@ bool ForceRootRouteDomainWhileForwardable(WCollector* collector, BaseObject* obj
     region->BindLiveInfo0FromLiveIfNull();
     LiveInfo* g0 = region->GetLiveInfo0ForProbe();
     size_t offset = region->GetAddressOffset(reinterpret_cast<MAddress>(obj));
-    RegionBitmap* ghostBitmap = g0 == nullptr ? nullptr : region->GetRouteMarkBitmap(g0);
+    RegionBitmap* ghostBitmap = g0 == nullptr ? nullptr : region->GetOwnerMarkBitmap(g0);
     if (g0 != nullptr && ghostBitmap != nullptr) {
         if (!region->IsRouteSurvivedObject(offset)) {
             size_t objSize = 0;
@@ -1641,7 +1641,11 @@ void WCollector::EvacuateYoungRegions(const std::vector<BaseObject*>& reachableV
     };
     const bool doYoungFlip = !youngFlipOff;
     GCThreadPool* threadPool = GetThreadPool();
-    const bool useParallel = threadPool != nullptr;
+    static const bool forceSerial = []() {
+        const char* value = std::getenv("MRT_GCV2_REFFIX_FORCE_SERIAL");
+        return value != nullptr && std::strcmp(value, "1") == 0;
+    }();
+    const bool useParallel = threadPool != nullptr && !forceSerial;
 
     // Keep opt-in (`=1`): `=0` or unset is the immediate rollback path.
     std::vector<MAddress> remsetVec;
@@ -1702,6 +1706,15 @@ void WCollector::EvacuateYoungRegions(const std::vector<BaseObject*>& reachableV
         const size_t nSlot = remsetVec.size();
         const int32_t helperNum = pool->GetMaxThreadNum();
         int32_t heapWorkers = helperNum + 1;
+        {
+            const char* value = std::getenv("MRT_GCV2_REFFIX_WORKERS");
+            if (value != nullptr && value[0] != '\0') {
+                int32_t requested = static_cast<int32_t>(std::strtol(value, nullptr, 10));
+                if (requested >= 1 && requested < heapWorkers) {
+                    heapWorkers = requested;
+                }
+            }
+        }
         if (heapWorkers < 1) {
             heapWorkers = 1;
         }
@@ -1781,6 +1794,15 @@ void WCollector::EvacuateYoungRegions(const std::vector<BaseObject*>& reachableV
         const int32_t helperNum = pool->GetMaxThreadNum();
         const int32_t poolCap = helperNum + 1;
         int32_t heapWorkers = poolCap;
+        {
+            const char* value = std::getenv("MRT_GCV2_REFFIX_WORKERS");
+            if (value != nullptr && value[0] != '\0') {
+                int32_t requested = static_cast<int32_t>(std::strtol(value, nullptr, 10));
+                if (requested >= 1 && requested < heapWorkers) {
+                    heapWorkers = requested;
+                }
+            }
+        }
         // At least 1 heap worker; root families = 5 additional tasks.
         if (heapWorkers < 1) {
             heapWorkers = 1;

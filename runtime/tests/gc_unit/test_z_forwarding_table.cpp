@@ -66,6 +66,35 @@ GC_TEST(ZForwarding, AttachedArraySitsAfterObject)
     fwd->Destroy();
 }
 
+// The provisional table is not a different lifetime object: it enters the same
+// three-state ref-count protocol before it is published in the granule map.
+// This couples the two pieces changed together by the provisional-table port.
+GC_TEST(ZForwarding, ProvisionalUsesRefCountProtocol)
+{
+    constexpr MAddress kStart = 0x58000000;
+    ZForwarding* fwd = ZForwarding::alloc(1, kStart, kStart, 0x1000, nullptr, 7, true);
+    GC_EXPECT_TRUE(fwd != nullptr);
+    GC_EXPECT_TRUE(fwd->is_provisional());
+    GC_EXPECT_EQ(fwd->page_life_id(), static_cast<RegionLifeId>(7));
+    GC_EXPECT_EQ(fwd->ref_count().load(std::memory_order_acquire), 1);
+
+    GC_EXPECT_TRUE(fwd->retain_page());
+    GC_EXPECT_EQ(fwd->ref_count().load(std::memory_order_acquire), 2);
+    fwd->release_page();
+    GC_EXPECT_EQ(fwd->ref_count().load(std::memory_order_acquire), 1);
+
+    GC_EXPECT_TRUE(fwd->claim());
+    fwd->in_place_relocation_claim_page();
+    GC_EXPECT_EQ(fwd->ref_count().load(std::memory_order_acquire), -1);
+    GC_EXPECT_FALSE(fwd->retain_page());
+    fwd->mark_done();
+    GC_EXPECT_TRUE(fwd->is_done());
+    fwd->release_page();
+    GC_EXPECT_EQ(fwd->ref_count().load(std::memory_order_acquire), 0);
+    GC_EXPECT_FALSE(fwd->retain_page());
+    fwd->Destroy();
+}
+
 GC_TEST(ZForwardingTable, kZfwdTableConsumeOn)
 {
     static_assert(ForwardingTable::kZfwdTableConsume,

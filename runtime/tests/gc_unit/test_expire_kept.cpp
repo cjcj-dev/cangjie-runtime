@@ -101,3 +101,23 @@ GC_TEST(ExemptLife, DropRetiredCoveringRemovesFindTo)
     ForwardingTable::DropRetiredCovering(kStart, kSize);
     GC_EXPECT_EQ(ForwardingTable::FindTo(from), static_cast<MAddress>(0));
 }
+
+// fwdlifetime: once Dispel has removed membership/ghost, the bad-colour
+// barrier must still be able to ask the retired generation directly. Before
+// the product fallback this answer existed but relocate_or_remap_object
+// returned from without asking for it.
+GC_TEST(ExemptLife, RetiredOnlyLookupSurvivesGhostLoss)
+{
+    constexpr MAddress kStart = 0x30000;
+    constexpr size_t kSize = 0x1000;
+    ForwardingEntries* tab = ForwardingEntries::Create(4, kStart, 0, kSize);
+    GC_EXPECT_TRUE(tab != nullptr);
+    const MAddress from = kStart + 24;
+    const MAddress to = 0x5000;
+    GC_EXPECT_EQ(tab->insert(from, to), to);
+    ForwardingTable::Retire(tab);
+
+    GC_EXPECT_EQ(ForwardingTable::FindRetiredTo(from), to);
+    ForwardingTable::DropRetiredCovering(kStart, kSize);
+    GC_EXPECT_EQ(ForwardingTable::FindRetiredTo(from), static_cast<MAddress>(0));
+}

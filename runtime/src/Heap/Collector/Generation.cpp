@@ -91,6 +91,49 @@
 #include "Heap/WCollector/WCollectorInternal.h"
 
 namespace MapleRuntime {
+namespace {
+bool VerifyStackRootPostconditionEnabled()
+{
+    static const bool on = []() {
+        const char* value = std::getenv("MRT_GCV2_VERIFY_STACK_ROOTS_COMPLETE");
+        return value != nullptr && std::strcmp(value, "1") == 0;
+    }();
+    return on;
+}
+} // namespace
+
+namespace WCollectorInternal {
+void VerifyStackRootPostcondition(uint64_t stackScanEpoch, const char* source)
+{
+    if (!VerifyStackRootPostconditionEnabled()) {
+        return;
+    }
+
+    size_t checked = 0;
+    size_t incomplete = 0;
+    MutatorManager::Instance().VisitAllMutators([&](Mutator& mutator) {
+        ++checked;
+        StackWatermark& watermark = mutator.GetStackWatermark();
+        if (watermark.IsDone(stackScanEpoch)) {
+            return;
+        }
+        ++incomplete;
+        LOG(RTLOG_ERROR,
+            "[GCV2][verify][stack-roots-complete] INCOMPLETE source=%s epoch=%llu mutator=%p tid=%u cjthread=%p "
+            "managed=%d saferegion=%d wm_epoch=%llu phase=%u owner=%u cursor=%zu frames=%zu "
+            "env=MRT_GCV2_VERIFY_STACK_ROOTS_COMPLETE=1",
+            source, static_cast<unsigned long long>(stackScanEpoch), &mutator, mutator.GetTid(),
+            mutator.GetCjthreadPtr(), mutator.IsManagedContext() ? 1 : 0, mutator.InSaferegion() ? 1 : 0,
+            static_cast<unsigned long long>(watermark.GetEpoch()), static_cast<unsigned>(watermark.GetPhase()),
+            static_cast<unsigned>(watermark.GetOwner()), watermark.GetCursorIndex(), watermark.GetFrameCount());
+    });
+    LOG(RTLOG_ERROR,
+        "[GCV2][verify][stack-roots-complete] SUMMARY source=%s epoch=%llu checked=%zu incomplete=%zu "
+        "env=MRT_GCV2_VERIFY_STACK_ROOTS_COMPLETE=1",
+        source, static_cast<unsigned long long>(stackScanEpoch), checked, incomplete);
+}
+} // namespace WCollectorInternal
+
 void WCollector::ValidateMinorReferences(const char* point, const std::vector<BaseObject*>* reachableVec)
 {
     (void)point;
@@ -660,6 +703,7 @@ void WCollector::DoYoungGarbageCollection()
                 (void)mutator.GcPhaseEnum(GCPhase::GC_PHASE_ENUM);
             }
         });
+        VerifyStackRootPostcondition(stackScanEpoch, "minor");
         StackRootSlotAttest::Finish();
     }
 
@@ -1450,6 +1494,16 @@ void WCollector::DoYoungGarbageCollection()
          reachableVec.size(), static_cast<unsigned long long>(fixpointScanNs),
          static_cast<unsigned long long>(fixpointClosureNs));
     EatArmDiag::DumpMinorSummary(minorTotalRuns + 1);
+    static const bool verifyRemsetEnabled = []() {
+        const char* value = std::getenv("MRT_GCV2_VERIFY_REMSET");
+        return value != nullptr && std::strcmp(value, "1") == 0;
+    }();
+    static const bool verifyHeapEnabled = []() {
+        const char* value = std::getenv("MRT_GCV2_VERIFY_HEAP");
+        return value != nullptr && std::strcmp(value, "1") == 0;
+    }();
+    std::unordered_set<BaseObject*> rootReachableForVerify;
+    const bool needRootReachable = verifyRemsetEnabled || verifyHeapEnabled;
     {
         size_t runIndex = minorTotalRuns + 1;
         auto visitRoots = [this, &allocationRoots](const std::function<void(BaseObject*)>& visitor) {
@@ -1459,9 +1513,16 @@ void WCollector::DoYoungGarbageCollection()
             VisitMinorRoots(visitor);
         };
         auto resolveField = [this](RefField<>& field) -> BaseObject* { return ResolveMinorReference(field); };
-        RunDiffPathExplainer(runIndex, visitRoots, resolveField, rememberedSlots, consumedSlots,
-                             &minorCandidateRegions, remsetStats, nullptr);
-        VerifyRememberedSetInvariant("pre-evacuate", rememberedSlots, false, nullptr);
+        if (needRootReachable) {
+            RunDiffPathExplainer(runIndex, visitRoots, resolveField, rememberedSlots, consumedSlots,
+                                 &minorCandidateRegions, remsetStats, &rootReachableForVerify);
+            VerifyRememberedSetInvariant("pre-evacuate", rememberedSlots, false,
+                                         verifyRemsetEnabled ? &rootReachableForVerify : nullptr);
+        } else {
+            RunDiffPathExplainer(runIndex, visitRoots, resolveField, rememberedSlots, consumedSlots,
+                                 &minorCandidateRegions, remsetStats, nullptr);
+            VerifyRememberedSetInvariant("pre-evacuate", rememberedSlots, false, nullptr);
+        }
     }
     if (UNLIKELY(YyEdgeDiag::Enabled())) {
         YyEdgeDiag::PublishProductVec(reachableVec);
@@ -1472,10 +1533,10 @@ void WCollector::DoYoungGarbageCollection()
     // does not require global VERIFY_HEAP.
     if (kVerifyPostEvac) {
         VLOG(REPORT, "[GCV2][verify][post-evac] enter point=post-mark run=%zu", minorTotalRuns + 1);
-        VerifyHeapObjects("post-mark", true, nullptr);
+        VerifyHeapObjects("post-mark", true, verifyHeapEnabled ? &rootReachableForVerify : nullptr);
         VLOG(REPORT, "[GCV2][verify][post-evac] point=post-mark run=%zu", minorTotalRuns + 1);
     } else {
-        VerifyHeapObjects("pre-evacuate", false, nullptr);
+        VerifyHeapObjects("pre-evacuate", false, verifyHeapEnabled ? &rootReachableForVerify : nullptr);
     }
 
     size_t liveBytes = 0;

@@ -210,6 +210,7 @@ void FinalizerProcessor::WaitStarted()
 void FinalizerProcessor::EnqueueFinalizables(const std::function<bool(BaseObject*)>& finalizable, U32 countLimit)
 {
     std::lock_guard<std::mutex> l(listLock);
+    U32 enqueued = 0;
     auto it = finalizers.begin();
     while (it != finalizers.end() && countLimit != 0) {
         BaseObject* obj = LoadFinalizerGood(*it);
@@ -221,6 +222,7 @@ void FinalizerProcessor::EnqueueFinalizables(const std::function<bool(BaseObject
         if (finalizable(obj)) {
             finalizables.push_back(*it);
             it = finalizers.erase(it);
+            ++enqueued;
         } else {
             ++it;
         }
@@ -229,6 +231,7 @@ void FinalizerProcessor::EnqueueFinalizables(const std::function<bool(BaseObject
     if (!finalizables.empty()) {
         hasFinalizableJob.store(true, std::memory_order_relaxed);
     }
+    VLOG(REPORT, "enqueued finalizers %u", enqueued);
 }
 
 // Process finalizable list

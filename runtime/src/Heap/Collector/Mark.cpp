@@ -108,24 +108,9 @@ bool WCollector::MarkObjectImpl(BaseObject* obj, bool youngClaim) const
     StartWhoDiag::ScopedCaller caller("WCollector::MarkObject", obj);
     size_t objectSize = obj->GetSize();
     // livesame: MarkObject adds live only on 0→1 (ZGC inc_live); no second AddLiveByteCount.
-    bool marked;
-    if (gcReason == GC_REASON_YOUNG) {
-        // oracleblack round 10, face b: the young cycle itself promotes regions (evac
-        // stay-young → PromoteYoungRegion); a later young-context mark of an object in a
-        // just-promoted region would bind the young view to an old region and trip
-        // GetMarkView's sole-constructor CHECK (RegionInfo.h:211). The old generation owns
-        // the region now: the young closure never traverses old targets, and the domain
-        // install that reaches here for promoted regions is moot — report already-marked.
-        if (UNLIKELY(!region->IsYoungRegion())) {
-            SurvNodeDiag::NoteFollowHolder(obj, SurvNodeDiag::FOLLOW_SKIP_GATE);
-            return true;
-        }
-        MarkView<Generation::Young> view = region->GetMarkView<Generation::Young>();
-        marked = region->MarkObject(view, obj, objectSize);
-    } else {
-        MarkView<Generation::Old> view = region->GetMarkView<Generation::Old>();
-        marked = region->MarkObject(view, obj, objectSize);
-    }
+    // ZGC zPage.inline.hpp:284-294: the target page owns mark authority. gcReason
+    // names the running closure, not the target object's face.
+    bool marked = region->MarkObjectByOwner(obj, objectSize);
     if (!marked) {
         SurvNodeDiag::NotePaint(obj, region);
     }
@@ -728,6 +713,7 @@ void WCollector::TraceHeap()
             // not started; this is the last point at which an incomplete stack-root
             // receipt can be reported before any mark-closure work consumes the roots.
             DoEnumeration(workStack, foreignStack);
+            VerifyStackRootPostcondition(stackScanEpoch, "major");
             StackRootSlotAttest::Finish();
             TransitionToGCPhase(GCPhase::GC_PHASE_TRACE, true);
         } else {
@@ -1895,6 +1881,15 @@ void WCollector::TraceYoungClosureParallel(WorkStack& workStack, bool fullYoungS
     const int32_t helperNum = threadPool->GetMaxThreadNum();
     int32_t poolCap = helperNum + 1;
     int32_t workers = poolCap;
+    {
+        const char* value = std::getenv("MRT_GCV2_MARKPAR_WORKERS");
+        if (value != nullptr && value[0] != '\0') {
+            int32_t requested = static_cast<int32_t>(std::strtol(value, nullptr, 10));
+            if (requested >= 1 && requested < workers) {
+                workers = requested;
+            }
+        }
+    }
     if (workers < 1) {
         workers = 1;
     }
@@ -2006,6 +2001,15 @@ void WCollector::TraceYoungClosureStriped(WorkStack& workStack, bool fullYoungSc
     const size_t dispelAtEntry = RegionInfo::GetDispelGhostCount();
 
     int32_t workers = threadPool->GetMaxThreadNum() + 1;
+    {
+        const char* value = std::getenv("MRT_GCV2_MARKPAR_WORKERS");
+        if (value != nullptr && value[0] != '\0') {
+            int32_t requested = static_cast<int32_t>(std::strtol(value, nullptr, 10));
+            if (requested >= 1 && requested < workers) {
+                workers = requested;
+            }
+        }
+    }
     if constexpr (kGcTriggerDynamicWorkersEnabled) {
         // zDirector.cpp:783-793 — initial_workers selected each cycle.
         const uint32_t selected = g_gcTriggerYoungWorkers.load(std::memory_order_relaxed);
@@ -2120,21 +2124,39 @@ void WCollector::TraceYoungClosure(WorkStack& workStack, bool fullYoungScan, Min
         return;
     }
     GCThreadPool* threadPool = GetThreadPool();
-    if (kMarkStriped && threadPool != nullptr) {
+    static const bool forceSerial = []() {
+        const char* value = std::getenv("MRT_GCV2_MARKPAR_FORCE_SERIAL");
+        return value != nullptr && std::strcmp(value, "1") == 0;
+    }();
+    const bool workersSet = std::getenv("MRT_GCV2_MARKPAR_WORKERS") != nullptr;
+    if (kMarkStriped && threadPool != nullptr && !forceSerial) {
         TraceYoungClosureStriped(workStack, fullYoungScan, reachableObjects, reachableVec, reachableSlots, weakSlots,
                                  useBitmapLedger, threadPool, reachableSlotDomain);
         return;
     }
-    VLOG(REPORT, "[GCV2][markpar][parallel] fallback=serial %s kMarkStriped=%d armed=%zu turned=%zu",
-         threadPool == nullptr ? "pool_unavailable" : "striped_off",
-         static_cast<int>(kMarkStriped), g_markStripeArmed.load(std::memory_order_relaxed),
-         g_markStripeTurned.load(std::memory_order_relaxed));
-    TraceYoungClosureSerial(workStack, fullYoungScan, reachableObjects, reachableVec, reachableSlots, weakSlots,
-                            useBitmapLedger, reachableSlotDomain);
-    VLOG(REPORT,
-         "[GCV2][markpar][parallel] workers_active=1 workers_scheduled=1 objects_marked=[%zu] "
-         "reachable_n=%zu parallel=0",
-         reachableVec.size(), reachableVec.size());
+    const bool useParallel = threadPool != nullptr && workersSet && !forceSerial;
+    if (!useParallel) {
+        const char* reason = "workers_unset";
+        if (threadPool == nullptr) {
+            reason = "pool_unavailable";
+        } else if (forceSerial) {
+            reason = "force_serial";
+        } else if (!kMarkStriped) {
+            reason = "striped_off";
+        }
+        VLOG(REPORT, "[GCV2][markpar][parallel] fallback=serial %s kMarkStriped=%d armed=%zu turned=%zu", reason,
+             static_cast<int>(kMarkStriped), g_markStripeArmed.load(std::memory_order_relaxed),
+             g_markStripeTurned.load(std::memory_order_relaxed));
+        TraceYoungClosureSerial(workStack, fullYoungScan, reachableObjects, reachableVec, reachableSlots, weakSlots,
+                                useBitmapLedger, reachableSlotDomain);
+        VLOG(REPORT,
+             "[GCV2][markpar][parallel] workers_active=1 workers_scheduled=1 objects_marked=[%zu] "
+             "reachable_n=%zu parallel=0",
+             reachableVec.size(), reachableVec.size());
+        return;
+    }
+    TraceYoungClosureParallel(workStack, fullYoungScan, reachableObjects, reachableVec, reachableSlots, weakSlots,
+                              useBitmapLedger, threadPool, reachableSlotDomain);
 }
 
 // youngconc: SATB termination for concurrent young mark — same loop shape as

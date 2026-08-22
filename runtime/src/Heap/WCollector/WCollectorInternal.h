@@ -8,6 +8,7 @@
 #define MAPLE_RUNTIME_WCOLLECTOR_INTERNAL_H
 
 #include <atomic>
+#include <cstdint>
 
 #if defined(__GNUC__)
 #define WCOLLECTOR_INTERNAL_HIDDEN __attribute__((visibility("hidden")))
@@ -20,6 +21,7 @@ namespace WCollectorInternal {
 
 WCOLLECTOR_INTERNAL_HIDDEN bool MinorYoungFlipOff();
 WCOLLECTOR_INTERNAL_HIDDEN bool NullslotProbeEnabled();
+WCOLLECTOR_INTERNAL_HIDDEN void VerifyStackRootPostcondition(uint64_t stackScanEpoch, const char* source);
 WCOLLECTOR_INTERNAL_HIDDEN void PushAdmittedYoung(BaseObject* object, TracingCollector::WorkStack& workStack,
                                                   const char* origin, const void* slot = nullptr,
                                                   BaseObject* holder = nullptr);

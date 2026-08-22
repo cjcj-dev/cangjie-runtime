@@ -521,7 +521,7 @@ MAddress ZForwarding::resolve_live(MAddress to) const
 
 bool ZForwarding::receipt_live(MAddress to) const { return resolve_live(to) != 0; }
 
-static MAddress FindRetiredTo(MAddress from)
+MAddress ForwardingTable::FindRetiredTo(MAddress from)
 {
     std::lock_guard<std::mutex> lock(g_retiredLock);
     auto scan = [&](const std::vector<ZForwarding*>& gens) -> MAddress {

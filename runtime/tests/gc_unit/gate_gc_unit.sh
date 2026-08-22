@@ -6,6 +6,7 @@ set -euo pipefail
 ROOT="$(cd "$(dirname "$0")/../../.." && pwd)"
 SRC="$ROOT/runtime/tests/gc_unit"
 SCRIPT="$SRC/run_standalone.sh"
+FINALIZER_SCRIPT="$SRC/run_finalizer_trigger.sh"
 
 if [[ "${GC_UNIT_GATE_SKIP:-0}" == "1" ]]; then
   echo "GC_UNIT_GATE_SKIP=1 — not a product verdict"
@@ -18,6 +19,10 @@ if [[ ! -d "$SRC" ]]; then
 fi
 if [[ ! -f "$SCRIPT" ]]; then
   echo "GC_UNIT_GATE_FAIL: missing run_standalone.sh" >&2
+  exit 2
+fi
+if [[ ! -f "$FINALIZER_SCRIPT" || ! -f "$SRC/finalizer_trigger.cj" ]]; then
+  echo "GC_UNIT_GATE_FAIL: missing end-to-end finalizer trigger test" >&2
   exit 2
 fi
 if [[ ! -f "$SRC/test_defect_regressions.cpp" ]]; then
@@ -142,6 +147,13 @@ fi
 if [[ $rc -ne 0 ]]; then
   echo "  full log: $OUT" >&2
   exit "$rc"
+fi
+
+# Root classification has a language-visible consequence that a C++ fixture
+# alone cannot prove: unreachable objects must actually execute ~init.
+if ! bash "$FINALIZER_SCRIPT"; then
+  echo "GC_UNIT_GATE_FAIL: end-to-end finalizer trigger test failed" >&2
+  exit 1
 fi
 
 touch "$STAMP"

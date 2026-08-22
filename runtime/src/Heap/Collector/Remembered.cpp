@@ -617,12 +617,24 @@ void WCollector::FixOldTaggedRefField(BaseObject* holder, RefField<>& field, con
 
 void WCollector::InvalidateOldTaggedRefsBeforeDispel()
 {
+    static const bool preflipWalk = []() {
+        const char* value = std::getenv("MRT_GCV2_PREFLIP_VERIFY");
+        return value != nullptr && std::strcmp(value, "1") == 0;
+    }();
+    if (!preflipWalk) {
+        return;
+    }
+    InvalidateOldTaggedRefs(true);
 }
 
 void WCollector::InvalidateOldTaggedRefs(bool requireSurvivedMark)
 {
-    constexpr bool account = false;
-    constexpr bool trackFixed = false;
+    static const bool preflipVerify = []() {
+        const char* value = std::getenv("MRT_GCV2_PREFLIP_VERIFY");
+        return value != nullptr && std::strcmp(value, "1") == 0;
+    }();
+    const bool account = requireSurvivedMark && preflipVerify;
+    const bool trackFixed = requireSurvivedMark && preflipVerify;
     MRT_PHASE_TIMER(requireSurvivedMark ? "InvalidateOldTaggedRefs.preflip" : "InvalidateOldTaggedRefs.postflip");
     ScopedStopTheWorld stw(requireSurvivedMark ? "invalidate old tagged refs before dispel"
                                                : "invalidate old tagged refs after flip");
@@ -966,6 +978,32 @@ void WCollector::InvalidateOldTaggedRefs(bool requireSurvivedMark)
     ReportF3DeadarmCounts(requireSurvivedMark ? "preflip" : "postflip");
     F3Why2Diag::Report(requireSurvivedMark ? "preflip" : "postflip");
     GarbRegionDiag::Report(requireSurvivedMark ? "preflip" : "postflip");
+    if (requireSurvivedMark && preflipVerify) {
+        static const bool preflipVerifyFatal = []() {
+            const char* value = std::getenv("MRT_GCV2_PREFLIP_VERIFY_FATAL");
+            return value != nullptr && std::strcmp(value, "1") == 0;
+        }();
+        const size_t fixedTotal = heapTotals.fixedSlots + rootTotals.fixedRootSlots;
+        VLOG(REPORT,
+             "[GCV2][preflip-verify] fixed=%zu fixedRoots=%zu fixedTotal=%zu oldTagged=%zu oldTaggedRoots=%zu "
+             "fields=%zu rootSlots=%zu fatal=%d env=MRT_GCV2_PREFLIP_VERIFY=1",
+             heapTotals.fixedSlots, rootTotals.fixedRootSlots, fixedTotal, heapTotals.oldTaggedSlots,
+             rootTotals.oldTaggedRootSlots, heapTotals.fields, rootTotals.rootSlots,
+             static_cast<int>(preflipVerifyFatal));
+        if (fixedTotal > 0) {
+            LOG(RTLOG_ERROR,
+                "[GCV2][preflip-verify] PREFLIP_RESIDUE fixed=%zu fixedRoots=%zu fixedTotal=%zu "
+                "oldTagged=%zu oldTaggedRoots=%zu (production skips preflip; residue means insurance needed)",
+                heapTotals.fixedSlots, rootTotals.fixedRootSlots, fixedTotal, heapTotals.oldTaggedSlots,
+                rootTotals.oldTaggedRootSlots);
+            if (preflipVerifyFatal) {
+                CHECK_DETAIL(false,
+                             "MRT_GCV2_PREFLIP_VERIFY_FATAL: preflip residue fixedTotal=%zu "
+                             "(fixed=%zu fixedRoots=%zu)",
+                             fixedTotal, heapTotals.fixedSlots, rootTotals.fixedRootSlots);
+            }
+        }
+    }
 }
 void WCollector::RescanRememberedSet(WorkStack& workStack, const MinorSlotSet& rememberedSlots,
                                      const MinorSlotSet& reachableSlots, const MinorSlotSet& weakSlots,

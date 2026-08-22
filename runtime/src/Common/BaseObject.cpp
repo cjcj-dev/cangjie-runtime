@@ -4,6 +4,9 @@
 //
 // See https://cangjie-lang.cn/pages/LICENSE for license information.
 
+#include <cstdlib>
+
+#include "Common/ColourMask.h"
 #include "Base/Log.h"
 #include "BaseObject.h"
 #include "Heap/Allocator/RegionInfo.h"
@@ -19,8 +22,32 @@
 namespace MapleRuntime {
 void AssertColouredWriteIfEnabled(const void* slot, MAddress newVal)
 {
-    (void)slot;
-    (void)newVal;
+    static const bool assertOn = []() {
+        const char* v = std::getenv("MRT_GCV2_ASSERT_COLOURED_WRITES");
+        return v != nullptr && v[0] == '1' && v[1] == '\0';
+    }();
+    if (LIKELY(!assertOn)) {
+        return;
+    }
+    static const bool reported = []() {
+        LOG(RTLOG_ERROR, "[GCV2][verify][coloured-writes] ARMED env=MRT_GCV2_ASSERT_COLOURED_WRITES=1");
+        return true;
+    }();
+    (void)reported;
+    if (!Heap::IsHeapAddress(slot)) {
+        return;
+    }
+    if ((newVal & ((MAddress(1) << 48) - 1)) == 0) {
+        return;
+    }
+    constexpr MAddress kColourMask = REMAP_COLOUR_MASK | MARKED_YOUNG_MASK | MARKED_OLD_MASK;
+    bool hasColour = (newVal & kColourMask) != 0;
+    bool tagged = ((newVal >> 48) & 1) != 0;
+    bool loadGood = (newVal & static_cast<MAddress>(::g_cjLoadBadMask)) == 0;
+    CHECK_DETAIL(hasColour && (loadGood || tagged),
+                 "MRT_GCV2_ASSERT_COLOURED_WRITES: plain/bad-colour heap ref write @%p val=%#zx "
+                 "hasColour=%d loadGood=%d tagged=%d",
+                 slot, newVal, hasColour, loadGood, tagged);
 }
 
 TypeInfo* BaseObject::GetTypeInfo() const { return stateWord.GetTypeInfo(); }

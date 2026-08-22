@@ -350,8 +350,7 @@ void MarkAndRememberNewValue(BarrierPhase barrierPhase, BaseObject* ref)
         if (!region->IsYoungRegion()) {
             return;
         }
-        MarkView<Generation::Young> view = region->GetMarkView<Generation::Young>();
-        bool already = region->MarkObject(view, ref, ref->GetSize());
+        bool already = region->MarkObjectByOwner(ref, ref->GetSize());
         if (already) {
             return;
         }
