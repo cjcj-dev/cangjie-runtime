@@ -887,7 +887,7 @@ static bool PushHeaderlessRecordField(BaseObject* record, const char* site)
 // ZUncoloredRoot::barrier writes back the *same* p it loaded (zUncoloredRoot.inline.hpp:38,59).
 static void PreForwardHeaderlessRecord(BaseObject* record, Collector& collector, std::set<void*>& rootFieldSet)
 {
-    if (record == nullptr || !IsStackAddr(reinterpret_cast<uintptr_t>(record))) {
+    if (record == nullptr) {
         return;
     }
     RootSlot& field = RootSlotAt(static_cast<void*>(record));
