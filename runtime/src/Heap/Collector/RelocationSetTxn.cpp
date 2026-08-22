@@ -173,16 +173,14 @@ bool RelocationSetTxn::TryDetach()
         if (p.region->GetRegionLifeId() != p.fromLife) {
             g_counters.participantLifeMismatch.fetch_add(1, std::memory_order_relaxed);
         }
-        // This is the existing detach checkpoint's permit for exactly this
-        // transaction/life. The registry remains reuse evidence for every
-        // other caller until all participants have passed the checkpoint.
+        if (p.region->ForwardingRefCount() != 0) {
+            detached = false;
+            continue;
+        }
         DetachPermitScope permit(this, p.fromLife);
         (void)FromPageDetach::FromPageDetachCheck(p.region, FromPageDetach::Site::MAJOR_RECHECK,
                                                   FromPageDetach::Action::MAJOR_CLOSE);
-        // zGeneration.cpp:276-284 reset_relocation_set removes forwarding after
-        // relocate; this is that drop. take_garbage must not have to wait for it.
         ForwardingTable::DropRetiredCovering(p.start, p.size, true);
-        detached = detached && !ForwardingTable::RetiredCovers(p.start, p.size);
     }
     if (detached) {
         state.store(State::DETACHED, std::memory_order_release);
