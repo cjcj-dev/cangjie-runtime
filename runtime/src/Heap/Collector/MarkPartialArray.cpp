@@ -55,20 +55,17 @@ bool Encodable(const void* chunkStart, size_t length)
     return ((addr - base) >> MIN_SIZE_SHIFT) <= MAX_OFFSET;
 }
 
-BaseObject* Encode(const void* chunkStart, size_t length)
+MarkStackEntry Encode(const void* chunkStart, size_t length, bool finalizable)
 {
     const MAddress addr = reinterpret_cast<MAddress>(chunkStart);
-    const uintptr_t offset = (addr - Heap::heapStartAddr) >> MIN_SIZE_SHIFT;
-    const uintptr_t entry = (offset << OFFSET_SHIFT) |
-                            (static_cast<uintptr_t>(length) << LENGTH_SHIFT) | TAG_MASK;
-    return reinterpret_cast<BaseObject*>(entry);
+    const size_t offset = static_cast<size_t>((addr - Heap::heapStartAddr) >> MIN_SIZE_SHIFT);
+    return MarkStackEntry::PartialArray(offset, length, finalizable);
 }
 
-void Decode(const BaseObject* entry, MAddress& chunkStart, size_t& length)
+void Decode(const MarkStackEntry& entry, MAddress& chunkStart, size_t& length)
 {
-    const uintptr_t raw = reinterpret_cast<uintptr_t>(entry);
-    const uintptr_t offset = raw >> OFFSET_SHIFT;
-    length = static_cast<size_t>((raw >> LENGTH_SHIFT) & MAX_LENGTH);
+    const size_t offset = entry.partialArrayOffset();
+    length = entry.partialArrayLength();
     chunkStart = Heap::heapStartAddr + (offset << MIN_SIZE_SHIFT);
 }
 

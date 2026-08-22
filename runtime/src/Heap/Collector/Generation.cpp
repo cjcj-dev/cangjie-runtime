@@ -197,7 +197,7 @@ void WCollector::ProbeUnmarkedLive(const MinorObjectSet& allocationRoots, const 
         }
     };
     while (!pending.empty()) {
-        BaseObject* object = pending.back();
+        BaseObject* object = pending.back().object();
         pending.pop_back();
         if (!Heap::IsHeapAddress(object) || !fullReachable.insert(object).second) {
             continue;
@@ -383,7 +383,7 @@ void WCollector::ValidateYoungMarking(const std::vector<BaseObject*>& reachableV
             }
         };
         while (!pending.empty()) {
-            BaseObject* object = pending.back();
+            BaseObject* object = pending.back().object();
             pending.pop_back();
             if (!reachable.insert(object).second) {
                 continue;
@@ -754,7 +754,7 @@ void WCollector::DoYoungGarbageCollection()
             SatbBuffer::Instance().GetRetiredObjects(enumRoots);
         }
         while (!enumRoots.empty()) {
-            BaseObject* object = enumRoots.back();
+            BaseObject* object = enumRoots.back().object();
             enumRoots.pop_back();
             if (Heap::IsHeapAddress(object)) {
                 allocationRoots.insert(object);
@@ -1020,7 +1020,7 @@ void WCollector::DoYoungGarbageCollection()
                     [&allocBlack](AllocBuffer& buffer) { buffer.MergeYoungAllocBlack(allocBlack); });
                 allocBlackN = allocBlack.size();
                 while (!allocBlack.empty()) {
-                    BaseObject* object = allocBlack.back();
+                    BaseObject* object = allocBlack.back().object();
                     allocBlack.pop_back();
                     if (object == nullptr || !Heap::IsHeapAddress(object)) {
                         continue;
@@ -1079,7 +1079,7 @@ void WCollector::DoYoungGarbageCollection()
                         [&finalRoots](AllocBuffer& buffer) { buffer.MergeRoots(finalRoots); });
                     SatbBuffer::Instance().GetRetiredObjects(finalRoots);
                     while (!finalRoots.empty()) {
-                        BaseObject* object = finalRoots.back();
+                        BaseObject* object = finalRoots.back().object();
                         finalRoots.pop_back();
                         if (Heap::IsHeapAddress(object)) {
                             allocationRoots.insert(object);
@@ -1122,7 +1122,7 @@ void WCollector::DoYoungGarbageCollection()
                     WorkStack finalSatb = NewWorkStack();
                     SatbBuffer::Instance().GetRetiredObjects(finalSatb);
                     while (!finalSatb.empty()) {
-                        BaseObject* obj = finalSatb.back();
+                        BaseObject* obj = finalSatb.back().object();
                         finalSatb.pop_back();
                         if (!Heap::IsHeapAddress(obj)) {
                             continue;
@@ -1163,7 +1163,7 @@ void WCollector::DoYoungGarbageCollection()
 
                     WorkStack fieldExtra = NewWorkStack();
                     while (!fieldHolders.empty()) {
-                        BaseObject* object = fieldHolders.back();
+                        BaseObject* object = fieldHolders.back().object();
                         fieldHolders.pop_back();
                         if (object == nullptr || !Heap::IsHeapAddress(object)) {
                             continue;
@@ -1331,7 +1331,7 @@ void WCollector::DoYoungGarbageCollection()
                                                "youngstatic.seal", &root);
                 }
                 (void)MarkObject(obj);
-                PushAdmittedYoung(obj, workStack, "youngstatic.seal");
+                PushAdmittedYoung(MarkStackEntry::FollowOnly(obj), workStack, "youngstatic.seal");
                 ++sealed;
             });
             if (!workStack.empty()) {

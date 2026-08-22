@@ -25,6 +25,10 @@ WCOLLECTOR_INTERNAL_HIDDEN void VerifyStackRootPostcondition(uint64_t stackScanE
 WCOLLECTOR_INTERNAL_HIDDEN void PushAdmittedYoung(BaseObject* object, TracingCollector::WorkStack& workStack,
                                                   const char* origin, const void* slot = nullptr,
                                                   BaseObject* holder = nullptr);
+WCOLLECTOR_INTERNAL_HIDDEN void PushAdmittedYoung(const MarkStackEntry& entry,
+                                                  TracingCollector::WorkStack& workStack,
+                                                  const char* origin, const void* slot = nullptr,
+                                                  BaseObject* holder = nullptr);
 WCOLLECTOR_INTERNAL_HIDDEN bool ScrubMinorFreeTarget(RefField<>& field, BaseObject* target, bool fromFix);
 
 extern WCOLLECTOR_INTERNAL_HIDDEN std::atomic<size_t> g_nullslotF3;

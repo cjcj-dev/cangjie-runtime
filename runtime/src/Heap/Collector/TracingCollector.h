@@ -16,6 +16,7 @@
 #include "Common/MarkWorkStack.h"
 #include "Heap/Allocator/RegionSpace.h"
 #include "Heap/Collector/ForwardDataManager.h"
+#include "Heap/Collector/MarkStackEntry.h"
 #include "Mutator/MutatorManager.h"
 
 // set 1 to enable concurrent mark test.
@@ -268,9 +269,9 @@ public:
     // Types, so that we don't confuse root sets and working stack.
     // The policy is: we simply `push_back` into root set,
     // but we use Enqueue to add into work stack.
-    using RootSet = MarkStack<BaseObject*>;
-    using WorkStack = MarkStack<BaseObject*>;
-    using WorkStackBuf = MarkStackBuf<BaseObject*>;
+    using RootSet = MarkStack<MarkStackEntry>;
+    using WorkStack = MarkStack<MarkStackEntry>;
+    using WorkStackBuf = MarkStackBuf<MarkStackEntry>;
 
     void Init() override;
     void Fini() override;
@@ -364,7 +365,7 @@ public:
     // Follow one partial-array chunk popped off the work stack. Ported from
     // ZGC's ZMark::follow_partial_array (zMark.cpp:265-270). Only reachable
     // when MarkPartialArray::Enabled(), since nothing pushes chunks otherwise.
-    virtual void FollowPartialArray(BaseObject* entry, WorkStack& workStack)
+    virtual void FollowPartialArray(const MarkStackEntry& entry, WorkStack& workStack)
     {
         Collector::AbortUnimplemented("TracingCollector::FollowPartialArray");
     }

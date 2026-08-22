@@ -83,6 +83,7 @@ $CXX -std=gnu++17 -O0 -g -Wall -Wextra -pthread -fno-rtti \
      "$SRC/test_fillerobj.cpp" \
     "$SRC/test_i2_readref.cpp" \
     "$SRC/test_fnlz_roots.cpp" \
+    "$SRC/test_mark_stack_entry.cpp" \
     "$SRC/test_partial_array.cpp" \
   -L"$RUNTIME_LIB_DIR" -Wl,-rpath,"$RUNTIME_LIB_DIR" \
   -lcangjie-runtime -lboundscheck \

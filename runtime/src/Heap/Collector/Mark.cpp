@@ -478,7 +478,7 @@ void WCollector::FollowArrayElements(BaseObject* holder, RefField<>* addr, size_
 }
 
 // zMark.cpp:265-270 (follow_partial_array).
-void WCollector::FollowPartialArray(BaseObject* entry, WorkStack& workStack)
+void WCollector::FollowPartialArray(const MarkStackEntry& entry, WorkStack& workStack)
 {
     MAddress chunkStart = 0;
     size_t length = 0;
@@ -623,7 +623,11 @@ void WCollector::SeedOldMarkFromYoungSurvivors(WorkStack& workStack, std::vector
                     return;
                 }
                 ++painted;
-                workStack.push_back(target);
+                // The GC-thread claim above already painted and counted the
+                // object. Keep the independent follow obligation in the entry;
+                // a plain pointer used to be popped as already-marked and lost
+                // this old closure frontier.
+                workStack.push_back(MarkStackEntry::FollowOnly(target));
             });
         });
     };
@@ -1071,6 +1075,19 @@ void PushAdmittedYoung(BaseObject* object, TracingCollector::WorkStack& workStac
         workStack.push_back(admitted);
     }
 }
+
+void PushAdmittedYoung(const MarkStackEntry& entry, TracingCollector::WorkStack& workStack, const char* origin,
+                       const void* slot, BaseObject* holder)
+{
+    BaseObject* admitted = AdmitYoungObject(entry.object(), origin, slot, holder);
+    if (admitted != nullptr) {
+        if (UNLIKELY(HeldFreeDiag::Enabled())) {
+            HeldFreeDiag::NotePush(admitted, origin);
+        }
+        workStack.push_back(MarkStackEntry(admitted, entry.mark(), entry.incLive(), entry.follow(),
+                                           entry.finalizable()));
+    }
+}
 } // namespace WCollectorInternal
 
 namespace {
@@ -1202,8 +1219,9 @@ public:
             if (workStack.empty()) {
                 break;
             }
-            BaseObject* object = workStack.back();
+            const MarkStackEntry entry = workStack.back();
             workStack.pop_back();
+            BaseObject* object = entry.object();
             if (!Heap::IsHeapAddress(object)) {
                 continue;
             }
@@ -1219,8 +1237,11 @@ public:
 
             if (useBitmapLedger) {
                 if (isYoung) {
-                    bool wasMarked = collector->MarkYoungObject(object);
+                    bool wasMarked = entry.mark() && collector->MarkYoungObject(object);
                     if (wasMarked) {
+                        if (!entry.follow()) {
+                            continue;
+                        }
                         // ghostroute: residual unmarked young only (no FYS re-push of marked).
                         EatArmDiag::NoteWasMarkedSkipFields(object);
                         if (object->HasRefField() && !object->IsWeakRef()) {
@@ -1255,7 +1276,9 @@ public:
                         }
                         continue;
                     }
-                    ++nMarked;
+                    if (entry.mark()) {
+                        ++nMarked;
+                    }
                     CHECK_DETAIL(object->IsValidObject(), "minor closure reached invalid object %p", object);
                     localObjects.push_back(object);
                 } else {
@@ -1263,8 +1286,11 @@ public:
                 }
             } else {
                 if (isYoung) {
-                    bool wasMarked = collector->MarkYoungObject(object);
+                    bool wasMarked = entry.mark() && collector->MarkYoungObject(object);
                     if (wasMarked) {
+                        if (!entry.follow()) {
+                            continue;
+                        }
                         EatArmDiag::NoteWasMarkedSkipFields(object);
                         if (object->HasRefField() && !object->IsWeakRef()) {
                             object->ForEachRefField([collector, this, object](RefField<>& field) {
@@ -1298,7 +1324,9 @@ public:
                         }
                         continue;
                     }
-                    ++nMarked;
+                    if (entry.mark()) {
+                        ++nMarked;
+                    }
                     if (!localNonYoungSeen.insert(object).second) {
                         continue;
                     }
@@ -1309,7 +1337,7 @@ public:
                 localObjects.push_back(object);
             }
 
-            if (!object->HasRefField()) {
+            if (!object->HasRefField() || !entry.follow()) {
                 if (shared.pool != nullptr) {
                     TryForkTask();
                 }
@@ -1355,7 +1383,7 @@ private:
 
 struct alignas(64) YoungMarkStripe {
     std::mutex lock;
-    std::vector<BaseObject*> published;
+    std::vector<MarkStackEntry> published;
     std::unordered_set<BaseObject*> seen;
     size_t owner = std::numeric_limits<size_t>::max();
 };
@@ -1413,10 +1441,10 @@ public:
             if (stack.empty() && !RefillOrReleaseCurrent()) {
                 continue;
             }
-            BaseObject* object = localStacks[currentStripe].back();
+            const MarkStackEntry entry = localStacks[currentStripe].back();
             localStacks[currentStripe].pop_back();
             shared.outputs[workerSlot]->touched = true;
-            ProcessObject(object, nMarked);
+            ProcessObject(entry, nMarked);
         }
         ReleaseCurrent();
         shared.outputs[workerSlot]->objectsMarked += nMarked;
@@ -1563,7 +1591,7 @@ private:
     {
         const size_t stripeIndex = shared.StripeFor(object);
         auto& local = localStacks[stripeIndex];
-        local.push_back(object);
+        local.push_back(MarkStackEntry::MarkAndFollow(object));
         if (stripeIndex != currentStripe && local.size() >= kMarkStripeLocalCapacity) {
             PublishLocal(stripeIndex);
         }
@@ -1630,8 +1658,9 @@ private:
         PushObject(object);
     }
 
-    void ProcessObject(BaseObject* object, size_t& nMarked)
+    void ProcessObject(const MarkStackEntry& entry, size_t& nMarked)
     {
+        BaseObject* object = entry.object();
         if (!Heap::IsHeapAddress(object)) {
             return;
         }
@@ -1656,8 +1685,11 @@ private:
 
         if (shared.useBitmapLedger) {
             if (isYoung) {
-                bool wasMarked = collector->MarkYoungObject(object);
+                bool wasMarked = entry.mark() && collector->MarkYoungObject(object);
                 if (wasMarked) {
+                    if (!entry.follow()) {
+                        return;
+                    }
                     EatArmDiag::NoteWasMarkedSkipFields(object);
                     if (object->HasRefField() && !object->IsWeakRef()) {
                         object->ForEachRefField([this, object](RefField<>& field) {
@@ -1666,7 +1698,9 @@ private:
                     }
                     return;
                 }
-                ++nMarked;
+                if (entry.mark()) {
+                    ++nMarked;
+                }
                 CHECK_DETAIL(object->IsValidObject(), "minor closure reached invalid object %p", object);
                 localObjects.push_back(object);
             } else {
@@ -1674,8 +1708,11 @@ private:
             }
         } else {
             if (isYoung) {
-                bool wasMarked = collector->MarkYoungObject(object);
+                bool wasMarked = entry.mark() && collector->MarkYoungObject(object);
                 if (wasMarked) {
+                    if (!entry.follow()) {
+                        return;
+                    }
                     EatArmDiag::NoteWasMarkedSkipFields(object);
                     if (object->HasRefField() && !object->IsWeakRef()) {
                         object->ForEachRefField([this, object](RefField<>& field) {
@@ -1684,7 +1721,9 @@ private:
                     }
                     return;
                 }
-                ++nMarked;
+                if (entry.mark()) {
+                    ++nMarked;
+                }
                 if (!ClaimSeen(object)) {
                     return;
                 }
@@ -1696,6 +1735,9 @@ private:
         }
 
         if (!object->HasRefField()) {
+            return;
+        }
+        if (!entry.follow()) {
             return;
         }
         auto pushTarget = [this, collector](RefField<>& field) {
@@ -1728,7 +1770,7 @@ private:
 
     YoungStripedShared& shared;
     size_t workerSlot;
-    std::vector<std::vector<BaseObject*>> localStacks;
+    std::vector<std::vector<MarkStackEntry>> localStacks;
     size_t currentStripe = kNoStripe;
     size_t nextStripe = 0;
 };
@@ -1757,8 +1799,9 @@ void WCollector::TraceYoungClosureSerial(WorkStack& workStack, bool fullYoungSca
         PushYoungObject(target, workStack, "closure_edge");
     };
     while (!workStack.empty()) {
-        BaseObject* object = workStack.back();
+        const MarkStackEntry entry = workStack.back();
         workStack.pop_back();
+        BaseObject* object = entry.object();
         if (!Heap::IsHeapAddress(object)) {
             continue;
         }
@@ -1775,8 +1818,11 @@ void WCollector::TraceYoungClosureSerial(WorkStack& workStack, bool fullYoungSca
 
         if (useBitmapLedger) {
             if (isYoung) {
-                bool wasMarked = MarkYoungObject(object);
+                bool wasMarked = entry.mark() && MarkYoungObject(object);
                 if (wasMarked) {
+                    if (!entry.follow()) {
+                        continue;
+                    }
                     EatArmDiag::NoteWasMarkedSkipFields(object);
                     if (!object->HasRefField() || object->IsWeakRef()) {
                         continue;
@@ -1840,15 +1886,16 @@ void WCollector::TraceYoungClosureSerial(WorkStack& workStack, bool fullYoungSca
                 }
                 continue;
             }
-            if (isYoung) {
-                (void)MarkYoungObject(object);
-            } else {
+            if (!isYoung) {
                 continue;
+            }
+            if (entry.mark()) {
+                (void)MarkYoungObject(object);
             }
             reachableVec.push_back(object);
         }
 
-        if (!object->HasRefField()) {
+        if (!object->HasRefField() || !entry.follow()) {
             continue;
         }
         if (UNLIKELY(object->IsWeakRef())) {
@@ -2051,9 +2098,9 @@ void WCollector::TraceYoungClosureStriped(WorkStack& workStack, bool fullYoungSc
 
     size_t rootCount = 0;
     while (!workStack.empty()) {
-        BaseObject* object = workStack.back();
+        const MarkStackEntry entry = workStack.back();
         workStack.pop_back();
-        shared.stripes[shared.StripeFor(object)]->published.push_back(object);
+        shared.stripes[shared.StripeFor(entry.object())]->published.push_back(entry);
         ++rootCount;
     }
     CHECK_DETAIL(rootCount != 0, "striped mark requires a non-empty root stack");
@@ -2183,7 +2230,7 @@ bool WCollector::MarkYoungSatbBuffer(WorkStack& workStack, bool fullYoungScan, M
         WorkStack remarkStack;
         SatbBuffer::Instance().GetRetiredObjects(remarkStack);
         while (!remarkStack.empty()) {
-            BaseObject* obj = remarkStack.back();
+            BaseObject* obj = remarkStack.back().object();
             remarkStack.pop_back();
             ++satbSeen;
             if (windowStats != nullptr) {
