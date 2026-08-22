@@ -8,6 +8,7 @@
 #ifndef MRT_WCOLLECTOR_H
 #define MRT_WCOLLECTOR_H
 #include "Common/ColourMask.h"
+#include "Base/TimeUtils.h"
 #include "Heap/Verify/HealCoverage.h"
 #include "Heap/WCollector/RemapYoungRoots.h"
 #include <atomic>
@@ -306,16 +307,59 @@ public:
     // forward_object (zRelocate.cpp:412-416) asserts find()!=null. There is no
     // "return from". non-heap / no-ghost are "not in this forwarding table"
     // (zGeneration.inline.hpp:131-140), not a fourth relocate exit.
-    // permhit: WaitRoutedTipReady is reachable from here and nowhere else (Collector.h:169
-    // make_load_good is its only caller), so "enter=0" alone cannot say whether the wait was
-    // never needed or whether the read barrier never reached this funnel at all. Count each
-    // arm under the same MRT_GCV2_WAITFWD gate; every counter is behind the gate, so the
-    // product path is unchanged when it is off.
+    // permhit: WaitRoutedTipReady is reachable from here and nowhere else (Collector.h:169;
+    // make_load_good is its only caller). The former MRT_GCV2_WAITFWD arm census was removed;
+    // the fwdlifetime accounting below has its own real getenv gate.
+    // fwdlifetime: the product fallback is unconditional; only accounting is
+    // gated so normal bad-colour loads do not pay two clock reads. This probe
+    // answers whether a no-ghost short circuit used to hide a live retired
+    // forwarding answer, and how much the retired-only lookup costs.
+    static bool FwdLifetimeProbeOn()
+    {
+        static const bool on = []() {
+            const char* v = std::getenv("MRT_GCV2_FWDLIFETIME");
+            return v != nullptr && v[0] == '1' && v[1] == '\0';
+        }();
+        return on;
+    }
+
     BaseObject* relocate_or_remap_object(BaseObject* obj, ZGenerationId generation) const override
     {
+        static std::atomic<uint64_t> lifeCallCount{ 0 };
+        static std::atomic<uint64_t> lifeNoGhostCount{ 0 };
+        static std::atomic<uint64_t> lifeWrongGenerationCount{ 0 };
+        static std::atomic<uint64_t> lifeRetiredQueryCount{ 0 };
+        static std::atomic<uint64_t> lifeRetiredAnswerCount{ 0 };
+        static std::atomic<uint64_t> lifeRetiredHitCount{ 0 };
+        static std::atomic<uint64_t> lifeRetiredNs{ 0 };
+        const bool lifetime = FwdLifetimeProbeOn();
         const bool tv = ToverFailDiag::Enabled();
         if (tv) {
             ToverFailDiag::NoteRemapCall();
+        }
+        if (lifetime) {
+            static std::atomic<bool> installed{ false };
+            bool expected = false;
+            if (installed.compare_exchange_strong(expected, true, std::memory_order_relaxed)) {
+                std::atexit([]() {
+                    std::fprintf(stderr,
+                                 "[GCV2][fwdlifetime] atexit call=%llu noGhost=%llu wrongGeneration=%llu "
+                                 "retiredQuery=%llu retiredAnswer=%llu retiredHit=%llu retiredNs=%llu\n",
+                                 static_cast<unsigned long long>(lifeCallCount.load(std::memory_order_relaxed)),
+                                 static_cast<unsigned long long>(lifeNoGhostCount.load(std::memory_order_relaxed)),
+                                 static_cast<unsigned long long>(
+                                     lifeWrongGenerationCount.load(std::memory_order_relaxed)),
+                                 static_cast<unsigned long long>(
+                                     lifeRetiredQueryCount.load(std::memory_order_relaxed)),
+                                 static_cast<unsigned long long>(
+                                     lifeRetiredAnswerCount.load(std::memory_order_relaxed)),
+                                 static_cast<unsigned long long>(
+                                     lifeRetiredHitCount.load(std::memory_order_relaxed)),
+                                 static_cast<unsigned long long>(lifeRetiredNs.load(std::memory_order_relaxed)));
+                    std::fflush(stderr);
+                });
+            }
+            lifeCallCount.fetch_add(1, std::memory_order_relaxed);
         }
         if (MutatorRelocate::StatsOn()) {
             MutatorRelocate::Role funnelRole = MutatorRelocate::Role::MUTATOR;
@@ -332,15 +376,39 @@ public:
             }
             return obj;
         }
-        RegionInfo* forwarding = RegionInfo::GetGhostFromRegionAt(reinterpret_cast<MAddress>(obj));
+        const MAddress fromAddr = reinterpret_cast<MAddress>(obj);
+        RegionInfo* forwarding = RegionInfo::GetGhostFromRegionAt(fromAddr);
         if (forwarding == nullptr || forwarding->generation_id() != generation) {
             if (tv) {
                 ToverFailDiag::NoteRemapNoGhost(); // 乙
             }
+            const uint64_t retiredStartNs = lifetime ? TimeUtil::NanoSeconds() : 0;
+            const MAddress retired = ForwardingTable::FindRetiredTo(fromAddr);
+            if (lifetime) {
+                lifeRetiredQueryCount.fetch_add(1, std::memory_order_relaxed);
+                lifeRetiredNs.fetch_add(TimeUtil::NanoSeconds() - retiredStartNs,
+                                        std::memory_order_relaxed);
+                if (forwarding == nullptr) {
+                    lifeNoGhostCount.fetch_add(1, std::memory_order_relaxed);
+                } else {
+                    lifeWrongGenerationCount.fetch_add(1, std::memory_order_relaxed);
+                }
+                if (retired != 0) {
+                    lifeRetiredAnswerCount.fetch_add(1, std::memory_order_relaxed);
+                }
+            }
+            if (retired != 0) {
+                BaseObject* to = reinterpret_cast<BaseObject*>(retired);
+                if (ToHeaderCovered(to)) {
+                    if (lifetime) {
+                        lifeRetiredHitCount.fetch_add(1, std::memory_order_relaxed);
+                    }
+                    return to;
+                }
+            }
             return obj;
         }
         RegionSpace& space = reinterpret_cast<RegionSpace&>(theAllocator);
-        const MAddress fromAddr = reinterpret_cast<MAddress>(obj);
         if constexpr (ForwardingTable::kEntriesSoleWhenArmed) {
             if (ForwardingTable::EntriesArmed(fromAddr)) {
                 const MAddress stored = ForwardingTable::FindTo(fromAddr);
