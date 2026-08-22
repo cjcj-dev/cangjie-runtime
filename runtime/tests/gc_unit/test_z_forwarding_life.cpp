@@ -213,4 +213,18 @@ GC_TEST(ZForwardingLife, DetachCheckMeasuresAndHonorsGate)
     ZForwardingLife::ResetIdle(fx.region0->metadata.fwdRefCount, fx.region0->metadata.fwdClaimed,
                                fx.region0->metadata.fwdDone);
     fx.region0->SetRouteDestHold(0);
+
+    // A completed drain retains the claimed latch until the next region life.
+    // ref=0/done=1 is already detached and must not self-quarantine.
+    fx.region0->metadata.fwdClaimed.store(true, std::memory_order_release);
+    fx.region0->metadata.fwdDone.store(true, std::memory_order_release);
+    const FromPageDetach::Counters completedBefore = FromPageDetach::GetCounters(site);
+    GC_EXPECT_TRUE(FromPageDetach::FromPageDetachCheck(fx.region0, site));
+    const FromPageDetach::Counters completedAfter = FromPageDetach::GetCounters(site);
+    GC_EXPECT_EQ(completedAfter.checks, completedBefore.checks + 1);
+    GC_EXPECT_EQ(completedAfter.withEvidence, completedBefore.withEvidence);
+    GC_EXPECT_EQ(completedAfter.forwardingClaimed, completedBefore.forwardingClaimed + 1);
+    GC_EXPECT_EQ(completedAfter.forwardingReleased, completedBefore.forwardingReleased + 1);
+    ZForwardingLife::ResetIdle(fx.region0->metadata.fwdRefCount, fx.region0->metadata.fwdClaimed,
+                               fx.region0->metadata.fwdDone);
 }

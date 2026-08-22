@@ -119,13 +119,17 @@ bool FromPageDetachCheck(const RegionInfo* region, Site site)
     // reader. Only the surplus is evidence that detach would still wait.
     const bool forwardingReaders = refCount > 1;
     const bool forwardingClaimed = refCount < 0 || region->ForwardingClaimed();
+    // fwdClaimed is a per-life latch. DrainScope leaves it true after publishing
+    // ref=0/done=1, and InitRegionInfo resets it only at reuse. Keep the latch in
+    // the census, but only a claim that still owns a non-zero ref is evidence.
+    const bool forwardingClaimActive = refCount < 0 || (region->ForwardingClaimed() && refCount != 0);
     const bool forwardingReleased = refCount == 0 && region->IsForwardingDone();
     const bool copyInflight = region->CopyInflight() != 0;
     // An active table and its construction token are normal until detach. Keep
     // them visible in the census, but do not call them an unhealed reader. A
     // retired covering table is different: reuse can erase the only remaining
     // answer for a stale slot, which is the i2 two-clock population.
-    const bool any = retiredTable || routeDestHeld || forwardingReaders || forwardingClaimed || copyInflight;
+    const bool any = retiredTable || routeDestHeld || forwardingReaders || forwardingClaimActive || copyInflight;
 
     out.withEvidence.fetch_add(any ? 1 : 0, std::memory_order_relaxed);
     const bool blocked = GateEnabled() && g_reusePermitDepth == 0 && any;
