@@ -1981,7 +1981,7 @@ RegionInfo* RegionManager::TakeRegion(size_t num, RegionInfo::UnitRole type, boo
         // barriers/remset still run. Unset must match product path bit-for-bit.
         // gchot: TakeRegion is alloc-hot; cache once (genperf sets env at process start).
         static const bool disableMinor = []() {
-            const char* disableMinorEnv = static_cast<const char*>(nullptr) /* pinned-off:MRT_GCV2_DISABLE_MINOR */;
+            const char* disableMinorEnv = std::getenv("MRT_GCV2_DISABLE_MINOR");
             return disableMinorEnv != nullptr && std::strcmp(disableMinorEnv, "1") == 0;
         }();
         if (disableMinor) {
