@@ -33,6 +33,7 @@
 #include "Heap/Collector/CollectorResources.h"
 #include "Heap/Heap.h"
 #include "Heap/Verify/DiagGate.h"
+#include "Heap/Verify/ProbeReadRouteDiag.h"
 #include "Mutator/Mutator.h"
 #include "HeapManager.inline.h"
 #include "LoaderManager.h"
@@ -180,9 +181,11 @@ void CaptureNwReadAfter(ObjectPtr result)
 extern "C" MRT_EXPORT void MRT_NwReadDiagArm(int64_t probe, int64_t expected)
 {
     g_nwReadSnapshot = {};
+    (void)ProbeReadRouteDiag::Take();
     if (!NwReadDiagEnabled()) {
         return;
     }
+    ProbeReadRouteDiag::Arm();
     g_nwReadSnapshot.armed = true;
     g_nwReadSnapshot.probe = probe;
     g_nwReadSnapshot.expected = expected;
@@ -192,7 +195,8 @@ extern "C" MRT_EXPORT void MRT_NwReadDiagFinish(int64_t got)
 {
     NwReadSnapshot sample = g_nwReadSnapshot;
     g_nwReadSnapshot = {};
-    if (!sample.armed || got == sample.expected) {
+    const ProbeReadRouteDiag::Snapshot route = ProbeReadRouteDiag::Take();
+    if (!sample.armed || (got == sample.expected && route.answers == 0)) {
         return;
     }
     size_t line = g_nwReadLines.fetch_add(1, std::memory_order_relaxed);
@@ -208,7 +212,9 @@ extern "C" MRT_EXPORT void MRT_NwReadDiagFinish(int64_t got)
                  "returned=%#llx returned_header=%#llx returned_typeinfo=%#llx returned_state=%u "
                  "returned_word1=%#llx returned_region_type=%u returned_region_young=%u "
                  "returned_young_age=%u returned_region=%#llx returned_young_face=%d "
-                 "returned_young_mark=%d returned_old_face=%d returned_old_mark=%d\n",
+                 "returned_young_mark=%d returned_old_face=%d returned_old_mark=%d "
+                 "retired_queries=%llu retired_answers=%llu retired_from=%#llx retired_to=%#llx "
+                 "retired_return_match=%u\n",
                  line, static_cast<long long>(sample.probe), static_cast<long long>(sample.expected),
                  static_cast<long long>(got), sample.captured ? 1u : 0u,
                  static_cast<unsigned long long>(sample.slot),
@@ -229,7 +235,12 @@ extern "C" MRT_EXPORT void MRT_NwReadDiagFinish(int64_t got)
                  static_cast<unsigned long long>(sample.returned.word1), sample.returned.regionType,
                  sample.returned.regionYoung, sample.returned.youngAge,
                  static_cast<unsigned long long>(sample.returned.regionStart), sample.returned.youngFace,
-                 sample.returned.youngMark, sample.returned.oldFace, sample.returned.oldMark);
+                 sample.returned.youngMark, sample.returned.oldFace, sample.returned.oldMark,
+                 static_cast<unsigned long long>(route.queries),
+                 static_cast<unsigned long long>(route.answers),
+                 static_cast<unsigned long long>(route.from),
+                 static_cast<unsigned long long>(route.to),
+                 route.to != 0 && route.to == sample.returned.address ? 1u : 0u);
     std::fflush(stderr);
 }
 

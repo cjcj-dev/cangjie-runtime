@@ -21,6 +21,7 @@
 #include "Heap.h"
 #include "Heap/Allocator/RegionInfo.h"
 #include "Heap/Allocator/ZGranuleMap.h"
+#include "Heap/Verify/ProbeReadRouteDiag.h"
 
 namespace MapleRuntime {
 namespace {
@@ -518,9 +519,12 @@ MAddress ForwardingTable::FindRetiredTo(MAddress from)
     };
     const MAddress fresh = scan(g_retired);
     if (fresh != 0) {
+        ProbeReadRouteDiag::NoteRetiredLookup(from, fresh);
         return fresh;
     }
-    return scan(g_retiredAged);
+    const MAddress aged = scan(g_retiredAged);
+    ProbeReadRouteDiag::NoteRetiredLookup(from, aged);
+    return aged;
 }
 
 MAddress ForwardingTable::FindTo(MAddress from)
