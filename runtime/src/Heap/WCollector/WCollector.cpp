@@ -6744,6 +6744,7 @@ void WCollector::EvacuateYoungRegions(const std::vector<BaseObject*>& reachableV
                                          &liveStw]() {
         const ScopedStopTheWorld* evacStw = liveStw();
         FixMinorRootSlots(evacStw);
+        PreforwardStaticRoots();
         PreforwardDiscoveredExternObjects();
         PreforwardAllResurrectExportFromObjects();
         for (BaseObject* object : reachableVec) {
@@ -6903,6 +6904,7 @@ void WCollector::EvacuateYoungRegions(const std::vector<BaseObject*>& reachableV
         {
             MRT_PHASE_TIMER("young.ref_fix_bulk_roots");
             FixMinorRootSlotsParallel(pool, liveStw());
+            pool->AddWork(new (std::nothrow) LambdaWork([this](size_t) { PreforwardStaticRoots(); }));
             pool->Start();
             pool->WaitFinish();
         }
@@ -7276,6 +7278,7 @@ void WCollector::EvacuateYoungRegions(const std::vector<BaseObject*>& reachableV
         {
             MRT_PHASE_TIMER("young.ref_fix_root_pass1");
             FixMinorRootSlots(liveStw());
+            PreforwardStaticRoots();
             PreforwardDiscoveredExternObjects();
             PreforwardAllResurrectExportFromObjects();
             postEvacPoint("post-preforward-roots", false); // breadcrumb only — avoid SEGV before fix body
@@ -7348,6 +7351,7 @@ void WCollector::EvacuateYoungRegions(const std::vector<BaseObject*>& reachableV
             g_minorRefCasFail.store(0, std::memory_order_relaxed);
             g_minorRefCasOk.store(0, std::memory_order_relaxed);
             FixMinorRootSlots(liveStw());
+            PreforwardStaticRoots();
             PreforwardDiscoveredExternObjects();
             PreforwardAllResurrectExportFromObjects();
             remsetVec.assign(rememberedSlots.begin(), rememberedSlots.end());
