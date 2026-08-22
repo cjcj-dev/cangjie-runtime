@@ -11,6 +11,7 @@
 #include "Base/MemUtils.h"
 #include "Base/SysCall.h"
 #include "Heap/Heap.h"
+#include "Heap/Collector/RegionLifeClock.h"
 #if defined(__linux__) || defined(hongmeng) || defined(__APPLE__)
 #include <sys/mman.h>
 #endif
@@ -39,12 +40,17 @@ class MarkView {
 public:
     RegionInfo* GetRegion() const { return region; }
     uint64_t GetEpoch() const { return epoch; }
+    RegionLifeId GetLifeId() const { return lifeId; }
 
 private:
-    MarkView(RegionInfo* regionIn, uint64_t epochIn) : region(regionIn), epoch(epochIn) {}
+    MarkView(RegionInfo* regionIn, uint64_t epochIn, RegionLifeId lifeIdIn)
+        : region(regionIn), epoch(epochIn), lifeId(lifeIdIn)
+    {
+    }
 
     RegionInfo* region;
     uint64_t epoch;
+    RegionLifeId lifeId;
 
     friend class RegionInfo;
 };
@@ -310,15 +316,27 @@ struct RouteInfo {
     uintptr_t toRegion1StartAddress = 0;
     uint32_t toRegion1UsedBytes = 0;
     uint32_t toRegion2Idx = 0;
+    RegionLifeId lifeId = 0;
 
     uintptr_t GetRoute(uint64_t preLiveBytes);
 
-    void SetRouteInfo(uintptr_t to1, uint32_t to1used = 0, uint32_t to2 = INVALID_VALUE)
+    void SetRouteInfo(uintptr_t to1, uint32_t to1used = 0, uint32_t to2 = INVALID_VALUE,
+                      RegionLifeId life = 0)
     {
         toRegion1StartAddress = to1;
         toRegion1UsedBytes = to1used;
         toRegion2Idx = to2;
+        lifeId = life;
     }
+    void Clear()
+    {
+        toRegion1StartAddress = 0;
+        toRegion1UsedBytes = 0;
+        toRegion2Idx = INVALID_VALUE;
+        lifeId = 0;
+    }
+    bool HasRoute() const { return toRegion1StartAddress != 0; }
+    RegionLifeId GetLifeId() const { return lifeId; }
     uint32_t GetToRegion1UsedBytes() const { return toRegion1UsedBytes; }
     uint32_t GetToRegion2Idx() const { return toRegion2Idx; }
 };

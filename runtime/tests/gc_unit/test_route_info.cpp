@@ -58,8 +58,7 @@ GC_TEST(RouteInfo, MissingDomainReturnsNullNotGarbage)
 
     // Bind ghost; still unmarked offset stays null — re-use unmarked sibling.
     BaseObject* sibling = fx.PlaceObject(reinterpret_cast<MAddress>(obj) + 128);
-    region->metadata.liveInfo0 = live;
-    region->metadata.regionEnd0 = region->GetRegionEnd();
+    region->BindLiveInfo0FromLiveIfNull();
     GC_EXPECT_TRUE(region->GetRouteForProbe(sibling) == nullptr);
 
     // Positive control, and it needs the route to actually exist.  Geometry plus a survivor bit is

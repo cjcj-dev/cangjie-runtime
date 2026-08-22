@@ -207,9 +207,8 @@ GC_TEST(LiveMap, LiveInfo0SnapshotSurvivesClear)
     RegionBitmap* bm = fx.PlantMarkBitmap(live, regionSize);
     (void)bm->MarkBits(256, 8, regionSize);
 
-    // PrepareForwardableRegion shape: liveInfo0 = liveInfo (pointer share).
-    region->metadata.liveInfo0 = region->metadata.liveInfo;
-    region->metadata.regionEnd0 = region->GetRegionEnd();
+    // Product publication shape: pointer-share plus route mark epoch/life stamp.
+    region->BindLiveInfo0FromLiveIfNull();
     GC_EXPECT_EQ(reinterpret_cast<uintptr_t>(region->GetLiveInfo0ForProbe()),
                  reinterpret_cast<uintptr_t>(live));
     GC_EXPECT_TRUE(region->IsRouteSurvivedObject(256));

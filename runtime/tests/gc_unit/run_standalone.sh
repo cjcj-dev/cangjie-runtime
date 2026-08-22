@@ -71,6 +71,7 @@ $CXX -std=gnu++17 -O0 -g -Wall -Wextra -pthread -fno-rtti \
     "$SRC/test_mutator_relocate.cpp" \
     "$SRC/test_expire_kept.cpp" \
     "$SRC/test_receipt_life.cpp" \
+    "$SRC/test_lifeclock.cpp" \
     "$SRC/test_exempt_unlock.cpp" \
     "$SRC/test_heal_coverage.cpp" \
     "$SRC/test_diag_gate.cpp" \

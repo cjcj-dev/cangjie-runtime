@@ -111,7 +111,11 @@ ZForwarding* ForwardingTable::get(MAddress addr)
     if (!Ready()) {
         return nullptr;
     }
-    return g_membership.get(addr);
+    ZForwarding* forwarding = g_membership.get(addr);
+    if (forwarding != nullptr && !forwarding->page_life_current(RegionLifeClock::Carrier::ARMED_ENTRY)) {
+        return nullptr;
+    }
+    return forwarding;
 }
 
 void ForwardingTable::Insert(MAddress regionStart, size_t regionSize, RegionInfo* region)
@@ -149,7 +153,8 @@ void ForwardingTable::EnsureEntries(RegionInfo* region)
         return;
     }
     const uint32_t liveObjs = EstimateLiveObjects(region, regionSize);
-    ZForwarding* created = ZForwarding::alloc(liveObjs, start, g_entries.base(), regionSize, region);
+    const RegionLifeId life = region->GetRegionLifeId();
+    ZForwarding* created = ZForwarding::alloc(liveObjs, start, g_entries.base(), regionSize, region, life);
     if (created == nullptr) {
         return;
     }
@@ -162,6 +167,7 @@ void ForwardingTable::EnsureEntries(RegionInfo* region)
         created = expected;
     }
     g_entries.put(start, regionSize, created);
+    RegionLifeClock::Publish(RegionLifeClock::Carrier::ARMED_ENTRY, created->page_life_id());
 }
 
 void ForwardingTable::ClearEntries(MAddress regionStart, size_t regionSize)
@@ -248,6 +254,7 @@ void ForwardingTable::Retire(ZForwarding* tab)
     }
     std::lock_guard<std::mutex> lock(g_retiredLock);
     g_retired.push_back(tab);
+    RegionLifeClock::Publish(RegionLifeClock::Carrier::RETIRED_ENTRY, tab->page_life_id());
     g_retiredTotal.fetch_add(1, std::memory_order_relaxed);
 }
 
@@ -257,6 +264,16 @@ void ForwardingTable::ReclaimRetired(const char* why)
     size_t heldNow = 0;
     {
         std::lock_guard<std::mutex> lock(g_retiredLock);
+        for (ZForwarding* tab : g_retired) {
+            RegionLifeClock::NoteZeroAcrossBoundary(RegionLifeClock::Carrier::RETIRED_ENTRY,
+                                                    tab != nullptr,
+                                                    tab == nullptr ? 0 : tab->page_life_id());
+        }
+        for (ZForwarding* tab : g_retiredAged) {
+            RegionLifeClock::NoteZeroAcrossBoundary(RegionLifeClock::Carrier::RETIRED_ENTRY,
+                                                    tab != nullptr,
+                                                    tab == nullptr ? 0 : tab->page_life_id());
+        }
         victims.swap(g_retiredAged);
         g_retiredAged.swap(g_retired);
         heldNow = g_retiredAged.size();
@@ -304,7 +321,20 @@ ZForwarding* ForwardingTable::GetEntries(MAddress addr)
     if (!Ready()) {
         return nullptr;
     }
-    return g_entries.get(addr);
+    ZForwarding* forwarding = g_entries.get(addr);
+    if (forwarding != nullptr && !forwarding->page_life_current(RegionLifeClock::Carrier::ARMED_ENTRY)) {
+        return nullptr;
+    }
+    return forwarding;
+}
+
+bool ZForwarding::page_life_current(RegionLifeClock::Carrier carrier) const
+{
+    if (_page == nullptr) {
+        RegionLifeClock::NoteUntracked(carrier);
+        return true;
+    }
+    return RegionLifeClock::Validate(carrier, _page_life_id, _page->GetRegionLifeId());
 }
 
 MAddress ForwardingTable::InsertMapping(MAddress from, MAddress to)
@@ -351,6 +381,7 @@ void ZForwarding::note_to_life(MAddress to)
     }
     const MAddress start = toRegion->GetRegionStart();
     const uint8_t seq = toRegion->GetRegionLifeSeq();
+    const RegionLifeId life = toRegion->GetRegionLifeId();
     for (uint8_t i = 0; i < _to_life_n; ++i) {
         if (_to_lives[i].start == start) {
             return;
@@ -358,8 +389,12 @@ void ZForwarding::note_to_life(MAddress to)
     }
     if (_to_life_n < 3) {
         _to_lives[_to_life_n].start = start;
-        _to_lives[_to_life_n].seq = seq;
+        _to_lives[_to_life_n].legacySeq = seq;
+        _to_lives[_to_life_n].lifeId = life;
         ++_to_life_n;
+        RegionLifeClock::Publish(RegionLifeClock::Carrier::RECEIPT, life);
+    } else {
+        RegionLifeClock::NoteCapWouldOverflow(RegionLifeClock::Carrier::RECEIPT);
     }
 }
 
@@ -382,10 +417,32 @@ MAddress ZForwarding::resolve_live(MAddress to) const
     if (_to_life_n != 0) {
         const MAddress start = toRegion->GetRegionStart();
         const uint8_t seq = toRegion->GetRegionLifeSeq();
+        const RegionLifeId life = toRegion->GetRegionLifeId();
+        bool tracked = false;
         for (uint8_t i = 0; i < _to_life_n; ++i) {
-            if (_to_lives[i].start == start && _to_lives[i].seq != seq) {
+            if (_to_lives[i].start == start) {
+                tracked = true;
+                const bool lifeCurrent = RegionLifeClock::Validate(
+                    RegionLifeClock::Carrier::RECEIPT, _to_lives[i].lifeId, life);
+                if (_to_lives[i].lifeId != life) {
+                    StaleToLifeCount().fetch_add(1, std::memory_order_relaxed);
+                }
+                if (!lifeCurrent || _to_lives[i].legacySeq != seq) {
+                    return 0;
+                }
+            }
+        }
+        if (!tracked) {
+            RegionLifeClock::NoteUntracked(RegionLifeClock::Carrier::RECEIPT);
+            if (RegionLifeClock::EnforceEnabled()) {
                 return 0;
             }
+        }
+    } else {
+        RegionLifeClock::NoteUntracked(RegionLifeClock::Carrier::RECEIPT);
+        if (!RegionLifeClock::Validate(RegionLifeClock::Carrier::RECEIPT, 0,
+                                       toRegion->GetRegionLifeId())) {
+            return 0;
         }
     }
     const ObjectState::ObjectStateCode st = obj->GetObjectState().GetStateCode();
@@ -411,7 +468,12 @@ static MAddress FindRetiredTo(MAddress from)
     auto scan = [&](const std::vector<ZForwarding*>& gens) -> MAddress {
         for (auto it = gens.rbegin(); it != gens.rend(); ++it) {
             ZForwarding* tab = *it;
-            if (tab != nullptr && tab->covers(from)) {
+            // A retired generation can outlive the address space which owned an unrelated table.
+            // Geometry is self-contained in ZForwarding, so reject non-candidates before touching
+            // the page pointer.  For a covering candidate the incarnation check still happens
+            // before reading its forwarding payload, which is the required fail-closed order.
+            if (tab != nullptr && tab->covers(from) &&
+                tab->page_life_current(RegionLifeClock::Carrier::RETIRED_ENTRY)) {
                 const MAddress to = tab->find(from);
                 if (to != 0) {
                     return to;
