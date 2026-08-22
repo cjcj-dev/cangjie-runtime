@@ -881,6 +881,30 @@ static bool PushHeaderlessRecordField(BaseObject* record, const char* site)
     return PushHeapRootIfPlausible(PlainRootObject(word), site);
 }
 
+// Argument-form struct-live: `root` holds a pointer to a headerless record
+// (String = {i8*, i32, i32}); the oop lives at record+0. Alloca-form FI already
+// names that word, so LoadPlain is a heap oop and never reaches here.
+// ZUncoloredRoot::barrier writes back the *same* p it loaded (zUncoloredRoot.inline.hpp:38,59).
+static void PreForwardHeaderlessRecord(BaseObject* record, Collector& collector, std::set<void*>& rootFieldSet)
+{
+    if (record == nullptr || !IsStackAddr(reinterpret_cast<uintptr_t>(record))) {
+        return;
+    }
+    RootSlot& field = RootSlotAt(static_cast<void*>(record));
+    if (!rootFieldSet.insert(static_cast<void*>(record)).second) {
+        return;
+    }
+    BaseObject* oldObj = PlainRootObject(field.LoadPlain());
+    if (!Heap::IsHeapAddress(oldObj) || !collector.IsGhostFromObject(oldObj) ||
+        collector.IsUnmovableFromObject(oldObj)) {
+        return;
+    }
+    BaseObject* toObj = collector.ForwardObject(oldObj);
+    if (toObj != nullptr && oldObj != toObj) {
+        HealRoot(field, from_object(toObj), HealSite::MutatorPreForwardHeaderlessRecord);
+    }
+}
+
 bool Mutator::DrainStackWatermark(const RootVisitor& visitor, uint64_t epoch, StackWatermark::Owner owner,
                                   const DerivedPtrVisitor* derivedPtrVisitor, size_t& scannedFrames)
 {
@@ -1082,6 +1106,8 @@ inline void Mutator::GCPhasePreForward(GCPhase newPhase)
         } else if (IsStackAddr(reinterpret_cast<uintptr_t>(oldObj))) {
             if (IsHeaderedStackObject(oldObj)) {
                 CheckAndPush(oldObj, rootSet, rootStack);
+            } else {
+                PreForwardHeaderlessRecord(oldObj, collector, rootFieldSet);
             }
         }
     };
@@ -1118,6 +1144,8 @@ inline void Mutator::GCPhasePreForward(GCPhase newPhase)
         } else if (IsStackAddr(reinterpret_cast<uintptr_t>(oldObj))) {
             if (IsHeaderedStackObject(oldObj)) {
                 CheckAndPush(oldObj, rootSet, rootStack);
+            } else {
+                PreForwardHeaderlessRecord(oldObj, collector, rootFieldSet);
             }
         }
         while (!rootStack.empty()) {
