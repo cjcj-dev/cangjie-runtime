@@ -1197,9 +1197,13 @@ void RegionManager::ReclaimRegion(RegionInfo* region)
     // gcvroot Z2: poison reclaimed payload so use-after-free roots are identifiable (MRT_GCV2_ZAP_RECLAIM=1).
     HeapZap::ZapReclaimedRegion(region->GetRegionStart(), region->GetRegionEnd());
     region->InitFreeUnits();
-    if (!FromPageDetach::FromPageDetachCheck(region, FromPageDetach::Site::RECLAIM_DIRTY)) {
-        freeRegionManager.AddDetachQuarantineUnits(unitIndex, num, false, false);
-        return;
+    if (FromPageDetach::GateEnabled()) {
+        // The entry check proved there was no older retired debt; DrainScope
+        // completed the current remap reader closure. ClearEntries inside
+        // InitFreeUnits therefore produced a table that can be detached now,
+        // not a new reason to wait another major cycle.
+        ForwardingTable::DropRetiredCovering(RegionInfo::GetUnitAddress(unitIndex),
+                                             num * RegionInfo::UNIT_SIZE);
     }
     freeRegionManager.AddGarbageUnits(unitIndex, num);
 }
@@ -1224,9 +1228,9 @@ void RegionManager::ReclaimRegionToMarkQuarantine(RegionInfo* region)
     }
     HeapZap::ZapReclaimedRegion(region->GetRegionStart(), region->GetRegionEnd());
     region->InitFreeUnits();
-    if (!FromPageDetach::FromPageDetachCheck(region, FromPageDetach::Site::RECLAIM_MARK_QUARANTINE)) {
-        freeRegionManager.AddDetachQuarantineUnits(unitIndex, num, false, false);
-        return;
+    if (FromPageDetach::GateEnabled()) {
+        ForwardingTable::DropRetiredCovering(RegionInfo::GetUnitAddress(unitIndex),
+                                             num * RegionInfo::UNIT_SIZE);
     }
     freeRegionManager.AddMarkQuarantineUnits(unitIndex, num);
 }
@@ -1260,13 +1264,13 @@ size_t RegionManager::ReleaseRegion(RegionInfo* region)
         RegionInfo::DrainScope drain(region, MutatorRelocate::Retire::RELEASE_REGION);
     }
     region->InitFreeUnits();
+    if (FromPageDetach::GateEnabled()) {
+        ForwardingTable::DropRetiredCovering(RegionInfo::GetUnitAddress(unitIndex),
+                                             num * RegionInfo::UNIT_SIZE);
+    }
     {
         FromPageDetach::ReusePermitScope reusePermit;
         RegionInfo::ReleaseUnits(unitIndex, num);
-    }
-    if (!FromPageDetach::FromPageDetachCheck(region, FromPageDetach::Site::RELEASE_REGION)) {
-        freeRegionManager.AddDetachQuarantineUnits(unitIndex, num, true, false);
-        return res;
     }
     freeRegionManager.AddReleaseUnits(unitIndex, num);
     return res;
