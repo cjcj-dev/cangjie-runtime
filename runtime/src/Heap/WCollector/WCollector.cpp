@@ -2443,7 +2443,15 @@ void WCollector::FixOldTaggedRefField(BaseObject* holder, RefField<>& field, con
     // survive the next flip's test, and writing a bare pointer would put back the very trust state
     // this phase removes. This is the self-heal half of the barrier, the same shape as ZGC's
     // self_heal (jdk zBarrier.inline.hpp:330-340), except we already had the resolve step.
-    RefField<> newField = RootSlotWriteback(latest, field);
+    //
+    // Family B (REPORT-remapdomain2): old-tagged × no receipt × live identity. Object did not
+    // move, so GetAndTryTagRefField may ColourStaleLoadBad the same address and return bits
+    // identical to the slot — HealSlot never runs, unhealed≈2.39M, checksum drifts.
+    // ZGC still self-heals identity remaps to the current colour. Force ColourStoreGood when
+    // the slot is old-tagged and latest is a live heap object.
+    RefField<> newField = (oldPointer && latestLive)
+        ? ColourStoreGood(from_object(latest))
+        : RootSlotWriteback(latest, field);
     if (oldField.GetFieldValue() == newField.GetFieldValue()) {
         return;
     }
