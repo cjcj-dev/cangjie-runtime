@@ -173,7 +173,7 @@ GC_TEST(ZForwardingLife, ResetIdleWakesRetainClaimed)
     GC_EXPECT_FALSE(retained.load(std::memory_order_acquire));
 }
 
-GC_TEST(ZForwardingLife, DetachCheckMeasuresWithoutGating)
+GC_TEST(ZForwardingLife, DetachCheckMeasuresAndHonorsGate)
 {
     GcHeapFixture fx;
     const auto site = FromPageDetach::Site::TAKE_GARBAGE_REUSE;
@@ -184,16 +184,27 @@ GC_TEST(ZForwardingLife, DetachCheckMeasuresWithoutGating)
                                         fx.region0->metadata.fwdDone);
     fx.region0->NoteCopyInflight();
 
-    GC_EXPECT_TRUE(FromPageDetach::FromPageDetachCheck(fx.region0, site));
+    const bool allowed = FromPageDetach::FromPageDetachCheck(fx.region0, site);
+    GC_EXPECT_EQ(allowed, !FromPageDetach::GateEnabled());
     const FromPageDetach::Counters after = FromPageDetach::GetCounters(site);
     GC_EXPECT_EQ(after.checks, before.checks + 1);
     GC_EXPECT_EQ(after.withEvidence, before.withEvidence + 1);
+    GC_EXPECT_EQ(after.blocked, before.blocked + (FromPageDetach::GateEnabled() ? 1 : 0));
     GC_EXPECT_EQ(after.routeDestHeld, before.routeDestHeld + 1);
     GC_EXPECT_EQ(after.forwardingPositive, before.forwardingPositive + 1);
     GC_EXPECT_EQ(after.forwardingReaders, before.forwardingReaders);
     GC_EXPECT_EQ(after.copyInflight, before.copyInflight + 1);
 
-    // Phase 1 observes but neither drains nor clears any evidence word.
+    {
+        FromPageDetach::ReusePermitScope permit;
+        GC_EXPECT_TRUE(FromPageDetach::FromPageDetachCheck(fx.region0, site));
+    }
+    const FromPageDetach::Counters permitted = FromPageDetach::GetCounters(site);
+    GC_EXPECT_EQ(permitted.checks, after.checks + 1);
+    GC_EXPECT_EQ(permitted.withEvidence, after.withEvidence + 1);
+    GC_EXPECT_EQ(permitted.blocked, after.blocked);
+
+    // Both arms observe without draining or clearing any evidence word here.
     GC_EXPECT_EQ(fx.region0->ForwardingRefCount(), 1);
     GC_EXPECT_EQ(fx.region0->CopyInflight(), 1);
     GC_EXPECT_TRUE(fx.region0->IsRouteDestHeld());

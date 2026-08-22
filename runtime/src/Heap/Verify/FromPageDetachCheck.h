@@ -34,12 +34,14 @@ enum class Site : uint8_t {
     RELEASE_UNITS = 11,
     INIT_FREE_UNITS = 12,
     INIT_REGION_INFO = 13,
-    SITE_COUNT = 14
+    MAJOR_RECHECK = 14,
+    SITE_COUNT = 15
 };
 
 struct Counters {
     uint64_t checks;
     uint64_t withEvidence;
+    uint64_t blocked;
     uint64_t activeTable;
     uint64_t retiredTable;
     uint64_t routeDestHeld;
@@ -50,11 +52,36 @@ struct Counters {
     uint64_t copyInflight;
 };
 
-// The sole evidence predicate. Phase 1 always returns true so callers cannot
-// accidentally turn the measuring arm into a product gate.
+struct QuarantineCounters {
+    uint64_t admitted;
+    uint64_t released;
+    uint64_t recheckHeld;
+    uint64_t peakEntries;
+};
+
+// Product default is OFF. Only the exact value "1" enables phase-2 blocking.
+bool GateEnabled();
+
+// A caller may carry a successful precheck across a compound reuse operation
+// (for example InitFreeUnits converting every subordinate unit). The scope
+// suppresses blocking only on that thread; observations are still counted.
+class ReusePermitScope {
+public:
+    ReusePermitScope();
+    ~ReusePermitScope();
+    ReusePermitScope(const ReusePermitScope&) = delete;
+    ReusePermitScope& operator=(const ReusePermitScope&) = delete;
+};
+
+// The sole evidence predicate. With the product-default OFF it is a measuring
+// arm and always returns true; CJRT_FROM_REUSE_GATE=1 refuses evidence.
 bool FromPageDetachCheck(const RegionInfo* region, Site site);
 
 Counters GetCounters(Site site);
+QuarantineCounters GetQuarantineCounters();
+void NoteQuarantineAdmitted(uint64_t entriesNow);
+void NoteQuarantineReleased();
+void NoteQuarantineRecheckHeld();
 const char* SiteName(Site site);
 void DumpSummary();
 

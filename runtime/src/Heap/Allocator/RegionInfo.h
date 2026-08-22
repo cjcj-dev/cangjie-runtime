@@ -1507,8 +1507,9 @@ public:
     {
         uintptr_t unitAddress = RegionInfo::GetUnitAddress(idx);
         size_t size = cnt * RegionInfo::UNIT_SIZE;
-        FromPageDetach::FromPageDetachCheck(RegionInfo::TryGetRegionInfoAt(unitAddress),
-                                            FromPageDetach::Site::CLEAR_UNITS);
+        CHECK_DETAIL(FromPageDetach::FromPageDetachCheck(RegionInfo::TryGetRegionInfoAt(unitAddress),
+                                                        FromPageDetach::Site::CLEAR_UNITS),
+                     "CJRT_FROM_REUSE_GATE bypass reached ClearUnits idx=%zu units=%zu", idx, cnt);
         DLOG(REGION, "clear dirty units[%zu+%zu, %zu) @[%#zx+%zu, %#zx)", idx, cnt, idx + cnt, unitAddress, size,
              RegionInfo::GetUnitAddress(idx + cnt));
         // gcfwdfix: ring of zeroed ranges for WAS_LIVE_BEFORE_CLEAR (MRT_GCV2_TRACE_CLEAR=1).
@@ -1521,8 +1522,10 @@ public:
     {
         void* unitAddress = reinterpret_cast<void*>(RegionInfo::GetUnitAddress(idx));
         size_t size = cnt * RegionInfo::UNIT_SIZE;
-        FromPageDetach::FromPageDetachCheck(RegionInfo::TryGetRegionInfoAt(reinterpret_cast<uintptr_t>(unitAddress)),
-                                            FromPageDetach::Site::RELEASE_UNITS);
+        CHECK_DETAIL(FromPageDetach::FromPageDetachCheck(
+                         RegionInfo::TryGetRegionInfoAt(reinterpret_cast<uintptr_t>(unitAddress)),
+                         FromPageDetach::Site::RELEASE_UNITS),
+                     "CJRT_FROM_REUSE_GATE bypass reached ReleaseUnits idx=%zu units=%zu", idx, cnt);
         DLOG(REGION, "release physical memory for units [%zu+%zu, %zu) @[%p+%zu, 0x%zx)", idx, cnt, idx + cnt,
              unitAddress, size, RegionInfo::GetUnitAddress(idx + cnt));
 #if defined(_WIN64)
@@ -1608,7 +1611,9 @@ public:
     // reset so that this region can be reused for allocation
     void InitFreeUnits()
     {
-        FromPageDetach::FromPageDetachCheck(this, FromPageDetach::Site::INIT_FREE_UNITS);
+        CHECK_DETAIL(FromPageDetach::FromPageDetachCheck(this, FromPageDetach::Site::INIT_FREE_UNITS),
+                     "CJRT_FROM_REUSE_GATE bypass reached InitFreeUnits region=%p", this);
+        FromPageDetach::ReusePermitScope permit;
         size_t nUnit = GetUnitCount();
         UnitInfo* unit = reinterpret_cast<UnitInfo*>(this);
         UnitInfo::UnitInfoArray array = UnitInfo::UnitInfoArray(unit, nUnit);
@@ -3546,7 +3551,8 @@ private:
     // bracket can be reordered with the payload stores between them.
     void InitRegionInfo(size_t nUnit, UnitRole uClass)
     {
-        FromPageDetach::FromPageDetachCheck(this, FromPageDetach::Site::INIT_REGION_INFO);
+        CHECK_DETAIL(FromPageDetach::FromPageDetachCheck(this, FromPageDetach::Site::INIT_REGION_INFO),
+                     "CJRT_FROM_REUSE_GATE bypass reached InitRegionInfo region=%p units=%zu", this, nUnit);
         SetUnitRole(UnitRole::FREE_UNITS);
         // See DispelGhostFromRegion: retire the route before detaching its compact table.
         SetRouteState(NORMAL);

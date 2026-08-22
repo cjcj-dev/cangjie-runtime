@@ -8,6 +8,8 @@
 #ifndef MRT_FREE_REGION_MANAGER_H
 #define MRT_FREE_REGION_MANAGER_H
 
+#include <vector>
+
 #include "CartesianTree.h"
 #include "RegionInfo.h"
 #include "Common/ScopedObjectAccess.h"
@@ -59,7 +61,12 @@ public:
                 if (dirtyOk) {
                     MAddress start = RegionInfo::GetUnitAddress(idx);
                     RegionInfo* dirtyRegion = RegionInfo::TryGetRegionInfoAt(start);
-                    FromPageDetach::FromPageDetachCheck(dirtyRegion, FromPageDetach::Site::TAKE_DIRTY_REUSE);
+                    if (!FromPageDetach::FromPageDetachCheck(dirtyRegion,
+                                                             FromPageDetach::Site::TAKE_DIRTY_REUSE)) {
+                        dirtyUnitTreeMutex.unlock();
+                        AddDetachQuarantineUnits(idx, num, false, false);
+                        continue;
+                    }
                     TraceClear::NoteRegionEvent(start, num * RegionInfo::UNIT_SIZE, "dirty_take", dirtyRegion, 0,
                                                 static_cast<unsigned int>(dirtyRegion->IsGhostFromRegion()),
                                                 static_cast<unsigned int>(dirtyRegion->GetRegionType()),
@@ -88,8 +95,12 @@ public:
                 if (releasedOk) {
                     RegionInfo* releasedRegion =
                         RegionInfo::TryGetRegionInfoAt(RegionInfo::GetUnitAddress(idx));
-                    FromPageDetach::FromPageDetachCheck(releasedRegion,
-                                                        FromPageDetach::Site::TAKE_RELEASED_REUSE);
+                    if (!FromPageDetach::FromPageDetachCheck(releasedRegion,
+                                                             FromPageDetach::Site::TAKE_RELEASED_REUSE)) {
+                        releasedUnitTreeMutex.unlock();
+                        AddDetachQuarantineUnits(idx, num, true, false);
+                        continue;
+                    }
 #ifdef _WIN64
                     MemMap::CommitMemory(
                         reinterpret_cast<void*>(RegionInfo::GetUnitAddress(idx)), num * RegionInfo::UNIT_SIZE);
@@ -221,7 +232,23 @@ public:
     size_t CalculateBytesToRelease() const;
     size_t ReleaseGarbageRegions(size_t targetCachedSize);
 
+    // Phase-2 FROM_PAGE_DETACH_GATE. Entries are withheld from both allocator
+    // trees until a major mark closure rechecks the same central predicate.
+    void AddDetachQuarantineRegion(RegionInfo* region, bool releasePhysical = false);
+    void AddDetachQuarantineUnits(UnitIndex idx, UnitCount num, bool released, bool needsInit,
+                                  bool releasePhysical = false);
+    size_t ReleaseDetachQuarantineAfterMajor();
+
 private:
+    struct DetachQuarantineEntry {
+        UnitIndex idx;
+        UnitCount num;
+        uint8_t rechecks;
+        bool released;
+        bool needsInit;
+        bool releasePhysical;
+    };
+
     inline void PrehandleReleasedUnit(bool expectPhysicalMem, size_t idx, size_t num) const
     {
         if (expectPhysicalMem) {
@@ -241,6 +268,9 @@ private:
     // Post-dispel units held until major mark ends (see AddMarkQuarantineUnits).
     mutable std::mutex markQuarantineTreeMutex;
     CartesianTree markQuarantineTree;
+
+    mutable std::mutex detachQuarantineMutex;
+    std::vector<DetachQuarantineEntry> detachQuarantine;
 };
 } // namespace MapleRuntime
 #endif // MRT_FREE_REGION_MANAGER_H
