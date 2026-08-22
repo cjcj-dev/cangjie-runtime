@@ -52,8 +52,19 @@ void CheckLoadGoodTarget(BaseObject* target, const Collector& collector, uint8_t
 // Full cross product of (slot colour, current good colour, target state code, route state, ghost,
 // young) -- the table, not a sample.  Twelve hypotheses were each a guess at which combination is
 // the bad one; enumerating removes the guessing.
-void NoteState(uintptr_t slotRaw, uintptr_t slotRawSecondRead, uintptr_t goodMask, BaseObject* target);
+void NoteState(uintptr_t slotRaw, uintptr_t slotRawSecondRead, uintptr_t goodMask, BaseObject* target, uint8_t phase);
 void DumpCensus(const char* why);
+
+// The illegal tuple counter is part of the measurement contract, not a boolean probe.  The
+// positive-control entry goes through the same classifier and backing counter as NoteState, but
+// skips the product forwarding lookup so gc_unit can construct the tuple without InitCJRuntime.
+uint64_t IllegalHitCount();
+uint64_t InjectIllegalTupleForTest(uintptr_t slotRaw, uintptr_t goodMask, BaseObject* target, uint8_t phase);
+
+// zBarrier.inline.hpp:318-344 computes one good_addr, derives the healing pointer from it, and
+// returns that same good_addr.  Every self-healing read barrier calls this always-on assertion at
+// the write-back boundary; healRaw and returned must therefore name the same resolved address.
+void AssertHealMatchesReturn(uintptr_t healRaw, BaseObject* returned, uint16_t site);
 
 // Called from the read barrier's load-good fast path, with the exact value that arm accepted.
 void NoteFastPathAccept(uintptr_t slotRaw, BaseObject* target);

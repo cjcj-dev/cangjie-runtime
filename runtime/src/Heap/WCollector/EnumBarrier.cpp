@@ -30,9 +30,8 @@ BaseObject* EnumBarrier::ReadReference(BaseObject* obj, RefField<false>& field) 
                 return resolved;
             }
             RefField<> goodField = theCollector.GetAndTryTagRefField(resolved);
-            ZgcSelfHealLoadGood(field, oldField.GetFieldValue(), goodField.GetFieldValue(),
-                                HealSite::EnumReadReference);
-            return resolved;
+            return ZgcSelfHealLoadGood(field, oldField.GetFieldValue(), goodField.GetFieldValue(),
+                                       HealSite::EnumReadReference);
         }
 
         BaseObject* loadGood = theCollector.make_load_good(oldField);
@@ -46,9 +45,8 @@ BaseObject* EnumBarrier::ReadReference(BaseObject* obj, RefField<false>& field) 
             return nullptr;
         }
         RefField<> goodField = theCollector.GetAndTryTagRefField(loadGood);
-        ZgcSelfHealLoadGood(field, oldField.GetFieldValue(), goodField.GetFieldValue(),
-                            HealSite::EnumReadReference);
-        return loadGood;
+        return ZgcSelfHealLoadGood(field, oldField.GetFieldValue(), goodField.GetFieldValue(),
+                                   HealSite::EnumReadReference);
     }
 }
 
