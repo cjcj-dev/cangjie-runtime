@@ -3063,8 +3063,9 @@ void RegionManager::CompactRegion(RegionInfo* region)
                 O2ORemsetDiag::NoteCompactRemsetInFrom(remIn);
             }
             collector.CopyObject(*currentObj, *toObj, size);
-            ForwardingTable::InsertMapping(currentPtr, toAddress);
             toObj->SetStateCode(ObjectState::NORMAL);
+            std::atomic_thread_fence(std::memory_order_release);
+            ForwardingTable::InsertMapping(currentPtr, toAddress);
             region->RecordCompactRoute(offset, toAddress);
             if (O2ORemsetDiag::Enabled()) {
                 O2ORemsetDiag::NoteCompactObjectMove(currentObj, toObj, size, youngRegion);
@@ -3072,7 +3073,6 @@ void RegionManager::CompactRegion(RegionInfo* region)
         }
         currentPtr += size;
     }
-    std::atomic_thread_fence(std::memory_order_release);
 
     // clear unused space which is free after compaction.
     // Walk-break leftovers are still live at from — do not memset them.
@@ -3180,10 +3180,10 @@ void RegionManager::CompactRegion(RegionInfo* region, RegionInfo* toRegion1)
                 O2ORemsetDiag::NoteCompactRemsetInFrom(remIn);
             }
             collector.CopyObject(*currentObj, *toObj, size);
-            ForwardingTable::InsertMapping(currentPtr, toAddress);
             toObj->SetStateCode(ObjectState::NORMAL);
-            region->RecordCompactRoute(offset, toAddress);
             std::atomic_thread_fence(std::memory_order_release);
+            ForwardingTable::InsertMapping(currentPtr, toAddress);
+            region->RecordCompactRoute(offset, toAddress);
             if (O2ORemsetDiag::Enabled()) {
                 O2ORemsetDiag::NoteCompactObjectMove(currentObj, toObj, size, youngRegion);
             }
@@ -3217,10 +3217,10 @@ void RegionManager::CompactRegion(RegionInfo* region, RegionInfo* toRegion1)
                 O2ORemsetDiag::NoteCompactRemsetInFrom(remIn);
             }
             collector.CopyObject(*currentObj, *toObj, size);
-            ForwardingTable::InsertMapping(currentPtr, toAddress);
             toObj->SetStateCode(ObjectState::NORMAL);
-            region->RecordCompactRoute(offset, toAddress);
             std::atomic_thread_fence(std::memory_order_release);
+            ForwardingTable::InsertMapping(currentPtr, toAddress);
+            region->RecordCompactRoute(offset, toAddress);
             if (O2ORemsetDiag::Enabled()) {
                 O2ORemsetDiag::NoteCompactObjectMove(currentObj, toObj, size, youngRegion);
             }
@@ -3567,7 +3567,8 @@ void RegionManager::ForwardRegion(RegionInfo* region)
             if (youngRegion && toObj != nullptr && O2ORemsetDiag::Enabled()) {
                 O2ORemsetDiag::NoteYoungObjectForward();
             }
-            if (youngRegion && toObj != nullptr && toObj->HasRefField()) {
+            if (youngRegion && toObj != nullptr &&
+                Collector::PlausibleManagedObjectGate("ForwardRegion.to", toObj) && toObj->HasRefField()) {
                 toObj->ForEachRefField([&rememberedSet, &promotedRecords, toObj, &collector](RefField<>& field) {
                     BaseObject* target = ScanFieldHealedTarget(collector, field);
                     MAddress slot = reinterpret_cast<MAddress>(&field);
@@ -3588,7 +3589,8 @@ void RegionManager::ForwardRegion(RegionInfo* region)
                         IdleEdgeDiag::NotePromoteTimeTarget(slot, /*old*/ 2, false);
                     }
                 });
-            } else if (!youngRegion && toObj != nullptr && toObj != obj && obj->IsForwarded()) {
+            } else if (!youngRegion && toObj != nullptr && toObj != obj && obj->IsForwarded() &&
+                       Collector::PlausibleManagedObjectGate("ForwardRegion.to", toObj)) {
                 size_t sz = RegionSpace::GetAllocSize(*obj);
                 MAddress fromBase = reinterpret_cast<MAddress>(obj);
                 MAddress toBase = reinterpret_cast<MAddress>(toObj);

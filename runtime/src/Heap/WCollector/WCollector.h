@@ -391,20 +391,23 @@ public:
                 const MAddress stored = ForwardingTable::FindTo(fromAddr);
                 if (stored != 0) {
                     BaseObject* to = reinterpret_cast<BaseObject*>(stored);
-                    if (funnel) {
-                        receiptCount.fetch_add(1, std::memory_order_relaxed);
+                    if (ToHeaderCovered(to)) {
+                        if (funnel) {
+                            receiptCount.fetch_add(1, std::memory_order_relaxed);
+                        }
+                        if (tv) {
+                            ToverFailDiag::NoteRemapReceipt();
+                        }
+                        return to;
                     }
-                    if (tv) {
-                        ToverFailDiag::NoteRemapReceipt();
-                    }
-                    return to;
                 }
                 if (!obj->IsForwarded()) {
                     // Armed miss on a not-yet-copied object: do not invent geometry.
                 } else {
                     BaseObject* geometric = space.GetRegionManager().FindPublishedRoute(obj, forwarding).dest;
                     if (geometric != nullptr &&
-                        ZForwarding::DestUsable(reinterpret_cast<MAddress>(geometric))) {
+                        ZForwarding::DestUsable(reinterpret_cast<MAddress>(geometric)) &&
+                        ToHeaderCovered(geometric)) {
                         (void)ForwardingTable::InsertMapping(fromAddr, reinterpret_cast<MAddress>(geometric));
                         if (funnel) {
                             receiptCount.fetch_add(1, std::memory_order_relaxed);
@@ -604,17 +607,27 @@ public:
 
     bool IsUnmovableFromObject(BaseObject* obj) const override;
 
+    // zRelocate.cpp:368-372: insert publishes a completed copy only. A geometric
+    // GetRoute dest or table hit with TypeInfo=0 is not a find() hit.
+    static bool ToHeaderCovered(BaseObject* to)
+    {
+        return to != nullptr && Collector::PlausibleManagedObjectGate("ToHeaderCovered", to);
+    }
+
     BaseObject* GetForwardPointer(BaseObject* fromObj, RegionInfo* region)
     {
         const MAddress fromAddr = reinterpret_cast<MAddress>(fromObj);
+        BaseObject* to = nullptr;
         if constexpr (ForwardingTable::kEntriesSoleWhenArmed) {
             if (ForwardingTable::EntriesArmed(fromAddr)) {
-                const MAddress to = ForwardingTable::FindTo(fromAddr);
-                return to == 0 ? nullptr : reinterpret_cast<BaseObject*>(to);
+                const MAddress stored = ForwardingTable::FindTo(fromAddr);
+                to = stored == 0 ? nullptr : reinterpret_cast<BaseObject*>(stored);
+                return ToHeaderCovered(to) ? to : nullptr;
             }
         }
         RegionSpace& space = reinterpret_cast<RegionSpace&>(theAllocator);
-        return space.GetRegionManager().FindPublishedRoute(fromObj, region).dest;
+        to = space.GetRegionManager().FindPublishedRoute(fromObj, region).dest;
+        return ToHeaderCovered(to) ? to : nullptr;
     }
 
     // Refuses a non-heap address the way FindToVersion does below, and for the same reason:
@@ -667,12 +680,15 @@ public:
             }
             if constexpr (ForwardingTable::kEntriesSoleWhenArmed) {
                 if (ans == ForwardingTable::ToAnswer::ArmedHit) {
-                    return stored;
+                    return ToHeaderCovered(stored) ? stored : nullptr;
                 }
                 if (ans == ForwardingTable::ToAnswer::ArmedMiss && !obj->IsForwarded()) {
                     return nullptr;
                 }
             }
+        }
+        if (stored != nullptr && !ToHeaderCovered(stored)) {
+            stored = nullptr;
         }
         RegionInfo* fromRegionInfo = RegionInfo::GetGhostFromRegionAt(fromAddr);
         if (fromRegionInfo == nullptr) {
@@ -683,7 +699,8 @@ public:
         if (geometric != nullptr) {
             ForwardingTable::NoteDestCompare(fromAddr, reinterpret_cast<MAddress>(geometric));
         }
-        if (geometric != nullptr && ZForwarding::DestUsable(reinterpret_cast<MAddress>(geometric))) {
+        if (geometric != nullptr && ZForwarding::DestUsable(reinterpret_cast<MAddress>(geometric)) &&
+            ToHeaderCovered(geometric)) {
             if (stored == nullptr) {
                 (void)ForwardingTable::InsertMapping(fromAddr, reinterpret_cast<MAddress>(geometric));
             }
@@ -692,7 +709,7 @@ public:
         if constexpr (ForwardingTable::kConsumeEntries) {
             return stored != nullptr ? stored : nullptr;
         }
-        return geometric;
+        return ToHeaderCovered(geometric) ? geometric : nullptr;
     }
 
 protected:
