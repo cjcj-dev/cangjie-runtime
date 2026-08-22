@@ -69,6 +69,8 @@ public:
     template<typename T>
     inline void WriteField(BaseObject* obj, Field<T>& field, T val) const;
 
+    static void NoteZeroTip(BaseObject* obj, const char* site);
+
     void WriteGeneric(const ObjectPtr obj, void* fieldPtr, const ObjectPtr src, size_t size) const;
     void ReadGeneric(const ObjectPtr dstPtr, ObjectPtr obj, void* fieldPtr, size_t size) const;
 
