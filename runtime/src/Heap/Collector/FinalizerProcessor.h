@@ -37,10 +37,12 @@ public:
         return count;
     }
 
-    // for : *finalizers* are not proper gc roots.
     void VisitGCRoots(const RootVisitor& visitor)
     {
         std::lock_guard<std::mutex> l(listLock);
+        for (RootSlot& obj : finalizers) {
+            visitor(obj);
+        }
         for (RootSlot& obj : finalizables) {
             visitor(obj);
         }
