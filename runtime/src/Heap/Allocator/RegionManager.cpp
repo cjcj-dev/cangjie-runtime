@@ -932,6 +932,16 @@ void FreeRegionManager::AddDetachQuarantineUnits(UnitIndex idx, UnitCount num, b
     FromPageDetach::NoteQuarantineAdmitted(detachQuarantine.size());
 }
 
+size_t FreeRegionManager::GetDetachQuarantineUnitCount() const
+{
+    std::lock_guard<std::mutex> lock(detachQuarantineMutex);
+    size_t units = 0;
+    for (const DetachQuarantineEntry& entry : detachQuarantine) {
+        units += entry.num;
+    }
+    return units;
+}
+
 void FreeRegionManager::DumpDetachQuarantineHolders(const char* why)
 {
     std::lock_guard<std::mutex> lock(detachQuarantineMutex);
@@ -2189,6 +2199,22 @@ RegionInfo* RegionManager::TakeRegion(size_t num, RegionInfo::UnitRole type, boo
     if (FromPageDetach::GateEnabled() && allowSaferegion && !IsGcThread() &&
         freeRegionManager.HasDetachQuarantine()) {
         Heap::GetHeap().GetCollector().RequestGC(GC_REASON_HEU, true);
+    }
+    static std::atomic<uint32_t> oomSnap{ 0 };
+    if (oomSnap.fetch_add(1, std::memory_order_relaxed) < 4) {
+        const size_t u = RegionInfo::UNIT_SIZE;
+        LOG(RTLOG_ERROR,
+            "[GCV2][oom-inv] tl=%zu from=%zu unmov=%zu recentFull=%zu garbage=%zu "
+            "oldPin=%zu recentPin=%zu rawPin=%zu oldLarge=%zu recentLarge=%zu "
+            "dirty=%zu released=%zu quarantine=%zu unit=%zu",
+            tlRegionList.GetUnitCount() * u, fromRegionList.GetUnitCount() * u,
+            unmovableFromRegionList.GetUnitCount() * u, recentFullRegionList.GetUnitCount() * u,
+            garbageRegionList.GetUnitCount() * u, oldPinnedRegionList.GetUnitCount() * u,
+            recentPinnedRegionList.GetUnitCount() * u, rawPointerPinnedRegionList.GetUnitCount() * u,
+            oldLargeRegionList.GetUnitCount() * u, recentLargeRegionList.GetUnitCount() * u,
+            static_cast<size_t>(freeRegionManager.GetDirtyUnitCount()) * u,
+            static_cast<size_t>(freeRegionManager.GetReleasedUnitCount()) * u,
+            freeRegionManager.GetDetachQuarantineUnitCount() * u, u);
     }
     return nullptr;
 }
