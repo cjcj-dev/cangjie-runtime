@@ -5912,19 +5912,7 @@ void WCollector::RescanRememberedSet(WorkStack& workStack, const MinorSlotSet& r
                               nullptr &&
                                                  targetRegion->GetRegionAllocPtr() > targetRegion->GetRegionStart()));
             }
-            BaseObject* healed = make_load_good(*field);
-            if (healed != nullptr && Heap::IsHeapAddress(healed) && healed->IsValidObject()) {
-                target = healed;
-            } else {
-                constexpr uint32_t kBadTargetRequeueCap = 8;
-                static std::unordered_map<MAddress, uint32_t> requeueHits;
-                uint32_t hits = ++requeueHits[slot];
-                CHECK_DETAIL(hits <= kBadTargetRequeueCap,
-                             "BAD_TARGET_REQUEUE_CAP slot=%#zx hits=%u cap=%u target=%p healed=%p",
-                             static_cast<size_t>(slot), hits, kBadTargetRequeueCap, target, healed);
-                Heap::GetHeap().GetRememberedSet().Record(slot);
-                continue;
-            }
+            continue;
         }
 
         bool noteRemsetHandoff = false;
