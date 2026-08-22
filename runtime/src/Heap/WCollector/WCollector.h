@@ -1163,6 +1163,10 @@ private:
     // requireSurvivedMark=false → post-Flip after Forward (to-space has no marks).
     // Anchor main 9ad991c4e8660c26d6bfe575f6425e1b227bdf94 + bfb5e8b24fa7c462321709c0c5af8290dccb38a6.
     void InvalidateOldTaggedRefsBeforeDispel();
+    // blacktrace: post-mark fixpoint trace of allocate-black / implicit-black spans so
+    // every survived object's fields entered the closure before compact (zMark.inline.hpp:79-87).
+    void TraceBlackAllocationsAtMarkEnd();
+    static bool BlacktraceAtPreforward();
     void InvalidateOldTaggedRefs(bool requireSurvivedMark);
     void FixOldTaggedRefField(BaseObject* holder, RefField<>& field, const ScopedStopTheWorld& stw);
     void PreforwardConcurrencyModelRoots();

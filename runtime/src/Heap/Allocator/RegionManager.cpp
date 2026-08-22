@@ -1874,6 +1874,69 @@ void RegionManager::ForEachObjUnsafe(const std::function<void(BaseObject*)>& vis
     }
 }
 
+void RegionManager::ForEachBlackSpanObject(const std::function<void(BaseObject*)>& visitor) const
+{
+    // blacktrace diagnostic arm (default off): MRT_GCV2_BLACKTRACE_FULL=1 widens the span
+    // to every object — used to answer "which window did the fatal store land in".
+    static const bool fullSpan = []() {
+        const char* v = std::getenv("MRT_GCV2_BLACKTRACE_FULL");
+        return v != nullptr && std::strcmp(v, "1") == 0;
+    }();
+    for (uintptr_t regionAddr = regionHeapStart; regionAddr < inactiveZone;) {
+        RegionInfo* region = RegionInfo::GetRegionInfoAt(regionAddr);
+        uintptr_t nextAddr = region->GetRegionEnd();
+        if (nextAddr <= regionAddr || nextAddr > inactiveZone) {
+            regionAddr += RegionInfo::UNIT_SIZE;
+            continue;
+        }
+        regionAddr = nextAddr;
+        if (!region->IsValidRegion() || region->IsFreeRegion() || region->IsGarbageRegion()) {
+            continue;
+        }
+        if (!region->IsLargeRegion() && !region->IsSmallRegion()) {
+            continue;
+        }
+        uintptr_t start = region->GetRegionStart();
+        uintptr_t allocPtr = region->GetRegionAllocPtr();
+        // Default empty; two live-without-trace spans:
+        //   isTraceRegion     => implicit-black: the whole region was born in the mark window.
+        //   water < allocPtr  => allocate-black tail bumped after mark start.
+        uintptr_t spanStart = allocPtr;
+        if (fullSpan) {
+            spanStart = start;
+        } else if (region->IsTraceRegion()) {
+            spanStart = start;
+        } else {
+            uintptr_t water = region->GetMarkStartAllocPtr();
+            if (water != 0 && water < allocPtr) {
+                spanStart = water < start ? start : water;
+            }
+        }
+        if (spanStart >= allocPtr) {
+            continue;
+        }
+        if (region->IsLargeRegion()) {
+            BaseObject* obj = from_region_addr(start);
+            if (Collector::PlausibleManagedObjectGate("ForEachBlackSpanObject.large", obj)) {
+                visitor(obj);
+            }
+            continue;
+        }
+        uintptr_t position = spanStart;
+        while (position < allocPtr) {
+            BaseObject* obj = from_region_addr(position);
+            // Same refuse-to-invent-step discipline as VisitAllObjects: a broken chain
+            // ends the walk for this region rather than guessing a size.
+            if (!Collector::PlausibleManagedObjectGate("ForEachBlackSpanObject", obj)) {
+                break;
+            }
+            size_t size = RegionSpace::GetAllocSize(*obj);
+            visitor(obj);
+            position += size;
+        }
+    }
+}
+
 void RegionManager::ForEachObjSafe(const std::function<void(BaseObject*)>& visitor) const
 {
     ScopedEnterSaferegion enterSaferegion(false);

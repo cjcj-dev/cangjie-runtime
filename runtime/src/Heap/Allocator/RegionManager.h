@@ -579,6 +579,12 @@ public:
 
     void ForEachObjUnsafe(const std::function<void(BaseObject*)>& visitor,
                           bool skipKnownEmptyRegions = false) const;
+    // blacktrace: visit objects that are judged live this cycle WITHOUT having been
+    // traced — implicit-black trace regions (whole span) and allocate-black
+    // watermark tails ([markStartAllocPtr, allocPtr)). Their reference fields must
+    // enter the mark closure before compact trusts IsRouteSurvivedObject
+    // (zPage.inline.hpp:179-184: ZGC makes such pages non-relocatable instead).
+    void ForEachBlackSpanObject(const std::function<void(BaseObject*)>& visitor) const;
     void ForEachObjSafe(const std::function<void(BaseObject*)>& visitor) const;
 
     size_t GetUsedRegionSize() const { return GetUsedUnitCount() * RegionInfo::UNIT_SIZE; }

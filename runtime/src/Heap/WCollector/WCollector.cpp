@@ -403,6 +403,27 @@ std::atomic<size_t> g_f3InvalidTgtRouteState[8]{ {} };
 std::atomic<size_t> g_f3InvalidTgtGhost{ 0 };
 std::atomic<size_t> g_f3InvalidTgtCompactTbl{ 0 };
 std::atomic<size_t> g_f3InvalidTgtCompactHit{ 0 };
+// staleclr3: read the ROUTE face (the very bitmap compact's survivedAt consulted —
+// GetRouteMarkView/liveInfo0) for the from offset. ghost regions keep this face alive
+// through postflip (GetRoute reads it), so the read is safe here.
+//   route_marked=1 & compact_hit=0 => the closure DID mark X but compact killed it
+//     anyway => double-face / wrong-face kill (B3).
+//   route_marked=0 (even under BLACKTRACE_FULL re-trace) => X was already dead when its
+//     edge was re-served => ancient residue, not a live-edge hole.
+std::atomic<size_t> g_f3InvalidTgtRouteMarked{ 0 };
+std::atomic<size_t> g_f3InvalidTgtRouteUnmarked{ 0 };
+// staleclr3 epoch decomposition of route_marked (IsRouteMarkedObject is epoch-agnostic
+// and includes the AllocatedAfterMarkStart shortcut; compact's survivedAt checks
+// face.epoch == view.epoch via LiveInfo::IsSurvivedObject, LiveInfo.h:238-252):
+//   afterWater     : offset past the mark-start water (post-mark allocation)
+//   bitNoEpoch     : route-face bitmap bit set (any epoch)
+//   survivedExact  : IsRouteSurvivedObject (expect ~0 — cross-check vs compact_hit=0)
+// A route_marked hit that is bitNoEpoch=1 & survivedExact=0 is a STALE-EPOCH bit:
+// marked in an earlier cycle, invisible to this cycle's compact.
+std::atomic<size_t> g_f3InvalidTgtAfterWater{ 0 };
+std::atomic<size_t> g_f3InvalidTgtBitNoEpoch{ 0 };
+std::atomic<size_t> g_f3InvalidTgtSurvivedExact{ 0 };
+std::atomic<size_t> g_f3InvalidTgtNoRouteBitmap{ 0 };
 // staleclr2: the合一假说 middle step. Retained mark-words indexed by pre-compact
 // offset (see round 2b note at the probe). And the slot's raw colour decomposition:
 // which bad-mask bits the old colour sets vs the currently published masks.
@@ -412,6 +433,9 @@ std::atomic<size_t> g_f3InvalidFromWordNoWords{ 0 };
 std::atomic<size_t> g_f3InvalidSlotMarkBad{ 0 };   // slot raw & g_cjMarkBadMask
 std::atomic<size_t> g_f3InvalidSlotLoadBad{ 0 };   // slot raw & g_cjLoadBadMask
 std::atomic<size_t> g_f3InvalidSlotMarkGoodNow{ 0 }; // old-looking slot passes CURRENT mark-good
+// blacktrace: engagement counters for the PostTrace black-span fixpoint.
+std::atomic<size_t> g_blacktraceSeeded{ 0 };
+std::atomic<size_t> g_blacktraceNewlyTraced{ 0 };
 std::atomic<bool> g_f3DeadarmAtexit{ false };
 
 namespace {
@@ -577,6 +601,14 @@ void ReportF3DeadarmCounts(const char* point)
                  g_f3InvalidTgtGhost.load(std::memory_order_relaxed),
                  g_f3InvalidTgtCompactTbl.load(std::memory_order_relaxed),
                  g_f3InvalidTgtCompactHit.load(std::memory_order_relaxed));
+    std::fprintf(stderr, "[GCV2][staleclr3] tgt_route_marked=%zu tgt_route_unmarked=%zu "
+                 "after_water=%zu bit_no_epoch=%zu survived_exact=%zu no_route_bitmap=%zu\n",
+                 g_f3InvalidTgtRouteMarked.load(std::memory_order_relaxed),
+                 g_f3InvalidTgtRouteUnmarked.load(std::memory_order_relaxed),
+                 g_f3InvalidTgtAfterWater.load(std::memory_order_relaxed),
+                 g_f3InvalidTgtBitNoEpoch.load(std::memory_order_relaxed),
+                 g_f3InvalidTgtSurvivedExact.load(std::memory_order_relaxed),
+                 g_f3InvalidTgtNoRouteBitmap.load(std::memory_order_relaxed));
     std::fprintf(stderr,
                  "[GCV2][staleclr2] from_word=[marked=%zu unmarked=%zu nowords=%zu] "
                  "slotcolour=[markbad=%zu loadbad=%zu markgoodnow=%zu] masks=[markBad=%#lx loadBad=%#lx]\n",
@@ -587,6 +619,9 @@ void ReportF3DeadarmCounts(const char* point)
                  g_f3InvalidSlotLoadBad.load(std::memory_order_relaxed),
                  g_f3InvalidSlotMarkGoodNow.load(std::memory_order_relaxed),
                  ::g_cjMarkBadMask, ::g_cjLoadBadMask);
+    std::fprintf(stderr, "[GCV2][blacktrace] seeded=%zu newly_traced=%zu\n",
+                 g_blacktraceSeeded.load(std::memory_order_relaxed),
+                 g_blacktraceNewlyTraced.load(std::memory_order_relaxed));
     std::fflush(stderr);
     VLOG(REPORT,
          "[GCV2][f3-deadarm] point=%s total=%zu soft_null=%zu "
@@ -737,6 +772,26 @@ void NoteF3InvalidObjectDiag(BaseObject* holder, const void* field, BaseObject* 
             if (latestRegion->ProbeCompactRouteHit(
                     latestRegion->GetAddressOffset(reinterpret_cast<MAddress>(latest)))) {
                 g_f3InvalidTgtCompactHit.fetch_add(1, std::memory_order_relaxed);
+            }
+        }
+        {
+            size_t fromOff = latestRegion->GetAddressOffset(reinterpret_cast<MAddress>(latest));
+            if (latestRegion->IsRouteMarkedObject(fromOff)) {
+                g_f3InvalidTgtRouteMarked.fetch_add(1, std::memory_order_relaxed);
+            } else {
+                g_f3InvalidTgtRouteUnmarked.fetch_add(1, std::memory_order_relaxed);
+            }
+            if (latestRegion->AllocatedAfterMarkStart(fromOff)) {
+                g_f3InvalidTgtAfterWater.fetch_add(1, std::memory_order_relaxed);
+            }
+            if (latestRegion->IsRouteSurvivedObject(fromOff)) {
+                g_f3InvalidTgtSurvivedExact.fetch_add(1, std::memory_order_relaxed);
+            }
+            RegionBitmap* rb = latestRegion->GetRouteMarkBitmap();
+            if (rb == nullptr) {
+                g_f3InvalidTgtNoRouteBitmap.fetch_add(1, std::memory_order_relaxed);
+            } else if (rb->IsMarked(fromOff)) {
+                g_f3InvalidTgtBitNoEpoch.fetch_add(1, std::memory_order_relaxed);
             }
         }
     }
@@ -3270,10 +3325,98 @@ void WCollector::InvalidateOldTaggedRefs(bool requireSurvivedMark)
     }
 }
 
+// blacktrace: bind "judged live" back to "fields traced" (ZGC zMark.inline.hpp:79-87:
+// every marked object is pushed with Follow; there is no marked-but-unfollowed state).
+//
+// Two product bypasses let an object be survived without ConcurrentMarkingWork ever
+// tracing its fields (staleclr3 §2):
+//   B1  AllocatedAfterMarkStart — objects bumped past the mark-start watermark are
+//       survived by IsRouteSurvivedObject (RegionInfo.h:491/501) and read as marked by
+//       IsMarkedObject (:1405-1407), so SATB ShouldEnqueue refuses them.
+//   B2  isTraceRegion implicit-black — HandleTraceRegions only clears flags; it never
+//       traces (RegionManager.h:665-677).
+// Compact (RegionManager.cpp:3040-3110) packs survivors verbatim and memsets the
+// free-tail; a survivor whose fields were never traced names targets the mark never
+// saw — those get judged dead and zeroed, and postflip F3 then counts
+// invalid_object_active_region (staleclr: tgt 100% COMPACTED, compact_hit=0).
+//
+// Fix: at PostTrace (STW, before HandleTraceRegions clears the trace flags and before
+// PreForward selects/routes anything), seed the closure with every black-span object
+// and drain to a fixpoint with the same MarkObject/trace discipline as
+// ConcurrentMarkingWork::Execute. Marking the black object itself also repairs the
+// bit-level face, so survived judgements and the mark bitmap agree afterwards.
+// Cost: one region-table walk per major; object work is proportional to bytes
+// allocated during the mark window only (span checks skip everything else).
+// blacktrace diagnostic arm selector (default off → hook at PostTrace).
+bool WCollector::BlacktraceAtPreforward()
+{
+    static const bool on = []() {
+        const char* v = std::getenv("MRT_GCV2_BLACKTRACE_AT");
+        return v != nullptr && std::strcmp(v, "PREFORWARD") == 0;
+    }();
+    return on;
+}
+
+void WCollector::TraceBlackAllocationsAtMarkEnd()
+{
+    MRT_PHASE_TIMER("PostTrace.blacktrace");
+    WorkStack stack = NewWorkStack();
+    size_t seeded = 0;
+    RegionSpace& space = reinterpret_cast<RegionSpace&>(theAllocator);
+    // NOTE: a set mark bit does NOT mean the fields were traced with their current
+    // values — the holder may have been traced early in the window and had a field
+    // overwritten afterwards (the exact edge SATB dropped via the B1/B2 skip), or been
+    // painted outside the closure entirely. So RE-TRACE the fields of every black-span
+    // object unconditionally; the drain below marks and recursively traces only what
+    // the closure never saw. First cut pushed the objects and skipped on wasMarked —
+    // that traced 4 of 3.4M seeded and changed nothing (probe: nw128, invalid 万级).
+    space.GetRegionManager().ForEachBlackSpanObject([this, &stack, &seeded](BaseObject* obj) {
+        if (obj == nullptr || !obj->IsValidObject() || !obj->HasRefField()) {
+            return;
+        }
+        TraceObjectRefFields(obj, stack);
+        ++seeded;
+    });
+    size_t newlyTraced = 0;
+    while (!stack.empty()) {
+        BaseObject* obj = stack.back();
+        stack.pop_back();
+        if (UNLIKELY(MarkPartialArray::IsPartialArrayEntry(obj))) {
+            FollowPartialArray(obj, stack);
+            continue;
+        }
+        if (!Collector::PlausibleManagedObjectGate("blacktrace.pop", obj)) {
+            BaseObject* host = Collector::TryRecoverInteriorBase(obj);
+            if (host == nullptr || host == obj ||
+                !Collector::PlausibleManagedObjectGate("blacktrace.host", host)) {
+                continue;
+            }
+            obj = host;
+        }
+        bool wasMarked = MarkObject(obj);
+        if (!wasMarked) {
+            ++newlyTraced;
+            if (obj->HasRefField()) {
+                TraceObjectRefFields(obj, stack);
+            }
+        }
+    }
+    g_blacktraceSeeded.fetch_add(seeded, std::memory_order_relaxed);
+    g_blacktraceNewlyTraced.fetch_add(newlyTraced, std::memory_order_relaxed);
+    if (seeded != 0) {
+        VLOG(REPORT, "[GCV2][blacktrace] seeded=%zu newly_traced=%zu", seeded, newlyTraced);
+    }
+}
+
 void WCollector::PostTrace()
 {
     MRT_PHASE_TIMER("PostTrace");
     TransitionToGCPhase(GC_PHASE_POST_TRACE, true);
+    if (BlacktraceAtPreforward()) {
+        // Diagnostic arm: run the fixpoint at Preforward instead (see Preforward).
+    } else {
+        TraceBlackAllocationsAtMarkEnd();
+    }
     RegionSpace& space = reinterpret_cast<RegionSpace&>(theAllocator);
     space.GetRegionManager().HandleTraceRegions();
     // clear weakRef List, set the referent as null
@@ -3302,6 +3445,14 @@ void WCollector::Preforward()
     MRT_PHASE_TIMER("Preforward");
     {
         ScopedLightSync scopedLightSync("Preforward", true, GCPhase::GC_PHASE_PREFORWARD);
+        if (BlacktraceAtPreforward()) {
+            // blacktrace diagnostic arm (MRT_GCV2_BLACKTRACE_AT=PREFORWARD): run the
+            // fixpoint at the last STW point before the relocate-start flips. If the
+            // fatal store lands in the POST_TRACE concurrent window (barrier no-op
+            // there, Barrier.cpp:307-309), PostTrace retrace misses it and this one
+            // catches it. Default off; PostTrace remains the production hook point.
+            TraceBlackAllocationsAtMarkEnd();
+        }
         RegionInfo::AdvanceCompactRouteTableGracePeriod();
         // fwdgrace: this sync does not go through TransitionToGCPhase, so the arena grace
         // period has to be advanced alongside the route-table one or the two drift apart.
