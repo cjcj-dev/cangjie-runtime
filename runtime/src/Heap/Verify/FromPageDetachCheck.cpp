@@ -149,13 +149,17 @@ bool FromPageDetachCheck(const RegionInfo* region, Site site, Action action)
     const bool otherEvidence = routeDestHeld || forwardingReaders || forwardingClaimActive || copyInflight ||
         txnEvidence;
     const bool closeAuthority = GateEnabled() || RelocationSetTxn::Enabled();
-    if (action == Action::MAJOR_CLOSE && closeAuthority && retiredTable && !otherEvidence) {
-        // zRelocate.cpp:1018-1047: the remap closure is complete. No retained
-        // reader or route destination still names this page, so the retired
-        // answer has reached its actual grace condition and can be detached.
+    // zRelocate.cpp:1024-1047: after release_page, detach_page waits for
+    // ref_count==0 then free_page. ZGC has no retired-table second wait
+    // (zPageAllocator.cpp:2253-2266). Gate already covers live readers/copy;
+    // a covering retired table with ref_count==0 is the same closure, so it
+    // must not bounce take_garbage (RegionManager.h:1056) back into quarantine.
+    const bool detachReady = refCount == 0 && !otherEvidence;
+    if (closeAuthority && retiredTable && detachReady) {
         ForwardingTable::DropRetiredCovering(start, size, true);
         retiredTable = ForwardingTable::RetiredCovers(start, size);
     }
+    (void)action;
     const bool any = retiredTable || otherEvidence;
 
     out.withEvidence.fetch_add(any ? 1 : 0, std::memory_order_relaxed);
