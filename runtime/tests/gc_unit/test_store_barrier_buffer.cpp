@@ -64,6 +64,34 @@ GC_TEST(StoreBuf, UnflushedPendingInvisibleToDrain)
     GC_EXPECT_EQ(buf.Pending(), 1u);
 }
 
+GC_TEST(StoreBuf, FlushBeforeRelocateSnapshotPublishesPending)
+{
+    GcHeapFixture fx;
+    RememberedSet rs;
+    rs.Initialize(fx.heapStart, 2 * RegionInfo::UNIT_SIZE);
+    StoreBarrierBuffer buf;
+    const MAddress slot = SlotAt(fx, 8);
+    buf.Add(slot, rs);
+    GC_EXPECT_TRUE(rs.Snapshot().count(slot) == 0);
+    buf.Flush(rs);
+    GC_EXPECT_TRUE(rs.Snapshot().count(slot) == 1);
+}
+
+GC_TEST(StoreBuf, MarkEndSnapshotLeavesCurrentForNextMinor)
+{
+    GcHeapFixture fx;
+    RememberedSet rs;
+    rs.Initialize(fx.heapStart, 2 * RegionInfo::UNIT_SIZE);
+    StoreBarrierBuffer buf;
+    const MAddress slot = SlotAt(fx, 11);
+    buf.Add(slot, rs);
+    buf.Flush(rs);
+    std::unordered_set<MAddress> markEnd = rs.Snapshot();
+    GC_EXPECT_TRUE(markEnd.count(slot) == 1);
+    GC_EXPECT_TRUE(rs.Contains(slot));
+    GC_EXPECT_EQ(rs.Size(), 1u);
+}
+
 GC_TEST(StoreBuf, FlushBeforeMinorDoesNotLoseEdges)
 {
     GcHeapFixture fx;

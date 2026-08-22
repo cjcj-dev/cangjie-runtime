@@ -330,9 +330,15 @@ void WCollector::DoGarbageCollection()
     // GetRouteMarkView's generation CHECK on every young-enrolled region (RegionInfo.h:385).
     {
         const GCReason majorReason = gcReason;
+        GCStats& stats = GetGCStats();
+        const GCReason majorStatsReason = stats.reason;
         gcReason = GC_REASON_YOUNG;
+        // MarkAndRememberNewValue dispatches its young paint vs major SATB leg
+        // through GCStats::reason. Publish the same nested-cycle identity there.
+        stats.reason = GC_REASON_YOUNG;
         DoYoungGarbageCollection();
         gcReason = majorReason;
+        stats.reason = majorStatsReason;
     }
     TraceHeap();
     PostTrace();
@@ -342,16 +348,11 @@ void WCollector::DoGarbageCollection()
     ForwardFromSpace();
     reinterpret_cast<RegionSpace&>(theAllocator).GetRegionManager().FinishIncompleteFromRegions();
 
-    // Publish a clean full-GC buffer before mutators return to IDLE. The phase
-    // transition is the grace period for writers that had already loaded the old
-    // buffer index; clear that captured buffer only after the transition completes.
-    RememberedSet& remset = Heap::GetHeap().GetRememberedSet();
-    uint8_t fullRemsetBuffer = remset.BeginFullClear();
+    // Preserve young remembered-set faces across old/full collection. ZGC old
+    // relocation transfers remembered fields; it does not globally erase the
+    // young current face. ClearRegion/TransferObjectSlots remain the authorities
+    // for reclaimed or moved holders (zRelocate.cpp:652-731).
     TransitionToGCPhase(GCPhase::GC_PHASE_IDLE, true);
-    size_t droppedRemsetRecords = remset.FinishFullClear(fullRemsetBuffer);
-    if (droppedRemsetRecords != 0) {
-        VLOG(REPORT, "[GCV2][remset] cleared after full GC dropped=%zu", droppedRemsetRecords);
-    }
     MergeResurrectExportObjects();
     PostResolveCycleTask();
     FlipTagID();

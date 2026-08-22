@@ -1102,7 +1102,9 @@ private:
     bool CasInstallResolvedTarget(RefField<>& field, MAddress expected, BaseObject* target,
                                   HealSite site, HealNull allowNull = HealNull::Disallow) const;
     BaseObject* ResolveMinorReference(RefField<>& field,
-                                     const ScopedStopTheWorld* stw = nullptr) const;
+                                     const ScopedStopTheWorld* stw = nullptr,
+                                     bool holderIsCurrentMinorRoot = false,
+                                     bool* preservedByCurrentRoot = nullptr) const;
     BaseObject* ResolveMinorReference(RootSlot& root,
                                      const ScopedStopTheWorld* stw = nullptr) const;
     void VisitMinorRootSlots(RootVisitor& rawRootVisitor, uint64_t stackScanEpoch = 0);
@@ -1137,12 +1139,14 @@ private:
     friend class YoungMarkingWork;
     friend class YoungStripedMarkingWork;
     void RescanRememberedSet(WorkStack& workStack, const MinorSlotSet& rememberedSlots,
-                             const MinorSlotSet& reachableSlots, const MinorSlotSet& weakSlots, bool fullYoungScan,
+                             const MinorSlotSet& reachableSlots, const MinorSlotSet& weakSlots,
+                             const MinorObjectSet& currentMinorRoots, bool fullYoungScan,
                              MinorSlotSet* consumedOut = nullptr, DiffPathRemsetStats* statsOut = nullptr,
                              MinorInteriorBaseMap* interiorBasesOut = nullptr,
                              const ScopedStopTheWorld* stw = nullptr);
     bool FixMinorEvacuatedSlot(RefField<>& field, BaseObject* knownBase = nullptr,
-                               const ScopedStopTheWorld* stw = nullptr) const;
+                               const ScopedStopTheWorld* stw = nullptr,
+                               bool holderIsCurrentMinorRoot = false) const;
     bool FixMinorEvacuatedSlot(RootSlot& root, const ScopedStopTheWorld* stw = nullptr) const;
     bool FixMinorEvacuatedSlot(DerivedSlot& derived, BaseObject* knownBase = nullptr,
                                const ScopedStopTheWorld* stw = nullptr) const;
@@ -1153,7 +1157,8 @@ private:
     // pause = flip + phase + root fix; concurrent = ForwardFromSpace; re-STW = heap
     // slot catch-up + evac_finish. nullptr keeps the whole evacuate under the caller STW.
     void EvacuateYoungRegions(const std::vector<BaseObject*>& reachableVec, const MinorSlotSet& rememberedSlots,
-                              bool refFixSlotsCoveredByReachable, const MinorInteriorBaseMap& interiorBases,
+                              const MinorObjectSet& currentMinorRoots, bool refFixSlotsCoveredByReachable,
+                              const MinorInteriorBaseMap& interiorBases,
                               std::unique_ptr<ScopedStopTheWorld>* stw = nullptr);
     void ValidateYoungMarking(const std::vector<BaseObject*>& reachableVec, const MinorObjectSet& allocationRoots);
     // Report-only: find young objs full-reachable but unmarked; attribute via remset MISSING.
