@@ -9,6 +9,7 @@
 
 #include "Heap/Allocator/ForwardingTable.h"
 #include "gc_heap_fixture.hpp"
+#include "Heap/Collector/RelocationSetTxn.h"
 #include "gc_unittest.hpp"
 
 using namespace MapleRuntime;
@@ -31,6 +32,13 @@ GC_TEST(ForwardingNoGeometry, ArmedMissIsNullNotGeometry)
     (void)bm->MarkBits(offset, 8, regionSize);
     fx.region0->BindLiveInfo0FromLiveIfNull();
 
+    RelocationSetTxn::Builder txn(Generation::Old);
+    GC_EXPECT_TRUE(txn.AddParticipantForTest(
+        fx.region0, fx.region0->GetRegionStart(), fx.region0->GetRegionSize(),
+        fx.region0->GetRegionLifeId(),
+        ForwardingTable::GetEntriesForInstall(fx.region0->GetRegionStart())));
+    GC_EXPECT_TRUE(txn.TryPublish());
+
     const MAddress from = reinterpret_cast<MAddress>(fx.obj0);
     GC_EXPECT_TRUE(ForwardingTable::EntriesArmed(from));
 
@@ -52,7 +60,28 @@ GC_TEST(ForwardingNoGeometry, ArmedMissIsNullNotGeometry)
     GC_EXPECT_TRUE(ans == ForwardingTable::ToAnswer::ArmedHit);
 
     fx.region0->SetRouteState(RegionInfo::NORMAL);
+    fx.region0->SetRouteDestHold(0);
+    const auto beforeClose = RelocationSetTxn::GetCounters();
+    if (RelocationSetTxn::Enabled()) {
+        ZForwardingLife::ResetForForwarding(fx.region0->metadata.fwdRefCount,
+                                            fx.region0->metadata.fwdClaimed,
+                                            fx.region0->metadata.fwdDone);
+        {
+            RegionInfo::DrainScope heldReader(fx.region0, MutatorRelocate::Retire::TAKE_GARBAGE);
+            RelocationSetTxn::CloseCopy(Generation::Old);
+            RelocationSetTxn::CloseRemap(Generation::Old);
+            GC_EXPECT_EQ(RelocationSetTxn::GetCounters().destroyed, beforeClose.destroyed);
+        }
+        // DrainScope's final release re-enters the existing detach checkpoint;
+        // no later GC cycle is required to destroy the last table.
+        GC_EXPECT_EQ(RelocationSetTxn::GetCounters().destroyed, beforeClose.destroyed + 1);
+    }
+    fx.region0->ExpireKeptPublish();
     fx.region0->metadata.liveInfo0 = nullptr;
     fx.region0->metadata.liveInfo = nullptr;
     fx.FreePlanted(live);
+    if (!RelocationSetTxn::Enabled()) {
+        RelocationSetTxn::CloseCopy(Generation::Old);
+        RelocationSetTxn::CloseRemap(Generation::Old);
+    }
 }

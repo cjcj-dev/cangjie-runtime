@@ -934,7 +934,7 @@ void FreeRegionManager::AddDetachQuarantineUnits(UnitIndex idx, UnitCount num, b
 
 size_t FreeRegionManager::ReleaseDetachQuarantineAfterMajor()
 {
-    if (!FromPageDetach::GateEnabled()) {
+    if (!FromPageDetach::GateEnabled() && !RelocationSetTxn::Enabled()) {
         return 0;
     }
     static constexpr uint8_t kMaxRechecks = 8;
@@ -1325,7 +1325,14 @@ void RegionManager::ExpireKeptFromPreviousCycle()
                 // kept page that never re-enters CSet otherwise lives until
                 // InitRegionInfo reuses the to-region (seqnum mismatch then
                 // rejects the stale dest).
-                ZForwarding* tab = ForwardingTable::GetEntries(region->GetRegionStart());
+                RelocationSetTxn::Handle txnHandle;
+                ZForwarding* tab = nullptr;
+                if (RelocationSetTxn::Enabled()) {
+                    txnHandle = RelocationSetTxn::AcquireParticipant(region, region->GetRegionLifeId());
+                    tab = txnHandle ? txnHandle.GetEnvelope() : nullptr;
+                } else {
+                    tab = ForwardingTable::GetEntries(region->GetRegionStart());
+                }
                 if (tab != nullptr && tab->kept_seen_expire()) {
                     ForwardingTable::ClearEntries(region->GetRegionStart(), region->GetRegionSize());
                     return;
@@ -2196,6 +2203,7 @@ void RegionManager::ExemptFromRegion(RegionInfo* region)
     // region-level wait can exit. Without this the wait never terminates
     // (cjpmnull3 wide-definition OOM). Hole pages are not collected this
     // cycle (cjpmnull2 Exempt).
+    RelocationSetTxn::NotePlan(region, RelocationSetTxn::PlanSlot::EXEMPT);
     WaitCopiedObjectsUnlocked(region);
     if (region != nullptr && !region->IsForwardingDone()) {
         static std::atomic<size_t> g_exemptKept{ 0 };

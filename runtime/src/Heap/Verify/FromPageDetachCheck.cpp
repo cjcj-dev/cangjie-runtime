@@ -14,6 +14,7 @@
 
 #include "Heap/Allocator/ForwardingTable.h"
 #include "Heap/Allocator/RegionInfo.h"
+#include "Heap/Collector/RelocationSetTxn.h"
 
 namespace MapleRuntime {
 namespace FromPageDetach {
@@ -31,6 +32,9 @@ struct AtomicCounters {
     std::atomic<uint64_t> forwardingClaimed{ 0 };
     std::atomic<uint64_t> forwardingReleased{ 0 };
     std::atomic<uint64_t> copyInflight{ 0 };
+    std::atomic<uint64_t> txnEvidence{ 0 };
+    std::atomic<uint64_t> txnHandles{ 0 };
+    std::atomic<uint64_t> txnOutstanding{ 0 };
 };
 
 constexpr size_t kSiteCount = static_cast<size_t>(Site::SITE_COUNT);
@@ -126,22 +130,32 @@ bool FromPageDetachCheck(const RegionInfo* region, Site site, Action action)
     const bool forwardingClaimActive = refCount < 0 || (region->ForwardingClaimed() && refCount != 0);
     const bool forwardingReleased = refCount == 0 && region->IsForwardingDone();
     const bool copyInflight = region->CopyInflight() != 0;
+    uint64_t txnHandles = 0;
+    uint64_t txnOutstanding = 0;
+    const bool txnEvidence = RelocationSetTxn::HasDetachEvidence(
+        region, region->GetRegionLifeId(), &txnHandles, &txnOutstanding);
     // An active table and its construction token are normal until detach. Keep
     // them visible in the census, but do not call them an unhealed reader. A
     // retired covering table is different: reuse can erase the only remaining
     // answer for a stale slot, which is the i2 two-clock population.
-    const bool otherEvidence = routeDestHeld || forwardingReaders || forwardingClaimActive || copyInflight;
-    if (action == Action::MAJOR_CLOSE && GateEnabled() && retiredTable && !otherEvidence) {
+    const bool otherEvidence = routeDestHeld || forwardingReaders || forwardingClaimActive || copyInflight ||
+        txnEvidence;
+    const bool closeAuthority = GateEnabled() || RelocationSetTxn::Enabled();
+    if (action == Action::MAJOR_CLOSE && closeAuthority && retiredTable && !otherEvidence) {
         // zRelocate.cpp:1018-1047: the remap closure is complete. No retained
         // reader or route destination still names this page, so the retired
         // answer has reached its actual grace condition and can be detached.
-        ForwardingTable::DropRetiredCovering(start, size);
+        ForwardingTable::DropRetiredCovering(start, size, true);
         retiredTable = ForwardingTable::RetiredCovers(start, size);
     }
     const bool any = retiredTable || otherEvidence;
 
     out.withEvidence.fetch_add(any ? 1 : 0, std::memory_order_relaxed);
-    const bool blocked = GateEnabled() && g_reusePermitDepth == 0 && any;
+    // Phase-2 transactions make their own detach evidence authoritative even
+    // when the standalone phase-1 reuse gate remains at its default OFF.
+    // All other evidence retains CJRT_FROM_REUSE_GATE's original policy.
+    const bool txnAuthority = RelocationSetTxn::Enabled() && txnEvidence;
+    const bool blocked = g_reusePermitDepth == 0 && ((GateEnabled() && any) || txnAuthority);
     out.blocked.fetch_add(blocked ? 1 : 0, std::memory_order_relaxed);
     out.activeTable.fetch_add(activeTable ? 1 : 0, std::memory_order_relaxed);
     out.retiredTable.fetch_add(retiredObserved ? 1 : 0, std::memory_order_relaxed);
@@ -151,6 +165,9 @@ bool FromPageDetachCheck(const RegionInfo* region, Site site, Action action)
     out.forwardingClaimed.fetch_add(forwardingClaimed ? 1 : 0, std::memory_order_relaxed);
     out.forwardingReleased.fetch_add(forwardingReleased ? 1 : 0, std::memory_order_relaxed);
     out.copyInflight.fetch_add(copyInflight ? 1 : 0, std::memory_order_relaxed);
+    out.txnEvidence.fetch_add(txnEvidence ? 1 : 0, std::memory_order_relaxed);
+    out.txnHandles.fetch_add(txnHandles, std::memory_order_relaxed);
+    out.txnOutstanding.fetch_add(txnOutstanding, std::memory_order_relaxed);
 
     return !blocked;
 }
@@ -160,7 +177,8 @@ Counters GetCounters(Site site)
     AtomicCounters& c = At(site);
     return Counters{ Load(c.checks), Load(c.withEvidence), Load(c.blocked), Load(c.activeTable), Load(c.retiredTable),
                      Load(c.routeDestHeld), Load(c.forwardingPositive), Load(c.forwardingReaders),
-                     Load(c.forwardingClaimed), Load(c.forwardingReleased), Load(c.copyInflight) };
+                     Load(c.forwardingClaimed), Load(c.forwardingReleased), Load(c.copyInflight),
+                     Load(c.txnEvidence), Load(c.txnHandles), Load(c.txnOutstanding) };
 }
 
 QuarantineCounters GetQuarantineCounters()
@@ -190,7 +208,8 @@ void DumpSummary()
         std::fprintf(stderr,
                      "[GCV2][detach-check] phase=%s site=%s checks=%llu evidence=%llu blocked=%llu "
                      "active_table=%llu retired_table=%llu route_dest_held=%llu fwd_positive=%llu "
-                     "fwd_readers=%llu fwd_claimed=%llu fwd_released=%llu copy_inflight=%llu\n",
+                     "fwd_readers=%llu fwd_claimed=%llu fwd_released=%llu copy_inflight=%llu "
+                     "txn_evidence=%llu txn_handles=%llu txn_outstanding=%llu\n",
                      GateEnabled() ? "enforce" : "measure", SiteName(site),
                      static_cast<unsigned long long>(c.checks),
                      static_cast<unsigned long long>(c.withEvidence),
@@ -202,7 +221,10 @@ void DumpSummary()
                      static_cast<unsigned long long>(c.forwardingReaders),
                      static_cast<unsigned long long>(c.forwardingClaimed),
                      static_cast<unsigned long long>(c.forwardingReleased),
-                     static_cast<unsigned long long>(c.copyInflight));
+                     static_cast<unsigned long long>(c.copyInflight),
+                     static_cast<unsigned long long>(c.txnEvidence),
+                     static_cast<unsigned long long>(c.txnHandles),
+                     static_cast<unsigned long long>(c.txnOutstanding));
     }
     const QuarantineCounters q = GetQuarantineCounters();
     std::fprintf(stderr,

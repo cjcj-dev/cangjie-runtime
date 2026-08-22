@@ -12,6 +12,7 @@
 #include "gc_unittest.hpp"
 #include "Heap/Allocator/ForwardingTable.h"
 #include "Heap/Allocator/RegionManager.h"
+#include "Heap/Collector/RelocationSetTxn.h"
 
 using namespace MapleRuntime;
 using namespace MapleRuntime::GcUnit;
@@ -97,7 +98,12 @@ GC_TEST(ExemptLife, DropRetiredCoveringRemovesFindTo)
     const MAddress stale = 0x2000;
     GC_EXPECT_EQ(tab->insert(from, stale), stale);
     ForwardingTable::Retire(tab);
-    GC_EXPECT_EQ(ForwardingTable::FindTo(from), stale);
+    if (RelocationSetTxn::Enabled()) {
+        // Transaction authority freezes new retired-table discoverers.
+        GC_EXPECT_EQ(ForwardingTable::FindTo(from), static_cast<MAddress>(0));
+    } else {
+        GC_EXPECT_EQ(ForwardingTable::FindTo(from), stale);
+    }
     ForwardingTable::DropRetiredCovering(kStart, kSize);
     GC_EXPECT_EQ(ForwardingTable::FindTo(from), static_cast<MAddress>(0));
 }

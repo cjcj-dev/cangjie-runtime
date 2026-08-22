@@ -19,6 +19,7 @@ set(SRC_LIST
     "LiveInfo.cpp"
     "ForwardDataManager.cpp"
     "PromotedRegionDomain.cpp"
+    "RelocationSetTxn.cpp"
     "ZForwardingLife.cpp"
 )
 

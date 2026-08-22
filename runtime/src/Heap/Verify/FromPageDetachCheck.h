@@ -52,6 +52,9 @@ struct Counters {
     uint64_t forwardingClaimed;
     uint64_t forwardingReleased;
     uint64_t copyInflight;
+    uint64_t txnEvidence;
+    uint64_t txnHandles;
+    uint64_t txnOutstanding;
 };
 
 struct QuarantineCounters {
