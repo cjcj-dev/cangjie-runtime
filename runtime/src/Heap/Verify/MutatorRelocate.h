@@ -136,8 +136,10 @@ inline LockedWaiterAnswer AnswerLockedWaiter(bool tableHit, bool pagePublished)
 enum class Retire : uint32_t {
     DISPEL_GHOST = 0, // RegionInfo::DispelGhostFromRegion
     TAKE_GARBAGE = 1, // RegionManager::TakeRegion garbage reuse, around ClearUnits
-    DETACH_QUARANTINE_RELEASE = 2,
-    RETIRE_COUNT = 3
+    RECLAIM_DIRTY = 2,
+    RECLAIM_MARK_QUARANTINE = 3,
+    RELEASE_REGION = 4,
+    RETIRE_COUNT = 5
 };
 
 // Why the mutator did not end up relocating. Reported per reason so a zero self_copy count

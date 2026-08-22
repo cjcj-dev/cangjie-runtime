@@ -67,6 +67,7 @@ public:
                         AddDetachQuarantineUnits(idx, num, false, false);
                         continue;
                     }
+                    FromPageDetach::ReusePermitScope reusePermit;
                     TraceClear::NoteRegionEvent(start, num * RegionInfo::UNIT_SIZE, "dirty_take", dirtyRegion, 0,
                                                 static_cast<unsigned int>(dirtyRegion->IsGhostFromRegion()),
                                                 static_cast<unsigned int>(dirtyRegion->GetRegionType()),
@@ -101,6 +102,7 @@ public:
                         AddDetachQuarantineUnits(idx, num, true, false);
                         continue;
                     }
+                    FromPageDetach::ReusePermitScope reusePermit;
 #ifdef _WIN64
                     MemMap::CommitMemory(
                         reinterpret_cast<void*>(RegionInfo::GetUnitAddress(idx)), num * RegionInfo::UNIT_SIZE);

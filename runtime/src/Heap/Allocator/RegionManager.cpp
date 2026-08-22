@@ -884,6 +884,7 @@ size_t FreeRegionManager::ReleaseGarbageRegions(size_t targetCachedSize)
             dirtyBytes = dirtyUnitTree.GetTotalCount() * RegionInfo::UNIT_SIZE;
             continue;
         }
+        FromPageDetach::ReusePermitScope reusePermit;
 
         std::lock_guard<std::mutex> lock2(releasedUnitTreeMutex);
         CHECK_DETAIL(releasedUnitTree.MergeInsert(idx, num, true), "tid %d: failed to release garbage units[%u+%u, %u)",
@@ -948,18 +949,16 @@ size_t FreeRegionManager::ReleaseDetachQuarantineAfterMajor()
         }
 
         if (entry.needsInit) {
-            // Freeze new retainers and consume the construction token before
-            // InitRegionInfo resets the in-place ZForwardingLife words.
-            {
-                RegionInfo::DrainScope drain(region, MutatorRelocate::Retire::DETACH_QUARANTINE_RELEASE);
-            }
-            FromPageDetach::ReusePermitScope permit;
+            // Re-enter the original funnel after its evidence has healed so
+            // path-specific scrub/zap/huge-page work is not skipped. That
+            // funnel drains and performs a second central check after
+            // ClearEntries; a newly retired table is re-admitted as a
+            // needsInit=false quarantine entry rather than reaching a tree.
             if (entry.releasePhysical) {
                 (void)regionManager.ReleaseRegion(region);
             } else {
                 regionManager.ReclaimRegion(region);
             }
-            releasedUnits += entry.num;
             FromPageDetach::NoteQuarantineReleased();
             continue;
         }
@@ -1191,9 +1190,16 @@ void RegionManager::ReclaimRegion(RegionInfo* region)
     // STEER3: scrub is at CollectRegion only (see header). Reclaim/TakeRegion reuse
     // must not re-scan O(N) under remset mutex.
 
+    {
+        RegionInfo::DrainScope drain(region, MutatorRelocate::Retire::RECLAIM_DIRTY);
+    }
     // gcvroot Z2: poison reclaimed payload so use-after-free roots are identifiable (MRT_GCV2_ZAP_RECLAIM=1).
     HeapZap::ZapReclaimedRegion(region->GetRegionStart(), region->GetRegionEnd());
     region->InitFreeUnits();
+    if (!FromPageDetach::FromPageDetachCheck(region, FromPageDetach::Site::RECLAIM_DIRTY)) {
+        freeRegionManager.AddDetachQuarantineUnits(unitIndex, num, false, false);
+        return;
+    }
     freeRegionManager.AddGarbageUnits(unitIndex, num);
 }
 
@@ -1212,8 +1218,15 @@ void RegionManager::ReclaimRegionToMarkQuarantine(RegionInfo* region)
     }
     DLOG(REGION, "mark-quarantine region %p @[%#zx+%zu, %#zx) type %u", region, region->GetRegionStart(),
          region->GetRegionAllocatedSize(), region->GetRegionEnd(), region->GetRegionType());
+    {
+        RegionInfo::DrainScope drain(region, MutatorRelocate::Retire::RECLAIM_MARK_QUARANTINE);
+    }
     HeapZap::ZapReclaimedRegion(region->GetRegionStart(), region->GetRegionEnd());
     region->InitFreeUnits();
+    if (!FromPageDetach::FromPageDetachCheck(region, FromPageDetach::Site::RECLAIM_MARK_QUARANTINE)) {
+        freeRegionManager.AddDetachQuarantineUnits(unitIndex, num, false, false);
+        return;
+    }
     freeRegionManager.AddMarkQuarantineUnits(unitIndex, num);
 }
 
@@ -1242,8 +1255,18 @@ size_t RegionManager::ReleaseRegion(RegionInfo* region)
     DLOG(REGION, "release region %p @[%#zx+%zu, %#zx) type %u", region, region->GetRegionStart(),
         region->GetRegionAllocatedSize(), region->GetRegionEnd(), region->GetRegionType());
 
+    {
+        RegionInfo::DrainScope drain(region, MutatorRelocate::Retire::RELEASE_REGION);
+    }
     region->InitFreeUnits();
-    RegionInfo::ReleaseUnits(unitIndex, num);
+    {
+        FromPageDetach::ReusePermitScope reusePermit;
+        RegionInfo::ReleaseUnits(unitIndex, num);
+    }
+    if (!FromPageDetach::FromPageDetachCheck(region, FromPageDetach::Site::RELEASE_REGION)) {
+        freeRegionManager.AddDetachQuarantineUnits(unitIndex, num, true, false);
+        return res;
+    }
     freeRegionManager.AddReleaseUnits(unitIndex, num);
     return res;
 }
@@ -1983,6 +2006,13 @@ RegionInfo* RegionManager::TakeRegion(size_t num, RegionInfo::UnitRole type, boo
         if (head->GetUnitCount() == num &&
             !FromPageDetach::FromPageDetachCheck(head, FromPageDetach::Site::TAKE_GARBAGE_REUSE)) {
             freeRegionManager.AddDetachQuarantineRegion(head);
+            head = nullptr;
+        }
+        // The ON arm makes the implicit active-table -> retired-table
+        // transition explicit before allocation. ReclaimRegion performs the
+        // post-detach central check and quarantines the newly retired answer.
+        if (head != nullptr && head->GetUnitCount() == num && FromPageDetach::GateEnabled()) {
+            ReclaimRegion(head);
             head = nullptr;
         }
         if (head != nullptr && head->GetUnitCount() == num) {
