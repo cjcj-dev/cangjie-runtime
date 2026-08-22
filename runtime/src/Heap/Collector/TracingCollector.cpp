@@ -17,6 +17,7 @@
 #include "Heap/Verify/EnumPushDiag.h"
 #include "Heap/Verify/HealPairDiag.h"
 #include "Heap/Verify/LoadGoodProbe.h"
+#include "Heap/Verify/NwDropAudit.h"
 #include "Heap/Verify/MarkCompleteVerify.h"
 #include "Heap/Verify/MarkFaceSnap.h"
 #include "Heap/Verify/NoTracedDiag.h"
@@ -1183,6 +1184,7 @@ void TracingCollector::PostGarbageCollection(uint64_t gcIndex)
     ReportSkippedStackMapCounts();
     // release pages in PagePool
     TransitionToGCPhase(GCPhase::GC_PHASE_RECLAIM_SATB_NODE, true);
+    NwDropAudit::Report("reclaim_satb");
     SatbBuffer::Instance().ReclaimALLPages();
     PagePool::Instance().Trim();
     (void)gcIndex;

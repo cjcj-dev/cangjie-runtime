@@ -38,12 +38,40 @@
 #include <atomic>
 #include <cstdio>
 #include <cstdlib>
+#include <cstring>
 #include <type_traits>
 #include <utility>
 #include <vector>
 
 namespace MapleRuntime {
 static_assert(!std::is_polymorphic<Barrier>::value, "Barrier must not regain virtual dispatch");
+
+void Barrier::NoteZeroTip(BaseObject* obj, const char* site)
+{
+    if (obj == nullptr || obj->GetTypeInfo() != nullptr) {
+        return;
+    }
+    static std::atomic<uint64_t> hits{ 0 };
+    static std::atomic<bool> atexitArmed{ false };
+    static const bool fatal = []() {
+        const char* v = std::getenv("CJRT_ZEROTIP_FATAL");
+        return v != nullptr && std::strcmp(v, "1") == 0;
+    }();
+    const uint64_t n = hits.fetch_add(1, std::memory_order_relaxed) + 1;
+    bool expected = false;
+    if (atexitArmed.compare_exchange_strong(expected, true, std::memory_order_relaxed)) {
+        std::atexit([]() {
+            std::fprintf(stderr, "[ZEROTIP] point=atexit n=%llu\n",
+                         static_cast<unsigned long long>(hits.load(std::memory_order_relaxed)));
+            std::fflush(stderr);
+        });
+    }
+    std::fprintf(stderr, "[ZEROTIP] site=%s n=%llu obj=%p fatal=%u\n", site == nullptr ? "?" : site,
+                 static_cast<unsigned long long>(n), static_cast<void*>(obj), static_cast<unsigned>(fatal));
+    std::fflush(stderr);
+    CHECK_DETAIL(!fatal, "ZEROTIP_NULL_TYPEINFO site=%s n=%llu obj=%p", site == nullptr ? "?" : site,
+                 static_cast<unsigned long long>(n), obj);
+}
 
 namespace {
 // OpenJDK ZBarrierFastPath for the load barriers: literally the test every
@@ -1600,6 +1628,7 @@ void Barrier::WriteGenericImpl(const ObjectPtr obj, void* fieldPtr, const Object
     if (phase == BarrierPhase::TRACE) {
         return static_cast<const TraceBarrier&>(*this).WriteGenericImpl(obj, fieldPtr, src, size);
     }
+    NoteZeroTip(obj, "Barrier.WriteGenericImpl");
     if ((obj != nullptr && !obj->HasRefField()) || (!Heap::IsHeapAddress(obj) && !Heap::IsHeapAddress(src))) {
         CHECK_DETAIL(memcpy_s(fieldPtr, size,
                               reinterpret_cast<void*>(reinterpret_cast<uintptr_t>(src) + TYPEINFO_PTR_SIZE),

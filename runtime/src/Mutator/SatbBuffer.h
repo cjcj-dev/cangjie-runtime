@@ -12,6 +12,7 @@
 #include "Common/PagePool.h"
 #include "Common/MarkWorkStack.h"
 #include "Heap/Allocator/RegionInfo.h"
+#include "Heap/Verify/NwDropAudit.h"
 namespace MapleRuntime {
 // snapshot at the beginning buffer
 // mainly used to buffer modified field of mutator write
@@ -57,6 +58,7 @@ public:
             while (index != CONTAINER_CAPACITY) {
                 Entry& entry = entryContainer[index++];
                 BaseObject* objectToMark = entry.knownBase != nullptr ? entry.knownBase : entry.target;
+                NwDropAudit::NoteSatbObj(objectToMark);
                 if (entry.knownBase != nullptr) {
                     SatbBuffer::NoteHostDequeued(entry.knownBase);
                 }
