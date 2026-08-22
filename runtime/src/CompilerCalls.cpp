@@ -28,6 +28,7 @@
 #include "Common/ScopedObjectAccess.h"
 #include "ExceptionManager.inline.h"
 #include "Heap/Barrier/Barrier.h"
+#include "Heap/Allocator/RegionInfo.h"
 #include "Heap/Collector/Collector.h"
 #include "Heap/Collector/CollectorResources.h"
 #include "Heap/Heap.h"
@@ -56,6 +57,125 @@
 #endif
 
 namespace MapleRuntime {
+
+namespace {
+struct NwReadSnapshot {
+    bool armed { false };
+    bool captured { false };
+    int64_t probe { -1 };
+    int64_t expected { 0 };
+    MAddress slot { 0 };
+    MAddress slotRaw { 0 };
+    MAddress peeledTarget { 0 };
+    MAddress returnedTarget { 0 };
+    uintptr_t targetHeader0 { 0 };
+    uintptr_t targetHeader1 { 0 };
+    uintptr_t returnedHeader0 { 0 };
+    uintptr_t returnedHeader1 { 0 };
+    MAddress regionStart { 0 };
+    MAddress regionAlloc { 0 };
+    MAddress regionEnd { 0 };
+    unsigned regionType { 0 };
+    MAddress returnedRegionStart { 0 };
+    unsigned returnedRegionType { 0 };
+};
+
+thread_local NwReadSnapshot g_nwReadSnapshot;
+std::atomic<size_t> g_nwReadLines { 0 };
+
+bool NwReadDiagEnabled()
+{
+    static const bool enabled = []() {
+        const char* value = std::getenv("MRT_GCV2_NWREAD");
+        return value != nullptr && value[0] == '1' && value[1] == '\0';
+    }();
+    return enabled;
+}
+
+void SnapshotNwTarget(MAddress address, uintptr_t& header0, uintptr_t& header1,
+                      MAddress& regionStart, MAddress& regionAlloc, MAddress& regionEnd,
+                      unsigned& regionType)
+{
+    if (address == 0 || !Heap::IsHeapAddress(address)) {
+        return;
+    }
+    RegionInfo* region = RegionInfo::TryGetRegionInfoAt(address);
+    if (region == nullptr) {
+        return;
+    }
+    regionStart = region->GetRegionStart();
+    regionAlloc = region->GetRegionAllocPtr();
+    regionEnd = region->GetRegionEnd();
+    regionType = static_cast<unsigned>(region->GetRegionType());
+    const uintptr_t* words = reinterpret_cast<const uintptr_t*>(address);
+    header0 = words[0];
+    header1 = words[1];
+}
+
+void CaptureNwRead(RefField<false>* field, MAddress rawBefore, ObjectPtr result)
+{
+    NwReadSnapshot& sample = g_nwReadSnapshot;
+    if (!sample.armed || sample.captured) {
+        return;
+    }
+    sample.captured = true;
+    sample.slot = reinterpret_cast<MAddress>(field);
+    sample.slotRaw = rawBefore;
+    sample.peeledTarget = RefField<>(rawBefore).GetAddress();
+    sample.returnedTarget = RefField<>(reinterpret_cast<MAddress>(result)).GetAddress();
+    SnapshotNwTarget(sample.peeledTarget, sample.targetHeader0, sample.targetHeader1,
+                     sample.regionStart, sample.regionAlloc, sample.regionEnd, sample.regionType);
+    MAddress unusedAlloc = 0;
+    MAddress unusedEnd = 0;
+    SnapshotNwTarget(sample.returnedTarget, sample.returnedHeader0, sample.returnedHeader1,
+                     sample.returnedRegionStart, unusedAlloc, unusedEnd, sample.returnedRegionType);
+}
+} // namespace
+
+extern "C" MRT_EXPORT void MRT_NwReadDiagArm(int64_t probe, int64_t expected)
+{
+    g_nwReadSnapshot = {};
+    if (!NwReadDiagEnabled()) {
+        return;
+    }
+    g_nwReadSnapshot.armed = true;
+    g_nwReadSnapshot.probe = probe;
+    g_nwReadSnapshot.expected = expected;
+}
+
+extern "C" MRT_EXPORT void MRT_NwReadDiagFinish(int64_t got)
+{
+    NwReadSnapshot sample = g_nwReadSnapshot;
+    g_nwReadSnapshot = {};
+    if (!sample.armed || got == sample.expected) {
+        return;
+    }
+    size_t line = g_nwReadLines.fetch_add(1, std::memory_order_relaxed);
+    if (line >= 128) {
+        return;
+    }
+    std::fprintf(stderr,
+                 "[GCV2][nwread] n=%zu probe=%lld expected=%lld got=%lld captured=%u "
+                 "slot=%#llx slot_raw=%#llx peeled=%#llx target_header=%#llx target_word1=%#llx "
+                 "region_type=%u region=[%#llx,%#llx,%#llx) returned=%#llx "
+                 "returned_header=%#llx returned_word1=%#llx returned_region_type=%u "
+                 "returned_region=%#llx\n",
+                 line, static_cast<long long>(sample.probe), static_cast<long long>(sample.expected),
+                 static_cast<long long>(got), sample.captured ? 1u : 0u,
+                 static_cast<unsigned long long>(sample.slot),
+                 static_cast<unsigned long long>(sample.slotRaw),
+                 static_cast<unsigned long long>(sample.peeledTarget),
+                 static_cast<unsigned long long>(sample.targetHeader0),
+                 static_cast<unsigned long long>(sample.targetHeader1), sample.regionType,
+                 static_cast<unsigned long long>(sample.regionStart),
+                 static_cast<unsigned long long>(sample.regionAlloc),
+                 static_cast<unsigned long long>(sample.regionEnd),
+                 static_cast<unsigned long long>(sample.returnedTarget),
+                 static_cast<unsigned long long>(sample.returnedHeader0),
+                 static_cast<unsigned long long>(sample.returnedHeader1), sample.returnedRegionType,
+                 static_cast<unsigned long long>(sample.returnedRegionStart));
+    std::fflush(stderr);
+}
 
 // Compiler may pass coloured managed refs as C ABI pointers (addrspace(1) GEP without peel).
 // Runtime must strip bits 48+ before treating them as C++ addresses (same as PlainArrayRef /
@@ -1937,6 +2057,9 @@ extern "C" ObjectPtr CJ_MCC_ReadRefField(const ObjectPtr obj, RefField<false>* f
             RootSlotAt(static_cast<void*>(field))); // isGlobal classifies this ABI field as root storage.
     } else {
         result = Heap::GetBarrier().ReadReference(obj, *field);
+    }
+    if (NwReadDiagEnabled()) {
+        CaptureNwRead(field, rawBefore, result);
     }
     // Log when ret is null. 乙 (raw/addr non-zero → barrier null) always logged (rare).
     // 甲 (slot already 0) only in concurrent GC windows so idle Option nulls don't exhaust cap.
