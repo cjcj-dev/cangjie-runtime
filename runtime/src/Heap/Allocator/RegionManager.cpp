@@ -460,11 +460,11 @@ size_t RegionManager::RecordPinnedCrossGenEdges()
         });
     };
     // STW-parallel of the same conservative walk. Record is fetch_or, so order
-    // does not change the remset. Default OFF — mutator-visible state is identical.
-    // Env MRT_GCV2_PINNED_SCAN_PARALLEL=1.
+    // does not change the remset. Default ON — mutator-visible state is identical.
+    // Env MRT_GCV2_PINNED_SCAN_PARALLEL=0 keeps the serial walk.
     static const bool parallelEnv = []() {
         const char* v = std::getenv("MRT_GCV2_PINNED_SCAN_PARALLEL");
-        return v != nullptr && std::strcmp(v, "1") == 0;
+        return v == nullptr || std::strcmp(v, "0") != 0;
     }();
     GCThreadPool* pool = parallelEnv ? Heap::GetHeap().GetCollectorResources().GetThreadPool() : nullptr;
     if (pool != nullptr) {
