@@ -161,4 +161,27 @@ GC_TEST(LifeClock, MissingRouteStampSurvivingBoundaryIsCounted)
         const auto after = RegionLifeClock::GetSnapshot(RegionLifeClock::Carrier::ROUTE_INFO);
         GC_EXPECT_TRUE(after.zeroAcrossBoundary > before.zeroAcrossBoundary);
     }
+
+    // The transition receipt keeps its legacy three-destination bound. Exercise
+    // the fourth distinct region through the real producer so the audit matrix
+    // cannot silently lose its cap_would_overflow column.
+    ZForwarding* receipt = ZForwarding::Create(4, region->GetRegionStart(), fx.heapStart,
+                                                region->GetRegionSize());
+    GC_EXPECT_TRUE(receipt != nullptr);
+    receipt->note_to_life(reinterpret_cast<MAddress>(fx.obj1));
+    auto* fx2 = new GcHeapFixture();
+    receipt->note_to_life(reinterpret_cast<MAddress>(fx2->obj1));
+    auto* fx3 = new GcHeapFixture();
+    receipt->note_to_life(reinterpret_cast<MAddress>(fx3->obj1));
+    auto* fx4 = new GcHeapFixture();
+    const auto capBefore = RegionLifeClock::GetSnapshot(RegionLifeClock::Carrier::RECEIPT);
+    receipt->note_to_life(reinterpret_cast<MAddress>(fx4->obj1));
+    if (RegionLifeClock::Active()) {
+        const auto capAfter = RegionLifeClock::GetSnapshot(RegionLifeClock::Carrier::RECEIPT);
+        GC_EXPECT_TRUE(capAfter.capWouldOverflow > capBefore.capWouldOverflow);
+    }
+    receipt->Destroy();
+    delete fx4;
+    delete fx3;
+    delete fx2;
 }
