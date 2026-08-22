@@ -409,6 +409,7 @@ void TracingCollector::VisitStackRoots(const RootVisitor& visitor, RegSlotsMap& 
         vctx.startIP = startIP;
         vctx.frameIP = frameIP;
         vctx.frameFA = frameAddress;
+        vctx.ownerMutator = &mutator;
         static thread_local char gcvrootNameBuf[256];
         gcvrootNameBuf[0] = '\0';
         CString fname = frame.GetFuncName();
@@ -648,13 +649,33 @@ void TracingCollector::RecordStubAllRegister(RegSlotsMap& regSlotsMap, Uptr fp)
 
 void TracingCollector::EnumConcurrencyModelRoots(RootSet& rootSet) const
 {
-    RootVisitor visitor = [&rootSet, this](ObjectRef& root) { EnumAndTagRawRoot(root, rootSet); };
+    RootVisitor visitor = [&rootSet, this](ObjectRef& root) {
+        if (VerifyRoots::Enabled()) {
+            RootVerifyContext ctx;
+            ctx.phase = "EnumConcurrencyModelRoots";
+            ctx.kind = RootKind::RUNTIME_ROOT;
+            ctx.rawValue = raw(root.LoadPlain());
+            ctx.hasRawValue = true;
+            VerifyRoots::VerifyRootPayload(ctx, &root, nullptr);
+        }
+        EnumAndTagRawRoot(root, rootSet);
+    };
     Runtime::Current().GetConcurrencyModel().VisitGCRoots(&visitor);
 }
 
 void TracingCollector::EnumStaticRoots(RootSet& rootSet) const
 {
-    const RootSlotVisitor& visitor = [&rootSet, this](RootSlot& root) { EnumAndTagRawRoot(root, rootSet); };
+    const RootSlotVisitor& visitor = [&rootSet, this](RootSlot& root) {
+        if (VerifyRoots::Enabled()) {
+            RootVerifyContext ctx;
+            ctx.phase = "EnumStaticRoots";
+            ctx.kind = RootKind::STATIC_ROOT;
+            ctx.rawValue = raw(root.LoadPlain());
+            ctx.hasRawValue = true;
+            VerifyRoots::VerifyRootPayload(ctx, &root, nullptr);
+        }
+        EnumAndTagRawRoot(root, rootSet);
+    };
     VisitStaticRoots(visitor);
 }
 
@@ -670,6 +691,14 @@ void TracingCollector::MergeMutatorRoots(WorkStack& workStack)
 void TracingCollector::EnumAllExportRoots(RootSet &foreignRootsSet)
 {
     Heap::GetHeap().VisitAllExportRoots([&foreignRootsSet, this](ObjectRef& root) {
+        if (VerifyRoots::Enabled()) {
+            RootVerifyContext ctx;
+            ctx.phase = "EnumAllExportRoots";
+            ctx.kind = RootKind::RUNTIME_ROOT;
+            ctx.rawValue = raw(root.LoadPlain());
+            ctx.hasRawValue = true;
+            VerifyRoots::VerifyRootPayload(ctx, &root, nullptr);
+        }
         EnumAndTagRawRoot(root, foreignRootsSet);
     });
 }
@@ -801,6 +830,11 @@ void TracingCollector::DoTracing(WorkStack& workStack, WorkStack& foreignRootsSe
     }
 
     {
+        // ZGC breaks termination on resurrection (zMarkTerminate.inline.hpp:125-139)
+        // and follows the resurrected closure before accepting mark end. Our
+        // finalizer discovery is controller-owned (no shared stripe): it follows
+        // that closure to empty here, after strict SATB termination and before
+        // the collector can leave the marking phase.
         MRT_PHASE_TIMER("concurrent resurrection");
         DoResurrection(workStack);
     }
@@ -892,8 +926,8 @@ bool TracingCollector::MarkSatbBuffer(WorkStack& workStack)
         // pre-value, so losing it leaves a still-reachable object unmarked -- and an
         // unmarked live object is exactly what makes its region look empty.
         if (!MarkTerminateInPauseEnabled()) {
-            // Ablation arm: the pre-existing behaviour, kept reachable so the pause can
-            // be measured against its own absence in one binary rather than two.
+            // Fault-injection/negative-control arm. The product constant is true;
+            // setting it false reconstructs the retired-only termination bug.
             TransitionToGCPhase(GCPhase::GC_PHASE_CLEAR_SATB_BUFFER, true);
             visitSatbObj();
             if (workStack.empty()) {
@@ -901,6 +935,14 @@ bool TracingCollector::MarkSatbBuffer(WorkStack& workStack)
             }
             continue;
         }
+        // Our worker-termination barrier is the stronger owner/join invariant,
+        // not ZGC's shared-stripe condition variable: TracingImpl returned only
+        // after WaitFinish(), every split MarkStack node has one owner, and there
+        // can be no queued publication at this cut. There are no shared lock-free
+        // stripes, hence no ZMarkingSMR object to protect.
+        CHECK_DETAIL(workStack.empty(), "strict mark termination with owner work");
+        CHECK_DETAIL(GetThreadPool()->GetWorkCount() == 0,
+                     "strict mark termination with published worker work");
         bool terminated = false;
         {
             ScopedStopTheWorld stw("mark terminate", true, GCPhase::GC_PHASE_CLEAR_SATB_BUFFER);
@@ -986,7 +1028,17 @@ void TracingCollector::Fini() { Collector::Fini(); }
 // VisitRawPointers. Only queued/running finalizables are strong mark roots.
 void TracingCollector::EnumFinalizerProcessorRoots(RootSet& rootSet) const
 {
-    RootVisitor visitor = [this, &rootSet](ObjectRef& root) { EnumAndTagRawRoot(root, rootSet); };
+    RootVisitor visitor = [this, &rootSet](ObjectRef& root) {
+        if (VerifyRoots::Enabled()) {
+            RootVerifyContext ctx;
+            ctx.phase = "EnumFinalizerProcessorRoots";
+            ctx.kind = RootKind::RUNTIME_ROOT;
+            ctx.rawValue = raw(root.LoadPlain());
+            ctx.hasRawValue = true;
+            VerifyRoots::VerifyRootPayload(ctx, &root, nullptr);
+        }
+        EnumAndTagRawRoot(root, rootSet);
+    };
     collectorResources.GetFinalizerProcessor().VisitGCRoots(visitor);
 }
 

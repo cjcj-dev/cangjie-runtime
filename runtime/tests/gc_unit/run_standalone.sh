@@ -82,9 +82,11 @@ $CXX -std=gnu++17 -O0 -g -Wall -Wextra -pthread -fno-rtti \
      "$SRC/test_current_object_ref.cpp" \
      "$SRC/test_fillerobj.cpp" \
     "$SRC/test_i2_readref.cpp" \
+    "$SRC/test_fwdreturn.cpp" \
     "$SRC/test_fnlz_roots.cpp" \
     "$SRC/test_mark_stack_entry.cpp" \
     "$SRC/test_partial_array.cpp" \
+    "$SRC/test_verify_roots.cpp" \
   -L"$RUNTIME_LIB_DIR" -Wl,-rpath,"$RUNTIME_LIB_DIR" \
   -lcangjie-runtime -lboundscheck \
   -o "$OUT/cj_gc_unit"
@@ -93,9 +95,9 @@ echo "LINKED_RUNTIME=$RUNTIME_LIB_DIR"
 # Binding proof: undefined product symbols must resolve from libcangjie-runtime.
 if command -v nm >/dev/null 2>&1; then
   echo "=== BINDING_PROOF (undefined in binary that resolve via runtime) ==="
-  nm -u "$OUT/cj_gc_unit" 2>/dev/null | grep -E 'RouteInfo|PlausibleManagedObjectGate|TryRecoverInteriorBase|RecordCrossGen|BindLiveInfo|GetRoute|MarkGoodHeapGate' || true
+  nm -u "$OUT/cj_gc_unit" 2>/dev/null | grep -E 'VerifyRoots|RouteInfo|PlausibleManagedObjectGate|TryRecoverInteriorBase|RecordCrossGen|BindLiveInfo|GetRoute|MarkGoodHeapGate' || true
   echo "=== RUNTIME_EXPORTS (product .so) ==="
-  nm -D "$RUNTIME_LIB_DIR/libcangjie-runtime.so" 2>/dev/null | grep -E 'PlausibleManagedObjectGate|TryRecoverInteriorBase|RouteInfo8GetRoute|RecordCrossGenEdge|MarkGoodHeapGate' | head -20 || true
+  nm -D "$RUNTIME_LIB_DIR/libcangjie-runtime.so" 2>/dev/null | grep -E 'VerifyRoots|PlausibleManagedObjectGate|TryRecoverInteriorBase|RouteInfo8GetRoute|RecordCrossGenEdge|MarkGoodHeapGate' | head -30 || true
 fi
 
 START=$(date +%s%N)

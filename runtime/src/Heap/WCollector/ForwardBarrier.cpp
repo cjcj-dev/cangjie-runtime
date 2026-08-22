@@ -164,9 +164,8 @@ BaseObject* ForwardBarrier::ReadReference(BaseObject* obj, RefField<false>& fiel
                     return resolved;
                 }
                 RefField<> goodField = theCollector.GetAndTryTagRefField(resolved);
-                ZgcSelfHealLoadGood(field, oldField.GetFieldValue(), goodField.GetFieldValue(),
-                                    HealSite::ForwardReadReference);
-                return resolved;
+                return ZgcSelfHealLoadGood(field, oldField.GetFieldValue(), goodField.GetFieldValue(),
+                                           HealSite::ForwardReadReference);
             }
             return resolved;
         }
@@ -208,8 +207,8 @@ BaseObject* ForwardBarrier::ReadReference(BaseObject* obj, RefField<false>& fiel
         RefField<> goodField = theCollector.GetAndTryTagRefField(loadGood);
         // OpenJDK ZBarrier::self_heal (zBarrier.inline.hpp:72-107): retain the exact
         // observed value as the CAS expected value and retry after a concurrent update.
-        ZgcSelfHealLoadGood(field, oldField.GetFieldValue(), goodField.GetFieldValue(),
-                            HealSite::ForwardReadReference);
+        loadGood = ZgcSelfHealLoadGood(field, oldField.GetFieldValue(), goodField.GetFieldValue(),
+                                       HealSite::ForwardReadReference);
         NoteZeroHeaderTarget("ForwardRead.healed", field, obj, loadGood, oldTarget, zhSteps);
         return loadGood;
     }
@@ -277,9 +276,8 @@ BaseObject* ForwardBarrier::AtomicReadReference(BaseObject* obj, RefField<true>&
         RefField<> goodField = theCollector.GetAndTryTagRefField(loadGood);
         // Replaces the old "not old-tag" assertion with the colour-era self-heal invariant.
         DCHECK(theCollector.is_load_good(goodField));
-        ZgcSelfHealLoadGood(field, oldField.GetFieldValue(), goodField.GetFieldValue(),
-                            HealSite::ForwardAtomicReadReference);
-        return loadGood;
+        return ZgcSelfHealLoadGood(field, oldField.GetFieldValue(), goodField.GetFieldValue(),
+                                   HealSite::ForwardAtomicReadReference);
     }
 }
 

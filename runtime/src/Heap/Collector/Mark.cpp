@@ -241,12 +241,6 @@ void WCollector::EnumAndTagRawRoot(ObjectRef& ref, RootSet& rootSet) const
         }
         return;
     }
-    if (VerifyRoots::Enabled()) {
-        RootVerifyContext vctx;
-        vctx.phase = "EnumAndTagRawRoot.plain";
-        vctx.kind = RootKind::RUNTIME_ROOT;
-        VerifyRoots::VerifyRootPayload(vctx, &ref, root);
-    }
     CHECK_DETAIL(root->IsValidObject(), "Enum and tag runtime root %p(%p) encounters invalid object", root, &ref);
     HealRootWriteback(ref, root, HealSite::WCollectorEnumRawRoot);
     rootSet.push_back(root);
@@ -2209,9 +2203,10 @@ void WCollector::TraceYoungClosure(WorkStack& workStack, bool fullYoungScan, Min
 // youngconc: SATB termination for concurrent young mark — same loop shape as
 // TracingCollector::MarkSatbBuffer, but feeds TraceYoungClosure (young claim + FYS).
 // Mutators run under TraceBarrier (InstallBarrier TRACE).
-// Termination: ZMark::end -> try_end (zMark.cpp:940-971) + ZMark::flush
-// (zMark.cpp:587-596 / :998-1006). Young mark uses the same ZMark
-// (zMark.cpp:757-780). kMarkTerminateInPause default false, same as major.
+// Termination: ZMark::end -> try_end (zMark.cpp:954-971) + ZMark::flush
+// (zMark.cpp:587-605 / :998-1006). Young mark uses the same ZMark
+// (zMark.cpp:757-780). kMarkTerminateInPause is the default-on strict cut shared
+// with major marking.
 bool WCollector::MarkYoungSatbBuffer(WorkStack& workStack, bool fullYoungScan, MinorObjectSet& reachableObjects,
                                      std::vector<BaseObject*>& reachableVec, MinorSlotSet& reachableSlots,
                                      MinorSlotSet& weakSlots, bool useBitmapLedger,
@@ -2283,6 +2278,8 @@ bool WCollector::MarkYoungSatbBuffer(WorkStack& workStack, bool fullYoungScan, M
             }
         }
         if (!MarkTerminateInPauseEnabled()) {
+            // Fault-injection/negative-control arm; product strict termination
+            // never commits from a retired-only sample.
             TransitionToGCPhase(GCPhase::GC_PHASE_CLEAR_SATB_BUFFER, true);
             visitSatbObj();
             if (workStack.empty()) {
@@ -2290,6 +2287,12 @@ bool WCollector::MarkYoungSatbBuffer(WorkStack& workStack, bool fullYoungScan, M
             }
             continue;
         }
+        // TraceYoungClosure's parallel path returns through WaitFinish(); its
+        // serial path owns the whole stack. Therefore owner-empty + no published
+        // pool task is our global-empty proof, without shared lock-free stripes.
+        CHECK_DETAIL(workStack.empty(), "strict young mark termination with owner work");
+        CHECK_DETAIL(GetThreadPool()->GetWorkCount() == 0,
+                     "strict young mark termination with published worker work");
         bool terminated = false;
         {
             ScopedStopTheWorld stw("young mark terminate", true, GCPhase::GC_PHASE_CLEAR_SATB_BUFFER);

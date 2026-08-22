@@ -16,6 +16,8 @@
 
 namespace MapleRuntime {
 
+class Mutator;
+
 // Root kinds (invariant S applicability):
 //   SLOT_STACK   — stackmap slot roots (AS1 boxes). Can verify S.
 //   REG_ROOT     — register roots. Can verify S.
@@ -55,6 +57,13 @@ struct RootVerifyContext {
     uintptr_t frameFA = 0;
     intptr_t slotBias = 0;
     int regNum = -1;
+    // Preserve the slot word before any root healing/uncolouring. ZGC verifies
+    // the oop stored at p, not only the already-decoded object address.
+    uintptr_t rawValue = 0;
+    bool hasRawValue = false;
+    // Stack objects are legal only in the stack range owned by the mutator
+    // being scanned; a GC worker's thread-local Mutator is not that owner.
+    Mutator* ownerMutator = nullptr;
 };
 
 class VerifyRoots {

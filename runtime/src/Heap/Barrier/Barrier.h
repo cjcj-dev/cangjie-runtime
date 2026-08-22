@@ -144,12 +144,13 @@ protected:
     void ResolveStaticStructRoots(MAddress dst, const GCTib gctib) const;
 
     // OpenJDK ZBarrier::self_heal (RefField.h / zBarrier.inline.hpp:72-110).
+    // Return the address encoded by healPtr, so write-back and hand-out have one source of truth.
     // One definition here rather than six lambdas so the exit predicate cannot drift
     // between phases.
-    void ZgcSelfHealLoadGood(RefField<false>& field, zpointer observed, zpointer healPtr,
-                             HealSite site) const;
-    void ZgcSelfHealLoadGood(RefField<true>& field, zpointer observed, zpointer healPtr,
-                             HealSite site) const;
+    BaseObject* ZgcSelfHealLoadGood(RefField<false>& field, zpointer observed, zpointer healPtr,
+                                    HealSite site) const;
+    BaseObject* ZgcSelfHealLoadGood(RefField<true>& field, zpointer observed, zpointer healPtr,
+                                    HealSite site) const;
 
     // I2: FORWARDED/zero-header from-copy → FindToVersion to. Never hand from.
     // SkipLaunderingHeal may refuse to write from into the slot; the return value
