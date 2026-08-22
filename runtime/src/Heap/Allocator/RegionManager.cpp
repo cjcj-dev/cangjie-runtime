@@ -57,6 +57,50 @@
 #include "Sync/Sync.h"
 
 namespace MapleRuntime {
+namespace RecentFullAccounting {
+namespace {
+std::atomic<size_t> enqueuedRegions{ 0 };
+std::atomic<size_t> dequeuedRegions{ 0 };
+std::atomic<size_t> currentBytes{ 0 };
+std::atomic<size_t> peakBytes{ 0 };
+}
+
+void Enqueue(size_t regions, size_t units)
+{
+    if (regions == 0) {
+        return;
+    }
+    enqueuedRegions.fetch_add(regions, std::memory_order_relaxed);
+    const size_t bytes = units * RegionInfo::UNIT_SIZE;
+    const size_t current = currentBytes.fetch_add(bytes, std::memory_order_relaxed) + bytes;
+    size_t peak = peakBytes.load(std::memory_order_relaxed);
+    while (peak < current &&
+           !peakBytes.compare_exchange_weak(peak, current, std::memory_order_relaxed)) {}
+}
+
+void Dequeue(size_t regions, size_t units)
+{
+    if (regions == 0) {
+        return;
+    }
+    dequeuedRegions.fetch_add(regions, std::memory_order_relaxed);
+    const size_t bytes = units * RegionInfo::UNIT_SIZE;
+    const size_t before = currentBytes.fetch_sub(bytes, std::memory_order_relaxed);
+    CHECK_DETAIL(before >= bytes, "recent-full accounting underflow: before=%zu remove=%zu", before, bytes);
+}
+
+void Report(size_t listRegions, size_t listBytes)
+{
+    const size_t in = enqueuedRegions.load(std::memory_order_relaxed);
+    const size_t out = dequeuedRegions.load(std::memory_order_relaxed);
+    VLOG(REPORT,
+         "[GCV2][recent-full-account] in=%zu out=%zu current_regions=%zu current_bytes=%zu "
+         "peak_bytes=%zu list_regions=%zu list_bytes=%zu",
+         in, out, in - out, currentBytes.load(std::memory_order_relaxed),
+         peakBytes.load(std::memory_order_relaxed), listRegions, listBytes);
+}
+} // namespace RecentFullAccounting
+
 uintptr_t RegionInfo::UnitInfo::totalUnitCount = 0;
 uintptr_t RegionInfo::UnitInfo::heapStartAddress = 0;
 size_t RegionInfo::UnitInfo::unitSizeShift = 0;
@@ -436,8 +480,17 @@ size_t RegionManager::RecordPinnedCrossGenEdges()
     MRT_PHASE_TIMER("young.pinned_scan");
     RememberedSet& rememberedSet = Heap::GetHeap().GetRememberedSet();
     std::atomic<size_t> recorded{ 0 };
-    auto scanRegion = [&rememberedSet, &recorded](RegionInfo* region) {
-        if (region == nullptr || region->IsYoungRegion() || region->IsGarbageRegion()) {
+    auto skipPinnedScanRegion = [](RegionInfo* region) {
+        // Drain/rescan cost on sd256 was 59.8% of young.* because this walk stamped
+        // from-space / free / ghost slots; RescanRememberedSet then dropped them as
+        // deadHolder (fysgone: consumed/recorded = 3.3%). ZGC does not walk from-space
+        // into the remset (zRemembered.cpp:347-387 found-old; scan is previous face only).
+        return region == nullptr || region->IsYoungRegion() || region->IsGarbageRegion() ||
+            region->IsFreeRegion() || region->IsFromRegion() || region->IsGhostFromRegion() ||
+            region->IsUnmovableFromRegion();
+    };
+    auto scanRegion = [&rememberedSet, &recorded, &skipPinnedScanRegion](RegionInfo* region) {
+        if (skipPinnedScanRegion(region)) {
             return;
         }
         region->VisitAllObjects([&rememberedSet, &recorded, region](BaseObject* object) {
@@ -470,8 +523,8 @@ size_t RegionManager::RecordPinnedCrossGenEdges()
     if (pool != nullptr) {
         MRT_PHASE_TIMER("young.pinned_scan.parallel");
         std::vector<RegionInfo*> regions;
-        auto collect = [&regions](RegionInfo* region) {
-            if (region != nullptr && !region->IsYoungRegion() && !region->IsGarbageRegion()) {
+        auto collect = [&regions, &skipPinnedScanRegion](RegionInfo* region) {
+            if (!skipPinnedScanRegion(region)) {
                 regions.push_back(region);
             }
         };
@@ -483,9 +536,6 @@ size_t RegionManager::RecordPinnedCrossGenEdges()
         largeTraceRegions.VisitAllRegions(collect);
         recentFullRegionList.VisitAllRegions(collect);
         fullTraceRegions.VisitAllRegions(collect);
-        unmovableFromRegionList.VisitAllRegions(collect);
-        fromRegionList.VisitAllRegions(collect);
-        tlRegionList.VisitAllRegions(collect);
         const size_t n = regions.size();
         if (n == 0) {
             return 0;
@@ -518,8 +568,8 @@ size_t RegionManager::RecordPinnedCrossGenEdges()
         VLOG(REPORT, "[GCV2][pinned_scan] parallel=1 regions=%zu workers=%d recorded=%zu", n, workers, nRec);
         return nRec;
     }
-    // All never-young alloc paths + post-promote old holders (IDLE bare-store gap).
-    // scanRegion already skips IsYoungRegion, so candidate young lists are free.
+    // Old holders only (pinned/large/full). from/tl/unmovable-from are the young
+    // cset; walking them stamped deadHolder slots (zRemembered.cpp:347-387).
     {
         MRT_PHASE_TIMER("young.pinned_scan.serial");
         recentPinnedRegionList.VisitAllRegions(scanRegion);
@@ -530,9 +580,6 @@ size_t RegionManager::RecordPinnedCrossGenEdges()
         largeTraceRegions.VisitAllRegions(scanRegion);
         recentFullRegionList.VisitAllRegions(scanRegion);
         fullTraceRegions.VisitAllRegions(scanRegion);
-        unmovableFromRegionList.VisitAllRegions(scanRegion);
-        fromRegionList.VisitAllRegions(scanRegion);
-        tlRegionList.VisitAllRegions(scanRegion);
     }
     return recorded.load(std::memory_order_relaxed);
 }
@@ -1370,7 +1417,9 @@ void RegionManager::AssembleSmallGarbageCandidates()
             // for ClearUnits while the route keeps answering the old geometry.
             if (!region->IsNotRelocatableThisCycle() &&
                 !RouteDestHold::HoldsBack(region, RouteDestHold::Site::ASSEMBLE_RECENT_FULL)) {
+                const size_t units = region->GetUnitCount();
                 recentFullRegionList.DeleteRegion(region);
+                RecentFullAccounting::Dequeue(1, units);
                 fromRegionList.PrependRegion(region, RegionInfo::RegionType::FROM_REGION);
             }
             region = next;
@@ -1539,7 +1588,9 @@ YoungCollectionStats RegionManager::PrepareYoungGarbageCandidates(const std::fun
             region = next;
             continue;
         }
+        const size_t units = region->GetUnitCount();
         recentFullRegionList.DeleteRegion(region);
+        RecentFullAccounting::Dequeue(1, units);
         fromRegionList.PrependRegion(region, RegionInfo::RegionType::FROM_REGION);
         region = next;
     }
@@ -2666,6 +2717,7 @@ void RegionManager::DumpRegionStats(const char* msg, bool dumpToError) const
     size_t recentFullUnits = recentFullRegionList.GetUnitCount();
     size_t recentFullSize = recentFullUnits * RegionInfo::UNIT_SIZE;
     size_t allocRecentFullSize = recentFullRegionList.GetAllocatedSize();
+    RecentFullAccounting::Report(recentFullRegions, recentFullSize);
 
     size_t garbageRegions = garbageRegionList.GetRegionCount();
     size_t garbageUnits = garbageRegionList.GetUnitCount();
@@ -3175,19 +3227,34 @@ void RegionManager::CompactRegion(RegionInfo* region)
     region->ResetCensusBoundary();
 
     OffpastDiag::NoteCompactDone(region);
-    {
-        const RegionInfo::RegionType type = region->GetRegionType();
-        if (type == RegionInfo::RegionType::FROM_REGION) {
-            fromRegionList.TryDeleteRegion(region, RegionInfo::RegionType::FROM_REGION,
-                RegionInfo::RegionType::THREAD_LOCAL_REGION);
-        } else if (type == RegionInfo::RegionType::LONE_FROM_REGION) {
-            region->SetRegionType(RegionInfo::RegionType::THREAD_LOCAL_REGION);
-        } else if (type == RegionInfo::RegionType::GARBAGE_REGION) {
-            garbageRegionList.TryDeleteRegion(region, RegionInfo::RegionType::GARBAGE_REGION,
-                                              RegionInfo::RegionType::THREAD_LOCAL_REGION);
-        }
+    EnlistCompactedRegionForAllocator(region);
+}
+
+void RegionManager::EnlistCompactedRegionForAllocator(RegionInfo* region)
+{
+    if (region == nullptr) {
+        return;
     }
-    tlRegionList.PrependRegion(region, RegionInfo::RegionType::THREAD_LOCAL_REGION);
+    const RegionInfo::RegionType type = region->GetRegionType();
+    bool claimed = false;
+    if (type == RegionInfo::RegionType::FROM_REGION) {
+        claimed = fromRegionList.TryDeleteRegion(region, RegionInfo::RegionType::FROM_REGION,
+                                                 RegionInfo::RegionType::THREAD_LOCAL_REGION);
+    } else if (type == RegionInfo::RegionType::LONE_FROM_REGION) {
+        region->SetRegionType(RegionInfo::RegionType::THREAD_LOCAL_REGION);
+        claimed = true;
+    } else if (type == RegionInfo::RegionType::GARBAGE_REGION) {
+        claimed = garbageRegionList.TryDeleteRegion(region, RegionInfo::RegionType::GARBAGE_REGION,
+                                                    RegionInfo::RegionType::THREAD_LOCAL_REGION);
+    } else if (type == RegionInfo::RegionType::THREAD_LOCAL_REGION ||
+               type == RegionInfo::RegionType::RECENT_FULL_REGION) {
+        // Already owned by the allocator list, or the concurrent stay-young
+        // path won and made it collector-visible. Both are complete states.
+        return;
+    }
+    if (claimed) {
+        tlRegionList.PrependRegion(region, RegionInfo::RegionType::THREAD_LOCAL_REGION);
+    }
 }
 
 // A region the forward path finished with in place has to stay reachable by a collection-set
@@ -3216,9 +3283,12 @@ void RegionManager::RehomeCompactedInPlaceRegion(RegionInfo* region)
     if (region->GetRegionType() != RegionInfo::RegionType::THREAD_LOCAL_REGION) {
         return;
     }
-    tlRegionList.TryDeleteRegion(region, RegionInfo::RegionType::THREAD_LOCAL_REGION,
-                                 RegionInfo::RegionType::RECENT_FULL_REGION);
+    if (!tlRegionList.TryDeleteRegion(region, RegionInfo::RegionType::THREAD_LOCAL_REGION,
+                                      RegionInfo::RegionType::RECENT_FULL_REGION)) {
+        return;
+    }
     recentFullRegionList.PrependRegion(region, RegionInfo::RegionType::RECENT_FULL_REGION);
+    RecentFullAccounting::Enqueue(1, region->GetUnitCount());
 }
 
 void RegionManager::CompactRegion(RegionInfo* region, RegionInfo* toRegion1)
@@ -3328,19 +3398,7 @@ void RegionManager::CompactRegion(RegionInfo* region, RegionInfo* toRegion1)
     region->ResetCensusBoundary();
 
     OffpastDiag::NoteCompactDone(region);
-    {
-        const RegionInfo::RegionType type = region->GetRegionType();
-        if (type == RegionInfo::RegionType::FROM_REGION) {
-            fromRegionList.TryDeleteRegion(region, RegionInfo::RegionType::FROM_REGION,
-                RegionInfo::RegionType::THREAD_LOCAL_REGION);
-        } else if (type == RegionInfo::RegionType::LONE_FROM_REGION) {
-            region->SetRegionType(RegionInfo::RegionType::THREAD_LOCAL_REGION);
-        } else if (type == RegionInfo::RegionType::GARBAGE_REGION) {
-            garbageRegionList.TryDeleteRegion(region, RegionInfo::RegionType::GARBAGE_REGION,
-                                              RegionInfo::RegionType::THREAD_LOCAL_REGION);
-        }
-    }
-    tlRegionList.PrependRegion(region, RegionInfo::RegionType::THREAD_LOCAL_REGION);
+    EnlistCompactedRegionForAllocator(region);
 }
 
 namespace {
@@ -3479,19 +3537,35 @@ void RegionManager::EnlistStayYoungSurvivor(RegionInfo* region)
     // CollectFromSpaceGarbage MergeRegionList walks a chain that now points
     // into recentFull, and DeleteRegionLocked SEGVs (r13=0, +0x14).
     const RegionInfo::RegionType type = region->GetRegionType();
+    bool claimed = false;
     if (type == RegionInfo::RegionType::FROM_REGION) {
-        fromRegionList.TryDeleteRegion(region, RegionInfo::RegionType::FROM_REGION,
-                                       RegionInfo::RegionType::RECENT_FULL_REGION);
+        claimed = fromRegionList.TryDeleteRegion(region, RegionInfo::RegionType::FROM_REGION,
+                                                 RegionInfo::RegionType::RECENT_FULL_REGION);
     } else if (type == RegionInfo::RegionType::LONE_FROM_REGION) {
         // TakeHeadRegion already unlinked it (RegionManager.cpp:1712). Type still
         // LONE_FROM until Prepend; kLoneFromIsFrom readers would keep treating it
         // as from-space if we skipped the store (WCollector.h:495).
         region->SetRegionType(RegionInfo::RegionType::RECENT_FULL_REGION);
+        claimed = true;
     } else if (type == RegionInfo::RegionType::GARBAGE_REGION) {
-        garbageRegionList.TryDeleteRegion(region, RegionInfo::RegionType::GARBAGE_REGION,
-                                          RegionInfo::RegionType::RECENT_FULL_REGION);
+        claimed = garbageRegionList.TryDeleteRegion(region, RegionInfo::RegionType::GARBAGE_REGION,
+                                                    RegionInfo::RegionType::RECENT_FULL_REGION);
+    } else if (type == RegionInfo::RegionType::THREAD_LOCAL_REGION) {
+        // CompactRegion's ownership tail may win first. Transfer that completed
+        // allocator-list state instead of either abandoning the survivor there
+        // or linking the node into two lists.
+        claimed = tlRegionList.TryDeleteRegion(region, RegionInfo::RegionType::THREAD_LOCAL_REGION,
+                                               RegionInfo::RegionType::RECENT_FULL_REGION);
+    } else if (type == RegionInfo::RegionType::RECENT_FULL_REGION) {
+        // RouteRegion's compact-in-place fallback already re-homed this region.
+        // A second Prepend while it is the list head sets both links to itself.
+        return;
+    }
+    if (!claimed) {
+        return;
     }
     recentFullRegionList.PrependRegion(region, RegionInfo::RegionType::RECENT_FULL_REGION);
+    RecentFullAccounting::Enqueue(1, region->GetUnitCount());
 }
 
 template<Generation G>
