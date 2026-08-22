@@ -258,6 +258,7 @@ public:
         std::lock_guard<std::mutex> lock(detachQuarantineMutex);
         return !detachQuarantine.empty();
     }
+    size_t GetDetachQuarantineUnitCount() const;
 
 private:
     struct DetachQuarantineEntry {
