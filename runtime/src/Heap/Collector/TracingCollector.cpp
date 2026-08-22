@@ -1035,6 +1035,7 @@ void TracingCollector::Init() {}
 
 void TracingCollector::Fini() { Collector::Fini(); }
 
+// VisitGCRoots walks finalizers + finalizables + workingFinalizables (relocatable roots).
 void TracingCollector::EnumFinalizerProcessorRoots(RootSet& rootSet) const
 {
     RootVisitor visitor = [this, &rootSet](ObjectRef& root) { EnumAndTagRawRoot(root, rootSet); };
