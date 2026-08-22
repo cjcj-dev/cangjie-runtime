@@ -1897,7 +1897,7 @@ void WCollector::TraceRefField(BaseObject* obj, RefField<>& field, WorkStack& wo
         } else {
             SurvNodeDiag::NoteTraceVisit(&field, targetObj, SurvNodeDiag::TRACE_SKIP_MARKED);
             ArrayWalkDiag::NoteVisit();
-            ArrayWalkDiag::NoteSkipMarked();
+            ArrayWalkDiag::NoteSkipMarkedTarget(targetObj);
         }
         return;
     }
@@ -1960,7 +1960,7 @@ void WCollector::TraceRefField(BaseObject* obj, RefField<>& field, WorkStack& wo
     } else {
         SurvNodeDiag::NoteTraceVisit(&field, latest, SurvNodeDiag::TRACE_SKIP_MARKED);
         ArrayWalkDiag::NoteVisit();
-        ArrayWalkDiag::NoteSkipMarked();
+        ArrayWalkDiag::NoteSkipMarkedTarget(latest);
     }
 }
 

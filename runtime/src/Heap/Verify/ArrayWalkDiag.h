@@ -16,6 +16,7 @@ void Begin(BaseObject* holder, uint64_t declared, TypeInfo* component, bool larg
 void NoteVisit();
 void NotePush();
 void NoteSkipMarked();
+void NoteSkipMarkedTarget(BaseObject* target);
 void NoteSkipGate();
 void NoteSkipNull();
 void End();

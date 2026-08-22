@@ -10,6 +10,7 @@
 #include "Heap/Allocator/RegionInfo.h"
 #include "Heap/Collector/GcStats.h"
 #include "Heap/Heap.h"
+#include "Heap/Allocator/RegionSpace.h"
 #include "Heap/Verify/DiagGate.h"
 #include "ObjectModel/MClass.h"
 
@@ -23,6 +24,10 @@ struct WalkFrame {
     uint64_t visits = 0;
     uint64_t push = 0;
     uint64_t skipMarked = 0;
+    uint64_t skipMarkedWater = 0;
+    uint64_t skipMarkedBit = 0;
+    uint64_t skipMarkedRouteNo = 0;
+    uint64_t skipMarkedRecentFull = 0;
     uint64_t skipGate = 0;
     uint64_t skipNull = 0;
     uint8_t componentKind = 0;
@@ -39,6 +44,10 @@ std::atomic<uint64_t> g_declaredSum{ 0 };
 std::atomic<uint64_t> g_visitsSum{ 0 };
 std::atomic<uint64_t> g_pushSum{ 0 };
 std::atomic<uint64_t> g_skipMarkedSum{ 0 };
+std::atomic<uint64_t> g_skipMarkedWaterSum{ 0 };
+std::atomic<uint64_t> g_skipMarkedBitSum{ 0 };
+std::atomic<uint64_t> g_skipMarkedRouteNoSum{ 0 };
+std::atomic<uint64_t> g_skipMarkedRecentFullSum{ 0 };
 std::atomic<uint64_t> g_skipGateSum{ 0 };
 std::atomic<uint64_t> g_skipNullSum{ 0 };
 std::atomic<uint64_t> g_maxDeclared{ 0 };
@@ -96,6 +105,31 @@ void NoteSkipMarked()
     }
 }
 
+void NoteSkipMarkedTarget(BaseObject* target)
+{
+    if (!t_active || target == nullptr) {
+        return;
+    }
+    ++t_frame.skipMarked;
+    RegionInfo* region = RegionInfo::TryGetRegionInfoAt(reinterpret_cast<MAddress>(target));
+    if (region == nullptr) {
+        return;
+    }
+    const size_t off = region->GetAddressOffset(reinterpret_cast<MAddress>(target));
+    const bool water = region->AllocatedAfterMarkStart(off);
+    if (water) {
+        ++t_frame.skipMarkedWater;
+    } else {
+        ++t_frame.skipMarkedBit;
+    }
+    if (!region->IsRouteSurvivedObject(off)) {
+        ++t_frame.skipMarkedRouteNo;
+    }
+    if (region->GetRegionType() == RegionInfo::RegionType::RECENT_FULL_REGION) {
+        ++t_frame.skipMarkedRecentFull;
+    }
+}
+
 void NoteSkipGate()
 {
     if (t_active) {
@@ -121,6 +155,10 @@ void End()
     g_visitsSum.fetch_add(t_frame.visits, std::memory_order_relaxed);
     g_pushSum.fetch_add(t_frame.push, std::memory_order_relaxed);
     g_skipMarkedSum.fetch_add(t_frame.skipMarked, std::memory_order_relaxed);
+    g_skipMarkedWaterSum.fetch_add(t_frame.skipMarkedWater, std::memory_order_relaxed);
+    g_skipMarkedBitSum.fetch_add(t_frame.skipMarkedBit, std::memory_order_relaxed);
+    g_skipMarkedRouteNoSum.fetch_add(t_frame.skipMarkedRouteNo, std::memory_order_relaxed);
+    g_skipMarkedRecentFullSum.fetch_add(t_frame.skipMarkedRecentFull, std::memory_order_relaxed);
     g_skipGateSum.fetch_add(t_frame.skipGate, std::memory_order_relaxed);
     g_skipNullSum.fetch_add(t_frame.skipNull, std::memory_order_relaxed);
     uint64_t prevMax = g_maxDeclared.load(std::memory_order_relaxed);
@@ -140,15 +178,20 @@ void End()
     if (incomplete || (t_frame.largeRegion != 0 && t_frame.declared >= 100000)) {
         std::fprintf(stderr,
                      "[GCV2][arraywalk] holder=%p large=%u kind=%u declared=%lu visits=%lu "
-                     "push=%lu skipMarked=%lu skipGate=%lu skipNull=%lu incomplete=%d gc=%u\n",
+                     "push=%lu skipMarked=%lu water=%lu bit=%lu routeNo=%lu recentFull=%lu "
+                     "skipGate=%lu skipNull=%lu incomplete=%d gc=%u\n",
                      static_cast<void*>(t_frame.holder), static_cast<unsigned>(t_frame.largeRegion),
                      static_cast<unsigned>(t_frame.componentKind),
                      static_cast<unsigned long>(t_frame.declared),
                      static_cast<unsigned long>(t_frame.visits),
                      static_cast<unsigned long>(t_frame.push),
                      static_cast<unsigned long>(t_frame.skipMarked),
+                     static_cast<unsigned long>(t_frame.skipMarkedWater),
+                     static_cast<unsigned long>(t_frame.skipMarkedBit),
+                     static_cast<unsigned long>(t_frame.skipMarkedRouteNo),
+                     static_cast<unsigned long>(t_frame.skipMarkedRecentFull),
                      static_cast<unsigned long>(t_frame.skipGate),
-                     static_cast<unsigned long>(t_frame.skipNull),                      incomplete ? 1 : 0,
+                     static_cast<unsigned long>(t_frame.skipNull), incomplete ? 1 : 0,
                      static_cast<unsigned>(g_gcCount.load(std::memory_order_relaxed)));
         std::fflush(stderr);
     }
@@ -161,7 +204,8 @@ void Report(const char* point)
     }
     std::fprintf(stderr,
                  "[GCV2][arraywalk] point=%s walks=%lu large=%lu incomplete=%lu declaredSum=%lu "
-                 "visitsSum=%lu push=%lu skipMarked=%lu skipGate=%lu skipNull=%lu maxDeclared=%lu "
+                 "visitsSum=%lu push=%lu skipMarked=%lu water=%lu bit=%lu routeNo=%lu recentFull=%lu "
+                 "skipGate=%lu skipNull=%lu maxDeclared=%lu "
                  "lastLargeHolder=%p lastLargeDeclared=%lu lastLargeVisits=%lu\n",
                  point != nullptr ? point : "?",
                  static_cast<unsigned long>(g_walks.load(std::memory_order_relaxed)),
@@ -171,6 +215,10 @@ void Report(const char* point)
                  static_cast<unsigned long>(g_visitsSum.load(std::memory_order_relaxed)),
                  static_cast<unsigned long>(g_pushSum.load(std::memory_order_relaxed)),
                  static_cast<unsigned long>(g_skipMarkedSum.load(std::memory_order_relaxed)),
+                 static_cast<unsigned long>(g_skipMarkedWaterSum.load(std::memory_order_relaxed)),
+                 static_cast<unsigned long>(g_skipMarkedBitSum.load(std::memory_order_relaxed)),
+                 static_cast<unsigned long>(g_skipMarkedRouteNoSum.load(std::memory_order_relaxed)),
+                 static_cast<unsigned long>(g_skipMarkedRecentFullSum.load(std::memory_order_relaxed)),
                  static_cast<unsigned long>(g_skipGateSum.load(std::memory_order_relaxed)),
                  static_cast<unsigned long>(g_skipNullSum.load(std::memory_order_relaxed)),
                  static_cast<unsigned long>(g_maxDeclared.load(std::memory_order_relaxed)),

@@ -430,16 +430,23 @@ public:
         CHECK_DETAIL(GetRouteMarkGeneration() == G,
                      "route mark generation mismatch region=%p have=%u want=%u", this,
                      static_cast<unsigned>(GetRouteMarkGeneration()), static_cast<unsigned>(G));
-        const RegionLifeId life = __atomic_load_n(&metadata.routeMarkLifeId, __ATOMIC_ACQUIRE);
+        // TRACE window: liveInfo0 is null (ClearLiveInfo). Minting a route view
+        // with a stale routeMarkLifeId makes ValidateMarkView fail while
+        // GetMarkView/IsMarkedObject still see the current bits — TraceRefField
+        // then skip-pushes (arraywalk routeNo==recentFull on sd 5s). Compact
+        // later reads this same route view and treats those objects dead.
+        // ZGC zMark.inline.hpp:79-87: marked ⇒ followed; one livemap seqnum.
+        LiveInfo* ghost = metadata.liveInfo0;
+        const RegionLifeId life = ghost == nullptr
+            ? GetRegionLifeId()
+            : __atomic_load_n(&metadata.routeMarkLifeId, __ATOMIC_ACQUIRE);
         uint64_t epoch;
         if (RegionLifeClock::EnforceEnabled()) {
-            epoch = __atomic_load_n(&metadata.routeMarkEpoch, __ATOMIC_ACQUIRE);
+            epoch = ghost == nullptr ? GetMarkSnapshotEpoch<G>()
+                                     : __atomic_load_n(&metadata.routeMarkEpoch, __ATOMIC_ACQUIRE);
         } else {
-            // Transition arm: keep the legacy self-minted epoch until enforcement
-            // becomes the default, while the shadow view carries the published life.
-            LiveInfo* face = metadata.liveInfo0;
-            epoch = face == nullptr ? GetMarkSnapshotEpoch<G>()
-                                    : face->GetMarkFace<G>().epoch.load(std::memory_order_acquire);
+            epoch = ghost == nullptr ? GetMarkSnapshotEpoch<G>()
+                                     : ghost->GetMarkFace<G>().epoch.load(std::memory_order_acquire);
         }
         return MarkView<G>(this, epoch, life);
     }
