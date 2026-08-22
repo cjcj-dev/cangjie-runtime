@@ -13,6 +13,7 @@ namespace MapleRuntime {
 namespace ProbeReadRouteDiag {
 struct Snapshot {
     bool armed { false };
+    MAddress expectedFrom { 0 };
     uint64_t queries { 0 };
     uint64_t answers { 0 };
     MAddress from { 0 };
@@ -34,7 +35,7 @@ inline void Arm()
 inline void NoteRetiredLookup(MAddress from, MAddress to)
 {
     Snapshot& snapshot = Current();
-    if (!snapshot.armed) {
+    if (!snapshot.armed || snapshot.expectedFrom == 0 || from != snapshot.expectedFrom) {
         return;
     }
     ++snapshot.queries;
@@ -45,6 +46,11 @@ inline void NoteRetiredLookup(MAddress from, MAddress to)
             snapshot.to = to;
         }
     }
+}
+
+inline void ExpectFrom(MAddress from)
+{
+    Current().expectedFrom = from;
 }
 
 inline Snapshot Take()

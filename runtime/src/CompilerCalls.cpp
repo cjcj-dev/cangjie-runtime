@@ -28,6 +28,7 @@
 #include "Common/ScopedObjectAccess.h"
 #include "ExceptionManager.inline.h"
 #include "Heap/Barrier/Barrier.h"
+#include "Heap/Allocator/ForwardingTable.h"
 #include "Heap/Allocator/RegionInfo.h"
 #include "Heap/Collector/Collector.h"
 #include "Heap/Collector/CollectorResources.h"
@@ -86,6 +87,8 @@ struct NwReadSnapshot {
     int64_t expected { 0 };
     MAddress slot { 0 };
     MAddress slotRaw { 0 };
+    MAddress beforeTo { 0 };
+    ForwardingTable::ToAnswer beforeAnswer { ForwardingTable::ToAnswer::Unarmed };
     GCPhase phase { GCPhase::GC_PHASE_IDLE };
     NwTargetSnapshot peeled;
     NwTargetSnapshot returned;
@@ -165,6 +168,10 @@ void CaptureNwReadBefore(RefField<false>* field, MAddress rawBefore)
     sample.slotRaw = rawBefore;
     sample.phase = Heap::GetHeap().GetGCPhase();
     SnapshotNwTarget(RefField<>(rawBefore).GetAddress(), sample.peeled);
+    if (sample.peeled.address != 0 && Heap::IsHeapAddress(sample.peeled.address)) {
+        sample.beforeTo = ForwardingTable::LookupTo(sample.peeled.address, &sample.beforeAnswer);
+        ProbeReadRouteDiag::ExpectFrom(sample.peeled.address);
+    }
 }
 
 void CaptureNwReadAfter(ObjectPtr result)
@@ -206,6 +213,7 @@ extern "C" MRT_EXPORT void MRT_NwReadDiagFinish(int64_t got)
     std::fprintf(stderr,
                  "[GCV2][nwread] n=%zu probe=%lld expected=%lld got=%lld captured=%u "
                  "slot=%#llx slot_raw=%#llx phase=%s(%u) "
+                 "before_to=%#llx before_answer=%u "
                  "peeled=%#llx target_header=%#llx target_typeinfo=%#llx target_state=%u "
                  "target_word1=%#llx region_type=%u region_young=%u young_age=%u "
                  "region=[%#llx,%#llx,%#llx) young_face=%d young_mark=%d old_face=%d old_mark=%d "
@@ -220,6 +228,8 @@ extern "C" MRT_EXPORT void MRT_NwReadDiagFinish(int64_t got)
                  static_cast<unsigned long long>(sample.slot),
                  static_cast<unsigned long long>(sample.slotRaw),
                  Collector::GetGCPhaseName(sample.phase), static_cast<unsigned>(sample.phase),
+                 static_cast<unsigned long long>(sample.beforeTo),
+                 static_cast<unsigned>(sample.beforeAnswer),
                  static_cast<unsigned long long>(sample.peeled.address),
                  static_cast<unsigned long long>(sample.peeled.header),
                  static_cast<unsigned long long>(sample.peeled.typeInfo), sample.peeled.stateCode,
