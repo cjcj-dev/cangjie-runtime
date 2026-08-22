@@ -71,6 +71,18 @@ GC_TEST(ObjectGate, RawArrayPlus8RecoversBase)
     GC_EXPECT_EQ(reinterpret_cast<uintptr_t>(host), reinterpret_cast<uintptr_t>(base));
 }
 
+GC_TEST(ObjectGate, GeomCrossEndRejectedOnActiveRegion)
+{
+    GcHeapFixture fx;
+    MAddress regionEnd = fx.region0->GetRegionEnd();
+    auto* tail = reinterpret_cast<BaseObject*>(regionEnd - 8);
+    *reinterpret_cast<uint64_t*>(tail) = reinterpret_cast<uintptr_t>(fx.typeInfo);
+    fx.region0->SetRegionAllocPtr(regionEnd);
+    GC_EXPECT_FALSE(Collector::PlausibleManagedObjectGate("gc_unit.tailslot", tail));
+    BaseObject* host = Collector::TryRecoverInteriorBase(tail);
+    (void)host;
+}
+
 // U5: non-interior (plausible tip) does not invent a host.
 GC_TEST(ObjectGate, NonInteriorNoFalseRecover)
 {

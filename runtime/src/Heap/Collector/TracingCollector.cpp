@@ -356,6 +356,14 @@ public:
                 }
                 continue;
             }
+            if (!Collector::PlausibleManagedObjectGate("ConcurrentMarkingWork.pop", obj)) {
+                BaseObject* host = Collector::TryRecoverInteriorBase(obj);
+                if (host == nullptr || host == obj ||
+                    !Collector::PlausibleManagedObjectGate("ConcurrentMarkingWork.host", host)) {
+                    continue;
+                }
+                obj = host;
+            }
             bool wasMarked = collector.MarkObject(obj);
             if (!wasMarked) {
                 nNewlyMarked++;
