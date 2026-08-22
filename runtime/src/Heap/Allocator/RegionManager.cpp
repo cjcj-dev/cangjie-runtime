@@ -1408,21 +1408,29 @@ void RegionManager::AssemblePinnedGarbageCandidates(bool collectAll)
 YoungCollectionStats RegionManager::PrepareYoungGarbageCandidates(const std::function<void(RegionInfo*)>& visitor)
 {
     YoungCollectionStats stats;
+    uint64_t subStart = TimeUtil::NanoSeconds();
     RegionInfo* oldRegion = fromRegionList.GetHeadRegion();
     while (oldRegion != nullptr) {
         RegionInfo* next = oldRegion->GetNextRegion();
+        ++stats.fromVisited;
+        stats.fromVisitedUnits += oldRegion->GetUnitCount();
         fromRegionList.DeleteRegion(oldRegion);
         ParkUnmovableFromRegion(oldRegion);
         oldRegion = next;
     }
+    stats.reparkNs = TimeUtil::NanoSeconds() - subStart;
 
+    subStart = TimeUtil::NanoSeconds();
     RegionInfo* region = unmovableFromRegionList.GetHeadRegion();
     while (region != nullptr) {
         RegionInfo* next = region->GetNextRegion();
+        ++stats.unmovableVisited;
+        stats.unmovableVisitedUnits += region->GetUnitCount();
         if (!region->IsYoungRegion()) {
             region = next;
             continue;
         }
+        ++stats.unmovableYoung;
         // twoflags: notRelocatable is major-Assemble only. Young mark re-establishes
         // liveness for POST_TRACE-stamped regions — do not skip minor CSet.
         // routedest: that reasoning is about liveness and does not transfer. A route
@@ -1431,37 +1439,64 @@ YoungCollectionStats RegionManager::PrepareYoungGarbageCandidates(const std::fun
         // young (RegionSpace.cpp takes the youngRegion = true default), and the destination
         // recorded at RegionManager.cpp:1957 is exactly such a region — so before this gate a
         // minor collected a live route's destination while honouring nothing.
-        if (RouteDestHold::HoldsBack(region, RouteDestHold::Site::YOUNG_UNMOVABLE)) {
+        const uint64_t holdStart = TimeUtil::NanoSeconds();
+        const bool held = RouteDestHold::HoldsBack(region, RouteDestHold::Site::YOUNG_UNMOVABLE);
+        stats.holdCheckNs += TimeUtil::NanoSeconds() - holdStart;
+        if (held) {
+            ++stats.unmovableHeld;
             region = next;
             continue;
         }
         MarkView<Generation::Young> view = region->GetMarkView<Generation::Young>();
+        const uint64_t clearStart = TimeUtil::NanoSeconds();
         region->ClearLiveInfo(view);
+        stats.clearLiveNs += TimeUtil::NanoSeconds() - clearStart;
+        ++stats.clearLiveRegions;
+        stats.clearLiveUnits += region->GetUnitCount();
+        const uint64_t visitorStart = TimeUtil::NanoSeconds();
         visitor(region);
+        stats.visitorNs += TimeUtil::NanoSeconds() - visitorStart;
         ++stats.candidateRegions;
         stats.candidateBytes += region->GetRegionAllocatedSize();
         if (region->GetRawPointerObjectCount() == 0) {
+            const uint64_t moveStart = TimeUtil::NanoSeconds();
             unmovableFromRegionList.DeleteRegion(region);
             fromRegionList.PrependRegion(region, RegionInfo::RegionType::FROM_REGION);
+            stats.listMoveNs += TimeUtil::NanoSeconds() - moveStart;
         }
         region = next;
     }
+    stats.unmovableNs = TimeUtil::NanoSeconds() - subStart;
 
+    subStart = TimeUtil::NanoSeconds();
     region = recentFullRegionList.GetHeadRegion();
     while (region != nullptr) {
         RegionInfo* next = region->GetNextRegion();
+        ++stats.recentFullVisited;
+        stats.recentFullVisitedUnits += region->GetUnitCount();
         if (!region->IsYoungRegion()) {
             region = next;
             continue;
         }
+        ++stats.recentFullYoung;
         // routedest: same exclusion as the unmovable young loop above.
-        if (RouteDestHold::HoldsBack(region, RouteDestHold::Site::YOUNG_RECENT_FULL)) {
+        const uint64_t holdStart = TimeUtil::NanoSeconds();
+        const bool held = RouteDestHold::HoldsBack(region, RouteDestHold::Site::YOUNG_RECENT_FULL);
+        stats.holdCheckNs += TimeUtil::NanoSeconds() - holdStart;
+        if (held) {
+            ++stats.recentFullHeld;
             region = next;
             continue;
         }
         MarkView<Generation::Young> view = region->GetMarkView<Generation::Young>();
+        const uint64_t clearStart = TimeUtil::NanoSeconds();
         region->ClearLiveInfo(view);
+        stats.clearLiveNs += TimeUtil::NanoSeconds() - clearStart;
+        ++stats.clearLiveRegions;
+        stats.clearLiveUnits += region->GetUnitCount();
+        const uint64_t visitorStart = TimeUtil::NanoSeconds();
         visitor(region);
+        stats.visitorNs += TimeUtil::NanoSeconds() - visitorStart;
         ++stats.candidateRegions;
         stats.candidateBytes += region->GetRegionAllocatedSize();
         if (region->GetRawPointerObjectCount() != 0) {
@@ -1469,11 +1504,14 @@ YoungCollectionStats RegionManager::PrepareYoungGarbageCandidates(const std::fun
             continue;
         }
         const size_t units = region->GetUnitCount();
+        const uint64_t moveStart = TimeUtil::NanoSeconds();
         recentFullRegionList.DeleteRegion(region);
         RecentFullAccounting::Dequeue(1, units);
         fromRegionList.PrependRegion(region, RegionInfo::RegionType::FROM_REGION);
+        stats.listMoveNs += TimeUtil::NanoSeconds() - moveStart;
         region = next;
     }
+    stats.recentFullNs = TimeUtil::NanoSeconds() - subStart;
     return stats;
 }
 

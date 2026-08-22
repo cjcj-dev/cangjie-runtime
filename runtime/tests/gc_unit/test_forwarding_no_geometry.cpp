@@ -33,6 +33,7 @@ GC_TEST(ForwardingNoGeometry, ArmedMissIsNullNotGeometry)
 
     const MAddress from = reinterpret_cast<MAddress>(fx.obj0);
     GC_EXPECT_TRUE(ForwardingTable::EntriesArmed(from));
+    GC_EXPECT_TRUE(ForwardingTable::GetEntries(from)->is_provisional());
 
     BaseObject* geometric = fx.region0->GetRouteForProbe(fx.obj0);
     GC_EXPECT_TRUE(geometric != nullptr);
@@ -47,6 +48,7 @@ GC_TEST(ForwardingNoGeometry, ArmedMissIsNullNotGeometry)
 
     const MAddress stored = fx.heapStart + RegionInfo::UNIT_SIZE + 128;
     GC_EXPECT_EQ(ForwardingTable::InsertMapping(from, stored), stored);
+    GC_EXPECT_FALSE(ForwardingTable::GetEntries(from)->is_provisional());
     ans = ForwardingTable::ToAnswer::Unarmed;
     GC_EXPECT_EQ(ForwardingTable::LookupTo(from, &ans), stored);
     GC_EXPECT_TRUE(ans == ForwardingTable::ToAnswer::ArmedHit);

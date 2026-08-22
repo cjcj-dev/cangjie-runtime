@@ -47,14 +47,14 @@ public:
     }
 
     static ZForwarding* alloc(uint32_t liveObjects, MAddress start, MAddress heapBase, size_t regionSize,
-                              RegionInfo* page, RegionLifeId pageLifeId = 0)
+                              RegionInfo* page, RegionLifeId pageLifeId = 0, bool provisional = false)
     {
         const uint32_t n = nentries(liveObjects);
         void* const addr = AttachedArray::alloc(n);
         if (addr == nullptr) {
             return nullptr;
         }
-        return ::new (addr) ZForwarding(page, start, heapBase, regionSize, n, pageLifeId);
+        return ::new (addr) ZForwarding(page, start, heapBase, regionSize, n, pageLifeId, provisional);
     }
 
     // Kept name so existing tests / ClearEntries continue to compile.
@@ -76,6 +76,7 @@ public:
     RegionLifeId page_life_id() const { return _page_life_id; }
     bool page_life_current(RegionLifeClock::Carrier carrier) const;
     uint32_t length() const { return static_cast<uint32_t>(_entries.length()); }
+    bool is_provisional() const { return _provisional; }
 
     // zPage.inline.hpp:176-185 seqnum bounds livemap/forwarding to one page life.
     // Record the to-region start+regionLifeSeq at insert; consume rejects when
@@ -223,7 +224,7 @@ public:
 private:
     // zForwarding.inline.hpp:59-76
     ZForwarding(RegionInfo* page, MAddress start, MAddress heapBase, size_t regionSize, size_t nentries,
-                RegionLifeId pageLifeId)
+                RegionLifeId pageLifeId, bool provisional)
         : _start(start),
           _size(regionSize),
           _heapBase(heapBase),
@@ -235,7 +236,8 @@ private:
           _ref_count(1),
           _done(false),
           _to_life_n(0),
-          _kept_seen_expire(false)
+          _kept_seen_expire(false),
+          _provisional(provisional)
     {
         _to_lives[0] = ToLife{};
         _to_lives[1] = ToLife{};
@@ -260,6 +262,7 @@ private:
     ToLife _to_lives[3];
     uint8_t _to_life_n;
     bool _kept_seen_expire;
+    const bool _provisional;
 };
 
 // Existing tests and ClearEntries still spell this name.

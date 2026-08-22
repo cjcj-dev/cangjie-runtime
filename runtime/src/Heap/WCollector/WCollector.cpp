@@ -6668,6 +6668,21 @@ void WCollector::DoYoungGarbageCollection()
         stats = manager.PrepareYoungGarbageCandidates(
             [this](RegionInfo* region) { minorCandidateRegions.insert(region); });
     }
+    VLOG(REPORT,
+         "[GCV2][candfix] prepare_candidates candidate_regions=%zu candidate_bytes=%zu "
+         "from_visited=%zu from_units=%zu unmovable_visited=%zu unmovable_units=%zu "
+         "unmovable_young=%zu unmovable_held=%zu recent_visited=%zu recent_units=%zu "
+         "recent_young=%zu recent_held=%zu clear_live_regions=%zu clear_live_units=%zu "
+         "objects_visited=%zu slots_visited=%zu repark_ns=%llu unmovable_ns=%llu recent_ns=%llu "
+         "hold_ns=%llu clear_live_ns=%llu visitor_ns=%llu list_move_ns=%llu",
+         stats.candidateRegions, stats.candidateBytes, stats.fromVisited, stats.fromVisitedUnits,
+         stats.unmovableVisited, stats.unmovableVisitedUnits, stats.unmovableYoung, stats.unmovableHeld,
+         stats.recentFullVisited, stats.recentFullVisitedUnits, stats.recentFullYoung, stats.recentFullHeld,
+         stats.clearLiveRegions, stats.clearLiveUnits, stats.objectVisits, stats.slotVisits,
+         static_cast<unsigned long long>(stats.reparkNs), static_cast<unsigned long long>(stats.unmovableNs),
+         static_cast<unsigned long long>(stats.recentFullNs), static_cast<unsigned long long>(stats.holdCheckNs),
+         static_cast<unsigned long long>(stats.clearLiveNs), static_cast<unsigned long long>(stats.visitorNs),
+         static_cast<unsigned long long>(stats.listMoveNs));
     // HotSpot g1HeapVerifier.cpp:424 verify_region_sets placement: after region accounting is stable.
     VerifyRegionSets("after-prepare-young");
     // Region-set verify after candidate construction (HotSpot verify_region_sets placement intent).
@@ -6976,6 +6991,7 @@ void WCollector::DoYoungGarbageCollection()
     if (FysAuditDiag::Enabled()) {
         FysAuditDiag::PostRescan(rememberedSlots, liveRememberedSlots, consumedSlots, weakSlots);
     }
+    size_t reachableBeforeRemsetClosure = reachableVec.size();
     {
         MRT_PHASE_TIMER("young.mark_from_remset");
         if (youngConcFollow) {
@@ -7434,34 +7450,72 @@ void WCollector::DoYoungGarbageCollection()
     VLOG(REPORT, "[GCV2][setbitmap] use=%d reachable_n=%zu set_n=%zu fullYoung=%d youngConc=%d",
          static_cast<int>(useBitmapLedger), reachableVec.size(), reachableObjects.size(),
          static_cast<int>(fullYoungScan), static_cast<int>(youngConcMark));
-    // iorfix / blackmark: product post-mark fixpoint (always on).
+    // iorfix / blackmark: product post-mark fixpoint.
     // PrepareYoung ClearLiveInfo drops pre-mark allocation-black bits; live holders in
-    // reachableVec can still hold fields to unmarked young (live0Surv=0 at GetRoute).
-    // Re-walk holder fields via ResolveMinorReference and re-enter TraceYoungClosure so
-    // those targets join the route domain *before* PrepareForwardable freezes liveInfo0.
+    // reachableVec used to hold fields to unmarked young (live0Surv=0 at GetRoute). The
+    // wasMarked residual walk (e533489f7) now closes that root frontier in-place. A later
+    // remset/SATB closure can still expand the reachable set and expose the old residual
+    // shape, so re-walk only when work arrived after the root closure. This preserves the
+    // correctness fallback without rescanning a closed root-only graph every minor.
     // Orthogonal to allocate-black paint (youngconc-only after §5.2 delete of MRT_GCV2_ALLOC_BLACK);
     // IOR samples are FixMinorEvacuatedSlot×liveobj with ROUTED+surv0 (REPORT-iorsource).
+    size_t fixpointTotalExtra = 0;
+    size_t fixpointRoundScans = 0;
+    size_t fixpointClosureRounds = 0;
+    size_t fixpointHolderVisits = 0;
+    size_t fixpointHolderNonHeap = 0;
+    size_t fixpointHolderGateSkip = 0;
+    size_t fixpointRefHolders = 0;
+    size_t fixpointRefFields = 0;
+    size_t fixpointTargetNull = 0;
+    size_t fixpointTargetNonHeap = 0;
+    size_t fixpointTargetRecovered = 0;
+    size_t fixpointTargetGateSkip = 0;
+    size_t fixpointTargetNotYoung = 0;
+    size_t fixpointTargetAlreadyMarked = 0;
+    size_t fixpointAdmitted = 0;
+    size_t fixpointReachableAdded = 0;
+    uint64_t fixpointScanNs = 0;
+    uint64_t fixpointClosureNs = 0;
+    const size_t lateReachableAdded = reachableVec.size() - reachableBeforeRemsetClosure;
+    const bool fixpointTriggered = lateReachableAdded != 0;
     {
-        size_t totalExtra = 0;
+        MRT_PHASE_TIMER("young.postmark_fixpoint");
         size_t rounds = 0;
         constexpr size_t kMaxFixpointRounds = 8;
-        for (; rounds < kMaxFixpointRounds; ++rounds) {
+        for (; fixpointTriggered && rounds < kMaxFixpointRounds; ++rounds) {
             WorkStack blackmarkExtra = NewWorkStack();
             const size_t nHolders = reachableVec.size();
+            ++fixpointRoundScans;
+            const uint64_t scanStart = TimeUtil::NanoSeconds();
             for (size_t i = 0; i < nHolders; ++i) {
+                ++fixpointHolderVisits;
                 BaseObject* object = reachableVec[i];
                 if (object == nullptr || !Heap::IsHeapAddress(object)) {
+                    ++fixpointHolderNonHeap;
                     continue;
                 }
                 if (!Collector::PlausibleManagedObjectGate("iorfix.fixpoint.holder", object)) {
+                    ++fixpointHolderGateSkip;
                     continue;
                 }
                 if (!object->HasRefField()) {
                     continue;
                 }
-                object->ForEachRefField([this, &blackmarkExtra, object](RefField<>& field) {
+                ++fixpointRefHolders;
+                object->ForEachRefField([this, &blackmarkExtra, object, &fixpointRefFields,
+                                         &fixpointTargetNull, &fixpointTargetNonHeap,
+                                         &fixpointTargetRecovered, &fixpointTargetGateSkip,
+                                         &fixpointTargetNotYoung, &fixpointTargetAlreadyMarked,
+                                         &fixpointAdmitted](RefField<>& field) {
+                    ++fixpointRefFields;
                     BaseObject* target = ResolveMinorReference(field);
                     if (target == nullptr || !Heap::IsHeapAddress(target)) {
+                        if (target == nullptr) {
+                            ++fixpointTargetNull;
+                        } else {
+                            ++fixpointTargetNonHeap;
+                        }
                         EatArmDiag::NoteFixpointEdge(object, target,
                                                     target == nullptr ? EatArmDiag::FixpointReason::TARGET_NULL
                                                                       : EatArmDiag::FixpointReason::TARGET_NONHEAP);
@@ -7471,20 +7525,25 @@ void WCollector::DoYoungGarbageCollection()
                         BaseObject* host = Collector::TryRecoverInteriorBase(target);
                         if (host != nullptr && host != target) {
                             target = host;
+                            ++fixpointTargetRecovered;
                         } else {
+                            ++fixpointTargetGateSkip;
                             EatArmDiag::NoteFixpointEdge(object, target, EatArmDiag::FixpointReason::PLAUSIBLE_FAIL);
                             return;
                         }
                     }
                     RegionInfo* region = RegionInfo::GetRegionInfoAt(reinterpret_cast<MAddress>(target));
                     if (region == nullptr || !region->IsYoungRegion()) {
+                        ++fixpointTargetNotYoung;
                         EatArmDiag::NoteFixpointEdge(object, target, EatArmDiag::FixpointReason::NOT_YOUNG);
                         return;
                     }
                     if (region->IsMarkedObject(region->GetMarkView<Generation::Young>(), target)) {
+                        ++fixpointTargetAlreadyMarked;
                         EatArmDiag::NoteFixpointEdge(object, target, EatArmDiag::FixpointReason::ALREADY_MARKED);
                         return;
                     }
+                    ++fixpointAdmitted;
                     EatArmDiag::NoteFixpointEdge(object, target, EatArmDiag::FixpointReason::ADMIT);
                     if (UNLIKELY(StartWhoDiag::Enabled())) {
                         StartWhoDiag::NoteProduced(target, StartWhoDiag::Source::HEAP_FIELD,
@@ -7493,24 +7552,38 @@ void WCollector::DoYoungGarbageCollection()
                     blackmarkExtra.push_back(target);
                 });
             }
+            fixpointScanNs += TimeUtil::NanoSeconds() - scanStart;
             if (blackmarkExtra.empty()) {
                 break;
             }
             size_t before = reachableVec.size();
             size_t extraN = blackmarkExtra.size();
+            const uint64_t closureStart = TimeUtil::NanoSeconds();
             TraceYoungClosure(blackmarkExtra, fullYoungScan, reachableObjects, reachableVec, reachableSlots,
                               weakSlots, useBitmapLedger);
-            totalExtra += extraN;
+            fixpointClosureNs += TimeUtil::NanoSeconds() - closureStart;
+            ++fixpointClosureRounds;
+            fixpointTotalExtra += extraN;
+            fixpointReachableAdded += reachableVec.size() - before;
             if (reachableVec.size() == before) {
                 break;
             }
         }
-        if (totalExtra != 0) {
-            VLOG(REPORT,
-                 "[GCV2][iorfix] postmark_fixpoint extra_roots=%zu rounds=%zu reachable_after=%zu",
-                 totalExtra, rounds, reachableVec.size());
-        }
     }
+    VLOG(REPORT,
+         "[GCV2][candfix] postmark_fixpoint trigger=%u root_reachable=%zu late_added=%zu "
+         "round_scans=%zu closure_rounds=%zu holder_visits=%zu "
+         "holder_nonheap=%zu holder_gate_skip=%zu ref_holders=%zu ref_fields=%zu target_null=%zu "
+         "target_nonheap=%zu target_recovered=%zu target_gate_skip=%zu target_not_young=%zu "
+         "target_already_marked=%zu admitted=%zu closure_inputs=%zu reachable_added=%zu "
+         "reachable_after=%zu scan_ns=%llu closure_ns=%llu",
+         static_cast<unsigned>(fixpointTriggered), reachableBeforeRemsetClosure, lateReachableAdded,
+         fixpointRoundScans, fixpointClosureRounds, fixpointHolderVisits, fixpointHolderNonHeap,
+         fixpointHolderGateSkip, fixpointRefHolders, fixpointRefFields, fixpointTargetNull,
+         fixpointTargetNonHeap, fixpointTargetRecovered, fixpointTargetGateSkip, fixpointTargetNotYoung,
+         fixpointTargetAlreadyMarked, fixpointAdmitted, fixpointTotalExtra, fixpointReachableAdded,
+         reachableVec.size(), static_cast<unsigned long long>(fixpointScanNs),
+         static_cast<unsigned long long>(fixpointClosureNs));
     EatArmDiag::DumpMinorSummary(minorTotalRuns + 1);
     static const bool verifyRemsetEnabled = []() {
         const char* value = std::getenv("MRT_GCV2_VERIFY_REMSET");
