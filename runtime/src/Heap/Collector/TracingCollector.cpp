@@ -265,6 +265,14 @@ public:
         // major claim without adding work to the common !wasMarked branch.
         HealPairDiag::ScopedMajorMarkTask majorMarkTask;
         size_t nNewlyMarked = 0;
+        auto traceFields = [this](BaseObject* object) {
+            const bool measure = DribbleDiagEnabled();
+            const uint64_t start = measure ? TimeUtil::NanoSeconds() : 0;
+            collector.TraceObjectRefFields(object, workStack);
+            if (measure) {
+                DribbleDiagNoteFieldScan(TimeUtil::NanoSeconds() - start);
+            }
+        };
         // loop until work stack empty.
         for (;;) {
             if (workStack.empty()) {
@@ -273,13 +281,19 @@ public:
             // get next object from work stack.
             BaseObject* obj = workStack.back();
             workStack.pop_back();
+            DribbleDiagNotePop();
             // A partial-array chunk is a continuation of an array that was
             // already marked, so it skips MarkObject entirely -- same order as
             // ZGC's ZMark::mark_and_follow (zMark.cpp:392-400), which dispatches
             // on the partial_array flag before the mark step. Forking still runs
             // below, which is the point: the chunk makes the tail stealable.
             if (UNLIKELY(MarkPartialArray::IsPartialArrayEntry(obj))) {
+                const bool measure = DribbleDiagEnabled();
+                const uint64_t start = measure ? TimeUtil::NanoSeconds() : 0;
                 collector.FollowPartialArray(obj, workStack);
+                if (measure) {
+                    DribbleDiagNoteFieldScan(TimeUtil::NanoSeconds() - start);
+                }
                 if (threadPool != nullptr) {
                     TryForkTask();
                 }
@@ -308,11 +322,11 @@ public:
                         collector.GetAndTryTagObj(TracingCollector::RefSlotKind::WEAK_REFERENT, obj, referentField);
                     if (referent != nullptr) {
                         DLOG(TRACE, "trace weakref obj %p ref@%p: 0x%zx", obj, &referent, referent);
-                        collector.TraceObjectRefFields(referent, workStack);
+                        traceFields(referent);
                         WeakRefBuffer::Instance().Insert(obj); // record live weakref objects
                     } // If referent is set to none, the corresponding weakref does not need to be recorded.
                 } else {
-                    collector.TraceObjectRefFields(obj, workStack);
+                    traceFields(obj);
                 }
             } else {
                 SurvNodeDiag::NoteFollowHolder(obj, SurvNodeDiag::FOLLOW_SKIP_MARKED);
@@ -777,7 +791,24 @@ void TracingCollector::DoTracing(WorkStack& workStack, WorkStack& foreignRootsSe
 
     {
         MRT_PHASE_TIMER("Concurrent marking");
+        const bool dribble = DribbleDiagEnabled();
+        const uint64_t initialStartNs = dribble ? TimeUtil::NanoSeconds() : 0;
+        if (dribble) {
+            DribbleDiagBeginRound();
+        }
         TracingImpl(workStack, foreignRootsSet, maxWorkers > 0);
+        if (dribble) {
+            const uint64_t initialNs = TimeUtil::NanoSeconds() - initialStartNs;
+            const DribbleSnapshot snap = DribbleDiagSnapshot();
+            DribbleDiagEnd();
+            VLOG(REPORT,
+                 "[GCV2][dribble][major-initial] pop=%llu push=%llu field_scans=%llu "
+                 "dur_ns=%llu field_ns=%llu other_ns=%llu",
+                 static_cast<unsigned long long>(snap.pops), static_cast<unsigned long long>(snap.pushes),
+                 static_cast<unsigned long long>(snap.fieldScans), static_cast<unsigned long long>(initialNs),
+                 static_cast<unsigned long long>(snap.fieldNs),
+                 static_cast<unsigned long long>(initialNs > snap.fieldNs ? initialNs - snap.fieldNs : 0));
+        }
     }
 
     {
@@ -822,7 +853,25 @@ bool TracingCollector::MarkSatbBuffer(WorkStack& workStack)
     // the first says the concurrent termination test was right, the second says the
     // flush is not reaching the mutators' nodes at all.
     size_t satbSeen = 0;
-    auto visitSatbObj = [this, &workStack, &satbSeen]() {
+    const bool dribble = DribbleDiagEnabled();
+    uint64_t roundStartNs = TimeUtil::NanoSeconds();
+    uint64_t pollNs = 0;
+    uint64_t closureNs = 0;
+    uint64_t phaseNs = 0;
+    uint64_t totalRoundNs = 0;
+    uint64_t totalFieldNs = 0;
+    uint64_t totalPollNs = 0;
+    uint64_t totalClosureNs = 0;
+    uint64_t totalPhaseNs = 0;
+    uint64_t totalPops = 0;
+    uint64_t totalPushes = 0;
+    uint64_t totalRetired = 0;
+    size_t roundSatbStart = 0;
+    if (dribble) {
+        DribbleDiagBeginRound();
+    }
+    auto visitSatbObj = [this, &workStack, &satbSeen, dribble, &pollNs]() {
+        const uint64_t start = dribble ? TimeUtil::NanoSeconds() : 0;
         WorkStack remarkStack;
         SatbBuffer::Instance().GetRetiredObjects(remarkStack);
 
@@ -832,9 +881,67 @@ bool TracingCollector::MarkSatbBuffer(WorkStack& workStack)
             ++satbSeen;
             if (Heap::IsHeapAddress(obj) && !this->IsMarkedObject<Generation::Old>(obj)) {
                 workStack.push_back(obj);
+                DribbleDiagNotePush();
                 DLOG(TRACE, "satb buffer add obj %p", obj);
             }
         }
+        if (dribble) {
+            pollNs += TimeUtil::NanoSeconds() - start;
+        }
+    };
+
+    auto traceClosure = [this, &workStack, dribble, &closureNs]() {
+        const uint64_t start = dribble ? TimeUtil::NanoSeconds() : 0;
+        GCThreadPool* threadPool = GetThreadPool();
+        WorkStack tmp;
+        TracingImpl(workStack, tmp,
+                    (workStack.size() > MAX_MARKING_WORK_SIZE) || (threadPool->GetWorkCount() > 0));
+        if (dribble) {
+            closureNs += TimeUtil::NanoSeconds() - start;
+        }
+    };
+    auto transitionClear = [this, dribble, &phaseNs]() {
+        const uint64_t start = dribble ? TimeUtil::NanoSeconds() : 0;
+        TransitionToGCPhase(GCPhase::GC_PHASE_CLEAR_SATB_BUFFER, true);
+        if (dribble) {
+            phaseNs += TimeUtil::NanoSeconds() - start;
+        }
+    };
+    auto finishRound = [&](uint64_t iter, const char* exit) {
+        if (!dribble) {
+            return;
+        }
+        const uint64_t now = TimeUtil::NanoSeconds();
+        const uint64_t duration = now - roundStartNs;
+        const DribbleSnapshot snap = DribbleDiagSnapshot();
+        const uint64_t retired = satbSeen - roundSatbStart;
+        const uint64_t accounted = pollNs + closureNs + phaseNs;
+        const uint64_t otherNs = duration > accounted ? duration - accounted : 0;
+        VLOG(REPORT,
+             "[GCV2][dribble][major-round] iter=%llu exit=%s retired=%llu pop=%llu push=%llu "
+             "field_scans=%llu dur_ns=%llu field_ns=%llu poll_ns=%llu closure_ns=%llu phase_ns=%llu "
+             "other_ns=%llu",
+             static_cast<unsigned long long>(iter), exit, static_cast<unsigned long long>(retired),
+             static_cast<unsigned long long>(snap.pops), static_cast<unsigned long long>(snap.pushes),
+             static_cast<unsigned long long>(snap.fieldScans), static_cast<unsigned long long>(duration),
+             static_cast<unsigned long long>(snap.fieldNs), static_cast<unsigned long long>(pollNs),
+             static_cast<unsigned long long>(closureNs), static_cast<unsigned long long>(phaseNs),
+             static_cast<unsigned long long>(otherNs));
+        totalRoundNs += duration;
+        totalFieldNs += snap.fieldNs;
+        totalPollNs += pollNs;
+        totalClosureNs += closureNs;
+        totalPhaseNs += phaseNs;
+        totalPops += snap.pops;
+        totalPushes += snap.pushes;
+        totalRetired += retired;
+        // Keep the diagnostic's own VLOG/aggregation cost out of the next round.
+        roundStartNs = TimeUtil::NanoSeconds();
+        roundSatbStart = satbSeen;
+        pollNs = 0;
+        closureNs = 0;
+        phaseNs = 0;
+        DribbleDiagResetRound();
     };
 
     visitSatbObj();
@@ -845,27 +952,29 @@ bool TracingCollector::MarkSatbBuffer(WorkStack& workStack)
             ScopedStopTheWorld stw("MarkSatbBuffer timeout", true, GCPhase::GC_PHASE_CLEAR_SATB_BUFFER);
             VLOG(REPORT, "MarkSatbBuffer is done for timeout");
             visitSatbObj();
-            GCThreadPool* threadPool = GetThreadPool();
-            WorkStack tmp;
-            TracingImpl(workStack, tmp, (workStack.size() > MAX_MARKING_WORK_SIZE) || (threadPool->GetWorkCount() > 0));
+            traceClosure();
+            finishRound(iterationCnt, "timeout");
+            if (dribble) {
+                DribbleDiagEnd();
+            }
             return workStack.empty();
         }
         if (LIKELY(!workStack.empty())) {
-            GCThreadPool* threadPool = GetThreadPool();
-            WorkStack tmp;
-            TracingImpl(workStack, tmp, (workStack.size() > MAX_MARKING_WORK_SIZE) || (threadPool->GetWorkCount() > 0));
+            traceClosure();
         }
         visitSatbObj();
         if (!workStack.empty()) {
+            finishRound(iterationCnt, "work");
             continue;
         }
         // Publish CLEAR_SATB so mutators stop treating this as plain TRACE. This is a
         // handshake, not a pause, so it can never be the termination test: a mutator
         // that has already acknowledged it runs on and may enqueue again.
         if (Heap::GetHeap().GetGCPhase() != GCPhase::GC_PHASE_CLEAR_SATB_BUFFER) {
-            TransitionToGCPhase(GCPhase::GC_PHASE_CLEAR_SATB_BUFFER, true);
+            transitionClear();
             visitSatbObj();
             if (!workStack.empty()) {
+                finishRound(iterationCnt, "phase-work");
                 continue;
             }
         }
@@ -884,11 +993,13 @@ bool TracingCollector::MarkSatbBuffer(WorkStack& workStack)
         if (!MarkTerminateInPauseEnabled()) {
             // Ablation arm: the pre-existing behaviour, kept reachable so the pause can
             // be measured against its own absence in one binary rather than two.
-            TransitionToGCPhase(GCPhase::GC_PHASE_CLEAR_SATB_BUFFER, true);
+            transitionClear();
             visitSatbObj();
             if (workStack.empty()) {
+                finishRound(iterationCnt, "empty");
                 break;
             }
+            finishRound(iterationCnt, "retry");
             continue;
         }
         bool terminated = false;
@@ -902,13 +1013,26 @@ bool TracingCollector::MarkSatbBuffer(WorkStack& workStack)
             terminated = workStack.empty();
         }
         if (terminated) {
+            finishRound(iterationCnt, "pause-empty");
             break;
         }
         // ZMark::_ncontinue: the pause found work the concurrent phase had declared
         // absent. Report it -- a non-zero here is the direct measurement of records
         // the pre-pause termination test used to drop.
         NoteMarkTerminateContinue(workStack.size());
+        finishRound(iterationCnt, "pause-retry");
     } while (true);
+    if (dribble) {
+        DribbleDiagEnd();
+        VLOG(REPORT,
+             "[GCV2][dribble][major-summary] rounds=%llu retired=%llu pop=%llu push=%llu "
+             "dur_ns=%llu field_ns=%llu poll_ns=%llu closure_ns=%llu phase_ns=%llu",
+             static_cast<unsigned long long>(iterationCnt), static_cast<unsigned long long>(totalRetired),
+             static_cast<unsigned long long>(totalPops), static_cast<unsigned long long>(totalPushes),
+             static_cast<unsigned long long>(totalRoundNs), static_cast<unsigned long long>(totalFieldNs),
+             static_cast<unsigned long long>(totalPollNs), static_cast<unsigned long long>(totalClosureNs),
+             static_cast<unsigned long long>(totalPhaseNs));
+    }
     ReportMarkTerminateContinue();
     return true;
 }

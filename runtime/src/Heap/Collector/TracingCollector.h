@@ -35,6 +35,25 @@ constexpr uint64_t NS_PER_S = 1000000000;
 constexpr bool kMarkTerminateInPause = false;
 inline bool MarkTerminateInPauseEnabled() { return kMarkTerminateInPause; }
 
+// Default-off per-round mark accounting shared by the major and young closure
+// implementations. Definitions live with WCollector's concrete field walker.
+struct DribbleSnapshot {
+    uint64_t pops;
+    uint64_t pushes;
+    uint64_t fieldScans;
+    uint64_t fieldNs;
+    uint64_t yieldCalls;
+    uint64_t yieldNs;
+};
+bool DribbleDiagEnabled();
+void DribbleDiagBeginRound();
+void DribbleDiagEnd();
+void DribbleDiagResetRound();
+DribbleSnapshot DribbleDiagSnapshot();
+void DribbleDiagNotePop();
+void DribbleDiagNotePush();
+void DribbleDiagNoteFieldScan(uint64_t ns);
+
 void NoteMarkTerminatePause();
 void NoteMarkTerminateFlushed(size_t n);
 void NoteMarkTerminateContinue(size_t stackSize);

@@ -982,6 +982,7 @@ void WCollector::TraceRefField(BaseObject* obj, RefField<>& field, WorkStack& wo
             }
             SurvNodeDiag::NoteTraceVisit(&field, targetObj, SurvNodeDiag::TRACE_PUSH);
             workStack.push_back(targetObj);
+            DribbleDiagNotePush();
         } else {
             SurvNodeDiag::NoteTraceVisit(&field, targetObj, SurvNodeDiag::TRACE_SKIP_MARKED);
         }
@@ -1037,6 +1038,7 @@ void WCollector::TraceRefField(BaseObject* obj, RefField<>& field, WorkStack& wo
         }
         SurvNodeDiag::NoteTraceVisit(&field, latest, SurvNodeDiag::TRACE_PUSH);
         workStack.push_back(latest);
+        DribbleDiagNotePush();
     } else {
         SurvNodeDiag::NoteTraceVisit(&field, latest, SurvNodeDiag::TRACE_SKIP_MARKED);
     }
@@ -1056,6 +1058,7 @@ void WCollector::PushPartialArray(RefField<>* addr, size_t length, WorkStack& wo
     }
     MarkPartialArray::NoteChunkPushed();
     workStack.push_back(MarkPartialArray::Encode(addr, length));
+    DribbleDiagNotePush();
 }
 
 // zMark.cpp:208-214 (follow_array_elements_small).
@@ -2999,6 +3002,116 @@ void WCollector::VisitMinorRoots(const std::function<void(BaseObject*)>& visitor
     VisitMinorValueRoots(visitor);
 }
 
+namespace {
+// dribble: default-off accounting for one MarkYoungSatbBuffer iteration. The
+// counters are active only while that loop owns the young closure, so the STW
+// users of the same helpers do not enter this ledger. ZGC comparison anchors:
+// follow_work/try_terminate (zMark.cpp:635-664) and mark-end
+// try_end/_ncontinue (zMark.cpp:954-990).
+struct DribbleCounters {
+    std::atomic<bool> active{ false };
+    std::atomic<uint64_t> pops{ 0 };
+    std::atomic<uint64_t> pushes{ 0 };
+    std::atomic<uint64_t> fieldScans{ 0 };
+    std::atomic<uint64_t> fieldNs{ 0 };
+    std::atomic<uint64_t> yieldCalls{ 0 };
+    std::atomic<uint64_t> yieldNs{ 0 };
+};
+
+DribbleCounters g_dribble;
+
+bool DribbleEnabled()
+{
+    static const bool enabled = []() {
+        const char* value = std::getenv("MRT_GCV2_DRIBBLE");
+        return value != nullptr && std::strcmp(value, "1") == 0;
+    }();
+    return enabled;
+}
+
+void DribbleResetCounters()
+{
+    g_dribble.pops.store(0, std::memory_order_relaxed);
+    g_dribble.pushes.store(0, std::memory_order_relaxed);
+    g_dribble.fieldScans.store(0, std::memory_order_relaxed);
+    g_dribble.fieldNs.store(0, std::memory_order_relaxed);
+    g_dribble.yieldCalls.store(0, std::memory_order_relaxed);
+    g_dribble.yieldNs.store(0, std::memory_order_relaxed);
+}
+
+void DribbleNotePop()
+{
+    if (UNLIKELY(g_dribble.active.load(std::memory_order_relaxed))) {
+        g_dribble.pops.fetch_add(1, std::memory_order_relaxed);
+    }
+}
+
+void DribbleNotePush()
+{
+    if (UNLIKELY(g_dribble.active.load(std::memory_order_relaxed))) {
+        g_dribble.pushes.fetch_add(1, std::memory_order_relaxed);
+    }
+}
+
+template<typename Visitor>
+void DribbleForEachRefField(BaseObject* object, Visitor visitor)
+{
+    if (LIKELY(!g_dribble.active.load(std::memory_order_relaxed))) {
+        object->ForEachRefField(visitor);
+        return;
+    }
+    const uint64_t start = TimeUtil::NanoSeconds();
+    object->ForEachRefField(visitor);
+    g_dribble.fieldNs.fetch_add(TimeUtil::NanoSeconds() - start, std::memory_order_relaxed);
+    g_dribble.fieldScans.fetch_add(1, std::memory_order_relaxed);
+}
+
+void DribbleNoteYieldWait(uint64_t start, uint64_t calls)
+{
+    if (start == 0) {
+        return;
+    }
+    g_dribble.yieldNs.fetch_add(TimeUtil::NanoSeconds() - start, std::memory_order_relaxed);
+    g_dribble.yieldCalls.fetch_add(calls, std::memory_order_relaxed);
+}
+} // namespace
+
+bool DribbleDiagEnabled() { return DribbleEnabled(); }
+
+void DribbleDiagBeginRound()
+{
+    DribbleResetCounters();
+    g_dribble.active.store(true, std::memory_order_release);
+}
+
+void DribbleDiagEnd() { g_dribble.active.store(false, std::memory_order_release); }
+
+void DribbleDiagResetRound() { DribbleResetCounters(); }
+
+DribbleSnapshot DribbleDiagSnapshot()
+{
+    return DribbleSnapshot{
+        g_dribble.pops.load(std::memory_order_relaxed),
+        g_dribble.pushes.load(std::memory_order_relaxed),
+        g_dribble.fieldScans.load(std::memory_order_relaxed),
+        g_dribble.fieldNs.load(std::memory_order_relaxed),
+        g_dribble.yieldCalls.load(std::memory_order_relaxed),
+        g_dribble.yieldNs.load(std::memory_order_relaxed)
+    };
+}
+
+void DribbleDiagNotePop() { DribbleNotePop(); }
+
+void DribbleDiagNotePush() { DribbleNotePush(); }
+
+void DribbleDiagNoteFieldScan(uint64_t ns)
+{
+    if (UNLIKELY(g_dribble.active.load(std::memory_order_relaxed))) {
+        g_dribble.fieldNs.fetch_add(ns, std::memory_order_relaxed);
+        g_dribble.fieldScans.fetch_add(1, std::memory_order_relaxed);
+    }
+}
+
 void WCollector::PushYoungObject(BaseObject* object, WorkStack& workStack, const char* origin) const
 {
     if (!Heap::IsHeapAddress(object)) {
@@ -3117,6 +3230,7 @@ void WCollector::PushYoungObject(BaseObject* object, WorkStack& workStack, const
             }
         }
         workStack.push_back(object);
+        DribbleNotePush();
     } else if (UNLIKELY(StartWhoDiag::Enabled()) && origin != nullptr &&
                (std::strcmp(origin, "alloc_buffer") == 0 ||
                 std::strcmp(origin, "alloc_buffer_final") == 0)) {
@@ -3204,6 +3318,7 @@ void PushAdmittedYoung(BaseObject* object, TracingCollector::WorkStack& workStac
             HeldFreeDiag::NotePush(admitted, origin);
         }
         workStack.push_back(admitted);
+        DribbleNotePush();
     }
 }
 
@@ -3334,6 +3449,7 @@ public:
             }
             BaseObject* object = workStack.back();
             workStack.pop_back();
+            DribbleNotePop();
             if (!Heap::IsHeapAddress(object)) {
                 continue;
             }
@@ -3354,7 +3470,7 @@ public:
                         // ghostroute: residual unmarked young only (no FYS re-push of marked).
                         EatArmDiag::NoteWasMarkedSkipFields(object);
                         if (object->HasRefField() && !object->IsWeakRef()) {
-                            object->ForEachRefField([collector, this, object](RefField<>& field) {
+                            DribbleForEachRefField(object, [collector, this, object](RefField<>& field) {
                                 BaseObject* target = collector->ResolveMinorReference(field);
                                 if (target == nullptr || !Heap::IsHeapAddress(target)) {
                                     return;
@@ -3397,7 +3513,7 @@ public:
                     if (wasMarked) {
                         EatArmDiag::NoteWasMarkedSkipFields(object);
                         if (object->HasRefField() && !object->IsWeakRef()) {
-                            object->ForEachRefField([collector, this, object](RefField<>& field) {
+                            DribbleForEachRefField(object, [collector, this, object](RefField<>& field) {
                                 BaseObject* target = collector->ResolveMinorReference(field);
                                 if (target == nullptr || !Heap::IsHeapAddress(target)) {
                                     return;
@@ -3456,13 +3572,13 @@ public:
                     continue;
                 }
                 // weak referent double-scan: do not claim referent; N2 CAS converge.
-                referent->ForEachRefField([&pushTarget](RefField<>& field) { pushTarget(field); });
+                DribbleForEachRefField(referent, [&pushTarget](RefField<>& field) { pushTarget(field); });
                 if (shared.pool != nullptr) {
                     TryForkTask();
                 }
                 continue;
             }
-            object->ForEachRefField([this, &localSlots, &pushTarget, recordSlots](RefField<>& field) {
+            DribbleForEachRefField(object, [this, &localSlots, &pushTarget, recordSlots](RefField<>& field) {
                 MAddress slot = reinterpret_cast<MAddress>(&field);
                 if (recordSlots &&
                     (shared.reachableSlotDomain == nullptr || shared.reachableSlotDomain->count(slot) != 0)) {
@@ -3545,6 +3661,7 @@ public:
             }
             BaseObject* object = localStacks[currentStripe].back();
             localStacks[currentStripe].pop_back();
+            DribbleNotePop();
             shared.outputs[workerSlot]->touched = true;
             ProcessObject(object, nMarked);
         }
@@ -3604,18 +3721,24 @@ private:
 
     bool WaitForWorkOrDone()
     {
+        const uint64_t waitStart = g_dribble.active.load(std::memory_order_relaxed) ? TimeUtil::NanoSeconds() : 0;
+        uint64_t yieldCalls = 0;
         size_t idle = shared.idleWorkers.fetch_add(1, std::memory_order_acq_rel) + 1;
         if (idle == shared.workerCount && !HasPublishedWork()) {
             shared.done.store(true, std::memory_order_release);
+            DribbleNoteYieldWait(waitStart, yieldCalls);
             return true;
         }
         while (!shared.done.load(std::memory_order_acquire)) {
             if (HasPublishedWork()) {
                 shared.idleWorkers.fetch_sub(1, std::memory_order_acq_rel);
+                DribbleNoteYieldWait(waitStart, yieldCalls);
                 return false;
             }
             std::this_thread::yield();
+            ++yieldCalls;
         }
+        DribbleNoteYieldWait(waitStart, yieldCalls);
         return true;
     }
 
@@ -3694,6 +3817,7 @@ private:
         const size_t stripeIndex = shared.StripeFor(object);
         auto& local = localStacks[stripeIndex];
         local.push_back(object);
+        DribbleNotePush();
         if (stripeIndex != currentStripe && local.size() >= kMarkStripeLocalCapacity) {
             PublishLocal(stripeIndex);
         }
@@ -3790,7 +3914,7 @@ private:
                 if (wasMarked) {
                     EatArmDiag::NoteWasMarkedSkipFields(object);
                     if (object->HasRefField() && !object->IsWeakRef()) {
-                        object->ForEachRefField([this, object](RefField<>& field) {
+                        DribbleForEachRefField(object, [this, object](RefField<>& field) {
                             PushResidualYoungChild(field, object, "ghostroute.striped.bitmap");
                         });
                     }
@@ -3808,7 +3932,7 @@ private:
                 if (wasMarked) {
                     EatArmDiag::NoteWasMarkedSkipFields(object);
                     if (object->HasRefField() && !object->IsWeakRef()) {
-                        object->ForEachRefField([this, object](RefField<>& field) {
+                        DribbleForEachRefField(object, [this, object](RefField<>& field) {
                             PushResidualYoungChild(field, object, "ghostroute.striped.legacy");
                         });
                     }
@@ -3843,10 +3967,10 @@ private:
             if (!Heap::IsHeapAddress(referent)) {
                 return;
             }
-            referent->ForEachRefField([&pushTarget](RefField<>& field) { pushTarget(field); });
+            DribbleForEachRefField(referent, [&pushTarget](RefField<>& field) { pushTarget(field); });
             return;
         }
-        object->ForEachRefField([this, &localSlots, &pushTarget](RefField<>& field) {
+        DribbleForEachRefField(object, [this, &localSlots, &pushTarget](RefField<>& field) {
             MAddress slot = reinterpret_cast<MAddress>(&field);
             if (shared.recordSlots &&
                 (shared.reachableSlotDomain == nullptr || shared.reachableSlotDomain->count(slot) != 0)) {
@@ -3889,6 +4013,7 @@ void WCollector::TraceYoungClosureSerial(WorkStack& workStack, bool fullYoungSca
     while (!workStack.empty()) {
         BaseObject* object = workStack.back();
         workStack.pop_back();
+        DribbleNotePop();
         if (!Heap::IsHeapAddress(object)) {
             continue;
         }
@@ -3911,7 +4036,7 @@ void WCollector::TraceYoungClosureSerial(WorkStack& workStack, bool fullYoungSca
                     if (!object->HasRefField() || object->IsWeakRef()) {
                         continue;
                     }
-                    object->ForEachRefField([this, &workStack, object](RefField<>& field) {
+                    DribbleForEachRefField(object, [this, &workStack, object](RefField<>& field) {
                         BaseObject* target = ResolveMinorReference(field);
                         if (target == nullptr || !Heap::IsHeapAddress(target)) {
                             return;
@@ -3944,7 +4069,7 @@ void WCollector::TraceYoungClosureSerial(WorkStack& workStack, bool fullYoungSca
             if (!LedgerInsert(reachableObjects, object)) {
                 EatArmDiag::NoteWasMarkedSkipFields(object);
                 if (isYoung && object->HasRefField() && !object->IsWeakRef()) {
-                    object->ForEachRefField([this, &workStack, object](RefField<>& field) {
+                    DribbleForEachRefField(object, [this, &workStack, object](RefField<>& field) {
                         BaseObject* target = ResolveMinorReference(field);
                         if (target == nullptr || !Heap::IsHeapAddress(target)) {
                             return;
@@ -3988,10 +4113,10 @@ void WCollector::TraceYoungClosureSerial(WorkStack& workStack, bool fullYoungSca
             if (!Heap::IsHeapAddress(referent)) {
                 continue;
             }
-            referent->ForEachRefField([&pushTarget](RefField<>& field) { pushTarget(field); });
+            DribbleForEachRefField(referent, [&pushTarget](RefField<>& field) { pushTarget(field); });
             continue;
         }
-        object->ForEachRefField([&recordReachableSlot, &pushTarget, recordSlots](RefField<>& field) {
+        DribbleForEachRefField(object, [&recordReachableSlot, &pushTarget, recordSlots](RefField<>& field) {
             if (recordSlots) {
                 recordReachableSlot(field);
             }
@@ -4273,7 +4398,27 @@ bool WCollector::MarkYoungSatbBuffer(WorkStack& workStack, bool fullYoungScan, M
     // is counted at the pop, not at the push -- the question this answers is "did the
     // window do GC work", not "how many greys survived the filter".
     size_t satbSeen = 0;
-    auto visitSatbObj = [this, &workStack, windowStats, &satbSeen]() {
+    const bool dribble = DribbleEnabled();
+    uint64_t roundStartNs = TimeUtil::NanoSeconds();
+    uint64_t pollNs = 0;
+    uint64_t closureNs = 0;
+    uint64_t phaseNs = 0;
+    uint64_t totalRoundNs = 0;
+    uint64_t totalFieldNs = 0;
+    uint64_t totalPollNs = 0;
+    uint64_t totalClosureNs = 0;
+    uint64_t totalPhaseNs = 0;
+    uint64_t totalYieldNs = 0;
+    uint64_t totalPops = 0;
+    uint64_t totalPushes = 0;
+    uint64_t totalRetired = 0;
+    size_t roundSatbStart = 0;
+    if (dribble) {
+        DribbleResetCounters();
+        g_dribble.active.store(true, std::memory_order_release);
+    }
+    auto visitSatbObj = [this, &workStack, windowStats, &satbSeen, dribble, &pollNs]() {
+        const uint64_t start = dribble ? TimeUtil::NanoSeconds() : 0;
         WorkStack remarkStack;
         SatbBuffer::Instance().GetRetiredObjects(remarkStack);
         while (!remarkStack.empty()) {
@@ -4288,6 +4433,68 @@ bool WCollector::MarkYoungSatbBuffer(WorkStack& workStack, bool fullYoungScan, M
             }
             PushYoungObject(obj, workStack, "young_satb");
         }
+        if (dribble) {
+            pollNs += TimeUtil::NanoSeconds() - start;
+        }
+    };
+    auto traceClosure = [this, &workStack, fullYoungScan, &reachableObjects, &reachableVec, &reachableSlots,
+                         &weakSlots, useBitmapLedger, dribble, &closureNs]() {
+        const uint64_t start = dribble ? TimeUtil::NanoSeconds() : 0;
+        TraceYoungClosure(workStack, fullYoungScan, reachableObjects, reachableVec, reachableSlots, weakSlots,
+                          useBitmapLedger);
+        if (dribble) {
+            closureNs += TimeUtil::NanoSeconds() - start;
+        }
+    };
+    auto transitionClear = [this, dribble, &phaseNs]() {
+        const uint64_t start = dribble ? TimeUtil::NanoSeconds() : 0;
+        TransitionToGCPhase(GCPhase::GC_PHASE_CLEAR_SATB_BUFFER, true);
+        if (dribble) {
+            phaseNs += TimeUtil::NanoSeconds() - start;
+        }
+    };
+    auto finishRound = [&](uint64_t iter, const char* exit) {
+        if (!dribble) {
+            return;
+        }
+        const uint64_t now = TimeUtil::NanoSeconds();
+        const uint64_t duration = now - roundStartNs;
+        const uint64_t pops = g_dribble.pops.load(std::memory_order_relaxed);
+        const uint64_t pushes = g_dribble.pushes.load(std::memory_order_relaxed);
+        const uint64_t fieldScans = g_dribble.fieldScans.load(std::memory_order_relaxed);
+        const uint64_t fieldNs = g_dribble.fieldNs.load(std::memory_order_relaxed);
+        const uint64_t yieldCalls = g_dribble.yieldCalls.load(std::memory_order_relaxed);
+        const uint64_t yieldNs = g_dribble.yieldNs.load(std::memory_order_relaxed);
+        const uint64_t retired = satbSeen - roundSatbStart;
+        const uint64_t accounted = pollNs + closureNs + phaseNs;
+        const uint64_t otherNs = duration > accounted ? duration - accounted : 0;
+        VLOG(REPORT,
+             "[GCV2][dribble][young-round] iter=%llu exit=%s retired=%llu pop=%llu push=%llu "
+             "field_scans=%llu dur_ns=%llu field_ns=%llu poll_ns=%llu closure_ns=%llu phase_ns=%llu "
+             "yield_calls=%llu yield_ns=%llu other_ns=%llu",
+             static_cast<unsigned long long>(iter), exit, static_cast<unsigned long long>(retired),
+             static_cast<unsigned long long>(pops), static_cast<unsigned long long>(pushes),
+             static_cast<unsigned long long>(fieldScans), static_cast<unsigned long long>(duration),
+             static_cast<unsigned long long>(fieldNs), static_cast<unsigned long long>(pollNs),
+             static_cast<unsigned long long>(closureNs), static_cast<unsigned long long>(phaseNs),
+             static_cast<unsigned long long>(yieldCalls), static_cast<unsigned long long>(yieldNs),
+             static_cast<unsigned long long>(otherNs));
+        totalRoundNs += duration;
+        totalFieldNs += fieldNs;
+        totalPollNs += pollNs;
+        totalClosureNs += closureNs;
+        totalPhaseNs += phaseNs;
+        totalYieldNs += yieldNs;
+        totalPops += pops;
+        totalPushes += pushes;
+        totalRetired += retired;
+        // Keep the diagnostic's own VLOG/aggregation cost out of the next round.
+        roundStartNs = TimeUtil::NanoSeconds();
+        roundSatbStart = satbSeen;
+        pollNs = 0;
+        closureNs = 0;
+        phaseNs = 0;
+        DribbleResetCounters();
     };
     visitSatbObj();
     uint64_t iterationCnt = 0;
@@ -4313,8 +4520,9 @@ bool WCollector::MarkYoungSatbBuffer(WorkStack& workStack, bool fullYoungScan, M
             if (windowStats != nullptr) {
                 ++windowStats->closureCalls;
             }
-            TraceYoungClosure(workStack, fullYoungScan, reachableObjects, reachableVec, reachableSlots, weakSlots,
-                              useBitmapLedger);
+            traceClosure();
+            finishRound(iterationCnt, "timeout");
+            g_dribble.active.store(false, std::memory_order_release);
             ReportMarkTerminateContinue();
             return workStack.empty();
         }
@@ -4322,28 +4530,31 @@ bool WCollector::MarkYoungSatbBuffer(WorkStack& workStack, bool fullYoungScan, M
             if (windowStats != nullptr) {
                 ++windowStats->closureCalls;
             }
-            TraceYoungClosure(workStack, fullYoungScan, reachableObjects, reachableVec, reachableSlots, weakSlots,
-                              useBitmapLedger);
+            traceClosure();
         }
         visitSatbObj();
         if (!workStack.empty()) {
+            finishRound(iterationCnt, "work");
             continue;
         }
         // Handshake, not a pause: a mutator that already acknowledged CLEAR_SATB
         // runs on and may enqueue again. Same as MarkSatbBuffer (TracingCollector.cpp).
         if (Heap::GetHeap().GetGCPhase() != GCPhase::GC_PHASE_CLEAR_SATB_BUFFER) {
-            TransitionToGCPhase(GCPhase::GC_PHASE_CLEAR_SATB_BUFFER, true);
+            transitionClear();
             visitSatbObj();
             if (!workStack.empty()) {
+                finishRound(iterationCnt, "phase-work");
                 continue;
             }
         }
         if (!MarkTerminateInPauseEnabled()) {
-            TransitionToGCPhase(GCPhase::GC_PHASE_CLEAR_SATB_BUFFER, true);
+            transitionClear();
             visitSatbObj();
             if (workStack.empty()) {
+                finishRound(iterationCnt, "empty");
                 break;
             }
+            finishRound(iterationCnt, "retry");
             continue;
         }
         bool terminated = false;
@@ -4357,10 +4568,23 @@ bool WCollector::MarkYoungSatbBuffer(WorkStack& workStack, bool fullYoungScan, M
             terminated = workStack.empty();
         }
         if (terminated) {
+            finishRound(iterationCnt, "pause-empty");
             break;
         }
         NoteMarkTerminateContinue(workStack.size());
+        finishRound(iterationCnt, "pause-retry");
     } while (true);
+    if (dribble) {
+        g_dribble.active.store(false, std::memory_order_release);
+        VLOG(REPORT,
+             "[GCV2][dribble][young-summary] rounds=%llu retired=%llu pop=%llu push=%llu "
+             "dur_ns=%llu field_ns=%llu poll_ns=%llu closure_ns=%llu phase_ns=%llu yield_ns=%llu",
+             static_cast<unsigned long long>(iterationCnt), static_cast<unsigned long long>(totalRetired),
+             static_cast<unsigned long long>(totalPops), static_cast<unsigned long long>(totalPushes),
+             static_cast<unsigned long long>(totalRoundNs), static_cast<unsigned long long>(totalFieldNs),
+             static_cast<unsigned long long>(totalPollNs), static_cast<unsigned long long>(totalClosureNs),
+             static_cast<unsigned long long>(totalPhaseNs), static_cast<unsigned long long>(totalYieldNs));
+    }
     ReportMarkTerminateContinue();
     return true;
 }
