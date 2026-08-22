@@ -7,6 +7,7 @@
 
 #include "Base/Types.h"
 #include "Common/TypeDef.h"
+#include <cstring>
 #if defined(_WIN64)
 #define NOGDI
 #include <windows.h>
@@ -795,21 +796,32 @@ intptr_t Mutator::FixExtendedStack(intptr_t frameBase, uint32_t adjustedSize, vo
     return 0;
 }
 
-inline void CheckAndPush(BaseObject* obj, std::set<BaseObject*>& rootSet, std::stack<BaseObject*>& rootStack)
+// Headered Cangjie stack object (TypeInfo in the first word) vs headerless
+// by-value ABI record (String = {i8*, i32, i32}). struct-live slots hold the
+// latter as a pointer-to-record; HotSpot oop maps name the *location of an
+// oop* (zMark.cpp:691 ZUncoloredRoot::mark reads the slot).
+static bool IsHeaderedStackObject(BaseObject* obj)
 {
-    if (!rootSet.insert(obj).second || !obj->IsValidObject()) {
-        return;
+    if (obj == nullptr || !obj->IsValidObject()) {
+        return false;
     }
-    // gcvroot: rich diagnostic before existing CHECK_DETAIL (does not replace/relax it).
-    VerifyRoots::BeforeCheckAndPush(obj);
     TypeInfo* tip = obj->GetTypeInfo();
     uintptr_t tipAddr = reinterpret_cast<uintptr_t>(tip);
-    CHECK_DETAIL((tipAddr & StateWord::ADDRESS_ALIGN_MASK) == 0,
-                 "CheckAndPush: TypeInfo %p on stack object %p is not 8-byte aligned "
-                 "(stateWord non-zero is not a managed-object proof)",
-                 tip, obj);
-    CHECK_DETAIL(tip->IsVaildType(),
-                 "CheckAndPush: TypeInfo %p on stack object %p has invalid type kind", tip, obj);
+    if (tip == nullptr || tipAddr < 4096 || (tipAddr & StateWord::ADDRESS_ALIGN_MASK) != 0) {
+        return false;
+    }
+    return tip->IsVaildType();
+}
+
+inline void CheckAndPush(BaseObject* obj, std::set<BaseObject*>& rootSet, std::stack<BaseObject*>& rootStack)
+{
+    if (!IsHeaderedStackObject(obj)) {
+        return;
+    }
+    if (!rootSet.insert(obj).second) {
+        return;
+    }
+    VerifyRoots::BeforeCheckAndPush(obj);
     if (obj->HasRefField()) {
         rootStack.push(obj);
     }
@@ -857,6 +869,16 @@ static bool PushHeapRootIfPlausible(BaseObject* obj, const char* site)
         EnumPushDiag::NotePush(plain, site, nullptr);
     }
     return true;
+}
+
+static bool PushHeaderlessRecordField(BaseObject* record, const char* site)
+{
+    if (record == nullptr) {
+        return false;
+    }
+    zaddress_unsafe word;
+    memcpy(&word, record, sizeof(word));
+    return PushHeapRootIfPlausible(PlainRootObject(word), site);
 }
 
 bool Mutator::DrainStackWatermark(const RootVisitor& visitor, uint64_t epoch, StackWatermark::Owner owner,
@@ -940,7 +962,11 @@ bool Mutator::GcPhaseEnum(GCPhase newPhase, uint64_t stackScanEpoch, bool bySelf
             }
             DLOG(ENUM, "enum stack root HeapSlot @%p: %p", &refFieldAddr, obj);
         } else if (IsStackAddr(reinterpret_cast<uintptr_t>(obj))) {
-            CheckAndPush(obj, rootSet, rootStack);
+            if (IsHeaderedStackObject(obj)) {
+                CheckAndPush(obj, rootSet, rootStack);
+            } else {
+                PushHeaderlessRecordField(obj, "GcPhaseEnum.ref.headerless");
+            }
         }
     };
 
@@ -955,7 +981,11 @@ bool Mutator::GcPhaseEnum(GCPhase newPhase, uint64_t stackScanEpoch, bool bySelf
             }
             DLOG(ENUM, "enum stack root @%p: %p", &root, obj);
         } else if (IsStackAddr(reinterpret_cast<uintptr_t>(obj))) {
-            CheckAndPush(obj, rootSet, rootStack);
+            if (IsHeaderedStackObject(obj)) {
+                CheckAndPush(obj, rootSet, rootStack);
+            } else {
+                PushHeaderlessRecordField(obj, "GcPhaseEnum.root.headerless");
+            }
         } else if (Heap::IsHeapAddress(obj) &&
                    !Collector::PlausibleManagedObjectGate("GcPhaseEnum.interior", obj)) {
             // introot: slot holds RawArray+8 (&length). Push the host object so mark
@@ -1050,7 +1080,9 @@ inline void Mutator::GCPhasePreForward(GCPhase newPhase)
                 HealRoot(rootField, from_object(toObj), HealSite::MutatorPreForwardStackField);
             }
         } else if (IsStackAddr(reinterpret_cast<uintptr_t>(oldObj))) {
-            CheckAndPush(oldObj, rootSet, rootStack);
+            if (IsHeaderedStackObject(oldObj)) {
+                CheckAndPush(oldObj, rootSet, rootStack);
+            }
         }
     };
 
@@ -1084,7 +1116,9 @@ inline void Mutator::GCPhasePreForward(GCPhase newPhase)
                 HealRoot(root, from_object(toObj), HealSite::MutatorPreForwardRoot);
             }
         } else if (IsStackAddr(reinterpret_cast<uintptr_t>(oldObj))) {
-            CheckAndPush(oldObj, rootSet, rootStack);
+            if (IsHeaderedStackObject(oldObj)) {
+                CheckAndPush(oldObj, rootSet, rootStack);
+            }
         }
         while (!rootStack.empty()) {
             BaseObject* obj = rootStack.top();
