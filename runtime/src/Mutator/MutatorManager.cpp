@@ -9,7 +9,6 @@
 
 #include <thread>
 #include <cstdlib>
-#include <cstring>
 #include "Base/TimeUtils.h"
 #include "Common/Runtime.h"
 #include "Concurrency/ConcurrencyModel.h"
@@ -22,25 +21,6 @@
 #include "CpuProfiler/CpuProfiler.h"
 
 namespace MapleRuntime {
-namespace {
-thread_local bool inEpochHandshake = false;
-
-uint64_t GetEpochHandshakeTimeoutMillis()
-{
-    static const uint64_t timeout = []() -> uint64_t {
-        const char* value = static_cast<const char*>(nullptr) /* pinned-off:MRT_GCV2_EPOCH_HANDSHAKE_TIMEOUT_MS */;
-        if (value != nullptr) {
-            char* end = nullptr;
-            unsigned long long parsed = std::strtoull(value, &end, 10);
-            if (end != value && parsed > 0) {
-                return static_cast<uint64_t>(parsed);
-            }
-        }
-        return 30000;
-    }();
-    return timeout;
-}
-} // namespace
 // Mutator-list write-lock watchdog timeout (seconds). Read once from env
 // cjMutatorLockTimeout, falling back to WAIT_LOCK_TIMEOUT, so heavy CPU-oversubscribed
 // builds can raise it without a rebuild. A reader holding the list lock can be starved
@@ -269,20 +249,12 @@ MutatorManager& MutatorManager::Instance() noexcept { return Runtime::Current().
 
 bool MutatorManager::EpochHandshakeEnabled()
 {
-    static const bool enabled = []() {
-        const char* value = static_cast<const char*>(nullptr) /* pinned-off:MRT_GCV2_EPOCH_HANDSHAKE */;
-        return value != nullptr && std::strcmp(value, "1") == 0;
-    }();
-    return enabled || ConcurrentStackScanEnabled();
+    return false;
 }
 
 bool MutatorManager::ConcurrentStackScanEnabled()
 {
-    static const bool enabled = []() {
-        const char* value = static_cast<const char*>(nullptr) /* pinned-off:MRT_GCV2_CONCURRENT_STACK_SCAN */;
-        return value != nullptr && std::strcmp(value, "1") == 0;
-    }();
-    return enabled;
+    return false;
 }
 
 void MutatorManager::RecordEpochHandshakeAck(Mutator& mutator, uint64_t epoch, bool bySelf)
@@ -368,160 +340,8 @@ void MutatorManager::RecordEpochHandshakeExitTransition()
 
 EpochHandshakeStats MutatorManager::RunEpochHandshake(const char* source)
 {
-    EpochHandshakeStats stats;
-    if (!EpochHandshakeEnabled()) {
-        return stats;
-    }
-
-    Mutator* caller = IsRuntimeThread() ? nullptr : Mutator::GetMutator();
-    bool callerEnteredSaferegion = caller != nullptr && caller->EnterSaferegion(true);
-    CHECK_DETAIL(!inEpochHandshake, "nested epoch handshake is not supported");
-    inEpochHandshake = true;
-    // Hold syncMutex so STW cannot interleave (StopTheWorld also takes it). Do NOT
-    // hold mutator-management W-lock across the wait: that serialised thread create
-    // (FIXED_ROSTER_IS_STEP0_ONLY). dynjoin replaces it with (乙) born-clean exclude
-    // + participant-set pin for DestroyMutator.
-    syncMutex.lock();
-    CHECK_DETAIL(!WorldStopped(), "epoch handshake must not run while worldStopped=true");
-
-    stats.epoch = epochHandshakeSequence.fetch_add(1, std::memory_order_relaxed) + 1;
-    CHECK_DETAIL(stats.epoch != 0, "epoch handshake sequence overflow");
-    epochHandshakeAcked.store(0, std::memory_order_relaxed);
-    epochHandshakeAckedTwice.store(0, std::memory_order_relaxed);
-    epochHandshakeSelfAck.store(0, std::memory_order_relaxed);
-    epochHandshakeGcAssistedAck.store(0, std::memory_order_relaxed);
-    epochHandshakeStartingAck.store(0, std::memory_order_relaxed);
-    epochHandshakeRunningAck.store(0, std::memory_order_relaxed);
-    epochHandshakeParkedAck.store(0, std::memory_order_relaxed);
-    epochHandshakeExitingAck.store(0, std::memory_order_relaxed);
-    epochHandshakeDeferredCreates.store(0, std::memory_order_relaxed);
-    epochHandshakeBornCleanJoins.store(0, std::memory_order_relaxed);
-    epochHandshakeExitTransitions.store(0, std::memory_order_relaxed);
-    epochHandshakeDestroyDeferred.store(0, std::memory_order_relaxed);
-    epochHandshakeStopTheWorldCalls.store(0, std::memory_order_relaxed);
-    epochHandshakeStackScanned.store(0, std::memory_order_relaxed);
-    epochHandshakeStackFallback.store(0, std::memory_order_relaxed);
-    epochHandshakeStackFrames.store(0, std::memory_order_relaxed);
-
-    uint64_t residualLockStart = TimeUtil::NanoSeconds();
-    {
-        std::lock_guard<std::mutex> lock(epochHandshakeLedgerMutex);
-        epochHandshakeAckedMutators.clear();
-        epochHandshakeParticipants.clear();
-    }
-    // Publish active BEFORE snapshot so concurrent CreateMutator sees active and
-    // takes the born-clean path. Snapshot then only captures pre-existing mutators;
-    // anyone who raced past is either in the list or born-clean (not both in wait).
-    epochHandshakeActive.store(stats.epoch, std::memory_order_release);
-
-    std::list<Mutator*> snapshotted;
-    VisitAllMutators([&snapshotted](Mutator& mutator) { snapshotted.push_back(&mutator); });
-    std::list<Mutator*> pending;
-    {
-        // Claim participants under the same lock ExcludeNewMutatorFromActiveEpoch uses.
-        std::lock_guard<std::mutex> lock(epochHandshakeLedgerMutex);
-        for (Mutator* mutator : snapshotted) {
-            if (mutator->FinishedEpochHandshake(stats.epoch)) {
-                continue; // born-clean race: create already excluded this mutator
-            }
-            if (epochHandshakeParticipants.insert(mutator).second) {
-                pending.push_back(mutator);
-            }
-        }
-    }
-    stats.requested = pending.size();
-    stats.managementLockNanos = TimeUtil::NanoSeconds() - residualLockStart;
-    for (Mutator* mutator : pending) {
-        // Defensive: born-clean may still race in after claim if Exclude lost the
-        // participants check; Request must not fire on an already-finished epoch.
-        if (mutator->FinishedEpochHandshake(stats.epoch)) {
-            continue;
-        }
-        mutator->RequestEpochHandshake(stats.epoch);
-    }
-
-    uint64_t waitStart = TimeUtil::MilliSeconds();
-    bool runningMutatorsHadSelfOpportunity = false;
-    // K-bound: timeout is the exit condition (ForwardBarrier.cpp:23-24 discipline).
-    // Wait set is fixed at snapshot; born-clean joiners never enlarge it.
-    while (!pending.empty()) {
-        for (auto it = pending.begin(); it != pending.end();) {
-            Mutator* mutator = *it;
-            if (mutator->FinishedEpochHandshake(stats.epoch)) {
-                it = pending.erase(it);
-                continue;
-            }
-            bool running = mutator->GetEpochHandshakeLifecycle() == Mutator::EPOCH_HANDSHAKE_RUNNING;
-            if (mutator->CanGcAssistEpochHandshake() && (!running || runningMutatorsHadSelfOpportunity)) {
-                (void)mutator->AcknowledgeEpochHandshake(stats.epoch, false);
-            }
-            ++it;
-        }
-        if (UNLIKELY(TimeUtil::MilliSeconds() - waitStart > GetEpochHandshakeTimeoutMillis())) {
-            LOG(RTLOG_ERROR,
-                "[GCV2][epoch-handshake] source=%s epoch=%llu requested=%zu acked=%zu acked_twice=%zu "
-                "missing=%zu timeout_ms=%llu",
-                source, static_cast<unsigned long long>(stats.epoch), stats.requested,
-                epochHandshakeAcked.load(std::memory_order_relaxed),
-                epochHandshakeAckedTwice.load(std::memory_order_relaxed), pending.size(),
-                static_cast<unsigned long long>(GetEpochHandshakeTimeoutMillis()));
-            CHECK_DETAIL(false, "epoch handshake timed out");
-        }
-        if (!pending.empty()) {
-            // A mutator released from the S1/S3/S5 pause is briefly still in a
-            // saferegion. Give RUNNING participants one scheduling opportunity
-            // to take the SELF claim before treating that transient state as a
-            // GC-assistable parked stack. Non-running lifecycle states remain
-            // immediately assistable above.
-            runningMutatorsHadSelfOpportunity = true;
-            (void)sched_yield();
-        }
-    }
-
-    stats.acked = epochHandshakeAcked.load(std::memory_order_relaxed);
-    stats.ackedTwice = epochHandshakeAckedTwice.load(std::memory_order_relaxed);
-    stats.selfAck = epochHandshakeSelfAck.load(std::memory_order_relaxed);
-    stats.gcAssistedAck = epochHandshakeGcAssistedAck.load(std::memory_order_relaxed);
-    stats.startingAck = epochHandshakeStartingAck.load(std::memory_order_relaxed);
-    stats.runningAck = epochHandshakeRunningAck.load(std::memory_order_relaxed);
-    stats.parkedAck = epochHandshakeParkedAck.load(std::memory_order_relaxed);
-    stats.exitingAck = epochHandshakeExitingAck.load(std::memory_order_relaxed);
-    stats.deferredCreates = epochHandshakeDeferredCreates.load(std::memory_order_relaxed);
-    stats.bornCleanJoins = epochHandshakeBornCleanJoins.load(std::memory_order_relaxed);
-    stats.exitTransitions = epochHandshakeExitTransitions.load(std::memory_order_relaxed);
-    stats.destroyDeferred = epochHandshakeDestroyDeferred.load(std::memory_order_relaxed);
-    stats.stopTheWorldCalls = epochHandshakeStopTheWorldCalls.load(std::memory_order_relaxed);
-    stats.stackScanned = epochHandshakeStackScanned.load(std::memory_order_relaxed);
-    stats.stackFallback = epochHandshakeStackFallback.load(std::memory_order_relaxed);
-    stats.stackFrames = epochHandshakeStackFrames.load(std::memory_order_relaxed);
-    CHECK_DETAIL(stats.acked == stats.requested && stats.ackedTwice == 0 && stats.stopTheWorldCalls == 0,
-                 "epoch handshake accounting failed: requested=%zu acked=%zu acked_twice=%zu stw_calls=%zu",
-                 stats.requested, stats.acked, stats.ackedTwice, stats.stopTheWorldCalls);
-    CHECK_DETAIL(!WorldStopped(), "epoch handshake changed worldStopped");
-
-    {
-        std::lock_guard<std::mutex> lock(epochHandshakeLedgerMutex);
-        epochHandshakeParticipants.clear();
-    }
-    epochHandshakeActive.store(0, std::memory_order_release);
-    syncMutex.unlock();
-    inEpochHandshake = false;
-    if (callerEnteredSaferegion) {
-        (void)caller->LeaveSaferegion();
-    }
-
-    LOG(RTLOG_ERROR,
-         "[GCV2][epoch-handshake] source=%s epoch=%llu requested=%zu acked=%zu acked_twice=%zu "
-         "self=%zu gc_assisted=%zu starting=%zu running=%zu parked=%zu exiting=%zu "
-         "deferred_create=%zu born_clean=%zu exit_transition=%zu destroy_deferred=%zu stw_calls=%zu "
-         "stack_scanned=%zu stack_fallback=%zu stack_frames=%zu wlock_us=%llu "
-         "env=MRT_GCV2_EPOCH_HANDSHAKE=1 env_scan=MRT_GCV2_CONCURRENT_STACK_SCAN",
-         source, static_cast<unsigned long long>(stats.epoch), stats.requested, stats.acked, stats.ackedTwice,
-         stats.selfAck, stats.gcAssistedAck, stats.startingAck, stats.runningAck, stats.parkedAck,
-         stats.exitingAck, stats.deferredCreates, stats.bornCleanJoins, stats.exitTransitions,
-         stats.destroyDeferred, stats.stopTheWorldCalls, stats.stackScanned, stats.stackFallback, stats.stackFrames,
-         static_cast<unsigned long long>(stats.managementLockNanos / 1000));
-    return stats;
+    (void)source;
+    return EpochHandshakeStats();
 }
 
 extern "C" MRT_EXPORT uint64_t MRT_RunEpochHandshake()
@@ -587,12 +407,7 @@ void MutatorManager::VisitAllMutatorsExceptFinalizer(MutatorVisitor func)
 
 void MutatorManager::StopTheWorld(bool syncGCPhase, GCPhase phase)
 {
-    // stackwm #5: exposure-hook slow path must not introduce STW (assertion ④).
     StackExposureHook::NoteStopTheWorldFromHook();
-    if (UNLIKELY(inEpochHandshake)) {
-        epochHandshakeStopTheWorldCalls.fetch_add(1, std::memory_order_relaxed);
-        CHECK_DETAIL(false, "epoch handshake path must not call StopTheWorld");
-    }
 #if defined(MRT_DEBUG) && (MRT_DEBUG == 1)
     bool saferegionEntered = false;
     // Ensure an active mutator entered saferegion before STW (aka. stop all other mutators).

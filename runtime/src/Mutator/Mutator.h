@@ -614,13 +614,10 @@ private:
             return;
         }
         if (LIKELY(satbNode != nullptr && satbNode->Push(target, knownBase))) {
-            SatbBuffer::NoteInteriorEnqueued(target, knownBase);
             return;
         }
         SatbBuffer::Instance().EnsureGoodNode(satbNode);
-        if (satbNode->Push(target, knownBase)) {
-            SatbBuffer::NoteInteriorEnqueued(target, knownBase);
-        }
+        (void)satbNode->Push(target, knownBase);
     }
     ManagedList<RootSlot>& GetLocalFinalizers() { return localFinalizers; }
     // Indicate the current mutator phase and use which barrier in concurrent gc

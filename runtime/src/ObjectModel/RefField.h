@@ -16,8 +16,6 @@
 #include <limits>
 #include <type_traits>
 
-#include <execinfo.h>
-
 #include "Base/Log.h"
 #include "Common/ColourMask.h"
 #include "Common/ColourPredicates.h"
@@ -440,42 +438,6 @@ inline void StoreColoured(HeapSlot<isAtomic>& slot, zaddress value, MAddress col
 template<bool isAtomic = false>
 using RefField = HeapSlot<isAtomic>;
 
-// staticnull: default-off probe for RootSlot plain stores that install null over
-// a previously non-null root (MRT_GCV2_STATICNULL=1). Captures slot/old/new +
-// short backtrace so concurrent TRACE-window zeroing of static roots is siteable.
-// Product path unchanged when env unset.
-inline bool StaticNullProbeEnabled()
-{
-    static const bool on = []() {
-        const char* v = static_cast<const char*>(nullptr) /* pinned-off:MRT_GCV2_STATICNULL */;
-        return v != nullptr && std::strcmp(v, "1") == 0;
-    }();
-    return on;
-}
-
-inline void NoteRootSlotNullStore(void* slot, MAddress oldRaw, const char* via)
-{
-    static std::atomic<size_t> g_staticNullN{ 0 };
-    size_t n = g_staticNullN.fetch_add(1, std::memory_order_relaxed);
-    if (n >= 128) {
-        return;
-    }
-    void* frames[16];
-    int nf = ::backtrace(frames, 16);
-    char** syms = nf > 0 ? ::backtrace_symbols(frames, nf) : nullptr;
-    std::fprintf(stderr,
-                 "[GCV2][staticnull] path=root_null_store n=%zu via=%s slot=%p old=%#zx new=0\n",
-                 n, via, slot, static_cast<size_t>(oldRaw));
-    if (syms != nullptr) {
-        int limit = nf < 12 ? nf : 12;
-        for (int i = 0; i < limit; ++i) {
-            std::fprintf(stderr, "[GCV2][staticnull]   #%d %s\n", i, syms[i]);
-        }
-        std::free(syms);
-    }
-    std::fflush(stderr);
-}
-
 // OpenJDK ZUncoloredRoot stores an unsafe, uncoloured address in the root and
 // carries colour metadata outside the slot (zUncoloredRoot.hpp:32-54).
 class RootSlot {
@@ -492,14 +454,6 @@ public:
 private:
     void StorePlain(zaddress value, std::memory_order order)
     {
-        if (StaticNullProbeEnabled() && is_null(value)) {
-            zaddress_unsafe prev;
-            __atomic_load(&rootValue, &prev, std::memory_order_relaxed);
-            MAddress oldRaw = raw(prev);
-            if (oldRaw != 0) {
-                NoteRootSlotNullStore(static_cast<void*>(this), oldRaw, "StorePlain");
-            }
-        }
         zaddress_unsafe unsafeValue = to_zaddress_unsafe(raw(value));
         __atomic_store(&rootValue, &unsafeValue, order);
     }

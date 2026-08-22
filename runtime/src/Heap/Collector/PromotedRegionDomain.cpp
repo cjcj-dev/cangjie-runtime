@@ -8,6 +8,7 @@
 
 #include <atomic>
 #include <chrono>
+#include <cstdlib>
 #include <cstring>
 #include <mutex>
 #include <unordered_set>
@@ -156,7 +157,7 @@ bool Enabled()
     // domainon: default ON. MRT_GCV2_PROMO_DOMAIN=0 disables; unset or any other value keeps on.
     // Old RecordPromotedCrossGenEdges still runs as shadow (not deleted this lane).
     static const bool on = []() {
-        const char* v = static_cast<const char*>(nullptr) /* pinned-off:MRT_GCV2_PROMO_DOMAIN */;
+        const char* v = std::getenv("MRT_GCV2_PROMO_DOMAIN");
         if (v == nullptr) {
             return true;
         }

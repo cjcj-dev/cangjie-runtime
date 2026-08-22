@@ -185,75 +185,6 @@ static void CensusFrameColoursAfterFlip(const char* site, uintptr_t prevRemap)
         MutatorManager::Instance().WorldStopped() ? 1 : 0);
 }
 
-namespace {
-bool VerifyStackRootPostconditionEnabled()
-{
-    static const bool on = []() {
-        const char* value = static_cast<const char*>(nullptr) /* pinned-off:MRT_GCV2_VERIFY_STACK_ROOTS_COMPLETE */;
-        return value != nullptr && std::strcmp(value, "1") == 0;
-    }();
-    return on;
-}
-
-bool InjectStackRootPostconditionFailure()
-{
-    static const bool on = []() {
-        const char* value = static_cast<const char*>(nullptr) /* pinned-off:MRT_GCV2_VERIFY_STACK_ROOTS_COMPLETE_INJECT */;
-        return value != nullptr && std::strcmp(value, "1") == 0;
-    }();
-    return on;
-}
-
-// ZGC's finish_processing() is imperative: its return establishes that the
-// target thread's stack has been processed.  Keep the product path report-only
-// until frame coverage can also attest every root-bearing slot inside a frame.
-void VerifyStackRootPostcondition(uint64_t stackScanEpoch, const char* source)
-{
-    if (!VerifyStackRootPostconditionEnabled()) {
-        return;
-    }
-
-    const bool inject = InjectStackRootPostconditionFailure();
-    bool injected = false;
-    size_t checked = 0;
-    size_t incomplete = 0;
-    MutatorManager::Instance().VisitAllMutators([&](Mutator& mutator) {
-        ++checked;
-        StackWatermark& watermark = mutator.GetStackWatermark();
-        const bool actualDone = watermark.IsDone(stackScanEpoch);
-        const bool injectedHere = inject && !injected;
-        injected = injected || injectedHere;
-        if (actualDone && !injectedHere) {
-            return;
-        }
-
-        ++incomplete;
-        LOG(RTLOG_ERROR,
-            "[GCV2][verify][stack-roots-complete] INCOMPLETE source=%s epoch=%llu mutator=%p tid=%u cjthread=%p "
-            "managed=%d saferegion=%d wm_epoch=%llu phase=%u owner=%u cursor=%zu frames=%zu injected=%d "
-            "env=MRT_GCV2_VERIFY_STACK_ROOTS_COMPLETE=1",
-            source, static_cast<unsigned long long>(stackScanEpoch), &mutator, mutator.GetTid(),
-            mutator.GetCjthreadPtr(), mutator.IsManagedContext() ? 1 : 0, mutator.InSaferegion() ? 1 : 0,
-            static_cast<unsigned long long>(watermark.GetEpoch()), static_cast<unsigned>(watermark.GetPhase()),
-            static_cast<unsigned>(watermark.GetOwner()), watermark.GetCursorIndex(), watermark.GetFrameCount(),
-            injectedHere ? 1 : 0);
-    });
-    LOG(RTLOG_ERROR,
-        "[GCV2][verify][stack-roots-complete] SUMMARY source=%s epoch=%llu checked=%zu incomplete=%zu injected=%d "
-        "env=MRT_GCV2_VERIFY_STACK_ROOTS_COMPLETE=1",
-        source, static_cast<unsigned long long>(stackScanEpoch), checked, incomplete, injected ? 1 : 0);
-}
-} // namespace
-
-// Phase A (ops/design/G1_WRITE_BARRIER_DESIGN.md §3.6): races in ForwardUpdateRawRef.
-// Total counts every lost CAS -- it is the positive control, proving the site is reached at all,
-// so a zero in StillBad means "did not happen" rather than "never wired up". StillBad counts the
-// races whose winning value still needs the barrier: zero under today's two-state encoding, and
-// a legal (not defective) state once phase C gives good a non-zero colour.
-// Report with MRT_GCV2_FORWARD_RACE_ACCOUNT=1.
-std::atomic<size_t> g_forwardRaceTotalCount{ 0 };
-std::atomic<size_t> g_forwardRaceStillBadCount{ 0 };
-
 // installdomain: positive control — how often Resolve/Fix would install a ghost-from that is
 // outside GetRoute's liveInfo0 survivor domain. Grant paints that bit before route geometry.
 // Report with MRT_GCV2_INSTALLDOMAIN_ACCOUNT=1 (also always VLOG once per minor if >0).
@@ -261,58 +192,6 @@ std::atomic<size_t> g_installDomainGrant{ 0 };
 std::atomic<size_t> g_installDomainAlready{ 0 };
 std::atomic<size_t> g_installDomainTooLate{ 0 };
 std::atomic<size_t> g_installDomainSkip{ 0 };
-
-// youngstatic: layered static-root mark funnel (default off MRT_GCV2_YOUNGSTATIC=1).
-// Answers Q1: ① enum face / ② SATB drop / ③ PushYoungObject filter.
-namespace {
-bool YoungStaticProbeOn()
-{
-    static const bool on = []() {
-        const char* v = static_cast<const char*>(nullptr) /* pinned-off:MRT_GCV2_YOUNGSTATIC */;
-        return v != nullptr && v[0] == '1' && v[1] == '\0';
-    }();
-    return on;
-}
-std::atomic<size_t> g_ysStaticVisit{ 0 };
-std::atomic<size_t> g_ysStaticYoung{ 0 };
-std::atomic<size_t> g_ysStaticOld{ 0 };
-std::atomic<size_t> g_ysPushSeen{ 0 };
-std::atomic<size_t> g_ysPushYoungUnmarked{ 0 };
-std::atomic<size_t> g_ysPushNotYoung{ 0 };
-std::atomic<size_t> g_ysPushAlready{ 0 };
-} // namespace
-
-// fysgrant: FYS mark result × pregrant face 2D (default off; MRT_GCV2_FYSGRANT=1).
-// Early-return BEFORE counters (promotegap shape).
-namespace {
-bool FysGrantProbeOn()
-{
-    static const bool on = []() {
-        const char* v = static_cast<const char*>(nullptr) /* pinned-off:MRT_GCV2_FYSGRANT */;
-        return v != nullptr && std::strcmp(v, "1") == 0;
-    }();
-    return on;
-}
-
-// reffixconc: expensive, read-mostly census for one workload campaign. The product
-// path and the ref-fix dedup switch do not depend on this probe.
-bool ReffixConcProbeOn()
-{
-    static const bool on = []() {
-        const char* v = static_cast<const char*>(nullptr) /* pinned-off:MRT_GCV2_REFFIXCONC_PROBE */;
-        return v != nullptr && std::strcmp(v, "1") == 0;
-    }();
-    return on;
-}
-// Per-process cumulative (same shape as installdomain counters).
-std::atomic<size_t> g_fysgrantYoungInVec{ 0 };     // young in reachableVec (FYS/closure claimed)
-std::atomic<size_t> g_fysgrantMarkedLive{ 0 };     // among them: current liveInfo survived
-std::atomic<size_t> g_fysgrantGhostLive0{ 0 };     // among them: liveInfo0 survived (post PrepareForwardable)
-std::atomic<size_t> g_fysgrantMarkedNoLive0{ 0 };  // liveInfo yes, liveInfo0 no (would be 乙)
-std::atomic<size_t> g_fysgrantNeither{ 0 };        // neither face (unexpected if claimed)
-std::atomic<size_t> g_fysgrantOldInVec{ 0 };       // non-young holders in vec (FYS-only path)
-std::atomic<size_t> g_fysgrantMinorN{ 0 };
-} // namespace
 
 // nullslot: count product paths that CAS-install nullptr into a ref field.
 // MRT_GCV2_NULLSLOT=1 → LOG each write (cap 64/path) + totals; default off.
@@ -337,9 +216,8 @@ std::atomic<size_t> g_resolveRootHealNull{ 0 };
 std::atomic<size_t> g_fixMinorRootSlotsCalls{ 0 };
 
 // F3 true-dead arm (FixOldTaggedRefField soft-null). Always-on classified counters
-// (f3arm / F3_KEEP_NO_NULL_DEAD_ARM §6 BEFORE_A). Default product still CAS-null;
-// MRT_GCV2_F3_DEADARM_ASSERT=1 fail-closes instead. Categories partition the
-// soft-null write — sum == total (assert path counts then aborts).
+// (f3arm / F3_KEEP_NO_NULL_DEAD_ARM §6 BEFORE_A). Default product still CAS-null.
+// Categories partition the soft-null write — sum == total.
 std::atomic<size_t> g_f3DeadarmTotal{ 0 };
 std::atomic<size_t> g_f3DeadarmLatestNull{ 0 };
 std::atomic<size_t> g_f3DeadarmRegionGarbage{ 0 };
@@ -423,15 +301,6 @@ bool SlotHeldByLiveObject(const void* slot)
 }
 } // namespace
 
-bool F3DeadarmAssertEnabled()
-{
-    static const bool on = []() {
-        const char* v = static_cast<const char*>(nullptr) /* pinned-off:MRT_GCV2_F3_DEADARM_ASSERT */;
-        return v != nullptr && std::strcmp(v, "1") == 0;
-    }();
-    return on;
-}
-
 void ReportF3DeadarmCounts(const char* point)
 {
     const size_t total = g_f3DeadarmTotal.load(std::memory_order_relaxed);
@@ -458,7 +327,7 @@ void ReportF3DeadarmCounts(const char* point)
                  "class_sum_ok=%d env_assert=%d\n",
                  point != nullptr ? point : "?", total, softNullParts, latestNull, regionGarbage, regionNull,
                  regionFree, regionNull + regionFree, latestNotHeap, validButNotLive, invalidObject, unknown,
-                 weakHolder, classSum == total ? 1 : 0, F3DeadarmAssertEnabled() ? 1 : 0);
+                 weakHolder, classSum == total ? 1 : 0, 0);
     std::fflush(stderr);
     VLOG(REPORT,
          "[GCV2][f3-deadarm] point=%s total=%zu soft_null=%zu "
@@ -468,7 +337,7 @@ void ReportF3DeadarmCounts(const char* point)
          "class_sum_ok=%d env_assert=%d",
          point != nullptr ? point : "?", total, softNullParts, latestNull, regionGarbage, regionNull, regionFree,
          regionNull + regionFree, latestNotHeap, validButNotLive, invalidObject, unknown, weakHolder,
-         classSum == total ? 1 : 0, F3DeadarmAssertEnabled() ? 1 : 0);
+         classSum == total ? 1 : 0, 0);
 }
 
 void EnsureF3DeadarmAtexit()
@@ -611,18 +480,11 @@ void NoteResolveRootNull(void* rootSlot, BaseObject* from, BaseObject* to, Regio
 }
 } // namespace
 
+std::atomic<size_t> g_forwardRaceTotalCount{ 0 };
+std::atomic<size_t> g_forwardRaceStillBadCount{ 0 };
+
 void ReportForwardRaceCounts()
 {
-    static const bool account = []() {
-        const char* v = static_cast<const char*>(nullptr) /* pinned-off:MRT_GCV2_FORWARD_RACE_ACCOUNT */;
-        return v != nullptr && std::strcmp(v, "1") == 0;
-    }();
-    if (!account) {
-        return;
-    }
-    VLOG(REPORT, "[GCV2][fwdrace] total=%zu still_bad=%zu",
-         g_forwardRaceTotalCount.load(std::memory_order_relaxed),
-         g_forwardRaceStillBadCount.load(std::memory_order_relaxed));
 }
 
 // paramzero: crash-time snapshot of (a) Mode-A stack slot -0x50(%rbp) and
@@ -699,311 +561,16 @@ void EmitParamzeroCrashProbe(uintptr_t rbp, uintptr_t rbx, uintptr_t rip)
 }
 
 namespace {
-// T1 ledger-cost probe (setbitmap O1③): default off.
-// MRT_GCV2_LEDGER_COST=1 → time+count every insert/lookup on objects/slots/weaks
-// MRT_GCV2_LEDGER_COST=2 → count only (no NanoSeconds; for overhead control)
-// Report line: [GCV2][ledger-cost] ...
-struct MinorLedgerCost {
-    uint64_t objInsNs = 0;
-    uint64_t objInsN = 0;
-    uint64_t objInsNew = 0;
-    uint64_t objLookNs = 0;
-    uint64_t objLookN = 0;
-    uint64_t slotInsNs = 0;
-    uint64_t slotInsN = 0;
-    uint64_t slotInsNew = 0;
-    uint64_t slotLookNs = 0;
-    uint64_t slotLookN = 0;
-    uint64_t weakInsNs = 0;
-    uint64_t weakInsN = 0;
-    uint64_t weakInsNew = 0;
-    uint64_t weakLookNs = 0;
-    uint64_t weakLookN = 0;
-
-    static int Mode()
-    {
-        static const int mode = []() {
-            const char* v = static_cast<const char*>(nullptr) /* pinned-off:MRT_GCV2_LEDGER_COST */;
-            if (v == nullptr || v[0] == '\0' || std::strcmp(v, "0") == 0) {
-                return 0;
-            }
-            if (std::strcmp(v, "2") == 0 || std::strcmp(v, "count") == 0) {
-                return 2;
-            }
-            return 1;
-        }();
-        return mode;
-    }
-
-    void Reset() { *this = MinorLedgerCost{}; }
-
-    void Report() const
-    {
-        if (Mode() == 0) {
-            return;
-        }
-        const uint64_t insNs = objInsNs + slotInsNs + weakInsNs;
-        const uint64_t lookNs = objLookNs + slotLookNs + weakLookNs;
-        VLOG(REPORT,
-             "[GCV2][ledger-cost] mode=%d "
-             "obj_ins_n=%llu obj_ins_new=%llu obj_ins_ns=%llu "
-             "obj_look_n=%llu obj_look_ns=%llu "
-             "slot_ins_n=%llu slot_ins_new=%llu slot_ins_ns=%llu "
-             "slot_look_n=%llu slot_look_ns=%llu "
-             "weak_ins_n=%llu weak_ins_new=%llu weak_ins_ns=%llu "
-             "weak_look_n=%llu weak_look_ns=%llu "
-             "ins_total_ns=%llu look_total_ns=%llu all_ns=%llu",
-             Mode(),
-             static_cast<unsigned long long>(objInsN), static_cast<unsigned long long>(objInsNew),
-             static_cast<unsigned long long>(objInsNs),
-             static_cast<unsigned long long>(objLookN), static_cast<unsigned long long>(objLookNs),
-             static_cast<unsigned long long>(slotInsN), static_cast<unsigned long long>(slotInsNew),
-             static_cast<unsigned long long>(slotInsNs),
-             static_cast<unsigned long long>(slotLookN), static_cast<unsigned long long>(slotLookNs),
-             static_cast<unsigned long long>(weakInsN), static_cast<unsigned long long>(weakInsNew),
-             static_cast<unsigned long long>(weakInsNs),
-             static_cast<unsigned long long>(weakLookN), static_cast<unsigned long long>(weakLookNs),
-             static_cast<unsigned long long>(insNs), static_cast<unsigned long long>(lookNs),
-             static_cast<unsigned long long>(insNs + lookNs));
-    }
-};
-
-thread_local MinorLedgerCost g_minorLedgerCost;
-
-// markperf: young.mark_closure internal partition (default off).
-// MRT_GCV2_MARK_COST=1 → NanoSeconds sub-buckets inside TraceYoungClosureSerial.
-// MRT_GCV2_MARK_COST=2 → counts only (no per-edge timer).
-// Forces serial path when enabled so partitions sum to mark_closure wall.
-struct MarkInternalCost {
-    uint64_t totalNs = 0;
-    uint64_t popGateNs = 0;
-    uint64_t markBitmapNs = 0;
-    uint64_t scanArrayNs = 0;
-    uint64_t scanObjNs = 0;
-    uint64_t resolvePushNs = 0;
-    uint64_t ledgerNs = 0;
-    uint64_t popN = 0;
-    uint64_t skipNotHeapN = 0;
-    uint64_t skipGateN = 0;
-    uint64_t alreadyMarkedN = 0;
-    uint64_t claimYoungN = 0;
-    uint64_t claimOldN = 0;
-    uint64_t leafN = 0;
-    uint64_t arrayN = 0;
-    uint64_t ordinaryN = 0;
-    uint64_t largeN = 0; // size >= 8KiB among scanned-with-refs
-    uint64_t weakN = 0;
-    uint64_t edgeN = 0;
-    uint64_t edgeYoungPushN = 0;
-    uint64_t bytesScanned = 0;
-
-    static int Mode()
-    {
-        static const int mode = []() {
-            const char* v = static_cast<const char*>(nullptr) /* pinned-off:MRT_GCV2_MARK_COST */;
-            if (v == nullptr || v[0] == '\0' || std::strcmp(v, "0") == 0) {
-                return 0;
-            }
-            if (std::strcmp(v, "2") == 0 || std::strcmp(v, "count") == 0) {
-                return 2;
-            }
-            return 1;
-        }();
-        return mode;
-    }
-
-    void Reset() { *this = MarkInternalCost{}; }
-
-    void Report(const char* tag) const
-    {
-        if (Mode() == 0) {
-            return;
-        }
-        // resolve_push is nested inside scan_* (called from ForEachRefField visitor).
-        const uint64_t scanGross = scanArrayNs + scanObjNs;
-        const uint64_t resolve = resolvePushNs;
-        const uint64_t scanExcl =
-            (scanGross > resolve) ? (scanGross - resolve) : 0;
-        const uint64_t scanArrayExcl =
-            (scanArrayNs > 0 && scanGross > 0)
-                ? (scanArrayNs * scanExcl / scanGross)
-                : 0;
-        const uint64_t scanObjExcl = (scanExcl > scanArrayExcl) ? (scanExcl - scanArrayExcl) : 0;
-        const uint64_t accounted = popGateNs + markBitmapNs + scanExcl + resolve + ledgerNs;
-        VLOG(REPORT,
-             "[GCV2][mark-cost] tag=%s mode=%d total_ns=%llu accounted_ns=%llu residual_ns=%lld "
-             "pop_gate_ns=%llu mark_bitmap_ns=%llu scan_array_excl_ns=%llu scan_obj_excl_ns=%llu "
-             "resolve_push_ns=%llu ledger_ns=%llu scan_array_gross_ns=%llu scan_obj_gross_ns=%llu "
-             "pop_n=%llu skip_not_heap=%llu skip_gate=%llu already_marked=%llu "
-             "claim_young=%llu claim_old=%llu leaf=%llu array=%llu ordinary=%llu large=%llu weak=%llu "
-             "edge_n=%llu edge_young_push=%llu bytes_scanned=%llu",
-             tag, Mode(), static_cast<unsigned long long>(totalNs),
-             static_cast<unsigned long long>(accounted),
-             static_cast<long long>(static_cast<int64_t>(totalNs) - static_cast<int64_t>(accounted)),
-             static_cast<unsigned long long>(popGateNs), static_cast<unsigned long long>(markBitmapNs),
-             static_cast<unsigned long long>(scanArrayExcl), static_cast<unsigned long long>(scanObjExcl),
-             static_cast<unsigned long long>(resolve), static_cast<unsigned long long>(ledgerNs),
-             static_cast<unsigned long long>(scanArrayNs), static_cast<unsigned long long>(scanObjNs),
-             static_cast<unsigned long long>(popN), static_cast<unsigned long long>(skipNotHeapN),
-             static_cast<unsigned long long>(skipGateN), static_cast<unsigned long long>(alreadyMarkedN),
-             static_cast<unsigned long long>(claimYoungN), static_cast<unsigned long long>(claimOldN),
-             static_cast<unsigned long long>(leafN), static_cast<unsigned long long>(arrayN),
-             static_cast<unsigned long long>(ordinaryN), static_cast<unsigned long long>(largeN),
-             static_cast<unsigned long long>(weakN), static_cast<unsigned long long>(edgeN),
-             static_cast<unsigned long long>(edgeYoungPushN),
-             static_cast<unsigned long long>(bytesScanned));
-    }
-};
-
-thread_local MarkInternalCost g_markInternalCost;
-
-// T2 closure-equality probe (setbitmap2): default off.
-// MRT_GCV2_CLOSURE_HASH=1 → dump normalized hash of product reachableVec (diagnostic only).
-// MRT_GCV2_CLOSURE_HASH=2 → in-process dual claim: product path + independent legacy set walk
-//   on the same roots/remset; compare absolute pointer sets (same process ⇒ real equality).
-// Catches: any missing/extra object between SETBITMAP claim styles under identical roots.
-// Misses (mode1 only): cross-process ASLR/alloc noise; mode2 is same-input.
-struct ClosureHashProbe {
-    static int Mode()
-    {
-        static const int mode = []() {
-            const char* v = static_cast<const char*>(nullptr) /* pinned-off:MRT_GCV2_CLOSURE_HASH */;
-            if (v == nullptr || v[0] == '\0' || std::strcmp(v, "0") == 0) {
-                return 0;
-            }
-            if (std::strcmp(v, "2") == 0) {
-                return 2;
-            }
-            return 1; // "1" or any other truthy
-        }();
-        return mode;
-    }
-
-    static bool Dual() { return Mode() == 2; }
-    static bool Dump() { return Mode() >= 1; }
-
-    static uint64_t Fnv1a(uint64_t h, uint64_t x)
-    {
-        constexpr uint64_t kPrime = 0x100000001b3ULL;
-        h ^= x;
-        h *= kPrime;
-        return h;
-    }
-
-    static uint64_t PtrSetHash(const std::vector<BaseObject*>& vec)
-    {
-        std::vector<uint64_t> addrs;
-        addrs.reserve(vec.size());
-        for (BaseObject* o : vec) {
-            if (o != nullptr) {
-                addrs.push_back(reinterpret_cast<uint64_t>(o));
-            }
-        }
-        std::sort(addrs.begin(), addrs.end());
-        // unique
-        addrs.erase(std::unique(addrs.begin(), addrs.end()), addrs.end());
-        uint64_t h = 0xcbf29ce484222325ULL;
-        for (uint64_t a : addrs) {
-            h = Fnv1a(h, a);
-        }
-        return h;
-    }
-
-    static void ReportDump(size_t minorRun, const std::vector<BaseObject*>& reachableVec, bool useBitmap,
-                           bool fullYoungScan)
-    {
-        if (!Dump()) {
-            return;
-        }
-        uint64_t h = PtrSetHash(reachableVec);
-        VLOG(REPORT,
-             "[GCV2][closure-hash] run=%zu count=%zu ptr_hash=%llx use=%d fullYoung=%d",
-             minorRun, reachableVec.size(), static_cast<unsigned long long>(h),
-             static_cast<int>(useBitmap), static_cast<int>(fullYoungScan));
-    }
-
-    // Compare product reachableVec vs dual legacy set walk result.
-    static void ReportEqual(size_t minorRun, const std::vector<BaseObject*>& product,
-                            const std::vector<BaseObject*>& dual, bool productUseBitmap, bool fullYoungScan)
-    {
-        std::vector<uint64_t> a;
-        std::vector<uint64_t> b;
-        a.reserve(product.size());
-        b.reserve(dual.size());
-        for (BaseObject* o : product) {
-            if (o != nullptr) {
-                a.push_back(reinterpret_cast<uint64_t>(o));
-            }
-        }
-        for (BaseObject* o : dual) {
-            if (o != nullptr) {
-                b.push_back(reinterpret_cast<uint64_t>(o));
-            }
-        }
-        std::sort(a.begin(), a.end());
-        std::sort(b.begin(), b.end());
-        a.erase(std::unique(a.begin(), a.end()), a.end());
-        b.erase(std::unique(b.begin(), b.end()), b.end());
-        const bool equal = (a == b);
-        size_t onlyA = 0;
-        size_t onlyB = 0;
-        if (!equal) {
-            std::vector<uint64_t> diff;
-            std::set_difference(a.begin(), a.end(), b.begin(), b.end(), std::back_inserter(diff));
-            onlyA = diff.size();
-            diff.clear();
-            std::set_difference(b.begin(), b.end(), a.begin(), a.end(), std::back_inserter(diff));
-            onlyB = diff.size();
-        }
-        VLOG(REPORT,
-             "[GCV2][closure-eq] run=%zu equal=%d prod_n=%zu dual_n=%zu only_prod=%zu only_dual=%zu "
-             "prod_use=%d fullYoung=%d",
-             minorRun, static_cast<int>(equal), a.size(), b.size(), onlyA, onlyB,
-             static_cast<int>(productUseBitmap), static_cast<int>(fullYoungScan));
-    }
-};
-
 template <typename SetT, typename KeyT>
-bool LedgerInsert(SetT& set, const KeyT& key, uint64_t& n, uint64_t& nNew, uint64_t& ns)
+bool LedgerInsert(SetT& set, const KeyT& key)
 {
-    const int mode = MinorLedgerCost::Mode();
-    if (mode == 0) {
-        return set.insert(key).second;
-    }
-    if (mode == 2) {
-        ++n;
-        auto r = set.insert(key);
-        if (r.second) {
-            ++nNew;
-        }
-        return r.second;
-    }
-    uint64_t t0 = TimeUtil::NanoSeconds();
-    auto r = set.insert(key);
-    ns += TimeUtil::NanoSeconds() - t0;
-    ++n;
-    if (r.second) {
-        ++nNew;
-    }
-    return r.second;
+    return set.insert(key).second;
 }
 
 template <typename SetT, typename KeyT>
-size_t LedgerCount(const SetT& set, const KeyT& key, uint64_t& n, uint64_t& ns)
+size_t LedgerCount(const SetT& set, const KeyT& key)
 {
-    const int mode = MinorLedgerCost::Mode();
-    if (mode == 0) {
-        return set.count(key);
-    }
-    if (mode == 2) {
-        ++n;
-        return set.count(key);
-    }
-    uint64_t t0 = TimeUtil::NanoSeconds();
-    size_t c = set.count(key);
-    ns += TimeUtil::NanoSeconds() - t0;
-    ++n;
-    return c;
+    return set.count(key);
 }
 } // namespace
 
@@ -1203,126 +770,6 @@ bool WCollector::TryUntagRefField(BaseObject* obj, RefField<>& field, BaseObject
             untagRefFieldBreadcrumb.active = 0;
         }
 #endif
-        if (UNLIKELY(!isValidTarget)) {
-            static const bool f3Region = []() {
-                const char* value = static_cast<const char*>(nullptr) /* pinned-off:MRT_GCV2_F3_REGION */;
-                return value != nullptr && std::strcmp(value, "1") == 0;
-            }();
-            if (f3Region) {
-                const bool targetInHeap = Heap::IsHeapAddress(target);
-                const bool holderInHeap = obj != nullptr && Heap::IsHeapAddress(obj);
-                const bool targetInGhost = targetInHeap && RegionInfo::InGhostFromRegion(target);
-                RegionInfo* targetCurrent = targetInHeap
-                    ? RegionInfo::TryGetRegionInfoAt(reinterpret_cast<MAddress>(target))
-                    : nullptr;
-                RegionInfo* targetGhost = targetInHeap
-                    ? RegionInfo::GetGhostFromRegionAt(reinterpret_cast<MAddress>(target))
-                    : nullptr;
-                RegionInfo* holderCurrent = holderInHeap
-                    ? RegionInfo::TryGetRegionInfoAt(reinterpret_cast<MAddress>(obj))
-                    : nullptr;
-                RegionInfo* holderGhost = holderInHeap
-                    ? RegionInfo::GetGhostFromRegionAt(reinterpret_cast<MAddress>(obj))
-                    : nullptr;
-                RegionInfo* selectedTargetRegion = targetInGhost ? targetGhost : targetCurrent;
-                const auto dumpRegion = [](const char* role, BaseObject* object, RegionInfo* region) {
-                    if (region == nullptr) {
-                        VLOG(REPORT,
-                             "[GCV2][F3_REGION][region] role=%s object=%p region=null "
-                             "NOT_AVAILABLE_no_region_metadata",
-                             role, object);
-                        return;
-                    }
-                    VLOG(REPORT,
-                         "[GCV2][F3_REGION][region] role=%s object=%p region=%p type=%u unmovable=%u "
-                         "young=%u youngAge=%u routeState=%u from=%u ghost=%u start=%#zx end=%#zx "
-                         "alloc=%#zx snapshotEpoch=%llu liveBytes=%zu",
-                         role, object, region, static_cast<unsigned>(region->GetRegionType()),
-                         static_cast<unsigned>(region->IsUnmovableFromRegion()),
-                         static_cast<unsigned>(region->IsYoungRegion()), static_cast<unsigned>(region->GetYoungAge()),
-                         static_cast<unsigned>(region->GetRouteState()), static_cast<unsigned>(region->IsFromRegion()),
-                         static_cast<unsigned>(region->IsGhostFromRegion()),
-                         static_cast<size_t>(region->GetRegionStart()), static_cast<size_t>(region->GetRegionEnd()),
-                         static_cast<size_t>(region->GetRegionAllocPtr()),
-                         static_cast<unsigned long long>(region->GetSnapshotEpoch()), region->GetLiveByteCount());
-                };
-
-                const GCPhase phase = GetGCPhase();
-                const uint64_t gcStartNs = GCStats::GetPrevGCStartTime();
-                VLOG(REPORT,
-                     "[GCV2][F3_REGION] target=%p field=%p holder=%p targetInHeap=%u holderInHeap=%u "
-                     "unit.inGhostFromRegion=%u selectedBranch=%s targetCurrent=%p targetGhost=%p selected=%p "
-                     "phase=%s(%u) completedGcCount=%zu gcStartNs=%llu",
-                     target, &field, obj, static_cast<unsigned>(targetInHeap), static_cast<unsigned>(holderInHeap),
-                     static_cast<unsigned>(targetInGhost), targetInGhost ? "ghost" : "current", targetCurrent,
-                     targetGhost, selectedTargetRegion, Collector::GetGCPhaseName(phase), static_cast<unsigned>(phase),
-                     g_gcCount.load(std::memory_order_relaxed), static_cast<unsigned long long>(gcStartNs));
-                dumpRegion("target_current_pre_find", target, targetCurrent);
-                dumpRegion("target_ghost_pre_find", target, targetGhost);
-                dumpRegion("holder_current", obj, holderCurrent);
-                dumpRegion("holder_ghost", obj, holderGhost);
-
-                char targetClear[384];
-                char holderClear[384];
-                const bool targetWasCleared = targetInHeap &&
-                    TraceClear::Lookup(reinterpret_cast<MAddress>(target), targetClear, sizeof(targetClear));
-                const bool holderWasCleared = holderInHeap &&
-                    TraceClear::Lookup(reinterpret_cast<MAddress>(obj), holderClear, sizeof(holderClear));
-                if (!targetInHeap) {
-                    std::snprintf(targetClear, sizeof(targetClear), "NOT_AVAILABLE_target_not_in_heap");
-                }
-                if (!holderInHeap) {
-                    std::snprintf(holderClear, sizeof(holderClear), "NOT_AVAILABLE_holder_not_in_heap");
-                }
-                VLOG(REPORT,
-                     "[GCV2][F3_REGION][lifecycle] targetClearedRecent=%u targetClear={%s} "
-                     "holderClearedRecent=%u holderClear={%s} "
-                     "targetRecycledSinceForward=NOT_AVAILABLE_no_forward_start_snapshotEpoch_baseline",
-                     static_cast<unsigned>(targetWasCleared), targetClear, static_cast<unsigned>(holderWasCleared),
-                     holderClear);
-
-                char ghostReclaim[384] = "NOT_AVAILABLE_target_not_in_heap";
-                char dirtyTake[384] = "NOT_AVAILABLE_target_not_in_heap";
-                char garbageReuse[384] = "NOT_AVAILABLE_target_not_in_heap";
-                char clearGhost[384] = "NOT_AVAILABLE_target_not_in_heap";
-                char dispel[384] = "NOT_AVAILABLE_target_not_in_heap";
-                const bool targetGhostReclaimed = targetInHeap && TraceClear::LookupKind(
-                    reinterpret_cast<MAddress>(target), "ghost_reclaim", gcStartNs, ghostReclaim,
-                    sizeof(ghostReclaim));
-                const bool targetDirtyTaken = targetInHeap && TraceClear::LookupKind(
-                    reinterpret_cast<MAddress>(target), "dirty_take", gcStartNs, dirtyTake, sizeof(dirtyTake));
-                const bool targetGarbageReused = targetInHeap && TraceClear::LookupKind(
-                    reinterpret_cast<MAddress>(target), "garbage_reuse", gcStartNs, garbageReuse,
-                    sizeof(garbageReuse));
-                const bool targetGhostCleared = targetInHeap && TraceClear::LookupKind(
-                    reinterpret_cast<MAddress>(target), "clear_ghost", gcStartNs, clearGhost,
-                    sizeof(clearGhost));
-                const bool targetDispelled = targetInHeap && TraceClear::LookupKind(
-                    reinterpret_cast<MAddress>(target), "dispel", gcStartNs, dispel, sizeof(dispel));
-                VLOG(REPORT,
-                     "[GCV2][F3_REGION][supply-path] ghostReclaim=%u dirtyTake=%u garbageReuse=%u "
-                     "clearGhost=%u dispel=%u pathConfirmedGhostReclaimDirtyReuse=%u "
-                     "ghostReclaim={%s} dirtyTake={%s} garbageReuse={%s} clearGhost={%s} dispel={%s}",
-                     static_cast<unsigned>(targetGhostReclaimed), static_cast<unsigned>(targetDirtyTaken),
-                     static_cast<unsigned>(targetGarbageReused), static_cast<unsigned>(targetGhostCleared),
-                     static_cast<unsigned>(targetDispelled),
-                     static_cast<unsigned>(targetGhostReclaimed && targetDirtyTaken), ghostReclaim, dirtyTake,
-                     garbageReuse, clearGhost, dispel);
-
-                BaseObject* toVersion = targetInHeap ? FindToVersion(target) : nullptr;
-                const bool toInHeap = toVersion != nullptr && Heap::IsHeapAddress(toVersion);
-                const int toValid = toInHeap ? static_cast<int>(toVersion->IsValidObject()) : -1;
-                RegionInfo* toRegion = toInHeap
-                    ? RegionInfo::TryGetRegionInfoAt(reinterpret_cast<MAddress>(toVersion))
-                    : nullptr;
-                VLOG(REPORT,
-                     "[GCV2][F3_REGION][forward] FindToVersion=%p toInHeap=%u toValid=%d "
-                     "findMayRouteRegion=%u TryForwardObject=NOT_CALLED_side_effectful_RouteRegion_and_object_copy",
-                     toVersion, static_cast<unsigned>(toInHeap), toValid, static_cast<unsigned>(targetInHeap));
-                dumpRegion("to_version_after_find", toVersion, toRegion);
-                dumpRegion("target_ghost_after_find", target, targetGhost);
-            }
-        }
         // Anchor main 2f1bc8355e92dbf01c063050b5c9a2947c711d64
         CHECK_DETAIL(isValidTarget, "TryUntagRefField encounters invalid tagged target %p at field %p", target,
                      &field);
@@ -2159,7 +1606,6 @@ void WCollector::TraceHeap()
             // not started; this is the last point at which an incomplete stack-root
             // receipt can be reported before any mark-closure work consumes the roots.
             DoEnumeration(workStack, foreignStack);
-            VerifyStackRootPostcondition(stackScanEpoch, "major");
             StackRootSlotAttest::Finish();
             TransitionToGCPhase(GCPhase::GC_PHASE_TRACE, true);
         } else {
@@ -2379,8 +1825,7 @@ void WCollector::FixOldTaggedRefField(BaseObject* holder, RefField<>& field, con
             // Fall through to RootSlotWriteback(latest).
         } else {
             // True dead residue: soft-null by default (e8e092f6).
-            // f3arm: always-on classified counters; MRT_GCV2_F3_DEADARM_ASSERT=1 → fail-closed
-            // (no CAS null). Default path byte-identical soft-null when env unset.
+            // f3arm: always-on classified counters.
             // f3weak: holder passed so weak_holder overlay can count IsWeakRef holders.
             // oraclegate: layer true-dead by HOLDER liveness. Reachability: a marked (live)
             // holder cannot hold a strong ref to a dead target -- when the classifier says it
@@ -2412,14 +1857,6 @@ void WCollector::FixOldTaggedRefField(BaseObject* holder, RefField<>& field, con
                      "[GCV2][F3-dead] holder=%p field=%p from=%p latest=%p reason=%s — null slot",
                      holder, &field, fromObj, latest, deadReason);
             }
-            if (F3DeadarmAssertEnabled()) {
-                ReportF3DeadarmCounts("assert");
-                CHECK_DETAIL(false,
-                             "[GCV2][f3-deadarm] ASSERT reason=%s rtype=%u latestValid=%d "
-                             "holder=%p field=%p from=%p latest=%p env=MRT_GCV2_F3_DEADARM_ASSERT=1",
-                             deadReason, rtype, latestValid, holder, &field, fromObj, latest);
-                return;
-            }
             NoteNullslotWrite("f3_fix_oldtag", holder, &field, fromObj, latest, &g_nullslotF3);
             RefField<> nullField(nullptr);
             (void)HealSlot(field, oldField.GetFieldValue(), nullField.GetFieldValue(),
@@ -2450,52 +1887,16 @@ void WCollector::FixOldTaggedRefField(BaseObject* holder, RefField<>& field, con
 
 void WCollector::InvalidateOldTaggedRefsBeforeDispel()
 {
-    // A1 (preflipacc §5 / rspec §四 A1): production skips the preflip full-heap walk.
-    // Population was empty across 123 majors × 3 loads; cost was ~27% of major total_gc.
-    // VERIFY / ACCOUNT still force the walk so soak/ALOT can keep the insurance tripwire.
-    static const bool preflipWalk = []() {
-        const char* verify = static_cast<const char*>(nullptr) /* pinned-off:MRT_GCV2_PREFLIP_VERIFY */;
-        if (verify != nullptr && std::strcmp(verify, "1") == 0) {
-            return true;
-        }
-        const char* account = static_cast<const char*>(nullptr) /* pinned-off:MRT_GCV2_PREFLIP_ACCOUNT */;
-        return account != nullptr && std::strcmp(account, "1") == 0;
-    }();
-    if (!preflipWalk) {
-        return;
-    }
-    InvalidateOldTaggedRefs(true);
 }
 
 void WCollector::InvalidateOldTaggedRefs(bool requireSurvivedMark)
 {
+    constexpr bool account = false;
+    constexpr bool trackFixed = false;
     MRT_PHASE_TIMER(requireSurvivedMark ? "InvalidateOldTaggedRefs.preflip" : "InvalidateOldTaggedRefs.postflip");
     ScopedStopTheWorld stw(requireSurvivedMark ? "invalidate old tagged refs before dispel"
                                                : "invalidate old tagged refs after flip");
 
-    // A2: parallel full-heap STW walk (ops/design/REMSET_OPTION1_SPEC_0805.txt §六).
-    // Sharding = atomic address cursor + region-head ownership; roots = 6 family tasks;
-    // account counters are per-worker then merged (H1/H2/H3). A1 VERIFY/ACCOUNT locals below.
-    static const bool accountEnv = []() {
-        const char* value = static_cast<const char*>(nullptr) /* pinned-off:MRT_GCV2_PREFLIP_ACCOUNT */;
-        return value != nullptr && std::strcmp(value, "1") == 0;
-    }();
-    static const bool preflipVerifyEnv = []() {
-        const char* value = static_cast<const char*>(nullptr) /* pinned-off:MRT_GCV2_PREFLIP_VERIFY */;
-        return value != nullptr && std::strcmp(value, "1") == 0;
-    }();
-    static const bool preflipInjectEnv = []() {
-        const char* value = static_cast<const char*>(nullptr) /* pinned-off:MRT_GCV2_PREFLIP_VERIFY_INJECT */;
-        return value != nullptr && std::strcmp(value, "1") == 0;
-    }();
-    // Locals for lambda capture (static const cannot be captured under -std=gnu++14).
-    const bool account = accountEnv;
-    const bool preflipVerify = preflipVerifyEnv;
-    const bool preflipInject = preflipInjectEnv;
-    // VERIFY always needs fixed counts so a non-zero residue can fail loud.
-    const bool trackFixed = account || (requireSurvivedMark && preflipVerify);
-
-    constexpr size_t regionTypeCount = static_cast<size_t>(RegionInfo::RegionType::GARBAGE_REGION) + 1;
     // CHUNK = 256 units × UNIT_SIZE (16MiB @ 64KB unit). Spec §六 T1.
     constexpr size_t kChunkUnits = 256;
     const size_t chunkBytes = kChunkUnits * RegionInfo::UNIT_SIZE;
@@ -2644,7 +2045,6 @@ void WCollector::InvalidateOldTaggedRefs(bool requireSurvivedMark)
                 addr = nextAddr;
             }
         }
-        RegionInfo* lastProcessedRegion = nullptr;
         while (addr < limit) {
             RegionInfo* region = RegionInfo::GetRegionInfoAt(addr);
             uintptr_t nextAddr = region->GetRegionEnd();
@@ -2659,10 +2059,6 @@ void WCollector::InvalidateOldTaggedRefs(bool requireSurvivedMark)
                 if (region->IsValidRegion() && !region->IsFreeRegion() && !region->IsGarbageRegion() &&
                     !(requireSurvivedMark &&
                       region->IsKnownEmpty(region->GetMarkView<Generation::Old>()))) {
-                    if (account && region != lastProcessedRegion) {
-                        lastProcessedRegion = region;
-                        ++acc.processedRegions;
-                    }
                     region->VisitAllObjects([&processObject, &acc](BaseObject* object) {
                         processObject(object, acc);
                     });
@@ -2684,74 +2080,6 @@ void WCollector::InvalidateOldTaggedRefs(bool requireSurvivedMark)
         }
     };
 
-    // H7: account shadow pass stays serial (diagnostic-only, not on hot path).
-    std::array<size_t, regionTypeCount> regionTypes{};
-    size_t regions = 0;
-    size_t knownEmptyRegions = 0;
-    size_t objects = 0;
-    size_t knownEmptyObjects = 0;
-    size_t fromRegions = 0;
-    if (account) {
-        RegionInfo* lastAccountRegion = nullptr;
-        space.ForEachObj(
-            [requireSurvivedMark, &regionTypes, &lastAccountRegion, &regions, &knownEmptyRegions, &objects,
-             &knownEmptyObjects, &fromRegions](BaseObject* obj) {
-                ++objects;
-                RegionInfo* region = obj == nullptr ? nullptr :
-                    RegionInfo::TryGetRegionInfoAt(reinterpret_cast<MAddress>(obj));
-                if (region == nullptr) {
-                    return;
-                }
-                if (region != lastAccountRegion) {
-                    lastAccountRegion = region;
-                    ++regions;
-                    ++regionTypes[static_cast<size_t>(region->GetRegionType())];
-                    if (requireSurvivedMark &&
-                        region->IsKnownEmpty(region->GetMarkView<Generation::Old>())) {
-                        ++knownEmptyRegions;
-                    }
-                    if (requireSurvivedMark && region->IsFromRegion()) {
-                        ++fromRegions;
-                    }
-                }
-                if (requireSurvivedMark &&
-                    region->IsKnownEmpty(region->GetMarkView<Generation::Old>())) {
-                    ++knownEmptyObjects;
-                }
-            },
-            false);
-    }
-
-    // A1 positive control: plant one old-tagged root so PREFLIP_VERIFY must observe fixed>0.
-    // Serial, before parallel dispatch; only on preflip path.
-    RootAccount injectAcc{};
-    if (requireSurvivedMark && preflipVerify && preflipInject) {
-        BaseObject* injectTarget = nullptr;
-        space.ForEachObj(
-            [&injectTarget](BaseObject* obj) {
-                if (injectTarget != nullptr || obj == nullptr || !obj->IsValidObject()) {
-                    return;
-                }
-                injectTarget = obj;
-            },
-            false);
-        if (injectTarget != nullptr) {
-            RefField<> planted(injectTarget, REMAP_COLOUR_MASK ^ currentRemapColour);
-            MAddress injectRootStorage = raw(planted.GetFieldValue());
-            ObjectRef injectRoot{};
-            *reinterpret_cast<MAddress*>(&injectRoot) = injectRootStorage;
-            RootVisitor fixRoot = makeRootVisitor(&injectAcc);
-            fixRoot(injectRoot);
-            VLOG(REPORT,
-                 "[GCV2][preflip-verify-inject] planted old-tag root target=%p raw=%#zx fixedRoots_now=%zu "
-                 "env=MRT_GCV2_PREFLIP_VERIFY_INJECT=1",
-                 injectTarget, static_cast<uintptr_t>(injectRootStorage), injectAcc.fixedRootSlots);
-        } else {
-            VLOG(REPORT,
-                 "[GCV2][preflip-verify-inject] no live object to plant env=MRT_GCV2_PREFLIP_VERIFY_INJECT=1");
-        }
-    }
-
     GCThreadPool* threadPool = GetThreadPool();
     // Positive control for silent serial degradation (spec §六 T3 ②).
     // Force serial via MRT_GCV2_STWPAR_FORCE_SERIAL=1 for bidirectional proof.
@@ -2762,7 +2090,7 @@ void WCollector::InvalidateOldTaggedRefs(bool requireSurvivedMark)
     const bool forceSerial = forceSerialEnv;
     const bool useParallel = threadPool != nullptr && !forceSerial;
 
-    RootAccount rootTotals = injectAcc;
+    RootAccount rootTotals{};
     HeapAccount heapTotals{};
     std::vector<size_t> chunksPerWorker;
     size_t workersScheduled = 0;
@@ -2908,56 +2236,6 @@ void WCollector::InvalidateOldTaggedRefs(bool requireSurvivedMark)
     ReportF3DeadarmCounts(requireSurvivedMark ? "preflip" : "postflip");
     F3Why2Diag::Report(requireSurvivedMark ? "preflip" : "postflip");
     GarbRegionDiag::Report(requireSurvivedMark ? "preflip" : "postflip");
-    if (account) {
-        VLOG(REPORT,
-             "[GCV2][preflip-account] phase=%s regions=%zu knownEmptyRegions=%zu objects=%zu "
-             "knownEmptyObjects=%zu processedRegions=%zu processedObjects=%zu invalid=%zu filtered=%zu "
-             "survived=%zu refHolders=%zu fields=%zu oldTagged=%zu fixed=%zu rootSlots=%zu "
-             "oldTaggedRoots=%zu fixedRoots=%zu youngTargets=%zu "
-             "rebuilt=%zu fromRegions=%zu fromLiveObjects=%zu fromLiveFields=%zu "
-             "env=MRT_GCV2_PREFLIP_ACCOUNT=1",
-             requireSurvivedMark ? "preflip" : "postflip", regions, knownEmptyRegions, objects, knownEmptyObjects,
-             heapTotals.processedRegions, heapTotals.processedObjects, heapTotals.invalidObjects,
-             heapTotals.filteredObjects,
-             heapTotals.processedObjects - heapTotals.invalidObjects - heapTotals.filteredObjects,
-             heapTotals.refHolders, heapTotals.fields, heapTotals.oldTaggedSlots, heapTotals.fixedSlots,
-             rootTotals.rootSlots, rootTotals.oldTaggedRootSlots, rootTotals.fixedRootSlots,
-             heapTotals.youngTargetSlots, heapTotals.rebuilt, fromRegions, heapTotals.fromLiveObjects,
-             heapTotals.fromLiveFields);
-        VLOG(REPORT,
-             "[GCV2][preflip-region-types] phase=%s type0=%zu type1=%zu type2=%zu type3=%zu type4=%zu "
-             "type5=%zu type6=%zu type7=%zu type8=%zu type9=%zu type10=%zu type11=%zu type12=%zu type13=%zu "
-             "type14=%zu env=MRT_GCV2_PREFLIP_ACCOUNT=1",
-             requireSurvivedMark ? "preflip" : "postflip", regionTypes[0], regionTypes[1], regionTypes[2],
-             regionTypes[3], regionTypes[4], regionTypes[5], regionTypes[6], regionTypes[7], regionTypes[8],
-             regionTypes[9], regionTypes[10], regionTypes[11], regionTypes[12], regionTypes[13], regionTypes[14]);
-    }
-    // A1 VERIFY tripwire: preflip fixed population must stay empty. Any fix is a named failure.
-    if (requireSurvivedMark && preflipVerify) {
-        const size_t fixedTotal = heapTotals.fixedSlots + rootTotals.fixedRootSlots;
-        VLOG(REPORT,
-             "[GCV2][preflip-verify] fixed=%zu fixedRoots=%zu fixedTotal=%zu oldTagged=%zu oldTaggedRoots=%zu "
-             "fields=%zu rootSlots=%zu env=MRT_GCV2_PREFLIP_VERIFY=1",
-             heapTotals.fixedSlots, rootTotals.fixedRootSlots, fixedTotal, heapTotals.oldTaggedSlots,
-             rootTotals.oldTaggedRootSlots, heapTotals.fields, rootTotals.rootSlots);
-        if (fixedTotal > 0) {
-            static const bool preflipVerifyFatal = []() {
-                const char* value = static_cast<const char*>(nullptr) /* pinned-off:MRT_GCV2_PREFLIP_VERIFY_FATAL */;
-                return value != nullptr && std::strcmp(value, "1") == 0;
-            }();
-            LOG(RTLOG_ERROR,
-                "[GCV2][preflip-verify] PREFLIP_RESIDUE fixed=%zu fixedRoots=%zu fixedTotal=%zu "
-                "oldTagged=%zu oldTaggedRoots=%zu (production skips preflip; residue means insurance needed)",
-                heapTotals.fixedSlots, rootTotals.fixedRootSlots, fixedTotal, heapTotals.oldTaggedSlots,
-                rootTotals.oldTaggedRootSlots);
-            if (preflipVerifyFatal) {
-                CHECK_DETAIL(false,
-                             "MRT_GCV2_PREFLIP_VERIFY_FATAL: preflip residue fixedTotal=%zu "
-                             "(fixed=%zu fixedRoots=%zu)",
-                             fixedTotal, heapTotals.fixedSlots, rootTotals.fixedRootSlots);
-            }
-        }
-    }
 }
 
 void WCollector::PostTrace()
@@ -3659,40 +2937,10 @@ void WCollector::VisitMinorRootSlots(RootVisitor& rawRootVisitor, uint64_t stack
 #if defined(MRT_REMSET_BITMAP_CROSSCHECK)
     Heap::GetHeap().VisitStaticRoots([&remset, &visitedRawRootVisitor](RootSlot& root) {
         remset.VisitStaticForCrossCheck(reinterpret_cast<MAddress>(&root));
-        if (YoungStaticProbeOn()) {
-            zaddress_unsafe obs = root.LoadPlain();
-            BaseObject* t = to_object(HeapSlot<>(to_zpointer(raw(obs))).GetTargetObject());
-            if (t != nullptr && Heap::IsHeapAddress(t)) {
-                g_ysStaticVisit.fetch_add(1, std::memory_order_relaxed);
-                RegionInfo* r = RegionInfo::TryGetRegionInfoAt(reinterpret_cast<MAddress>(t));
-                if (r != nullptr && r->IsYoungRegion()) {
-                    g_ysStaticYoung.fetch_add(1, std::memory_order_relaxed);
-                } else {
-                    g_ysStaticOld.fetch_add(1, std::memory_order_relaxed);
-                }
-            }
-        }
         visitedRawRootVisitor(root);
     });
 #else
-    if (YoungStaticProbeOn()) {
-        Heap::GetHeap().VisitStaticRoots([&visitedRawRootVisitor](RootSlot& root) {
-            zaddress_unsafe obs = root.LoadPlain();
-            BaseObject* t = to_object(HeapSlot<>(to_zpointer(raw(obs))).GetTargetObject());
-            if (t != nullptr && Heap::IsHeapAddress(t)) {
-                g_ysStaticVisit.fetch_add(1, std::memory_order_relaxed);
-                RegionInfo* r = RegionInfo::TryGetRegionInfoAt(reinterpret_cast<MAddress>(t));
-                if (r != nullptr && r->IsYoungRegion()) {
-                    g_ysStaticYoung.fetch_add(1, std::memory_order_relaxed);
-                } else {
-                    g_ysStaticOld.fetch_add(1, std::memory_order_relaxed);
-                }
-            }
-            visitedRawRootVisitor(root);
-        });
-    } else {
-        Heap::GetHeap().VisitStaticRoots(visitedRawRootVisitor);
-    }
+    Heap::GetHeap().VisitStaticRoots(visitedRawRootVisitor);
 #endif
     gMinorRootOrigin = "concurrency";
     Runtime::Current().GetConcurrencyModel().VisitGCRoots(&visitedRawRootVisitor);
@@ -3848,26 +3096,6 @@ void WCollector::PushYoungObject(BaseObject* object, WorkStack& workStack, const
         CHECK_DETAIL(false, "minor root/reference %p is not a valid object origin=%s", object, src);
     }
     RegionInfo* region = RegionInfo::GetRegionInfoAt(reinterpret_cast<MAddress>(object));
-    if (YoungStaticProbeOn()) {
-        const char* src = origin;
-        if (src == nullptr || std::strcmp(src, "unknown") == 0 || std::strcmp(src, "minor_root") == 0 ||
-            std::strcmp(src, "minor_root_final") == 0) {
-            if (gMinorRootOrigin != nullptr && std::strcmp(gMinorRootOrigin, "unknown") != 0) {
-                src = gMinorRootOrigin;
-            }
-        }
-        if (src != nullptr && (std::strcmp(src, "static") == 0 || std::strcmp(src, "minor_root") == 0 ||
-                               std::strcmp(src, "minor_root_final") == 0)) {
-            g_ysPushSeen.fetch_add(1, std::memory_order_relaxed);
-            if (!region->IsYoungRegion()) {
-                g_ysPushNotYoung.fetch_add(1, std::memory_order_relaxed);
-            } else if (region->IsMarkedObject(region->GetMarkView<Generation::Young>(), object)) {
-                g_ysPushAlready.fetch_add(1, std::memory_order_relaxed);
-            } else {
-                g_ysPushYoungUnmarked.fetch_add(1, std::memory_order_relaxed);
-            }
-        }
-    }
     if (region->IsYoungRegion() &&
         !region->IsMarkedObject(region->GetMarkView<Generation::Young>(), object)) {
         if (UNLIKELY(WhoPushDiag::Enabled())) {
@@ -3992,39 +3220,9 @@ size_t MarkStripeCount(size_t workers)
 // h3seed3 乙: live-holder slot → free|garbage target → HealSlot null.
 // Criterion fields (RegionInfo state word): IsFreeRegion() / IsGarbageRegion()
 // via TryGetRegionInfoAt(target) at the call site (closure edge or Fix).
-// Default-off counters: MRT_GCV2_MINOR_SCRUB_COUNT=1
-// Measurement-only kill switch (default OFF = scrub ON): MRT_GCV2_MINOR_SCRUB_OFF=1
-// ⛔ not a product default; h3hang B′ arm only.
-std::atomic<uint64_t> g_minorScrubSlotN{ 0 };
-std::atomic<uint64_t> g_minorScrubFreeN{ 0 };
-std::atomic<uint64_t> g_minorScrubGarbageN{ 0 };
-std::atomic<uint64_t> g_minorScrubClosureN{ 0 };
-std::atomic<uint64_t> g_minorScrubFixN{ 0 };
-
-bool MinorScrubCountEnabled()
-{
-    static const bool on = []() {
-        const char* v = static_cast<const char*>(nullptr) /* pinned-off:MRT_GCV2_MINOR_SCRUB_COUNT */;
-        return v != nullptr && std::strcmp(v, "1") == 0;
-    }();
-    return on;
-}
-
-bool MinorScrubOff()
-{
-    static const bool off = []() {
-        const char* v = static_cast<const char*>(nullptr) /* pinned-off:MRT_GCV2_MINOR_SCRUB_OFF */;
-        return v != nullptr && std::strcmp(v, "1") == 0;
-    }();
-    return off;
-}
-
 // Returns true if the slot was scrubbed (caller must not push / treat as live edge).
-bool ScrubMinorFreeTarget(RefField<>& field, BaseObject* target, bool fromFix)
+bool ScrubMinorFreeTarget(RefField<>& field, BaseObject* target, bool /*fromFix*/)
 {
-    if (MinorScrubOff()) {
-        return false;
-    }
     if (target == nullptr || !Heap::IsHeapAddress(target)) {
         return false;
     }
@@ -4046,40 +3244,9 @@ bool ScrubMinorFreeTarget(RefField<>& field, BaseObject* target, bool fromFix)
         (void)HealSlot(field, to_zpointer(oldVal), zpointer::null,
                        HealSite::WCollectorMinorFixForwardNull, HealNull::Allow);
     }
-    if (MinorScrubCountEnabled()) {
-        g_minorScrubSlotN.fetch_add(1, std::memory_order_relaxed);
-        if (isFree) {
-            g_minorScrubFreeN.fetch_add(1, std::memory_order_relaxed);
-        }
-        if (isGarbage) {
-            g_minorScrubGarbageN.fetch_add(1, std::memory_order_relaxed);
-        }
-        if (fromFix) {
-            g_minorScrubFixN.fetch_add(1, std::memory_order_relaxed);
-        } else {
-            g_minorScrubClosureN.fetch_add(1, std::memory_order_relaxed);
-        }
-    }
     return true;
 }
 
-void DumpMinorScrubCountIfEnabled(const char* point)
-{
-    if (!MinorScrubCountEnabled()) {
-        return;
-    }
-    uint64_t slots = g_minorScrubSlotN.exchange(0, std::memory_order_relaxed);
-    uint64_t freeN = g_minorScrubFreeN.exchange(0, std::memory_order_relaxed);
-    uint64_t garbN = g_minorScrubGarbageN.exchange(0, std::memory_order_relaxed);
-    uint64_t cloN = g_minorScrubClosureN.exchange(0, std::memory_order_relaxed);
-    uint64_t fixN = g_minorScrubFixN.exchange(0, std::memory_order_relaxed);
-    VLOG(REPORT,
-         "[GCV2][minor-scrub] point=%s slots=%llu free=%llu garbage=%llu closure=%llu fix=%llu "
-         "env=MRT_GCV2_MINOR_SCRUB_COUNT=1",
-         point, static_cast<unsigned long long>(slots), static_cast<unsigned long long>(freeN),
-         static_cast<unsigned long long>(garbN), static_cast<unsigned long long>(cloN),
-         static_cast<unsigned long long>(fixN));
-}
 } // namespace
 
 struct YoungMarkingShared {
@@ -4701,46 +3868,15 @@ void WCollector::TraceYoungClosureSerial(WorkStack& workStack, bool fullYoungSca
                                          MinorSlotSet& weakSlots, bool useBitmapLedger,
                                          const MinorSlotSet* reachableSlotDomain)
 {
-    // setbitmap O1③: useBitmapLedger=true → claim young via MarkObject (region mark bitmap)
-    // + collect into reachableVec; non-young under FYS still uses reachableObjects set.
-    // FYS=0: skip reachableSlots inserts (lookups never fire; T1 measured pure write cost).
-    const bool recordSlots = fullYoungScan; // only FYS path looks up reachableSlots
-    const int markCostMode = MarkInternalCost::Mode();
-    const uint64_t tSerial0 = (markCostMode == 1) ? TimeUtil::NanoSeconds() : 0;
+    const bool recordSlots = fullYoungScan;
     auto recordReachableSlot = [&reachableSlots, reachableSlotDomain](RefField<>& field) {
         MAddress slot = reinterpret_cast<MAddress>(&field);
         if (reachableSlotDomain != nullptr && reachableSlotDomain->count(slot) == 0) {
             return;
         }
-        (void)LedgerInsert(reachableSlots, slot, g_minorLedgerCost.slotInsN, g_minorLedgerCost.slotInsNew,
-                           g_minorLedgerCost.slotInsNs);
+        (void)LedgerInsert(reachableSlots, slot);
     };
-    auto pushTarget = [this, &workStack, markCostMode](RefField<>& field) {
-        if (markCostMode == 1) {
-            uint64_t t0 = TimeUtil::NanoSeconds();
-        BaseObject* target = ResolveMinorReference(field);
-        if (ScrubMinorFreeTarget(field, target, false)) {
-            g_markInternalCost.resolvePushNs += TimeUtil::NanoSeconds() - t0;
-            ++g_markInternalCost.edgeN;
-            return;
-        }
-        if (UNLIKELY(HeldFreeDiag::Enabled())) {
-            HeldFreeDiag::NoteEnumSlot(&field, target, "closure_edge");
-        }
-        {
-            size_t before = workStack.size();
-            PushYoungObject(target, workStack, "closure_edge");
-            if (workStack.size() > before) {
-                ++g_markInternalCost.edgeYoungPushN;
-            }
-        }
-            g_markInternalCost.resolvePushNs += TimeUtil::NanoSeconds() - t0;
-            ++g_markInternalCost.edgeN;
-            return;
-        }
-        if (markCostMode == 2) {
-            ++g_markInternalCost.edgeN;
-        }
+    auto pushTarget = [this, &workStack](RefField<>& field) {
         BaseObject* target = ResolveMinorReference(field);
         if (ScrubMinorFreeTarget(field, target, false)) {
             return;
@@ -4748,90 +3884,29 @@ void WCollector::TraceYoungClosureSerial(WorkStack& workStack, bool fullYoungSca
         if (UNLIKELY(HeldFreeDiag::Enabled())) {
             HeldFreeDiag::NoteEnumSlot(&field, target, "closure_edge");
         }
-        {
-            size_t before = (markCostMode == 2) ? workStack.size() : 0;
-            PushYoungObject(target, workStack, "closure_edge");
-            if (markCostMode == 2 && workStack.size() > before) {
-                ++g_markInternalCost.edgeYoungPushN;
-            }
-        }
+        PushYoungObject(target, workStack, "closure_edge");
     };
     while (!workStack.empty()) {
-        BaseObject* object = nullptr;
-        if (markCostMode == 1) {
-            uint64_t t0 = TimeUtil::NanoSeconds();
-            object = workStack.back();
-            workStack.pop_back();
-            ++g_markInternalCost.popN;
-            if (!Heap::IsHeapAddress(object)) {
-                ++g_markInternalCost.skipNotHeapN;
-                g_markInternalCost.popGateNs += TimeUtil::NanoSeconds() - t0;
-                continue;
-            }
-            if (!Collector::PlausibleManagedObjectGate("TraceYoungClosure", object)) {
-                BaseObject* host = Collector::TryRecoverInteriorBase(object);
-                if (host != nullptr && host != object) {
-                    PushAdmittedYoung(host, workStack, "TraceYoungClosure.recover");
-                }
-                ++g_markInternalCost.skipGateN;
-                g_markInternalCost.popGateNs += TimeUtil::NanoSeconds() - t0;
-                continue;
-            }
-            CHECK_DETAIL(object->IsValidObject(), "minor closure reached invalid object %p", object);
-            g_markInternalCost.popGateNs += TimeUtil::NanoSeconds() - t0;
-        } else {
-            object = workStack.back();
-            workStack.pop_back();
-            if (markCostMode == 2) {
-                ++g_markInternalCost.popN;
-            }
-            if (!Heap::IsHeapAddress(object)) {
-                if (markCostMode == 2) {
-                    ++g_markInternalCost.skipNotHeapN;
-                }
-                continue;
-            }
-            // markfloor / introot: RawArray+8 interiors pass IsValidObject (tip=length≠null)
-            // then HasRefField/GetSize SEGV. Recover host; skip interior itself.
-            if (!Collector::PlausibleManagedObjectGate("TraceYoungClosure", object)) {
-                BaseObject* host = Collector::TryRecoverInteriorBase(object);
-                if (host != nullptr && host != object) {
-                    PushAdmittedYoung(host, workStack, "TraceYoungClosure.recover");
-                }
-                if (markCostMode == 2) {
-                    ++g_markInternalCost.skipGateN;
-                }
-                continue;
-            }
-            CHECK_DETAIL(object->IsValidObject(), "minor closure reached invalid object %p", object);
+        BaseObject* object = workStack.back();
+        workStack.pop_back();
+        if (!Heap::IsHeapAddress(object)) {
+            continue;
         }
+        if (!Collector::PlausibleManagedObjectGate("TraceYoungClosure", object)) {
+            BaseObject* host = Collector::TryRecoverInteriorBase(object);
+            if (host != nullptr && host != object) {
+                PushAdmittedYoung(host, workStack, "TraceYoungClosure.recover");
+            }
+            continue;
+        }
+        CHECK_DETAIL(object->IsValidObject(), "minor closure reached invalid object %p", object);
         RegionInfo* region = RegionInfo::GetRegionInfoAt(reinterpret_cast<MAddress>(object));
         const bool isYoung = region->IsYoungRegion();
 
         if (useBitmapLedger) {
             if (isYoung) {
-                // MarkObject returns true if already marked → skip re-visit.
-                // Two diagnostics land on the same branch and neither subsumes the other:
-                // markperf times the bitmap write and counts already-marked visits, eatarm
-                // records that an already-marked object leaves its fields untraced. Both are
-                // gated (markCostMode / EatArmDiag) so the default build pays for neither.
-                bool wasMarked = false;
-                if (markCostMode == 1) {
-                    uint64_t t0 = TimeUtil::NanoSeconds();
-                    wasMarked = MarkYoungObject(object);
-                    g_markInternalCost.markBitmapNs += TimeUtil::NanoSeconds() - t0;
-                } else {
-                    wasMarked = MarkYoungObject(object);
-                }
+                bool wasMarked = MarkYoungObject(object);
                 if (wasMarked) {
-                    if (markCostMode != 0) {
-                        ++g_markInternalCost.alreadyMarkedN;
-                    }
-                    // eatarm D6: wasMarked used to skip field walk entirely.
-                    // ghostroute: Ensure/MarkNewObject/alloc-black can paint without scanning
-                    // fields → children stay live0Surv=0 → FixMinor liveobj → exclusive
-                    // CHECK invalid_object_route. Residual-scan unmarked young only
-                    // (FYS pushTarget would re-push marked peers → infinite stack).
                     EatArmDiag::NoteWasMarkedSkipFields(object);
                     if (!object->HasRefField() || object->IsWeakRef()) {
                         continue;
@@ -4861,17 +3936,12 @@ void WCollector::TraceYoungClosureSerial(WorkStack& workStack, bool fullYoungSca
                     });
                     continue;
                 }
-                if (markCostMode != 0) {
-                    ++g_markInternalCost.claimYoungN;
-                }
                 reachableVec.push_back(object);
             } else {
                 continue;
             }
         } else {
-            if (!LedgerInsert(reachableObjects, object, g_minorLedgerCost.objInsN, g_minorLedgerCost.objInsNew,
-                              g_minorLedgerCost.objInsNs)) {
-                // Dedup hit: residual unmarked young only (paint-without-scan / Ensure).
+            if (!LedgerInsert(reachableObjects, object)) {
                 EatArmDiag::NoteWasMarkedSkipFields(object);
                 if (isYoung && object->HasRefField() && !object->IsWeakRef()) {
                     object->ForEachRefField([this, &workStack, object](RefField<>& field) {
@@ -4901,16 +3971,7 @@ void WCollector::TraceYoungClosureSerial(WorkStack& workStack, bool fullYoungSca
                 continue;
             }
             if (isYoung) {
-                if (markCostMode == 1) {
-                    uint64_t t0 = TimeUtil::NanoSeconds();
-                    (void)MarkYoungObject(object);
-                    g_markInternalCost.markBitmapNs += TimeUtil::NanoSeconds() - t0;
-                } else {
-                    (void)MarkYoungObject(object);
-                }
-                if (markCostMode != 0) {
-                    ++g_markInternalCost.claimYoungN;
-                }
+                (void)MarkYoungObject(object);
             } else {
                 continue;
             }
@@ -4918,70 +3979,24 @@ void WCollector::TraceYoungClosureSerial(WorkStack& workStack, bool fullYoungSca
         }
 
         if (!object->HasRefField()) {
-            if (markCostMode != 0) {
-                ++g_markInternalCost.leafN;
-            }
             continue;
         }
         if (UNLIKELY(object->IsWeakRef())) {
-            if (markCostMode != 0) {
-                ++g_markInternalCost.weakN;
-            }
             HeapSlot<>& referentField = HeapSlotAt<>(reinterpret_cast<MAddress>(object) + TYPEINFO_PTR_SIZE);
-            (void)LedgerInsert(weakSlots, reinterpret_cast<MAddress>(&referentField), g_minorLedgerCost.weakInsN,
-                               g_minorLedgerCost.weakInsNew, g_minorLedgerCost.weakInsNs);
+            (void)LedgerInsert(weakSlots, reinterpret_cast<MAddress>(&referentField));
             BaseObject* referent = ResolveMinorReference(referentField);
             if (!Heap::IsHeapAddress(referent)) {
                 continue;
             }
-            if (markCostMode == 1) {
-                uint64_t t0 = TimeUtil::NanoSeconds();
-                referent->ForEachRefField([&pushTarget](RefField<>& field) { pushTarget(field); });
-                g_markInternalCost.scanObjNs += TimeUtil::NanoSeconds() - t0;
-            } else {
-                referent->ForEachRefField([&pushTarget](RefField<>& field) { pushTarget(field); });
-            }
+            referent->ForEachRefField([&pushTarget](RefField<>& field) { pushTarget(field); });
             continue;
         }
-        const bool isArray = object->IsRawArray();
-        size_t objSize = 0;
-        if (markCostMode != 0) {
-            objSize = object->GetSize();
-            g_markInternalCost.bytesScanned += objSize;
-            if (isArray) {
-                ++g_markInternalCost.arrayN;
-            } else {
-                ++g_markInternalCost.ordinaryN;
+        object->ForEachRefField([&recordReachableSlot, &pushTarget, recordSlots](RefField<>& field) {
+            if (recordSlots) {
+                recordReachableSlot(field);
             }
-            if (objSize >= 8192) {
-                ++g_markInternalCost.largeN;
-            }
-        }
-        if (markCostMode == 1) {
-            uint64_t t0 = TimeUtil::NanoSeconds();
-            object->ForEachRefField([&recordReachableSlot, &pushTarget, recordSlots](RefField<>& field) {
-                if (recordSlots) {
-                    recordReachableSlot(field);
-                }
-                pushTarget(field);
-            });
-            uint64_t dt = TimeUtil::NanoSeconds() - t0;
-            if (isArray) {
-                g_markInternalCost.scanArrayNs += dt;
-            } else {
-                g_markInternalCost.scanObjNs += dt;
-            }
-        } else {
-            object->ForEachRefField([&recordReachableSlot, &pushTarget, recordSlots](RefField<>& field) {
-                if (recordSlots) {
-                    recordReachableSlot(field);
-                }
-                pushTarget(field);
-            });
-        }
-    }
-    if (markCostMode == 1) {
-        g_markInternalCost.totalNs += TimeUtil::NanoSeconds() - tSerial0;
+            pushTarget(field);
+        });
     }
 }
 
@@ -4992,26 +4007,10 @@ void WCollector::TraceYoungClosureParallel(WorkStack& workStack, bool fullYoungS
 {
     // T-D ③: dispel frozen across parallel mark window (same as R2 reffix).
     const size_t dispelAtEntry = RegionInfo::GetDispelGhostCount();
-    {
-        const char* inject = static_cast<const char*>(nullptr) /* pinned-off:MRT_GCV2_MARKPAR_INJECT_DISPEL */;
-        if (inject != nullptr && std::strcmp(inject, "1") == 0) {
-            RegionInfo::InjectDispelCountForTest();
-            VLOG(REPORT, "[GCV2][markpar] inject_dispel=1 (positive control)");
-        }
-    }
 
     const int32_t helperNum = threadPool->GetMaxThreadNum();
     int32_t poolCap = helperNum + 1;
     int32_t workers = poolCap;
-    {
-        const char* wEnv = static_cast<const char*>(nullptr) /* pinned-off:MRT_GCV2_MARKPAR_WORKERS */;
-        if (wEnv != nullptr && wEnv[0] != '\0') {
-            int32_t want = static_cast<int32_t>(std::strtol(wEnv, nullptr, 10));
-            if (want >= 1 && want < workers) {
-                workers = want;
-            }
-        }
-    }
     if (workers < 1) {
         workers = 1;
     }
@@ -5121,24 +4120,8 @@ void WCollector::TraceYoungClosureStriped(WorkStack& workStack, bool fullYoungSc
 {
     g_markStripeArmed.fetch_add(1, std::memory_order_relaxed);
     const size_t dispelAtEntry = RegionInfo::GetDispelGhostCount();
-    {
-        const char* inject = static_cast<const char*>(nullptr) /* pinned-off:MRT_GCV2_MARKPAR_INJECT_DISPEL */;
-        if (inject != nullptr && std::strcmp(inject, "1") == 0) {
-            RegionInfo::InjectDispelCountForTest();
-            VLOG(REPORT, "[GCV2][markpar][striped] inject_dispel=1 (positive control)");
-        }
-    }
 
     int32_t workers = threadPool->GetMaxThreadNum() + 1;
-    {
-        const char* wEnv = static_cast<const char*>(nullptr) /* pinned-off:MRT_GCV2_MARKPAR_WORKERS */;
-        if (wEnv != nullptr && wEnv[0] != '\0') {
-            int32_t want = static_cast<int32_t>(std::strtol(wEnv, nullptr, 10));
-            if (want >= 1 && want < workers) {
-                workers = want;
-            }
-        }
-    }
     if constexpr (kGcTriggerDynamicWorkersEnabled) {
         // zDirector.cpp:783-793 — initial_workers selected each cycle.
         const uint32_t selected = g_gcTriggerYoungWorkers.load(std::memory_order_relaxed);
@@ -5253,55 +4236,21 @@ void WCollector::TraceYoungClosure(WorkStack& workStack, bool fullYoungScan, Min
         return;
     }
     GCThreadPool* threadPool = GetThreadPool();
-    static const bool forceSerialEnv = []() {
-        const char* value = static_cast<const char*>(nullptr) /* pinned-off:MRT_GCV2_MARKPAR_FORCE_SERIAL */;
-        return value != nullptr && std::strcmp(value, "1") == 0;
-    }();
-    // markperf probe only instruments serial path; force serial when MARK_COST≠0.
-    const bool forceSerialForCost = MarkInternalCost::Mode() != 0;
-    const bool workersEnvSet = static_cast<const char*>(nullptr) /* pinned-off:MRT_GCV2_MARKPAR_WORKERS */ != nullptr;
-    const bool serialOverride = forceSerialEnv || forceSerialForCost;
-    // kMarkStriped is independent of the WORKERS getenv. The old nesting
-    // (stripedEnv && useParallel) made STRIPED a no-op once WORKERS was pinned-off.
-    if (kMarkStriped && threadPool != nullptr && !serialOverride) {
+    if (kMarkStriped && threadPool != nullptr) {
         TraceYoungClosureStriped(workStack, fullYoungScan, reachableObjects, reachableVec, reachableSlots, weakSlots,
                                  useBitmapLedger, threadPool, reachableSlotDomain);
         return;
     }
-    const bool useParallel = threadPool != nullptr && workersEnvSet && !serialOverride;
-    if (!useParallel) {
-        // It used to print pool_unavailable unconditionally, which sent readers to inspect
-        // the thread pool when the real cause was an unset env var. Report the cause the
-        // operator can act on, most deliberate first -- NOT useParallel's && order, which
-        // would answer "workers_unset" to someone who just asked for FORCE_SERIAL=1:
-        //   pool_unavailable  environmental, nothing to set
-        //   force_serial      operator asked for serial outright
-        //   mark_cost         operator turned on the markperf probe, which implies serial
-        //   workers_unset     the default state -- nobody opted in
-        //   striped_off       kMarkStriped is false (current product default)
-        const char* reason = "workers_unset";
-        if (threadPool == nullptr) {
-            reason = "pool_unavailable";
-        } else if (forceSerialEnv) {
-            reason = "force_serial";
-        } else if (forceSerialForCost) {
-            reason = "mark_cost";
-        } else if (!kMarkStriped) {
-            reason = "striped_off";
-        }
-        VLOG(REPORT, "[GCV2][markpar][parallel] fallback=serial %s kMarkStriped=%d armed=%zu turned=%zu", reason,
-             static_cast<int>(kMarkStriped), g_markStripeArmed.load(std::memory_order_relaxed),
-             g_markStripeTurned.load(std::memory_order_relaxed));
-        TraceYoungClosureSerial(workStack, fullYoungScan, reachableObjects, reachableVec, reachableSlots, weakSlots,
-                                useBitmapLedger, reachableSlotDomain);
-        VLOG(REPORT,
-             "[GCV2][markpar][parallel] workers_active=1 workers_scheduled=1 objects_marked=[%zu] "
-             "reachable_n=%zu parallel=0",
-             reachableVec.size(), reachableVec.size());
-        return;
-    }
-    TraceYoungClosureParallel(workStack, fullYoungScan, reachableObjects, reachableVec, reachableSlots, weakSlots,
-                              useBitmapLedger, threadPool, reachableSlotDomain);
+    VLOG(REPORT, "[GCV2][markpar][parallel] fallback=serial %s kMarkStriped=%d armed=%zu turned=%zu",
+         threadPool == nullptr ? "pool_unavailable" : "striped_off",
+         static_cast<int>(kMarkStriped), g_markStripeArmed.load(std::memory_order_relaxed),
+         g_markStripeTurned.load(std::memory_order_relaxed));
+    TraceYoungClosureSerial(workStack, fullYoungScan, reachableObjects, reachableVec, reachableSlots, weakSlots,
+                            useBitmapLedger, reachableSlotDomain);
+    VLOG(REPORT,
+         "[GCV2][markpar][parallel] workers_active=1 workers_scheduled=1 objects_marked=[%zu] "
+         "reachable_n=%zu parallel=0",
+         reachableVec.size(), reachableVec.size());
 }
 
 // youngconc: SATB termination for concurrent young mark — same loop shape as
@@ -5434,18 +4383,12 @@ void WCollector::RescanRememberedSet(WorkStack& workStack, const MinorSlotSet& r
     size_t targetOriginVisitedObjects = 0;
     size_t scrubbedBadTarget = 0;
     size_t scrubbedStaleOldTag = 0;
-    static const bool retainedProbe = []() {
-        const char* value = static_cast<const char*>(nullptr) /* pinned-off:MRT_GCV2_RETLIVE_PROBE */;
-        return value != nullptr && std::strcmp(value, "1") == 0;
-    }();
+    constexpr bool retainedProbe = false;
     // remsetlife: uncapped classification of the bad_target arm. The existing sample log
     // caps at 16 per process, so the 386-edge population was only ever seen through 84
     // samples. Counters answer "where does the target sit" for every dropped edge.
     // Default off; observation only, no control-flow change.
-    static const bool remsetLifeProbe = []() {
-        const char* value = static_cast<const char*>(nullptr) /* pinned-off:MRT_GCV2_REMSETLIFE */;
-        return value != nullptr && std::strcmp(value, "1") == 0;
-    }();
+    constexpr bool remsetLifeProbe = false;
     size_t btNoRegion = 0;
     size_t btBeyondAlloc = 0;
     size_t btInAlloc = 0;
@@ -5635,7 +4578,7 @@ void WCollector::RescanRememberedSet(WorkStack& workStack, const MinorSlotSet& r
             NwDropAudit::Note(NwDropAudit::kNotHeap);
             continue;
         }
-        if (LedgerCount(weakSlots, slot, g_minorLedgerCost.weakLookN, g_minorLedgerCost.weakLookNs) != 0) {
+        if (LedgerCount(weakSlots, slot) != 0) {
             if (statsOut != nullptr) {
                 ++statsOut->skippedWeak;
             }
@@ -6118,64 +5061,6 @@ bool WCollector::FixMinorEvacuatedSlot(RefField<>& field, BaseObject* knownBase,
     // ForwardObject null = movable ghost with no to-version (survivor-gate miss).
     // Drop the edge; do not reinstall the from address that is about to be reclaimed.
     if (current == nullptr) {
-        // concwin: classify which young object Compact/Admit missed (default off).
-        static const bool concwinOn = []() {
-            const char* v = static_cast<const char*>(nullptr) /* pinned-off:MRT_GCV2_CONCWIN */;
-            return v != nullptr && v[0] == '1' && v[1] == '\0';
-        }();
-        if (concwinOn) {
-            static std::atomic<size_t> g_concwinN{ 0 };
-            size_t n = g_concwinN.fetch_add(1, std::memory_order_relaxed);
-            if (n < 32) {
-                RegionInfo* tgtReg = RegionInfo::GetGhostFromRegionAt(reinterpret_cast<MAddress>(target));
-                if (tgtReg == nullptr) {
-                    tgtReg = RegionInfo::TryGetRegionInfoAt(reinterpret_cast<MAddress>(target));
-                }
-                const char* tgtName = "?";
-                int tgtRaw = -1;
-                int tgtYoung = -1;
-                unsigned rs = 0xffu;
-                size_t off = 0;
-                size_t liveBytes = 0;
-                int live0 = -1;
-                int marked = -1;
-                if (target != nullptr && Heap::IsHeapAddress(target) &&
-                    Collector::PlausibleManagedObjectGate("concwin.target", target)) {
-                    TypeInfo* ti = target->GetTypeInfo();
-                    if (ti != nullptr && ti->GetName() != nullptr) {
-                        tgtName = ti->GetName();
-                    }
-                    tgtRaw = target->IsRawArray() ? 1 : 0;
-                }
-                if (tgtReg != nullptr) {
-                    tgtYoung = tgtReg->IsYoungRegion() ? 1 : 0;
-                    rs = static_cast<unsigned>(tgtReg->GetRouteState());
-                    liveBytes = tgtReg->GetLiveByteCount();
-                    off = tgtReg->GetAddressOffset(reinterpret_cast<MAddress>(target));
-                    LiveInfo* g0 = tgtReg->GetLiveInfo0ForProbe();
-                    live0 = (g0 != nullptr && tgtReg->IsRouteSurvivedObject(off)) ? 1 : 0;
-                    if (tgtReg->IsYoungRegion()) {
-                        marked = tgtReg->IsMarkedObject(tgtReg->GetMarkView<Generation::Young>(), target) ? 1 : 0;
-                    } else {
-                        marked = tgtReg->IsMarkedObject(tgtReg->GetMarkView<Generation::Old>(), target) ? 1 : 0;
-                    }
-                }
-                uintptr_t fieldAddr = reinterpret_cast<uintptr_t>(&field);
-                RegionInfo* holderReg = RegionInfo::TryGetRegionInfoAt(static_cast<MAddress>(fieldAddr));
-                size_t fieldOff = 0;
-                int holderYoung = -1;
-                if (holderReg != nullptr) {
-                    fieldOff = holderReg->GetAddressOffset(static_cast<MAddress>(fieldAddr));
-                    holderYoung = holderReg->IsYoungRegion() ? 1 : 0;
-                }
-                std::fprintf(stderr,
-                             "[GCV2][concwin] heap_cas_null n=%zu field=%p fieldOff=%zu holderYoung=%d "
-                             "tgt=%p name=%s raw=%d young=%d rs=%u liveBytes=%zu off=%zu live0=%d marked=%d\n",
-                             n, static_cast<void*>(&field), fieldOff, holderYoung, static_cast<void*>(target),
-                             tgtName, tgtRaw, tgtYoung, rs, liveBytes, off, live0, marked);
-                std::fflush(stderr);
-            }
-        }
         if (SlotHeldByLiveObject(&field)) {
             return false;
         }
@@ -6269,75 +5154,6 @@ bool WCollector::FixMinorEvacuatedSlot(RootSlot& root, const ScopedStopTheWorld*
         }
     }
     if (current == nullptr) {
-        // fwdnull: classify why ForwardObject returned null on a root (default off).
-        // Gate MRT_GCV2_FWDNULL=1. Answers Q1 ① survivor / ② Admit / ③ mark / ④ Route.
-        static const bool fwdnullOn = []() {
-            const char* v = static_cast<const char*>(nullptr) /* pinned-off:MRT_GCV2_FWDNULL */;
-            return v != nullptr && v[0] == '1' && v[1] == '\0';
-        }();
-        if (fwdnullOn) {
-            static std::atomic<size_t> g_fwdnullN{ 0 };
-            size_t n = g_fwdnullN.fetch_add(1, std::memory_order_relaxed);
-            if (n < 64) {
-                const bool marked = IsMarkedObject<Generation::Young>(target);
-                const bool survived = IsSurvivedObject<Generation::Young>(target);
-                const bool ghost = IsGhostFromObject(target);
-                const bool unmov = IsUnmovableFromObject(target);
-                RegionInfo* reg = RegionInfo::GetGhostFromRegionAt(reinterpret_cast<MAddress>(target));
-                if (reg == nullptr) {
-                    reg = RegionInfo::TryGetRegionInfoAt(reinterpret_cast<MAddress>(target));
-                }
-                unsigned rs = 0xffu;
-                size_t liveBytes = 0;
-                size_t offset = 0;
-                int live0Surv = -1;
-                int liveSurv = -1;
-                int admitOk = -1;
-                int routeNull = -1;
-                int ghostNull = (reg == nullptr) ? 1 : 0;
-                if (reg != nullptr) {
-                    rs = static_cast<unsigned>(reg->GetRouteState());
-                    liveBytes = reg->GetLiveByteCount();
-                    offset = reg->GetAddressOffset(reinterpret_cast<MAddress>(target));
-                    LiveInfo* g0 = reg->GetLiveInfo0ForProbe();
-                    LiveInfo* li = reg->GetLiveInfo();
-                    live0Surv = (g0 != nullptr && reg->IsRouteSurvivedObject(offset)) ? 1 : 0;
-                    MarkView<Generation::Young> view = reg->GetMarkView<Generation::Young>();
-                    liveSurv = (li != nullptr && reg->IsSurvivedObject(view, li, offset)) ? 1 : 0;
-                    OptionalRouteTicket ticket = reg->AdmitForRoute(target);
-                    admitOk = ticket ? 1 : 0;
-                    if (ticket) {
-                        BaseObject* to = reg->GetRoute(ticket.value());
-                        routeNull = (to == nullptr) ? 1 : 0;
-                    }
-                }
-                // Classification priority: not-ghost → unmovable → no-region → admit-miss
-                // (survivor-gate) → route-geometry-null → other.
-                const char* why = "other";
-                if (!ghost) {
-                    why = "not_ghost";
-                } else if (unmov) {
-                    why = "unmovable";
-                } else if (reg == nullptr) {
-                    why = "no_ghost_region";
-                } else if (admitOk == 0) {
-                    why = "admit_miss"; // ① survivor gate / liveInfo0
-                } else if (routeNull == 1) {
-                    why = "route_null"; // ④ geometry soft-miss
-                } else if (admitOk == 1 && routeNull == 0) {
-                    why = "route_ok_but_fwd_null"; // exclusive/soft after admit
-                }
-                std::fprintf(stderr,
-                             "[GCV2][fwdnull] n=%zu slot=%p target=%p marked=%d survived=%d "
-                             "ghost=%d unmov=%d ghostNull=%d rs=%u liveBytes=%zu off=%zu "
-                             "live0Surv=%d liveSurv=%d admit=%d routeNull=%d why=%s\n",
-                             n, static_cast<void*>(&root), static_cast<void*>(target),
-                             static_cast<int>(marked), static_cast<int>(survived),
-                             static_cast<int>(ghost), static_cast<int>(unmov), ghostNull, rs,
-                             liveBytes, offset, live0Surv, liveSurv, admitOk, routeNull, why);
-                std::fflush(stderr);
-            }
-        }
         OffpastDiag::NoteFixMissSlot(static_cast<void*>(&root), target);
         // I2: Forward miss still consults FindToVersion/receipt. Stale miss
         // refuses silently leaving from (seqnum-bounded table already rejects
@@ -6675,7 +5491,7 @@ void WCollector::EvacuateYoungRegions(const std::vector<BaseObject*>& reachableV
     // path; without it, concurrent copy is the empty window concreffix measured.
     // MRT_GCV2_MINOR_YOUNG_FLIP=0 rolls back to the all-STW evacuate.
     static const bool youngFlipOff = []() {
-        const char* v = static_cast<const char*>(nullptr) /* pinned-off:MRT_GCV2_MINOR_YOUNG_FLIP */;
+        const char* v = std::getenv("MRT_GCV2_MINOR_YOUNG_FLIP");
         return v != nullptr && std::strcmp(v, "0") == 0;
     }();
     const bool concRelocate = stw != nullptr && *stw != nullptr && !youngFlipOff;
@@ -6710,33 +5526,11 @@ void WCollector::EvacuateYoungRegions(const std::vector<BaseObject*>& reachableV
     };
     const bool doYoungFlip = !youngFlipOff;
     GCThreadPool* threadPool = GetThreadPool();
-    static const bool forceSerialEnv = []() {
-        const char* value = static_cast<const char*>(nullptr) /* pinned-off:MRT_GCV2_REFFIX_FORCE_SERIAL */;
-        return value != nullptr && std::strcmp(value, "1") == 0;
-    }();
-    const bool useParallel = threadPool != nullptr && !forceSerialEnv;
+    const bool useParallel = threadPool != nullptr;
 
     // Keep opt-in (`=1`): `=0` or unset is the immediate rollback path.
-    static const bool refFixCoveredDedup = []() {
-        const char* v = static_cast<const char*>(nullptr) /* pinned-off:MRT_GCV2_REFFIX_COVERED_DEDUP */;
-        return v != nullptr && std::strcmp(v, "1") == 0;
-    }();
-    const bool refFixCoveredDedupActive = refFixCoveredDedup && refFixSlotsCoveredByReachable;
-
-    // reachableVec is already materialised by TraceYoungClosure (setbitmap O1③). Under
-    // non-concurrent FYS, RescanRememberedSet only consumes slots present in reachableSlots;
-    // those slots are fields of objects in reachableVec and will be visited by
-    // FixMinorObjectSlots. Only interior references still need the remset-specific known-base
-    // path. Construct that exact residual directly instead of hashing all consumed slots again.
     std::vector<MAddress> remsetVec;
-    if (refFixCoveredDedupActive) {
-        remsetVec.reserve(interiorBases.size());
-        for (const auto& entry : interiorBases) {
-            remsetVec.push_back(entry.first);
-        }
-    } else {
-        remsetVec.assign(rememberedSlots.begin(), rememberedSlots.end());
-    }
+    remsetVec.assign(rememberedSlots.begin(), rememberedSlots.end());
 
     auto fixHeapSlice = [this, &reachableVec, &remsetVec, &interiorBases, &currentObject, &liveStw](
                             size_t beginObj, size_t endObj, size_t beginSlot, size_t endSlot,
@@ -6793,15 +5587,6 @@ void WCollector::EvacuateYoungRegions(const std::vector<BaseObject*>& reachableV
         const size_t nSlot = remsetVec.size();
         const int32_t helperNum = pool->GetMaxThreadNum();
         int32_t heapWorkers = helperNum + 1;
-        {
-            const char* wEnv = static_cast<const char*>(nullptr) /* pinned-off:MRT_GCV2_REFFIX_WORKERS */;
-            if (wEnv != nullptr && wEnv[0] != '\0') {
-                int32_t want = static_cast<int32_t>(std::strtol(wEnv, nullptr, 10));
-                if (want >= 1 && want < heapWorkers) {
-                    heapWorkers = want;
-                }
-            }
-        }
         if (heapWorkers < 1) {
             heapWorkers = 1;
         }
@@ -6876,30 +5661,11 @@ void WCollector::EvacuateYoungRegions(const std::vector<BaseObject*>& reachableV
                                            &liveStw](GCThreadPool* pool) {
         // T-D ③: dispel must stay frozen across the parallel window.
         const size_t dispelAtEntry = RegionInfo::GetDispelGhostCount();
-        // Positive control: MRT_GCV2_REFFIX_INJECT_DISPEL=1 forces a synthetic bump so
-        // the assertion path is proven to fire (not a silent always-pass).
-        {
-            const char* inject = static_cast<const char*>(nullptr) /* pinned-off:MRT_GCV2_REFFIX_INJECT_DISPEL */;
-            if (inject != nullptr && std::strcmp(inject, "1") == 0) {
-                RegionInfo::InjectDispelCountForTest();
-                VLOG(REPORT, "[GCV2][reffix] inject_dispel=1 (positive control)");
-            }
-        }
-
         const size_t nObj = reachableVec.size();
         const size_t nSlot = remsetVec.size();
         const int32_t helperNum = pool->GetMaxThreadNum();
         const int32_t poolCap = helperNum + 1;
         int32_t heapWorkers = poolCap;
-        {
-            const char* wEnv = static_cast<const char*>(nullptr) /* pinned-off:MRT_GCV2_REFFIX_WORKERS */;
-            if (wEnv != nullptr && wEnv[0] != '\0') {
-                int32_t want = static_cast<int32_t>(std::strtol(wEnv, nullptr, 10));
-                if (want >= 1 && want < heapWorkers) {
-                    heapWorkers = want;
-                }
-            }
-        }
         // At least 1 heap worker; root families = 5 additional tasks.
         if (heapWorkers < 1) {
             heapWorkers = 1;
@@ -7055,18 +5821,6 @@ void WCollector::EvacuateYoungRegions(const std::vector<BaseObject*>& reachableV
             doFlip();
         }
 
-        if (refFixCoveredDedup) {
-            const size_t coveredLedger = refFixCoveredDedupActive && rememberedSlots.size() >= remsetVec.size()
-                ? rememberedSlots.size() - remsetVec.size()
-                : 0;
-            VLOG(REPORT,
-                 "[GCV2][reffixconc][dedup] requested=1 active=%u input=%zu covered=%zu residual=%zu "
-                  "interior=%zu concMarkCompatible=%u concRelocate=%u",
-                  static_cast<unsigned>(refFixCoveredDedupActive), rememberedSlots.size(),
-                  coveredLedger, remsetVec.size(), interiorBases.size(),
-                  static_cast<unsigned>(refFixSlotsCoveredByReachable), static_cast<unsigned>(concRelocate));
-        }
-
         {
             MRT_PHASE_TIMER("young.ref_fix_prepare");
             TransitionToGCPhase(GCPhase::GC_PHASE_PREFORWARD, true);
@@ -7215,81 +5969,6 @@ void WCollector::EvacuateYoungRegions(const std::vector<BaseObject*>& reachableV
                 "[GCV2][installdomain] pregrant grant=%zu already=%zu tooLate=%zu skip=%zu "
                 "note=grant0_means_already_in_domain_not_failure",
                 grant, already, tooLate, skip);
-            if (YoungStaticProbeOn()) {
-                LOG(RTLOG_ERROR,
-                    "[GCV2][youngstatic] funnel staticVisit=%zu staticYoung=%zu staticOld=%zu "
-                    "pushSeen=%zu pushYoungUnmarked=%zu pushNotYoung=%zu pushAlready=%zu",
-                    g_ysStaticVisit.load(std::memory_order_relaxed),
-                    g_ysStaticYoung.load(std::memory_order_relaxed),
-                    g_ysStaticOld.load(std::memory_order_relaxed),
-                    g_ysPushSeen.load(std::memory_order_relaxed),
-                    g_ysPushYoungUnmarked.load(std::memory_order_relaxed),
-                    g_ysPushNotYoung.load(std::memory_order_relaxed),
-                    g_ysPushAlready.load(std::memory_order_relaxed));
-            }
-
-            // fysgrant: after PrepareForwardTable + pregrant Ensure — classify reachableVec.
-            // Gate first; zero product cost when off. Counts are cumulative across minors.
-            if (FysGrantProbeOn()) {
-                size_t youngInVec = 0;
-                size_t markedLive = 0;
-                size_t ghostLive0 = 0;
-                size_t markedNoLive0 = 0;
-                size_t neither = 0;
-                size_t oldInVec = 0;
-                for (BaseObject* object : reachableVec) {
-                    if (object == nullptr || !Heap::IsHeapAddress(object)) {
-                        continue;
-                    }
-                    if (!Collector::PlausibleManagedObjectGate("fysgrant.vec", object)) {
-                        continue;
-                    }
-                    RegionInfo* region = RegionInfo::TryGetRegionInfoAt(reinterpret_cast<MAddress>(object));
-                    if (region == nullptr) {
-                        continue;
-                    }
-                    if (!region->IsYoungRegion()) {
-                        ++oldInVec;
-                        continue;
-                    }
-                    ++youngInVec;
-                    size_t offset = region->GetAddressOffset(reinterpret_cast<MAddress>(object));
-                    LiveInfo* live = region->GetLiveInfo();
-                    LiveInfo* ghost = region->GetLiveInfo0ForProbe();
-                    MarkView<Generation::Young> view = region->GetMarkView<Generation::Young>();
-                    const bool curOk = live != nullptr && region->IsSurvivedObject(view, live, offset);
-                    const bool g0Ok = ghost != nullptr && region->IsRouteSurvivedObject(offset);
-                    if (curOk) {
-                        ++markedLive;
-                    }
-                    if (g0Ok) {
-                        ++ghostLive0;
-                    }
-                    if (curOk && !g0Ok) {
-                        ++markedNoLive0;
-                    }
-                    if (!curOk && !g0Ok) {
-                        ++neither;
-                    }
-                }
-                g_fysgrantYoungInVec.fetch_add(youngInVec, std::memory_order_relaxed);
-                g_fysgrantMarkedLive.fetch_add(markedLive, std::memory_order_relaxed);
-                g_fysgrantGhostLive0.fetch_add(ghostLive0, std::memory_order_relaxed);
-                g_fysgrantMarkedNoLive0.fetch_add(markedNoLive0, std::memory_order_relaxed);
-                g_fysgrantNeither.fetch_add(neither, std::memory_order_relaxed);
-                g_fysgrantOldInVec.fetch_add(oldInVec, std::memory_order_relaxed);
-                size_t minorN = g_fysgrantMinorN.fetch_add(1, std::memory_order_relaxed) + 1;
-                LOG(RTLOG_ERROR,
-                    "[GCV2][fysgrant] minor=%zu youngInVec=%zu markedLive=%zu live0=%zu "
-                    "markedNoLive0=%zu neither=%zu oldInVec=%zu "
-                    "pregrant grant=%zu already=%zu tooLate=%zu "
-                    "cum young=%zu live0=%zu markedNoLive0=%zu",
-                    minorN, youngInVec, markedLive, ghostLive0, markedNoLive0, neither, oldInVec,
-                    grant, already, tooLate,
-                    g_fysgrantYoungInVec.load(std::memory_order_relaxed),
-                    g_fysgrantGhostLive0.load(std::memory_order_relaxed),
-                    g_fysgrantMarkedNoLive0.load(std::memory_order_relaxed));
-            }
         }
 
         // pass1 root fix after domain grant — serial sandwich stays;
@@ -7435,10 +6114,6 @@ void WCollector::EvacuateYoungRegions(const std::vector<BaseObject*>& reachableV
         // rebuild gate must open. Prefer leaving a residual young undemoted; if
         // residualPromote path is empty (product real_load: residual≡0), re-tag
         // the first minor candidate as young after demote. Default off.
-        const char* keepOneYoungEnv = static_cast<const char*>(nullptr) /* pinned-off:MRT_GCV2_REBUILD_KEEP_ONE_YOUNG */;
-        const bool keepOneYoung =
-            keepOneYoungEnv != nullptr && std::strcmp(keepOneYoungEnv, "1") == 0;
-        bool keptOneYoung = false;
         {
         // Decision + Register + Promote stay in STW3 (O(regions)). The remset walk
         // moved to young.conc_promote_walk after STW3 release (zRelocate.cpp:1257-1306).
@@ -7451,10 +6126,6 @@ void WCollector::EvacuateYoungRegions(const std::vector<BaseObject*>& reachableV
                     continue;
                 }
                 MarkView<Generation::Young> promotionView = region->GetMarkView<Generation::Young>();
-                if (keepOneYoung && !keptOneYoung) {
-                    keptOneYoung = true;
-                    continue;
-                }
                 if (kPageAgeAdaptiveTenuring &&
                     !ShouldPromoteAge(region->GetYoungAge(), GetGCStats().tenuringThreshold)) {
                     if (region->IsLoneFromRegion() || region->IsFromRegion()) {
@@ -7476,22 +6147,6 @@ void WCollector::EvacuateYoungRegions(const std::vector<BaseObject*>& reachableV
                 (void)region->PromoteYoungRegion(promotionView);
             }
         }
-        }
-        if (keepOneYoung && !keptOneYoung) {
-            // No residual young remained (common today). Re-tag one candidate so
-            // GetYoungRegionCount()>0 and the structural gate opens for the dual-arm
-            // positive control. Not a product path.
-            for (RegionInfo* region : minorCandidateRegions) {
-                if (region == nullptr) {
-                    continue;
-                }
-                region->SetYoungRegionFlag(1);
-                keptOneYoung = true;
-                VLOG(REPORT,
-                     "[GCV2Minor][rebuild-gate] positive-control reyoung region=%p",
-                     region);
-                break;
-            }
         }
         size_t promotedPathRecords = RegionManager::ConsumePromotedCrossGenEdgeCount();
 
@@ -7536,164 +6191,8 @@ void WCollector::EvacuateYoungRegions(const std::vector<BaseObject*>& reachableV
 
 void WCollector::ValidateMinorReferences(const char* point, const std::vector<BaseObject*>* reachableVec)
 {
-    const char* enabled = static_cast<const char*>(nullptr) /* pinned-off:MRT_GCV2_STALE_REFERENCE_VALIDATOR */;
-    if (enabled == nullptr || std::strcmp(enabled, "1") != 0) {
-        return;
-    }
-
-    constexpr size_t categoryCount = 12;
-    constexpr size_t sampleCount = 3;
-    const std::array<const char*, categoryCount> categoryNames = {
-        "stack", "register", "derived", "static", "heap", "weak", "finalizer", "export",
-        "concurrency", "external_resurrection", "exception", "raw_object"
-    };
-    std::array<size_t, categoryCount> counts{};
-    std::array<std::array<const void*, sampleCount>, categoryCount> slots{};
-    std::array<std::array<BaseObject*, sampleCount>, categoryCount> holders{};
-    std::array<std::array<BaseObject*, sampleCount>, categoryCount> targets{};
-    std::array<std::array<uint8_t, sampleCount>, categoryCount> regionTypes{};
-    std::array<std::array<uint8_t, sampleCount>, categoryCount> objectStates{};
-    std::array<std::array<uint16_t, sampleCount>, categoryCount> tags{};
-    WorkStack pending = NewWorkStack();
-    MinorObjectSet visited;
-    bool buildReachableClosure = reachableVec == nullptr;
-
-    auto record = [this, &counts, &slots, &holders, &targets, &regionTypes, &objectStates, &tags](
-                      size_t category, const void* slot, BaseObject* holder, BaseObject* target, uint16_t tag) {
-        if (!Heap::IsHeapAddress(target) || !IsGhostFromObject(target) || IsUnmovableFromObject(target)) {
-            return false;
-        }
-        RegionInfo* region = RegionInfo::TryGetRegionInfoAt(reinterpret_cast<MAddress>(target));
-        bool regionReturned = region == nullptr || region->IsGarbageRegion() || region->IsFreeRegion();
-        ObjectState::ObjectStateCode state = target->GetStateWord().GetStateCode();
-        if (!regionReturned && state != ObjectState::FORWARDED) {
-            return false;
-        }
-        size_t sample = counts[category]++;
-        if (sample < sampleCount) {
-            slots[category][sample] = slot;
-            holders[category][sample] = holder;
-            targets[category][sample] = target;
-            regionTypes[category][sample] =
-                region == nullptr ? std::numeric_limits<uint8_t>::max() : static_cast<uint8_t>(region->GetRegionType());
-            objectStates[category][sample] = static_cast<uint8_t>(state);
-            tags[category][sample] = tag;
-        }
-        return true;
-    };
-    auto inspectTarget = [&record, &pending, buildReachableClosure](
-                             size_t category, const void* slot, BaseObject* holder, BaseObject* target, uint16_t tag) {
-        if (record(category, slot, holder, target, tag)) {
-            return;
-        }
-        if (!buildReachableClosure || !Heap::IsHeapAddress(target)) {
-            return;
-        }
-        RegionInfo* region = RegionInfo::TryGetRegionInfoAt(reinterpret_cast<MAddress>(target));
-        if (region != nullptr && !region->IsGarbageRegion() && !region->IsFreeRegion() && target->IsValidObject()) {
-            pending.push_back(target);
-        }
-    };
-    auto recordRawRoot = [this, &inspectTarget](size_t category) {
-        return RootVisitor([this, category, &inspectTarget](ObjectRef& root) {
-            HeapSlot<> value(to_zpointer(raw(root.LoadPlain())));
-            uint16_t tag = IsLoadBad(value) ? 1 : std::numeric_limits<uint16_t>::max();
-            inspectTarget(category, &root, nullptr, to_object(value.GetTargetObject()), tag);
-        });
-    };
-    auto recordField = [this, &inspectTarget](size_t category, BaseObject* holder, RefField<>& field) {
-        RefField<> value(field);
-        uint16_t tag = IsLoadBad(value) ? 1 : std::numeric_limits<uint16_t>::max();
-        inspectTarget(category, &field, holder, to_object(value.GetTargetObject()), tag);
-    };
-
-    RootVisitor stackVisitor = recordRawRoot(0);
-    RootVisitor registerVisitor = recordRawRoot(1);
-    DerivedPtrVisitor derivedVisitor = [&inspectTarget](BasePtrType basePtr, DerivedSlot& derivedPtr) {
-        inspectTarget(2, &derivedPtr, nullptr, from_native_ref(raw(basePtr)),
-                      std::numeric_limits<uint16_t>::max());
-    };
-    RootVisitor exceptionVisitor = recordRawRoot(10);
-    RootVisitor rawObjectVisitor = recordRawRoot(11);
-    MutatorManager::Instance().VisitAllMutators(
-        [&registerVisitor, &stackVisitor, &derivedVisitor, &exceptionVisitor, &rawObjectVisitor](Mutator& mutator) {
-            mutator.VisitHeapReferences(
-                registerVisitor, stackVisitor, derivedVisitor, exceptionVisitor, rawObjectVisitor);
-        });
-
-    Heap::GetHeap().VisitStaticRoots(recordRawRoot(3));
-    collectorResources.GetFinalizerProcessor().VisitRawPointers(recordRawRoot(6));
-    Heap::GetHeap().VisitAllExportRoots(recordRawRoot(7));
-    RootVisitor concurrencyVisitor = recordRawRoot(8);
-    Runtime::Current().GetConcurrencyModel().VisitGCRoots(&concurrencyVisitor);
-
-    {
-        std::lock_guard<std::mutex> lock(resurrectExportMtx);
-        for (BaseObject* const& object : resurrectedExportObjectes) {
-            inspectTarget(9, &object, nullptr, object, std::numeric_limits<uint16_t>::max());
-        }
-        for (BaseObject* const& object : resurrectedExportObjectesForwardPhase) {
-            inspectTarget(9, &object, nullptr, object, std::numeric_limits<uint16_t>::max());
-        }
-    }
-    {
-        std::lock_guard<std::mutex> lock(cycleWorkStackMtx);
-        for (const auto& entry : cycleRefWorkStack) {
-            inspectTarget(9, &entry.first, nullptr, entry.first, std::numeric_limits<uint16_t>::max());
-            for (BaseObject* const& object : entry.second) {
-                inspectTarget(9, &object, nullptr, object, std::numeric_limits<uint16_t>::max());
-            }
-        }
-    }
-
-    auto visitObject = [this, &recordField](BaseObject* object) {
-        BaseObject* holder = object;
-        if (IsGhostFromObject(holder) && !IsUnmovableFromObject(holder) &&
-            holder->GetStateWord().GetStateCode() == ObjectState::FORWARDED) {
-            holder = FindLatestVersion(holder);
-        }
-        if (holder == nullptr || IsGhostFromObject(holder) || !holder->IsValidObject() || !holder->HasRefField()) {
-            return;
-        }
-        size_t category = holder->IsWeakRef() ? 5 : 4;
-        holder->ForEachRefField(
-            [category, holder, &recordField](RefField<>& field) { recordField(category, holder, field); });
-    };
-    if (reachableVec != nullptr) {
-        for (BaseObject* object : *reachableVec) {
-            visitObject(object);
-        }
-    } else {
-        while (!pending.empty()) {
-            BaseObject* object = pending.back();
-            pending.pop_back();
-            if (visited.insert(object).second) {
-                visitObject(object);
-            }
-        }
-    }
-
-    size_t total = 0;
-    for (size_t category = 0; category < categoryCount; ++category) {
-        total += counts[category];
-        VLOG(REPORT,
-             "[GCV2Minor] STALE_SLOT_CATEGORY_%s point=%s count=%zu "
-             "samples=[%p/%p/%p/type=%u/state=%u/tag=%u,%p/%p/%p/type=%u/state=%u/tag=%u,"
-             "%p/%p/%p/type=%u/state=%u/tag=%u]",
-             categoryNames[category], point, counts[category], slots[category][0], holders[category][0],
-             targets[category][0], static_cast<unsigned>(regionTypes[category][0]),
-             static_cast<unsigned>(objectStates[category][0]), static_cast<unsigned>(tags[category][0]),
-             slots[category][1], holders[category][1], targets[category][1],
-             static_cast<unsigned>(regionTypes[category][1]), static_cast<unsigned>(objectStates[category][1]),
-             static_cast<unsigned>(tags[category][1]), slots[category][2], holders[category][2], targets[category][2],
-             static_cast<unsigned>(regionTypes[category][2]), static_cast<unsigned>(objectStates[category][2]),
-             static_cast<unsigned>(tags[category][2]));
-    }
-    VLOG(REPORT, "[GCV2Minor] VALIDATOR_GATED_BY_MRT_GCV2_STALE_REFERENCE_VALIDATOR point=%s total=%zu",
-         point, total);
-    if (std::strcmp(point, "round2-start") == 0) {
-        VLOG(REPORT, "[GCV2Minor] STALE_SLOT_AT_ROUND2_START_%zu", total);
-    }
+    (void)point;
+    (void)reachableVec;
 }
 
 void WCollector::VerifyRegionSets(const char* point)
@@ -8169,11 +6668,11 @@ void WCollector::DoYoungGarbageCollection()
     // Flags must be known before remset drain: FOLLOW STW1 only flips
     // (zRememberedSet.cpp:36), scan is concurrent (zRemembered.cpp:561-576).
     static const bool youngConcMark = []() {
-        const char* v = static_cast<const char*>(nullptr) /* pinned-off:MRT_GCV2_YOUNG_CONC_MARK */;
+        const char* v = std::getenv("MRT_GCV2_YOUNG_CONC_MARK");
         return v != nullptr && std::strcmp(v, "1") == 0;
     }();
     static const bool youngConcFollowRequested = []() {
-        const char* v = static_cast<const char*>(nullptr) /* pinned-off:MRT_GCV2_YOUNG_CONC_FOLLOW */;
+        const char* v = std::getenv("MRT_GCV2_YOUNG_CONC_FOLLOW");
         return v != nullptr && std::strcmp(v, "1") == 0;
     }();
     const bool youngConcFollow = youngConcFollowRequested && youngConcMark;
@@ -8182,23 +6681,9 @@ void WCollector::DoYoungGarbageCollection()
         // minortime: ④ remset / cross-gen edge consume (drain + pinned stamp; rescan below)
         MRT_PHASE_TIMER("young.remset_drain");
         RememberedSet& rememberedSet = Heap::GetHeap().GetRememberedSet();
-        size_t prePinnedDistinct = ReffixConcProbeOn() ? rememberedSet.Size() : 0;
         size_t pinnedRemsetRecords = manager.RecordPinnedCrossGenEdges();
-        size_t postPinnedDistinct = ReffixConcProbeOn() ? rememberedSet.Size() : 0;
         if (pinnedRemsetRecords != 0) {
             VLOG(REPORT, "[GCV2Minor] pinnedCrossGenEdges=%zu", pinnedRemsetRecords);
-        }
-        if (ReffixConcProbeOn()) {
-            size_t overlap = prePinnedDistinct + pinnedRemsetRecords >= postPinnedDistinct
-                ? prePinnedDistinct + pinnedRemsetRecords - postPinnedDistinct
-                : 0;
-            size_t pinnedOnly = postPinnedDistinct > prePinnedDistinct
-                ? postPinnedDistinct - prePinnedDistinct
-                : 0;
-            VLOG(REPORT,
-                 "[GCV2][reffixconc][source] prePinnedDistinct=%zu pinnedVisits=%zu "
-                 "overlap=%zu pinnedOnly=%zu unionDistinct=%zu",
-                 prePinnedDistinct, pinnedRemsetRecords, overlap, pinnedOnly, postPinnedDistinct);
         }
         // d1producer: D1 counts misses against the *mutator* remset at :5204, but the pinned walk
         // above drains into this same minor. Ask here, before the drain, how many D1 edges the
@@ -8258,7 +6743,6 @@ void WCollector::DoYoungGarbageCollection()
                 (void)mutator.GcPhaseEnum(GCPhase::GC_PHASE_ENUM);
             }
         });
-        VerifyStackRootPostcondition(stackScanEpoch, "minor");
         StackRootSlotAttest::Finish();
     }
 
@@ -8267,12 +6751,12 @@ void WCollector::DoYoungGarbageCollection()
     // The drain side uses the bitmap's exact distinct count to reserve its destination.
     // The FYS-only consumed-ledger elision is decided later, after youngConcMark is known.
     static const bool remsetHashOptRequested = []() {
-        const char* value = static_cast<const char*>(nullptr) /* pinned-off:MRT_GCV2_REMSET_HASH_OPT */;
+        const char* value = std::getenv("MRT_GCV2_REMSET_HASH_OPT");
         return value == nullptr || std::strcmp(value, "1") == 0;
     }();
     // setbitmap O1③: default ON (bitmap claim + vector). MRT_GCV2_SETBITMAP=0 → legacy set path.
     static const bool useBitmapLedger = []() {
-        const char* v = static_cast<const char*>(nullptr) /* pinned-off:MRT_GCV2_SETBITMAP */;
+        const char* v = std::getenv("MRT_GCV2_SETBITMAP");
         if (v != nullptr && std::strcmp(v, "0") == 0) {
             return false;
         }
@@ -8332,11 +6816,11 @@ void WCollector::DoYoungGarbageCollection()
     // makes the first n mark-ends report "not converged" so the edge has a positive control
     // (a re-entry that is never taken cannot be shown to work).
     static const bool youngMarkEndReenter = []() {
-        const char* v = static_cast<const char*>(nullptr) /* pinned-off:MRT_GCV2_YOUNG_MARK_END_REENTER */;
+        const char* v = std::getenv("MRT_GCV2_YOUNG_MARK_END_REENTER");
         return v != nullptr && std::strcmp(v, "1") == 0;
     }();
     static const size_t youngMarkEndForceReenter = []() -> size_t {
-        const char* v = static_cast<const char*>(nullptr) /* pinned-off:MRT_GCV2_YOUNG_MARK_END_FORCE_REENTER */;
+        const char* v = std::getenv("MRT_GCV2_YOUNG_MARK_END_FORCE_REENTER");
         if (v == nullptr) {
             return 0;
         }
@@ -8350,21 +6834,7 @@ void WCollector::DoYoungGarbageCollection()
     // every reachable heap field.  Concurrent young marking is deliberately excluded:
     // its STW2 admits slots recorded after this initial remset snapshot.
     // Keep opt-in (`=1`): `=0` or unset preserves the unrestricted-ledger path.
-    static const bool markRemsetIntersectRequested = []() {
-        const char* value = static_cast<const char*>(nullptr) /* pinned-off:MRT_GCV2_MARK_REMSET_INTERSECT */;
-        return value != nullptr && std::strcmp(value, "1") == 0;
-    }();
-    const bool markRemsetIntersectActive =
-        markRemsetIntersectRequested && fullYoungScan && !youngConcMark;
-    const MinorSlotSet* reachableSlotDomain = markRemsetIntersectActive ? &rememberedSlots : nullptr;
-    if (markRemsetIntersectRequested) {
-        VLOG(REPORT,
-             "[GCV2][markstw][remset-intersect] requested=1 active=%u remembered=%zu fys=%u youngConc=%u",
-             static_cast<unsigned>(markRemsetIntersectActive), rememberedSlots.size(),
-             static_cast<unsigned>(fullYoungScan), static_cast<unsigned>(youngConcMark));
-    }
-    g_minorLedgerCost.Reset();
-    g_markInternalCost.Reset();
+    const MinorSlotSet* reachableSlotDomain = nullptr;
     // portyoungconc L2: this is ZGC's boundary. Everything above is pause_mark_start
     // (colour flip, retire, remset flip) plus root enumeration; everything below until
     // STW2 is concurrent_mark(). Release here so mark_follow runs with mutators alive.
@@ -8397,8 +6867,6 @@ void WCollector::DoYoungGarbageCollection()
         TraceYoungClosure(workStack, fullYoungScan, reachableObjects, reachableVec, reachableSlots, weakSlots,
                           useBitmapLedger, reachableSlotDomain);
     }
-    g_markInternalCost.Report("mark_closure");
-    g_markInternalCost.Reset();
     // fysdesign: O→Y edges on FYS-claimed holders vs remset membership (default off).
     if (FysDesignDiag::Enabled()) {
         static thread_local WCollector* tlsCollector = nullptr;
@@ -8410,27 +6878,14 @@ void WCollector::DoYoungGarbageCollection()
         FysDesignDiag::Report("post_root_mark");
         tlsCollector = nullptr;
     }
-    static const bool refFixCoveredDedupRequested = []() {
-        const char* value = static_cast<const char*>(nullptr) /* pinned-off:MRT_GCV2_REFFIX_COVERED_DEDUP */;
-        return value != nullptr && std::strcmp(value, "1") == 0;
-    }();
-    // zconc: MRT_GCV2_MINOR_CONC_REF_FIX deleted. Concurrent relocate is the
-    // product path; the old flag only opened an empty yield window and inverted
-    // the two remset-dedup gates (REPORT-concreffix).
     auto envOne = [](const char* name) {
         const char* value = std::getenv(name);
         return value != nullptr && std::strcmp(value, "1") == 0;
     };
-    const bool consumedIdentityRequired = ReffixConcProbeOn() || FysAuditDiag::Enabled() ||
+    const bool consumedIdentityRequired = FysAuditDiag::Enabled() ||
         envOne("MRT_GCV2_DIFF_PATH") || envOne("MRT_GCV2_VERIFY_REMSET") ||
         envOne("MRT_GCV2_VERIFY_HEAP");
-    // Fail closed: Rescan itself still performs every filter/resolve/scrub/push
-    // and interior-base recovery.  Only its redundant consumed-address set is
-    // omitted, and only when covered ref-fix will not consume ordinary entries.
-    // Rescan's FYS gate makes every consumed slot a member of reachableSlots at
-    // runtime; this is a control-flow invariant, not a workload coverage guess.
-    const bool remsetConsumedLedgerElideActive = remsetHashOptRequested && fullYoungScan && !youngConcMark &&
-        refFixCoveredDedupRequested && !consumedIdentityRequired;
+    const bool remsetConsumedLedgerElideActive = false;
 
     if (youngConcFollow && rememberedSlots.empty()) {
         // scan_and_follow (zRemembered.cpp:561-576): previous face as grey
@@ -8445,9 +6900,9 @@ void WCollector::DoYoungGarbageCollection()
     }
     size_t liveRememberedCount = 0;
     for (MAddress slot : rememberedSlots) {
-        if (LedgerCount(weakSlots, slot, g_minorLedgerCost.weakLookN, g_minorLedgerCost.weakLookNs) == 0 &&
+        if (LedgerCount(weakSlots, slot) == 0 &&
             (!fullYoungScan ||
-             LedgerCount(reachableSlots, slot, g_minorLedgerCost.slotLookN, g_minorLedgerCost.slotLookNs) != 0)) {
+             LedgerCount(reachableSlots, slot) != 0)) {
             ++liveRememberedCount;
             if (!remsetConsumedLedgerElideActive) {
                 liveRememberedSlots.insert(slot);
@@ -8492,54 +6947,6 @@ void WCollector::DoYoungGarbageCollection()
         }
         TraceYoungClosure(workStack, fullYoungScan, reachableObjects, reachableVec, reachableSlots, weakSlots,
                           useBitmapLedger, reachableSlotDomain);
-    }
-    g_markInternalCost.Report("mark_from_remset");
-    if (ReffixConcProbeOn()) {
-        std::unordered_set<BaseObject*> distinctTargets;
-        distinctTargets.reserve(consumedSlots.size());
-        size_t nullOrNonHeapTargets = 0;
-        size_t youngTargets = 0;
-        size_t oldTargets = 0;
-        for (MAddress slot : consumedSlots) {
-            if (!Heap::IsHeapAddress(slot)) {
-                ++nullOrNonHeapTargets;
-                continue;
-            }
-            BaseObject* target = ResolveMinorReference(HeapSlotAt<>(slot));
-            if (target == nullptr || !Heap::IsHeapAddress(target)) {
-                ++nullOrNonHeapTargets;
-                continue;
-            }
-            distinctTargets.insert(target);
-            RegionInfo* targetRegion = RegionInfo::TryGetRegionInfoAt(reinterpret_cast<MAddress>(target));
-            if (targetRegion != nullptr && targetRegion->IsYoungRegion()) {
-                ++youngTargets;
-            } else {
-                ++oldTargets;
-            }
-        }
-        size_t coveredSlots = 0;
-        size_t holderObjects = 0;
-        for (BaseObject* holder : reachableVec) {
-            if (holder == nullptr || !Heap::IsHeapAddress(holder) || !holder->HasRefField()) {
-                continue;
-            }
-            bool holderHasRemembered = false;
-            holder->ForEachRefField([&rememberedSlots, &coveredSlots, &holderHasRemembered](RefField<>& field) {
-                if (rememberedSlots.count(reinterpret_cast<MAddress>(&field)) != 0) {
-                    ++coveredSlots;
-                    holderHasRemembered = true;
-                }
-            });
-            holderObjects += holderHasRemembered ? 1 : 0;
-        }
-        VLOG(REPORT,
-             "[GCV2][reffixconc][shape] recorded=%zu consumed=%zu distinctTargets=%zu "
-             "youngTargetSlots=%zu oldTargetSlots=%zu nullOrNonHeap=%zu "
-             "reachableHolderObjects=%zu coveredSlots=%zu dedupPctX100=%zu",
-             rememberedSlots.size(), consumedSlots.size(), distinctTargets.size(), youngTargets, oldTargets,
-             nullOrNonHeapTargets, holderObjects, coveredSlots,
-             consumedSlots.empty() ? 0 : coveredSlots * 10000 / consumedSlots.size());
     }
     if (youngConcMark && stw != nullptr) {
         // concwin: release only after the STW1 snapshot (roots + remset drain) is marked.
@@ -8620,8 +7027,7 @@ void WCollector::DoYoungGarbageCollection()
                         if (!Heap::IsHeapAddress(slot)) {
                             continue;
                         }
-                        (void)LedgerInsert(reachableSlots, slot, g_minorLedgerCost.slotInsN,
-                                           g_minorLedgerCost.slotInsNew, g_minorLedgerCost.slotInsNs);
+                        (void)LedgerInsert(reachableSlots, slot);
                     }
                     if (!workStack.empty()) {
                         TraceYoungClosure(workStack, fullYoungScan, reachableObjects, reachableVec, reachableSlots,
@@ -8663,8 +7069,7 @@ void WCollector::DoYoungGarbageCollection()
                         object->ForEachRefField([this, &reachableSlots](RefField<>& field) {
                             MAddress slot = reinterpret_cast<MAddress>(&field);
                             if (Heap::IsHeapAddress(slot)) {
-                                (void)LedgerInsert(reachableSlots, slot, g_minorLedgerCost.slotInsN,
-                                                   g_minorLedgerCost.slotInsNew, g_minorLedgerCost.slotInsNs);
+                                (void)LedgerInsert(reachableSlots, slot);
                             }
                         });
                     }
@@ -8798,8 +7203,7 @@ void WCollector::DoYoungGarbageCollection()
                                                 object](RefField<>& field) {
                             MAddress slot = reinterpret_cast<MAddress>(&field);
                             if (fullYoungScan && Heap::IsHeapAddress(slot)) {
-                                (void)LedgerInsert(reachableSlots, slot, g_minorLedgerCost.slotInsN,
-                                                   g_minorLedgerCost.slotInsNew, g_minorLedgerCost.slotInsNs);
+                                (void)LedgerInsert(reachableSlots, slot);
                             }
                             BaseObject* target = ResolveMinorReference(field);
                             if (target == nullptr || !Heap::IsHeapAddress(target)) {
@@ -8892,9 +7296,9 @@ void WCollector::DoYoungGarbageCollection()
         liveRememberedSlots.clear();
         liveRememberedCount = 0;
         for (MAddress slot : rememberedSlots) {
-            if (LedgerCount(weakSlots, slot, g_minorLedgerCost.weakLookN, g_minorLedgerCost.weakLookNs) == 0 &&
+            if (LedgerCount(weakSlots, slot) == 0 &&
                 (!fullYoungScan ||
-                 LedgerCount(reachableSlots, slot, g_minorLedgerCost.slotLookN, g_minorLedgerCost.slotLookNs) != 0)) {
+                 LedgerCount(reachableSlots, slot) != 0)) {
                 liveRememberedSlots.insert(slot);
                 ++liveRememberedCount;
             }
@@ -8965,7 +7369,6 @@ void WCollector::DoYoungGarbageCollection()
                 sealed, already, staticYoung, staticOld, gateSkip, reachableVec.size());
         }
     }
-    g_minorLedgerCost.Report();
     // portyoungconc positive control. Emitted on EVERY minor, including the closed arm, so
     // "no line" and "a line of zeros" are distinguishable. window_ns is the only field that
     // a merely-existing window can raise; marked_in_window / satb_objects / closure_calls
@@ -9059,104 +7462,6 @@ void WCollector::DoYoungGarbageCollection()
         }
     }
     EatArmDiag::DumpMinorSummary(minorTotalRuns + 1);
-    // setbitmap2: optional closure equality probe (default off).
-    // mode=1: dump product ptr-set hash; mode=2: in-process dual legacy set walk on same roots.
-    ClosureHashProbe::ReportDump(minorTotalRuns + 1, reachableVec, useBitmapLedger, fullYoungScan);
-    if (ClosureHashProbe::Dual()) {
-        // Independent set claim on the *same* STW root/remset snapshot.
-        // FYS=1: reuse TraceYoungClosure + RescanRememberedSet (set claim) — mark bits don't
-        // gate set insert. FYS=0: PushYoungObject skips already-marked young, so use a
-        // mark-agnostic set walker (same roots + remset targets).
-        std::vector<BaseObject*> dualVec;
-        dualVec.reserve(reachableVec.size());
-        if (fullYoungScan) {
-            WorkStack dualStack = NewWorkStack();
-            for (BaseObject* object : allocationRoots) {
-                if (Heap::IsHeapAddress(object)) {
-                    dualStack.push_back(object);
-                }
-            }
-            VisitMinorRoots([&dualStack](BaseObject* object) {
-                if (Heap::IsHeapAddress(object)) {
-                    dualStack.push_back(object);
-                }
-            });
-            MinorObjectSet dualObjects;
-            MinorSlotSet dualSlots;
-            MinorSlotSet dualWeaks;
-            TraceYoungClosure(dualStack, fullYoungScan, dualObjects, dualVec, dualSlots, dualWeaks,
-                              /*useBitmapLedger=*/false);
-            RescanRememberedSet(dualStack, rememberedSlots, dualSlots, dualWeaks, fullYoungScan, nullptr, nullptr,
-                                nullptr, stw.get());
-            TraceYoungClosure(dualStack, fullYoungScan, dualObjects, dualVec, dualSlots, dualWeaks,
-                              /*useBitmapLedger=*/false);
-        } else {
-            auto dualPush = [](BaseObject* object, WorkStack& stack) {
-                if (!Heap::IsHeapAddress(object)) {
-                    return;
-                }
-                RegionInfo* region = RegionInfo::GetRegionInfoAt(reinterpret_cast<MAddress>(object));
-                if (region->IsYoungRegion()) {
-                    stack.push_back(object);
-                }
-            };
-            WorkStack dualStack = NewWorkStack();
-            for (BaseObject* object : allocationRoots) {
-                dualPush(object, dualStack);
-            }
-            VisitMinorRoots([&dualPush, &dualStack](BaseObject* object) { dualPush(object, dualStack); });
-            for (MAddress slot : rememberedSlots) {
-                HeapSlot<>& field = HeapSlotAt<>(slot);
-                dualPush(ResolveMinorReference(field), dualStack);
-            }
-            MinorObjectSet dualSeen;
-            while (!dualStack.empty()) {
-                BaseObject* object = dualStack.back();
-                dualStack.pop_back();
-                if (!Heap::IsHeapAddress(object)) {
-                    continue;
-                }
-                if (!dualSeen.insert(object).second) {
-                    continue;
-                }
-                RegionInfo* region = RegionInfo::GetRegionInfoAt(reinterpret_cast<MAddress>(object));
-                if (!region->IsYoungRegion()) {
-                    continue;
-                }
-                dualVec.push_back(object);
-                if (!object->HasRefField()) {
-                    continue;
-                }
-                if (UNLIKELY(object->IsWeakRef())) {
-                    HeapSlot<>& referentField = HeapSlotAt<>(
-                        reinterpret_cast<MAddress>(object) + TYPEINFO_PTR_SIZE);
-                    BaseObject* referent = ResolveMinorReference(referentField);
-                    if (Heap::IsHeapAddress(referent)) {
-                        referent->ForEachRefField([this, &dualPush, &dualStack](RefField<>& field) {
-                            dualPush(ResolveMinorReference(field), dualStack);
-                        });
-                    }
-                    continue;
-                }
-                object->ForEachRefField([this, &dualPush, &dualStack](RefField<>& field) {
-                    dualPush(ResolveMinorReference(field), dualStack);
-                });
-            }
-        }
-        ClosureHashProbe::ReportEqual(minorTotalRuns + 1, reachableVec, dualVec, useBitmapLedger, fullYoungScan);
-    }
-    static const bool verifyRemsetEnabled = []() {
-        const char* value = static_cast<const char*>(nullptr) /* pinned-off:MRT_GCV2_VERIFY_REMSET */;
-        return value != nullptr && std::strcmp(value, "1") == 0;
-    }();
-    static const bool verifyHeapEnabled = []() {
-        const char* value = static_cast<const char*>(nullptr) /* pinned-off:MRT_GCV2_VERIFY_HEAP */;
-        return value != nullptr && std::strcmp(value, "1") == 0;
-    }();
-    std::unordered_set<BaseObject*> rootReachableForVerify;
-    const bool needRootReachable = verifyRemsetEnabled || verifyHeapEnabled;
-    // Independent remset completeness check (invariant R). Gated by MRT_GCV2_VERIFY_REMSET.
-    // Uses the minor-acquired slot set: live remset is empty after AcquireRecordsForMinor.
     {
         size_t runIndex = minorTotalRuns + 1;
         auto visitRoots = [this, &allocationRoots](const std::function<void(BaseObject*)>& visitor) {
@@ -9166,16 +7471,9 @@ void WCollector::DoYoungGarbageCollection()
             VisitMinorRoots(visitor);
         };
         auto resolveField = [this](RefField<>& field) -> BaseObject* { return ResolveMinorReference(field); };
-        if (needRootReachable) {
-            RunDiffPathExplainer(runIndex, visitRoots, resolveField, rememberedSlots, consumedSlots,
-                                 &minorCandidateRegions, remsetStats, &rootReachableForVerify);
-            VerifyRememberedSetInvariant("pre-evacuate", rememberedSlots, false,
-                                         verifyRemsetEnabled ? &rootReachableForVerify : nullptr);
-        } else {
-            RunDiffPathExplainer(runIndex, visitRoots, resolveField, rememberedSlots, consumedSlots,
-                                 &minorCandidateRegions, remsetStats, nullptr);
-            VerifyRememberedSetInvariant("pre-evacuate", rememberedSlots, false, nullptr);
-        }
+        RunDiffPathExplainer(runIndex, visitRoots, resolveField, rememberedSlots, consumedSlots,
+                             &minorCandidateRegions, remsetStats, nullptr);
+        VerifyRememberedSetInvariant("pre-evacuate", rememberedSlots, false, nullptr);
     }
     if (UNLIKELY(YyEdgeDiag::Enabled())) {
         YyEdgeDiag::PublishProductVec(reachableVec);
@@ -9186,10 +7484,10 @@ void WCollector::DoYoungGarbageCollection()
     // does not require global VERIFY_HEAP.
     if (kVerifyPostEvac) {
         VLOG(REPORT, "[GCV2][verify][post-evac] enter point=post-mark run=%zu", minorTotalRuns + 1);
-        VerifyHeapObjects("post-mark", true, verifyHeapEnabled ? &rootReachableForVerify : nullptr);
+        VerifyHeapObjects("post-mark", true, nullptr);
         VLOG(REPORT, "[GCV2][verify][post-evac] point=post-mark run=%zu", minorTotalRuns + 1);
     } else {
-        VerifyHeapObjects("pre-evacuate", false, verifyHeapEnabled ? &rootReachableForVerify : nullptr);
+        VerifyHeapObjects("pre-evacuate", false, nullptr);
     }
 
     size_t liveBytes = 0;
@@ -9310,7 +7608,6 @@ void WCollector::DoYoungGarbageCollection()
     }
     // STEER4: DumpScrubCostAndReset is a no-op unless MRT_GCV2_SCRUB_COST=1.
     RegionManager::DumpScrubCostAndReset("post-minor");
-    DumpMinorScrubCountIfEnabled("post-minor");
     IdleEdgeDiag::DumpProcessTotals("post-minor");
     FysAuditDiag::DumpProcessTotals("post-minor");
     O2ORemsetDiag::DumpAndMaybeReset("post-minor", /*reset*/ true);
@@ -9384,13 +7681,7 @@ void WCollector::DoGarbageCollection()
     // read barrier heals a stale colour on the way past (FixOldTaggedRefField), the walk has
     // nothing left to do -- but that claim needs measuring before the walk goes away for good, so
     // it is a switch rather than a deletion. Nobody has measured what this pass costs.
-    static const bool skipPostflipWalk = []() {
-        const char* v = static_cast<const char*>(nullptr) /* pinned-off:MRT_GCV2_SKIP_POSTFLIP_WALK */;
-        return v != nullptr && std::strcmp(v, "1") == 0;
-    }();
-    if (!skipPostflipWalk) {
-        InvalidateOldTaggedRefs(false);
-    }
+    InvalidateOldTaggedRefs(false);
     reinterpret_cast<RegionSpace&>(theAllocator).GetRegionManager().ExpireKeptFromPreviousCycle();
     if (HealCoverage::kHealCoverageCensus) {
         HealCoverage::CensusAfterPublication(
@@ -9675,11 +7966,7 @@ BaseObject* WCollector::WaitRoutedTipReady(BaseObject* from, BaseObject* to, Reg
     static std::atomic<uint64_t> enterCount{0};
     static std::atomic<uint64_t> tipReadyCount{0};
     static std::atomic<uint64_t> giveUpCount{0};
-    static int diagOn = -1;
-    if (diagOn < 0) {
-        const char* v = static_cast<const char*>(nullptr) /* pinned-off:MRT_GCV2_WAITFWD */;
-        diagOn = (v != nullptr && v[0] == '1' && v[1] == '\0') ? 1 : 0;
-    }
+    constexpr int diagOn = 0;
     if (diagOn) {
         // permwho: the three counters were incremented but never read anywhere, so
         // MRT_GCV2_WAITFWD=1 produced no output at all and "enter != 0" was unanswerable.
