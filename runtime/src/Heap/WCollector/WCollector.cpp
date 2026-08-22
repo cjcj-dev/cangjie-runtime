@@ -2744,7 +2744,7 @@ void WCollector::InvalidateOldTaggedRefs(bool requireSurvivedMark)
     // Positive control for silent serial degradation (spec §六 T3 ②).
     // Force serial via MRT_GCV2_STWPAR_FORCE_SERIAL=1 for bidirectional proof.
     static const bool forceSerialEnv = []() {
-        const char* value = static_cast<const char*>(nullptr) /* pinned-off:MRT_GCV2_STWPAR_FORCE_SERIAL */;
+        const char* value = std::getenv("MRT_GCV2_STWPAR_FORCE_SERIAL");
         return value != nullptr && std::strcmp(value, "1") == 0;
     }();
     const bool forceSerial = forceSerialEnv;
@@ -2796,7 +2796,7 @@ void WCollector::InvalidateOldTaggedRefs(bool requireSurvivedMark)
         const int32_t poolCap = helperNum + 1;
         int32_t heapWorkers = poolCap;
         {
-            const char* wEnv = static_cast<const char*>(nullptr) /* pinned-off:MRT_GCV2_STWPAR_WORKERS */;
+            const char* wEnv = std::getenv("MRT_GCV2_STWPAR_WORKERS");
             if (wEnv != nullptr && wEnv[0] != '\0') {
                 int32_t want = static_cast<int32_t>(std::strtol(wEnv, nullptr, 10));
                 if (want >= 1 && want < heapWorkers) {
