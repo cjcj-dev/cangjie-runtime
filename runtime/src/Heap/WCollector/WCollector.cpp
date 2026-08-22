@@ -5347,6 +5347,15 @@ bool WCollector::MarkYoungSatbBuffer(WorkStack& workStack, bool fullYoungScan, M
         if (windowStats != nullptr) {
             ++windowStats->satbIters;
         }
+        static const bool followConvDiag = []() {
+            const char* v = std::getenv("MRT_GCV2_FOLLOWCONV");
+            return v != nullptr && std::strcmp(v, "1") == 0;
+        }();
+        if (followConvDiag && (iterationCnt <= 8 || (iterationCnt % 64) == 0)) {
+            VLOG(REPORT,
+                 "[GCV2][followconv][satb] iter=%llu satb_seen=%zu stack=%zu reachable=%zu",
+                 static_cast<unsigned long long>(iterationCnt), satbSeen, workStack.size(), reachableVec.size());
+        }
         if (++iterationCnt > maxIterationLoopNum && (TimeUtil::NanoSeconds() - iterationStartTime) > maxIterationTime) {
             ScopedStopTheWorld stw("MarkYoungSatbBuffer timeout", true, GCPhase::GC_PHASE_CLEAR_SATB_BUFFER);
             VLOG(REPORT, "[GCV2][youngconc] MarkYoungSatbBuffer timeout STW drain");
@@ -8604,6 +8613,43 @@ void WCollector::DoYoungGarbageCollection()
                 MinorSlotSet concurrentRemset;
                 StoreBarrierBuffer::FlushAll(Heap::GetHeap().GetRememberedSet());
                 totalConcRemset = Heap::GetHeap().GetRememberedSet().DrainForMinor(concurrentRemset);
+                {
+                    static const bool followConvDiag = []() {
+                        const char* v = std::getenv("MRT_GCV2_FOLLOWCONV");
+                        return v != nullptr && std::strcmp(v, "1") == 0;
+                    }();
+                    if (followConvDiag) {
+                        size_t already = 0;
+                        size_t fresh = 0;
+                        size_t other = 0;
+                        for (MAddress slot : concurrentRemset) {
+                            if (!Heap::IsHeapAddress(slot)) {
+                                ++other;
+                                continue;
+                            }
+                            BaseObject* tgt = ResolveMinorReference(HeapSlotAt<>(slot));
+                            if (tgt == nullptr || !Heap::IsHeapAddress(tgt)) {
+                                ++other;
+                                continue;
+                            }
+                            RegionInfo* region =
+                                RegionInfo::GetRegionInfoAt(reinterpret_cast<MAddress>(tgt));
+                            if (region == nullptr || !region->IsYoungRegion()) {
+                                ++other;
+                                continue;
+                            }
+                            if (region->IsMarkedObject(region->GetMarkView<Generation::Young>(), tgt)) {
+                                ++already;
+                            } else {
+                                ++fresh;
+                            }
+                        }
+                        VLOG(REPORT,
+                             "[GCV2][followconv][remset] n=%zu already_marked=%zu fresh_unmarked=%zu other=%zu "
+                             "reachable=%zu",
+                             totalConcRemset, already, fresh, other, reachableVec.size());
+                    }
+                }
                 // Observe-only: classify current-face targets against water/mark/SATB/alloc-black
                 // BEFORE MergeYoungAllocBlack / GetRetiredObjects consume those ledgers.
                 // Does not push workStack (zGeneration.cpp:897-916 pause_mark_end has no drain).
