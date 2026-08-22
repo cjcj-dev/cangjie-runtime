@@ -19,6 +19,11 @@
 #include "Base/LogFile.h"
 
 namespace MapleRuntime {
+// drainpillar: dedup census shared between Record() (producer) and
+// ScanPreviousForMinor() (printer). Default-off probe, see MRT_GCV2_REMSET_RECORD_PROBE.
+static std::atomic<size_t> g_remsetRecordProbeCalls{ 0 };
+static std::atomic<size_t> g_remsetRecordProbeDups{ 0 };
+
 RememberedSet::RememberedSet()
 {
     for (size_t buffer = 0; buffer < kBufferCount; ++buffer) {
@@ -107,6 +112,15 @@ void RememberedSet::ClearWordDirty(size_t buffer, size_t word)
 void RememberedSet::Record(MAddress fieldAddress, bool fromMutatorBarrier)
 {
     CheckInitialized();
+    // drainpillar: dedup-before census for the minor drain (Q1: how many barrier
+    // Record() calls collapse into distinct bitmap bits). Observation only,
+    // default off; two relaxed fetch_adds when enabled, nothing otherwise.
+    // ZGC anchor: zRemembered.cpp:347-387 keeps found-old in bitmaps too, so the
+    // same dedup-by-bit shape applies there.
+    static const bool recordProbe = []() {
+        const char* value = std::getenv("MRT_GCV2_REMSET_RECORD_PROBE");
+        return value != nullptr && std::strcmp(value, "1") == 0;
+    }();
     size_t bit = AddressToBit(fieldAddress);
     size_t word = bit / kBitsPerWord;
     uint64_t mask = static_cast<uint64_t>(1) << (bit % kBitsPerWord);
@@ -118,6 +132,11 @@ void RememberedSet::Record(MAddress fieldAddress, bool fromMutatorBarrier)
     MarkWordDirty(buffer, word);
     if ((old & mask) == 0) {
         recordCounts[buffer].fetch_add(1, std::memory_order_relaxed);
+    } else if (recordProbe) {
+        g_remsetRecordProbeDups.fetch_add(1, std::memory_order_relaxed);
+    }
+    if (recordProbe) {
+        g_remsetRecordProbeCalls.fetch_add(1, std::memory_order_relaxed);
     }
 #if defined(MRT_REMSET_BITMAP_CROSSCHECK)
     std::lock_guard<std::mutex> guard(oracleLock);
@@ -255,6 +274,12 @@ size_t RememberedSet::ScanPreviousForMinor(std::unordered_set<MAddress>& records
     size_t recorded = recordCounts[scanBuffer].exchange(0, std::memory_order_relaxed);
     CHECK_DETAIL(recorded == records.size(), "remembered-set count mismatch: bitmap=%zu records=%zu", recorded,
                  records.size());
+    {
+        // drainpillar: print the dedup census (calls vs distinct bits) once per minor.
+        VLOG(REPORT, "[GCV2][remsetdrain][recordprobe] calls=%zu dups=%zu distinct=%zu",
+             g_remsetRecordProbeCalls.exchange(0, std::memory_order_relaxed),
+             g_remsetRecordProbeDups.exchange(0, std::memory_order_relaxed), recorded);
+    }
     if (breakdownProbe) {
         uint64_t drainTotalNs = TimeUtil::NanoSeconds() - drainStartNs;
         uint64_t otherNs = drainTotalNs > bitmapWalkNs + setInsertNs
