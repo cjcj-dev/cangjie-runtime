@@ -463,11 +463,12 @@ size_t RegionManager::RecordPinnedCrossGenEdges()
     // does not change the remset. Default OFF — mutator-visible state is identical.
     // Env MRT_GCV2_PINNED_SCAN_PARALLEL=1.
     static const bool parallelEnv = []() {
-        const char* v = static_cast<const char*>(nullptr) /* pinned-off:MRT_GCV2_PINNED_SCAN_PARALLEL */;
+        const char* v = std::getenv("MRT_GCV2_PINNED_SCAN_PARALLEL");
         return v != nullptr && std::strcmp(v, "1") == 0;
     }();
     GCThreadPool* pool = parallelEnv ? Heap::GetHeap().GetCollectorResources().GetThreadPool() : nullptr;
     if (pool != nullptr) {
+        MRT_PHASE_TIMER("young.pinned_scan.parallel");
         std::vector<RegionInfo*> regions;
         auto collect = [&regions](RegionInfo* region) {
             if (region != nullptr && !region->IsYoungRegion() && !region->IsGarbageRegion()) {
@@ -519,17 +520,20 @@ size_t RegionManager::RecordPinnedCrossGenEdges()
     }
     // All never-young alloc paths + post-promote old holders (IDLE bare-store gap).
     // scanRegion already skips IsYoungRegion, so candidate young lists are free.
-    recentPinnedRegionList.VisitAllRegions(scanRegion);
-    oldPinnedRegionList.VisitAllRegions(scanRegion);
-    rawPointerPinnedRegionList.VisitAllRegions(scanRegion);
-    recentLargeRegionList.VisitAllRegions(scanRegion);
-    oldLargeRegionList.VisitAllRegions(scanRegion);
-    largeTraceRegions.VisitAllRegions(scanRegion);
-    recentFullRegionList.VisitAllRegions(scanRegion);
-    fullTraceRegions.VisitAllRegions(scanRegion);
-    unmovableFromRegionList.VisitAllRegions(scanRegion);
-    fromRegionList.VisitAllRegions(scanRegion);
-    tlRegionList.VisitAllRegions(scanRegion);
+    {
+        MRT_PHASE_TIMER("young.pinned_scan.serial");
+        recentPinnedRegionList.VisitAllRegions(scanRegion);
+        oldPinnedRegionList.VisitAllRegions(scanRegion);
+        rawPointerPinnedRegionList.VisitAllRegions(scanRegion);
+        recentLargeRegionList.VisitAllRegions(scanRegion);
+        oldLargeRegionList.VisitAllRegions(scanRegion);
+        largeTraceRegions.VisitAllRegions(scanRegion);
+        recentFullRegionList.VisitAllRegions(scanRegion);
+        fullTraceRegions.VisitAllRegions(scanRegion);
+        unmovableFromRegionList.VisitAllRegions(scanRegion);
+        fromRegionList.VisitAllRegions(scanRegion);
+        tlRegionList.VisitAllRegions(scanRegion);
+    }
     return recorded.load(std::memory_order_relaxed);
 }
 
