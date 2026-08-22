@@ -920,9 +920,11 @@ public:
     // it does not create another reuse admission path.
     void ReleaseDetachQuarantineAfterMinor()
     {
-        const size_t detachReleased = freeRegionManager.ReleaseDetachQuarantineAfterMajor();
-        VLOG(REPORT, "[GCV2][detach-quarantine] minor_released_units=%zu minor_released_bytes=%zu",
-             detachReleased, detachReleased * RegionInfo::UNIT_SIZE);
+        const size_t detachReleased =
+            freeRegionManager.ReleaseDetachQuarantineAfterMajor(FromPageDetach::Site::MINOR_RECHECK);
+        LOG(RTLOG_ERROR, "[GCV2][detach-quarantine] site=minor_path units=%zu bytes=%zu", detachReleased,
+            detachReleased * RegionInfo::UNIT_SIZE);
+        freeRegionManager.DumpDetachQuarantineHolders("after_minor");
     }
 
     void ClearAllLiveInfo()
