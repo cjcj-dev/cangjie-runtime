@@ -346,14 +346,7 @@ public:
         }
         RegionInfo* regionInfo = RegionInfo::GetRegionInfoAt(reinterpret_cast<MAddress>(obj));
         // livesame: MarkObject adds live only on 0→1 (ZGC inc_live).
-        bool marked;
-        if (gcReason == GC_REASON_YOUNG) {
-            MarkView<Generation::Young> view = regionInfo->GetMarkView<Generation::Young>();
-            marked = regionInfo->MarkObject(view, obj);
-        } else {
-            MarkView<Generation::Old> view = regionInfo->GetMarkView<Generation::Old>();
-            marked = regionInfo->MarkObject(view, obj);
-        }
+        bool marked = regionInfo->MarkObjectByOwner(obj);
         if (!marked) {
             size_t objSize = obj->GetSize();
             if (!fixReferences && regionInfo->IsFromRegion()) {
