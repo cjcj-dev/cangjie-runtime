@@ -48,15 +48,6 @@ void RememberedSet::Initialize(MAddress start, size_t size)
             dirtyMaps[buffer][word].store(0, std::memory_order_relaxed);
         }
     }
-    // d1producer: sticky ever-recorded backing, gated off by default (see RememberedSet.h).
-    const char* everEnv = static_cast<const char*>(nullptr) /* pinned-off:MRT_GCV2_REMSET_EVER */;
-    if (everEnv != nullptr && std::strcmp(everEnv, "1") == 0) {
-        everRecorded.reset(new (std::nothrow) std::atomic<uint64_t>[wordCount]);
-        CHECK_DETAIL(everRecorded != nullptr, "failed to allocate remembered-set ever bitmap");
-        for (size_t word = 0; word < wordCount; ++word) {
-            everRecorded[word].store(0, std::memory_order_relaxed);
-        }
-    }
     initialized = true;
 }
 
@@ -184,106 +175,41 @@ size_t RememberedSet::ScanPreviousForMinor(std::unordered_set<MAddress>& records
     CHECK_DETAIL(records.empty(), "minor remembered-set destination must be empty");
     size_t scanBuffer = activeBuffer.load(std::memory_order_acquire) ^ 1U;
 
-    static const bool breakdownProbe = []() {
-        const char* value = static_cast<const char*>(nullptr) /* pinned-off:MRT_GCV2_REMSET_DRAIN_PROBE */;
-        return value != nullptr && std::strcmp(value, "1") == 0;
-    }();
     static const bool reserveDestination = []() {
-        const char* value = static_cast<const char*>(nullptr) /* pinned-off:MRT_GCV2_REMSET_HASH_OPT */;
+        const char* value = std::getenv("MRT_GCV2_REMSET_HASH_OPT");
         return value == nullptr || std::strcmp(value, "1") == 0;
     }();
-    const uint64_t drainStartNs = breakdownProbe ? TimeUtil::NanoSeconds() : 0;
     const size_t expectedRecords = recordCounts[scanBuffer].load(std::memory_order_relaxed);
     if (reserveDestination) {
         records.reserve(expectedRecords);
     }
 
-    uint64_t bitmapWalkNs = 0;
-    uint64_t setInsertNs = 0;
-    if (breakdownProbe) {
-        // One dirty-map word covers at most 4096 field slots.  Batch at that
-        // boundary so clock reads do not perturb every insertion, while keeping
-        // the same monotonically increasing insert order and normal rehashes.
-        std::vector<MAddress> decoded;
-        decoded.reserve(kBitsPerWord * kBitsPerWord);
-        for (size_t dirtyIdx = 0; dirtyIdx < dirtyWordCount; ++dirtyIdx) {
-            decoded.clear();
-            uint64_t startNs = TimeUtil::NanoSeconds();
-            uint64_t dirty = dirtyMaps[scanBuffer][dirtyIdx].exchange(0, std::memory_order_relaxed);
-            while (dirty != 0) {
-                unsigned wordInDirty = static_cast<unsigned>(__builtin_ctzll(dirty));
-                size_t wordIdx = dirtyIdx * kBitsPerWord + wordInDirty;
-                if (wordIdx < wordCount) {
-                    uint64_t word = bitmaps[scanBuffer][wordIdx].exchange(0, std::memory_order_relaxed);
-                    while (word != 0) {
-                        unsigned bitInWord = static_cast<unsigned>(__builtin_ctzll(word));
-                        size_t bit = wordIdx * kBitsPerWord + bitInWord;
-                        if (bit < bitCount) {
-                            decoded.push_back(heapStart + bit * kFieldBytes);
-                        }
-                        word &= word - 1;
+    for (size_t dirtyIdx = 0; dirtyIdx < dirtyWordCount; ++dirtyIdx) {
+        uint64_t dirty = dirtyMaps[scanBuffer][dirtyIdx].exchange(0, std::memory_order_relaxed);
+        while (dirty != 0) {
+            unsigned wordInDirty = static_cast<unsigned>(__builtin_ctzll(dirty));
+            size_t wordIdx = dirtyIdx * kBitsPerWord + wordInDirty;
+            if (wordIdx < wordCount) {
+                uint64_t word = bitmaps[scanBuffer][wordIdx].exchange(0, std::memory_order_relaxed);
+                while (word != 0) {
+                    unsigned bitInWord = static_cast<unsigned>(__builtin_ctzll(word));
+                    size_t bit = wordIdx * kBitsPerWord + bitInWord;
+                    if (bit < bitCount) {
+                        records.insert(heapStart + bit * kFieldBytes);
                     }
+                    word &= word - 1;
                 }
-                dirty &= dirty - 1;
             }
-            bitmapWalkNs += TimeUtil::NanoSeconds() - startNs;
-            startNs = TimeUtil::NanoSeconds();
-            records.insert(decoded.begin(), decoded.end());
-            setInsertNs += TimeUtil::NanoSeconds() - startNs;
-        }
-    } else {
-        for (size_t dirtyIdx = 0; dirtyIdx < dirtyWordCount; ++dirtyIdx) {
-            uint64_t dirty = dirtyMaps[scanBuffer][dirtyIdx].exchange(0, std::memory_order_relaxed);
-            while (dirty != 0) {
-                unsigned wordInDirty = static_cast<unsigned>(__builtin_ctzll(dirty));
-                size_t wordIdx = dirtyIdx * kBitsPerWord + wordInDirty;
-                if (wordIdx < wordCount) {
-                    uint64_t word = bitmaps[scanBuffer][wordIdx].exchange(0, std::memory_order_relaxed);
-                    while (word != 0) {
-                        unsigned bitInWord = static_cast<unsigned>(__builtin_ctzll(word));
-                        size_t bit = wordIdx * kBitsPerWord + bitInWord;
-                        if (bit < bitCount) {
-                            records.insert(heapStart + bit * kFieldBytes);
-                        }
-                        word &= word - 1;
-                    }
-                }
-                dirty &= dirty - 1;
-            }
+            dirty &= dirty - 1;
         }
     }
     size_t recorded = recordCounts[scanBuffer].exchange(0, std::memory_order_relaxed);
     CHECK_DETAIL(recorded == records.size(), "remembered-set count mismatch: bitmap=%zu records=%zu", recorded,
                  records.size());
-    if (breakdownProbe) {
-        uint64_t drainTotalNs = TimeUtil::NanoSeconds() - drainStartNs;
-        uint64_t otherNs = drainTotalNs > bitmapWalkNs + setInsertNs
-            ? drainTotalNs - bitmapWalkNs - setInsertNs
-            : 0;
-        VLOG(REPORT,
-             "[GCV2][remsetdrain][breakdown] records=%zu reserve=%u bitmapWalkNs=%llu "
-             "setInsertNs=%llu otherNs=%llu drainTotalNs=%llu buckets=%zu loadMilli=%zu",
-             recorded, static_cast<unsigned>(reserveDestination),
-             static_cast<unsigned long long>(bitmapWalkNs), static_cast<unsigned long long>(setInsertNs),
-             static_cast<unsigned long long>(otherNs), static_cast<unsigned long long>(drainTotalNs),
-             records.bucket_count(),
-             records.bucket_count() == 0 ? 0 : records.size() * 1000 / records.bucket_count());
-    }
 
 #if defined(MRT_REMSET_BITMAP_CROSSCHECK)
     std::lock_guard<std::mutex> guard(oracleLock);
     bool injected = false;
-    const char* inject = static_cast<const char*>(nullptr) /* pinned-off:MRT_GCV2_VERIFY_REMSET_BITMAP_INJECT_MISMATCH */;
-    if (inject != nullptr && std::strcmp(inject, "1") == 0) {
-        for (size_t bit = 0; bit < bitCount; ++bit) {
-            MAddress candidate = heapStart + bit * kFieldBytes;
-            if (oracleRecords[scanBuffer].count(candidate) == 0) {
-                oracleRecords[scanBuffer].insert(candidate);
-                injected = true;
-                break;
-            }
-        }
-    }
     bool equivalent = records.size() == oracleRecords[scanBuffer].size();
     for (MAddress slot : records) {
         equivalent = equivalent && oracleRecords[scanBuffer].count(slot) != 0;
@@ -510,56 +436,6 @@ void RememberedSet::VisitStaticForCrossCheck(MAddress fieldAddress)
 void RememberedSet::CheckStaticCoverageForMinor()
 {
     std::lock_guard<std::mutex> guard(oracleLock);
-    const char* trace = static_cast<const char*>(nullptr) /* pinned-off:MRT_GCV2_TRACE_EXTERNAL_SLOTS */;
-    bool traceEnabled = trace != nullptr && std::strcmp(trace, "1") == 0;
-    if (!traceEnabled) {
-        staticRecords.clear();
-        staticRecordSites.clear();
-        visitedStaticRoots.clear();
-        lastDrainedHeapRecords = 0;
-        return;
-    }
-    bool injected = false;
-    const char* inject = static_cast<const char*>(nullptr) /* pinned-off:MRT_GCV2_TRACE_EXTERNAL_SLOTS_INJECT_MISSING */;
-    if (inject != nullptr && std::strcmp(inject, "1") == 0) {
-        staticRecords.insert(heapStart);
-        staticRecordSites[heapStart] = 0;
-        injected = true;
-    }
-    size_t missing = 0;
-    for (MAddress slot : staticRecords) {
-        if (visitedStaticRoots.count(slot) != 0) {
-            continue;
-        }
-        ++missing;
-        MAddress callsite = staticRecordSites[slot];
-        Dl_info info {};
-        bool resolved = callsite != 0 && dladdr(reinterpret_cast<void*>(callsite), &info) != 0;
-        MAddress base = resolved ? reinterpret_cast<MAddress>(info.dli_fbase) : 0;
-        std::fprintf(stderr,
-                     "REMSET_EXTERNAL_ROOT_MISSING slot=%#zx callsite=%#zx dso_offset=%#zx symbol=%s\n",
-                     static_cast<size_t>(slot), static_cast<size_t>(callsite),
-                     static_cast<size_t>(callsite - base),
-                     resolved && info.dli_sname != nullptr ? info.dli_sname : "?");
-    }
-    ++staticCrossCheckRounds;
-    size_t legacyTotal = lastDrainedHeapRecords + staticRecords.size();
-    double removedShare = legacyTotal == 0 ? 0.0 :
-        100.0 * static_cast<double>(staticRecords.size()) / static_cast<double>(legacyTotal);
-    std::fprintf(stderr, "REMSET_EXTERNAL_ROOT_SCAN round=%zu fired=1\n", staticCrossCheckRounds);
-    std::fprintf(stderr,
-                 "REMSET_EXTERNAL_ROOT_COVERAGE round=%zu recorded=%zu visited=%zu missing=%zu injected=%u "
-                 "heap_records=%zu legacy_total=%zu removed_share=%.6f%%\n",
-                 staticCrossCheckRounds, staticRecords.size(), visitedStaticRoots.size(), missing,
-                 static_cast<unsigned>(injected), lastDrainedHeapRecords, legacyTotal, removedShare);
-    if (missing != 0) {
-        std::fprintf(stderr, "REMSET_EXTERNAL_ROOT_MISMATCH injected=%u missing=%zu recorded=%zu\n",
-                     static_cast<unsigned>(injected), missing, staticRecords.size());
-        const char* fatal = static_cast<const char*>(nullptr) /* pinned-off:MRT_GCV2_TRACE_EXTERNAL_SLOTS_FATAL */;
-        if (fatal != nullptr && std::strcmp(fatal, "1") == 0) {
-            std::abort();
-        }
-    }
     staticRecords.clear();
     staticRecordSites.clear();
     visitedStaticRoots.clear();
