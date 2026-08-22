@@ -1508,11 +1508,17 @@ void WCollector::TraceRefField(BaseObject* obj, RefField<>& field, WorkStack& wo
         }
         // markfloor: skip interiors (RawArray+8 etc.) before IsValidObject/GetSize.
         if (!Collector::PlausibleManagedObjectGate("TraceRefField", targetObj)) {
-            if (UNLIKELY(GateDropDiag::Enabled())) {
-                GateDropDiag::NoteReject(obj, &field, targetObj, GateDropDiag::ARM_PLAUSIBLE_GOOD);
+            BaseObject* host = Collector::TryRecoverInteriorBase(targetObj);
+            if (host != nullptr && host != targetObj &&
+                Collector::PlausibleManagedObjectGate("TraceRefField.host", host)) {
+                targetObj = host;
+            } else {
+                if (UNLIKELY(GateDropDiag::Enabled())) {
+                    GateDropDiag::NoteReject(obj, &field, targetObj, GateDropDiag::ARM_PLAUSIBLE_GOOD);
+                }
+                SurvNodeDiag::NoteTraceVisit(&field, targetObj, SurvNodeDiag::TRACE_SKIP_GATE);
+                return;
             }
-            SurvNodeDiag::NoteTraceVisit(&field, targetObj, SurvNodeDiag::TRACE_SKIP_GATE);
-            return;
         }
         // Anchor main 9a124c4f14ddd5944330ddbf68d1659cbb629e56
         // obj is null when the field arrived as a partial-array chunk, which
@@ -1542,11 +1548,17 @@ void WCollector::TraceRefField(BaseObject* obj, RefField<>& field, WorkStack& wo
         return;
     }
     if (!Collector::PlausibleManagedObjectGate("TraceRefField.slow", latest)) {
-        if (UNLIKELY(GateDropDiag::Enabled())) {
-            GateDropDiag::NoteReject(obj, &field, latest, GateDropDiag::ARM_PLAUSIBLE_SLOW);
+        BaseObject* host = Collector::TryRecoverInteriorBase(latest);
+        if (host != nullptr && host != latest &&
+            Collector::PlausibleManagedObjectGate("TraceRefField.slow.host", host)) {
+            latest = host;
+        } else {
+            if (UNLIKELY(GateDropDiag::Enabled())) {
+                GateDropDiag::NoteReject(obj, &field, latest, GateDropDiag::ARM_PLAUSIBLE_SLOW);
+            }
+            SurvNodeDiag::NoteTraceVisit(&field, latest, SurvNodeDiag::TRACE_SKIP_GATE);
+            return;
         }
-        SurvNodeDiag::NoteTraceVisit(&field, latest, SurvNodeDiag::TRACE_SKIP_GATE);
-        return;
     }
     CHECK_DETAIL(latest->IsValidObject(), "Invalid object %p is referenced by strong object %p: %s and offset %zd",
                  latest, obj, obj == nullptr ? "<partial-array chunk>" : obj->GetTypeInfo()->GetName(),

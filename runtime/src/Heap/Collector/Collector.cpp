@@ -8,6 +8,7 @@
 #include "Collector/Collector.h"
 
 #include <atomic>
+#include <cstdio>
 #include <cstdlib>
 #include <cstring>
 #include <limits>
@@ -38,6 +39,20 @@ std::atomic<size_t> g_markGoodHeapGateSample{ 0 };
 // not a TypeInfo*. 0x200 observed = MArray::length at RawArray+8.
 std::atomic<size_t> g_plausibleObjGateReject{ 0 };
 std::atomic<size_t> g_plausibleObjGateSample{ 0 };
+std::atomic<size_t> g_geomCrossEndReject{ 0 };
+std::atomic<bool> g_geomAtexit{ false };
+
+void EnsureGeomAtexit()
+{
+    bool expected = false;
+    if (g_geomAtexit.compare_exchange_strong(expected, true, std::memory_order_relaxed)) {
+        std::atexit([]() {
+            std::fprintf(stderr, "[GCV2][tailslot] geom_cross_end=%zu\n",
+                         g_geomCrossEndReject.load(std::memory_order_relaxed));
+            std::fflush(stderr);
+        });
+    }
+}
 // interiorsrc2: per-site reject counters (always on when gate accounts).
 std::atomic<size_t> g_plausibleObjGateBySite[16]{ {} };
 // ⭐⭐⭐ 0809 00:5x：**按 interior offset 计数，⛔ 不经采样**。
@@ -153,6 +168,8 @@ std::atomic<size_t> g_maskEquivChecked{ 0 };
 std::atomic<size_t> g_maskEquivMismatch{ 0 };
 std::atomic<size_t> g_maskEquivInjected{ 0 };
 
+bool ObjectFitsInRegion(BaseObject* obj, RegionInfo* region);
+
 // Pure predicate copy: same reject set as PlausibleManagedObjectGate, no counters.
 // Used only for GATEEQUIV dual-run. Must track the product gate branch-for-branch.
 bool PlausibleManagedObjectGatePure(BaseObject* obj)
@@ -188,7 +205,27 @@ bool PlausibleManagedObjectGatePure(BaseObject* obj)
     if (!TypeInfoManager::GetTypeInfoManager().IsResidentTypeInfoAddress(tipAddr)) {
         return false;
     }
-    return true;
+    return ObjectFitsInRegion(obj, region);
+}
+
+bool ObjectFitsInRegion(BaseObject* obj, RegionInfo* region)
+{
+    if (obj == nullptr || region == nullptr) {
+        return false;
+    }
+    if (region->IsLargeRegion()) {
+        return true;
+    }
+    MAddress objAddr = reinterpret_cast<MAddress>(obj);
+    MAddress regionEnd = region->GetRegionEnd();
+    if (objAddr >= regionEnd) {
+        return false;
+    }
+    size_t objSize = obj->GetSize();
+    if (objSize == 0 || (objSize % 8) != 0) {
+        return false;
+    }
+    return objSize <= (regionEnd - objAddr);
 }
 
 // interiorsrc2: classify tip word without calling IsVaildType (may SEGV on bad tip).
@@ -258,7 +295,10 @@ BaseObject* RecoverInteriorBaseImpl(BaseObject* obj, BaseObject* knownBase)
     }
     uintptr_t tipAddr = reinterpret_cast<uintptr_t>(obj->GetTypeInfo());
     if (TipWordLooksLikeTypeInfo(tipAddr)) {
-        return nullptr;
+        RegionInfo* region = RegionInfo::TryGetRegionInfoAt(reinterpret_cast<uintptr_t>(obj));
+        if (region != nullptr && ObjectFitsInRegion(obj, region)) {
+            return nullptr;
+        }
     }
     if (knownBase != nullptr && Heap::IsHeapAddress(knownBase) && knownBase != obj) {
         uintptr_t hostTip = reinterpret_cast<uintptr_t>(knownBase->GetTypeInfo());
@@ -520,10 +560,12 @@ bool PlausibleManagedObjectGate(const char* site, BaseObject* obj)
             }
         }
     } else {
-        // sizeguard: work stack may hold a pointer into a FREE/GARBAGE region whose payload
-        // still looks like a valid object (stale tip ⇒ plausible GetSize, but obj+size crosses
-        // regionEnd). Reject before MarkObject/GetSize. Observed: regionType=0 allocPtr=start
-        // bitIdx=510/511 objSize=24 under concurrent stack scan.
+        // sizeguard: work stack may hold a pointer into a region whose payload still looks
+        // like a valid object (stale/interior tip ⇒ plausible GetSize, but obj+size crosses
+        // regionEnd). Reject by geometry, not region type: FREE/GARBAGE and full active
+        // (regionType=2/3, allocPtr==end, +0xffe0/+0xfff0) share the shape.
+        // ZGC: zMarkStackEntry.hpp:81 encodes object_address in bits 63-5 (no interior);
+        // zPage.inline.hpp:188 is_in requires offset < top().
         RegionInfo* region = RegionInfo::TryGetRegionInfoAt(reinterpret_cast<uintptr_t>(obj));
         if (region == nullptr || region->IsFreeRegion() || region->IsGarbageRegion() ||
             region->GetRegionType() == RegionInfo::RegionType::FREE_REGION) {
@@ -566,9 +608,23 @@ bool PlausibleManagedObjectGate(const char* site, BaseObject* obj)
                 // (aligned, ≥4GiB, low32≠0, not in heap). Residence is the
                 // positive contract that rejects those without relaxing the gate.
                 reason = "tip-not-resident";
+            } else if (!ObjectFitsInRegion(obj, region)) {
+                reason = "geom-cross-end";
             }
             if (reason != nullptr) {
                 product = false;
+                if (reason[0] == 'g' && std::strcmp(reason, "geom-cross-end") == 0) {
+                    EnsureGeomAtexit();
+                    size_t gn = g_geomCrossEndReject.fetch_add(1, std::memory_order_relaxed) + 1;
+                    if (gn <= 16 || (gn & 0x3ffU) == 0) {
+                        MAddress objAddr = reinterpret_cast<MAddress>(obj);
+                        MAddress rEnd = region == nullptr ? 0 : region->GetRegionEnd();
+                        LOG(RTLOG_ERROR,
+                            "[GCV2][tailslot] REJECT site=%s obj=%p tip=%p objSize=%zu regionEnd=%#zx remain=%zu n=%zu",
+                            site, obj, tip, obj->GetSize(), static_cast<size_t>(rEnd),
+                            objAddr < rEnd ? static_cast<size_t>(rEnd - objAddr) : 0, gn);
+                    }
+                }
                 if (account) {
                     size_t n = g_plausibleObjGateReject.fetch_add(1, std::memory_order_relaxed) + 1;
                     g_plausibleObjGateBySite[SiteBucket(site)].fetch_add(1, std::memory_order_relaxed);
@@ -630,6 +686,9 @@ BaseObject* Collector::TryRecoverInteriorBase(BaseObject* obj, BaseObject* known
 
 void Collector::ReportPlausibleManagedObjectGateCounts()
 {
+    std::fprintf(stderr, "[GCV2][tailslot] geom_cross_end=%zu\n",
+                 g_geomCrossEndReject.load(std::memory_order_relaxed));
+    std::fflush(stderr);
     if (GateEquivOn()) {
         LOG(RTLOG_ERROR,
             "[GCV2][gateequiv] checked=%zu mismatch=%zu inject=%zu env=MRT_GCV2_GATEEQUIV=1",
@@ -640,8 +699,9 @@ void Collector::ReportPlausibleManagedObjectGateCounts()
     if (!PlausibleObjGateAccountOn()) {
         return;
     }
-    LOG(RTLOG_ERROR, "[GCV2][markfloor-obj-gate] reject=%zu env=MRT_GCV2_MARKFLOOR_OBJ_GATE=1",
-        g_plausibleObjGateReject.load(std::memory_order_relaxed));
+    LOG(RTLOG_ERROR, "[GCV2][markfloor-obj-gate] reject=%zu geom_cross_end=%zu env=MRT_GCV2_MARKFLOOR_OBJ_GATE=1",
+        g_plausibleObjGateReject.load(std::memory_order_relaxed),
+        g_geomCrossEndReject.load(std::memory_order_relaxed));
     // ⭐⭐ 这一行才是 C1 判据该读的：⭐ 未经采样的按 offset 全量计数
     LOG(RTLOG_ERROR,
         "[GCV2][markfloor-obj-gate] byintoff none=%zu off8=%zu off16=%zu off24=%zu off32=%zu",

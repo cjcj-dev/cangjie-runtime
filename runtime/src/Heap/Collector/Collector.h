@@ -286,6 +286,8 @@ public:
     // small integer or non-TypeInfo, before GetSize/HasRefField dereference the tip.
     // sizeguard: also reject addresses in FREE/GARBAGE regions (stale payload may still
     // look like a TypeInfo tip and trip INVALID_OBJECT_SIZE at MarkObject).
+    // tailslot: reject when obj+GetSize crosses regionEnd on any live region
+    // (zMarkStackEntry.hpp:81 object_address bits 63-5; zPage.inline.hpp:188 is_in).
     // Count rejects under MRT_GCV2_MARKFLOOR_OBJ_GATE=1.
     static bool PlausibleManagedObjectGate(const char* site, BaseObject* obj);
     static void ReportPlausibleManagedObjectGateCounts();
