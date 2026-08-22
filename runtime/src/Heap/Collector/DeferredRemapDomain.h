@@ -94,6 +94,13 @@ struct Snapshot {
     uint64_t postflipRounds = 0;
     uint64_t candidates = 0;
     uint64_t trackedByHolderType[16]{};
+    uint64_t staleColorObserved = 0;
+    uint64_t staleColorUnhealed = 0;
+    uint64_t staleColorNoReceipt = 0;
+    uint64_t walkSkipTl = 0;
+    uint64_t walkSkipRecentFull = 0;
+    uint64_t walkSkipOther = 0;
+    uint64_t walkBreakHole = 0;
 };
 
 // REMAPDOMAIN_AUDIT=1 enables the zero-product-change shadow/oracle path.
@@ -130,7 +137,11 @@ size_t ConsumeYoungPrevious(const SlotResolver& resolver, const SlotRecorder& re
 // Postflip remains the product oracle. Begin/Note/End can be called from the
 // parallel walk; Note is internally serialized. target is the pre-heal value.
 void BeginPostflip(uint64_t majorIndex);
-void NotePostflipSlot(MAddress slot, BaseObject* holder, BaseObject* target, uint8_t holderType, bool changed);
+void NotePostflipSlot(MAddress slot, BaseObject* holder, BaseObject* target, uint8_t holderType, bool changed,
+                      uintptr_t rawWord = 0, bool oldTagged = false);
+// walkRange skip / VisitAllObjects hole. reason is a stable token, not a format string.
+void NoteWalkSkip(MAddress regionStart, uint8_t regionType, uint8_t route, RegionLifeId life, MAddress allocPtr,
+                  MAddress regionEnd, const char* reason);
 void EndPostflip();
 
 Snapshot GetSnapshot();
