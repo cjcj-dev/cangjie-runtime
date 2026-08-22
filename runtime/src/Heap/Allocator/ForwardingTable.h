@@ -41,6 +41,9 @@ public:
 
     // Dual-write hook from RegionInfo (PrepareForwardable / SetRegionType FROM*).
     static void Insert(MAddress regionStart, size_t regionSize, RegionInfo* region);
+    // Publish FROM membership immediately, but defer the live-sized attached array
+    // until PrepareForwardableRegion has a closed mark face.
+    static void InsertProvisional(MAddress regionStart, size_t regionSize, RegionInfo* region);
     static void Remove(MAddress regionStart, size_t regionSize);
     static void EnsureEntries(RegionInfo* region);
     static void ClearEntries(MAddress regionStart, size_t regionSize);

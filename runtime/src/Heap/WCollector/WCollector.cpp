@@ -6846,6 +6846,7 @@ void WCollector::DoYoungGarbageCollection()
     if (FysAuditDiag::Enabled()) {
         FysAuditDiag::PostRescan(rememberedSlots, liveRememberedSlots, consumedSlots, weakSlots);
     }
+    size_t reachableBeforeRemsetClosure = reachableVec.size();
     {
         MRT_PHASE_TIMER("young.mark_from_remset");
         if (youngConcFollow) {
@@ -7291,11 +7292,13 @@ void WCollector::DoYoungGarbageCollection()
     VLOG(REPORT, "[GCV2][setbitmap] use=%d reachable_n=%zu set_n=%zu fullYoung=%d youngConc=%d",
          static_cast<int>(useBitmapLedger), reachableVec.size(), reachableObjects.size(),
          static_cast<int>(fullYoungScan), static_cast<int>(youngConcMark));
-    // iorfix / blackmark: product post-mark fixpoint (always on).
+    // iorfix / blackmark: product post-mark fixpoint.
     // PrepareYoung ClearLiveInfo drops pre-mark allocation-black bits; live holders in
-    // reachableVec can still hold fields to unmarked young (live0Surv=0 at GetRoute).
-    // Re-walk holder fields via ResolveMinorReference and re-enter TraceYoungClosure so
-    // those targets join the route domain *before* PrepareForwardable freezes liveInfo0.
+    // reachableVec used to hold fields to unmarked young (live0Surv=0 at GetRoute). The
+    // wasMarked residual walk (e533489f7) now closes that root frontier in-place. A later
+    // remset/SATB closure can still expand the reachable set and expose the old residual
+    // shape, so re-walk only when work arrived after the root closure. This preserves the
+    // correctness fallback without rescanning a closed root-only graph every minor.
     // Orthogonal to allocate-black paint (youngconc-only after §5.2 delete of MRT_GCV2_ALLOC_BLACK);
     // IOR samples are FixMinorEvacuatedSlot×liveobj with ROUTED+surv0 (REPORT-iorsource).
     size_t fixpointTotalExtra = 0;
@@ -7316,11 +7319,13 @@ void WCollector::DoYoungGarbageCollection()
     size_t fixpointReachableAdded = 0;
     uint64_t fixpointScanNs = 0;
     uint64_t fixpointClosureNs = 0;
+    const size_t lateReachableAdded = reachableVec.size() - reachableBeforeRemsetClosure;
+    const bool fixpointTriggered = lateReachableAdded != 0;
     {
         MRT_PHASE_TIMER("young.postmark_fixpoint");
         size_t rounds = 0;
         constexpr size_t kMaxFixpointRounds = 8;
-        for (; rounds < kMaxFixpointRounds; ++rounds) {
+        for (; fixpointTriggered && rounds < kMaxFixpointRounds; ++rounds) {
             WorkStack blackmarkExtra = NewWorkStack();
             const size_t nHolders = reachableVec.size();
             ++fixpointRoundScans;
@@ -7408,11 +7413,13 @@ void WCollector::DoYoungGarbageCollection()
         }
     }
     VLOG(REPORT,
-         "[GCV2][candfix] postmark_fixpoint round_scans=%zu closure_rounds=%zu holder_visits=%zu "
+         "[GCV2][candfix] postmark_fixpoint trigger=%u root_reachable=%zu late_added=%zu "
+         "round_scans=%zu closure_rounds=%zu holder_visits=%zu "
          "holder_nonheap=%zu holder_gate_skip=%zu ref_holders=%zu ref_fields=%zu target_null=%zu "
          "target_nonheap=%zu target_recovered=%zu target_gate_skip=%zu target_not_young=%zu "
          "target_already_marked=%zu admitted=%zu closure_inputs=%zu reachable_added=%zu "
          "reachable_after=%zu scan_ns=%llu closure_ns=%llu",
+         static_cast<unsigned>(fixpointTriggered), reachableBeforeRemsetClosure, lateReachableAdded,
          fixpointRoundScans, fixpointClosureRounds, fixpointHolderVisits, fixpointHolderNonHeap,
          fixpointHolderGateSkip, fixpointRefHolders, fixpointRefFields, fixpointTargetNull,
          fixpointTargetNonHeap, fixpointTargetRecovered, fixpointTargetGateSkip, fixpointTargetNotYoung,
