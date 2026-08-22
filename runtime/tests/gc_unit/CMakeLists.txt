@@ -49,6 +49,7 @@ set(GC_UNIT_SOURCES
     test_i2_readref.cpp
     test_fnlz_roots.cpp
     test_partial_array.cpp
+    test_deferred_remap_domain.cpp
 )
 
 add_executable(cj_gc_unit ${GC_UNIT_SOURCES})

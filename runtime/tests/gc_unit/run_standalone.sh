@@ -43,6 +43,7 @@ $CXX -std=gnu++17 -O0 -g -Wall -Wextra -pthread -fno-rtti \
   "$SRC/gc_unit_main.cpp" \
   "$SRC/gc_unit_stubs.cpp" \
   "$ROOT/runtime/src/Heap/Allocator/ForwardingTable.cpp" \
+  "$ROOT/runtime/src/Heap/Collector/DeferredRemapDomain.cpp" \
   "$SRC/test_colour_address.cpp" \
   "$SRC/test_trustp1_phase1.cpp" \
   "$SRC/test_route_info.cpp" \
@@ -82,6 +83,7 @@ $CXX -std=gnu++17 -O0 -g -Wall -Wextra -pthread -fno-rtti \
     "$SRC/test_i2_readref.cpp" \
     "$SRC/test_fnlz_roots.cpp" \
     "$SRC/test_partial_array.cpp" \
+    "$SRC/test_deferred_remap_domain.cpp" \
   -L"$RUNTIME_LIB_DIR" -Wl,-rpath,"$RUNTIME_LIB_DIR" \
   -lcangjie-runtime -lboundscheck \
   -o "$OUT/cj_gc_unit"
