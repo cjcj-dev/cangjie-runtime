@@ -1796,6 +1796,12 @@ BaseObject* WCollector::ForwardUpdateRawRef(ObjectRef& root)
     if (IsGhostFromObject(oldObj)) {
         BaseObject* toVersion = TryForwardObject(oldObj);
         if (toVersion == nullptr) {
+            // ZUncoloredRoot::barrier (zUncoloredRoot.inline.hpp:35-60): remap then
+            // store a plain zaddress. TryForward miss still consults the forwarding
+            // table; never leave a reclaimable from in a static/plain root.
+            toVersion = FindToVersion(oldObj);
+        }
+        if (toVersion == nullptr) {
             return oldObj;
         }
         HealPairDiag::NoteRaw(oldObj, toVersion, &root,
@@ -8874,51 +8880,55 @@ void WCollector::DoYoungGarbageCollection()
         remsetStats.live = liveRememberedCount;
         VLOG(REPORT, "[GCV2][youngconc] concurrent young mark done; STW2 post-mark+evac reachable=%zu",
              reachableVec.size());
-        // youngstatic: seal static-root young targets into mark face under STW2.
-        // Probe showed VisitStaticRoots enumerates (staticYoung≫0) but PushYoungObject is
-        // bypassed under FYS (direct workStack). Residual unmarked static young still reach
-        // FixMinor as ghost-from with live0Surv=0. Force MarkObject here (not only push).
-        {
-            size_t sealed = 0;
-            size_t already = 0;
-            size_t staticYoung = 0;
-            size_t staticOld = 0;
-            size_t gateSkip = 0;
-            Heap::GetHeap().VisitStaticRoots([this, &sealed, &already, &staticYoung, &staticOld, &gateSkip,
-                                             &workStack](RootSlot& root) {
-                zaddress_unsafe observed = root.LoadPlain();
-                HeapSlot<> bits(to_zpointer(raw(observed)));
-                BaseObject* obj = to_object(bits.GetTargetObject());
-                if (obj == nullptr || !Heap::IsHeapAddress(obj)) {
-                    return;
-                }
-                if (!Collector::PlausibleManagedObjectGate("youngstatic.seal", obj)) {
-                    BaseObject* host = Collector::TryRecoverInteriorBase(obj);
-                    if (host == nullptr || host == obj) {
-                        ++gateSkip;
-                        return;
-                    }
-                    obj = host;
-                }
-                if (!obj->IsValidObject()) {
+    }
+    // youngstatic: product path. Previously nested under youngConcMark, which is
+    // pinned-off (always false) — seal never ran. Static String.myData then died
+    // (FillerArray at the registered slot). Mark + ForwardUpdateRawRef (plain
+    // writeback, zUncoloredRoot.inline.hpp:35-60) on every minor.
+    {
+        size_t sealed = 0;
+        size_t already = 0;
+        size_t staticYoung = 0;
+        size_t staticOld = 0;
+        size_t gateSkip = 0;
+        size_t forwarded = 0;
+        Heap::GetHeap().VisitStaticRoots([this, &sealed, &already, &staticYoung, &staticOld, &gateSkip,
+                                         &forwarded, &workStack](RootSlot& root) {
+            zaddress_unsafe observed = root.LoadPlain();
+            HeapSlot<> bits(to_zpointer(raw(observed)));
+            BaseObject* obj = to_object(bits.GetTargetObject());
+            if (obj == nullptr || !Heap::IsHeapAddress(obj)) {
+                return;
+            }
+            if (!Collector::PlausibleManagedObjectGate("youngstatic.seal", obj)) {
+                BaseObject* host = Collector::TryRecoverInteriorBase(obj);
+                if (host == nullptr || host == obj) {
                     ++gateSkip;
                     return;
                 }
-                RegionInfo* region = RegionInfo::TryGetRegionInfoAt(reinterpret_cast<MAddress>(obj));
-                if (region == nullptr) {
-                    ++gateSkip;
-                    return;
+                obj = host;
+            }
+            if (!obj->IsValidObject()) {
+                ++gateSkip;
+                return;
+            }
+            RegionInfo* region = RegionInfo::TryGetRegionInfoAt(reinterpret_cast<MAddress>(obj));
+            if (region == nullptr) {
+                ++gateSkip;
+                return;
+            }
+            if (!region->IsYoungRegion()) {
+                ++staticOld;
+                BaseObject* after = ForwardUpdateRawRef(root);
+                if (after != obj) {
+                    ++forwarded;
                 }
-                if (!region->IsYoungRegion()) {
-                    ++staticOld;
-                    return;
-                }
-                ++staticYoung;
-                if (region->IsMarkedObject(region->GetMarkView<Generation::Young>(), obj)) {
-                    ++already;
-                    return;
-                }
-                // Direct paint (do not rely solely on workStack drain under concurrent residue).
+                return;
+            }
+            ++staticYoung;
+            if (region->IsMarkedObject(region->GetMarkView<Generation::Young>(), obj)) {
+                ++already;
+            } else {
                 if (UNLIKELY(StartWhoDiag::Enabled())) {
                     StartWhoDiag::NoteProduced(obj, StartWhoDiag::Source::ROOT_DERIVED,
                                                "youngstatic.seal", &root);
@@ -8926,16 +8936,20 @@ void WCollector::DoYoungGarbageCollection()
                 (void)MarkObject(obj);
                 PushAdmittedYoung(obj, workStack, "youngstatic.seal");
                 ++sealed;
-            });
-            if (!workStack.empty()) {
-                TraceYoungClosure(workStack, fullYoungScan, reachableObjects, reachableVec, reachableSlots,
-                                  weakSlots, useBitmapLedger);
             }
-            LOG(RTLOG_ERROR,
-                "[GCV2][youngstatic] stw2_static_seal sealed=%zu already=%zu staticYoung=%zu "
-                "staticOld=%zu gateSkip=%zu reachable=%zu",
-                sealed, already, staticYoung, staticOld, gateSkip, reachableVec.size());
+            BaseObject* after = ForwardUpdateRawRef(root);
+            if (after != obj) {
+                ++forwarded;
+            }
+        });
+        if (!workStack.empty()) {
+            TraceYoungClosure(workStack, fullYoungScan, reachableObjects, reachableVec, reachableSlots,
+                              weakSlots, useBitmapLedger);
         }
+        LOG(RTLOG_ERROR,
+            "[GCV2][youngstatic] stw2_static_seal sealed=%zu already=%zu staticYoung=%zu "
+            "staticOld=%zu gateSkip=%zu forwarded=%zu reachable=%zu",
+            sealed, already, staticYoung, staticOld, gateSkip, forwarded, reachableVec.size());
     }
     g_minorLedgerCost.Report();
     // portyoungconc positive control. Emitted on EVERY minor, including the closed arm, so
