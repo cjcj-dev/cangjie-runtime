@@ -34,7 +34,10 @@ namespace MapleRuntime {
 namespace GcUnit {
 
 struct GcHeapFixture {
-    static constexpr size_t kUnits = 2;
+    // Six permits the intrusive RegionList port to exercise the same six-node
+    // order/removal matrix as OpenJDK test_zList.  Existing fixtures still
+    // initialize and use region0/region1 only.
+    static constexpr size_t kUnits = 6;
 
     GcHeapFixture()
     {

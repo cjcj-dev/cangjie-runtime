@@ -17,6 +17,27 @@
 using namespace MapleRuntime;
 using namespace MapleRuntime::GcUnit;
 
+// Port of test_zLiveMap.cpp's one-object large-page invariant onto the
+// Cangjie RegionBitmap representation.  The first mark makes the only object
+// live and accounts its bytes exactly once; repeating it is idempotent.
+GC_TEST(ZLiveMapPort, OneObjectPageMarkAccountsLiveOnce)
+{
+    constexpr size_t kPageSize = 4096;
+    RegionBitmap* bitmap = GcHeapFixture::AllocPlantedBitmap(kPageSize);
+
+    GC_EXPECT_FALSE(bitmap->IsMarked(0));
+    GC_EXPECT_EQ(bitmap->GetLiveBytes(), static_cast<size_t>(0));
+    GC_EXPECT_FALSE(bitmap->MarkBits(0, kPageSize, kPageSize));
+    GC_EXPECT_TRUE(bitmap->IsMarked(0));
+    GC_EXPECT_TRUE(bitmap->IsMarked(kPageSize - kMarkedBytesPerBit));
+    GC_EXPECT_EQ(bitmap->GetLiveBytes(), kPageSize);
+    GC_EXPECT_EQ(bitmap->RecomputeLiveBytes(), kPageSize);
+
+    GC_EXPECT_TRUE(bitmap->MarkBits(0, kPageSize, kPageSize));
+    GC_EXPECT_EQ(bitmap->GetLiveBytes(), kPageSize);
+    GcHeapFixture::FreePlantedBitmap(bitmap);
+}
+
 // U4: product mark then IsSurvivedObject.
 GC_TEST(LiveMap, MarkAndSurvive)
 {

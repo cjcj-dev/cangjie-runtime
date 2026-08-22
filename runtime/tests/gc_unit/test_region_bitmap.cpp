@@ -18,6 +18,64 @@
 using namespace MapleRuntime;
 using namespace MapleRuntime::GcUnit;
 
+// Shared half of test_zBitMap.cpp::test_set_pair_unset.  A Cangjie mark bit
+// covers eight bytes, so a strongly marked 16-byte object is the same two-bit
+// transition.  MarkBits returns "already marked" (the inverse polarity of
+// ZBitMap::par_set_bit_pair's success return), and live bytes are the inc_live
+// witness.
+GC_TEST(ZBitMapPort, StrongPairUnset)
+{
+    constexpr size_t kBitsPerWord = sizeof(uintptr_t) * 8;
+    // RegionBitmap requires at least one complete 64-bit mark word.  Keep a
+    // valid backing bitmap while `bitSize` preserves ZGC's logical test range.
+    constexpr size_t kBackingRegionSize = 4096;
+    const size_t bitSizes[] = { 2, 62, 64, 66, 126, 128 };
+    for (size_t bitSize : bitSizes) {
+        for (size_t i = 0; i < bitSize - 1; ++i) {
+            if ((i + 1) % kBitsPerWord == 0) {
+                continue;
+            }
+            RegionBitmap* bitmap = GcHeapFixture::AllocPlantedBitmap(kBackingRegionSize);
+            const size_t offset = i * kMarkedBytesPerBit;
+            GC_EXPECT_FALSE(bitmap->MarkBits(offset, 2 * kMarkedBytesPerBit, kBackingRegionSize));
+            GC_EXPECT_TRUE(bitmap->IsMarked(offset));
+            GC_EXPECT_TRUE(bitmap->IsMarked(offset + kMarkedBytesPerBit));
+            GC_EXPECT_EQ(bitmap->GetLiveBytes(), 2 * kMarkedBytesPerBit);
+            GC_EXPECT_EQ(bitmap->RecomputeLiveBytes(), 2 * kMarkedBytesPerBit);
+            GcHeapFixture::FreePlantedBitmap(bitmap);
+        }
+    }
+}
+
+// Shared half of test_zBitMap.cpp::test_set_pair_set.  Once every bit is set,
+// setting any pair must report "already", leave both bits set, and not account
+// live bytes a second time.
+GC_TEST(ZBitMapPort, StrongPairSet)
+{
+    constexpr size_t kBitsPerWord = sizeof(uintptr_t) * 8;
+    // See StrongPairUnset: backing geometry is not part of the pair invariant.
+    constexpr size_t kBackingRegionSize = 4096;
+    const size_t bitSizes[] = { 2, 62, 64, 66, 126, 128 };
+    for (size_t bitSize : bitSizes) {
+        const size_t logicalSize = bitSize * kMarkedBytesPerBit;
+        RegionBitmap* bitmap = GcHeapFixture::AllocPlantedBitmap(kBackingRegionSize);
+        GC_EXPECT_FALSE(bitmap->MarkBits(0, logicalSize, kBackingRegionSize));
+        GC_EXPECT_EQ(bitmap->GetLiveBytes(), logicalSize);
+
+        for (size_t i = 0; i < bitSize - 1; ++i) {
+            if ((i + 1) % kBitsPerWord == 0) {
+                continue;
+            }
+            const size_t offset = i * kMarkedBytesPerBit;
+            GC_EXPECT_TRUE(bitmap->MarkBits(offset, 2 * kMarkedBytesPerBit, kBackingRegionSize));
+            GC_EXPECT_TRUE(bitmap->IsMarked(offset));
+            GC_EXPECT_TRUE(bitmap->IsMarked(offset + kMarkedBytesPerBit));
+            GC_EXPECT_EQ(bitmap->GetLiveBytes(), logicalSize);
+        }
+        GcHeapFixture::FreePlantedBitmap(bitmap);
+    }
+}
+
 // bitCover for a unit-sized region: every address offset in [0, regionSize) must be
 // representable when markBitmap is fully allocated for that regionSize.
 GC_TEST(RegionBitmap, BitCoverMatchesRegionSize)
