@@ -2623,7 +2623,7 @@ void WCollector::InvalidateOldTaggedRefs(bool requireSurvivedMark)
                     ? static_cast<uint8_t>(255)
                     : static_cast<uint8_t>(holderRegion->GetRegionType());
                 DeferredRemapDomain::NotePostflipSlot(
-                    reinterpret_cast<MAddress>(&field), obj, oldTarget, holderType, changed);
+                    reinterpret_cast<MAddress>(&field), obj, oldTarget, holderType, changed, oldValue, oldTagged);
             }
             if (!recordCrossGen) {
                 return;
@@ -2645,8 +2645,10 @@ void WCollector::InvalidateOldTaggedRefs(bool requireSurvivedMark)
 
     // Region-head-ownership walk over [rangeStart, rangeEnd). H6: carry transient-extent
     // guard verbatim. Spec §六 T1: first-step correction if region head is before rangeStart.
-    auto walkRange = [&processObject, requireSurvivedMark, account](uintptr_t rangeStart, uintptr_t rangeEnd,
-                                                                    uintptr_t inactive, HeapAccount& acc) {
+    auto walkRange = [&processObject, requireSurvivedMark, account, postflipDomain](uintptr_t rangeStart,
+                                                                                    uintptr_t rangeEnd,
+                                                                                    uintptr_t inactive,
+                                                                                    HeapAccount& acc) {
         if (rangeStart >= rangeEnd || rangeStart >= inactive) {
             return;
         }
@@ -2677,9 +2679,10 @@ void WCollector::InvalidateOldTaggedRefs(bool requireSurvivedMark)
             // Region-head ownership: only visit if the region's head is in this chunk.
             // Regions that spill past limit still belong entirely to this worker.
             if (addr >= rangeStart && addr < limit) {
+                const bool knownEmpty = requireSurvivedMark &&
+                    region->IsKnownEmpty(region->GetMarkView<Generation::Old>());
                 if (region->IsValidRegion() && !region->IsFreeRegion() && !region->IsGarbageRegion() &&
-                    !(requireSurvivedMark &&
-                      region->IsKnownEmpty(region->GetMarkView<Generation::Old>()))) {
+                    !knownEmpty) {
                     if (account && region != lastProcessedRegion) {
                         lastProcessedRegion = region;
                         ++acc.processedRegions;
@@ -2687,6 +2690,14 @@ void WCollector::InvalidateOldTaggedRefs(bool requireSurvivedMark)
                     region->VisitAllObjects([&processObject, &acc](BaseObject* object) {
                         processObject(object, acc);
                     });
+                } else if (postflipDomain) {
+                    const char* reason = !region->IsValidRegion() ? "invalid" :
+                        region->IsFreeRegion() ? "free" :
+                        region->IsGarbageRegion() ? "garbage" : "known_empty";
+                    DeferredRemapDomain::NoteWalkSkip(
+                        region->GetRegionStart(), static_cast<uint8_t>(region->GetRegionType()),
+                        static_cast<uint8_t>(region->GetRouteState()), region->GetRegionLifeId(),
+                        region->GetRegionAllocPtr(), region->GetRegionEnd(), reason);
                 }
             }
             addr = nextAddr;
