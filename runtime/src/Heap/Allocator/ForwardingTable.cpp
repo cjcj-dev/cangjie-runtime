@@ -32,6 +32,9 @@ namespace {
 ZGranuleMap<ZForwarding*> g_membership;
 ZGranuleMap<ZForwarding*> g_entries;
 std::atomic<bool> g_ready{ false };
+// Installation is rare and phase-scoped. Serialize provisional-to-full replacement so
+// readers never observe a freed membership carrier while the attached array is resized.
+std::mutex g_installLock;
 
 std::atomic<uint64_t> g_cmpTotal{ 0 };
 std::atomic<uint64_t> g_cmpAgree{ 0 };
@@ -87,12 +90,12 @@ void ForwardingTable::Initialize(MAddress heapStart, size_t heapSize, size_t uni
 uint32_t ForwardingTable::EstimateLiveObjects(RegionInfo* region, size_t regionSize)
 {
     // zForwarding.inline.hpp:43-50 sizes from live *object* count. GetLiveByteCount
-    // is bytes; liveBytes>>3 counts 8-byte words. When the live count is still
-    // zero (lazy EnsureEntries), take the region's capacity so the table cannot
-    // fill and spin (REPORT-fwdentries).
+    // is bytes; liveBytes>>3 counts 8-byte words. Before marking has made zero
+    // authoritative, take the region's capacity so the table cannot fill and spin
+    // (REPORT-fwdentries). A closed zero-live face needs only the minimum table.
     const uint64_t liveBytes = region->GetLiveByteCount();
     uint64_t estimate = liveBytes >> ZForwarding::kAlignShift;
-    if (estimate == 0) {
+    if (estimate == 0 && !region->IsLiveCountAuthoritative()) {
         estimate = regionSize >> ZForwarding::kAlignShift;
     }
     if (estimate == 0) {
@@ -146,6 +149,27 @@ void ForwardingTable::Insert(MAddress regionStart, size_t regionSize, RegionInfo
     g_membership.put(regionStart, regionSize, forwarding);
 }
 
+void ForwardingTable::InsertProvisional(MAddress regionStart, size_t regionSize, RegionInfo* region)
+{
+    if (!Ready() || region == nullptr || regionSize == 0) {
+        return;
+    }
+    std::lock_guard<std::mutex> lock(g_installLock);
+    ZForwarding* forwarding = g_entries.get(regionStart);
+    if (forwarding == nullptr) {
+        // Two entries preserve the existing armed-miss semantics and membership publication,
+        // without zeroing a capacity-sized table before marking has established live bytes.
+        forwarding = ZForwarding::alloc(1, regionStart, g_entries.base(), regionSize, region,
+                                        region->GetRegionLifeId(), true);
+        if (forwarding == nullptr) {
+            return;
+        }
+        g_entries.put(regionStart, regionSize, forwarding);
+        RegionLifeClock::Publish(RegionLifeClock::Carrier::ARMED_ENTRY, forwarding->page_life_id());
+    }
+    g_membership.put(regionStart, regionSize, forwarding);
+}
+
 void ForwardingTable::Remove(MAddress regionStart, size_t regionSize)
 {
     if (!Ready() || regionSize == 0) {
@@ -164,7 +188,9 @@ void ForwardingTable::EnsureEntries(RegionInfo* region)
     if (g_entries.index_for_offset(start) == SIZE_MAX) {
         return;
     }
-    if (g_entries.get(start) != nullptr) {
+    std::lock_guard<std::mutex> lock(g_installLock);
+    ZForwarding* previous = g_entries.get(start);
+    if (previous != nullptr && !previous->is_provisional()) {
         return;
     }
     const uint32_t liveObjs = EstimateLiveObjects(region, regionSize);
@@ -173,16 +199,14 @@ void ForwardingTable::EnsureEntries(RegionInfo* region)
     if (created == nullptr) {
         return;
     }
-    ZForwarding* expected = nullptr;
-    if (!g_entries.compare_exchange(start, expected, created)) {
-        created->Destroy();
-        if (expected == nullptr || expected->start() != start) {
-            return;
-        }
-        created = expected;
-    }
     g_entries.put(start, regionSize, created);
+    if (previous != nullptr && g_membership.get(start) == previous) {
+        g_membership.put(start, regionSize, created);
+    }
     RegionLifeClock::Publish(RegionLifeClock::Carrier::ARMED_ENTRY, created->page_life_id());
+    if (previous != nullptr) {
+        Retire(previous);
+    }
 }
 
 void ForwardingTable::ClearEntries(MAddress regionStart, size_t regionSize)
@@ -190,6 +214,7 @@ void ForwardingTable::ClearEntries(MAddress regionStart, size_t regionSize)
     if (!Ready() || regionSize == 0) {
         return;
     }
+    std::lock_guard<std::mutex> lock(g_installLock);
     ZForwarding* tab = g_entries.exchange(regionStart, nullptr);
     const size_t granule = g_entries.granule();
     if (granule != 0) {
@@ -355,7 +380,7 @@ bool ZForwarding::page_life_current(RegionLifeClock::Carrier carrier) const
 MAddress ForwardingTable::InsertMapping(MAddress from, MAddress to)
 {
     ZForwarding* tab = GetEntries(from);
-    if (tab == nullptr) {
+    if (tab == nullptr || tab->is_provisional()) {
         RegionInfo* region = nullptr;
         ZForwarding* membership = get(from);
         if (membership != nullptr) {

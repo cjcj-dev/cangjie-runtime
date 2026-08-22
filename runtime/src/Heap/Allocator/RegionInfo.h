@@ -2505,8 +2505,7 @@ public:
         // changes.  That is the convergence the port is for: one writer of membership instead of N.
         if (type == RegionType::FROM_REGION || type == RegionType::LONE_FROM_REGION ||
             type == RegionType::UNMOVABLE_FROM_REGION || type == RegionType::RAW_POINTER_PINNED_REGION) {
-            ForwardingTable::Insert(GetRegionStart(), GetRegionSize(), this);
-            ForwardingTable::EnsureEntries(this);
+            ForwardingTable::InsertProvisional(GetRegionStart(), GetRegionSize(), this);
         } else if (type == RegionType::FREE_REGION || type == RegionType::GARBAGE_REGION ||
                    type == RegionType::TO_REGION) {
             // The ghost bit is part of membership and outlives the type change: all six residual
