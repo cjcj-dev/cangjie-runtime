@@ -16,6 +16,7 @@
 #include "Common/MarkWorkStack.h"
 #include "Heap/Allocator/RegionSpace.h"
 #include "Heap/Collector/ForwardDataManager.h"
+#include "Heap/Collector/MarkStackEntry.h"
 #include "Mutator/MutatorManager.h"
 
 // set 1 to enable concurrent mark test.
@@ -26,13 +27,13 @@ namespace MapleRuntime {
 constexpr uint64_t NS_PER_US = 1000;
 constexpr uint64_t NS_PER_S = 1000000000;
 
-// Shared by MarkSatbBuffer (major) and MarkYoungSatbBuffer (young).
-// ZMark::end -> try_end (zMark.cpp:940-971) decides termination inside the
-// pause after ZMark::flush (zMark.cpp:587-596 / :998-1006). Young mark
-// termination uses the same ZMark (zMark.cpp:757-780 young roots).
-// Default false: the pre-existing concurrent test. Flip to true to measure
-// the pause arm. Compile-time, not an MRT_GCV2_ env (commit 05095555).
-constexpr bool kMarkTerminateInPause = false;
+// Strict mark-end cut shared by major MarkSatbBuffer and young
+// MarkYoungSatbBuffer. ZMark::end -> try_end (zMark.cpp:954-971) decides
+// termination with mutators stopped, after ZMark::flush (zMark.cpp:587-605,
+// :998-1006), and resumes concurrent follow when that cut exposes work
+// (zMark.cpp:973-990). This must stay compile-time and default-on: retired-only
+// sampling cannot see a mutator's non-full SATB node.
+constexpr bool kMarkTerminateInPause = true;
 inline bool MarkTerminateInPauseEnabled() { return kMarkTerminateInPause; }
 
 void NoteMarkTerminatePause();
@@ -268,9 +269,9 @@ public:
     // Types, so that we don't confuse root sets and working stack.
     // The policy is: we simply `push_back` into root set,
     // but we use Enqueue to add into work stack.
-    using RootSet = MarkStack<BaseObject*>;
-    using WorkStack = MarkStack<BaseObject*>;
-    using WorkStackBuf = MarkStackBuf<BaseObject*>;
+    using RootSet = MarkStack<MarkStackEntry>;
+    using WorkStack = MarkStack<MarkStackEntry>;
+    using WorkStackBuf = MarkStackBuf<MarkStackEntry>;
 
     void Init() override;
     void Fini() override;
@@ -346,14 +347,7 @@ public:
         }
         RegionInfo* regionInfo = RegionInfo::GetRegionInfoAt(reinterpret_cast<MAddress>(obj));
         // livesame: MarkObject adds live only on 0→1 (ZGC inc_live).
-        bool marked;
-        if (gcReason == GC_REASON_YOUNG) {
-            MarkView<Generation::Young> view = regionInfo->GetMarkView<Generation::Young>();
-            marked = regionInfo->MarkObject(view, obj);
-        } else {
-            MarkView<Generation::Old> view = regionInfo->GetMarkView<Generation::Old>();
-            marked = regionInfo->MarkObject(view, obj);
-        }
+        bool marked = regionInfo->MarkObjectByOwner(obj);
         if (!marked) {
             size_t objSize = obj->GetSize();
             if (!fixReferences && regionInfo->IsFromRegion()) {
@@ -371,7 +365,7 @@ public:
     // Follow one partial-array chunk popped off the work stack. Ported from
     // ZGC's ZMark::follow_partial_array (zMark.cpp:265-270). Only reachable
     // when MarkPartialArray::Enabled(), since nothing pushes chunks otherwise.
-    virtual void FollowPartialArray(BaseObject* entry, WorkStack& workStack)
+    virtual void FollowPartialArray(const MarkStackEntry& entry, WorkStack& workStack)
     {
         Collector::AbortUnimplemented("TracingCollector::FollowPartialArray");
     }

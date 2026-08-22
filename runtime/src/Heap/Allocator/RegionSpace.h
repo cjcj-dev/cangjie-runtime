@@ -213,8 +213,8 @@ public:
         // getsize7: no live callers (grep). Unsized GetSize hazard documented in GETSIZE_CALLSITES;
         // do not include Collector.h here (Allocator include path / cycle). Gate at call sites if revived.
         RegionInfo* regionInfo = RegionInfo::GetRegionInfoAt(reinterpret_cast<MAddress>(obj));
-        MarkView<G> view = regionInfo->GetMarkView<G>();
-        return regionInfo->MarkObject(view, obj);
+        (void)G;
+        return regionInfo->MarkObjectByOwner(obj);
     }
 
     template<Generation G>

@@ -304,12 +304,14 @@ MAddress AllocBuffer::Allocate(size_t totalSize, AllocType allocType)
                     if (totalSize > 0 && (totalSize % 8) == 0 && offset + totalSize <= regionSize) {
                         SealCheck::NotePaint(reg, offset, totalSize, "RegionSpace::AllocBlack.live");
                         MarkView<Generation::Young> view = reg->GetMarkView<Generation::Young>();
+                        reg->VerifyMarkFaceOwner<Generation::Young>(
+                            reinterpret_cast<BaseObject*>(addr), "RegionSpace::AllocBlack.live");
                         bool already = reg->GetOrAllocMarkBitmap(view)->MarkBits(offset, totalSize, regionSize);
                         if (!already) {
                             reg->AddLiveByteCount(totalSize);
                         }
                         LiveInfo* ghost = reg->GetLiveInfo0ForProbe();
-                        RegionBitmap* ghostBitmap = ghost == nullptr ? nullptr : reg->GetRouteMarkBitmap(ghost);
+                        RegionBitmap* ghostBitmap = ghost == nullptr ? nullptr : reg->GetOwnerMarkBitmap(ghost);
                         if (ghost != nullptr && ghostBitmap != nullptr) {
                             SealCheck::NotePaint(reg, offset, totalSize, "RegionSpace::AllocBlack.ghost");
                             (void)ghostBitmap->MarkBits(offset, totalSize, regionSize);

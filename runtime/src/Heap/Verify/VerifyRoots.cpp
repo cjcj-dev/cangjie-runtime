@@ -8,15 +8,18 @@
 
 #include <atomic>
 #include <cstdint>
+#include <cstdio>
 #include <cstdlib>
 #include <cstring>
 
-#include "Base/LogFile.h"
+#include "Common/ColourPredicates.h"
 #include "Common/StateWord.h"
 #include "Heap/Heap.h"
+#include "Heap/Collector/ManagedObjectGate.h"
 #include "Heap/Verify/Zap.h"
 #include "Mutator/Mutator.h"
 #include "ObjectModel/MClass.inline.h"
+#include "TypeInfoManager.h"
 
 namespace MapleRuntime {
 namespace {
@@ -36,7 +39,7 @@ enum class RootVerifyChannel : uint8_t { Ok = 0, Defect, Info };
 
 bool VerifyRoots::Enabled()
 {
-    static const bool on = false /* pinned:MRT_GCV2_VERIFY_ROOTS */;
+    static const bool on = EnvIsOne("MRT_GCV2_VERIFY_ROOTS");
     return on;
 }
 
@@ -109,12 +112,25 @@ void VerifyRoots::VerifyRootPayload(const RootVerifyContext& ctx, void* slotOrRe
     if (!Enabled()) {
         return;
     }
-    if (obj == nullptr) {
-        return; // invariant S: null is legal
+    const uintptr_t objAddr = ctx.hasRawValue ? ctx.rawValue : reinterpret_cast<uintptr_t>(obj);
+    if (objAddr == 0) {
+        return; // invariant S: raw null is legal
     }
 
-    uintptr_t objAddr = reinterpret_cast<uintptr_t>(obj);
-    AddrRegion objRegion = ClassifyAddress(objAddr);
+    // RootSlot is the Cangjie counterpart of ZUncoloredRoot. Reject metadata
+    // before converting to BaseObject*: converting first either hid the bad
+    // bits through uncoloring or trapped in from_native_ref, so the verifier
+    // itself never reported the corrupt root.
+    const bool hasHighBits = (objAddr & ~ColourPredicates::HEAP_ADDRESS_MASK) != 0;
+    AddrRegion objRegion = AddrRegion::OTHER;
+    if (!hasHighBits) {
+        obj = from_native_ref(objAddr);
+        if (ctx.ownerMutator != nullptr && ctx.ownerMutator->IsStackAddr(objAddr)) {
+            objRegion = AddrRegion::STACK;
+        } else {
+            objRegion = ClassifyAddress(objAddr);
+        }
+    }
 
     RootVerifyChannel channel = RootVerifyChannel::Ok;
     const char* reason = "ok";
@@ -123,12 +139,26 @@ void VerifyRoots::VerifyRootPayload(const RootVerifyContext& ctx, void* slotOrRe
     AddrRegion tipRegion = AddrRegion::NULL_ADDR;
     int typeByte = -1;
 
-    if (objRegion == AddrRegion::ZAP_PATTERN) {
+    if (hasHighBits) {
+        channel = RootVerifyChannel::Defect;
+        reason = "root-value-is-coloured";
+    } else if (objRegion == AddrRegion::ZAP_PATTERN) {
         channel = RootVerifyChannel::Defect;
         reason = "slot-value-is-zap-pattern";
     } else if (objRegion == AddrRegion::LOW_NON_HEAP) {
         channel = RootVerifyChannel::Defect;
         reason = "slot-value-low-non-heap";
+    } else if (objRegion == AddrRegion::OTHER || objRegion == AddrRegion::NULL_ADDR) {
+        channel = RootVerifyChannel::Defect;
+        reason = "root-value-not-heap-or-owner-stack";
+    } else if (objRegion == AddrRegion::HEAP && !PlausibleManagedObjectGate("VerifyRoots", obj)) {
+        channel = RootVerifyChannel::Defect;
+        reason = "root-value-not-managed-object-base";
+    } else if (objRegion == AddrRegion::STACK && ctx.kind != RootKind::STACK_OBJECT) {
+        // A stack-map root may legally name a headerless stack record whose
+        // first word is the real managed reference. CheckAndPush supplies the
+        // stronger STACK_OBJECT kind after proving a header is present.
+        return;
     } else {
         tip = obj->GetTypeInfo();
         tipAddr = reinterpret_cast<uintptr_t>(tip);
@@ -147,7 +177,9 @@ void VerifyRoots::VerifyRootPayload(const RootVerifyContext& ctx, void* slotOrRe
             // Known AS1 defect: tip residue lands in heap anonymous area, not TypeInfoManager.
             channel = RootVerifyChannel::Defect;
             reason = "typeinfo-in-heap-not-typeinfo-manager";
-            typeByte = static_cast<int>(tip->GetType());
+        } else if (!TypeInfoManager::GetTypeInfoManager().IsResidentTypeInfoAddress(tipAddr)) {
+            channel = RootVerifyChannel::Defect;
+            reason = "typeinfo-not-resident";
         } else if (!tip->IsVaildType()) {
             channel = RootVerifyChannel::Defect;
             reason = "invalid-type-kind";
@@ -168,18 +200,22 @@ void VerifyRoots::VerifyRootPayload(const RootVerifyContext& ctx, void* slotOrRe
         g_badRootCount.fetch_add(1, std::memory_order_relaxed);
     }
     const char* fname = (ctx.funcName != nullptr && ctx.funcName[0] != '\0') ? ctx.funcName : "?";
-    VLOG(REPORT,
-         "[GCV2][verify][roots] %s kind=%s phase=%s reason=%s "
-         "func=%s startIP=%p frameIP=%p frameFA=%p pcOff=0x%zx "
-         "slotBias=%zd reg=%d slotOrReg=%p "
-         "obj=%p objRegion=%s tip=%p tipRegion=%s typeByte=%d "
-         "env=MRT_GCV2_VERIFY_ROOTS=1",
-         tag, KindName(ctx.kind), ctx.phase, reason, fname,
-         reinterpret_cast<void*>(ctx.startIP), reinterpret_cast<void*>(ctx.frameIP),
-         reinterpret_cast<void*>(ctx.frameFA),
-         (ctx.startIP != 0 && ctx.frameIP >= ctx.startIP) ? (ctx.frameIP - ctx.startIP) : 0,
-         static_cast<ssize_t>(ctx.slotBias), ctx.regNum, slotOrRegAddr, obj, RegionName(objRegion),
-         reinterpret_cast<void*>(tipAddr), RegionName(tipRegion), typeByte);
+    // VLOG(REPORT) is compiled closed in Release, which would turn this into
+    // an invisible counter. A diagnostic verifier must report the failing
+    // slot without requiring a second logging flag.
+    std::fprintf(stderr,
+                 "[GCV2][verify][roots] %s kind=%s phase=%s reason=%s "
+                 "func=%s startIP=%p frameIP=%p frameFA=%p pcOff=0x%zx "
+                 "slotBias=%zd reg=%d slotOrReg=%p raw=0x%zx "
+                 "obj=%p objRegion=%s tip=%p tipRegion=%s typeByte=%d "
+                 "env=MRT_GCV2_VERIFY_ROOTS=1\n",
+                 tag, KindName(ctx.kind), ctx.phase, reason, fname,
+                 reinterpret_cast<void*>(ctx.startIP), reinterpret_cast<void*>(ctx.frameIP),
+                 reinterpret_cast<void*>(ctx.frameFA),
+                 (ctx.startIP != 0 && ctx.frameIP >= ctx.startIP) ? (ctx.frameIP - ctx.startIP) : 0,
+                 static_cast<ssize_t>(ctx.slotBias), ctx.regNum, slotOrRegAddr, objAddr, obj, RegionName(objRegion),
+                 reinterpret_cast<void*>(tipAddr), RegionName(tipRegion), typeByte);
+    std::fflush(stderr);
 }
 
 void VerifyRoots::BeforeCheckAndPush(BaseObject* obj)
@@ -204,9 +240,9 @@ SlotDebugVisitor VerifyRoots::MakeSlotDebugVisitor(const RootVerifyContext& base
         if (ctx.frameFA != 0) {
             slotAddr = reinterpret_cast<void*>(static_cast<intptr_t>(ctx.frameFA) + static_cast<intptr_t>(bias));
         }
-        // Stack-map roots are native, uncoloured references. The verifier keeps
-        // the historical pointer-shaped diagnostic boundary after classifying them.
-        VerifyRootPayload(ctx, slotAddr, from_native_ref(raw(root)));
+        ctx.rawValue = raw(root);
+        ctx.hasRawValue = true;
+        VerifyRootPayload(ctx, slotAddr, nullptr);
     };
 }
 
@@ -216,8 +252,9 @@ RegDebugVisitor VerifyRoots::MakeRegDebugVisitor(const RootVerifyContext& baseCt
         RootVerifyContext ctx = baseCtx;
         ctx.kind = RootKind::REG_ROOT;
         ctx.regNum = static_cast<int>(reg);
-        // Saved-register roots use the same native uncoloured ABI as stack slots.
-        VerifyRootPayload(ctx, nullptr, from_native_ref(raw(root)));
+        ctx.rawValue = raw(root);
+        ctx.hasRawValue = true;
+        VerifyRootPayload(ctx, nullptr, nullptr);
     };
 }
 

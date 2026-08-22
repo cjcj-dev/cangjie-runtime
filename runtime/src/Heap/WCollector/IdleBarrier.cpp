@@ -55,9 +55,8 @@ BaseObject* IdleBarrier::ReadReference(BaseObject* obj, RefField<false>& field) 
                 return resolved;
             }
             RefField<> goodField = theCollector.GetAndTryTagRefField(resolved);
-            ZgcSelfHealLoadGood(field, oldField.GetFieldValue(), goodField.GetFieldValue(),
-                                HealSite::IdleReadReference);
-            return resolved;
+            return ZgcSelfHealLoadGood(field, oldField.GetFieldValue(), goodField.GetFieldValue(),
+                                       HealSite::IdleReadReference);
         }
 
         BaseObject* loadGood = theCollector.make_load_good(oldField);
@@ -71,9 +70,8 @@ BaseObject* IdleBarrier::ReadReference(BaseObject* obj, RefField<false>& field) 
             return nullptr;
         }
         RefField<> goodField = theCollector.GetAndTryTagRefField(loadGood);
-        ZgcSelfHealLoadGood(field, oldField.GetFieldValue(), goodField.GetFieldValue(),
-                            HealSite::IdleReadReference);
-        return loadGood;
+        return ZgcSelfHealLoadGood(field, oldField.GetFieldValue(), goodField.GetFieldValue(),
+                                   HealSite::IdleReadReference);
     }
 }
 
@@ -104,9 +102,8 @@ BaseObject* IdleBarrier::AtomicReadReference(BaseObject* obj, RefField<true>& fi
             return loadGood;
         }
         RefField<> goodField = theCollector.GetAndTryTagRefField(loadGood);
-        ZgcSelfHealLoadGood(field, oldField.GetFieldValue(), goodField.GetFieldValue(),
-                            HealSite::IdleAtomicReadReference);
-        return loadGood;
+        return ZgcSelfHealLoadGood(field, oldField.GetFieldValue(), goodField.GetFieldValue(),
+                                   HealSite::IdleAtomicReadReference);
     }
 }
 

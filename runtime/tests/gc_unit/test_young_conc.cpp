@@ -30,6 +30,7 @@
 #define private public
 #include "Heap/Barrier/RememberedSet.h"
 #include "Heap/Collector/LiveInfo.h"
+#include "Mutator/Mutator.h"
 #undef private
 
 #include "Heap/Allocator/AllocBuffer.h"
@@ -496,20 +497,20 @@ GC_TEST(YoungConc, ClassifySkipOldHolderTarget)
                  static_cast<unsigned>(Stw2CurrentAudit::Stw2Cover::Skip));
 }
 
-// Product default matches major: kMarkTerminateInPause=false (f3a48c102).
-// Young MarkYoungSatbBuffer reads the same compile-time gate.
-GC_TEST(YoungConc, MarkTerminateInPauseDefaultOff)
+// Product must not return to retired-only termination. Flipping the constant is
+// also the deliberate-break red proof for the regression guard below.
+GC_TEST(YoungConc, MarkTerminateProtocolDefault)
 {
-    GC_EXPECT_FALSE(kMarkTerminateInPause);
-    GC_EXPECT_FALSE(MarkTerminateInPauseEnabled());
+    GC_EXPECT_TRUE(kMarkTerminateInPause);
+    GC_EXPECT_TRUE(MarkTerminateInPauseEnabled());
 }
 
-// ZMark::flush (zMark.cpp:998-1006) / Mutator::FlushSatbBuffer: an in-flight
-// SATB node that is not full is never retired by EnsureGoodNode, so
-// GetRetiredObjects cannot see it. FlushQueue hands the node over
-// unconditionally. That is the hole MarkYoungSatbBuffer's pause arm closes
-// (WCollector.cpp MarkYoungSatbBuffer, same shape as MarkSatbBuffer).
-GC_TEST(YoungConc, UnfullSatbNodeInvisibleUntilFlush)
+// Negative control for the exact pre-fix termination decision. Leave one SATB
+// deletion-barrier pre-value in a mutator-local, non-full node. Retired-only
+// sampling reports global-empty and would commit termination, while the target
+// remains white. This test is supposed to prove the miss, not pretend the
+// legacy arm is correct.
+GC_TEST(YoungConc, LegacyTerminationMissesUnfullSatbNode)
 {
     GcHeapFixture fx;
     fx.region0->SetYoungRegionFlag(1);
@@ -518,21 +519,41 @@ GC_TEST(YoungConc, UnfullSatbNodeInvisibleUntilFlush)
     (void)fx.PlantMarkBitmap<Generation::Young>(live, fx.region0->GetRegionSize());
     (void)fx.PlantMarkBitmap<Generation::Old>(live, fx.region0->GetRegionSize());
 
+    Mutator mutator;
     auto* node = new SatbBuffer::Node();
     GC_EXPECT_TRUE(node->Push(fx.obj0, nullptr));
+    mutator.satbNode = node;
+    GC_EXPECT_TRUE(mutator.PeekSatbNode() == node);
     GC_EXPECT_FALSE(node->IsEmpty());
     GC_EXPECT_FALSE(node->IsFull());
 
-    std::vector<BaseObject*> retired;
-    SatbBuffer::Instance().GetRetiredObjects(retired);
-    GC_EXPECT_EQ(retired.size(), 0u);
+    std::vector<BaseObject*> markWork;
+    SatbBuffer::Instance().GetRetiredObjects(markWork);
+    const bool legacyWouldTerminate = markWork.empty();
+    const size_t offset = fx.region0->GetAddressOffset(reinterpret_cast<MAddress>(fx.obj0));
+    const auto view = fx.region0->GetMarkView<Generation::Young>();
 
-    SatbBuffer::Instance().FlushQueue(node);
-    GC_EXPECT_TRUE(node == nullptr);
+    GC_EXPECT_TRUE(legacyWouldTerminate);
+    GC_EXPECT_FALSE(fx.region0->IsMarkedObject(view, offset));
 
-    SatbBuffer::Instance().GetRetiredObjects(retired);
-    GC_EXPECT_EQ(retired.size(), 1u);
-    GC_EXPECT_EQ(reinterpret_cast<uintptr_t>(retired[0]), reinterpret_cast<uintptr_t>(fx.obj0));
+    // Strict mark-end cut (ZGC zMark.cpp:954-971, :998-1006): mutators are
+    // frozen before their partial nodes are handed over, then the same retired
+    // queue is sampled. The discovered grey forces mark-end continue.
+    mutator.FlushSatbBuffer();
+    GC_EXPECT_TRUE(mutator.PeekSatbNode() == nullptr);
+    SatbBuffer::Instance().GetRetiredObjects(markWork);
+    const bool strictWouldTerminate = markWork.empty();
+
+    GC_EXPECT_FALSE(strictWouldTerminate);
+    GC_EXPECT_EQ(markWork.size(), 1u);
+    GC_EXPECT_EQ(reinterpret_cast<uintptr_t>(markWork[0]), reinterpret_cast<uintptr_t>(fx.obj0));
+
+    while (!markWork.empty()) {
+        BaseObject* grey = markWork.back();
+        markWork.pop_back();
+        (void)fx.region0->MarkObject(view, grey, 8);
+    }
+    GC_EXPECT_TRUE(fx.region0->IsMarkedObject(view, offset));
 
     fx.region0->metadata.liveInfo = nullptr;
     fx.FreePlanted(live);

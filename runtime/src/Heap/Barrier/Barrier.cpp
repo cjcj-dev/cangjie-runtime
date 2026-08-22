@@ -145,22 +145,32 @@ bool SkipLaunderingHeal(Collector& collector, zpointer healPtr, HealSite site)
 }
 } // namespace
 
-void Barrier::ZgcSelfHealLoadGood(RefField<false>& field, zpointer observed, zpointer healPtr,
-                                  HealSite site) const
+BaseObject* Barrier::ZgcSelfHealLoadGood(RefField<false>& field, zpointer observed, zpointer healPtr,
+                                         HealSite site) const
 {
+    // GetAndTryTagRefField may advance a stale/free input to a newer to-version.  Derive the
+    // hand-out from its result, never from the address the caller passed to the tagger.
+    BaseObject* returned = to_object(RefField<>(healPtr).GetTargetObject());
+    ZgcInvariants::AssertHealMatchesReturn(static_cast<uintptr_t>(raw(healPtr)), returned,
+                                           static_cast<uint16_t>(site));
     if (SkipLaunderingHeal(theCollector, healPtr, site)) {
-        return;
+        return returned;
     }
     ZgcSelfHeal(field, observed, healPtr, LoadGoodFastPath(theCollector), site);
+    return returned;
 }
 
-void Barrier::ZgcSelfHealLoadGood(RefField<true>& field, zpointer observed, zpointer healPtr,
-                                  HealSite site) const
+BaseObject* Barrier::ZgcSelfHealLoadGood(RefField<true>& field, zpointer observed, zpointer healPtr,
+                                         HealSite site) const
 {
+    BaseObject* returned = to_object(RefField<>(healPtr).GetTargetObject());
+    ZgcInvariants::AssertHealMatchesReturn(static_cast<uintptr_t>(raw(healPtr)), returned,
+                                           static_cast<uint16_t>(site));
     if (SkipLaunderingHeal(theCollector, healPtr, site)) {
-        return;
+        return returned;
     }
     ZgcSelfHeal(field, observed, healPtr, LoadGoodFastPath(theCollector), site);
+    return returned;
 }
 
 template<typename Function>
@@ -350,8 +360,7 @@ void MarkAndRememberNewValue(BarrierPhase barrierPhase, BaseObject* ref)
         if (!region->IsYoungRegion()) {
             return;
         }
-        MarkView<Generation::Young> view = region->GetMarkView<Generation::Young>();
-        bool already = region->MarkObject(view, ref, ref->GetSize());
+        bool already = region->MarkObjectByOwner(ref, ref->GetSize());
         if (already) {
             return;
         }
@@ -999,8 +1008,8 @@ BaseObject* Barrier::ReadReference(BaseObject* obj, RefField<false>& field) cons
                 if (resolved != nullptr && resolved != handed) {
                     handed = resolved;
                     RefField<> goodField = theCollector.GetAndTryTagRefField(handed);
-                    ZgcSelfHealLoadGood(field, field.GetFieldValue(), goodField.GetFieldValue(),
-                                        HealSite::IdleReadReference);
+                    handed = ZgcSelfHealLoadGood(field, field.GetFieldValue(), goodField.GetFieldValue(),
+                                                 HealSite::IdleReadReference);
                 }
             }
         }
@@ -1010,7 +1019,8 @@ BaseObject* Barrier::ReadReference(BaseObject* obj, RefField<false>& field) cons
         const uintptr_t slotRead1 = static_cast<uintptr_t>(raw(field.GetFieldValue()));
         const uintptr_t slotRead2 = static_cast<uintptr_t>(raw(field.GetFieldValue()));
         ZgcInvariants::NoteState(slotRead1, slotRead2,
-                                 static_cast<uintptr_t>(::g_cjLoadBadMask) ^ REMAP_COLOUR_MASK, handed);
+                                 static_cast<uintptr_t>(::g_cjLoadBadMask) ^ REMAP_COLOUR_MASK, handed,
+                                 static_cast<uint8_t>(phase));
         NoteHandedOut(handed, obj, field, theCollector, static_cast<uint8_t>(phase));
         return handed;
     }
@@ -1161,9 +1171,8 @@ BaseObject* Barrier::AtomicReadReference(BaseObject* obj, RefField<true>& field,
         BaseObject* resolved = ResolveFromCopyForMutator(handed);
         if (resolved != handed && resolved != nullptr) {
             RefField<> goodField = theCollector.GetAndTryTagRefField(resolved);
-            ZgcSelfHealLoadGood(field, field.GetFieldValue(order), goodField.GetFieldValue(),
-                                HealSite::IdleAtomicReadReference);
-            return resolved;
+            return ZgcSelfHealLoadGood(field, field.GetFieldValue(order), goodField.GetFieldValue(),
+                                       HealSite::IdleAtomicReadReference);
         }
         return handed;
     }

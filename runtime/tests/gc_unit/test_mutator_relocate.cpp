@@ -64,6 +64,8 @@ GC_TEST(MutatorRelocate, TwoThreadsInsertSameFromLoserTakesWinner)
         }
         gotB.store(tab->insert(from, toB));
     });
+    JoinGuard t1Guard(t1);
+    JoinGuard t2Guard(t2);
     t1.join();
     t2.join();
     const MAddress a = gotA.load();
@@ -124,6 +126,8 @@ GC_TEST(FwdSpin, LockedWaiterSeesInsertBeforeUnlock)
         }
         phase.store(2, std::memory_order_release);
     });
+    JoinGuard copierGuard(copier);
+    JoinGuard waiterGuard(waiter);
     waiter.join();
     copier.join();
     GC_EXPECT_EQ(waiterGot.load(), 1);

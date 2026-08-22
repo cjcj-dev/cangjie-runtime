@@ -246,7 +246,10 @@ endif()
     # tens of seconds where the workload route needs a crash, a rate over N>=10 and a forensic read.
     # It shipped behind MRT_GC_UNIT_TESTS:BOOL=OFF with a fail-closed gate script that nothing ever
     # called, so it ran zero times.  POST_BUILD rather than add_dependencies because it links the
-    # freshly built .so; the script self-skips via a stamp when neither the .so nor the suite moved,
+    # freshly built .so.  If no matching cjc exists, the C++ suite remains a hard gate while the
+    # language-level finalizer test records a machine-readable NOT_RUN beside the .so and lets this
+    # build finish; composition gates must require GATE=PASS.  The script uses a stamp when neither
+    # the .so nor the suite moved,
     # and known_failures.txt keeps today's two standing failures from blocking while still blocking
     # anything new -- and blocking a listed test that starts passing, so the list cannot rot.
     # Linux only: the gate script and run_standalone.sh hard-code libcangjie-runtime.so, so on macOS

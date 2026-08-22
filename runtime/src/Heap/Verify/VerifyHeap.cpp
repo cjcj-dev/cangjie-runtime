@@ -410,20 +410,21 @@ void VerifyHeapObjects(const char* point, bool force, const std::unordered_set<B
 {
     // Default off — HotSpot VerifyBeforeGC/VerifyAfterGC DIAGNOSTIC pattern.
     // force=true lets post-evac run without enabling the global pre-evacuate gate.
-    if (!force && !false /* pinned:MRT_GCV2_VERIFY_HEAP */) {
+    static const bool verifyHeapEnabled = []() {
+        const char* value = std::getenv("MRT_GCV2_VERIFY_HEAP");
+        return value != nullptr && std::strcmp(value, "1") == 0;
+    }();
+    if (!force && !verifyHeapEnabled) {
         return;
     }
 
     static std::atomic<size_t> invokeCount{ 0 };
     size_t invoke = invokeCount.fetch_add(1, std::memory_order_relaxed) + 1;
-    size_t startAt = (0) /* pinned:MRT_GCV2_VERIFY_HEAP_START_AT */;
+    constexpr size_t startAt = 0;
     if (startAt != 0 && invoke < startAt) {
         return;
     }
-    size_t every = (1) /* pinned:MRT_GCV2_VERIFY_HEAP_EVERY */;
-    if (every == 0) {
-        every = 1;
-    }
+    constexpr size_t every = 1;
     if (startAt != 0) {
         if ((invoke - startAt) % every != 0) {
             return;
@@ -432,7 +433,7 @@ void VerifyHeapObjects(const char* point, bool force, const std::unordered_set<B
         return;
     }
 
-    size_t maxFailures = (kDefaultMaxFailures) /* pinned:MRT_GCV2_VERIFY_HEAP_MAX_FAILURES */;
+    size_t maxFailures = kDefaultMaxFailures;
     if (maxFailures == 0) {
         maxFailures = kDefaultMaxFailures;
     }
@@ -519,11 +520,5 @@ void VerifyHeapObjects(const char* point, bool force, const std::unordered_set<B
         YyEdgeDiag::Report(point == nullptr ? "?" : point);
     }
 
-    if (false /* pinned:MRT_GCV2_VERIFY_HEAP_FATAL */ && stats.failures != 0) {
-        CHECK_DETAIL(false,
-                     "heap object invariant H broken: point=%s failures=%zu objects=%zu H2_tipInHeap=%zu H3=%zu",
-                     point == nullptr ? "?" : point, stats.failures, stats.objectsScanned, stats.h2TipInHeap,
-                     stats.h3BadRef);
-    }
 }
 } // namespace MapleRuntime

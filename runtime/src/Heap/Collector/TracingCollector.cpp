@@ -271,20 +271,21 @@ public:
                 break;
             }
             // get next object from work stack.
-            BaseObject* obj = workStack.back();
+            const MarkStackEntry entry = workStack.back();
             workStack.pop_back();
             // A partial-array chunk is a continuation of an array that was
             // already marked, so it skips MarkObject entirely -- same order as
             // ZGC's ZMark::mark_and_follow (zMark.cpp:392-400), which dispatches
             // on the partial_array flag before the mark step. Forking still runs
             // below, which is the point: the chunk makes the tail stealable.
-            if (UNLIKELY(MarkPartialArray::IsPartialArrayEntry(obj))) {
-                collector.FollowPartialArray(obj, workStack);
+            if (UNLIKELY(MarkPartialArray::IsPartialArrayEntry(entry))) {
+                collector.FollowPartialArray(entry, workStack);
                 if (threadPool != nullptr) {
                     TryForkTask();
                 }
                 continue;
             }
+            BaseObject* obj = entry.object();
             if (!Collector::PlausibleManagedObjectGate("ConcurrentMarkingWork.pop", obj)) {
                 BaseObject* host = Collector::TryRecoverInteriorBase(obj);
                 if (host == nullptr || host == obj ||
@@ -293,9 +294,17 @@ public:
                 }
                 obj = host;
             }
-            bool wasMarked = collector.MarkObject(obj);
-            if (!wasMarked) {
-                nNewlyMarked++;
+            bool wasMarked = false;
+            if (entry.mark()) {
+                // MarkObject owns live-byte accounting in this collector, so
+                // incLive attests the operation instead of causing a second
+                // increment after a successful claim.
+                wasMarked = collector.MarkObject(obj);
+            }
+            if ((!entry.mark() || !wasMarked) && entry.follow()) {
+                if (entry.mark()) {
+                    nNewlyMarked++;
+                }
                 if (!obj->HasRefField()) {
                     continue;
                 }
@@ -314,7 +323,7 @@ public:
                 } else {
                     collector.TraceObjectRefFields(obj, workStack);
                 }
-            } else {
+            } else if (entry.mark() && wasMarked) {
                 SurvNodeDiag::NoteFollowHolder(obj, SurvNodeDiag::FOLLOW_SKIP_MARKED);
                 if (UNLIKELY(HealPairDiag::YoungClaimEnabled())) {
                     HealPairDiag::NoteMajorWasMarked(obj);
@@ -348,8 +357,9 @@ public:
                 break;
             }
             // get next object from work stack.
-            BaseObject* obj = workStack.back();
+            const MarkStackEntry entry = workStack.back();
             workStack.pop_back();
+            BaseObject* obj = entry.object();
             bool wasMarked = collector.MarkObject(obj);
             if (!wasMarked) {
                 collector.DFSTraceExportObject(obj);
@@ -399,6 +409,7 @@ void TracingCollector::VisitStackRoots(const RootVisitor& visitor, RegSlotsMap& 
         vctx.startIP = startIP;
         vctx.frameIP = frameIP;
         vctx.frameFA = frameAddress;
+        vctx.ownerMutator = &mutator;
         static thread_local char gcvrootNameBuf[256];
         gcvrootNameBuf[0] = '\0';
         CString fname = frame.GetFuncName();
@@ -638,13 +649,33 @@ void TracingCollector::RecordStubAllRegister(RegSlotsMap& regSlotsMap, Uptr fp)
 
 void TracingCollector::EnumConcurrencyModelRoots(RootSet& rootSet) const
 {
-    RootVisitor visitor = [&rootSet, this](ObjectRef& root) { EnumAndTagRawRoot(root, rootSet); };
+    RootVisitor visitor = [&rootSet, this](ObjectRef& root) {
+        if (VerifyRoots::Enabled()) {
+            RootVerifyContext ctx;
+            ctx.phase = "EnumConcurrencyModelRoots";
+            ctx.kind = RootKind::RUNTIME_ROOT;
+            ctx.rawValue = raw(root.LoadPlain());
+            ctx.hasRawValue = true;
+            VerifyRoots::VerifyRootPayload(ctx, &root, nullptr);
+        }
+        EnumAndTagRawRoot(root, rootSet);
+    };
     Runtime::Current().GetConcurrencyModel().VisitGCRoots(&visitor);
 }
 
 void TracingCollector::EnumStaticRoots(RootSet& rootSet) const
 {
-    const RootSlotVisitor& visitor = [&rootSet, this](RootSlot& root) { EnumAndTagRawRoot(root, rootSet); };
+    const RootSlotVisitor& visitor = [&rootSet, this](RootSlot& root) {
+        if (VerifyRoots::Enabled()) {
+            RootVerifyContext ctx;
+            ctx.phase = "EnumStaticRoots";
+            ctx.kind = RootKind::STATIC_ROOT;
+            ctx.rawValue = raw(root.LoadPlain());
+            ctx.hasRawValue = true;
+            VerifyRoots::VerifyRootPayload(ctx, &root, nullptr);
+        }
+        EnumAndTagRawRoot(root, rootSet);
+    };
     VisitStaticRoots(visitor);
 }
 
@@ -660,6 +691,14 @@ void TracingCollector::MergeMutatorRoots(WorkStack& workStack)
 void TracingCollector::EnumAllExportRoots(RootSet &foreignRootsSet)
 {
     Heap::GetHeap().VisitAllExportRoots([&foreignRootsSet, this](ObjectRef& root) {
+        if (VerifyRoots::Enabled()) {
+            RootVerifyContext ctx;
+            ctx.phase = "EnumAllExportRoots";
+            ctx.kind = RootKind::RUNTIME_ROOT;
+            ctx.rawValue = raw(root.LoadPlain());
+            ctx.hasRawValue = true;
+            VerifyRoots::VerifyRootPayload(ctx, &root, nullptr);
+        }
         EnumAndTagRawRoot(root, foreignRootsSet);
     });
 }
@@ -791,6 +830,11 @@ void TracingCollector::DoTracing(WorkStack& workStack, WorkStack& foreignRootsSe
     }
 
     {
+        // ZGC breaks termination on resurrection (zMarkTerminate.inline.hpp:125-139)
+        // and follows the resurrected closure before accepting mark end. Our
+        // finalizer discovery is controller-owned (no shared stripe): it follows
+        // that closure to empty here, after strict SATB termination and before
+        // the collector can leave the marking phase.
         MRT_PHASE_TIMER("concurrent resurrection");
         DoResurrection(workStack);
     }
@@ -827,7 +871,7 @@ bool TracingCollector::MarkSatbBuffer(WorkStack& workStack)
         SatbBuffer::Instance().GetRetiredObjects(remarkStack);
 
         while (!remarkStack.empty()) {
-            BaseObject* obj = remarkStack.back();
+            BaseObject* obj = remarkStack.back().object();
             remarkStack.pop_back();
             ++satbSeen;
             if (Heap::IsHeapAddress(obj) && !this->IsMarkedObject<Generation::Old>(obj)) {
@@ -882,8 +926,8 @@ bool TracingCollector::MarkSatbBuffer(WorkStack& workStack)
         // pre-value, so losing it leaves a still-reachable object unmarked -- and an
         // unmarked live object is exactly what makes its region look empty.
         if (!MarkTerminateInPauseEnabled()) {
-            // Ablation arm: the pre-existing behaviour, kept reachable so the pause can
-            // be measured against its own absence in one binary rather than two.
+            // Fault-injection/negative-control arm. The product constant is true;
+            // setting it false reconstructs the retired-only termination bug.
             TransitionToGCPhase(GCPhase::GC_PHASE_CLEAR_SATB_BUFFER, true);
             visitSatbObj();
             if (workStack.empty()) {
@@ -891,6 +935,14 @@ bool TracingCollector::MarkSatbBuffer(WorkStack& workStack)
             }
             continue;
         }
+        // Our worker-termination barrier is the stronger owner/join invariant,
+        // not ZGC's shared-stripe condition variable: TracingImpl returned only
+        // after WaitFinish(), every split MarkStack node has one owner, and there
+        // can be no queued publication at this cut. There are no shared lock-free
+        // stripes, hence no ZMarkingSMR object to protect.
+        CHECK_DETAIL(workStack.empty(), "strict mark termination with owner work");
+        CHECK_DETAIL(GetThreadPool()->GetWorkCount() == 0,
+                     "strict mark termination with published worker work");
         bool terminated = false;
         {
             ScopedStopTheWorld stw("mark terminate", true, GCPhase::GC_PHASE_CLEAR_SATB_BUFFER);
@@ -937,15 +989,16 @@ void TracingCollector::DoResurrection(WorkStack& workStack)
 
     size_t resurrectdObjects = 0;
     while (!workStack.empty()) {
-        BaseObject* obj = workStack.back();
+        const MarkStackEntry entry = workStack.back();
         workStack.pop_back();
 
         // TraceObjectRefFields below can push partial-array chunks onto this
         // stack too, so this loop has to decode them as well.
-        if (UNLIKELY(MarkPartialArray::IsPartialArrayEntry(obj))) {
-            FollowPartialArray(obj, workStack);
+        if (UNLIKELY(MarkPartialArray::IsPartialArrayEntry(entry))) {
+            FollowPartialArray(entry, workStack);
             continue;
         }
+        BaseObject* obj = entry.object();
 
         // skip if the object already marked.
         RegionInfo* regionInfo = RegionInfo::GetRegionInfoAt(reinterpret_cast<MAddress>(obj));
@@ -971,10 +1024,21 @@ void TracingCollector::Init() {}
 
 void TracingCollector::Fini() { Collector::Fini(); }
 
-// VisitGCRoots walks finalizers + finalizables + workingFinalizables (relocatable roots).
+// Registered finalizers are discovered by DoResurrection and fixed by
+// VisitRawPointers. Only queued/running finalizables are strong mark roots.
 void TracingCollector::EnumFinalizerProcessorRoots(RootSet& rootSet) const
 {
-    RootVisitor visitor = [this, &rootSet](ObjectRef& root) { EnumAndTagRawRoot(root, rootSet); };
+    RootVisitor visitor = [this, &rootSet](ObjectRef& root) {
+        if (VerifyRoots::Enabled()) {
+            RootVerifyContext ctx;
+            ctx.phase = "EnumFinalizerProcessorRoots";
+            ctx.kind = RootKind::RUNTIME_ROOT;
+            ctx.rawValue = raw(root.LoadPlain());
+            ctx.hasRawValue = true;
+            VerifyRoots::VerifyRootPayload(ctx, &root, nullptr);
+        }
+        EnumAndTagRawRoot(root, rootSet);
+    };
     collectorResources.GetFinalizerProcessor().VisitGCRoots(visitor);
 }
 
@@ -1135,7 +1199,7 @@ void TracingCollector::DFSTraceExportObject(BaseObject *exportObj)
     workStack.push_back(exportObj);
     std::list<BaseObject*> externObjs;
     while (!workStack.empty()) {
-        BaseObject* obj = workStack.back();
+        BaseObject* obj = workStack.back().object();
         workStack.pop_back();
         obj->ForEachRefField([&workStack, obj, this, &externObjs](RefField<>& field) {
             (void)obj;

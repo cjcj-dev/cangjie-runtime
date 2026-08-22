@@ -688,11 +688,11 @@ bool RegionInfo::VisitLiveObjectsUntilFalse(const std::function<bool(BaseObject*
 {
     // Skip only when a mark phase established live==0. Bare zero (e.g. non-young under minor)
     // is not an emptiness proof — fall through and consult the mark bitmap.
-    if (IsRouteKnownEmpty()) {
+    if (IsOwnerKnownEmpty()) {
         return true;
     }
     // tipnull arm R: Admit/GetRoute use the typed liveInfo0 face after PrepareForwardable.
-    auto survivedAt = [this](size_t offset) -> bool { return IsRouteSurvivedObject(offset); };
+    auto survivedAt = [this](size_t offset) -> bool { return IsOwnerSurvivedObject(offset); };
     if (IsLargeRegion()) {
         BaseObject* obj = from_region_addr(GetRegionStart());
         if (!Collector::PlausibleManagedObjectGate("VisitLiveObjects", obj)) {
@@ -3023,7 +3023,7 @@ void RegionManager::CompactRegion(RegionInfo* region)
     // copy the same set — region->IsSurvivedObject reads current liveInfo (+ mark-epoch), which
     // can disagree with the ghost face. Wrong face ⇒ copy nothing / wrong set, memset free-tail
     // that still holds root-named from → leave-alone → reclaim → GetSize UAF (FYS1 deadold).
-    auto survivedAt = [region](size_t offset) -> bool { return region->IsRouteSurvivedObject(offset); };
+    auto survivedAt = [region](size_t offset) -> bool { return region->IsOwnerSurvivedObject(offset); };
     // resolveto: keep dense pack (no holes). Record fromOff→dest so GetRoute on
     // COMPACTED answers the packed slot, not the prefix-sum hole.
     region->FreeCompactRouteTable();
@@ -3161,7 +3161,7 @@ void RegionManager::CompactRegion(RegionInfo* region, RegionInfo* toRegion1)
     BaseObject* currentObj = from_region_addr(currentPtr);
     CopyCollector& collector = reinterpret_cast<CopyCollector&>(Heap::GetHeap().GetCollector());
     // uafclose: same ghost-face survivor as CompactRegion(region) / VisitLive / Admit.
-    auto survivedAt = [region](size_t offset) -> bool { return region->IsRouteSurvivedObject(offset); };
+    auto survivedAt = [region](size_t offset) -> bool { return region->IsOwnerSurvivedObject(offset); };
     region->FreeCompactRouteTable();
     while (true) {
         CHECK(currentPtr>=regionStart);
@@ -3537,7 +3537,7 @@ void RegionManager::ForwardRegion(RegionInfo* region)
     // Incomplete: DispelGhost (no geometric plan) + Exempt — never FORWARDED empty, never
     // ROUTED forever (TIMEOUT), never soft-null after Collect (SEGV si_addr=0x8).
     auto allLiveBitsHaveReceipt = [region]() -> bool {
-        auto survivedAt = [region](size_t offset) -> bool { return region->IsRouteSurvivedObject(offset); };
+        auto survivedAt = [region](size_t offset) -> bool { return region->IsOwnerSurvivedObject(offset); };
         if (region->IsLargeRegion()) {
             if (!survivedAt(0)) {
                 return true;

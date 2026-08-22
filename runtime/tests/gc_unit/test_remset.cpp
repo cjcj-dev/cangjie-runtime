@@ -265,6 +265,35 @@ GC_TEST(Remset, OldToOldRecordedBecauseBarrierConditionsOnSlot)
     GC_EXPECT_TRUE(ExpectRecorded(rs, reinterpret_cast<MAddress>(field)));
 }
 
+// The sticky provenance bitmap is diagnostic backing, not product state.  Its
+// positive control must cover all three claims the probe makes: the env really
+// allocates it, a mutator-barrier record flips the bit, and a destructive minor
+// drain does not clear it.
+GC_TEST(Remset, EverRecordedStickyBitmapPositiveControl)
+{
+    GcHeapFixture fx;
+    const MAddress slot = reinterpret_cast<MAddress>(fx.obj0) + TYPEINFO_PTR_SIZE;
+
+    (void)unsetenv("MRT_GCV2_REMSET_EVER");
+    RememberedSet off;
+    off.Initialize(fx.heapStart, 2 * RegionInfo::UNIT_SIZE);
+    GC_EXPECT_FALSE(off.EverRecordedEnabled());
+    GC_EXPECT_FALSE(off.WasEverRecorded(slot));
+
+    GC_EXPECT_EQ(setenv("MRT_GCV2_REMSET_EVER", "1", 1), 0);
+    RememberedSet on;
+    on.Initialize(fx.heapStart, 2 * RegionInfo::UNIT_SIZE);
+    GC_EXPECT_TRUE(on.EverRecordedEnabled());
+    GC_EXPECT_FALSE(on.WasEverRecorded(slot));
+
+    on.Record(slot, true);
+    GC_EXPECT_TRUE(on.WasEverRecorded(slot));
+    std::unordered_set<MAddress> drained;
+    on.DrainForMinor(drained);
+    GC_EXPECT_TRUE(on.WasEverRecorded(slot));
+    (void)unsetenv("MRT_GCV2_REMSET_EVER");
+}
+
 // ---------------------------------------------------------------------------------------------
 // Edge retention across minors.
 //

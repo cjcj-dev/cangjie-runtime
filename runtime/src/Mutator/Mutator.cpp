@@ -310,6 +310,13 @@ void Mutator::RequestEpochHandshake(uint64_t epoch)
 void Mutator::MarkBornCleanForEpoch(uint64_t epoch)
 {
     CHECK_DETAIL(epoch != 0, "born-clean epoch must not use epoch zero");
+    if (UNLIKELY(MutatorManager::ConcurrentStackScanEnabled())) {
+        CHECK_DETAIL(Heap::GetHeap().GetGCPhase() == GCPhase::GC_PHASE_ENUM,
+                     "concurrent stack-scan join before ENUM barrier publication");
+        bool began = stackWatermark.TryBegin(epoch, StackWatermark::WM_OWNER_SELF, 0);
+        CHECK_DETAIL(began, "born-clean mutator failed to close empty stack watermark");
+        stackWatermark.Finish(StackWatermark::WM_OWNER_SELF);
+    }
     // Publish completion before state so a concurrent FinishedEpochHandshake
     // observer that sees ACKNOWLEDGED also sees the matching completion.
     epochHandshakeRequest.store(epoch, std::memory_order_relaxed);
@@ -334,6 +341,20 @@ bool Mutator::AcknowledgeEpochHandshake(uint64_t epoch, bool bySelf)
         return false;
     }
 
+    if (UNLIKELY(MutatorManager::ConcurrentStackScanEnabled())) {
+        // S1/S3/S5 publication order: the first short STW must publish the ENUM
+        // barrier before an ack can snapshot roots. The acquire phase read pairs
+        // with Collector::SetGCPhase's release store and therefore also observes
+        // the preceding InstallBarrier.
+        CHECK_DETAIL(Heap::GetHeap().GetGCPhase() == GCPhase::GC_PHASE_ENUM,
+                     "concurrent stack scan ack before ENUM barrier publication");
+        size_t frames = 0;
+        bool scanned = GcPhaseEnum(GCPhase::GC_PHASE_ENUM, epoch, bySelf, &frames);
+        MutatorManager::Instance().RecordEpochHandshakeStackScan(scanned, frames);
+        if (scanned) {
+            SetMutatorPhase(GCPhase::GC_PHASE_ENUM);
+        }
+    }
     ClearSuspensionFlag(SUSPENSION_FOR_EPOCH_HANDSHAKE);
     SetSafepointActive(HasAnySuspensionRequest());
     MutatorManager::Instance().RecordEpochHandshakeAck(*this, epoch, bySelf);
@@ -418,12 +439,31 @@ void Mutator::VisitStackRoots(const RootVisitor& func)
 void Mutator::VisitExceptionRoots(const RootVisitor& func)
 {
     // ExceptionRef is a legacy ABI word owned by ExceptionWrapper; metadata classifies it as a root.
-    func(RootSlotAt(&exceptionWrapper.GetExceptionRef()));
+    RootSlot& root = RootSlotAt(&exceptionWrapper.GetExceptionRef());
+    if (VerifyRoots::Enabled()) {
+        RootVerifyContext ctx;
+        ctx.phase = "VisitExceptionRoots";
+        ctx.kind = RootKind::RUNTIME_ROOT;
+        ctx.rawValue = raw(root.LoadPlain());
+        ctx.hasRawValue = true;
+        ctx.ownerMutator = this;
+        VerifyRoots::VerifyRootPayload(ctx, &root, nullptr);
+    }
+    func(root);
 }
 
 void Mutator::VisitRawObjects(const RootVisitor& func)
 {
     if (!is_null(rawObject.LoadPlain())) {
+        if (VerifyRoots::Enabled()) {
+            RootVerifyContext ctx;
+            ctx.phase = "VisitRawObjects";
+            ctx.kind = RootKind::RUNTIME_ROOT;
+            ctx.rawValue = raw(rawObject.LoadPlain());
+            ctx.hasRawValue = true;
+            ctx.ownerMutator = this;
+            VerifyRoots::VerifyRootPayload(ctx, &rawObject, nullptr);
+        }
         func(rawObject);
     }
 }
@@ -622,6 +662,7 @@ void Mutator::RecordStackPtrs(std::set<RootSlot*>& rootSlots,
             RootVerifyContext vctx;
             vctx.phase = "RecordStackPtrs";
             vctx.kind = RootKind::STACK_OBJECT;
+            vctx.ownerMutator = this;
             VerifyRoots::VerifyRootPayload(vctx, objSlot, obj);
         }
         TypeInfo* tip = obj->GetTypeInfo();
@@ -791,7 +832,8 @@ static bool IsHeaderedStackObject(BaseObject* obj)
     return tip->IsVaildType();
 }
 
-inline void CheckAndPush(BaseObject* obj, std::set<BaseObject*>& rootSet, std::stack<BaseObject*>& rootStack)
+inline void CheckAndPush(BaseObject* obj, std::set<BaseObject*>& rootSet, std::stack<BaseObject*>& rootStack,
+                         Mutator* ownerMutator)
 {
     if (!IsHeaderedStackObject(obj)) {
         return;
@@ -799,7 +841,13 @@ inline void CheckAndPush(BaseObject* obj, std::set<BaseObject*>& rootSet, std::s
     if (!rootSet.insert(obj).second) {
         return;
     }
-    VerifyRoots::BeforeCheckAndPush(obj);
+    if (VerifyRoots::Enabled()) {
+        RootVerifyContext ctx;
+        ctx.phase = "CheckAndPush";
+        ctx.kind = RootKind::STACK_OBJECT;
+        ctx.ownerMutator = ownerMutator;
+        VerifyRoots::VerifyRootPayload(ctx, nullptr, obj);
+    }
     if (obj->HasRefField()) {
         rootStack.push(obj);
     }
@@ -995,7 +1043,7 @@ bool Mutator::GcPhaseEnum(GCPhase newPhase, uint64_t stackScanEpoch, bool bySelf
             DLOG(ENUM, "enum stack root HeapSlot @%p: %p", &refFieldAddr, obj);
         } else if (IsStackAddr(reinterpret_cast<uintptr_t>(obj))) {
             if (IsHeaderedStackObject(obj)) {
-                CheckAndPush(obj, rootSet, rootStack);
+                CheckAndPush(obj, rootSet, rootStack, this);
             } else {
                 PushHeaderlessRecordField(obj, "GcPhaseEnum.ref.headerless");
             }
@@ -1014,7 +1062,7 @@ bool Mutator::GcPhaseEnum(GCPhase newPhase, uint64_t stackScanEpoch, bool bySelf
             DLOG(ENUM, "enum stack root @%p: %p", &root, obj);
         } else if (IsStackAddr(reinterpret_cast<uintptr_t>(obj))) {
             if (IsHeaderedStackObject(obj)) {
-                CheckAndPush(obj, rootSet, rootStack);
+                CheckAndPush(obj, rootSet, rootStack, this);
             } else {
                 PushHeaderlessRecordField(obj, "GcPhaseEnum.root.headerless");
             }
@@ -1071,10 +1119,8 @@ bool Mutator::GcPhaseEnum(GCPhase newPhase, uint64_t stackScanEpoch, bool bySelf
     // ZGC marks base and derived together in the oopmap walk (zMark.cpp:691-692
     // ZUncoloredRoot::mark).
     //
-    // Nothing exercises this today: MRT_GCV2_CONCURRENT_STACK_SCAN and
-    // MRT_GCV2_EPOCH_HANDSHAKE are both pinned off (MutatorManager.cpp:270-287). It is
-    // wired now because it is a precondition for turning either of them on, not
-    // because a load has been run through it.
+    // MRT_GCV2_CONCURRENT_STACK_SCAN exercises this path; MRT_GCV2_EPOCH_HANDSHAKE
+    // uses the same acknowledgement lifecycle without the stack traversal.
     size_t frames = 0;
     StackWatermark::Owner owner = bySelf ? StackWatermark::WM_OWNER_SELF : StackWatermark::WM_OWNER_GC;
     bool scanned = DrainStackWatermark(visitor, stackScanEpoch, owner, &derivedVisitor, frames);
@@ -1113,7 +1159,7 @@ inline void Mutator::GCPhasePreForward(GCPhase newPhase)
             }
         } else if (IsStackAddr(reinterpret_cast<uintptr_t>(oldObj))) {
             if (IsHeaderedStackObject(oldObj)) {
-                CheckAndPush(oldObj, rootSet, rootStack);
+                CheckAndPush(oldObj, rootSet, rootStack, this);
             } else {
                 PreForwardHeaderlessRecord(oldObj, collector, rootFieldSet);
             }
@@ -1151,7 +1197,7 @@ inline void Mutator::GCPhasePreForward(GCPhase newPhase)
             }
         } else if (IsStackAddr(reinterpret_cast<uintptr_t>(oldObj))) {
             if (IsHeaderedStackObject(oldObj)) {
-                CheckAndPush(oldObj, rootSet, rootStack);
+                CheckAndPush(oldObj, rootSet, rootStack, this);
             } else {
                 PreForwardHeaderlessRecord(oldObj, collector, rootFieldSet);
             }

@@ -59,6 +59,7 @@ GC_TEST(ExemptLife, ExemptWaitsForLockedThenPublishesDone)
         fx.region0->EndCopyInflight();
         phase.store(2, std::memory_order_release);
     });
+    JoinGuard copierGuard(copier);
     while (phase.load(std::memory_order_acquire) < 1) {
         std::this_thread::yield();
     }
@@ -158,13 +159,20 @@ GC_TEST(ZForwardingLife, DrainScopeWaitsCopiedWhenRefCountZero)
         fx.region0->EndCopyInflight();
         phase.store(2, std::memory_order_release);
     });
+    JoinGuard copierGuard(copier);
     while (phase.load(std::memory_order_acquire) < 1) {
         std::this_thread::yield();
     }
+    int32_t inflightAfterDrain = -1;
     {
         RegionInfo::DrainScope drain(fx.region0, MutatorRelocate::Retire::TAKE_GARBAGE);
-        GC_EXPECT_EQ(fx.region0->CopyInflight(), 0);
-        GC_EXPECT_EQ(phase.load(std::memory_order_acquire), 2);
+        // Snapshot the state protected by DrainScope without throwing while
+        // copier is still joinable. EndCopyInflight publishes the protected
+        // copy before the thread's later phase=2 bookkeeping, so DrainScope
+        // is not required to synchronize that later store.
+        inflightAfterDrain = fx.region0->CopyInflight();
     }
     copier.join();
+    GC_EXPECT_EQ(inflightAfterDrain, 0);
+    GC_EXPECT_EQ(phase.load(std::memory_order_acquire), 2);
 }
