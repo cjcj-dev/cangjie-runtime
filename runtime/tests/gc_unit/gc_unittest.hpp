@@ -16,6 +16,7 @@
 #include <exception>
 #include <functional>
 #include <string>
+#include <thread>
 #include <vector>
 
 namespace MapleRuntime {
@@ -44,6 +45,27 @@ struct AssertFailure : std::exception {
     explicit AssertFailure(std::string m) : msg(std::move(m)) {}
     const char* what() const noexcept override { return msg.c_str(); }
     std::string msg;
+};
+
+// A throwing assertion must never turn its real failure into
+// std::terminate merely because a test-local thread has not reached its
+// explicit join yet. Tests still join at the point that establishes their
+// synchronization contract; this guard owns the exceptional exit path.
+class JoinGuard {
+public:
+    explicit JoinGuard(std::thread& thread) : thread(thread) {}
+    ~JoinGuard()
+    {
+        if (thread.joinable()) {
+            thread.join();
+        }
+    }
+
+    JoinGuard(const JoinGuard&) = delete;
+    JoinGuard& operator=(const JoinGuard&) = delete;
+
+private:
+    std::thread& thread;
 };
 
 inline void Fail(const char* file, int line, const char* expr)

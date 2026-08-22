@@ -52,16 +52,19 @@ GC_TEST(ZForwardingLife, DetachWaitsForLastReader)
         ZForwardingLife::detach_page(life.ref);
         detachDone.store(true, std::memory_order_release);
     });
+    JoinGuard waiterGuard(waiter);
     while (!detachEntered.load(std::memory_order_acquire)) {
         std::this_thread::yield();
     }
     std::this_thread::sleep_for(std::chrono::milliseconds(5));
-    GC_EXPECT_FALSE(detachDone.load(std::memory_order_acquire));
+    const bool doneBeforeRelease = detachDone.load(std::memory_order_acquire);
     ZForwardingLife::release_page(life.ref); // 2 → 1, still held by construction token
     std::this_thread::sleep_for(std::chrono::milliseconds(5));
-    GC_EXPECT_FALSE(detachDone.load(std::memory_order_acquire));
+    const bool doneWithConstructionToken = detachDone.load(std::memory_order_acquire);
     ZForwardingLife::release_page(life.ref); // 1 → 0
     waiter.join();
+    GC_EXPECT_FALSE(doneBeforeRelease);
+    GC_EXPECT_FALSE(doneWithConstructionToken);
     GC_EXPECT_TRUE(detachDone.load(std::memory_order_acquire));
     GC_EXPECT_EQ(life.ref.load(), 0);
 }
@@ -80,18 +83,28 @@ GC_TEST(ZForwardingLife, ClaimInvertsAndLateRetainRefusesImmediately)
         ZForwardingLife::in_place_relocation_claim_page(life.ref);
         claimDone.store(true, std::memory_order_release);
     });
+    JoinGuard claimerGuard(claimer);
     while (!claimEntered.load(std::memory_order_acquire)) {
         std::this_thread::yield();
     }
     std::this_thread::sleep_for(std::chrono::milliseconds(5));
-    GC_EXPECT_FALSE(claimDone.load(std::memory_order_acquire));
-    GC_EXPECT_TRUE(life.ref.load() < 0);
+    const bool doneBeforeRelease = claimDone.load(std::memory_order_acquire);
+    const int32_t refBeforeLateRetain = life.ref.load();
     // The late retain is a try-lock. It must not wait while this test still
     // owns the reader that the claimer needs to reach -1.
-    GC_EXPECT_FALSE(ZForwardingLife::retain_page(life.ref, life.done));
-    GC_EXPECT_EQ(life.ref.load(), -2);
+    const bool lateRetained = ZForwardingLife::retain_page(life.ref, life.done);
+    const int32_t refAfterLateRetain = life.ref.load();
+    if (lateRetained) {
+        // Keep the negative control joinable even if retain_page regresses and
+        // unexpectedly creates a second reader token.
+        ZForwardingLife::release_page(life.ref);
+    }
     ZForwardingLife::release_page(life.ref); // 2 → -2, then +1 → -1, claim proceeds
     claimer.join();
+    GC_EXPECT_FALSE(doneBeforeRelease);
+    GC_EXPECT_TRUE(refBeforeLateRetain < 0);
+    GC_EXPECT_FALSE(lateRetained);
+    GC_EXPECT_EQ(refAfterLateRetain, -2);
     GC_EXPECT_TRUE(claimDone.load(std::memory_order_acquire));
     GC_EXPECT_EQ(life.ref.load(), -1);
     ZForwardingLife::mark_done(life.done);
@@ -125,13 +138,15 @@ GC_TEST(ZForwardingLife, CopyInflightDrainWakes)
         ZForwardingLife::wait_copied(copy);
         finished.store(true, std::memory_order_release);
     });
+    JoinGuard waiterGuard(waiter);
     while (!entered.load(std::memory_order_acquire)) {
         std::this_thread::yield();
     }
     std::this_thread::sleep_for(std::chrono::milliseconds(5));
-    GC_EXPECT_FALSE(finished.load(std::memory_order_acquire));
+    const bool finishedBeforeEndCopy = finished.load(std::memory_order_acquire);
     ZForwardingLife::end_copy(copy);
     waiter.join();
+    GC_EXPECT_FALSE(finishedBeforeEndCopy);
     GC_EXPECT_TRUE(finished.load(std::memory_order_acquire));
     GC_EXPECT_EQ(copy.load(), 0);
 }
