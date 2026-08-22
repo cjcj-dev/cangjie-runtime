@@ -306,6 +306,11 @@ void DumpPromoteGapProbe(const char* tag)
              static_cast<unsigned long long>(a), static_cast<unsigned long long>(b));
     }
 }
+
+BaseObject* ScanFieldHealedTarget(Collector& collector, RefField<>& field)
+{
+    return collector.make_load_good(field);
+}
 } // namespace
 
 size_t RegionManager::RecordPromotedCrossGenEdges(RegionInfo* region)
@@ -361,7 +366,7 @@ size_t RegionManager::RecordPromotedCrossGenEdges(RegionInfo* region)
         }
         object->ForEachRefField([&rememberedSet, &recorded, &liveEdges, &deadEdges, &unknownEdges,
                                 hasObjectLiveness, survived, object](RefField<>& field) {
-            BaseObject* target = to_object(field.GetTargetObject());
+            BaseObject* target = ScanFieldHealedTarget(Heap::GetHeap().GetCollector(), field);
             MAddress slot = reinterpret_cast<MAddress>(&field);
             if (target == nullptr || !Heap::IsHeapAddress(target)) {
                 NotePromoteGapField(object, field, false, false);
@@ -3559,8 +3564,8 @@ void RegionManager::ForwardRegion(RegionInfo* region)
                 O2ORemsetDiag::NoteYoungObjectForward();
             }
             if (youngRegion && toObj != nullptr && toObj->HasRefField()) {
-                toObj->ForEachRefField([&rememberedSet, &promotedRecords, toObj](RefField<>& field) {
-                    BaseObject* target = to_object(field.GetTargetObject());
+                toObj->ForEachRefField([&rememberedSet, &promotedRecords, toObj, &collector](RefField<>& field) {
+                    BaseObject* target = ScanFieldHealedTarget(collector, field);
                     MAddress slot = reinterpret_cast<MAddress>(&field);
                     if (target == nullptr || !Heap::IsHeapAddress(target)) {
                         NotePromoteGapField(toObj, field, false, true);
