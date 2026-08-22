@@ -4,7 +4,11 @@
 //
 // See https://cangjie-lang.cn/pages/LICENSE for license information.
 
+#include <atomic>
 #include <cstdlib>
+#include <cstdio>
+#include <unistd.h>
+#include <sys/syscall.h>
 
 #include "Common/ColourMask.h"
 #include "Base/Log.h"
@@ -21,6 +25,102 @@
 #include "Heap/Verify/PlainCensus.h"
 
 namespace MapleRuntime {
+namespace {
+constexpr size_t kLockOwnerCap = 4096;
+struct LockOwnerSlot {
+    std::atomic<uintptr_t> obj{ 0 };
+    std::atomic<uint64_t> tid{ 0 };
+    std::atomic<void*> ra{ nullptr };
+};
+LockOwnerSlot g_lockOwners[kLockOwnerCap];
+
+size_t OwnerIndex(const void* obj)
+{
+    auto p = reinterpret_cast<uintptr_t>(obj);
+    return (p >> 4) & (kLockOwnerCap - 1);
+}
+
+uint64_t ThisTid() { return static_cast<uint64_t>(syscall(SYS_gettid)); }
+
+void NoteLockOwner(BaseObject* obj)
+{
+    LockOwnerSlot& s = g_lockOwners[OwnerIndex(obj)];
+    s.obj.store(reinterpret_cast<uintptr_t>(obj), std::memory_order_relaxed);
+    s.tid.store(ThisTid(), std::memory_order_relaxed);
+    s.ra.store(__builtin_return_address(0), std::memory_order_relaxed);
+}
+
+void ClearLockOwner(BaseObject* obj)
+{
+    LockOwnerSlot& s = g_lockOwners[OwnerIndex(obj)];
+    if (s.obj.load(std::memory_order_relaxed) == reinterpret_cast<uintptr_t>(obj)) {
+        s.tid.store(0, std::memory_order_relaxed);
+        s.ra.store(nullptr, std::memory_order_relaxed);
+        s.obj.store(0, std::memory_order_relaxed);
+    }
+}
+
+void ReportUnlockNotLocked(BaseObject* obj, ObjectState current, ObjectState want)
+{
+    static std::atomic<size_t> n{ 0 };
+    size_t hit = n.fetch_add(1, std::memory_order_relaxed) + 1;
+    uint64_t word = 0;
+    if (obj != nullptr) {
+        word = __atomic_load_n(reinterpret_cast<uint64_t*>(obj), __ATOMIC_ACQUIRE);
+    }
+    unsigned sc = current.GetStateCode();
+    RegionInfo* region =
+        obj == nullptr ? nullptr : RegionInfo::TryGetRegionInfoAt(reinterpret_cast<uintptr_t>(obj));
+    unsigned rtype = region == nullptr ? 255u : static_cast<unsigned>(region->GetRegionType());
+    unsigned unit = region == nullptr ? 255u : static_cast<unsigned>(region->GetUnitRole());
+    unsigned young = region == nullptr ? 0u : static_cast<unsigned>(region->IsYoungRegion());
+    MAddress rstart = region == nullptr ? 0 : region->GetRegionStart();
+    MAddress rend = region == nullptr ? 0 : region->GetRegionEnd();
+    LockOwnerSlot& s = g_lockOwners[OwnerIndex(obj)];
+    uintptr_t ownerObj = s.obj.load(std::memory_order_relaxed);
+    uint64_t ownerTid = s.tid.load(std::memory_order_relaxed);
+    void* ownerRa = s.ra.load(std::memory_order_relaxed);
+    const bool ownerMatch = ownerObj == reinterpret_cast<uintptr_t>(obj);
+    std::fprintf(stderr,
+                 "[GCV2][lockstate] UNLOCK_NOT_LOCKED n=%zu obj=%p word=%#llx stateCode=%u want=%u "
+                 "tid=%llu owner_tid=%llu owner_match=%d owner_ra=%p "
+                 "region=%p start=%#zx end=%#zx regionType=%u unitRole=%u young=%u "
+                 "ra0=%p ra1=%p ra2=%p\n",
+                 hit, static_cast<void*>(obj), static_cast<unsigned long long>(word), sc,
+                 static_cast<unsigned>(want.GetStateCode()), static_cast<unsigned long long>(ThisTid()),
+                 static_cast<unsigned long long>(ownerMatch ? ownerTid : 0), ownerMatch ? 1 : 0, ownerRa,
+                 static_cast<void*>(region), static_cast<size_t>(rstart), static_cast<size_t>(rend), rtype, unit,
+                 young, __builtin_return_address(0), __builtin_return_address(1), __builtin_return_address(2));
+    std::fflush(stderr);
+    LOG(RTLOG_ERROR,
+        "[GCV2][lockstate] UNLOCK_NOT_LOCKED n=%zu obj=%p word=%#llx stateCode=%u want=%u tid=%llu "
+        "owner_tid=%llu owner_match=%d",
+        hit, obj, static_cast<unsigned long long>(word), sc, static_cast<unsigned>(want.GetStateCode()),
+        static_cast<unsigned long long>(ThisTid()), static_cast<unsigned long long>(ownerMatch ? ownerTid : 0),
+        ownerMatch ? 1 : 0);
+}
+} // namespace
+
+bool BaseObject::TryLockObject(const StateWord curWord)
+{
+    bool ok = stateWord.TryLockStateWord(curWord.GetObjectState());
+    if (ok) {
+        NoteLockOwner(this);
+    }
+    return ok;
+}
+
+void BaseObject::UnlockObject(const ObjectState newState)
+{
+    ObjectState current = GetObjectState();
+    if (!current.IsLockedState()) {
+        ReportUnlockNotLocked(this, current, newState);
+    } else {
+        ClearLockOwner(this);
+    }
+    stateWord.UnlockStateWord(newState);
+}
+
 // COLOUR_WRITEBACK_AUDIT §六 判据 1：唯一落笔 choke（单一定义，默认关）。
 // plaincensus: also feed fail-open writer counters (MRT_GCV2_PLAIN_WRITE_COUNT=1).
 void AssertColouredWriteIfEnabled(const void* slot, MAddress newVal)

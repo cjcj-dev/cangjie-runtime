@@ -72,9 +72,8 @@ public:
     // because forwaring object can only be executed by only one thread,
     // so we don't need to worry aboout concurrent competetion
 
-    bool TryLockObject(const StateWord curWord) { return stateWord.TryLockStateWord(curWord.GetObjectState()); }
-
-    void UnlockObject(const ObjectState newState) { stateWord.UnlockStateWord(newState); }
+    bool TryLockObject(const StateWord curWord);
+    void UnlockObject(const ObjectState newState);
 
     void OnFinalizerCreated();
 
