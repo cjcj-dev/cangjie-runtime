@@ -71,6 +71,7 @@ enum class HealSite : uint16_t {
     IdleCopyStructArrayRecolour,
     IdleReadReference,
     IdleWriteStructRecolour,
+    MutatorPreForwardHeaderlessRecord,
     MutatorPreForwardInterior,
     MutatorPreForwardRoot,
     MutatorPreForwardStackField,
