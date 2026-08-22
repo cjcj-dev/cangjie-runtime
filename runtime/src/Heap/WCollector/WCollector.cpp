@@ -1828,6 +1828,31 @@ void WCollector::PreforwardStaticRoots()
     Heap::GetHeap().VisitStaticRoots(visitor);
 }
 
+void WCollector::PreforwardStaticRootsCensus(const char* site)
+{
+    size_t visited = 0;
+    size_t fromSlots = 0;
+    size_t rewritten = 0;
+    Heap::GetHeap().VisitStaticRoots([this, &visited, &fromSlots, &rewritten](RootSlot& root) {
+        ++visited;
+        zaddress_unsafe observed = root.LoadPlain();
+        const MAddress before = raw(observed);
+        HeapSlot<> bits(to_zpointer(before));
+        BaseObject* obj = to_object(bits.GetTargetObject());
+        if (obj != nullptr && Heap::IsHeapAddress(obj) &&
+            (IsGhostFromObject(obj) || IsFromObject(obj))) {
+            ++fromSlots;
+        }
+        ForwardUpdateRawRef(root);
+        if (raw(root.LoadPlain()) != before) {
+            ++rewritten;
+        }
+    });
+    LOG(RTLOG_ERROR,
+        "[GCV2][staticwb] site=%s cycle=%zu visited=%zu from=%zu rewritten=%zu",
+        site, static_cast<size_t>(minorTotalRuns + 1), visited, fromSlots, rewritten);
+}
+
 void WCollector::RemapYoungRoots()
 {
     if (!RemapYoungRootsLogic::kEnableRemapYoungRoots) {
@@ -7351,7 +7376,10 @@ void WCollector::EvacuateYoungRegions(const std::vector<BaseObject*>& reachableV
             g_minorRefCasFail.store(0, std::memory_order_relaxed);
             g_minorRefCasOk.store(0, std::memory_order_relaxed);
             FixMinorRootSlots(liveStw());
-            PreforwardStaticRoots();
+            LOG(RTLOG_ERROR,
+                "[GCV2][staticwb7404] ran=0 skip=conc cycle=%zu",
+                static_cast<size_t>(minorTotalRuns + 1));
+            PreforwardStaticRootsCensus("conc7354");
             PreforwardDiscoveredExternObjects();
             PreforwardAllResurrectExportFromObjects();
             remsetVec.assign(rememberedSlots.begin(), rememberedSlots.end());
@@ -7401,7 +7429,7 @@ void WCollector::EvacuateYoungRegions(const std::vector<BaseObject*>& reachableV
         MRT_PHASE_TIMER("young.copy");
         ForwardFromSpace();
         manager.FinishIncompleteFromRegions();
-        PreforwardStaticRoots();
+        PreforwardStaticRootsCensus("stw7404");
         postEvacPoint("post-forward-pre-reclaim", true);
         if (kVerifyPostEvac) {
             ValidateMinorReferences("post-forward-pre-reclaim", &reachableVec);

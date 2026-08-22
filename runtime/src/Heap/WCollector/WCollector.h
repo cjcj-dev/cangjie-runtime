@@ -1157,6 +1157,8 @@ private:
     void Preforward();
     void PreforwardAllExportFromRoots();
     void PreforwardStaticRoots();
+    // Path-unique census+writeback. site="stw7404" is the post-copy STW arm only.
+    void PreforwardStaticRootsCensus(const char* site);
     void PreforwardFinalizerProcessorRoots();
     void PreforwardDiscoveredExternObjects();
     void PreforwardAllResurrectExportFromObjects();
