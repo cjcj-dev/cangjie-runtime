@@ -238,7 +238,7 @@ void CollectorResources::StartGCThreads()
         // Off by default: on real_load the formula picks 23 workers on a 32-core
         // domain and costs 2.22x task-clock for 1.14x wall (REPORT-jvmparam),
         // which reproduces the earlier no-headroom result from REPORT-gcthreads.
-        const char* jvmThreadsEnv = static_cast<const char*>(nullptr) /* pinned-off:MRT_GCV2_JVM_GC_THREADS */;
+        const char* jvmThreadsEnv = std::getenv("MRT_GCV2_JVM_GC_THREADS");
         const bool useJvmThreads = jvmThreadsEnv != nullptr && std::strcmp(jvmThreadsEnv, "1") == 0;
         unsigned int activeProcessorCount = std::thread::hardware_concurrency();
         bool affinityDetected = false;
