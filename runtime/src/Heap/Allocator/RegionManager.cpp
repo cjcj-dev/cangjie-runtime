@@ -2014,8 +2014,9 @@ RegionInfo* RegionManager::TakeRegion(size_t num, RegionInfo::UnitRole type, boo
             head = nullptr;
         }
         // The ON arm makes the implicit active-table -> retired-table
-        // transition explicit before allocation. ReclaimRegion performs the
-        // post-detach central check and quarantines the newly retired answer.
+        // transition explicit before allocation. ReclaimRegion drains the
+        // current readers, retires the table, and detaches that now-closed
+        // answer before publishing the range to the free tree.
         if (head != nullptr && head->GetUnitCount() == num && FromPageDetach::GateEnabled()) {
             ReclaimRegion(head);
             head = nullptr;
@@ -2106,6 +2107,16 @@ RegionInfo* RegionManager::TakeRegion(size_t num, RegionInfo::UnitRole type, boo
         if ((n & (n - 1)) == 0) {
             VLOG(REPORT, "[Alloc] supply_gated_pressure gated_bytes=%zu n=%zu", gatedBytes, n);
         }
+    }
+    // A detach quarantine is released only by the next major PostTrace
+    // closure. If a minor filled it and allocation has exhausted every other
+    // source, waiting for organic allocation progress can deadlock the grace
+    // condition: no page means no progress towards the next major. Request
+    // that closure here; GC threads and ROUTING critical sections must not
+    // synchronously request a collection from inside their own operation.
+    if (FromPageDetach::GateEnabled() && allowSaferegion && !IsGcThread() &&
+        freeRegionManager.HasDetachQuarantine()) {
+        Heap::GetHeap().GetCollector().RequestGC(GC_REASON_HEU, true);
     }
     return nullptr;
 }

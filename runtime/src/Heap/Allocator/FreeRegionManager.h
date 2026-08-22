@@ -252,6 +252,11 @@ public:
     void AddDetachQuarantineUnits(UnitIndex idx, UnitCount num, bool released, bool needsInit,
                                   bool releasePhysical = false);
     size_t ReleaseDetachQuarantineAfterMajor();
+    bool HasDetachQuarantine() const
+    {
+        std::lock_guard<std::mutex> lock(detachQuarantineMutex);
+        return !detachQuarantine.empty();
+    }
 
 private:
     struct DetachQuarantineEntry {
