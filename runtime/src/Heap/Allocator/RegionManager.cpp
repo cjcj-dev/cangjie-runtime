@@ -42,6 +42,7 @@
 #include "Heap/Verify/CsetEmptyWho.h"
 #include "Heap/Verify/TraceClear.h"
 #include "Heap/Verify/FillerZeroDiag.h"
+#include "Heap/Verify/HoleWhoDiag.h"
 #include "Heap/Allocator/HeapFiller.h"
 #include "Heap/Allocator/ForwardingTable.h"
 #include "Heap/WCollector/RelocationSetSelector.h"
@@ -651,17 +652,22 @@ void RegionInfo::VisitAllObjects(const std::function<void(BaseObject*)>&& func)
     } else if (IsSmallRegion()) {
         uintptr_t position = GetRegionStart();
         uintptr_t allocPtr = GetRegionAllocPtr();
+        BaseObject* prevObj = nullptr;
+        size_t prevSize = 0;
         while (position < allocPtr) {
             BaseObject* obj = from_region_addr(position);
             // getsize7: GetAllocSize → GetSize reads TypeInfo; interiors/holes SEGV here
             // (deadlock_enqfrontier: VisitLiveObjectsUntilFalse ← RouteRegion ← TryForward).
             // Refuse: break without inventing size — remaining stream is unwalkable.
             if (!Collector::PlausibleManagedObjectGate("VisitAllObjects", obj)) {
+                HoleWhoDiag::NoteWalkBreak(this, position, allocPtr, prevObj, prevSize);
                 break;
             }
             // GetAllocSize should before call func, because object maybe destroy in compact gc.
             size_t size = RegionSpace::GetAllocSize(*obj);
             func(obj);
+            prevObj = obj;
+            prevSize = size;
             position += size;
         }
     }
@@ -2627,6 +2633,58 @@ void RegionManager::RequestForRegion(size_t size)
     prevRegionAllocTime = TimeUtil::NanoSeconds();
 }
 
+static void FillRouteReserve(uintptr_t start, size_t size)
+{
+    if (size < 8) {
+        return;
+    }
+    FillerZeroDiag::Note(FillerZeroDiag::Site::ROUTE_RESERVE, start, size);
+    HeapFiller::ZeroAndFill(start, size);
+}
+
+static void FillZeroGaps(uintptr_t start, uintptr_t end)
+{
+    uintptr_t pos = start;
+    while (pos + 8 <= end) {
+        BaseObject* obj = from_region_addr(pos);
+        if (Collector::PlausibleManagedObjectGate("FillZeroGaps", obj)) {
+            size_t sz = RegionSpace::GetAllocSize(*obj);
+            if (sz < 8 || pos + sz > end) {
+                break;
+            }
+            pos += sz;
+            continue;
+        }
+        uintptr_t gap = pos;
+        while (pos + 8 <= end && *reinterpret_cast<uint64_t*>(pos) == 0) {
+            pos += 8;
+        }
+        size_t n = pos - gap;
+        if (n >= 8) {
+            FillRouteReserve(gap, n);
+        } else {
+            pos += 8;
+        }
+    }
+}
+
+static void FillPublishedRouteGaps(RegionInfo* fromRegion)
+{
+    RouteInfo ri = fromRegion->GetRouteInfoForProbe();
+    if (ri.toRegion1StartAddress != 0 && ri.toRegion1UsedBytes >= 8) {
+        FillZeroGaps(ri.toRegion1StartAddress,
+                     ri.toRegion1StartAddress + ri.toRegion1UsedBytes);
+    }
+    if (ri.toRegion2Idx != RouteInfo::INVALID_VALUE) {
+        MAddress to2 = RegionInfo::GetUnitAddress(ri.toRegion2Idx);
+        RegionInfo* to2r = RegionInfo::TryGetRegionInfoAt(to2);
+        uintptr_t to2end = to2r != nullptr ? to2r->GetRegionAllocPtr() : to2;
+        if (to2end > to2) {
+            FillZeroGaps(to2, to2end);
+        }
+    }
+}
+
 bool RegionManager::RouteOrCompactRegionImpl(RegionInfo* region)
 {
     CHECK(region->IsRoutingState());
@@ -2691,7 +2749,9 @@ bool RegionManager::RouteOrCompactRegionImpl(RegionInfo* region)
                 toRegion1->GetRegionStart(), toRegion1->GetRegionStart() + fromBytes, toRegion1->GetRegionEnd());
             return result;
         } else {
+            uintptr_t reserved = toRegion1->GetRegionAllocPtr();
             toRegion1->Alloc(fromBytes);
+            FillRouteReserve(reserved, fromBytes);
             result = true;
             buffer->SetRegion(toRegion1);
         }
@@ -2712,6 +2772,7 @@ bool RegionManager::RouteOrCompactRegionImpl(RegionInfo* region)
     MAddress toRegion1Addr = toRegion1->GetRegionAllocPtr();
     if (fromBytes <= toRegion1Capacity) {
         toRegion1->Alloc(fromBytes);
+        FillRouteReserve(toRegion1Addr, fromBytes);
         // routedest: the widest-exposure arm. toRegion1Addr is a bump pointer taken from the
         // middle of the calling thread's own live alloc-buffer region, which keeps serving
         // that thread's allocations afterwards, and which is young — so before this hold the
@@ -2748,7 +2809,10 @@ bool RegionManager::RouteOrCompactRegionImpl(RegionInfo* region)
     CHECK(region != toRegion2);
     if (toRegion2 != nullptr) {
         toRegion1->Alloc(usedBytes1);
+        FillRouteReserve(toRegion1Addr, usedBytes1);
+        uintptr_t r2 = toRegion2->GetRegionAllocPtr();
         CHECK(toRegion2->Alloc(usedBytes2) != 0);
+        FillRouteReserve(r2, usedBytes2);
         result = true;
         buffer->SetRegion(toRegion2);
     } else {
@@ -3580,6 +3644,7 @@ void RegionManager::ForwardRegion(RegionInfo* region)
         // those headers remain LOCKED — waiters treat done as "no live copier".
         WaitCopiedObjectsUnlocked(region);
         region->SetRouteState(RegionInfo::RouteState::FORWARDED);
+        FillPublishedRouteGaps(region);
         // zRelocate.cpp:1152 — last act after every object on the page is relocated.
         region->MarkForwardingDone();
         // livesame ORDER + ZGC reset_livemap (zForwarding.cpp:71-74): one publish for
