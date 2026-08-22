@@ -8262,7 +8262,10 @@ void WCollector::DoYoungGarbageCollection()
         StackRootSlotAttest::Finish();
     }
 
-    constexpr bool fullYoungScan = false;
+    static const bool fullYoungScan = []() {
+        const char* value = std::getenv("MRT_GCV2_FULL_YOUNG_SCAN");
+        return value != nullptr && value[0] == '1' && value[1] == '\0';
+    }();
     // remsetdrain: hash-work reduction defaults on; `=0` is the immediate rollback.
     // The drain side uses the bitmap's exact distinct count to reserve its destination.
     // The FYS-only consumed-ledger elision is decided later, after youngConcMark is known.

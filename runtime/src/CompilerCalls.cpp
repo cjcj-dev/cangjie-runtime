@@ -31,6 +31,7 @@
 #include "Heap/Collector/Collector.h"
 #include "Heap/Collector/CollectorResources.h"
 #include "Heap/Heap.h"
+#include "Heap/Allocator/RegionInfo.h"
 #include "Heap/Verify/DiagGate.h"
 #include "Mutator/Mutator.h"
 #include "HeapManager.inline.h"
@@ -594,6 +595,74 @@ extern "C" size_t MCC_GetBlockingCJThreadNumber() { return ScheduleCJThreadCount
 extern "C" size_t MCC_GetNativeThreadNumber() { return ScheduleRunningOSThreadCount(); }
 
 extern "C" size_t MCC_GetGCCount() { return g_gcCount.load(std::memory_order_acquire); }
+
+extern "C" void MCC_SdDriftDescribe(uint64_t curRef, uint64_t lastRef, int64_t got, int64_t exp)
+{
+    auto describe = [](const char* tag, uint64_t ref) {
+        const uint64_t obj = ref & 0xffffffffffffull;
+        const uint64_t colour = ref >> 48;
+        if (obj == 0) {
+            fprintf(stderr, "[SDDRIFT] %s ref=0 obj=0 colour=0x%llx\n", tag,
+                    static_cast<unsigned long long>(colour));
+            return;
+        }
+        uint64_t hdr = 0;
+        int64_t idAt = 0;
+        hdr = *reinterpret_cast<uint64_t*>(obj);
+        idAt = reinterpret_cast<int64_t*>(obj)[1];
+        RegionInfo* region = RegionInfo::TryGetRegionInfoAt(obj);
+        unsigned type = 99;
+        unsigned young = 0;
+        unsigned from = 0;
+        unsigned garbage = 0;
+        unsigned fwdDone = 0;
+        unsigned route = 99;
+        size_t live = 0;
+        if (region != nullptr) {
+            type = static_cast<unsigned>(region->GetRegionType());
+            young = region->IsYoungRegion() ? 1 : 0;
+            from = region->IsFromRegion() || region->IsLoneFromRegion() ? 1 : 0;
+            garbage = region->IsGarbageRegion() ? 1 : 0;
+            fwdDone = region->IsForwardingDone() ? 1 : 0;
+            route = static_cast<unsigned>(region->GetRouteState());
+            live = region->GetLiveByteCount();
+        }
+        fprintf(stderr,
+                "[SDDRIFT] %s obj=0x%llx colour=0x%llx hdr=0x%llx id=%lld type=%u young=%u "
+                "from=%u garbage=%u fwdDone=%u route=%u live=%zu\n",
+                tag, static_cast<unsigned long long>(obj), static_cast<unsigned long long>(colour),
+                static_cast<unsigned long long>(hdr), static_cast<long long>(idAt), type, young,
+                from, garbage, fwdDone, route, live);
+    };
+    const uint64_t curObj = curRef & 0xffffffffffffull;
+    const uint64_t lastObj = lastRef & 0xffffffffffffull;
+    const GCPhase phase = Heap::GetHeap().GetGCPhase();
+    fprintf(stderr,
+            "[SDDRIFT] probe got=%lld exp=%lld d=%lld sameAddr=%d gcCount=%zu phase=%s\n",
+            static_cast<long long>(got), static_cast<long long>(exp),
+            static_cast<long long>(exp - got), curObj == lastObj ? 1 : 0,
+            g_gcCount.load(std::memory_order_acquire), Collector::GetGCPhaseName(phase));
+    describe("cur", curRef);
+    describe("last", lastRef);
+    const char* bucket = "丙";
+    if (curObj == lastObj) {
+        RegionInfo* region = RegionInfo::TryGetRegionInfoAt(curObj);
+        const bool from = region != nullptr && (region->IsFromRegion() || region->IsLoneFromRegion());
+        const bool garbage = region != nullptr && region->IsGarbageRegion();
+        const bool freeReg = region != nullptr && region->GetRegionType() == RegionInfo::RegionType::FREE_REGION;
+        if (from) {
+            bucket = "甲";
+        } else if (garbage || freeReg) {
+            bucket = "乙";
+        } else {
+            bucket = "乙";
+        }
+    } else {
+        bucket = "丙";
+    }
+    fprintf(stderr, "[SDDRIFT] bucket=%s\n", bucket);
+    fflush(stderr);
+}
 
 extern "C" uint64_t MCC_GetGCTimeUs() { return g_gcTotalTimeUs.load(std::memory_order_acquire); }
 

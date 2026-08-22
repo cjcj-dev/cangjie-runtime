@@ -64,6 +64,7 @@ extern "C" size_t MCC_GetBlockingCJThreadNumber();
 extern "C" size_t MCC_GetNativeThreadNumber();
 
 extern "C" size_t MCC_GetGCCount();
+extern "C" void MCC_SdDriftDescribe(uint64_t curRef, uint64_t lastRef, int64_t got, int64_t exp);
 extern "C" uint64_t MCC_GetGCTimeUs();
 extern "C" size_t MCC_GetGCFreedSize();
 extern "C" bool MCC_IsGCRunning();
