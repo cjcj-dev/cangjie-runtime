@@ -7401,6 +7401,7 @@ void WCollector::EvacuateYoungRegions(const std::vector<BaseObject*>& reachableV
         MRT_PHASE_TIMER("young.copy");
         ForwardFromSpace();
         manager.FinishIncompleteFromRegions();
+        PreforwardStaticRoots();
         postEvacPoint("post-forward-pre-reclaim", true);
         if (kVerifyPostEvac) {
             ValidateMinorReferences("post-forward-pre-reclaim", &reachableVec);
@@ -8885,19 +8886,18 @@ void WCollector::DoYoungGarbageCollection()
         VLOG(REPORT, "[GCV2][youngconc] concurrent young mark done; STW2 post-mark+evac reachable=%zu",
              reachableVec.size());
     }
-    // youngstatic: product path. Previously nested under youngConcMark, which is
-    // pinned-off (always false) — seal never ran. Static String.myData then died
-    // (FillerArray at the registered slot). Mark + ForwardUpdateRawRef (plain
-    // writeback, zUncoloredRoot.inline.hpp:35-60) on every minor.
+    // youngstatic: product path. Seal/mark only — BEFORE evacuate. Writeback here
+    // (fceeac4a8) always saw forwarded=0: FindToVersion/TryForward miss until copy.
+    // Plain static writeback is PreforwardStaticRoots after ForwardFromSpace
+    // (young.copy / young.concurrent_relocate), matching full-GC Preforward at :3013.
     {
         size_t sealed = 0;
         size_t already = 0;
         size_t staticYoung = 0;
         size_t staticOld = 0;
         size_t gateSkip = 0;
-        size_t forwarded = 0;
         Heap::GetHeap().VisitStaticRoots([this, &sealed, &already, &staticYoung, &staticOld, &gateSkip,
-                                         &forwarded, &workStack](RootSlot& root) {
+                                         &workStack](RootSlot& root) {
             zaddress_unsafe observed = root.LoadPlain();
             HeapSlot<> bits(to_zpointer(raw(observed)));
             BaseObject* obj = to_object(bits.GetTargetObject());
@@ -8923,10 +8923,6 @@ void WCollector::DoYoungGarbageCollection()
             }
             if (!region->IsYoungRegion()) {
                 ++staticOld;
-                BaseObject* after = ForwardUpdateRawRef(root);
-                if (after != obj) {
-                    ++forwarded;
-                }
                 return;
             }
             ++staticYoung;
@@ -8941,10 +8937,6 @@ void WCollector::DoYoungGarbageCollection()
                 PushAdmittedYoung(obj, workStack, "youngstatic.seal");
                 ++sealed;
             }
-            BaseObject* after = ForwardUpdateRawRef(root);
-            if (after != obj) {
-                ++forwarded;
-            }
         });
         if (!workStack.empty()) {
             TraceYoungClosure(workStack, fullYoungScan, reachableObjects, reachableVec, reachableSlots,
@@ -8952,8 +8944,8 @@ void WCollector::DoYoungGarbageCollection()
         }
         LOG(RTLOG_ERROR,
             "[GCV2][youngstatic] stw2_static_seal sealed=%zu already=%zu staticYoung=%zu "
-            "staticOld=%zu gateSkip=%zu forwarded=%zu reachable=%zu",
-            sealed, already, staticYoung, staticOld, gateSkip, forwarded, reachableVec.size());
+            "staticOld=%zu gateSkip=%zu forwarded=0 reachable=%zu",
+            sealed, already, staticYoung, staticOld, gateSkip, reachableVec.size());
     }
     g_minorLedgerCost.Report();
     // portyoungconc positive control. Emitted on EVERY minor, including the closed arm, so
