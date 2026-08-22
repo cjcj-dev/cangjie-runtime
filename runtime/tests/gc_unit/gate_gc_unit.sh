@@ -1,15 +1,59 @@
 #!/usr/bin/env bash
-# Fail-closed GC unit gate: suite must exist, build, and pass.
-# Intended for kkk2 / CI wrappers. Exit non-zero if anything is missing.
+# GC unit gate: the C++ suite fails closed; the language-level finalizer test
+# records NOT_RUN when no matching cjc is available so building the runtime
+# itself does not acquire a compiler dependency.  A composition gate must
+# still reject anything other than GATE=PASS in the status artifact.
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "$0")/../../.." && pwd)"
 SRC="$ROOT/runtime/tests/gc_unit"
 SCRIPT="$SRC/run_standalone.sh"
 FINALIZER_SCRIPT="$SRC/run_finalizer_trigger.sh"
+STATUS_FILE="${GC_UNIT_GATE_STATUS:-${GCV2_RUNTIME_LIB_DIR:+$GCV2_RUNTIME_LIB_DIR/gc_unit_gate.status}}"
+STATUS_FILE="${STATUS_FILE:-$ROOT/runtime/output/gc_unit_gate.status}"
+
+GATE_STATE=FAIL
+CPP_SUITE_STATE=NOT_RUN
+CPP_SUITE_SOURCE=NOT_RUN
+FINALIZER_STATE=NOT_RUN
+FINALIZER_SOURCE=NOT_RUN
+STATUS_REASON=UNEXPECTED_EXIT
+
+write_status() {
+  local status_dir tmp
+  status_dir="$(dirname "$STATUS_FILE")"
+  mkdir -p "$status_dir"
+  tmp="$STATUS_FILE.tmp.$$"
+  {
+    echo "SCHEMA_VERSION=1"
+    echo "GATE=$GATE_STATE"
+    echo "CPP_SUITE=$CPP_SUITE_STATE"
+    echo "CPP_SUITE_SOURCE=$CPP_SUITE_SOURCE"
+    echo "FINALIZER_TRIGGER=$FINALIZER_STATE"
+    echo "FINALIZER_TRIGGER_SOURCE=$FINALIZER_SOURCE"
+    echo "REASON=$STATUS_REASON"
+  } >"$tmp"
+  mv -f "$tmp" "$STATUS_FILE"
+}
+
+on_exit() {
+  local rc=$?
+  trap - EXIT
+  write_status
+  exit "$rc"
+}
+trap on_exit EXIT
+
+# Invalidate any previous PASS before doing work.  The EXIT trap covers normal
+# failures, but it cannot run after SIGKILL or machine loss; leaving an old PASS
+# readable during a new run would let a composition gate accept stale evidence.
+STATUS_REASON=STARTED
+write_status
 
 if [[ "${GC_UNIT_GATE_SKIP:-0}" == "1" ]]; then
-  echo "GC_UNIT_GATE_SKIP=1 — not a product verdict"
+  GATE_STATE=NOT_RUN
+  STATUS_REASON=EXPLICIT_SKIP
+  echo "GC_UNIT_GATE_NOT_RUN reason=EXPLICIT_SKIP status=$STATUS_FILE"
   exit 0
 fi
 
@@ -41,8 +85,19 @@ if [[ -z "${GCV2_RUNTIME_LIB_DIR:-}" ]]; then
   done
 fi
 if [[ -z "${GCV2_RUNTIME_LIB_DIR:-}" || ! -f "$GCV2_RUNTIME_LIB_DIR/libcangjie-runtime.so" ]]; then
+  STATUS_REASON=MISSING_RUNTIME
   echo "GC_UNIT_GATE_FAIL: no libcangjie-runtime.so (set GCV2_RUNTIME_LIB_DIR)" >&2
   exit 2
+fi
+
+# Resolve cjc before the stamp fast path.  Otherwise a stamp from an earlier
+# compiler-equipped build could turn today's missing compiler into a cached
+# PASS instead of the required visible NOT_RUN state.
+CJC_BIN="${CJC:-${CANGJIE_HOME:-}/bin/cjc}"
+FINALIZER_CAN_RUN=0
+if [[ -x "$CJC_BIN" ]]; then
+  FINALIZER_CAN_RUN=1
+  export CJC="$CJC_BIN"
 fi
 
 export GC_UNIT_OUT="${GC_UNIT_OUT:-$SRC/build_standalone}"
@@ -82,7 +137,19 @@ if [[ -f "$STAMP" && "$STAMP" -nt "$SO" ]]; then
   # was never re-checked -- caught by firing that arm on purpose and watching it read green.
   newer=$(find "$SRC" -path "$GC_UNIT_OUT" -prune -o -type f -newer "$STAMP" -print -quit 2>/dev/null)
   if [[ -z "$newer" ]]; then
-    echo "GC_UNIT_GATE_OK (cached: runtime and suite both older than last green run)"
+    CPP_SUITE_STATE=PASS
+    CPP_SUITE_SOURCE=CACHE
+    if [[ $FINALIZER_CAN_RUN -eq 0 ]]; then
+      GATE_STATE=NOT_RUN
+      STATUS_REASON=NO_CJC
+      echo "GC_UNIT_GATE_NOT_RUN reason=NO_CJC cpp_suite=PASS(cache) status=$STATUS_FILE"
+      exit 0
+    fi
+    FINALIZER_STATE=PASS
+    FINALIZER_SOURCE=CACHE
+    GATE_STATE=PASS
+    STATUS_REASON=CACHED_PASS
+    echo "GC_UNIT_GATE_OK (cached: runtime and suite both older than last green run) status=$STATUS_FILE"
     exit 0
   fi
 fi
@@ -101,6 +168,9 @@ timeout "$GC_UNIT_TIMEOUT" bash "$SCRIPT" >"$OUT" 2>&1
 suite_rc=$?
 set -e
 if [[ $suite_rc -eq 124 ]]; then
+  CPP_SUITE_STATE=FAIL
+  CPP_SUITE_SOURCE=FRESH
+  STATUS_REASON=CPP_SUITE_TIMEOUT
   echo "GC_UNIT_GATE_FAIL: suite did not finish within ${GC_UNIT_TIMEOUT}s -- a test is hung, not slow" >&2
   echo "  last lines of $OUT:" >&2
   tail -5 "$OUT" >&2
@@ -126,6 +196,9 @@ fi
 # A grep that matches nothing and a run that never happened produce the same empty string, and this
 # campaign has already read one for the other.  Require the tally line before trusting an empty set.
 if ! grep -qE '^\[========\] [0-9]+ tests:' "$OUT"; then
+  CPP_SUITE_STATE=FAIL
+  CPP_SUITE_SOURCE=FRESH
+  STATUS_REASON=CPP_SUITE_INCOMPLETE
   echo "GC_UNIT_GATE_FAIL: no tally line in output -- the suite did not run to completion (rc=$suite_rc)" >&2
   exit 3
 fi
@@ -145,18 +218,37 @@ if [[ -n "$fixed" ]]; then
   rc=1
 fi
 if [[ $rc -ne 0 ]]; then
+  CPP_SUITE_STATE=FAIL
+  CPP_SUITE_SOURCE=FRESH
+  STATUS_REASON=CPP_SUITE_FAILURE
   echo "  full log: $OUT" >&2
   exit "$rc"
 fi
 
+CPP_SUITE_STATE=PASS
+CPP_SUITE_SOURCE=FRESH
+
+if [[ $FINALIZER_CAN_RUN -eq 0 ]]; then
+  GATE_STATE=NOT_RUN
+  STATUS_REASON=NO_CJC
+  echo "GC_UNIT_GATE_NOT_RUN reason=NO_CJC cpp_suite=PASS(fresh) status=$STATUS_FILE"
+  exit 0
+fi
+
 # Root classification has a language-visible consequence that a C++ fixture
 # alone cannot prove: unreachable objects must actually execute ~init.
+FINALIZER_STATE=FAIL
+FINALIZER_SOURCE=FRESH
+STATUS_REASON=FINALIZER_TRIGGER_FAILURE
 if ! bash "$FINALIZER_SCRIPT"; then
   echo "GC_UNIT_GATE_FAIL: end-to-end finalizer trigger test failed" >&2
   exit 1
 fi
 
+FINALIZER_STATE=PASS
+GATE_STATE=PASS
+STATUS_REASON=PASS
 touch "$STAMP"
 n_allowed=$(echo "$allowed" | grep -c . || true)
 n_tests=$(grep -oE '^\[========\] [0-9]+ tests' "$OUT" | grep -oE '[0-9]+' | head -1 || true)
-echo "GC_UNIT_GATE_OK tests=$n_tests known_failures=$n_allowed (suite rc=$suite_rc)"
+echo "GC_UNIT_GATE_OK tests=$n_tests known_failures=$n_allowed (suite rc=$suite_rc) status=$STATUS_FILE"
