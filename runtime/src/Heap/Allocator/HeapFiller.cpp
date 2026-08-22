@@ -24,7 +24,10 @@ static std::atomic<bool> g_typesReady{ false };
 bool Enabled()
 {
     const char* v = std::getenv("CJRT_HEAP_FILLER");
-    return v != nullptr && v[0] == '1' && v[1] == '\0';
+    if (v != nullptr && v[0] == '0' && v[1] == '\0') {
+        return false;
+    }
+    return true;
 }
 
 static TypeInfo* PlantTi(void* storage, TypeKind kind, U32 sizeOrComp, const char* name)

@@ -7,9 +7,9 @@
 using namespace MapleRuntime;
 using namespace MapleRuntime::GcUnit;
 
-GC_TEST(FillerObj, DefaultOffLeavesZeroGapUnwalkable)
+GC_TEST(FillerObj, ExplicitOffLeavesZeroGapUnwalkable)
 {
-    unsetenv("CJRT_HEAP_FILLER");
+    setenv("CJRT_HEAP_FILLER", "0", 1);
     GcHeapFixture fx;
     MAddress start = fx.region0->GetRegionStart();
     BaseObject* a = fx.PlaceObject(start);
@@ -21,6 +21,7 @@ GC_TEST(FillerObj, DefaultOffLeavesZeroGapUnwalkable)
     fx.region0->VisitAllObjects([&](BaseObject*) { ++n; });
     GC_EXPECT_EQ(n, static_cast<size_t>(1));
     (void)a;
+    unsetenv("CJRT_HEAP_FILLER");
 }
 
 GC_TEST(FillerObj, EnabledWalkCrossesFilledGap)
@@ -50,7 +51,7 @@ GC_TEST(FillerObj, EnabledWalkCrossesFilledGap)
 
 GC_TEST(FillerObj, RouteReserveGapWalkableWhenEnabled)
 {
-    setenv("CJRT_HEAP_FILLER", "1", 1);
+    unsetenv("CJRT_HEAP_FILLER");
     GcHeapFixture fx;
     MAddress start = fx.region0->GetRegionStart();
     BaseObject* a = fx.PlaceObject(start);
