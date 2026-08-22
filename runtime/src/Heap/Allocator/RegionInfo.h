@@ -1651,12 +1651,34 @@ public:
 
     static MAddress GetUnitAddress(size_t unitIdx) { return UnitInfo::GetUnitAddress(unitIdx); }
 
+    static void WaitCopiedBeforePayloadWipe(RegionInfo* region, const char* site)
+    {
+        if (region == nullptr) {
+            return;
+        }
+        const int32_t inflight = region->CopyInflight();
+        if (inflight == 0) {
+            return;
+        }
+        std::fprintf(stderr,
+                     "[GCV2][lockstate] ZERO_UNDER_COPY site=%s inflight=%d region=%p start=%#zx "
+                     "regionType=%u unitRole=%u copyWait=1\n",
+                     site != nullptr ? site : "?", inflight, static_cast<void*>(region),
+                     static_cast<size_t>(region->GetRegionStart()),
+                     static_cast<unsigned>(region->GetRegionType()),
+                     static_cast<unsigned>(region->GetUnitRole()));
+        std::fflush(stderr);
+        region->WaitCopiedInflight();
+    }
+
     static void ClearUnits(size_t idx, size_t cnt,
                            FillerZeroDiag::Site site = FillerZeroDiag::Site::CLEAR_UNITS)
     {
         uintptr_t unitAddress = RegionInfo::GetUnitAddress(idx);
         size_t size = cnt * RegionInfo::UNIT_SIZE;
-        CHECK_DETAIL(FromPageDetach::FromPageDetachCheck(RegionInfo::TryGetRegionInfoAt(unitAddress),
+        RegionInfo* wipeRegion = RegionInfo::TryGetRegionInfoAt(unitAddress);
+        WaitCopiedBeforePayloadWipe(wipeRegion, "ClearUnits");
+        CHECK_DETAIL(FromPageDetach::FromPageDetachCheck(wipeRegion,
                                                         FromPageDetach::Site::CLEAR_UNITS),
                      "CJRT_FROM_REUSE_GATE bypass reached ClearUnits idx=%zu units=%zu", idx, cnt);
         DLOG(REGION, "clear dirty units[%zu+%zu, %zu) @[%#zx+%zu, %#zx)", idx, cnt, idx + cnt, unitAddress, size,
@@ -1672,8 +1694,9 @@ public:
     {
         void* unitAddress = reinterpret_cast<void*>(RegionInfo::GetUnitAddress(idx));
         size_t size = cnt * RegionInfo::UNIT_SIZE;
-        CHECK_DETAIL(FromPageDetach::FromPageDetachCheck(
-                         RegionInfo::TryGetRegionInfoAt(reinterpret_cast<uintptr_t>(unitAddress)),
+        RegionInfo* wipeRegion = RegionInfo::TryGetRegionInfoAt(reinterpret_cast<uintptr_t>(unitAddress));
+        WaitCopiedBeforePayloadWipe(wipeRegion, "ReleaseUnits");
+        CHECK_DETAIL(FromPageDetach::FromPageDetachCheck(wipeRegion,
                          FromPageDetach::Site::RELEASE_UNITS),
                      "CJRT_FROM_REUSE_GATE bypass reached ReleaseUnits idx=%zu units=%zu", idx, cnt);
         DLOG(REGION, "release physical memory for units [%zu+%zu, %zu) @[%p+%zu, 0x%zx)", idx, cnt, idx + cnt,
@@ -3829,6 +3852,7 @@ private:
         // See DispelGhostFromRegion: retire the route before detaching its compact table.
         SetRouteState(NORMAL);
         ZForwardingLife::ResetIdle(metadata.fwdRefCount, metadata.fwdClaimed, metadata.fwdDone);
+        WaitCopiedBeforePayloadWipe(this, "InitRegionInfo");
         metadata.copyInflight.store(0, std::memory_order_relaxed);
         ForwardingTable::ClearEntries(GetRegionStart(), nUnit * RegionInfo::UNIT_SIZE);
         metadata.allocPtr = GetRegionStart();
