@@ -480,8 +480,17 @@ size_t RegionManager::RecordPinnedCrossGenEdges()
     MRT_PHASE_TIMER("young.pinned_scan");
     RememberedSet& rememberedSet = Heap::GetHeap().GetRememberedSet();
     std::atomic<size_t> recorded{ 0 };
-    auto scanRegion = [&rememberedSet, &recorded](RegionInfo* region) {
-        if (region == nullptr || region->IsYoungRegion() || region->IsGarbageRegion()) {
+    auto skipPinnedScanRegion = [](RegionInfo* region) {
+        // Drain/rescan cost on sd256 was 59.8% of young.* because this walk stamped
+        // from-space / free / ghost slots; RescanRememberedSet then dropped them as
+        // deadHolder (fysgone: consumed/recorded = 3.3%). ZGC does not walk from-space
+        // into the remset (zRemembered.cpp:347-387 found-old; scan is previous face only).
+        return region == nullptr || region->IsYoungRegion() || region->IsGarbageRegion() ||
+            region->IsFreeRegion() || region->IsFromRegion() || region->IsGhostFromRegion() ||
+            region->IsUnmovableFromRegion();
+    };
+    auto scanRegion = [&rememberedSet, &recorded, &skipPinnedScanRegion](RegionInfo* region) {
+        if (skipPinnedScanRegion(region)) {
             return;
         }
         region->VisitAllObjects([&rememberedSet, &recorded, region](BaseObject* object) {
@@ -514,8 +523,8 @@ size_t RegionManager::RecordPinnedCrossGenEdges()
     if (pool != nullptr) {
         MRT_PHASE_TIMER("young.pinned_scan.parallel");
         std::vector<RegionInfo*> regions;
-        auto collect = [&regions](RegionInfo* region) {
-            if (region != nullptr && !region->IsYoungRegion() && !region->IsGarbageRegion()) {
+        auto collect = [&regions, &skipPinnedScanRegion](RegionInfo* region) {
+            if (!skipPinnedScanRegion(region)) {
                 regions.push_back(region);
             }
         };
@@ -527,9 +536,6 @@ size_t RegionManager::RecordPinnedCrossGenEdges()
         largeTraceRegions.VisitAllRegions(collect);
         recentFullRegionList.VisitAllRegions(collect);
         fullTraceRegions.VisitAllRegions(collect);
-        unmovableFromRegionList.VisitAllRegions(collect);
-        fromRegionList.VisitAllRegions(collect);
-        tlRegionList.VisitAllRegions(collect);
         const size_t n = regions.size();
         if (n == 0) {
             return 0;
@@ -562,8 +568,8 @@ size_t RegionManager::RecordPinnedCrossGenEdges()
         VLOG(REPORT, "[GCV2][pinned_scan] parallel=1 regions=%zu workers=%d recorded=%zu", n, workers, nRec);
         return nRec;
     }
-    // All never-young alloc paths + post-promote old holders (IDLE bare-store gap).
-    // scanRegion already skips IsYoungRegion, so candidate young lists are free.
+    // Old holders only (pinned/large/full). from/tl/unmovable-from are the young
+    // cset; walking them stamped deadHolder slots (zRemembered.cpp:347-387).
     {
         MRT_PHASE_TIMER("young.pinned_scan.serial");
         recentPinnedRegionList.VisitAllRegions(scanRegion);
@@ -574,9 +580,6 @@ size_t RegionManager::RecordPinnedCrossGenEdges()
         largeTraceRegions.VisitAllRegions(scanRegion);
         recentFullRegionList.VisitAllRegions(scanRegion);
         fullTraceRegions.VisitAllRegions(scanRegion);
-        unmovableFromRegionList.VisitAllRegions(scanRegion);
-        fromRegionList.VisitAllRegions(scanRegion);
-        tlRegionList.VisitAllRegions(scanRegion);
     }
     return recorded.load(std::memory_order_relaxed);
 }
