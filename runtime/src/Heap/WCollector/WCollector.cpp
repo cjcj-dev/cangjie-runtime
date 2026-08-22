@@ -72,6 +72,7 @@
 #include "Heap/Verify/HealPairDiag.h"
 #include "Heap/Verify/GateDropDiag.h"
 #include "Heap/Verify/NoTracedDiag.h"
+#include "Heap/Verify/ArrayWalkDiag.h"
 #include "Heap/Verify/SurvNodeDiag.h"
 #include "Heap/Verify/HeldFreeDiag.h"
 #include "Heap/Verify/YyEdgeDiag.h"
@@ -1856,6 +1857,8 @@ void WCollector::TraceRefField(BaseObject* obj, RefField<>& field, WorkStack& wo
                 GateDropDiag::NoteReject(obj, &field, targetObj, GateDropDiag::ARM_MARKGOOD);
             }
             SurvNodeDiag::NoteTraceVisit(&field, targetObj, SurvNodeDiag::TRACE_SKIP_GATE);
+            ArrayWalkDiag::NoteVisit();
+            ArrayWalkDiag::NoteSkipGate();
             return;
         }
         // markfloor: skip interiors (RawArray+8 etc.) before IsValidObject/GetSize.
@@ -1869,6 +1872,8 @@ void WCollector::TraceRefField(BaseObject* obj, RefField<>& field, WorkStack& wo
                     GateDropDiag::NoteReject(obj, &field, targetObj, GateDropDiag::ARM_PLAUSIBLE_GOOD);
                 }
                 SurvNodeDiag::NoteTraceVisit(&field, targetObj, SurvNodeDiag::TRACE_SKIP_GATE);
+                ArrayWalkDiag::NoteVisit();
+                ArrayWalkDiag::NoteSkipGate();
                 return;
             }
         }
@@ -1886,9 +1891,13 @@ void WCollector::TraceRefField(BaseObject* obj, RefField<>& field, WorkStack& wo
                                            "TraceRefField.mark_good", &field, obj);
             }
             SurvNodeDiag::NoteTraceVisit(&field, targetObj, SurvNodeDiag::TRACE_PUSH);
+            ArrayWalkDiag::NoteVisit();
+            ArrayWalkDiag::NotePush();
             workStack.push_back(targetObj);
         } else {
             SurvNodeDiag::NoteTraceVisit(&field, targetObj, SurvNodeDiag::TRACE_SKIP_MARKED);
+            ArrayWalkDiag::NoteVisit();
+            ArrayWalkDiag::NoteSkipMarked();
         }
         return;
     }
@@ -1897,6 +1906,8 @@ void WCollector::TraceRefField(BaseObject* obj, RefField<>& field, WorkStack& wo
 
     // target object could be null or non-heap for some static variable.
     if (!Heap::IsHeapAddress(latest)) {
+        ArrayWalkDiag::NoteVisit();
+        ArrayWalkDiag::NoteSkipNull();
         return;
     }
     if (!Collector::PlausibleManagedObjectGate("TraceRefField.slow", latest)) {
@@ -1909,6 +1920,8 @@ void WCollector::TraceRefField(BaseObject* obj, RefField<>& field, WorkStack& wo
                 GateDropDiag::NoteReject(obj, &field, latest, GateDropDiag::ARM_PLAUSIBLE_SLOW);
             }
             SurvNodeDiag::NoteTraceVisit(&field, latest, SurvNodeDiag::TRACE_SKIP_GATE);
+            ArrayWalkDiag::NoteVisit();
+            ArrayWalkDiag::NoteSkipGate();
             return;
         }
     }
@@ -1941,9 +1954,13 @@ void WCollector::TraceRefField(BaseObject* obj, RefField<>& field, WorkStack& wo
                                        "TraceRefField.slow", &field, obj);
         }
         SurvNodeDiag::NoteTraceVisit(&field, latest, SurvNodeDiag::TRACE_PUSH);
+        ArrayWalkDiag::NoteVisit();
+        ArrayWalkDiag::NotePush();
         workStack.push_back(latest);
     } else {
         SurvNodeDiag::NoteTraceVisit(&field, latest, SurvNodeDiag::TRACE_SKIP_MARKED);
+        ArrayWalkDiag::NoteVisit();
+        ArrayWalkDiag::NoteSkipMarked();
     }
 }
 
@@ -2059,6 +2076,9 @@ void WCollector::TraceObjectRefFields(BaseObject* obj, WorkStack& workStack)
         MArray* array = reinterpret_cast<MArray*>(obj);
         MIndex arrayLength = array->GetLength();
         TypeInfo* componentTypeInfo = array->GetComponentTypeInfo();
+        RegionInfo* holderRegion = RegionInfo::TryGetRegionInfoAt(reinterpret_cast<MAddress>(obj));
+        const bool largeHolder = holderRegion != nullptr && holderRegion->IsLargeRegion();
+        ArrayWalkDiag::Begin(obj, static_cast<uint64_t>(arrayLength), componentTypeInfo, largeHolder);
         if (componentTypeInfo->IsStructType()) {
             GCTib gcTib = componentTypeInfo->GetGCTib();
             MAddress contentAddr = reinterpret_cast<Uptr>(array) + MArray::GetContentOffset();
@@ -2075,14 +2095,17 @@ void WCollector::TraceObjectRefFields(BaseObject* obj, WorkStack& workStack)
             // -component branch above has no ZGC counterpart and is left alone.
             if (UNLIKELY(MarkPartialArray::Enabled())) {
                 FollowArrayElements(obj, arrayContent, arrayLength, workStack);
+                ArrayWalkDiag::End();
                 return;
             }
             for (MIndex i = 0; i < arrayLength; ++i) {
                 visitor(arrayContent[i]);
             }
         } else {
+            ArrayWalkDiag::End();
             LOG(RTLOG_FATAL, "array object %p has wrong component type", array);
         }
+        ArrayWalkDiag::End();
         return;
     }
 
@@ -3371,7 +3394,11 @@ void WCollector::TraceBlackAllocationsAtMarkEnd()
     // the closure never saw. First cut pushed the objects and skipped on wasMarked —
     // that traced 4 of 3.4M seeded and changed nothing (probe: nw128, invalid 万级).
     space.GetRegionManager().ForEachBlackSpanObject([this, &stack, &seeded](BaseObject* obj) {
-        if (obj == nullptr || !obj->IsValidObject() || !obj->HasRefField()) {
+        if (obj == nullptr || !obj->IsValidObject()) {
+            return;
+        }
+        (void)MarkObject(obj);
+        if (!obj->HasRefField()) {
             return;
         }
         TraceObjectRefFields(obj, stack);
@@ -3412,11 +3439,16 @@ void WCollector::PostTrace()
 {
     MRT_PHASE_TIMER("PostTrace");
     TransitionToGCPhase(GC_PHASE_POST_TRACE, true);
-    if (BlacktraceAtPreforward()) {
-        // Diagnostic arm: run the fixpoint at Preforward instead (see Preforward).
-    } else {
-        TraceBlackAllocationsAtMarkEnd();
+    static const bool blacktraceOn = []() {
+        const char* v = std::getenv("MRT_GCV2_BLACKTRACE");
+        return v != nullptr && std::strcmp(v, "1") == 0;
+    }();
+    if (blacktraceOn) {
+        if (!BlacktraceAtPreforward()) {
+            TraceBlackAllocationsAtMarkEnd();
+        }
     }
+    ArrayWalkDiag::Report("PostTrace");
     RegionSpace& space = reinterpret_cast<RegionSpace&>(theAllocator);
     space.GetRegionManager().HandleTraceRegions();
     // clear weakRef List, set the referent as null
