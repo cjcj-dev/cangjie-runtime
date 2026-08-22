@@ -1571,6 +1571,26 @@ bool ClaimFromRegion(RegionList& fromList, RegionInfo* del, RegionInfo::RegionTy
                  "[isfromreg] site=%s unexpected type=%u route=%u", site, t, rs);
     return false;
 }
+
+std::atomic<size_t> g_fwdToGateRefuse{ 0 };
+std::atomic<bool> g_fwdToGateAtexit{ false };
+
+void NoteFwdToGateRefuse(const char* site, BaseObject* toObj)
+{
+    const size_t n = g_fwdToGateRefuse.fetch_add(1, std::memory_order_relaxed) + 1;
+    if (!g_fwdToGateAtexit.exchange(true, std::memory_order_relaxed)) {
+        std::atexit([]() {
+            std::fprintf(stderr, "[GCV2][fwd-to-gate] atexit refuse=%zu\n",
+                         g_fwdToGateRefuse.load(std::memory_order_relaxed));
+            std::fflush(stderr);
+        });
+    }
+    if (n <= 8 || (n & (n - 1)) == 0) {
+        GCPhase phase = Heap::GetHeap().GetGCPhase();
+        LOG(RTLOG_ERROR, "[GCV2][fwd-to-gate] refuse n=%zu site=%s to=%p phase=%s", n, site,
+            static_cast<void*>(toObj), Collector::GetGCPhaseName(phase));
+    }
+}
 } // namespace
 
 // ZGC zGeneration.cpp:211-213: !is_relocatable (is_allocating) pages are not
@@ -3567,8 +3587,10 @@ void RegionManager::ForwardRegion(RegionInfo* region)
             if (youngRegion && toObj != nullptr && O2ORemsetDiag::Enabled()) {
                 O2ORemsetDiag::NoteYoungObjectForward();
             }
-            if (youngRegion && toObj != nullptr &&
-                Collector::PlausibleManagedObjectGate("ForwardRegion.to", toObj) && toObj->HasRefField()) {
+            if (youngRegion && toObj != nullptr) {
+                if (!Collector::PlausibleManagedObjectGate("ForwardRegion.to", toObj)) {
+                    NoteFwdToGateRefuse("young", toObj);
+                } else if (toObj->HasRefField()) {
                 toObj->ForEachRefField([&rememberedSet, &promotedRecords, toObj, &collector](RefField<>& field) {
                     BaseObject* target = ScanFieldHealedTarget(collector, field);
                     MAddress slot = reinterpret_cast<MAddress>(&field);
@@ -3586,11 +3608,14 @@ void RegionManager::ForwardRegion(RegionInfo* region)
                         IdleEdgeDiag::NotePromoteTimeTarget(slot, /*young*/ 1, true);
                     } else {
                         NotePromoteGapField(toObj, field, false, true);
-                        IdleEdgeDiag::NotePromoteTimeTarget(slot, /*old*/ 2, false);
+                         IdleEdgeDiag::NotePromoteTimeTarget(slot, /*old*/ 2, false);
                     }
                 });
-            } else if (!youngRegion && toObj != nullptr && toObj != obj && obj->IsForwarded() &&
-                       Collector::PlausibleManagedObjectGate("ForwardRegion.to", toObj)) {
+                }
+            } else if (!youngRegion && toObj != nullptr && toObj != obj && obj->IsForwarded()) {
+                if (!Collector::PlausibleManagedObjectGate("ForwardRegion.to", toObj)) {
+                    NoteFwdToGateRefuse("old", toObj);
+                } else {
                 size_t sz = RegionSpace::GetAllocSize(*obj);
                 MAddress fromBase = reinterpret_cast<MAddress>(obj);
                 MAddress toBase = reinterpret_cast<MAddress>(toObj);
@@ -3612,6 +3637,7 @@ void RegionManager::ForwardRegion(RegionInfo* region)
                             }
                         });
                     }
+                }
                 }
             }
             // tipnull arm R: receipt = object FORWARDED (Copy wrote tip), not soft-keep from.
