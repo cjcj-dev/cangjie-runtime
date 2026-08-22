@@ -48,6 +48,14 @@ void RememberedSet::Initialize(MAddress start, size_t size)
             dirtyMaps[buffer][word].store(0, std::memory_order_relaxed);
         }
     }
+    const char* everGate = std::getenv("MRT_GCV2_REMSET_EVER");
+    if (everGate != nullptr && std::strcmp(everGate, "1") == 0) {
+        everRecorded.reset(new (std::nothrow) std::atomic<uint64_t>[wordCount]);
+        CHECK_DETAIL(everRecorded != nullptr, "failed to allocate remembered-set sticky bitmap");
+        for (size_t word = 0; word < wordCount; ++word) {
+            everRecorded[word].store(0, std::memory_order_relaxed);
+        }
+    }
     initialized = true;
 }
 

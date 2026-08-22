@@ -11,9 +11,11 @@
 // if Idle WriteReferenceImpl skips MCC / RecordCrossGenEdge, Idle phase arm must go red.
 
 #include <algorithm>
+#include <cstdlib>
 #include <cstdint>
 #include <cstring>
 #include <new>
+#include <string>
 #include <unordered_set>
 
 // RememberedSet::Record is private with `friend class Barrier` -- friendship a derived TestBarrier
@@ -68,7 +70,77 @@ bool ExpectRecorded(RememberedSet& rs, MAddress fieldAddr)
     return std::find(records.begin(), records.end(), fieldAddr) != records.end() && records.size() == 1;
 }
 
+class ScopedEnv final {
+public:
+    ScopedEnv(const char* name, const char* value) : name(name)
+    {
+        const char* oldValue = std::getenv(name);
+        if (oldValue != nullptr) {
+            hadOldValue = true;
+            savedValue = oldValue;
+        }
+        if (value == nullptr) {
+            (void)unsetenv(name);
+        } else {
+            (void)setenv(name, value, 1);
+        }
+    }
+
+    ~ScopedEnv()
+    {
+        if (hadOldValue) {
+            (void)setenv(name.c_str(), savedValue.c_str(), 1);
+        } else {
+            (void)unsetenv(name.c_str());
+        }
+    }
+
+private:
+    std::string name;
+    std::string savedValue;
+    bool hadOldValue = false;
+};
+
 } // namespace
+
+// Validation-only sticky storage is absent unless explicitly armed.
+GC_TEST(Remset, StickyBitmapDisabledByDefault)
+{
+    ScopedEnv gate("MRT_GCV2_REMSET_EVER", nullptr);
+    GcHeapFixture fx;
+    RememberedSet rs;
+    rs.Initialize(fx.heapStart, 2 * RegionInfo::UNIT_SIZE);
+    GC_EXPECT_FALSE(rs.EverRecordedEnabled());
+}
+
+// When armed, the sticky bit proves a mutator barrier recorded the slot and survives a drain.
+GC_TEST(Remset, StickyBitmapTracksMutatorBarrierAcrossDrain)
+{
+    ScopedEnv gate("MRT_GCV2_REMSET_EVER", "1");
+    GcHeapFixture fx;
+    fx.region0->SetYoungRegionFlag(0);
+    fx.region1->SetYoungRegionFlag(1);
+    fx.region1->SetYoungAge(1);
+
+    auto* field = &HeapSlotAt<>(reinterpret_cast<MAddress>(fx.obj0) + TYPEINFO_PTR_SIZE);
+    const MAddress slot = reinterpret_cast<MAddress>(field);
+    TestCollector collector;
+    RememberedSet rs;
+    rs.Initialize(fx.heapStart, 2 * RegionInfo::UNIT_SIZE);
+    TestBarrier barrier(collector, rs);
+
+    GC_EXPECT_TRUE(rs.EverRecordedEnabled());
+    GC_EXPECT_FALSE(rs.WasEverRecorded(slot));
+    field->StoreColoured(zpointer::null);
+    barrier.WriteReference(fx.obj0, *field, fx.obj1);
+    GC_EXPECT_TRUE(rs.Contains(slot));
+    GC_EXPECT_TRUE(rs.WasEverRecorded(slot));
+
+    std::unordered_set<MAddress> records;
+    rs.DrainForMinor(records);
+    GC_EXPECT_FALSE(rs.Contains(slot));
+    GC_EXPECT_TRUE(rs.WasEverRecorded(slot));
+}
 
 // U7: product Barrier NVI WriteReference records old→young edge.
 GC_TEST(Remset, OldToYoungRecordedByBarrier)
