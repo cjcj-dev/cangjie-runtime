@@ -457,11 +457,16 @@ private:
         zaddress_unsafe unsafeValue = to_zaddress_unsafe(raw(value));
         __atomic_store(&rootValue, &unsafeValue, order);
     }
-
+    // PLAIN_ROOTS=0 escape hatch; private to WCollector so ordinary root writers stay plain-only.
+    void StoreCollectorRollback(zpointer value, std::memory_order order) {
+        zaddress_unsafe unsafeValue = to_zaddress_unsafe(raw(value));
+        __atomic_store(&rootValue, &unsafeValue, order);
+    }
     zaddress_unsafe rootValue;
 
     friend void StorePlain(RootSlot&, zaddress, std::memory_order);
     friend bool HealRoot(RootSlot&, zaddress, HealSite, HealNull, std::memory_order);
+    friend class WCollector;
 };
 
 // Read-only root capability. This is intentionally const-qualified rather than a

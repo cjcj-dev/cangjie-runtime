@@ -888,7 +888,7 @@ void WCollector::EnumAndTagRawRoot(ObjectRef& ref, RootSet& rootSet) const
         // The paired derived path cannot reach this branch because it is a DerivedSlot.
         BaseObject* host = Collector::TryRecoverInteriorBase(root);
         if (host != nullptr && host->IsValidObject()) {
-            HealRoot(ref, from_object(root), HealSite::WCollectorEnumRawInteriorRoot);
+            HealRootWriteback(ref, root, HealSite::WCollectorEnumRawInteriorRoot);
             rootSet.push_back(host);
         }
         return;
@@ -900,7 +900,7 @@ void WCollector::EnumAndTagRawRoot(ObjectRef& ref, RootSet& rootSet) const
         VerifyRoots::VerifyRootPayload(vctx, &ref, root);
     }
     CHECK_DETAIL(root->IsValidObject(), "Enum and tag runtime root %p(%p) encounters invalid object", root, &ref);
-    HealRoot(ref, from_object(root), HealSite::WCollectorEnumRawRoot);
+    HealRootWriteback(ref, root, HealSite::WCollectorEnumRawRoot);
     rootSet.push_back(root);
 }
 
@@ -1244,13 +1244,13 @@ BaseObject* WCollector::ForwardUpdateRawRef(ObjectRef& root)
                     (reinterpret_cast<uintptr_t>(oldObj) - reinterpret_cast<uintptr_t>(host)));
                 HealPairDiag::NoteRaw(oldObj, toInterior, &root,
                                       static_cast<uint16_t>(HealSite::WCollectorForwardRawInterior));
-                HealRoot(root, from_object(toInterior), HealSite::WCollectorForwardRawInterior);
+                HealRootWriteback(root, toInterior, HealSite::WCollectorForwardRawInterior);
                 return toInterior;
             }
         }
         HealPairDiag::NoteRaw(oldObj, oldObj, &root,
                               static_cast<uint16_t>(HealSite::WCollectorPreserveRawInterior));
-        HealRoot(root, from_object(oldObj), HealSite::WCollectorPreserveRawInterior);
+        HealRootWriteback(root, oldObj, HealSite::WCollectorPreserveRawInterior);
         return oldObj;
     }
     if (IsGhostFromObject(oldObj)) {
@@ -1260,13 +1260,13 @@ BaseObject* WCollector::ForwardUpdateRawRef(ObjectRef& root)
         }
         HealPairDiag::NoteRaw(oldObj, toVersion, &root,
                               static_cast<uint16_t>(HealSite::WCollectorForwardRawGhost));
-        HealRoot(root, from_object(toVersion), HealSite::WCollectorForwardRawGhost);
+        HealRootWriteback(root, toVersion, HealSite::WCollectorForwardRawGhost);
         DLOG(FIX, "fix raw-ref @%p: %p -> %p", &root, oldObj, toVersion);
         return toVersion;
     } else {
         HealPairDiag::NoteRaw(oldObj, oldObj, &root,
                               static_cast<uint16_t>(HealSite::WCollectorNormalizeRawRoot));
-        HealRoot(root, from_object(oldObj), HealSite::WCollectorNormalizeRawRoot);
+        HealRootWriteback(root, oldObj, HealSite::WCollectorNormalizeRawRoot);
     }
 
     return oldObj;
@@ -1364,7 +1364,7 @@ void WCollector::RemapYoungRoots()
         if (!Collector::PlausibleManagedObjectGate("RemapYoungRoots.static", latest)) {
             return;
         }
-        HealRoot(root, from_object(latest), HealSite::WCollectorRemapYoungRoots);
+        HealRootWriteback(root, latest, HealSite::WCollectorRemapYoungRoots);
         ++staticRemapped;
     };
     Heap::GetHeap().VisitStaticRoots(staticVisitor);
@@ -2831,7 +2831,7 @@ BaseObject* WCollector::ResolveMinorReference(RootSlot& root, const ScopedStopTh
                 RegionInfo* toRegion = RegionInfo::TryGetRegionInfoAt(reinterpret_cast<MAddress>(to));
                 if (toRegion != nullptr && !toRegion->IsFreeRegion() && !toRegion->IsGarbageRegion() &&
                     to->IsValidObject()) {
-                    HealRoot(root, from_object(to), HealSite::WCollectorResolveRootLoadGoodForward);
+                    HealRootWriteback(root, to, HealSite::WCollectorResolveRootLoadGoodForward);
                     return to;
                 }
                 NoteRootGateRefusal(root, object, to, toRegion);
@@ -2845,7 +2845,7 @@ BaseObject* WCollector::ResolveMinorReference(RootSlot& root, const ScopedStopTh
         RegionInfo* toRegion = RegionInfo::TryGetRegionInfoAt(reinterpret_cast<MAddress>(to));
         if (toRegion != nullptr && !toRegion->IsFreeRegion() && !toRegion->IsGarbageRegion() &&
             to->IsValidObject()) {
-            HealRoot(root, from_object(to), HealSite::WCollectorResolveRootOldForward);
+            HealRootWriteback(root, to, HealSite::WCollectorResolveRootOldForward);
             return to;
         }
     }
@@ -2854,7 +2854,7 @@ BaseObject* WCollector::ResolveMinorReference(RootSlot& root, const ScopedStopTh
         if (fromRegion != nullptr && !fromRegion->IsFreeRegion() && !fromRegion->IsGarbageRegion() &&
             object->IsValidObject()) {
             EnsureRouteDomainMembership(const_cast<WCollector*>(this), object);
-            HealRoot(root, from_object(object), HealSite::WCollectorNormalizeOldRoot);
+            HealRootWriteback(root, object, HealSite::WCollectorNormalizeOldRoot);
             return object;
         }
     }
@@ -5126,11 +5126,11 @@ bool WCollector::FixMinorEvacuatedSlot(RootSlot& root, const ScopedStopTheWorld*
                 BaseObject* toInterior = reinterpret_cast<BaseObject*>(
                     reinterpret_cast<uintptr_t>(toHost) +
                     (reinterpret_cast<uintptr_t>(target) - reinterpret_cast<uintptr_t>(host)));
-                HealRoot(root, from_object(toInterior), HealSite::WCollectorFixRootInteriorForward);
+                HealRootWriteback(root, toInterior, HealSite::WCollectorFixRootInteriorForward);
                 return true;
             }
         }
-        HealRoot(root, from_object(target), HealSite::WCollectorPreserveRootInterior);
+        HealRootWriteback(root, target, HealSite::WCollectorPreserveRootInterior);
         return false;
     }
     HeapSlot<> oldBits(to_zpointer(oldValue));
@@ -5161,7 +5161,7 @@ bool WCollector::FixMinorEvacuatedSlot(RootSlot& root, const ScopedStopTheWorld*
         BaseObject* viaTable = FindToVersion(target);
         if (viaTable != nullptr && viaTable != target && Heap::IsHeapAddress(viaTable) &&
             viaTable->IsValidObject()) {
-            HealRoot(root, from_object(viaTable), HealSite::WCollectorFixRootForwarded);
+            HealRootWriteback(root, viaTable, HealSite::WCollectorFixRootForwarded);
             return true;
         }
         static std::atomic<size_t> g_ysRootLeaveAlone{ 0 };
@@ -5175,14 +5175,14 @@ bool WCollector::FixMinorEvacuatedSlot(RootSlot& root, const ScopedStopTheWorld*
         return false;
     }
     if (!Collector::PlausibleManagedObjectGate("FixMinorEvacuatedSlot.postfwd", current)) {
-        HealRoot(root, from_object(current), HealSite::WCollectorFixRootPostForwardInterior);
+        HealRootWriteback(root, current, HealSite::WCollectorFixRootPostForwardInterior);
         return false;
     }
     MAddress newValue = reinterpret_cast<MAddress>(current);
     if (oldValue == newValue && raw(root.LoadPlain()) == newValue) {
         return false;
     }
-    HealRoot(root, from_object(current), HealSite::WCollectorFixRootForwarded);
+    HealRootWriteback(root, current, HealSite::WCollectorFixRootForwarded);
     return true;
 }
 
@@ -5219,7 +5219,7 @@ bool WCollector::FixMinorEvacuatedSlot(DerivedSlot& derived, BaseObject* knownBa
     }
 
     RootSlot fixedBase;
-    StorePlain(fixedBase, from_object(currentBase));
+    HealRootWriteback(fixedBase, currentBase, HealSite::WCollectorFixRootForwarded);
     RebaseDerived(derived, fixedBase, offset);
     return raw(observed) != raw(derived.LoadDerived());
 }
