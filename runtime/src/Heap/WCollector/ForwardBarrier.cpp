@@ -158,7 +158,17 @@ BaseObject* ForwardBarrier::ReadReference(BaseObject* obj, RefField<false>& fiel
                 // or painted an earlier one whose colour has come back around.
                 ZgcInvariants::NoteFastPathAccept(static_cast<uintptr_t>(raw(oldField.GetFieldValue())), oldTarget);
             }
-            return oldTarget;
+            BaseObject* resolved = ResolveFromCopyForMutator(oldTarget);
+            if (resolved != oldTarget && resolved != nullptr) {
+                if (!Heap::IsHeapAddress(resolved)) {
+                    return resolved;
+                }
+                RefField<> goodField = theCollector.GetAndTryTagRefField(resolved);
+                ZgcSelfHealLoadGood(field, oldField.GetFieldValue(), goodField.GetFieldValue(),
+                                    HealSite::ForwardReadReference);
+                return resolved;
+            }
+            return resolved;
         }
 
         ToverFailDiag::NoteSlowEnter();
@@ -191,6 +201,10 @@ BaseObject* ForwardBarrier::ReadReference(BaseObject* obj, RefField<false>& fiel
             return loadGood;
         }
 
+        loadGood = ResolveFromCopyForMutator(loadGood);
+        if (loadGood == nullptr) {
+            return nullptr;
+        }
         RefField<> goodField = theCollector.GetAndTryTagRefField(loadGood);
         // OpenJDK ZBarrier::self_heal (zBarrier.inline.hpp:72-107): retain the exact
         // observed value as the CAS expected value and retry after a concurrent update.

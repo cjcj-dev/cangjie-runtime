@@ -25,7 +25,17 @@ BaseObject* PreforwardBarrier::ReadReference(BaseObject* obj, RefField<false>& f
         RefField<> oldField(field);
         BaseObject* oldTarget = to_object(oldField.GetTargetObject());
         if (oldTarget == nullptr || LIKELY(theCollector.is_load_good(oldField))) {
-            return oldTarget;
+            BaseObject* resolved = ResolveFromCopyForMutator(oldTarget);
+            if (resolved == oldTarget || resolved == nullptr) {
+                return resolved;
+            }
+            if (!Heap::IsHeapAddress(resolved)) {
+                return resolved;
+            }
+            RefField<> goodField = theCollector.GetAndTryTagRefField(resolved);
+            ZgcSelfHealLoadGood(field, oldField.GetFieldValue(), goodField.GetFieldValue(),
+                                HealSite::PreforwardReadReference);
+            return resolved;
         }
 
         BaseObject* loadGood = oldTarget;
@@ -46,6 +56,10 @@ BaseObject* PreforwardBarrier::ReadReference(BaseObject* obj, RefField<false>& f
             return loadGood;
         }
 
+        loadGood = ResolveFromCopyForMutator(loadGood);
+        if (loadGood == nullptr) {
+            return nullptr;
+        }
         RefField<> goodField = theCollector.GetAndTryTagRefField(loadGood);
         // OpenJDK ZBarrier::self_heal (zBarrier.inline.hpp:72-107): retain the exact
         // observed value as the CAS expected value and retry after a concurrent update.

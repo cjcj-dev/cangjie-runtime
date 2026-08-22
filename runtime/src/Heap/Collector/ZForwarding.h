@@ -81,6 +81,7 @@ public:
     // Record the to-region start+regionLifeSeq at insert; consume rejects when
     // InitRegionInfo has bumped that seq (RegionInfo.h:InitRegionInfo).
     void note_to_life(MAddress to);
+    static bool DestUsable(MAddress to);
     MAddress resolve_live(MAddress to) const;
     bool receipt_live(MAddress to) const;
     void note_kept_expire() { _kept_seen_expire = true; }
@@ -194,6 +195,10 @@ public:
         }
         (void)find(fromIndex, &cursor);
         const size_t toOffset = static_cast<size_t>(to - _heapBase);
+        if (toOffset > ForwardingEntry::kMaxToOffset) {
+            OverflowRefusals().fetch_add(1, std::memory_order_relaxed);
+            return 0;
+        }
         const size_t finalOff = insert(fromIndex, toOffset, &cursor);
         if (finalOff == kNotStored) {
             return 0;

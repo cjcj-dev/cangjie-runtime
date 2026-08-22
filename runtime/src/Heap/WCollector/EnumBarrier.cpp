@@ -22,7 +22,17 @@ BaseObject* EnumBarrier::ReadReference(BaseObject* obj, RefField<false>& field) 
         RefField<> oldField(field);
         BaseObject* oldTarget = to_object(oldField.GetTargetObject());
         if (oldTarget == nullptr || LIKELY(theCollector.is_load_good(oldField))) {
-            return oldTarget;
+            BaseObject* resolved = ResolveFromCopyForMutator(oldTarget);
+            if (resolved == oldTarget || resolved == nullptr) {
+                return resolved;
+            }
+            if (!Heap::IsHeapAddress(resolved)) {
+                return resolved;
+            }
+            RefField<> goodField = theCollector.GetAndTryTagRefField(resolved);
+            ZgcSelfHealLoadGood(field, oldField.GetFieldValue(), goodField.GetFieldValue(),
+                                HealSite::EnumReadReference);
+            return resolved;
         }
 
         BaseObject* loadGood = theCollector.make_load_good(oldField);
@@ -30,6 +40,10 @@ BaseObject* EnumBarrier::ReadReference(BaseObject* obj, RefField<false>& field) 
         // evacuated. Colouring + CAS into those slots faults (si_code=2 ACCERR). Skip write-back.
         if (loadGood != nullptr && !Heap::IsHeapAddress(loadGood)) {
             return loadGood;
+        }
+        loadGood = ResolveFromCopyForMutator(loadGood);
+        if (loadGood == nullptr) {
+            return nullptr;
         }
         RefField<> goodField = theCollector.GetAndTryTagRefField(loadGood);
         ZgcSelfHealLoadGood(field, oldField.GetFieldValue(), goodField.GetFieldValue(),
@@ -203,7 +217,7 @@ BaseObject* EnumBarrier::AtomicReadReference(BaseObject* obj, RefField<true>& fi
     BaseObject* target = nullptr;
     RefField<false> oldField(field.GetFieldValue(order));
     if (theCollector.IsCurrentPointer(oldField)) {
-        target = to_object(oldField.GetTargetObject());
+        target = ResolveFromCopyForMutator(to_object(oldField.GetTargetObject()));
         DLOG(EBARRIER, "atomic read obj %p ref@%p: %#zx -> %p", obj, &field, raw(oldField.GetFieldValue()), target);
         return target;
     }

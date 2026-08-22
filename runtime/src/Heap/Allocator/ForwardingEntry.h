@@ -14,29 +14,33 @@
 
 namespace MapleRuntime {
 
-// zForwardingEntry.hpp:32-47 — populated:1 | to_offset:45 | from_index:18
-//
-// 18 bits of from_index times the 8-byte object alignment is exactly 2 MB, which is ZGC's small
-// page size -- the field is sized to its container, not chosen loosely.  Our regions are not
-// bounded by 2 MB, so the same field silently wraps on a larger one: two objects whose indices
-// differ by 2^18 compare equal and find() hands back the wrong to-address.  A miss would be
-// harmless (the caller falls back to route geometry); a wrong destination is not.  kMaxFromIndex
-// exists so that case is refused at insert time instead.
+// zForwardingEntry.hpp:32-47 was populated:1 | to_offset:45 | from_index:18 (2 MiB pages).
+// Our regions exceed 2 MiB; 18-bit from_index refused those inserts (OverflowRefusals)
+// while the copy still stamped FORWARDED. D7-a: to_offset 45→40 (1 TiB heap),
+// from_index 18→23 (64 MiB region). kMax* still refuse rather than truncate.
 class ForwardingEntry {
 public:
-    static constexpr size_t kFromIndexBits = 18;
-    static constexpr size_t kMaxFromIndex = (size_t(1) << kFromIndexBits) - 1;
+    static constexpr size_t kPopulatedBits = 1;
+    static constexpr size_t kToOffsetBits = 40;
+    static constexpr size_t kFromIndexBits = 23;
+    static constexpr size_t kToOffsetShift = kPopulatedBits;
+    static constexpr size_t kFromIndexShift = kPopulatedBits + kToOffsetBits;
+    static constexpr uint64_t kToOffsetMask = (1ULL << kToOffsetBits) - 1;
+    static constexpr uint64_t kFromIndexMask = (1ULL << kFromIndexBits) - 1;
+    static constexpr size_t kMaxFromIndex = static_cast<size_t>(kFromIndexMask);
+    static constexpr size_t kMaxToOffset = static_cast<size_t>(kToOffsetMask);
+    static_assert(kPopulatedBits + kToOffsetBits + kFromIndexBits == 64, "ForwardingEntry packing");
 
     ForwardingEntry() : entry_(0) {}
     ForwardingEntry(size_t fromIndex, size_t toOffset)
-        : entry_((1ULL << 0) | ((static_cast<uint64_t>(toOffset) & ((1ULL << 45) - 1)) << 1) |
-                 ((static_cast<uint64_t>(fromIndex) & ((1ULL << 18) - 1)) << 46))
+        : entry_((1ULL << 0) | ((static_cast<uint64_t>(toOffset) & kToOffsetMask) << kToOffsetShift) |
+                 ((static_cast<uint64_t>(fromIndex) & kFromIndexMask) << kFromIndexShift))
     {
     }
 
     bool populated() const { return (entry_ & 1ULL) != 0; }
-    size_t to_offset() const { return static_cast<size_t>((entry_ >> 1) & ((1ULL << 45) - 1)); }
-    size_t from_index() const { return static_cast<size_t>((entry_ >> 46) & ((1ULL << 18) - 1)); }
+    size_t to_offset() const { return static_cast<size_t>((entry_ >> kToOffsetShift) & kToOffsetMask); }
+    size_t from_index() const { return static_cast<size_t>((entry_ >> kFromIndexShift) & kFromIndexMask); }
     uint64_t raw() const { return entry_; }
     static ForwardingEntry FromRaw(uint64_t raw)
     {

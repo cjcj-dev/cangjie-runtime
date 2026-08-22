@@ -24,7 +24,17 @@ BaseObject* PostTraceBarrier::ReadReference(BaseObject* obj, RefField<false>& fi
         RefField<> oldField(field);
         BaseObject* oldTarget = to_object(oldField.GetTargetObject());
         if (oldTarget == nullptr || LIKELY(theCollector.is_load_good(oldField))) {
-            return oldTarget;
+            BaseObject* resolved = ResolveFromCopyForMutator(oldTarget);
+            if (resolved == oldTarget || resolved == nullptr) {
+                return resolved;
+            }
+            if (!Heap::IsHeapAddress(resolved)) {
+                return resolved;
+            }
+            RefField<> goodField = theCollector.GetAndTryTagRefField(resolved);
+            ZgcSelfHealLoadGood(field, oldField.GetFieldValue(), goodField.GetFieldValue(),
+                                HealSite::PostTraceReadReference);
+            return resolved;
         }
 
         BaseObject* loadGood = theCollector.make_load_good(oldField);
@@ -32,6 +42,10 @@ BaseObject* PostTraceBarrier::ReadReference(BaseObject* obj, RefField<false>& fi
         // evacuated. Colouring + CAS into those slots faults (si_code=2 ACCERR). Skip write-back.
         if (loadGood != nullptr && !Heap::IsHeapAddress(loadGood)) {
             return loadGood;
+        }
+        loadGood = ResolveFromCopyForMutator(loadGood);
+        if (loadGood == nullptr) {
+            return nullptr;
         }
         RefField<> goodField = theCollector.GetAndTryTagRefField(loadGood);
         // OpenJDK ZBarrier::self_heal (zBarrier.inline.hpp:72-107): the exact observed value is

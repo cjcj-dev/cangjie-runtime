@@ -6311,18 +6311,21 @@ bool WCollector::FixMinorEvacuatedSlot(RootSlot& root, const ScopedStopTheWorld*
             }
         }
         OffpastDiag::NoteFixMissSlot(static_cast<void*>(&root), target);
-        // youngstatic / ZGC zBarrier "Never heal with null": a live RootSlot must not be
-        // cleared when ForwardObject misses. Leave the slot alone (still names from/ghost);
-        // mutator load-barrier / later STW can remap. Heap-field CAS-null path is separate.
-        // ⛔ Do not reinstall from as a "fix"; ⛔ do not StorePlain(null) on roots.
-        // statresid: leave-alone is residual only after force-domain+retry; preferred
-        // path is grant-before-route so Forward succeeds and from is not reclaimed.
+        // I2: Forward miss still consults FindToVersion/receipt. Stale miss
+        // refuses silently leaving from (seqnum-bounded table already rejects
+        // expired entries). ⛔ Do not reinstall from; ⛔ do not StorePlain(null).
+        BaseObject* viaTable = FindToVersion(target);
+        if (viaTable != nullptr && viaTable != target && Heap::IsHeapAddress(viaTable) &&
+            viaTable->IsValidObject()) {
+            HealRoot(root, from_object(viaTable), HealSite::WCollectorFixRootForwarded);
+            return true;
+        }
         static std::atomic<size_t> g_ysRootLeaveAlone{ 0 };
         size_t la = g_ysRootLeaveAlone.fetch_add(1, std::memory_order_relaxed) + 1;
         if (la <= 32) {
             LOG(RTLOG_ERROR,
                 "[GCV2][youngstatic] root_fwd_null_leave_alone n=%zu root=%p target=%p "
-                "(ZGC never-heal-null; mark miss residual after force-domain)",
+                "(ZGC never-heal-null; table miss after force-domain)",
                 la, static_cast<void*>(&root), static_cast<void*>(target));
         }
         return false;
@@ -9748,7 +9751,19 @@ BaseObject* WCollector::WaitRoutedTipReady(BaseObject* from, BaseObject* to, Reg
         if constexpr (ForwardingTable::kEntriesSoleWhenArmed) {
             if (ForwardingTable::EntriesArmed(reinterpret_cast<MAddress>(from))) {
                 const MAddress stored = ForwardingTable::FindTo(reinterpret_cast<MAddress>(from));
-                return stored == 0 ? nullptr : reinterpret_cast<BaseObject*>(stored);
+                if (stored != 0) {
+                    return reinterpret_cast<BaseObject*>(stored);
+                }
+                if (from->IsForwarded()) {
+                    BaseObject* geometric = space.GetRegionManager().FindPublishedRoute(from, forwarding).dest;
+                    if (geometric != nullptr &&
+                        ZForwarding::DestUsable(reinterpret_cast<MAddress>(geometric))) {
+                        (void)ForwardingTable::InsertMapping(reinterpret_cast<MAddress>(from),
+                                                             reinterpret_cast<MAddress>(geometric));
+                        return geometric;
+                    }
+                }
+                return nullptr;
             }
         }
         return space.GetRegionManager().FindPublishedRoute(from, forwarding).dest;
@@ -10252,7 +10267,19 @@ BaseObject* WCollector::ForwardObjectExclusive(BaseObject* obj, BaseObject* toOb
         toObj->SetStateCode(ObjectState::NORMAL);
     }
     std::atomic_thread_fence(std::memory_order_release);
-    ForwardingTable::InsertMapping(reinterpret_cast<MAddress>(obj), reinterpret_cast<MAddress>(toObj));
+    const MAddress mapped =
+        ForwardingTable::InsertMapping(reinterpret_cast<MAddress>(obj), reinterpret_cast<MAddress>(toObj));
+    if (mapped == 0) {
+        static std::atomic<uint64_t> g_insertLost{ 0 };
+        const uint64_t n = g_insertLost.fetch_add(1, std::memory_order_relaxed) + 1;
+        if (n <= 16 || (n & (n - 1)) == 0) {
+            LOG(RTLOG_ERROR,
+                "[FWDTABLE] InsertMapping miss after copy n=%llu from=%p to=%p overflow=%llu full=%llu",
+                static_cast<unsigned long long>(n), static_cast<void*>(obj), static_cast<void*>(toObj),
+                static_cast<unsigned long long>(ZForwarding::OverflowRefusals().load(std::memory_order_relaxed)),
+                static_cast<unsigned long long>(ZForwarding::FullRefusals().load(std::memory_order_relaxed)));
+        }
+    }
     // portmutreloc: the copy just happened on this thread. InScope() is set only by
     // TryMutatorRelocate, so this counts objects a mutator relocated itself and nothing else --
     // the one number that distinguishes "the ported leg ran" from "the leg exists". GC workers
