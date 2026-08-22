@@ -162,10 +162,10 @@ void CopyCollector::ForwardFromSpace()
     int32_t previousActiveHelpers = 0;
     bool restoreActiveHelpers = false;
     if (gcReason == GC_REASON_YOUNG) {
-        const char* forceSerialEnv = static_cast<const char*>(nullptr) /* pinned-off:MRT_GCV2_EVACPAR_FORCE_SERIAL */;
+        const char* forceSerialEnv = std::getenv("MRT_GCV2_EVACPAR_FORCE_SERIAL");
         const bool forceSerial =
             forceSerialEnv != nullptr && std::strcmp(forceSerialEnv, "1") == 0;
-        const char* workGateEnv = static_cast<const char*>(nullptr) /* pinned-off:MRT_GCV2_EVACPAR_WORK_GATE */;
+        const char* workGateEnv = std::getenv("MRT_GCV2_EVACPAR_WORK_GATE");
         const bool workGate = workGateEnv != nullptr && std::strcmp(workGateEnv, "1") == 0;
         GCThreadPool* evacuationPool = collectorResources.GetEvacuationThreadPool();
         if (forceSerial) {

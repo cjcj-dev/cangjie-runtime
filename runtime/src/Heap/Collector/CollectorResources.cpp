@@ -281,7 +281,7 @@ void CollectorResources::StartGCThreads()
         // is normally fixed at two total workers.  A dedicated opt-in pool lets
         // the copy phase scale without also widening ref-fix/mark work.  Unset,
         // malformed, one, and out-of-affinity values preserve the old pool.
-        const char* evacWorkersEnv = static_cast<const char*>(nullptr) /* pinned-off:MRT_GCV2_EVACPAR_WORKERS */;
+        const char* evacWorkersEnv = std::getenv("MRT_GCV2_EVACPAR_WORKERS");
         if (evacWorkersEnv != nullptr && evacWorkersEnv[0] != '\0') {
             char* end = nullptr;
             long requested = std::strtol(evacWorkersEnv, &end, 10);
