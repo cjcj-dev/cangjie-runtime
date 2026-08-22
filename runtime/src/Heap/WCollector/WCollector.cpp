@@ -648,24 +648,9 @@ bool WCollector::MarkObjectImpl(BaseObject* obj, bool youngClaim) const
     StartWhoDiag::ScopedCaller caller("WCollector::MarkObject", obj);
     size_t objectSize = obj->GetSize();
     // livesame: MarkObject adds live only on 0→1 (ZGC inc_live); no second AddLiveByteCount.
-    bool marked;
-    if (gcReason == GC_REASON_YOUNG) {
-        // oracleblack round 10, face b: the young cycle itself promotes regions (evac
-        // stay-young → PromoteYoungRegion); a later young-context mark of an object in a
-        // just-promoted region would bind the young view to an old region and trip
-        // GetMarkView's sole-constructor CHECK (RegionInfo.h:211). The old generation owns
-        // the region now: the young closure never traverses old targets, and the domain
-        // install that reaches here for promoted regions is moot — report already-marked.
-        if (UNLIKELY(!region->IsYoungRegion())) {
-            SurvNodeDiag::NoteFollowHolder(obj, SurvNodeDiag::FOLLOW_SKIP_GATE);
-            return true;
-        }
-        MarkView<Generation::Young> view = region->GetMarkView<Generation::Young>();
-        marked = region->MarkObject(view, obj, objectSize);
-    } else {
-        MarkView<Generation::Old> view = region->GetMarkView<Generation::Old>();
-        marked = region->MarkObject(view, obj, objectSize);
-    }
+    // ZGC zPage.inline.hpp:284-294: the target page owns mark authority. gcReason
+    // names the running closure, not the target object's face.
+    bool marked = region->MarkObjectByOwner(obj, objectSize);
     if (!marked) {
         SurvNodeDiag::NotePaint(obj, region);
     }
@@ -2497,7 +2482,7 @@ void EnsureRouteDomainMembership(WCollector* collector, BaseObject* obj)
     }
     LiveInfo* live = region->GetLiveInfo();
     LiveInfo* ghost = region->GetLiveInfo0ForProbe();
-    RegionBitmap* ghostBitmap = ghost == nullptr ? nullptr : region->GetRouteMarkBitmap(ghost);
+    RegionBitmap* ghostBitmap = ghost == nullptr ? nullptr : region->GetOwnerMarkBitmap(ghost);
     if (ghost != nullptr && ghost != live && ghostBitmap != nullptr) {
         size_t objSize = 0;
         if (Collector::PlausibleManagedObjectGate("EnsureRouteDomain.size", obj)) {
@@ -2563,7 +2548,7 @@ bool ForceRootRouteDomainWhileForwardable(WCollector* collector, BaseObject* obj
     region->BindLiveInfo0FromLiveIfNull();
     LiveInfo* g0 = region->GetLiveInfo0ForProbe();
     size_t offset = region->GetAddressOffset(reinterpret_cast<MAddress>(obj));
-    RegionBitmap* ghostBitmap = g0 == nullptr ? nullptr : region->GetRouteMarkBitmap(g0);
+    RegionBitmap* ghostBitmap = g0 == nullptr ? nullptr : region->GetOwnerMarkBitmap(g0);
     if (g0 != nullptr && ghostBitmap != nullptr) {
         if (!region->IsRouteSurvivedObject(offset)) {
             size_t objSize = 0;

@@ -442,6 +442,27 @@ public:
         return MarkView<G>(this, epoch, life);
     }
 
+    // The page owner chooses the face; the sealed forwarding snapshot still
+    // supplies the epoch/life. This preserves route geometry stability without
+    // allowing routeMarkGeneration to override page ownership.
+    template<Generation G>
+    MarkView<G> GetOwnerRouteMarkView()
+    {
+        CHECK_DETAIL((G == Generation::Young) == IsYoungRegion(),
+                     "owner route view generation mismatch region=%p owner=%s want=%s", this,
+                     IsYoungRegion() ? "young" : "old", G == Generation::Young ? "young" : "old");
+        const RegionLifeId life = __atomic_load_n(&metadata.routeMarkLifeId, __ATOMIC_ACQUIRE);
+        uint64_t epoch;
+        if (RegionLifeClock::EnforceEnabled()) {
+            epoch = __atomic_load_n(&metadata.routeMarkEpoch, __ATOMIC_ACQUIRE);
+        } else {
+            LiveInfo* face = metadata.liveInfo0;
+            epoch = face == nullptr ? GetMarkSnapshotEpoch<G>()
+                                    : face->GetMarkFace<G>().epoch.load(std::memory_order_acquire);
+        }
+        return MarkView<G>(this, epoch, life);
+    }
+
     template<Generation G>
     uint64_t GetMarkEpoch(MarkView<G> view, LiveInfo* liveInfo) const
     {
@@ -500,6 +521,37 @@ public:
             return true;
         }
         return false;
+    }
+
+    // Page-owned liveness authority used by relocation/compact. The route generation
+    // remains a forwarding snapshot tag, but it no longer chooses which face decides
+    // whether an object on this page is copied.
+    bool IsOwnerSurvivedObject(size_t offset)
+    {
+        LiveInfo* face = metadata.liveInfo0 != nullptr ? metadata.liveInfo0 : GetLiveInfo();
+        if (IsYoungRegion()) {
+            MarkView<Generation::Young> view = GetOwnerRouteMarkView<Generation::Young>();
+            return IsSurvivedObject(view, face, offset) || AllocatedAfterMarkStart(offset);
+        }
+        MarkView<Generation::Old> view = GetOwnerRouteMarkView<Generation::Old>();
+        return IsSurvivedObject(view, face, offset) || AllocatedAfterMarkStart(offset);
+    }
+
+    bool IsOwnerKnownEmpty()
+    {
+        if (IsYoungRegion()) {
+            return IsKnownYoungEmpty(GetOwnerRouteMarkView<Generation::Young>());
+        }
+        return IsKnownEmpty(GetOwnerRouteMarkView<Generation::Old>());
+    }
+
+    RegionBitmap* GetOwnerMarkBitmap(LiveInfo* face = nullptr)
+    {
+        LiveInfo* selected = face != nullptr ? face : GetLiveInfo();
+        if (IsYoungRegion()) {
+            return GetMarkBitmap(GetOwnerRouteMarkView<Generation::Young>(), selected);
+        }
+        return GetMarkBitmap(GetOwnerRouteMarkView<Generation::Old>(), selected);
     }
 
     bool IsRouteMarkedObject(size_t offset)
@@ -1140,6 +1192,88 @@ public:
         SetResurrectedRegionFlag(0);
     }
 
+    Generation GetOwnerGeneration() const
+    {
+        return IsYoungRegion() ? Generation::Young : Generation::Old;
+    }
+
+    template<Generation G>
+    bool MarkFaceMatchesOwner() const
+    {
+        return GetOwnerGeneration() == G;
+    }
+
+    static bool PageOwnerVerifyCountOnly()
+    {
+        static const bool countOnly = []() {
+            const char* value = std::getenv("MRT_GCV2_VERIFY_PAGE_OWNER");
+            return value != nullptr && std::strcmp(value, "count") == 0;
+        }();
+        return countOnly;
+    }
+
+    static std::atomic<size_t>& PageOwnerMismatchAttempts()
+    {
+        static std::atomic<size_t> count{0};
+        return count;
+    }
+
+    static std::atomic<size_t>& PageOwnerMismatchFirstPaints()
+    {
+        static std::atomic<size_t> count{0};
+        return count;
+    }
+
+    static void ReportPageOwnerVerifyCounts()
+    {
+        std::fprintf(stderr, "[GCV2][page-owner] point=atexit mismatch_attempts=%zu first_paints=%zu mode=%s\n",
+                     PageOwnerMismatchAttempts().load(std::memory_order_relaxed),
+                     PageOwnerMismatchFirstPaints().load(std::memory_order_relaxed),
+                     PageOwnerVerifyCountOnly() ? "count" : "assert");
+        std::fflush(stderr);
+    }
+
+    static void EnsurePageOwnerVerifyAtexit()
+    {
+        static const bool installed = []() {
+            std::atexit([]() { ReportPageOwnerVerifyCounts(); });
+            return true;
+        }();
+        (void)installed;
+    }
+
+    template<Generation G>
+    void VerifyMarkFaceOwner(const BaseObject* obj, const char* site) const
+    {
+        EnsurePageOwnerVerifyAtexit();
+        if (LIKELY(MarkFaceMatchesOwner<G>())) {
+            return;
+        }
+        const size_t mismatch = PageOwnerMismatchAttempts().fetch_add(1, std::memory_order_relaxed) + 1;
+        if (PageOwnerVerifyCountOnly()) {
+            if (mismatch <= 8) {
+                std::fprintf(stderr,
+                             "[GCV2][page-owner] mismatch n=%zu site=%s object=%p region=%p owner=%s face=%s\n",
+                             mismatch, site, obj, this,
+                             GetOwnerGeneration() == Generation::Young ? "young" : "old",
+                             G == Generation::Young ? "young" : "old");
+                std::fflush(stderr);
+            }
+            return;
+        }
+        CHECK_DETAIL(false, "mark face does not match page owner site=%s object=%p region=%p owner=%s face=%s",
+                     site, obj, this, GetOwnerGeneration() == Generation::Young ? "young" : "old",
+                     G == Generation::Young ? "young" : "old");
+    }
+
+    template<Generation G>
+    void NotePageOwnerFirstPaint() const
+    {
+        if (UNLIKELY(!MarkFaceMatchesOwner<G>())) {
+            PageOwnerMismatchFirstPaints().fetch_add(1, std::memory_order_relaxed);
+        }
+    }
+
     // livesame / ZGC zMark.inline.hpp + zBitMap.inline.hpp:inc_live — count only on 0→1.
     // MarkBits returns true if already marked; false on first paint. AddLive only then.
     template<Generation G>
@@ -1152,10 +1286,12 @@ public:
             // transitive reference closure are the work lost by this fail-closed branch.
             return true;
         }
+        VerifyMarkFaceOwner<G>(obj, "RegionInfo::MarkObject.unsized");
         if (IsLargeRegion()) {
             if (GetMarkedRegionFlag(view) != 1) {
                 SetMarkedRegionFlag(view, 1);
                 AddLiveByteCount(obj->GetSize());
+                NotePageOwnerFirstPaint<G>();
                 return false;
             }
             return true;
@@ -1172,6 +1308,7 @@ public:
         bool already = writeBm->MarkBits(offset, objSize, regionSize);
         if (!already) {
             AddLiveByteCount(objSize);
+            NotePageOwnerFirstPaint<G>();
         }
         (void)TagReuseProbe::NoteMarkBitsSticky(this, offset, true, "MarkObject_sized0", G);
         (void)MarkWhyProbe::NoteAfterMarkBits(this, obj, offset, objSize, regionSize, writeBm, already,
@@ -1184,10 +1321,12 @@ public:
     bool MarkObject(MarkView<G> view, const BaseObject* obj, size_t objSize)
     {
         CHECK(view.GetRegion() == this);
+        VerifyMarkFaceOwner<G>(obj, "RegionInfo::MarkObject.sized");
         if (IsLargeRegion()) {
             if (GetMarkedRegionFlag(view) != 1) {
                 SetMarkedRegionFlag(view, 1);
                 AddLiveByteCount(objSize);
+                NotePageOwnerFirstPaint<G>();
                 return false;
             }
             return true;
@@ -1203,12 +1342,29 @@ public:
         bool already = writeBm->MarkBits(offset, objSize, regionSize);
         if (!already) {
             AddLiveByteCount(objSize);
+            NotePageOwnerFirstPaint<G>();
         }
         (void)TagReuseProbe::NoteMarkBitsSticky(this, offset, true, "MarkObject_sized", G);
         (void)MarkWhyProbe::NoteAfterMarkBits(this, obj, offset, objSize, regionSize, writeBm, already,
                                               "MarkObject_sized", G);
         CHECK(IsMarkedObject(view, offset));
         return already;
+    }
+
+    bool MarkObjectByOwner(const BaseObject* obj)
+    {
+        if (IsYoungRegion()) {
+            return MarkObject(GetMarkView<Generation::Young>(), obj);
+        }
+        return MarkObject(GetMarkView<Generation::Old>(), obj);
+    }
+
+    bool MarkObjectByOwner(const BaseObject* obj, size_t objSize)
+    {
+        if (IsYoungRegion()) {
+            return MarkObject(GetMarkView<Generation::Young>(), obj, objSize);
+        }
+        return MarkObject(GetMarkView<Generation::Old>(), obj, objSize);
     }
 
     bool ResurrectObject(const BaseObject* obj, size_t offset)

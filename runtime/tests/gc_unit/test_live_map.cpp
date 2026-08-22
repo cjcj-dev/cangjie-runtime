@@ -291,6 +291,55 @@ GC_TEST(LiveMap, YoungAndOldBitmapFacesAreIndependent)
     fx.FreePlanted(live);
 }
 
+// pageown / ZGC zPage.inline.hpp:284-294: the target page, not the
+// collector closure, chooses the physical mark authority.
+GC_TEST(LiveMap, OwnerDispatchMarksYoungFace)
+{
+    GcHeapFixture fx;
+    RegionInfo* region = fx.region0;
+    region->SetYoungRegionFlag(1);
+    LiveInfo* live = fx.PlantLiveInfo(region);
+    (void)fx.PlantMarkBitmap<Generation::Young>(live, region->GetRegionSize());
+    (void)fx.PlantMarkBitmap<Generation::Old>(live, region->GetRegionSize());
+    const size_t offset = region->GetAddressOffset(reinterpret_cast<MAddress>(fx.obj0));
+
+    GC_EXPECT_FALSE(region->MarkObjectByOwner(fx.obj0, fx.obj0->GetSize()));
+    GC_EXPECT_TRUE(region->IsMarkedObject(region->GetMarkView<Generation::Young>(), offset));
+    GC_EXPECT_FALSE(region->IsMarkedObject(region->GetMarkView<Generation::Old>(), offset));
+    GC_EXPECT_TRUE(region->MarkFaceMatchesOwner<Generation::Young>());
+    GC_EXPECT_FALSE(region->MarkFaceMatchesOwner<Generation::Old>());
+
+    region->metadata.liveInfo = nullptr;
+    fx.FreePlanted(live);
+}
+
+// The forwarding generation remains stored for compatibility, but relocation
+// liveness must ignore it and select the target page owner's face.
+GC_TEST(LiveMap, RelocationReadUsesOwnerNotRouteGeneration)
+{
+    GcHeapFixture fx;
+    RegionInfo* region = fx.region0;
+    region->SetYoungRegionFlag(1);
+    region->SetRouteMarkGeneration(Generation::Old);
+    LiveInfo* live = fx.PlantLiveInfo(region);
+    RegionBitmap* young = fx.PlantMarkBitmap<Generation::Young>(live, region->GetRegionSize());
+    (void)fx.PlantMarkBitmap<Generation::Old>(live, region->GetRegionSize());
+    const size_t offset = region->GetAddressOffset(reinterpret_cast<MAddress>(fx.obj0));
+    (void)young->MarkBits(offset, fx.obj0->GetSize(), region->GetRegionSize());
+    MarkView<Generation::Young> ownerView = region->GetMarkView<Generation::Young>();
+    region->metadata.routeMarkEpoch = ownerView.GetEpoch();
+    region->metadata.routeMarkLifeId = ownerView.GetLifeId();
+    region->metadata.liveInfo0 = live;
+
+    GC_EXPECT_EQ(region->GetRouteMarkGeneration(), Generation::Old);
+    GC_EXPECT_TRUE(region->IsOwnerSurvivedObject(offset));
+    GC_EXPECT_FALSE(region->GetOwnerMarkBitmap(live) == nullptr);
+
+    region->metadata.liveInfo0 = nullptr;
+    region->metadata.liveInfo = nullptr;
+    fx.FreePlanted(live);
+}
+
 // genface promotion boundary: a Young mark may remain readable through the
 // already-captured historical token (PromotedRegionDomain needs that), but it
 // cannot leak into the newly authoritative Old face.
