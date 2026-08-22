@@ -2164,6 +2164,15 @@ public:
         return from_region_addr(it->second);
     }
 
+    // staleclr (diagnostic only): compact-table presence / hit without exposing the
+    // private table loader to WCollector's invalid-object probe. No behaviour change.
+    bool ProbeHasCompactRouteTable() const { return LoadCompactRouteTable() != nullptr; }
+    bool ProbeCompactRouteHit(size_t fromOff) const
+    {
+        CompactRouteTable* table = LoadCompactRouteTable();
+        return table != nullptr && table->find(fromOff) != table->end();
+    }
+
     // A phase transition is a mutator grace period. Tables detached in generation N
     // survive two completed transitions so a detach racing the transition boundary is
     // conservatively assigned to either side without endangering a reader.

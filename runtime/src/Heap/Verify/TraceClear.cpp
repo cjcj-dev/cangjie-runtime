@@ -356,7 +356,14 @@ void TraceClear::DumpRecent(size_t n)
 
 bool TraceClear::SkipCompactMemset()
 {
-    static const bool on = false /* pinned:MRT_GCV2_SKIP_COMPACT_MEMSET */;
+    // staleclr arm C (diagnostic, default off; live env read for the experiment).
+    // If invalid_object_active_region collapses with the compact free-tail memset
+    // skipped, the zeroed tips named by stale old-colour slots are compact-memset
+    // products — proving the targets were not-survived at compact, not freed raw.
+    static const bool on = []() {
+        const char* v = std::getenv("MRT_GCV2_SKIP_COMPACT_MEMSET");
+        return v != nullptr && std::strcmp(v, "1") == 0;
+    }();
     return on;
 }
 

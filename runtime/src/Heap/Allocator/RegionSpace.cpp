@@ -8,8 +8,10 @@
 #include "Allocator/RegionSpace.h"
 
 #include <atomic>
+#include <cstdio>
 #include <cstdlib>
 #include <cstring>
+#include <mutex>
 
 #include "Collector/Collector.h"
 #include "Collector/CollectorResources.h"
@@ -26,6 +28,37 @@
 
 namespace MapleRuntime {
 namespace {
+// staleclr arm A (diagnostic, default OFF; live env read — this one is meant to be
+// toggled per experiment, unlike the pinned-off permanent switches). Zero freshly
+// allocated units at the AllocBuffer::Allocate chokepoint. Coverage note: this
+// catches every allocation that goes through AllocBuffer::Allocate; report line is
+// printed at exit so the arm's coverage is auditable.
+std::atomic<size_t> g_staleclrZeroAllocs{ 0 };
+std::atomic<size_t> g_staleclrZeroBytes{ 0 };
+
+void StaleclrZeroAlloc(MAddress addr, size_t totalSize)
+{
+    static const bool on = []() {
+        const char* v = std::getenv("MRT_GCV2_STALECLR_ZERO_ALLOC");
+        return v != nullptr && std::strcmp(v, "1") == 0;
+    }();
+    if (!on || addr == 0) {
+        return;
+    }
+    static std::once_flag once;
+    std::call_once(once, []() {
+        std::atexit([]() {
+            std::fprintf(stderr, "[GCV2][staleclr][armA] zero_allocs=%zu zero_bytes=%zu\n",
+                         g_staleclrZeroAllocs.load(std::memory_order_relaxed),
+                         g_staleclrZeroBytes.load(std::memory_order_relaxed));
+            std::fflush(stderr);
+        });
+    });
+    std::memset(reinterpret_cast<void*>(addr), 0, totalSize);
+    g_staleclrZeroAllocs.fetch_add(1, std::memory_order_relaxed);
+    g_staleclrZeroBytes.fetch_add(totalSize, std::memory_order_relaxed);
+}
+
 // csetalloc: count mutator MOVEABLE bumps that would land in a region already in
 // the relocation set (FROM / LONE_FROM / route-in-progress). Always-on counters;
 // sample lines gated by MRT_GCV2_ALLOC_INTO_CSET_DIAG=1.
@@ -261,6 +294,12 @@ MAddress AllocBuffer::Allocate(size_t totalSize, AllocType allocType)
     // gcvroot Z3: poison new object bytes before header install (MRT_GCV2_ZAP_ALLOC=1).
     if (addr != 0) {
         HeapZap::ZapAllocated(addr, totalSize);
+        // staleclr arm A (diagnostic, default off): zero the fresh unit before the caller
+        // installs the header. Recycle-time ClearUnits already zeroes region payload, so any
+        // old-colour field bits that survive this must have been WRITTEN after allocation.
+        // Persistence of invalid_object_active_region under this arm => family B (real
+        // pointers / mark hole); disappearance => family A (bogus bits in a reused unit).
+        StaleclrZeroAlloc(addr, totalSize);
         RegionInfo* reg = nullptr;
         if (tlRegion != nullptr && tlRegion != RegionInfo::NullRegion()) {
             reg = tlRegion;

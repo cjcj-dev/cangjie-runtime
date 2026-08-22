@@ -376,6 +376,33 @@ std::atomic<size_t> g_f3InvalidTail64{ 0 };     // regionEnd - latest <= 64 (tai
 std::atomic<size_t> g_f3InvalidHolderLive{ 0 }; // HolderObjectIsLive(holder) overlay
 std::atomic<size_t> g_f3InvalidFromInterior{ 0 }; // from itself is a recoverable interior
 std::atomic<size_t> g_f3InvalidLogged{ 0 };
+
+// staleclr: family A/B discriminators. A = bogus bits in a freshly-reused unit
+// (never a real reference); B = a real old-colour pointer whose target escaped
+// marking/evacuation (mark hole / missed heal).
+std::atomic<size_t> g_f3InvalidSameRegion{ 0 };    // holder region == target region (family-A shape)
+std::atomic<size_t> g_f3InvalidHolderRtype[16]{ {} };
+// Retained mark snapshot of the TARGET region (this cycle's mark, retained for F3):
+//   marked  => from was a LIVE object at this cycle's mark, yet has no receipt and a
+//              zeroed tip => killed after marking (compact memset / recycle-after-snapshot)
+//   covered => snapshot covers the offset but the bit is clear: from was NOT marked
+//   nosnap  => no usable snapshot for that region/offset
+std::atomic<size_t> g_f3InvalidFromRetainedMarked{ 0 };
+std::atomic<size_t> g_f3InvalidFromRetainedUnmarked{ 0 };
+std::atomic<size_t> g_f3InvalidFromRetainedNoSnap{ 0 };
+std::atomic<size_t> g_f3InvalidHolderRetainedMarked{ 0 };
+std::atomic<size_t> g_f3InvalidHolderRetainedNoSnap{ 0 };
+// Slot persistence: distinct field addresses vs repeats (same slot recounted every major).
+std::atomic<size_t> g_f3InvalidSlotNew{ 0 };
+std::atomic<size_t> g_f3InvalidSlotRepeat{ 0 };
+std::atomic<uintptr_t> g_f3InvalidSlotSet[1 << 15]{ {} };
+// staleclr round 2: what the TARGET region did this cycle. COMPACTED + table + no hit
+// means "address was not a survived object at compact time" (dead per mark, then the
+// free-tail was memset) — i.e. the pointer names an object mark never moved.
+std::atomic<size_t> g_f3InvalidTgtRouteState[8]{ {} };
+std::atomic<size_t> g_f3InvalidTgtGhost{ 0 };
+std::atomic<size_t> g_f3InvalidTgtCompactTbl{ 0 };
+std::atomic<size_t> g_f3InvalidTgtCompactHit{ 0 };
 std::atomic<bool> g_f3DeadarmAtexit{ false };
 
 namespace {
@@ -509,6 +536,38 @@ void ReportF3DeadarmCounts(const char* point)
                  g_f3InvalidRtype[5].load(std::memory_order_relaxed),
                  g_f3InvalidRtype[6].load(std::memory_order_relaxed),
                  g_f3InvalidRtype[7].load(std::memory_order_relaxed));
+    std::fprintf(stderr,
+                 "[GCV2][staleclr] same_region=%zu holder_rtype=[%zu,%zu,%zu,%zu,%zu,%zu,%zu,%zu] "
+                 "from_retained=[marked=%zu unmarked=%zu nosnap=%zu] holder_retained=[marked=%zu nosnap=%zu] "
+                 "slot=[new=%zu repeat=%zu]\n",
+                 g_f3InvalidSameRegion.load(std::memory_order_relaxed),
+                 g_f3InvalidHolderRtype[0].load(std::memory_order_relaxed),
+                 g_f3InvalidHolderRtype[1].load(std::memory_order_relaxed),
+                 g_f3InvalidHolderRtype[2].load(std::memory_order_relaxed),
+                 g_f3InvalidHolderRtype[3].load(std::memory_order_relaxed),
+                 g_f3InvalidHolderRtype[4].load(std::memory_order_relaxed),
+                 g_f3InvalidHolderRtype[5].load(std::memory_order_relaxed),
+                 g_f3InvalidHolderRtype[6].load(std::memory_order_relaxed),
+                 g_f3InvalidHolderRtype[7].load(std::memory_order_relaxed),
+                 g_f3InvalidFromRetainedMarked.load(std::memory_order_relaxed),
+                 g_f3InvalidFromRetainedUnmarked.load(std::memory_order_relaxed),
+                 g_f3InvalidFromRetainedNoSnap.load(std::memory_order_relaxed),
+                 g_f3InvalidHolderRetainedMarked.load(std::memory_order_relaxed),
+                 g_f3InvalidHolderRetainedNoSnap.load(std::memory_order_relaxed),
+                 g_f3InvalidSlotNew.load(std::memory_order_relaxed),
+                 g_f3InvalidSlotRepeat.load(std::memory_order_relaxed));
+    std::fprintf(stderr,
+                 "[GCV2][staleclr] tgt_routestate=[N=%zu FABLE=%zu ING=%zu ED=%zu CMP=%zu FWD=%zu] ghost=%zu "
+                 "compact_tbl=%zu compact_hit=%zu\n",
+                 g_f3InvalidTgtRouteState[0].load(std::memory_order_relaxed),
+                 g_f3InvalidTgtRouteState[1].load(std::memory_order_relaxed),
+                 g_f3InvalidTgtRouteState[2].load(std::memory_order_relaxed),
+                 g_f3InvalidTgtRouteState[3].load(std::memory_order_relaxed),
+                 g_f3InvalidTgtRouteState[4].load(std::memory_order_relaxed),
+                 g_f3InvalidTgtRouteState[5].load(std::memory_order_relaxed),
+                 g_f3InvalidTgtGhost.load(std::memory_order_relaxed),
+                 g_f3InvalidTgtCompactTbl.load(std::memory_order_relaxed),
+                 g_f3InvalidTgtCompactHit.load(std::memory_order_relaxed));
     std::fflush(stderr);
     VLOG(REPORT,
          "[GCV2][f3-deadarm] point=%s total=%zu soft_null=%zu "
@@ -589,6 +648,75 @@ void NoteF3InvalidObjectDiag(BaseObject* holder, const void* field, BaseObject* 
     if (rtype < 16) {
         g_f3InvalidRtype[rtype].fetch_add(1, std::memory_order_relaxed);
     }
+    // staleclr: family discriminators.
+    RegionInfo* holderRegion = (holder != nullptr && Heap::IsHeapAddress(holder))
+                                   ? RegionInfo::TryGetRegionInfoAt(reinterpret_cast<MAddress>(holder))
+                                   : nullptr;
+    if (holderRegion == latestRegion) {
+        g_f3InvalidSameRegion.fetch_add(1, std::memory_order_relaxed);
+    }
+    if (holderRegion != nullptr) {
+        unsigned ht = static_cast<unsigned>(holderRegion->GetRegionType());
+        if (ht < 16) {
+            g_f3InvalidHolderRtype[ht].fetch_add(1, std::memory_order_relaxed);
+        }
+        // Was the HOLDER itself seen live at this cycle's retained mark snapshot?
+        MAddress holderAddr = reinterpret_cast<MAddress>(holder);
+        if (holderRegion->IsRetainedSnapshotValid() && holderRegion->HasRetainedMarkWords() &&
+            holderAddr < holderRegion->GetRetainedLiveInfoCoveredUpTo()) {
+            if (holderRegion->RetainedMarkWordsSay(holderRegion->GetAddressOffset(holderAddr))) {
+                g_f3InvalidHolderRetainedMarked.fetch_add(1, std::memory_order_relaxed);
+            }
+        } else {
+            g_f3InvalidHolderRetainedNoSnap.fetch_add(1, std::memory_order_relaxed);
+        }
+    }
+    // Was the TARGET a marked-live object at this cycle's retained mark snapshot?
+    {
+        MAddress fromAddr = reinterpret_cast<MAddress>(latest);
+        if (latestRegion->IsRetainedSnapshotValid() && latestRegion->HasRetainedMarkWords() &&
+            fromAddr < latestRegion->GetRetainedLiveInfoCoveredUpTo()) {
+            if (latestRegion->RetainedMarkWordsSay(latestRegion->GetAddressOffset(fromAddr))) {
+                g_f3InvalidFromRetainedMarked.fetch_add(1, std::memory_order_relaxed);
+            } else {
+                g_f3InvalidFromRetainedUnmarked.fetch_add(1, std::memory_order_relaxed);
+            }
+        } else {
+            g_f3InvalidFromRetainedNoSnap.fetch_add(1, std::memory_order_relaxed);
+        }
+    }
+    // staleclr round 2: target region's route history this cycle.
+    {
+        unsigned rs = static_cast<unsigned>(latestRegion->GetRouteState());
+        if (rs < 8) {
+            g_f3InvalidTgtRouteState[rs].fetch_add(1, std::memory_order_relaxed);
+        }
+        if (latestRegion->IsGhostFromRegion()) {
+            g_f3InvalidTgtGhost.fetch_add(1, std::memory_order_relaxed);
+        }
+        if (latestRegion->ProbeHasCompactRouteTable()) {
+            g_f3InvalidTgtCompactTbl.fetch_add(1, std::memory_order_relaxed);
+            if (latestRegion->ProbeCompactRouteHit(
+                    latestRegion->GetAddressOffset(reinterpret_cast<MAddress>(latest)))) {
+                g_f3InvalidTgtCompactHit.fetch_add(1, std::memory_order_relaxed);
+            }
+        }
+    }
+    // Slot persistence: same field address counted before?
+    {
+        uintptr_t fa = reinterpret_cast<uintptr_t>(field);
+        size_t idx = (fa >> 3) & ((1 << 15) - 1);
+        uintptr_t expected = 0;
+        if (g_f3InvalidSlotSet[idx].compare_exchange_strong(expected, fa, std::memory_order_relaxed)) {
+            g_f3InvalidSlotNew.fetch_add(1, std::memory_order_relaxed); // empty slot -> first sighting
+        } else if (expected == fa) {
+            g_f3InvalidSlotRepeat.fetch_add(1, std::memory_order_relaxed); // same slot again (later major)
+        } else {
+            // Collision with a different address: overwrite; count as new (approximation).
+            g_f3InvalidSlotSet[idx].store(fa, std::memory_order_relaxed);
+            g_f3InvalidSlotNew.fetch_add(1, std::memory_order_relaxed);
+        }
+    }
     if (latestRegion->GetRegionEnd() - reinterpret_cast<MAddress>(latest) <= 64) {
         g_f3InvalidTail64.fetch_add(1, std::memory_order_relaxed);
     }
@@ -604,13 +732,26 @@ void NoteF3InvalidObjectDiag(BaseObject* holder, const void* field, BaseObject* 
         static const char* kSrcName[F3SRC_N] = { "from", "route", "receipt" };
         static const char* kTipName[F3TIP_N] = { "interior", "hole_above_alloc", "zero_below_alloc",
                                                  "statebits_only", "other" };
+        int fromRetained = -1; // 0 unmarked, 1 marked, -1 no snapshot
+        {
+            MAddress fromAddr = reinterpret_cast<MAddress>(latest);
+            if (latestRegion->IsRetainedSnapshotValid() && latestRegion->HasRetainedMarkWords() &&
+                fromAddr < latestRegion->GetRetainedLiveInfoCoveredUpTo()) {
+                fromRetained =
+                    latestRegion->RetainedMarkWordsSay(latestRegion->GetAddressOffset(fromAddr)) ? 1 : 0;
+            }
+        }
         std::fprintf(stderr,
                      "[GCV2][f3state][sample] n=%zu src=%s tip=%s rtype=%u holder=%p field=%p from=%p latest=%p "
-                     "off=%#zx allocPtr=%#zx regionEnd=%#zx rawWord=%#zx\n",
+                     "off=%#zx allocPtr=%#zx regionEnd=%#zx rawWord=%#zx same_region=%d holder_rtype=%d "
+                     "from_retained=%d\n",
                      n, kSrcName[src], kTipName[tipClass], rtype, holder, field, fromObj, latest,
                      static_cast<size_t>(latestRegion->GetAddressOffset(reinterpret_cast<MAddress>(latest))),
                      static_cast<size_t>(latestRegion->GetRegionAllocPtr()),
-                     static_cast<size_t>(latestRegion->GetRegionEnd()), static_cast<size_t>(rawWord));
+                     static_cast<size_t>(latestRegion->GetRegionEnd()), static_cast<size_t>(rawWord),
+                     holderRegion == latestRegion ? 1 : 0,
+                     holderRegion != nullptr ? static_cast<int>(holderRegion->GetRegionType()) : -1,
+                     fromRetained);
         std::fflush(stderr);
     }
 }
@@ -2566,7 +2707,16 @@ void WCollector::InvalidateOldTaggedRefsBeforeDispel()
         const char* account = static_cast<const char*>(nullptr) /* pinned-off:MRT_GCV2_PREFLIP_ACCOUNT */;
         return account != nullptr && std::strcmp(account, "1") == 0;
     }();
-    if (!preflipWalk) {
+    // staleclr arm B (diagnostic, default off; live env on purpose — this toggle is the
+    // experiment). Force the production-skipped preflip full-heap walk so every marked
+    // holder's old-tag fields are fixed pre-dispel, while forwarding receipts still exist.
+    // If family-B samples (cross-region, real old-colour pointers) collapse under this arm,
+    // the producing gap is "holder not covered / slot not healed before dispel".
+    static const bool staleclrPreflip = []() {
+        const char* v = std::getenv("MRT_GCV2_STALECLR_PREFLIP");
+        return v != nullptr && std::strcmp(v, "1") == 0;
+    }();
+    if (!preflipWalk && !staleclrPreflip) {
         return;
     }
     InvalidateOldTaggedRefs(true);
