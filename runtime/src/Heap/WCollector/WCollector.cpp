@@ -403,6 +403,15 @@ std::atomic<size_t> g_f3InvalidTgtRouteState[8]{ {} };
 std::atomic<size_t> g_f3InvalidTgtGhost{ 0 };
 std::atomic<size_t> g_f3InvalidTgtCompactTbl{ 0 };
 std::atomic<size_t> g_f3InvalidTgtCompactHit{ 0 };
+// staleclr2: the合一假说 middle step. Retained mark-words indexed by pre-compact
+// offset (see round 2b note at the probe). And the slot's raw colour decomposition:
+// which bad-mask bits the old colour sets vs the currently published masks.
+std::atomic<size_t> g_f3InvalidFromWordMarked{ 0 };
+std::atomic<size_t> g_f3InvalidFromWordUnmarked{ 0 };
+std::atomic<size_t> g_f3InvalidFromWordNoWords{ 0 };
+std::atomic<size_t> g_f3InvalidSlotMarkBad{ 0 };   // slot raw & g_cjMarkBadMask
+std::atomic<size_t> g_f3InvalidSlotLoadBad{ 0 };   // slot raw & g_cjLoadBadMask
+std::atomic<size_t> g_f3InvalidSlotMarkGoodNow{ 0 }; // old-looking slot passes CURRENT mark-good
 std::atomic<bool> g_f3DeadarmAtexit{ false };
 
 namespace {
@@ -568,6 +577,16 @@ void ReportF3DeadarmCounts(const char* point)
                  g_f3InvalidTgtGhost.load(std::memory_order_relaxed),
                  g_f3InvalidTgtCompactTbl.load(std::memory_order_relaxed),
                  g_f3InvalidTgtCompactHit.load(std::memory_order_relaxed));
+    std::fprintf(stderr,
+                 "[GCV2][staleclr2] from_word=[marked=%zu unmarked=%zu nowords=%zu] "
+                 "slotcolour=[markbad=%zu loadbad=%zu markgoodnow=%zu] masks=[markBad=%#lx loadBad=%#lx]\n",
+                 g_f3InvalidFromWordMarked.load(std::memory_order_relaxed),
+                 g_f3InvalidFromWordUnmarked.load(std::memory_order_relaxed),
+                 g_f3InvalidFromWordNoWords.load(std::memory_order_relaxed),
+                 g_f3InvalidSlotMarkBad.load(std::memory_order_relaxed),
+                 g_f3InvalidSlotLoadBad.load(std::memory_order_relaxed),
+                 g_f3InvalidSlotMarkGoodNow.load(std::memory_order_relaxed),
+                 ::g_cjMarkBadMask, ::g_cjLoadBadMask);
     std::fflush(stderr);
     VLOG(REPORT,
          "[GCV2][f3-deadarm] point=%s total=%zu soft_null=%zu "
@@ -685,7 +704,26 @@ void NoteF3InvalidObjectDiag(BaseObject* holder, const void* field, BaseObject* 
             g_f3InvalidFromRetainedNoSnap.fetch_add(1, std::memory_order_relaxed);
         }
     }
-    // staleclr round 2: target region's route history this cycle.
+    // staleclr round 2b: the retained mark-word COPY is indexed by PRE-compact offsets
+    // (CaptureRetainedMarkWords copies the whole bitmap), so it answers "did the mark face
+    // mark this address" even after the pack moved allocPtr. The coveredUpTo gate used by
+    // HolderObjectIsLive is a holder-liveness bound and hides exactly the offsets we need;
+    // query the words directly and keep the coveredUpTo reading as a separate counter.
+    //   word_marked=1 & compact_hit=0  => mark DID mark X, compact judged it dead: wrong-face.
+    //   word_marked=0                  => the edge never delivered X to the mark closure.
+    {
+        MAddress fromAddr = reinterpret_cast<MAddress>(latest);
+        size_t fromOff = latestRegion->GetAddressOffset(fromAddr);
+        if (latestRegion->HasRetainedMarkWords()) {
+            if (latestRegion->RetainedMarkWordsSay(fromOff)) {
+                g_f3InvalidFromWordMarked.fetch_add(1, std::memory_order_relaxed);
+            } else {
+                g_f3InvalidFromWordUnmarked.fetch_add(1, std::memory_order_relaxed);
+            }
+        } else {
+            g_f3InvalidFromWordNoWords.fetch_add(1, std::memory_order_relaxed);
+        }
+    }
     {
         unsigned rs = static_cast<unsigned>(latestRegion->GetRouteState());
         if (rs < 8) {
@@ -701,6 +739,19 @@ void NoteF3InvalidObjectDiag(BaseObject* holder, const void* field, BaseObject* 
                 g_f3InvalidTgtCompactHit.fetch_add(1, std::memory_order_relaxed);
             }
         }
+    }
+    // staleclr2: slot raw colour decomposition vs the currently published masks.
+    // The invalid arm only fires on IsOldPointer slots, so markBad should be ~all;
+    // markGoodNow counts colour-wraparound (stale colour that passes today's mask).
+    uintptr_t slotRaw = __atomic_load_n(reinterpret_cast<const uintptr_t*>(field), __ATOMIC_RELAXED);
+    if ((slotRaw & ::g_cjMarkBadMask) != 0) {
+        g_f3InvalidSlotMarkBad.fetch_add(1, std::memory_order_relaxed);
+    }
+    if ((slotRaw & ::g_cjLoadBadMask) != 0) {
+        g_f3InvalidSlotLoadBad.fetch_add(1, std::memory_order_relaxed);
+    }
+    if ((slotRaw & ::g_cjMarkBadMask) == 0 && (slotRaw & ((1ull << 48) - 1)) != 0) {
+        g_f3InvalidSlotMarkGoodNow.fetch_add(1, std::memory_order_relaxed);
     }
     // Slot persistence: same field address counted before?
     {
@@ -733,6 +784,7 @@ void NoteF3InvalidObjectDiag(BaseObject* holder, const void* field, BaseObject* 
         static const char* kTipName[F3TIP_N] = { "interior", "hole_above_alloc", "zero_below_alloc",
                                                  "statebits_only", "other" };
         int fromRetained = -1; // 0 unmarked, 1 marked, -1 no snapshot
+        int fromWord = -1;     // retained mark-word bit at pre-compact offset: 0/1, -1 no words
         {
             MAddress fromAddr = reinterpret_cast<MAddress>(latest);
             if (latestRegion->IsRetainedSnapshotValid() && latestRegion->HasRetainedMarkWords() &&
@@ -740,18 +792,21 @@ void NoteF3InvalidObjectDiag(BaseObject* holder, const void* field, BaseObject* 
                 fromRetained =
                     latestRegion->RetainedMarkWordsSay(latestRegion->GetAddressOffset(fromAddr)) ? 1 : 0;
             }
+            if (latestRegion->HasRetainedMarkWords()) {
+                fromWord = latestRegion->RetainedMarkWordsSay(latestRegion->GetAddressOffset(fromAddr)) ? 1 : 0;
+            }
         }
         std::fprintf(stderr,
                      "[GCV2][f3state][sample] n=%zu src=%s tip=%s rtype=%u holder=%p field=%p from=%p latest=%p "
                      "off=%#zx allocPtr=%#zx regionEnd=%#zx rawWord=%#zx same_region=%d holder_rtype=%d "
-                     "from_retained=%d\n",
+                     "from_retained=%d from_word=%d slotRaw=%#zx\n",
                      n, kSrcName[src], kTipName[tipClass], rtype, holder, field, fromObj, latest,
                      static_cast<size_t>(latestRegion->GetAddressOffset(reinterpret_cast<MAddress>(latest))),
                      static_cast<size_t>(latestRegion->GetRegionAllocPtr()),
                      static_cast<size_t>(latestRegion->GetRegionEnd()), static_cast<size_t>(rawWord),
                      holderRegion == latestRegion ? 1 : 0,
                      holderRegion != nullptr ? static_cast<int>(holderRegion->GetRegionType()) : -1,
-                     fromRetained);
+                     fromRetained, fromWord, static_cast<size_t>(slotRaw));
         std::fflush(stderr);
     }
 }
