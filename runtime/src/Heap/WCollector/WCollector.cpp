@@ -5825,10 +5825,9 @@ void WCollector::EvacuateYoungRegions(const std::vector<BaseObject*>& reachableV
             MRT_PHASE_TIMER("young.ref_fix_prepare");
             TransitionToGCPhase(GCPhase::GC_PHASE_PREFORWARD, true);
 
-            // iorfix: PrepareForwardTable FIRST so liveInfo0 exists, then pre-grant while
-            // every from region is still FORWARDABLE, THEN pass1 Fix/Forward.
-            // Prior order ran FixMinorRootSlots before pregrant; that RouteRegion→ROUTED
-            // freezes liveByteCount so Ensure on liveobj edges is tooLate (iorsource 5/5 ROUTED).
+            // iorfix: PrepareForwardTable FIRST so liveInfo0 snapshots the closed mark
+            // domain while every from region is still FORWARDABLE, THEN pass1 Fix/Forward.
+            // Prior order let FixMinorRootSlots RouteRegion before the domain snapshot.
             TransitionToGCPhase(GCPhase::GC_PHASE_POST_TRACE, true);
             fwdTable.PrepareForwardTable<Generation::Young>();
             // fliporder: from-space is now published, so flip here -- ZGC's install-then-flip order.
@@ -5839,139 +5838,20 @@ void WCollector::EvacuateYoungRegions(const std::vector<BaseObject*>& reachableV
             postEvacPoint("pre-fix-forwarded", false);
         }
 
-        // installdomain / iorfix: serial pre-grant on FORWARDABLE ghost face only.
-        // Raw field read (no ResolveMinorReference — Resolve can RouteRegion).
-        // Multi-round field walk: grant may paint a young whose fields hold further
-        // unmarked from-objects (same shape as FixMinor liveobj IOR edges).
+        // pregrant: the centralized route-domain confirmation walk is deliberately empty.
+        // The always-on post-mark fixpoint above is the frontier finder: it scans live
+        // holders, queues only young targets missing from the mark face, and closes their
+        // transitive fields before PrepareForwardTable snapshots that face into liveInfo0.
+        // Root-only late membership is handled by FixMinorRootSlots' two-pass
+        // grant-before-forward immediately below. Rewalking reachableVec + remset + every
+        // root here only asked IsRouteSurvivedObject again for an already-closed domain.
+        // ZGC likewise installs the relocation set from marking liveness and has no
+        // centralized pregrant pass (zGeneration.cpp:190-250).
         {
             MRT_PHASE_TIMER("young.ref_fix_pregrant");
-            auto ensureObj = [this](BaseObject* t) {
-                if (t == nullptr || !Heap::IsHeapAddress(t)) {
-                    return;
-                }
-                if (!Collector::PlausibleManagedObjectGate("installdomain.pregrant", t)) {
-                    BaseObject* host = Collector::TryRecoverInteriorBase(t);
-                    if (host != nullptr && host != t) {
-                        EnsureRouteDomainMembership(const_cast<WCollector*>(this), host);
-                    }
-                    return;
-                }
-                EnsureRouteDomainMembership(const_cast<WCollector*>(this), t);
-            };
-            auto ensureField = [&ensureObj](RefField<>& field) {
-                RefField<> value(field);
-                ensureObj(to_object(value.GetTargetObject()));
-            };
-            for (BaseObject* object : reachableVec) {
-                ensureObj(object);
-            }
-            for (MAddress slot : remsetVec) {
-                if (Heap::IsHeapAddress(slot)) {
-                    ensureField(HeapSlotAt<>(slot));
-                }
-            }
-            constexpr size_t kPregrantRounds = 4;
-            for (size_t round = 0; round < kPregrantRounds; ++round) {
-                size_t grantBefore = g_installDomainGrant.load(std::memory_order_relaxed);
-                for (BaseObject* object : reachableVec) {
-                    if (object == nullptr || !Heap::IsHeapAddress(object)) {
-                        continue;
-                    }
-                    if (!Collector::PlausibleManagedObjectGate("installdomain.pregrant", object)) {
-                        continue;
-                    }
-                    if (!object->IsValidObject() || !object->HasRefField()) {
-                        continue;
-                    }
-                    object->ForEachRefField(ensureField);
-                }
-                size_t grantAfter = g_installDomainGrant.load(std::memory_order_relaxed);
-                if (grantAfter == grantBefore) {
-                    break;
-                }
-            }
-            // youngstatic: static roots are FixMinor-critical. ensureObj may skip non-from
-            // faces; after PrepareForwardable young cset is ghost — force domain paint and
-            // count residual admit-miss before FixMinorRootSlots.
-            size_t ysRootEnsure = 0;
-            size_t ysRootMissAfter = 0;
-            size_t ysRootYoung = 0;
-            RootVisitor rootEnsure = [this, &ensureObj, &ysRootEnsure, &ysRootMissAfter,
-                                     &ysRootYoung](ObjectRef& root) {
-                zaddress_unsafe observed = root.LoadPlain();
-                HeapSlot<> bits(to_zpointer(raw(observed)));
-                BaseObject* obj = to_object(bits.GetTargetObject());
-                OffpastDiag::NotePregrantSlot(static_cast<void*>(&root), obj, "pregrant_raw");
-                ensureObj(obj);
-                if (obj == nullptr || !Heap::IsHeapAddress(obj)) {
-                    return;
-                }
-                if (!Collector::PlausibleManagedObjectGate("youngstatic.pregrant", obj)) {
-                    BaseObject* host = Collector::TryRecoverInteriorBase(obj);
-                    if (host == nullptr) {
-                        return;
-                    }
-                    obj = host;
-                    ensureObj(obj);
-                }
-                RegionInfo* region = RegionInfo::TryGetRegionInfoAt(reinterpret_cast<MAddress>(obj));
-                if (region == nullptr || !region->IsYoungRegion()) {
-                    return;
-                }
-                ++ysRootYoung;
-                ++ysRootEnsure;
-                // Second chance: Ensure may have skipped when !ghost&&!from earlier in process;
-                // ghost face is required for AdmitForRoute.
-                EnsureRouteDomainMembership(const_cast<WCollector*>(this), obj);
-                LiveInfo* g0 = region->GetLiveInfo0ForProbe();
-                size_t offset = region->GetAddressOffset(reinterpret_cast<MAddress>(obj));
-                if (g0 == nullptr || !region->IsRouteSurvivedObject(offset)) {
-                    // Last resort under FORWARDABLE: MarkObject + bind ghost.
-                    (void)MarkObject(obj);
-                    region->BindLiveInfo0FromLiveIfNull();
-                    g0 = region->GetLiveInfo0ForProbe();
-                    RegionBitmap* ghostBitmap = g0 == nullptr ? nullptr : region->GetRouteMarkBitmap(g0);
-                    if (g0 != nullptr && ghostBitmap != nullptr) {
-                        size_t objSize = 0;
-                        if (Collector::PlausibleManagedObjectGate("youngstatic.pregrant.size", obj)) {
-                            objSize = obj->GetSize();
-                        }
-                        size_t regionSize = static_cast<size_t>(region->GetRegionEnd() - region->GetRegionStart());
-                        if (objSize > 0 && offset + objSize <= regionSize) {
-                            SealCheck::NotePaint(region, offset, objSize, "youngstatic.pregrant.ghost");
-                            (void)ghostBitmap->MarkBits(offset, objSize, regionSize);
-                        }
-                    }
-                    g0 = region->GetLiveInfo0ForProbe();
-                    if (g0 == nullptr || !region->IsRouteSurvivedObject(offset)) {
-                        ++ysRootMissAfter;
-                    }
-                }
-                OffpastDiag::NotePregrantSlot(static_cast<void*>(&root), obj, "pregrant_static");
-            };
-            MutatorManager::Instance().VisitAllMutators(
-                [&rootEnsure](Mutator& mutator) { mutator.VisitMutatorRoots(rootEnsure); });
-            Heap::GetHeap().VisitStaticRoots(rootEnsure);
-            LOG(RTLOG_ERROR,
-                "[GCV2][youngstatic] pregrant_static young=%zu ensureCalls=%zu missAfter=%zu",
-                ysRootYoung, ysRootEnsure, ysRootMissAfter);
-            Runtime::Current().GetConcurrencyModel().VisitGCRoots(&rootEnsure);
-            collectorResources.GetFinalizerProcessor().VisitRawPointers(rootEnsure);
-            Heap::GetHeap().VisitAllExportRoots(rootEnsure);
-
-            size_t grant = g_installDomainGrant.load(std::memory_order_relaxed);
-            size_t already = g_installDomainAlready.load(std::memory_order_relaxed);
-            size_t tooLate = g_installDomainTooLate.load(std::memory_order_relaxed);
-            size_t skip = g_installDomainSkip.load(std::memory_order_relaxed);
-            // grant=0 is healthy when already≫0: Ensure found face already survived.
-            // 0 ≠ failure. tooLate>0 is the bad signal. (fysgrant / iorcover)
-            LOG(RTLOG_ERROR,
-                "[GCV2][installdomain] pregrant grant=%zu already=%zu tooLate=%zu skip=%zu "
-                "note=grant0_means_already_in_domain_not_failure",
-                grant, already, tooLate, skip);
         }
 
-        // pass1 root fix after domain grant — serial sandwich stays;
+        // pass1 root fix after the domain snapshot — serial sandwich stays;
         // only the post-map fixForwardedReferences body is parallelized (⑦ bulk).
         // pass1 is load-bearing for previous-gen residual (MINOR_CONCURRENCY §七 T-A).
         {
@@ -6158,11 +6038,18 @@ void WCollector::EvacuateYoungRegions(const std::vector<BaseObject*>& reachableV
         FlipPromoDiag::OnPromotePhaseEnd(minorTotalRuns + 1, promotedPathRecords, residualPromoteRecords);
         FlipPromoDiag::DumpProcessTotals("post-promote");
 
-        // ZRelocate::relocate tail adds remembered fields for flip-promoted
-        // pages before release_page/detach_page (zRelocate.cpp:1257-1306,
-        // 1018-1047). Discharge resolves the promoted fields, so it must
-        // consume their forwarding receipts before PrepareForwardTable
-        // retires those receipts below.
+    }
+
+    // ZRelocateAddRemsetForFlipPromoted runs after STW3 release, still in FORWARD.
+    // Keep the forwarding receipts alive across this concurrent walk: a short retire
+    // safepoint below performs PrepareForwardTable only after DischargeAll has resolved
+    // every promoted field. This preserves the prerequisite recorded by 3ddac725f8
+    // without violating PromotedRegionDomain.h's off-STW lifecycle contract.
+    CHECK_DETAIL(stw != nullptr && *stw != nullptr,
+                 "promoted-domain discharge must release an active STW3 owner");
+    stw->reset();
+    {
+        MRT_PHASE_TIMER("young.conc_promote_walk");
         if (PromotedRegionDomain::Enabled()) {
             RememberedSet& remsetForDomain = Heap::GetHeap().GetRememberedSet();
             size_t domainEdges = PromotedRegionDomain::DischargeAll(
@@ -6170,13 +6057,18 @@ void WCollector::EvacuateYoungRegions(const std::vector<BaseObject*>& reachableV
                 [&remsetForDomain](MAddress slot) { remsetForDomain.Record(slot); });
             PromotedRegionDomain::NoteRecordCall(static_cast<uint32_t>(GC_REASON_YOUNG),
                                                  /*site*/ 3, domainEdges);
-            PromotedRegionDomain::DumpReconcile(minorTotalRuns + 1, "pre_retire_promote_walk");
-            PromotedRegionDomain::DumpProcessTotals("pre_retire_promote_walk");
+            PromotedRegionDomain::DumpReconcile(minorTotalRuns + 1, "conc_promote_walk");
+            PromotedRegionDomain::DumpProcessTotals("conc_promote_walk");
             VLOG(REPORT, "[PROMODOMAIN] dischargeEdges=%zu", domainEdges);
         } else {
-            PromotedRegionDomain::DumpCoverageByReason("pre_retire_promote_walk_domain_off");
+            PromotedRegionDomain::DumpCoverageByReason("conc_promote_walk_domain_off");
         }
+    }
 
+    *stw = std::make_unique<ScopedStopTheWorld>("young retire forwarding", true,
+                                                GCPhase::GC_PHASE_FORWARD);
+    {
+        MRT_PHASE_TIMER("young.evac_retire");
         {
         // PROBE evacct: how much of young.evac_finish is the second PrepareForwardTable<Young>?
         MRT_PHASE_TIMER("young.evac_prepare_next");
