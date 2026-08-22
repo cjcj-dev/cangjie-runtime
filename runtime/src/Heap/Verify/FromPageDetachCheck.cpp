@@ -43,6 +43,13 @@ std::atomic<uint64_t> g_quarantineAdmitted{ 0 };
 std::atomic<uint64_t> g_quarantineReleased{ 0 };
 std::atomic<uint64_t> g_quarantineRecheckHeld{ 0 };
 std::atomic<uint64_t> g_quarantinePeakEntries{ 0 };
+std::atomic<uint64_t> g_minorRecheckCalls{ 0 };
+std::atomic<uint64_t> g_minorPending{ 0 };
+std::atomic<uint64_t> g_minorFreed{ 0 };
+std::atomic<uint64_t> g_minorHeld{ 0 };
+constexpr size_t kBlockBucketCount = 7;
+std::array<std::atomic<uint64_t>, kBlockBucketCount> g_heldBlockPages{};
+std::array<std::atomic<uint64_t>, kBlockBucketCount> g_heldBlockUnits{};
 thread_local uint32_t g_reusePermitDepth = 0;
 
 AtomicCounters& At(Site site)
@@ -99,6 +106,7 @@ const char* SiteName(Site site)
         "init_free_units",
         "init_region_info",
         "major_recheck",
+        "minor_recheck",
     };
     const size_t i = static_cast<size_t>(site);
     return i < kSiteCount ? kNames[i] : "invalid";
@@ -181,10 +189,123 @@ Counters GetCounters(Site site)
                      Load(c.txnEvidence), Load(c.txnHandles), Load(c.txnOutstanding) };
 }
 
+uint32_t ClassifyBlock(const RegionInfo* region)
+{
+    if (region == nullptr) {
+        return 0;
+    }
+    uint32_t bits = 0;
+    const MAddress start = region->GetRegionStart();
+    const size_t size = region->GetRegionSizeForDetachCheck();
+    if (ForwardingTable::RetiredCovers(start, size)) {
+        bits |= static_cast<uint32_t>(BlockBit::RETIRED_TABLE);
+    }
+    if (region->IsRouteDestHeld()) {
+        bits |= static_cast<uint32_t>(BlockBit::ROUTE_DEST_HELD);
+    }
+    const int32_t refCount = region->ForwardingRefCount();
+    if (refCount > 1) {
+        bits |= static_cast<uint32_t>(BlockBit::FWD_READERS);
+    }
+    if (refCount < 0 || (region->ForwardingClaimed() && refCount != 0)) {
+        bits |= static_cast<uint32_t>(BlockBit::FWD_CLAIM);
+    }
+    if (region->CopyInflight() != 0) {
+        bits |= static_cast<uint32_t>(BlockBit::COPY_INFLIGHT);
+    }
+    uint64_t txnHandles = 0;
+    uint64_t txnOutstanding = 0;
+    if (RelocationSetTxn::HasDetachEvidence(region, region->GetRegionLifeId(), &txnHandles, &txnOutstanding)) {
+        if (txnHandles != 0) {
+            bits |= static_cast<uint32_t>(BlockBit::TXN_HANDLES);
+        }
+        if (txnOutstanding != 0) {
+            bits |= static_cast<uint32_t>(BlockBit::TXN_NOT_DETACHED);
+        }
+    }
+    return bits;
+}
+
+const char* BlockName(uint32_t bits)
+{
+    if (bits == 0) {
+        return "none";
+    }
+    if (bits == static_cast<uint32_t>(BlockBit::RETIRED_TABLE)) {
+        return "retired_table";
+    }
+    if (bits == static_cast<uint32_t>(BlockBit::ROUTE_DEST_HELD)) {
+        return "route_dest_held";
+    }
+    if (bits == static_cast<uint32_t>(BlockBit::FWD_READERS)) {
+        return "fwd_readers";
+    }
+    if (bits == static_cast<uint32_t>(BlockBit::FWD_CLAIM)) {
+        return "fwd_claim";
+    }
+    if (bits == static_cast<uint32_t>(BlockBit::COPY_INFLIGHT)) {
+        return "copy_inflight";
+    }
+    if (bits == static_cast<uint32_t>(BlockBit::TXN_HANDLES)) {
+        return "txn_handles";
+    }
+    if (bits == static_cast<uint32_t>(BlockBit::TXN_NOT_DETACHED)) {
+        return "txn_not_detached";
+    }
+    return "mixed";
+}
+
+void NoteMinorRecheck(size_t pending, size_t freed, size_t held)
+{
+    g_minorRecheckCalls.fetch_add(1, std::memory_order_relaxed);
+    g_minorPending.fetch_add(pending, std::memory_order_relaxed);
+    g_minorFreed.fetch_add(freed, std::memory_order_relaxed);
+    g_minorHeld.fetch_add(held, std::memory_order_relaxed);
+}
+
+void NoteHeldBlock(uint32_t bits, size_t units)
+{
+    size_t idx = kBlockBucketCount - 1;
+    if (bits == static_cast<uint32_t>(BlockBit::RETIRED_TABLE)) {
+        idx = 0;
+    } else if (bits == static_cast<uint32_t>(BlockBit::ROUTE_DEST_HELD)) {
+        idx = 1;
+    } else if (bits == static_cast<uint32_t>(BlockBit::FWD_READERS)) {
+        idx = 2;
+    } else if (bits == static_cast<uint32_t>(BlockBit::FWD_CLAIM)) {
+        idx = 3;
+    } else if (bits == static_cast<uint32_t>(BlockBit::COPY_INFLIGHT)) {
+        idx = 4;
+    } else if (bits == static_cast<uint32_t>(BlockBit::TXN_HANDLES) ||
+               bits == static_cast<uint32_t>(BlockBit::TXN_NOT_DETACHED) ||
+               bits == (static_cast<uint32_t>(BlockBit::TXN_HANDLES) |
+                        static_cast<uint32_t>(BlockBit::TXN_NOT_DETACHED))) {
+        idx = 5;
+    }
+    g_heldBlockPages[idx].fetch_add(1, std::memory_order_relaxed);
+    g_heldBlockUnits[idx].fetch_add(units, std::memory_order_relaxed);
+}
+
+void DumpHeldBuckets(const char* why)
+{
+    static const char* kBucket[] = { "retired_table", "route_dest_held", "fwd_readers", "fwd_claim",
+                                     "copy_inflight", "txn", "mixed" };
+    std::fprintf(stderr, "[GCV2][detach-hold] why=%s", why == nullptr ? "?" : why);
+    for (size_t i = 0; i < kBlockBucketCount; ++i) {
+        std::fprintf(stderr, " %s_pages=%llu_units=%llu", kBucket[i],
+                     static_cast<unsigned long long>(Load(g_heldBlockPages[i])),
+                     static_cast<unsigned long long>(Load(g_heldBlockUnits[i])));
+    }
+    std::fprintf(stderr, "\n");
+    std::fflush(stderr);
+}
+
 QuarantineCounters GetQuarantineCounters()
 {
     return QuarantineCounters{ Load(g_quarantineAdmitted), Load(g_quarantineReleased),
-                               Load(g_quarantineRecheckHeld), Load(g_quarantinePeakEntries) };
+                               Load(g_quarantineRecheckHeld), Load(g_quarantinePeakEntries),
+                               Load(g_minorRecheckCalls), Load(g_minorPending), Load(g_minorFreed),
+                               Load(g_minorHeld) };
 }
 
 void NoteQuarantineAdmitted(uint64_t entriesNow)
@@ -229,10 +350,16 @@ void DumpSummary()
     const QuarantineCounters q = GetQuarantineCounters();
     std::fprintf(stderr,
                  "[GCV2][detach-quarantine] gate=%u admitted=%llu released=%llu recheck_held=%llu "
-                 "peak_entries=%llu max_entries=65536 max_rechecks=8\n",
+                 "peak_entries=%llu max_entries=65536 max_rechecks=8 "
+                 "minor_recheck_calls=%llu minor_pending=%llu minor_freed=%llu minor_held=%llu\n",
                  static_cast<unsigned>(GateEnabled()), static_cast<unsigned long long>(q.admitted),
                  static_cast<unsigned long long>(q.released), static_cast<unsigned long long>(q.recheckHeld),
-                 static_cast<unsigned long long>(q.peakEntries));
+                 static_cast<unsigned long long>(q.peakEntries),
+                 static_cast<unsigned long long>(q.minorRecheckCalls),
+                 static_cast<unsigned long long>(q.minorPending),
+                 static_cast<unsigned long long>(q.minorFreed),
+                 static_cast<unsigned long long>(q.minorHeld));
+    DumpHeldBuckets("atexit");
     std::fflush(stderr);
 }
 

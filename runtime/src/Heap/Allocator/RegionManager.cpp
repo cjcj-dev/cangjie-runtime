@@ -932,9 +932,28 @@ void FreeRegionManager::AddDetachQuarantineUnits(UnitIndex idx, UnitCount num, b
     FromPageDetach::NoteQuarantineAdmitted(detachQuarantine.size());
 }
 
-size_t FreeRegionManager::ReleaseDetachQuarantineAfterMajor()
+void FreeRegionManager::DumpDetachQuarantineHolders(const char* why)
+{
+    std::lock_guard<std::mutex> lock(detachQuarantineMutex);
+    LOG(RTLOG_ERROR, "[GCV2][detach-hold] why=%s live_entries=%zu", why == nullptr ? "?" : why,
+        detachQuarantine.size());
+    for (const DetachQuarantineEntry& entry : detachQuarantine) {
+        RegionInfo* region = RegionInfo::TryGetRegionInfoAt(RegionInfo::GetUnitAddress(entry.idx));
+        const uint32_t bits = FromPageDetach::ClassifyBlock(region);
+        LOG(RTLOG_ERROR,
+            "[GCV2][detach-hold] entry idx=%u units=%u rechecks=%u expect=MAJOR_CLOSE block=%s bits=%u region=%p",
+            entry.idx, entry.num, static_cast<unsigned>(entry.rechecks), FromPageDetach::BlockName(bits), bits,
+            region);
+    }
+    FromPageDetach::DumpHeldBuckets(why);
+}
+
+size_t FreeRegionManager::ReleaseDetachQuarantineAfterMajor(FromPageDetach::Site site)
 {
     if (!FromPageDetach::GateEnabled() && !RelocationSetTxn::Enabled()) {
+        if (site == FromPageDetach::Site::MINOR_RECHECK) {
+            FromPageDetach::NoteMinorRecheck(0, 0, 0);
+        }
         return 0;
     }
     static constexpr uint8_t kMaxRechecks = 8;
@@ -954,10 +973,11 @@ size_t FreeRegionManager::ReleaseDetachQuarantineAfterMajor()
         // post-PrepareForwardTable major closure retired the only route
         // generation that could have stamped the withheld address.
         region->SetRouteDestHold(0);
-        if (!FromPageDetach::FromPageDetachCheck(region, FromPageDetach::Site::MAJOR_RECHECK,
-                                                 FromPageDetach::Action::MAJOR_CLOSE)) {
+        if (!FromPageDetach::FromPageDetachCheck(region, site, FromPageDetach::Action::MAJOR_CLOSE)) {
             ++entry.rechecks;
             FromPageDetach::NoteQuarantineRecheckHeld();
+            const uint32_t bits = FromPageDetach::ClassifyBlock(region);
+            FromPageDetach::NoteHeldBlock(bits, entry.num);
             CHECK_DETAIL(entry.rechecks <= kMaxRechecks,
                          "CJRT_FROM_REUSE_GATE detach quarantine did not close idx=%u units=%u rechecks=%u max=%u",
                          entry.idx, entry.num, static_cast<unsigned>(entry.rechecks),
@@ -995,6 +1015,13 @@ size_t FreeRegionManager::ReleaseDetachQuarantineAfterMajor()
                      "CJRT_FROM_REUSE_GATE detach quarantine overflow on recheck current=%zu held=%zu max=65536",
                      detachQuarantine.size(), held.size());
         detachQuarantine.insert(detachQuarantine.end(), held.begin(), held.end());
+    }
+    if (site == FromPageDetach::Site::MINOR_RECHECK) {
+        FromPageDetach::NoteMinorRecheck(pending.size(), pending.size() - held.size(), held.size());
+        LOG(RTLOG_ERROR,
+            "[GCV2][detach-quarantine] site=minor_recheck pending=%zu freed_entries=%zu held_entries=%zu "
+            "freed_units=%zu",
+            pending.size(), pending.size() - held.size(), held.size(), releasedUnits);
     }
     return releasedUnits;
 }

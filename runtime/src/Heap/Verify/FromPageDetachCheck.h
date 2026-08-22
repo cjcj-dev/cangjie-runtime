@@ -7,6 +7,7 @@
 #ifndef MRT_FROM_PAGE_DETACH_CHECK_H
 #define MRT_FROM_PAGE_DETACH_CHECK_H
 
+#include <cstddef>
 #include <cstdint>
 
 namespace MapleRuntime {
@@ -37,7 +38,8 @@ enum class Site : uint8_t {
     INIT_FREE_UNITS = 12,
     INIT_REGION_INFO = 13,
     MAJOR_RECHECK = 14,
-    SITE_COUNT = 15
+    MINOR_RECHECK = 15,
+    SITE_COUNT = 16
 };
 
 struct Counters {
@@ -62,7 +64,27 @@ struct QuarantineCounters {
     uint64_t released;
     uint64_t recheckHeld;
     uint64_t peakEntries;
+    uint64_t minorRecheckCalls;
+    uint64_t minorPending;
+    uint64_t minorFreed;
+    uint64_t minorHeld;
 };
+
+enum class BlockBit : uint32_t {
+    NONE = 0,
+    RETIRED_TABLE = 1u << 0,
+    ROUTE_DEST_HELD = 1u << 1,
+    FWD_READERS = 1u << 2,
+    FWD_CLAIM = 1u << 3,
+    COPY_INFLIGHT = 1u << 4,
+    TXN_HANDLES = 1u << 5,
+    TXN_NOT_DETACHED = 1u << 6,
+};
+
+uint32_t ClassifyBlock(const RegionInfo* region);
+const char* BlockName(uint32_t bits);
+void NoteMinorRecheck(size_t pending, size_t freed, size_t held);
+void NoteHeldBlock(uint32_t bits, size_t units);
 
 enum class Action : uint8_t {
     OBSERVE = 0,
@@ -96,6 +118,7 @@ void NoteQuarantineReleased();
 void NoteQuarantineRecheckHeld();
 const char* SiteName(Site site);
 void DumpSummary();
+void DumpHeldBuckets(const char* why);
 
 } // namespace FromPageDetach
 } // namespace MapleRuntime

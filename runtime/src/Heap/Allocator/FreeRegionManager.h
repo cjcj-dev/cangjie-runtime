@@ -251,7 +251,8 @@ public:
     void AddDetachQuarantineRegion(RegionInfo* region, bool releasePhysical = false);
     void AddDetachQuarantineUnits(UnitIndex idx, UnitCount num, bool released, bool needsInit,
                                   bool releasePhysical = false);
-    size_t ReleaseDetachQuarantineAfterMajor();
+    size_t ReleaseDetachQuarantineAfterMajor(FromPageDetach::Site site = FromPageDetach::Site::MAJOR_RECHECK);
+    void DumpDetachQuarantineHolders(const char* why);
     bool HasDetachQuarantine() const
     {
         std::lock_guard<std::mutex> lock(detachQuarantineMutex);
