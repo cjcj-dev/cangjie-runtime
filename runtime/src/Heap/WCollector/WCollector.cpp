@@ -771,6 +771,10 @@ struct MinorLedgerCost {
 thread_local MinorLedgerCost g_minorLedgerCost;
 
 // fysgone: product FYS is constexpr false — prove minor closure does not walk old.
+// Compile-time gated: the three closure paths below see millions of holders per
+// minor, so even relaxed atomics are not free in product. Campaign convention is
+// a source constant (never an MRT_GCV2_ env lookup on a hot path).
+static constexpr bool kMinorOldCensusEnabled = false;
 struct MinorOldCensus {
     std::atomic<uint64_t> holderYoung{ 0 };
     std::atomic<uint64_t> holderOld{ 0 };
@@ -3905,7 +3909,9 @@ void WCollector::PushYoungObject(BaseObject* object, WorkStack& workStack, const
         }
     }
     if (!region->IsYoungRegion()) {
-        g_minorOldCensus.pushSkipOld.fetch_add(1, std::memory_order_relaxed);
+        if constexpr (kMinorOldCensusEnabled) {
+            g_minorOldCensus.pushSkipOld.fetch_add(1, std::memory_order_relaxed);
+        }
     }
     if (region->IsYoungRegion() &&
         !region->IsMarkedObject(region->GetMarkView<Generation::Young>(), object)) {
@@ -4218,7 +4224,9 @@ public:
             }
             RegionInfo* region = RegionInfo::GetRegionInfoAt(reinterpret_cast<MAddress>(object));
             const bool isYoung = region->IsYoungRegion();
-            g_minorOldCensus.NoteHolder(isYoung, false);
+            if constexpr (kMinorOldCensusEnabled) {
+                g_minorOldCensus.NoteHolder(isYoung, false);
+            }
 
             if (useBitmapLedger) {
                 if (isYoung) {
@@ -4656,7 +4664,9 @@ private:
         WCollector* collector = shared.collector;
         RegionInfo* region = RegionInfo::GetRegionInfoAt(reinterpret_cast<MAddress>(object));
         const bool isYoung = region->IsYoungRegion();
-        g_minorOldCensus.NoteHolder(isYoung, false);
+        if constexpr (kMinorOldCensusEnabled) {
+            g_minorOldCensus.NoteHolder(isYoung, false);
+        }
 
         if (shared.useBitmapLedger) {
             if (isYoung) {
@@ -4848,7 +4858,9 @@ void WCollector::TraceYoungClosureSerial(WorkStack& workStack, bool fullYoungSca
         }
         RegionInfo* region = RegionInfo::GetRegionInfoAt(reinterpret_cast<MAddress>(object));
         const bool isYoung = region->IsYoungRegion();
-        g_minorOldCensus.NoteHolder(isYoung, false);
+        if constexpr (kMinorOldCensusEnabled) {
+            g_minorOldCensus.NoteHolder(isYoung, false);
+        }
 
         if (useBitmapLedger) {
             if (isYoung) {
@@ -8407,7 +8419,9 @@ void WCollector::DoYoungGarbageCollection()
     }
     g_minorLedgerCost.Reset();
     g_markInternalCost.Reset();
-    g_minorOldCensus.Reset();
+    if constexpr (kMinorOldCensusEnabled) {
+        g_minorOldCensus.Reset();
+    }
     // portyoungconc L2: this is ZGC's boundary. Everything above is pause_mark_start
     // (colour flip, retire, remset flip) plus root enumeration; everything below until
     // STW2 is concurrent_mark(). Release here so mark_follow runs with mutators alive.
@@ -9009,7 +9023,9 @@ void WCollector::DoYoungGarbageCollection()
         }
     }
     g_minorLedgerCost.Report();
-    g_minorOldCensus.Report();
+    if constexpr (kMinorOldCensusEnabled) {
+        g_minorOldCensus.Report();
+    }
     // portyoungconc positive control. Emitted on EVERY minor, including the closed arm, so
     // "no line" and "a line of zeros" are distinguishable. window_ns is the only field that
     // a merely-existing window can raise; marked_in_window / satb_objects / closure_calls
