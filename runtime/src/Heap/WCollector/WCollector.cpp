@@ -1946,10 +1946,10 @@ void WCollector::InvalidateOldTaggedRefs(bool requireSurvivedMark)
         };
     };
 
-    auto processObject = [this, requireSurvivedMark, rebuildRemset, census, trackFixed,
+    auto processObject = [this, requireSurvivedMark, rebuildRemset, account, trackFixed,
                           &stw](BaseObject* obj, HeapAccount& acc) {
         RegionInfo* accountRegion = nullptr;
-        if (census) {
+        if (account) {
             ++acc.processedObjects;
             if (obj != nullptr) {
                 accountRegion = RegionInfo::TryGetRegionInfoAt(reinterpret_cast<MAddress>(obj));
@@ -1958,26 +1958,26 @@ void WCollector::InvalidateOldTaggedRefs(bool requireSurvivedMark)
             // worker (region-head ownership), so summing processedRegions is exact.
         }
         if (obj == nullptr || !obj->IsValidObject()) {
-            if (census) {
+            if (account) {
                 ++acc.invalidObjects;
             }
             return;
         }
         if (requireSurvivedMark) {
             if (!IsSurvivedObject<Generation::Old>(obj)) {
-                if (census) {
+                if (account) {
                     ++acc.filteredObjects;
                 }
                 return;
             }
-            if (census && accountRegion != nullptr && accountRegion->IsFromRegion()) {
+            if (account && accountRegion != nullptr && accountRegion->IsFromRegion()) {
                 ++acc.fromLiveObjects;
             }
         }
         if (!obj->HasRefField()) {
             return;
         }
-        if (census) {
+        if (account) {
             ++acc.refHolders;
         }
         bool recordCrossGen = false;
@@ -1986,9 +1986,9 @@ void WCollector::InvalidateOldTaggedRefs(bool requireSurvivedMark)
             recordCrossGen = holderRegion != nullptr && !holderRegion->IsYoungRegion() &&
                              !holderRegion->IsGarbageRegion() && !holderRegion->IsFreeRegion();
         }
-        bool forwardHolder = census && requireSurvivedMark && accountRegion != nullptr &&
+        bool forwardHolder = account && requireSurvivedMark && accountRegion != nullptr &&
                              accountRegion->IsFromRegion();
-        obj->ForEachRefField([this, obj, recordCrossGen, rebuildRemset, forwardHolder, census, trackFixed,
+        obj->ForEachRefField([this, obj, recordCrossGen, rebuildRemset, forwardHolder, account, trackFixed,
                               &acc, &stw](RefField<>& field) {
             uintptr_t oldValue = raw(field.GetFieldValue());
             bool oldTagged = trackFixed && IsOldPointer(field);
@@ -2014,7 +2014,7 @@ void WCollector::InvalidateOldTaggedRefs(bool requireSurvivedMark)
             }
             RegionInfo* targetRegion = RegionInfo::GetRegionInfoAt(reinterpret_cast<MAddress>(target));
             if (targetRegion != nullptr && targetRegion->IsYoungRegion()) {
-                if (census) {
+                if (account) {
                     ++acc.youngTargetSlots;
                 }
                 rebuildRemset->Record(reinterpret_cast<MAddress>(&field));
@@ -2025,7 +2025,7 @@ void WCollector::InvalidateOldTaggedRefs(bool requireSurvivedMark)
 
     // Region-head-ownership walk over [rangeStart, rangeEnd). H6: carry transient-extent
     // guard verbatim. Spec §六 T1: first-step correction if region head is before rangeStart.
-    auto walkRange = [&processObject, requireSurvivedMark, census](uintptr_t rangeStart, uintptr_t rangeEnd,
+    auto walkRange = [&processObject, requireSurvivedMark, account](uintptr_t rangeStart, uintptr_t rangeEnd,
                                                                     uintptr_t inactive, HeapAccount& acc) {
         if (rangeStart >= rangeEnd || rangeStart >= inactive) {
             return;
