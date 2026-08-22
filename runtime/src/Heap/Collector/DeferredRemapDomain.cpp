@@ -75,6 +75,43 @@ struct State {
     std::unordered_set<MAddress> oracleFixed;
     std::unordered_map<MAddress, MAddress> oracleTargets;
     std::unordered_map<MAddress, uint8_t> publishOutcome;
+    struct SlotSample {
+        MAddress slot = 0;
+        MAddress holder = 0;
+        MAddress target = 0;
+        uintptr_t rawWord = 0;
+        bool oldTagged = false;
+        bool changed = false;
+        bool liveHolder = true;
+        bool hasReceipt = false;
+        uint8_t holderType = 255;
+        uint8_t holderRoute = 255;
+        uint8_t targetType = 255;
+        RegionLifeId holderLife = 0;
+        RegionLifeId targetLife = 0;
+        MAddress holderStart = 0;
+        MAddress holderAlloc = 0;
+        MAddress targetStart = 0;
+        MAddress targetAlloc = 0;
+    };
+    std::unordered_map<MAddress, SlotSample> oracleSamples;
+    uint64_t roundStaleColor = 0;
+    uint64_t roundStaleUnhealed = 0;
+    uint64_t roundStaleNoReceipt = 0;
+    uint64_t roundWalkSkipTl = 0;
+    uint64_t roundWalkSkipRecentFull = 0;
+    uint64_t roundWalkSkipOther = 0;
+    uint64_t roundWalkBreakHole = 0;
+    struct SkipSample {
+        MAddress start = 0;
+        uint8_t type = 255;
+        uint8_t route = 255;
+        RegionLifeId life = 0;
+        MAddress allocPtr = 0;
+        MAddress end = 0;
+        const char* reason = "";
+    };
+    std::vector<SkipSample> skipSamples;
     Snapshot stats;
     size_t capacity = 1U << 22; // hard upper bound, configurable before first use
     uint64_t currentMinor = 0;
@@ -923,32 +960,37 @@ void BeginPostflip(uint64_t majorIndex)
     state.roundFixed = 0;
     state.roundObserved = 0;
     state.roundObservedFixed = 0;
+    state.roundStaleColor = 0;
+    state.roundStaleUnhealed = 0;
+    state.roundStaleNoReceipt = 0;
+    state.roundWalkSkipTl = 0;
+    state.roundWalkSkipRecentFull = 0;
+    state.roundWalkSkipOther = 0;
+    state.roundWalkBreakHole = 0;
     std::memset(state.roundTrackedByHolderType, 0, sizeof(state.roundTrackedByHolderType));
     state.oracleTrackedSlots.clear();
     state.oracleFixed.clear();
     state.oracleTargets.clear();
+    state.oracleSamples.clear();
+    state.skipSamples.clear();
     state.postflipOpen = true;
 }
 
-void NotePostflipSlot(MAddress slot, BaseObject* holder, BaseObject* target, uint8_t holderType, bool changed)
+void NotePostflipSlot(MAddress slot, BaseObject* holder, BaseObject* target, uint8_t holderType, bool changed,
+                      uintptr_t rawWord, bool oldTagged)
 {
     if ((!Active() && !Domain().testing) || slot == 0 || target == nullptr) {
         return;
     }
     State& state = Domain();
-    if (!state.testing) {
-        if (!IsTrackedTarget(target)) {
-            return;
-        }
-        // The product walk also recolours old-tagged references whose object
-        // never moved.  That is not a deferred-remap obligation: only an exact
-        // forwarding receipt proves that this concrete from object requires a
-        // to_addr+offset repair (zRemembered.cpp:50-78).
-        ZForwarding* forwarding = ForwardingTable::GetEntries(reinterpret_cast<MAddress>(target));
-        const MAddress to = forwarding == nullptr ? 0 : forwarding->find(reinterpret_cast<MAddress>(target));
-        if (to == 0 || to == reinterpret_cast<MAddress>(target)) {
-            return;
-        }
+    ZForwarding* forwarding = nullptr;
+    MAddress to = 0;
+    bool hasReceipt = state.testing;
+    const bool targetInHeap = Heap::IsHeapAddress(target);
+    if (!state.testing && targetInHeap) {
+        forwarding = ForwardingTable::GetEntries(reinterpret_cast<MAddress>(target));
+        to = forwarding == nullptr ? 0 : forwarding->find(reinterpret_cast<MAddress>(target));
+        hasReceipt = to != 0 && to != reinterpret_cast<MAddress>(target);
     }
     std::lock_guard<std::mutex> guard(state.mutex);
     if (!state.postflipOpen) {
@@ -960,24 +1002,76 @@ void NotePostflipSlot(MAddress slot, BaseObject* holder, BaseObject* target, uin
         ++state.stats.postflipObservedFixed;
         ++state.roundObservedFixed;
     }
+    if (oldTagged) {
+        ++state.stats.staleColorObserved;
+        ++state.roundStaleColor;
+        if (!changed) {
+            ++state.stats.staleColorUnhealed;
+            ++state.roundStaleUnhealed;
+        }
+        if (!hasReceipt) {
+            ++state.stats.staleColorNoReceipt;
+            ++state.roundStaleNoReceipt;
+        }
+    }
     bool liveHolder = true;
-    if (!state.testing && holder != nullptr) {
+    RegionInfo* holderRegion = nullptr;
+    if (!state.testing && holder != nullptr && Heap::IsHeapAddress(holder)) {
         const MAddress holderFrom = reinterpret_cast<MAddress>(holder);
+        holderRegion = RegionInfo::TryGetRegionInfoAt(holderFrom);
         ZForwarding* holderForwarding = ForwardingTable::GetEntries(holderFrom);
         const MAddress holderTo = holderForwarding == nullptr ? 0 : holderForwarding->find(holderFrom);
         if (holderTo != 0) {
             liveHolder = holderTo == holderFrom;
-        } else {
-            RegionInfo* holderRegion = RegionInfo::TryGetRegionInfoAt(holderFrom);
-            if (holderRegion != nullptr &&
-                (holderRegion->IsFromRegion() || holderRegion->IsLoneFromRegion() ||
-                 holderRegion->IsUnmovableFromRegion() ||
-                 holderRegion->GetRouteState() != RegionInfo::RouteState::NORMAL)) {
-                MarkView<Generation::Old> view = holderRegion->GetMarkView<Generation::Old>();
-                liveHolder = holderRegion->IsSurvivedObject(
-                    view, holderRegion->GetAddressOffset(holderFrom));
-            }
+        } else if (holderRegion != nullptr &&
+                   (holderRegion->IsFromRegion() || holderRegion->IsLoneFromRegion() ||
+                    holderRegion->IsUnmovableFromRegion() ||
+                    holderRegion->GetRouteState() != RegionInfo::RouteState::NORMAL)) {
+            MarkView<Generation::Old> view = holderRegion->GetMarkView<Generation::Old>();
+            liveHolder = holderRegion->IsSurvivedObject(
+                view, holderRegion->GetAddressOffset(holderFrom));
         }
+    }
+    // Receipt-bearing live holders remain the deferred-remap obligation set
+    // (zRemembered.cpp:50-78). Old-tagged no-receipt slots are family-B residue:
+    // counted above, sampled below, never mixed into oracleFixed.
+    const bool remapObligation = state.testing || (targetInHeap && hasReceipt && IsTrackedTarget(target));
+    State::SlotSample sample;
+    sample.slot = slot;
+    sample.holder = reinterpret_cast<MAddress>(holder);
+    sample.target = reinterpret_cast<MAddress>(target);
+    sample.rawWord = rawWord;
+    sample.oldTagged = oldTagged;
+    sample.changed = changed;
+    sample.liveHolder = liveHolder;
+    sample.hasReceipt = hasReceipt;
+    sample.holderType = holderType;
+    if (holderRegion == nullptr && holder != nullptr) {
+        holderRegion = RegionInfo::TryGetRegionInfoAt(reinterpret_cast<MAddress>(holder));
+    }
+    if (holderRegion != nullptr) {
+        sample.holderRoute = static_cast<uint8_t>(holderRegion->GetRouteState());
+        sample.holderLife = holderRegion->GetRegionLifeId();
+        sample.holderStart = holderRegion->GetRegionStart();
+        sample.holderAlloc = holderRegion->GetRegionAllocPtr();
+        sample.holderType = static_cast<uint8_t>(holderRegion->GetRegionType());
+    }
+    RegionInfo* targetRegion = targetInHeap ? RegionInfo::TryGetRegionInfoAt(reinterpret_cast<MAddress>(target)) : nullptr;
+    if (targetRegion != nullptr) {
+        sample.targetType = static_cast<uint8_t>(targetRegion->GetRegionType());
+        sample.targetLife = targetRegion->GetRegionLifeId();
+        sample.targetStart = targetRegion->GetRegionStart();
+        sample.targetAlloc = targetRegion->GetRegionAllocPtr();
+    }
+    const bool wantSample = (oldTagged && !changed) || (remapObligation && changed);
+    const bool preferFamilyB = sample.holderType == static_cast<uint8_t>(RegionInfo::RegionType::THREAD_LOCAL_REGION) ||
+        sample.holderType == static_cast<uint8_t>(RegionInfo::RegionType::RECENT_FULL_REGION);
+    if (wantSample && state.oracleSamples.size() < 64 &&
+        (preferFamilyB || state.oracleSamples.size() < 24)) {
+        state.oracleSamples.emplace(slot, sample);
+    }
+    if (!remapObligation) {
+        return;
     }
     if (state.oracleTrackedSlots.count(slot) == 0 && state.oracleTrackedSlots.size() >= state.capacity) {
         CHECK_DETAIL(false,
@@ -995,14 +1089,52 @@ void NotePostflipSlot(MAddress slot, BaseObject* holder, BaseObject* target, uin
     ++state.stats.oracleTracked;
     ++state.roundTracked;
     state.oracleTargets[slot] = reinterpret_cast<MAddress>(target);
-    if (holderType < 16) {
-        ++state.stats.trackedByHolderType[holderType];
-        ++state.roundTrackedByHolderType[holderType];
+    if (sample.holderType < 16) {
+        ++state.stats.trackedByHolderType[sample.holderType];
+        ++state.roundTrackedByHolderType[sample.holderType];
     }
     if (changed) {
         ++state.stats.oracleFixed;
         ++state.roundFixed;
         state.oracleFixed.insert(slot);
+    }
+}
+
+void NoteWalkSkip(MAddress regionStart, uint8_t regionType, uint8_t route, RegionLifeId life, MAddress allocPtr,
+                  MAddress regionEnd, const char* reason)
+{
+    if (!Active() && !Domain().testing) {
+        return;
+    }
+    State& state = Domain();
+    std::lock_guard<std::mutex> guard(state.mutex);
+    if (!state.postflipOpen) {
+        return;
+    }
+    const char* token = reason == nullptr ? "unknown" : reason;
+    if (std::strcmp(token, "visit_break_hole") == 0) {
+        ++state.stats.walkBreakHole;
+        ++state.roundWalkBreakHole;
+    } else if (regionType == static_cast<uint8_t>(RegionInfo::RegionType::THREAD_LOCAL_REGION)) {
+        ++state.stats.walkSkipTl;
+        ++state.roundWalkSkipTl;
+    } else if (regionType == static_cast<uint8_t>(RegionInfo::RegionType::RECENT_FULL_REGION)) {
+        ++state.stats.walkSkipRecentFull;
+        ++state.roundWalkSkipRecentFull;
+    } else {
+        ++state.stats.walkSkipOther;
+        ++state.roundWalkSkipOther;
+    }
+    if (state.skipSamples.size() < 16) {
+        State::SkipSample sample;
+        sample.start = regionStart;
+        sample.type = regionType;
+        sample.route = route;
+        sample.life = life;
+        sample.allocPtr = allocPtr;
+        sample.end = regionEnd;
+        sample.reason = token;
+        state.skipSamples.push_back(sample);
     }
 }
 
@@ -1026,20 +1158,50 @@ void EndPostflip()
                 const MAddress targetAddress = state.oracleTargets[slot];
                 RegionInfo* holder = RegionInfo::TryGetRegionInfoAt(slot);
                 RegionInfo* target = RegionInfo::TryGetRegionInfoAt(targetAddress);
+                const auto sampleIt = state.oracleSamples.find(slot);
+                const State::SlotSample* sample = sampleIt == state.oracleSamples.end() ? nullptr : &sampleIt->second;
+                const MAddress holderAddr = sample != nullptr ? sample->holder : 0;
+                const uintptr_t rawWord = sample != nullptr ? sample->rawWord : 0;
+                const bool oldTagged = sample != nullptr && sample->oldTagged;
+                const MAddress holderAlloc = holder == nullptr ? 0 : holder->GetRegionAllocPtr();
+                const MAddress targetAlloc = target == nullptr ? 0 : target->GetRegionAllocPtr();
+                const bool holderAboveAlloc = holder != nullptr && slot >= holderAlloc;
+                const bool targetAboveAlloc = target != nullptr && targetAddress >= targetAlloc;
+                const bool holderTl = holder != nullptr && holder->IsThreadLocalRegion();
+                const char* whyWalk = "in_walk";
+                if (holder == nullptr) {
+                    whyWalk = "holder_region_null";
+                } else if (holder->IsGarbageRegion()) {
+                    whyWalk = "holder_garbage";
+                } else if (holder->IsFreeRegion()) {
+                    whyWalk = "holder_free";
+                } else if (holderAboveAlloc) {
+                    whyWalk = "slot_above_allocPtr";
+                } else if (holderTl) {
+                    whyWalk = "holder_thread_local";
+                }
                 std::fprintf(stderr,
-                             "[REMAPDOMAIN][missing] slot=%#zx holderStart=%#zx holderLife=%llu holderType=%u "
-                             "target=%#zx targetStart=%#zx targetLife=%llu targetType=%u exactTo=%#zx\n",
-                             static_cast<size_t>(slot),
+                             "[REMAPDOMAIN][missing] slot=%#zx holder=%#zx holderStart=%#zx holderAlloc=%#zx "
+                             "holderLife=%llu holderType=%u holderRoute=%u holderTl=%u slotAboveAlloc=%u "
+                             "raw=%#llx oldTagged=%u target=%#zx targetStart=%#zx targetAlloc=%#zx "
+                             "targetLife=%llu targetType=%u targetAboveAlloc=%u exactTo=%#zx whyWalk=%s "
+                             "publishOutcome=%u\n",
+                             static_cast<size_t>(slot), static_cast<size_t>(holderAddr),
                              static_cast<size_t>(holder == nullptr ? 0 : holder->GetRegionStart()),
+                             static_cast<size_t>(holderAlloc),
                              static_cast<unsigned long long>(holder == nullptr ? 0 : holder->GetRegionLifeId()),
                              holder == nullptr ? 255U : static_cast<unsigned>(holder->GetRegionType()),
+                             holder == nullptr ? 255U : static_cast<unsigned>(holder->GetRouteState()),
+                             holderTl ? 1U : 0U, holderAboveAlloc ? 1U : 0U,
+                             static_cast<unsigned long long>(rawWord), oldTagged ? 1U : 0U,
                              static_cast<size_t>(targetAddress),
                              static_cast<size_t>(target == nullptr ? 0 : target->GetRegionStart()),
+                             static_cast<size_t>(targetAlloc),
                              static_cast<unsigned long long>(target == nullptr ? 0 : target->GetRegionLifeId()),
                              target == nullptr ? 255U : static_cast<unsigned>(target->GetRegionType()),
-                             static_cast<size_t>(ForwardingTable::FindTo(targetAddress)));
-                std::fprintf(stderr, "[REMAPDOMAIN][missing-outcome] slot=%#zx publishOutcome=%u\n",
-                             static_cast<size_t>(slot), static_cast<unsigned>(state.publishOutcome[slot]));
+                             targetAboveAlloc ? 1U : 0U,
+                             static_cast<size_t>(ForwardingTable::FindTo(targetAddress)), whyWalk,
+                             static_cast<unsigned>(state.publishOutcome[slot]));
             }
             ++roundMissing;
         }
@@ -1133,10 +1295,68 @@ void EndPostflip()
                      static_cast<unsigned long long>(state.roundTrackedByHolderType[12]),
                      static_cast<unsigned long long>(state.roundTrackedByHolderType[13]),
                      static_cast<unsigned long long>(state.roundTrackedByHolderType[14]),
-                     static_cast<unsigned long long>(state.roundTrackedByHolderType[15]));
+                      static_cast<unsigned long long>(state.roundTrackedByHolderType[15]));
+        std::fprintf(stderr,
+                     "[REMAPDOMAIN][residue] major=%llu staleColor=%llu unhealed=%llu noReceipt=%llu "
+                     "walkSkipTl=%llu walkSkipRecentFull=%llu walkSkipOther=%llu walkBreakHole=%llu\n",
+                     static_cast<unsigned long long>(state.currentMajor),
+                     static_cast<unsigned long long>(state.roundStaleColor),
+                     static_cast<unsigned long long>(state.roundStaleUnhealed),
+                     static_cast<unsigned long long>(state.roundStaleNoReceipt),
+                     static_cast<unsigned long long>(state.roundWalkSkipTl),
+                     static_cast<unsigned long long>(state.roundWalkSkipRecentFull),
+                     static_cast<unsigned long long>(state.roundWalkSkipOther),
+                     static_cast<unsigned long long>(state.roundWalkBreakHole));
+        unsigned residueDumped = 0;
+        unsigned dumpedByType[16]{};
+        for (const auto& item : state.oracleSamples) {
+            const State::SlotSample& sample = item.second;
+            if (!(sample.oldTagged && !sample.changed)) {
+                continue;
+            }
+            if (sample.holderType < 16 && dumpedByType[sample.holderType] >= 2 && residueDumped >= 8) {
+                continue;
+            }
+            if (residueDumped >= 16) {
+                break;
+            }
+            const bool holderAbove = sample.holderAlloc != 0 && sample.holder >= sample.holderAlloc;
+            const bool targetAbove = sample.targetAlloc != 0 && sample.target >= sample.targetAlloc;
+            const bool slotAbove = sample.holderAlloc != 0 && sample.slot >= sample.holderAlloc;
+            std::fprintf(stderr,
+                         "[REMAPDOMAIN][residue-sample] slot=%#zx holder=%#zx holderStart=%#zx holderAlloc=%#zx "
+                         "holderLife=%llu holderType=%u holderRoute=%u holderAboveAlloc=%u slotAboveAlloc=%u "
+                         "raw=%#llx oldTagged=1 changed=0 hasReceipt=%u liveHolder=%u target=%#zx "
+                         "targetStart=%#zx targetAlloc=%#zx targetLife=%llu targetType=%u targetAboveAlloc=%u\n",
+                         static_cast<size_t>(sample.slot), static_cast<size_t>(sample.holder),
+                         static_cast<size_t>(sample.holderStart), static_cast<size_t>(sample.holderAlloc),
+                         static_cast<unsigned long long>(sample.holderLife),
+                         static_cast<unsigned>(sample.holderType), static_cast<unsigned>(sample.holderRoute),
+                         holderAbove ? 1U : 0U, slotAbove ? 1U : 0U,
+                         static_cast<unsigned long long>(sample.rawWord), sample.hasReceipt ? 1U : 0U,
+                         sample.liveHolder ? 1U : 0U, static_cast<size_t>(sample.target),
+                         static_cast<size_t>(sample.targetStart), static_cast<size_t>(sample.targetAlloc),
+                         static_cast<unsigned long long>(sample.targetLife),
+                         static_cast<unsigned>(sample.targetType), targetAbove ? 1U : 0U);
+            ++residueDumped;
+            if (sample.holderType < 16) {
+                ++dumpedByType[sample.holderType];
+            }
+        }
+        for (const State::SkipSample& sample : state.skipSamples) {
+            std::fprintf(stderr,
+                         "[REMAPDOMAIN][walk-skip] start=%#zx end=%#zx alloc=%#zx type=%u route=%u life=%llu "
+                         "reason=%s\n",
+                         static_cast<size_t>(sample.start), static_cast<size_t>(sample.end),
+                         static_cast<size_t>(sample.allocPtr), static_cast<unsigned>(sample.type),
+                         static_cast<unsigned>(sample.route), static_cast<unsigned long long>(sample.life),
+                         sample.reason);
+        }
         std::fflush(stderr);
     }
     state.oracleFixed.clear();
+    state.oracleSamples.clear();
+    state.skipSamples.clear();
     state.postflipOpen = false;
 }
 
@@ -1165,8 +1385,10 @@ void Report(const char* point)
                  "barrier=%llu retainFailed=%llu duplicate=%llu consumed=%llu simulated=%llu requeue=%llu "
                  "lifeMismatch=%llu holderDead=%llu missing=%llu extra=%llu oracleTracked=%llu "
                  "oracleFixed=%llu postflipObserved=%llu postflipObservedFixed=%llu flips=%llu "
-                 "maxMinorAge=%llu current=%llu previous=%llu awaiting=%llu "
-                 "candidates=%llu peak=%llu capacity=%llu postflipRounds=%llu\n",
+                  "maxMinorAge=%llu current=%llu previous=%llu awaiting=%llu "
+                  "candidates=%llu peak=%llu capacity=%llu postflipRounds=%llu "
+                  "staleColor=%llu unhealed=%llu noReceipt=%llu walkSkipTl=%llu "
+                  "walkSkipRecentFull=%llu walkBreakHole=%llu\n",
                  point == nullptr ? "?" : point, static_cast<unsigned>(AuditEnabled()),
                  static_cast<unsigned>(ProductEnabled()), static_cast<unsigned long long>(snapshot.staged),
                  static_cast<unsigned long long>(snapshot.captured),
@@ -1193,8 +1415,14 @@ void Report(const char* point)
                  static_cast<unsigned long long>(snapshot.awaitingOracle),
                  static_cast<unsigned long long>(snapshot.candidates),
                  static_cast<unsigned long long>(snapshot.peak),
-                 static_cast<unsigned long long>(snapshot.capacity),
-                 static_cast<unsigned long long>(snapshot.postflipRounds));
+                  static_cast<unsigned long long>(snapshot.capacity),
+                  static_cast<unsigned long long>(snapshot.postflipRounds),
+                  static_cast<unsigned long long>(snapshot.staleColorObserved),
+                  static_cast<unsigned long long>(snapshot.staleColorUnhealed),
+                  static_cast<unsigned long long>(snapshot.staleColorNoReceipt),
+                  static_cast<unsigned long long>(snapshot.walkSkipTl),
+                  static_cast<unsigned long long>(snapshot.walkSkipRecentFull),
+                  static_cast<unsigned long long>(snapshot.walkBreakHole));
     std::fflush(stderr);
 }
 
@@ -1212,6 +1440,8 @@ void ResetForTesting(size_t capacity)
     state.promotedCandidates.clear();
     state.youngHolderRegions.clear();
     state.oracleFixed.clear();
+    state.oracleSamples.clear();
+    state.skipSamples.clear();
     state.stats = Snapshot{};
     state.capacity = capacity == 0 ? 1 : capacity;
     state.currentMinor = 0;
