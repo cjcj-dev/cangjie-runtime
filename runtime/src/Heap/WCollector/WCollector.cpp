@@ -50,6 +50,7 @@
 #include "Heap/Verify/VerifyRoots.h"
 #include "Heap/Verify/Zap.h"
 #include "Heap/Verify/DiagGate.h"
+#include "Heap/Verify/NwDropAudit.h"
 #include "Heap/Verify/IdleEdgeDiag.h"
 #include "Heap/Verify/EatArmDiag.h"
 #include "Heap/Verify/FysDesignDiag.h"
@@ -5613,22 +5614,26 @@ void WCollector::RescanRememberedSet(WorkStack& workStack, const MinorSlotSet& r
         }
         return recovered;
     };
+    NwDropAudit::EnsureAtexit();
     for (MAddress slot : rememberedSlots) {
         if (!Heap::IsHeapAddress(slot)) {
             if (statsOut != nullptr) {
                 ++statsOut->skippedNotHeap;
             }
+            NwDropAudit::Note(NwDropAudit::kNotHeap);
             continue;
         }
         if (LedgerCount(weakSlots, slot, g_minorLedgerCost.weakLookN, g_minorLedgerCost.weakLookNs) != 0) {
             if (statsOut != nullptr) {
                 ++statsOut->skippedWeak;
             }
+            NwDropAudit::Note(NwDropAudit::kWeak);
             continue;
         }
         RegionInfo* holderRegion = RegionInfo::TryGetRegionInfoAt(slot);
         if (holderRegion == nullptr || holderRegion->IsFreeRegion() || holderRegion->IsGarbageRegion()) {
             ++scrubbedDeadHolder;
+            NwDropAudit::Note(NwDropAudit::kDeadHolder);
             size_t n = g_remsetScrubLogged.fetch_add(1, std::memory_order_relaxed);
             if (n < 16) {
                 VLOG(REPORT,
@@ -5747,6 +5752,7 @@ void WCollector::RescanRememberedSet(WorkStack& workStack, const MinorSlotSet& r
         }
         if (!keepByRetainedSnapshot) {
             ++scrubbedDeadHolder;
+            NwDropAudit::Note(NwDropAudit::kRetained);
             continue;
         }
 
@@ -5773,6 +5779,7 @@ void WCollector::RescanRememberedSet(WorkStack& workStack, const MinorSlotSet& r
                     continue;
                 }
                 ++scrubbedStaleOldTag;
+                NwDropAudit::Note(NwDropAudit::kStaleOldTag);
                 // N2: CAS null install (same slot may race with ResolveMinorReference under FYS=1).
                 NoteNullslotWrite("remset_stale_oldtag", nullptr, field, rawTarget, to, &g_nullslotRemset);
                 (void)CasInstallResolvedTarget(*field, raw(peek.GetFieldValue()), nullptr,
@@ -5791,11 +5798,17 @@ void WCollector::RescanRememberedSet(WorkStack& workStack, const MinorSlotSet& r
         BaseObject* target = ResolveMinorReference(*field);
         if (target == nullptr || !Heap::IsHeapAddress(target)) {
             ++scrubbedStale;
+            if (rawTarget != nullptr && Heap::IsHeapAddress(rawTarget) && plannedTo(rawTarget) == nullptr) {
+                NwDropAudit::Note(NwDropAudit::kFindToMiss);
+            } else {
+                NwDropAudit::Note(NwDropAudit::kResolveNull);
+            }
             continue;
         }
         BaseObject* targetBase = recoverYoungTargetBase(target);
         if (targetBase == nullptr) {
             ++scrubbedNoTargetOrigin;
+            NwDropAudit::Note(NwDropAudit::kNoOrigin);
             continue;
         }
         if (targetBase != target) {
@@ -5807,6 +5820,7 @@ void WCollector::RescanRememberedSet(WorkStack& workStack, const MinorSlotSet& r
         }
         if (!target->IsValidObject()) {
             ++scrubbedBadTarget;
+            NwDropAudit::Note(NwDropAudit::kBadTarget);
             if (remsetLifeProbe) {
                 MAddress tAddr = reinterpret_cast<MAddress>(target);
                 RegionInfo* tRegion = RegionInfo::TryGetRegionInfoAt(tAddr);
@@ -5913,6 +5927,7 @@ void WCollector::RescanRememberedSet(WorkStack& workStack, const MinorSlotSet& r
                                        "RescanRememberedSet.PushYoungObject", field, holder);
         }
         PushYoungObject(target, workStack, "remset");
+        NwDropAudit::Note(NwDropAudit::kAdmit);
         if (consumedOut != nullptr) {
             consumedOut->insert(slot);
         }
@@ -5954,6 +5969,7 @@ void WCollector::RescanRememberedSet(WorkStack& workStack, const MinorSlotSet& r
     // Printed every minor, including the zero: "re-arm never fired" and "re-arm is compiled out"
     // read identically otherwise, and this campaign has already spent a turn on that confusion.
     VLOG(REPORT, "[GCV2][remset-rearm] reRemembered=%zu scanned=%zu", reRemembered, rememberedSlots.size());
+    NwDropAudit::Report("rescan");
     if (remsetLifeProbe && scrubbedBadTarget != 0) {
         VLOG(REPORT,
              "[GCV2][remsetlife] badTarget=%zu noRegion=%zu beyondAlloc=%zu inAlloc=%zu word0Zero=%zu "
