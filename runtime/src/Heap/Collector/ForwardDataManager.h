@@ -13,10 +13,16 @@
 #if defined(__linux__) || defined(hongmeng) || defined(__APPLE__)
 #include <sys/mman.h>
 #endif
+#include <atomic>
+#include <cstdlib>
+#include <cstring>
+#include <mutex>
+
 #include "Base/Log.h"
 #include "Base/LogFile.h"
 #include "Base/MemUtils.h"
 #include "Base/SysCall.h"
+#include "Heap/Verify/FwdInflight.h"
 #include "LiveInfo.h"
 
 #ifdef _WIN64
@@ -117,6 +123,11 @@ class ForwardDataManager {
 
         void UnbindPreviousLiveInfo();
 
+        uintptr_t GetStartAddress() const { return startAddress; }
+        size_t GetSize() const { return size; }
+        uintptr_t GetZoneStart(Zone::ZoneType type) const { return allocZone[type].zoneStartAddress; }
+        uintptr_t GetZonePos(Zone::ZoneType type) const { return allocZone[type].zonePosition.load(); }
+
     private:
         Zone allocZone[Zone::TOTAL_NUM];
         uintptr_t startAddress = 0;
@@ -146,7 +157,7 @@ public:
 
     void InitializeForwardData();
 
-    void ClearPreviousForwardData() { liveInfoData[GetPreviousTagID()].ReleaseMemory(); }
+    void ClearPreviousForwardData();
 
     RegionBitmap* AllocateRegionBitmap(size_t regionSize)
     {
@@ -164,10 +175,20 @@ public:
             liveInfoData[currentTagID].Allocate(ForwardDataSpace::Zone::ZoneType::LIVE_INFO, sizeof(LiveInfo)));
     }
 
-    uint16_t GetPreviousTagID() const { return currentTagID ^ 1; }
+    uint16_t GetPreviousTagID() const
+    {
+        return static_cast<uint16_t>((currentTagID + TAG_ID_COUNT - 1) % TAG_ID_COUNT);
+    }
 
     void SetTagID(uint16_t id) { currentTagID = id; }
 
+    // Replaced by ZForwardingLife: a reader that still holds liveInfo0 has retain_page,
+    // and DrainScope has already waited that count to 0 before the region (and therefore
+    // this arena slot) can be recycled. The two-generation grace gate is gone.
+    static void AdvanceGracePeriod() {}
+
+public:
+    // Recycle the slot that just left the one-generation window (same timing as N=2).
     void UnbindPreviousLiveInfo() { liveInfoData[GetPreviousTagID()].UnbindPreviousLiveInfo(); }
 
 private:
@@ -179,12 +200,12 @@ private:
         regionUnitCount = unitCnt;
         // 64: bitmap 1 bit marks the 64 bits in region.
         constexpr uint8_t bitMarksSize = 64;
-        // 3 bitmap for each region: markBitmap,resurrectBitmap, enqueueBitmap.
-        constexpr uint8_t bitmapNum = 3;
+        // 4 bitmaps for each region: young mark, old mark, resurrect, enqueue.
+        constexpr uint8_t bitmapNum = 4;
         return unitCnt * sizeof(LiveInfo) +
             unitCnt * (sizeof(RegionBitmap) + (REGION_UNIT_SIZE / bitMarksSize)) * bitmapNum;
     }
-    ForwardDataSpace liveInfoData[2];
+    ForwardDataSpace liveInfoData[TAG_ID_COUNT];
     size_t regionUnitCount = 0;
     uintptr_t forwardDataStart = 0;
     size_t forwardDataSize = 0;

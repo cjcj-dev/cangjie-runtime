@@ -6,10 +6,12 @@
 
 set(SRC_LIST
     "Allocator.cpp"
+    "ForwardingTable.cpp"
     "MemMap.cpp"
     "RegionSpace.cpp"
     "RegionManager.cpp"
     "CartesianTree.cpp"
+    "HeapFiller.cpp"
 )
 
 include_directories(${CMAKE_CURRENT_SOURCE_DIR}/../)

@@ -12,7 +12,22 @@
 #include "StackMap/StackMap.h"
 #include "StackMetadataHelper.h"
 
+#include <cstdarg>
+#include <cstring>
+
 namespace MapleRuntime {
+namespace {
+void SigAppend(char* buf, size_t cap, const char* fmt, ...)
+{
+    size_t len = strnlen(buf, cap);
+    CHECK_IN_SIG(len < cap);
+    va_list args;
+    va_start(args, fmt);
+    int n = vsprintf_s(buf + len, cap - len, fmt, args);
+    va_end(args);
+    CHECK_IN_SIG(n != -1);
+}
+} // namespace
 void FrameInfo::ResolveProcInfo()
 {
     startProc = GetFuncStartPC();

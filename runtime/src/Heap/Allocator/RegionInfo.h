@@ -7,25 +7,57 @@
 #ifndef MRT_REGION_INFO_H
 #define MRT_REGION_INFO_H
 
+#include <algorithm>
+#include <atomic>
+#include <cstdio>
+#include <cstdlib>
+#include <cstring>
+#include <limits>
 #include <list>
 #include <map>
+#include <mutex>
 #include <set>
-#include <thread>
+#include <unordered_map>
 #include <vector>
 #ifdef _WIN64
 #include <errhandlingapi.h>
 #include <handleapi.h>
 #include <memoryapi.h>
 #else
+#include <dlfcn.h>
 #include <sys/mman.h>
 #endif
 #include "Base/Globals.h"
+#include "Base/Log.h"
 #include "Base/MemUtils.h"
 #include "Base/Panic.h"
 #include "Base/RwLock.h"
 #include "Heap/Collector/ForwardDataManager.h"
+#include "Heap/Collector/ZForwardingLife.h"
 #include "Heap/Collector/GcInfos.h"
 #include "Heap/Collector/LiveInfo.h"
+#include "Heap/Collector/ManagedObjectGate.h"
+#include "Heap/Allocator/RouteTicket.h"
+#include "Heap/Verify/AllocPhaseDiag.h"
+#include "Heap/Verify/DiagGate.h"
+#include "Heap/Verify/NullRouteCaller.h"
+#include "Heap/Verify/TraceClear.h"
+#include "Heap/Verify/HeldFreeDiag.h"
+#include "Heap/Verify/FillerZeroDiag.h"
+#include "Heap/Verify/RegionLifeDiag.h"
+#include "Heap/Verify/TagReuseProbe.h"
+#include "Heap/Verify/MarkWhyProbe.h"
+#include "Heap/Verify/SurvNodeDiag.h"
+#include "Heap/Verify/EatArmDiag.h"
+#include "Heap/Verify/RouteDestHold.h"
+#include "Heap/Verify/FromPageDetachCheck.h"
+#include "Heap/Allocator/ForwardingTable.h"
+#include "Heap/Verify/FwdInflight.h"
+#include "Heap/Verify/MutatorRelocate.h"
+#include "Base/TimeUtils.h"
+#include "Heap/Verify/RouteDom.h"
+#include "Heap/Verify/SealCheck.h"
+#include "Heap/Verify/TlRawDiag.h"
 #include "securec.h"
 #ifdef CANGJIE_ASAN_SUPPORT
 #include "Sanitizer/SanitizerInterface.h"
@@ -40,16 +72,16 @@ public:
     T GetAtomicValue(size_t pos, size_t bitLen) const
     {
         T value = __atomic_load_n(&fieldVal, __ATOMIC_ACQUIRE);
-        T bitMask = ((1 << bitLen) - 1) << pos;
+        T bitMask = FieldMask(pos, bitLen);
         return value & bitMask;
     }
     void SetAtomicValue(size_t pos, size_t bitLen, T newValue)
     {
         do {
             T oldValue = fieldVal;
-            T bitMask = ((1 << bitLen) - 1) << pos;
+            T bitMask = FieldMask(pos, bitLen);
             T unchangedBitMask = ~bitMask;
-            T newFieldValue = ((newValue << pos) & bitMask) | (oldValue & unchangedBitMask);
+            T newFieldValue = (static_cast<T>(newValue << pos) & bitMask) | (oldValue & unchangedBitMask);
             if (__atomic_compare_exchange_n(&fieldVal, &oldValue, newFieldValue, false, __ATOMIC_ACQ_REL,
                                             __ATOMIC_ACQUIRE)) {
                 return;
@@ -58,6 +90,14 @@ public:
     }
 
 private:
+    static constexpr T FieldMask(size_t pos, size_t bitLen)
+    {
+        constexpr size_t width = std::numeric_limits<T>::digits;
+        const T lowMask = bitLen >= width ? static_cast<T>(~T(0))
+                                          : static_cast<T>((T(1) << bitLen) - T(1));
+        return static_cast<T>(lowMask << pos);
+    }
+
     T fieldVal;
 };
 // this class is the metadata of region, it contains all the information needed to manage its corresponding memory.
@@ -75,6 +115,34 @@ private:
 // region info is stored in the metadata of its primary unit (i.e. the first unit).
 class RegionInfo {
 public:
+    using CompactRouteTable = std::unordered_map<size_t, MAddress>;
+
+    enum class RetainedLiveInfoState : uint8_t {
+        NEVER_EXAMINED,
+        SNAPSHOT_VALID,
+        SNAPSHOT_EMPTY,
+    };
+
+    // holderlive (F2): the only object-level holder-liveness filter we have reads
+    // GetRetainedLiveInfoState() at WCollector.cpp:3579 and measured NEVER_EXAMINED for
+    // 100% of holders (never=2787/originFound=2787 per minor). NEVER_EXAMINED has three
+    // distinct producers and the state word cannot tell them apart:
+    //   - nobody ever called Preserve* on this region during its current life,
+    //   - Preserve* ran but had no live info to keep (it writes NEVER_EXAMINED itself),
+    //   - Preserve* ran and stored a snapshot, then a clear path wiped it.
+    // These counters name which one happened. Maintained unconditionally (three stores on
+    // cold region-lifecycle paths); read only under MRT_GCV2_RETLIVE_PROBE.
+    enum RetainedOp : uint8_t {
+        RETAINED_OP_NONE = 0,
+        RETAINED_OP_PRESERVE_VALID = 1,
+        RETAINED_OP_PRESERVE_EMPTY = 2,
+        RETAINED_OP_PRESERVE_NEVER = 3,
+        RETAINED_OP_CLEAR_CHECKED = 4,   // CheckAndClearLiveInfo (RegionInfo.h:1271)
+        RETAINED_OP_CLEAR_ALL = 5,       // ClearLiveInfo (RegionInfo.h:1297)
+        RETAINED_OP_CLEAR_RANGE = 6,     // NullLiveInfoFieldsInRange (RegionInfo.h:1327)
+        RETAINED_OP_COUNT = 7,
+    };
+
     enum RouteState : uint8_t {
         NORMAL = 0,
         FORWARDABLE,
@@ -94,6 +162,8 @@ public:
 
     bool CompareExchangeRouteState(RouteState expected, RouteState newWord)
     {
+        const RegionLifeId life = GetRegionLifeId();
+        __atomic_store_n(&metadata.routeStateLifeId, life, __ATOMIC_RELEASE);
 #if defined(__x86_64__)
         bool success = __atomic_compare_exchange_n(&(metadata.routeState), &expected, newWord, true, __ATOMIC_ACQ_REL,
                                                    __ATOMIC_ACQUIRE);
@@ -102,34 +172,223 @@ public:
         bool success = __atomic_compare_exchange_n(&(metadata.routeState), &expected, newWord, false, __ATOMIC_SEQ_CST,
                                                    __ATOMIC_ACQUIRE);
 #endif
+        if (success) {
+            RegionLifeClock::Publish(RegionLifeClock::Carrier::ROUTE_STATE, life);
+        }
         return success;
     }
 
     RouteState GetRouteState() const
     {
         RouteState state = __atomic_load_n(&(metadata.routeState), std::memory_order_acquire);
+        if (!RegionLifeClock::Validate(RegionLifeClock::Carrier::ROUTE_STATE,
+                                       __atomic_load_n(&metadata.routeStateLifeId, __ATOMIC_ACQUIRE),
+                                       GetRegionLifeId())) {
+            return RouteState::NORMAL;
+        }
         return state;
     }
 
-    void SetRouteState(RouteState state) { __atomic_store_n(&(metadata.routeState), state, std::memory_order_release); }
+    void SetRouteState(RouteState state)
+    {
+        const RegionLifeId life = GetRegionLifeId();
+        __atomic_store_n(&metadata.routeStateLifeId, life, __ATOMIC_RELEASE);
+        __atomic_store_n(&(metadata.routeState), state, std::memory_order_release);
+        RegionLifeClock::Publish(RegionLifeClock::Carrier::ROUTE_STATE, life);
+    }
+
+    // sealcheck: mark face frozen for geometry (M3). Set at RouteRegion ROUTING entry.
+    bool IsMarkFaceSealed() const
+    {
+        return (__atomic_load_n(&metadata.markFaceSealed, std::memory_order_acquire) & MARK_FACE_SEALED_BIT) != 0;
+    }
+    void SetMarkFaceSealed(bool v)
+    {
+        if (v) {
+            __atomic_fetch_or(&metadata.markFaceSealed, MARK_FACE_SEALED_BIT, __ATOMIC_RELEASE);
+        } else {
+            __atomic_fetch_and(&metadata.markFaceSealed, static_cast<uint8_t>(~MARK_FACE_SEALED_BIT),
+                               __ATOMIC_RELEASE);
+        }
+    }
+
+    uint64_t GetSnapshotEpoch() const
+    {
+        return __atomic_load_n(&metadata.snapshotEpoch, std::memory_order_acquire);
+    }
+
+    uint8_t GetRegionLifeSeq() const
+    {
+        return static_cast<uint8_t>(__atomic_load_n(&metadata.routeDestHold, __ATOMIC_ACQUIRE) >> 1);
+    }
+
+    RegionLifeId GetRegionLifeId() const
+    {
+        return metadata.regionLifeId.load(std::memory_order_acquire);
+    }
+
+    bool IsRouteStateLifeCurrent() const
+    {
+        const RegionLifeId stamp = __atomic_load_n(&metadata.routeStateLifeId, __ATOMIC_ACQUIRE);
+        return RegionLifeClock::Validate(RegionLifeClock::Carrier::ROUTE_STATE, stamp, GetRegionLifeId());
+    }
+
+    template<Generation G>
+    uint64_t GetMarkSnapshotEpoch() const
+    {
+        if (G == Generation::Young) {
+            return __atomic_load_n(&metadata.youngSnapshotEpoch, std::memory_order_acquire) &
+                YOUNG_SNAPSHOT_EPOCH_MASK;
+        }
+        return GetSnapshotEpoch();
+    }
+
+    template<Generation G>
+    MarkView<G> GetMarkView()
+    {
+        // A major closure visits both young and old regions.  A minor closure is
+        // only authoritative for young regions, so minting the inverse binding is
+        // rejected at the sole constructor boundary.
+        CHECK_DETAIL(G != Generation::Young || IsYoungRegion(),
+                     "cannot bind a young mark view to old region %p", this);
+        const RegionLifeId life = GetRegionLifeId();
+        RegionLifeClock::Publish(RegionLifeClock::Carrier::MARK_SNAPSHOT, life);
+        return MarkView<G>(this, GetMarkSnapshotEpoch<G>(), life);
+    }
+
+    template<Generation G>
+    bool ValidateMarkView(MarkView<G> view) const
+    {
+        CHECK(view.GetRegion() == this);
+        return RegionLifeClock::Validate(RegionLifeClock::Carrier::MARK_SNAPSHOT, view.GetLifeId(),
+                                         GetRegionLifeId());
+    }
+
+    void BumpSnapshotEpoch()
+    {
+        __atomic_fetch_add(&metadata.snapshotEpoch, 1, std::memory_order_acq_rel);
+    }
+
+    template<Generation G>
+    void BumpMarkSnapshotEpoch()
+    {
+        if (G == Generation::Young) {
+            __atomic_fetch_add(&metadata.youngSnapshotEpoch, 1, std::memory_order_acq_rel);
+            return;
+        }
+        BumpSnapshotEpoch();
+    }
+
+    // oneseq: tagged bumps so atexit/milestones show whether epoch advances per-list / per-region.
+    // Default off; enable with MRT_GCV2_ONESEQ=1 or MRT_GCV2_DIAG=oneseq.
+    static bool OneseqDiagEnabled()
+    {
+        static const bool enabled = DiagGate::LegacyOrToken("MRT_GCV2_ONESEQ", "oneseq");
+        return enabled;
+    }
+
+    template<Generation G>
+    void BumpSnapshotEpochFromClearLiveInfo()
+    {
+        if (!OneseqDiagEnabled()) {
+            BumpMarkSnapshotEpoch<G>();
+            return;
+        }
+        size_t n;
+        if (G == Generation::Young) {
+            n = oneseqBumpClearYoung.fetch_add(1, std::memory_order_relaxed) + 1;
+        } else {
+            n = oneseqBumpClearOld.fetch_add(1, std::memory_order_relaxed) + 1;
+        }
+        BumpMarkSnapshotEpoch<G>();
+        EnsureOneseqAtexit();
+        // Milestone dump so timeout-killed ALOT runs still leave a line (atexit may not run).
+        if (n == 1 || n == 8 || n == 64 || n == 256 || n == 1024 || (n >= 4096 && (n & (n - 1)) == 0)) {
+            ReportOneseqCounts(G == Generation::Young ? "clear_young_milestone" : "clear_old_milestone");
+        }
+    }
+    void BumpSnapshotEpochFromInitRegion()
+    {
+        if (!OneseqDiagEnabled()) {
+            BumpSnapshotEpoch();
+            BumpMarkSnapshotEpoch<Generation::Young>();
+            return;
+        }
+        size_t n = oneseqBumpInitRegion.fetch_add(1, std::memory_order_relaxed) + 1;
+        BumpSnapshotEpoch();
+        BumpMarkSnapshotEpoch<Generation::Young>();
+        EnsureOneseqAtexit();
+        if (n == 1 || n == 64 || n == 1024 || (n >= 4096 && (n & (n - 1)) == 0)) {
+            ReportOneseqCounts("init_milestone");
+        }
+    }
+    template<Generation G>
+    void BumpSnapshotEpochFromResetAfterForward()
+    {
+        if (!OneseqDiagEnabled()) {
+            BumpMarkSnapshotEpoch<G>();
+            return;
+        }
+        size_t n = oneseqBumpResetAfterForward.fetch_add(1, std::memory_order_relaxed) + 1;
+        BumpMarkSnapshotEpoch<G>();
+        EnsureOneseqAtexit();
+        if (n == 1 || n == 64 || n == 1024 || (n >= 4096 && (n & (n - 1)) == 0)) {
+            ReportOneseqCounts("reset_fwd_milestone");
+        }
+    }
+
+    static void EnsureOneseqAtexit();
+    static void ReportOneseqCounts(const char* point);
 
     bool IsCompacted() { return GetRouteState() == RouteState::COMPACTED; }
 
     bool IsRoutingState() { return GetRouteState() == RouteState::ROUTING; }
+
+    // enroltime: when does a region actually join the relocation set?
+    //
+    // OpenJDK installs the whole set before the colour flips: ZRelocationSet::install runs in the
+    // concurrent select_relocation_set (zGeneration.cpp:254), and only afterwards does
+    // relocate_start -> flip_relocate_start run (:918 -> :922 -> :651).  Because of that ordering,
+    // "painted with the current colour, after the flip" is equivalent to "names an object that
+    // will not move this cycle", and ZGC's whole colour-epoch argument rests on that equivalence.
+    //
+    // Ours enrols lazily: RouteRegion drives each region's RouteState out of NORMAL as forwarding
+    // reaches it.  If that happens after the flip, the equivalence breaks -- a value painted
+    // store-good in between is load-good and later names a from-version, which is exactly the
+    // measured FORWARD population (afterFlip=1, slotGood=1, hasTo=1, 20/20) whose targets must have
+    // had RouteState == NORMAL when they were painted, since every non-NORMAL target is already
+    // caught by the staleness predicate (ROUTEASK: 105 triggers, 100% covered).
+    //
+    // GCPhase is the cheap witness: PREFORWARD/FORWARD mean the relocate-start flip has run.
+    static constexpr bool kEnrolTimeProbe = true;
+    static std::atomic<uint64_t>& EnrolBeforeFlip()
+    {
+        static std::atomic<uint64_t> n{ 0 };
+        return n;
+    }
+    static std::atomic<uint64_t>& EnrolAfterFlip()
+    {
+        static std::atomic<uint64_t> n{ 0 };
+        return n;
+    }
+    void NoteEnrolPhase();
 
     bool TryLockRouting(RouteState curState)
     {
         if (IsRoutingState()) {
             return false;
         }
-        return CompareExchangeRouteState(curState, RouteState::ROUTING);
+        const bool locked = CompareExchangeRouteState(curState, RouteState::ROUTING);
+        if (kEnrolTimeProbe && locked && curState == RouteState::NORMAL) {
+            NoteEnrolPhase();
+        }
+        return locked;
     }
 
-    size_t GetPreLiveBytesInGhostRegion(MAddress address)
+    // Probe-only: ghost preLiveBytes (product callers must hold a RouteTicket).
+    size_t GetPreLiveBytesInGhostRegionForProbe(MAddress address)
     {
-        DCHECK(metadata.liveInfo0 != nullptr);
-        size_t offset = GetAddressOffset(address);
-        return metadata.liveInfo0->GetPreLiveBytes(offset, GetGhostRegionSize());
+        return GetPreLiveBytesInGhostRegion(address);
     }
 
     RegionInfo()
@@ -152,6 +411,582 @@ public:
         return liveInfo;
     }
 
+    // Probe-only: raw ghost liveInfo0 (no TEMPORARY filter; ghost never uses TEMPORARY).
+    LiveInfo* GetLiveInfo0ForProbe() const { return metadata.liveInfo0; }
+
+    Generation GetRouteMarkGeneration() const
+    {
+        return (__atomic_load_n(&metadata.markFaceSealed, std::memory_order_acquire) & ROUTE_MARK_YOUNG_BIT) != 0
+            ? Generation::Young : Generation::Old;
+    }
+
+    void SetRouteMarkGeneration(Generation generation)
+    {
+        if (generation == Generation::Young) {
+            __atomic_fetch_or(&metadata.markFaceSealed, ROUTE_MARK_YOUNG_BIT, __ATOMIC_RELEASE);
+        } else {
+            __atomic_fetch_and(&metadata.markFaceSealed, static_cast<uint8_t>(~ROUTE_MARK_YOUNG_BIT),
+                               __ATOMIC_RELEASE);
+        }
+    }
+
+    template<Generation G>
+    MarkView<G> GetRouteMarkView()
+    {
+        CHECK_DETAIL(GetRouteMarkGeneration() == G,
+                     "route mark generation mismatch region=%p have=%u want=%u", this,
+                     static_cast<unsigned>(GetRouteMarkGeneration()), static_cast<unsigned>(G));
+        const RegionLifeId life = __atomic_load_n(&metadata.routeMarkLifeId, __ATOMIC_ACQUIRE);
+        uint64_t epoch;
+        if (RegionLifeClock::EnforceEnabled()) {
+            epoch = __atomic_load_n(&metadata.routeMarkEpoch, __ATOMIC_ACQUIRE);
+        } else {
+            // Transition arm: keep the legacy self-minted epoch until enforcement
+            // becomes the default, while the shadow view carries the published life.
+            LiveInfo* face = metadata.liveInfo0;
+            epoch = face == nullptr ? GetMarkSnapshotEpoch<G>()
+                                    : face->GetMarkFace<G>().epoch.load(std::memory_order_acquire);
+        }
+        return MarkView<G>(this, epoch, life);
+    }
+
+    // The page owner chooses the face; the sealed forwarding snapshot still
+    // supplies the epoch/life. This preserves route geometry stability without
+    // allowing routeMarkGeneration to override page ownership.
+    template<Generation G>
+    MarkView<G> GetOwnerRouteMarkView()
+    {
+        CHECK_DETAIL((G == Generation::Young) == IsYoungRegion(),
+                     "owner route view generation mismatch region=%p owner=%s want=%s", this,
+                     IsYoungRegion() ? "young" : "old", G == Generation::Young ? "young" : "old");
+        const RegionLifeId life = __atomic_load_n(&metadata.routeMarkLifeId, __ATOMIC_ACQUIRE);
+        uint64_t epoch;
+        if (RegionLifeClock::EnforceEnabled()) {
+            epoch = __atomic_load_n(&metadata.routeMarkEpoch, __ATOMIC_ACQUIRE);
+        } else {
+            LiveInfo* face = metadata.liveInfo0;
+            epoch = face == nullptr ? GetMarkSnapshotEpoch<G>()
+                                    : face->GetMarkFace<G>().epoch.load(std::memory_order_acquire);
+        }
+        return MarkView<G>(this, epoch, life);
+    }
+
+    template<Generation G>
+    uint64_t GetMarkEpoch(MarkView<G> view, LiveInfo* liveInfo) const
+    {
+        CHECK(view.GetRegion() == this);
+        if (!ValidateMarkView(view)) {
+            return 0;
+        }
+        return liveInfo == nullptr ? 0 : liveInfo->GetMarkFace<G>().epoch.load(std::memory_order_acquire);
+    }
+
+    template<Generation G>
+    RegionBitmap* GetMarkBitmap(MarkView<G> view, LiveInfo* liveInfo) const
+    {
+        CHECK(view.GetRegion() == this);
+        if (!ValidateMarkView(view)) {
+            return nullptr;
+        }
+        if (liveInfo == nullptr ||
+            liveInfo->GetMarkFace<G>().epoch.load(std::memory_order_acquire) != view.GetEpoch()) {
+            return nullptr;
+        }
+        RegionBitmap* bitmap =
+            __atomic_load_n(&liveInfo->GetMarkFace<G>().bitmap, std::memory_order_acquire);
+        return reinterpret_cast<MAddress>(bitmap) == LiveInfo::TEMPORARY_PTR ? nullptr : bitmap;
+    }
+
+    template<Generation G>
+    bool IsSurvivedObject(MarkView<G> view, LiveInfo* liveInfo, size_t offset) const
+    {
+        CHECK(view.GetRegion() == this);
+        if (!ValidateMarkView(view)) {
+            return false;
+        }
+        return liveInfo != nullptr && liveInfo->IsSurvivedObject(view, offset);
+    }
+
+    bool IsRouteSurvivedObject(size_t offset)
+    {
+        if (GetRouteMarkGeneration() == Generation::Young) {
+            MarkView<Generation::Young> view = GetRouteMarkView<Generation::Young>();
+            if (!ValidateMarkView(view)) {
+                return false;
+            }
+            LiveInfo* face = metadata.liveInfo0 != nullptr ? metadata.liveInfo0 : GetLiveInfo();
+            if (IsSurvivedObject(view, face, offset) || AllocatedAfterMarkStart(offset)) {
+                return true;
+            }
+            return false;
+        }
+        MarkView<Generation::Old> view = GetRouteMarkView<Generation::Old>();
+        if (!ValidateMarkView(view)) {
+            return false;
+        }
+        LiveInfo* face = metadata.liveInfo0 != nullptr ? metadata.liveInfo0 : GetLiveInfo();
+        if (IsSurvivedObject(view, face, offset) || AllocatedAfterMarkStart(offset)) {
+            return true;
+        }
+        return false;
+    }
+
+    // Page-owned liveness authority used by relocation/compact. The route generation
+    // remains a forwarding snapshot tag, but it no longer chooses which face decides
+    // whether an object on this page is copied.
+    bool IsOwnerSurvivedObject(size_t offset)
+    {
+        LiveInfo* face = metadata.liveInfo0 != nullptr ? metadata.liveInfo0 : GetLiveInfo();
+        if (IsYoungRegion()) {
+            MarkView<Generation::Young> view = GetOwnerRouteMarkView<Generation::Young>();
+            return IsSurvivedObject(view, face, offset) || AllocatedAfterMarkStart(offset);
+        }
+        MarkView<Generation::Old> view = GetOwnerRouteMarkView<Generation::Old>();
+        return IsSurvivedObject(view, face, offset) || AllocatedAfterMarkStart(offset);
+    }
+
+    bool IsOwnerKnownEmpty()
+    {
+        if (IsYoungRegion()) {
+            return IsKnownYoungEmpty(GetOwnerRouteMarkView<Generation::Young>());
+        }
+        return IsKnownEmpty(GetOwnerRouteMarkView<Generation::Old>());
+    }
+
+    RegionBitmap* GetOwnerMarkBitmap(LiveInfo* face = nullptr)
+    {
+        LiveInfo* selected = face != nullptr ? face : GetLiveInfo();
+        if (IsYoungRegion()) {
+            return GetMarkBitmap(GetOwnerRouteMarkView<Generation::Young>(), selected);
+        }
+        return GetMarkBitmap(GetOwnerRouteMarkView<Generation::Old>(), selected);
+    }
+
+    bool IsRouteMarkedObject(size_t offset)
+    {
+        if (GetRouteMarkGeneration() == Generation::Young) {
+            MarkView<Generation::Young> view = GetRouteMarkView<Generation::Young>();
+            if (!ValidateMarkView(view)) {
+                return false;
+            }
+            if (AllocatedAfterMarkStart(offset)) {
+                return true;
+            }
+            LiveInfo* face = metadata.liveInfo0 != nullptr ? metadata.liveInfo0 : GetLiveInfo();
+            if (IsLargeRegion()) {
+                return GetMarkedRegionFlag(view) == 1;
+            }
+            RegionBitmap* bitmap = GetMarkBitmap(view, face);
+            return bitmap != nullptr && bitmap->IsMarked(offset);
+        }
+        MarkView<Generation::Old> view = GetRouteMarkView<Generation::Old>();
+        if (!ValidateMarkView(view)) {
+            return false;
+        }
+        if (AllocatedAfterMarkStart(offset)) {
+            return true;
+        }
+        LiveInfo* face = metadata.liveInfo0 != nullptr ? metadata.liveInfo0 : GetLiveInfo();
+        if (IsLargeRegion()) {
+            return GetMarkedRegionFlag(view) == 1;
+        }
+        RegionBitmap* bitmap = GetMarkBitmap(view, face);
+        return bitmap != nullptr && bitmap->IsMarked(offset);
+    }
+
+    bool IsRouteMarkedObject(const BaseObject* object)
+    {
+        return IsRouteMarkedObject(GetAddressOffset(reinterpret_cast<MAddress>(object)));
+    }
+
+    bool IsRouteKnownEmpty()
+    {
+        if (GetRouteMarkGeneration() == Generation::Young) {
+            return IsKnownYoungEmpty(GetRouteMarkView<Generation::Young>());
+        }
+        return IsKnownEmpty(GetRouteMarkView<Generation::Old>());
+    }
+
+    RegionBitmap* GetRouteMarkBitmap(LiveInfo* face = nullptr)
+    {
+        LiveInfo* selected = face != nullptr ? face : GetLiveInfo();
+        if (GetRouteMarkGeneration() == Generation::Young) {
+            return GetMarkBitmap(GetRouteMarkView<Generation::Young>(), selected);
+        }
+        return GetMarkBitmap(GetRouteMarkView<Generation::Old>(), selected);
+    }
+
+    uint64_t GetRouteMarkEpoch(LiveInfo* face)
+    {
+        if (GetRouteMarkGeneration() == Generation::Young) {
+            return GetMarkEpoch(GetRouteMarkView<Generation::Young>(), face);
+        }
+        return GetMarkEpoch(GetRouteMarkView<Generation::Old>(), face);
+    }
+
+    uint64_t GetRouteMarkSnapshotEpoch() const
+    {
+        return GetRouteMarkGeneration() == Generation::Young
+            ? GetMarkSnapshotEpoch<Generation::Young>()
+            : GetMarkSnapshotEpoch<Generation::Old>();
+    }
+
+    size_t RecomputeRouteBitmapLiveBytes(LiveInfo* face)
+    {
+        if (face == nullptr) {
+            return 0;
+        }
+        if (GetRouteMarkGeneration() == Generation::Young) {
+            return face->RecomputeBitmapLiveBytes(GetRouteMarkView<Generation::Young>());
+        }
+        return face->RecomputeBitmapLiveBytes(GetRouteMarkView<Generation::Old>());
+    }
+
+    size_t GetRouteBitmapLiveBytes(LiveInfo* face)
+    {
+        if (face == nullptr) {
+            return 0;
+        }
+        if (GetRouteMarkGeneration() == Generation::Young) {
+            MarkView<Generation::Young> view = GetRouteMarkView<Generation::Young>();
+            return face->GetBitmapLiveBytes(view);
+        }
+        MarkView<Generation::Old> view = GetRouteMarkView<Generation::Old>();
+        return face->GetBitmapLiveBytes(view);
+    }
+
+    // permhit, probe-only: the route's own to-side plan. RouteInfo records a bare start
+    // address plus a used-bytes split (LiveInfo.h:246-248) and carries no epoch, so a
+    // to-region that was reclaimed and re-taken keeps answering the same geometry. Only
+    // the recorded plan, next to the region that lives at that address now, separates
+    // "no path ever filled this tip" from "a tip was filled and the memory was reused".
+    // Precedent: GetLiveInfo0ForProbe.
+    RouteInfo GetRouteInfoForProbe() const
+    {
+        return IsRouteInfoLifeCurrent() ? metadata.routeInfo : RouteInfo{};
+    }
+
+    // installdomain: if PrepareForwardable snapshotted a null liveInfo, GetRoute always
+    // rejects. After MarkObject created current liveInfo, bind it as ghost while still
+    // FORWARDABLE so the paint is route-visible (pointer-share, same as PrepareForwardable).
+    void BindLiveInfo0FromLiveIfNull()
+    {
+        if (metadata.liveInfo0 != nullptr) {
+            return;
+        }
+        LiveInfo* live = GetLiveInfo();
+        if (live == nullptr) {
+            return;
+        }
+        const uint64_t epoch = GetRouteMarkGeneration() == Generation::Young
+            ? live->GetMarkFace<Generation::Young>().epoch.load(std::memory_order_acquire)
+            : live->GetMarkFace<Generation::Old>().epoch.load(std::memory_order_acquire);
+        const RegionLifeId life = GetRegionLifeId();
+        __atomic_store_n(&metadata.routeMarkEpoch, epoch, __ATOMIC_RELAXED);
+        __atomic_store_n(&metadata.routeMarkLifeId, life, __ATOMIC_RELEASE);
+        RegionLifeClock::Publish(RegionLifeClock::Carrier::MARK_SNAPSHOT, life);
+        metadata.liveInfo0 = live;
+        if (metadata.regionEnd0 == 0 || metadata.regionEnd0 < metadata.regionEnd) {
+            metadata.regionEnd0 = metadata.regionEnd;
+        }
+    }
+
+    bool IsRetainedLifeCurrent() const
+    {
+        const RegionLifeId stamp = __atomic_load_n(&metadata.retainedLifeId, __ATOMIC_ACQUIRE);
+        return RegionLifeClock::Validate(RegionLifeClock::Carrier::RETAINED_COPY, stamp, GetRegionLifeId());
+    }
+
+    LiveInfo* GetRetainedLiveInfo() const
+    {
+        return IsRetainedLifeCurrent() ? metadata.retainedLiveInfo : nullptr;
+    }
+
+    RetainedLiveInfoState GetRetainedLiveInfoState() const
+    {
+        if (metadata.retainedLiveInfoState == RetainedLiveInfoState::NEVER_EXAMINED) {
+            return metadata.retainedLiveInfoState;
+        }
+        return IsRetainedLifeCurrent() ? metadata.retainedLiveInfoState : RetainedLiveInfoState::NEVER_EXAMINED;
+    }
+
+    uint64_t GetRetainedLiveInfoEpoch() const
+    {
+        return IsRetainedLifeCurrent() ? metadata.retainedLiveInfoEpoch : 0;
+    }
+
+    MAddress GetRetainedLiveInfoCoveredUpTo() const
+    {
+        return IsRetainedLifeCurrent() ? metadata.retainedLiveInfoCoveredUpTo : 0;
+    }
+
+    void StampRetainedSnapshot()
+    {
+        const RegionLifeId life = GetRegionLifeId();
+        __atomic_store_n(&metadata.retainedLifeId, life, __ATOMIC_RELEASE);
+        RegionLifeClock::Publish(RegionLifeClock::Carrier::RETAINED_COPY, life);
+    }
+
+    // holderlive (F2): the retained snapshot has to answer "was this holder live at the last
+    // mark" during every minor until the next major re-marks the region. It cannot do that as a
+    // borrowed LiveInfo*: LiveInfo lives in a per-tag arena that is recycled one GC cycle later
+    // (ForwardDataManager::ClearPreviousForwardData → ReleaseMemory), and UnbindPreviousLiveInfo
+    // (DoGarbageCollection, WCollector.cpp:6122 at 7924d28f) drops every borrowed pointer
+    // into it at the end of each major.
+    // Measured: 100% of remset holders read NEVER_EXAMINED, and for 2113/2115 of them the last
+    // thing that touched the snapshot was that unbind ([RETLIVE][why-never] lastOp=clrChecked).
+    // So keep our own copy of the bits — regionSize/512 bytes, allocated only for regions that
+    // are actually preserved. ZGC keeps the page livemap valid through relocation
+    // (zLiveMap.inline.hpp:38-40,86-90); this copy is the equivalent persistent carrier.
+    static constexpr bool RetainedOwnCopyEnabled() { return true; }
+
+    // Union of the mark faces that proved this holder live, plus resurrectBitmap.
+    // While the region is still young, that includes the current Young face
+    // (zPage.cpp:103-113 keeps the same livemap across flip-promote).
+    void CaptureRetainedMarkWords(MarkView<Generation::Old> view, LiveInfo* liveInfo)
+    {
+        FreeRetainedMarkWords();
+        if (IsLargeRegion()) {
+            // ZGC large pages contain one object at page start (zPage.inline.hpp:53-58),
+            // but still represent its liveness with the page livemap (228-240). Mirror
+            // our large-region mark/resurrect single bits in retained word bit zero.
+            // zPage.cpp:103-113 flip-promote only retargets generation_id; the
+            // livemap bits stay. In-place young promote captures before
+            // PromoteYoungRegion (RegionManager.cpp:3212), while the Old flag is
+            // still clear (RegionInfo.h:2540-2544). Union the current Young flag.
+            bool marked = GetMarkedRegionFlag(view) == 1 || metadata.isResurrected == 1;
+            // In-place young promote captures before MarkForwardingDone
+            // (RegionManager.cpp:3212). After a real copy, forwarding is already
+            // done (RegionManager.cpp:3544) and the Young bits name FROM copies
+            // that must not stay live.
+            if (IsYoungRegion() && !IsForwardingDone() &&
+                GetMarkedRegionFlag(GetMarkView<Generation::Young>()) == 1) {
+                marked = true;
+            }
+            if (!marked) {
+                return;
+            }
+            uint64_t* words = static_cast<uint64_t*>(malloc(sizeof(uint64_t)));
+            CHECK(words != nullptr);
+            words[0] = 1;
+            metadata.retainedMarkWords = words;
+            metadata.retainedMarkWordCnt = 1;
+            return;
+        }
+        if (liveInfo == nullptr) {
+            return;
+        }
+        LiveInfo::MarkFace& oldFace = liveInfo->GetMarkFace<Generation::Old>();
+        RegionBitmap* mark = oldFace.epoch.load(std::memory_order_acquire) == view.GetEpoch()
+            ? __atomic_load_n(&oldFace.bitmap, std::memory_order_acquire) : nullptr;
+        // Same seqnum retarget as zPage.cpp:103-113: while the region is still
+        // young, the Young face is the mark that proved these objects live.
+        // Do not copy it into Old (genface); only the retained snapshot unions
+        // it, and only before promotion so a later major cannot resurrect
+        // objects the Old closure left unmarked.
+        RegionBitmap* youngMark = nullptr;
+        if (IsYoungRegion() && !IsForwardingDone()) {
+            LiveInfo::MarkFace& youngFace = liveInfo->GetMarkFace<Generation::Young>();
+            youngMark =
+                youngFace.epoch.load(std::memory_order_acquire) == GetMarkSnapshotEpoch<Generation::Young>()
+                ? __atomic_load_n(&youngFace.bitmap, std::memory_order_acquire) : nullptr;
+        }
+        RegionBitmap* resurrect = liveInfo->resurrectBitmap;
+        size_t markWords = mark == nullptr ? 0 : mark->wordCnt.load(std::memory_order_acquire);
+        size_t youngWords = youngMark == nullptr ? 0 : youngMark->wordCnt.load(std::memory_order_acquire);
+        size_t resurrectWords = resurrect == nullptr ? 0 : resurrect->wordCnt.load(std::memory_order_acquire);
+        size_t wordCnt = std::max(markWords, std::max(youngWords, resurrectWords));
+        if (wordCnt == 0) {
+            return;
+        }
+        uint64_t* words = static_cast<uint64_t*>(malloc(wordCnt * sizeof(uint64_t)));
+        CHECK(words != nullptr);
+        for (size_t i = 0; i < wordCnt; ++i) {
+            uint64_t bits = 0;
+            if (i < markWords) {
+                bits |= mark->markWords[i].load(std::memory_order_acquire);
+            }
+            if (i < youngWords) {
+                bits |= youngMark->markWords[i].load(std::memory_order_acquire);
+            }
+            if (i < resurrectWords) {
+                bits |= resurrect->markWords[i].load(std::memory_order_acquire);
+            }
+            words[i] = bits;
+        }
+        metadata.retainedMarkWords = words;
+        metadata.retainedMarkWordCnt = static_cast<uint32_t>(wordCnt);
+    }
+
+    bool HasRetainedMarkWords() const
+    {
+        return IsRetainedLifeCurrent() && metadata.retainedMarkWords != nullptr;
+    }
+
+    // Same indexing as RegionBitmap::IsMarked.
+    bool RetainedMarkWordsSay(size_t offset) const
+    {
+        if (!IsRetainedLifeCurrent()) {
+            return false;
+        }
+        if (metadata.retainedMarkWords == nullptr) {
+            return false;
+        }
+        size_t bitIdx = offset / kMarkedBytesPerBit;
+        size_t wordIdx = bitIdx / kBitsPerWord;
+        if (wordIdx >= metadata.retainedMarkWordCnt) {
+            return false;
+        }
+        return (metadata.retainedMarkWords[wordIdx] &
+                (static_cast<uint64_t>(1) << (bitIdx % kBitsPerWord))) != 0;
+    }
+
+    void FreeRetainedMarkWords()
+    {
+        if (metadata.retainedMarkWords != nullptr) {
+            free(metadata.retainedMarkWords);
+            metadata.retainedMarkWords = nullptr;
+        }
+        metadata.retainedMarkWordCnt = 0;
+    }
+
+    uint32_t GetRetainedPreserveCount() const { return metadata.retainedPreserveCnt; }
+
+    uint32_t GetRetainedClearCount() const { return metadata.retainedClearCnt; }
+
+    uint8_t GetRetainedLastOp() const { return metadata.retainedLastOp; }
+
+    void PreserveRetainedLiveInfo()
+    {
+        metadata.retainedLiveInfo = GetLiveInfo();
+        metadata.retainedLiveInfoEpoch = GetSnapshotEpoch();
+        metadata.retainedLiveInfoCoveredUpTo = GetRegionAllocPtr();
+        if (RetainedOwnCopyEnabled()) {
+            CaptureRetainedMarkWords(GetMarkView<Generation::Old>(), metadata.retainedLiveInfo);
+        }
+        if (IsLargeRegion()) {
+            if (GetLiveByteCount() == 0) {
+                metadata.retainedLiveInfoState = GetRegionAllocPtr() <= GetRegionStart()
+                    ? RetainedLiveInfoState::SNAPSHOT_EMPTY
+                    : RetainedLiveInfoState::NEVER_EXAMINED;
+                NoteRetainedPreserve();
+                return;
+            }
+            metadata.retainedLiveInfoState = RetainedLiveInfoState::SNAPSHOT_VALID;
+            NoteRetainedPreserve();
+            return;
+        }
+        if (metadata.retainedLiveInfo != nullptr) {
+            metadata.retainedLiveInfoState = RetainedLiveInfoState::SNAPSHOT_VALID;
+            NoteRetainedPreserve();
+            return;
+        }
+        CHECK(GetLiveByteCount() == 0);
+        metadata.retainedLiveInfoState = GetRegionAllocPtr() <= GetRegionStart()
+            ? RetainedLiveInfoState::SNAPSHOT_EMPTY
+            : RetainedLiveInfoState::NEVER_EXAMINED;
+        NoteRetainedPreserve();
+    }
+
+    MAddress GetCensusBoundary() const
+    {
+        return GetRegionStart() + metadata.censusBoundaryOffset;
+    }
+
+    void StampCensusBoundary()
+    {
+        uintptr_t offset = GetRegionAllocPtr() - GetRegionStart();
+        metadata.censusBoundaryOffset =
+            static_cast<uint32_t>(std::min<uintptr_t>(offset, std::numeric_limits<uint32_t>::max()));
+    }
+
+    void ResetCensusBoundary() { metadata.censusBoundaryOffset = 0; }
+
+    void PreserveRetainedLiveInfoUpTo(MAddress boundary)
+    {
+        CHECK(boundary >= GetRegionStart() && boundary <= GetRegionAllocPtr());
+        if (IsLargeRegion()) {
+            PreserveRetainedLiveInfo();
+            return;
+        }
+        metadata.retainedLiveInfo = GetLiveInfo();
+        metadata.retainedLiveInfoEpoch = GetSnapshotEpoch();
+        metadata.retainedLiveInfoCoveredUpTo = boundary;
+        if (RetainedOwnCopyEnabled()) {
+            CaptureRetainedMarkWords(GetMarkView<Generation::Old>(), metadata.retainedLiveInfo);
+        }
+        if (metadata.retainedLiveInfo == nullptr && boundary > GetRegionStart()) {
+            metadata.retainedLiveInfoState = RetainedLiveInfoState::NEVER_EXAMINED;
+            NoteRetainedPreserve();
+            return;
+        }
+        metadata.retainedLiveInfoState = RetainedLiveInfoState::SNAPSHOT_VALID;
+        NoteRetainedPreserve();
+    }
+
+    ALWAYS_INLINE void PreserveRetainedLiveInfo(MAddress coveredUpToOverride)
+    {
+        if (coveredUpToOverride == GetRegionStart() && GetRegionAllocPtr() != GetRegionStart()) {
+            CHECK(GetLiveByteCount() == 0);
+            metadata.retainedLiveInfo = GetLiveInfo();
+            metadata.retainedLiveInfoEpoch = GetSnapshotEpoch();
+            metadata.retainedLiveInfoCoveredUpTo = coveredUpToOverride;
+            metadata.retainedLiveInfoState = RetainedLiveInfoState::SNAPSHOT_VALID;
+            NoteRetainedPreserve();
+            return;
+        }
+        CHECK(coveredUpToOverride == GetRegionAllocPtr());
+        PreserveRetainedLiveInfo();
+    }
+
+    // holderlive (F2): record the outcome of a Preserve* call. Called after the state word
+    // is already written, so the op code is derived from it rather than duplicated.
+    ALWAYS_INLINE void NoteRetainedPreserve()
+    {
+        ++metadata.retainedPreserveCnt;
+        switch (metadata.retainedLiveInfoState) {
+            case RetainedLiveInfoState::SNAPSHOT_VALID:
+                metadata.retainedLastOp = RETAINED_OP_PRESERVE_VALID;
+                break;
+            case RetainedLiveInfoState::SNAPSHOT_EMPTY:
+                metadata.retainedLastOp = RETAINED_OP_PRESERVE_EMPTY;
+                break;
+            default:
+                metadata.retainedLastOp = RETAINED_OP_PRESERVE_NEVER;
+                break;
+        }
+        // Publish the carrier stamp last: an acquiring reader that accepts
+        // this life also observes the retained pointer/state/owned words.
+        StampRetainedSnapshot();
+    }
+
+    // holderlive (F2): a clear only destroys information if there was a snapshot to destroy.
+    ALWAYS_INLINE void NoteRetainedClear(RetainedOp op)
+    {
+        if (metadata.retainedLiveInfoState == RetainedLiveInfoState::NEVER_EXAMINED) {
+            return;
+        }
+        ++metadata.retainedClearCnt;
+        metadata.retainedLastOp = static_cast<uint8_t>(op);
+    }
+
+    bool IsRetainedSnapshotValid() const
+    {
+        if (metadata.retainedLiveInfoState == RetainedLiveInfoState::NEVER_EXAMINED) {
+            return false;
+        }
+        if (!IsRetainedLifeCurrent()) {
+            return false;
+        }
+        // An owned copy is the persistent livemap carrier. Its lifetime is
+        // ended explicitly by ClearLiveInfo<Old> or region reinitialization;
+        // forwarding's epoch bump only retires the borrowed LiveInfo face.
+        if (metadata.retainedMarkWords != nullptr) {
+            return true;
+        }
+        return metadata.retainedLiveInfoEpoch == GetSnapshotEpoch();
+    }
+
     LiveInfo* GetOrAllocLiveInfo()
     {
         do {
@@ -167,6 +1002,12 @@ public:
                                             std::memory_order_relaxed)) {
                 LiveInfo* allocatedLiveInfo = ForwardDataManager::GetForwardDataManager().AllocateLiveInfo();
                 allocatedLiveInfo->bindedRegion = this;
+                allocatedLiveInfo->GetMarkFace<Generation::Young>().epoch = 0;
+                allocatedLiveInfo->GetMarkFace<Generation::Young>().bitmap = nullptr;
+                allocatedLiveInfo->GetMarkFace<Generation::Old>().epoch = 0;
+                allocatedLiveInfo->GetMarkFace<Generation::Old>().bitmap = nullptr;
+                allocatedLiveInfo->resurrectBitmap = nullptr;
+                allocatedLiveInfo->enqueueBitmap = nullptr;
                 __atomic_store_n(&metadata.liveInfo, allocatedLiveInfo, std::memory_order_release);
                 DLOG(REGION, "region %p@%#zx liveinfo %p", this, GetRegionStart(), metadata.liveInfo);
                 return allocatedLiveInfo;
@@ -176,37 +1017,54 @@ public:
         return nullptr;
     }
 
-    RegionBitmap* GetMarkBitmap()
+    template<Generation G>
+    RegionBitmap* GetMarkBitmap(MarkView<G> view)
     {
+        CHECK(view.GetRegion() == this);
+        if (!ValidateMarkView(view)) {
+            return nullptr;
+        }
         LiveInfo* liveInfo = GetLiveInfo();
         if (liveInfo == nullptr) {
             return nullptr;
         }
-        RegionBitmap* bitmap = __atomic_load_n(&liveInfo->markBitmap, std::memory_order_acquire);
+        LiveInfo::MarkFace& face = liveInfo->GetMarkFace<G>();
+        if (face.epoch.load(std::memory_order_acquire) != view.GetEpoch()) {
+            return nullptr;
+        }
+        RegionBitmap* bitmap = __atomic_load_n(&face.bitmap, std::memory_order_acquire);
         if (reinterpret_cast<MAddress>(bitmap) == LiveInfo::TEMPORARY_PTR) {
             return nullptr;
         }
         return bitmap;
     }
 
-    RegionBitmap* GetOrAllocMarkBitmap()
+    template<Generation G>
+    RegionBitmap* GetOrAllocMarkBitmap(MarkView<G> view)
     {
+        CHECK(view.GetRegion() == this);
+        CHECK(view.GetEpoch() == GetMarkSnapshotEpoch<G>());
         LiveInfo* liveInfo = GetOrAllocLiveInfo();
+        LiveInfo::MarkFace& face = liveInfo->GetMarkFace<G>();
         do {
-            RegionBitmap* bitmap = __atomic_load_n(&liveInfo->markBitmap, std::memory_order_acquire);
+            RegionBitmap* bitmap = __atomic_load_n(&face.bitmap, std::memory_order_acquire);
             if (UNLIKELY(reinterpret_cast<uintptr_t>(bitmap) == LiveInfo::TEMPORARY_PTR)) {
                 continue;
             }
             if (LIKELY(bitmap != nullptr)) {
+                CHECK(face.epoch.load(std::memory_order_acquire) == view.GetEpoch());
                 return bitmap;
             }
             RegionBitmap* newValue = reinterpret_cast<RegionBitmap*>(LiveInfo::TEMPORARY_PTR);
-            if (__atomic_compare_exchange_n(&liveInfo->markBitmap, &bitmap, newValue, false, std::memory_order_seq_cst,
+            if (__atomic_compare_exchange_n(&face.bitmap, &bitmap, newValue, false, std::memory_order_seq_cst,
                                             std::memory_order_relaxed)) {
                 RegionBitmap* allocated =
                     ForwardDataManager::GetForwardDataManager().AllocateRegionBitmap(GetRegionSize());
-                __atomic_store_n(&liveInfo->markBitmap, allocated, std::memory_order_release);
-                DLOG(REGION, "region %p@%#zx markbitmap %p", this, GetRegionStart(), metadata.liveInfo->markBitmap);
+                face.epoch.store(view.GetEpoch(), std::memory_order_release);
+                __atomic_store_n(&face.bitmap, allocated, std::memory_order_release);
+                MarkWhyProbe::NoteMarkBitmapAlloc(this, allocated);
+                DLOG(REGION, "region %p@%#zx markbitmap generation=%s bitmap=%p", this, GetRegionStart(),
+                     G == Generation::Young ? "young" : "old", allocated);
                 return allocated;
             }
         } while (true);
@@ -292,44 +1150,229 @@ public:
         return nullptr;
     }
 
-    void ResetMarkBit()
+    template<Generation G>
+    uint8_t GetMarkedRegionFlag(MarkView<G> view) const
     {
-        SetMarkedRegionFlag(0);
+        CHECK(view.GetRegion() == this);
+        if (!ValidateMarkView(view)) {
+            return 0;
+        }
+        // The large-region face is a single bit rather than a bitmap, but it is
+        // still scoped by the same per-generation mark epoch.  A captured view
+        // from an earlier cycle must not observe a later cycle's reused bit.
+        if (view.GetEpoch() != GetMarkSnapshotEpoch<G>()) {
+            return 0;
+        }
+        if (G == Generation::Young) {
+            return (__atomic_load_n(&metadata.youngSnapshotEpoch, std::memory_order_acquire) &
+                    YOUNG_LARGE_MARKED_BIT) != 0;
+        }
+        return metadata.regionStateBitField.GetAtomicValue(RegionStateBitPos::MARKED_REGION_FLAG, 1) != 0;
+    }
+
+    template<Generation G>
+    void SetMarkedRegionFlag(MarkView<G> view, uint8_t flag)
+    {
+        CHECK(view.GetRegion() == this);
+        CHECK(view.GetEpoch() == GetMarkSnapshotEpoch<G>());
+        if (G == Generation::Young) {
+            if (flag != 0) {
+                __atomic_fetch_or(&metadata.youngSnapshotEpoch, YOUNG_LARGE_MARKED_BIT, __ATOMIC_RELEASE);
+            } else {
+                __atomic_fetch_and(&metadata.youngSnapshotEpoch, YOUNG_SNAPSHOT_EPOCH_MASK, __ATOMIC_RELEASE);
+            }
+            return;
+        }
+        metadata.regionStateBitField.SetAtomicValue(RegionStateBitPos::MARKED_REGION_FLAG, 1, flag);
+    }
+
+    void ResetMarkBit(MarkView<Generation::Old> view)
+    {
+        SurvNodeDiag::NoteClear(this, SurvNodeDiag::CLEAR_RESET_MARK_BIT, false);
+        // CollectLargeGarbage calls this for a live large page immediately
+        // after mark. Preserve its one-object livemap before clearing the
+        // current face, just as ZPage keeps its live bit through relocation.
+        if (IsLargeRegion() && IsSurvivedObject(view, 0)) {
+            PreserveRetainedLiveInfo();
+        }
+        SetMarkedRegionFlag(view, 0);
         SetEnqueuedRegionFlag(0);
         SetResurrectedRegionFlag(0);
     }
 
-    bool MarkObject(const BaseObject* obj)
+    Generation GetOwnerGeneration() const
     {
+        return IsYoungRegion() ? Generation::Young : Generation::Old;
+    }
+
+    template<Generation G>
+    bool MarkFaceMatchesOwner() const
+    {
+        return GetOwnerGeneration() == G;
+    }
+
+    static bool PageOwnerVerifyCountOnly()
+    {
+        static const bool countOnly = []() {
+            const char* value = std::getenv("MRT_GCV2_VERIFY_PAGE_OWNER");
+            return value != nullptr && std::strcmp(value, "count") == 0;
+        }();
+        return countOnly;
+    }
+
+    static std::atomic<size_t>& PageOwnerMismatchAttempts()
+    {
+        static std::atomic<size_t> count{0};
+        return count;
+    }
+
+    static std::atomic<size_t>& PageOwnerMismatchFirstPaints()
+    {
+        static std::atomic<size_t> count{0};
+        return count;
+    }
+
+    static void ReportPageOwnerVerifyCounts()
+    {
+        std::fprintf(stderr, "[GCV2][page-owner] point=atexit mismatch_attempts=%zu first_paints=%zu mode=%s\n",
+                     PageOwnerMismatchAttempts().load(std::memory_order_relaxed),
+                     PageOwnerMismatchFirstPaints().load(std::memory_order_relaxed),
+                     PageOwnerVerifyCountOnly() ? "count" : "assert");
+        std::fflush(stderr);
+    }
+
+    static void EnsurePageOwnerVerifyAtexit()
+    {
+        static const bool installed = []() {
+            std::atexit([]() { ReportPageOwnerVerifyCounts(); });
+            return true;
+        }();
+        (void)installed;
+    }
+
+    template<Generation G>
+    void VerifyMarkFaceOwner(const BaseObject* obj, const char* site) const
+    {
+        EnsurePageOwnerVerifyAtexit();
+        if (LIKELY(MarkFaceMatchesOwner<G>())) {
+            return;
+        }
+        const size_t mismatch = PageOwnerMismatchAttempts().fetch_add(1, std::memory_order_relaxed) + 1;
+        if (PageOwnerVerifyCountOnly()) {
+            if (mismatch <= 8) {
+                std::fprintf(stderr,
+                             "[GCV2][page-owner] mismatch n=%zu site=%s object=%p region=%p owner=%s face=%s\n",
+                             mismatch, site, obj, this,
+                             GetOwnerGeneration() == Generation::Young ? "young" : "old",
+                             G == Generation::Young ? "young" : "old");
+                std::fflush(stderr);
+            }
+            return;
+        }
+        CHECK_DETAIL(false, "mark face does not match page owner site=%s object=%p region=%p owner=%s face=%s",
+                     site, obj, this, GetOwnerGeneration() == Generation::Young ? "young" : "old",
+                     G == Generation::Young ? "young" : "old");
+    }
+
+    template<Generation G>
+    void NotePageOwnerFirstPaint() const
+    {
+        if (UNLIKELY(!MarkFaceMatchesOwner<G>())) {
+            PageOwnerMismatchFirstPaints().fetch_add(1, std::memory_order_relaxed);
+        }
+    }
+
+    // livesame / ZGC zMark.inline.hpp + zBitMap.inline.hpp:inc_live — count only on 0→1.
+    // MarkBits returns true if already marked; false on first paint. AddLive only then.
+    template<Generation G>
+    bool MarkObject(MarkView<G> view, const BaseObject* obj)
+    {
+        CHECK(view.GetRegion() == this);
+        if (!PlausibleManagedObjectGate("RegionInfo::MarkObject.unsized", const_cast<BaseObject*>(obj))) {
+            // Rejected objects are deliberately reported as already marked: callers must not
+            // enqueue/scan them. If the gate ever rejects a real object, its liveness and
+            // transitive reference closure are the work lost by this fail-closed branch.
+            return true;
+        }
+        VerifyMarkFaceOwner<G>(obj, "RegionInfo::MarkObject.unsized");
         if (IsLargeRegion()) {
-            if (metadata.isMarked != 1) {
-                SetMarkedRegionFlag(1);
+            if (GetMarkedRegionFlag(view) != 1) {
+                SetMarkedRegionFlag(view, 1);
+                AddLiveByteCount(obj->GetSize());
+                NotePageOwnerFirstPaint<G>();
                 return false;
             }
             return true;
         }
         U32 objSize = obj->GetSize();
-        size_t offset = GetAddressOffset(reinterpret_cast<MAddress>(obj));
-        size_t regionSize = offset + GetRegionEnd() - reinterpret_cast<MAddress>(obj);
-        bool marked = GetOrAllocMarkBitmap()->MarkBits(offset, objSize, regionSize);
-        CHECK(IsMarkedObject(offset));
-        return marked;
+        MAddress objAddr = reinterpret_cast<MAddress>(obj);
+        MAddress regionStart = GetRegionStart();
+        MAddress regionEnd = GetRegionEnd();
+        CheckObjectSize(obj, objSize, regionStart, regionEnd);
+        size_t offset = objAddr - regionStart;
+        size_t regionSize = regionEnd - regionStart;
+        RegionBitmap* writeBm = GetOrAllocMarkBitmap(view);
+        SealCheck::NotePaint(this, offset, objSize, "RegionInfo::MarkObject");
+        bool already = writeBm->MarkBits(offset, objSize, regionSize);
+        if (!already) {
+            AddLiveByteCount(objSize);
+            NotePageOwnerFirstPaint<G>();
+        }
+        (void)TagReuseProbe::NoteMarkBitsSticky(this, offset, true, "MarkObject_sized0", G);
+        (void)MarkWhyProbe::NoteAfterMarkBits(this, obj, offset, objSize, regionSize, writeBm, already,
+                                              "MarkObject_sized0", G);
+        CHECK(IsMarkedObject(view, offset));
+        return already;
     }
 
-    bool MarkObject(const BaseObject* obj, size_t objSize)
+    template<Generation G>
+    bool MarkObject(MarkView<G> view, const BaseObject* obj, size_t objSize)
     {
+        CHECK(view.GetRegion() == this);
+        VerifyMarkFaceOwner<G>(obj, "RegionInfo::MarkObject.sized");
         if (IsLargeRegion()) {
-            if (metadata.isMarked != 1) {
-                SetMarkedRegionFlag(1);
+            if (GetMarkedRegionFlag(view) != 1) {
+                SetMarkedRegionFlag(view, 1);
+                AddLiveByteCount(objSize);
+                NotePageOwnerFirstPaint<G>();
                 return false;
             }
             return true;
         }
-        size_t offset = GetAddressOffset(reinterpret_cast<MAddress>(obj));
-        size_t regionSize = offset + GetRegionEnd() - reinterpret_cast<MAddress>(obj);
-        bool marked = GetOrAllocMarkBitmap()->MarkBits(offset, objSize, regionSize);
-        CHECK(IsMarkedObject(offset));
-        return marked;
+        MAddress objAddr = reinterpret_cast<MAddress>(obj);
+        MAddress regionStart = GetRegionStart();
+        MAddress regionEnd = GetRegionEnd();
+        CheckObjectSize(obj, objSize, regionStart, regionEnd);
+        size_t offset = objAddr - regionStart;
+        size_t regionSize = regionEnd - regionStart;
+        RegionBitmap* writeBm = GetOrAllocMarkBitmap(view);
+        SealCheck::NotePaint(this, offset, objSize, "RegionInfo::MarkObject_sized");
+        bool already = writeBm->MarkBits(offset, objSize, regionSize);
+        if (!already) {
+            AddLiveByteCount(objSize);
+            NotePageOwnerFirstPaint<G>();
+        }
+        (void)TagReuseProbe::NoteMarkBitsSticky(this, offset, true, "MarkObject_sized", G);
+        (void)MarkWhyProbe::NoteAfterMarkBits(this, obj, offset, objSize, regionSize, writeBm, already,
+                                              "MarkObject_sized", G);
+        CHECK(IsMarkedObject(view, offset));
+        return already;
+    }
+
+    bool MarkObjectByOwner(const BaseObject* obj)
+    {
+        if (IsYoungRegion()) {
+            return MarkObject(GetMarkView<Generation::Young>(), obj);
+        }
+        return MarkObject(GetMarkView<Generation::Old>(), obj);
+    }
+
+    bool MarkObjectByOwner(const BaseObject* obj, size_t objSize)
+    {
+        if (IsYoungRegion()) {
+            return MarkObject(GetMarkView<Generation::Young>(), obj, objSize);
+        }
+        return MarkObject(GetMarkView<Generation::Old>(), obj, objSize);
     }
 
     bool ResurrectObject(const BaseObject* obj, size_t offset)
@@ -337,19 +1380,38 @@ public:
         if (IsLargeRegion()) {
             if (metadata.isResurrected != 1) {
                 SetResurrectedRegionFlag(1);
+                AddLiveByteCount(obj->GetSize());
                 return false;
             }
             return true;
         }
         U32 objSize = obj->GetSize();
-        size_t regionSize = offset + GetRegionEnd() - reinterpret_cast<MAddress>(obj);
-        bool marked = GetOrAllocResurrectBitmap()->MarkBits(offset, objSize, regionSize);
-        CHECK(IsResurrectedObject(offset));
-        return marked;
+        MAddress regionStart = GetRegionStart();
+        MAddress regionEnd = GetRegionEnd();
+        CheckObjectSize(obj, objSize, regionStart, regionEnd);
+        size_t regionSize = regionEnd - regionStart;
+        RegionBitmap* bitmap = GetOrAllocResurrectBitmap();
+        SealCheck::NotePaint(this, offset, objSize, "RegionInfo::ResurrectObject");
+        bool already = bitmap->MarkBits(offset, objSize, regionSize);
+        if (!already) {
+            AddLiveByteCount(objSize);
+        }
+        CHECK(bitmap->IsMarked(offset));
+        return already;
     }
 
     bool EnqueueObject(const BaseObject* obj, size_t offset)
     {
+        if (IsFreeRegion() || IsGarbageRegion() || GetRegionType() == RegionType::FREE_REGION) {
+            return true;
+        }
+        if (!PlausibleManagedObjectGate("RegionInfo::EnqueueObject", const_cast<BaseObject*>(obj))) {
+            // Rejected objects are reported as already enqueued: ShouldEnqueue
+            // treats true as "do not SATB-push". Lost work is the SATB entry and
+            // the later mark/trace of this address; if the gate ever rejects a
+            // real object, that object's SATB-driven liveness is the miss.
+            return true;
+        }
         if (IsLargeRegion()) {
             if (metadata.isEnqueued != 1) {
                 SetEnqueuedRegionFlag(1);
@@ -358,10 +1420,16 @@ public:
             return true;
         }
         U32 objSize = obj->GetSize();
-        size_t regionSize = offset + GetRegionEnd() - reinterpret_cast<MAddress>(obj);
+        MAddress regionStart = GetRegionStart();
+        MAddress regionEnd = GetRegionEnd();
+        CheckObjectSize(obj, objSize, regionStart, regionEnd);
+        size_t regionSize = regionEnd - regionStart;
         CHECK(regionSize > 0);
-        bool marked = GetOrAllocEnqueueBitmap()->MarkBits(offset, objSize, regionSize);
-        CHECK(IsEnqueuedObject(offset));
+        RegionBitmap* bitmap = GetOrAllocEnqueueBitmap();
+        // enqueue face is not the route geometry face; still report if mark-face sealed.
+        SealCheck::NotePaint(this, offset, objSize, "RegionInfo::EnqueueObject");
+        bool marked = bitmap->MarkBits(offset, objSize, regionSize);
+        CHECK(bitmap->IsMarked(offset));
         return marked;
     }
 
@@ -390,45 +1458,184 @@ public:
         return resurrectBitmap->IsMarked(offset);
     }
 
-    bool IsMarkedObject(const BaseObject* obj)
+    // markepoch: count reads of a LiveInfo whose markEpoch != region snapshotEpoch.
+    // Default product still returns false (same as "no bit"); MRT_GCV2_MARK_EPOCH_ASSERT=1 aborts.
+    // Design: ops/design/MARK_EPOCH_DISCIPLINE.md §5 (ZGC zLiveMap.inline.hpp:41-43).
+    // Hot path: epoch match is load+cmp only (no atomic). Stale path always counts.
+    static std::atomic<size_t> markEpochStaleReadCount;
+    static std::atomic<bool> markEpochAtexitInstalled;
+
+    // oneseq: per-region epoch / LIVE_AUTHORITY currency probes (default-off counters and dump).
+    static std::atomic<size_t> oneseqBumpClearYoung;
+    static std::atomic<size_t> oneseqBumpClearOld;
+    static std::atomic<size_t> oneseqBumpInitRegion;
+    static std::atomic<size_t> oneseqBumpResetAfterForward;
+    static std::atomic<size_t> oneseqIsKnownEmptyCalls;
+    static std::atomic<size_t> oneseqAuthBlocksReclaim;   // !auth && emptyByEpoch
+    static std::atomic<size_t> oneseqAuthAndEmpty;        // auth && emptyByEpoch (= IsKnownEmpty true)
+    static std::atomic<size_t> oneseqAuthNotEmpty;        // auth && !emptyByEpoch
+    static std::atomic<size_t> oneseqNoAuthNotEmpty;      // !auth && !emptyByEpoch
+    static std::atomic<bool> oneseqAtexitInstalled;
+    // cjpmnull2: ZGC empty = this-cycle marked ∧ live==0. Epoch mismatch / no face
+    // is "not marked this cycle", not empty (zPage.inline.hpp:223-225).
+    static std::atomic<size_t> ikeTrueEmpty;
+    static std::atomic<size_t> ikeConservativeKeep;
+    static std::atomic<size_t> ikeConservativeKeepBytes;
+    static std::atomic<size_t> ikeNullFaceKeep;
+    static std::atomic<size_t> ikeEpochKeep;
+    static std::atomic<bool> ikeAtexitInstalled;
+
+    static bool MarkEpochAssertEnabled()
     {
-        if (IsLargeRegion()) {
-            return (metadata.isMarked == 1);
+        return false;
+    }
+
+    static void ReportMarkEpochCounts(const char* point)
+    {
+        const size_t stale = markEpochStaleReadCount.load(std::memory_order_relaxed);
+        std::fprintf(stderr, "[GCV2][mark-epoch] point=%s stale_read=%zu env_assert=%d\n",
+                     point != nullptr ? point : "?", stale, MarkEpochAssertEnabled() ? 1 : 0);
+        std::fflush(stderr);
+    }
+
+    static void EnsureMarkEpochAtexit()
+    {
+        bool expected = false;
+        if (markEpochAtexitInstalled.compare_exchange_strong(expected, true, std::memory_order_relaxed)) {
+            std::atexit([]() { ReportMarkEpochCounts("atexit"); });
         }
-        RegionBitmap* markBitmap = GetMarkBitmap();
-        if (markBitmap == nullptr) {
+    }
+
+    // Returns false if face is stale (counts as unmarked). true ⇒ epoch matches; caller checks bits.
+    template<Generation G>
+    bool NoteMarkEpochOnRead(MarkView<G> view, LiveInfo* liveInfo)
+    {
+        CHECK(view.GetRegion() == this);
+        if (!ValidateMarkView(view)) {
+            return false;
+        }
+        if (liveInfo == nullptr) {
+            return false;
+        }
+        LiveInfo::MarkFace& markFace = liveInfo->GetMarkFace<G>();
+        RegionBitmap* bitmap = __atomic_load_n(&markFace.bitmap, std::memory_order_acquire);
+        // A LiveInfo is now only the carrier for two lazy faces.  The other
+        // generation may have allocated the carrier while this face has never
+        // existed; absence is ordinary "unmarked", not a stale-face read.
+        if (bitmap == nullptr || reinterpret_cast<MAddress>(bitmap) == LiveInfo::TEMPORARY_PTR) {
+            return false;
+        }
+        const uint64_t face = markFace.epoch.load(std::memory_order_acquire);
+        const uint64_t now = GetMarkSnapshotEpoch<G>();
+        if (view.GetEpoch() == now && face == view.GetEpoch()) {
+            return true;
+        }
+        EnsureMarkEpochAtexit();
+        size_t n = markEpochStaleReadCount.fetch_add(1, std::memory_order_relaxed) + 1;
+        if (n <= 8) {
+            LOG(RTLOG_ERROR,
+                "[GCV2][mark-epoch] stale_read generation=%s region=%p "
+                "viewEpoch=%llu faceEpoch=%llu regionEpoch=%llu n=%zu",
+                G == Generation::Young ? "young" : "old", this,
+                static_cast<unsigned long long>(view.GetEpoch()), static_cast<unsigned long long>(face),
+                static_cast<unsigned long long>(now), n);
+        }
+        return false;
+    }
+
+    template<Generation G>
+    bool IsMarkedObject(MarkView<G> view, const BaseObject* obj)
+    {
+        CHECK(view.GetRegion() == this);
+        if (!ValidateMarkView(view)) {
             return false;
         }
         size_t offset = GetAddressOffset(reinterpret_cast<MAddress>(obj));
-        return markBitmap->IsMarked(offset);
-    }
-
-    bool IsMarkedObject(size_t offset)
-    {
-        if (IsLargeRegion()) {
-            return (metadata.isMarked == 1);
+        if (view.GetEpoch() == GetMarkSnapshotEpoch<G>() && AllocatedAfterMarkStart(offset)) {
+            return true;
         }
-        RegionBitmap* markBitmap = GetMarkBitmap();
-        if (markBitmap == nullptr) {
+        if (IsLargeRegion()) {
+            return GetMarkedRegionFlag(view) == 1;
+        }
+        LiveInfo* liveInfo = GetLiveInfo();
+        if (liveInfo == nullptr) {
+            return false;
+        }
+        // markepoch §5: stale face ⇒ unmarked (ZGC is_marked false before bit test).
+        if (!NoteMarkEpochOnRead(view, liveInfo)) {
+            return false;
+        }
+        RegionBitmap* markBitmap =
+            __atomic_load_n(&liveInfo->GetMarkFace<G>().bitmap, std::memory_order_acquire);
+        if (markBitmap == nullptr || reinterpret_cast<MAddress>(markBitmap) == LiveInfo::TEMPORARY_PTR) {
             return false;
         }
         return markBitmap->IsMarked(offset);
     }
 
-    bool IsSurvivedObject(size_t offset)
+    template<Generation G>
+    bool IsMarkedObject(MarkView<G> view, size_t offset)
     {
+        CHECK(view.GetRegion() == this);
+        if (!ValidateMarkView(view)) {
+            return false;
+        }
+        if (view.GetEpoch() == GetMarkSnapshotEpoch<G>() && AllocatedAfterMarkStart(offset)) {
+            return true;
+        }
         if (IsLargeRegion()) {
-            return metadata.isMarked == 1 || metadata.isResurrected == 1;
+            return GetMarkedRegionFlag(view) == 1;
         }
+        LiveInfo* liveInfo = GetLiveInfo();
+        if (liveInfo == nullptr) {
+            return false;
+        }
+        if (!NoteMarkEpochOnRead(view, liveInfo)) {
+            return false;
+        }
+        RegionBitmap* markBitmap =
+            __atomic_load_n(&liveInfo->GetMarkFace<G>().bitmap, std::memory_order_acquire);
+        if (markBitmap == nullptr || reinterpret_cast<MAddress>(markBitmap) == LiveInfo::TEMPORARY_PTR) {
+            return false;
+        }
+        return markBitmap->IsMarked(offset);
+    }
 
-        RegionBitmap* markBitmap = GetMarkBitmap();
-        if (markBitmap && markBitmap->IsMarked(offset)) {
+    template<Generation G>
+    bool IsSurvivedObject(MarkView<G> view, size_t offset)
+    {
+        CHECK(view.GetRegion() == this);
+        if (!ValidateMarkView(view)) {
+            return false;
+        }
+        if (view.GetEpoch() == GetMarkSnapshotEpoch<G>() && AllocatedAfterMarkStart(offset)) {
             return true;
         }
+        if (IsLargeRegion()) {
+            return GetMarkedRegionFlag(view) == 1 ||
+                (G == Generation::Old && metadata.isResurrected == 1);
+        }
 
-        RegionBitmap* resurrectBitmap = GetResurrectBitmap();
-        if (resurrectBitmap && resurrectBitmap->IsMarked(offset)) {
-            return true;
+        LiveInfo* liveInfo = GetLiveInfo();
+        if (liveInfo == nullptr) {
+            return false;
+        }
+        if (NoteMarkEpochOnRead(view, liveInfo)) {
+            RegionBitmap* markBitmap =
+                __atomic_load_n(&liveInfo->GetMarkFace<G>().bitmap, std::memory_order_acquire);
+            if (markBitmap != nullptr && reinterpret_cast<MAddress>(markBitmap) != LiveInfo::TEMPORARY_PTR &&
+                markBitmap->IsMarked(offset)) {
+                return true;
+            }
+        }
+        if (G == Generation::Old) {
+            RegionBitmap* resurrectBitmap =
+                __atomic_load_n(&liveInfo->resurrectBitmap, std::memory_order_acquire);
+            if (resurrectBitmap != nullptr &&
+                reinterpret_cast<MAddress>(resurrectBitmap) != LiveInfo::TEMPORARY_PTR &&
+                resurrectBitmap->IsMarked(offset)) {
+                return true;
+            }
         }
         return false;
     }
@@ -493,42 +1700,83 @@ public:
     {
         UnitInfo::totalUnitCount = nUnit;
         UnitInfo::heapStartAddress = heapAddress;
+        // gatehot: UNIT_SIZE is page size (power of two). ctz → shift for GetUnitIdxAt.
+        CHECK(UNIT_SIZE != 0 && (UNIT_SIZE & (UNIT_SIZE - 1)) == 0);
+        UnitInfo::unitSizeShift = static_cast<size_t>(__builtin_ctzll(static_cast<unsigned long long>(UNIT_SIZE)));
+        // routedest: per-unit metadata is per-page metadata, so any growth here is a
+        // percentage of the whole heap. Nobody had measured it; report it once so the cost
+        // of routeDestHold (one byte, expected to land in existing padding) is a number
+        // rather than an assumption. Paired with the static_assert below.
+        // routedest: per-unit metadata is per-page metadata, so growth here is a percentage
+        // of the whole heap. Measured on x86_64 at main 0626ab83: 192 bytes without
+        // routeDestHold, and 192 with it at its current placement — the flag is free.
+        // Pinned so that a future field addition has to be a deliberate edit rather than a
+        // silent heap-wide cost, and so that anyone who moves routeDestHold "somewhere more
+        // readable" finds out immediately.
+        // genface: the independent young mark epoch costs 8 bytes per 4 KiB
+        // unit (0.195% of heap capacity); both bitmap faces remain lazy.
+        // markwater: markStartAllocPtr sits next to regionEnd0 (same snapshot
+        // format). 8 bytes per 4 KiB unit is another 0.195% of heap capacity.
+        // lifeclock: independent 64-bit region identity plus the five region-local
+        // carrier stamps and RouteInfo's stamp grow metadata 208 -> 272 bytes.
+        // The 64-byte delta is 1.5625% per 4 KiB unit; it buys a non-wrapping
+        // incarnation proof instead of another bounded ABA window.
+        static_assert(sizeof(UnitInfo) == 272, "per-unit metadata size changed; it is per-page, so price it");
+        if (RouteDestHold::AccountOn()) {
+            LOG(RTLOG_ERROR,
+                "[GCV2][routedest] unit_metadata sizeof_UnitInfo=%zu unit_size=%zu overhead_permille=%zu",
+                sizeof(UnitInfo), static_cast<size_t>(UNIT_SIZE), (sizeof(UnitInfo) * 1000) / UNIT_SIZE);
+        }
     }
 
     static RegionInfo* GetRegionInfo(uint32_t idx)
     {
         UnitInfo* unit = RegionInfo::UnitInfo::GetUnitInfo(idx);
-        if (static_cast<UnitRole>(unit->GetMetadata().unitRole) == UnitRole::SUBORDINATE_UNIT) {
+        if (LoadUnitRole(unit) == UnitRole::SUBORDINATE_UNIT) {
             return unit->GetMetadata().ownerRegion;
         }
         return reinterpret_cast<RegionInfo*>(unit);
     }
 
-    static RegionInfo* GetRegionInfoAt(uintptr_t allocAddr)
+    // Safely query a heap address whose unit may no longer have a live owning region.
+    ALWAYS_INLINE static RegionInfo* TryGetRegionInfoAt(uintptr_t allocAddr)
     {
         UnitInfo* unit = RegionInfo::UnitInfo::GetUnitInfoAt(allocAddr);
-        if (static_cast<UnitRole>(unit->GetMetadata().unitRole) == UnitRole::SUBORDINATE_UNIT) {
+        if (LoadUnitRole(unit) == UnitRole::SUBORDINATE_UNIT) {
             return unit->GetMetadata().ownerRegion;
         }
         return reinterpret_cast<RegionInfo*>(unit);
+    }
+
+    // The caller must know that allocAddr resolves to an extant region owner.
+    static RegionInfo* GetRegionInfoAt(uintptr_t allocAddr)
+    {
+        RegionInfo* region = TryGetRegionInfoAt(allocAddr);
+        CHECK_DETAIL(region != nullptr, "heap address %#zx has no owning region", allocAddr);
+        return region;
     }
 
     static bool InGhostFromRegion(BaseObject* obj)
     {
-        UnitInfo* unit = RegionInfo::UnitInfo::GetUnitInfoAt(reinterpret_cast<uintptr_t>(obj));
-        return unit->GetMetadata().inGhostFromRegion != 0;
+        return GetGhostFromRegionAt(reinterpret_cast<uintptr_t>(obj)) != nullptr;
     }
 
     static RegionInfo* GetGhostFromRegionAt(uintptr_t allocAddr)
     {
         UnitInfo* unit = RegionInfo::UnitInfo::GetUnitInfoAt(allocAddr);
-        if (unit->GetMetadata().inGhostFromRegion == 0) {
+        if (unit->GetMetadata().regionStateBitField.GetAtomicValue(
+                RegionStateBitPos::IN_GHOST_FROM_REGION_FLAG, 1) == 0) {
             return nullptr;
         }
-        if (static_cast<UnitRole>(unit->GetMetadata().unitRole0) == UnitRole::SUBORDINATE_UNIT) {
-            return unit->GetMetadata().ownerRegion0;
+        RegionInfo* region = LoadUnitRole0(unit) == UnitRole::SUBORDINATE_UNIT
+            ? unit->GetMetadata().ownerRegion0 : reinterpret_cast<RegionInfo*>(unit);
+        if (region == nullptr ||
+            !RegionLifeClock::Validate(RegionLifeClock::Carrier::GHOST,
+                                       __atomic_load_n(&unit->GetMetadata().ghostLifeId, __ATOMIC_ACQUIRE),
+                                       region->GetRegionLifeId())) {
+            return nullptr;
         }
-        return reinterpret_cast<RegionInfo*>(unit);
+        return region;
     }
 
     static void InitFreeRegion(size_t unitIdx, size_t nUnit)
@@ -552,12 +1800,42 @@ public:
 
     static MAddress GetUnitAddress(size_t unitIdx) { return UnitInfo::GetUnitAddress(unitIdx); }
 
-    static void ClearUnits(size_t idx, size_t cnt)
+    static void WaitCopiedBeforePayloadWipe(RegionInfo* region, const char* site)
+    {
+        if (region == nullptr) {
+            return;
+        }
+        const int32_t inflight = region->CopyInflight();
+        if (inflight == 0) {
+            return;
+        }
+        std::fprintf(stderr,
+                     "[GCV2][lockstate] ZERO_UNDER_COPY site=%s inflight=%d region=%p start=%#zx "
+                     "regionType=%u unitRole=%u copyWait=1\n",
+                     site != nullptr ? site : "?", inflight, static_cast<void*>(region),
+                     static_cast<size_t>(region->GetRegionStart()),
+                     static_cast<unsigned>(region->GetRegionType()),
+                     static_cast<unsigned>(region->GetUnitRole()));
+        std::fflush(stderr);
+        region->WaitCopiedInflight();
+    }
+
+    static void ClearUnits(size_t idx, size_t cnt,
+                           FillerZeroDiag::Site site = FillerZeroDiag::Site::CLEAR_UNITS)
     {
         uintptr_t unitAddress = RegionInfo::GetUnitAddress(idx);
         size_t size = cnt * RegionInfo::UNIT_SIZE;
+        RegionInfo* wipeRegion = RegionInfo::TryGetRegionInfoAt(unitAddress);
+        WaitCopiedBeforePayloadWipe(wipeRegion, "ClearUnits");
+        CHECK_DETAIL(FromPageDetach::FromPageDetachCheck(wipeRegion,
+                                                        FromPageDetach::Site::CLEAR_UNITS),
+                     "CJRT_FROM_REUSE_GATE bypass reached ClearUnits idx=%zu units=%zu", idx, cnt);
         DLOG(REGION, "clear dirty units[%zu+%zu, %zu) @[%#zx+%zu, %#zx)", idx, cnt, idx + cnt, unitAddress, size,
              RegionInfo::GetUnitAddress(idx + cnt));
+        // gcfwdfix: ring of zeroed ranges for WAS_LIVE_BEFORE_CLEAR (MRT_GCV2_TRACE_CLEAR=1).
+        TraceClear::NoteRange(static_cast<MAddress>(unitAddress), size, "clear_units", nullptr, 0);
+        HeldFreeDiag::NoteClearRange(unitAddress, size);
+        FillerZeroDiag::Note(site, unitAddress, size);
         MapleRuntime::MemorySet(unitAddress, size, 0, size);
     }
 
@@ -565,6 +1843,11 @@ public:
     {
         void* unitAddress = reinterpret_cast<void*>(RegionInfo::GetUnitAddress(idx));
         size_t size = cnt * RegionInfo::UNIT_SIZE;
+        RegionInfo* wipeRegion = RegionInfo::TryGetRegionInfoAt(reinterpret_cast<uintptr_t>(unitAddress));
+        WaitCopiedBeforePayloadWipe(wipeRegion, "ReleaseUnits");
+        CHECK_DETAIL(FromPageDetach::FromPageDetachCheck(wipeRegion,
+                         FromPageDetach::Site::RELEASE_UNITS),
+                     "CJRT_FROM_REUSE_GATE bypass reached ReleaseUnits idx=%zu units=%zu", idx, cnt);
         DLOG(REGION, "release physical memory for units [%zu+%zu, %zu) @[%p+%zu, 0x%zx)", idx, cnt, idx + cnt,
              unitAddress, size, RegionInfo::GetUnitAddress(idx + cnt));
 #if defined(_WIN64)
@@ -587,7 +1870,7 @@ public:
 #endif
     }
 
-    BaseObject* GetFirstObject() const { return reinterpret_cast<BaseObject*>(GetRegionStart()); }
+    BaseObject* GetFirstObject() const { return from_region_addr(GetRegionStart()); }
 
     bool IsEmpty() const
     {
@@ -600,6 +1883,17 @@ public:
         MAddress regionStart = GetRegionStart();
         DCHECK(metadata.regionEnd > regionStart);
         return metadata.regionEnd - regionStart;
+    }
+
+    // Read-only, defensive extent for the phase-1 detach census. InitRegionInfo
+    // calls the census before metadata.regionEnd is installed on a never-used
+    // unit, so that case is one unit rather than an underflowed stale extent.
+    size_t GetRegionSizeForDetachCheck() const
+    {
+        const MAddress start = GetRegionStart();
+        const MAddress end = metadata.regionEnd;
+        const MAddress heapEnd = UnitInfo::heapStartAddress + UnitInfo::totalUnitCount * UNIT_SIZE;
+        return end > start && end <= heapEnd ? end - start : UNIT_SIZE;
     }
 
     size_t GetUnitCount() const { return GetRegionSize() / UNIT_SIZE; }
@@ -629,9 +1923,19 @@ public:
     void VisitAllObjects(const std::function<void(BaseObject*)>&& func);
     bool VisitLiveObjectsUntilFalse(const std::function<bool(BaseObject*)>&& func);
 
+    // After-copy Exempt parks FORWARDED residuals (zRelocate.cpp:1041-1047).
+    // CSet empty-select still needs those headers; strip only at the next install,
+    // after the table is retired (zRelocationSet.cpp:91-96). A leftover FORWARDED
+    // with no table entry makes ForwardObjectImpl return PlanRoute's uncopied dest
+    // (si_addr=0x8 / near-golden drift). Does not touch LOCKED (live copier).
+    void ClearRelocationResiduals();
+
     // reset so that this region can be reused for allocation
     void InitFreeUnits()
     {
+        CHECK_DETAIL(FromPageDetach::FromPageDetachCheck(this, FromPageDetach::Site::INIT_FREE_UNITS),
+                     "CJRT_FROM_REUSE_GATE bypass reached InitFreeUnits region=%p", this);
+        FromPageDetach::ReusePermitScope permit;
         size_t nUnit = GetUnitCount();
         UnitInfo* unit = reinterpret_cast<UnitInfo*>(this);
         UnitInfo::UnitInfoArray array = UnitInfo::UnitInfoArray(unit, nUnit);
@@ -642,30 +1946,295 @@ public:
 
     void SetRouteInfo(uintptr_t to1, uint32_t to1used = 0, uint32_t to2 = RouteInfo::INVALID_VALUE)
     {
-        metadata.routeInfo.SetRouteInfo(to1, to1used, to2);
+        const RegionLifeId life = GetRegionLifeId();
+        metadata.routeInfo.SetRouteInfo(to1, to1used, to2, life);
+        RegionLifeClock::Publish(RegionLifeClock::Carrier::ROUTE_INFO, life);
     }
 
-    BaseObject* GetRoute(BaseObject* fromObj)
+    bool IsRouteInfoLifeCurrent() const
+    {
+        return RegionLifeClock::Validate(RegionLifeClock::Carrier::ROUTE_INFO,
+                                         metadata.routeInfo.GetLifeId(), GetRegionLifeId());
+    }
+
+    // Sole mint of RouteTicket. Guard = survived on liveInfo0 AND object start.
+    // MarkBits paints multi-byte ranges (LiveInfo.h MarkBits); IsSurvivedObject(interior)
+    // is true for every 8B covered by a marked object, but VisitLive/Copy only run on
+    // size-walk starts (RegionManager.cpp VisitLiveObjectsUntilFalse). Admit⊃Copy at
+    // address granularity is the permanent hole (permrate/permwho). ROUTE_DOMAIN.md §0-②.
+    // Start predicate = tip word looks like TypeInfo (same reject set as
+    // PlausibleManagedObjectGate tip arm) — interiors carry field data, not TypeInfo*.
+    // Miss = empty OptionalRouteTicket; never silent derive.
+    // Anchor: ops/design/ROUTE_DOMAIN.md §2; former guard RegionInfo.h GetRoute.
+    ATTR_WARN_UNUSED OptionalRouteTicket AdmitForRoute(BaseObject* fromObj)
     {
         MAddress fromAddress = reinterpret_cast<MAddress>(fromObj);
-        uint64_t preLiveBytes = GetPreLiveBytesInGhostRegion(fromAddress);
-        MAddress toAddr = metadata.routeInfo.GetRoute(preLiveBytes);
-        return reinterpret_cast<BaseObject*>(toAddr);
+        size_t offset = GetAddressOffset(fromAddress);
+        LiveInfo* ghostLiveInfo = metadata.liveInfo0;
+        bool survived = false;
+        if (GetRouteMarkGeneration() == Generation::Young) {
+            MarkView<Generation::Young> view = GetRouteMarkView<Generation::Young>();
+            survived = IsSurvivedObject(view, ghostLiveInfo, offset);
+        } else {
+            MarkView<Generation::Old> view = GetRouteMarkView<Generation::Old>();
+            survived = IsSurvivedObject(view, ghostLiveInfo, offset);
+        }
+        // Compact packed dest is in compactRouteTable (not prefix-sum). A
+        // mark-start allocate-black object Compact copied must Admit so
+        // GetRoute can look up that dest. Routed prefix-sum has no slot for
+        // it, so water alone does not Admit on the ROUTED arm.
+        if (!survived && AllocatedAfterMarkStart(offset) && LoadCompactRouteTable() != nullptr) {
+            survived = true;
+        }
+        // Large region: single object at start; tip check is the start test for small.
+        bool startOk = false;
+        if (survived) {
+            if (IsLargeRegion()) {
+                startOk = (offset == 0);
+            } else if (fromObj != nullptr) {
+                // Tip-only read (StateWord). No IsVaildType / GetSize — same shape as
+                // Collector::PlausibleManagedObjectGate tip arm (Collector.cpp).
+                TypeInfo* tip = fromObj->GetTypeInfo();
+                uintptr_t tipAddr = reinterpret_cast<uintptr_t>(tip);
+                constexpr uintptr_t kMinPlausibleTypeInfoAddr = 0x100000000ULL;
+                if (tipAddr != 0 && tipAddr >= kMinPlausibleTypeInfoAddr &&
+                    (tipAddr & StateWord::ADDRESS_ALIGN_MASK) == 0 &&
+                    (tipAddr & 0xffffffffULL) != 0 &&
+                    !Heap::IsHeapAddress(tipAddr)) {
+                    startOk = true;
+                }
+                // uafclose: after CompactRegion copies survivors and memset free-tail, the
+                // from header at the old address is zeroed. RouteState COMPACTED (and
+                // FORWARDED after VisitLive) still needs Admit so FindToVersion can return
+                // the geometric to — tip is no longer a valid start oracle. Survivor bit
+                // on liveInfo0 is the domain membership proof (VisitLive already walked starts).
+                if (!startOk) {
+                    RouteState rsTip = GetRouteState();
+                    if (rsTip == RouteState::COMPACTED || rsTip == RouteState::FORWARDED) {
+                        startOk = true;
+                    }
+                }
+            }
+        }
+        if (!survived || !startOk) {
+            if (EatArmDiag::Enabled()) {
+                RouteState rsEat = GetRouteState();
+                if (rsEat == RouteState::ROUTED || rsEat == RouteState::FORWARDABLE ||
+                    rsEat == RouteState::ROUTING) {
+                    EatArmDiag::NoteIorTarget(fromObj, EatArmDiag::GetFixHost(), offset);
+                }
+            }
+            return OptionalRouteTicket();
+        }
+        return OptionalRouteTicket(fromObj);
     }
 
-    void PrepareForwardableRegion()
+    // Geometric derive; domain is guaranteed by RouteTicket. No survivor re-check.
+    // Anchor: LiveInfo.h:230-245; LiveInfo.cpp:15-24; ops/design/ROUTE_DOMAIN.md §2.
+    // Compacted: dest is the dense pack slot recorded by CompactRegion, not prefix-sum.
+    BaseObject* GetRoute(RouteTicket t)
     {
+        if (!IsRouteStateLifeCurrent()) {
+            LOG(RTLOG_FATAL,
+                "[LIFECLOCK][MUTATOR_STALE_ROUTE_STATE] region=%p current=%llu stamp=%llu",
+                this, static_cast<unsigned long long>(GetRegionLifeId()),
+                static_cast<unsigned long long>(metadata.routeStateLifeId));
+        }
+        BaseObject* fromObj = t.From();
+        MAddress fromAddress = reinterpret_cast<MAddress>(fromObj);
+        CompactRouteTable* compactRouteTable = LoadCompactRouteTable();
+        if (compactRouteTable != nullptr) {
+            BaseObject* packed = LookupCompactRoute(GetAddressOffset(fromAddress), compactRouteTable);
+            if (packed != nullptr) {
+                return packed;
+            }
+            // Compacted and not packed: prefix-sum dest is a hole (dense pack).
+            // Keep from if Compact left it in place (walk break); else no to-version.
+            if (fromObj->IsValidObject()) {
+                return fromObj;
+            }
+            return nullptr;
+        }
+        // FreeCompactRouteTable publishes NORMAL before detaching a compact table. An
+        // already-admitted reader that loses the detach race must soft-miss rather than
+        // reinterpret a compact destination as prefix-sum geometry.
+        RouteState routeState = GetRouteState();
+        if (routeState != RouteState::ROUTED && routeState != RouteState::FORWARDED) {
+            return nullptr;
+        }
+        uint64_t preLiveBytes = GetPreLiveBytesInGhostRegion(fromAddress);
+        if (!IsRouteInfoLifeCurrent()) {
+            LOG(RTLOG_FATAL,
+                "[LIFECLOCK][MUTATOR_STALE_ROUTE_INFO] region=%p current=%llu stamp=%llu",
+                this, static_cast<unsigned long long>(GetRegionLifeId()),
+                static_cast<unsigned long long>(metadata.routeInfo.GetLifeId()));
+        }
+        MAddress toAddr = metadata.routeInfo.GetRoute(preLiveBytes);
+        // routedom: observe mark-domain at geometric GetRoute call site (default off).
+        if (RouteDom::Enabled()) {
+            RouteDom::NoteRoute(this, fromObj, preLiveBytes, static_cast<uintptr_t>(toAddr));
+        }
+        return from_region_addr(toAddr);
+    }
+
+    void FreeCompactRouteTable()
+    {
+        CompactRouteTable* table = static_cast<CompactRouteTable*>(
+            __atomic_exchange_n(&metadata.compactRouteTable, static_cast<void*>(nullptr), __ATOMIC_ACQ_REL));
+        if (table != nullptr) {
+            RetireCompactRouteTable(table);
+        }
+    }
+
+    void EnsureCompactRouteTable()
+    {
+        if (LoadCompactRouteTable() == nullptr) {
+            CompactRouteTable* table = new CompactRouteTable();
+            void* expected = nullptr;
+            if (!__atomic_compare_exchange_n(&metadata.compactRouteTable, &expected, static_cast<void*>(table),
+                                             false, __ATOMIC_RELEASE, __ATOMIC_ACQUIRE)) {
+                delete table;
+            }
+        }
+    }
+
+    void RecordCompactRoute(size_t fromOff, MAddress dest)
+    {
+        EnsureCompactRouteTable();
+        CompactRouteTable* table = LoadCompactRouteTable();
+        CHECK(table != nullptr);
+        (*table)[fromOff] = dest;
+    }
+
+    BaseObject* LookupCompactRoute(size_t fromOff, const CompactRouteTable* table) const
+    {
+        auto it = table->find(fromOff);
+        if (it == table->end()) {
+            return nullptr;
+        }
+        return from_region_addr(it->second);
+    }
+
+    // A phase transition is a mutator grace period. Tables detached in generation N
+    // survive two completed transitions so a detach racing the transition boundary is
+    // conservatively assigned to either side without endangering a reader.
+    static void AdvanceCompactRouteTableGracePeriod()
+    {
+        std::vector<CompactRouteTable*> ready;
+        {
+            std::lock_guard<std::mutex> lock(CompactRouteTableRetireMutex());
+            uint64_t& generation = CompactRouteTableGraceGeneration();
+            ++generation;
+            auto& retired = RetiredCompactRouteTables();
+            auto it = retired.begin();
+            while (it != retired.end()) {
+                if (generation - it->generation >= 2) {
+                    ready.push_back(it->table);
+                    it = retired.erase(it);
+                } else {
+                    ++it;
+                }
+            }
+        }
+        for (CompactRouteTable* table : ready) {
+            delete table;
+        }
+    }
+
+    // Deleted: asking for a route with a bare BaseObject* is unspellable.
+    // Call AdmitForRoute first; product miss arms name nullopt; probes use GetRouteForProbe.
+    BaseObject* GetRoute(BaseObject* fromObj) = delete;
+
+    // Probe/diagnostics only — same Admit+derive as product, never a public bypass.
+    // Precedent: GetLiveInfo0ForProbe. Anchor: ops/design/ROUTE_DOMAIN.md §2.
+    BaseObject* GetRouteForProbe(BaseObject* fromObj)
+    {
+        OptionalRouteTicket ticket = AdmitForRoute(fromObj);
+        if (!ticket) {
+            return nullptr;
+        }
+        return GetRoute(ticket.value());
+    }
+
+    // Probe-only: pure RouteInfo geometry for a preLiveBytes rank (no survivor gate).
+    MAddress GetRoutePlanAddr(uint64_t preLiveBytes)
+    {
+        if (!IsRouteInfoLifeCurrent()) {
+            return 0;
+        }
+        return metadata.routeInfo.GetRoute(preLiveBytes);
+    }
+
+    ZGenerationId generation_id() const { return metadata._generation_id; }
+
+    template<Generation G>
+    void PrepareForwardableRegion(MarkView<G> view)
+    {
+        CHECK(view.GetRegion() == this);
         CHECK(IsFromRegion());
         CHECK(static_cast<UnitRole>(metadata.unitRole) == UnitRole::SMALL_SIZED_UNITS);
         CHECK(metadata.inGhostFromRegion == 0);
-        metadata.routeState = FORWARDABLE;
-        SetUnitRole0(static_cast<UnitRole>(metadata.unitRole));
-        metadata.liveInfo0 = metadata.liveInfo;
-        metadata.regionEnd0 = metadata.regionEnd;
-        metadata.routeInfo.SetRouteInfo(0);
-        if (GetLiveByteCount() > 0) {
-            SetInGhostRegion(1);
+        // marklate: freeze last-alloc phase before ghost snapshot (survives reuse).
+        AllocPhaseDiag::FreezeRegion(GetRegionStart());
+        const RouteState prevRoute = GetRouteState();
+        SetRouteState(FORWARDABLE);
+        // After-copy Exempt keeps the page (zRelocate.cpp:1041-1047) but the
+        // forwarding table must not survive into the next install.
+        // EnsureEntries returns early if a table is already armed, so a kept
+        // page would carry last cycle's mappings (REPORT-trainbisect §6 knife B;
+        // [IKEKEEP-01] same shape). ZGC destroys forwarding at the next
+        // ZRelocationSetInstallTask (zRelocationSet.cpp:91-96).
+        ForwardingTable::ClearEntries(GetRegionStart(), GetRegionSize());
+        ForwardingTable::DropRetiredCovering(GetRegionStart(), GetRegionSize());
+        // Only last-cycle after-copy Exempt pages carry FORWARDED headers
+        // (RegionManager.cpp:3533 then Exempt). Walking every from is the
+        // rec=stw tax (B2.1 |Δ|=+4.53%). Snapshot prevRoute before paint.
+        if (prevRoute == FORWARDED || prevRoute == COMPACTED) {
+            ClearRelocationResiduals();
         }
+        // PORT_ZFORWARDING step 1: same event, recorded address-keyed as well.  Populated in
+        // parallel with the region machinery so the two answers can be compared before either is
+        // trusted; nothing reads it for decisions yet.
+        ForwardingTable::Insert(GetRegionStart(), GetRegionSize(), this);
+        ForwardingTable::EnsureEntries(this);
+        // enrolphase: which side of the relocate-start flip does this enrolment land on?
+        //
+        // OpenJDK installs the relocation set once, in the concurrent select_relocation_set
+        // (zGeneration.cpp:254 ZRelocationSet::install), and only then flips
+        // (relocate_start -> flip_relocate_start, :918 -> :922).  Post-flip the set is closed, so
+        // "painted with the current colour after the flip" implies "will not move this cycle".
+        //
+        // EvacuateYoungRegions calls PrepareForwardTable<Young> twice -- WCollector.cpp:6483 and
+        // again at :6952 -- with the young flip between them.  An enrolment on the far side leaves
+        // a window in which a region is still NORMAL while the current colour is already the new
+        // one, and a value painted there is load-good but names an object that is about to move.
+        // That matches the measured FORWARD population exactly (afterFlip=1, slotGood=1, hasTo=1,
+        // 20/20), and it is why moving only the first flip (kFlipAfterFromSpace) changed nothing.
+        //
+        // The staleness predicate is not the hole: over ~2^20 non-NORMAL targets per run, across
+        // six runs, zero escaped it.
+        NoteEnrolPhase();
+        // sealcheck: snapshot is not yet sealed; geometry freeze is at RouteRegion ROUTING.
+        SetMarkFaceSealed(false);
+        SetUnitRole0(static_cast<UnitRole>(metadata.unitRole));
+        __atomic_store_n(&metadata.routeMarkEpoch, view.GetEpoch(), __ATOMIC_RELAXED);
+        __atomic_store_n(&metadata.routeMarkLifeId, view.GetLifeId(), __ATOMIC_RELEASE);
+        RegionLifeClock::Publish(RegionLifeClock::Carrier::MARK_SNAPSHOT, view.GetLifeId());
+        metadata.liveInfo0 = metadata.liveInfo;
+        // zForwarding.inline.hpp:67-70 — construction token = 1. Late retain after
+        // detach (count 0) is refused; that is the ABA answer.
+        ZForwardingLife::ResetForForwarding(metadata.fwdRefCount, metadata.fwdClaimed, metadata.fwdDone);
+        metadata.copyInflight.store(0, std::memory_order_relaxed);
+        SetRouteMarkGeneration(G);
+        metadata.regionEnd0 = metadata.regionEnd;
+        metadata.routeInfo.Clear();
+        metadata._generation_id = IsYoungRegion() ? ZGenerationId::young : ZGenerationId::old;
+        // fysfixb / a2e7ee37: always install ghost, including liveBytes==0.
+        // ForwardRegion only early-exits IsKnownEmpty (LIVE_AUTHORITY|0). Regions with
+        // liveBytes==0 but no mark authority (neverExamined) still call RouteRegion;
+        // without ghost that hits CHECK(IsGhostFromRegion). Ghost retention also
+        // holds dead-from until PrepareFromRegionList dispel (plainedge).
+        SetInGhostRegion(1);
 
         metadata.nextRegionIdx0 = metadata.nextRegionIdx;
 
@@ -681,9 +2250,7 @@ public:
 
             array[i].SetUnitRole0(UnitRole::SUBORDINATE_UNIT);
             mdata.ownerRegion0 = this;
-            if (GetLiveByteCount() > 0) {
-                array[i].SetInGhostRegion(1);
-            }
+            array[i].SetInGhostRegion(1, GetRegionLifeId());
         }
     }
 
@@ -691,10 +2258,13 @@ public:
     {
         if (IsGhostFromRegion()) {
             size_t nUnit = GetUnitCount();
+            TraceClear::NoteRegionEvent(GetRegionStart(), nUnit * UNIT_SIZE, "clear_ghost", this,
+                                        GetLiveByteCount(), 1, static_cast<unsigned int>(GetRegionType()),
+                                        static_cast<unsigned int>(GetRouteState()));
             UnitInfo* unit = reinterpret_cast<UnitInfo*>(this);
             UnitInfo::UnitInfoArray array = UnitInfo::UnitInfoArray(unit, nUnit);
             for (size_t i = 0; i < nUnit; i++) {
-                array[i].SetInGhostRegion(0);
+                array[i].SetInGhostRegion(0, GetRegionLifeId());
             }
         }
     }
@@ -702,20 +2272,87 @@ public:
     // dispel all units of this region.
     // inGhostFromRegion is the unique guard condition.
 
+    // T-D guardian (MINOR_CONCURRENCY_0805 §八): parallel windows assert this is frozen.
+    // Public for reffix parallel window assert + positive-control inject.
+    static std::atomic<size_t> dispelGhostCount;
+
+    static size_t GetDispelGhostCount()
+    {
+        return dispelGhostCount.load(std::memory_order_relaxed);
+    }
+
+    // Positive control only (MRT_GCV2_REFFIX_INJECT_DISPEL=1): bump without real dispel.
+    static void InjectDispelCountForTest()
+    {
+        dispelGhostCount.fetch_add(1, std::memory_order_relaxed);
+    }
+
     void DispelGhostFromRegion()
     {
-        metadata.routeState = NORMAL;
+        // fwdinflight: this is one of the three edges that retire from-side route state, and
+        // it is unconditional -- nothing here waits for a reader. ZGC's equivalent,
+        // ZForwarding::detach_page (zForwarding.cpp:171-181), blocks until _ref_count is zero.
+        // Count what we would be invalidating. Default off; never blocks.
+        FwdInflight::NoteRetireRegion(this, FwdInflight::Retire::DISPEL_GHOST);
+        // portmutreloc: and this is the wait FwdInflight was measuring the absence of. Held
+        // for the whole body so that FreeCompactRouteTable below -- ZGC's free_page -- cannot
+        // run while a retained reader is inside the route lookup or a mutator copy.
+        DrainScope drain(this, MutatorRelocate::Retire::DISPEL_GHOST);
+        // PORT_ZFORWARDING step 1: the retirement edge.  ZGC's equivalent is refcount-driven
+        // (ZForwarding::detach_page waits for _ref_count == 0); recording the removal here first
+        // lets step 3 change *when* it happens without changing *where*.
+        ForwardingTable::Remove(GetRegionStart(), GetRegionSize());
+        dispelGhostCount.fetch_add(1, std::memory_order_relaxed);
         size_t nUnit = GetGhostRegionUnitCount();
+        TraceClear::NoteRegionEvent(GetRegionStart(), nUnit * UNIT_SIZE, "dispel", this, GetLiveByteCount(),
+                                    static_cast<unsigned int>(IsGhostFromRegion()),
+                                    static_cast<unsigned int>(GetRegionType()),
+                                    static_cast<unsigned int>(GetRouteState()));
+        // fysfixb: name who clears the ghost bit (PrepareFromRegionList peer path).
+        VLOG(REPORT,
+             "[GCV2][ghost-dispel] region=%p start=%#zx nUnit=%zu live=%zu route=%u young=%u",
+             this, GetRegionStart(), nUnit, GetLiveByteCount(),
+             static_cast<unsigned int>(GetRouteState()),
+             static_cast<unsigned>(IsYoungRegion()));
         UnitInfo* unit = reinterpret_cast<UnitInfo*>(this);
         UnitInfo::UnitInfoArray array = UnitInfo::UnitInfoArray(unit, nUnit);
         for (size_t i = 0; i < nUnit; i++) {
-            array[i].SetInGhostRegion(0);
+            array[i].SetInGhostRegion(0, GetRegionLifeId());
+        }
+        // Publish route retirement before detaching the table. A reader that observes
+        // the atomic nullptr then also observes NORMAL and soft-misses in GetRoute.
+        SetRouteState(NORMAL);
+        FreeCompactRouteTable();
+        SetMarkFaceSealed(false);
+    }
+
+    bool IsGhostFromRegion() const
+    {
+        const bool ghost = metadata.regionStateBitField.GetAtomicValue(
+            RegionStateBitPos::IN_GHOST_FROM_REGION_FLAG, 1) != 0;
+        if (!ghost) {
+            return false;
+        }
+        return RegionLifeClock::Validate(RegionLifeClock::Carrier::GHOST,
+                                         __atomic_load_n(&metadata.ghostLifeId, __ATOMIC_ACQUIRE),
+                                         GetRegionLifeId());
+    }
+
+    // After TakeRegion re-init, every unit must have ghost cleared (payload wipe does not touch metadata).
+    void AssertGhostClearedAfterReuse(size_t nUnit) const
+    {
+        CHECK(!IsGhostFromRegion());
+        size_t baseIdx = GetUnitIdx();
+        for (size_t i = 1; i < nUnit; i++) {
+            MAddress addr = GetUnitAddress(baseIdx + i);
+            CHECK(!InGhostFromRegion(from_region_addr(addr)));
         }
     }
 
-    bool IsGhostFromRegion() const { return metadata.inGhostFromRegion == 1; }
-
     // the interface can only be used to clear live info after gc.
+    // Same rule for liveInfo / liveInfo0 / retained: if the slot still holds this LiveInfo*, drop it.
+    // Garbage is skipped here (may be mid-reuse); NullLiveInfoFieldsInRange covers garbage before
+    // ReleaseMemory so dangling into a dying tag cannot survive.
     void CheckAndClearLiveInfo(LiveInfo* liveInfo)
     {
         // Garbage region may be reused by other thread. For the sake of safety, we don't clean it here.
@@ -725,36 +2362,288 @@ public:
         }
         // Check the value whether is expected, in order to avoid resetting a reused region.
         if (metadata.liveInfo == liveInfo) {
+            SurvNodeDiag::NoteClear(this, SurvNodeDiag::CLEAR_CHECK_AND_CLEAR, false);
             metadata.liveInfo = nullptr;
-            metadata.liveByteCount = 0;
+            // Tracking phase ended: live counter is no longer a mark-period truth.
+            __atomic_store_n(&metadata.liveByteCount, 0, std::memory_order_release);
+        }
+        if (metadata.liveInfo0 == liveInfo) {
+            metadata.liveInfo0 = nullptr;
+            metadata.routeMarkEpoch = 0;
+            metadata.routeMarkLifeId = 0;
+        }
+        if (metadata.retainedLiveInfo == liveInfo) {
+            NoteRetainedClear(RETAINED_OP_CLEAR_CHECKED);
+            metadata.retainedLiveInfo = nullptr;
+            // holderlive (F2): this unbind exists because the borrowed LiveInfo* is about to
+            // dangle — it says nothing about whether the snapshot is still true. When we own
+            // the bits, drop the pointer and keep the verdict.
+            if (metadata.retainedMarkWords != nullptr) {
+                return;
+            }
+            metadata.retainedLiveInfoState = RetainedLiveInfoState::NEVER_EXAMINED;
+            metadata.retainedLiveInfoEpoch = 0;
+            metadata.retainedLiveInfoCoveredUpTo = 0;
+            metadata.retainedLifeId = 0;
         }
     }
-    void ClearLiveInfo()
+    template<Generation G>
+    void ClearLiveInfo(MarkView<G> view)
     {
-        if (metadata.liveInfo != nullptr) {
-            metadata.liveInfo = nullptr;
+        CHECK(view.GetRegion() == this);
+        UnitRole unitRole = LoadUnitRole(reinterpret_cast<UnitInfo*>(this));
+        if (unitRole == UnitRole::FREE_UNITS) {
+            return;
         }
-        metadata.liveByteCount = 0;
-    }
-
-    // only from-region should be locked.
-    bool TryLockReadFromRegion()
-    {
-        if (metadata.rwLock.TryLockRead()) {
-            if (IsFromRegion() || IsLoneFromRegion()) {
-                return true;
-            } else {
-                metadata.rwLock.UnlockRead();
+        CHECK_DETAIL(unitRole == UnitRole::SMALL_SIZED_UNITS || unitRole == UnitRole::LARGE_SIZED_UNITS,
+                     "ClearLiveInfo must be called on a region head");
+        SurvNodeDiag::NoteClear(this, SurvNodeDiag::CLEAR_LIVE_INFO, true);
+        // ZGC mark-start allocation watermark (zPage is_allocating). Capture
+        // before the epoch bump so VisitLive / IsKnownEmpty / IsMarkedObject
+        // see objects bumped after this point as implicitly live.
+        if (MarkStartAllocWaterEnabled()) {
+            metadata.markStartAllocPtr = GetRegionAllocPtr();
+        } else {
+            metadata.markStartAllocPtr = 0;
+        }
+        // Clear a large face while the supplied view still names the current
+        // epoch; only then publish the epoch bump that makes old views stale.
+        if (IsLargeRegion()) {
+            SetMarkedRegionFlag(view, 0);
+            if (G == Generation::Old) {
+                MarkView<Generation::Young> youngView(this, GetMarkSnapshotEpoch<Generation::Young>(),
+                                                       GetRegionLifeId());
+                SetMarkedRegionFlag(youngView, 0);
             }
         }
-        return false;
+        BumpSnapshotEpochFromClearLiveInfo<G>();
+        if (G == Generation::Old) {
+            // A major cycle supersedes both closures.  Dropping the carrier is
+            // safe because both per-generation faces live in the same arena.
+            BumpMarkSnapshotEpoch<Generation::Young>();
+            if (metadata.liveInfo != nullptr) {
+                metadata.liveInfo = nullptr;
+            }
+        } else {
+            // A minor starts a new young closure without erasing the last major
+            // closure.  Only the young lazy face is detached.
+            LiveInfo* liveInfo = GetLiveInfo();
+            if (liveInfo != nullptr) {
+                LiveInfo::MarkFace& youngFace = liveInfo->GetMarkFace<Generation::Young>();
+                __atomic_store_n(&youngFace.bitmap, static_cast<RegionBitmap*>(nullptr),
+                                 std::memory_order_release);
+                youngFace.epoch = 0;
+            }
+        }
+        // Same pointer-carrier rule as liveInfo/retained: mark-cycle start drops ghost too.
+        // PrepareForwardableRegion copies liveInfo→liveInfo0; without this, liveInfo0
+        // can outlive ReleaseMemory(previous tag) (tagreuse T2). The new mark-start
+        // snapshot itself is nevertheless a real, current-life carrier: publish its
+        // epoch/life explicitly so route-mark readers never have to mint an epoch.
+        metadata.liveInfo0 = nullptr;
+        SetRouteMarkGeneration(G);
+        const RegionLifeId routeLife = GetRegionLifeId();
+        __atomic_store_n(&metadata.routeMarkEpoch, GetMarkSnapshotEpoch<G>(), __ATOMIC_RELAXED);
+        __atomic_store_n(&metadata.routeMarkLifeId, routeLife, __ATOMIC_RELEASE);
+        RegionLifeClock::Publish(RegionLifeClock::Carrier::MARK_SNAPSHOT, routeLife);
+        if (G == Generation::Old) {
+            NoteRetainedClear(RETAINED_OP_CLEAR_ALL);
+            // A new major mark supersedes the retained major snapshot.  Young
+            // clears deliberately leave this old/major authority intact.
+            FreeRetainedMarkWords();
+            metadata.retainedLiveInfo = nullptr;
+            metadata.retainedLiveInfoState = RetainedLiveInfoState::NEVER_EXAMINED;
+            metadata.retainedLiveInfoEpoch = 0;
+            metadata.retainedLiveInfoCoveredUpTo = 0;
+            metadata.retainedLifeId = 0;
+        }
+        // Start of a mark cycle for this region: live=0 is authoritative until proven otherwise.
+        __atomic_store_n(&metadata.liveByteCount, LIVE_AUTHORITY_BIT, std::memory_order_release);
+        SetMarkFaceSealed(false);
     }
 
-    void UnlockReadFromRegion() { metadata.rwLock.UnlockRead(); }
+    // Structural: drop any liveInfo/liveInfo0/retained that land in [rangeStart, rangeStart+rangeSize).
+    // Called under STW immediately before ForwardDataSpace::ReleaseMemory so pointer validity
+    // is a structure guarantee (not a "do not read after phase X" convention). Covers garbage.
+    void NullLiveInfoFieldsInRange(uintptr_t rangeStart, size_t rangeSize)
+    {
+        auto inRange = [rangeStart, rangeSize](LiveInfo* p) -> bool {
+            if (p == nullptr || rangeSize == 0) {
+                return false;
+            }
+            uintptr_t addr = reinterpret_cast<uintptr_t>(p);
+            return addr >= rangeStart && addr < (rangeStart + rangeSize);
+        };
+        LiveInfo* liveInfo = __atomic_load_n(&metadata.liveInfo, std::memory_order_acquire);
+        if (reinterpret_cast<MAddress>(liveInfo) != LiveInfo::TEMPORARY_PTR && inRange(liveInfo)) {
+            SurvNodeDiag::NoteClear(this, SurvNodeDiag::CLEAR_NULL_IN_RANGE, false);
+            __atomic_store_n(&metadata.liveInfo, static_cast<LiveInfo*>(nullptr), std::memory_order_release);
+            // Tracking phase for this LiveInfo ended with its backing store about to vanish.
+            __atomic_store_n(&metadata.liveByteCount, 0, std::memory_order_release);
+        }
+        if (inRange(metadata.liveInfo0)) {
+            metadata.liveInfo0 = nullptr;
+            metadata.routeMarkEpoch = 0;
+            metadata.routeMarkLifeId = 0;
+        }
+        if (inRange(metadata.retainedLiveInfo)) {
+            NoteRetainedClear(RETAINED_OP_CLEAR_RANGE);
+            metadata.retainedLiveInfo = nullptr;
+            // holderlive (F2): same rule as CheckAndClearLiveInfo — the range is about to be
+            // madvise'd, so the pointer must go; an owned copy is not in that range.
+            if (metadata.retainedMarkWords != nullptr) {
+                return;
+            }
+            metadata.retainedLiveInfoState = RetainedLiveInfoState::NEVER_EXAMINED;
+            metadata.retainedLiveInfoEpoch = 0;
+            metadata.retainedLiveInfoCoveredUpTo = 0;
+            metadata.retainedLifeId = 0;
+        }
+    }
+
+    // ZForwarding::retain_page (zForwarding.cpp:86-108). Three-state: 0 refuses,
+    // <0 waits for done then refuses, >0 CAS +1.
+    bool RetainForwarding()
+    {
+        return ZForwardingLife::retain_page(metadata.fwdRefCount, metadata.fwdDone);
+    }
+
+    void ReleaseForwarding() { ZForwardingLife::release_page(metadata.fwdRefCount); }
+
+    // ZForwarding::retain_page: the three-state count is the gate, not the list
+    // type. After ForwardRegion, CollectRegion moves the region to garbage
+    // while the payload is still live; mutator relocate must still pin it.
+    bool TryLockReadFromRegion() { return RetainForwarding(); }
+
+    void UnlockReadFromRegion() { ReleaseForwarding(); }
+
+    // RAII retain_page / release_page. ok() is false when the page is already
+    // released or claimed — the late reader must not touch from-side state.
+    class RetainScope {
+    public:
+        explicit RetainScope(RegionInfo* region) : region(nullptr)
+        {
+            if (region != nullptr && region->RetainForwarding()) {
+                this->region = region;
+            }
+        }
+        ~RetainScope()
+        {
+            if (region != nullptr) {
+                region->ReleaseForwarding();
+            }
+        }
+        bool ok() const { return region != nullptr; }
+
+        RetainScope(const RetainScope&) = delete;
+        RetainScope& operator=(const RetainScope&) = delete;
+        RetainScope(RetainScope&&) = delete;
+        RetainScope& operator=(RetainScope&&) = delete;
+
+    private:
+        RegionInfo* region;
+    };
+
+    bool ClaimForwarding() { return ZForwardingLife::claim(metadata.fwdClaimed); }
+
+    void MarkForwardingDone() { ZForwardingLife::mark_done(metadata.fwdDone); }
+
+    bool IsForwardingDone() const { return ZForwardingLife::is_done(metadata.fwdDone); }
+
+    // ZGC has no terminal kept: a page not selected this cycle is an ordinary
+    // candidate next cycle (zRelocationSetSelector.cpp:114-196 rebuilds from
+    // the page table; zGeneration.cpp:205-213). Drop the in-cycle publish so
+    // WaitRoutedTipReady cannot treat last cycle's Exempt as this cycle's done.
+    void ExpireKeptPublish()
+    {
+        if (IsGhostFromRegion()) {
+            DispelGhostFromRegion();
+        } else {
+            const RouteState rs = GetRouteState();
+            if (rs != RouteState::FORWARDED && rs != RouteState::COMPACTED && rs != RouteState::NORMAL) {
+                SetRouteState(NORMAL);
+            }
+        }
+        ZForwardingLife::ResetIdle(metadata.fwdRefCount, metadata.fwdClaimed, metadata.fwdDone);
+        metadata.copyInflight.store(0, std::memory_order_relaxed);
+    }
+
+    void NoteCopyInflight() { ZForwardingLife::note_copy(metadata.copyInflight); }
+
+    void EndCopyInflight() { ZForwardingLife::end_copy(metadata.copyInflight); }
+
+    void WaitCopiedInflight() { ZForwardingLife::wait_copied(metadata.copyInflight); }
+
+    int32_t CopyInflight() const { return metadata.copyInflight.load(std::memory_order_acquire); }
+
+    int32_t ForwardingRefCount() const { return metadata.fwdRefCount.load(std::memory_order_acquire); }
+
+    bool ForwardingClaimed() const { return metadata.fwdClaimed.load(std::memory_order_acquire); }
 
     void LockWriteRegion() { metadata.rwLock.LockWrite(); }
 
     void UnlockWriteRegion() { metadata.rwLock.UnlockWrite(); }
+
+    // ZForwarding in_place_relocation_claim_page + detach_page (zForwarding.cpp:110-181).
+    // Invert the count (n → -n) so new retainers refuse, wait until -1 (every reader
+    // has released), then the retire body runs exclusive. Destructor publishes done
+    // and drops the construction token to 0. Always on.
+    class DrainScope {
+    public:
+        DrainScope(RegionInfo* region, MutatorRelocate::Retire site) : region(nullptr)
+        {
+            if (region == nullptr) {
+                return;
+            }
+            uint64_t start = TimeUtil::NanoSeconds();
+            // copyInflight is the copier token (zForwarding.cpp:86-108 / lockdrain).
+            // detach_page does not observe it. ClearUnits must not race a LOCKED copy.
+            ZForwardingLife::wait_copied(region->metadata.copyInflight);
+            int32_t before = region->metadata.fwdRefCount.load(std::memory_order_acquire);
+            // zForwarding.cpp:171-181 detach_page: wait until 0. A count that is
+            // already 0 is a successful wait, not a license to skip the drain —
+            // LEAD-NOTE 0820 21:1x: TakeRegion garbage_reuse ClearUnits ran with
+            // no wait when only naked mutator refs remained.
+            if (before == 0) {
+                ZForwardingLife::detach_page(region->metadata.fwdRefCount);
+                uint64_t spun = TimeUtil::NanoSeconds() - start;
+                MutatorRelocate::NoteDrain(site, spun, false);
+                return;
+            }
+            if (!region->ClaimForwarding()) {
+                // Another retire already claimed. Wait until that one published 0.
+                ZForwardingLife::detach_page(region->metadata.fwdRefCount);
+                uint64_t spun = TimeUtil::NanoSeconds() - start;
+                MutatorRelocate::NoteDrain(site, spun, true);
+                return;
+            }
+            this->region = region;
+            if (before > 0) {
+                ZForwardingLife::in_place_relocation_claim_page(region->metadata.fwdRefCount);
+            }
+            uint64_t spun = TimeUtil::NanoSeconds() - start;
+            MutatorRelocate::NoteDrain(site, spun, before != 1);
+        }
+
+        ~DrainScope()
+        {
+            if (region == nullptr) {
+                return;
+            }
+            region->MarkForwardingDone();
+            if (region->metadata.fwdRefCount.load(std::memory_order_acquire) != 0) {
+                ZForwardingLife::release_page(region->metadata.fwdRefCount);
+            }
+        }
+
+        DrainScope(const DrainScope&) = delete;
+        DrainScope& operator=(const DrainScope&) = delete;
+        DrainScope(DrainScope&&) = delete;
+        DrainScope& operator=(DrainScope&&) = delete;
+
+    private:
+        RegionInfo* region;
+    };
 
     // These interfaces are used to make sure the writing operations of value in C++ Bit Field will be atomic.
     void SetUnitRole(UnitRole role)
@@ -769,17 +2658,79 @@ public:
     {
         metadata.regionStateBitField.SetAtomicValue(RegionStateBitPos::REGION_TYPE_FLAG, BIT_LENGTH,
                                                     static_cast<uint8_t>(type));
+        // PORT_ZFORWARDING step 1, continued.  Inserting only at PrepareForwardableRegion left the
+        // table 15.6% short of what the region predicates answer (legacyOnly=2.6M of 16.8M), because
+        // membership of the relocation set is established at many scattered sites here --
+        // fromRegionList.PrependRegion(..., FROM_REGION) appears in AssembleSmallGarbageCandidates,
+        // PrepareYoungGarbageCandidates and several others -- while ZGC establishes it once, in
+        // ZRelocationSet::install.
+        //
+        // Rather than chase those sites one by one, hook the single place the type actually
+        // changes.  That is the convergence the port is for: one writer of membership instead of N.
+        if (type == RegionType::FROM_REGION || type == RegionType::LONE_FROM_REGION ||
+            type == RegionType::UNMOVABLE_FROM_REGION || type == RegionType::RAW_POINTER_PINNED_REGION) {
+            ForwardingTable::InsertProvisional(GetRegionStart(), GetRegionSize(), this);
+        } else if (type == RegionType::FREE_REGION || type == RegionType::GARBAGE_REGION ||
+                   type == RegionType::TO_REGION) {
+            // The ghost bit is part of membership and outlives the type change: all six residual
+            // legacyOnly disagreements were rtype=14 (GARBAGE_REGION) with ghost still set, i.e.
+            // the type moved on while IsGhostFromObject still answered yes.  Dropping the entry
+            // there is exactly the "membership has no single source of truth" problem this port
+            // exists to remove, so keep it until the ghost is actually dispelled
+            // (DispelGhostFromRegion already calls Remove).
+            if (!IsGhostFromRegion()) {
+                ForwardingTable::Remove(GetRegionStart(), GetRegionSize());
+            }
+        }
     }
     void SetTraceRegionFlag(uint8_t flag)
     {
+        uint8_t prev = metadata.isTraceRegion;
         metadata.regionStateBitField.SetAtomicValue(RegionStateBitPos::TRACE_REGION_FLAG, 1, flag);
+        // blackmark: track 1→0 clears (EnlistFullThreadLocalRegion / HandleTraceRegions).
+        if (AllocPhaseDiag::Enabled()) {
+            if (flag == 0 && prev != 0) {
+                AllocPhaseDiag::NoteTraceFlagCleared(GetRegionStart());
+            } else if (flag != 0) {
+                AllocPhaseDiag::NoteTraceFlagSet(GetRegionStart());
+            }
+        }
+    }
+    // twoflags: CSet/route exclusion only. Independent of isTraceRegion lifetime.
+    void SetNotRelocatableThisCycle(uint8_t flag)
+    {
+        __atomic_store_n(&metadata.notRelocatableThisCycle, flag, __ATOMIC_RELEASE);
+    }
+    bool IsNotRelocatableThisCycle() const
+    {
+        return __atomic_load_n(&metadata.notRelocatableThisCycle, __ATOMIC_ACQUIRE) != 0;
+    }
+    // routedest: destination-side hold. Idempotent by construction, and it has to be:
+    // RouteOrCompactRegionImpl publishes the split plan twice for the same holder when the
+    // toRegion2 allocation fails (SetRouteInfo at RegionManager.cpp:1992, then again at
+    // :1999), so the stamp on toRegion1 runs twice. Stamping a byte twice is a no-op.
+    // Do NOT turn this into a reference count without handling that double publish.
+    void SetRouteDestHold(uint8_t flag)
+    {
+        uint8_t cur = __atomic_load_n(&metadata.routeDestHold, __ATOMIC_RELAXED);
+        uint8_t next = static_cast<uint8_t>((cur & ~1u) | (flag != 0 ? 1u : 0u));
+        __atomic_store_n(&metadata.routeDestHold, next, __ATOMIC_RELEASE);
+    }
+    bool IsRouteDestHeld() const
+    {
+        return (__atomic_load_n(&metadata.routeDestHold, __ATOMIC_ACQUIRE) & 1u) != 0;
     }
     void SetInGhostRegion(uint8_t flag)
     {
+        const RegionLifeId life = GetRegionLifeId();
+        __atomic_store_n(&metadata.ghostLifeId, life, __ATOMIC_RELEASE);
         metadata.regionStateBitField.SetAtomicValue(RegionStateBitPos::IN_GHOST_FROM_REGION_FLAG, 1, flag);
+        if (flag != 0) {
+            RegionLifeClock::Publish(RegionLifeClock::Carrier::GHOST, life);
+        }
     }
 
-    void SetMarkedRegionFlag(uint8_t flag)
+    void SetOldMarkedRegionFlag(uint8_t flag)
     {
         metadata.regionStateBitField.SetAtomicValue(RegionStateBitPos::MARKED_REGION_FLAG, 1, flag);
     }
@@ -793,7 +2744,51 @@ public:
         metadata.regionStateBitField.SetAtomicValue(RegionStateBitPos::RESURRECTED_REGION_FLAG, 1, flag);
     }
 
-    RegionType GetRegionType() const { return static_cast<RegionType>(metadata.regionType); }
+    void SetYoungRegionFlag(uint8_t flag);
+
+    bool IsYoungRegion() const
+    {
+        return metadata.regionStateBitField.GetAtomicValue(RegionStateBitPos::YOUNG_REGION_FLAG, 1) != 0;
+    }
+
+    static size_t GetYoungRegionCount();
+
+    static bool HasYoungRegions();
+
+    // genface: promotion is the ownership boundary between the two mark faces.
+    // A caller must name the Young closure it is retiring; the returned Old
+    // view observes only the independently maintained Old face.  In particular,
+    // this operation deliberately does not copy either the ordinary Young bitmap
+    // or the Young large-region flag into the Old face.
+    MarkView<Generation::Old> PromoteYoungRegion(MarkView<Generation::Young> youngView)
+    {
+        CHECK_DETAIL(youngView.GetRegion() == this, "young promotion view belongs to another region");
+        CHECK_DETAIL(IsYoungRegion(), "cannot promote an old region %p", this);
+        CHECK_DETAIL(youngView.GetEpoch() == GetMarkSnapshotEpoch<Generation::Young>(),
+                     "cannot promote region %p through a stale young mark view", this);
+        SetYoungRegionFlag(0);
+        SetYoungAge(0);
+        return GetMarkView<Generation::Old>();
+    }
+
+    void SetYoungAge(uint8_t age)
+    {
+        CHECK(age <= MAX_YOUNG_AGE);
+        metadata.regionStateBitField.SetAtomicValue(RegionStateBitPos::YOUNG_AGE_FLAG, YOUNG_AGE_BIT_LENGTH, age);
+    }
+
+    uint8_t GetYoungAge() const
+    {
+        return static_cast<uint8_t>(metadata.regionStateBitField.GetAtomicValue(
+                                        RegionStateBitPos::YOUNG_AGE_FLAG, YOUNG_AGE_BIT_LENGTH) >>
+                                    RegionStateBitPos::YOUNG_AGE_FLAG);
+    }
+
+    RegionType GetRegionType() const
+    {
+        return static_cast<RegionType>(
+            metadata.regionStateBitField.GetAtomicValue(RegionStateBitPos::REGION_TYPE_FLAG, BIT_LENGTH));
+    }
     UnitRole GetUnitRole() const { return static_cast<UnitRole>(metadata.unitRole); }
 
     size_t GetUnitIdx() const { return RegionInfo::UnitInfo::GetUnitIdx(reinterpret_cast<const UnitInfo*>(this)); }
@@ -812,6 +2807,51 @@ public:
     void SetRegionAllocPtr(MAddress addr) { metadata.allocPtr = addr; }
 
     MAddress GetRegionAllocPtr() const { return metadata.allocPtr; }
+
+    MAddress GetMarkStartAllocPtr() const { return metadata.markStartAllocPtr; }
+
+    // Product on. MRT_GCV2_MARKWATER_OFF=1 restores the pre-watermark trickle
+    // (perturbation for REPORT-oracleblack3 §4).
+    static bool MarkStartAllocWaterEnabled()
+    {
+        static const bool on = []() {
+            const char* v = std::getenv("MRT_GCV2_MARKWATER_OFF");
+            return v == nullptr || !(v[0] == '1' && v[1] == '\0');
+        }();
+        return on;
+    }
+
+    // offset ≥ mark-start allocPtr (exclusive end at ClearLiveInfo). Objects
+    // bumped after that point are ZGC allocate-black / is_allocating.
+    // water == start means the region was empty at mark-start, so every
+    // object now in it was born after that snapshot.
+    bool AllocatedAfterMarkStart(size_t offset) const
+    {
+        if (!MarkStartAllocWaterEnabled()) {
+            return false;
+        }
+        uintptr_t water = metadata.markStartAllocPtr;
+        if (water == 0) {
+            return false;
+        }
+        MAddress start = GetRegionStart();
+        if (water <= start) {
+            return true;
+        }
+        return offset >= static_cast<size_t>(water - start);
+    }
+
+    bool HasMarkStartAllocGap() const
+    {
+        if (!MarkStartAllocWaterEnabled()) {
+            return false;
+        }
+        uintptr_t water = metadata.markStartAllocPtr;
+        if (water == 0) {
+            return false;
+        }
+        return GetRegionAllocPtr() > water;
+    }
 
     int32_t IncRawPointerObjectCount()
     {
@@ -931,20 +2971,17 @@ public:
         metadata.nextRegionIdx = static_cast<uint32_t>(nextIdx);
     }
 
-    bool IsFromRegion() const { return static_cast<RegionType>(metadata.regionType) == RegionType::FROM_REGION; }
-    bool IsLoneFromRegion() const
-    {
-        return static_cast<RegionType>(metadata.regionType) == RegionType::LONE_FROM_REGION;
-    }
+    bool IsFromRegion() const { return GetRegionType() == RegionType::FROM_REGION; }
+    bool IsLoneFromRegion() const { return GetRegionType() == RegionType::LONE_FROM_REGION; }
     bool IsUnmovableFromRegion() const
     {
-        return static_cast<RegionType>(metadata.regionType) == RegionType::UNMOVABLE_FROM_REGION ||
-            static_cast<RegionType>(metadata.regionType) == RegionType::RAW_POINTER_PINNED_REGION;
+        RegionType type = GetRegionType();
+        return type == RegionType::UNMOVABLE_FROM_REGION || type == RegionType::RAW_POINTER_PINNED_REGION;
     }
 
-    bool IsToRegion() const { return static_cast<RegionType>(metadata.regionType) == RegionType::TO_REGION; }
+    bool IsToRegion() const { return GetRegionType() == RegionType::TO_REGION; }
 
-    bool IsGarbageRegion() const { return static_cast<RegionType>(metadata.regionType) == RegionType::GARBAGE_REGION; }
+    bool IsGarbageRegion() const { return GetRegionType() == RegionType::GARBAGE_REGION; }
     bool IsFreeRegion() const { return static_cast<UnitRole>(metadata.unitRole) == UnitRole::FREE_UNITS; }
 
     bool IsValidRegion() const
@@ -953,13 +2990,254 @@ public:
             static_cast<UnitRole>(metadata.unitRole) == UnitRole::LARGE_SIZED_UNITS;
     }
 
-    uint32_t GetLiveByteCount() const { return metadata.liveByteCount; }
+    // liveByteCount: bit63 = LIVE_AUTHORITY (mark-period established), bits0-62 = live bytes.
+    // densify / fragmentation still use the byte count; reclaim-empty uses IsKnownEmpty()
+    // which mirrors ZGC page->is_marked() (mark face epoch), not the byte counter alone.
+    static constexpr uint64_t LIVE_AUTHORITY_BIT = 1ull << 63;
+    static constexpr uint64_t LIVE_BYTES_MASK = LIVE_AUTHORITY_BIT - 1ull;
 
-    void ResetLiveByteCount() { metadata.liveByteCount = 0; }
+    // livesame crosscheck (ZGC ZPage::verify_live): live book vs mark face.
+    static std::atomic<size_t> liveCrossMismatchCount;
+    static std::atomic<size_t> liveCrossCheckCount;
+    static std::atomic<bool> liveCrossAtexitInstalled;
 
-    void AddLiveByteCount(uint32_t count)
+    uint64_t GetLiveByteCount() const
     {
-        (void)__atomic_fetch_add(&metadata.liveByteCount, count, __ATOMIC_ACQ_REL);
+        return __atomic_load_n(&metadata.liveByteCount, std::memory_order_acquire) & LIVE_BYTES_MASK;
+    }
+
+    bool IsLiveCountAuthoritative() const
+    {
+        return (__atomic_load_n(&metadata.liveByteCount, std::memory_order_acquire) & LIVE_AUTHORITY_BIT) != 0;
+    }
+
+    // ZGC zGeneration.cpp:216-221 / zPage.inline.hpp:223-225:
+    //   is_marked = livemap.seqnum == generation.seqnum
+    //   register_empty_page iff !is_marked — but that is safe only because ZGC's mark
+    //   is complete for every relocatable page. Ours is not (GetRouteMarkView mints
+    //   epoch from liveInfo0; stale_read viewEpoch≠snapshotEpoch).
+    // cjpmnull2: empty = this-cycle marked ∧ live==0. Epoch mismatch / null face
+    // means "not marked this cycle", not "empty". Authority still required so a
+    // minor cannot reclaim non-young on a bare zero.
+    bool IsKnownEmpty(MarkView<Generation::Old> view) const
+    {
+        CHECK(view.GetRegion() == this);
+        if (!ValidateMarkView(view)) {
+            return false;
+        }
+        // ZGC allocate-black: a mark-start watermark gap means objects were
+        // born after ClearLiveInfo and are implicitly live. Do not treat the
+        // region empty, and do not AddLiveByteCount for them.
+        if (HasMarkStartAllocGap()) {
+            return false;
+        }
+        uint64_t raw = __atomic_load_n(&metadata.liveByteCount, std::memory_order_acquire);
+        const bool auth = (raw & LIVE_AUTHORITY_BIT) != 0;
+        bool markedThisCycle = false;
+        bool keepNullFace = false;
+        bool keepEpoch = false;
+        if (IsLargeRegion()) {
+            if (view.GetEpoch() != GetMarkSnapshotEpoch<Generation::Old>()) {
+                keepEpoch = true;
+            } else {
+                markedThisCycle = true;
+            }
+        } else {
+            LiveInfo* liveInfo = __atomic_load_n(&metadata.liveInfo, std::memory_order_acquire);
+            if (liveInfo == nullptr || reinterpret_cast<MAddress>(liveInfo) == LiveInfo::TEMPORARY_PTR) {
+                markedThisCycle = false;
+                keepNullFace = true;
+            } else if (liveInfo->GetMarkFace<Generation::Old>().epoch.load(std::memory_order_acquire) !=
+                           view.GetEpoch() ||
+                       view.GetEpoch() != GetMarkSnapshotEpoch<Generation::Old>()) {
+                markedThisCycle = false;
+                keepEpoch = true;
+            } else {
+                markedThisCycle = true;
+            }
+        }
+        const bool emptyByMark = markedThisCycle && (IsLargeRegion()
+            ? GetMarkedRegionFlag(view) == 0
+            : ((raw & LIVE_BYTES_MASK) == 0));
+        if (OneseqDiagEnabled()) {
+            oneseqIsKnownEmptyCalls.fetch_add(1, std::memory_order_relaxed);
+            if (!auth && emptyByMark) {
+                oneseqAuthBlocksReclaim.fetch_add(1, std::memory_order_relaxed);
+            } else if (auth && emptyByMark) {
+                oneseqAuthAndEmpty.fetch_add(1, std::memory_order_relaxed);
+            } else if (auth && !emptyByMark) {
+                oneseqAuthNotEmpty.fetch_add(1, std::memory_order_relaxed);
+            } else {
+                oneseqNoAuthNotEmpty.fetch_add(1, std::memory_order_relaxed);
+            }
+        }
+        if (!ikeAtexitInstalled.exchange(true, std::memory_order_relaxed)) {
+            std::atexit([]() {
+                std::fprintf(stderr,
+                             "[GCV2][ike-keep] atexit trueEmpty=%zu keep=%zu keepBytes=%zu "
+                             "nullFace=%zu epoch=%zu\n",
+                             ikeTrueEmpty.load(std::memory_order_relaxed),
+                             ikeConservativeKeep.load(std::memory_order_relaxed),
+                             ikeConservativeKeepBytes.load(std::memory_order_relaxed),
+                             ikeNullFaceKeep.load(std::memory_order_relaxed),
+                             ikeEpochKeep.load(std::memory_order_relaxed));
+                std::fflush(stderr);
+            });
+        }
+        if (!auth) {
+            return false;
+        }
+        if (emptyByMark) {
+            ikeTrueEmpty.fetch_add(1, std::memory_order_relaxed);
+            return true;
+        }
+        if (keepNullFace || keepEpoch) {
+            size_t n = ikeConservativeKeep.fetch_add(1, std::memory_order_relaxed) + 1;
+            ikeConservativeKeepBytes.fetch_add(GetRegionSize(), std::memory_order_relaxed);
+            if (keepNullFace) {
+                ikeNullFaceKeep.fetch_add(1, std::memory_order_relaxed);
+            }
+            if (keepEpoch) {
+                ikeEpochKeep.fetch_add(1, std::memory_order_relaxed);
+            }
+            if (n <= 8 || (n & (n - 1)) == 0) {
+                LOG(RTLOG_ERROR,
+                    "[GCV2][ike-keep] n=%zu region=%p start=%#zx nullFace=%u epoch=%u "
+                    "live=%llu — not empty (unmarked this cycle)",
+                    n, this, GetRegionStart(), static_cast<unsigned>(keepNullFace),
+                    static_cast<unsigned>(keepEpoch),
+                    static_cast<unsigned long long>(raw & LIVE_BYTES_MASK));
+            }
+        }
+        return false;
+    }
+
+    bool IsKnownYoungEmpty(MarkView<Generation::Young> view) const
+    {
+        CHECK(view.GetRegion() == this);
+        if (!ValidateMarkView(view)) {
+            return false;
+        }
+        if (HasMarkStartAllocGap()) {
+            return false;
+        }
+        uint64_t raw = __atomic_load_n(&metadata.liveByteCount, std::memory_order_acquire);
+        const bool auth = (raw & LIVE_AUTHORITY_BIT) != 0;
+        bool markedThisCycle = false;
+        if (IsLargeRegion()) {
+            markedThisCycle = view.GetEpoch() == GetMarkSnapshotEpoch<Generation::Young>();
+        } else {
+            LiveInfo* liveInfo = __atomic_load_n(&metadata.liveInfo, std::memory_order_acquire);
+            if (liveInfo == nullptr || reinterpret_cast<MAddress>(liveInfo) == LiveInfo::TEMPORARY_PTR) {
+                markedThisCycle = false;
+            } else {
+                markedThisCycle = liveInfo->GetMarkFace<Generation::Young>().epoch.load(std::memory_order_acquire) ==
+                        view.GetEpoch() &&
+                    view.GetEpoch() == GetMarkSnapshotEpoch<Generation::Young>();
+            }
+        }
+        const bool emptyByMark = markedThisCycle && (IsLargeRegion()
+            ? GetMarkedRegionFlag(view) == 0
+            : ((raw & LIVE_BYTES_MASK) == 0));
+        return auth && emptyByMark;
+    }
+
+    bool IsSafeKnownEmpty(MarkView<Generation::Old> view)
+    {
+        if (!IsKnownEmpty(view)) {
+            return false;
+        }
+        if (GetRegionAllocPtr() <= GetRegionStart()) {
+            return true;
+        }
+        // Examined: either large, or we had a mark face this cycle that is now stale/null
+        // (authority already required by IsKnownEmpty). Residual bitmap pointer may remain.
+        return GetMarkBitmap(view) != nullptr || GetResurrectBitmap() != nullptr || IsLargeRegion() ||
+            __atomic_load_n(&metadata.liveInfo, std::memory_order_acquire) != nullptr;
+    }
+
+    bool IsSafeKnownYoungEmpty(MarkView<Generation::Young> view)
+    {
+        if (!IsKnownYoungEmpty(view)) {
+            return false;
+        }
+        if (GetRegionAllocPtr() <= GetRegionStart()) {
+            return true;
+        }
+        return GetMarkBitmap(view) != nullptr || IsLargeRegion() ||
+            __atomic_load_n(&metadata.liveInfo, std::memory_order_acquire) != nullptr;
+    }
+
+    void ResetLiveByteCount()
+    {
+        // densify rebuild: clear byte counter only (mark face rewritten in place next).
+        __atomic_store_n(&metadata.liveByteCount, LIVE_AUTHORITY_BIT, std::memory_order_release);
+    }
+
+    // ZGC zForwarding.cpp:71-74 reset_livemap after from-page iteration — one publish:
+    // empty live bytes + invalidate mark face (bump snapshotEpoch; large clears isMarked).
+    // MARK_EPOCH_DISCIPLINE §4.2: no memset of shared markWords.
+    template<Generation G>
+    void ResetLiveMapAfterForward(MarkView<G> view)
+    {
+        CHECK(view.GetRegion() == this);
+        // Forwarding is the last reader of this mark face. Copy it while the
+        // supplied view is still current; a partially forwarded page may stay
+        // UNMOVABLE_FROM after the epoch bump and still contain live holders.
+        if (!IsLargeRegion()) {
+            PreserveRetainedLiveInfo();
+        }
+        __atomic_store_n(&metadata.liveByteCount, LIVE_AUTHORITY_BIT, std::memory_order_release);
+        if (IsLargeRegion()) {
+            SetMarkedRegionFlag(view, 0);
+        }
+        BumpSnapshotEpochFromResetAfterForward<G>();
+    }
+
+    void AddLiveByteCount(uint64_t count)
+    {
+        uint64_t prev = __atomic_fetch_add(&metadata.liveByteCount, count, __ATOMIC_ACQ_REL);
+        if ((prev & LIVE_AUTHORITY_BIT) == 0) {
+            (void)__atomic_fetch_or(&metadata.liveByteCount, LIVE_AUTHORITY_BIT, __ATOMIC_ACQ_REL);
+        }
+    }
+
+    // ZGC ZPage::verify_live — live_objects/bytes must match livemap. Always-on counter;
+    // MRT_GCV2_LIVE_CROSSCHECK=1 aborts on mismatch.
+    template<Generation G>
+    void VerifyLiveBooks(MarkView<G> view, const char* where)
+    {
+        CHECK(view.GetRegion() == this);
+        liveCrossCheckCount.fetch_add(1, std::memory_order_relaxed);
+        if (!IsLiveCountAuthoritative()) {
+            return;
+        }
+        const uint64_t liveBytes = GetLiveByteCount();
+        const bool emptyByMark = G == Generation::Young
+            ? IsKnownYoungEmpty(MarkView<Generation::Young>(this, view.GetEpoch(), view.GetLifeId()))
+            : IsKnownEmpty(MarkView<Generation::Old>(this, view.GetEpoch(), view.GetLifeId()));
+        // Homology only when this cycle marked the page. Unmarked ∧ live==0 is
+        // conservative-keep (cjpmnull2), not a book error (zPage.inline.hpp:223-225).
+        const bool emptyByLive = (liveBytes == 0);
+        if (emptyByMark == emptyByLive || (!emptyByMark && emptyByLive)) {
+            return;
+        }
+        size_t n = liveCrossMismatchCount.fetch_add(1, std::memory_order_relaxed) + 1;
+        if (!liveCrossAtexitInstalled.exchange(true, std::memory_order_relaxed)) {
+            std::atexit([]() {
+                std::fprintf(stderr, "[GCV2][livesame][crosscheck] atexit checks=%zu mismatch=%zu\n",
+                             liveCrossCheckCount.load(std::memory_order_relaxed),
+                             liveCrossMismatchCount.load(std::memory_order_relaxed));
+                std::fflush(stderr);
+            });
+        }
+        if (n <= 32) {
+            LOG(RTLOG_ERROR,
+                "[GCV2][livesame][crosscheck] where=%s region=%p liveBytes=%llu emptyByMark=%u "
+                "emptyByLive=%u n=%zu",
+                where != nullptr ? where : "?", this, static_cast<unsigned long long>(liveBytes),
+                static_cast<unsigned>(emptyByMark), static_cast<unsigned>(emptyByLive), n);
+        }
     }
 
     void RemoveFromList()
@@ -977,15 +3255,131 @@ public:
     }
 
 private:
+    struct RetiredCompactRouteTable {
+        CompactRouteTable* table;
+        uint64_t generation;
+    };
+
+    CompactRouteTable* LoadCompactRouteTable() const
+    {
+        return static_cast<CompactRouteTable*>(
+            __atomic_load_n(&metadata.compactRouteTable, __ATOMIC_ACQUIRE));
+    }
+
+    static std::mutex& CompactRouteTableRetireMutex()
+    {
+        static std::mutex mutex;
+        return mutex;
+    }
+
+    static uint64_t& CompactRouteTableGraceGeneration()
+    {
+        static uint64_t generation = 0;
+        return generation;
+    }
+
+    static std::vector<RetiredCompactRouteTable>& RetiredCompactRouteTables()
+    {
+        static std::vector<RetiredCompactRouteTable> retired;
+        return retired;
+    }
+
+    static void RetireCompactRouteTable(CompactRouteTable* table)
+    {
+        std::lock_guard<std::mutex> lock(CompactRouteTableRetireMutex());
+        RetiredCompactRouteTables().push_back({ table, CompactRouteTableGraceGeneration() });
+    }
+
+    // Product geometry only — reachable from GetRoute(RouteTicket). External product
+    // callers cannot reach preLiveBytes without a ticket (ROUTE_DOMAIN.md §2).
+    size_t GetPreLiveBytesInGhostRegion(MAddress address)
+    {
+        DCHECK(metadata.liveInfo0 != nullptr);
+        size_t offset = GetAddressOffset(address);
+        if (GetRouteMarkGeneration() == Generation::Young) {
+            MarkView<Generation::Young> view = GetRouteMarkView<Generation::Young>();
+            return metadata.liveInfo0->GetPreLiveBytes(view, offset, GetGhostRegionSize());
+        }
+        MarkView<Generation::Old> view = GetRouteMarkView<Generation::Old>();
+        return metadata.liveInfo0->GetPreLiveBytes(view, offset, GetGhostRegionSize());
+    }
+
+    ALWAYS_INLINE void CheckObjectSize(
+        const BaseObject* obj, size_t objSize, MAddress regionStart, MAddress regionEnd) const
+    {
+        // Always-on TypeInfo range check: same predicate as CheckTypeInfoRegion rule 3
+        // (VerifyHeap.cpp:105-108) — tip ∈ heap address range is a defect.
+        // Default: count + one-shot dump (no abort). Fatal: MRT_GCV2_TIPINHEAP_FATAL=1.
+        TypeInfo* tip = obj->GetTypeInfo();
+        if (UNLIKELY(Heap::IsHeapAddress(tip))) {
+            ReportTypeInfoInHeap(obj, tip, objSize, regionStart, regionEnd);
+        }
+        MAddress objAddr = reinterpret_cast<MAddress>(obj);
+        // kMarkedBytesPerBit is 8, matching Allocator::ALLOC_ALIGN (Allocator.h:19).
+        if (UNLIKELY(objSize == 0 || (objSize % kMarkedBytesPerBit) != 0 || objSize > regionEnd - objAddr)) {
+            ReportInvalidObjectSize(obj, objSize, regionStart, regionEnd);
+        }
+    }
+
+    // Cold path for tip ∈ heap. Reuses Heap::IsHeapAddress (CheckTypeInfoRegion rule 3 body);
+    // does not reimplement the full VERIFY_HEAP channel (stats / misaligned / ContainsAddress).
+    ATTR_COLD ATTR_NO_INLINE void ReportTypeInfoInHeap(const BaseObject* obj, TypeInfo* tip, size_t objSize,
+                                                       MAddress regionStart, MAddress regionEnd) const
+    {
+        size_t n = tipInHeapHits.fetch_add(1, std::memory_order_relaxed) + 1;
+        if (n == 1) {
+            GCPhase phase = Heap::GetHeap().GetGCPhase();
+            LOG(RTLOG_ERROR,
+                "[GCV2][tipguard][TYPEINFO_IN_HEAP] obj=%p tip=%p objSize=%zu region=%p regionStart=%#zx "
+                "regionEnd=%#zx allocPtr=%#zx regionType=%u young=%u phase=%u "
+                "(default=count; fatal=MRT_GCV2_TIPINHEAP_FATAL=1)",
+                obj, tip, objSize, this, regionStart, regionEnd, GetRegionAllocPtr(),
+                static_cast<unsigned>(GetRegionType()), static_cast<unsigned>(IsYoungRegion()),
+                static_cast<unsigned>(phase));
+        } else if ((n & 0x3ffU) == 0) {
+            LOG(RTLOG_ERROR, "[GCV2][tipguard][TYPEINFO_IN_HEAP_COUNT] total=%zu", n);
+        }
+    }
+
+    NO_RETURN ATTR_COLD ATTR_NO_INLINE void ReportInvalidObjectSize(
+        const BaseObject* obj, size_t objSize, MAddress regionStart, MAddress regionEnd) const
+    {
+        MAddress objAddr = reinterpret_cast<MAddress>(obj);
+        size_t bitCapacity = (regionEnd - regionStart) / kMarkedBytesPerBit;
+        size_t bitIndex = objAddr >= regionStart ? (objAddr - regionStart) / kMarkedBytesPerBit :
+                                                   std::numeric_limits<size_t>::max();
+        GCPhase phase = Heap::GetHeap().GetGCPhase();
+        LOG(RTLOG_FATAL,
+            "[GCV2][sizeguard][INVALID_OBJECT_SIZE] obj=%p objSize=%zu region=%p regionStart=%#zx "
+            "regionEnd=%#zx allocPtr=%#zx regionType=%u unitRole=%u young=%u phase=%u bitCap=%zu bitIdx=%zu align=%zu",
+            obj, objSize, this, regionStart, regionEnd, GetRegionAllocPtr(), static_cast<unsigned>(GetRegionType()),
+            static_cast<unsigned>(GetUnitRole()), static_cast<unsigned>(IsYoungRegion()),
+            static_cast<unsigned>(phase), bitCapacity, bitIndex, kMarkedBytesPerBit);
+        std::abort();
+    }
+
+    static std::atomic<size_t> tipInHeapHits;
+
+    static std::atomic<size_t> youngRegionCount;
+    static std::mutex youngRegionFlagMutex;
     static constexpr int32_t MAX_RAW_POINTER_COUNT = std::numeric_limits<int32_t>::max();
     static constexpr int32_t BIT_LENGTH = 4;
+    static constexpr uint8_t YOUNG_AGE_BIT_LENGTH = 6;
+    static constexpr uint8_t YOUNG_STATE_BIT_LENGTH = 1 + YOUNG_AGE_BIT_LENGTH;
+    static constexpr uint8_t MAX_YOUNG_AGE = (1U << YOUNG_AGE_BIT_LENGTH) - 1;
+    static constexpr uint64_t YOUNG_LARGE_MARKED_BIT = static_cast<uint64_t>(1) << 63;
+    static constexpr uint64_t YOUNG_SNAPSHOT_EPOCH_MASK = YOUNG_LARGE_MARKED_BIT - 1;
+    static constexpr uint8_t MARK_FACE_SEALED_BIT = 1U << 0;
+    static constexpr uint8_t ROUTE_MARK_YOUNG_BIT = 1U << 1;
     enum RegionStateBitPos : uint8_t {
         REGION_TYPE_FLAG = 0,
         TRACE_REGION_FLAG = BIT_LENGTH,
         IN_GHOST_FROM_REGION_FLAG,
         MARKED_REGION_FLAG,
         ENQUEUED_REGION_FLAG,
-        RESURRECTED_REGION_FLAG
+        RESURRECTED_REGION_FLAG,
+        YOUNG_REGION_FLAG,
+        YOUNG_AGE_FLAG
     };
 
     struct UnitMetadata {
@@ -997,22 +3391,85 @@ private:
             uint32_t nextRegionIdx;
             uint32_t prevRegionIdx; // support fast deletion for region list.
 
-            uint32_t liveByteCount;
+            uint64_t liveByteCount;
             int32_t rawPointerObjectCount;
+            uint32_t censusBoundaryOffset;
         };
 
-        union {
-            LiveInfo* liveInfo = nullptr;
-            RegionInfo* ownerRegion; // if unit is SUBORDINATE_UNIT
-        };
+        // ZGC page seqnum analogue: an independent, non-wrapping incarnation
+        // identity. It is deliberately not packed into routeDestHold.
+        std::atomic<RegionLifeId> regionLifeId{ 0 };
 
-        union {
-            LiveInfo* liveInfo0 = nullptr;
-            RegionInfo* ownerRegion0; // if unit is SUBORDINATE_UNIT
-        };
+        LiveInfo* liveInfo = nullptr;
+        RegionInfo* ownerRegion = nullptr; // if unit is SUBORDINATE_UNIT
+
+        LiveInfo* liveInfo0 = nullptr;
+        RegionInfo* ownerRegion0 = nullptr; // if unit is SUBORDINATE_UNIT
+
+        LiveInfo* retainedLiveInfo = nullptr;
+        RetainedLiveInfoState retainedLiveInfoState = RetainedLiveInfoState::NEVER_EXAMINED;
+        uint64_t retainedLiveInfoEpoch = 0;
+        MAddress retainedLiveInfoCoveredUpTo = 0;
+        RegionLifeId retainedLifeId = 0;
+        // holderlive (F2): per-region-life history of the three fields above. Reset by
+        // InitRegionInfo so "preserve count 0" means "never preserved in this life", not
+        // "never preserved since boot".
+        uint32_t retainedPreserveCnt = 0;
+        uint32_t retainedClearCnt = 0;
+        uint8_t retainedLastOp = RETAINED_OP_NONE;
+        // routedest: 1 while some from-region's published RouteInfo still names this region
+        // as a destination. Stamped inside the ROUTING critical section by
+        // RouteOrCompactRegionImpl, dropped once per route generation by
+        // ClearRouteDestHoldFlags after PrepareFromRegionList's dispel walk has retired every
+        // route that could name it. Read by the reclaim entry points, which refuse a held
+        // region — the to-side counterpart of ZGC's per-page reference count, expressed as a
+        // gate rather than a count because the answer only has to change once per generation.
+        //
+        // Durability, and the reason this works at all: UnitInfo lives BELOW heapStartAddress
+        // (UnitInfo::GetUnitInfo returns heapStartAddress - (idx + 1) * sizeof(UnitInfo)),
+        // while ClearUnits MemorySets and ReleaseUnits madvises only payload at
+        // heapStartAddress + idx * UNIT_SIZE. A flag in UnitMetadata therefore survives both
+        // zeroing writers. Do not "fix" this on the assumption that ClearUnits wipes it.
+        //
+        // Placement: deliberately here, in the padding after retainedLastOp and before the
+        // 8-aligned retainedMarkWords pointer, not beside markFaceSealed where it reads more
+        // naturally. Measured: beside markFaceSealed it grew sizeof(UnitInfo) 192 -> 200,
+        // and per-unit metadata is per-page (UNIT_SIZE is the system page size), so that is
+        // +0.195% of the whole heap for one byte. Here it is free.
+        //
+        // Plain uint8_t rather than a regionStateBitField slot: bitfield writes are not
+        // atomic (see the comment on that union above) and this is written by a routing
+        // thread while reclaim threads read it. Same reason notRelocatableThisCycle and
+        // markFaceSealed are plain bytes.
+        uint8_t routeDestHold = 0;
+        // ZForwarding.hpp:66-69. Fits the 6-byte hole after routeDestHold:
+        // hold(1)+claimed(1)+done(1)+pad(1)+ref(4) = 8, then retainedMarkWords
+        // stays 8-aligned. markStartAllocPtr sits next to regionEnd0 (+8).
+        std::atomic<bool> fwdClaimed{ false };
+        std::atomic<bool> fwdDone{ false };
+        std::atomic<int32_t> fwdRefCount{ 0 };
+        // holderlive (F2): owned copy of the retained mark bits (mark | resurrect). Null unless
+        // MRT_GCV2_RETAINED_OWN_COPY=1. Freed by ClearLiveInfo / InitRegionInfo.
+        uint64_t* retainedMarkWords = nullptr;
+        uint32_t retainedMarkWordCnt = 0;
+        // In-flight copiers that hold LOCKED (TryLock success → Unlock). Fills the
+        // 4-byte hole after retainedMarkWordCnt; sizeof(UnitInfo) stays 208.
+        std::atomic<int32_t> copyInflight{ 0 };
+
+        // resolveto: Compact packs densely; GetRoute prefix-sum dests are holes.
+        // Table maps from-offset → actual dest for COMPACTED regions only.
+        void* compactRouteTable = nullptr;
 
         uintptr_t regionEnd0;
+        // ZGC zPage allocate-black: objects at offset >= this allocPtr, snapshotted
+        // at ClearLiveInfo / mark-start, are implicitly live (zPage.inline.hpp:180-185
+        // is_allocating). Same snapshot format as regionEnd0. 0 = no mark-start yet.
+        uintptr_t markStartAllocPtr;
         RouteInfo routeInfo;
+        uint64_t routeMarkEpoch = 0;
+        RegionLifeId routeMarkLifeId = 0;
+        uint64_t snapshotEpoch = 0;
+        uint64_t youngSnapshotEpoch = 0;
 
         // used to traverse ghost region.
         uint32_t nextRegionIdx0;
@@ -1050,6 +3507,16 @@ private:
             BitField<uint16_t> regionStateBitField;
         };
         RouteState routeState; // todo: put in RouteInfo
+        RegionLifeId routeStateLifeId = 0;
+        RegionLifeId ghostLifeId = 0;
+        // twoflags: orthogonal to isTraceRegion.
+        // isTraceRegion = implicit-black / ShouldEnqueue skip (cleared by HandleTraceRegions).
+        // notRelocatableThisCycle = allocated after mark start this cycle → not a
+        // relocation / CSet candidate until next PrepareTrace. Never read by ShouldEnqueue.
+        uint8_t notRelocatableThisCycle = 0;
+        // sealcheck: 1 after RouteRegion enters ROUTING (geometry face frozen).
+        uint8_t markFaceSealed = 0;
+        ZGenerationId _generation_id;
         RwLock rwLock;
     };
 
@@ -1058,18 +3525,47 @@ private:
         // propgated from RegionManager
         static uintptr_t heapStartAddress; // the address of the first region space to allocate objects
         static size_t totalUnitCount;
+        // gatehot: log2(UNIT_SIZE); UNIT_SIZE is always a power-of-two page size.
+        // Hot GetUnitIdxAt uses a shift instead of a runtime / on a non-constant divisor.
+        static size_t unitSizeShift;
 
         constexpr static uint32_t INVALID_IDX = std::numeric_limits<uint32_t>::max();
-        static size_t GetUnitIdxAt(uintptr_t allocAddr)
-        {
-            if (heapStartAddress <= allocAddr && allocAddr < (heapStartAddress + totalUnitCount * UNIT_SIZE)) {
-                return (allocAddr - heapStartAddress) / UNIT_SIZE;
-            }
 
-            std::abort();
+        // gatehot: OOB path used to live in the same function as the hot index math.
+        // That forced a full frame (dladdr + FormatLog + stack canary) on every call and
+        // blocked inlining into TryGetRegionInfoAt / PlausibleManagedObjectGate.
+        // Cold-only: same greppable FATAL text as before (unitzero trail).
+        ATTR_NO_INLINE ATTR_COLD static size_t GetUnitIdxAtOOB(uintptr_t allocAddr);
+
+        // Hot path: range check + shift. Must stay tiny enough to inline at every call site.
+        ALWAYS_INLINE static size_t GetUnitIdxAt(uintptr_t allocAddr)
+        {
+            uintptr_t start = heapStartAddress;
+            size_t units = totalUnitCount;
+            size_t shift = unitSizeShift;
+            // UNIT_SIZE == (1 << shift); keep arithmetic identical to
+            //   start <= addr < start + units * UNIT_SIZE
+            // without loading the UNIT_SIZE global or emitting a DIV.
+            if (LIKELY(start <= allocAddr &&
+                       ((allocAddr - start) >> shift) < units)) {
+                size_t idx = (allocAddr - start) >> shift;
+#if defined(MRT_DEBUG) && (MRT_DEBUG == 1)
+                // Debug builds always cross-check shift vs div (GATEEQUIV math).
+                size_t divIdx = (allocAddr - start) / UNIT_SIZE;
+                if (UNLIKELY(idx != divIdx)) {
+                    LOG(RTLOG_FATAL, "GetUnitIdxAt GATEEQUIV mismatch addr=%#zx shift=%zu div=%zu",
+                        allocAddr, idx, divIdx);
+                }
+#endif
+                return idx;
+            }
+            return GetUnitIdxAtOOB(allocAddr);
         }
 
-        static UnitInfo* GetUnitInfoAt(uintptr_t allocAddr) { return GetUnitInfo(GetUnitIdxAt(allocAddr)); }
+        ALWAYS_INLINE static UnitInfo* GetUnitInfoAt(uintptr_t allocAddr)
+        {
+            return GetUnitInfo(GetUnitIdxAt(allocAddr));
+        }
 
         // get the unit address by index
         static MAddress GetUnitAddress(size_t idx)
@@ -1118,12 +3614,16 @@ private:
         {
             metadata.regionStateBitField.SetAtomicValue(RegionStateBitPos::TRACE_REGION_FLAG, 1, flag);
         }
-        void SetInGhostRegion(uint8_t flag)
+        void SetInGhostRegion(uint8_t flag, RegionLifeId life = 0)
         {
+            __atomic_store_n(&metadata.ghostLifeId, life, __ATOMIC_RELEASE);
             metadata.regionStateBitField.SetAtomicValue(RegionStateBitPos::IN_GHOST_FROM_REGION_FLAG, 1, flag);
+            if (flag != 0) {
+                RegionLifeClock::Publish(RegionLifeClock::Carrier::GHOST, life);
+            }
         }
 
-        void SetMarkedRegionFlag(uint8_t flag)
+        void SetOldMarkedRegionFlag(uint8_t flag)
         {
             metadata.regionStateBitField.SetAtomicValue(RegionStateBitPos::MARKED_REGION_FLAG, 1, flag);
         }
@@ -1138,10 +3638,15 @@ private:
             metadata.regionStateBitField.SetAtomicValue(RegionStateBitPos::RESURRECTED_REGION_FLAG, 1, flag);
         }
 
+        // Publish the owner before the discriminator that guards it, so a reader which observes
+        // SUBORDINATE_UNIT always finds a non-null ownerRegion (:530-546). SetUnitRole is an
+        // acq_rel compare-exchange (BitField::SetAtomicValue :46-58), which orders the store
+        // above it.
         void InitSubordinateUnit(RegionInfo* owner)
         {
-            SetUnitRole(UnitRole::SUBORDINATE_UNIT);
             metadata.ownerRegion = owner;
+            SetInGhostRegion(0);
+            SetUnitRole(UnitRole::SUBORDINATE_UNIT);
         }
 
         void ToFreeRegion() { InitFreeRegion(GetUnitIdx(this), 1); }
@@ -1177,26 +3682,168 @@ private:
         UnitMetadata metadata;
     };
 
+    // unitRole selects the ownerRegion/liveInfo payload, and its writers publish it with an acq_rel
+    // compare-exchange (UnitInfo::InitSubordinateUnit, InitRegionInfo below). Read it with
+    // acquire so that the selected payload read which follows in GetRegionInfo/GetRegionInfoAt/
+    // GetGhostFromRegionAt cannot be hoisted above the discriminator: a plain pair of loads may
+    // be reordered, or folded into an unconditional load plus a select, either of which would
+    // defeat the writer's ordering. On x86_64 an acquire load is the same instruction as a
+    // relaxed one, so this constrains the compiler and costs nothing at run time.
+    static UnitRole LoadUnitRole(UnitInfo* unit)
+    {
+        return static_cast<UnitRole>(unit->GetMetadata().unitRoleBitField.GetAtomicValue(0, BIT_LENGTH));
+    }
+
+    static UnitRole LoadUnitRole0(UnitInfo* unit)
+    {
+        return static_cast<UnitRole>(
+            unit->GetMetadata().unitRoleBitField.GetAtomicValue(BIT_LENGTH, BIT_LENGTH) >> BIT_LENGTH);
+    }
+
+    void ObserveLifeBoundary() const
+    {
+        RegionLifeClock::NoteZeroAcrossBoundary(RegionLifeClock::Carrier::ROUTE_INFO,
+                                                metadata.routeInfo.HasRoute(),
+                                                metadata.routeInfo.GetLifeId());
+        RegionLifeClock::NoteZeroAcrossBoundary(RegionLifeClock::Carrier::ROUTE_STATE,
+                                                metadata.routeState != RouteState::NORMAL,
+                                                metadata.routeStateLifeId);
+        RegionLifeClock::NoteZeroAcrossBoundary(RegionLifeClock::Carrier::GHOST,
+                                                metadata.inGhostFromRegion != 0,
+                                                metadata.ghostLifeId);
+        RegionLifeClock::NoteZeroAcrossBoundary(RegionLifeClock::Carrier::MARK_SNAPSHOT,
+                                                metadata.liveInfo0 != nullptr || metadata.routeMarkEpoch != 0,
+                                                metadata.routeMarkLifeId);
+        RegionLifeClock::NoteZeroAcrossBoundary(RegionLifeClock::Carrier::RETAINED_COPY,
+                                                metadata.retainedLiveInfo != nullptr ||
+                                                    metadata.retainedMarkWords != nullptr ||
+                                                    metadata.retainedLiveInfoState !=
+                                                        RetainedLiveInfoState::NEVER_EXAMINED,
+                                                metadata.retainedLifeId);
+    }
+
+    void BumpRegionLifeId()
+    {
+        RegionLifeId old = metadata.regionLifeId.load(std::memory_order_relaxed);
+        for (;;) {
+            if (UNLIKELY(old == std::numeric_limits<RegionLifeId>::max())) {
+                LOG(RTLOG_FATAL,
+                    "[LIFECLOCK][REGION_LIFE_ID_OVERFLOW] region=%p life=%llu; wraparound is forbidden",
+                    this, static_cast<unsigned long long>(old));
+                return;
+            }
+            if (metadata.regionLifeId.compare_exchange_weak(old, old + 1, std::memory_order_release,
+                                                            std::memory_order_relaxed)) {
+                return;
+            }
+        }
+    }
+
+    // unitRole selects between the ownerRegion/liveInfo payloads and allocPtr/regionEnd:
+    // a reader that observes SUBORDINATE_UNIT dereferences metadata.ownerRegion (:530-546),
+    // and a reader that observes SMALL_SIZED_UNITS or LARGE_SIZED_UNITS treats this unit as a
+    // region head and reads metadata.regionEnd (IsValidRegion :1018-1022). This function both
+    // leaves the first state and enters the second, and the readers are not stopped by
+    // ScopedStopTheWorld -- the collector's own promotion walk (RegionManager.cpp:549-551) runs
+    // while the finalizer thread reclaims regions through here. So the role is moved to the
+    // neutral FREE_UNITS first, the payload is rewritten, and only then is the real role
+    // published. FREE_UNITS is safe to expose at any moment: it makes readers treat the unit as
+    // itself, and it is neither a valid region nor a subordinate one.
+    // SetUnitRole is an acq_rel compare-exchange (BitField::SetAtomicValue :46-58), so neither
+    // bracket can be reordered with the payload stores between them.
     void InitRegionInfo(size_t nUnit, UnitRole uClass)
     {
+        CHECK_DETAIL(FromPageDetach::FromPageDetachCheck(this, FromPageDetach::Site::INIT_REGION_INFO),
+                     "CJRT_FROM_REUSE_GATE bypass reached InitRegionInfo region=%p units=%zu", this, nUnit);
+        SetUnitRole(UnitRole::FREE_UNITS);
+        // Invalidate every old-life carrier before clearing any of its payload.
+        // Readers either retain the old page (detachgate) or observe this bump and
+        // reject the old incarnation; there is no wraparound fallback.
+        ObserveLifeBoundary();
+        BumpRegionLifeId();
+        {
+            uint8_t cur = __atomic_load_n(&metadata.routeDestHold, __ATOMIC_RELAXED);
+            uint8_t seq = static_cast<uint8_t>(((cur >> 1) + 1) & 0x7f);
+            uint8_t next = static_cast<uint8_t>((cur & 1u) | (seq << 1));
+            __atomic_store_n(&metadata.routeDestHold, next, __ATOMIC_RELEASE);
+        }
+        // See DispelGhostFromRegion: retire the route before detaching its compact table.
+        SetRouteState(NORMAL);
+        ZForwardingLife::ResetIdle(metadata.fwdRefCount, metadata.fwdClaimed, metadata.fwdDone);
+        WaitCopiedBeforePayloadWipe(this, "InitRegionInfo");
+        metadata.copyInflight.store(0, std::memory_order_relaxed);
+        ForwardingTable::ClearEntries(GetRegionStart(), nUnit * RegionInfo::UNIT_SIZE);
         metadata.allocPtr = GetRegionStart();
         metadata.regionEnd = metadata.allocPtr + nUnit * RegionInfo::UNIT_SIZE;
+        // Unset until ClearLiveInfo starts a mark. 0 so idle / test regions do
+        // not treat every object as allocate-black.
+        metadata.markStartAllocPtr = 0;
         metadata.prevRegionIdx = NULLPTR_IDX;
         metadata.nextRegionIdx = NULLPTR_IDX;
-        metadata.liveByteCount = 0;
+        // Ghost walk (PrepareFromRegionList) follows nextRegionIdx0. A reused
+        // region that still named its previous-life successor kept a retired
+        // from-space chain alive across InitRegion (RegionManager.h:782).
+        metadata.nextRegionIdx0 = NULLPTR_IDX;
+        metadata.censusBoundaryOffset = 0;
+        __atomic_store_n(&metadata.liveByteCount, 0, std::memory_order_release);
         metadata.liveInfo = nullptr;
+        metadata.liveInfo0 = nullptr;
+        FreeCompactRouteTable();
+        FreeRetainedMarkWords();
+        metadata.retainedLiveInfo = nullptr;
+        metadata.retainedLiveInfoState = RetainedLiveInfoState::NEVER_EXAMINED;
+        metadata.retainedLiveInfoEpoch = 0;
+        metadata.retainedLiveInfoCoveredUpTo = 0;
+        metadata.retainedLifeId = 0;
+        // holderlive (F2): new region life — its predecessor's snapshot history does not
+        // describe the objects that are about to be allocated here.
+        metadata.retainedPreserveCnt = 0;
+        metadata.retainedClearCnt = 0;
+        metadata.retainedLastOp = RETAINED_OP_NONE;
+        BumpSnapshotEpochFromInitRegion();
+        // routedest: this is the reuse edge named in the defect. TakeRegion has already run
+        // ClearUnits over this payload; if a published route still names this region, the
+        // route now answers into zeroed (or freshly re-allocated) memory. Count it here
+        // rather than at ClearUnits because this is the one call that runs exactly once per
+        // reuse. The hold is deliberately NOT cleared: reaching this point while held means
+        // a reclaim gate was bypassed, and leaving the flag set keeps the region out of the
+        // next collection set instead of silently papering over the escape.
+        RouteDestHold::NoteReuse(this, IsRouteDestHeld());
         SetRegionType(RegionType::FREE_REGION);
-        SetUnitRole(uClass);
         SetTraceRegionFlag(0);
-        SetMarkedRegionFlag(0);
+        SetNotRelocatableThisCycle(0);
+        // routedest part D: InitRegionInfo resets liveInfo, liveInfo0, the compact route
+        // table and every retained* field, but historically left routeState and routeInfo
+        // alone, so a re-taken region inherited its predecessor's plan and its predecessor's
+        // COMPACTED state. RouteObject reads `RouteRegion(r) || r->IsCompacted()`
+        // (RegionManager.h:605, :626), and the IsCompacted arm bypasses the ghost gate — so
+        // an inherited COMPACTED state left a null liveInfo0 as the only thing standing
+        // between a reused region and answering a route out of the previous life's geometry.
+        // The whole design rests on "the ghost bit bounds route readability"; this is the
+        // one hole in that obligation.
+        // Route state was reset before FreeCompactRouteTable; clear the geometry here.
+        metadata.routeInfo.Clear();
+        metadata.routeMarkEpoch = 0;
+        metadata.routeMarkLifeId = 0;
+        // Ghost lives in unit metadata, not payload: ClearUnits cannot clear it.
+        // TakeRegion reuses garbage without DispelGhostFromRegion (RegionInfo.h:667-698).
+        SetInGhostRegion(0);
+        SetOldMarkedRegionFlag(0);
+        __atomic_fetch_and(&metadata.youngSnapshotEpoch, YOUNG_SNAPSHOT_EPOCH_MASK, __ATOMIC_RELEASE);
         SetEnqueuedRegionFlag(0);
         SetResurrectedRegionFlag(0);
+        SetYoungRegionFlag(0);
+        SetMarkFaceSealed(false);
+        SetRouteMarkGeneration(Generation::Old);
         __atomic_store_n(&metadata.rawPointerObjectCount, 0, __ATOMIC_SEQ_CST);
+        SetUnitRole(uClass);
     }
 
     void InitRegion(size_t nUnit, UnitRole uClass)
     {
         InitRegionInfo(nUnit, uClass);
+        TlRawDiag::NoteInitRegion(this);
+        RegionLifeDiag::NoteTake(this);
 
         // initialize region's subordinate units.
 
@@ -1205,6 +3852,7 @@ private:
         for (size_t i = 1; i < nUnit; i++) {
             array[i].InitSubordinateUnit(this);
         }
+        AssertGhostClearedAfterReuse(nUnit);
     }
 
     static constexpr uint32_t NULLPTR_IDX = UnitInfo::INVALID_IDX;

@@ -8,6 +8,7 @@
 #include "ThreadLocal.h"
 
 #include "Common/Runtime.h"
+#include "Common/ThreadCache.h"
 #include "schedule.h"
 #include "Base/Globals.h"
 #include "Mutator/Mutator.h"
@@ -39,19 +40,24 @@ CleanThreadLocalData::CleanThreadLocalData()
 {
     // Add a side effect to make sure the constructor wont be optimized out.
     std::atomic_thread_fence(std::memory_order_seq_cst);
-    static volatile bool isInit = false;
-    if (!isInit) {
-        isInit = true;
-    }
 }
 
 CleanThreadLocalData::~CleanThreadLocalData()
 {
+    ThreadLocalData* local = ThreadLocal::GetThreadLocalData();
+    void* cache = local->threadCache;
+    local->threadCache = nullptr;
+
     if (!ThreadLocal::TryGetRdLock()) {
+        // Runtime Fini already holds the write lock; PagePool may be torn down next.
+        // Process exit reclaims the last caches.
         return;
     }
 
-    ThreadLocalData* local = ThreadLocal::GetThreadLocalData();
+    if (cache != nullptr) {
+        delete reinterpret_cast<ThreadCache*>(cache);
+    }
+
     if (Runtime::CurrentRef() == nullptr ||
         local->isCJProcessor || local->foreignCJThread == nullptr) {
         ThreadLocal::UnlockRdLock();

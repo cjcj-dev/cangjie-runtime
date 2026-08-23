@@ -89,9 +89,12 @@ class HeapReferenceMap : public RootMap {
 public:
     HeapReferenceMap(Uptr base, PrologueRegisterClosure&& prologue) : RootMap(base, std::move(prologue)) {}
     HeapReferenceMap(bool valid, Uptr base, const StackMapEntry& entry, PrologueRegisterClosure&& prologue)
-        : RootMap(valid, base, entry, std::move(prologue)), derivedPtr(entry.BuildDerivedPtrRoot()) {}
+        : RootMap(valid, base, entry, std::move(prologue)), derivedPtr(entry.BuildDerivedPtrRoot()),
+          oopSlotRoot(entry.BuildOopSlotRoot()), oopRegRoot(entry.BuildOopRegRoot()) {}
     HeapReferenceMap(HeapReferenceMap&& other)
-        : RootMap(std::move(other)), derivedPtr(other.derivedPtr), rootsList(std::move(other.rootsList)) {}
+        : RootMap(std::move(other)), derivedPtr(other.derivedPtr),
+          oopSlotRoot(std::move(other.oopSlotRoot)), oopRegRoot(other.oopRegRoot),
+          rootsList(std::move(other.rootsList)) {}
     HeapReferenceMap& operator=(HeapReferenceMap&& other)
     {
         if (this == &other) {
@@ -99,18 +102,25 @@ public:
         }
         RootMap::operator=(std::move(other));
         this->derivedPtr = other.derivedPtr;
+        this->oopSlotRoot = std::move(other.oopSlotRoot);
+        this->oopRegRoot = other.oopRegRoot;
         this->rootsList = std::move(other.rootsList);
         return *this;
     }
     ~HeapReferenceMap() override = default;
     bool VisitRegRoots(const RootVisitor& visitor, const RegDebugVisitor& debugFunc, RegSlotsMap& regSlotsMap) override
     {
-        return regRoot.VisitGCRoots(visitor, debugFunc, regSlotsMap, &rootsList);
+        RootVisitor oopVisitor = [](ObjectRef& root) { VisitTaggedOopSlot(root); };
+        bool ok = regRoot.VisitGCRoots(visitor, debugFunc, regSlotsMap, &rootsList);
+        oopRegRoot.VisitGCRoots(oopVisitor, debugFunc, regSlotsMap, &rootsList);
+        return ok;
     }
 
     void VisitSlotRoots(const RootVisitor& visitor, const SlotDebugVisitor& debugFunc) override
     {
         slotRoot.VisitGCRoots(visitor, debugFunc, stackBase, &rootsList);
+        RootVisitor oopVisitor = [](ObjectRef& root) { VisitTaggedOopSlot(root); };
+        oopSlotRoot.VisitGCRoots(oopVisitor, debugFunc, stackBase, &rootsList);
     }
 
     // VisitDerivedPtr must be invoked after VisitRegRoots and VisitSlotRoots;
@@ -124,8 +134,21 @@ public:
         }
     }
 
+    StackMapRootCounts CountRootSlots() const
+    {
+        StackMapRootCounts counts;
+        counts.baseSlots = slotRoot.CountRootSlots();
+        counts.baseRegs = regRoot.CountRootSlots();
+        StackMapRootCounts derivedCounts = derivedPtr.CountRootSlots();
+        counts.derivedSlots = derivedCounts.derivedSlots;
+        counts.derivedRegs = derivedCounts.derivedRegs;
+        return counts;
+    }
+
 private:
     DerivedPtr derivedPtr;
+    SlotRoot oopSlotRoot;
+    RegRoot oopRegRoot;
     std::list<BasePtrType> rootsList;
 };
 
@@ -226,7 +249,7 @@ public:
     ~StackMapBuilder() = default;
 
     template<class MapType>
-    MapType Build() const
+    MapType Build(bool countDerivedRows = false) const
     {
         PrologueRegisterClosure closure;
         PrologueVisitor visitor = [&closure](PrologueRegisterClosure::Type type, uint32_t value) {
@@ -244,11 +267,21 @@ public:
 #else
         auto head = CompressedStackMapHead::GetStackMapHead(startPC, visitor);
 #endif
-        auto entry = head.GetStackMapEntry(startPC, framePC);
+        auto entry = head.GetStackMapEntry(startPC, framePC, countDerivedRows);
         if (!entry.IsValid()) {
             return MapType(stackBase, std::move(closure));
         }
         return MapType(true, stackBase, entry, std::move(closure));
+    }
+
+    StackMapInvalidReason GetInvalidReason() const
+    {
+#ifdef __APPLE__
+        auto head = CompressedStackMapHead::GetStackMapHead(stackBase, nullptr);
+#else
+        auto head = CompressedStackMapHead::GetStackMapHead(startPC, nullptr);
+#endif
+        return head.GetInvalidReason(startPC, framePC);
     }
 
 protected:
@@ -260,8 +293,9 @@ protected:
 
 // specialization for MethodMap which avoids using malloc().
 template<>
-inline MethodMap StackMapBuilder::Build<MethodMap>() const
+inline MethodMap StackMapBuilder::Build<MethodMap>(bool countDerivedRows) const
 {
+    (void)countDerivedRows;
 #ifdef __APPLE__
     auto head = CompressedStackMapHead::GetStackMapHead(stackBase, nullptr, funcDesc);
 #else

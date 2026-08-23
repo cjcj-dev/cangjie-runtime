@@ -31,6 +31,10 @@ namespace MapleRuntime {
 class BaseObject;
 class WCollector;
 
+namespace HealPairDiag {
+void NoteZeroWrite(const void* slot, uintptr_t oldRaw, uintptr_t newRaw, uint16_t site);
+}
+
 // Instrumentation for the ZBarrier::self_heal port below. Declared rather than
 // included for the same reason HealPairDiag is: this header sits under Heap/ in
 // the include graph, not above it. Full contract in Heap/Verify/ZgcSelfHealDiag.h.
@@ -344,7 +348,11 @@ inline bool HealSlot(HeapSlot<isAtomic>& slot, zpointer expected, zpointer desir
     if (allowNull == HealNull::Disallow && !is_null(expected) && is_null(desired)) {
         return false;
     }
-    return slot.CompareExchange(expected, desired, succOrder, failOrder, observedOut);
+    bool ok = slot.CompareExchange(expected, desired, succOrder, failOrder, observedOut);
+    if (ok && is_null(desired)) {
+        HealPairDiag::NoteZeroWrite(&slot, raw(expected), raw(desired), static_cast<uint16_t>(site));
+    }
+    return ok;
 }
 
 // ZBarrier::self_heal is the product path (zBarrier.inline.hpp:72-110). The

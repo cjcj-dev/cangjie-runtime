@@ -230,6 +230,18 @@ elseif (WINDOWS_FLAG MATCHES 1)
 endif()
     add_library(runtime STATIC ${SRC_LIST})
     add_library(cangjie-runtime SHARED ${SRC_LIST})
+    add_custom_target(check_heal_slot_writes ALL
+        COMMAND python3 "${CMAKE_CURRENT_SOURCE_DIR}/../tests/check_heal_slot_writes.py"
+        COMMENT "Checking that HeapSlot compare-exchange writes stay inside HealSlot"
+        VERBATIM)
+    add_dependencies(runtime check_heal_slot_writes)
+    add_dependencies(cangjie-runtime check_heal_slot_writes)
+    add_custom_target(check_diag_not_hollow ALL
+        COMMAND python3 "${CMAKE_CURRENT_SOURCE_DIR}/../tests/check_diag_not_hollow.py"
+        COMMENT "Checking that a diagnostic documenting a gate is not an all-no-op implementation"
+        VERBATIM)
+    add_dependencies(runtime check_diag_not_hollow)
+    add_dependencies(cangjie-runtime check_diag_not_hollow)
     if (((IOS_FLAG MATCHES 1 OR IOS_SIMULATOR_FLAG MATCHES 1) AND (CMAKE_SYSTEM_PROCESSOR MATCHES "aarch64")) OR
         ((CMAKE_SYSTEM_PROCESSOR MATCHES "x86_64" AND IOS_FLAG MATCHES 1) OR IOS_SIMULATOR_FLAG MATCHES 2))
 	target_compile_options(cangjie-runtime PRIVATE -Wno-elaborated-enum-base)

@@ -37,7 +37,8 @@ public:
         return count;
     }
 
-    // for : *finalizers* are not proper gc roots.
+    // Registered finalizers are weak until DoResurrection selects them. Only
+    // queued/running finalizables are ordinary liveness roots.
     void VisitGCRoots(const RootVisitor& visitor)
     {
         std::lock_guard<std::mutex> l(listLock);

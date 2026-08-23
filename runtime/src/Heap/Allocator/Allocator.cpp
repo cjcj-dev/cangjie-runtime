@@ -53,7 +53,11 @@ bool Allocator::InitAyncAllocation()
         default:
             LOG(RTLOG_ERROR, "Unsupported cjEnableAsyncAllocation, cjEnableAsyncAllocation should be 0 or 1.\n");
     }
+#if defined(__OHOS__) || defined(__ANDROID__)
     return true;
+#else
+    return false;
+#endif
 }
 
 // PageAlllocator

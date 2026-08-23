@@ -115,14 +115,13 @@ _CJ_MCC_HandleSafepoint:
    // call safepoint handler
    mov  x0, x28
    bl _HandleSafepoint
-   .global _unwindPCForSafepointHandlerStub
-_unwindPCForSafepointHandlerStub:
+L_unwindPCForSafepointHandlerStub:
    bl _MRT_GetThreadLocalData
    str  x0, [sp, #0xf0]
    bl _MRT_DeleteC2NContext
 
    // restore callee registers
-.L_noexception:
+L_noexception:
    ldp   q0,  q1, [sp, #0x110]
    ldp   q2,  q3, [sp, #0x130]
    ldp   q4,  q5, [sp, #0x150]
@@ -205,6 +204,10 @@ _unwindPCForSafepointHandlerStub:
    cfi_adjust_cfa_offset (-HandleSafepointStubFrameSize)
 
    ret
-   .global _unwindPCForSafepointStubEnd
-_unwindPCForSafepointStubEnd:
+L_unwindPCForSafepointStubEnd:
    .cfi_endproc
+
+   .globl _unwindPCForSafepointHandlerStub
+_unwindPCForSafepointHandlerStub = L_unwindPCForSafepointHandlerStub
+   .globl _unwindPCForSafepointStubEnd
+_unwindPCForSafepointStubEnd = L_unwindPCForSafepointStubEnd

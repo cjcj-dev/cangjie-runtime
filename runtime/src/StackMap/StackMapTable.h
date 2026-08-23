@@ -339,7 +339,7 @@ public:
     }
     std::vector<SlotBits> GetSlotBitMap(U32 row) const
     {
-        if (slotFormat != PURE_COMPRESSED_STACKMAP) {
+        if (StackMapIsCompressed(slotFormat)) {
             return GetWAHSlotBitMap(row);
         }
         // regular bits length : 32 bits
@@ -477,26 +477,39 @@ private:
 };
 
 struct IdxSet {
-    IdxSet() : regIdx(0), slotIdx(0), lineNumIdx(0), derivedPtrIdx(0), stackRegIdx(0), stackSlotIdx(0) {}
-    IdxSet(U32 reg, U32 slot, U32 lineNum, U32 derivePtr, U32 stackReg, U32 stackSlot)
+    IdxSet() : regIdx(0), slotIdx(0), lineNumIdx(0), derivedPtrIdx(0), stackRegIdx(0), stackSlotIdx(0),
+               oopRegIdx(0), oopSlotIdx(0) {}
+    IdxSet(U32 reg, U32 slot, U32 lineNum, U32 derivePtr, U32 stackReg, U32 stackSlot,
+           U32 oopReg = 0, U32 oopSlot = 0)
         : regIdx(reg), slotIdx(slot), lineNumIdx(lineNum), derivedPtrIdx(derivePtr),
-          stackRegIdx(stackReg), stackSlotIdx(stackSlot) {}
+          stackRegIdx(stackReg), stackSlotIdx(stackSlot), oopRegIdx(oopReg), oopSlotIdx(oopSlot) {}
     IdxSet(U32 reg, U32 slot, U32 lineNum, U32 derivePtr)
         : regIdx(reg), slotIdx(slot), lineNumIdx(lineNum), derivedPtrIdx(derivePtr),
-          stackRegIdx(0), stackSlotIdx(0) {}
+          stackRegIdx(0), stackSlotIdx(0), oopRegIdx(0), oopSlotIdx(0) {}
     U32 regIdx;
     U32 slotIdx;
     U32 lineNumIdx;
     U32 derivedPtrIdx;
     U32 stackRegIdx;
     U32 stackSlotIdx;
+    U32 oopRegIdx;
+    U32 oopSlotIdx;
+};
+
+enum class StackMapLookupResult : U8 {
+    FOUND,
+    ZERO_ENTRIES,
+    PC_MISS,
 };
 
 class StackMapTable : public TableAPI {
 public:
-    StackMapTable(U8* tableAddrStart, U32 tableBitStart) : TableAPI(tableAddrStart, tableBitStart) { Init(); }
-    explicit StackMapTable(const BitsManager& bits) : TableAPI(bits) { Init(); }
-    explicit StackMapTable(BitsManager&& bits) : TableAPI(bits) { Init(); }
+    StackMapTable(U8* tableAddrStart, U32 tableBitStart, U32 format = 0)
+        : TableAPI(tableAddrStart, tableBitStart), mapFormat(format) { Init(); }
+    explicit StackMapTable(const BitsManager& bits, U32 format = 0)
+        : TableAPI(bits), mapFormat(format) { Init(); }
+    explicit StackMapTable(BitsManager&& bits, U32 format = 0)
+        : TableAPI(bits), mapFormat(format) { Init(); }
     ~StackMapTable() = default;
     IdxSet GetIdxSet(Uptr startPC, Uptr framePC) const
     {
@@ -510,21 +523,11 @@ public:
         U32 right = recordNum - 1;
         U32 leftPCOff = PCAt(left);
         if (leftPCOff == targetPCOff) {
-            if (CangjieRuntime::stackGrowConfig == StackGrowConfig::STACK_GROW_ON) {
-                return IdxSet(RegIdxAt(left), SlotIdxAt(left), LineNumIdxAt(left),
-                    DerivePtrIdxAt(left), StackRegIdxAt(left), StackSlotIdxAt(left));
-            } else {
-                return IdxSet(RegIdxAt(left), SlotIdxAt(left), LineNumIdxAt(left), DerivePtrIdxAt(left));
-            }
+            return MakeIdxSet(left);
         }
         U32 rightPCOff = PCAt(right);
         if (rightPCOff == targetPCOff) {
-            if (CangjieRuntime::stackGrowConfig == StackGrowConfig::STACK_GROW_ON) {
-                return IdxSet(RegIdxAt(right), SlotIdxAt(right), LineNumIdxAt(right),
-                    DerivePtrIdxAt(right), StackRegIdxAt(right), StackSlotIdxAt(right));
-            } else {
-                return IdxSet(RegIdxAt(right), SlotIdxAt(right), LineNumIdxAt(right), DerivePtrIdxAt(right));
-            }
+            return MakeIdxSet(right);
         }
         if (targetPCOff < leftPCOff || targetPCOff > rightPCOff) {
             DLOG(ENUM, "stack map is empty in this frame");
@@ -535,12 +538,7 @@ public:
             U32 mid = (left + right) >> 1;
             U32 midPCOff = PCAt(mid);
             if (midPCOff == targetPCOff) {
-                if (CangjieRuntime::stackGrowConfig == StackGrowConfig::STACK_GROW_ON) {
-                    return IdxSet(RegIdxAt(mid), SlotIdxAt(mid), LineNumIdxAt(mid),
-                        DerivePtrIdxAt(mid), StackRegIdxAt(mid), StackSlotIdxAt(mid));
-                } else {
-                    return IdxSet(RegIdxAt(mid), SlotIdxAt(mid), LineNumIdxAt(mid), DerivePtrIdxAt(mid));
-                }
+                return MakeIdxSet(mid);
             } else if (midPCOff < targetPCOff) {
                 left = mid + 1;
             } else {
@@ -550,25 +548,102 @@ public:
         return IdxSet();
     }
 
+    StackMapLookupResult GetLookupResult(Uptr startPC, Uptr framePC) const
+    {
+        U32 recordNum = headerInfo[RECORD_NUM];
+        if (recordNum == 0) {
+            return StackMapLookupResult::ZERO_ENTRIES;
+        }
+        U32 targetPCOff = static_cast<U32>(framePC - startPC);
+        U32 left = 0;
+        U32 right = recordNum - 1;
+        U32 leftPCOff = PCAt(left);
+        U32 rightPCOff = PCAt(right);
+        if (targetPCOff < leftPCOff || targetPCOff > rightPCOff) {
+            return StackMapLookupResult::PC_MISS;
+        }
+        while (left <= right) {
+            U32 mid = (left + right) >> 1;
+            U32 midPCOff = PCAt(mid);
+            if (midPCOff == targetPCOff) {
+                return StackMapLookupResult::FOUND;
+            }
+            if (midPCOff < targetPCOff) {
+                left = mid + 1;
+            } else {
+                right = mid - 1;
+            }
+        }
+        return StackMapLookupResult::PC_MISS;
+    }
+
     U32 GetRegBitsLen() const { return headerInfo[REG_BITS_LEN]; }
     U32 GetSlotBitsLen() const { return headerInfo[SLOT_BITS_LEN]; }
+    U32 GetDerivedPtrRows(Uptr startPC, Uptr framePC, U32 totalRows) const
+    {
+        const U32 recordNum = headerInfo[RECORD_NUM];
+        const U32 targetPCOff = static_cast<U32>(framePC - startPC);
+        U32 currentStart = 0;
+        for (U32 row = 0; row < recordNum; ++row) {
+            if (PCAt(row) == targetPCOff) {
+                currentStart = DerivePtrIdxAt(row);
+                break;
+            }
+        }
+        if (currentStart == 0 || currentStart > totalRows) {
+            return 0;
+        }
+
+        U32 nextStart = totalRows + 1;
+        for (U32 row = 0; row < recordNum; ++row) {
+            U32 candidate = DerivePtrIdxAt(row);
+            if (candidate > currentStart && candidate < nextStart) {
+                nextStart = candidate;
+            }
+        }
+        return nextStart - currentStart;
+    }
 
 private:
+    IdxSet MakeIdxSet(U32 row) const
+    {
+        const bool grow = CangjieRuntime::stackGrowConfig == StackGrowConfig::STACK_GROW_ON;
+        return IdxSet(RegIdxAt(row), SlotIdxAt(row), LineNumIdxAt(row), DerivePtrIdxAt(row),
+                      grow ? StackRegIdxAt(row) : 0, grow ? StackSlotIdxAt(row) : 0,
+                      StackMapHasOopSlot(mapFormat) ? OopRegIdxAt(row) : 0,
+                      StackMapHasOopSlot(mapFormat) ? OopSlotIdxAt(row) : 0);
+    }
+    U32 HeaderColCount() const
+    {
+        U32 n = HEADER_COL_NUM - STACK_ITEM_NUM - OOP_ITEM_NUM;
+        if (CangjieRuntime::stackGrowConfig == StackGrowConfig::STACK_GROW_ON) {
+            n += STACK_ITEM_NUM;
+        }
+        if (StackMapHasOopSlot(mapFormat)) {
+            n += OOP_ITEM_NUM;
+        }
+        return n;
+    }
     void Init()
     {
+        U32 cols = HeaderColCount();
+        data = ResolveHeader(headerInfo, cols).GetNext(headerInfo[cols - 1]);
+        rowBitsLen = PC_OFF_BITS + headerInfo[REG_BITS_LEN] + headerInfo[SLOT_BITS_LEN] +
+            headerInfo[LINE_NUM_BITS_LEN] + headerInfo[DERIVE_PTR_BITS_LEN];
         if (CangjieRuntime::stackGrowConfig == StackGrowConfig::STACK_GROW_ON) {
-            data = ResolveHeader(headerInfo, HEADER_COL_NUM).GetNext(headerInfo[PADDING_BITS_LEN]);
-            rowBitsLen = PC_OFF_BITS + headerInfo[REG_BITS_LEN] + headerInfo[SLOT_BITS_LEN] +
-                headerInfo[LINE_NUM_BITS_LEN] + headerInfo[DERIVE_PTR_BITS_LEN] +
-                headerInfo[STACK_REG_BITS_LEN] + headerInfo[STACK_SLOT_BITS_LEN];
-            nextTable = data.GetNext(rowBitsLen * headerInfo[RECORD_NUM]);
-        } else {
-            data = ResolveHeader(headerInfo, HEADER_COL_NUM - STACK_ITEM_NUM).GetNext(headerInfo[PADDING_BITS_LEN -
-                                                                                                 STACK_ITEM_NUM]);
-            rowBitsLen = PC_OFF_BITS + headerInfo[REG_BITS_LEN] + headerInfo[SLOT_BITS_LEN] +
-                headerInfo[LINE_NUM_BITS_LEN] + headerInfo[DERIVE_PTR_BITS_LEN];
-            nextTable = data.GetNext(rowBitsLen * headerInfo[RECORD_NUM]);
+            rowBitsLen += headerInfo[STACK_REG_BITS_LEN] + headerInfo[STACK_SLOT_BITS_LEN];
         }
+        if (StackMapHasOopSlot(mapFormat)) {
+            if (CangjieRuntime::stackGrowConfig == StackGrowConfig::STACK_GROW_ON) {
+                oopRegBits = headerInfo[OOP_REG_BITS_LEN];
+                oopSlotBits = headerInfo[OOP_SLOT_BITS_LEN];
+            } else {
+                oopRegBits = headerInfo[STACK_REG_BITS_LEN];
+                oopSlotBits = headerInfo[STACK_SLOT_BITS_LEN];
+            }
+            rowBitsLen += oopRegBits + oopSlotBits;
+        }
+        nextTable = data.GetNext(rowBitsLen * headerInfo[RECORD_NUM]);
     }
     U32 PCAt(U32 row) const
     {
@@ -612,6 +687,27 @@ private:
         auto bitsManager = data.GetNext(skipBitsLen);
         return bitsManager.GetBits(headerInfo[STACK_SLOT_BITS_LEN]);
     }
+    U32 OopRegIdxAt(U32 row) const
+    {
+        U32 skipBitsLen = row * rowBitsLen + PC_OFF_BITS + headerInfo[REG_BITS_LEN] + headerInfo[SLOT_BITS_LEN] +
+            headerInfo[LINE_NUM_BITS_LEN] + headerInfo[DERIVE_PTR_BITS_LEN];
+        if (CangjieRuntime::stackGrowConfig == StackGrowConfig::STACK_GROW_ON) {
+            skipBitsLen += headerInfo[STACK_REG_BITS_LEN] + headerInfo[STACK_SLOT_BITS_LEN];
+        }
+        auto bitsManager = data.GetNext(skipBitsLen);
+        return bitsManager.GetBits(oopRegBits);
+    }
+    U32 OopSlotIdxAt(U32 row) const
+    {
+        U32 skipBitsLen = row * rowBitsLen + PC_OFF_BITS + headerInfo[REG_BITS_LEN] + headerInfo[SLOT_BITS_LEN] +
+            headerInfo[LINE_NUM_BITS_LEN] + headerInfo[DERIVE_PTR_BITS_LEN];
+        if (CangjieRuntime::stackGrowConfig == StackGrowConfig::STACK_GROW_ON) {
+            skipBitsLen += headerInfo[STACK_REG_BITS_LEN] + headerInfo[STACK_SLOT_BITS_LEN];
+        }
+        skipBitsLen += oopRegBits;
+        auto bitsManager = data.GetNext(skipBitsLen);
+        return bitsManager.GetBits(oopSlotBits);
+    }
     enum HeaderColTag : U32 {
         RECORD_NUM = 0,
         REG_BITS_LEN,
@@ -620,12 +716,18 @@ private:
         DERIVE_PTR_BITS_LEN,
         STACK_REG_BITS_LEN,
         STACK_SLOT_BITS_LEN,
+        OOP_REG_BITS_LEN,
+        OOP_SLOT_BITS_LEN,
         PADDING_BITS_LEN,
         HEADER_COL_NUM,
     };
     static constexpr U32 STACK_ITEM_NUM = 2;
+    static constexpr U32 OOP_ITEM_NUM = 2;
     static constexpr U32 PC_OFF_BITS = 32;
     U32 headerInfo[HEADER_COL_NUM]{ 0 };
+    U32 mapFormat = 0;
+    U32 oopRegBits = 0;
+    U32 oopSlotBits = 0;
 };
 
 // DerivedPtrTable doesn't have header info, the bits length is the same as stack map table.
@@ -642,6 +744,7 @@ public:
         BitsManager rowBits = data.GetNext(row * rowBitsLen);
         return std::make_pair(rowBits.GetBits(regBitsLen), rowBits.GetNext(regBitsLen).GetBits(slotBitsLen));
     }
+    U32 GetRecordNum() const { return headerInfo[RECORD_NUM]; }
 
 private:
     void Init()

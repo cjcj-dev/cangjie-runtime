@@ -13,6 +13,7 @@
 #include "Interpreter/Options.h"
 #include "Loader/ILoader.h"
 #include "LoaderManager.h"
+#include "TypeInfoManager.h"
 
 namespace MapleRuntime {
 bool LoaderManager::isReleased;
@@ -188,6 +189,7 @@ void LoaderManager::RegisterLoadFile(Uptr address) const
 
 void LoaderManager::UnregisterLoadFile(Uptr address) const
 {
+    TypeInfoManager::GetTypeInfoManager().InvalidateGenericTypeInfoFastMap();
     loader->UnregisterLoadFile(address);
 }
 
@@ -237,8 +239,15 @@ struct CJEnvMethods {
 
 bool IsCJRomSdkNamespace()
 {
-    Dl_namespace dlns;
-    dlns_get(nullptr, &dlns);
+    using DlnsGet = int (*)(const char*, Dl_namespace*);
+    auto dlnsGet = reinterpret_cast<DlnsGet>(dlsym(RTLD_DEFAULT, "dlns_get"));
+    if (dlnsGet == nullptr) {
+        return false;
+    }
+    Dl_namespace dlns {};
+    if (dlnsGet(nullptr, &dlns) != 0) {
+        return false;
+    }
     return strcmp(dlns.name, "cj_rom_sdk") == 0;
 }
 

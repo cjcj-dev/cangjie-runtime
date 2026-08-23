@@ -28,13 +28,24 @@
 #include "Common/ScopedObjectAccess.h"
 #include "ExceptionManager.inline.h"
 #include "Heap/Barrier/Barrier.h"
+#include "Heap/Allocator/RegionInfo.h"
+#include "Heap/Barrier/RememberedSet.h"
+#include "Heap/Collector/Collector.h"
 #include "Heap/Collector/CollectorResources.h"
+#include "Heap/Collector/GcStats.h"
 #include "Heap/Heap.h"
+#include "Heap/Verify/DiagGate.h"
+#include "Heap/Verify/ProbeReadRouteDiag.h"
+#include "Mutator/Mutator.h"
 #include "HeapManager.inline.h"
 #include "LoaderManager.h"
 #include "TypeInfoManager.h"
 #include "ObjectModel/Field.inline.h"
 #include "ObjectModel/RefField.inline.h"
+#include <atomic>
+#include <cstdio>
+#include <cstdlib>
+#include <cstring>
 #ifdef _WIN64
 #include "Mutator/MutatorManager.h"
 #include "Mutator/ThreadLocal.h"
@@ -49,6 +60,264 @@
 #endif
 
 namespace MapleRuntime {
+
+namespace {
+struct NwTargetSnapshot {
+    MAddress address { 0 };
+    uintptr_t header { 0 };
+    uintptr_t word1 { 0 };
+    MAddress regionStart { 0 };
+    MAddress regionAlloc { 0 };
+    MAddress regionEnd { 0 };
+    unsigned regionType { 0 };
+    unsigned regionYoung { 0 };
+    unsigned youngAge { 0 };
+    int youngFace { -1 };
+    int youngMark { -1 };
+    int oldFace { -1 };
+    int oldMark { -1 };
+    int allocatedAfterStart { -1 };
+    int traceRegion { -1 };
+    uint64_t rootHits { 0 };
+    uint32_t rootGc { 0 };
+    MAddress rootSlot { 0 };
+    unsigned rootKind { 0 };
+    unsigned rootThisGc { 0 };
+};
+
+struct NwReadSnapshot {
+    bool armed { false };
+    bool captured { false };
+    bool returnedCaptured { false };
+    int64_t probe { -1 };
+    int64_t expected { 0 };
+    MAddress slot { 0 };
+    MAddress slotRaw { 0 };
+    GCPhase phase { GCPhase::GC_PHASE_IDLE };
+    MAddress holderSlotOffset { 0 };
+    int edgeInRemset { -1 };
+    int edgeEverRemset { -1 };
+    int edgeEverEnabled { -1 };
+    NwTargetSnapshot peeled;
+    NwTargetSnapshot holder;
+    NwTargetSnapshot returned;
+};
+
+thread_local NwReadSnapshot g_nwReadSnapshot;
+std::atomic<size_t> g_nwReadLines { 0 };
+
+bool NwReadDiagEnabled()
+{
+    static const bool enabled = []() {
+        const char* value = std::getenv("MRT_GCV2_NWREAD");
+        return value != nullptr && value[0] == '1' && value[1] == '\0';
+    }();
+    return enabled;
+}
+
+template<Generation G>
+void SnapshotNwMark(RegionInfo* region, MAddress address, int& facePresent, int& marked)
+{
+    MarkView<G> view = region->GetMarkView<G>();
+    facePresent = 0;
+    marked = 0;
+    if (region->IsLargeRegion()) {
+        facePresent = 1;
+        marked = region->GetMarkedRegionFlag(view) == 1 ? 1 : 0;
+        return;
+    }
+    RegionBitmap* bitmap = region->GetMarkBitmap(view);
+    if (bitmap == nullptr) {
+        return;
+    }
+    facePresent = 1;
+    marked = bitmap->IsMarked(region->GetAddressOffset(address)) ? 1 : 0;
+}
+
+void SnapshotNwTarget(MAddress address, NwTargetSnapshot& target)
+{
+    target.address = address;
+    if (address == 0 || !Heap::IsHeapAddress(address)) {
+        return;
+    }
+    RegionInfo* region = RegionInfo::TryGetRegionInfoAt(address);
+    if (region == nullptr) {
+        return;
+    }
+    target.regionStart = region->GetRegionStart();
+    target.regionAlloc = region->GetRegionAllocPtr();
+    target.regionEnd = region->GetRegionEnd();
+    target.regionType = static_cast<unsigned>(region->GetRegionType());
+    target.regionYoung = region->IsYoungRegion() ? 1u : 0u;
+    target.youngAge = region->GetYoungAge();
+    const size_t offset = region->GetAddressOffset(address);
+    target.allocatedAfterStart = region->AllocatedAfterMarkStart(offset) ? 1 : 0;
+    target.traceRegion = region->IsTraceRegion() ? 1 : 0;
+    const ProbeReadRouteDiag::RootEvidence root = ProbeReadRouteDiag::LookupRoot(address);
+    target.rootHits = root.hits;
+    target.rootGc = root.gc;
+    target.rootSlot = root.slot;
+    target.rootKind = static_cast<unsigned>(root.kind);
+    target.rootThisGc = root.hits != 0 && root.gc == static_cast<uint32_t>(
+        g_gcCount.load(std::memory_order_relaxed)) ? 1u : 0u;
+    const uintptr_t* words = reinterpret_cast<const uintptr_t*>(address);
+    target.header = words[0];
+    target.word1 = words[1];
+    if (target.regionYoung != 0) {
+        SnapshotNwMark<Generation::Young>(region, address, target.youngFace, target.youngMark);
+    }
+    SnapshotNwMark<Generation::Old>(region, address, target.oldFace, target.oldMark);
+}
+
+void CaptureNwReadBefore(const ObjectPtr obj, RefField<false>* field, MAddress rawBefore)
+{
+    NwReadSnapshot& sample = g_nwReadSnapshot;
+    if (!sample.armed || sample.captured) {
+        return;
+    }
+    sample.captured = true;
+    sample.slot = reinterpret_cast<MAddress>(field);
+    sample.slotRaw = rawBefore;
+    sample.phase = Heap::GetHeap().GetGCPhase();
+    SnapshotNwTarget(RefField<>(rawBefore).GetAddress(), sample.peeled);
+    SnapshotNwTarget(RefField<>(reinterpret_cast<MAddress>(obj)).GetAddress(), sample.holder);
+    if (sample.holder.address != 0 && sample.slot >= sample.holder.address) {
+        sample.holderSlotOffset = sample.slot - sample.holder.address;
+    }
+    if (sample.slot != 0 && Heap::IsHeapAddress(sample.slot)) {
+        RememberedSet& remset = Heap::GetHeap().GetRememberedSet();
+        sample.edgeInRemset = remset.Contains(sample.slot) ? 1 : 0;
+        sample.edgeEverRemset = remset.WasEverRecorded(sample.slot) ? 1 : 0;
+        sample.edgeEverEnabled = remset.EverRecordedEnabled() ? 1 : 0;
+    }
+}
+
+void CaptureNwReadAfter(ObjectPtr result)
+{
+    NwReadSnapshot& sample = g_nwReadSnapshot;
+    if (!sample.captured || sample.returnedCaptured) {
+        return;
+    }
+    sample.returnedCaptured = true;
+    SnapshotNwTarget(RefField<>(reinterpret_cast<MAddress>(result)).GetAddress(), sample.returned);
+}
+} // namespace
+
+extern "C" MRT_EXPORT void MRT_NwReadDiagArm(int64_t probe, int64_t expected)
+{
+    g_nwReadSnapshot = {};
+    if (!NwReadDiagEnabled()) {
+        return;
+    }
+    g_nwReadSnapshot.armed = true;
+    g_nwReadSnapshot.probe = probe;
+    g_nwReadSnapshot.expected = expected;
+}
+
+extern "C" MRT_EXPORT void MRT_NwReadDiagFinish(int64_t got)
+{
+    NwReadSnapshot sample = g_nwReadSnapshot;
+    g_nwReadSnapshot = {};
+    if (!sample.armed || got == sample.expected) {
+        return;
+    }
+    size_t line = g_nwReadLines.fetch_add(1, std::memory_order_relaxed);
+    if (line >= 128) {
+        return;
+    }
+    const ProbeReadRouteDiag::EdgeStoreEvidence edgeStore =
+        ProbeReadRouteDiag::LookupEdgeStore(sample.slot);
+    std::fprintf(stderr,
+                 "[GCV2][nwread] n=%zu probe=%lld expected=%lld got=%lld captured=%u "
+                 "slot=%#llx slot_raw=%#llx phase=%s(%u) peeled=%#llx "
+                 "target_header=%#llx target_word1=%#llx region_type=%u region_young=%u young_age=%u "
+                 "region=[%#llx,%#llx,%#llx) young_face=%d young_mark=%d old_face=%d old_mark=%d "
+                 "returned=%#llx returned_header=%#llx returned_word1=%#llx returned_region_type=%u "
+                 "returned_region_young=%u returned_young_mark=%d returned_old_mark=%d "
+                 "target_after_start=%d target_trace_region=%d target_root_hits=%llu target_root_gc=%u "
+                 "target_root_this_gc=%u target_root_kind=%u target_root_slot=%#llx holder=%#llx "
+                 "holder_header=%#llx holder_word1=%#llx holder_region_type=%u holder_region_young=%u "
+                 "holder_young_age=%u holder_region=%#llx holder_young_mark=%d holder_old_mark=%d "
+                 "holder_after_start=%d holder_trace_region=%d holder_root_hits=%llu holder_root_gc=%u "
+                 "holder_root_this_gc=%u holder_root_kind=%u holder_root_slot=%#llx "
+                 "holder_slot_offset=%#llx edge_in_remset=%d edge_ever_remset=%d edge_ever_enabled=%d "
+                 "edge_store_writes=%llu edge_store_target=%#llx edge_store_previous=%#llx "
+                 "edge_store_barrier_phase=%u edge_store_slow=%u "
+                 "edge_remset_epoch=%llu edge_remset_records=%llu edge_remset_consumes=%llu "
+                 "edge_remset_clears=%llu edge_remset_target=%#llx edge_remset_event=%u edge_remset_face=%u\n",
+                 line, static_cast<long long>(sample.probe), static_cast<long long>(sample.expected),
+                 static_cast<long long>(got), sample.captured ? 1u : 0u,
+                 static_cast<unsigned long long>(sample.slot), static_cast<unsigned long long>(sample.slotRaw),
+                 Collector::GetGCPhaseName(sample.phase), static_cast<unsigned>(sample.phase),
+                 static_cast<unsigned long long>(sample.peeled.address),
+                 static_cast<unsigned long long>(sample.peeled.header),
+                 static_cast<unsigned long long>(sample.peeled.word1), sample.peeled.regionType,
+                 sample.peeled.regionYoung, sample.peeled.youngAge,
+                 static_cast<unsigned long long>(sample.peeled.regionStart),
+                 static_cast<unsigned long long>(sample.peeled.regionAlloc),
+                 static_cast<unsigned long long>(sample.peeled.regionEnd), sample.peeled.youngFace,
+                 sample.peeled.youngMark, sample.peeled.oldFace, sample.peeled.oldMark,
+                 static_cast<unsigned long long>(sample.returned.address),
+                 static_cast<unsigned long long>(sample.returned.header),
+                 static_cast<unsigned long long>(sample.returned.word1), sample.returned.regionType,
+                 sample.returned.regionYoung, sample.returned.youngMark, sample.returned.oldMark,
+                 sample.peeled.allocatedAfterStart, sample.peeled.traceRegion,
+                 static_cast<unsigned long long>(sample.peeled.rootHits), sample.peeled.rootGc,
+                 sample.peeled.rootThisGc, sample.peeled.rootKind,
+                 static_cast<unsigned long long>(sample.peeled.rootSlot),
+                 static_cast<unsigned long long>(sample.holder.address),
+                 static_cast<unsigned long long>(sample.holder.header),
+                 static_cast<unsigned long long>(sample.holder.word1), sample.holder.regionType,
+                 sample.holder.regionYoung, sample.holder.youngAge,
+                 static_cast<unsigned long long>(sample.holder.regionStart), sample.holder.youngMark,
+                 sample.holder.oldMark, sample.holder.allocatedAfterStart, sample.holder.traceRegion,
+                 static_cast<unsigned long long>(sample.holder.rootHits), sample.holder.rootGc,
+                 sample.holder.rootThisGc, sample.holder.rootKind,
+                 static_cast<unsigned long long>(sample.holder.rootSlot),
+                 static_cast<unsigned long long>(sample.holderSlotOffset), sample.edgeInRemset,
+                 sample.edgeEverRemset, sample.edgeEverEnabled,
+                 static_cast<unsigned long long>(edgeStore.writes),
+                 static_cast<unsigned long long>(edgeStore.target),
+                 static_cast<unsigned long long>(edgeStore.previous),
+                 static_cast<unsigned>(edgeStore.barrierPhase), static_cast<unsigned>(edgeStore.slowPath),
+                 static_cast<unsigned long long>(edgeStore.remsetEpoch),
+                 static_cast<unsigned long long>(edgeStore.remsetRecords),
+                 static_cast<unsigned long long>(edgeStore.remsetConsumes),
+                 static_cast<unsigned long long>(edgeStore.remsetClears),
+                 static_cast<unsigned long long>(edgeStore.remsetTarget),
+                 static_cast<unsigned>(edgeStore.remsetEvent), static_cast<unsigned>(edgeStore.remsetFace));
+    std::fflush(stderr);
+}
+
+// Compiler may pass coloured managed refs as C ABI pointers (addrspace(1) GEP without peel).
+// Runtime must strip bits 48+ before treating them as C++ addresses (same as PlainArrayRef /
+// acqstrip). RefField address field is bits 0..47; mask matches UncolorIfGCPtr / load-good AND.
+static MAddress PlainManagedAddr(MAddress maybeColoured)
+{
+    return RefField<>(maybeColoured).GetAddress();
+}
+
+static ObjectPtr PlainObjectPtr(ObjectPtr maybeColoured)
+{
+    return reinterpret_cast<ObjectPtr>(PlainManagedAddr(reinterpret_cast<MAddress>(maybeColoured)));
+}
+
+// TypeInfo lives in private mmap / static modules (TypeInfoManager), not the GC heap.
+// Compiler may still pass TypeInfo* with GC colour bits set (isTagged/remap); strip before
+// treating as a C++ TypeInfo* (titaint / tistrip; same PlainManagedAddr as acqstrip/mmstrip).
+static TypeInfo* PlainTypeInfoPtr(TypeInfo* maybeColoured)
+{
+    return reinterpret_cast<TypeInfo*>(PlainManagedAddr(reinterpret_cast<MAddress>(maybeColoured)));
+}
+
+extern "C" void MRT_DumpTiStripProbe(void) {}
+
+template<bool isAtomic>
+static RefField<isAtomic>* PlainRefFieldPtr(RefField<isAtomic>* maybeColoured)
+{
+    MAddress address = PlainManagedAddr(reinterpret_cast<MAddress>(maybeColoured));
+    return &HeapSlotAt<isAtomic>(address);
+}
 
 static bool IsGlobalStruct(const ObjectPtr basePtr, MAddress field)
 {
@@ -293,45 +562,93 @@ extern "C" ArrayRef MCC_NewArray64(const TypeInfo* arrayInfo, MIndex nElems)
     return array;
 }
 
+// stackarr: default-off guard — stack value must not be written into a heap ref
+// field. Catches PEA stack-promoted RawArray/NewObject later stored via
+// WriteRefField (HashMap.init buckets). Gate: MRT_GCV2_STACKREF=1 or
+// MRT_GCV2_DIAG=stackref. Probe-only abort; product path unchanged when off.
+namespace {
+bool StackrefGuardEnabled()
+{
+    static const bool on = []() {
+        return MapleRuntime::DiagGate::LegacyOrToken("MRT_GCV2_STACKREF", "stackref");
+    }();
+    return on;
+}
+std::atomic<uint64_t> g_stackrefChecks{ 0 };
+std::atomic<uint64_t> g_stackrefHits{ 0 };
+} // namespace
+
 extern "C" void MCC_WriteRefField(const ObjectPtr ref, const ObjectPtr obj, RefField<false>* field)
 {
-    if (IsGlobalStruct(obj, reinterpret_cast<MAddress>(field))) {
+    // arrayinit2: compiler GEP of coloured base yields coloured field place; strip before use.
+    ObjectPtr plainObj = PlainObjectPtr(obj);
+    RefField<false>* plainField = PlainRefFieldPtr(field);
+    ObjectPtr plainRef = PlainObjectPtr(ref);
+    if (IsGlobalStruct(plainObj, reinterpret_cast<MAddress>(plainField))) {
         VLOG(REPORT, "found and writing a global struct ref field");
-        Heap::GetBarrier().WriteStaticRef(RootSlotAt(static_cast<void*>(field)), ref);
+        Heap::GetBarrier().WriteStaticRef(RootSlotAt(static_cast<void*>(plainField)), plainRef); // Global field is root storage.
         return;
     }
-    if (!Heap::IsHeapAddress(obj)) {
-        Heap::GetBarrier().WriteStaticRef(RootSlotAt(static_cast<void*>(field)), ref);
+    if (!Heap::IsHeapAddress(plainObj)) {
+        // Non-heap holder (static/global): same remset duty as WriteStaticRef.
+        Heap::GetBarrier().WriteStaticRef(RootSlotAt(static_cast<void*>(plainField)), plainRef); // Static field is root storage.
         return;
     }
-    Heap::GetBarrier().WriteReference(obj, *field, ref);
+    // Heap holder + stack value: PEA stack-promoted RawArray/NewObject stored
+    // via WriteRefField (HashMap.init buckets). Use Mutator::IsStackAddr so
+    // legitimate non-heap constants / image pointers are not false-positive.
+    if (StackrefGuardEnabled()) {
+        g_stackrefChecks.fetch_add(1, std::memory_order_relaxed);
+        Mutator* mu = Mutator::GetMutator();
+        if (plainRef != nullptr && mu != nullptr &&
+            mu->IsStackAddr(reinterpret_cast<uintptr_t>(plainRef))) {
+            g_stackrefHits.fetch_add(1, std::memory_order_relaxed);
+            fprintf(stderr,
+                    "[GCV2][stackref] stack value written into heap field: "
+                    "ref=%p obj=%p field=%p checks=%llu hits=%llu\n",
+                    reinterpret_cast<void*>(plainRef), reinterpret_cast<void*>(plainObj),
+                    reinterpret_cast<void*>(plainField),
+                    static_cast<unsigned long long>(g_stackrefChecks.load(std::memory_order_relaxed)),
+                    static_cast<unsigned long long>(g_stackrefHits.load(std::memory_order_relaxed)));
+            fflush(stderr);
+            abort();
+        }
+    }
+    Heap::GetBarrier().WriteReference(plainObj, *plainField, plainRef);
 }
 
 extern "C" void MCC_WriteStructField(ObjectPtr obj, MAddress dst, size_t dstLen, MAddress src, size_t srcLen,
                                      GCTib gctib)
 {
-    CHECK_DETAIL((dst != 0u && src != 0u), "MCC_WriteStructField wrong parameter, dst: %p src: %p", dst, src);
-    if (IsGlobalStruct(obj, dst)) {
-        Heap::GetBarrier().WriteStaticStruct(dst, dstLen, src, srcLen, gctib);
+    ObjectPtr plainObj = PlainObjectPtr(obj);
+    MAddress plainDst = PlainManagedAddr(dst);
+    MAddress plainSrc = PlainManagedAddr(src);
+    CHECK_DETAIL((plainDst != 0u && plainSrc != 0u), "MCC_WriteStructField wrong parameter, dst: %p src: %p", plainDst,
+                 plainSrc);
+    if (IsGlobalStruct(plainObj, plainDst)) {
+        Heap::GetBarrier().WriteStaticStruct(plainDst, dstLen, plainSrc, srcLen, gctib);
         return;
     }
-    if (UNLIKELY(!Heap::IsHeapAddress(obj))) {
-        CHECK_DETAIL(memcpy_s(reinterpret_cast<void*>(dst), dstLen, reinterpret_cast<void*>(src), srcLen) == EOK,
-                     "memcpy_s failed");
+    if (UNLIKELY(!Heap::IsHeapAddress(plainObj))) {
+        Heap::GetBarrier().WriteStaticStruct(plainDst, dstLen, plainSrc, srcLen, gctib);
         return;
     }
-    Heap::GetBarrier().WriteStruct(obj, dst, dstLen, src, srcLen);
+    Heap::GetBarrier().WriteStruct(plainObj, plainDst, dstLen, plainSrc, srcLen);
 }
 
 extern "C" void MCC_WriteStaticRef(const ObjectPtr ref, RootSlot* field)
 {
-    Heap::GetBarrier().WriteStaticRef(*field, ref);
+    MAddress address = PlainManagedAddr(reinterpret_cast<MAddress>(field));
+    Heap::GetBarrier().WriteStaticRef(RootSlotAt(address), PlainObjectPtr(ref));
 }
 
 extern "C" void MCC_WriteStaticStruct(MAddress dst, size_t dstLen, MAddress src, size_t srcLen, const GCTib gcTib)
 {
-    CHECK_DETAIL((dst != 0u && src != 0u), "MCC_WriteStaticStruct wrong parameter, dst: %p src: %p", dst, src);
-    Heap::GetBarrier().WriteStaticStruct(dst, dstLen, src, srcLen, gcTib);
+    MAddress plainDst = PlainManagedAddr(dst);
+    MAddress plainSrc = PlainManagedAddr(src);
+    CHECK_DETAIL((plainDst != 0u && plainSrc != 0u), "MCC_WriteStaticStruct wrong parameter, dst: %p src: %p", plainDst,
+                 plainSrc);
+    Heap::GetBarrier().WriteStaticStruct(plainDst, dstLen, plainSrc, srcLen, gcTib);
 }
 
 extern "C" TypeInfo* MCC_GetObjClass(const ObjectPtr obj)
@@ -363,7 +680,8 @@ extern "C" void CJ_MCC_ArrayCopyRef(const ObjectPtr dstObj, MAddress dstField, s
         return;
     }
     MRT_ASSERT(dstSize <= SECUREC_MEM_MAX_LEN, "size too big in CJ_MCC_ArrayCopy");
-    Heap::GetBarrier().CopyRefArray(dstObj, dstField, dstSize, srcObj, srcField, srcSize);
+    Heap::GetBarrier().CopyRefArray(PlainObjectPtr(dstObj), PlainManagedAddr(dstField), dstSize,
+                                    PlainObjectPtr(srcObj), PlainManagedAddr(srcField), srcSize);
 }
 
 extern "C" void CJ_MCC_ArrayCopyStruct(const ObjectPtr dstObj, MAddress dstField, size_t dstSize,
@@ -373,29 +691,33 @@ extern "C" void CJ_MCC_ArrayCopyStruct(const ObjectPtr dstObj, MAddress dstField
         return;
     }
     MRT_ASSERT(dstSize <= SECUREC_MEM_MAX_LEN, "size too big in CJ_MCC_ArrayCopy");
-    Heap::GetBarrier().CopyStructArray(dstObj, dstField, dstSize, srcObj, srcField, srcSize);
+    Heap::GetBarrier().CopyStructArray(PlainObjectPtr(dstObj), PlainManagedAddr(dstField), dstSize,
+                                       PlainObjectPtr(srcObj), PlainManagedAddr(srcField), srcSize);
 }
 extern "C" void MCC_AtomicWriteReference(const ObjectPtr ref, const ObjectPtr obj, RefField<true>* field,
                                          MemoryOrder order)
 {
-    Heap::GetBarrier().AtomicWriteReference(obj, *field, ref, order);
+    Heap::GetBarrier().AtomicWriteReference(PlainObjectPtr(obj), *PlainRefFieldPtr(field), PlainObjectPtr(ref), order);
 }
 
 extern "C" ObjectPtr MCC_AtomicReadReference(const ObjectPtr obj, RefField<true>* field, MemoryOrder order)
 {
-    return Heap::GetBarrier().AtomicReadReference(obj, *field, order);
+    return Heap::GetBarrier().AtomicReadReference(PlainObjectPtr(obj), *PlainRefFieldPtr(field), order);
 }
 
 extern "C" ObjectPtr MCC_AtomicSwapReference(const ObjectPtr ref, const ObjectPtr obj, RefField<true>* field,
                                              MemoryOrder order)
 {
-    return Heap::GetBarrier().AtomicSwapReference(obj, *field, ref, order);
+    return Heap::GetBarrier().AtomicSwapReference(PlainObjectPtr(obj), *PlainRefFieldPtr(field), PlainObjectPtr(ref),
+                                                  order);
 }
 
 extern "C" bool MCC_AtomicCompareSwapReference(const ObjectPtr oldRef, const ObjectPtr newRef, const ObjectPtr obj,
                                                RefField<true>* field, MemoryOrder succOrder, MemoryOrder failOrder)
 {
-    return Heap::GetBarrier().CompareAndSwapReference(obj, *field, oldRef, newRef, succOrder, failOrder);
+    return Heap::GetBarrier().CompareAndSwapReference(PlainObjectPtr(obj), *PlainRefFieldPtr(field),
+                                                      PlainObjectPtr(oldRef), PlainObjectPtr(newRef), succOrder,
+                                                      failOrder);
 }
 
 extern "C" void MCC_InvokeGCImpl(bool sync) { HeapManager::RequestGC(GC_REASON_USER, !sync); }
@@ -424,11 +746,11 @@ extern "C" size_t MCC_GetBlockingCJThreadNumber() { return ScheduleCJThreadCount
 
 extern "C" size_t MCC_GetNativeThreadNumber() { return ScheduleRunningOSThreadCount(); }
 
-extern "C" size_t MCC_GetGCCount() { return g_gcCount; }
+extern "C" size_t MCC_GetGCCount() { return g_gcCount.load(std::memory_order_acquire); }
 
-extern "C" uint64_t MCC_GetGCTimeUs() { return g_gcTotalTimeUs; }
+extern "C" uint64_t MCC_GetGCTimeUs() { return g_gcTotalTimeUs.load(std::memory_order_acquire); }
 
-extern "C" size_t MCC_GetGCFreedSize() { return g_gcCollectedTotalBytes; }
+extern "C" size_t MCC_GetGCFreedSize() { return g_gcCollectedTotalBytes.load(std::memory_order_acquire); }
 
 extern "C" bool MCC_StartCpuProfiling()
 {
@@ -837,14 +1159,24 @@ extern "C" ThreadSnapshot MCC_GetCurrentThreadSnapshotImpl(const TypeInfo* array
     return snapshot;
 }
 
+// Strip ZGC colour / tag bits (bits 48+) so IsHeapAddress / Pin / C payload see a plain VA.
+// RefField address field is bits 0..47 (RefField.h); same mask as the compiler load-good AND.
+static ArrayRef PlainArrayRef(const ArrayRef array)
+{
+    return reinterpret_cast<ArrayRef>(RefField<>(reinterpret_cast<MAddress>(array)).GetAddress());
+}
+
 static ArrayRef PinArray(const ArrayRef array)
 {
     Mutator* mutator = Mutator::GetMutator();
     CHECK_DETAIL(mutator != nullptr, "Mutator has not initialized or has been fini: %p", mutator);
     CHECK_DETAIL(!mutator->InSaferegion(), "Mutator to be fini should not be in saferegion");
-    // forbid gc thread to move this region.
-    Heap::GetHeap().GetCollector().AddRawPointerObject(array);
-    return static_cast<ArrayRef>(array);
+    // forbid gc thread to move this region. array must already be plain (see PlainArrayRef).
+    // The pin may resolve a movable from-copy to its to-version (oracleblack face c):
+    // the caller must hand out the RESOLVED payload, and MCC_ReleaseRawData will Dec the
+    // same region the pin Inc'd.
+    BaseObject* pinned = Heap::GetHeap().GetCollector().PinRawPointerObject(array);
+    return static_cast<ArrayRef>(pinned);
 }
 
 // Return the raw pointer of input array object, isCopy records whether memory copy occurs.
@@ -853,8 +1185,10 @@ static ArrayRef PinArray(const ArrayRef array)
 // but can't return until GC finish current work.
 extern "C" void* MCC_AcquireRawData(const ArrayRef array, bool* isCopy)
 {
-    if (!Heap::IsHeapAddress(array)) {
-        return array->ConvertToCArray();
+    // Coloured refs fail the heap-range check and skip pin; strip first (ffibound / acqstrip).
+    ArrayRef plain = PlainArrayRef(array);
+    if (!Heap::IsHeapAddress(plain)) {
+        return plain == nullptr ? nullptr : plain->ConvertToCArray();
     }
 #ifdef _WIN64
     static void* unreadablePage = reinterpret_cast<void*>(0x1234);
@@ -862,18 +1196,18 @@ extern "C" void* MCC_AcquireRawData(const ArrayRef array, bool* isCopy)
     static void* unreadablePage = MutatorManager::Instance().GetSafepointPageManager()->GetUnreadablePage();
 #endif
     MRT_ASSERT(unreadablePage != nullptr, "runtime is not initialized\n");
-    if (UNLIKELY(array == nullptr)) {
+    if (UNLIKELY(plain == nullptr)) {
         return nullptr;
     }
-    if (UNLIKELY(array->GetContentSize() == 0)) {
+    if (UNLIKELY(plain->GetContentSize() == 0)) {
         return unreadablePage;
     }
-    MRT_ASSERT(array->IsPrimitiveArray(), "Expect primitive array in MCC_AcquireRawData");
+    MRT_ASSERT(plain->IsPrimitiveArray(), "Expect primitive array in MCC_AcquireRawData");
     if (isCopy != nullptr) {
         *isCopy = false;
     }
     (void)CJThreadPreemptOffCntAdd();
-    ArrayRef pArray = PinArray(array);
+    ArrayRef pArray = PinArray(plain);
 #if defined(GENERAL_ASAN_SUPPORT_INTERFACE)
     auto* rawPtr = pArray->ConvertToCArray();
     std::vector<uint64_t> frame;
@@ -901,17 +1235,18 @@ extern "C" void* MCC_AcquireRawData(const ArrayRef array, bool* isCopy)
 // Release the raw pointer
 extern "C" void MCC_ReleaseRawData(ArrayRef array, void* rawPtr)
 {
-    if (!Heap::IsHeapAddress(array)) {
+    ArrayRef plain = PlainArrayRef(array);
+    if (!Heap::IsHeapAddress(plain)) {
         return;
     }
-    MRT_ASSERT(array->IsPrimitiveArray(), "Expect primitive array in MCC_ReleaseRawData");
+    MRT_ASSERT(plain->IsPrimitiveArray(), "Expect primitive array in MCC_ReleaseRawData");
 #ifdef _WIN64
     static void* unreadablePage = reinterpret_cast<void*>(0x1234);
 #else
     static void* unreadablePage = MutatorManager::Instance().GetSafepointPageManager()->GetUnreadablePage();
 #endif
     MRT_ASSERT(unreadablePage != nullptr, "runtime is not initialized\n");
-    if (UNLIKELY(array == nullptr || rawPtr == nullptr)) {
+    if (UNLIKELY(plain == nullptr || rawPtr == nullptr)) {
         return;
     }
     if (rawPtr == unreadablePage) {
@@ -919,7 +1254,7 @@ extern "C" void MCC_ReleaseRawData(ArrayRef array, void* rawPtr)
     }
 #if defined(GENERAL_ASAN_SUPPORT_INTERFACE) || defined(CANGJIE_GWPASAN_SUPPORT)
     // sanitizer will convert alias/colorized pointer to real pointer for runtime
-    rawPtr = Sanitizer::ArrayReleaseMemoryRegion(array, rawPtr, array->GetContentSize());
+    rawPtr = Sanitizer::ArrayReleaseMemoryRegion(plain, rawPtr, plain->GetContentSize());
 #endif
 #if defined(GENERAL_ASAN_SUPPORT_INTERFACE)
     std::vector<uint64_t> frame;
@@ -1592,12 +1927,309 @@ extern "C" void* MCC_GetParameterAnnotations(ParameterInfo* parameterInfo, TypeI
     return parameterInfo->GetAnnotations(arrayTi);
 }
 
+// readnull: when ReadRefField returns null, record slot addr / raw 64-bit / return.
+// Gate MRT_GCV2_NULLSLOT (default off). Cap 64 samples. Probe-only; no product path change.
+namespace {
+bool ReadnullProbeEnabled()
+{
+    static const bool on = []() {
+        return MapleRuntime::DiagGate::LegacyOrToken("MRT_GCV2_NULLSLOT", "nullslot");
+    }();
+    return on;
+}
+std::atomic<size_t> g_readRefNullN{ 0 };
+} // namespace
+
+
+// fromver: split "the read barrier was skipped" from "the read barrier returned a
+// from-version". Census of CJ_MCC_ReadRefField's return value + the pre-barrier slot.
+// Gate MRT_GCV2_FROMVER (default off). Probe-only; no product path change.
+namespace {
+bool FromverProbeEnabled()
+{
+    static const bool on = []() {
+        return MapleRuntime::DiagGate::LegacyOrToken("MRT_GCV2_FROMVER", "fromver");
+    }();
+    return on;
+}
+
+// positive controls (calls / normal returns / consumer reachability) sit next to the
+// signature counters so a zero cannot be read as "the instrument never ran".
+std::atomic<uint64_t> g_fvCalls{ 0 };
+std::atomic<uint64_t> g_fvRetNull{ 0 };
+std::atomic<uint64_t> g_fvRetNonHeap{ 0 };
+std::atomic<uint64_t> g_fvRetNormal{ 0 };
+std::atomic<uint64_t> g_fvRetLocked{ 0 };
+std::atomic<uint64_t> g_fvRetForwarding{ 0 };
+std::atomic<uint64_t> g_fvRetForwarded{ 0 };
+std::atomic<uint64_t> g_fvSlotPlain{ 0 };
+std::atomic<uint64_t> g_fvSlotColoured{ 0 };
+std::atomic<uint64_t> g_fvSlotPlainFwd{ 0 };
+std::atomic<uint64_t> g_fvFwdLogged{ 0 };
+std::atomic<uint64_t> g_fvPlainFwdLogged{ 0 };
+std::atomic<uint64_t> g_fvMccCalls{ 0 };
+std::atomic<uint64_t> g_fvMccDirty{ 0 };
+std::atomic<uint64_t> g_fvMccLogged{ 0 };
+// which ForwardBarrier::ReadReference exit produced a from-version. Reconstructed from the
+// pre-barrier slot snapshot with the barrier's own predicates, so no barrier file is touched:
+//   is_load_good(oldField) true  -> ForwardBarrier.cpp:26-29 `return oldTarget` (fast return)
+//   false                        -> it went through make_load_good / ForwardObject and still
+//                                   came back with the from address
+std::atomic<uint64_t> g_fvFwdViaLoadGood{ 0 };
+std::atomic<uint64_t> g_fvFwdViaSlow{ 0 };
+// control on the reconstructed predicate itself: both outcomes must be non-degenerate,
+// otherwise the split above is measuring my RefField reconstruction, not the barrier.
+std::atomic<uint64_t> g_fvAllLoadGood{ 0 };
+std::atomic<uint64_t> g_fvAllNotLoadGood{ 0 };
+
+constexpr uint64_t FV_LOG_CAP = 4096;
+constexpr uint64_t FV_HEARTBEAT = 1ull << 22;
+
+#define FV_LD(c) static_cast<unsigned long long>((c).load(std::memory_order_relaxed))
+void FromverCensus(const char* why)
+{
+    std::fprintf(stderr,
+                 "[GCV2][fromver][census] why=%s calls=%llu ret_null=%llu ret_nonheap=%llu "
+                 "ret_normal=%llu ret_locked=%llu ret_forwarding=%llu ret_FORWARDED=%llu "
+                 "slot_plain=%llu slot_coloured=%llu slot_plain_FORWARDED=%llu "
+                 "fwd_via_loadgood=%llu fwd_via_slow=%llu all_loadgood=%llu all_notloadgood=%llu "
+                 "mcc_calls=%llu mcc_dirty=%llu\n",
+                 why, FV_LD(g_fvCalls), FV_LD(g_fvRetNull), FV_LD(g_fvRetNonHeap),
+                 FV_LD(g_fvRetNormal), FV_LD(g_fvRetLocked), FV_LD(g_fvRetForwarding),
+                 FV_LD(g_fvRetForwarded), FV_LD(g_fvSlotPlain), FV_LD(g_fvSlotColoured),
+                 FV_LD(g_fvSlotPlainFwd), FV_LD(g_fvFwdViaLoadGood), FV_LD(g_fvFwdViaSlow),
+                 FV_LD(g_fvAllLoadGood), FV_LD(g_fvAllNotLoadGood), FV_LD(g_fvMccCalls),
+                 FV_LD(g_fvMccDirty));
+    std::fflush(stderr);
+}
+
+// state code of the word the mutator is about to load as TypeInfo*; -1 = not a heap object.
+int FromverStateOf(const void* p)
+{
+    if (p == nullptr || !Heap::IsHeapAddress(const_cast<void*>(p))) {
+        return -1;
+    }
+    uint64_t hdr = __atomic_load_n(reinterpret_cast<const uint64_t*>(p), __ATOMIC_RELAXED);
+    return static_cast<int>((hdr >> 48) & 0x3u);
+}
+
+uint64_t FromverHeaderOf(const void* p)
+{
+    return __atomic_load_n(reinterpret_cast<const uint64_t*>(p), __ATOMIC_RELAXED);
+}
+
+// Called once per CJ_MCC_ReadRefField, after the barrier has produced `result`.
+void FromverAfterRead(ObjectPtr result, MAddress rawBefore, MAddress addrBefore, bool isGlobal,
+                      GCPhase phaseBefore, bool loadGoodBefore)
+{
+    uint64_t n = g_fvCalls.fetch_add(1, std::memory_order_relaxed);
+    GCPhase phaseAfter = Heap::GetHeap().GetGCPhase();
+    if (loadGoodBefore) {
+        g_fvAllLoadGood.fetch_add(1, std::memory_order_relaxed);
+    } else {
+        g_fvAllNotLoadGood.fetch_add(1, std::memory_order_relaxed);
+    }
+
+    // pre-barrier slot: hi16==0 is exactly the emitted fast path's skip condition
+    // (cjpm 0x765230 `shr $0x30` + `je`), so such a slot is read *without* this barrier
+    // everywhere the compiler inlined the test.
+    unsigned hi16 = static_cast<unsigned>((static_cast<uint64_t>(rawBefore) >> 48) & 0xffffu);
+    if (rawBefore != 0) {
+        if (hi16 == 0u) {
+            g_fvSlotPlain.fetch_add(1, std::memory_order_relaxed);
+            int st = FromverStateOf(reinterpret_cast<void*>(addrBefore));
+            if (st == static_cast<int>(ObjectState::FORWARDED)) {
+                uint64_t k = g_fvSlotPlainFwd.fetch_add(1, std::memory_order_relaxed);
+                if (g_fvPlainFwdLogged.fetch_add(1, std::memory_order_relaxed) < FV_LOG_CAP) {
+                    std::fprintf(stderr,
+                                 "[GCV2][fromver][plainfwd] k=%llu slot_target=%#llx hdr=%#llx "
+                                 "phase=%s(%u)\n",
+                                 static_cast<unsigned long long>(k),
+                                 static_cast<unsigned long long>(addrBefore),
+                                 static_cast<unsigned long long>(
+                                     FromverHeaderOf(reinterpret_cast<void*>(addrBefore))),
+                                 Collector::GetGCPhaseName(phaseBefore),
+                                 static_cast<unsigned>(phaseBefore));
+                    std::fflush(stderr);
+                }
+            }
+        } else {
+            g_fvSlotColoured.fetch_add(1, std::memory_order_relaxed);
+        }
+    }
+
+    if (result == nullptr) {
+        g_fvRetNull.fetch_add(1, std::memory_order_relaxed);
+    } else {
+        int st = FromverStateOf(result);
+        if (st < 0) {
+            g_fvRetNonHeap.fetch_add(1, std::memory_order_relaxed);
+        } else if (st == static_cast<int>(ObjectState::NORMAL)) {
+            g_fvRetNormal.fetch_add(1, std::memory_order_relaxed);
+        } else {
+            if (st == static_cast<int>(ObjectState::LOCKED)) {
+                g_fvRetLocked.fetch_add(1, std::memory_order_relaxed);
+            } else if (st == static_cast<int>(ObjectState::FORWARDING)) {
+                g_fvRetForwarding.fetch_add(1, std::memory_order_relaxed);
+            } else {
+                g_fvRetForwarded.fetch_add(1, std::memory_order_relaxed);
+            }
+            if (loadGoodBefore) {
+                g_fvFwdViaLoadGood.fetch_add(1, std::memory_order_relaxed);
+            } else {
+                g_fvFwdViaSlow.fetch_add(1, std::memory_order_relaxed);
+            }
+            if (g_fvFwdLogged.fetch_add(1, std::memory_order_relaxed) < FV_LOG_CAP) {
+                // region predicates are read after the call; phase_before/phase_after in the
+                // same line say whether a flip could have moved them under us.
+                Collector& fvC = Heap::GetHeap().GetCollector();
+                RefField<> fvSlot(rawBefore);
+                std::fprintf(stderr,
+                             "[GCV2][fromver][retstate] state=%d ret=%p hdr=%#llx "
+                             "raw_before=%#llx hi16=%#x tagged=%u tagid=%u addr_before=%#llx "
+                             "moved=%u is_global=%u load_good=%u unmovable=%u ghost=%u fromobj=%u "
+                             "phase_before=%s(%u) phase_after=%s(%u)\n",
+                             st, static_cast<void*>(result),
+                             static_cast<unsigned long long>(FromverHeaderOf(result)),
+                             static_cast<unsigned long long>(rawBefore), hi16,
+                              (raw(fvSlot.GetFieldValue()) & ::g_cjLoadBadMask) != 0 ? 1u : 0u,
+                              0u,
+                             static_cast<unsigned long long>(addrBefore),
+                             addrBefore == reinterpret_cast<MAddress>(result) ? 0u : 1u,
+                             isGlobal ? 1u : 0u, loadGoodBefore ? 1u : 0u,
+                             fvC.IsUnmovableFromObject(result) ? 1u : 0u,
+                             fvC.IsGhostFromObject(result) ? 1u : 0u,
+                             fvC.IsFromObject(result) ? 1u : 0u,
+                             Collector::GetGCPhaseName(phaseBefore),
+                             static_cast<unsigned>(phaseBefore),
+                             Collector::GetGCPhaseName(phaseAfter),
+                             static_cast<unsigned>(phaseAfter));
+                std::fflush(stderr);
+            }
+        }
+    }
+
+    if (n == 0) {
+        std::fprintf(stderr, "[GCV2][fromver] armed\n");
+        std::fflush(stderr);
+    } else if ((n & (FV_HEARTBEAT - 1)) == 0) {
+        FromverCensus("heartbeat");
+    }
+}
+
+// Consumer side: the three MCC entries that take a TypeInfo* straight out of an object
+// header word. A dirty arg (stateCode != 0) *is* the crash signature; dumping the census
+// at that instant is the correlator -- it says how many from-versions the barrier had
+// handed out by then.
+void FromverMccEntry(const char* where, const void* ti)
+{
+    if (!FromverProbeEnabled()) {
+        return;
+    }
+    g_fvMccCalls.fetch_add(1, std::memory_order_relaxed);
+    if (ti == nullptr) {
+        return;
+    }
+    unsigned hi16 = static_cast<unsigned>((reinterpret_cast<uint64_t>(ti) >> 48) & 0xffffu);
+    if (hi16 == 0u) {
+        return;
+    }
+    g_fvMccDirty.fetch_add(1, std::memory_order_relaxed);
+    if (g_fvMccLogged.fetch_add(1, std::memory_order_relaxed) < FV_LOG_CAP) {
+        std::fprintf(stderr, "[GCV2][fromver][mccdirty] where=%s arg=%p hi16=%#x state=%u\n", where,
+                     ti, hi16, hi16 & 3u);
+        std::fflush(stderr);
+        FromverCensus("mccdirty");
+    }
+}
+#undef FV_LD
+} // namespace
+
 extern "C" ObjectPtr CJ_MCC_ReadRefField(const ObjectPtr obj, RefField<false>* field)
 {
-    if (IsGlobalStruct(obj, reinterpret_cast<MAddress>(field))) {
-        return Heap::GetBarrier().ReadStaticRef(RootSlotAt(static_cast<void*>(field)));
+    const bool isGlobal = IsGlobalStruct(obj, reinterpret_cast<MAddress>(field));
+    // Snapshot raw slot BEFORE barrier may self-heal (CAS) the field.
+    const MAddress rawBefore =
+        field != nullptr ? static_cast<MAddress>(raw(field->GetFieldValue())) : 0;
+    const MAddress addrBefore =
+        field != nullptr ? field->GetAddress() : 0;
+    const bool fvOn = FromverProbeEnabled();
+    const GCPhase fvPhaseBefore = fvOn ? Heap::GetHeap().GetGCPhase()
+                                       : GCPhase::GC_PHASE_IDLE;
+    // the barrier's own fast-return predicate, on the exact value the barrier
+    // is about to read (ForwardBarrier.cpp:26-29).
+    bool fvLoadGoodBefore = false;
+    if (fvOn) {
+        RefField<> fvSlotBefore(rawBefore);
+        fvLoadGoodBefore = Heap::GetHeap().GetCollector().is_load_good(fvSlotBefore);
     }
-    return Heap::GetBarrier().ReadReference(obj, *field);
+    if (NwReadDiagEnabled()) {
+        CaptureNwReadBefore(obj, field, rawBefore);
+    }
+    ObjectPtr result = nullptr;
+    if (isGlobal) {
+        result = Heap::GetBarrier().ReadStaticRef(
+            RootSlotAt(static_cast<void*>(field))); // isGlobal classifies this ABI field as root storage.
+    } else {
+        result = Heap::GetBarrier().ReadReference(obj, *field);
+    }
+    if (NwReadDiagEnabled()) {
+        CaptureNwReadAfter(result);
+    }
+    // Log when ret is null. 乙 (raw/addr non-zero → barrier null) always logged (rare).
+    // 甲 (slot already 0) only in concurrent GC windows so idle Option nulls don't exhaust cap.
+    if (result == nullptr && ReadnullProbeEnabled()) {
+        GCPhase phase = Heap::GetHeap().GetGCPhase();
+        const bool yiCandidate = (addrBefore != 0) || (rawBefore != 0);
+        const bool inModeAWindow =
+            phase == GCPhase::GC_PHASE_PREFORWARD || phase == GCPhase::GC_PHASE_FORWARD ||
+            phase == GCPhase::GC_PHASE_ENUM || phase == GCPhase::GC_PHASE_TRACE ||
+            phase == GCPhase::GC_PHASE_CLEAR_SATB_BUFFER ||
+            phase == GCPhase::GC_PHASE_POST_TRACE ||
+            phase == GCPhase::GC_PHASE_RECLAIM_SATB_NODE ||
+            phase == GCPhase::GC_PHASE_IDLE;
+        if (yiCandidate || inModeAWindow) {
+            size_t n = g_readRefNullN.fetch_add(1, std::memory_order_relaxed);
+            if (n < 256) {
+                const MAddress rawAfter =
+                    field != nullptr ? static_cast<MAddress>(raw(field->GetFieldValue())) : 0;
+                const unsigned fieldInHeap =
+                    field != nullptr && Heap::IsHeapAddress(reinterpret_cast<void*>(field)) ? 1u : 0u;
+                const unsigned holderInHeap =
+                    obj != nullptr && Heap::IsHeapAddress(obj) ? 1u : 0u;
+                const MAddress off =
+                    (obj != nullptr && field != nullptr)
+                        ? (reinterpret_cast<MAddress>(field) - reinterpret_cast<MAddress>(obj))
+                        : 0;
+                // 甲: raw address bits already 0; 乙: non-null raw decoded to null by barrier;
+                // 丙 candidate: field not in heap / holder not in heap (address-side).
+                const char* kind = "jia";
+                if (addrBefore != 0) {
+                    kind = "yi";
+                } else if (rawBefore != 0) {
+                    kind = "yi_coloured_null";
+                } else if (!fieldInHeap || (obj != nullptr && !holderInHeap)) {
+                    kind = "bing_addr";
+                }
+                std::fprintf(stderr,
+                             "[GCV2][nullslot] path=read_ref_null n=%zu field=%p raw_before=%#lx "
+                             "addr_before=%#lx ret=%p raw_after=%#lx holder=%p off=%#lx is_global=%u "
+                             "field_in_heap=%u holder_in_heap=%u phase=%s(%u) kind=%s\n",
+                             n, static_cast<void*>(field), static_cast<unsigned long>(rawBefore),
+                             static_cast<unsigned long>(addrBefore), static_cast<void*>(result),
+                             static_cast<unsigned long>(rawAfter), static_cast<void*>(obj),
+                             static_cast<unsigned long>(off), isGlobal ? 1u : 0u, fieldInHeap,
+                             holderInHeap, Collector::GetGCPhaseName(phase),
+                             static_cast<unsigned>(phase), kind);
+                std::fflush(stderr);
+            }
+        }
+    }
+    if (fvOn) {
+        FromverAfterRead(result, rawBefore, addrBefore, isGlobal, fvPhaseBefore,
+                         fvLoadGoodBefore);
+    }
+    return result;
 }
 
 extern "C" ObjectPtr CJ_MCC_ReadWeakRef(const ObjectPtr obj, RefField<false>* field)
@@ -1633,11 +2265,34 @@ extern "C" void* MCC_GetTypeInfoAnnotations(TypeInfo* cls, TypeInfo* arrayTi) { 
 // for generic
 extern "C" TypeInfo* CJ_MCC_GetOrCreateTypeInfo(TypeTemplate* typeTemplate, U32 argSize, TypeInfo* typeArgs[])
 {
-    return TypeInfoManager::GetTypeInfoManager().GetOrCreateTypeInfo(typeTemplate, argSize, typeArgs);
+    TypeInfo** plainArgs = typeArgs;
+    TypeInfo* stackPlain[16];
+    TypeInfo** heapPlain = nullptr;
+    if (typeArgs != nullptr && argSize > 0) {
+        if (argSize <= 16) {
+            plainArgs = stackPlain;
+        } else {
+            heapPlain = static_cast<TypeInfo**>(std::malloc(sizeof(TypeInfo*) * argSize));
+            CHECK_DETAIL(heapPlain != nullptr, "CJ_MCC_GetOrCreateTypeInfo plainArgs malloc failed");
+            plainArgs = heapPlain;
+        }
+        for (U32 i = 0; i < argSize; ++i) {
+            plainArgs[i] = PlainTypeInfoPtr(typeArgs[i]);
+        }
+    }
+    TypeInfo* result =
+        TypeInfoManager::GetTypeInfoManager().GetOrCreateTypeInfo(typeTemplate, argSize, plainArgs);
+    if (heapPlain != nullptr) {
+        std::free(heapPlain);
+    }
+    return result;
 }
 
 extern "C" bool CJ_MCC_IsSubType(TypeInfo* typeInfo, TypeInfo* superTypeInfo)
 {
+    typeInfo = PlainTypeInfoPtr(typeInfo);
+    superTypeInfo = PlainTypeInfoPtr(superTypeInfo);
+    FromverMccEntry("IsSubType", typeInfo);
     if (typeInfo == nullptr || superTypeInfo == nullptr) {
         return false;
     }
@@ -1703,6 +2358,8 @@ static bool IsTupleTypeOf(ObjectPtr obj, TypeInfo* typeInfo, TypeInfo* targetTyp
 
 extern "C" bool CJ_MCC_IsTupleTypeOf(ObjectPtr obj, TypeInfo* typeInfo, TypeInfo* targetTypeInfo)
 {
+    typeInfo = PlainTypeInfoPtr(typeInfo);
+    targetTypeInfo = PlainTypeInfoPtr(targetTypeInfo);
     if (obj == nullptr || targetTypeInfo == nullptr) {
         return false;
     }
@@ -1714,11 +2371,17 @@ extern "C" void CJ_MCC_WriteGeneric(const ObjectPtr obj, void* fieldPtr, const O
     if (src == nullptr || size == 0) {
         return;
     }
-    Heap::GetBarrier().WriteGeneric(obj, fieldPtr, src, size);
+    Heap::GetBarrier().WriteGeneric(PlainObjectPtr(obj),
+                                    reinterpret_cast<void*>(PlainManagedAddr(reinterpret_cast<MAddress>(fieldPtr))),
+                                    PlainObjectPtr(src), size);
 }
 
 extern "C" void CJ_MCC_AssignGeneric(ObjectPtr dst, ObjectPtr src, TypeInfo* typeInfo)
 {
+    typeInfo = PlainTypeInfoPtr(typeInfo);
+    if (typeInfo == nullptr) {
+        return;
+    }
     size_t instanceSize = typeInfo->GetInstanceSize();
     if (instanceSize == 0) {
         return;
@@ -1783,16 +2446,24 @@ extern "C" void CJ_MCC_ReadGeneric(const ObjectPtr dstPtr, ObjectPtr obj, void* 
 
 extern "C" FuncPtr* CJ_MCC_GetMTable(TypeInfo* ti, TypeInfo* itf)
 {
+    ti = PlainTypeInfoPtr(ti);
+    itf = PlainTypeInfoPtr(itf);
+    FromverMccEntry("GetMTable", ti);
     return ti->GetMTable(itf);
 }
 
 extern "C" TypeInfo* CJ_MCC_GetMethodOuterTI(TypeInfo* ti, TypeInfo* itf, U64 index)
 {
+    ti = PlainTypeInfoPtr(ti);
+    itf = PlainTypeInfoPtr(itf);
+    FromverMccEntry("GetMethodOuterTI", ti);
     return ti->GetMethodOuterTI(itf, index);
 }
 
 extern "C" void CJ_MCC_UpdateVMT(TypeInfo* ti, TypeInfo* itf, ExtensionData* extensionData)
 {
+    ti = PlainTypeInfoPtr(ti);
+    itf = PlainTypeInfoPtr(itf);
     if (UNLIKELY(!extensionData->IsFuncTableUpdated())) {
         return ti->TryUpdateExtensionData(itf, extensionData);
     }
@@ -1926,11 +2597,22 @@ extern "C" void CJ_MCC_ArrayCopyGeneric(const ObjectPtr dstObj, MAddress dstFiel
         case TypeKind::TYPE_KIND_UINT_NATIVE:
         case TypeKind::TYPE_KIND_CSTRING:
         case TypeKind::TYPE_KIND_CPOINTER:
-        case TypeKind::TYPE_KIND_CFUNC:
-        case TypeKind::TYPE_KIND_VARRAY: {
+        case TypeKind::TYPE_KIND_CFUNC: {
             CHECK_DETAIL(memmove_s(reinterpret_cast<void*>(dstField), dstSize,
                                    reinterpret_cast<void*>(srcField), srcSize) == EOK,
                          "MCC_ArrayCopyGeneric memmove_s failed");
+            break;
+        }
+        case TypeKind::TYPE_KIND_VARRAY: {
+            // VArray may embed managed refs (HasRefField recurses via component flag /
+            // TypeGCInfo). Unconditional memmove skips remset post-record (G-C1).
+            if (componentTypeInfo->HasRefField()) {
+                Heap::GetBarrier().CopyStructArray(dstObj, dstField, dstSize, srcObj, srcField, srcSize);
+            } else {
+                CHECK_DETAIL(memmove_s(reinterpret_cast<void*>(dstField), dstSize,
+                                       reinterpret_cast<void*>(srcField), srcSize) == EOK,
+                             "MCC_ArrayCopyGeneric memmove_s failed");
+            }
             break;
         }
         case TypeKind::TYPE_KIND_TUPLE:
@@ -1949,7 +2631,11 @@ extern "C" void CJ_MCC_CopyStructField(BaseObject* dstBase, void* dstField, size
 
 extern "C" int32_t __ccc_personality_v0() { return 0; }
 // @deprecated
-extern "C" void CJ_MCC_IVCallInstrumentation(TypeInfo* cls, const char* callBaseKey) {}
+extern "C" void CJ_MCC_IVCallInstrumentation(TypeInfo* cls, const char* callBaseKey)
+{
+    (void)PlainTypeInfoPtr(cls);
+    (void)callBaseKey;
+}
 
 void CJ_MCC_CrossAccessBarrier(U64 cjExport)
 {

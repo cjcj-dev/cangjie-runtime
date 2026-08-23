@@ -219,7 +219,7 @@ void SamplesRecord::AddEmptySample(SampleTask& task)
 
     SetPreviousState(info, FrameType::UNKNOWN);
 
-    IncreaseNodeHitCount(info, ROOT_NODE_ID);
+    IncreaseNodeHitCount(info, IDLE_NODE_ID);
 
     AddSampleNodeId(info, IDLE_NODE_ID);
 
@@ -456,7 +456,7 @@ CString SamplesRecord::ParseUrl(uint64_t funcIdentifier)
 #endif
     CString url =  path.IsEmpty() ? fileName : path + slash + fileName;
     identifierUrlMap.emplace(funcIdentifier, url);
-    return fileName;
+    return url;
 }
 
 CString SamplesRecord::GetDemangleName(uint64_t funcIdentifier)

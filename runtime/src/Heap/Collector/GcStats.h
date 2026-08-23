@@ -22,27 +22,57 @@ namespace MapleRuntime {
 // statistics for previous gc.
 class GCStats {
 public:
+    enum class YoungHeuThrottleDecision : uint8_t {
+        REFRESHED,
+        DISABLED,
+        NO_COLLECTION_SET,
+        DEFERRAL_ALREADY_USED,
+        OLD_PRESSURE_HIGH,
+        WITHIN_EXISTING_HEU_WINDOW,
+    };
+
     GCStats() = default;
     ~GCStats() = default;
 
     void Init();
 
-    size_t GetThreshold() const { return heapThreshold; }
+    size_t GetThreshold() const { return heapThreshold.load(std::memory_order_acquire); }
 
     void Dump() const;
 
-    static uint64_t GetPrevGCStartTime() { return prevGcStartTime; }
+    static uint64_t GetPrevGCStartTime() { return prevGcStartTime.load(std::memory_order_acquire); }
 
-    static void SetPrevGCStartTime(uint64_t timestamp) { prevGcStartTime = timestamp; }
+    static void SetPrevGCStartTime(uint64_t timestamp)
+    {
+        prevGcStartTime.store(timestamp, std::memory_order_release);
+    }
 
-    static uint64_t GetPrevGCFinishTime() { return prevGcFinishTime; }
+    static uint64_t GetPrevGCFinishTime() { return prevGcFinishTime.load(std::memory_order_acquire); }
 
-    static void SetPrevGCFinishTime(uint64_t timestamp) { prevGcFinishTime = timestamp; }
+    static void SetPrevGCFinishTime(uint64_t timestamp)
+    {
+        prevGcFinishTime.store(timestamp, std::memory_order_release);
+    }
 
-    static uint64_t prevGcStartTime;
-    static uint64_t prevGcFinishTime;
+    YoungHeuThrottleDecision RecordYoungGCFinish(uint64_t timestamp, size_t allocatedAfter,
+                                                 size_t promotedBytes, size_t candidateBytes,
+                                                 size_t maxCapacity, uint64_t durationNs,
+                                                 uint64_t heuMinIntervalNs, bool deferralEnabled);
 
-    GCReason reason;
+    void RecordMajorGCFinish(uint64_t timestamp)
+    {
+        RecordMajorGCFinish(timestamp, 0, 0, 0, 0);
+    }
+
+    void RecordMajorGCFinish(uint64_t timestamp, uint64_t durationNs, size_t usedAfter,
+                             size_t collectedBytes, uint32_t totalCollections);
+
+    static const char* YoungHeuThrottleDecisionName(YoungHeuThrottleDecision decision);
+
+    static std::atomic<uint64_t> prevGcStartTime;
+    static std::atomic<uint64_t> prevGcFinishTime;
+
+    GCReason reason = GC_REASON_USER;
     bool isConcurrentMark;
     bool async;
 
@@ -64,13 +94,53 @@ public:
     size_t collectedBytes;
     size_t collectedObjects;
 
+    // Young collection-set bytes and marked bytes that survive the minor.
+    size_t youngCandidateBytes;
+    size_t youngPromotedBytes;
+    uint32_t tenuringThreshold;
+    size_t liveByAge[16];
+
     double garbageRatio;
     double collectionRate; // bytes per nano-second
 
-    size_t heapThreshold;
+    std::atomic<size_t> heapThreshold{ 0 };
+
+    // L1: last minor feeds the young watermark (CopyCollector.cpp skipped UpdateGCStats).
+    std::atomic<size_t> lastYoungCandidateBytes{ 0 };
+    std::atomic<size_t> lastYoungPromotedBytes{ 0 };
+    std::atomic<size_t> lastYoungCollectedBytes{ 0 };
+    std::atomic<uint64_t> lastYoungDurationNs{ 0 };
+    std::atomic<bool> hasYoungSample{ false };
+    std::atomic<size_t> youngTriggerBytes{ 32 * MB };
+
+    std::atomic<uint32_t> warmupCyclesDone{ 0 };
+    std::atomic<bool> isWarm{ false };
+    std::atomic<bool> isTimeTrustable{ false };
+    std::atomic<uint64_t> lastGcDurationNs{ 0 };
+    // zDirector R4 snapshots. Static so GCStats (embedded in HeapImpl next
+    // to barriers) stays the 13d5fee2 size. TruncatedSeq windows live in
+    // GcStats.cpp and only publish these atomics at cycle end.
+    static std::atomic<uint64_t> lastOldDurationNs;
+    static std::atomic<uint64_t> lastMajorFinishNs;
+    static std::atomic<uint32_t> collectionsAtLastMajor;
+    static std::atomic<size_t> usedAtLastMajorEnd;
+    static std::atomic<size_t> oldLiveAtMarkEnd;
+    static std::atomic<double> reclaimedPerYoungAvg;
+    static std::atomic<double> reclaimedPerOldAvg;
+    static std::atomic<double> lastYoungGcDurationAvgSec;
+    static std::atomic<double> lastOldGcDurationAvgSec;
+
+    void RecordYoungStats(size_t candidateBytes, size_t promotedBytes, size_t collectedBytes, uint64_t durationNs,
+                          size_t maxCapacity);
+
+private:
+    // A minor may extend the HEU finish-time throttle once after a major. A
+    // second consecutive minor must leave the clock alone so a major cannot be
+    // starved by a stream of young collections.
+    bool youngHeuDeferralUsed = false;
 };
-extern size_t g_gcCount;
-extern uint64_t g_gcTotalTimeUs;
-extern size_t g_gcCollectedTotalBytes;
+extern std::atomic<size_t> g_gcCount;
+extern std::atomic<uint64_t> g_gcTotalTimeUs;
+extern std::atomic<size_t> g_gcCollectedTotalBytes;
 } // namespace MapleRuntime
 #endif // MRT_STATS_H

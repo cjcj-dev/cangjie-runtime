@@ -40,6 +40,9 @@ struct LdrDataTableEntry {
 
 RuntimeFunction* WinModule::GetRuntimeFunction(Uptr pc) const
 {
+    if (funcTableCount == 0 || funcTable == nullptr) {
+        return nullptr;
+    }
     uint32_t start = 0;
     uint32_t end = funcTableCount - 1;
     uint32_t mid = 0;
@@ -50,6 +53,9 @@ RuntimeFunction* WinModule::GetRuntimeFunction(Uptr pc) const
         } else if (pc - imageBaseStart > funcTable[mid].endAddress) {
             start = mid + 1;
         } else {
+            if (mid == 0) {
+                break;
+            }
             end = mid - 1;
         }
     }
@@ -123,8 +129,6 @@ void WinModuleManager::ReadModuleInfo(HMODULE* moduleHandlers, int moduleHandler
         TCHAR moduleFullName[MAX_PATH] = { 0 };
         DWORD nameLen = GetModuleFileNameA(moduleHandlers[i], moduleFullName, MAX_PATH);
         if (nameLen == 0 || nameLen == MAX_PATH) {
-            // The module name is unavailable or truncated (a path of exactly MAX_PATH
-            // characters cannot be stored): skip this module.
             continue;
         }
         char drive[_MAX_DRIVE] = { 0 };
@@ -134,11 +138,8 @@ void WinModuleManager::ReadModuleInfo(HMODULE* moduleHandlers, int moduleHandler
         errno_t splitRet =
             _splitpath_s(moduleFullName, drive, _MAX_DRIVE, dir, _MAX_DIR, fname, _MAX_FNAME, ext, _MAX_EXT);
         if (splitRet != 0) {
-            // The path could not be split: skip this module instead of reading
-            // uninitialized buffers.
             continue;
         }
-        std::string moduleFName = std::string(drive) + std::string(dir) + std::string(fname) + std::string(ext);
         std::string moduleName = std::string(fname) + std::string(ext);
         if (nativeLibNames.count(moduleName) != 0) {
             continue;
@@ -156,7 +157,7 @@ void WinModuleManager::ReadModuleInfo(HMODULE* moduleHandlers, int moduleHandler
         uint32_t funcTableCount = funcTableSize / sizeof(RuntimeFunction);
 
         WinModule* winModule =
-            new (std::nothrow) WinModule(imageBaseStart, imageBaseEnd, funcTable, funcTableCount, moduleFName.c_str());
+            new (std::nothrow) WinModule(imageBaseStart, imageBaseEnd, funcTable, funcTableCount, moduleName.c_str());
         if (UNLIKELY(winModule == nullptr)) {
             LOG(RTLOG_FATAL, "new WinModule failed.");
         }

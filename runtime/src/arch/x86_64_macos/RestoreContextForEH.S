@@ -41,6 +41,14 @@ _RestoreContextForEH:
     movq    %rsp, %rdi
     callq   _MRT_RestoreContext
 
+    // See x86_64_linux/RestoreContextForEH.S: zero C return regs so N2CStub
+    // does not treat the landing-pad PC as the C return value.
+    movq    %rax, %r11
+    xorq    %rax, %rax
+    xorq    %rdx, %rdx
+    xorps   %xmm0, %xmm0
+    xorps   %xmm1, %xmm1
+
     // Restore all callee saved register.
     movq    (%rsp), %rbx
     movq    0x08(%rsp), %r12
@@ -51,5 +59,5 @@ _RestoreContextForEH:
     movq    0x30(%rsp), %rsp
 
     // jump to landingpad.
-    jmpq   *%rax
+    jmpq   *%r11
     .cfi_endproc

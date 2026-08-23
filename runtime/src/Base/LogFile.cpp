@@ -7,6 +7,7 @@
 
 #include "LogFile.h"
 
+#include "Base/GcLog.h"
 #include "Base/SysCall.h"
 #include "securec.h"
 
@@ -137,25 +138,55 @@ static void WriteLogImpl(bool addPrefix, LogType type, const char* format, va_li
         return;
     }
     int index = 0;
+    size_t requiredCapacity = 0;
     if (addPrefix) {
-        index = sprintf_s(buf, sizeof(buf), "%s %d ", TimeUtil::GetTimestamp().Str(), MapleRuntime::GetTid());
-        if (index == -1) {
-            PRINT_ERROR("WriteLogImpl sprintf_s failed. msg: %s\n", strerror(errno));
-            return;
+        int ret = snprintf(buf, sizeof(buf), "%s %d ", TimeUtil::GetTimestamp().Str(), MapleRuntime::GetTid());
+        if (ret < 0) {
+            ret = snprintf(buf, sizeof(buf), "[FORMAT ERROR bufferCapacity=%zu bytes logType=%s]",
+                sizeof(buf), LOG_TYPE_NAMES[type]);
+        }
+        if (ret < 0) {
+            buf[0] = '\0';
+        } else if (static_cast<size_t>(ret) >= sizeof(buf)) {
+            requiredCapacity = static_cast<size_t>(ret) + 1;
+        } else {
+            index = ret;
         }
     }
 
-    int ret = vsprintf_s(buf + index, sizeof(buf) - index, format, args);
-    if (ret == -1) {
-        PRINT_ERROR("WriteLogImpl vsprintf_s failed. msg: %s\n", strerror(errno));
-        return;
+    if (requiredCapacity == 0) {
+        size_t remainingCapacity = sizeof(buf) - static_cast<size_t>(index);
+        int ret = vsnprintf(buf + index, remainingCapacity, format, args);
+        if (ret < 0) {
+            ret = snprintf(buf + index, remainingCapacity, "[FORMAT ERROR bufferCapacity=%zu bytes logType=%s]",
+                sizeof(buf), LOG_TYPE_NAMES[type]);
+        }
+        if (ret < 0) {
+            buf[index] = '\0';
+        } else if (static_cast<size_t>(ret) >= remainingCapacity) {
+            requiredCapacity = static_cast<size_t>(index) + static_cast<size_t>(ret) + 1;
+        } else {
+            index += ret;
+        }
     }
-    index += ret;
+
+    if (requiredCapacity != 0) {
+        char marker[128];
+        int markerLength = snprintf(marker, sizeof(marker),
+            "...[TRUNCATED requiredCapacity=%zu bytes bufferCapacity=%zu bytes logType=%s]", requiredCapacity,
+            sizeof(buf), LOG_TYPE_NAMES[type]);
+        size_t markerOffset = sizeof(buf) - static_cast<size_t>(markerLength) - 1;
+        (void)memcpy_s(buf + markerOffset, sizeof(buf) - markerOffset, marker, static_cast<size_t>(markerLength));
+        index = static_cast<int>(sizeof(buf) - 1);
+    }
 
     LogFile::LogFileLock(type);
 #if defined(__OHOS__) && (__OHOS__ == 1)
     auto env = CString(std::getenv("MRT_REPORT"));
-    if (env.Str() == nullptr && type == LogType::REPORT) {
+    // ⛔ IsEmpty(), not Str() == nullptr (see CString.cpp:27-35). With the old guard this
+    // OHOS branch never ran, so an unset MRT_REPORT fell through to GetFile() == nullptr
+    // and printed "MRT_REPORT is not a valid path" for every REPORT line.
+    if (env.IsEmpty() && type == LogType::REPORT) {
         if (Logger::GetLogger().GetMinimumLogLevel() == RTLOG_INFO) {
             PRINT_INFO("%{public}s\n", buf);
         }
@@ -271,7 +302,11 @@ long GetEnv(const char* envName, long defaultValue)
 RTLogLevel InitLogLevel()
 {
     auto env = CString(std::getenv("MRT_LOG_LEVEL"));
-    if (env.Str() == nullptr) {
+    // ⛔ IsEmpty(), not Str() == nullptr (see CString.cpp:27-35). This is the site where the
+    // dead guard was observable: unset MRT_LOG_LEVEL reached the length check below, so every
+    // process emitted one spurious RTLOG_ERROR "Unsupported in MRT_LOG_LEVEL length" line.
+    // Measured: unset => 1 complaint, MRT_LOG_LEVEL=e => 0.
+    if (env.IsEmpty()) {
         return RTLOG_ERROR;
     }
 
@@ -303,4 +338,8 @@ RTLogLevel InitLogLevel()
     }
     return RTLOG_ERROR;
 }
+
+void EmitPhaseRecord(const char* name, uint64_t us) { GcLog::Phase(name, us); }
+
+bool GcLogRecordsEnabled() { return GcLog::Enabled(); }
 } // namespace MapleRuntime

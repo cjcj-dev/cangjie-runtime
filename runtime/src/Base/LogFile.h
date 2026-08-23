@@ -265,28 +265,45 @@ private:
 
 #define MRT_PHASE_TIMER(...) Timer MRT_pt_##__LINE__(__VA_ARGS__)
 
+// One structured phase record alongside the human-readable line above. The schema, the version
+// and the cycle counter live in Base/GcLog.h; this cannot include it because GcLog.h needs
+// WriteLog from here. Keep the field order identical to GcLog::Phase.
+void EmitPhaseRecord(const char* name, uint64_t us);
+// True when MRT_GC_LOG enables structured cycle/phase records (defined in LogFile.cpp).
+bool GcLogRecordsEnabled();
+
 class Timer {
 public:
     explicit Timer(const CString& pName, LogType type = REPORT) : name(pName), logType(type)
     {
-        if (ENABLE_LOG(type)) {
+        // Time when either the human VLOG channel or structured GC log needs the duration.
+        // ENABLE_LOG alone used to gate phase records; under DEFAULT_MRT_REPORT=0 that
+        // silently dropped rec=phase even with MRT_GC_LOG=1.
+        if (ENABLE_LOG(type) || GcLogRecordsEnabled()) {
             startTime = TimeUtil::MicroSeconds();
+            active = true;
         }
     }
 
     ~Timer()
     {
+        if (!active) {
+            return;
+        }
+        uint64_t stopTime = TimeUtil::MicroSeconds();
+        uint64_t diffTime = stopTime - startTime;
         if (ENABLE_LOG(logType)) {
-            uint64_t stopTime = TimeUtil::MicroSeconds();
-            uint64_t diffTime = stopTime - startTime;
             WriteLog(true, logType, "%s time: %sus", name.Str(), Pretty(diffTime).Str());
         }
+        // EmitPhaseRecord → GcLog::Phase self-gates on MRT_GC_LOG (always-on stderr).
+        EmitPhaseRecord(name.Str(), diffTime);
     }
 
 private:
     CString name;
     uint64_t startTime = 0;
     LogType logType;
+    bool active = false;
 };
 } // namespace MapleRuntime
 #endif // MRT_LOG_FILE_H

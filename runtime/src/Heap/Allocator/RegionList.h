@@ -39,12 +39,20 @@ public:
 
         CHECK(oldType != newType);
         std::lock_guard<std::mutex> lock(listMutex);
-        if (del->GetRegionType() == oldType) {
-            DeleteRegionLocked(del);
-            del->SetRegionType(newType);
-            return true;
+        if (del->GetRegionType() != oldType) {
+            return false;
         }
-        return false;
+        // Type maps 1:1 to list except the window after this CAS-like claim
+        // unlinks and before the caller Prepends onto the destination list.
+        // An unlisted node has prev==null and is not head (DeleteRegionLocked
+        // clears both links). Refuse so a concurrent TryDelete on the dest
+        // list cannot DecCounts a list that does not own the node.
+        if (listHead != del && del->GetPrevRegion() == nullptr) {
+            return false;
+        }
+        DeleteRegionLocked(del);
+        del->SetRegionType(newType);
+        return true;
     }
 
 #ifdef MRT_DEBUG
@@ -112,7 +120,7 @@ public:
         return CountAllocatedSize();
     }
 
-    void VisitAllRegions(const std::function<void(RegionInfo*)>& visitor)
+    void VisitAllRegions(const std::function<void(RegionInfo*)>& visitor) const
     {
         std::lock_guard<std::mutex> lock(listMutex);
         RegionInfo* node = listHead;
@@ -126,8 +134,17 @@ public:
 
     void VisitAllGhostRegions(const std::function<void(RegionInfo*)>& visitor)
     {
-        for (RegionInfo* node = listHead; node != nullptr; node = node->GetNextGhostRegion()) {
+        // Snapshot next before the visitor. PrepareFromRegionList may
+        // ReclaimRegionToMarkQuarantine → InitRegionInfo, which clears
+        // nextRegionIdx0 (the ghost successor). Walking GetNextGhostRegion
+        // after that truncates the chain; undispelled from-regions then
+        // fail PrepareForwardableRegion CHECK(inGhostFromRegion==0).
+        // Same shape as VisitAllRegions (RegionList.h:115-124).
+        RegionInfo* node = listHead;
+        while (node != nullptr) {
+            RegionInfo* next = node->GetNextGhostRegion();
             visitor(node);
+            node = next;
         }
     }
 
@@ -166,7 +183,7 @@ public:
     }
 
 protected:
-    std::mutex listMutex;
+    mutable std::mutex listMutex;
     size_t regionCount = 0;
     size_t unitCount = 0;
     RegionInfo* listHead = nullptr; // the start region for iteration, i.e., the first region

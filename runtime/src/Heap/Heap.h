@@ -29,6 +29,7 @@ class Heap {
 public:
     static Heap& GetHeap();
     static Barrier& GetBarrier() { return **currentBarrierPtr; }
+    virtual RememberedSet& GetRememberedSet() = 0;
 
     // concurrent gc uses barrier to access heap.
     static bool UseBarrier() { return *currentBarrierPtr != stwBarrierPtr; }

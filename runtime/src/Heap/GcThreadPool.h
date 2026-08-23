@@ -75,7 +75,7 @@ public:
 
     // Set max active thread number of pool, redundant thread hangup in sleep condition var.
     // notify more waiting thread get to work when pool is running.
-    // Range [1 - maxThreadNum].
+    // Range [0 - maxThreadNum]. Zero leaves all work to the calling GC thread.
     void SetMaxActiveThreadNum(int32_t num);
 
     // Get max active thread number of pool.

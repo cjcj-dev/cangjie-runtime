@@ -8,6 +8,8 @@
 #ifndef MRT_FREE_REGION_MANAGER_H
 #define MRT_FREE_REGION_MANAGER_H
 
+#include <vector>
+
 #include "CartesianTree.h"
 #include "RegionInfo.h"
 #include "Common/ScopedObjectAccess.h"
@@ -27,15 +29,21 @@ public:
     {
         dirtyUnitTree.Fini();
         releasedUnitTree.Fini();
+        markQuarantineTree.Fini();
     }
 
     void Initialize(UnitCount regionCnt)
     {
         releasedUnitTree.Init(regionCnt);
         dirtyUnitTree.Init(regionCnt);
+        markQuarantineTree.Init(regionCnt);
     }
 
-    RegionInfo* TakeRegion(size_t num, RegionInfo::UnitRole uclass, bool expectPhysicalMem)
+    // allowSaferegion: when false, never ScopedEnterSaferegion (ROUTING critical section —
+    // holding routeState=ROUTING while waiting on phase transition deadlocks PreForward;
+    // see REPORT-routespin.md). Best-effort one pass; caller falls back to CompactRegion.
+    RegionInfo* TakeRegion(size_t num, RegionInfo::UnitRole uclass, bool expectPhysicalMem,
+                           bool allowSaferegion = true)
     {
         UnitIndex idx = 0;
         bool tryDirtyTree = true;
@@ -45,18 +53,39 @@ public:
         while (tryDirtyTree || tryReleasedTree) {
             // first try to get a dirty region.
             if (tryDirtyTree && dirtyUnitTreeMutex.try_lock()) {
+                bool dirtyOk = false;
+                {
+                    // TakeUnits may refresh the residual free-tree node via
+                    // InitRegionInfo before returning the selected extent.
+                    // Carry a structural permit only across that maintenance;
+                    // the selected extent is checked immediately afterwards.
+                    FromPageDetach::ReusePermitScope treePermit;
 #if defined(__OHOS__)
-                bool dirtyOk = dirtyUnitTree.TakeUnitsLowAddr(num, idx);
+                    dirtyOk = dirtyUnitTree.TakeUnitsLowAddr(num, idx);
 #else
-                bool dirtyOk = dirtyUnitTree.TakeUnits(num, idx);
+                    dirtyOk = dirtyUnitTree.TakeUnits(num, idx);
 #endif
+                }
                 if (dirtyOk) {
+                    MAddress start = RegionInfo::GetUnitAddress(idx);
+                    RegionInfo* dirtyRegion = RegionInfo::TryGetRegionInfoAt(start);
+                    if (!FromPageDetach::FromPageDetachCheck(dirtyRegion,
+                                                             FromPageDetach::Site::TAKE_DIRTY_REUSE)) {
+                        dirtyUnitTreeMutex.unlock();
+                        AddDetachQuarantineUnits(idx, num, false, false);
+                        continue;
+                    }
+                    FromPageDetach::ReusePermitScope reusePermit;
+                    TraceClear::NoteRegionEvent(start, num * RegionInfo::UNIT_SIZE, "dirty_take", dirtyRegion, 0,
+                                                static_cast<unsigned int>(dirtyRegion->IsGhostFromRegion()),
+                                                static_cast<unsigned int>(dirtyRegion->GetRegionType()),
+                                                static_cast<unsigned int>(dirtyRegion->GetRouteState()));
                     DLOG(REGION, "c-tree %p alloc dirty units[%u+%u, %u) @[0x%zx, 0x%zx), %u dirty-units left",
                         &dirtyUnitTree, idx, num, idx + num, RegionInfo::GetUnitAddress(idx),
                         RegionInfo::GetUnitAddress(idx + num), dirtyUnitTree.GetTotalCount());
 
                     // it makes sense to slow down allocation by clearing region memory.
-                    RegionInfo::ClearUnits(idx, num);
+                    RegionInfo::ClearUnits(idx, num, FillerZeroDiag::Site::DIRTY_TAKE);
                     RegionInfo* region = RegionInfo::InitRegion(idx, num, uclass);
                     dirtyUnitTreeMutex.unlock();
                     return region;
@@ -67,12 +96,25 @@ public:
 
             // then try to get a released region.
             if (tryReleasedTree && releasedUnitTreeMutex.try_lock()) {
+                bool releasedOk = false;
+                {
+                    FromPageDetach::ReusePermitScope treePermit;
 #if defined(__OHOS__)
-                bool releasedOk = releasedUnitTree.TakeUnitsLowAddr(num, idx);
+                    releasedOk = releasedUnitTree.TakeUnitsLowAddr(num, idx);
 #else
-                bool releasedOk = releasedUnitTree.TakeUnits(num, idx);
+                    releasedOk = releasedUnitTree.TakeUnits(num, idx);
 #endif
+                }
                 if (releasedOk) {
+                    RegionInfo* releasedRegion =
+                        RegionInfo::TryGetRegionInfoAt(RegionInfo::GetUnitAddress(idx));
+                    if (!FromPageDetach::FromPageDetachCheck(releasedRegion,
+                                                             FromPageDetach::Site::TAKE_RELEASED_REUSE)) {
+                        releasedUnitTreeMutex.unlock();
+                        AddDetachQuarantineUnits(idx, num, true, false);
+                        continue;
+                    }
+                    FromPageDetach::ReusePermitScope reusePermit;
 #ifdef _WIN64
                     MemMap::CommitMemory(
                         reinterpret_cast<void*>(RegionInfo::GetUnitAddress(idx)), num * RegionInfo::UNIT_SIZE);
@@ -88,6 +130,10 @@ public:
                 tryReleasedTree = false; // once we fail to take units, stop trying.
                 releasedUnitTreeMutex.unlock();
             }
+            // routefix: ROUTING holders must not park here (LeaveSaferegion → WaitForPhaseTransition).
+            if (!allowSaferegion) {
+                return nullptr;
+            }
             ScopedEnterSaferegion enterSaferegion(true);
         }
 
@@ -102,6 +148,49 @@ public:
         if (UNLIKELY(!dirtyUnitTree.MergeInsert(idx, num, true))) {
             LOG(RTLOG_FATAL, "tid %d: failed to add dirty units [%u+%u, %u)", GetTid(), idx, num, idx + num);
         }
+    }
+
+    // mark-epoch quarantine: units reclaimed after DispelGhost must not enter the dirty
+    // tree (mutator TakeRegion → ClearUnits) until the next major concurrent mark ends.
+    // INV: concurrent mark may still hold plain strong refs into this range (SATB).
+    void AddMarkQuarantineUnits(UnitIndex idx, UnitCount num)
+    {
+        ScopedEnterSaferegion enterSaferegion(true);
+        std::lock_guard<std::mutex> lg(markQuarantineTreeMutex);
+        if (UNLIKELY(!markQuarantineTree.MergeInsert(idx, num, true))) {
+            LOG(RTLOG_FATAL, "tid %d: failed to add mark-quarantine units [%u+%u, %u)", GetTid(), idx, num, idx + num);
+        }
+    }
+
+    // Release point = major PostTrace entry (TRACE+CLEAR_SATB done). Moves all quarantined
+    // units into the dirty tree so allocation may ClearUnits them again.
+    size_t ReleaseMarkQuarantineToDirty()
+    {
+        size_t releasedUnits = 0;
+        ScopedEnterSaferegion enterSaferegion(true);
+        std::lock_guard<std::mutex> lockQ(markQuarantineTreeMutex);
+        std::lock_guard<std::mutex> lockD(dirtyUnitTreeMutex);
+        while (true) {
+            auto node = markQuarantineTree.RootNode();
+            if (node == nullptr) {
+                break;
+            }
+            UnitIndex idx = node->GetIndex();
+            UnitCount num = node->GetCount();
+            markQuarantineTree.ReleaseRootNode();
+            if (UNLIKELY(!dirtyUnitTree.MergeInsert(idx, num, true))) {
+                LOG(RTLOG_FATAL, "tid %d: failed to promote mark-quarantine units [%u+%u, %u) to dirty",
+                    GetTid(), idx, num, idx + num);
+            }
+            releasedUnits += num;
+        }
+        return releasedUnits;
+    }
+
+    UnitCount GetMarkQuarantineUnitCount() const
+    {
+        std::lock_guard<std::mutex> lg(markQuarantineTreeMutex);
+        return markQuarantineTree.GetTotalCount();
     }
 
     void AddReleaseUnits(UnitIndex idx, UnitCount num)
@@ -157,11 +246,32 @@ public:
     size_t CalculateBytesToRelease() const;
     size_t ReleaseGarbageRegions(size_t targetCachedSize);
 
+    // Phase-2 FROM_PAGE_DETACH_GATE. Entries are withheld from both allocator
+    // trees until a major mark closure rechecks the same central predicate.
+    void AddDetachQuarantineRegion(RegionInfo* region, bool releasePhysical = false);
+    void AddDetachQuarantineUnits(UnitIndex idx, UnitCount num, bool released, bool needsInit,
+                                  bool releasePhysical = false);
+    size_t ReleaseDetachQuarantineAfterMajor();
+    bool HasDetachQuarantine() const
+    {
+        std::lock_guard<std::mutex> lock(detachQuarantineMutex);
+        return !detachQuarantine.empty();
+    }
+
 private:
+    struct DetachQuarantineEntry {
+        UnitIndex idx;
+        UnitCount num;
+        uint8_t rechecks;
+        bool released;
+        bool needsInit;
+        bool releasePhysical;
+    };
+
     inline void PrehandleReleasedUnit(bool expectPhysicalMem, size_t idx, size_t num) const
     {
         if (expectPhysicalMem) {
-            RegionInfo::ClearUnits(idx, num);
+            RegionInfo::ClearUnits(idx, num, FillerZeroDiag::Site::RELEASED_PRE);
         }
     }
     RegionManager& regionManager;
@@ -173,6 +283,13 @@ private:
     // dirty units are neither cleared nor released, thus must be zeroed explicitly for allocation.
     mutable std::mutex dirtyUnitTreeMutex;
     CartesianTree dirtyUnitTree;
+
+    // Post-dispel units held until major mark ends (see AddMarkQuarantineUnits).
+    mutable std::mutex markQuarantineTreeMutex;
+    CartesianTree markQuarantineTree;
+
+    mutable std::mutex detachQuarantineMutex;
+    std::vector<DetachQuarantineEntry> detachQuarantine;
 };
 } // namespace MapleRuntime
 #endif // MRT_FREE_REGION_MANAGER_H

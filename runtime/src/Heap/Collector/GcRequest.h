@@ -8,6 +8,7 @@
 #ifndef MRT_GCREQUEST_H
 #define MRT_GCREQUEST_H
 
+#include <atomic>
 #include <cstdint>
 #include <limits>
 
@@ -32,6 +33,7 @@ enum GCReason : uint32_t {
     GC_REASON_HEU_SYNC,    // Just wait one gc request to reduce heap fragmentation.
     GC_REASON_NATIVE_SYNC, // Just wait one gc request to reduce native heap consumption.
     GC_REASON_FORCE,       // force gc is triggered when runtime triggers gc actively.
+    GC_REASON_YOUNG,       // Young-region allocation reaches the minor collection threshold.
     GC_REASON_MAX,
     GC_REASON_INVALID = std::numeric_limits<uint32_t>::max(),
 };
@@ -43,8 +45,8 @@ struct GCRequest {
     const bool isSync;
     const bool isConcurrent;
 
-    uint64_t minIntervelNs;
-    uint64_t prevRequestTime;
+    std::atomic<uint64_t> minIntervelNs;
+    std::atomic<uint64_t> prevRequestTime;
 
     inline bool IsFrequentGC() const;
     inline bool IsFrequentAsyncGC() const;
@@ -53,8 +55,18 @@ struct GCRequest {
 
     bool IsSyncGC() const { return isSync; }
 
-    void SetMinInterval(const uint64_t intervalNs) { minIntervelNs = intervalNs; }
-    void SetPrevRequestTime(uint64_t timestamp) { prevRequestTime = timestamp; }
+    void SetMinInterval(const uint64_t intervalNs)
+    {
+        minIntervelNs.store(intervalNs, std::memory_order_release);
+    }
+    uint64_t GetMinInterval() const
+    {
+        return minIntervelNs.load(std::memory_order_acquire);
+    }
+    void SetPrevRequestTime(uint64_t timestamp)
+    {
+        prevRequestTime.store(timestamp, std::memory_order_release);
+    }
 };
 
 // Defined in gcRequest.cpp

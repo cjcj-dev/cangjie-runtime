@@ -17,6 +17,9 @@
 #include "Base/SysCall.h"
 #include "Mutator/MutatorManager.h"
 #include "securec.h"
+#if defined(CANGJIE_TSAN_SUPPORT)
+#include "Sanitizer/SanitizerInterface.h"
+#endif
 
 // thread pool implementation
 namespace MapleRuntime {
@@ -52,6 +55,8 @@ void GCPoolThread::SetThreadPriority(pid_t tid, int32_t priority)
 }
 #endif
 
+
+
 void* GCPoolThread::WorkerFunc(void* param)
 {
     // set current thread as a gc thread.
@@ -69,6 +74,10 @@ void* GCPoolThread::WorkerFunc(void* param)
 #if defined(__linux__) || defined(hongmeng)
     thread->tid = MapleRuntime::GetTid();
     SetThreadPriority(thread->tid, pool->priority);
+#endif
+
+#if defined(CANGJIE_TSAN_SUPPORT)
+    Sanitizer::TsanAttachNativeThread();
 #endif
 
     while (!pool->IsExited()) {
@@ -104,6 +113,12 @@ void* GCPoolThread::WorkerFunc(void* param)
             }
         }
         if (task != nullptr) {
+#if defined(CANGJIE_TSAN_SUPPORT)
+            // Lazy attach: pool threads are created before TsanInitialize; first
+            // real GC work happens after, so re-try here so A2/R2 paths get thr.
+            Sanitizer::TsanAttachNativeThread();
+            TsanPosCtrlMaybeRace(thread->id);
+#endif
             task->Execute(thread->id);
             delete task;
         }
@@ -116,6 +131,9 @@ void* GCPoolThread::WorkerFunc(void* param)
             pool->allThreadStopped.notify_all();
         }
     }
+#if defined(CANGJIE_TSAN_SUPPORT)
+    Sanitizer::TsanDetachNativeThread();
+#endif
     return nullptr;
 }
 
@@ -185,7 +203,7 @@ void GCThreadPool::SetMaxActiveThreadNum(int32_t num)
     int32_t oldNum = maxActiveThreadNum;
     if (num >= maxThreadNum) {
         maxActiveThreadNum = maxThreadNum;
-    } else if (num > 0) {
+    } else if (num >= 0) {
         maxActiveThreadNum = num;
     } else {
         LOG(RTLOG_ERROR, "SetMaxActiveThreadNum invalid input val");

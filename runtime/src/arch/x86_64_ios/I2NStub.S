@@ -65,8 +65,8 @@ _CJ_MCC_I2NStub:
     movapd  %xmm7, -192(%rbp)
 
     // SaveC2NContext(pc, fa, threadLocalData)
-    call    .L_current_pc
-.L_current_pc:
+    call    L_current_pc
+L_current_pc:
     popq    %rdi
     movq    %rbp, %rsi
     movq    -48(%rbp), %rdx
@@ -106,11 +106,11 @@ _CJ_MCC_I2NStub:
 
     // LeaveSaferegion() only if EnterSaferegion changed state
     cmpq    $0, SafeStateOffset(%rbp)
-    je      .L_no_leave_saferegion
+    je      L_no_leave_saferegion
     callq   _MRT_LeaveSaferegion
     callq   _MRT_GetThreadLocalData
     movq    %rax, -48(%rbp)
-.L_no_leave_saferegion:
+L_no_leave_saferegion:
 
     // DeleteC2NContext(threadLocalData)
     movq    -48(%rbp), %rdi

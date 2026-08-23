@@ -7,429 +7,202 @@
 
 #include "WCollector.h"
 
+#include <array>
+#include <atomic>
+#if defined(MRT_GCV2_UNTAG_BREADCRUMB)
+#include <csignal>
+#endif
+#include <cstdint>
+#include <cstdio>
+#include <cstdlib>
+#include <cstring>
+#include <algorithm>
+#include <iterator>
+#include <limits>
+#include <memory>
+#include <mutex>
+#include <string>
+#include <thread>
+#include <unordered_map>
+#include <unordered_set>
+#include <vector>
+#include <unistd.h>
+
+#if defined(MRT_GCV2_UNTAG_BREADCRUMB)
+#include "Base/SysCall.h"
+#endif
 #include "Concurrency/Concurrency.h"
+#include "Heap/Barrier/StoreBarrierBuffer.h"
+#include "Heap/Collector/GcTriggerFlags.h"
+#include "Heap/Collector/MarkPartialArray.h"
+#include "Heap/Collector/TenuringThreshold.h"
+#include "Heap/GcThreadPool.h"
+#include "Heap/HeapWork.h"
+#if defined(MRT_GCV2_UNTAG_BREADCRUMB)
+#include "Heap/WCollector/UntagRefFieldBreadcrumb.h"
+#endif
+#include "Heap/Verify/VerifyHeap.h"
+#include "Heap/Verify/MarkCompleteVerify.h"
+#include "Heap/Verify/VerifyOption.h"
+#include "Heap/Verify/VerifyRememberedSet.h"
+#include "Heap/Verify/DiffPathExplainer.h"
+#include "Heap/Verify/TraceClear.h"
+#include "Heap/Verify/VerifyRoots.h"
+#include "Heap/Verify/Zap.h"
+#include "Heap/Verify/DiagGate.h"
+#include "Heap/Verify/NwDropAudit.h"
+#include "Heap/Verify/IdleEdgeDiag.h"
+#include "Heap/Verify/EatArmDiag.h"
+#include "Heap/Verify/FysDesignDiag.h"
+#include "Heap/Verify/F3Why2Diag.h"
+#include "Heap/Verify/GarbRegionDiag.h"
+#include "Heap/Verify/FysAuditDiag.h"
+#include "Heap/Verify/Stw2CurrentAudit.h"
+#include "Heap/Verify/FlipPromoDiag.h"
+#include "Heap/Verify/O2ORemsetDiag.h"
+#include "Heap/Verify/NullRouteCaller.h"
+#include "Heap/Verify/PlainCensus.h"
+#include "Heap/Verify/SealCheck.h"
+#include "Heap/Verify/ToverFailDiag.h"
+#include "Heap/Verify/OffpastDiag.h"
+#include "Heap/Verify/TlRawDiag.h"
+#include "Heap/Verify/StartWhoDiag.h"
+#include "Heap/Verify/StackRootSlotAttest.h"
+#include "Heap/Verify/WhoPushDiag.h"
+#include "Heap/Verify/HealPairDiag.h"
+#include "Heap/Verify/GateDropDiag.h"
+#include "Heap/Verify/NoTracedDiag.h"
+#include "Heap/Verify/SurvNodeDiag.h"
+#include "Heap/Verify/HeldFreeDiag.h"
+#include "Heap/Verify/YyEdgeDiag.h"
+#include "Heap/Collector/PromotedRegionDomain.h"
+#include "Heap/Verify/CsetEmptyWho.h"
+#include "Common/ColourPredicates.h"
+#include "Heap/WCollector/RemapYoungRoots.h"
 #include "Mutator/MutatorManager.h"
+#include "ObjectModel/MArray.inline.h"
+#include "UnwindStack/StackFrameCursor.h"
+#include "ObjectModel/RefField.inline.h"
+#include "TypeInfoManager.h"
+#include "Verify/VerifyRegions.h"
+#if defined(MRT_GCV2_UNTAG_BREADCRUMB)
+#include "securec.h"
+#endif
+#include "Heap/WCollector/WCollectorInternal.h"
 
 namespace MapleRuntime {
-bool WCollector::IsUnmovableFromObject(BaseObject* obj) const
-{
-    // filter const string object.
-    if (!Heap::IsHeapAddress(obj)) {
-        return false;
-    }
+static_assert(sizeof(RefField<false>) == 8, "RefField colour layout must preserve the 64-bit ABI");
+std::atomic<size_t> g_forwardRaceTotalCount{ 0 };
+std::atomic<size_t> g_forwardRaceStillBadCount{ 0 };
 
-    RegionInfo* regionInfo = nullptr;
-    if (RegionInfo::InGhostFromRegion(obj)) {
-        regionInfo = RegionInfo::GetGhostFromRegionAt(reinterpret_cast<uintptr_t>(obj));
-    } else {
-        regionInfo = RegionInfo::GetRegionInfoAt(reinterpret_cast<uintptr_t>(obj));
-    }
-    return regionInfo->IsUnmovableFromRegion();
+void ReportForwardRaceCounts()
+{
 }
 
-bool WCollector::MarkObject(BaseObject* obj) const
+// paramzero: crash-time snapshot of (a) Mode-A stack slot -0x50(%rbp) and
+// (b) heap CAS-null arm counters. Gate = MRT_GCV2_NULLSLOT (same as nullslot);
+// atomics themselves are always-on. Called from SignalManager::EmitCrashRec.
+// AS-safe-ish: only stack reads + write(2); no heap, no lock.
+void EmitParamzeroCrashProbe(uintptr_t rbp, uintptr_t rbx, uintptr_t rip)
 {
-    RegionInfo* region = RegionInfo::GetRegionInfoAt(reinterpret_cast<MAddress>(obj));
-    size_t objectSize = obj->GetSize();
-    bool marked = region->MarkObject(obj, objectSize);
-    if (!marked) {
-        region->AddLiveByteCount(objectSize);
-        (void)region;
-        DLOG(TRACE, "mark obj %p<%p>(%zu) in region %p(%u)@%#zx, live %u", obj, obj->GetTypeInfo(), objectSize,
-             region, region->GetRegionType(), region->GetRegionStart(), region->GetLiveByteCount());
-    }
-    return marked;
-}
-
-bool WCollector::ResurrectObject(BaseObject* obj, size_t offset, RegionInfo* region)
-{
-    bool resurrected = region->ResurrectObject(obj, offset);
-        if (!resurrected) {
-            region->AddLiveByteCount(obj->GetSize());
-            DLOG(TRACE, "resurrect region %p@%#zx obj %p<%p>(%zu), live bytes %u", region, region->GetRegionStart(),
-                 obj, obj->GetTypeInfo(), obj->GetSize(), region->GetLiveByteCount());
-        }
-        return resurrected;
-}
-
-// this api updates current pointer as well as old pointer, caller should take care of this.
-template<bool forward>
-bool WCollector::TryUpdateRefFieldImpl(BaseObject* obj, RefField<>& field, BaseObject*& fromObj,
-                                       BaseObject*& toObj) const
-{
-    RefField<> oldRef(field);
-    if (IsLoadBad(oldRef)) {
-        fromObj = to_object(oldRef.GetTargetObject());
-        if (forward) {
-            toObj = const_cast<WCollector*>(this)->TryForwardObject(fromObj);
-        } else {
-            toObj = FindToVersion(fromObj);
-        }
-        if (toObj == nullptr) {
-            return false;
-        }
-        RefField<> tmpField(toObj);
-        if (field.CompareExchange(oldRef.GetFieldValue(), tmpField.GetFieldValue())) {
-            if (obj != nullptr) {
-                DLOG(TRACE, "update obj %p<%p>(%zu)+%zu ref-field@%p: %#zx -> %#zx", obj, obj->GetTypeInfo(),
-                     obj->GetSize(), BaseObject::FieldOffset(obj, &field), &field, raw(oldRef.GetFieldValue()),
-                     tmpField.GetFieldValue());
-            } else {
-                DLOG(TRACE, "update ref@%p: 0x%zx -> %p", &field, raw(oldRef.GetFieldValue()), toObj);
-            }
-            return true;
-        } else {
-            if (obj != nullptr) {
-                DLOG(TRACE,
-                     "update obj %p<%p>(%zu)+%zu but cas failed ref-field@%p: %#zx(%#zx) -> %#zx but cas failed ", obj,
-                     obj->GetTypeInfo(), obj->GetSize(), BaseObject::FieldOffset(obj, &field), &field,
-                     raw(oldRef.GetFieldValue()), raw(field.GetFieldValue()), raw(tmpField.GetFieldValue()));
-            } else {
-                DLOG(TRACE, "update but cas failed ref@%p: 0x%zx(%zx) -> %p", &field, raw(oldRef.GetFieldValue()),
-                     field.GetFieldValue(), toObj);
-            }
-            return true;
-        }
-    }
-
-    return false;
-}
-bool WCollector::TryUpdateRefField(BaseObject* obj, RefField<>& field, BaseObject*& newRef) const
-{
-    BaseObject* oldRef = nullptr;
-    return TryUpdateRefFieldImpl<false>(obj, field, oldRef, newRef);
-}
-
-bool WCollector::TryForwardRefField(BaseObject* obj, RefField<>& field, BaseObject*& newRef) const
-{
-    BaseObject* oldRef = nullptr;
-    return TryUpdateRefFieldImpl<true>(obj, field, oldRef, newRef);
-}
-// this api untags current pointer as well as old pointer, caller should take care of this.
-bool WCollector::TryUntagRefField(BaseObject* obj, RefField<>& field, BaseObject*& target) const
-{
-    for (;;) {
-        RefField<> oldRef(field);
-        if (!IsLoadBad(oldRef)) {
-            return false;
-        }
-        target = to_object(oldRef.GetTargetObject());
-        RefField<> newRef(target);
-        if (field.CompareExchange(oldRef.GetFieldValue(), newRef.GetFieldValue())) {
-            if (obj != nullptr) {
-                DLOG(FIX, "untag obj %p<%p>(%zu) ref-field@%p: %#zx -> %#zx", obj, obj->GetTypeInfo(), obj->GetSize(),
-                     &field, raw(oldRef.GetFieldValue()), raw(newRef.GetFieldValue()));
-            } else {
-                DLOG(FIX, "untag ref@%p: %#zx -> %#zx", &field, raw(oldRef.GetFieldValue()), raw(newRef.GetFieldValue()));
-            }
-            return true;
-        }
-    }
-
-    return false;
-}
-
-// RefFieldRoot is root in tagged pointer format.
-void WCollector::EnumRefFieldRoot(RefField<>& field, RootSet& rootSet) const
-{
-    RefField<> oldField(field);
-    // if field is already tagged currently, it is also already enumerated.
-    if (IsCurrentPointer(oldField)) {
-        rootSet.push_back(to_object(oldField.GetTargetObject()));
+    if (!NullslotProbeEnabled()) {
         return;
     }
-
-    BaseObject* latest = nullptr;
-    if (IsOldPointer(oldField)) {
-        BaseObject* targetObj = to_object(oldField.GetTargetObject());
-        latest = FindLatestVersion(targetObj);
-    } else {
-        latest = to_object(field.GetTargetObject());
+    // Read -0x50(%rbp) = entry rsi spill (nullwriter objdump). Best-effort:
+    // if the page is unmapped this may re-fault; nested SEGV is accepted.
+    unsigned long slot50 = 0;
+    unsigned long slot30 = 0;
+    unsigned long slot40 = 0;
+    unsigned long savedRbp = 0;
+    unsigned long retAddr = 0;
+    unsigned long callerSlot50 = 0;
+    int slotOk = 0;
+    if (rbp != 0 && rbp > 0x1000UL) {
+        const unsigned long* fp = reinterpret_cast<const unsigned long*>(rbp);
+        // Frame layout: [rbp]=saved rbp, [rbp+8]=return, [rbp-0x50]=rsi spill.
+        savedRbp = fp[0];
+        retAddr = fp[1];
+        const unsigned long* slot50p =
+            reinterpret_cast<const unsigned long*>(rbp - 0x50UL);
+        const unsigned long* slot30p =
+            reinterpret_cast<const unsigned long*>(rbp - 0x30UL);
+        const unsigned long* slot40p =
+            reinterpret_cast<const unsigned long*>(rbp - 0x40UL);
+        slot50 = *slot50p;
+        slot30 = *slot30p;
+        slot40 = *slot40p;
+        slotOk = 1;
+        if (savedRbp != 0 && savedRbp > 0x1000UL) {
+            const unsigned long* cfp =
+                reinterpret_cast<const unsigned long*>(savedRbp - 0x50UL);
+            callerSlot50 = *cfp;
+        }
     }
+    // rbx at crash is the reloaded -0x50 value (Mode A: 0).
+    // entry_is_zero: if slot50==0 at crash AND product never rewrites that spill
+    // before reload (objdump: only one store at 6ef849 before 6ef8ee load), then
+    // the argument was already 0 at function entry.
+    char line[768];
+    int n = sprintf_s(line, sizeof(line),
+                      "[GCV2][nullslot] path=paramzero_frame n=0 "
+                      "rbp=%#lx rip=%#lx rbx=%#lx "
+                      "slot_m50=%#lx slot_m30=%#lx slot_m40=%#lx "
+                      "saved_rbp=%#lx ret=%#lx caller_slot_m50=%#lx slot_ok=%d "
+                      "entry_arg_zero=%d\n",
+                      static_cast<unsigned long>(rbp), static_cast<unsigned long>(rip),
+                      static_cast<unsigned long>(rbx), slot50, slot30, slot40, savedRbp,
+                      retAddr, callerSlot50, slotOk, (slotOk && slot50 == 0) ? 1 : 0);
+    if (n > 0) {
+        (void)write(STDERR_FILENO, line, static_cast<size_t>(n));
+    }
+    n = sprintf_s(line, sizeof(line),
+                  "[GCV2][nullslot] path=paramzero_cas n=0 "
+                  "fix_resolve_cas=%zu f3_fix_oldtag=%zu remset_stale=%zu "
+                  "resolve_root_entry=%zu resolve_root_old=%zu resolve_root_healNull=%zu "
+                  "fix_minor_roots_calls=%zu\n",
+                  g_nullslotResolve.load(std::memory_order_relaxed),
+                  g_nullslotF3.load(std::memory_order_relaxed),
+                  g_nullslotRemset.load(std::memory_order_relaxed),
+                  g_resolveRootEntry.load(std::memory_order_relaxed),
+                  g_resolveRootOld.load(std::memory_order_relaxed),
+                  g_resolveRootHealNull.load(std::memory_order_relaxed),
+                  g_fixMinorRootSlotsCalls.load(std::memory_order_relaxed));
+    if (n > 0) {
+        (void)write(STDERR_FILENO, line, static_cast<size_t>(n));
+    }
+}
+#if defined(MRT_GCV2_UNTAG_BREADCRUMB)
+namespace {
+struct UntagRefFieldBreadcrumb {
+    const void* holder = nullptr;
+    const void* field = nullptr;
+    const void* target = nullptr;
+    const void* caller = nullptr;
+    size_t fieldOffset = 0;
+    volatile sig_atomic_t active = 0;
+};
 
-    // target object could be null or non-heap for some static variable.
-    if (!Heap::IsHeapAddress(latest)) {
+thread_local UntagRefFieldBreadcrumb untagRefFieldBreadcrumb;
+} // namespace
+
+void PrintUntagRefFieldBreadcrumb() noexcept
+{
+    if (untagRefFieldBreadcrumb.active == 0) {
         return;
     }
-    CHECK_DETAIL(latest->IsValidObject(), "Enum static root %p(%p) encounters invalid object", latest, &field);
-    RefField<> newField = GetAndTryTagRefField(latest);
-    if (oldField.GetFieldValue() == newField.GetFieldValue()) {
-        DLOG(ENUM, "enum static ref@%p: %#zx -> %p<%p>(%zu)", &field, raw(oldField.GetFieldValue()), latest,
-             latest->GetTypeInfo(), latest->GetSize());
-    } else if (field.CompareExchange(oldField.GetFieldValue(), newField.GetFieldValue())) {
-        DLOG(ENUM, "enum static ref@%p: %#zx=>%#zx -> %p<%p>(%zu)", &field, raw(oldField.GetFieldValue()),
-             raw(newField.GetFieldValue()), latest, latest->GetTypeInfo(), latest->GetSize());
-    } else {
-        DLOG(ENUM, "enum static ref@%p: %#zx -> %p<%p>(%zu)", &field, raw(oldField.GetFieldValue()), latest,
-             latest->GetTypeInfo(), latest->GetSize());
-    }
-    rootSet.push_back(latest);
-}
-
-void WCollector::EnumAndTagRawRoot(ObjectRef& ref, RootSet& rootSet) const
-{
-    RefField<>& refField = reinterpret_cast<RefField<>&>(ref);
-    RefField<> oldField(refField);
-    CHECK_DETAIL(!IsOldPointer(oldField), "EnumAndTagRawRoot failed: Invalid root: %zx", oldField.GetFieldValue());
-    if (IsCurrentPointer(oldField)) {
-        rootSet.push_back(to_object(oldField.GetTargetObject()));
-        return;
-    }
-    BaseObject* root = to_object(oldField.GetTargetObject());
-    if (Heap::IsHeapAddress(root)) {
-        CHECK_DETAIL(root->IsValidObject(), "Enum and tag runtime root %p(%p) encounters invalid object", root, &ref);
-        RefField<> newField = GetAndTryTagRefField(root);
-        if (oldField.GetFieldValue() == newField.GetFieldValue()) {
-            DLOG(ENUM, "enum raw root @%p: %p(%zu)", &ref, root, root->GetSize());
-        } else if (refField.CompareExchange(oldField.GetFieldValue(), newField.GetFieldValue())) {
-            DLOG(ENUM, "enum static ref@%p: %#zx=>%#zx -> %p<%p>(%zu)", &refField, raw(oldField.GetFieldValue()),
-                 raw(newField.GetFieldValue()), root, root->GetTypeInfo(), root->GetSize());
-        } else {
-            DLOG(ENUM, "enum static ref@%p: %#zx -> %p<%p>(%zu)", &refField, raw(oldField.GetFieldValue()), root,
-                 root->GetTypeInfo(), root->GetSize());
-        }
-        rootSet.push_back(root);
+    std::atomic_signal_fence(std::memory_order_seq_cst);
+    char buf[320];
+    int n = sprintf_s(buf, sizeof(buf),
+                      "%d E GC untag breadcrumb: holder=%p field=%p field_offset=%zu target=%p caller_pc=%p\n",
+                      static_cast<int>(GetTid()), untagRefFieldBreadcrumb.holder, untagRefFieldBreadcrumb.field,
+                      untagRefFieldBreadcrumb.fieldOffset, untagRefFieldBreadcrumb.target,
+                      untagRefFieldBreadcrumb.caller);
+    if (n > 0) {
+        (void)write(STDERR_FILENO, buf, static_cast<size_t>(n));
     }
 }
+#endif
 
-// note each ref-field will not be traced twice, so each old pointer the tracer meets must come from previous gc.
-void WCollector::TraceRefField(BaseObject* obj, RefField<>& field, WorkStack& workStack) const
-{
-    RefField<> oldField(field);
-    if (IsCurrentPointer(oldField)) {
-        BaseObject* targetObj = to_object(oldField.GetTargetObject());
-        if (!IsMarkedObject(targetObj)) {
-            workStack.push_back(targetObj);
-        }
-        return;
-    }
-
-    BaseObject* latest = nullptr;
-    if (IsOldPointer(oldField)) {
-        BaseObject* targetObj = to_object(oldField.GetTargetObject());
-        latest = FindLatestVersion(targetObj);
-    } else {
-        latest = to_object(field.GetTargetObject());
-    }
-
-    // target object could be null or non-heap for some static variable.
-    if (!Heap::IsHeapAddress(latest)) {
-        return;
-    }
-    CHECK_DETAIL(latest->IsValidObject(), "Invalid object %p is referenced by object %p: %s and offset %zd", latest,
-                 obj, obj->GetTypeInfo()->GetName(), BaseObject::FieldOffset(obj, &field));
-    RefField<> newField = GetAndTryTagRefField(latest);
-    if (oldField.GetFieldValue() == newField.GetFieldValue()) {
-        DLOG(TRACE, "trace obj %p ref@%p: %p<%p>(%zu)", obj, &field, latest, latest->GetTypeInfo(), latest->GetSize());
-    } else if (field.CompareExchange(oldField.GetFieldValue(), newField.GetFieldValue())) {
-        DLOG(TRACE, "trace obj %p ref@%p: %#zx => %#zx->%p<%p>(%zu)", obj, &field, raw(oldField.GetFieldValue()),
-             raw(newField.GetFieldValue()), latest, latest->GetTypeInfo(), latest->GetSize());
-    }
-
-    if (!IsMarkedObject(latest)) {
-        workStack.push_back(latest);
-    }
-}
-
-void WCollector::TraceObjectRefFields(BaseObject* obj, WorkStack& workStack)
-{
-    auto refFunc = [this, obj, &workStack](RefField<>& field) { TraceRefField(obj, field, workStack); };
-
-    obj->ForEachRefField(refFunc);
-}
-
-BaseObject* WCollector::GetAndTryTagObj(BaseObject* obj, RefField<>& field)
-{
-    RefField<> oldField(field);
-    BaseObject* latest = nullptr;
-    if (IsCurrentPointer(oldField)) {
-        BaseObject* targetObj = to_object(oldField.GetTargetObject());
-        return targetObj;
-    }
-    if (IsOldPointer(oldField)) {
-        BaseObject* targetObj = to_object(oldField.GetTargetObject());
-        latest = FindLatestVersion(targetObj);
-    } else {
-        latest = to_object(field.GetTargetObject());
-    }
-    // target object could be null or non-heap for some static variable.
-    if (!Heap::IsHeapAddress(latest)) {
-        return nullptr;
-    }
-    CHECK_DETAIL(latest->IsValidObject(), "Invalid object %p is referenced by weak object %p: %s and offset %zd",
-                 latest, obj, obj->GetTypeInfo()->GetName(), BaseObject::FieldOffset(obj, &field));
-    RefField<> newField = GetAndTryTagRefField(latest);
-    if (oldField.GetFieldValue() == newField.GetFieldValue()) {
-        DLOG(TRACE, "trace obj %p ref@%p: %p<%p>(%zu)", obj, &field, latest, latest->GetTypeInfo(), latest->GetSize());
-    } else if (field.CompareExchange(oldField.GetFieldValue(), newField.GetFieldValue())) {
-        DLOG(TRACE, "trace obj %p ref@%p: %#zx => %#zx->%p<%p>(%zu)", obj, &field, raw(oldField.GetFieldValue()),
-            raw(newField.GetFieldValue()), latest, latest->GetTypeInfo(), latest->GetSize());
-    }
-    return latest;
-}
-
-BaseObject* WCollector::ForwardUpdateRawRef(ObjectRef& root)
-{
-    auto& refField = reinterpret_cast<RefField<>&>(root);
-    RefField<> oldField(refField);
-    BaseObject* oldObj = to_object(oldField.GetTargetObject());
-    DLOG(FIX, "visit raw-ref @%p: %p", &root, oldObj);
-    CHECK_DETAIL(!IsOldPointer(oldField), "ForwardUpdateRawRef failed: Invalid object: %zx", oldField.GetFieldValue());
-    if (IsCurrentPointer(oldField)) {
-        if (IsGhostFromObject(oldObj)) {
-            BaseObject* toVersion = TryForwardObject(oldObj);
-            CHECK(toVersion != nullptr);
-            RefField<> newField(toVersion);
-            // CAS failure means some mutator or gc thread writes a new ref (must be a to-object), no need to retry.
-            if (refField.CompareExchange(oldField.GetFieldValue(), newField.GetFieldValue())) {
-                DLOG(FIX, "fix raw-ref @%p: %p -> %p", &root, oldObj, toVersion);
-                return toVersion;
-            }
-            CHECK(!IsCurrentPointer(refField));
-        } else {
-            RefField<> newField(oldObj);
-            // CAS failure means some mutator or gc thread writes a new ref (must be a to-object), no need to retry.
-            if (refField.CompareExchange(oldField.GetFieldValue(), newField.GetFieldValue())) {
-                DLOG(FIX, "fix raw-ref @%p: %p -> %p", &root, oldObj, oldObj);
-                return oldObj;
-            }
-        }
-    }
-
-    return oldObj;
-}
-void WCollector::PreforwardAllExportFromRoots()
-{
-    RootVisitor visitor = [this](ObjectRef& root) { ForwardUpdateRawRef(root); };
-    Heap::GetHeap().VisitAllExportRoots(visitor);
-}
-void WCollector::PreforwardFinalizerProcessorRoots()
-{
-    RootVisitor visitor = [this](ObjectRef& root) { ForwardUpdateRawRef(root); };
-    collectorResources.GetFinalizerProcessor().VisitRawPointers(visitor);
-}
-
-void WCollector::PreforwardConcurrencyModelRoots()
-{
-    RootVisitor visitor = [this](ObjectRef& root) { ForwardUpdateRawRef(root); };
-    Runtime::Current().GetConcurrencyModel().VisitGCRoots(&visitor);
-}
-
-void WCollector::PreforwardDiscoveredExternObjects()
-{
-    std::lock_guard<std::mutex> lg(cycleWorkStackMtx);
-    CHECK(discoveredExternObjects.empty());
-    auto it = cycleRefWorkStack.begin();
-    std::unordered_map<BaseObject*, std::list<BaseObject*>> tmp;
-    while (it != cycleRefWorkStack.end()) {
-        BaseObject* exportObj = it->first;
-        BaseObject* latest = exportObj;
-        if (IsGhostFromObject(exportObj) && !IsUnmovableFromObject(exportObj)) {
-            latest = ForwardObject(exportObj);
-        }
-        for (auto &externObj : it->second) {
-            if (IsGhostFromObject(externObj) && !IsUnmovableFromObject(externObj)) {
-                BaseObject* toObj = ForwardObject(externObj);
-                externObj = toObj;
-            }
-        }
-        if (latest != exportObj) {
-            tmp[latest] = it->second;
-            it = cycleRefWorkStack.erase(it);
-        } else {
-            it++;
-        }
-    }
-    if (!tmp.empty()) {
-        cycleRefWorkStack.insert(tmp.begin(), tmp.end());
-    }
-}
-
-void WCollector::PreforwardAllResurrectExportFromObjects()
-{
-    std::unordered_set<BaseObject*> tmp;
-    std::lock_guard<std::mutex> lg(resurrectExportMtx);
-    auto it = resurrectedExportObjectes.begin();
-    while (it != resurrectedExportObjectes.end()) {
-        BaseObject* exportObj = *it;
-        BaseObject* latest = exportObj;
-        if (IsGhostFromObject(exportObj) && !IsUnmovableFromObject(exportObj)) {
-            latest = ForwardObject(exportObj);
-        }
-        if (latest != exportObj) {
-            tmp.insert(latest);
-            it = resurrectedExportObjectes.erase(it);
-        } else {
-            it++;
-        }
-    }
-    if (!tmp.empty()) {
-        resurrectedExportObjectes.insert(tmp.begin(), tmp.end());
-    }
-}
-void WCollector::TraceHeap()
-{
-    WorkStack workStack = NewWorkStack();
-    WorkStack foreignStack = NewWorkStack();
-    // assemble garbage candidates for tracing.
-    reinterpret_cast<RegionSpace&>(theAllocator).AssembleGarbageCandidates();
-
-    {
-        MRT_PHASE_TIMER("enum roots & update old pointers within");
-        TransitionToGCPhase(GCPhase::GC_PHASE_ENUM, true);
-        DoEnumeration(workStack, foreignStack);
-    }
-
-    {
-        MRT_PHASE_TIMER("trace live objects & update old pointers in ref-fields");
-        markedObjectCount.store(0, std::memory_order_relaxed);
-        TransitionToGCPhase(GCPhase::GC_PHASE_TRACE, true);
-        reinterpret_cast<RegionSpace&>(theAllocator).PrepareTrace();
-        DoTracing(workStack, foreignStack);
-
-        ProcessFinalizers();
-    }
-}
-
-void WCollector::PostTrace()
-{
-    MRT_PHASE_TIMER("PostTrace");
-    TransitionToGCPhase(GC_PHASE_POST_TRACE, true);
-    RegionSpace& space = reinterpret_cast<RegionSpace&>(theAllocator);
-    space.GetRegionManager().HandleTraceRegions();
-    // clear weakRef List, set the referent as null
-    WeakRefBuffer::Instance().ClearWeakRefBuffer();
-    // clear satb buffer when gc finish tracing.
-    SatbBuffer::Instance().ClearBuffer();
-    // reclaim large objects immediately after tracing is done.
-    PrepareCycleRef();
-    CollectLargeGarbage();
-    CollectPinnedGarbage();
-    RefineFromSpace();
-    fwdTable.PrepareForwardTable();
-}
-
-void WCollector::Preforward()
-{
-    ScopedEntryTrace trace("CJRT_GC_PREFORWARD");
-    MRT_PHASE_TIMER("Preforward");
-    {
-        ScopedLightSync scopedLightSync("Preforward", true, GCPhase::GC_PHASE_PREFORWARD);
-    }
-
-    GCThreadPool* threadPool = GetThreadPool();
-    MRT_ASSERT(threadPool != nullptr, "thread pool is null");
-    // forward and fix cj future objects
-    threadPool->AddWork(new (std::nothrow) LambdaWork([this](size_t) { PreforwardConcurrencyModelRoots(); }));
-
-    // forward and fix finalizer roots.
-    threadPool->AddWork(new (std::nothrow) LambdaWork([this](size_t) { PreforwardFinalizerProcessorRoots(); }));
-    threadPool->AddWork(new (std::nothrow) LambdaWork([this](size_t) { PreforwardAllExportFromRoots(); }));
-    threadPool->AddWork(new (std::nothrow) LambdaWork([this](size_t) { PreforwardDiscoveredExternObjects(); }));
-    threadPool->AddWork(new (std::nothrow) LambdaWork([this](size_t) { PreforwardAllResurrectExportFromObjects(); }));
-    threadPool->Start();
-    threadPool->WaitFinish();
-}
 
 
 extern "C" void CJ_MRT_RolveCycleRef();
@@ -526,135 +299,102 @@ void WCollector::PostResolveCycleTask()
 }
 void WCollector::DoGarbageCollection()
 {
+    // Free the forwarding entry tables retired during the previous cycle. ZGC recycles its
+    // forwarding arena at the next cycle's ZRelocationSetInstallTask (zRelocationSet.cpp:91-96),
+    // one whole phase after ZHeap::free_page released the page the forwarding described; that gap
+    // is why ZForwarding::find may run holding no reference (zRelocate.cpp:382-393). Reclaiming at
+    // the head of a cycle gives ours the same gap: by now every reader that could have loaded one
+    // of these pointers has been through a phase transition.
+    ForwardingTable::ReclaimRetired("cycle-start");
+    // ZGC: not-selected pages are ordinary candidates next cycle
+    // (zRelocationSetSelector.cpp:114-196). Expire last cycle's Exempt-kept
+    // before Assemble / PrepareYoung so they re-enter the selector.
+    reinterpret_cast<RegionSpace&>(theAllocator).GetRegionManager().ExpireKeptFromPreviousCycle();
+    if (gcReason == GC_REASON_YOUNG) {
+        DoYoungGarbageCollection();
+        Collector::ReportMarkGoodHeapGateCounts();
+        return;
+    }
+    // oracleblack: a major is young + old, as in ZGC (zGeneration.cpp ZGenerationOld
+    // collections run the young generation first; a standalone old cycle does not exist).
+    // Ours ran old-only: under a config whose young trigger never fires (cjpm at 12GB,
+    // youngRegionTriggerBytes=32MB unreached), young regions were never marked by anyone,
+    // yet three separate paths (ForwardRegion knownEmpty, its unmarked arm, and
+    // Assemble->from-space route=5 collect) judged them by the OLD view and freed live
+    // young objects wholesale (f3-livehole census; TraceClear kind=coll_live).
+    // Running the young cycle first gives every young region a real examination each major.
+    //
+    // The nested young cycle must run under its own identity: CopyCollector::ForwardFromSpace
+    // (CopyCollector.cpp:189-193) and every other generation dispatch key on gcReason, so a
+    // young evacuation executed while gcReason==HEU instantiates the Old templates and trips
+    // GetRouteMarkView's generation CHECK on every young-enrolled region (RegionInfo.h:385).
+    {
+        const GCReason majorReason = gcReason;
+        GCStats& stats = GetGCStats();
+        const GCReason majorStatsReason = stats.reason;
+        gcReason = GC_REASON_YOUNG;
+        // MarkAndRememberNewValue dispatches its young paint vs major SATB leg
+        // through GCStats::reason. Publish the same nested-cycle identity there.
+        stats.reason = GC_REASON_YOUNG;
+        DoYoungGarbageCollection();
+        gcReason = majorReason;
+        stats.reason = majorStatsReason;
+    }
     TraceHeap();
     PostTrace();
 
     Preforward();
 
     ForwardFromSpace();
+    reinterpret_cast<RegionSpace&>(theAllocator).GetRegionManager().FinishIncompleteFromRegions();
 
+    // Preserve young remembered-set faces across old/full collection. ZGC old
+    // relocation transfers remembered fields; it does not globally erase the
+    // young current face. ClearRegion/TransferObjectSlots remain the authorities
+    // for reclaimed or moved holders (zRelocate.cpp:652-731).
     TransitionToGCPhase(GCPhase::GC_PHASE_IDLE, true);
     MergeResurrectExportObjects();
     PostResolveCycleTask();
     FlipTagID();
     ForwardDataManager::GetForwardDataManager().SetTagID(currentTagID);
+    // FlipTagID just turned this cycle's current-tags into IsOldPointer. F3 pre-flip only
+    // saw the previous tag generation. This pass must NOT filter IsSurvivedObject:
+    // after Forward, live holders are in to-space without mark bits at the new addr.
+    //
+    // This walk exists because a reference could not say for itself that its colour was stale, so
+    // someone had to strip the old tag off every one of them before the tag was reused. Once the
+    // read barrier heals a stale colour on the way past (FixOldTaggedRefField), the walk has
+    // nothing left to do -- but that claim needs measuring before the walk goes away for good, so
+    // it is a switch rather than a deletion. Nobody has measured what this pass costs.
+    InvalidateOldTaggedRefs(false);
+    reinterpret_cast<RegionSpace&>(theAllocator).GetRegionManager().ExpireKeptFromPreviousCycle();
+    if (HealCoverage::kHealCoverageCensus) {
+        HealCoverage::CensusAfterPublication(
+            currentRemapColour, FlipSeq().load(std::memory_order_relaxed), "major-postflip");
+    }
 
     CollectSmallSpace();
+    // domainon: major path coverage dump (Record may fire under non-YOUNG if youngRegion).
+    PromotedRegionDomain::DumpCoverageByReason("post-major");
+    // retmid: do NOT StampCensusBoundaries / PromoteAllRegions here.
+    // Ablation D (both major STWs disabled) restores mid_alloc 5/5; any of
+    // Flush/Stamp/Promote in these STWs reintroduces 0/5 or residual 甲 under
+    // FYS=0 SKIP_PINNED=1 512MB. Retained-liveness still applies on residual and
+    // in-place promote paths that already Preserve + RecordPromotedCrossGenEdges.
     ForwardDataManager::GetForwardDataManager().UnbindPreviousLiveInfo();
+    Collector::ReportMarkGoodHeapGateCounts();
+    O2ORemsetDiag::DumpAndMaybeReset("post-major", /*reset*/ true);
 }
-
-void WCollector::MarkNewObject(BaseObject* obj)
-{
-    GCPhase mutatorPhase = Mutator::GetMutator()->GetMutatorPhase();
-    if (UNLIKELY(mutatorPhase == GCPhase::GC_PHASE_ENUM) || UNLIKELY(mutatorPhase == GCPhase::GC_PHASE_TRACE) ||
-        UNLIKELY(mutatorPhase == GCPhase::GC_PHASE_CLEAR_SATB_BUFFER)) {
-        MarkObject(obj);
-    }
-}
-
-void WCollector::ProcessFinalizers()
-{
-    std::function<bool(BaseObject*)> finalizable = [this](BaseObject* obj) { return !IsMarkedObject(obj); };
-    FinalizerProcessor& fp = collectorResources.GetFinalizerProcessor();
-    fp.EnqueueFinalizables(finalizable, snapshotFinalizerNum);
-    fp.Notify();
-}
-
-BaseObject* WCollector::ForwardObject(BaseObject* obj)
-{
-    BaseObject* to = TryForwardObject(obj);
-    return (to != nullptr) ? to : obj;
-}
-
-BaseObject* WCollector::TryForwardObject(BaseObject* obj)
-{
-    RegionInfo* region = RegionInfo::GetGhostFromRegionAt(reinterpret_cast<MAddress>(obj));
-    if (region == nullptr) {
-        return nullptr;
-    }
-
-    if (fwdTable.RouteRegion(region)) {
-        if (region->TryLockReadFromRegion()) {
-            BaseObject* toVersion = ForwardObjectImpl(obj, region);
-            region->UnlockReadFromRegion();
-            return toVersion;
-        } else {
-            return FindToVersion(obj);
-        }
-    } else if (region->IsCompacted()) {
-        return FindToVersion(obj);
-    }
-    return nullptr;
-}
-
-BaseObject* WCollector::ForwardObjectImpl(BaseObject* obj, RegionInfo* ghostFromRegion)
-{
-    CHECK(GetGCPhase() == GCPhase::GC_PHASE_PREFORWARD || GetGCPhase() == GCPhase::GC_PHASE_FORWARD);
-    do {
-        StateWord oldWord = obj->GetStateWord();
-
-        // 1. object has already been forwarded
-        if (obj->IsForwarded()) {
-            auto toObj = GetForwardPointer(obj, ghostFromRegion);
-            DLOG(FORWARD, "skip forwarded obj %p -> %p<%p>(%zu)", obj, toObj, toObj->GetTypeInfo(), toObj->GetSize());
-            return toObj;
-        }
-
-        // 2. object is being forwarded, spin until it is forwarded (or gets its own forwarded address)
-        if (oldWord.IsLockedWord()) {
-            sched_yield();
-            continue;
-        }
-
-        // 3. hope we can forward this object
-        if (obj->TryLockObject(oldWord)) {
-            return ForwardObjectExclusive(obj);
-        }
-    } while (true);
-    LOG(RTLOG_FATAL, "forwardObject exit in wrong path");
-    return nullptr;
-}
-
-BaseObject* WCollector::ForwardObjectExclusive(BaseObject* obj)
-{
-    size_t size = RegionSpace::GetAllocSize(*obj);
-    BaseObject* toObj = fwdTable.RouteObject(obj);
-    CHECK_DETAIL(toObj != nullptr, "invalid object route");
-    DLOG(FORWARD, "forward obj %p<%p>(%zu) to %p", obj, obj->GetTypeInfo(), size, toObj);
-    CopyObject(*obj, *toObj, size);
-    toObj->SetStateCode(ObjectState::NORMAL);
-    std::atomic_thread_fence(std::memory_order_release);
-    obj->UnlockObject(ObjectState::FORWARDED);
-    return toObj;
-}
-
-void WCollector::CollectSmallSpace()
-{
-    GCStats& stats = GetGCStats();
-    RegionSpace& space = reinterpret_cast<RegionSpace&>(theAllocator);
-    {
-        MRT_PHASE_TIMER("CollectFromSpaceGarbage");
-        stats.collectedBytes += stats.smallGarbageSize;
-        space.CollectFromSpaceGarbage();
-    }
-
-    size_t candidateBytes = stats.fromSpaceSize + stats.pinnedSpaceSize + stats.largeSpaceSize;
-    stats.garbageRatio = (candidateBytes > 0) ? static_cast<float>(stats.collectedBytes) / candidateBytes : 0;
-
-    stats.liveBytesAfterGC = space.AllocatedBytes();
-
-    VLOG(REPORT,
-         "collect %zu B: old small %zu - %zu B, old pinned %zu - %zu B, old large %zu - %zu B. garbage ratio %.2f%%",
-         stats.collectedBytes, stats.fromSpaceSize, stats.smallGarbageSize, stats.pinnedSpaceSize,
-         stats.pinnedGarbageSize, stats.largeSpaceSize, stats.largeGarbageSize,
-         stats.garbageRatio * 100); // The base of the percentage is 100
-
-    VLOG(REPORT, "start to release heap garbage memory");
-#if defined(__EULER__)
-    Heap::GetHeap().GetAllocator().TryReclaimGarbageMemory();
-#endif
-    collectorResources.GetFinalizerProcessor().NotifyToReclaimGarbage();
-}
-
 bool WCollector::ShouldIgnoreRequest(GCRequest& request) { return request.ShouldBeIgnored(); }
+} // namespace MapleRuntime
+namespace MapleRuntime {
+namespace ZgcInvariants {
+// flipseq bridge: keeps ZgcInvariants.cpp from having to include the collector header.
+uint64_t WCollectorFlipSeqForProbe() { return WCollector::FlipSeq().load(std::memory_order_relaxed); }
+BaseObject* ProbeFindToVersion(BaseObject* obj)
+{
+    Collector& c = Heap::GetHeap().GetCollector();
+    return c.FindToVersion(obj);
+}
+} // namespace ZgcInvariants
 } // namespace MapleRuntime
