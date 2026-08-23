@@ -299,6 +299,7 @@ if ! bash "$FINALIZER_SCRIPT"; then
   echo "GC_UNIT_GATE_FAIL: end-to-end finalizer trigger test failed" >&2
   exit 1
 fi
+FINALIZER_STATE=PASS
 
 PHASE_ENTRY_STATE=FAIL
 PHASE_ENTRY_SOURCE=FRESH
@@ -307,6 +308,7 @@ if ! bash "$PHASE_ENTRY_SCRIPT"; then
   echo "GC_UNIT_GATE_FAIL: forwarding-carrier phase entry test failed" >&2
   exit 1
 fi
+PHASE_ENTRY_STATE=PASS
 
 if [[ "$TESTABLE_INTERNALS" == "1" ]]; then
   SEGMENTED_MANAGED_STATE=FAIL
@@ -316,13 +318,9 @@ if [[ "$TESTABLE_INTERNALS" == "1" ]]; then
     echo "GC_UNIT_GATE_FAIL: managed segmented-array product entry test failed" >&2
     exit 1
   fi
-fi
-
-FINALIZER_STATE=PASS
-PHASE_ENTRY_STATE=PASS
-if [[ "$TESTABLE_INTERNALS" == "1" ]]; then
   SEGMENTED_MANAGED_STATE=PASS
 fi
+
 GATE_STATE=PASS
 STATUS_REASON=PASS
 touch "$STAMP"
