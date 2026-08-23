@@ -53,30 +53,10 @@
 #include "Heap/Verify/Zap.h"
 #include "Heap/Verify/DiagGate.h"
 #include "Heap/Verify/NwDropAudit.h"
-#include "Heap/Verify/IdleEdgeDiag.h"
-#include "Heap/Verify/EatArmDiag.h"
-#include "Heap/Verify/FysDesignDiag.h"
-#include "Heap/Verify/F3Why2Diag.h"
 #include "Heap/Verify/GarbRegionDiag.h"
-#include "Heap/Verify/FysAuditDiag.h"
 #include "Heap/Verify/Stw2CurrentAudit.h"
-#include "Heap/Verify/FlipPromoDiag.h"
-#include "Heap/Verify/O2ORemsetDiag.h"
 #include "Heap/Verify/NullRouteCaller.h"
-#include "Heap/Verify/PlainCensus.h"
-#include "Heap/Verify/SealCheck.h"
-#include "Heap/Verify/ToverFailDiag.h"
-#include "Heap/Verify/OffpastDiag.h"
-#include "Heap/Verify/TlRawDiag.h"
-#include "Heap/Verify/StartWhoDiag.h"
-#include "Heap/Verify/StackRootSlotAttest.h"
-#include "Heap/Verify/WhoPushDiag.h"
-#include "Heap/Verify/HealPairDiag.h"
-#include "Heap/Verify/GateDropDiag.h"
-#include "Heap/Verify/NoTracedDiag.h"
 #include "Heap/Verify/SurvNodeDiag.h"
-#include "Heap/Verify/HeldFreeDiag.h"
-#include "Heap/Verify/YyEdgeDiag.h"
 #include "Heap/Collector/PromotedRegionDomain.h"
 #include "Heap/Verify/CsetEmptyWho.h"
 #include "Common/ColourPredicates.h"
@@ -493,7 +473,7 @@ void WCollector::FixOldTaggedRefField(BaseObject* holder, RefField<>& field, con
         } else if (latestRegion->IsGarbageRegion()) {
             reason = "region_garbage";
             rtype = static_cast<unsigned>(latestRegion->GetRegionType());
-            F3Why2Diag::NoteF3RegionGarbage(latestRegion, latest);
+
             GarbRegionDiag::NoteF3Join(latestRegion, latest, reason);
         } else {
             latestValid = latestValidObj ? 1 : 0;
@@ -978,7 +958,7 @@ void WCollector::InvalidateOldTaggedRefs(bool requireSurvivedMark)
     }
     // Always-on F3 dead-arm class totals (soft-null + bad-tip). Greppable every F3 walk.
     ReportF3DeadarmCounts(requireSurvivedMark ? "preflip" : "postflip");
-    F3Why2Diag::Report(requireSurvivedMark ? "preflip" : "postflip");
+
     GarbRegionDiag::Report(requireSurvivedMark ? "preflip" : "postflip");
     if (requireSurvivedMark && preflipVerify) {
         static const bool preflipVerifyFatal = []() {
@@ -1575,17 +1555,6 @@ void WCollector::RescanRememberedSet(WorkStack& workStack, const MinorSlotSet& r
             continue;
         }
 
-        bool noteRemsetHandoff = false;
-        if (UNLIKELY(StartWhoDiag::Enabled())) {
-            RegionInfo* targetRegion = RegionInfo::TryGetRegionInfoAt(reinterpret_cast<MAddress>(target));
-            noteRemsetHandoff = targetRegion != nullptr && targetRegion->IsYoungRegion() &&
-                !targetRegion->IsMarkedObject(targetRegion->GetMarkView<Generation::Young>(), target);
-        }
-        if (noteRemsetHandoff) {
-            BaseObject* holder = originIt != rememberedOrigins.end() ? originIt->second : nullptr;
-            StartWhoDiag::NoteProduced(target, StartWhoDiag::Source::REMSET,
-                                       "RescanRememberedSet.PushYoungObject", field, holder);
-        }
         PushYoungObject(target, workStack, "remset");
         NwDropAudit::Note(NwDropAudit::kAdmit);
         if (consumedOut != nullptr) {
