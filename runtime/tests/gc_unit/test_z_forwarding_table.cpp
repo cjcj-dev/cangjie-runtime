@@ -25,11 +25,11 @@
 using namespace MapleRuntime;
 using namespace MapleRuntime::GcUnit;
 
-static_assert(!std::is_convertible_v<MAddress, zoffset>);
-static_assert(!std::is_convertible_v<zoffset, MAddress>);
-static_assert(!std::is_convertible_v<zpointer, zoffset>);
-static_assert(!std::is_convertible_v<zaddress, zoffset>);
-static_assert(!std::is_convertible_v<zaddress_unsafe, zoffset>);
+static_assert(!std::is_convertible<MAddress, zoffset>::value);
+static_assert(!std::is_convertible<zoffset, MAddress>::value);
+static_assert(!std::is_convertible<zpointer, zoffset>::value);
+static_assert(!std::is_convertible<zaddress, zoffset>::value);
+static_assert(!std::is_convertible<zaddress_unsafe, zoffset>::value);
 
 GC_TEST(ZGranuleMap, GetPutRemove)
 {

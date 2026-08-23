@@ -72,7 +72,7 @@ target_include_directories(cj_gc_unit PRIVATE
 target_compile_features(cj_gc_unit PRIVATE cxx_std_17)
 # The product target disables C++ exceptions globally, while this deliberately
 # tiny test runner reports assertion failures with throw/catch.
-target_compile_options(cj_gc_unit PRIVATE -fno-rtti -fexceptions)
+target_compile_options(cj_gc_unit PRIVATE -fno-rtti -fexceptions -std=gnu++17)
 # The suite tests the real ZStat implementation regardless of whether the product .so was
 # built with MRT_ZSTAT: it compiles Base/ZStat.cpp itself with the compile-time gate open.
 target_compile_definitions(cj_gc_unit PRIVATE MRT_ZSTAT_COMPILED=1 MRT_TESTABLE_INTERNALS=1)
@@ -89,3 +89,29 @@ endif()
 
 enable_testing()
 add_test(NAME cj_gc_unit COMMAND cj_gc_unit)
+
+# Product-link proof for ForwardingTable::ClearEntries.  Keep this in a fresh
+# process because ForwardingTable::Initialize is deliberately one-shot and the
+# main suite already owns that process-global table.
+add_executable(cj_gc_clear_entries_unit
+    gc_unit_main.cpp
+    clear_entries_product_unit.cpp
+)
+target_include_directories(cj_gc_clear_entries_unit PRIVATE
+    ${CMAKE_CURRENT_SOURCE_DIR}
+    ${CMAKE_SOURCE_DIR}/src
+    ${CMAKE_SOURCE_DIR}/src/Heap
+    ${CMAKE_SOURCE_DIR}/include
+)
+target_compile_features(cj_gc_clear_entries_unit PRIVATE cxx_std_14)
+target_compile_options(cj_gc_clear_entries_unit PRIVATE -fno-rtti -fexceptions -std=gnu++14)
+if (TARGET cangjie-runtime)
+    target_link_libraries(cj_gc_clear_entries_unit PRIVATE cangjie-runtime)
+elseif (DEFINED GCV2_RUNTIME_LIB_DIR)
+    target_link_directories(cj_gc_clear_entries_unit PRIVATE ${GCV2_RUNTIME_LIB_DIR})
+    target_link_libraries(cj_gc_clear_entries_unit PRIVATE cangjie-runtime boundscheck)
+    set_target_properties(cj_gc_clear_entries_unit PROPERTIES
+        BUILD_RPATH "${GCV2_RUNTIME_LIB_DIR}"
+        INSTALL_RPATH "${GCV2_RUNTIME_LIB_DIR}")
+endif()
+add_test(NAME cj_gc_clear_entries_unit COMMAND cj_gc_clear_entries_unit)
