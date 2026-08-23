@@ -150,13 +150,19 @@ void RegionSpace::Init(const HeapParam& vmHeapParam)
 #endif
     // this must succeed otherwise it won't return
     map = MemMap::MapMemory(totalSize, metadataSize, opt, addressBudget, numaTopology);
+    // RegionManager indexes units as heapStart + index * UNIT_SIZE. Until that
+    // caller is segment-aware, never reinterpret holes between reservations as
+    // allocatable units.
+    CHECK_DETAIL(map->GetReservationRegistry().Contains(reinterpret_cast<uintptr_t>(map->GetBaseAddr()), totalSize),
+                 "RegionSpace requires a contiguous heap reservation");
 #if defined(CANGJIE_SANITIZER_SUPPORT) || defined(CANGJIE_GWPASAN_SUPPORT)
     Sanitizer::OnHeapAllocated(map->GetBaseAddr(), map->GetMappedSize());
 #endif
 
     Logger::GetLogger().SetMinimumLogLevel(CangjieRuntime::GetLogParam().logLevel);
     MAddress metadata = reinterpret_cast<MAddress>(map->GetBaseAddr());
-    regionManager.Initialize(unitNum, metadata, *map);
+    regionManager.Initialize(unitNum, metadata, *map, vmHeapParam,
+                             CangjieRuntime::GetGCParam().garbageThreshold);
     reservedStart = regionManager.GetRegionHeapStart();
     reservedEnd = reinterpret_cast<MAddress>(map->GetMappedEndAddr());
 #if defined(MRT_DUMP_ADDRESS)

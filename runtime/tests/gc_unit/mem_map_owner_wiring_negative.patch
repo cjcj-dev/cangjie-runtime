@@ -1,0 +1,12 @@
+diff --git a/runtime/src/Heap/Allocator/RegionManager.cpp b/runtime/src/Heap/Allocator/RegionManager.cpp
+--- a/runtime/src/Heap/Allocator/RegionManager.cpp
++++ b/runtime/src/Heap/Allocator/RegionManager.cpp
+@@ -1075,7 +1075,7 @@ void RegionManager::Initialize(size_t nUnit, uintptr_t regionInfoAddr, MemMap& memoryOwner,
+     SetCacheRatio(0.0, 1.0, 1.0);
+ #endif
+     // propagate region heap layout
+-    RegionInfo::Initialize(nUnit, regionHeapStart, &memoryOwner);
++    RegionInfo::Initialize(nUnit, regionHeapStart, nullptr); // red proof: disconnect heap owner propagation
+     freeRegionManager.Initialize(nUnit);
+     this->exemptedRegionThreshold = heapParam.exemptionThreshold;
+     DLOG(REPORT, "region info @0x%zx+%zu, heap [0x%zx, 0x%zx), unit count %zu", regionInfoAddr, metadataSize,

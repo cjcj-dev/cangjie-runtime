@@ -81,7 +81,7 @@ struct NumaPartitionRange {
 
 class NumaPartitionRegistry {
 public:
-    bool Initialize(uintptr_t start, size_t size, const NumaTopology& topology);
+    bool Initialize(const ReservationRegistry& reservations, const NumaTopology& topology);
     bool Owns(uintptr_t start, size_t size, uint32_t node) const;
     const std::vector<NumaPartitionRange>& Ranges() const { return ranges; }
 

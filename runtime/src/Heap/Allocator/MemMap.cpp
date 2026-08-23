@@ -275,10 +275,10 @@ size_t ReservationRegistry::TotalSize() const
     return total;
 }
 
-bool NumaPartitionRegistry::Initialize(uintptr_t start, size_t size, const NumaTopology& topology)
+bool NumaPartitionRegistry::Initialize(const ReservationRegistry& reservations, const NumaTopology& topology)
 {
-    if (!topology.IsSealed() || start == 0 || size == 0 || AddOverflows(start, size) ||
-        (size % ALLOC_UTIL_PAGE_SIZE) != 0) {
+    const size_t size = reservations.TotalSize();
+    if (!topology.IsSealed() || size == 0 || (size % ALLOC_UTIL_PAGE_SIZE) != 0) {
         return false;
     }
     const size_t granules = size / ALLOC_UTIL_PAGE_SIZE;
@@ -286,14 +286,36 @@ bool NumaPartitionRegistry::Initialize(uintptr_t start, size_t size, const NumaT
     if (count == 0) {
         return false;
     }
-    uintptr_t cursor = start;
-    for (size_t index = 0; index < count; ++index) {
-        const size_t nodeGranules = granules / count + (index < granules % count ? 1 : 0);
-        const size_t nodeBytes = nodeGranules * ALLOC_UTIL_PAGE_SIZE;
-        ranges.push_back(NumaPartitionRange{ MemoryRange{ cursor, nodeBytes }, topology.NodeAt(index) });
-        cursor += nodeBytes;
+    size_t nodeIndex = 0;
+    size_t remainingForNode = (granules / count + (nodeIndex < granules % count ? 1 : 0)) *
+                              ALLOC_UTIL_PAGE_SIZE;
+    size_t assigned = 0;
+    for (const MemoryRange& reservation : reservations.Ranges()) {
+        if (reservation.IsNull() || AddOverflows(reservation.start, reservation.size) ||
+            (reservation.start % ALLOC_UTIL_PAGE_SIZE) != 0 ||
+            (reservation.size % ALLOC_UTIL_PAGE_SIZE) != 0) {
+            return false;
+        }
+        uintptr_t cursor = reservation.start;
+        size_t remaining = reservation.size;
+        while (remaining != 0) {
+            const size_t partSize = std::min(remaining, remainingForNode);
+            ranges.push_back(NumaPartitionRange{ MemoryRange{ cursor, partSize }, topology.NodeAt(nodeIndex) });
+            cursor += partSize;
+            remaining -= partSize;
+            assigned += partSize;
+            remainingForNode -= partSize;
+            if (remainingForNode == 0 && assigned != size) {
+                ++nodeIndex;
+                if (nodeIndex >= count) {
+                    return false;
+                }
+                remainingForNode = (granules / count + (nodeIndex < granules % count ? 1 : 0)) *
+                                   ALLOC_UTIL_PAGE_SIZE;
+            }
+        }
     }
-    return cursor == start + size;
+    return assigned == size;
 }
 
 bool NumaPartitionRegistry::Owns(uintptr_t start, size_t size, uint32_t node) const
@@ -336,6 +358,9 @@ MemMap* MemMap::TryMapMemory(size_t reqSize, size_t initSize, const Option& opt,
             return nullptr;
         }
     } else {
+        if (opt.reqBase != nullptr) {
+            return nullptr;
+        }
         size_t segmentSize = std::min(fallbackSegmentSize, mappedSize);
         segmentSize = AllocUtilRndDown(segmentSize, static_cast<size_t>(ALLOC_UTIL_PAGE_SIZE));
         if (segmentSize == 0) {
@@ -344,11 +369,8 @@ MemMap* MemMap::TryMapMemory(size_t reqSize, size_t initSize, const Option& opt,
         size_t reserved = 0;
         while (reserved < mappedSize) {
             const size_t currentSize = std::min(segmentSize, mappedSize - reserved);
-            void* requested = reserved == 0 ? opt.reqBase
-                                            : reinterpret_cast<void*>(reinterpret_cast<uintptr_t>(base) + reserved);
-            void* segment = osBackend.Reserve(requested, currentSize, opt.flags, opt.tag,
-                                               reserved != 0 || requested != nullptr);
-            if (segment == nullptr || (reserved != 0 && segment != requested) ||
+            void* segment = osBackend.Reserve(nullptr, currentSize, opt.flags, opt.tag, false);
+            if (segment == nullptr ||
                 !registry.Insert(MemoryRange{ reinterpret_cast<uintptr_t>(segment), currentSize })) {
                 if (segment != nullptr) {
                     (void)osBackend.Unreserve(segment, currentSize);
@@ -358,15 +380,13 @@ MemMap* MemMap::TryMapMemory(size_t reqSize, size_t initSize, const Option& opt,
                 }
                 return nullptr;
             }
-            if (reserved == 0) {
-                base = segment;
-            }
             reserved += currentSize;
         }
+        base = reinterpret_cast<void*>(registry.Ranges().front().start);
     }
 
     NumaPartitionRegistry partitions;
-    if (!partitions.Initialize(reinterpret_cast<uintptr_t>(base), mappedSize, topology)) {
+    if (!partitions.Initialize(registry, topology)) {
         for (const MemoryRange& range : registry.Ranges()) {
             (void)osBackend.Unreserve(reinterpret_cast<void*>(range.start), range.size);
         }
@@ -413,7 +433,7 @@ MemMap::MemMap(void* baseAddr, size_t initSize, size_t mappedSize, int prot, Res
       bindNuma(shouldBindNuma)
 {
     memCurrEndAddr = reinterpret_cast<void*>(reinterpret_cast<uintptr_t>(memBaseAddr) + memCurrSize);
-    memMappedEndAddr = reinterpret_cast<void*>(reinterpret_cast<uintptr_t>(memBaseAddr) + memMappedSize);
+    memMappedEndAddr = reinterpret_cast<void*>(reservationRegistry.Ranges().back().End());
 }
 
 bool MemMap::ApplyByPartition(void* addr, size_t size, uint32_t* requiredNode, bool release)

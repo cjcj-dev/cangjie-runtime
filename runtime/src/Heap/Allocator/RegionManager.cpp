@@ -986,12 +986,12 @@ size_t FreeRegionManager::ReleaseDetachQuarantineAfterMajor()
     return releasedUnits;
 }
 
-void RegionManager::SetMaxUnitCountForRegion()
+void RegionManager::SetMaxUnitCountForRegion(size_t regionSize)
 {
-    maxUnitCountPerRegion = CangjieRuntime::GetHeapParam().regionSize * KB / RegionInfo::UNIT_SIZE;
+    maxUnitCountPerRegion = regionSize * KB / RegionInfo::UNIT_SIZE;
 }
 
-void RegionManager::SetMaxUnitCountForPinnedRegion()
+void RegionManager::SetMaxUnitCountForPinnedRegion(size_t regionSize)
 {
     auto env = std::getenv("cjPinnedRegionSize");
     if (env == nullptr) {
@@ -1001,15 +1001,15 @@ void RegionManager::SetMaxUnitCountForPinnedRegion()
     size_t size = CString::ParseSizeFromEnv(env);
     // The minimum region size is system page size, measured in KB.
     size_t minSize = MapleRuntime::MRT_PAGE_SIZE / KB;
-    if (size >= minSize && size <= CangjieRuntime::GetHeapParam().regionSize) {
+    if (size >= minSize && size <= regionSize) {
         maxUnitCountPerPinnedRegion = size * KB / RegionInfo::UNIT_SIZE;
     } else {
         LOG(RTLOG_ERROR, "Unsupported cjPinnedRegionSize parameter. Valid cjPinnedRegionSize"
-            "range is [%zuKB, %zuKB].\n", minSize, CangjieRuntime::GetHeapParam().regionSize);
+            "range is [%zuKB, %zuKB].\n", minSize, regionSize);
     }
 }
 
-void RegionManager::SetLargeObjectThreshold()
+void RegionManager::SetLargeObjectThreshold(size_t configuredRegionSize)
 {
     auto env = std::getenv("cjLargeThresholdSize");
     if (env == nullptr) {
@@ -1027,13 +1027,13 @@ void RegionManager::SetLargeObjectThreshold()
         LOG(RTLOG_ERROR, "Unsupported cjLargeThresholdSize parameter. Valid cjLargeThresholdSize"
             "range is [%zuKB, 2048KB].\n", minSize);
     }
-    size_t regionSize = CangjieRuntime::GetHeapParam().regionSize * KB;
+    size_t regionSize = configuredRegionSize * KB;
     largeObjectThreshold = largeObjectThreshold > regionSize ? regionSize :  largeObjectThreshold;
 }
 
-void RegionManager::SetGarbageThreshold()
+void RegionManager::SetGarbageThreshold(double garbageThreshold)
 {
-    fromSpaceGarbageThreshold = CangjieRuntime::GetGCParam().garbageThreshold;
+    fromSpaceGarbageThreshold = garbageThreshold;
 }
 
 #if defined(__EULER__)
@@ -1056,7 +1056,8 @@ void RegionManager::SetCacheRatio(double minSize, double maxSize, double default
 }
 #endif
 
-void RegionManager::Initialize(size_t nUnit, uintptr_t regionInfoAddr, MemMap& memoryOwner)
+void RegionManager::Initialize(size_t nUnit, uintptr_t regionInfoAddr, MemMap& memoryOwner,
+                               const HeapParam& heapParam, double garbageThreshold)
 {
     size_t metadataSize = GetMetadataSize(nUnit);
     this->regionInfoStart = regionInfoAddr;
@@ -1066,17 +1067,17 @@ void RegionManager::Initialize(size_t nUnit, uintptr_t regionInfoAddr, MemMap& m
     // index is (addr - base) / UNIT_SIZE with no probing -- ZGranuleMap's shape.
     ForwardingTable::Initialize(regionHeapStart, nUnit * RegionInfo::UNIT_SIZE, RegionInfo::UNIT_SIZE);
     this->inactiveZone = regionHeapStart;
-    SetMaxUnitCountForRegion();
-    SetMaxUnitCountForPinnedRegion();
-    SetLargeObjectThreshold();
-    SetGarbageThreshold();
+    SetMaxUnitCountForRegion(heapParam.regionSize);
+    SetMaxUnitCountForPinnedRegion(heapParam.regionSize);
+    SetLargeObjectThreshold(heapParam.regionSize);
+    SetGarbageThreshold(garbageThreshold);
 #if defined(__EULER__)
     SetCacheRatio(0.0, 1.0, 1.0);
 #endif
     // propagate region heap layout
     RegionInfo::Initialize(nUnit, regionHeapStart, &memoryOwner);
     freeRegionManager.Initialize(nUnit);
-    this->exemptedRegionThreshold = CangjieRuntime::GetHeapParam().exemptionThreshold;
+    this->exemptedRegionThreshold = heapParam.exemptionThreshold;
     DLOG(REPORT, "region info @0x%zx+%zu, heap [0x%zx, 0x%zx), unit count %zu", regionInfoAddr, metadataSize,
          regionHeapStart, regionHeapEnd, nUnit);
 }

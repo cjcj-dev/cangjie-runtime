@@ -168,7 +168,8 @@ public:
 #if defined(__EULER__)
     void SetCacheRatio(double minSize, double maxSize, double defaultParam);
 #endif
-    void Initialize(size_t regionNum, uintptr_t regionInfoStart, MemMap& memoryOwner);
+    void Initialize(size_t regionNum, uintptr_t regionInfoStart, MemMap& memoryOwner,
+                    const HeapParam& heapParam, double garbageThreshold);
 
     RegionManager()
         : freeRegionManager(*this), tlRegionList("thread local regions"), recentFullRegionList("recent full regions"),
@@ -677,10 +678,10 @@ public:
         recentLargeRegionList.MergeRegionList(largeSizeRegionList, RegionInfo::RegionType::RECENT_LARGE_REGION);
     }
 
-    void SetMaxUnitCountForRegion();
-    void SetMaxUnitCountForPinnedRegion();
-    void SetLargeObjectThreshold();
-    void SetGarbageThreshold();
+    void SetMaxUnitCountForRegion(size_t regionSize);
+    void SetMaxUnitCountForPinnedRegion(size_t regionSize);
+    void SetLargeObjectThreshold(size_t regionSize);
+    void SetGarbageThreshold(double garbageThreshold);
 
     void HandleTraceRegions()
     {
