@@ -15,7 +15,13 @@
 #include "Heap/Allocator/ForwardingTable.h"
 #include "Heap/Allocator/RegionManager.h"
 #include "Heap/Collector/RelocationRequestQueue.h"
+#include "Heap/Collector/CollectorProxy.h"
+#include "Heap/WCollector/WCollector.h"
+#include "Common/Runtime.h"
+#include "Mutator/MutatorManager.h"
 #include "gc_unittest.hpp"
+
+extern "C" int CJ_ScheduleManagerInit();
 
 using namespace MapleRuntime;
 using namespace MapleRuntime::GcUnit;
@@ -27,6 +33,13 @@ struct RelocationReceiptTestAccess {
     {
         manager.fromRegionList.PrependRegion(region, RegionInfo::RegionType::FROM_REGION);
     }
+
+#if defined(MRT_TESTABLE_INTERNALS)
+    static void BindCollector(CollectorResources& resources, TracingCollector& collector)
+    {
+        resources.collectorProxy.currentCollector = &collector;
+    }
+#endif
 };
 
 } // namespace MapleRuntime
@@ -130,6 +143,62 @@ bool RunSerialClaimedOwnerProductEntry()
     return added.request->state() == RelocationRequestQueue::State::COMPLETED &&
         queue.Wait(added.request) == to && queue.CompletionCount() == 1 && queue.PendingCount() == 0;
 }
+
+#if defined(MRT_TESTABLE_INTERNALS)
+class YoungForwardRuntimeCollector : public WCollector {
+public:
+    YoungForwardRuntimeCollector(Allocator& allocator, CollectorResources& resources)
+        : WCollector(allocator, resources) {}
+
+    void ForwardYoungFromRuntimeEntry()
+    {
+        SetGCReason(GC_REASON_YOUNG);
+        ForwardFromSpace();
+    }
+};
+
+class YoungForwardTestRuntime : public Runtime {
+public:
+    explicit YoungForwardTestRuntime(MutatorManager& manager)
+    {
+        mutatorManager = &manager;
+        runtime = this;
+    }
+
+    ~YoungForwardTestRuntime() override { runtime = nullptr; }
+
+    RuntimeParam GetRuntimeParam() const override { return RuntimeParam {}; }
+    void SetGCThreshold(uint64_t) override {}
+};
+
+bool RunYoungRuntimeProductEntry()
+{
+    // gc_unit does not start the language scheduler.  The product phase
+    // transition still visits its real global mutator list, so initialize just
+    // that list and its lock in this isolated child (which exits via _exit).
+    if (CJ_ScheduleManagerInit() != 0) {
+        return false;
+    }
+    MutatorManager mutatorManager;
+    YoungForwardTestRuntime runtime(mutatorManager);
+    RegionSpace& space = reinterpret_cast<RegionSpace&>(Heap::GetHeap().GetAllocator());
+    RegionManager& manager = space.GetRegionManager();
+
+    RelocationRequestQueue& queue = manager.GetRelocationRequestQueue();
+    queue.BeginCycle();
+
+    YoungForwardRuntimeCollector collector(Heap::GetHeap().GetAllocator(), Heap::GetHeap().GetCollectorResources());
+#if defined(MRT_TESTABLE_INTERNALS)
+    RelocationReceiptTestAccess::BindCollector(Heap::GetHeap().GetCollectorResources(), collector);
+#endif
+    collector.ForwardYoungFromRuntimeEntry();
+
+    int lateOwner = 0;
+    const auto late = queue.Add(&lateOwner, 0x73300040);
+    return !late.accepted && late.request->state() == RelocationRequestQueue::State::FAILED &&
+        queue.PendingCount() == 0;
+}
+#endif
 
 #if defined(MRT_TESTABLE_INTERNALS)
 bool RunActualTaskClaimedOwnerSuccess()
@@ -249,6 +318,13 @@ GC_TEST(GCThreadPool, ProductSerialEntryRegistersWorkerAndCompletesClaimedOwner)
 {
     ExpectIsolatedScenarioPasses<RunSerialClaimedOwnerProductEntry>();
 }
+
+#if defined(MRT_TESTABLE_INTERNALS)
+GC_TEST(GCThreadPool, ProductYoungRuntimeEntryClosesRelocationRequestGeneration)
+{
+    ExpectIsolatedScenarioPasses<RunYoungRuntimeProductEntry>();
+}
+#endif
 
 #if defined(MRT_TESTABLE_INTERNALS)
 GC_TEST(GCThreadPool, ActualForwardTaskCompletesClaimedOwnerAtRegionExit)
