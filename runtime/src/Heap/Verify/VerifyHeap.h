@@ -26,8 +26,9 @@ class BaseObject;
 //
 // Enumeration is independent of minor reachableObjects / TraceYoungClosure / remset.
 // force=true: run even when MRT_GCV2_VERIFY_HEAP is unset (post-evac hook uses this).
-// rootReachableHolders, when supplied, is DiffPathExplainer's independent full-root
-// closure.  H3 uses it to split dead inventory from an edge a product walk can reach.
+// rootReachableHolders, when supplied, is a completed independent full-root closure.
+// nullptr means the closure was not measured; an empty non-null set means it ran and
+// found no holders. H3 uses a valid closure to split dead inventory from reachable edges.
 void VerifyHeapObjects(const char* point, bool force = false,
                        const std::unordered_set<BaseObject*>* rootReachableHolders = nullptr);
 

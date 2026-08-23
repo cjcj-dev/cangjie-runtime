@@ -17,7 +17,7 @@ class BaseObject;
 // garbregion: live-slot census into a region at CollectRegion / F3 join.
 // Gate: MRT_GCV2_GARBREGION=1 or MRT_GCV2_DIAG token garbregion. Default off.
 //
-// CensusBeforeForward walks the heap once (ForEachObj, same shape as FysAuditDiag)
+// CensusBeforeForward walks the heap once with Heap::ForEachObj.
 // and counts heap slots whose target lands in each region. NoteCollectEnter
 // joins that snapshot to the region being marked GARBAGE. NoteF3Join joins
 // FixOldTaggedRefField's region_garbage / region_free reasons to the same row.

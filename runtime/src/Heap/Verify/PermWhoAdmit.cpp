@@ -9,8 +9,7 @@ namespace PermWhoAdmit {
 // This file was hollowed out to `return false` / empty bodies while the header kept its full
 // four-arm contract, its gate names (MRT_GCV2_PERMWHO_ADMIT) and all of its call sites.  That
 // combination reads exactly like a live instrument: turning the documented gate on produces zero
-// output, and zero output reads as "the arm never fires".  RouteDestHold.cpp was hollowed the same
-// way (e90e22a4) and had to be restored earlier in this campaign; ToverFailDiag.cpp still is.
+// output, and zero output reads as "the arm never fires". Only the live abandon arm remains here.
 //
 // Only the abandon sink is restored here, because that is the one number in question.  The gate is
 // a compile-time constant, not a new MRT_GCV2_ variable: the campaign cut those from 190 to 3.
@@ -40,9 +39,6 @@ static std::atomic<uint64_t> g_forwardedTotal{ 0 };
 static std::atomic<uint64_t> g_walkedTotal{ 0 };
 
 bool Enabled() { return kPermWhoAdmit; }
-
-void NoteRoute(RegionInfo* region, BaseObject* from, BaseObject* to) {}
-void NoteRoutePlan(RegionInfo* region, size_t fromBytes, unsigned densifyOutcome) {}
 
 void NoteAbandon(RegionInfo* region, size_t walkedObjects, size_t forwardedObjects)
 {

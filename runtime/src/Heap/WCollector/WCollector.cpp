@@ -45,36 +45,15 @@
 #include "Heap/Verify/MarkCompleteVerify.h"
 #include "Heap/Verify/VerifyOption.h"
 #include "Heap/Verify/VerifyRememberedSet.h"
-#include "Heap/Verify/DiffPathExplainer.h"
 #include "Heap/Verify/TraceClear.h"
 #include "Heap/Verify/VerifyRoots.h"
 #include "Heap/Verify/Zap.h"
 #include "Heap/Verify/DiagGate.h"
 #include "Heap/Verify/NwDropAudit.h"
-#include "Heap/Verify/IdleEdgeDiag.h"
-#include "Heap/Verify/EatArmDiag.h"
-#include "Heap/Verify/FysDesignDiag.h"
-#include "Heap/Verify/F3Why2Diag.h"
 #include "Heap/Verify/GarbRegionDiag.h"
-#include "Heap/Verify/FysAuditDiag.h"
 #include "Heap/Verify/Stw2CurrentAudit.h"
-#include "Heap/Verify/FlipPromoDiag.h"
-#include "Heap/Verify/O2ORemsetDiag.h"
 #include "Heap/Verify/NullRouteCaller.h"
-#include "Heap/Verify/PlainCensus.h"
-#include "Heap/Verify/SealCheck.h"
-#include "Heap/Verify/ToverFailDiag.h"
-#include "Heap/Verify/OffpastDiag.h"
-#include "Heap/Verify/TlRawDiag.h"
-#include "Heap/Verify/StartWhoDiag.h"
-#include "Heap/Verify/StackRootSlotAttest.h"
-#include "Heap/Verify/WhoPushDiag.h"
-#include "Heap/Verify/HealPairDiag.h"
-#include "Heap/Verify/GateDropDiag.h"
-#include "Heap/Verify/NoTracedDiag.h"
 #include "Heap/Verify/SurvNodeDiag.h"
-#include "Heap/Verify/HeldFreeDiag.h"
-#include "Heap/Verify/YyEdgeDiag.h"
 #include "Heap/Collector/PromotedRegionDomain.h"
 #include "Heap/Verify/CsetEmptyWho.h"
 #include "Common/ColourPredicates.h"
@@ -383,7 +362,7 @@ void WCollector::DoGarbageCollection()
     // in-place promote paths that already Preserve + RecordPromotedCrossGenEdges.
     ForwardDataManager::GetForwardDataManager().UnbindPreviousLiveInfo();
     Collector::ReportMarkGoodHeapGateCounts();
-    O2ORemsetDiag::DumpAndMaybeReset("post-major", /*reset*/ true);
+
 }
 bool WCollector::ShouldIgnoreRequest(GCRequest& request) { return request.ShouldBeIgnored(); }
 } // namespace MapleRuntime

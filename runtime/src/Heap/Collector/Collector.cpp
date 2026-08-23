@@ -196,38 +196,6 @@ void MaskEquivCheck(const EpochColours& e, const BadMasks& m)
     (void)m;
 }
 
-// goodpred: only reached when MRT_GCV2_ZGC_LOADGOOD or MRT_GCV2_LOADGOOD_AUDIT is set;
-// Collector::is_load_good keeps the legacy expression inline for the default mode.
-bool Collector::is_load_good_switched(RefField<>& ref, uint8_t site) const
-{
-    if (UNLIKELY(GoodPredDiag::SelfTestPending())) {
-        const uintptr_t mask = static_cast<uintptr_t>(::g_cjLoadBadMask);
-        const uintptr_t colour = ColourPredicates::current_remapped(mask);
-        // A payload the address bits accept; nothing dereferences it, both predicates are
-        // pure bit tests. Mid-evacuation is no longer a pointer bit; stale remap is load-bad.
-        const uintptr_t payload = 0x0000700000001000ULL;
-        const uintptr_t taggedValue = payload | (REMAP_COLOUR_MASK ^ colour);
-        const uintptr_t plainValue = payload | colour;
-        RefField<> taggedProbe(to_zpointer(static_cast<MAddress>(taggedValue)));
-        RefField<> plainProbe(to_zpointer(static_cast<MAddress>(plainValue)));
-        GoodPredDiag::ReportSelfTest(
-            taggedValue,
-            !is_null(taggedProbe.GetTargetObject()) && is_young_load_good(taggedProbe) &&
-                is_old_load_good(taggedProbe),
-            ColourPredicates::is_load_good(taggedValue, mask), plainValue,
-            !is_null(plainProbe.GetTargetObject()) && is_young_load_good(plainProbe) &&
-                is_old_load_good(plainProbe),
-            ColourPredicates::is_load_good(plainValue, mask));
-    }
-    const uintptr_t value = static_cast<uintptr_t>(raw(ref.GetFieldValue()));
-    const bool zgc = ColourPredicates::is_load_good(value, static_cast<uintptr_t>(::g_cjLoadBadMask));
-    if (GoodPredDiag::g_mode == GoodPredDiag::kZgc) {
-        return zgc;
-    }
-    const bool legacy = !is_null(ref.GetTargetObject()) && is_young_load_good(ref) && is_old_load_good(ref);
-    return GoodPredDiag::NoteAudit(value, legacy, zgc, site);
-}
-
 bool Collector::MarkGoodHeapGate(const char* site, BaseObject* target)
 {
     (void)site;

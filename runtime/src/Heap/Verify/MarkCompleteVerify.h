@@ -7,6 +7,9 @@
 #ifndef MRT_MARK_COMPLETE_VERIFY_H
 #define MRT_MARK_COMPLETE_VERIFY_H
 
+#include <cstddef>
+#include <cstdint>
+
 // Port of ZVerify::after_mark (zVerify.cpp:496-506).
 //
 // ZGC reclaims a page on `!is_marked` alone (zGeneration.cpp:216-221,
@@ -46,6 +49,7 @@
 // the okInteriorBase exemption or the deadFrom arm.
 
 namespace MapleRuntime {
+class BaseObject;
 
 namespace MarkCompleteVerify {
 
@@ -54,6 +58,14 @@ bool Enabled();
 // Runs under its own ScopedStopTheWorld, so it must be called from the GC thread
 // outside any existing STW scope.  Report-only unless the FATAL gate is set.
 void RunAtMarkEnd(const char* point);
+
+// Retrace census integrated with the completeness verifier. A dead-edge holder
+// is watched in one cycle; later traces and moves distinguish "painted without
+// following" from a target-marking or insertion-barrier miss.
+void WatchHolder(const BaseObject* obj);
+void NoteHolderTrace(BaseObject* obj);
+void NoteHolderCopy(const void* fromAddr, const void* toAddr, size_t size, uint32_t done);
+void ReportHolderTraces(const char* point);
 
 } // namespace MarkCompleteVerify
 

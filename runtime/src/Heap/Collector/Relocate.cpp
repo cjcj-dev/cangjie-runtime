@@ -46,7 +46,6 @@
 #include "Heap/Verify/MarkCompleteVerify.h"
 #include "Heap/Verify/VerifyOption.h"
 #include "Heap/Verify/VerifyRememberedSet.h"
-#include "Heap/Verify/DiffPathExplainer.h"
 #include "Heap/Verify/TraceClear.h"
 #include "Heap/Verify/VerifyRoots.h"
 #include "Heap/Verify/Zap.h"

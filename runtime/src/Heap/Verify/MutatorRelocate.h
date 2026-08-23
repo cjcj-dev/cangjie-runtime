@@ -132,7 +132,7 @@ inline LockedWaiterAnswer AnswerLockedWaiter(bool tableHit, bool pagePublished)
     return LockedWaiterAnswer::Yield;
 }
 
-// Which retire edge drained. Mirrors FwdInflight::Retire, which measured the same edges.
+// Which forwarding retirement edge drained.
 enum class Retire : uint32_t {
     DISPEL_GHOST = 0, // RegionInfo::DispelGhostFromRegion
     TAKE_GARBAGE = 1, // RegionManager::TakeRegion garbage reuse, around ClearUnits

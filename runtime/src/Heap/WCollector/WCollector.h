@@ -22,8 +22,7 @@
 #include "Allocator/RegionSpace.h"
 #include "Heap/Allocator/ForwardingTable.h"
 #include "Collector/CopyCollector.h"
-#include "Heap/Verify/DiffPathExplainer.h"
-#include "Heap/Verify/ToverFailDiag.h"
+#include "Heap/Collector/RemsetScanStats.h"
 #include "Heap/Verify/MutatorRelocate.h"
 #include "Mutator/MutatorManager.h"
 namespace MapleRuntime {
@@ -353,12 +352,6 @@ public:
         static std::atomic<uint64_t> lifeRetiredNs{ 0 };
         const bool funnel = RemapFunnelOn();
         const bool lifetime = FwdLifetimeProbeOn();
-        // toverfail reuses the same arm split as MRT_GCV2_WAITFWD (e49a5bcc), under its
-        // own gate so product path is unchanged when both are off.
-        const bool tv = ToverFailDiag::Enabled();
-        if (tv) {
-            ToverFailDiag::NoteRemapCall();
-        }
         if (lifetime) {
             static std::atomic<bool> installed{ false };
             bool expected = false;
@@ -393,17 +386,11 @@ public:
             MutatorRelocate::NoteFunnelCall(funnelRole);
         }
         if (!Heap::IsHeapAddress(obj)) {
-            if (tv) {
-                ToverFailDiag::NoteRemapNonHeap();
-            }
             return obj;
         }
         const MAddress fromAddr = reinterpret_cast<MAddress>(obj);
         RegionInfo* forwarding = RegionInfo::GetGhostFromRegionAt(fromAddr);
         if (forwarding == nullptr || forwarding->generation_id() != generation) {
-            if (tv) {
-                ToverFailDiag::NoteRemapNoGhost(); // 乙
-            }
             const uint64_t retiredStartNs = lifetime ? TimeUtil::NanoSeconds() : 0;
             const MAddress retired = ForwardingTable::FindRetiredTo(fromAddr);
             if (lifetime) {
@@ -437,9 +424,6 @@ public:
                 if (stored != 0) {
                     BaseObject* to = reinterpret_cast<BaseObject*>(stored);
                     if (ToHeaderCovered(to)) {
-                        if (tv) {
-                            ToverFailDiag::NoteRemapReceipt();
-                        }
                         return to;
                     }
                 }
@@ -464,15 +448,9 @@ public:
         }
         if (to != nullptr) {
             if (LIKELY(!Heap::IsHeapAddress(to))) {
-                if (tv) {
-                    ToverFailDiag::NoteRemapReceipt();
-                }
                 return to;
             }
             if ((obj->IsForwarded() || forwarding->IsCompacted()) && to->IsValidObject()) {
-                if (tv) {
-                    ToverFailDiag::NoteRemapReceipt();
-                }
                 return to;
             }
         } else if (obj->IsForwarded()) {
@@ -494,9 +472,6 @@ public:
         // publish (FORWARDED/COMPACTED/kept). After publish, a miss is the
         // VisitLive hole and keep-from is legal. Not the object-level empty
         // wait 47595a33 deleted.
-        if (tv) {
-            ToverFailDiag::NoteRemapWait();
-        }
         if (MutatorRelocate::StatsOn()) {
             MutatorRelocate::NoteWaitEnter();
         }
@@ -1145,7 +1120,7 @@ private:
     void RescanRememberedSet(WorkStack& workStack, const MinorSlotSet& rememberedSlots,
                              const MinorSlotSet& reachableSlots, const MinorSlotSet& weakSlots,
                              const MinorObjectSet& currentMinorRoots, bool fullYoungScan,
-                             MinorSlotSet* consumedOut = nullptr, DiffPathRemsetStats* statsOut = nullptr,
+                             MinorSlotSet* consumedOut = nullptr, RemsetScanStats* statsOut = nullptr,
                              MinorInteriorBaseMap* interiorBasesOut = nullptr,
                              const ScopedStopTheWorld* stw = nullptr);
     bool FixMinorEvacuatedSlot(RefField<>& field, BaseObject* knownBase = nullptr,

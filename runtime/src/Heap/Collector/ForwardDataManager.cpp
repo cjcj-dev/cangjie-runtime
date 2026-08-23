@@ -43,7 +43,7 @@ void ForwardDataManager::ClearPreviousForwardData()
     // ZForwardingLife has already drained every from-region that could still hold a
     // liveInfo0 local into this range (DrainScope on dispel / take-garbage). A late
     // RouteObject is refused at retain_page (count == 0) and never loads the pointer.
-    FwdInflight::NoteRetireGlobal(rangeStart, rangeSize, FwdInflight::Retire::ARENA_RELEASE);
+
     space.ReleaseMemory();
 }
 

@@ -11,16 +11,10 @@
 #include "Concurrency/Concurrency.h"
 #include "Heap/Allocator/AllocBuffer.h"
 #include "Heap/Collector/MarkPartialArray.h"
-#include "Heap/Verify/EnumPushDiag.h"
-#include "Heap/Verify/HealPairDiag.h"
-#include "Heap/Verify/LoadGoodProbe.h"
 #include "Heap/Verify/NwDropAudit.h"
 #include "Heap/Verify/MarkCompleteVerify.h"
-#include "Heap/Verify/MarkFaceSnap.h"
-#include "Heap/Verify/NoTracedDiag.h"
 #include "Heap/Verify/StatHealDiag.h"
 #include "Heap/Verify/SurvNodeDiag.h"
-#include "Heap/Verify/StackRootSlotAttest.h"
 #include "Heap/Verify/VerifyRoots.h"
 #include "ObjectModel/RefField.inline.h"
 
@@ -267,7 +261,6 @@ public:
     {
         // One task-wide origin scope lets the existing 0->1 hook identify a
         // major claim without adding work to the common !wasMarked branch.
-        HealPairDiag::ScopedMajorMarkTask majorMarkTask;
         size_t nNewlyMarked = 0;
         // loop until work stack empty.
         for (;;) {
@@ -329,9 +322,6 @@ public:
                 }
             } else if (entry.mark() && wasMarked) {
                 SurvNodeDiag::NoteFollowHolder(obj, SurvNodeDiag::FOLLOW_SKIP_MARKED);
-                if (UNLIKELY(HealPairDiag::YoungClaimEnabled())) {
-                    HealPairDiag::NoteMajorWasMarked(obj);
-                }
             }
             // try to fork new task if needed.
             if (threadPool != nullptr) {
@@ -446,25 +436,10 @@ void TracingCollector::VisitStackRoots(const RootVisitor& visitor, RegSlotsMap& 
     }
     // introot: use HeapReferenceMap so base/derived pairs are available. RootMap only
     // carries reg/slot roots and silently drops derived (RawArray+8 held across safepoint).
-    const bool attestFrame = StackRootSlotAttest::FrameActive();
-    HeapReferenceMap heapMap = builder.Build<HeapReferenceMap>(attestFrame);
-    StackMapRootCounts declaredCounts;
-    StackMapRootCounts visitedCounts;
-    if (attestFrame && heapMap.IsValid()) {
-        declaredCounts = heapMap.CountRootSlots();
-    }
+    HeapReferenceMap heapMap = builder.Build<HeapReferenceMap>(false);
     RootVisitor slotVisitor = visitor;
     RootVisitor regVisitor = visitor;
-    if (attestFrame) {
-        slotVisitor = [&visitor, &visitedCounts](ObjectRef& root) {
-            ++visitedCounts.baseSlots;
-            visitor(root);
-        };
-        regVisitor = [&visitor, &visitedCounts](ObjectRef& root) {
-            ++visitedCounts.baseRegs;
-            visitor(root);
-        };
-    }
+
     if (heapMap.IsValid()) {
         heapMap.VisitSlotRoots(slotVisitor, slotDebugFunc);
         if (!heapMap.VisitRegRoots(regVisitor, regDebugFunc, regSlotsMap)) {
@@ -476,11 +451,7 @@ void TracingCollector::VisitStackRoots(const RootVisitor& visitor, RegSlotsMap& 
         }
         // Mark the base of each derived pair. Derived slot itself is not an object root;
         // leave it for PreForward's derived visitor to rewrite after evacuation.
-        DerivedPtrVisitor derivedMark = [&visitor, attestFrame, &visitedCounts](BasePtrType basePtr,
-                                                                               DerivedSlot& derivedPtr) {
-            if (attestFrame) {
-                ++visitedCounts.derivedSlots;
-            }
+        DerivedPtrVisitor derivedMark = [&visitor](BasePtrType basePtr, DerivedSlot& derivedPtr) {
             (void)derivedPtr;
             if (is_null(basePtr)) {
                 return;
@@ -503,9 +474,7 @@ void TracingCollector::VisitStackRoots(const RootVisitor& visitor, RegSlotsMap& 
     mutator.PushFrameInfoForTrace(gcInfo);
 #endif
     heapMap.RecordCalleeSaved(regSlotsMap);
-    if (attestFrame) {
-        StackRootSlotAttest::CheckFrame(frameIP, heapMap.IsValid(), mutator, declaredCounts, visitedCounts);
-    }
+
 }
 
 void TracingCollector::VisitHeapReferencesOnStack(const RootVisitor& rootVisitor,
@@ -524,30 +493,7 @@ void TracingCollector::VisitHeapReferencesOnStack(const RootVisitor& regRootVisi
     uintptr_t frameIP = reinterpret_cast<uintptr_t>(frame.mFrame.GetIP());
     uintptr_t frameAddress = reinterpret_cast<uintptr_t>(frame.mFrame.GetFA());
     StackMapBuilder builder = StackMapBuilder(startIP, frameIP, frameAddress);
-    const bool attestFrame = StackRootSlotAttest::FrameActive();
-    HeapReferenceMap heapMap = builder.Build<HeapReferenceMap>(attestFrame);
-    StackMapRootCounts declaredCounts;
-    StackMapRootCounts visitedCounts;
-    if (attestFrame && heapMap.IsValid()) {
-        declaredCounts = heapMap.CountRootSlots();
-    }
-    RootVisitor attestRegVisitor = regRootVisitor;
-    RootVisitor attestSlotVisitor = slotRootVisitor;
-    DerivedPtrVisitor attestDerivedVisitor = derivedPtrVisitor;
-    if (attestFrame) {
-        attestRegVisitor = [&regRootVisitor, &visitedCounts](ObjectRef& root) {
-            ++visitedCounts.baseRegs;
-            regRootVisitor(root);
-        };
-        attestSlotVisitor = [&slotRootVisitor, &visitedCounts](ObjectRef& root) {
-            ++visitedCounts.baseSlots;
-            slotRootVisitor(root);
-        };
-        attestDerivedVisitor = [&derivedPtrVisitor, &visitedCounts](BasePtrType basePtr, DerivedSlot& derivedPtr) {
-            ++visitedCounts.derivedSlots;
-            derivedPtrVisitor(basePtr, derivedPtr);
-        };
-    }
+    HeapReferenceMap heapMap = builder.Build<HeapReferenceMap>(false);
 #if defined(GCINFO_DEBUG) && GCINFO_DEBUG
     auto infoNode = GCInfoNodeForFix::BuildNodeForFix(startIP, frameIP, frame.mFrame.GetFA());
     auto slotDebugFunc = [&infoNode](SlotBias off, const BaseObject* root) {
@@ -573,50 +519,17 @@ void TracingCollector::VisitHeapReferencesOnStack(const RootVisitor& regRootVisi
     DerivedPtrDebugVisitor derivedPtrDebugFunc = nullptr;
 #endif
     DLOG(ENUM, "visit heap-ref 0x%zx-@0x%zx, fp 0x%zx", startIP, frameIP, frameAddress);
-    if (UNLIKELY(EnumPushDiag::Enabled())) {
-        static thread_local char enumpushNameBuf[256];
-        enumpushNameBuf[0] = '\0';
-        CString fname = frame.GetFuncName();
-        if (fname.Str() != nullptr) {
-            std::strncpy(enumpushNameBuf, fname.Str(), sizeof(enumpushNameBuf) - 1);
-            enumpushNameBuf[sizeof(enumpushNameBuf) - 1] = '\0';
-        }
-        EnumPushDiag::NoteFrame(startIP, frameIP, frameAddress, 1, heapMap.IsValid() ? 1 : 0, 0, 0, enumpushNameBuf);
-#if defined(GCINFO_DEBUG) && GCINFO_DEBUG
-        auto prevSlot = slotDebugFunc;
-        slotDebugFunc = [prevSlot, frameAddress](SlotBias off, const BaseObject* root) {
-            EnumPushDiag::NoteMapSlot(frameAddress, off, const_cast<BaseObject*>(root));
-            if (prevSlot) {
-                prevSlot(off, root);
-            }
-        };
-        auto prevReg = regDebugFunc;
-        regDebugFunc = [prevReg, frameAddress](RegisterNum i, const BaseObject* root) {
-            EnumPushDiag::NoteMapReg(frameAddress, static_cast<int>(i), const_cast<BaseObject*>(root));
-            if (prevReg) {
-                prevReg(i, root);
-            }
-        };
-#else
-        slotDebugFunc = [frameAddress](SlotBias off, zaddress_unsafe root) {
-            EnumPushDiag::NoteMapSlot(frameAddress, off, reinterpret_cast<BaseObject*>(raw(root)));
-        };
-        regDebugFunc = [frameAddress](RegisterNum i, zaddress_unsafe root) {
-            EnumPushDiag::NoteMapReg(frameAddress, static_cast<int>(i), reinterpret_cast<BaseObject*>(raw(root)));
-        };
-#endif
-    }
     if (heapMap.IsValid()) {
-        if (!heapMap.VisitRegRoots(attestRegVisitor, regDebugFunc, regSlotsMap)) {
+        if (!heapMap.VisitRegRoots(regRootVisitor, regDebugFunc, regSlotsMap)) {
 #if defined(GCINFO_DEBUG) && GCINFO_DEBUG
             mutator.PushFrameInfoForFix(infoNode);
 #endif
             LOG(RTLOG_FATAL, "wrong reg info, start ip: %p frame pc: %p", reinterpret_cast<void*>(startIP),
                 reinterpret_cast<void*>(frameIP));
         }
-        heapMap.VisitSlotRoots(attestSlotVisitor, slotDebugFunc);
+        heapMap.VisitSlotRoots(slotRootVisitor, slotDebugFunc);
         // VisitDerivedPtr must be invoked after VisitRegRoots and VisitSlotRoots;
-        heapMap.VisitDerivedPtr(attestDerivedVisitor, derivedPtrDebugFunc, regSlotsMap);
+        heapMap.VisitDerivedPtr(derivedPtrVisitor, derivedPtrDebugFunc, regSlotsMap);
     } else {
         RecordSkippedStackMap(builder.GetInvalidReason(), frame, startIP, frameIP);
     }
@@ -624,9 +537,6 @@ void TracingCollector::VisitHeapReferencesOnStack(const RootVisitor& regRootVisi
     mutator.PushFrameInfoForFix(infoNode);
 #endif
     heapMap.RecordCalleeSaved(regSlotsMap);
-    if (attestFrame) {
-        StackRootSlotAttest::CheckFrame(frameIP, heapMap.IsValid(), mutator, declaredCounts, visitedCounts);
-    }
 }
 
 void TracingCollector::RecordStubCalleeSaved(RegSlotsMap& regSlotsMap, Uptr fp)
@@ -1174,14 +1084,13 @@ void TracingCollector::PostGarbageCollection(uint64_t gcIndex)
 {
     // Periodic persistence: timeout/ABRT/SIGKILL cannot erase counters from
     // completed GC cycles. Both probes self-gate and remain default off.
-    HealPairDiag::ReportYoungClaim("gc_end");
     // holdercapture: periodic persistence, so ABRT/kill cannot erase the snapshot census.
-    MarkFaceSnap::Report("gc_end");
-    NoTracedDiag::Report("gc_end");
+
+    MarkCompleteVerify::ReportHolderTraces("gc_end");
     SatbBuffer::ReportFilterDrops("gc_end");
     // loadgood: same reason -- the workload under measurement ends in SIGSEGV, so the
     // cross-table has to be on stderr before the crash, not only at exit.
-    LoadGoodProbe::Report("gc_end");
+
     // portarray: positive control for large-array chunking; self-gates, default off.
     MarkPartialArray::Report("gc_end");
     ReportSkippedStackMapCounts();

@@ -10,6 +10,7 @@ set(SRC_LIST
     "MemMap.cpp"
     "RegionSpace.cpp"
     "RegionManager.cpp"
+    "RouteDestHold.cpp"
     "CartesianTree.cpp"
     "HeapFiller.cpp"
 )

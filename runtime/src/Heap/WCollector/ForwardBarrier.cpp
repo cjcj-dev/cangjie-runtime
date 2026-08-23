@@ -10,8 +10,6 @@
 #include "Base/SysCall.h"
 #include "Common/ScopedObjectLock.h"
 #include "Heap/Verify/ZgcInvariants.h"
-#include "Heap/Verify/ToverFailDiag.h"
-#include "Heap/Verify/RegionLifeDiag.h"
 #include "Heap/Verify/TraceClear.h"
 #include "Mutator/Mutator.h"
 #include "ObjectModel/Field.inline.h"
@@ -23,16 +21,6 @@
 
 namespace MapleRuntime {
 namespace {
-// toverfail: barrier-moment snapshot of ObjectState bits (not post-return recompute).
-unsigned ToverFailStateCode(BaseObject* obj)
-{
-    if (obj == nullptr || !Heap::IsHeapAddress(obj)) {
-        return 0xffu;
-    }
-    uint64_t hdr = __atomic_load_n(reinterpret_cast<const uint64_t*>(obj), __ATOMIC_RELAXED);
-    return static_cast<unsigned>((hdr >> 48) & 0x3u);
-}
-
 // Names the *slot* a zero-header target came out of, which is the half our existing gate is
 // missing: PlausibleManagedObjectGate(site, obj) takes the object and a site string but never
 // the field it was read from, so a rejection cannot be traced back to the writer.
@@ -121,10 +109,6 @@ void NoteZeroHeaderTarget(const char* site, const RefField<false>& field, BaseOb
         (holder != nullptr && Heap::IsHeapAddress(holder))
             ? static_cast<unsigned>(holder->IsValidObject()) : 0xffu,
         clearInfo);
-    // RegionLifeDiag already records every free with its PATH_*, phase, gcCount, knownEmpty and
-    // liveBytes, and DumpJoinForTarget exists for exactly this question: which path freed the
-    // region this address is in.  Restored from e90e22a4^ for the diagnostic build.
-    RegionLifeDiag::DumpJoinForTarget(reinterpret_cast<uintptr_t>(target), "zerohdr");
 }
 } // namespace
 
@@ -139,7 +123,7 @@ BaseObject* ForwardBarrier::ReadReference(BaseObject* obj, RefField<false>& fiel
         BaseObject* oldTarget = to_object(oldField.GetTargetObject());
         if (oldTarget == nullptr || LIKELY(theCollector.is_load_good(oldField))) {
             if (oldTarget != nullptr) {
-                ToverFailDiag::NoteLoadGoodFast();
+
                 NoteZeroHeaderTarget("ForwardRead.fast", field, obj, oldTarget);
                 // fastfrom: the state census isolated exactly one tuple ZGC's design excludes --
                 // slot colour == current good colour, target FORWARDED, target in a ghost-from
@@ -170,11 +154,11 @@ BaseObject* ForwardBarrier::ReadReference(BaseObject* obj, RefField<false>& fiel
             return resolved;
         }
 
-        ToverFailDiag::NoteSlowEnter();
+
         BaseObject* loadGood = oldTarget;
         unsigned zhSteps = 0;
         if (!theCollector.IsUnmovableFromObject(oldTarget)) {
-            ToverFailDiag::NoteResolveEnter();
+
             loadGood = theCollector.make_load_good(oldField);
             zhSteps |= 1u;
             if (theCollector.IsGhostFromObject(loadGood)) {
@@ -186,13 +170,9 @@ BaseObject* ForwardBarrier::ReadReference(BaseObject* obj, RefField<false>& fiel
                     loadGood = fwd;
                 }
             }
-            ToverFailDiag::NoteResolveOutcome(oldTarget, loadGood,
-                                              loadGood != oldTarget ? 1u : 0u);
+
         } else {
             // 丁: barrier-moment IsUnmovableFromObject short-circuit (fromver §6).
-            unsigned st = ToverFailStateCode(oldTarget);
-            ToverFailDiag::NoteUnmovableSkip(oldTarget, st,
-                                             st == static_cast<unsigned>(ObjectState::FORWARDED) ? 1u : 0u);
         }
         // relroroot / rostatic: non-heap targets (static constants under GNU_RELRO) are never
         // evacuated. Colouring + CAS into those slots faults (si_code=2 ACCERR). Skip write-back.
@@ -242,16 +222,16 @@ BaseObject* ForwardBarrier::AtomicReadReference(BaseObject* obj, RefField<true>&
         BaseObject* oldTarget = to_object(oldField.GetTargetObject());
         if (oldTarget == nullptr || LIKELY(theCollector.is_load_good(oldField))) {
             if (oldTarget != nullptr) {
-                ToverFailDiag::NoteLoadGoodFast();
+
             }
             DLOG(FBARRIER, "atomic read obj %p ref@%p: %#zx -> %p", obj, &field, raw(oldField.GetFieldValue()), oldTarget);
             return oldTarget;
         }
 
-        ToverFailDiag::NoteSlowEnter();
+
         BaseObject* loadGood = oldTarget;
         if (!theCollector.IsUnmovableFromObject(oldTarget)) {
-            ToverFailDiag::NoteResolveEnter();
+
             loadGood = theCollector.make_load_good(oldField);
             if (theCollector.IsGhostFromObject(loadGood)) {
                 BaseObject* fwd = theCollector.ForwardObject(loadGood);
@@ -261,12 +241,8 @@ BaseObject* ForwardBarrier::AtomicReadReference(BaseObject* obj, RefField<true>&
                     loadGood = fwd;
                 }
             }
-            ToverFailDiag::NoteResolveOutcome(oldTarget, loadGood,
-                                              loadGood != oldTarget ? 1u : 0u);
+
         } else {
-            unsigned st = ToverFailStateCode(oldTarget);
-            ToverFailDiag::NoteUnmovableSkip(oldTarget, st,
-                                             st == static_cast<unsigned>(ObjectState::FORWARDED) ? 1u : 0u);
         }
         // relroroot / rostatic: non-heap targets under GNU_RELRO — skip colour CAS write-back.
         if (loadGood != nullptr && !Heap::IsHeapAddress(loadGood)) {

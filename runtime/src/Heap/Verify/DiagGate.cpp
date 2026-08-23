@@ -78,7 +78,7 @@ bool LegacyOrToken(const char* legacyEnv, const char* token)
 
 bool SelfTestOn()
 {
-    return EnvIsOne("MRT_GCV2_IDLEEDGE_SELFTEST") || EnvIsOne("MRT_GCV2_DIAG_SELFTEST") || TokenOn("selftest");
+    return EnvIsOne("MRT_GCV2_DIAG_SELFTEST") || TokenOn("selftest");
 }
 
 void MaybeAnnounce()
@@ -92,8 +92,8 @@ void MaybeAnnounce()
     const char* csv = DiagEnv();
     if (wantHelp) {
         LOG(RTLOG_ERROR,
-            "[GCV2][diag] tokens: idleedge promote promotegap fullclear nullslot stackref fromver oneseq "
-            "rootgate reffixwalk markcomplete statheal selftest all | legacy: MRT_GCV2_<NAME>=1");
+            "[GCV2][diag] tokens: promote promotegap nullslot stackref fromver oneseq rootgate reffixwalk "
+            "markcomplete markcompletefatal intedge statheal selftest all | legacy: MRT_GCV2_<NAME>=1");
     }
     if (wantActive) {
         LOG(RTLOG_ERROR, "[GCV2][diag] MRT_GCV2_DIAG=%s selftest=%d", csv == nullptr ? "(unset)" : csv,

@@ -115,7 +115,7 @@ void CrashCensusHandler(int sig)
 // from load time under either gate, while the crash handlers are installed lazily
 // on first use -- SignalManager installs its own later, and taking that over at
 // load time would change the crash path of a run that is not even exercising this
-// code (ToverFailDiag.cpp:108-118 makes the same trade).
+// code. Installing lazily avoids changing unrelated crash paths.
 std::atomic<bool> g_atexitRegistered{ false };
 
 void EnsureAtexit()

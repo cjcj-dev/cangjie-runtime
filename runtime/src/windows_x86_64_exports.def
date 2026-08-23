@@ -1320,10 +1320,6 @@ EXPORTS
     _ZN12MapleRuntime12GCThreadPoolD1Ev @1314
     _ZN12MapleRuntime12GCThreadPoolD2Ev @1315
     _ZN12MapleRuntime12GetCallerRspERNS_16WinModuleManagerERKNS_12MachineFrameE @1316
-    _ZN12MapleRuntime12IdleEdgeDiag17DumpProcessTotalsEPKc @1317
-    _ZN12MapleRuntime12IdleEdgeDiag19NoteBarrierDecisionEyNS_7GCPhaseEbhhhh @1318
-    _ZN12MapleRuntime12IdleEdgeDiag20CensusPrePinnedStampEy @1319
-    _ZN12MapleRuntime12IdleEdgeDiag7EnabledEv @1320
     _ZN12MapleRuntime12InitLogLevelEv @1321
     _ZN12MapleRuntime12LineNumTableD0Ev @1322
     _ZN12MapleRuntime12MTableBitmap10ForEachBitERKNSt3__18functionIFvPNS_13ExtensionDataEEEEPS4_ @1323
@@ -1607,7 +1603,6 @@ EXPORTS
     _ZN12MapleRuntime14PrintStackInfo16FillInStackTraceEv @1602
     _ZN12MapleRuntime14PrintStackInfoD0Ev @1603
     _ZN12MapleRuntime14PrologueVarInt15ResolvePrologueERKNSt3__18functionIFvNS_23PrologueRegisterClosure4TypeEjEEE @1604
-    _ZN12MapleRuntime14RunPlainCensusEPKcb @1605
     _ZN12MapleRuntime14STACK_ADDR_MAXE @1606 DATA
     _ZN12MapleRuntime14StackWatermark11OnStackGrowEx @1607
     _ZN12MapleRuntime14StackWatermark13VerifyEnabledEv @1608
@@ -1728,16 +1723,6 @@ EXPORTS
     _ZN12MapleRuntime16MangleNameHelper8DemangleEv @1723
     _ZN12MapleRuntime16MangleNameHelperC2ENS_7CStringENS_20StackTraceFormatFlagE @1724
     _ZN12MapleRuntime16PostTraceBarrierD0Ev @1725
-    _ZN12MapleRuntime16RemsetPhaseProbe11DumpSummaryEPKc @1726
-    _ZN12MapleRuntime16RemsetPhaseProbe11NoteMissingEy @1727
-    _ZN12MapleRuntime16RemsetPhaseProbe14SkipReasonNameENS0_10SkipReasonE @1728
-    _ZN12MapleRuntime16RemsetPhaseProbe15ClearSlotStampsEv @1729
-    _ZN12MapleRuntime16RemsetPhaseProbe16BarrierClassNameENS0_12BarrierClassE @1730
-    _ZN12MapleRuntime16RemsetPhaseProbe18ForceRecordEnabledEv @1731
-    _ZN12MapleRuntime16RemsetPhaseProbe19PhaseToBarrierClassENS_7GCPhaseE @1732
-    _ZN12MapleRuntime16RemsetPhaseProbe7EnabledEv @1733
-    _ZN12MapleRuntime16RemsetPhaseProbe9NoteWriteEyNS_7GCPhaseENS0_10SkipReasonEb @1734
-    _ZN12MapleRuntime16RemsetPhaseProbe9PhaseNameENS_7GCPhaseE @1735
     _ZN12MapleRuntime16StackFrameCursor10ProcessAllERKNSt3__18functionIFvRNS_8RootSlotEEEERNS_7MutatorE @1736
     _ZN12MapleRuntime16StackFrameCursor10ProcessOneERKNSt3__18functionIFvRNS_8RootSlotEEEERNS_7MutatorE @1737
     _ZN12MapleRuntime16StackFrameCursor12ProcessFrameERKNS_9FrameInfoERNS_11RegSlotsMapERKNSt3__18functionIFvRNS_8RootSlotEEEERNS_7MutatorE @1738
@@ -1831,10 +1816,6 @@ EXPORTS
     _ZN12MapleRuntime17PreforwardBarrierD0Ev @1826
     _ZN12MapleRuntime17ScopedAllocBufferD1Ev @1827
     _ZN12MapleRuntime17ScopedAllocBufferD2Ev @1828
-    _ZN12MapleRuntime17ScopedPlainWriterC1ENS_15PlainWriterSiteE @1829
-    _ZN12MapleRuntime17ScopedPlainWriterC2ENS_15PlainWriterSiteE @1830
-    _ZN12MapleRuntime17ScopedPlainWriterD1Ev @1831
-    _ZN12MapleRuntime17ScopedPlainWriterD2Ev @1832
     _ZN12MapleRuntime17StackExposureHook10ResetStatsEv @1833
     _ZN12MapleRuntime17StackExposureHook11NoopProcessERNS_14StackWatermarkEy @1834
     _ZN12MapleRuntime17StackExposureHook11RunSlowPathERNS_14StackWatermarkEyRKNSt3__18functionIFyS2_yEEEPKc @1835
@@ -1904,7 +1885,6 @@ EXPORTS
     _ZN12MapleRuntime18ForwardDataManager21InitializeForwardDataEv @1899
     _ZN12MapleRuntime18ForwardDataManager24ClearPreviousForwardDataEv @1900
     _ZN12MapleRuntime18GetCallerFrameInfoERNS_16WinModuleManagerERKNS_12MachineFrameERNS_19UnwindContextStatusE @1901
-    _ZN12MapleRuntime18NotePlainHeapWriteEPKvy @1902
     _ZN12MapleRuntime18RemoveRegionLockedEPNS_10RegionListEPNS_10RegionInfoE @1903
     _ZN12MapleRuntime18StackGrowStackInfo15RecordStackPtrsERKNSt3__18functionIFvRNS_8RootSlotEEEES8_RKNS2_IFvNS_15zaddress_unsafeERNS_11DerivedSlotEEEERNS_7MutatorE @1904
     _ZN12MapleRuntime18StackGrowStackInfo16FillInStackTraceEv @1905
@@ -1913,7 +1893,6 @@ EXPORTS
     _ZN12MapleRuntime18YoungMarkingSharedD2Ev @1908
     _ZN12MapleRuntime19FreePinnedSlotLists9PushFrontEPNS_10BaseObjectE @1909
     _ZN12MapleRuntime19ORDERS_OF_MAGNITUDEE @1910 DATA
-    _ZN12MapleRuntime19PlainWriterSiteNameENS_15PlainWriterSiteE @1911
     _ZN12MapleRuntime19PrettyOrderMathNanoEyPKc @1912
     _ZN12MapleRuntime19SemanticVersionInfoC1ERNS_7CStringE @1913
     _ZN12MapleRuntime19SemanticVersionInfoC2ERNS_7CStringE @1914
@@ -1958,7 +1937,6 @@ EXPORTS
     _ZN12MapleRuntime21ParseVerifyMarkSourceEv @1953
     _ZN12MapleRuntime21ScopedEnterSaferegionC2Eb @1954
     _ZN12MapleRuntime22CompressedStackMapHead15GetStackMapHeadEyRKNSt3__18functionIFvNS_23PrologueRegisterClosure4TypeEjEEEPy @1955
-    _ZN12MapleRuntime22DumpPlainWriteCountersEPKc @1956
     _ZN12MapleRuntime22ExportRootsTracingWork7ExecuteEy @1957
     _ZN12MapleRuntime22ExportRootsTracingWorkD0Ev @1958
     _ZN12MapleRuntime22ExportRootsTracingWorkD2Ev @1959
@@ -1970,7 +1948,6 @@ EXPORTS
     _ZN12MapleRuntime23ReportForwardRaceCountsEv @1965
     _ZN12MapleRuntime23g_forwardRaceTotalCountE @1966 DATA
     _ZN12MapleRuntime23g_gcCollectedTotalBytesE @1967 DATA
-    _ZN12MapleRuntime24InjectPlainHeapWriteOnceEv @1968
     _ZN12MapleRuntime24ReportRemsetConsumeStatsEyRKNS_19DiffPathRemsetStatsE @1969
     _ZN12MapleRuntime25RestoreInjectedPlainIfAnyEv @1970
     _ZN12MapleRuntime26g_forwardRaceStillBadCountE @1971 DATA
@@ -2165,7 +2142,6 @@ EXPORTS
     _ZN12MapleRuntime8BaseFile12CreateCJFileENS_8FileTypeENS_7CStringEy @2160
     _ZN12MapleRuntime8BaseFileD0Ev @2161
     _ZN12MapleRuntime8BaseFileD2Ev @2162
-    _ZN12MapleRuntime8ColumnOfENS_15PlainWriterSiteE @2163
     _ZN12MapleRuntime8EnumInfo14GetAnnotationsEPNS_8TypeInfoE @2164
     _ZN12MapleRuntime8EnumInfo18GetCtorAnnotationsEjPNS_8TypeInfoE @2165
     _ZN12MapleRuntime8EnumInfo19GetStaticMethodInfoEj @2166

@@ -30,7 +30,6 @@ uintptr_t RouteInfo::GetRoute(uint64_t preLiveBytes)
     // stale one. Arithmetic is the recorded plan's intended meaning; the lookup only ever
     // added a way for it to change underneath the reader.
     MAddress toRegion2Start = RegionInfo::GetUnitAddress(toRegion2Idx);
-    RouteDestHold::NoteTo2Resolve(static_cast<uintptr_t>(toRegion2Start), toRegion2Idx);
     return toRegion2Start + (preLiveBytes - toRegion1UsedBytes);
 }
 } // namespace MapleRuntime

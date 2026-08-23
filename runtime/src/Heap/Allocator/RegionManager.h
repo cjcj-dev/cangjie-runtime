@@ -23,19 +23,11 @@
 #include "RoutePublish.h"
 #include "Common/RunType.h"
 #include "FreeRegionManager.h"
-#include "Heap/Verify/FwdInflight.h"
 #include "Heap/GcThreadPool.h"
 #include "RegionList.h"
-#include "Heap/Verify/EmptyLiveDiag.h"
-#include "Heap/Verify/F3Why2Diag.h"
 #include "Heap/Verify/GarbRegionDiag.h"
-#include "Heap/Verify/HealPairDiag.h"
 #include "Heap/Verify/TraceClear.h"
-#include "Heap/Verify/MarkFaceSnap.h"
-#include "Heap/Verify/RegionLifeDiag.h"
-#include "Heap/Verify/SealCheck.h"
 #include "Heap/Verify/PermWhoAdmit.h"
-#include "Heap/Verify/PinFireDiag.h"
 #include "securec.h"
 #include "SlotList.h"
 #include "Sync/Sync.h"
@@ -316,7 +308,7 @@ public:
         if (region != nullptr) {
             // the region was not needed after all, hand it back the same way
             // RegionSpace::FeedHungryBuffers() does (RegionSpace.cpp:302-306).
-            RegionLifeDiag::SetNextFreePath(RegionLifeDiag::PATH_UNUSED_PINNED);
+
             (void)CollectRegion<Generation::Old>(region);
         }
 
@@ -420,7 +412,6 @@ public:
     {
         MarkView<G> view = region->GetRouteMarkView<G>();
         const bool knownEmpty = IsKnownEmptyForView(region, view);
-        const uint16_t freePath = RegionLifeDiag::TakeNextFreePath();
         // whoempty: record the *decision*, with the live-byte count it was made on, into the same
         // ring ClearUnits writes to.  ClearUnits passes liveBefore as a literal 0
         // (RegionInfo.h:1429 `TraceClear::NoteRange(unitAddress, size, "clear_units", nullptr, 0)`),
@@ -428,32 +419,19 @@ public:
         // This entry carries the real number, taken at the one edge where a region dies.
         TraceClear::NoteRange(region->GetRegionStart(), region->GetRegionSize(),
                               knownEmpty ? "coll_empty" : "coll_live", region, region->GetLiveByteCount(),
-                              static_cast<unsigned>(G), freePath);
+                              static_cast<unsigned>(G), 0);
         DLOG(REGION, "collect region %p@[%#zx+%zu, %#zx) type %u", region, region->GetRegionStart(),
              region->GetLiveByteCount(), region->GetRegionEnd(), region->GetRegionType());
         // f3why2/livesame: always-on enter + knownEmpty_marked class.
-        F3Why2Diag::NoteCollectEnter(region);
+
         // emptylive: epoch-split size-walk on knownEmpty (gate MRT_GCV2_EMPTYLIVE).
-        EmptyLiveDiag::NoteCollectEnter(region);
+
         GarbRegionDiag::NoteCollectEnter(region);
-        // regionlife: free-edge accounting (default off; also via WHOZERO).
-        {
-            RegionLifeDiag::NoteFree(region, freePath);
-            // holdercapture: last instant the mark face still exists. InitFreeUnits is
-            // below; after it the bitmap/LiveInfo answer for the wrong reason.
-            MarkFaceSnap::NoteRegionFree(region, freePath);
-        }
-        HealPairDiag::NoteCollect(region->GetRegionStart(), region->GetRegionEnd(),
-                                 region->GetLiveByteCount(),
-                                 static_cast<uint32_t>(region->GetRegionType()),
-                                 knownEmpty ? 1U : 0U);
         // Probe: knownEmpty region still holds valid object headers (gcreclaim / B2 H1).
         {
             // gcreclaim was written for exactly the question now in hand -- does a region we are
             // about to declare empty still contain valid object headers, and are any of them
-            // marked -- and then pinned off.  This is the fourth instrument this session that was
-            // already built and switched off (TraceClear, PermWhoAdmit, ToverFailDiag were the
-            // others), so the campaign's bottleneck is not writing probes.
+            // marked. This live census stays until the corresponding blocker closes.
             //
             // What it decides: 45 of 45 unusable zero-header targets sit in regions this call
             // classified knownEmpty with a real GetLiveByteCount() of 0.  validObjs > 0 there means
@@ -543,7 +521,7 @@ public:
         CHECK(rawAddr == 0 || (rawAddr >> 48) == 0);
         RegionInfo* region = RegionInfo::GetRegionInfoAt(rawAddr);
         region->IncRawPointerObjectCount();
-        PinFireDiag::NoteAddRawPointer();
+
         // CSet empty-free (ExemptFromRegions) TryDeletes FROM under the same
         // list lock (zGeneration.cpp:211-221 register_empty_page). Inc first so
         // a GC that already claimed GARBAGE still sees rawPtrCnt>0. Retry the
@@ -751,7 +729,7 @@ public:
 
     RoutePlan PlanRoute(BaseObject* fromObj, RegionInfo* fromRegionInfo, CopierRouteToken)
     {
-        return RoutePlan{ ComputeRoute(fromObj, fromRegionInfo, FwdInflight::Site::ROUTE_WITH_REGION) };
+        return RoutePlan{ ComputeRoute(fromObj, fromRegionInfo) };
     }
 
     RoutePlan PlanRoute(BaseObject* fromObj, CopierRouteToken)
@@ -761,7 +739,7 @@ public:
 
     RoutePlan PlanRoute(BaseObject* fromObj, RegionInfo* fromRegionInfo, StwRouteToken)
     {
-        return RoutePlan{ ComputeRoute(fromObj, fromRegionInfo, FwdInflight::Site::ROUTE_WITH_REGION) };
+        return RoutePlan{ ComputeRoute(fromObj, fromRegionInfo) };
     }
 
     RoutePlan PlanRoute(BaseObject* fromObj, StwRouteToken)
@@ -771,7 +749,7 @@ public:
 
     PublishedRoute FindPublishedRoute(BaseObject* fromObj, RegionInfo* fromRegionInfo)
     {
-        BaseObject* to = ComputeRoute(fromObj, fromRegionInfo, FwdInflight::Site::ROUTE_WITH_REGION);
+        BaseObject* to = ComputeRoute(fromObj, fromRegionInfo);
         if (to == nullptr || !RouteIsPublished(fromObj, fromRegionInfo)) {
             return PublishedRoute{ nullptr };
         }
@@ -784,7 +762,7 @@ public:
         if (fromRegionInfo == nullptr) {
             return PublishedRoute{ nullptr };
         }
-        BaseObject* to = ComputeRoute(fromObj, fromRegionInfo, FwdInflight::Site::ROUTE_LOOKUP);
+        BaseObject* to = ComputeRoute(fromObj, fromRegionInfo);
         if (to == nullptr || !RouteIsPublished(fromObj, fromRegionInfo)) {
             return PublishedRoute{ nullptr };
         }
@@ -826,7 +804,7 @@ public:
             if (fromRegionInfo->TryLockRouting(oldState)) {
                 // sealcheck E_seal (per-region): face freezes before geometry read.
                 // RouteOrCompactRegionImpl reads GetLiveByteCount / VisitLiveObjects next.
-                SealCheck::NoteSeal(fromRegionInfo);
+
                 if (RouteOrCompactRegionImpl(fromRegionInfo)) {
                     fromRegionInfo->SetRouteState(RegionInfo::RouteState::ROUTED);
                     return true;
@@ -999,23 +977,22 @@ private:
         if (fromRegionInfo == nullptr) {
             return RoutePlan{ nullptr };
         }
-        return RoutePlan{ ComputeRoute(fromObj, fromRegionInfo, FwdInflight::Site::ROUTE_LOOKUP) };
+        return RoutePlan{ ComputeRoute(fromObj, fromRegionInfo) };
     }
 
-    BaseObject* ComputeRoute(BaseObject* fromObj, RegionInfo* fromRegionInfo, FwdInflight::Site site)
+    BaseObject* ComputeRoute(BaseObject* fromObj, RegionInfo* fromRegionInfo)
     {
         RegionInfo::RetainScope retain(fromRegionInfo);
         if (!retain.ok()) {
             return nullptr;
         }
-        FwdInflight::Scope inflight(fromRegionInfo, site);
+
         if (RouteRegion(fromRegionInfo) || fromRegionInfo->IsCompacted()) {
             OptionalRouteTicket ticket = fromRegionInfo->AdmitForRoute(fromObj);
             if (!ticket) {
                 return nullptr;
             }
             BaseObject* to = fromRegionInfo->GetRoute(ticket.value());
-            PermWhoAdmit::NoteRoute(fromRegionInfo, fromObj, to);
             return to;
         }
         return nullptr;
