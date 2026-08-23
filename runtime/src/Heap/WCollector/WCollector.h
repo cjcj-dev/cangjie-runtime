@@ -27,6 +27,7 @@
 #include "Heap/Verify/MutatorRelocate.h"
 #include "Mutator/MutatorManager.h"
 namespace MapleRuntime {
+class MarkLiveCache;
 class ScopedStopTheWorld;
 
 // paramzero: crash-time dump of Mode-A frame slot + heap CAS-null counters.
@@ -1084,8 +1085,11 @@ private:
     using MinorSlotSet = std::unordered_set<MAddress>;
     using MinorInteriorBaseMap = std::unordered_map<MAddress, BaseObject*>;
 
-    bool MarkObjectImpl(BaseObject* obj, bool youngClaim) const;
-    bool MarkYoungObject(BaseObject* obj) const { return MarkObjectImpl(obj, true); }
+    bool MarkObjectImpl(BaseObject* obj, bool youngClaim, MarkLiveCache* liveCache = nullptr) const;
+    bool MarkYoungObject(BaseObject* obj, MarkLiveCache* liveCache = nullptr) const
+    {
+        return MarkObjectImpl(obj, true, liveCache);
+    }
 
     // Large reference-array chunking, ported from ZGC's ZMark (zMark.cpp:185-263).
     // `holder` is the owning array, carried only for diagnostics; it is nullptr

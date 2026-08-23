@@ -85,6 +85,7 @@ $CXX -std=gnu++17 -O0 -g -Wall -Wextra -pthread -fno-rtti \
     "$SRC/test_fwdreturn.cpp" \
     "$SRC/test_fnlz_roots.cpp" \
     "$SRC/test_mark_stack_entry.cpp" \
+    "$SRC/test_mark_stripe.cpp" \
     "$SRC/test_partial_array.cpp" \
     "$SRC/test_verify_roots.cpp" \
   -L"$RUNTIME_LIB_DIR" -Wl,-rpath,"$RUNTIME_LIB_DIR" \

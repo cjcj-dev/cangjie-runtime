@@ -1326,14 +1326,16 @@ public:
     }
 
     template<Generation G>
-    bool MarkObject(MarkView<G> view, const BaseObject* obj, size_t objSize)
+    bool MarkObject(MarkView<G> view, const BaseObject* obj, size_t objSize, bool accountLive = true)
     {
         CHECK(view.GetRegion() == this);
         VerifyMarkFaceOwner<G>(obj, "RegionInfo::MarkObject.sized");
         if (IsLargeRegion()) {
             if (GetMarkedRegionFlag(view) != 1) {
                 SetMarkedRegionFlag(view, 1);
-                AddLiveByteCount(objSize);
+                if (accountLive) {
+                    AddLiveByteCount(objSize);
+                }
                 NotePageOwnerFirstPaint<G>();
                 return false;
             }
@@ -1349,7 +1351,9 @@ public:
         SealCheck::NotePaint(this, offset, objSize, "RegionInfo::MarkObject_sized");
         bool already = writeBm->MarkBits(offset, objSize, regionSize);
         if (!already) {
-            AddLiveByteCount(objSize);
+            if (accountLive) {
+                AddLiveByteCount(objSize);
+            }
             NotePageOwnerFirstPaint<G>();
         }
         (void)TagReuseProbe::NoteMarkBitsSticky(this, offset, true, "MarkObject_sized", G);
@@ -1367,12 +1371,12 @@ public:
         return MarkObject(GetMarkView<Generation::Old>(), obj);
     }
 
-    bool MarkObjectByOwner(const BaseObject* obj, size_t objSize)
+    bool MarkObjectByOwner(const BaseObject* obj, size_t objSize, bool accountLive = true)
     {
         if (IsYoungRegion()) {
-            return MarkObject(GetMarkView<Generation::Young>(), obj, objSize);
+            return MarkObject(GetMarkView<Generation::Young>(), obj, objSize, accountLive);
         }
-        return MarkObject(GetMarkView<Generation::Old>(), obj, objSize);
+        return MarkObject(GetMarkView<Generation::Old>(), obj, objSize, accountLive);
     }
 
     bool ResurrectObject(const BaseObject* obj, size_t offset)
