@@ -20,7 +20,6 @@
 #include "Heap.h"
 #include "Heap/Verify/AllocPhaseDiag.h"
 #include "Heap/Verify/MinorGCALot.h"
-#include "Heap/Verify/SealCheck.h"
 #include "Heap/Verify/Zap.h"
 #include "Mutator/Mutator.h"
 
@@ -302,7 +301,7 @@ MAddress AllocBuffer::Allocate(size_t totalSize, AllocType allocType)
                     size_t offset = static_cast<size_t>(addr - regionStart);
                     size_t regionSize = static_cast<size_t>(regionEnd - regionStart);
                     if (totalSize > 0 && (totalSize % 8) == 0 && offset + totalSize <= regionSize) {
-                        SealCheck::NotePaint(reg, offset, totalSize, "RegionSpace::AllocBlack.live");
+
                         MarkView<Generation::Young> view = reg->GetMarkView<Generation::Young>();
                         reg->VerifyMarkFaceOwner<Generation::Young>(
                             reinterpret_cast<BaseObject*>(addr), "RegionSpace::AllocBlack.live");
@@ -313,7 +312,7 @@ MAddress AllocBuffer::Allocate(size_t totalSize, AllocType allocType)
                         LiveInfo* ghost = reg->GetLiveInfo0ForProbe();
                         RegionBitmap* ghostBitmap = ghost == nullptr ? nullptr : reg->GetOwnerMarkBitmap(ghost);
                         if (ghost != nullptr && ghostBitmap != nullptr) {
-                            SealCheck::NotePaint(reg, offset, totalSize, "RegionSpace::AllocBlack.ghost");
+
                             (void)ghostBitmap->MarkBits(offset, totalSize, regionSize);
                         }
                         // grey-list so STW2 can force reachableVec + field scan

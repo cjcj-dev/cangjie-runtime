@@ -19,7 +19,6 @@
 #include "Heap/Allocator/RegionInfo.h"
 #include "Heap/Allocator/RegionSpace.h"
 #include "Heap/Heap.h"
-#include "Heap/Verify/RemsetPhaseProbe.h"
 #include "ObjectModel/MClass.h"
 #include "ObjectModel/RefField.h"
 
@@ -122,7 +121,6 @@ void CollectNonYoungFieldSlots(std::unordered_set<MAddress>& fieldSlots, RemsetV
                         ++stats.missingNonArray;
                     }
                     PushSample(stats.missingSamples, stats.missingSampleCount, slot);
-                    RemsetPhaseProbe::NoteMissing(slot);
                     size_t correctnessFailure = rootReachabilityKnown ? stats.missingRootReachable : stats.missing;
                     if (correctnessRelevant && correctnessFailure <= maxFailures) {
                         bool targetValid = target->IsValidObject();
@@ -240,8 +238,6 @@ void VerifyRememberedSetInvariant(const char* point, const std::unordered_set<MA
          reinterpret_cast<void*>(stats.staleSamples[2]), reinterpret_cast<void*>(stats.staleSamples[3]),
          reinterpret_cast<void*>(stats.danglingSamples[0]), reinterpret_cast<void*>(stats.danglingSamples[1]),
          reinterpret_cast<void*>(stats.danglingSamples[2]), reinterpret_cast<void*>(stats.danglingSamples[3]));
-
-    RemsetPhaseProbe::DumpSummary(point == nullptr ? "?" : point);
 
 }
 } // namespace MapleRuntime

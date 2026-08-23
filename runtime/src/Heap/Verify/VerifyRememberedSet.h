@@ -31,7 +31,7 @@ class BaseObject;
 // remsetSnapshot: non-owning view of remset slots at the verification point
 // (typically the post-AcquireRecordsForMinor local set; live remset is empty then).
 // force=true: run even when MRT_GCV2_VERIFY_REMSET is unset (post-evac hook uses this).
-// rootReachableHolders: independent full-root closure, or null when unavailable.
+// rootReachableHolders: completed independent full-root closure, or nullptr when not measured.
 void VerifyRememberedSetInvariant(const char* point, const std::unordered_set<MAddress>& remsetSnapshot,
                                   bool force = false,
                                   const std::unordered_set<BaseObject*>* rootReachableHolders = nullptr);

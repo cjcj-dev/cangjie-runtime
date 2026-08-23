@@ -6,8 +6,6 @@
 
 
 #include "IdleBarrier.h"
-
-#include "Heap/Verify/LoadGoodProbe.h"
 #include "Mutator/Mutator.h"
 #include "ObjectModel/MArray.h"
 #include "ObjectModel/RefField.inline.h"
@@ -31,21 +29,7 @@ BaseObject* IdleBarrier::ReadReference(BaseObject* obj, RefField<false>& field) 
         // loadgood: heap face of the ZGC_LOAD_BARRIER_PARITY §四·① observation. Same
         // instrument as Barrier::ReadStaticRef, on the slot class that does carry colour.
         // Only the first attempt is recorded, so a self-heal retry is not a second read.
-        if (UNLIKELY(LoadGoodProbe::Enabled())) {
-            const uintptr_t rawWord = raw(oldField.GetFieldValue());
-            if (rawWord == 0) {
-                LoadGoodProbe::NoteNull(LoadGoodProbe::kFaceHeap);
-            } else {
-                const bool heapGhost = oldTarget != nullptr && Heap::IsHeapAddress(oldTarget) &&
-                                       theCollector.IsGhostFromObject(oldTarget);
-                LoadGoodProbe::NoteRead(LoadGoodProbe::kFaceHeap, rawWord, heapGhost,
-                                        theCollector.is_load_good(oldField));
-                if ((rawWord & ::g_cjLoadBadMask) != 0) {
-                    LoadGoodProbe::NoteBadSample(LoadGoodProbe::kFaceHeap, rawWord,
-                                                 reinterpret_cast<uintptr_t>(oldTarget));
-                }
-            }
-        }
+
         if (oldTarget == nullptr || LIKELY(theCollector.is_load_good(oldField))) {
             BaseObject* resolved = ResolveFromCopyForMutator(oldTarget);
             if (resolved == oldTarget || resolved == nullptr) {

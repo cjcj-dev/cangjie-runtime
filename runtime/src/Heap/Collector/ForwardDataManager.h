@@ -22,7 +22,6 @@
 #include "Base/LogFile.h"
 #include "Base/MemUtils.h"
 #include "Base/SysCall.h"
-#include "Heap/Verify/FwdInflight.h"
 #include "LiveInfo.h"
 
 #ifdef _WIN64

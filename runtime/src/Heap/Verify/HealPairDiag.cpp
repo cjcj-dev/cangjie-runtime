@@ -9,8 +9,8 @@
 
 namespace MapleRuntime {
 namespace HealPairDiag {
-// cjpmnull2: restore NoteZeroWrite / NoteCrashWhoZero only. Other sinks stay
-// hollow (header already says HOLLOWED). Compile-time gate, no new MRT_GCV2_*.
+// cjpmnull2: live NoteZeroWrite / NoteCrashWhoZero arm. Compile-time gate, no
+// new MRT_GCV2_* reader.
 constexpr bool kWhoZero = true;
 constexpr size_t kZeroRing = 256;
 
@@ -25,23 +25,6 @@ static std::atomic<size_t> g_zeroN{ 0 };
 static std::atomic<size_t> g_zeroBySite[128];
 static ZeroRec g_ring[kZeroRing];
 static std::atomic<bool> g_atexit{ false };
-
-bool Enabled() { return kWhoZero; }
-bool YoungClaimEnabled() { return false; }
-ScopedMajorMarkTask::ScopedMajorMarkTask() {}
-ScopedMajorMarkTask::~ScopedMajorMarkTask() {}
-void NoteRaw(const void* oldAddr, const void* newAddr, const void* slot, uint16_t site) {  }
-void NoteCollect(uintptr_t start, uintptr_t end, uint64_t liveBytes, uint32_t rtype, uint32_t knownEmpty) {  }
-void NoteCrashRdi(uintptr_t rdi) {  }
-void NoteCrashRegs(uintptr_t rdi, uintptr_t rax, uintptr_t r12, uintptr_t r14, uintptr_t rbp) {  }
-void NoteCopy(const void* fromAddr, const void* toAddr, size_t size, uint32_t done) {  }
-uint64_t MidCopyStallNs() { return 0; }
-void MaybeMidCopyStall(size_t size) {  }
-void NoteEdgeWrite(const void* holder, const void* slot, uintptr_t oldRaw, uintptr_t newRaw, uint8_t barrierKind) {  }
-void NoteFirstMark(const void* obj, bool youngClaim ) {  }
-void NoteMajorWasMarked(const void* obj) {  }
-void ReportYoungClaim(const char* point) {  }
-uint8_t LookupMarkOrigin(uintptr_t obj, uint32_t* claimGc, uint8_t* majorSkip, uint32_t* majorGc, uint8_t* hasRef, uint8_t* nonYoungRef) { return 0; }
 
 void Report(const char* point)
 {

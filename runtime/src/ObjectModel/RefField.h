@@ -75,8 +75,6 @@ enum class HealSite : uint16_t {
     MutatorPreForwardRoot,
     MutatorPreForwardStackField,
     MutatorStripRootColour,
-    PlainCensusInject,
-    PlainCensusRestore,
     PostTraceAtomicReadReference,
     PostTraceCompareAndSwapReference,
     PostTraceCopyStructArrayRecolour,

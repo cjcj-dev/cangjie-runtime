@@ -48,36 +48,16 @@
 #include "Heap/Verify/MarkCompleteVerify.h"
 #include "Heap/Verify/VerifyOption.h"
 #include "Heap/Verify/VerifyRememberedSet.h"
-#include "Heap/Verify/DiffPathExplainer.h"
 #include "Heap/Verify/TraceClear.h"
 #include "Heap/Verify/VerifyRoots.h"
 #include "Heap/Verify/Zap.h"
 #include "Heap/Verify/DiagGate.h"
 #include "Heap/Verify/NwDropAudit.h"
-#include "Heap/Verify/IdleEdgeDiag.h"
-#include "Heap/Verify/EatArmDiag.h"
-#include "Heap/Verify/FysDesignDiag.h"
-#include "Heap/Verify/F3Why2Diag.h"
 #include "Heap/Verify/GarbRegionDiag.h"
-#include "Heap/Verify/FysAuditDiag.h"
 #include "Heap/Verify/Stw2CurrentAudit.h"
-#include "Heap/Verify/FlipPromoDiag.h"
-#include "Heap/Verify/O2ORemsetDiag.h"
 #include "Heap/Verify/NullRouteCaller.h"
-#include "Heap/Verify/PlainCensus.h"
-#include "Heap/Verify/SealCheck.h"
-#include "Heap/Verify/ToverFailDiag.h"
-#include "Heap/Verify/OffpastDiag.h"
-#include "Heap/Verify/TlRawDiag.h"
-#include "Heap/Verify/StartWhoDiag.h"
-#include "Heap/Verify/StackRootSlotAttest.h"
-#include "Heap/Verify/WhoPushDiag.h"
-#include "Heap/Verify/HealPairDiag.h"
-#include "Heap/Verify/GateDropDiag.h"
-#include "Heap/Verify/NoTracedDiag.h"
+#include "Heap/Verify/MarkCompleteVerify.h"
 #include "Heap/Verify/SurvNodeDiag.h"
-#include "Heap/Verify/HeldFreeDiag.h"
-#include "Heap/Verify/YyEdgeDiag.h"
 #include "Heap/Collector/PromotedRegionDomain.h"
 #include "Heap/Verify/CsetEmptyWho.h"
 #include "Common/ColourPredicates.h"
@@ -108,7 +88,7 @@ bool WCollector::MarkObjectImpl(BaseObject* obj, bool youngClaim, MarkLiveCache*
         return true;
     }
     RegionInfo* region = RegionInfo::GetRegionInfoAt(reinterpret_cast<MAddress>(obj));
-    StartWhoDiag::ScopedCaller caller("WCollector::MarkObject", obj);
+
     size_t objectSize = obj->GetSize();
     // livesame: MarkObject adds live only on 0→1 (ZGC inc_live); no second AddLiveByteCount.
     // ZGC zPage.inline.hpp:284-294: the target page owns mark authority. gcReason
@@ -122,11 +102,8 @@ bool WCollector::MarkObjectImpl(BaseObject* obj, bool youngClaim, MarkLiveCache*
     if (!marked) {
         SurvNodeDiag::NotePaint(obj, region);
     }
-    if (UNLIKELY(HeldFreeDiag::Enabled()) && !marked) {
-        HeldFreeDiag::NoteMark(obj);
-    }
+
     if (!marked) {
-        HealPairDiag::NoteFirstMark(obj, youngClaim);
         DLOG(TRACE, "mark obj %p<%p>(%zu) in region %p(%u)@%#zx, live %zu", obj, obj->GetTypeInfo(), objectSize,
              region, region->GetRegionType(), region->GetRegionStart(), region->GetLiveByteCount());
     }
@@ -300,9 +277,7 @@ void WCollector::TraceRefField(BaseObject* obj, RefField<>& field, WorkStack& wo
         // Skip field on reject — same as pre-zcolor7 slow path for plain non-heap.
         if (!Collector::MarkGoodHeapGate("TraceRefField", targetObj)) {
             // gatedrop: reject arm only (default off). leave untraced.
-            if (UNLIKELY(GateDropDiag::Enabled())) {
-                GateDropDiag::NoteReject(obj, &field, targetObj, GateDropDiag::ARM_MARKGOOD);
-            }
+
             SurvNodeDiag::NoteTraceVisit(&field, targetObj, SurvNodeDiag::TRACE_SKIP_GATE);
             return;
         }
@@ -313,9 +288,7 @@ void WCollector::TraceRefField(BaseObject* obj, RefField<>& field, WorkStack& wo
                 Collector::PlausibleManagedObjectGate("TraceRefField.host", host)) {
                 targetObj = host;
             } else {
-                if (UNLIKELY(GateDropDiag::Enabled())) {
-                    GateDropDiag::NoteReject(obj, &field, targetObj, GateDropDiag::ARM_PLAUSIBLE_GOOD);
-                }
+
                 SurvNodeDiag::NoteTraceVisit(&field, targetObj, SurvNodeDiag::TRACE_SKIP_GATE);
                 return;
             }
@@ -329,10 +302,7 @@ void WCollector::TraceRefField(BaseObject* obj, RefField<>& field, WorkStack& wo
                      obj == nullptr ? "<partial-array chunk>" : obj->GetTypeInfo()->GetName(),
                      obj == nullptr ? static_cast<ssize_t>(-1) : BaseObject::FieldOffset(obj, &field));
         if (!IsMarkedObject<Generation::Old>(targetObj)) {
-            if (UNLIKELY(StartWhoDiag::Enabled())) {
-                StartWhoDiag::NoteProduced(targetObj, StartWhoDiag::Source::HEAP_FIELD,
-                                           "TraceRefField.mark_good", &field, obj);
-            }
+
             SurvNodeDiag::NoteTraceVisit(&field, targetObj, SurvNodeDiag::TRACE_PUSH);
             workStack.push_back(targetObj);
         } else {
@@ -353,9 +323,7 @@ void WCollector::TraceRefField(BaseObject* obj, RefField<>& field, WorkStack& wo
             Collector::PlausibleManagedObjectGate("TraceRefField.slow.host", host)) {
             latest = host;
         } else {
-            if (UNLIKELY(GateDropDiag::Enabled())) {
-                GateDropDiag::NoteReject(obj, &field, latest, GateDropDiag::ARM_PLAUSIBLE_SLOW);
-            }
+
             SurvNodeDiag::NoteTraceVisit(&field, latest, SurvNodeDiag::TRACE_SKIP_GATE);
             return;
         }
@@ -384,10 +352,7 @@ void WCollector::TraceRefField(BaseObject* obj, RefField<>& field, WorkStack& wo
     }
 
     if (!IsMarkedObject<Generation::Old>(latest)) {
-        if (UNLIKELY(StartWhoDiag::Enabled())) {
-            StartWhoDiag::NoteProduced(latest, StartWhoDiag::Source::HEAP_FIELD,
-                                       "TraceRefField.slow", &field, obj);
-        }
+
         SurvNodeDiag::NoteTraceVisit(&field, latest, SurvNodeDiag::TRACE_PUSH);
         workStack.push_back(latest);
     } else {
@@ -494,8 +459,8 @@ void WCollector::FollowPartialArray(const MarkStackEntry& entry, WorkStack& work
 
 void WCollector::TraceObjectRefFields(BaseObject* obj, WorkStack& workStack)
 {
-    if (UNLIKELY(NoTracedDiag::Enabled())) {
-        NoTracedDiag::NoteTrace(obj);
+    if (UNLIKELY(MarkCompleteVerify::Enabled())) {
+        MarkCompleteVerify::NoteHolderTrace(obj);
     }
     auto visitor = [this, obj, &workStack](RefField<>& field) { TraceRefField(obj, field, workStack); };
     TypeInfo* typeInfo = obj->GetTypeInfo();
@@ -656,7 +621,6 @@ void WCollector::TraceHeap()
     reinterpret_cast<RegionSpace&>(theAllocator).AssembleGarbageCandidates();
 
     // plaincensus Phase 1a: measure plain HeapSlots before major mark.
-    RunPlainCensus("pre-major-mark", false);
 
     const bool concurrentStackScan = MutatorManager::ConcurrentStackScanEnabled();
     uint64_t stackScanEpoch = 0;
@@ -682,7 +646,7 @@ void WCollector::TraceHeap()
     }
 
     if (concurrentStackScan) {
-        StackRootSlotAttest::Begin("major");
+
         EpochHandshakeStats handshake = MutatorManager::Instance().RunEpochHandshake("pre-major-stack");
         stackScanEpoch = handshake.epoch;
         CHECK_DETAIL(stackScanEpoch != 0 && handshake.stackScanned + handshake.stackFallback == handshake.requested,
@@ -723,7 +687,7 @@ void WCollector::TraceHeap()
             // receipt can be reported before any mark-closure work consumes the roots.
             DoEnumeration(workStack, foreignStack);
             VerifyStackRootPostcondition(stackScanEpoch, "major");
-            StackRootSlotAttest::Finish();
+
             TransitionToGCPhase(GCPhase::GC_PHASE_TRACE, true);
         } else {
             TransitionToGCPhase(GCPhase::GC_PHASE_ENUM, true);
@@ -858,9 +822,7 @@ void WCollector::VisitMinorRoots(const std::function<void(BaseObject*)>& visitor
                                          static_cast<uint32_t>(g_gcCount.load(std::memory_order_relaxed)),
                                          ProbeReadRouteDiag::RootKind::MinorRaw);
         }
-        if (UNLIKELY(HeldFreeDiag::Enabled())) {
-            HeldFreeDiag::NoteEnumSlot(&root, obj, gMinorRootOrigin);
-        }
+
         if (obj != nullptr && Heap::IsHeapAddress(obj) &&
             !Collector::PlausibleManagedObjectGate("VisitMinorRoots.raw", obj)) {
             BaseObject* host = Collector::TryRecoverInteriorBase(obj);
@@ -889,9 +851,7 @@ void WCollector::PushYoungObject(BaseObject* object, WorkStack& workStack, const
         }
         return;
     }
-    if (UNLIKELY(HeldFreeDiag::Enabled())) {
-        HeldFreeDiag::NotePush(object, origin);
-    }
+
     if (!object->IsValidObject()) {
         // Rich diagnosis before fail-closed abort: address looks like a heap range
         // but object header is not a valid managed object (stack-ish residue, stale
@@ -974,29 +934,9 @@ void WCollector::PushYoungObject(BaseObject* object, WorkStack& workStack, const
     RegionInfo* region = RegionInfo::GetRegionInfoAt(reinterpret_cast<MAddress>(object));
     if (region->IsYoungRegion() &&
         !region->IsMarkedObject(region->GetMarkView<Generation::Young>(), object)) {
-        if (UNLIKELY(WhoPushDiag::Enabled())) {
-            WhoPushDiag::NotePush(object, origin);
-        }
-        if (UNLIKELY(StartWhoDiag::Enabled())) {
-            if (origin != nullptr &&
-                (std::strcmp(origin, "closure_edge") == 0 || std::strcmp(origin, "young_alloc_black") == 0 ||
-                 std::strcmp(origin, "young_satb") == 0 || std::strcmp(origin, "young_satb_final") == 0)) {
-                StartWhoDiag::NoteProduced(object, StartWhoDiag::Source::HEAP_FIELD, origin);
-            } else if (origin != nullptr &&
-                       (std::strcmp(origin, "minor_root") == 0 ||
-                        std::strcmp(origin, "minor_root_final") == 0)) {
-                StartWhoDiag::NoteProduced(object, StartWhoDiag::Source::ROOT_DERIVED, origin);
-            } else if (origin != nullptr &&
-                       (std::strcmp(origin, "alloc_buffer") == 0 ||
-                        std::strcmp(origin, "alloc_buffer_final") == 0)) {
-                StartWhoDiag::NoteProducedRootIfPending(object);
-            }
-        }
+
+
         workStack.push_back(object);
-    } else if (UNLIKELY(StartWhoDiag::Enabled()) && origin != nullptr &&
-               (std::strcmp(origin, "alloc_buffer") == 0 ||
-                std::strcmp(origin, "alloc_buffer_final") == 0)) {
-        StartWhoDiag::DiscardRootCandidate(object);
     }
 }
 
@@ -1044,9 +984,7 @@ BaseObject* AdmitYoungObject(BaseObject* object, const char* origin, const void*
     if (!Heap::IsHeapAddress(object)) {
         return nullptr;
     }
-    if (UNLIKELY(WhoPushDiag::Enabled())) {
-        WhoPushDiag::NotePush(object, origin, slot, holder);
-    }
+
     if (!Collector::PlausibleManagedObjectGate("AdmitYoungObject", object)) {
         BaseObject* host = Collector::TryRecoverInteriorBase(object);
         if (host == nullptr || host == object) {
@@ -1057,17 +995,7 @@ BaseObject* AdmitYoungObject(BaseObject* object, const char* origin, const void*
             return nullptr;
         }
     }
-    if (UNLIKELY(StartWhoDiag::Enabled())) {
-        if (origin != nullptr &&
-            (std::strstr(origin, "root") != nullptr || std::strstr(origin, "alloc_buffer") != nullptr ||
-             std::strstr(origin, "seal") != nullptr)) {
-            StartWhoDiag::NoteProduced(object, StartWhoDiag::Source::ROOT_DERIVED, origin, slot, holder);
-        } else if (origin != nullptr && std::strstr(origin, "remset") != nullptr) {
-            StartWhoDiag::NoteProduced(object, StartWhoDiag::Source::REMSET, origin, slot, holder);
-        } else {
-            StartWhoDiag::NoteProduced(object, StartWhoDiag::Source::HEAP_FIELD, origin, slot, holder);
-        }
-    }
+
     return object;
 }
 
@@ -1079,9 +1007,7 @@ void PushAdmittedYoung(BaseObject* object, TracingCollector::WorkStack& workStac
 {
     BaseObject* admitted = AdmitYoungObject(object, origin, slot, holder);
     if (admitted != nullptr) {
-        if (UNLIKELY(HeldFreeDiag::Enabled())) {
-            HeldFreeDiag::NotePush(admitted, origin);
-        }
+
         workStack.push_back(admitted);
     }
 }
@@ -1091,9 +1017,7 @@ void PushAdmittedYoung(const MarkStackEntry& entry, TracingCollector::WorkStack&
 {
     BaseObject* admitted = AdmitYoungObject(entry.object(), origin, slot, holder);
     if (admitted != nullptr) {
-        if (UNLIKELY(HeldFreeDiag::Enabled())) {
-            HeldFreeDiag::NotePush(admitted, origin);
-        }
+
         workStack.push_back(MarkStackEntry(admitted, entry.mark(), entry.incLive(), entry.follow(),
                                            entry.finalizable()));
     }
@@ -1254,7 +1178,7 @@ public:
                             continue;
                         }
                         // ghostroute: residual unmarked young only (no FYS re-push of marked).
-                        EatArmDiag::NoteWasMarkedSkipFields(object);
+
                         if (object->HasRefField() && !object->IsWeakRef()) {
                             object->ForEachRefField([collector, this, object](RefField<>& field) {
                                 BaseObject* target = collector->ResolveMinorReference(field);
@@ -1275,10 +1199,7 @@ public:
                                     tr->IsMarkedObject(tr->GetMarkView<Generation::Young>(), target)) {
                                     return;
                                 }
-                                if (UNLIKELY(StartWhoDiag::Enabled())) {
-                                    StartWhoDiag::NoteProduced(target, StartWhoDiag::Source::HEAP_FIELD,
-                                                               "ghostroute.parallel.bitmap", &field, object);
-                                }
+
                                 PushAdmittedYoung(target, workStack, "ghostroute.parallel.bitmap", &field, object);
                             });
                         }
@@ -1302,7 +1223,7 @@ public:
                         if (!entry.follow()) {
                             continue;
                         }
-                        EatArmDiag::NoteWasMarkedSkipFields(object);
+
                         if (object->HasRefField() && !object->IsWeakRef()) {
                             object->ForEachRefField([collector, this, object](RefField<>& field) {
                                 BaseObject* target = collector->ResolveMinorReference(field);
@@ -1323,10 +1244,7 @@ public:
                                     tr->IsMarkedObject(tr->GetMarkView<Generation::Young>(), target)) {
                                     return;
                                 }
-                                if (UNLIKELY(StartWhoDiag::Enabled())) {
-                                    StartWhoDiag::NoteProduced(target, StartWhoDiag::Source::HEAP_FIELD,
-                                                               "ghostroute.parallel.legacy", &field, object);
-                                }
+
                                 PushAdmittedYoung(target, workStack, "ghostroute.parallel.legacy", &field, object);
                             });
                         }
@@ -1533,9 +1451,7 @@ private:
             targetRegion->IsMarkedObject(targetRegion->GetMarkView<Generation::Young>(), target)) {
             return;
         }
-        if (UNLIKELY(StartWhoDiag::Enabled())) {
-            StartWhoDiag::NoteProduced(target, StartWhoDiag::Source::HEAP_FIELD, origin, &field, holder);
-        }
+
         PushObject(target);
     }
 
@@ -1561,12 +1477,8 @@ private:
             region->IsMarkedObject(region->GetMarkView<Generation::Young>(), object)) {
             return;
         }
-        if (UNLIKELY(StartWhoDiag::Enabled())) {
-            StartWhoDiag::NoteProduced(object, StartWhoDiag::Source::HEAP_FIELD, origin);
-        }
-        if (UNLIKELY(WhoPushDiag::Enabled())) {
-            WhoPushDiag::NotePush(object, origin);
-        }
+
+
         PushObject(object);
     }
 
@@ -1602,7 +1514,7 @@ private:
                     if (!entry.follow()) {
                         return;
                     }
-                    EatArmDiag::NoteWasMarkedSkipFields(object);
+
                     if (object->HasRefField() && !object->IsWeakRef()) {
                         object->ForEachRefField([this, object](RefField<>& field) {
                             PushResidualYoungChild(field, object, "ghostroute.striped.bitmap");
@@ -1625,7 +1537,7 @@ private:
                     if (!entry.follow()) {
                         return;
                     }
-                    EatArmDiag::NoteWasMarkedSkipFields(object);
+
                     if (object->HasRefField() && !object->IsWeakRef()) {
                         object->ForEachRefField([this, object](RefField<>& field) {
                             PushResidualYoungChild(field, object, "ghostroute.striped.legacy");
@@ -1703,9 +1615,7 @@ void WCollector::TraceYoungClosureSerial(WorkStack& workStack, bool fullYoungSca
         if (ScrubMinorFreeTarget(field, target, false)) {
             return;
         }
-        if (UNLIKELY(HeldFreeDiag::Enabled())) {
-            HeldFreeDiag::NoteEnumSlot(&field, target, "closure_edge");
-        }
+
         PushYoungObject(target, workStack, "closure_edge");
     };
     while (!workStack.empty()) {
@@ -1733,7 +1643,7 @@ void WCollector::TraceYoungClosureSerial(WorkStack& workStack, bool fullYoungSca
                     if (!entry.follow()) {
                         continue;
                     }
-                    EatArmDiag::NoteWasMarkedSkipFields(object);
+
                     if (!object->HasRefField() || object->IsWeakRef()) {
                         continue;
                     }
@@ -1754,10 +1664,7 @@ void WCollector::TraceYoungClosureSerial(WorkStack& workStack, bool fullYoungSca
                             tr->IsMarkedObject(tr->GetMarkView<Generation::Young>(), target)) {
                             return;
                         }
-                        if (UNLIKELY(StartWhoDiag::Enabled())) {
-                            StartWhoDiag::NoteProduced(target, StartWhoDiag::Source::HEAP_FIELD,
-                                                       "ghostroute.serial.bitmap", &field, object);
-                        }
+
                         PushAdmittedYoung(target, workStack, "ghostroute.serial.bitmap", &field, object);
                     });
                     continue;
@@ -1768,7 +1675,7 @@ void WCollector::TraceYoungClosureSerial(WorkStack& workStack, bool fullYoungSca
             }
         } else {
             if (!LedgerInsert(reachableObjects, object)) {
-                EatArmDiag::NoteWasMarkedSkipFields(object);
+
                 if (isYoung && object->HasRefField() && !object->IsWeakRef()) {
                     object->ForEachRefField([this, &workStack, object](RefField<>& field) {
                         BaseObject* target = ResolveMinorReference(field);
@@ -1787,10 +1694,7 @@ void WCollector::TraceYoungClosureSerial(WorkStack& workStack, bool fullYoungSca
                             tr->IsMarkedObject(tr->GetMarkView<Generation::Young>(), target)) {
                             return;
                         }
-                        if (UNLIKELY(StartWhoDiag::Enabled())) {
-                            StartWhoDiag::NoteProduced(target, StartWhoDiag::Source::HEAP_FIELD,
-                                                       "ghostroute.serial.legacy", &field, object);
-                        }
+
                         PushAdmittedYoung(target, workStack, "ghostroute.serial.legacy", &field, object);
                     });
                 }

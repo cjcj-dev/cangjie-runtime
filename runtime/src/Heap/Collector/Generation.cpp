@@ -45,36 +45,15 @@
 #include "Heap/Verify/MarkCompleteVerify.h"
 #include "Heap/Verify/VerifyOption.h"
 #include "Heap/Verify/VerifyRememberedSet.h"
-#include "Heap/Verify/DiffPathExplainer.h"
 #include "Heap/Verify/TraceClear.h"
 #include "Heap/Verify/VerifyRoots.h"
 #include "Heap/Verify/Zap.h"
 #include "Heap/Verify/DiagGate.h"
 #include "Heap/Verify/NwDropAudit.h"
-#include "Heap/Verify/IdleEdgeDiag.h"
-#include "Heap/Verify/EatArmDiag.h"
-#include "Heap/Verify/FysDesignDiag.h"
-#include "Heap/Verify/F3Why2Diag.h"
 #include "Heap/Verify/GarbRegionDiag.h"
-#include "Heap/Verify/FysAuditDiag.h"
 #include "Heap/Verify/Stw2CurrentAudit.h"
-#include "Heap/Verify/FlipPromoDiag.h"
-#include "Heap/Verify/O2ORemsetDiag.h"
 #include "Heap/Verify/NullRouteCaller.h"
-#include "Heap/Verify/PlainCensus.h"
-#include "Heap/Verify/SealCheck.h"
-#include "Heap/Verify/ToverFailDiag.h"
-#include "Heap/Verify/OffpastDiag.h"
-#include "Heap/Verify/TlRawDiag.h"
-#include "Heap/Verify/StartWhoDiag.h"
-#include "Heap/Verify/StackRootSlotAttest.h"
-#include "Heap/Verify/WhoPushDiag.h"
-#include "Heap/Verify/HealPairDiag.h"
-#include "Heap/Verify/GateDropDiag.h"
-#include "Heap/Verify/NoTracedDiag.h"
 #include "Heap/Verify/SurvNodeDiag.h"
-#include "Heap/Verify/HeldFreeDiag.h"
-#include "Heap/Verify/YyEdgeDiag.h"
 #include "Heap/Collector/PromotedRegionDomain.h"
 #include "Heap/Verify/CsetEmptyWho.h"
 #include "Common/ColourPredicates.h"
@@ -540,10 +519,9 @@ void WCollector::DoYoungGarbageCollection()
         stw = std::make_unique<ScopedStopTheWorld>("young collection", true, GCPhase::GC_PHASE_ENUM);
     }
     // plaincensus Phase 1a: measure plain HeapSlots before young mark mutates colours.
-    RunPlainCensus("pre-minor", false);
     // This STW entry is the young-only mark start; old marking does not participate in a minor.
     flip_young_mark_start();
-    HeldFreeDiag::BeginYoungCycle();
+
     // minortime: STW rendezvous cost is already logged by ScopedStopTheWorld dtor
     // ("young collection stw time N us"). Body timers below exclude that wait.
     // Timeline probe (gcdirty): earliest STW point = mutator just handed control.
@@ -562,7 +540,7 @@ void WCollector::DoYoungGarbageCollection()
         MRT_PHASE_TIMER("young.flush_alloc");
         FlushAllocationRegions();
     }
-    TlRawDiag::NoteMinorEnter(minorTotalRuns + 1);
+
     if (minorTotalRuns != 0) {
         ValidateMinorReferences("round2-start", nullptr);
     }
@@ -614,17 +592,17 @@ void WCollector::DoYoungGarbageCollection()
     // fast-path (phase < ENUM) is a bare store — old→young edges never hit remset.
     // Stamp them before Acquire so pre-evacuate verify and young mark both see them.
     // idleedge: census remset-miss old→young BEFORE pinned stamp fills those gaps.
-    IdleEdgeDiag::CensusPrePinnedStamp(minorTotalRuns + 1);
+
     // fysaudit: full non-young O→Y vs mutator remset (D1/D2/D3). Observe only.
-    FysAuditDiag::OnMinorBegin(minorTotalRuns + 1);
-    FysAuditDiag::CensusPrePinned(minorTotalRuns + 1);
-    EatArmDiag::OnMinorBegin(minorTotalRuns + 1);
-    FysDesignDiag::OnMinorBegin(minorTotalRuns + 1);
+
+
+
+
     // promodomain: reset last cycle's flip-promoted table (CHECK registered==discharged).
     // Corresponds to ZGC reset_relocation_set before the new young collection.
     PromotedRegionDomain::ResetForNextMinor(minorTotalRuns + 1);
     // flippromo: open broad-vs-product window for regions demoted last minor.
-    FlipPromoDiag::OnBroadScanBegin(minorTotalRuns + 1);
+
     // Flags must be known before remset drain: FOLLOW STW1 only flips
     // (zRememberedSet.cpp:36), scan is concurrent (zRemembered.cpp:561-576).
     static const bool youngConcMark = []() {
@@ -648,7 +626,7 @@ void WCollector::DoYoungGarbageCollection()
         // d1producer: D1 counts misses against the *mutator* remset at :5204, but the pinned walk
         // above drains into this same minor. Ask here, before the drain, how many D1 edges the
         // walk put back — the residual is what FYS=0 really loses. Observe only, default off.
-        FysAuditDiag::CensusPostPinned(minorTotalRuns + 1, pinnedRemsetRecords);
+
         StoreBarrierBuffer::FlushAll(rememberedSet);
         if (youngConcFollow) {
             // S5 flip only (YOUNG_CONCURRENT.md). ScanPreviousForMinor runs after
@@ -657,15 +635,7 @@ void WCollector::DoYoungGarbageCollection()
         } else {
             rememberedSet.DrainForMinor(rememberedSlots);
         }
-        if (UNLIKELY(HeldFreeDiag::Enabled())) {
-            for (MAddress slot : rememberedSlots) {
-                if (!Heap::IsHeapAddress(slot)) {
-                    continue;
-                }
-                BaseObject* tgt = ResolveMinorReference(HeapSlotAt<>(slot));
-                HeldFreeDiag::NoteEnumSlot(reinterpret_cast<void*>(slot), tgt, "remset");
-            }
-        }
+
     }
 
     uint64_t stackScanEpoch = 0;
@@ -677,7 +647,7 @@ void WCollector::DoYoungGarbageCollection()
         Heap::GetHeap().SetGCPhase(GCPhase::GC_PHASE_ENUM);
         stw.reset();
 
-        StackRootSlotAttest::Begin("minor");
+
         EpochHandshakeStats handshake = MutatorManager::Instance().RunEpochHandshake("pre-minor-stack");
         stackScanEpoch = handshake.epoch;
         CHECK_DETAIL(stackScanEpoch != 0 && handshake.stackScanned + handshake.stackFallback == handshake.requested,
@@ -704,7 +674,7 @@ void WCollector::DoYoungGarbageCollection()
             }
         });
         VerifyStackRootPostcondition(stackScanEpoch, "minor");
-        StackRootSlotAttest::Finish();
+
     }
 
     constexpr bool fullYoungScan = false;
@@ -835,24 +805,6 @@ void WCollector::DoYoungGarbageCollection()
         TraceYoungClosure(workStack, fullYoungScan, reachableObjects, reachableVec, reachableSlots, weakSlots,
                           useBitmapLedger, reachableSlotDomain);
     }
-    // fysdesign: O→Y edges on FYS-claimed holders vs remset membership (default off).
-    if (FysDesignDiag::Enabled()) {
-        static thread_local WCollector* tlsCollector = nullptr;
-        tlsCollector = this;
-        auto resolvePtr = [](RefField<>& field) -> BaseObject* {
-            return tlsCollector->ResolveMinorReference(field);
-        };
-        FysDesignDiag::Census(reachableVec, rememberedSlots, fullYoungScan, resolvePtr);
-        FysDesignDiag::Report("post_root_mark");
-        tlsCollector = nullptr;
-    }
-    auto envOne = [](const char* name) {
-        const char* value = std::getenv(name);
-        return value != nullptr && std::strcmp(value, "1") == 0;
-    };
-    const bool consumedIdentityRequired = FysAuditDiag::Enabled() ||
-        envOne("MRT_GCV2_DIFF_PATH") || envOne("MRT_GCV2_VERIFY_REMSET") ||
-        envOne("MRT_GCV2_VERIFY_HEAP");
     const bool remsetConsumedLedgerElideActive = false;
 
     if (youngConcFollow && rememberedSlots.empty()) {
@@ -877,9 +829,7 @@ void WCollector::DoYoungGarbageCollection()
             }
         }
     }
-    // Remset consume-vs-recorded (G1SummarizeRSetStats analog) + optional dual-closure
-    // diff-path explainer. Both gated default-off; see DiffPathExplainer.h.
-    DiffPathRemsetStats remsetStats;
+    RemsetScanStats remsetStats;
     remsetStats.recorded = rememberedSlots.size();
     remsetStats.live = liveRememberedCount;
     MinorSlotSet consumedSlots;
@@ -898,16 +848,13 @@ void WCollector::DoYoungGarbageCollection()
     if (remsetHashOptRequested) {
         VLOG(REPORT,
              "[GCV2][remsetdrain][hash-opt] requested=1 active=%u recorded=%zu live=%zu consumed=%zu "
-              "consumedLedger=%zu interiors=%zu fys=%u youngConc=%u identityRequired=%u",
+             "consumedLedger=%zu interiors=%zu fys=%u youngConc=%u",
               static_cast<unsigned>(remsetConsumedLedgerElideActive), rememberedSlots.size(), remsetStats.live,
               remsetStats.consumed, consumedSlots.size(), remsetInteriorBases.size(),
-              static_cast<unsigned>(fullYoungScan), static_cast<unsigned>(youngConcMark),
-              static_cast<unsigned>(consumedIdentityRequired));
+              static_cast<unsigned>(fullYoungScan), static_cast<unsigned>(youngConcMark));
     }
     // fysaudit: D2 retained-drop + D4 live-not-consumed (product path already FYS=0 under audit).
-    if (FysAuditDiag::Enabled()) {
-        FysAuditDiag::PostRescan(rememberedSlots, liveRememberedSlots, consumedSlots, weakSlots);
-    }
+
     size_t reachableBeforeRemsetClosure = reachableVec.size();
     {
         MRT_PHASE_TIMER("young.mark_from_remset");
@@ -1234,10 +1181,7 @@ void WCollector::DoYoungGarbageCollection()
                                     region->GetMarkView<Generation::Young>(), target)) {
                                 return;
                             }
-                            if (UNLIKELY(StartWhoDiag::Enabled())) {
-                                StartWhoDiag::NoteProduced(target, StartWhoDiag::Source::HEAP_FIELD,
-                                                           "youngconc.field_rescan", &field, object);
-                            }
+
                             PushAdmittedYoung(target, fieldExtra, "youngconc.field_rescan", &field, object);
                         });
                     }
@@ -1360,10 +1304,7 @@ void WCollector::DoYoungGarbageCollection()
                     return;
                 }
                 // Direct paint (do not rely solely on workStack drain under concurrent residue).
-                if (UNLIKELY(StartWhoDiag::Enabled())) {
-                    StartWhoDiag::NoteProduced(obj, StartWhoDiag::Source::ROOT_DERIVED,
-                                               "youngstatic.seal", &root);
-                }
+
                 (void)MarkObject(obj);
                 PushAdmittedYoung(MarkStackEntry::FollowOnly(obj), workStack, "youngstatic.seal");
                 ++sealed;
@@ -1459,9 +1400,7 @@ void WCollector::DoYoungGarbageCollection()
                         } else {
                             ++fixpointTargetNonHeap;
                         }
-                        EatArmDiag::NoteFixpointEdge(object, target,
-                                                    target == nullptr ? EatArmDiag::FixpointReason::TARGET_NULL
-                                                                      : EatArmDiag::FixpointReason::TARGET_NONHEAP);
+
                         return;
                     }
                     if (!Collector::PlausibleManagedObjectGate("iorfix.fixpoint.target", target)) {
@@ -1471,27 +1410,24 @@ void WCollector::DoYoungGarbageCollection()
                             ++fixpointTargetRecovered;
                         } else {
                             ++fixpointTargetGateSkip;
-                            EatArmDiag::NoteFixpointEdge(object, target, EatArmDiag::FixpointReason::PLAUSIBLE_FAIL);
+
                             return;
                         }
                     }
                     RegionInfo* region = RegionInfo::GetRegionInfoAt(reinterpret_cast<MAddress>(target));
                     if (region == nullptr || !region->IsYoungRegion()) {
                         ++fixpointTargetNotYoung;
-                        EatArmDiag::NoteFixpointEdge(object, target, EatArmDiag::FixpointReason::NOT_YOUNG);
+
                         return;
                     }
                     if (region->IsMarkedObject(region->GetMarkView<Generation::Young>(), target)) {
                         ++fixpointTargetAlreadyMarked;
-                        EatArmDiag::NoteFixpointEdge(object, target, EatArmDiag::FixpointReason::ALREADY_MARKED);
+
                         return;
                     }
                     ++fixpointAdmitted;
-                    EatArmDiag::NoteFixpointEdge(object, target, EatArmDiag::FixpointReason::ADMIT);
-                    if (UNLIKELY(StartWhoDiag::Enabled())) {
-                        StartWhoDiag::NoteProduced(target, StartWhoDiag::Source::HEAP_FIELD,
-                                                   "iorfix.fixpoint", &field, object);
-                    }
+
+
                     blackmarkExtra.push_back(target);
                 });
             }
@@ -1527,50 +1463,22 @@ void WCollector::DoYoungGarbageCollection()
          fixpointTargetAlreadyMarked, fixpointAdmitted, fixpointTotalExtra, fixpointReachableAdded,
          reachableVec.size(), static_cast<unsigned long long>(fixpointScanNs),
          static_cast<unsigned long long>(fixpointClosureNs));
-    EatArmDiag::DumpMinorSummary(minorTotalRuns + 1);
-    static const bool verifyRemsetEnabled = []() {
-        const char* value = std::getenv("MRT_GCV2_VERIFY_REMSET");
-        return value != nullptr && std::strcmp(value, "1") == 0;
-    }();
-    static const bool verifyHeapEnabled = []() {
-        const char* value = std::getenv("MRT_GCV2_VERIFY_HEAP");
-        return value != nullptr && std::strcmp(value, "1") == 0;
-    }();
-    std::unordered_set<BaseObject*> rootReachableForVerify;
-    const bool needRootReachable = verifyRemsetEnabled || verifyHeapEnabled;
-    {
-        size_t runIndex = minorTotalRuns + 1;
-        auto visitRoots = [this, &allocationRoots](const std::function<void(BaseObject*)>& visitor) {
-            for (BaseObject* object : allocationRoots) {
-                visitor(object);
-            }
-            VisitMinorRoots(visitor);
-        };
-        auto resolveField = [this](RefField<>& field) -> BaseObject* { return ResolveMinorReference(field); };
-        if (needRootReachable) {
-            RunDiffPathExplainer(runIndex, visitRoots, resolveField, rememberedSlots, consumedSlots,
-                                 &minorCandidateRegions, remsetStats, &rootReachableForVerify);
-            VerifyRememberedSetInvariant("pre-evacuate", rememberedSlots, false,
-                                         verifyRemsetEnabled ? &rootReachableForVerify : nullptr);
-        } else {
-            RunDiffPathExplainer(runIndex, visitRoots, resolveField, rememberedSlots, consumedSlots,
-                                 &minorCandidateRegions, remsetStats, nullptr);
-            VerifyRememberedSetInvariant("pre-evacuate", rememberedSlots, false, nullptr);
-        }
-    }
-    if (UNLIKELY(YyEdgeDiag::Enabled())) {
-        YyEdgeDiag::PublishProductVec(reachableVec);
-    }
+
+    // No independent full-root closure is available after deleting the empty
+    // explainer. nullptr means "not measured"; an empty set must mean a closure
+    // actually ran and found no holders.
+    VerifyRememberedSetInvariant("pre-evacuate", rememberedSlots, false, nullptr);
+
     // Full-heap object invariant H (HotSpot G1HeapVerifier::verify inventory #10).
     // Independent ForEachObj walk; gated by MRT_GCV2_VERIFY_HEAP (default off).
     // Timeline (gcdirty): also force as post-mark under POST_EVAC so first-dirty bracketing
     // does not require global VERIFY_HEAP.
     if (kVerifyPostEvac) {
         VLOG(REPORT, "[GCV2][verify][post-evac] enter point=post-mark run=%zu", minorTotalRuns + 1);
-        VerifyHeapObjects("post-mark", true, verifyHeapEnabled ? &rootReachableForVerify : nullptr);
+        VerifyHeapObjects("post-mark", true, nullptr);
         VLOG(REPORT, "[GCV2][verify][post-evac] point=post-mark run=%zu", minorTotalRuns + 1);
     } else {
-        VerifyHeapObjects("pre-evacuate", false, verifyHeapEnabled ? &rootReachableForVerify : nullptr);
+        VerifyHeapObjects("pre-evacuate", false, nullptr);
     }
 
     size_t liveBytes = 0;
@@ -1692,8 +1600,8 @@ void WCollector::DoYoungGarbageCollection()
     }
     // STEER4: DumpScrubCostAndReset is a no-op unless MRT_GCV2_SCRUB_COST=1.
     RegionManager::DumpScrubCostAndReset("post-minor");
-    IdleEdgeDiag::DumpProcessTotals("post-minor");
-    FysAuditDiag::DumpProcessTotals("post-minor");
-    O2ORemsetDiag::DumpAndMaybeReset("post-minor", /*reset*/ true);
+
+
+
 }
 } // namespace MapleRuntime

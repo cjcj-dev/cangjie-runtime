@@ -34,11 +34,6 @@
 #include "Heap/Barrier/RememberedSet.h"
 #include "Heap/HeapWork.h"
 #include "Heap/Verify/DiagGate.h"
-#include "Heap/Verify/F3Why2Diag.h"
-#include "Heap/Verify/FlipPromoDiag.h"
-#include "Heap/Verify/IdleEdgeDiag.h"
-#include "Heap/Verify/O2ORemsetDiag.h"
-#include "Heap/Verify/OffpastDiag.h"
 #include "Heap/Verify/CsetEmptyWho.h"
 #include "Heap/Verify/TraceClear.h"
 #include "Heap/Verify/FillerZeroDiag.h"
@@ -386,7 +381,7 @@ size_t RegionManager::RecordPromotedCrossGenEdges(RegionInfo* region)
             MAddress slot = reinterpret_cast<MAddress>(&field);
             if (target == nullptr || !Heap::IsHeapAddress(target)) {
                 NotePromoteGapField(object, field, false, false);
-                IdleEdgeDiag::NotePromoteTimeTarget(slot, /*null/nonheap*/ 3, false);
+
                 return;
             }
             RegionInfo* targetRegion = RegionInfo::GetRegionInfoAt(reinterpret_cast<MAddress>(target));
@@ -395,12 +390,12 @@ size_t RegionManager::RecordPromotedCrossGenEdges(RegionInfo* region)
                 ++recorded;
                 // promodomain dual-run: old product edge set for bidirectional reconcile.
                 PromotedRegionDomain::NoteOldProductRecord(slot);
-                FlipPromoDiag::NoteProductRecord(slot, /*path*/ 0);
+
                 NotePromoteGapField(object, field, true, false);
-                IdleEdgeDiag::NotePromoteTimeTarget(slot, /*young*/ 1, true);
+
             } else {
                 NotePromoteGapField(object, field, false, false);
-                IdleEdgeDiag::NotePromoteTimeTarget(slot, /*old*/ 2, false);
+
             }
         });
     };
@@ -408,7 +403,7 @@ size_t RegionManager::RecordPromotedCrossGenEdges(RegionInfo* region)
     if (recorded != 0) {
         g_promotedCrossGenEdgeCount.fetch_add(recorded, std::memory_order_relaxed);
     }
-    FlipPromoDiag::NotePromotedRegion(region, /*path*/ 0, recorded);
+
     return recorded;
 }
 
@@ -451,7 +446,7 @@ size_t RegionManager::RecordPinnedCrossGenEdges()
                     MAddress slot = reinterpret_cast<MAddress>(&field);
                     rememberedSet.Record(slot);
                     recorded.fetch_add(1, std::memory_order_relaxed);
-                    FlipPromoDiag::NoteBroadRecord(region, slot);
+
                 }
             });
         });
@@ -1095,15 +1090,7 @@ void RegionManager::ScrubRememberedSetForRegion(RegionInfo* region)
     }
     MAddress rStart = static_cast<MAddress>(region->GetRegionStart());
     MAddress rEnd = static_cast<MAddress>(region->GetRegionEnd());
-    if (!O2ORemsetDiag::Enabled()) {
-        (void)Heap::GetHeap().GetRememberedSet().ClearRegion(rStart, rEnd, nullptr);
-        return;
-    }
-    size_t words = 0;
-    size_t scrubbed = Heap::GetHeap().GetRememberedSet().ClearRegion(rStart, rEnd, &words);
-    if (!region->IsYoungRegion()) {
-        O2ORemsetDiag::NoteScrubNonYoung(region, scrubbed);
-    }
+    (void)Heap::GetHeap().GetRememberedSet().ClearRegion(rStart, rEnd, nullptr);
 }
 
 void RegionManager::DumpScrubCostAndReset(const char* point)
@@ -1123,7 +1110,6 @@ void RegionManager::ReclaimRegion(RegionInfo* region)
     // region, so an abort here would trade an unproven assumption for a hard stop. Count and
     // name it instead, under the default-off account gate; a non-zero funnel_held is the
     // signal that the enumeration was wrong.
-    RouteDestHold::NoteReclaimFunnel(region, "ReclaimRegion");
     size_t num = region->GetUnitCount();
     size_t unitIndex = region->GetUnitIdx();
     if (num >= HUGE_PAGE) {
@@ -1159,7 +1145,6 @@ void RegionManager::ReclaimRegionToMarkQuarantine(RegionInfo* region)
         return;
     }
     // routedest: census only, see ReclaimRegion.
-    RouteDestHold::NoteReclaimFunnel(region, "ReclaimRegionToMarkQuarantine");
     size_t num = region->GetUnitCount();
     size_t unitIndex = region->GetUnitIdx();
     if (num >= HUGE_PAGE) {
@@ -1187,11 +1172,10 @@ size_t RegionManager::ReleaseRegion(RegionInfo* region)
         return heldBytes;
     }
     // routedest: census only, see ReclaimRegion.
-    RouteDestHold::NoteReclaimFunnel(region, "ReleaseRegion");
-    RegionLifeDiag::NoteRelease(region, RegionLifeDiag::PATH_RELEASE_LARGE);
+
     // holdercapture: large regions above the release threshold never reach CollectRegion,
     // so the snapshot has to be taken on this path too or the face is lost unrecorded.
-    MarkFaceSnap::NoteRegionFree(region, RegionLifeDiag::PATH_RELEASE_LARGE);
+
     size_t res = region->GetRegionSize();
     size_t num = region->GetUnitCount();
     size_t unitIndex = region->GetUnitIdx();
@@ -1364,13 +1348,9 @@ void RegionManager::ClearNotRelocatableThisCycleFlags()
 // held_regions, which is the only way to tell that failure apart from the opposite one.
 void RegionManager::ClearRouteDestHoldFlags()
 {
-    size_t heldRegions = 0;
-    size_t heldBytes = 0;
-    auto clearList = [&heldRegions, &heldBytes](RegionList& list) {
-        list.VisitAllRegions([&heldRegions, &heldBytes](RegionInfo* region) {
+    auto clearList = [](RegionList& list) {
+        list.VisitAllRegions([](RegionInfo* region) {
             if (region->IsRouteDestHeld()) {
-                ++heldRegions;
-                heldBytes += region->GetRegionSize();
                 region->SetRouteDestHold(0);
             }
         });
@@ -1386,7 +1366,6 @@ void RegionManager::ClearRouteDestHoldFlags()
     clearList(oldLargeRegionList);
     clearList(fullTraceRegions);
     clearList(largeTraceRegions);
-    RouteDestHold::NoteClearPoint(heldRegions, heldBytes);
 }
 
 void RegionManager::AssemblePinnedGarbageCandidates(bool collectAll)
@@ -1735,11 +1714,11 @@ size_t RegionManager::ExemptFromRegions()
                 rawPointerPinnedRegionList.PrependRegion(del, RegionInfo::RegionType::RAW_POINTER_PINNED_REGION);
                 continue;
             }
-            RegionLifeDiag::SetNextFreePath(RegionLifeDiag::PATH_CSET_EMPTY);
+
             TraceClear::NoteRange(del->GetRegionStart(), del->GetRegionSize(),
                                   residual != 0 ? "coll_live" : "coll_empty", del, liveBytes,
                                   static_cast<unsigned>(Generation::Old),
-                                  RegionLifeDiag::PATH_CSET_EMPTY);
+                                  0);
             ScrubRememberedSetForRegion(del);
             garbageRegionList.PrependRegion(del, RegionInfo::RegionType::GARBAGE_REGION);
             continue;
@@ -2039,7 +2018,7 @@ RegionInfo* RegionManager::TakeRegion(size_t num, RegionInfo::UnitRole type, boo
             // fwdinflight: the reuse edge. ClearUnits zeroes the payload with no region
             // rwLock held -- CollectRegion's write lock (RegionManager.h:436-447) covers only
             // the list move, not this. Count readers still inside a route lookup on it.
-            FwdInflight::NoteRetireRegion(head, FwdInflight::Retire::TAKE_GARBAGE);
+
             auto idx = head->GetUnitIdx();
             {
                 // portmutreloc: ZForwarding::detach_page before the page goes back to the
@@ -2389,7 +2368,7 @@ size_t RegionManager::CollectFreePinnedSlots(RegionInfo* region)
     // pinroot: raw-pointer pin is a liveness hold — do not free any slot while count > 0.
     // AddRawPointerObject only bumps this counter (no mark bit / root set); reclaim must honour it.
     if (region->GetRawPointerObjectCount() > 0) {
-        PinFireDiag::NoteSkipFreeSlots(region);
+
         return 0;
     }
     // traverse pinned region to reclaim free pinned objects.
@@ -2415,7 +2394,7 @@ size_t RegionManager::CollectFreePinnedSlots(RegionInfo* region)
 
 size_t RegionManager::CollectPinnedGarbage()
 {
-    PinFireDiag::NoteCollectPinnedGarbage();
+
     {
         std::lock_guard<std::mutex> lock(freePinnedSlotListMutex);
         freePinnedSlotLists.Clear();
@@ -2425,7 +2404,7 @@ size_t RegionManager::CollectPinnedGarbage()
     while (region != nullptr) {
         // pinroot: whole-region reclaim also ignores pins; skip while any raw pointer holds.
         if (region->GetRawPointerObjectCount() > 0) {
-            PinFireDiag::NoteSkipRegion(region);
+
             region = region->GetNextRegion();
             continue;
         }
@@ -2438,7 +2417,7 @@ size_t RegionManager::CollectPinnedGarbage()
             auto fixToObj = [](BaseObject* obj) { ReleaseNativeResource(obj); };
             del->VisitAllObjects(fixToObj);
 
-            RegionLifeDiag::SetNextFreePath(RegionLifeDiag::PATH_PINNED_GARBAGE);
+
             garbageSize += CollectRegion<Generation::Old>(del);
             continue;
         } else {
@@ -2446,7 +2425,7 @@ size_t RegionManager::CollectPinnedGarbage()
             region = region->GetNextRegion();
         }
     }
-    PinFireDiag::Report("post-CollectPinnedGarbage");
+
     return garbageSize;
 }
 
@@ -2466,18 +2445,10 @@ size_t RegionManager::CollectLargeGarbage()
         // surely as at the top of ReleaseRegion. Moving the sample moves the zero; it does
         // not remove it.
         //
-        // What is actually measurable is disagreement between faces. GetMarkedRegionFlag
-        // returns 0 from its first line when the view's epoch is not the region's current
-        // one (RegionInfo.h), so a region marked under one epoch can read dead under the
-        // epoch this decision binds. MarkFaceSnap therefore records the predicate's own
-        // view AND the route view side by side, plus whether the route view's epoch gate
-        // was even open - without that last column, "the faces agree" and "the second face
-        // was unreadable" are the same observation.
-        //
         // The mark bit read through the view below is a control, not the finding: it must
         // be 0 on every released region, and if it ever is not, the reading of this
         // predicate is wrong and the rest of the measurement is void.
-        MarkFaceSnap::NoteBeforeReleaseDecision(region);
+
         // for large region, the offset of obj is 0
         MarkView<Generation::Old> view = region->GetMarkView<Generation::Old>();
         if (!region->IsSurvivedObject(view, 0)) {
@@ -2490,7 +2461,7 @@ size_t RegionManager::CollectLargeGarbage()
             if (del->GetRegionSize() > RegionInfo::LARGE_OBJECT_RELEASE_THRESHOLD) {
                 garbageSize += ReleaseRegion(del);
             } else {
-                RegionLifeDiag::SetNextFreePath(RegionLifeDiag::PATH_LARGE_GARBAGE);
+
                 garbageSize += CollectRegion<Generation::Old>(del);
             }
         } else {
@@ -2607,7 +2578,7 @@ void RegionManager::DumpRegionStats(const char* msg, bool dumpToError) const
     size_t allHeapSize = regionHeapEnd - regionHeapStart;
     size_t allUnits = allHeapSize / RegionInfo::UNIT_SIZE;
     size_t inactiveUnits = (regionHeapEnd - inactiveZone) / RegionInfo::UNIT_SIZE;
-    
+
     size_t usedUnitCount = GetUsedUnitCount();
     size_t usedObjSize = GetAllocatedSize();
     size_t releasedUnits = freeRegionManager.GetReleasedUnitCount();
@@ -2853,7 +2824,7 @@ bool RegionManager::RouteOrCompactRegionImpl(RegionInfo* region)
 {
     CHECK(region->IsRoutingState());
     CHECK_DETAIL(region->GetRawPointerObjectCount() <= 0, "pinned region shouldn't be moved");
-    OffpastDiag::NoteRouteEnter(region);
+
     // densifycut (G6): densify apply+walk+census removed. Product path already never applied
     // (MRT_GCV2_DENSIFY default off). Exit net retained: allLiveBitsHaveReceipt + abandon +
     // AdmitForRoute + VisitLiveObjectsUntilFalse. densifyOutcome always "not densified" (1).
@@ -2874,7 +2845,6 @@ bool RegionManager::RouteOrCompactRegionImpl(RegionInfo* region)
         fromBytes = bitmapLive;
     }
     // permwho: fromBytes now sizes the reservation to cover the prefix-sum face.
-    PermWhoAdmit::NoteRoutePlan(region, fromBytes, /*densifyOutcome=*/1u);
     AllocBuffer* buffer = AllocBuffer::GetOrCreateAllocBuffer();
     RegionInfo* toRegion1 = buffer->GetRegion();
     // resolveto / offpast: CompactRegion prepends the still-ghost region as TL and the old
@@ -3011,12 +2981,6 @@ void RegionManager::CompactRegion(RegionInfo* region)
     MAddress regionStart = region->GetRegionStart();
     DLOG(REGION, "compact region %p@[%#zx+%zu, %#zx) type %u", region, regionStart,
         region->GetLiveByteCount(), region->GetRegionEnd(), region->GetRegionType());
-    const bool youngRegion = region->IsYoungRegion();
-    // compactrem: count calls + per-object geometry / teset-in-from (default-off).
-    if (O2ORemsetDiag::Enabled()) {
-        O2ORemsetDiag::NoteCompactCall(/*overload*/ 1, youngRegion);
-    }
-    RememberedSet& rememberedSet = Heap::GetHeap().GetRememberedSet();
     MAddress regionLimit = region->GetRegionAllocPtr();
     CopyCollector& collector = reinterpret_cast<CopyCollector&>(Heap::GetHeap().GetCollector());
     // uafclose: Admit/GetRoute/VisitLive use liveInfo0 after PrepareForwardable. Compact must
@@ -3042,24 +3006,13 @@ void RegionManager::CompactRegion(RegionInfo* region)
             MAddress toAddress = region->Alloc(size);
             BaseObject* toObj = from_region_addr(toAddress);
             DLOG(FORWARD, "compact obj %p<%p>(%zu) to %p", currentObj, currentObj->GetTypeInfo(), size, toObj);
-            if (O2ORemsetDiag::Enabled() && !youngRegion) {
-                size_t remIn = 0;
-                MAddress fromEnd = currentPtr + size;
-                for (MAddress slot : rememberedSet.Snapshot()) {
-                    if (slot >= currentPtr && slot < fromEnd) {
-                        ++remIn;
-                    }
-                }
-                O2ORemsetDiag::NoteCompactRemsetInFrom(remIn);
-            }
+
             collector.CopyObject(*currentObj, *toObj, size);
             toObj->SetStateCode(ObjectState::NORMAL);
             std::atomic_thread_fence(std::memory_order_release);
             ForwardingTable::InsertMapping(currentPtr, toAddress);
             region->RecordCompactRoute(offset, toAddress);
-            if (O2ORemsetDiag::Enabled()) {
-                O2ORemsetDiag::NoteCompactObjectMove(currentObj, toObj, size, youngRegion);
-            }
+
         }
         currentPtr += size;
     }
@@ -3081,7 +3034,7 @@ void RegionManager::CompactRegion(RegionInfo* region)
 
     region->ResetCensusBoundary();
 
-    OffpastDiag::NoteCompactDone(region);
+
     EnlistCompactedRegionForAllocator(region);
 }
 
@@ -3152,11 +3105,6 @@ void RegionManager::CompactRegion(RegionInfo* region, RegionInfo* toRegion1)
     DLOG(REGION, "compact region %p@[%#zx+%zu, %#zx) type %u to region %p@%#zx:%#zx",
         region, regionStart, region->GetLiveByteCount(), region->GetRegionEnd(), region->GetRegionType(),
         toRegion1, toRegion1->GetRegionStart(), toRegion1->GetRegionAllocPtr());
-    const bool youngRegion = region->IsYoungRegion();
-    if (O2ORemsetDiag::Enabled()) {
-        O2ORemsetDiag::NoteCompactCall(/*overload*/ 2, youngRegion);
-    }
-    RememberedSet& rememberedSet = Heap::GetHeap().GetRememberedSet();
     MAddress currentPtr = regionStart;
     BaseObject* currentObj = from_region_addr(currentPtr);
     CopyCollector& collector = reinterpret_cast<CopyCollector&>(Heap::GetHeap().GetCollector());
@@ -3177,24 +3125,13 @@ void RegionManager::CompactRegion(RegionInfo* region, RegionInfo* toRegion1)
             }
             BaseObject* toObj = from_region_addr(toAddress);
             DLOG(FORWARD, "compact obj %p<%p>(%zu) to %p", currentObj, currentObj->GetTypeInfo(), size, toObj);
-            if (O2ORemsetDiag::Enabled() && !youngRegion) {
-                size_t remIn = 0;
-                MAddress fromEnd = currentPtr + size;
-                for (MAddress slot : rememberedSet.Snapshot()) {
-                    if (slot >= currentPtr && slot < fromEnd) {
-                        ++remIn;
-                    }
-                }
-                O2ORemsetDiag::NoteCompactRemsetInFrom(remIn);
-            }
+
             collector.CopyObject(*currentObj, *toObj, size);
             toObj->SetStateCode(ObjectState::NORMAL);
             std::atomic_thread_fence(std::memory_order_release);
             ForwardingTable::InsertMapping(currentPtr, toAddress);
             region->RecordCompactRoute(offset, toAddress);
-            if (O2ORemsetDiag::Enabled()) {
-                O2ORemsetDiag::NoteCompactObjectMove(currentObj, toObj, size, youngRegion);
-            }
+
         }
         currentPtr += size;
         currentObj = from_region_addr(currentPtr);
@@ -3214,24 +3151,13 @@ void RegionManager::CompactRegion(RegionInfo* region, RegionInfo* toRegion1)
             MAddress toAddress = region->Alloc(size);
             BaseObject* toObj = from_region_addr(toAddress);
             DLOG(FORWARD, "compact obj %p<%p>(%zu) to %p", currentObj, currentObj->GetTypeInfo(), size, toObj);
-            if (O2ORemsetDiag::Enabled() && !youngRegion) {
-                size_t remIn = 0;
-                MAddress fromEnd = currentPtr + size;
-                for (MAddress slot : rememberedSet.Snapshot()) {
-                    if (slot >= currentPtr && slot < fromEnd) {
-                        ++remIn;
-                    }
-                }
-                O2ORemsetDiag::NoteCompactRemsetInFrom(remIn);
-            }
+
             collector.CopyObject(*currentObj, *toObj, size);
             toObj->SetStateCode(ObjectState::NORMAL);
             std::atomic_thread_fence(std::memory_order_release);
             ForwardingTable::InsertMapping(currentPtr, toAddress);
             region->RecordCompactRoute(offset, toAddress);
-            if (O2ORemsetDiag::Enabled()) {
-                O2ORemsetDiag::NoteCompactObjectMove(currentObj, toObj, size, youngRegion);
-            }
+
         }
         currentPtr += size;
     }
@@ -3252,7 +3178,7 @@ void RegionManager::CompactRegion(RegionInfo* region, RegionInfo* toRegion1)
 
     region->ResetCensusBoundary();
 
-    OffpastDiag::NoteCompactDone(region);
+
     EnlistCompactedRegionForAllocator(region);
 }
 
@@ -3352,7 +3278,7 @@ void RegionManager::ForwardRegion(RegionInfo* region)
             MarkView<Generation::Young> promotionView = region->GetMarkView<Generation::Young>();
             (void)region->PromoteYoungRegion(promotionView);
         }
-        RegionLifeDiag::SetNextFreePath(RegionLifeDiag::PATH_FWD_KNOWN_EMPTY);
+
         CollectRegion<G>(region);
         return;
     }
@@ -3470,9 +3396,7 @@ void RegionManager::ForwardRegion(RegionInfo* region)
             // remset bits by field offset (zRelocate.cpp:652-731). From bits are scrubbed
             // later by CollectRegion → ClearRegion (no in-place overlap on this path:
             // RouteObject always mints a distinct to address).
-            if (youngRegion && toObj != nullptr && O2ORemsetDiag::Enabled()) {
-                O2ORemsetDiag::NoteYoungObjectForward();
-            }
+
             if (youngRegion && toObj != nullptr) {
                 if (!Collector::PlausibleManagedObjectGate("ForwardRegion.to", toObj)) {
                     NoteFwdToGateRefuse("young", toObj);
@@ -3482,19 +3406,19 @@ void RegionManager::ForwardRegion(RegionInfo* region)
                     MAddress slot = reinterpret_cast<MAddress>(&field);
                     if (target == nullptr || !Heap::IsHeapAddress(target)) {
                         NotePromoteGapField(toObj, field, false, true);
-                        IdleEdgeDiag::NotePromoteTimeTarget(slot, /*null/nonheap*/ 3, false);
+
                         return;
                     }
                     RegionInfo* targetRegion = RegionInfo::GetRegionInfoAt(reinterpret_cast<MAddress>(target));
                     if (targetRegion != nullptr && targetRegion->IsYoungRegion()) {
                         rememberedSet.Record(slot);
                         ++promotedRecords;
-                        FlipPromoDiag::NoteProductRecord(slot, /*path*/ 1);
+
                         NotePromoteGapField(toObj, field, true, true);
-                        IdleEdgeDiag::NotePromoteTimeTarget(slot, /*young*/ 1, true);
+
                     } else {
                         NotePromoteGapField(toObj, field, false, true);
-                         IdleEdgeDiag::NotePromoteTimeTarget(slot, /*old*/ 2, false);
+
                     }
                 });
                 }
@@ -3507,23 +3431,7 @@ void RegionManager::ForwardRegion(RegionInfo* region)
                 MAddress toBase = reinterpret_cast<MAddress>(toObj);
                 size_t moved = rememberedSet.TransferObjectSlots(fromBase, toBase, sz);
                 recordedOnToForOld += moved;
-                if (O2ORemsetDiag::Enabled()) {
-                    O2ORemsetDiag::NoteOldObjectForward(obj, toObj, sz);
-                    ++oldObjForwarded;
-                    if (toObj->HasRefField()) {
-                        toObj->ForEachRefField([&o2yOnToForOld](RefField<>& field) {
-                            BaseObject* target = to_object(field.GetTargetObject());
-                            if (target == nullptr || !Heap::IsHeapAddress(target)) {
-                                return;
-                            }
-                            RegionInfo* targetRegion =
-                                RegionInfo::GetRegionInfoAt(reinterpret_cast<MAddress>(target));
-                            if (targetRegion != nullptr && targetRegion->IsYoungRegion()) {
-                                ++o2yOnToForOld;
-                            }
-                        });
-                    }
-                }
+
                 }
             }
             // tipnull arm R: receipt = object FORWARDED (Copy wrote tip), not soft-keep from.
@@ -3703,7 +3611,7 @@ void RegionManager::ForwardRegion(RegionInfo* region)
             const uint64_t liveBefore = region->GetLiveByteCount();
             size_t validBefore = 0;
             size_t markedBefore = 0;
-            F3Why2Diag::CountMarks(region, validBefore, markedBefore);
+
             region->VerifyLiveBooks(markView, "pre-ResetLiveMapAfterForward");
             // Simulated split for ORDER: live-only then mark-only was the old bug;
             // measure residual marks after live-zero before joint reset.
@@ -3711,14 +3619,13 @@ void RegionManager::ForwardRegion(RegionInfo* region)
             const uint64_t liveAfterReset = region->GetLiveByteCount();
             size_t validAfterReset = 0;
             size_t markedAfterReset = 0;
-            F3Why2Diag::CountMarks(region, validAfterReset, markedAfterReset);
+
             // Joint publish (restores live empty + epoch bump in one API).
             region->ResetLiveMapAfterForward(markView);
             size_t validAfterInv = 0;
             size_t markedAfterInv = 0;
-            F3Why2Diag::CountMarks(region, validAfterInv, markedAfterInv);
-            F3Why2Diag::NoteForwardOrder(region, liveBefore, markedBefore, liveAfterReset, markedAfterReset,
-                                         markedAfterInv);
+
+
             region->VerifyLiveBooks(markView, "post-ResetLiveMapAfterForward");
             if (youngRegion) {
                 if (promotedRecords != 0) {
@@ -3726,18 +3633,6 @@ void RegionManager::ForwardRegion(RegionInfo* region)
                 }
                 MarkView<Generation::Young> promotionView = region->GetMarkView<Generation::Young>();
                 (void)region->PromoteYoungRegion(promotionView);
-            } else if (O2ORemsetDiag::Enabled()) {
-                // Pre-scrub census: remset bits still at from-addresses (Transfer moved to to).
-                size_t remsetInFrom = 0;
-                MAddress rStart = static_cast<MAddress>(region->GetRegionStart());
-                MAddress rEnd = static_cast<MAddress>(region->GetRegionEnd());
-                for (MAddress slot : rememberedSet.Snapshot()) {
-                    if (slot >= rStart && slot < rEnd) {
-                        ++remsetInFrom;
-                    }
-                }
-                O2ORemsetDiag::NoteOldRegionForwarded(region, remsetInFrom, oldObjForwarded, o2yOnToForOld,
-                                                     recordedOnToForOld);
             }
             (void)validBefore;
             (void)validAfterReset;

@@ -33,10 +33,6 @@ runtime/src/Heap/WCollector/EnumBarrier.cpp:305	CopyStructArrayImpl receives an 
 runtime/src/Heap/WCollector/EnumBarrier.cpp:313	CopyStructArrayImpl receives an array destination and must enumerate overwritten reference fields.
 runtime/src/Heap/Allocator/RegionSpace.cpp:345	AllocBlack has just allocated and initialized addr as an object start before publishing it to the grey list.
 runtime/src/Heap/Allocator/RegionInfo.h:1298	NullRouteCaller::Host stores an object address as an integer diagnostic provenance token.
-runtime/src/Heap/Verify/EatArmDiag.cpp:516	The opt-in self-test uses a non-dereferenced fake host identity to exercise diagnostic accounting.
-runtime/src/Heap/Verify/EatArmDiag.cpp:517	The opt-in self-test uses a non-dereferenced fake target identity to exercise diagnostic accounting.
-runtime/src/Heap/Verify/RouteDom.cpp:135	The route-domain probe forms a region-local candidate and checks mark metadata before accepting it.
-runtime/src/Heap/Verify/RouteDom.cpp:184	The bounded region walk forms a candidate and validates heap membership plus a plausible object start.
 runtime/src/Interpreter/InterpreterSpecific.cpp:186	DYN_Placeholder is the interpreter's void-pointer ABI carrier for a RootSlot placeholder.
 runtime/src/Interpreter/InterpreterSpecific.cpp:347	DYN_ObjRef is the interpreter's void-pointer ABI carrier for the object tested by InstanceOf.
 runtime/src/Interpreter/InterpreterSpecific.cpp:383	DYN_ObjRef is the interpreter's void-pointer ABI carrier for the value written to a static root.

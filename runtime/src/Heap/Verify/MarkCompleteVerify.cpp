@@ -22,7 +22,6 @@
 #include "Heap/Heap.h"
 #include "Heap/Verify/DiagGate.h"
 #include "Heap/Verify/InteriorEdgeClass.h"
-#include "Heap/Verify/NoTracedDiag.h"
 #include "Heap/Verify/SurvNodeDiag.h"
 #include "Mutator/MutatorManager.h"
 #include "ObjectModel/MArray.h"
@@ -34,6 +33,23 @@ namespace MarkCompleteVerify {
 namespace {
 
 constexpr size_t kSampleLimit = 32;
+constexpr size_t kTraceWatchSlots = 256;
+constexpr size_t kTraceWatchMask = kTraceWatchSlots - 1;
+
+struct TraceWatchSlot {
+    std::atomic<uintptr_t> addr{ 0 };
+    std::atomic<uint64_t> traced{ 0 };
+    std::atomic<uint64_t> moved{ 0 };
+};
+
+TraceWatchSlot g_traceWatch[kTraceWatchSlots];
+std::atomic<uint64_t> g_traceWatched{ 0 };
+std::atomic<uint64_t> g_traceCollisions{ 0 };
+
+size_t TraceWatchSlotOf(uintptr_t addr)
+{
+    return static_cast<size_t>((addr >> 4) & kTraceWatchMask);
+}
 
 struct Stats {
     // Walk coverage -- the positive controls.  A defect count of zero next to a
@@ -219,7 +235,7 @@ void ReportDeadEdge(Stats& stats, size_t maxSamples, const char* point, BaseObje
     // so the next cycle says whether this holder is ever followed at all. That is
     // the split between "painted live without a field scan" and "scanned, but the
     // target did not get marked".
-    NoTracedDiag::Watch(holder);
+    WatchHolder(holder);
     const unsigned holderMarked = RegionSpace::IsMarkedObject<Generation::Old>(holder) ? 1u : 0u;
     const unsigned holderResurrected = RegionSpace::IsResurrectedObject(holder) ? 1u : 0u;
     const unsigned targetMarkedBit = RegionSpace::IsMarkedObject<Generation::Old>(target) ? 1u : 0u;
@@ -662,6 +678,89 @@ size_t MaxSamples()
 
 } // namespace
 
+void WatchHolder(const BaseObject* obj)
+{
+    if (!Enabled() || obj == nullptr) {
+        return;
+    }
+    const uintptr_t addr = reinterpret_cast<uintptr_t>(obj);
+    TraceWatchSlot& slot = g_traceWatch[TraceWatchSlotOf(addr)];
+    uintptr_t expected = slot.addr.load(std::memory_order_acquire);
+    if (expected == addr) {
+        return;
+    }
+    if (expected != 0) {
+        g_traceCollisions.fetch_add(1, std::memory_order_relaxed);
+        return;
+    }
+    if (slot.addr.compare_exchange_strong(expected, addr, std::memory_order_acq_rel,
+                                          std::memory_order_acquire)) {
+        slot.traced.store(0, std::memory_order_relaxed);
+        slot.moved.store(0, std::memory_order_relaxed);
+        g_traceWatched.fetch_add(1, std::memory_order_relaxed);
+    }
+}
+
+void NoteHolderTrace(BaseObject* obj)
+{
+    if (obj == nullptr) {
+        return;
+    }
+    const uintptr_t addr = reinterpret_cast<uintptr_t>(obj);
+    TraceWatchSlot& slot = g_traceWatch[TraceWatchSlotOf(addr)];
+    if (slot.addr.load(std::memory_order_acquire) == addr) {
+        slot.traced.fetch_add(1, std::memory_order_relaxed);
+    }
+}
+
+void NoteHolderCopy(const void* fromAddr, const void* toAddr, size_t size, uint32_t done)
+{
+    (void)size;
+    (void)done;
+    if (!Enabled() || fromAddr == nullptr || toAddr == nullptr) {
+        return;
+    }
+    const uintptr_t from = reinterpret_cast<uintptr_t>(fromAddr);
+    TraceWatchSlot& slot = g_traceWatch[TraceWatchSlotOf(from)];
+    if (slot.addr.load(std::memory_order_acquire) != from) {
+        return;
+    }
+    slot.moved.fetch_add(1, std::memory_order_relaxed);
+    const uintptr_t to = reinterpret_cast<uintptr_t>(toAddr);
+    TraceWatchSlot& dst = g_traceWatch[TraceWatchSlotOf(to)];
+    uintptr_t empty = 0;
+    if (dst.addr.compare_exchange_strong(empty, to, std::memory_order_acq_rel,
+                                         std::memory_order_acquire)) {
+        dst.traced.store(0, std::memory_order_relaxed);
+        dst.moved.store(0, std::memory_order_relaxed);
+    } else {
+        g_traceCollisions.fetch_add(1, std::memory_order_relaxed);
+    }
+}
+
+void ReportHolderTraces(const char* point)
+{
+    if (!Enabled()) {
+        return;
+    }
+    const uint64_t watched = g_traceWatched.load(std::memory_order_relaxed);
+    LOG(RTLOG_ERROR, "[GCV2][markcomplete][retrace] point=%s watched=%llu collisions=%llu",
+        point == nullptr ? "?" : point, static_cast<unsigned long long>(watched),
+        static_cast<unsigned long long>(g_traceCollisions.load(std::memory_order_relaxed)));
+    for (size_t i = 0; i < kTraceWatchSlots; ++i) {
+        const uintptr_t addr = g_traceWatch[i].addr.load(std::memory_order_acquire);
+        if (addr == 0) {
+            continue;
+        }
+        const uint64_t traced = g_traceWatch[i].traced.load(std::memory_order_relaxed);
+        LOG(RTLOG_ERROR,
+            "[GCV2][markcomplete][retrace] holder=%#zx traced=%llu moved=%llu case=%s",
+            static_cast<size_t>(addr), static_cast<unsigned long long>(traced),
+            static_cast<unsigned long long>(g_traceWatch[i].moved.load(std::memory_order_relaxed)),
+            traced == 0 ? "painted-not-followed" : "followed");
+    }
+}
+
 bool Enabled()
 {
     static const bool on = DiagGate::LegacyOrToken("MRT_GCV2_MARKCOMPLETE", "markcomplete");
@@ -740,7 +839,6 @@ void RunAtMarkEnd(const char* point)
         static_cast<unsigned long long>(stats.costNs), stats.deadIntSlotNotRef, stats.deadIntRecoverFail,
         stats.deadIntBaseUnmarked, stats.deadIntValueCorrupt);
     SurvNodeDiag::ReportAtMarkEnd(point);
-
     if (FatalOnFailure() && (stats.deadTarget != 0 || stats.rootDead != 0)) {
         CHECK_DETAIL(false,
                      "MRT_GCV2_MARKCOMPLETE_FATAL: mark is not complete at %s: deadTarget=%zu "

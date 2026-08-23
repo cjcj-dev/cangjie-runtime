@@ -7,7 +7,6 @@
 #include "UnwindStack/StackFrameCursor.h"
 
 #include "Collector/TracingCollector.h"
-#include "Heap/Verify/StackRootSlotAttest.h"
 
 namespace MapleRuntime {
 
@@ -122,7 +121,7 @@ bool StackFrameCursor::ProcessOne(const RootVisitor& visitor, Mutator& mutator,
     if (Done()) {
         return false;
     }
-    StackRootSlotAttest::FrameScope attestFrame(index);
+
     ProcessFrame(frames[index], regSlotsMap, visitor, mutator, derivedPtrVisitor);
     ++index;
     return true;
@@ -147,7 +146,7 @@ bool StackFrameCursor::ResumeAt(size_t resumeIndex, Mutator& mutator)
     regSlotsMap = RegSlotsMap();
     index = 0;
     RootVisitor noop = [](ObjectRef&) {};
-    StackRootSlotAttest::SuppressScope suppressAttest;
+
     while (index < resumeIndex) {
         ProcessFrame(frames[index], regSlotsMap, noop, mutator);
         ++index;

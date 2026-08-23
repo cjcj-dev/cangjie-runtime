@@ -33,14 +33,7 @@ void EmitParamzeroCrashProbe(uintptr_t rbp, uintptr_t rbx, uintptr_t rip);
 #include "Signal/SignalUtils.h"
 #include "Inspector/CjHeapData.h"
 #include "Heap/Collector/TaskQueue.h"
-#include "Heap/Verify/StartWhoDiag.h"
-#include "Heap/Verify/WhoPushDiag.h"
-#include "Heap/Verify/HeldFreeDiag.h"
-#include "Heap/Verify/TlRawDiag.h"
 #include "Heap/Verify/HealPairDiag.h"
-#include "Heap/Verify/MarkFaceSnap.h"
-#include "Heap/Verify/LoadGoodProbe.h"
-#include "Heap/Verify/HdrWhoDiag.h"
 #include "securec.h"
 #ifdef COV_SIGNALHANDLE
 extern "C" void __gcov_dump(void);
@@ -216,59 +209,21 @@ void EmitCrashRec(int sig, const siginfo_t* info, void* context, uintptr_t sigPc
     if (n > 0) {
         WriteSigDiag(line, static_cast<size_t>(n));
     }
-    // loadgood: counters only, no register access and no heap walk, so it is placed ahead
-    // of every probe that is known to be able to abort. Default off.
-    LoadGoodProbe::Report("crash");
     // paramzero: dump -0x50(%rbp) + heap CAS-null counters (gate MRT_GCV2_NULLSLOT).
     // Mode A pc_off=0x6ef90a / si_addr=0x38: answer "was entry arg already 0?".
     if (context != nullptr) {
         const ucontext_t& uctx = *static_cast<const ucontext_t*>(context);
 #if defined(__x86_64__) && !defined(__APPLE__)
         uintptr_t rbx = static_cast<uintptr_t>(uctx.uc_mcontext.gregs[REG_RBX]);
-        uintptr_t rdi = static_cast<uintptr_t>(uctx.uc_mcontext.gregs[REG_RDI]);
-        uintptr_t rax = static_cast<uintptr_t>(uctx.uc_mcontext.gregs[REG_RAX]);
         uintptr_t r12 = static_cast<uintptr_t>(uctx.uc_mcontext.gregs[REG_R12]);
-        uintptr_t r14 = static_cast<uintptr_t>(uctx.uc_mcontext.gregs[REG_R14]);
-        uintptr_t rbp = static_cast<uintptr_t>(uctx.uc_mcontext.gregs[REG_RBP]);
         uintptr_t rcx = static_cast<uintptr_t>(uctx.uc_mcontext.gregs[REG_RCX]);
-        uintptr_t rdx = static_cast<uintptr_t>(uctx.uc_mcontext.gregs[REG_RDX]);
         uintptr_t rsi = static_cast<uintptr_t>(uctx.uc_mcontext.gregs[REG_RSI]);
         uintptr_t r13 = static_cast<uintptr_t>(uctx.uc_mcontext.gregs[REG_R13]);
-        // holdercapture runs FIRST, deliberately.
-        //
-        // This handler is a sequence of probes with no isolation between them: the first
-        // one that faults or trips a fatal check takes every probe after it down. That is
-        // not hypothetical — MAIN n10 died here with
-        //   "F GetUnitIdxAt OOB addr=... ra1=NoTracedDiag::NoteCrashJoin
-        //    ra2=HealPairDiag::NoteCrashWhoZero"
-        // on a SIGSEGV whose r13 was not a heap address, and everything downstream of
-        // NoteCrashWhoZero was simply never reached. Ordering is the only isolation
-        // available here, so the reading this lane exists to take goes before the probes
-        // that are known to abort.
-        //
-        // The question it asks is also weaker than the others on purpose: not "does this
-        // look like a known crash signature" but "was this address inside a region we
-        // freed, and what did that region's mark face say at the moment of the free".
-        {
-            const uintptr_t sweepAddrs[] = { reinterpret_cast<uintptr_t>(siAddr), rdi, rsi, rdx,
-                                             rcx, rax, rbx, r12, r13, r14, rbp };
-            const char* const sweepNames[] = { "si_addr", "rdi", "rsi", "rdx", "rcx", "rax",
-                                               "rbx", "r12", "r13", "r14", "rbp" };
-            MarkFaceSnap::NoteCrashSweep(sweepAddrs, sweepNames,
-                                         sizeof(sweepAddrs) / sizeof(sweepAddrs[0]));
-        }
 #else
         uintptr_t rbx = 0;
 #endif
         EmitParamzeroCrashProbe(sigRbp, rbx, sigPc);
 #if defined(__x86_64__) && !defined(__APPLE__)
-        TlRawDiag::NoteCrashRdi(rdi);
-        StartWhoDiag::NoteCrash();
-        WhoPushDiag::NoteCrashRdi(rdi);
-        HealPairDiag::NoteCrashRdi(rdi);
-        HdrWhoDiag::NoteCrashRdi(rdi);
-        HealPairDiag::NoteCrashRegs(rdi, rax, r12, r14, rbp);
-        HeldFreeDiag::NoteCrashRegs(rax, rbx, rcx, rdx, rsi, rdi, r12, r14, rbp);
         HealPairDiag::NoteCrashWhoZero(r13, rcx, rsi, rbx, r12);
 #endif
     }

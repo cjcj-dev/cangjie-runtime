@@ -47,7 +47,6 @@
 #include "Heap/Verify/MarkCompleteVerify.h"
 #include "Heap/Verify/VerifyOption.h"
 #include "Heap/Verify/VerifyRememberedSet.h"
-#include "Heap/Verify/DiffPathExplainer.h"
 #include "Heap/Verify/TraceClear.h"
 #include "Heap/Verify/VerifyRoots.h"
 #include "Heap/Verify/Zap.h"
@@ -990,7 +989,7 @@ void WCollector::InvalidateOldTaggedRefs(bool requireSurvivedMark)
 void WCollector::RescanRememberedSet(WorkStack& workStack, const MinorSlotSet& rememberedSlots,
                                      const MinorSlotSet& reachableSlots, const MinorSlotSet& weakSlots,
                                      const MinorObjectSet& currentMinorRoots, bool fullYoungScan,
-                                     MinorSlotSet* consumedOut, DiffPathRemsetStats* statsOut,
+                                     MinorSlotSet* consumedOut, RemsetScanStats* statsOut,
                                      MinorInteriorBaseMap* interiorBasesOut, const ScopedStopTheWorld* stw)
 {
     auto noteRemsetOutcome = [](MAddress slot, uint8_t outcome, MAddress target) {

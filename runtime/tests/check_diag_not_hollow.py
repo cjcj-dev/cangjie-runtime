@@ -1,26 +1,9 @@
 #!/usr/bin/env python3
-"""A diagnostic whose header documents a gate must not have an all-empty implementation.
+"""Reject a gated diagnostic whose implementation has only no-op function bodies.
 
-34 of the subsystems under src/Heap/Verify/ were reduced to `return false;` and empty
-bodies while three things were left completely intact: the header's arm-by-arm contract,
-its gate name (MRT_GCV2_TOVERFAIL, MRT_GCV2_PERMWHO_ADMIT, ...), and every call site in
-the product code.  ToverFailDiag.h even still carries the sentence "Positive controls sit
-next to the signature counters so a zero cannot mean 'probe dead'".
-
-That combination is worse than deleting them.  Reading the header tells you the instrument
-exists and how to switch it on; switching it on produces zero lines; and zero lines read as
-"that arm never fires".  Every number taken from a hollowed subsystem is a false negative,
-and the ledgers are full of "turn on gate X and measure" plans that cannot work.  This was
-found on 2026-08-18 one step before it was acted on: a run with MRT_GCV2_TOVERFAIL=1 was
-already queued to decide whether the unmovable-skip arm hands out from-versions.
-
-Deleting a diagnostic is fine.  Keeping a diagnostic is fine.  Keeping the *documentation*
-of one whose body is gone is not, so this fails the build until the header says so.
-
-Fix either way:
-  - restore the sink (see PermWhoAdmit.cpp for the shape: compile-time constant gate, plus a
-    line on the zero case so a zero cannot be read as a dead probe), or
-  - put HOLLOWED in the header, which records that the contract below it is not running.
+A documented gate plus an empty implementation produces false-negative measurements.
+Delete that subsystem and its call sites, or keep at least one live sink with a positive
+control. No header marker or historical comment waives this check.
 """
 
 import pathlib
@@ -30,12 +13,36 @@ import sys
 ROOT = pathlib.Path(__file__).resolve().parents[1]
 VERIFY = ROOT / "src/Heap/Verify"
 
-# A body that is empty or a bare `return <literal>;` carries no behaviour.
-EMPTY_BODY = re.compile(r"\)\s*(?:const\s*)?\{\s*(?:return\s+(?:false|true|0|nullptr)\s*;\s*)?\}")
-# Definitions only: a leading type at column 0, which is how these files are written.
-DEFINITION = re.compile(r"^(?:void|bool|size_t|uint\d+_t|unsigned|int|const\s+char\*)\s+\w+\s*\(", re.M)
+# Definitions only: a leading return type at column 0. The complete signature is
+# captured through its opening brace so empty lambdas inside a live function cannot
+# be mistaken for additional empty top-level definitions.
+DEFINITION = re.compile(
+    r"^(?:void|bool|size_t|uint\d+_t|unsigned|int|const\s+char\*)\s+"
+    r"[A-Za-z_][A-Za-z0-9_:~]*\s*\([^;{}]*\)\s*(?:const\s*)?\{",
+    re.M,
+)
+EMPTY_CONTENT = re.compile(r"\s*(?:return\s+(?:false|true|0|nullptr)\s*;\s*)?\Z")
 GATE = re.compile(r"MRT_[A-Z0-9_]+")
-HOLLOW_MARK = "HOLLOWED"
+def function_bodies(text: str):
+    """Yield top-level definition bodies; braces in comments/strings are masked."""
+    masked = list(text)
+    for match in re.finditer(r'//[^\n]*|/\*.*?\*/|"(?:\\.|[^"\\])*"|\'(?:\\.|[^\'\\])*\'', text, re.S):
+        for i in range(match.start(), match.end()):
+            if masked[i] != "\n":
+                masked[i] = " "
+    masked_text = "".join(masked)
+    for definition in DEFINITION.finditer(masked_text):
+        open_brace = definition.end() - 1
+        depth = 1
+        cursor = open_brace + 1
+        while cursor < len(masked_text) and depth != 0:
+            if masked_text[cursor] == "{":
+                depth += 1
+            elif masked_text[cursor] == "}":
+                depth -= 1
+            cursor += 1
+        if depth == 0:
+            yield masked_text[open_brace + 1 : cursor - 1]
 
 
 def main() -> int:
@@ -54,13 +61,12 @@ def main() -> int:
         if not GATE.search(header_text):
             continue
         checked += 1
-        if HOLLOW_MARK in header_text:
-            continue
         body = src.read_text(errors="replace")
-        definitions = len(DEFINITION.findall(body))
+        bodies = list(function_bodies(body))
+        definitions = len(bodies)
         if definitions == 0:
             continue
-        empties = len(EMPTY_BODY.findall(body))
+        empties = sum(1 for function_body in bodies if EMPTY_CONTENT.fullmatch(function_body))
         if empties >= definitions:
             offenders.append((src.name, header.name, definitions, empties))
 
@@ -68,7 +74,7 @@ def main() -> int:
         print("DIAG_HOLLOW_GUARD FAIL: header documents a gate but the implementation is all no-ops")
         for name, hdr, definitions, empties in offenders:
             print(f"  {name}: {empties}/{definitions} bodies empty, and {hdr} still documents its gate")
-        print("  Restore the sink, or write HOLLOWED in the header so the contract is not read as live.")
+        print("  Restore a live sink, or delete the subsystem and all product call sites.")
         return 1
 
     print(f"DIAG_HOLLOW_GUARD PASS gated_subsystems={checked}")

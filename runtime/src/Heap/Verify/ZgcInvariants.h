@@ -40,7 +40,7 @@ class Collector;
 // Discipline for anything added here: it must be *live*.  41 of the 51 gated subsystems under
 // Heap/Verify are `return false;` and empty bodies behind headers that still document their gates,
 // which makes a zero from them unreadable.  A new invariant that is not implemented must say
-// HOLLOWED in this header (runtime/tests/check_diag_not_hollow.py enforces that), and every
+// reduced to empty bodies in this header (runtime/tests/check_diag_not_hollow.py enforces that), and every
 // counter must emit its zero case so a silent guard cannot be mistaken for a clean run.
 namespace ZgcInvariants {
 

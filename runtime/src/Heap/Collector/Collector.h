@@ -20,8 +20,6 @@
 #include "Base/Macros.h"
 #include "GcRequest.h"
 #include "GcStats.h"
-#include "Heap/Verify/GoodPredDiag.h"
-#include "Heap/Verify/ToverFailDiag.h"
 
 namespace MapleRuntime {
 // GCPhase describes phases for stw/concurrent gc.
@@ -198,21 +196,13 @@ public:
     virtual bool is_young_load_good(RefField<>&) const { AbortUnimplemented("Collector::is_young_load_good"); }
     virtual bool is_old_load_good(RefField<>&) const { AbortUnimplemented("Collector::is_old_load_good"); }
 
-    // ZPointer::is_load_good (zAddress.inline.hpp:631-633). Product path is the
-    // ZGC definition. MRT_GCV2_LOADGOOD_AUDIT=1 still evaluates both and
-    // censuses disagreement; the answer stays ZGC either way.
-    bool is_load_good(RefField<>& ref) const { return is_load_good_at(ref, GoodPredDiag::kSiteBarrier); }
-
-    bool is_load_good_at(RefField<>& ref, uint8_t site) const
+    // ZPointer::is_load_good (zAddress.inline.hpp:631-633). Keep the product
+    // predicate in the collector domain; diagnostic mode selection must not own it.
+    bool is_load_good(RefField<>& ref) const
     {
-        if (LIKELY(GoodPredDiag::g_mode != GoodPredDiag::kAudit)) {
-            return ColourPredicates::is_load_good(static_cast<uintptr_t>(raw(ref.GetFieldValue())),
-                                                  static_cast<uintptr_t>(::g_cjLoadBadMask));
-        }
-        return is_load_good_switched(ref, site);
+        return ColourPredicates::is_load_good(static_cast<uintptr_t>(raw(ref.GetFieldValue())),
+                                              static_cast<uintptr_t>(::g_cjLoadBadMask));
     }
-
-    bool is_load_good_switched(RefField<>& ref, uint8_t site) const;
 
     virtual ZGenerationId remap_generation(RefField<>&) const
     {
@@ -232,21 +222,12 @@ public:
     {
         // 凭什么 to_object: GetTargetObject 已剥色；null 或 load-good 可直接用。
         BaseObject* target = to_object(ref.GetTargetObject());
-        if (target == nullptr || is_load_good_at(ref, GoodPredDiag::kSiteMakeLoadGood)) {
+        if (target == nullptr || is_load_good(ref)) {
             return target;
         }
-        ToverFailDiag::NoteMlgEnter();
+
         BaseObject* remapped = relocate_or_remap_object(target, remap_generation(ref));
-        if (remapped == nullptr) {
-            ToverFailDiag::NoteMlgKeepFrom();
-            return target;
-        }
-        if (remapped == target) {
-            ToverFailDiag::NoteMlgKeepFrom();
-        } else {
-            ToverFailDiag::NoteMlgMoved();
-        }
-        return remapped;
+        return remapped == nullptr ? target : remapped;
     }
 
     // OpenJDK ZPointer::is_mark_good (zAddress.inline.hpp:658-664): mark-good includes load-good,
@@ -259,8 +240,7 @@ public:
     bool is_mark_good(RefField<>& ref) const
     {
         zpointer v = ref.GetFieldValue();
-        return (raw(v) & ::g_cjMarkBadMask) == 0 && !is_null(v) &&
-            is_load_good_at(ref, GoodPredDiag::kSiteMarkGood);
+        return (raw(v) & ::g_cjMarkBadMask) == 0 && !is_null(v) && is_load_good(ref);
     }
 
     // OpenJDK ZPointer::is_store_good (zAddress.inline.hpp:679-684): store-good includes
@@ -268,8 +248,7 @@ public:
     bool is_store_good(RefField<>& ref) const
     {
         zpointer v = ref.GetFieldValue();
-        return (raw(v) & ::g_cjStoreBadMask) == 0 && !is_null(v) &&
-            is_load_good_at(ref, GoodPredDiag::kSiteStoreGood);
+        return (raw(v) & ::g_cjStoreBadMask) == 0 && !is_null(v) && is_load_good(ref);
     }
 
     bool is_store_bad(RefField<>& ref) const

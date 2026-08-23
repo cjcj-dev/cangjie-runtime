@@ -4,7 +4,7 @@
 //
 // See https://cangjie-lang.cn/pages/LICENSE for license information.
 
-// Restored 2026-08-20 (markport).  This file was HOLLOWED: every accessor in the matching .cpp
+// Restored 2026-08-20 (markport). Every accessor in the matching .cpp had once been stubbed:
 // was `return false;`, so all nine consumers below were silently dead -- MRT_GCV2_NULLSLOT among
 // them, which is the gate REPORT-satbnull.md's repro command and two lane acceptance gates read.
 // A run with the env set produced zero lines, and zero read as "that arm never fires".  The
@@ -17,16 +17,15 @@
 // Unified diagnostic gate for GC instruments.
 //
 // Master switch (optional CSV of tokens, case-sensitive, comma/space separated):
-//   MRT_GCV2_DIAG=idleedge,promote,fullclear,nullslot,selftest
+//   MRT_GCV2_DIAG=promote,nullslot,markcomplete,statheal,selftest
 //   MRT_GCV2_DIAG=all
 //
 // Legacy per-probe envs remain authoritative aliases (in-flight recipes must keep working):
-//   MRT_GCV2_IDLEEDGE=1
-//   MRT_GCV2_IDLEEDGE_STAMP_BITS=<16..22>
 //   MRT_GCV2_PROMOTEGAP_PROBE=1
-//   MRT_GCV2_FULLCLEAR_PROBE=1
 //   MRT_GCV2_NULLSLOT=1
-//   MRT_GCV2_IDLEEDGE_SELFTEST=1  /  MRT_GCV2_DIAG_SELFTEST=1
+//   MRT_GCV2_MARKCOMPLETE=1
+//   MRT_GCV2_STATHEAL=1
+//   MRT_GCV2_DIAG_SELFTEST=1
 //
 // Discovery:
 //   MRT_GCV2_DIAG_HELP=1    — print registered tokens + legacy aliases once

@@ -42,22 +42,15 @@
 #include "Heap/Verify/DiagGate.h"
 #include "Heap/Verify/NullRouteCaller.h"
 #include "Heap/Verify/TraceClear.h"
-#include "Heap/Verify/HeldFreeDiag.h"
 #include "Heap/Verify/FillerZeroDiag.h"
-#include "Heap/Verify/RegionLifeDiag.h"
 #include "Heap/Verify/TagReuseProbe.h"
 #include "Heap/Verify/MarkWhyProbe.h"
 #include "Heap/Verify/SurvNodeDiag.h"
-#include "Heap/Verify/EatArmDiag.h"
-#include "Heap/Verify/RouteDestHold.h"
+#include "Heap/Allocator/RouteDestHold.h"
 #include "Heap/Verify/FromPageDetachCheck.h"
 #include "Heap/Allocator/ForwardingTable.h"
-#include "Heap/Verify/FwdInflight.h"
 #include "Heap/Verify/MutatorRelocate.h"
 #include "Base/TimeUtils.h"
-#include "Heap/Verify/RouteDom.h"
-#include "Heap/Verify/SealCheck.h"
-#include "Heap/Verify/TlRawDiag.h"
 #include "securec.h"
 #ifdef CANGJIE_ASAN_SUPPORT
 #include "Sanitizer/SanitizerInterface.h"
@@ -1312,7 +1305,7 @@ public:
         size_t offset = objAddr - regionStart;
         size_t regionSize = regionEnd - regionStart;
         RegionBitmap* writeBm = GetOrAllocMarkBitmap(view);
-        SealCheck::NotePaint(this, offset, objSize, "RegionInfo::MarkObject");
+
         bool already = writeBm->MarkBits(offset, objSize, regionSize);
         if (!already) {
             AddLiveByteCount(objSize);
@@ -1348,7 +1341,7 @@ public:
         size_t offset = objAddr - regionStart;
         size_t regionSize = regionEnd - regionStart;
         RegionBitmap* writeBm = GetOrAllocMarkBitmap(view);
-        SealCheck::NotePaint(this, offset, objSize, "RegionInfo::MarkObject_sized");
+
         bool already = writeBm->MarkBits(offset, objSize, regionSize);
         if (!already) {
             if (accountLive) {
@@ -1395,7 +1388,7 @@ public:
         CheckObjectSize(obj, objSize, regionStart, regionEnd);
         size_t regionSize = regionEnd - regionStart;
         RegionBitmap* bitmap = GetOrAllocResurrectBitmap();
-        SealCheck::NotePaint(this, offset, objSize, "RegionInfo::ResurrectObject");
+
         bool already = bitmap->MarkBits(offset, objSize, regionSize);
         if (!already) {
             AddLiveByteCount(objSize);
@@ -1431,7 +1424,7 @@ public:
         CHECK(regionSize > 0);
         RegionBitmap* bitmap = GetOrAllocEnqueueBitmap();
         // enqueue face is not the route geometry face; still report if mark-face sealed.
-        SealCheck::NotePaint(this, offset, objSize, "RegionInfo::EnqueueObject");
+
         bool marked = bitmap->MarkBits(offset, objSize, regionSize);
         CHECK(bitmap->IsMarked(offset));
         return marked;
@@ -1726,11 +1719,6 @@ public:
         // The 64-byte delta is 1.5625% per 4 KiB unit; it buys a non-wrapping
         // incarnation proof instead of another bounded ABA window.
         static_assert(sizeof(UnitInfo) == 272, "per-unit metadata size changed; it is per-page, so price it");
-        if (RouteDestHold::AccountOn()) {
-            LOG(RTLOG_ERROR,
-                "[GCV2][routedest] unit_metadata sizeof_UnitInfo=%zu unit_size=%zu overhead_permille=%zu",
-                sizeof(UnitInfo), static_cast<size_t>(UNIT_SIZE), (sizeof(UnitInfo) * 1000) / UNIT_SIZE);
-        }
     }
 
     static RegionInfo* GetRegionInfo(uint32_t idx)
@@ -1838,7 +1826,7 @@ public:
              RegionInfo::GetUnitAddress(idx + cnt));
         // gcfwdfix: ring of zeroed ranges for WAS_LIVE_BEFORE_CLEAR (MRT_GCV2_TRACE_CLEAR=1).
         TraceClear::NoteRange(static_cast<MAddress>(unitAddress), size, "clear_units", nullptr, 0);
-        HeldFreeDiag::NoteClearRange(unitAddress, size);
+
         FillerZeroDiag::Note(site, unitAddress, size);
         MapleRuntime::MemorySet(unitAddress, size, 0, size);
     }
@@ -2021,13 +2009,7 @@ public:
             }
         }
         if (!survived || !startOk) {
-            if (EatArmDiag::Enabled()) {
-                RouteState rsEat = GetRouteState();
-                if (rsEat == RouteState::ROUTED || rsEat == RouteState::FORWARDABLE ||
-                    rsEat == RouteState::ROUTING) {
-                    EatArmDiag::NoteIorTarget(fromObj, EatArmDiag::GetFixHost(), offset);
-                }
-            }
+
             return OptionalRouteTicket();
         }
         return OptionalRouteTicket(fromObj);
@@ -2075,9 +2057,7 @@ public:
         }
         MAddress toAddr = metadata.routeInfo.GetRoute(preLiveBytes);
         // routedom: observe mark-domain at geometric GetRoute call site (default off).
-        if (RouteDom::Enabled()) {
-            RouteDom::NoteRoute(this, fromObj, preLiveBytes, static_cast<uintptr_t>(toAddr));
-        }
+
         return from_region_addr(toAddr);
     }
 
@@ -2297,8 +2277,8 @@ public:
         // it is unconditional -- nothing here waits for a reader. ZGC's equivalent,
         // ZForwarding::detach_page (zForwarding.cpp:171-181), blocks until _ref_count is zero.
         // Count what we would be invalidating. Default off; never blocks.
-        FwdInflight::NoteRetireRegion(this, FwdInflight::Retire::DISPEL_GHOST);
-        // portmutreloc: and this is the wait FwdInflight was measuring the absence of. Held
+
+        // portmutreloc: hold the forwarding drain across the whole body. It is held
         // for the whole body so that FreeCompactRouteTable below -- ZGC's free_page -- cannot
         // run while a retained reader is inside the route lookup or a mutator copy.
         DrainScope drain(this, MutatorRelocate::Retire::DISPEL_GHOST);
@@ -3812,7 +3792,6 @@ private:
         // reuse. The hold is deliberately NOT cleared: reaching this point while held means
         // a reclaim gate was bypassed, and leaving the flag set keeps the region out of the
         // next collection set instead of silently papering over the escape.
-        RouteDestHold::NoteReuse(this, IsRouteDestHeld());
         SetRegionType(RegionType::FREE_REGION);
         SetTraceRegionFlag(0);
         SetNotRelocatableThisCycle(0);
@@ -3846,8 +3825,8 @@ private:
     void InitRegion(size_t nUnit, UnitRole uClass)
     {
         InitRegionInfo(nUnit, uClass);
-        TlRawDiag::NoteInitRegion(this);
-        RegionLifeDiag::NoteTake(this);
+
+
 
         // initialize region's subordinate units.
 

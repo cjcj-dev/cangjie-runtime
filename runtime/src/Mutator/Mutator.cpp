@@ -16,8 +16,6 @@
 #include "Common/ScopedObjectAccess.h"
 #include "Concurrency/ConcurrencyModel.h"
 #include "Heap/Collector/FinalizerProcessor.h"
-#include "Heap/Verify/EnumPushDiag.h"
-#include "Heap/Verify/StartWhoDiag.h"
 #include "Heap/Verify/VerifyRoots.h"
 #include "Heap/Verify/StackExposureOracle.h"
 #include "Heap/Verify/StackFrameOracle.h"
@@ -877,23 +875,17 @@ static bool PushHeapRootIfPlausible(BaseObject* obj, const char* site)
 {
     BaseObject* plain = PlainRootObject(to_zaddress_unsafe(reinterpret_cast<MAddress>(obj)));
     if (!Heap::IsHeapAddress(plain)) {
-        if (UNLIKELY(EnumPushDiag::Enabled())) {
-            EnumPushDiag::NoteSkip(plain, site, "non-heap");
-        }
+
         return false;
     }
     // markfloor gate: tip-small-int (e.g. length at RawArray+8) must not enter work stack.
     if (!Collector::PlausibleManagedObjectGate(site, plain)) {
-        if (UNLIKELY(EnumPushDiag::Enabled())) {
-            EnumPushDiag::NoteSkip(plain, site, "implausible");
-        }
+
         return false;
     }
     AllocBuffer* buffer = AllocBuffer::GetOrCreateAllocBuffer();
     buffer->PushRoot(plain);
-    if (UNLIKELY(EnumPushDiag::Enabled())) {
-        EnumPushDiag::NotePush(plain, site, nullptr);
-    }
+
     return true;
 }
 
@@ -1037,9 +1029,7 @@ bool Mutator::GcPhaseEnum(GCPhase newPhase, uint64_t stackScanEpoch, bool bySelf
             static_cast<void*>(&refFieldAddr)); // Stack-object field metadata denotes a root word.
         BaseObject* obj = PlainRootObject(rootField.LoadPlain());
         if (PushHeapRootIfPlausible(obj, "GcPhaseEnum.ref")) {
-            if (UNLIKELY(StartWhoDiag::Enabled())) {
-                StartWhoDiag::NoteRootCandidate(obj, "GcPhaseEnum.ref", &refFieldAddr, obj, nullptr);
-            }
+
             DLOG(ENUM, "enum stack root HeapSlot @%p: %p", &refFieldAddr, obj);
         } else if (IsStackAddr(reinterpret_cast<uintptr_t>(obj))) {
             if (IsHeaderedStackObject(obj)) {
@@ -1056,9 +1046,7 @@ bool Mutator::GcPhaseEnum(GCPhase newPhase, uint64_t stackScanEpoch, bool bySelf
         StripRootObjectColour(root);
         BaseObject* obj = PlainRootObject(root.LoadPlain());
         if (PushHeapRootIfPlausible(obj, "GcPhaseEnum.root")) {
-            if (UNLIKELY(StartWhoDiag::Enabled())) {
-                StartWhoDiag::NoteRootCandidate(obj, "GcPhaseEnum.root", &root, obj, nullptr);
-            }
+
             DLOG(ENUM, "enum stack root @%p: %p", &root, obj);
         } else if (IsStackAddr(reinterpret_cast<uintptr_t>(obj))) {
             if (IsHeaderedStackObject(obj)) {
@@ -1072,10 +1060,8 @@ bool Mutator::GcPhaseEnum(GCPhase newPhase, uint64_t stackScanEpoch, bool bySelf
             // closure reaches the live array; leave the slot plain (not object-head).
             BaseObject* host = Collector::TryRecoverInteriorBase(obj);
             if (host != nullptr) {
-                bool pushed = PushHeapRootIfPlausible(host, "GcPhaseEnum.interiorBase");
-                if (pushed && UNLIKELY(StartWhoDiag::Enabled())) {
-                    StartWhoDiag::NoteRootCandidate(host, "GcPhaseEnum.interiorBase", &root, host, obj);
-                }
+                (void)PushHeapRootIfPlausible(host, "GcPhaseEnum.interiorBase");
+
                 DLOG(ENUM, "enum interior stack root @%p: interior=%p host=%p", &root, obj, host);
             } else {
                 DLOG(ENUM, "skip interior stack root @%p: %p", &root, obj);
@@ -1101,10 +1087,8 @@ bool Mutator::GcPhaseEnum(GCPhase newPhase, uint64_t stackScanEpoch, bool bySelf
                           reinterpret_cast<MAddress>(derivedObj) - reinterpret_cast<MAddress>(base));
         }
         if (base != nullptr && Heap::IsHeapAddress(base)) {
-            bool pushed = PushHeapRootIfPlausible(base, "GcPhaseEnum.derivedBase");
-            if (pushed && UNLIKELY(StartWhoDiag::Enabled())) {
-                StartWhoDiag::NoteRootCandidate(base, "GcPhaseEnum.derivedBase", &derivedPtr, base, derivedObj);
-            }
+            (void)PushHeapRootIfPlausible(base, "GcPhaseEnum.derivedBase");
+
         }
     };
     if (stackScanEpoch == 0) {

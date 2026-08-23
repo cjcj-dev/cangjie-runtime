@@ -5,7 +5,7 @@
 // See https://cangjie-lang.cn/pages/LICENSE for license information.
 
 // TRUST_STATE_KILL_PLAN Phase 1 contracts (header-level positive/negative).
-// Runtime inject positive control lives in PlainCensus (MRT_GCV2_PLAIN_WRITE_INJECT=1).
+// The model below is the positive control for the live coloured-write assertion.
 
 #include "Common/ColourMask.h"
 #include "Common/ColourTypes.h"
@@ -32,7 +32,7 @@ constexpr Uptr ModelRootSlotWritebackPlain(Uptr addr)
     return addr & kAddrMask;
 }
 
-// Census plain definition: non-null address bits, zero colour metadata.
+// Plain-reference definition: non-null address bits, zero colour metadata.
 constexpr bool IsPlainHeapRef(Uptr v)
 {
     if ((v & kAddrMask) == 0) {
@@ -53,14 +53,14 @@ GC_TEST(TrustP1, TryUntagHeapSlotWritebackIsColoured)
     GC_EXPECT_NE(written & kColourMetaMask, 0u);
 }
 
-// ① negative: plain untag write-back would be counted as plainHeapRefSlots residual.
+// ① negative: a plain untag write-back violates the coloured-write invariant.
 GC_TEST(TrustP1, PlainUntagWritebackWouldBeCensusHit)
 {
     Uptr plain = kSampleAddr; // old TryUntag shape RefField<>(target)
     GC_EXPECT_TRUE(IsPlainHeapRef(plain));
 }
 
-// ② positive: RootSlot plain write-back stays plain (legal; not census-counted).
+// ② positive: RootSlot plain write-back stays plain (legal outside HeapSlot storage).
 GC_TEST(TrustP1, RootSlotWritebackPlainIsPlain)
 {
     Uptr plain = ModelRootSlotWritebackPlain(kSampleAddr | ZPointerRemapped01);
@@ -89,8 +89,8 @@ GC_TEST(TrustP1, DerivedInteriorPlainIsDistinctFromK1ObjectRoot)
     GC_EXPECT_FALSE(IsPlainHeapRef(colouredRoot));
 }
 
-// ④ positive control model: inject plain then census counts 1.
-GC_TEST(TrustP1, CensusPlainDefinitionMatchesInjectShape)
+// ④ positive-control model: removing colour produces the forbidden heap-slot shape.
+GC_TEST(TrustP1, ColouredWriteGuardRejectsPlainShape)
 {
     Uptr coloured = ModelHeapSlotWriteback(kSampleAddr, ZPointerRemapped00 | MARKED_YOUNG_0);
     Uptr injected = coloured & kAddrMask; // inject peels colour meta
