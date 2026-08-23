@@ -52,30 +52,10 @@
 #include "Heap/Verify/Zap.h"
 #include "Heap/Verify/DiagGate.h"
 #include "Heap/Verify/NwDropAudit.h"
-#include "Heap/Verify/IdleEdgeDiag.h"
-#include "Heap/Verify/EatArmDiag.h"
-#include "Heap/Verify/FysDesignDiag.h"
-#include "Heap/Verify/F3Why2Diag.h"
 #include "Heap/Verify/GarbRegionDiag.h"
-#include "Heap/Verify/FysAuditDiag.h"
 #include "Heap/Verify/Stw2CurrentAudit.h"
-#include "Heap/Verify/FlipPromoDiag.h"
-#include "Heap/Verify/O2ORemsetDiag.h"
 #include "Heap/Verify/NullRouteCaller.h"
-#include "Heap/Verify/PlainCensus.h"
-#include "Heap/Verify/SealCheck.h"
-#include "Heap/Verify/ToverFailDiag.h"
-#include "Heap/Verify/OffpastDiag.h"
-#include "Heap/Verify/TlRawDiag.h"
-#include "Heap/Verify/StartWhoDiag.h"
-#include "Heap/Verify/StackRootSlotAttest.h"
-#include "Heap/Verify/WhoPushDiag.h"
-#include "Heap/Verify/HealPairDiag.h"
-#include "Heap/Verify/GateDropDiag.h"
-#include "Heap/Verify/NoTracedDiag.h"
 #include "Heap/Verify/SurvNodeDiag.h"
-#include "Heap/Verify/HeldFreeDiag.h"
-#include "Heap/Verify/YyEdgeDiag.h"
 #include "Heap/Collector/PromotedRegionDomain.h"
 #include "Heap/Verify/CsetEmptyWho.h"
 #include "Common/ColourPredicates.h"
@@ -344,14 +324,10 @@ BaseObject* WCollector::ForwardUpdateRawRef(ObjectRef& root)
                 BaseObject* toInterior = reinterpret_cast<BaseObject*>(
                     reinterpret_cast<uintptr_t>(toHost) +
                     (reinterpret_cast<uintptr_t>(oldObj) - reinterpret_cast<uintptr_t>(host)));
-                HealPairDiag::NoteRaw(oldObj, toInterior, &root,
-                                      static_cast<uint16_t>(HealSite::WCollectorForwardRawInterior));
                 HealRootWriteback(root, toInterior, HealSite::WCollectorForwardRawInterior);
                 return toInterior;
             }
         }
-        HealPairDiag::NoteRaw(oldObj, oldObj, &root,
-                              static_cast<uint16_t>(HealSite::WCollectorPreserveRawInterior));
         HealRootWriteback(root, oldObj, HealSite::WCollectorPreserveRawInterior);
         return oldObj;
     }
@@ -360,14 +336,10 @@ BaseObject* WCollector::ForwardUpdateRawRef(ObjectRef& root)
         if (toVersion == nullptr) {
             return oldObj;
         }
-        HealPairDiag::NoteRaw(oldObj, toVersion, &root,
-                              static_cast<uint16_t>(HealSite::WCollectorForwardRawGhost));
         HealRootWriteback(root, toVersion, HealSite::WCollectorForwardRawGhost);
         DLOG(FIX, "fix raw-ref @%p: %p -> %p", &root, oldObj, toVersion);
         return toVersion;
     } else {
-        HealPairDiag::NoteRaw(oldObj, oldObj, &root,
-                              static_cast<uint16_t>(HealSite::WCollectorNormalizeRawRoot));
         HealRootWriteback(root, oldObj, HealSite::WCollectorNormalizeRawRoot);
     }
 
@@ -707,7 +679,7 @@ void EnsureRouteDomainMembership(WCollector* collector, BaseObject* obj)
         MAddress regionStart = region->GetRegionStart();
         size_t regionSize = static_cast<size_t>(region->GetRegionEnd() - regionStart);
         if (objSize > 0 && offset + objSize <= regionSize) {
-            SealCheck::NotePaint(region, offset, objSize, "EnsureRouteDomainMembership.ghost");
+
             // MarkObject already maintained liveByteCount on the live face; ghost paint is
             // domain-visible bits only (do not double-count).
             (void)ghostBitmap->MarkBits(offset, objSize, regionSize);
@@ -773,7 +745,7 @@ bool ForceRootRouteDomainWhileForwardable(WCollector* collector, BaseObject* obj
             }
             size_t regionSize = static_cast<size_t>(region->GetRegionEnd() - region->GetRegionStart());
             if (objSize > 0 && offset + objSize <= regionSize) {
-                SealCheck::NotePaint(region, offset, objSize, "statresid.force_domain.ghost");
+
                 // MarkObject above already counted liveByteCount when first paint on live.
                 // Ghost-only MarkBits must not double-count (FYS0 OverflowException risk).
                 (void)ghostBitmap->MarkBits(offset, objSize, regionSize);
@@ -1162,7 +1134,6 @@ bool WCollector::FixMinorEvacuatedSlot(RefField<>& field, BaseObject* knownBase,
                 MAddress oldVal = raw(oldField.GetFieldValue());
                 MAddress plainVal = reinterpret_cast<MAddress>(toHost) + offset;
                 if (oldVal != plainVal) {
-                    ScopedPlainWriter tag(PlainWriterSite::FixMinorInterior);
                     (void)CasInstallInteriorPlain(field, to_zpointer(oldVal), toHost, offset,
                                                   HealSite::WCollectorMinorFixInteriorForward);
                 }
@@ -1173,7 +1144,6 @@ bool WCollector::FixMinorEvacuatedSlot(RefField<>& field, BaseObject* knownBase,
         MAddress oldVal = raw(oldField.GetFieldValue());
         MAddress plainVal = reinterpret_cast<MAddress>(target);
         if (oldVal != plainVal) {
-            ScopedPlainWriter tag(PlainWriterSite::FixMinorInterior);
             (void)CasInstallInteriorPlain(field, to_zpointer(oldVal), target,
                                           HealSite::WCollectorMinorFixInteriorPreserve);
         }
@@ -1207,7 +1177,6 @@ bool WCollector::FixMinorEvacuatedSlot(RefField<>& field, BaseObject* knownBase,
         MAddress oldVal = raw(field.GetFieldValue());
         MAddress plainVal = reinterpret_cast<MAddress>(current);
         if (oldVal != plainVal) {
-            ScopedPlainWriter tag(PlainWriterSite::FixMinorInterior);
             (void)CasInstallInteriorPlain(field, to_zpointer(oldVal), current,
                                           HealSite::WCollectorMinorFixInteriorPostForward);
         }
@@ -1287,7 +1256,7 @@ bool WCollector::FixMinorEvacuatedSlot(RootSlot& root, const ScopedStopTheWorld*
         }
     }
     if (current == nullptr) {
-        OffpastDiag::NoteFixMissSlot(static_cast<void*>(&root), target);
+
         // I2: Forward miss still consults FindToVersion/receipt. Stale miss
         // refuses silently leaving from (seqnum-bounded table already rejects
         // expired entries). ⛔ Do not reinstall from; ⛔ do not StorePlain(null).
@@ -1346,7 +1315,7 @@ bool WCollector::FixMinorEvacuatedSlot(DerivedSlot& derived, BaseObject* knownBa
         (void)ForceRootRouteDomainWhileForwardable(const_cast<WCollector*>(this), knownBase);
         currentBase = const_cast<WCollector*>(this)->ForwardObject(knownBase);
         if (currentBase == nullptr) {
-            OffpastDiag::NoteFixMissSlot(static_cast<void*>(&derived), knownBase);
+
             return false;
         }
     }
@@ -1389,7 +1358,7 @@ void WCollector::FixMinorRootSlots(const ScopedStopTheWorld* stw)
         }
         if (IsGhostFromObject(obj) && !IsUnmovableFromObject(obj)) {
             (void)ForceRootRouteDomainWhileForwardable(const_cast<WCollector*>(this), obj);
-            OffpastDiag::NotePregrantSlot(static_cast<void*>(&root), obj, "grant_pass");
+
         } else if (!Collector::PlausibleManagedObjectGate("statresid.grant_pass", obj)) {
             BaseObject* host = Collector::TryRecoverInteriorBase(obj);
             if (host != nullptr && IsGhostFromObject(host) && !IsUnmovableFromObject(host)) {
@@ -1407,22 +1376,12 @@ void WCollector::FixMinorRootSlots(const ScopedStopTheWorld* stw)
     RootVisitor rawRootVisitor = [this, stw](ObjectRef& root) {
         NullRouteCaller::ScopedEdge _edge("root", nullptr, reinterpret_cast<uintptr_t>(&root));
         NullRouteCaller::ScopedTag _nrTag("FixMinorEvacuatedSlot");
-        bool wrote = FixMinorEvacuatedSlot(root, stw);
-        if (UNLIKELY(HeldFreeDiag::Enabled())) {
-            BaseObject* tgt = ResolveMinorReference(root, stw);
-            HeldFreeDiag::NoteFixSlot(&root, tgt, wrote ? 1 : 0, "FixMinor.root");
-        }
+        (void)FixMinorEvacuatedSlot(root, stw);
     };
     DerivedPtrVisitor derivedVisitor = [this, stw](BasePtrType basePtr, DerivedSlot& derived) {
         BaseObject* knownBase = is_null(basePtr) ? nullptr :
             to_object(safe(uncolor_bits(to_zpointer(raw(basePtr)))));
-        bool wrote = FixMinorEvacuatedSlot(derived, knownBase, stw);
-        if (UNLIKELY(HeldFreeDiag::Enabled())) {
-            zaddress_unsafe value = derived.LoadDerived();
-            BaseObject* target = is_null(value) ? nullptr :
-                to_object(safe(uncolor_bits(to_zpointer(raw(value)))));
-            HeldFreeDiag::NoteFixSlot(&derived, target, wrote ? 1 : 0, "FixMinor.derived");
-        }
+        (void)FixMinorEvacuatedSlot(derived, knownBase, stw);
     };
     // fixenum: VisitMutatorRoots exposes derived pairs only as temporary base roots and
     // deliberately leaves their real slots for PreForward. Minor fix needs the typed
@@ -1494,17 +1453,13 @@ void WCollector::FixMinorObjectSlots(BaseObject* object, const ScopedStopTheWorl
     }
     // eatarm brackets the host so an IOR can be attributed to the object being fixed;
     // nullgate names the edge inside. Both are gated and neither subsumes the other.
-    EatArmDiag::SetFixHost(object);
+
     object->ForEachRefField([this, object, stw](RefField<>& field) {
         NullRouteCaller::ScopedEdge _edge("liveobj", object, reinterpret_cast<uintptr_t>(&field));
         NullRouteCaller::ScopedTag _nrTag("FixMinorEvacuatedSlot");
-        bool wrote = FixMinorEvacuatedSlot(field, nullptr, stw);
-        if (UNLIKELY(HeldFreeDiag::Enabled())) {
-            BaseObject* tgt = ResolveMinorReference(field, stw);
-            HeldFreeDiag::NoteFixSlot(&field, tgt, wrote ? 1 : 0, "FixMinor.field");
-        }
+        (void)FixMinorEvacuatedSlot(field, nullptr, stw);
     });
-    EatArmDiag::SetFixHost(nullptr);
+
 }
 
 // R2: parallel ⑦ young.ref_fix — index-shard reachableObjects + remset slots;
@@ -1526,7 +1481,7 @@ void WCollector::FixMinorRootSlotsParallel(GCThreadPool* threadPool, const Scope
         }
         if (IsGhostFromObject(obj) && !IsUnmovableFromObject(obj)) {
             (void)ForceRootRouteDomainWhileForwardable(const_cast<WCollector*>(this), obj);
-            OffpastDiag::NotePregrantSlot(static_cast<void*>(&root), obj, "grant_pass.par");
+
         } else if (!Collector::PlausibleManagedObjectGate("statresid.grant_pass.par", obj)) {
             BaseObject* host = Collector::TryRecoverInteriorBase(obj);
             if (host != nullptr && IsGhostFromObject(host) && !IsUnmovableFromObject(host)) {
@@ -1546,22 +1501,12 @@ void WCollector::FixMinorRootSlotsParallel(GCThreadPool* threadPool, const Scope
     auto rootFix = [this, stw](ObjectRef& root) {
         NullRouteCaller::ScopedEdge _edge("root", nullptr, reinterpret_cast<uintptr_t>(&root));
         NullRouteCaller::ScopedTag _nrTag("FixMinorEvacuatedSlot");
-        bool wrote = FixMinorEvacuatedSlot(root, stw);
-        if (UNLIKELY(HeldFreeDiag::Enabled())) {
-            BaseObject* tgt = ResolveMinorReference(root, stw);
-            HeldFreeDiag::NoteFixSlot(&root, tgt, wrote ? 1 : 0, "FixMinor.root.par");
-        }
+        (void)FixMinorEvacuatedSlot(root, stw);
     };
     DerivedPtrVisitor derivedFix = [this, stw](BasePtrType basePtr, DerivedSlot& derived) {
         BaseObject* knownBase = is_null(basePtr) ? nullptr :
             to_object(safe(uncolor_bits(to_zpointer(raw(basePtr)))));
-        bool wrote = FixMinorEvacuatedSlot(derived, knownBase, stw);
-        if (UNLIKELY(HeldFreeDiag::Enabled())) {
-            zaddress_unsafe value = derived.LoadDerived();
-            BaseObject* target = is_null(value) ? nullptr :
-                to_object(safe(uncolor_bits(to_zpointer(raw(value)))));
-            HeldFreeDiag::NoteFixSlot(&derived, target, wrote ? 1 : 0, "FixMinor.derived.par");
-        }
+        (void)FixMinorEvacuatedSlot(derived, knownBase, stw);
     };
     threadPool->AddWork(new (std::nothrow) LambdaWork([this, rootFix, derivedFix](size_t) {
         RootVisitor rawRootVisitor = rootFix;
@@ -1694,12 +1639,8 @@ void WCollector::EvacuateYoungRegions(const std::vector<BaseObject*>& reachableV
                 NullRouteCaller::ScopedTag _nrTag("FixMinorEvacuatedSlot");
                 auto known = interiorBases.find(slot);
                 BaseObject* knownBase = known != interiorBases.end() ? known->second : nullptr;
-                bool wrote = FixMinorEvacuatedSlot(HeapSlotAt<>(slot), knownBase, evacStw,
-                                                   holderIsCurrentRoot(slot));
-                if (UNLIKELY(HeldFreeDiag::Enabled())) {
-                    BaseObject* tgt = ResolveMinorReference(HeapSlotAt<>(slot), evacStw);
-                    HeldFreeDiag::NoteFixSlot(reinterpret_cast<void*>(slot), tgt, wrote ? 1 : 0, "FixMinor.remset");
-                }
+                (void)FixMinorEvacuatedSlot(HeapSlotAt<>(slot), knownBase, evacStw,
+                                            holderIsCurrentRoot(slot));
             }
         }
     };
@@ -1719,12 +1660,8 @@ void WCollector::EvacuateYoungRegions(const std::vector<BaseObject*>& reachableV
                 NullRouteCaller::ScopedTag _nrTag("FixMinorEvacuatedSlot");
                 auto known = interiorBases.find(slot);
                 BaseObject* knownBase = known != interiorBases.end() ? known->second : nullptr;
-                bool wrote = FixMinorEvacuatedSlot(HeapSlotAt<>(slot), knownBase, evacStw,
-                                                   holderIsCurrentRoot(slot));
-                if (UNLIKELY(HeldFreeDiag::Enabled())) {
-                    BaseObject* tgt = ResolveMinorReference(HeapSlotAt<>(slot), evacStw);
-                    HeldFreeDiag::NoteFixSlot(reinterpret_cast<void*>(slot), tgt, wrote ? 1 : 0, "FixMinor.remset");
-                }
+                (void)FixMinorEvacuatedSlot(HeapSlotAt<>(slot), knownBase, evacStw,
+                                            holderIsCurrentRoot(slot));
             }
         }
     };
@@ -2206,8 +2143,8 @@ void WCollector::EvacuateYoungRegions(const std::vector<BaseObject*>& reachableV
              "[GCV2Minor] remembered-set promoteReplay=%zu residualPromote=%zu "
              "youngRegionCount=%zu",
              promotedPathRecords, residualPromoteRecords, liveYoungRegions);
-        FlipPromoDiag::OnPromotePhaseEnd(minorTotalRuns + 1, promotedPathRecords, residualPromoteRecords);
-        FlipPromoDiag::DumpProcessTotals("post-promote");
+
+
 
     }
 
@@ -2592,7 +2529,6 @@ BaseObject* WCollector::WaitRoutedTipReady(BaseObject* from, BaseObject* to, Reg
         return from;
     };
 
-    const bool tv = ToverFailDiag::Enabled();
     auto lookupTo = [&]() -> BaseObject* {
         if constexpr (ForwardingTable::kEntriesSoleWhenArmed) {
             if (ForwardingTable::EntriesArmed(reinterpret_cast<MAddress>(from))) {
@@ -2618,9 +2554,6 @@ BaseObject* WCollector::WaitRoutedTipReady(BaseObject* from, BaseObject* to, Reg
     if (again != nullptr && Heap::IsHeapAddress(again) && again->IsValidObject()) {
         if (diagOn) {
             tipReadyCount.fetch_add(1, std::memory_order_relaxed);
-        }
-        if (tv) {
-            ToverFailDiag::NoteRemapWaitTip();
         }
         if (MutatorRelocate::StatsOn()) {
             MutatorRelocate::NoteWaitReceipt();
@@ -2884,32 +2817,15 @@ BaseObject* WCollector::ForwardObject(BaseObject* obj)
 {
     // markfloor: stack/reg roots may hold RawArray+8 interiors (tip=length). Do not
     // GetSize/CopyObject them; leave the slot unchanged (caller keeps obj).
-    const bool tv = ToverFailDiag::Enabled();
-    if (tv) {
-        ToverFailDiag::NoteFwdEnter();
-    }
     if (!Collector::PlausibleManagedObjectGate("WCollector::ForwardObject", obj)) {
         // tipnull: uncopied movable ghost is not VisitLive success.
         if (IsGhostFromObject(obj) && !IsUnmovableFromObject(obj)) {
-            if (tv) {
-                ToverFailDiag::NoteFwdNull();
-            }
             return nullptr;
-        }
-        if (tv) {
-            ToverFailDiag::NoteFwdSame();
         }
         return obj;
     }
     BaseObject* to = TryForwardObject(obj);
     if (to != nullptr) {
-        if (tv) {
-            if (to != obj) {
-                ToverFailDiag::NoteFwdOk();
-            } else {
-                ToverFailDiag::NoteFwdSame();
-            }
-        }
         return to;
     }
     // GetRoute survivor gate / exclusive soft-miss: a movable ghost-from with no
@@ -2917,13 +2833,7 @@ BaseObject* WCollector::ForwardObject(BaseObject* obj)
     // pointer that CollectRegion is about to reclaim → UAF / HANG under ALOT.
     // Unmovable / non-ghost still keep `obj` (in-place / not in route domain).
     if (IsGhostFromObject(obj) && !IsUnmovableFromObject(obj)) {
-        if (tv) {
-            ToverFailDiag::NoteFwdNull();
-        }
         return nullptr;
-    }
-    if (tv) {
-        ToverFailDiag::NoteFwdSame();
     }
     return obj;
 }

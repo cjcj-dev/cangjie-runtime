@@ -15,14 +15,9 @@
 #include "Heap/Collector/Collector.h"
 #include "Heap/Collector/CollectorResources.h"
 #include "Heap/Heap.h"
-#include "Heap/Verify/HealPairDiag.h"
-#include "Heap/Verify/IdleEdgeDiag.h"
 #include "Heap/Verify/SurvNodeDiag.h"
-#include "Heap/Verify/LoadGoodProbe.h"
 #include "Heap/Verify/ProbeReadRouteDiag.h"
-#include "Heap/Verify/RemsetPhaseProbe.h"
 #include "Heap/Verify/StatHealDiag.h"
-#include "Heap/Verify/YyEdgeDiag.h"
 #include "Heap/Verify/ZgcSelfHealDiag.h"
 #include "Heap/WCollector/EnumBarrier.h"
 #include "Heap/WCollector/ForwardBarrier.h"
@@ -619,38 +614,6 @@ void Barrier::WriteReference(BaseObject* obj, RefField<false>& field, BaseObject
             }
         }
     }
-    // edgemiss: narrow log when installed target is large (default-off, self-gates).
-    if (ref != nullptr) {
-        uint8_t bk = 0;
-        switch (phase) {
-            case BarrierPhase::IDLE:
-                bk = 1;
-                break;
-            case BarrierPhase::ENUM:
-                bk = 2;
-                break;
-            case BarrierPhase::TRACE:
-                bk = 3;
-                break;
-            case BarrierPhase::POST_TRACE:
-                bk = 4;
-                break;
-            case BarrierPhase::PREFORWARD:
-                bk = 5;
-                break;
-            case BarrierPhase::FORWARD:
-                bk = 6;
-                break;
-            case BarrierPhase::STW:
-                bk = 7;
-                break;
-            default:
-                bk = 0;
-                break;
-        }
-        HealPairDiag::NoteEdgeWrite(obj, &field, raw(prev.GetFieldValue()),
-                                    raw(field.GetFieldValue()), bk);
-    }
 }
 
 void Barrier::WriteReferenceImpl(BaseObject* obj, RefField<false>& field, BaseObject* ref) const
@@ -861,10 +824,8 @@ static inline void NoteHandedOut(BaseObject* target, BaseObject* holder, const R
     //                         SetTypeInfo cannot clear because it writes only typeInfoLow32 /
     //                         typeInfoHigh16 and never touches objectState (StateWord.h:106-116)
     const bool hasTo = (collector.FindToVersion(target) != nullptr);
-    // Attributes the hand-out to a code path.  ForwardBarrier's unmovable arm (ForwardBarrier.cpp:150
-    // and :237) does no resolve at all -- it only calls a ToverFailDiag counter, whose body is empty
-    // (that whole subsystem is hollow), then hands `oldTarget` back and self-heals the slot load-good.
-    // Its own diagnostic call even passes `st == ObjectState::FORWARDED`, so the case was known.
+    // Attributes the hand-out to a code path. ForwardBarrier's unmovable arm hands
+    // `oldTarget` back and self-heals the slot load-good without resolving it.
     const bool unmov = collector.IsUnmovableFromObject(target);
     // ghostage: the recycling reading says these slots are stale across at least one relocation
     // cycle -- painted with a colour that was good then, made load-bad by the flip, and made good
@@ -1080,36 +1041,17 @@ BaseObject* Barrier::ReadStaticRef(RootSlot& field) const
 {
     zaddress_unsafe observed = field.LoadPlain();
     if (is_null(observed)) {
-        if (UNLIKELY(LoadGoodProbe::Enabled())) {
-            LoadGoodProbe::NoteNull(LoadGoodProbe::kFaceRoot);
-        }
         return nullptr;
     }
     // Decode any legacy colour bits at an external ABI boundary without exposing
     // the RootSlot storage as a HeapSlot.
     HeapSlot<> observedBits(to_zpointer(raw(observed)));
     BaseObject* target = to_object(observedBits.GetTargetObject());
-    // Hoisted out of the `if` below purely so the probe can record the same decision
-    // production makes. Short-circuit order and effects are unchanged.
     const bool ghost =
         target != nullptr && Heap::IsHeapAddress(target) && theCollector.IsGhostFromObject(target);
-    if (UNLIKELY(LoadGoodProbe::Enabled())) {
-        LoadGoodProbe::NoteRead(LoadGoodProbe::kFaceRoot, raw(observed), ghost,
-                                theCollector.is_load_good(observedBits));
-        if ((raw(observed) & ::g_cjLoadBadMask) != 0) {
-            LoadGoodProbe::NoteBadSample(LoadGoodProbe::kFaceRoot, raw(observed),
-                                         reinterpret_cast<uintptr_t>(target));
-        }
-    }
     BaseObject* beforeRoute = target;
     if (ghost) {
-        BaseObject* before = target;
         target = theCollector.FindLatestVersion(target);
-        if (UNLIKELY(LoadGoodProbe::Enabled())) {
-            LoadGoodProbe::NoteRouteSample(LoadGoodProbe::kFaceRoot, raw(observed),
-                                           reinterpret_cast<uintptr_t>(before),
-                                           reinterpret_cast<uintptr_t>(target));
-        }
     }
     const bool resolvedChanged = target != beforeRoute;
     const bool healAttempted = target != nullptr && raw(observed) != reinterpret_cast<uintptr_t>(target);
@@ -1766,121 +1708,29 @@ void Barrier::ReadGenericImpl(const ObjectPtr dstObj, ObjectPtr obj, void* field
 
 void Barrier::RecordCrossGenEdge(BaseObject* obj, MAddress fieldAddress, BaseObject* ref) const
 {
-    using namespace RemsetPhaseProbe;
-    // promoteedge gen codes: 0=unknown 1=young 2=old 3=nonheap
-    constexpr uint8_t kGenUnknown = 0;
-    constexpr uint8_t kGenYoung = 1;
-    constexpr uint8_t kGenOld = 2;
-    constexpr uint8_t kGenNonHeap = 3;
-    auto genOfAddr = [](MAddress addr) -> uint8_t {
-        if (addr == 0 || !Heap::IsHeapAddress(addr)) {
-            return kGenNonHeap;
-        }
-        RegionInfo* region = RegionInfo::TryGetRegionInfoAt(addr);
-        if (region == nullptr) {
-            return kGenUnknown;
-        }
-        return region->IsYoungRegion() ? kGenYoung : kGenOld;
-    };
-    const bool probeOn = Enabled();
-    const bool idleEdgeOn = IdleEdgeDiag::Enabled();
-    // idlewrite: also stamp object-header gen so field-addr vs obj mismatch is visible.
-    // Computed behind the gate: genOfAddr does an IsHeapAddress plus a region lookup, and this
-    // is the write barrier's hot path -- diagnostics must cost nothing when they are off.
-    const uint8_t holderObjGen = (idleEdgeOn && obj != nullptr && Heap::IsHeapAddress(obj))
-        ? genOfAddr(reinterpret_cast<MAddress>(obj))
-        : kGenUnknown;
-    const bool forceRecord = ForceRecordEnabled();
-    GCPhase phase = GCPhase::GC_PHASE_UNDEF;
-    if (probeOn || idleEdgeOn) {
-        phase = Heap::GetHeap().GetGCPhase();
-    }
-
-    if (!HasYoungRegionsForRecording() && !forceRecord) {
-        if (probeOn) {
-            NoteWrite(fieldAddress, phase, REASON_NO_YOUNG, false);
-        }
-        if (idleEdgeOn) {
-            IdleEdgeDiag::NoteBarrierDecision(fieldAddress, phase, false, genOfAddr(fieldAddress),
-                                              genOfAddr(reinterpret_cast<MAddress>(ref)),
-                                              static_cast<uint8_t>(REASON_NO_YOUNG), holderObjGen);
-        }
+    if (!HasYoungRegionsForRecording()) {
         return;
     }
     if (ref == nullptr || !Heap::IsHeapAddress(ref)) {
-        if (probeOn) {
-            NoteWrite(fieldAddress, phase, REASON_REF_NULL_OR_NONHEAP, false);
-        }
-        if (idleEdgeOn) {
-            IdleEdgeDiag::NoteBarrierDecision(fieldAddress, phase, false, genOfAddr(fieldAddress), kGenNonHeap,
-                                              static_cast<uint8_t>(REASON_REF_NULL_OR_NONHEAP), holderObjGen);
-        }
         return;
     }
-    // Bulk paths (CopyRefArray / WriteStruct) reach here without going through
-    // WriteReference. Single-field stores already marked in WriteReference;
-    // MarkObject / SATB enqueue are idempotent.
+
+    // Bulk paths reach here without WriteReference. Marking and remembering the
+    // new value is idempotent for single-field stores that already did so.
     MarkAndRememberNewValue(this->phase, ref);
-    RegionInfo* targetRegion = RegionInfo::GetRegionInfoAt(reinterpret_cast<MAddress>(ref));
-    // ⛔⛔ Do NOT skip on "the target is not young right now".
-    //
-    // OpenJDK keys the remembered set on the *slot*, never on the target
-    // (zBarrier.inline.hpp:729-733):
-    //
-    //     inline void ZBarrier::remember(volatile zpointer* p) {
-    //       if (ZHeap::heap()->is_old(p)) { ZGeneration::young()->remember(p); }
-    //     }
-    //
-    // Where a slot lives is stable; which generation its target is in is not -- a region's
-    // young-ness changes with promotion, relocation and reuse.  Testing a moving property once,
-    // at store time, and never re-testing it is how an edge gets lost.
-    //
-    // Measured: with MRT_GCV2_MINOR_GC_ALOT forcing young collections, ProbeUnmarkedLive
-    // (WCollector.cpp:8579) reported on run 69
-    //     fullYoung=369904 markedYoung=369072 UNMARKED_LIVE=832
-    //     missingEdgeHolders=28 edgeInRemset=0 edgeNotInRemset=28 noIncomingOld=804
-    // -- every one of the 28 unmarked-live objects that had an incoming old->young edge had that
-    // edge *absent* from the remembered set, so the loss is on the recording side, not the
-    // consumption side.  Those objects are then reclaimed with knownEmpty=1 neverExam=1 and a
-    // live field keeps naming the zeroed memory, which is the si_addr=0x8 crash.
-    //
-    // Recording an edge whose target turns out to be old costs a remembered-set entry and one
-    // extra slot scan; not recording it loses the object.  ZGC picks the same side of that trade.
-    (void)targetRegion;
-    // Heap holder: only record old→young (source not young).
+
+    // OpenJDK keys its remembered set on the slot, whose generation is stable,
+    // rather than on the target, whose generation can change during promotion.
     if (Heap::IsHeapAddress(fieldAddress)) {
         if (obj == nullptr || !Heap::IsHeapAddress(obj)) {
-            if (probeOn) {
-                NoteWrite(fieldAddress, phase, REASON_HOLDER_NULL_OR_NONHEAP, false);
-            }
-            if (idleEdgeOn) {
-                IdleEdgeDiag::NoteBarrierDecision(fieldAddress, phase, false, kGenUnknown, kGenYoung,
-                                                  static_cast<uint8_t>(REASON_HOLDER_NULL_OR_NONHEAP), holderObjGen);
-            }
             return;
         }
         RegionInfo* sourceRegion = RegionInfo::GetRegionInfoAt(fieldAddress);
         if (sourceRegion->IsYoungRegion()) {
-            if (probeOn) {
-                NoteWrite(fieldAddress, phase, REASON_HOLDER_YOUNG, false);
-            }
-            if (idleEdgeOn) {
-                IdleEdgeDiag::NoteBarrierDecision(fieldAddress, phase, false, kGenYoung, kGenYoung,
-                                                  static_cast<uint8_t>(REASON_HOLDER_YOUNG), holderObjGen);
-            }
-            if (UNLIKELY(YyEdgeDiag::Enabled())) {
-                YyEdgeDiag::NoteYoungToYoung(obj, fieldAddress, ref);
-            }
-            // h3seed2 甲: seed the young holder object into the next minor work stack.
-            // Object-level dirty list (AllocBuffer), not field remset — avoids y2yN remset bloat.
-            if (obj != nullptr) {
-                AllocBuffer* buffer = AllocBuffer::GetAllocBuffer();
-                if (buffer != nullptr) {
-                    buffer->PushY2yDirtyHolder(obj);
-                }
-            }
-            if (UNLIKELY(YyEdgeDiag::RecordEnabled())) {
-                theRememberedSet.Record(fieldAddress, /*fromMutatorBarrier=*/true);
+            // Preserve the product young-holder dirty list.
+            AllocBuffer* buffer = AllocBuffer::GetAllocBuffer();
+            if (buffer != nullptr) {
+                buffer->PushY2yDirtyHolder(obj);
             }
             return;
         }
@@ -1894,30 +1744,15 @@ void Barrier::RecordCrossGenEdge(BaseObject* obj, MAddress fieldAddress, BaseObj
         } else {
             theRememberedSet.Record(fieldAddress, /*fromMutatorBarrier=*/true);
         }
-        if (probeOn) {
-            NoteWrite(fieldAddress, phase, REASON_RECORDED, true);
-        }
-        if (idleEdgeOn) {
-            IdleEdgeDiag::NoteBarrierDecision(fieldAddress, phase, true, kGenOld, kGenYoung,
-                                              static_cast<uint8_t>(REASON_RECORDED), holderObjGen);
-        }
         return;
     }
-    // Non-heap fields cannot contribute heap-region remset bits. Static/global
-    // slots are visited as roots in every minor collection, so recording them in
-    // the remset only makes RescanRememberedSet discard them as non-heap slots.
+
+    // Static/global slots are visited as roots in every minor collection.
     (void)obj;
 #if defined(MRT_REMSET_BITMAP_CROSSCHECK)
     theRememberedSet.RecordStaticForCrossCheck(
         fieldAddress, reinterpret_cast<MAddress>(__builtin_return_address(0)));
 #endif
-    if (probeOn) {
-        NoteWrite(fieldAddress, phase, REASON_HOLDER_NULL_OR_NONHEAP, false);
-    }
-    if (idleEdgeOn) {
-        IdleEdgeDiag::NoteBarrierDecision(fieldAddress, phase, false, kGenNonHeap, kGenYoung,
-                                          static_cast<uint8_t>(REASON_HOLDER_NULL_OR_NONHEAP), holderObjGen);
-    }
 }
 
 void Barrier::RecordCrossGenEdgesInStruct(BaseObject* obj, MAddress start, size_t size,
