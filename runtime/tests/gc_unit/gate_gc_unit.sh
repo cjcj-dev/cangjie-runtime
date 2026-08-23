@@ -9,6 +9,7 @@ ROOT="$(cd "$(dirname "$0")/../../.." && pwd)"
 SRC="$ROOT/runtime/tests/gc_unit"
 SCRIPT="$SRC/run_standalone.sh"
 FINALIZER_SCRIPT="$SRC/run_finalizer_trigger.sh"
+PHASE_ENTRY_SCRIPT="$SRC/run_phase_entry_trigger.sh"
 STATUS_FILE="${GC_UNIT_GATE_STATUS:-${GCV2_RUNTIME_LIB_DIR:+$GCV2_RUNTIME_LIB_DIR/gc_unit_gate.status}}"
 STATUS_FILE="${STATUS_FILE:-$ROOT/runtime/output/gc_unit_gate.status}"
 
@@ -17,6 +18,8 @@ CPP_SUITE_STATE=NOT_RUN
 CPP_SUITE_SOURCE=NOT_RUN
 FINALIZER_STATE=NOT_RUN
 FINALIZER_SOURCE=NOT_RUN
+PHASE_ENTRY_STATE=NOT_RUN
+PHASE_ENTRY_SOURCE=NOT_RUN
 STATUS_REASON=UNEXPECTED_EXIT
 
 write_status() {
@@ -31,6 +34,8 @@ write_status() {
     echo "CPP_SUITE_SOURCE=$CPP_SUITE_SOURCE"
     echo "FINALIZER_TRIGGER=$FINALIZER_STATE"
     echo "FINALIZER_TRIGGER_SOURCE=$FINALIZER_SOURCE"
+    echo "PHASE_ENTRY_TRIGGER=$PHASE_ENTRY_STATE"
+    echo "PHASE_ENTRY_TRIGGER_SOURCE=$PHASE_ENTRY_SOURCE"
     echo "REASON=$STATUS_REASON"
   } >"$tmp"
   mv -f "$tmp" "$STATUS_FILE"
@@ -65,8 +70,10 @@ if [[ ! -f "$SCRIPT" ]]; then
   echo "GC_UNIT_GATE_FAIL: missing run_standalone.sh" >&2
   exit 2
 fi
-if [[ ! -f "$FINALIZER_SCRIPT" || ! -f "$SRC/finalizer_trigger.cj" ]]; then
-  echo "GC_UNIT_GATE_FAIL: missing end-to-end finalizer trigger test" >&2
+if [[ ! -f "$FINALIZER_SCRIPT" || ! -f "$SRC/finalizer_trigger.cj" ||
+      ! -f "$PHASE_ENTRY_SCRIPT" || ! -f "$SRC/phase_entry_trigger.cj" ||
+      ! -f "$SRC/phase_entry_major.cj" ]]; then
+  echo "GC_UNIT_GATE_FAIL: missing end-to-end language-level test" >&2
   exit 2
 fi
 if [[ ! -f "$SRC/test_defect_regressions.cpp" ]]; then
@@ -147,6 +154,8 @@ if [[ -f "$STAMP" && "$STAMP" -nt "$SO" ]]; then
     fi
     FINALIZER_STATE=PASS
     FINALIZER_SOURCE=CACHE
+    PHASE_ENTRY_STATE=PASS
+    PHASE_ENTRY_SOURCE=CACHE
     GATE_STATE=PASS
     STATUS_REASON=CACHED_PASS
     echo "GC_UNIT_GATE_OK (cached: runtime and suite both older than last green run) status=$STATUS_FILE"
@@ -267,7 +276,16 @@ if ! bash "$FINALIZER_SCRIPT"; then
   exit 1
 fi
 
+PHASE_ENTRY_STATE=FAIL
+PHASE_ENTRY_SOURCE=FRESH
+STATUS_REASON=PHASE_ENTRY_TRIGGER_FAILURE
+if ! bash "$PHASE_ENTRY_SCRIPT"; then
+  echo "GC_UNIT_GATE_FAIL: forwarding-carrier phase entry test failed" >&2
+  exit 1
+fi
+
 FINALIZER_STATE=PASS
+PHASE_ENTRY_STATE=PASS
 GATE_STATE=PASS
 STATUS_REASON=PASS
 touch "$STAMP"

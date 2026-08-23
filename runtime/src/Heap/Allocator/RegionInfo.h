@@ -2160,13 +2160,10 @@ public:
     }
 
     // Product publication edge shared by forwarding and from-page liveness.
-    // These non-inline overloads keep tests and all runtime Prepare callers on
-    // the same product SO symbol; the templated implementation remains typed.
-    void PublishForwardingCarrier(MarkView<Generation::Young> view);
-    void PublishForwardingCarrier(MarkView<Generation::Old> view);
-
+    // Keep this in the ordinary product inline path: the operation is part of
+    // PrepareForwardableRegion, not a test-facing ABI surface.
     template<Generation G>
-    void PublishForwardingCarrierImpl(MarkView<G> view)
+    __attribute__((always_inline)) inline void PublishForwardingCarrier(MarkView<G> view)
     {
         SetUnitRole0(static_cast<UnitRole>(metadata.unitRole));
         PublishFromPageMetadata(view);
