@@ -267,6 +267,14 @@ endif()
             COMMENT "Running the deterministic GC unit suite against the runtime just built"
             VERBATIM)
     endif()
+    if (WINDOWS_FLAG MATCHES 1)
+        add_custom_command(TARGET cangjie-runtime POST_BUILD
+            COMMAND python3 "${CMAKE_CURRENT_SOURCE_DIR}/../build/generate_windows_exports.py" check
+                "${CMAKE_BINARY_DIR}/windows_x86_64_exports.raw.def"
+                "${CMAKE_CURRENT_SOURCE_DIR}/windows_x86_64_exports.def"
+            COMMENT "Checking the Windows runtime export surface"
+            VERBATIM)
+    endif()
     if (((IOS_FLAG MATCHES 1 OR IOS_SIMULATOR_FLAG MATCHES 1) AND (CMAKE_SYSTEM_PROCESSOR MATCHES "aarch64")) OR
         ((CMAKE_SYSTEM_PROCESSOR MATCHES "x86_64" AND IOS_FLAG MATCHES 1) OR IOS_SIMULATOR_FLAG MATCHES 2))
 	target_compile_options(cangjie-runtime PRIVATE -Wno-elaborated-enum-base)
