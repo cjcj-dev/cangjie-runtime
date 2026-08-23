@@ -439,13 +439,22 @@ public:
         GCPhase phase = GC_PHASE_IDLE) : reason(gcReason)
     {
         startTime = TimeUtil::NanoSeconds();
+        // StartLightSync parks every mutator, so phases entered anywhere in this scope
+        // belong to ZStat's pause account just like phases in ScopedStopTheWorld.
+        ZStat::EnterStwScope();
         MutatorManager::Instance().StartLightSync(syncGCPhase, phase);
+        stoppedTime = TimeUtil::NanoSeconds();
     }
 
     __attribute__((always_inline)) ~ScopedLightSync()
     {
-        LOG(RTLOG_REPORT, "%s light sync time %zu us", reason, GetElapsedTime() / 1000); // 1000:nsec per usec
+        const uint64_t endTime = TimeUtil::NanoSeconds();
+        LOG(RTLOG_REPORT, "%s light sync time %zu us", reason, (endTime - startTime) / 1000); // 1000:nsec per usec
+        // A light sync parks every mutator just like StopTheWorld(). Keep its rendezvous and
+        // held intervals in the same structured pause ledger so pause sums cannot omit it.
+        GcLog::Stw(reason, stoppedTime - startTime, endTime - stoppedTime);
         MutatorManager::Instance().StopLightSync();
+        ZStat::ExitStwScope();
     }
 
     uint64_t GetElapsedTime() const { return TimeUtil::NanoSeconds() - startTime; }
@@ -453,6 +462,7 @@ public:
 private:
     const char* reason = nullptr;
     uint64_t startTime = 0;
+    uint64_t stoppedTime = 0;
 };
 
 // Scoped lock STW, this prevent other thread STW during the current scope.
