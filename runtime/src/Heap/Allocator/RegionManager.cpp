@@ -99,6 +99,7 @@ void Report(size_t listRegions, size_t listBytes)
 uintptr_t RegionInfo::UnitInfo::totalUnitCount = 0;
 uintptr_t RegionInfo::UnitInfo::heapStartAddress = 0;
 size_t RegionInfo::UnitInfo::unitSizeShift = 0;
+MemMap* RegionInfo::UnitInfo::memoryOwner = nullptr;
 
 // gatehot: cold OOB for GetUnitIdxAt — kept out of the hot function so the common
 // path can inline (was ~128 insns with dladdr/FATAL in the same body).
@@ -985,12 +986,12 @@ size_t FreeRegionManager::ReleaseDetachQuarantineAfterMajor()
     return releasedUnits;
 }
 
-void RegionManager::SetMaxUnitCountForRegion()
+void RegionManager::SetMaxUnitCountForRegion(size_t regionSize)
 {
-    maxUnitCountPerRegion = CangjieRuntime::GetHeapParam().regionSize * KB / RegionInfo::UNIT_SIZE;
+    maxUnitCountPerRegion = regionSize * KB / RegionInfo::UNIT_SIZE;
 }
 
-void RegionManager::SetMaxUnitCountForPinnedRegion()
+void RegionManager::SetMaxUnitCountForPinnedRegion(size_t regionSize)
 {
     auto env = std::getenv("cjPinnedRegionSize");
     if (env == nullptr) {
@@ -1000,15 +1001,15 @@ void RegionManager::SetMaxUnitCountForPinnedRegion()
     size_t size = CString::ParseSizeFromEnv(env);
     // The minimum region size is system page size, measured in KB.
     size_t minSize = MapleRuntime::MRT_PAGE_SIZE / KB;
-    if (size >= minSize && size <= CangjieRuntime::GetHeapParam().regionSize) {
+    if (size >= minSize && size <= regionSize) {
         maxUnitCountPerPinnedRegion = size * KB / RegionInfo::UNIT_SIZE;
     } else {
         LOG(RTLOG_ERROR, "Unsupported cjPinnedRegionSize parameter. Valid cjPinnedRegionSize"
-            "range is [%zuKB, %zuKB].\n", minSize, CangjieRuntime::GetHeapParam().regionSize);
+            "range is [%zuKB, %zuKB].\n", minSize, regionSize);
     }
 }
 
-void RegionManager::SetLargeObjectThreshold()
+void RegionManager::SetLargeObjectThreshold(size_t configuredRegionSize)
 {
     auto env = std::getenv("cjLargeThresholdSize");
     if (env == nullptr) {
@@ -1026,13 +1027,13 @@ void RegionManager::SetLargeObjectThreshold()
         LOG(RTLOG_ERROR, "Unsupported cjLargeThresholdSize parameter. Valid cjLargeThresholdSize"
             "range is [%zuKB, 2048KB].\n", minSize);
     }
-    size_t regionSize = CangjieRuntime::GetHeapParam().regionSize * KB;
+    size_t regionSize = configuredRegionSize * KB;
     largeObjectThreshold = largeObjectThreshold > regionSize ? regionSize :  largeObjectThreshold;
 }
 
-void RegionManager::SetGarbageThreshold()
+void RegionManager::SetGarbageThreshold(double garbageThreshold)
 {
-    fromSpaceGarbageThreshold = CangjieRuntime::GetGCParam().garbageThreshold;
+    fromSpaceGarbageThreshold = garbageThreshold;
 }
 
 #if defined(__EULER__)
@@ -1055,12 +1056,10 @@ void RegionManager::SetCacheRatio(double minSize, double maxSize, double default
 }
 #endif
 
-void RegionManager::Initialize(size_t nUnit, uintptr_t regionInfoAddr)
+void RegionManager::Initialize(size_t nUnit, uintptr_t regionInfoAddr, MemMap& memoryOwner,
+                               const HeapParam& heapParam, double garbageThreshold)
 {
     size_t metadataSize = GetMetadataSize(nUnit);
-#ifdef _WIN64
-    MemMap::CommitMemory(reinterpret_cast<void*>(regionInfoAddr), metadataSize);
-#endif
     this->regionInfoStart = regionInfoAddr;
     this->regionHeapStart = regionInfoAddr + metadataSize;
     this->regionHeapEnd = regionHeapStart + nUnit * RegionInfo::UNIT_SIZE;
@@ -1068,17 +1067,17 @@ void RegionManager::Initialize(size_t nUnit, uintptr_t regionInfoAddr)
     // index is (addr - base) / UNIT_SIZE with no probing -- ZGranuleMap's shape.
     ForwardingTable::Initialize(regionHeapStart, nUnit * RegionInfo::UNIT_SIZE, RegionInfo::UNIT_SIZE);
     this->inactiveZone = regionHeapStart;
-    SetMaxUnitCountForRegion();
-    SetMaxUnitCountForPinnedRegion();
-    SetLargeObjectThreshold();
-    SetGarbageThreshold();
+    SetMaxUnitCountForRegion(heapParam.regionSize);
+    SetMaxUnitCountForPinnedRegion(heapParam.regionSize);
+    SetLargeObjectThreshold(heapParam.regionSize);
+    SetGarbageThreshold(garbageThreshold);
 #if defined(__EULER__)
     SetCacheRatio(0.0, 1.0, 1.0);
 #endif
     // propagate region heap layout
-    RegionInfo::Initialize(nUnit, regionHeapStart);
+    RegionInfo::Initialize(nUnit, regionHeapStart, &memoryOwner);
     freeRegionManager.Initialize(nUnit);
-    this->exemptedRegionThreshold = CangjieRuntime::GetHeapParam().exemptionThreshold;
+    this->exemptedRegionThreshold = heapParam.exemptionThreshold;
     DLOG(REPORT, "region info @0x%zx+%zu, heap [0x%zx, 0x%zx), unit count %zu", regionInfoAddr, metadataSize,
          regionHeapStart, regionHeapEnd, nUnit);
 }
@@ -2068,10 +2067,7 @@ RegionInfo* RegionManager::TakeRegion(size_t num, RegionInfo::UnitRole type, boo
         if (reserved) {
             region = RegionInfo::InitRegionAt(addr, num, type);
             size_t idx = region->GetUnitIdx();
-#ifdef _WIN64
-            MemMap::CommitMemory(
-                reinterpret_cast<void*>(RegionInfo::GetUnitAddress(idx)), num * RegionInfo::UNIT_SIZE);
-#endif
+            RegionInfo::CommitUnits(idx, num);
             (void)idx; // eliminate compilation warning
             DLOG(REGION, "take inactive units [%zu+%zu, %zu) at [0x%zx, 0x%zx)", idx, num, idx + num,
                  RegionInfo::GetUnitAddress(idx), RegionInfo::GetUnitAddress(idx + num));

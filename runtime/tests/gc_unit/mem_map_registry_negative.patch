@@ -1,0 +1,12 @@
+diff --git a/runtime/src/Heap/Allocator/MemMap.cpp b/runtime/src/Heap/Allocator/MemMap.cpp
+--- a/runtime/src/Heap/Allocator/MemMap.cpp
++++ b/runtime/src/Heap/Allocator/MemMap.cpp
+@@ -372,7 +372,7 @@ MemMap* MemMap::TryMapMemory(size_t reqSize, size_t initSize, const Option& opt,
+             void* segment = osBackend.Reserve(nullptr, currentSize, opt.flags, opt.tag, false);
+             if (segment == nullptr ||
+-                !registry.Insert(MemoryRange{ reinterpret_cast<uintptr_t>(segment), currentSize })) {
++                false /* red proof: skip fallback registry insertion */) {
+                 if (segment != nullptr) {
+                     (void)osBackend.Unreserve(segment, currentSize);
+                 }
+                 for (const MemoryRange& range : registry.Ranges()) {
