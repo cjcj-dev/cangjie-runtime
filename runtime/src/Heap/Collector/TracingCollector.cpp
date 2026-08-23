@@ -1050,7 +1050,7 @@ void TracingCollector::DumpRoots(LogType logType)
 }
 #endif
 
-void TracingCollector::PreGarbageCollection(bool isConcurrent)
+void TracingCollector::PreGarbageCollection(bool isConcurrent, uint64_t gcIndex)
 {
     ResetSkippedStackMapCounts();
     VLOG(REPORT, "Begin GC log. GCReason: %s, Current allocated %s, Current threshold %s, current tag %u",
@@ -1072,7 +1072,7 @@ void TracingCollector::PreGarbageCollection(bool isConcurrent)
          threadCount, threadCount - 1, threadPool->GetMaxActiveThreadNum());
 
     GetGCStats().reason = gcReason;
-    GetGCStats().async = !g_gcRequests[gcReason].IsSyncGC();
+    GetGCStats().async = (gcIndex == GCTask::ASYNC_TASK_INDEX);
     GetGCStats().isConcurrentMark = isConcurrent;
 #if defined(MRT_DEBUG) && (MRT_DEBUG == 1)
     DumpBeforeGC();

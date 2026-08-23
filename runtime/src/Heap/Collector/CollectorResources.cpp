@@ -125,19 +125,49 @@ void CollectorResources::StopGCThreads()
 void CollectorResources::RunTaskLoop()
 {
     gcTid.store(MapleRuntime::GetTid(), std::memory_order_release);
+#if defined(MRT_GC_UNIT_TESTS)
+    taskQueue->DrainTaskQueue(testCollector != nullptr ? static_cast<void*>(testCollector)
+                                                      : static_cast<void*>(&collectorProxy));
+#else
     taskQueue->DrainTaskQueue(&collectorProxy);
+#endif
     NotifyGCFinished(GCTask::TASK_INDEX_FOR_EXIT);
 }
 
 // For the ignored gc request, check whether need to wait for current gc finish
-void CollectorResources::PostIgnoredGcRequest(GCReason reason)
+void CollectorResources::PostIgnoredGcRequest(bool shouldWait)
 {
-    GCRequest& request = g_gcRequests[reason];
-    if (request.IsSyncGC() && isGcStarted.load(std::memory_order_seq_cst)) {
+    if (shouldWait && isGcStarted.load(std::memory_order_seq_cst)) {
         ScopedEnterSaferegion safeRegion(false);
         WaitForGCFinish();
     }
 }
+
+#if defined(MRT_GC_UNIT_TESTS)
+bool CollectorResources::ShouldWaitForIgnoredGcRequest(GCReason reason, bool async)
+{
+    return !async || g_gcRequests[reason].IsSyncGC();
+}
+
+bool CollectorResources::HasSyncTaskCompleted(uint64_t finishedIndex, uint64_t awaitedIndex)
+{
+    if (finishedIndex == GCTask::TASK_INDEX_FOR_EXIT) {
+        return true;
+    }
+    MRT_ASSERT(finishedIndex >= GCTask::SYNC_TASK_MIN_INDEX && finishedIndex < GCTask::ASYNC_TASK_INDEX,
+               "finished sync task index must not be a sentinel");
+    MRT_ASSERT(awaitedIndex >= GCTask::SYNC_TASK_MIN_INDEX && awaitedIndex < GCTask::ASYNC_TASK_INDEX,
+               "awaited sync task index must not be a sentinel");
+    constexpr uint64_t ringSize = GCTask::ASYNC_TASK_INDEX - GCTask::SYNC_TASK_MIN_INDEX;
+    constexpr uint64_t halfRing = ringSize / 2;
+    uint64_t finishedOrdinal = finishedIndex - GCTask::SYNC_TASK_MIN_INDEX;
+    uint64_t awaitedOrdinal = awaitedIndex - GCTask::SYNC_TASK_MIN_INDEX;
+    uint64_t forwardDistance = finishedOrdinal >= awaitedOrdinal
+        ? finishedOrdinal - awaitedOrdinal
+        : ringSize - awaitedOrdinal + finishedOrdinal;
+    return forwardDistance <= halfRing;
+}
+#endif
 
 void CollectorResources::RequestAsyncGC(GCReason reason)
 {
@@ -163,20 +193,13 @@ void CollectorResources::RequestGCAndWait(GCReason reason)
         return oldTask.GetGCReason() == newTask.GetGCReason();
     };
 
-    GCRequest& request = g_gcRequests[reason];
-    // If this gcTask need not to block, just add to async queue
-    if (!request.IsSyncGC()) {
-        taskQueue->EnqueueAsync(gcTask);
-        return;
-    }
-
-    // If this gcTask need to block,
-    // add gcTask to syncTaskQueue of gcTaskQueue and wait until this gcTask finished
+    // The caller selected the synchronous path. Add this task to the sync FIFO
+    // and wait for the completion index assigned to this request.
     std::unique_lock<std::mutex> lock(gcFinishedCondMutex);
     uint64_t curThreadSyncIndex = taskQueue->EnqueueSync(gcTask, filter);
     // wait until GC finished
     std::function<bool()> pred = [this, curThreadSyncIndex] {
-        return ((finishedGcIndex >= curThreadSyncIndex) || (finishedGcIndex == GCTask::TASK_INDEX_FOR_EXIT));
+        return HasSyncTaskCompleted(finishedGcIndex.load(std::memory_order_acquire), curThreadSyncIndex);
     };
     gcFinishedCondVar.wait(lock, pred);
 }
@@ -190,9 +213,14 @@ void CollectorResources::RequestGC(GCReason reason, bool async)
     GCRequest& request = g_gcRequests[reason];
     uint64_t curTime = TimeUtil::NanoSeconds();
     request.SetPrevRequestTime(curTime);
-    if (collectorProxy.ShouldIgnoreRequest(request)) {
+#if defined(MRT_GC_UNIT_TESTS)
+    Collector& requestOwner = testCollector != nullptr ? *testCollector : static_cast<Collector&>(collectorProxy);
+#else
+    CollectorProxy& requestOwner = collectorProxy;
+#endif
+    if (requestOwner.ShouldIgnoreRequest(request)) {
         DLOG(ALLOC, "ignore gc request");
-        PostIgnoredGcRequest(reason);
+        PostIgnoredGcRequest(ShouldWaitForIgnoredGcRequest(reason, async));
     } else if (async) {
         RequestAsyncGC(reason);
     } else {

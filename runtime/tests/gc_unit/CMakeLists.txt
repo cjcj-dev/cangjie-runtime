@@ -40,6 +40,7 @@ set(GC_UNIT_SOURCES
     test_range_registry.cpp
     test_stay_young.cpp
     test_gc_trigger.cpp
+    test_gc_request_sync.cpp
     test_mutator_relocate.cpp
     test_expire_kept.cpp
     test_receipt_life.cpp

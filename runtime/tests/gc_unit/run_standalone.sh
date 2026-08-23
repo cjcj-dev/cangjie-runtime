@@ -51,9 +51,15 @@ if [[ -d "$ROOT/runtime/output/temp/include" ]]; then
   INC_FLAGS+=(-I"$ROOT/runtime/output/temp/include")
 fi
 
+GC_UNIT_DEFS=(-DMRT_ZSTAT_COMPILED=1)
+nm -D "$RUNTIME_LIB_DIR/libcangjie-runtime.so" >"$OUT/runtime-dynamic-symbols.txt"
+if /usr/bin/grep -q 'ShouldWaitForIgnoredGcRequest' "$OUT/runtime-dynamic-symbols.txt"; then
+  GC_UNIT_DEFS+=(-DMRT_GC_UNIT_TESTS=1)
+fi
+
 $CXX -std=gnu++17 -O0 -g -Wall -Wextra -pthread -fno-rtti \
   "${RANGE_REGISTRY_FLAGS[@]}" \
-  -DMRT_ZSTAT_COMPILED=1 \
+  "${GC_UNIT_DEFS[@]}" \
   "${INC_FLAGS[@]}" \
   "$SRC/gc_unit_main.cpp" \
   "$SRC/gc_unit_stubs.cpp" \
@@ -88,6 +94,7 @@ $CXX -std=gnu++17 -O0 -g -Wall -Wextra -pthread -fno-rtti \
     "${RANGE_REGISTRY_SOURCES[@]}" \
     "$SRC/test_stay_young.cpp" \
     "$SRC/test_gc_trigger.cpp" \
+    "$SRC/test_gc_request_sync.cpp" \
     "$SRC/test_mutator_relocate.cpp" \
     "$SRC/test_expire_kept.cpp" \
     "$SRC/test_receipt_life.cpp" \

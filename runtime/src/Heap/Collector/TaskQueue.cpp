@@ -16,7 +16,11 @@ namespace MapleRuntime {
 bool GCExecutor::Execute(void* owner)
 {
     MRT_ASSERT(owner != nullptr, "task queue owner ptr should not be null!");
-    CollectorProxy* collectorProxy = reinterpret_cast<CollectorProxy*>(owner);
+#if defined(MRT_GC_UNIT_TESTS)
+    Collector* collector = reinterpret_cast<Collector*>(owner);
+#else
+    CollectorProxy* collector = reinterpret_cast<CollectorProxy*>(owner);
+#endif
 
     switch (taskType) {
         case GCTask::TaskType::TASK_TYPE_TERMINATE_GC: {
@@ -26,13 +30,13 @@ bool GCExecutor::Execute(void* owner)
             uint64_t curTime = TimeUtil::NanoSeconds();
             if ((curTime - GCStats::GetPrevGCStartTime()) > CangjieRuntime::GetGCParam().backupGCInterval) {
                 GCStats::SetPrevGCStartTime(curTime);
-                collectorProxy->RunGarbageCollection(GCTask::ASYNC_TASK_INDEX, GC_REASON_BACKUP);
+                collector->RunGarbageCollection(GCTask::ASYNC_TASK_INDEX, GC_REASON_BACKUP);
             }
             break;
         }
         case GCTask::TaskType::TASK_TYPE_INVOKE_GC: {
             GCStats::SetPrevGCStartTime(TimeUtil::NanoSeconds());
-            collectorProxy->RunGarbageCollection(taskIndex, gcReason);
+            collector->RunGarbageCollection(taskIndex, gcReason);
             break;
         }
         case GCTask::TaskType::TASK_TYPE_DUMP_HEAP: {
