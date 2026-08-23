@@ -31,6 +31,30 @@ namespace {
 // is the only unlink (zGeneration.cpp:276-285).
 ZGranuleMap<ZForwarding*> g_membership;
 ZGranuleMap<ZForwarding*> g_entries;
+
+// Product boundary: callers still own virtual addresses, while ZGranuleMap
+// consumes only heap offsets. These helpers force every consumer through the
+// map's checked MAddress -> zoffset gate before an array element can be formed.
+ZForwarding* MapGet(const ZGranuleMap<ZForwarding*>& map, MAddress addr)
+{
+    zoffset offset;
+    return map.offset_for_address(addr, &offset) ? map.get(offset) : nullptr;
+}
+
+void MapPut(ZGranuleMap<ZForwarding*>& map, MAddress addr, size_t size, ZForwarding* value)
+{
+    zoffset offset;
+    if (map.offset_for_address(addr, &offset)) {
+        map.put(offset, size, value);
+    }
+}
+
+ZForwarding* MapExchange(ZGranuleMap<ZForwarding*>& map, MAddress addr, ZForwarding* value)
+{
+    zoffset offset;
+    return map.offset_for_address(addr, &offset) ? map.exchange(offset, value) : nullptr;
+}
+
 std::atomic<bool> g_ready{ false };
 // Installation is rare and phase-scoped. Serialize provisional-to-full replacement so
 // readers never observe a freed membership carrier while the attached array is resized.
@@ -110,8 +134,8 @@ void ForwardingTable::insert(ZForwarding* forwarding)
     if (forwarding == nullptr || !Ready()) {
         return;
     }
-    g_membership.put(forwarding->start(), forwarding->size(), forwarding);
-    g_entries.put(forwarding->start(), forwarding->size(), forwarding);
+    MapPut(g_membership, forwarding->start(), forwarding->size(), forwarding);
+    MapPut(g_entries, forwarding->start(), forwarding->size(), forwarding);
 }
 
 void ForwardingTable::remove(ZForwarding* forwarding)
@@ -121,7 +145,7 @@ void ForwardingTable::remove(ZForwarding* forwarding)
     if (forwarding == nullptr || !Ready()) {
         return;
     }
-    g_membership.put(forwarding->start(), forwarding->size(), nullptr);
+    MapPut(g_membership, forwarding->start(), forwarding->size(), nullptr);
 }
 
 ZForwarding* ForwardingTable::get(MAddress addr)
@@ -129,7 +153,7 @@ ZForwarding* ForwardingTable::get(MAddress addr)
     if (!Ready()) {
         return nullptr;
     }
-    ZForwarding* forwarding = g_membership.get(addr);
+    ZForwarding* forwarding = MapGet(g_membership, addr);
     if (forwarding != nullptr && !forwarding->page_life_current(RegionLifeClock::Carrier::ARMED_ENTRY)) {
         return nullptr;
     }
@@ -142,11 +166,11 @@ void ForwardingTable::Insert(MAddress regionStart, size_t regionSize, RegionInfo
         return;
     }
     EnsureEntries(region);
-    ZForwarding* forwarding = g_entries.get(regionStart);
+    ZForwarding* forwarding = MapGet(g_entries, regionStart);
     if (forwarding == nullptr) {
         return;
     }
-    g_membership.put(regionStart, regionSize, forwarding);
+    MapPut(g_membership, regionStart, regionSize, forwarding);
 }
 
 void ForwardingTable::InsertProvisional(MAddress regionStart, size_t regionSize, RegionInfo* region)
@@ -155,7 +179,7 @@ void ForwardingTable::InsertProvisional(MAddress regionStart, size_t regionSize,
         return;
     }
     std::lock_guard<std::mutex> lock(g_installLock);
-    ZForwarding* forwarding = g_entries.get(regionStart);
+    ZForwarding* forwarding = MapGet(g_entries, regionStart);
     if (forwarding == nullptr) {
         // Two entries preserve the existing armed-miss semantics and membership publication,
         // without zeroing a capacity-sized table before marking has established live bytes.
@@ -164,10 +188,10 @@ void ForwardingTable::InsertProvisional(MAddress regionStart, size_t regionSize,
         if (forwarding == nullptr) {
             return;
         }
-        g_entries.put(regionStart, regionSize, forwarding);
+        MapPut(g_entries, regionStart, regionSize, forwarding);
         RegionLifeClock::Publish(RegionLifeClock::Carrier::ARMED_ENTRY, forwarding->page_life_id());
     }
-    g_membership.put(regionStart, regionSize, forwarding);
+    MapPut(g_membership, regionStart, regionSize, forwarding);
 }
 
 void ForwardingTable::Remove(MAddress regionStart, size_t regionSize)
@@ -175,7 +199,7 @@ void ForwardingTable::Remove(MAddress regionStart, size_t regionSize)
     if (!Ready() || regionSize == 0) {
         return;
     }
-    g_membership.put(regionStart, regionSize, nullptr);
+    MapPut(g_membership, regionStart, regionSize, nullptr);
 }
 
 void ForwardingTable::EnsureEntries(RegionInfo* region)
@@ -185,11 +209,12 @@ void ForwardingTable::EnsureEntries(RegionInfo* region)
     }
     const MAddress start = region->GetRegionStart();
     const size_t regionSize = region->GetRegionSize();
-    if (g_entries.index_for_offset(start) == SIZE_MAX) {
+    zoffset startOffset;
+    if (!g_entries.offset_for_address(start, &startOffset)) {
         return;
     }
     std::lock_guard<std::mutex> lock(g_installLock);
-    ZForwarding* previous = g_entries.get(start);
+    ZForwarding* previous = g_entries.get(startOffset);
     if (previous != nullptr && !previous->is_provisional()) {
         return;
     }
@@ -199,9 +224,9 @@ void ForwardingTable::EnsureEntries(RegionInfo* region)
     if (created == nullptr) {
         return;
     }
-    g_entries.put(start, regionSize, created);
-    if (previous != nullptr && g_membership.get(start) == previous) {
-        g_membership.put(start, regionSize, created);
+    g_entries.put(startOffset, regionSize, created);
+    if (previous != nullptr && MapGet(g_membership, start) == previous) {
+        MapPut(g_membership, start, regionSize, created);
     }
     RegionLifeClock::Publish(RegionLifeClock::Carrier::ARMED_ENTRY, created->page_life_id());
     if (previous != nullptr) {
@@ -215,15 +240,8 @@ void ForwardingTable::ClearEntries(MAddress regionStart, size_t regionSize)
         return;
     }
     std::lock_guard<std::mutex> lock(g_installLock);
-    ZForwarding* tab = g_entries.exchange(regionStart, nullptr);
-    const size_t granule = g_entries.granule();
-    if (granule != 0) {
-        const size_t first = g_entries.index_for_offset(regionStart);
-        const size_t count = regionSize / granule + ((regionSize % granule) != 0 ? 1 : 0);
-        for (size_t i = 1; i < count && first != SIZE_MAX && first + i < g_entries.size(); ++i) {
-            g_entries.put(g_entries.base() + (first + i) * granule, nullptr);
-        }
-    }
+    ZForwarding* tab = MapExchange(g_entries, regionStart, nullptr);
+    MapPut(g_entries, regionStart, regionSize, nullptr);
     if (tab != nullptr && tab->start() == regionStart) {
         Retire(tab);
     }
@@ -238,11 +256,11 @@ static void UnlinkThenDestroy(ZForwarding* tab)
     // ClearEntries parks it; get() must stay valid until the object is
     // actually freed). Null both before Destroy so get() cannot UAF
     // (zForwardingTable.inline.hpp:56-62 remove, then arena recycle).
-    if (g_membership.get(tab->start()) == tab) {
-        g_membership.put(tab->start(), tab->size(), nullptr);
+    if (MapGet(g_membership, tab->start()) == tab) {
+        MapPut(g_membership, tab->start(), tab->size(), nullptr);
     }
-    if (g_entries.get(tab->start()) == tab) {
-        g_entries.put(tab->start(), tab->size(), nullptr);
+    if (MapGet(g_entries, tab->start()) == tab) {
+        MapPut(g_entries, tab->start(), tab->size(), nullptr);
     }
     tab->Destroy();
 }
@@ -361,7 +379,7 @@ ZForwarding* ForwardingTable::GetEntries(MAddress addr)
     if (!Ready()) {
         return nullptr;
     }
-    ZForwarding* forwarding = g_entries.get(addr);
+    ZForwarding* forwarding = MapGet(g_entries, addr);
     if (forwarding != nullptr && !forwarding->page_life_current(RegionLifeClock::Carrier::ARMED_ENTRY)) {
         return nullptr;
     }
