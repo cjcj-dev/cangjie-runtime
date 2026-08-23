@@ -15,6 +15,7 @@
 #include <set>
 #include <vector>
 
+#include "Common/ColourPredicates.h"
 #include "GcRequest.h"
 #include "GcStats.h"
 
@@ -89,6 +90,16 @@ public:
     virtual bool TryUntagRefField(BaseObject*, RefField<>&, BaseObject*&) const { std::abort(); }
     virtual bool TryTagRefField(BaseObject*, RefField<>&, BaseObject*) const { std::abort(); }
     virtual RefField<> GetAndTryTagRefField(BaseObject*) const { std::abort(); }
+
+    bool IsLoadBad(RefField<>& ref) const
+    {
+        return ColourPredicates::is_load_bad(raw(ref.GetFieldValue()), ::g_cjLoadBadMask);
+    }
+
+    bool is_load_good(RefField<>& ref) const
+    {
+        return ColourPredicates::is_load_good(raw(ref.GetFieldValue()), ::g_cjLoadBadMask);
+    }
 
     virtual bool IsOldPointer(RefField<>&) const { std::abort(); }
     virtual bool IsCurrentPointer(RefField<>&) const { std::abort(); }

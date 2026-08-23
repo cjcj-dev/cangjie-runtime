@@ -9,6 +9,8 @@
 #define MRT_MUTATOR_H
 
 #include <climits>
+#include <tuple>
+#include <vector>
 
 #include "Exception/Exception.h"
 #include "Heap/Allocator/Allocator.h"
@@ -104,7 +106,8 @@ public:
     void StackGuardRecover() const;
 
     bool IsStackAddr(uintptr_t addr);
-    void RecordStackPtrs(std::set<BaseObject**>& resSet);
+    void RecordStackPtrs(std::set<RootSlot*>& rootSlots,
+                         std::vector<std::tuple<DerivedSlot*, BasePtrType, size_t>>& derivedSlots);
     intptr_t FixExtendedStack(intptr_t frameBase = 0, uint32_t adjustedSize = 0, void* ip = nullptr);
 
     void InitTid()
@@ -413,20 +416,20 @@ public:
     void SetStackGrowFrameSize(uint32_t sgfs) { stackGrowFrameSize = sgfs; }
 #endif
 
-    void PushRawObject(BaseObject* obj) { rawObject.object = obj; }
+    void PushRawObject(BaseObject* obj) { StorePlain(rawObject, from_object(obj)); }
 
     BaseObject* PopRawObject()
     {
-        BaseObject* obj = rawObject.object;
-        rawObject.object = nullptr;
+        BaseObject* obj = to_object(safe(rawObject.LoadPlain()));
+        StorePlain(rawObject, zaddress::null);
         return obj;
     }
 
     void AddLocalFinalizer(BaseObject* obj)
     {
-        RefField<> tmpField(nullptr);
-        Heap::GetBarrier().WriteStaticRef(tmpField, obj);
-        localFinalizers.push_back(reinterpret_cast<BaseObject*>(tmpField.GetFieldValue()));
+        RootSlot root;
+        StorePlain(root, from_object(obj));
+        localFinalizers.push_back(root);
     }
 
     void MutatorLock() { mutatorLock.lock(); }
@@ -515,7 +518,7 @@ private:
             }
         }
     }
-    ManagedList<BaseObject*>& GetLocalFinalizers() { return localFinalizers; }
+    ManagedList<RootSlot>& GetLocalFinalizers() { return localFinalizers; }
     // Indicate the current mutator phase and use which barrier in concurrent gc
     // ATTENTION: THE LAYOUT FOR GCPHASE MUST NOT BE CHANGED!
     std::atomic<GCPhase> mutatorPhase = { GCPhase::GC_PHASE_UNDEF };
@@ -546,9 +549,9 @@ private:
     std::atomic<uint32_t> suspensionFlag = { 0 };
     // Indicate the state of mutator's phase transition
     std::atomic<GCPhaseTransitionState> transitionState = { NO_TRANSITION };
-    ObjectRef rawObject{ nullptr };
+    ObjectRef rawObject{};
 
-    ManagedList<BaseObject*> localFinalizers;
+    ManagedList<RootSlot> localFinalizers;
 
     SatbBuffer::Node* satbNode = nullptr;
 #if defined(GCINFO_DEBUG) && GCINFO_DEBUG

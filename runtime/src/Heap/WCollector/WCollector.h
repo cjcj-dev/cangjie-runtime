@@ -82,10 +82,10 @@ public:
     uint16_t GetPreviousTagID() const { return currentTagID ^ 1; }
 
     // note this api is not atomic, caller should take care of this.
-    bool IsOldPointer(RefField<>& ref) const override { return ref.IsTagged() && ref.GetTagID() == GetPreviousTagID(); }
+    bool IsOldPointer(RefField<>& ref) const override { return IsLoadBad(ref); }
 
     // note this api is not atomic, caller should take care of this.
-    bool IsCurrentPointer(RefField<>& ref) const override { return ref.IsTagged() && ref.GetTagID() == currentTagID; }
+    bool IsCurrentPointer(RefField<>& ref) const override { return is_load_good(ref); }
 
     void AddRawPointerObject(BaseObject* obj) override
     {
@@ -157,11 +157,10 @@ protected:
 
     RefField<> GetAndTryTagRefField(BaseObject* target) const override
     {
-        if (IsFromObject(target)) {
-            return RefField<>(target, 1, currentTagID);
-        } else {
-            return RefField<>(target);
+        if (target == nullptr) {
+            return RefField<>(zpointer::null);
         }
+        return RefField<>(target, ::g_cjStoreGoodMask);
     }
 
     void CollectLargeGarbage()

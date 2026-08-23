@@ -25,11 +25,13 @@ namespace MapleRuntime {
 class ThreadCache {
 public:
     ThreadCache() noexcept {}
+    ~ThreadCache();
     ThreadCache(const ThreadCache&) noexcept = delete;
     ThreadCache& operator=(const ThreadCache&) noexcept = delete;
 
     void* Allocate(size_t bytes);
     void Deallocate(void* ptr, size_t bytes);
+    void Flush();
 
 private:
     // Return a segment of list to CentralCache

@@ -7,6 +7,10 @@
 
 #include "ObjectModel/MClass.h"
 
+#include <iterator>
+#include <utility>
+#include <vector>
+
 #include "Base/Globals.h"
 #include "Common/TypeDef.h"
 #include "ExceptionManager.inline.h"
@@ -22,6 +26,8 @@
 #include "Utils/CycleQueue.h" // Common header
 #include "Utils/Demangler.h"
 #include "Flags.h"
+
+#include <type_traits>
 
 #ifdef INTERPRETER_ENABLED
 #include "Interpreter/RuntimeTypes.h"
@@ -140,10 +146,12 @@ void TypeInfo::SetGCTib(GCTib gctib)
 
 void TypeInfo::SetMTableDesc(MTableDesc* desc)
 {
-    this->mTableDesc = desc;
-    std::atomic_thread_fence(std::memory_order_seq_cst);
-    // 15: The most significant bit indicates whether the mTable is initialized.
-    validInheritNum = validInheritNum & ((1ULL << 15) - 1);
+    // Publish the desc first so a reader that observes the cleared uninit bit
+    // also observes a real MTableDesc (release/acquire with validInheritNum).
+    __atomic_store_n(&this->mTableDesc, desc, __ATOMIC_RELEASE);
+    U16 inherit = __atomic_load_n(&validInheritNum, __ATOMIC_RELAXED);
+    inherit = static_cast<U16>(inherit & ((1U << 15) - 1));
+    __atomic_store_n(&validInheritNum, inherit, __ATOMIC_RELEASE);
 }
 
 void TypeInfo::SetEnumDebugInfo(EnumDebugInfo* enumDebugInfo)
@@ -188,7 +196,9 @@ inline bool IsSameRootPackage(TypeInfo* itf1, TypeInfo* itf2)
     auto name2 = itf2->GetName();
     U32 pos = 0U;
     char ch = name1[pos];
-    while (ch == name2[pos]) {
+    // Stop at NUL: equal names with no '.' / ':' are not a shared root
+    // package, and reading past the terminator is OOB (SUSPECT-02).
+    while (ch != '\0' && ch == name2[pos]) {
         if (ch == '.' || ch == ':') {
             return true;
         }
@@ -258,8 +268,11 @@ void TypeInfo::TryUpdateExtensionData(TypeInfo* itf, ExtensionData* extensionDat
         }
 
         TryInitMTable();
+        MTableDesc* desc = GetMTableDesc();
+        CHECK(desc != nullptr);
+        std::lock_guard<std::recursive_mutex> tableLock(desc->mTableMutex);
         TraverseInnerExtensionDefs();
-        auto& mTable = mTableDesc->mTable;
+        auto& mTable = desc->mTable;
         for (const auto& superTypePair : mTable) {
             auto superTi = superTypePair.second.GetSuperTi();
             // make sure super is the subtype of itf, and super is the direct super type of this type.
@@ -313,7 +326,10 @@ void TypeInfo::AddMTable(TypeInfo* itf, ExtensionData* extensionData)
     TryInitMTableNoLock();
     U32 itfUUID = itf->GetUUID();
     CHECK(itfUUID != 0);
-    auto& mTable = GetMTableDesc()->mTable;
+    MTableDesc* desc = GetMTableDesc();
+    CHECK(desc != nullptr);
+    std::lock_guard<std::recursive_mutex> tableLock(desc->mTableMutex);
+    auto& mTable = desc->mTable;
     auto it = mTable.find(itfUUID);
     if (it == mTable.end()) {
         mTable.emplace(itfUUID, InheritFuncTable(extensionData, itf, extensionData->GetFuncTableSize()));
@@ -382,6 +398,26 @@ static bool ResolveExtensionData(
     return true;
 }
 
+static void MergeMTableSnapshot(TypeInfo* dest, TypeInfo* src)
+{
+    MTableDesc* destDesc = dest->GetMTableDesc();
+    MTableDesc* srcDesc = src->GetMTableDesc();
+    CHECK(destDesc != nullptr && srcDesc != nullptr);
+    if (destDesc == srcDesc) {
+        return;
+    }
+    std::vector<std::pair<U32, InheritFuncTable>> snapshot;
+    {
+        std::lock_guard<std::recursive_mutex> srcLock(srcDesc->mTableMutex);
+        snapshot.reserve(srcDesc->mTable.size());
+        for (const auto& pair : srcDesc->mTable) {
+            snapshot.emplace_back(pair.first, pair.second);
+        }
+    }
+    std::lock_guard<std::recursive_mutex> destLock(destDesc->mTableMutex);
+    destDesc->mTable.insert(std::make_move_iterator(snapshot.begin()), std::make_move_iterator(snapshot.end()));
+}
+
 static void ResolveInnerExtensionDefs(
     TypeInfo* ti, TypeInfo* resolveTi, const std::function<void(TypeInfo*)> getInterface)
 {
@@ -395,13 +431,11 @@ static void ResolveInnerExtensionDefs(
         if (ti == resolveTi) {
             return;
         }
-        auto& resolve_ti_mtable = resolveTi->GetMTableDesc()->mTable;
-        ti->GetMTableDesc()->mTable.insert(resolve_ti_mtable.begin(), resolve_ti_mtable.end());
+        MergeMTableSnapshot(ti, resolveTi);
         return;
     }
     if (ti != resolveTi) {
-        auto& resolve_ti_mtable = resolveTi->GetMTableDesc()->mTable;
-        ti->GetMTableDesc()->mTable.insert(resolve_ti_mtable.begin(), resolve_ti_mtable.end());
+        MergeMTableSnapshot(ti, resolveTi);
     }
 
     ExtensionData** vExtensionPtr = resolveTi->GetvExtensionDataStart();
@@ -439,11 +473,13 @@ static void ResolveInnerExtensionDefs(
 
 void TypeInfo::TraverseInnerExtensionDefs(const std::function<void(TypeInfo*)> getInterface)
 {
-    if (!this->mTableDesc->needsResolveInner) {
+    MTableDesc* desc = GetMTableDesc();
+    CHECK(desc != nullptr);
+    if (!desc->NeedResolveInner()) {
         return;
     }
     TypeInfo* curType = this;
-    this->mTableDesc->pending = true;
+    desc->pending.store(true, std::memory_order_relaxed);
     while (curType) {
         ResolveInnerExtensionDefs(this, curType, getInterface);
         if (curType->IsRawArray() || curType->IsVArray() || curType->IsCPointer()) {
@@ -451,13 +487,15 @@ void TypeInfo::TraverseInnerExtensionDefs(const std::function<void(TypeInfo*)> g
         }
         curType = curType->GetSuperTypeInfo();
     }
-    this->mTableDesc->pending = false;
-    this->mTableDesc->needsResolveInner = false;
+    desc->pending.store(false, std::memory_order_relaxed);
+    desc->MarkInnerResolved();
 }
 
 void TypeInfo::TraverseOuterExtensionDefs(const std::function<void(TypeInfo*)> getInterface)
 {
-    if (!this->mTableDesc->NeedResolveOuter()) {
+    MTableDesc* desc = GetMTableDesc();
+    CHECK(desc != nullptr);
+    if (!desc->NeedResolveOuter()) {
         return;
     }
     U16 typeArgNum = GetTypeArgNum();
@@ -494,17 +532,20 @@ void TypeInfo::TraverseOuterExtensionDefs(const std::function<void(TypeInfo*)> g
             return false;
         },
         sourceGeneric);
-    this->mTableDesc->needsResolveOuter = false;
+    desc->MarkOuterResolved();
 }
 
 void TypeInfo::GetInterfaces(std::vector<TypeInfo*> &itfs)
 {
     TryInitMTable();
+    MTableDesc* desc = GetMTableDesc();
+    CHECK(desc != nullptr);
+    std::lock_guard<std::recursive_mutex> tableLock(desc->mTableMutex);
     TraverseInnerExtensionDefs();
     if (IsGenericTypeInfo()) {
         TraverseOuterExtensionDefs();
     }
-    for (const auto& pair : mTableDesc->mTable) {
+    for (const auto& pair : desc->mTable) {
         auto super = pair.second.GetSuperTi();
         if (super->IsInterface()) {
             itfs.emplace_back(super);
@@ -518,8 +559,10 @@ ExtensionData* TypeInfo::FindExtensionDataRecursively(TypeInfo* itf)
         return nullptr;
     }
 
-    std::lock_guard<std::recursive_mutex> lock(mTableDesc->mTableMutex);
-    for (const auto& pair : mTableDesc->mTable) {
+    MTableDesc* desc = GetMTableDesc();
+    CHECK(desc != nullptr);
+    std::lock_guard<std::recursive_mutex> lock(desc->mTableMutex);
+    for (const auto& pair : desc->mTable) {
         if (pair.first == GetUUID()) {
             // Avoid infinite recursion. The mTAble may contain itself.
             continue;
@@ -528,7 +571,7 @@ ExtensionData* TypeInfo::FindExtensionDataRecursively(TypeInfo* itf)
         auto found = super->FindExtensionData(itf, true);
         if (found) {
             // This won't cause the issue of iterator invalidation since the function will exit immediately.
-            mTableDesc->mTable.emplace(itf->GetUUID(), InheritFuncTable(found, itf, found->GetFuncTableSize()));
+            desc->mTable.emplace(itf->GetUUID(), InheritFuncTable(found, itf, found->GetFuncTableSize()));
             return found;
         }
     }
@@ -539,32 +582,31 @@ ExtensionData* TypeInfo::FindExtensionData(TypeInfo* itf, bool searchRecursively
 {
     TryInitMTable();
     auto itfUUID = itf->GetUUID();
-    if (!mTableDesc->IsFullyHandled()) {
-        std::lock_guard<std::recursive_mutex> lock(mTableDesc->mTableMutex);
-        if (!mTableDesc->IsFullyHandled()) {
-            // Why need this? Consider the following scenarios:
-            // interface I1<T> {}
-            // class CB<T> <: I1<T> where T <: I1<T>
-            // class CA <: CB<CA> {}
-            // Now, generated NonExtensionDatas = [..., CA_CB, CA_I1, ..., CB_I1] (ignore virtual functions).
-            // For the CA, when the CB is traversed, the CA is I1<CA> needs to be checked.
-            // In this case, IsSubType() is invoked to repeatedly generate the mTable of the CA. And The repeated
-            // invoking can be quickly filtered out.
-            if (mTableDesc->pending) {
-                auto it = mTableDesc->mTable.find(itfUUID);
-                if (it != mTableDesc->mTable.end()) {
-                    return it->second.GetExtensionData();
-                } else {
-                    return itf->IsInterface() && searchRecursively ? FindExtensionDataRecursively(itf) : nullptr;
-                }
+    MTableDesc* desc = GetMTableDesc();
+    CHECK(desc != nullptr);
+    std::lock_guard<std::recursive_mutex> lock(desc->mTableMutex);
+    if (!desc->IsFullyHandled()) {
+        // Why need this? Consider the following scenarios:
+        // interface I1<T> {}
+        // class CB<T> <: I1<T> where T <: I1<T>
+        // class CA <: CB<CA> {}
+        // Now, generated NonExtensionDatas = [..., CA_CB, CA_I1, ..., CB_I1] (ignore virtual functions).
+        // For the CA, when the CB is traversed, the CA is I1<CA> needs to be checked.
+        // In this case, IsSubType() is invoked to repeatedly generate the mTable of the CA. And The repeated
+        // invoking can be quickly filtered out.
+        if (desc->pending.load(std::memory_order_relaxed)) {
+            auto it = desc->mTable.find(itfUUID);
+            if (it != desc->mTable.end()) {
+                return it->second.GetExtensionData();
+            } else {
+                return itf->IsInterface() && searchRecursively ? FindExtensionDataRecursively(itf) : nullptr;
             }
-            TraverseInnerExtensionDefs();
-            TraverseOuterExtensionDefs();
         }
+        TraverseInnerExtensionDefs();
+        TraverseOuterExtensionDefs();
     }
-    auto& mTable = mTableDesc->mTable;
-    auto it = mTable.find(itfUUID);
-    if (it != mTable.end()) {
+    auto it = desc->mTable.find(itfUUID);
+    if (it != desc->mTable.end()) {
         return it->second.GetExtensionData();
     }
     return itf->IsInterface() && searchRecursively ? FindExtensionDataRecursively(itf) : nullptr;
@@ -578,11 +620,15 @@ FuncPtr* TypeInfo::GetMTable(TypeInfo* itf)
     if (UNLIKELY(IsTempEnum() && GetSuperTypeInfo())) {
         return GetSuperTypeInfo()->GetMTable(itf);
     }
-    // Fast path: mTable ready and entry found with func table already updated
-    if (LIKELY(!IsMTableDescUnInitialized() && mTableDesc->IsFullyHandled())) {
+    // Fast path: flags published (acquire) then locked find. The map is never
+    // immutable — FindExtensionDataRecursively can still emplace — so every
+    // find holds mTableMutex. The flags only skip the initial resolve.
+    MTableDesc* desc = GetMTableDesc();
+    if (LIKELY(!IsMTableDescUnInitialized() && desc != nullptr && desc->IsFullyHandled())) {
         const U32 itfUUID = itf->GetUUID();
-        auto it = mTableDesc->mTable.find(itfUUID);
-        if (it != mTableDesc->mTable.end()) {
+        std::lock_guard<std::recursive_mutex> tableLock(desc->mTableMutex);
+        auto it = desc->mTable.find(itfUUID);
+        if (it != desc->mTable.end()) {
             ExtensionData* ed = it->second.GetExtensionData();
             if (LIKELY(ed->IsFuncTableUpdated())) {
                 return ed->GetFuncTable();
@@ -611,10 +657,14 @@ TypeInfo* TypeInfo::GetMethodOuterTI(TypeInfo* itf, U64 index)
     if (UNLIKELY(IsTempEnum() && superTi != nullptr)) {
         return superTi->GetMethodOuterTI(itf, index);
     }
-    if (UNLIKELY(IsMTableDescUnInitialized() || !mTableDesc->IsFullyHandled())) {
+    if (UNLIKELY(IsMTableDescUnInitialized() || GetMTableDesc() == nullptr ||
+                 !GetMTableDesc()->IsFullyHandled())) {
         (void)FindExtensionData(itf, true);
     }
-    auto& mTable = mTableDesc->mTable;
+    MTableDesc* desc = GetMTableDesc();
+    CHECK(desc != nullptr);
+    std::lock_guard<std::recursive_mutex> tableLock(desc->mTableMutex);
+    auto& mTable = desc->mTable;
     auto it = mTable.find(itfUUID);
     if (it == mTable.end()) {
         LOG(RTLOG_FATAL, "expected interface %s is not in class %s", itf->GetName(), GetName());
@@ -846,7 +896,7 @@ static void* GetAnnotations(Uptr annotationMethod, TypeInfo* arrayTi)
     }
     ArgValue values;
     uintptr_t structRet[ARRAY_STRUCT_SIZE];
-    values.AddReference(reinterpret_cast<BaseObject*>(structRet));
+    values.AddReference(as_abi_ref_slot(structRet));
     uintptr_t threadData = MapleRuntime::MRT_GetThreadLocalData();
 #if defined(__aarch64__)
     ApplyCangjieMethodStub(values.GetData(), reinterpret_cast<void*>(values.GetStackSize()),
@@ -870,13 +920,9 @@ bool TypeTemplate::IsEnumCtor() const
     }
     // The current SDK emits enum constructor with empty enumInfo,
     // so enumInfo == nullptr indicates an enum constructor.
-    // Earlier versions emitted enum constructor with non-empty enumInfo and
-    // MODIFIER_ENUM_CTOR flag set in the modifier; such cases are not handled
-    // here and would be misidentified as the enum itself.
-    if (enumInfo == nullptr) {
-        return true;
-    }
-    return false;
+    // Earlier versions emitted enum constructors with non-empty enumInfo and
+    // MODIFIER_ENUM_CTOR set in the modifier; honor that form for compatibility.
+    return enumInfo == nullptr || static_cast<bool>(enumInfo->GetModifier() & MODIFIER_ENUM_CTOR);
 }
 
 void* ReflectInfo::GetAnnotations(TypeInfo* arrayTi)
@@ -903,13 +949,9 @@ bool TypeInfo::IsEnumCtor() const
     }
     // The current SDK emits enum constructor with empty enumInfo,
     // so enumInfo == nullptr indicates an enum constructor.
-    // Earlier versions emitted enum constructor with non-empty enumInfo and
-    // MODIFIER_ENUM_CTOR flag set in the modifier; such cases are not handled
-    // here and would be misidentified as the enum itself.
-    if (enumInfo == nullptr) {
-        return true;
-    }
-    return false;
+    // Earlier versions emitted enum constructors with non-empty enumInfo and
+    // MODIFIER_ENUM_CTOR set in the modifier; honor that form for compatibility.
+    return enumInfo == nullptr || static_cast<bool>(enumInfo->GetModifier() & MODIFIER_ENUM_CTOR);
 }
 
 bool TypeInfo::IsOptionLikeRefEnum()
@@ -1249,11 +1291,89 @@ void EnumCtorInfo::SetName(const char* pName)
 }
 
 #ifdef INTERPRETER_ENABLED
+struct GCTibLayoutCheck {
+    // GCTib and DYN_GCTib are binary mirrors. Keep both standard-layout so
+    // every named union member below can be checked with offsetof.
+    static void CheckInterpreterMirror()
+    {
+        static_assert(std::is_standard_layout<GCTib>::value,
+            "GCTib must remain standard-layout for mirror offset checks");
+        static_assert(std::is_standard_layout<DYN_GCTib>::value,
+            "DYN_GCTib must remain standard-layout for mirror offset checks");
+        static_assert(sizeof(DYN_GCTib) == sizeof(GCTib), "DYN_GCTib size must match GCTib");
+        static_assert(alignof(DYN_GCTib) == alignof(GCTib), "DYN_GCTib alignment must match GCTib");
+        static_assert(__builtin_offsetof(DYN_GCTib, raw) == __builtin_offsetof(GCTib, tag),
+            "raw/tag offset mismatch");
+        static_assert(__builtin_offsetof(DYN_GCTib, raw) == __builtin_offsetof(GCTib, bitmap),
+            "raw/bitmap offset mismatch");
+        static_assert(__builtin_offsetof(DYN_GCTib, ptr) == __builtin_offsetof(GCTib, gctib),
+            "ptr/gctib offset mismatch");
+    }
+};
+
+struct ExtensionDataLayoutCheck {
+    // ExtensionData and DYN_ExtensionData are binary mirrors. Keep both
+    // standard-layout so every named field below can be checked with offsetof.
+    static void CheckInterpreterMirror()
+    {
+        static_assert(std::is_standard_layout<ExtensionData>::value,
+            "ExtensionData must remain standard-layout for mirror offset checks");
+        static_assert(std::is_standard_layout<DYN_ExtensionData>::value,
+            "DYN_ExtensionData must remain standard-layout for mirror offset checks");
+        static_assert(sizeof(DYN_ExtensionData) == sizeof(ExtensionData),
+            "DYN_ExtensionData size must match ExtensionData");
+        static_assert(alignof(DYN_ExtensionData) == alignof(ExtensionData),
+            "DYN_ExtensionData alignment must match ExtensionData");
+        static_assert(__builtin_offsetof(DYN_ExtensionData, argNum) ==
+                __builtin_offsetof(ExtensionData, argNum),
+            "argNum offset mismatch");
+        static_assert(__builtin_offsetof(DYN_ExtensionData, isInterfaceTypeInfo) ==
+                __builtin_offsetof(ExtensionData, isInterfaceTypeInfo),
+            "isInterfaceTypeInfo offset mismatch");
+        static_assert(__builtin_offsetof(DYN_ExtensionData, flag) == __builtin_offsetof(ExtensionData, flag),
+            "flag offset mismatch");
+        static_assert(__builtin_offsetof(DYN_ExtensionData, funcTableSize) ==
+                __builtin_offsetof(ExtensionData, funcTableSize),
+            "funcTableSize offset mismatch");
+        static_assert(__builtin_offsetof(DYN_ExtensionData, tt) == __builtin_offsetof(ExtensionData, tt),
+            "tt offset mismatch");
+        static_assert(__builtin_offsetof(DYN_ExtensionData, ti) == __builtin_offsetof(ExtensionData, ti),
+            "ti offset mismatch");
+        static_assert(__builtin_offsetof(DYN_ExtensionData, interfaceFn) ==
+                __builtin_offsetof(ExtensionData, interfaceFn),
+            "interfaceFn offset mismatch");
+        static_assert(__builtin_offsetof(DYN_ExtensionData, interfaceTypeInfo) ==
+                __builtin_offsetof(ExtensionData, interfaceTypeInfo),
+            "interfaceTypeInfo offset mismatch");
+        static_assert(__builtin_offsetof(DYN_ExtensionData, whereCondFn) ==
+                __builtin_offsetof(ExtensionData, whereCondFn),
+            "whereCondFn offset mismatch");
+        static_assert(__builtin_offsetof(DYN_ExtensionData, funcTable) ==
+                __builtin_offsetof(ExtensionData, funcTable),
+            "funcTable offset mismatch");
+    }
+};
+
 struct TypeInfoLayoutCheck {
     // Static layout checks: DYN_TypeInfo is a binary mirror of TypeInfo.
     static void CheckInterpreterMirror()
     {
         static_assert(sizeof(DYN_TypeInfo) == sizeof(TypeInfo), "DYN_TypeInfo size must match TypeInfo");
+        // Alignment was the one property of the mirror nothing here checked, and
+        // it is declared in two files that must move together: TypeInfo carries
+        // ATTR_PACKED in MClass.h, DYN_TypeInfo carries TYPE_INFO_ATTRS in the
+        // public header Interpreter/RuntimeTypes.h. Raising one alone leaves
+        // sizeof and every offset identical, so the checks below all pass while
+        // the two structs disagree about where they may be placed.
+        static_assert(alignof(DYN_TypeInfo) == alignof(TypeInfo),
+            "DYN_TypeInfo alignment must match TypeInfo -- raise ATTR_PACKED in MClass.h and "
+            "TYPE_INFO_ATTRS in include/Interpreter/RuntimeTypes.h together");
+        // The collector treats a tip that is not 8-byte aligned as not-a-TypeInfo
+        // (StateWord::ADDRESS_ALIGN_MASK, consumed at Collector.cpp:104 and :304
+        // and asserted fatally at Mutator.cpp:597 and :754). Declaring less than
+        // that is what let the arena hand out addresses the collector rejects.
+        static_assert(alignof(TypeInfo) >= StateWord::ADDRESS_ALIGN_MASK + 1,
+            "TypeInfo declares weaker alignment than the collector requires of a tip");
         static_assert(__builtin_offsetof(DYN_TypeInfo, typeInfoName) == __builtin_offsetof(TypeInfo, typeInfoName),
             "typeInfoName offset mismatch");
         static_assert(

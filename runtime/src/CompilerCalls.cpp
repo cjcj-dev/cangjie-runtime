@@ -297,11 +297,11 @@ extern "C" void MCC_WriteRefField(const ObjectPtr ref, const ObjectPtr obj, RefF
 {
     if (IsGlobalStruct(obj, reinterpret_cast<MAddress>(field))) {
         VLOG(REPORT, "found and writing a global struct ref field");
-        Heap::GetBarrier().WriteStaticRef(*field, ref);
+        Heap::GetBarrier().WriteStaticRef(RootSlotAt(static_cast<void*>(field)), ref);
         return;
     }
     if (!Heap::IsHeapAddress(obj)) {
-        field->SetTargetObject(ref);
+        Heap::GetBarrier().WriteStaticRef(RootSlotAt(static_cast<void*>(field)), ref);
         return;
     }
     Heap::GetBarrier().WriteReference(obj, *field, ref);
@@ -323,7 +323,7 @@ extern "C" void MCC_WriteStructField(ObjectPtr obj, MAddress dst, size_t dstLen,
     Heap::GetBarrier().WriteStruct(obj, dst, dstLen, src, srcLen);
 }
 
-extern "C" void MCC_WriteStaticRef(const ObjectPtr ref, RefField<false>* field)
+extern "C" void MCC_WriteStaticRef(const ObjectPtr ref, RootSlot* field)
 {
     Heap::GetBarrier().WriteStaticRef(*field, ref);
 }
@@ -1595,7 +1595,7 @@ extern "C" void* MCC_GetParameterAnnotations(ParameterInfo* parameterInfo, TypeI
 extern "C" ObjectPtr CJ_MCC_ReadRefField(const ObjectPtr obj, RefField<false>* field)
 {
     if (IsGlobalStruct(obj, reinterpret_cast<MAddress>(field))) {
-        return Heap::GetBarrier().ReadStaticRef(*field);
+        return Heap::GetBarrier().ReadStaticRef(RootSlotAt(static_cast<void*>(field)));
     }
     return Heap::GetBarrier().ReadReference(obj, *field);
 }
@@ -1620,7 +1620,7 @@ extern "C" void CJ_MCC_ReadStructField(MAddress dstPtr, ObjectPtr obj, MAddress 
     }
     Heap::GetBarrier().ReadStruct(dstPtr, obj, srcField, size);
 }
-extern "C" ObjectPtr CJ_MCC_ReadStaticRef(RefField<false>* field)
+extern "C" ObjectPtr CJ_MCC_ReadStaticRef(RootSlot* field)
 {
     return Heap::GetBarrier().ReadStaticRef(*field);
 }
@@ -1683,7 +1683,7 @@ static bool IsTupleTypeOf(ObjectPtr obj, TypeInfo* typeInfo, TypeInfo* targetTyp
             if (Heap::IsHeapAddress(obj)) {
                 curObj = Heap::GetBarrier().ReadReference(obj, obj->GetRefField(offset));
             } else {
-                curObj = obj->GetRefField(offset).GetTargetObject();
+                curObj = to_object(obj->GetRefField(offset).GetTargetObject());
             }
             TypeInfo* curti = curObj->GetTypeInfo();
             if (!curti->IsSubType(fieldTargetTI)) {

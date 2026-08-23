@@ -30,8 +30,8 @@ public:
     {
         U32 count = 0;
         std::lock_guard<std::mutex> l(listLock);
-        for (BaseObject*& obj : finalizers) {
-            visitor(reinterpret_cast<ObjectRef&>(obj));
+        for (RootSlot& obj : finalizers) {
+            visitor(obj);
             ++count;
         }
         return count;
@@ -41,11 +41,11 @@ public:
     void VisitGCRoots(const RootVisitor& visitor)
     {
         std::lock_guard<std::mutex> l(listLock);
-        for (BaseObject*& obj : finalizables) {
-            visitor(reinterpret_cast<ObjectRef&>(obj));
+        for (RootSlot& obj : finalizables) {
+            visitor(obj);
         }
-        for (BaseObject*& obj : workingFinalizables) {
-            visitor(reinterpret_cast<ObjectRef&>(obj));
+        for (RootSlot& obj : workingFinalizables) {
+            visitor(obj);
         }
     }
 
@@ -53,14 +53,14 @@ public:
     void VisitRawPointers(const RootVisitor& visitor)
     {
         std::lock_guard<std::mutex> l(listLock);
-        for (BaseObject*& obj : finalizables) {
-            visitor(reinterpret_cast<ObjectRef&>(obj));
+        for (RootSlot& obj : finalizables) {
+            visitor(obj);
         }
-        for (BaseObject*& obj : workingFinalizables) {
-            visitor(reinterpret_cast<ObjectRef&>(obj));
+        for (RootSlot& obj : workingFinalizables) {
+            visitor(obj);
         }
-        for (BaseObject*& obj : finalizers) {
-            visitor(reinterpret_cast<ObjectRef&>(obj));
+        for (RootSlot& obj : finalizers) {
+            visitor(obj);
         }
     }
 
@@ -78,7 +78,7 @@ public:
 
     void EnqueueFinalizables(const std::function<bool(BaseObject*)>& finalizable, U32 countLimit = UINT_MAX);
     void RegisterFinalizer(BaseObject* obj);
-    void RegisterFinalizers(ManagedList<BaseObject*>& objs);
+    void RegisterFinalizers(ManagedList<RootSlot>& objs);
     bool IsRunning() const { return running; }
     uint32_t GetTid() const { return tid; }
 
@@ -113,12 +113,12 @@ private:
 
     // finalization
     std::mutex listLock;                 // lock for finalizers & finalizables & workingFinalizables
-    ManagedList<BaseObject*> finalizers; // created finalizer record, accessed by mutator & GC
+    ManagedList<RootSlot> finalizers; // created finalizer record, accessed by mutator & GC
 
     // a dead finalizer is moved into finalizable by GC, then run finalize method by FP thread
-    ManagedList<BaseObject*> finalizables;
+    ManagedList<RootSlot> finalizables;
 
-    ManagedList<BaseObject*> workingFinalizables; // FP working list, swap from finalizables
+    ManagedList<RootSlot> workingFinalizables; // FP working list, swap from finalizables
 
     std::atomic<bool> hasFinalizableJob;
     std::atomic<bool> shouldReclaimHeapGarbage;

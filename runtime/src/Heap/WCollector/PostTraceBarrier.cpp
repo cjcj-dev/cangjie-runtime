@@ -18,21 +18,21 @@ namespace MapleRuntime {
 BaseObject* PostTraceBarrier::ReadReference(BaseObject* obj, RefField<false>& field) const
 {
     RefField<> tmpField(field);
-    if (tmpField.IsTagged()) {
+    if (theCollector.IsOldPointer(tmpField)) {
         CHECK(theCollector.IsCurrentPointer(tmpField));
     }
-    return tmpField.GetTargetObject();
+    return to_object(tmpField.GetTargetObject());
 }
 
-BaseObject* PostTraceBarrier::ReadStaticRef(RefField<false>& field) const { return ReadReference(nullptr, field); }
+BaseObject* PostTraceBarrier::ReadStaticRef(RootSlot& field) const { return Barrier::ReadStaticRef(field); }
 
 BaseObject* PostTraceBarrier::ReadWeakRef(BaseObject* obj, RefField<false>& field) const
 {
     RefField<> tmpField(field);
-    if (tmpField.IsTagged()) {
+    if (theCollector.IsOldPointer(tmpField)) {
         CHECK(theCollector.IsCurrentPointer(tmpField));
     }
-    BaseObject* referent = tmpField.GetTargetObject();
+    BaseObject* referent = to_object(tmpField.GetTargetObject());
     if (referent == nullptr) {
         return nullptr;
     }
@@ -44,7 +44,7 @@ BaseObject* PostTraceBarrier::ReadWeakRef(BaseObject* obj, RefField<false>& fiel
         *referentAddr = nullptr; // set referent field as null
         return nullptr;
     }
-    return tmpField.GetTargetObject();
+    return to_object(tmpField.GetTargetObject());
 }
 
 void PostTraceBarrier::ReadStruct(MAddress dst, BaseObject* obj, MAddress src, size_t size) const
@@ -58,7 +58,7 @@ void PostTraceBarrier::ReadStruct(MAddress dst, BaseObject* obj, MAddress src, s
                 }
                 (void)ReadReference(obj, field);
                 MAddress offset = reinterpret_cast<MAddress>(&field) - src;
-                refFields.Push(reinterpret_cast<RefField<>*>(dst + offset));
+                refFields.Push(&HeapSlotAt<>(dst + offset));
             },
             src, src + size);
     }
@@ -80,7 +80,7 @@ void PostTraceBarrier::ReadStaticStruct(MAddress dst, MAddress src, size_t size,
         [this, &refFields, dst, src](RefField<>& srcField) {
             (void)ReadReference(nullptr, srcField);
             MAddress offset = reinterpret_cast<MAddress>(&srcField) - src;
-            refFields.Push(reinterpret_cast<RefField<>*>(dst + offset));
+            refFields.Push(&HeapSlotAt<>(dst + offset));
         },
         src, src + size);
 
@@ -99,13 +99,12 @@ void PostTraceBarrier::WriteReference(BaseObject* obj, RefField<false>& field, B
     CHECK(!theCollector.IsOldPointer(tmpField));
     DLOG(BARRIER, "write obj %p ref-field@%p: %#zx -> %p", obj, &field, tmpField.GetFieldValue(), ref);
     RefField<> newField = theCollector.GetAndTryTagRefField(ref);
-    field.SetFieldValue(newField.GetFieldValue());
+    field.StoreColoured(newField.GetFieldValue());
 }
 
-void PostTraceBarrier::WriteStaticRef(RefField<false>& field, BaseObject* ref) const
+void PostTraceBarrier::WriteStaticRef(RootSlot& field, BaseObject* ref) const
 {
-    RefField<> newField = theCollector.GetAndTryTagRefField(ref);
-    field.SetFieldValue(newField.GetFieldValue());
+    StorePlain(field, from_object(ref));
 }
 
 void PostTraceBarrier::WriteStruct(BaseObject* obj, MAddress dst, size_t dstLen, MAddress src, size_t srcLen) const
@@ -117,11 +116,12 @@ void PostTraceBarrier::WriteStruct(BaseObject* obj, MAddress dst, size_t dstLen,
         obj->ForEachRefInStruct(
             [=](RefField<>& refField) {
                 RefField<> oldField(refField);
-                MAddress oldValue = oldField.GetFieldValue();
+                MAddress oldValue = raw(oldField.GetFieldValue());
                 BaseObject* latestVerison = ReadReference(nullptr, oldField);
                 RefField<> newField = theCollector.GetAndTryTagRefField(latestVerison);
-                if (oldValue != newField.GetFieldValue()) {
-                    refField.CompareExchange(oldValue, newField.GetFieldValue());
+                if (oldValue != raw(newField.GetFieldValue())) {
+                    HealSlot(refField, to_zpointer(oldValue), newField.GetFieldValue(),
+                             HealSite::PostTraceWriteStructRecolour, HealNull::Allow);
                 }
             },
             dst, dst + dstLen);
@@ -140,11 +140,12 @@ void PostTraceBarrier::WriteStaticStruct(MAddress dst, size_t dstLen, MAddress s
 
     gctib.ForEachBitmapWord(dst, [=](RefField<>& refField) {
         RefField<> oldField(refField);
-        MAddress oldValue = oldField.GetFieldValue();
+        MAddress oldValue = raw(oldField.GetFieldValue());
         BaseObject* untagged = ReadReference(nullptr, oldField);
         RefField<> newField = theCollector.GetAndTryTagRefField(untagged);
-        if (oldValue != newField.GetFieldValue()) {
-            refField.CompareExchange(oldValue, newField.GetFieldValue());
+        if (oldValue != raw(newField.GetFieldValue())) {
+            HealSlot(refField, to_zpointer(oldValue), newField.GetFieldValue(),
+                     HealSite::PostTraceWriteStructRecolour, HealNull::Allow);
         }
     });
     DLOG(TRACE, "write static struct@[%#zx, %#zx) with [%#zx, %#zx)", dst, dst + dstLen, src, src + srcLen);
@@ -160,7 +161,7 @@ BaseObject* PostTraceBarrier::AtomicReadReference(BaseObject* obj, RefField<true
     BaseObject* target = nullptr;
     RefField<false> oldField(field.GetFieldValue(order));
     if (theCollector.IsCurrentPointer(oldField)) {
-        target = oldField.GetTargetObject();
+        target = to_object(oldField.GetTargetObject());
         DLOG(TBARRIER, "atomic read obj %p ref@%p: %#zx -> %p", obj, &field, oldField.GetFieldValue(), target);
         return target;
     }
@@ -186,15 +187,15 @@ void PostTraceBarrier::AtomicWriteReference(BaseObject* obj, RefField<true>& fie
                                             MemoryOrder order) const
 {
     RefField<> oldField(field.GetFieldValue(order));
-    MAddress oldValue = oldField.GetFieldValue();
+    MAddress oldValue = raw(oldField.GetFieldValue());
     (void)oldValue;
     RefField<> newField = theCollector.GetAndTryTagRefField(newRef);
-    field.SetFieldValue(newField.GetFieldValue(), order);
+    field.StoreColoured(newField.GetFieldValue(), order);
     if (obj != nullptr) {
         DLOG(TBARRIER, "atomic write obj %p<%p>(%zu) ref@%p: %#zx -> %#zx", obj, obj->GetTypeInfo(), obj->GetSize(),
-             &field, oldValue, newField.GetFieldValue());
+             &field, oldValue, raw(newField.GetFieldValue()));
     } else {
-        DLOG(TBARRIER, "atomic write static ref@%p: %#zx -> %#zx", &field, oldValue, newField.GetFieldValue());
+        DLOG(TBARRIER, "atomic write static ref@%p: %#zx -> %#zx", &field, oldValue, raw(newField.GetFieldValue()));
     }
 }
 
@@ -202,7 +203,7 @@ BaseObject* PostTraceBarrier::AtomicSwapReference(BaseObject* obj, RefField<true
                                                   MemoryOrder order) const
 {
     RefField<> newField = theCollector.GetAndTryTagRefField(newRef);
-    MAddress oldValue = field.Exchange(newField.GetFieldValue(), order);
+    MAddress oldValue = raw(field.Exchange(newField.GetFieldValue(), order));
     RefField<> oldField(oldValue);
     BaseObject* oldRef = ReadReference(nullptr, oldField);
     DLOG(TRACE, "atomic swap obj %p<%p>(%zu) ref-field@%p: old %#zx(%p), new %#zx(%p)", obj, obj->GetTypeInfo(),
@@ -213,15 +214,16 @@ BaseObject* PostTraceBarrier::AtomicSwapReference(BaseObject* obj, RefField<true
 bool PostTraceBarrier::CompareAndSwapReference(BaseObject* obj, RefField<true>& field, BaseObject* oldRef,
                                                BaseObject* newRef, MemoryOrder succOrder, MemoryOrder failOrder) const
 {
-    MAddress oldFieldValue = field.GetFieldValue(std::memory_order_seq_cst);
+    MAddress oldFieldValue = raw(field.GetFieldValue(std::memory_order_seq_cst));
     RefField<false> oldField(oldFieldValue);
     BaseObject* oldVersion = ReadReference(nullptr, oldField);
     RefField<> newField = theCollector.GetAndTryTagRefField(newRef);
     while (oldVersion == oldRef) {
-        if (field.CompareExchange(oldFieldValue, newField.GetFieldValue(), succOrder, failOrder)) {
+        if (HealSlot(field, to_zpointer(oldFieldValue), newField.GetFieldValue(),
+                     HealSite::PostTraceCompareAndSwapReference, HealNull::Allow, succOrder, failOrder)) {
             return true;
         }
-        oldFieldValue = field.GetFieldValue(std::memory_order_seq_cst);
+        oldFieldValue = raw(field.GetFieldValue(std::memory_order_seq_cst));
         RefField<false> oldField(oldFieldValue);
         oldVersion = ReadReference(nullptr, oldField);
     }
@@ -248,7 +250,8 @@ void PostTraceBarrier::CopyStructArray(BaseObject* dstObj, MAddress dstField, MI
         BaseObject* target = ReadReference(nullptr, toBeUpdated);
         RefField<> newField = theCollector.GetAndTryTagRefField(target);
         if (newField.GetFieldValue() != oldField.GetFieldValue()) {
-            field.CompareExchange(oldField.GetFieldValue(), newField.GetFieldValue());
+            HealSlot(field, oldField.GetFieldValue(), newField.GetFieldValue(),
+                     HealSite::PostTraceCopyStructArrayRecolour, HealNull::Allow);
         }
     };
     MArray* srcArray = static_cast<MArray*>(srcObj);

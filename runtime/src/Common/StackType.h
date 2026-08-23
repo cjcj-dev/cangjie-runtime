@@ -416,6 +416,7 @@ public:
     UnwindContext(const UnwindContext& frame)
     {
         frameInfo = frame.frameInfo;
+        anchorFA = frame.anchorFA;
         status = frame.GetUnwindContextStatus();
     }
 

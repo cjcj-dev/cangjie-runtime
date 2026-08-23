@@ -33,16 +33,16 @@ void StaticRootTable::UnregisterRoots(StaticRootArray* addr, U32 size)
     }
 }
 
-void StaticRootTable::VisitRoots(const RefFieldVisitor& visitor)
+void StaticRootTable::VisitRoots(const RootSlotVisitor& visitor)
 {
     std::lock_guard<std::mutex> lock(gcRootsLock);
     U32 gcRootsSize = 0;
-    std::unordered_set<RefField<>*> visitedSet;
+    std::unordered_set<RootSlot*> visitedSet;
     for (auto iter = gcRootsBuckets.begin(); iter != gcRootsBuckets.end(); iter++) {
         gcRootsSize = iter->second;
         StaticRootArray* array = iter->first;
         for (USize i = 0; i < gcRootsSize; i++) {
-            RefField<>* root = array->content[i];
+            RootSlot* root = array->content[i];
             // make sure to visit each static root only once time.
             if (!visitedSet.insert(root).second) {
                 continue;
@@ -56,7 +56,7 @@ void ExportRootTable::VisitGCRoots(const RootVisitor& visitor)
 {
     std::lock_guard<std::mutex> lock(tableMutex);
     for (auto &rootInfo : exportRoots) {
-        visitor(reinterpret_cast<ObjectRef&>(rootInfo.exportObj));
+        visitor(rootInfo.exportObj);
     }
 }
 class ConcurrentMarkingWork : public HeapWork {
@@ -297,7 +297,7 @@ void TracingCollector::EnumConcurrencyModelRoots(RootSet& rootSet) const
 
 void TracingCollector::EnumStaticRoots(RootSet& rootSet) const
 {
-    const RefFieldVisitor& visitor = [&rootSet, this](RefField<>& root) { EnumRefFieldRoot(root, rootSet); };
+    const RootSlotVisitor& visitor = [&rootSet, this](RootSlot& root) { EnumAndTagRawRoot(root, rootSet); };
     VisitStaticRoots(visitor);
 }
 
@@ -514,17 +514,14 @@ void TracingCollector::DoResurrection(WorkStack& workStack)
 {
     workStack.clear();
     RootVisitor func = [&workStack, this](ObjectRef& ref) {
-        RefField<>& refField = reinterpret_cast<RefField<>&>(ref);
-        RefField<> tmpField(refField);
-        BaseObject* finalizerObj = tmpField.GetTargetObject();
+        const zaddress_unsafe observed = ref.LoadPlain();
+        BaseObject* finalizerObj = to_object(safe(observed));
         if (!IsMarkedObject(finalizerObj)) {
             DLOG(TRACE, "resurrectable obj @%p:%p", &ref, finalizerObj);
             workStack.push_back(finalizerObj);
         }
-        RefField<> newField = GetAndTryTagRefField(finalizerObj);
-        if (tmpField.GetFieldValue() != newField.GetFieldValue() &&
-            refField.CompareExchange(tmpField.GetFieldValue(), newField.GetFieldValue())) {
-            DLOG(FIX, "tag finalizer %p@%p -> %#zx", finalizerObj, &ref, newField.GetFieldValue());
+        if (HealRoot(ref, from_object(finalizerObj), HealSite::TracingCollectorResurrectFinalizer)) {
+            DLOG(FIX, "heal finalizer %p@%p", finalizerObj, &ref);
         }
     };
     snapshotFinalizerNum = collectorResources.GetFinalizerProcessor().VisitFinalizers(func);
@@ -617,10 +614,12 @@ ATTR_NO_SANITIZE_ADDRESS
 void TracingCollector::DumpRoots(LogType logType)
 {
     RootVisitor rootVisitor = [this, logType](ObjectRef& ref) {
-        auto obj = ref.object;
-        if (obj == nullptr) {
+        zaddress_unsafe value = ref.LoadPlain();
+        if (is_null(value)) {
             return;
         }
+        // DumpRoots is called while the root owner retains the target for inspection.
+        auto obj = to_object(safe(value));
         DLOG(logType, "%p Fast Check %d Accurate Check %d", obj,
              theAllocator.IsHeapAddress(reinterpret_cast<MAddress>(obj)),
              theAllocator.IsHeapObject(reinterpret_cast<MAddress>(obj)));
@@ -634,7 +633,7 @@ void TracingCollector::DumpRoots(LogType logType)
     VisitFinalizerRoots(rootVisitor);
 
     RefFieldVisitor refFieldVisitor = [this, logType](RefField<>& ref) {
-        auto obj = ref.GetTargetObject();
+        auto obj = to_object(ref.GetTargetObject());
         if (obj == nullptr) {
             return;
         }
@@ -644,7 +643,7 @@ void TracingCollector::DumpRoots(LogType logType)
     };
 
     DLOG(logType, "static fields");
-    VisitStaticRoots(refFieldVisitor);
+    VisitStaticRoots(rootSlotVisitor);
 
     DLOG(logType, "Dump GCRoots end");
 }
@@ -701,7 +700,7 @@ void TracingCollector::DFSTraceExportObject(BaseObject *exportObj)
             (void)obj;
             RefField<> oldField(field);
             if (IsCurrentPointer(oldField)) {
-                BaseObject* targetObj = oldField.GetTargetObject();
+                BaseObject* targetObj = to_object(oldField.GetTargetObject());
                 if (IsMarkedObject(targetObj)) {
                     return;
                 }
@@ -716,10 +715,10 @@ void TracingCollector::DFSTraceExportObject(BaseObject *exportObj)
 
             BaseObject* latest = nullptr;
             if (IsOldPointer(oldField)) {
-                BaseObject* targetObj = oldField.GetTargetObject();
+                BaseObject* targetObj = to_object(oldField.GetTargetObject());
                 latest = FindLatestVersion(targetObj);
             } else {
-                latest = field.GetTargetObject();
+                latest = to_object(field.GetTargetObject());
             }
 
             // target object could be null or non-heap for some static variable.
@@ -732,9 +731,10 @@ void TracingCollector::DFSTraceExportObject(BaseObject *exportObj)
             if (oldField.GetFieldValue() == newField.GetFieldValue()) {
                 DLOG(TRACE, "trace obj %p ref@%p: %p<%p>(%zu)", obj, &field, latest, latest->GetTypeInfo(),
                      latest->GetSize());
-            } else if (field.CompareExchange(oldField.GetFieldValue(), newField.GetFieldValue())) {
-                DLOG(TRACE, "trace obj %p ref@%p: %#zx => %#zx->%p<%p>(%zu)", obj, &field, oldField.GetFieldValue(),
-                     newField.GetFieldValue(), latest, latest->GetTypeInfo(), latest->GetSize());
+            } else if (HealSlot(field, oldField.GetFieldValue(), newField.GetFieldValue(),
+                                HealSite::TracingCollectorTraceRefField, HealNull::Allow)) {
+                DLOG(TRACE, "trace obj %p ref@%p: %#zx => %#zx->%p<%p>(%zu)", obj, &field, raw(oldField.GetFieldValue()),
+                     raw(newField.GetFieldValue()), latest, latest->GetTypeInfo(), latest->GetSize());
             }
 
             if (IsMarkedObject(latest)) {
@@ -798,7 +798,7 @@ void TracingCollector::EnumAllCommonRoots(GCThreadPool* threadPool, RootSet& roo
     delete[] dynamicRootSets;
 }
 
-void TracingCollector::VisitStaticRoots(const RefFieldVisitor& visitor) const
+void TracingCollector::VisitStaticRoots(const RootSlotVisitor& visitor) const
 {
     Heap::GetHeap().VisitStaticRoots(visitor);
 }

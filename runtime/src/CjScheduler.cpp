@@ -347,7 +347,7 @@ void* WrapperTask(void* arg, unsigned int len)
     // mutator has been set to a valid pointer before.
     Mutator* mutator = reinterpret_cast<ThreadLocalData*>(threadData)->mutator;
     MRT_PreRunManagedCode(mutator, 0, reinterpret_cast<ThreadLocalData*>(threadData));
-    BaseObject* future = Heap::GetBarrier().ReadStaticRef(*(reinterpret_cast<RefField<>*>(&lwtData->obj)));
+    BaseObject* future = Heap::GetBarrier().ReadStaticRef(RootSlotAt(static_cast<void*>(&lwtData->obj)));
     TypeInfo* typeInfo = future->GetTypeInfo();
 #if defined(__aarch64__)
     ExecuteCangjieStub(future, typeInfo, 0, execute, reinterpret_cast<void*>(threadData), &g_ut);
@@ -370,8 +370,7 @@ void* MCC_NewCJThread(void* execute, void* future, void* scheduler)
     data.execute = execute;
     data.threadObject = nullptr;
     data.obj = nullptr;
-    RefField<>* runtimeRootField = reinterpret_cast<RefField<>*>(&data.obj);
-    Heap::GetBarrier().WriteStaticRef(*runtimeRootField, reinterpret_cast<BaseObject*>(future));
+    Heap::GetBarrier().WriteStaticRef(RootSlotAt(static_cast<void*>(&data.obj)), from_native_ref(future));
     if (!scheduler) {
         scheduler = MapleRuntime::Runtime::Current().GetConcurrencyModel().GetThreadScheduler();
     }
@@ -462,8 +461,9 @@ static void* WrapperExclusiveClosure(void* arg, unsigned int len)
     Mutator* mutator = reinterpret_cast<ThreadLocalData*>(threadData)->mutator;
     MRT_PreRunManagedCode(mutator, 0, reinterpret_cast<ThreadLocalData*>(threadData));
     lwtData->threadObject = nullptr;
-    BaseObject* executeClosure = Heap::GetBarrier().ReadStaticRef(reinterpret_cast<RefField<false>&>(lwtData->execute));
-    BaseObject* closureObj = Heap::GetBarrier().ReadStaticRef(reinterpret_cast<RefField<false>&>(lwtData->obj));
+    BaseObject* executeClosure =
+        Heap::GetBarrier().ReadStaticRef(RootSlotAt(static_cast<void*>(&lwtData->execute)));
+    BaseObject* closureObj = Heap::GetBarrier().ReadStaticRef(RootSlotAt(static_cast<void*>(&lwtData->obj)));
 #if defined(__aarch64__)
     ExecuteExclusiveCangjieStub(closureObj, nullptr, executeClosure, reinterpret_cast<void*>(threadData), &g_ut);
 #elif defined(__x86_64__)
@@ -482,10 +482,8 @@ void* MCC_NewExclusiveCJThread(void* executeClosure, void* closurePtr, void* fut
     data.execute = nullptr;
     data.obj = nullptr;
     data.threadObject = futureTi;
-    RefField<>* executeRootField = reinterpret_cast<RefField<>*>(&data.obj);
-    Heap::GetBarrier().WriteStaticRef(*executeRootField, reinterpret_cast<BaseObject*>(closurePtr));
-    RefField<>* objRootField = reinterpret_cast<RefField<>*>(&data.execute);
-    Heap::GetBarrier().WriteStaticRef(*objRootField, reinterpret_cast<BaseObject*>(executeClosure));
+    Heap::GetBarrier().WriteStaticRef(RootSlotAt(static_cast<void*>(&data.obj)), from_native_ref(closurePtr));
+    Heap::GetBarrier().WriteStaticRef(RootSlotAt(static_cast<void*>(&data.execute)), from_native_ref(executeClosure));
     return ExclusiveCJThreadNew(WrapperExclusiveClosure, &data, sizeof(LWTData));
 }
 
@@ -600,7 +598,7 @@ static void* WrapperOfExecuteClosure(void* arg, unsigned int len)
     TypeInfo* futureTi = static_cast<TypeInfo*>(lwtData->threadObject);
     // threadObject is used to pass TypeInfo of future. After use, need set to nullptr.
     lwtData->threadObject = nullptr;
-    BaseObject* closureObj = Heap::GetBarrier().ReadStaticRef(reinterpret_cast<RefField<false>&>(lwtData->obj));
+    BaseObject* closureObj = Heap::GetBarrier().ReadStaticRef(RootSlotAt(static_cast<void*>(&lwtData->obj)));
 #if defined(__aarch64__)
     ExecuteCangjieStub(closureObj, futureTi, 0, executeClosure, reinterpret_cast<void*>(threadData), &g_ut);
 #elif defined(__arm__)
@@ -621,8 +619,7 @@ void* MCC_NewCJThreadNoReturn(void* executeClosure, void* closurePtr, void* sche
     data.execute = executeClosure;
     data.obj = nullptr;
     data.threadObject = futureTi; // used to pass TypeInfo of future
-    RefField<>* runtimeRootField = reinterpret_cast<RefField<>*>(&data.obj);
-    Heap::GetBarrier().WriteStaticRef(*runtimeRootField, reinterpret_cast<BaseObject*>(closurePtr));
+    Heap::GetBarrier().WriteStaticRef(RootSlotAt(static_cast<void*>(&data.obj)), from_native_ref(closurePtr));
     if (!scheduler) {
         scheduler = MapleRuntime::Runtime::Current().GetConcurrencyModel().GetThreadScheduler();
     }

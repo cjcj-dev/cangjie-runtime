@@ -16,10 +16,14 @@
 extern "C" {
 #endif // __cplusplus
 
+// Must match ATTR_PACKED on TypeInfo in ObjectModel/MClass.h: DYN_TypeInfo is a
+// binary mirror of it, and the collector requires a tip to be 8-byte aligned
+// (StateWord::ADDRESS_ALIGN_MASK). MClass.cpp's TypeInfoLayoutCheck asserts both
+// size and alignment, so the two cannot drift apart silently.
 #ifdef __arm__
 #define TYPE_INFO_ATTRS
 #else
-#define TYPE_INFO_ATTRS __attribute__((__aligned__(4), __packed__))
+#define TYPE_INFO_ATTRS __attribute__((__aligned__(8), __packed__))
 #endif
 
 #define EXTENSION_DATA_ATTRS __attribute__((__aligned__(4), __packed__))

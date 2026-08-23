@@ -195,12 +195,12 @@ void VisitDerivedPtrFromInterpreter(
 {
     const DerivedPtrVisitor* visitor = static_cast<const DerivedPtrVisitor*>(_visitor);
     BasePtrType* basePtrLocation = static_cast<BasePtrType*>(_basePtrHolder);
-    DerivedPtrType* derivedPtrLocation = static_cast<DerivedPtrType*>(_derivedPtrHolder);
+    DerivedSlot& derivedPtrLocation = DerivedSlotAt(_derivedPtrHolder);
 
     DLOG(INTERPRETER, "VisitDerivedPtrFromInterpreter: visitor=[%p], placeholder=[%p]", (void*)visitor,
-        (void*)derivedPtrLocation);
+        (void*)&derivedPtrLocation);
 
-    (*visitor)(*basePtrLocation, *derivedPtrLocation);
+    (*visitor)(*basePtrLocation, derivedPtrLocation);
 }
 
 struct DYN_TypeInfo* TypeInfoProvider(const char* sig)
@@ -372,7 +372,7 @@ DYN_ObjRef ReadStaticField(DYN_FieldRef source)
 {
     DLOG(INTERPRETER, "ReadStaticField %p", source);
 
-    BaseObject* res = Heap::GetBarrier().ReadStaticRef(*static_cast<RefField<false>*>(source));
+    BaseObject* res = Heap::GetBarrier().ReadStaticRef(RootSlotAt(source));
     return static_cast<DYN_ObjRef>(res);
 }
 
@@ -380,7 +380,7 @@ void WriteStaticField(DYN_FieldRef destination, DYN_ObjRef new_value)
 {
     DLOG(INTERPRETER, "WriteStaticField %p %p", destination, new_value);
 
-    Heap::GetBarrier().WriteStaticRef(*static_cast<RefField<false>*>(destination), static_cast<BaseObject*>(new_value));
+    Heap::GetBarrier().WriteStaticRef(RootSlotAt(destination), static_cast<BaseObject*>(new_value));
 }
 
 DYN_ObjRef ReadInstanceField(DYN_ObjRef source, DYN_FieldRef field)

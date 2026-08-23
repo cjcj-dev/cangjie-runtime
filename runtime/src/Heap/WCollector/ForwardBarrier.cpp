@@ -22,12 +22,12 @@ BaseObject* ForwardBarrier::ReadReference(BaseObject* obj, RefField<false>& fiel
 {
     do {
         RefField<> tmpField(field);
-        if (LIKELY(!tmpField.IsTagged())) {
-            return tmpField.GetTargetObject();
+        if (LIKELY(theCollector.is_load_good(tmpField))) {
+            return to_object(tmpField.GetTargetObject());
         }
         CHECK(!theCollector.IsOldPointer(tmpField));
         if (theCollector.IsCurrentPointer(tmpField)) {
-            BaseObject* target = tmpField.GetTargetObject();
+            BaseObject* target = to_object(tmpField.GetTargetObject());
             BaseObject* toObj = nullptr;
             if (theCollector.IsUnmovableFromObject(target)) {
                 if (theCollector.TryUntagRefField(obj, field, target)) {
@@ -41,7 +41,7 @@ BaseObject* ForwardBarrier::ReadReference(BaseObject* obj, RefField<false>& fiel
     return nullptr;
 }
 
-BaseObject* ForwardBarrier::ReadStaticRef(RefField<false>& field) const { return ReadReference(nullptr, field); }
+BaseObject* ForwardBarrier::ReadStaticRef(RootSlot& field) const { return Barrier::ReadStaticRef(field); }
 
 BaseObject* ForwardBarrier::ReadWeakRef(BaseObject* obj, RefField<false>& field) const
 {
@@ -79,7 +79,7 @@ BaseObject* ForwardBarrier::AtomicReadReference(BaseObject* obj, RefField<true>&
     DCHECK(!theCollector.IsOldPointer(tmpField));
 
     if (theCollector.IsCurrentPointer(tmpField)) {
-        BaseObject* target = tmpField.GetTargetObject();
+        BaseObject* target = to_object(tmpField.GetTargetObject());
         if (theCollector.IsUnmovableFromObject(target)) {
             if (theCollector.TryUntagRefField(obj, reinterpret_cast<RefField<>&>(field), target)) {
                 DLOG(FBARRIER, "atomic read obj %p ref@%p: %#zx -> %p", obj, &field, tmpField.GetFieldValue(), target);
@@ -102,20 +102,21 @@ BaseObject* ForwardBarrier::AtomicReadReference(BaseObject* obj, RefField<true>&
 void ForwardBarrier::AtomicWriteReference(BaseObject* obj, RefField<true>& field, BaseObject* newRef,
                                           MemoryOrder order) const
 {
-    RefField<> newField(newRef);
-    field.SetFieldValue(newField.GetFieldValue(), order);
+    RefField<> newField = theCollector.GetAndTryTagRefField(newRef);
+    field.StoreColoured(newField.GetFieldValue(), order);
     if (obj != nullptr) {
         DLOG(FBARRIER, "atomic write obj %p<%p>(%zu) ref@%p: %#zx", obj, obj->GetTypeInfo(), obj->GetSize(), &field,
-             newField.GetFieldValue());
+             raw(newField.GetFieldValue()));
     } else {
-        DLOG(FBARRIER, "atomic write static ref@%p: %#zx", &field, newField.GetFieldValue());
+        DLOG(FBARRIER, "atomic write static ref@%p: %#zx", &field, raw(newField.GetFieldValue()));
     }
 }
 
 BaseObject* ForwardBarrier::AtomicSwapReference(BaseObject* obj, RefField<true>& field, BaseObject* newRef,
                                                 MemoryOrder order) const
 {
-    MAddress oldValue = field.Exchange(newRef, order);
+    RefField<> coloured = theCollector.GetAndTryTagRefField(newRef);
+    MAddress oldValue = raw(field.Exchange(coloured.GetFieldValue(), order));
     RefField<> oldField(oldValue);
     BaseObject* oldRef = ReadReference(nullptr, oldField);
     DLOG(BARRIER, "atomic swap obj %p<%p>(%zu) ref-field@%p: old %#zx(%p), new %#zx(%p)", obj, obj->GetTypeInfo(),
@@ -126,15 +127,16 @@ BaseObject* ForwardBarrier::AtomicSwapReference(BaseObject* obj, RefField<true>&
 bool ForwardBarrier::CompareAndSwapReference(BaseObject* obj, RefField<true>& field, BaseObject* oldRef,
                                              BaseObject* newRef, MemoryOrder succOrder, MemoryOrder failOrder) const
 {
-    MAddress oldFieldValue = field.GetFieldValue(std::memory_order_seq_cst);
+    MAddress oldFieldValue = raw(field.GetFieldValue(std::memory_order_seq_cst));
     RefField<false> oldField(oldFieldValue);
     BaseObject* oldVersion = ReadReference(nullptr, oldField);
     while (oldVersion == oldRef) {
-        RefField<> newField(newRef);
-        if (field.CompareExchange(oldFieldValue, newField.GetFieldValue(), succOrder, failOrder)) {
+        RefField<> newField = theCollector.GetAndTryTagRefField(newRef);
+        if (HealSlot(field, to_zpointer(oldFieldValue), newField.GetFieldValue(),
+                     HealSite::ForwardCompareAndSwapReference, HealNull::Allow, succOrder, failOrder)) {
             return true;
         }
-        oldFieldValue = field.GetFieldValue(std::memory_order_seq_cst);
+        oldFieldValue = raw(field.GetFieldValue(std::memory_order_seq_cst));
         RefField<false> tmp(oldFieldValue);
         oldVersion = ReadReference(nullptr, tmp);
     }

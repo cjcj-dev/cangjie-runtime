@@ -8,6 +8,8 @@
 #ifndef MRT_MCLASS_H
 #define MRT_MCLASS_H
 
+#include <atomic>
+#include <cstring>
 #include <functional>
 #include <mutex>
 #include <unordered_map>
@@ -53,12 +55,11 @@ union MTableBitmap {
             U8* bitmaps = largeBitmap->second;
             for (U32 i = 0; i < largeBitmap->first; ++i) {
                 U8 bitInfo = bitmaps[i];
+                ExtensionData** byteStart = vExtensionPtr + i * sizeof(U8) * 8;
                 while (LIKELY(bitInfo != 0)) {
-                    if (bitInfo & 0x1) {
-                        visitor(*vExtensionPtr);
-                    }
-                    bitInfo >>= 1;
-                    ++vExtensionPtr;
+                    U32 bitIndex = static_cast<U32>(__builtin_ctz(static_cast<unsigned int>(bitInfo)));
+                    visitor(*(byteStart + bitIndex));
+                    bitInfo &= static_cast<U8>(bitInfo - 1);
                 }
             }
         }
@@ -108,6 +109,9 @@ public:
         : superExtensionData(ed), superTypeInfo(super), cachedTypeInfos(sz) {}
     ExtensionData* GetExtensionData() const { return superExtensionData; }
     TypeInfo* GetSuperTi() const { return superTypeInfo; }
+    // Caller must hold MTableDesc::mTableMutex. The assignment deletes the old
+    // array; Get/SetCachedTypeInfo also take that mutex, so no reader can still
+    // hold the pointer being freed (BUG-19).
     void ResetAtomicInfoArray(size_t size) { cachedTypeInfos = AtomicTypeInfoArray(size); }
     TypeInfo* GetCachedTypeInfo(size_t index) const { return cachedTypeInfos.Get(index); }
     void SetCachedTypeInfo(size_t index, TypeInfo* ti) { cachedTypeInfos.Set(index, ti); }
@@ -136,6 +140,7 @@ private:
             if (this == &other) {
                 return *this;
             }
+            delete[] typeInfos;
             cacheSize = other.cacheSize;
             if (cacheSize == 0) {
                 typeInfos = nullptr;
@@ -165,6 +170,7 @@ private:
             if (this == &other) {
                 return *this;
             }
+            delete[] typeInfos;
             cacheSize = other.cacheSize;
             typeInfos = other.typeInfos;
             other.cacheSize = 0;
@@ -215,29 +221,30 @@ struct MTableDesc {
     std::unordered_map<U32, InheritFuncTable> mTable;
     MTableBitmap mTableBitmap;
     std::recursive_mutex mTableMutex;
-    bool pending = false;
-    bool needsResolveInner = true;
-    bool needsResolveOuter = true;
+    std::atomic<bool> pending { false };
+    std::atomic<bool> needsResolveInner { true };
+    std::atomic<bool> needsResolveOuter { true };
     explicit MTableDesc(ArchUInt bitmap_);
     MTableDesc() = delete;
     bool IsFullyHandled() const { return !NeedResolveInner() && !NeedResolveOuter(); };
-    inline bool NeedResolveInner() const { return needsResolveInner; }
-    inline bool NeedResolveOuter() const { return needsResolveOuter; }
+    inline bool NeedResolveInner() const { return needsResolveInner.load(std::memory_order_acquire); }
+    inline bool NeedResolveOuter() const { return needsResolveOuter.load(std::memory_order_acquire); }
+    inline void MarkInnerResolved() { needsResolveInner.store(false, std::memory_order_release); }
+    inline void MarkOuterResolved() { needsResolveOuter.store(false, std::memory_order_release); }
 };
 
 typedef TypeInfo* (*GenericFunc)(TypeInfo**);
 struct ShortGCTib {
     ArchUInt bitmap; // lower 63 bits are valid, each bit indicates 8-byte width, 1:ref, 0:no-ref
 
-    void ForEachBitmapWord(MAddress fieldAddr, const RefFieldVisitor& visitor) const
+    template<typename Visitor>
+    void ForEachBitmapWord(MAddress fieldAddr, const Visitor& visitor) const
     {
         ArchUInt gcInfo = bitmap & (~SIGN_BIT);
         while (LIKELY(gcInfo != 0)) {
-            if (gcInfo & REF_BIT_MASK) {
-                visitor(*reinterpret_cast<RefField<>*>(fieldAddr));
-            }
-            gcInfo >>= BITS_FOR_REF;
-            fieldAddr += sizeof(RefField<>);
+            U32 bitIndex = static_cast<U32>(__builtin_ctzll(static_cast<unsigned long long>(gcInfo)));
+            visitor(HeapSlotAt<>(fieldAddr + bitIndex * sizeof(HeapSlot<>)));
+            gcInfo &= gcInfo - 1;
         }
     }
     void ForEachBitmapWordInRange(MAddress baseAddr, const RefFieldVisitor& visitor, MAddress rangeStart,
@@ -253,7 +260,7 @@ struct ShortGCTib {
                 return;
             }
             if (gcInfo & REF_BIT_MASK) {
-                visitor(*reinterpret_cast<RefField<>*>(fieldAddr));
+                visitor(HeapSlotAt<>(fieldAddr));
             }
             gcInfo >>= BITS_FOR_REF;
             fieldAddr += sizeof(RefField<>);
@@ -274,7 +281,7 @@ struct StdGCTib {
     {
         U8 wordBits = bitmapWord & REF_BIT_MASK;
         if (wordBits != 0) {
-            visitor(*reinterpret_cast<RefField<>*>(fieldAddr));
+            visitor(HeapSlotAt<>(fieldAddr));
         }
         // go next ref word.
         bitmapWord >>= BITS_FOR_REF;
@@ -282,29 +289,46 @@ struct StdGCTib {
     }
     void VisitAllField(U8 &bitmapWord, MAddress &fieldAddr, const RefFieldVisitor &visitor) const
     {
-        visitor(*reinterpret_cast<RefField<> *>(fieldAddr));
+        visitor(HeapSlotAt<>(fieldAddr));
 
         // go next ref word.
         bitmapWord >>= BITS_FOR_REF;
         fieldAddr += sizeof(RefField<>);
     }
-    void ForEachBitmapWord(MAddress contentAddr, const RefFieldVisitor& visitor) const
+    template<typename Visitor>
+    void ForEachBitmapWord(MAddress contentAddr, const Visitor& visitor) const
     {
         const U8* bitmaps = bitmapWords;
-
-        // start address of fields.
         MAddress baseAddr = contentAddr;
-        // for each bitmap word.
-        for (U32 i = 0; i < nBitmapWords; ++i) {
-            U8 bitmapWord = bitmaps[i];
-            MAddress fieldAddr = baseAddr;
-
-            // for each bit in bitmap.
-            while (LIKELY(bitmapWord != 0)) {
-                VisitRefField(bitmapWord, fieldAddr, visitor);
+        U32 i = 0;
+        constexpr U32 bitmapWordsPerBatch = sizeof(ArchUInt);
+        constexpr U32 refsPerBatch = bitmapWordsPerBatch * REFS_PER_BIT_WORD;
+        for (; i + bitmapWordsPerBatch <= nBitmapWords; i += bitmapWordsPerBatch) {
+            ArchUInt bitmapBatch;
+            std::memcpy(&bitmapBatch, bitmaps + i, sizeof(bitmapBatch));
+            if (LIKELY(bitmapBatch == 0)) {
+                baseAddr += sizeof(RefField<>) * refsPerBatch;
+                continue;
             }
-            // go next bitmap word.
-            baseAddr += (sizeof(RefField<>) * REFS_PER_BIT_WORD);
+            for (U32 j = 0; j < bitmapWordsPerBatch; ++j) {
+                U8 bitmapWord = bitmaps[i + j];
+                MAddress wordBaseAddr = baseAddr + sizeof(RefField<>) * j * REFS_PER_BIT_WORD;
+                while (LIKELY(bitmapWord != 0)) {
+                    U32 bitIndex = static_cast<U32>(__builtin_ctz(static_cast<unsigned int>(bitmapWord)));
+                    visitor(HeapSlotAt<>(wordBaseAddr + bitIndex * sizeof(HeapSlot<>)));
+                    bitmapWord &= static_cast<U8>(bitmapWord - 1);
+                }
+            }
+            baseAddr += sizeof(RefField<>) * refsPerBatch;
+        }
+        for (; i < nBitmapWords; ++i) {
+            U8 bitmapWord = bitmaps[i];
+            while (LIKELY(bitmapWord != 0)) {
+                U32 bitIndex = static_cast<U32>(__builtin_ctz(static_cast<unsigned int>(bitmapWord)));
+                visitor(HeapSlotAt<>(baseAddr + bitIndex * sizeof(HeapSlot<>)));
+                bitmapWord &= static_cast<U8>(bitmapWord - 1);
+            }
+            baseAddr += sizeof(RefField<>) * REFS_PER_BIT_WORD;
         }
     }
     void ForEachBitmapWordInRange(MAddress contentAddr, const RefFieldVisitor& visitor, MAddress rangeStart,
@@ -353,13 +377,30 @@ union GCTib {
 #endif
     }
 
-    void ForEachBitmapWord(MAddress contentAddr, const RefFieldVisitor& visitor) const
+    template<typename Visitor>
+    void ForEachBitmapWord(MAddress contentAddr, const Visitor& visitor) const
     {
         if (IsGCTibWord()) {
             bitmap.ForEachBitmapWord(contentAddr, visitor);
         } else {
             gctib->ForEachBitmapWord(contentAddr, visitor);
         }
+    }
+
+    // STACK_ROOTS_STAY_PLAIN: a non-heap destination (static/global storage) is a *root*,
+    // not a heap field. StaticRootTable registers those words as RootSlot and
+    // WCollector::EnumAndTagRawRoot heals them with StorePlain, so a coloured write there is
+    // both pointless (the next root enumeration overwrites it plain) and hazardous (relroroot:
+    // static slots can sit on RELRO read-only pages where lock cmpxchg faults).
+    // Yielding RootSlot makes the coloured spelling not compile: RootSlot has no
+    // CompareExchange / StoreColoured / GetFieldValue, and StorePlain only accepts zaddress.
+    // The bitmap walk itself is unchanged -- this only re-types what it hands out.
+    template<typename Visitor>
+    void ForEachRootSlot(MAddress contentAddr, const Visitor& visitor) const
+    {
+        ForEachBitmapWord(contentAddr, [&visitor](HeapSlot<>& word) {
+            visitor(RootSlotAt(reinterpret_cast<void*>(&word)));
+        });
     }
 
     void ForEachBitmapWordInRange(MAddress contentAddr, const RefFieldVisitor& visitor, MAddress rangeStart,
@@ -557,10 +598,21 @@ private:
 };
 
 // Class is a generalization of type information
+//
+// The alignment here is not cosmetic: the collector treats a tip whose low three
+// bits are set as not-a-TypeInfo (StateWord::ADDRESS_ALIGN_MASK), softly at
+// Collector.cpp:104 and :304 and fatally at Mutator.cpp:597 and :754. Declaring
+// 4 while requiring 8 is what let TypeInfoManager's arena hand out addresses the
+// collector then rejected. Raising 4 -> 8 costs nothing in layout: sizeof stays
+// 96 (already a multiple of 8) and every field offset is unchanged, because
+// offsets come from __packed__ and not from __aligned__.
+//
+// This must stay in step with TYPE_INFO_ATTRS in include/Interpreter/RuntimeTypes.h;
+// MClass.cpp's TypeInfoLayoutCheck now asserts that, which it previously did not.
 #ifdef __arm__
 class TypeInfo {
 #else
-class ATTR_PACKED(4) TypeInfo {
+class ATTR_PACKED(8) TypeInfo {
 #endif
     friend class TypeInfoManager;
 #ifdef INTERPRETER_ENABLED
@@ -681,14 +733,27 @@ public:
     void SetInstanceSize(U32 size) { this->instanceSize = size; }
     void SetGCTib(GCTib gctib);
     void SetComponentTypeInfo(TypeInfo* ti) { this->componentTypeInfo = ti; }
-    void SetValidInheritNum(U16 num) { this->validInheritNum = num | (1 << 15); }
+    void SetValidInheritNum(U16 num)
+    {
+        U16 tagged = static_cast<U16>(num | (1U << 15));
+        __atomic_store_n(&validInheritNum, tagged, __ATOMIC_RELEASE);
+    }
+    void MarkMTableUninitialized()
+    {
+        U16 inherit = __atomic_load_n(&validInheritNum, __ATOMIC_RELAXED);
+        inherit = static_cast<U16>(inherit | (1U << 15));
+        __atomic_store_n(&validInheritNum, inherit, __ATOMIC_RELEASE);
+    }
     bool IsSubType(TypeInfo* superTypeInfo);
     void SetFlagHasRefField();
     void SetReflectInfo(ReflectInfo* info) { this->reflectInfo = info; }
     void SetvExtensionDataStart(ExtensionData **ptr) { this->vExtensionDataStart = ptr; }
     void SetEnumInfo(EnumInfo* ei) { this->enumInfo = ei; }
     void SetEnumDebugInfo(EnumDebugInfo* enumDebugInfo);
-    MTableDesc* GetMTableDesc() const { return mTableDesc; }
+    MTableDesc* GetMTableDesc() const
+    {
+        return __atomic_load_n(reinterpret_cast<MTableDesc* const*>(&mTableDesc), __ATOMIC_ACQUIRE);
+    }
     void AddMTable(TypeInfo* ti, ExtensionData* extensionData);
     FuncPtr* GetMTable(TypeInfo* itf);
     TypeInfo* GetMethodOuterTI(TypeInfo* itf, U64 index);
@@ -718,18 +783,22 @@ private:
     std::pair<FuncPtr*, bool> FindMTable(U32 itfUUID);
 
     inline bool IsMTableDescUnInitialized() {
-
-        return (mTableDesc == nullptr) || (validInheritNum >> 15 == 1)
+        MTableDesc* desc =
+            __atomic_load_n(reinterpret_cast<MTableDesc* const*>(&mTableDesc), __ATOMIC_ACQUIRE);
+        U16 inherit = __atomic_load_n(&validInheritNum, __ATOMIC_ACQUIRE);
+        return (desc == nullptr) || (inherit >> 15 == 1)
         // mtable bitmap optimization will be enabled for non-ARM architectures.
 #ifndef __arm__
-               || (reinterpret_cast<uintptr_t>(mTableDesc) >> 63 == 1)
+               || (reinterpret_cast<uintptr_t>(desc) >> 63 == 1)
 #endif
             ;
     }
     // This function must be called before mTableDesc is overwritten.
     inline ArchUInt GetResolveBitmapFromMTableDesc()
     {
-        return reinterpret_cast<uintptr_t>(mTableDesc);
+        MTableDesc* desc =
+            __atomic_load_n(reinterpret_cast<MTableDesc* const*>(&mTableDesc), __ATOMIC_ACQUIRE);
+        return reinterpret_cast<uintptr_t>(desc);
     }
 
     const char* typeInfoName;
