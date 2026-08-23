@@ -34,6 +34,8 @@ public:
     void VisitStackRoots(const RootVisitor& func, Mutator& mutator) const;
     void VisitHeapReferencesOnStack(const RootVisitor& rootVisitor, const DerivedPtrVisitor& derivedPtrVisitor,
                                     Mutator& mutator) const;
+    void VisitHeapReferencesOnStack(const RootVisitor& regRootVisitor, const RootVisitor& slotRootVisitor,
+                                    const DerivedPtrVisitor& derivedPtrVisitor, Mutator& mutator) const;
 };
 
 class RecordStackInfo : public GCStackInfo {

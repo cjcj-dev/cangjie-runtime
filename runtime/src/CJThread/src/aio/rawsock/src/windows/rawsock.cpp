@@ -109,6 +109,7 @@ int RawsockAcceptCoreInlock(SOCKET listenFd, struct sockaddr_storage *localAndPe
                    reinterpret_cast<char *>(&wsaprotocolInfo), &optlen) == SOCKET_ERROR) {
         error = WSAGetLastError();
         LOG_ERROR(error, "getsockopt failed, fd: %d, level: %d, optname: %d", listenFd, SOL_SOCKET, SO_PROTOCOL_INFO);
+        atomic_store(&operation->iocpComplete, true);
         return error;
     }
     // Create a socket that supports overlapping I/O operations.
@@ -118,6 +119,7 @@ int RawsockAcceptCoreInlock(SOCKET listenFd, struct sockaddr_storage *localAndPe
         error = WSAGetLastError();
         LOG_ERROR(error, "WSASocket failed, domain: %u, protocol: %d", wsaprotocolInfo.iAddressFamily,
                   wsaprotocolInfo.iProtocol);
+        atomic_store(&operation->iocpComplete, true);
         return error;
     }
 

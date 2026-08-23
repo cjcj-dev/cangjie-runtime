@@ -38,9 +38,24 @@ using namespace Register;
 using BasePtrType = zaddress_unsafe;
 using DerivedPtrType = zaddress_unsafe;
 constexpr U32 PURE_COMPRESSED_STACKMAP = 0;
+constexpr U32 STACKMAP_COMPRESSED_BIT = 1;
+constexpr U32 STACKMAP_OOP_SLOT_BIT = 2;
+inline bool StackMapIsCompressed(U32 format) { return (format & STACKMAP_COMPRESSED_BIT) != 0; }
+inline bool StackMapHasOopSlot(U32 format) { return (format & STACKMAP_OOP_SLOT_BIT) != 0; }
+void VisitTaggedOopSlot(ObjectRef& root);
 // derivedptr visitor parameters: basePtr, the reference of derivedptr
 using DerivedPtrVisitor = std::function<void(BasePtrType, DerivedSlot&)>;
 using DerivedPtrDebugVisitor = std::function<void(BasePtrType, DerivedPtrType)>;
+struct StackMapRootCounts {
+    size_t baseSlots{ 0 };
+    size_t baseRegs{ 0 };
+    size_t derivedSlots{ 0 };
+    size_t derivedRegs{ 0 };
+
+    size_t Base() const { return baseSlots + baseRegs; }
+    size_t Derived() const { return derivedSlots + derivedRegs; }
+    size_t Total() const { return Base() + Derived(); }
+};
 struct RegSlotsMap {
     SlotAddress addrMap[REGISTERS_COUNT]{ nullptr };
     bool isRecorded[REGISTERS_COUNT]{ false };

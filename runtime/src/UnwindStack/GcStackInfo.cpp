@@ -10,60 +10,62 @@
 
 #include "Collector/TracingCollector.h"
 #include "Common/StackType.h"
+#include "Heap/Verify/EnumPushDiag.h"
+#include "Heap/Verify/StackRootSlotAttest.h"
 #include "Interpreter/InterpreterSpecific.h"
+#include "UnwindStack/StackFrameCursor.h"
 
 namespace MapleRuntime {
 #ifdef __arm__
 void GCStackInfo::VisitStackRoots(const RootVisitor& func, Mutator& mutator) const
 {
     RegSlotsMap regSlotsMap;
+    size_t frameIndex = 0;
     for (const auto& frame : stack) {
-        switch (frame.GetFrameType()) {
-            case FrameType::MANAGED: {
-                TracingCollector::VisitStackRoots(func, regSlotsMap, frame, mutator);
-                break;
-            }
-            case FrameType::STACKGROW:
-                LOG(RTLOG_FATAL, "STACKGROW frame is not supported in VisitStackRoots");
-                break;
-            case FrameType::SAFEPOINT:
-                TracingCollector::RecordStubAllRegister(regSlotsMap, reinterpret_cast<Uptr>(frame.mFrame.GetFA()));
-                break;
-            case FrameType::C2R_STUB:
-                TracingCollector::RecordStubCalleeSaved(regSlotsMap, reinterpret_cast<Uptr>(frame.mFrame.GetFA()));
-                break;
-            case FrameType::C2N_STUB:
-                TracingCollector::RecordC2NStubCalleeSaved(regSlotsMap, reinterpret_cast<Uptr>(frame.mFrame.GetFA()));
-                break;
-            case FrameType::EXSLUSIVE:
-                TracingCollector::RecordExclusiveStubCalleeSaved(regSlotsMap,
-                                                                 reinterpret_cast<Uptr>(frame.mFrame.GetFA()));
-                break;
-            default: {
-                break;
-            }
-        }
+        StackRootSlotAttest::FrameScope attestFrame(frameIndex++);
+        StackFrameCursor::ProcessFrame(frame, regSlotsMap, func, mutator);
     }
 }
 
 void GCStackInfo::VisitHeapReferencesOnStack(const RootVisitor& rootVisitor, const DerivedPtrVisitor& derivedPtrVisitor,
                                              Mutator& mutator) const
 {
+    VisitHeapReferencesOnStack(rootVisitor, rootVisitor, derivedPtrVisitor, mutator);
+}
+
+void GCStackInfo::VisitHeapReferencesOnStack(const RootVisitor& regRootVisitor,
+                                             const RootVisitor& slotRootVisitor,
+                                             const DerivedPtrVisitor& derivedPtrVisitor, Mutator& mutator) const
+{
     RegSlotsMap regSlotsMap;
+    size_t frameIndex = 0;
     for (const auto& frame : stack) {
+        StackRootSlotAttest::FrameScope attestFrame(frameIndex++);
         switch (frame.GetFrameType()) {
             case FrameType::MANAGED: {
-                TracingCollector::VisitHeapReferencesOnStack(rootVisitor, derivedPtrVisitor, regSlotsMap, frame,
-                                                             mutator);
+                TracingCollector::VisitHeapReferencesOnStack(
+                    regRootVisitor, slotRootVisitor, derivedPtrVisitor, regSlotsMap, frame, mutator);
                 break;
             }
             case FrameType::C2R_STUB:
+                if (UNLIKELY(EnumPushDiag::Enabled())) {
+                    EnumPushDiag::NoteFrame(0, reinterpret_cast<uintptr_t>(frame.mFrame.GetIP()),
+                                           reinterpret_cast<uintptr_t>(frame.mFrame.GetFA()), 0, 0, 0, 0, "C2R");
+                }
                 TracingCollector::RecordStubCalleeSaved(regSlotsMap, reinterpret_cast<Uptr>(frame.mFrame.GetFA()));
                 break;
             case FrameType::C2N_STUB:
+                if (UNLIKELY(EnumPushDiag::Enabled())) {
+                    EnumPushDiag::NoteFrame(0, reinterpret_cast<uintptr_t>(frame.mFrame.GetIP()),
+                                           reinterpret_cast<uintptr_t>(frame.mFrame.GetFA()), 0, 0, 0, 0, "C2N");
+                }
                 TracingCollector::RecordC2NStubCalleeSaved(regSlotsMap, reinterpret_cast<Uptr>(frame.mFrame.GetFA()));
                 break;
             case FrameType::EXSLUSIVE:
+                if (UNLIKELY(EnumPushDiag::Enabled())) {
+                    EnumPushDiag::NoteFrame(0, reinterpret_cast<uintptr_t>(frame.mFrame.GetIP()),
+                                           reinterpret_cast<uintptr_t>(frame.mFrame.GetFA()), 0, 0, 0, 0, "EXCLUSIVE");
+                }
                 TracingCollector::RecordExclusiveStubCalleeSaved(regSlotsMap,
                                                                  reinterpret_cast<Uptr>(frame.mFrame.GetFA()));
                 break;
@@ -71,9 +73,17 @@ void GCStackInfo::VisitHeapReferencesOnStack(const RootVisitor& rootVisitor, con
                 LOG(RTLOG_FATAL, "STACKGROW frame is not supported in VisitHeapReferencesOnStack");
                 break;
             case FrameType::SAFEPOINT:
+                if (UNLIKELY(EnumPushDiag::Enabled())) {
+                    EnumPushDiag::NoteFrame(0, reinterpret_cast<uintptr_t>(frame.mFrame.GetIP()),
+                                           reinterpret_cast<uintptr_t>(frame.mFrame.GetFA()), 0, 0, 0, 0, "SAFEPOINT");
+                }
                 TracingCollector::RecordStubAllRegister(regSlotsMap, reinterpret_cast<Uptr>(frame.mFrame.GetFA()));
                 break;
             default: {
+                if (UNLIKELY(EnumPushDiag::Enabled())) {
+                    EnumPushDiag::NoteFrame(0, reinterpret_cast<uintptr_t>(frame.mFrame.GetIP()),
+                                           reinterpret_cast<uintptr_t>(frame.mFrame.GetFA()), 0, 0, 0, 0, "NON_MANAGED");
+                }
                 break;
             }
         }
@@ -117,28 +127,10 @@ void RecordStackInfo::VisitStackRoots(const RootVisitor &func, Mutator &mutator)
 void GCStackInfo::VisitStackRoots(const RootVisitor& func, Mutator& mutator) const
 {
     RegSlotsMap regSlotsMap;
+    size_t frameIndex = 0;
     for (const auto& frame : stack) {
-        switch (frame.GetFrameType()) {
-            case FrameType::MANAGED: {
-                TracingCollector::VisitStackRoots(func, regSlotsMap, frame, mutator);
-                break;
-            }
-            case FrameType::SAFEPOINT:
-            case FrameType::STACKGROW:
-                TracingCollector::RecordStubAllRegister(regSlotsMap, reinterpret_cast<Uptr>(frame.mFrame.GetFA()));
-                break;
-            case FrameType::C2R_STUB:
-            case FrameType::C2N_STUB:
-            case FrameType::EXSLUSIVE:
-#ifdef INTERPRETER_ENABLED
-            case FrameType::INTERPRETER_C2I:
-#endif
-                TracingCollector::RecordStubCalleeSaved(regSlotsMap, reinterpret_cast<Uptr>(frame.mFrame.GetFA()));
-                break;
-            default: {
-                break;
-            }
-        }
+        StackRootSlotAttest::FrameScope attestFrame(frameIndex++);
+        StackFrameCursor::ProcessFrame(frame, regSlotsMap, func, mutator);
     }
 
 #ifdef INTERPRETER_ENABLED
@@ -172,12 +164,21 @@ void GCStackInfo::VisitStackRoots(const RootVisitor& func, Mutator& mutator) con
 void GCStackInfo::VisitHeapReferencesOnStack(const RootVisitor& rootVisitor, const DerivedPtrVisitor& derivedPtrVisitor,
                                              Mutator& mutator) const
 {
+    VisitHeapReferencesOnStack(rootVisitor, rootVisitor, derivedPtrVisitor, mutator);
+}
+
+void GCStackInfo::VisitHeapReferencesOnStack(const RootVisitor& regRootVisitor,
+                                             const RootVisitor& slotRootVisitor,
+                                             const DerivedPtrVisitor& derivedPtrVisitor, Mutator& mutator) const
+{
     RegSlotsMap regSlotsMap;
+    size_t frameIndex = 0;
     for (const auto& frame : stack) {
+        StackRootSlotAttest::FrameScope attestFrame(frameIndex++);
         switch (frame.GetFrameType()) {
             case FrameType::MANAGED: {
-                TracingCollector::VisitHeapReferencesOnStack(rootVisitor, derivedPtrVisitor, regSlotsMap, frame,
-                                                             mutator);
+                TracingCollector::VisitHeapReferencesOnStack(
+                    regRootVisitor, slotRootVisitor, derivedPtrVisitor, regSlotsMap, frame, mutator);
                 break;
             }
             case FrameType::C2R_STUB:
@@ -186,24 +187,36 @@ void GCStackInfo::VisitHeapReferencesOnStack(const RootVisitor& rootVisitor, con
 #ifdef INTERPRETER_ENABLED
             case FrameType::INTERPRETER_C2I:
 #endif
+                if (UNLIKELY(EnumPushDiag::Enabled())) {
+                    EnumPushDiag::NoteFrame(0, reinterpret_cast<uintptr_t>(frame.mFrame.GetIP()),
+                                           reinterpret_cast<uintptr_t>(frame.mFrame.GetFA()), 0, 0, 0, 0, "STUB");
+                }
                 TracingCollector::RecordStubCalleeSaved(regSlotsMap, reinterpret_cast<Uptr>(frame.mFrame.GetFA()));
                 break;
             case FrameType::SAFEPOINT:
             case FrameType::STACKGROW:
+                if (UNLIKELY(EnumPushDiag::Enabled())) {
+                    EnumPushDiag::NoteFrame(0, reinterpret_cast<uintptr_t>(frame.mFrame.GetIP()),
+                                           reinterpret_cast<uintptr_t>(frame.mFrame.GetFA()), 0, 0, 0, 0, "SAFEPOINT");
+                }
                 TracingCollector::RecordStubAllRegister(regSlotsMap, reinterpret_cast<Uptr>(frame.mFrame.GetFA()));
                 break;
             default: {
+                if (UNLIKELY(EnumPushDiag::Enabled())) {
+                    EnumPushDiag::NoteFrame(0, reinterpret_cast<uintptr_t>(frame.mFrame.GetIP()),
+                                           reinterpret_cast<uintptr_t>(frame.mFrame.GetFA()), 0, 0, 0, 0, "NON_MANAGED");
+                }
                 break;
             }
         }
     }
 
 #ifdef INTERPRETER_ENABLED
-    auto adjustingStackVisitor = [this, &rootVisitor, &derivedPtrVisitor](DYN_VisitingState state) {
+    auto adjustingStackVisitor = [this, &slotRootVisitor, &derivedPtrVisitor](DYN_VisitingState state) {
         for (const auto& frame : stack) {
             switch (frame.GetFrameType()) {
                 case FrameType::INTERPRETER:
-                    VisitInterpreterFrameRootsAdjusting(state, frame, &rootVisitor, &derivedPtrVisitor);
+                    VisitInterpreterFrameRootsAdjusting(state, frame, &slotRootVisitor, &derivedPtrVisitor);
                     break;
                 default: {
                     break;
@@ -266,6 +279,10 @@ void GCStackInfo::FillInStackTrace()
 #else
         if (uwContext.UnwindToCallerContext(caller, uwCtxStatus) == false) {
 #endif
+            // L742: fail-observable; do not elevate to FATAL (preserve route-verifier order).
+            LOG(RTLOG_ERROR,
+                "GCStackInfo unwind truncated at frames=%zu ip=%p fa=%p (GC roots may be incomplete)",
+                stack.size(), uwContext.frameInfo.mFrame.GetIP(), uwContext.frameInfo.mFrame.GetFA());
             return;
         }
         uwContext = caller;
@@ -288,6 +305,9 @@ void RecordStackInfo::FillInStackTrace()
 #else
         if (uwContext.UnwindToCallerContext(caller, uwCtxStatus) == false) {
 #endif
+            LOG(RTLOG_ERROR,
+                "RecordStackInfo unwind truncated at frames=%zu ip=%p fa=%p",
+                stacks.size(), uwContext.frameInfo.mFrame.GetIP(), uwContext.frameInfo.mFrame.GetFA());
             return;
         }
         uwContext = caller;
@@ -309,6 +329,9 @@ void CJThreadStackInfo::FillInStackTrace()
 #else
         if (uwContext.UnwindToCallerContext(caller, uwCtxStatus) == false) {
 #endif
+            LOG(RTLOG_ERROR,
+                "CJThreadStackInfo unwind truncated at frames=%zu ip=%p fa=%p",
+                stack.size(), uwContext.frameInfo.mFrame.GetIP(), uwContext.frameInfo.mFrame.GetFA());
             return;
         }
         uwContext = caller;
@@ -377,6 +400,8 @@ void CJThreadStackInfo::GetInfoFromStackTrace(uint32_t* framePcArr, char** funcN
     if (arrIdx == 0 && stackSize > 0) {
         funcNameArr[arrIdx] = GetFuncOrFileNameStr(CString("?"));
         fileNameArr[arrIdx] = GetFuncOrFileNameStr(CString("unknown"));
+        framePcArr[arrIdx] = 0;
+        lineNumberArr[arrIdx] = 0;
         arrIdx = 1;
     }
     realStackSize = arrIdx;

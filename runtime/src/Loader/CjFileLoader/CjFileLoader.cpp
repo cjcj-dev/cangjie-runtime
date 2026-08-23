@@ -202,7 +202,9 @@ void CJFileLoader::RegisterTypeInfoCreatedByFE(BaseFile* baseFile)
 {
     TypeInfoManager& typeInfoMgr = TypeInfoManager::GetTypeInfoManager();
     Uptr typeInfoBase = baseFile->GetTypeInfoBase();
-    Uptr typeInfoEnd = typeInfoBase + baseFile->GetTypeInfoTotalSize();
+    U32 typeInfoTotalSize = baseFile->GetTypeInfoTotalSize();
+    typeInfoMgr.NoteTypeInfoImage(typeInfoBase, typeInfoTotalSize);
+    Uptr typeInfoEnd = typeInfoBase + typeInfoTotalSize;
     while (typeInfoBase < typeInfoEnd) {
         TypeInfo* ti = reinterpret_cast<TypeInfo*>(typeInfoBase);
         constexpr uint32_t typeInfoAlign = 16u;
@@ -306,7 +308,10 @@ PackageInfo* CJFileLoader::GetPackageInfo(const char* pkgName) const
 
 void CJFileLoader::RemoveLoadedFiles(BaseFile* baseFile)
 {
+    extensionDatas.erase(baseFile);
     loadedFiles.remove(baseFile);
+    TypeInfoManager::GetTypeInfoManager().RemoveTypeInfosInRange(
+        baseFile->GetTypeInfoBase(), baseFile->GetTypeInfoTotalSize());
     baseFile->UnregisterFile();
     delete baseFile;
 }
@@ -381,7 +386,10 @@ void CJFileLoader::RecordTypeInfo(TypeInfo* ti)
 
 void CJFileLoader::ClearLoadedFiles()
 {
+    extensionDatas.clear();
     VisitBaseFile([](BaseFile* baseFile) {
+        TypeInfoManager::GetTypeInfoManager().RemoveTypeInfosInRange(
+            baseFile->GetTypeInfoBase(), baseFile->GetTypeInfoTotalSize());
         baseFile->UnregisterFile();
         delete baseFile;
         return false;
@@ -459,6 +467,7 @@ int CJFileLoader::UnloadLibrary(const char* libName)
 Uptr CJFileLoader::FindSymbol(const CString libName, const CString symName) const
 {
     CString baseName = Os::Path::GetBaseName(libName.Str());
+    std::lock_guard<std::mutex> lock(libCjsoHandlersMutex);
     auto handlerIt =
         std::find_if(cjLibHandlers.begin(), cjLibHandlers.end(), [&baseName](const LibNameToHandler& info) {
             return baseName == Os::Path::GetBaseName(info.baseName.Str());

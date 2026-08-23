@@ -1,0 +1,473 @@
+// Copyright (c) Huawei Technologies Co., Ltd. 2025. All rights reserved.
+// This source file is part of the Cangjie project, licensed under Apache-2.0
+// with Runtime Library Exception.
+//
+// See https://cangjie-lang.cn/pages/LICENSE for license information.
+
+#include "Heap/Barrier/RememberedSet.h"
+
+#include <cstdlib>
+#include <cstring>
+#include <new>
+#include <vector>
+#if defined(MRT_REMSET_BITMAP_CROSSCHECK)
+#include <cstdio>
+#include <dlfcn.h>
+#endif
+
+#include "Base/Log.h"
+#include "Base/LogFile.h"
+#include "Heap/Verify/ProbeReadRouteDiag.h"
+
+namespace MapleRuntime {
+RememberedSet::RememberedSet()
+{
+    for (size_t buffer = 0; buffer < kBufferCount; ++buffer) {
+        recordCounts[buffer].store(0, std::memory_order_relaxed);
+    }
+}
+
+void RememberedSet::Initialize(MAddress start, size_t size)
+{
+    CHECK_DETAIL(!initialized, "remembered set initialized twice");
+    CHECK_DETAIL(size != 0, "remembered set heap range is empty");
+    CHECK_DETAIL(start % kFieldBytes == 0, "remembered set heap start %#zx is not field-aligned", start);
+    heapStart = start;
+    heapSize = size;
+    bitCount = (size + kFieldBytes - 1) / kFieldBytes;
+    wordCount = (bitCount + kBitsPerWord - 1) / kBitsPerWord;
+    dirtyWordCount = (wordCount + kBitsPerWord - 1) / kBitsPerWord;
+    for (size_t buffer = 0; buffer < kBufferCount; ++buffer) {
+        bitmaps[buffer].reset(new (std::nothrow) std::atomic<uint64_t>[wordCount]);
+        CHECK_DETAIL(bitmaps[buffer] != nullptr, "failed to allocate remembered-set bitmap");
+        for (size_t word = 0; word < wordCount; ++word) {
+            bitmaps[buffer][word].store(0, std::memory_order_relaxed);
+        }
+        dirtyMaps[buffer].reset(new (std::nothrow) std::atomic<uint64_t>[dirtyWordCount]);
+        CHECK_DETAIL(dirtyMaps[buffer] != nullptr, "failed to allocate remembered-set dirty map");
+        for (size_t word = 0; word < dirtyWordCount; ++word) {
+            dirtyMaps[buffer][word].store(0, std::memory_order_relaxed);
+        }
+    }
+    const char* ever = std::getenv("MRT_GCV2_REMSET_EVER");
+    if (ever != nullptr && std::strcmp(ever, "1") == 0) {
+        everRecorded.reset(new (std::nothrow) std::atomic<uint64_t>[wordCount]);
+        CHECK_DETAIL(everRecorded != nullptr, "failed to allocate sticky remembered-set bitmap");
+        for (size_t word = 0; word < wordCount; ++word) {
+            everRecorded[word].store(0, std::memory_order_relaxed);
+        }
+    }
+    initialized = true;
+}
+
+bool RememberedSet::WasEverRecorded(MAddress fieldAddress) const
+{
+    if (everRecorded == nullptr) {
+        return false;
+    }
+    if (fieldAddress < heapStart || fieldAddress >= heapStart + heapSize ||
+        fieldAddress % kFieldBytes != 0) {
+        return false;
+    }
+    size_t bit = (fieldAddress - heapStart) / kFieldBytes;
+    size_t word = bit / kBitsPerWord;
+    uint64_t mask = static_cast<uint64_t>(1) << (bit % kBitsPerWord);
+    return (everRecorded[word].load(std::memory_order_relaxed) & mask) != 0;
+}
+
+void RememberedSet::CheckInitialized() const
+{
+    CHECK_DETAIL(initialized, "remembered set used before initialization");
+}
+
+size_t RememberedSet::AddressToBit(MAddress fieldAddress) const
+{
+    CHECK_DETAIL(fieldAddress >= heapStart && fieldAddress < heapStart + heapSize,
+                 "remembered field %#zx is outside heap [%#zx, %#zx)", fieldAddress, heapStart,
+                 heapStart + heapSize);
+    size_t offset = fieldAddress - heapStart;
+    CHECK_DETAIL(offset % kFieldBytes == 0, "remembered field %#zx is not field-aligned", fieldAddress);
+    return offset / kFieldBytes;
+}
+
+void RememberedSet::MarkWordDirty(size_t buffer, size_t word)
+{
+    size_t dirtyWord = word / kBitsPerWord;
+    uint64_t mask = static_cast<uint64_t>(1) << (word % kBitsPerWord);
+    dirtyMaps[buffer][dirtyWord].fetch_or(mask, std::memory_order_relaxed);
+}
+
+void RememberedSet::ClearWordDirty(size_t buffer, size_t word)
+{
+    size_t dirtyWord = word / kBitsPerWord;
+    uint64_t mask = static_cast<uint64_t>(1) << (word % kBitsPerWord);
+    dirtyMaps[buffer][dirtyWord].fetch_and(~mask, std::memory_order_relaxed);
+}
+
+void RememberedSet::Record(MAddress fieldAddress, bool fromMutatorBarrier)
+{
+    CheckInitialized();
+    size_t bit = AddressToBit(fieldAddress);
+    size_t word = bit / kBitsPerWord;
+    uint64_t mask = static_cast<uint64_t>(1) << (bit % kBitsPerWord);
+    size_t buffer = activeBuffer.load(std::memory_order_acquire);
+    uint64_t old = bitmaps[buffer][word].fetch_or(mask, std::memory_order_relaxed);
+    if (fromMutatorBarrier && everRecorded != nullptr) {
+        everRecorded[word].fetch_or(mask, std::memory_order_relaxed);
+    }
+    MarkWordDirty(buffer, word);
+    if ((old & mask) == 0) {
+        recordCounts[buffer].fetch_add(1, std::memory_order_relaxed);
+    }
+    ProbeReadRouteDiag::NoteRemsetEvent(
+        fieldAddress,
+        fromMutatorBarrier ? ProbeReadRouteDiag::REMSET_MUTATOR_RECORD : ProbeReadRouteDiag::REMSET_GC_RECORD,
+        static_cast<uint8_t>(buffer));
+#if defined(MRT_REMSET_BITMAP_CROSSCHECK)
+    std::lock_guard<std::mutex> guard(oracleLock);
+    oracleRecords[buffer].insert(fieldAddress);
+#endif
+}
+
+size_t RememberedSet::TransferObjectSlots(MAddress fromBase, MAddress toBase, size_t size)
+{
+    CheckInitialized();
+    // ForwardRegion old→old never in-places (RouteObject allocates a distinct to-space).
+    // CompactRegion is a separate path and does not call this.
+    if (size < kFieldBytes || fromBase == toBase) {
+        return 0;
+    }
+    MAddress fromEnd = fromBase + size;
+    if (fromBase < heapStart || fromEnd > heapStart + heapSize) {
+        return 0;
+    }
+    MAddress toEnd = toBase + size;
+    if (toBase < heapStart || toEnd > heapStart + heapSize) {
+        return 0;
+    }
+    // Field-aligned addresses in [fromBase, fromEnd).
+    size_t firstBit = (fromBase - heapStart + kFieldBytes - 1) / kFieldBytes;
+    size_t endBit = (fromEnd - heapStart) / kFieldBytes;
+    if (firstBit >= endBit || firstBit >= bitCount) {
+        return 0;
+    }
+    if (endBit > bitCount) {
+        endBit = bitCount;
+    }
+    size_t buffer = activeBuffer.load(std::memory_order_acquire);
+    const ptrdiff_t delta = static_cast<ptrdiff_t>(toBase) - static_cast<ptrdiff_t>(fromBase);
+    size_t transferred = 0;
+    for (size_t bit = firstBit; bit < endBit; ++bit) {
+        size_t word = bit / kBitsPerWord;
+        uint64_t mask = static_cast<uint64_t>(1) << (bit % kBitsPerWord);
+        uint64_t w = bitmaps[buffer][word].load(std::memory_order_relaxed);
+        if ((w & mask) == 0) {
+            continue;
+        }
+        MAddress fromSlot = heapStart + bit * kFieldBytes;
+        MAddress toSlot = static_cast<MAddress>(static_cast<ptrdiff_t>(fromSlot) + delta);
+        ProbeReadRouteDiag::NoteRemsetEvent(
+            fromSlot, ProbeReadRouteDiag::REMSET_TRANSFER_OUT, static_cast<uint8_t>(buffer), toSlot);
+        Record(toSlot, false);
+        ++transferred;
+    }
+    return transferred;
+}
+
+void RememberedSet::FlipForMinor()
+{
+    CheckInitialized();
+    size_t scanBuffer = activeBuffer.load(std::memory_order_relaxed);
+    size_t nextBuffer = scanBuffer ^ 1U;
+    CHECK_DETAIL(ClearBuffer(nextBuffer) == 0 && recordCounts[nextBuffer].load(std::memory_order_relaxed) == 0,
+                 "remembered-set next buffer is not empty at minor swap");
+    activeBuffer.store(static_cast<uint8_t>(nextBuffer), std::memory_order_release);
+    ProbeReadRouteDiag::NoteRemsetFlip();
+}
+
+size_t RememberedSet::ScanPreviousForMinor(std::unordered_set<MAddress>& records)
+{
+    CheckInitialized();
+    CHECK_DETAIL(records.empty(), "minor remembered-set destination must be empty");
+    size_t scanBuffer = activeBuffer.load(std::memory_order_acquire) ^ 1U;
+
+    static const bool reserveDestination = []() {
+        const char* value = std::getenv("MRT_GCV2_REMSET_HASH_OPT");
+        return value == nullptr || std::strcmp(value, "1") == 0;
+    }();
+    const size_t expectedRecords = recordCounts[scanBuffer].load(std::memory_order_relaxed);
+    if (reserveDestination) {
+        records.reserve(expectedRecords);
+    }
+
+    for (size_t dirtyIdx = 0; dirtyIdx < dirtyWordCount; ++dirtyIdx) {
+        uint64_t dirty = dirtyMaps[scanBuffer][dirtyIdx].exchange(0, std::memory_order_relaxed);
+        while (dirty != 0) {
+            unsigned wordInDirty = static_cast<unsigned>(__builtin_ctzll(dirty));
+            size_t wordIdx = dirtyIdx * kBitsPerWord + wordInDirty;
+            if (wordIdx < wordCount) {
+                uint64_t word = bitmaps[scanBuffer][wordIdx].exchange(0, std::memory_order_relaxed);
+                while (word != 0) {
+                    unsigned bitInWord = static_cast<unsigned>(__builtin_ctzll(word));
+                    size_t bit = wordIdx * kBitsPerWord + bitInWord;
+                    if (bit < bitCount) {
+                        MAddress slot = heapStart + bit * kFieldBytes;
+                        ProbeReadRouteDiag::NoteRemsetEvent(
+                            slot, ProbeReadRouteDiag::REMSET_CONSUME, static_cast<uint8_t>(scanBuffer));
+                        records.insert(slot);
+                    }
+                    word &= word - 1;
+                }
+            }
+            dirty &= dirty - 1;
+        }
+    }
+    size_t recorded = recordCounts[scanBuffer].exchange(0, std::memory_order_relaxed);
+    CHECK_DETAIL(recorded == records.size(), "remembered-set count mismatch: bitmap=%zu records=%zu", recorded,
+                 records.size());
+
+#if defined(MRT_REMSET_BITMAP_CROSSCHECK)
+    std::lock_guard<std::mutex> guard(oracleLock);
+    bool injected = false;
+    bool equivalent = records.size() == oracleRecords[scanBuffer].size();
+    for (MAddress slot : records) {
+        equivalent = equivalent && oracleRecords[scanBuffer].count(slot) != 0;
+    }
+    if (!equivalent) {
+        std::fprintf(stderr,
+                     "REMSET_BITMAP_CROSSCHECK_MISMATCH operation=drain injected=%u bitmap=%zu oracle=%zu\n",
+                     static_cast<unsigned>(injected), records.size(), oracleRecords[scanBuffer].size());
+        std::abort();
+    }
+    lastDrainedHeapRecords = records.size();
+    oracleRecords[scanBuffer].clear();
+    ++bitmapCrossCheckCount;
+#endif
+    return records.size();
+}
+
+size_t RememberedSet::DrainForMinor(std::unordered_set<MAddress>& records)
+{
+    FlipForMinor();
+    return ScanPreviousForMinor(records);
+}
+
+std::unordered_set<MAddress> RememberedSet::Snapshot() const
+{
+    CheckInitialized();
+    std::unordered_set<MAddress> records;
+    size_t buffer = activeBuffer.load(std::memory_order_acquire);
+    records.reserve(recordCounts[buffer].load(std::memory_order_relaxed));
+    for (size_t dirtyIdx = 0; dirtyIdx < dirtyWordCount; ++dirtyIdx) {
+        uint64_t dirty = dirtyMaps[buffer][dirtyIdx].load(std::memory_order_relaxed);
+        while (dirty != 0) {
+            unsigned wordInDirty = static_cast<unsigned>(__builtin_ctzll(dirty));
+            size_t wordIdx = dirtyIdx * kBitsPerWord + wordInDirty;
+            if (wordIdx < wordCount) {
+                uint64_t word = bitmaps[buffer][wordIdx].load(std::memory_order_relaxed);
+                while (word != 0) {
+                    unsigned bitInWord = static_cast<unsigned>(__builtin_ctzll(word));
+                    size_t bit = wordIdx * kBitsPerWord + bitInWord;
+                    if (bit < bitCount) {
+                        records.insert(heapStart + bit * kFieldBytes);
+                    }
+                    word &= word - 1;
+                }
+            }
+            dirty &= dirty - 1;
+        }
+    }
+#if defined(MRT_REMSET_BITMAP_CROSSCHECK)
+    std::lock_guard<std::mutex> guard(oracleLock);
+    size_t heapRecordCount = 0;
+    bool equivalent = true;
+    for (MAddress slot : records) {
+        if (slot < heapStart || slot >= heapStart + heapSize) {
+            continue;
+        }
+        ++heapRecordCount;
+        equivalent = equivalent && oracleRecords[buffer].count(slot) != 0;
+    }
+    equivalent = equivalent && heapRecordCount == oracleRecords[buffer].size();
+    if (!equivalent) {
+        std::fprintf(stderr, "REMSET_BITMAP_CROSSCHECK_MISMATCH operation=snapshot bitmap=%zu oracle=%zu\n",
+                     heapRecordCount, oracleRecords[buffer].size());
+        std::abort();
+    }
+#endif
+    return records;
+}
+
+bool RememberedSet::Contains(MAddress fieldAddress) const
+{
+    CheckInitialized();
+    if (fieldAddress < heapStart || fieldAddress >= heapStart + heapSize) {
+        return false;
+    }
+    size_t bit = AddressToBit(fieldAddress);
+    size_t buffer = activeBuffer.load(std::memory_order_acquire);
+    uint64_t word = bitmaps[buffer][bit / kBitsPerWord].load(std::memory_order_relaxed);
+    return (word & (static_cast<uint64_t>(1) << (bit % kBitsPerWord))) != 0;
+}
+
+size_t RememberedSet::Size() const
+{
+    CheckInitialized();
+    size_t buffer = activeBuffer.load(std::memory_order_acquire);
+    return recordCounts[buffer].load(std::memory_order_relaxed);
+}
+
+size_t RememberedSet::ClearRangeInBuffer(size_t buffer, size_t firstBit, size_t endBit, size_t* outWords)
+{
+    if (firstBit >= endBit) {
+        return 0;
+    }
+    size_t firstWord = firstBit / kBitsPerWord;
+    size_t lastWord = (endBit - 1) / kBitsPerWord;
+    size_t removed = 0;
+    for (size_t wordIdx = firstWord; wordIdx <= lastWord; ++wordIdx) {
+        size_t first = wordIdx == firstWord ? firstBit % kBitsPerWord : 0;
+        size_t last = wordIdx == lastWord ? (endBit - 1) % kBitsPerWord + 1 : kBitsPerWord;
+        uint64_t lowMask = first == 0 ? 0 : (static_cast<uint64_t>(1) << first) - 1;
+        uint64_t highMask = last == kBitsPerWord ? ~static_cast<uint64_t>(0) :
+                                                       (static_cast<uint64_t>(1) << last) - 1;
+        uint64_t mask = highMask & ~lowMask;
+        uint64_t old = bitmaps[buffer][wordIdx].fetch_and(~mask, std::memory_order_relaxed);
+        uint64_t cleared = old & mask;
+        removed += static_cast<size_t>(__builtin_popcountll(cleared));
+        while (cleared != 0) {
+            const unsigned bitInWord = static_cast<unsigned>(__builtin_ctzll(cleared));
+            const size_t bit = wordIdx * kBitsPerWord + bitInWord;
+            ProbeReadRouteDiag::NoteRemsetEvent(
+                heapStart + bit * kFieldBytes, ProbeReadRouteDiag::REMSET_REGION_CLEAR,
+                static_cast<uint8_t>(buffer));
+            cleared &= cleared - 1;
+        }
+        if ((old & ~mask) == 0) {
+            ClearWordDirty(buffer, wordIdx);
+        }
+    }
+    if (removed != 0) {
+        recordCounts[buffer].fetch_sub(removed, std::memory_order_relaxed);
+    }
+    if (outWords != nullptr) {
+        *outWords += lastWord - firstWord + 1;
+    }
+    return removed;
+}
+
+size_t RememberedSet::ClearRegion(MAddress start, MAddress end, size_t* outWords)
+{
+    CheckInitialized();
+    if (outWords != nullptr) {
+        *outWords = 0;
+    }
+    if (start >= end) {
+        return 0;
+    }
+    CHECK_DETAIL(start >= heapStart && end <= heapStart + heapSize,
+                 "remembered-set region [%#zx, %#zx) outside heap [%#zx, %#zx)", start, end, heapStart,
+                 heapStart + heapSize);
+    CHECK_DETAIL((start - heapStart) % kFieldBytes == 0 && (end - heapStart) % kFieldBytes == 0,
+                 "remembered-set region [%#zx, %#zx) is not field-aligned", start, end);
+    size_t firstBit = (start - heapStart) / kFieldBytes;
+    size_t endBit = (end - heapStart) / kFieldBytes;
+    size_t removed = 0;
+    for (size_t buffer = 0; buffer < kBufferCount; ++buffer) {
+        removed += ClearRangeInBuffer(buffer, firstBit, endBit, outWords);
+    }
+#if defined(MRT_REMSET_BITMAP_CROSSCHECK)
+    std::lock_guard<std::mutex> guard(oracleLock);
+    for (size_t buffer = 0; buffer < kBufferCount; ++buffer) {
+        for (auto it = oracleRecords[buffer].begin(); it != oracleRecords[buffer].end();) {
+            if (*it >= start && *it < end) {
+                it = oracleRecords[buffer].erase(it);
+            } else {
+                ++it;
+            }
+        }
+    }
+    ++bitmapCrossCheckCount;
+#endif
+    return removed;
+}
+
+size_t RememberedSet::ClearBuffer(size_t buffer)
+{
+    size_t removed = 0;
+    for (size_t dirtyIdx = 0; dirtyIdx < dirtyWordCount; ++dirtyIdx) {
+        uint64_t dirty = dirtyMaps[buffer][dirtyIdx].exchange(0, std::memory_order_relaxed);
+        while (dirty != 0) {
+            unsigned wordInDirty = static_cast<unsigned>(__builtin_ctzll(dirty));
+            size_t word = dirtyIdx * kBitsPerWord + wordInDirty;
+            if (word < wordCount) {
+                removed += static_cast<size_t>(
+                    __builtin_popcountll(bitmaps[buffer][word].exchange(0, std::memory_order_relaxed)));
+            }
+            dirty &= dirty - 1;
+        }
+    }
+    size_t expected = recordCounts[buffer].exchange(0, std::memory_order_relaxed);
+    CHECK_DETAIL(removed == expected, "remembered-set dirty index mismatch: bitmap=%zu count=%zu", removed, expected);
+    return removed;
+}
+
+uint8_t RememberedSet::BeginFullClear()
+{
+    CheckInitialized();
+    size_t scanBuffer = activeBuffer.load(std::memory_order_acquire);
+    size_t nextBuffer = scanBuffer ^ 1U;
+    CHECK_DETAIL(ClearBuffer(nextBuffer) == 0, "remembered-set next full buffer is not empty");
+    size_t previous = activeBuffer.exchange(static_cast<uint8_t>(nextBuffer), std::memory_order_acq_rel);
+    CHECK_DETAIL(previous == scanBuffer, "concurrent remembered-set full rotation");
+#if defined(MRT_REMSET_BITMAP_CROSSCHECK)
+    {
+        std::lock_guard<std::mutex> guard(oracleLock);
+        oracleRecords[nextBuffer].clear();
+    }
+#endif
+    return static_cast<uint8_t>(scanBuffer);
+}
+
+size_t RememberedSet::FinishFullClear(uint8_t scanBuffer)
+{
+    CheckInitialized();
+    CHECK_DETAIL(scanBuffer < kBufferCount, "invalid remembered-set scan buffer %u", scanBuffer);
+    CHECK_DETAIL(scanBuffer != activeBuffer.load(std::memory_order_acquire),
+                 "cannot clear active remembered-set buffer");
+    size_t heapRemoved = ClearBuffer(scanBuffer);
+#if defined(MRT_REMSET_BITMAP_CROSSCHECK)
+    std::lock_guard<std::mutex> guard(oracleLock);
+    CHECK_DETAIL(heapRemoved == oracleRecords[scanBuffer].size(),
+                 "full remembered-set cross-check mismatch: bitmap=%zu oracle=%zu", heapRemoved,
+                 oracleRecords[scanBuffer].size());
+    oracleRecords[scanBuffer].clear();
+    ++bitmapCrossCheckCount;
+#endif
+    return heapRemoved;
+}
+
+#if defined(MRT_REMSET_BITMAP_CROSSCHECK)
+void RememberedSet::RecordStaticForCrossCheck(MAddress fieldAddress, MAddress callsite)
+{
+    std::lock_guard<std::mutex> guard(oracleLock);
+    staticRecords.insert(fieldAddress);
+    staticRecordSites[fieldAddress] = callsite;
+}
+
+void RememberedSet::VisitStaticForCrossCheck(MAddress fieldAddress)
+{
+    std::lock_guard<std::mutex> guard(oracleLock);
+    visitedStaticRoots.insert(fieldAddress);
+}
+
+void RememberedSet::CheckStaticCoverageForMinor()
+{
+    std::lock_guard<std::mutex> guard(oracleLock);
+    staticRecords.clear();
+    staticRecordSites.clear();
+    visitedStaticRoots.clear();
+    lastDrainedHeapRecords = 0;
+}
+#endif
+} // namespace MapleRuntime

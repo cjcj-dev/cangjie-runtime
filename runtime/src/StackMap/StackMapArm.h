@@ -102,6 +102,17 @@ public:
         return true;
     }
 
+    size_t CountRootSlots() const
+    {
+        RegBits bits = regBits;
+        size_t count = 0;
+        while (bits != 0) {
+            count += bits & LOWEST_BIT;
+            bits >>= 1;
+        }
+        return count;
+    }
+
     static void RecordRegs(RegSlotsMap& regSlotsMap, Uptr fp)
     {
         RecordStubAllRegister(regSlotsMap, fp);

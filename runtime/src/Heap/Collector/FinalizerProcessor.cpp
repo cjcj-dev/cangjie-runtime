@@ -10,12 +10,25 @@
 #include "Base/Macros.h"
 #include "Common/ScopedObjectAccess.h"
 #include "ExceptionManager.inline.h"
+#include "Heap/Allocator/HeapFiller.h"
+#include "Heap/Heap.h"
 #include "Mutator/Mutator.h"
 #include "ObjectModel/MObject.h"
 #include "CjScheduler.h"
 
 namespace MapleRuntime {
 constexpr U32 DEFAULT_FINALIZER_TIMEOUT_MS = 2000;
+
+static BaseObject* LoadFinalizerGood(RootSlot& slot)
+{
+    Collector& collector = Heap::GetHeap().GetCollector();
+    HeapSlot<> tmp(to_zpointer(raw(slot.LoadPlain())));
+    BaseObject* obj = collector.make_load_good(tmp);
+    if (obj != nullptr && raw(slot.LoadPlain()) != reinterpret_cast<MAddress>(obj)) {
+        HealRoot(slot, from_object(obj), HealSite::TracingCollectorResurrectFinalizer);
+    }
+    return obj;
+}
 
 // Note: can only be called by FinalizerProcessor thread
 extern "C" MRT_EXPORT void* MRT_ProcessFinalizers(void* arg)
@@ -90,8 +103,10 @@ void FinalizerProcessor::Run()
             MRT_PHASE_TIMER("finalizerProcessor waitting time", FINALIZE);
             while (running) {
                 hasPendingFinalizableJob = hasFinalizableJob.load(std::memory_order_relaxed);
-                hasPendingReclaimHeapGarbage = shouldReclaimHeapGarbage.load(std::memory_order_relaxed);
-                hasPendingFeedHungryBuffers = shouldFeedHungryBuffers.load(std::memory_order_relaxed);
+                hasPendingReclaimHeapGarbage =
+                    shouldReclaimHeapGarbage.exchange(false, std::memory_order_acq_rel);
+                hasPendingFeedHungryBuffers =
+                    shouldFeedHungryBuffers.exchange(false, std::memory_order_acq_rel);
                 if (hasPendingFinalizableJob || hasPendingReclaimHeapGarbage || hasPendingFeedHungryBuffers) {
                     break;
                 }
@@ -195,15 +210,19 @@ void FinalizerProcessor::WaitStarted()
 void FinalizerProcessor::EnqueueFinalizables(const std::function<bool(BaseObject*)>& finalizable, U32 countLimit)
 {
     std::lock_guard<std::mutex> l(listLock);
+    U32 enqueued = 0;
     auto it = finalizers.begin();
     while (it != finalizers.end() && countLimit != 0) {
-        // finalizers is visited as a GC root while listLock is held, so its
-        // plain value names a live object for this locked inspection.
-        BaseObject* obj = to_object(safe(it->LoadPlain()));
+        BaseObject* obj = LoadFinalizerGood(*it);
         --countLimit;
+        if (obj == nullptr || HeapFiller::IsFiller(obj)) {
+            it = finalizers.erase(it);
+            continue;
+        }
         if (finalizable(obj)) {
             finalizables.push_back(*it);
             it = finalizers.erase(it);
+            ++enqueued;
         } else {
             ++it;
         }
@@ -212,6 +231,7 @@ void FinalizerProcessor::EnqueueFinalizables(const std::function<bool(BaseObject
     if (!finalizables.empty()) {
         hasFinalizableJob.store(true, std::memory_order_relaxed);
     }
+    VLOG(REPORT, "enqueued finalizers %u", enqueued);
 }
 
 // Process finalizable list
@@ -226,9 +246,12 @@ void FinalizerProcessor::ProcessFinalizableList()
         // keep GC thread from visiting roots when workingFinalizables list is updating
         ScopedObjectAccess soa;
         CHECK_DETAIL(ExceptionManager::GetPendingException() == nullptr, "should not exist pending exception");
-        // workingFinalizables remains a registered GC root; ScopedObjectAccess
-        // prevents a moving collection while this plain value is consumed.
-        BaseObject* finalizeObjAddr = to_object(safe(itor->LoadPlain()));
+        BaseObject* finalizeObjAddr = LoadFinalizerGood(*itor);
+        if (finalizeObjAddr == nullptr || HeapFiller::IsFiller(finalizeObjAddr)) {
+            std::lock_guard<std::mutex> l(listLock);
+            itor = workingFinalizables.erase(itor);
+            continue;
+        }
 
         TypeInfo* classInfo = reinterpret_cast<MObject*>(finalizeObjAddr)->GetTypeInfo();
         FuncRef finalizerMethod = classInfo->GetFinalizeMethod();
@@ -333,12 +356,10 @@ void FinalizerProcessor::ReclaimHeapGarbage()
 {
     ScopedEntryTrace trace("CJRT_GC_RECLAIM");
     Heap::GetHeap().GetAllocator().ReclaimGarbageMemory(false);
-    shouldReclaimHeapGarbage.store(false, std::memory_order_relaxed);
 }
 
 void FinalizerProcessor::FeedHungryBuffers()
 {
     Heap::GetHeap().GetAllocator().FeedHungryBuffers();
-    shouldFeedHungryBuffers.store(false, std::memory_order_relaxed);
 }
 } // namespace MapleRuntime

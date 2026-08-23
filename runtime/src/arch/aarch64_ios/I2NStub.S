@@ -71,8 +71,8 @@ _CJ_MCC_I2NStub:
 
     // SaveC2NContext(pc, fa, threadLocalData).
     mov  x1, x29
-    adr  x0, .L_unwind_pc
-.L_unwind_pc:
+    adr  x0, L_unwind_pc
+L_unwind_pc:
     mov  x2, x28
     bl   _MRT_SaveC2NContext
 
@@ -106,9 +106,9 @@ _CJ_MCC_I2NStub:
     // LeaveSaferegion() only if EnterSaferegion changed state
     ldr  x9, [sp, #SafeStateOffset]
     cmp  x9, #0
-    beq  .L_no_leave_saferegion
+    beq  L_no_leave_saferegion
     bl   _MRT_LeaveSaferegion
-.L_no_leave_saferegion:
+L_no_leave_saferegion:
 
     // DeleteC2NContext(threadLocalData)
     bl   _MRT_GetThreadLocalData

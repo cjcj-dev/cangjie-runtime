@@ -14,7 +14,7 @@
 #include "securec.h"
 #include "basetime.h"
 #include "Base/Log.h"
-#if defined(CANGJIE_ASAN_SUPPORT)
+#if defined(CANGJIE_SANITIZER_SUPPORT)
 #include "Sanitizer/SanitizerInterface.h"
 #endif
 #include "StackManager.h"
@@ -246,6 +246,10 @@ int ScheduleProcessorInit(struct Schedule *schedule, unsigned int processorNum)
         error = ProcessorInit(schedule, &(processorGroup[id]), ProcessorNewId());
         if (error) {
             LOG_ERROR(error, "processor id:%d init failed", id);
+            for (unsigned int done = 0; done < id; done++) {
+                QueueDestroy(&processorGroup[done].runq);
+                PthreadSpinDestroy(&processorGroup[done].lock);
+            }
             MapleRuntime::NativeAllocator::NativeFree(processorGroup, mallocSize);
             return error;
         }
@@ -442,6 +446,7 @@ struct Schedule *ScheduleAlloc(ScheduleType scheduleType)
     } else if (scheduleType == SCHEDULE_DEFAULT && g_scheduleManager.defaultSchedule != nullptr) {
         LOG_ERROR(ERRNO_SCHD_INIT_FAILED, "can't create second default schedule");
         MapleRuntime::NativeAllocator::NativeFree(schedule, sizeof(struct Schedule));
+        ScheduleSet(nullptr);
         return nullptr;
     }
     return schedule;
@@ -584,19 +589,23 @@ ScheduleHandle ScheduleNew(ScheduleType scheduleType, const struct ScheduleAttr 
     if (scheduleType == SCHEDULE_DEFAULT && !g_scheduleManager.initFlag) {
         error = ScheduleManagerInit();
         if (error) {
-            MapleRuntime::NativeAllocator::NativeFree(schedule, sizeof(struct Schedule));
+            ScheduleFree(schedule);
             return nullptr;
         }
     } else if (scheduleType != SCHEDULE_DEFAULT && !g_scheduleManager.initFlag) {
         LOG_ERROR(ERRNO_SCHD_INIT_FAILED, "default schedule hasn't been inited");
-        MapleRuntime::NativeAllocator::NativeFree(schedule, sizeof(struct Schedule));
+        ScheduleFree(schedule);
         return nullptr;
     } else if (scheduleType == SCHEDULE_DEFAULT && g_scheduleManager.initFlag) {
         // Before the default scheduler is created, g_scheduleManager should not be
         // initialized and should not go to this branch. Therefore, g_scheduleManager cannot
         // be created.
         LOG_ERROR(ERRNO_SCHD_INIT_FAILED, "g_shceduleManager shouldn't have been initialized");
+        if (g_scheduleManager.defaultSchedule == schedule) {
+            g_scheduleManager.defaultSchedule = nullptr;
+        }
         MapleRuntime::NativeAllocator::NativeFree(schedule, sizeof(struct Schedule));
+        ScheduleSet(nullptr);
         return nullptr;
     }
 
@@ -734,7 +743,10 @@ int ScheduleStart(void)
     if (schedule->state != SCHEDULE_INIT) {
         return ERRNO_SCHD_IS_RUNNING;
     }
-    ScheduleNetpollInit();
+    ret = ScheduleNetpollInit();
+    if (ret != 0) {
+        return ret;
+    }
     if (schedule->scheduleType == SCHEDULE_DEFAULT) {
         ret = SchmonStart(schedule);
         if (ret != 0) {
@@ -783,13 +795,17 @@ bool ScheduleExistTask(void)
 int ScheduleStartNoWait(unsigned long long timeout)
 {
     struct Schedule *schedule;
+    int ret;
 
     schedule = ScheduleGet();
     if (schedule == nullptr || schedule->scheduleType == SCHEDULE_DEFAULT || schedule->state != SCHEDULE_INIT) {
         return ERRNO_SCHD_ATTR_INVALID;
     }
     if (!schedule->noWaitAttr.netpollInit) {
-        ScheduleNetpollInit();
+        ret = ScheduleNetpollInit();
+        if (ret != 0) {
+            return ret;
+        }
         schedule->noWaitAttr.netpollInit = true;
     }
     if (!ScheduleExistTask()) {
@@ -876,6 +892,9 @@ void ScheduleProcessorFree(struct Schedule *schedule)
                 func(processor);
             }
         }
+#if defined(CANGJIE_TSAN_SUPPORT)
+        MapleRuntime::Sanitizer::TsanDeleteRaceProc(processor);
+#endif
     }
 
     // Release processor.
@@ -1350,6 +1369,10 @@ bool ScheduleAnyCJThread(ScheduleHandle scheduleHandle)
     for (i = 0; i < schedule->schdProcessor.processorNum; ++i) {
         processor = &schedule->schdProcessor.processorGroup[i];
         if (QueueLength(&processor->runq) != 0) {
+            return true;
+        }
+        if (atomic_load_explicit(&processor->cjthreadNext, std::memory_order_relaxed) !=
+            static_cast<struct CJThread *>(nullptr)) {
             return true;
         }
     }

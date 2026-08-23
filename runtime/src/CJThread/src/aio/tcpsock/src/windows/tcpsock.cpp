@@ -95,12 +95,23 @@ int TcpsockAcceptCoreInlock(SOCKET listenFd, struct sockaddr_storage *localAndPe
         return ret;
     }
 
-    // Create sockets that support overlapping I/O operations.
-    acceptFd = WSASocket(AF_INET, SOCK_STREAM, 0, nullptr,
-                         0, WSA_FLAG_OVERLAPPED);
+    WSAPROTOCOL_INFO wsaprotocolInfo;
+    int optlen = sizeof(wsaprotocolInfo);
+    if (getsockopt(listenFd, SOL_SOCKET, SO_PROTOCOL_INFO,
+                   reinterpret_cast<char *>(&wsaprotocolInfo), &optlen) == SOCKET_ERROR) {
+        ret = WSAGetLastError();
+        LOG_ERROR(ret, "getsockopt failed, fd: %d, level: %d, optname: %d", listenFd, SOL_SOCKET, SO_PROTOCOL_INFO);
+        atomic_store(&operation->iocpComplete, true);
+        return ret;
+    }
+    // AcceptEx requires the accept socket to be the same address family as the listener.
+    acceptFd = WSASocket(wsaprotocolInfo.iAddressFamily, wsaprotocolInfo.iSocketType, wsaprotocolInfo.iProtocol,
+                         nullptr, 0, WSA_FLAG_OVERLAPPED);
     if (acceptFd == INVALID_SOCKET) {
         ret = WSAGetLastError();
-        LOG_ERROR(ret, "WSASocket failed, domain: %u, protocol: %d", AF_INET, 0);
+        LOG_ERROR(ret, "WSASocket failed, domain: %u, protocol: %d", wsaprotocolInfo.iAddressFamily,
+                  wsaprotocolInfo.iProtocol);
+        atomic_store(&operation->iocpComplete, true);
         return ret;
     }
 

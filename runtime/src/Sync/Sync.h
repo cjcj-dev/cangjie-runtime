@@ -58,7 +58,11 @@ struct CJMonitor {
 #ifdef __arm__
     uint32_t padding;
 #endif
-    CJMutex* mutexPtr;
+    // Managed heap ref field (std.sync Monitor.mutex). Must be HeapSlot so colour
+    // is visible and reads go through Barrier::ReadReference — bare CJMutex* made
+    // the type system blind (GetUnitIdxAt_OOB via AddRawPointerObject; see
+    // reports/REPORT-traceuncolour.md). Layout stays one machine word.
+    HeapSlot<> mutexPtr;
     bool isWaitQueueInit;
     Waitqueue wq;
 };
@@ -77,7 +81,8 @@ struct CJMultiConditionMonitor {
 #ifdef __arm__
     uint32_t padding;
 #endif
-    CJMutex* mutexPtr;
+    // Same managed heap ref as CJMonitor::mutexPtr (std.sync MultiConditionMonitor).
+    HeapSlot<> mutexPtr;
 };
 
 void ReleaseNativeResource(BaseObject* obj);

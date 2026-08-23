@@ -92,7 +92,7 @@ private:
         CString baseName;
         void* handler;
     };
-    std::mutex libCjsoHandlersMutex;
+    mutable std::mutex libCjsoHandlersMutex;
     std::list<LibNameToHandler> cjLibHandlers;
     std::list<BaseFile*> loadedFiles;
     std::unordered_map<const char*, PackageInfo*, HashString, EqualString> packageInfos;

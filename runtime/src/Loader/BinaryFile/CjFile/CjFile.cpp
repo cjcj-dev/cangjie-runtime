@@ -59,7 +59,7 @@ void CJFile::LoadWinCJFileMeta()
     cJFileMeta.gcRootSize = *header->tables[GC_ROOT_TABLE].tableSize / sizeof(U64);
     cJFileMeta.packageInfoTbl.packageInfoBasePtr = *header->tables[PACKINFO_TABLE].tableAddr;
     cJFileMeta.packageInfoTbl.packageInfoTotalSize = *header->tables[PACKINFO_TABLE].tableSize;
-    cJFileMeta.typeExtTbl.typeExtBasePtr = reinterpret_cast<TypeExt*>(header->tables[TYPE_EXT_TABLE].tableAddr);
+    cJFileMeta.typeExtTbl.typeExtBasePtr = reinterpret_cast<TypeExt*>(*header->tables[TYPE_EXT_TABLE].tableAddr);
     cJFileMeta.typeExtTbl.typeExtTotalSize = *header->tables[TYPE_EXT_TABLE].tableSize;
     Heap::GetHeap().RegisterStaticRoots(cJFileMeta.gcRootsAddr, cJFileMeta.gcRootSize);
 }

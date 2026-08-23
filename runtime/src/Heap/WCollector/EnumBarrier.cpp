@@ -16,29 +16,38 @@
 #endif
 
 namespace MapleRuntime {
-// Because gc thread will also have impact on tagged pointer in enum and trace phase,
-// so we don't expect reading barrier have the ability to modify the referent field.
 BaseObject* EnumBarrier::ReadReference(BaseObject* obj, RefField<false>& field) const
 {
-    RefField<> tmpField(field);
-    if (LIKELY(theCollector.is_load_good(tmpField))) {
-        return to_object(tmpField.GetTargetObject());
-    }
-    if (theCollector.IsCurrentPointer(tmpField)) {
-        return to_object(tmpField.GetTargetObject());
-    }
-    if (theCollector.IsOldPointer(tmpField)) {
-        BaseObject* fromVersion = to_object(tmpField.GetTargetObject());
-        BaseObject* toVersion = theCollector.FindToVersion(fromVersion);
-        BaseObject* target = nullptr;
-        if (toVersion != nullptr) {
-            target = toVersion;
-        } else {
-            target = fromVersion;
+    for (;;) {
+        RefField<> oldField(field);
+        BaseObject* oldTarget = to_object(oldField.GetTargetObject());
+        if (oldTarget == nullptr || LIKELY(theCollector.is_load_good(oldField))) {
+            BaseObject* resolved = ResolveFromCopyForMutator(oldTarget);
+            if (resolved == oldTarget || resolved == nullptr) {
+                return resolved;
+            }
+            if (!Heap::IsHeapAddress(resolved)) {
+                return resolved;
+            }
+            RefField<> goodField = theCollector.GetAndTryTagRefField(resolved);
+            return ZgcSelfHealLoadGood(field, oldField.GetFieldValue(), goodField.GetFieldValue(),
+                                       HealSite::EnumReadReference);
         }
-        return target;
+
+        BaseObject* loadGood = theCollector.make_load_good(oldField);
+        // relroroot / rostatic: non-heap targets (static constants under GNU_RELRO) are never
+        // evacuated. Colouring + CAS into those slots faults (si_code=2 ACCERR). Skip write-back.
+        if (loadGood != nullptr && !Heap::IsHeapAddress(loadGood)) {
+            return loadGood;
+        }
+        loadGood = ResolveFromCopyForMutator(loadGood);
+        if (loadGood == nullptr) {
+            return nullptr;
+        }
+        RefField<> goodField = theCollector.GetAndTryTagRefField(loadGood);
+        return ZgcSelfHealLoadGood(field, oldField.GetFieldValue(), goodField.GetFieldValue(),
+                                   HealSite::EnumReadReference);
     }
-    return to_object(tmpField.GetTargetObject());
 }
 
 BaseObject* EnumBarrier::ReadStaticRef(RootSlot& field) const { return Barrier::ReadStaticRef(field); }
@@ -57,34 +66,27 @@ BaseObject* EnumBarrier::ReadWeakRef(BaseObject* obj, RefField<false>& field) co
 
 void EnumBarrier::ReadStruct(MAddress dst, BaseObject* obj, MAddress src, size_t size) const
 {
-    LocalRefFieldContainer refFields;
+    if (!Heap::IsHeapAddress(dst)) {
+        CopyStructPlainToNonHeap(dst, obj, src, size);
+        return;
+    }
     if (obj != nullptr) {
         obj->ForEachRefInStruct(
-            [&refFields, dst, src, size](RefField<false>& field) {
-                if (reinterpret_cast<MAddress>(&field) < src || reinterpret_cast<MAddress>(&field) >= (src + size)) {
-                    return;
-                }
-                RefField<> oldField(field);
-                MAddress offset = reinterpret_cast<MAddress>(&field) - src;
-                refFields.Push(&HeapSlotAt<>(dst + offset));
+            [this, obj](RefField<false>& field) {
+                (void)ReadReference(obj, field);
             },
             src, src + size);
     }
-
     CHECK(memcpy_s(reinterpret_cast<void*>(dst), size, reinterpret_cast<void*>(src), size) == EOK);
-    refFields.VisitRefField([this](RefField<>& dstRef) {
-        BaseObject* target = nullptr;
-        if (theCollector.IsCurrentPointer(dstRef)) {
-            theCollector.TryUntagRefField(nullptr, dstRef, target);
-        } else if (theCollector.IsOldPointer(dstRef)) {
-            RefField<> healed = theCollector.GetAndTryTagRefField(ReadReference(nullptr, dstRef));
-            dstRef.StoreColoured(healed.GetFieldValue());
-        }
-    });
 }
 
 void EnumBarrier::ReadStaticStruct(MAddress dst, MAddress src, size_t size, const GCTib gctib) const
 {
+    if (!Heap::IsHeapAddress(dst)) {
+        CopyStaticStructPlainToNonHeap(dst, src, size, gctib);
+        return;
+    }
+    CHECK(memcpy_s(reinterpret_cast<void*>(dst), size, reinterpret_cast<void*>(src), size) == EOK);
     LocalRefFieldContainer refFields;
     gctib.ForEachBitmapWordInRange(
         src,
@@ -93,20 +95,12 @@ void EnumBarrier::ReadStaticStruct(MAddress dst, MAddress src, size_t size, cons
             refFields.Push(&HeapSlotAt<>(dst + offset));
         },
         src, src + size);
-
-    CHECK(memcpy_s(reinterpret_cast<void*>(dst), size, reinterpret_cast<void*>(src), size) == EOK);
     refFields.VisitRefField([this](RefField<>& dstRef) {
-        BaseObject* target = nullptr;
-        if (theCollector.IsCurrentPointer(dstRef)) {
-            theCollector.TryUntagRefField(nullptr, dstRef, target);
-        } else if (theCollector.IsOldPointer(dstRef)) {
-            RefField<> healed = theCollector.GetAndTryTagRefField(ReadReference(nullptr, dstRef));
-            dstRef.StoreColoured(healed.GetFieldValue());
-        }
+        (void)ReadReference(nullptr, dstRef);
     });
 }
 
-void EnumBarrier::WriteReference(BaseObject* obj, RefField<false>& field, BaseObject* ref) const
+void EnumBarrier::WriteReferenceImpl(BaseObject* obj, RefField<false>& field, BaseObject* ref) const
 {
     RefField<> tmpField(field);
     BaseObject* remeberedObject = nullptr;
@@ -146,9 +140,12 @@ void EnumBarrier::WriteStaticRef(RootSlot& field, BaseObject* ref) const
     DLOG(BARRIER, "write static ref@%p: %p -|> %p", &field, rememberedObject, ref);
     std::atomic_thread_fence(std::memory_order_seq_cst);
     StorePlain(field, from_object(ref));
+#if defined(MRT_REMSET_BITMAP_CROSSCHECK)
+    RecordCrossGenEdge(nullptr, reinterpret_cast<MAddress>(&field), ref);
+#endif
 }
 
-void EnumBarrier::WriteStruct(BaseObject* obj, MAddress dst, size_t dstLen, MAddress src, size_t srcLen) const
+void EnumBarrier::WriteStructImpl(BaseObject* obj, MAddress dst, size_t dstLen, MAddress src, size_t srcLen) const
 {
     if (obj != nullptr) {
         MRT_ASSERT(dst > reinterpret_cast<MAddress>(obj), "WriteStruct struct addr is less than obj!");
@@ -157,7 +154,7 @@ void EnumBarrier::WriteStruct(BaseObject* obj, MAddress dst, size_t dstLen, MAdd
             [=](RefField<>& dstField) {
                 mutator->RememberObjectInSatbBuffer(ReadReference(obj, dstField));
                 MAddress offset = reinterpret_cast<MAddress>(&dstField) - dst;
-                HeapSlot<>& srcField = HeapSlotAt<>(src + offset);
+                HeapSlot<> srcField(HeapSlotAt<>(src + offset));
                 mutator->RememberObjectInSatbBuffer(ReadReference(nullptr, srcField));
             },
             dst, dst + srcLen);
@@ -175,7 +172,7 @@ void EnumBarrier::WriteStruct(BaseObject* obj, MAddress dst, size_t dstLen, MAdd
                 RefField<> newField = theCollector.GetAndTryTagRefField(untagged);
                 if (oldField.GetFieldValue() != newField.GetFieldValue()) {
                     HealSlot(refField, oldField.GetFieldValue(), newField.GetFieldValue(),
-                             HealSite::EnumWriteStructRecolour, HealNull::Allow);
+                             HealSite::EnumWriteStructRecolour);
                 }
             },
             dst, dst + dstLen);
@@ -193,23 +190,19 @@ void EnumBarrier::WriteStaticStruct(MAddress dst, size_t dstLen, MAddress src, s
     gctib.ForEachBitmapWord(dst, [=](RefField<>& dstField) {
         mutator->RememberObjectInSatbBuffer(ReadReference(nullptr, dstField));
         uint32_t offset = reinterpret_cast<MAddress>(&dstField) - dst;
-        HeapSlot<>& srcField = HeapSlotAt<>(src + offset);
+        HeapSlot<> srcField(HeapSlotAt<>(src + offset));
         mutator->RememberObjectInSatbBuffer(ReadReference(nullptr, srcField));
     });
     std::atomic_thread_fence(std::memory_order_seq_cst);
     CHECK_DETAIL(memcpy_s(reinterpret_cast<void*>(dst), dstLen, reinterpret_cast<void*>(src), srcLen) == EOK,
                  "memcpy_s failed");
 
-    gctib.ForEachBitmapWord(dst, [=](RefField<>& refField) {
-        RefField<> oldField(refField);
-        RefField<> toBeUpdated(oldField);
-        BaseObject* untagged = ReadReference(nullptr, toBeUpdated);
-        RefField<> newField = theCollector.GetAndTryTagRefField(untagged);
-        if (oldField.GetFieldValue() != newField.GetFieldValue()) {
-            HealSlot(refField, oldField.GetFieldValue(), newField.GetFieldValue(),
-                     HealSite::EnumWriteStructRecolour, HealNull::Allow);
-        }
+    ResolveStaticStructRoots(dst, gctib);
+#if defined(MRT_REMSET_BITMAP_CROSSCHECK)
+    gctib.ForEachBitmapWord(dst, [this](RefField<>& field) {
+        RecordCrossGenEdge(nullptr, reinterpret_cast<MAddress>(&field), to_object(field.GetTargetObject()));
     });
+#endif
 
 #if defined(CANGJIE_TSAN_SUPPORT)
     Sanitizer::TsanWriteMemoryRange(reinterpret_cast<void*>(dst), dstLen);
@@ -222,7 +215,7 @@ BaseObject* EnumBarrier::AtomicReadReference(BaseObject* obj, RefField<true>& fi
     BaseObject* target = nullptr;
     RefField<false> oldField(field.GetFieldValue(order));
     if (theCollector.IsCurrentPointer(oldField)) {
-        target = to_object(oldField.GetTargetObject());
+        target = ResolveFromCopyForMutator(to_object(oldField.GetTargetObject()));
         DLOG(EBARRIER, "atomic read obj %p ref@%p: %#zx -> %p", obj, &field, raw(oldField.GetFieldValue()), target);
         return target;
     }
@@ -232,7 +225,7 @@ BaseObject* EnumBarrier::AtomicReadReference(BaseObject* obj, RefField<true>& fi
     return target;
 }
 
-BaseObject* EnumBarrier::AtomicSwapReference(BaseObject* obj, RefField<true>& field, BaseObject* newRef,
+BaseObject* EnumBarrier::AtomicSwapReferenceImpl(BaseObject* obj, RefField<true>& field, BaseObject* newRef,
                                              MemoryOrder order) const
 {
     RefField<> newField = theCollector.GetAndTryTagRefField(newRef);
@@ -247,7 +240,7 @@ BaseObject* EnumBarrier::AtomicSwapReference(BaseObject* obj, RefField<true>& fi
     return oldRef;
 }
 
-void EnumBarrier::AtomicWriteReference(BaseObject* obj, RefField<true>& field, BaseObject* newRef,
+void EnumBarrier::AtomicWriteReferenceImpl(BaseObject* obj, RefField<true>& field, BaseObject* newRef,
                                        MemoryOrder order) const
 {
     RefField<> oldField(field.GetFieldValue(order));
@@ -261,22 +254,22 @@ void EnumBarrier::AtomicWriteReference(BaseObject* obj, RefField<true>& field, B
     mutator->RememberObjectInSatbBuffer(newRef);
     if (obj != nullptr) {
         DLOG(EBARRIER, "atomic write obj %p<%p>(%zu) ref@%p: %#zx -> %#zx", obj, obj->GetTypeInfo(), obj->GetSize(),
-             &field, oldValue, newField.GetFieldValue());
+             &field, oldValue, raw(newField.GetFieldValue()));
     } else {
-        DLOG(EBARRIER, "atomic write static ref@%p: %#zx -> %#zx", &field, oldValue, newField.GetFieldValue());
+        DLOG(EBARRIER, "atomic write static ref@%p: %#zx -> %#zx", &field, oldValue, raw(newField.GetFieldValue()));
     }
 }
 
-bool EnumBarrier::CompareAndSwapReference(BaseObject* obj, RefField<true>& field, BaseObject* oldRef,
+bool EnumBarrier::CompareAndSwapReferenceImpl(BaseObject* obj, RefField<true>& field, BaseObject* oldRef,
                                           BaseObject* newRef, MemoryOrder sOrder, MemoryOrder fOrder) const
 {
-    RefField<> newField = theCollector.GetAndTryTagRefField(newRef);
-
     MAddress oldFieldValue = raw(field.GetFieldValue(std::memory_order_seq_cst));
     RefField<false> oldField(oldFieldValue);
     BaseObject* oldVersion = ReadReference(nullptr, oldField);
 
-    while (oldVersion == oldRef) {
+    // Bound kCasAttempts: colour self-heal can keep raw expected bits moving (c3179214).
+    for (int attempt = 0; attempt < kCasAttempts && oldVersion == oldRef; ++attempt) {
+        RefField<> newField = theCollector.GetAndTryTagRefField(newRef);
         if (HealSlot(field, to_zpointer(oldFieldValue), newField.GetFieldValue(),
                      HealSite::EnumCompareAndSwapReference, HealNull::Allow, sOrder, fOrder)) {
             Mutator* mutator = Mutator::GetMutator();
@@ -292,9 +285,13 @@ bool EnumBarrier::CompareAndSwapReference(BaseObject* obj, RefField<true>& field
     return false;
 }
 
-void EnumBarrier::CopyStructArray(BaseObject* dstObj, MAddress dstField, MIndex dstSize, BaseObject* srcObj,
+void EnumBarrier::CopyStructArrayImpl(BaseObject* dstObj, MAddress dstField, MIndex dstSize, BaseObject* srcObj,
                                   MAddress srcField, MIndex srcSize) const
 {
+    if (dstObj == nullptr || !Heap::IsHeapAddress(dstObj)) {
+        CopyStructArrayPlainToNonHeap(dstField, srcObj, srcField, srcSize);
+        return;
+    }
 #if defined(MRT_DEBUG) && (MRT_DEBUG == 1)
     if (!(static_cast<MArray*>(dstObj)->GetComponentTypeInfo()->IsStructType())) {
         LOG(RTLOG_FATAL, "array %p type is not struct type", dstObj);
@@ -321,7 +318,7 @@ void EnumBarrier::CopyStructArray(BaseObject* dstObj, MAddress dstField, MIndex 
         RefField<> newField = theCollector.GetAndTryTagRefField(target);
         if (newField.GetFieldValue() != oldField.GetFieldValue()) {
             HealSlot(field, oldField.GetFieldValue(), newField.GetFieldValue(),
-                     HealSite::EnumCopyStructArrayRecolour, HealNull::Allow);
+                     HealSite::EnumCopyStructArrayRecolour);
         }
     };
     MArray* srcArray = static_cast<MArray*>(srcObj);
@@ -345,41 +342,46 @@ void EnumBarrier::CopyStructArray(BaseObject* dstObj, MAddress dstField, MIndex 
 #endif
 }
 
-void EnumBarrier::WriteGeneric(const ObjectPtr obj, void* fieldPtr, const ObjectPtr src, size_t size) const
+void EnumBarrier::WriteGenericImpl(const ObjectPtr obj, void* fieldPtr, const ObjectPtr src, size_t size) const
 {
-    if ((obj != nullptr && !obj->HasRefField()) || (!Heap::IsHeapAddress(obj) && !Heap::IsHeapAddress(src))) {
-        CHECK_DETAIL(memcpy_s(fieldPtr, size,
-                              reinterpret_cast<void*>(reinterpret_cast<uintptr_t>(src) + TYPEINFO_PTR_SIZE),
+    ObjectPtr dst = obj;
+    void* fp = fieldPtr;
+    dst = RelocateHolderForWrite(dst, fp);
+    ObjectPtr from = ResolveFromCopyForMutator(src);
+    NoteZeroTip(dst, "EnumBarrier.WriteGenericImpl");
+    if ((dst != nullptr && !dst->HasRefField()) || (!Heap::IsHeapAddress(dst) && !Heap::IsHeapAddress(from))) {
+        CHECK_DETAIL(memcpy_s(fp, size,
+                              reinterpret_cast<void*>(reinterpret_cast<uintptr_t>(from) + TYPEINFO_PTR_SIZE),
                               size) == EOK,
                      "WriteGeneric memcpy_s failed");
 #if defined(CANGJIE_TSAN_SUPPORT)
-        if (Heap::IsHeapAddress(src)) {
+        if (Heap::IsHeapAddress(from)) {
             Sanitizer::TsanReadMemoryRange(
-                reinterpret_cast<void*>(reinterpret_cast<uintptr_t>(src) + TYPEINFO_PTR_SIZE), size);
+                reinterpret_cast<void*>(reinterpret_cast<uintptr_t>(from) + TYPEINFO_PTR_SIZE), size);
         }
-        if (Heap::IsHeapAddress(obj)) {
-            Sanitizer::TsanWriteMemoryRange(fieldPtr, size);
+        if (Heap::IsHeapAddress(dst)) {
+            Sanitizer::TsanWriteMemoryRange(fp, size);
         }
 #endif
-    } else if (!Heap::IsHeapAddress(obj) && Heap::IsHeapAddress(src)) {
-        MAddress dstAddr = reinterpret_cast<MAddress>(fieldPtr);
-        MAddress srcAddr = reinterpret_cast<MAddress>(src) + TYPEINFO_PTR_SIZE;
-        ReadStruct(dstAddr, src, srcAddr, size);
-    } else if ((Heap::IsHeapAddress(obj) && !Heap::IsHeapAddress(src))) {
-        MAddress dstAddr = reinterpret_cast<MAddress>(fieldPtr);
-        MAddress srcAddr = reinterpret_cast<MAddress>(src) + TYPEINFO_PTR_SIZE;
-        WriteStruct(obj, dstAddr, size, srcAddr, size);
+    } else if (!Heap::IsHeapAddress(dst) && Heap::IsHeapAddress(from)) {
+        MAddress dstAddr = reinterpret_cast<MAddress>(fp);
+        MAddress srcAddr = reinterpret_cast<MAddress>(from) + TYPEINFO_PTR_SIZE;
+        ReadStruct(dstAddr, from, srcAddr, size);
+    } else if ((Heap::IsHeapAddress(dst) && !Heap::IsHeapAddress(from))) {
+        MAddress dstAddr = reinterpret_cast<MAddress>(fp);
+        MAddress srcAddr = reinterpret_cast<MAddress>(from) + TYPEINFO_PTR_SIZE;
+        WriteStruct(dst, dstAddr, size, srcAddr, size);
     } else {
-        MAddress dstAddr = reinterpret_cast<MAddress>(fieldPtr);
-        MAddress srcAddr = reinterpret_cast<MAddress>(src) + TYPEINFO_PTR_SIZE;
+        MAddress dstAddr = reinterpret_cast<MAddress>(fp);
+        MAddress srcAddr = reinterpret_cast<MAddress>(from) + TYPEINFO_PTR_SIZE;
         void* tmp = malloc(size);
-        ReadStruct((MAddress)tmp, src, srcAddr, size);
-        WriteStruct(obj, dstAddr, size, (MAddress)tmp, size);
+        ReadStruct((MAddress)tmp, from, srcAddr, size);
+        WriteStruct(dst, dstAddr, size, (MAddress)tmp, size);
         free(tmp);
     }
 }
 
-void EnumBarrier::ReadGeneric(const ObjectPtr dstObj, ObjectPtr obj, void* fieldPtr, size_t size) const
+void EnumBarrier::ReadGenericImpl(const ObjectPtr dstObj, ObjectPtr obj, void* fieldPtr, size_t size) const
 {
     if (!Heap::IsHeapAddress(dstObj) && !Heap::IsHeapAddress(obj)) {
         CHECK_DETAIL(memcpy_s(reinterpret_cast<void*>(reinterpret_cast<uintptr_t>(dstObj) + TYPEINFO_PTR_SIZE), size,

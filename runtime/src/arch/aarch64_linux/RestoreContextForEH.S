@@ -46,6 +46,10 @@ RestoreContextForEH:
     mov     x0, sp
     bl      MRT_RestoreContext
 
+    // x0 = landing pad. Save it; zero AAPCS return regs so N2CStub epilogue
+    // does not treat the landing-pad PC as the C return value (see x86_64_linux).
+    mov     x9, x0
+
     // Restore all callee saved register.
     ldp     x19, x20, [sp]
     ldp     x21, x22, [sp, #16]
@@ -63,10 +67,17 @@ RestoreContextForEH:
     // jump to landingpad.
 #if defined(ENABLE_BACKWARD_PTRAUTH_CFI)
     mov     x16, sp
-    mov     x17, x0
+    mov     x17, x9
     autia1716
-    mov     x0, x17
+    mov     x9, x17
 #endif
-    br      x0
+    mov     x0, xzr
+    mov     x1, xzr
+    mov     x2, xzr
+    mov     x3, xzr
+    mov     x8, xzr
+    fmov    d0, xzr
+    fmov    d1, xzr
+    br      x9
     .cfi_endproc
     .size RestoreContextForEH, .-RestoreContextForEH

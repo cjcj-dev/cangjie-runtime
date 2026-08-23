@@ -12,6 +12,11 @@ set(SRC_LIST
     "PreforwardBarrier.cpp"
     "ForwardBarrier.cpp"
     "WCollector.cpp"
+    "../Collector/Generation.cpp"
+    "../Collector/Mark.cpp"
+    "../Collector/Relocate.cpp"
+    "../Collector/Remembered.cpp"
+    "../Collector/RelocationSet.cpp"
 )
 
 include_directories(${CMAKE_CURRENT_SOURCE_DIR}/..)

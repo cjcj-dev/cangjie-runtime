@@ -12,7 +12,22 @@
 #include "StackMap/StackMap.h"
 #include "StackMetadataHelper.h"
 
+#include <cstdarg>
+#include <cstring>
+
 namespace MapleRuntime {
+namespace {
+void SigAppend(char* buf, size_t cap, const char* fmt, ...)
+{
+    size_t len = strnlen(buf, cap);
+    CHECK_IN_SIG(len < cap);
+    va_list args;
+    va_start(args, fmt);
+    int n = vsprintf_s(buf + len, cap - len, fmt, args);
+    va_end(args);
+    CHECK_IN_SIG(n != -1);
+}
+} // namespace
 void FrameInfo::ResolveProcInfo()
 {
     startProc = GetFuncStartPC();
@@ -138,11 +153,11 @@ void SigHandlerFrameinfo::PrintFrameInfo(uint32_t frameIdx) const
         CHECK_IN_SIG(sprintf_s(fileName, maxPrcessSize, "%s", funcDesc->GetFuncDir().Str()) != -1);
         if (*fileName != '\0') {
 #ifdef _WIN64
-            CHECK_IN_SIG(sprintf_s(fileName, maxPrcessSize, "%s%s", fileName, "\\") != -1);
-            CHECK_IN_SIG(sprintf_s(fileName, maxPrcessSize, "%s%s", fileName, funcDesc->GetFuncFilename().Str()) != -1);
+            SigAppend(fileName, maxPrcessSize, "%s", "\\");
+            SigAppend(fileName, maxPrcessSize, "%s", funcDesc->GetFuncFilename().Str());
 #else
-            CHECK_IN_SIG(sprintf_s(fileName, maxPrcessSize, "%s%s", fileName, "/") != -1);
-            CHECK_IN_SIG(sprintf_s(fileName, maxPrcessSize, "%s%s", fileName, funcDesc->GetFuncFilename().Str()) != -1);
+            SigAppend(fileName, maxPrcessSize, "%s", "/");
+            SigAppend(fileName, maxPrcessSize, "%s", funcDesc->GetFuncFilename().Str());
 #endif
         }
 
@@ -150,12 +165,11 @@ void SigHandlerFrameinfo::PrintFrameInfo(uint32_t frameIdx) const
                                       reinterpret_cast<uintptr_t>(mFrame.GetFA()));
         MethodMap methodMap = stackMapBuild.Build<MethodMap>();
         lineNumber = methodMap.IsValid() ? methodMap.GetLineNum() : 0;
-        CHECK_IN_SIG(
-            sprintf_s(outputStr, maxPrcessSize, "%s in %s", outputStr, *methodName == '\0' ? "?" : methodName) != -1);
+        SigAppend(outputStr, maxPrcessSize, " in %s", *methodName == '\0' ? "?" : methodName);
         if (*fileName != '\0') {
-            CHECK_IN_SIG(sprintf_s(outputStr, maxPrcessSize, "%s at %s", outputStr, fileName) != -1);
+            SigAppend(outputStr, maxPrcessSize, " at %s", fileName);
             if (lineNumber != 0) {
-                CHECK_IN_SIG(sprintf_s(outputStr, maxPrcessSize, "%s:%d", outputStr, lineNumber) != -1);
+                SigAppend(outputStr, maxPrcessSize, ":%d", lineNumber);
             }
         }
     } else {
@@ -163,10 +177,9 @@ void SigHandlerFrameinfo::PrintFrameInfo(uint32_t frameIdx) const
         CHECK_IN_SIG(Os::Loader::GetBinaryInfoFromAddress(mFrame.GetIP(), &binInfo) != -1);
         CHECK_IN_SIG(sprintf_s(fileName, maxPrcessSize, "%s", binInfo.filePathName.Str()) != -1);
         CHECK_IN_SIG(sprintf_s(methodName, maxPrcessSize, "%s", binInfo.symbolName.Str()) != -1);
-        CHECK_IN_SIG(
-            sprintf_s(outputStr, maxPrcessSize, "%s in %s", outputStr, *methodName == '\0' ? "?" : methodName) != -1);
+        SigAppend(outputStr, maxPrcessSize, " in %s", *methodName == '\0' ? "?" : methodName);
         if (*fileName != '\0') {
-            CHECK_IN_SIG(sprintf_s(outputStr, maxPrcessSize, "%s from %s", outputStr, fileName) != -1);
+            SigAppend(outputStr, maxPrcessSize, " from %s", fileName);
         }
     }
     FLOG(RTLOG_ERROR, outputStr);

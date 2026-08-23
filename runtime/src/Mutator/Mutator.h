@@ -25,6 +25,7 @@
 #include "Interpreter/Options.h"
 #include "Interpreter/RTInterface.h"
 #include "ObjectModel/RefField.h"
+#include "UnwindStack/StackWatermark.h"
 
 
 namespace MapleRuntime {
@@ -42,6 +43,7 @@ public:
         SUSPENSION_FOR_SYNC = 2,
         SUSPENSION_FOR_EXIT = 4,
         SUSPENSION_FOR_CPU_PROFILE = 8,
+        SUSPENSION_FOR_EPOCH_HANDSHAKE = 16,
     };
 
     enum GCPhaseTransitionState : uint32_t {
@@ -64,12 +66,31 @@ public:
         SAFE_REGION_FALSE = 0x03020100,
     };
 
+    enum EpochHandshakeState : uint32_t {
+        EPOCH_HANDSHAKE_IDLE,
+        EPOCH_HANDSHAKE_REQUESTED,
+        EPOCH_HANDSHAKE_CLAIMED,
+        EPOCH_HANDSHAKE_ACKNOWLEDGED,
+    };
+
+    enum EpochHandshakeLifecycle : uint32_t {
+        EPOCH_HANDSHAKE_STARTING,
+        EPOCH_HANDSHAKE_RUNNING,
+        EPOCH_HANDSHAKE_PARKED,
+        EPOCH_HANDSHAKE_EXITING,
+    };
+
     // Called when a mutator starts and finishes, respectively.
     void Init()
     {
         observerCnt = 0;
         mutatorPhase.store(GCPhase::GC_PHASE_IDLE);
         inManagedContext.store(true);
+        epochHandshakeRequest.store(0, std::memory_order_relaxed);
+        epochHandshakeCompletion.store(0, std::memory_order_relaxed);
+        epochHandshakeState.store(EPOCH_HANDSHAKE_IDLE, std::memory_order_relaxed);
+        epochHandshakeLifecycle.store(EPOCH_HANDSHAKE_STARTING, std::memory_order_relaxed);
+        stackWatermark.OnCreate();
 
 #ifdef INTERPRETER_ENABLED
         InitInterpreterPart();
@@ -80,10 +101,7 @@ public:
     {
         tid = 0;
         stackBoundAddr = nullptr;
-        if (satbNode != nullptr) {
-            SatbBuffer::Instance().RetireNode(satbNode);
-            satbNode = nullptr;
-        }
+        SatbBuffer::Instance().FlushQueue(satbNode);
 
 #ifdef INTERPRETER_ENABLED
         DestroyInterpreterPart();
@@ -173,8 +191,17 @@ public:
     // Force current mutator leave saferegion, internal use only.
     __attribute__((always_inline)) inline void DoLeaveSaferegion()
     {
-        SetInSaferegion(SAFE_REGION_FALSE);
-        // go slow path if the mutator should suspend
+        for (;;) {
+            MutatorLock();
+            if (epochHandshakeState.load(std::memory_order_acquire) == EPOCH_HANDSHAKE_CLAIMED) {
+                MutatorUnlock();
+                (void)sched_yield();
+                continue;
+            }
+            SetInSaferegion(SAFE_REGION_FALSE);
+            MutatorUnlock();
+            break;
+        }
         if (UNLIKELY(HasAnySuspensionRequest())) {
             HandleSuspensionRequest();
         }
@@ -279,6 +306,32 @@ public:
         return (suspensionFlag.load(std::memory_order_acquire) != 0) || HasPreemptRequest();
     }
 
+    void RequestEpochHandshake(uint64_t epoch);
+    bool AcknowledgeEpochHandshake(uint64_t epoch, bool bySelf);
+    // dynjoin (乙): brand-new mutator is born-clean for the currently active epoch.
+    // Empty stack + current GC phase ⇒ no contribution to this epoch's root set.
+    void MarkBornCleanForEpoch(uint64_t epoch);
+
+    bool FinishedEpochHandshake(uint64_t epoch) const
+    {
+        return epochHandshakeCompletion.load(std::memory_order_acquire) == epoch;
+    }
+
+    bool CanGcAssistEpochHandshake() const
+    {
+        return InSaferegion();
+    }
+
+    EpochHandshakeLifecycle GetEpochHandshakeLifecycle() const
+    {
+        return epochHandshakeLifecycle.load(std::memory_order_acquire);
+    }
+
+    void SetEpochHandshakeLifecycle(EpochHandshakeLifecycle state)
+    {
+        epochHandshakeLifecycle.store(state, std::memory_order_release);
+    }
+
     void SetSafepointStatePtr(uint64_t* slot) { safepointStatePtr = slot; }
 
     void SetSafepointActive(bool value)
@@ -313,7 +366,11 @@ public:
         }
     }
 
-    inline void GcPhaseEnum(GCPhase newPhase);
+    bool GcPhaseEnum(GCPhase newPhase, uint64_t stackScanEpoch = 0, bool bySelf = false,
+                     size_t* scannedFrames = nullptr);
+    bool DrainStackWatermark(const RootVisitor& visitor, uint64_t epoch, StackWatermark::Owner owner,
+                             const DerivedPtrVisitor* derivedPtrVisitor,
+                             size_t& scannedFrames);
     inline void GCPhasePreForward(GCPhase newPhase);
     inline void HandleGCPhase(GCPhase newPhase);
     inline void HandleGCPhaseIDLE();
@@ -348,6 +405,9 @@ public:
     }
 
     void VisitHeapReferences(const RootVisitor& rootVisitor, const DerivedPtrVisitor& derivedPtrVisitor);
+    void VisitHeapReferences(const RootVisitor& regRootVisitor, const RootVisitor& slotRootVisitor,
+                             const DerivedPtrVisitor& derivedPtrVisitor, const RootVisitor& exceptionRootVisitor,
+                             const RootVisitor& rawObjectVisitor);
 
     void DumpMutator() const
     {
@@ -392,17 +452,8 @@ public:
 
     void SetManagedContext(bool isManagedContext);
 
-    ATTR_NO_INLINE void RememberObjectInSatbBuffer(const BaseObject* obj) { RememberObjectImpl(obj); }
-
-    const SatbBuffer::Node* GetSatbBufferNode() const { return satbNode; }
-
-    void ClearSatbBufferNode()
-    {
-        if (satbNode == nullptr) {
-            return;
-        }
-        satbNode->Clear();
-    }
+    ATTR_NO_INLINE void RememberObjectInSatbBuffer(const BaseObject* target);
+    ATTR_NO_INLINE void RememberObjectInSatbBuffer(const BaseObject* target, const BaseObject* knownBase);
 
     inline uintptr_t GetStackTopAddr() { return stackTopAddr; }
     inline void SetStackTopAddr(uintptr_t sta) { stackTopAddr = sta; }
@@ -420,6 +471,7 @@ public:
 
     BaseObject* PopRawObject()
     {
+        // PushRawObject accepts a live object and rawObject keeps it rooted until this pop.
         BaseObject* obj = to_object(safe(rawObject.LoadPlain()));
         StorePlain(rawObject, zaddress::null);
         return obj;
@@ -441,15 +493,19 @@ public:
         if (UNLIKELY(tlData->buffer == nullptr)) {
             (void)AllocBuffer::GetOrCreateAllocBuffer();
         }
-        DoLeaveSaferegion();
+        SetEpochHandshakeLifecycle(EPOCH_HANDSHAKE_RUNNING);
         SetSafepointStatePtr(&tlData->safepointState);
-        SetSafepointActive(false);
+        SetSafepointActive(HasAnySuspensionRequest());
+        DoLeaveSaferegion();
     }
 
     void PreparedToPark(void* pc, void* fa)
     {
         SetSafepointStatePtr(nullptr);
+        stackWatermark.OnPark();
         if (UNLIKELY((uwContext.GetUnwindContextStatus() == UnwindContextStatus::RISKY) || InSaferegion())) {
+            SetInSaferegion(SaferegionState::SAFE_REGION_TRUE);
+            SetEpochHandshakeLifecycle(EPOCH_HANDSHAKE_PARKED);
             return;
         }
 #if defined(__linux__) || defined(hongmeng) || defined(__APPLE__)
@@ -469,6 +525,7 @@ public:
         }
 #endif // platform
         SetInSaferegion(SaferegionState::SAFE_REGION_TRUE);
+        SetEpochHandshakeLifecycle(EPOCH_HANDSHAKE_PARKED);
     }
 
     // This interface is used for initiating the mutator who is created by foreign thread.
@@ -499,24 +556,68 @@ public:
 
     void ReleaseForeignThread();
 
+    // Observe-only: in-flight SATB node (not yet FlushQueue'd). STW2 CLEAR_SATB
+    // flushes before Census; peek still covers a node that HandleGCPhase missed.
+    SatbBuffer::Node* PeekSatbNode() const { return satbNode; }
+
+    // Hand this mutator's in-flight SATB node over unconditionally.
+    // ZMark::flush(Thread*) (zMark.cpp:998-1006) is what the mark-termination
+    // handshake calls on every thread, and it does not ask whether that thread
+    // already ran a phase transition. HandleGCPhase(CLEAR_SATB_BUFFER) is not a
+    // substitute: EnsurePhaseTransition (MutatorManager.cpp:806-811) erases any
+    // mutator already parked in the target phase without re-running the handler,
+    // so a second transition to the same phase flushes nobody.
+    void FlushSatbBuffer()
+    {
+        std::lock_guard<std::mutex> lg(mutatorLock);
+        SatbBuffer::Instance().FlushQueue(satbNode);
+    }
+
 protected:
     // for managed stack
     void VisitStackRoots(const RootVisitor& func);
     void VisitHeapReferencesOnStack(const RootVisitor& rootVisitor, const DerivedPtrVisitor& derivedPtrVisitor);
+    void VisitHeapReferencesOnStack(const RootVisitor& regRootVisitor, const RootVisitor& slotRootVisitor,
+                                    const DerivedPtrVisitor& derivedPtrVisitor,
+                                    const RootVisitor& rawObjectVisitor);
     // for exception ref
     void VisitExceptionRoots(const RootVisitor& func);
     void VisitRawObjects(const RootVisitor& func);
     void CreateCurrentGCInfo();
 
 private:
-    void RememberObjectImpl(const BaseObject* obj)
+    void RememberObjectImpl(const BaseObject* target, const BaseObject* knownBase)
     {
-        if (LIKELY(Heap::IsHeapAddress(obj))) {
-            if (SatbBuffer::Instance().ShouldEnqueue(obj)) {
-                SatbBuffer::Instance().EnsureGoodNode(satbNode);
-                satbNode->Push(obj);
-            }
+        GCPhase phase = GetMutatorPhase();
+        // Marking is still consuming satb records in GC_PHASE_CLEAR_SATB_BUFFER: MarkSatbBuffer keeps
+        // tracing after the first CLEAR_SATB handshake and re-flushes every mutator's node once per
+        // remark iteration, so records written in this phase are both needed and consumed. Dropping
+        // them here loses deletion-barrier records inside the live remark window and lets a hidden
+        // object survive unmarked with previous-cycle tags in its fields, which PostTrace's
+        // PrepareForwardTable then makes unresolvable (tripping PostTraceBarrier's
+        // CHECK(IsCurrentPointer)). Records written after the remark fixpoint still land here and in
+        // the buffers, but they can only reference already-marked objects, objects in non-collected
+        // trace regions, or non-heap/null values. ClearBuffer/the FORWARD-transition clear can discard
+        // those records safely, so accepting them is cheap and correct.
+        GCPhase heapPhase = Heap::GetHeap().GetGCPhase();
+        // FOLLOW / major TRACE publishes the heap phase before mutators handshake.
+        // The heap-phase fallback used to accept only ENUM, so a concurrent store
+        // dropped SATB: seen as Stw2CurrentAudit uncovered (old→young, FOLLOW) and
+        // as SD256 CSet-empty residual pages stuck nullFace (major, ke=0). ZGC
+        // heap_store_slow_path marks the new address regardless
+        // (zBarrier.cpp:253-261). Accept every marking phase.
+        const bool mutatorMarking = phase == GCPhase::GC_PHASE_ENUM || phase == GCPhase::GC_PHASE_TRACE ||
+            phase == GCPhase::GC_PHASE_CLEAR_SATB_BUFFER;
+        const bool heapMarking = heapPhase == GCPhase::GC_PHASE_ENUM || heapPhase == GCPhase::GC_PHASE_TRACE ||
+            heapPhase == GCPhase::GC_PHASE_CLEAR_SATB_BUFFER;
+        if (UNLIKELY(!mutatorMarking && !heapMarking)) {
+            return;
         }
+        if (LIKELY(satbNode != nullptr && satbNode->Push(target, knownBase))) {
+            return;
+        }
+        SatbBuffer::Instance().EnsureGoodNode(satbNode);
+        (void)satbNode->Push(target, knownBase);
     }
     ManagedList<RootSlot>& GetLocalFinalizers() { return localFinalizers; }
     // Indicate the current mutator phase and use which barrier in concurrent gc
@@ -575,7 +676,22 @@ private:
         ScheduleHandle schedule = { nullptr };
     } foreignThreadInfo;
 
+    // Step-0 no-op epoch handshake state. Keep these fields at the end of Mutator's
+    // existing product layout: compiler-generated code has hard-coded offsets in the
+    // prefix (RUNTIME_MAP §6), while the handshake is runtime-only.
+    std::atomic<uint64_t> epochHandshakeRequest = { 0 };
+    std::atomic<uint64_t> epochHandshakeCompletion = { 0 };
+    std::atomic<EpochHandshakeState> epochHandshakeState = { EPOCH_HANDSHAKE_IDLE };
+    std::atomic<EpochHandshakeLifecycle> epochHandshakeLifecycle = { EPOCH_HANDSHAKE_STARTING };
+
+    // stackwm #1: per-mutator stack scan watermark (state only; no concurrent scan).
+    // Layout-safe: after handshake fields, runtime-only, not compiler-hardcoded.
+    StackWatermark stackWatermark;
+
 public:
+    StackWatermark& GetStackWatermark() { return stackWatermark; }
+    const StackWatermark& GetStackWatermark() const { return stackWatermark; }
+
 #ifdef INTERPRETER_ENABLED
     void InitInterpreterPart();
     void DestroyInterpreterPart();
