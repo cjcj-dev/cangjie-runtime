@@ -8,16 +8,97 @@
 #ifndef MRT_ALLOC_MEM_MAP_H
 #define MRT_ALLOC_MEM_MAP_H
 
+#include <cstddef>
+#include <cstdint>
+#include <vector>
+
 #ifdef _WIN64
 #include <handleapi.h>
 #include <memoryapi.h>
 #else
 #include <sys/mman.h>
 #endif
+
 #include "AllocUtil.h"
 #include "Common/TypeDef.h"
 
 namespace MapleRuntime {
+
+class AddressSpaceBudget {
+public:
+    static AddressSpaceBudget Seal(size_t availableBytes, size_t safeFraction = 2);
+    static AddressSpaceBudget SealProcessBudget();
+
+    bool IsSealed() const { return sealed; }
+    bool Allows(size_t bytes) const { return sealed && bytes <= safeBytes; }
+    size_t AvailableBytes() const { return availableBytes; }
+    size_t SafeBytes() const { return safeBytes; }
+
+private:
+    size_t availableBytes{ 0 };
+    size_t safeBytes{ 0 };
+    bool sealed{ false };
+};
+
+class NumaTopology {
+public:
+    static NumaTopology Seal(const std::vector<uint32_t>& nodeIds);
+    static NumaTopology SealProcessTopology();
+
+    bool IsSealed() const { return sealed; }
+    size_t Count() const { return nodes.size(); }
+    uint32_t NodeAt(size_t index) const { return nodes[index]; }
+    bool Contains(uint32_t node) const;
+
+private:
+    std::vector<uint32_t> nodes;
+    bool sealed{ false };
+};
+
+struct MemoryRange {
+    uintptr_t start{ 0 };
+    size_t size{ 0 };
+
+    uintptr_t End() const { return start + size; }
+    bool IsNull() const { return start == 0 || size == 0; }
+};
+
+class ReservationRegistry {
+public:
+    bool Insert(MemoryRange range);
+    bool Contains(uintptr_t start, size_t size) const;
+    size_t TotalSize() const;
+    const std::vector<MemoryRange>& Ranges() const { return ranges; }
+
+private:
+    std::vector<MemoryRange> ranges;
+};
+
+struct NumaPartitionRange {
+    MemoryRange range;
+    uint32_t node{ 0 };
+};
+
+class NumaPartitionRegistry {
+public:
+    bool Initialize(uintptr_t start, size_t size, const NumaTopology& topology);
+    bool Owns(uintptr_t start, size_t size, uint32_t node) const;
+    const std::vector<NumaPartitionRange>& Ranges() const { return ranges; }
+
+private:
+    std::vector<NumaPartitionRange> ranges;
+};
+
+class MemMapBackend {
+public:
+    virtual ~MemMapBackend() = default;
+    virtual void* Reserve(void* requested, size_t size, unsigned int flags, const char* tag, bool exact) = 0;
+    virtual bool Commit(void* addr, size_t size, int prot, uint32_t numaNode, bool bindNuma) = 0;
+    virtual bool Protect(void* addr, size_t size, int prot) = 0;
+    virtual bool Release(void* addr, size_t size, uint32_t numaNode) = 0;
+    virtual bool Unreserve(void* addr, size_t size) = 0;
+};
+
 class MemMap {
 public:
 #ifdef _WIN64
@@ -34,24 +115,22 @@ public:
 #endif
     static constexpr int DEFAULT_MEM_PROT = PROT_READ | PROT_WRITE;
 
-    struct Option {         // optional args for mem map
-        const char* tag;    // name to identify the mapped memory
-        void* reqBase;      // a hint to mmap about start addr, not guaranteed
-        unsigned int flags; // mmap flags
-        int prot;           // initial access flags
-        bool protAll;       // applying prot to all pages in range
+    struct Option {
+        const char* tag;
+        void* reqBase;
+        unsigned int flags;
+        int prot;
+        bool protAll;
     };
-    // by default, it tries to map memory in low addr space, with a random start
     static constexpr Option DEFAULT_OPTIONS = { "maple_unnamed", nullptr, DEFAULT_MEM_FLAGS, DEFAULT_MEM_PROT, false };
 
-    // the only way to get a MemMap
     static MemMap* MapMemory(size_t reqSize, size_t initSize, const Option& opt = DEFAULT_OPTIONS);
+    static MemMap* MapMemory(size_t reqSize, size_t initSize, const Option& opt,
+                             const AddressSpaceBudget& budget, const NumaTopology& topology);
+    static MemMap* TryMapMemory(size_t reqSize, size_t initSize, const Option& opt,
+                               const AddressSpaceBudget& budget, const NumaTopology& topology,
+                               MemMapBackend& backend, size_t fallbackSegmentSize = 64U * 1024U * 1024U);
 
-#ifdef _WIN64
-    static void CommitMemory(void* addr, size_t size);
-#endif
-
-    // destroy a MemMap
     static void DestroyMemMap(MemMap*& memMap) noexcept
     {
         if (memMap != nullptr) {
@@ -60,11 +139,19 @@ public:
         }
     }
 
+    bool CommitMemory(void* addr, size_t size);
+    bool CommitMemory(void* addr, size_t size, uint32_t numaNode);
+    bool ReleaseMemory(void* addr, size_t size);
+    bool ReleaseMemory(void* addr, size_t size, uint32_t numaNode);
+    bool ProtectMemory(void* addr, size_t size, int prot);
+
     void* GetBaseAddr() const { return memBaseAddr; }
     void* GetCurrEnd() const { return memCurrEndAddr; }
     void* GetMappedEndAddr() const { return memMappedEndAddr; }
     size_t GetCurrSize() const { return memCurrSize; }
     size_t GetMappedSize() const { return memMappedSize; }
+    const ReservationRegistry& GetReservationRegistry() const { return reservationRegistry; }
+    const NumaPartitionRegistry& GetNumaPartitionRegistry() const { return numaPartitions; }
 
     ~MemMap();
     MemMap(const MemMap& that) = delete;
@@ -73,19 +160,22 @@ public:
     MemMap& operator=(MemMap&& that) = delete;
 
 private:
-#if defined(__APPLE__)
-    static void* MapMemoryOnApple(void* reqBase, size_t reqSize, size_t initSize, const Option& opt);
-#endif
-    static bool ProtectMemInternal(void* addr, size_t size, int prot);
+    static bool IsValidRange(uintptr_t start, size_t size);
+    bool ApplyByPartition(void* addr, size_t size, uint32_t* requiredNode, bool release);
 
-    void* memBaseAddr;      // start of the mapped memory
-    void* memCurrEndAddr;   // end of the memory **in use**
-    void* memMappedEndAddr; // end of the mapped memory, always >= currEndAddr
-    size_t memCurrSize;     // size of the memory **in use**
-    size_t memMappedSize;   // size of the mapped memory, always >= currSize
+    void* memBaseAddr{ nullptr };
+    void* memCurrEndAddr{ nullptr };
+    void* memMappedEndAddr{ nullptr };
+    size_t memCurrSize{ 0 };
+    size_t memMappedSize{ 0 };
+    int commitProt{ DEFAULT_MEM_PROT };
+    ReservationRegistry reservationRegistry;
+    NumaPartitionRegistry numaPartitions;
+    MemMapBackend* backend{ nullptr };
+    bool bindNuma{ false };
 
-    // MemMap is created via factory method
-    MemMap(void* baseAddr, size_t initSize, size_t mappedSize);
-}; // class MemMap
+    MemMap(void* baseAddr, size_t initSize, size_t mappedSize, int prot, ReservationRegistry&& registry,
+           NumaPartitionRegistry&& partitions, MemMapBackend& osBackend, bool shouldBindNuma);
+};
 } // namespace MapleRuntime
 #endif // MRT_ALLOC_MEM_MAP_H
