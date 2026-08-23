@@ -1086,9 +1086,12 @@ private:
                                      bool* preservedByCurrentRoot = nullptr) const;
     BaseObject* ResolveMinorReference(RootSlot& root,
                                      const ScopedStopTheWorld* stw = nullptr) const;
-    void VisitMinorRootSlots(RootVisitor& rawRootVisitor, uint64_t stackScanEpoch = 0);
+    void VisitMinorRootSlots(RootVisitor& rawRootVisitor, RootVisitor& invisibleRootVisitor,
+                             uint64_t stackScanEpoch = 0);
     void VisitMinorValueRoots(const std::function<void(BaseObject*)>& visitor);
-    void VisitMinorRoots(const std::function<void(BaseObject*)>& visitor, uint64_t stackScanEpoch = 0);
+    void VisitMinorRoots(const std::function<void(BaseObject*)>& visitor,
+                         const std::function<void(BaseObject*)>& invisibleVisitor,
+                         uint64_t stackScanEpoch = 0);
     // origin tags root source for invalid-minor-root diagnosis (gcbadroot).
     void PushYoungObject(BaseObject* object, WorkStack& workStack, const char* origin = "unknown") const;
     // setbitmap O1③: claim young via MarkObject (region mark bitmap) + collect vector;

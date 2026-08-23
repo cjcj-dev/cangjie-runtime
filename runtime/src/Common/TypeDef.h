@@ -75,6 +75,9 @@ enum class AllocType {
     MOVEABLE_OBJECT = 0,
     PINNED_OBJECT,
     RAW_POINTER_OBJECT,
+    // Large reference arrays initialize their payload in safepoint-bounded
+    // segments. The allocator must not clear the reused extent first.
+    MOVEABLE_OBJECT_SEGMENTED_CLEAR,
 };
 
 #ifdef __cplusplus

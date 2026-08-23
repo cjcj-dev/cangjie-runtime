@@ -32,14 +32,27 @@ extern "C" MRT_EXPORT MAddress CJ_MRT_TestAllocateArrayStorage(size_t size, Allo
     }
     return HeapManager::Allocate(size, allocType);
 }
+
+void NoteLargeArrayInitRootVisit(LargeArrayRootVisitSite site, BaseObject* object)
+{
+    if (g_largeArrayInitTestHooks.onRootVisit != nullptr) {
+        g_largeArrayInitTestHooks.onRootVisit(site, object);
+    }
+}
 #endif
 
-MArray* MArray::InitializeLargeRefArray(MAddress address, MIndex nElems, TypeInfo& arrayClass)
+MArray* MArray::InitializeLargeRefArray(MAddress address, MSize arraySize, MIndex nElems,
+                                        TypeInfo& arrayClass)
 {
     // Publish a complete boundary before the first yield. The invisible-root
     // release store below makes these plain header writes visible to GC.
     MArray* array = reinterpret_cast<MArray*>(SetClassInfo(address, &arrayClass));
     array->SetLength(nElems);
+    // ZObjArrayAllocator marks the published header so every ZIterator skips
+    // the incomplete object array (zObjArrayAllocator.cpp:92-112,
+    // zIterator.inline.hpp:56-70). The side root controls liveness; this header
+    // bit independently controls heap iteration.
+    array->SetInvisibleObject(true);
 
     Mutator* mutator = Mutator::GetMutator();
     CHECK_DETAIL(mutator != nullptr, "large reference array initialization requires a mutator");
@@ -50,7 +63,11 @@ MArray* MArray::InitializeLargeRefArray(MAddress address, MIndex nElems, TypeInf
     }
 #endif
 
-    const size_t contentSize = static_cast<size_t>(nElems) * RefField<>::GetSize();
+    const size_t contentOffset = GetContentOffset();
+    CHECK_DETAIL(arraySize >= contentOffset, "large reference array size is smaller than its header");
+    // Clear through the aligned object end, including tail padding. The allocator
+    // deliberately leaves a reused extent dirty for this path.
+    const size_t contentSize = static_cast<size_t>(arraySize) - contentOffset;
     size_t processed = 0;
     size_t segmentIndex = 0;
     size_t epoch = g_gcCount.load(std::memory_order_acquire);
@@ -90,6 +107,7 @@ MArray* MArray::InitializeLargeRefArray(MAddress address, MIndex nElems, TypeInf
     }
 
     MArray* complete = static_cast<MArray*>(mutator->WithdrawInvisibleRoot());
+    complete->SetInvisibleObject(false);
 #if defined(MRT_GC_UNIT_TESTS)
     if (g_largeArrayInitTestHooks.onWithdraw != nullptr) {
         g_largeArrayInitTestHooks.onWithdraw(complete);
@@ -100,6 +118,13 @@ MArray* MArray::InitializeLargeRefArray(MAddress address, MIndex nElems, TypeInf
 
 void MArray::ForEachRefFieldInRange(const RefFieldVisitor& visitor, MAddress fieldStart, MIndex fieldEnd) const
 {
+    if (IsInvisibleObject()) {
+#if defined(MRT_GC_UNIT_TESTS)
+        NoteLargeArrayInitRootVisit(LargeArrayRootVisitSite::ITERATOR_SKIP,
+                                    const_cast<MArray*>(this));
+#endif
+        return;
+    }
     TypeInfo* componentTi = GetComponentTypeInfo();
     MIndex size = fieldEnd - fieldStart;
     if (componentTi->IsStructType()) {

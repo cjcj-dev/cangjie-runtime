@@ -43,7 +43,7 @@ public:
     // holding routeState=ROUTING while waiting on phase transition deadlocks PreForward;
     // see REPORT-routespin.md). Best-effort one pass; caller falls back to CompactRegion.
     RegionInfo* TakeRegion(size_t num, RegionInfo::UnitRole uclass, bool expectPhysicalMem,
-                           bool allowSaferegion = true)
+                           bool allowSaferegion = true, bool clearPayload = true)
     {
         UnitIndex idx = 0;
         bool tryDirtyTree = true;
@@ -84,8 +84,11 @@ public:
                         &dirtyUnitTree, idx, num, idx + num, RegionInfo::GetUnitAddress(idx),
                         RegionInfo::GetUnitAddress(idx + num), dirtyUnitTree.GetTotalCount());
 
-                    // it makes sense to slow down allocation by clearing region memory.
-                    RegionInfo::ClearUnits(idx, num, FillerZeroDiag::Site::DIRTY_TAKE);
+                    if (clearPayload) {
+                        // Ordinary allocations require zero-filled reused payload. A segmented
+                        // large reference array establishes that state itself after publication.
+                        RegionInfo::ClearUnits(idx, num, FillerZeroDiag::Site::DIRTY_TAKE);
+                    }
                     RegionInfo* region = RegionInfo::InitRegion(idx, num, uclass);
                     dirtyUnitTreeMutex.unlock();
                     return region;
@@ -121,7 +124,7 @@ public:
                         RegionInfo::GetUnitAddress(idx + num), releasedUnitTree.GetTotalCount());
                     RegionInfo* region = RegionInfo::InitRegion(idx, num, uclass);
                     releasedUnitTreeMutex.unlock();
-                    PrehandleReleasedUnit(expectPhysicalMem, idx, num);
+                    PrehandleReleasedUnit(expectPhysicalMem && clearPayload, idx, num);
                     return region;
                 }
                 tryReleasedTree = false; // once we fail to take units, stop trying.

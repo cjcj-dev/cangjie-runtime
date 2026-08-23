@@ -368,9 +368,9 @@ public:
 
     bool GcPhaseEnum(GCPhase newPhase, uint64_t stackScanEpoch = 0, bool bySelf = false,
                      size_t* scannedFrames = nullptr);
-    bool DrainStackWatermark(const RootVisitor& visitor, uint64_t epoch, StackWatermark::Owner owner,
-                             const DerivedPtrVisitor* derivedPtrVisitor,
-                             size_t& scannedFrames);
+    bool DrainStackWatermark(const RootVisitor& visitor, const RootVisitor& invisibleRootVisitor,
+                             uint64_t epoch, StackWatermark::Owner owner,
+                             const DerivedPtrVisitor* derivedPtrVisitor, size_t& scannedFrames);
     inline void GCPhasePreForward(GCPhase newPhase);
     inline void HandleGCPhase(GCPhase newPhase);
     inline void HandleGCPhaseIDLE();
@@ -400,7 +400,12 @@ public:
 
     void VisitMutatorRoots(const RootVisitor& visitor)
     {
-        VisitStackRoots(visitor);
+        VisitMutatorRoots(visitor, visitor);
+    }
+
+    void VisitMutatorRoots(const RootVisitor& visitor, const RootVisitor& invisibleRootVisitor)
+    {
+        VisitStackRoots(visitor, invisibleRootVisitor);
         VisitExceptionRoots(visitor);
         VisitNativeFrameRoots(visitor);
     }
@@ -476,8 +481,9 @@ public:
 
     // A newly allocated large reference array publishes its parseable header before
     // yielding, but is not a normal object until all of its slots have been cleared.
-    // Keep that incomplete state in this mutator-owned side slot rather than taking
-    // another StateWord bit. VisitRawObjects is the GC consumer of the slot.
+    // Keep liveness in this mutator-owned side slot; the orthogonal StateWord
+    // invisible bit tells heap iterators not to visit the incomplete payload.
+    // VisitRawObjects is the GC consumer of the slot.
     void PublishInvisibleRoot(BaseObject* obj)
     {
         CHECK_DETAIL(obj != nullptr, "cannot publish a null invisible root");
@@ -600,7 +606,7 @@ public:
 
 protected:
     // for managed stack
-    void VisitStackRoots(const RootVisitor& func);
+    void VisitStackRoots(const RootVisitor& func, const RootVisitor& invisibleRootVisitor);
     void VisitHeapReferencesOnStack(const RootVisitor& rootVisitor, const DerivedPtrVisitor& derivedPtrVisitor);
     void VisitHeapReferencesOnStack(const RootVisitor& regRootVisitor, const RootVisitor& slotRootVisitor,
                                     const DerivedPtrVisitor& derivedPtrVisitor,

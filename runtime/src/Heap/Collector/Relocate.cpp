@@ -1373,6 +1373,10 @@ void WCollector::FixMinorRootSlots(const ScopedStopTheWorld* stw)
     Heap::GetHeap().VisitAllExportRoots(grantVisitor);
 
     RootVisitor rawRootVisitor = [this, stw](ObjectRef& root) {
+#if defined(MRT_GC_UNIT_TESTS)
+        NoteLargeArrayInitRootVisit(LargeArrayRootVisitSite::MINOR_RELOCATE,
+                                    to_object(safe(root.LoadPlain(std::memory_order_acquire))));
+#endif
         NullRouteCaller::ScopedEdge _edge("root", nullptr, reinterpret_cast<uintptr_t>(&root));
         NullRouteCaller::ScopedTag _nrTag("FixMinorEvacuatedSlot");
         (void)FixMinorEvacuatedSlot(root, stw);
@@ -1498,6 +1502,10 @@ void WCollector::FixMinorRootSlotsParallel(GCThreadPool* threadPool, const Scope
     // 5 root families as separate tasks (static kept whole — mutex+dedup set).
     // Order matches serial FixMinorRootSlots.
     auto rootFix = [this, stw](ObjectRef& root) {
+#if defined(MRT_GC_UNIT_TESTS)
+        NoteLargeArrayInitRootVisit(LargeArrayRootVisitSite::MINOR_RELOCATE,
+                                    to_object(safe(root.LoadPlain(std::memory_order_acquire))));
+#endif
         NullRouteCaller::ScopedEdge _edge("root", nullptr, reinterpret_cast<uintptr_t>(&root));
         NullRouteCaller::ScopedTag _nrTag("FixMinorEvacuatedSlot");
         (void)FixMinorEvacuatedSlot(root, stw);
