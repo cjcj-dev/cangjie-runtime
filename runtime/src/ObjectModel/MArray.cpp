@@ -183,12 +183,19 @@ MArray* MArray::InitializeLargeRefArray(MAddress address, MSize arraySize, MInde
     complete->SetInvisibleObject(false);
 #if defined(MRT_GC_UNIT_TESTS)
     if (managedTest) {
-        const LargeArrayRootVisitSite required = managedTestGc == ManagedSegmentedGc::YOUNG
-            ? LargeArrayRootVisitSite::MUTATOR_STACK_MANAGED
-            : LargeArrayRootVisitSite::STACK_WATERMARK_MANAGED;
+        const uint32_t required = managedTestGc == ManagedSegmentedGc::YOUNG
+            ? VisitBit(LargeArrayRootVisitSite::MUTATOR_STACK_MANAGED) |
+                VisitBit(LargeArrayRootVisitSite::MINOR_MARK) |
+                VisitBit(LargeArrayRootVisitSite::MINOR_RELOCATE) |
+                VisitBit(LargeArrayRootVisitSite::ITERATOR_SKIP)
+            : VisitBit(LargeArrayRootVisitSite::STACK_WATERMARK_MANAGED) |
+                VisitBit(LargeArrayRootVisitSite::MINOR_RELOCATE) |
+                VisitBit(LargeArrayRootVisitSite::REMEMBERED) |
+                VisitBit(LargeArrayRootVisitSite::ITERATOR_SKIP);
         const uint32_t sites = g_managedSegmentedVisitSites.load(std::memory_order_acquire);
-        CHECK_DETAIL((sites & VisitBit(required)) != 0,
-                     "language-level segmented-array GC missed managed side-root consumer");
+        CHECK_DETAIL((sites & required) == required,
+                     "language-level segmented-array GC missed managed root consumer: required=%#x actual=%#x",
+                     required, sites);
         std::fprintf(stderr, "[SEGMENTED_MANAGED_OK] mode=%s root_sites=%#x\n",
                      managedTestGc == ManagedSegmentedGc::YOUNG ? "young" : "full", sites);
         g_managedSegmentedActive.store(false, std::memory_order_release);
