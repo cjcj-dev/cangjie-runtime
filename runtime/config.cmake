@@ -459,6 +459,10 @@ option(BUILD_CJTHREAD "Build cjthread module" ON)
 option(BUILD_RUNTIME   "Build runtime module"   ON)
 option(BUILD_DEMANGLE  "Build demangle module"  OFF)
 option(MRT_GCV2_UNTAG_BREADCRUMB "Build untag-ref-field crash breadcrumb diagnostics" OFF)
+# ZStatPhase instrumentation (Base/ZStat.*, zStat.hpp:212-342). Default OFF: the product .so then
+# contains no ZStat code at all (inline no-ops), so the default path is byte-cost-free. When ON,
+# emission is still runtime-gated by the MRT_ZSTAT env var.
+option(MRT_ZSTAT "Build ZStatPhase pause/concurrent instrumentation" OFF)
 # GC unit tests (HotSpot-gtest-shaped, pure invariant TUs). Default OFF so product
 # builds are byte-identical when the option is left alone.
 option(MRT_GC_UNIT_TESTS "Build GC unit tests (cj_gc_unit)" OFF)

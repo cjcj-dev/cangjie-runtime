@@ -15,6 +15,18 @@
 #include <vector>
 
 namespace MapleRuntime {
+// Two-level gate (0823 二轮): a default-OFF runtime env check still costs ~4ns per Timer scope
+// (measured, kkk2 20M-op pairs) and that was enough to push the natural_wave gold cliff at 320MB
+// up by one heap step.  So the first level is compile-time, same shape as kGcTrigger* in
+// GcTriggerFlags.h: a product build without -DMRT_ZSTAT (cmake option, default OFF) contains no
+// ZStat code at all -- every entry point below is an inline no-op and `nm -D` finds zero ZStat
+// symbols.  The second level (only in builds that compiled it in) is the MRT_ZSTAT env var.
+#ifndef MRT_ZSTAT_COMPILED
+#define MRT_ZSTAT_COMPILED 0
+#endif
+
+#if MRT_ZSTAT_COMPILED
+
 // Port of ZGC's ZStatPhase family (zStat.hpp:212-342): every GC phase is timed and its duration is
 // booked under exactly one of two kinds -- pause or concurrent -- so a consumer never has to guess
 // whether a number contains the concurrent window.  ZGC binds the kind statically to each phase
@@ -91,5 +103,19 @@ private:
     static std::atomic<int> g_stwDepth;
     static std::atomic<int> g_enabledOverride; // -1 = read env, 0/1 = forced by SetEnabledForTest
 };
+
+#else // !MRT_ZSTAT_COMPILED: every entry point is an inline no-op; the build contains no ZStat code.
+
+class ZStat {
+public:
+    static constexpr bool Enabled() { return false; }
+    static void EnterStwScope() {}
+    static void ExitStwScope() {}
+    static constexpr bool WorldStoppedNow() { return false; }
+    static void NotePhase(const char*, bool, uint64_t) {}
+    static void NoteCycleEnd(uint64_t) {}
+};
+
+#endif // MRT_ZSTAT_COMPILED
 } // namespace MapleRuntime
 #endif // MRT_ZSTAT_H

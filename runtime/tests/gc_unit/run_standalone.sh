@@ -39,9 +39,11 @@ if [[ -d "$ROOT/runtime/output/temp/include" ]]; then
 fi
 
 $CXX -std=gnu++17 -O0 -g -Wall -Wextra -pthread -fno-rtti \
+  -DMRT_ZSTAT_COMPILED=1 \
   "${INC_FLAGS[@]}" \
   "$SRC/gc_unit_main.cpp" \
   "$SRC/gc_unit_stubs.cpp" \
+  "$ROOT/runtime/src/Base/ZStat.cpp" \
   "$ROOT/runtime/src/Heap/Allocator/ForwardingTable.cpp" \
   "$SRC/test_colour_address.cpp" \
   "$SRC/test_z_bit_field.cpp" \

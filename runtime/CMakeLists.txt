@@ -83,6 +83,10 @@ if (MRT_GCV2_UNTAG_BREADCRUMB)
     add_compile_definitions(MRT_GCV2_UNTAG_BREADCRUMB)
 endif()
 
+if (MRT_ZSTAT)
+    add_compile_definitions(MRT_ZSTAT_COMPILED=1)
+endif()
+
 message("-- BUILD_CJTHREAD: " ${BUILD_CJTHREAD})
 message("-- BUILD_RUNTIME: "   ${BUILD_RUNTIME})
 
