@@ -46,6 +46,7 @@ $CXX -std=gnu++17 -O0 -g -Wall -Wextra -pthread -fno-rtti \
   "$SRC/test_colour_address.cpp" \
   "$SRC/test_z_bit_field.cpp" \
   "$SRC/test_z_list.cpp" \
+  "$SRC/test_zstat.cpp" \
   "$SRC/test_trustp1_phase1.cpp" \
   "$SRC/test_route_info.cpp" \
   "$SRC/test_live_map.cpp" \

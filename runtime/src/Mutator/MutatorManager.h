@@ -15,6 +15,7 @@
 
 #include "Base/AtomicSpinLock.h"
 #include "Base/GcLog.h"
+#include "Base/ZStat.h"
 #include "Base/Globals.h"
 #include "Base/Panic.h"
 #include "Base/RwLock.h"
@@ -401,6 +402,9 @@ public:
         GCPhase phase = GC_PHASE_IDLE) : reason(gcReason)
     {
         startTime = TimeUtil::NanoSeconds();
+        // ZStat kind source (zStat.hpp:257/270): a scope entered while this counter is held is a
+        // pause phase.  No-op unless MRT_ZSTAT is on.
+        ZStat::EnterStwScope();
         MutatorManager::Instance().StopTheWorld(syncGCPhase, phase);
         stoppedTime = TimeUtil::NanoSeconds();
     }
@@ -415,6 +419,7 @@ public:
         // rec=cycle/rec=phase instead.
         GcLog::Stw(reason, stoppedTime - startTime, endTime - stoppedTime);
         MutatorManager::Instance().StartTheWorld();
+        ZStat::ExitStwScope();
     }
 
     uint64_t GetElapsedTime() const { return TimeUtil::NanoSeconds() - startTime; }
