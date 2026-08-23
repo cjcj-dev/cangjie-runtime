@@ -10,6 +10,7 @@
 set(GC_UNIT_SOURCES
     gc_unit_main.cpp
     gc_unit_stubs.cpp
+    ${CMAKE_SOURCE_DIR}/src/Base/ZStat.cpp
     test_colour_address.cpp
     test_z_bit_field.cpp
     test_z_list.cpp
@@ -69,6 +70,9 @@ target_compile_features(cj_gc_unit PRIVATE cxx_std_17)
 # The product target disables C++ exceptions globally, while this deliberately
 # tiny test runner reports assertion failures with throw/catch.
 target_compile_options(cj_gc_unit PRIVATE -fno-rtti -fexceptions)
+# The suite tests the real ZStat implementation regardless of whether the product .so was
+# built with MRT_ZSTAT: it compiles Base/ZStat.cpp itself with the compile-time gate open.
+target_compile_definitions(cj_gc_unit PRIVATE MRT_ZSTAT_COMPILED=1)
 # Prefer in-tree runtime library when building as part of the product tree.
 if (TARGET cangjie-runtime)
     target_link_libraries(cj_gc_unit PRIVATE cangjie-runtime)

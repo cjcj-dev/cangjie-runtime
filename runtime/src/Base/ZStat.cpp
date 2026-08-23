@@ -6,6 +6,8 @@
 
 #include "Base/ZStat.h"
 
+#if MRT_ZSTAT_COMPILED
+
 #include <cstdarg>
 #include <algorithm>
 #include <cstdio>
@@ -205,3 +207,4 @@ void ZStat::EmitLine(const char* format, ...)
     std::fflush(stderr);
 }
 } // namespace MapleRuntime
+#endif // MRT_ZSTAT_COMPILED
