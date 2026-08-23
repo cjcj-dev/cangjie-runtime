@@ -12,6 +12,7 @@
 #include <cstring>
 
 #include "Base/GcLog.h"
+#include "Base/ZStat.h"
 #include "Allocator/RegionSpace.h"
 #include "Heap/Collector/GcTrigger.h"
 #include "Heap/Verify/GarbRegionDiag.h"
@@ -95,10 +96,14 @@ void CopyCollector::RunGarbageCollection(uint64_t gcIndex, GCReason reason)
     // Emitted here rather than from GCStats::Dump, because UpdateGCStats below (and so Dump) is
     // skipped for young collections: a minor would produce no cycle record and its phases would
     // be attributed to the next major.
-    GcLog::Cycle(GcLog::CompleteCycle(), reason == GC_REASON_YOUNG ? "minor" : "major",
+    uint64_t cycleSeq = GcLog::CompleteCycle();
+    GcLog::Cycle(cycleSeq, reason == GC_REASON_YOUNG ? "minor" : "major",
                  g_gcRequests[reason].name, gcStats.gcStartTime, gcStats.gcEndTime - gcStats.gcStartTime,
                  gcStats.liveBytesBeforeGC, gcStats.liveBytesAfterGC, gcStats.collectedBytes,
                  Heap::GetHeap().GetUsedPageSize(), gcStats.GetThreshold());
+    // ZStatPhase cycle rollup (zStat.hpp:228 ZStatPhaseCollection): per-phase pause/concurrent
+    // totals + max pause for the cycle that just closed.  No-op unless MRT_ZSTAT is on.
+    ZStat::NoteCycleEnd(cycleSeq);
     if (reason != GC_REASON_YOUNG) {
         UpdateGCStats();
     }

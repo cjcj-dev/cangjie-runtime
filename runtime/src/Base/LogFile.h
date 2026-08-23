@@ -13,6 +13,7 @@
 #include "Base/Log.h"
 #include "Base/Macros.h"
 #include "Base/TimeUtils.h"
+#include "Base/ZStat.h"
 #include "Cangjie.h"
 #include "Interpreter/Options.h"
 
@@ -279,9 +280,15 @@ public:
         // Time when either the human VLOG channel or structured GC log needs the duration.
         // ENABLE_LOG alone used to gate phase records; under DEFAULT_MRT_REPORT=0 that
         // silently dropped rec=phase even with MRT_GC_LOG=1.
-        if (ENABLE_LOG(type) || GcLogRecordsEnabled()) {
+        zstatActive = ZStat::Enabled();
+        if (ENABLE_LOG(type) || GcLogRecordsEnabled() || zstatActive) {
             startTime = TimeUtil::MicroSeconds();
             active = true;
+            // ZStatPhase kind (pause vs concurrent, zStat.hpp:257/270) is sampled at scope
+            // entry: a phase that straddles the world-release is booked where its work began.
+            if (zstatActive) {
+                zstatPauseAtStart = ZStat::WorldStoppedNow();
+            }
         }
     }
 
@@ -297,6 +304,9 @@ public:
         }
         // EmitPhaseRecord → GcLog::Phase self-gates on MRT_GC_LOG (always-on stderr).
         EmitPhaseRecord(name.Str(), diffTime);
+        if (zstatActive) {
+            ZStat::NotePhase(name.Str(), zstatPauseAtStart, diffTime * 1000); // 1000: us → ns
+        }
     }
 
 private:
@@ -304,6 +314,8 @@ private:
     uint64_t startTime = 0;
     LogType logType;
     bool active = false;
+    bool zstatActive = false;
+    bool zstatPauseAtStart = false;
 };
 } // namespace MapleRuntime
 #endif // MRT_LOG_FILE_H

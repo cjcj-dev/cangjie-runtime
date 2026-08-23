@@ -13,6 +13,7 @@ set(GC_UNIT_SOURCES
     test_colour_address.cpp
     test_z_bit_field.cpp
     test_z_list.cpp
+    test_zstat.cpp
     test_trustp1_phase1.cpp
     test_route_info.cpp
     test_live_map.cpp
