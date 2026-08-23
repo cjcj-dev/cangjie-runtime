@@ -7,6 +7,7 @@
 // collector answer so no workload sampling is involved.
 
 #include <cstring>
+#include <dlfcn.h>
 #include <mutex>
 #include <sstream>
 
@@ -37,6 +38,69 @@ extern "C" MapleRuntime::ObjectPtr CJ_MCC_ReadRefField(
     MapleRuntime::ObjectPtr obj, MapleRuntime::RefField<false>* field);
 
 namespace {
+
+class ProductForwardingApi {
+public:
+    static ProductForwardingApi& Get()
+    {
+        static ProductForwardingApi api;
+        return api;
+    }
+
+    void Initialize(MAddress start, size_t size, size_t unit) const { initialize(start, size, unit); }
+    void Insert(MAddress start, size_t size, RegionInfo* region) const { insert(start, size, region); }
+    MAddress InsertMapping(MAddress from, MAddress to) const { return insertMapping(from, to); }
+    void Remove(MAddress start, size_t size) const { remove(start, size); }
+    void ClearEntries(MAddress start, size_t size) const { clearEntries(start, size); }
+    void DropRetiredCovering(MAddress start, size_t size) const { dropRetiredCovering(start, size); }
+    ZForwarding* GetEntries(MAddress from) const { return getEntries(from); }
+    MAddress FindRetiredTo(MAddress from) const { return findRetiredTo(from); }
+
+private:
+    template<typename Fn>
+    static Fn Resolve(void* handle, const char* name)
+    {
+        void* symbol = dlsym(handle, name);
+        GC_EXPECT_TRUE(symbol != nullptr);
+        return reinterpret_cast<Fn>(symbol);
+    }
+
+    ProductForwardingApi()
+    {
+        // run_standalone.sh deliberately compiles another ForwardingTable.cpp for older tests.
+        // Bind these constructors to the already-loaded product SO explicitly, so the receipt
+        // producer and M0ExitDiagnostics consumer cannot accidentally use different globals.
+        handle = dlopen("libcangjie-runtime.so", RTLD_NOW | RTLD_NOLOAD);
+        GC_EXPECT_TRUE(handle != nullptr);
+        initialize = Resolve<InitializeFn>(handle, "_ZN12MapleRuntime15ForwardingTable10InitializeEmmm");
+        insert = Resolve<InsertFn>(handle, "_ZN12MapleRuntime15ForwardingTable6InsertEmmPNS_10RegionInfoE");
+        insertMapping =
+            Resolve<InsertMappingFn>(handle, "_ZN12MapleRuntime15ForwardingTable13InsertMappingEmm");
+        remove = Resolve<RangeFn>(handle, "_ZN12MapleRuntime15ForwardingTable6RemoveEmm");
+        clearEntries = Resolve<RangeFn>(handle, "_ZN12MapleRuntime15ForwardingTable12ClearEntriesEmm");
+        dropRetiredCovering =
+            Resolve<RangeFn>(handle, "_ZN12MapleRuntime15ForwardingTable19DropRetiredCoveringEmm");
+        getEntries = Resolve<GetEntriesFn>(handle, "_ZN12MapleRuntime15ForwardingTable10GetEntriesEm");
+        findRetiredTo = Resolve<FindRetiredToFn>(handle, "_ZN12MapleRuntime15ForwardingTable13FindRetiredToEm");
+    }
+
+    using InitializeFn = void (*)(MAddress, size_t, size_t);
+    using InsertFn = void (*)(MAddress, size_t, RegionInfo*);
+    using InsertMappingFn = MAddress (*)(MAddress, MAddress);
+    using RangeFn = void (*)(MAddress, size_t);
+    using GetEntriesFn = ZForwarding* (*)(MAddress);
+    using FindRetiredToFn = MAddress (*)(MAddress);
+
+    void* handle = nullptr;
+    InitializeFn initialize = nullptr;
+    InsertFn insert = nullptr;
+    InsertMappingFn insertMapping = nullptr;
+    RangeFn remove = nullptr;
+    RangeFn clearEntries = nullptr;
+    RangeFn dropRetiredCovering = nullptr;
+    GetEntriesFn getEntries = nullptr;
+    FindRetiredToFn findRetiredTo = nullptr;
+};
 
 class NoAnswerCollector final : public Collector {
 public:
@@ -132,11 +196,13 @@ struct RootEntryFixture {
     RootEntryFixture() : collector(Heap::GetHeap().GetAllocator(), Heap::GetHeap().GetCollectorResources())
     {
         ProductRootRuntime::Ensure();
-        ForwardingTable::Initialize(heap.heapStart, GcHeapFixture::kUnits * RegionInfo::UNIT_SIZE,
-                                    RegionInfo::UNIT_SIZE);
+        auto& forwarding = ProductForwardingApi::Get();
+        forwarding.Initialize(heap.heapStart, GcHeapFixture::kUnits * RegionInfo::UNIT_SIZE,
+                              RegionInfo::UNIT_SIZE);
         heap.region0->SetRegionType(RegionInfo::RegionType::FROM_REGION);
         heap.region0->SetInGhostRegion(1);
         heap.region0->SetRouteState(RegionInfo::ROUTED);
+        forwarding.Insert(heap.region0->GetRegionStart(), heap.region0->GetRegionSize(), heap.region0);
         StorePlain(root, from_object(heap.obj0));
         registeredRoots[0] = &root;
         Heap::GetHeap().RegisterStaticRoots(reinterpret_cast<Uptr>(registeredRoots), 1);
@@ -145,6 +211,39 @@ struct RootEntryFixture {
     ~RootEntryFixture()
     {
         Heap::GetHeap().UnregisterStaticRoots(reinterpret_cast<Uptr>(registeredRoots), 1);
+        auto& forwarding = ProductForwardingApi::Get();
+        forwarding.Remove(heap.region0->GetRegionStart(), heap.region0->GetRegionSize());
+        forwarding.ClearEntries(heap.region0->GetRegionStart(), heap.region0->GetRegionSize());
+        forwarding.DropRetiredCovering(heap.region0->GetRegionStart(), heap.region0->GetRegionSize());
+        // Keep the standalone-only duplicate clean as well. In the CMake product-linked test these
+        // calls resolve to the same already-cleared product instance and are harmless no-ops.
+        ForwardingTable::Remove(heap.region0->GetRegionStart(), heap.region0->GetRegionSize());
+        ForwardingTable::ClearEntries(heap.region0->GetRegionStart(), heap.region0->GetRegionSize());
+        ForwardingTable::DropRetiredCovering(heap.region0->GetRegionStart(), heap.region0->GetRegionSize());
+    }
+
+    MAddress PublishUnusableActiveWitness()
+    {
+        auto& forwarding = ProductForwardingApi::Get();
+        const MAddress from = reinterpret_cast<MAddress>(heap.obj0);
+        const MAddress to = reinterpret_cast<MAddress>(heap.obj1);
+        GC_EXPECT_EQ(forwarding.InsertMapping(from, to), to);
+        GC_EXPECT_TRUE(forwarding.GetEntries(from) != nullptr);
+        GC_EXPECT_EQ(forwarding.GetEntries(from)->find(from), to);
+        GC_EXPECT_EQ(forwarding.FindRetiredTo(from), static_cast<MAddress>(0));
+        *reinterpret_cast<uint64_t*>(heap.obj1) = 0; // product FindToVersion must reject this receipt
+        return to;
+    }
+
+    MAddress PublishUnusableRetiredWitness()
+    {
+        auto& forwarding = ProductForwardingApi::Get();
+        const MAddress to = PublishUnusableActiveWitness();
+        forwarding.ClearEntries(heap.region0->GetRegionStart(), heap.region0->GetRegionSize());
+        const MAddress from = reinterpret_cast<MAddress>(heap.obj0);
+        GC_EXPECT_TRUE(forwarding.GetEntries(from) == nullptr);
+        GC_EXPECT_EQ(forwarding.FindRetiredTo(from), to);
+        return to;
     }
 
     GcHeapFixture heap;
@@ -238,4 +337,63 @@ GC_TEST(M0Exit, RootFixRuntimeEnumerationClassifiesPublishedCopyAsS1)
     GC_EXPECT_EQ(after.rootFix, before.rootFix + 1);
     GC_EXPECT_EQ(static_cast<uintptr_t>(raw(fx.root.LoadPlain())),
                  reinterpret_cast<uintptr_t>(fx.heap.obj0));
+}
+
+GC_TEST(M0Exit, RootFixClassifiesActiveOnlyUnusableCopyAsS1)
+{
+    RootEntryFixture fx;
+    (void)fx.PublishUnusableActiveWitness();
+    const M0ExitDiagnostics::Counts before = M0ExitDiagnostics::GetCounts();
+
+    fx.collector.FixMinorRootSlots(nullptr);
+
+    const M0ExitDiagnostics::Counts after = M0ExitDiagnostics::GetCounts();
+    GC_EXPECT_EQ(after.total, before.total + 1);
+    GC_EXPECT_EQ(after.s1, before.s1 + 1);
+    GC_EXPECT_EQ(after.activeWitness, before.activeWitness + 1);
+    GC_EXPECT_EQ(after.retiredWitness, before.retiredWitness);
+    GC_EXPECT_EQ(after.copyPublishedWitness, before.copyPublishedWitness);
+    GC_EXPECT_EQ(static_cast<uintptr_t>(raw(fx.root.LoadPlain())),
+                 reinterpret_cast<uintptr_t>(fx.heap.obj0));
+}
+
+GC_TEST(M0Exit, RootFixClassifiesRetiredOnlyUnusableCopyAsS1)
+{
+    RootEntryFixture fx;
+    (void)fx.PublishUnusableRetiredWitness();
+    const M0ExitDiagnostics::Counts before = M0ExitDiagnostics::GetCounts();
+
+    fx.collector.FixMinorRootSlots(nullptr);
+
+    const M0ExitDiagnostics::Counts after = M0ExitDiagnostics::GetCounts();
+    GC_EXPECT_EQ(after.total, before.total + 1);
+    GC_EXPECT_EQ(after.s1, before.s1 + 1);
+    GC_EXPECT_EQ(after.activeWitness, before.activeWitness);
+    GC_EXPECT_EQ(after.retiredWitness, before.retiredWitness + 1);
+    GC_EXPECT_EQ(after.copyPublishedWitness, before.copyPublishedWitness);
+    GC_EXPECT_EQ(static_cast<uintptr_t>(raw(fx.root.LoadPlain())),
+                 reinterpret_cast<uintptr_t>(fx.heap.obj0));
+}
+
+GC_TEST(M0Exit, ReadRuntimeEntryBoundsDetailsAndCountsSuppressed)
+{
+    ReadEntryFixture fx;
+    *reinterpret_cast<uint64_t*>(fx.heap.obj0) = 0;
+    const M0ExitDiagnostics::Counts before = M0ExitDiagnostics::GetCounts();
+    GC_EXPECT_TRUE(before.sampled <= M0ExitDiagnostics::kDetailedSampleLimit);
+    const uint64_t toLimit = M0ExitDiagnostics::kDetailedSampleLimit - before.sampled;
+    constexpr uint64_t kBeyondLimit = 3;
+    const uint64_t attempts = toLimit + kBeyondLimit;
+
+    for (uint64_t i = 0; i < attempts; ++i) {
+        ObjectPtr got = CJ_MCC_ReadRefField(fx.heap.obj1, fx.field);
+        GC_EXPECT_EQ(reinterpret_cast<uintptr_t>(got), reinterpret_cast<uintptr_t>(fx.heap.obj0));
+    }
+
+    const M0ExitDiagnostics::Counts after = M0ExitDiagnostics::GetCounts();
+    GC_EXPECT_EQ(after.total, before.total + attempts);
+    GC_EXPECT_EQ(after.s0, before.s0 + attempts);
+    GC_EXPECT_EQ(after.readBarrier, before.readBarrier + attempts);
+    GC_EXPECT_EQ(after.sampled, M0ExitDiagnostics::kDetailedSampleLimit);
+    GC_EXPECT_EQ(after.suppressed, before.suppressed + kBeyondLimit);
 }
