@@ -73,6 +73,61 @@ GC_TEST(RelocationRequestQueue, RequestedReceiptIsClaimedBeforeOrdinaryAndComple
     GC_EXPECT_EQ(ordinaryClaims, 1);
 }
 
+// zRelocate.cpp:134-147: ZGC's waiter is released by the *page* becoming done
+// (`while (!forwarding->is_done()) _lock.wait();`), and zRelocate.cpp:391-406
+// only enters that wait under a retained page, so a queued forwarding cannot
+// outlive relocation.  Our request is keyed by object instead, and a page can
+// finish relocating without producing an entry for one particular object -- the
+// VisitLive hole recorded at MutatorRelocate.h:71-76.  For such a request the
+// generation close is the only remaining terminal, which makes the FAILED loop
+// in SynchronizePoll load bearing: without it the mutator blocked in
+// WaitRoutedTipReady (Relocate.cpp:2652) has no event left that can wake it.
+//
+// The other tests in this file all reach their terminal through Publish or
+// CompleteOwner, so none of them covers a request that no worker ever touches.
+// Assert on the observable state rather than on a waiter, so a lost terminal
+// reports here instead of stalling the runner.
+GC_TEST(RelocationRequestQueue, GenerationCloseTerminatesARequestNoWorkerEverPublished)
+{
+    RelocationRequestQueue queue;
+    queue.BeginWorkers(1);
+    int owner = 0;
+    constexpr MAddress kFrom = 0xA000;
+    const auto added = queue.Add(&owner, kFrom);
+    GC_EXPECT_TRUE(added.accepted);
+    GC_EXPECT_TRUE(added.inserted);
+    GC_EXPECT_EQ(queue.PendingCount(), static_cast<size_t>(1));
+    GC_EXPECT_EQ(queue.CompletionCount(), static_cast<uint64_t>(0));
+
+    // Replay the worker shape of RegionManager.h:1216-1243.  The worker claims
+    // the request first (SelectBeforeOrdinary) ...
+    const auto claimed = queue.SelectBeforeOrdinary([]() -> void* { return nullptr; });
+    GC_EXPECT_TRUE(claimed.is_request());
+    GC_EXPECT_TRUE(claimed.request == added.request);
+
+    // ... and then loses the region ownership transition at
+    // RegionManager.h:1238-1241, so it continues the loop without completing
+    // the request.  The request is now off the deque yet still registered, and
+    // no CompleteOwner will ever name it: the deque poll and the ordinary poll
+    // are both empty from here on.
+    GC_EXPECT_EQ(queue.PendingCount(), static_cast<size_t>(1));
+    const auto empty = queue.SelectBeforeOrdinary([]() -> void* { return nullptr; });
+    GC_EXPECT_FALSE(static_cast<bool>(empty));
+
+    const auto done = queue.SynchronizePoll();
+    GC_EXPECT_TRUE(done.workersDone);
+    GC_EXPECT_FALSE(done.is_request());
+
+    // Load bearing: closing the generation must give this request a terminal.
+    GC_EXPECT_TRUE(added.request->state() == RelocationRequestQueue::State::FAILED);
+    GC_EXPECT_EQ(queue.PendingCount(), static_cast<size_t>(0));
+    GC_EXPECT_EQ(queue.CompletionCount(), static_cast<uint64_t>(1));
+
+    // Only reached once the terminal above is proven set, so this cannot block.
+    GC_EXPECT_EQ(queue.Wait(added.request), static_cast<MAddress>(0));
+    GC_EXPECT_EQ(added.request->receipt(), static_cast<MAddress>(0));
+}
+
 GC_TEST(RelocationRequestQueue, FailedOwnerCompletionReleasesWaiterWithoutReceipt)
 {
     RelocationRequestQueue queue;
