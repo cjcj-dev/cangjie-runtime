@@ -20,6 +20,10 @@ namespace M0ExitDiagnostics {
 
 enum class Exit : uint8_t { RootFix = 0, ReadBarrier = 1 };
 
+// Detailed records are intentionally bounded. Every event still contributes to the aggregate
+// classifier below, and the process summary reports sampled/suppressed/total explicitly.
+constexpr uint64_t kDetailedSampleLimit = 32;
+
 #if defined(MRT_GC_UNIT_TEST_ACCESS)
 struct Counts {
     uint64_t total;
@@ -27,6 +31,11 @@ struct Counts {
     uint64_t s1;
     uint64_t rootFix;
     uint64_t readBarrier;
+    uint64_t activeWitness;
+    uint64_t retiredWitness;
+    uint64_t copyPublishedWitness;
+    uint64_t sampled;
+    uint64_t suppressed;
 };
 #endif
 

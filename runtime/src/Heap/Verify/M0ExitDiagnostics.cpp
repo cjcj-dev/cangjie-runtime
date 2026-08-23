@@ -5,6 +5,8 @@
 #include "Heap/Verify/M0ExitDiagnostics.h"
 
 #include <atomic>
+#include <cstdio>
+#include <cstdlib>
 
 #include "Base/Log.h"
 #include "Common/BaseObject.h"
@@ -36,6 +38,54 @@ std::atomic<uint64_t> g_s0{ 0 };
 std::atomic<uint64_t> g_s1{ 0 };
 std::atomic<uint64_t> g_rootFix{ 0 };
 std::atomic<uint64_t> g_readBarrier{ 0 };
+std::atomic<uint64_t> g_activeWitness{ 0 };
+std::atomic<uint64_t> g_retiredWitness{ 0 };
+std::atomic<uint64_t> g_copyPublishedWitness{ 0 };
+std::atomic<uint64_t> g_sampled{ 0 };
+std::atomic<uint64_t> g_suppressed{ 0 };
+std::atomic<bool> g_summaryRegistered{ false };
+
+void DumpSummary()
+{
+    const uint64_t total = g_total.load(std::memory_order_relaxed);
+    const uint64_t sampled = g_sampled.load(std::memory_order_relaxed);
+    const uint64_t suppressed = g_suppressed.load(std::memory_order_relaxed);
+    std::fprintf(stderr,
+                 "[M0][summary] sampled=%llu suppressed=%llu total=%llu s0=%llu s1=%llu "
+                 "rootFix=%llu readBarrier=%llu activeWitness=%llu retiredWitness=%llu "
+                 "copyPublishedWitness=%llu\n",
+                 static_cast<unsigned long long>(sampled), static_cast<unsigned long long>(suppressed),
+                 static_cast<unsigned long long>(total),
+                 static_cast<unsigned long long>(g_s0.load(std::memory_order_relaxed)),
+                 static_cast<unsigned long long>(g_s1.load(std::memory_order_relaxed)),
+                 static_cast<unsigned long long>(g_rootFix.load(std::memory_order_relaxed)),
+                 static_cast<unsigned long long>(g_readBarrier.load(std::memory_order_relaxed)),
+                 static_cast<unsigned long long>(g_activeWitness.load(std::memory_order_relaxed)),
+                 static_cast<unsigned long long>(g_retiredWitness.load(std::memory_order_relaxed)),
+                 static_cast<unsigned long long>(g_copyPublishedWitness.load(std::memory_order_relaxed)));
+    std::fflush(stderr);
+}
+
+void EnsureSummaryAtExit()
+{
+    bool expected = false;
+    if (g_summaryRegistered.compare_exchange_strong(expected, true, std::memory_order_relaxed)) {
+        (void)std::atexit(DumpSummary);
+    }
+}
+
+bool TakeDetailSample(uint64_t& ordinal)
+{
+    uint64_t sampled = g_sampled.load(std::memory_order_relaxed);
+    while (sampled < kDetailedSampleLimit) {
+        if (g_sampled.compare_exchange_weak(sampled, sampled + 1, std::memory_order_relaxed)) {
+            ordinal = sampled + 1;
+            return true;
+        }
+    }
+    g_suppressed.fetch_add(1, std::memory_order_relaxed);
+    return false;
+}
 
 const char* ExitName(Exit exit)
 {
@@ -80,6 +130,7 @@ StackMapScope::~StackMapScope()
 void Note(Exit exit, BaseObject* target, const void* slot, BaseObject* holder, uint8_t phase)
 {
     const uint64_t n = g_total.fetch_add(1, std::memory_order_relaxed) + 1;
+    EnsureSummaryAtExit();
     if (exit == Exit::RootFix) {
         g_rootFix.fetch_add(1, std::memory_order_relaxed);
     } else {
@@ -99,6 +150,20 @@ void Note(Exit exit, BaseObject* target, const void* slot, BaseObject* holder, u
     const bool copyPublished = target != nullptr && region != nullptr && target->IsForwarded();
     const bool hasTo = activeTo != 0 || retiredTo != 0 || copyPublished;
     (hasTo ? g_s1 : g_s0).fetch_add(1, std::memory_order_relaxed);
+    if (activeTo != 0) {
+        g_activeWitness.fetch_add(1, std::memory_order_relaxed);
+    }
+    if (retiredTo != 0) {
+        g_retiredWitness.fetch_add(1, std::memory_order_relaxed);
+    }
+    if (copyPublished) {
+        g_copyPublishedWitness.fetch_add(1, std::memory_order_relaxed);
+    }
+
+    uint64_t sampleOrdinal = 0;
+    if (!TakeDetailSample(sampleOrdinal)) {
+        return;
+    }
 
     unsigned youngMark = 2; // 2 = not a young region, so no young mark face exists
     unsigned oldMark = 0;
@@ -121,14 +186,13 @@ void Note(Exit exit, BaseObject* target, const void* slot, BaseObject* holder, u
     const unsigned regionType = region == nullptr ? 0xffu : static_cast<unsigned>(region->GetRegionType());
     const unsigned routeState = region == nullptr ? 0xffu : static_cast<unsigned>(region->GetRouteState());
 
-    // M0 is rare and every occurrence matters. Do not power-of-two throttle: throttling would
-    // recreate the silent bucket this record exists to remove.
     LOG(RTLOG_ERROR,
-        "[M0][classify] n=%llu class=%s hasTo=%u exit=%s target=%p slot=%p holder=%p phase=%u "
+        "[M0][classify] n=%llu sample=%llu class=%s hasTo=%u exit=%s target=%p slot=%p holder=%p phase=%u "
         "copyPublished=%u youngMark=%u oldMark=%u stackMap=%s stackReason=%s startIP=%p frameIP=%p "
         "frameFA=%p active=%u activeTo=%p retiredTo=%p flipEpoch=%llu regionLife=%llu activeLife=%llu "
         "activeCurrent=%u youngEpoch=%llu oldEpoch=%llu regionType=%u routeState=%u",
-        static_cast<unsigned long long>(n), hasTo ? "S1" : "S0", hasTo ? 1u : 0u, ExitName(exit),
+        static_cast<unsigned long long>(n), static_cast<unsigned long long>(sampleOrdinal),
+        hasTo ? "S1" : "S0", hasTo ? 1u : 0u, ExitName(exit),
         static_cast<void*>(target), slot, static_cast<void*>(holder), static_cast<unsigned>(phase),
         copyPublished ? 1u : 0u, youngMark, oldMark, stackMap, StackMapReasonName(g_stackMap.reason),
         reinterpret_cast<void*>(g_stackMap.startIP), reinterpret_cast<void*>(g_stackMap.frameIP),
@@ -145,7 +209,11 @@ Counts GetCounts()
 {
     return Counts{ g_total.load(std::memory_order_relaxed), g_s0.load(std::memory_order_relaxed),
                    g_s1.load(std::memory_order_relaxed), g_rootFix.load(std::memory_order_relaxed),
-                   g_readBarrier.load(std::memory_order_relaxed) };
+                   g_readBarrier.load(std::memory_order_relaxed),
+                   g_activeWitness.load(std::memory_order_relaxed),
+                   g_retiredWitness.load(std::memory_order_relaxed),
+                   g_copyPublishedWitness.load(std::memory_order_relaxed),
+                   g_sampled.load(std::memory_order_relaxed), g_suppressed.load(std::memory_order_relaxed) };
 }
 #endif
 
