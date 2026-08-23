@@ -1,0 +1,12 @@
+diff --git a/runtime/src/Heap/Allocator/RegionManager.h b/runtime/src/Heap/Allocator/RegionManager.h
+index 73e7d8fa4..b0c73e7c0 100644
+--- a/runtime/src/Heap/Allocator/RegionManager.h
++++ b/runtime/src/Heap/Allocator/RegionManager.h
+@@ -825,6 +825,7 @@ public:
+     template<Generation G>
+     void PrepareFromRegionList()
+     {
++        relocationRequestQueue.BeginWorkers(1);
+         size_t retainedRegions = 0;
+         size_t retainedBytes = 0;
+         size_t markQuarantinedRegions = 0;
