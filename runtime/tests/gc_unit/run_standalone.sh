@@ -26,6 +26,19 @@ if [[ -z "$RUNTIME_LIB_DIR" || ! -f "$RUNTIME_LIB_DIR/libcangjie-runtime.so" ]];
   exit 2
 fi
 
+RANGE_REGISTRY_FLAGS=()
+RANGE_REGISTRY_SOURCES=()
+if [[ "${MRT_TESTABLE_INTERNALS:-0}" == "1" ]]; then
+  range_registry_symbols=$(nm -D "$RUNTIME_LIB_DIR/libcangjie-runtime.so" 2>/dev/null | \
+    /usr/bin/grep -c 'RangeRegistry' || true)
+  if [[ "$range_registry_symbols" -eq 0 ]]; then
+    echo "error: MRT_TESTABLE_INTERNALS=1 but product SO has no RangeRegistry symbols" >&2
+    exit 6
+  fi
+  RANGE_REGISTRY_FLAGS=(-DMRT_TESTABLE_INTERNALS=1)
+  RANGE_REGISTRY_SOURCES=("$SRC/test_range_registry.cpp")
+fi
+
 BOUNDS_INC="$ROOT/runtime/third_party/third_party_bounds_checking_function/include"
 INC_FLAGS=(
   -I"$SRC"
@@ -39,6 +52,7 @@ if [[ -d "$ROOT/runtime/output/temp/include" ]]; then
 fi
 
 $CXX -std=gnu++17 -O0 -g -Wall -Wextra -pthread -fno-rtti \
+  "${RANGE_REGISTRY_FLAGS[@]}" \
   -DMRT_ZSTAT_COMPILED=1 \
   "${INC_FLAGS[@]}" \
   "$SRC/gc_unit_main.cpp" \
@@ -71,7 +85,7 @@ $CXX -std=gnu++17 -O0 -g -Wall -Wextra -pthread -fno-rtti \
     "$SRC/test_relocation_set_selector.cpp" \
     "$SRC/test_store_barrier_buffer.cpp" \
     "$SRC/test_page_age.cpp" \
-    "$SRC/test_range_registry.cpp" \
+    "${RANGE_REGISTRY_SOURCES[@]}" \
     "$SRC/test_stay_young.cpp" \
     "$SRC/test_gc_trigger.cpp" \
     "$SRC/test_mutator_relocate.cpp" \

@@ -74,7 +74,7 @@ target_compile_features(cj_gc_unit PRIVATE cxx_std_17)
 target_compile_options(cj_gc_unit PRIVATE -fno-rtti -fexceptions)
 # The suite tests the real ZStat implementation regardless of whether the product .so was
 # built with MRT_ZSTAT: it compiles Base/ZStat.cpp itself with the compile-time gate open.
-target_compile_definitions(cj_gc_unit PRIVATE MRT_ZSTAT_COMPILED=1)
+target_compile_definitions(cj_gc_unit PRIVATE MRT_ZSTAT_COMPILED=1 MRT_TESTABLE_INTERNALS=1)
 # Prefer in-tree runtime library when building as part of the product tree.
 if (TARGET cangjie-runtime)
     target_link_libraries(cj_gc_unit PRIVATE cangjie-runtime)

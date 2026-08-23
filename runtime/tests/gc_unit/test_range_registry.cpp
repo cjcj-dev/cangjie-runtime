@@ -214,6 +214,35 @@ GC_TEST(RangeRegistryDirection, LowAndHighClaimsUseOppositeAddressEnds)
     ExpectSnapshot(highRegistry, { Range(100, 50), Range(300, 60) });
 }
 
+GC_TEST(RangeRegistryFailure, LowNoFitReturnsNullAndPreservesLedger)
+{
+    RangeRegistry registry;
+    GC_EXPECT_TRUE(registry.RegisterRange(Range(100, 4)));
+    GC_EXPECT_TRUE(registry.RegisterRange(Range(200, 7)));
+    const Range actual = registry.ClaimLow(8);
+    GC_EXPECT_TRUE(actual.IsNull());
+    ExpectSnapshot(registry, { Range(100, 4), Range(200, 7) });
+}
+
+GC_TEST(RangeRegistryFailure, HighNoFitReturnsNullAndPreservesLedger)
+{
+    RangeRegistry registry;
+    GC_EXPECT_TRUE(registry.RegisterRange(Range(100, 4)));
+    GC_EXPECT_TRUE(registry.RegisterRange(Range(200, 7)));
+    const Range actual = registry.ClaimHigh(8);
+    GC_EXPECT_TRUE(actual.IsNull());
+    ExpectSnapshot(registry, { Range(100, 4), Range(200, 7) });
+}
+
+GC_TEST(RangeRegistryFailure, ZeroSizeReturnsNullAndPreservesLedger)
+{
+    RangeRegistry registry;
+    GC_EXPECT_TRUE(registry.RegisterRange(Range(100, 8)));
+    GC_EXPECT_TRUE(registry.ClaimLow(0).IsNull());
+    GC_EXPECT_TRUE(registry.ClaimHigh(0).IsNull());
+    ExpectSnapshot(registry, { Range(100, 8) });
+}
+
 GC_TEST(RangeRegistryDirection, FixedRandomSequenceMatchesIndependentByteModel)
 {
     constexpr uintptr_t base = 1000;

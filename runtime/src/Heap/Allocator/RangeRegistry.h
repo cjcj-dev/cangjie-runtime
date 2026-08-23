@@ -102,4 +102,8 @@ private:
 
 } // namespace MapleRuntime
 
+#ifndef MRT_TESTABLE_INTERNALS
+#include "Heap/Allocator/RangeRegistry.inline.h"
+#endif
+
 #endif // MRT_ALLOC_RANGE_REGISTRY_H
