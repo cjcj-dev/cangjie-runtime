@@ -130,18 +130,15 @@ struct GcHeapFixture {
         bitmap = nullptr;
     }
 
-    // Hand-plant LiveInfo + every GetOrAlloc* face (mark young/old stay explicit;
-    // enqueue is the face ShouldEnqueue allocates when the SATB skip-check misses).
+    // Hand-plant the product's one page livemap. The template on
+    // PlantMarkBitmap remains only to keep typed test call sites concise; G no
+    // longer selects storage.
     LiveInfo* PlantLiveInfo(RegionInfo* region)
     {
         auto* live = new LiveInfo();
         live->bindedRegion = region;
-        live->GetMarkFace<Generation::Young>().epoch.store(
-            region->GetMarkSnapshotEpoch<Generation::Young>(), std::memory_order_relaxed);
-        live->GetMarkFace<Generation::Young>().bitmap = nullptr;
-        live->GetMarkFace<Generation::Old>().epoch.store(
-            region->GetMarkSnapshotEpoch<Generation::Old>(), std::memory_order_relaxed);
-        live->GetMarkFace<Generation::Old>().bitmap = nullptr;
+        live->GetMarkFace().epoch.store(region->GetSnapshotEpoch(), std::memory_order_relaxed);
+        live->GetMarkFace().bitmap = nullptr;
         live->resurrectBitmap = nullptr;
         live->enqueueBitmap = AllocPlantedBitmap(region->GetRegionSize());
         region->metadata.liveInfo = live;
@@ -151,8 +148,12 @@ struct GcHeapFixture {
     template<Generation G = Generation::Old>
     RegionBitmap* PlantMarkBitmap(LiveInfo* live, size_t regionSize)
     {
+        (void)G;
+        if (live->GetMarkFace().bitmap != nullptr) {
+            return live->GetMarkFace().bitmap;
+        }
         auto* bm = AllocPlantedBitmap(regionSize);
-        live->GetMarkFace<G>().bitmap = bm;
+        live->GetMarkFace().bitmap = bm;
         return bm;
     }
 
@@ -161,15 +162,10 @@ struct GcHeapFixture {
         if (live == nullptr) {
             return;
         }
-        RegionBitmap* young = live->GetMarkFace<Generation::Young>().bitmap;
-        RegionBitmap* old = live->GetMarkFace<Generation::Old>().bitmap;
-        if (young != nullptr) {
-            FreePlantedBitmap(young);
-            live->GetMarkFace<Generation::Young>().bitmap = nullptr;
-        }
-        if (old != nullptr && old != young) {
-            FreePlantedBitmap(old);
-            live->GetMarkFace<Generation::Old>().bitmap = nullptr;
+        RegionBitmap* mark = live->GetMarkFace().bitmap;
+        if (mark != nullptr) {
+            FreePlantedBitmap(mark);
+            live->GetMarkFace().bitmap = nullptr;
         }
         FreePlantedBitmap(live->enqueueBitmap);
         FreePlantedBitmap(live->resurrectBitmap);

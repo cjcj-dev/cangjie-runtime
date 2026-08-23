@@ -237,7 +237,7 @@ struct LiveInfo {
     template<Generation G>
     bool IsSurvivedObject(MarkView<G> view, size_t offset) const
     {
-        const MarkFace& face = GetMarkFace<G>();
+        const MarkFace& face = GetMarkFace();
         RegionBitmap* markBitmap = __atomic_load_n(&face.bitmap, std::memory_order_acquire);
         if (face.epoch.load(std::memory_order_acquire) == view.GetEpoch() && markBitmap != nullptr &&
             reinterpret_cast<MAddress>(markBitmap) != TEMPORARY_PTR && markBitmap->IsMarked(offset)) {
@@ -252,7 +252,7 @@ struct LiveInfo {
     template<Generation G>
     size_t GetBitmapLiveBytes(MarkView<G> view) const
     {
-        const MarkFace& face = GetMarkFace<G>();
+        const MarkFace& face = GetMarkFace();
         RegionBitmap* markBitmap = __atomic_load_n(&face.bitmap, std::memory_order_acquire);
         const bool current = face.epoch.load(std::memory_order_acquire) == view.GetEpoch();
         return (!current || markBitmap == nullptr ? 0 : markBitmap->GetLiveBytes()) +
@@ -262,7 +262,7 @@ struct LiveInfo {
     template<Generation G>
     size_t RecomputeBitmapLiveBytes(MarkView<G> view) const
     {
-        const MarkFace& face = GetMarkFace<G>();
+        const MarkFace& face = GetMarkFace();
         RegionBitmap* markBitmap = __atomic_load_n(&face.bitmap, std::memory_order_acquire);
         const bool current = face.epoch.load(std::memory_order_acquire) == view.GetEpoch();
         return (!current || markBitmap == nullptr ? 0 : markBitmap->RecomputeLiveBytes()) +
@@ -271,23 +271,24 @@ struct LiveInfo {
 
 private:
     struct MarkFace {
-        // ZGC ZLiveMap::_seqnum counterpart, now one per collector generation.
+        // ZGC ZLiveMap::_seqnum counterpart, one per page metadata incarnation.
         std::atomic<uint64_t> epoch{ 0 };
         RegionBitmap* bitmap = nullptr;
     };
 
-    MarkFace markFaces[2];
+    // A page metadata object owns exactly one ordinary livemap. Generation is
+    // carried by the page/current-or-from metadata which owns this LiveInfo,
+    // never by a second bitmap hidden inside the same carrier.
+    MarkFace markFace;
 
-    template<Generation G>
     MarkFace& GetMarkFace()
     {
-        return markFaces[static_cast<size_t>(G)];
+        return markFace;
     }
 
-    template<Generation G>
     const MarkFace& GetMarkFace() const
     {
-        return markFaces[static_cast<size_t>(G)];
+        return markFace;
     }
 
     // Geometry prefix-sum: only RegionInfo::GetPreLiveBytesInGhostRegion (ticket path).
@@ -299,7 +300,7 @@ private:
         RegionBitmap::PreMaskInfo maskInfo;
         RegionBitmap::GetPreMaskInfo(offset, regionSize, maskInfo);
         uint64_t liveBytes = 0;
-        MarkFace& face = GetMarkFace<G>();
+        MarkFace& face = GetMarkFace();
         RegionBitmap* markBitmap = __atomic_load_n(&face.bitmap, std::memory_order_acquire);
         if (face.epoch.load(std::memory_order_acquire) == view.GetEpoch() && markBitmap != nullptr) {
             liveBytes += markBitmap->GetPreLiveBytes(maskInfo);

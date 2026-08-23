@@ -541,6 +541,16 @@ void RegionInfo::SetYoungRegionFlag(uint8_t flag)
     }
 }
 
+void RegionInfo::PublishForwardingCarrier(MarkView<Generation::Young> view)
+{
+    PublishForwardingCarrierImpl(view);
+}
+
+void RegionInfo::PublishForwardingCarrier(MarkView<Generation::Old> view)
+{
+    PublishForwardingCarrierImpl(view);
+}
+
 size_t RegionInfo::GetYoungRegionCount()
 {
     return youngRegionCount.load(std::memory_order_acquire);
