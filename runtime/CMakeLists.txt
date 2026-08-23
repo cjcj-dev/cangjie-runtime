@@ -100,6 +100,10 @@ if (MRT_GC_UNIT_TESTS)
     add_compile_definitions(MRT_GC_UNIT_TESTS=1)
 endif()
 
+if (MRT_TESTABLE_INTERNALS)
+    add_compile_definitions(MRT_TESTABLE_INTERNALS=1)
+endif()
+
 message("-- BUILD_CJTHREAD: " ${BUILD_CJTHREAD})
 message("-- BUILD_RUNTIME: "   ${BUILD_RUNTIME})
 

@@ -63,6 +63,10 @@ fi
 echo "M0_TEST_ACCESS=$M0_TEST_ACCESS"
 
 BOUNDS_INC="$ROOT/runtime/third_party/third_party_bounds_checking_function/include"
+TESTABLE_FLAGS=()
+if [[ "${MRT_TESTABLE_INTERNALS:-0}" == "1" ]]; then
+  TESTABLE_FLAGS+=(-DMRT_TESTABLE_INTERNALS=1)
+fi
 INC_FLAGS=(
   -I"$SRC"
   -I"$ROOT/runtime/src"
@@ -84,6 +88,7 @@ $CXX -std=gnu++17 -O0 -g -Wall -Wextra -pthread -fno-rtti \
   "${RANGE_REGISTRY_FLAGS[@]}" \
   "${GC_UNIT_DEFS[@]}" \
   "${TEST_DEFINES[@]}" \
+  "${TESTABLE_FLAGS[@]}" \
   "${INC_FLAGS[@]}" \
   "$SRC/gc_unit_main.cpp" \
   "$SRC/gc_unit_stubs.cpp" \
@@ -146,6 +151,7 @@ $CXX -std=gnu++17 -O0 -g -Wall -Wextra -pthread -fno-rtti \
   -o "$OUT/cj_gc_unit"
 
 echo "LINKED_RUNTIME=$RUNTIME_LIB_DIR"
+echo "MRT_TESTABLE_INTERNALS=${MRT_TESTABLE_INTERNALS:-0}"
 # Binding proof: undefined product symbols must resolve from libcangjie-runtime.
 if command -v nm >/dev/null 2>&1; then
   echo "=== BINDING_PROOF (undefined in binary that resolve via runtime) ==="

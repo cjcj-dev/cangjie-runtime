@@ -1,0 +1,12 @@
+diff --git a/runtime/src/Heap/Allocator/RegionManager.h b/runtime/src/Heap/Allocator/RegionManager.h
+index 4fe2f3fdb..2e162bf3d 100644
+--- a/runtime/src/Heap/Allocator/RegionManager.h
++++ b/runtime/src/Heap/Allocator/RegionManager.h
+@@ -1232,7 +1232,6 @@ inline void ExecuteForwardTask(RegionManager& regionManager, RegionList& fromReg
+         if (fromRegionList.TryDeleteRegion(region, RegionInfo::RegionType::FROM_REGION,
+                                            RegionInfo::RegionType::LONE_FROM_REGION)) {
+             regionManager.ForwardRegion<G>(region);
+-            regionManager.CompleteRelocationRequests(region);
+         }
+     }
+ }

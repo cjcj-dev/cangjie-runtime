@@ -1190,8 +1190,6 @@ EXPORTS
     _ZN12MapleRuntime11EHStackInfo16FillInStackTraceEv @1184
     _ZN12MapleRuntime11EHStackInfoD0Ev @1185
     _ZN12MapleRuntime11EnumBarrierD0Ev @1186
-    _ZN12MapleRuntime11ForwardTask7ExecuteEy @1187
-    _ZN12MapleRuntime11ForwardTaskD0Ev @1188
     _ZN12MapleRuntime11GCStackInfo16FillInStackTraceEv @1189
     _ZN12MapleRuntime11GCStackInfoD0Ev @1190
     _ZN12MapleRuntime11HeapManager4FiniEv @1191
@@ -3129,7 +3127,6 @@ EXPORTS
     _ZTVN12MapleRuntime11EHFrameInfoE @3151 DATA
     _ZTVN12MapleRuntime11EHStackInfoE @3152 DATA
     _ZTVN12MapleRuntime11EnumBarrierE @3153 DATA
-    _ZTVN12MapleRuntime11ForwardTaskE @3154 DATA
     _ZTVN12MapleRuntime11GCStackInfoE @3155 DATA
     _ZTVN12MapleRuntime11IdleBarrierE @3156 DATA
     _ZTVN12MapleRuntime11RegionSpaceE @3157 DATA
