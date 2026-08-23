@@ -1,0 +1,75 @@
+# Exact source-line exemptions for check_no_bare_baseobject_cast.sh.
+# Format: relative-path:line<TAB>why this representation cast is required.
+runtime/src/Sync/Sync.cpp:570	CJMonitor embeds a managed mutex field; the read barrier requires its holder as BaseObject storage.
+runtime/src/Sync/Sync.cpp:605	CJMultiConditionMonitor embeds the same managed mutex field and uses the same holder representation.
+runtime/src/Heap/Barrier/Barrier.cpp:503	The bulk struct-array copy contract identifies dstObj as the destination MArray before field recolouring.
+runtime/src/Heap/Collector/FinalizerProcessor.cpp:235	workingFinalizables contains finalizable class instances; MObject exposes their finalizer TypeInfo.
+runtime/src/Heap/Collector/Collector.cpp:215	Interior-base probing forms a candidate object start and validates its heap address and TypeInfo before use.
+runtime/src/Heap/Collector/Collector.cpp:262	The validated interior offset is subtracted to recover the already-checked host object start.
+runtime/src/Heap/Collector/TracingCollector.h:307	The resurrected-export set entry is presented through the legacy ObjectRef root-visitor representation.
+runtime/src/Heap/WCollector/PostTraceBarrier.cpp:246	CopyStructArrayImpl receives an array destination; debug code checks its struct component type.
+runtime/src/Heap/WCollector/PostTraceBarrier.cpp:260	CopyStructArrayImpl receives an array source and must enumerate its reference-bearing elements.
+runtime/src/Heap/WCollector/WCollector.cpp:1210	TypeInfo::IsRawArray establishes the MArray layout used to trace array elements.
+runtime/src/Heap/WCollector/WCollector.cpp:1290	ForwardUpdateRawRef rebuilds a plain interior address from a forwarded, validated host plus offset.
+runtime/src/Heap/WCollector/WCollector.cpp:4313	FixMinorEvacuatedSlot rebuilds a plain interior address from a forwarded, validated host plus offset.
+runtime/src/Heap/WCollector/WCollector.h:437	WCollector is the friend allowed to mint the private null HeapSlot representation without colour.
+runtime/src/Heap/WCollector/IdleBarrier.cpp:230	CopyRefArrayImpl receives an array destination; debug code checks its object component type.
+runtime/src/Heap/WCollector/IdleBarrier.cpp:231	CopyRefArrayImpl receives an array destination; debug code checks its interface component type.
+runtime/src/Heap/WCollector/IdleBarrier.cpp:232	CopyRefArrayImpl receives an array destination; debug code checks its array component type.
+runtime/src/Heap/WCollector/IdleBarrier.cpp:288	CopyStructArrayImpl receives an array destination; debug code checks its struct component type.
+runtime/src/Heap/WCollector/IdleBarrier.cpp:293	CopyStructArrayImpl receives an array source and must enumerate its reference-bearing elements.
+runtime/src/Heap/WCollector/IdleBarrier.cpp:312	The bulk struct-array copy contract identifies dstObj as the destination MArray before field recolouring.
+runtime/src/Heap/WCollector/ForwardBarrier.cpp:224	CopyStructArrayImpl receives an array destination; debug code checks its struct component type.
+runtime/src/Heap/WCollector/ForwardBarrier.cpp:239	CopyStructArrayImpl receives an array source and must enumerate its reference-bearing elements.
+runtime/src/Heap/WCollector/ForwardBarrier.cpp:256	The bulk struct-array copy contract identifies dstObj as the destination MArray before field recolouring.
+runtime/src/Heap/WCollector/TraceBarrier.cpp:301	CopyStructArrayImpl receives an array destination; debug code checks its struct component type.
+runtime/src/Heap/WCollector/TraceBarrier.cpp:317	CopyStructArrayImpl receives an array source and must enumerate its reference-bearing elements.
+runtime/src/Heap/WCollector/TraceBarrier.cpp:325	CopyStructArrayImpl receives an array destination and must enumerate overwritten reference fields.
+runtime/src/Heap/WCollector/PreforwardBarrier.cpp:192	CopyStructArrayImpl receives an array destination; debug code checks its struct component type.
+runtime/src/Heap/WCollector/PreforwardBarrier.cpp:207	CopyStructArrayImpl receives an array source and must enumerate its reference-bearing elements.
+runtime/src/Heap/WCollector/PreforwardBarrier.cpp:224	The bulk struct-array copy contract identifies dstObj as the destination MArray before field recolouring.
+runtime/src/Heap/WCollector/EnumBarrier.cpp:278	CopyStructArrayImpl receives an array destination; debug code checks its struct component type.
+runtime/src/Heap/WCollector/EnumBarrier.cpp:305	CopyStructArrayImpl receives an array source and must enumerate its reference-bearing elements.
+runtime/src/Heap/WCollector/EnumBarrier.cpp:313	CopyStructArrayImpl receives an array destination and must enumerate overwritten reference fields.
+runtime/src/Heap/Allocator/RegionSpace.cpp:345	AllocBlack has just allocated and initialized addr as an object start before publishing it to the grey list.
+runtime/src/Heap/Allocator/RegionInfo.h:1298	NullRouteCaller::Host stores an object address as an integer diagnostic provenance token.
+runtime/src/Heap/Verify/EatArmDiag.cpp:516	The opt-in self-test uses a non-dereferenced fake host identity to exercise diagnostic accounting.
+runtime/src/Heap/Verify/EatArmDiag.cpp:517	The opt-in self-test uses a non-dereferenced fake target identity to exercise diagnostic accounting.
+runtime/src/Heap/Verify/RouteDom.cpp:135	The route-domain probe forms a region-local candidate and checks mark metadata before accepting it.
+runtime/src/Heap/Verify/RouteDom.cpp:184	The bounded region walk forms a candidate and validates heap membership plus a plausible object start.
+runtime/src/Interpreter/InterpreterSpecific.cpp:186	DYN_Placeholder is the interpreter's void-pointer ABI carrier for a RootSlot placeholder.
+runtime/src/Interpreter/InterpreterSpecific.cpp:347	DYN_ObjRef is the interpreter's void-pointer ABI carrier for the object tested by InstanceOf.
+runtime/src/Interpreter/InterpreterSpecific.cpp:383	DYN_ObjRef is the interpreter's void-pointer ABI carrier for the value written to a static root.
+runtime/src/Interpreter/InterpreterSpecific.cpp:390	DYN_FieldRef is the interpreter ABI address of an instance HeapSlot.
+runtime/src/Interpreter/InterpreterSpecific.cpp:391	DYN_ObjRef is the interpreter ABI holder object for an instance-field barrier read.
+runtime/src/Interpreter/InterpreterSpecific.cpp:398	DYN_FieldRef is the interpreter ABI address of an instance HeapSlot.
+runtime/src/Interpreter/InterpreterSpecific.cpp:399	DYN_ObjRef carries both holder and new managed value through the instance-field write ABI.
+runtime/src/Interpreter/InterpreterSpecific.cpp:405	GetArrayElement receives an array object through the DYN_ObjRef ABI.
+runtime/src/Interpreter/InterpreterSpecific.cpp:412	SetArrayElement receives an array object through the DYN_ObjRef ABI.
+runtime/src/Interpreter/InterpreterSpecific.cpp:413	SetArrayElement receives its managed element through the DYN_ObjRef ABI.
+runtime/src/Interpreter/InterpreterSpecific.cpp:422	ReadStructFieldOfObject receives its managed holder through the DYN_ObjRef ABI.
+runtime/src/Interpreter/InterpreterSpecific.cpp:439	WriteStructFieldOfObject validates heap membership before restoring the DYN_ObjRef holder type.
+runtime/src/Interpreter/InterpreterSpecific.cpp:486	ReadGeneric receives destination and source managed objects through the DYN_ObjRef ABI.
+runtime/src/Interpreter/InterpreterSpecific.cpp:498	WriteGeneric receives destination and source managed objects through the DYN_ObjRef ABI.
+runtime/src/Inspector/CjHeapData.cpp:224	BaseObject::IsRawArray establishes the array layout selected for heap-dump tagging.
+runtime/src/Inspector/CjHeapData.cpp:560	WriteObjectArray is called only for an object-array dump and needs MArray length/content access.
+runtime/src/Inspector/CjHeapData.cpp:596	WriteStructArray is called only for a struct-array dump and needs MArray layout access.
+runtime/src/Inspector/CjHeapData.cpp:630	WritePrimitiveArray is called only for a primitive-array dump and needs MArray length access.
+runtime/src/Inspector/HeapSnapshotJsonSerializer.cpp:452	The object-array serializer receives an array object and needs MArray length/content access.
+runtime/src/Inspector/HeapSnapshotJsonSerializer.cpp:508	The struct-array serializer receives an array object and needs MArray layout access.
+runtime/src/Inspector/HeapSnapshotJsonSerializer.cpp:561	The primitive-array serializer receives an array object and needs MArray length access.
+runtime/src/Common/ColourTypes.h:75	to_object is the named conversion from a proven uncoloured zaddress to BaseObject pointer form.
+runtime/src/Common/BaseObject.cpp:106	ForEachElementInArray is an array-only helper and needs MArray length/component layout.
+runtime/src/Common/BaseObject.cpp:155	ForEachAggRefFieldInArray is an array-only member path and needs MArray aggregate layout.
+runtime/src/Common/BaseObject.cpp:187	TypeInfo::IsArrayType establishes MArray layout for BaseObject::GetSize.
+runtime/src/CompilerCalls.cpp:1177	ObjectManager returned rawArrayObj as ArrayRef; the object field barrier accepts BaseObject representation.
+runtime/src/CompilerCalls.cpp:1640	The associated-values ArrayRef is stored through an object field barrier requiring BaseObject representation.
+runtime/src/ObjectModel/MethodInfo.cpp:520	The x86_64 sret ABI passes its allocated managed return buffer through AddReference.
+runtime/src/ObjectModel/MObject.inline.h:71	MObject::LoadRef has an MObject return contract for the managed reference read from its field.
+runtime/src/ObjectModel/MArray.inline.h:134	SetClassInfo has initialized newly allocated array storage before MArray length initialization.
+runtime/src/ObjectModel/RefField.h:391	HeapSlotAt is the raw-address decoder whose typed callers are restricted by deleted overloads.
+runtime/src/ObjectModel/RefField.h:409	RootSlotAt is the raw-address decoder whose typed callers are restricted by deleted overloads.
+runtime/src/ObjectModel/RefField.h:426	DerivedSlotAt is the raw-address decoder whose typed callers are restricted by deleted overloads.
+runtime/src/UnwindStack/StackGrowStackInfo.cpp:78	Machine-frame FA identifies the ABI root spill word visited during stack growth.
+runtime/src/Concurrency/CJThreadModel/CJThreadModel.cpp:27	LWTData::obj is a void-pointer ABI word registered and visited as a managed root.
+runtime/src/Concurrency/CJThreadModel/CJThreadModel.cpp:29	LWTData::threadObject is a void-pointer ABI word registered and visited as a managed root.
