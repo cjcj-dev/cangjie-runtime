@@ -21,7 +21,9 @@
 #include "Heap/Collector/Collector.h"
 #include "Heap/Heap.h"
 #include "Heap/Verify/M0ExitDiagnostics.h"
+#include "Heap/WCollector/IdleBarrier.h"
 #include "Mutator/MutatorManager.h"
+#include "ObjectModel/MArray.inline.h"
 #include "ObjectModel/RefField.inline.h"
 #include "gc_unittest.hpp"
 
@@ -36,6 +38,20 @@ using namespace MapleRuntime::GcUnit;
 
 extern "C" MapleRuntime::ObjectPtr CJ_MCC_ReadRefField(
     MapleRuntime::ObjectPtr obj, MapleRuntime::RefField<false>* field);
+extern "C" void CJ_MCC_ReadStructField(MapleRuntime::MAddress dstPtr, MapleRuntime::ObjectPtr obj,
+                                        MapleRuntime::MAddress srcField, size_t size, MapleRuntime::GCTib gctib);
+extern "C" void CJ_MCC_ReadStaticStruct(MapleRuntime::MAddress dstPtr, size_t dstSize,
+                                         MapleRuntime::MAddress srcPtr, size_t srcSize,
+                                         MapleRuntime::GCTib gctib);
+extern "C" void CJ_MCC_ArrayCopyRef(MapleRuntime::ObjectPtr dstObj, MapleRuntime::MAddress dstField,
+                                     size_t dstSize, MapleRuntime::ObjectPtr srcObj,
+                                     MapleRuntime::MAddress srcField, size_t srcSize);
+extern "C" void CJ_MCC_ArrayCopyStruct(MapleRuntime::ObjectPtr dstObj, MapleRuntime::MAddress dstField,
+                                        size_t dstSize, MapleRuntime::ObjectPtr srcObj,
+                                        MapleRuntime::MAddress srcField, size_t srcSize);
+extern "C" void MCC_WriteStaticStruct(MapleRuntime::MAddress dst, size_t dstLen,
+                                       MapleRuntime::MAddress src, size_t srcLen,
+                                       const MapleRuntime::GCTib gctib);
 
 namespace {
 
@@ -123,12 +139,6 @@ public:
     BaseObject* relocate_or_remap_object(BaseObject* object, ZGenerationId) const override { return object; }
 };
 
-class IdleProductBarrier final : public Barrier {
-public:
-    IdleProductBarrier(Collector& collector, RememberedSet& rememberedSet)
-        : Barrier(collector, rememberedSet, BarrierPhase::IDLE) {}
-};
-
 class InstalledBarrierScope {
 public:
     explicit InstalledBarrierScope(Barrier& barrier) : previous(Heap::currentBarrierPtr), installed(&barrier)
@@ -160,8 +170,31 @@ struct ReadEntryFixture {
     GcHeapFixture heap;
     NoAnswerCollector collector;
     RememberedSet rememberedSet;
-    IdleProductBarrier barrier;
+    IdleBarrier barrier;
     InstalledBarrierScope installed;
+    RefField<>* field = nullptr;
+};
+
+struct RefArraySource {
+    explicit RefArraySource(ReadEntryFixture& fx)
+    {
+        std::memset(arrayTypeStorage, 0, sizeof(arrayTypeStorage));
+        arrayType = reinterpret_cast<TypeInfo*>(arrayTypeStorage);
+        arrayType->SetType(TypeKind::TYPE_KIND_RAWARRAY);
+        arrayType->SetComponentTypeInfo(fx.heap.typeInfo);
+        TypeInfoManager::GetTypeInfoManager().NoteTypeInfoImage(
+            reinterpret_cast<uintptr_t>(arrayTypeStorage), sizeof(arrayTypeStorage));
+
+        array = reinterpret_cast<MArray*>(fx.heap.obj1);
+        array->SetClassInfo(arrayType);
+        array->SetLength(1);
+        field = &HeapSlotAt<>(reinterpret_cast<MAddress>(array) + MArray::GetContentOffset());
+        field->StoreColoured(to_zpointer(reinterpret_cast<MAddress>(fx.heap.obj0)));
+    }
+
+    alignas(TypeInfo) unsigned char arrayTypeStorage[sizeof(TypeInfo)];
+    TypeInfo* arrayType = nullptr;
+    MArray* array = nullptr;
     RefField<>* field = nullptr;
 };
 
@@ -288,6 +321,138 @@ GC_TEST(M0Exit, ReadRuntimeEntryClassifiesPublishedCopyAsS1)
     GC_EXPECT_EQ(after.total, before.total + 1);
     GC_EXPECT_EQ(after.s1, before.s1 + 1);
     GC_EXPECT_EQ(after.s0, before.s0);
+    GC_EXPECT_EQ(after.readBarrier, before.readBarrier + 1);
+}
+
+GC_TEST(M0Exit, ReadStructRuntimeEntryClassifiesNoCopyAsS0)
+{
+    ReadEntryFixture fx;
+    *reinterpret_cast<uint64_t*>(fx.heap.obj0) = 0;
+    RootSlot copied;
+    const M0ExitDiagnostics::Counts before = M0ExitDiagnostics::GetCounts();
+
+    // Product chain: CJ_MCC_ReadStructField -> Barrier::ReadStruct -> the inherited
+    // CopyStructPlainToNonHeap helper -> its unqualified ReadReference call.
+    CJ_MCC_ReadStructField(reinterpret_cast<MAddress>(&copied), fx.heap.obj1,
+                           reinterpret_cast<MAddress>(fx.field), sizeof(*fx.field), GCTib {});
+
+    const M0ExitDiagnostics::Counts after = M0ExitDiagnostics::GetCounts();
+    GC_EXPECT_EQ(static_cast<uintptr_t>(raw(copied.LoadPlain())), reinterpret_cast<uintptr_t>(fx.heap.obj0));
+    GC_EXPECT_EQ(after.total, before.total + 1);
+    GC_EXPECT_EQ(after.s0, before.s0 + 1);
+    GC_EXPECT_EQ(after.s1, before.s1);
+    GC_EXPECT_EQ(after.readBarrier, before.readBarrier + 1);
+}
+
+GC_TEST(M0Exit, ReadStructRuntimeEntryClassifiesPublishedCopyAsS1)
+{
+    ReadEntryFixture fx;
+    BaseObject* publishedCopy = fx.heap.PlaceObject(fx.heap.heapStart + 256);
+    std::memcpy(publishedCopy, fx.heap.obj0, fx.heap.obj0->GetSize());
+    GC_EXPECT_TRUE(publishedCopy->IsValidObject());
+    fx.heap.obj0->SetStateCode(ObjectState::FORWARDED);
+    RootSlot copied;
+    const M0ExitDiagnostics::Counts before = M0ExitDiagnostics::GetCounts();
+
+    CJ_MCC_ReadStructField(reinterpret_cast<MAddress>(&copied), fx.heap.obj1,
+                           reinterpret_cast<MAddress>(fx.field), sizeof(*fx.field), GCTib {});
+
+    const M0ExitDiagnostics::Counts after = M0ExitDiagnostics::GetCounts();
+    GC_EXPECT_EQ(static_cast<uintptr_t>(raw(copied.LoadPlain())), reinterpret_cast<uintptr_t>(fx.heap.obj0));
+    GC_EXPECT_EQ(after.total, before.total + 1);
+    GC_EXPECT_EQ(after.s1, before.s1 + 1);
+    GC_EXPECT_EQ(after.s0, before.s0);
+    GC_EXPECT_EQ(after.readBarrier, before.readBarrier + 1);
+}
+
+GC_TEST(M0Exit, ReadStaticStructRuntimeEntryUsesBaseHelper)
+{
+    ReadEntryFixture fx;
+    *reinterpret_cast<uint64_t*>(fx.heap.obj0) = 0;
+    RootSlot copied;
+    const M0ExitDiagnostics::Counts before = M0ExitDiagnostics::GetCounts();
+
+    CJ_MCC_ReadStaticStruct(reinterpret_cast<MAddress>(&copied), sizeof(copied),
+                            reinterpret_cast<MAddress>(fx.field), sizeof(*fx.field), fx.heap.obj1->GetGCTib());
+
+    const M0ExitDiagnostics::Counts after = M0ExitDiagnostics::GetCounts();
+    GC_EXPECT_EQ(static_cast<uintptr_t>(raw(copied.LoadPlain())), reinterpret_cast<uintptr_t>(fx.heap.obj0));
+    GC_EXPECT_EQ(after.total, before.total + 1);
+    GC_EXPECT_EQ(after.s0, before.s0 + 1);
+    GC_EXPECT_EQ(after.readBarrier, before.readBarrier + 1);
+}
+
+GC_TEST(M0Exit, CopyStructArrayRuntimeEntryUsesBaseHelper)
+{
+    ReadEntryFixture fx;
+    RefArraySource source(fx);
+    *reinterpret_cast<uint64_t*>(fx.heap.obj0) = 0;
+    RootSlot copied;
+    const M0ExitDiagnostics::Counts before = M0ExitDiagnostics::GetCounts();
+
+    CJ_MCC_ArrayCopyStruct(nullptr, reinterpret_cast<MAddress>(&copied), sizeof(copied), source.array,
+                           reinterpret_cast<MAddress>(source.field), sizeof(*source.field));
+
+    const M0ExitDiagnostics::Counts after = M0ExitDiagnostics::GetCounts();
+    GC_EXPECT_EQ(static_cast<uintptr_t>(raw(copied.LoadPlain())), reinterpret_cast<uintptr_t>(fx.heap.obj0));
+    GC_EXPECT_EQ(after.total, before.total + 1);
+    GC_EXPECT_EQ(after.s0, before.s0 + 1);
+    GC_EXPECT_EQ(after.readBarrier, before.readBarrier + 1);
+}
+
+GC_TEST(M0Exit, CopyRefArrayForwardRuntimeEntryUsesBaseHelper)
+{
+    ReadEntryFixture fx;
+    *reinterpret_cast<uint64_t*>(fx.heap.obj0) = 0;
+    static RootSlot copied;
+    const MAddress dst = reinterpret_cast<MAddress>(&copied);
+    const MAddress src = reinterpret_cast<MAddress>(fx.field);
+    GC_EXPECT_TRUE(dst < src);
+    const M0ExitDiagnostics::Counts before = M0ExitDiagnostics::GetCounts();
+
+    CJ_MCC_ArrayCopyRef(nullptr, dst, sizeof(copied), fx.heap.obj1, src, sizeof(*fx.field));
+
+    const M0ExitDiagnostics::Counts after = M0ExitDiagnostics::GetCounts();
+    GC_EXPECT_EQ(static_cast<uintptr_t>(raw(copied.LoadPlain())), reinterpret_cast<uintptr_t>(fx.heap.obj0));
+    GC_EXPECT_EQ(after.total, before.total + 1);
+    GC_EXPECT_EQ(after.s0, before.s0 + 1);
+    GC_EXPECT_EQ(after.readBarrier, before.readBarrier + 1);
+}
+
+GC_TEST(M0Exit, CopyRefArrayBackwardRuntimeEntryUsesBaseHelper)
+{
+    ReadEntryFixture fx;
+    *reinterpret_cast<uint64_t*>(fx.heap.obj0) = 0;
+    RootSlot copied;
+    const MAddress dst = reinterpret_cast<MAddress>(&copied);
+    const MAddress src = reinterpret_cast<MAddress>(fx.field);
+    GC_EXPECT_TRUE(dst > src);
+    const M0ExitDiagnostics::Counts before = M0ExitDiagnostics::GetCounts();
+
+    CJ_MCC_ArrayCopyRef(nullptr, dst, sizeof(copied), fx.heap.obj1, src, sizeof(*fx.field));
+
+    const M0ExitDiagnostics::Counts after = M0ExitDiagnostics::GetCounts();
+    GC_EXPECT_EQ(static_cast<uintptr_t>(raw(copied.LoadPlain())), reinterpret_cast<uintptr_t>(fx.heap.obj0));
+    GC_EXPECT_EQ(after.total, before.total + 1);
+    GC_EXPECT_EQ(after.s0, before.s0 + 1);
+    GC_EXPECT_EQ(after.readBarrier, before.readBarrier + 1);
+}
+
+GC_TEST(M0Exit, WriteStaticStructRuntimeEntryUsesBaseHelper)
+{
+    ReadEntryFixture fx;
+    *reinterpret_cast<uint64_t*>(fx.heap.obj0) = 0;
+    RefField<> source(fx.field->GetFieldValue());
+    RootSlot copied;
+    const M0ExitDiagnostics::Counts before = M0ExitDiagnostics::GetCounts();
+
+    MCC_WriteStaticStruct(reinterpret_cast<MAddress>(&copied), sizeof(copied),
+                          reinterpret_cast<MAddress>(&source), sizeof(source), fx.heap.obj1->GetGCTib());
+
+    const M0ExitDiagnostics::Counts after = M0ExitDiagnostics::GetCounts();
+    GC_EXPECT_EQ(static_cast<uintptr_t>(raw(copied.LoadPlain())), reinterpret_cast<uintptr_t>(fx.heap.obj0));
+    GC_EXPECT_EQ(after.total, before.total + 1);
+    GC_EXPECT_EQ(after.s0, before.s0 + 1);
     GC_EXPECT_EQ(after.readBarrier, before.readBarrier + 1);
 }
 
