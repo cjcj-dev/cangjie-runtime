@@ -105,6 +105,7 @@ $CXX -std=gnu++17 -O0 -g -Wall -Wextra -pthread -fno-rtti \
     "$SRC/test_mark_stack_entry.cpp" \
     "$SRC/test_mark_stripe.cpp" \
     "$SRC/test_partial_array.cpp" \
+    "$SRC/test_segmented_array_init.cpp" \
     "$SRC/test_verify_roots.cpp" \
     "$SRC/test_mem_map.cpp" \
   -L"$RUNTIME_LIB_DIR" -Wl,-rpath,"$RUNTIME_LIB_DIR" \

@@ -404,6 +404,11 @@ public:
         VisitExceptionRoots(visitor);
     }
 
+#if defined(MRT_GC_UNIT_TESTS)
+    // Test-only access to the product root consumer without exposing storage.
+    void VisitInvisibleRoot(const RootVisitor& visitor) { VisitRawObjects(visitor); }
+#endif
+
     void VisitHeapReferences(const RootVisitor& rootVisitor, const DerivedPtrVisitor& derivedPtrVisitor);
     void VisitHeapReferences(const RootVisitor& regRootVisitor, const RootVisitor& slotRootVisitor,
                              const DerivedPtrVisitor& derivedPtrVisitor, const RootVisitor& exceptionRootVisitor,
@@ -467,13 +472,31 @@ public:
     void SetStackGrowFrameSize(uint32_t sgfs) { stackGrowFrameSize = sgfs; }
 #endif
 
-    void PushRawObject(BaseObject* obj) { StorePlain(rawObject, from_object(obj)); }
-
-    BaseObject* PopRawObject()
+    // A newly allocated large reference array publishes its parseable header before
+    // yielding, but is not a normal object until all of its slots have been cleared.
+    // Keep that incomplete state in this mutator-owned side slot rather than taking
+    // another StateWord bit. VisitRawObjects is the GC consumer of the slot.
+    void PublishInvisibleRoot(BaseObject* obj)
     {
-        // PushRawObject accepts a live object and rawObject keeps it rooted until this pop.
-        BaseObject* obj = to_object(safe(rawObject.LoadPlain()));
-        StorePlain(rawObject, zaddress::null);
+        CHECK_DETAIL(obj != nullptr, "cannot publish a null invisible root");
+        CHECK_DETAIL(is_null(rawObject.LoadPlain(std::memory_order_acquire)),
+                     "nested invisible roots are not supported");
+        StorePlain(rawObject, from_object(obj), std::memory_order_release);
+    }
+
+    BaseObject* LoadInvisibleRoot() const
+    {
+        zaddress_unsafe value = rawObject.LoadPlain(std::memory_order_acquire);
+        return is_null(value) ? nullptr : to_object(safe(value));
+    }
+
+    BaseObject* WithdrawInvisibleRoot()
+    {
+        BaseObject* obj = LoadInvisibleRoot();
+        CHECK_DETAIL(obj != nullptr, "cannot withdraw an unpublished invisible root");
+        // The release store is the complete-state publication point. A root scan
+        // that no longer observes this side slot must also observe every null slot.
+        StorePlain(rawObject, zaddress::null, std::memory_order_release);
         return obj;
     }
 

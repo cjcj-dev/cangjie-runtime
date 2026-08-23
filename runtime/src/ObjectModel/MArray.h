@@ -17,6 +17,10 @@ class ATTR_PACKED(8) MArray : public BaseObject {
 class ATTR_PACKED(4) MArray : public BaseObject {
 #endif
 public:
+    // OpenJDK ZObjArrayAllocator uses the same 64 KiB maximum segment
+    // (zObjArrayAllocator.cpp:55-63). The threshold includes the array header.
+    static constexpr MSize LARGE_REF_ARRAY_INIT_SEGMENT_SIZE = 64 * 1024;
+
     static constexpr MOffset GetContentOffset(); // in Bytes
 
     // inlined static functions to create arrays
@@ -50,9 +54,25 @@ public:
     void ForEachRefFieldInRange(const RefFieldVisitor& visitor, MAddress fieldStart, MIndex fieldEnd) const;
 
 private:
+    static MArray* InitializeLargeRefArray(MAddress address, MIndex nElems, TypeInfo& arrayClass);
+
     // use MIndex because length is the upper boundary of all indices
     MIndex length;
     // array content is appended here.
 };
+
+#if defined(MRT_GC_UNIT_TESTS)
+// Test-only product hooks. They are compiled out of the default product shape;
+// the deterministic suite still enters through MCC_NewObjArray in the product SO.
+struct LargeArrayInitTestHooks {
+    MAddress (*allocate)(size_t size, AllocType allocType) = nullptr;
+    void (*onPublish)(MArray* array) = nullptr;
+    void (*onYield)(size_t segmentIndex) = nullptr;
+    void (*onWithdraw)(MArray* array) = nullptr;
+};
+
+extern "C" MRT_EXPORT void CJ_MRT_SetLargeArrayInitTestHooks(const LargeArrayInitTestHooks* hooks);
+extern "C" MRT_EXPORT MAddress CJ_MRT_TestAllocateArrayStorage(size_t size, AllocType allocType);
+#endif
 } // namespace MapleRuntime
 #endif // MRT_MARRAY_H

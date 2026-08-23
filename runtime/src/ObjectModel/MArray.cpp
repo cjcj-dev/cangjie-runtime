@@ -7,7 +7,97 @@
 
 #include "MArray.inline.h"
 
+#include <algorithm>
+
+#include "Base/MemUtils.h"
+#include "Common/ScopedObjectAccess.h"
+#include "Heap/Collector/GcStats.h"
+#include "Mutator/Mutator.h"
+
 namespace MapleRuntime {
+#if defined(MRT_GC_UNIT_TESTS)
+namespace {
+LargeArrayInitTestHooks g_largeArrayInitTestHooks;
+} // namespace
+
+extern "C" MRT_EXPORT void CJ_MRT_SetLargeArrayInitTestHooks(const LargeArrayInitTestHooks* hooks)
+{
+    g_largeArrayInitTestHooks = hooks == nullptr ? LargeArrayInitTestHooks{} : *hooks;
+}
+
+extern "C" MRT_EXPORT MAddress CJ_MRT_TestAllocateArrayStorage(size_t size, AllocType allocType)
+{
+    if (g_largeArrayInitTestHooks.allocate != nullptr) {
+        return g_largeArrayInitTestHooks.allocate(size, allocType);
+    }
+    return HeapManager::Allocate(size, allocType);
+}
+#endif
+
+MArray* MArray::InitializeLargeRefArray(MAddress address, MIndex nElems, TypeInfo& arrayClass)
+{
+    // Publish a complete boundary before the first yield. The invisible-root
+    // release store below makes these plain header writes visible to GC.
+    MArray* array = reinterpret_cast<MArray*>(SetClassInfo(address, &arrayClass));
+    array->SetLength(nElems);
+
+    Mutator* mutator = Mutator::GetMutator();
+    CHECK_DETAIL(mutator != nullptr, "large reference array initialization requires a mutator");
+    mutator->PublishInvisibleRoot(array);
+#if defined(MRT_GC_UNIT_TESTS)
+    if (g_largeArrayInitTestHooks.onPublish != nullptr) {
+        g_largeArrayInitTestHooks.onPublish(array);
+    }
+#endif
+
+    const size_t contentSize = static_cast<size_t>(nElems) * RefField<>::GetSize();
+    size_t processed = 0;
+    size_t segmentIndex = 0;
+    size_t epoch = g_gcCount.load(std::memory_order_acquire);
+    while (processed < contentSize) {
+        MArray* current = static_cast<MArray*>(mutator->LoadInvisibleRoot());
+        CHECK_DETAIL(current != nullptr, "large reference array lost its invisible root");
+        const size_t segment = std::min(contentSize - processed,
+                                        static_cast<size_t>(LARGE_REF_ARRAY_INIT_SEGMENT_SIZE));
+        const MAddress start = reinterpret_cast<MAddress>(current->ConvertToCArray()) + processed;
+        // RefField raw null is the all-zero word (RefField.h:427-433); unlike ZGC,
+        // no epoch-coloured null fill is needed in this runtime.
+        MemorySet(start, segment, 0, segment);
+
+        {
+            // Entering a saferegion is this runtime's mutator/GC handshake edge.
+            // The root stays published throughout the whole interval.
+            ScopedEnterSaferegion yield(true);
+#if defined(MRT_GC_UNIT_TESTS)
+            if (g_largeArrayInitTestHooks.onYield != nullptr) {
+                g_largeArrayInitTestHooks.onYield(segmentIndex);
+            }
+#endif
+        }
+
+        const size_t observedEpoch = g_gcCount.load(std::memory_order_acquire);
+        if (UNLIKELY(observedEpoch != epoch)) {
+            // GC may have copied a version containing a block from before this
+            // initializer's last write. Reacquire through the healed root and
+            // rewrite every block in the new version.
+            epoch = observedEpoch;
+            processed = 0;
+            segmentIndex = 0;
+            continue;
+        }
+        processed += segment;
+        ++segmentIndex;
+    }
+
+    MArray* complete = static_cast<MArray*>(mutator->WithdrawInvisibleRoot());
+#if defined(MRT_GC_UNIT_TESTS)
+    if (g_largeArrayInitTestHooks.onWithdraw != nullptr) {
+        g_largeArrayInitTestHooks.onWithdraw(complete);
+    }
+#endif
+    return complete;
+}
+
 void MArray::ForEachRefFieldInRange(const RefFieldVisitor& visitor, MAddress fieldStart, MIndex fieldEnd) const
 {
     TypeInfo* componentTi = GetComponentTypeInfo();
