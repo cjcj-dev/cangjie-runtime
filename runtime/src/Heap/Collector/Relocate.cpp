@@ -566,7 +566,14 @@ void WCollector::Preforward()
     ScopedEntryTrace trace("CJRT_GC_PREFORWARD");
     MRT_PHASE_TIMER("Preforward");
     {
+        // OpenJDK zGeneration.cpp:1175-1200: isolate pause_relocate_start from the
+        // concurrent root-preforward work below. ScopedLightSync emits its matching
+        // rec=stw record, including rendezvous and held time.
         ScopedLightSync scopedLightSync("Preforward", true, GCPhase::GC_PHASE_PREFORWARD);
+        // ZStat samples pause/concurrent kind when the timer is constructed, so enter
+        // ScopedLightSync first. Destruction order also closes this timer before mutators
+        // resume, keeping the whole phase in the pause account.
+        MRT_PHASE_TIMER("old.relocate_start");
         RegionInfo::AdvanceCompactRouteTableGracePeriod();
         // fwdgrace: this sync does not go through TransitionToGCPhase, so the arena grace
         // period has to be advanced alongside the route-table one or the two drift apart.
