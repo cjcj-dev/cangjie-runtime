@@ -22,10 +22,12 @@ namespace MapleRuntime {
 
 // ZRelocateQueue::add_and_wait/prune_and_claim (zRelocate.cpp:134-191).
 // One Request is shared by all waiters for the same from address. The queue owns
-// the QUEUED -> CLAIMED transition; receipt publication alone owns COMPLETED.
+// the QUEUED -> CLAIMED transition; the region owner owns the terminal SUCCESS
+// or FAILED transition. Workers synchronize here before leaving so Add cannot
+// strand a request between the last empty poll and worker termination.
 class RelocationRequestQueue {
 public:
-    enum class State : uint8_t { QUEUED, CLAIMED, COMPLETED };
+    enum class State : uint8_t { QUEUED, CLAIMED, COMPLETED, FAILED };
 
     class Request {
     public:
@@ -52,22 +54,35 @@ public:
     struct EnqueueResult {
         Handle request;
         bool inserted;
+        bool accepted;
     };
 
     struct Selection {
         Handle request;
         void* ordinary;
+        bool workersDone{ false };
 
         bool is_request() const { return request != nullptr; }
         explicit operator bool() const { return request != nullptr || ordinary != nullptr; }
     };
 
+    // PrepareFromRegionList opens the request generation before mutators can
+    // observe its routes. BeginWorkers registers exactly the workers which can
+    // run concurrently (helpers plus the calling GC thread).
+    void BeginCycle();
+    void BeginWorkers(size_t workers);
     EnqueueResult Add(void* owner, MAddress from);
     MAddress Wait(const Handle& request);
 
     // Only the first publication for this from-address completes the Request.
     // The notification is per Request, not a queue-wide wakeup.
     bool Publish(MAddress from, MAddress receipt);
+    bool Fail(MAddress from);
+
+    // Complete every request owned by a region after ForwardRegion returns.
+    // A zero resolver result is a failed completion: the region was retained
+    // this cycle, so waiters may keep the still-live from address.
+    size_t CompleteOwner(void* owner, const std::function<MAddress(MAddress)>& resolveReceipt);
 
     Handle PruneAndClaim();
 
@@ -77,18 +92,32 @@ public:
     {
         Handle request = PruneAndClaim();
         if (request != nullptr) {
-            return Selection{ request, nullptr };
+            return Selection{ request, nullptr, false };
         }
-        return Selection{ nullptr, claimOrdinary() };
+        return Selection{ nullptr, claimOrdinary(), false };
     }
 
+    // Called only after both request and ordinary polls were empty. Idle
+    // workers rendezvous here. Add wakes them while any worker remains; the
+    // last synchronized worker closes the generation atomically with Add.
+    Selection SynchronizePoll();
+
     size_t PendingCount() const;
+    size_t SynchronizedWorkerCount() const;
     uint64_t CompletionCount() const { return completionCount.load(std::memory_order_relaxed); }
 
 private:
+    bool Complete(MAddress from, MAddress receipt, State terminalState);
+    static void CompleteHandle(const Handle& request, MAddress receipt, State terminalState);
+    Handle PruneAndClaimLocked();
+
     mutable std::mutex queueMutex;
+    std::condition_variable queueAttention;
     std::deque<Handle> queue;
     std::unordered_map<MAddress, Handle> byFrom;
+    bool accepting{ true };
+    size_t workerCount{ 0 };
+    size_t synchronizedWorkers{ 0 };
     std::atomic<uint64_t> completionCount{ 0 };
 };
 

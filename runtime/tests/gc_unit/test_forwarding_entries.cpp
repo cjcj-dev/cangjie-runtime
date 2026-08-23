@@ -159,7 +159,8 @@ GC_TEST(ZForwardingEntries, OutOfRangeFromIndexUsesOverflowReceipt)
     const MAddress justOver = kStart + ((ForwardingEntry::kMaxFromIndex + 1) * kAlign);
     const MAddress dest = 0x9000;
 
-    const uint64_t before = ForwardingEntries::OverflowRefusals().load(std::memory_order_relaxed);
+    const uint64_t before = ForwardingEntries::OverflowFallbacks().load(std::memory_order_relaxed);
+    const uint64_t refusedBefore = ForwardingEntries::OverflowRefusals().load(std::memory_order_relaxed);
 
     // The last index the field can hold is stored and found.
     GC_EXPECT_EQ(tab->insert(inRange, dest), dest);
@@ -168,7 +169,8 @@ GC_TEST(ZForwardingEntries, OutOfRangeFromIndexUsesOverflowReceipt)
     // One past it uses the exact-key overflow receipt, and the event is counted --
     // otherwise a truncating build and a guarded one look identical from outside.
     GC_EXPECT_EQ(tab->insert(justOver, dest + 8), dest + 8);
-    GC_EXPECT_EQ(ForwardingEntries::OverflowRefusals().load(std::memory_order_relaxed), before + 1);
+    GC_EXPECT_EQ(ForwardingEntries::OverflowFallbacks().load(std::memory_order_relaxed), before + 1);
+    GC_EXPECT_EQ(ForwardingEntries::OverflowRefusals().load(std::memory_order_relaxed), refusedBefore);
 
     // The overflow lookup is exact and cannot alias the last encodable index.
     GC_EXPECT_EQ(tab->find(justOver), dest + 8);
@@ -230,9 +232,11 @@ GC_TEST(ZForwardingEntries, FullTableInsertionUsesOverflowReceipt)
 
     // Inserting into a full attached array spills into an exact-key receipt and
     // returns rather than retrying forever.
-    const uint64_t before = ForwardingEntries::FullRefusals().load(std::memory_order_relaxed);
+    const uint64_t before = ForwardingEntries::FullFallbacks().load(std::memory_order_relaxed);
+    const uint64_t refusedBefore = ForwardingEntries::FullRefusals().load(std::memory_order_relaxed);
     GC_EXPECT_EQ(tab->insert(absent, 0xa000), static_cast<MAddress>(0xa000));
-    GC_EXPECT_EQ(ForwardingEntries::FullRefusals().load(std::memory_order_relaxed), before + 1);
+    GC_EXPECT_EQ(ForwardingEntries::FullFallbacks().load(std::memory_order_relaxed), before + 1);
+    GC_EXPECT_EQ(ForwardingEntries::FullRefusals().load(std::memory_order_relaxed), refusedBefore);
     GC_EXPECT_EQ(tab->find(absent), static_cast<MAddress>(0xa000));
 
     // The entries that were there are still there and still correct.

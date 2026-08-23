@@ -2652,6 +2652,15 @@ BaseObject* WCollector::WaitRoutedTipReady(BaseObject* from, BaseObject* to, Reg
         }
 
         const MAddress receipt = requests.Wait(queued.request);
+        if (receipt == 0) {
+            CHECK_DETAIL(!forwarding->IsFreeRegion() && !forwarding->IsGarbageRegion(),
+                         "relocation request failed after owner retirement from=%p region=%p",
+                         from, forwarding);
+            if (MutatorRelocate::StatsOn()) {
+                MutatorRelocate::NoteWaitGiveUp();
+            }
+            return from;
+        }
         BaseObject* ready = reinterpret_cast<BaseObject*>(receipt);
         const bool stableInPlace = ready == from && forwarding->IsCompacted();
         CHECK_DETAIL(receipt != 0 && (ready != from || stableInPlace) &&

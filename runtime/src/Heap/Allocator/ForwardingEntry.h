@@ -15,7 +15,7 @@
 namespace MapleRuntime {
 
 // zForwardingEntry.hpp:32-47 was populated:1 | to_offset:45 | from_index:18 (2 MiB pages).
-// Our regions exceed 2 MiB; 18-bit from_index refused those inserts (OverflowRefusals)
+// Our regions exceed 2 MiB; 18-bit from_index sends those inserts to the exact-key overflow receipt.
 // while the copy still stamped FORWARDED. D7-a: to_offset 45→40 (1 TiB heap),
 // from_index 18→23 (64 MiB region). kMax* still refuse rather than truncate.
 class ForwardingEntry {

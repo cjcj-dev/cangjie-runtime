@@ -603,10 +603,18 @@ public:
                     return fromRegionList.TakeHeadRegion(RegionInfo::RegionType::LONE_FROM_REGION);
                 });
             if (!selected) {
-                break;
+                selected = regionManager.GetRelocationRequestQueue().SynchronizePoll();
+                if (selected.workersDone) {
+                    break;
+                }
+                if (!selected) {
+                    continue;
+                }
             }
             if (!selected.is_request()) {
-                regionManager.ForwardRegion<G>(static_cast<RegionInfo*>(selected.ordinary));
+                RegionInfo* region = static_cast<RegionInfo*>(selected.ordinary);
+                regionManager.ForwardRegion<G>(region);
+                regionManager.CompleteRelocationRequests(region);
                 continue;
             }
 
@@ -616,13 +624,7 @@ public:
             if (fromRegionList.TryDeleteRegion(region, RegionInfo::RegionType::FROM_REGION,
                                                RegionInfo::RegionType::LONE_FROM_REGION)) {
                 regionManager.ForwardRegion<G>(region);
-                const MAddress receipt = ForwardingTable::FindTo(selected.request->from());
-                if (receipt != 0) {
-                    (void)regionManager.GetRelocationRequestQueue().Publish(selected.request->from(), receipt);
-                }
-                CHECK_DETAIL(receipt != 0,
-                             "requested relocation completed without receipt from=%#zx region=%p",
-                             static_cast<size_t>(selected.request->from()), region);
+                regionManager.CompleteRelocationRequests(region);
             }
         }
     }
@@ -2131,22 +2133,28 @@ template<Generation G>
 void RegionManager::ForwardFromRegions(GCThreadPool* threadPool)
 {
     if (threadPool != nullptr) {
-        int32_t threadNum = threadPool->GetMaxThreadNum() + 1;
+        int32_t threadNum = threadPool->GetMaxActiveThreadNum() + 1;
         // We won't change fromRegionList during gc, so we can use it without lock.
         size_t regionCount = fromRegionList.GetRegionCount();
-        if (UNLIKELY(regionCount == 0)) {
-            return;
-        }
+        (void)regionCount;
 
         // we start threadPool before adding work so that we can concurrently add tasks;
+        relocationRequestQueue.BeginWorkers(static_cast<size_t>(threadNum));
         threadPool->Start();
         for (int32_t i = 0; i < threadNum; ++i) {
             threadPool->AddWork(new (std::nothrow) ForwardTask<G>(*this, fromRegionList));
         }
         threadPool->WaitFinish();
     } else {
+        relocationRequestQueue.BeginWorkers(1);
         ForwardFromRegions<G>();
     }
+}
+
+size_t RegionManager::CompleteRelocationRequests(RegionInfo* region)
+{
+    return relocationRequestQueue.CompleteOwner(
+        region, [](MAddress from) { return ForwardingTable::FindTo(from); });
 }
 
 namespace {
@@ -2373,7 +2381,13 @@ void RegionManager::ForwardFromRegions()
                 return fromRegionList.TakeHeadRegion(RegionInfo::RegionType::LONE_FROM_REGION);
             });
         if (!selected) {
-            break;
+            selected = relocationRequestQueue.SynchronizePoll();
+            if (selected.workersDone) {
+                break;
+            }
+            if (!selected) {
+                continue;
+            }
         }
         RegionInfo* region = selected.is_request() ? static_cast<RegionInfo*>(selected.request->owner())
                                                    : static_cast<RegionInfo*>(selected.ordinary);
@@ -2384,15 +2398,7 @@ void RegionManager::ForwardFromRegions()
         }
         MRT_ASSERT(region->IsValidRegion(), "the head region of fromRegionList is invalid");
         ForwardRegion<G>(region);
-        if (selected.is_request()) {
-            const MAddress receipt = ForwardingTable::FindTo(selected.request->from());
-            if (receipt != 0) {
-                (void)relocationRequestQueue.Publish(selected.request->from(), receipt);
-            }
-            CHECK_DETAIL(receipt != 0,
-                         "requested relocation completed without receipt from=%#zx region=%p",
-                         static_cast<size_t>(selected.request->from()), region);
-        }
+        CompleteRelocationRequests(region);
     }
 
     VLOG(REPORT, "forward %zu from-region units", fromRegionList.GetUnitCount());

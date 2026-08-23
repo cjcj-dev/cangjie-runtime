@@ -197,6 +197,7 @@ public:
     template<Generation G>
     void ForwardRegion(RegionInfo* region);
     RelocationRequestQueue& GetRelocationRequestQueue() { return relocationRequestQueue; }
+    size_t CompleteRelocationRequests(RegionInfo* region);
     // Before clearing the young flag on a promoted region, record every live
     // old→young out-edge that mutators skipped while the source was still young.
     static size_t RecordPromotedCrossGenEdges(RegionInfo* region);
@@ -822,6 +823,7 @@ public:
     template<Generation G>
     void PrepareFromRegionList()
     {
+        relocationRequestQueue.BeginCycle();
         size_t retainedRegions = 0;
         size_t retainedBytes = 0;
         size_t markQuarantinedRegions = 0;
