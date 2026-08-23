@@ -22,6 +22,7 @@
 #include "Heap/Collector/CollectorResources.h"
 #include "Heap/Collector/GcRequest.h"
 #include "Heap/Heap.h"
+#include "Heap/Allocator/RegionSpace.h"
 #include "Mutator/Mutator.h"
 #include "ObjectModel/MArray.inline.h"
 #include "TypeInfoManager.h"
@@ -97,6 +98,13 @@ enum class YieldGc : uint8_t {
     NONE,
     YOUNG,
     FULL,
+};
+
+enum class AllocationSource : uint8_t {
+    INACTIVE,
+    DIRTY,
+    RELEASED,
+    GARBAGE,
 };
 
 struct SegmentedArrayContext {
@@ -299,6 +307,88 @@ bool PrepareExactDirtyLargeExtent(SegmentedArrayContext& ctx)
     return true;
 }
 
+bool PrepareExactLargeExtent(AllocationSource source, SegmentedArrayContext& ctx)
+{
+    RegionManager& manager =
+        reinterpret_cast<RegionSpace&>(Heap::GetHeap().GetAllocator()).GetRegionManager();
+    const MIndex arraySize = CalculateArraySize(kLargeRefLength, RefField<>::GetSize());
+    const size_t unitCount =
+        (static_cast<size_t>(arraySize) + RegionInfo::UNIT_SIZE - 1) / RegionInfo::UNIT_SIZE;
+
+    if (source == AllocationSource::INACTIVE) {
+        ctx.dirtyAddress = manager.GetInactiveZone();
+        return true;
+    }
+
+    RegionInfo* prepared = manager.TakeRegion(
+        unitCount, RegionInfo::UnitRole::LARGE_SIZED_UNITS, false, true, true);
+    if (prepared == nullptr) {
+        return false;
+    }
+    ctx.dirtyAddress = prepared->GetRegionStart();
+    switch (source) {
+        case AllocationSource::DIRTY:
+            manager.ReclaimRegion(prepared);
+            break;
+        case AllocationSource::RELEASED:
+            (void)manager.ReleaseRegion(prepared);
+            break;
+        case AllocationSource::GARBAGE:
+            (void)manager.CollectRegion<Generation::Old>(prepared);
+            break;
+        case AllocationSource::INACTIVE:
+            return false;
+    }
+    if (source == AllocationSource::DIRTY || source == AllocationSource::GARBAGE) {
+        std::memset(reinterpret_cast<void*>(ctx.dirtyAddress), ctx.dirtyByte,
+                    unitCount * RegionInfo::UNIT_SIZE);
+    }
+    return true;
+}
+
+void* RunAllocationSourceCase(void* rawSource)
+{
+    const uintptr_t mode = reinterpret_cast<uintptr_t>(rawSource);
+    const AllocationSource source = static_cast<AllocationSource>(mode & 0xffU);
+    const bool nativeContext = (mode & 0x100U) != 0;
+    SegmentedArrayContext ctx(kLargeRefLength);
+    if (!PrepareExactLargeExtent(source, ctx)) {
+        return reinterpret_cast<void*>(1);
+    }
+    const uintptr_t expectedAddress = ctx.dirtyAddress;
+    if (source == AllocationSource::INACTIVE || source == AllocationSource::RELEASED) {
+        ctx.dirtyAddress = 0;
+    }
+
+    Mutator* mutator = Mutator::GetMutator();
+    if (nativeContext) {
+        mutator->SetManagedContext(false);
+    }
+    MArray* array = MCC_NewObjArray(GetReferenceArrayTypeInfos().array, kLargeRefLength);
+    if (nativeContext) {
+        mutator->SetManagedContext(true);
+    }
+    size_t status = ctx.failures;
+    status += array == nullptr ? 1 : 0;
+    status += reinterpret_cast<uintptr_t>(array) == expectedAddress ? 0 : 1;
+    status += ctx.publishCount == 1 ? 0 : 1;
+    status += ctx.yieldCount >= 2 ? 0 : 1;
+    status += ctx.withdrawCount == 1 ? 0 : 1;
+    status += array != nullptr && AllSlotsAreRawNull(array) ? 0 : 1;
+    if (source == AllocationSource::DIRTY || source == AllocationSource::GARBAGE) {
+        status += ctx.checkedDirtyBoundary ? 0 : 1;
+    }
+    std::fprintf(stderr,
+                 "[SEGMENTED_ARRAY_SOURCE] context=%s source=%u status=%zu expected=%#lx array=%p "
+                 "publish=%zu yield=%zu withdraw=%zu dirty=%d null=%d\n",
+                 nativeContext ? "native" : "managed", static_cast<unsigned>(source), status,
+                 static_cast<unsigned long>(expectedAddress),
+                 static_cast<void*>(array), ctx.publishCount, ctx.yieldCount, ctx.withdrawCount,
+                 ctx.checkedDirtyBoundary, array != nullptr && AllSlotsAreRawNull(array));
+    std::fflush(stderr);
+    return reinterpret_cast<void*>(status);
+}
+
 void* RunSegmentedCase(void* rawMode)
 {
     const YieldGc gc = static_cast<YieldGc>(reinterpret_cast<uintptr_t>(rawMode));
@@ -350,11 +440,19 @@ void* RunSegmentedCase(void* rawMode)
     return reinterpret_cast<void*>(status);
 }
 
-void* RunSmallReferenceCase(void*)
+void* RunSmallReferenceCase(void* rawNative)
 {
     constexpr MIndex length = 16;
     SegmentedArrayContext ctx(length);
+    Mutator* mutator = Mutator::GetMutator();
+    const bool nativeContext = reinterpret_cast<uintptr_t>(rawNative) != 0;
+    if (nativeContext) {
+        mutator->SetManagedContext(false);
+    }
     MArray* array = MCC_NewObjArray(GetReferenceArrayTypeInfos().array, length);
+    if (nativeContext) {
+        mutator->SetManagedContext(true);
+    }
     size_t status = 0;
     status += array == nullptr ? 1 : 0;
     status += ctx.publishCount == 0 ? 0 : 1;
@@ -364,11 +462,19 @@ void* RunSmallReferenceCase(void*)
     return reinterpret_cast<void*>(status);
 }
 
-void* RunLargePrimitiveCase(void*)
+void* RunLargePrimitiveCase(void* rawNative)
 {
     constexpr MIndex length = static_cast<MIndex>(MArray::LARGE_REF_ARRAY_INIT_SEGMENT_SIZE * 2 + 1);
     SegmentedArrayContext ctx(length);
+    Mutator* mutator = Mutator::GetMutator();
+    const bool nativeContext = reinterpret_cast<uintptr_t>(rawNative) != 0;
+    if (nativeContext) {
+        mutator->SetManagedContext(false);
+    }
     MArray* array = MCC_NewArray8(GetByteArrayTypeInfos().array, length);
+    if (nativeContext) {
+        mutator->SetManagedContext(true);
+    }
     size_t status = 0;
     status += array == nullptr ? 1 : 0;
     status += ctx.publishCount == 0 ? 0 : 1;
@@ -428,15 +534,71 @@ GC_TEST(SegmentedArrayInit, YieldKeepsInvisibleRootAndPublishesBoundary)
     GC_EXPECT_EQ(RunRuntimeCase(RunSegmentedCase, static_cast<uintptr_t>(YieldGc::NONE)), 0);
 }
 
+GC_TEST(SegmentedArrayInit, ManagedFirstInactiveExtentUsesSegmentedInitializer)
+{
+    GC_EXPECT_EQ(RunRuntimeCase(RunAllocationSourceCase,
+                                static_cast<uintptr_t>(AllocationSource::INACTIVE)), 0);
+}
+
+GC_TEST(SegmentedArrayInit, ManagedDirtyExtentUsesSegmentedInitializer)
+{
+    GC_EXPECT_EQ(RunRuntimeCase(RunAllocationSourceCase,
+                                static_cast<uintptr_t>(AllocationSource::DIRTY)), 0);
+}
+
+GC_TEST(SegmentedArrayInit, ManagedReleasedExtentUsesSegmentedInitializer)
+{
+    GC_EXPECT_EQ(RunRuntimeCase(RunAllocationSourceCase,
+                                static_cast<uintptr_t>(AllocationSource::RELEASED)), 0);
+}
+
+GC_TEST(SegmentedArrayInit, ManagedGarbageExtentUsesSegmentedInitializer)
+{
+    GC_EXPECT_EQ(RunRuntimeCase(RunAllocationSourceCase,
+                                static_cast<uintptr_t>(AllocationSource::GARBAGE)), 0);
+}
+
+GC_TEST(SegmentedArrayInit, NativeFirstInactiveExtentUsesSegmentedInitializer)
+{
+    GC_EXPECT_EQ(RunRuntimeCase(RunAllocationSourceCase,
+                                0x100U | static_cast<uintptr_t>(AllocationSource::INACTIVE)), 0);
+}
+
+GC_TEST(SegmentedArrayInit, NativeDirtyExtentUsesSegmentedInitializer)
+{
+    GC_EXPECT_EQ(RunRuntimeCase(RunAllocationSourceCase,
+                                0x100U | static_cast<uintptr_t>(AllocationSource::DIRTY)), 0);
+}
+
+GC_TEST(SegmentedArrayInit, NativeReleasedExtentUsesSegmentedInitializer)
+{
+    GC_EXPECT_EQ(RunRuntimeCase(RunAllocationSourceCase,
+                                0x100U | static_cast<uintptr_t>(AllocationSource::RELEASED)), 0);
+}
+
+GC_TEST(SegmentedArrayInit, NativeGarbageExtentUsesSegmentedInitializer)
+{
+    GC_EXPECT_EQ(RunRuntimeCase(RunAllocationSourceCase,
+                                0x100U | static_cast<uintptr_t>(AllocationSource::GARBAGE)), 0);
+}
+
 GC_TEST(SegmentedArrayInit, EpochFlipRestartsAndRewritesPublishedBlock)
 {
     GC_EXPECT_EQ(RunRuntimeCase(RunSegmentedCase, static_cast<uintptr_t>(YieldGc::FULL)), 0);
+}
+
+GC_TEST(SegmentedArrayInit, EpochFlipRestartsAndRewritesPublishedBlockParallel)
+{
     GC_EXPECT_EQ(RunRuntimeCase(RunSegmentedCase, static_cast<uintptr_t>(YieldGc::FULL), 2), 0);
 }
 
 GC_TEST(SegmentedArrayInit, YoungGcRepairsIncompleteArrayRoot)
 {
     GC_EXPECT_EQ(RunRuntimeCase(RunSegmentedCase, static_cast<uintptr_t>(YieldGc::YOUNG)), 0);
+}
+
+GC_TEST(SegmentedArrayInit, YoungGcRepairsIncompleteArrayRootParallel)
+{
     GC_EXPECT_EQ(RunRuntimeCase(RunSegmentedCase, static_cast<uintptr_t>(YieldGc::YOUNG), 2), 0);
 }
 
@@ -445,9 +607,19 @@ GC_TEST(SegmentedArrayInit, SmallReferenceArrayKeepsFastPath)
     GC_EXPECT_EQ(RunRuntimeCase(RunSmallReferenceCase, 0), 0);
 }
 
+GC_TEST(SegmentedArrayInit, NativeSmallReferenceArrayKeepsFastPath)
+{
+    GC_EXPECT_EQ(RunRuntimeCase(RunSmallReferenceCase, 1), 0);
+}
+
 GC_TEST(SegmentedArrayInit, LargePrimitiveArrayKeepsFastPath)
 {
     GC_EXPECT_EQ(RunRuntimeCase(RunLargePrimitiveCase, 0), 0);
+}
+
+GC_TEST(SegmentedArrayInit, NativeLargePrimitiveArrayKeepsFastPath)
+{
+    GC_EXPECT_EQ(RunRuntimeCase(RunLargePrimitiveCase, 1), 0);
 }
 
 #endif // MRT_GC_UNIT_TESTS

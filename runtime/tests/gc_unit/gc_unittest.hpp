@@ -118,7 +118,16 @@ inline int RunAll()
 {
     int failed = 0;
     int passed = 0;
+    // Exact-name filtering gives each product fault arm an independent process
+    // and output. A typo must not turn that arm into a vacuous green run.
+    const char* filter = std::getenv("GC_UNIT_FILTER");
     for (const auto& t : Registry()) {
+        if (filter != nullptr) {
+            const std::string fullName = std::string(t.suite) + "." + t.name;
+            if (fullName != filter) {
+                continue;
+            }
+        }
         try {
             t.fn();
             std::printf("[  PASS  ] %s.%s\n", t.suite, t.name);
@@ -136,6 +145,9 @@ inline int RunAll()
     }
     const int tests = passed + failed;
     std::printf("[========] %d tests: %d passed, %d failed\n", tests, passed, failed);
+    if (filter != nullptr && tests == 0) {
+        std::fprintf(stderr, "[  ERROR ] GC_UNIT_FILTER matched no test: %s\n", filter);
+    }
 
     // The runtime has atexit diagnostics on stderr (for example ZForwardingLife's summary).  A
     // caller that merges stdout and stderr can therefore receive a tally split by diagnostics when
@@ -157,7 +169,7 @@ inline int RunAll()
             }
         }
     }
-    return failed == 0 && tallyWritten ? 0 : 1;
+    return failed == 0 && tallyWritten && (filter == nullptr || tests != 0) ? 0 : 1;
 }
 
 } // namespace GcUnit
