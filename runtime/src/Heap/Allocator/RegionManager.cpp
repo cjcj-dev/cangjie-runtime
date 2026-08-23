@@ -596,9 +596,34 @@ public:
     void Execute(size_t) override
     {
         while (true) {
-            RegionInfo* region = fromRegionList.TakeHeadRegion(RegionInfo::RegionType::LONE_FROM_REGION);
-            if (region == nullptr) { break; }
-            regionManager.ForwardRegion<G>(region);
+            // zRelocate.cpp:1193-1203: serve a mutator's requested receipt
+            // before advancing the ordinary relocation iterator.
+            RelocationRequestQueue::Selection selected =
+                regionManager.GetRelocationRequestQueue().SelectBeforeOrdinary([this]() -> void* {
+                    return fromRegionList.TakeHeadRegion(RegionInfo::RegionType::LONE_FROM_REGION);
+                });
+            if (!selected) {
+                break;
+            }
+            if (!selected.is_request()) {
+                regionManager.ForwardRegion<G>(static_cast<RegionInfo*>(selected.ordinary));
+                continue;
+            }
+
+            RegionInfo* region = static_cast<RegionInfo*>(selected.request->owner());
+            // The list transition is the single relocation owner. If an ordinary
+            // worker won first, it will publish the requested receipt and wake us.
+            if (fromRegionList.TryDeleteRegion(region, RegionInfo::RegionType::FROM_REGION,
+                                               RegionInfo::RegionType::LONE_FROM_REGION)) {
+                regionManager.ForwardRegion<G>(region);
+                const MAddress receipt = ForwardingTable::FindTo(selected.request->from());
+                if (receipt != 0) {
+                    (void)regionManager.GetRelocationRequestQueue().Publish(selected.request->from(), receipt);
+                }
+                CHECK_DETAIL(receipt != 0,
+                             "requested relocation completed without receipt from=%#zx region=%p",
+                             static_cast<size_t>(selected.request->from()), region);
+            }
         }
     }
 
@@ -2343,12 +2368,31 @@ void RegionManager::ForwardFromRegions()
     // next young cycle can revisit stale list state.  A zero-helper execution
     // is serial, but it must still detach and mark each unit LONE_FROM_REGION.
     while (true) {
-        RegionInfo* region = fromRegionList.TakeHeadRegion(RegionInfo::RegionType::LONE_FROM_REGION);
-        if (region == nullptr) {
+        RelocationRequestQueue::Selection selected =
+            relocationRequestQueue.SelectBeforeOrdinary([this]() -> void* {
+                return fromRegionList.TakeHeadRegion(RegionInfo::RegionType::LONE_FROM_REGION);
+            });
+        if (!selected) {
             break;
+        }
+        RegionInfo* region = selected.is_request() ? static_cast<RegionInfo*>(selected.request->owner())
+                                                   : static_cast<RegionInfo*>(selected.ordinary);
+        if (selected.is_request() &&
+            !fromRegionList.TryDeleteRegion(region, RegionInfo::RegionType::FROM_REGION,
+                                            RegionInfo::RegionType::LONE_FROM_REGION)) {
+            continue;
         }
         MRT_ASSERT(region->IsValidRegion(), "the head region of fromRegionList is invalid");
         ForwardRegion<G>(region);
+        if (selected.is_request()) {
+            const MAddress receipt = ForwardingTable::FindTo(selected.request->from());
+            if (receipt != 0) {
+                (void)relocationRequestQueue.Publish(selected.request->from(), receipt);
+            }
+            CHECK_DETAIL(receipt != 0,
+                         "requested relocation completed without receipt from=%#zx region=%p",
+                         static_cast<size_t>(selected.request->from()), region);
+        }
     }
 
     VLOG(REPORT, "forward %zu from-region units", fromRegionList.GetUnitCount());
@@ -3006,7 +3050,8 @@ void RegionManager::CompactRegion(RegionInfo* region)
             collector.CopyObject(*currentObj, *toObj, size);
             toObj->SetStateCode(ObjectState::NORMAL);
             std::atomic_thread_fence(std::memory_order_release);
-            ForwardingTable::InsertMapping(currentPtr, toAddress);
+            const MAddress receipt = ForwardingTable::InsertMapping(currentPtr, toAddress);
+            (void)relocationRequestQueue.Publish(currentPtr, receipt);
             region->RecordCompactRoute(offset, toAddress);
 
         }
@@ -3125,7 +3170,8 @@ void RegionManager::CompactRegion(RegionInfo* region, RegionInfo* toRegion1)
             collector.CopyObject(*currentObj, *toObj, size);
             toObj->SetStateCode(ObjectState::NORMAL);
             std::atomic_thread_fence(std::memory_order_release);
-            ForwardingTable::InsertMapping(currentPtr, toAddress);
+            const MAddress receipt = ForwardingTable::InsertMapping(currentPtr, toAddress);
+            (void)relocationRequestQueue.Publish(currentPtr, receipt);
             region->RecordCompactRoute(offset, toAddress);
 
         }
@@ -3151,7 +3197,8 @@ void RegionManager::CompactRegion(RegionInfo* region, RegionInfo* toRegion1)
             collector.CopyObject(*currentObj, *toObj, size);
             toObj->SetStateCode(ObjectState::NORMAL);
             std::atomic_thread_fence(std::memory_order_release);
-            ForwardingTable::InsertMapping(currentPtr, toAddress);
+            const MAddress receipt = ForwardingTable::InsertMapping(currentPtr, toAddress);
+            (void)relocationRequestQueue.Publish(currentPtr, receipt);
             region->RecordCompactRoute(offset, toAddress);
 
         }

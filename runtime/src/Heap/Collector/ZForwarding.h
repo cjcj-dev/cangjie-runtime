@@ -10,8 +10,10 @@
 #include <atomic>
 #include <cstddef>
 #include <cstdint>
+#include <functional>
 #include <mutex>
 #include <new>
+#include <unordered_map>
 
 #include "Heap/Allocator/ForwardingEntry.h"
 #include "Heap/Allocator/ZAttachedArray.h"
@@ -31,6 +33,11 @@ public:
     using AttachedArray = ZAttachedArray<ZForwarding, std::atomic<uint64_t>>;
     static constexpr uint32_t kAlignShift = 3;
     static constexpr size_t kNotStored = SIZE_MAX;
+
+    struct Receipt {
+        MAddress address;
+        bool installed;
+    };
 
     static uint32_t nentries(uint32_t liveObjects)
     {
@@ -132,15 +139,20 @@ public:
     // zForwarding.inline.hpp:248-252 — miss is null, never geometry.
     MAddress find(MAddress from) const
     {
-        ForwardingCursor cursor = 0;
-        const ForwardingEntry entry = find(index(from), &cursor);
-        if (!entry.populated()) {
-            return 0;
+        const uintptr_t fromIndex = index(from);
+        if (fromIndex <= ForwardingEntry::kMaxFromIndex) {
+            ForwardingCursor cursor = 0;
+            const ForwardingEntry entry = find(fromIndex, &cursor);
+            if (entry.populated()) {
+                return _heapBase + static_cast<MAddress>(entry.to_offset());
+            }
         }
-        return _heapBase + static_cast<MAddress>(entry.to_offset());
+        std::lock_guard<std::mutex> lock(_overflowLock);
+        auto found = _overflow.find(from);
+        return found == _overflow.end() ? 0 : found->second;
     }
 
-    size_t insert(uintptr_t fromIndex, size_t toOffset, ForwardingCursor* cursor)
+    size_t insert(uintptr_t fromIndex, size_t toOffset, ForwardingCursor* cursor, bool* installed = nullptr)
     {
         const ForwardingEntry neu(fromIndex, toOffset);
         std::atomic_thread_fence(std::memory_order_release);
@@ -149,6 +161,9 @@ public:
             uint64_t expected = 0;
             if (words[*cursor].compare_exchange_strong(expected, neu.raw(), std::memory_order_relaxed,
                                                        std::memory_order_relaxed)) {
+                if (installed != nullptr) {
+                    *installed = true;
+                }
                 return toOffset;
             }
             ForwardingEntry prev = ForwardingEntry::FromRaw(expected);
@@ -159,6 +174,9 @@ public:
             bool full = true;
             for (size_t probes = 0; probes < _entries.length() && entry.populated(); ++probes) {
                 if (entry.from_index() == fromIndex) {
+                    if (installed != nullptr) {
+                        *installed = false;
+                    }
                     return entry.to_offset();
                 }
                 entry = next(cursor);
@@ -186,25 +204,49 @@ public:
         return n;
     }
 
-    MAddress insert(MAddress from, MAddress to)
+    Receipt insert_receipt(MAddress from, MAddress to, const std::function<void()>& beforeFirstCas = {})
     {
         ForwardingCursor cursor = 0;
         const uintptr_t fromIndex = index(from);
-        if (fromIndex > ForwardingEntry::kMaxFromIndex) {
-            OverflowRefusals().fetch_add(1, std::memory_order_relaxed);
-            return 0;
-        }
-        (void)find(fromIndex, &cursor);
         const size_t toOffset = static_cast<size_t>(to - _heapBase);
-        if (toOffset > ForwardingEntry::kMaxToOffset) {
+        const bool encodable = fromIndex <= ForwardingEntry::kMaxFromIndex &&
+            toOffset <= ForwardingEntry::kMaxToOffset;
+        if (encodable) {
+            const ForwardingEntry existing = find(fromIndex, &cursor);
+            if (existing.populated()) {
+                return Receipt{ _heapBase + static_cast<MAddress>(existing.to_offset()), false };
+            }
+            if (beforeFirstCas) {
+                beforeFirstCas();
+            }
+            bool installed = false;
+            const size_t finalOff = insert(fromIndex, toOffset, &cursor, &installed);
+            if (finalOff != kNotStored) {
+                return Receipt{ _heapBase + static_cast<MAddress>(finalOff), installed };
+            }
+        } else {
             OverflowRefusals().fetch_add(1, std::memory_order_relaxed);
-            return 0;
         }
-        const size_t finalOff = insert(fromIndex, toOffset, &cursor);
-        if (finalOff == kNotStored) {
-            return 0;
+
+        // The attached array is deliberately bounded, but receipt installation is
+        // total. Rare estimate/encoding overflow lives in this per-forwarding map;
+        // readers consult it after the lock-free table. Recheck the primary table
+        // under the overflow lock so a concurrent CAS winner cannot be shadowed.
+        std::lock_guard<std::mutex> lock(_overflowLock);
+        if (encodable) {
+            ForwardingCursor retryCursor = 0;
+            const ForwardingEntry existing = find(fromIndex, &retryCursor);
+            if (existing.populated()) {
+                return Receipt{ _heapBase + static_cast<MAddress>(existing.to_offset()), false };
+            }
         }
-        return _heapBase + static_cast<MAddress>(finalOff);
+        auto inserted = _overflow.emplace(from, to);
+        return Receipt{ inserted.first->second, inserted.second };
+    }
+
+    MAddress insert(MAddress from, MAddress to)
+    {
+        return insert_receipt(from, to).address;
     }
 
     // zForwarding.cpp:51-53 / :86-194. Dual-inited; product still uses RegionInfo copies.
@@ -235,6 +277,8 @@ private:
           _ref_lock(),
           _ref_count(1),
           _done(false),
+          _overflowLock(),
+          _overflow(),
           _to_life_n(0),
           _kept_seen_expire(false),
           _provisional(provisional)
@@ -254,6 +298,8 @@ private:
     mutable std::mutex _ref_lock;
     std::atomic<int32_t> _ref_count;
     std::atomic<bool> _done;
+    mutable std::mutex _overflowLock;
+    std::unordered_map<MAddress, MAddress> _overflow;
     struct ToLife {
         MAddress start;
         uint8_t legacySeq;

@@ -24,6 +24,7 @@
 #include "Common/RunType.h"
 #include "FreeRegionManager.h"
 #include "Heap/GcThreadPool.h"
+#include "Heap/Collector/RelocationRequestQueue.h"
 #include "RegionList.h"
 #include "Heap/Verify/GarbRegionDiag.h"
 #include "Heap/Verify/TraceClear.h"
@@ -195,6 +196,7 @@ public:
     void ForwardFromRegions();
     template<Generation G>
     void ForwardRegion(RegionInfo* region);
+    RelocationRequestQueue& GetRelocationRequestQueue() { return relocationRequestQueue; }
     // Before clearing the young flag on a promoted region, record every live
     // old→young out-edge that mutators skipped while the source was still young.
     static size_t RecordPromotedCrossGenEdges(RegionInfo* region);
@@ -1145,6 +1147,7 @@ private:
     // fromRegionList is a list of full regions waiting to be collected (i.e. for forwarding).
     // region type must be FROM_REGION.
     RegionList fromRegionList;
+    RelocationRequestQueue relocationRequestQueue;
     RegionList ghostFromRegionList;
 
     // regions exempted by ExemptFromRegions, which will not be moved during current GC.

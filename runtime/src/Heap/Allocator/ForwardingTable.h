@@ -68,7 +68,11 @@ public:
     static ZForwarding* GetEntries(MAddress addr);
 
     // After copy: zRelocate.cpp:367-372
+    static ZForwarding::Receipt InstallMapping(MAddress from, MAddress to);
     static MAddress InsertMapping(MAddress from, MAddress to);
+    // The object-header publication decision is deliberately a named invariant
+    // so gc_unit can prove the old "mapped==0, still FORWARDED" arm red.
+    static bool ReceiptAllowsForwarded(MAddress mapped) { return mapped != 0; }
     static uint64_t StaleToLifeCount();
     static MAddress FindTo(MAddress from);
     // Retired-only lookup for a bad-colour load whose from page has already

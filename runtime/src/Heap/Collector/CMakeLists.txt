@@ -20,6 +20,7 @@ set(SRC_LIST
     "LiveInfo.cpp"
     "ForwardDataManager.cpp"
     "PromotedRegionDomain.cpp"
+    "RelocationRequestQueue.cpp"
     "ZForwardingLife.cpp"
 )
 
