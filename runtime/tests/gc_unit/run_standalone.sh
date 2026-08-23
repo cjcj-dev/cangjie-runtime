@@ -39,6 +39,17 @@ if [[ "${MRT_TESTABLE_INTERNALS:-0}" == "1" ]]; then
   RANGE_REGISTRY_SOURCES=("$SRC/test_range_registry.cpp")
 fi
 
+# The M0 counter accessor is deliberately absent from the default product. Compile its five
+# observer tests only when the linked SO was built with MRT_GC_UNIT_TESTS=ON.
+M0_TEST_ARGS=()
+M0_TEST_ACCESS=off
+if nm -D --defined-only "$RUNTIME_LIB_DIR/libcangjie-runtime.so" 2>/dev/null | c++filt |
+    /usr/bin/grep 'M0ExitDiagnostics::GetCounts' >/dev/null; then
+  M0_TEST_ARGS=(-DMRT_GC_UNIT_TEST_ACCESS=1 "$SRC/test_m0_exit.cpp")
+  M0_TEST_ACCESS=on
+fi
+echo "M0_TEST_ACCESS=$M0_TEST_ACCESS"
+
 BOUNDS_INC="$ROOT/runtime/third_party/third_party_bounds_checking_function/include"
 INC_FLAGS=(
   -I"$SRC"
@@ -100,6 +111,7 @@ $CXX -std=gnu++17 -O0 -g -Wall -Wextra -pthread -fno-rtti \
      "$SRC/test_current_object_ref.cpp" \
      "$SRC/test_fillerobj.cpp" \
     "$SRC/test_i2_readref.cpp" \
+    "${M0_TEST_ARGS[@]}" \
     "$SRC/test_fwdreturn.cpp" \
     "$SRC/test_fnlz_roots.cpp" \
     "$SRC/test_mark_stack_entry.cpp" \

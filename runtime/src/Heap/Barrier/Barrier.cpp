@@ -11,6 +11,7 @@
 #include "Heap/Barrier/StoreBarrierBuffer.h"
 #include "Heap/Allocator/RegionInfo.h"
 #include "Heap/Verify/ZgcInvariants.h"
+#include "Heap/Verify/M0ExitDiagnostics.h"
 #include "Heap/Allocator/RegionSpace.h"
 #include "Heap/Collector/Collector.h"
 #include "Heap/Collector/CollectorResources.h"
@@ -998,6 +999,9 @@ BaseObject* Barrier::ReadReference(BaseObject* obj, RefField<false>& field) cons
                     RefField<> goodField = theCollector.GetAndTryTagRefField(handed);
                     handed = ZgcSelfHealLoadGood(field, field.GetFieldValue(), goodField.GetFieldValue(),
                                                  HealSite::IdleReadReference);
+                } else {
+                    M0ExitDiagnostics::Note(M0ExitDiagnostics::Exit::ReadBarrier, handed, &field, obj,
+                                            static_cast<uint8_t>(phase));
                 }
             }
         }

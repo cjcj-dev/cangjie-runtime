@@ -79,6 +79,12 @@ endif()
 include(${CMAKE_CURRENT_SOURCE_DIR}/config.cmake)
 include(${CMAKE_CURRENT_SOURCE_DIR}/SetupAr.cmake)
 
+if (MRT_GC_UNIT_TESTS)
+    # Test-only visibility for observers such as M0ExitDiagnostics::GetCounts.
+    # Correctness/diagnostic product paths must remain outside this definition.
+    add_compile_definitions(MRT_GC_UNIT_TEST_ACCESS=1)
+endif()
+
 if (MRT_GCV2_UNTAG_BREADCRUMB)
     add_compile_definitions(MRT_GCV2_UNTAG_BREADCRUMB)
 endif()
