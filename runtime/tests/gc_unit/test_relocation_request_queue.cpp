@@ -22,6 +22,7 @@ GC_TEST(RelocationRequestQueue, RequestedReceiptIsClaimedBeforeOrdinaryAndComple
     int ordinary = 0;
     constexpr MAddress kFrom = 0x1000;
     constexpr MAddress kTo = 0x2000;
+    queue.BeginWorkers(1);
     RelocationRequestQueue::EnqueueResult added = queue.Add(&owner, kFrom);
     GC_EXPECT_TRUE(added.inserted);
 
@@ -75,7 +76,6 @@ GC_TEST(RelocationRequestQueue, RequestedReceiptIsClaimedBeforeOrdinaryAndComple
 GC_TEST(RelocationRequestQueue, FailedOwnerCompletionReleasesWaiterWithoutReceipt)
 {
     RelocationRequestQueue queue;
-    queue.BeginCycle();
     queue.BeginWorkers(1);
     int owner = 0;
     constexpr MAddress kFrom = 0x3000;
@@ -105,7 +105,6 @@ GC_TEST(RelocationRequestQueue, FailedOwnerCompletionReleasesWaiterWithoutReceip
 GC_TEST(RelocationRequestQueue, LastWorkerAndAddHaveOneAtomicProgressDecision)
 {
     RelocationRequestQueue queue;
-    queue.BeginCycle();
     queue.BeginWorkers(1);
     int owner = 0;
     constexpr MAddress kFrom = 0x4000;
@@ -132,10 +131,35 @@ GC_TEST(RelocationRequestQueue, LastWorkerAndAddHaveOneAtomicProgressDecision)
     GC_EXPECT_EQ(queue.Wait(late.request), static_cast<MAddress>(0));
 }
 
+GC_TEST(RelocationRequestQueue, ProductPreparationCannotReopenClosedWorkerGeneration)
+{
+    RegionManager manager;
+    RelocationRequestQueue& queue = manager.GetRelocationRequestQueue();
+    queue.BeginWorkers(1);
+    GC_EXPECT_TRUE(queue.SynchronizePoll().workersDone);
+
+    // EvacuateYoungRegions performs PrepareForwardTable<Young> again after
+    // ForwardFromSpace has closed the worker generation. Exercise its product
+    // consumer directly: preparation may retire forwarding state, but it must
+    // not reactivate the request queue without workers.
+    manager.PrepareFromRegionList<Generation::Young>();
+
+    int lateOwner = 0;
+    const auto late = queue.Add(&lateOwner, 0x5008);
+    GC_EXPECT_FALSE(late.accepted);
+    if (late.accepted) {
+        // Keep the deliberate reopen arm finite: report this test instead of
+        // leaving its accepted request with no worker and stalling the suite.
+        (void)queue.Fail(late.request->from());
+    }
+    GC_EXPECT_TRUE(late.request->state() == RelocationRequestQueue::State::FAILED);
+    GC_EXPECT_EQ(queue.Wait(late.request), static_cast<MAddress>(0));
+    GC_EXPECT_EQ(queue.PendingCount(), static_cast<size_t>(0));
+}
+
 GC_TEST(RelocationRequestQueue, AddWakesAWorkerSynchronizedOnAnEmptyQueue)
 {
     RelocationRequestQueue queue;
-    queue.BeginCycle();
     queue.BeginWorkers(2);
     int owner = 0;
     constexpr MAddress kFrom = 0x8000;
@@ -175,7 +199,6 @@ GC_TEST(RelocationRequestQueue, RegionManagerCompletesRetainedOwnerThroughProduc
     GcHeapFixture fx;
     RegionManager manager;
     RelocationRequestQueue& queue = manager.GetRelocationRequestQueue();
-    queue.BeginCycle();
     queue.BeginWorkers(1);
     const MAddress from = fx.region0->GetRegionStart();
     const auto added = queue.Add(fx.region0, from);

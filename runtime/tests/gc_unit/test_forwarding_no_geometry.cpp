@@ -70,7 +70,7 @@ GC_TEST(ForwardingNoGeometry, ArmedMissIsNullNotGeometry)
     ForwardingTable::ClearEntries(fx.region0->GetRegionStart(), fx.region0->GetRegionSize());
     ForwardingTable::DropRetiredCovering(fx.region0->GetRegionStart(), fx.region0->GetRegionSize());
     fx.region0->SetRouteState(RegionInfo::NORMAL);
-    fx.region0->metadata.liveInfo0 = nullptr;
+    fx.region0->RetireFromPageMetadata();
     fx.region0->metadata.liveInfo = nullptr;
     fx.FreePlanted(live);
 }
@@ -121,7 +121,7 @@ GC_TEST(ForwardingNoGeometry, ArmedLookupAndSuccessfulExclusiveCopyPublishProduc
     // queue helper with a hand-fed receipt.
     RegionSpace& productSpace = reinterpret_cast<RegionSpace&>(Heap::GetHeap().GetAllocator());
     RelocationRequestQueue& requests = productSpace.GetRegionManager().GetRelocationRequestQueue();
-    requests.BeginCycle();
+    requests.BeginWorkers(1);
     BaseObject* copyFrom = fx.PlaceObject(fx.region0->GetRegionStart() + 128);
     BaseObject* copyTo = fx.PlaceObject(fx.region1->GetRegionStart() + 128);
     fx.region0->SetRegionAllocPtr(reinterpret_cast<MAddress>(copyFrom) + 64);
@@ -151,6 +151,7 @@ GC_TEST(ForwardingNoGeometry, ArmedLookupAndSuccessfulExclusiveCopyPublishProduc
     GC_EXPECT_EQ(requests.Wait(requested.request), copyToAddr);
     GC_EXPECT_TRUE(copyFrom->IsForwarded());
     GC_EXPECT_EQ(fx.region0->CopyInflight(), 0);
+    GC_EXPECT_TRUE(requests.SynchronizePoll().workersDone);
 #endif
 
     ForwardingTable::Remove(fx.region0->GetRegionStart(), fx.region0->GetRegionSize());
