@@ -586,53 +586,41 @@ const size_t RegionManager::MAX_UNIT_COUNT_PER_REGION = (128 * KB) / MapleRuntim
 const size_t RegionManager::HUGE_PAGE = (2048 * KB) / MapleRuntime::MRT_PAGE_SIZE;;
 
 template<Generation G>
-class ForwardTask : public HeapWork {
-public:
-    ForwardTask(RegionManager& manager, RegionList& fromSpace)
-        : regionManager(manager), fromRegionList(fromSpace) {}
-
-    ~ForwardTask() = default;
-
-    void Execute(size_t) override
-    {
-        while (true) {
-            // zRelocate.cpp:1193-1203: serve a mutator's requested receipt
-            // before advancing the ordinary relocation iterator.
-            RelocationRequestQueue::Selection selected =
-                regionManager.GetRelocationRequestQueue().SelectBeforeOrdinary([this]() -> void* {
-                    return fromRegionList.TakeHeadRegion(RegionInfo::RegionType::LONE_FROM_REGION);
-                });
-            if (!selected) {
-                selected = regionManager.GetRelocationRequestQueue().SynchronizePoll();
-                if (selected.workersDone) {
-                    break;
-                }
-                if (!selected) {
-                    continue;
-                }
+void ForwardTask<G>::Execute(size_t)
+{
+    while (true) {
+        // zRelocate.cpp:1193-1203: serve a mutator's requested receipt
+        // before advancing the ordinary relocation iterator.
+        RelocationRequestQueue::Selection selected =
+            regionManager.GetRelocationRequestQueue().SelectBeforeOrdinary([this]() -> void* {
+                return fromRegionList.TakeHeadRegion(RegionInfo::RegionType::LONE_FROM_REGION);
+            });
+        if (!selected) {
+            selected = regionManager.GetRelocationRequestQueue().SynchronizePoll();
+            if (selected.workersDone) {
+                break;
             }
-            if (!selected.is_request()) {
-                RegionInfo* region = static_cast<RegionInfo*>(selected.ordinary);
-                regionManager.ForwardRegion<G>(region);
-                regionManager.CompleteRelocationRequests(region);
+            if (!selected) {
                 continue;
             }
+        }
+        if (!selected.is_request()) {
+            RegionInfo* region = static_cast<RegionInfo*>(selected.ordinary);
+            regionManager.ForwardRegion<G>(region);
+            regionManager.CompleteRelocationRequests(region);
+            continue;
+        }
 
-            RegionInfo* region = static_cast<RegionInfo*>(selected.request->owner());
-            // The list transition is the single relocation owner. If an ordinary
-            // worker won first, it will publish the requested receipt and wake us.
-            if (fromRegionList.TryDeleteRegion(region, RegionInfo::RegionType::FROM_REGION,
-                                               RegionInfo::RegionType::LONE_FROM_REGION)) {
-                regionManager.ForwardRegion<G>(region);
-                regionManager.CompleteRelocationRequests(region);
-            }
+        RegionInfo* region = static_cast<RegionInfo*>(selected.request->owner());
+        // The list transition is the single relocation owner. If an ordinary
+        // worker won first, it will publish the requested receipt and wake us.
+        if (fromRegionList.TryDeleteRegion(region, RegionInfo::RegionType::FROM_REGION,
+                                           RegionInfo::RegionType::LONE_FROM_REGION)) {
+            regionManager.ForwardRegion<G>(region);
+            regionManager.CompleteRelocationRequests(region);
         }
     }
-
-private:
-    RegionManager& regionManager;
-    RegionList& fromRegionList;
-};
+}
 
 #if defined(GCINFO_DEBUG) && GCINFO_DEBUG
 void RegionInfo::DumpRegionInfo(LogType type) const
@@ -3734,6 +3722,8 @@ template void RegionManager::ForwardFromRegions<Generation::Young>(GCThreadPool*
 template void RegionManager::ForwardFromRegions<Generation::Old>(GCThreadPool*);
 template void RegionManager::ForwardFromRegions<Generation::Young>();
 template void RegionManager::ForwardFromRegions<Generation::Old>();
+template class ForwardTask<Generation::Young>;
+template class ForwardTask<Generation::Old>;
 template void RegionManager::ForwardRegion<Generation::Young>(RegionInfo*);
 template void RegionManager::ForwardRegion<Generation::Old>(RegionInfo*);
 } // namespace MapleRuntime

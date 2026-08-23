@@ -6,7 +6,9 @@
 
 #include <atomic>
 
+#include "gc_heap_fixture.hpp"
 #include "Heap/GcThreadPool.h"
+#include "Heap/Allocator/RegionManager.h"
 #include "Heap/Collector/RelocationRequestQueue.h"
 #include "gc_unittest.hpp"
 
@@ -52,4 +54,28 @@ GC_TEST(GCThreadPool, RelocationRequestHasOneCompletionOwnerBeforeWaitFinishRetu
     GC_EXPECT_EQ(completionOwners.load(std::memory_order_relaxed), static_cast<size_t>(1));
     GC_EXPECT_EQ(queue.CompletionCount(), static_cast<uint64_t>(1));
     pool.Exit();
+}
+
+GC_TEST(GCThreadPool, ActualForwardTaskClosesClaimedRequestExactlyOnceWhenOwnerExits)
+{
+    GcHeapFixture fx;
+    RegionManager manager;
+    RegionList emptyFromSpace("gc-unit-empty-from");
+    RelocationRequestQueue& queue = manager.GetRelocationRequestQueue();
+    queue.BeginCycle();
+    queue.BeginWorkers(1);
+    const MAddress from = reinterpret_cast<MAddress>(fx.obj0);
+    const auto added = queue.Add(fx.region0, from);
+    GC_EXPECT_TRUE(added.accepted);
+
+    // Execute the same product HeapWork that ForwardFromRegions submits. The
+    // owner is deliberately absent from the from list, modeling an installer
+    // which lost ownership and exited before publishing a receipt.
+    ForwardTask<Generation::Old> task(manager, emptyFromSpace);
+    task.Execute(0);
+
+    GC_EXPECT_TRUE(added.request->state() == RelocationRequestQueue::State::FAILED);
+    GC_EXPECT_EQ(queue.Wait(added.request), static_cast<MAddress>(0));
+    GC_EXPECT_EQ(queue.CompletionCount(), static_cast<uint64_t>(1));
+    GC_EXPECT_EQ(queue.PendingCount(), static_cast<size_t>(0));
 }

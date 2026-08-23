@@ -39,6 +39,8 @@ class CompactCollector;
 class VerifyRegions;
 class TagReuseProbe;
 class WCollector;
+template<Generation G>
+class ForwardTask;
 
 struct YoungCollectionStats {
     size_t candidateRegions = 0;
@@ -1199,6 +1201,23 @@ private:
 #endif
     std::mutex freePinnedSlotListMutex;
     FreePinnedSlotLists freePinnedSlotLists;
+};
+
+// The actual relocation HeapWork submitted by ForwardFromRegions. Keep Execute
+// out of line so the unit runner resolves this product implementation from
+// libcangjie-runtime instead of compiling a private test copy.
+template<Generation G>
+class MRT_EXPORT ForwardTask : public HeapWork {
+public:
+    ForwardTask(RegionManager& manager, RegionList& fromSpace)
+        : regionManager(manager), fromRegionList(fromSpace) {}
+
+    ~ForwardTask() override = default;
+    void Execute(size_t) override;
+
+private:
+    RegionManager& regionManager;
+    RegionList& fromRegionList;
 };
 } // namespace MapleRuntime
 #endif // MRT_REGION_MANAGER_H

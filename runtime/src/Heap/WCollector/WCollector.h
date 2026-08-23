@@ -82,6 +82,8 @@ public:
 using CrossRefHandler = void(*)(BaseObject*, BaseObject*);
 
 class WCollector : public CopyCollector {
+    friend struct MutatorPublishTestAccess;
+
 public:
     explicit WCollector(Allocator& allocator, CollectorResources& resources)
         : CopyCollector(allocator, resources), fwdTable(reinterpret_cast<RegionSpace&>(allocator))
