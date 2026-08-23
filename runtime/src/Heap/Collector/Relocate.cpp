@@ -2550,9 +2550,11 @@ BaseObject* WCollector::WaitRoutedTipReady(BaseObject* from, BaseObject* to, Reg
                     BaseObject* geometric = space.GetRegionManager().FindPublishedRoute(from, forwarding).dest;
                     if (geometric != nullptr &&
                         ZForwarding::DestUsable(reinterpret_cast<MAddress>(geometric))) {
-                        (void)ForwardingTable::InsertMapping(reinterpret_cast<MAddress>(from),
-                                                             reinterpret_cast<MAddress>(geometric));
-                        return geometric;
+                        const MAddress receipt = ForwardingTable::InsertMapping(
+                            reinterpret_cast<MAddress>(from), reinterpret_cast<MAddress>(geometric));
+                        (void)space.GetRegionManager().GetRelocationRequestQueue().Publish(
+                            reinterpret_cast<MAddress>(from), receipt);
+                        return reinterpret_cast<BaseObject*>(receipt);
                     }
                 }
                 return nullptr;
@@ -2640,56 +2642,39 @@ BaseObject* WCollector::WaitRoutedTipReady(BaseObject* from, BaseObject* to, Reg
         }
         if (wn <= 8 || (wn & (wn - 1)) == 0) {
             LOG(RTLOG_ERROR,
-                "[GCV2][region-wait] n=%zu from=%p region=%p route=%u done=%u — wait region publish",
+                "[GCV2][region-wait] n=%zu from=%p region=%p route=%u done=%u — queue receipt request",
                 wn, from, forwarding, static_cast<unsigned>(rs),
                 static_cast<unsigned>(forwarding->IsForwardingDone()));
         }
-        auto regionIsPublished = [&]() -> bool {
-            const RegionInfo::RouteState now = forwarding->GetRouteState();
-            return now == RegionInfo::RouteState::FORWARDED ||
-                now == RegionInfo::RouteState::COMPACTED || forwarding->IsForwardingDone();
-        };
-        const int spinCap = MutatorRelocate::kWaitRegionPublish ? MutatorRelocate::kRegionWaitSpins
-                                                                : MutatorRelocate::kInflightWaitSpins;
-        int spins = 0;
-        for (; spins < spinCap; ++spins) {
-            if (regionIsPublished()) {
-                BaseObject* ready = lookupTo();
-                if (ready != nullptr && Heap::IsHeapAddress(ready) && ready->IsValidObject()) {
-                    g_regionGot.fetch_add(1, std::memory_order_relaxed);
-                    if (MutatorRelocate::StatsOn()) {
-                        MutatorRelocate::NoteRegionWaitSpins(spins);
-                        MutatorRelocate::NoteRegionWaitGot();
-                        MutatorRelocate::NoteWaitReceipt();
-                    }
-                    return ready;
-                }
-                // Published and table still misses: VisitLive hole. Keep-from is
-                // legal (cjpmnull2 Exempt: hole pages are not collected this cycle).
-                if (MutatorRelocate::StatsOn()) {
-                    MutatorRelocate::NoteRegionWaitSpins(spins);
-                    MutatorRelocate::NoteRegionWaitPublishedMiss();
-                    MutatorRelocate::NoteWaitGiveUp();
-                }
-                return from;
-            }
-            sched_yield();
+        // A mutator-discovered object must be in the worker's relocation domain
+        // before the request is visible. The request then replaces the bounded
+        // yield: it can complete only with this object's published receipt.
+        EnsureRouteDomainMembership(const_cast<WCollector*>(this), from);
+        RelocationRequestQueue& requests = space.GetRegionManager().GetRelocationRequestQueue();
+        RelocationRequestQueue::EnqueueResult queued =
+            requests.Add(forwarding, reinterpret_cast<MAddress>(from));
+
+        // Close publish-before-enqueue: installation may have won between the
+        // first lookup and Add(). Publishing an already-existing receipt is the
+        // only alternate completion path.
+        BaseObject* raced = lookupTo();
+        if (raced != nullptr && Heap::IsHeapAddress(raced) && raced->IsValidObject()) {
+            (void)requests.Publish(reinterpret_cast<MAddress>(from), reinterpret_cast<MAddress>(raced));
         }
-        BaseObject* last = lookupTo();
-        if (last != nullptr && Heap::IsHeapAddress(last) && last->IsValidObject()) {
-            if (MutatorRelocate::StatsOn()) {
-                MutatorRelocate::NoteRegionWaitSpins(spins);
-                MutatorRelocate::NoteRegionWaitGot();
-                MutatorRelocate::NoteWaitReceipt();
-            }
-            return last;
-        }
+
+        const MAddress receipt = requests.Wait(queued.request);
+        BaseObject* ready = reinterpret_cast<BaseObject*>(receipt);
+        const bool stableInPlace = ready == from && forwarding->IsCompacted();
+        CHECK_DETAIL(receipt != 0 && (ready != from || stableInPlace) &&
+                         Heap::IsHeapAddress(ready) && ready->IsValidObject(),
+                     "relocation request returned invalid receipt from=%p receipt=%#zx",
+                     from, static_cast<size_t>(receipt));
+        g_regionGot.fetch_add(1, std::memory_order_relaxed);
         if (MutatorRelocate::StatsOn()) {
-            MutatorRelocate::NoteRegionWaitSpins(spins);
-            MutatorRelocate::NoteRegionWaitTimeout();
-            MutatorRelocate::NoteWaitGiveUp();
+            MutatorRelocate::NoteRegionWaitGot();
+            MutatorRelocate::NoteWaitReceipt();
         }
-        return from;
+        return ready;
     }
     if constexpr (MutatorRelocate::kUnpublishedMeansKeepFrom) {
         if (MutatorRelocate::StatsOn()) {
@@ -3035,19 +3020,19 @@ BaseObject* WCollector::ForwardObjectExclusive(BaseObject* obj, BaseObject* toOb
         obj->UnlockObject(ObjectState::NORMAL);
         return nullptr;
     }
-    const MAddress mapped =
-        ForwardingTable::InsertMapping(reinterpret_cast<MAddress>(obj), reinterpret_cast<MAddress>(toObj));
-    if (mapped == 0) {
-        static std::atomic<uint64_t> g_insertLost{ 0 };
-        const uint64_t n = g_insertLost.fetch_add(1, std::memory_order_relaxed) + 1;
-        if (n <= 16 || (n & (n - 1)) == 0) {
-            LOG(RTLOG_ERROR,
-                "[FWDTABLE] InsertMapping miss after copy n=%llu from=%p to=%p overflow=%llu full=%llu",
-                static_cast<unsigned long long>(n), static_cast<void*>(obj), static_cast<void*>(toObj),
-                static_cast<unsigned long long>(ZForwarding::OverflowRefusals().load(std::memory_order_relaxed)),
-                static_cast<unsigned long long>(ZForwarding::FullRefusals().load(std::memory_order_relaxed)));
-        }
+    const ZForwarding::Receipt receipt =
+        ForwardingTable::InstallMapping(reinterpret_cast<MAddress>(obj), reinterpret_cast<MAddress>(toObj));
+    const MAddress mapped = receipt.address;
+    if (!ForwardingTable::ReceiptAllowsForwarded(mapped)) {
+        // FORWARDED is a publication of the receipt, not merely of CopyObject.
+        // If the table itself could not be installed, restore a retryable header;
+        // never expose a forwarded object whose answer is the retiring from slot.
+        obj->UnlockObject(ObjectState::NORMAL);
+        return nullptr;
     }
+    RegionSpace& regionSpace = reinterpret_cast<RegionSpace&>(theAllocator);
+    (void)regionSpace.GetRegionManager().GetRelocationRequestQueue().Publish(
+        reinterpret_cast<MAddress>(obj), mapped);
     // portmutreloc: the copy just happened on this thread. InScope() is set only by
     // TryMutatorRelocate, so this counts objects a mutator relocated itself and nothing else --
     // the one number that distinguishes "the ported leg ran" from "the leg exists". GC workers
@@ -3068,6 +3053,6 @@ BaseObject* WCollector::ForwardObjectExclusive(BaseObject* obj, BaseObject* toOb
         }
     }
     obj->UnlockObject(ObjectState::FORWARDED);
-    return toObj;
+    return reinterpret_cast<BaseObject*>(mapped);
 }
 } // namespace MapleRuntime
