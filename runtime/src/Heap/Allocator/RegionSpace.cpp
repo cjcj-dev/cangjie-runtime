@@ -137,6 +137,11 @@ void RegionSpace::Init(const HeapParam& vmHeapParam)
     size_t heapSize = vmHeapParam.heapSize * 1024;
     size_t totalSize = RegionManager::GetHeapMemorySize(heapSize);
     size_t unitNum = RegionManager::GetHeapUnitCount(heapSize);
+    size_t metadataSize = RegionManager::GetMetadataSize(unitNum);
+    // Seal both process inputs before the first mmap. The values remain fixed
+    // for the complete reservation and physical-page lifetime.
+    const AddressSpaceBudget addressBudget = AddressSpaceBudget::SealProcessBudget();
+    const NumaTopology numaTopology = NumaTopology::SealProcessTopology();
 #if defined(CANGJIE_ASAN_SUPPORT)
     // asan's memory alias technique needs a shareable page
     opt.flags &= ~MAP_PRIVATE;
@@ -144,14 +149,14 @@ void RegionSpace::Init(const HeapParam& vmHeapParam)
     DLOG(SANITIZER, "mmap flags set to 0x%x", opt.flags);
 #endif
     // this must succeed otherwise it won't return
-    map = MemMap::MapMemory(totalSize, totalSize, opt);
+    map = MemMap::MapMemory(totalSize, metadataSize, opt, addressBudget, numaTopology);
 #if defined(CANGJIE_SANITIZER_SUPPORT) || defined(CANGJIE_GWPASAN_SUPPORT)
     Sanitizer::OnHeapAllocated(map->GetBaseAddr(), map->GetMappedSize());
 #endif
 
     Logger::GetLogger().SetMinimumLogLevel(CangjieRuntime::GetLogParam().logLevel);
     MAddress metadata = reinterpret_cast<MAddress>(map->GetBaseAddr());
-    regionManager.Initialize(unitNum, metadata);
+    regionManager.Initialize(unitNum, metadata, *map);
     reservedStart = regionManager.GetRegionHeapStart();
     reservedEnd = reinterpret_cast<MAddress>(map->GetMappedEndAddr());
 #if defined(MRT_DUMP_ADDRESS)

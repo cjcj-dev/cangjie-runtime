@@ -168,7 +168,7 @@ public:
 #if defined(__EULER__)
     void SetCacheRatio(double minSize, double maxSize, double defaultParam);
 #endif
-    void Initialize(size_t regionNum, uintptr_t regionInfoStart);
+    void Initialize(size_t regionNum, uintptr_t regionInfoStart, MemMap& memoryOwner);
 
     RegionManager()
         : freeRegionManager(*this), tlRegionList("thread local regions"), recentFullRegionList("recent full regions"),

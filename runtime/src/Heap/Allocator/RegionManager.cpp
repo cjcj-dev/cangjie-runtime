@@ -99,6 +99,7 @@ void Report(size_t listRegions, size_t listBytes)
 uintptr_t RegionInfo::UnitInfo::totalUnitCount = 0;
 uintptr_t RegionInfo::UnitInfo::heapStartAddress = 0;
 size_t RegionInfo::UnitInfo::unitSizeShift = 0;
+MemMap* RegionInfo::UnitInfo::memoryOwner = nullptr;
 
 // gatehot: cold OOB for GetUnitIdxAt — kept out of the hot function so the common
 // path can inline (was ~128 insns with dladdr/FATAL in the same body).
@@ -1055,12 +1056,9 @@ void RegionManager::SetCacheRatio(double minSize, double maxSize, double default
 }
 #endif
 
-void RegionManager::Initialize(size_t nUnit, uintptr_t regionInfoAddr)
+void RegionManager::Initialize(size_t nUnit, uintptr_t regionInfoAddr, MemMap& memoryOwner)
 {
     size_t metadataSize = GetMetadataSize(nUnit);
-#ifdef _WIN64
-    MemMap::CommitMemory(reinterpret_cast<void*>(regionInfoAddr), metadataSize);
-#endif
     this->regionInfoStart = regionInfoAddr;
     this->regionHeapStart = regionInfoAddr + metadataSize;
     this->regionHeapEnd = regionHeapStart + nUnit * RegionInfo::UNIT_SIZE;
@@ -1076,7 +1074,7 @@ void RegionManager::Initialize(size_t nUnit, uintptr_t regionInfoAddr)
     SetCacheRatio(0.0, 1.0, 1.0);
 #endif
     // propagate region heap layout
-    RegionInfo::Initialize(nUnit, regionHeapStart);
+    RegionInfo::Initialize(nUnit, regionHeapStart, &memoryOwner);
     freeRegionManager.Initialize(nUnit);
     this->exemptedRegionThreshold = CangjieRuntime::GetHeapParam().exemptionThreshold;
     DLOG(REPORT, "region info @0x%zx+%zu, heap [0x%zx, 0x%zx), unit count %zu", regionInfoAddr, metadataSize,
@@ -2068,10 +2066,7 @@ RegionInfo* RegionManager::TakeRegion(size_t num, RegionInfo::UnitRole type, boo
         if (reserved) {
             region = RegionInfo::InitRegionAt(addr, num, type);
             size_t idx = region->GetUnitIdx();
-#ifdef _WIN64
-            MemMap::CommitMemory(
-                reinterpret_cast<void*>(RegionInfo::GetUnitAddress(idx)), num * RegionInfo::UNIT_SIZE);
-#endif
+            RegionInfo::CommitUnits(idx, num);
             (void)idx; // eliminate compilation warning
             DLOG(REGION, "take inactive units [%zu+%zu, %zu) at [0x%zx, 0x%zx)", idx, num, idx + num,
                  RegionInfo::GetUnitAddress(idx), RegionInfo::GetUnitAddress(idx + num));

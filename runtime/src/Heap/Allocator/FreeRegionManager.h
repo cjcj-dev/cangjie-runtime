@@ -115,10 +115,7 @@ public:
                         continue;
                     }
                     FromPageDetach::ReusePermitScope reusePermit;
-#ifdef _WIN64
-                    MemMap::CommitMemory(
-                        reinterpret_cast<void*>(RegionInfo::GetUnitAddress(idx)), num * RegionInfo::UNIT_SIZE);
-#endif
+                    RegionInfo::CommitUnits(idx, num);
                     DLOG(REGION, "c-tree %p alloc released units[%u+%u, %u) @[0x%zx, 0x%zx), %u released-units left",
                         &releasedUnitTree, idx, num, idx + num, RegionInfo::GetUnitAddress(idx),
                         RegionInfo::GetUnitAddress(idx + num), releasedUnitTree.GetTotalCount());

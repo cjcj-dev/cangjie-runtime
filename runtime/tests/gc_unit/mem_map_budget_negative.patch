@@ -1,0 +1,8 @@
+diff --git a/runtime/src/Heap/Allocator/MemMap.cpp b/runtime/src/Heap/Allocator/MemMap.cpp
+--- a/runtime/src/Heap/Allocator/MemMap.cpp
++++ b/runtime/src/Heap/Allocator/MemMap.cpp
+@@ -326,3 +326,3 @@ MemMap* MemMap::TryMapMemory(size_t reqSize, size_t initSize, const Option& opt,
+     const size_t mappedSize = AllocUtilRndUp<size_t>(reqSize, ALLOC_UTIL_PAGE_SIZE);
+-    if (!budget.Allows(mappedSize)) {
++    if (false && !budget.Allows(mappedSize)) { // red proof: ignore VA preflight
+         return nullptr;

@@ -41,9 +41,6 @@ public:
         opt.tag = "maple_alloc_ros_sud";
         opt.reqBase = nullptr;
         memMap = MemMap::MapMemory(mapSize, mapSize, opt);
-#ifdef _WIN64
-        MemMap::CommitMemory(memMap->GetBaseAddr(), mapSize);
-#endif
         beginAddr = reinterpret_cast<MAddress>(memMap->GetBaseAddr());
         endAddr = reinterpret_cast<MAddress>(memMap->GetCurrEnd());
         Clear();
@@ -197,9 +194,6 @@ public:
         opt.tag = "maplert_alloc";
         opt.reqBase = nullptr;
         memMap = MemMap::MapMemory(mapSize, mapSize, opt);
-#ifdef _WIN64
-        MemMap::CommitMemory(memMap->GetBaseAddr(), mapSize);
-#endif
         currAddr = reinterpret_cast<MAddress>(memMap->GetBaseAddr());
         endAddr = reinterpret_cast<MAddress>(memMap->GetCurrEnd());
     }

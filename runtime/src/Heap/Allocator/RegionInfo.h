@@ -49,6 +49,7 @@
 #include "Heap/Allocator/RouteDestHold.h"
 #include "Heap/Verify/FromPageDetachCheck.h"
 #include "Heap/Allocator/ForwardingTable.h"
+#include "Heap/Allocator/MemMap.h"
 #include "Heap/Verify/MutatorRelocate.h"
 #include "Base/TimeUtils.h"
 #include "securec.h"
@@ -1693,10 +1694,11 @@ public:
         GARBAGE_REGION,
     };
 
-    static void Initialize(size_t nUnit, uintptr_t heapAddress)
+    static void Initialize(size_t nUnit, uintptr_t heapAddress, MemMap* memoryOwner = nullptr)
     {
         UnitInfo::totalUnitCount = nUnit;
         UnitInfo::heapStartAddress = heapAddress;
+        UnitInfo::memoryOwner = memoryOwner;
         // gatehot: UNIT_SIZE is page size (power of two). ctz → shift for GetUnitIdxAt.
         CHECK(UNIT_SIZE != 0 && (UNIT_SIZE & (UNIT_SIZE - 1)) == 0);
         UnitInfo::unitSizeShift = static_cast<size_t>(__builtin_ctzll(static_cast<unsigned long long>(UNIT_SIZE)));
@@ -1831,6 +1833,14 @@ public:
         MapleRuntime::MemorySet(unitAddress, size, 0, size);
     }
 
+    static void CommitUnits(size_t idx, size_t cnt)
+    {
+        void* unitAddress = reinterpret_cast<void*>(RegionInfo::GetUnitAddress(idx));
+        size_t size = cnt * RegionInfo::UNIT_SIZE;
+        CHECK_DETAIL(UnitInfo::memoryOwner != nullptr && UnitInfo::memoryOwner->CommitMemory(unitAddress, size),
+                     "commit outside heap reservation idx=%zu units=%zu", idx, cnt);
+    }
+
     static void ReleaseUnits(size_t idx, size_t cnt)
     {
         void* unitAddress = reinterpret_cast<void*>(RegionInfo::GetUnitAddress(idx));
@@ -1842,21 +1852,8 @@ public:
                      "CJRT_FROM_REUSE_GATE bypass reached ReleaseUnits idx=%zu units=%zu", idx, cnt);
         DLOG(REGION, "release physical memory for units [%zu+%zu, %zu) @[%p+%zu, 0x%zx)", idx, cnt, idx + cnt,
              unitAddress, size, RegionInfo::GetUnitAddress(idx + cnt));
-#if defined(_WIN64)
-        CHECK_E(UNLIKELY(!VirtualFree(unitAddress, size, MEM_DECOMMIT)), "VirtualFree failed in ReturnPage, errno: %s",
-                GetLastError());
-
-#elif defined(__APPLE__)
-        MemorySet(reinterpret_cast<uintptr_t>(unitAddress), size, 0, size);
-        void* ret = mmap(unitAddress, size, PROT_READ | PROT_WRITE, MAP_PRIVATE | MAP_ANONYMOUS | MAP_FIXED, -1, 0);
-        if (ret == MAP_FAILED) {
-            LOG(RTLOG_ERROR, "region mmmap fixed failed");
-        } else if (ret != reinterpret_cast<void*>(unitAddress)) {
-            LOG(RTLOG_ERROR, "mmap fixed at wrong addr %p->%p", unitAddress, ret);
-        }
-#else
-        (void)madvise(unitAddress, size, MADV_DONTNEED);
-#endif
+        CHECK_DETAIL(UnitInfo::memoryOwner != nullptr && UnitInfo::memoryOwner->ReleaseMemory(unitAddress, size),
+                     "release outside heap reservation idx=%zu units=%zu", idx, cnt);
 #ifdef CANGJIE_ASAN_SUPPORT
         Sanitizer::OnHeapMadvise(unitAddress, size);
 #endif
@@ -3509,6 +3506,7 @@ private:
         // propgated from RegionManager
         static uintptr_t heapStartAddress; // the address of the first region space to allocate objects
         static size_t totalUnitCount;
+        static MemMap* memoryOwner;
         // gatehot: log2(UNIT_SIZE); UNIT_SIZE is always a power-of-two page size.
         // Hot GetUnitIdxAt uses a shift instead of a runtime / on a non-constant divisor.
         static size_t unitSizeShift;
