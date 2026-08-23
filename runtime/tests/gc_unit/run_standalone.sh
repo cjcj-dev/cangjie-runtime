@@ -26,6 +26,7 @@ if [[ -z "$RUNTIME_LIB_DIR" || ! -f "$RUNTIME_LIB_DIR/libcangjie-runtime.so" ]];
   exit 2
 fi
 
+TEST_DEFINES=(-DMRT_ZSTAT_COMPILED=1)
 RANGE_REGISTRY_FLAGS=()
 RANGE_REGISTRY_SOURCES=()
 if [[ "${MRT_TESTABLE_INTERNALS:-0}" == "1" ]]; then
@@ -37,6 +38,18 @@ if [[ "${MRT_TESTABLE_INTERNALS:-0}" == "1" ]]; then
   fi
   RANGE_REGISTRY_FLAGS=(-DMRT_TESTABLE_INTERNALS=1)
   RANGE_REGISTRY_SOURCES=("$SRC/test_range_registry.cpp")
+fi
+
+# Keep the standalone test translation units in the same compile-time
+# configuration as the product SO they bind.  The default SO deliberately has
+# no segmented-array test hooks; an MRT_GC_UNIT_TESTS SO exports the hook and
+# must compile the corresponding integration tests into this executable.
+if nm -D "$RUNTIME_LIB_DIR/libcangjie-runtime.so" 2>/dev/null | \
+    /usr/bin/grep 'CJ_MRT_SetLargeArrayInitTestHooks' >/dev/null; then
+  TEST_DEFINES+=(-DMRT_GC_UNIT_TESTS=1)
+  echo "GC_UNIT_PRODUCT_CONFIGURATION=MRT_GC_UNIT_TESTS"
+else
+  echo "GC_UNIT_PRODUCT_CONFIGURATION=DEFAULT"
 fi
 
 BOUNDS_INC="$ROOT/runtime/third_party/third_party_bounds_checking_function/include"
@@ -53,7 +66,7 @@ fi
 
 $CXX -std=gnu++17 -O0 -g -Wall -Wextra -pthread -fno-rtti \
   "${RANGE_REGISTRY_FLAGS[@]}" \
-  -DMRT_ZSTAT_COMPILED=1 \
+  "${TEST_DEFINES[@]}" \
   "${INC_FLAGS[@]}" \
   "$SRC/gc_unit_main.cpp" \
   "$SRC/gc_unit_stubs.cpp" \

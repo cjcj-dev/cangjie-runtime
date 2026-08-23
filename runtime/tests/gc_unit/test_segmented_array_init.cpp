@@ -4,19 +4,25 @@
 
 #if defined(MRT_GC_UNIT_TESTS)
 
+#include <cstdint>
+#include <cstdio>
 #include <cstdlib>
 #include <cstring>
 #if defined(__linux__)
+#include <sched.h>
 #include <sys/wait.h>
 #include <unistd.h>
 #endif
 
-#include "gc_heap_fixture.hpp"
 #include "gc_unittest.hpp"
 
-#include "Heap/Collector/GcStats.h"
+#include "Cangjie.h"
+#include "Common/ScopedObjectAccess.h"
+#include "Heap/Collector/Collector.h"
+#include "Heap/Collector/CollectorResources.h"
+#include "Heap/Collector/GcRequest.h"
+#include "Heap/Heap.h"
 #include "Mutator/Mutator.h"
-#include "Mutator/ThreadLocal.h"
 #include "ObjectModel/MArray.inline.h"
 #include "TypeInfoManager.h"
 
@@ -87,21 +93,23 @@ ByteArrayTypeInfos& GetByteArrayTypeInfos()
     return infos;
 }
 
+enum class YieldGc : uint8_t {
+    NONE,
+    YOUNG,
+    FULL,
+};
+
 struct SegmentedArrayContext {
     static SegmentedArrayContext* current;
 
-    explicit SegmentedArrayContext(MIndex arrayLength) : length(arrayLength)
+    explicit SegmentedArrayContext(MIndex arrayLength, YieldGc requestedGc = YieldGc::NONE)
+        : length(arrayLength), gc(requestedGc)
     {
-        previousMutator = ThreadLocal::GetMutator();
-        mutator.Init();
-        mutator.SetInSaferegion(Mutator::SAFE_REGION_FALSE);
-        ThreadLocal::SetMutator(&mutator);
-
         LargeArrayInitTestHooks hooks;
-        hooks.allocate = Allocate;
         hooks.onPublish = OnPublish;
         hooks.onYield = OnYield;
         hooks.onWithdraw = OnWithdraw;
+        hooks.onRootVisit = OnRootVisit;
         current = this;
         CJ_MRT_SetLargeArrayInitTestHooks(&hooks);
     }
@@ -110,35 +118,117 @@ struct SegmentedArrayContext {
     {
         CJ_MRT_SetLargeArrayInitTestHooks(nullptr);
         current = nullptr;
-        ThreadLocal::SetMutator(previousMutator);
-        std::free(storage);
-    }
-
-    static MAddress Allocate(size_t size, AllocType)
-    {
-        void* memory = nullptr;
-        if (posix_memalign(&memory, alignof(MArray), size) != 0) {
-            return NULL_ADDRESS;
-        }
-        std::memset(memory, 0, size);
-        current->storage = memory;
-        current->storageSize = size;
-        ++current->allocations;
-        return reinterpret_cast<MAddress>(memory);
     }
 
     static void OnPublish(MArray* array)
     {
         ++current->publishCount;
         current->publishedArray = array;
+        if (!array->IsInvisibleObject()) {
+            ++current->failures;
+        }
+    }
+
+    static bool ByteRangeEquals(const uint8_t* begin, size_t size, uint8_t expected)
+    {
+        for (size_t i = 0; i < size; ++i) {
+            if (begin[i] != expected) {
+                return false;
+            }
+        }
+        return true;
     }
 
     static void OnYield(size_t segmentIndex)
     {
-        ++current->yieldCount;
-        current->lastYieldSegment = segmentIndex;
-        if (current->yieldAction != nullptr) {
-            current->yieldAction(segmentIndex);
+        SegmentedArrayContext& ctx = *current;
+        ++ctx.yieldCount;
+        if (segmentIndex == 0) {
+            ++ctx.firstSegmentYieldCount;
+        }
+
+        MArray* rootBefore = static_cast<MArray*>(Mutator::GetMutator()->LoadInvisibleRoot());
+        if (rootBefore == nullptr || rootBefore != ctx.publishedArray ||
+            rootBefore->GetTypeInfo() != GetReferenceArrayTypeInfos().array ||
+            rootBefore->GetLength() != ctx.length || !rootBefore->IsInvisibleObject()) {
+            ++ctx.failures;
+            return;
+        }
+        if (segmentIndex == 0) {
+            const StateWord beforeLock = rootBefore->GetStateWord();
+            if (!rootBefore->TryLockObject(beforeLock)) {
+                ++ctx.failures;
+            } else {
+                if (!rootBefore->IsInvisibleObject()) {
+                    ++ctx.failures;
+                }
+                rootBefore->UnlockObject(ObjectState::NORMAL);
+                if (!rootBefore->IsInvisibleObject()) {
+                    ++ctx.failures;
+                }
+            }
+        }
+
+        // Substantive allocator arm: exact dirty large-region reuse must expose
+        // one zeroed segment while leaving the next segment dirty. A pre-loop
+        // ClearUnits makes this suffix check fail at the first yield.
+        if (segmentIndex == 0 && !ctx.checkedDirtyBoundary && ctx.dirtyAddress != 0) {
+            ctx.checkedDirtyBoundary = true;
+            const uint8_t* content = rootBefore->ConvertToCArray();
+            const size_t segment = MArray::LARGE_REF_ARRAY_INIT_SEGMENT_SIZE;
+            if (reinterpret_cast<uintptr_t>(rootBefore) != ctx.dirtyAddress ||
+                !ByteRangeEquals(content, segment, 0) ||
+                !ByteRangeEquals(content + segment, segment, ctx.dirtyByte)) {
+                ++ctx.failures;
+            }
+        }
+
+        if (!ctx.requestedGc && ctx.gc != YieldGc::NONE && segmentIndex == 0) {
+            ctx.requestedGc = true;
+            ctx.gcCountBefore = g_gcCount.load(std::memory_order_acquire);
+            Mutator* mutator = Mutator::GetMutator();
+            U64 youngSeedRoot = 0;
+            if (ctx.gc == YieldGc::YOUNG) {
+                // Large arrays are old-generation regions. Plant one genuine
+                // young allocation so this request cannot take the empty-young
+                // fast path before VisitMinorRootSlots/FixMinorRootSlots.
+                ScopedObjectAccess access;
+                MArray* youngSeed = MCC_NewObjArray(GetReferenceArrayTypeInfos().array, 16);
+                if (youngSeed == nullptr) {
+                    ++ctx.failures;
+                } else {
+                    youngSeedRoot = Heap::GetHeap().RegisterExportRoot(youngSeed);
+                }
+            }
+            mutator->SetManagedContext(false);
+            if (ctx.gc == YieldGc::YOUNG) {
+                Heap::GetHeap().GetCollector().RequestGC(GC_REASON_YOUNG, false);
+                CollectorResources& resources = Heap::GetHeap().GetCollectorResources();
+                size_t attempts = 0;
+                while (!resources.IsGcStarted() && attempts++ < 1000000) {
+                    (void)sched_yield();
+                }
+                if (!resources.IsGcStarted()) {
+                    ++ctx.failures;
+                } else {
+                    resources.WaitForGCFinish();
+                }
+            } else {
+                Heap::GetHeap().GetCollector().RequestGC(GC_REASON_FORCE, false);
+            }
+            mutator->SetManagedContext(true);
+            if (youngSeedRoot != 0) {
+                Heap::GetHeap().RemoveExportObject(youngSeedRoot);
+            }
+            ctx.gcCountAfter = g_gcCount.load(std::memory_order_acquire);
+            MArray* rootAfter = static_cast<MArray*>(Mutator::GetMutator()->LoadInvisibleRoot());
+            if (ctx.gcCountAfter <= ctx.gcCountBefore || rootAfter == nullptr ||
+                rootAfter->GetTypeInfo() != GetReferenceArrayTypeInfos().array ||
+                rootAfter->GetLength() != ctx.length) {
+                ++ctx.failures;
+            }
+            ctx.rootMoved = rootAfter != rootBefore;
+            ctx.publishedArray = rootAfter;
         }
     }
 
@@ -146,83 +236,38 @@ struct SegmentedArrayContext {
     {
         ++current->withdrawCount;
         current->withdrawnArray = array;
+        if (array->IsInvisibleObject()) {
+            ++current->failures;
+        }
     }
 
-    using YieldAction = void (*)(size_t segmentIndex);
+    static void OnRootVisit(LargeArrayRootVisitSite site, BaseObject* object)
+    {
+        if (current->publishedArray != nullptr && object == current->publishedArray) {
+            current->rootVisitSites |= static_cast<uint32_t>(1U << static_cast<unsigned>(site));
+        }
+    }
+
     MIndex length;
-    Mutator mutator;
-    Mutator* previousMutator = nullptr;
-    void* storage = nullptr;
-    size_t storageSize = 0;
-    size_t allocations = 0;
+    YieldGc gc;
+    uintptr_t dirtyAddress = 0;
+    uint8_t dirtyByte = 0xa5;
     size_t publishCount = 0;
     size_t yieldCount = 0;
+    size_t firstSegmentYieldCount = 0;
     size_t withdrawCount = 0;
-    size_t lastYieldSegment = 0;
+    size_t failures = 0;
+    size_t gcCountBefore = 0;
+    size_t gcCountAfter = 0;
+    bool checkedDirtyBoundary = false;
+    bool requestedGc = false;
+    bool rootMoved = false;
+    uint32_t rootVisitSites = 0;
     MArray* publishedArray = nullptr;
     MArray* withdrawnArray = nullptr;
-    YieldAction yieldAction = nullptr;
-
-    size_t scannerRuns = 0;
-    size_t scannerFailures = 0;
-    bool flipped = false;
 };
 
 SegmentedArrayContext* SegmentedArrayContext::current = nullptr;
-
-void ScanInvisibleRoot(size_t)
-{
-    SegmentedArrayContext& ctx = *SegmentedArrayContext::current;
-    ++ctx.scannerRuns;
-#if defined(__linux__)
-    const pid_t child = fork();
-    if (child == 0) {
-#endif
-        bool sawRoot = false;
-        bool sawType = false;
-        bool sawLength = false;
-        size_t slots = 0;
-        size_t nullSlots = 0;
-        RootVisitor scanner = [&](RootSlot& root) {
-            sawRoot = true;
-            auto* array = static_cast<MArray*>(to_object(safe(root.LoadPlain(std::memory_order_acquire))));
-            sawType = array->GetTypeInfo() == GetReferenceArrayTypeInfos().array;
-            sawLength = array->GetLength() == ctx.length;
-            array->ForEachRefField([&](RefField<>& slot) {
-                ++slots;
-                if (is_null(slot.GetFieldValue())) {
-                    ++nullSlots;
-                }
-            });
-        };
-        ctx.mutator.VisitInvisibleRoot(scanner);
-        const bool valid = sawRoot && sawType && sawLength && slots == static_cast<size_t>(ctx.length) &&
-            nullSlots == slots;
-#if defined(__linux__)
-        _exit(valid ? 0 : 1);
-    }
-    int status = 0;
-    if (child < 0 || waitpid(child, &status, 0) != child || !WIFEXITED(status) || WEXITSTATUS(status) != 0) {
-        ++ctx.scannerFailures;
-    }
-#else
-    if (!valid) {
-        ++ctx.scannerFailures;
-    }
-#endif
-}
-
-void FlipEpochAndRewriteFirstBlock(size_t segmentIndex)
-{
-    SegmentedArrayContext& ctx = *SegmentedArrayContext::current;
-    if (ctx.flipped || segmentIndex != 0) {
-        return;
-    }
-    ctx.flipped = true;
-    g_gcCount.fetch_add(1, std::memory_order_release);
-    std::memset(ctx.publishedArray->ConvertToCArray(), 0xa5,
-                MArray::LARGE_REF_ARRAY_INIT_SEGMENT_SIZE);
-}
 
 bool AllSlotsAreRawNull(MArray* array)
 {
@@ -234,75 +279,175 @@ bool AllSlotsAreRawNull(MArray* array)
     });
     return allNull;
 }
+
+constexpr MIndex kLargeRefLength = static_cast<MIndex>(
+    (MArray::LARGE_REF_ARRAY_INIT_SEGMENT_SIZE * 2) / sizeof(void*) + 1);
+
+bool PrepareExactDirtyLargeExtent(SegmentedArrayContext& ctx)
+{
+    const MIndex contentBytes = kLargeRefLength * sizeof(RefField<>);
+    MArray* dirty = MCC_NewArray8(GetByteArrayTypeInfos().array, contentBytes);
+    if (dirty == nullptr) {
+        return false;
+    }
+    std::memset(dirty->ConvertToCArray(), ctx.dirtyByte, static_cast<size_t>(contentBytes));
+    ctx.dirtyAddress = reinterpret_cast<uintptr_t>(dirty);
+    dirty = nullptr;
+    Mutator::GetMutator()->SetManagedContext(false);
+    Heap::GetHeap().GetCollector().RequestGC(GC_REASON_FORCE, false);
+    Mutator::GetMutator()->SetManagedContext(true);
+    return true;
+}
+
+void* RunSegmentedCase(void* rawMode)
+{
+    const YieldGc gc = static_cast<YieldGc>(reinterpret_cast<uintptr_t>(rawMode));
+    SegmentedArrayContext ctx(kLargeRefLength, gc);
+    if (!PrepareExactDirtyLargeExtent(ctx)) {
+        return reinterpret_cast<void*>(1);
+    }
+
+    MArray* array = MCC_NewObjArray(GetReferenceArrayTypeInfos().array, kLargeRefLength);
+    size_t status = ctx.failures;
+    status += array == nullptr ? 1 : 0;
+    status += ctx.publishCount == 1 ? 0 : 1;
+    status += ctx.yieldCount >= 2 ? 0 : 1;
+    status += ctx.checkedDirtyBoundary ? 0 : 1;
+    status += ctx.withdrawCount == 1 ? 0 : 1;
+    status += array != nullptr && ctx.withdrawnArray == array ? 0 : 1;
+    status += array != nullptr && !array->IsInvisibleObject() ? 0 : 1;
+    status += Mutator::GetMutator()->LoadInvisibleRoot() == nullptr ? 0 : 1;
+    status += array != nullptr && AllSlotsAreRawNull(array) ? 0 : 1;
+    if (gc != YieldGc::NONE) {
+        status += ctx.requestedGc ? 0 : 1;
+        status += ctx.gcCountAfter > ctx.gcCountBefore ? 0 : 1;
+        status += ctx.firstSegmentYieldCount >= 2 ? 0 : 1;
+        if (gc == YieldGc::YOUNG) {
+            const uint32_t required =
+                (1U << static_cast<unsigned>(LargeArrayRootVisitSite::MUTATOR_STACK)) |
+                (1U << static_cast<unsigned>(LargeArrayRootVisitSite::MINOR_MARK)) |
+                (1U << static_cast<unsigned>(LargeArrayRootVisitSite::MINOR_RELOCATE)) |
+                (1U << static_cast<unsigned>(LargeArrayRootVisitSite::ITERATOR_SKIP));
+            status += (ctx.rootVisitSites & required) == required ? 0 : 1;
+        } else {
+            const uint32_t required =
+                (1U << static_cast<unsigned>(LargeArrayRootVisitSite::STACK_WATERMARK)) |
+                (1U << static_cast<unsigned>(LargeArrayRootVisitSite::REMEMBERED)) |
+                (1U << static_cast<unsigned>(LargeArrayRootVisitSite::ITERATOR_SKIP));
+            status += (ctx.rootVisitSites & required) == required ? 0 : 1;
+        }
+    }
+    std::fprintf(stderr,
+                 "[SEGMENTED_ARRAY_CASE] mode=%u status=%zu failures=%zu dirty=%d dirty_addr=%#lx "
+                 "array=%p publish=%zu yield=%zu first=%zu withdraw=%zu requested_gc=%d "
+                 "gc_before=%zu gc_after=%zu moved=%d root_sites=%#x null=%d\n",
+                 static_cast<unsigned>(gc), status, ctx.failures, ctx.checkedDirtyBoundary,
+                 static_cast<unsigned long>(ctx.dirtyAddress), static_cast<void*>(array), ctx.publishCount,
+                 ctx.yieldCount, ctx.firstSegmentYieldCount, ctx.withdrawCount, ctx.requestedGc,
+                 ctx.gcCountBefore, ctx.gcCountAfter, ctx.rootMoved, ctx.rootVisitSites,
+                 array != nullptr && AllSlotsAreRawNull(array));
+    std::fflush(stderr);
+    return reinterpret_cast<void*>(status);
+}
+
+void* RunSmallReferenceCase(void*)
+{
+    constexpr MIndex length = 16;
+    SegmentedArrayContext ctx(length);
+    MArray* array = MCC_NewObjArray(GetReferenceArrayTypeInfos().array, length);
+    size_t status = 0;
+    status += array == nullptr ? 1 : 0;
+    status += ctx.publishCount == 0 ? 0 : 1;
+    status += ctx.yieldCount == 0 ? 0 : 1;
+    status += ctx.withdrawCount == 0 ? 0 : 1;
+    status += array != nullptr && AllSlotsAreRawNull(array) ? 0 : 1;
+    return reinterpret_cast<void*>(status);
+}
+
+void* RunLargePrimitiveCase(void*)
+{
+    constexpr MIndex length = static_cast<MIndex>(MArray::LARGE_REF_ARRAY_INIT_SEGMENT_SIZE * 2 + 1);
+    SegmentedArrayContext ctx(length);
+    MArray* array = MCC_NewArray8(GetByteArrayTypeInfos().array, length);
+    size_t status = 0;
+    status += array == nullptr ? 1 : 0;
+    status += ctx.publishCount == 0 ? 0 : 1;
+    status += ctx.yieldCount == 0 ? 0 : 1;
+    status += ctx.withdrawCount == 0 ? 0 : 1;
+    return reinterpret_cast<void*>(status);
+}
+
+int RunRuntimeCase(CJTaskFunc task, uintptr_t argument, U32 processorCount = 1)
+{
+#if defined(__linux__)
+    const pid_t child = fork();
+    if (child == 0) {
+        if (argument == static_cast<uintptr_t>(YieldGc::FULL)) {
+            (void)setenv("MRT_GCV2_CONCURRENT_STACK_SCAN", "1", 1);
+        } else {
+            (void)unsetenv("MRT_GCV2_CONCURRENT_STACK_SCAN");
+        }
+        (void)setenv("cjProcessorNum", processorCount == 1 ? "1" : "2", 1);
+        RuntimeParam param {};
+        param.heapParam.heapSize = 32 * 1024;
+        param.coParam.processorNum = processorCount;
+        if (InitCJRuntime(&param) != E_OK) {
+            _exit(100);
+        }
+        CJThreadHandle handle = RunCJTask(task, reinterpret_cast<void*>(argument));
+        if (handle == nullptr) {
+            _exit(101);
+        }
+        void* result = nullptr;
+        if (GetTaskRet(handle, &result) != E_OK) {
+            _exit(102);
+        }
+        ReleaseHandle(handle);
+        const uintptr_t status = reinterpret_cast<uintptr_t>(result);
+        if (FiniCJRuntime() != E_OK) {
+            _exit(103);
+        }
+        _exit(status > 99 ? 99 : static_cast<int>(status));
+    }
+    int status = 0;
+    if (child < 0 || waitpid(child, &status, 0) != child || !WIFEXITED(status)) {
+        return 120;
+    }
+    return WEXITSTATUS(status);
+#else
+    (void)task;
+    (void)argument;
+    (void)processorCount;
+    return 0;
+#endif
+}
 } // namespace
 
 GC_TEST(SegmentedArrayInit, YieldKeepsInvisibleRootAndPublishesBoundary)
 {
-    GcHeapFixture heap;
-    constexpr MIndex length = static_cast<MIndex>(
-        (MArray::LARGE_REF_ARRAY_INIT_SEGMENT_SIZE * 2) / sizeof(void*) + 1);
-    SegmentedArrayContext ctx(length);
-    ctx.yieldAction = ScanInvisibleRoot;
-
-    MArray* array = MCC_NewObjArray(GetReferenceArrayTypeInfos().array, length);
-
-    GC_EXPECT_TRUE(array != nullptr);
-    GC_EXPECT_EQ(ctx.allocations, 1u);
-    GC_EXPECT_EQ(ctx.publishCount, 1u);
-    GC_EXPECT_TRUE(ctx.yieldCount >= 2u);
-    GC_EXPECT_EQ(ctx.scannerRuns, ctx.yieldCount);
-    GC_EXPECT_EQ(ctx.scannerFailures, 0u);
-    GC_EXPECT_EQ(ctx.withdrawCount, 1u);
-    GC_EXPECT_TRUE(ctx.withdrawnArray == array);
-    GC_EXPECT_TRUE(ctx.mutator.LoadInvisibleRoot() == nullptr);
+    GC_EXPECT_EQ(RunRuntimeCase(RunSegmentedCase, static_cast<uintptr_t>(YieldGc::NONE)), 0);
 }
 
 GC_TEST(SegmentedArrayInit, EpochFlipRestartsAndRewritesPublishedBlock)
 {
-    GcHeapFixture heap;
-    constexpr MIndex length = static_cast<MIndex>(
-        (MArray::LARGE_REF_ARRAY_INIT_SEGMENT_SIZE * 2) / sizeof(void*) + 1);
-    SegmentedArrayContext ctx(length);
-    ctx.yieldAction = FlipEpochAndRewriteFirstBlock;
+    GC_EXPECT_EQ(RunRuntimeCase(RunSegmentedCase, static_cast<uintptr_t>(YieldGc::FULL)), 0);
+    GC_EXPECT_EQ(RunRuntimeCase(RunSegmentedCase, static_cast<uintptr_t>(YieldGc::FULL), 2), 0);
+}
 
-    MArray* array = MCC_NewObjArray(GetReferenceArrayTypeInfos().array, length);
-
-    GC_EXPECT_TRUE(ctx.flipped);
-    GC_EXPECT_TRUE(ctx.yieldCount >= 4u);
-    GC_EXPECT_TRUE(AllSlotsAreRawNull(array));
-    GC_EXPECT_EQ(ctx.withdrawCount, 1u);
-    GC_EXPECT_TRUE(ctx.mutator.LoadInvisibleRoot() == nullptr);
+GC_TEST(SegmentedArrayInit, YoungGcRepairsIncompleteArrayRoot)
+{
+    GC_EXPECT_EQ(RunRuntimeCase(RunSegmentedCase, static_cast<uintptr_t>(YieldGc::YOUNG)), 0);
+    GC_EXPECT_EQ(RunRuntimeCase(RunSegmentedCase, static_cast<uintptr_t>(YieldGc::YOUNG), 2), 0);
 }
 
 GC_TEST(SegmentedArrayInit, SmallReferenceArrayKeepsFastPath)
 {
-    GcHeapFixture heap;
-    constexpr MIndex length = 16;
-    SegmentedArrayContext ctx(length);
-
-    MArray* array = MCC_NewObjArray(GetReferenceArrayTypeInfos().array, length);
-
-    GC_EXPECT_TRUE(array != nullptr);
-    GC_EXPECT_EQ(ctx.allocations, 1u);
-    GC_EXPECT_EQ(ctx.publishCount, 0u);
-    GC_EXPECT_EQ(ctx.yieldCount, 0u);
-    GC_EXPECT_EQ(ctx.withdrawCount, 0u);
-    GC_EXPECT_TRUE(AllSlotsAreRawNull(array));
+    GC_EXPECT_EQ(RunRuntimeCase(RunSmallReferenceCase, 0), 0);
 }
 
 GC_TEST(SegmentedArrayInit, LargePrimitiveArrayKeepsFastPath)
 {
-    GcHeapFixture heap;
-    constexpr MIndex length = static_cast<MIndex>(MArray::LARGE_REF_ARRAY_INIT_SEGMENT_SIZE * 2 + 1);
-    SegmentedArrayContext ctx(length);
-
-    MArray* array = MCC_NewArray8(GetByteArrayTypeInfos().array, length);
-
-    GC_EXPECT_TRUE(array != nullptr);
-    GC_EXPECT_EQ(ctx.allocations, 1u);
-    GC_EXPECT_EQ(ctx.publishCount, 0u);
-    GC_EXPECT_EQ(ctx.yieldCount, 0u);
-    GC_EXPECT_EQ(ctx.withdrawCount, 0u);
+    GC_EXPECT_EQ(RunRuntimeCase(RunLargePrimitiveCase, 0), 0);
 }
 
 #endif // MRT_GC_UNIT_TESTS

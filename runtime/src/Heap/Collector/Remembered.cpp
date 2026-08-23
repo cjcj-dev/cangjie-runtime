@@ -653,6 +653,10 @@ void WCollector::InvalidateOldTaggedRefs(bool requireSurvivedMark)
 
     auto makeRootVisitor = [this, trackFixed](RootAccount* acc) -> RootVisitor {
         return [this, trackFixed, acc](ObjectRef& root) {
+#if defined(MRT_GC_UNIT_TESTS)
+            NoteLargeArrayInitRootVisit(LargeArrayRootVisitSite::REMEMBERED,
+                                        to_object(safe(root.LoadPlain(std::memory_order_acquire))));
+#endif
             uintptr_t oldValue = raw(root.LoadPlain());
             HeapSlot<> observedBits(to_zpointer(oldValue));
             bool oldTagged = trackFixed && IsOldPointer(observedBits);

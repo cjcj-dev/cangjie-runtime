@@ -252,7 +252,7 @@ public:
     // take a region with *num* units for allocation
     // allowSaferegion=false: best-effort, never enter saferegion (ROUTING critical section).
     RegionInfo* TakeRegion(size_t num, RegionInfo::UnitRole, bool expectPhysicalMem = false,
-                           bool allowSaferegion = true);
+                           bool allowSaferegion = true, bool clearPayload = true);
 
     uintptr_t AllocPinnedFromFreeList(size_t size);
 
@@ -320,10 +320,11 @@ public:
     // note: AllocSmall() is always performed by region owned by mutator thread
     // thus no need to do in RegionManager
     // caller assures size is truely large (> region size)
-    uintptr_t AllocLarge(size_t size)
+    uintptr_t AllocLarge(size_t size, bool clearPayload = true)
     {
         size_t regionCount = (size + RegionInfo::UNIT_SIZE - 1) / RegionInfo::UNIT_SIZE;
-        RegionInfo* region = TakeRegion(regionCount, RegionInfo::UnitRole::LARGE_SIZED_UNITS);
+        RegionInfo* region = TakeRegion(regionCount, RegionInfo::UnitRole::LARGE_SIZED_UNITS,
+                                        false, true, clearPayload);
         if (region == nullptr) {
             return 0;
         }

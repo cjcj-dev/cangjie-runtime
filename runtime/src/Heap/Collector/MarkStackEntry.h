@@ -10,7 +10,7 @@
 #include <cstddef>
 #include <cstdint>
 
-#include "Base/Panic.h"
+#include "Base/Log.h"
 
 namespace MapleRuntime {
 class BaseObject;

@@ -22,6 +22,9 @@
 #include "Heap/Verify/StackWatermarkOracle.h"
 #include "Heap/WCollector/WCollector.h"
 #include "ObjectModel/RefField.inline.h"
+#if defined(MRT_GC_UNIT_TESTS)
+#include "ObjectModel/MArray.h"
+#endif
 #include "MutatorManager.h"
 #include "StackManager.h"
 #include "UnwindStack/StackFrameCursor.h"
@@ -384,11 +387,25 @@ void Mutator::SuspendForSync()
 void Mutator::CreateCurrentGCInfo() { gcInfos.CreateCurrentGCInfo(); }
 #endif
 
-void Mutator::VisitStackRoots(const RootVisitor& func)
+void Mutator::VisitStackRoots(const RootVisitor& func, const RootVisitor& invisibleRootVisitor)
 {
     MutatorLock();
-    // the stack doesn't include managed frame, skip it.
+#if defined(MRT_GC_UNIT_TESTS)
+    RootVisitor observedInvisibleRootVisitor = [&invisibleRootVisitor](ObjectRef& root) {
+        NoteLargeArrayInitRootVisit(LargeArrayRootVisitSite::MUTATOR_STACK,
+                                    to_object(safe(root.LoadPlain(std::memory_order_acquire))));
+        invisibleRootVisitor(root);
+    };
+    const RootVisitor& visitedInvisibleRootVisitor = observedInvisibleRootVisitor;
+#else
+    const RootVisitor& visitedInvisibleRootVisitor = invisibleRootVisitor;
+#endif
+    // A native/exclusive frame has no managed stack map, but its side roots are
+    // independent of stack metadata and must remain visible. In particular an
+    // incomplete large reference array can be published while a native helper
+    // owns the mutator.
     if (!IsManagedContext()) {
+        VisitRawObjects(visitedInvisibleRootVisitor);
         MutatorUnlock();
         return;
     }
@@ -429,7 +446,7 @@ void Mutator::VisitStackRoots(const RootVisitor& func)
         }
     }
     StackManager::VisitStackRoots(uwContext, func, *this);
-    VisitRawObjects(func);
+    VisitRawObjects(visitedInvisibleRootVisitor);
     DecObserver();
     MutatorUnlock();
 }
@@ -479,8 +496,10 @@ void Mutator::VisitHeapReferencesOnStack(const RootVisitor& regRootVisitor, cons
                                          const RootVisitor& rawObjectVisitor)
 {
     MutatorLock();
-    // the stack doesn't include managed frame, skip it.
+    // No managed frame means there is no stack map to visit. Side roots are
+    // stored outside the managed stack and still require relocation repair.
     if (!IsManagedContext()) {
+        VisitRawObjects(rawObjectVisitor);
         MutatorUnlock();
         return;
     }
@@ -874,7 +893,7 @@ static void StripRootObjectColour(ObjectRef& root)
     }
 }
 
-static bool PushHeapRootIfPlausible(BaseObject* obj, const char* site)
+static bool PushHeapRootIfPlausible(BaseObject* obj, const char* site, bool follow = true)
 {
     BaseObject* plain = PlainRootObject(to_zaddress_unsafe(reinterpret_cast<MAddress>(obj)));
     if (!Heap::IsHeapAddress(plain)) {
@@ -887,7 +906,11 @@ static bool PushHeapRootIfPlausible(BaseObject* obj, const char* site)
         return false;
     }
     AllocBuffer* buffer = AllocBuffer::GetOrCreateAllocBuffer();
-    buffer->PushRoot(plain);
+    if (follow) {
+        buffer->PushRoot(plain);
+    } else {
+        buffer->PushInvisibleRoot(plain);
+    }
 
     return true;
 }
@@ -956,11 +979,22 @@ void VisitTaggedOopSlot(ObjectRef& root)
     }
 }
 
-bool Mutator::DrainStackWatermark(const RootVisitor& visitor, uint64_t epoch, StackWatermark::Owner owner,
+bool Mutator::DrainStackWatermark(const RootVisitor& visitor, const RootVisitor& invisibleRootVisitor,
+                                  uint64_t epoch, StackWatermark::Owner owner,
                                   const DerivedPtrVisitor* derivedPtrVisitor, size_t& scannedFrames)
 {
     scannedFrames = 0;
     MutatorLock();
+#if defined(MRT_GC_UNIT_TESTS)
+    RootVisitor observedInvisibleRootVisitor = [&invisibleRootVisitor](ObjectRef& root) {
+        NoteLargeArrayInitRootVisit(LargeArrayRootVisitSite::STACK_WATERMARK,
+                                    to_object(safe(root.LoadPlain(std::memory_order_acquire))));
+        invisibleRootVisitor(root);
+    };
+    const RootVisitor& visitedInvisibleRootVisitor = observedInvisibleRootVisitor;
+#else
+    const RootVisitor& visitedInvisibleRootVisitor = invisibleRootVisitor;
+#endif
     if (owner == StackWatermark::WM_OWNER_GC && !InSaferegion()) {
         MutatorUnlock();
         return false;
@@ -968,6 +1002,7 @@ bool Mutator::DrainStackWatermark(const RootVisitor& visitor, uint64_t epoch, St
     if (!IsManagedContext()) {
         bool began = stackWatermark.TryBegin(epoch, owner, 0);
         if (began) {
+            VisitRawObjects(visitedInvisibleRootVisitor);
             stackWatermark.Finish(owner);
         }
         MutatorUnlock();
@@ -994,7 +1029,7 @@ bool Mutator::DrainStackWatermark(const RootVisitor& visitor, uint64_t epoch, St
         while (cursor.ProcessOne(visitor, *this, derivedPtrVisitor)) {
             stackWatermark.AdvanceTo(cursor.Cursor(), owner);
         }
-        VisitRawObjects(visitor);
+        VisitRawObjects(visitedInvisibleRootVisitor);
         // Frame coverage is the completion quantity.  FrameCount alone is the
         // size of the snapshot and therefore cannot prove that the cursor
         // actually processed it.
@@ -1076,6 +1111,11 @@ bool Mutator::GcPhaseEnum(GCPhase newPhase, uint64_t stackScanEpoch, bool bySelf
             obj->ForEachRefField(refVisitor);
         }
     };
+    RootVisitor invisibleRootVisitor = [](ObjectRef& root) {
+        StripRootObjectColour(root);
+        BaseObject* obj = PlainRootObject(root.LoadPlain());
+        (void)PushHeapRootIfPlausible(obj, "GcPhaseEnum.invisible", false);
+    };
     // introot: Enum previously used VisitMutatorRoots → RootMap (reg/slot only), so
     // base/derived pairs never entered. VisitHeapReferences builds HeapReferenceMap and
     // visits derived; the derived visitor marks the base and keeps the derived slot plain.
@@ -1095,7 +1135,7 @@ bool Mutator::GcPhaseEnum(GCPhase newPhase, uint64_t stackScanEpoch, bool bySelf
         }
     };
     if (stackScanEpoch == 0) {
-        VisitHeapReferences(visitor, derivedVisitor);
+        VisitHeapReferences(visitor, visitor, derivedVisitor, visitor, invisibleRootVisitor);
         return true;
     }
     // The concurrent stack-scan leg now carries the same derived visitor as the
@@ -1110,7 +1150,8 @@ bool Mutator::GcPhaseEnum(GCPhase newPhase, uint64_t stackScanEpoch, bool bySelf
     // uses the same acknowledgement lifecycle without the stack traversal.
     size_t frames = 0;
     StackWatermark::Owner owner = bySelf ? StackWatermark::WM_OWNER_SELF : StackWatermark::WM_OWNER_GC;
-    bool scanned = DrainStackWatermark(visitor, stackScanEpoch, owner, &derivedVisitor, frames);
+    bool scanned = DrainStackWatermark(
+        visitor, invisibleRootVisitor, stackScanEpoch, owner, &derivedVisitor, frames);
     if (scannedFrames != nullptr) {
         *scannedFrames = frames;
     }

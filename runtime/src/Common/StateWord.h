@@ -30,6 +30,7 @@ public:
     };
 
     static constexpr size_t STATE_BIT_COUNT = 2;
+    static constexpr uint16_t INVISIBLE_OBJECT_BIT = static_cast<uint16_t>(1U << STATE_BIT_COUNT);
 
     // constructure and destructure
     ObjectState() { SetStateBits(0); }
@@ -47,6 +48,16 @@ public:
     bool IsForwardableState() const { return GetStateCode() == NORMAL; }
     bool IsLockedState() const { return GetStateCode() == LOCKED; }
     bool IsForwardedState() const { return GetStateCode() == FORWARDED; }
+    bool IsInvisibleObject() const { return (AtomicGetStateBits() & INVISIBLE_OBJECT_BIT) != 0; }
+
+    void SetInvisibleObject(bool invisible)
+    {
+        if (invisible) {
+            __atomic_fetch_or(&stateBits, INVISIBLE_OBJECT_BIT, __ATOMIC_RELEASE);
+        } else {
+            __atomic_fetch_and(&stateBits, static_cast<uint16_t>(~INVISIBLE_OBJECT_BIT), __ATOMIC_RELEASE);
+        }
+    }
 
     union {
         struct {
@@ -164,6 +175,8 @@ public:
 
     bool IsForwardableState() const { return objectState.IsForwardableState(); }
     bool IsForwardedState() const { return objectState.IsForwardedState(); }
+    bool IsInvisibleObject() const { return objectState.IsInvisibleObject(); }
+    void SetInvisibleObject(bool invisible) { objectState.SetInvisibleObject(invisible); }
 
     bool IsLockedWord() const { return objectState.IsLockedState(); }
     void SetStateCode(ObjectState::ObjectStateCode state) { objectState.SetStateCode(state); }
@@ -173,7 +186,9 @@ public:
         if (current.IsLockedState()) {
             return false;
         }
-        return objectState.CompareExchangeStateBits(current.GetStateBits(), ObjectState::LOCKED);
+        ObjectState locked(current);
+        locked.SetStateCode(ObjectState::LOCKED);
+        return objectState.CompareExchangeStateBits(current.GetStateBits(), locked.GetStateBits());
     }
 
     void UnlockStateWord(const ObjectState newState)
@@ -181,7 +196,9 @@ public:
         do {
             ObjectState current = objectState.AtomicGetObjectState();
             CHECK(current.IsLockedState());
-            if (objectState.CompareExchangeStateBits(current.GetStateBits(), newState.GetStateBits())) {
+            ObjectState unlocked(current);
+            unlocked.SetStateCode(newState.GetStateCode());
+            if (objectState.CompareExchangeStateBits(current.GetStateBits(), unlocked.GetStateBits())) {
                 return;
             }
         } while (true);
