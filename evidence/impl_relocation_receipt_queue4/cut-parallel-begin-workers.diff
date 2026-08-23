@@ -1,0 +1,12 @@
+diff --git a/runtime/src/Heap/Allocator/RegionManager.cpp b/runtime/src/Heap/Allocator/RegionManager.cpp
+index 564d0f941..c67b5c35e 100644
+--- a/runtime/src/Heap/Allocator/RegionManager.cpp
++++ b/runtime/src/Heap/Allocator/RegionManager.cpp
+@@ -2102,7 +2102,6 @@ void RegionManager::ForwardFromRegions(GCThreadPool* threadPool)
+         (void)regionCount;
+ 
+         // we start threadPool before adding work so that we can concurrently add tasks;
+-        relocationRequestQueue.BeginWorkers(static_cast<size_t>(threadNum));
+         threadPool->Start();
+         for (int32_t i = 0; i < threadNum; ++i) {
+             threadPool->AddWork(new (std::nothrow) ForwardTask<G>(*this, fromRegionList));

@@ -1203,17 +1203,68 @@ private:
     FreePinnedSlotLists freePinnedSlotLists;
 };
 
-// The actual relocation HeapWork submitted by ForwardFromRegions. Keep Execute
-// out of line so the unit runner resolves this product implementation from
-// libcangjie-runtime instead of compiling a private test copy.
+namespace detail {
+
+// A single algorithm body serves both compile-time shapes below.  The default
+// product inlines it through ForwardTask::Execute; the testable shape calls it
+// from the exported out-of-line Execute instantiated in RegionManager.cpp.
 template<Generation G>
-class MRT_EXPORT ForwardTask : public HeapWork {
+inline void ExecuteForwardTask(RegionManager& regionManager, RegionList& fromRegionList)
+{
+    while (true) {
+        // zRelocate.cpp:1193-1203: serve a mutator's requested receipt
+        // before advancing the ordinary relocation iterator.
+        RelocationRequestQueue::Selection selected =
+            regionManager.GetRelocationRequestQueue().SelectBeforeOrdinary([&fromRegionList]() -> void* {
+                return fromRegionList.TakeHeadRegion(RegionInfo::RegionType::LONE_FROM_REGION);
+            });
+        if (!selected) {
+            selected = regionManager.GetRelocationRequestQueue().SynchronizePoll();
+            if (selected.workersDone) {
+                break;
+            }
+            if (!selected) {
+                continue;
+            }
+        }
+        if (!selected.is_request()) {
+            RegionInfo* region = static_cast<RegionInfo*>(selected.ordinary);
+            regionManager.ForwardRegion<G>(region);
+            regionManager.CompleteRelocationRequests(region);
+            continue;
+        }
+
+        RegionInfo* region = static_cast<RegionInfo*>(selected.request->owner());
+        // The list transition is the single relocation owner. If an ordinary
+        // worker won first, it will publish the requested receipt and wake us.
+        if (fromRegionList.TryDeleteRegion(region, RegionInfo::RegionType::FROM_REGION,
+                                           RegionInfo::RegionType::LONE_FROM_REGION)) {
+            regionManager.ForwardRegion<G>(region);
+            regionManager.CompleteRelocationRequests(region);
+        }
+    }
+}
+
+} // namespace detail
+
+// The actual relocation HeapWork submitted by ForwardFromRegions.  Test builds
+// export Execute so the unit runner binds the product SO; default builds retain
+// the implicit inline virtual with no MRT_EXPORT and no dynamic export.
+template<Generation G>
+class ForwardTask : public HeapWork {
 public:
     ForwardTask(RegionManager& manager, RegionList& fromSpace)
         : regionManager(manager), fromRegionList(fromSpace) {}
 
     ~ForwardTask() override = default;
-    void Execute(size_t) override;
+#if defined(MRT_TESTABLE_INTERNALS)
+    MRT_EXPORT void Execute(size_t) override;
+#else
+    __attribute__((visibility("hidden"))) void Execute(size_t) override
+    {
+        detail::ExecuteForwardTask<G>(regionManager, fromRegionList);
+    }
+#endif
 
 private:
     RegionManager& regionManager;

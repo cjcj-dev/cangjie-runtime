@@ -17,6 +17,7 @@ using namespace MapleRuntime::GcUnit;
 
 namespace MapleRuntime {
 
+#if defined(MRT_TESTABLE_INTERNALS)
 // Access only: the exercised implementation remains the product SO's
 // WCollector::ForwardObjectExclusive, including its real Publish call.
 struct MutatorPublishTestAccess {
@@ -26,6 +27,7 @@ struct MutatorPublishTestAccess {
         return collector.ForwardObjectExclusive(from, to, copyPage);
     }
 };
+#endif
 
 } // namespace MapleRuntime
 
@@ -68,6 +70,7 @@ GC_TEST(ForwardingNoGeometry, ArmedLookupAndSuccessfulExclusiveCopyPublishProduc
     GC_EXPECT_EQ(ForwardingTable::LookupTo(from, &ans), stored);
     GC_EXPECT_TRUE(ans == ForwardingTable::ToAnswer::ArmedHit);
 
+#if defined(MRT_TESTABLE_INTERNALS)
     // Drive the product success path itself: CopyObject -> InstallMapping ->
     // RelocationRequestQueue::Publish -> UnlockObject(FORWARDED). This is the
     // call site at Relocate.cpp in WCollector::ForwardObjectExclusive, not a
@@ -104,6 +107,7 @@ GC_TEST(ForwardingNoGeometry, ArmedLookupAndSuccessfulExclusiveCopyPublishProduc
     GC_EXPECT_EQ(requests.Wait(requested.request), copyToAddr);
     GC_EXPECT_TRUE(copyFrom->IsForwarded());
     GC_EXPECT_EQ(fx.region0->CopyInflight(), 0);
+#endif
 
     fx.region0->SetRouteState(RegionInfo::NORMAL);
     fx.region0->RetireFromPageMetadata();

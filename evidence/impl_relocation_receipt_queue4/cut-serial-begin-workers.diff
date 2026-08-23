@@ -1,0 +1,12 @@
+diff --git a/runtime/src/Heap/Allocator/RegionManager.cpp b/runtime/src/Heap/Allocator/RegionManager.cpp
+index 564d0f941..788e6cb75 100644
+--- a/runtime/src/Heap/Allocator/RegionManager.cpp
++++ b/runtime/src/Heap/Allocator/RegionManager.cpp
+@@ -2109,7 +2109,6 @@ void RegionManager::ForwardFromRegions(GCThreadPool* threadPool)
+         }
+         threadPool->WaitFinish();
+     } else {
+-        relocationRequestQueue.BeginWorkers(1);
+         ForwardFromRegions<G>();
+     }
+ }
