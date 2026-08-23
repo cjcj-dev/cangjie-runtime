@@ -13,6 +13,7 @@ set(SRC_LIST
     "CollectorResources.cpp"
     "TracingCollector.cpp"
     "MarkPartialArray.cpp"
+    "MarkStripe.cpp"
     "TaskQueue.cpp"
     "FinalizerProcessor.cpp"
     "CopyCollector.cpp"

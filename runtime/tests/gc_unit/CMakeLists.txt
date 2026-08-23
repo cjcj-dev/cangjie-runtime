@@ -52,6 +52,7 @@ set(GC_UNIT_SOURCES
     test_fwdreturn.cpp
     test_fnlz_roots.cpp
     test_mark_stack_entry.cpp
+    test_mark_stripe.cpp
     test_partial_array.cpp
     test_verify_roots.cpp
 )
