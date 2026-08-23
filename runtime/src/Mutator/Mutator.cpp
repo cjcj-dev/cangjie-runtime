@@ -391,8 +391,9 @@ void Mutator::VisitStackRoots(const RootVisitor& func, const RootVisitor& invisi
 {
     MutatorLock();
 #if defined(MRT_GC_UNIT_TESTS)
-    RootVisitor observedInvisibleRootVisitor = [&invisibleRootVisitor](ObjectRef& root) {
-        NoteLargeArrayInitRootVisit(LargeArrayRootVisitSite::MUTATOR_STACK,
+    RootVisitor observedInvisibleRootVisitor = [this, &invisibleRootVisitor](ObjectRef& root) {
+        NoteLargeArrayInitRootVisit(IsManagedContext() ? LargeArrayRootVisitSite::MUTATOR_STACK_MANAGED
+                                                      : LargeArrayRootVisitSite::MUTATOR_STACK_NATIVE,
                                     to_object(safe(root.LoadPlain(std::memory_order_acquire))));
         invisibleRootVisitor(root);
     };
@@ -986,8 +987,9 @@ bool Mutator::DrainStackWatermark(const RootVisitor& visitor, const RootVisitor&
     scannedFrames = 0;
     MutatorLock();
 #if defined(MRT_GC_UNIT_TESTS)
-    RootVisitor observedInvisibleRootVisitor = [&invisibleRootVisitor](ObjectRef& root) {
-        NoteLargeArrayInitRootVisit(LargeArrayRootVisitSite::STACK_WATERMARK,
+    RootVisitor observedInvisibleRootVisitor = [this, &invisibleRootVisitor](ObjectRef& root) {
+        NoteLargeArrayInitRootVisit(IsManagedContext() ? LargeArrayRootVisitSite::STACK_WATERMARK_MANAGED
+                                                      : LargeArrayRootVisitSite::STACK_WATERMARK_NATIVE,
                                     to_object(safe(root.LoadPlain(std::memory_order_acquire))));
         invisibleRootVisitor(root);
     };
