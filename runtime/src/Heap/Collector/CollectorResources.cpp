@@ -141,8 +141,12 @@ void CollectorResources::PostIgnoredGcRequest(GCReason reason)
 
 void CollectorResources::RequestAsyncGC(GCReason reason)
 {
-    // The gc request must be none blocked
-    MRT_ASSERT(!g_gcRequests[reason].IsSyncGC(), "trigger from unsafe context must be none blocked");
+    // Static synchronous reasons must never be connected to the non-blocking
+    // request port.  USER remains legal because its mode is selected per call.
+    // This void port has no error channel: returning would drop a required GC,
+    // while falling back to a blocking request can deadlock its unsafe caller.
+    // A fatal check is therefore the lightest non-silent rejection available.
+    CHECK(!g_gcRequests[reason].IsSyncGC());
     GCExecutor gcTask(GCTask::TaskType::TASK_TYPE_INVOKE_GC, reason);
     // we use async enqueue because this doesn't have locks, lowering the risk
     // of timeouts when entering safe region due to thread scheduling
