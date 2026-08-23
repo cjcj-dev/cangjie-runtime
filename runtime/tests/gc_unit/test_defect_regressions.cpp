@@ -171,6 +171,32 @@ GC_TEST(DefectRegress, RelroNonHeapSkipsSelfHealCas)
     munmap(ro, page);
 }
 
+// statheal: a mutable root converges on the exact plain target returned by the
+// read barrier, while an observed-value CAS cannot overwrite a concurrent store.
+GC_TEST(DefectRegress, StaticRootObservedValueHeal)
+{
+    GcHeapFixture fx;
+    RootSlot root;
+    StorePlain(root, from_object(fx.obj0));
+    zaddress_unsafe observed = root.LoadPlain();
+    GC_EXPECT_TRUE(HealRootIfObserved(root, observed, from_object(fx.obj1),
+                                     HealSite::BarrierReadStaticReference));
+    GC_EXPECT_EQ(raw(root.LoadPlain()), reinterpret_cast<Uptr>(fx.obj1));
+}
+
+GC_TEST(DefectRegress, StaticRootHealDoesNotClobberConcurrentStore)
+{
+    GcHeapFixture fx;
+    RootSlot root;
+    StorePlain(root, from_object(fx.obj0));
+    zaddress_unsafe observed = root.LoadPlain();
+    BaseObject* concurrent = fx.PlaceObject(reinterpret_cast<MAddress>(fx.obj1) + 128);
+    StorePlain(root, from_object(concurrent));
+    GC_EXPECT_FALSE(HealRootIfObserved(root, observed, from_object(fx.obj1),
+                                      HealSite::BarrierReadStaticReference));
+    GC_EXPECT_EQ(raw(root.LoadPlain()), reinterpret_cast<Uptr>(concurrent));
+}
+
 // ⑤ minor ResolveMinor non-heap arm (same contract as ② on the minor side).
 // Product: ResolveMinorReference — non-heap returns as-is, never CAS-null (WCollector.cpp:1935).
 GC_TEST(DefectRegress, MinorNonHeapResolveNeverCasNull)

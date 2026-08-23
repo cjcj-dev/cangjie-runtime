@@ -52,6 +52,7 @@ void NoteRetry(unsigned iterations);
 // exhaustive: a catch-all value would recreate the attribution gap HealSlot closes.
 enum class HealSite : uint16_t {
     BaseObjectCompareExchangeRefField,
+    BarrierReadStaticReference,
     BarrierCompareAndSwapReference,
     BarrierCopyRefArrayRecolour,
     BarrierCopyStructArrayRecolour,
@@ -457,6 +458,13 @@ private:
         zaddress_unsafe unsafeValue = to_zaddress_unsafe(raw(value));
         __atomic_store(&rootValue, &unsafeValue, order);
     }
+
+    bool CompareExchangePlain(zaddress_unsafe expected, zaddress desired,
+                              std::memory_order succOrder, std::memory_order failOrder)
+    {
+        zaddress_unsafe unsafeDesired = to_zaddress_unsafe(raw(desired));
+        return __atomic_compare_exchange(&rootValue, &expected, &unsafeDesired, false, succOrder, failOrder);
+    }
     // PLAIN_ROOTS=0 escape hatch; private to WCollector so ordinary root writers stay plain-only.
     void StoreCollectorRollback(zpointer value, std::memory_order order) {
         zaddress_unsafe unsafeValue = to_zaddress_unsafe(raw(value));
@@ -466,6 +474,8 @@ private:
 
     friend void StorePlain(RootSlot&, zaddress, std::memory_order);
     friend bool HealRoot(RootSlot&, zaddress, HealSite, HealNull, std::memory_order);
+    friend bool HealRootIfObserved(RootSlot&, zaddress_unsafe, zaddress, HealSite,
+                                   HealNull, std::memory_order, std::memory_order);
     friend class WCollector;
 };
 
@@ -491,6 +501,22 @@ inline bool HealRoot(RootSlot& slot, zaddress good, HealSite site,
     }
     slot.StorePlain(good, order);
     return true;
+}
+
+// ZUncoloredRoot::barrier writes the same load-good address that it hands to
+// its closure (zUncoloredRoot.inline.hpp:35-60). ReadStaticRef runs in mutator
+// context, so preserve a concurrent WriteStaticRef by replacing only the exact
+// word this read observed.
+inline bool HealRootIfObserved(RootSlot& slot, zaddress_unsafe observed, zaddress good, HealSite site,
+                               HealNull allowNull = HealNull::Disallow,
+                               std::memory_order succOrder = std::memory_order_relaxed,
+                               std::memory_order failOrder = std::memory_order_relaxed)
+{
+    (void)site;
+    if (allowNull == HealNull::Disallow && !is_null(observed) && is_null(good)) {
+        return false;
+    }
+    return slot.CompareExchangePlain(observed, good, succOrder, failOrder);
 }
 
 // OpenJDK ProcessDerivedOop preserves the offset, processes the base, then
