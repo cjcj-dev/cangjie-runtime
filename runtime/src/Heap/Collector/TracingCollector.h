@@ -246,7 +246,7 @@ public:
     {}
 
     ~TracingCollector() override = default;
-    virtual void PreGarbageCollection(bool isConcurrent);
+    virtual void PreGarbageCollection(bool isConcurrent, uint64_t gcIndex);
     virtual void PostGarbageCollection(uint64_t gcIndex);
 
     static void VisitStackRoots(const RootVisitor& visitor, RegSlotsMap& regSlotsMap, const FrameInfo& frame,

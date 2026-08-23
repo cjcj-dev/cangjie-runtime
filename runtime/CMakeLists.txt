@@ -87,6 +87,13 @@ if (MRT_ZSTAT)
     add_compile_definitions(MRT_ZSTAT_COMPILED=1)
 endif()
 
+# Test-only access remains absent from the default product.  When the explicit
+# GC unit configuration is selected, both the product library and its tests see
+# the same compile-time contract.
+if (MRT_GC_UNIT_TESTS)
+    add_compile_definitions(MRT_GC_UNIT_TESTS=1)
+endif()
+
 message("-- BUILD_CJTHREAD: " ${BUILD_CJTHREAD})
 message("-- BUILD_RUNTIME: "   ${BUILD_RUNTIME})
 
