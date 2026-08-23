@@ -879,6 +879,13 @@ public:
                  region->GetLiveByteCount(), region->GetRegionEnd());
             MarkView<G> view = region->GetMarkView<G>();
             region->PrepareForwardableRegion(view);
+            // ZGC installs the page and its forwarding record as one relocation-set
+            // operation (zRelocationSet.cpp:91-96).  Keep the equivalent invariant
+            // at this GC phase boundary: a from-region must not become visible to
+            // either major PostTrace or minor evacuation without its page carrier.
+            CHECK_DETAIL(region->HasFromPageMetadata(),
+                         "from-page carrier missing after prepare region=%p generation=%u",
+                         region, static_cast<unsigned>(G));
         });
 
         fromRegionList.CopyListTo(ghostFromRegionList);

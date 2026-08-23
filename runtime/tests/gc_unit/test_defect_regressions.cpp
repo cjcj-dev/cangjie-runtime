@@ -101,9 +101,9 @@ GC_TEST(DefectRegress, PregrantBeforeRouteDomainFreeze)
     void* mem = std::calloc(1, bytes);
     GC_EXPECT_TRUE(mem != nullptr);
     auto* lateBm = new (mem) RegionBitmap(regionSize);
-    late->GetMarkFace<Generation::Old>().epoch.store(
+    late->GetMarkFace().epoch.store(
         region->GetMarkSnapshotEpoch<Generation::Old>(), std::memory_order_relaxed);
-    late->GetMarkFace<Generation::Old>().bitmap = lateBm;
+    late->GetMarkFace().bitmap = lateBm;
     region->metadata.liveInfo = late;
     size_t offB = region->GetAddressOffset(reinterpret_cast<MAddress>(objB));
     (void)lateBm->MarkBits(offB, 8, regionSize);
@@ -112,7 +112,7 @@ GC_TEST(DefectRegress, PregrantBeforeRouteDomainFreeze)
     // Domain still frozen on ghost without B ⇒ Admit/GetRouteForProbe must miss.
     GC_EXPECT_TRUE(region->GetRouteForProbe(objB) == nullptr);
 
-    region->metadata.liveInfo0 = nullptr;
+    region->RetireFromPageMetadata();
     region->metadata.liveInfo = nullptr;
     lateBm->~RegionBitmap();
     std::free(lateBm);
