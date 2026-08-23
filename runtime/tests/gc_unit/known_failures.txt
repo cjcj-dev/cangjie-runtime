@@ -1,0 +1,18 @@
+# Tests that are allowed to fail, one name per line.  The gate blocks on any failure not listed
+# here, and equally on any listed test that has started passing -- so the list cannot rot in either
+# direction and "we know about that one" cannot quietly become "nobody has looked in months".
+#
+# An entry is a debt.  It needs a reason and a next step; "it fails" is not a reason.  Adding a line
+# deserves the same scrutiny as turning a check off, which is how this repo ended up with 41 hollowed
+# diagnostic subsystems, a whole unit suite behind a default-OFF flag, and a fail-closed gate script
+# that nothing ever called.
+#
+# Empty as of 2026-08-18: 80 of 80 pass.  The two that stood here were resolved rather than waived --
+# both were the test being wrong about what OpenJDK does, not the runtime:
+#   Remset.OldToOldNotRecorded            zBarrier.inline.hpp:729-733 conditions on the slot, so
+#                                         old->old IS recorded; zRemembered.cpp:578-589 prunes it at
+#                                         scan time instead.
+#   RouteInfo.MissingDomainReturnsNullNotGarbage
+#                                         its positive arm asked for a destination from a region in
+#                                         RouteState NORMAL; a forwarding that was never installed
+#                                         has nothing to answer with (zForwarding.inline.hpp:248-252).
