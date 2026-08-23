@@ -24,6 +24,7 @@ PHASE_ENTRY_SOURCE=NOT_RUN
 SEGMENTED_MANAGED_STATE=NOT_RUN
 SEGMENTED_MANAGED_SOURCE=NOT_RUN
 STATUS_REASON=UNEXPECTED_EXIT
+TESTABLE_INTERNALS="${MRT_TESTABLE_INTERNALS:-0}"
 
 write_status() {
   local status_dir tmp
@@ -67,6 +68,15 @@ if [[ "${GC_UNIT_GATE_SKIP:-0}" == "1" ]]; then
   exit 0
 fi
 
+case "$TESTABLE_INTERNALS" in
+  0|1) ;;
+  *)
+    STATUS_REASON=INVALID_TESTABLE_INTERNALS
+    echo "GC_UNIT_GATE_FAIL: MRT_TESTABLE_INTERNALS must be 0 or 1 (got '$TESTABLE_INTERNALS')" >&2
+    exit 2
+    ;;
+esac
+
 if [[ ! -d "$SRC" ]]; then
   echo "GC_UNIT_GATE_FAIL: missing $SRC" >&2
   exit 2
@@ -77,9 +87,13 @@ if [[ ! -f "$SCRIPT" ]]; then
 fi
 if [[ ! -f "$FINALIZER_SCRIPT" || ! -f "$SRC/finalizer_trigger.cj" ||
       ! -f "$PHASE_ENTRY_SCRIPT" || ! -f "$SRC/phase_entry_trigger.cj" ||
-      ! -f "$SRC/phase_entry_major.cj" || ! -f "$SEGMENTED_MANAGED_SCRIPT" ||
-      ! -f "$SRC/segmented_array_managed.cj" ]]; then
+      ! -f "$SRC/phase_entry_major.cj" ]]; then
   echo "GC_UNIT_GATE_FAIL: missing end-to-end language-level test" >&2
+  exit 2
+fi
+if [[ "$TESTABLE_INTERNALS" == "1" &&
+      ( ! -f "$SEGMENTED_MANAGED_SCRIPT" || ! -f "$SRC/segmented_array_managed.cj" ) ]]; then
+  echo "GC_UNIT_GATE_FAIL: missing managed segmented-array language-level test" >&2
   exit 2
 fi
 if [[ ! -f "$SRC/test_defect_regressions.cpp" ]]; then
@@ -162,8 +176,10 @@ if [[ -f "$STAMP" && "$STAMP" -nt "$SO" ]]; then
     FINALIZER_SOURCE=CACHE
     PHASE_ENTRY_STATE=PASS
     PHASE_ENTRY_SOURCE=CACHE
-    SEGMENTED_MANAGED_STATE=PASS
-    SEGMENTED_MANAGED_SOURCE=CACHE
+    if [[ "$TESTABLE_INTERNALS" == "1" ]]; then
+      SEGMENTED_MANAGED_STATE=PASS
+      SEGMENTED_MANAGED_SOURCE=CACHE
+    fi
     GATE_STATE=PASS
     STATUS_REASON=CACHED_PASS
     echo "GC_UNIT_GATE_OK (cached: runtime and suite both older than last green run) status=$STATUS_FILE"
@@ -292,17 +308,21 @@ if ! bash "$PHASE_ENTRY_SCRIPT"; then
   exit 1
 fi
 
-SEGMENTED_MANAGED_STATE=FAIL
-SEGMENTED_MANAGED_SOURCE=FRESH
-STATUS_REASON=SEGMENTED_ARRAY_MANAGED_FAILURE
-if ! bash "$SEGMENTED_MANAGED_SCRIPT"; then
-  echo "GC_UNIT_GATE_FAIL: managed segmented-array product entry test failed" >&2
-  exit 1
+if [[ "$TESTABLE_INTERNALS" == "1" ]]; then
+  SEGMENTED_MANAGED_STATE=FAIL
+  SEGMENTED_MANAGED_SOURCE=FRESH
+  STATUS_REASON=SEGMENTED_ARRAY_MANAGED_FAILURE
+  if ! bash "$SEGMENTED_MANAGED_SCRIPT"; then
+    echo "GC_UNIT_GATE_FAIL: managed segmented-array product entry test failed" >&2
+    exit 1
+  fi
 fi
 
 FINALIZER_STATE=PASS
 PHASE_ENTRY_STATE=PASS
-SEGMENTED_MANAGED_STATE=PASS
+if [[ "$TESTABLE_INTERNALS" == "1" ]]; then
+  SEGMENTED_MANAGED_STATE=PASS
+fi
 GATE_STATE=PASS
 STATUS_REASON=PASS
 touch "$STAMP"
