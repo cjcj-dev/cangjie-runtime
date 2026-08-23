@@ -178,6 +178,29 @@ GC_TEST(ZForwardingEntries, OutOfRangeFromIndexUsesOverflowReceipt)
     tab->Destroy();
 }
 
+// Keep the pre-receipt guard name and its core invariant: an unencodable key
+// must never truncate onto an in-range key. The attached array still records a
+// refusal; the new exact-key overflow receipt makes the overall insert total.
+GC_TEST(ZForwardingEntries, OutOfRangeFromIndexIsRefusedNotTruncated)
+{
+    constexpr MAddress kStart = 0x1000;
+    constexpr size_t kAlign = size_t(1) << 3;
+    ForwardingEntries* tab = ForwardingEntries::Create(8, kStart, 0);
+    GC_EXPECT_TRUE(tab != nullptr);
+
+    const MAddress inRange = kStart + (ForwardingEntry::kMaxFromIndex * kAlign);
+    const MAddress justOver = kStart + ((ForwardingEntry::kMaxFromIndex + 1) * kAlign);
+    const MAddress dest = 0x9000;
+    const uint64_t refusedBefore = ForwardingEntries::OverflowRefusals().load(std::memory_order_relaxed);
+
+    GC_EXPECT_EQ(tab->insert(inRange, dest), dest);
+    GC_EXPECT_EQ(tab->insert(justOver, dest + 8), dest + 8);
+    GC_EXPECT_EQ(ForwardingEntries::OverflowRefusals().load(std::memory_order_relaxed), refusedBefore + 1);
+    GC_EXPECT_EQ(tab->find(justOver), dest + 8);
+    GC_EXPECT_EQ(tab->find(inRange), dest);
+    tab->Destroy();
+}
+
 // D7-a: from_index 23 bits covers a 64 MiB region. 3 MiB used to overflow 18 bits.
 GC_TEST(ZForwardingEntries, LargeFromIndexRoundTrip)
 {
@@ -240,6 +263,33 @@ GC_TEST(ZForwardingEntries, FullTableInsertionUsesOverflowReceipt)
     GC_EXPECT_EQ(tab->find(absent), static_cast<MAddress>(0xa000));
 
     // The entries that were there are still there and still correct.
+    GC_EXPECT_EQ(tab->find(kStart), static_cast<MAddress>(0x9000));
+    tab->Destroy();
+}
+
+// Preserve the original full-probe regression name. A full attached array
+// still terminates and records its refusal; the exact-key overflow receipt is
+// now the successful continuation rather than a terminal zero.
+GC_TEST(ZForwardingEntries, FullTableProbeTerminatesInsteadOfSpinning)
+{
+    constexpr MAddress kStart = 0x1000;
+    constexpr size_t kAlign = size_t(1) << 3;
+    ForwardingEntries* tab = ForwardingEntries::Create(2, kStart, 0);
+    GC_EXPECT_TRUE(tab != nullptr);
+
+    const size_t capacity = tab->length();
+    GC_EXPECT_TRUE(capacity > 0);
+    for (size_t i = 0; i < capacity; ++i) {
+        const MAddress from = kStart + (i * kAlign);
+        GC_EXPECT_TRUE(tab->insert(from, 0x9000 + (i * kAlign)) != 0);
+    }
+
+    const MAddress absent = kStart + (capacity * kAlign);
+    GC_EXPECT_EQ(tab->find(absent), static_cast<MAddress>(0));
+    const uint64_t refusedBefore = ForwardingEntries::FullRefusals().load(std::memory_order_relaxed);
+    GC_EXPECT_EQ(tab->insert(absent, 0xa000), static_cast<MAddress>(0xa000));
+    GC_EXPECT_EQ(ForwardingEntries::FullRefusals().load(std::memory_order_relaxed), refusedBefore + 1);
+    GC_EXPECT_EQ(tab->find(absent), static_cast<MAddress>(0xa000));
     GC_EXPECT_EQ(tab->find(kStart), static_cast<MAddress>(0x9000));
     tab->Destroy();
 }
