@@ -53,6 +53,7 @@ typeinfo_reuse_plugin.cpp                 manual     pair of dlopen/dlclose imag
 zgc_self_heal_loop_unit.cpp               manual     harness for run_zgc_self_heal_loop_probe.sh
 string_dedup_product.cj                   manual     product String.deduplicated() backing-identity witness via unsafe rawData mutation
 string_dedup_product_cut.diff             manual     product fault injection: disconnect String.deduplicated() from canonicalizeString and rebuild std.core SO
+string_dedup_same_length_negative.patch   manual     product fault injection: weaken canonical equality to length-only; only the same-length distinct-content guard must fail
 typeinfo_remove_negative.patch            manual     fault injection: remove both unload-path RemoveTypeInfosInRange calls for the negative runtime
 
 epoch_handshake_foreign_churn.cpp         orphan     no runner; foreign-N2C churn against the epoch handshake

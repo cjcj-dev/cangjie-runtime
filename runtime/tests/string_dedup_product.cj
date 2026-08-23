@@ -48,6 +48,17 @@ main(): Int64 {
     overwriteFirstByte(unequalLeft, UInt8(85))
     checks.check("unequal_not_merged", firstByte(unequalRight) == unequalRightBefore)
 
+    let sameLengthLeftExpected = "same-len-alpha!"
+    let sameLengthRightExpected = "same-len-omega!"
+    let sameLengthLeft = sameLengthLeftExpected.clone().deduplicated()
+    let sameLengthRight = sameLengthRightExpected.clone().deduplicated()
+    let sameLengthContentsPreserved = sameLengthLeft == sameLengthLeftExpected &&
+        sameLengthRight == sameLengthRightExpected
+    let sameLengthRightBefore = firstByte(sameLengthRight)
+    overwriteFirstByte(sameLengthLeft, UInt8(83))
+    checks.check("same_length_distinct_not_merged", sameLengthContentsPreserved &&
+        firstByte(sameLengthRight) == sameLengthRightBefore)
+
     let rangeBaseLeft = "aaRANGE-CANONzz".clone()
     let rangeBaseRight = "bbRANGE-CANONyy".clone()
     let rangeLeft = rangeBaseLeft[2..13].deduplicated()
