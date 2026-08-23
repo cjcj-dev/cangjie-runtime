@@ -242,6 +242,24 @@ public struct String <: Collection<Byte> & Comparable<String> & Hashable & ToStr
     }
 
     /**
+     * Returns a String whose effective UTF-8 byte range is shared with an
+     * already deduplicated equal String, when one exists.
+     *
+     * This operation is explicit and functional: it does not change this
+     * String value. Callers must retain the returned value. A sliced String is
+     * first detached from its larger backing so canonicalization cannot make a
+     * short-lived slice retain unrelated bytes.
+     */
+    public func deduplicated(): String {
+        if (length == 0) {
+            return String.empty
+        }
+        let wholeBacking = start == 0u32 && Int64(length) == arraySize(myData)
+        let candidate = if (wholeBacking) { this } else { clone() }
+        return canonicalizeString(candidate)
+    }
+
+    /**
      * Use wyhash to generate a hash value for a string.
      */
     @Frozen
