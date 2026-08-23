@@ -129,8 +129,18 @@ inline MArray* MArray::NewKnownWidthArray(MIndex nElems, TypeInfo& arrayClass, c
         ExceptionManager::OutOfMemory();
         return nullptr;
     }
-    auto address = HeapManager::Allocate(arraySize, allocType);
+    MAddress address;
+#if defined(MRT_GC_UNIT_TESTS)
+    address = CJ_MRT_TestAllocateArrayStorage(arraySize, allocType);
+#else
+    address = HeapManager::Allocate(arraySize, allocType);
+#endif
     if (LIKELY(address != NULL_ADDRESS)) {
+        const bool isLargeRefArray = arraySize > LARGE_REF_ARRAY_INIT_SEGMENT_SIZE &&
+            elemBytes == RefField<>::GetSize() && arrayClass.GetComponentTypeInfo()->IsRef();
+        if (UNLIKELY(isLargeRefArray)) {
+            return InitializeLargeRefArray(address, nElems, arrayClass);
+        }
         MArray* newArray = reinterpret_cast<MArray*>(SetClassInfo(address, &arrayClass));
         newArray->SetLength(nElems);
 #if defined(__OHOS__) && (__OHOS__ == 1)

@@ -58,6 +58,7 @@ set(GC_UNIT_SOURCES
     test_mark_stack_entry.cpp
     test_mark_stripe.cpp
     test_partial_array.cpp
+    test_segmented_array_init.cpp
     test_verify_roots.cpp
     test_mem_map.cpp
 )
@@ -75,7 +76,10 @@ target_compile_features(cj_gc_unit PRIVATE cxx_std_17)
 target_compile_options(cj_gc_unit PRIVATE -fno-rtti -fexceptions -std=gnu++17)
 # The suite tests the real ZStat implementation regardless of whether the product .so was
 # built with MRT_ZSTAT: it compiles Base/ZStat.cpp itself with the compile-time gate open.
-target_compile_definitions(cj_gc_unit PRIVATE MRT_ZSTAT_COMPILED=1 MRT_TESTABLE_INTERNALS=1)
+target_compile_definitions(cj_gc_unit PRIVATE
+    MRT_ZSTAT_COMPILED=1
+    MRT_TESTABLE_INTERNALS=1
+    MRT_GC_UNIT_TESTS=1)
 # Prefer in-tree runtime library when building as part of the product tree.
 if (TARGET cangjie-runtime)
     target_link_libraries(cj_gc_unit PRIVATE cangjie-runtime)

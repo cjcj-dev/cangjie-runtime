@@ -453,12 +453,15 @@ void Mutator::VisitExceptionRoots(const RootVisitor& func)
 
 void Mutator::VisitRawObjects(const RootVisitor& func)
 {
-    if (!is_null(rawObject.LoadPlain())) {
+    // Pairs with PublishInvisibleRoot's release store: a scanner that sees the
+    // root must also see the already-published type and array length.
+    zaddress_unsafe rootValue = rawObject.LoadPlain(std::memory_order_acquire);
+    if (!is_null(rootValue)) {
         if (VerifyRoots::Enabled()) {
             RootVerifyContext ctx;
             ctx.phase = "VisitRawObjects";
             ctx.kind = RootKind::RUNTIME_ROOT;
-            ctx.rawValue = raw(rawObject.LoadPlain());
+            ctx.rawValue = raw(rootValue);
             ctx.hasRawValue = true;
             ctx.ownerMutator = this;
             VerifyRoots::VerifyRootPayload(ctx, &rawObject, nullptr);

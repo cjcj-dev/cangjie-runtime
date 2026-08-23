@@ -1165,5 +1165,11 @@ endif() # BUILD_RUNTIME
 # GC unit tests — independent of BUILD_RUNTIME product link; default OFF.
 if (MRT_GC_UNIT_TESTS)
     message(STATUS "MRT_GC_UNIT_TESTS=ON: building runtime/tests/gc_unit")
+    # Test hooks alter only testability. Keep them out of the default product
+    # build and compile both the product call site and ObjectModel definition
+    # with the same shape when the deterministic suite is requested.
+    target_compile_definitions(cangjie-runtime PRIVATE MRT_GC_UNIT_TESTS=1)
+    target_compile_definitions(runtime PRIVATE MRT_GC_UNIT_TESTS=1)
+    target_compile_definitions(ObjectModel PRIVATE MRT_GC_UNIT_TESTS=1)
     add_subdirectory(tests/gc_unit)
 endif()
