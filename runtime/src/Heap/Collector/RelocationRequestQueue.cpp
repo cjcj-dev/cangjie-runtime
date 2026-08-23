@@ -12,22 +12,15 @@
 
 namespace MapleRuntime {
 
-void RelocationRequestQueue::BeginCycle()
-{
-    std::lock_guard<std::mutex> lock(queueMutex);
-    CHECK_DETAIL(workerCount == 0 && synchronizedWorkers == 0 && byFrom.empty(),
-                 "relocation request generation reopened with unfinished work");
-    queue.clear();
-    accepting = true;
-}
-
 void RelocationRequestQueue::BeginWorkers(size_t workers)
 {
     std::lock_guard<std::mutex> lock(queueMutex);
-    CHECK_DETAIL(accepting && workers != 0 && workerCount == 0 && synchronizedWorkers == 0,
+    CHECK_DETAIL(!accepting && workers != 0 && workerCount == 0 && synchronizedWorkers == 0 && byFrom.empty(),
                  "invalid relocation worker generation workers=%zu active=%zu synchronized=%zu accepting=%u",
                  workers, workerCount, synchronizedWorkers, static_cast<unsigned>(accepting));
+    queue.clear();
     workerCount = workers;
+    accepting = true;
 }
 
 RelocationRequestQueue::EnqueueResult RelocationRequestQueue::Add(void* owner, MAddress from)

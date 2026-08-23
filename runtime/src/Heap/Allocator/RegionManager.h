@@ -825,7 +825,6 @@ public:
     template<Generation G>
     void PrepareFromRegionList()
     {
-        relocationRequestQueue.BeginCycle();
         size_t retainedRegions = 0;
         size_t retainedBytes = 0;
         size_t markQuarantinedRegions = 0;

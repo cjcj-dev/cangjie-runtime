@@ -66,10 +66,10 @@ public:
         explicit operator bool() const { return request != nullptr || ordinary != nullptr; }
     };
 
-    // PrepareFromRegionList opens the request generation before mutators can
-    // observe its routes. BeginWorkers registers exactly the workers which can
-    // run concurrently (helpers plus the calling GC thread).
-    void BeginCycle();
+    // ZRelocateQueue::activate(nworkers) (zRelocate.cpp:80-83) makes queue
+    // acceptance and worker registration one lifetime transition. There is no
+    // preparation-only opener: accepting requests without a registered worker
+    // generation would leave a waiter with no completion owner.
     void BeginWorkers(size_t workers);
     EnqueueResult Add(void* owner, MAddress from);
     MAddress Wait(const Handle& request);
@@ -115,7 +115,7 @@ private:
     std::condition_variable queueAttention;
     std::deque<Handle> queue;
     std::unordered_map<MAddress, Handle> byFrom;
-    bool accepting{ true };
+    bool accepting{ false };
     size_t workerCount{ 0 };
     size_t synchronizedWorkers{ 0 };
     std::atomic<uint64_t> completionCount{ 0 };

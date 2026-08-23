@@ -93,55 +93,37 @@ bool InstallOwnerReceipt(MAddress& from, MAddress& to)
     return ForwardingTable::FindTo(from) == to;
 }
 
-bool RunParallelOrdinaryOwnerProductEntry()
+bool RunParallelProductEntryClosesGeneration()
 {
     GcHeapFixture fx;
     RegionManager manager;
-    MAddress from = 0;
-    MAddress to = 0;
-    if (!InstallOwnerReceipt(from, to)) {
-        return false;
-    }
     PrepareOwnerRegion(fx);
 
     RelocationRequestQueue& queue = manager.GetRelocationRequestQueue();
-    queue.BeginCycle();
-    const auto added = queue.Add(fx.region0, from);
-    if (!added.accepted || queue.PruneAndClaim() != added.request) {
-        return false;
-    }
-    // Another worker has already claimed the request.  The ordinary owner is
-    // therefore the only branch which can complete it after ForwardRegion.
     RelocationReceiptTestAccess::ParkFrom(manager, fx.region0);
     GCThreadPool pool("gc-unit-product-parallel", 2, GCPoolThread::GC_THREAD_PRIORITY);
     manager.ForwardFromRegions<Generation::Old>(&pool);
-    const bool completed = added.request->state() == RelocationRequestQueue::State::COMPLETED &&
-        queue.Wait(added.request) == to && queue.CompletionCount() == 1 && queue.PendingCount() == 0;
+    int lateOwner = 0;
+    const auto late = queue.Add(&lateOwner, 0x73200040);
+    const bool closed = !late.accepted && late.request->state() == RelocationRequestQueue::State::FAILED &&
+        queue.PendingCount() == 0;
     pool.Exit();
-    return completed;
+    return closed;
 }
 
-bool RunSerialClaimedOwnerProductEntry()
+bool RunSerialProductEntryClosesGeneration()
 {
     GcHeapFixture fx;
     RegionManager manager;
-    MAddress from = 0;
-    MAddress to = 0;
-    if (!InstallOwnerReceipt(from, to)) {
-        return false;
-    }
     PrepareOwnerRegion(fx);
 
     RelocationRequestQueue& queue = manager.GetRelocationRequestQueue();
-    queue.BeginCycle();
-    const auto added = queue.Add(fx.region0, from);
-    if (!added.accepted) {
-        return false;
-    }
     RelocationReceiptTestAccess::ParkFrom(manager, fx.region0);
     manager.ForwardFromRegions<Generation::Old>(nullptr);
-    return added.request->state() == RelocationRequestQueue::State::COMPLETED &&
-        queue.Wait(added.request) == to && queue.CompletionCount() == 1 && queue.PendingCount() == 0;
+    int lateOwner = 0;
+    const auto late = queue.Add(&lateOwner, 0x73200048);
+    return !late.accepted && late.request->state() == RelocationRequestQueue::State::FAILED &&
+        queue.PendingCount() == 0;
 }
 
 #if defined(MRT_TESTABLE_INTERNALS)
@@ -185,7 +167,6 @@ bool RunYoungRuntimeProductEntry()
     RegionManager& manager = space.GetRegionManager();
 
     RelocationRequestQueue& queue = manager.GetRelocationRequestQueue();
-    queue.BeginCycle();
 
     YoungForwardRuntimeCollector collector(Heap::GetHeap().GetAllocator(), Heap::GetHeap().GetCollectorResources());
 #if defined(MRT_TESTABLE_INTERNALS)
@@ -214,7 +195,6 @@ bool RunActualTaskClaimedOwnerSuccess()
     PrepareOwnerRegion(fx);
 
     RelocationRequestQueue& queue = manager.GetRelocationRequestQueue();
-    queue.BeginCycle();
     queue.BeginWorkers(1);
     const auto added = queue.Add(fx.region0, from);
     if (!added.accepted) {
@@ -249,7 +229,6 @@ GC_TEST(GCThreadPool, RelocationRequestHasOneCompletionOwnerBeforeWaitFinishRetu
     constexpr MAddress kTo = 0x7000;
     int owner = 0;
     RelocationRequestQueue queue;
-    queue.BeginCycle();
     queue.BeginWorkers(kWorkers);
     const auto added = queue.Add(&owner, kFrom);
     std::atomic<size_t> completionOwners{ 0 };
@@ -290,7 +269,6 @@ GC_TEST(GCThreadPool, ActualForwardTaskClosesClaimedRequestExactlyOnceWhenOwnerE
     RegionManager manager;
     RegionList emptyFromSpace("gc-unit-empty-from");
     RelocationRequestQueue& queue = manager.GetRelocationRequestQueue();
-    queue.BeginCycle();
     queue.BeginWorkers(1);
     const MAddress from = reinterpret_cast<MAddress>(fx.obj0);
     const auto added = queue.Add(fx.region0, from);
@@ -309,14 +287,14 @@ GC_TEST(GCThreadPool, ActualForwardTaskClosesClaimedRequestExactlyOnceWhenOwnerE
 }
 #endif
 
-GC_TEST(GCThreadPool, ProductParallelEntryRegistersWorkersAndCompletesOrdinaryOwner)
+GC_TEST(GCThreadPool, ProductParallelEntryRegistersWorkersAndClosesGeneration)
 {
-    ExpectIsolatedScenarioPasses<RunParallelOrdinaryOwnerProductEntry>();
+    ExpectIsolatedScenarioPasses<RunParallelProductEntryClosesGeneration>();
 }
 
-GC_TEST(GCThreadPool, ProductSerialEntryRegistersWorkerAndCompletesClaimedOwner)
+GC_TEST(GCThreadPool, ProductSerialEntryRegistersWorkerAndClosesGeneration)
 {
-    ExpectIsolatedScenarioPasses<RunSerialClaimedOwnerProductEntry>();
+    ExpectIsolatedScenarioPasses<RunSerialProductEntryClosesGeneration>();
 }
 
 #if defined(MRT_TESTABLE_INTERNALS)
