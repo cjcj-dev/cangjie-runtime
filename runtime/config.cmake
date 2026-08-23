@@ -227,8 +227,10 @@ if (MACOS_FLAG MATCHES 1 OR IOS_FLAG MATCHES 1 OR IOS_SIMULATOR_FLAG MATCHES 1 O
     endif()
 endif()
 
-set(CMAKE_SYSTEM_PROCESSOR "${CMAKE_HOST_SYSTEM_PROCESSOR}" CACHE FILEPATH "" FORCE)
-if (IOS_SIMULATOR_FLAG MATCHES 2)
+set(CMAKE_SYSTEM_PROCESSOR "${cmake_host_system_processor}" CACHE FILEPATH "" FORCE)
+if (IOS_FLAG MATCHES 1 OR IOS_SIMULATOR_FLAG MATCHES 1)
+    set(CMAKE_SYSTEM_PROCESSOR "aarch64" CACHE FILEPATH "" FORCE)
+elseif (IOS_SIMULATOR_FLAG MATCHES 2)
     set(CMAKE_SYSTEM_PROCESSOR "x86_64" CACHE FILEPATH "" FORCE)
 endif()
 
@@ -308,7 +310,12 @@ if (OHOS_FLAG IN_LIST OHOS_FLAG_LIST)
         --sysroot=${OHOS_ROOT}/out/sdk/obj/third_party/musl/sysroot ${OHOS_INCLUDE}"
     )
 elseif (WINDOWS_FLAG MATCHES 1)
-    set(CMAKE_INIT_FLAGS "-Wno-unused-command-line-argument -fno-omit-frame-pointer -fvisibility=hidden -fno-exceptions \
+    # The DLL link relies on -Wl,--export-all-symbols for its export surface (the
+    # upstream toolchain is mingw gcc, where visibility attributes are inert on
+    # PE-COFF). Under clang+lld, -fvisibility=hidden excludes every symbol not
+    # marked MRT_EXPORT from auto-export, dropping the MCC_* compiler-call
+    # surface products import — keep default visibility to match upstream.
+    set(CMAKE_INIT_FLAGS "-Wno-unused-command-line-argument -fno-omit-frame-pointer -fvisibility=default -fno-exceptions \
         -fno-rtti -Wall -fstack-protector-strong -Wno-inconsistent-dllimport -fno-strict-aliasing -fno-common")
 elseif (ANDROID_FLAG MATCHES 1 OR ANDROID_FLAG MATCHES 2)
     message("android toolchain, clang version=${CLANG_VERSION_STRING}")
@@ -451,6 +458,10 @@ set(CMAKE_COV_FLAGS "-fprofile-arcs -ftest-coverage -O0 -fno-inline")
 option(BUILD_CJTHREAD "Build cjthread module" ON)
 option(BUILD_RUNTIME   "Build runtime module"   ON)
 option(BUILD_DEMANGLE  "Build demangle module"  OFF)
+option(MRT_GCV2_UNTAG_BREADCRUMB "Build untag-ref-field crash breadcrumb diagnostics" OFF)
+# GC unit tests (HotSpot-gtest-shaped, pure invariant TUs). Default OFF so product
+# builds are byte-identical when the option is left alone.
+option(MRT_GC_UNIT_TESTS "Build GC unit tests (cj_gc_unit)" OFF)
 
 set(TARGET_ARCH "linux_${CMAKE_HOST_SYSTEM_PROCESSOR}_cjnative")
 if (OHOS_FLAG MATCHES 1)
@@ -494,7 +505,7 @@ if (ANDROID_FLAG MATCHES 3)
     endif ()
 endif()
 if (IOS_FLAG MATCHES 1)
-    set(TARGET_ARCH "ios_${CMAKE_HOST_SYSTEM_PROCESSOR}_cjnative")
+    set(TARGET_ARCH "ios_${CMAKE_SYSTEM_PROCESSOR}_cjnative")
 endif()
 if (IOS_SIMULATOR_FLAG MATCHES 1 OR IOS_SIMULATOR_FLAG MATCHES 2)
     set(TARGET_ARCH "ios_simulator_${CMAKE_SYSTEM_PROCESSOR}_cjnative")
