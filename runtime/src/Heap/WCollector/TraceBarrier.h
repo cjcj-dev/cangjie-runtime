@@ -21,7 +21,7 @@ public:
 
     BaseObject* ReadReference(BaseObject* obj, RefField<false>& field) const;
     BaseObject* ReadWeakRef(BaseObject* obj, RefField<false>& field) const;
-    BaseObject* ReadStaticRef(ReadOnlyRootSlot& field) const;
+    BaseObject* ReadStaticRef(RootSlot& field) const;
     void ReadStruct(MAddress dst, BaseObject* obj, MAddress src, size_t size) const;
     void ReadStaticStruct(MAddress dst, MAddress src, size_t size, const GCTib gctib) const;
 

@@ -87,8 +87,8 @@ void WrongDerivedRawStore(DerivedSlot& slot, const RootSlot& base)
 #endif
 
 // ── ReadOnlyRootSlot（静态/RELRO 只读根）──────────────────────────────────────
-// ReadOnlyRootSlot = const RootSlot：读路径能收它，写路径必须收不下
-// —— relroroot(B-4 ⑤) 实证这些页可能是 r--p，写进去必 SEGV。
+// ReadOnlyRootSlot = const RootSlot：写路径必须收不下。自愈的
+// ReadStaticRef 只接受 RootSlot&，只读注册面不得进入该契约。
 #if defined(MRT_NEGATIVE_READONLY_ROOT_WRITE)
 void WrongReadOnlyRootWrite(ReadOnlyRootSlot& root, zaddress plain)
 {

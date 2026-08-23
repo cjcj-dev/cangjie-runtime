@@ -18,6 +18,7 @@
 #include "Heap/Verify/MarkCompleteVerify.h"
 #include "Heap/Verify/MarkFaceSnap.h"
 #include "Heap/Verify/NoTracedDiag.h"
+#include "Heap/Verify/StatHealDiag.h"
 #include "Heap/Verify/SurvNodeDiag.h"
 #include "Heap/Verify/StackRootSlotAttest.h"
 #include "Heap/Verify/VerifyRoots.h"
@@ -198,6 +199,7 @@ void StaticRootTable::UnregisterRoots(StaticRootArray* addr, U32 size)
 void StaticRootTable::VisitRoots(const RootSlotVisitor& visitor)
 {
     std::lock_guard<std::mutex> lock(gcRootsLock);
+    StatHealDiag::BeginStaticRootScan();
     U32 gcRootsSize = 0;
     std::unordered_set<RootSlot*> visitedSet;
     for (auto iter = gcRootsBuckets.begin(); iter != gcRootsBuckets.end(); iter++) {
@@ -209,9 +211,11 @@ void StaticRootTable::VisitRoots(const RootSlotVisitor& visitor)
             if (!visitedSet.insert(root).second) {
                 continue;
             }
+            StatHealDiag::NoteStaticRootSlot(*root);
             visitor(*root);
         }
     }
+    StatHealDiag::EndStaticRootScan();
 }
 
 void ExportRootTable::VisitGCRoots(const RootVisitor& visitor)

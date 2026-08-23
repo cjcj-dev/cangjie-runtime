@@ -21,6 +21,7 @@
 #include "Heap/Verify/LoadGoodProbe.h"
 #include "Heap/Verify/ProbeReadRouteDiag.h"
 #include "Heap/Verify/RemsetPhaseProbe.h"
+#include "Heap/Verify/StatHealDiag.h"
 #include "Heap/Verify/YyEdgeDiag.h"
 #include "Heap/Verify/ZgcSelfHealDiag.h"
 #include "Heap/WCollector/EnumBarrier.h"
@@ -1075,7 +1076,7 @@ BaseObject* Barrier::ReadWeakRef(BaseObject* obj, RefField<false>& field) const
     }
 }
 
-BaseObject* Barrier::ReadStaticRef(ReadOnlyRootSlot& field) const
+BaseObject* Barrier::ReadStaticRef(RootSlot& field) const
 {
     zaddress_unsafe observed = field.LoadPlain();
     if (is_null(observed)) {
@@ -1100,6 +1101,7 @@ BaseObject* Barrier::ReadStaticRef(ReadOnlyRootSlot& field) const
                                          reinterpret_cast<uintptr_t>(target));
         }
     }
+    BaseObject* beforeRoute = target;
     if (ghost) {
         BaseObject* before = target;
         target = theCollector.FindLatestVersion(target);
@@ -1108,6 +1110,18 @@ BaseObject* Barrier::ReadStaticRef(ReadOnlyRootSlot& field) const
                                            reinterpret_cast<uintptr_t>(before),
                                            reinterpret_cast<uintptr_t>(target));
         }
+    }
+    const bool resolvedChanged = target != beforeRoute;
+    const bool healAttempted = target != nullptr && raw(observed) != reinterpret_cast<uintptr_t>(target);
+    const bool statHealDiagEnabled = UNLIKELY(StatHealDiag::Enabled());
+    bool healSucceeded = false;
+    if (healAttempted && !(statHealDiagEnabled && StatHealDiag::SuppressHealForAB())) {
+        healSucceeded = HealRootIfObserved(field, observed, from_object(target),
+                                           HealSite::BarrierReadStaticReference);
+    }
+    if (statHealDiagEnabled) {
+        StatHealDiag::NoteStaticRead(field, raw(observed), (raw(observed) & ::g_cjLoadBadMask) != 0,
+                                     ghost, resolvedChanged, healAttempted, healSucceeded);
     }
     return target;
 }

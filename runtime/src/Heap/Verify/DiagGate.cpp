@@ -93,7 +93,7 @@ void MaybeAnnounce()
     if (wantHelp) {
         LOG(RTLOG_ERROR,
             "[GCV2][diag] tokens: idleedge promote promotegap fullclear nullslot stackref fromver oneseq "
-            "rootgate reffixwalk markcomplete selftest all | legacy: MRT_GCV2_<NAME>=1");
+            "rootgate reffixwalk markcomplete statheal selftest all | legacy: MRT_GCV2_<NAME>=1");
     }
     if (wantActive) {
         LOG(RTLOG_ERROR, "[GCV2][diag] MRT_GCV2_DIAG=%s selftest=%d", csv == nullptr ? "(unset)" : csv,
