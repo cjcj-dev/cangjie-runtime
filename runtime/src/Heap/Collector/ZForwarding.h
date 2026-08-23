@@ -188,6 +188,10 @@ public:
                 break;
             }
         }
+        // Preserve the pre-existing attached-array refusal diagnostic while
+        // separately recording that the total receipt path fell back to the
+        // exact-key map.
+        FullRefusals().fetch_add(1, std::memory_order_relaxed);
         FullFallbacks().fetch_add(1, std::memory_order_relaxed);
         return kNotStored;
     }
@@ -198,8 +202,9 @@ public:
         return n;
     }
 
-    // Preserve the pre-existing diagnostic contract. These count terminal
-    // refusal, not a successful spill into the exact-key receipt map.
+    // Preserve the pre-existing diagnostic contract. These count refusal by
+    // the bounded attached array; fallback counters below count the successful
+    // exact-key continuation of that same event.
     static std::atomic<uint64_t>& FullRefusals()
     {
         static std::atomic<uint64_t> n{ 0 };
@@ -239,6 +244,7 @@ public:
                 return Receipt{ _heapBase + static_cast<MAddress>(finalOff), installed };
             }
         } else {
+            OverflowRefusals().fetch_add(1, std::memory_order_relaxed);
             OverflowFallbacks().fetch_add(1, std::memory_order_relaxed);
         }
 

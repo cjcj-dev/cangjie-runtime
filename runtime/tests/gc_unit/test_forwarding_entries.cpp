@@ -170,7 +170,7 @@ GC_TEST(ZForwardingEntries, OutOfRangeFromIndexUsesOverflowReceipt)
     // otherwise a truncating build and a guarded one look identical from outside.
     GC_EXPECT_EQ(tab->insert(justOver, dest + 8), dest + 8);
     GC_EXPECT_EQ(ForwardingEntries::OverflowFallbacks().load(std::memory_order_relaxed), before + 1);
-    GC_EXPECT_EQ(ForwardingEntries::OverflowRefusals().load(std::memory_order_relaxed), refusedBefore);
+    GC_EXPECT_EQ(ForwardingEntries::OverflowRefusals().load(std::memory_order_relaxed), refusedBefore + 1);
 
     // The overflow lookup is exact and cannot alias the last encodable index.
     GC_EXPECT_EQ(tab->find(justOver), dest + 8);
@@ -236,7 +236,7 @@ GC_TEST(ZForwardingEntries, FullTableInsertionUsesOverflowReceipt)
     const uint64_t refusedBefore = ForwardingEntries::FullRefusals().load(std::memory_order_relaxed);
     GC_EXPECT_EQ(tab->insert(absent, 0xa000), static_cast<MAddress>(0xa000));
     GC_EXPECT_EQ(ForwardingEntries::FullFallbacks().load(std::memory_order_relaxed), before + 1);
-    GC_EXPECT_EQ(ForwardingEntries::FullRefusals().load(std::memory_order_relaxed), refusedBefore);
+    GC_EXPECT_EQ(ForwardingEntries::FullRefusals().load(std::memory_order_relaxed), refusedBefore + 1);
     GC_EXPECT_EQ(tab->find(absent), static_cast<MAddress>(0xa000));
 
     // The entries that were there are still there and still correct.
