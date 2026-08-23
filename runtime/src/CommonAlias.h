@@ -16,7 +16,7 @@ extern "C" MRT_EXPORT void CJ_MCC_WriteStructField(const ObjectPtr obj, MAddress
                                                    MAddress src, size_t srcLen)
     __attribute__((alias("MCC_WriteStructField")));
 
-extern "C" MRT_EXPORT void CJ_MCC_WriteStaticRef(const ObjectPtr ref, RefField<false>* field)
+extern "C" MRT_EXPORT void CJ_MCC_WriteStaticRef(const ObjectPtr ref, RootSlot* field)
     __attribute__((alias("MCC_WriteStaticRef")));
 extern "C" MRT_EXPORT void CJ_MCC_WriteStaticStruct(MAddress dst, size_t dstLen, MAddress src, size_t srcLen,
                                                     const GCTib gcTib) __attribute__((alias("MCC_WriteStaticStruct")));

@@ -57,7 +57,7 @@ void* ParameterInfo::GetAnnotations(TypeInfo* arrayTi)
     }
     ArgValue values;
     uintptr_t structRet[ARRAY_STRUCT_SIZE];
-    values.AddReference(reinterpret_cast<BaseObject*>(structRet));
+    values.AddReference(as_abi_ref_slot(structRet));
     uintptr_t threadData = MapleRuntime::MRT_GetThreadLocalData();
 #if defined(__aarch64__)
     ApplyCangjieMethodStub(values.GetData(), reinterpret_cast<void*>(values.GetStackSize()),
@@ -131,7 +131,7 @@ void* MethodInfo::GetAnnotations(TypeInfo* arrayTi)
     }
     ArgValue values;
     uintptr_t structRet[ARRAY_STRUCT_SIZE];
-    values.AddReference(reinterpret_cast<BaseObject*>(structRet));
+    values.AddReference(as_abi_ref_slot(structRet));
     uintptr_t threadData = MapleRuntime::MRT_GetThreadLocalData();
 #if defined(__aarch64__)
     ApplyCangjieMethodStub(values.GetData(), reinterpret_cast<void*>(values.GetStackSize()),
@@ -192,10 +192,13 @@ GenericTypeInfo* MethodInfo::GetGenericParameterInfo(U32 index)
 
 bool MethodInfo::CheckGenericConstraint(GenericTypeInfo* genericTi, TypeInfo* ti, void* genericArgsArray)
 {
+    if (ti == nullptr) {
+        return false;
+    }
     U32 genericConstraintCnt = genericTi->GetGenericConstraintNum();
     for (U32 idx = 0; idx < genericConstraintCnt; ++idx) {
         TypeInfo* genericConstraintTi = genericTi->GetGenericConstraint(idx);
-        if (genericConstraintTi->IsGeneric()) {
+        if (genericConstraintTi != nullptr && genericConstraintTi->IsGeneric()) {
             genericConstraintTi =
                 GetActualTypeFromGenericType(reinterpret_cast<GenericTypeInfo*>(genericConstraintTi), genericArgsArray);
         }
@@ -210,24 +213,39 @@ bool MethodInfo::CheckMethodActualArgs(void* genericArgsArray, void* actualArgsA
 {
     // check Generic Constrains
     U16 genericArgCnt = GetNumOfGenericParameterInfos();
+    if (genericArgCnt > 0) {
+        if (genericArgsArray == nullptr) {
+            return false;
+        }
+        HeapSlot<false>& genericRawPtrField = HeapSlotAt<false>(
+            &(static_cast<CJArray*>(genericArgsArray)->rawPtr));
+        CJRawArray* genericRawArray = reinterpret_cast<CJRawArray*>(
+            Heap::GetBarrier().ReadReference(nullptr, genericRawPtrField));
+        if (genericRawArray == nullptr || genericRawArray->len < genericArgCnt) {
+            return false;
+        }
+    }
     for (U16 genericIdx = 0; genericIdx < genericArgCnt; ++genericIdx) {
         GenericTypeInfo* genericTi = GetGenericParameterInfo(genericIdx);
+        if (genericTi == nullptr) {
+            return false;
+        }
         TypeInfo* ti = GetActualTypeFromGenericType(genericTi, genericArgsArray);
         if (genericTi->GetGenericConstraintNum() > 0 && !CheckGenericConstraint(genericTi, ti, genericArgsArray)) {
             return false;
         }
     }
 
-    RefField<false>* actualRawPtrField = reinterpret_cast<RefField<false>*>(
+    HeapSlot<false>& actualRawPtrField = HeapSlotAt<false>(
         &(static_cast<CJArray*>(actualArgsArray)->rawPtr));
     CJRawArray* cjRawArray = reinterpret_cast<CJRawArray*>(
-        Heap::GetBarrier().ReadReference(nullptr, *actualRawPtrField));
+        Heap::GetBarrier().ReadReference(nullptr, actualRawPtrField));
     U64 actualArgCnt = cjRawArray->len;
     if (actualArgCnt != GetNumOfActualParameterInfos()) {
         return false;
     }
     ObjRef rawArray = reinterpret_cast<ObjRef>(cjRawArray);
-    RefField<false>* refField = reinterpret_cast<RefField<false>*>(&(cjRawArray->data));
+    HeapSlot<false>* refField = &HeapSlotAt<false>(&(cjRawArray->data));
     for (U64 actualArgIdx = 0; actualArgIdx < actualArgCnt; ++actualArgIdx) {
         ObjRef argObj = static_cast<ObjRef>(Heap::GetBarrier().ReadReference(rawArray, *refField));
         ParameterInfo* actualParameterInfo = GetActualParameterInfo(actualArgIdx);
@@ -289,13 +307,20 @@ TypeInfo* MethodInfo::GetReturnType()
 TypeInfo* MethodInfo::GetActualTypeFromGenericType(GenericTypeInfo* genericTi, void* genericArgs)
 {
     if (genericTi->IsGeneric() && genericArgs != nullptr) {
+        HeapSlot<false>& genericRawPtrField = HeapSlotAt<false>(
+            &(static_cast<CJArray*>(genericArgs)->rawPtr));
+        CJRawArray* genericRawArray = reinterpret_cast<CJRawArray*>(
+            Heap::GetBarrier().ReadReference(nullptr, genericRawPtrField));
+        if (genericRawArray == nullptr) {
+            return nullptr;
+        }
+        U64 available = genericRawArray->len;
         for (U32 idx = 0; idx < genericParametersCnt; ++idx) {
             GenericTypeInfo* genericParamType = GetGenericParameterInfo(idx);
             if (genericTi == genericParamType) {
-                RefField<false>* genericRawPtrField = reinterpret_cast<RefField<false>*>(
-                    &(static_cast<CJArray*>(genericArgs)->rawPtr));
-                CJRawArray* genericRawArray = reinterpret_cast<CJRawArray*>(
-                    Heap::GetBarrier().ReadReference(nullptr, *genericRawPtrField));
+                if (idx >= available) {
+                    return nullptr;
+                }
                 Uptr base = reinterpret_cast<Uptr>(&(genericRawArray->data));
                 TypeInfo* ti = *reinterpret_cast<TypeInfo**>(base + idx * TYPEINFO_PTR_SIZE);
                 return ti;
@@ -449,13 +474,12 @@ void MethodInfo::PrepareCJMethodActualArgs(ArgValue* argValues, void* actualArgs
     // Read rawPtr (ref to CJRawArray) through the GC read barrier instead of a raw
     // cast: if GC concurrently moves the CJRawArray, the raw read would return a
     // stale pointer and all downstream argObj reads would be garbage.
-    RefField<false>* rawPtrField = reinterpret_cast<RefField<false>*>(
-        &(static_cast<CJArray*>(actualArgsArray)->rawPtr));
+    HeapSlot<false>& rawPtrField = HeapSlotAt<false>(&(static_cast<CJArray*>(actualArgsArray)->rawPtr));
     CJRawArray* cjRawArray = reinterpret_cast<CJRawArray*>(
-        Heap::GetBarrier().ReadReference(nullptr, *rawPtrField));
+        Heap::GetBarrier().ReadReference(nullptr, rawPtrField));
     U64 actualArgCnt = cjRawArray->len;
     ObjRef rawArray = reinterpret_cast<ObjRef>(cjRawArray);
-    RefField<false>* refField = reinterpret_cast<RefField<false>*>(&(cjRawArray->data));
+    HeapSlot<false>* refField = &HeapSlotAt<false>(&(cjRawArray->data));
     for (U64 actualArgIdx = 0; actualArgIdx < actualArgCnt; ++actualArgIdx) {
         ObjRef argObj = static_cast<ObjRef>(Heap::GetBarrier().ReadReference(rawArray, *refField));
         ParameterInfo* actualParameterInfo = GetActualParameterInfo(actualArgIdx);
@@ -474,10 +498,10 @@ void MethodInfo::PrepareCJMethodActualArgs(ArgValue* argValues, void* actualArgs
 
 void MethodInfo::PrepareCJMethodGenericArgs(ArgValue* argValues, void* genericArgsArray)
 {
-    RefField<false>* genericRawPtrField = reinterpret_cast<RefField<false>*>(
+    HeapSlot<false>& genericRawPtrField = HeapSlotAt<false>(
         &(static_cast<CJArray*>(genericArgsArray)->rawPtr));
     CJRawArray* genericRawArray = reinterpret_cast<CJRawArray*>(
-        Heap::GetBarrier().ReadReference(nullptr, *genericRawPtrField));
+        Heap::GetBarrier().ReadReference(nullptr, genericRawPtrField));
     Uptr base = reinterpret_cast<Uptr>(&(genericRawArray->data));
     U64 genericArgCnt = genericRawArray->len;
     for (U64 idx = 0; idx < genericArgCnt; ++idx) {
@@ -521,13 +545,19 @@ void* MethodInfo::RetValueToAny(Value ret, void* sret, TypeInfo* retType)
         }
         return obj;
     } else if (retType->IsVArray()) {
-        // VArray is only used to store value types,
-        // so we can copy the memory directly
-        MSize vArraySize = retType->GetFieldNum() * retType->GetComponentTypeInfo()->GetInstanceSize();
+        // RAW_POINTER_OBJECT may land non-young; ref-bearing VArray uses WriteStruct (G-C3).
+        MSize vArraySize = retType->GetInstanceSize();
         MSize size = MRT_ALIGN(vArraySize + TYPEINFO_PTR_SIZE, TYPEINFO_PTR_SIZE);
         MObject* obj = ObjectManager::NewObject(retType, size, AllocType::RAW_POINTER_OBJECT);
-        if (memcpy_s(reinterpret_cast<void*>(reinterpret_cast<Uptr>(obj) + TYPEINFO_PTR_SIZE), vArraySize,
-            reinterpret_cast<void*>(ret.ref), vArraySize) != EOK) {
+        if (vArraySize == 0) {
+            return obj;
+        }
+        MAddress dst = reinterpret_cast<Uptr>(obj) + TYPEINFO_PTR_SIZE;
+        if (retType->HasRefField()) {
+            Heap::GetBarrier().WriteStruct(obj, dst, vArraySize,
+                                           reinterpret_cast<Uptr>(ret.ref), vArraySize);
+        } else if (memcpy_s(reinterpret_cast<void*>(dst), vArraySize,
+                            reinterpret_cast<void*>(ret.ref), vArraySize) != EOK) {
             LOG(RTLOG_ERROR, "RetValueToAny memcpy_s fail");
         }
         return obj;
@@ -778,8 +808,13 @@ void* DynamicMethodInfo::ApplyCangjieMethod(void* argsArray)
 #endif
     argValues.AddReference(instanceObj);
 
+    // Official ABI (SUSPECT-01): this path is FunctionTypeInfo.apply, which
+    // only ever receives Array<Any>. std.reflect already type-checks each
+    // boxed element (checkArgsSizeAndType). The closure callee therefore
+    // takes the boxed Any as a reference. Value-parameter unboxing lives on
+    // MethodInfo::AddCJArg, used by the named-method apply path only.
     ObjRef rawArray = reinterpret_cast<ObjRef>(cjRawArray);
-    RefField<false>* refField = reinterpret_cast<RefField<false>*>(&(cjRawArray->data));
+    HeapSlot<false>* refField = &HeapSlotAt<false>(&(cjRawArray->data));
     for (U64 actualArgIdx = 0; actualArgIdx < actualArgCount; ++actualArgIdx) {
         ObjRef argObj = static_cast<ObjRef>(Heap::GetBarrier().ReadReference(rawArray, *refField));
         argValues.AddReference(argObj);

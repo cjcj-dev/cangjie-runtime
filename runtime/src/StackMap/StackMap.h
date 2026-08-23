@@ -126,7 +126,7 @@ public:
 
 private:
     DerivedPtr derivedPtr;
-    std::list<Uptr> rootsList;
+    std::list<BasePtrType> rootsList;
 };
 
 class MethodMap : public StackMap {
@@ -214,7 +214,7 @@ protected:
     SlotRoot stackPtrSlotRoot;
     RegRoot stackPtrRegRoot;
     DerivedPtr derivedPtr;
-    std::list<Uptr> rootsList;
+    std::list<BasePtrType> rootsList;
 };
 
 class StackMapBuilder {

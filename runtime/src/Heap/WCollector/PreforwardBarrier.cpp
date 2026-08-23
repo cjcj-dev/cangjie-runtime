@@ -22,12 +22,12 @@ BaseObject* PreforwardBarrier::ReadReference(BaseObject* obj, RefField<false>& f
 {
     do {
         RefField<> tmpField(field);
-        if (LIKELY(!tmpField.IsTagged())) {
-            return tmpField.GetTargetObject();
+        if (LIKELY(theCollector.is_load_good(tmpField))) {
+            return to_object(tmpField.GetTargetObject());
         }
         CHECK(!theCollector.IsOldPointer(tmpField));
         if (theCollector.IsCurrentPointer(tmpField)) {
-            BaseObject* target = tmpField.GetTargetObject();
+            BaseObject* target = to_object(tmpField.GetTargetObject());
             if (theCollector.IsUnmovableFromObject(target)) {
                 if (theCollector.TryUntagRefField(obj, field, target)) {
                     return target;
@@ -43,7 +43,7 @@ BaseObject* PreforwardBarrier::ReadReference(BaseObject* obj, RefField<false>& f
     return nullptr;
 }
 
-BaseObject* PreforwardBarrier::ReadStaticRef(RefField<false>& field) const { return ReadReference(nullptr, field); }
+BaseObject* PreforwardBarrier::ReadStaticRef(RootSlot& field) const { return Barrier::ReadStaticRef(field); }
 
 BaseObject* PreforwardBarrier::ReadWeakRef(BaseObject* obj, RefField<false>& field) const
 {
@@ -75,7 +75,7 @@ void PreforwardBarrier::ReadStaticStruct(MAddress dst, MAddress src, size_t size
         RefField<> oldField(field);
         BaseObject* target = ReadReference(nullptr, field);
         (void)target;
-        DLOG(FIX, "read static ref-field(in struct)@%p: 0x%zx -> %p", &field, oldField.GetFieldValue(), target);
+        DLOG(FIX, "read static ref-field(in struct)@%p: 0x%zx -> %p", &field, raw(oldField.GetFieldValue()), target);
     });
 }
 
@@ -84,7 +84,7 @@ BaseObject* PreforwardBarrier::AtomicReadReference(BaseObject* obj, RefField<tru
     RefField<false> tmpField(field.GetFieldValue(order));
     CHECK(!theCollector.IsOldPointer(tmpField));
     if (theCollector.IsCurrentPointer(tmpField)) {
-        BaseObject* target = tmpField.GetTargetObject();
+        BaseObject* target = to_object(tmpField.GetTargetObject());
         if (theCollector.IsUnmovableFromObject(target)) {
             if (theCollector.TryUntagRefField(obj, reinterpret_cast<RefField<>&>(field), target)) {
                 DLOG(PBARRIER, "atomic read obj %p ref@%p: %#zx -> %p", obj, &field, tmpField.GetFieldValue(), target);
@@ -97,9 +97,9 @@ BaseObject* PreforwardBarrier::AtomicReadReference(BaseObject* obj, RefField<tru
                 DLOG(PBARRIER, "atomic read obj %p ref@%p: %#zx -> %p", obj, &field, tmpField.GetFieldValue(), toObj);
                 return toObj;
             } else {
-                BaseObject* oldVersion = tmpField.GetTargetObject();
+                BaseObject* oldVersion = to_object(tmpField.GetTargetObject());
                 BaseObject* toObj = theCollector.ForwardObject(oldVersion);
-                RefField<> newField(toObj);
+                RefField<> newField = theCollector.GetAndTryTagRefField(toObj);
                 (void)obj->CompareExchangeRefField(reinterpret_cast<RefField<false>&>(field), tmpField, newField);
                 DLOG(PBARRIER, "atomic read obj %p ref@%p: %#zx -> %p", obj, &field, tmpField.GetFieldValue(), toObj);
                 return toObj;
@@ -115,20 +115,21 @@ BaseObject* PreforwardBarrier::AtomicReadReference(BaseObject* obj, RefField<tru
 void PreforwardBarrier::AtomicWriteReference(BaseObject* obj, RefField<true>& field, BaseObject* newRef,
                                              MemoryOrder order) const
 {
-    RefField<> newField(newRef);
-    field.SetFieldValue(newField.GetFieldValue(), order);
+    RefField<> newField = theCollector.GetAndTryTagRefField(newRef);
+    field.StoreColoured(newField.GetFieldValue(), order);
     if (obj != nullptr) {
         DLOG(PBARRIER, "atomic write obj %p<%p>(%zu) ref@%p: %#zx", obj, obj->GetTypeInfo(), obj->GetSize(), &field,
-             newField.GetFieldValue());
+             raw(newField.GetFieldValue()));
     } else {
-        DLOG(PBARRIER, "atomic write static ref@%p: %#zx", &field, newField.GetFieldValue());
+        DLOG(PBARRIER, "atomic write static ref@%p: %#zx", &field, raw(newField.GetFieldValue()));
     }
 }
 
 BaseObject* PreforwardBarrier::AtomicSwapReference(BaseObject* obj, RefField<true>& field, BaseObject* newRef,
                                                    MemoryOrder order) const
 {
-    MAddress oldValue = field.Exchange(newRef, order);
+    RefField<> coloured = theCollector.GetAndTryTagRefField(newRef);
+    MAddress oldValue = raw(field.Exchange(coloured.GetFieldValue(), order));
     RefField<> oldField(oldValue);
     BaseObject* oldRef = ReadReference(nullptr, oldField);
     DLOG(BARRIER, "atomic swap obj %p<%p>(%zu) ref@%p: old %#zx(%p), new %#zx(%p)", obj, obj->GetTypeInfo(),
@@ -139,15 +140,16 @@ BaseObject* PreforwardBarrier::AtomicSwapReference(BaseObject* obj, RefField<tru
 bool PreforwardBarrier::CompareAndSwapReference(BaseObject* obj, RefField<true>& field, BaseObject* oldRef,
                                                 BaseObject* newRef, MemoryOrder succOrder, MemoryOrder failOrder) const
 {
-    MAddress oldFieldValue = field.GetFieldValue(std::memory_order_seq_cst);
+    MAddress oldFieldValue = raw(field.GetFieldValue(std::memory_order_seq_cst));
     RefField<false> oldField(oldFieldValue);
     BaseObject* oldVersion = ReadReference(nullptr, oldField);
     while (oldVersion == oldRef) {
-        RefField<> newField(newRef);
-        if (field.CompareExchange(oldFieldValue, newField.GetFieldValue(), succOrder, failOrder)) {
+        RefField<> newField = theCollector.GetAndTryTagRefField(newRef);
+        if (HealSlot(field, to_zpointer(oldFieldValue), newField.GetFieldValue(),
+                     HealSite::PreforwardCompareAndSwapReference, HealNull::Allow, succOrder, failOrder)) {
             return true;
         }
-        oldFieldValue = field.GetFieldValue(std::memory_order_seq_cst);
+        oldFieldValue = raw(field.GetFieldValue(std::memory_order_seq_cst));
         RefField<false> tmp(oldFieldValue);
         oldVersion = ReadReference(nullptr, tmp);
     }

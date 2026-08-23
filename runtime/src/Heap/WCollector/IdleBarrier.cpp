@@ -20,8 +20,8 @@ BaseObject* IdleBarrier::ReadReference(BaseObject* obj, RefField<false>& field) 
 {
     do {
         RefField<> oldField(field);
-        if (LIKELY(!oldField.IsTagged())) {
-            return oldField.GetTargetObject();
+        if (LIKELY(theCollector.is_load_good(oldField))) {
+            return to_object(oldField.GetTargetObject());
         }
         BaseObject* toVersion = nullptr;
         if (theCollector.TryUpdateRefField(obj, field, toVersion)) {
@@ -39,7 +39,7 @@ BaseObject* IdleBarrier::ReadReference(BaseObject* obj, RefField<false>& field) 
     return nullptr;
 }
 
-BaseObject* IdleBarrier::ReadStaticRef(RefField<false>& field) const { return ReadReference(nullptr, field); }
+BaseObject* IdleBarrier::ReadStaticRef(RootSlot& field) const { return Barrier::ReadStaticRef(field); }
 
 BaseObject* IdleBarrier::ReadWeakRef(BaseObject* obj, RefField<false>& field) const
 {
@@ -52,18 +52,18 @@ BaseObject* IdleBarrier::AtomicReadReference(BaseObject* obj, RefField<true>& fi
     BaseObject* toVersion = nullptr;
     // note TryUpdateRefField and TryUntagRefField are all atomic operations.
     if (theCollector.TryUpdateRefField(obj, reinterpret_cast<RefField<false>&>(field), toVersion)) {
-        DLOG(BARRIER, "atomic read obj %p ref@%p: %#zx -> %p", obj, &field, oldField.GetFieldValue(), toVersion);
+        DLOG(BARRIER, "atomic read obj %p ref@%p: %#zx -> %p", obj, &field, raw(oldField.GetFieldValue()), toVersion);
         return toVersion;
     }
 
     BaseObject* target = nullptr;
     if (theCollector.TryUntagRefField(obj, reinterpret_cast<RefField<false>&>(field), target)) {
-        DLOG(BARRIER, "atomic read obj %p ref@%p: %#zx -> %p", obj, &field, oldField.GetFieldValue(), target);
+        DLOG(BARRIER, "atomic read obj %p ref@%p: %#zx -> %p", obj, &field, raw(oldField.GetFieldValue()), target);
         return target;
     }
 
     target = ReadReference(nullptr, oldField);
-    DLOG(BARRIER, "atomic read obj %p ref@%p: %#zx -> %p", obj, &field, oldField.GetFieldValue(), target);
+    DLOG(BARRIER, "atomic read obj %p ref@%p: %#zx -> %p", obj, &field, raw(oldField.GetFieldValue()), target);
     return target;
 }
 
@@ -103,14 +103,16 @@ void IdleBarrier::AtomicWriteReference(BaseObject* obj, RefField<true>& field, B
     } else {
         DLOG(BARRIER, "atomic write static ref@%p: %p", &field, newRef);
     }
-    field.SetTargetObject(newRef, order);
+    RefField<> newField = theCollector.GetAndTryTagRefField(newRef);
+    field.StoreColoured(newField.GetFieldValue(), order);
 }
 
 BaseObject* IdleBarrier::AtomicSwapReference(BaseObject* obj, RefField<true>& field, BaseObject* newRef,
                                              MemoryOrder order) const
 {
     // newRef must be the latest versions.
-    MAddress oldValue = field.Exchange(newRef, order);
+    RefField<> coloured = theCollector.GetAndTryTagRefField(newRef);
+    MAddress oldValue = raw(field.Exchange(coloured.GetFieldValue(), order));
     RefField<> oldField(oldValue);
     BaseObject* oldRef = ReadReference(nullptr, oldField);
     DLOG(BARRIER, "atomic swap obj %p<%p>(%zu) ref@%p: old %#zx(%p), new %#zx(%p)", obj, obj->GetTypeInfo(),
@@ -121,17 +123,18 @@ BaseObject* IdleBarrier::AtomicSwapReference(BaseObject* obj, RefField<true>& fi
 bool IdleBarrier::CompareAndSwapReference(BaseObject* obj, RefField<true>& field, BaseObject* oldRef,
                                           BaseObject* newRef, MemoryOrder sOrder, MemoryOrder fOrder) const
 {
-    MAddress oldFieldValue = field.GetFieldValue(std::memory_order_seq_cst);
+    MAddress oldFieldValue = raw(field.GetFieldValue(std::memory_order_seq_cst));
     RefField<false> oldField(oldFieldValue);
     BaseObject* oldVersion = ReadReference(nullptr, oldField);
 
     // oldRef and newRef must be the latest versions.
     while (oldVersion == oldRef) {
-        RefField<> newField(newRef);
-        if (field.CompareExchange(oldFieldValue, newField.GetFieldValue(), sOrder, fOrder)) {
+        RefField<> newField = theCollector.GetAndTryTagRefField(newRef);
+        if (HealSlot(field, to_zpointer(oldFieldValue), newField.GetFieldValue(),
+                     HealSite::IdleCompareAndSwapReference, HealNull::Allow, sOrder, fOrder)) {
             return true;
         }
-        oldFieldValue = field.GetFieldValue(std::memory_order_seq_cst);
+        oldFieldValue = raw(field.GetFieldValue(std::memory_order_seq_cst));
         RefField<false> tmp(oldFieldValue);
         oldVersion = ReadReference(nullptr, tmp);
     }
@@ -140,8 +143,9 @@ bool IdleBarrier::CompareAndSwapReference(BaseObject* obj, RefField<true>& field
 
 void IdleBarrier::WriteReference(BaseObject* obj, RefField<false>& field, BaseObject* ref) const
 {
-    DLOG(BARRIER, "write obj %p ref@%p: %p => %p", obj, &field, field.GetTargetObject(), ref);
-    field.SetTargetObject(ref);
+    DLOG(BARRIER, "write obj %p ref@%p: %p => %p", obj, &field, to_object(field.GetTargetObject()), ref);
+    RefField<> newField = theCollector.GetAndTryTagRefField(ref);
+    field.StoreColoured(newField.GetFieldValue());
 }
 
 void IdleBarrier::WriteStruct(BaseObject* obj, MAddress dst, size_t dstLen, MAddress src, size_t srcLen) const
@@ -154,7 +158,7 @@ void IdleBarrier::WriteStruct(BaseObject* obj, MAddress dst, size_t dstLen, MAdd
 #endif
 }
 
-void IdleBarrier::WriteStaticRef(RefField<false>& field, BaseObject* ref) const { WriteReference(nullptr, field, ref); }
+void IdleBarrier::WriteStaticRef(RootSlot& field, BaseObject* ref) const { Barrier::WriteStaticRef(field, ref); }
 
 void IdleBarrier::WriteStaticStruct(MAddress dst, size_t dstLen, MAddress src, size_t srcLen, const GCTib gctib) const
 {
@@ -185,13 +189,13 @@ void IdleBarrier::CopyRefArray(BaseObject* dstObj, MAddress dst, MIndex dstSize,
         MAddress currentSrc = src;
         MAddress fieldBound = dst + dstSize;
         while (currentDst < fieldBound) {
-            RefField<false>* currentDstField = reinterpret_cast<RefField<false>*>(currentDst);
-            RefField<false>* currentSrcField = reinterpret_cast<RefField<false>*>(currentSrc);
-            BaseObject* newRef = ReadReference(srcObj, *currentSrcField);
+            HeapSlot<false>& currentDstField = HeapSlotAt<false>(currentDst);
+            HeapSlot<false>& currentSrcField = HeapSlotAt<false>(currentSrc);
+            BaseObject* newRef = ReadReference(srcObj, currentSrcField);
             if (inHeap) {
-                WriteReference(dstObj, *currentDstField, newRef);
+                WriteReference(dstObj, currentDstField, newRef);
             } else {
-                currentDstField->SetTargetObject(newRef);
+                StorePlain(RootSlotAt(currentDst), from_object(newRef));
             }
             currentDst += sizeof(RefField<false>);
             currentSrc += sizeof(RefField<false>);
@@ -201,13 +205,13 @@ void IdleBarrier::CopyRefArray(BaseObject* dstObj, MAddress dst, MIndex dstSize,
         MAddress currentSrc = src + srcSize - sizeof(RefField<>);
         MAddress fieldBound = dst;
         while (currentDst >= fieldBound) {
-            RefField<false>* currentDstField = reinterpret_cast<RefField<false>*>(currentDst);
-            RefField<false>* currentSrcField = reinterpret_cast<RefField<false>*>(currentSrc);
-            BaseObject* newRef = ReadReference(srcObj, *currentSrcField);
+            HeapSlot<false>& currentDstField = HeapSlotAt<false>(currentDst);
+            HeapSlot<false>& currentSrcField = HeapSlotAt<false>(currentSrc);
+            BaseObject* newRef = ReadReference(srcObj, currentSrcField);
             if (inHeap) {
-                WriteReference(dstObj, *currentDstField, newRef);
+                WriteReference(dstObj, currentDstField, newRef);
             } else {
-                currentDstField->SetTargetObject(newRef);
+                StorePlain(RootSlotAt(currentDst), from_object(newRef));
             }
             currentDst -= sizeof(RefField<false>);
             currentSrc -= sizeof(RefField<false>);
