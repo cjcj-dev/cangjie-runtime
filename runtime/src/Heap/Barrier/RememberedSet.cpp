@@ -17,6 +17,7 @@
 
 #include "Base/Log.h"
 #include "Base/LogFile.h"
+#include "Heap/Verify/ProbeReadRouteDiag.h"
 
 namespace MapleRuntime {
 RememberedSet::RememberedSet()
@@ -118,6 +119,10 @@ void RememberedSet::Record(MAddress fieldAddress, bool fromMutatorBarrier)
     if ((old & mask) == 0) {
         recordCounts[buffer].fetch_add(1, std::memory_order_relaxed);
     }
+    ProbeReadRouteDiag::NoteRemsetEvent(
+        fieldAddress,
+        fromMutatorBarrier ? ProbeReadRouteDiag::REMSET_MUTATOR_RECORD : ProbeReadRouteDiag::REMSET_GC_RECORD,
+        static_cast<uint8_t>(buffer));
 #if defined(MRT_REMSET_BITMAP_CROSSCHECK)
     std::lock_guard<std::mutex> guard(oracleLock);
     oracleRecords[buffer].insert(fieldAddress);
@@ -161,6 +166,8 @@ size_t RememberedSet::TransferObjectSlots(MAddress fromBase, MAddress toBase, si
         }
         MAddress fromSlot = heapStart + bit * kFieldBytes;
         MAddress toSlot = static_cast<MAddress>(static_cast<ptrdiff_t>(fromSlot) + delta);
+        ProbeReadRouteDiag::NoteRemsetEvent(
+            fromSlot, ProbeReadRouteDiag::REMSET_TRANSFER_OUT, static_cast<uint8_t>(buffer), toSlot);
         Record(toSlot, false);
         ++transferred;
     }
@@ -175,6 +182,7 @@ void RememberedSet::FlipForMinor()
     CHECK_DETAIL(ClearBuffer(nextBuffer) == 0 && recordCounts[nextBuffer].load(std::memory_order_relaxed) == 0,
                  "remembered-set next buffer is not empty at minor swap");
     activeBuffer.store(static_cast<uint8_t>(nextBuffer), std::memory_order_release);
+    ProbeReadRouteDiag::NoteRemsetFlip();
 }
 
 size_t RememberedSet::ScanPreviousForMinor(std::unordered_set<MAddress>& records)
@@ -203,7 +211,10 @@ size_t RememberedSet::ScanPreviousForMinor(std::unordered_set<MAddress>& records
                     unsigned bitInWord = static_cast<unsigned>(__builtin_ctzll(word));
                     size_t bit = wordIdx * kBitsPerWord + bitInWord;
                     if (bit < bitCount) {
-                        records.insert(heapStart + bit * kFieldBytes);
+                        MAddress slot = heapStart + bit * kFieldBytes;
+                        ProbeReadRouteDiag::NoteRemsetEvent(
+                            slot, ProbeReadRouteDiag::REMSET_CONSUME, static_cast<uint8_t>(scanBuffer));
+                        records.insert(slot);
                     }
                     word &= word - 1;
                 }
@@ -322,7 +333,16 @@ size_t RememberedSet::ClearRangeInBuffer(size_t buffer, size_t firstBit, size_t 
                                                        (static_cast<uint64_t>(1) << last) - 1;
         uint64_t mask = highMask & ~lowMask;
         uint64_t old = bitmaps[buffer][wordIdx].fetch_and(~mask, std::memory_order_relaxed);
-        removed += static_cast<size_t>(__builtin_popcountll(old & mask));
+        uint64_t cleared = old & mask;
+        removed += static_cast<size_t>(__builtin_popcountll(cleared));
+        while (cleared != 0) {
+            const unsigned bitInWord = static_cast<unsigned>(__builtin_ctzll(cleared));
+            const size_t bit = wordIdx * kBitsPerWord + bitInWord;
+            ProbeReadRouteDiag::NoteRemsetEvent(
+                heapStart + bit * kFieldBytes, ProbeReadRouteDiag::REMSET_REGION_CLEAR,
+                static_cast<uint8_t>(buffer));
+            cleared &= cleared - 1;
+        }
         if ((old & ~mask) == 0) {
             ClearWordDirty(buffer, wordIdx);
         }

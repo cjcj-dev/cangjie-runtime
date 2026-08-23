@@ -29,7 +29,8 @@ WCOLLECTOR_INTERNAL_HIDDEN void PushAdmittedYoung(const MarkStackEntry& entry,
                                                   TracingCollector::WorkStack& workStack,
                                                   const char* origin, const void* slot = nullptr,
                                                   BaseObject* holder = nullptr);
-WCOLLECTOR_INTERNAL_HIDDEN bool ScrubMinorFreeTarget(RefField<>& field, BaseObject* target, bool fromFix);
+WCOLLECTOR_INTERNAL_HIDDEN bool ScrubMinorFreeTarget(RefField<>& field, BaseObject* target, bool fromFix,
+                                                    bool holderIsCurrentMinorRoot = false);
 
 extern WCOLLECTOR_INTERNAL_HIDDEN std::atomic<size_t> g_nullslotF3;
 extern WCOLLECTOR_INTERNAL_HIDDEN std::atomic<size_t> g_nullslotResolve;

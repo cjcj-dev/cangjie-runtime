@@ -28,6 +28,7 @@
 #include "Heap/Barrier/Barrier.h"
 #include "Heap/Collector/Collector.h"
 #include "Heap/WCollector/IdleBarrier.h"
+#include "Heap/WCollector/RememberedHolderPolicy.h"
 #include "ObjectModel/RefField.inline.h"
 #include "gc_heap_fixture.hpp"
 #include "gc_unittest.hpp"
@@ -70,6 +71,14 @@ bool ExpectRecorded(RememberedSet& rs, MAddress fieldAddr)
 }
 
 } // namespace
+
+GC_TEST(Remset, CurrentMinorRootOverridesRetainedDeadSnapshotAndNullHeal)
+{
+    GC_EXPECT_TRUE(KeepRememberedHolder(true, false));
+    GC_EXPECT_TRUE(KeepRememberedHolder(true, true));
+    GC_EXPECT_TRUE(KeepRememberedHolder(false, true));
+    GC_EXPECT_FALSE(KeepRememberedHolder(false, false));
+}
 
 // U7: product Barrier NVI WriteReference records old→young edge.
 GC_TEST(Remset, OldToYoungRecordedByBarrier)

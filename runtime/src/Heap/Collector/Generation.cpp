@@ -728,6 +728,7 @@ void WCollector::DoYoungGarbageCollection()
     std::vector<BaseObject*> reachableVec;
     reachableVec.reserve(1 << 17); // ~128k; real_load ~155k reachable
     MinorObjectSet allocationRoots;
+    MinorObjectSet currentMinorRoots;
     MinorSlotSet reachableSlots;
     MinorSlotSet weakSlots;
     if (remsetHashOptRequested && fullYoungScan) {
@@ -761,7 +762,13 @@ void WCollector::DoYoungGarbageCollection()
             }
             PushYoungObject(object, workStack, "alloc_buffer");
         }
-        VisitMinorRoots([this, &workStack](BaseObject* object) {
+        VisitMinorRoots([this, &workStack, &currentMinorRoots](BaseObject* object) {
+            if (Heap::IsHeapAddress(object)) {
+                RegionInfo* region = RegionInfo::TryGetRegionInfoAt(reinterpret_cast<MAddress>(object));
+                if (region != nullptr && !region->IsYoungRegion()) {
+                    currentMinorRoots.insert(object);
+                }
+            }
             PushYoungObject(object, workStack, "minor_root");
         }, stackScanEpoch);
     }
@@ -883,7 +890,8 @@ void WCollector::DoYoungGarbageCollection()
     {
         // minortime: ④ remset rescan + ⑤ mark closure pass-2 (from remset edges)
         MRT_PHASE_TIMER("young.remset_rescan");
-        RescanRememberedSet(workStack, rememberedSlots, reachableSlots, weakSlots, fullYoungScan,
+        RescanRememberedSet(workStack, rememberedSlots, reachableSlots, weakSlots, currentMinorRoots,
+                            fullYoungScan,
                             remsetConsumedLedgerElideActive ? nullptr : &consumedSlots, &remsetStats,
                             &remsetInteriorBases, stw.get());
     }
@@ -988,6 +996,7 @@ void WCollector::DoYoungGarbageCollection()
                         // Do NOT pass product fullYoungScan: that path drops slots missing from
                         // reachableSlots. Concurrent edges are the authority for new greys.
                         RescanRememberedSet(workStack, concurrentRemset, reachableSlots, weakSlots,
+                                            currentMinorRoots,
                                             /*fullYoungScan=*/false, &consumedSlots, &remsetStats,
                                             &remsetInteriorBases, stw.get());
                         for (MAddress slot : concurrentRemset) {
@@ -1002,12 +1011,30 @@ void WCollector::DoYoungGarbageCollection()
                         }
                     }
                 } else {
-                    // ZGC keeps a young target on current for the next young collection
-                    // (zRemembered.cpp:561-576).  Barrier producers have already marked the
-                    // new target; this collection's relocation fixes active slots via the
-                    // STW3 Snapshot() below, and the next STW1 consumes them after
-                    // FlipForMinor/ScanPreviousForMinor (RememberedSet.cpp:162-228).
-                    deferredCurrentRemset = rememberedSet.Size();
+                    // Keep current for the next minor, but scan it now as ZGC does
+                    // for an entry that crossed the young-mark flip
+                    // (zStoreBarrierBuffer.cpp:170-187). Snapshot is deliberately
+                    // non-destructive: this cycle scans it and the next flip retains it.
+                    concurrentRemset = rememberedSet.Snapshot();
+                    deferredCurrentRemset = concurrentRemset.size();
+                    Stw2CurrentAudit::Census(concurrentRemset, &theAllocator);
+                    if (!concurrentRemset.empty()) {
+                        rememberedSlots.insert(concurrentRemset.begin(), concurrentRemset.end());
+                        remsetStats.recorded = rememberedSlots.size();
+                        RescanRememberedSet(workStack, concurrentRemset, reachableSlots, weakSlots,
+                                            currentMinorRoots,
+                                            /*fullYoungScan=*/false, &consumedSlots, &remsetStats,
+                                            &remsetInteriorBases, stw.get());
+                        for (MAddress slot : concurrentRemset) {
+                            if (Heap::IsHeapAddress(slot)) {
+                                (void)LedgerInsert(reachableSlots, slot);
+                            }
+                        }
+                        if (!workStack.empty()) {
+                            TraceYoungClosure(workStack, fullYoungScan, reachableObjects, reachableVec,
+                                              reachableSlots, weakSlots, useBitmapLedger);
+                        }
+                    }
                 }
             }
             // youngconc Ⅱ: TRACE-window allocate-black greys (painted at alloc). Claim skip in
@@ -1098,7 +1125,14 @@ void WCollector::DoYoungGarbageCollection()
                             }
                         }
                     }
-                    VisitMinorRoots([this, &workStack, &rootExtraN](BaseObject* object) {
+                    VisitMinorRoots([this, &workStack, &rootExtraN, &currentMinorRoots](BaseObject* object) {
+                        if (Heap::IsHeapAddress(object)) {
+                            RegionInfo* region =
+                                RegionInfo::TryGetRegionInfoAt(reinterpret_cast<MAddress>(object));
+                            if (region != nullptr && !region->IsYoungRegion()) {
+                                currentMinorRoots.insert(object);
+                            }
+                        }
                         if (fullYoungScan) {
                             size_t before = workStack.size();
                             PushAdmittedYoung(object, workStack, "minor_root_final.fys");
@@ -1605,7 +1639,8 @@ void WCollector::DoYoungGarbageCollection()
     // their holders are in reachableVec and will be scanned by FixMinorObjectSlots.
     // Concurrent mark force-admits slots without that proof.
     const bool refFixSlotsCoveredByReachable = fullYoungScan && !youngConcMark;
-    EvacuateYoungRegions(reachableVec, consumedSlots, refFixSlotsCoveredByReachable, remsetInteriorBases, &stw);
+    EvacuateYoungRegions(reachableVec, consumedSlots, currentMinorRoots, refFixSlotsCoveredByReachable,
+                         remsetInteriorBases, &stw);
     size_t allocatedAfter = space.AllocatedBytes();
     stats.reclaimedBytes = allocatedBefore > allocatedAfter ? allocatedBefore - allocatedAfter : 0;
     GetGCStats().collectedBytes = stats.reclaimedBytes;

@@ -6,6 +6,8 @@
 
 
 #include "Heap/WCollector/WCollector.h"
+#include "Heap/WCollector/RememberedHolderPolicy.h"
+#include "Heap/Verify/ProbeReadRouteDiag.h"
 
 #include <array>
 #include <atomic>
@@ -1007,9 +1009,29 @@ void WCollector::InvalidateOldTaggedRefs(bool requireSurvivedMark)
 }
 void WCollector::RescanRememberedSet(WorkStack& workStack, const MinorSlotSet& rememberedSlots,
                                      const MinorSlotSet& reachableSlots, const MinorSlotSet& weakSlots,
-                                     bool fullYoungScan, MinorSlotSet* consumedOut, DiffPathRemsetStats* statsOut,
+                                     const MinorObjectSet& currentMinorRoots, bool fullYoungScan,
+                                     MinorSlotSet* consumedOut, DiffPathRemsetStats* statsOut,
                                      MinorInteriorBaseMap* interiorBasesOut, const ScopedStopTheWorld* stw)
 {
+    auto noteRemsetOutcome = [](MAddress slot, uint8_t outcome, MAddress target) {
+        if (!ProbeReadRouteDiag::RootTrackingEnabled() || slot == 0) {
+            return;
+        }
+        const size_t start = ProbeReadRouteDiag::EdgeStoreLedger::Hash(slot);
+        for (size_t n = 0; n < 8; ++n) {
+            auto& record = ProbeReadRouteDiag::EdgeStoreLedger::Records()[
+                (start + n) & ProbeReadRouteDiag::EdgeStoreLedger::kMask];
+            if (record.slot.load(std::memory_order_acquire) != slot) {
+                continue;
+            }
+            record.remsetEpoch.store(
+                ProbeReadRouteDiag::RemsetEpoch().load(std::memory_order_relaxed), std::memory_order_relaxed);
+            record.remsetTarget.store(target, std::memory_order_relaxed);
+            record.remsetFace.store(0xff, std::memory_order_relaxed);
+            record.remsetEvent.store(static_cast<uint8_t>(64 + outcome), std::memory_order_release);
+            return;
+        }
+    };
     auto plannedTo = [this, stw](BaseObject* from) -> BaseObject* {
         return stw != nullptr ? PlanRouteUnderStw(from, *stw).dest : FindToVersion(from);
     };
@@ -1032,6 +1054,9 @@ void WCollector::RescanRememberedSet(WorkStack& workStack, const MinorSlotSet& r
     size_t targetOriginVisitedObjects = 0;
     size_t scrubbedBadTarget = 0;
     size_t scrubbedStaleOldTag = 0;
+    size_t retainedDeadDropped = 0;
+    size_t rootedRetainedKept = 0;
+    size_t rootedStalePreserved = 0;
     constexpr bool retainedProbe = false;
     // remsetlife: uncapped classification of the bad_target arm. The existing sample log
     // caps at 16 per process, so the 386-edge population was only ever seen through 84
@@ -1104,6 +1129,7 @@ void WCollector::RescanRememberedSet(WorkStack& workStack, const MinorSlotSet& r
     std::unordered_set<RegionInfo*> originRegions;
     for (MAddress slot : rememberedSlots) {
         if (!Heap::IsHeapAddress(slot)) {
+            noteRemsetOutcome(slot, 1, 0);
             continue;
         }
         RegionInfo* region = RegionInfo::TryGetRegionInfoAt(slot);
@@ -1228,6 +1254,7 @@ void WCollector::RescanRememberedSet(WorkStack& workStack, const MinorSlotSet& r
             continue;
         }
         if (LedgerCount(weakSlots, slot) != 0) {
+            noteRemsetOutcome(slot, 2, 0);
             if (statsOut != nullptr) {
                 ++statsOut->skippedWeak;
             }
@@ -1236,6 +1263,7 @@ void WCollector::RescanRememberedSet(WorkStack& workStack, const MinorSlotSet& r
         }
         RegionInfo* holderRegion = RegionInfo::TryGetRegionInfoAt(slot);
         if (holderRegion == nullptr || holderRegion->IsFreeRegion() || holderRegion->IsGarbageRegion()) {
+            noteRemsetOutcome(slot, 3, 0);
             ++scrubbedDeadHolder;
             NwDropAudit::Note(NwDropAudit::kDeadHolder);
             size_t n = g_remsetScrubLogged.fetch_add(1, std::memory_order_relaxed);
@@ -1250,10 +1278,12 @@ void WCollector::RescanRememberedSet(WorkStack& workStack, const MinorSlotSet& r
         }
 
         bool keepByRetainedSnapshot = true;
+        BaseObject* retainedHolder = nullptr;
         auto originIt = rememberedOrigins.find(slot);
         if (originIt != rememberedOrigins.end() && originIt->second != nullptr &&
             Heap::IsHeapAddress(originIt->second)) {
             BaseObject* holder = originIt->second;
+            retainedHolder = holder;
             RegionInfo* originRegion = RegionInfo::TryGetRegionInfoAt(reinterpret_cast<MAddress>(holder));
             if (originRegion == holderRegion) {
                 if (retainedProbe) {
@@ -1354,10 +1384,22 @@ void WCollector::RescanRememberedSet(WorkStack& workStack, const MinorSlotSet& r
                 ++retainedDrop;
             }
         }
-        if (!keepByRetainedSnapshot) {
+        // The current MinorRaw/value-root walk is newer liveness evidence than
+        // the retained old snapshot. Keep the normal dead-holder pruning, but
+        // let a holder observed as a root in this minor win. This mirrors
+        // ZRemembered::scan_field (zRemembered.cpp:578-588): scan a live field
+        // consumed from the previous face and re-arm it if it still points young.
+        bool keepByCurrentRoot =
+            retainedHolder != nullptr && currentMinorRoots.count(retainedHolder) != 0;
+        if (!KeepRememberedHolder(keepByRetainedSnapshot, keepByCurrentRoot)) {
+            noteRemsetOutcome(slot, 4, 0);
             ++scrubbedDeadHolder;
+            ++retainedDeadDropped;
             NwDropAudit::Note(NwDropAudit::kRetained);
             continue;
+        }
+        if (!keepByRetainedSnapshot && keepByCurrentRoot) {
+            ++rootedRetainedKept;
         }
 
         HeapSlot<>* field = &HeapSlotAt<>(slot);
@@ -1379,9 +1421,15 @@ void WCollector::RescanRememberedSet(WorkStack& workStack, const MinorSlotSet& r
             // Do not CAS-null — slot may be RO; drop remset edge only via fall-through scrub.
             if (to == nullptr && !fromLive &&
                 (rawTarget == nullptr || Heap::IsHeapAddress(rawTarget))) {
-                if (SlotHeldByLiveObject(field)) {
+                bool holderLiveBySnapshot = SlotHeldByLiveObject(field);
+                if (KeepRememberedHolder(holderLiveBySnapshot, keepByCurrentRoot)) {
+                    if (!holderLiveBySnapshot && keepByCurrentRoot) {
+                        ++rootedStalePreserved;
+                    }
+                    noteRemsetOutcome(slot, 5, reinterpret_cast<MAddress>(rawTarget));
                     continue;
                 }
+                noteRemsetOutcome(slot, 6, reinterpret_cast<MAddress>(rawTarget));
                 ++scrubbedStaleOldTag;
                 NwDropAudit::Note(NwDropAudit::kStaleOldTag);
                 // N2: CAS null install (same slot may race with ResolveMinorReference under FYS=1).
@@ -1399,8 +1447,14 @@ void WCollector::RescanRememberedSet(WorkStack& workStack, const MinorSlotSet& r
             }
         }
 
-        BaseObject* target = ResolveMinorReference(*field);
+        bool preservedByCurrentRoot = false;
+        BaseObject* target =
+            ResolveMinorReference(*field, nullptr, keepByCurrentRoot, &preservedByCurrentRoot);
+        if (preservedByCurrentRoot) {
+            ++rootedStalePreserved;
+        }
         if (target == nullptr || !Heap::IsHeapAddress(target)) {
+            noteRemsetOutcome(slot, 7, reinterpret_cast<MAddress>(target));
             ++scrubbedStale;
             if (rawTarget != nullptr && Heap::IsHeapAddress(rawTarget) && plannedTo(rawTarget) == nullptr) {
                 NwDropAudit::Note(NwDropAudit::kFindToMiss);
@@ -1411,6 +1465,7 @@ void WCollector::RescanRememberedSet(WorkStack& workStack, const MinorSlotSet& r
         }
         BaseObject* targetBase = recoverYoungTargetBase(target);
         if (targetBase == nullptr) {
+            noteRemsetOutcome(slot, 8, reinterpret_cast<MAddress>(target));
             ++scrubbedNoTargetOrigin;
             NwDropAudit::Note(NwDropAudit::kNoOrigin);
             continue;
@@ -1423,6 +1478,7 @@ void WCollector::RescanRememberedSet(WorkStack& workStack, const MinorSlotSet& r
             ++recoveredTargetInterior;
         }
         if (!target->IsValidObject()) {
+            noteRemsetOutcome(slot, 9, reinterpret_cast<MAddress>(target));
             ++scrubbedBadTarget;
             NwDropAudit::Note(NwDropAudit::kBadTarget);
             if (remsetLifeProbe) {
@@ -1552,6 +1608,8 @@ void WCollector::RescanRememberedSet(WorkStack& workStack, const MinorSlotSet& r
             if (keepRegion != nullptr && keepRegion->IsYoungRegion()) {
                 Heap::GetHeap().GetRememberedSet().Record(slot);
                 ++reRemembered;
+            } else {
+                noteRemsetOutcome(slot, 10, reinterpret_cast<MAddress>(target));
             }
         }
     }
@@ -1573,6 +1631,10 @@ void WCollector::RescanRememberedSet(WorkStack& workStack, const MinorSlotSet& r
     // Printed every minor, including the zero: "re-arm never fired" and "re-arm is compiled out"
     // read identically otherwise, and this campaign has already spent a turn on that confusion.
     VLOG(REPORT, "[GCV2][remset-rearm] reRemembered=%zu scanned=%zu", reRemembered, rememberedSlots.size());
+    VLOG(REPORT,
+         "[GCV2][remset-holder-policy] rootedRetainedKept=%zu retainedDeadDropped=%zu "
+         "rootedStalePreserved=%zu currentRoots=%zu",
+         rootedRetainedKept, retainedDeadDropped, rootedStalePreserved, currentMinorRoots.size());
     NwDropAudit::Report("rescan");
     if (remsetLifeProbe && scrubbedBadTarget != 0) {
         VLOG(REPORT,
