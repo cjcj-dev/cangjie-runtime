@@ -33,11 +33,18 @@ enum class zaddress : Uptr { null = 0 };
 // Uncoloured — NOT safe to dereference; memory may be uncommitted / reclaimed.
 enum class zaddress_unsafe : Uptr { null = 0 };
 
+// Heap-base-relative virtual address offset. It is neither an address nor a
+// coloured pointer and therefore has no implicit conversion to/from either.
+// Mirror OpenJDK ZGC zAddress.hpp:230-233. A valid value is formed only by the
+// range-checking owner of the heap address space (currently ZGranuleMap).
+enum class zoffset : Uptr { zero = 0, invalid = static_cast<Uptr>(-1) };
+
 // ── raw bit views (for CAS expected/new, masks, logging) ──────────────────
 // 凭什么: enum class stores the same bits; raw is identity, not a state change.
 constexpr Uptr raw(zpointer p) { return static_cast<Uptr>(p); }
 constexpr Uptr raw(zaddress a) { return static_cast<Uptr>(a); }
 constexpr Uptr raw(zaddress_unsafe u) { return static_cast<Uptr>(u); }
+constexpr Uptr raw(zoffset offset) { return static_cast<Uptr>(offset); }
 
 // ── constructors from raw machine words ───────────────────────────────────
 // to_zpointer: 凭什么: value was just read from a ref-field slot (or is about to

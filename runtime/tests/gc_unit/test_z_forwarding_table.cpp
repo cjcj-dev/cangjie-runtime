@@ -20,8 +20,16 @@
 #include "Heap/Collector/ZForwarding.h"
 #include "gc_unittest.hpp"
 
+#include <type_traits>
+
 using namespace MapleRuntime;
 using namespace MapleRuntime::GcUnit;
+
+static_assert(!std::is_convertible_v<MAddress, zoffset>);
+static_assert(!std::is_convertible_v<zoffset, MAddress>);
+static_assert(!std::is_convertible_v<zpointer, zoffset>);
+static_assert(!std::is_convertible_v<zaddress, zoffset>);
+static_assert(!std::is_convertible_v<zaddress_unsafe, zoffset>);
 
 GC_TEST(ZGranuleMap, GetPutRemove)
 {
@@ -32,14 +40,37 @@ GC_TEST(ZGranuleMap, GetPutRemove)
 
     ZForwarding* fwd = ZForwarding::Create(4, kStart, kStart, kSize);
     GC_EXPECT_TRUE(fwd != nullptr);
-    map.put(kStart, kSize, fwd);
-    GC_EXPECT_TRUE(map.get(kStart) == fwd);
-    GC_EXPECT_TRUE(map.get(kStart + 8) == fwd);
-    GC_EXPECT_TRUE(map.get(kStart + kSize) == nullptr);
+    zoffset start;
+    zoffset interior;
+    zoffset next;
+    GC_EXPECT_TRUE(map.offset_for_address(kStart, &start));
+    GC_EXPECT_TRUE(map.offset_for_address(kStart + 8, &interior));
+    GC_EXPECT_TRUE(map.offset_for_address(kStart + kSize, &next));
+    map.put(start, kSize, fwd);
+    GC_EXPECT_TRUE(map.get(start) == fwd);
+    GC_EXPECT_TRUE(map.get(interior) == fwd);
+    GC_EXPECT_TRUE(map.get(next) == nullptr);
 
-    map.put(kStart, kSize, nullptr);
-    GC_EXPECT_TRUE(map.get(kStart) == nullptr);
+    map.put(start, kSize, nullptr);
+    GC_EXPECT_TRUE(map.get(start) == nullptr);
     fwd->Destroy();
+}
+
+GC_TEST(ZGranuleMap, OffsetBoundaryRejectsBeforeIndex)
+{
+    constexpr MAddress kStart = 0x41000000;
+    constexpr size_t kGranule = 0x1000;
+    constexpr size_t kHeapSize = 4 * kGranule;
+    ZGranuleMap<ZForwarding*> map;
+    GC_EXPECT_TRUE(map.Initialize(kStart, kHeapSize, kGranule));
+
+    zoffset offset = zoffset::invalid;
+    GC_EXPECT_TRUE(map.offset_for_address(kStart, &offset));
+    GC_EXPECT_EQ(raw(offset), static_cast<Uptr>(0));
+    GC_EXPECT_TRUE(map.offset_for_address(kStart + kHeapSize - 1, &offset));
+    GC_EXPECT_EQ(raw(offset), static_cast<Uptr>(kHeapSize - 1));
+    GC_EXPECT_FALSE(map.offset_for_address(kStart - 1, &offset));
+    GC_EXPECT_FALSE(map.offset_for_address(kStart + kHeapSize, &offset));
 }
 
 GC_TEST(ZForwarding, AttachedArraySitsAfterObject)
@@ -113,18 +144,22 @@ GC_TEST(ZForwardingTable, MembershipUnlinkKeepsEntries)
 
     ZForwarding* fwd = ZForwarding::Create(4, kStart, kStart, kSize);
     GC_EXPECT_TRUE(fwd != nullptr);
-    membership.put(kStart, kSize, fwd);
-    entries.put(kStart, kSize, fwd);
-
-    membership.put(kStart, kSize, nullptr);
-    GC_EXPECT_TRUE(membership.get(kStart) == nullptr);
-    GC_EXPECT_TRUE(entries.get(kStart) == fwd);
-
     const MAddress from = kStart + 16;
     const MAddress to = 0x70000000;
-    GC_EXPECT_EQ(fwd->insert(from, to), to);
-    GC_EXPECT_EQ(entries.get(from)->find(from), to);
+    zoffset start;
+    zoffset fromOffset;
+    GC_EXPECT_TRUE(membership.offset_for_address(kStart, &start));
+    GC_EXPECT_TRUE(entries.offset_for_address(from, &fromOffset));
+    membership.put(start, kSize, fwd);
+    entries.put(start, kSize, fwd);
 
-    entries.put(kStart, kSize, nullptr);
+    membership.put(start, kSize, nullptr);
+    GC_EXPECT_TRUE(membership.get(start) == nullptr);
+    GC_EXPECT_TRUE(entries.get(start) == fwd);
+
+    GC_EXPECT_EQ(fwd->insert(from, to), to);
+    GC_EXPECT_EQ(entries.get(fromOffset)->find(from), to);
+
+    entries.put(start, kSize, nullptr);
     fwd->Destroy();
 }
