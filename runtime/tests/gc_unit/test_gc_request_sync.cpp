@@ -6,6 +6,8 @@
 // synchronous callers wait for their request's completion index, while
 // asynchronous callers return immediately and share one pending bitmap entry.
 
+#if defined(MRT_GC_UNIT_TESTS)
+
 #include <atomic>
 #include <chrono>
 #include <csignal>
@@ -23,8 +25,11 @@
 #include "gc_unittest.hpp"
 
 #include "Cangjie.h"
+#include "Heap/Allocator/RegionSpace.h"
+#include "Heap/Collector/CollectorProxy.h"
 #include "Heap/Collector/CollectorResources.h"
 #include "Heap/Heap.h"
+#include "Inspector/ProfilerAgentImpl.h"
 #include "Mutator/ThreadLocal.h"
 
 using namespace MapleRuntime;
@@ -36,11 +41,15 @@ extern "C" void MCC_InvokeGCImpl(bool sync);
 
 class CollectorResourcesTestPeer {
 public:
-    static Collector* Init(CollectorResources& resources, Collector& collector, bool startNearReceiptWrap)
+    static void Init(CollectorResources& resources, Collector& collector, bool startNearReceiptWrap)
     {
         MRT_ASSERT(resources.taskQueue == nullptr, "gc_unit requires an uninitialized product task queue");
-        Collector* productCollector = resources.collector;
-        resources.collector = &collector;
+        static bool productCollectorInitialized = false;
+        if (!productCollectorInitialized) {
+            resources.collectorProxy.Init();
+            productCollectorInitialized = true;
+        }
+        resources.testCollector = &collector;
         resources.taskQueue = new TaskQueue<GCExecutor>;
         resources.taskQueue->Init();
         if (startNearReceiptWrap) {
@@ -48,7 +57,6 @@ public:
         }
         resources.finishedGcIndex.store(resources.taskQueue->syncTaskIndex, std::memory_order_release);
         resources.isGCActive.store(true, std::memory_order_release);
-        return productCollector;
     }
 
     static bool ShouldWaitForIgnoredGcRequest(GCReason reason, bool async)
@@ -63,11 +71,19 @@ public:
         (void)resources.taskQueue->EnqueueSync(task, filter);
     }
 
-    static void Destroy(CollectorResources& resources, Collector* productCollector)
+    static void Destroy(CollectorResources& resources)
     {
         delete resources.taskQueue;
         resources.taskQueue = nullptr;
-        resources.collector = productCollector;
+        resources.testCollector = nullptr;
+    }
+};
+
+class RegionSpaceTestPeer {
+public:
+    static bool ShouldRetryAllocation(RegionSpace& space, size_t& tryTimes, size_t size)
+    {
+        return space.ShouldRetryAllocation(tryTimes, size);
     }
 };
 
@@ -87,6 +103,7 @@ public:
         std::lock_guard<std::mutex> lock(mutex);
         ++ignoreChecks;
         ignoreChecked.notify_all();
+        requestProgress.notify_all();
         return ignoreRequests;
     }
     BaseObject* FindToVersion(BaseObject*) const override { return nullptr; }
@@ -129,6 +146,26 @@ public:
         return ignoreChecked.wait_for(lock, kHarnessHangLimit, [this, count] { return ignoreChecks >= count; });
     }
 
+    void NoteRequesterReturned()
+    {
+        std::lock_guard<std::mutex> lock(mutex);
+        requesterReturned = true;
+        requestProgress.notify_all();
+    }
+
+    bool WaitForRequestDecisionOrReturn()
+    {
+        std::unique_lock<std::mutex> lock(mutex);
+        return requestProgress.wait_for(lock, kHarnessHangLimit,
+                                        [this] { return ignoreChecks != 0 || requesterReturned; });
+    }
+
+    bool HasRequesterReturned()
+    {
+        std::lock_guard<std::mutex> lock(mutex);
+        return requesterReturned;
+    }
+
     void ReleaseOne()
     {
         std::lock_guard<std::mutex> lock(mutex);
@@ -160,8 +197,10 @@ private:
     std::mutex mutex;
     std::condition_variable entered;
     std::condition_variable ignoreChecked;
+    std::condition_variable requestProgress;
     std::condition_variable release;
     bool ignoreRequests = false;
+    bool requesterReturned = false;
     size_t ignoreChecks = 0;
     size_t releasedRuns = 0;
     std::vector<uint64_t> indexes;
@@ -175,7 +214,7 @@ public:
     {
         Heap::GetHeap().EnableGC(true);
         collector.SetResources(resources);
-        productCollector = CollectorResourcesTestPeer::Init(resources, collector, startNearReceiptWrap);
+        CollectorResourcesTestPeer::Init(resources, collector, startNearReceiptWrap);
         consumer = std::thread([this] { resources.RunTaskLoop(); });
     }
 
@@ -189,7 +228,7 @@ public:
         collector.ReleaseAll();
         CollectorResourcesTestPeer::RequestStop(resources);
         consumer.join();
-        CollectorResourcesTestPeer::Destroy(resources, productCollector);
+        CollectorResourcesTestPeer::Destroy(resources);
         Heap::GetHeap().EnableGC(gcWasEnabled);
     }
 
@@ -197,7 +236,6 @@ public:
     CollectorResources& resources;
 
 private:
-    Collector* productCollector = nullptr;
     bool gcWasEnabled;
     std::thread consumer;
 };
@@ -220,13 +258,18 @@ SyncResult RunSynchronousRequest(const std::function<void(RequestHarness&)>& req
         // An FP runtime thread has no mutator and is a supported synchronous caller.
         ThreadLocal::SetThreadType(ThreadType::FP_THREAD);
         request(harness);
+        harness.collector.NoteRequesterReturned();
         returnedPromise.set_value();
     });
     JoinGuard requesterGuard(requester);
 
-    bool entered = harness.collector.WaitForRuns(1);
+    bool requestMadeProgress = harness.collector.WaitForRequestDecisionOrReturn();
+    bool entered = requestMadeProgress && !harness.collector.HasRequesterReturned() &&
+        harness.collector.WaitForRuns(1);
     bool returnedBeforeRelease = returned.wait_for(std::chrono::seconds(0)) == std::future_status::ready;
-    harness.collector.ReleaseOne();
+    if (entered) {
+        harness.collector.ReleaseOne();
+    }
     bool returnedAfterRelease = returned.wait_for(kHarnessHangLimit) == std::future_status::ready;
     if (!returnedAfterRelease) {
         harness.Stop();
@@ -334,6 +377,38 @@ GC_TEST(GcRequestSync, OomAndForceRemainSynchronous)
         ExpectCompletedSync(result, reason);
     }
 }
+
+GC_TEST(GcRequestSync, AllocationRetryOomEntryWaitsForOwnCompletion)
+{
+    SyncResult result = RunSynchronousRequest([](RequestHarness&) {
+        RegionSpace& space = static_cast<RegionSpace&>(Heap::GetHeap().GetAllocator());
+        size_t tryTimes = 5;
+        bool shouldRetry = RegionSpaceTestPeer::ShouldRetryAllocation(space, tryTimes, 64);
+        GC_EXPECT_TRUE(shouldRetry);
+    });
+    ExpectCompletedSync(result, GC_REASON_OOM);
+}
+
+GC_TEST(GcRequestSync, AllocationRetryHeuEntryWaitsForOwnCompletion)
+{
+    SyncResult result = RunSynchronousRequest([](RequestHarness&) {
+        RegionSpace& space = static_cast<RegionSpace&>(Heap::GetHeap().GetAllocator());
+        size_t tryTimes = 4;
+        bool shouldRetry = RegionSpaceTestPeer::ShouldRetryAllocation(space, tryTimes, 64);
+        GC_EXPECT_TRUE(shouldRetry);
+    });
+    ExpectCompletedSync(result, GC_REASON_HEU);
+}
+
+#if defined(__OHOS__) && (__OHOS__ == 1)
+GC_TEST(GcRequestSync, ProfilerCollectGarbageEntryWaitsForOwnCompletion)
+{
+    SyncResult result = RunSynchronousRequest([](RequestHarness&) {
+        ProfilerAgentImpl("{\"id\":1,\"method\":\"collectGarbage\"}", [](const std::string&) {});
+    });
+    ExpectCompletedSync(result, GC_REASON_HEU);
+}
+#endif
 
 GC_TEST(GcRequestSync, IgnoredStaticSyncReasonsWaitForCurrentGc)
 {
@@ -509,3 +584,5 @@ GC_TEST(GcRequestSync, CompilerAsyncEntryReturnsAndMergesPendingRequest)
 }
 
 } // namespace MapleRuntime
+
+#endif // MRT_GC_UNIT_TESTS

@@ -221,7 +221,14 @@ public:
                 }
             }
         }
-        task.SetTaskIndex(static_cast<GCTask::TaskIndex>(++syncTaskIndex));
+        // Keep receipts in the legal ring; sentinel values are protocol state,
+        // never synchronous request identifiers.
+        if (syncTaskIndex >= GCTask::ASYNC_TASK_INDEX - 1) {
+            syncTaskIndex = GCTask::SYNC_TASK_MIN_INDEX;
+        } else {
+            ++syncTaskIndex;
+        }
+        task.SetTaskIndex(static_cast<GCTask::TaskIndex>(syncTaskIndex));
         queue.push_back(task);
         taskQueueCondVar.notify_all();
         return task.GetTaskIndex();
@@ -279,6 +286,10 @@ public:
     }
 
 private:
+#if defined(MRT_GC_UNIT_TESTS)
+    friend class CollectorResourcesTestPeer;
+#endif
+
     static constexpr uint64_t DEFAULT_GC_TASK_INTERVAL_TIMEOUT_NS = 1000L * 1000 * 1000; // default 1s
     std::recursive_mutex taskQueueLock;
     std::condition_variable_any taskQueueCondVar;

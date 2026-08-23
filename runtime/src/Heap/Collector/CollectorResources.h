@@ -16,7 +16,11 @@
 #include "TaskQueue.h"
 
 namespace MapleRuntime {
+class Collector;
 class CollectorProxy;
+#if defined(MRT_GC_UNIT_TESTS)
+class CollectorResourcesTestPeer;
+#endif
 // CollectorResources provides the resources that a functional collector need,
 // such as gc thread/threadPool, gc task queue...
 class CollectorResources {
@@ -64,6 +68,10 @@ public:
     void RequestHeapDump(GCTask::TaskType gcTask);
 
 private:
+#if defined(MRT_GC_UNIT_TESTS)
+    friend class CollectorResourcesTestPeer;
+#endif
+
     void StartGCThreads();
     void TerminateGCTask();
     void StopGCThreads();
@@ -72,7 +80,35 @@ private:
     // reason: The reason for this GC.
     void RequestAsyncGC(GCReason reason);
     void RequestGCAndWait(GCReason reason);
-    void PostIgnoredGcRequest(GCReason reason);
+    void PostIgnoredGcRequest(bool shouldWait);
+#if defined(MRT_GC_UNIT_TESTS)
+    MRT_EXPORT static bool ShouldWaitForIgnoredGcRequest(GCReason reason, bool async);
+    MRT_EXPORT static bool HasSyncTaskCompleted(uint64_t finishedIndex, uint64_t awaitedIndex);
+#else
+    ALWAYS_INLINE static inline bool ShouldWaitForIgnoredGcRequest(GCReason reason, bool async)
+    {
+        return !async || g_gcRequests[reason].IsSyncGC();
+    }
+
+    ALWAYS_INLINE static inline bool HasSyncTaskCompleted(uint64_t finishedIndex, uint64_t awaitedIndex)
+    {
+        if (finishedIndex == GCTask::TASK_INDEX_FOR_EXIT) {
+            return true;
+        }
+        MRT_ASSERT(finishedIndex >= GCTask::SYNC_TASK_MIN_INDEX && finishedIndex < GCTask::ASYNC_TASK_INDEX,
+                   "finished sync task index must not be a sentinel");
+        MRT_ASSERT(awaitedIndex >= GCTask::SYNC_TASK_MIN_INDEX && awaitedIndex < GCTask::ASYNC_TASK_INDEX,
+                   "awaited sync task index must not be a sentinel");
+        constexpr uint64_t ringSize = GCTask::ASYNC_TASK_INDEX - GCTask::SYNC_TASK_MIN_INDEX;
+        constexpr uint64_t halfRing = ringSize / 2;
+        uint64_t finishedOrdinal = finishedIndex - GCTask::SYNC_TASK_MIN_INDEX;
+        uint64_t awaitedOrdinal = awaitedIndex - GCTask::SYNC_TASK_MIN_INDEX;
+        uint64_t forwardDistance = finishedOrdinal >= awaitedOrdinal
+            ? finishedOrdinal - awaitedOrdinal
+            : ringSize - awaitedOrdinal + finishedOrdinal;
+        return forwardDistance <= halfRing;
+    }
+#endif
 
     // the thread pool for parallel tracing.
     GCThreadPool* gcThreadPool = nullptr;
@@ -80,6 +116,11 @@ private:
     GCThreadPool* evacuationThreadPool = nullptr;
     int32_t gcThreadCount = 1;
     TaskQueue<GCExecutor>* taskQueue = nullptr;
+#if defined(MRT_GC_UNIT_TESTS)
+    // Deterministic unit builds can replace only the task executor.  The
+    // default product retains CollectorProxy as its sole owner and ABI shape.
+    Collector* testCollector = nullptr;
+#endif
 
     // the collector thread handle.
     pthread_t gcMainThread = 0;

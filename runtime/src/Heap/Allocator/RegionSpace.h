@@ -25,6 +25,9 @@
 #endif
 
 namespace MapleRuntime {
+#if defined(MRT_GC_UNIT_TESTS)
+class RegionSpaceTestPeer;
+#endif
 // RegionSpace aims to be the API for other components of runtime
 // the complication of implementation is delegated to RegionManager
 // allocator should not depend on any assumptions on the details of RegionManager
@@ -254,6 +257,10 @@ public:
     friend class Allocator;
 
 private:
+#if defined(MRT_GC_UNIT_TESTS)
+    friend class RegionSpaceTestPeer;
+#endif
+
     enum class TryAllocationThreshold {
         RESCHEDULE = 3,
         TRIGGER_OOM = 5,
