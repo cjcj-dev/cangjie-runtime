@@ -324,14 +324,14 @@ void* RunSegmentedCase(void* rawMode)
         status += ctx.firstSegmentYieldCount >= 2 ? 0 : 1;
         if (gc == YieldGc::YOUNG) {
             const uint32_t required =
-                (1U << static_cast<unsigned>(LargeArrayRootVisitSite::MUTATOR_STACK)) |
+                (1U << static_cast<unsigned>(LargeArrayRootVisitSite::MUTATOR_STACK_NATIVE)) |
                 (1U << static_cast<unsigned>(LargeArrayRootVisitSite::MINOR_MARK)) |
                 (1U << static_cast<unsigned>(LargeArrayRootVisitSite::MINOR_RELOCATE)) |
                 (1U << static_cast<unsigned>(LargeArrayRootVisitSite::ITERATOR_SKIP));
             status += (ctx.rootVisitSites & required) == required ? 0 : 1;
         } else {
             const uint32_t required =
-                (1U << static_cast<unsigned>(LargeArrayRootVisitSite::STACK_WATERMARK)) |
+                (1U << static_cast<unsigned>(LargeArrayRootVisitSite::STACK_WATERMARK_NATIVE)) |
                 (1U << static_cast<unsigned>(LargeArrayRootVisitSite::REMEMBERED)) |
                 (1U << static_cast<unsigned>(LargeArrayRootVisitSite::ITERATOR_SKIP));
             status += (ctx.rootVisitSites & required) == required ? 0 : 1;

@@ -10,6 +10,7 @@ SRC="$ROOT/runtime/tests/gc_unit"
 SCRIPT="$SRC/run_standalone.sh"
 FINALIZER_SCRIPT="$SRC/run_finalizer_trigger.sh"
 PHASE_ENTRY_SCRIPT="$SRC/run_phase_entry_trigger.sh"
+SEGMENTED_MANAGED_SCRIPT="$SRC/run_segmented_array_managed.sh"
 STATUS_FILE="${GC_UNIT_GATE_STATUS:-${GCV2_RUNTIME_LIB_DIR:+$GCV2_RUNTIME_LIB_DIR/gc_unit_gate.status}}"
 STATUS_FILE="${STATUS_FILE:-$ROOT/runtime/output/gc_unit_gate.status}"
 
@@ -20,6 +21,8 @@ FINALIZER_STATE=NOT_RUN
 FINALIZER_SOURCE=NOT_RUN
 PHASE_ENTRY_STATE=NOT_RUN
 PHASE_ENTRY_SOURCE=NOT_RUN
+SEGMENTED_MANAGED_STATE=NOT_RUN
+SEGMENTED_MANAGED_SOURCE=NOT_RUN
 STATUS_REASON=UNEXPECTED_EXIT
 
 write_status() {
@@ -36,6 +39,8 @@ write_status() {
     echo "FINALIZER_TRIGGER_SOURCE=$FINALIZER_SOURCE"
     echo "PHASE_ENTRY_TRIGGER=$PHASE_ENTRY_STATE"
     echo "PHASE_ENTRY_TRIGGER_SOURCE=$PHASE_ENTRY_SOURCE"
+    echo "SEGMENTED_ARRAY_MANAGED=$SEGMENTED_MANAGED_STATE"
+    echo "SEGMENTED_ARRAY_MANAGED_SOURCE=$SEGMENTED_MANAGED_SOURCE"
     echo "REASON=$STATUS_REASON"
   } >"$tmp"
   mv -f "$tmp" "$STATUS_FILE"
@@ -72,7 +77,8 @@ if [[ ! -f "$SCRIPT" ]]; then
 fi
 if [[ ! -f "$FINALIZER_SCRIPT" || ! -f "$SRC/finalizer_trigger.cj" ||
       ! -f "$PHASE_ENTRY_SCRIPT" || ! -f "$SRC/phase_entry_trigger.cj" ||
-      ! -f "$SRC/phase_entry_major.cj" ]]; then
+      ! -f "$SRC/phase_entry_major.cj" || ! -f "$SEGMENTED_MANAGED_SCRIPT" ||
+      ! -f "$SRC/segmented_array_managed.cj" ]]; then
   echo "GC_UNIT_GATE_FAIL: missing end-to-end language-level test" >&2
   exit 2
 fi
@@ -156,6 +162,8 @@ if [[ -f "$STAMP" && "$STAMP" -nt "$SO" ]]; then
     FINALIZER_SOURCE=CACHE
     PHASE_ENTRY_STATE=PASS
     PHASE_ENTRY_SOURCE=CACHE
+    SEGMENTED_MANAGED_STATE=PASS
+    SEGMENTED_MANAGED_SOURCE=CACHE
     GATE_STATE=PASS
     STATUS_REASON=CACHED_PASS
     echo "GC_UNIT_GATE_OK (cached: runtime and suite both older than last green run) status=$STATUS_FILE"
@@ -284,8 +292,17 @@ if ! bash "$PHASE_ENTRY_SCRIPT"; then
   exit 1
 fi
 
+SEGMENTED_MANAGED_STATE=FAIL
+SEGMENTED_MANAGED_SOURCE=FRESH
+STATUS_REASON=SEGMENTED_ARRAY_MANAGED_FAILURE
+if ! bash "$SEGMENTED_MANAGED_SCRIPT"; then
+  echo "GC_UNIT_GATE_FAIL: managed segmented-array product entry test failed" >&2
+  exit 1
+fi
+
 FINALIZER_STATE=PASS
 PHASE_ENTRY_STATE=PASS
+SEGMENTED_MANAGED_STATE=PASS
 GATE_STATE=PASS
 STATUS_REASON=PASS
 touch "$STAMP"
