@@ -54,7 +54,7 @@ GC_TEST(ForwardingNoGeometry, ArmedMissIsNullNotGeometry)
     GC_EXPECT_TRUE(ans == ForwardingTable::ToAnswer::ArmedHit);
 
     fx.region0->SetRouteState(RegionInfo::NORMAL);
-    fx.region0->metadata.liveInfo0 = nullptr;
+    fx.region0->RetireFromPageMetadata();
     fx.region0->metadata.liveInfo = nullptr;
     fx.FreePlanted(live);
 }

@@ -82,7 +82,7 @@ GC_TEST(RouteInfo, MissingDomainReturnsNullNotGarbage)
     GC_EXPECT_EQ(reinterpret_cast<uintptr_t>(to), 0x20000000u + pre);
 
     region->SetRouteState(RegionInfo::NORMAL);
-    region->metadata.liveInfo0 = nullptr;
+    region->RetireFromPageMetadata();
     region->metadata.liveInfo = nullptr;
     fx.FreePlanted(live);
 }
@@ -145,7 +145,7 @@ GC_TEST(RouteInfo, BindLiveInfo0FromLiveIfNull)
     GC_EXPECT_EQ(reinterpret_cast<uintptr_t>(region->GetLiveInfo0ForProbe()),
                  reinterpret_cast<uintptr_t>(liveA));
 
-    region->metadata.liveInfo0 = nullptr;
+    region->RetireFromPageMetadata();
     region->metadata.liveInfo = nullptr;
     region->BindLiveInfo0FromLiveIfNull();
     GC_EXPECT_TRUE(region->GetLiveInfo0ForProbe() == nullptr);
@@ -155,7 +155,7 @@ GC_TEST(RouteInfo, BindLiveInfo0FromLiveIfNull)
     GC_EXPECT_EQ(reinterpret_cast<uintptr_t>(region->GetLiveInfo0ForProbe()),
                  reinterpret_cast<uintptr_t>(liveA));
 
-    region->metadata.liveInfo0 = nullptr;
+    region->RetireFromPageMetadata();
     region->metadata.liveInfo = nullptr;
     fx.FreePlanted(liveA);
     delete liveB;

@@ -151,22 +151,20 @@ GC_TEST(YoungConc, PaintedObjectSkippedByShouldEnqueue)
     fx.FreePlanted(live);
 }
 
-// Stale major (Old) mark must not skip SATB during young concurrent mark.
-// SatbBuffer::ShouldEnqueue used Old unconditionally; a still-young object with a
-// leftover Old bit was treated as already-enqueued and never keep-alive marked.
-GC_TEST(YoungConc, StaleOldMarkDoesNotSkipYoungEnqueue)
+// A current page has one owner/livemap pair. Typed closure views do not expose
+// a second current bitmap, so either reader observes the owner's existing mark.
+GC_TEST(YoungConc, SingleCurrentMarkSuppressesEnqueueForEitherClosure)
 {
     GcHeapFixture fx;
     fx.region0->SetYoungRegionFlag(1);
     fx.region0->SetYoungAge(1);
     LiveInfo* live = fx.PlantLiveInfo(fx.region0);
     (void)fx.PlantMarkBitmap<Generation::Young>(live, fx.region0->GetRegionSize());
-    (void)fx.PlantMarkBitmap<Generation::Old>(live, fx.region0->GetRegionSize());
     size_t off = fx.region0->GetAddressOffset(reinterpret_cast<MAddress>(fx.obj0));
-    MarkView<Generation::Old> oldView = fx.region0->GetMarkView<Generation::Old>();
-    (void)fx.region0->GetMarkBitmap(oldView)->MarkBits(off, 8, fx.region0->GetRegionSize());
+    MarkView<Generation::Young> youngView = fx.region0->GetMarkView<Generation::Young>();
+    (void)fx.region0->GetMarkBitmap(youngView)->MarkBits(off, 8, fx.region0->GetRegionSize());
+    GC_EXPECT_FALSE(RegionSpace::ShouldEnqueue<Generation::Young>(fx.obj0));
     GC_EXPECT_FALSE(RegionSpace::ShouldEnqueue<Generation::Old>(fx.obj0));
-    GC_EXPECT_TRUE(RegionSpace::ShouldEnqueue<Generation::Young>(fx.obj0));
     fx.region0->metadata.liveInfo = nullptr;
     fx.FreePlanted(live);
 }
