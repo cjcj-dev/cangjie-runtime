@@ -80,8 +80,8 @@ GC_TEST(ZStat, RegistryEnumeratesObservedPhases)
     ZStat::NotePhase("young.evac_finish", true, 50);
     std::vector<std::string> names = ZStat::RegisteredPhases();
     GC_EXPECT_EQ(names.size(), 2U);
-    GC_EXPECT_EQ(names[0], std::string("young.evac_finish")); // sorted for stable diffs
-    GC_EXPECT_EQ(names[1], std::string("young.remset_drain"));
+    // sorted for stable diffs
+    GC_EXPECT_EQ(names[0] == "young.evac_finish" && names[1] == "young.remset_drain", true);
 }
 
 GC_TEST(ZStat, StwDepthCounterClassifies)
