@@ -100,10 +100,15 @@ void ForwardingTable::Initialize(MAddress heapStart, size_t heapSize, size_t uni
     if (dumped.compare_exchange_strong(expected, true, std::memory_order_relaxed)) {
         std::atexit([]() {
             std::fprintf(stderr,
-                         "[FWDTABLE][refuse] atexit full=%llu overflow=%llu armedHit=%llu armedMiss=%llu unarmed=%llu\n",
+                         "[FWDTABLE][refuse] atexit full=%llu overflow=%llu fallbackFull=%llu "
+                         "fallbackOverflow=%llu armedHit=%llu armedMiss=%llu unarmed=%llu\n",
                          static_cast<unsigned long long>(ZForwarding::FullRefusals().load(std::memory_order_relaxed)),
                          static_cast<unsigned long long>(
                              ZForwarding::OverflowRefusals().load(std::memory_order_relaxed)),
+                         static_cast<unsigned long long>(
+                             ZForwarding::FullFallbacks().load(std::memory_order_relaxed)),
+                         static_cast<unsigned long long>(
+                             ZForwarding::OverflowFallbacks().load(std::memory_order_relaxed)),
                          static_cast<unsigned long long>(ForwardingTable::ArmedHitCount()),
                          static_cast<unsigned long long>(ForwardingTable::ArmedMissCount()),
                          static_cast<unsigned long long>(ForwardingTable::UnarmedCount()));
@@ -425,6 +430,11 @@ ZForwarding::Receipt ForwardingTable::InstallMapping(MAddress from, MAddress to)
 MAddress ForwardingTable::InsertMapping(MAddress from, MAddress to)
 {
     return InstallMapping(from, to).address;
+}
+
+bool ForwardingTable::ReceiptAllowsForwarded(MAddress mapped)
+{
+    return mapped != 0;
 }
 
 std::atomic<uint64_t>& ZForwarding::StaleToLifeCount()

@@ -188,11 +188,25 @@ public:
                 break;
             }
         }
-        FullRefusals().fetch_add(1, std::memory_order_relaxed);
+        FullFallbacks().fetch_add(1, std::memory_order_relaxed);
         return kNotStored;
     }
 
+    static std::atomic<uint64_t>& FullFallbacks()
+    {
+        static std::atomic<uint64_t> n{ 0 };
+        return n;
+    }
+
+    // Preserve the pre-existing diagnostic contract. These count terminal
+    // refusal, not a successful spill into the exact-key receipt map.
     static std::atomic<uint64_t>& FullRefusals()
+    {
+        static std::atomic<uint64_t> n{ 0 };
+        return n;
+    }
+
+    static std::atomic<uint64_t>& OverflowFallbacks()
     {
         static std::atomic<uint64_t> n{ 0 };
         return n;
@@ -225,7 +239,7 @@ public:
                 return Receipt{ _heapBase + static_cast<MAddress>(finalOff), installed };
             }
         } else {
-            OverflowRefusals().fetch_add(1, std::memory_order_relaxed);
+            OverflowFallbacks().fetch_add(1, std::memory_order_relaxed);
         }
 
         // The attached array is deliberately bounded, but receipt installation is
