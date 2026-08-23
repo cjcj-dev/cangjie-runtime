@@ -10,14 +10,18 @@
 #include <mutex>
 #include <sstream>
 
+#include "gc_heap_fixture.hpp"
+
+#include "Common/Runtime.h"
+#include "Concurrency/Concurrency.h"
 #include "Heap/Barrier/Barrier.h"
 #include "Heap/Barrier/RememberedSet.h"
 #include "Common/ColourPredicates.h"
 #include "Heap/Collector/Collector.h"
 #include "Heap/Heap.h"
 #include "Heap/Verify/M0ExitDiagnostics.h"
+#include "Mutator/MutatorManager.h"
 #include "ObjectModel/RefField.inline.h"
-#include "gc_heap_fixture.hpp"
 #include "gc_unittest.hpp"
 
 // Test-only access to the existing private root-fix entry; this changes no product declaration,
@@ -36,10 +40,11 @@ namespace {
 
 class NoAnswerCollector final : public Collector {
 public:
+    BaseObject* answer = nullptr;
     void Init() override {}
     void RunGarbageCollection(uint64_t, GCReason) override {}
     bool ShouldIgnoreRequest(GCRequest&) override { return false; }
-    BaseObject* FindToVersion(BaseObject*) const override { return nullptr; }
+    BaseObject* FindToVersion(BaseObject*) const override { return answer; }
     bool TryUpdateRefField(BaseObject*, RefField<>&, BaseObject*&) const override { return false; }
     bool IsOldPointer(RefField<>&) const override { return false; }
     bool IsFromObject(BaseObject*) const override { return false; }
@@ -97,19 +102,55 @@ struct ReadEntryFixture {
 };
 
 struct RootEntryFixture {
+    class ProductRootRuntime final : public Runtime {
+    public:
+        static void Ensure()
+        {
+            static ProductRootRuntime runtimeContainer;
+            (void)runtimeContainer;
+        }
+
+        RuntimeParam GetRuntimeParam() const override { return params; }
+        void SetGCThreshold(uint64_t) override {}
+
+    private:
+        ProductRootRuntime()
+        {
+            runtime = this;
+            mutatorManager = &manager;
+            concurrencyModel = &concurrency;
+            manager.Init();
+            const ConcurrencyParam concurrencyParam = { 1024, 64, 1 };
+            concurrency.Init(concurrencyParam);
+        }
+
+        RuntimeParam params = {};
+        MutatorManager manager;
+        Concurrency concurrency;
+    };
+
     RootEntryFixture() : collector(Heap::GetHeap().GetAllocator(), Heap::GetHeap().GetCollectorResources())
     {
+        ProductRootRuntime::Ensure();
         ForwardingTable::Initialize(heap.heapStart, GcHeapFixture::kUnits * RegionInfo::UNIT_SIZE,
                                     RegionInfo::UNIT_SIZE);
         heap.region0->SetRegionType(RegionInfo::RegionType::FROM_REGION);
         heap.region0->SetInGhostRegion(1);
         heap.region0->SetRouteState(RegionInfo::ROUTED);
         StorePlain(root, from_object(heap.obj0));
+        registeredRoots[0] = &root;
+        Heap::GetHeap().RegisterStaticRoots(reinterpret_cast<Uptr>(registeredRoots), 1);
+    }
+
+    ~RootEntryFixture()
+    {
+        Heap::GetHeap().UnregisterStaticRoots(reinterpret_cast<Uptr>(registeredRoots), 1);
     }
 
     GcHeapFixture heap;
     WCollector collector;
     RootSlot root;
+    RootSlot* registeredRoots[1] = {};
 };
 
 } // namespace
@@ -154,23 +195,25 @@ GC_TEST(M0Exit, ReadRuntimeEntryClassifiesPublishedCopyAsS1)
 GC_TEST(M0Exit, ReadRuntimeEntryResolvedNormalPathIsSilent)
 {
     ReadEntryFixture fx;
+    fx.heap.obj0->SetStateCode(ObjectState::FORWARDED);
+    fx.collector.answer = fx.heap.obj1;
     const M0ExitDiagnostics::Counts before = M0ExitDiagnostics::GetCounts();
 
     ObjectPtr got = CJ_MCC_ReadRefField(fx.heap.obj1, fx.field);
 
     const M0ExitDiagnostics::Counts after = M0ExitDiagnostics::GetCounts();
-    GC_EXPECT_EQ(reinterpret_cast<uintptr_t>(got), reinterpret_cast<uintptr_t>(fx.heap.obj0));
+    GC_EXPECT_EQ(reinterpret_cast<uintptr_t>(got), reinterpret_cast<uintptr_t>(fx.heap.obj1));
     GC_EXPECT_EQ(after.total, before.total);
     GC_EXPECT_EQ(after.s0, before.s0);
     GC_EXPECT_EQ(after.s1, before.s1);
 }
 
-GC_TEST(M0Exit, RootFixProductExitClassifiesNoCopyAsS0)
+GC_TEST(M0Exit, RootFixRuntimeEnumerationClassifiesNoCopyAsS0)
 {
     RootEntryFixture fx;
     const M0ExitDiagnostics::Counts before = M0ExitDiagnostics::GetCounts();
 
-    (void)fx.collector.FixMinorEvacuatedSlot(fx.root, nullptr);
+    fx.collector.FixMinorRootSlots(nullptr);
 
     const M0ExitDiagnostics::Counts after = M0ExitDiagnostics::GetCounts();
     GC_EXPECT_EQ(after.total, before.total + 1);
@@ -180,14 +223,14 @@ GC_TEST(M0Exit, RootFixProductExitClassifiesNoCopyAsS0)
                  reinterpret_cast<uintptr_t>(fx.heap.obj0));
 }
 
-GC_TEST(M0Exit, RootFixProductExitClassifiesPublishedCopyAsS1)
+GC_TEST(M0Exit, RootFixRuntimeEnumerationClassifiesPublishedCopyAsS1)
 {
     RootEntryFixture fx;
     std::memcpy(fx.heap.obj1, fx.heap.obj0, fx.heap.obj0->GetSize());
     fx.heap.obj0->SetStateCode(ObjectState::FORWARDED);
     const M0ExitDiagnostics::Counts before = M0ExitDiagnostics::GetCounts();
 
-    (void)fx.collector.FixMinorEvacuatedSlot(fx.root, nullptr);
+    fx.collector.FixMinorRootSlots(nullptr);
 
     const M0ExitDiagnostics::Counts after = M0ExitDiagnostics::GetCounts();
     GC_EXPECT_EQ(after.total, before.total + 1);
