@@ -37,6 +37,7 @@ set(GC_UNIT_SOURCES
     test_relocation_set_selector.cpp
     test_store_barrier_buffer.cpp
     test_page_age.cpp
+    test_range_registry.cpp
     test_stay_young.cpp
     test_gc_trigger.cpp
     test_mutator_relocate.cpp
