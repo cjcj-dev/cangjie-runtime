@@ -156,7 +156,12 @@ fi
 
 KNOWN="$SRC/known_failures.txt"
 OUT="$GC_UNIT_OUT/gate_run.log"
+TALLY="$GC_UNIT_OUT/gate_tally.txt"
 mkdir -p "$GC_UNIT_OUT"
+# The tally is completion evidence, not a cache.  Remove it before every run so an early compiler
+# error, signal or timeout cannot make this invocation consume a previous run's success.
+rm -f "$TALLY"
+export GC_UNIT_TALLY_FILE="$TALLY"
 # Timeout, because a hanging test is not a failing test. The suite runs in tens of seconds; the one
 # time it did not, a perturbation reintroduced an unbounded probe loop and the *build* hung rather
 # than the gate reporting anything -- POST_BUILD inherits the hang, so `cmake --build` never
@@ -194,12 +199,29 @@ if [[ -z "$allowed" ]] && grep -qE '^[A-Za-z]' "$KNOWN"; then
   exit 3
 fi
 # A grep that matches nothing and a run that never happened produce the same empty string, and this
-# campaign has already read one for the other.  Require the tally line before trusting an empty set.
-if ! grep -qE '^\[========\] [0-9]+ tests:' "$OUT"; then
+# campaign has already read one for the other.  Require one exact tally from the suite's independent
+# evidence file before trusting an empty set.  Parsing the merged stdout/stderr log here reintroduces
+# the atexit interleaving failure this file exists to prevent.
+if [[ ! -f "$TALLY" ]] || ! grep -qxE '\[========\] [0-9]+ tests: [0-9]+ passed, [0-9]+ failed' "$TALLY" ||
+    [[ $(wc -l <"$TALLY") -ne 1 ]]; then
   CPP_SUITE_STATE=FAIL
   CPP_SUITE_SOURCE=FRESH
   STATUS_REASON=CPP_SUITE_INCOMPLETE
-  echo "GC_UNIT_GATE_FAIL: no tally line in output -- the suite did not run to completion (rc=$suite_rc)" >&2
+  echo "GC_UNIT_GATE_FAIL: no valid independent tally -- the suite did not run to completion (rc=$suite_rc)" >&2
+  exit 3
+fi
+tally_tests=$(sed -E 's/^\[========\] ([0-9]+) tests: ([0-9]+) passed, ([0-9]+) failed$/\1/' "$TALLY")
+tally_passed=$(sed -E 's/^\[========\] ([0-9]+) tests: ([0-9]+) passed, ([0-9]+) failed$/\2/' "$TALLY")
+tally_failed=$(sed -E 's/^\[========\] ([0-9]+) tests: ([0-9]+) passed, ([0-9]+) failed$/\3/' "$TALLY")
+actual_count=0
+if [[ -n "$actual" ]]; then
+  actual_count=$(echo "$actual" | wc -l)
+fi
+if [[ $((tally_passed + tally_failed)) -ne $tally_tests || $actual_count -ne $tally_failed ]]; then
+  CPP_SUITE_STATE=FAIL
+  CPP_SUITE_SOURCE=FRESH
+  STATUS_REASON=CPP_SUITE_EVIDENCE_MISMATCH
+  echo "GC_UNIT_GATE_FAIL: tally/failure evidence mismatch (tests=$tally_tests passed=$tally_passed failed=$tally_failed parsed_failures=$actual_count)" >&2
   exit 3
 fi
 
@@ -250,5 +272,4 @@ GATE_STATE=PASS
 STATUS_REASON=PASS
 touch "$STAMP"
 n_allowed=$(echo "$allowed" | grep -c . || true)
-n_tests=$(grep -oE '^\[========\] [0-9]+ tests' "$OUT" | grep -oE '[0-9]+' | head -1 || true)
-echo "GC_UNIT_GATE_OK tests=$n_tests known_failures=$n_allowed (suite rc=$suite_rc) status=$STATUS_FILE"
+echo "GC_UNIT_GATE_OK tests=$tally_tests known_failures=$n_allowed (suite rc=$suite_rc) status=$STATUS_FILE"

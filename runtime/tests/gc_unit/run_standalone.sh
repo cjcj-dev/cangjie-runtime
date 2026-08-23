@@ -101,9 +101,11 @@ if command -v nm >/dev/null 2>&1; then
 fi
 
 START=$(date +%s%N)
+set +e
 LD_LIBRARY_PATH="$RUNTIME_LIB_DIR${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}" "$OUT/cj_gc_unit"
 RC=$?
+set -e
 END=$(date +%s%N)
 ELAPSED_MS=$(( (END - START) / 1000000 ))
-echo "GC_UNIT_OK rc=$RC wall_ms=$ELAPSED_MS"
+echo "GC_UNIT_RUN_DONE rc=$RC wall_ms=$ELAPSED_MS"
 exit "$RC"

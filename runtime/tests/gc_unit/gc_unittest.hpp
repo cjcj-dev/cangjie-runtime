@@ -134,8 +134,30 @@ inline int RunAll()
             ++failed;
         }
     }
-    std::printf("[========] %d tests: %d passed, %d failed\n", passed + failed, passed, failed);
-    return failed == 0 ? 0 : 1;
+    const int tests = passed + failed;
+    std::printf("[========] %d tests: %d passed, %d failed\n", tests, passed, failed);
+
+    // The runtime has atexit diagnostics on stderr (for example ZForwardingLife's summary).  A
+    // caller that merges stdout and stderr can therefore receive a tally split by diagnostics when
+    // stdio flushes its buffered stdout at process exit.  Duplicate the completion evidence into a
+    // caller-provided file and close it before returning from main, so no atexit output can share
+    // that channel.  Direct invocations remain unchanged when the variable is absent.
+    bool tallyWritten = true;
+    if (const char* tallyPath = std::getenv("GC_UNIT_TALLY_FILE")) {
+        FILE* tally = std::fopen(tallyPath, "w");
+        if (tally == nullptr) {
+            std::fprintf(stderr, "[  ERROR ] cannot open GC_UNIT_TALLY_FILE=%s\n", tallyPath);
+            tallyWritten = false;
+        } else {
+            tallyWritten = std::fprintf(tally, "[========] %d tests: %d passed, %d failed\n", tests, passed, failed) >=
+                0;
+            tallyWritten = std::fclose(tally) == 0 && tallyWritten;
+            if (!tallyWritten) {
+                std::fprintf(stderr, "[  ERROR ] cannot write GC_UNIT_TALLY_FILE=%s\n", tallyPath);
+            }
+        }
+    }
+    return failed == 0 && tallyWritten ? 0 : 1;
 }
 
 } // namespace GcUnit
