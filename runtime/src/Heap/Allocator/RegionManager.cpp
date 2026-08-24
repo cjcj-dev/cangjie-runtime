@@ -585,27 +585,13 @@ const size_t RegionManager::MAX_UNIT_COUNT_PER_REGION = (128 * KB) / MapleRuntim
 // size of huge page is 2048KB.
 const size_t RegionManager::HUGE_PAGE = (2048 * KB) / MapleRuntime::MRT_PAGE_SIZE;;
 
+#if defined(MRT_TESTABLE_INTERNALS)
 template<Generation G>
-class ForwardTask : public HeapWork {
-public:
-    ForwardTask(RegionManager& manager, RegionList& fromSpace)
-        : regionManager(manager), fromRegionList(fromSpace) {}
-
-    ~ForwardTask() = default;
-
-    void Execute(size_t) override
-    {
-        while (true) {
-            RegionInfo* region = fromRegionList.TakeHeadRegion(RegionInfo::RegionType::LONE_FROM_REGION);
-            if (region == nullptr) { break; }
-            regionManager.ForwardRegion<G>(region);
-        }
-    }
-
-private:
-    RegionManager& regionManager;
-    RegionList& fromRegionList;
-};
+void ForwardTask<G>::Execute(size_t)
+{
+    detail::ExecuteForwardTask<G>(regionManager, fromRegionList);
+}
+#endif
 
 #if defined(GCINFO_DEBUG) && GCINFO_DEBUG
 void RegionInfo::DumpRegionInfo(LogType type) const
@@ -2110,22 +2096,28 @@ template<Generation G>
 void RegionManager::ForwardFromRegions(GCThreadPool* threadPool)
 {
     if (threadPool != nullptr) {
-        int32_t threadNum = threadPool->GetMaxThreadNum() + 1;
+        int32_t threadNum = threadPool->GetMaxActiveThreadNum() + 1;
         // We won't change fromRegionList during gc, so we can use it without lock.
         size_t regionCount = fromRegionList.GetRegionCount();
-        if (UNLIKELY(regionCount == 0)) {
-            return;
-        }
+        (void)regionCount;
 
         // we start threadPool before adding work so that we can concurrently add tasks;
+        relocationRequestQueue.BeginWorkers(static_cast<size_t>(threadNum));
         threadPool->Start();
         for (int32_t i = 0; i < threadNum; ++i) {
             threadPool->AddWork(new (std::nothrow) ForwardTask<G>(*this, fromRegionList));
         }
         threadPool->WaitFinish();
     } else {
+        relocationRequestQueue.BeginWorkers(1);
         ForwardFromRegions<G>();
     }
+}
+
+size_t RegionManager::CompleteRelocationRequests(RegionInfo* region)
+{
+    return relocationRequestQueue.CompleteOwner(
+        region, [](MAddress from) { return ForwardingTable::FindTo(from); });
 }
 
 namespace {
@@ -2347,12 +2339,29 @@ void RegionManager::ForwardFromRegions()
     // next young cycle can revisit stale list state.  A zero-helper execution
     // is serial, but it must still detach and mark each unit LONE_FROM_REGION.
     while (true) {
-        RegionInfo* region = fromRegionList.TakeHeadRegion(RegionInfo::RegionType::LONE_FROM_REGION);
-        if (region == nullptr) {
-            break;
+        RelocationRequestQueue::Selection selected =
+            relocationRequestQueue.SelectBeforeOrdinary([this]() -> void* {
+                return fromRegionList.TakeHeadRegion(RegionInfo::RegionType::LONE_FROM_REGION);
+            });
+        if (!selected) {
+            selected = relocationRequestQueue.SynchronizePoll();
+            if (selected.workersDone) {
+                break;
+            }
+            if (!selected) {
+                continue;
+            }
+        }
+        RegionInfo* region = selected.is_request() ? static_cast<RegionInfo*>(selected.request->owner())
+                                                   : static_cast<RegionInfo*>(selected.ordinary);
+        if (selected.is_request() &&
+            !fromRegionList.TryDeleteRegion(region, RegionInfo::RegionType::FROM_REGION,
+                                            RegionInfo::RegionType::LONE_FROM_REGION)) {
+            continue;
         }
         MRT_ASSERT(region->IsValidRegion(), "the head region of fromRegionList is invalid");
         ForwardRegion<G>(region);
+        CompleteRelocationRequests(region);
     }
 
     VLOG(REPORT, "forward %zu from-region units", fromRegionList.GetUnitCount());
@@ -3010,7 +3019,8 @@ void RegionManager::CompactRegion(RegionInfo* region)
             collector.CopyObject(*currentObj, *toObj, size);
             toObj->SetStateCode(ObjectState::NORMAL);
             std::atomic_thread_fence(std::memory_order_release);
-            ForwardingTable::InsertMapping(currentPtr, toAddress);
+            const MAddress receipt = ForwardingTable::InsertMapping(currentPtr, toAddress);
+            (void)relocationRequestQueue.Publish(currentPtr, receipt);
             region->RecordCompactRoute(offset, toAddress);
 
         }
@@ -3129,7 +3139,8 @@ void RegionManager::CompactRegion(RegionInfo* region, RegionInfo* toRegion1)
             collector.CopyObject(*currentObj, *toObj, size);
             toObj->SetStateCode(ObjectState::NORMAL);
             std::atomic_thread_fence(std::memory_order_release);
-            ForwardingTable::InsertMapping(currentPtr, toAddress);
+            const MAddress receipt = ForwardingTable::InsertMapping(currentPtr, toAddress);
+            (void)relocationRequestQueue.Publish(currentPtr, receipt);
             region->RecordCompactRoute(offset, toAddress);
 
         }
@@ -3155,7 +3166,8 @@ void RegionManager::CompactRegion(RegionInfo* region, RegionInfo* toRegion1)
             collector.CopyObject(*currentObj, *toObj, size);
             toObj->SetStateCode(ObjectState::NORMAL);
             std::atomic_thread_fence(std::memory_order_release);
-            ForwardingTable::InsertMapping(currentPtr, toAddress);
+            const MAddress receipt = ForwardingTable::InsertMapping(currentPtr, toAddress);
+            (void)relocationRequestQueue.Publish(currentPtr, receipt);
             region->RecordCompactRoute(offset, toAddress);
 
         }
@@ -3685,6 +3697,10 @@ template void RegionManager::ForwardFromRegions<Generation::Young>(GCThreadPool*
 template void RegionManager::ForwardFromRegions<Generation::Old>(GCThreadPool*);
 template void RegionManager::ForwardFromRegions<Generation::Young>();
 template void RegionManager::ForwardFromRegions<Generation::Old>();
+#if defined(MRT_TESTABLE_INTERNALS)
+template class ForwardTask<Generation::Young>;
+template class ForwardTask<Generation::Old>;
+#endif
 template void RegionManager::ForwardRegion<Generation::Young>(RegionInfo*);
 template void RegionManager::ForwardRegion<Generation::Old>(RegionInfo*);
 } // namespace MapleRuntime

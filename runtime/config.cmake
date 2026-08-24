@@ -466,6 +466,15 @@ option(MRT_ZSTAT "Build ZStatPhase pause/concurrent instrumentation" OFF)
 # GC unit tests (HotSpot-gtest-shaped, pure invariant TUs). Default OFF so product
 # builds are byte-identical when the option is left alone.
 option(MRT_GC_UNIT_TESTS "Build GC unit tests (cj_gc_unit)" OFF)
+# Test-only product shape: expose selected internal entry points so gc_unit can
+# bind the implementation from libcangjie-runtime.  The default product keeps
+# those templates inline and does not grant test access.
+option(MRT_TESTABLE_INTERNALS "Build test-only exported GC internals" OFF)
+if (MRT_GC_UNIT_TESTS)
+    # An in-tree gc_unit target must see the same class shape as the product SO
+    # it links.  Turning on the test suite is itself an explicit test build.
+    set(MRT_TESTABLE_INTERNALS ON)
+endif()
 
 set(TARGET_ARCH "linux_${CMAKE_HOST_SYSTEM_PROCESSOR}_cjnative")
 if (OHOS_FLAG MATCHES 1)

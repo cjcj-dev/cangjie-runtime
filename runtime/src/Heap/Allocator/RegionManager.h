@@ -24,6 +24,7 @@
 #include "Common/RunType.h"
 #include "FreeRegionManager.h"
 #include "Heap/GcThreadPool.h"
+#include "Heap/Collector/RelocationRequestQueue.h"
 #include "RegionList.h"
 #include "Heap/Verify/GarbRegionDiag.h"
 #include "Heap/Verify/TraceClear.h"
@@ -38,6 +39,8 @@ class CompactCollector;
 class VerifyRegions;
 class TagReuseProbe;
 class WCollector;
+template<Generation G>
+class ForwardTask;
 
 struct YoungCollectionStats {
     size_t candidateRegions = 0;
@@ -195,6 +198,8 @@ public:
     void ForwardFromRegions();
     template<Generation G>
     void ForwardRegion(RegionInfo* region);
+    RelocationRequestQueue& GetRelocationRequestQueue() { return relocationRequestQueue; }
+    size_t CompleteRelocationRequests(RegionInfo* region);
     // Before clearing the young flag on a promoted region, record every live
     // old→young out-edge that mutators skipped while the source was still young.
     static size_t RecordPromotedCrossGenEdges(RegionInfo* region);
@@ -1146,6 +1151,7 @@ private:
     // fromRegionList is a list of full regions waiting to be collected (i.e. for forwarding).
     // region type must be FROM_REGION.
     RegionList fromRegionList;
+    RelocationRequestQueue relocationRequestQueue;
     RegionList ghostFromRegionList;
 
     // regions exempted by ExemptFromRegions, which will not be moved during current GC.
@@ -1195,6 +1201,74 @@ private:
 #endif
     std::mutex freePinnedSlotListMutex;
     FreePinnedSlotLists freePinnedSlotLists;
+};
+
+namespace detail {
+
+// A single algorithm body serves both compile-time shapes below.  The default
+// product inlines it through ForwardTask::Execute; the testable shape calls it
+// from the exported out-of-line Execute instantiated in RegionManager.cpp.
+template<Generation G>
+inline void ExecuteForwardTask(RegionManager& regionManager, RegionList& fromRegionList)
+{
+    while (true) {
+        // zRelocate.cpp:1193-1203: serve a mutator's requested receipt
+        // before advancing the ordinary relocation iterator.
+        RelocationRequestQueue::Selection selected =
+            regionManager.GetRelocationRequestQueue().SelectBeforeOrdinary([&fromRegionList]() -> void* {
+                return fromRegionList.TakeHeadRegion(RegionInfo::RegionType::LONE_FROM_REGION);
+            });
+        if (!selected) {
+            selected = regionManager.GetRelocationRequestQueue().SynchronizePoll();
+            if (selected.workersDone) {
+                break;
+            }
+            if (!selected) {
+                continue;
+            }
+        }
+        if (!selected.is_request()) {
+            RegionInfo* region = static_cast<RegionInfo*>(selected.ordinary);
+            regionManager.ForwardRegion<G>(region);
+            regionManager.CompleteRelocationRequests(region);
+            continue;
+        }
+
+        RegionInfo* region = static_cast<RegionInfo*>(selected.request->owner());
+        // The list transition is the single relocation owner. If an ordinary
+        // worker won first, it will publish the requested receipt and wake us.
+        if (fromRegionList.TryDeleteRegion(region, RegionInfo::RegionType::FROM_REGION,
+                                           RegionInfo::RegionType::LONE_FROM_REGION)) {
+            regionManager.ForwardRegion<G>(region);
+            regionManager.CompleteRelocationRequests(region);
+        }
+    }
+}
+
+} // namespace detail
+
+// The actual relocation HeapWork submitted by ForwardFromRegions.  Test builds
+// export Execute so the unit runner binds the product SO; default builds retain
+// the implicit inline virtual with no MRT_EXPORT and no dynamic export.
+template<Generation G>
+class ForwardTask : public HeapWork {
+public:
+    ForwardTask(RegionManager& manager, RegionList& fromSpace)
+        : regionManager(manager), fromRegionList(fromSpace) {}
+
+    ~ForwardTask() override = default;
+#if defined(MRT_TESTABLE_INTERNALS)
+    MRT_EXPORT void Execute(size_t) override;
+#else
+    __attribute__((visibility("hidden"))) void Execute(size_t) override
+    {
+        detail::ExecuteForwardTask<G>(regionManager, fromRegionList);
+    }
+#endif
+
+private:
+    RegionManager& regionManager;
+    RegionList& fromRegionList;
 };
 } // namespace MapleRuntime
 #endif // MRT_REGION_MANAGER_H

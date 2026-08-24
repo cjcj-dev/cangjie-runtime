@@ -66,6 +66,10 @@ fi
 echo "M0_TEST_ACCESS=$M0_TEST_ACCESS"
 
 BOUNDS_INC="$ROOT/runtime/third_party/third_party_bounds_checking_function/include"
+TESTABLE_FLAGS=()
+if [[ "${MRT_TESTABLE_INTERNALS:-0}" == "1" ]]; then
+  TESTABLE_FLAGS+=(-DMRT_TESTABLE_INTERNALS=1)
+fi
 INC_FLAGS=(
   -I"$SRC"
   -I"$ROOT/runtime/src"
@@ -80,11 +84,11 @@ fi
 $CXX -std=gnu++17 -O0 -g -Wall -Wextra -pthread -fno-rtti \
   "${RANGE_REGISTRY_FLAGS[@]}" \
   "${TEST_DEFINES[@]}" \
+  "${TESTABLE_FLAGS[@]}" \
   "${INC_FLAGS[@]}" \
   "$SRC/gc_unit_main.cpp" \
   "$SRC/gc_unit_stubs.cpp" \
   "$ROOT/runtime/src/Base/ZStat.cpp" \
-  "$ROOT/runtime/src/Heap/Allocator/ForwardingTable.cpp" \
   "$SRC/test_colour_address.cpp" \
   "$SRC/test_z_bit_field.cpp" \
   "$SRC/test_z_list.cpp" \
@@ -116,6 +120,8 @@ $CXX -std=gnu++17 -O0 -g -Wall -Wextra -pthread -fno-rtti \
     "$SRC/test_gc_trigger.cpp" \
     "$SRC/test_gc_request_sync.cpp" \
     "$SRC/test_mutator_relocate.cpp" \
+    "$SRC/test_relocation_request_queue.cpp" \
+    "$SRC/test_gc_thread_pool.cpp" \
     "$SRC/test_expire_kept.cpp" \
     "$SRC/test_receipt_life.cpp" \
     "$SRC/test_lifeclock.cpp" \
@@ -141,12 +147,13 @@ $CXX -std=gnu++17 -O0 -g -Wall -Wextra -pthread -fno-rtti \
   -o "$OUT/cj_gc_unit"
 
 echo "LINKED_RUNTIME=$RUNTIME_LIB_DIR"
+echo "MRT_TESTABLE_INTERNALS=${MRT_TESTABLE_INTERNALS:-0}"
 # Binding proof: undefined product symbols must resolve from libcangjie-runtime.
 if command -v nm >/dev/null 2>&1; then
   echo "=== BINDING_PROOF (undefined in binary that resolve via runtime) ==="
-  nm -u "$OUT/cj_gc_unit" 2>/dev/null | grep -E 'RangeRegistry|VerifyRoots|RouteInfo|PlausibleManagedObjectGate|TryRecoverInteriorBase|RecordCrossGen|BindLiveInfo|GetRoute|MarkGoodHeapGate' || true
+  nm -u "$OUT/cj_gc_unit" 2>/dev/null | grep -E 'RangeRegistry|RelocationRequestQueue|ReceiptAllowsForwarded|VerifyRoots|RouteInfo|PlausibleManagedObjectGate|TryRecoverInteriorBase|RecordCrossGen|BindLiveInfo|GetRoute|MarkGoodHeapGate' || true
   echo "=== RUNTIME_EXPORTS (product .so) ==="
-  nm -D "$RUNTIME_LIB_DIR/libcangjie-runtime.so" 2>/dev/null | grep -E 'RangeRegistry|VerifyRoots|PlausibleManagedObjectGate|TryRecoverInteriorBase|RouteInfo8GetRoute|RecordCrossGenEdge|MarkGoodHeapGate' | head -40 || true
+  nm -D "$RUNTIME_LIB_DIR/libcangjie-runtime.so" 2>/dev/null | grep -E 'RangeRegistry|RelocationRequestQueue|ReceiptAllowsForwarded|VerifyRoots|PlausibleManagedObjectGate|TryRecoverInteriorBase|RouteInfo8GetRoute|RecordCrossGenEdge|MarkGoodHeapGate' | head -40 || true
 fi
 
 START=$(date +%s%N)

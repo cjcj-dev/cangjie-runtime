@@ -273,7 +273,7 @@ endif()
         add_custom_command(TARGET cangjie-runtime POST_BUILD
             COMMAND ${CMAKE_COMMAND} -E env
                 "GCV2_RUNTIME_LIB_DIR=$<TARGET_FILE_DIR:cangjie-runtime>"
-                "MRT_TESTABLE_INTERNALS=$<BOOL:${MRT_GC_UNIT_TESTS}>"
+                "MRT_TESTABLE_INTERNALS=$<BOOL:${MRT_TESTABLE_INTERNALS}>"
                 bash "${CMAKE_CURRENT_SOURCE_DIR}/../tests/gc_unit/gate_gc_unit.sh"
             COMMENT "Running the deterministic GC unit suite against the runtime just built"
             VERBATIM)

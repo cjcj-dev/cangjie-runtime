@@ -88,6 +88,10 @@ public:
         return currentCollector->GetAndTryTagRefField(obj);
     }
 
+#if defined(MRT_TESTABLE_INTERNALS)
+    friend struct RelocationReceiptTestAccess;
+#endif
+
 private:
     // supported collector set
     TracingCollector* currentCollector = nullptr;

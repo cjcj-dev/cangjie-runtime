@@ -100,10 +100,15 @@ void ForwardingTable::Initialize(MAddress heapStart, size_t heapSize, size_t uni
     if (dumped.compare_exchange_strong(expected, true, std::memory_order_relaxed)) {
         std::atexit([]() {
             std::fprintf(stderr,
-                         "[FWDTABLE][refuse] atexit full=%llu overflow=%llu armedHit=%llu armedMiss=%llu unarmed=%llu\n",
+                         "[FWDTABLE][refuse] atexit full=%llu overflow=%llu fallbackFull=%llu "
+                         "fallbackOverflow=%llu armedHit=%llu armedMiss=%llu unarmed=%llu\n",
                          static_cast<unsigned long long>(ZForwarding::FullRefusals().load(std::memory_order_relaxed)),
                          static_cast<unsigned long long>(
                              ZForwarding::OverflowRefusals().load(std::memory_order_relaxed)),
+                         static_cast<unsigned long long>(
+                             ZForwarding::FullFallbacks().load(std::memory_order_relaxed)),
+                         static_cast<unsigned long long>(
+                             ZForwarding::OverflowFallbacks().load(std::memory_order_relaxed)),
                          static_cast<unsigned long long>(ForwardingTable::ArmedHitCount()),
                          static_cast<unsigned long long>(ForwardingTable::ArmedMissCount()),
                          static_cast<unsigned long long>(ForwardingTable::UnarmedCount()));
@@ -395,7 +400,7 @@ bool ZForwarding::page_life_current(RegionLifeClock::Carrier carrier) const
     return RegionLifeClock::Validate(carrier, _page_life_id, _page->GetRegionLifeId());
 }
 
-MAddress ForwardingTable::InsertMapping(MAddress from, MAddress to)
+ZForwarding::Receipt ForwardingTable::InstallMapping(MAddress from, MAddress to)
 {
     ZForwarding* tab = GetEntries(from);
     if (tab == nullptr || tab->is_provisional()) {
@@ -411,13 +416,25 @@ MAddress ForwardingTable::InsertMapping(MAddress from, MAddress to)
         tab = GetEntries(from);
     }
     if (tab == nullptr) {
-        return 0;
+        CHECK_DETAIL(false, "forwarding receipt table unavailable from=%#zx to=%#zx",
+                     static_cast<size_t>(from), static_cast<size_t>(to));
+        return ZForwarding::Receipt{ 0, false };
     }
-    const MAddress stored = tab->insert(from, to);
-    if (stored != 0) {
-        tab->note_to_life(stored);
+    const ZForwarding::Receipt receipt = tab->insert_receipt(from, to);
+    if (receipt.installed) {
+        tab->note_to_life(receipt.address);
     }
-    return stored;
+    return receipt;
+}
+
+MAddress ForwardingTable::InsertMapping(MAddress from, MAddress to)
+{
+    return InstallMapping(from, to).address;
+}
+
+bool ForwardingTable::ReceiptAllowsForwarded(MAddress mapped)
+{
+    return mapped != 0;
 }
 
 std::atomic<uint64_t>& ZForwarding::StaleToLifeCount()

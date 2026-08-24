@@ -82,6 +82,10 @@ public:
 using CrossRefHandler = void(*)(BaseObject*, BaseObject*);
 
 class WCollector : public CopyCollector {
+#if defined(MRT_TESTABLE_INTERNALS)
+    friend struct MutatorPublishTestAccess;
+#endif
+
 public:
     explicit WCollector(Allocator& allocator, CollectorResources& resources)
         : CopyCollector(allocator, resources), fwdTable(reinterpret_cast<RegionSpace&>(allocator))
@@ -434,8 +438,10 @@ public:
                     if (geometric != nullptr &&
                         ZForwarding::DestUsable(reinterpret_cast<MAddress>(geometric)) &&
                         ToHeaderCovered(geometric)) {
-                        (void)ForwardingTable::InsertMapping(fromAddr, reinterpret_cast<MAddress>(geometric));
-                        return geometric;
+                        const MAddress receipt =
+                            ForwardingTable::InsertMapping(fromAddr, reinterpret_cast<MAddress>(geometric));
+                        (void)space.GetRegionManager().GetRelocationRequestQueue().Publish(fromAddr, receipt);
+                        return reinterpret_cast<BaseObject*>(receipt);
                     }
                 }
             }
@@ -697,7 +703,10 @@ public:
         if (geometric != nullptr && ZForwarding::DestUsable(reinterpret_cast<MAddress>(geometric)) &&
             ToHeaderCovered(geometric)) {
             if (stored == nullptr) {
-                (void)ForwardingTable::InsertMapping(fromAddr, reinterpret_cast<MAddress>(geometric));
+                const MAddress receipt =
+                    ForwardingTable::InsertMapping(fromAddr, reinterpret_cast<MAddress>(geometric));
+                (void)space.GetRegionManager().GetRelocationRequestQueue().Publish(fromAddr, receipt);
+                geometric = reinterpret_cast<BaseObject*>(receipt);
             }
             return geometric;
         }

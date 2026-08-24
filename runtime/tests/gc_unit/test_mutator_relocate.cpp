@@ -4,6 +4,7 @@
 #include <atomic>
 #include <thread>
 
+#include "Heap/Allocator/ForwardingTable.h"
 #include "Heap/Collector/ZForwarding.h"
 #include "Heap/Collector/ZForwardingLife.h"
 #include "Heap/Verify/MutatorRelocate.h"
@@ -74,6 +75,60 @@ GC_TEST(MutatorRelocate, TwoThreadsInsertSameFromLoserTakesWinner)
     GC_EXPECT_EQ(a, b);
     GC_EXPECT_EQ(tab->find(from), a);
     tab->Destroy();
+}
+
+GC_TEST(MutatorRelocate, ForcedFirstCasFailureReturnsOneReceiptAndOneCompleter)
+{
+    constexpr MAddress kStart = 0x1000;
+    ForwardingEntries* tab = ForwardingEntries::Create(8, kStart, 0);
+    GC_EXPECT_TRUE(tab != nullptr);
+    const MAddress from = kStart + 16;
+    const MAddress toA = 0x2000;
+    const MAddress toB = 0x3000;
+    std::atomic<int> atFirstCas{ 0 };
+    std::atomic<MAddress> gotA{ 0 };
+    std::atomic<MAddress> gotB{ 0 };
+    std::atomic<int> completed{ 0 };
+
+    auto firstCasBarrier = [&]() {
+        atFirstCas.fetch_add(1, std::memory_order_acq_rel);
+        while (atFirstCas.load(std::memory_order_acquire) != 2) {
+            std::this_thread::yield();
+        }
+    };
+    std::thread t1([&]() {
+        const ZForwarding::Receipt receipt = tab->insert_receipt(from, toA, firstCasBarrier);
+        gotA.store(receipt.address, std::memory_order_release);
+        completed.fetch_add(receipt.installed ? 1 : 0, std::memory_order_relaxed);
+    });
+    std::thread t2([&]() {
+        const ZForwarding::Receipt receipt = tab->insert_receipt(from, toB, firstCasBarrier);
+        gotB.store(receipt.address, std::memory_order_release);
+        completed.fetch_add(receipt.installed ? 1 : 0, std::memory_order_relaxed);
+    });
+    JoinGuard t1Guard(t1);
+    JoinGuard t2Guard(t2);
+    t1.join();
+    t2.join();
+
+    const MAddress winner = gotA.load(std::memory_order_acquire);
+    GC_EXPECT_NE(winner, static_cast<MAddress>(0));
+    GC_EXPECT_EQ(gotB.load(std::memory_order_acquire), winner);
+    GC_EXPECT_EQ(tab->find(from), winner);
+    GC_EXPECT_EQ(completed.load(std::memory_order_relaxed), 1);
+
+    size_t populated = 0;
+    for (ForwardingCursor cursor = 0; cursor < tab->length(); ++cursor) {
+        populated += tab->at(&cursor).populated() ? 1 : 0;
+    }
+    GC_EXPECT_EQ(populated, static_cast<size_t>(1));
+    tab->Destroy();
+}
+
+GC_TEST(MutatorRelocate, ForwardedPublicationRequiresNonNullReceipt)
+{
+    GC_EXPECT_FALSE(ForwardingTable::ReceiptAllowsForwarded(0));
+    GC_EXPECT_TRUE(ForwardingTable::ReceiptAllowsForwarded(0x2000));
 }
 
 GC_TEST(MutatorRelocate, ForwardedRegionNoEntryKeepsFrom)
