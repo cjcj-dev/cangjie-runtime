@@ -198,6 +198,7 @@ void TypeInfoManager::FreeMMap(uintptr_t address, size_t size)
 
 void TypeInfoManager::AddTypeInfo(TypeInfo* ti)
 {
+    ElfUnloadQuiescence::ReadScope reader;
     if (!ti->IsInitialUUID()) {
         std::lock_guard<std::recursive_mutex> lock(tiMutex);
         registeredTypeInfos.insert(ti);
@@ -281,6 +282,7 @@ void TypeInfoManager::AddTypeInfo(TypeInfo* ti)
 
 bool TypeInfoManager::ContainsTypeInfo(TypeInfo* ti)
 {
+    ElfUnloadQuiescence::ReadScope reader;
     std::lock_guard<std::recursive_mutex> lock(tiMutex);
     return registeredTypeInfos.count(ti) != 0;
 }
@@ -319,9 +321,22 @@ void TypeInfoManager::RemoveTypeInfosInRange(uintptr_t begin, size_t size)
         return;
     }
     std::lock_guard<std::recursive_mutex> lock(tiMutex);
+    auto inRange = [begin, size](const void* ptr) {
+        uintptr_t address = reinterpret_cast<uintptr_t>(ptr);
+        return address >= begin && address - begin < size;
+    };
+    std::unordered_set<U32> removedUUIDs;
     for (auto it = registeredTypeInfos.begin(); it != registeredTypeInfos.end();) {
-        uintptr_t address = reinterpret_cast<uintptr_t>(*it);
-        if (address >= begin && address - begin < size) {
+        TypeInfo* ti = *it;
+        bool remove = inRange(ti);
+        if (!remove && ti->IsGenericTypeInfo()) {
+            remove = inRange(ti->GetSourceGeneric());
+            for (U32 idx = 0; !remove && idx < ti->GetTypeArgNum(); ++idx) {
+                remove = inRange(ti->GetTypeArgs()[idx]);
+            }
+        }
+        if (remove) {
+            removedUUIDs.insert(ti->GetUUID());
             it = registeredTypeInfos.erase(it);
         } else {
             ++it;
@@ -334,6 +349,45 @@ void TypeInfoManager::RemoveTypeInfosInRange(uintptr_t begin, size_t size)
             ++it;
         }
     }
+    for (auto it = nonGenericTypeInfos.begin(); it != nonGenericTypeInfos.end();) {
+        if (inRange(it->first) || inRange(it->second)) {
+            it = nonGenericTypeInfos.erase(it);
+        } else {
+            ++it;
+        }
+    }
+    for (auto it = genericTypeInfos.begin(); it != genericTypeInfos.end();) {
+        if (inRange(it->first) || inRange(it->second)) {
+            it = genericTypeInfos.erase(it);
+        } else {
+            ++it;
+        }
+    }
+    for (auto it = typeTemplates.begin(); it != typeTemplates.end();) {
+        if (inRange(it->first) || inRange(it->second)) {
+            it = typeTemplates.erase(it);
+        } else {
+            ++it;
+        }
+    }
+    if (inRange(anyTi)) {
+        anyTi = nullptr;
+    }
+    if (inRange(objectTi)) {
+        objectTi = nullptr;
+    }
+    for (TypeInfo* ti : registeredTypeInfos) {
+        removedUUIDs.erase(ti->GetUUID());
+    }
+    for (U32 uuid : removedUUIDs) {
+        auto mTableIt = mTableList.find(uuid);
+        if (mTableIt != mTableList.end()) {
+            delete mTableIt->second;
+            mTableList.erase(mTableIt);
+        }
+    }
+    genericTypeInfoFastMap.Invalidate();
+    genericTypeInfoDescMap.RemoveInRange(begin, size);
 }
 
 std::pair<size_t, size_t> TypeInfoManager::GetTypeInfoIndexShape()
@@ -344,6 +398,7 @@ std::pair<size_t, size_t> TypeInfoManager::GetTypeInfoIndexShape()
 
 U16 TypeInfoManager::GetTypeTemplateUUID(TypeTemplate* tt)
 {
+    ElfUnloadQuiescence::ReadScope reader;
     U16 ttUUID = tt->GetUUID();
     if (ttUUID != 0) {
         return ttUUID;
@@ -412,6 +467,39 @@ TypeInfoManager::GenericTiDesc* TypeInfoManager::GenericTiDescHashMap::InsertGen
     bucket.maps[h].push_back(tiDesc);
     bucket.rwLock.UnlockWrite();
     return tiDesc;
+}
+
+void TypeInfoManager::GenericTiDescHashMap::RemoveInRange(uintptr_t begin, size_t size)
+{
+    auto inRange = [begin, size](const void* ptr) {
+        uintptr_t address = reinterpret_cast<uintptr_t>(ptr);
+        return address >= begin && address - begin < size;
+    };
+    for (auto& bucket : buckets) {
+        bucket.rwLock.LockWrite();
+        for (auto mapIt = bucket.maps.begin(); mapIt != bucket.maps.end();) {
+            auto& descriptions = mapIt->second;
+            for (auto descIt = descriptions.begin(); descIt != descriptions.end();) {
+                GenericTiDesc* desc = *descIt;
+                bool remove = inRange(desc->tt) || inRange(desc->typeInfo);
+                for (U32 idx = 0; !remove && idx < desc->argSize; ++idx) {
+                    remove = inRange(desc->args[idx]);
+                }
+                if (remove) {
+                    delete desc;
+                    descIt = descriptions.erase(descIt);
+                } else {
+                    ++descIt;
+                }
+            }
+            if (descriptions.empty()) {
+                mapIt = bucket.maps.erase(mapIt);
+            } else {
+                ++mapIt;
+            }
+        }
+        bucket.rwLock.UnlockWrite();
+    }
 }
 
 TypeInfoManager::GenericTiDescFastMap::Entry::Entry(
@@ -611,6 +699,7 @@ TypeInfoManager::GenericTiDesc* TypeInfoManager::GetTypeInfo(TypeTemplate* tt, U
 
 TypeInfo* TypeInfoManager::GetOrCreateTypeInfo(TypeTemplate* tt, U32 argSize, TypeInfo* args[])
 {
+    ElfUnloadQuiescence::ReadScope reader;
     U64 fastMapGeneration = 0;
     GenericTiDesc* fastTypeInfoDesc = genericTypeInfoFastMap.Get(tt, argSize, args, fastMapGeneration);
     if (fastTypeInfoDesc != nullptr) {

@@ -16,6 +16,7 @@
 #include "Base/Log.h"
 #include "Base/LogFile.h"
 #include "Base/TimeUtils.h"
+#include "Loader/ElfUnloadQuiescence.h"
 #include "LoaderManager.h"
 #include "StackMap/StackMap.h"
 
@@ -35,6 +36,7 @@ public:
     };
     static GCInfoNode BuildNodeForTrace(Uptr startIP, Uptr ip, FrameAddress* fa)
     {
+        ElfUnloadQuiescence::ReadScope metadataReader;
         CString time = TimeUtil::GetTimestamp();
 
 #ifdef __APPLE__
@@ -121,6 +123,7 @@ class GCInfoNodeForFix : public GCInfoNode {
 public:
     static GCInfoNodeForFix BuildNodeForFix(Uptr startIP, Uptr ip, FrameAddress* fa)
     {
+        ElfUnloadQuiescence::ReadScope metadataReader;
         CString time = TimeUtil::GetTimestamp();
 
 #ifdef __APPLE__

@@ -100,6 +100,9 @@ public:
     void RegisterRoots(StaticRootArray* addr, U32 size);
     void UnregisterRoots(StaticRootArray* addr, U32 size);
     void VisitRoots(const RootSlotVisitor& visitor);
+#ifdef MRT_TESTABLE_INTERNALS
+    USize RootCountForTesting();
+#endif
 
 private:
     std::mutex gcRootsLock;                         // lock gcRootsBuckets

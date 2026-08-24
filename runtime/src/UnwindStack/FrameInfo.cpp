@@ -11,6 +11,7 @@
 #include "os/Loader.h"
 #include "StackMap/StackMap.h"
 #include "StackMetadataHelper.h"
+#include "Loader/ElfUnloadQuiescence.h"
 
 #include <cstdarg>
 #include <cstring>
@@ -30,6 +31,7 @@ void SigAppend(char* buf, size_t cap, const char* fmt, ...)
 } // namespace
 void FrameInfo::ResolveProcInfo()
 {
+    ElfUnloadQuiescence::ReadScope metadataReader;
     startProc = GetFuncStartPC();
 #ifdef __APPLE__
     FuncDescRef funcDesc = MFuncDesc::GetFuncDesc(mFrame.GetFA());
@@ -146,6 +148,7 @@ FuncDescRef SigHandlerFrameinfo::GetFuncDescForSignal() const
 
 void SigHandlerFrameinfo::PrintFrameInfo(uint32_t frameIdx) const
 {
+    ElfUnloadQuiescence::ReadScope metadataReader;
     if (frameIdx > 0 && fType == FrameType::NATIVE) {
         FLOG(RTLOG_ERROR, "      ...");
         return;

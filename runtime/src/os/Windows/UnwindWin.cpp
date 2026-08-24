@@ -6,6 +6,7 @@
 
 
 #include "UnwindWin.h"
+#include "Loader/ElfUnloadQuiescence.h"
 
 #include "Base/Log.h"
 #include "Common/StackType.h"
@@ -75,6 +76,7 @@ uint32_t GetStackOffset(UnwindInfo& unwindInfo)
 
 FrameInfo GetCurFrameInfo(WinModuleManager& winModuleManager, Uptr pc, Uptr sp)
 {
+    ElfUnloadQuiescence::ReadScope metadataReader;
     WinModule* module = winModuleManager.GetWinModuleByPc(pc);
     if (module == nullptr) {
         winModuleManager.ReadWinModuleAtRunning();
@@ -114,6 +116,7 @@ FrameInfo GetCurFrameInfo(WinModuleManager& winModuleManager, Uptr pc, Uptr sp)
 FrameInfo GetCallerFrameInfo(WinModuleManager& winModuleManager, const MachineFrame& curFrame,
                              UnwindContextStatus& status)
 {
+    ElfUnloadQuiescence::ReadScope metadataReader;
     static bool isCalleeThrowStackOverFlowError = false;
     Uptr callerPC = reinterpret_cast<Uptr>(curFrame.GetFA()->returnAddress);
 

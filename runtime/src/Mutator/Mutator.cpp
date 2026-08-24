@@ -36,6 +36,7 @@
 #include "CpuProfiler/CpuProfiler.h"
 #include "Base/LogFile.h"
 #include "Interpreter/InterpreterSpecific.h"
+#include "Loader/ElfUnloadQuiescence.h"
 
 namespace MapleRuntime {
 void Mutator::RememberObjectInSatbBuffer(const BaseObject* target)
@@ -800,6 +801,7 @@ intptr_t Mutator::FixExtendedStack(intptr_t frameBase, uint32_t adjustedSize, vo
             stackGrowContext.frameInfo.mFrame.UnwindToCallerMachineFrame(caller.frameInfo.mFrame);
 #endif
             caller.frameInfo.ResolveProcInfo();
+            ElfUnloadQuiescence::ReadScope metadataReader;
 #ifdef __APPLE__
             FuncDescRef funcDesc = MFuncDesc::GetFuncDesc(caller.frameInfo.mFrame.GetFA());
 #else

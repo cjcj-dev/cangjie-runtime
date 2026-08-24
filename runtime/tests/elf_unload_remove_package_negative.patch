@@ -1,0 +1,6 @@
+diff --git a/runtime/src/Loader/CjFileLoader/CjFileLoader.cpp b/runtime/src/Loader/CjFileLoader/CjFileLoader.cpp
+--- a/runtime/src/Loader/CjFileLoader/CjFileLoader.cpp
++++ b/runtime/src/Loader/CjFileLoader/CjFileLoader.cpp
+@@ -406 +406 @@ void CJFileLoader::UnlinkLoadedFile(BaseFile* baseFile)
+-    RemovePackageInfo(baseFile);
++    // Fault injection: retain the unloaded image's package directory entries.

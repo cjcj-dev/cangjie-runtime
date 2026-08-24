@@ -1,0 +1,15 @@
+diff --git a/runtime/src/StackManager.cpp b/runtime/src/StackManager.cpp
+--- a/runtime/src/StackManager.cpp
++++ b/runtime/src/StackManager.cpp
+@@ -165,11 +165,9 @@ void StackManager::VisitStackRoots(const UnwindContext& topFrame, const RootVisi
+ void StackManager::VisitStackRoots(const UnwindContext& topFrame, const RootVisitor& func, Mutator& mutator)
+ {
+-    ElfUnloadQuiescence::ReadScope metadataReader(ElfUnloadQuiescence::ReaderKind::GC_STACK_ENTRY);
+     GCStackInfo gcStackInfo(&topFrame);
+     gcStackInfo.FillInStackTrace();
+ #ifdef MRT_TESTABLE_INTERNALS
+     ElfUnloadQuiescence::PauseGcReaderForTesting();
+ #endif
+-    ElfUnloadQuiescence::AssertReaderActive();
+     gcStackInfo.VisitStackRoots(func, mutator);
+ }

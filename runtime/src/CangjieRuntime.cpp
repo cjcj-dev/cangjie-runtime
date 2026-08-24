@@ -12,6 +12,7 @@
 #include "Heap/Heap.h"
 #include "HeapManager.h"
 #include "ObjectManager.h"
+#include "ObjectModel/MFuncdesc.inline.h"
 #include "StackManager.h"
 #if defined(__linux__) || defined(hongmeng) || defined(__APPLE__)
 #include "SignalManager.h"
@@ -61,6 +62,53 @@ extern "C" MRT_EXPORT void MRT_LibraryUnLoad(uint64_t address)
     LoaderManager* loaderManager = LoaderManager::GetInstance();
     loaderManager->UnloadFile(address);
 }
+
+#ifdef MRT_TESTABLE_INTERNALS
+extern "C" MRT_EXPORT size_t MRT_TestElfUnloadStaticRootCount()
+{
+    return Heap::GetStaticRootCountForTesting();
+}
+
+extern "C" MRT_EXPORT bool MRT_TestElfUnloadPackagePathPresent(const char* path)
+{
+    return LoaderManager::GetInstance()->VisitPackageInfoByPath(path, [](PackageInfo*) {});
+}
+
+extern "C" MRT_EXPORT size_t MRT_TestElfUnloadPackageIndexSize()
+{
+    return LoaderManager::GetInstance()->GetLoader()->GetPackageIndexSizeForTesting();
+}
+
+extern "C" MRT_EXPORT bool MRT_TestElfUnloadTypePresent(const char* name)
+{
+    return LoaderManager::GetInstance()->FindTypeInfoFromLoadedFiles(name) != nullptr;
+}
+
+extern "C" MRT_EXPORT size_t MRT_TestElfUnloadTypeIndexSize()
+{
+    return TypeInfoManager::GetTypeInfoManager().GetTypeInfoIndexShape().first;
+}
+
+extern "C" MRT_EXPORT bool MRT_TestElfUnloadFuncDescPresent(uintptr_t startPC)
+{
+    return MFuncDesc::GetFuncDesc(startPC) != nullptr;
+}
+
+extern "C" MRT_EXPORT uintptr_t MRT_TestElfUnloadImageIdentity(uintptr_t address)
+{
+    return ElfUnloadQuiescence::ImageIdentityForTesting(address);
+}
+
+extern "C" MRT_EXPORT bool MRT_TestElfUnloadImageIdentityLinked(uintptr_t imageIdentity)
+{
+    return ElfUnloadQuiescence::IsImageIdentityLinkedForTesting(imageIdentity);
+}
+
+extern "C" MRT_EXPORT void* MRT_TestElfUnloadLibraryHandle(const char* libName)
+{
+    return LoaderManager::GetInstance()->GetLoader()->GetLibraryHandleForTesting(libName);
+}
+#endif
 
 #if defined(MRT_DEBUG) && (MRT_DEBUG == 1)
 void DumpAllStackTrace0()

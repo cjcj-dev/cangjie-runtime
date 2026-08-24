@@ -28,6 +28,9 @@ class CollectorResources;
 class Heap {
 public:
     static Heap& GetHeap();
+#ifdef MRT_TESTABLE_INTERNALS
+    static size_t GetStaticRootCountForTesting();
+#endif
     static Barrier& GetBarrier() { return **currentBarrierPtr; }
     virtual RememberedSet& GetRememberedSet() = 0;
 
