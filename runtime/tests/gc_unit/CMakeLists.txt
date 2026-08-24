@@ -54,6 +54,7 @@ set(GC_UNIT_SOURCES
     test_fillerobj.cpp
     test_i2_readref.cpp
     test_fwdreturn.cpp
+    test_ghost_region_lookup.cpp
     test_fnlz_roots.cpp
     test_mark_stack_entry.cpp
     test_mark_stripe.cpp
