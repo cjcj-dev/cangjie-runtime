@@ -85,7 +85,14 @@ struct TestSnapshot {
 void ResetForTest();
 AllocationToken BindStampForTest(uint64_t externalKey, const ObjectStamp& stamp);
 AllocationToken LookupStampForTest(const ObjectStamp& stamp);
+AllocationToken ExternalTokenForTest(uint64_t externalKey);
 bool ValidateEndpointForTest(bool present, const ObjectStamp& stamp);
+const char* ClassifyEvidenceForTest(bool targetPresent, const ObjectStamp& target,
+                                    bool consumerPresent, const ObjectStamp& consumer,
+                                    bool activeToPresent, const ObjectStamp& activeTo,
+                                    bool retiredToPresent, const ObjectStamp& retiredTo);
+void DropNextM0WriteForTest();
+bool FooterValidForTest();
 TestSnapshot SnapshotForTest();
 #endif
 

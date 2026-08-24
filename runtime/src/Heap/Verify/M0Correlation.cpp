@@ -79,6 +79,9 @@ std::atomic<uint64_t> g_interventionUnregister { 0 };
 std::atomic<uint64_t> g_contractErrors { 0 };
 std::atomic<uint64_t> g_writeErrors { 0 };
 std::atomic<bool> g_footerRegistered { false };
+#if defined(MRT_GC_UNIT_TEST_ACCESS)
+std::atomic<bool> g_dropNextM0Write { false };
+#endif
 
 const char* BoolDigit(bool value)
 {
@@ -129,7 +132,7 @@ uint64_t Emit(const char* record, const char* format, ...)
     return seq;
 }
 
-void DumpFooter()
+bool FooterValid()
 {
     const uint64_t m0Seen = g_m0Seen.load(std::memory_order_relaxed);
     const uint64_t m0Written = g_m0Written.load(std::memory_order_relaxed);
@@ -144,12 +147,22 @@ void DumpFooter()
     }
     const bool interventionValid = selected == 0 ? (registered == 0 && unregistered == 0)
                                                   : (registered == 1 && unregistered == 1);
-    const bool valid = errors == 0 && writes == 0 && m0Seen == m0Written && interventionValid;
+    return errors == 0 && writes == 0 && m0Seen == m0Written && interventionValid;
+}
+
+void DumpFooter()
+{
+    const uint64_t m0Seen = g_m0Seen.load(std::memory_order_relaxed);
+    const uint64_t m0Written = g_m0Written.load(std::memory_order_relaxed);
+    const uint64_t errors = g_contractErrors.load(std::memory_order_relaxed);
+    const uint64_t writes = g_writeErrors.load(std::memory_order_relaxed);
+    const uint64_t registered = g_interventionRegister.load(std::memory_order_relaxed);
+    const uint64_t unregistered = g_interventionUnregister.load(std::memory_order_relaxed);
     (void)Emit("footer",
                "valid=%s binds=%llu tag_rejected=%llu forwards=%llu m0_seen=%llu m0_written=%llu "
                "observations=%llu releases=%llu intervention_register=%llu intervention_unregister=%llu "
                "contract_errors=%llu write_errors=%llu",
-               BoolDigit(valid), static_cast<unsigned long long>(g_binds.load(std::memory_order_relaxed)),
+               BoolDigit(FooterValid()), static_cast<unsigned long long>(g_binds.load(std::memory_order_relaxed)),
                static_cast<unsigned long long>(g_tagRejected.load(std::memory_order_relaxed)),
                static_cast<unsigned long long>(g_forwards.load(std::memory_order_relaxed)),
                static_cast<unsigned long long>(m0Seen), static_cast<unsigned long long>(m0Written),
@@ -724,6 +737,11 @@ void RecordM0(uint64_t causalSeq, uint64_t m0Seq, const char* exitName, const ch
     }
     targetEvidence.token = token;
     const char* outputClass = valid ? classification : "INVALID_EVIDENCE";
+#if defined(MRT_GC_UNIT_TEST_ACCESS)
+    if (g_dropNextM0Write.exchange(false, std::memory_order_relaxed)) {
+        return;
+    }
+#endif
     const uint64_t ledger = Emit(
         "m0",
         "causal_seq=%llu m0_seq=%llu exit=%s class=%s phase=%u allocation_token=%llu "
@@ -778,6 +796,7 @@ void ResetForTest()
     g_interventionUnregister.store(0, std::memory_order_relaxed);
     g_contractErrors.store(0, std::memory_order_relaxed);
     g_writeErrors.store(0, std::memory_order_relaxed);
+    g_dropNextM0Write.store(false, std::memory_order_relaxed);
 }
 
 AllocationToken BindStampForTest(uint64_t externalKey, const ObjectStamp& stamp)
@@ -792,9 +811,36 @@ AllocationToken LookupStampForTest(const ObjectStamp& stamp)
     return ResolveStampLocked(stamp, 0, false);
 }
 
+AllocationToken ExternalTokenForTest(uint64_t externalKey)
+{
+    std::lock_guard<std::mutex> lock(g_registryLock);
+    std::unordered_map<uint64_t, AllocationToken>::const_iterator external = g_external.find(externalKey);
+    return external == g_external.end() ? 0 : external->second;
+}
+
 bool ValidateEndpointForTest(bool present, const ObjectStamp& stamp)
 {
     return EndpointValid(present, stamp);
+}
+
+const char* ClassifyEvidenceForTest(bool targetPresent, const ObjectStamp& target,
+                                    bool consumerPresent, const ObjectStamp& consumer,
+                                    bool activeToPresent, const ObjectStamp& activeTo,
+                                    bool retiredToPresent, const ObjectStamp& retiredTo)
+{
+    return EndpointValid(targetPresent, target) && EndpointValid(consumerPresent, consumer) &&
+        EndpointValid(activeToPresent, activeTo) && EndpointValid(retiredToPresent, retiredTo)
+        ? "VALID" : "INVALID_EVIDENCE";
+}
+
+void DropNextM0WriteForTest()
+{
+    g_dropNextM0Write.store(true, std::memory_order_relaxed);
+}
+
+bool FooterValidForTest()
+{
+    return FooterValid();
 }
 
 TestSnapshot SnapshotForTest()
