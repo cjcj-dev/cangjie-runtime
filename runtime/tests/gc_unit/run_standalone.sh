@@ -139,6 +139,7 @@ $CXX -std=gnu++17 -O0 -g -Wall -Wextra -pthread -fno-rtti \
     "$SRC/test_i2_readref.cpp" \
     "${M0_TEST_ARGS[@]}" \
     "$SRC/test_fwdreturn.cpp" \
+    "$SRC/test_ghost_region_lookup.cpp" \
     "$SRC/test_fnlz_roots.cpp" \
     "$SRC/test_mark_stack_entry.cpp" \
     "$SRC/test_mark_stripe.cpp" \
