@@ -286,7 +286,12 @@ public:
         if (ENABLE_LOG(type) || gcLogActive || zstatActive) {
             startTimeNs = TimeUtil::NanoSeconds();
             active = true;
-            cycleSeq = GcLog::CurrentSeq();
+            // FINALIZE timers run on a lifecycle thread that does not participate in the active
+            // collection.  Its LogType is the structural ownership marker: even when that thread
+            // overlaps a process-wide cycle, its work remains unowned (seq=0).  All GC phase
+            // timers use the default REPORT type and retain the active cycle, including nonpillar
+            // phases such as young.flush_alloc.
+            cycleSeq = logType == FINALIZE ? 0 : GcLog::CurrentSeq();
             // ZStatPhase kind (pause vs concurrent, zStat.hpp:257/270) is sampled at scope
             // entry: a phase that straddles the world-release is booked where its work began.
             if (zstatActive) {
