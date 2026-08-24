@@ -100,6 +100,20 @@ validity and diagnostic columns, not numbers that may be traded for speed.
    overwrite prior evidence. Workload binaries and referenced evidence remain
    immutable; intermediate compiler files may be removed after their hashes
    are recorded.
+10. `MRT_GC_LOG` is not a cross-runtime observer.  The official runtime has no
+    corresponding GcLog/phase-timer work, so setting the same variable in both
+    processes makes the environment look symmetric without making observer
+    cost symmetric.  Primary `subject` and `official` attempts therefore leave
+    every observation variable unset.  A subject-only ledger companion may be
+    collected beside each pair, provided it differs from subject/fair only by
+    `MRT_GC_LOG=UNSET/1` and never enters a subject/official ratio.  Odd/even
+    rounds reverse the complete `subject/fair, official/fair, subject/ledger`
+    order so both comparisons reverse their order bias.  Observer overhead is reported
+    separately from the fair performance matrix; it is not silently subtracted
+    as a correction.  Because the clean fair attempts also omit the common
+    runtime/report observer, they answer wall/throughput/RSS/correctness but
+    cannot populate cross-runtime pause quantiles.  Such a campaign is not a
+    complete release metric vector and must not be presented as one.
 
 ## 5. Ratios and confidence
 

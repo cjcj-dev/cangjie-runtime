@@ -20,6 +20,13 @@ TIME_RE = re.compile(r"wall_s=([0-9.]+)\tmaxrss_kb=([0-9]+)\ttime_exit=([0-9]+)"
 PAUSE_RE = re.compile(r"(?:stw time|light sync time) ([0-9]+) us")
 REASON_RE = re.compile(r"Begin GC log\. GCReason: ([^,]+),")
 RUN_RE = re.compile(r"r([0-9]+)-(subject|official)")
+FAIR_OBSERVER_ENV = {
+    "env.MRT_LOG_LEVEL": "UNSET",
+    "env.MRT_LOG_PATH": "UNSET",
+    "env.MRT_REPORT": "UNSET",
+    "env.MRT_GC_LOG": "UNSET",
+    "env.MRT_GCV2_*": "UNSET",
+}
 
 
 def sha256(path: Path) -> str:
@@ -84,6 +91,33 @@ def load_manifest(path: Path) -> dict[str, dict[str, str]]:
         return {row["workload"]: row for row in csv.DictReader(stream, dialect="excel-tab")}
 
 
+def read_meta(path: Path) -> dict[str, str]:
+    values: dict[str, str] = {}
+    for line_number, line in enumerate(path.read_text().splitlines(), start=1):
+        key, separator, value = line.partition("=")
+        if not separator or not key:
+            raise ValueError(f"bad metadata line {path}:{line_number}")
+        if key in values:
+            raise ValueError(f"duplicate metadata key {key}: {path}")
+        values[key] = value
+    return values
+
+
+def validate_fair_observer_recipe(
+    meta: dict[str, str], relative: Path, arm: str, heap: str
+) -> None:
+    if meta.get("arm") != arm or meta.get("heap") != heap or meta.get("env.cjHeapSize") != heap:
+        raise ValueError(f"attempt metadata does not match path: {relative}")
+    if meta.get("observation") != "fair":
+        raise ValueError(f"non-fair attempt cannot enter subject/official ratio: {relative}")
+    observer_env = {key: value for key, value in meta.items() if key.startswith("env.MRT_")}
+    if observer_env != FAIR_OBSERVER_ENV:
+        raise ValueError(
+            f"unclean fair observer recipe for subject/official ratio: {relative}; "
+            f"got {observer_env}, expected {FAIR_OBSERVER_ENV}"
+        )
+
+
 def parse_attempt(directory: Path, root: Path, manifest: dict[str, dict[str, str]]) -> dict[str, object]:
     relative = directory.relative_to(root / "runs")
     workload, heap, run_name = relative.parts
@@ -92,6 +126,8 @@ def parse_attempt(directory: Path, root: Path, manifest: dict[str, dict[str, str
         raise ValueError(f"unexpected attempt path: {relative}")
     round_number = int(match.group(1))
     arm = match.group(2)
+    meta = read_meta(directory / "meta.txt")
+    validate_fair_observer_recipe(meta, relative, arm, heap)
     rc = int((directory / "rc").read_text().strip())
     time_match = TIME_RE.search((directory / "time.tsv").read_text().strip())
     if time_match is None:

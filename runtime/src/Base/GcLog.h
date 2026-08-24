@@ -23,10 +23,11 @@ namespace MapleRuntime {
 // record is one line, `key=value` separated by spaces, with a stable field order and a schema
 // version so a reader can refuse a record it does not understand.
 //
-//   [GCLOG] v=2 rec=cycle seq= kind= reason= start_ns= dur_ns= live_before= live_after=
+//   [GCLOG] v=3 rec=cycle seq= kind= reason= start_ns= dur_ns= live_before= live_after=
 //           collected= heap_used= threshold= rss_kb=
-//   [GCLOG] v=2 rec=phase seq= name= us=
-//   [GCLOG] v=2 rec=stw   seq= reason= wait_ns= held_ns=
+//   [GCLOG] v=3 rec=phase seq= name= ns=
+//   [GCLOG] v=3 rec=phase_leaf seq= name= ns= kind= depth= path_ok= path=
+//   [GCLOG] v=3 rec=stw   seq= reason= wait_ns= held_ns=
 //   [GCLOG] v=3 rec=crash ...  (crash signature; always-on via write(2), see Crash())
 //
 // A phase record carries the seq of the cycle it belongs to, so phases join to cycles without
@@ -36,13 +37,13 @@ namespace MapleRuntime {
 // MRT_GC_LOG so a crash before GcLog init still emits.
 class GcLog {
 public:
-    static constexpr uint32_t SCHEMA_VERSION = 2;
-    // Crash records advance the schema; cycle/phase stay at v=2 for existing readers.
+    static constexpr uint32_t SCHEMA_VERSION = 3;
+    // Crash records share v3 but remain independently emitted and parsed.
     static constexpr uint32_t CRASH_SCHEMA_VERSION = 3;
     // 128: longest phase name in the tree is well under this; longer ones are truncated.
-    // v2: dur/start are nanoseconds (were labelled us), phase names are folded to one token,
-    // and the cycle record moved so minors emit one too.
+    // v3: all machine durations are nanoseconds and all names are folded to one token.
     static constexpr size_t MAX_PHASE_NAME = 128;
+    static constexpr size_t MAX_PHASE_PATH = 512;
     // Fixed-capacity last-FATAL slot for crash assert= field. No TLS, no lock, no heap.
     static constexpr size_t FATAL_SLOT_CAP = 512;
 
@@ -52,17 +53,35 @@ public:
         return enabled;
     }
 
-    // Cycles are numbered from 1. Phase records are emitted while a collection runs and the cycle
-    // record only at the end of it, so the in-progress number is one past the count of completed
-    // cycles. Both accessors return that same number for the same collection: phases read it,
-    // the cycle record takes it and closes the cycle.
-    static uint64_t CurrentSeq() { return CycleCounter().load(std::memory_order_relaxed) + 1; }
+    // There is exactly one process-wide active collection.  A Timer snapshots CurrentSeq() in its
+    // constructor; scopes created outside a collection therefore retain seq=0 even if they end
+    // during a later collection.  Pairing is a default product invariant, not a test-only check.
+    static uint64_t BeginCycle()
+    {
+        uint64_t seq = CycleCounter().fetch_add(1, std::memory_order_relaxed) + 1;
+        if (seq == 0 || ActiveSeq().exchange(seq, std::memory_order_acq_rel) != 0) {
+            std::abort();
+        }
+        return seq;
+    }
 
-    static uint64_t CompleteCycle() { return CycleCounter().fetch_add(1, std::memory_order_relaxed) + 1; }
+    static uint64_t CurrentSeq() { return ActiveSeq().load(std::memory_order_acquire); }
+
+    static void CompleteCycle(uint64_t seq)
+    {
+        uint64_t expected = seq;
+        if (seq == 0 || !ActiveSeq().compare_exchange_strong(
+                            expected, 0, std::memory_order_acq_rel, std::memory_order_acquire)) {
+            std::abort();
+        }
+    }
 
     static void Cycle(uint64_t seq, const char* kind, const char* reason, uint64_t startNs, uint64_t durNs,
                       size_t liveBefore, size_t liveAfter, size_t collected, size_t heapUsed, size_t threshold)
     {
+        if (seq == 0) {
+            std::abort();
+        }
         if (!Enabled()) {
             return;
         }
@@ -70,14 +89,18 @@ public:
         // Do not route through WriteLog(REPORT) — Release gates REPORT on MRT_REPORT=<path>
         // (DEFAULT_MRT_REPORT=0), which silently dropped cycle/phase and caused false
         // "rec=cycle=0 ⇒ no GC" readings (walkcost/hostslow).
+        char safeKind[MAX_PHASE_NAME + 1];
+        char safeReason[MAX_PHASE_NAME + 1];
+        FoldToToken(kind, safeKind);
+        FoldToToken(reason, safeReason);
         EmitLine("[GCLOG] v=%u rec=cycle seq=%llu kind=%s reason=%s start_ns=%llu dur_ns=%llu "
                  "live_before=%zu live_after=%zu collected=%zu heap_used=%zu threshold=%zu rss_kb=%zu",
-                 SCHEMA_VERSION, static_cast<unsigned long long>(seq), kind, reason,
+                 SCHEMA_VERSION, static_cast<unsigned long long>(seq), safeKind, safeReason,
                  static_cast<unsigned long long>(startNs), static_cast<unsigned long long>(durNs), liveBefore,
                  liveAfter, collected, heapUsed, threshold, ResidentKB());
     }
 
-    static void Phase(const char* name, uint64_t us)
+    static void Phase(uint64_t seq, const char* name, uint64_t ns)
     {
         if (!Enabled()) {
             return;
@@ -85,8 +108,26 @@ public:
         char safe[MAX_PHASE_NAME + 1];
         FoldToToken(name, safe);
         // Same always-on channel as Cycle (see Cycle comment).
-        EmitLine("[GCLOG] v=%u rec=phase seq=%llu name=%s us=%llu", SCHEMA_VERSION,
-                 static_cast<unsigned long long>(CurrentSeq()), safe, static_cast<unsigned long long>(us));
+        EmitLine("[GCLOG] v=%u rec=phase seq=%llu name=%s ns=%llu", SCHEMA_VERSION,
+                 static_cast<unsigned long long>(seq), safe, static_cast<unsigned long long>(ns));
+    }
+
+    // `path` is assembled from already folded components by Timer and uses `>` only as the
+    // leaf-to-root separator.  On fixed-buffer overflow Timer still emits a syntactically exact
+    // record with path_ok=0, which strict readers reject instead of accepting silent truncation.
+    static void PhaseLeaf(uint64_t seq, const char* name, uint64_t ns, const char* kind, uint64_t depth,
+                          bool pathOk, const char* path)
+    {
+        if (!Enabled()) {
+            return;
+        }
+        char safe[MAX_PHASE_NAME + 1];
+        FoldToToken(name, safe);
+        EmitLine("[GCLOG] v=%u rec=phase_leaf seq=%llu name=%s ns=%llu kind=%s depth=%llu "
+                 "path_ok=%u path=%s",
+                 SCHEMA_VERSION, static_cast<unsigned long long>(seq), safe,
+                 static_cast<unsigned long long>(ns), kind, static_cast<unsigned long long>(depth),
+                 pathOk ? 1U : 0U, path);
     }
 
     // One record per stop-the-world, because neither of the two records above can answer "how long
@@ -206,6 +247,9 @@ private:
                 out[i] = keep ? c : '_';
             }
         }
+        if (i == 0) {
+            out[i++] = '_';
+        }
         out[i] = '\0';
     }
 
@@ -231,6 +275,12 @@ private:
     {
         static std::atomic<uint64_t> counter{ 0 };
         return counter;
+    }
+
+    static std::atomic<uint64_t>& ActiveSeq()
+    {
+        static std::atomic<uint64_t> seq{ 0 };
+        return seq;
     }
 
     static char* FatalSlot()

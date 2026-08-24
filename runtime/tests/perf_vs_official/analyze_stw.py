@@ -10,23 +10,13 @@ import json, math, re, sys
 from collections import defaultdict
 from pathlib import Path
 
-STW_SEQ = re.compile(r"rec=stw\b.*\bseq=(\d+)\s+reason=(\S+)\s+wait_ns=(\d+)\s+held_ns=(\d+)")
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+from gclog_schema import build_phase_leaf_ledger, parse_gclog
+
 STW_OFFICIAL = re.compile(r"(?:stw time|light sync time) (\d+) us")
-CYCLE = re.compile(
-    r"rec=cycle\b.*\bseq=(\d+)\s+kind=(\S+)\s+reason=(\S+)\s+start_ns=(\d+)\s+dur_ns=(\d+)"
-)
 BEGIN = re.compile(r"Begin GC log\. GCReason: ([^,]+),")
-PHASE = re.compile(r"rec=phase\b.*\bname=(\S+)\s+us=(\d+)")
 WALL = re.compile(r"wall_s=([0-9.]+)")
 CONC_PHASE = re.compile(r"concurrent|conc_|satb|re-marking|remark", re.I)
-
-PILLARS = {
-    "ref_fix": re.compile(r"ref.?fix|fix.?ref|FixRef|ref_fix", re.I),
-    "mark": re.compile(r"mark", re.I),
-    "evac_finish": re.compile(r"evac_finish|evac.?finish", re.I),
-    "drain": re.compile(r"drain|remset", re.I),
-    "copy": re.compile(r"copy|reloc|evac(?!_finish)", re.I),
-}
 
 
 def pctile(vals, q):
@@ -66,23 +56,25 @@ def parse_logs(d: Path, arm: str):
 
 def cycle_pauses(text: str):
     by_seq = defaultdict(int)
-    for m in STW_SEQ.finditer(text):
-        by_seq[int(m.group(1))] += int(m.group(4))
+    records = parse_gclog(text)
+    for record in records.stw:
+        by_seq[record.seq] += record.held_ns
     if by_seq:
         return dict(by_seq)
+    if records.any():
+        return {}
     us = [int(x) * 1000 for x in STW_OFFICIAL.findall(text)]
     return {i: v for i, v in enumerate(us, 1)}
 
 
 def cycle_durs(text: str):
-    out = {}
-    kinds = {}
-    for m in CYCLE.finditer(text):
-        seq = int(m.group(1))
-        out[seq] = int(m.group(5))
-        kinds[seq] = m.group(2)
+    records = parse_gclog(text)
+    out = {record.seq: record.dur_ns for record in records.cycles}
+    kinds = {record.seq: record.kind for record in records.cycles}
     if out:
         return out, kinds
+    if records.any():
+        return {}, {}
     reasons = BEGIN.findall(text)
     return {i: 0 for i, _ in enumerate(reasons, 1)}, {
         i: ("minor" if "YOUNG" in r.upper() or "MINOR" in r.upper() else "major")
@@ -96,8 +88,17 @@ def pillars(text: str):
     conc = 0
     total = 0
     wait = 0
-    for name, us in PHASE.findall(text):
-        us = int(us)
+    records = parse_gclog(text)
+    if records.cycles:
+        ledger = build_phase_leaf_ledger(records)
+        for row in ledger["cycles"]:
+            for key, ns in row["pillars_ns"].items():
+                acc[key] += ns / 1000.0
+    elif records.any():
+        raise ValueError("structured GCLOG records appeared without a cycle master record")
+    for record in records.phases:
+        name = record.name
+        us = record.ns / 1000.0
         names[name] += us
         total += us
         if name == "finalizerProcessor_waitting_time":
@@ -105,13 +106,6 @@ def pillars(text: str):
             continue
         if CONC_PHASE.search(name):
             conc += us
-        hit = None
-        for key, rx in PILLARS.items():
-            if rx.search(name):
-                hit = key
-                break
-        if hit:
-            acc[hit] += us
     return dict(acc), dict(names), total, conc, wait
 
 

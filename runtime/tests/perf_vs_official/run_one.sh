@@ -1,8 +1,8 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-if [[ $# -ne 10 ]]; then
-    echo "usage: $0 OUT ARM HEAP BIN MARKER WORK_UNITS UNIT_NAME RTLIB CORES TIMEOUT_SECONDS" >&2
+if [[ $# -ne 11 ]]; then
+    echo "usage: $0 OUT ARM HEAP BIN MARKER WORK_UNITS UNIT_NAME RTLIB CORES TIMEOUT_SECONDS OBSERVATION" >&2
     exit 2
 fi
 
@@ -16,11 +16,20 @@ unit_name=$7
 runtime_lib=$(realpath "$8")
 cores=$9
 timeout_seconds=${10}
+observation=${11}
 
 case "$arm" in
     subject|official) ;;
     *) echo "unknown arm: $arm" >&2; exit 2 ;;
 esac
+case "$observation" in
+    fair|ledger) ;;
+    *) echo "unknown observation profile: $observation" >&2; exit 2 ;;
+esac
+[[ "$observation" != ledger || "$arm" == subject ]] || {
+    echo "ledger profile is subject-only; it is not a symmetric official observer" >&2
+    exit 2
+}
 [[ ! -e "$out" ]] || { echo "refusing to overwrite: $out" >&2; exit 2; }
 [[ -x "$binary" ]] || { echo "workload is not executable: $binary" >&2; exit 2; }
 for library in libcangjie-runtime.so libboundscheck.so; do
@@ -64,12 +73,31 @@ begin=$(date --iso-8601=ns)
     printf 'boundscheck_sha256=%s\n' "$bounds_sha"
     printf 'cores=%s\n' "$cores"
     printf 'timeout_seconds=%s\n' "$timeout_seconds"
+    printf 'observation=%s\n' "$observation"
     printf 'begin=%s\n' "$begin"
     printf 'env.cjHeapSize=%s\n' "$heap"
-    printf 'env.MRT_LOG_LEVEL=i\n'
-    printf 'env.MRT_GC_LOG=1\n'
+    if [[ "$observation" == fair ]]; then
+        printf 'env.MRT_LOG_LEVEL=UNSET\n'
+        printf 'env.MRT_LOG_PATH=UNSET\n'
+        printf 'env.MRT_REPORT=UNSET\n'
+        printf 'env.MRT_GC_LOG=UNSET\n'
+    else
+        printf 'env.MRT_LOG_LEVEL=UNSET\n'
+        printf 'env.MRT_LOG_PATH=UNSET\n'
+        printf 'env.MRT_REPORT=UNSET\n'
+        printf 'env.MRT_GC_LOG=1\n'
+    fi
     printf 'env.MRT_GCV2_*=UNSET\n'
 } >"$out/meta.txt"
+
+observer_env=()
+if [[ "$observation" == ledger ]]; then
+    # This is deliberately the sole environment difference from subject/fair.
+    # Official has no GcLog/MRT_PHASE_TIMER implementation, so passing the same
+    # spelling to that arm would make the environment look symmetric while the
+    # executed observer work remained asymmetric.
+    observer_env+=(MRT_GC_LOG=1)
+fi
 
 set +e
 env -i \
@@ -78,10 +106,7 @@ env -i \
     PATH=/usr/bin:/bin \
     LD_LIBRARY_PATH="$runtime_lib" \
     cjHeapSize="$heap" \
-    MRT_LOG_LEVEL=i \
-    MRT_LOG_PATH="$out/runtime.log" \
-    MRT_REPORT="$out/report.log" \
-    MRT_GC_LOG=1 \
+    "${observer_env[@]}" \
     taskset -c "$cores" \
     /usr/bin/time -f $'wall_s=%e\tmaxrss_kb=%M\ttime_exit=%x' -o "$out/time.tsv" \
     timeout --signal=TERM --kill-after=2s "${timeout_seconds}s" \

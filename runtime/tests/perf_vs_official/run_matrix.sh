@@ -33,7 +33,7 @@ grep -Eq "^perfbar(-[0-9]+)? cores=${cores}([[:space:]]|$)" /dev/shm/MEASURE_ACT
     exit 2
 }
 
-install -d "$out/runs" "$out/evidence"
+install -d "$out/runs" "$out/ledger/runs" "$out/evidence"
 cp "$workloads" "$out/manifest.tsv"
 cat /dev/shm/MEASURE_ACTIVE >"$out/evidence/MEASURE_ACTIVE.before"
 cat /proc/meminfo >"$out/evidence/meminfo.before"
@@ -50,17 +50,24 @@ uname -a >"$out/evidence/uname.txt"
     printf 'driver_sha256=%s\n' "$(sha256sum "$0" | awk '{print $1}')"
     printf 'run_one_sha256=%s\n' "$(sha256sum "$script_dir/run_one.sh" | awk '{print $1}')"
     printf 'gc_tuning=UNSET\n'
+    printf 'comparison_observation=fair:all_observers=UNSET\n'
+    printf 'supplemental_observation_ledger=subject-ledger:MRT_GC_LOG=1\n'
+    printf 'observer_ab_only_difference=MRT_GC_LOG\n'
 } >"$out/campaign.meta"
 printf '%s\n' $'workload\theap\tround\tstatus\tdetail' >"$out/deferred.tsv"
 
 run_attempt() {
-    local id=$1 heap=$2 round=$3 arm=$4 binary=$5 marker=$6 work_units=$7 unit_name=$8
+    local id=$1 heap=$2 round=$3 arm=$4 observation=$5 binary=$6 marker=$7 work_units=$8 unit_name=$9
     local run_dir
-    run_dir="$out/runs/$id/$heap/r$(printf '%02d' "$round")-$arm"
+    if [[ "$observation" == fair ]]; then
+        run_dir="$out/runs/$id/$heap/r$(printf '%02d' "$round")-$arm"
+    else
+        run_dir="$out/ledger/runs/$id/$heap/r$(printf '%02d' "$round")-$arm"
+    fi
     "$script_dir/run_one.sh" "$run_dir" "$arm" "$heap" "$binary" "$marker" \
         "$work_units" "$unit_name" \
         "$([[ "$arm" == subject ]] && printf '%s' "$subject_rt" || printf '%s' "$official_rt")" \
-        "$cores" "$timeout_seconds" | tee -a "$out/campaign.log"
+        "$cores" "$timeout_seconds" "$observation" | tee -a "$out/campaign.log"
 }
 
 while IFS=$'\t' read -r id _source _source_sha _compiler _compiler_sha _compiler_stamp binary binary_sha marker work_units unit_name; do
@@ -81,12 +88,15 @@ while IFS=$'\t' read -r id _source _source_sha _compiler _compiler_sha _compiler
             printf '%s %s %s\n' "$(date --iso-8601=ns)" "$id/$heap/r$round" "$(cat /proc/loadavg)" \
                 >>"$out/evidence/pair_loadavg.tsv"
             if ((round % 2 == 1)); then
-                order=(subject official)
+                order=(subject:fair official:fair subject:ledger)
             else
-                order=(official subject)
+                order=(subject:ledger official:fair subject:fair)
             fi
-            for arm in "${order[@]}"; do
-                run_attempt "$id" "$heap" "$round" "$arm" "$binary" "$marker" "$work_units" "$unit_name"
+            for attempt in "${order[@]}"; do
+                arm=${attempt%%:*}
+                observation=${attempt#*:}
+                run_attempt "$id" "$heap" "$round" "$arm" "$observation" \
+                    "$binary" "$marker" "$work_units" "$unit_name"
             done
         done
     done
