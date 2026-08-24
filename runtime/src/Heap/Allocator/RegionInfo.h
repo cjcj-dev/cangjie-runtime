@@ -2234,6 +2234,9 @@ public:
         // ZRelocationSetInstallTask (zRelocationSet.cpp:91-96).
         ForwardingTable::ClearEntries(GetRegionStart(), GetRegionSize());
         ForwardingTable::DropRetiredCovering(GetRegionStart(), GetRegionSize());
+        CHECK_DETAIL(ForwardingTable::PreparePublicationGeneration(GetRegionStart(), GetRegionSize()),
+                     "forwarding generation prepare failed region=%p range=[%#zx,%#zx)",
+                     this, static_cast<size_t>(GetRegionStart()), static_cast<size_t>(GetRegionEnd()));
         // Only last-cycle after-copy Exempt pages carry FORWARDED headers
         // (RegionManager.cpp:3533 then Exempt). Walking every from is the
         // rec=stw tax (B2.1 |Δ|=+4.53%). Snapshot prevRoute before paint.
@@ -2243,8 +2246,9 @@ public:
         // PORT_ZFORWARDING step 1: same event, recorded address-keyed as well.  Populated in
         // parallel with the region machinery so the two answers can be compared before either is
         // trusted; nothing reads it for decisions yet.
-        ForwardingTable::Insert(GetRegionStart(), GetRegionSize(), this);
-        ForwardingTable::EnsureEntries(this);
+        CHECK_DETAIL(ForwardingTable::InstallPublicationBeforeCopy(GetRegionStart(), GetRegionSize(), this),
+                     "forwarding table install failed before relocation region=%p range=[%#zx,%#zx)",
+                     this, static_cast<size_t>(GetRegionStart()), static_cast<size_t>(GetRegionEnd()));
         // enrolphase: which side of the relocate-start flip does this enrolment land on?
         //
         // OpenJDK installs the relocation set once, in the concurrent select_relocation_set
@@ -2663,7 +2667,10 @@ public:
         // changes.  That is the convergence the port is for: one writer of membership instead of N.
         if (type == RegionType::FROM_REGION || type == RegionType::LONE_FROM_REGION ||
             type == RegionType::UNMOVABLE_FROM_REGION || type == RegionType::RAW_POINTER_PINNED_REGION) {
-            ForwardingTable::InsertProvisional(GetRegionStart(), GetRegionSize(), this);
+            // Best-effort comparison carrier. Correctness is established by
+            // the checked full install in PrepareForwardableRegion; tests and
+            // pre-heap metadata transitions may legitimately have no map yet.
+            (void)ForwardingTable::InsertProvisional(GetRegionStart(), GetRegionSize(), this);
         } else if (type == RegionType::FREE_REGION || type == RegionType::GARBAGE_REGION ||
                    type == RegionType::TO_REGION) {
             // The ghost bit is part of membership and outlives the type change: all six residual

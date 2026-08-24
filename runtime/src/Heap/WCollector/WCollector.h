@@ -84,6 +84,7 @@ using CrossRefHandler = void(*)(BaseObject*, BaseObject*);
 class WCollector : public CopyCollector {
 #if defined(MRT_TESTABLE_INTERNALS)
     friend struct MutatorPublishTestAccess;
+    friend struct RelocationReceiptTestAccess;
 #endif
 
 public:
@@ -422,8 +423,9 @@ public:
             return obj;
         }
         RegionSpace& space = reinterpret_cast<RegionSpace&>(theAllocator);
+        const bool entriesArmed = ForwardingTable::EntriesArmed(fromAddr);
         if constexpr (ForwardingTable::kEntriesSoleWhenArmed) {
-            if (ForwardingTable::EntriesArmed(fromAddr)) {
+            if (entriesArmed) {
                 const MAddress stored = ForwardingTable::FindTo(fromAddr);
                 if (stored != 0) {
                     BaseObject* to = reinterpret_cast<BaseObject*>(stored);
@@ -433,22 +435,18 @@ public:
                 }
                 if (!obj->IsForwarded()) {
                     // Armed miss on a not-yet-copied object: do not invent geometry.
-                } else {
-                    BaseObject* geometric = space.GetRegionManager().FindPublishedRoute(obj, forwarding).dest;
-                    if (geometric != nullptr &&
-                        ZForwarding::DestUsable(reinterpret_cast<MAddress>(geometric)) &&
-                        ToHeaderCovered(geometric)) {
-                        const MAddress receipt =
-                            ForwardingTable::InsertMapping(fromAddr, reinterpret_cast<MAddress>(geometric));
-                        (void)space.GetRegionManager().GetRelocationRequestQueue().Publish(fromAddr, receipt);
-                        return reinterpret_cast<BaseObject*>(receipt);
-                    }
                 }
+            }
+        }
+        if (obj->IsForwarded()) {
+            BaseObject* published = GetForwardPointer(obj, forwarding);
+            if (published != nullptr) {
+                return published;
             }
         }
         BaseObject* to = space.GetRegionManager().FindPublishedRoute(obj, forwarding).dest;
         if constexpr (ForwardingTable::kEntriesSoleWhenArmed) {
-            if (ForwardingTable::EntriesArmed(fromAddr) && !obj->IsForwarded()) {
+            if (entriesArmed && !obj->IsForwarded()) {
                 to = nullptr;
             }
         }
@@ -615,7 +613,7 @@ public:
         return to != nullptr && Collector::PlausibleManagedObjectGate("ToHeaderCovered", to);
     }
 
-    BaseObject* GetForwardPointer(BaseObject* fromObj, RegionInfo* region)
+    BaseObject* GetForwardPointer(BaseObject* fromObj, RegionInfo* region) const
     {
         const MAddress fromAddr = reinterpret_cast<MAddress>(fromObj);
         BaseObject* to = nullptr;
@@ -623,12 +621,29 @@ public:
             if (ForwardingTable::EntriesArmed(fromAddr)) {
                 const MAddress stored = ForwardingTable::FindTo(fromAddr);
                 to = stored == 0 ? nullptr : reinterpret_cast<BaseObject*>(stored);
-                return ToHeaderCovered(to) ? to : nullptr;
+                if (ToHeaderCovered(to)) {
+                    return to;
+                }
+                if (!fromObj->IsForwarded()) {
+                    return nullptr;
+                }
             }
         }
         RegionSpace& space = reinterpret_cast<RegionSpace&>(theAllocator);
         to = space.GetRegionManager().FindPublishedRoute(fromObj, region).dest;
-        return ToHeaderCovered(to) ? to : nullptr;
+        if (!fromObj->IsForwarded() || !ToHeaderCovered(to) ||
+            !ZForwarding::DestUsable(reinterpret_cast<MAddress>(to))) {
+            return nullptr;
+        }
+        ForwardingTable::Publication publication =
+            ForwardingTable::RetainOpenPublicationAfterCopy(region, fromAddr);
+        if (!publication) {
+            return nullptr;
+        }
+        const MAddress receipt = ForwardingTable::InsertMapping(
+            publication, fromAddr, reinterpret_cast<MAddress>(to));
+        (void)space.GetRegionManager().GetRelocationRequestQueue().Publish(fromAddr, receipt);
+        return reinterpret_cast<BaseObject*>(receipt);
     }
 
     // Refuses a non-heap address the way FindToVersion does below, and for the same reason:
@@ -703,8 +718,13 @@ public:
         if (geometric != nullptr && ZForwarding::DestUsable(reinterpret_cast<MAddress>(geometric)) &&
             ToHeaderCovered(geometric)) {
             if (stored == nullptr) {
-                const MAddress receipt =
-                    ForwardingTable::InsertMapping(fromAddr, reinterpret_cast<MAddress>(geometric));
+                ForwardingTable::Publication publication =
+                    ForwardingTable::RetainOpenPublicationAfterCopy(fromRegionInfo, fromAddr);
+                if (!publication) {
+                    return stored;
+                }
+                const MAddress receipt = ForwardingTable::InsertMapping(
+                    publication, fromAddr, reinterpret_cast<MAddress>(geometric));
                 (void)space.GetRegionManager().GetRelocationRequestQueue().Publish(fromAddr, receipt);
                 geometric = reinterpret_cast<BaseObject*>(receipt);
             }

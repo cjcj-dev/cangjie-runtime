@@ -152,6 +152,18 @@ $CXX -std=gnu++17 -O0 -g -Wall -Wextra -pthread -fno-rtti \
   -lcangjie-runtime -lboundscheck \
   -o "$OUT/cj_gc_unit"
 
+# Fresh-process product-link arm for the one-shot ForwardingTable.  It binds
+# CompactRegion/ClearEntries from the same runtime SO as the full suite; no
+# forwarding component is rebuilt into this executable.
+$CXX -std=gnu++17 -O0 -g -Wall -Wextra -pthread -fno-rtti \
+  -DMRT_TESTABLE_INTERNALS=1 \
+  "${INC_FLAGS[@]}" \
+  "$SRC/gc_unit_main.cpp" \
+  "$SRC/clear_entries_product_unit.cpp" \
+  -L"$RUNTIME_LIB_DIR" -Wl,-rpath,"$RUNTIME_LIB_DIR" \
+  -lcangjie-runtime -lboundscheck \
+  -o "$OUT/cj_gc_forwarding_publication_unit"
+
 echo "LINKED_RUNTIME=$RUNTIME_LIB_DIR"
 echo "MRT_TESTABLE_INTERNALS=${MRT_TESTABLE_INTERNALS:-0}"
 # Binding proof: undefined product symbols must resolve from libcangjie-runtime.
@@ -163,11 +175,41 @@ if command -v nm >/dev/null 2>&1; then
 fi
 
 START=$(date +%s%N)
+FINAL_TALLY="${GC_UNIT_TALLY_FILE:-}"
+MAIN_TALLY="$OUT/main_tally.txt"
+PUBLICATION_TALLY="$OUT/forwarding_publication_tally.txt"
+rm -f "$MAIN_TALLY" "$PUBLICATION_TALLY"
 set +e
-LD_LIBRARY_PATH="$RUNTIME_LIB_DIR${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}" "$OUT/cj_gc_unit"
-RC=$?
+GC_UNIT_TALLY_FILE="$MAIN_TALLY" \
+  LD_LIBRARY_PATH="$RUNTIME_LIB_DIR${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}" "$OUT/cj_gc_unit"
+MAIN_RC=$?
+GC_UNIT_TALLY_FILE="$PUBLICATION_TALLY" \
+  LD_LIBRARY_PATH="$RUNTIME_LIB_DIR${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}" \
+  "$OUT/cj_gc_forwarding_publication_unit"
+PUBLICATION_RC=$?
 set -e
 END=$(date +%s%N)
 ELAPSED_MS=$(( (END - START) / 1000000 ))
-echo "GC_UNIT_RUN_DONE rc=$RC wall_ms=$ELAPSED_MS"
+
+# The gate consumes one independent tally.  Merge only two complete runner
+# tallies; an abort or disconnect leaves the final tally absent and fails
+# closed instead of turning an incomplete run into "one red".
+if [[ -n "$FINAL_TALLY" && -f "$MAIN_TALLY" && -f "$PUBLICATION_TALLY" ]]; then
+  read -r main_tests main_pass main_fail < <(
+    sed -nE 's/^\[========\] ([0-9]+) tests: ([0-9]+) passed, ([0-9]+) failed$/\1 \2 \3/p' "$MAIN_TALLY")
+  read -r publication_tests publication_pass publication_fail < <(
+    sed -nE 's/^\[========\] ([0-9]+) tests: ([0-9]+) passed, ([0-9]+) failed$/\1 \2 \3/p' "$PUBLICATION_TALLY")
+  if [[ -n "${main_tests:-}" && -n "${publication_tests:-}" ]]; then
+    printf '[========] %d tests: %d passed, %d failed\n' \
+      "$((main_tests + publication_tests))" \
+      "$((main_pass + publication_pass))" \
+      "$((main_fail + publication_fail))" >"$FINAL_TALLY"
+  fi
+fi
+
+RC=0
+if [[ $MAIN_RC -ne 0 || $PUBLICATION_RC -ne 0 ]]; then
+  RC=1
+fi
+echo "GC_UNIT_RUN_DONE rc=$RC main_rc=$MAIN_RC publication_rc=$PUBLICATION_RC wall_ms=$ELAPSED_MS"
 exit "$RC"

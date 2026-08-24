@@ -2541,26 +2541,32 @@ BaseObject* WCollector::WaitRoutedTipReady(BaseObject* from, BaseObject* to, Reg
         return from;
     };
 
+    bool publicationClosed = false;
     auto lookupTo = [&]() -> BaseObject* {
         if constexpr (ForwardingTable::kEntriesSoleWhenArmed) {
-            if (ForwardingTable::EntriesArmed(reinterpret_cast<MAddress>(from))) {
-                const MAddress stored = ForwardingTable::FindTo(reinterpret_cast<MAddress>(from));
+            const MAddress fromAddr = reinterpret_cast<MAddress>(from);
+            const bool entriesArmed = ForwardingTable::EntriesArmed(fromAddr);
+            if (entriesArmed) {
+                const MAddress stored = ForwardingTable::FindTo(fromAddr);
                 if (stored != 0) {
                     return reinterpret_cast<BaseObject*>(stored);
                 }
-                if (from->IsForwarded()) {
-                    BaseObject* geometric = space.GetRegionManager().FindPublishedRoute(from, forwarding).dest;
-                    if (geometric != nullptr &&
-                        ZForwarding::DestUsable(reinterpret_cast<MAddress>(geometric))) {
-                        const MAddress receipt = ForwardingTable::InsertMapping(
-                            reinterpret_cast<MAddress>(from), reinterpret_cast<MAddress>(geometric));
-                        (void)space.GetRegionManager().GetRelocationRequestQueue().Publish(
-                            reinterpret_cast<MAddress>(from), receipt);
-                        return reinterpret_cast<BaseObject*>(receipt);
-                    }
-                }
-                return nullptr;
             }
+            BaseObject* geometric = space.GetRegionManager().FindPublishedRoute(from, forwarding).dest;
+            if (from->IsForwarded() && geometric != nullptr &&
+                ZForwarding::DestUsable(reinterpret_cast<MAddress>(geometric))) {
+                ForwardingTable::Publication publication =
+                    ForwardingTable::RetainOpenPublicationAfterCopy(forwarding, fromAddr);
+                if (!publication) {
+                    publicationClosed = true;
+                    return nullptr;
+                }
+                const MAddress receipt = ForwardingTable::InsertMapping(
+                    publication, fromAddr, reinterpret_cast<MAddress>(geometric));
+                (void)space.GetRegionManager().GetRelocationRequestQueue().Publish(fromAddr, receipt);
+                return reinterpret_cast<BaseObject*>(receipt);
+            }
+            return entriesArmed ? nullptr : geometric;
         }
         return space.GetRegionManager().FindPublishedRoute(from, forwarding).dest;
     };
@@ -2573,6 +2579,9 @@ BaseObject* WCollector::WaitRoutedTipReady(BaseObject* from, BaseObject* to, Reg
             MutatorRelocate::NoteWaitReceipt();
         }
         return again;
+    }
+    if (publicationClosed) {
+        return nullptr;
     }
     const bool tableHit = again != nullptr;
     const RegionInfo::RouteState rs = forwarding->GetRouteState();
@@ -2629,6 +2638,9 @@ BaseObject* WCollector::WaitRoutedTipReady(BaseObject* from, BaseObject* to, Reg
                 MutatorRelocate::NoteWaitReceipt();
             }
             return retired;
+        }
+        if (publicationClosed) {
+            return nullptr;
         }
         if (MutatorRelocate::StatsOn()) {
             MutatorRelocate::NoteWaitGiveUp();
@@ -2919,7 +2931,6 @@ BaseObject* WCollector::ForwardObjectImpl(BaseObject* obj, RegionInfo* ghostFrom
     // or ROUTING wait that only GC can finish. ZGC relocate_object_inner
     // (zRelocate.cpp:354-372) does alloc+copy+insert with no safepoint; 乙1 is
     // the same rule for the object lock that routefix already applied to ROUTING.
-    ForwardingTable::EnsureEntries(ghostFromRegion);
     BaseObject* planned = fwdTable.PlanRoute(obj, CopierRouteMint::Make()).dest;
     do {
         StateWord oldWord = obj->GetStateWord();
@@ -3026,6 +3037,14 @@ BaseObject* WCollector::ForwardObjectExclusive(BaseObject* obj, BaseObject* toOb
         obj->UnlockObject(ObjectState::NORMAL);
         return nullptr;
     }
+    ForwardingTable::Publication publication = ForwardingTable::EnsurePublicationBeforeCopy(
+        copyPage, reinterpret_cast<MAddress>(obj));
+    if (!publication) {
+        // Installation/allocation failure is propagated before CopyObject. Once
+        // bytes are copied, publication is an invariant and cannot be a miss.
+        obj->UnlockObject(ObjectState::NORMAL);
+        return nullptr;
+    }
     size_t size = RegionSpace::GetAllocSize(*obj);
     DLOG(FORWARD, "forward obj %p<%p>(%zu) to %p", obj, obj->GetTypeInfo(), size, toObj);
     CopyObject(*obj, *toObj, size);
@@ -3044,8 +3063,8 @@ BaseObject* WCollector::ForwardObjectExclusive(BaseObject* obj, BaseObject* toOb
         obj->UnlockObject(ObjectState::NORMAL);
         return nullptr;
     }
-    const ZForwarding::Receipt receipt =
-        ForwardingTable::InstallMapping(reinterpret_cast<MAddress>(obj), reinterpret_cast<MAddress>(toObj));
+    const ZForwarding::Receipt receipt = ForwardingTable::InstallMapping(
+        publication, reinterpret_cast<MAddress>(obj), reinterpret_cast<MAddress>(toObj));
     const MAddress mapped = receipt.address;
     if (!ForwardingTable::ReceiptAllowsForwarded(mapped)) {
         // FORWARDED is a publication of the receipt, not merely of CopyObject.

@@ -49,6 +49,17 @@ GC_TEST(ForwardingNoGeometry, ArmedMissIsNullNotGeometry)
     fx.region0->BindLiveInfo0FromLiveIfNull();
 
     const MAddress from = reinterpret_cast<MAddress>(fx.obj0);
+    if (!ForwardingTable::EntriesArmed(from)) {
+        // The one-shot map may carry the preceding test's sealed generation.
+        // Reopening is explicit; SetRegionType must not do it implicitly.
+        if (!ForwardingTable::InsertProvisional(
+                fx.region0->GetRegionStart(), fx.region0->GetRegionSize(), fx.region0)) {
+            GC_EXPECT_TRUE(ForwardingTable::PreparePublicationGeneration(
+                fx.region0->GetRegionStart(), fx.region0->GetRegionSize()));
+            GC_EXPECT_TRUE(ForwardingTable::InsertProvisional(
+                fx.region0->GetRegionStart(), fx.region0->GetRegionSize(), fx.region0));
+        }
+    }
     GC_EXPECT_TRUE(ForwardingTable::EntriesArmed(from));
     GC_EXPECT_TRUE(ForwardingTable::GetEntries(from)->is_provisional());
 
@@ -61,7 +72,17 @@ GC_TEST(ForwardingNoGeometry, ArmedMissIsNullNotGeometry)
     GC_EXPECT_TRUE(looked != reinterpret_cast<MAddress>(geometric));
 
     const MAddress stored = fx.heapStart + RegionInfo::UNIT_SIZE + 128;
-    GC_EXPECT_EQ(ForwardingTable::InsertMapping(from, stored), stored);
+    ForwardingTable::ClearEntries(fx.region0->GetRegionStart(), fx.region0->GetRegionSize());
+    ForwardingTable::DropRetiredCovering(fx.region0->GetRegionStart(), fx.region0->GetRegionSize());
+    GC_EXPECT_TRUE(ForwardingTable::PreparePublicationGeneration(
+        fx.region0->GetRegionStart(), fx.region0->GetRegionSize()));
+    GC_EXPECT_TRUE(ForwardingTable::InstallPublicationBeforeCopy(
+        fx.region0->GetRegionStart(), fx.region0->GetRegionSize(), fx.region0));
+    ForwardingTable::Publication publication =
+        ForwardingTable::EnsurePublicationBeforeCopy(fx.region0, from);
+    GC_EXPECT_TRUE(static_cast<bool>(publication));
+    GC_EXPECT_EQ(ForwardingTable::InsertMapping(publication, from, stored), stored);
+    publication = ForwardingTable::Publication();
     ans = ForwardingTable::ToAnswer::Unarmed;
     GC_EXPECT_EQ(ForwardingTable::LookupTo(from, &ans), stored);
     GC_EXPECT_TRUE(ans == ForwardingTable::ToAnswer::ArmedHit);
@@ -93,6 +114,17 @@ GC_TEST(ForwardingNoGeometry, ArmedLookupAndSuccessfulExclusiveCopyPublishProduc
     fx.region0->BindLiveInfo0FromLiveIfNull();
 
     const MAddress from = reinterpret_cast<MAddress>(fx.obj0);
+    if (!ForwardingTable::EntriesArmed(from)) {
+        // The preceding test sealed this address range. Only an explicit cycle
+        // boundary may install this test's provisional carrier.
+        if (!ForwardingTable::InsertProvisional(
+                fx.region0->GetRegionStart(), fx.region0->GetRegionSize(), fx.region0)) {
+            GC_EXPECT_TRUE(ForwardingTable::PreparePublicationGeneration(
+                fx.region0->GetRegionStart(), fx.region0->GetRegionSize()));
+            GC_EXPECT_TRUE(ForwardingTable::InsertProvisional(
+                fx.region0->GetRegionStart(), fx.region0->GetRegionSize(), fx.region0));
+        }
+    }
     GC_EXPECT_TRUE(ForwardingTable::EntriesArmed(from));
     GC_EXPECT_TRUE(ForwardingTable::GetEntries(from)->is_provisional());
 
@@ -108,7 +140,17 @@ GC_TEST(ForwardingNoGeometry, ArmedLookupAndSuccessfulExclusiveCopyPublishProduc
     GC_EXPECT_TRUE(looked != reinterpret_cast<MAddress>(geometric));
 
     const MAddress stored = fx.heapStart + RegionInfo::UNIT_SIZE + 128;
-    GC_EXPECT_EQ(ForwardingTable::InsertMapping(from, stored), stored);
+    ForwardingTable::ClearEntries(fx.region0->GetRegionStart(), fx.region0->GetRegionSize());
+    ForwardingTable::DropRetiredCovering(fx.region0->GetRegionStart(), fx.region0->GetRegionSize());
+    GC_EXPECT_TRUE(ForwardingTable::PreparePublicationGeneration(
+        fx.region0->GetRegionStart(), fx.region0->GetRegionSize()));
+    GC_EXPECT_TRUE(ForwardingTable::InstallPublicationBeforeCopy(
+        fx.region0->GetRegionStart(), fx.region0->GetRegionSize(), fx.region0));
+    ForwardingTable::Publication publication =
+        ForwardingTable::EnsurePublicationBeforeCopy(fx.region0, from);
+    GC_EXPECT_TRUE(static_cast<bool>(publication));
+    GC_EXPECT_EQ(ForwardingTable::InsertMapping(publication, from, stored), stored);
+    publication = ForwardingTable::Publication();
     GC_EXPECT_FALSE(ForwardingTable::GetEntries(from)->is_provisional());
     ans = ForwardingTable::ToAnswer::Unarmed;
     GC_EXPECT_EQ(ForwardingTable::LookupTo(from, &ans), stored);

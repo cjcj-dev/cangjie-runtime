@@ -1075,7 +1075,12 @@ void RegionManager::Initialize(size_t nUnit, uintptr_t regionInfoAddr, MemMap& m
     this->regionHeapEnd = regionHeapStart + nUnit * RegionInfo::UNIT_SIZE;
     // PORT_ZFORWARDING step 1: the address-keyed table covers the same span the units do, so an
     // index is (addr - base) / UNIT_SIZE with no probing -- ZGranuleMap's shape.
-    ForwardingTable::Initialize(regionHeapStart, nUnit * RegionInfo::UNIT_SIZE, RegionInfo::UNIT_SIZE);
+    CHECK_DETAIL(ForwardingTable::Initialize(
+                     regionHeapStart, nUnit * RegionInfo::UNIT_SIZE, RegionInfo::UNIT_SIZE),
+                 "forwarding table initialization failed heap=[%#zx,%#zx) unit=%zu",
+                 static_cast<size_t>(regionHeapStart),
+                 static_cast<size_t>(regionHeapStart + nUnit * RegionInfo::UNIT_SIZE),
+                 RegionInfo::UNIT_SIZE);
     this->inactiveZone = regionHeapStart;
     SetMaxUnitCountForRegion(heapParam.regionSize);
     SetMaxUnitCountForPinnedRegion(heapParam.regionSize);
@@ -3015,6 +3020,11 @@ void RegionManager::CompactRegion(RegionInfo* region)
     DLOG(REGION, "compact region %p@[%#zx+%zu, %#zx) type %u", region, regionStart,
         region->GetLiveByteCount(), region->GetRegionEnd(), region->GetRegionType());
     MAddress regionLimit = region->GetRegionAllocPtr();
+    ForwardingTable::Publication publication =
+        ForwardingTable::EnsurePublicationBeforeCopy(region, regionStart);
+    CHECK_DETAIL(static_cast<bool>(publication),
+                 "compact forwarding table unavailable before copy region=%p range=[%#zx,%#zx)",
+                 region, static_cast<size_t>(regionStart), static_cast<size_t>(region->GetRegionEnd()));
     CopyCollector& collector = reinterpret_cast<CopyCollector&>(Heap::GetHeap().GetCollector());
     // uafclose: Admit/GetRoute/VisitLive use liveInfo0 after PrepareForwardable. Compact must
     // copy the same set — region->IsSurvivedObject reads current liveInfo (+ mark-epoch), which
@@ -3043,7 +3053,7 @@ void RegionManager::CompactRegion(RegionInfo* region)
             collector.CopyObject(*currentObj, *toObj, size);
             toObj->SetStateCode(ObjectState::NORMAL);
             std::atomic_thread_fence(std::memory_order_release);
-            const MAddress receipt = ForwardingTable::InsertMapping(currentPtr, toAddress);
+            const MAddress receipt = ForwardingTable::InsertMapping(publication, currentPtr, toAddress);
             (void)relocationRequestQueue.Publish(currentPtr, receipt);
             region->RecordCompactRoute(offset, toAddress);
 
@@ -3140,6 +3150,11 @@ void RegionManager::CompactRegion(RegionInfo* region, RegionInfo* toRegion1)
         region, regionStart, region->GetLiveByteCount(), region->GetRegionEnd(), region->GetRegionType(),
         toRegion1, toRegion1->GetRegionStart(), toRegion1->GetRegionAllocPtr());
     MAddress currentPtr = regionStart;
+    ForwardingTable::Publication publication =
+        ForwardingTable::EnsurePublicationBeforeCopy(region, regionStart);
+    CHECK_DETAIL(static_cast<bool>(publication),
+                 "partial compact forwarding table unavailable before copy region=%p range=[%#zx,%#zx)",
+                 region, static_cast<size_t>(regionStart), static_cast<size_t>(region->GetRegionEnd()));
     BaseObject* currentObj = from_region_addr(currentPtr);
     CopyCollector& collector = reinterpret_cast<CopyCollector&>(Heap::GetHeap().GetCollector());
     // uafclose: same ghost-face survivor as CompactRegion(region) / VisitLive / Admit.
@@ -3163,7 +3178,7 @@ void RegionManager::CompactRegion(RegionInfo* region, RegionInfo* toRegion1)
             collector.CopyObject(*currentObj, *toObj, size);
             toObj->SetStateCode(ObjectState::NORMAL);
             std::atomic_thread_fence(std::memory_order_release);
-            const MAddress receipt = ForwardingTable::InsertMapping(currentPtr, toAddress);
+            const MAddress receipt = ForwardingTable::InsertMapping(publication, currentPtr, toAddress);
             (void)relocationRequestQueue.Publish(currentPtr, receipt);
             region->RecordCompactRoute(offset, toAddress);
 
@@ -3190,7 +3205,7 @@ void RegionManager::CompactRegion(RegionInfo* region, RegionInfo* toRegion1)
             collector.CopyObject(*currentObj, *toObj, size);
             toObj->SetStateCode(ObjectState::NORMAL);
             std::atomic_thread_fence(std::memory_order_release);
-            const MAddress receipt = ForwardingTable::InsertMapping(currentPtr, toAddress);
+            const MAddress receipt = ForwardingTable::InsertMapping(publication, currentPtr, toAddress);
             (void)relocationRequestQueue.Publish(currentPtr, receipt);
             region->RecordCompactRoute(offset, toAddress);
 

@@ -14,6 +14,7 @@
 #include <cstdlib>
 #include <cstring>
 #include <mutex>
+#include <utility>
 #include <vector>
 
 #include "Base/Log.h"
@@ -31,6 +32,12 @@ namespace {
 // is the only unlink (zGeneration.cpp:276-285).
 ZGranuleMap<ZForwarding*> g_membership;
 ZGranuleMap<ZForwarding*> g_entries;
+// Per-region-span generation word: bit 0 is open, upper bits are the
+// monotonically increasing generation. Clear leaves the closed tombstone in
+// place, so a missing g_entries pointer can never be mistaken for permission to
+// allocate a replacement.
+ZGranuleMap<uint64_t> g_publicationState;
+constexpr uint64_t kPublicationOpen = 1;
 
 // Product boundary: callers still own virtual addresses, while ZGranuleMap
 // consumes only heap offsets. These helpers force every consumer through the
@@ -53,6 +60,29 @@ ZForwarding* MapExchange(ZGranuleMap<ZForwarding*>& map, MAddress addr, ZForward
 {
     zoffset offset;
     return map.offset_for_address(addr, &offset) ? map.exchange(offset, value) : nullptr;
+}
+
+uint64_t PublicationStateAt(MAddress addr)
+{
+    zoffset offset;
+    return g_publicationState.offset_for_address(addr, &offset) ? g_publicationState.get(offset) : 0;
+}
+
+void PutPublicationState(MAddress addr, size_t size, uint64_t state)
+{
+    zoffset offset;
+    if (g_publicationState.offset_for_address(addr, &offset)) {
+        g_publicationState.put(offset, size, state);
+    }
+}
+
+uint64_t PublicationGeneration(uint64_t state) { return state >> 1; }
+
+bool PublicationOpen(uint64_t state) { return (state & kPublicationOpen) != 0; }
+
+void SealPublicationLocked(MAddress start, size_t size)
+{
+    PutPublicationState(start, size, PublicationStateAt(start) & ~kPublicationOpen);
 }
 
 std::atomic<bool> g_ready{ false };
@@ -81,17 +111,25 @@ std::atomic<uint64_t> g_unarmed{ 0 };
 
 bool ForwardingTable::Ready() { return g_ready.load(std::memory_order_acquire); }
 
-void ForwardingTable::Initialize(MAddress heapStart, size_t heapSize, size_t unitSize)
+bool ForwardingTable::Initialize(MAddress heapStart, size_t heapSize, size_t unitSize)
 {
-    if (g_ready.load(std::memory_order_acquire) || unitSize == 0 || heapSize == 0) {
-        return;
+    if (g_ready.load(std::memory_order_acquire)) {
+        return true;
+    }
+    if (unitSize == 0 || heapSize == 0) {
+        return false;
     }
     if (!g_membership.Initialize(heapStart, heapSize, unitSize) ||
-        !g_entries.Initialize(heapStart, heapSize, unitSize)) {
+        !g_entries.Initialize(heapStart, heapSize, unitSize) ||
+        !g_publicationState.Initialize(heapStart, heapSize, unitSize)) {
         LOG(RTLOG_ERROR, "[FWDTABLE] granule map init failed size=%zu unit=%zu -- table stays off", heapSize,
             unitSize);
-        return;
+        return false;
     }
+    // Generation zero is the initial, pre-cycle provisional-membership epoch.
+    // The first ClearEntries seals it exactly like every later generation;
+    // only PreparePublicationGeneration may open the next one.
+    PutPublicationState(heapStart, heapSize, kPublicationOpen);
     g_ready.store(true, std::memory_order_release);
     LOG(RTLOG_ERROR, "[FWDTABLE] armed base=%#zx size=%zu unit=%zu entries=%zu", static_cast<size_t>(heapStart),
         heapSize, unitSize, g_membership.size());
@@ -114,6 +152,7 @@ void ForwardingTable::Initialize(MAddress heapStart, size_t heapSize, size_t uni
                          static_cast<unsigned long long>(ForwardingTable::UnarmedCount()));
         });
     }
+    return true;
 }
 
 uint32_t ForwardingTable::EstimateLiveObjects(RegionInfo* region, size_t regionSize)
@@ -165,38 +204,90 @@ ZForwarding* ForwardingTable::get(MAddress addr)
     return forwarding;
 }
 
-void ForwardingTable::Insert(MAddress regionStart, size_t regionSize, RegionInfo* region)
+bool ForwardingTable::PreparePublicationGeneration(MAddress regionStart, size_t regionSize)
 {
     if (!Ready() || regionSize == 0) {
-        return;
-    }
-    EnsureEntries(region);
-    ZForwarding* forwarding = MapGet(g_entries, regionStart);
-    if (forwarding == nullptr) {
-        return;
-    }
-    MapPut(g_membership, regionStart, regionSize, forwarding);
-}
-
-void ForwardingTable::InsertProvisional(MAddress regionStart, size_t regionSize, RegionInfo* region)
-{
-    if (!Ready() || region == nullptr || regionSize == 0) {
-        return;
+        return false;
     }
     std::lock_guard<std::mutex> lock(g_installLock);
+    const uint64_t state = PublicationStateAt(regionStart);
+    if (PublicationOpen(state)) {
+        return false;
+    }
+    const uint64_t previous = PublicationGeneration(state);
+    CHECK_DETAIL(previous < (UINT64_MAX >> 1),
+                 "forwarding publication generation exhausted start=%#zx", static_cast<size_t>(regionStart));
+    PutPublicationState(regionStart, regionSize, ((previous + 1) << 1) | kPublicationOpen);
+    return true;
+}
+
+bool ForwardingTable::InstallPublicationBeforeCopy(
+    MAddress regionStart, size_t regionSize, RegionInfo* region)
+{
+    if (!Ready() || regionSize == 0) {
+        return false;
+    }
+    std::lock_guard<std::mutex> lock(g_installLock);
+    ZForwarding* forwarding = EnsureEntriesLocked(region);
+    if (forwarding == nullptr || forwarding->start() != regionStart || forwarding->size() < regionSize ||
+        forwarding->is_provisional()) {
+        return false;
+    }
+    MapPut(g_membership, regionStart, regionSize, forwarding);
+    return true;
+}
+
+bool ForwardingTable::InsertProvisional(MAddress regionStart, size_t regionSize, RegionInfo* region)
+{
+    if (!Ready() || region == nullptr || regionSize == 0) {
+        return false;
+    }
+    std::lock_guard<std::mutex> lock(g_installLock);
+    const uint64_t publicationState = PublicationStateAt(regionStart);
+    // Provisional membership is still an installation. Once ClearEntries seals
+    // this generation, it must wait for the next explicit prepare boundary.
+    if (!PublicationOpen(publicationState)) {
+        return false;
+    }
     ZForwarding* forwarding = MapGet(g_entries, regionStart);
+    const uint64_t generation = PublicationGeneration(publicationState);
+    const bool usable = forwarding != nullptr && forwarding->start() == regionStart &&
+        forwarding->size() >= regionSize && forwarding->page() == region &&
+        forwarding->page_life_current(RegionLifeClock::Carrier::ARMED_ENTRY) &&
+        forwarding->publication_generation() == generation;
+    if (forwarding != nullptr && !usable) {
+        // Replacing any carrier under an open generation would create two table
+        // identities for one cycle. Seal, drain, and require a new prepare.
+        SealPublicationLocked(regionStart, regionSize);
+        if (!forwarding->claim()) {
+            forwarding->detach_page();
+        } else {
+            forwarding->in_place_relocation_claim_page();
+            forwarding->mark_done();
+            forwarding->release_page();
+        }
+        MapPut(g_entries, regionStart, regionSize, nullptr);
+        if (MapGet(g_membership, regionStart) == forwarding) {
+            MapPut(g_membership, regionStart, regionSize, nullptr);
+        }
+        Retire(forwarding);
+        return false;
+    }
     if (forwarding == nullptr) {
         // Two entries preserve the existing armed-miss semantics and membership publication,
         // without zeroing a capacity-sized table before marking has established live bytes.
-        forwarding = ZForwarding::alloc(1, regionStart, g_entries.base(), regionSize, region,
-                                        region->GetRegionLifeId(), true);
-        if (forwarding == nullptr) {
-            return;
+        ZForwarding* created = ZForwarding::alloc(1, regionStart, g_entries.base(), regionSize, region,
+                                                 region->GetRegionLifeId(), true);
+        if (created == nullptr) {
+            return false;
         }
-        MapPut(g_entries, regionStart, regionSize, forwarding);
-        RegionLifeClock::Publish(RegionLifeClock::Carrier::ARMED_ENTRY, forwarding->page_life_id());
+        created->set_publication_generation(generation);
+        RegionLifeClock::Publish(RegionLifeClock::Carrier::ARMED_ENTRY, created->page_life_id());
+        MapPut(g_entries, regionStart, regionSize, created);
+        forwarding = created;
     }
     MapPut(g_membership, regionStart, regionSize, forwarding);
+    return true;
 }
 
 void ForwardingTable::Remove(MAddress regionStart, size_t regionSize)
@@ -207,36 +298,84 @@ void ForwardingTable::Remove(MAddress regionStart, size_t regionSize)
     MapPut(g_membership, regionStart, regionSize, nullptr);
 }
 
-void ForwardingTable::EnsureEntries(RegionInfo* region)
+namespace {
+void DrainPublicationOwners(ZForwarding* forwarding)
+{
+    if (forwarding == nullptr) {
+        return;
+    }
+    if (!forwarding->claim()) {
+        forwarding->detach_page();
+        return;
+    }
+    forwarding->in_place_relocation_claim_page();
+    forwarding->mark_done();
+    forwarding->release_page();
+    CHECK_DETAIL(forwarding->ref_count().load(std::memory_order_acquire) == 0,
+                 "forwarding responsibility not drained tab=%p start=%#zx ref=%d", forwarding,
+                 static_cast<size_t>(forwarding->start()),
+                 forwarding->ref_count().load(std::memory_order_relaxed));
+}
+} // namespace
+
+ZForwarding* ForwardingTable::EnsureEntriesLocked(RegionInfo* region)
 {
     if (!Ready() || region == nullptr) {
-        return;
+        return nullptr;
     }
     const MAddress start = region->GetRegionStart();
     const size_t regionSize = region->GetRegionSize();
     zoffset startOffset;
     if (!g_entries.offset_for_address(start, &startOffset)) {
-        return;
+        return nullptr;
     }
-    std::lock_guard<std::mutex> lock(g_installLock);
+    const uint64_t publicationState = PublicationStateAt(start);
+    if (!PublicationOpen(publicationState)) {
+        return nullptr;
+    }
+    const uint64_t generation = PublicationGeneration(publicationState);
     ZForwarding* previous = g_entries.get(startOffset);
-    if (previous != nullptr && !previous->is_provisional()) {
-        return;
+    if (previous != nullptr && !previous->is_provisional() && previous->start() == start &&
+        previous->size() >= regionSize && previous->page() == region &&
+        previous->page_life_current(RegionLifeClock::Carrier::ARMED_ENTRY) &&
+        previous->publication_generation() == generation) {
+        return previous;
+    }
+    // A malformed table from this same open generation is not replaceable: a
+    // copier could already carry its identity. Seal it and require the next
+    // explicit PreparePublicationGeneration instead of silently installing a
+    // second identity under late consumers.
+    if (previous != nullptr && previous->publication_generation() == generation) {
+        SealPublicationLocked(start, regionSize);
+        DrainPublicationOwners(previous);
+        g_entries.put(startOffset, regionSize, nullptr);
+        if (MapGet(g_membership, start) == previous) {
+            MapPut(g_membership, start, regionSize, nullptr);
+        }
+        Retire(previous);
+        return nullptr;
     }
     const uint32_t liveObjs = EstimateLiveObjects(region, regionSize);
     const RegionLifeId life = region->GetRegionLifeId();
     ZForwarding* created = ZForwarding::alloc(liveObjs, start, g_entries.base(), regionSize, region, life);
     if (created == nullptr) {
-        return;
+        SealPublicationLocked(start, regionSize);
+        return nullptr;
     }
+    created->set_publication_generation(generation);
+    RegionLifeClock::Publish(RegionLifeClock::Carrier::ARMED_ENTRY, created->page_life_id());
+    // Keep the previous table mapped until every copier carrying it has
+    // inserted its receipt. g_installLock prevents a new acquisition while the
+    // old generation drains.
+    DrainPublicationOwners(previous);
     g_entries.put(startOffset, regionSize, created);
     if (previous != nullptr && MapGet(g_membership, start) == previous) {
         MapPut(g_membership, start, regionSize, created);
     }
-    RegionLifeClock::Publish(RegionLifeClock::Carrier::ARMED_ENTRY, created->page_life_id());
     if (previous != nullptr) {
         Retire(previous);
     }
+    return created;
 }
 
 void ForwardingTable::ClearEntries(MAddress regionStart, size_t regionSize)
@@ -245,7 +384,18 @@ void ForwardingTable::ClearEntries(MAddress regionStart, size_t regionSize)
         return;
     }
     std::lock_guard<std::mutex> lock(g_installLock);
-    ZForwarding* tab = MapExchange(g_entries, regionStart, nullptr);
+    // The tombstone is published before claim/drain. A late before-copy or
+    // after-copy acquisition that loses this lock therefore fails closed even
+    // after g_entries has been unlinked.
+    SealPublicationLocked(regionStart, regionSize);
+    ZForwarding* tab = MapGet(g_entries, regionStart);
+    if (tab != nullptr && tab->start() == regionStart) {
+        // Seal while the table is still mapped. Existing Publication owners can
+        // finish insert/publish; new owners cannot pass g_installLock. Only then
+        // may reset unlink the forwarding (zGeneration.cpp:276-284).
+        DrainPublicationOwners(tab);
+    }
+    (void)MapExchange(g_entries, regionStart, nullptr);
     MapPut(g_entries, regionStart, regionSize, nullptr);
     if (tab != nullptr && tab->start() == regionStart) {
         Retire(tab);
@@ -400,26 +550,50 @@ bool ZForwarding::page_life_current(RegionLifeClock::Carrier carrier) const
     return RegionLifeClock::Validate(carrier, _page_life_id, _page->GetRegionLifeId());
 }
 
-ZForwarding::Receipt ForwardingTable::InstallMapping(MAddress from, MAddress to)
+ForwardingTable::Publication ForwardingTable::EnsurePublicationBeforeCopy(
+    RegionInfo* region, MAddress from)
 {
-    ZForwarding* tab = GetEntries(from);
-    if (tab == nullptr || tab->is_provisional()) {
-        RegionInfo* region = nullptr;
-        ZForwarding* membership = get(from);
-        if (membership != nullptr) {
-            region = membership->page();
-        }
-        if (region == nullptr) {
-            region = RegionInfo::TryGetRegionInfoAt(from);
-        }
-        EnsureEntries(region);
-        tab = GetEntries(from);
+    if (!Ready() || region == nullptr) {
+        return Publication();
     }
-    if (tab == nullptr) {
-        CHECK_DETAIL(false, "forwarding receipt table unavailable from=%#zx to=%#zx",
-                     static_cast<size_t>(from), static_cast<size_t>(to));
-        return ZForwarding::Receipt{ 0, false };
+    std::lock_guard<std::mutex> lock(g_installLock);
+    ZForwarding* tab = EnsureEntriesLocked(region);
+    const uint64_t state = PublicationStateAt(region->GetRegionStart());
+    if (tab == nullptr || tab->is_provisional() || tab->start() != region->GetRegionStart() ||
+        tab->size() < region->GetRegionSize() || !tab->covers(from) || !PublicationOpen(state) ||
+        tab->publication_generation() != PublicationGeneration(state) || !tab->retain_page()) {
+        return Publication();
     }
+    return Publication(tab);
+}
+
+ForwardingTable::Publication ForwardingTable::RetainOpenPublicationAfterCopy(
+    RegionInfo* region, MAddress from)
+{
+    if (!Ready() || region == nullptr) {
+        return Publication();
+    }
+    std::lock_guard<std::mutex> lock(g_installLock);
+    const uint64_t state = PublicationStateAt(region->GetRegionStart());
+    if (!PublicationOpen(state)) {
+        return Publication();
+    }
+    ZForwarding* tab = MapGet(g_entries, from);
+    if (tab == nullptr || tab->is_provisional() || tab->start() != region->GetRegionStart() ||
+        tab->size() < region->GetRegionSize() || !tab->covers(from) ||
+        tab->publication_generation() != PublicationGeneration(state) || !tab->retain_page()) {
+        return Publication();
+    }
+    return Publication(tab);
+}
+
+ZForwarding::Receipt ForwardingTable::InstallMapping(
+    const Publication& publication, MAddress from, MAddress to)
+{
+    ZForwarding* tab = publication.forwarding;
+    CHECK_DETAIL(tab != nullptr && !tab->is_provisional() && tab->covers(from),
+                 "forwarding publication responsibility missing from=%#zx to=%#zx tab=%p",
+                 static_cast<size_t>(from), static_cast<size_t>(to), tab);
     const ZForwarding::Receipt receipt = tab->insert_receipt(from, to);
     if (receipt.installed) {
         tab->note_to_life(receipt.address);
@@ -427,9 +601,33 @@ ZForwarding::Receipt ForwardingTable::InstallMapping(MAddress from, MAddress to)
     return receipt;
 }
 
-MAddress ForwardingTable::InsertMapping(MAddress from, MAddress to)
+MAddress ForwardingTable::InsertMapping(const Publication& publication, MAddress from, MAddress to)
 {
-    return InstallMapping(from, to).address;
+    return InstallMapping(publication, from, to).address;
+}
+
+void ForwardingTable::Publication::Release()
+{
+    if (forwarding != nullptr) {
+        forwarding->release_page();
+        forwarding = nullptr;
+    }
+}
+
+ForwardingTable::Publication::~Publication() { Release(); }
+
+ForwardingTable::Publication::Publication(Publication&& other) noexcept
+    : forwarding(std::exchange(other.forwarding, nullptr))
+{
+}
+
+ForwardingTable::Publication& ForwardingTable::Publication::operator=(Publication&& other) noexcept
+{
+    if (this != &other) {
+        Release();
+        forwarding = std::exchange(other.forwarding, nullptr);
+    }
+    return *this;
 }
 
 bool ForwardingTable::ReceiptAllowsForwarded(MAddress mapped)
