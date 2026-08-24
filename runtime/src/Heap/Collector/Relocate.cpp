@@ -2635,9 +2635,25 @@ BaseObject* WCollector::WaitRoutedTipReady(BaseObject* from, BaseObject* to, Reg
                 wn, from, forwarding, static_cast<unsigned>(rs),
                 static_cast<unsigned>(forwarding->IsForwardingDone()));
         }
+        auto regionIsPublished = [forwarding]() -> bool {
+            const RegionInfo::RouteState now = forwarding->GetRouteState();
+            return now == RegionInfo::RouteState::FORWARDED ||
+                now == RegionInfo::RouteState::COMPACTED || forwarding->IsForwardingDone();
+        };
+        // zRelocate.cpp:382-406 enters add_and_wait only after retain_page
+        // succeeded. RetainForwarding may itself observe a concurrent page
+        // completion and refuse; keep-from is then the legal late answer.
+        if (!forwarding->TryLockReadFromRegion()) {
+            if (MutatorRelocate::StatsOn()) {
+                MutatorRelocate::NoteWaitGiveUp();
+            }
+            return from;
+        }
+        forwarding->UnlockReadFromRegion();
+
         // A mutator-discovered object must be in the worker's relocation domain
-        // before the request is visible. The request then replaces the bounded
-        // yield: it can complete only with this object's published receipt.
+        // before the request is visible. The request is an attention signal;
+        // page publication, not this object's receipt, is the wait predicate.
         EnsureRouteDomainMembership(const_cast<WCollector*>(this), from);
         RelocationRequestQueue& requests = space.GetRegionManager().GetRelocationRequestQueue();
         RelocationRequestQueue::EnqueueResult queued =
@@ -2651,28 +2667,25 @@ BaseObject* WCollector::WaitRoutedTipReady(BaseObject* from, BaseObject* to, Reg
             (void)requests.Publish(reinterpret_cast<MAddress>(from), reinterpret_cast<MAddress>(raced));
         }
 
-        const MAddress receipt = requests.Wait(queued.request);
-        if (receipt == 0) {
-            CHECK_DETAIL(!forwarding->IsFreeRegion() && !forwarding->IsGarbageRegion(),
-                         "relocation request failed after owner retirement from=%p region=%p",
-                         from, forwarding);
+        requests.WaitUntil(queued.request, regionIsPublished);
+
+        // zRelocate.cpp:408-415 asks the object question only after the page is
+        // done. A miss is the VisitLive hole recorded in MutatorRelocate.h:68-80
+        // and legally keeps the still-live from address.
+        BaseObject* ready = lookupTo();
+        if (ready != nullptr && Heap::IsHeapAddress(ready) && ready->IsValidObject()) {
+            g_regionGot.fetch_add(1, std::memory_order_relaxed);
             if (MutatorRelocate::StatsOn()) {
-                MutatorRelocate::NoteWaitGiveUp();
+                MutatorRelocate::NoteRegionWaitGot();
+                MutatorRelocate::NoteWaitReceipt();
             }
-            return from;
+            return ready;
         }
-        BaseObject* ready = reinterpret_cast<BaseObject*>(receipt);
-        const bool stableInPlace = ready == from && forwarding->IsCompacted();
-        CHECK_DETAIL(receipt != 0 && (ready != from || stableInPlace) &&
-                         Heap::IsHeapAddress(ready) && ready->IsValidObject(),
-                     "relocation request returned invalid receipt from=%p receipt=%#zx",
-                     from, static_cast<size_t>(receipt));
-        g_regionGot.fetch_add(1, std::memory_order_relaxed);
         if (MutatorRelocate::StatsOn()) {
-            MutatorRelocate::NoteRegionWaitGot();
-            MutatorRelocate::NoteWaitReceipt();
+            MutatorRelocate::NoteRegionWaitPublishedMiss();
+            MutatorRelocate::NoteWaitGiveUp();
         }
-        return ready;
+        return from;
     }
     if constexpr (MutatorRelocate::kUnpublishedMeansKeepFrom) {
         if (MutatorRelocate::StatsOn()) {

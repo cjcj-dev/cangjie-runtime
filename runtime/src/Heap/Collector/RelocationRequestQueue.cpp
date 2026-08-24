@@ -6,6 +6,7 @@
 
 #include "Heap/Collector/RelocationRequestQueue.h"
 
+#include <chrono>
 #include <vector>
 
 #include "Mutator/Mutator.inline.h"
@@ -71,6 +72,30 @@ MAddress RelocationRequestQueue::Wait(const Handle& request)
         (void)mutator->LeaveSaferegion();
     }
     return receipt;
+}
+
+void RelocationRequestQueue::WaitUntil(const Handle& request, const std::function<bool()>& pageDone)
+{
+    if (request == nullptr || pageDone()) {
+        return;
+    }
+
+    // Keep the mutator in a saferegion exactly as Wait() does, but use the page
+    // predicate from ZRelocateQueue::add_and_wait (zRelocate.cpp:134-150).
+    // Object completion notifications accelerate the next predicate check;
+    // the timed check is the independent exit when this object has no receipt.
+    Mutator* mutator = ThreadLocal::GetMutator();
+    const ThreadType threadType = ThreadLocal::GetThreadType();
+    const bool stateChanged = mutator != nullptr && threadType != ThreadType::FP_THREAD &&
+                              threadType != ThreadType::GC_THREAD && mutator->EnterSaferegion(true);
+    std::unique_lock<std::mutex> lock(request->completionMutex);
+    while (!pageDone()) {
+        (void)request->completion.wait_for(lock, std::chrono::milliseconds(1));
+    }
+    lock.unlock();
+    if (stateChanged) {
+        (void)mutator->LeaveSaferegion();
+    }
 }
 
 bool RelocationRequestQueue::Publish(MAddress from, MAddress receipt)
