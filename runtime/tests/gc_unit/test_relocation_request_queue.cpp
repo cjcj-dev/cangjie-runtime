@@ -5,6 +5,9 @@
 // See https://cangjie-lang.cn/pages/LICENSE for license information.
 
 #include <atomic>
+#include <chrono>
+#include <condition_variable>
+#include <mutex>
 #include <thread>
 
 #include "gc_heap_fixture.hpp"
@@ -73,15 +76,11 @@ GC_TEST(RelocationRequestQueue, RequestedReceiptIsClaimedBeforeOrdinaryAndComple
     GC_EXPECT_EQ(ordinaryClaims, 1);
 }
 
-// zRelocate.cpp:134-147: ZGC's waiter is released by the *page* becoming done
-// (`while (!forwarding->is_done()) _lock.wait();`), and zRelocate.cpp:391-406
-// only enters that wait under a retained page, so a queued forwarding cannot
-// outlive relocation.  Our request is keyed by object instead, and a page can
-// finish relocating without producing an entry for one particular object -- the
-// VisitLive hole recorded at MutatorRelocate.h:71-76.  For such a request the
-// generation close is the only remaining terminal, which makes the FAILED loop
-// in SynchronizePoll load bearing: without it the mutator blocked in
-// WaitRoutedTipReady (Relocate.cpp:2652) has no event left that can wake it.
+// Page-level waiters no longer depend on an object Request terminal, but the
+// queue generation still owns every accepted Request.  Closing a generation
+// must therefore terminate and remove even a request which a worker claimed but
+// could not publish; Wait(handle), state observers, and queue reuse all rely on
+// that lifecycle contract independently of WaitRoutedTipReady's page predicate.
 //
 // The other tests in this file all reach their terminal through Publish or
 // CompleteOwner, so none of them covers a request that no worker ever touches.
@@ -126,6 +125,67 @@ GC_TEST(RelocationRequestQueue, GenerationCloseTerminatesARequestNoWorkerEverPub
     // Only reached once the terminal above is proven set, so this cannot block.
     GC_EXPECT_EQ(queue.Wait(added.request), static_cast<MAddress>(0));
     GC_EXPECT_EQ(added.request->receipt(), static_cast<MAddress>(0));
+}
+
+GC_TEST(RelocationRequestQueue, PageCompletionTerminatesWaitWithoutObjectReceipt)
+{
+    RelocationRequestQueue queue;
+    queue.BeginWorkers(1);
+    int owner = 0;
+    constexpr MAddress kFrom = 0xA008;
+    const auto added = queue.Add(&owner, kFrom);
+    GC_EXPECT_TRUE(added.accepted);
+
+    std::atomic<bool> pageDone{ false };
+    std::atomic<bool> cleanup{ false };
+    std::atomic<bool> predicateObserved{ false };
+    std::mutex returnedMutex;
+    std::condition_variable returnedCondition;
+    bool returned = false;
+    std::thread waiter([&]() {
+        queue.WaitUntil(added.request, [&]() {
+            predicateObserved.store(true, std::memory_order_release);
+            returnedCondition.notify_one();
+            return pageDone.load(std::memory_order_acquire) || cleanup.load(std::memory_order_acquire);
+        });
+        {
+            std::lock_guard<std::mutex> lock(returnedMutex);
+            returned = true;
+        }
+        returnedCondition.notify_one();
+    });
+    JoinGuard waiterGuard(waiter);
+
+    std::unique_lock<std::mutex> returnedLock(returnedMutex);
+    const bool waiterReachedPredicate = returnedCondition.wait_for(
+        returnedLock, std::chrono::seconds(1),
+        [&predicateObserved]() { return predicateObserved.load(std::memory_order_acquire); });
+    returnedLock.unlock();
+    GC_EXPECT_TRUE(waiterReachedPredicate);
+
+    // Publish page completion only after the waiter has evaluated the predicate
+    // false once; otherwise the entry fast path would not exercise the wait.
+    pageDone.store(true, std::memory_order_release);
+    returnedLock.lock();
+    const bool returnedByPage = returnedCondition.wait_for(
+        returnedLock, std::chrono::seconds(1), [&returned]() { return returned; });
+    returnedLock.unlock();
+
+    // Keep a deliberately object-terminal implementation finite so the red arm
+    // reports this item instead of stalling the entire suite.
+    if (!returnedByPage) {
+        cleanup.store(true, std::memory_order_release);
+        (void)queue.Fail(kFrom);
+    }
+    waiter.join();
+
+    GC_EXPECT_TRUE(returnedByPage);
+    if (returnedByPage) {
+        GC_EXPECT_TRUE(added.request->state() == RelocationRequestQueue::State::QUEUED);
+        GC_EXPECT_EQ(added.request->receipt(), static_cast<MAddress>(0));
+        GC_EXPECT_TRUE(queue.Fail(kFrom));
+    }
+    GC_EXPECT_TRUE(queue.SynchronizePoll().workersDone);
 }
 
 GC_TEST(RelocationRequestQueue, FailedOwnerCompletionReleasesWaiterWithoutReceipt)
