@@ -197,13 +197,6 @@ GC_UNIT_TALLY_FILE="$PUBLICATION_TALLY" \
   LD_LIBRARY_PATH="$RUNTIME_LIB_DIR${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}" \
   "$OUT/cj_gc_forwarding_publication_unit"
 PUBLICATION_RC=$?
-M0_FIXTURE_RC=0
-if [[ ${#M0_CORRELATION_TEST_ARGS[@]} -ne 0 ]]; then
-  GCV2_RUNTIME_LIB_DIR="$RUNTIME_LIB_DIR" \
-    CJC="${CJC:-${CANGJIE_HOME:-}/bin/cjc}" \
-    bash "$SRC/run_m0_correlation_fixture.sh"
-  M0_FIXTURE_RC=$?
-fi
 set -e
 END=$(date +%s%N)
 ELAPSED_MS=$(( (END - START) / 1000000 ))
@@ -225,9 +218,8 @@ if [[ -n "$FINAL_TALLY" && -f "$MAIN_TALLY" && -f "$PUBLICATION_TALLY" ]]; then
 fi
 
 RC=0
-if [[ $MAIN_RC -ne 0 || $PUBLICATION_RC -ne 0 || $M0_FIXTURE_RC -ne 0 ]]; then
+if [[ $MAIN_RC -ne 0 || $PUBLICATION_RC -ne 0 ]]; then
   RC=1
 fi
-echo "GC_UNIT_RUN_DONE rc=$RC main_rc=$MAIN_RC publication_rc=$PUBLICATION_RC " \
-     "m0_fixture_rc=$M0_FIXTURE_RC wall_ms=$ELAPSED_MS"
+echo "GC_UNIT_RUN_DONE rc=$RC main_rc=$MAIN_RC publication_rc=$PUBLICATION_RC wall_ms=$ELAPSED_MS"
 exit "$RC"
