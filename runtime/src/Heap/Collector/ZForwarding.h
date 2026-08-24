@@ -81,6 +81,8 @@ public:
     size_t regionSize() const { return _size; }
     RegionInfo* page() { return _page; }
     RegionLifeId page_life_id() const { return _page_life_id; }
+    uint64_t publication_generation() const { return _publication_generation; }
+    void set_publication_generation(uint64_t generation) { _publication_generation = generation; }
     bool page_life_current(RegionLifeClock::Carrier carrier) const;
     uint32_t length() const { return static_cast<uint32_t>(_entries.length()); }
     bool is_provisional() const { return _provisional; }
@@ -293,6 +295,7 @@ private:
           _entries(nentries),
           _page(page),
           _page_life_id(pageLifeId),
+          _publication_generation(0),
           _claimed(false),
           _ref_lock(),
           _ref_count(1),
@@ -314,6 +317,9 @@ private:
     const AttachedArray _entries;
     RegionInfo* const _page;
     const RegionLifeId _page_life_id;
+    // Monotonic per-region-span generation. Written before the table pointer is
+    // published, then immutable for the table's lifetime.
+    uint64_t _publication_generation;
     std::atomic<bool> _claimed;
     mutable std::mutex _ref_lock;
     std::atomic<int32_t> _ref_count;

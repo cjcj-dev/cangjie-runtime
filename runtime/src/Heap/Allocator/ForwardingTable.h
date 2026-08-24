@@ -22,6 +22,29 @@ class BaseObject;
 // ClearEntries. ZGC has one map because reset_relocation_set is the only unlink.
 class ForwardingTable {
 public:
+    // A retained, fully-installed forwarding carried across object copy and
+    // receipt publication. ClearEntries seals the table and waits for every
+    // Publication to drain before unlinking it (zRelocate.cpp:354-379,
+    // zGeneration.cpp:253-265,276-284).
+    class Publication {
+    public:
+        Publication() : forwarding(nullptr) {}
+        ~Publication();
+        Publication(Publication&& other) noexcept;
+        Publication& operator=(Publication&& other) noexcept;
+        explicit operator bool() const { return forwarding != nullptr; }
+
+        Publication(const Publication&) = delete;
+        Publication& operator=(const Publication&) = delete;
+
+    private:
+        explicit Publication(ZForwarding* forwarding) : forwarding(forwarding) {}
+        void Release();
+
+        ZForwarding* forwarding;
+        friend class ForwardingTable;
+    };
+
     // Compile-time: FindToVersion prefers a stored entry, then falls back to geometry
     // until the entry exists.  After route retirement only the entry can answer.
     static constexpr bool kConsumeEntries = true;
@@ -37,15 +60,18 @@ public:
 
     enum class ToAnswer : uint8_t { ArmedHit, ArmedMiss, Unarmed };
 
-    static void Initialize(MAddress heapStart, size_t heapSize, size_t unitSize);
+    static bool Initialize(MAddress heapStart, size_t heapSize, size_t unitSize);
 
-    // Dual-write hook from RegionInfo (PrepareForwardable / SetRegionType FROM*).
-    static void Insert(MAddress regionStart, size_t regionSize, RegionInfo* region);
+    // Explicit cycle boundary. This is the only operation allowed to reopen a
+    // region span after ClearEntries sealed its previous generation.
+    static bool PreparePublicationGeneration(MAddress regionStart, size_t regionSize);
+    // Full table installation at PrepareForwardableRegion, before any copy in
+    // this generation can begin.
+    static bool InstallPublicationBeforeCopy(MAddress regionStart, size_t regionSize, RegionInfo* region);
     // Publish FROM membership immediately, but defer the live-sized attached array
     // until PrepareForwardableRegion has a closed mark face.
-    static void InsertProvisional(MAddress regionStart, size_t regionSize, RegionInfo* region);
+    static bool InsertProvisional(MAddress regionStart, size_t regionSize, RegionInfo* region);
     static void Remove(MAddress regionStart, size_t regionSize);
-    static void EnsureEntries(RegionInfo* region);
     static void ClearEntries(MAddress regionStart, size_t regionSize);
     // After-copy Exempt parks a live table; ClearEntries unlinks it into the
     // retired generation. FindTo/LookupTo still scan that generation, so a
@@ -67,9 +93,14 @@ public:
     static ZForwarding* Get(MAddress addr) { return get(addr); }
     static ZForwarding* GetEntries(MAddress addr);
 
-    // After copy: zRelocate.cpp:367-372
-    static ZForwarding::Receipt InstallMapping(MAddress from, MAddress to);
-    static MAddress InsertMapping(MAddress from, MAddress to);
+    // Copy producer: may allocate/install the explicitly prepared generation,
+    // then retains it across copy and receipt publication.
+    static Publication EnsurePublicationBeforeCopy(RegionInfo* region, MAddress from);
+    // After-copy consumer: retain the current generation only while it remains
+    // open. It never allocates, installs, replaces, or reopens a table.
+    static Publication RetainOpenPublicationAfterCopy(RegionInfo* region, MAddress from);
+    static ZForwarding::Receipt InstallMapping(const Publication& publication, MAddress from, MAddress to);
+    static MAddress InsertMapping(const Publication& publication, MAddress from, MAddress to);
     // Out of line so the unit runner exercises the product SO's publication
     // decision instead of compiling a private test copy.
     static bool ReceiptAllowsForwarded(MAddress mapped);
@@ -93,6 +124,7 @@ public:
 
 private:
     static uint32_t EstimateLiveObjects(RegionInfo* region, size_t regionSize);
+    static ZForwarding* EnsureEntriesLocked(RegionInfo* region);
 };
 } // namespace MapleRuntime
 
