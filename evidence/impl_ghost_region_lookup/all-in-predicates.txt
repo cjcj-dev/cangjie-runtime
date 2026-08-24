@@ -1,0 +1,257 @@
+runtime/src/Cangjie.h:363:MRT_EXPORT void RegisterArkVMInRuntime(unsigned long long vm);
+runtime/src/CommonAlias.h:66:extern "C" MRT_EXPORT ArrayRef CJ_MCC_FillInStackTraceImpl(const TypeInfo* arrayInfo, const ArrayRef exceptionMessage)
+runtime/src/UnwindStack/PrintStackInfo.h:30:    void FillInStackTrace() override;
+runtime/src/UnwindStack/StackGrowStackInfo.h:31:    void FillInStackTrace() override;
+runtime/src/CangjieRuntimeApi.cpp:848:void RegisterArkVMInRuntime(unsigned long long vm)
+runtime/src/CangjieRuntimeApi.cpp:850:    CJRegisterArkVMInRuntime(vm);
+runtime/src/UnwindStack/StackExposureHook.cpp:153:size_t StackExposureHook::StopTheWorldCallsInHook() { return g_stwInHook.load(std::memory_order_relaxed); }
+runtime/src/Heap/Verify/StackExposureOracle.cpp:141:    size_t stw = StackExposureHook::StopTheWorldCallsInHook();
+runtime/src/Heap/Verify/MutatorRelocate.cpp:89:bool InScope() { return t_inScope; }
+runtime/src/UnwindStack/PrintSignalStackInfo.cpp:13:void PrintSignalStackInfo::FillInStackTrace()
+runtime/src/TypeInfoManager.cpp:316:void TypeInfoManager::RemoveTypeInfosInRange(uintptr_t begin, size_t size)
+runtime/src/TypeInfoManager.cpp:481:TypeInfoManager::GenericTiDescFastMap::Entry* TypeInfoManager::GenericTiDescFastMap::FindInTable(
+runtime/src/TypeInfoManager.cpp:539:    Entry* entry = FindInTable(table, hash, tt, argSize, args);
+runtime/src/TypeInfoManager.cpp:573:    if (FindInTable(table, hash, tt, argSize, args) != nullptr) {
+runtime/src/Mutator/Mutator.inline.h:17:    SetInSaferegion(SAFE_REGION_TRUE);
+runtime/src/Mutator/Mutator.inline.h:22:    if (LIKELY(!InSaferegion())) {
+runtime/src/Mutator/Mutator.inline.h:36:    if (LIKELY(InSaferegion())) {
+runtime/src/UnwindStack/GcStackInfo.h:33:    void FillInStackTrace() override;
+runtime/src/UnwindStack/GcStackInfo.h:60:    void FillInStackTrace() override;
+runtime/src/UnwindStack/GcStackInfo.h:79:    void FillInStackTrace() override;
+runtime/src/Mutator/Mutator.cpp:41:void Mutator::RememberObjectInSatbBuffer(const BaseObject* target)
+runtime/src/Mutator/Mutator.cpp:48:    RememberObjectInSatbBuffer(mutableTarget, knownBase);
+runtime/src/Mutator/Mutator.cpp:51:void Mutator::RememberObjectInSatbBuffer(const BaseObject* target, const BaseObject* knownBase)
+runtime/src/Mutator/Mutator.cpp:253:        SetInSaferegion(SAFE_REGION_TRUE);
+runtime/src/Mutator/Mutator.cpp:275:        SetInSaferegion(SAFE_REGION_FALSE);
+runtime/src/Mutator/Mutator.cpp:1000:    if (owner == StackWatermark::WM_OWNER_GC && !InSaferegion()) {
+runtime/src/Mutator/MutatorManager.cpp:760:        if ((!mutator.InSaferegion())) {
+runtime/src/Mutator/MutatorManager.cpp:777:            if (mutator->InSaferegion()) {
+runtime/src/Mutator/MutatorManager.cpp:813:            if (mutator->InSaferegion() && mutator->TransitionGCPhase(false)) {
+runtime/src/Mutator/MutatorManager.cpp:860:            if (mutator->InSaferegion() && mutator->TransitionToCpuProfile(false)) {
+runtime/src/Mutator/MutatorManager.cpp:913:        if (!mut.InSaferegion()) {
+runtime/src/Heap/Verify/TagReuseProbe.cpp:42:bool InRange(uintptr_t p, uintptr_t start, size_t size)
+runtime/src/Heap/Verify/TagReuseProbe.cpp:124:            if (!InRange(cur, rangeStart, rangeSize)) {
+runtime/src/Heap/Verify/TagReuseProbe.cpp:175:        if (InRange(lip, rangeStart, rangeSize)) {
+runtime/src/Heap/Verify/TagReuseProbe.cpp:184:        if (InRange(li0p, rangeStart, rangeSize)) {
+runtime/src/Heap/Verify/TagReuseProbe.cpp:190:        if (InRange(retp, rangeStart, rangeSize)) {
+runtime/src/Mutator/Mutator.h:145:    __attribute__((always_inline)) inline void SetInSaferegion(SaferegionState state)
+runtime/src/Mutator/Mutator.h:152:    __attribute__((always_inline)) inline bool InSaferegion() const
+runtime/src/Mutator/Mutator.h:201:            SetInSaferegion(SAFE_REGION_FALSE);
+runtime/src/Mutator/Mutator.h:322:        return InSaferegion();
+runtime/src/Mutator/Mutator.h:465:    ATTR_NO_INLINE void RememberObjectInSatbBuffer(const BaseObject* target);
+runtime/src/Mutator/Mutator.h:466:    ATTR_NO_INLINE void RememberObjectInSatbBuffer(const BaseObject* target, const BaseObject* knownBase);
+runtime/src/Mutator/Mutator.h:535:        if (UNLIKELY((uwContext.GetUnwindContextStatus() == UnwindContextStatus::RISKY) || InSaferegion())) {
+runtime/src/Mutator/Mutator.h:536:            SetInSaferegion(SaferegionState::SAFE_REGION_TRUE);
+runtime/src/Mutator/Mutator.h:556:        SetInSaferegion(SaferegionState::SAFE_REGION_TRUE);
+runtime/src/UnwindStack/PrintSignalStackInfo.h:20:    void FillInStackTrace() override;
+runtime/src/Heap/Verify/MutatorRelocate.h:176:bool InScope();
+runtime/src/Heap/Verify/MutatorRelocate.h:196:// Called from WCollector::ForwardObjectExclusive, immediately after CopyObject, when InScope().
+runtime/src/UnwindStack/StackFrameCursor.cpp:18:    void FillInStackTrace() override
+runtime/src/UnwindStack/StackFrameCursor.cpp:47:    filler.FillInStackTrace();
+runtime/src/CompilerCalls.cpp:839:extern "C" ArrayRef MCC_FillInStackTraceImpl(const TypeInfo* arrayInfo, const ArrayRef excepMsg)
+runtime/src/CompilerCalls.cpp:1076:        record->FillInStackTrace();
+runtime/src/CompilerCalls.cpp:1145:    record.FillInStackTrace();
+runtime/src/CompilerCalls.cpp:1173:    CHECK_DETAIL(!mutator->InSaferegion(), "Mutator to be fini should not be in saferegion");
+runtime/src/CompilerCalls.cpp:2725:    RegisterArkVMInRuntime(arkVm);
+runtime/src/UnwindStack/EhStackInfo.h:30:    void FillInStackTrace() override;
+runtime/src/Signal/SignalStack.cpp:362:static void FindSymbolInLibc(T* result, const char* name)
+runtime/src/Signal/SignalStack.cpp:390:        FindSymbolInLibc(&g_linkedSignalAction, "sigaction");
+runtime/src/Signal/SignalStack.cpp:391:        FindSymbolInLibc(&g_linkedSignalProcmask, "sigprocmask");
+runtime/src/TypeInfoManager.h:51:    void RemoveTypeInfosInRange(uintptr_t begin, size_t size);
+runtime/src/TypeInfoManager.h:211:        static Entry* FindInTable(Table* table, U64 hash, TypeTemplate* tt, U32 argSize, TypeInfo* args[]);
+runtime/src/UnwindStack/EhStackInfo.cpp:15:void EHStackInfo::FillInStackTrace()
+runtime/src/UnwindStack/GcStackInfo.cpp:236:void GCStackInfo::FillInStackTrace()
+runtime/src/UnwindStack/GcStackInfo.cpp:262:void RecordStackInfo::FillInStackTrace()
+runtime/src/UnwindStack/GcStackInfo.cpp:287:void CJThreadStackInfo::FillInStackTrace()
+runtime/src/UnwindStack/GcStackInfo.cpp:403:    stackInfo.FillInStackTrace();
+runtime/src/UnwindStack/GcStackInfo.cpp:421:        stackInfo.FillInStackTrace();
+runtime/src/UnwindStack/PrintStackInfo.cpp:12:void PrintStackInfo::FillInStackTrace()
+runtime/src/Common/BaseObject.cpp:86:static void ForEachRefFieldInNonArrayObject(ObjectPtr obj, const RefFieldVisitor& visitor)
+runtime/src/Common/BaseObject.cpp:95:static void ForEachElementInArray(ObjectPtr obj, const RefFieldVisitor& visitor)
+runtime/src/Common/BaseObject.cpp:131:            ForEachElementInArray(this, visitor);
+runtime/src/Common/BaseObject.cpp:133:            ForEachRefFieldInNonArrayObject(this, visitor);
+runtime/src/Common/BaseObject.cpp:138:void BaseObject::ForEachRefInStruct(const RefFieldVisitor& visitor, MAddress aggStart, MAddress aggEnd)
+runtime/src/Common/BaseObject.cpp:143:            ForEachAggRefFieldInArray(visitor, aggStart, aggEnd);
+runtime/src/Common/BaseObject.cpp:145:            ForEachAggRefFieldInNonArray(visitor, aggStart, aggEnd);
+runtime/src/Common/BaseObject.cpp:150:void BaseObject::ForEachAggRefFieldInArray(const RefFieldVisitor& visitor, MAddress aggStart, MAddress aggEnd)
+runtime/src/Common/BaseObject.cpp:166:            gcTib.ForEachBitmapWordInRange(currentAddr, visitor, aggStart, aggEnd);
+runtime/src/Common/BaseObject.cpp:174:void BaseObject::ForEachAggRefFieldInNonArray(const RefFieldVisitor& visitor, MAddress aggStart, MAddress aggEnd) const
+runtime/src/Common/BaseObject.cpp:177:    GetGCTib().ForEachBitmapWordInRange(reinterpret_cast<MAddress>(this) + TYPEINFO_PTR_SIZE, visitor, aggStart,
+runtime/src/Common/BaseObject.cpp:206:bool BaseObject::IsInTraceRegion() const
+runtime/src/UnwindStack/StackInfo.h:63:    virtual void FillInStackTrace() = 0;
+runtime/src/Loader/BinaryFile/BaseFile.h:31:    virtual bool IsAddrInCJFile(Uptr addr) const = 0;
+runtime/src/UnwindStack/StackGrowStackInfo.cpp:17:void StackGrowStackInfo::FillInStackTrace()
+runtime/src/Common/BaseObject.h:36:    void ForEachRefInStruct(const HeapSlotVisitor& visitor, MAddress aggStart, MAddress aggEnd);
+runtime/src/Common/BaseObject.h:71:    bool IsInTraceRegion() const;
+runtime/src/Common/BaseObject.h:105:    void ForEachAggRefFieldInArray(const RefFieldVisitor& visitor, MAddress aggStart, MAddress aggEnd);
+runtime/src/Common/BaseObject.h:106:    void ForEachAggRefFieldInNonArray(const RefFieldVisitor& visitor, MAddress aggStart, MAddress aggEnd) const;
+runtime/src/Heap/Collector/Relocate.cpp:192:    if (RegionInfo::InGhostFromRegion(obj)) {
+runtime/src/Heap/Collector/Relocate.cpp:2129:                        RegionManager::FinishStayYoungInPlace(region);
+runtime/src/Heap/Collector/Relocate.cpp:2322:                static_cast<unsigned long long>(r->GetPreLiveBytesInGhostRegionForProbe(fromAddr));
+runtime/src/Heap/Collector/Relocate.cpp:2421:                    static_cast<unsigned long long>(r->GetPreLiveBytesInGhostRegionForProbe(position));
+runtime/src/Heap/Collector/Relocate.cpp:3048:    // portmutreloc: the copy just happened on this thread. InScope() is set only by
+runtime/src/Heap/Collector/Relocate.cpp:3063:        if (MutatorRelocate::InScope()) {
+runtime/src/UnwindStack/StackExposureHook.h:74:    static size_t StopTheWorldCallsInHook();
+runtime/src/Inspector/CjHeapData.cpp:336:        recordStackInfo->FillInStackTrace();
+runtime/src/Heap/Allocator/RegionManager.cpp:2880:            RehomeCompactedInPlaceRegion(region);
+runtime/src/Heap/Allocator/RegionManager.cpp:2960:        RehomeCompactedInPlaceRegion(region);
+runtime/src/Heap/Allocator/RegionManager.cpp:3086:void RegionManager::RehomeCompactedInPlaceRegion(RegionInfo* region)
+runtime/src/Heap/Allocator/RegionManager.cpp:3211:void RegionManager::FinishStayYoungInPlace(RegionInfo* region)
+runtime/src/Heap/Allocator/RegionManager.cpp:3219:    FinishStayYoungInPlace(region);
+runtime/src/Sanitizer/ArrayReferenceCounter.h:103:    bool inline constexpr AddressInRange(uintptr_t addr)
+runtime/src/Heap/Collector/ForwardDataManager.cpp:41:    regionSpace.GetRegionManager().NullLiveInfoFieldsInRange(rangeStart, rangeSize);
+runtime/src/MacAlias.h:87:extern "C" MRT_EXPORT ArrayRef CJ_MCC_FillInStackTraceImpl(const TypeInfo* arrayInfo, const ArrayRef exceptionMessage);
+runtime/src/ObjectModel/MClass.h:250:    void ForEachBitmapWordInRange(MAddress baseAddr, const RefFieldVisitor& visitor, MAddress rangeStart,
+runtime/src/ObjectModel/MClass.h:334:    void ForEachBitmapWordInRange(MAddress contentAddr, const RefFieldVisitor& visitor, MAddress rangeStart,
+runtime/src/ObjectModel/MClass.h:406:    void ForEachBitmapWordInRange(MAddress contentAddr, const RefFieldVisitor& visitor, MAddress rangeStart,
+runtime/src/ObjectModel/MClass.h:418:            bitmap.ForEachBitmapWordInRange(contentAddr, visitor, rangeStart, rangeEnd);
+runtime/src/ObjectModel/MClass.h:420:            gctib->ForEachBitmapWordInRange(contentAddr, visitor, rangeStart, rangeEnd);
+runtime/src/ObjectModel/MArray.cpp:210:void MArray::ForEachRefFieldInRange(const RefFieldVisitor& visitor, MAddress fieldStart, MIndex fieldEnd) const
+runtime/src/Heap/Allocator/RegionInfo.h:375:    size_t GetPreLiveBytesInGhostRegionForProbe(MAddress address)
+runtime/src/Heap/Allocator/RegionInfo.h:377:        return GetPreLiveBytesInGhostRegion(address);
+runtime/src/Heap/Allocator/RegionInfo.h:1746:    static bool InGhostFromRegion(BaseObject* obj)
+runtime/src/Heap/Allocator/RegionInfo.h:2041:        uint64_t preLiveBytes = GetPreLiveBytesInGhostRegion(fromAddress);
+runtime/src/Heap/Allocator/RegionInfo.h:2180:        SetInGhostRegion(1);
+runtime/src/Heap/Allocator/RegionInfo.h:2193:            array[i].SetInGhostRegion(1, GetRegionLifeId());
+runtime/src/Heap/Allocator/RegionInfo.h:2273:                array[i].SetInGhostRegion(0, GetRegionLifeId());
+runtime/src/Heap/Allocator/RegionInfo.h:2326:            array[i].SetInGhostRegion(0, GetRegionLifeId());
+runtime/src/Heap/Allocator/RegionInfo.h:2359:            CHECK(!InGhostFromRegion(from_region_addr(addr)));
+runtime/src/Heap/Allocator/RegionInfo.h:2448:    void NullLiveInfoFieldsInRange(uintptr_t rangeStart, size_t rangeSize)
+runtime/src/Heap/Allocator/RegionInfo.h:2703:    void SetInGhostRegion(uint8_t flag)
+runtime/src/Heap/Allocator/RegionInfo.h:3280:    size_t GetPreLiveBytesInGhostRegion(MAddress address)
+runtime/src/Heap/Allocator/RegionInfo.h:3300:            ReportTypeInfoInHeap(obj, tip, objSize, regionStart, regionEnd);
+runtime/src/Heap/Allocator/RegionInfo.h:3311:    ATTR_COLD ATTR_NO_INLINE void ReportTypeInfoInHeap(const BaseObject* obj, TypeInfo* tip, size_t objSize,
+runtime/src/Heap/Allocator/RegionInfo.h:3611:        void SetInGhostRegion(uint8_t flag, RegionLifeId life = 0)
+runtime/src/Heap/Allocator/RegionInfo.h:3642:            SetInGhostRegion(0);
+runtime/src/Heap/Allocator/RegionInfo.h:3820:        SetInGhostRegion(0);
+runtime/src/Heap/Collector/TracingCollector.h:37:inline bool MarkTerminateInPauseEnabled() { return kMarkTerminateInPause; }
+runtime/src/CompilerCalls.h:94:extern "C" ArrayRef MCC_FillInStackTraceImpl(const TypeInfo* arrayInfo, const ArrayRef excepMsg);
+runtime/src/Loader/BinaryFile/CjFile/CjFile.h:26:    bool IsAddrInCJFile(Uptr addr) const override;
+runtime/src/Exception/Exception.cpp:97:    ehStackInfo.FillInStackTrace();
+runtime/src/Loader/BinaryFile/CjFile/CjFile.cpp:191:bool CJFile::IsAddrInCJFile(Uptr addr) const { return cJFileMetaBegin <= addr && addr < cJFileMetaEnd; }
+runtime/src/StackManager.cpp:102:    printStackInfo.FillInStackTrace();
+runtime/src/StackManager.cpp:115:    printSignalStackInfo.FillInStackTrace();
+runtime/src/StackManager.cpp:122:    printStackInfo.FillInStackTrace();
+runtime/src/StackManager.cpp:147:    printStackInfo.FillInStackTrace();
+runtime/src/StackManager.cpp:166:    gcStackInfo.FillInStackTrace();
+runtime/src/StackManager.cpp:180:    gcStackInfo.FillInStackTrace();
+runtime/src/StackManager.cpp:190:    stackInfo.FillInStackTrace();
+runtime/src/StackManager.cpp:224:            ehStackInfo.FillInStackTrace();
+runtime/src/StackManager.cpp:229:            gcStackInfo.FillInStackTrace();
+runtime/src/StackManager.cpp:234:            printStackInfo.FillInStackTrace();
+runtime/src/Heap/Allocator/RegionManager.h:213:    void RehomeCompactedInPlaceRegion(RegionInfo* region);
+runtime/src/Heap/Allocator/RegionManager.h:234:    static void FinishStayYoungInPlace(RegionInfo* region);
+runtime/src/Heap/Allocator/RegionManager.h:263:        LockRegionListInSaferegion(regionListMutex);
+runtime/src/Heap/Allocator/RegionManager.h:289:        LockRegionListInSaferegion(regionListMutex);
+runtime/src/Heap/Allocator/RegionManager.h:957:    void NullLiveInfoFieldsInRange(uintptr_t rangeStart, size_t rangeSize)
+runtime/src/Heap/Allocator/RegionManager.h:961:                region->NullLiveInfoFieldsInRange(rangeStart, rangeSize);
+runtime/src/Heap/Allocator/RegionManager.h:1092:    static void LockRegionListInSaferegion(std::mutex& listMutex)
+runtime/src/Heap/Allocator/RegionManager.h:1115:    inline void CheckRegionWhetherCreatedInFixPhase(RegionInfo* region);
+runtime/src/Loader/CjFileLoader/CjFileLoader.cpp:313:    TypeInfoManager::GetTypeInfoManager().RemoveTypeInfosInRange(
+runtime/src/Loader/CjFileLoader/CjFileLoader.cpp:391:        TypeInfoManager::GetTypeInfoManager().RemoveTypeInfosInRange(
+runtime/src/ObjectModel/MArray.h:54:    void ForEachRefFieldInRange(const RefFieldVisitor& visitor, MAddress fieldStart, MIndex fieldEnd) const;
+runtime/src/Sanitizer/AddressSanitizer/AsanInterface.cpp:161:    if (!g_counter->AddressInRange(reinterpret_cast<uintptr_t>(alias))) {
+runtime/src/Heap/Allocator/RegionSpace.cpp:31:bool RegionIsInRelocationSet(const RegionInfo* reg)
+runtime/src/Heap/Allocator/RegionSpace.cpp:225:    if (UNLIKELY(tlRegion != RegionInfo::NullRegion() && RegionIsInRelocationSet(tlRegion))) {
+runtime/src/Heap/Allocator/RegionSpace.cpp:356:        if (UNLIKELY(RegionIsInRelocationSet(tlRegion))) {
+runtime/src/Heap/Allocator/RegionSpace.cpp:385:        if (UNLIKELY(RegionIsInRelocationSet(r))) {
+runtime/src/Heap/Collector/Generation.cpp:105:            mutator.GetCjthreadPtr(), mutator.IsManagedContext() ? 1 : 0, mutator.InSaferegion() ? 1 : 0,
+runtime/src/Heap/Collector/Generation.cpp:1372:         static_cast<unsigned long long>(concWindow.windowNs), concWindow.MarkedInWindow(),
+runtime/src/Sanitizer/HwAddressSanitizer/HwasanInterface.cpp:62:    if (g_counter != nullptr && g_counter->AddressInRange(addr)) {
+runtime/src/Heap/Collector/Collector.cpp:71:bool ObjectFitsInRegion(BaseObject* obj, RegionInfo* region)
+runtime/src/Heap/Collector/Collector.cpp:159:        if (region != nullptr && ObjectFitsInRegion(obj, region)) {
+runtime/src/Heap/Collector/Collector.cpp:232:    if (!ObjectFitsInRegion(obj, region)) {
+runtime/src/Concurrency/CJThreadModel/CJThreadModel.cpp:57:    if (status == UnwindContextStatus::RISKY && curMutator->InSaferegion()) {
+runtime/src/Concurrency/CJThreadModel/CJThreadModel.cpp:61:        if (status != UnwindContextStatus::RISKY || !curMutator->InSaferegion()) {
+runtime/src/Heap/Barrier/Barrier.h:168:    void RecordCrossGenEdgesInStruct(BaseObject* obj, MAddress start, size_t size,
+runtime/src/Heap/Barrier/Barrier.h:170:    void RecordCrossGenEdgesInRefArray(BaseObject* obj, MAddress start, size_t size,
+runtime/src/Heap/Barrier/Barrier.cpp:372:        mutator->RememberObjectInSatbBuffer(ref);
+runtime/src/Heap/Barrier/Barrier.cpp:640:        obj->ForEachRefInStruct(
+runtime/src/Heap/Barrier/Barrier.cpp:650:    RecordCrossGenEdgesInStruct(obj, dst, dstLen, &snap);
+runtime/src/Heap/Barrier/Barrier.cpp:664:        obj->ForEachRefInStruct(
+runtime/src/Heap/Barrier/Barrier.cpp:1265:    RecordCrossGenEdgesInRefArray(dstObj, dstField, dstSize, &snap);
+runtime/src/Heap/Barrier/Barrier.cpp:1313:        dstObj->ForEachRefInStruct(
+runtime/src/Heap/Barrier/Barrier.cpp:1323:    RecordCrossGenEdgesInStruct(dstObj, dstField, dstSize, &snap);
+runtime/src/Heap/Barrier/Barrier.cpp:1354:        static_cast<MArray*>(dstObj)->ForEachRefFieldInRange(recolour, dstField, dstField + srcSize);
+runtime/src/Heap/Barrier/Barrier.cpp:1383:        srcObj->ForEachRefInStruct(
+runtime/src/Heap/Barrier/Barrier.cpp:1430:    gctib.ForEachBitmapWordInRange(
+runtime/src/Heap/Barrier/Barrier.cpp:1489:    static_cast<MArray*>(srcObj)->ForEachRefFieldInRange(
+runtime/src/Heap/Barrier/Barrier.cpp:1599:        obj->ForEachRefInStruct(
+runtime/src/Heap/Barrier/Barrier.cpp:1636:    RecordCrossGenEdgesInStruct(dst, reinterpret_cast<MAddress>(fp), size);
+runtime/src/Heap/Barrier/Barrier.cpp:1681:        RecordCrossGenEdgesInStruct(dstObj, reinterpret_cast<MAddress>(dstObj) + TYPEINFO_PTR_SIZE, size);
+runtime/src/Heap/Barrier/Barrier.cpp:1758:void Barrier::RecordCrossGenEdgesInStruct(BaseObject* obj, MAddress start, size_t size,
+runtime/src/Heap/Barrier/Barrier.cpp:1767:    obj->ForEachRefInStruct(
+runtime/src/Heap/Barrier/Barrier.cpp:1786:void Barrier::RecordCrossGenEdgesInRefArray(BaseObject* obj, MAddress start, size_t size,
+runtime/src/Heap/WCollector/EnumBarrier.cpp:61:        mutator->RememberObjectInSatbBuffer(target);
+runtime/src/Heap/WCollector/EnumBarrier.cpp:74:        obj->ForEachRefInStruct(
+runtime/src/Heap/WCollector/EnumBarrier.cpp:91:    gctib.ForEachBitmapWordInRange(
+runtime/src/Heap/WCollector/EnumBarrier.cpp:119:        mutator->RememberObjectInSatbBuffer(remeberedObject);
+runtime/src/Heap/WCollector/EnumBarrier.cpp:122:        mutator->RememberObjectInSatbBuffer(ref);
+runtime/src/Heap/WCollector/EnumBarrier.cpp:135:        mutator->RememberObjectInSatbBuffer(rememberedObject);
+runtime/src/Heap/WCollector/EnumBarrier.cpp:138:        mutator->RememberObjectInSatbBuffer(ref);
+runtime/src/Heap/WCollector/EnumBarrier.cpp:153:        obj->ForEachRefInStruct(
+runtime/src/Heap/WCollector/EnumBarrier.cpp:155:                mutator->RememberObjectInSatbBuffer(ReadReference(obj, dstField));
+runtime/src/Heap/WCollector/EnumBarrier.cpp:158:                mutator->RememberObjectInSatbBuffer(ReadReference(nullptr, srcField));
+runtime/src/Heap/WCollector/EnumBarrier.cpp:167:        obj->ForEachRefInStruct(
+runtime/src/Heap/WCollector/EnumBarrier.cpp:191:        mutator->RememberObjectInSatbBuffer(ReadReference(nullptr, dstField));
+runtime/src/Heap/WCollector/EnumBarrier.cpp:194:        mutator->RememberObjectInSatbBuffer(ReadReference(nullptr, srcField));
+runtime/src/Heap/WCollector/EnumBarrier.cpp:236:    mutator->RememberObjectInSatbBuffer(oldRef);
+runtime/src/Heap/WCollector/EnumBarrier.cpp:237:    mutator->RememberObjectInSatbBuffer(newRef);
+runtime/src/Heap/WCollector/EnumBarrier.cpp:253:    mutator->RememberObjectInSatbBuffer(oldRef);
+runtime/src/Heap/WCollector/EnumBarrier.cpp:254:    mutator->RememberObjectInSatbBuffer(newRef);
+runtime/src/Heap/WCollector/EnumBarrier.cpp:276:            mutator->RememberObjectInSatbBuffer(oldRef);
+runtime/src/Heap/WCollector/EnumBarrier.cpp:277:            mutator->RememberObjectInSatbBuffer(newRef);
+runtime/src/Heap/WCollector/EnumBarrier.cpp:317:        mutator->RememberObjectInSatbBuffer(target);
+runtime/src/Heap/WCollector/EnumBarrier.cpp:325:    srcArray->ForEachRefFieldInRange(srcVisitor, srcField, srcField + srcSize);
+runtime/src/Heap/WCollector/EnumBarrier.cpp:330:        mutator->RememberObjectInSatbBuffer(target);
+runtime/src/Heap/WCollector/EnumBarrier.cpp:333:    dstArray->ForEachRefFieldInRange(dstVisitor, dstField, dstField + srcSize);
+runtime/src/Heap/Collector/Mark.cpp:2130:        if (!MarkTerminateInPauseEnabled()) {
+runtime/src/Heap/Barrier/RememberedSet.h:111:    size_t ClearRangeInBuffer(size_t buffer, size_t firstBit, size_t endBit, size_t* outWords);
+runtime/src/Heap/WCollector/PreforwardBarrier.cpp:84:        obj->ForEachRefInStruct(
+runtime/src/Heap/WCollector/PreforwardBarrier.cpp:217:    srcArray->ForEachRefFieldInRange(srcVisitor, srcField, srcField + srcSize);
+runtime/src/Heap/WCollector/PreforwardBarrier.cpp:233:        static_cast<MArray*>(dstObj)->ForEachRefFieldInRange(recolour, dstField, dstField + srcSize);
+runtime/src/os/Windows/WinModuleManager.cpp:51:        if (IsInRuntimeFunc(mid, pc)) {
+runtime/src/os/Windows/WinModuleManager.cpp:68:        if (module->IsInModule(pc)) {
+runtime/src/Heap/Collector/TracingCollector.cpp:842:        if (!MarkTerminateInPauseEnabled()) {
+runtime/src/Heap/Barrier/RememberedSet.cpp:320:size_t RememberedSet::ClearRangeInBuffer(size_t buffer, size_t firstBit, size_t endBit, size_t* outWords)
+runtime/src/Heap/Barrier/RememberedSet.cpp:377:        removed += ClearRangeInBuffer(buffer, firstBit, endBit, outWords);
+runtime/src/Heap/WCollector/TraceBarrier.cpp:27:    mutator->RememberObjectInSatbBuffer(ref);
+runtime/src/Heap/WCollector/TraceBarrier.cpp:76:        mutator->RememberObjectInSatbBuffer(target);
+runtime/src/Heap/WCollector/TraceBarrier.cpp:89:        obj->ForEachRefInStruct(
+runtime/src/Heap/WCollector/TraceBarrier.cpp:106:    gctib.ForEachBitmapWordInRange(src, [&refFields, dst, src](RefField<>& srcField) {
+runtime/src/Heap/WCollector/TraceBarrier.cpp:132:        mutator->RememberObjectInSatbBuffer(rememberedObject);
+runtime/src/Heap/WCollector/TraceBarrier.cpp:151:        mutator->RememberObjectInSatbBuffer(rememberedObject);
+runtime/src/Heap/WCollector/TraceBarrier.cpp:168:            obj->ForEachRefInStruct(
+runtime/src/Heap/WCollector/TraceBarrier.cpp:170:                    mutator->RememberObjectInSatbBuffer(ReadReference(obj, refField));
+runtime/src/Heap/WCollector/TraceBarrier.cpp:174:        obj->ForEachRefInStruct(
+runtime/src/Heap/WCollector/TraceBarrier.cpp:186:        obj->ForEachRefInStruct(
+runtime/src/Heap/WCollector/TraceBarrier.cpp:212:            mutator->RememberObjectInSatbBuffer(ReadReference(nullptr, dstField));
+runtime/src/Heap/WCollector/TraceBarrier.cpp:261:    mutator->RememberObjectInSatbBuffer(oldRef);
+runtime/src/Heap/WCollector/TraceBarrier.cpp:279:    mutator->RememberObjectInSatbBuffer(oldRef);
+runtime/src/Heap/WCollector/TraceBarrier.cpp:299:            mutator->RememberObjectInSatbBuffer(oldRef);
+runtime/src/Heap/WCollector/TraceBarrier.cpp:340:    srcArray->ForEachRefFieldInRange(srcVisitor, srcField, srcField + srcSize);
+runtime/src/Heap/WCollector/TraceBarrier.cpp:345:        mutator->RememberObjectInSatbBuffer(target);
+runtime/src/Heap/WCollector/TraceBarrier.cpp:348:    dstArray->ForEachRefFieldInRange(dstVisitor, dstField, dstField + srcSize);
+runtime/src/os/Windows/WinModuleManager.h:53:    bool IsInModule(Uptr pc) const { return pc >= imageBaseStart && pc <= imageBaseEnd; }
+runtime/src/os/Windows/WinModuleManager.h:55:    bool IsInRuntimeFunc(uint32_t index, Uptr pc) const
+runtime/src/Heap/WCollector/PostTraceBarrier.cpp:86:        obj->ForEachRefInStruct(
+runtime/src/Heap/WCollector/PostTraceBarrier.cpp:101:    gctib.ForEachBitmapWordInRange(
+runtime/src/Heap/WCollector/PostTraceBarrier.cpp:139:        obj->ForEachRefInStruct(
+runtime/src/Heap/WCollector/PostTraceBarrier.cpp:279:    srcArray->ForEachRefFieldInRange(srcVisitor, srcField, srcField + srcSize);
+runtime/src/Heap/WCollector/IdleBarrier.cpp:101:        obj->ForEachRefInStruct(
+runtime/src/Heap/WCollector/IdleBarrier.cpp:187:        obj->ForEachRefInStruct(
+runtime/src/Heap/WCollector/IdleBarrier.cpp:300:    srcArray->ForEachRefFieldInRange(srcVisitor, srcField, srcField + srcSize);
+runtime/src/Heap/WCollector/IdleBarrier.cpp:318:        static_cast<MArray*>(dstObj)->ForEachRefFieldInRange(recolour, dstField, dstField + srcSize);
+runtime/src/Heap/WCollector/WCollector.h:43:// there is no window there. A non-zero windowNs with markedInWindow()==0 and
+runtime/src/Heap/WCollector/WCollector.h:55:    size_t MarkedInWindow() const { return markedAtExit >= markedAtEntry ? markedAtExit - markedAtEntry : 0; }
+runtime/src/Heap/WCollector/WCollector.h:597:            return RegionInfo::InGhostFromRegion(obj);
+runtime/src/Heap/WCollector/ForwardBarrier.cpp:99:        static_cast<unsigned>(RegionInfo::InGhostFromRegion(target)),
+runtime/src/Heap/WCollector/ForwardBarrier.cpp:102:        preResolve == nullptr ? 0xffu : static_cast<unsigned>(RegionInfo::InGhostFromRegion(preResolve)),
+runtime/src/Heap/WCollector/ForwardBarrier.cpp:331:    srcArray->ForEachRefFieldInRange(srcVisitor, srcField, srcField + srcSize);
+runtime/src/Heap/WCollector/ForwardBarrier.cpp:347:        static_cast<MArray*>(dstObj)->ForEachRefFieldInRange(recolour, dstField, dstField + srcSize);
+runtime/src/CJThread/src/runtime/schedule/include/schedule.h:547:void CJRegisterArkVMInRuntime(unsigned long long vm);
+runtime/src/CJThread/src/runtime/schedule/src/schedule.cpp:668:void CJRegisterArkVMInRuntime(unsigned long long vm)
+runtime/src/CJThread/src/runtime/schedule/src/cjthread.cpp:1289:int CJThreadParkInForeignThread(CJThread* cjthread, ParkCallbackFunc func, void *arg)
+runtime/src/CJThread/src/runtime/schedule/src/cjthread.cpp:1372:        return CJThreadParkInForeignThread(cjthread, func, arg);
+runtime/src/CJThread/src/runtime/schedule/src/cjthread.cpp:1378:        return CJThreadParkInForeignThread(cjthread, func, arg);
+runtime/src/CJThread/src/runtime/schedule/src/cjthread.cpp:1383:        return CJThreadParkInForeignThread(cjthread, func, arg);

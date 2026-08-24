@@ -1,0 +1,44 @@
+runtime/src/CompilerCalls.cpp:2100:                             fvC.IsUnmovableFromObject(result) ? 1u : 0u,
+runtime/src/Heap/Barrier/Barrier.cpp:126:    } else if (collector.IsGhostFromObject(target) && !collector.IsUnmovableFromObject(target)) {
+runtime/src/Heap/Barrier/Barrier.cpp:829:    const bool unmov = collector.IsUnmovableFromObject(target);
+runtime/src/Heap/Collector/Collector.h:107:    virtual bool IsUnmovableFromObject(BaseObject*) const
+runtime/src/Heap/Collector/Collector.h:109:        AbortUnimplemented("Collector::IsUnmovableFromObject");
+runtime/src/Heap/Collector/CollectorProxy.h:64:    bool IsUnmovableFromObject(BaseObject* obj) const override { return currentCollector->IsUnmovableFromObject(obj); }
+runtime/src/Heap/Collector/Relocate.cpp:184:bool WCollector::IsUnmovableFromObject(BaseObject* obj) const
+runtime/src/Heap/Collector/Relocate.cpp:320:        if (host != nullptr && IsGhostFromObject(host) && !IsUnmovableFromObject(host)) {
+runtime/src/Heap/Collector/Relocate.cpp:492:        if (IsGhostFromObject(exportObj) && !IsUnmovableFromObject(exportObj)) {
+runtime/src/Heap/Collector/Relocate.cpp:496:            if (IsGhostFromObject(externObj) && !IsUnmovableFromObject(externObj)) {
+runtime/src/Heap/Collector/Relocate.cpp:521:        if (IsGhostFromObject(exportObj) && !IsUnmovableFromObject(exportObj)) {
+runtime/src/Heap/Collector/Relocate.cpp:616:    if (collector->IsUnmovableFromObject(obj)) {
+runtime/src/Heap/Collector/Relocate.cpp:820:            !IsUnmovableFromObject(object)) {
+runtime/src/Heap/Collector/Relocate.cpp:1002:            !IsUnmovableFromObject(object)) {
+runtime/src/Heap/Collector/Relocate.cpp:1127:        if (host != nullptr && IsGhostFromObject(host) && !IsUnmovableFromObject(host)) {
+runtime/src/Heap/Collector/Relocate.cpp:1158:    if (!alreadyTo && IsGhostFromObject(target) && !IsUnmovableFromObject(target)) {
+runtime/src/Heap/Collector/Relocate.cpp:1222:        if (host != nullptr && IsGhostFromObject(host) && !IsUnmovableFromObject(host)) {
+runtime/src/Heap/Collector/Relocate.cpp:1243:    if (!alreadyTo && IsGhostFromObject(target) && !IsUnmovableFromObject(target)) {
+runtime/src/Heap/Collector/Relocate.cpp:1313:        IsGhostFromObject(knownBase) && !IsUnmovableFromObject(knownBase)) {
+runtime/src/Heap/Collector/Relocate.cpp:1358:        if (IsGhostFromObject(obj) && !IsUnmovableFromObject(obj)) {
+runtime/src/Heap/Collector/Relocate.cpp:1363:            if (host != nullptr && IsGhostFromObject(host) && !IsUnmovableFromObject(host)) {
+runtime/src/Heap/Collector/Relocate.cpp:1485:        if (IsGhostFromObject(obj) && !IsUnmovableFromObject(obj)) {
+runtime/src/Heap/Collector/Relocate.cpp:1490:            if (host != nullptr && IsGhostFromObject(host) && !IsUnmovableFromObject(host)) {
+runtime/src/Heap/Collector/Relocate.cpp:1567:        if (IsGhostFromObject(object) && !IsUnmovableFromObject(object)) {
+runtime/src/Heap/Collector/Relocate.cpp:2829:        if (IsGhostFromObject(obj) && !IsUnmovableFromObject(obj)) {
+runtime/src/Heap/Collector/Relocate.cpp:2842:    if (IsGhostFromObject(obj) && !IsUnmovableFromObject(obj)) {
+runtime/src/Heap/Heap.cpp:371:            !collector.IsUnmovableFromObject(recordObj)) {
+runtime/src/Heap/WCollector/ForwardBarrier.cpp:160:        if (!theCollector.IsUnmovableFromObject(oldTarget)) {
+runtime/src/Heap/WCollector/ForwardBarrier.cpp:175:            // 丁: barrier-moment IsUnmovableFromObject short-circuit (fromver §6).
+runtime/src/Heap/WCollector/ForwardBarrier.cpp:233:        if (!theCollector.IsUnmovableFromObject(oldTarget)) {
+runtime/src/Heap/WCollector/PreforwardBarrier.cpp:41:        if (!theCollector.IsUnmovableFromObject(oldTarget)) {
+runtime/src/Heap/WCollector/PreforwardBarrier.cpp:122:        if (!theCollector.IsUnmovableFromObject(oldTarget)) {
+runtime/src/Heap/WCollector/WCollector.h:549:    // since IsUnmovableFromObject covers UNMOVABLE_FROM/RAW_POINTER_PINNED and not LONE_FROM.
+runtime/src/Heap/WCollector/WCollector.h:603:    bool IsUnmovableFromObject(BaseObject* obj) const override;
+runtime/src/Heap/WCollector/WCollector.h:973:                                             IsUnmovableFromObject(target));
+runtime/src/Mutator/Mutator.cpp:944:        collector.IsUnmovableFromObject(oldObj)) {
+runtime/src/Mutator/Mutator.cpp:960:            if (collector.IsGhostFromObject(obj) && !collector.IsUnmovableFromObject(obj)) {
+runtime/src/Mutator/Mutator.cpp:1184:            !collector.IsUnmovableFromObject(oldObj)) {
+runtime/src/Mutator/Mutator.cpp:1209:                !collector.IsUnmovableFromObject(host)) {
+runtime/src/Mutator/Mutator.cpp:1222:            !collector.IsUnmovableFromObject(oldObj)) {
+runtime/src/Mutator/Mutator.cpp:1255:            !collector.IsGhostFromObject(fromVersion) || collector.IsUnmovableFromObject(fromVersion)) {
+runtime/src/windows_x86_64_exports.def:2421:    _ZNK12MapleRuntime10WCollector21IsUnmovableFromObjectEPNS_10BaseObjectE @2442
+runtime/src/windows_x86_64_exports.def:2564:    _ZNK12MapleRuntime14CollectorProxy21IsUnmovableFromObjectEPNS_10BaseObjectE @2585
+runtime/src/windows_x86_64_exports.def:2751:    _ZNK12MapleRuntime9Collector21IsUnmovableFromObjectEPNS_10BaseObjectE @2773
