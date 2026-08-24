@@ -64,8 +64,24 @@ public:
     }
 
     void Initialize(MAddress start, size_t size, size_t unit) const { initialize(start, size, unit); }
-    void Insert(MAddress start, size_t size, RegionInfo* region) const { insert(start, size, region); }
-    MAddress InsertMapping(MAddress from, MAddress to) const { return insertMapping(from, to); }
+    bool InsertProvisional(MAddress start, size_t size, RegionInfo* region) const
+    {
+        return insertProvisional(start, size, region);
+    }
+    bool PreparePublicationGeneration(MAddress start, size_t size) const
+    {
+        return preparePublicationGeneration(start, size);
+    }
+    MAddress InsertMapping(RegionInfo* region, MAddress from, MAddress to) const
+    {
+        ClearEntries(region->GetRegionStart(), region->GetRegionSize());
+        DropRetiredCovering(region->GetRegionStart(), region->GetRegionSize());
+        GC_EXPECT_TRUE(preparePublicationGeneration(region->GetRegionStart(), region->GetRegionSize()));
+        GC_EXPECT_TRUE(installPublicationBeforeCopy(region->GetRegionStart(), region->GetRegionSize(), region));
+        ForwardingTable::Publication publication = ensurePublicationBeforeCopy(region, from);
+        GC_EXPECT_TRUE(static_cast<bool>(publication));
+        return insertMapping(publication, from, to);
+    }
     void Remove(MAddress start, size_t size) const { remove(start, size); }
     void ClearEntries(MAddress start, size_t size) const { clearEntries(start, size); }
     void DropRetiredCovering(MAddress start, size_t size) const { dropRetiredCovering(start, size); }
@@ -89,9 +105,16 @@ private:
         handle = dlopen("libcangjie-runtime.so", RTLD_NOW | RTLD_NOLOAD);
         GC_EXPECT_TRUE(handle != nullptr);
         initialize = Resolve<InitializeFn>(handle, "_ZN12MapleRuntime15ForwardingTable10InitializeEmmm");
-        insert = Resolve<InsertFn>(handle, "_ZN12MapleRuntime15ForwardingTable6InsertEmmPNS_10RegionInfoE");
-        insertMapping =
-            Resolve<InsertMappingFn>(handle, "_ZN12MapleRuntime15ForwardingTable13InsertMappingEmm");
+        insertProvisional = Resolve<InsertProvisionalFn>(
+            handle, "_ZN12MapleRuntime15ForwardingTable17InsertProvisionalEmmPNS_10RegionInfoE");
+        preparePublicationGeneration = Resolve<PreparePublicationGenerationFn>(
+            handle, "_ZN12MapleRuntime15ForwardingTable28PreparePublicationGenerationEmm");
+        installPublicationBeforeCopy = Resolve<InstallPublicationBeforeCopyFn>(
+            handle, "_ZN12MapleRuntime15ForwardingTable28InstallPublicationBeforeCopyEmmPNS_10RegionInfoE");
+        ensurePublicationBeforeCopy = Resolve<EnsurePublicationBeforeCopyFn>(
+            handle, "_ZN12MapleRuntime15ForwardingTable27EnsurePublicationBeforeCopyEPNS_10RegionInfoEm");
+        insertMapping = Resolve<InsertMappingFn>(
+            handle, "_ZN12MapleRuntime15ForwardingTable13InsertMappingERKNS0_11PublicationEmm");
         remove = Resolve<RangeFn>(handle, "_ZN12MapleRuntime15ForwardingTable6RemoveEmm");
         clearEntries = Resolve<RangeFn>(handle, "_ZN12MapleRuntime15ForwardingTable12ClearEntriesEmm");
         dropRetiredCovering =
@@ -101,15 +124,21 @@ private:
     }
 
     using InitializeFn = void (*)(MAddress, size_t, size_t);
-    using InsertFn = void (*)(MAddress, size_t, RegionInfo*);
-    using InsertMappingFn = MAddress (*)(MAddress, MAddress);
+    using InsertProvisionalFn = bool (*)(MAddress, size_t, RegionInfo*);
+    using PreparePublicationGenerationFn = bool (*)(MAddress, size_t);
+    using InstallPublicationBeforeCopyFn = bool (*)(MAddress, size_t, RegionInfo*);
+    using EnsurePublicationBeforeCopyFn = ForwardingTable::Publication (*)(RegionInfo*, MAddress);
+    using InsertMappingFn = MAddress (*)(const ForwardingTable::Publication&, MAddress, MAddress);
     using RangeFn = void (*)(MAddress, size_t);
     using GetEntriesFn = ZForwarding* (*)(MAddress);
     using FindRetiredToFn = MAddress (*)(MAddress);
 
     void* handle = nullptr;
     InitializeFn initialize = nullptr;
-    InsertFn insert = nullptr;
+    InsertProvisionalFn insertProvisional = nullptr;
+    PreparePublicationGenerationFn preparePublicationGeneration = nullptr;
+    InstallPublicationBeforeCopyFn installPublicationBeforeCopy = nullptr;
+    EnsurePublicationBeforeCopyFn ensurePublicationBeforeCopy = nullptr;
     InsertMappingFn insertMapping = nullptr;
     RangeFn remove = nullptr;
     RangeFn clearEntries = nullptr;
@@ -235,7 +264,13 @@ struct RootEntryFixture {
         heap.region0->SetRegionType(RegionInfo::RegionType::FROM_REGION);
         heap.region0->SetInGhostRegion(1);
         heap.region0->SetRouteState(RegionInfo::ROUTED);
-        forwarding.Insert(heap.region0->GetRegionStart(), heap.region0->GetRegionSize(), heap.region0);
+        if (!forwarding.InsertProvisional(
+                heap.region0->GetRegionStart(), heap.region0->GetRegionSize(), heap.region0)) {
+            GC_EXPECT_TRUE(forwarding.PreparePublicationGeneration(
+                heap.region0->GetRegionStart(), heap.region0->GetRegionSize()));
+            GC_EXPECT_TRUE(forwarding.InsertProvisional(
+                heap.region0->GetRegionStart(), heap.region0->GetRegionSize(), heap.region0));
+        }
         StorePlain(root, from_object(heap.obj0));
         registeredRoots[0] = &root;
         Heap::GetHeap().RegisterStaticRoots(reinterpret_cast<Uptr>(registeredRoots), 1);
@@ -260,7 +295,7 @@ struct RootEntryFixture {
         auto& forwarding = ProductForwardingApi::Get();
         const MAddress from = reinterpret_cast<MAddress>(heap.obj0);
         const MAddress to = reinterpret_cast<MAddress>(heap.obj1);
-        GC_EXPECT_EQ(forwarding.InsertMapping(from, to), to);
+        GC_EXPECT_EQ(forwarding.InsertMapping(heap.region0, from, to), to);
         GC_EXPECT_TRUE(forwarding.GetEntries(from) != nullptr);
         GC_EXPECT_EQ(forwarding.GetEntries(from)->find(from), to);
         GC_EXPECT_EQ(forwarding.FindRetiredTo(from), static_cast<MAddress>(0));
