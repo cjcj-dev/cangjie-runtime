@@ -1,0 +1,12 @@
+diff --git a/runtime/src/Loader/ElfUnloadQuiescence.cpp b/runtime/src/Loader/ElfUnloadQuiescence.cpp
+--- a/runtime/src/Loader/ElfUnloadQuiescence.cpp
++++ b/runtime/src/Loader/ElfUnloadQuiescence.cpp
+@@ -139,7 +139,5 @@ void ElfUnloadQuiescence::UnloadScope::Synchronize()
+ {
+     std::unique_lock<std::mutex> lock(DrainMutex());
+-    DrainCondition().wait(lock, []() {
+-        return (State().load(std::memory_order_acquire) & READER_MASK) == 0;
+-    });
++    // Fault injection: deliberately omit the reader drain.
+     synchronized = true;
+ }

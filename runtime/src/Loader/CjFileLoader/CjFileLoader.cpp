@@ -7,9 +7,20 @@
 
 #include "CjFileLoader.h"
 
+#include <algorithm>
+#include <chrono>
+#include <memory>
+#include <thread>
+
 #include "ExceptionManager.inline.h"
+#include "Common/ScopedObjectAccess.h"
+#include "Loader/ElfUnloadQuiescence.h"
+#include "LoaderManager.h"
+#include "Mutator/Mutator.h"
+#include "Mutator/MutatorManager.h"
 #include "ObjectManager.inline.h"
 #include "TypeInfoManager.h"
+#include "UnwindStack/GcStackInfo.h"
 namespace MapleRuntime {
 
 void CJFileLoader::Fini()
@@ -24,6 +35,7 @@ void CJFileLoader::RegisterLoadFile(Uptr fileMetaAddr)
     if (file == nullptr) {
         return;
     }
+    std::lock_guard<std::recursive_mutex> catalogLock(catalogMutex);
     file->RegisterFile();
 #ifndef __arm__
     AddPackageInfos(file);
@@ -51,10 +63,18 @@ void CJFileLoader::UnregisterLoadFile(Uptr fileMetaAddr)
 {
     BaseFile* file = GetBaseFileByMetaAddr(fileMetaAddr);
     if (file != nullptr) {
+        // zGeneration.cpp:1340-1368: unlink -> observer handshake -> purge.
+        // RemoveLoadedFiles accepts an image-specific authorization from the
+        // public entry, or performs the complete direct-callback protection.
         RemoveLoadedFiles(file);
     }
 }
-void CJFileLoader::AddLoadedFiles(BaseFile* baseFile) { loadedFiles.push_back(baseFile); }
+void CJFileLoader::AddLoadedFiles(BaseFile* baseFile)
+{
+    std::lock_guard<std::recursive_mutex> catalogLock(catalogMutex);
+    ElfUnloadQuiescence::LinkImage(baseFile->GetFileMetaAddr());
+    loadedFiles.push_back(baseFile);
+}
 
 BaseFile* CJFileLoader::CreateFileRefFromAddr(Uptr fileMetaAddr)
 {
@@ -75,6 +95,7 @@ BaseFile* CJFileLoader::CreateFileRefFromAddr(Uptr fileMetaAddr)
 
 void CJFileLoader::AddPackageInfos(BaseFile* baseFile)
 {
+    std::lock_guard<std::recursive_mutex> catalogLock(catalogMutex);
     Uptr packageInfoBase = baseFile->GetPackageInfoBase();
     U32 pkgTotalSize = baseFile->GetPackageInfoTotalSize();
     while (pkgTotalSize > 0) {
@@ -106,6 +127,8 @@ void CJFileLoader::AddPackageInfos(BaseFile* baseFile)
 
 bool CJFileLoader::FileHasLoaded(const char* path)
 {
+    ElfUnloadQuiescence::ReadScope reader;
+    std::lock_guard<std::recursive_mutex> catalogLock(catalogMutex);
     CString baseName = Os::Path::GetBaseName(path);
     auto fileIt = filePackageMap.find(baseName.Str());
     if (fileIt != filePackageMap.end()) {
@@ -116,6 +139,8 @@ bool CJFileLoader::FileHasLoaded(const char* path)
 
 bool CJFileLoader::FileHasMultiPackage(const char* path)
 {
+    ElfUnloadQuiescence::ReadScope reader;
+    std::lock_guard<std::recursive_mutex> catalogLock(catalogMutex);
     CString baseName = Os::Path::GetBaseName(path);
     auto fileIt = filePackageMap.find(baseName.Str());
     if (fileIt != filePackageMap.end() && fileIt->second.size() > 1) {
@@ -126,6 +151,8 @@ bool CJFileLoader::FileHasMultiPackage(const char* path)
 
 void CJFileLoader::GetSubPackages(PackageInfo* packageInfo, std::vector<PackageInfo*> &subPackages)
 {
+    ElfUnloadQuiescence::ReadScope reader;
+    std::lock_guard<std::recursive_mutex> catalogLock(catalogMutex);
     CString prefix = CString(packageInfo->GetPackageName()) + ".";
     for (auto &pkgInfoPair : packageInfos) {
         PackageInfo* pkgInfo = pkgInfoPair.second;
@@ -139,6 +166,8 @@ void CJFileLoader::GetSubPackages(PackageInfo* packageInfo, std::vector<PackageI
 void CJFileLoader::VisitExtensionData(
     TypeInfo* ti, const std::function<bool(ExtensionData* ed)>& f, TypeTemplate* tt) const
 {
+    ElfUnloadQuiescence::ReadScope reader;
+    std::lock_guard<std::recursive_mutex> catalogLock(catalogMutex);
     ti->TryInitMTable();
     CHECK(loadedFiles.size() >= extensionDatas.size());
     for (auto baseFile : loadedFiles) {
@@ -270,18 +299,28 @@ void CJFileLoader::RegisterOuterTypeExtensions(BaseFile* baseFile)
     }
 }
 
-PackageInfo* CJFileLoader::GetPackageInfoByPath(const char* path)
+bool CJFileLoader::VisitPackageInfoByPath(
+    const char* path, const std::function<void(PackageInfo*)>& visitor)
 {
-    CString baseName = Os::Path::GetBaseName(path);
-    auto fileIt = filePackageMap.find(baseName.Str());
-    if (fileIt == filePackageMap.end()) {
-        return nullptr;
+    ElfUnloadQuiescence::ReadScope reader;
+    PackageInfo* packageInfo = nullptr;
+    {
+        std::lock_guard<std::recursive_mutex> catalogLock(catalogMutex);
+        CString baseName = Os::Path::GetBaseName(path);
+        auto fileIt = filePackageMap.find(baseName.Str());
+        if (fileIt == filePackageMap.end()) {
+            return false;
+        }
+        packageInfo = fileIt->second[0];
     }
-    return fileIt->second[0];
+    visitor(packageInfo);
+    return true;
 }
 
 void CJFileLoader::RemovePackageInfo(const char* path)
 {
+    ElfUnloadQuiescence::ReadScope reader;
+    std::lock_guard<std::recursive_mutex> catalogLock(catalogMutex);
     CString baseName = Os::Path::GetBaseName(path);
     auto fileIt = filePackageMap.find(baseName.Str());
     if (fileIt != filePackageMap.end()) {
@@ -292,8 +331,41 @@ void CJFileLoader::RemovePackageInfo(const char* path)
     }
 }
 
+void CJFileLoader::RemovePackageInfo(BaseFile* baseFile)
+{
+    std::lock_guard<std::recursive_mutex> catalogLock(catalogMutex);
+    CString baseName = baseFile->GetBaseName();
+    auto fileIt = filePackageMap.find(baseName.Str());
+    if (fileIt == filePackageMap.end()) {
+        return;
+    }
+
+    std::unordered_set<PackageInfo*> removedPackages(fileIt->second.begin(), fileIt->second.end());
+    for (PackageInfo* pkgInfo : fileIt->second) {
+        auto pkgIt = packageInfos.find(pkgInfo->GetPackageName());
+        if (pkgIt != packageInfos.end() && pkgIt->second == pkgInfo) {
+            packageInfos.erase(pkgIt);
+        }
+    }
+    filePackageMap.erase(fileIt);
+
+    for (auto it = subPackageMap.begin(); it != subPackageMap.end();) {
+        if (removedPackages.count(it->first) != 0) {
+            it = subPackageMap.erase(it);
+            continue;
+        }
+        auto& children = it->second;
+        children.erase(std::remove_if(children.begin(), children.end(), [&removedPackages](PackageInfo* child) {
+            return removedPackages.count(child) != 0;
+        }), children.end());
+        ++it;
+    }
+}
+
 PackageInfo* CJFileLoader::GetPackageInfo(const char* pkgName) const
 {
+    ElfUnloadQuiescence::ReadScope reader;
+    std::lock_guard<std::recursive_mutex> catalogLock(catalogMutex);
     PackageInfo* pkgInfo = nullptr;
     auto it = packageInfos.find(pkgName);
     if (it != packageInfos.end()) {
@@ -306,18 +378,135 @@ PackageInfo* CJFileLoader::GetPackageInfo(const char* pkgName) const
     return nullptr;
 }
 
-void CJFileLoader::RemoveLoadedFiles(BaseFile* baseFile)
+void CJFileLoader::UnlinkLoadedFile(BaseFile* baseFile)
 {
+    std::lock_guard<std::recursive_mutex> catalogLock(catalogMutex);
     extensionDatas.erase(baseFile);
     loadedFiles.remove(baseFile);
+
+    for (auto it = typeInfoCache.begin(); it != typeInfoCache.end();) {
+        if (baseFile->IsAddrInCJFile(reinterpret_cast<Uptr>(it->second))) {
+            it = typeInfoCache.erase(it);
+        } else {
+            ++it;
+        }
+    }
+    for (auto it = typeTemplateCache.begin(); it != typeTemplateCache.end();) {
+        if (baseFile->IsAddrInCJFile(reinterpret_cast<Uptr>(it->second))) {
+            it = typeTemplateCache.erase(it);
+        } else {
+            ++it;
+        }
+    }
+    for (auto it = typeExts.begin(); it != typeExts.end();) {
+        if (baseFile->IsAddrInCJFile(reinterpret_cast<Uptr>(it->second)) ||
+            baseFile->IsAddrInCJFile(reinterpret_cast<Uptr>(it->first))) {
+            it = typeExts.erase(it);
+        } else {
+            ++it;
+        }
+    }
+    staticGIs.erase(std::remove_if(staticGIs.begin(), staticGIs.end(), [baseFile](TypeInfo* ti) {
+        return baseFile->IsAddrInCJFile(reinterpret_cast<Uptr>(ti));
+    }), staticGIs.end());
+    RemovePackageInfo(baseFile);
+
+    baseFile->UnregisterFile();
+}
+
+void CJFileLoader::PurgeLoadedFile(BaseFile* baseFile)
+{
+    Uptr imageAddress = baseFile->GetFileMetaAddr();
+    CHECK_DETAIL(ElfUnloadQuiescence::IsPurgeAuthorized(imageAddress),
+                 "ELF metadata purge requires pending/active authorization");
     TypeInfoManager::GetTypeInfoManager().RemoveTypeInfosInRange(
         baseFile->GetTypeInfoBase(), baseFile->GetTypeInfoTotalSize());
-    baseFile->UnregisterFile();
+    ElfUnloadQuiescence::UnlinkImage(imageAddress);
     delete baseFile;
+}
+
+void CJFileLoader::RemoveLoadedFiles(BaseFile* baseFile)
+{
+    Uptr imageAddress = baseFile->GetFileMetaAddr();
+
+    // A public unload callback runs on the same thread and inside the exact
+    // pending/active/STW scopes that authorized this image. A direct callback
+    // has no authorization and must establish all three protections itself.
+    bool authorizedByCaller = ElfUnloadQuiescence::IsPurgeAuthorized(imageAddress);
+    std::unique_ptr<ElfUnloadQuiescence::PurgeAuthorizationScope> callbackAuthorization;
+    if (!authorizedByCaller && ElfUnloadQuiescence::HasCallerPurgeProtection()) {
+        CHECK_DETAIL(!ElfUnloadQuiescence::CallerProtectionHasPendingForImage(imageAddress),
+                     "ELF dependent image has a pending task during public unload");
+        CHECK_DETAIL(!HasActiveImageFrames(baseFile),
+                     "ELF dependent image has an active frame during public unload");
+        callbackAuthorization =
+            std::make_unique<ElfUnloadQuiescence::PurgeAuthorizationScope>(imageAddress);
+        authorizedByCaller = true;
+    }
+    std::unique_ptr<ElfUnloadQuiescence::TaskAdmissionScope> directAdmission;
+    if (!authorizedByCaller) {
+#ifdef MRT_TESTABLE_INTERNALS
+        ElfUnloadQuiescence::NoteDirectPreflightForTesting();
+#endif
+        directAdmission = std::make_unique<ElfUnloadQuiescence::TaskAdmissionScope>();
+        directAdmission->WaitUntilNoPendingForImage(imageAddress);
+
+        // The platform close cannot be rejected after its fini callback starts.
+        // Wait outside the retirement cut until every active image frame leaves.
+        for (;;) {
+            bool active = false;
+            {
+                ScopedEnterSaferegion enterSaferegion(false);
+                ScopedStopTheWorld preflight("direct ELF unload active-image preflight", false);
+                active = HasActiveImageFrames(baseFile);
+            }
+            if (!active) {
+                break;
+            }
+            std::this_thread::sleep_for(std::chrono::milliseconds(1));
+        }
+    }
+
+    ElfUnloadQuiescence::UnloadScope unload(imageAddress);
+
+    // Unlink every discovery surface while pre-cut readers retain their use
+    // right. StaticRootTable::UnregisterRoots also waits for an in-flight GC
+    // root visitor because both operations hold gcRootsLock.
+    UnlinkLoadedFile(baseFile);
+#ifdef MRT_TESTABLE_INTERNALS
+    if (!authorizedByCaller) {
+        ElfUnloadQuiescence::NoteDirectUnlinkForTesting();
+    }
+#endif
+
+    // GC code lookup readers are not mutators, so drain them explicitly before
+    // the mutator rendezvous. Admission remains closed through purge.
+    unload.Synchronize();
+
+    if (!authorizedByCaller) {
+        ScopedEnterSaferegion enterSaferegion(false);
+        ScopedStopTheWorld handshake("ELF unload quiescence", false);
+#ifdef MRT_TESTABLE_INTERNALS
+        ElfUnloadQuiescence::NoteDirectHandshakeForTesting();
+#endif
+        CHECK_DETAIL(!HasActiveImageFrames(baseFile),
+                     "ELF image became active after direct unload preflight");
+        ElfUnloadQuiescence::PurgeAuthorizationScope authorization(imageAddress);
+        PurgeLoadedFile(baseFile);
+#ifdef MRT_TESTABLE_INTERNALS
+        ElfUnloadQuiescence::NoteDirectPurgeForTesting();
+#endif
+        unload.OpenAdmission();
+        return;
+    }
+    PurgeLoadedFile(baseFile);
+    unload.OpenAdmission();
 }
 
 void CJFileLoader::VisitBaseFile(const std::function<bool(BaseFile*)>& f) const
 {
+    ElfUnloadQuiescence::ReadScope reader;
+    std::lock_guard<std::recursive_mutex> catalogLock(catalogMutex);
     for (auto file : loadedFiles) {
         if (f(file)) {
             return;
@@ -327,6 +516,8 @@ void CJFileLoader::VisitBaseFile(const std::function<bool(BaseFile*)>& f) const
 
 TypeInfo* CJFileLoader::FindTypeInfoFromLoadedFiles(const char* typeInfoName)
 {
+    ElfUnloadQuiescence::ReadScope reader;
+    std::lock_guard<std::recursive_mutex> catalogLock(catalogMutex);
     auto it = typeInfoCache.find(typeInfoName);
     if (it != typeInfoCache.end()) {
         return it->second;
@@ -354,6 +545,8 @@ TypeInfo* CJFileLoader::FindTypeInfoFromLoadedFiles(const char* typeInfoName)
 
 TypeTemplate* CJFileLoader::FindTypeTemplateFromLoadedFiles(const char* typeTemplateName)
 {
+    ElfUnloadQuiescence::ReadScope reader;
+    std::lock_guard<std::recursive_mutex> catalogLock(catalogMutex);
     auto it = typeTemplateCache.find(typeTemplateName);
     if (it != typeTemplateCache.end()) {
         return it->second;
@@ -381,24 +574,42 @@ TypeTemplate* CJFileLoader::FindTypeTemplateFromLoadedFiles(const char* typeTemp
 
 void CJFileLoader::RecordTypeInfo(TypeInfo* ti)
 {
+    ElfUnloadQuiescence::ReadScope reader;
+    std::lock_guard<std::recursive_mutex> catalogLock(catalogMutex);
     typeInfoCache.insert({ ti->GetName(), ti });
 }
 
 void CJFileLoader::ClearLoadedFiles()
 {
-    extensionDatas.clear();
-    VisitBaseFile([](BaseFile* baseFile) {
-        TypeInfoManager::GetTypeInfoManager().RemoveTypeInfosInRange(
-            baseFile->GetTypeInfoBase(), baseFile->GetTypeInfoTotalSize());
-        baseFile->UnregisterFile();
-        delete baseFile;
-        return false;
-    });
-    loadedFiles.clear();
+    // CangjieRuntime clears Runtime::runtime before module finalization, so a
+    // shutdown cleanup cannot create ScopedStopTheWorld or query
+    // MutatorManager::Instance(). Both runtime exits retire their entry mutator
+    // and stop the scheduler before FiniAndDelete, so no active image frame can
+    // be created or remain here. Close task admission for the complete cleanup
+    // and prove the remaining pending side explicitly for every image.
+    CHECK_DETAIL(Runtime::CurrentRef() == nullptr,
+                 "ELF shutdown cleanup requires a stopped runtime");
+    ElfUnloadQuiescence::TaskAdmissionScope shutdownAdmission;
+    for (;;) {
+        BaseFile* file = nullptr;
+        {
+            std::lock_guard<std::recursive_mutex> catalogLock(catalogMutex);
+            if (loadedFiles.empty()) {
+                return;
+            }
+            file = loadedFiles.front();
+        }
+        Uptr imageAddress = file->GetFileMetaAddr();
+        shutdownAdmission.WaitUntilNoPendingForImage(imageAddress);
+        ElfUnloadQuiescence::PurgeAuthorizationScope authorization(
+            imageAddress, shutdownAdmission);
+        RemoveLoadedFiles(file);
+    }
 }
 
 bool CJFileLoader::LibInit(const char* libName)
 {
+    ElfUnloadQuiescence::ReadScope reader;
     BaseFile* baseFile = GetBaseFile(libName);
     if (baseFile == nullptr) {
         return false;
@@ -457,11 +668,64 @@ int CJFileLoader::UnloadLibrary(const char* libName)
         return -1;
     }
 
-    int ret = binLoadApi.binUnload(handlerIt->handler);
+    int ret = -1;
+    BaseFile* baseFile = GetBaseFile(baseName);
+    if (LoaderManager::GetInstance()->GetInitStatus()) {
+        if (baseFile == nullptr) {
+            return -1;
+        }
+        // A FutureImpl retains the image entry before its cjthread becomes an
+        // active mutator. Close that transition first, then reject queued image
+        // entries before using the active-frame preflight for started tasks.
+        ElfUnloadQuiescence::TaskAdmissionScope taskAdmission;
+        if (taskAdmission.HasPendingForImage(baseFile->GetFileMetaAddr())) {
+            LOG(RTLOG_WARNING, "refuse to unload queued Cangjie image %s", baseName.Str());
+            return -1;
+        }
+        // Keep every managed entry stopped from the active-frame decision
+        // through the platform unmap. A mutator blocked in C2N is already in a
+        // saferegion, but its managed caller is still an active image frame and
+        // therefore makes this unload ineligible.
+        ScopedEnterSaferegion enterSaferegion(false);
+        ScopedStopTheWorld stw("ELF unload active-image preflight", false);
+        if (HasActiveImageFrames(baseFile)) {
+            LOG(RTLOG_WARNING, "refuse to unload active Cangjie image %s", baseName.Str());
+            return -1;
+        }
+        ElfUnloadQuiescence::PurgeAuthorizationScope authorization(
+            baseFile->GetFileMetaAddr(), taskAdmission);
+        ret = binLoadApi.binUnload(handlerIt->handler);
+    } else {
+        ret = binLoadApi.binUnload(handlerIt->handler);
+    }
     if (ret == 0) {
         cjLibHandlers.erase(handlerIt);
     }
     return ret;
+}
+
+bool CJFileLoader::HasActiveImageFrames(BaseFile* baseFile) const
+{
+    ElfUnloadQuiescence::ReadScope metadataReader;
+    bool active = false;
+    const Uptr imageAddress = baseFile->GetFileMetaAddr();
+    MutatorManager::Instance().VisitAllMutatorsExceptFinalizer([&](Mutator& mutator) {
+        if (active || !mutator.IsManagedContext()) {
+            return;
+        }
+        GCStackInfo stackInfo(&mutator.GetUnwindContext());
+        stackInfo.FillInStackTrace();
+        for (const FrameInfo& frame : stackInfo.GetStack()) {
+            Uptr startPC = reinterpret_cast<Uptr>(frame.GetFuncStartPC());
+            Uptr framePC = reinterpret_cast<Uptr>(frame.mFrame.GetIP());
+            if (ElfUnloadQuiescence::IsAddressInImage(startPC, imageAddress) ||
+                ElfUnloadQuiescence::IsAddressInImage(framePC, imageAddress)) {
+                active = true;
+                return;
+            }
+        }
+    });
+    return active;
 }
 
 Uptr CJFileLoader::FindSymbol(const CString libName, const CString symName) const
@@ -477,6 +741,19 @@ Uptr CJFileLoader::FindSymbol(const CString libName, const CString symName) cons
     }
     return reinterpret_cast<Uptr>(binLoadApi.findSymbol(handlerIt->handler, symName.Str()));
 }
+
+#ifdef MRT_TESTABLE_INTERNALS
+void* CJFileLoader::GetLibraryHandleForTesting(const char* libName) const
+{
+    CString baseName = Os::Path::GetBaseName(libName);
+    std::lock_guard<std::mutex> lock(libCjsoHandlersMutex);
+    auto handlerIt =
+        std::find_if(cjLibHandlers.begin(), cjLibHandlers.end(), [&baseName](const LibNameToHandler& info) {
+            return baseName == Os::Path::GetBaseName(info.baseName.Str());
+        });
+    return handlerIt == cjLibHandlers.end() ? nullptr : handlerIt->handler;
+}
+#endif
 
 bool CJFileLoader::DoInitImage(BaseFile* baseFile) const
 {
@@ -562,6 +839,7 @@ void CJFileLoader::TryThrowException(Uptr fileMetaAddr)
 
 U32 CJFileLoader::GetNumOfInterface(TypeInfo* ti)
 {
+    ElfUnloadQuiescence::ReadScope reader;
     std::vector<TypeInfo*> itfs;
     ti->GetInterfaces(itfs);
     return itfs.size();
@@ -569,6 +847,7 @@ U32 CJFileLoader::GetNumOfInterface(TypeInfo* ti)
 
 TypeInfo* CJFileLoader::GetInterface(TypeInfo* ti, U32 idx)
 {
+    ElfUnloadQuiescence::ReadScope reader;
     std::vector<TypeInfo*> itfs;
     ti->GetInterfaces(itfs);
     if (idx >= itfs.size()) {
@@ -579,7 +858,18 @@ TypeInfo* CJFileLoader::GetInterface(TypeInfo* ti, U32 idx)
 
 TypeExt* CJFileLoader::GetTypeExt(void* type)
 {
+    ElfUnloadQuiescence::ReadScope reader;
+    std::lock_guard<std::recursive_mutex> catalogLock(catalogMutex);
     auto it = typeExts.find(type);
     return it == typeExts.end() ? nullptr : it->second;
 }
+
+#ifdef MRT_TESTABLE_INTERNALS
+size_t CJFileLoader::GetPackageIndexSizeForTesting() const
+{
+    ElfUnloadQuiescence::ReadScope reader;
+    std::lock_guard<std::recursive_mutex> catalogLock(catalogMutex);
+    return filePackageMap.size();
+}
+#endif
 } // namespace MapleRuntime

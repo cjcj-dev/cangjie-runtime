@@ -1,0 +1,12 @@
+diff --git a/runtime/src/Loader/CjFileLoader/CjFileLoader.cpp b/runtime/src/Loader/CjFileLoader/CjFileLoader.cpp
+--- a/runtime/src/Loader/CjFileLoader/CjFileLoader.cpp
++++ b/runtime/src/Loader/CjFileLoader/CjFileLoader.cpp
+@@ -595,8 +595,6 @@ void CJFileLoader::ClearLoadedFiles()
+         }
+         Uptr imageAddress = file->GetFileMetaAddr();
+         shutdownAdmission.WaitUntilNoPendingForImage(imageAddress);
+-        ElfUnloadQuiescence::PurgeAuthorizationScope authorization(
+-            imageAddress, shutdownAdmission);
+         RemoveLoadedFiles(file);
+     }
+ }

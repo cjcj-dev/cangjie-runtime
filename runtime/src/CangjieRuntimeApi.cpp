@@ -26,6 +26,7 @@
 #include "RuntimeConfig.h"
 #include "UnwindStack/MangleNameHelper.h"
 #include "Loader/CjFileLoader/CjFileLoader.h"
+#include "Loader/ElfUnloadQuiescence.h"
 #include "LoaderManager.h"
 #include "Interpreter/InterpreterSpecific.h"
 #include "Interpreter/RuntimeAPI.h"
@@ -397,6 +398,7 @@ enum FutureFlag : uint8_t {
 
 struct FutureImpl {
     const CJTaskFunc fn;
+    MapleRuntime::ElfUnloadQuiescence::PendingTask pendingTask;
     void* arg;
     void* res{ nullptr };
     FutureFlag flag{ FLAG_WAITING };
@@ -404,7 +406,10 @@ struct FutureImpl {
     std::condition_variable cv;
     bool autoRelease{ false };
 
-    explicit FutureImpl(void* arg, const CJTaskFunc fn = nullptr) : fn(fn), arg(arg) {}
+    explicit FutureImpl(void* arg, const CJTaskFunc fn = nullptr)
+        : fn(fn), pendingTask(reinterpret_cast<MapleRuntime::Uptr>(fn)), arg(arg)
+    {
+    }
 };
 
 static void* UserFuncExecutor(void* arg, [[maybe_unused]] unsigned int len)
@@ -417,6 +422,9 @@ static void* UserFuncExecutor(void* arg, [[maybe_unused]] unsigned int len)
     MapleRuntime::MRT_PreRunManagedCode(mutator, 0, reinterpret_cast<MapleRuntime::ThreadLocalData*>(threadData));
     void* ptr = MapleRuntime::ExecuteCangjieStub(fi->arg, 0, 0, reinterpret_cast<void*>(fi->fn),
                                                  reinterpret_cast<void*>(threadData), 0);
+    {
+        MapleRuntime::ElfUnloadQuiescence::PendingTask::CompletionScope taskComplete(fi->pendingTask);
+    }
 #ifdef CANGJIE_TSAN_SUPPORT
     MapleRuntime::Sanitizer::TsanFinalize();
 #endif
@@ -511,6 +519,9 @@ CJThreadHandle RunCJTaskImpl(const CJTaskFunc func, void* args, int num = 0, CJT
 #endif
         if (CJThreadAttrSpecificSet(&attr, num, data) != 0) {
             LOG(RTLOG_ERROR, "failed to set cjthread specific, please check your input num.\n");
+            std::lock_guard<std::mutex> lck(g_mtx);
+            futureSet.erase(reinterpret_cast<uintptr_t>(fi));
+            delete fi;
             return nullptr;
         }
     }
@@ -562,6 +573,9 @@ static void* UserFuncWrapper(void* arg)
     MapleRuntime::MRT_PreRunManagedCode(mutator, 0, reinterpret_cast<MapleRuntime::ThreadLocalData*>(threadData));
     void* ptr = MapleRuntime::ExecuteCangjieStub(fi->arg, 0, 0, reinterpret_cast<void*>(fi->fn),
                                                  reinterpret_cast<void*>(threadData), 0);
+    {
+        MapleRuntime::ElfUnloadQuiescence::PendingTask::CompletionScope taskComplete(fi->pendingTask);
+    }
 
     MapleRuntime::ExceptionManager::CheckAndDumpException();
     MapleRuntime::Runtime::Current().GetMutatorManager().TransitMutatorToExit();
@@ -590,12 +604,14 @@ SemiCJThreadHandle CreateCJThread(const CJTaskFunc func, void *arg, struct CJThr
     CJThreadAttrInit(&attr);
     if (data != nullptr && CJThreadAttrSpecificSet(&attr, num, (CJThreadSpecificDataInner*)data) != 0) {
         LOG(RTLOG_ERROR, "failed to set CJThreadSpecificData, check in-arg num.\n");
+        delete fi;
         return nullptr;
     }
 
     CJThreadHandle handle = CJ_CJThreadCreate((const struct CJThreadAttr*)(&attr), UserFuncWrapper, fi);
     if (handle == nullptr) {
         LOG(RTLOG_ERROR, "failed to create cjthread.\n");
+        delete fi;
         return nullptr;
     }
     return handle;

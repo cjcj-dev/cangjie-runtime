@@ -38,6 +38,7 @@ run_mutator_lock_liveness_probe.sh        manual     source-text structural chec
 run_epoch_handshake_protocol_probe.sh     manual     g++ only + cpuset; old/new PROTOCOL_FIXED arms
 run_threadlocal_init_race_probe.sh        manual     g++ -fsanitize=thread + cpuset
 run_typeinfo_reuse_probe.sh               manual     built runtime SO; dlopen/dlclose address-reuse positive/negative arms plus measured registeredTypeInfos RSS
+run_elf_unload_quiescence.sh              manual     testable product runtime SO + Cangjie SDK; real dylib unload reader/directory/type/static-root groups and public PackageInfo snapshot traversal
 run_zgc_self_heal_loop_probe.sh           manual     built runtime SO; scripts a lost CAS to drive the ported ZBarrier::self_heal loop through its :103-107 retry and :98-101 fast-path-exit arms, which the workload leaves cold
 run_string_dedup_product.sh               manual     rebuilt std.core module + product SO + runtime SO; full/range, detach, unequal, and 32-way concurrent request arms
 
@@ -50,6 +51,34 @@ epoch_handshake_protocol_harness.cpp      manual     harness for run_epoch_hands
 threadlocal_init_race_harness.cpp         manual     harness for run_threadlocal_init_race_probe.sh
 typeinfo_reuse_harness.cpp                manual     harness for run_typeinfo_reuse_probe.sh
 typeinfo_reuse_plugin.cpp                 manual     pair of dlopen/dlclose images for TypeInfo virtual-address reuse
+elf_unload_quiescence_harness.cpp         manual     real product SO unload-chain group assertions and deterministic held-reader rendezvous
+elf_unload_quiescence_plugin.cj            manual     Cangjie dylib with package/type/function descriptor/static root unload surfaces
+package_snapshot_public.cj                 manual     SDK public PackageInfo.load/subPackages/getSubPackage traversal over snapshot handles
+package_snapshot_late_load_public.cj       manual     SDK public PackageInfo late-load publication, concurrent/reverse descendants, atomic getter states, and post-unload stable handles
+package_snapshot_root.cj                   manual     root package for prefix-equivalent snapshot enumeration
+package_snapshot_branch.cj                 manual     intermediate package whose snapshot must expose its own descendants
+package_snapshot_leaf_r.cj                 manual     first leaf under the snapshot branch
+package_snapshot_leaf_t.cj                 manual     sibling leaf under the snapshot branch
+package_snapshot_sibling.cj                manual     leaf sibling of the snapshot branch
+package_snapshot_subpackages_negative.patch manual    product fault injection: disconnect snapshot subpackages from the native getter
+package_snapshot_late_load_negative.patch manual     product fault injection: disconnect incremental descendant publication while preserving initially complete snapshot graphs
+elf_unload_queue_blocker.cj                manual     second-image Cangjie task occupies the sole processor so target-image entry remains queued
+elf_unload_gc_entry.cj                     manual     MRT_CjRuntimeInit path with deterministic managed roots for the real GC stack entry
+elf_unload_skip_handshake_negative.patch  manual     product fault injection: omit shared reader drain; GcEntryReader and ReaderUse must fail
+elf_unload_remove_package_negative.patch  manual     product fault injection: retain package directory entries; only Directory must fail
+elf_unload_gc_entry_negative.patch        manual     product fault injection: disconnect the real GC stack-root entry; only GcEntryReader must fail
+elf_unload_active_frame_negative.patch    manual     product fault injection: bypass active-image rejection; only NativeFrameReject must fail
+elf_unload_queued_task_negative.patch     manual     product fault injection: bypass queued image-entry rejection; only QueuedTaskReject must fail
+elf_unload_direct_order_negative.patch    manual     product fault injection: put purge before direct-callback handshake; all four direct modes must fail at their common convergence
+elf_unload_direct_active_negative.patch   manual     product fault injection: omit direct callback active-frame decision; only DirectActiveProtection mode must fail
+elf_unload_direct_queued_negative.patch   manual     product fault injection: omit direct callback pending-task wait; only DirectQueuedProtection must fail
+elf_unload_world_stopped_negative.patch   manual     product fault injection: accept unrelated STW as purge authorization; only DirectUnrelatedStw mode must fail
+elf_unload_early_return_negative.patch    manual     product fault injection: report missing unload handler as success; only EarlyReturnNoPurge must fail
+elf_unload_remove_roots_negative.patch    manual     product fault injection: retain static-root registration; only StaticRoots must fail
+elf_unload_remove_type_negative.patch     manual     product fault injection: retain type-index entries; only TypeIndex must fail
+elf_unload_unlink_image_negative.patch    manual     product fault injection: retain linked-image identity; only ReaderUse must fail
+elf_unload_shutdown_authorization_negative.patch manual product fault injection: disconnect shutdown purge authorization; only the finalizer-trigger shutdown entry must fail
+elf_unload_compatible_preinit_negative.patch manual product fault injection: bypass the shared compatible-package early return; every LoadCJLibraryWithInit mode fails while plain direct modes stay green
 zgc_self_heal_loop_unit.cpp               manual     harness for run_zgc_self_heal_loop_probe.sh
 string_dedup_product.cj                   manual     product String.deduplicated() backing-identity witness via unsafe rawData mutation
 string_dedup_product_cut.diff             manual     product fault injection: disconnect String.deduplicated() from canonicalizeString and rebuild std.core SO

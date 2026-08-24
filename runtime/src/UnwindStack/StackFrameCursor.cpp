@@ -7,6 +7,7 @@
 #include "UnwindStack/StackFrameCursor.h"
 
 #include "Collector/TracingCollector.h"
+#include "Loader/ElfUnloadQuiescence.h"
 
 namespace MapleRuntime {
 
@@ -17,6 +18,7 @@ public:
     explicit CursorFillStackInfo(const UnwindContext* context) : StackInfo(context) {}
     void FillInStackTrace() override
     {
+        ElfUnloadQuiescence::ReadScope metadataReader;
         UnwindContext uwContext;
         CheckTopUnwindContextAndInit(uwContext);
         while (!uwContext.frameInfo.mFrame.IsAnchorFrame(anchorFA)) {

@@ -12,6 +12,7 @@
 #include "Common/StackType.h"
 #include "ExceptionManager.inline.h"
 #include "Mutator/Mutator.h"
+#include "Loader/ElfUnloadQuiescence.h"
 #include "ObjectManager.inline.h"
 #include "UnwindStack/EhStackInfo.h"
 #include "UnwindStack/GcStackInfo.h"
@@ -118,6 +119,7 @@ void StackManager::PrintSignalStackTrace(UnwindContext* uwContext, uintptr_t pc,
 
 void StackManager::PrintStackTraceForCpuProfile(UnwindContext* unContext, unsigned long long int cjThreadId)
 {
+    ElfUnloadQuiescence::ReadScope metadataReader;
     PrintStackInfo printStackInfo(unContext);
     printStackInfo.FillInStackTrace();
     auto stacks = printStackInfo.GetStack();
@@ -162,8 +164,13 @@ void StackManager::GetStackTraceByLiteFrameInfo(const uint64_t ip, const uint64_
 
 void StackManager::VisitStackRoots(const UnwindContext& topFrame, const RootVisitor& func, Mutator& mutator)
 {
+    ElfUnloadQuiescence::ReadScope metadataReader(ElfUnloadQuiescence::ReaderKind::GC_STACK_ENTRY);
     GCStackInfo gcStackInfo(&topFrame);
     gcStackInfo.FillInStackTrace();
+#ifdef MRT_TESTABLE_INTERNALS
+    ElfUnloadQuiescence::PauseGcReaderForTesting();
+#endif
+    ElfUnloadQuiescence::AssertReaderActive();
     gcStackInfo.VisitStackRoots(func, mutator);
 }
 
@@ -176,8 +183,10 @@ void StackManager::VisitHeapReferencesOnStack(const UnwindContext& topFrame, con
 void StackManager::VisitHeapReferencesOnStack(const UnwindContext& topFrame, const RootVisitor& regRootVisitor,
     const RootVisitor& slotRootVisitor, const DerivedPtrVisitor& derivedPtrVisitor, Mutator& mutator)
 {
+    ElfUnloadQuiescence::ReadScope metadataReader(ElfUnloadQuiescence::ReaderKind::GC_STACK_ENTRY);
     GCStackInfo gcStackInfo(&topFrame);
     gcStackInfo.FillInStackTrace();
+    ElfUnloadQuiescence::AssertReaderActive();
     gcStackInfo.VisitHeapReferencesOnStack(regRootVisitor, slotRootVisitor, derivedPtrVisitor, mutator);
 }
 
@@ -185,9 +194,11 @@ void StackManager::VisitStackPtrMap(const UnwindContext& topFrame, const StackPt
                                     const StackPtrVisitor& fixPtrVisitor, const DerivedPtrVisitor& derivedPtrVisitor,
                                     Mutator& mutator)
 {
+    ElfUnloadQuiescence::ReadScope metadataReader(ElfUnloadQuiescence::ReaderKind::GC_STACK_ENTRY);
     // Reuse gcStackInfo for stack unwind.
     StackGrowStackInfo stackInfo(&topFrame);
     stackInfo.FillInStackTrace();
+    ElfUnloadQuiescence::AssertReaderActive();
     stackInfo.RecordStackPtrs(traceAndFixPtrVisitor, fixPtrVisitor, derivedPtrVisitor, mutator);
 }
 

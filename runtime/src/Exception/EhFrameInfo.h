@@ -12,6 +12,7 @@
 #include "CalleeSavedRegisterContext.h"
 #include "Common/TypeDef.h"
 #include "EhTable.h"
+#include "Loader/ElfUnloadQuiescence.h"
 #include "ObjectModel/MFuncdesc.inline.h"
 #include "StackMap/StackMapTable.h"
 
@@ -81,6 +82,7 @@ public:
 
     void RestoreToCallerContext(CalleeSavedRegisterContext& context, uint32_t adjustedSize = 0) const override
     {
+        ElfUnloadQuiescence::ReadScope metadataReader;
         constexpr uint8_t sizeOfAddr = sizeof(void*);       // arm32 is 4, aarch64 is 8
         constexpr uint8_t sizeOfStackHead = sizeOfAddr * 2; // callee rbp + return addr
 #if defined(__x86_64__)

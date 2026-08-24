@@ -10,6 +10,7 @@
 #include "Common/Dataref.h"
 #include "Common/StackType.h"
 #include "Common/TypeDef.h"
+#include "Loader/ElfUnloadQuiescence.h"
 #include "ObjectModel/MFuncdesc.inline.h"
 #include "StackMap/DerivedPtr.h"
 #include "StackMap/SlotRoot.h"
@@ -132,6 +133,7 @@ public:
     static CompressedStackMapHead GetStackMapHead(Uptr addr, const PrologueVisitor& visitor,
                                                   uint64_t* funcDesc = nullptr)
     {
+        ElfUnloadQuiescence::ReadScope metadataReader;
         U8 *stackmapStart = nullptr;
         if (funcDesc)
             stackmapStart = reinterpret_cast<U8*>(reinterpret_cast<FuncDescRef>(funcDesc)->GetStackMap());

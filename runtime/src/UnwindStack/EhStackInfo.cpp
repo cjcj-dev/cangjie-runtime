@@ -10,10 +10,12 @@
 
 #include "Common/StackType.h"
 #include "Interpreter/Options.h"
+#include "Loader/ElfUnloadQuiescence.h"
 
 namespace MapleRuntime {
 void EHStackInfo::FillInStackTrace()
 {
+    ElfUnloadQuiescence::ReadScope metadataReader;
     UnwindContext uwContext;
     // Top unwind context can only be runtime or Cangjie context.
     CheckTopUnwindContextAndInit(uwContext);

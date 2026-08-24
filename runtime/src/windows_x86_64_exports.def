@@ -1272,7 +1272,7 @@ EXPORTS
     _ZN12MapleRuntime12CJFileLoader17TryThrowExceptionEy @1268
     _ZN12MapleRuntime12CJFileLoader18UnregisterLoadFileEy @1269
     _ZN12MapleRuntime12CJFileLoader19FileHasMultiPackageEPKc @1270
-    _ZN12MapleRuntime12CJFileLoader20GetPackageInfoByPathEPKc @1271
+    _ZN12MapleRuntime12CJFileLoader22VisitPackageInfoByPathEPKcRKNSt3__18functionIFvPNS_11PackageInfoEEEE @1271
     _ZN12MapleRuntime12CJFileLoader21CreateFileRefFromAddrEy @1272
     _ZN12MapleRuntime12CJFileLoader21GetBaseFileByMetaAddrEy @1273
     _ZN12MapleRuntime12CJFileLoader25CheckPackageCompatibilityEPNS_8BaseFileE @1274
@@ -1385,7 +1385,7 @@ EXPORTS
     _ZN12MapleRuntime13LoaderManager19FileHasMultiPackageEPKc @1385
     _ZN12MapleRuntime13LoaderManager19LoadPreLoadedImagesEv @1386
     _ZN12MapleRuntime13LoaderManager20GetPackageInfoByNameEPKc @1387
-    _ZN12MapleRuntime13LoaderManager20GetPackageInfoByPathEPKc @1388
+    _ZN12MapleRuntime13LoaderManager22VisitPackageInfoByPathEPKcRKNSt3__18functionIFvPNS_11PackageInfoEEEE @1388
     _ZN12MapleRuntime13LoaderManager20PreInitializePackageEy @1389
     _ZN12MapleRuntime13LoaderManager25AddPreLoadedImageMetaAddrEy @1390
     _ZN12MapleRuntime13LoaderManager25CheckPackageCompatibilityEy @1391

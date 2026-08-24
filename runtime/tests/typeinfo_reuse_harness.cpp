@@ -38,14 +38,15 @@ public:
     {
     }
 
-    void RegisterFile() override {}
-    void UnregisterFile() override
+    ~ReuseFile() override
     {
-        if (dlclose(handle) != 0) {
+        if (handle != nullptr && dlclose(handle) != 0) {
             Fail("dlclose");
         }
-        handle = nullptr;
     }
+
+    void RegisterFile() override {}
+    void UnregisterFile() override {}
     bool IsAddrInCJFile(MapleRuntime::Uptr) const override { return false; }
     MapleRuntime::Uptr GetPackageInfoBase() override { return 0; }
     MapleRuntime::U32 GetPackageInfoTotalSize() override { return 0; }

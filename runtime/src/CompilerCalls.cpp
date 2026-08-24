@@ -36,6 +36,7 @@
 #include "Heap/Heap.h"
 #include "Heap/Verify/DiagGate.h"
 #include "Heap/Verify/ProbeReadRouteDiag.h"
+#include "Loader/ElfUnloadQuiescence.h"
 #include "Mutator/Mutator.h"
 #include "HeapManager.inline.h"
 #include "LoaderManager.h"
@@ -46,6 +47,11 @@
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
+#include <memory>
+#include <mutex>
+#include <string>
+#include <unordered_map>
+#include <vector>
 #ifdef _WIN64
 #include "Mutator/MutatorManager.h"
 #include "Mutator/ThreadLocal.h"
@@ -1275,6 +1281,169 @@ enum LoadPackageStatus {
     LOAD_FILENAME_REPEATED = 3
 };
 
+namespace {
+struct PackageInfoSnapshot {
+    std::string packageName;
+    std::string version;
+    std::vector<TypeInfo*> typeInfos;
+    std::vector<MethodInfo*> globalMethods;
+    std::vector<StaticFieldInfo*> globalFields;
+    PackageInfo* related { nullptr };
+    std::vector<PackageInfo*> subPackages;
+};
+
+std::mutex& PackageInfoSnapshotMutex()
+{
+    static std::mutex mutex;
+    return mutex;
+}
+
+std::unordered_map<PackageInfo*, std::unique_ptr<PackageInfoSnapshot>>& PackageInfoSnapshots()
+{
+    static std::unordered_map<PackageInfo*, std::unique_ptr<PackageInfoSnapshot>> snapshots;
+    return snapshots;
+}
+
+PackageInfoSnapshot* FindPackageInfoSnapshot(PackageInfo* packageInfo)
+{
+    std::lock_guard<std::mutex> lock(PackageInfoSnapshotMutex());
+    auto& snapshots = PackageInfoSnapshots();
+    auto it = snapshots.find(packageInfo);
+    return it == snapshots.end() ? nullptr : it->second.get();
+}
+
+bool CopyPackageInfoSnapshotSubPackages(PackageInfo* packageInfo, std::vector<PackageInfo*>& subPackages)
+{
+    std::lock_guard<std::mutex> lock(PackageInfoSnapshotMutex());
+    auto& snapshots = PackageInfoSnapshots();
+    auto it = snapshots.find(packageInfo);
+    if (it == snapshots.end()) {
+        return false;
+    }
+    subPackages = it->second->subPackages;
+    return true;
+}
+
+bool IsStrictPackageAncestor(const std::string& ancestor, const std::string& descendant)
+{
+    return descendant.size() > ancestor.size() && descendant.compare(0, ancestor.size(), ancestor) == 0 &&
+        descendant[ancestor.size()] == '.';
+}
+
+void AppendSnapshotDescendant(std::unordered_map<PackageInfo*, std::unique_ptr<PackageInfoSnapshot>>& snapshots,
+                              PackageInfoSnapshot& ancestor, PackageInfo* descendantHandle)
+{
+    auto descendant = snapshots.find(descendantHandle);
+    if (descendant == snapshots.end()) {
+        return;
+    }
+    const std::string& descendantName = descendant->second->packageName;
+    for (PackageInfo* currentHandle : ancestor.subPackages) {
+        auto current = snapshots.find(currentHandle);
+        if (current != snapshots.end() && current->second->packageName == descendantName) {
+            return;
+        }
+    }
+    ancestor.subPackages.push_back(descendantHandle);
+}
+
+void ReconcilePublishedSubPackages(
+    std::unordered_map<PackageInfo*, std::unique_ptr<PackageInfoSnapshot>>& snapshots,
+    const std::vector<PackageInfo*>& publishedHandles)
+{
+    // Package discovery and snapshot construction happen under the loader reader/catalog
+    // protocol before this function is entered.  Reconcile only immutable snapshot names
+    // while holding the snapshot mutex, so this publication never calls back into the loader.
+    for (PackageInfo* publishedHandle : publishedHandles) {
+        auto published = snapshots.find(publishedHandle);
+        if (published == snapshots.end()) {
+            continue;
+        }
+        PackageInfoSnapshot& publishedSnapshot = *published->second;
+        for (auto& entry : snapshots) {
+            PackageInfo* existingHandle = entry.first;
+            PackageInfoSnapshot& existingSnapshot = *entry.second;
+            if (existingHandle == publishedHandle) {
+                continue;
+            }
+            if (IsStrictPackageAncestor(existingSnapshot.packageName, publishedSnapshot.packageName)) {
+                AppendSnapshotDescendant(snapshots, existingSnapshot, publishedHandle);
+            }
+            if (IsStrictPackageAncestor(publishedSnapshot.packageName, existingSnapshot.packageName)) {
+                AppendSnapshotDescendant(snapshots, publishedSnapshot, existingHandle);
+            }
+        }
+    }
+}
+
+class PackageInfoSnapshotBuilder final {
+public:
+    PackageInfo* Build(PackageInfo* source)
+    {
+        PackageInfo* root = BuildOne(source);
+        if (root == nullptr) {
+            return nullptr;
+        }
+        std::lock_guard<std::mutex> lock(PackageInfoSnapshotMutex());
+        auto& snapshots = PackageInfoSnapshots();
+        std::vector<PackageInfo*> publishedHandles;
+        publishedHandles.reserve(pending.size());
+        for (auto& entry : pending) {
+            PackageInfo* handle = reinterpret_cast<PackageInfo*>(entry.get());
+            publishedHandles.push_back(handle);
+            snapshots.emplace(handle, std::move(entry));
+        }
+        ReconcilePublishedSubPackages(snapshots, publishedHandles);
+        return root;
+    }
+
+private:
+    PackageInfo* BuildOne(PackageInfo* source)
+    {
+        if (source == nullptr) {
+            return nullptr;
+        }
+        auto found = handles.find(source);
+        if (found != handles.end()) {
+            return found->second;
+        }
+        auto snapshot = std::make_unique<PackageInfoSnapshot>();
+        PackageInfo* handle = reinterpret_cast<PackageInfo*>(snapshot.get());
+        handles.emplace(source, handle);
+        PackageInfoSnapshot* value = snapshot.get();
+        pending.push_back(std::move(snapshot));
+
+        const char* packageName = source->GetPackageName();
+        const char* version = source->GetVersion();
+        value->packageName = packageName == nullptr ? "" : packageName;
+        value->version = version == nullptr ? "" : version;
+        value->typeInfos.reserve(source->GetNumOfTypeInfos());
+        for (U32 i = 0; i < source->GetNumOfTypeInfos(); ++i) {
+            value->typeInfos.push_back(source->GetTypeInfo(i));
+        }
+        value->globalMethods.reserve(source->GetNumOfGlobalMethodInfos());
+        for (U32 i = 0; i < source->GetNumOfGlobalMethodInfos(); ++i) {
+            value->globalMethods.push_back(source->GetGlobalMethodInfo(i));
+        }
+        value->globalFields.reserve(source->GetNumOfGlobalFieldInfos());
+        for (U32 i = 0; i < source->GetNumOfGlobalFieldInfos(); ++i) {
+            value->globalFields.push_back(source->GetGlobalFieldInfo(i));
+        }
+        value->related = BuildOne(source->GetRelatedPackageInfo());
+        std::vector<PackageInfo*> subPackages;
+        LoaderManager::GetInstance()->GetSubPackages(source, subPackages);
+        value->subPackages.reserve(subPackages.size());
+        for (PackageInfo* subPackage : subPackages) {
+            value->subPackages.push_back(BuildOne(subPackage));
+        }
+        return handle;
+    }
+
+    std::unordered_map<PackageInfo*, PackageInfo*> handles;
+    std::vector<std::unique_ptr<PackageInfoSnapshot>> pending;
+};
+} // namespace
+
 extern "C" void* MCC_LoadPackage(const char* path)
 {
     if (path == nullptr || *path == '\0') {
@@ -1287,7 +1456,7 @@ extern "C" void* MCC_LoadPackage(const char* path)
     if (LoadCJLibrary(path) != E_OK) {
         return reinterpret_cast<void*>(LOAD_FAIL);
     }
-    if (loaderMgr->GetPackageInfoByPath(path) == nullptr) {
+    if (!loaderMgr->VisitPackageInfoByPath(path, [](PackageInfo*) {})) {
         loaderMgr->RemovePackageInfo(path);
         return reinterpret_cast<void*>(LOAD_PACKAGE_REPEATED);
     }
@@ -1298,7 +1467,14 @@ extern "C" void* MCC_LoadPackage(const char* path)
     if (InitCJLibrary(path) != E_OK) {
         return reinterpret_cast<void*>(LOAD_FAIL);
     }
-    return loaderMgr->GetPackageInfoByPath(path);
+    PackageInfo* snapshot = nullptr;
+    bool found = loaderMgr->VisitPackageInfoByPath(path, [&snapshot](PackageInfo* packageInfo) {
+#ifdef MRT_TESTABLE_INTERNALS
+        ElfUnloadQuiescence::PausePackageReaderForTesting();
+#endif
+        snapshot = PackageInfoSnapshotBuilder().Build(packageInfo);
+    });
+    return found && snapshot != nullptr ? static_cast<void*>(snapshot) : reinterpret_cast<void*>(LOAD_FAIL);
 }
 
 extern "C" PackageInfo* MCC_GetPackageByQualifiedName(const char* packageName)
@@ -1311,13 +1487,19 @@ extern "C" PackageInfo* MCC_GetPackageByQualifiedName(const char* packageName)
 
 extern "C" const char* MCC_GetPackageVersion(PackageInfo* packageInfo)
 {
+    PackageInfoSnapshot* snapshot = FindPackageInfoSnapshot(packageInfo);
+    if (snapshot != nullptr) {
+        return snapshot->version.c_str();
+    }
     return packageInfo->GetVersion();
 }
 
 extern "C" ObjectPtr MCC_GetSubPackages(PackageInfo* packageInfo, TypeInfo* arrayTi)
 {
     std::vector<PackageInfo*> subPackages = {};
-    LoaderManager::GetInstance()->GetSubPackages(packageInfo, subPackages);
+    if (!CopyPackageInfoSnapshotSubPackages(packageInfo, subPackages)) {
+        LoaderManager::GetInstance()->GetSubPackages(packageInfo, subPackages);
+    }
     size_t subPkgCnt = subPackages.size();
     // Array<CPointer<Unit>> layout likes { Rarray<CPointer<Unit>>, Int64, Int64 }
     TypeInfo* rawArrayTi = arrayTi->GetFieldType(0); // 0: first field type RawArray<CPointer<Unit>>.ti
@@ -1342,37 +1524,75 @@ extern "C" ObjectPtr MCC_GetSubPackages(PackageInfo* packageInfo, TypeInfo* arra
 }
 
 // for package
-extern "C" const char* MCC_GetPackageName(PackageInfo* packageInfo) { return packageInfo->GetPackageName(); }
+extern "C" const char* MCC_GetPackageName(PackageInfo* packageInfo)
+{
+    PackageInfoSnapshot* snapshot = FindPackageInfoSnapshot(packageInfo);
+    if (snapshot != nullptr) {
+        return snapshot->packageName.c_str();
+    }
+    return packageInfo->GetPackageName();
+}
 
 extern "C" PackageInfo* MCC_GetRelatedPackageInfo(PackageInfo* packageInfo)
 {
+    PackageInfoSnapshot* snapshot = FindPackageInfoSnapshot(packageInfo);
+    if (snapshot != nullptr) {
+        return snapshot->related;
+    }
     return packageInfo->GetRelatedPackageInfo(); // todo
 }
 
-extern "C" U32 MCC_GetNumOfTypeInfos(PackageInfo* packageInfo) { return packageInfo->GetNumOfTypeInfos(); }
+extern "C" U32 MCC_GetNumOfTypeInfos(PackageInfo* packageInfo)
+{
+    PackageInfoSnapshot* snapshot = FindPackageInfoSnapshot(packageInfo);
+    if (snapshot != nullptr) {
+        return static_cast<U32>(snapshot->typeInfos.size());
+    }
+    return packageInfo->GetNumOfTypeInfos();
+}
 
 extern "C" TypeInfo* MCC_GetPackageTypeInfo(PackageInfo* packageInfo, U32 index)
 {
+    PackageInfoSnapshot* snapshot = FindPackageInfoSnapshot(packageInfo);
+    if (snapshot != nullptr) {
+        return index < snapshot->typeInfos.size() ? snapshot->typeInfos[index] : nullptr;
+    }
     return packageInfo->GetTypeInfo(index);
 }
 
 extern "C" U32 MCC_GetPackageNumOfGlobalMethodInfos(PackageInfo* packageInfo)
 {
+    PackageInfoSnapshot* snapshot = FindPackageInfoSnapshot(packageInfo);
+    if (snapshot != nullptr) {
+        return static_cast<U32>(snapshot->globalMethods.size());
+    }
     return packageInfo->GetNumOfGlobalMethodInfos();
 }
 
 extern "C" MethodInfo* MCC_GetPackageGlobalMethodInfo(PackageInfo* packageInfo, U32 index)
 {
+    PackageInfoSnapshot* snapshot = FindPackageInfoSnapshot(packageInfo);
+    if (snapshot != nullptr) {
+        return index < snapshot->globalMethods.size() ? snapshot->globalMethods[index] : nullptr;
+    }
     return packageInfo->GetGlobalMethodInfo(index);
 }
 
 extern "C" U32 MCC_GetPackageNumOfGlobalFieldInfos(PackageInfo* packageInfo)
 {
+    PackageInfoSnapshot* snapshot = FindPackageInfoSnapshot(packageInfo);
+    if (snapshot != nullptr) {
+        return static_cast<U32>(snapshot->globalFields.size());
+    }
     return packageInfo->GetNumOfGlobalFieldInfos();
 }
 
 extern "C" StaticFieldInfo* MCC_GetPackageGlobalFieldInfo(PackageInfo* packageInfo, U32 index)
 {
+    PackageInfoSnapshot* snapshot = FindPackageInfoSnapshot(packageInfo);
+    if (snapshot != nullptr) {
+        return index < snapshot->globalFields.size() ? snapshot->globalFields[index] : nullptr;
+    }
     return packageInfo->GetGlobalFieldInfo(index);
 }
 
