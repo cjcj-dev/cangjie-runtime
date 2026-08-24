@@ -1312,6 +1312,70 @@ PackageInfoSnapshot* FindPackageInfoSnapshot(PackageInfo* packageInfo)
     return it == snapshots.end() ? nullptr : it->second.get();
 }
 
+bool CopyPackageInfoSnapshotSubPackages(PackageInfo* packageInfo, std::vector<PackageInfo*>& subPackages)
+{
+    std::lock_guard<std::mutex> lock(PackageInfoSnapshotMutex());
+    auto& snapshots = PackageInfoSnapshots();
+    auto it = snapshots.find(packageInfo);
+    if (it == snapshots.end()) {
+        return false;
+    }
+    subPackages = it->second->subPackages;
+    return true;
+}
+
+bool IsStrictPackageAncestor(const std::string& ancestor, const std::string& descendant)
+{
+    return descendant.size() > ancestor.size() && descendant.compare(0, ancestor.size(), ancestor) == 0 &&
+        descendant[ancestor.size()] == '.';
+}
+
+void AppendSnapshotDescendant(std::unordered_map<PackageInfo*, std::unique_ptr<PackageInfoSnapshot>>& snapshots,
+                              PackageInfoSnapshot& ancestor, PackageInfo* descendantHandle)
+{
+    auto descendant = snapshots.find(descendantHandle);
+    if (descendant == snapshots.end()) {
+        return;
+    }
+    const std::string& descendantName = descendant->second->packageName;
+    for (PackageInfo* currentHandle : ancestor.subPackages) {
+        auto current = snapshots.find(currentHandle);
+        if (current != snapshots.end() && current->second->packageName == descendantName) {
+            return;
+        }
+    }
+    ancestor.subPackages.push_back(descendantHandle);
+}
+
+void ReconcilePublishedSubPackages(
+    std::unordered_map<PackageInfo*, std::unique_ptr<PackageInfoSnapshot>>& snapshots,
+    const std::vector<PackageInfo*>& publishedHandles)
+{
+    // Package discovery and snapshot construction happen under the loader reader/catalog
+    // protocol before this function is entered.  Reconcile only immutable snapshot names
+    // while holding the snapshot mutex, so this publication never calls back into the loader.
+    for (PackageInfo* publishedHandle : publishedHandles) {
+        auto published = snapshots.find(publishedHandle);
+        if (published == snapshots.end()) {
+            continue;
+        }
+        PackageInfoSnapshot& publishedSnapshot = *published->second;
+        for (auto& entry : snapshots) {
+            PackageInfo* existingHandle = entry.first;
+            PackageInfoSnapshot& existingSnapshot = *entry.second;
+            if (existingHandle == publishedHandle) {
+                continue;
+            }
+            if (IsStrictPackageAncestor(existingSnapshot.packageName, publishedSnapshot.packageName)) {
+                AppendSnapshotDescendant(snapshots, existingSnapshot, publishedHandle);
+            }
+            if (IsStrictPackageAncestor(publishedSnapshot.packageName, existingSnapshot.packageName)) {
+                AppendSnapshotDescendant(snapshots, publishedSnapshot, existingHandle);
+            }
+        }
+    }
+}
+
 class PackageInfoSnapshotBuilder final {
 public:
     PackageInfo* Build(PackageInfo* source)
@@ -1322,10 +1386,14 @@ public:
         }
         std::lock_guard<std::mutex> lock(PackageInfoSnapshotMutex());
         auto& snapshots = PackageInfoSnapshots();
+        std::vector<PackageInfo*> publishedHandles;
+        publishedHandles.reserve(pending.size());
         for (auto& entry : pending) {
             PackageInfo* handle = reinterpret_cast<PackageInfo*>(entry.get());
+            publishedHandles.push_back(handle);
             snapshots.emplace(handle, std::move(entry));
         }
+        ReconcilePublishedSubPackages(snapshots, publishedHandles);
         return root;
     }
 
@@ -1429,10 +1497,7 @@ extern "C" const char* MCC_GetPackageVersion(PackageInfo* packageInfo)
 extern "C" ObjectPtr MCC_GetSubPackages(PackageInfo* packageInfo, TypeInfo* arrayTi)
 {
     std::vector<PackageInfo*> subPackages = {};
-    PackageInfoSnapshot* snapshot = FindPackageInfoSnapshot(packageInfo);
-    if (snapshot != nullptr) {
-        subPackages = snapshot->subPackages;
-    } else {
+    if (!CopyPackageInfoSnapshotSubPackages(packageInfo, subPackages)) {
         LoaderManager::GetInstance()->GetSubPackages(packageInfo, subPackages);
     }
     size_t subPkgCnt = subPackages.size();

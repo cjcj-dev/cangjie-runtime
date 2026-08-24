@@ -54,12 +54,14 @@ typeinfo_reuse_plugin.cpp                 manual     pair of dlopen/dlclose imag
 elf_unload_quiescence_harness.cpp         manual     real product SO unload-chain group assertions and deterministic held-reader rendezvous
 elf_unload_quiescence_plugin.cj            manual     Cangjie dylib with package/type/function descriptor/static root unload surfaces
 package_snapshot_public.cj                 manual     SDK public PackageInfo.load/subPackages/getSubPackage traversal over snapshot handles
+package_snapshot_late_load_public.cj       manual     SDK public PackageInfo late-load publication, concurrent/reverse descendants, atomic getter states, and post-unload stable handles
 package_snapshot_root.cj                   manual     root package for prefix-equivalent snapshot enumeration
 package_snapshot_branch.cj                 manual     intermediate package whose snapshot must expose its own descendants
 package_snapshot_leaf_r.cj                 manual     first leaf under the snapshot branch
 package_snapshot_leaf_t.cj                 manual     sibling leaf under the snapshot branch
 package_snapshot_sibling.cj                manual     leaf sibling of the snapshot branch
 package_snapshot_subpackages_negative.patch manual    product fault injection: disconnect snapshot subpackages from the native getter
+package_snapshot_late_load_negative.patch manual     product fault injection: disconnect incremental descendant publication while preserving initially complete snapshot graphs
 elf_unload_queue_blocker.cj                manual     second-image Cangjie task occupies the sole processor so target-image entry remains queued
 elf_unload_gc_entry.cj                     manual     MRT_CjRuntimeInit path with deterministic managed roots for the real GC stack entry
 elf_unload_skip_handshake_negative.patch  manual     product fault injection: omit shared reader drain; GcEntryReader and ReaderUse must fail

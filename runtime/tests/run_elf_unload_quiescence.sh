@@ -38,6 +38,8 @@ build_snapshot_dylib package_snapshot_sibling.cj libsnapshot_sibling.so
 build_snapshot_dylib package_snapshot_root.cj libsnapshot_root.so
 cjEnableGC=1 CANGJIE_HOME="$CANGJIE_SDK" "$CANGJIE_SDK/bin/cjc" \
     "$SRC/package_snapshot_public.cj" -o "$OUT/package_snapshot_public"
+cjEnableGC=1 CANGJIE_HOME="$CANGJIE_SDK" "$CANGJIE_SDK/bin/cjc" \
+    "$SRC/package_snapshot_late_load_public.cj" -o "$OUT/package_snapshot_late_load_public"
 
 MARKER_SYMBOL="$(nm -D --defined-only "$OUT/libelfunloadprobe.so" | \
     awk '$3 ~ /unloadMarker/ { print $3; exit }')"
@@ -71,6 +73,8 @@ echo "BLOCKER_SYMBOL=$BLOCKER_SYMBOL"
 ldd "$OUT/elf_unload_quiescence"
 LD_LIBRARY_PATH="$RUNTIME_LIB_DIR:$CANGJIE_SDK/runtime/lib/linux_x86_64_cjnative${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}" \
     ldd "$OUT/package_snapshot_public"
+LD_LIBRARY_PATH="$RUNTIME_LIB_DIR:$CANGJIE_SDK/runtime/lib/linux_x86_64_cjnative${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}" \
+    ldd "$OUT/package_snapshot_late_load_public"
 
 set +e
 aggregate_rc=0
@@ -99,5 +103,13 @@ LD_LIBRARY_PATH="$RUNTIME_LIB_DIR:$CANGJIE_SDK/runtime/lib/linux_x86_64_cjnative
 snapshot_rc=$?
 echo "MODE=package_snapshot_public RC=$snapshot_rc"
 aggregate_rc=$((aggregate_rc | snapshot_rc))
+cjEnableGC=1 \
+LD_LIBRARY_PATH="$RUNTIME_LIB_DIR:$CANGJIE_SDK/runtime/lib/linux_x86_64_cjnative${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}" \
+    "$OUT/package_snapshot_late_load_public" \
+    "$OUT/libsnapshot_leaf_r.so" "$OUT/libsnapshot_leaf_t.so" "$OUT/libsnapshot_branch.so" \
+    "$OUT/libsnapshot_sibling.so" "$OUT/libsnapshot_root.so"
+late_snapshot_rc=$?
+echo "MODE=package_snapshot_late_load_public RC=$late_snapshot_rc"
+aggregate_rc=$((aggregate_rc | late_snapshot_rc))
 set -e
 exit "$aggregate_rc"
