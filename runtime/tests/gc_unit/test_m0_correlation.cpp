@@ -520,4 +520,19 @@ GC_TEST(M0Correlation, MissingM0RecordInvalidatesFooter)
     GC_EXPECT_FALSE(M0Correlation::FooterValidForTest());
 }
 
+GC_TEST(M0Correlation, PaintedHeaderWithoutReceiptIsInvalidEvidence)
+{
+    GcHeapFixture fx;
+    M0Correlation::ResetForTest();
+    const M0Correlation::ObjectStamp stamp = M0Correlation::CaptureStamp(fx.obj0);
+    GC_EXPECT_NE(M0Correlation::BindStampForTest(0x802, stamp), 0u);
+    fx.obj0->SetStateCode(ObjectState::FORWARDED);
+    M0ExitDiagnostics::Note(M0ExitDiagnostics::Exit::ReadBarrier, fx.obj0, nullptr, nullptr, 4);
+    const M0Correlation::TestSnapshot snapshot = M0Correlation::SnapshotForTest();
+    GC_EXPECT_EQ(snapshot.m0Seen, 1u);
+    GC_EXPECT_EQ(snapshot.m0Written, 1u);
+    GC_EXPECT_EQ(snapshot.contractErrors, 1u);
+    GC_EXPECT_FALSE(M0Correlation::FooterValidForTest());
+}
+
 #endif
