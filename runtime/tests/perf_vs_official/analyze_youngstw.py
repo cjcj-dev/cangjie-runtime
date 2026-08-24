@@ -12,12 +12,13 @@ import argparse
 import datetime as dt
 import json
 import re
+import sys
 from pathlib import Path
 from statistics import median
 
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+from gclog_schema import parse_gclog
 
-PHASE_RE = re.compile(r"rec=phase seq=1 name=([^ ]+) us=(\d+)")
-STW_RE = re.compile(r"rec=stw seq=1 reason=([^ ]+) wait_ns=(\d+) held_ns=(\d+)")
 STAMP_RE = re.compile(r"^(\d{4}-\d\d-\d\d \d\d:\d\d:\d\d\.\d+) \d+ (.*)$")
 TIMER_RE = re.compile(r"^(.+) time: ([\d,]+)us$")
 
@@ -78,9 +79,10 @@ def load_run(directory: Path) -> dict[str, object]:
     stderr = (directory / "stderr").read_text(errors="replace")
     report = one_file(directory, "report.log.").read_text(errors="replace")
     runtime = one_file(directory, "runtime.log.").read_text(errors="replace")
-    phases = {name: int(us) for name, us in PHASE_RE.findall(stderr)}
-    stw = {reason: int(held) for reason, _wait, held in STW_RE.findall(stderr)}
-    if len(STW_RE.findall(stderr)) != 4:
+    records = parse_gclog(stderr)
+    phases = {record.name: record.ns / 1000.0 for record in records.phases if record.seq == 1}
+    stw = {record.reason: record.held_ns for record in records.stw if record.seq == 1}
+    if len(records.stw) != 4:
         raise ValueError(f"{directory}: expected four STW records")
     if not all(name in phases for name in COLLECTION_PHASES):
         missing = sorted(set(COLLECTION_PHASES) - phases.keys())

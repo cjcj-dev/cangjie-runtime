@@ -2023,8 +2023,8 @@ void WCollector::EvacuateYoungRegions(const std::vector<BaseObject*>& reachableV
     if (doConcRelocate) {
         TransitionToGCPhase(GCPhase::GC_PHASE_FORWARD, true);
         {
-            MRT_PHASE_TIMER("young.concurrent_relocate");
             stw->reset();
+            MRT_PHASE_TIMER("young.concurrent_relocate");
             VLOG(REPORT, "[GCV2][relocate][conc] concurrent_relocate start nObj=%zu flip=1",
                  reachableVec.size());
             {
