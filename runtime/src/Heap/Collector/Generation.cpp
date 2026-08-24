@@ -624,6 +624,11 @@ void WCollector::DoYoungGarbageCollection()
         return v != nullptr && std::strcmp(v, "1") == 0;
     }();
     const bool youngConcFollow = youngConcFollowRequested && youngConcMark;
+    // FOLLOW cannot publish stack roots without an epoch receipt.  Reuse the
+    // existing handshake even when only the explicit epoch knob is enabled;
+    // otherwise fail closed before releasing the world.
+    const bool concurrentYoungRoots = concurrentStackScan ||
+        (youngConcFollow && MutatorManager::EpochHandshakeEnabled());
     MinorSlotSet rememberedSlots;
     {
         // minortime: ④ remset / cross-gen edge consume (drain + pinned stamp; rescan below)
@@ -649,7 +654,7 @@ void WCollector::DoYoungGarbageCollection()
     }
 
     uint64_t stackScanEpoch = 0;
-    if (concurrentStackScan) {
+    if (concurrentYoungRoots) {
         // Publish S1/S3/S5 while every mutator is stopped. SetGCPhase is the
         // release publication point; AcknowledgeEpochHandshake asserts ENUM
         // before it is allowed to snapshot a single frame.
@@ -717,7 +722,12 @@ void WCollector::DoYoungGarbageCollection()
         // normally.  Capacity does not admit or discard a slot.
         reachableSlots.reserve(rememberedSlots.size());
     }
-    {
+    // ZGC zGeneration.cpp:665-669: root production belongs to concurrent_mark.
+    // Keep one producer (the existing owner-specific VisitMinorRoots/epoch path),
+    // selecting only its phase boundary. MARK-only remains a diagnostic arm and
+    // therefore keeps the producer under its pause; MARK+FOLLOW invokes it after
+    // the world-release publication below.
+    auto produceYoungRoots = [&]() {
         // minortime: ③ root enum (alloc buffers + VisitMinorRoots)
         MRT_PHASE_TIMER("young.root_enum");
         WorkStack enumRoots = NewWorkStack();
@@ -765,22 +775,22 @@ void WCollector::DoYoungGarbageCollection()
             }
             workStack.push_back(MarkStackEntry::MarkOnly(object));
         }, stackScanEpoch);
+    };
+    if (!youngConcFollow) {
+        produceYoungRoots();
     }
     // youngconc: concurrent young mark (mutator-concurrent, not only STW-parallel).
     // Default OFF until STW2 remset/root fixpoint is checksum-clean (see REPORT-youngconc).
     // MRT_GCV2_YOUNG_CONC_MARK=1 enables; reuses major TRACE barrier + SATB (no second family).
-    // STW1 = prepare + remset drain + root enum + STW1-snapshot mark (concwin);
+    // MARK-only diagnostic arm keeps root enum/closure in STW1;
+    // MARK+FOLLOW publishes only the start state in STW1 and runs roots/follow concurrently.
     // STW2 = concurrent remset drain + re-enum + evacuate.
     // youngConcMark / youngConcFollow computed above (before remset drain).
     // portyoungconc L1 (ZGC zGeneration.cpp:550-555): mark_end() returning false leaves the
     // safepoint and runs concurrent_mark_continue() = mark_follow() before re-entering.
-    // Ours logs NON_CONVERGED and evacuates anyway. =1 arms the re-entry edge; FORCE=<n>
-    // makes the first n mark-ends report "not converged" so the edge has a positive control
-    // (a re-entry that is never taken cannot be shown to work).
-    static const bool youngMarkEndReenter = []() {
-        const char* v = std::getenv("MRT_GCV2_YOUNG_MARK_END_REENTER");
-        return v != nullptr && std::strcmp(v, "1") == 0;
-    }();
+    // A non-converged mark end must re-enter; FORCE=<n> makes the first n mark-ends report
+    // "not converged" so the edge has a positive control (a re-entry that is never taken
+    // cannot be shown to work).
     static const size_t youngMarkEndForceReenter = []() -> size_t {
         const char* v = std::getenv("MRT_GCV2_YOUNG_MARK_END_FORCE_REENTER");
         if (v == nullptr) {
@@ -798,30 +808,27 @@ void WCollector::DoYoungGarbageCollection()
     // Keep opt-in (`=1`): `=0` or unset preserves the unrestricted-ledger path.
     const MinorSlotSet* reachableSlotDomain = nullptr;
     // portyoungconc L2: this is ZGC's boundary. Everything above is pause_mark_start
-    // (colour flip, retire, remset flip) plus root enumeration; everything below until
-    // STW2 is concurrent_mark(). Release here so mark_follow runs with mutators alive.
+    // (colour flip, retire, remset flip) only; roots and follow are concurrent_mark().
+    // Release here before invoking the existing root producer so mark_follow runs
+    // with mutators alive.
     if (youngConcFollow && stw != nullptr) {
+        CHECK_DETAIL(stackScanEpoch != 0,
+                     "young FOLLOW requires an epoch-backed concurrent stack-root receipt");
         concWindow.markedAtEntry = reachableVec.size();
         TransitionToGCPhase(GCPhase::GC_PHASE_TRACE, true);
         reinterpret_cast<RegionSpace&>(theAllocator).PrepareTrace();
         stw.reset();
         concWindowStartNs = TimeUtil::NanoSeconds();
+        produceYoungRoots();
         VLOG(REPORT,
-             "[GCV2][youngconc] concurrent young mark start (FOLLOW: roots enumerated, closure concurrent) "
+             "[GCV2][youngconc] concurrent young mark start (FOLLOW: roots+closure concurrent) "
              "roots_marked=%zu",
              concWindow.markedAtEntry);
     }
     {
         // minortime: ⑤ mark closure pass-1 (from roots)
-        // concwin: keep this under STW so the STW1 snapshot is painted before mutators
-        // resume. Prior order released the world first → FixMinor CAS-null of still-live
-        // young Array elems (live0=0) → next TRACE WriteRefField(obj=nil, field=0x10).
-        // ZGC shape: pause_mark_start marks the snapshot; concurrent_mark follows SATB.
-        // portyoungconc: that last sentence does not match ZGC -- pause_mark_start
-        // (zGeneration.cpp:855-884) marks nothing; mark_roots() is inside concurrent_mark().
-        // The STW placement here is a real failure record (live0=0 CAS-null), not the ZGC
-        // shape, so YOUNG_CONC_FOLLOW re-tries the ZGC order behind its own flag rather
-        // than changing this default.
+        // MARK-only runs this closure under STW; MARK+FOLLOW reaches this block after
+        // the release above, matching ZGC mark_roots()+mark_follow in concurrent_mark.
         MRT_PHASE_TIMER("young.mark_closure");
         if (youngConcFollow) {
             ++concWindow.closureCalls;
@@ -1252,8 +1259,19 @@ void WCollector::DoYoungGarbageCollection()
             // has a positive control on a workload that converges in one pass every time --
             // an untaken branch cannot be shown to work.
             const bool forcedNotDone = concWindow.reenters < youngMarkEndForceReenter;
-            const bool wantReenter = (!converged || forcedNotDone) && youngMarkEndReenter &&
-                concWindow.reenters < kMaxMarkEndReenters;
+            const bool needsReenter = !converged || forcedNotDone;
+            if (needsReenter && concWindow.reenters >= kMaxMarkEndReenters) {
+                VLOG(REPORT,
+                     "[GCV2][youngconc] mark_end fail-closed: reentry budget exhausted "
+                     "reenters=%zu max=%zu converged=%d forced=%d",
+                     concWindow.reenters, kMaxMarkEndReenters, static_cast<int>(converged),
+                     static_cast<int>(forcedNotDone));
+                CHECK_DETAIL(false,
+                             "young mark non-converged after reentry budget exhausted: "
+                             "reenters=%zu max=%zu converged=%d",
+                             concWindow.reenters, kMaxMarkEndReenters, static_cast<int>(converged));
+            }
+            const bool wantReenter = needsReenter;
             markEndDone = !wantReenter;
             if (!converged) {
                 VLOG(REPORT,
