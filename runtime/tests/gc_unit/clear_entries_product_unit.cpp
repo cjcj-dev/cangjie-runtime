@@ -505,3 +505,63 @@ GC_TEST(ForwardingPublicationProduct, ClearWaitsForHeldPublicationAndKeepsReceip
     region->metadata.liveInfo = nullptr;
     fx.FreePlanted(live);
 }
+
+// zForwarding.cpp:134-169: claim inverts a positive refcount before waiting for
+// outstanding Publication owners.  Observe that state transition rather than a
+// timing window: correct clear reaches a negative count while the owner is held;
+// a non-draining clear returns with a non-negative count.
+GC_TEST(ForwardingPublicationProduct, ClearDrainEntersClaimedWaitBeforeReturning)
+{
+    GcHeapFixture& fx = ProductFixture();
+    RegionInfo* region = RegionInfo::InitRegion(1, 2, RegionInfo::UnitRole::SMALL_SIZED_UNITS);
+    GC_EXPECT_TRUE(region != nullptr);
+    region->SetRegionType(RegionInfo::RegionType::THREAD_LOCAL_REGION);
+    BaseObject* fromObject = fx.PlaceObject(region->GetRegionStart() + 64);
+    region->SetRegionAllocPtr(reinterpret_cast<MAddress>(fromObject) + fromObject->GetSize());
+    const MAddress from = reinterpret_cast<MAddress>(fromObject);
+    const MAddress to = fx.region0->GetRegionStart();
+    WCollector collector(Heap::GetHeap().GetAllocator(), Heap::GetHeap().GetCollectorResources());
+    RelocationReceiptTestAccess::BindCollector(Heap::GetHeap().GetCollectorResources(), &collector);
+    LiveInfo* live = PrepareForwardable(fx, region, from);
+    ForwardingTable::Publication publication = ForwardingTable::EnsurePublicationBeforeCopy(region, from);
+    GC_EXPECT_TRUE(static_cast<bool>(publication));
+    ZForwarding* heldTable = ForwardingTable::GetEntries(region->GetRegionStart());
+    GC_EXPECT_TRUE(heldTable != nullptr);
+
+    std::atomic<bool> clearDone{ false };
+    std::thread clearer([&]() {
+        ForwardingTable::ClearEntries(region->GetRegionStart(), region->GetRegionSize());
+        clearDone.store(true, std::memory_order_release);
+    });
+    while (heldTable != nullptr && heldTable->ref_count().load(std::memory_order_acquire) >= 0 &&
+           !clearDone.load(std::memory_order_acquire)) {
+        std::this_thread::yield();
+    }
+    const bool enteredClaimedDrain =
+        heldTable != nullptr && heldTable->ref_count().load(std::memory_order_acquire) < 0;
+
+    const ZForwarding::Receipt receipt = ForwardingTable::InstallMapping(publication, from, to);
+    GC_EXPECT_TRUE(receipt.installed);
+    GC_EXPECT_EQ(receipt.address, to);
+    publication = ForwardingTable::Publication();
+    clearer.join();
+
+    GC_EXPECT_TRUE(enteredClaimedDrain);
+    GC_EXPECT_TRUE(clearDone.load(std::memory_order_acquire));
+    GC_EXPECT_EQ(ForwardingTable::FindRetiredTo(from), to);
+
+    ForwardingTable::Publication late = ForwardingTable::EnsurePublicationBeforeCopy(region, from);
+    const bool reopenedAfterClear = static_cast<bool>(late);
+    GC_EXPECT_FALSE(reopenedAfterClear);
+    late = ForwardingTable::Publication();
+    if (reopenedAfterClear) {
+        // Keep the fault arm isolated: release the late owner, then let a second
+        // clear close and retire the accidentally reopened table.
+        ForwardingTable::ClearEntries(region->GetRegionStart(), region->GetRegionSize());
+    }
+
+    ForwardingTable::DropRetiredCovering(region->GetRegionStart(), region->GetRegionSize());
+    RelocationReceiptTestAccess::BindCollector(Heap::GetHeap().GetCollectorResources(), nullptr);
+    region->metadata.liveInfo = nullptr;
+    fx.FreePlanted(live);
+}
