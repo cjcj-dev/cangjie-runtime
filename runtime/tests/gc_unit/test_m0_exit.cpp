@@ -499,7 +499,7 @@ GC_TEST(M0Exit, ReadRuntimeEntryResolvedNormalPathIsSilent)
     GC_EXPECT_EQ(after.s1, before.s1);
 }
 
-GC_TEST(M0Exit, RootFixRuntimeEnumerationClassifiesNoCopyAsS0)
+GC_OTHER_VM_TEST(M0Exit, RootFixRuntimeEnumerationClassifiesNoCopyAsS0)
 {
     RootEntryFixture fx;
     const M0ExitDiagnostics::Counts before = M0ExitDiagnostics::GetCounts();
@@ -514,7 +514,7 @@ GC_TEST(M0Exit, RootFixRuntimeEnumerationClassifiesNoCopyAsS0)
                  reinterpret_cast<uintptr_t>(fx.heap.obj0));
 }
 
-GC_TEST(M0Exit, RootFixRuntimeEnumerationClassifiesPublishedCopyAsS1)
+GC_OTHER_VM_TEST(M0Exit, RootFixRuntimeEnumerationClassifiesPublishedCopyAsS1)
 {
     RootEntryFixture fx;
     std::memcpy(fx.heap.obj1, fx.heap.obj0, fx.heap.obj0->GetSize());
@@ -531,7 +531,7 @@ GC_TEST(M0Exit, RootFixRuntimeEnumerationClassifiesPublishedCopyAsS1)
                  reinterpret_cast<uintptr_t>(fx.heap.obj0));
 }
 
-GC_TEST(M0Exit, RootFixClassifiesActiveOnlyUnusableCopyAsS1)
+GC_OTHER_VM_TEST(M0Exit, RootFixClassifiesActiveOnlyUnusableCopyAsS1)
 {
     RootEntryFixture fx;
     (void)fx.PublishUnusableActiveWitness();
@@ -549,7 +549,7 @@ GC_TEST(M0Exit, RootFixClassifiesActiveOnlyUnusableCopyAsS1)
                  reinterpret_cast<uintptr_t>(fx.heap.obj0));
 }
 
-GC_TEST(M0Exit, RootFixClassifiesRetiredOnlyUnusableCopyAsS1)
+GC_OTHER_VM_TEST(M0Exit, RootFixClassifiesRetiredOnlyUnusableCopyAsS1)
 {
     RootEntryFixture fx;
     (void)fx.PublishUnusableRetiredWitness();

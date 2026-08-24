@@ -529,95 +529,95 @@ int RunRuntimeCase(CJTaskFunc task, uintptr_t argument, U32 processorCount = 1)
 }
 } // namespace
 
-GC_TEST(SegmentedArrayInit, YieldKeepsInvisibleRootAndPublishesBoundary)
+GC_OTHER_VM_TEST(SegmentedArrayInit, YieldKeepsInvisibleRootAndPublishesBoundary)
 {
     GC_EXPECT_EQ(RunRuntimeCase(RunSegmentedCase, static_cast<uintptr_t>(YieldGc::NONE)), 0);
 }
 
-GC_TEST(SegmentedArrayInit, ManagedFirstInactiveExtentUsesSegmentedInitializer)
+GC_OTHER_VM_TEST(SegmentedArrayInit, ManagedFirstInactiveExtentUsesSegmentedInitializer)
 {
     GC_EXPECT_EQ(RunRuntimeCase(RunAllocationSourceCase,
                                 static_cast<uintptr_t>(AllocationSource::INACTIVE)), 0);
 }
 
-GC_TEST(SegmentedArrayInit, ManagedDirtyExtentUsesSegmentedInitializer)
+GC_OTHER_VM_TEST(SegmentedArrayInit, ManagedDirtyExtentUsesSegmentedInitializer)
 {
     GC_EXPECT_EQ(RunRuntimeCase(RunAllocationSourceCase,
                                 static_cast<uintptr_t>(AllocationSource::DIRTY)), 0);
 }
 
-GC_TEST(SegmentedArrayInit, ManagedReleasedExtentUsesSegmentedInitializer)
+GC_OTHER_VM_TEST(SegmentedArrayInit, ManagedReleasedExtentUsesSegmentedInitializer)
 {
     GC_EXPECT_EQ(RunRuntimeCase(RunAllocationSourceCase,
                                 static_cast<uintptr_t>(AllocationSource::RELEASED)), 0);
 }
 
-GC_TEST(SegmentedArrayInit, ManagedGarbageExtentUsesSegmentedInitializer)
+GC_OTHER_VM_TEST(SegmentedArrayInit, ManagedGarbageExtentUsesSegmentedInitializer)
 {
     GC_EXPECT_EQ(RunRuntimeCase(RunAllocationSourceCase,
                                 static_cast<uintptr_t>(AllocationSource::GARBAGE)), 0);
 }
 
-GC_TEST(SegmentedArrayInit, NativeFirstInactiveExtentUsesSegmentedInitializer)
+GC_OTHER_VM_TEST(SegmentedArrayInit, NativeFirstInactiveExtentUsesSegmentedInitializer)
 {
     GC_EXPECT_EQ(RunRuntimeCase(RunAllocationSourceCase,
                                 0x100U | static_cast<uintptr_t>(AllocationSource::INACTIVE)), 0);
 }
 
-GC_TEST(SegmentedArrayInit, NativeDirtyExtentUsesSegmentedInitializer)
+GC_OTHER_VM_TEST(SegmentedArrayInit, NativeDirtyExtentUsesSegmentedInitializer)
 {
     GC_EXPECT_EQ(RunRuntimeCase(RunAllocationSourceCase,
                                 0x100U | static_cast<uintptr_t>(AllocationSource::DIRTY)), 0);
 }
 
-GC_TEST(SegmentedArrayInit, NativeReleasedExtentUsesSegmentedInitializer)
+GC_OTHER_VM_TEST(SegmentedArrayInit, NativeReleasedExtentUsesSegmentedInitializer)
 {
     GC_EXPECT_EQ(RunRuntimeCase(RunAllocationSourceCase,
                                 0x100U | static_cast<uintptr_t>(AllocationSource::RELEASED)), 0);
 }
 
-GC_TEST(SegmentedArrayInit, NativeGarbageExtentUsesSegmentedInitializer)
+GC_OTHER_VM_TEST(SegmentedArrayInit, NativeGarbageExtentUsesSegmentedInitializer)
 {
     GC_EXPECT_EQ(RunRuntimeCase(RunAllocationSourceCase,
                                 0x100U | static_cast<uintptr_t>(AllocationSource::GARBAGE)), 0);
 }
 
-GC_TEST(SegmentedArrayInit, EpochFlipRestartsAndRewritesPublishedBlock)
+GC_OTHER_VM_TEST(SegmentedArrayInit, EpochFlipRestartsAndRewritesPublishedBlock)
 {
     GC_EXPECT_EQ(RunRuntimeCase(RunSegmentedCase, static_cast<uintptr_t>(YieldGc::FULL)), 0);
 }
 
-GC_TEST(SegmentedArrayInit, EpochFlipRestartsAndRewritesPublishedBlockParallel)
+GC_OTHER_VM_TEST(SegmentedArrayInit, EpochFlipRestartsAndRewritesPublishedBlockParallel)
 {
     GC_EXPECT_EQ(RunRuntimeCase(RunSegmentedCase, static_cast<uintptr_t>(YieldGc::FULL), 2), 0);
 }
 
-GC_TEST(SegmentedArrayInit, YoungGcRepairsIncompleteArrayRoot)
+GC_OTHER_VM_TEST(SegmentedArrayInit, YoungGcRepairsIncompleteArrayRoot)
 {
     GC_EXPECT_EQ(RunRuntimeCase(RunSegmentedCase, static_cast<uintptr_t>(YieldGc::YOUNG)), 0);
 }
 
-GC_TEST(SegmentedArrayInit, YoungGcRepairsIncompleteArrayRootParallel)
+GC_OTHER_VM_TEST(SegmentedArrayInit, YoungGcRepairsIncompleteArrayRootParallel)
 {
     GC_EXPECT_EQ(RunRuntimeCase(RunSegmentedCase, static_cast<uintptr_t>(YieldGc::YOUNG), 2), 0);
 }
 
-GC_TEST(SegmentedArrayInit, SmallReferenceArrayKeepsFastPath)
+GC_OTHER_VM_TEST(SegmentedArrayInit, SmallReferenceArrayKeepsFastPath)
 {
     GC_EXPECT_EQ(RunRuntimeCase(RunSmallReferenceCase, 0), 0);
 }
 
-GC_TEST(SegmentedArrayInit, NativeSmallReferenceArrayKeepsFastPath)
+GC_OTHER_VM_TEST(SegmentedArrayInit, NativeSmallReferenceArrayKeepsFastPath)
 {
     GC_EXPECT_EQ(RunRuntimeCase(RunSmallReferenceCase, 1), 0);
 }
 
-GC_TEST(SegmentedArrayInit, LargePrimitiveArrayKeepsFastPath)
+GC_OTHER_VM_TEST(SegmentedArrayInit, LargePrimitiveArrayKeepsFastPath)
 {
     GC_EXPECT_EQ(RunRuntimeCase(RunLargePrimitiveCase, 0), 0);
 }
 
-GC_TEST(SegmentedArrayInit, NativeLargePrimitiveArrayKeepsFastPath)
+GC_OTHER_VM_TEST(SegmentedArrayInit, NativeLargePrimitiveArrayKeepsFastPath)
 {
     GC_EXPECT_EQ(RunRuntimeCase(RunLargePrimitiveCase, 1), 0);
 }
