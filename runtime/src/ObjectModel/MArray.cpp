@@ -148,14 +148,6 @@ MArray* MArray::InitializeLargeRefArray(MAddress address, MSize arraySize, MInde
                 const size_t gcCountBefore = g_gcCount.load(std::memory_order_acquire);
                 if (managedTestGc == ManagedSegmentedGc::YOUNG) {
                     Heap::GetHeap().GetCollector().RequestGC(GC_REASON_YOUNG, false);
-                    CollectorResources& resources = Heap::GetHeap().GetCollectorResources();
-                    size_t attempts = 0;
-                    while (!resources.IsGcStarted() && attempts++ < 1000000) {
-                        std::this_thread::yield();
-                    }
-                    CHECK_DETAIL(resources.IsGcStarted(),
-                                 "language-level segmented-array young GC did not start");
-                    resources.WaitForGCFinish();
                 } else {
                     Heap::GetHeap().GetCollector().RequestGC(GC_REASON_FORCE, false);
                 }

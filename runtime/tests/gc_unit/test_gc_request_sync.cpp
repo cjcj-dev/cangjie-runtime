@@ -28,6 +28,7 @@
 #include "Heap/Allocator/RegionSpace.h"
 #include "Heap/Collector/CollectorProxy.h"
 #include "Heap/Collector/CollectorResources.h"
+#include "Heap/Collector/GcStats.h"
 #include "Heap/Heap.h"
 #include "Inspector/ProfilerAgentImpl.h"
 #include "Mutator/ThreadLocal.h"
@@ -116,6 +117,9 @@ public:
 
     void RunGarbageCollection(uint64_t gcIndex, GCReason reason) override
     {
+        if (advanceEpoch) {
+            resources->SetGcStarted(true);
+        }
         size_t runNumber = 0;
         {
             std::unique_lock<std::mutex> lock(mutex);
@@ -124,6 +128,9 @@ public:
             runNumber = indexes.size();
             entered.notify_all();
             release.wait(lock, [this, runNumber] { return releasedRuns >= runNumber; });
+        }
+        if (advanceEpoch) {
+            g_gcCount.fetch_add(1, std::memory_order_release);
         }
         resources->NotifyGCFinished(gcIndex);
     }
@@ -138,6 +145,12 @@ public:
     {
         std::lock_guard<std::mutex> lock(mutex);
         ignoreRequests = value;
+    }
+
+    void SetAdvanceEpoch(bool value)
+    {
+        std::lock_guard<std::mutex> lock(mutex);
+        advanceEpoch = value;
     }
 
     bool WaitForIgnoreChecks(size_t count)
@@ -200,6 +213,7 @@ private:
     std::condition_variable requestProgress;
     std::condition_variable release;
     bool ignoreRequests = false;
+    bool advanceEpoch = false;
     bool requesterReturned = false;
     size_t ignoreChecks = 0;
     size_t releasedRuns = 0;
@@ -360,6 +374,43 @@ GC_TEST(GcRequestSync, CompilerSyncEntryWaitsForOwnCompletion)
 {
     SyncResult result = RunSynchronousRequest([](RequestHarness&) { MCC_InvokeGCImpl(true); });
     ExpectCompletedSync(result, GC_REASON_USER);
+}
+
+GC_TEST(GcRequestSync, YoungSyncReturnsAfterEpochAndIdle)
+{
+    RequestHarness harness;
+    harness.collector.SetAdvanceEpoch(true);
+    const size_t epochBefore = g_gcCount.load(std::memory_order_acquire);
+    std::promise<void> returnedPromise;
+    std::future<void> returned = returnedPromise.get_future();
+    std::atomic<size_t> epochAfter{ epochBefore };
+    std::atomic<bool> startedAfter{ true };
+    std::thread requester([&] {
+        ThreadLocal::SetThreadType(ThreadType::FP_THREAD);
+        harness.resources.RequestGC(GC_REASON_YOUNG, false);
+        epochAfter.store(g_gcCount.load(std::memory_order_acquire), std::memory_order_release);
+        startedAfter.store(harness.resources.IsGcStarted(), std::memory_order_release);
+        returnedPromise.set_value();
+    });
+    JoinGuard requesterGuard(requester);
+
+    bool entered = harness.collector.WaitForRuns(1);
+    bool returnedBeforeRelease = returned.wait_for(std::chrono::seconds(0)) == std::future_status::ready;
+    if (entered) {
+        harness.collector.ReleaseOne();
+    }
+    bool returnedAfterRelease = returned.wait_for(kHarnessHangLimit) == std::future_status::ready;
+    if (!returnedAfterRelease) {
+        harness.Stop();
+    }
+    requester.join();
+    harness.Stop();
+
+    GC_EXPECT_TRUE(entered);
+    GC_EXPECT_FALSE(returnedBeforeRelease);
+    GC_EXPECT_TRUE(returnedAfterRelease);
+    GC_EXPECT_TRUE(epochAfter.load(std::memory_order_acquire) > epochBefore);
+    GC_EXPECT_FALSE(startedAfter.load(std::memory_order_acquire));
 }
 
 GC_TEST(GcRequestSync, ForceFullEntryWaitsForOwnCompletion)

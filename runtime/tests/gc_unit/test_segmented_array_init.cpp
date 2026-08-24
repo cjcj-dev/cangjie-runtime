@@ -211,16 +211,6 @@ struct SegmentedArrayContext {
             mutator->SetManagedContext(false);
             if (ctx.gc == YieldGc::YOUNG) {
                 Heap::GetHeap().GetCollector().RequestGC(GC_REASON_YOUNG, false);
-                CollectorResources& resources = Heap::GetHeap().GetCollectorResources();
-                size_t attempts = 0;
-                while (!resources.IsGcStarted() && attempts++ < 1000000) {
-                    (void)sched_yield();
-                }
-                if (!resources.IsGcStarted()) {
-                    ++ctx.failures;
-                } else {
-                    resources.WaitForGCFinish();
-                }
             } else {
                 Heap::GetHeap().GetCollector().RequestGC(GC_REASON_FORCE, false);
             }
