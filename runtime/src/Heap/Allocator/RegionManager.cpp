@@ -142,6 +142,30 @@ size_t RegionInfo::UnitInfo::GetUnitIdxAtOOB(uintptr_t allocAddr)
 }
 std::atomic<size_t> RegionInfo::youngRegionCount { 0 };
 std::atomic<size_t> RegionInfo::dispelGhostCount { 0 };
+#if defined(MRT_GC_UNIT_TESTS)
+std::atomic<RegionInfo::GhostLookupTestHook> RegionInfo::ghostLookupTestHook { nullptr };
+std::atomic<size_t> RegionInfo::ghostLookupTestHookCalls { 0 };
+
+void RegionInfo::SetGhostLookupTestHook(GhostLookupTestHook hook)
+{
+    ghostLookupTestHookCalls.store(0, std::memory_order_relaxed);
+    ghostLookupTestHook.store(hook, std::memory_order_release);
+}
+
+size_t RegionInfo::GhostLookupTestHookCalls()
+{
+    return ghostLookupTestHookCalls.load(std::memory_order_acquire);
+}
+
+void RegionInfo::RunGhostLookupTestHook(RegionInfo* region)
+{
+    GhostLookupTestHook hook = ghostLookupTestHook.exchange(nullptr, std::memory_order_acq_rel);
+    if (hook != nullptr) {
+        ghostLookupTestHookCalls.fetch_add(1, std::memory_order_relaxed);
+        hook(region);
+    }
+}
+#endif
 std::atomic<size_t> RegionInfo::markEpochStaleReadCount { 0 };
 std::atomic<bool> RegionInfo::markEpochAtexitInstalled { false };
 std::atomic<size_t> RegionInfo::oneseqBumpClearYoung { 0 };
