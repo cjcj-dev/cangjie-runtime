@@ -3711,6 +3711,7 @@ uintptr_t RegionManager::AllocPinnedFromFreeList(size_t size)
     }
     uintptr_t allocPtr = freePinnedSlotLists.PopFront(size);
     if (allocPtr != 0) {
+        M0Correlation::InvalidateStampBinding(allocPtr, M0Correlation::BindingInvalidation::PINNED_SLOT_REUSE);
         RegionInfo* region = RegionInfo::GetRegionInfoAt(allocPtr);
         region->ResetCensusBoundary();
         region->PreserveRetainedLiveInfoUpTo(region->GetRegionStart());

@@ -65,6 +65,15 @@ if nm -D --defined-only "$RUNTIME_LIB_DIR/libcangjie-runtime.so" 2>/dev/null | c
 fi
 echo "M0_TEST_ACCESS=$M0_TEST_ACCESS"
 
+M0_CORRELATION_TEST_ARGS=()
+M0_CORRELATION_ENV=()
+if nm -D --defined-only "$RUNTIME_LIB_DIR/libcangjie-runtime.so" 2>/dev/null | c++filt |
+    /usr/bin/grep 'M0Correlation::ResetForTest' >/dev/null; then
+  TEST_DEFINES+=(-DMRT_M0_CORRELATION_EXPERIMENT=1 -DMRT_GC_UNIT_TEST_ACCESS=1)
+  M0_CORRELATION_TEST_ARGS=("$SRC/test_m0_correlation.cpp")
+  M0_CORRELATION_ENV=(MRT_GCV2_DIAG=m0corr)
+fi
+
 BOUNDS_INC="$ROOT/runtime/third_party/third_party_bounds_checking_function/include"
 TESTABLE_FLAGS=()
 if [[ "${MRT_TESTABLE_INTERNALS:-0}" == "1" ]]; then
@@ -135,6 +144,7 @@ $CXX -std=gnu++17 -O0 -g -Wall -Wextra -pthread -fno-rtti \
      "$SRC/test_fillerobj.cpp" \
     "$SRC/test_i2_readref.cpp" \
     "${M0_TEST_ARGS[@]}" \
+    "${M0_CORRELATION_TEST_ARGS[@]}" \
     "$SRC/test_fwdreturn.cpp" \
     "$SRC/test_ghost_region_lookup.cpp" \
     "$SRC/test_fnlz_roots.cpp" \
@@ -176,7 +186,7 @@ MAIN_TALLY="$OUT/main_tally.txt"
 PUBLICATION_TALLY="$OUT/forwarding_publication_tally.txt"
 rm -f "$MAIN_TALLY" "$PUBLICATION_TALLY"
 set +e
-GC_UNIT_TALLY_FILE="$MAIN_TALLY" \
+env "${M0_CORRELATION_ENV[@]}" GC_UNIT_TALLY_FILE="$MAIN_TALLY" \
   LD_LIBRARY_PATH="$RUNTIME_LIB_DIR${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}" "$OUT/cj_gc_unit"
 MAIN_RC=$?
 GC_UNIT_TALLY_FILE="$PUBLICATION_TALLY" \

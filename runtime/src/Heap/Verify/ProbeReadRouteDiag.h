@@ -12,6 +12,7 @@
 #include <cstring>
 
 #include "Common/TypeDef.h"
+#include "Heap/Verify/DiagGate.h"
 
 namespace MapleRuntime {
 namespace ProbeReadRouteDiag {
@@ -116,10 +117,7 @@ inline void NoteRemsetFlip()
 
 inline bool RootTrackingEnabled()
 {
-    static const bool enabled = []() {
-        const char* value = std::getenv("MRT_GCV2_NWREAD");
-        return value != nullptr && std::strcmp(value, "1") == 0;
-    }();
+    static const bool enabled = DiagGate::TokenOn("probereadroute");
     return enabled;
 }
 
