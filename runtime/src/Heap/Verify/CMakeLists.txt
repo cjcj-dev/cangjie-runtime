@@ -29,6 +29,7 @@ set(SRC_LIST
     "ZgcSelfHealDiag.cpp"
     "ZgcInvariants.cpp"
     "M0ExitDiagnostics.cpp"
+    "M0Correlation.cpp"
     "HealCoverage.cpp"
     "Stw2CurrentAudit.cpp"
     "CsetEmptyWho.cpp"

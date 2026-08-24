@@ -51,6 +51,7 @@
 #include "Heap/Allocator/ForwardingTable.h"
 #include "Heap/Allocator/MemMap.h"
 #include "Heap/Verify/MutatorRelocate.h"
+#include "Heap/Verify/M0Correlation.h"
 #include "Base/TimeUtils.h"
 #include "securec.h"
 #ifdef CANGJIE_ASAN_SUPPORT
@@ -3769,6 +3770,7 @@ private:
     {
         CHECK_DETAIL(FromPageDetach::FromPageDetachCheck(this, FromPageDetach::Site::INIT_REGION_INFO),
                      "CJRT_FROM_REUSE_GATE bypass reached InitRegionInfo region=%p units=%zu", this, nUnit);
+        M0Correlation::InvalidateRegionBindings(GetRegionStart(), GetRegionLifeId());
         SetUnitRole(UnitRole::FREE_UNITS);
         // Invalidate every old-life carrier before clearing any of its payload.
         // Readers either retain the old page (detachgate) or observe this bump and

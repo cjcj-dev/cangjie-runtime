@@ -14,6 +14,7 @@
 #include "Heap/Allocator/RegionInfo.h"
 #include "Heap/Collector/ZForwarding.h"
 #include "Heap/Heap.h"
+#include "Heap/Verify/M0Correlation.h"
 
 namespace MapleRuntime {
 namespace ZgcInvariants {
@@ -129,6 +130,7 @@ StackMapScope::~StackMapScope()
 
 void Note(Exit exit, BaseObject* target, const void* slot, BaseObject* holder, uint8_t phase)
 {
+    const uint64_t causalSeq = M0Correlation::NextCausalSeq();
     const uint64_t n = g_total.fetch_add(1, std::memory_order_relaxed) + 1;
     EnsureSummaryAtExit();
     if (exit == Exit::RootFix) {
@@ -159,6 +161,9 @@ void Note(Exit exit, BaseObject* target, const void* slot, BaseObject* holder, u
     if (copyPublished) {
         g_copyPublishedWitness.fetch_add(1, std::memory_order_relaxed);
     }
+
+    M0Correlation::RecordM0(causalSeq, n, ExitName(exit), hasTo ? "S1" : "S0", target,
+                             activeTo, retiredTo, phase);
 
     uint64_t sampleOrdinal = 0;
     if (!TakeDetailSample(sampleOrdinal)) {

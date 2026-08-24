@@ -93,7 +93,8 @@ void MaybeAnnounce()
     if (wantHelp) {
         LOG(RTLOG_ERROR,
             "[GCV2][diag] tokens: promote promotegap nullslot stackref fromver oneseq rootgate reffixwalk "
-            "markcomplete markcompletefatal intedge statheal selftest all | legacy: MRT_GCV2_<NAME>=1");
+            "markcomplete markcompletefatal intedge statheal m0corr probereadroute selftest all | "
+            "legacy: MRT_GCV2_<NAME>=1");
     }
     if (wantActive) {
         LOG(RTLOG_ERROR, "[GCV2][diag] MRT_GCV2_DIAG=%s selftest=%d", csv == nullptr ? "(unset)" : csv,
