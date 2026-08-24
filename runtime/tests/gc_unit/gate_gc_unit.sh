@@ -23,6 +23,7 @@ PHASE_ENTRY_STATE=NOT_RUN
 PHASE_ENTRY_SOURCE=NOT_RUN
 SEGMENTED_MANAGED_STATE=NOT_RUN
 SEGMENTED_MANAGED_SOURCE=NOT_RUN
+SEGMENTED_MANAGED_CAN_RUN=0
 STATUS_REASON=UNEXPECTED_EXIT
 TESTABLE_INTERNALS="${MRT_TESTABLE_INTERNALS:-0}"
 
@@ -42,6 +43,7 @@ write_status() {
     echo "PHASE_ENTRY_TRIGGER_SOURCE=$PHASE_ENTRY_SOURCE"
     echo "SEGMENTED_ARRAY_MANAGED=$SEGMENTED_MANAGED_STATE"
     echo "SEGMENTED_ARRAY_MANAGED_SOURCE=$SEGMENTED_MANAGED_SOURCE"
+    echo "SEGMENTED_ARRAY_MANAGED_CAN_RUN=$SEGMENTED_MANAGED_CAN_RUN"
     echo "REASON=$STATUS_REASON"
   } >"$tmp"
   mv -f "$tmp" "$STATUS_FILE"
@@ -93,6 +95,9 @@ if [[ ! -f "$FINALIZER_SCRIPT" || ! -f "$SRC/finalizer_trigger.cj" ||
 fi
 if [[ "$TESTABLE_INTERNALS" == "1" &&
       ( ! -f "$SEGMENTED_MANAGED_SCRIPT" || ! -f "$SRC/segmented_array_managed.cj" ) ]]; then
+  # TESTABLE_INTERNALS is an explicit product/test contract.  Do this check
+  # before capability probing so a missing managed fixture cannot be hidden by
+  # a product SO that was built without the test hook.
   echo "GC_UNIT_GATE_FAIL: missing managed segmented-array language-level test" >&2
   exit 2
 fi
@@ -131,6 +136,22 @@ export GC_UNIT_OUT="${GC_UNIT_OUT:-$SRC/build_standalone}"
 
 STAMP="$GC_UNIT_OUT/.gate_stamp"
 SO="$GCV2_RUNTIME_LIB_DIR/libcangjie-runtime.so"
+# ELF versioned exports print as `name@@VERSION`; accept both that and the
+# unversioned form. An exact `$` anchor after the bare name misses the
+# versioned export and silently keeps SEGMENTED_MANAGED_CAN_RUN at 0.
+if nm -D "$SO" | /usr/bin/grep -E '[[:space:]]CJ_MRT_SetLargeArrayInitTestHooks(@@[^[:space:]]+)?$' >/dev/null; then
+  SEGMENTED_MANAGED_CAN_RUN=1
+  if [[ ! -f "$SEGMENTED_MANAGED_SCRIPT" || ! -f "$SRC/segmented_array_managed.cj" ]]; then
+    echo "GC_UNIT_GATE_FAIL: product SO exposes segmented-array test hooks but the managed test is missing" >&2
+    exit 2
+  fi
+elif [[ "$TESTABLE_INTERNALS" == "1" ]]; then
+  # In a TESTABLE build the hook is part of the same contract as the managed
+  # fixture.  Treat its absence as a configuration error instead of silently
+  # converting the managed phase to NOT_RUN.
+  echo "GC_UNIT_GATE_FAIL: TESTABLE_INTERNALS=1 but product SO lacks segmented-array test hooks" >&2
+  exit 2
+fi
 # Two source lists name this suite: CMakeLists.txt (behind MRT_GC_UNIT_TESTS, default OFF) and
 # run_standalone.sh (the one that actually runs).  test_z_forwarding_life.cpp sat in the first and
 # not the second, so its three tests had never executed once.  A file present but not compiled looks
@@ -176,7 +197,7 @@ if [[ -f "$STAMP" && "$STAMP" -nt "$SO" ]]; then
     FINALIZER_SOURCE=CACHE
     PHASE_ENTRY_STATE=PASS
     PHASE_ENTRY_SOURCE=CACHE
-    if [[ "$TESTABLE_INTERNALS" == "1" ]]; then
+    if [[ $SEGMENTED_MANAGED_CAN_RUN -eq 1 ]]; then
       SEGMENTED_MANAGED_STATE=PASS
       SEGMENTED_MANAGED_SOURCE=CACHE
     fi
@@ -310,7 +331,7 @@ if ! bash "$PHASE_ENTRY_SCRIPT"; then
 fi
 PHASE_ENTRY_STATE=PASS
 
-if [[ "$TESTABLE_INTERNALS" == "1" ]]; then
+if [[ $SEGMENTED_MANAGED_CAN_RUN -eq 1 ]]; then
   SEGMENTED_MANAGED_STATE=FAIL
   SEGMENTED_MANAGED_SOURCE=FRESH
   STATUS_REASON=SEGMENTED_ARRAY_MANAGED_FAILURE

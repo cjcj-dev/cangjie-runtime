@@ -162,6 +162,7 @@ $CXX -std=gnu++17 -O0 -g -Wall -Wextra -pthread -fno-rtti \
 # CompactRegion/ClearEntries from the same runtime SO as the full suite; no
 # forwarding component is rebuilt into this executable.
 $CXX -std=gnu++17 -O0 -g -Wall -Wextra -pthread -fno-rtti \
+  "${TEST_DEFINES[@]}" \
   -DMRT_TESTABLE_INTERNALS=1 \
   "${INC_FLAGS[@]}" \
   "$SRC/gc_unit_main.cpp" \

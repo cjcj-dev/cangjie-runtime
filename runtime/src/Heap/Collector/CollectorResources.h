@@ -18,7 +18,7 @@
 namespace MapleRuntime {
 class Collector;
 class CollectorProxy;
-#if defined(MRT_GC_UNIT_TESTS)
+#if defined(MRT_TESTABLE_INTERNALS)
 class CollectorResourcesTestPeer;
 #endif
 // CollectorResources provides the resources that a functional collector need,
@@ -72,7 +72,7 @@ public:
 #endif
 
 private:
-#if defined(MRT_GC_UNIT_TESTS)
+#if defined(MRT_TESTABLE_INTERNALS)
     friend class CollectorResourcesTestPeer;
 #endif
 
@@ -85,7 +85,7 @@ private:
     void RequestAsyncGC(GCReason reason);
     void RequestGCAndWait(GCReason reason);
     void PostIgnoredGcRequest(bool shouldWait);
-#if defined(MRT_GC_UNIT_TESTS)
+#if defined(MRT_TESTABLE_INTERNALS)
     MRT_EXPORT static bool ShouldWaitForIgnoredGcRequest(GCReason reason, bool async);
     MRT_EXPORT static bool HasSyncTaskCompleted(uint64_t finishedIndex, uint64_t awaitedIndex);
 #else

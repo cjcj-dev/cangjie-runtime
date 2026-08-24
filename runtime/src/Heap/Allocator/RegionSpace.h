@@ -25,7 +25,7 @@
 #endif
 
 namespace MapleRuntime {
-#if defined(MRT_GC_UNIT_TESTS)
+#if defined(MRT_TESTABLE_INTERNALS)
 class RegionSpaceTestPeer;
 #endif
 // RegionSpace aims to be the API for other components of runtime
@@ -257,7 +257,7 @@ public:
     friend class Allocator;
 
 private:
-#if defined(MRT_GC_UNIT_TESTS)
+#if defined(MRT_TESTABLE_INTERNALS)
     friend class RegionSpaceTestPeer;
 #endif
 

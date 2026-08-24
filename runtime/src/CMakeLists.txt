@@ -231,15 +231,11 @@ endif()
     # RangeRegistry remains header-inline in product builds while it has no
     # consumer. GC tests deliberately switch it to an out-of-line product-SO
     # implementation so the test binary can prove which copy it exercises.
-    if (MRT_GC_UNIT_TESTS)
+    if (MRT_TESTABLE_INTERNALS)
         list(APPEND SRC_LIST "Heap/Allocator/RangeRegistry.cpp")
     endif()
     add_library(runtime STATIC ${SRC_LIST})
     add_library(cangjie-runtime SHARED ${SRC_LIST})
-    if (MRT_GC_UNIT_TESTS)
-        target_compile_definitions(runtime PRIVATE MRT_TESTABLE_INTERNALS=1)
-        target_compile_definitions(cangjie-runtime PRIVATE MRT_TESTABLE_INTERNALS=1)
-    endif()
     add_custom_target(check_heal_slot_writes ALL
         COMMAND python3 "${CMAKE_CURRENT_SOURCE_DIR}/../tests/check_heal_slot_writes.py"
         COMMENT "Checking that HeapSlot compare-exchange writes stay inside HealSlot"
