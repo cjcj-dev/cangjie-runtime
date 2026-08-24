@@ -22,6 +22,7 @@
 #include "Heap.h"
 #include "Heap/Allocator/RegionInfo.h"
 #include "Heap/Allocator/ZGranuleMap.h"
+#include "Heap/Verify/M0Correlation.h"
 
 namespace MapleRuntime {
 namespace {
@@ -598,6 +599,7 @@ ZForwarding::Receipt ForwardingTable::InstallMapping(
     if (receipt.installed) {
         tab->note_to_life(receipt.address);
     }
+    M0Correlation::PropagateForwarding(from, receipt.address, receipt.address, receipt.installed);
     return receipt;
 }
 

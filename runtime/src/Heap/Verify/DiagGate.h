@@ -17,7 +17,7 @@
 // Unified diagnostic gate for GC instruments.
 //
 // Master switch (optional CSV of tokens, case-sensitive, comma/space separated):
-//   MRT_GCV2_DIAG=promote,nullslot,markcomplete,statheal,selftest
+//   MRT_GCV2_DIAG=promote,nullslot,markcomplete,statheal,m0corr,selftest
 //   MRT_GCV2_DIAG=all
 //
 // Legacy per-probe envs remain authoritative aliases (in-flight recipes must keep working):
