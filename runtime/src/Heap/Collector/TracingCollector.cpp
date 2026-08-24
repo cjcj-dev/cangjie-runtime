@@ -13,6 +13,7 @@
 #include "Heap/Collector/MarkPartialArray.h"
 #include "Heap/Verify/NwDropAudit.h"
 #include "Heap/Verify/MarkCompleteVerify.h"
+#include "Heap/Verify/M0ExitDiagnostics.h"
 #include "Heap/Verify/StatHealDiag.h"
 #include "Heap/Verify/SurvNodeDiag.h"
 #include "Heap/Verify/VerifyRoots.h"
@@ -437,6 +438,8 @@ void TracingCollector::VisitStackRoots(const RootVisitor& visitor, RegSlotsMap& 
     // introot: use HeapReferenceMap so base/derived pairs are available. RootMap only
     // carries reg/slot roots and silently drops derived (RawArray+8 held across safepoint).
     HeapReferenceMap heapMap = builder.Build<HeapReferenceMap>(false);
+    M0ExitDiagnostics::StackMapScope m0StackMap(
+        heapMap.IsValid(), builder.GetInvalidReason(), startIP, frameIP, frameAddress);
     RootVisitor slotVisitor = visitor;
     RootVisitor regVisitor = visitor;
 
@@ -494,6 +497,8 @@ void TracingCollector::VisitHeapReferencesOnStack(const RootVisitor& regRootVisi
     uintptr_t frameAddress = reinterpret_cast<uintptr_t>(frame.mFrame.GetFA());
     StackMapBuilder builder = StackMapBuilder(startIP, frameIP, frameAddress);
     HeapReferenceMap heapMap = builder.Build<HeapReferenceMap>(false);
+    M0ExitDiagnostics::StackMapScope m0StackMap(
+        heapMap.IsValid(), builder.GetInvalidReason(), startIP, frameIP, frameAddress);
 #if defined(GCINFO_DEBUG) && GCINFO_DEBUG
     auto infoNode = GCInfoNodeForFix::BuildNodeForFix(startIP, frameIP, frame.mFrame.GetFA());
     auto slotDebugFunc = [&infoNode](SlotBias off, const BaseObject* root) {

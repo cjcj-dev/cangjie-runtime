@@ -44,6 +44,7 @@
 #endif
 #include "Heap/Verify/VerifyHeap.h"
 #include "Heap/Verify/MarkCompleteVerify.h"
+#include "Heap/Verify/M0ExitDiagnostics.h"
 #include "Heap/Verify/VerifyOption.h"
 #include "Heap/Verify/VerifyRememberedSet.h"
 #include "Heap/Verify/TraceClear.h"
@@ -1265,6 +1266,8 @@ bool WCollector::FixMinorEvacuatedSlot(RootSlot& root, const ScopedStopTheWorld*
             HealRootWriteback(root, viaTable, HealSite::WCollectorFixRootForwarded);
             return true;
         }
+        M0ExitDiagnostics::Note(M0ExitDiagnostics::Exit::RootFix, target, &root, nullptr,
+                                static_cast<uint8_t>(GetGCPhase()));
         static std::atomic<size_t> g_ysRootLeaveAlone{ 0 };
         size_t la = g_ysRootLeaveAlone.fetch_add(1, std::memory_order_relaxed) + 1;
         if (la <= 32) {
