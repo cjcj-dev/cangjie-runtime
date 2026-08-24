@@ -16,7 +16,7 @@ namespace MapleRuntime {
 bool GCExecutor::Execute(void* owner)
 {
     MRT_ASSERT(owner != nullptr, "task queue owner ptr should not be null!");
-#if defined(MRT_GC_UNIT_TESTS)
+#if defined(MRT_TESTABLE_INTERNALS)
     Collector* collector = reinterpret_cast<Collector*>(owner);
 #else
     CollectorProxy* collector = reinterpret_cast<CollectorProxy*>(owner);

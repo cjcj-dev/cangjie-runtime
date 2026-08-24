@@ -143,7 +143,7 @@ void CollectorResources::PostIgnoredGcRequest(bool shouldWait)
     }
 }
 
-#if defined(MRT_GC_UNIT_TESTS)
+#if defined(MRT_TESTABLE_INTERNALS)
 bool CollectorResources::ShouldWaitForIgnoredGcRequest(GCReason reason, bool async)
 {
     return !async || g_gcRequests[reason].IsSyncGC();
