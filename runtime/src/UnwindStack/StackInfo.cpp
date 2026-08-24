@@ -15,6 +15,7 @@
 #include "Common/TypeDef.h"
 #include "Exception/Exception.h"
 #include "Interpreter/InterpreterSpecific.h"
+#include "Loader/ElfUnloadQuiescence.h"
 #include "MangleNameHelper.h"
 #include "StackMap/StackMap.h"
 #include "UnwindStack/StackMetadataHelper.h"
@@ -34,6 +35,7 @@ static uint64_t *stackFrameAlign(uint64_t *fa)
 
 void InitPtrAuthRAMod(FrameInfo& callerFrameInfo, FrameInfo& calleeFrameInfo)
 {
+    ElfUnloadQuiescence::ReadScope metadataReader;
     if (calleeFrameInfo.GetFrameType() == FrameType::MANAGED) {
         FuncDescRef funcDesc = MFuncDesc::GetFuncDesc(
             reinterpret_cast<Uptr>(FrameInfo::GetFuncStartPCFromFrameAddress(
@@ -187,6 +189,7 @@ uint32_t* StackInfo::GetAnchorFAFromMutatorContext() const
 
 void StackInfo::ExtractLiteFrameInfoFromStack(std::vector<uint64_t>& liteFrameInfos, size_t steps) const
 {
+    ElfUnloadQuiescence::ReadScope metadataReader;
     size_t count = 1;
     for (const auto& frameInfo : stack) {
         if (count > steps) {

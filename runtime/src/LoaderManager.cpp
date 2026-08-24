@@ -71,9 +71,10 @@ PackageInfo* LoaderManager::GetPackageInfoByName(const char* packageName)
     return loader->GetPackageInfo(packageName);
 }
 
-PackageInfo* LoaderManager::GetPackageInfoByPath(const char* path)
+bool LoaderManager::VisitPackageInfoByPath(
+    const char* path, const std::function<void(PackageInfo*)>& visitor)
 {
-    return loader->GetPackageInfoByPath(path);
+    return loader->VisitPackageInfoByPath(path, visitor);
 }
 
 void LoaderManager::RemovePackageInfo(const char* path)

@@ -1,0 +1,12 @@
+diff --git a/runtime/src/CompilerCalls.cpp b/runtime/src/CompilerCalls.cpp
+--- a/runtime/src/CompilerCalls.cpp
++++ b/runtime/src/CompilerCalls.cpp
+@@ -1431,7 +1431,7 @@ extern "C" ObjectPtr MCC_GetSubPackages(PackageInfo* packageInfo, TypeInfo* arrayTi)
+     std::vector<PackageInfo*> subPackages = {};
+     PackageInfoSnapshot* snapshot = FindPackageInfoSnapshot(packageInfo);
+     if (snapshot != nullptr) {
+-        subPackages = snapshot->subPackages;
++        // Fault injection: disconnect the stable snapshot subpackage graph from the native getter.
+     } else {
+         LoaderManager::GetInstance()->GetSubPackages(packageInfo, subPackages);
+     }

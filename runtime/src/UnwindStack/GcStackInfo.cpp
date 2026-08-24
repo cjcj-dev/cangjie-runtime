@@ -5,6 +5,7 @@
 // See https://cangjie-lang.cn/pages/LICENSE for license information.
 
 #include "GcStackInfo.h"
+#include "Loader/ElfUnloadQuiescence.h"
 
 #include <stack>
 
@@ -235,6 +236,7 @@ void RecordStackInfo::VisitStackRoots(const RootVisitor &func, Mutator &mutator)
 
 void GCStackInfo::FillInStackTrace()
 {
+    ElfUnloadQuiescence::ReadScope metadataReader;
     UnwindContext uwContext;
     // Top unwind context can only be runtime or Cangjie context.
 
@@ -261,6 +263,7 @@ void GCStackInfo::FillInStackTrace()
 
 void RecordStackInfo::FillInStackTrace()
 {
+    ElfUnloadQuiescence::ReadScope metadataReader;
     UnwindContext uwContext;
     // Top unwind context can only be runtime or Cangjie context.
     CheckTopUnwindContextAndInit(uwContext);
@@ -286,6 +289,7 @@ void RecordStackInfo::FillInStackTrace()
 
 void CJThreadStackInfo::FillInStackTrace()
 {
+    ElfUnloadQuiescence::ReadScope metadataReader;
     UnwindContext uwContext;
     // Top unwind context can only be runtime or Cangjie context.
     CheckTopUnwindContextAndInit(uwContext);

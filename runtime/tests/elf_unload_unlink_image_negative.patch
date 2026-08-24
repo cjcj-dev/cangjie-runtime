@@ -1,0 +1,11 @@
+diff --git a/runtime/src/Loader/CjFileLoader/CjFileLoader.cpp b/runtime/src/Loader/CjFileLoader/CjFileLoader.cpp
+--- a/runtime/src/Loader/CjFileLoader/CjFileLoader.cpp
++++ b/runtime/src/Loader/CjFileLoader/CjFileLoader.cpp
+@@ -415,6 +415,6 @@ void CJFileLoader::PurgeLoadedFile(BaseFile* baseFile)
+                  "ELF metadata purge requires pending/active authorization");
+     TypeInfoManager::GetTypeInfoManager().RemoveTypeInfosInRange(
+         baseFile->GetTypeInfoBase(), baseFile->GetTypeInfoTotalSize());
+-    ElfUnloadQuiescence::UnlinkImage(imageAddress);
++    // Fault injection: retain the unloaded image in the linked-image registry.
+     delete baseFile;
+ }

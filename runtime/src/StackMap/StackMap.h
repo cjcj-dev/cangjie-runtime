@@ -9,6 +9,7 @@
 #define MRT_STACKMAP_H
 #include <unordered_set>
 #include "StackMap/CompressedStackMap.h"
+#include "Loader/ElfUnloadQuiescence.h"
 namespace MapleRuntime {
 class StackMap {
 public:
@@ -251,6 +252,7 @@ public:
     template<class MapType>
     MapType Build(bool countDerivedRows = false) const
     {
+        ElfUnloadQuiescence::ReadScope metadataReader;
         PrologueRegisterClosure closure;
         PrologueVisitor visitor = [&closure](PrologueRegisterClosure::Type type, uint32_t value) {
             switch (type) {
@@ -276,6 +278,7 @@ public:
 
     StackMapInvalidReason GetInvalidReason() const
     {
+        ElfUnloadQuiescence::ReadScope metadataReader;
 #ifdef __APPLE__
         auto head = CompressedStackMapHead::GetStackMapHead(stackBase, nullptr);
 #else
@@ -295,6 +298,7 @@ protected:
 template<>
 inline MethodMap StackMapBuilder::Build<MethodMap>(bool countDerivedRows) const
 {
+    ElfUnloadQuiescence::ReadScope metadataReader;
     (void)countDerivedRows;
 #ifdef __APPLE__
     auto head = CompressedStackMapHead::GetStackMapHead(stackBase, nullptr, funcDesc);

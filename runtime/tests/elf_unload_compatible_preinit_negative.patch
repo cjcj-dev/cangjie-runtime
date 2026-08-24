@@ -1,0 +1,11 @@
+diff --git a/runtime/src/Loader/CjFileLoader/CjFileLoader.cpp b/runtime/src/Loader/CjFileLoader/CjFileLoader.cpp
+--- a/runtime/src/Loader/CjFileLoader/CjFileLoader.cpp
++++ b/runtime/src/Loader/CjFileLoader/CjFileLoader.cpp
+@@ -814,6 +814,6 @@ void CJFileLoader::TryThrowException(Uptr fileMetaAddr)
+ {
+     BaseFile* file = GetBaseFileByMetaAddr(fileMetaAddr);
+-    if (file == nullptr || file->IsCompatible()) {
++    if (file == nullptr) {
+         return;
+     }
+     CString packageName = file->GetRealPath();

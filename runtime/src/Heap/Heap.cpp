@@ -100,6 +100,9 @@ public:
     void RegisterStaticRoots(Uptr addr, U32) override;
     void UnregisterStaticRoots(Uptr addr, U32) override;
     void VisitStaticRoots(const RootSlotVisitor& visitor) override;
+#ifdef MRT_TESTABLE_INTERNALS
+    size_t GetStaticRootCountForTesting() { return staticRootTable.RootCountForTesting(); }
+#endif
     bool ForEachObj(const std::function<void(BaseObject*)>&, bool) const override;
     ssize_t GetHeapPhysicalMemorySize() const override;
     void InstallBarrier(const GCPhase phase) override;
@@ -226,6 +229,13 @@ MAddress HeapImpl::GetStartAddress() const { return theSpace->GetSpaceStartAddre
 MAddress HeapImpl::GetSpaceEndAddress() const { return theSpace->GetSpaceEndAddress(); }
 
 Heap& Heap::GetHeap() { return *g_heapInstance; }
+
+#ifdef MRT_TESTABLE_INTERNALS
+size_t Heap::GetStaticRootCountForTesting()
+{
+    return g_heapInstance->GetStaticRootCountForTesting();
+}
+#endif
 
 void HeapImpl::RegisterStaticRoots(Uptr addr, U32 size)
 {

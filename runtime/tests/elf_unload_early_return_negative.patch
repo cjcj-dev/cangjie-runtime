@@ -1,0 +1,10 @@
+diff --git a/runtime/src/Loader/CjFileLoader/CjFileLoader.cpp b/runtime/src/Loader/CjFileLoader/CjFileLoader.cpp
+--- a/runtime/src/Loader/CjFileLoader/CjFileLoader.cpp
++++ b/runtime/src/Loader/CjFileLoader/CjFileLoader.cpp
+@@ -645,5 +645,5 @@ int CJFileLoader::UnloadLibrary(const char* libName)
+             return baseName == Os::Path::GetBaseName(info.baseName.Str());
+         });
+     if (handlerIt == cjLibHandlers.end()) {
+-        return -1;
++        return 0; // Fault injection: report success for a missing handler.
+     }

@@ -1,0 +1,12 @@
+diff --git a/runtime/src/Loader/CjFileLoader/CjFileLoader.cpp b/runtime/src/Loader/CjFileLoader/CjFileLoader.cpp
+--- a/runtime/src/Loader/CjFileLoader/CjFileLoader.cpp
++++ b/runtime/src/Loader/CjFileLoader/CjFileLoader.cpp
+@@ -611,7 +611,7 @@ int CJFileLoader::UnloadLibrary(const char* libName)
+         // active mutator. Close that transition first, then reject queued image
+         // entries before using the active-frame preflight for started tasks.
+         ElfUnloadQuiescence::TaskAdmissionScope taskAdmission;
+-        if (taskAdmission.HasPendingForImage(baseFile->GetFileMetaAddr())) {
++        if (false && taskAdmission.HasPendingForImage(baseFile->GetFileMetaAddr())) {
+             LOG(RTLOG_WARNING, "refuse to unload queued Cangjie image %s", baseName.Str());
+             return -1;
+         }

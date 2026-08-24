@@ -22,6 +22,7 @@
 #endif
 #include "Base/HashUtils.h"
 #include "Base/ImmortalWrapper.h"
+#include "Loader/ElfUnloadQuiescence.h"
 
 namespace MapleRuntime {
 class TypeGCInfo {
@@ -56,6 +57,8 @@ public:
     void RecordMTableDesc(U32 uuid, MTableDesc* mTableDesc) { mTableList.emplace(uuid, mTableDesc); }
     MTableDesc* GetMTableDesc(U32 uuid)
     {
+        ElfUnloadQuiescence::ReadScope reader;
+        std::lock_guard<std::recursive_mutex> lock(tiMutex);
         auto it = mTableList.find(uuid);
         if (it != mTableList.end()) {
             return it->second;
@@ -74,6 +77,8 @@ public:
     // also accept non-heap addresses (see VerifyHeap / VerifyRoots).
     bool ContainsAddress(uintptr_t addr) const
     {
+        ElfUnloadQuiescence::ReadScope reader;
+        std::lock_guard<std::recursive_mutex> lock(tiMutex);
         for (const auto& m : mmapList) {
             if (addr >= m.first && addr < m.first + m.second) {
                 return true;
@@ -85,8 +90,12 @@ public:
     // ASCII / leftover payload tips are outside both. Does not dereference tip.
     bool IsResidentTypeInfoAddress(uintptr_t addr) const
     {
-        if (ContainsAddress(addr)) {
-            return true;
+        ElfUnloadQuiescence::ReadScope reader;
+        std::lock_guard<std::recursive_mutex> lock(tiMutex);
+        for (const auto& m : mmapList) {
+            if (addr >= m.first && addr < m.first + m.second) {
+                return true;
+            }
         }
         for (const auto& m : imageList) {
             if (addr >= m.first && addr < m.first + m.second) {
@@ -128,6 +137,7 @@ private:
             argSize = desc.argSize;
             hash = desc.hash;
             argsVector.assign(desc.args, desc.args + desc.argSize);
+            args = argsVector.data();
             tid.store(GetTid());
         }
 
@@ -170,6 +180,7 @@ private:
         }
         GenericTiDesc* InsertGenericTiDesc(GenericTiDesc& desc);
         GenericTiDesc* GetGenericTiDesc(GenericTiDesc& desc);
+        void RemoveInRange(uintptr_t begin, size_t size);
     private:
         struct Bucket {
             std::unordered_map<U32, std::vector<GenericTiDesc*>> maps;
@@ -228,7 +239,7 @@ private:
     size_t mapMemory = 1 * MB; // dynamic scaling, 1mb each time.
     std::atomic<uintptr_t> position;
     std::mutex ttMutex; //  guaranteed typeTemplates insert and find atomic
-    std::recursive_mutex tiMutex; //  guaranteed nonGenericTypeInfo insert and find atomic
+    mutable std::recursive_mutex tiMutex; // guaranteed nonGenericTypeInfo insert and find atomic
     // Exact, current TypeInfo identities. Unlike an address-range heuristic, membership
     // cannot turn arbitrary module payload into an object header; image unload erases its range.
     std::unordered_set<TypeInfo*> registeredTypeInfos;

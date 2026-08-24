@@ -191,6 +191,14 @@ void StaticRootTable::UnregisterRoots(StaticRootArray* addr, U32 size)
     gcRootsBuckets.erase(iter);
 }
 
+#ifdef MRT_TESTABLE_INTERNALS
+USize StaticRootTable::RootCountForTesting()
+{
+    std::lock_guard<std::mutex> lock(gcRootsLock);
+    return totalRootsCount;
+}
+#endif
+
 void StaticRootTable::VisitRoots(const RootSlotVisitor& visitor)
 {
     std::lock_guard<std::mutex> lock(gcRootsLock);

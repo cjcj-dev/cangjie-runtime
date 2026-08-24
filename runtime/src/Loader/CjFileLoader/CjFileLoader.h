@@ -61,7 +61,8 @@ public:
     TypeTemplate* FindTypeTemplateFromLoadedFiles(const char* className) override;
     void RecordTypeInfo(TypeInfo* ti) override;
     PackageInfo* GetPackageInfo(const char* packageName) const override;
-    PackageInfo* GetPackageInfoByPath(const char* path) override;
+    bool VisitPackageInfoByPath(
+        const char* path, const std::function<void(PackageInfo*)>& visitor) override;
     void RemovePackageInfo(const char* path) override;
     bool FileHasLoaded(const char* path) override;
     bool FileHasMultiPackage(const char* path) override;
@@ -75,6 +76,10 @@ public:
     U32 GetNumOfInterface(TypeInfo* typeInfo) override;
     TypeInfo* GetInterface(TypeInfo* typeInfo, U32 idx) override;
     TypeExt* GetTypeExt(void* type) override;
+#ifdef MRT_TESTABLE_INTERNALS
+    size_t GetPackageIndexSizeForTesting() const override;
+    void* GetLibraryHandleForTesting(const char* libName) const override;
+#endif
     void RegisterTypeExt(BaseFile* baseFile) override;
 #ifdef __OHOS__
     void RegisterLoadFunc(void* loadFunc, void* loadLibraryFunc) override;
@@ -84,6 +89,10 @@ protected:
     struct BinLoadApi binLoadApi;
 
 private:
+    bool HasActiveImageFrames(BaseFile* baseFile) const;
+    void PurgeLoadedFile(BaseFile* baseFile);
+    void UnlinkLoadedFile(BaseFile* baseFile);
+    void RemovePackageInfo(BaseFile* baseFile);
     void ParseEnumCtor(TypeInfo* ti);
     void RegisterTypeInfoCreatedByFE(BaseFile* baseFile);
     void RegisterOuterTypeExtensions(BaseFile* baseFile);
@@ -93,6 +102,7 @@ private:
         void* handler;
     };
     mutable std::mutex libCjsoHandlersMutex;
+    mutable std::recursive_mutex catalogMutex;
     std::list<LibNameToHandler> cjLibHandlers;
     std::list<BaseFile*> loadedFiles;
     std::unordered_map<const char*, PackageInfo*, HashString, EqualString> packageInfos;

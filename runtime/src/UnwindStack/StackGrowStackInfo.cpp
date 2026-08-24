@@ -12,10 +12,12 @@
 #include "Collector/TracingCollector.h"
 #include "Common/StackType.h"
 #include "Interpreter/InterpreterSpecific.h"
+#include "Loader/ElfUnloadQuiescence.h"
 
 namespace MapleRuntime {
 void StackGrowStackInfo::FillInStackTrace()
 {
+    ElfUnloadQuiescence::ReadScope metadataReader;
     Mutator* mutator = Mutator::GetMutator();
     if (mutator == nullptr) {
         return;
@@ -73,6 +75,7 @@ void StackGrowStackInfo::RecordStackPtrs(const StackPtrVisitor& traceAndFixPtrVi
                                          const StackPtrVisitor& fixPtrVisitor,
                                          const DerivedPtrVisitor& derivedPtrVisitor, Mutator& mutator)
 {
+    ElfUnloadQuiescence::ReadScope metadataReader;
     RegSlotsMap regSlotsMap;
     for (const auto& frame : stack) {
         ObjectRef* rbp = reinterpret_cast<ObjectRef*>(frame.GetMachineFrame().GetFA());
