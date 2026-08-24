@@ -165,6 +165,10 @@ void WCollector::ProbeUnmarkedLive(const MinorObjectSet& allocationRoots, const 
         if (Heap::IsHeapAddress(object)) {
             pending.push_back(object);
         }
+    }, [&pending](BaseObject* object) {
+        if (Heap::IsHeapAddress(object)) {
+            pending.push_back(MarkStackEntry::MarkOnly(object));
+        }
     });
     for (BaseObject* object : allocationRoots) {
         pending.push_back(object);
@@ -176,7 +180,8 @@ void WCollector::ProbeUnmarkedLive(const MinorObjectSet& allocationRoots, const 
         }
     };
     while (!pending.empty()) {
-        BaseObject* object = pending.back().object();
+        const MarkStackEntry entry = pending.back();
+        BaseObject* object = entry.object();
         pending.pop_back();
         if (!Heap::IsHeapAddress(object) || !fullReachable.insert(object).second) {
             continue;
@@ -191,7 +196,7 @@ void WCollector::ProbeUnmarkedLive(const MinorObjectSet& allocationRoots, const 
         if (region->IsYoungRegion()) {
             fullYoung.insert(object);
         }
-        if (!object->HasRefField()) {
+        if (!entry.follow() || !object->HasRefField()) {
             continue;
         }
         if (UNLIKELY(object->IsWeakRef())) {
@@ -351,6 +356,10 @@ void WCollector::ValidateYoungMarking(const std::vector<BaseObject*>& reachableV
             if (Heap::IsHeapAddress(object)) {
                 pending.push_back(object);
             }
+        }, [&pending](BaseObject* object) {
+            if (Heap::IsHeapAddress(object)) {
+                pending.push_back(MarkStackEntry::MarkOnly(object));
+            }
         });
         for (BaseObject* object : allocationRoots) {
             pending.push_back(object);
@@ -362,7 +371,8 @@ void WCollector::ValidateYoungMarking(const std::vector<BaseObject*>& reachableV
             }
         };
         while (!pending.empty()) {
-            BaseObject* object = pending.back().object();
+            const MarkStackEntry entry = pending.back();
+            BaseObject* object = entry.object();
             pending.pop_back();
             if (!reachable.insert(object).second) {
                 continue;
@@ -372,7 +382,7 @@ void WCollector::ValidateYoungMarking(const std::vector<BaseObject*>& reachableV
             if (region->IsYoungRegion()) {
                 expectedYoung.insert(object);
             }
-            if (!object->HasRefField()) {
+            if (!entry.follow() || !object->HasRefField()) {
                 continue;
             }
             if (UNLIKELY(object->IsWeakRef())) {
@@ -725,12 +735,17 @@ void WCollector::DoYoungGarbageCollection()
             SatbBuffer::Instance().GetRetiredObjects(enumRoots);
         }
         while (!enumRoots.empty()) {
-            BaseObject* object = enumRoots.back().object();
+            const MarkStackEntry entry = enumRoots.back();
+            BaseObject* object = entry.object();
             enumRoots.pop_back();
             if (Heap::IsHeapAddress(object)) {
                 allocationRoots.insert(object);
             }
-            PushYoungObject(object, workStack, "alloc_buffer");
+            if (entry.follow()) {
+                PushYoungObject(object, workStack, "alloc_buffer");
+            } else if (Heap::IsHeapAddress(object)) {
+                workStack.push_back(MarkStackEntry::MarkOnly(object));
+            }
         }
         VisitMinorRoots([this, &workStack, &currentMinorRoots](BaseObject* object) {
             if (Heap::IsHeapAddress(object)) {
@@ -740,6 +755,15 @@ void WCollector::DoYoungGarbageCollection()
                 }
             }
             PushYoungObject(object, workStack, "minor_root");
+        }, [&workStack, &currentMinorRoots](BaseObject* object) {
+            if (!Heap::IsHeapAddress(object)) {
+                return;
+            }
+            RegionInfo* region = RegionInfo::TryGetRegionInfoAt(reinterpret_cast<MAddress>(object));
+            if (region != nullptr && !region->IsYoungRegion()) {
+                currentMinorRoots.insert(object);
+            }
+            workStack.push_back(MarkStackEntry::MarkOnly(object));
         }, stackScanEpoch);
     }
     // youngconc: concurrent young mark (mutator-concurrent, not only STW-parallel).
@@ -1053,12 +1077,18 @@ void WCollector::DoYoungGarbageCollection()
                         [&finalRoots](AllocBuffer& buffer) { buffer.MergeRoots(finalRoots); });
                     SatbBuffer::Instance().GetRetiredObjects(finalRoots);
                     while (!finalRoots.empty()) {
-                        BaseObject* object = finalRoots.back().object();
+                        const MarkStackEntry entry = finalRoots.back();
+                        BaseObject* object = entry.object();
                         finalRoots.pop_back();
                         if (Heap::IsHeapAddress(object)) {
                             allocationRoots.insert(object);
                         }
-                        if (fullYoungScan) {
+                        if (!entry.follow()) {
+                            if (Heap::IsHeapAddress(object)) {
+                                workStack.push_back(MarkStackEntry::MarkOnly(object));
+                                ++rootExtraN;
+                            }
+                        } else if (fullYoungScan) {
                             size_t before = workStack.size();
                             PushAdmittedYoung(object, workStack, "alloc_buffer_final.fys");
                             if (workStack.size() > before) {
@@ -1093,6 +1123,17 @@ void WCollector::DoYoungGarbageCollection()
                                 ++rootExtraN;
                             }
                         }
+                    }, [&workStack, &rootExtraN, &currentMinorRoots](BaseObject* object) {
+                        if (!Heap::IsHeapAddress(object)) {
+                            return;
+                        }
+                        RegionInfo* region =
+                            RegionInfo::TryGetRegionInfoAt(reinterpret_cast<MAddress>(object));
+                        if (region != nullptr && !region->IsYoungRegion()) {
+                            currentMinorRoots.insert(object);
+                        }
+                        workStack.push_back(MarkStackEntry::MarkOnly(object));
+                        ++rootExtraN;
                     });
                     if (!workStack.empty()) {
                         TraceYoungClosure(workStack, fullYoungScan, reachableObjects, reachableVec, reachableSlots,

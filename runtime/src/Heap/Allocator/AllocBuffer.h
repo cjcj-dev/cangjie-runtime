@@ -13,6 +13,7 @@
 
 #include "Common/MarkWorkStack.h"
 #include "Heap/Barrier/StoreBarrierBuffer.h"
+#include "Heap/Collector/MarkStackEntry.h"
 #include "RegionList.h"
 
 namespace MapleRuntime {
@@ -51,7 +52,11 @@ public:
     void CommitRawPointerRegions();
 
     // record stack roots in allocBuffer so that mutator can concurrently enumerate roots without lock.
-    void PushRoot(BaseObject* root) { stackRoots.emplace_back(root); }
+    void PushRoot(BaseObject* root) { stackRoots.emplace_back(MarkStackEntry::MarkAndFollow(root)); }
+
+    // An incomplete large reference array is live but its dirty suffix must not
+    // be traversed. This is ZUncoloredRoot::mark_invisible_object's DontFollow.
+    void PushInvisibleRoot(BaseObject* root) { stackRoots.emplace_back(MarkStackEntry::MarkOnly(root)); }
 
     // move the stack roots to other container so that other threads can visit them.
     template<class WorkStack>
@@ -60,8 +65,8 @@ public:
         if (stackRoots.empty()) {
             return;
         }
-        for (BaseObject* obj : stackRoots) {
-            workStack.push_back(obj);
+        for (const MarkStackEntry& entry : stackRoots) {
+            workStack.push_back(entry);
         }
         stackRoots.clear();
     }
@@ -137,7 +142,7 @@ private:
     RegionList tlRawPointerRegions;
     RegionList tlLargeRawPointerRegions;
     // Record stack roots in concurrent enum phase, waiting for GC to merge these roots
-    std::list<BaseObject*> stackRoots;
+    std::list<MarkStackEntry> stackRoots;
     // youngconc allocate-black greys (see PushYoungAllocBlack)
     std::list<BaseObject*> youngAllocBlack;
     // h3seed2: mutator-local young→young dirty holders (see PushY2yDirtyHolder)

@@ -64,8 +64,12 @@ MAddress RegionSpace::TryAllocateOnce(size_t allocSize, AllocType allocType)
         return regionManager.AllocPinned(allocSize);
     }
     if (UNLIKELY(allocSize >= regionManager.GetLargeObjectThreshold())) {
-        return regionManager.AllocLarge(allocSize);
+        return regionManager.AllocLarge(
+            allocSize, allocType != AllocType::MOVEABLE_OBJECT_SEGMENTED_CLEAR);
     }
+    CHECK_DETAIL(allocType != AllocType::MOVEABLE_OBJECT_SEGMENTED_CLEAR,
+                 "segmented-clear allocation must be a large object: size=%zu threshold=%zu",
+                 allocSize, regionManager.GetLargeObjectThreshold());
     AllocBuffer* allocBuffer = AllocBuffer::GetOrCreateAllocBuffer();
     return allocBuffer->Allocate(allocSize, allocType);
 }

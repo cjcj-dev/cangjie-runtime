@@ -1864,7 +1864,7 @@ void RegionManager::PromoteAllRegions()
 }
 
 RegionInfo* RegionManager::TakeRegion(size_t num, RegionInfo::UnitRole type, bool expectPhysicalMem,
-                                      bool allowSaferegion)
+                                      bool allowSaferegion, bool clearPayload)
 {
     // a chance to invoke heuristic gc.
     // routefix: under ROUTING, skip RequestGC — PostIgnoredGcRequest may ScopedEnterSaferegion.
@@ -2021,13 +2021,16 @@ RegionInfo* RegionManager::TakeRegion(size_t num, RegionInfo::UnitRole type, boo
             auto idx = head->GetUnitIdx();
             {
                 // portmutreloc: ZForwarding::detach_page before the page goes back to the
-                // allocator. ClearUnits zeroes the payload a retained reader may still be
-                // copying out of, so the drain has to enclose it. Scoped tight: it ends
-                // before InitRegion, which re-initialises the metadata the lock lives in.
-                // The wipe is of the payload (GetUnitAddress(idx)), not of the UnitInfo
-                // array, so the lock itself survives the body.
+                // allocator. Reuse overwrites the payload a retained reader may still be
+                // copying out of, regardless of whether that overwrite starts here or in
+                // the segmented array initializer, so the drain must always precede reuse.
+                // Scoped tight: it ends before InitRegion, which re-initialises the metadata
+                // the lock lives in. ClearUnits is still conditional because segmented
+                // reference arrays deliberately clear the payload at yield boundaries.
                 RegionInfo::DrainScope drain(head, MutatorRelocate::Retire::TAKE_GARBAGE);
-                RegionInfo::ClearUnits(idx, num, FillerZeroDiag::Site::TAKE_GARBAGE);
+                if (clearPayload) {
+                    RegionInfo::ClearUnits(idx, num, FillerZeroDiag::Site::TAKE_GARBAGE);
+                }
             }
             DLOG(REGION, "reuse garbage region %p@[%#zx, %#zx)", head, head->GetRegionStart(), head->GetRegionEnd());
             MutatorAllocRate::sample_allocation(size);
@@ -2041,7 +2044,8 @@ RegionInfo* RegionManager::TakeRegion(size_t num, RegionInfo::UnitRole type, boo
     size_t gatedBytes = GetGatedGarbageBytes();
 #endif
 
-    RegionInfo* region = freeRegionManager.TakeRegion(num, type, expectPhysicalMem, allowSaferegion);
+    RegionInfo* region = freeRegionManager.TakeRegion(
+        num, type, expectPhysicalMem, allowSaferegion, clearPayload);
     if (region != nullptr) {
         if (num >= HUGE_PAGE) {
             TagHugePage(region, num);
@@ -2074,7 +2078,7 @@ RegionInfo* RegionManager::TakeRegion(size_t num, RegionInfo::UnitRole type, boo
             if (num >= HUGE_PAGE) {
                 TagHugePage(region, num);
             }
-            if (expectPhysicalMem) {
+            if (expectPhysicalMem && clearPayload) {
                 RegionInfo::ClearUnits(idx, num, FillerZeroDiag::Site::TAKE_INACTIVE);
             }
             MutatorAllocRate::sample_allocation(size);

@@ -368,9 +368,9 @@ public:
 
     bool GcPhaseEnum(GCPhase newPhase, uint64_t stackScanEpoch = 0, bool bySelf = false,
                      size_t* scannedFrames = nullptr);
-    bool DrainStackWatermark(const RootVisitor& visitor, uint64_t epoch, StackWatermark::Owner owner,
-                             const DerivedPtrVisitor* derivedPtrVisitor,
-                             size_t& scannedFrames);
+    bool DrainStackWatermark(const RootVisitor& visitor, const RootVisitor& invisibleRootVisitor,
+                             uint64_t epoch, StackWatermark::Owner owner,
+                             const DerivedPtrVisitor* derivedPtrVisitor, size_t& scannedFrames);
     inline void GCPhasePreForward(GCPhase newPhase);
     inline void HandleGCPhase(GCPhase newPhase);
     inline void HandleGCPhaseIDLE();
@@ -400,9 +400,19 @@ public:
 
     void VisitMutatorRoots(const RootVisitor& visitor)
     {
-        VisitStackRoots(visitor);
+        VisitMutatorRoots(visitor, visitor);
+    }
+
+    void VisitMutatorRoots(const RootVisitor& visitor, const RootVisitor& invisibleRootVisitor)
+    {
+        VisitStackRoots(visitor, invisibleRootVisitor);
         VisitExceptionRoots(visitor);
     }
+
+#if defined(MRT_GC_UNIT_TESTS)
+    // Test-only access to the product root consumer without exposing storage.
+    void VisitInvisibleRoot(const RootVisitor& visitor) { VisitRawObjects(visitor); }
+#endif
 
     void VisitHeapReferences(const RootVisitor& rootVisitor, const DerivedPtrVisitor& derivedPtrVisitor);
     void VisitHeapReferences(const RootVisitor& regRootVisitor, const RootVisitor& slotRootVisitor,
@@ -467,13 +477,32 @@ public:
     void SetStackGrowFrameSize(uint32_t sgfs) { stackGrowFrameSize = sgfs; }
 #endif
 
-    void PushRawObject(BaseObject* obj) { StorePlain(rawObject, from_object(obj)); }
-
-    BaseObject* PopRawObject()
+    // A newly allocated large reference array publishes its parseable header before
+    // yielding, but is not a normal object until all of its slots have been cleared.
+    // Keep liveness in this mutator-owned side slot; the orthogonal StateWord
+    // invisible bit tells heap iterators not to visit the incomplete payload.
+    // VisitRawObjects is the GC consumer of the slot.
+    void PublishInvisibleRoot(BaseObject* obj)
     {
-        // PushRawObject accepts a live object and rawObject keeps it rooted until this pop.
-        BaseObject* obj = to_object(safe(rawObject.LoadPlain()));
-        StorePlain(rawObject, zaddress::null);
+        CHECK_DETAIL(obj != nullptr, "cannot publish a null invisible root");
+        CHECK_DETAIL(is_null(rawObject.LoadPlain(std::memory_order_acquire)),
+                     "nested invisible roots are not supported");
+        StorePlain(rawObject, from_object(obj), std::memory_order_release);
+    }
+
+    BaseObject* LoadInvisibleRoot() const
+    {
+        zaddress_unsafe value = rawObject.LoadPlain(std::memory_order_acquire);
+        return is_null(value) ? nullptr : to_object(safe(value));
+    }
+
+    BaseObject* WithdrawInvisibleRoot()
+    {
+        BaseObject* obj = LoadInvisibleRoot();
+        CHECK_DETAIL(obj != nullptr, "cannot withdraw an unpublished invisible root");
+        // The release store is the complete-state publication point. A root scan
+        // that no longer observes this side slot must also observe every null slot.
+        StorePlain(rawObject, zaddress::null, std::memory_order_release);
         return obj;
     }
 
@@ -575,7 +604,7 @@ public:
 
 protected:
     // for managed stack
-    void VisitStackRoots(const RootVisitor& func);
+    void VisitStackRoots(const RootVisitor& func, const RootVisitor& invisibleRootVisitor);
     void VisitHeapReferencesOnStack(const RootVisitor& rootVisitor, const DerivedPtrVisitor& derivedPtrVisitor);
     void VisitHeapReferencesOnStack(const RootVisitor& regRootVisitor, const RootVisitor& slotRootVisitor,
                                     const DerivedPtrVisitor& derivedPtrVisitor,

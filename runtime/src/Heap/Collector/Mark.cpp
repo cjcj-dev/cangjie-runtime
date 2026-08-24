@@ -737,8 +737,19 @@ namespace {
 thread_local const char* gMinorRootOrigin = "unknown";
 } // namespace
 
-void WCollector::VisitMinorRootSlots(RootVisitor& rawRootVisitor, uint64_t stackScanEpoch)
+void WCollector::VisitMinorRootSlots(RootVisitor& rawRootVisitor, RootVisitor& invisibleRootVisitor,
+                                     uint64_t stackScanEpoch)
 {
+#if defined(MRT_GC_UNIT_TESTS)
+    RootVisitor observedInvisibleRootVisitor = [&invisibleRootVisitor](ObjectRef& root) {
+        NoteLargeArrayInitRootVisit(LargeArrayRootVisitSite::MINOR_MARK,
+                                    to_object(safe(root.LoadPlain(std::memory_order_acquire))));
+        invisibleRootVisitor(root);
+    };
+    RootVisitor& visitedInvisibleRootVisitor = observedInvisibleRootVisitor;
+#else
+    RootVisitor& visitedInvisibleRootVisitor = invisibleRootVisitor;
+#endif
 #if defined(MRT_REMSET_BITMAP_CROSSCHECK)
     RememberedSet& remset = Heap::GetHeap().GetRememberedSet();
     RootVisitor checkedRawRootVisitor = [&remset, &rawRootVisitor](ObjectRef& root) {
@@ -760,7 +771,7 @@ void WCollector::VisitMinorRootSlots(RootVisitor& rawRootVisitor, uint64_t stack
         if (stackScanEpoch != 0) {
             ++stwFallback;
         }
-        mutator.VisitMutatorRoots(visitedRawRootVisitor);
+        mutator.VisitMutatorRoots(visitedRawRootVisitor, visitedInvisibleRootVisitor);
     });
     if (stackScanEpoch != 0) {
         LOG(RTLOG_ERROR,
@@ -813,7 +824,9 @@ void WCollector::VisitMinorValueRoots(const std::function<void(BaseObject*)>& vi
     gMinorRootOrigin = "unknown";
 }
 
-void WCollector::VisitMinorRoots(const std::function<void(BaseObject*)>& visitor, uint64_t stackScanEpoch)
+void WCollector::VisitMinorRoots(const std::function<void(BaseObject*)>& visitor,
+                                 const std::function<void(BaseObject*)>& invisibleVisitor,
+                                 uint64_t stackScanEpoch)
 {
     RootVisitor rawRootVisitor = [this, &visitor](ObjectRef& root) {
         BaseObject* obj = ResolveMinorReference(root);
@@ -833,7 +846,19 @@ void WCollector::VisitMinorRoots(const std::function<void(BaseObject*)>& visitor
         }
         visitor(obj);
     };
-    VisitMinorRootSlots(rawRootVisitor, stackScanEpoch);
+    RootVisitor invisibleRootVisitor = [this, &invisibleVisitor](ObjectRef& root) {
+        BaseObject* obj = ResolveMinorReference(root);
+        if (obj != nullptr && Heap::IsHeapAddress(obj) &&
+            !Collector::PlausibleManagedObjectGate("VisitMinorRoots.invisible", obj)) {
+            BaseObject* host = Collector::TryRecoverInteriorBase(obj);
+            if (host != nullptr) {
+                invisibleVisitor(host);
+            }
+            return;
+        }
+        invisibleVisitor(obj);
+    };
+    VisitMinorRootSlots(rawRootVisitor, invisibleRootVisitor, stackScanEpoch);
     VisitMinorValueRoots(visitor);
 }
 

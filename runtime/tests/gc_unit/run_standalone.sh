@@ -26,6 +26,7 @@ if [[ -z "$RUNTIME_LIB_DIR" || ! -f "$RUNTIME_LIB_DIR/libcangjie-runtime.so" ]];
   exit 2
 fi
 
+TEST_DEFINES=(-DMRT_ZSTAT_COMPILED=1)
 RANGE_REGISTRY_FLAGS=()
 RANGE_REGISTRY_SOURCES=()
 if [[ "${MRT_TESTABLE_INTERNALS:-0}" == "1" ]]; then
@@ -37,6 +38,20 @@ if [[ "${MRT_TESTABLE_INTERNALS:-0}" == "1" ]]; then
   fi
   RANGE_REGISTRY_FLAGS=(-DMRT_TESTABLE_INTERNALS=1)
   RANGE_REGISTRY_SOURCES=("$SRC/test_range_registry.cpp")
+fi
+
+# Keep the standalone test translation units in the same compile-time
+# configuration as the product SO they bind. The default SO deliberately has
+# neither test-only export; an MRT_GC_UNIT_TESTS SO must compile both integration
+# suites into this executable so a partial product configuration fails at link.
+nm -D "$RUNTIME_LIB_DIR/libcangjie-runtime.so" >"$OUT/runtime-dynamic-symbols.txt"
+if /usr/bin/grep -Eq \
+    'ShouldWaitForIgnoredGcRequest|CJ_MRT_SetLargeArrayInitTestHooks' \
+    "$OUT/runtime-dynamic-symbols.txt"; then
+  TEST_DEFINES+=(-DMRT_GC_UNIT_TESTS=1)
+  echo "GC_UNIT_PRODUCT_CONFIGURATION=MRT_GC_UNIT_TESTS"
+else
+  echo "GC_UNIT_PRODUCT_CONFIGURATION=DEFAULT"
 fi
 
 BOUNDS_INC="$ROOT/runtime/third_party/third_party_bounds_checking_function/include"
@@ -51,15 +66,9 @@ if [[ -d "$ROOT/runtime/output/temp/include" ]]; then
   INC_FLAGS+=(-I"$ROOT/runtime/output/temp/include")
 fi
 
-GC_UNIT_DEFS=(-DMRT_ZSTAT_COMPILED=1)
-nm -D "$RUNTIME_LIB_DIR/libcangjie-runtime.so" >"$OUT/runtime-dynamic-symbols.txt"
-if /usr/bin/grep -q 'ShouldWaitForIgnoredGcRequest' "$OUT/runtime-dynamic-symbols.txt"; then
-  GC_UNIT_DEFS+=(-DMRT_GC_UNIT_TESTS=1)
-fi
-
 $CXX -std=gnu++17 -O0 -g -Wall -Wextra -pthread -fno-rtti \
   "${RANGE_REGISTRY_FLAGS[@]}" \
-  "${GC_UNIT_DEFS[@]}" \
+  "${TEST_DEFINES[@]}" \
   "${INC_FLAGS[@]}" \
   "$SRC/gc_unit_main.cpp" \
   "$SRC/gc_unit_stubs.cpp" \
@@ -112,6 +121,7 @@ $CXX -std=gnu++17 -O0 -g -Wall -Wextra -pthread -fno-rtti \
     "$SRC/test_mark_stack_entry.cpp" \
     "$SRC/test_mark_stripe.cpp" \
     "$SRC/test_partial_array.cpp" \
+    "$SRC/test_segmented_array_init.cpp" \
     "$SRC/test_verify_roots.cpp" \
     "$SRC/test_mem_map.cpp" \
   -L"$RUNTIME_LIB_DIR" -Wl,-rpath,"$RUNTIME_LIB_DIR" \

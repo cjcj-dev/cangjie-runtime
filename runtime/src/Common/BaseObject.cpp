@@ -122,6 +122,12 @@ void BaseObject::ForEachRefField(const RefFieldVisitor& visitor)
     TypeInfo* typeInfo = GetTypeInfo();
     if (typeInfo->HasRefField()) {
         if (UNLIKELY(typeInfo->IsRawArray())) {
+            if (IsInvisibleObject()) {
+#if defined(MRT_GC_UNIT_TESTS)
+                NoteLargeArrayInitRootVisit(LargeArrayRootVisitSite::ITERATOR_SKIP, this);
+#endif
+                return;
+            }
             ForEachElementInArray(this, visitor);
         } else {
             ForEachRefFieldInNonArrayObject(this, visitor);

@@ -62,9 +62,11 @@ public:
     ObjectState GetObjectState() const { return stateWord.GetObjectState(); }
 
     bool IsForwarded() const { return GetObjectState().IsForwardedState(); }
+    bool IsInvisibleObject() const { return GetObjectState().IsInvisibleObject(); }
 
     void SetClassInfo(TypeInfo* klassRef) { stateWord.SetTypeInfo(klassRef); }
     void SetStateCode(ObjectState::ObjectStateCode state) { stateWord.SetStateCode(state); }
+    void SetInvisibleObject(bool invisible) { stateWord.SetInvisibleObject(invisible); }
 
     bool IsInTraceRegion() const;
 
