@@ -16,11 +16,9 @@ import sys
 from collections import defaultdict
 from pathlib import Path
 
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+from gclog_schema import parse_gclog
 
-STW = re.compile(
-    r"rec=stw\b.*\bseq=(\d+)\s+reason=(\S+)\s+wait_ns=(\d+)\s+held_ns=(\d+)"
-)
-PHASE = re.compile(r"rec=phase\b.*\bname=(\S+)\s+us=(\d+)")
 REFFIX = re.compile(r"\[GCV2\]\[reffix\]\[conc_heap\].*\bnObj=(\d+)\s+nSlot=(\d+)")
 CENSUS = re.compile(r"\[GCV2\]\[hapillar\]\[postflip\]\s+(.*)")
 KV = re.compile(r"([A-Za-z][A-Za-z0-9]*)=(\d+)")
@@ -67,7 +65,8 @@ def analyze_reasons(runs: list[Path]) -> tuple[dict, dict]:
     ref_rows: list[dict] = []
     for run in runs:
         stderr = (run / "stderr").read_text(errors="replace")
-        events = [(int(seq), reason, int(held)) for seq, reason, _, held in STW.findall(stderr)]
+        records = parse_gclog(stderr)
+        events = [(record.seq, record.reason, record.held_ns) for record in records.stw]
         by_reason: dict[str, int] = defaultdict(int)
         for _, reason, held in events:
             by_reason[reason] += held
@@ -75,8 +74,8 @@ def analyze_reasons(runs: list[Path]) -> tuple[dict, dict]:
         for reason, held in by_reason.items():
             per_reason[reason].append(held)
         phases: dict[str, int] = defaultdict(int)
-        for name, us in PHASE.findall(stderr):
-            phases[name] += int(us)
+        for record in records.phases:
+            phases[record.name] += record.ns / 1000.0
         report = report_text(run)
         match = REFFIX.search(report)
         if match is None:

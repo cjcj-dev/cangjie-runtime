@@ -56,6 +56,7 @@ void CopyCollector::CopyObject(const BaseObject& fromObj, BaseObject& toObj, siz
 void CopyCollector::RunGarbageCollection(uint64_t gcIndex, GCReason reason)
 {
     ScopedEntryTrace trace("CJRT_GC_START");
+    const uint64_t cycleSeq = GcLog::BeginCycle();
     // prevent other threads stop-the-world during GC.
     // this may be removed in the future.
     ScopedSTWLock stwLock;
@@ -83,7 +84,7 @@ void CopyCollector::RunGarbageCollection(uint64_t gcIndex, GCReason reason)
     // Emitted here rather than from GCStats::Dump, because UpdateGCStats below (and so Dump) is
     // skipped for young collections: a minor would produce no cycle record and its phases would
     // be attributed to the next major.
-    uint64_t cycleSeq = GcLog::CompleteCycle();
+    GcLog::CompleteCycle(cycleSeq);
     GcLog::Cycle(cycleSeq, reason == GC_REASON_YOUNG ? "minor" : "major",
                  g_gcRequests[reason].name, gcStats.gcStartTime, gcStats.gcEndTime - gcStats.gcStartTime,
                  gcStats.liveBytesBeforeGC, gcStats.liveBytesAfterGC, gcStats.collectedBytes,

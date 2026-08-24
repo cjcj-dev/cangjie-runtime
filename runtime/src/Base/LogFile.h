@@ -8,8 +8,10 @@
 #ifndef MRT_LOG_FILE_H
 #define MRT_LOG_FILE_H
 
+#include <cstring>
 #include <mutex>
 
+#include "Base/GcLog.h"
 #include "Base/Log.h"
 #include "Base/Macros.h"
 #include "Base/TimeUtils.h"
@@ -266,12 +268,11 @@ private:
 
 #define MRT_PHASE_TIMER(...) Timer MRT_pt_##__LINE__(__VA_ARGS__)
 
-// One structured phase record alongside the human-readable line above. The schema, the version
-// and the cycle counter live in Base/GcLog.h; this cannot include it because GcLog.h needs
-// WriteLog from here. Keep the field order identical to GcLog::Phase.
-void EmitPhaseRecord(const char* name, uint64_t us);
-// True when MRT_GC_LOG enables structured cycle/phase records (defined in LogFile.cpp).
-bool GcLogRecordsEnabled();
+// The sole out-of-line Timer → GCLOG bearing point.  Inclusive and structural-leaf records receive
+// the same constructor-captured seq, name and nanosecond sample, so neither schema can drift.
+// `kind` is -1 unknown, 0 concurrent, 1 pause.
+void EmitTimerRecords(uint64_t seq, const char* name, uint64_t ns, bool isLeaf, int kind, uint64_t depth,
+                      bool pathOk, const char* path);
 
 class Timer {
 public:
@@ -281,41 +282,119 @@ public:
         // ENABLE_LOG alone used to gate phase records; under DEFAULT_MRT_REPORT=0 that
         // silently dropped rec=phase even with MRT_GC_LOG=1.
         zstatActive = ZStat::Enabled();
-        if (ENABLE_LOG(type) || GcLogRecordsEnabled() || zstatActive) {
-            startTime = TimeUtil::MicroSeconds();
+        gcLogActive = GcLog::Enabled();
+        if (ENABLE_LOG(type) || gcLogActive || zstatActive) {
+            startTimeNs = TimeUtil::NanoSeconds();
             active = true;
+            cycleSeq = GcLog::CurrentSeq();
             // ZStatPhase kind (pause vs concurrent, zStat.hpp:257/270) is sampled at scope
             // entry: a phase that straddles the world-release is booked where its work began.
             if (zstatActive) {
                 zstatPauseAtStart = ZStat::WorldStoppedNow();
             }
+            if (gcLogActive) {
+                parent = CurrentLeafTimer();
+                if (parent != nullptr) {
+                    parent->hasChild = true;
+                }
+                CurrentLeafTimer() = this;
+            }
         }
     }
+
+    Timer(const Timer&) = delete;
+    Timer& operator=(const Timer&) = delete;
+    Timer(Timer&&) = delete;
+    Timer& operator=(Timer&&) = delete;
 
     ~Timer()
     {
         if (!active) {
             return;
         }
-        uint64_t stopTime = TimeUtil::MicroSeconds();
-        uint64_t diffTime = stopTime - startTime;
-        if (ENABLE_LOG(logType)) {
-            WriteLog(true, logType, "%s time: %sus", name.Str(), Pretty(diffTime).Str());
+        if (gcLogActive) {
+            CHECK(CurrentLeafTimer() == this);
+            CurrentLeafTimer() = parent;
         }
-        // EmitPhaseRecord → GcLog::Phase self-gates on MRT_GC_LOG (always-on stderr).
-        EmitPhaseRecord(name.Str(), diffTime);
+        uint64_t stopTimeNs = TimeUtil::NanoSeconds();
+        uint64_t diffTimeNs = stopTimeNs - startTimeNs;
+        if (ENABLE_LOG(logType)) {
+            WriteLog(true, logType, "%s time: %sus", name.Str(), Pretty(diffTimeNs / 1000).Str());
+        }
+        char path[GcLog::MAX_PHASE_PATH + 1] = "_";
+        uint64_t depth = 1;
+        bool pathOk = true;
+        const bool isLeaf = gcLogActive && !hasChild;
+        if (isLeaf) {
+            BuildLeafPath(path, sizeof(path), depth, pathOk);
+        }
+        EmitTimerRecords(cycleSeq, name.Str(), diffTimeNs, isLeaf,
+                         zstatActive ? (zstatPauseAtStart ? 1 : 0) : -1, depth, pathOk, path);
+        // Keep ZStat as an adjacent independent downstream: cutting GCLOG emission must not cut
+        // the positive-control account.
         if (zstatActive) {
-            ZStat::NotePhase(name.Str(), zstatPauseAtStart, diffTime * 1000); // 1000: us → ns
+            ZStat::NotePhase(name.Str(), zstatPauseAtStart, diffTimeNs);
         }
     }
 
 private:
+    static void FoldPathComponent(const char* text, char* out)
+    {
+        size_t i = 0;
+        if (text != nullptr) {
+            for (; i < GcLog::MAX_PHASE_NAME && text[i] != '\0'; ++i) {
+                char c = text[i];
+                bool keep = (c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z') ||
+                            (c >= '0' && c <= '9') || c == '.' || c == '_' || c == '-';
+                out[i] = keep ? c : '_';
+            }
+        }
+        if (i == 0) {
+            out[i++] = '_';
+        }
+        out[i] = '\0';
+    }
+
+    void BuildLeafPath(char* out, size_t cap, uint64_t& depth, bool& pathOk) const
+    {
+        size_t pos = 0;
+        depth = 0;
+        pathOk = true;
+        for (const Timer* timer = this; timer != nullptr; timer = timer->parent) {
+            char component[GcLog::MAX_PHASE_NAME + 1];
+            FoldPathComponent(timer->name.Str(), component);
+            size_t componentLen = std::strlen(component);
+            size_t separatorLen = pos == 0 ? 0 : 1;
+            if (pos + separatorLen + componentLen >= cap) {
+                pathOk = false;
+                break;
+            }
+            if (separatorLen != 0) {
+                out[pos++] = '>';
+            }
+            std::memcpy(out + pos, component, componentLen);
+            pos += componentLen;
+            ++depth;
+        }
+        out[pos] = '\0';
+    }
+
+    static Timer*& CurrentLeafTimer()
+    {
+        static thread_local Timer* current = nullptr;
+        return current;
+    }
+
     CString name;
-    uint64_t startTime = 0;
+    uint64_t startTimeNs = 0;
+    uint64_t cycleSeq = 0;
     LogType logType;
     bool active = false;
+    bool gcLogActive = false;
     bool zstatActive = false;
     bool zstatPauseAtStart = false;
+    bool hasChild = false;
+    Timer* parent = nullptr;
 };
 } // namespace MapleRuntime
 #endif // MRT_LOG_FILE_H
