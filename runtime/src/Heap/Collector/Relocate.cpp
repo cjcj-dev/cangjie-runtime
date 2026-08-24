@@ -189,10 +189,12 @@ bool WCollector::IsUnmovableFromObject(BaseObject* obj) const
         return false;
     }
 
-    RegionInfo* regionInfo = nullptr;
-    if (RegionInfo::InGhostFromRegion(obj)) {
-        regionInfo = RegionInfo::GetGhostFromRegionAt(reinterpret_cast<uintptr_t>(obj));
-    } else {
+    // zRelocate.cpp:385-390: a lookup miss after the membership probe is a legal
+    // concurrent outcome (ghost dispel), so re-resolve from authoritative state
+    // instead of using a pointer that this race can leave null. GetRegionInfoAt
+    // itself CHECKs (early-stop) on a genuine no-owner invariant break.
+    RegionInfo* regionInfo = RegionInfo::GetGhostFromRegionAt(reinterpret_cast<uintptr_t>(obj));
+    if (regionInfo == nullptr) {
         regionInfo = RegionInfo::GetRegionInfoAt(reinterpret_cast<uintptr_t>(obj));
     }
     return regionInfo->IsUnmovableFromRegion();
