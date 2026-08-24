@@ -77,6 +77,12 @@ struct RelocationReceiptTestAccess {
         }
         return result;
     }
+
+    static BaseObject* ForwardExclusive(
+        WCollector& collector, BaseObject* from, BaseObject* to, RegionInfo* copyPage)
+    {
+        return collector.ForwardObjectExclusive(from, to, copyPage);
+    }
 };
 
 } // namespace MapleRuntime
@@ -562,6 +568,62 @@ GC_TEST(ForwardingPublicationProduct, ClearDrainEntersClaimedWaitBeforeReturning
 
     ForwardingTable::DropRetiredCovering(region->GetRegionStart(), region->GetRegionSize());
     RelocationReceiptTestAccess::BindCollector(Heap::GetHeap().GetCollectorResources(), nullptr);
+    region->metadata.liveInfo = nullptr;
+    fx.FreePlanted(live);
+}
+
+// zRelocate.cpp:362-372: Exclusive owns the before-copy Publication through
+// CopyObject, receipt installation, queue publication and FORWARDED state.  Use
+// the product allocator's real queue so no receipt is hand-fed by this test.
+GC_TEST(ForwardingPublicationProduct, ExclusiveCopyPublishesProductReceipt)
+{
+    GcHeapFixture& fx = ProductFixture();
+    RegionInfo* region = RegionInfo::InitRegion(0, 1, RegionInfo::UnitRole::SMALL_SIZED_UNITS);
+    RegionInfo* destination = RegionInfo::InitRegion(1, 1, RegionInfo::UnitRole::SMALL_SIZED_UNITS);
+    GC_EXPECT_TRUE(region != nullptr && destination != nullptr);
+    region->SetRegionType(RegionInfo::RegionType::THREAD_LOCAL_REGION);
+    destination->SetRegionType(RegionInfo::RegionType::THREAD_LOCAL_REGION);
+    BaseObject* fromObject = fx.PlaceObject(region->GetRegionStart() + 64);
+    BaseObject* toObject = fx.PlaceObject(destination->GetRegionStart() + 64);
+    region->SetRegionAllocPtr(reinterpret_cast<MAddress>(fromObject) + fromObject->GetSize());
+    destination->SetRegionAllocPtr(reinterpret_cast<MAddress>(toObject) + toObject->GetSize());
+    const MAddress from = reinterpret_cast<MAddress>(fromObject);
+    const MAddress to = reinterpret_cast<MAddress>(toObject);
+
+    WCollector collector(Heap::GetHeap().GetAllocator(), Heap::GetHeap().GetCollectorResources());
+    RelocationReceiptTestAccess::BindCollector(Heap::GetHeap().GetCollectorResources(), &collector);
+    LiveInfo* live = PrepareForwardable(fx, region, from);
+    RegionSpace& productSpace = reinterpret_cast<RegionSpace&>(Heap::GetHeap().GetAllocator());
+    RelocationRequestQueue& queue = productSpace.GetRegionManager().GetRelocationRequestQueue();
+    queue.BeginWorkers(1);
+    const auto request = queue.Add(region, from);
+    GC_EXPECT_TRUE(request.accepted);
+
+    StateWord oldWord = fromObject->GetStateWord();
+    GC_EXPECT_TRUE(fromObject->TryLockObject(oldWord));
+    region->NoteCopyInflight();
+    BaseObject* relocated =
+        RelocationReceiptTestAccess::ForwardExclusive(collector, fromObject, toObject, region);
+
+    const bool productPublished = request.request->state() == RelocationRequestQueue::State::COMPLETED;
+    GC_EXPECT_TRUE(productPublished);
+    if (!productPublished) {
+        (void)queue.Fail(from);
+    }
+    GC_EXPECT_TRUE(relocated == toObject);
+    GC_EXPECT_EQ(request.request->receipt(), to);
+    GC_EXPECT_EQ(queue.Wait(request.request), to);
+    GC_EXPECT_EQ(ForwardingTable::FindTo(from), to);
+    GC_EXPECT_TRUE(fromObject->IsForwarded());
+    GC_EXPECT_EQ(region->CopyInflight(), 0);
+    GC_EXPECT_TRUE(queue.SynchronizePoll().workersDone);
+
+    RelocationReceiptTestAccess::BindCollector(Heap::GetHeap().GetCollectorResources(), nullptr);
+    ForwardingTable::ClearEntries(region->GetRegionStart(), region->GetRegionSize());
+    ForwardingTable::DropRetiredCovering(region->GetRegionStart(), region->GetRegionSize());
+    if (region->IsGhostFromRegion()) {
+        region->DispelGhostFromRegion();
+    }
     region->metadata.liveInfo = nullptr;
     fx.FreePlanted(live);
 }
