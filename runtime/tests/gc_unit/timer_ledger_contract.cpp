@@ -8,6 +8,7 @@
 #include "Base/LogFile.h"
 
 using MapleRuntime::GcLog;
+using MapleRuntime::FINALIZE;
 using MapleRuntime::Timer;
 
 namespace {
@@ -47,8 +48,18 @@ int main()
     CloseCycle(capturedSeq);
     captured.reset();
 
+    const uint64_t ownershipSeq = GcLog::BeginCycle();
     {
-        Timer finalizer("Finalizer");
+        Timer external("contract.external", FINALIZE);
+    }
+    {
+        Timer internalNonpillar("young.flush_alloc");
+    }
+    GcLog::Stw("timer_ownership", 1, 2);
+    CloseCycle(ownershipSeq);
+
+    {
+        Timer finalizer("Finalizer", FINALIZE);
     }
     std::puts("TIMER_LEDGER_CONTRACT_OK");
     return 0;

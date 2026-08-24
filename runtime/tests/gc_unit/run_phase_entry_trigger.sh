@@ -134,6 +134,18 @@ else:
         errors.append("unowned_finalizer_seq")
     if "Finalizer" not in ledger["unowned_nonpillar_names"]:
         errors.append("unowned_nonpillar_exclusion")
+    external = leaves.get("contract.external")
+    if external is None or external.seq != 0:
+        errors.append("active_cycle_external_seq")
+    internal = leaves.get("young.flush_alloc")
+    if internal is None or internal.seq == 0 or internal.seq not in {cycle.seq for cycle in records.cycles}:
+        errors.append("active_cycle_internal_seq")
+    if "contract.external" not in ledger["unowned_nonpillar_names"]:
+        errors.append("active_cycle_external_unowned")
+    owned_row = next((row for row in ledger["cycles"] if internal is not None and
+                      row["seq"] == internal.seq), None)
+    if owned_row is None or owned_row["structural_leaf_ns"] != internal.ns:
+        errors.append("active_cycle_internal_bound")
 
 print(
     f"SCHEMA_LEDGER_GUARD mode={mode} cycles={len(records.cycles)} stw={len(records.stw)} "

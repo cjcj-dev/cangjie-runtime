@@ -146,6 +146,18 @@ class PhaseLeafLedgerTest(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, r"inequality_1.*seq=1 sum_ns=101 dur_ns=100"):
             phase_leaf_ledger("\n".join((cycle(1, 100), leaf(1, "young.flush_alloc", 101))))
 
+    def test_gc_external_unowned_and_internal_nonpillar_owned_in_same_log(self) -> None:
+        text = "\n".join((
+            cycle(1, 100),
+            leaf(0, "contract.external", 999),
+            leaf(1, "young.flush_alloc", 99),
+        ))
+        result = phase_leaf_ledger(text)
+        self.assertEqual(result["unowned_nonpillar_names"], ["contract.external"])
+        self.assertEqual(result["cycles"][0]["structural_leaf_ns"], 99)
+        with self.assertRaisesRegex(ValueError, r"inequality_1.*sum_ns=101 dur_ns=100"):
+            phase_leaf_ledger(text.replace("name=young.flush_alloc ns=99", "name=young.flush_alloc ns=101"))
+
     @staticmethod
     def inequality_fixture(*, pillar_ns: int = 20, nonpillar_ns: int = 10,
                            zpause_ns: int = 30, cycle_ns: int = 100,
