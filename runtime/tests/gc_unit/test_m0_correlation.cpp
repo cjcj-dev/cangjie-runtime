@@ -12,6 +12,7 @@
 #endif
 
 #include "Cangjie.h"
+#include "gc_heap_fixture.hpp"
 #include "Heap/Allocator/ForwardingTable.h"
 #include "Heap/Allocator/RegionManager.h"
 #include "Heap/Allocator/RegionSpace.h"
@@ -20,7 +21,6 @@
 #include "Heap/Verify/M0ExitDiagnostics.h"
 #include "Heap/WCollector/WCollector.h"
 #include "TypeInfoManager.h"
-#include "gc_heap_fixture.hpp"
 #include "gc_unittest.hpp"
 
 using namespace MapleRuntime;
@@ -71,7 +71,7 @@ bool IsClass(const char* value, const char* expected)
 
 TypeInfo* ProductClassInfo()
 {
-    static alignas(TypeInfo) unsigned char storage[sizeof(TypeInfo)];
+    alignas(TypeInfo) static unsigned char storage[sizeof(TypeInfo)];
     static bool initialized = false;
     if (!initialized) {
         std::memset(storage, 0, sizeof(storage));
@@ -135,7 +135,7 @@ void* RunMoveableBindObserveRelease(void*)
     M0Correlation::ResetForTest();
     M0Correlation::SelectKeepLive(0);
     M0Correlation::TagNextAllocation(key);
-    BaseObject* object = MCC_NewObject(ProductClassInfo(), ProductObjectSize());
+    BaseObject* object = reinterpret_cast<BaseObject*>(MCC_NewObject(ProductClassInfo(), ProductObjectSize()));
     size_t failures = object == nullptr ? 1 : 0;
     const M0Correlation::AllocationToken token = M0Correlation::ExternalTokenForTest(key);
     failures += token == 0 ? 1 : 0;
@@ -163,8 +163,10 @@ void* RunPinnedReject(void*)
     constexpr uint64_t key = 0x402;
     M0Correlation::ResetForTest();
     M0Correlation::TagNextAllocation(key);
-    BaseObject* pinned = MCC_NewPinnedObject(ProductClassInfo(), ProductObjectSize(), false);
-    BaseObject* laterMoveable = MCC_NewObject(ProductClassInfo(), ProductObjectSize());
+    BaseObject* pinned = reinterpret_cast<BaseObject*>(
+        MCC_NewPinnedObject(ProductClassInfo(), ProductObjectSize(), false));
+    BaseObject* laterMoveable = reinterpret_cast<BaseObject*>(
+        MCC_NewObject(ProductClassInfo(), ProductObjectSize()));
     const M0Correlation::TestSnapshot snapshot = M0Correlation::SnapshotForTest();
     size_t failures = pinned == nullptr || laterMoveable == nullptr ? 1 : 0;
     failures += snapshot.tagRejected == 1 ? 0 : 1;
@@ -185,7 +187,7 @@ void* RunKeepLive(void* rawTreatment)
     M0Correlation::ResetForTest();
     M0Correlation::SelectKeepLive(treatment ? key : 0);
     M0Correlation::TagNextAllocation(key);
-    BaseObject* object = MCC_NewObject(ProductClassInfo(), ProductObjectSize());
+    BaseObject* object = reinterpret_cast<BaseObject*>(MCC_NewObject(ProductClassInfo(), ProductObjectSize()));
     size_t hitsBefore = 0;
     Heap::GetHeap().VisitAllExportRoots([&](ObjectRef& root) {
         if (raw(root.LoadPlain()) == reinterpret_cast<uintptr_t>(object)) {
@@ -216,7 +218,8 @@ void* RunPinnedSlotReuse(void*)
 {
     constexpr uint64_t key = 0x405;
     M0Correlation::ResetForTest();
-    BaseObject* pinned = MCC_NewPinnedObject(ProductClassInfo(), ProductObjectSize(), false);
+    BaseObject* pinned = reinterpret_cast<BaseObject*>(
+        MCC_NewPinnedObject(ProductClassInfo(), ProductObjectSize(), false));
     size_t failures = pinned == nullptr ? 1 : 0;
     if (pinned == nullptr) {
         return reinterpret_cast<void*>(failures);
