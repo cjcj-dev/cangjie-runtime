@@ -215,7 +215,7 @@ GC_TEST(PartialArray, MultiChunk)
     ExpectSame(buf.slots, n);
 }
 
-GC_TEST(PartialArray, BoundaryRefs)
+GC_OTHER_VM_TEST(PartialArray, BoundaryRefs)
 {
     GcHeapFixture fx;
     const size_t n = MarkPartialArray::MIN_LENGTH * 3;
