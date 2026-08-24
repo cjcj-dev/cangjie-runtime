@@ -1,0 +1,137 @@
+[  0%] Built target cjNativeStartAndEnd
+[  1%] Checking that HeapSlot compare-exchange writes stay inside HealSlot
+[  1%] Checking that a diagnostic documenting a gate is not an all-no-op implementation
+[ 20%] Built target boundscheck
+[ 24%] Built target cjthreadmodel
+[ 25%] Built target Base
+[ 27%] Built target Concurrency
+[ 29%] Built target Common
+[ 30%] Built target Loader
+[ 31%] Built target BinaryFile
+[ 32%] Built target CjFileLoader
+[ 34%] Built target CjSemanticVersion
+[ 34%] Built target CjFile
+[ 35%] Built target Inspector
+[ 37%] Built target Exception
+[ 38%] Built target Heap
+[ 40%] Built target Barrier
+[ 43%] Built target Allocator
+[ 49%] Built target WCollector
+[ 49%] Building CXX object src/Heap/Collector/CMakeFiles/Collector.dir/CopyCollector.cpp.o
+DIAG_HOLLOW_GUARD PASS gated_subsystems=29
+[ 51%] Built target Mutator
+[ 51%] Built target check_diag_not_hollow
+[ 55%] Built target ObjectModel
+[ 68%] Built target Verify
+[ 72%] Built target Sync
+[ 77%] Built target UnwindStack
+[ 78%] Built target CpuProfiler
+[ 80%] Built target Signal
+[ 81%] Built target Interpreter
+[ 81%] Built target Sanitizer
+In file included from /root/cj_build/impl_relocation_receipt_queue5-mutant/src/runtime/src/Heap/Collector/CopyCollector.cpp:8:
+In file included from /root/cj_build/impl_relocation_receipt_queue5-mutant/src/runtime/src/Heap/Collector/CopyCollector.h:11:
+In file included from /root/cj_build/impl_relocation_receipt_queue5-mutant/src/runtime/src/Heap/Allocator/RegionSpace.h:19:
+In file included from /root/cj_build/impl_relocation_receipt_queue5-mutant/src/runtime/src/Heap/Allocator/Allocator.h:11:
+In file included from /root/cj_build/impl_relocation_receipt_queue5-mutant/src/runtime/src/Heap/Allocator/AllocBufferManager.h:15:
+In file included from /root/cj_build/impl_relocation_receipt_queue5-mutant/src/runtime/src/Heap/Allocator/AllocBuffer.h:16:
+In file included from /root/cj_build/impl_relocation_receipt_queue5-mutant/src/runtime/src/Heap/Allocator/RegionList.h:11:
+In file included from /root/cj_build/impl_relocation_receipt_queue5-mutant/src/runtime/src/Heap/Allocator/RegionInfo.h:41:
+/root/cj_build/impl_relocation_receipt_queue5-mutant/src/runtime/src/Heap/Verify/AllocPhaseDiag.h:57:1: warning: inline variables are a C++17 extension [-Wc++17-extensions]
+inline Slot g_table[kCap] = {};
+^
+/root/cj_build/impl_relocation_receipt_queue5-mutant/src/runtime/src/Heap/Verify/AllocPhaseDiag.h:58:1: warning: inline variables are a C++17 extension [-Wc++17-extensions]
+inline NearEntry g_near[kNearCap] = {};
+^
+In file included from /root/cj_build/impl_relocation_receipt_queue5-mutant/src/runtime/src/Heap/Collector/CopyCollector.cpp:8:
+In file included from /root/cj_build/impl_relocation_receipt_queue5-mutant/src/runtime/src/Heap/Collector/CopyCollector.h:11:
+In file included from /root/cj_build/impl_relocation_receipt_queue5-mutant/src/runtime/src/Heap/Allocator/RegionSpace.h:19:
+In file included from /root/cj_build/impl_relocation_receipt_queue5-mutant/src/runtime/src/Heap/Allocator/Allocator.h:11:
+In file included from /root/cj_build/impl_relocation_receipt_queue5-mutant/src/runtime/src/Heap/Allocator/AllocBufferManager.h:15:
+In file included from /root/cj_build/impl_relocation_receipt_queue5-mutant/src/runtime/src/Heap/Allocator/AllocBuffer.h:16:
+In file included from /root/cj_build/impl_relocation_receipt_queue5-mutant/src/runtime/src/Heap/Allocator/RegionList.h:11:
+In file included from /root/cj_build/impl_relocation_receipt_queue5-mutant/src/runtime/src/Heap/Allocator/RegionInfo.h:43:
+/root/cj_build/impl_relocation_receipt_queue5-mutant/src/runtime/src/Heap/Verify/NullRouteCaller.h:34:1: warning: inline variables are a C++17 extension [-Wc++17-extensions]
+inline thread_local const char* g_tag = nullptr;
+^
+/root/cj_build/impl_relocation_receipt_queue5-mutant/src/runtime/src/Heap/Verify/NullRouteCaller.h:35:1: warning: inline variables are a C++17 extension [-Wc++17-extensions]
+inline thread_local const char* g_edgeSrc = nullptr;
+^
+/root/cj_build/impl_relocation_receipt_queue5-mutant/src/runtime/src/Heap/Verify/NullRouteCaller.h:36:1: warning: inline variables are a C++17 extension [-Wc++17-extensions]
+inline thread_local uintptr_t g_slot = 0;
+^
+/root/cj_build/impl_relocation_receipt_queue5-mutant/src/runtime/src/Heap/Verify/NullRouteCaller.h:37:1: warning: inline variables are a C++17 extension [-Wc++17-extensions]
+inline thread_local void* g_host = nullptr;
+^
+In file included from /root/cj_build/impl_relocation_receipt_queue5-mutant/src/runtime/src/Heap/Collector/CopyCollector.cpp:8:
+In file included from /root/cj_build/impl_relocation_receipt_queue5-mutant/src/runtime/src/Heap/Collector/CopyCollector.h:11:
+In file included from /root/cj_build/impl_relocation_receipt_queue5-mutant/src/runtime/src/Heap/Allocator/RegionSpace.h:19:
+In file included from /root/cj_build/impl_relocation_receipt_queue5-mutant/src/runtime/src/Heap/Allocator/Allocator.h:11:
+In file included from /root/cj_build/impl_relocation_receipt_queue5-mutant/src/runtime/src/Heap/Allocator/AllocBufferManager.h:15:
+In file included from /root/cj_build/impl_relocation_receipt_queue5-mutant/src/runtime/src/Heap/Allocator/AllocBuffer.h:16:
+In file included from /root/cj_build/impl_relocation_receipt_queue5-mutant/src/runtime/src/Heap/Allocator/RegionList.h:11:
+In file included from /root/cj_build/impl_relocation_receipt_queue5-mutant/src/runtime/src/Heap/Allocator/RegionInfo.h:53:
+/root/cj_build/impl_relocation_receipt_queue5-mutant/src/runtime/src/Heap/Verify/MutatorRelocate.h:102:8: warning: constexpr if is a C++17 extension [-Wc++17-extensions]
+    if constexpr (kWaitRegionPublish) {
+       ^
+In file included from /root/cj_build/impl_relocation_receipt_queue5-mutant/src/runtime/src/Heap/Collector/CopyCollector.cpp:8:
+In file included from /root/cj_build/impl_relocation_receipt_queue5-mutant/src/runtime/src/Heap/Collector/CopyCollector.h:11:
+In file included from /root/cj_build/impl_relocation_receipt_queue5-mutant/src/runtime/src/Heap/Allocator/RegionSpace.h:22:
+In file included from /root/cj_build/impl_relocation_receipt_queue5-mutant/src/runtime/src/Heap/Allocator/RegionManager.h:25:
+In file included from /root/cj_build/impl_relocation_receipt_queue5-mutant/src/runtime/src/Heap/Allocator/FreeRegionManager.h:15:
+In file included from /root/cj_build/impl_relocation_receipt_queue5-mutant/src/runtime/src/Common/ScopedObjectAccess.h:11:
+In file included from /root/cj_build/impl_relocation_receipt_queue5-mutant/src/runtime/src/Mutator/Mutator.inline.h:11:
+In file included from /root/cj_build/impl_relocation_receipt_queue5-mutant/src/runtime/src/Mutator/MutatorManager.h:17:
+/root/cj_build/impl_relocation_receipt_queue5-mutant/src/runtime/src/Base/GcLog.h:217:45: warning: format string is not a string literal [-Wformat-nonliteral]
+        int n = vsnprintf(buf, sizeof(buf), format, args);
+                                            ^~~~~~
+In file included from /root/cj_build/impl_relocation_receipt_queue5-mutant/src/runtime/src/Heap/Collector/CopyCollector.cpp:8:
+In file included from /root/cj_build/impl_relocation_receipt_queue5-mutant/src/runtime/src/Heap/Collector/CopyCollector.h:13:
+/root/cj_build/impl_relocation_receipt_queue5-mutant/src/runtime/src/Heap/Collector/TracingCollector.h:352:20: warning: unused variable 'objSize' [-Wunused-variable]
+            size_t objSize = obj->GetSize();
+                   ^
+In file included from /root/cj_build/impl_relocation_receipt_queue5-mutant/src/runtime/src/Heap/Collector/CopyCollector.cpp:17:
+/root/cj_build/impl_relocation_receipt_queue5-mutant/src/runtime/src/Heap/Collector/GcTrigger.h:477:8: warning: constexpr if is a C++17 extension [-Wc++17-extensions]
+    if constexpr (kGcTriggerMajorAllocRateEnabled) {
+       ^
+/root/cj_build/impl_relocation_receipt_queue5-mutant/src/runtime/src/Heap/Collector/GcTrigger.h:496:8: warning: constexpr if is a C++17 extension [-Wc++17-extensions]
+    if constexpr (kGcTriggerProactiveEnabled) {
+       ^
+/root/cj_build/impl_relocation_receipt_queue5-mutant/src/runtime/src/Heap/Collector/CopyCollector.cpp:189:12: warning: constexpr if is a C++17 extension [-Wc++17-extensions]
+        if constexpr (kGcTriggerDynamicWorkersEnabled) {
+           ^
+12 warnings generated.
+[ 82%] Linking CXX static library ../../../../output/temp/ar/x86_64_Release/libCollector.a
+[ 89%] Built target Collector
+HEAL_SLOT_GUARD PASS direct_calls=1 escaped=0 enum_sites=72 explicit_uses=87 other=0
+[ 89%] Built target check_heal_slot_writes
+[ 90%] Linking CXX shared library ../../output/temp/lib/x86_64_Release/libcangjie-runtime.so
+Running the deterministic GC unit suite against the runtime just built
+[  PASS  ] MarkStripe.SmrHazardPreventsAbaReuse
+[  PASS  ] MarkStripe.ConcurrentGlobalStealIsLiveAndLossless
+[  PASS  ] PartialArray.EncodeDecodeRoundtrip
+[  PASS  ] PartialArray.EmptyAndSingle
+[  PASS  ] PartialArray.ThresholdExact
+[  PASS  ] PartialArray.ThresholdMinusOne
+[  PASS  ] PartialArray.ThresholdPlusOne
+[  PASS  ] PartialArray.MultiChunk
+[  PASS  ] PartialArray.BoundaryRefs
+[  PASS  ] PartialArray.UnalignedStart
+[  PASS  ] VerifyRoots.DefaultOffLeavesCorruptRootUnobserved
+[  PASS  ] VerifyRoots.EnabledReportsColouredRootBeforeDereference
+[  PASS  ] MemMapContract.NullAndInvalidInputsDoNotReachOS
+[  PASS  ] MemMapContract.AccessorsBoundaryCommitProtectAndDestroy
+[  PASS  ] MemMapContract.FallbackRegistryPreservesEveryAcquiredReservation
+[  PASS  ] MemMapContract.BudgetRejectsBeforeReserve
+[  PASS  ] MemMapContract.TwoNodeOwnershipRejectsCrossNodeFree
+[  PASS  ] MemMapContract.RegionManagerInactiveAllocationUsesMemMapOwner
+[========] 335 tests: 334 passed, 1 failed
+GC_UNIT_RUN_DONE rc=1 wall_ms=274
+GC_UNIT_GATE_FAIL: failures not in known_failures.txt:
+  GCThreadPool.ProductYoungRuntimeEntryClosesRelocationRequestGeneration
+  full log: /root/cj_build/impl_relocation_receipt_queue5-mutant/src/runtime/tests/gc_unit/build_standalone/gate_run.log
+gmake[3]: *** [src/CMakeFiles/cangjie-runtime.dir/build.make:443：../output/temp/lib/x86_64_Release/libcangjie-runtime.so] 错误 1
+gmake[3]: *** 正在删除文件“../output/temp/lib/x86_64_Release/libcangjie-runtime.so”
+gmake[2]: *** [CMakeFiles/Makefile2:755：src/CMakeFiles/cangjie-runtime.dir/all] 错误 2
+gmake[1]: *** [CMakeFiles/Makefile2:762：src/CMakeFiles/cangjie-runtime.dir/rule] 错误 2
+gmake: *** [Makefile:221：cangjie-runtime] 错误 2

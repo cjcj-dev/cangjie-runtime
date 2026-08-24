@@ -1,0 +1,8 @@
+diff --git a/runtime/src/Heap/Collector/Relocate.cpp b/runtime/src/Heap/Collector/Relocate.cpp
+--- a/runtime/src/Heap/Collector/Relocate.cpp
++++ b/runtime/src/Heap/Collector/Relocate.cpp
+@@
+     RegionSpace& regionSpace = reinterpret_cast<RegionSpace&>(theAllocator);
+-    (void)regionSpace.GetRegionManager().GetRelocationRequestQueue().Publish(
+-        reinterpret_cast<MAddress>(obj), mapped);
++    (void)regionSpace;

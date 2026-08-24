@@ -1,0 +1,14 @@
+diff --git a/runtime/src/Heap/Collector/CopyCollector.cpp b/runtime/src/Heap/Collector/CopyCollector.cpp
+--- a/runtime/src/Heap/Collector/CopyCollector.cpp
++++ b/runtime/src/Heap/Collector/CopyCollector.cpp
+@@ -207,9 +207,7 @@ void CopyCollector::ForwardFromSpace()
+              static_cast<unsigned>(copyPool != nullptr), workers, stats.fromSpaceSize, bytesPerWorker, maxWorkers,
+              poolKind, static_cast<unsigned>(forceSerial), static_cast<unsigned>(workGate));
+     }
+-    if (gcReason == GC_REASON_YOUNG) {
+-        space.ForwardFromSpace<Generation::Young>(copyPool);
+-    } else {
++    if (gcReason != GC_REASON_YOUNG) {
+         space.ForwardFromSpace<Generation::Old>(copyPool);
+     }
+     if (restoreActiveHelpers) {

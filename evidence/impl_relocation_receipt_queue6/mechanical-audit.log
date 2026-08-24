@@ -1,0 +1,184 @@
+=== DIRECT QUEUE LIFETIME AND RECEIPT CONSUMERS ===
+runtime/src/Heap/Allocator/RegionManager.cpp:2101:        relocationRequestQueue.BeginWorkers(static_cast<size_t>(threadNum));
+runtime/src/Heap/Allocator/RegionManager.cpp:2108:        relocationRequestQueue.BeginWorkers(1);
+runtime/src/Heap/Allocator/RegionManager.cpp:2115:    return relocationRequestQueue.CompleteOwner(
+runtime/src/Heap/Allocator/RegionManager.cpp:2339:            relocationRequestQueue.SelectBeforeOrdinary([this]() -> void* {
+runtime/src/Heap/Allocator/RegionManager.cpp:2343:            selected = relocationRequestQueue.SynchronizePoll();
+runtime/src/Heap/Allocator/RegionManager.cpp:3019:            (void)relocationRequestQueue.Publish(currentPtr, receipt);
+runtime/src/Heap/Allocator/RegionManager.cpp:3139:            (void)relocationRequestQueue.Publish(currentPtr, receipt);
+runtime/src/Heap/Allocator/RegionManager.cpp:3166:            (void)relocationRequestQueue.Publish(currentPtr, receipt);
+runtime/src/Heap/Allocator/RegionManager.h:201:    RelocationRequestQueue& GetRelocationRequestQueue() { return relocationRequestQueue; }
+runtime/src/Heap/Allocator/RegionManager.h:1153:    RelocationRequestQueue relocationRequestQueue;
+runtime/src/Heap/Allocator/RegionManager.h:1217:            regionManager.GetRelocationRequestQueue().SelectBeforeOrdinary([&fromRegionList]() -> void* {
+runtime/src/Heap/Allocator/RegionManager.h:1221:            selected = regionManager.GetRelocationRequestQueue().SynchronizePoll();
+runtime/src/Heap/Collector/Relocate.cpp:2544:                        (void)space.GetRegionManager().GetRelocationRequestQueue().Publish(
+runtime/src/Heap/Collector/Relocate.cpp:2642:        RelocationRequestQueue& requests = space.GetRegionManager().GetRelocationRequestQueue();
+runtime/src/Heap/Collector/Relocate.cpp:3032:    (void)regionSpace.GetRegionManager().GetRelocationRequestQueue().Publish(
+runtime/src/Heap/Collector/RelocationRequestQueue.cpp:15:void RelocationRequestQueue::BeginWorkers(size_t workers)
+runtime/src/Heap/Collector/RelocationRequestQueue.cpp:162:RelocationRequestQueue::Selection RelocationRequestQueue::SynchronizePoll()
+runtime/src/Heap/Collector/RelocationRequestQueue.h:73:    void BeginWorkers(size_t workers);
+runtime/src/Heap/Collector/RelocationRequestQueue.h:103:    Selection SynchronizePoll();
+runtime/src/Heap/WCollector/WCollector.h:443:                        (void)space.GetRegionManager().GetRelocationRequestQueue().Publish(fromAddr, receipt);
+runtime/src/Heap/WCollector/WCollector.h:708:                (void)space.GetRegionManager().GetRelocationRequestQueue().Publish(fromAddr, receipt);
+=== UPWARD RUNTIME ENTRY CHAIN ===
+runtime/src/Heap/Allocator/RegionInfo.h:2246:        // EvacuateYoungRegions calls PrepareForwardTable<Young> twice -- WCollector.cpp:6483 and
+runtime/src/Heap/Allocator/RegionInfo.h:2317:        // fysfixb: name who clears the ghost bit (PrepareFromRegionList peer path).
+runtime/src/Heap/Allocator/RegionInfo.h:3419:        // ClearRouteDestHoldFlags after PrepareFromRegionList's dispel walk has retired every
+runtime/src/Heap/Allocator/RegionInfo.h:3776:        // Ghost walk (PrepareFromRegionList) follows nextRegionIdx0. A reused
+runtime/src/Heap/Allocator/RegionList.h:137:        // Snapshot next before the visitor. PrepareFromRegionList may
+runtime/src/Heap/Allocator/RegionManager.cpp:927:        // post-PrepareForwardTable major closure retired the only route
+runtime/src/Heap/Allocator/RegionManager.cpp:1325:// PrepareFromRegionList, immediately after the ghost dispel walk and before the next
+runtime/src/Heap/Allocator/RegionManager.cpp:1327:// PrepareForwardTable call sites is what makes it immune to a missed site, and there are
+runtime/src/Heap/Allocator/RegionManager.cpp:2092:void RegionManager::ForwardFromRegions(GCThreadPool* threadPool)
+runtime/src/Heap/Allocator/RegionManager.cpp:2109:        ForwardFromRegions<G>();
+runtime/src/Heap/Allocator/RegionManager.cpp:2331:void RegionManager::ForwardFromRegions()
+runtime/src/Heap/Allocator/RegionManager.cpp:3655:        // PrepareFromRegionList. Residuals are settled above before done.
+runtime/src/Heap/Allocator/RegionManager.cpp:3692:template void RegionManager::ForwardFromRegions<Generation::Young>(GCThreadPool*);
+runtime/src/Heap/Allocator/RegionManager.cpp:3693:template void RegionManager::ForwardFromRegions<Generation::Old>(GCThreadPool*);
+runtime/src/Heap/Allocator/RegionManager.cpp:3694:template void RegionManager::ForwardFromRegions<Generation::Young>();
+runtime/src/Heap/Allocator/RegionManager.cpp:3695:template void RegionManager::ForwardFromRegions<Generation::Old>();
+runtime/src/Heap/Allocator/RegionManager.h:196:    void ForwardFromRegions(GCThreadPool* threadPool);
+runtime/src/Heap/Allocator/RegionManager.h:198:    void ForwardFromRegions();
+runtime/src/Heap/Allocator/RegionManager.h:781:        // Producers that clear ghost: DispelGhostFromRegion (PrepareFromRegionList),
+runtime/src/Heap/Allocator/RegionManager.h:826:    void PrepareFromRegionList()
+runtime/src/Heap/Allocator/RegionManager.h:899:    // Release point for OPTION_2 mark-epoch gate: major PostTrace after PrepareForwardTable.
+runtime/src/Heap/Allocator/RegionManager.h:902:    // Note: this major's just-installed quarantine (from PrepareForwardTable above) is also
+runtime/src/Heap/Allocator/RegionManager.h:904:    // prior minor PrepareForwardTable are the ones that covered the TRACE window.
+runtime/src/Heap/Allocator/RegionManager.h:960:    // Phase: STW inside PrepareForwardTable → ClearPreviousForwardData (minor ×2, major ×1).
+runtime/src/Heap/Allocator/RegionManager.h:1249:// The actual relocation HeapWork submitted by ForwardFromRegions.  Test builds
+runtime/src/Heap/Allocator/RegionSpace.h:168:    void PrepareFromSpace() { regionManager.PrepareFromRegionList<G>(); }
+runtime/src/Heap/Allocator/RegionSpace.h:173:    void ForwardFromSpace(GCThreadPool* threadPool)
+runtime/src/Heap/Allocator/RegionSpace.h:175:        MRT_PHASE_TIMER("ForwardFromRegions");
+runtime/src/Heap/Allocator/RegionSpace.h:176:        regionManager.ForwardFromRegions<G>(threadPool);
+runtime/src/Heap/Collector/CopyCollector.cpp:142:void CopyCollector::ForwardFromSpace()
+runtime/src/Heap/Collector/CopyCollector.cpp:211:        space.ForwardFromSpace<Generation::Young>(copyPool);
+runtime/src/Heap/Collector/CopyCollector.cpp:213:        space.ForwardFromSpace<Generation::Old>(copyPool);
+runtime/src/Heap/Collector/CopyCollector.h:30:    virtual void ForwardFromSpace();
+runtime/src/Heap/Collector/Generation.cpp:1248:        // EvacuateYoungRegions remset authority is consumedSlots — fysfixa 3f27f0c4).
+runtime/src/Heap/Collector/Generation.cpp:1527:    // ⑥⑦⑧ inside EvacuateYoungRegions: pause relocate_start / concurrent copy / evac_finish
+runtime/src/Heap/Collector/Generation.cpp:1550:    EvacuateYoungRegions(reachableVec, consumedSlots, currentMinorRoots, refFixSlotsCoveredByReachable,
+runtime/src/Heap/Collector/Generation.cpp:1557:    // fix+forward+remset rebuild inside EvacuateYoungRegions, every live ref must
+runtime/src/Heap/Collector/Generation.cpp:1573:    // EvacuateYoungRegions retires the forwarding receipts. Then enter IDLE.
+runtime/src/Heap/Collector/Relocate.cpp:793:        // copy. Consume its still-active receipt before PrepareForwardTable
+runtime/src/Heap/Collector/Relocate.cpp:1536:void WCollector::EvacuateYoungRegions(const std::vector<BaseObject*>& reachableVec,
+runtime/src/Heap/Collector/Relocate.cpp:1900:        // Ours flipped first and prepared from-space afterwards (PrepareForwardTable<Young> below),
+runtime/src/Heap/Collector/Relocate.cpp:1912:        // Our own major path already has the ZGC order: PrepareForwardTable<Old> at :2533 runs
+runtime/src/Heap/Collector/Relocate.cpp:1917:            // once per flip, naming which side of PrepareForwardTable<Young> we are on.
+runtime/src/Heap/Collector/Relocate.cpp:1931:            // iorfix: PrepareForwardTable FIRST so liveInfo0 snapshots the closed mark
+runtime/src/Heap/Collector/Relocate.cpp:1935:            fwdTable.PrepareForwardTable<Generation::Young>();
+runtime/src/Heap/Collector/Relocate.cpp:1947:        // transitive fields before PrepareForwardTable snapshots that face into liveInfo0.
+runtime/src/Heap/Collector/Relocate.cpp:2019:                ForwardFromSpace();
+runtime/src/Heap/Collector/Relocate.cpp:2086:        ForwardFromSpace();
+runtime/src/Heap/Collector/Relocate.cpp:2152:    // safepoint below performs PrepareForwardTable only after DischargeAll has resolved
+runtime/src/Heap/Collector/Relocate.cpp:2180:        // PROBE evacct: how much of young.evac_finish is the second PrepareForwardTable<Young>?
+runtime/src/Heap/Collector/Relocate.cpp:2182:        fwdTable.PrepareForwardTable<Generation::Young>();
+runtime/src/Heap/Collector/Relocate.cpp:2593:    // POST_TRACE already RouteRegion's (PrepareForwardTable); copy is still
+runtime/src/Heap/Collector/Relocate.cpp:2594:    // ahead. Skipping the wait there keep-froms a page ForwardFromSpace is
+runtime/src/Heap/Collector/RelocationSet.cpp:92:    fwdTable.PrepareForwardTable<Generation::Old>();
+runtime/src/Heap/Collector/RelocationSet.cpp:94:    // units (from this PrepareForwardTable and any prior minor) to dirty for reuse.
+runtime/src/Heap/WCollector/WCollector.cpp:306:    // The nested young cycle must run under its own identity: CopyCollector::ForwardFromSpace
+runtime/src/Heap/WCollector/WCollector.cpp:327:    ForwardFromSpace();
+runtime/src/Heap/WCollector/WCollector.h:71:    void PrepareForwardTable()
+runtime/src/Heap/WCollector/WCollector.h:539:    // "is its region still typed FROM_REGION".  ForwardFromRegions takes each region off the
+runtime/src/Heap/WCollector/WCollector.h:903:    // before the region is enrolled and after ForwardFromRegions retypes it to LONE_FROM.  That is
+runtime/src/Heap/WCollector/WCollector.h:922:    // PrepareFromRegionList, which runs from PrepareForwardTable<Old> before the relocate flip.
+runtime/src/Heap/WCollector/WCollector.h:1145:    // pause = flip + phase + root fix; concurrent = ForwardFromSpace; re-STW = heap
+runtime/src/Heap/WCollector/WCollector.h:1147:    void EvacuateYoungRegions(const std::vector<BaseObject*>& reachableVec, const MinorSlotSet& rememberedSlots,
+=== TESTS ADDED RELATIVE TO CURRENT MAIN ===
+ForwardingNoGeometry.ArmedLookupAndSuccessfulExclusiveCopyPublishProductReceipt
+GCThreadPool.ActualForwardTaskClosesClaimedRequestExactlyOnceWhenOwnerExits
+GCThreadPool.ActualForwardTaskCompletesClaimedOwnerAtRegionExit
+GCThreadPool.ProductParallelEntryRegistersWorkersAndClosesGeneration
+GCThreadPool.ProductSerialEntryRegistersWorkerAndClosesGeneration
+GCThreadPool.ProductYoungRuntimeEntryClosesRelocationRequestGeneration
+GCThreadPool.RelocationRequestHasOneCompletionOwnerBeforeWaitFinishReturns
+MutatorRelocate.ForcedFirstCasFailureReturnsOneReceiptAndOneCompleter
+MutatorRelocate.ForwardedPublicationRequiresNonNullReceipt
+RelocationRequestQueue.AddWakesAWorkerSynchronizedOnAnEmptyQueue
+RelocationRequestQueue.FailedOwnerCompletionReleasesWaiterWithoutReceipt
+RelocationRequestQueue.LastWorkerAndAddHaveOneAtomicProgressDecision
+RelocationRequestQueue.ProductPreparationCannotReopenClosedWorkerGeneration
+RelocationRequestQueue.RegionManagerCompletesRetainedOwnerThroughProductWiring
+RelocationRequestQueue.RequestedReceiptIsClaimedBeforeOrdinaryAndCompletesOnce
+ZForwardingEntries.FullTableInsertionUsesOverflowReceipt
+ZForwardingEntries.OutOfRangeFromIndexUsesOverflowReceipt
+=== TESTS DELETED RELATIVE TO CURRENT MAIN ===
+=== QUEUE5 TEST REPLACEMENTS (INFORMATIONAL) ===
+ADDED_VS_QUEUE5
+GCThreadPool.ProductParallelEntryRegistersWorkersAndClosesGeneration
+GCThreadPool.ProductSerialEntryRegistersWorkerAndClosesGeneration
+LiveMap.CurrentLargePageHasSingleMarkBit
+LiveMap.CurrentPageHasSingleBitmap
+LiveMap.FromPageOwnerAndLivemapStayIdenticalAcrossPromotion
+LiveMap.OldForwardingCarrierPublishesOwnerAndRetires
+LiveMap.PromotionCarrierLivesUntilForwardingRelease
+RangeRegistryDirection.FixedRandomSequenceMatchesIndependentByteModel
+RangeRegistryDirection.LowAndHighClaimsUseOppositeAddressEnds
+RangeRegistryFailure.HighNoFitReturnsNullAndPreservesLedger
+RangeRegistryFailure.LowNoFitReturnsNullAndPreservesLedger
+RangeRegistryFailure.ZeroSizeReturnsNullAndPreservesLedger
+RangeRegistryMerge.AdjacentInsertMergesBothNeighbours
+RangeRegistryMerge.HandOutAndBackCallbacksKeepTheLedgerReversible
+RangeValue.SplitGrowAndPartitionPreserveEveryByte
+RelocationRequestQueue.ProductPreparationCannotReopenClosedWorkerGeneration
+YoungConc.SingleCurrentMarkSuppressesEnqueueForEitherClosure
+DELETED_VS_QUEUE5
+GCThreadPool.ProductParallelEntryRegistersWorkersAndCompletesOrdinaryOwner
+GCThreadPool.ProductSerialEntryRegistersWorkerAndCompletesClaimedOwner
+LiveMap.PromotionDoesNotInheritYoungBitmapMark
+LiveMap.PromotionDoesNotInheritYoungLargeFlag
+LiveMap.RelocationReadUsesOwnerNotRouteGeneration
+LiveMap.RetainedCaptureDoesNotUnionYoungFaceAfterPromotion
+LiveMap.YoungAndOldBitmapFacesAreIndependent
+LiveMap.YoungAndOldLargeFlagsAreIndependent
+YoungConc.StaleOldMarkDoesNotSkipYoungEnqueue
+=== CURRENT MAIN MARKERS PRESERVED ===
+HEAD:runtime/tests/gc_unit/test_forwarding_no_geometry.cpp:34:GC_TEST(ForwardingNoGeometry, ArmedMissIsNullNotGeometry)
+HEAD:runtime/tests/gc_unit/test_mem_map.cpp:131:GC_TEST(MemMapContract, FallbackRegistryPreservesEveryAcquiredReservation)
+HEAD:runtime/tests/gc_unit/test_mem_map.cpp:309:GC_TEST(MemMapContract, RegionManagerInactiveAllocationUsesMemMapOwner)
+HEAD:runtime/tests/gc_unit/test_range_registry.cpp:161:GC_TEST(RangeRegistryMerge, AdjacentInsertMergesBothNeighbours)
+HEAD:runtime/tests/gc_unit/test_range_registry.cpp:174:GC_TEST(RangeRegistryMerge, HandOutAndBackCallbacksKeepTheLedgerReversible)
+HEAD:runtime/tests/gc_unit/test_range_registry.cpp:202:GC_TEST(RangeRegistryDirection, LowAndHighClaimsUseOppositeAddressEnds)
+HEAD:runtime/tests/gc_unit/test_range_registry.cpp:217:GC_TEST(RangeRegistryFailure, LowNoFitReturnsNullAndPreservesLedger)
+HEAD:runtime/tests/gc_unit/test_range_registry.cpp:227:GC_TEST(RangeRegistryFailure, HighNoFitReturnsNullAndPreservesLedger)
+HEAD:runtime/tests/gc_unit/test_range_registry.cpp:237:GC_TEST(RangeRegistryFailure, ZeroSizeReturnsNullAndPreservesLedger)
+HEAD:runtime/tests/gc_unit/test_range_registry.cpp:246:GC_TEST(RangeRegistryDirection, FixedRandomSequenceMatchesIndependentByteModel)
+HEAD:runtime/src/CMakeLists.txt:231:    # RangeRegistry remains header-inline in product builds while it has no
+HEAD:runtime/src/CMakeLists.txt:235:        list(APPEND SRC_LIST "Heap/Allocator/RangeRegistry.cpp")
+HEAD:runtime/tests/gc_unit/run_standalone.sh:33:    /usr/bin/grep -c 'RangeRegistry' || true)
+HEAD:runtime/tests/gc_unit/run_standalone.sh:35:    echo "error: MRT_TESTABLE_INTERNALS=1 but product SO has no RangeRegistry symbols" >&2
+HEAD:runtime/tests/gc_unit/run_standalone.sh:125:  nm -u "$OUT/cj_gc_unit" 2>/dev/null | grep -E 'RangeRegistry|RelocationRequestQueue|ReceiptAllowsForwarded|VerifyRoots|RouteInfo|PlausibleManagedObjectGate|TryRecoverInteriorBase|RecordCrossGen|BindLiveInfo|GetRoute|MarkGoodHeapGate' || true
+HEAD:runtime/tests/gc_unit/run_standalone.sh:127:  nm -D "$RUNTIME_LIB_DIR/libcangjie-runtime.so" 2>/dev/null | grep -E 'RangeRegistry|RelocationRequestQueue|ReceiptAllowsForwarded|VerifyRoots|PlausibleManagedObjectGate|TryRecoverInteriorBase|RouteInfo8GetRoute|RecordCrossGenEdge|MarkGoodHeapGate' | head -40 || true
+=== CURRENT MAIN PRODUCT/TEST PATHS MISSING FROM DELIVERY ===
+=== CONFLICT FILE EXACT DIFF AGAINST CURRENT MAIN ===
+diff --git a/runtime/src/CMakeLists.txt b/runtime/src/CMakeLists.txt
+index 3a68c7287..9b958a53a 100644
+--- a/runtime/src/CMakeLists.txt
++++ b/runtime/src/CMakeLists.txt
+@@ -276 +276 @@ endif()
+-                "MRT_TESTABLE_INTERNALS=$<BOOL:${MRT_GC_UNIT_TESTS}>"
++                "MRT_TESTABLE_INTERNALS=$<BOOL:${MRT_TESTABLE_INTERNALS}>"
+diff --git a/runtime/tests/gc_unit/run_standalone.sh b/runtime/tests/gc_unit/run_standalone.sh
+index e3d7e1a2a..00132344e 100755
+--- a/runtime/tests/gc_unit/run_standalone.sh
++++ b/runtime/tests/gc_unit/run_standalone.sh
+@@ -42,0 +43,4 @@ BOUNDS_INC="$ROOT/runtime/third_party/third_party_bounds_checking_function/inclu
++TESTABLE_FLAGS=()
++if [[ "${MRT_TESTABLE_INTERNALS:-0}" == "1" ]]; then
++  TESTABLE_FLAGS+=(-DMRT_TESTABLE_INTERNALS=1)
++fi
+@@ -56,0 +61 @@ $CXX -std=gnu++17 -O0 -g -Wall -Wextra -pthread -fno-rtti \
++  "${TESTABLE_FLAGS[@]}" \
+@@ -61 +65,0 @@ $CXX -std=gnu++17 -O0 -g -Wall -Wextra -pthread -fno-rtti \
+-  "$ROOT/runtime/src/Heap/Allocator/ForwardingTable.cpp" \
+@@ -91,0 +96,2 @@ $CXX -std=gnu++17 -O0 -g -Wall -Wextra -pthread -fno-rtti \
++    "$SRC/test_relocation_request_queue.cpp" \
++    "$SRC/test_gc_thread_pool.cpp" \
+@@ -114,0 +121 @@ echo "LINKED_RUNTIME=$RUNTIME_LIB_DIR"
++echo "MRT_TESTABLE_INTERNALS=${MRT_TESTABLE_INTERNALS:-0}"
+@@ -118 +125 @@ if command -v nm >/dev/null 2>&1; then
+-  nm -u "$OUT/cj_gc_unit" 2>/dev/null | grep -E 'RangeRegistry|VerifyRoots|RouteInfo|PlausibleManagedObjectGate|TryRecoverInteriorBase|RecordCrossGen|BindLiveInfo|GetRoute|MarkGoodHeapGate' || true
++  nm -u "$OUT/cj_gc_unit" 2>/dev/null | grep -E 'RangeRegistry|RelocationRequestQueue|ReceiptAllowsForwarded|VerifyRoots|RouteInfo|PlausibleManagedObjectGate|TryRecoverInteriorBase|RecordCrossGen|BindLiveInfo|GetRoute|MarkGoodHeapGate' || true
+@@ -120 +127 @@ if command -v nm >/dev/null 2>&1; then
+-  nm -D "$RUNTIME_LIB_DIR/libcangjie-runtime.so" 2>/dev/null | grep -E 'RangeRegistry|VerifyRoots|PlausibleManagedObjectGate|TryRecoverInteriorBase|RouteInfo8GetRoute|RecordCrossGenEdge|MarkGoodHeapGate' | head -40 || true
++  nm -D "$RUNTIME_LIB_DIR/libcangjie-runtime.so" 2>/dev/null | grep -E 'RangeRegistry|RelocationRequestQueue|ReceiptAllowsForwarded|VerifyRoots|PlausibleManagedObjectGate|TryRecoverInteriorBase|RouteInfo8GetRoute|RecordCrossGenEdge|MarkGoodHeapGate' | head -40 || true

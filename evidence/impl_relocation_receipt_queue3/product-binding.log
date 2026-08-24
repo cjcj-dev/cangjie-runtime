@@ -1,0 +1,25 @@
+ 20:11:51 up 32 days, 21:22,  1 user,  load average: 4.31, 6.61, 7.05
+cc32c8dbd155132f9c0f987141278c8d1a58656d8be79da23fa5e19f09368693  runtime/output/temp/lib/x86_64_Release/libcangjie-runtime.so
+40bfe6aee95cd40fc941909a88958975a364a0bfe81c14d1b552aa1eb6ca4a5f  runtime/tests/gc_unit/build_standalone/cj_gc_unit
+TEST_UNDEFINED_PRODUCT_SYMBOLS
+                 U MapleRuntime::WCollector::ForwardObjectExclusive(MapleRuntime::BaseObject*, MapleRuntime::BaseObject*, MapleRuntime::RegionInfo*)@CANGJIE
+                 U MapleRuntime::ForwardTask<(MapleRuntime::Generation)1>::Execute(unsigned long)@CANGJIE
+                 U MapleRuntime::RelocationRequestQueue::Publish(unsigned long, unsigned long)@CANGJIE
+PRODUCT_EXPORTS
+0000000000532340 T MapleRuntime::WCollector::ForwardObjectExclusive(MapleRuntime::BaseObject*)@@CANGJIE
+0000000000532030 T MapleRuntime::WCollector::ForwardObjectExclusive(MapleRuntime::BaseObject*, MapleRuntime::BaseObject*, MapleRuntime::RegionInfo*)@@CANGJIE
+00000000004cf130 W MapleRuntime::ForwardTask<(MapleRuntime::Generation)0>::Execute(unsigned long)@@CANGJIE
+00000000004cf470 W MapleRuntime::ForwardTask<(MapleRuntime::Generation)1>::Execute(unsigned long)@@CANGJIE
+000000000050bbc0 T MapleRuntime::RelocationRequestQueue::Publish(unsigned long, unsigned long)@@CANGJIE
+00000000004e91b0 W std::_Function_handler<void* (), MapleRuntime::ForwardTask<(MapleRuntime::Generation)0>::Execute(unsigned long)::{lambda()#1}>::_M_manager(std::_Any_data&, std::_Any_data const&, std::_Manager_operation)@@CANGJIE
+00000000004e9150 W std::_Function_handler<void* (), MapleRuntime::ForwardTask<(MapleRuntime::Generation)0>::Execute(unsigned long)::{lambda()#1}>::_M_invoke(std::_Any_data const&)@@CANGJIE
+00000000004e9240 W std::_Function_handler<void* (), MapleRuntime::ForwardTask<(MapleRuntime::Generation)1>::Execute(unsigned long)::{lambda()#1}>::_M_manager(std::_Any_data&, std::_Any_data const&, std::_Manager_operation)@@CANGJIE
+00000000004e91e0 W std::_Function_handler<void* (), MapleRuntime::ForwardTask<(MapleRuntime::Generation)1>::Execute(unsigned long)::{lambda()#1}>::_M_invoke(std::_Any_data const&)@@CANGJIE
+RUNTIME_BINDING
+	libcangjie-runtime.so => /root/cj_build/rev_relocation_receipt_queue2-mutant/src/runtime/output/temp/lib/x86_64_Release/libcangjie-runtime.so (0x000078a238e00000)
+	libboundscheck.so => /root/cj_build/rev_relocation_receipt_queue2-mutant/src/runtime/output/temp/lib/x86_64_Release/libboundscheck.so (0x000078a244fbf000)
+TEST_RESULT
+[  PASS  ] ForwardingNoGeometry.ArmedLookupAndSuccessfulExclusiveCopyPublishProductReceipt
+[  PASS  ] GCThreadPool.ActualForwardTaskClosesClaimedRequestExactlyOnceWhenOwnerExits
+[========] 322 tests: 322 passed, 0 failed
+GC_UNIT_RUN_DONE rc=0 wall_ms=239

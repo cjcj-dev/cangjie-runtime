@@ -42,6 +42,8 @@ set(GC_UNIT_SOURCES
     test_gc_trigger.cpp
     test_gc_request_sync.cpp
     test_mutator_relocate.cpp
+    test_relocation_request_queue.cpp
+    test_gc_thread_pool.cpp
     test_expire_kept.cpp
     test_receipt_life.cpp
     test_lifeclock.cpp
@@ -53,6 +55,7 @@ set(GC_UNIT_SOURCES
     test_current_object_ref.cpp
     test_fillerobj.cpp
     test_i2_readref.cpp
+    test_m0_exit.cpp
     test_fwdreturn.cpp
     test_ghost_region_lookup.cpp
     test_fnlz_roots.cpp

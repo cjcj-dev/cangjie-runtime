@@ -67,6 +67,10 @@ public:
     GCStats& GetGCStats() { return gcStats; }
     void RequestHeapDump(GCTask::TaskType gcTask);
 
+#if defined(MRT_TESTABLE_INTERNALS)
+    friend struct RelocationReceiptTestAccess;
+#endif
+
 private:
 #if defined(MRT_GC_UNIT_TESTS)
     friend class CollectorResourcesTestPeer;

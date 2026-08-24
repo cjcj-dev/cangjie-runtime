@@ -1,0 +1,64 @@
+COMMAND: git grep -n 'BeginWorkers' -- runtime/src
+runtime/src/Heap/Allocator/RegionManager.cpp:2105:        relocationRequestQueue.BeginWorkers(static_cast<size_t>(threadNum));
+runtime/src/Heap/Allocator/RegionManager.cpp:2112:        relocationRequestQueue.BeginWorkers(1);
+runtime/src/Heap/Collector/RelocationRequestQueue.cpp:24:void RelocationRequestQueue::BeginWorkers(size_t workers)
+runtime/src/Heap/Collector/RelocationRequestQueue.h:70:    // observe its routes. BeginWorkers registers exactly the workers which can
+runtime/src/Heap/Collector/RelocationRequestQueue.h:73:    void BeginWorkers(size_t workers);
+
+COMMAND: git grep -n 'CompleteRelocationRequests' -- runtime/src
+runtime/src/Heap/Allocator/RegionManager.cpp:2117:size_t RegionManager::CompleteRelocationRequests(RegionInfo* region)
+runtime/src/Heap/Allocator/RegionManager.cpp:2364:        CompleteRelocationRequests(region);
+runtime/src/Heap/Allocator/RegionManager.h:201:    size_t CompleteRelocationRequests(RegionInfo* region);
+runtime/src/Heap/Allocator/RegionManager.h:1225:            regionManager.CompleteRelocationRequests(region);
+runtime/src/Heap/Allocator/RegionManager.h:1235:            regionManager.CompleteRelocationRequests(region);
+
+COMMAND: git grep -n 'ForwardFromRegions' -- runtime/src
+runtime/src/Heap/Allocator/RegionManager.cpp:2096:void RegionManager::ForwardFromRegions(GCThreadPool* threadPool)
+runtime/src/Heap/Allocator/RegionManager.cpp:2113:        ForwardFromRegions<G>();
+runtime/src/Heap/Allocator/RegionManager.cpp:2335:void RegionManager::ForwardFromRegions()
+runtime/src/Heap/Allocator/RegionManager.cpp:3696:template void RegionManager::ForwardFromRegions<Generation::Young>(GCThreadPool*);
+runtime/src/Heap/Allocator/RegionManager.cpp:3697:template void RegionManager::ForwardFromRegions<Generation::Old>(GCThreadPool*);
+runtime/src/Heap/Allocator/RegionManager.cpp:3698:template void RegionManager::ForwardFromRegions<Generation::Young>();
+runtime/src/Heap/Allocator/RegionManager.cpp:3699:template void RegionManager::ForwardFromRegions<Generation::Old>();
+runtime/src/Heap/Allocator/RegionManager.h:195:    void ForwardFromRegions(GCThreadPool* threadPool);
+runtime/src/Heap/Allocator/RegionManager.h:197:    void ForwardFromRegions();
+runtime/src/Heap/Allocator/RegionManager.h:1242:// The actual relocation HeapWork submitted by ForwardFromRegions.  Test builds
+runtime/src/Heap/Allocator/RegionSpace.h:175:        MRT_PHASE_TIMER("ForwardFromRegions");
+runtime/src/Heap/Allocator/RegionSpace.h:176:        regionManager.ForwardFromRegions<G>(threadPool);
+runtime/src/Heap/WCollector/WCollector.h:539:    // "is its region still typed FROM_REGION".  ForwardFromRegions takes each region off the
+runtime/src/Heap/WCollector/WCollector.h:903:    // before the region is enrolled and after ForwardFromRegions retypes it to LONE_FROM.  That is
+runtime/src/windows_x86_64_exports.def:1424:    _ZN12MapleRuntime13RegionManager18ForwardFromRegionsEPNS_12GCThreadPoolE @1424
+runtime/src/windows_x86_64_exports.def:1425:    _ZN12MapleRuntime13RegionManager18ForwardFromRegionsEv @1425
+
+COMMAND: git grep -n 'ForwardTask' -- runtime/src
+runtime/src/Heap/Allocator/RegionManager.cpp:589:void ForwardTask<G>::Execute(size_t)
+runtime/src/Heap/Allocator/RegionManager.cpp:591:    detail::ExecuteForwardTask<G>(regionManager, fromRegionList);
+runtime/src/Heap/Allocator/RegionManager.cpp:2108:            threadPool->AddWork(new (std::nothrow) ForwardTask<G>(*this, fromRegionList));
+runtime/src/Heap/Allocator/RegionManager.cpp:2337:    // Use the same ownership transition as ForwardTask.  Walking the linked
+runtime/src/Heap/Allocator/RegionManager.cpp:3701:template class ForwardTask<Generation::Young>;
+runtime/src/Heap/Allocator/RegionManager.cpp:3702:template class ForwardTask<Generation::Old>;
+runtime/src/Heap/Allocator/RegionManager.h:43:class ForwardTask;
+runtime/src/Heap/Allocator/RegionManager.h:1201:// product inlines it through ForwardTask::Execute; the testable shape calls it
+runtime/src/Heap/Allocator/RegionManager.h:1204:inline void ExecuteForwardTask(RegionManager& regionManager, RegionList& fromRegionList)
+runtime/src/Heap/Allocator/RegionManager.h:1246:class ForwardTask : public HeapWork {
+runtime/src/Heap/Allocator/RegionManager.h:1248:    ForwardTask(RegionManager& manager, RegionList& fromSpace)
+runtime/src/Heap/Allocator/RegionManager.h:1251:    ~ForwardTask() override = default;
+runtime/src/Heap/Allocator/RegionManager.h:1257:        detail::ExecuteForwardTask<G>(regionManager, fromRegionList);
+
+COMMAND: git grep -n 'MRT_TESTABLE_INTERNALS' -- runtime/src runtime/CMakeLists.txt runtime/config.cmake
+runtime/CMakeLists.txt:90:if (MRT_TESTABLE_INTERNALS)
+runtime/CMakeLists.txt:91:    add_compile_definitions(MRT_TESTABLE_INTERNALS=1)
+runtime/config.cmake:472:option(MRT_TESTABLE_INTERNALS "Build test-only exported GC internals" OFF)
+runtime/config.cmake:476:    set(MRT_TESTABLE_INTERNALS ON)
+runtime/src/CMakeLists.txt:266:                "MRT_TESTABLE_INTERNALS=$<BOOL:${MRT_TESTABLE_INTERNALS}>"
+runtime/src/Heap/Allocator/RegionManager.cpp:587:#if defined(MRT_TESTABLE_INTERNALS)
+runtime/src/Heap/Allocator/RegionManager.cpp:3700:#if defined(MRT_TESTABLE_INTERNALS)
+runtime/src/Heap/Allocator/RegionManager.h:1252:#if defined(MRT_TESTABLE_INTERNALS)
+runtime/src/Heap/WCollector/WCollector.h:85:#if defined(MRT_TESTABLE_INTERNALS)
+
+COMMAND: git grep -n 'Fallback' -- runtime/tests/gc_unit
+runtime/tests/gc_unit/test_forwarding_entries.cpp:162:    const uint64_t before = ForwardingEntries::OverflowFallbacks().load(std::memory_order_relaxed);
+runtime/tests/gc_unit/test_forwarding_entries.cpp:172:    GC_EXPECT_EQ(ForwardingEntries::OverflowFallbacks().load(std::memory_order_relaxed), before + 1);
+runtime/tests/gc_unit/test_forwarding_entries.cpp:235:    const uint64_t before = ForwardingEntries::FullFallbacks().load(std::memory_order_relaxed);
+runtime/tests/gc_unit/test_forwarding_entries.cpp:238:    GC_EXPECT_EQ(ForwardingEntries::FullFallbacks().load(std::memory_order_relaxed), before + 1);
+runtime/tests/gc_unit/test_unwind_regressions.cpp:161:GC_TEST(UnwindRegress, FallbackZeroesPcAndLine)

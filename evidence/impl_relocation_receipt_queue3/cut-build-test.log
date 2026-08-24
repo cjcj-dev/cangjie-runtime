@@ -1,0 +1,205 @@
+[  0%] Built target cjNativeStartAndEnd
+[  1%] Checking that HeapSlot compare-exchange writes stay inside HealSlot
+[  1%] Checking that a diagnostic documenting a gate is not an all-no-op implementation
+[  5%] Built target Base
+[  7%] Built target Concurrency
+[  8%] Built target cjthreadmodel
+[ 28%] Built target boundscheck
+[ 29%] Built target Common
+[ 30%] Built target Loader
+Consolidate compiler generated dependencies of target Inspector
+[ 30%] Built target CjFile
+[ 31%] Built target BinaryFile
+[ 32%] Built target CjSemanticVersion
+[ 34%] Built target CjFileLoader
+[ 35%] Built target Inspector
+Consolidate compiler generated dependencies of target Heap
+[ 37%] Built target Exception
+Consolidate compiler generated dependencies of target Barrier
+Consolidate compiler generated dependencies of target Allocator
+[ 38%] Built target Heap
+[ 40%] Built target Barrier
+DIAG_HOLLOW_GUARD PASS gated_subsystems=29
+Consolidate compiler generated dependencies of target Collector
+[ 43%] Built target Allocator
+Consolidate compiler generated dependencies of target WCollector
+Consolidate compiler generated dependencies of target Mutator
+[ 43%] Built target check_diag_not_hollow
+[ 51%] Built target Collector
+[ 51%] Building CXX object src/Heap/WCollector/CMakeFiles/WCollector.dir/__/Collector/Relocate.cpp.o
+[ 55%] Built target ObjectModel
+[ 57%] Built target Mutator
+Consolidate compiler generated dependencies of target Verify
+Consolidate compiler generated dependencies of target UnwindStack
+[ 58%] Built target Sync
+[ 60%] Built target CpuProfiler
+[ 72%] Built target Verify
+[ 74%] Built target Interpreter
+[ 75%] Built target Signal
+[ 83%] Built target UnwindStack
+[ 83%] Built target Sanitizer
+In file included from /root/cj_build/rev_relocation_receipt_queue2-mutant/src/runtime/src/Heap/Collector/Relocate.cpp:8:
+In file included from /root/cj_build/rev_relocation_receipt_queue2-mutant/src/runtime/src/Heap/WCollector/WCollector.h:22:
+In file included from /root/cj_build/rev_relocation_receipt_queue2-mutant/src/runtime/src/Heap/Allocator/RegionSpace.h:19:
+In file included from /root/cj_build/rev_relocation_receipt_queue2-mutant/src/runtime/src/Heap/Allocator/Allocator.h:11:
+In file included from /root/cj_build/rev_relocation_receipt_queue2-mutant/src/runtime/src/Heap/Allocator/AllocBufferManager.h:15:
+In file included from /root/cj_build/rev_relocation_receipt_queue2-mutant/src/runtime/src/Heap/Allocator/AllocBuffer.h:16:
+In file included from /root/cj_build/rev_relocation_receipt_queue2-mutant/src/runtime/src/Heap/Allocator/RegionList.h:11:
+In file included from /root/cj_build/rev_relocation_receipt_queue2-mutant/src/runtime/src/Heap/Allocator/RegionInfo.h:41:
+/root/cj_build/rev_relocation_receipt_queue2-mutant/src/runtime/src/Heap/Verify/AllocPhaseDiag.h:57:1: warning: inline variables are a C++17 extension [-Wc++17-extensions]
+inline Slot g_table[kCap] = {};
+^
+/root/cj_build/rev_relocation_receipt_queue2-mutant/src/runtime/src/Heap/Verify/AllocPhaseDiag.h:58:1: warning: inline variables are a C++17 extension [-Wc++17-extensions]
+inline NearEntry g_near[kNearCap] = {};
+^
+In file included from /root/cj_build/rev_relocation_receipt_queue2-mutant/src/runtime/src/Heap/Collector/Relocate.cpp:8:
+In file included from /root/cj_build/rev_relocation_receipt_queue2-mutant/src/runtime/src/Heap/WCollector/WCollector.h:22:
+In file included from /root/cj_build/rev_relocation_receipt_queue2-mutant/src/runtime/src/Heap/Allocator/RegionSpace.h:19:
+In file included from /root/cj_build/rev_relocation_receipt_queue2-mutant/src/runtime/src/Heap/Allocator/Allocator.h:11:
+In file included from /root/cj_build/rev_relocation_receipt_queue2-mutant/src/runtime/src/Heap/Allocator/AllocBufferManager.h:15:
+In file included from /root/cj_build/rev_relocation_receipt_queue2-mutant/src/runtime/src/Heap/Allocator/AllocBuffer.h:16:
+In file included from /root/cj_build/rev_relocation_receipt_queue2-mutant/src/runtime/src/Heap/Allocator/RegionList.h:11:
+In file included from /root/cj_build/rev_relocation_receipt_queue2-mutant/src/runtime/src/Heap/Allocator/RegionInfo.h:43:
+/root/cj_build/rev_relocation_receipt_queue2-mutant/src/runtime/src/Heap/Verify/NullRouteCaller.h:34:1: warning: inline variables are a C++17 extension [-Wc++17-extensions]
+inline thread_local const char* g_tag = nullptr;
+^
+/root/cj_build/rev_relocation_receipt_queue2-mutant/src/runtime/src/Heap/Verify/NullRouteCaller.h:35:1: warning: inline variables are a C++17 extension [-Wc++17-extensions]
+inline thread_local const char* g_edgeSrc = nullptr;
+^
+/root/cj_build/rev_relocation_receipt_queue2-mutant/src/runtime/src/Heap/Verify/NullRouteCaller.h:36:1: warning: inline variables are a C++17 extension [-Wc++17-extensions]
+inline thread_local uintptr_t g_slot = 0;
+^
+/root/cj_build/rev_relocation_receipt_queue2-mutant/src/runtime/src/Heap/Verify/NullRouteCaller.h:37:1: warning: inline variables are a C++17 extension [-Wc++17-extensions]
+inline thread_local void* g_host = nullptr;
+^
+In file included from /root/cj_build/rev_relocation_receipt_queue2-mutant/src/runtime/src/Heap/Collector/Relocate.cpp:8:
+In file included from /root/cj_build/rev_relocation_receipt_queue2-mutant/src/runtime/src/Heap/WCollector/WCollector.h:22:
+In file included from /root/cj_build/rev_relocation_receipt_queue2-mutant/src/runtime/src/Heap/Allocator/RegionSpace.h:19:
+In file included from /root/cj_build/rev_relocation_receipt_queue2-mutant/src/runtime/src/Heap/Allocator/Allocator.h:11:
+In file included from /root/cj_build/rev_relocation_receipt_queue2-mutant/src/runtime/src/Heap/Allocator/AllocBufferManager.h:15:
+In file included from /root/cj_build/rev_relocation_receipt_queue2-mutant/src/runtime/src/Heap/Allocator/AllocBuffer.h:16:
+In file included from /root/cj_build/rev_relocation_receipt_queue2-mutant/src/runtime/src/Heap/Allocator/RegionList.h:11:
+In file included from /root/cj_build/rev_relocation_receipt_queue2-mutant/src/runtime/src/Heap/Allocator/RegionInfo.h:52:
+/root/cj_build/rev_relocation_receipt_queue2-mutant/src/runtime/src/Heap/Verify/MutatorRelocate.h:102:8: warning: constexpr if is a C++17 extension [-Wc++17-extensions]
+    if constexpr (kWaitRegionPublish) {
+       ^
+In file included from /root/cj_build/rev_relocation_receipt_queue2-mutant/src/runtime/src/Heap/Collector/Relocate.cpp:8:
+In file included from /root/cj_build/rev_relocation_receipt_queue2-mutant/src/runtime/src/Heap/WCollector/WCollector.h:22:
+In file included from /root/cj_build/rev_relocation_receipt_queue2-mutant/src/runtime/src/Heap/Allocator/RegionSpace.h:22:
+In file included from /root/cj_build/rev_relocation_receipt_queue2-mutant/src/runtime/src/Heap/Allocator/RegionManager.h:25:
+In file included from /root/cj_build/rev_relocation_receipt_queue2-mutant/src/runtime/src/Heap/Allocator/FreeRegionManager.h:15:
+In file included from /root/cj_build/rev_relocation_receipt_queue2-mutant/src/runtime/src/Common/ScopedObjectAccess.h:11:
+In file included from /root/cj_build/rev_relocation_receipt_queue2-mutant/src/runtime/src/Mutator/Mutator.inline.h:11:
+In file included from /root/cj_build/rev_relocation_receipt_queue2-mutant/src/runtime/src/Mutator/MutatorManager.h:17:
+/root/cj_build/rev_relocation_receipt_queue2-mutant/src/runtime/src/Base/GcLog.h:217:45: warning: format string is not a string literal [-Wformat-nonliteral]
+        int n = vsnprintf(buf, sizeof(buf), format, args);
+                                            ^~~~~~
+In file included from /root/cj_build/rev_relocation_receipt_queue2-mutant/src/runtime/src/Heap/Collector/Relocate.cpp:8:
+In file included from /root/cj_build/rev_relocation_receipt_queue2-mutant/src/runtime/src/Heap/WCollector/WCollector.h:24:
+In file included from /root/cj_build/rev_relocation_receipt_queue2-mutant/src/runtime/src/Heap/Collector/CopyCollector.h:13:
+/root/cj_build/rev_relocation_receipt_queue2-mutant/src/runtime/src/Heap/Collector/TracingCollector.h:352:20: warning: unused variable 'objSize' [-Wunused-variable]
+            size_t objSize = obj->GetSize();
+                   ^
+In file included from /root/cj_build/rev_relocation_receipt_queue2-mutant/src/runtime/src/Heap/Collector/Relocate.cpp:8:
+/root/cj_build/rev_relocation_receipt_queue2-mutant/src/runtime/src/Heap/WCollector/WCollector.h:423:12: warning: constexpr if is a C++17 extension [-Wc++17-extensions]
+        if constexpr (ForwardingTable::kEntriesSoleWhenArmed) {
+           ^
+/root/cj_build/rev_relocation_receipt_queue2-mutant/src/runtime/src/Heap/WCollector/WCollector.h:448:12: warning: constexpr if is a C++17 extension [-Wc++17-extensions]
+        if constexpr (ForwardingTable::kEntriesSoleWhenArmed) {
+           ^
+/root/cj_build/rev_relocation_receipt_queue2-mutant/src/runtime/src/Heap/WCollector/WCollector.h:344:38: warning: unused variable 'routeNullCount' [-Wunused-variable]
+        static std::atomic<uint64_t> routeNullCount{ 0 };
+                                     ^
+/root/cj_build/rev_relocation_receipt_queue2-mutant/src/runtime/src/Heap/WCollector/WCollector.h:347:38: warning: unused variable 'giveFromCount' [-Wunused-variable]
+        static std::atomic<uint64_t> giveFromCount{ 0 };
+                                     ^
+/root/cj_build/rev_relocation_receipt_queue2-mutant/src/runtime/src/Heap/WCollector/WCollector.h:343:38: warning: unused variable 'noGhostCount' [-Wunused-variable]
+        static std::atomic<uint64_t> noGhostCount{ 0 };
+                                     ^
+/root/cj_build/rev_relocation_receipt_queue2-mutant/src/runtime/src/Heap/WCollector/WCollector.h:341:38: warning: unused variable 'callCount' [-Wunused-variable]
+        static std::atomic<uint64_t> callCount{ 0 };
+                                     ^
+/root/cj_build/rev_relocation_receipt_queue2-mutant/src/runtime/src/Heap/WCollector/WCollector.h:346:38: warning: unused variable 'waitCount' [-Wunused-variable]
+        static std::atomic<uint64_t> waitCount{ 0 };
+                                     ^
+/root/cj_build/rev_relocation_receipt_queue2-mutant/src/runtime/src/Heap/WCollector/WCollector.h:355:20: warning: unused variable 'funnel' [-Wunused-variable]
+        const bool funnel = RemapFunnelOn();
+                   ^
+/root/cj_build/rev_relocation_receipt_queue2-mutant/src/runtime/src/Heap/WCollector/WCollector.h:345:38: warning: unused variable 'receiptCount' [-Wunused-variable]
+        static std::atomic<uint64_t> receiptCount{ 0 };
+                                     ^
+/root/cj_build/rev_relocation_receipt_queue2-mutant/src/runtime/src/Heap/WCollector/WCollector.h:342:38: warning: unused variable 'nonHeapCount' [-Wunused-variable]
+        static std::atomic<uint64_t> nonHeapCount{ 0 };
+                                     ^
+/root/cj_build/rev_relocation_receipt_queue2-mutant/src/runtime/src/Heap/WCollector/WCollector.h:620:12: warning: constexpr if is a C++17 extension [-Wc++17-extensions]
+        if constexpr (ForwardingTable::kEntriesSoleWhenArmed) {
+           ^
+/root/cj_build/rev_relocation_receipt_queue2-mutant/src/runtime/src/Heap/WCollector/WCollector.h:675:12: warning: constexpr if is a C++17 extension [-Wc++17-extensions]
+        if constexpr (ForwardingTable::kConsumeEntries) {
+           ^
+/root/cj_build/rev_relocation_receipt_queue2-mutant/src/runtime/src/Heap/WCollector/WCollector.h:680:16: warning: constexpr if is a C++17 extension [-Wc++17-extensions]
+            if constexpr (ForwardingTable::kEntriesSoleWhenArmed) {
+               ^
+/root/cj_build/rev_relocation_receipt_queue2-mutant/src/runtime/src/Heap/WCollector/WCollector.h:711:12: warning: constexpr if is a C++17 extension [-Wc++17-extensions]
+        if constexpr (ForwardingTable::kConsumeEntries) {
+           ^
+/root/cj_build/rev_relocation_receipt_queue2-mutant/src/runtime/src/Heap/Collector/Relocate.cpp:1510:56: warning: lambda capture 'this' is not used [-Wunused-lambda-capture]
+    threadPool->AddWork(new (std::nothrow) LambdaWork([this, rootFix, derivedFix](size_t) {
+                                                       ^~~~~
+/root/cj_build/rev_relocation_receipt_queue2-mutant/src/runtime/src/Heap/Collector/Relocate.cpp:1518:56: warning: lambda capture 'this' is not used [-Wunused-lambda-capture]
+    threadPool->AddWork(new (std::nothrow) LambdaWork([this, rootFix](size_t) {
+                                                       ^~~~~
+/root/cj_build/rev_relocation_receipt_queue2-mutant/src/runtime/src/Heap/Collector/Relocate.cpp:1522:56: warning: lambda capture 'this' is not used [-Wunused-lambda-capture]
+    threadPool->AddWork(new (std::nothrow) LambdaWork([this, rootFix](size_t) {
+                                                       ^~~~~
+/root/cj_build/rev_relocation_receipt_queue2-mutant/src/runtime/src/Heap/Collector/Relocate.cpp:1530:56: warning: lambda capture 'this' is not used [-Wunused-lambda-capture]
+    threadPool->AddWork(new (std::nothrow) LambdaWork([this, rootFix](size_t) {
+                                                       ^~~~~
+/root/cj_build/rev_relocation_receipt_queue2-mutant/src/runtime/src/Heap/Collector/Relocate.cpp:1668:33: warning: lambda capture 'this' is not used [-Wunused-lambda-capture]
+    auto fixHeapParallelOnly = [this, &reachableVec, &remsetVec, &fixHeapSlice](GCThreadPool* pool) {
+                                ^~~~~
+/root/cj_build/rev_relocation_receipt_queue2-mutant/src/runtime/src/Heap/Collector/Relocate.cpp:2532:12: warning: constexpr if is a C++17 extension [-Wc++17-extensions]
+        if constexpr (ForwardingTable::kEntriesSoleWhenArmed) {
+           ^
+/root/cj_build/rev_relocation_receipt_queue2-mutant/src/runtime/src/Heap/Collector/Relocate.cpp:2677:8: warning: constexpr if is a C++17 extension [-Wc++17-extensions]
+    if constexpr (MutatorRelocate::kUnpublishedMeansKeepFrom) {
+       ^
+/root/cj_build/rev_relocation_receipt_queue2-mutant/src/runtime/src/Heap/Collector/Relocate.cpp:2774:8: warning: constexpr if is a C++17 extension [-Wc++17-extensions]
+    if constexpr (!kResolveStoreValue) {
+       ^
+31 warnings generated.
+[ 83%] Linking CXX static library ../../../../output/temp/ar/x86_64_Release/libWCollector.a
+[ 89%] Built target WCollector
+HEAL_SLOT_GUARD PASS direct_calls=1 escaped=0 enum_sites=72 explicit_uses=87 other=0
+[ 89%] Built target check_heal_slot_writes
+Consolidate compiler generated dependencies of target cangjie-runtime
+[ 90%] Linking CXX shared library ../../output/temp/lib/x86_64_Release/libcangjie-runtime.so
+Running the deterministic GC unit suite against the runtime just built
+[  PASS  ] FnlzRoots.RegisteredFinalizerIsRawPointerButNotStrongRoot
+[  PASS  ] FnlzRoots.VisitFinalizersCountMatchesRegister
+[  PASS  ] MarkStackEntry.ObjectPoliciesAreIndependent
+[  PASS  ] MarkStackEntry.PartialArrayIsASeparateKind
+[  PASS  ] MarkStackEntry.StackSplitPreservesPolicy
+[  PASS  ] MarkStripe.NoSmrPositiveControlCorruptsHead
+[  PASS  ] MarkStripe.SmrHazardPreventsAbaReuse
+[  PASS  ] MarkStripe.ConcurrentGlobalStealIsLiveAndLossless
+[  PASS  ] PartialArray.EncodeDecodeRoundtrip
+[  PASS  ] PartialArray.EmptyAndSingle
+[  PASS  ] PartialArray.ThresholdExact
+[  PASS  ] PartialArray.ThresholdMinusOne
+[  PASS  ] PartialArray.ThresholdPlusOne
+[  PASS  ] PartialArray.MultiChunk
+[  PASS  ] PartialArray.BoundaryRefs
+[  PASS  ] PartialArray.UnalignedStart
+[  PASS  ] VerifyRoots.DefaultOffLeavesCorruptRootUnobserved
+[  PASS  ] VerifyRoots.EnabledReportsColouredRootBeforeDereference
+[========] 322 tests: 321 passed, 1 failed
+GC_UNIT_RUN_DONE rc=1 wall_ms=244
+GC_UNIT_GATE_FAIL: failures not in known_failures.txt:
+  ForwardingNoGeometry.ArmedLookupAndSuccessfulExclusiveCopyPublishProductReceipt
+  full log: /root/cj_build/rev_relocation_receipt_queue2-mutant/src/runtime/tests/gc_unit/build_standalone/gate_run.log
+gmake[3]: *** [src/CMakeFiles/cangjie-runtime.dir/build.make:443：../output/temp/lib/x86_64_Release/libcangjie-runtime.so] 错误 1
+gmake[3]: *** 正在删除文件“../output/temp/lib/x86_64_Release/libcangjie-runtime.so”
+gmake[2]: *** [CMakeFiles/Makefile2:755：src/CMakeFiles/cangjie-runtime.dir/all] 错误 2
+gmake[1]: *** [CMakeFiles/Makefile2:762：src/CMakeFiles/cangjie-runtime.dir/rule] 错误 2
+gmake: *** [Makefile:221：cangjie-runtime] 错误 2

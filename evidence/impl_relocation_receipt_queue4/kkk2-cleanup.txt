@@ -1,0 +1,8 @@
+COMMAND: bash /root/cj_build/tools/box.sh kkk2 'du -sh <two exact lane trees>; rm -rf <two exact lane trees>; test ! -e <each>; df -h /root/cj_build'
+BEFORE:
+242M /root/cj_build/impl_relocation_receipt_queue4-mutant
+240M /root/cj_build/impl_relocation_receipt_queue4-default
+AFTER:
+/dev/nvme0n1p5 443G 382G 39G 91% /
+CLEANUP_RC_MUTANT=0
+CLEANUP_RC_DEFAULT=0
