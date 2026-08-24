@@ -64,20 +64,16 @@ public:
     }
 
     void Initialize(MAddress start, size_t size, size_t unit) const { initialize(start, size, unit); }
-    bool InsertProvisional(MAddress start, size_t size, RegionInfo* region) const
-    {
-        return insertProvisional(start, size, region);
-    }
     bool PreparePublicationGeneration(MAddress start, size_t size) const
     {
         return preparePublicationGeneration(start, size);
     }
+    bool InstallPublicationBeforeCopy(MAddress start, size_t size, RegionInfo* region) const
+    {
+        return installPublicationBeforeCopy(start, size, region);
+    }
     MAddress InsertMapping(RegionInfo* region, MAddress from, MAddress to) const
     {
-        ClearEntries(region->GetRegionStart(), region->GetRegionSize());
-        DropRetiredCovering(region->GetRegionStart(), region->GetRegionSize());
-        GC_EXPECT_TRUE(preparePublicationGeneration(region->GetRegionStart(), region->GetRegionSize()));
-        GC_EXPECT_TRUE(installPublicationBeforeCopy(region->GetRegionStart(), region->GetRegionSize(), region));
         ForwardingTable::Publication publication = ensurePublicationBeforeCopy(region, from);
         GC_EXPECT_TRUE(static_cast<bool>(publication));
         return insertMapping(publication, from, to);
@@ -105,8 +101,6 @@ private:
         handle = dlopen("libcangjie-runtime.so", RTLD_NOW | RTLD_NOLOAD);
         GC_EXPECT_TRUE(handle != nullptr);
         initialize = Resolve<InitializeFn>(handle, "_ZN12MapleRuntime15ForwardingTable10InitializeEmmm");
-        insertProvisional = Resolve<InsertProvisionalFn>(
-            handle, "_ZN12MapleRuntime15ForwardingTable17InsertProvisionalEmmPNS_10RegionInfoE");
         preparePublicationGeneration = Resolve<PreparePublicationGenerationFn>(
             handle, "_ZN12MapleRuntime15ForwardingTable28PreparePublicationGenerationEmm");
         installPublicationBeforeCopy = Resolve<InstallPublicationBeforeCopyFn>(
@@ -124,7 +118,6 @@ private:
     }
 
     using InitializeFn = void (*)(MAddress, size_t, size_t);
-    using InsertProvisionalFn = bool (*)(MAddress, size_t, RegionInfo*);
     using PreparePublicationGenerationFn = bool (*)(MAddress, size_t);
     using InstallPublicationBeforeCopyFn = bool (*)(MAddress, size_t, RegionInfo*);
     using EnsurePublicationBeforeCopyFn = ForwardingTable::Publication (*)(RegionInfo*, MAddress);
@@ -135,7 +128,6 @@ private:
 
     void* handle = nullptr;
     InitializeFn initialize = nullptr;
-    InsertProvisionalFn insertProvisional = nullptr;
     PreparePublicationGenerationFn preparePublicationGeneration = nullptr;
     InstallPublicationBeforeCopyFn installPublicationBeforeCopy = nullptr;
     EnsurePublicationBeforeCopyFn ensurePublicationBeforeCopy = nullptr;
@@ -264,11 +256,11 @@ struct RootEntryFixture {
         heap.region0->SetRegionType(RegionInfo::RegionType::FROM_REGION);
         heap.region0->SetInGhostRegion(1);
         heap.region0->SetRouteState(RegionInfo::ROUTED);
-        if (!forwarding.InsertProvisional(
+        if (!forwarding.InstallPublicationBeforeCopy(
                 heap.region0->GetRegionStart(), heap.region0->GetRegionSize(), heap.region0)) {
             GC_EXPECT_TRUE(forwarding.PreparePublicationGeneration(
                 heap.region0->GetRegionStart(), heap.region0->GetRegionSize()));
-            GC_EXPECT_TRUE(forwarding.InsertProvisional(
+            GC_EXPECT_TRUE(forwarding.InstallPublicationBeforeCopy(
                 heap.region0->GetRegionStart(), heap.region0->GetRegionSize(), heap.region0));
         }
         StorePlain(root, from_object(heap.obj0));
