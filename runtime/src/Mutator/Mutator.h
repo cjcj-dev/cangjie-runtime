@@ -657,7 +657,7 @@ private:
         GCPhase heapPhase = Heap::GetHeap().GetGCPhase();
         // FOLLOW / major TRACE publishes the heap phase before mutators handshake.
         // The heap-phase fallback used to accept only ENUM, so a concurrent store
-        // dropped SATB: seen as an uncovered old→young FOLLOW edge and
+        // dropped SATB: seen as Stw2CurrentAudit uncovered (old→young, FOLLOW) and
         // as SD256 CSet-empty residual pages stuck nullFace (major, ke=0). ZGC
         // heap_store_slow_path marks the new address regardless
         // (zBarrier.cpp:253-261). Accept every marking phase.

@@ -31,6 +31,7 @@ set(SRC_LIST
     "M0ExitDiagnostics.cpp"
     "M0Correlation.cpp"
     "HealCoverage.cpp"
+    "Stw2CurrentAudit.cpp"
     "CsetEmptyWho.cpp"
     "FillerZeroDiag.cpp"
     "HoleWhoDiag.cpp"

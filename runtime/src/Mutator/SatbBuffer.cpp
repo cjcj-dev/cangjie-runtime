@@ -29,7 +29,7 @@ bool SatbBuffer::ShouldEnqueue(const BaseObject* obj)
     // Young concurrent mark paints the Young face (ClearLiveInfo<Young> at
     // PrepareYoungGarbageCandidates). SATB used the Old face unconditionally, so a
     // stale major mark on a still-young object skipped enqueue — the current-face
-    // target then showed up as uncovered (REPORT-youngconcstw2).
+    // target then showed up as Stw2CurrentAudit uncovered (REPORT-youngconcstw2).
     // ZGC heap_store_slow_path marks the *new* address (zBarrier.cpp:253-261 /
     // zBarrier.inline.hpp:735-739 mark_and_remember). Using the Young face during
     // GC_REASON_YOUNG is the SATB equivalent of that keep-alive.

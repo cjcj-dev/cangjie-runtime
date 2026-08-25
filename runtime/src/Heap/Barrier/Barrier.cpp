@@ -318,7 +318,7 @@ inline bool HasYoungRegionsForRecording()
 // remember(p) is RecordCrossGenEdge (slot-keyed remset). The mark half was missing:
 // SATB enqueues the overwritten prev (deletion barrier), not keep-alive of the new
 // target. Concurrent old→young stores therefore landed on the remset current face
-// with a white young target (REPORT-youngconcstw2).
+// with a white young target (Stw2CurrentAudit uncovered, REPORT-youngconcstw2).
 //
 // Window: BarrierPhase::TRACE only (InstallBarrier maps TRACE and CLEAR_SATB onto
 // TraceBarrier). Idle/Enum/STW/PostTrace/Preforward/Forward are no-ops.
