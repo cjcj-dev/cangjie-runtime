@@ -135,7 +135,10 @@ def load_run(directory: Path) -> dict[str, object]:
         r"ensureCalls=(?P<static_ensure>\d+) missAfter=(?P<static_miss>\d+)",
         runtime, ("static_young", "static_ensure", "static_miss")))
 
-    tail_start = timer_end["young.ref_fix_tail"][0]
+    # The post-relocate tail now begins after the retained concurrent STW fix.
+    # Using the bulk fix end as the boundary keeps ghost-dispel accounting
+    # aligned with the current Relocate.cpp sequence.
+    tail_start = timer_end["young.ref_fix_bulk"][0]
     tail_end = timer_end["young.evac_prepare_next"][0]
     counters["evac_ghost_regions"] = sum(
         tail_start < timestamp <= tail_end and "[GCV2][ghost-dispel]" in body
@@ -148,7 +151,7 @@ def load_run(directory: Path) -> dict[str, object]:
     evac_other_us = evac_tail_us - counters["domain_ns"] / 1000.0
     post_held_us = stw["young_post-relocate"] / 1000.0
     post_boundary_us = post_held_us - (
-        phases["young.ref_fix_bulk"] + phases["young.ref_fix_tail"] + phases["young.evac_finish"])
+        phases["young.ref_fix_bulk"] + phases["young.evac_finish"])
 
     return {
         "run": directory.name,
@@ -182,7 +185,6 @@ def summarize(root: Path) -> dict[str, object]:
 
     post_rows = [
         ("young.ref_fix_bulk", [run["phases_us"]["young.ref_fix_bulk"] for run in runs]),
-        ("young.ref_fix_tail", [run["phases_us"]["young.ref_fix_tail"] for run in runs]),
         ("counter.promodomain_discharge", [run["counters"]["domain_ns"] / 1000.0 for run in runs]),
         ("derived.evac_finish_other", [run["evac_other_us"] for run in runs]),
         ("young.evac_prepare_next", [run["phases_us"]["young.evac_prepare_next"] for run in runs]),
