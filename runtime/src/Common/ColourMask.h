@@ -26,7 +26,7 @@ extern "C" {
 // Any bit set means the reference needs the barrier before use: it is mid-evacuation, or it
 // carries a colour other than the one being handed out now. The collector owns the value and
 // swaps it at a phase boundary; see WCollector::set_good_masks. The compiler emits a reference
-// to this symbol by name (CJBarrierLowering.cpp:641), so it is extern "C": a mangled name would
+// to this symbol by name (CJBarrierLowering.cpp:653), so it is extern "C": a mangled name would
 // drift between compiler versions.
 extern unsigned long g_cjLoadBadMask;
 
