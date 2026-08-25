@@ -41,6 +41,8 @@ namespace {
 
 class TestCollector final : public Collector {
 public:
+    explicit TestCollector(bool colourStores = false) : colourStores(colourStores) {}
+
     void Init() override {}
     void RunGarbageCollection(uint64_t, GCReason) override {}
     bool ShouldIgnoreRequest(GCRequest&) override { return false; }
@@ -49,8 +51,14 @@ public:
     bool IsOldPointer(RefField<>&) const override { return false; }
     RefField<> GetAndTryTagRefField(BaseObject* obj) const override
     {
+        if (colourStores) {
+            return RefField<>(obj, ::g_cjStoreGoodMask);
+        }
         return RefField<>(to_zpointer(reinterpret_cast<MAddress>(obj)));
     }
+
+private:
+    bool colourStores;
 };
 
 class TestBarrier final : public Barrier {
@@ -169,6 +177,61 @@ GC_TEST(Remset, OldToYoungRecordedByBarrier)
     field->StoreColoured(zpointer::null);
     barrier.WriteReference(fx.obj0, *field, fx.obj1);
     GC_EXPECT_TRUE(ExpectRecorded(rs, reinterpret_cast<MAddress>(field)));
+}
+
+// Case A: a non-null plain previous word is not store-good.  The product barrier must still
+// register the old slot; the cheap compiler-side negative-mask predicate cannot be used as the
+// remembered-set witness for this value.
+GC_TEST(Remset, PlainPreviousWordStillRecordsOldToYoung)
+{
+    GcHeapFixture fx;
+    fx.region0->SetYoungRegionFlag(0);
+    fx.region1->SetYoungRegionFlag(1);
+    fx.region1->SetYoungAge(1);
+
+    auto* field = &HeapSlotAt<>(reinterpret_cast<MAddress>(fx.obj0) + TYPEINFO_PTR_SIZE);
+    const MAddress slot = reinterpret_cast<MAddress>(field);
+    TestCollector collector(true);
+    RememberedSet rs;
+    rs.Initialize(fx.heapStart, 2 * RegionInfo::UNIT_SIZE);
+    Barrier barrier(collector, rs);
+
+    // Deliberately install a non-null, uncoloured previous word (case A).
+    field->StoreColoured(to_zpointer(reinterpret_cast<MAddress>(fx.obj1)));
+    GC_EXPECT_FALSE(collector.is_store_good(*field));
+    barrier.WriteReference(fx.obj0, *field, fx.obj1);
+
+    GC_EXPECT_TRUE(rs.Contains(slot));
+}
+
+// Case B: the slot was already registered, then the current remset face was drained before the
+// next write.  A store-good/same-target fast-path decision must not suppress the new current-face
+// registration after DrainForMinor has cleared the prior bitmap.
+GC_TEST(Remset, StoreGoodRewriteReregistersAfterDrain)
+{
+    GcHeapFixture fx;
+    fx.region0->SetYoungRegionFlag(0);
+    fx.region1->SetYoungRegionFlag(1);
+    fx.region1->SetYoungAge(1);
+
+    auto* field = &HeapSlotAt<>(reinterpret_cast<MAddress>(fx.obj0) + TYPEINFO_PTR_SIZE);
+    const MAddress slot = reinterpret_cast<MAddress>(field);
+    TestCollector collector(true);
+    RememberedSet rs;
+    rs.Initialize(fx.heapStart, 2 * RegionInfo::UNIT_SIZE);
+    Barrier barrier(collector, rs);
+
+    field->StoreColoured(zpointer::null);
+    barrier.WriteReference(fx.obj0, *field, fx.obj1);
+    std::unordered_set<MAddress> firstMinor;
+    rs.DrainForMinor(firstMinor);
+    GC_EXPECT_TRUE(firstMinor.count(slot) == 1);
+    GC_EXPECT_EQ(rs.Size(), 0u);
+    GC_EXPECT_TRUE(collector.is_store_good(*field));
+
+    barrier.WriteReference(fx.obj0, *field, fx.obj1);
+
+    GC_EXPECT_TRUE(rs.Contains(slot));
 }
 
 // U7: product IdleBarrier WriteReference also records (wbclose2 acceptance).
