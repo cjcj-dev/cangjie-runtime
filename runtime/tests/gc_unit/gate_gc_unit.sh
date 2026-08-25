@@ -57,6 +57,20 @@ on_exit() {
 }
 trap on_exit EXIT
 
+# This check exercises the gate's own contract.  It runs before any skip,
+# runtime build, or capability probing so a broken contract cannot be hidden by
+# NO_CJC or an explicit skip.  The contract fixture invokes a private copy of
+# this gate; its recursion guard is intentionally scoped to that synthetic child
+# only.
+if [[ "${GC_UNIT_GATE_CONTRACT_SELFTEST:-0}" != "1" ]]; then
+  if ! bash "$SRC/test_gate_testable_contract.sh"; then
+    echo "GC_UNIT_GATE_FAIL: testable gate contract failed" >&2
+    exit 2
+  fi
+  echo "GATE_TESTABLE_CONTRACT_OK"
+fi
+
+
 # Invalidate any previous PASS before doing work.  The EXIT trap covers normal
 # failures, but it cannot run after SIGKILL or machine loss; leaving an old PASS
 # readable during a new run would let a composition gate accept stale evidence.
