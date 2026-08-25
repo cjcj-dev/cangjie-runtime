@@ -37,14 +37,27 @@
 #include "Heap/Allocator/RegionSpace.h"
 #include "Heap/Barrier/Barrier.h"
 #include "Heap/Collector/Collector.h"
+#include "Heap/Collector/CollectorProxy.h"
 #include "Heap/Collector/CollectorResources.h"
 #include "Heap/Collector/TracingCollector.h"
 #include "Heap/Verify/Stw2CurrentAudit.h"
 #include "Mutator/SatbBuffer.h"
+#include "Mutator/ThreadLocal.h"
 #include "ObjectModel/RefField.inline.h"
 
 using namespace MapleRuntime;
 using namespace MapleRuntime::GcUnit;
+
+namespace MapleRuntime {
+#if defined(MRT_TESTABLE_INTERNALS)
+struct RelocationReceiptTestAccess {
+    static void InitCollectorProxy(CollectorResources& resources)
+    {
+        resources.collectorProxy.Init();
+    }
+};
+#endif
+} // namespace MapleRuntime
 
 namespace {
 
@@ -330,6 +343,53 @@ GC_TEST(YoungConc, OldToYoungStillRecorded)
     GC_EXPECT_EQ(records.size(), 1u);
     GC_EXPECT_TRUE(records.count(reinterpret_cast<MAddress>(field)) == 1);
 }
+
+// Major TRACE window with no young regions: a bulk write must still publish the
+// new target to the SATB consumer.  This is the regression arm for the
+// RecordCrossGenEdgesInStruct early return; it observes retired entries after
+// flushing the mutator node rather than merely checking that a helper ran.
+#if defined(MRT_TESTABLE_INTERNALS)
+GC_OTHER_VM_TEST(YoungConc, BulkWritePublishesSatbWithoutYoungRegions)
+{
+    GcHeapFixture fx;
+    fx.region0->SetYoungRegionFlag(0);
+    fx.region1->SetYoungRegionFlag(0);
+
+    TestCollector collector;
+    RememberedSet rs;
+    rs.Initialize(fx.heapStart, 2 * RegionInfo::UNIT_SIZE);
+    TestBarrier barrier(collector, rs);
+
+    CollectorResources& resources = Heap::GetHeap().GetCollectorResources();
+    RelocationReceiptTestAccess::InitCollectorProxy(resources);
+    const bool startedBefore = resources.IsGcStarted();
+    const GCReason reasonBefore = resources.GetGCStats().reason;
+    const GCPhase heapPhaseBefore = Heap::GetHeap().GetGCPhase();
+    resources.SetGcStarted(true);
+    resources.GetGCStats().reason = GC_REASON_USER;
+    Heap::GetHeap().SetGCPhase(GCPhase::GC_PHASE_TRACE);
+
+    Mutator mutator;
+    mutator.SetMutatorPhase(GCPhase::GC_PHASE_TRACE);
+    ThreadLocal::SetMutator(&mutator);
+
+    BaseObject* source = fx.obj1;
+    MAddress dstField = reinterpret_cast<MAddress>(fx.obj0) + TYPEINFO_PTR_SIZE;
+    barrier.WriteStruct(fx.obj0, dstField, sizeof(source), reinterpret_cast<MAddress>(&source), sizeof(source));
+
+    mutator.FlushSatbBuffer();
+    std::vector<BaseObject*> retired;
+    SatbBuffer::Instance().GetRetiredObjects(retired);
+
+    ThreadLocal::SetMutator(nullptr);
+    Heap::GetHeap().SetGCPhase(heapPhaseBefore);
+    resources.SetGcStarted(startedBefore);
+    resources.GetGCStats().reason = reasonBefore;
+
+    GC_EXPECT_EQ(retired.size(), 1u);
+    GC_EXPECT_EQ(reinterpret_cast<uintptr_t>(retired[0]), reinterpret_cast<uintptr_t>(fx.obj1));
+}
+#endif
 
 // mark_and_remember mark half (zBarrier.inline.hpp:735-739): TRACE + young GC
 // paints the new young target. STW/Idle TestBarrier must not (phase gate).
