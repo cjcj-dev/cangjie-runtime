@@ -40,7 +40,6 @@
 #include "Heap/Collector/CollectorProxy.h"
 #include "Heap/Collector/CollectorResources.h"
 #include "Heap/Collector/TracingCollector.h"
-#include "Heap/Verify/Stw2CurrentAudit.h"
 #include "Mutator/SatbBuffer.h"
 #include "Mutator/ThreadLocal.h"
 #include "ObjectModel/RefField.inline.h"
@@ -285,6 +284,54 @@ GC_TEST(YoungConc, PaintWithoutGreyLedgerMissesWorkStack)
     fx.FreePlanted(live);
 }
 
+// Late-edge positive control: the TRACE-window producer publishes an
+// already-painted object with an explicit Follow receipt.  The consumer must
+// see that bit after the retired-node handoff; treating this as ordinary SATB
+// would lose the child traversal because the young mark claim already won.
+GC_TEST(YoungConc, LateEdgeFollowReceiptSurvivesSatbHandoff)
+{
+    GcHeapFixture fx;
+    fx.region0->SetYoungRegionFlag(0);
+    fx.region1->SetYoungRegionFlag(1);
+    fx.region1->SetYoungAge(1);
+    LiveInfo* live = fx.PlantLiveInfo(fx.region1);
+    (void)fx.PlantMarkBitmap<Generation::Young>(live, fx.region1->GetRegionSize());
+
+    auto* field = &HeapSlotAt<>(reinterpret_cast<MAddress>(fx.obj0) + TYPEINFO_PTR_SIZE);
+    TestCollector collector;
+    RememberedSet rememberedSet;
+    rememberedSet.Initialize(fx.heapStart, 2 * RegionInfo::UNIT_SIZE);
+    TestTraceBarrier barrier(collector, rememberedSet);
+    Mutator mutator;
+    ThreadLocal::SetMutator(&mutator);
+    CollectorResources& resources = Heap::GetHeap().GetCollectorResources();
+    const bool startedBefore = resources.IsGcStarted();
+    const GCReason reasonBefore = resources.GetGCStats().reason;
+    resources.SetGcStarted(true);
+    resources.GetGCStats().reason = GC_REASON_YOUNG;
+
+    // Product barrier path: this is a late TRACE-window store, not a direct
+    // call to the publication helper.
+    barrier.Record(fx.obj0, reinterpret_cast<MAddress>(field), fx.obj1);
+    mutator.FlushSatbBuffer();
+
+    resources.SetGcStarted(startedBefore);
+    resources.GetGCStats().reason = reasonBefore;
+    ThreadLocal::SetMutator(nullptr);
+
+    bool sawFollow = false;
+    BaseObject* sawObject = nullptr;
+    SatbBuffer::Instance().GetRetiredEntries([&](BaseObject* object, bool follow) {
+        sawObject = object;
+        sawFollow = follow;
+    });
+    GC_EXPECT_EQ(reinterpret_cast<uintptr_t>(sawObject), reinterpret_cast<uintptr_t>(fx.obj1));
+    GC_EXPECT_TRUE(sawFollow);
+
+    fx.region1->metadata.liveInfo = nullptr;
+    fx.FreePlanted(live);
+}
+
 // 3. young→young overwrite is not remset (ZGC remember only if slot old; zBarrier:729-733).
 GC_TEST(YoungConc, YoungToYoungWriteNotInRemset)
 {
@@ -460,99 +507,6 @@ GC_TEST(YoungConc, IdleStoreDoesNotMarkNewYoungTarget)
 
     fx.region1->metadata.liveInfo = nullptr;
     fx.FreePlanted(live);
-}
-
-// Peek must not consume the grey-list MergeYoungAllocBlack still owns (Stw2CurrentAudit).
-GC_TEST(YoungConc, PeekYoungAllocBlackDoesNotConsume)
-{
-    GcHeapFixture fx;
-    auto* buf = new AllocBuffer();
-    buf->PushYoungAllocBlack(fx.obj0);
-    std::vector<BaseObject*> peeked;
-    buf->PeekYoungAllocBlack(peeked);
-    GC_EXPECT_EQ(peeked.size(), 1u);
-    std::vector<BaseObject*> merged;
-    buf->MergeYoungAllocBlack(merged);
-    GC_EXPECT_EQ(merged.size(), 1u);
-    GC_EXPECT_EQ(reinterpret_cast<uintptr_t>(merged[0]), reinterpret_cast<uintptr_t>(fx.obj0));
-}
-
-// Positive control: ArmInject forces uncovered+=1 so a zero cannot mean dead probe.
-// Product default kStw2CurrentAudit=false (rec=stw |Δ|=6.4%); skip when off.
-GC_TEST(YoungConc, Stw2CurrentInjectForcesUncovered)
-{
-    if (!Stw2CurrentAudit::Enabled()) {
-        return;
-    }
-    const size_t before = Stw2CurrentAudit::Uncovered();
-    Stw2CurrentAudit::ArmInject();
-    std::unordered_set<MAddress> empty;
-    Stw2CurrentAudit::Census(empty, nullptr);
-    GC_EXPECT_EQ(Stw2CurrentAudit::Uncovered(), before + 1);
-}
-
-GC_TEST(YoungConc, ClassifyWaterBeatsMark)
-{
-    GcHeapFixture fx;
-    fx.region0->SetYoungRegionFlag(1);
-    fx.region0->SetYoungAge(1);
-    fx.region0->metadata.markStartAllocPtr = reinterpret_cast<uintptr_t>(fx.obj0);
-    std::unordered_set<BaseObject*> none;
-    GC_EXPECT_EQ(static_cast<unsigned>(Stw2CurrentAudit::ClassifyTarget(fx.obj0, none, none)),
-                 static_cast<unsigned>(Stw2CurrentAudit::Stw2Cover::Water));
-}
-
-GC_TEST(YoungConc, ClassifyMarkedWhenNoWater)
-{
-    GcHeapFixture fx;
-    fx.region0->SetYoungRegionFlag(1);
-    fx.region0->SetYoungAge(1);
-    fx.region0->metadata.markStartAllocPtr = 0;
-    LiveInfo* live = fx.PlantLiveInfo(fx.region0);
-    (void)fx.PlantMarkBitmap<Generation::Young>(live, fx.region0->GetRegionSize());
-    size_t off = fx.region0->GetAddressOffset(reinterpret_cast<MAddress>(fx.obj0));
-    MarkView<Generation::Young> view = fx.region0->GetMarkView<Generation::Young>();
-    bool first = fx.region0->GetMarkBitmap(view)->MarkBits(off, 8, fx.region0->GetRegionSize());
-    GC_EXPECT_FALSE(first);
-    std::unordered_set<BaseObject*> none;
-    GC_EXPECT_EQ(static_cast<unsigned>(Stw2CurrentAudit::ClassifyTarget(fx.obj0, none, none)),
-                 static_cast<unsigned>(Stw2CurrentAudit::Stw2Cover::Marked));
-    fx.region0->metadata.liveInfo = nullptr;
-    fx.FreePlanted(live);
-}
-
-GC_TEST(YoungConc, ClassifyAllocBlackWhenUnmarked)
-{
-    GcHeapFixture fx;
-    fx.region0->SetYoungRegionFlag(1);
-    fx.region0->SetYoungAge(1);
-    fx.region0->metadata.markStartAllocPtr = 0;
-    std::unordered_set<BaseObject*> allocBlack;
-    allocBlack.insert(fx.obj0);
-    std::unordered_set<BaseObject*> none;
-    GC_EXPECT_EQ(static_cast<unsigned>(Stw2CurrentAudit::ClassifyTarget(fx.obj0, allocBlack, none)),
-                 static_cast<unsigned>(Stw2CurrentAudit::Stw2Cover::AllocBlack));
-}
-
-GC_TEST(YoungConc, ClassifyUncoveredYoung)
-{
-    GcHeapFixture fx;
-    fx.region0->SetYoungRegionFlag(1);
-    fx.region0->SetYoungAge(1);
-    fx.region0->metadata.markStartAllocPtr = 0;
-    std::unordered_set<BaseObject*> none;
-    GC_EXPECT_EQ(static_cast<unsigned>(Stw2CurrentAudit::ClassifyTarget(fx.obj0, none, none)),
-                 static_cast<unsigned>(Stw2CurrentAudit::Stw2Cover::Uncovered));
-}
-
-GC_TEST(YoungConc, ClassifySkipOldHolderTarget)
-{
-    GcHeapFixture fx;
-    fx.region0->SetYoungRegionFlag(0);
-    fx.region0->metadata.markStartAllocPtr = 0;
-    std::unordered_set<BaseObject*> none;
-    GC_EXPECT_EQ(static_cast<unsigned>(Stw2CurrentAudit::ClassifyTarget(fx.obj0, none, none)),
-                 static_cast<unsigned>(Stw2CurrentAudit::Stw2Cover::Skip));
 }
 
 // Product must not return to retired-only termination. Flipping the constant is

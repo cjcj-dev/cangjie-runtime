@@ -312,23 +312,13 @@ inline bool HasYoungRegionsForRecording()
     return hasYoungRegions;
 }
 
-// This helper is our insertion/keep-alive leg: it marks (young) or enqueues (major)
-// the newly stored target. It is intentionally not described as a verbatim ZGC
-// store-barrier port. ZGC's normal buffered path first retains the overwritten
-// value (p, prev) in heap_store_slow_path (zBarrier.cpp:252-263), and the buffer
-// flush calls mark_and_remember(p, make_load_good(entry._prev))
-// (zStoreBarrierBuffer.cpp:280-281): that is SATB deletion of prev. ZGC's
-// no-buffer fallback instead calls mark_and_remember(p, addr), where addr is the
-// new value (zBarrier.cpp:252-263). Thus ZGC has both paths, with prev marking
-// being the normal buffered semantics and new-value marking the fallback.
-//
-// Our prev/deletion leg is separate and remains in TraceBarrier: a single-field
-// write snapshots the old slot and enqueues it (TraceBarrier.cpp:117-134), while
-// bulk struct writes do the same for every pre-store field (TraceBarrier.cpp:161-180)
-// and static/atomic variants have corresponding old-value enqueues
-// (TraceBarrier.cpp:141-153,250-301). MarkAndRememberNewValue therefore supplies
-// the complementary new-value keep-alive needed by our young alloc-black and
-// major/no-young windows; it does not replace the prev SATB deletion barrier.
+// ZGC mark_and_remember (zBarrier.inline.hpp:735-739):
+//   if (!is_null(addr)) { mark<DontResurrect, AnyThread, Follow, Strong>(addr); }
+//   remember(p);
+// remember(p) is RecordCrossGenEdge (slot-keyed remset). The mark half was missing:
+// SATB enqueues the overwritten prev (deletion barrier), not keep-alive of the new
+// target. Concurrent old→young stores therefore landed on the remset current face
+// with a white young target (REPORT-youngconcstw2).
 //
 // Window: BarrierPhase::TRACE only (InstallBarrier maps TRACE and CLEAR_SATB onto
 // TraceBarrier). Idle/Enum/STW/PostTrace/Preforward/Forward are no-ops.
@@ -376,6 +366,23 @@ void MarkAndRememberNewValue(BarrierPhase barrierPhase, BaseObject* ref)
         AllocBuffer* buffer = AllocBuffer::GetAllocBuffer();
         if (buffer != nullptr) {
             buffer->PushYoungAllocBlack(ref);
+        }
+        // Publish the same child work into the SATB termination domain.  The
+        // explicit follow bit is required because allocate-black has already
+        // claimed the young mark bit and a plain SATB consumer would skip it.
+        // This barrier can run in gc_unit and during runtime bootstrap, where
+        // no CJ thread model is installed.  Mutator::GetMutator() falls back
+        // to CJ_CJThreadGetMutator in that state; the optional entry point is
+        // not initialized and calling it raises signal 11 before a null
+        // mutator can be observed.  The publication producer must be the
+        // mutator bound to this OS thread, so read that binding directly.
+        Mutator* mutator = ThreadLocal::GetMutator();
+        // Runtime/GC threads can expose a runtime mutator object through the
+        // concurrency model, but they are not managed mutator contexts and do
+        // not own an in-flight SATB node.  The publication contract is only
+        // valid on a managed producer thread.
+        if (mutator != nullptr && mutator->IsManagedContext()) {
+            mutator->PublishYoungAllocBlack(ref);
         }
         return;
     }
