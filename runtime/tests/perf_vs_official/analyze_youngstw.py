@@ -71,6 +71,38 @@ def timed_report_lines(text: str) -> list[tuple[dt.datetime, str]]:
     return result
 
 
+def report_timer_ends(
+    report_lines: list[tuple[dt.datetime, str]],
+) -> dict[str, tuple[dt.datetime, int]]:
+    result: dict[str, tuple[dt.datetime, int]] = {}
+    for timestamp, body in report_lines:
+        match = TIMER_RE.match(body)
+        if match is not None:
+            result[match.group(1)] = (timestamp, int(match.group(2).replace(",", "")))
+    return result
+
+
+def evac_ghost_regions(
+    report_lines: list[tuple[dt.datetime, str]],
+    timer_end: dict[str, tuple[dt.datetime, int]],
+) -> int:
+    """Count current-cycle ghost retirement during the evacuation tail.
+
+    ``ExpireKeptFromPreviousCycle`` runs after ``young.ref_fix_bulk`` closes and
+    before ``young.evac_finish`` starts.  Deriving the latter's start from its
+    end timestamp and duration keeps those previous-cycle retirements out while
+    retaining the current evacuation tail through ``young.evac_prepare_next``.
+    """
+    evac_finish_end, evac_finish_us = timer_end["young.evac_finish"]
+    tail_start = evac_finish_end - dt.timedelta(microseconds=evac_finish_us)
+    tail_end = timer_end["young.evac_prepare_next"][0]
+    if tail_end < tail_start:
+        raise ValueError("young.evac_prepare_next ends before young.evac_finish starts")
+    return sum(
+        tail_start < timestamp <= tail_end and "[GCV2][ghost-dispel]" in body
+        for timestamp, body in report_lines)
+
+
 def load_run(directory: Path) -> dict[str, object]:
     if (directory / "classification").read_text().strip() != "COMPLETE":
         raise ValueError(f"{directory}: not COMPLETE")
@@ -88,11 +120,7 @@ def load_run(directory: Path) -> dict[str, object]:
         raise ValueError(f"{directory}: missing phases {missing}")
 
     report_lines = timed_report_lines(report)
-    timer_end: dict[str, tuple[dt.datetime, int]] = {}
-    for timestamp, body in report_lines:
-        match = TIMER_RE.match(body)
-        if match is not None:
-            timer_end[match.group(1)] = (timestamp, int(match.group(2).replace(",", "")))
+    timer_end = report_timer_ends(report_lines)
     mark_end, _ = timer_end["young.mark_from_remset"]
     pre_clear_end, pre_clear_us = timer_end["young.pre_evac_clear"]
     postmark_gap_us = (pre_clear_end - mark_end).total_seconds() * 1e6 - pre_clear_us
@@ -135,14 +163,7 @@ def load_run(directory: Path) -> dict[str, object]:
         r"ensureCalls=(?P<static_ensure>\d+) missAfter=(?P<static_miss>\d+)",
         runtime, ("static_young", "static_ensure", "static_miss")))
 
-    # The post-relocate tail now begins after the retained concurrent STW fix.
-    # Using the bulk fix end as the boundary keeps ghost-dispel accounting
-    # aligned with the current Relocate.cpp sequence.
-    tail_start = timer_end["young.ref_fix_bulk"][0]
-    tail_end = timer_end["young.evac_prepare_next"][0]
-    counters["evac_ghost_regions"] = sum(
-        tail_start < timestamp <= tail_end and "[GCV2][ghost-dispel]" in body
-        for timestamp, body in report_lines)
+    counters["evac_ghost_regions"] = evac_ghost_regions(report_lines, timer_end)
 
     collection_known_us = sum(phases[name] for name in COLLECTION_PHASES)
     collection_held_us = stw["young_collection"] / 1000.0
