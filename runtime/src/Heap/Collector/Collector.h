@@ -181,7 +181,7 @@ public:
     // Phase C: the value now says whether it may be stale. A reference is good when it carries
     // the colour the collector is currently handing out and is not mid-evacuation; anything else
     // -- an older colour, or a tagged reference -- has to go through the barrier. One AND, matching
-    // what the compiler emits (CJBarrierLowering.cpp:641) and what ZGC does
+    // what the compiler emits (CJBarrierLowering.cpp:653) and what ZGC does
     // (jdk zBarrier.inline.hpp:626-628).
     //
     // A zero field passes, as it does in ZGC: null carries no colour, and every stored reference
