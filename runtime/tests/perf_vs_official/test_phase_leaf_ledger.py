@@ -255,6 +255,43 @@ class PhaseLeafLedgerTest(unittest.TestCase):
         self.assertIn("CONTRACT_2_PAUSE_WALL verdict=FAIL", result.stdout)
         self.assertEqual(result.stdout.count("verdict=FAIL"), 2)
 
+    def test_phase_cross_cycle_timestamp_fails_only_contract_3(self) -> None:
+        text = "\n".join((
+            cycle(1, 100),
+            cycle(2, 100).replace("start_ns=1", "start_ns=1000"),
+            phase(1, "young.copy", 35, start_ns=1005),
+            phase(2, "young.copy2", 20, start_ns=1010),
+            leaf(1, "young.copy", 20, kind="pause"),
+            leaf(1, "young.flush_alloc", 10, kind="pause"),
+            leaf(2, "young.copy2", 20, kind="pause"),
+            "[GCLOG] v=3 rec=stw seq=1 reason=young start_ns=1005 wait_ns=1 held_ns=40",
+            "[GCLOG] v=3 rec=stw seq=2 reason=young start_ns=1010 wait_ns=1 held_ns=30",
+            "[ZSTAT] v=1 rec=zphase seq=1 name=young.copy pause_ns=30 conc_ns=5 n=1",
+            "[ZSTAT] v=1 rec=zphase seq=2 name=young.copy2 pause_ns=15 conc_ns=5 n=1",
+            "[ZSTAT] v=1 rec=zcycle seq=1 pause_ns=30 conc_ns=5 max_pause_ns=30 phases=1",
+            "[ZSTAT] v=1 rec=zcycle seq=2 pause_ns=15 conc_ns=5 max_pause_ns=15 phases=1",
+        ))
+        result = self.run_inequality_checker(text, wall_ns=1_000_000_000)
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn("CONTRACT_1_WORK_LEDGER verdict=PASS", result.stdout)
+        self.assertIn("CONTRACT_2_PAUSE_WALL verdict=PASS", result.stdout)
+        self.assertIn("CONTRACT_3_PHASE_CYCLE verdict=FAIL", result.stdout)
+        self.assertIn("INEQUALITY_3 cycle_ns=200 wall_ns=1000000000", result.stdout)
+        self.assertIn(
+            "PHASE_CYCLE_BOUND seq=1 name=young.copy phase=[1005,1040] cycle=[1,101] verdict=FAIL",
+            result.stdout,
+        )
+        self.assertEqual(result.stdout.count("verdict=FAIL"), 2)
+
+    def test_phase_inside_absolute_cycle_window_keeps_contract_3_green(self) -> None:
+        text = self.inequality_fixture().replace(
+            "start_ns=1 ns=35", "start_ns=2 ns=35"
+        )
+        result = self.run_inequality_checker(text)
+        self.assertEqual(result.returncode, 0, result.stdout)
+        self.assertIn("PHASE_CYCLE_DETAIL phase_samples=1 cycle_bound_mismatches=0", result.stdout)
+        self.assertIn("CONTRACT_3_PHASE_CYCLE verdict=PASS", result.stdout)
+
     def test_no_pause_phase_fails_closed_instead_of_accepting_zero_union(self) -> None:
         damaged = self.inequality_fixture().replace(
             "name=young.copy kind=pause", "name=young.copy kind=conc"

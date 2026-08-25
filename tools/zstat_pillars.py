@@ -20,7 +20,8 @@ EXPLANATION = (
     "zphase.pause_ns is inclusive work: a sum of Timer samples, not reported_pause_wall_ns. "
     "Contract 1 checks exact GCLOG↔ZSTAT sample and detail↔master conservation; Contract 2 "
     "checks each pause phase against an independently emitted same-seq STW interval, then "
-    "checks the aggregate interval unions."
+    "checks the aggregate interval unions. Contract 3 checks every positive-seq phase against "
+    "the absolute time window of its owning cycle."
 )
 
 
@@ -221,6 +222,36 @@ def main() -> int:
     print(f"CONTRACT_2_PAUSE_WALL verdict={'PASS' if contract_2_ok else 'FAIL'}")
     print("ZSTAT_INCLUSIVE_WORK_EXPLANATION " + EXPLANATION)
 
+    # Contract 3: a phase's absolute interval belongs to the time window of its
+    # owning cycle.  Contract 2 only compares records within one seq, so a whole
+    # phase/STW pair shifted to another cycle would otherwise remain green.
+    cycle_by_seq = {record.seq: record for record in gclog.cycles}
+    phase_cycle_mismatches = []
+    positive_phase_samples = 0
+    for record in gclog.phases:
+        if record.seq <= 0:
+            continue
+        positive_phase_samples += 1
+        cycle = cycle_by_seq[record.seq]
+        phase_end = record.start_ns + record.ns
+        cycle_end = cycle.start_ns + cycle.dur_ns
+        if not (cycle.start_ns <= record.start_ns <= phase_end <= cycle_end):
+            phase_cycle_mismatches.append((
+                record.seq, record.name, record.start_ns, phase_end,
+                cycle.start_ns, cycle_end,
+            ))
+    print(
+        f"PHASE_CYCLE_DETAIL phase_samples={positive_phase_samples} "
+        f"cycle_bound_mismatches={len(phase_cycle_mismatches)}"
+    )
+    for seq, name, phase_start, phase_end, cycle_start, cycle_end in phase_cycle_mismatches:
+        print(
+            f"PHASE_CYCLE_BOUND seq={seq} name={name} "
+            f"phase=[{phase_start},{phase_end}] cycle=[{cycle_start},{cycle_end}] verdict=FAIL"
+        )
+    contract_3_ok = positive_phase_samples > 0 and not phase_cycle_mismatches
+    print(f"CONTRACT_3_PHASE_CYCLE verdict={'PASS' if contract_3_ok else 'FAIL'}")
+
     pillar_total = sum(leaf_pillar_ns.values())
     print(f"{'pillar':<12} {'self-norm%':>10} {'ref%':>6} {'delta':>7}  pause-share%")
     legacy_red = False
@@ -240,7 +271,10 @@ def main() -> int:
         f"ratio={cycle_ns / args.wall_ns:.9f} "
         f"verdict={'PASS' if inequality_3_ok else 'FAIL'}"
     )
-    return 1 if legacy_red or not contract_1_ok or not contract_2_ok or not inequality_3_ok else 0
+    return 1 if (
+        legacy_red or not contract_1_ok or not contract_2_ok or
+        not contract_3_ok or not inequality_3_ok
+    ) else 0
 
 
 if __name__ == "__main__":
