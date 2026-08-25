@@ -15,6 +15,7 @@
 #include <cstring>
 #include <exception>
 #include <functional>
+#include <csignal>
 #include <string>
 #include <thread>
 #include <vector>
@@ -211,6 +212,7 @@ inline int RunAll()
         return 1;
     }
     bool selectedOtherVmChild = false;
+    const char* abortBefore = std::getenv("GC_UNIT_ABORT_BEFORE");
     for (const auto& t : Registry()) {
         const std::string fullName = std::string(t.suite) + "." + t.name;
         if (filter != nullptr) {
@@ -220,6 +222,18 @@ inline int RunAll()
         }
         const bool directOtherVmChild = otherVmChild != nullptr && fullName == otherVmChild && t.otherVm;
         selectedOtherVmChild = selectedOtherVmChild || directOtherVmChild;
+        // Emit the exact test name before entering its body.  Flush here so
+        // an abnormal process exit leaves the last started test in the log.
+        if (otherVmChild == nullptr) {
+            std::printf("[  RUN   ] %s\n", fullName.c_str());
+        } else {
+            std::fprintf(stderr, "[  RUN   ] %s\n", fullName.c_str());
+        }
+        std::fflush(nullptr);
+        if (abortBefore != nullptr && std::strcmp(abortBefore, fullName.c_str()) == 0) {
+            std::raise(SIGSEGV);
+            std::_Exit(139);
+        }
         try {
             if (t.otherVm && !directOtherVmChild) {
                 RunInOtherVm(fullName);
