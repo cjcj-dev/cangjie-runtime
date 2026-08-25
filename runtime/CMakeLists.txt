@@ -279,9 +279,10 @@ if (DUMPADDRESS_FLAG MATCHES 1)
     add_definitions(-DMRT_DUMP_ADDRESS)
 endif ()
 
-if (CJ_SDK_VERSION)
-    add_definitions(-DCJ_SDK_VERSION="${CJ_SDK_VERSION}")
+if (NOT CJ_SDK_VERSION)
+    message(FATAL_ERROR "CJ_SDK_VERSION must be defined (pass -DCJ_SDK_VERSION=<version>)")
 endif()
+add_definitions(-DCJ_SDK_VERSION="${CJ_SDK_VERSION}")
 
 # ⭐⭐⭐ 0809：把【源码 commit】烙进二进制。
 #   ⛔ 起因（同一晚三次）：⭐ 修法在源码里，⭐ 而我们跑的是旧二进制 ——
