@@ -938,11 +938,10 @@ void WCollector::DoYoungGarbageCollection()
         // same edge into this collection's marking work a second time at mark end.
         //
         // ZGC shape (zGeneration.cpp:542-558 mark_end re-enter): under STW2 mutators are frozen,
-        // so roots+SATB+field-rescan loop to a quiet fixpoint; there is no current-face drain.
-        // The all-STW relocation rollback is the exception because it has no later active-face
-        // Snapshot for same-cycle reference fixing.
+        // so roots+SATB+field-rescan loop to a quiet fixpoint; the current-face Snapshot is
+        // consumed for this cycle's reference fixing and retained for the next flip.
         //
-        // (1) flush current; defer it, or drain only for the all-STW rollback
+        // (1) flush current and take the non-destructive Snapshot
         // (2) fixpoint: roots + retired SATB + reachableVec field rescan (young→young)
         // (3) quiet = no new greys this iter (work empty, no field extra, reachableVec stable)
         {
