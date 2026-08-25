@@ -280,11 +280,15 @@ inline void NoteW1GhostFromStore(Collector& collector, BaseObject* ref)
 
 inline void NoteStoreFastPath()
 {
+    // Diagnostic only: this counts a pre-store snapshot match, not whether a
+    // remset record was physically emitted.
     g_storeBarrierFastPath.fetch_add(1, std::memory_order_relaxed);
 }
 
 inline void NoteStoreSlowPath()
 {
+    // Diagnostic only: this counts a pre-store snapshot miss, not a ZGC
+    // slow-path invocation or a required remset operation.
     g_storeBarrierSlowPath.fetch_add(1, std::memory_order_relaxed);
 }
 
@@ -308,13 +312,23 @@ inline bool HasYoungRegionsForRecording()
     return hasYoungRegions;
 }
 
-// ZGC mark_and_remember (zBarrier.inline.hpp:735-739):
-//   if (!is_null(addr)) { mark<DontResurrect, AnyThread, Follow, Strong>(addr); }
-//   remember(p);
-// remember(p) is RecordCrossGenEdge (slot-keyed remset). The mark half was missing:
-// SATB enqueues the overwritten prev (deletion barrier), not keep-alive of the new
-// target. Concurrent old→young stores therefore landed on the remset current face
-// with a white young target (Stw2CurrentAudit uncovered, REPORT-youngconcstw2).
+// This helper is our insertion/keep-alive leg: it marks (young) or enqueues (major)
+// the newly stored target. It is intentionally not described as a verbatim ZGC
+// store-barrier port. ZGC's normal buffered path first retains the overwritten
+// value (p, prev) in heap_store_slow_path (zBarrier.cpp:252-263), and the buffer
+// flush calls mark_and_remember(p, make_load_good(entry._prev))
+// (zStoreBarrierBuffer.cpp:280-281): that is SATB deletion of prev. ZGC's
+// no-buffer fallback instead calls mark_and_remember(p, addr), where addr is the
+// new value (zBarrier.cpp:252-263). Thus ZGC has both paths, with prev marking
+// being the normal buffered semantics and new-value marking the fallback.
+//
+// Our prev/deletion leg is separate and remains in TraceBarrier: a single-field
+// write snapshots the old slot and enqueues it (TraceBarrier.cpp:117-134), while
+// bulk struct writes do the same for every pre-store field (TraceBarrier.cpp:161-180)
+// and static/atomic variants have corresponding old-value enqueues
+// (TraceBarrier.cpp:141-153,250-301). MarkAndRememberNewValue therefore supplies
+// the complementary new-value keep-alive needed by our young alloc-black and
+// major/no-young windows; it does not replace the prev SATB deletion barrier.
 //
 // Window: BarrierPhase::TRACE only (InstallBarrier maps TRACE and CLEAR_SATB onto
 // TraceBarrier). Idle/Enum/STW/PostTrace/Preforward/Forward are no-ops.
@@ -323,9 +337,6 @@ inline bool HasYoungRegionsForRecording()
 // Young: paint + PushYoungAllocBlack (STW2 MergeYoungAllocBlack follows children).
 // Major: SATB-enqueue the new target (TraceBarrier RememberNewReference can still
 // lose it when ShouldEnqueue treats an unmarked isTraceRegion as allocate-black).
-// zBarrier.inline.hpp:735-739 marks the new address on every heap store; SATB
-// deletion of the pre-value is not a substitute (REPORT-youngconcstw2 satb=0;
-// survnode DEAD_SLOT visitSame=0).
 void MarkAndRememberNewValue(BarrierPhase barrierPhase, BaseObject* ref)
 {
     if (ref == nullptr || !Heap::IsHeapAddress(ref)) {
@@ -1793,6 +1804,9 @@ void Barrier::RecordCrossGenEdgesInStruct(BaseObject* obj, MAddress start, size_
             // storecov: when a pre-store snapshot is supplied, skip remset for slots that
             // were already store-good for this target; count fast/slow only on gated calls
             // (nullptr snap = legacy always-Record, no counter noise for ReadGeneric).
+            // With no young regions the producer snapshot is intentionally empty, so every
+            // bulk field is a counted slow miss. This is an observable diagnostic-semantic
+            // change of the bulk no-young fix, not a claim that remset work was required.
             if (prevSnap != nullptr) {
                 if (prevSnap->Matches(addr, ref)) {
                     NoteStoreFastPath();
@@ -1816,6 +1830,8 @@ void Barrier::RecordCrossGenEdgesInRefArray(BaseObject* obj, MAddress start, siz
         HeapSlot<>& field = HeapSlotAt<>(current);
         BaseObject* ref = to_object(field.GetTargetObject());
         if (prevSnap != nullptr) {
+            // See the struct aggregator above: an empty no-young snapshot makes each
+            // field a diagnostic slow miss while the new-value mark still runs below.
             if (prevSnap->Matches(current, ref)) {
                 NoteStoreFastPath();
                 continue;
