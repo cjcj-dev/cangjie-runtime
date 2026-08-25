@@ -713,6 +713,10 @@ void Barrier::WriteStaticRefPlain(RootSlot& field, BaseObject* ref) const
     StorePlain(field, from_object(ref));
 #if defined(MRT_REMSET_BITMAP_CROSSCHECK)
     RecordCrossGenEdge(nullptr, reinterpret_cast<MAddress>(&field), ref);
+#else
+    // SATB mark of the new value is independent of remembered-set maintenance;
+    // the default product does not compile the cross-check RecordCrossGenEdge call.
+    MarkAndRememberNewValue(this->phase, ref);
 #endif
 }
 
@@ -1779,9 +1783,6 @@ void Barrier::RecordCrossGenEdge(BaseObject* obj, MAddress fieldAddress, BaseObj
 void Barrier::RecordCrossGenEdgesInStruct(BaseObject* obj, MAddress start, size_t size,
                                           const StoreGoodPrevSnapshot* prevSnap) const
 {
-    if (!HasYoungRegionsForRecording()) {
-        return;
-    }
     if (obj == nullptr || !Heap::IsHeapAddress(obj)) {
         return;
     }
@@ -1807,9 +1808,6 @@ void Barrier::RecordCrossGenEdgesInStruct(BaseObject* obj, MAddress start, size_
 void Barrier::RecordCrossGenEdgesInRefArray(BaseObject* obj, MAddress start, size_t size,
                                             const StoreGoodPrevSnapshot* prevSnap) const
 {
-    if (!HasYoungRegionsForRecording()) {
-        return;
-    }
     if (obj == nullptr || !Heap::IsHeapAddress(obj)) {
         return;
     }
