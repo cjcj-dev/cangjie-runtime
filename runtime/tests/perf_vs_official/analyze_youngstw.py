@@ -32,7 +32,6 @@ COLLECTION_PHASES = (
     "young.mark_from_remset",
     "young.pre_evac_clear",
     "young.ref_fix_prepare",
-    "young.ref_fix_pregrant",
     "young.ref_fix_root_pass1",
 )
 
