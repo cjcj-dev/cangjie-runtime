@@ -621,6 +621,17 @@ void Barrier::WriteReference(BaseObject* obj, RefField<false>& field, BaseObject
     }
 }
 
+void Barrier::PostWriteReference(BaseObject* obj, RefField<false>& field, BaseObject* ref) const
+{
+    // Unlike ZGC, our compiler hit predicate cannot use store-good as proof
+    // that this slot already has a current remset entry: plain previous words
+    // and same-colour writes to a different target are both admitted there.
+    // The hit arm has already performed color_store_good, so execute only the
+    // product side effects that the skipped WriteReference still owes.
+    MarkAndRememberNewValue(this->phase, ref);
+    RecordCrossGenEdge(obj, reinterpret_cast<MAddress>(&field), to_object(field.GetTargetObject()));
+}
+
 void Barrier::WriteReferenceImpl(BaseObject* obj, RefField<false>& field, BaseObject* ref) const
 {
     if (phase != BarrierPhase::STW) {
@@ -1116,9 +1127,9 @@ void Barrier::AtomicWriteReferenceImpl(BaseObject* obj, RefField<true>& field, B
 BaseObject* Barrier::AtomicSwapReference(BaseObject* obj, RefField<true>& field, BaseObject* newRef,
                                          MemoryOrder order) const
 {
-    // storecov: gate on the actual pre-swap slot bits (not an "expected" value — swap has
-    // none). Same shape as WriteReference / AtomicWriteReference: prev store-good for newRef
-    // ⇒ edge already registered when the slot first became store-good.
+    // Read the actual pre-swap slot bits (swap has no expected value) for the
+    // fast/slow diagnostic. Remset recording remains unconditional after the
+    // successful store because store-good is not a current-entry witness here.
     newRef = theCollector.ResolveStoreValue(newRef);
     NoteW1GhostFromStore(theCollector, newRef);
     NoteW1HolderStore(theCollector, obj);
@@ -1185,10 +1196,10 @@ bool Barrier::CompareAndSwapReference(BaseObject* obj, RefField<true>& field, Ba
                                       MemoryOrder succOrder, MemoryOrder failOrder) const
 {
     // storecov: CAS has an expected (oldRef) and a stored (newRef). The store-good gate
-    // uses the actual pre-CAS slot bits (same as WriteReference prev), compared to newRef
-    // — not to oldRef. On success with prev already store-good for newRef, the write is a
-    // same-target refresh (typically oldRef==newRef) and remset work is redundant.
-    // Failed CAS stores nothing ⇒ no Record (unchanged).
+    // Use the actual pre-CAS slot bits (same as WriteReference prev), compared
+    // to newRef rather than oldRef, for the diagnostic fast/slow count. A
+    // successful store always calls remset recording; a failed CAS stores
+    // nothing and therefore calls neither marking nor recording.
     newRef = theCollector.ResolveStoreValue(newRef);
     NoteW1GhostFromStore(theCollector, newRef);
     NoteW1HolderStore(theCollector, obj);
