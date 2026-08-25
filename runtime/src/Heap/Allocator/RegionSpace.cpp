@@ -286,7 +286,7 @@ MAddress AllocBuffer::Allocate(size_t totalSize, AllocType allocType)
         // youngconc allocate-black (MRT_GCV2_YOUNG_CONC_MARK=1 only): paint mark bits + grey-list
         // for TRACE/CLEAR window young allocs. Experimental MRT_GCV2_ALLOC_BLACK full paint removed
         // (ZGC_CONVERGENCE_RULING §5.2; default-off + author-marked incomplete; product relies on
-        // the Generation.cpp mark-end publication/termination path). Ordinary MOVEABLE alloc
+        // post-mark fixpoint at WCollector.cpp iorfix/blackmark loop). Ordinary MOVEABLE alloc
         // never MarkNewObject; pin reuse did MarkObject. GetRoute reads ghost liveInfo0 — also
         // mark ghost when present. isTraceRegion alone makes ShouldEnqueue skip SATB; without
         // paint those objects stay live0Surv=0 at route under concurrent young mark.

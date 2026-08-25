@@ -299,6 +299,15 @@ public:
         }
     }
 
+    // Observe-only: walk retired SATB without PopAll (Stw2CurrentAudit).
+    template<typename F>
+    void PeekRetired(F&& f) const
+    {
+        for (Node* n = retiredNodes.PeekHead(); n != nullptr; n = n->next) {
+            n->PeekEntries(f);
+        }
+    }
+
     // Mark-end termination observes the same publication domain consumed by
     // GetRetiredEntries(), without walking the published entries in the pause.
     bool IsRetiredEmpty() const { return retiredNodes.PeekHead() == nullptr; }
