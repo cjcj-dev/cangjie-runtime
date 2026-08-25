@@ -76,6 +76,15 @@ struct GcHeapFixture {
 
     ~GcHeapFixture()
     {
+        // SetYoungRegionFlag owns the process-wide youngRegionCount. Fixtures
+        // are mapped per test, so leaving their flags set before munmap makes
+        // later tests observe young regions that no longer exist.
+        if (region0 != nullptr && region0->IsYoungRegion()) {
+            region0->SetYoungRegionFlag(0);
+        }
+        if (region1 != nullptr && region1->IsYoungRegion()) {
+            region1->SetYoungRegionFlag(0);
+        }
         if (mapping != nullptr && mapping != MAP_FAILED) {
             munmap(mapping, mappedSize);
         }
