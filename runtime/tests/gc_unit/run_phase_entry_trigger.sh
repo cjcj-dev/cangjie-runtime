@@ -36,6 +36,7 @@ SDK_TOOLS="${CANGJIE_HOME:-}/tools/lib"
 SDK_LLVM="${CANGJIE_HOME:-}/third_party/llvm/lib"
 
 PYTHONDONTWRITEBYTECODE=1 python3 -m unittest \
+  "$ROOT/runtime/tests/perf_vs_official/test_analyze_youngstw.py" \
   "$ROOT/runtime/tests/perf_vs_official/test_gclog_schema.py" \
   "$ROOT/runtime/tests/perf_vs_official/test_phase_leaf_ledger.py" \
   >"$OUT/schema_ledger.unit.log" 2>&1
