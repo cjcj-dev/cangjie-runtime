@@ -1954,19 +1954,6 @@ void WCollector::EvacuateYoungRegions(const std::vector<BaseObject*>& reachableV
             postEvacPoint("pre-fix-forwarded", false);
         }
 
-        // pregrant: the centralized route-domain confirmation walk is deliberately empty.
-        // The always-on post-mark fixpoint above is the frontier finder: it scans live
-        // holders, queues only young targets missing from the mark face, and closes their
-        // transitive fields before PrepareForwardTable snapshots that face into liveInfo0.
-        // Root-only late membership is handled by FixMinorRootSlots' two-pass
-        // grant-before-forward immediately below. Rewalking reachableVec + remset + every
-        // root here only asked IsRouteSurvivedObject again for an already-closed domain.
-        // ZGC likewise installs the relocation set from marking liveness and has no
-        // centralized pregrant pass (zGeneration.cpp:190-250).
-        {
-            MRT_PHASE_TIMER("young.ref_fix_pregrant");
-        }
-
         // pass1 root fix after the domain snapshot — serial sandwich stays;
         // only the post-map fixForwardedReferences body is parallelized (⑦ bulk).
         // pass1 is load-bearing for previous-gen residual (MINOR_CONCURRENCY §七 T-A).
