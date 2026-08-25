@@ -314,7 +314,7 @@ inline bool HasYoungRegionsForRecording()
 // remember(p) is RecordCrossGenEdge (slot-keyed remset). The mark half was missing:
 // SATB enqueues the overwritten prev (deletion barrier), not keep-alive of the new
 // target. Concurrent old→young stores therefore landed on the remset current face
-// with a white young target (Stw2CurrentAudit uncovered, REPORT-youngconcstw2).
+// with a white young target (REPORT-youngconcstw2).
 //
 // Window: BarrierPhase::TRACE only (InstallBarrier maps TRACE and CLEAR_SATB onto
 // TraceBarrier). Idle/Enum/STW/PostTrace/Preforward/Forward are no-ops.
@@ -365,6 +365,23 @@ void MarkAndRememberNewValue(BarrierPhase barrierPhase, BaseObject* ref)
         AllocBuffer* buffer = AllocBuffer::GetAllocBuffer();
         if (buffer != nullptr) {
             buffer->PushYoungAllocBlack(ref);
+        }
+        // Publish the same child work into the SATB termination domain.  The
+        // explicit follow bit is required because allocate-black has already
+        // claimed the young mark bit and a plain SATB consumer would skip it.
+        // This barrier can run in gc_unit and during runtime bootstrap, where
+        // no CJ thread model is installed.  Mutator::GetMutator() falls back
+        // to CJ_CJThreadGetMutator in that state; the optional entry point is
+        // not initialized and calling it raises signal 11 before a null
+        // mutator can be observed.  The publication producer must be the
+        // mutator bound to this OS thread, so read that binding directly.
+        Mutator* mutator = ThreadLocal::GetMutator();
+        // Runtime/GC threads can expose a runtime mutator object through the
+        // concurrency model, but they are not managed mutator contexts and do
+        // not own an in-flight SATB node.  The publication contract is only
+        // valid on a managed producer thread.
+        if (mutator != nullptr && mutator->IsManagedContext()) {
+            mutator->PublishYoungAllocBlack(ref);
         }
         return;
     }

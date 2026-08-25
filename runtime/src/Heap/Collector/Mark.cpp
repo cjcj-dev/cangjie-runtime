@@ -54,7 +54,6 @@
 #include "Heap/Verify/DiagGate.h"
 #include "Heap/Verify/NwDropAudit.h"
 #include "Heap/Verify/GarbRegionDiag.h"
-#include "Heap/Verify/Stw2CurrentAudit.h"
 #include "Heap/Verify/NullRouteCaller.h"
 #include "Heap/Verify/MarkCompleteVerify.h"
 #include "Heap/Verify/SurvNodeDiag.h"
@@ -2073,18 +2072,33 @@ bool WCollector::MarkYoungSatbBuffer(WorkStack& workStack, bool fullYoungScan, M
     size_t satbSeen = 0;
     auto visitSatbObj = [this, &workStack, windowStats, &satbSeen]() {
         WorkStack remarkStack;
-        SatbBuffer::Instance().GetRetiredObjects(remarkStack);
-        while (!remarkStack.empty()) {
-            BaseObject* obj = remarkStack.back().object();
-            remarkStack.pop_back();
+        SatbBuffer::Instance().GetRetiredEntries([&](BaseObject* obj, bool follow) {
             ++satbSeen;
             if (windowStats != nullptr) {
                 ++windowStats->satbObjects;
             }
+            if (follow) {
+                remarkStack.push_back(MarkStackEntry::FollowOnly(obj));
+            } else {
+                // Keep ordinary SATB semantics (including the young mark
+                // claim/filter) unchanged; only allocate-black uses the
+                // explicit Follow publication.
+                if (Heap::IsHeapAddress(obj)) {
+                    PushYoungObject(obj, workStack, "young_satb");
+                }
+            }
+        });
+        while (!remarkStack.empty()) {
+            const MarkStackEntry entry = remarkStack.back();
+            BaseObject* obj = entry.object();
+            remarkStack.pop_back();
             if (!Heap::IsHeapAddress(obj)) {
                 continue;
             }
-            PushYoungObject(obj, workStack, "young_satb");
+            // Allocate-black has already claimed the mark bit; preserve
+            // Follow so TraceYoungClosure still records the object and
+            // traverses its children.
+            workStack.push_back(entry);
         }
     };
     visitSatbObj();
