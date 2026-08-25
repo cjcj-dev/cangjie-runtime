@@ -19,7 +19,6 @@
 namespace MapleRuntime {
 namespace WCollectorInternal {
 
-WCOLLECTOR_INTERNAL_HIDDEN bool MinorYoungFlipOff();
 WCOLLECTOR_INTERNAL_HIDDEN bool NullslotProbeEnabled();
 WCOLLECTOR_INTERNAL_HIDDEN void VerifyStackRootPostcondition(uint64_t stackScanEpoch, const char* source);
 WCOLLECTOR_INTERNAL_HIDDEN void PushAdmittedYoung(BaseObject* object, TracingCollector::WorkStack& workStack,
