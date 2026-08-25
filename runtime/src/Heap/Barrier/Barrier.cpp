@@ -1736,8 +1736,8 @@ void Barrier::RecordCrossGenEdge(BaseObject* obj, MAddress fieldAddress, BaseObj
     // exits that call this function directly: Write/PostWrite/AtomicWrite,
     // AtomicSwap, and successful CAS. Their new value must be marked even when
     // there are no young regions, while slot recording may return early below.
-    // Bulk aggregation paths retain their own pre-call early returns; that
-    // coverage is tracked by a separate change.
+    // Bulk aggregation paths reach this function per field and no longer gate
+    // on young regions before it, so their new values are marked here too.
     MarkAndRememberNewValue(this->phase, ref);
 
     if (!HasYoungRegionsForRecording()) {
