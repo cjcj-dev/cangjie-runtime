@@ -960,58 +960,28 @@ void WCollector::DoYoungGarbageCollection()
                 MinorSlotSet concurrentRemset;
                 RememberedSet& rememberedSet = Heap::GetHeap().GetRememberedSet();
                 StoreBarrierBuffer::FlushAll(rememberedSet);
-                if (MinorYoungFlipOff()) {
-                    // The all-STW rollback has no post-relocate active-face Snapshot(), so it
-                    // still needs current slots in this collection's consumedSlots/ref-fix set.
-                    totalConcRemset = rememberedSet.DrainForMinor(concurrentRemset);
-                    // Observe-only: classify current-face targets against water/mark/SATB/alloc-black
-                    // BEFORE MergeYoungAllocBlack / GetRetiredObjects consume those ledgers.
-                    // Does not push workStack (zGeneration.cpp:897-916 pause_mark_end has no drain).
-                    Stw2CurrentAudit::Census(concurrentRemset, &theAllocator);
-                    if (totalConcRemset != 0) {
-                        rememberedSlots.insert(concurrentRemset.begin(), concurrentRemset.end());
-                        remsetStats.recorded = rememberedSlots.size();
-                        // Do NOT pass product fullYoungScan: that path drops slots missing from
-                        // reachableSlots. Concurrent edges are the authority for new greys.
-                        RescanRememberedSet(workStack, concurrentRemset, reachableSlots, weakSlots,
-                                            currentMinorRoots,
-                                            /*fullYoungScan=*/false, &consumedSlots, &remsetStats,
-                                            &remsetInteriorBases, stw.get());
-                        for (MAddress slot : concurrentRemset) {
-                            if (!Heap::IsHeapAddress(slot)) {
-                                continue;
-                            }
+                // Keep current for the next minor, but scan it now as ZGC does
+                // for an entry that crossed the young-mark flip
+                // (zStoreBarrierBuffer.cpp:170-187). Snapshot is deliberately
+                // non-destructive: this cycle scans it and the next flip retains it.
+                concurrentRemset = rememberedSet.Snapshot();
+                deferredCurrentRemset = concurrentRemset.size();
+                Stw2CurrentAudit::Census(concurrentRemset, &theAllocator);
+                if (!concurrentRemset.empty()) {
+                    rememberedSlots.insert(concurrentRemset.begin(), concurrentRemset.end());
+                    remsetStats.recorded = rememberedSlots.size();
+                    RescanRememberedSet(workStack, concurrentRemset, reachableSlots, weakSlots,
+                                        currentMinorRoots,
+                                        /*fullYoungScan=*/false, &consumedSlots, &remsetStats,
+                                        &remsetInteriorBases, stw.get());
+                    for (MAddress slot : concurrentRemset) {
+                        if (Heap::IsHeapAddress(slot)) {
                             (void)LedgerInsert(reachableSlots, slot);
                         }
-                        if (!workStack.empty()) {
-                            TraceYoungClosure(workStack, fullYoungScan, reachableObjects, reachableVec,
-                                              reachableSlots, weakSlots, useBitmapLedger);
-                        }
                     }
-                } else {
-                    // Keep current for the next minor, but scan it now as ZGC does
-                    // for an entry that crossed the young-mark flip
-                    // (zStoreBarrierBuffer.cpp:170-187). Snapshot is deliberately
-                    // non-destructive: this cycle scans it and the next flip retains it.
-                    concurrentRemset = rememberedSet.Snapshot();
-                    deferredCurrentRemset = concurrentRemset.size();
-                    Stw2CurrentAudit::Census(concurrentRemset, &theAllocator);
-                    if (!concurrentRemset.empty()) {
-                        rememberedSlots.insert(concurrentRemset.begin(), concurrentRemset.end());
-                        remsetStats.recorded = rememberedSlots.size();
-                        RescanRememberedSet(workStack, concurrentRemset, reachableSlots, weakSlots,
-                                            currentMinorRoots,
-                                            /*fullYoungScan=*/false, &consumedSlots, &remsetStats,
-                                            &remsetInteriorBases, stw.get());
-                        for (MAddress slot : concurrentRemset) {
-                            if (Heap::IsHeapAddress(slot)) {
-                                (void)LedgerInsert(reachableSlots, slot);
-                            }
-                        }
-                        if (!workStack.empty()) {
-                            TraceYoungClosure(workStack, fullYoungScan, reachableObjects, reachableVec,
-                                              reachableSlots, weakSlots, useBitmapLedger);
-                        }
+                    if (!workStack.empty()) {
+                        TraceYoungClosure(workStack, fullYoungScan, reachableObjects, reachableVec,
+                                          reachableSlots, weakSlots, useBitmapLedger);
                     }
                 }
             }

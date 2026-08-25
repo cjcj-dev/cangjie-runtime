@@ -76,15 +76,6 @@ struct CopierRouteMint {
     static CopierRouteToken Make() { return CopierRouteToken(); }
 };
 namespace WCollectorInternal {
-bool MinorYoungFlipOff()
-{
-    static const bool off = []() {
-        const char* value = std::getenv("MRT_GCV2_MINOR_YOUNG_FLIP");
-        return value != nullptr && std::strcmp(value, "0") == 0;
-    }();
-    return off;
-}
-
 } // namespace WCollectorInternal
 // Frame-colour census after relocate-start flip. Compile-time off; no MRT_GCV2_ env.
 //
@@ -1580,39 +1571,10 @@ void WCollector::EvacuateYoungRegions(const std::vector<BaseObject*>& reachableV
     // is flip + set_phase(Relocate) + _relocate.start(); object copy is concurrent.
     // Flip is the trap that makes mutator loads take the self-heal / relocate_object
     // path; without it, concurrent copy is the empty window concreffix measured.
-    // MRT_GCV2_MINOR_YOUNG_FLIP=0 rolls back to the all-STW evacuate.
-    const bool youngFlipOff = MinorYoungFlipOff();
-    const bool concRelocate = stw != nullptr && *stw != nullptr && !youngFlipOff;
-    // Concurrent copy is opt-in, not default. REPORT-zpublish measured it drifting the
-    // survival_dense checksum 1 run in 5 (368685912892819 vs golden 368685940367600)
-    // while 4/5 were golden -- a silent wrong answer, which is worse than a missing
-    // optimisation. The publish-vs-compute split (this branch's main work) was necessary
-    // but is demonstrably not sufficient; ops/design/ROUTE_PUBLISH_VS_COMPUTE.md.
-    // MRT_GCV2_CONC_RELOCATE=1 turns it on -- that is the arm where role=mutator
-    // any_copies first became non-zero (2269) and noGhost fell 99.997% -> 99.773%.
-    // On. It was off because of a silent wrong answer -- survival_dense produced
-    // 368685912892819 instead of the golden 368685940367600 in one run of five -- and a wrong
-    // checksum is worse than a missing optimisation, so the comment above was right to keep it off.
-    //
-    // That measurement predates mutator-assisted relocation. Concurrent relocation is exactly the
-    // arm where a mutator meets an object the collector has not moved yet; until this cycle it hit
-    // WaitRoutedTipReady, which waited for a publication nobody had been asked to make. The comment
-    // above even records the symptom: role=mutator any_copies first became non-zero on this arm.
-    //
-    // Re-measured on the workload the defect was found on, after that fix:
-    //   correctness  15 of 15 runs golden with it on, 4 of 4 with it off, no wrong answer
-    //   wall         11.74s off, 8.38s on -- 1.40x, five runs each
-    // and natural_wave_notime is 8 of 8 with it on.
-    //
-    // A compile-time constant rather than the env read it replaces: this was the last live
-    // MRT_GCV2_ getenv in the tree, and the campaign cut those from 190 to 3 precisely because a
-    // pinned-off env read looks identical to a mechanism that never fires.
-    constexpr bool concRelocateOn = true;
-    const bool doConcRelocate = concRelocate && concRelocateOn;
     auto liveStw = [stw]() -> const ScopedStopTheWorld* {
         return (stw != nullptr && *stw != nullptr) ? stw->get() : nullptr;
     };
-    const bool doYoungFlip = !youngFlipOff;
+    const bool doYoungFlip = true;
     GCThreadPool* threadPool = GetThreadPool();
     static const bool forceSerial = []() {
         const char* value = std::getenv("MRT_GCV2_REFFIX_FORCE_SERIAL");
@@ -1620,7 +1582,6 @@ void WCollector::EvacuateYoungRegions(const std::vector<BaseObject*>& reachableV
     }();
     const bool useParallel = threadPool != nullptr && !forceSerial;
 
-    // Keep opt-in (`=1`): `=0` or unset is the immediate rollback path.
     std::vector<MAddress> remsetVec;
     remsetVec.assign(rememberedSlots.begin(), rememberedSlots.end());
 
@@ -1646,27 +1607,6 @@ void WCollector::EvacuateYoungRegions(const std::vector<BaseObject*>& reachableV
         }
         for (size_t i = beginSlot; i < endSlot; ++i) {
             MAddress slot = remsetVec[i];
-            if (Heap::IsHeapAddress(slot)) {
-                NullRouteCaller::ScopedEdge _edge("remset", nullptr, static_cast<uintptr_t>(slot));
-                NullRouteCaller::ScopedTag _nrTag("FixMinorEvacuatedSlot");
-                auto known = interiorBases.find(slot);
-                BaseObject* knownBase = known != interiorBases.end() ? known->second : nullptr;
-                (void)FixMinorEvacuatedSlot(HeapSlotAt<>(slot), knownBase, evacStw,
-                                            holderIsCurrentRoot(slot));
-            }
-        }
-    };
-
-    auto fixForwardedReferencesSerial = [this, &reachableVec, &remsetVec, &interiorBases, &currentObject,
-                                         &liveStw, &holderIsCurrentRoot]() {
-        const ScopedStopTheWorld* evacStw = liveStw();
-        FixMinorRootSlots(evacStw);
-        PreforwardDiscoveredExternObjects();
-        PreforwardAllResurrectExportFromObjects();
-        for (BaseObject* object : reachableVec) {
-            FixMinorObjectSlots(currentObject(object), evacStw);
-        }
-        for (MAddress slot : remsetVec) {
             if (Heap::IsHeapAddress(slot)) {
                 NullRouteCaller::ScopedEdge _edge("remset", nullptr, static_cast<uintptr_t>(slot));
                 NullRouteCaller::ScopedTag _nrTag("FixMinorEvacuatedSlot");
@@ -1764,136 +1704,6 @@ void WCollector::EvacuateYoungRegions(const std::vector<BaseObject*>& reachableV
              g_minorRefCasFail.load(std::memory_order_relaxed));
     };
 
-    auto fixForwardedReferencesParallel = [this, &reachableVec, &remsetVec, &fixHeapSlice,
-                                           &liveStw](GCThreadPool* pool) {
-        // T-D ③: dispel must stay frozen across the parallel window.
-        const size_t dispelAtEntry = RegionInfo::GetDispelGhostCount();
-        const size_t nObj = reachableVec.size();
-        const size_t nSlot = remsetVec.size();
-        const int32_t helperNum = pool->GetMaxThreadNum();
-        const int32_t poolCap = helperNum + 1;
-        int32_t heapWorkers = poolCap;
-        {
-            const char* value = std::getenv("MRT_GCV2_REFFIX_WORKERS");
-            if (value != nullptr && value[0] != '\0') {
-                int32_t requested = static_cast<int32_t>(std::strtol(value, nullptr, 10));
-                if (requested >= 1 && requested < heapWorkers) {
-                    heapWorkers = requested;
-                }
-            }
-        }
-        // At least 1 heap worker; root families = 5 additional tasks.
-        if (heapWorkers < 1) {
-            heapWorkers = 1;
-        }
-        std::vector<size_t> objectsTaken(static_cast<size_t>(heapWorkers), 0);
-        std::atomic<size_t> objCursor{ 0 };
-        std::atomic<size_t> slotCursor{ 0 };
-        // Chunk size: aim ~heapWorkers*4 grabs for load balance; min 64 objects.
-        const size_t objChunk = std::max<size_t>(64, (nObj + static_cast<size_t>(heapWorkers) * 4 - 1) /
-                                                        (static_cast<size_t>(heapWorkers) * 4 + 1));
-        const size_t slotChunk = std::max<size_t>(64, (nSlot + static_cast<size_t>(heapWorkers) * 4 - 1) /
-                                                         (static_cast<size_t>(heapWorkers) * 4 + 1));
-
-        // uafclose: root Fix must finish before any heap Forward/Route. Serial FixMinorRootSlots
-        // already does roots first; the old parallel path queued root tasks + heap workers then
-        // Start() once — heap ForwardObject → RouteRegion → CompactRegion could memset free-tail
-        // while a root still named that from (leave-alone → reclaim → GetSize UAF).
-        // Phase 1: root families only (grant-before-route + parallel root Fix).
-        // concreffix: split the two phases on the structured channel. ZGC keeps root fix in
-        // pause_relocate_start but has no centralized field-walk at all — slots heal through the
-        // load barrier. So phase 1 is work a self-healing barrier would still owe, and phase 2 is
-        // the part it would remove. Timing them apart is the only way to size that trade.
-        {
-            MRT_PHASE_TIMER("young.ref_fix_bulk_roots");
-            FixMinorRootSlotsParallel(pool, liveStw());
-            pool->Start();
-            pool->WaitFinish();
-        }
-        // Phase 2: export/extern preforward + heap/remset Fix (same pool, after roots).
-        // The timer below closes right after WaitFinish; it covers the two preforward tasks as
-        // well, because they are queued into the same pool run and cannot be timed apart.
-        {
-        MRT_PHASE_TIMER("young.ref_fix_bulk_heap");
-        pool->AddWork(new (std::nothrow) LambdaWork([this](size_t) { PreforwardDiscoveredExternObjects(); }));
-        pool->AddWork(new (std::nothrow) LambdaWork([this](size_t) { PreforwardAllResurrectExportFromObjects(); }));
-
-        for (int32_t w = 0; w < heapWorkers; ++w) {
-            size_t* taken = &objectsTaken[static_cast<size_t>(w)];
-            pool->AddWork(new (std::nothrow) LambdaWork(
-                [fixHeapSlice, &objCursor, &slotCursor, nObj, nSlot, objChunk, slotChunk, taken](size_t) {
-                    for (;;) {
-                        size_t o0 = nObj;
-                        size_t o1 = nObj;
-                        size_t s0 = nSlot;
-                        size_t s1 = nSlot;
-                        bool got = false;
-                        if (objCursor.load(std::memory_order_relaxed) < nObj) {
-                            o0 = objCursor.fetch_add(objChunk, std::memory_order_relaxed);
-                            if (o0 < nObj) {
-                                o1 = std::min(o0 + objChunk, nObj);
-                                got = true;
-                            } else {
-                                o0 = o1 = nObj;
-                            }
-                        }
-                        if (slotCursor.load(std::memory_order_relaxed) < nSlot) {
-                            s0 = slotCursor.fetch_add(slotChunk, std::memory_order_relaxed);
-                            if (s0 < nSlot) {
-                                s1 = std::min(s0 + slotChunk, nSlot);
-                                got = true;
-                            } else {
-                                s0 = s1 = nSlot;
-                            }
-                        }
-                        if (!got) {
-                            break;
-                        }
-                        fixHeapSlice(o0, o1, s0, s1, *taken);
-                    }
-                }));
-        }
-
-        pool->Start();
-        pool->WaitFinish();
-        }
-
-        const size_t dispelAtExit = RegionInfo::GetDispelGhostCount();
-        CHECK_DETAIL(dispelAtExit == dispelAtEntry,
-                     "T-D ghost dispel during parallel ref_fix window entry=%zu exit=%zu "
-                     "(plain InGhostFromRegion read assumes phase isolation)",
-                     dispelAtEntry, dispelAtExit);
-        // concreffix: population of the centralized walk — the denominator for "how much work
-        // would a self-healing barrier remove". It must not use REPORT (that would perturb the
-        // very timings being measured), but it must not be always-on either: unconditional
-        // RTLOG_ERROR would put one ERROR line per minor on the product path. Gate it like the
-        // other GC instruments (ebceaf91 precedent); nObj/nSlot/heapWorkers are pre-existing
-        // loop bounds, so the disabled path costs one cached bool test.
-        static const bool walkPopOn = DiagGate::LegacyOrToken("MRT_GCV2_REFFIX_WALK", "reffixwalk");
-        if (walkPopOn) {
-            LOG(RTLOG_ERROR, "[GCV2][reffix][walk] nObj=%zu nSlot=%zu heapWorkers=%d", nObj, nSlot,
-                heapWorkers);
-        }
-
-        size_t active = 0;
-        std::string takenStr;
-        for (size_t i = 0; i < objectsTaken.size(); ++i) {
-            if (objectsTaken[i] != 0) {
-                ++active;
-            }
-            if (i != 0) {
-                takenStr += ',';
-            }
-            takenStr += std::to_string(objectsTaken[i]);
-        }
-        VLOG(REPORT,
-             "[GCV2][reffix][parallel] workers_active=%zu workers_scheduled=%d objects_taken=[%s] "
-             "nObj=%zu nSlot=%zu cas_ok=%zu cas_fail=%zu parallel=1",
-             active, heapWorkers, takenStr.c_str(), nObj, nSlot,
-             g_minorRefCasOk.load(std::memory_order_relaxed),
-             g_minorRefCasFail.load(std::memory_order_relaxed));
-    };
-
     // Earliest post-mark checkpoint: still before any fix/forward mutates refs.
     postEvacPoint("evac-enter", true);
 
@@ -1902,7 +1712,7 @@ void WCollector::EvacuateYoungRegions(const std::vector<BaseObject*>& reachableV
         MRT_PHASE_TIMER("young.ref_fix");
 
         // ZGC relocate_start (zGeneration.cpp:918-931): flip remap colour then
-        // enter Relocate. Product path. MRT_GCV2_MINOR_YOUNG_FLIP=0 rolls back.
+        // enter Relocate. Product path.
         //
         // fliporder: that citation covers only half of what ZGC does here.  ZGC installs the
         // relocation set at zGeneration.cpp:254, inside the *concurrent* select_relocation_set,
@@ -1954,8 +1764,7 @@ void WCollector::EvacuateYoungRegions(const std::vector<BaseObject*>& reachableV
             postEvacPoint("pre-fix-forwarded", false);
         }
 
-        // pass1 root fix after the domain snapshot — serial sandwich stays;
-        // only the post-map fixForwardedReferences body is parallelized (⑦ bulk).
+        // pass1 root fix after the domain snapshot.
         // pass1 is load-bearing for previous-gen residual (MINOR_CONCURRENCY §七 T-A).
         {
             MRT_PHASE_TIMER("young.ref_fix_root_pass1");
@@ -1969,55 +1778,16 @@ void WCollector::EvacuateYoungRegions(const std::vector<BaseObject*>& reachableV
         g_minorRefCasFail.store(0, std::memory_order_relaxed);
         g_minorRefCasOk.store(0, std::memory_order_relaxed);
 
-        if (!doConcRelocate) {
-            MRT_PHASE_TIMER("young.ref_fix_bulk");
-            if (!useParallel) {
-                VLOG(REPORT, "[GCV2][reffix][parallel] fallback=serial %s",
-                     threadPool == nullptr ? "pool_unavailable" : "force_serial");
-                fixForwardedReferencesSerial();
-                VLOG(REPORT,
-                     "[GCV2][reffix][parallel] workers_active=1 workers_scheduled=1 objects_taken=[%zu] "
-                     "nObj=%zu nSlot=%zu cas_ok=%zu cas_fail=%zu parallel=0",
-                     reachableVec.size(), reachableVec.size(), remsetVec.size(),
-                     g_minorRefCasOk.load(std::memory_order_relaxed),
-                     g_minorRefCasFail.load(std::memory_order_relaxed));
-            } else {
-                fixForwardedReferencesParallel(threadPool);
-            }
-        }
-
-        if (!doConcRelocate) {
-            MRT_PHASE_TIMER("young.ref_fix_tail");
-            size_t rej = g_fixinputReject.load(std::memory_order_relaxed);
-            size_t rec = g_fixinputRecover.load(std::memory_order_relaxed);
-            size_t unr = g_fixinputUnrecoverable.load(std::memory_order_relaxed);
-            if (rej != 0 || rec != 0 || unr != 0) {
-                LOG(RTLOG_ERROR,
-                    "[GCV2][fixinput] reject=%zu recover=%zu unrecoverable=%zu",
-                    rej, rec, unr);
-            }
-            ValidateMinorReferences("before-return", &reachableVec);
-            manager.ExpireKeptFromPreviousCycle();
-            postEvacPoint("post-fix-pre-forward", true);
-            if (HealCoverage::kHealCoverageCensus) {
-                HealCoverage::CensusAfterPublication(
-                    currentRemapColour, FlipSeq().load(std::memory_order_relaxed),
-                    "young-ref-fix");
-            }
-        }
     }
 
-    if (doConcRelocate) {
+    {
         TransitionToGCPhase(GCPhase::GC_PHASE_FORWARD, true);
         {
             stw->reset();
             MRT_PHASE_TIMER("young.concurrent_relocate");
             VLOG(REPORT, "[GCV2][relocate][conc] concurrent_relocate start nObj=%zu flip=1",
                  reachableVec.size());
-            {
-                MRT_PHASE_TIMER("young.copy");
-                ForwardFromSpace();
-            }
+            ForwardFromSpace();
             *stw = std::make_unique<ScopedStopTheWorld>("young post-relocate", true,
                                                         GCPhase::GC_PHASE_FORWARD);
             manager.FinishIncompleteFromRegions();
@@ -2064,7 +1834,6 @@ void WCollector::EvacuateYoungRegions(const std::vector<BaseObject*>& reachableV
             }
         }
         {
-            MRT_PHASE_TIMER("young.ref_fix_tail");
             size_t rej = g_fixinputReject.load(std::memory_order_relaxed);
             size_t rec = g_fixinputRecover.load(std::memory_order_relaxed);
             size_t unr = g_fixinputUnrecoverable.load(std::memory_order_relaxed);
@@ -2080,14 +1849,6 @@ void WCollector::EvacuateYoungRegions(const std::vector<BaseObject*>& reachableV
                     currentRemapColour, FlipSeq().load(std::memory_order_relaxed),
                     "young-ref-fix-conc");
             }
-        }
-    } else {
-        MRT_PHASE_TIMER("young.copy");
-        ForwardFromSpace();
-        manager.FinishIncompleteFromRegions();
-        postEvacPoint("post-forward-pre-reclaim", true);
-        if (kVerifyPostEvac) {
-            ValidateMinorReferences("post-forward-pre-reclaim", &reachableVec);
         }
     }
 
