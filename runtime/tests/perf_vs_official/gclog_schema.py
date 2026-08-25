@@ -21,14 +21,15 @@ GC_CYCLE = re.compile(
     r"heap_used=(\S+) threshold=(\S+) rss_kb=(\S+)$"
 )
 GC_PHASE = re.compile(
-    rf"^\[GCLOG\] v=(\S+) rec=phase seq=(\S+) name=({TOKEN}) ns=(\S+)$"
+    rf"^\[GCLOG\] v=(\S+) rec=phase seq=(\S+) name=({TOKEN}) kind=(pause|conc|unknown) "
+    r"start_ns=(\S+) ns=(\S+)$"
 )
 GC_PHASE_LEAF = re.compile(
     rf"^\[GCLOG\] v=(\S+) rec=phase_leaf seq=(\S+) name=({TOKEN}) ns=(\S+) "
     rf"kind=(pause|conc|unknown) depth=(\S+) path_ok=(\S+) path=({PATH})$"
 )
 GC_STW = re.compile(
-    rf"^\[GCLOG\] v=(\S+) rec=stw seq=(\S+) reason=({TOKEN}) wait_ns=(\S+) held_ns=(\S+)$"
+    rf"^\[GCLOG\] v=(\S+) rec=stw seq=(\S+) reason=({TOKEN}) start_ns=(\S+) wait_ns=(\S+) held_ns=(\S+)$"
 )
 ZSTAT_PHASE = re.compile(
     rf"^\[ZSTAT\] v=(\S+) rec=zphase seq=(\S+) name=({TOKEN}) pause_ns=(\S+) "
@@ -68,6 +69,8 @@ class CycleRecord:
 class PhaseRecord:
     seq: int
     name: str
+    kind: str
+    start_ns: int
     ns: int
 
 
@@ -87,6 +90,7 @@ class PhaseLeafRecord:
 class StwRecord:
     seq: int
     reason: str
+    start_ns: int
     wait_ns: int
     held_ns: int
 
@@ -165,8 +169,9 @@ def parse_gclog(text: str) -> GcLogRecords:
                 match = _exact(GC_PHASE, line, "GCLOG phase")
                 _version(match.group(1), 3, "GCLOG phase", line)
                 records.phases.append(PhaseRecord(
-                    _u64(match.group(2), "seq", line), match.group(3),
-                    _u64(match.group(4), "ns", line)))
+                    _u64(match.group(2), "seq", line), match.group(3), match.group(4),
+                    _u64(match.group(5), "start_ns", line),
+                    _u64(match.group(6), "ns", line)))
                 continue
             if family == "phase_leaf":
                 match = _exact(GC_PHASE_LEAF, line, "GCLOG phase_leaf")
@@ -211,7 +216,8 @@ def parse_gclog(text: str) -> GcLogRecords:
             _version(match.group(1), 3, "GCLOG stw", line)
             records.stw.append(StwRecord(
                 _u64(match.group(2), "seq", line), match.group(3),
-                _u64(match.group(4), "wait_ns", line), _u64(match.group(5), "held_ns", line)))
+                _u64(match.group(4), "start_ns", line),
+                _u64(match.group(5), "wait_ns", line), _u64(match.group(6), "held_ns", line)))
     return records
 
 

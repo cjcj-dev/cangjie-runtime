@@ -11,7 +11,7 @@ from analyze_stw import cycle_pauses
 from gclog_schema import parse_gclog, parse_zstat, phase_ns_records
 
 
-GOOD_PHASE = "[GCLOG] v=3 rec=phase seq=7 name=young.probe ns=999"
+GOOD_PHASE = "[GCLOG] v=3 rec=phase seq=7 name=young.probe kind=conc start_ns=1 ns=999"
 GOOD_LEAF = (
     "[GCLOG] v=3 rec=phase_leaf seq=7 name=young.copy_leaf ns=19 kind=conc "
     "depth=2 path_ok=1 path=young.copy_leaf>young.copy"
@@ -20,7 +20,7 @@ GOOD_CYCLE = (
     "[GCLOG] v=3 rec=cycle seq=7 kind=minor reason=young start_ns=1 dur_ns=100 "
     "live_before=9 live_after=8 collected=1 heap_used=8 threshold=10 rss_kb=11"
 )
-GOOD_STW = "[GCLOG] v=3 rec=stw seq=7 reason=young wait_ns=3 held_ns=4"
+GOOD_STW = "[GCLOG] v=3 rec=stw seq=7 reason=young start_ns=1 wait_ns=3 held_ns=4"
 GOOD_ZPHASE = "[ZSTAT] v=1 rec=zphase seq=7 name=young.copy pause_ns=0 conc_ns=19 n=1"
 GOOD_ZCYCLE = "[ZSTAT] v=1 rec=zcycle seq=7 pause_ns=0 conc_ns=19 max_pause_ns=0 phases=1"
 
@@ -36,8 +36,8 @@ class GcLogSchemaTest(unittest.TestCase):
 
     def test_sub_microsecond_phase_keeps_ns(self) -> None:
         text = "\n".join((
-            "[GCLOG] v=3 rec=phase seq=1 name=one ns=1",
-            "[GCLOG] v=3 rec=phase seq=1 name=nine_nine_nine ns=999",
+            "[GCLOG] v=3 rec=phase seq=1 name=one kind=pause start_ns=1 ns=1",
+            "[GCLOG] v=3 rec=phase seq=1 name=nine_nine_nine kind=conc start_ns=1 ns=999",
         ))
         self.assertEqual(phase_ns_records(text), [(1, "one", 1), (1, "nine_nine_nine", 999)])
 
@@ -47,25 +47,25 @@ class GcLogSchemaTest(unittest.TestCase):
 
     def test_v2_is_rejected_instead_of_scaled_as_v3(self) -> None:
         with self.assertRaises(ValueError):
-            parse_gclog("[GCLOG] v=2 rec=phase seq=7 name=young.probe us=1")
+            parse_gclog("[GCLOG] v=2 rec=phase seq=7 name=young.probe kind=conc start_ns=1 us=1")
 
     def test_malformed_v3_is_rejected(self) -> None:
         with self.assertRaises(ValueError):
-            parse_gclog("[GCLOG] v=3 rec=phase seq=7 name=young.probe us=1")
+            parse_gclog("[GCLOG] v=3 rec=phase seq=7 name=young.probe kind=conc start_ns=1 us=1")
 
     def test_mixed_bad_version_fails_closed(self) -> None:
         with self.assertRaises(ValueError):
-            parse_gclog(GOOD_PHASE + "\n[GCLOG] v=x rec=phase seq=8 name=bad ns=1")
+            parse_gclog(GOOD_PHASE + "\n[GCLOG] v=x rec=phase seq=8 name=bad kind=conc start_ns=1 ns=1")
 
     def test_mixed_missing_version_fails_closed(self) -> None:
         with self.assertRaises(ValueError):
-            parse_gclog(GOOD_PHASE + "\n[GCLOG] rec=phase seq=8 name=bad ns=1")
+            parse_gclog(GOOD_PHASE + "\n[GCLOG] rec=phase seq=8 name=bad kind=conc start_ns=1 ns=1")
 
     def test_negative_duplicate_unknown_version_rejected(self) -> None:
         bad = (
-            "[GCLOG] v=-1 rec=phase seq=1 name=p ns=1",
-            "[GCLOG] v=3 v=3 rec=phase seq=1 name=p ns=1",
-            "[GCLOG] v=4 rec=phase seq=1 name=p ns=1",
+            "[GCLOG] v=-1 rec=phase seq=1 name=p kind=conc start_ns=1 ns=1",
+            "[GCLOG] v=3 v=3 rec=phase seq=1 name=p kind=conc start_ns=1 ns=1",
+            "[GCLOG] v=4 rec=phase seq=1 name=p kind=conc start_ns=1 ns=1",
         )
         for line in bad:
             with self.subTest(line=line), self.assertRaises(ValueError):
@@ -73,7 +73,7 @@ class GcLogSchemaTest(unittest.TestCase):
 
     def test_old_phase_v2_and_leaf_v1_rejected(self) -> None:
         bad = (
-            "[GCLOG] v=2 rec=phase seq=1 name=p us=1",
+            "[GCLOG] v=2 rec=phase seq=1 name=p kind=conc start_ns=1 us=1",
             "[GCLOG] v=1 rec=phase_leaf seq=1 name=p us=1 kind=pause path=p",
         )
         for line in bad:
@@ -86,10 +86,10 @@ class GcLogSchemaTest(unittest.TestCase):
 
     def test_non_numeric_and_overflow_numbers_rejected(self) -> None:
         bad = (
-            "[GCLOG] v=3 rec=phase seq=x name=p ns=1",
-            "[GCLOG] v=3 rec=phase seq=1 name=p ns=x",
-            f"[GCLOG] v=3 rec=phase seq={1 << 64} name=p ns=1",
-            f"[GCLOG] v=3 rec=phase seq=1 name=p ns={1 << 64}",
+            "[GCLOG] v=3 rec=phase seq=x name=p kind=conc start_ns=1 ns=1",
+            "[GCLOG] v=3 rec=phase seq=1 name=p kind=conc start_ns=1 ns=x",
+            f"[GCLOG] v=3 rec=phase seq={1 << 64} name=p kind=conc start_ns=1 ns=1",
+            f"[GCLOG] v=3 rec=phase seq=1 name=p kind=conc start_ns=1 ns={1 << 64}",
         )
         for line in bad:
             with self.subTest(line=line), self.assertRaises(ValueError):
@@ -98,9 +98,9 @@ class GcLogSchemaTest(unittest.TestCase):
     def test_missing_reordered_duplicate_extra_fields_rejected(self) -> None:
         bad = (
             "[GCLOG] v=3 rec=phase seq=1 name=p",
-            "[GCLOG] v=3 rec=phase name=p seq=1 ns=1",
-            "[GCLOG] v=3 rec=phase seq=1 seq=1 name=p ns=1",
-            "[GCLOG] v=3 rec=phase seq=1 name=p ns=1 extra=1",
+            "[GCLOG] v=3 rec=phase name=p seq=1 kind=conc start_ns=1 ns=1",
+            "[GCLOG] v=3 rec=phase seq=1 seq=1 name=p kind=conc start_ns=1 ns=1",
+            "[GCLOG] v=3 rec=phase seq=1 name=p kind=conc start_ns=1 ns=1 extra=1",
         )
         for line in bad:
             with self.subTest(line=line), self.assertRaises(ValueError):

@@ -39,12 +39,12 @@ int main()
             }
         }
     }
-    GcLog::Stw("timer_nested", 1, 2);
+    GcLog::Stw("timer_nested", 1, 1, 2);
     CloseCycle(nestedSeq);
 
     const uint64_t capturedSeq = GcLog::BeginCycle();
     std::unique_ptr<Timer> captured(new Timer("cycle.captured"));
-    GcLog::Stw("timer_captured", 1, 2);
+    GcLog::Stw("timer_captured", 1, 1, 2);
     CloseCycle(capturedSeq);
     captured.reset();
 
@@ -55,7 +55,7 @@ int main()
     {
         Timer internalNonpillar("young.flush_alloc");
     }
-    GcLog::Stw("timer_ownership", 1, 2);
+    GcLog::Stw("timer_ownership", 1, 1, 2);
     CloseCycle(ownershipSeq);
 
     {
