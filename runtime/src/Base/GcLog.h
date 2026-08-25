@@ -25,9 +25,9 @@ namespace MapleRuntime {
 //
 //   [GCLOG] v=3 rec=cycle seq= kind= reason= start_ns= dur_ns= live_before= live_after=
 //           collected= heap_used= threshold= rss_kb=
-//   [GCLOG] v=3 rec=phase seq= name= ns=
+//   [GCLOG] v=3 rec=phase seq= name= kind= start_ns= ns=
 //   [GCLOG] v=3 rec=phase_leaf seq= name= ns= kind= depth= path_ok= path=
-//   [GCLOG] v=3 rec=stw   seq= reason= wait_ns= held_ns=
+//   [GCLOG] v=3 rec=stw   seq= reason= start_ns= wait_ns= held_ns=
 //   [GCLOG] v=3 rec=crash ...  (crash signature; always-on via write(2), see Crash())
 //
 // A phase record carries the seq of the cycle it belongs to, so phases join to cycles without
@@ -100,7 +100,7 @@ public:
                  liveAfter, collected, heapUsed, threshold, ResidentKB());
     }
 
-    static void Phase(uint64_t seq, const char* name, uint64_t ns)
+    static void Phase(uint64_t seq, const char* name, const char* kind, uint64_t startNs, uint64_t ns)
     {
         if (!Enabled()) {
             return;
@@ -108,8 +108,9 @@ public:
         char safe[MAX_PHASE_NAME + 1];
         FoldToToken(name, safe);
         // Same always-on channel as Cycle (see Cycle comment).
-        EmitLine("[GCLOG] v=%u rec=phase seq=%llu name=%s ns=%llu", SCHEMA_VERSION,
-                 static_cast<unsigned long long>(seq), safe, static_cast<unsigned long long>(ns));
+        EmitLine("[GCLOG] v=%u rec=phase seq=%llu name=%s kind=%s start_ns=%llu ns=%llu", SCHEMA_VERSION,
+                 static_cast<unsigned long long>(seq), safe, kind,
+                 static_cast<unsigned long long>(startNs), static_cast<unsigned long long>(ns));
     }
 
     // `path` is assembled from already folded components by Timer and uses `>` only as the
@@ -143,15 +144,16 @@ public:
     // safepoint polling density in the mutators, held_ns tracks what the collector does with the
     // world stopped.  Mutators are progressively blocked during wait_ns, so a pause budget must
     // count both -- ZGC's pause tracer likewise starts at the VM operation, not at the last arrival.
-    static void Stw(const char* reason, uint64_t waitNs, uint64_t heldNs)
+    static void Stw(const char* reason, uint64_t startNs, uint64_t waitNs, uint64_t heldNs)
     {
         if (!Enabled()) {
             return;
         }
         char safe[MAX_PHASE_NAME + 1];
         FoldToToken(reason, safe);
-        EmitLine("[GCLOG] v=%u rec=stw seq=%llu reason=%s wait_ns=%llu held_ns=%llu", SCHEMA_VERSION,
-                 static_cast<unsigned long long>(CurrentSeq()), safe, static_cast<unsigned long long>(waitNs),
+        EmitLine("[GCLOG] v=%u rec=stw seq=%llu reason=%s start_ns=%llu wait_ns=%llu held_ns=%llu", SCHEMA_VERSION,
+                 static_cast<unsigned long long>(CurrentSeq()), safe,
+                 static_cast<unsigned long long>(startNs), static_cast<unsigned long long>(waitNs),
                  static_cast<unsigned long long>(heldNs));
     }
 

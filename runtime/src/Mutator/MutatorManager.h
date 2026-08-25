@@ -417,7 +417,7 @@ public:
         // number a pause budget is made of was only visible in a mode that writes ~10MB per run and
         // perturbs the thing being measured. Emit it on the same always-on MRT_GC_LOG channel as
         // rec=cycle/rec=phase instead.
-        GcLog::Stw(reason, stoppedTime - startTime, endTime - stoppedTime);
+        GcLog::Stw(reason, startTime, stoppedTime - startTime, endTime - stoppedTime);
         MutatorManager::Instance().StartTheWorld();
         ZStat::ExitStwScope();
     }
@@ -452,7 +452,7 @@ public:
         LOG(RTLOG_REPORT, "%s light sync time %zu us", reason, (endTime - startTime) / 1000); // 1000:nsec per usec
         // A light sync parks every mutator just like StopTheWorld(). Keep its rendezvous and
         // held intervals in the same structured pause ledger so pause sums cannot omit it.
-        GcLog::Stw(reason, stoppedTime - startTime, endTime - stoppedTime);
+        GcLog::Stw(reason, startTime, stoppedTime - startTime, endTime - stoppedTime);
         MutatorManager::Instance().StopLightSync();
         ZStat::ExitStwScope();
     }

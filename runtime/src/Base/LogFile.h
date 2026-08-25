@@ -271,7 +271,7 @@ private:
 // The sole out-of-line Timer → GCLOG bearing point.  Inclusive and structural-leaf records receive
 // the same constructor-captured seq, name and nanosecond sample, so neither schema can drift.
 // `kind` is -1 unknown, 0 concurrent, 1 pause.
-void EmitTimerRecords(uint64_t seq, const char* name, uint64_t ns, bool isLeaf, int kind, uint64_t depth,
+void EmitTimerRecords(uint64_t seq, const char* name, uint64_t startNs, uint64_t ns, bool isLeaf, int kind, uint64_t depth,
                       bool pathOk, const char* path);
 
 class Timer {
@@ -333,7 +333,7 @@ public:
         if (isLeaf) {
             BuildLeafPath(path, sizeof(path), depth, pathOk);
         }
-        EmitTimerRecords(cycleSeq, name.Str(), diffTimeNs, isLeaf,
+        EmitTimerRecords(cycleSeq, name.Str(), startTimeNs, diffTimeNs, isLeaf,
                          zstatActive ? (zstatPauseAtStart ? 1 : 0) : -1, depth, pathOk, path);
         // Keep ZStat as an adjacent independent downstream: cutting GCLOG emission must not cut
         // the positive-control account.

@@ -23,8 +23,11 @@ def cycle(seq: int, dur_ns: int = 100) -> str:
     )
 
 
-def phase(seq: int, name: str, ns: int) -> str:
-    return f"[GCLOG] v=3 rec=phase seq={seq} name={name} ns={ns}"
+def phase(seq: int, name: str, ns: int, *, kind: str = "pause", start_ns: int = 1) -> str:
+    return (
+        f"[GCLOG] v=3 rec=phase seq={seq} name={name} kind={kind} "
+        f"start_ns={start_ns} ns={ns}"
+    )
 
 
 def leaf(seq: int, name: str, ns: int, path: str | None = None, kind: str = "unknown") -> str:
@@ -164,9 +167,10 @@ class PhaseLeafLedgerTest(unittest.TestCase):
                            leaf_kind: str = "pause") -> str:
         return "\n".join((
             cycle(1, cycle_ns),
+            phase(1, "young.copy", 35),
             leaf(1, "young.copy", pillar_ns, kind=leaf_kind),
             leaf(1, "young.flush_alloc", nonpillar_ns, kind=leaf_kind),
-            "[GCLOG] v=3 rec=stw seq=1 reason=young wait_ns=1 held_ns=40",
+            "[GCLOG] v=3 rec=stw seq=1 reason=young start_ns=1 wait_ns=1 held_ns=40",
             f"[ZSTAT] v=1 rec=zphase seq=1 name=young.copy pause_ns={zpause_ns} conc_ns=5 n=1",
             f"[ZSTAT] v=1 rec=zcycle seq=1 pause_ns={zpause_ns} conc_ns=5 "
             f"max_pause_ns={zpause_ns} phases=1",
@@ -185,7 +189,8 @@ class PhaseLeafLedgerTest(unittest.TestCase):
     def test_three_inequality_checker_normal_is_green(self) -> None:
         result = self.run_inequality_checker(self.inequality_fixture())
         self.assertEqual(result.returncode, 0, result.stdout)
-        self.assertIn("INEQUALITY_2 zphase_pause_ns=30 held_ns=40 verdict=PASS", result.stdout)
+        self.assertIn("CONTRACT_1_WORK_LEDGER verdict=PASS", result.stdout)
+        self.assertIn("CONTRACT_2_PAUSE_WALL verdict=PASS", result.stdout)
         self.assertIn("INEQUALITY_3 cycle_ns=100 wall_ns=120 ratio=", result.stdout)
         self.assertNotIn("verdict=FAIL", result.stdout)
 
@@ -193,29 +198,71 @@ class PhaseLeafLedgerTest(unittest.TestCase):
         result = self.run_inequality_checker(self.inequality_fixture(pillar_ns=101))
         self.assertNotEqual(result.returncode, 0)
         self.assertIn("inequality_1 structural leaf sum exceeds cycle", result.stdout)
-        self.assertNotIn("INEQUALITY_2", result.stdout)
+        self.assertNotIn("CONTRACT_1_WORK_LEDGER", result.stdout)
         self.assertNotIn("INEQUALITY_3", result.stdout)
 
     def test_nonpillar_overfull_only_fails_inequality_1(self) -> None:
         result = self.run_inequality_checker(self.inequality_fixture(nonpillar_ns=101))
         self.assertNotEqual(result.returncode, 0)
         self.assertIn("inequality_1 structural leaf sum exceeds cycle", result.stdout)
-        self.assertNotIn("INEQUALITY_2", result.stdout)
+        self.assertNotIn("CONTRACT_1_WORK_LEDGER", result.stdout)
         self.assertNotIn("INEQUALITY_3", result.stdout)
 
-    def test_zphase_held_extreme_mismatch_only_fails_inequality_2(self) -> None:
+    def test_zphase_ledger_extreme_mismatch_fails_contract_1(self) -> None:
         result = self.run_inequality_checker(self.inequality_fixture(zpause_ns=100))
         self.assertNotEqual(result.returncode, 0)
-        self.assertIn("INEQUALITY_2 zphase_pause_ns=100 held_ns=40 verdict=FAIL", result.stdout)
+        self.assertIn("CONTRACT_1_WORK_LEDGER verdict=FAIL", result.stdout)
+        self.assertIn("CONTRACT_2_PAUSE_WALL verdict=PASS", result.stdout)
         self.assertIn("INEQUALITY_3 cycle_ns=100 wall_ns=120 ratio=", result.stdout)
         self.assertEqual(result.stdout.count("verdict=FAIL"), 1)
 
     def test_cycle_wall_overflow_only_fails_inequality_3(self) -> None:
         result = self.run_inequality_checker(self.inequality_fixture(cycle_ns=200))
         self.assertNotEqual(result.returncode, 0)
-        self.assertIn("INEQUALITY_2 zphase_pause_ns=30 held_ns=40 verdict=PASS", result.stdout)
+        self.assertIn("CONTRACT_1_WORK_LEDGER verdict=PASS", result.stdout)
         self.assertIn("INEQUALITY_3 cycle_ns=200 wall_ns=120 ratio=", result.stdout)
         self.assertEqual(result.stdout.count("verdict=FAIL"), 1)
+
+    def test_pause_phase_outside_same_seq_stw_fails_contract_2(self) -> None:
+        damaged = self.inequality_fixture().replace(
+            "name=young.copy kind=pause start_ns=1 ns=35",
+            "name=young.copy kind=pause start_ns=50 ns=35",
+        )
+        result = self.run_inequality_checker(damaged, wall_ns=120)
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn("containment_mismatches=1", result.stdout)
+        self.assertIn(
+            "PAUSE_PHASE_CONTAINMENT seq=1 sample=0 name=young.copy "
+            "phase=[50,85) stw_candidates=[1,42) verdict=FAIL",
+            result.stdout,
+        )
+        self.assertIn("CONTRACT_2_PAUSE_WALL verdict=FAIL", result.stdout)
+        self.assertEqual(result.stdout.count("verdict=FAIL"), 2)
+
+    def test_same_seq_stw_moved_away_from_pause_phase_fails_contract_2(self) -> None:
+        damaged = self.inequality_fixture().replace(
+            "reason=young start_ns=1 wait_ns=1 held_ns=40",
+            "reason=young start_ns=50 wait_ns=1 held_ns=40",
+        )
+        result = self.run_inequality_checker(damaged, wall_ns=120)
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn("containment_mismatches=1", result.stdout)
+        self.assertIn(
+            "PAUSE_PHASE_CONTAINMENT seq=1 sample=0 name=young.copy "
+            "phase=[1,36) stw_candidates=[50,91) verdict=FAIL",
+            result.stdout,
+        )
+        self.assertIn("CONTRACT_2_PAUSE_WALL verdict=FAIL", result.stdout)
+        self.assertEqual(result.stdout.count("verdict=FAIL"), 2)
+
+    def test_no_pause_phase_fails_closed_instead_of_accepting_zero_union(self) -> None:
+        damaged = self.inequality_fixture().replace(
+            "name=young.copy kind=pause", "name=young.copy kind=conc"
+        )
+        result = self.run_inequality_checker(damaged, wall_ns=120)
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn("pause_phase_samples=0", result.stdout)
+        self.assertIn("CONTRACT_2_PAUSE_WALL verdict=FAIL", result.stdout)
 
     def test_unknown_kind_classification_fails_closed_without_pause_share(self) -> None:
         result = self.run_inequality_checker(self.inequality_fixture(leaf_kind="unknown"))
