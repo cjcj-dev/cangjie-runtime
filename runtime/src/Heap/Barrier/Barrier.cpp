@@ -1728,11 +1728,12 @@ void Barrier::RecordCrossGenEdge(BaseObject* obj, MAddress fieldAddress, BaseObj
         return;
     }
 
-    // Keep the two ZGC mark_and_remember side effects independent: marking the
-    // new value is required even when the current remset has no young regions,
-    // while the slot recording below may legitimately return early.  Keeping
-    // this first also closes AtomicSwap/CAS, whose only post-store edge is this
-    // function (Barrier.cpp:1127-1218).
+    // Keep mark and remset recording independent for the single-field store
+    // exits that call this function directly: Write/PostWrite/AtomicWrite,
+    // AtomicSwap, and successful CAS. Their new value must be marked even when
+    // there are no young regions, while slot recording may return early below.
+    // Bulk aggregation paths retain their own pre-call early returns; that
+    // coverage is tracked by a separate change.
     MarkAndRememberNewValue(this->phase, ref);
 
     if (!HasYoungRegionsForRecording()) {
