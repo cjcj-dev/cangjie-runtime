@@ -116,6 +116,10 @@ public:
         NEVER_EXAMINED,
         SNAPSHOT_VALID,
         SNAPSHOT_EMPTY,
+        // A retained snapshot was published in this snapshot cycle and its
+        // carrier is no longer current.  This is derived from the monotonic
+        // ever-preserved bit; clear/unbind exits never write this state.
+        SNAPSHOT_LOST,
     };
 
     // holderlive (F2): the only object-level holder-liveness filter we have reads
@@ -124,7 +128,8 @@ public:
     // distinct producers and the state word cannot tell them apart:
     //   - nobody ever called Preserve* on this region during its current life,
     //   - Preserve* ran but had no live info to keep (it writes NEVER_EXAMINED itself),
-    //   - Preserve* ran and stored a snapshot, then a clear path wiped it.
+    //   - Preserve* ran and stored a snapshot, then a clear path wiped it
+    //     (SNAPSHOT_LOST, which is now distinguishable from NEVER_EXAMINED).
     // These counters name which one happened. Maintained unconditionally (three stores on
     // cold region-lifecycle paths); read only under MRT_GCV2_RETLIVE_PROBE.
     enum RetainedOp : uint8_t {
@@ -702,7 +707,14 @@ public:
     bool IsRetainedLifeCurrent() const
     {
         const RegionLifeId stamp = __atomic_load_n(&metadata.retainedLifeId, __ATOMIC_ACQUIRE);
-        return RegionLifeClock::Validate(RegionLifeClock::Carrier::RETAINED_COPY, stamp, GetRegionLifeId());
+        const RegionLifeId current = GetRegionLifeId();
+        const bool auditAccepts =
+            RegionLifeClock::Validate(RegionLifeClock::Carrier::RETAINED_COPY, stamp, current);
+        // Validate is audit-only unless enforcement is enabled and therefore
+        // deliberately accepts missing/stale stamps in ordinary product runs.
+        // Snapshot-state derivation needs the structural answer in every
+        // configuration: zero is not a carrier, and only this life is current.
+        return stamp != 0 && stamp == current && auditAccepts;
     }
 
     LiveInfo* GetRetainedLiveInfo() const
@@ -712,11 +724,19 @@ public:
 
     RetainedLiveInfoState GetRetainedLiveInfoState() const
     {
-        if (metadata.retainedLiveInfoState == RetainedLiveInfoState::NEVER_EXAMINED) {
-            return metadata.retainedLiveInfoState;
+        if (metadata.retainedEverPreserved == 0) {
+            return RetainedLiveInfoState::NEVER_EXAMINED;
         }
-        return IsRetainedLifeCurrent() ? metadata.retainedLiveInfoState : RetainedLiveInfoState::NEVER_EXAMINED;
+        if (!IsRetainedLifeCurrent()) {
+            return RetainedLiveInfoState::SNAPSHOT_LOST;
+        }
+        return metadata.retainedLiveInfoCoveredUpTo <= GetRegionStart() &&
+                GetRegionAllocPtr() <= GetRegionStart()
+            ? RetainedLiveInfoState::SNAPSHOT_EMPTY
+            : RetainedLiveInfoState::SNAPSHOT_VALID;
     }
+
+    bool HasEverPreservedRetainedLiveInfo() const { return metadata.retainedEverPreserved != 0; }
 
     uint64_t GetRetainedLiveInfoEpoch() const
     {
@@ -835,8 +855,17 @@ public:
 
     uint8_t GetRetainedLastOp() const { return metadata.retainedLastOp; }
 
+    // A Preserve attempt replaces the previous publication.  Keep the
+    // monotonic history armed, but invalidate the carrier until this attempt
+    // proves that it has a snapshot and publishes it in NoteRetainedPreserve.
+    ALWAYS_INLINE void BeginRetainedPreserve()
+    {
+        __atomic_store_n(&metadata.retainedLifeId, static_cast<RegionLifeId>(0), __ATOMIC_RELEASE);
+    }
+
     void PreserveRetainedLiveInfo()
     {
+        BeginRetainedPreserve();
         metadata.retainedLiveInfo = GetLiveInfo();
         metadata.retainedLiveInfoEpoch = GetSnapshotEpoch();
         uint8_t largeMarked = metadata.isMarked;
@@ -855,26 +884,18 @@ public:
         }
         if (IsLargeRegion()) {
             if (GetLiveByteCount() == 0) {
-                metadata.retainedLiveInfoState = GetRegionAllocPtr() <= GetRegionStart()
-                    ? RetainedLiveInfoState::SNAPSHOT_EMPTY
-                    : RetainedLiveInfoState::NEVER_EXAMINED;
-                NoteRetainedPreserve();
+                NoteRetainedPreserve(GetRegionAllocPtr() <= GetRegionStart());
                 return;
             }
-            metadata.retainedLiveInfoState = RetainedLiveInfoState::SNAPSHOT_VALID;
-            NoteRetainedPreserve();
+            NoteRetainedPreserve(true);
             return;
         }
         if (metadata.retainedLiveInfo != nullptr) {
-            metadata.retainedLiveInfoState = RetainedLiveInfoState::SNAPSHOT_VALID;
-            NoteRetainedPreserve();
+            NoteRetainedPreserve(true);
             return;
         }
         CHECK(GetLiveByteCount() == 0);
-        metadata.retainedLiveInfoState = GetRegionAllocPtr() <= GetRegionStart()
-            ? RetainedLiveInfoState::SNAPSHOT_EMPTY
-            : RetainedLiveInfoState::NEVER_EXAMINED;
-        NoteRetainedPreserve();
+        NoteRetainedPreserve(GetRegionAllocPtr() <= GetRegionStart());
     }
 
     MAddress GetCensusBoundary() const
@@ -898,6 +919,7 @@ public:
             PreserveRetainedLiveInfo();
             return;
         }
+        BeginRetainedPreserve();
         metadata.retainedLiveInfo = GetLiveInfo();
         metadata.retainedLiveInfoEpoch = GetSnapshotEpoch();
         uint8_t largeMarked = metadata.isMarked;
@@ -914,36 +936,45 @@ public:
         if (RetainedOwnCopyEnabled()) {
             CaptureRetainedMarkWords(metadata.retainedLiveInfo, metadata.retainedLiveInfoEpoch, largeMarked);
         }
-        if (metadata.retainedLiveInfo == nullptr && boundary > GetRegionStart()) {
-            metadata.retainedLiveInfoState = RetainedLiveInfoState::NEVER_EXAMINED;
-            NoteRetainedPreserve();
+        if (metadata.retainedLiveInfo == nullptr) {
+            // This decision is derived after CaptureRetainedMarkWords has
+            // replaced the previous owned carrier.  Once a successful
+            // Preserve armed the monotonic bit, carrier absence is LOST on
+            // every exit; no clear/unbind exit has to remember to write it.
+            CHECK(GetRetainedLiveInfoState() != RetainedLiveInfoState::SNAPSHOT_LOST);
+            NoteRetainedPreserve(false);
             return;
         }
-        metadata.retainedLiveInfoState = RetainedLiveInfoState::SNAPSHOT_VALID;
-        NoteRetainedPreserve();
+        NoteRetainedPreserve(true);
     }
 
     ALWAYS_INLINE void PreserveRetainedLiveInfo(MAddress coveredUpToOverride)
     {
         if (coveredUpToOverride == GetRegionStart() && GetRegionAllocPtr() != GetRegionStart()) {
             CHECK(GetLiveByteCount() == 0);
+            BeginRetainedPreserve();
             metadata.retainedLiveInfo = GetLiveInfo();
             metadata.retainedLiveInfoEpoch = GetSnapshotEpoch();
             metadata.retainedLiveInfoCoveredUpTo = coveredUpToOverride;
-            metadata.retainedLiveInfoState = RetainedLiveInfoState::SNAPSHOT_VALID;
-            NoteRetainedPreserve();
+            NoteRetainedPreserve(true);
             return;
         }
         CHECK(coveredUpToOverride == GetRegionAllocPtr());
         PreserveRetainedLiveInfo();
     }
 
-    // holderlive (F2): record the outcome of a Preserve* call. Called after the state word
-    // is already written, so the op code is derived from it rather than duplicated.
-    ALWAYS_INLINE void NoteRetainedPreserve()
+    // holderlive (F2): record the outcome of a Preserve* attempt. Only a
+    // successful publication arms the monotonic bit and carrier stamp.
+    ALWAYS_INLINE void NoteRetainedPreserve(bool succeeded)
     {
         ++metadata.retainedPreserveCnt;
-        switch (metadata.retainedLiveInfoState) {
+        if (succeeded) {
+            metadata.retainedEverPreserved = 1;
+            // Publish last: an acquiring reader that accepts this life also
+            // observes the retained pointer/owned words and covered boundary.
+            StampRetainedSnapshot();
+        }
+        switch (GetRetainedLiveInfoState()) {
             case RetainedLiveInfoState::SNAPSHOT_VALID:
                 metadata.retainedLastOp = RETAINED_OP_PRESERVE_VALID;
                 break;
@@ -954,15 +985,12 @@ public:
                 metadata.retainedLastOp = RETAINED_OP_PRESERVE_NEVER;
                 break;
         }
-        // Publish the carrier stamp last: an acquiring reader that accepts
-        // this life also observes the retained pointer/state/owned words.
-        StampRetainedSnapshot();
     }
 
     // holderlive (F2): a clear only destroys information if there was a snapshot to destroy.
     ALWAYS_INLINE void NoteRetainedClear(RetainedOp op)
     {
-        if (metadata.retainedLiveInfoState == RetainedLiveInfoState::NEVER_EXAMINED) {
+        if (GetRetainedLiveInfoState() == RetainedLiveInfoState::NEVER_EXAMINED) {
             return;
         }
         ++metadata.retainedClearCnt;
@@ -971,7 +999,9 @@ public:
 
     bool IsRetainedSnapshotValid() const
     {
-        if (metadata.retainedLiveInfoState == RetainedLiveInfoState::NEVER_EXAMINED) {
+        RetainedLiveInfoState state = GetRetainedLiveInfoState();
+        if (state == RetainedLiveInfoState::NEVER_EXAMINED ||
+            state == RetainedLiveInfoState::SNAPSHOT_LOST) {
             return false;
         }
         if (!IsRetainedLifeCurrent()) {
@@ -2408,7 +2438,6 @@ public:
             if (metadata.retainedMarkWords != nullptr) {
                 return;
             }
-            metadata.retainedLiveInfoState = RetainedLiveInfoState::NEVER_EXAMINED;
             metadata.retainedLiveInfoEpoch = 0;
             metadata.retainedLiveInfoCoveredUpTo = 0;
             metadata.retainedLifeId = 0;
@@ -2451,10 +2480,12 @@ public:
             // clears deliberately leave this old/major authority intact.
             FreeRetainedMarkWords();
             metadata.retainedLiveInfo = nullptr;
-            metadata.retainedLiveInfoState = RetainedLiveInfoState::NEVER_EXAMINED;
             metadata.retainedLiveInfoEpoch = 0;
             metadata.retainedLiveInfoCoveredUpTo = 0;
             metadata.retainedLifeId = 0;
+            // ClearLiveInfo<Old> starts a new retained-snapshot cycle.  It is
+            // the only same-region-life boundary allowed to disarm the bit.
+            metadata.retainedEverPreserved = 0;
         }
         // Start of a mark cycle for this region: live=0 is authoritative until proven otherwise.
         __atomic_store_n(&metadata.liveByteCount, LIVE_AUTHORITY_BIT, std::memory_order_release);
@@ -2493,7 +2524,6 @@ public:
             if (metadata.retainedMarkWords != nullptr) {
                 return;
             }
-            metadata.retainedLiveInfoState = RetainedLiveInfoState::NEVER_EXAMINED;
             metadata.retainedLiveInfoEpoch = 0;
             metadata.retainedLiveInfoCoveredUpTo = 0;
             metadata.retainedLifeId = 0;
@@ -3425,7 +3455,9 @@ private:
         RegionInfo* ownerRegion0 = nullptr; // if unit is SUBORDINATE_UNIT
 
         LiveInfo* retainedLiveInfo = nullptr;
-        RetainedLiveInfoState retainedLiveInfoState = RetainedLiveInfoState::NEVER_EXAMINED;
+        // Monotonic within a retained-snapshot cycle: only successful
+        // Preserve arms it; old-mark start or region-life bump disarms it.
+        uint8_t retainedEverPreserved = 0;
         uint64_t retainedLiveInfoEpoch = 0;
         MAddress retainedLiveInfoCoveredUpTo = 0;
         RegionLifeId retainedLifeId = 0;
@@ -3732,8 +3764,7 @@ private:
         RegionLifeClock::NoteZeroAcrossBoundary(RegionLifeClock::Carrier::RETAINED_COPY,
                                                 metadata.retainedLiveInfo != nullptr ||
                                                     metadata.retainedMarkWords != nullptr ||
-                                                    metadata.retainedLiveInfoState !=
-                                                        RetainedLiveInfoState::NEVER_EXAMINED,
+                                                    metadata.retainedEverPreserved != 0,
                                                 metadata.retainedLifeId);
     }
 
@@ -3749,6 +3780,9 @@ private:
             }
             if (metadata.regionLifeId.compare_exchange_weak(old, old + 1, std::memory_order_release,
                                                             std::memory_order_relaxed)) {
+                // A new region life is the hard boundary for the monotonic
+                // retained Preserve history.
+                metadata.retainedEverPreserved = 0;
                 return;
             }
         }
@@ -3807,7 +3841,6 @@ private:
         FreeCompactRouteTable();
         FreeRetainedMarkWords();
         metadata.retainedLiveInfo = nullptr;
-        metadata.retainedLiveInfoState = RetainedLiveInfoState::NEVER_EXAMINED;
         metadata.retainedLiveInfoEpoch = 0;
         metadata.retainedLiveInfoCoveredUpTo = 0;
         metadata.retainedLifeId = 0;

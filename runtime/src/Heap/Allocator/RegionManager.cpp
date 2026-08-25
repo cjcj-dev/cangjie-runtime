@@ -1793,7 +1793,13 @@ size_t RegionManager::ExemptFromRegions()
             if (!ClaimFromRegion(fromRegionList, del, RegionInfo::RegionType::UNMOVABLE_FROM_REGION, "cset-relocsel")) {
                 continue;
             }
-            del->PreserveRetainedLiveInfo();
+            // ZGC keeps an unselected relocation-set page in place; its liveness
+            // snapshot is only required when this cycle actually examined the
+            // page.  Relocsel also sees pages with a live-byte census but no
+            // current mark face (NEVER_EXAMINED), so use the bounded preserve
+            // form rather than asserting that every live page has a snapshot.
+            del->PreserveRetainedLiveInfoUpTo(
+                std::min(del->GetCensusBoundary(), del->GetRegionAllocPtr()));
             ExemptFromRegion(del);
             floatingGarbage += (del->GetRegionSize() - del->GetLiveByteCount());
         }
