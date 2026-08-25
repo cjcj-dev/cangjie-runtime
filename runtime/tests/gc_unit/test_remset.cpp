@@ -28,6 +28,7 @@
 
 #include "Heap/Barrier/Barrier.h"
 #include "Heap/Collector/Collector.h"
+#include "Heap/Heap.h"
 #include "Heap/WCollector/IdleBarrier.h"
 #include "Heap/WCollector/RememberedHolderPolicy.h"
 #include "ObjectModel/RefField.inline.h"
@@ -37,10 +38,28 @@
 using namespace MapleRuntime;
 using namespace MapleRuntime::GcUnit;
 
+extern "C" void CJ_MCC_PostWriteRefField(ObjectPtr ref, ObjectPtr obj, RefField<false>* field);
+
 namespace {
+
+class InstalledBarrierScope {
+public:
+    explicit InstalledBarrierScope(Barrier& barrier) : previous(Heap::currentBarrierPtr), installed(&barrier)
+    {
+        Heap::currentBarrierPtr = &installed;
+    }
+
+    ~InstalledBarrierScope() { Heap::currentBarrierPtr = previous; }
+
+private:
+    Barrier** previous;
+    Barrier* installed;
+};
 
 class TestCollector final : public Collector {
 public:
+    explicit TestCollector(bool colourStores = false) : colourStores(colourStores) {}
+
     void Init() override {}
     void RunGarbageCollection(uint64_t, GCReason) override {}
     bool ShouldIgnoreRequest(GCRequest&) override { return false; }
@@ -49,8 +68,14 @@ public:
     bool IsOldPointer(RefField<>&) const override { return false; }
     RefField<> GetAndTryTagRefField(BaseObject* obj) const override
     {
+        if (colourStores) {
+            return RefField<>(obj, ::g_cjStoreGoodMask);
+        }
         return RefField<>(to_zpointer(reinterpret_cast<MAddress>(obj)));
     }
+
+private:
+    bool colourStores;
 };
 
 class TestBarrier final : public Barrier {
@@ -171,6 +196,183 @@ GC_TEST(Remset, OldToYoungRecordedByBarrier)
     GC_EXPECT_TRUE(ExpectRecorded(rs, reinterpret_cast<MAddress>(field)));
 }
 
+// Case A: a non-null plain previous word is not store-good.  The product barrier must still
+// register the old slot; the cheap compiler-side negative-mask predicate cannot be used as the
+// remembered-set witness for this value.
+GC_TEST(Remset, PlainPreviousWordStillRecordsOldToYoung)
+{
+    GcHeapFixture fx;
+    fx.region0->SetYoungRegionFlag(0);
+    fx.region1->SetYoungRegionFlag(1);
+    fx.region1->SetYoungAge(1);
+
+    auto* field = &HeapSlotAt<>(reinterpret_cast<MAddress>(fx.obj0) + TYPEINFO_PTR_SIZE);
+    const MAddress slot = reinterpret_cast<MAddress>(field);
+    TestCollector collector(true);
+    RememberedSet rs;
+    rs.Initialize(fx.heapStart, 2 * RegionInfo::UNIT_SIZE);
+    Barrier barrier(collector, rs);
+
+    // Deliberately install a non-null, uncoloured previous word (case A).
+    field->StoreColoured(to_zpointer(reinterpret_cast<MAddress>(fx.obj1)));
+    GC_EXPECT_FALSE(collector.is_store_good(*field));
+    barrier.WriteReference(fx.obj0, *field, fx.obj1);
+
+    GC_EXPECT_TRUE(rs.Contains(slot));
+}
+
+// Case B: the slot was already registered, then the current remset face was drained before the
+// next write.  A store-good/same-target fast-path decision must not suppress the new current-face
+// registration after DrainForMinor has cleared the prior bitmap.
+GC_TEST(Remset, StoreGoodRewriteReregistersAfterDrain)
+{
+    GcHeapFixture fx;
+    fx.region0->SetYoungRegionFlag(0);
+    fx.region1->SetYoungRegionFlag(1);
+    fx.region1->SetYoungAge(1);
+
+    auto* field = &HeapSlotAt<>(reinterpret_cast<MAddress>(fx.obj0) + TYPEINFO_PTR_SIZE);
+    const MAddress slot = reinterpret_cast<MAddress>(field);
+    TestCollector collector(true);
+    RememberedSet rs;
+    rs.Initialize(fx.heapStart, 2 * RegionInfo::UNIT_SIZE);
+    Barrier barrier(collector, rs);
+
+    field->StoreColoured(zpointer::null);
+    barrier.WriteReference(fx.obj0, *field, fx.obj1);
+    std::unordered_set<MAddress> firstMinor;
+    rs.DrainForMinor(firstMinor);
+    GC_EXPECT_TRUE(firstMinor.count(slot) == 1);
+    GC_EXPECT_EQ(rs.Size(), 0u);
+    GC_EXPECT_TRUE(collector.is_store_good(*field));
+
+    barrier.WriteReference(fx.obj0, *field, fx.obj1);
+
+    GC_EXPECT_TRUE(rs.Contains(slot));
+}
+
+// Compiler hit arm analogue for case A. The coloured store is already done,
+// so the product post-store exit must be the operation that makes the slot
+// observable in the current remembered-set face.
+GC_TEST(Remset, CompilerPostStoreRecordsPlainPreviousWord)
+{
+    GcHeapFixture fx;
+    fx.region0->SetYoungRegionFlag(0);
+    fx.region1->SetYoungRegionFlag(1);
+    fx.region1->SetYoungAge(1);
+
+    auto* field = &HeapSlotAt<>(reinterpret_cast<MAddress>(fx.obj0) + TYPEINFO_PTR_SIZE);
+    const MAddress slot = reinterpret_cast<MAddress>(field);
+    TestCollector collector(true);
+    RememberedSet rs;
+    rs.Initialize(fx.heapStart, 2 * RegionInfo::UNIT_SIZE);
+    Barrier barrier(collector, rs);
+    InstalledBarrierScope installedBarrier(barrier);
+
+    field->StoreColoured(to_zpointer(reinterpret_cast<MAddress>(fx.obj0)));
+    GC_EXPECT_FALSE(collector.is_store_good(*field));
+    RefField<> installed = collector.GetAndTryTagRefField(fx.obj1);
+    field->StoreColoured(installed.GetFieldValue());
+    GC_EXPECT_FALSE(rs.Contains(slot)); // positive control: the direct store alone does not record
+
+    CJ_MCC_PostWriteRefField(fx.obj1, fx.obj0, field);
+    GC_EXPECT_TRUE(rs.Contains(slot));
+}
+
+// Exact T0/T1 construction from case B. T0 has no young region, so the old
+// target store paints the slot but records nothing. T1 installs a young target
+// through the compiler-like hit arm; only the post-store product exit records it.
+GC_TEST(Remset, CompilerPostStoreRecordsChangedTargetAfterNoYoung)
+{
+    GcHeapFixture fx;
+    fx.region0->SetYoungRegionFlag(0);
+    fx.region1->SetYoungRegionFlag(0);
+
+    auto* field = &HeapSlotAt<>(reinterpret_cast<MAddress>(fx.obj0) + TYPEINFO_PTR_SIZE);
+    const MAddress slot = reinterpret_cast<MAddress>(field);
+    TestCollector collector(true);
+    RememberedSet rs;
+    rs.Initialize(fx.heapStart, 2 * RegionInfo::UNIT_SIZE);
+    Barrier barrier(collector, rs);
+    InstalledBarrierScope installedBarrier(barrier);
+
+    field->StoreColoured(zpointer::null);
+    barrier.WriteReference(fx.obj0, *field, fx.obj0);
+    GC_EXPECT_TRUE(collector.is_store_good(*field));
+    GC_EXPECT_FALSE(rs.Contains(slot));
+
+    fx.region1->SetYoungRegionFlag(1);
+    fx.region1->SetYoungAge(1);
+    RefField<> installed = collector.GetAndTryTagRefField(fx.obj1);
+    field->StoreColoured(installed.GetFieldValue());
+    GC_EXPECT_FALSE(rs.Contains(slot)); // pre-fix compiler hit result
+
+    CJ_MCC_PostWriteRefField(fx.obj1, fx.obj0, field);
+    GC_EXPECT_TRUE(rs.Contains(slot));
+}
+
+GC_TEST(Remset, AtomicWriteRecordsOldToYoung)
+{
+    GcHeapFixture fx;
+    fx.region0->SetYoungRegionFlag(0);
+    fx.region1->SetYoungRegionFlag(1);
+    fx.region1->SetYoungAge(1);
+    auto* field = &HeapSlotAt<true>(reinterpret_cast<MAddress>(fx.obj0) + TYPEINFO_PTR_SIZE);
+    const MAddress slot = reinterpret_cast<MAddress>(field);
+    TestCollector collector(true);
+    RememberedSet rs;
+    rs.Initialize(fx.heapStart, 2 * RegionInfo::UNIT_SIZE);
+    Barrier barrier(collector, rs);
+
+    field->StoreColoured(zpointer::null);
+    barrier.AtomicWriteReference(fx.obj0, *field, fx.obj1, std::memory_order_seq_cst);
+    GC_EXPECT_TRUE(rs.Contains(slot));
+}
+
+GC_TEST(Remset, AtomicSwapRecordsOldToYoung)
+{
+    GcHeapFixture fx;
+    fx.region0->SetYoungRegionFlag(0);
+    fx.region1->SetYoungRegionFlag(1);
+    fx.region1->SetYoungAge(1);
+    auto* field = &HeapSlotAt<true>(reinterpret_cast<MAddress>(fx.obj0) + TYPEINFO_PTR_SIZE);
+    const MAddress slot = reinterpret_cast<MAddress>(field);
+    TestCollector collector(true);
+    RememberedSet rs;
+    rs.Initialize(fx.heapStart, 2 * RegionInfo::UNIT_SIZE);
+    Barrier barrier(collector, rs);
+
+    field->StoreColoured(zpointer::null);
+    BaseObject* old = barrier.AtomicSwapReference(fx.obj0, *field, fx.obj1, std::memory_order_seq_cst);
+    GC_EXPECT_TRUE(old == nullptr);
+    GC_EXPECT_TRUE(rs.Contains(slot));
+}
+
+GC_TEST(Remset, CompareAndSwapRecordsOnlySuccessfulStore)
+{
+    GcHeapFixture fx;
+    fx.region0->SetYoungRegionFlag(0);
+    fx.region1->SetYoungRegionFlag(1);
+    fx.region1->SetYoungAge(1);
+    auto* field = &HeapSlotAt<true>(reinterpret_cast<MAddress>(fx.obj0) + TYPEINFO_PTR_SIZE);
+    const MAddress slot = reinterpret_cast<MAddress>(field);
+    TestCollector collector(true);
+    RememberedSet rs;
+    rs.Initialize(fx.heapStart, 2 * RegionInfo::UNIT_SIZE);
+    Barrier barrier(collector, rs);
+
+    field->StoreColoured(zpointer::null);
+    GC_EXPECT_FALSE(barrier.CompareAndSwapReference(fx.obj0, *field, fx.obj1, fx.obj1,
+                                                    std::memory_order_seq_cst,
+                                                    std::memory_order_seq_cst));
+    GC_EXPECT_FALSE(rs.Contains(slot));
+
+    GC_EXPECT_TRUE(barrier.CompareAndSwapReference(fx.obj0, *field, nullptr, fx.obj1,
+                                                   std::memory_order_seq_cst,
+                                                   std::memory_order_seq_cst));
+    GC_EXPECT_TRUE(rs.Contains(slot));
+}
+
 // U7: product IdleBarrier WriteReference also records (wbclose2 acceptance).
 // Pre-fix Idle may skip MCC; product base NVI still posts RecordCrossGenEdge after
 // WriteReferenceImpl — so this is green when NVI post-record is intact.
@@ -261,6 +463,13 @@ GC_TEST(Remset, OldToOldRecordedBecauseBarrierConditionsOnSlot)
     GcHeapFixture fx;
     fx.region0->SetYoungRegionFlag(0);
     fx.region1->SetYoungRegionFlag(0);
+    // RecordCrossGenEdge has an intentional process-wide no-young fast exit.
+    // Make the test's precondition explicit instead of borrowing a leaked
+    // youngRegionCount from an earlier fixture.
+    RegionInfo* youngWitness =
+        RegionInfo::InitRegion(2, 1, RegionInfo::UnitRole::SMALL_SIZED_UNITS);
+    youngWitness->SetRegionType(RegionInfo::RegionType::THREAD_LOCAL_REGION);
+    youngWitness->SetYoungRegionFlag(1);
 
     auto* field = &HeapSlotAt<>(reinterpret_cast<MAddress>(fx.obj0) + TYPEINFO_PTR_SIZE);
 
@@ -272,6 +481,7 @@ GC_TEST(Remset, OldToOldRecordedBecauseBarrierConditionsOnSlot)
     field->StoreColoured(zpointer::null);
     barrier.WriteReference(fx.obj0, *field, fx.obj1);
     GC_EXPECT_TRUE(ExpectRecorded(rs, reinterpret_cast<MAddress>(field)));
+    youngWitness->SetYoungRegionFlag(0);
 }
 
 // The sticky provenance bitmap is diagnostic backing, not product state.  Its

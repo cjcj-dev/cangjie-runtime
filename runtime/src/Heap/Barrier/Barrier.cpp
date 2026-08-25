@@ -567,10 +567,14 @@ void Barrier::WriteF64(BaseObject* obj, Field<double>& field, double val) const 
 void Barrier::WriteReference(BaseObject* obj, RefField<false>& field, BaseObject* ref) const
 {
     // OpenJDK zBarrier.inline.hpp:695-706 store_barrier_on_heap_oop_field:
-    // fast path = is_store_good(prev); slow path = remset/SATB work then color_store_good.
-    // Our colour is applied by WriteReferenceImpl (GetAndTryTagRefField → store-good colour).
-    // If the pre-store slot is already store-good for the same target, skip remset work
-    // (second write of a registered edge must not re-enter RecordCrossGenEdge).
+    // fast path = is_store_good(prev) skips heap_store_slow_path, which is also
+    // where remember(p) lives (zBarrier.inline.hpp:729-733). That skip is safe in ZGC
+    // because scanning the previous remset face re-registers slots that still hold a
+    // young pointer (zRemembered.cpp:578-589 / zStoreBarrierBuffer.cpp:170-187).
+    // Our drain clears the bit without re-arming current, so a later store-good write
+    // can otherwise leave an old slot absent from this round's remembered set.
+    // remember(p) is keyed by the old slot, not by prev colour or target identity;
+    // always RecordCrossGenEdge and retain the fast/slow counters for diagnostics.
     ref = theCollector.ResolveStoreValue(ref);
     NoteValueSideStore(ref, static_cast<uint8_t>(phase));
     NoteW1GhostFromStore(theCollector, ref);
@@ -583,13 +587,12 @@ void Barrier::WriteReference(BaseObject* obj, RefField<false>& field, BaseObject
     // zBarrier.inline.hpp:735-739 mark_and_remember: mark the new target on every
     // heap store, not only the remset slow path. A store-good rewrite of a
     // different object still needs keep-alive (survnode visitSame=0).
-    MarkAndRememberNewValue(this->phase, ref);
-    if (!prevStoreGood) {
-        NoteStoreSlowPath();
-        RecordCrossGenEdge(obj, reinterpret_cast<MAddress>(&field), to_object(field.GetTargetObject()));
-    } else {
+    if (prevStoreGood) {
         NoteStoreFastPath();
+    } else {
+        NoteStoreSlowPath();
     }
+    RecordCrossGenEdge(obj, reinterpret_cast<MAddress>(&field), to_object(field.GetTargetObject()));
     // Journal only the 4,800 slots that survival_dense later probes. This
     // binds a missing edge to its actual last store without adding atomic
     // traffic to the other ~15.4M array writes.
@@ -615,6 +618,16 @@ void Barrier::WriteReference(BaseObject* obj, RefField<false>& field, BaseObject
             }
         }
     }
+}
+
+void Barrier::PostWriteReference(BaseObject* obj, RefField<false>& field, BaseObject* ref) const
+{
+    // Unlike ZGC, our compiler hit predicate cannot use store-good as proof
+    // that this slot already has a current remset entry: plain previous words
+    // and same-colour writes to a different target are both admitted there.
+    // The hit arm has already performed color_store_good, so execute only the
+    // product side effects that the skipped WriteReference still owes.
+    RecordCrossGenEdge(obj, reinterpret_cast<MAddress>(&field), to_object(field.GetTargetObject()));
 }
 
 void Barrier::WriteReferenceImpl(BaseObject* obj, RefField<false>& field, BaseObject* ref) const
@@ -1082,13 +1095,12 @@ void Barrier::AtomicWriteReference(BaseObject* obj, RefField<true>& field, BaseO
     const bool prevStoreGood = PrevIsStoreGoodForTarget(theCollector, prev, ref);
     AtomicWriteReferenceImpl(obj, field, ref, order);
     SurvNodeDiag::NoteStore(&field, to_object(prev.GetTargetObject()), ref, SurvNodeDiag::STORE_ATOMIC_WRITE);
-    MarkAndRememberNewValue(this->phase, ref);
-    if (!prevStoreGood) {
-        NoteStoreSlowPath();
-        RecordCrossGenEdge(obj, reinterpret_cast<MAddress>(&field), to_object(field.GetTargetObject()));
-    } else {
+    if (prevStoreGood) {
         NoteStoreFastPath();
+    } else {
+        NoteStoreSlowPath();
     }
+    RecordCrossGenEdge(obj, reinterpret_cast<MAddress>(&field), to_object(field.GetTargetObject()));
 }
 
 void Barrier::AtomicWriteReferenceImpl(BaseObject* obj, RefField<true>& field, BaseObject* ref, MemoryOrder order) const
@@ -1112,9 +1124,9 @@ void Barrier::AtomicWriteReferenceImpl(BaseObject* obj, RefField<true>& field, B
 BaseObject* Barrier::AtomicSwapReference(BaseObject* obj, RefField<true>& field, BaseObject* newRef,
                                          MemoryOrder order) const
 {
-    // storecov: gate on the actual pre-swap slot bits (not an "expected" value — swap has
-    // none). Same shape as WriteReference / AtomicWriteReference: prev store-good for newRef
-    // ⇒ edge already registered when the slot first became store-good.
+    // Read the actual pre-swap slot bits (swap has no expected value) for the
+    // fast/slow diagnostic. Remset recording remains unconditional after the
+    // successful store because store-good is not a current-entry witness here.
     newRef = theCollector.ResolveStoreValue(newRef);
     NoteW1GhostFromStore(theCollector, newRef);
     NoteW1HolderStore(theCollector, obj);
@@ -1122,12 +1134,12 @@ BaseObject* Barrier::AtomicSwapReference(BaseObject* obj, RefField<true>& field,
     const bool prevStoreGood = PrevIsStoreGoodForTarget(theCollector, prev, newRef);
     BaseObject* oldRef = AtomicSwapReferenceImpl(obj, field, newRef, order);
     SurvNodeDiag::NoteStore(&field, oldRef, newRef, SurvNodeDiag::STORE_SWAP);
-    if (!prevStoreGood) {
-        NoteStoreSlowPath();
-        RecordCrossGenEdge(obj, reinterpret_cast<MAddress>(&field), to_object(field.GetTargetObject()));
-    } else {
+    if (prevStoreGood) {
         NoteStoreFastPath();
+    } else {
+        NoteStoreSlowPath();
     }
+    RecordCrossGenEdge(obj, reinterpret_cast<MAddress>(&field), to_object(field.GetTargetObject()));
     return oldRef;
 }
 
@@ -1181,10 +1193,10 @@ bool Barrier::CompareAndSwapReference(BaseObject* obj, RefField<true>& field, Ba
                                       MemoryOrder succOrder, MemoryOrder failOrder) const
 {
     // storecov: CAS has an expected (oldRef) and a stored (newRef). The store-good gate
-    // uses the actual pre-CAS slot bits (same as WriteReference prev), compared to newRef
-    // — not to oldRef. On success with prev already store-good for newRef, the write is a
-    // same-target refresh (typically oldRef==newRef) and remset work is redundant.
-    // Failed CAS stores nothing ⇒ no Record (unchanged).
+    // Use the actual pre-CAS slot bits (same as WriteReference prev), compared
+    // to newRef rather than oldRef, for the diagnostic fast/slow count. A
+    // successful store always calls remset recording; a failed CAS stores
+    // nothing and therefore calls neither marking nor recording.
     newRef = theCollector.ResolveStoreValue(newRef);
     NoteW1GhostFromStore(theCollector, newRef);
     NoteW1HolderStore(theCollector, obj);
@@ -1193,12 +1205,12 @@ bool Barrier::CompareAndSwapReference(BaseObject* obj, RefField<true>& field, Ba
     bool success = CompareAndSwapReferenceImpl(obj, field, oldRef, newRef, succOrder, failOrder);
     if (success) {
         SurvNodeDiag::NoteStore(&field, oldRef, newRef, SurvNodeDiag::STORE_CAS);
-        if (!prevStoreGood) {
-            NoteStoreSlowPath();
-            RecordCrossGenEdge(obj, reinterpret_cast<MAddress>(&field), to_object(field.GetTargetObject()));
-        } else {
+        if (prevStoreGood) {
             NoteStoreFastPath();
+        } else {
+            NoteStoreSlowPath();
         }
+        RecordCrossGenEdge(obj, reinterpret_cast<MAddress>(&field), to_object(field.GetTargetObject()));
     }
     return success;
 }
@@ -1712,16 +1724,21 @@ void Barrier::ReadGenericImpl(const ObjectPtr dstObj, ObjectPtr obj, void* field
 
 void Barrier::RecordCrossGenEdge(BaseObject* obj, MAddress fieldAddress, BaseObject* ref) const
 {
-    if (!HasYoungRegionsForRecording()) {
-        return;
-    }
     if (ref == nullptr || !Heap::IsHeapAddress(ref)) {
         return;
     }
 
-    // Bulk paths reach here without WriteReference. Marking and remembering the
-    // new value is idempotent for single-field stores that already did so.
+    // Keep mark and remset recording independent for the single-field store
+    // exits that call this function directly: Write/PostWrite/AtomicWrite,
+    // AtomicSwap, and successful CAS. Their new value must be marked even when
+    // there are no young regions, while slot recording may return early below.
+    // Bulk aggregation paths retain their own pre-call early returns; that
+    // coverage is tracked by a separate change.
     MarkAndRememberNewValue(this->phase, ref);
+
+    if (!HasYoungRegionsForRecording()) {
+        return;
+    }
 
     // OpenJDK keys its remembered set on the slot, whose generation is stable,
     // rather than on the target, whose generation can change during promotion.
