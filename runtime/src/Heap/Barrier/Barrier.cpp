@@ -587,7 +587,6 @@ void Barrier::WriteReference(BaseObject* obj, RefField<false>& field, BaseObject
     // zBarrier.inline.hpp:735-739 mark_and_remember: mark the new target on every
     // heap store, not only the remset slow path. A store-good rewrite of a
     // different object still needs keep-alive (survnode visitSame=0).
-    MarkAndRememberNewValue(this->phase, ref);
     if (prevStoreGood) {
         NoteStoreFastPath();
     } else {
@@ -628,7 +627,6 @@ void Barrier::PostWriteReference(BaseObject* obj, RefField<false>& field, BaseOb
     // and same-colour writes to a different target are both admitted there.
     // The hit arm has already performed color_store_good, so execute only the
     // product side effects that the skipped WriteReference still owes.
-    MarkAndRememberNewValue(this->phase, ref);
     RecordCrossGenEdge(obj, reinterpret_cast<MAddress>(&field), to_object(field.GetTargetObject()));
 }
 
@@ -1097,7 +1095,6 @@ void Barrier::AtomicWriteReference(BaseObject* obj, RefField<true>& field, BaseO
     const bool prevStoreGood = PrevIsStoreGoodForTarget(theCollector, prev, ref);
     AtomicWriteReferenceImpl(obj, field, ref, order);
     SurvNodeDiag::NoteStore(&field, to_object(prev.GetTargetObject()), ref, SurvNodeDiag::STORE_ATOMIC_WRITE);
-    MarkAndRememberNewValue(this->phase, ref);
     if (prevStoreGood) {
         NoteStoreFastPath();
     } else {
@@ -1727,16 +1724,20 @@ void Barrier::ReadGenericImpl(const ObjectPtr dstObj, ObjectPtr obj, void* field
 
 void Barrier::RecordCrossGenEdge(BaseObject* obj, MAddress fieldAddress, BaseObject* ref) const
 {
-    if (!HasYoungRegionsForRecording()) {
-        return;
-    }
     if (ref == nullptr || !Heap::IsHeapAddress(ref)) {
         return;
     }
 
-    // Bulk paths reach here without WriteReference. Marking and remembering the
-    // new value is idempotent for single-field stores that already did so.
+    // Keep the two ZGC mark_and_remember side effects independent: marking the
+    // new value is required even when the current remset has no young regions,
+    // while the slot recording below may legitimately return early.  Keeping
+    // this first also closes AtomicSwap/CAS, whose only post-store edge is this
+    // function (Barrier.cpp:1127-1218).
     MarkAndRememberNewValue(this->phase, ref);
+
+    if (!HasYoungRegionsForRecording()) {
+        return;
+    }
 
     // OpenJDK keys its remembered set on the slot, whose generation is stable,
     // rather than on the target, whose generation can change during promotion.
