@@ -35,11 +35,15 @@ SDK_RUNTIME="${CANGJIE_HOME:-}/runtime/lib/linux_x86_64_cjnative"
 SDK_TOOLS="${CANGJIE_HOME:-}/tools/lib"
 SDK_LLVM="${CANGJIE_HOME:-}/third_party/llvm/lib"
 
+set +e
 PYTHONDONTWRITEBYTECODE=1 python3 -m unittest \
   "$ROOT/runtime/tests/perf_vs_official/test_analyze_youngstw.py" \
   "$ROOT/runtime/tests/perf_vs_official/test_gclog_schema.py" \
   "$ROOT/runtime/tests/perf_vs_official/test_phase_leaf_ledger.py" \
   >"$OUT/schema_ledger.unit.log" 2>&1
+analyzer_unit_rc=$?
+set -e
+echo "$analyzer_unit_rc" >"$OUT/schema_ledger.unit.rc"
 
 if [[ "${PHASE_ENTRY_REUSE_ELFS:-0}" != 1 ]]; then
   LD_LIBRARY_PATH="$RUNTIME_LIB_DIR:$SDK_RUNTIME:$SDK_TOOLS:$SDK_LLVM${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}" \
@@ -165,14 +169,17 @@ if guard_log minor "$MINOR_RUN_LOG"; then minor_guard_rc=0; else minor_guard_rc=
 if guard_log major "$MAJOR_RUN_LOG"; then major_guard_rc=0; else major_guard_rc=$?; fi
 if guard_log timer "$TIMER_RUN_LOG"; then timer_guard_rc=0; else timer_guard_rc=$?; fi
 
-if [[ $minor_rc -ne 0 || $major_rc -ne 0 || $timer_rc -ne 0 ||
+if [[ $analyzer_unit_rc -ne 0 ||
+      $minor_rc -ne 0 || $major_rc -ne 0 || $timer_rc -ne 0 ||
       $minor_guard_rc -ne 0 || $major_guard_rc -ne 0 || $timer_guard_rc -ne 0 ]]; then
-  echo "PHASE_ENTRY_TRIGGER_FAIL minor_rc=$minor_rc major_rc=$major_rc timer_rc=$timer_rc " \
+  echo "PHASE_ENTRY_TRIGGER_FAIL analyzer_unit_rc=$analyzer_unit_rc " \
+       "minor_rc=$minor_rc major_rc=$major_rc timer_rc=$timer_rc " \
        "minor_guard_rc=$minor_guard_rc major_guard_rc=$major_guard_rc timer_guard_rc=$timer_guard_rc" >&2
+  tail -30 "$OUT/schema_ledger.unit.log" >&2
   tail -30 "$MINOR_RUN_LOG" >&2
   tail -30 "$MAJOR_RUN_LOG" >&2
   tail -30 "$TIMER_RUN_LOG" >&2
   exit 1
 fi
 
-echo "PHASE_ENTRY_TRIGGER_OK minor_rc=0 major_rc=0 timer_rc=0 guards=3"
+echo "PHASE_ENTRY_TRIGGER_OK analyzer_unit_rc=0 minor_rc=0 major_rc=0 timer_rc=0 guards=3"
