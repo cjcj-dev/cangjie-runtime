@@ -10,16 +10,98 @@
 
 #include <cstdint>
 #include <cstring>
-#include <algorithm>
-#include <csignal>
-#include <sys/wait.h>
-#include <unistd.h>
+#include <atomic>
+#include <dlfcn.h>
+#include <limits>
+#include <thread>
 
 #include "gc_heap_fixture.hpp"
 #include "gc_unittest.hpp"
 
 using namespace MapleRuntime;
 using namespace MapleRuntime::GcUnit;
+
+// Do not materialize product inline/template bodies in this test executable.
+// Product-path calls must resolve from libcangjie-runtime.so, so the test ELF
+// cannot self-satisfy the product symbols with weak definitions.
+namespace MapleRuntime {
+extern template bool RegionInfo::MarkObject<Generation::Young>(
+    MarkView<Generation::Young>, const BaseObject*, size_t, bool);
+extern template bool RegionInfo::MarkObject<Generation::Old>(
+    MarkView<Generation::Old>, const BaseObject*, size_t, bool);
+extern template bool RegionInfo::MarkObject<Generation::Young>(
+    MarkView<Generation::Young>, const BaseObject*);
+extern template bool RegionInfo::MarkObject<Generation::Old>(
+    MarkView<Generation::Old>, const BaseObject*);
+extern template void RegionInfo::ClearLiveInfo<Generation::Young>(MarkView<Generation::Young>);
+extern template void RegionInfo::ClearLiveInfo<Generation::Old>(MarkView<Generation::Old>);
+} // namespace MapleRuntime
+
+namespace {
+
+void* ProductRuntimeHandle()
+{
+    static void* handle = []() {
+        void* h = dlopen("libcangjie-runtime.so", RTLD_NOW | RTLD_NOLOAD);
+        if (h == nullptr) {
+            h = dlopen("libcangjie-runtime.so", RTLD_NOW);
+        }
+        return h;
+    }();
+    return handle;
+}
+
+template<Generation G>
+using ProductMarkObject = bool (*)(RegionInfo*, MarkView<G>, const BaseObject*, size_t, bool);
+
+template<Generation G>
+ProductMarkObject<G> ProductMarkObjectFn();
+
+template<>
+ProductMarkObject<Generation::Young> ProductMarkObjectFn<Generation::Young>()
+{
+    static auto fn = reinterpret_cast<ProductMarkObject<Generation::Young>>(dlsym(
+        ProductRuntimeHandle(),
+        "_ZN12MapleRuntime10RegionInfo10MarkObjectILNS_10GenerationE0EEEbNS_8MarkViewIXT_EEEPKNS_10BaseObjectEmb"));
+    return fn;
+}
+
+template<>
+ProductMarkObject<Generation::Old> ProductMarkObjectFn<Generation::Old>()
+{
+    static auto fn = reinterpret_cast<ProductMarkObject<Generation::Old>>(dlsym(
+        ProductRuntimeHandle(),
+        "_ZN12MapleRuntime10RegionInfo10MarkObjectILNS_10GenerationE1EEEbNS_8MarkViewIXT_EEEPKNS_10BaseObjectEmb"));
+    return fn;
+}
+
+using ProductClearLiveInfo = void (*)(RegionInfo*, MarkView<Generation::Young>);
+using ProductPreserveRetained = void (*)(RegionInfo*);
+using ProductBumpEpoch = void (*)(RegionInfo*);
+
+ProductClearLiveInfo ProductClearLiveInfoFn()
+{
+    static auto fn = reinterpret_cast<ProductClearLiveInfo>(dlsym(
+        ProductRuntimeHandle(),
+        "_ZN12MapleRuntime10RegionInfo13ClearLiveInfoILNS_10GenerationE0EEEvNS_8MarkViewIXT_EEE"));
+    return fn;
+}
+
+ProductPreserveRetained ProductPreserveRetainedFn()
+{
+    static auto fn = reinterpret_cast<ProductPreserveRetained>(dlsym(
+        ProductRuntimeHandle(), "_ZN12MapleRuntime10RegionInfo24PreserveRetainedLiveInfoEv"));
+    return fn;
+}
+
+ProductBumpEpoch ProductBumpEpochFn()
+{
+    static auto fn = reinterpret_cast<ProductBumpEpoch>(dlsym(
+        ProductRuntimeHandle(), "_ZN12MapleRuntime10RegionInfo31BumpSnapshotEpochFromInitRegionEv"));
+    return fn;
+}
+
+} // namespace
 
 // Port of test_zLiveMap.cpp's one-object large-page invariant onto the
 // Cangjie RegionBitmap representation.  The first mark makes the only object
@@ -111,7 +193,7 @@ GC_TEST(LiveMap, RetainedCaptureUnionsYoungFaceBeforePromotion)
     size_t holderOffset = region->GetAddressOffset(reinterpret_cast<MAddress>(fx.obj0));
     (void)youngBitmap->MarkBits(holderOffset, 8, region->GetRegionSize());
 
-    region->PreserveRetainedLiveInfo();
+    ProductPreserveRetainedFn()(region);
     GC_EXPECT_TRUE(region->HasRetainedMarkWords());
     GC_EXPECT_TRUE(region->RetainedMarkWordsSay(holderOffset));
 
@@ -141,7 +223,7 @@ GC_TEST(LiveMap, RetainedCaptureSkipsYoungFaceAfterForwardingDone)
     (void)youngBitmap->MarkBits(holderOffset, 8, region->GetRegionSize());
 
     region->MarkForwardingDone();
-    region->PreserveRetainedLiveInfo();
+    ProductPreserveRetainedFn()(region);
     GC_EXPECT_FALSE(region->RetainedMarkWordsSay(holderOffset));
 
     region->FreeRetainedMarkWords();
@@ -149,99 +231,75 @@ GC_TEST(LiveMap, RetainedCaptureSkipsYoungFaceAfterForwardingDone)
     fx.FreePlanted(live);
 }
 
-// Relocsel's unselected-page arm may carry a live-byte census without a
-// current mark face.  The bounded preserve records that this page was not
-// examined instead of applying PreserveRetainedLiveInfo's examined-page CHECK.
-GC_TEST(LiveMap, UnexaminedRelocselPageKeepsWithoutSnapshot)
+// A forwarding completion from the previous face may still be visible while
+// the next mark cycle publishes a new current face.  The product sequence
+// below (publish carrier → complete/reset forwarding → clear/mark next face)
+// must retain that new face rather than treating the stale done bit as a FROM
+// copy indicator.
+GC_TEST(LiveMap, RetainedCaptureKeepsCurrentYoungFaceAfterStaleForwardingDone)
 {
     GcHeapFixture fx;
     RegionInfo* region = fx.region0;
+    region->SetYoungRegionFlag(1);
     region->SetRegionType(RegionInfo::RegionType::UNMOVABLE_FROM_REGION);
-    region->AddLiveByteCount(64);
-    GC_EXPECT_FALSE(region->HasEverPreservedRetainedLiveInfo());
-    region->PreserveRetainedLiveInfoUpTo(
-        std::min(region->GetCensusBoundary(), region->GetRegionAllocPtr()));
-    GC_EXPECT_TRUE(region->GetRetainedLiveInfo() == nullptr);
-    GC_EXPECT_FALSE(region->HasEverPreservedRetainedLiveInfo());
-    GC_EXPECT_EQ(static_cast<unsigned>(region->GetRetainedLiveInfoState()),
-                 static_cast<unsigned>(RegionInfo::RetainedLiveInfoState::NEVER_EXAMINED));
+    LiveInfo* previous = fx.PlantLiveInfo(region);
+    RegionBitmap* previousBitmap = fx.PlantMarkBitmap<Generation::Young>(previous, region->GetRegionSize());
+    size_t holderOffset = region->GetAddressOffset(reinterpret_cast<MAddress>(fx.obj0));
+    (void)previousBitmap->MarkBits(holderOffset, 8, region->GetRegionSize());
+
+    MarkView<Generation::Young> previousView = region->GetMarkView<Generation::Young>();
+    region->PublishFromPageMetadata(previousView);
+    region->MarkForwardingDone();
+    region->ResetLiveMapAfterForward(previousView);
+
+    // ClearLiveInfo + MarkObject are the product mark-start/current-face path;
+    // no test-only epoch or LiveInfo fields are written here.
+    MarkView<Generation::Young> clearView = region->GetMarkView<Generation::Young>();
+    ProductClearLiveInfoFn()(region, clearView);
+    MarkView<Generation::Young> currentView = region->GetMarkView<Generation::Young>();
+    (void)ProductMarkObjectFn<Generation::Young>()(region, currentView, fx.obj0, 8, true);
+    ProductPreserveRetainedFn()(region);
+    GC_EXPECT_TRUE(region->RetainedMarkWordsSay(holderOffset));
+
+    region->metadata.liveInfo = nullptr;
+    region->RetireFromPageMetadata();
+    region->FreeRetainedMarkWords();
+    fx.FreePlanted(previous);
 }
 
-// Positive control: first publish a valid snapshot, then clear/unbind its
-// borrowed LiveInfo.  The bounded API must retain the examined-then-lost
-// distinction and abort; this is not the initial NEVER_EXAMINED fixture.
-GC_TEST(LiveMap, ExaminedPageWithoutSnapshotStillAborts)
+// Clearing starts a new mark cycle but does not itself publish a current
+// liveness face.  With no MarkObject in that cycle, a stale forwarding-done
+// carrier must not make the previous from-page bits current again.
+GC_TEST(LiveMap, RetainedCaptureRejectsOldFromFaceWhenNewCycleMarksNothing)
 {
     GcHeapFixture fx;
     RegionInfo* region = fx.region0;
+    region->SetYoungRegionFlag(1);
     region->SetRegionType(RegionInfo::RegionType::UNMOVABLE_FROM_REGION);
-    LiveInfo* live = fx.PlantLiveInfo(region);
-    RegionBitmap* bm = fx.PlantMarkBitmap(live, region->GetRegionSize());
-    (void)bm->MarkBits(0, 8, region->GetRegionSize());
-    GC_EXPECT_FALSE(region->HasEverPreservedRetainedLiveInfo());
-    region->PreserveRetainedLiveInfo();
-    GC_EXPECT_TRUE(region->HasEverPreservedRetainedLiveInfo());
-    GC_EXPECT_EQ(static_cast<unsigned>(region->GetRetainedLiveInfoState()),
-                 static_cast<unsigned>(RegionInfo::RetainedLiveInfoState::SNAPSHOT_VALID));
-    // The production unbind path may have no owned carrier (for example
-    // after its arena is retired); exercise that borrowed-pointer loss path
-    // explicitly before CheckAndClearLiveInfo stamps SNAPSHOT_LOST.
-    region->FreeRetainedMarkWords();
-    region->CheckAndClearLiveInfo(live);
-    region->AddLiveByteCount(64);
-    GC_EXPECT_EQ(static_cast<unsigned>(region->GetRetainedLiveInfoState()),
-                 static_cast<unsigned>(RegionInfo::RetainedLiveInfoState::SNAPSHOT_LOST));
-    pid_t pid = fork();
-    GC_EXPECT_TRUE(pid >= 0);
-    if (pid == 0) {
-        region->PreserveRetainedLiveInfoUpTo(
-            std::min(region->GetCensusBoundary(), region->GetRegionAllocPtr()));
-        _exit(0);
-    }
-    int status = 0;
-    GC_EXPECT_TRUE(waitpid(pid, &status, 0) == pid);
-    GC_EXPECT_TRUE(WIFSIGNALED(status));
-    GC_EXPECT_EQ(WTERMSIG(status), SIGABRT);
-    fx.FreePlanted(live);
-}
+    LiveInfo* previous = fx.PlantLiveInfo(region);
+    RegionBitmap* previousBitmap = fx.PlantMarkBitmap<Generation::Young>(previous, region->GetRegionSize());
+    size_t holderOffset = region->GetAddressOffset(reinterpret_cast<MAddress>(fx.obj0));
 
-// Owned-copy positive arm: CheckAndClearLiveInfo deliberately returns early
-// while the private bitmap still carries the valid snapshot.  The following
-// bounded Preserve replaces that owned carrier, finds no current LiveInfo,
-// and must derive LOST from the monotonic ever-preserved bit.
-GC_TEST(LiveMap, OwnedCopyExaminedPageWithoutSnapshotStillAborts)
-{
-    GcHeapFixture fx;
-    RegionInfo* region = fx.region0;
-    region->SetRegionType(RegionInfo::RegionType::UNMOVABLE_FROM_REGION);
-    LiveInfo* live = fx.PlantLiveInfo(region);
-    RegionBitmap* bm = fx.PlantMarkBitmap(live, region->GetRegionSize());
-    (void)bm->MarkBits(0, 8, region->GetRegionSize());
-    GC_EXPECT_FALSE(region->HasEverPreservedRetainedLiveInfo());
-    region->PreserveRetainedLiveInfo();
-    GC_EXPECT_TRUE(region->HasEverPreservedRetainedLiveInfo());
-    GC_EXPECT_TRUE(region->HasRetainedMarkWords());
-    GC_EXPECT_EQ(static_cast<unsigned>(region->GetRetainedLiveInfoState()),
-                 static_cast<unsigned>(RegionInfo::RetainedLiveInfoState::SNAPSHOT_VALID));
+    // Build the old face through the product marker, then carry it through the
+    // real forwarding publication/reset path.  No epoch, flag, from-page or
+    // retained field is written by the test.
+    MarkView<Generation::Young> previousView = region->GetMarkView<Generation::Young>();
+    GC_EXPECT_FALSE(ProductMarkObjectFn<Generation::Young>()(region, previousView, fx.obj0, 8, true));
+    GC_EXPECT_TRUE(previousBitmap->IsMarked(holderOffset));
+    region->PublishFromPageMetadata(previousView);
+    region->MarkForwardingDone();
+    region->ResetLiveMapAfterForward(previousView);
 
-    region->CheckAndClearLiveInfo(live);
-    GC_EXPECT_TRUE(region->HasRetainedMarkWords());
-    GC_EXPECT_EQ(static_cast<unsigned>(region->GetRetainedLiveInfoState()),
-                 static_cast<unsigned>(RegionInfo::RetainedLiveInfoState::SNAPSHOT_VALID));
-    region->AddLiveByteCount(64);
-    pid_t pid = fork();
-    GC_EXPECT_TRUE(pid >= 0);
-    if (pid == 0) {
-        region->PreserveRetainedLiveInfoUpTo(
-            std::min(region->GetCensusBoundary(), region->GetRegionAllocPtr()));
-        _exit(0);
-    }
-    int status = 0;
-    GC_EXPECT_TRUE(waitpid(pid, &status, 0) == pid);
-    GC_EXPECT_TRUE(WIFSIGNALED(status));
-    GC_EXPECT_EQ(WTERMSIG(status), SIGABRT);
+    MarkView<Generation::Young> clearView = region->GetMarkView<Generation::Young>();
+    ProductClearLiveInfoFn()(region, clearView);
+    // Deliberately no MarkObject: the new cycle has zero first paint.
+    ProductPreserveRetainedFn()(region);
+    GC_EXPECT_FALSE(region->RetainedMarkWordsSay(holderOffset));
+
+    region->metadata.liveInfo = nullptr;
+    region->RetireFromPageMetadata();
     region->FreeRetainedMarkWords();
-    fx.FreePlanted(live);
+    fx.FreePlanted(previous);
 }
 
 GC_TEST(LiveMap, RetainedCaptureUnionsYoungLargeFlagBeforePromotion)
@@ -256,7 +314,7 @@ GC_TEST(LiveMap, RetainedCaptureUnionsYoungLargeFlagBeforePromotion)
     region->SetRegionAllocPtr(region->GetRegionStart() + 64);
     region->AddLiveByteCount(64);
 
-    region->PreserveRetainedLiveInfo();
+    ProductPreserveRetainedFn()(region);
     GC_EXPECT_TRUE(region->HasRetainedMarkWords());
     GC_EXPECT_TRUE(region->RetainedMarkWordsSay(0));
 
@@ -532,6 +590,58 @@ GC_TEST(LiveMap, CurrentLargePageHasSingleMarkBit)
     GC_EXPECT_EQ(region->GetMarkedRegionFlag(nextYoung), 1u);
     GC_EXPECT_EQ(region->GetMarkedRegionFlag(young), 0u);
     GC_EXPECT_EQ(region->GetMarkedRegionFlag(old), 0u);
+}
+
+// The large-page first paint is a single publication/accounting RMW.  Two
+// concurrent callers therefore have exactly one false (new-mark) result and
+// the live byte book contains the object size once.
+GC_TEST(LiveMap, LargeFirstPaintHasSingleWinner)
+{
+    GcHeapFixture fx;
+    RegionInfo* region = fx.region0;
+    region->SetUnitRole(RegionInfo::UnitRole::LARGE_SIZED_UNITS);
+    region->SetRegionType(RegionInfo::RegionType::LARGE_REGION);
+    BaseObject* holder = fx.PlaceObject(region->GetRegionStart());
+    region->SetRegionAllocPtr(region->GetRegionStart() + holder->GetSize());
+    MarkView<Generation::Old> view = region->GetMarkView<Generation::Old>();
+
+    std::atomic<bool> go { false };
+    std::atomic<int> first { 0 };
+    std::thread t0([&]() {
+        while (!go.load(std::memory_order_acquire)) {
+        }
+        if (!ProductMarkObjectFn<Generation::Old>()(region, view, holder, holder->GetSize(), true)) {
+            first.fetch_add(1, std::memory_order_relaxed);
+        }
+    });
+    std::thread t1([&]() {
+        while (!go.load(std::memory_order_acquire)) {
+        }
+        if (!ProductMarkObjectFn<Generation::Old>()(region, view, holder, holder->GetSize(), true)) {
+            first.fetch_add(1, std::memory_order_relaxed);
+        }
+    });
+    go.store(true, std::memory_order_release);
+    t0.join();
+    t1.join();
+
+    GC_EXPECT_EQ(first.load(std::memory_order_relaxed), 1);
+    GC_EXPECT_EQ(region->GetLiveByteCount(), static_cast<uint64_t>(holder->GetSize()));
+    GC_EXPECT_TRUE(region->IsCurrentFacePublished());
+}
+
+// The tagged generation skips raw zero at its only wrap point, keeping the
+// non-zero publication invariant intact for the following first paint.
+GC_TEST(LiveMap, SnapshotEpochWrapSkipsZero)
+{
+    GcHeapFixture fx;
+    RegionInfo* region = fx.region0;
+    region->metadata.snapshotEpoch = std::numeric_limits<uint64_t>::max() - 1;
+    ProductBumpEpochFn()(region);
+    GC_EXPECT_EQ(region->metadata.snapshotEpoch, 2ULL);
+    GC_EXPECT_EQ(region->GetSnapshotEpoch(), 1ULL);
+    region->PublishCurrentMarkFace();
+    GC_EXPECT_TRUE((region->metadata.snapshotEpoch & 1ULL) != 0);
 }
 
 // markwater: ClearLiveInfo snapshots allocPtr. Objects at offset ≥ water
