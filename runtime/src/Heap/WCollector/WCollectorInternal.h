@@ -39,6 +39,11 @@ extern WCOLLECTOR_INTERNAL_HIDDEN std::atomic<size_t> g_resolveRootEntry;
 extern WCOLLECTOR_INTERNAL_HIDDEN std::atomic<size_t> g_resolveRootOld;
 extern WCOLLECTOR_INTERNAL_HIDDEN std::atomic<size_t> g_resolveRootHealNull;
 extern WCOLLECTOR_INTERNAL_HIDDEN std::atomic<size_t> g_fixMinorRootSlotsCalls;
+// Post-lifecycle forwarding observation on concurrent soft-resolve paths: the
+// carrier retired between slot observation and FindToVersion. Counted, never
+// dereferenced, never CAS-null (zGeneration.cpp:1341-1353 unlink/handshake pair
+// has no equivalent handshake on these paths).
+extern WCOLLECTOR_INTERNAL_HIDDEN std::atomic<size_t> g_findtoPostLifecycleSoft;
 
 WCOLLECTOR_INTERNAL_HIDDEN bool HolderObjectIsLive(BaseObject* holder);
 WCOLLECTOR_INTERNAL_HIDDEN bool SlotHeldByLiveObject(const void* slot);

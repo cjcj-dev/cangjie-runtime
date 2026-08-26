@@ -113,7 +113,10 @@ public:
     void Init() override {}
     void RunGarbageCollection(uint64_t, GCReason) override {}
     bool ShouldIgnoreRequest(GCRequest&) override { return false; }
-    BaseObject* FindToVersion(BaseObject*) const override { return nullptr; }
+    FindToVersionResult FindToVersion(BaseObject*) const override
+    {
+        return FindToVersionResult::NotForwarded();
+    }
     bool TryUpdateRefField(BaseObject*, RefField<>&, BaseObject*&) const override { return false; }
     bool IsOldPointer(RefField<>&) const override { return false; }
     RefField<> GetAndTryTagRefField(BaseObject* obj) const override

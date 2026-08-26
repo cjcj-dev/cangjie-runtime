@@ -5,8 +5,11 @@
 // See https://cangjie-lang.cn/pages/LICENSE for license information.
 
 #include <atomic>
+#include <chrono>
+#include <condition_variable>
 #include <cstring>
 #include <dlfcn.h>
+#include <mutex>
 #include <thread>
 
 #include "gc_heap_fixture.hpp"
@@ -59,9 +62,9 @@ struct RelocationReceiptTestAccess {
         return result;
     }
 
-    static BaseObject* ProductFindToVersion(WCollector& collector, BaseObject* from)
+    static FindToVersionResult ProductFindToVersion(WCollector& collector, BaseObject* from)
     {
-        using ProductFn = BaseObject* (*)(const WCollector*, BaseObject*);
+        using ProductFn = FindToVersionResult (*)(const WCollector*, BaseObject*);
         void* handle = dlopen("libcangjie-runtime.so", RTLD_NOW | RTLD_NOLOAD);
         GC_EXPECT_TRUE(handle != nullptr);
         void* symbol = handle == nullptr ? nullptr : dlsym(
@@ -70,8 +73,12 @@ struct RelocationReceiptTestAccess {
         Dl_info info {};
         GC_EXPECT_TRUE(symbol != nullptr && dladdr(symbol, &info) != 0 && info.dli_fname != nullptr &&
                        std::strstr(info.dli_fname, "libcangjie-runtime.so") != nullptr);
-        BaseObject* result =
-            symbol == nullptr ? nullptr : reinterpret_cast<ProductFn>(symbol)(&collector, from);
+        if (info.dli_fname != nullptr) {
+            std::fprintf(stderr, "FINDTO_PRODUCT_SO=%s\n", info.dli_fname);
+        }
+        FindToVersionResult result = symbol == nullptr
+            ? FindToVersionResult::NotManaged()
+            : reinterpret_cast<ProductFn>(symbol)(&collector, from);
         if (handle != nullptr) {
             (void)dlclose(handle);
         }
@@ -241,8 +248,10 @@ GC_TEST(ForwardingPublicationProduct, LateFindToVersionCannotReopenSealedGenerat
     LateBackfillState state = PrepareLateBackfill(fx, collector);
     ForwardingTable::ClearEntries(state.region->GetRegionStart(), state.region->GetRegionSize());
 
-    BaseObject* resolved = RelocationReceiptTestAccess::ProductFindToVersion(collector, state.from);
-    GC_EXPECT_TRUE(resolved == nullptr);
+    FindToVersionResult resolved = RelocationReceiptTestAccess::ProductFindToVersion(collector, state.from);
+    // The sealed generation still carries a FORWARDED from-object but has no
+    // mapping. ZGC treats this as an assertion state, not an ordinary miss.
+    GC_EXPECT_TRUE(resolved.state() == FindToVersionResult::State::Unavailable);
     GC_EXPECT_TRUE(ForwardingTable::GetEntries(reinterpret_cast<MAddress>(state.from)) == nullptr);
     ForwardingTable::Publication late =
         ForwardingTable::RetainOpenPublicationAfterCopy(state.region, reinterpret_cast<MAddress>(state.from));
@@ -251,6 +260,166 @@ GC_TEST(ForwardingPublicationProduct, LateFindToVersionCannotReopenSealedGenerat
     CleanupLateBackfill(fx, state);
     RelocationReceiptTestAccess::BindCollector(Heap::GetHeap().GetCollectorResources(), nullptr);
 }
+
+GC_OTHER_VM_TEST(FindToPublicState, NotManagedIsObservable)
+{
+    WCollector collector(Heap::GetHeap().GetAllocator(), Heap::GetHeap().GetCollectorResources());
+    FindToVersionResult result = RelocationReceiptTestAccess::ProductFindToVersion(collector, nullptr);
+    GC_EXPECT_TRUE(result.state() == FindToVersionResult::State::NotManaged);
+    GC_EXPECT_TRUE(result.found() == nullptr);
+}
+
+GC_OTHER_VM_TEST(FindToPublicState, QueryableMissIsObservable)
+{
+    GcHeapFixture& fx = ProductFixture();
+    RegionInfo* region = fx.region0;
+    BaseObject* from = fx.PlaceObject(region->GetRegionStart() + 64);
+    region->SetRegionType(RegionInfo::RegionType::THREAD_LOCAL_REGION);
+    region->SetRegionAllocPtr(reinterpret_cast<MAddress>(from) + from->GetSize());
+    WCollector collector(Heap::GetHeap().GetAllocator(), Heap::GetHeap().GetCollectorResources());
+    RelocationReceiptTestAccess::BindCollector(Heap::GetHeap().GetCollectorResources(), &collector);
+    LiveInfo* live = PrepareForwardable(fx, region, reinterpret_cast<MAddress>(from));
+
+    GC_EXPECT_EQ(ForwardingTable::ArmedMissCount(), static_cast<uint64_t>(0));
+    GC_EXPECT_EQ(ForwardingTable::UnavailableCount(), static_cast<uint64_t>(0));
+    FindToVersionResult result = RelocationReceiptTestAccess::ProductFindToVersion(collector, from);
+    GC_EXPECT_TRUE(result.state() == FindToVersionResult::State::NotForwarded);
+    GC_EXPECT_EQ(ForwardingTable::ArmedMissCount(), static_cast<uint64_t>(1));
+    GC_EXPECT_EQ(ForwardingTable::UnavailableCount(), static_cast<uint64_t>(0));
+
+    RelocationReceiptTestAccess::BindCollector(Heap::GetHeap().GetCollectorResources(), nullptr);
+    ForwardingTable::ClearEntries(region->GetRegionStart(), region->GetRegionSize());
+    ForwardingTable::DropRetiredCovering(region->GetRegionStart(), region->GetRegionSize());
+    region->metadata.liveInfo = nullptr;
+    fx.FreePlanted(live);
+}
+
+GC_OTHER_VM_TEST(FindToPublicState, UnavailableIsObservable)
+{
+    GcHeapFixture& fx = ProductFixture();
+    RegionInfo* region = fx.region0;
+    BaseObject* from = fx.PlaceObject(region->GetRegionStart() + 64);
+    region->SetRegionType(RegionInfo::RegionType::THREAD_LOCAL_REGION);
+    region->SetRegionAllocPtr(reinterpret_cast<MAddress>(from) + from->GetSize());
+    WCollector collector(Heap::GetHeap().GetAllocator(), Heap::GetHeap().GetCollectorResources());
+    RelocationReceiptTestAccess::BindCollector(Heap::GetHeap().GetCollectorResources(), &collector);
+    LiveInfo* live = PrepareForwardable(fx, region, reinterpret_cast<MAddress>(from));
+    ForwardingTable::ClearEntries(region->GetRegionStart(), region->GetRegionSize());
+    ForwardingTable::DropRetiredCovering(region->GetRegionStart(), region->GetRegionSize());
+
+    GC_EXPECT_EQ(ForwardingTable::ArmedMissCount(), static_cast<uint64_t>(0));
+    GC_EXPECT_EQ(ForwardingTable::UnavailableCount(), static_cast<uint64_t>(0));
+    FindToVersionResult result = RelocationReceiptTestAccess::ProductFindToVersion(collector, from);
+    GC_EXPECT_TRUE(result.state() == FindToVersionResult::State::Unavailable);
+    GC_EXPECT_EQ(ForwardingTable::ArmedMissCount(), static_cast<uint64_t>(0));
+    GC_EXPECT_EQ(ForwardingTable::UnavailableCount(), static_cast<uint64_t>(1));
+
+    RelocationReceiptTestAccess::BindCollector(Heap::GetHeap().GetCollectorResources(), nullptr);
+    region->metadata.liveInfo = nullptr;
+    fx.FreePlanted(live);
+}
+
+#if defined(MRT_TESTABLE_INTERNALS) && defined(MRT_FINDTO_RETAIN_TEST)
+struct RetainWindowState {
+    std::mutex mutex;
+    std::condition_variable cv;
+    bool lookupRetained = false;
+    bool releaseLookup = false;
+    bool clearStarted = false;
+    bool clearDone = false;
+};
+
+void HoldRetainedLookup(void* context)
+{
+    auto& state = *static_cast<RetainWindowState*>(context);
+    std::unique_lock<std::mutex> lock(state.mutex);
+    state.lookupRetained = true;
+    state.cv.notify_all();
+    state.cv.wait(lock, [&state]() { return state.releaseLookup; });
+}
+
+// The hook setter is a testability export that only exists when the product SO
+// itself was compiled with MRT_TESTABLE_INTERNALS. Bind it at runtime (same
+// pattern as test_live_map.cpp) so this TU keeps linking against the default
+// OFF product, where the guarded block below is compiled out anyway.
+using ProductSetLookupRetainHook = void (*)(void (*)(void*), void*);
+
+static ProductSetLookupRetainHook ProductSetLookupRetainHookFn()
+{
+    void* handle = dlopen("libcangjie-runtime.so", RTLD_NOW | RTLD_NOLOAD);
+    if (handle == nullptr) {
+        handle = dlopen("libcangjie-runtime.so", RTLD_NOW);
+    }
+    GC_EXPECT_TRUE(handle != nullptr);
+    auto fn = reinterpret_cast<ProductSetLookupRetainHook>(
+        dlsym(handle, "_ZN12MapleRuntime15ForwardingTable19SetLookupRetainHookEPFvPvES1_"));
+    // This test is the positive retain-window arm.  A product built without
+    // the test hook is not a passing observation; it is a missing precondition.
+    GC_EXPECT_TRUE(fn != nullptr);
+    return fn;
+}
+
+GC_OTHER_VM_TEST(FindToRetainWindow, ActiveLookupPinsCarrierUntilQueryReturns)
+{
+    GcHeapFixture& fx = ProductFixture();
+    RegionInfo* region = fx.region0;
+    WCollector collector(Heap::GetHeap().GetAllocator(), Heap::GetHeap().GetCollectorResources());
+    RelocationReceiptTestAccess::BindCollector(Heap::GetHeap().GetCollectorResources(), &collector);
+    ProductSetLookupRetainHook setHook = ProductSetLookupRetainHookFn();
+    BaseObject* from = fx.PlaceObject(region->GetRegionStart() + 64);
+    region->SetRegionType(RegionInfo::RegionType::THREAD_LOCAL_REGION);
+    region->SetRegionAllocPtr(reinterpret_cast<MAddress>(from) + from->GetSize());
+    LiveInfo* live = PrepareForwardable(fx, region, reinterpret_cast<MAddress>(from));
+    RetainWindowState state;
+    setHook(HoldRetainedLookup, &state);
+    FindToVersionResult queryResult = FindToVersionResult::NotManaged();
+
+    std::thread query([&]() {
+        queryResult = RelocationReceiptTestAccess::ProductFindToVersion(collector, from);
+    });
+    {
+        std::unique_lock<std::mutex> lock(state.mutex);
+        // Bounded: if the product never pins the carrier (retain pin cut), the
+        // hook never fires and this must fail here, not hang.
+        const bool pinned = state.cv.wait_for(lock, std::chrono::seconds(10),
+                                              [&state]() { return state.lookupRetained; });
+        GC_EXPECT_TRUE(pinned);
+    }
+    std::thread clear([&]() {
+        {
+            std::lock_guard<std::mutex> lock(state.mutex);
+            state.clearStarted = true;
+            state.cv.notify_all();
+        }
+        ForwardingTable::ClearEntries(region->GetRegionStart(), region->GetRegionSize());
+        {
+            std::lock_guard<std::mutex> lock(state.mutex);
+            state.clearDone = true;
+            state.cv.notify_all();
+        }
+    });
+    {
+        std::unique_lock<std::mutex> lock(state.mutex);
+        state.cv.wait(lock, [&state]() { return state.clearStarted; });
+        GC_EXPECT_FALSE(state.cv.wait_for(
+            lock, std::chrono::milliseconds(100), [&state]() { return state.clearDone; }));
+        state.releaseLookup = true;
+        state.cv.notify_all();
+    }
+    query.join();
+    clear.join();
+    setHook(nullptr, nullptr);
+    // A carrier that was present in the active slot but refused retain is a
+    // lifecycle failure, not an ordinary armed miss (ForwardingTable.cpp:896).
+    GC_EXPECT_TRUE(queryResult.state() == FindToVersionResult::State::Unavailable);
+    GC_EXPECT_TRUE(state.clearDone);
+
+    RelocationReceiptTestAccess::BindCollector(Heap::GetHeap().GetCollectorResources(), nullptr);
+    ForwardingTable::DropRetiredCovering(region->GetRegionStart(), region->GetRegionSize());
+    region->metadata.liveInfo = nullptr;
+    fx.FreePlanted(live);
+}
+#endif
 
 GC_TEST(ForwardingPublicationProduct, ClearEntriesRetiresAndDropsWholeSpan)
 {

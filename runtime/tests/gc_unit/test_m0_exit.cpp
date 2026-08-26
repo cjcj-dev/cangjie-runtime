@@ -7,9 +7,12 @@
 // collector answer so no workload sampling is involved.
 
 #include <cstring>
+#include <csignal>
 #include <dlfcn.h>
 #include <mutex>
 #include <sstream>
+#include <sys/wait.h>
+#include <unistd.h>
 
 #include "gc_heap_fixture.hpp"
 
@@ -145,7 +148,10 @@ public:
     void Init() override {}
     void RunGarbageCollection(uint64_t, GCReason) override {}
     bool ShouldIgnoreRequest(GCRequest&) override { return false; }
-    BaseObject* FindToVersion(BaseObject*) const override { return answer; }
+    FindToVersionResult FindToVersion(BaseObject*) const override
+    {
+        return answer == nullptr ? FindToVersionResult::NotForwarded() : FindToVersionResult::Found(answer);
+    }
     bool TryUpdateRefField(BaseObject*, RefField<>&, BaseObject*&) const override { return false; }
     bool IsOldPointer(RefField<>&) const override { return false; }
     bool IsFromObject(BaseObject*) const override { return false; }
@@ -514,21 +520,25 @@ GC_OTHER_VM_TEST(M0Exit, RootFixRuntimeEnumerationClassifiesNoCopyAsS0)
                  reinterpret_cast<uintptr_t>(fx.heap.obj0));
 }
 
-GC_OTHER_VM_TEST(M0Exit, RootFixRuntimeEnumerationClassifiesPublishedCopyAsS1)
+GC_OTHER_VM_TEST(M0Exit, RootFixRuntimeEnumerationFailsClosedWithoutPublishedMapping)
 {
     RootEntryFixture fx;
     std::memcpy(fx.heap.obj1, fx.heap.obj0, fx.heap.obj0->GetSize());
     fx.heap.obj0->SetStateCode(ObjectState::FORWARDED);
-    const M0ExitDiagnostics::Counts before = M0ExitDiagnostics::GetCounts();
+    GC_EXPECT_TRUE(fx.collector.FindToVersion(fx.heap.obj0).state() ==
+                   FindToVersionResult::State::Unavailable);
 
-    fx.collector.FixMinorRootSlots(nullptr);
-
-    const M0ExitDiagnostics::Counts after = M0ExitDiagnostics::GetCounts();
-    GC_EXPECT_EQ(after.total, before.total + 1);
-    GC_EXPECT_EQ(after.s1, before.s1 + 1);
-    GC_EXPECT_EQ(after.rootFix, before.rootFix + 1);
-    GC_EXPECT_EQ(static_cast<uintptr_t>(raw(fx.root.LoadPlain())),
-                 reinterpret_cast<uintptr_t>(fx.heap.obj0));
+    const pid_t child = fork();
+    GC_EXPECT_TRUE(child >= 0);
+    if (child == 0) {
+        (void)signal(SIGABRT, SIG_DFL);
+        fx.collector.FixMinorRootSlots(nullptr);
+        _exit(0);
+    }
+    int status = 0;
+    GC_EXPECT_EQ(waitpid(child, &status, 0), child);
+    GC_EXPECT_TRUE(WIFSIGNALED(status));
+    GC_EXPECT_EQ(WTERMSIG(status), SIGABRT);
 }
 
 GC_OTHER_VM_TEST(M0Exit, RootFixClassifiesActiveOnlyUnusableCopyAsS1)

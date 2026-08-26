@@ -869,7 +869,11 @@ static inline void NoteHandedOut(BaseObject* target, BaseObject* holder, const R
     //                         bits left in re-used memory -- a different defect, and one that
     //                         SetTypeInfo cannot clear because it writes only typeInfoLow32 /
     //                         typeInfoHigh16 and never touches objectState (StateWord.h:106-116)
-    const bool hasTo = (collector.FindToVersion(target) != nullptr);
+    // This is a diagnostic observer, not a product consumer. It must not turn
+    // an Unavailable observation into process termination; the read-barrier
+    // consumer below owns the fail-closed decision.
+    const FindToVersionResult observed = collector.FindToVersion(target);
+    const bool hasTo = observed.found() != nullptr;
     // Attributes the hand-out to a code path. ForwardBarrier's unmovable arm hands
     // `oldTarget` back and self-heals the slot load-good without resolving it.
     const bool unmov = collector.IsUnmovableFromObject(target);
@@ -996,7 +1000,8 @@ BaseObject* Barrier::ResolveFromCopyForMutator(BaseObject* target) const
     if (JudgeTarget(target) == TargetVerdict::Usable) {
         return target;
     }
-    BaseObject* to = theCollector.FindToVersion(target);
+    BaseObject* to =
+        theCollector.FindToVersion(target).GetOrFailClosed("Barrier::ResolveFromCopyForMutator");
     if (to != nullptr && to != target) {
         return to;
     }
@@ -1036,7 +1041,8 @@ BaseObject* Barrier::ReadReference(BaseObject* obj, RefField<false>& field) cons
         if (kStaleGuard) {
             const TargetVerdict verdict = JudgeTarget(handed);
             if (verdict != TargetVerdict::Usable) {
-                BaseObject* resolved = theCollector.FindToVersion(handed);
+                BaseObject* resolved =
+                    theCollector.FindToVersion(handed).GetOrFailClosed("Barrier::ReadReference");
                 ZgcInvariants::NoteStaleGuardFired(verdict == TargetVerdict::ZeroHeader, resolved != nullptr, handed,
                                                    obj, &field);
                 if (resolved != nullptr && resolved != handed) {

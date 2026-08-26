@@ -200,7 +200,7 @@ bool WCollector::TryUpdateRefFieldImpl(BaseObject* obj, RefField<>& field, BaseO
         if (forward) {
             toObj = const_cast<WCollector*>(this)->TryForwardObject(fromObj);
         } else {
-            toObj = FindToVersion(fromObj);
+            toObj = FindToVersion(fromObj).GetOrFailClosed("WCollector::TryUpdateRefFieldImpl");
         }
         if (toObj == nullptr) {
             return false;
@@ -773,7 +773,20 @@ BaseObject* WCollector::ResolveMinorReference(RefField<>& field, const ScopedSto
                                               bool* preservedByCurrentRoot) const
 {
     auto plannedTo = [this, stw](BaseObject* from) -> BaseObject* {
-        return stw != nullptr ? PlanRouteUnderStw(from, *stw).dest : FindToVersion(from);
+        if (stw != nullptr) {
+            return PlanRouteUnderStw(from, *stw).dest;
+        }
+        FindToVersionResult resolved = FindToVersion(from);
+        if (resolved.is_unavailable()) {
+            // This is one of the three deliberate non-dereference consumers:
+            // a concurrent remembered-slot scan may observe a carrier retiring
+            // between slot observation and this query.  Unavailable therefore
+            // has one strategy here—drop this scan item, leave the slot
+            // untouched, and never hand the answer to object-field access.
+            g_findtoPostLifecycleSoft.fetch_add(1, std::memory_order_relaxed);
+            return nullptr;
+        }
+        return resolved.GetOrFailClosed("WCollector::ResolveMinorReference.field");
     };
 
     RefField<> value(field);
@@ -967,7 +980,18 @@ static void NoteRootGateRefusal(const RootSlot& root, BaseObject* from, BaseObje
 BaseObject* WCollector::ResolveMinorReference(RootSlot& root, const ScopedStopTheWorld* stw) const
 {
     auto plannedTo = [this, stw](BaseObject* from) -> BaseObject* {
-        return stw != nullptr ? PlanRouteUnderStw(from, *stw).dest : FindToVersion(from);
+        if (stw != nullptr) {
+            return PlanRouteUnderStw(from, *stw).dest;
+        }
+        FindToVersionResult resolved = FindToVersion(from);
+        if (resolved.is_unavailable()) {
+            // Root-slot scan counterpart of the field scan above.  No object
+            // field is dereferenced on this branch; the root remains pending
+            // for the owning pass rather than being converted to a value.
+            g_findtoPostLifecycleSoft.fetch_add(1, std::memory_order_relaxed);
+            return nullptr;
+        }
+        return resolved.GetOrFailClosed("WCollector::ResolveMinorReference.root");
     };
 
     zaddress_unsafe observed = root.LoadPlain();
@@ -1253,7 +1277,8 @@ bool WCollector::FixMinorEvacuatedSlot(RootSlot& root, const ScopedStopTheWorld*
         // I2: Forward miss still consults FindToVersion/receipt. Stale miss
         // refuses silently leaving from (seqnum-bounded table already rejects
         // expired entries). ⛔ Do not reinstall from; ⛔ do not StorePlain(null).
-        BaseObject* viaTable = FindToVersion(target);
+        BaseObject* viaTable =
+            FindToVersion(target).GetOrFailClosed("WCollector::FixMinorEvacuatedSlot");
         if (viaTable != nullptr && viaTable != target && Heap::IsHeapAddress(viaTable) &&
             viaTable->IsValidObject()) {
             HealRootWriteback(root, viaTable, HealSite::WCollectorFixRootForwarded);
@@ -2555,11 +2580,6 @@ BaseObject* WCollector::ResolveStoreValue(BaseObject* ref) const
     // color_store_good includes remap. A movable ghost-from value must go
     // through the same relocate_or_remap funnel as the load barrier
     // (zRelocate.cpp:382-416) before it is painted store-good.
-    // Flip false for the perturbation SO (W1 returns, crash returns).
-    static constexpr bool kResolveStoreValue = true;
-    if constexpr (!kResolveStoreValue) {
-        return ref;
-    }
     if (ref == nullptr || !Heap::IsHeapAddress(ref)) {
         return ref;
     }
@@ -2571,7 +2591,7 @@ BaseObject* WCollector::ResolveStoreValue(BaseObject* ref) const
         // keeps the value for ColourStaleLoadBad — never null, never store-good.
         RegionInfo* live = RegionInfo::TryGetRegionInfoAt(fromAddr);
         if (ghost == nullptr && (live == nullptr || live->IsFreeRegion())) {
-            BaseObject* retired = FindToVersion(ref);
+            BaseObject* retired = FindToVersion(ref).GetOrFailClosed("WCollector::ResolveStoreValue");
             if (retired != nullptr) {
                 return retired;
             }
@@ -2651,7 +2671,7 @@ BaseObject* WCollector::TryForwardObject(BaseObject* obj)
             if (retainedPhase != GCPhase::GC_PHASE_PREFORWARD &&
                 retainedPhase != GCPhase::GC_PHASE_FORWARD) {
                 region->UnlockReadFromRegion();
-                return FindToVersion(obj);
+                return FindToVersion(obj).GetOrFailClosed("WCollector::TryForwardObject.phase");
             }
             BaseObject* toVersion = ForwardObjectImpl(obj, region);
             region->UnlockReadFromRegion();
@@ -2662,10 +2682,10 @@ BaseObject* WCollector::TryForwardObject(BaseObject* obj)
         // Our n<0 refusal is immediate (the caller may already hold an outer pin),
         // so a table miss is allowed here. Returning null makes ForwardRegion's
         // receipt audit keep the page instead of spinning outside a safepoint.
-        return FindToVersion(obj);
+        return FindToVersion(obj).GetOrFailClosed("WCollector::TryForwardObject.retain");
     } else if (region->IsCompacted()) {
         // Compact copies under region write-lock before COMPACTED is published.
-        return FindToVersion(obj);
+        return FindToVersion(obj).GetOrFailClosed("WCollector::TryForwardObject.compacted");
     }
     return nullptr;
 }
