@@ -114,7 +114,7 @@ std::set<size_t> OnSet(Slot* addr, size_t length)
 
 std::set<size_t> ExpectSame(Slot* addr, size_t length)
 {
-    const MAddress savedStart = Heap::heapStartAddr;
+    const MAddress savedStart = Heap::GetHeapStartAddress();
     const MAddress savedEnd = Heap::heapCurrentEnd;
     const MAddress lo = AlignDown(reinterpret_cast<MAddress>(addr),
                                   static_cast<MAddress>(MarkPartialArray::MIN_SIZE));
@@ -163,7 +163,7 @@ GC_TEST(PartialArray, EncodeDecodeRoundtrip)
 {
     GcHeapFixture fx;
     SlotBuf buf(MarkPartialArray::MIN_LENGTH);
-    const MAddress savedStart = Heap::heapStartAddr;
+    const MAddress savedStart = Heap::GetHeapStartAddress();
     const MAddress savedEnd = Heap::heapCurrentEnd;
     Heap::OnHeapCreated(reinterpret_cast<MAddress>(buf.slots));
     Heap::OnHeapExtended(reinterpret_cast<MAddress>(buf.slots) + buf.bytes);
@@ -197,7 +197,7 @@ GC_TEST(PartialArray, PageOffsetChunkRoundtrips)
 {
     GcHeapFixture fx;
     SlotBuf buf(MarkPartialArray::MIN_LENGTH * 4);
-    const MAddress savedStart = Heap::heapStartAddr;
+    const MAddress savedStart = Heap::GetHeapStartAddress();
     const MAddress savedEnd = Heap::heapCurrentEnd;
     Heap::OnHeapCreated(reinterpret_cast<MAddress>(buf.slots));
     Heap::OnHeapExtended(reinterpret_cast<MAddress>(buf.slots) + buf.bytes);
@@ -219,6 +219,44 @@ GC_TEST(PartialArray, PageOffsetChunkRoundtrips)
     Heap::OnHeapCreated(savedStart);
     Heap::OnHeapExtended(savedEnd);
 }
+
+#ifdef MRT_TESTABLE_INTERNALS
+GC_TEST(PartialArray, EncodableRejectsAbsoluteOnlyAlignment)
+{
+    // B=4097/A=8192 is the minimal counterexample to an absolute-alignment
+    // predicate: A is page aligned, but (A-B)=4095 is not.
+    const MAddress savedStart = Heap::GetHeapStartAddress();
+    const MAddress savedEnd = Heap::heapCurrentEnd;
+    Heap::SetHeapStartForTesting(static_cast<MAddress>(4097));
+    GC_EXPECT_TRUE((static_cast<MAddress>(8192) & (MarkPartialArray::MIN_SIZE - 1)) == 0);
+    GC_EXPECT_TRUE((Heap::GetHeapStartAddress() & (MarkPartialArray::MIN_SIZE - 1)) != 0);
+    GC_EXPECT_FALSE(MarkPartialArray::Encodable(reinterpret_cast<const void*>(8192),
+                                                 MarkPartialArray::MIN_LENGTH));
+    Heap::SetHeapStartForTesting(savedStart);
+    Heap::OnHeapExtended(savedEnd);
+}
+
+GC_TEST(PartialArray, RelativeBaseRoundtrips)
+{
+    // An arbitrary base is valid when the chunk has the same page phase:
+    // B=4097/A=8193 gives A-B=4096 and must encode/decode exactly.
+    const MAddress savedStart = Heap::GetHeapStartAddress();
+    const MAddress savedEnd = Heap::heapCurrentEnd;
+    Heap::SetHeapStartForTesting(static_cast<MAddress>(4097));
+    constexpr MAddress chunk = 8193;
+    GC_EXPECT_TRUE(MarkPartialArray::Encodable(reinterpret_cast<const void*>(chunk),
+                                                MarkPartialArray::MIN_LENGTH));
+    const MarkStackEntry entry = MarkPartialArray::Encode(
+        reinterpret_cast<const void*>(chunk), MarkPartialArray::MIN_LENGTH);
+    MAddress decoded = 0;
+    size_t decodedLength = 0;
+    MarkPartialArray::Decode(entry, decoded, decodedLength);
+    GC_EXPECT_EQ(decoded, chunk);
+    GC_EXPECT_EQ(decodedLength, MarkPartialArray::MIN_LENGTH);
+    Heap::SetHeapStartForTesting(savedStart);
+    Heap::OnHeapExtended(savedEnd);
+}
+#endif // MRT_TESTABLE_INTERNALS
 
 GC_TEST(PartialArray, EmptyAndSingle)
 {
