@@ -2389,6 +2389,7 @@ void RegionManager::ForwardFromRegions()
         }
         RegionInfo* region = selected.is_request() ? static_cast<RegionInfo*>(selected.request->owner())
                                                    : static_cast<RegionInfo*>(selected.ordinary);
+#if defined(MRT_GCV2_REGION_WAIT_DIAG)
         if (selected.is_request()) {
             static std::atomic<size_t> g_regionWaitClaim{ 0 };
             const size_t n = g_regionWaitClaim.fetch_add(1, std::memory_order_relaxed) + 1;
@@ -2398,24 +2399,24 @@ void RegionManager::ForwardFromRegions()
                     n, reinterpret_cast<void*>(selected.request->from()), relocationRequestQueue.PendingCount());
             }
         }
+#endif
         if (selected.is_request() &&
             !fromRegionList.TryDeleteRegion(region, RegionInfo::RegionType::FROM_REGION,
                                             RegionInfo::RegionType::LONE_FROM_REGION)) {
-            // The request has already been claimed and is no longer on the
-            // worker deque.  An ordinary worker may have won the list race and
-            // will still forward the region; otherwise no consumer can reach
-            // CompleteOwner.  Fail now in either case: WaitUntil has a terminal
-            // escape, and a concurrent publisher simply wins the one-shot
-            // completion race if it got there first.
-            const bool failed = relocationRequestQueue.Fail(selected.request->from());
-            static std::atomic<size_t> g_claimFail{ 0 };
-            const size_t n = g_claimFail.fetch_add(1, std::memory_order_relaxed) + 1;
+            // Claim only removes the handle from the worker deque; byFrom still
+            // owns it. An ordinary worker may already own this region, so do not
+            // publish FAILED here. That worker publishes receipt/pageDone, or
+            // generation close proves that no publisher remains and fails it.
+#if defined(MRT_GCV2_REGION_WAIT_DIAG)
+            static std::atomic<size_t> g_claimLoser{ 0 };
+            const size_t n = g_claimLoser.fetch_add(1, std::memory_order_relaxed) + 1;
             if (n <= 8 || (n & (n - 1)) == 0) {
                 LOG(RTLOG_ERROR,
-                    "[GCV2][region-wait-claim-fail] n=%zu from=%p fail=%u pending=%zu",
-                    n, reinterpret_cast<void*>(selected.request->from()), static_cast<unsigned>(failed),
+                    "[GCV2][region-wait-claim-loser] n=%zu from=%p deferred=1 pending=%zu",
+                    n, reinterpret_cast<void*>(selected.request->from()),
                     relocationRequestQueue.PendingCount());
             }
+#endif
             continue;
         }
         MRT_ASSERT(region->IsValidRegion(), "the head region of fromRegionList is invalid");

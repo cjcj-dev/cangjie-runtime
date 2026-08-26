@@ -139,15 +139,19 @@ GC_TEST(RelocationRequestQueue, PageCompletionTerminatesWaitWithoutObjectReceipt
     std::atomic<bool> pageDone{ false };
     std::atomic<bool> cleanup{ false };
     std::atomic<bool> predicateObserved{ false };
+    std::atomic<MAddress> publishedMapping{ 0 };
+    std::atomic<MAddress> resolvedAfterWait{ 0 };
     std::mutex returnedMutex;
     std::condition_variable returnedCondition;
     bool returned = false;
     std::thread waiter([&]() {
-        queue.WaitUntil(added.request, [&]() {
+        const MAddress receipt = queue.WaitUntil(added.request, [&]() {
             predicateObserved.store(true, std::memory_order_release);
             returnedCondition.notify_one();
             return pageDone.load(std::memory_order_acquire) || cleanup.load(std::memory_order_acquire);
         });
+        resolvedAfterWait.store(receipt != 0 ? receipt : publishedMapping.load(std::memory_order_acquire),
+                                std::memory_order_release);
         {
             std::lock_guard<std::mutex> lock(returnedMutex);
             returned = true;
@@ -165,6 +169,8 @@ GC_TEST(RelocationRequestQueue, PageCompletionTerminatesWaitWithoutObjectReceipt
 
     // Publish page completion only after the waiter has evaluated the predicate
     // false once; otherwise the entry fast path would not exercise the wait.
+    constexpr MAddress kTo = 0xB008;
+    publishedMapping.store(kTo, std::memory_order_release);
     pageDone.store(true, std::memory_order_release);
     returnedLock.lock();
     const bool returnedByPage = returnedCondition.wait_for(
@@ -180,11 +186,36 @@ GC_TEST(RelocationRequestQueue, PageCompletionTerminatesWaitWithoutObjectReceipt
     waiter.join();
 
     GC_EXPECT_TRUE(returnedByPage);
+    GC_EXPECT_EQ(resolvedAfterWait.load(std::memory_order_acquire), kTo);
     if (returnedByPage) {
         GC_EXPECT_TRUE(added.request->state() == RelocationRequestQueue::State::QUEUED);
         GC_EXPECT_EQ(added.request->receipt(), static_cast<MAddress>(0));
         GC_EXPECT_TRUE(queue.Fail(kFrom));
     }
+    GC_EXPECT_TRUE(queue.SynchronizePoll().workersDone);
+}
+
+GC_TEST(RelocationRequestQueue, CompletedReceiptReturnsResultBeforePageCompletion)
+{
+    RelocationRequestQueue queue;
+    queue.BeginWorkers(1);
+    int owner = 0;
+    constexpr MAddress kFrom = 0xB010;
+    constexpr MAddress kTo = 0xC010;
+    const auto added = queue.Add(&owner, kFrom);
+    GC_EXPECT_TRUE(added.accepted);
+
+    // Receipt-first arm: Publish stores the exact to address before the
+    // COMPLETED release. The page deliberately remains incomplete; returning
+    // is correct only if the caller receives that result rather than keeping
+    // from after a second, independently constructed lookup.
+    std::atomic<bool> pageDone{ false };
+    GC_EXPECT_TRUE(queue.Publish(kFrom, kTo));
+    const MAddress result = queue.WaitUntil(
+        added.request, [&]() { return pageDone.load(std::memory_order_acquire); });
+    GC_EXPECT_FALSE(pageDone.load(std::memory_order_acquire));
+    GC_EXPECT_EQ(result, kTo);
+    GC_EXPECT_EQ(added.request->receipt(), kTo);
     GC_EXPECT_TRUE(queue.SynchronizePoll().workersDone);
 }
 
@@ -201,8 +232,11 @@ GC_TEST(RelocationRequestQueue, FailedRequestTerminatesPageWaitWithoutPublicatio
 
     std::atomic<bool> pageDone{ false };
     std::atomic<bool> returned{ false };
+    std::atomic<MAddress> waitResult{ 1 };
     std::thread waiter([&]() {
-        queue.WaitUntil(added.request, [&]() { return pageDone.load(std::memory_order_acquire); });
+        waitResult.store(
+            queue.WaitUntil(added.request, [&]() { return pageDone.load(std::memory_order_acquire); }),
+            std::memory_order_release);
         returned.store(true, std::memory_order_release);
     });
     JoinGuard waiterGuard(waiter);
@@ -225,6 +259,7 @@ GC_TEST(RelocationRequestQueue, FailedRequestTerminatesPageWaitWithoutPublicatio
     }
     waiter.join();
     GC_EXPECT_TRUE(returnedByFailure);
+    GC_EXPECT_EQ(waitResult.load(std::memory_order_acquire), static_cast<MAddress>(0));
     GC_EXPECT_TRUE(added.request->state() == RelocationRequestQueue::State::FAILED);
     GC_EXPECT_EQ(queue.PendingCount(), static_cast<size_t>(0));
     GC_EXPECT_TRUE(queue.SynchronizePoll().workersDone);
