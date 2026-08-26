@@ -160,6 +160,15 @@ protected:
     // SkipLaunderingHeal may refuse to write from into the slot; the return value
     // still resolves. zBarrier.inline.hpp:294-340 relocate-or-remap then self-heal to.
     BaseObject* ResolveFromCopyForMutator(BaseObject* target) const;
+
+    // loadfc (zBarrier.inline.hpp:294-344): the single mutator load hand-out postcondition.
+    // Postcondition: the returned value is either a verified current version (null / non-heap /
+    // Usable header / resolvable to-version), or the process stops in a controlled, attributable
+    // [LOADFC] abort. Every mutator load exit funnels through this; no exit may return an
+    // unverified non-Usable from-address.
+    BaseObject* FinalizeLoadForMutator(BaseObject* handed, BaseObject* holder, const RefField<false>* field,
+                                       const char* site) const;
+
     // zBarrier.inline.hpp:294-340 make_load_good then mutate the to-address.
     // WriteGenericImpl used to HasRefField the from-copy after ClearUnits.
     BaseObject* RelocateHolderForWrite(BaseObject* obj, void*& fieldPtr) const;

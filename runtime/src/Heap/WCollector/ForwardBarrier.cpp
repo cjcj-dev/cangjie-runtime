@@ -148,10 +148,13 @@ BaseObject* ForwardBarrier::ReadReference(BaseObject* obj, RefField<false>& fiel
                     return resolved;
                 }
                 RefField<> goodField = theCollector.GetAndTryTagRefField(resolved);
-                return ZgcSelfHealLoadGood(field, oldField.GetFieldValue(), goodField.GetFieldValue(),
-                                           HealSite::ForwardReadReference);
+                // loadfc: unified hand-out postcondition before the value leaves.
+                return FinalizeLoadForMutator(
+                    ZgcSelfHealLoadGood(field, oldField.GetFieldValue(), goodField.GetFieldValue(),
+                                        HealSite::ForwardReadReference),
+                    obj, &field, "ForwardBarrier::ReadReference.fast");
             }
-            return resolved;
+            return FinalizeLoadForMutator(resolved, obj, &field, "ForwardBarrier::ReadReference.fast");
         }
 
 
@@ -190,7 +193,8 @@ BaseObject* ForwardBarrier::ReadReference(BaseObject* obj, RefField<false>& fiel
         loadGood = ZgcSelfHealLoadGood(field, oldField.GetFieldValue(), goodField.GetFieldValue(),
                                        HealSite::ForwardReadReference);
         NoteZeroHeaderTarget("ForwardRead.healed", field, obj, loadGood, oldTarget, zhSteps);
-        return loadGood;
+        // loadfc: unified hand-out postcondition before the value leaves.
+        return FinalizeLoadForMutator(loadGood, obj, &field, "ForwardBarrier::ReadReference.slow");
     }
 }
 
@@ -225,7 +229,9 @@ BaseObject* ForwardBarrier::AtomicReadReference(BaseObject* obj, RefField<true>&
 
             }
             DLOG(FBARRIER, "atomic read obj %p ref@%p: %#zx -> %p", obj, &field, raw(oldField.GetFieldValue()), oldTarget);
-            return oldTarget;
+            // loadfc: atomic fast path has no other guard; the outer Barrier exit also checks,
+            // but bulk/inner callers reach this return directly.
+            return FinalizeLoadForMutator(oldTarget, obj, nullptr, "ForwardBarrier::AtomicReadReference");
         }
 
 
@@ -252,8 +258,10 @@ BaseObject* ForwardBarrier::AtomicReadReference(BaseObject* obj, RefField<true>&
         RefField<> goodField = theCollector.GetAndTryTagRefField(loadGood);
         // Replaces the old "not old-tag" assertion with the colour-era self-heal invariant.
         DCHECK(theCollector.is_load_good(goodField));
-        return ZgcSelfHealLoadGood(field, oldField.GetFieldValue(), goodField.GetFieldValue(),
-                                   HealSite::ForwardAtomicReadReference);
+        return FinalizeLoadForMutator(ZgcSelfHealLoadGood(field, oldField.GetFieldValue(),
+                                                          goodField.GetFieldValue(),
+                                                          HealSite::ForwardAtomicReadReference),
+                                      obj, nullptr, "ForwardBarrier::AtomicReadReference.slow");
     }
 }
 
