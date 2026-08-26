@@ -18,12 +18,34 @@
 #include <vector>
 
 #include "Base/Globals.h"
+#include "Heap/Collector/CollectorResources.h"
 #include "Heap/Collector/MarkPartialArray.h"
 #include "gc_heap_fixture.hpp"
+#include "Heap/WCollector/WCollector.h"
 #include "gc_unittest.hpp"
 
 using namespace MapleRuntime;
 using namespace MapleRuntime::GcUnit;
+
+#if defined(MRT_TESTABLE_INTERNALS)
+namespace MapleRuntime {
+
+struct PartialArrayTestAccess {
+    static void Push(const WCollector& collector, RefField<>* addr, size_t length,
+                     TracingCollector::WorkStack& workStack)
+    {
+        collector.PushPartialArray(addr, length, workStack);
+    }
+
+    static void StoreTarget(const WCollector& collector, RefField<>& field, BaseObject* target)
+    {
+        const RefField<> coloured = collector.GetAndTryTagRefField(target);
+        field.StoreColoured(coloured.GetFieldValue());
+    }
+};
+
+} // namespace MapleRuntime
+#endif
 
 namespace {
 
@@ -157,6 +179,75 @@ struct SlotBuf {
     }
 };
 
+#if defined(MRT_TESTABLE_INTERNALS)
+class HeapBaseOverride {
+public:
+    explicit HeapBaseOverride(MAddress base)
+        : savedStart(Heap::GetHeapStartAddress()), savedEnd(Heap::heapCurrentEnd)
+    {
+        Heap::SetHeapStartForTesting(base);
+    }
+
+    ~HeapBaseOverride()
+    {
+        Heap::SetHeapStartForTesting(savedStart);
+        Heap::OnHeapExtended(savedEnd);
+    }
+
+private:
+    MAddress savedStart;
+    MAddress savedEnd;
+};
+
+struct LowAddressSlots {
+    static constexpr size_t PAGE_COUNT = 5;
+
+    void* mem = nullptr;
+
+    LowAddressSlots()
+    {
+        // Keep the arbitrary-base test inside MarkStackEntry's 32-bit page-offset
+        // domain. MAP_FIXED_NOREPLACE preserves unrelated mappings if a candidate
+        // is already occupied.
+        constexpr MAddress candidates[] = {
+            static_cast<MAddress>(0x100000000ULL),
+            static_cast<MAddress>(0x200000000ULL),
+            static_cast<MAddress>(0x300000000ULL),
+        };
+        for (MAddress candidate : candidates) {
+            mem = mmap(reinterpret_cast<void*>(candidate), PAGE_COUNT * MarkPartialArray::MIN_SIZE,
+                       PROT_READ | PROT_WRITE,
+                       MAP_PRIVATE | MAP_ANONYMOUS | MAP_FIXED_NOREPLACE, -1, 0);
+            if (mem != MAP_FAILED) {
+                break;
+            }
+        }
+        if (mem == MAP_FAILED) {
+            std::abort();
+        }
+        std::memset(mem, 0, PAGE_COUNT * MarkPartialArray::MIN_SIZE);
+    }
+
+    ~LowAddressSlots()
+    {
+        if (mem != nullptr && mem != MAP_FAILED) {
+            munmap(mem, PAGE_COUNT * MarkPartialArray::MIN_SIZE);
+        }
+    }
+
+    RefField<>* AbsoluteAlignedChunk() const
+    {
+        return reinterpret_cast<RefField<>*>(mem);
+    }
+
+    RefField<>* RelativeAlignedChunk() const
+    {
+        const MAddress chunk = reinterpret_cast<MAddress>(mem) + 2 * MarkPartialArray::MIN_SIZE + 1;
+        return reinterpret_cast<RefField<>*>(chunk);
+    }
+};
+#endif
+
 } // namespace
 
 GC_TEST(PartialArray, EncodeDecodeRoundtrip)
@@ -223,38 +314,51 @@ GC_TEST(PartialArray, PageOffsetChunkRoundtrips)
 #ifdef MRT_TESTABLE_INTERNALS
 GC_TEST(PartialArray, EncodableRejectsAbsoluteOnlyAlignment)
 {
-    // B=4097/A=8192 is the minimal counterexample to an absolute-alignment
-    // predicate: A is page aligned, but (A-B)=4095 is not.
-    const MAddress savedStart = Heap::GetHeapStartAddress();
-    const MAddress savedEnd = Heap::heapCurrentEnd;
-    Heap::SetHeapStartForTesting(static_cast<MAddress>(4097));
-    GC_EXPECT_TRUE((static_cast<MAddress>(8192) & (MarkPartialArray::MIN_SIZE - 1)) == 0);
+    // B=4097 and any page-aligned A form the absolute-only counterexample:
+    // A is page aligned, but (A-B) has page phase 4095.
+    GcHeapFixture fx;
+    LowAddressSlots slots;
+    WCollector collector(Heap::GetHeap().GetAllocator(), Heap::GetHeap().GetCollectorResources());
+    TracingCollector::WorkStack workStack;
+    HeapBaseOverride base(static_cast<MAddress>(4097));
+    RefField<>* const chunk = slots.AbsoluteAlignedChunk();
+
+    GC_EXPECT_TRUE((reinterpret_cast<MAddress>(chunk) & (MarkPartialArray::MIN_SIZE - 1)) == 0);
     GC_EXPECT_TRUE((Heap::GetHeapStartAddress() & (MarkPartialArray::MIN_SIZE - 1)) != 0);
-    GC_EXPECT_FALSE(MarkPartialArray::Encodable(reinterpret_cast<const void*>(8192),
-                                                 MarkPartialArray::MIN_LENGTH));
-    Heap::SetHeapStartForTesting(savedStart);
-    Heap::OnHeapExtended(savedEnd);
+    PartialArrayTestAccess::Push(collector, chunk, MarkPartialArray::MIN_LENGTH, workStack);
+    const bool followedInline = workStack.empty();
+    if (!followedInline) {
+        // A deliberately disconnected Encodable guard leaves an invalid
+        // descriptor here. Remove it before reporting the exact expectation.
+        workStack.pop_back();
+    }
+    GC_EXPECT_TRUE(followedInline);
 }
 
 GC_TEST(PartialArray, RelativeBaseRoundtrips)
 {
-    // An arbitrary base is valid when the chunk has the same page phase:
-    // B=4097/A=8193 gives A-B=4096 and must encode/decode exactly.
-    const MAddress savedStart = Heap::GetHeapStartAddress();
-    const MAddress savedEnd = Heap::heapCurrentEnd;
-    Heap::SetHeapStartForTesting(static_cast<MAddress>(4097));
-    constexpr MAddress chunk = 8193;
-    GC_EXPECT_TRUE(MarkPartialArray::Encodable(reinterpret_cast<const void*>(chunk),
-                                                MarkPartialArray::MIN_LENGTH));
-    const MarkStackEntry entry = MarkPartialArray::Encode(
-        reinterpret_cast<const void*>(chunk), MarkPartialArray::MIN_LENGTH);
-    MAddress decoded = 0;
-    size_t decodedLength = 0;
-    MarkPartialArray::Decode(entry, decoded, decodedLength);
-    GC_EXPECT_EQ(decoded, chunk);
-    GC_EXPECT_EQ(decodedLength, MarkPartialArray::MIN_LENGTH);
-    Heap::SetHeapStartForTesting(savedStart);
-    Heap::OnHeapExtended(savedEnd);
+    // B=4097 and A%4096=1 must take the product Push -> Encode handoff.
+    // Follow then decodes A and reaches the sole non-null slot at that address.
+    GcHeapFixture fx;
+    LowAddressSlots slots;
+    WCollector collector(Heap::GetHeap().GetAllocator(), Heap::GetHeap().GetCollectorResources());
+    TracingCollector::WorkStack workStack;
+    HeapBaseOverride base(static_cast<MAddress>(4097));
+    RefField<>* const chunk = slots.RelativeAlignedChunk();
+    PartialArrayTestAccess::StoreTarget(collector, chunk[0], fx.obj0);
+
+    PartialArrayTestAccess::Push(collector, chunk, MarkPartialArray::MIN_LENGTH, workStack);
+    GC_EXPECT_FALSE(workStack.empty());
+    const MarkStackEntry partial = workStack.back();
+    workStack.pop_back();
+    GC_EXPECT_TRUE(MarkPartialArray::IsPartialArrayEntry(partial));
+
+    collector.FollowPartialArray(partial, workStack);
+    GC_EXPECT_FALSE(workStack.empty());
+    const MarkStackEntry reached = workStack.back();
+    workStack.pop_back();
+    GC_EXPECT_FALSE(MarkPartialArray::IsPartialArrayEntry(reached));
+    GC_EXPECT_TRUE(reached.object() == fx.obj0);
 }
 #endif // MRT_TESTABLE_INTERNALS
 
