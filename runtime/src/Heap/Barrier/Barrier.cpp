@@ -1081,10 +1081,12 @@ BaseObject* Barrier::ReadReference(BaseObject* obj, RefField<false>& field) cons
     }
     BaseObject* toVersion = nullptr;
     if (theCollector.TryUpdateRefField(obj, field, toVersion)) {
-        return toVersion;
+        return FinalizeLoadForMutator(toVersion, obj, &field, "Barrier::ReadReference.stw");
     } else {
         BaseObject* target = to_object(field.GetTargetObject());
-        return target;
+        // loadfc: STW hand-out shares the postcondition (crash family pc=CreateNewFileInfo/
+        // AttributePack::TestAttr fires with the stwBarrier installed, reclaim_satb_phase).
+        return FinalizeLoadForMutator(target, obj, &field, "Barrier::ReadReference.stw");
     }
 }
 
@@ -1105,10 +1107,10 @@ BaseObject* Barrier::ReadWeakRef(BaseObject* obj, RefField<false>& field) const
     }
     BaseObject* toVersion = nullptr;
     if (theCollector.TryUpdateRefField(obj, field, toVersion)) {
-        return toVersion;
+        return FinalizeLoadForMutator(toVersion, obj, &field, "Barrier::ReadWeakRef.stw");
     } else {
         BaseObject* target = to_object(field.GetTargetObject());
-        return target;
+        return FinalizeLoadForMutator(target, obj, &field, "Barrier::ReadWeakRef.stw");
     }
 }
 
@@ -1255,7 +1257,7 @@ BaseObject* Barrier::AtomicReadReference(BaseObject* obj, RefField<true>& field,
 
     BaseObject* target = to_object(tmpField.GetTargetObject());
     DLOG(BARRIER, "atomic read obj %p ref@%p: %#zx -> %p", obj, &field, raw(tmpField.GetFieldValue()), target);
-    return target;
+    return FinalizeLoadForMutator(target, obj, nullptr, "Barrier::AtomicReadReference.stw");
 }
 
 bool Barrier::CompareAndSwapReference(BaseObject* obj, RefField<true>& field, BaseObject* oldRef, BaseObject* newRef,
