@@ -443,6 +443,10 @@ GC_OTHER_VM_TEST(Remset, StoreGoodAfterProductConsumerRearm)
     GC_EXPECT_TRUE(firstCount == 1);
     GC_EXPECT_EQ(sizeAfterFirstDrain, 0u);
     GC_EXPECT_TRUE(sizeAfterFirstConsume == 1);
+#if defined(MRT_GC_UNIT_TESTS)
+    GC_EXPECT_EQ(firstReceipt.seen, 1u);
+    GC_EXPECT_EQ(firstReceipt.consumed, 1u);
+#endif
     GC_EXPECT_TRUE(containsBeforeSecondDrain);
     GC_EXPECT_TRUE(secondCount == 1);
     GC_EXPECT_EQ(sizeAfterSecondDrain, 0u);

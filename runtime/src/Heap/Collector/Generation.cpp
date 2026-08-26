@@ -103,24 +103,22 @@ Y2yHandoffTestReceipt ReadY2yHandoffTestReceipt()
              g_y2yHandoffReceipt.afterStw2.load(std::memory_order_relaxed) };
 }
 
-void NoteY2yHandoffTestReceipt(uint8_t phase, uint64_t before, uint64_t after)
+void NoteY2yBeforeReleaseTestReceipt(uint64_t pending)
 {
-    switch (phase) {
-        case 0:
-            g_y2yHandoffReceipt.phase0.fetch_add(1, std::memory_order_relaxed);
-            g_y2yHandoffReceipt.beforeRelease.store(before, std::memory_order_relaxed);
-            break;
-        case 1:
-            g_y2yHandoffReceipt.phase1.fetch_add(1, std::memory_order_relaxed);
-            g_y2yHandoffReceipt.afterRoot.store(after, std::memory_order_relaxed);
-            break;
-        case 2:
-            g_y2yHandoffReceipt.phase2.fetch_add(1, std::memory_order_relaxed);
-            g_y2yHandoffReceipt.afterStw2.store(after, std::memory_order_relaxed);
-            break;
-        default:
-            break;
-    }
+    g_y2yHandoffReceipt.phase0.fetch_add(1, std::memory_order_relaxed);
+    g_y2yHandoffReceipt.beforeRelease.store(pending, std::memory_order_relaxed);
+}
+
+void NoteY2yAfterRootTestReceipt(uint64_t pending)
+{
+    g_y2yHandoffReceipt.phase1.fetch_add(1, std::memory_order_relaxed);
+    g_y2yHandoffReceipt.afterRoot.store(pending, std::memory_order_relaxed);
+}
+
+void NoteY2yAfterStw2TestReceipt(uint64_t pending)
+{
+    g_y2yHandoffReceipt.phase2.fetch_add(1, std::memory_order_relaxed);
+    g_y2yHandoffReceipt.afterStw2.store(pending, std::memory_order_relaxed);
 }
 
 #endif
@@ -776,38 +774,49 @@ void WCollector::DoYoungGarbageCollection()
         // normally.  Capacity does not admit or discard a slot.
         reachableSlots.reserve(rememberedSlots.size());
     }
-    auto mergeY2yDirtyHolders = [&](WorkStack& destination, uint8_t phase) {
+    auto mergeY2yDirtyHolders = [&](WorkStack& destination) {
         theAllocator.VisitAllocBuffers([&destination](AllocBuffer& buffer) {
             buffer.MergeY2yDirtyHolders(destination);
         });
-        const size_t after = destination.size();
-#if defined(MRT_TESTABLE_INTERNALS)
-        size_t remaining = 0;
-        theAllocator.VisitAllocBuffers([&remaining](AllocBuffer& buffer) {
-            remaining += buffer.Y2yDirtyHolderCount();
-        });
-        NoteY2yHandoffTestReceipt(phase, remaining, after);
-#endif
     };
+#if defined(MRT_TESTABLE_INTERNALS)
+    auto pendingY2yDirtyHolderCount = [&]() {
+        size_t pending = 0;
+        theAllocator.VisitAllocBuffers([&pending](AllocBuffer& buffer) {
+            pending += buffer.Y2yDirtyHolderCount();
+        });
+        return pending;
+    };
+#endif
+#if defined(MRT_WAVE8_Y2Y_FIXED_ARM)
+    WorkStack fixedArmFirstBatch = NewWorkStack();
+    bool fixedArmFirstBatchMerged = false;
+#endif
     // ZGC zGeneration.cpp:665-669: root production belongs to concurrent_mark.
     // Keep one producer (the existing owner-specific VisitMinorRoots/epoch path),
     // selecting only its phase boundary. MARK-only remains a diagnostic arm and
     // therefore keeps the producer under its pause; MARK+FOLLOW invokes it after
     // the world-release publication below.
-    auto produceYoungRoots = [&](WorkStack* preMergedY2y = nullptr) {
+    auto produceYoungRoots = [&]() {
         // minortime: ③ root enum (alloc buffers + VisitMinorRoots)
         MRT_PHASE_TIMER("young.root_enum");
         WorkStack enumRoots = NewWorkStack();
-        size_t preMergedCount = 0;
         theAllocator.VisitAllocBuffers([&enumRoots](AllocBuffer& buffer) { buffer.MergeRoots(enumRoots); });
-        // h3seed2: FOLLOW's first batch is merged before release and supplied here.
-        // MARK-only has no release window, so merge it at the normal root boundary.
-        if (preMergedY2y != nullptr) {
-            preMergedCount = preMergedY2y->size();
-            enumRoots.insert(*preMergedY2y);
+        // Mainline order: roots first, then the y2y holder batch.  The fixed
+        // experiment consumes FOLLOW's first batch before release and only
+        // transfers that already-consumed batch here.
+#if defined(MRT_WAVE8_Y2Y_FIXED_ARM)
+        if (fixedArmFirstBatchMerged) {
+            enumRoots.insert(fixedArmFirstBatch);
         } else {
-            mergeY2yDirtyHolders(enumRoots, 0);
+            mergeY2yDirtyHolders(enumRoots);
         }
+#else
+        mergeY2yDirtyHolders(enumRoots);
+#endif
+#if defined(MRT_TESTABLE_INTERNALS)
+        NoteY2yAfterRootTestReceipt(pendingY2yDirtyHolderCount());
+#endif
         if (stackScanEpoch != 0) {
             SatbBuffer::Instance().GetRetiredObjects(enumRoots);
         }
@@ -842,11 +851,6 @@ void WCollector::DoYoungGarbageCollection()
             }
             workStack.push_back(MarkStackEntry::MarkOnly(object));
         }, stackScanEpoch);
-#if defined(MRT_TESTABLE_INTERNALS)
-        if (preMergedY2y != nullptr) {
-            NoteY2yHandoffTestReceipt(1, 0, preMergedCount);
-        }
-#endif
     };
     if (!youngConcFollow) {
         produceYoungRoots();
@@ -890,22 +894,18 @@ void WCollector::DoYoungGarbageCollection()
         concWindow.markedAtEntry = reachableVec.size();
         TransitionToGCPhase(GCPhase::GC_PHASE_TRACE, true);
         reinterpret_cast<RegionSpace&>(theAllocator).PrepareTrace();
-        WorkStack preReleaseY2y = NewWorkStack();
-#if defined(MRT_WAVE8_Y2Y_FAULT)
-        // Fault arm: the single-line ordering cutback intentionally releases
-        // STW before the first y2y merge.  The receipt is forced to 1 so the
-        // control arm's 0→1 boundary remains machine-checkable.
-        stw.reset();
-        mergeY2yDirtyHolders(preReleaseY2y, 0);
+#if defined(MRT_WAVE8_Y2Y_FIXED_ARM)
+        mergeY2yDirtyHolders(fixedArmFirstBatch);
+        fixedArmFirstBatchMerged = true;
+#endif
 #if defined(MRT_TESTABLE_INTERNALS)
-        NoteY2yHandoffTestReceipt(0, 1, preReleaseY2y.size());
+        // Observation only: read the live per-mutator containers at the exact
+        // release boundary.  Default code does not consume them here.
+        NoteY2yBeforeReleaseTestReceipt(pendingY2yDirtyHolderCount());
 #endif
-#else
-        mergeY2yDirtyHolders(preReleaseY2y, 0);
         stw.reset();
-#endif
         concWindowStartNs = TimeUtil::NanoSeconds();
-        produceYoungRoots(&preReleaseY2y);
+        produceYoungRoots();
         VLOG(REPORT,
              "[GCV2][youngconc] concurrent young mark start (FOLLOW: roots+closure concurrent) "
              "roots_marked=%zu",
@@ -1267,7 +1267,10 @@ void WCollector::DoYoungGarbageCollection()
                 size_t fieldExtraN = 0;
                 {
                     WorkStack fieldHolders = NewWorkStack();
-                    mergeY2yDirtyHolders(fieldHolders, 2);
+                    mergeY2yDirtyHolders(fieldHolders);
+#if defined(MRT_TESTABLE_INTERNALS)
+                    NoteY2yAfterStw2TestReceipt(pendingY2yDirtyHolderCount());
+#endif
                     const size_t incrementalEnd = reachableVec.size();
                     for (size_t i = fieldScanCursor; i < incrementalEnd; ++i) {
                         fieldHolders.push_back(reachableVec[i]);

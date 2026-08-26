@@ -468,8 +468,7 @@ GC_OTHER_VM_TEST(YoungConc, LateEdgeFollowReceiptReachesYoungRuntimeDispatch)
 {
     GC_EXPECT_EQ(CJ_ScheduleManagerInit(), 0);
     GC_EXPECT_EQ(setenv("MRT_GCV2_YOUNG_CONC_MARK", "1", 1), 0);
-    GC_EXPECT_EQ(setenv("MRT_GCV2_YOUNG_CONC_FOLLOW", "1", 1), 0);
-    GC_EXPECT_EQ(setenv("MRT_GCV2_EPOCH_HANDSHAKE", "1", 1), 0);
+    GC_EXPECT_EQ(setenv("MRT_GCV2_YOUNG_CONC_FOLLOW", "0", 1), 0);
     GC_EXPECT_EQ(setenv("MRT_GCV2_MARKPAR_FORCE_SERIAL", "1", 1), 0);
     MutatorManager mutatorManager;
     YoungConcTestRuntime runtime(mutatorManager);
@@ -514,14 +513,6 @@ GC_OTHER_VM_TEST(YoungConc, LateEdgeFollowReceiptReachesYoungRuntimeDispatch)
     resources.SetGcStarted(true);
     resources.GetGCStats().reason = GC_REASON_YOUNG;
 
-#if defined(MRT_GC_UNIT_TESTS)
-    ResetY2yHandoffTestReceipt();
-    // H0 enters through the real mutator allocation buffer; the collection
-    // dispatch below performs the phase-0 product merge and records it.
-    AllocBuffer* y2yBuffer = AllocBuffer::GetOrCreateAllocBuffer();
-    y2yBuffer->PushY2yDirtyHolder(fx.obj0);
-#endif
-
     auto* holderField = &HeapSlotAt<>(reinterpret_cast<MAddress>(fx.obj0) + TYPEINFO_PTR_SIZE);
     barrier.Record(fx.obj0, reinterpret_cast<MAddress>(holderField), fx.obj1);
     mutator.FlushSatbBuffer();
@@ -529,34 +520,17 @@ GC_OTHER_VM_TEST(YoungConc, LateEdgeFollowReceiptReachesYoungRuntimeDispatch)
 
     std::fprintf(stderr, "DETAIL late_edge_consumer stage=before_young_runtime_entry\n");
     RelocationReceiptTestAccess::RunCollectionDispatch(collector);
-#if defined(MRT_GC_UNIT_TESTS)
-    const auto y2yReceipt = ReadY2yHandoffTestReceipt();
-#endif
     const bool stayedYoung = fx.region1->IsYoungRegion();
     const bool childMarked = stayedYoung
         ? fx.region1->IsMarkedObject(fx.region1->GetMarkView<Generation::Young>(), child)
         : fx.region1->IsMarkedObject(fx.region1->GetMarkView<Generation::Old>(), child);
     std::fprintf(stderr,
-                 "DETAIL late_edge_consumer stage=after_young_runtime_entry child_marked=%d stayed_young=%d "
-#if defined(MRT_GC_UNIT_TESTS)
-                 "y2y_phase0=%zu y2y_phase1=%zu y2y_phase2=%zu before_release=%zu after_root=%zu after_stw2=%zu\n",
-#else
-                 "\n",
-#endif
-                 static_cast<int>(childMarked), static_cast<int>(stayedYoung)
-#if defined(MRT_GC_UNIT_TESTS)
-                 , static_cast<size_t>(y2yReceipt.phase0), static_cast<size_t>(y2yReceipt.phase1),
-                 static_cast<size_t>(y2yReceipt.phase2), static_cast<size_t>(y2yReceipt.beforeRelease),
-                 static_cast<size_t>(y2yReceipt.afterRoot), static_cast<size_t>(y2yReceipt.afterStw2)
-#endif
-                 );
+                 "DETAIL late_edge_consumer stage=after_young_runtime_entry child_marked=%d stayed_young=%d\n",
+                 static_cast<int>(childMarked), static_cast<int>(stayedYoung));
 
     resources.SetGcStarted(startedBefore);
     resources.GetGCStats().reason = reasonBefore;
     GC_EXPECT_TRUE(childMarked);
-#if defined(MRT_GC_UNIT_TESTS)
-    GC_EXPECT_TRUE(y2yReceipt.phase0 >= 1);
-#endif
 
     RelocationReceiptTestAccess::BindThreadPool(resources, nullptr);
     std::fprintf(stderr, "DETAIL late_edge_consumer stage=before_pool_exit\n");
@@ -565,6 +539,90 @@ GC_OTHER_VM_TEST(YoungConc, LateEdgeFollowReceiptReachesYoungRuntimeDispatch)
     RelocationReceiptTestAccess::BindCollector(resources, nullptr);
     // The isolated process owns the candidate region and its collection
     // metadata until exit; do not free that state behind RegionManager.
+    (void)live;
+}
+
+// H receipt arm: the same product dispatch is run with FOLLOW enabled and a
+// real mutator-local y2y holder.  The expected beforeRelease value is tied to
+// the compile-time fixed arm, so swapping only the product SO is a precise
+// 0 -> red -> 0 control.
+GC_OTHER_VM_TEST(YoungConc, Y2yBeforeReleaseReceiptIsMeasured)
+{
+    GC_EXPECT_EQ(CJ_ScheduleManagerInit(), 0);
+    GC_EXPECT_EQ(setenv("MRT_GCV2_YOUNG_CONC_MARK", "1", 1), 0);
+    GC_EXPECT_EQ(setenv("MRT_GCV2_YOUNG_CONC_FOLLOW", "1", 1), 0);
+    GC_EXPECT_EQ(setenv("MRT_GCV2_EPOCH_HANDSHAKE", "1", 1), 0);
+    GC_EXPECT_EQ(setenv("MRT_GCV2_MARKPAR_FORCE_SERIAL", "1", 1), 0);
+    MutatorManager mutatorManager;
+    YoungConcTestRuntime runtime(mutatorManager);
+    GcHeapFixture fx;
+    fx.region0->SetYoungRegionFlag(0);
+    fx.region1->SetYoungRegionFlag(1);
+    fx.region1->SetYoungAge(1);
+    LiveInfo* live = fx.PlantLiveInfo(fx.region1);
+    (void)fx.PlantMarkBitmap<Generation::Young>(live, fx.region1->GetRegionSize());
+    BaseObject* child = fx.PlaceObject(reinterpret_cast<MAddress>(fx.obj1) + 64);
+    fx.region1->SetRegionAllocPtr(reinterpret_cast<MAddress>(child) + 64);
+    auto* parentField = &HeapSlotAt<>(reinterpret_cast<MAddress>(fx.obj1) + TYPEINFO_PTR_SIZE);
+    parentField->StoreColoured(to_zpointer(reinterpret_cast<MAddress>(child)));
+
+    CollectorResources& resources = Heap::GetHeap().GetCollectorResources();
+    WCollector collector(Heap::GetHeap().GetAllocator(), resources);
+    RelocationReceiptTestAccess::BindCollector(resources, &collector);
+    collector.SetGCPhase(GCPhase::GC_PHASE_CLEAR_SATB_BUFFER);
+    GCThreadPool threadPool("gc-unit-y2y-receipt", 0, GCPoolThread::GC_THREAD_PRIORITY);
+    RelocationReceiptTestAccess::BindThreadPool(resources, &threadPool);
+    RegionSpace& space = reinterpret_cast<RegionSpace&>(Heap::GetHeap().GetAllocator());
+    space.GetRegionManager().EnlistFullThreadLocalRegion(fx.region1);
+    space.GetRegionManager().AddRawPointerObject(child);
+    RememberedSet& runtimeRememberedSet = Heap::GetHeap().GetRememberedSet();
+    runtimeRememberedSet.Initialize(fx.heapStart, 2 * RegionInfo::UNIT_SIZE);
+    RememberedSet producerRememberedSet;
+    producerRememberedSet.Initialize(fx.heapStart, 2 * RegionInfo::UNIT_SIZE);
+    TestTraceBarrier barrier(collector, producerRememberedSet);
+    Mutator mutator;
+    ThreadLocal::SetMutator(&mutator);
+    const bool startedBefore = resources.IsGcStarted();
+    const GCReason reasonBefore = resources.GetGCStats().reason;
+    resources.SetGcStarted(true);
+    resources.GetGCStats().reason = GC_REASON_YOUNG;
+#if defined(MRT_GC_UNIT_TESTS)
+    ResetY2yHandoffTestReceipt();
+    AllocBuffer::GetOrCreateAllocBuffer()->PushY2yDirtyHolder(fx.obj0);
+#endif
+    auto* holderField = &HeapSlotAt<>(reinterpret_cast<MAddress>(fx.obj0) + TYPEINFO_PTR_SIZE);
+    barrier.Record(fx.obj0, reinterpret_cast<MAddress>(holderField), fx.obj1);
+    mutator.FlushSatbBuffer();
+    ThreadLocal::SetMutator(nullptr);
+    RelocationReceiptTestAccess::RunCollectionDispatch(collector);
+#if defined(MRT_GC_UNIT_TESTS)
+    const auto receipt = ReadY2yHandoffTestReceipt();
+    std::fprintf(stderr,
+                 "DETAIL y2y_h_receipt before_release=%zu after_root=%zu after_stw2=%zu "
+                 "phase0=%zu phase1=%zu phase2=%zu\n",
+                 static_cast<size_t>(receipt.beforeRelease), static_cast<size_t>(receipt.afterRoot),
+                 static_cast<size_t>(receipt.afterStw2), static_cast<size_t>(receipt.phase0),
+                 static_cast<size_t>(receipt.phase1), static_cast<size_t>(receipt.phase2));
+    // The fixed arm consumes before release; the default arm only observes.
+#if defined(MRT_WAVE8_Y2Y_FIXED_ARM)
+    GC_EXPECT_EQ(receipt.beforeRelease, 0u);
+#else
+    GC_EXPECT_TRUE(receipt.beforeRelease > 0);
+#endif
+    GC_EXPECT_TRUE(receipt.phase0 >= 1);
+    GC_EXPECT_EQ(receipt.afterRoot, 0u);
+    GC_EXPECT_EQ(receipt.afterStw2, 0u);
+#endif
+    resources.SetGcStarted(startedBefore);
+    resources.GetGCStats().reason = reasonBefore;
+    const bool stayedYoung = fx.region1->IsYoungRegion();
+    const bool childMarked = stayedYoung
+        ? fx.region1->IsMarkedObject(fx.region1->GetMarkView<Generation::Young>(), child)
+        : fx.region1->IsMarkedObject(fx.region1->GetMarkView<Generation::Old>(), child);
+    GC_EXPECT_TRUE(childMarked);
+    RelocationReceiptTestAccess::BindThreadPool(resources, nullptr);
+    threadPool.Exit();
+    RelocationReceiptTestAccess::BindCollector(resources, nullptr);
     (void)live;
 }
 
