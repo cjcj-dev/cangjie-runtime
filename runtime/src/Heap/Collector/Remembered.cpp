@@ -72,6 +72,86 @@
 #include "Heap/WCollector/WCollectorInternal.h"
 
 namespace MapleRuntime {
+#if defined(MRT_TESTABLE_INTERNALS)
+namespace {
+struct RemsetFilterReceiptState {
+    std::atomic<uint64_t> seen { 0 };
+    std::atomic<uint64_t> consumed { 0 };
+    std::atomic<uint64_t> stale { 0 };
+    std::atomic<uint64_t> deadHolder { 0 };
+    std::atomic<uint64_t> noOrigin { 0 };
+    std::atomic<uint64_t> badTarget { 0 };
+    std::atomic<MAddress> lastConsumedSlot { 0 };
+    std::atomic<MAddress> lastStaleSlot { 0 };
+    std::atomic<MAddress> lastDeadHolderSlot { 0 };
+    std::atomic<MAddress> lastNoOriginSlot { 0 };
+    std::atomic<MAddress> lastBadTargetSlot { 0 };
+};
+RemsetFilterReceiptState g_remsetFilterReceipt;
+}
+
+void ResetRemsetFilterTestReceipt()
+{
+    g_remsetFilterReceipt.seen.store(0, std::memory_order_relaxed);
+    g_remsetFilterReceipt.consumed.store(0, std::memory_order_relaxed);
+    g_remsetFilterReceipt.stale.store(0, std::memory_order_relaxed);
+    g_remsetFilterReceipt.deadHolder.store(0, std::memory_order_relaxed);
+    g_remsetFilterReceipt.noOrigin.store(0, std::memory_order_relaxed);
+    g_remsetFilterReceipt.badTarget.store(0, std::memory_order_relaxed);
+    g_remsetFilterReceipt.lastConsumedSlot.store(0, std::memory_order_relaxed);
+    g_remsetFilterReceipt.lastStaleSlot.store(0, std::memory_order_relaxed);
+    g_remsetFilterReceipt.lastDeadHolderSlot.store(0, std::memory_order_relaxed);
+    g_remsetFilterReceipt.lastNoOriginSlot.store(0, std::memory_order_relaxed);
+    g_remsetFilterReceipt.lastBadTargetSlot.store(0, std::memory_order_relaxed);
+}
+
+RemsetFilterTestReceipt ReadRemsetFilterTestReceipt()
+{
+    return { g_remsetFilterReceipt.seen.load(std::memory_order_relaxed),
+             g_remsetFilterReceipt.consumed.load(std::memory_order_relaxed),
+             g_remsetFilterReceipt.stale.load(std::memory_order_relaxed),
+             g_remsetFilterReceipt.deadHolder.load(std::memory_order_relaxed),
+             g_remsetFilterReceipt.noOrigin.load(std::memory_order_relaxed),
+             g_remsetFilterReceipt.badTarget.load(std::memory_order_relaxed),
+             g_remsetFilterReceipt.lastConsumedSlot.load(std::memory_order_relaxed),
+             g_remsetFilterReceipt.lastStaleSlot.load(std::memory_order_relaxed),
+             g_remsetFilterReceipt.lastDeadHolderSlot.load(std::memory_order_relaxed),
+             g_remsetFilterReceipt.lastNoOriginSlot.load(std::memory_order_relaxed),
+             g_remsetFilterReceipt.lastBadTargetSlot.load(std::memory_order_relaxed) };
+}
+
+void NoteRemsetFilterTestReceipt(MAddress slot, RemsetFilterReceiptReason reason, bool consumed)
+{
+    if (slot == 0) {
+        return;
+    }
+    g_remsetFilterReceipt.seen.fetch_add(1, std::memory_order_relaxed);
+    if (consumed) {
+        g_remsetFilterReceipt.consumed.fetch_add(1, std::memory_order_relaxed);
+        g_remsetFilterReceipt.lastConsumedSlot.store(slot, std::memory_order_relaxed);
+    }
+    switch (reason) {
+        case RemsetFilterReceiptReason::kStale:
+            g_remsetFilterReceipt.stale.fetch_add(1, std::memory_order_relaxed);
+            g_remsetFilterReceipt.lastStaleSlot.store(slot, std::memory_order_relaxed);
+            break;
+        case RemsetFilterReceiptReason::kDeadHolder:
+            g_remsetFilterReceipt.deadHolder.fetch_add(1, std::memory_order_relaxed);
+            g_remsetFilterReceipt.lastDeadHolderSlot.store(slot, std::memory_order_relaxed);
+            break;
+        case RemsetFilterReceiptReason::kNoOrigin:
+            g_remsetFilterReceipt.noOrigin.fetch_add(1, std::memory_order_relaxed);
+            g_remsetFilterReceipt.lastNoOriginSlot.store(slot, std::memory_order_relaxed);
+            break;
+        case RemsetFilterReceiptReason::kBadTarget:
+            g_remsetFilterReceipt.badTarget.fetch_add(1, std::memory_order_relaxed);
+            g_remsetFilterReceipt.lastBadTargetSlot.store(slot, std::memory_order_relaxed);
+            break;
+        case RemsetFilterReceiptReason::kNone:
+            break;
+    }
+}
+#endif
 // nullslot: count product paths that CAS-install nullptr into a ref field.
 // MRT_GCV2_NULLSLOT=1 → LOG each write (cap 64/path) + totals; default off.
 // rootdrop: same gate also arms path=resolve_root_null (RootSlot HealRoot null).
@@ -1259,6 +1339,9 @@ void WCollector::RescanRememberedSet(WorkStack& workStack, const MinorSlotSet& r
         }
         RegionInfo* holderRegion = RegionInfo::TryGetRegionInfoAt(slot);
         if (holderRegion == nullptr || holderRegion->IsFreeRegion() || holderRegion->IsGarbageRegion()) {
+#if defined(MRT_TESTABLE_INTERNALS)
+            NoteRemsetFilterTestReceipt(slot, RemsetFilterReceiptReason::kDeadHolder, false);
+#endif
             noteRemsetOutcome(slot, 3, 0);
             ++scrubbedDeadHolder;
             NwDropAudit::Note(NwDropAudit::kDeadHolder);
@@ -1388,6 +1471,9 @@ void WCollector::RescanRememberedSet(WorkStack& workStack, const MinorSlotSet& r
         bool keepByCurrentRoot =
             retainedHolder != nullptr && currentMinorRoots.count(retainedHolder) != 0;
         if (!KeepRememberedHolder(keepByRetainedSnapshot, keepByCurrentRoot)) {
+#if defined(MRT_TESTABLE_INTERNALS)
+            NoteRemsetFilterTestReceipt(slot, RemsetFilterReceiptReason::kDeadHolder, false);
+#endif
             noteRemsetOutcome(slot, 4, 0);
             ++scrubbedDeadHolder;
             ++retainedDeadDropped;
@@ -1427,6 +1513,9 @@ void WCollector::RescanRememberedSet(WorkStack& workStack, const MinorSlotSet& r
                 }
                 noteRemsetOutcome(slot, 6, reinterpret_cast<MAddress>(rawTarget));
                 ++scrubbedStaleOldTag;
+#if defined(MRT_TESTABLE_INTERNALS)
+                NoteRemsetFilterTestReceipt(slot, RemsetFilterReceiptReason::kStale, false);
+#endif
                 NwDropAudit::Note(NwDropAudit::kStaleOldTag);
                 // N2: CAS null install (same slot may race with ResolveMinorReference under FYS=1).
                 NoteNullslotWrite("remset_stale_oldtag", nullptr, field, rawTarget, to, &g_nullslotRemset);
@@ -1457,10 +1546,16 @@ void WCollector::RescanRememberedSet(WorkStack& workStack, const MinorSlotSet& r
             } else {
                 NwDropAudit::Note(NwDropAudit::kResolveNull);
             }
+#if defined(MRT_TESTABLE_INTERNALS)
+            NoteRemsetFilterTestReceipt(slot, RemsetFilterReceiptReason::kStale, false);
+#endif
             continue;
         }
         BaseObject* targetBase = recoverYoungTargetBase(target);
         if (targetBase == nullptr) {
+#if defined(MRT_TESTABLE_INTERNALS)
+            NoteRemsetFilterTestReceipt(slot, RemsetFilterReceiptReason::kNoOrigin, false);
+#endif
             noteRemsetOutcome(slot, 8, reinterpret_cast<MAddress>(target));
             ++scrubbedNoTargetOrigin;
             NwDropAudit::Note(NwDropAudit::kNoOrigin);
@@ -1474,6 +1569,9 @@ void WCollector::RescanRememberedSet(WorkStack& workStack, const MinorSlotSet& r
             ++recoveredTargetInterior;
         }
         if (!target->IsValidObject()) {
+#if defined(MRT_TESTABLE_INTERNALS)
+            NoteRemsetFilterTestReceipt(slot, RemsetFilterReceiptReason::kBadTarget, false);
+#endif
             noteRemsetOutcome(slot, 9, reinterpret_cast<MAddress>(target));
             ++scrubbedBadTarget;
             NwDropAudit::Note(NwDropAudit::kBadTarget);
@@ -1579,6 +1677,9 @@ void WCollector::RescanRememberedSet(WorkStack& workStack, const MinorSlotSet& r
         if (statsOut != nullptr) {
             ++statsOut->consumed;
         }
+#if defined(MRT_TESTABLE_INTERNALS)
+        NoteRemsetFilterTestReceipt(slot, RemsetFilterReceiptReason::kNone, true);
+#endif
         // S1 (fysminor): re-remember on consumption, like ZGC zRemembered.cpp:578-588
         // (scan_field re-arms the entry via remember(p) whenever the healed value is
         // still young). DrainForMinor emptied the scan buffer, and the three rebuild

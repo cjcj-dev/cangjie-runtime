@@ -12,6 +12,7 @@
 #include "Heap/Verify/HealCoverage.h"
 #include "Heap/WCollector/RemapYoungRoots.h"
 #include <atomic>
+#include <cstdint>
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
@@ -33,6 +34,46 @@ class ScopedStopTheWorld;
 // Declared here so SignalManager can call without including WCollector.cpp guts.
 // Gate = MRT_GCV2_NULLSLOT (default off).
 void EmitParamzeroCrashProbe(uintptr_t rbp, uintptr_t rbx, uintptr_t rip);
+
+#if defined(MRT_TESTABLE_INTERNALS)
+// One-shot wave8 attribution receipts.  The storage is native and fixed-size;
+// production builds do not declare or emit any of this instrumentation.
+enum class RemsetFilterReceiptReason : uint8_t {
+    kNone = 0,
+    kStale = 1,
+    kDeadHolder = 2,
+    kNoOrigin = 3,
+    kBadTarget = 4,
+};
+struct RemsetFilterTestReceipt {
+    uint64_t seen = 0;
+    uint64_t consumed = 0;
+    uint64_t stale = 0;
+    uint64_t deadHolder = 0;
+    uint64_t noOrigin = 0;
+    uint64_t badTarget = 0;
+    MAddress lastConsumedSlot = 0;
+    MAddress lastStaleSlot = 0;
+    MAddress lastDeadHolderSlot = 0;
+    MAddress lastNoOriginSlot = 0;
+    MAddress lastBadTargetSlot = 0;
+};
+void ResetRemsetFilterTestReceipt();
+RemsetFilterTestReceipt ReadRemsetFilterTestReceipt();
+void NoteRemsetFilterTestReceipt(MAddress slot, RemsetFilterReceiptReason reason, bool consumed);
+
+struct Y2yHandoffTestReceipt {
+    uint64_t phase0 = 0; // first merge before release
+    uint64_t phase1 = 0; // roots consumed after release
+    uint64_t phase2 = 0; // STW2 merge
+    uint64_t beforeRelease = 0;
+    uint64_t afterRoot = 0;
+    uint64_t afterStw2 = 0;
+};
+void ResetY2yHandoffTestReceipt();
+Y2yHandoffTestReceipt ReadY2yHandoffTestReceipt();
+void NoteY2yHandoffTestReceipt(uint8_t phase, uint64_t before, uint64_t after);
+#endif
 
 // portyoungconc: work accounting for the concurrent young mark window.
 // ZGC anchor: ZGenerationYoung::concurrent_mark() = mark_roots() + mark_follow()
