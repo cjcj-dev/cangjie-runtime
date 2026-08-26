@@ -6,6 +6,7 @@
 
 #include "Heap.h"
 
+#include "Heap/Collector/MarkPartialArray.h"
 #include "Collector/CollectorProxy.h"
 #include "Collector/CollectorResources.h"
 #include "Interpreter/Options.h"
@@ -29,6 +30,13 @@ Barrier** Heap::currentBarrierPtr = nullptr;
 Barrier* Heap::stwBarrierPtr = nullptr;
 MAddress Heap::heapStartAddr = 0;
 MAddress Heap::heapCurrentEnd = 0;
+
+void Heap::CheckHeapStartAlignment(MAddress startAddr)
+{
+    CHECK_DETAIL((startAddr & (MarkPartialArray::MIN_SIZE - 1)) == 0,
+                 "heap start address must be aligned to partial-array minimum size: start=%#zx alignment=%zu",
+                 static_cast<size_t>(startAddr), MarkPartialArray::MIN_SIZE);
+}
 
 static bool InitEnabledGCParam()
 {

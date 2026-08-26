@@ -119,8 +119,14 @@ public:
 
     virtual void StopGCWork() = 0;
 
+    // Partial-array mark entries encode a 4K-shifted heap-relative offset
+    // (zMark.cpp:177-186).  Keep the heap origin on that same 4K boundary so
+    // absolute chunk alignment is sufficient for an exact encode/decode roundtrip.
+    static void CheckHeapStartAlignment(MAddress startAddr);
+
     static void OnHeapCreated(MAddress startAddr)
     {
+        CheckHeapStartAlignment(startAddr);
         heapStartAddr = startAddr;
         heapCurrentEnd = 0;
     }

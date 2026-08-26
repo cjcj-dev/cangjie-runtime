@@ -41,12 +41,13 @@ struct GcHeapFixture {
 
     GcHeapFixture()
     {
-        mappedSize = kUnits * sizeof(RegionInfo) + kUnits * RegionInfo::UNIT_SIZE;
+        const size_t metadataSize = RegionManager::GetMetadataSize(kUnits);
+        mappedSize = metadataSize + kUnits * RegionInfo::UNIT_SIZE;
         mapping = mmap(nullptr, mappedSize, PROT_READ | PROT_WRITE, MAP_PRIVATE | MAP_ANONYMOUS, -1, 0);
         if (mapping == MAP_FAILED) {
             std::abort();
         }
-        heapStart = reinterpret_cast<MAddress>(mapping) + kUnits * sizeof(RegionInfo);
+        heapStart = reinterpret_cast<MAddress>(mapping) + metadataSize;
         RegionInfo::Initialize(kUnits, heapStart);
         region0 = RegionInfo::InitRegion(0, 1, RegionInfo::UnitRole::SMALL_SIZED_UNITS);
         region1 = RegionInfo::InitRegion(1, 1, RegionInfo::UnitRole::SMALL_SIZED_UNITS);
