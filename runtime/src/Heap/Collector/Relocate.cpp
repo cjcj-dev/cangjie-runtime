@@ -2456,6 +2456,14 @@ BaseObject* WCollector::WaitRoutedTipReady(BaseObject* from, BaseObject* to, Reg
         RelocationRequestQueue& requests = space.GetRegionManager().GetRelocationRequestQueue();
         RelocationRequestQueue::EnqueueResult queued =
             requests.Add(forwarding, reinterpret_cast<MAddress>(from));
+        static std::atomic<size_t> g_regionWaitAdd{ 0 };
+        const size_t addN = g_regionWaitAdd.fetch_add(1, std::memory_order_relaxed) + 1;
+        if (addN <= 8 || (addN & (addN - 1)) == 0) {
+            LOG(RTLOG_ERROR,
+                "[GCV2][region-wait-add] n=%zu from=%p accepted=%u inserted=%u state=%u pending=%zu",
+                addN, from, static_cast<unsigned>(queued.accepted), static_cast<unsigned>(queued.inserted),
+                static_cast<unsigned>(queued.request->state()), requests.PendingCount());
+        }
 
         // Close publish-before-enqueue: installation may have won between the
         // first lookup and Add(). Publishing an already-existing receipt is the

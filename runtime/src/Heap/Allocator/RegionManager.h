@@ -1241,6 +1241,11 @@ inline void ExecuteForwardTask(RegionManager& regionManager, RegionList& fromReg
                                            RegionInfo::RegionType::LONE_FROM_REGION)) {
             regionManager.ForwardRegion<G>(region);
             regionManager.CompleteRelocationRequests(region);
+        } else {
+            // The request was claimed, so generation close can no longer find
+            // it in the queue.  An ordinary worker may have won the list race;
+            // if not, this is the only remaining terminal owner.
+            (void)regionManager.GetRelocationRequestQueue().Fail(selected.request->from());
         }
     }
 }

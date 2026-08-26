@@ -90,6 +90,15 @@ void RelocationRequestQueue::WaitUntil(const Handle& request, const std::functio
                               threadType != ThreadType::GC_THREAD && mutator->EnterSaferegion(true);
     std::unique_lock<std::mutex> lock(request->completionMutex);
     while (!pageDone()) {
+        const State state = request->requestState.load(std::memory_order_acquire);
+        // A request can be failed without a page publication (for example when
+        // its region claim loses the FROM-list race).  The page predicate is
+        // still the normal completion signal, but a terminal request state is
+        // an independent, bounded exit so the waiter can take its keep-from
+        // fallback instead of polling a page that no longer has a publisher.
+        if (state == State::COMPLETED || state == State::FAILED) {
+            break;
+        }
         (void)request->completion.wait_for(lock, std::chrono::milliseconds(1));
     }
     lock.unlock();
