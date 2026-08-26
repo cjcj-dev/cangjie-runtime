@@ -103,17 +103,6 @@ def evac_ghost_regions(
         for timestamp, body in report_lines)
 
 
-def _ghost_count(
-    report_lines: list[tuple[dt.datetime, str]],
-    start: dt.datetime,
-    end: dt.datetime,
-) -> int:
-    """Count one emitted ghost-dispel record per matching report line."""
-    return sum(
-        start < timestamp <= end and "[GCV2][ghost-dispel]" in body
-        for timestamp, body in report_lines)
-
-
 def validate_run(
     directory: Path,
     phases: dict[str, float],
@@ -126,9 +115,10 @@ def validate_run(
     """Reject a structurally plausible log whose derived ledger is impossible.
 
     These are semantic contracts of the r4 boundary change, rather than fixed
-    campaign values: the new evacuation-tail interval is a subset of the old
-    bulk-end interval, every derived interval has non-negative elapsed time,
-    and counters which partition a visited population cannot exceed it.
+    campaign values: the independently reported evacuation-tail population
+    agrees with its timestamped records, every derived interval has
+    non-negative elapsed time, and counters which partition a visited
+    population cannot exceed it.
     """
     required_timers = (
         "young.mark_from_remset",
@@ -156,17 +146,14 @@ def validate_run(
             f"start={tail_start.isoformat()} end={tail_end.isoformat()}"
         )
 
-    old_count = _ghost_count(report_lines, bulk_end, tail_end)
-    new_count = _ghost_count(report_lines, tail_start, tail_end)
-    if new_count > old_count:
+    measured_ghost_regions = evac_ghost_regions(report_lines, timer_end)
+    if counters["candidates"] != measured_ghost_regions:
         raise ValueError(
-            f"{directory}: ghost boundary is not a subset: old={old_count} new={new_count}"
+            f"{directory}: invariant evac_ghost_regions == GCV2Minor candidates "
+            f"violated: counter={counters['candidates']} "
+            f"measured={measured_ghost_regions}"
         )
-    if counters["evac_ghost_regions"] != new_count:
-        raise ValueError(
-            f"{directory}: evac_ghost_regions counter disagrees with boundary: "
-            f"counter={counters['evac_ghost_regions']} measured={new_count}"
-        )
+    counters["evac_ghost_regions"] = measured_ghost_regions
 
     collection_boundary_us = (
         stw["young_collection"] / 1000.0
@@ -266,8 +253,6 @@ def load_run(directory: Path) -> dict[str, object]:
         r"\[GCV2\]\[youngstatic\] pregrant_static young=(?P<static_young>\d+) "
         r"ensureCalls=(?P<static_ensure>\d+) missAfter=(?P<static_miss>\d+)",
         runtime, ("static_young", "static_ensure", "static_miss")))
-
-    counters["evac_ghost_regions"] = evac_ghost_regions(report_lines, timer_end)
 
     collection_known_us = sum(phases[name] for name in COLLECTION_PHASES)
     collection_held_us = stw["young_collection"] / 1000.0

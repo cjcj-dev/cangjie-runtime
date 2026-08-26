@@ -29,7 +29,15 @@ class AnalyzeYoungStwTest(unittest.TestCase):
         self.assertEqual(evac_ghost_regions(report_lines, report_timer_ends(report_lines)), 1)
 
     @staticmethod
-    def _write_fixture(root: Path, cas_fail: int) -> None:
+    def _write_fixture(
+        root: Path,
+        cas_fail: int,
+        *,
+        extra_ghost: bool = False,
+        candidate_counter: int = 1,
+        boundary_order_violation: bool = False,
+        post_held_ns: int = 1000000,
+    ) -> None:
         phases = [
             "young.flush_alloc", "young.prepare_candidates", "young.remset_drain",
             "young.root_enum", "young.mark_closure", "young.remset_rescan",
@@ -49,25 +57,32 @@ class AnalyzeYoungStwTest(unittest.TestCase):
             f"[GCLOG] v=3 rec=phase seq=1 name={name} kind=pause start_ns=0 ns={phase_ns[name]}"
             for name in phases
         ) + "\n" + "\n".join(
-            f"[GCLOG] v=3 rec=stw seq=1 reason={reason} start_ns=0 wait_ns=0 held_ns=1000000"
+            f"[GCLOG] v=3 rec=stw seq=1 reason={reason} start_ns=0 wait_ns=0 "
+            f"held_ns={post_held_ns if reason == 'young_post-relocate' else 1000000}"
             for reason in ("young_collection", "young_post-relocate", "other_a", "other_b")
         ) + "\n"
-        report = "\n".join((
+        report_lines = [
             "2026-01-01 00:00:00.001000 1 young.mark_from_remset time: 10us",
             "2026-01-01 00:00:00.001200 1 young.pre_evac_clear time: 100us",
             "2026-01-01 00:00:00.003200 1 young.ref_fix_bulk time: 20us",
             "2026-01-01 00:00:00.003250 1 [GCV2][ghost-dispel] region=previous",
             "2026-01-01 00:00:00.003500 1 [GCV2][ghost-dispel] region=current",
             "2026-01-01 00:00:00.003900 1 young.evac_prepare_next time: 20us",
-            "2026-01-01 00:00:00.004000 1 young.evac_finish time: 700us",
-            "[GCV2Minor] run=1 candidates=2 candidateBytes=100 liveBytes=10 remembered=1",
+            f"2026-01-01 00:00:00.004000 1 young.evac_finish time: "
+            f"{'900' if boundary_order_violation else '700'}us",
+            f"[GCV2Minor] run=1 candidates={candidate_counter} "
+            "candidateBytes=100 liveBytes=10 remembered=1",
             "[GCV2][markpar] reachable_n=2",
             "[GCV2Minor] y2yDirtyHolders=1",
             "[GCV2][remsetdrain] recorded=3 live=1 consumed=1 interiors=1",
             f"[GCV2][reffix][conc_heap] nObj=1 nSlot=3 cas_ok=1 cas_fail={cas_fail}",
             "remembered-set promoteReplay=1 residualPromote=1 youngRegionCount=2",
             "[PROMODOMAIN][DISCHARGE] edges=1 ns=10000 registered=1 tableBytes≈64",
-        ))
+        ]
+        if extra_ghost:
+            report_lines.insert(
+                5, "2026-01-01 00:00:00.003600 1 [GCV2][ghost-dispel] region=unexpected")
+        report = "\n".join(report_lines)
         runtime = "\n".join((
             "[GCV2][installdomain] pregrant grant=1 already=1 tooLate=0 skip=0",
             "[GCV2][youngstatic] pregrant_static young=1 ensureCalls=1 missAfter=0",
@@ -96,6 +111,33 @@ class AnalyzeYoungStwTest(unittest.TestCase):
             )
             self.assertEqual(green.returncode, 0, green.stderr)
             self.assertEqual(json.loads(green.stdout)["n"], 10)
+
+            self._write_fixture(root, cas_fail=0, extra_ghost=True)
+            ghost_red = subprocess.run(
+                [sys.executable, str(analyzer), str(root), "--compact"],
+                text=True, capture_output=True, check=False,
+            )
+            self.assertEqual(ghost_red.returncode, 1)
+            self.assertIn(
+                "evac_ghost_regions == GCV2Minor candidates",
+                ghost_red.stderr,
+            )
+
+            self._write_fixture(root, cas_fail=0, boundary_order_violation=True)
+            boundary_red = subprocess.run(
+                [sys.executable, str(analyzer), str(root), "--compact"],
+                text=True, capture_output=True, check=False,
+            )
+            self.assertEqual(boundary_red.returncode, 1)
+            self.assertIn("boundary order violated", boundary_red.stderr)
+
+            self._write_fixture(root, cas_fail=0, post_held_ns=50000)
+            derived_red = subprocess.run(
+                [sys.executable, str(analyzer), str(root), "--compact"],
+                text=True, capture_output=True, check=False,
+            )
+            self.assertEqual(derived_red.returncode, 1)
+            self.assertIn("post_boundary_us", derived_red.stderr)
 
             self._write_fixture(root, cas_fail=999)
             red = subprocess.run(
