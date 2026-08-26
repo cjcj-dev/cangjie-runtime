@@ -1,5 +1,6 @@
 runtime/tests/gc_unit/build_standalone/
 runtime/target/
 *.tar.gz
+# Python analyzer bytecode (housekeeping only).
 __pycache__/
 *.pyc
