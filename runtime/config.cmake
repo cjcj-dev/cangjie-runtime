@@ -470,6 +470,7 @@ option(MRT_GC_UNIT_TESTS "Build GC unit tests (cj_gc_unit)" OFF)
 # bind the implementation from libcangjie-runtime.  The default product keeps
 # those templates inline and does not grant test access.
 option(MRT_TESTABLE_INTERNALS "Build test-only exported GC internals" OFF)
+option(MRT_WAVE8_Y2Y_FIXED_ARM "Enable the wave8 y2y pre-release fixed experiment arm" OFF)
 # M0 correlation is an experiment-only identity ledger.  The default product
 # does not compile its ABI or registry paths.
 option(MRT_M0_CORRELATION_EXPERIMENT "Build the M0 correlation experiment ledger" OFF)

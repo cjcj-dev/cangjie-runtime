@@ -104,6 +104,10 @@ if (MRT_TESTABLE_INTERNALS)
     add_compile_definitions(MRT_TESTABLE_INTERNALS=1)
 endif()
 
+if (MRT_WAVE8_Y2Y_FIXED_ARM)
+    add_compile_definitions(MRT_WAVE8_Y2Y_FIXED_ARM=1)
+endif()
+
 if (MRT_M0_CORRELATION_EXPERIMENT)
     add_compile_definitions(MRT_M0_CORRELATION_EXPERIMENT=1)
 endif()

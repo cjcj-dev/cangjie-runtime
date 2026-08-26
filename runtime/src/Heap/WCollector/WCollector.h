@@ -63,7 +63,7 @@ RemsetFilterTestReceipt ReadRemsetFilterTestReceipt();
 void NoteRemsetFilterTestReceipt(MAddress slot, RemsetFilterReceiptReason reason, bool consumed);
 
 struct Y2yHandoffTestReceipt {
-    uint64_t phase0 = 0; // first merge before release
+    uint64_t phase0 = 0; // release-boundary observation
     uint64_t phase1 = 0; // roots consumed after release
     uint64_t phase2 = 0; // STW2 merge
     uint64_t beforeRelease = 0;
@@ -72,7 +72,9 @@ struct Y2yHandoffTestReceipt {
 };
 void ResetY2yHandoffTestReceipt();
 Y2yHandoffTestReceipt ReadY2yHandoffTestReceipt();
-void NoteY2yHandoffTestReceipt(uint8_t phase, uint64_t before, uint64_t after);
+void NoteY2yBeforeReleaseTestReceipt(uint64_t pending);
+void NoteY2yAfterRootTestReceipt(uint64_t pending);
+void NoteY2yAfterStw2TestReceipt(uint64_t pending);
 #endif
 
 // portyoungconc: work accounting for the concurrent young mark window.
