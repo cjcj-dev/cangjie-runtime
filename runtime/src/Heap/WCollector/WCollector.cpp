@@ -373,7 +373,7 @@ uint64_t WCollectorFlipSeqForProbe() { return WCollector::FlipSeq().load(std::me
 BaseObject* ProbeFindToVersion(BaseObject* obj)
 {
     Collector& c = Heap::GetHeap().GetCollector();
-    return c.FindToVersion(obj);
+    return c.FindToVersion(obj).GetOrFailClosed("ZgcInvariants::ProbeFindToVersion");
 }
 } // namespace ZgcInvariants
 } // namespace MapleRuntime

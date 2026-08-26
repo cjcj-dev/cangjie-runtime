@@ -458,7 +458,8 @@ public:
                 return to;
             }
         } else if (obj->IsForwarded()) {
-            BaseObject* published = FindToVersion(obj);
+            BaseObject* published =
+                FindToVersion(obj).GetOrFailClosed("WCollector::ForwardObjectImpl");
             if (published != nullptr) {
                 return published;
             }
@@ -676,7 +677,7 @@ public:
         return space.GetRegionManager().PlanRoute(fromObj, stw.route_plan_token());
     }
 
-    BaseObject* FindToVersion(BaseObject* obj) const override
+    FindToVersionResult FindToVersion(BaseObject* obj) const override
     {
         // Mirror IsGhostFromObject: GetGhostFromRegionAt → GetUnitIdxAt has no heap range
         // check, so null / non-heap (incl. colour-only null after flip) aborts as
@@ -684,7 +685,7 @@ public:
         // nullptr here is dual: non-heap/null gate OR unpublished / no to-version.
         // Soft-resolve paths must not CAS-null on the non-heap reading (RO static).
         if (obj == nullptr || !Heap::IsHeapAddress(obj)) {
-            return nullptr;
+            return FindToVersionResult::NotManaged();
         }
         const MAddress fromAddr = reinterpret_cast<MAddress>(obj);
         ForwardingTable::ToAnswer ans = ForwardingTable::ToAnswer::Unarmed;
@@ -696,10 +697,14 @@ public:
             }
             if constexpr (ForwardingTable::kEntriesSoleWhenArmed) {
                 if (ans == ForwardingTable::ToAnswer::ArmedHit) {
-                    return ToHeaderCovered(stored) ? stored : nullptr;
+                    return ToHeaderCovered(stored) ? FindToVersionResult::Found(stored)
+                                                  : FindToVersionResult::NotForwarded();
+                }
+                if (ans == ForwardingTable::ToAnswer::Unavailable) {
+                    return FindToVersionResult::Unavailable();
                 }
                 if (ans == ForwardingTable::ToAnswer::ArmedMiss && !obj->IsForwarded()) {
-                    return nullptr;
+                    return FindToVersionResult::NotForwarded();
                 }
             }
         }
@@ -708,7 +713,11 @@ public:
         }
         RegionInfo* fromRegionInfo = RegionInfo::GetGhostFromRegionAt(fromAddr);
         if (fromRegionInfo == nullptr) {
-            return stored;
+            if (stored != nullptr) {
+                return FindToVersionResult::Found(stored);
+            }
+            return obj->IsForwarded() ? FindToVersionResult::Unavailable()
+                                      : FindToVersionResult::NotForwarded();
         }
         RegionSpace& space = reinterpret_cast<RegionSpace&>(theAllocator);
         BaseObject* geometric = space.GetRegionManager().FindPublishedRoute(obj).dest;
@@ -721,19 +730,27 @@ public:
                 ForwardingTable::Publication publication =
                     ForwardingTable::RetainOpenPublicationAfterCopy(fromRegionInfo, fromAddr);
                 if (!publication) {
-                    return stored;
+                    return FindToVersionResult::Unavailable();
                 }
                 const MAddress receipt = ForwardingTable::InsertMapping(
                     publication, fromAddr, reinterpret_cast<MAddress>(geometric));
                 (void)space.GetRegionManager().GetRelocationRequestQueue().Publish(fromAddr, receipt);
                 geometric = reinterpret_cast<BaseObject*>(receipt);
             }
-            return geometric;
+            return FindToVersionResult::Found(geometric);
         }
         if constexpr (ForwardingTable::kConsumeEntries) {
-            return stored != nullptr ? stored : nullptr;
+            if (stored != nullptr) {
+                return FindToVersionResult::Found(stored);
+            }
+            return obj->IsForwarded() ? FindToVersionResult::Unavailable()
+                                      : FindToVersionResult::NotForwarded();
         }
-        return ToHeaderCovered(geometric) ? geometric : nullptr;
+        if (geometric != nullptr && ToHeaderCovered(geometric)) {
+            return FindToVersionResult::Found(geometric);
+        }
+        return obj->IsForwarded() ? FindToVersionResult::Unavailable()
+                                  : FindToVersionResult::NotForwarded();
     }
 
 protected:
@@ -831,7 +848,7 @@ protected:
         }
         RegionInfo* live = RegionInfo::TryGetRegionInfoAt(reinterpret_cast<MAddress>(target));
         if (live == nullptr || live->IsFreeRegion()) {
-            BaseObject* to = FindToVersion(target);
+            BaseObject* to = FindToVersion(target).GetOrFailClosed("WCollector::GetAndTryTagRefField.free");
             if (to != nullptr) {
                 target = to;
             } else {
@@ -841,7 +858,7 @@ protected:
             }
         }
         if (IsStaleStoreValue(target)) {
-            BaseObject* to = FindToVersion(target);
+            BaseObject* to = FindToVersion(target).GetOrFailClosed("WCollector::GetAndTryTagRefField.stale");
             if (to != nullptr) {
                 target = to;
             }

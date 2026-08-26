@@ -58,7 +58,11 @@ public:
     // tableOnly is the other old-path miss (type not yet FROM while table is).
     static constexpr bool kZfwdTableConsume = true;
 
-    enum class ToAnswer : uint8_t { ArmedHit, ArmedMiss, Unarmed };
+    // Transport detail used by WCollector's public FindToVersionResult.
+    // ArmedMiss means a retained/queryable carrier was searched. Unavailable
+    // means a carrier or closed publication exists but can no longer be
+    // queried. Unarmed remains the pre-publication route-geometry state.
+    enum class ToAnswer : uint8_t { ArmedHit, ArmedMiss, Unavailable, Unarmed };
 
     static bool Initialize(MAddress heapStart, size_t heapSize, size_t unitSize);
 
@@ -114,7 +118,13 @@ public:
     static MAddress LookupTo(MAddress from, ToAnswer* answer = nullptr);
     static uint64_t ArmedHitCount();
     static uint64_t ArmedMissCount();
+    static uint64_t UnavailableCount();
     static uint64_t UnarmedCount();
+
+#if defined(MRT_TESTABLE_INTERNALS)
+    using LookupRetainHook = void (*)(void*);
+    static void SetLookupRetainHook(LookupRetainHook hook, void* context);
+#endif
 
     static void NoteCompare(MAddress addr, bool legacy);
     static void NoteDestCompare(MAddress from, MAddress geometricTo);

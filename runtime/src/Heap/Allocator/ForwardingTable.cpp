@@ -106,7 +106,22 @@ std::atomic<uint64_t> g_destPending{ 0 };
 std::atomic<uint64_t> g_destDisagreeByType[kTypeBuckets] = {};
 std::atomic<uint64_t> g_armedHit{ 0 };
 std::atomic<uint64_t> g_armedMiss{ 0 };
+std::atomic<uint64_t> g_unavailable{ 0 };
 std::atomic<uint64_t> g_unarmed{ 0 };
+
+#if defined(MRT_TESTABLE_INTERNALS)
+std::atomic<ForwardingTable::LookupRetainHook> g_lookupRetainHook{ nullptr };
+std::atomic<void*> g_lookupRetainHookContext{ nullptr };
+#endif
+
+bool PublicationClosedAt(MAddress addr)
+{
+    zoffset offset;
+    if (!g_publicationState.offset_for_address(addr, &offset)) {
+        return false;
+    }
+    return !PublicationOpen(g_publicationState.get(offset));
+}
 
 } // namespace
 
@@ -140,7 +155,7 @@ bool ForwardingTable::Initialize(MAddress heapStart, size_t heapSize, size_t uni
         std::atexit([]() {
             std::fprintf(stderr,
                          "[FWDTABLE][refuse] atexit full=%llu overflow=%llu fallbackFull=%llu "
-                         "fallbackOverflow=%llu armedHit=%llu armedMiss=%llu unarmed=%llu\n",
+                         "fallbackOverflow=%llu armedHit=%llu armedMiss=%llu unavailable=%llu unarmed=%llu\n",
                          static_cast<unsigned long long>(ZForwarding::FullRefusals().load(std::memory_order_relaxed)),
                          static_cast<unsigned long long>(
                              ZForwarding::OverflowRefusals().load(std::memory_order_relaxed)),
@@ -150,6 +165,7 @@ bool ForwardingTable::Initialize(MAddress heapStart, size_t heapSize, size_t uni
                              ZForwarding::OverflowFallbacks().load(std::memory_order_relaxed)),
                          static_cast<unsigned long long>(ForwardingTable::ArmedHitCount()),
                          static_cast<unsigned long long>(ForwardingTable::ArmedMissCount()),
+                         static_cast<unsigned long long>(ForwardingTable::UnavailableCount()),
                          static_cast<unsigned long long>(ForwardingTable::UnarmedCount()));
         });
     }
@@ -756,9 +772,11 @@ MAddress ZForwarding::resolve_live(MAddress to) const
 
 bool ZForwarding::receipt_live(MAddress to) const { return resolve_live(to) != 0; }
 
-MAddress ForwardingTable::FindRetiredTo(MAddress from)
+static MAddress FindRetiredToImpl(MAddress from, ForwardingTable::ToAnswer* answer)
 {
     std::lock_guard<std::mutex> lock(g_retiredLock);
+    bool searched = false;
+    bool rejected = false;
     auto scan = [&](const std::vector<ZForwarding*>& gens) -> MAddress {
         for (auto it = gens.rbegin(); it != gens.rend(); ++it) {
             ZForwarding* tab = *it;
@@ -766,22 +784,44 @@ MAddress ForwardingTable::FindRetiredTo(MAddress from)
             // Geometry is self-contained in ZForwarding, so reject non-candidates before touching
             // the page pointer.  For a covering candidate the incarnation check still happens
             // before reading its forwarding payload, which is the required fail-closed order.
-            if (tab != nullptr && tab->covers(from) &&
-                tab->page_life_current(RegionLifeClock::Carrier::RETIRED_ENTRY)) {
-                const MAddress to = tab->find(from);
-                if (to != 0) {
-                    return to;
-                }
+            if (tab == nullptr || !tab->covers(from)) {
+                continue;
+            }
+            if (!tab->page_life_current(RegionLifeClock::Carrier::RETIRED_ENTRY)) {
+                rejected = true;
+                continue;
+            }
+            searched = true;
+            const MAddress to = tab->find(from);
+            if (to != 0) {
+                return to;
             }
         }
         return 0;
     };
     const MAddress fresh = scan(g_retired);
     if (fresh != 0) {
+        if (answer != nullptr) {
+            *answer = ForwardingTable::ToAnswer::ArmedHit;
+        }
         return fresh;
     }
-    return scan(g_retiredAged);
+    const MAddress aged = scan(g_retiredAged);
+    if (answer != nullptr) {
+        if (aged != 0) {
+            *answer = ForwardingTable::ToAnswer::ArmedHit;
+        } else if (searched) {
+            *answer = ForwardingTable::ToAnswer::ArmedMiss;
+        } else if (rejected) {
+            *answer = ForwardingTable::ToAnswer::Unavailable;
+        } else {
+            *answer = ForwardingTable::ToAnswer::Unarmed;
+        }
+    }
+    return aged;
 }
+
+MAddress ForwardingTable::FindRetiredTo(MAddress from) { return FindRetiredToImpl(from, nullptr); }
 
 MAddress ForwardingTable::FindTo(MAddress from)
 {
@@ -808,9 +848,34 @@ bool ForwardingTable::EntriesArmed(MAddress from) { return GetEntries(from) != n
 
 MAddress ForwardingTable::LookupTo(MAddress from, ToAnswer* answer)
 {
-    ZForwarding* tab = GetEntries(from);
-    if (tab != nullptr) {
-        const MAddress to = tab->find(from);
+    // zForwarding.cpp:86-108,134-181. Resolve the active slot and retain it
+    // under the same install lock that seals/unlinks it. The lookup may then
+    // run lock-free while ClearEntries drains this exact ownership token.
+    ZForwarding* retained = nullptr;
+    bool activeRejected = false;
+    {
+        std::lock_guard<std::mutex> lock(g_installLock);
+        ZForwarding* candidate = Ready() ? MapGet(g_entries, from) : nullptr;
+        if (candidate != nullptr) {
+            if (!candidate->page_life_current(RegionLifeClock::Carrier::ARMED_ENTRY) ||
+                !candidate->retain_page()) {
+                activeRejected = true;
+            } else {
+                retained = candidate;
+            }
+        }
+    }
+    bool activeSearched = false;
+    if (retained != nullptr) {
+        activeSearched = true;
+#if defined(MRT_TESTABLE_INTERNALS)
+        ForwardingTable::LookupRetainHook hook = g_lookupRetainHook.load(std::memory_order_acquire);
+        if (hook != nullptr) {
+            hook(g_lookupRetainHookContext.load(std::memory_order_acquire));
+        }
+#endif
+        const MAddress to = retained->find(from);
+        retained->release_page();
         if (to != 0) {
             g_armedHit.fetch_add(1, std::memory_order_relaxed);
             if (answer != nullptr) {
@@ -819,7 +884,8 @@ MAddress ForwardingTable::LookupTo(MAddress from, ToAnswer* answer)
             return to;
         }
     }
-    const MAddress retired = FindRetiredTo(from);
+    ToAnswer retiredAnswer = ToAnswer::Unarmed;
+    const MAddress retired = FindRetiredToImpl(from, &retiredAnswer);
     if (retired != 0) {
         g_armedHit.fetch_add(1, std::memory_order_relaxed);
         if (answer != nullptr) {
@@ -827,10 +893,17 @@ MAddress ForwardingTable::LookupTo(MAddress from, ToAnswer* answer)
         }
         return retired;
     }
-    if (tab != nullptr) {
+    if (activeSearched || retiredAnswer == ToAnswer::ArmedMiss) {
         g_armedMiss.fetch_add(1, std::memory_order_relaxed);
         if (answer != nullptr) {
             *answer = ToAnswer::ArmedMiss;
+        }
+        return 0;
+    }
+    if (activeRejected || retiredAnswer == ToAnswer::Unavailable || PublicationClosedAt(from)) {
+        g_unavailable.fetch_add(1, std::memory_order_relaxed);
+        if (answer != nullptr) {
+            *answer = ToAnswer::Unavailable;
         }
         return 0;
     }
@@ -843,7 +916,16 @@ MAddress ForwardingTable::LookupTo(MAddress from, ToAnswer* answer)
 
 uint64_t ForwardingTable::ArmedHitCount() { return g_armedHit.load(std::memory_order_relaxed); }
 uint64_t ForwardingTable::ArmedMissCount() { return g_armedMiss.load(std::memory_order_relaxed); }
+uint64_t ForwardingTable::UnavailableCount() { return g_unavailable.load(std::memory_order_relaxed); }
 uint64_t ForwardingTable::UnarmedCount() { return g_unarmed.load(std::memory_order_relaxed); }
+
+#if defined(MRT_TESTABLE_INTERNALS)
+void ForwardingTable::SetLookupRetainHook(LookupRetainHook hook, void* context)
+{
+    g_lookupRetainHookContext.store(context, std::memory_order_release);
+    g_lookupRetainHook.store(hook, std::memory_order_release);
+}
+#endif
 
 void ForwardingTable::NoteCompare(MAddress addr, bool legacy)
 {
