@@ -773,9 +773,19 @@ BaseObject* WCollector::ResolveMinorReference(RefField<>& field, const ScopedSto
                                               bool* preservedByCurrentRoot) const
 {
     auto plannedTo = [this, stw](BaseObject* from) -> BaseObject* {
-        return stw != nullptr
-            ? PlanRouteUnderStw(from, *stw).dest
-            : FindToVersion(from).GetOrFailClosed("WCollector::ResolveMinorReference.field");
+        if (stw != nullptr) {
+            return PlanRouteUnderStw(from, *stw).dest;
+        }
+        FindToVersionResult resolved = FindToVersion(from);
+        if (resolved.is_unavailable()) {
+            // Concurrent remembered-slot scan: holders need not be live and the
+            // young forwarding carrier can retire between slot observation and
+            // this query. Post-lifecycle soft miss — count it, leave the slot
+            // untouched; never hand the answer to object-field access.
+            g_findtoPostLifecycleSoft.fetch_add(1, std::memory_order_relaxed);
+            return nullptr;
+        }
+        return resolved.GetOrFailClosed("WCollector::ResolveMinorReference.field");
     };
 
     RefField<> value(field);
@@ -969,9 +979,15 @@ static void NoteRootGateRefusal(const RootSlot& root, BaseObject* from, BaseObje
 BaseObject* WCollector::ResolveMinorReference(RootSlot& root, const ScopedStopTheWorld* stw) const
 {
     auto plannedTo = [this, stw](BaseObject* from) -> BaseObject* {
-        return stw != nullptr
-            ? PlanRouteUnderStw(from, *stw).dest
-            : FindToVersion(from).GetOrFailClosed("WCollector::ResolveMinorReference.root");
+        if (stw != nullptr) {
+            return PlanRouteUnderStw(from, *stw).dest;
+        }
+        FindToVersionResult resolved = FindToVersion(from);
+        if (resolved.is_unavailable()) {
+            g_findtoPostLifecycleSoft.fetch_add(1, std::memory_order_relaxed);
+            return nullptr;
+        }
+        return resolved.GetOrFailClosed("WCollector::ResolveMinorReference.root");
     };
 
     zaddress_unsafe observed = root.LoadPlain();

@@ -96,6 +96,7 @@ std::atomic<size_t> g_resolveRootEntry{ 0 };
 std::atomic<size_t> g_resolveRootOld{ 0 };
 std::atomic<size_t> g_resolveRootHealNull{ 0 };
 std::atomic<size_t> g_fixMinorRootSlotsCalls{ 0 };
+std::atomic<size_t> g_findtoPostLifecycleSoft{ 0 };
 
 // F3 true-dead arm (FixOldTaggedRefField soft-null). Always-on classified counters
 // (f3arm / F3_KEEP_NO_NULL_DEAD_ARM §6 BEFORE_A). Default product still CAS-null.
@@ -1016,9 +1017,15 @@ void WCollector::RescanRememberedSet(WorkStack& workStack, const MinorSlotSet& r
         }
     };
     auto plannedTo = [this, stw](BaseObject* from) -> BaseObject* {
-        return stw != nullptr
-            ? PlanRouteUnderStw(from, *stw).dest
-            : FindToVersion(from).GetOrFailClosed("WCollector::RescanRememberedSet");
+        if (stw != nullptr) {
+            return PlanRouteUnderStw(from, *stw).dest;
+        }
+        FindToVersionResult resolved = FindToVersion(from);
+        if (resolved.is_unavailable()) {
+            g_findtoPostLifecycleSoft.fetch_add(1, std::memory_order_relaxed);
+            return nullptr;
+        }
+        return resolved.GetOrFailClosed("WCollector::RescanRememberedSet");
     };
 
     // HotSpot G1RemSet scrub analogue. ORDER matters (STEER2 / defect⑤):
@@ -1609,6 +1616,8 @@ void WCollector::RescanRememberedSet(WorkStack& workStack, const MinorSlotSet& r
          "[GCV2][remset-holder-policy] rootedRetainedKept=%zu retainedDeadDropped=%zu "
          "rootedStalePreserved=%zu currentRoots=%zu",
          rootedRetainedKept, retainedDeadDropped, rootedStalePreserved, currentMinorRoots.size());
+    VLOG(REPORT, "[GCV2][findto-postlifecycle] soft=%zu",
+         g_findtoPostLifecycleSoft.load(std::memory_order_relaxed));
     NwDropAudit::Report("rescan");
     if (remsetLifeProbe && scrubbedBadTarget != 0) {
         VLOG(REPORT,
