@@ -86,6 +86,7 @@ class WCollector : public CopyCollector {
     friend struct MutatorPublishTestAccess;
     friend struct PartialArrayTestAccess;
     friend struct RelocationReceiptTestAccess;
+    friend struct RemsetRearmTestAccess;
 #endif
 
 public:

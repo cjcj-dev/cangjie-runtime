@@ -22,6 +22,9 @@
 // does not inherit.  The minor's own consumer (WCollector::RescanRememberedSet) calls Record
 // directly when it re-arms a scanned slot, so a test that cannot call it cannot model the re-arm at
 // all.  Same idiom the fixture already uses for RegionInfo; scoped to this one header.
+#ifndef MRT_TESTABLE_INTERNALS
+#define MRT_TESTABLE_INTERNALS 1
+#endif
 #define private public
 #include "Heap/Barrier/RememberedSet.h"
 #undef private
@@ -33,12 +36,63 @@
 #include "Heap/WCollector/RememberedHolderPolicy.h"
 #include "ObjectModel/RefField.inline.h"
 #include "gc_heap_fixture.hpp"
+#include "Heap/WCollector/WCollector.h"
 #include "gc_unittest.hpp"
 
 using namespace MapleRuntime;
 using namespace MapleRuntime::GcUnit;
 
 extern "C" void CJ_MCC_PostWriteRefField(ObjectPtr ref, ObjectPtr obj, RefField<false>* field);
+
+namespace MapleRuntime {
+
+// The product minor path drains the previous face in Generation.cpp and then
+// hands that exact set to WCollector::RescanRememberedSet. Keep this test peer
+// limited to that hand-off; all filtering, resolving, marking and re-arming
+// remain in the product function compiled into libcangjie-runtime.so.
+struct RemsetRearmTestAccess {
+    struct ConsumeResult {
+        size_t work = 0;
+        size_t consumedLedger = 0;
+        RemsetScanStats stats;
+    };
+
+    static RefField<> Tag(WCollector& collector, BaseObject* object)
+    {
+        return collector.GetAndTryTagRefField(object);
+    }
+
+    static void BeginMinor(WCollector& collector)
+    {
+        // WCollector::DoYoungGarbageCollection publishes the new young mark and
+        // remembered colours before RememberedSet::DrainForMinor (Generation.cpp:533,649-651).
+        collector.flip_young_mark_start();
+    }
+
+    static ConsumeResult ConsumePrevious(WCollector& collector, const std::unordered_set<MAddress>& previous,
+                                          BaseObject* currentMinorRoot)
+    {
+        WCollector::WorkStack workStack = collector.NewWorkStack();
+        WCollector::MinorSlotSet reachableSlots;
+        WCollector::MinorSlotSet weakSlots;
+        WCollector::MinorObjectSet currentMinorRoots;
+        WCollector::MinorSlotSet consumed;
+        RemsetScanStats stats;
+        stats.recorded = previous.size();
+        if (currentMinorRoot != nullptr) {
+            currentMinorRoots.insert(currentMinorRoot);
+        }
+        collector.RescanRememberedSet(workStack, previous, reachableSlots, weakSlots, currentMinorRoots,
+                                      /*fullYoungScan=*/false, &consumed, &stats);
+        const size_t work = workStack.size();
+        while (!workStack.empty()) {
+            workStack.pop_back();
+        }
+        return ConsumeResult { work, consumed.size(), stats };
+    }
+};
+
+} // namespace MapleRuntime
 
 namespace {
 
@@ -252,6 +306,154 @@ GC_TEST(Remset, StoreGoodRewriteReregistersAfterDrain)
     barrier.WriteReference(fx.obj0, *field, fx.obj1);
 
     GC_EXPECT_TRUE(rs.Contains(slot));
+}
+
+// Product-path form of the r6b failure arm. Generation drains the previous
+// face, then WCollector::RescanRememberedSet consumes it and re-arms the slot
+// while its resolved target is still young (zRemembered.cpp:578-589). The
+// compiler-like bare store below makes no runtime call; minor #2 must still
+// receive the slot from the current face established by that product consumer.
+GC_OTHER_VM_TEST(Remset, StoreGoodAfterProductConsumerRearm)
+{
+    GcHeapFixture fx;
+    fx.region0->SetYoungRegionFlag(0);
+    fx.region1->SetYoungRegionFlag(1);
+    fx.region1->SetYoungAge(1);
+    LiveInfo* live = fx.PlantLiveInfo(fx.region1);
+    (void)fx.PlantMarkBitmap<Generation::Young>(live, fx.region1->GetRegionSize());
+    // Product remset consumption accepts exact object starts through the loaded
+    // TypeInfo registry (Remembered.cpp:1157-1204). GcHeapFixture normally needs
+    // residence only; this product-entry test needs the stronger real-object precondition.
+    fx.typeInfo->SetUUID(1);
+    TypeInfoManager::GetTypeInfoManager().AddTypeInfo(fx.typeInfo);
+    const bool targetTypeRegistered = TypeInfoManager::GetTypeInfoManager().ContainsTypeInfo(fx.typeInfo);
+
+    auto* field = &HeapSlotAt<>(reinterpret_cast<MAddress>(fx.obj0) + TYPEINFO_PTR_SIZE);
+    const MAddress slot = reinterpret_cast<MAddress>(field);
+    BaseObject* objectB = fx.PlaceObject(fx.heapStart + RegionInfo::UNIT_SIZE + 128);
+    fx.region1->SetRegionAllocPtr(reinterpret_cast<MAddress>(objectB) + 64);
+
+    RememberedSet& rs = Heap::GetHeap().GetRememberedSet();
+    rs.Initialize(fx.heapStart, 2 * RegionInfo::UNIT_SIZE);
+    WCollector collector(Heap::GetHeap().GetAllocator(), Heap::GetHeap().GetCollectorResources());
+    Barrier barrier(collector, rs);
+
+    field->StoreColoured(zpointer::null);
+    barrier.WriteReference(fx.obj0, *field, fx.obj1);
+    RemsetRearmTestAccess::BeginMinor(collector);
+    std::unordered_set<MAddress> firstMinor;
+    const size_t firstDrainCount = rs.DrainForMinor(firstMinor);
+    const size_t firstCount = firstMinor.count(slot);
+    const size_t sizeAfterFirstDrain = rs.Size();
+    const auto firstConsume = RemsetRearmTestAccess::ConsumePrevious(collector, firstMinor, fx.obj0);
+    const size_t sizeAfterFirstConsume = rs.Size();
+
+    // LLVM store-good hit analogue: coloured volatile store, no runtime hand-off.
+    RefField<> taggedB = RemsetRearmTestAccess::Tag(collector, objectB);
+    field->StoreColoured(taggedB.GetFieldValue());
+    const uintptr_t fieldBeforeSecondDrain = raw(field->GetFieldValue());
+    const bool containsBeforeSecondDrain = rs.Contains(slot);
+    RemsetRearmTestAccess::BeginMinor(collector);
+    std::unordered_set<MAddress> secondMinor;
+    const size_t secondDrainCount = rs.DrainForMinor(secondMinor);
+    const size_t secondCount = secondMinor.count(slot);
+    const size_t sizeAfterSecondDrain = rs.Size();
+    const auto secondConsume = RemsetRearmTestAccess::ConsumePrevious(collector, secondMinor, fx.obj0);
+    const size_t sizeAfterSecondConsume = rs.Size();
+
+    std::fprintf(stderr,
+                 "DETAIL arm=product_consumer slot=0x%zx first_drain=%zu first_count=%zu "
+                 "size_after_first_drain=%zu first_consumer_work=%zu first_consumed=%zu "
+                 "first_stats_consumed=%zu first_skipped_not_heap=%zu first_skipped_weak=%zu "
+                 "target_type_registered=%u size_after_first_consume=%zu "
+                 "field_before_second_drain=0x%zx remset_before_second_drain=%u "
+                 "second_drain=%zu second_count=%zu size_after_second_drain=%zu "
+                 "second_consumer_work=%zu second_consumed=%zu second_stats_consumed=%zu "
+                 "second_skipped_not_heap=%zu second_skipped_weak=%zu "
+                 "size_after_second_consume=%zu target_young=%u "
+                 "invariant=slot_present_after_bare_store\n",
+                 static_cast<size_t>(slot), firstDrainCount, firstCount, sizeAfterFirstDrain,
+                 firstConsume.work, firstConsume.consumedLedger, firstConsume.stats.consumed,
+                 firstConsume.stats.skippedNotHeap, firstConsume.stats.skippedWeak,
+                 static_cast<unsigned>(targetTypeRegistered), sizeAfterFirstConsume,
+                 static_cast<size_t>(fieldBeforeSecondDrain),
+                 static_cast<unsigned>(containsBeforeSecondDrain), secondDrainCount, secondCount,
+                 sizeAfterSecondDrain, secondConsume.work, secondConsume.consumedLedger,
+                 secondConsume.stats.consumed, secondConsume.stats.skippedNotHeap,
+                 secondConsume.stats.skippedWeak, sizeAfterSecondConsume,
+                 static_cast<unsigned>(fx.region1->IsYoungRegion()));
+    std::fflush(stderr);
+
+    GC_EXPECT_TRUE(firstCount == 1);
+    GC_EXPECT_EQ(sizeAfterFirstDrain, 0u);
+    GC_EXPECT_TRUE(sizeAfterFirstConsume == 1);
+    GC_EXPECT_TRUE(containsBeforeSecondDrain);
+    GC_EXPECT_TRUE(secondCount == 1);
+    GC_EXPECT_EQ(sizeAfterSecondDrain, 0u);
+    GC_EXPECT_TRUE(sizeAfterSecondConsume == 1);
+
+    fx.region1->metadata.liveInfo = nullptr;
+    fx.FreePlanted(live);
+}
+
+// r6b positive control: if the product consumer were absent, the existing
+// post-store exit would still register the bare store. Cutting the consumer's
+// re-arm line must leave this item green, so the negative arm is precise.
+GC_OTHER_VM_TEST(Remset, PostStoreControlRegistersAfterDrain)
+{
+    GcHeapFixture fx;
+    fx.region0->SetYoungRegionFlag(0);
+    fx.region1->SetYoungRegionFlag(1);
+    fx.region1->SetYoungAge(1);
+
+    auto* field = &HeapSlotAt<>(reinterpret_cast<MAddress>(fx.obj0) + TYPEINFO_PTR_SIZE);
+    const MAddress slot = reinterpret_cast<MAddress>(field);
+    BaseObject* objectB = fx.PlaceObject(fx.heapStart + RegionInfo::UNIT_SIZE + 128);
+    fx.region1->SetRegionAllocPtr(reinterpret_cast<MAddress>(objectB) + 64);
+
+    RememberedSet& rs = Heap::GetHeap().GetRememberedSet();
+    rs.Initialize(fx.heapStart, 2 * RegionInfo::UNIT_SIZE);
+    WCollector collector(Heap::GetHeap().GetAllocator(), Heap::GetHeap().GetCollectorResources());
+    Barrier barrier(collector, rs);
+    InstalledBarrierScope installedBarrier(barrier);
+
+    field->StoreColoured(zpointer::null);
+    barrier.WriteReference(fx.obj0, *field, fx.obj1);
+    std::unordered_set<MAddress> firstMinor;
+    const size_t firstDrainCount = rs.DrainForMinor(firstMinor);
+    const size_t firstCount = firstMinor.count(slot);
+    const size_t sizeAfterFirstDrain = rs.Size();
+
+    RefField<> taggedB = RemsetRearmTestAccess::Tag(collector, objectB);
+    field->StoreColoured(taggedB.GetFieldValue());
+    const uintptr_t fieldBeforeHook = raw(field->GetFieldValue());
+    const bool containsBeforeHook = rs.Contains(slot);
+    CJ_MCC_PostWriteRefField(objectB, fx.obj0, field);
+    const uintptr_t fieldAfterHook = raw(field->GetFieldValue());
+    const bool containsAfterHook = rs.Contains(slot);
+    const size_t sizeAfterHook = rs.Size();
+    std::unordered_set<MAddress> controlMinor;
+    const size_t controlDrainCount = rs.DrainForMinor(controlMinor);
+    const size_t controlCount = controlMinor.count(slot);
+    const size_t sizeAfterControlDrain = rs.Size();
+
+    std::fprintf(stderr,
+                 "DETAIL arm=post_store_control slot=0x%zx first_drain=%zu first_count=%zu "
+                 "size_after_first_drain=%zu field_before_hook=0x%zx remset_before_hook=%u "
+                 "field_after_hook=0x%zx remset_after_hook=%u size_after_hook=%zu "
+                 "control_drain=%zu control_count=%zu size_after_control_drain=%zu "
+                 "invariant=post_store_registers\n",
+                 static_cast<size_t>(slot), firstDrainCount, firstCount, sizeAfterFirstDrain,
+                 static_cast<size_t>(fieldBeforeHook), static_cast<unsigned>(containsBeforeHook),
+                 static_cast<size_t>(fieldAfterHook), static_cast<unsigned>(containsAfterHook), sizeAfterHook,
+                 controlDrainCount, controlCount, sizeAfterControlDrain);
+    std::fflush(stderr);
+
+    GC_EXPECT_TRUE(firstCount == 1);
+    GC_EXPECT_EQ(sizeAfterFirstDrain, 0u);
+    GC_EXPECT_FALSE(containsBeforeHook);
+    GC_EXPECT_TRUE(containsAfterHook);
+    GC_EXPECT_TRUE(controlCount == 1);
 }
 
 // Compiler hit arm analogue for case A. The coloured store is already done,
