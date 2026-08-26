@@ -40,13 +40,14 @@ bool Enabled()
 bool Encodable(const void* chunkStart, size_t length)
 {
     const MAddress addr = reinterpret_cast<MAddress>(chunkStart);
-    const MAddress base = Heap::heapStartAddr;
+    const MAddress base = Heap::GetHeapStartAddress();
     if (addr < base) {
         return false;
     }
-    // push_partial_array asserts this in ZGC (zMark.cpp:186); the split in
-    // FollowArrayElementsLarge is what makes it hold.
-    if ((addr & (MIN_SIZE - 1)) != 0) {
+    // Encode/Decode store (addr - base) >> MIN_SIZE_SHIFT and reconstruct
+    // base + (offset << MIN_SIZE_SHIFT).  Keep this predicate relative to
+    // that same base (zMark.cpp:177-186).
+    if (((addr - base) & (MIN_SIZE - 1)) != 0) {
         return false;
     }
     if (length == 0 || length > MAX_LENGTH) {
@@ -58,7 +59,7 @@ bool Encodable(const void* chunkStart, size_t length)
 MarkStackEntry Encode(const void* chunkStart, size_t length, bool finalizable)
 {
     const MAddress addr = reinterpret_cast<MAddress>(chunkStart);
-    const size_t offset = static_cast<size_t>((addr - Heap::heapStartAddr) >> MIN_SIZE_SHIFT);
+    const size_t offset = static_cast<size_t>((addr - Heap::GetHeapStartAddress()) >> MIN_SIZE_SHIFT);
     return MarkStackEntry::PartialArray(offset, length, finalizable);
 }
 
@@ -66,7 +67,7 @@ void Decode(const MarkStackEntry& entry, MAddress& chunkStart, size_t& length)
 {
     const size_t offset = entry.partialArrayOffset();
     length = entry.partialArrayLength();
-    chunkStart = Heap::heapStartAddr + (offset << MIN_SIZE_SHIFT);
+    chunkStart = Heap::GetHeapStartAddress() + (offset << MIN_SIZE_SHIFT);
 }
 
 void NoteArraySplit() { (void)g_arraysSplit.fetch_add(1, std::memory_order_relaxed); }
