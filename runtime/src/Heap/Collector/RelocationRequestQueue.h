@@ -74,10 +74,10 @@ public:
     EnqueueResult Add(void* owner, MAddress from);
     MAddress Wait(const Handle& request);
 
-    // ZRelocateQueue::add_and_wait waits for forwarding->is_done(), not for an
-    // object receipt. Request completion is only an attention signal here: a
-    // page can finish legally without publishing this particular object.
-    void WaitUntil(const Handle& request, const std::function<bool()>& pageDone);
+    // Return a published object receipt when COMPLETED wins the wait. A zero
+    // result means page completion or a proven no-publisher FAILED terminal;
+    // the caller must then resolve from the forwarding table after the wait.
+    MAddress WaitUntil(const Handle& request, const std::function<bool()>& pageDone);
 
     // Only the first publication for this from-address completes the Request.
     // The notification is per Request, not a queue-wide wakeup.

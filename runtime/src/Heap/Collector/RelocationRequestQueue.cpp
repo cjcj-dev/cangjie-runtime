@@ -74,10 +74,10 @@ MAddress RelocationRequestQueue::Wait(const Handle& request)
     return receipt;
 }
 
-void RelocationRequestQueue::WaitUntil(const Handle& request, const std::function<bool()>& pageDone)
+MAddress RelocationRequestQueue::WaitUntil(const Handle& request, const std::function<bool()>& pageDone)
 {
     if (request == nullptr || pageDone()) {
-        return;
+        return 0;
     }
 
     // Keep the mutator in a saferegion exactly as Wait() does, but use the page
@@ -88,15 +88,18 @@ void RelocationRequestQueue::WaitUntil(const Handle& request, const std::functio
     const ThreadType threadType = ThreadLocal::GetThreadType();
     const bool stateChanged = mutator != nullptr && threadType != ThreadType::FP_THREAD &&
                               threadType != ThreadType::GC_THREAD && mutator->EnterSaferegion(true);
+    MAddress receipt = 0;
     std::unique_lock<std::mutex> lock(request->completionMutex);
     while (!pageDone()) {
         const State state = request->requestState.load(std::memory_order_acquire);
-        // A request can be failed without a page publication (for example when
-        // its region claim loses the FROM-list race).  The page predicate is
-        // still the normal completion signal, but a terminal request state is
-        // an independent, bounded exit so the waiter can take its keep-from
-        // fallback instead of polling a page that no longer has a publisher.
-        if (state == State::COMPLETED || state == State::FAILED) {
+        // COMPLETED publishes the exact to address before the release-store;
+        // consume it directly instead of relying on a second table lookup.
+        // FAILED is only published once no object/page publisher remains.
+        if (state == State::COMPLETED) {
+            receipt = request->publishedReceipt.load(std::memory_order_relaxed);
+            break;
+        }
+        if (state == State::FAILED) {
             break;
         }
         (void)request->completion.wait_for(lock, std::chrono::milliseconds(1));
@@ -105,6 +108,7 @@ void RelocationRequestQueue::WaitUntil(const Handle& request, const std::functio
     if (stateChanged) {
         (void)mutator->LeaveSaferegion();
     }
+    return receipt;
 }
 
 bool RelocationRequestQueue::Publish(MAddress from, MAddress receipt)

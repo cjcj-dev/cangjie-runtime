@@ -2450,12 +2450,13 @@ BaseObject* WCollector::WaitRoutedTipReady(BaseObject* from, BaseObject* to, Reg
         forwarding->UnlockReadFromRegion();
 
         // A mutator-discovered object must be in the worker's relocation domain
-        // before the request is visible. The request is an attention signal;
-        // page publication, not this object's receipt, is the wait predicate.
+        // before the request is visible. Either its exact to receipt or the
+        // region-level publication/no-publisher terminal resolves this wait.
         EnsureRouteDomainMembership(const_cast<WCollector*>(this), from);
         RelocationRequestQueue& requests = space.GetRegionManager().GetRelocationRequestQueue();
         RelocationRequestQueue::EnqueueResult queued =
             requests.Add(forwarding, reinterpret_cast<MAddress>(from));
+#if defined(MRT_GCV2_REGION_WAIT_DIAG)
         static std::atomic<size_t> g_regionWaitAdd{ 0 };
         const size_t addN = g_regionWaitAdd.fetch_add(1, std::memory_order_relaxed) + 1;
         if (addN <= 8 || (addN & (addN - 1)) == 0) {
@@ -2464,6 +2465,7 @@ BaseObject* WCollector::WaitRoutedTipReady(BaseObject* from, BaseObject* to, Reg
                 addN, from, static_cast<unsigned>(queued.accepted), static_cast<unsigned>(queued.inserted),
                 static_cast<unsigned>(queued.request->state()), requests.PendingCount());
         }
+#endif
 
         // Close publish-before-enqueue: installation may have won between the
         // first lookup and Add(). Publishing an already-existing receipt is the
@@ -2473,11 +2475,22 @@ BaseObject* WCollector::WaitRoutedTipReady(BaseObject* from, BaseObject* to, Reg
             (void)requests.Publish(reinterpret_cast<MAddress>(from), reinterpret_cast<MAddress>(raced));
         }
 
-        requests.WaitUntil(queued.request, regionIsPublished);
+        const MAddress completedReceipt = requests.WaitUntil(queued.request, regionIsPublished);
+        if (completedReceipt != 0) {
+            BaseObject* completed = reinterpret_cast<BaseObject*>(completedReceipt);
+            if (Heap::IsHeapAddress(completed) && completed->IsValidObject()) {
+                g_regionGot.fetch_add(1, std::memory_order_relaxed);
+                if (MutatorRelocate::StatsOn()) {
+                    MutatorRelocate::NoteRegionWaitGot();
+                    MutatorRelocate::NoteWaitReceipt();
+                }
+                return completed;
+            }
+        }
 
-        // zRelocate.cpp:408-415 asks the object question only after the page is
-        // done. A miss is the VisitLive hole recorded in MutatorRelocate.h:68-80
-        // and legally keeps the still-live from address.
+        // Page completion or a proven no-publisher failure has no object
+        // receipt. Ask the table after that terminal; a miss is the VisitLive
+        // hole recorded in MutatorRelocate.h:68-80 and legally keeps from.
         BaseObject* ready = lookupTo();
         if (ready != nullptr && Heap::IsHeapAddress(ready) && ready->IsValidObject()) {
             g_regionGot.fetch_add(1, std::memory_order_relaxed);

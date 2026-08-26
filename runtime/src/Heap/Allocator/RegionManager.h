@@ -1235,6 +1235,16 @@ inline void ExecuteForwardTask(RegionManager& regionManager, RegionList& fromReg
         }
 
         RegionInfo* region = static_cast<RegionInfo*>(selected.request->owner());
+#if defined(MRT_GCV2_REGION_WAIT_DIAG)
+        static std::atomic<size_t> g_regionWaitClaim{ 0 };
+        const size_t claimN = g_regionWaitClaim.fetch_add(1, std::memory_order_relaxed) + 1;
+        if (claimN <= 8 || (claimN & (claimN - 1)) == 0) {
+            LOG(RTLOG_ERROR,
+                "[GCV2][region-wait-claim] n=%zu from=%p claim=1 pending=%zu",
+                claimN, reinterpret_cast<void*>(selected.request->from()),
+                regionManager.GetRelocationRequestQueue().PendingCount());
+        }
+#endif
         // The list transition is the single relocation owner. If an ordinary
         // worker won first, it will publish the requested receipt and wake us.
         if (fromRegionList.TryDeleteRegion(region, RegionInfo::RegionType::FROM_REGION,
@@ -1242,10 +1252,19 @@ inline void ExecuteForwardTask(RegionManager& regionManager, RegionList& fromReg
             regionManager.ForwardRegion<G>(region);
             regionManager.CompleteRelocationRequests(region);
         } else {
-            // The request was claimed, so generation close can no longer find
-            // it in the queue.  An ordinary worker may have won the list race;
-            // if not, this is the only remaining terminal owner.
-            (void)regionManager.GetRelocationRequestQueue().Fail(selected.request->from());
+            // Claim removes only the deque entry. Keep the handle in byFrom:
+            // an ordinary owner may already be forwarding this region, and the
+            // last-worker generation close remains the no-publisher terminal.
+#if defined(MRT_GCV2_REGION_WAIT_DIAG)
+            static std::atomic<size_t> g_claimLoser{ 0 };
+            const size_t loserN = g_claimLoser.fetch_add(1, std::memory_order_relaxed) + 1;
+            if (loserN <= 8 || (loserN & (loserN - 1)) == 0) {
+                LOG(RTLOG_ERROR,
+                    "[GCV2][region-wait-claim-loser] n=%zu from=%p deferred=1 pending=%zu",
+                    loserN, reinterpret_cast<void*>(selected.request->from()),
+                    regionManager.GetRelocationRequestQueue().PendingCount());
+            }
+#endif
         }
     }
 }

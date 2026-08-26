@@ -561,9 +561,14 @@ GC_TEST(ForwardingPublicationProduct, PageWaitThenLookupReadsOriginalCompactRece
 
     if (enteredProductQueue) {
         manager.CompactRegion(region);
-        // Publish(from, receipt) notifies this request, but WaitUntil must not
-        // return until the independent page predicate becomes true.
-        GC_EXPECT_FALSE(waiterReturned.load(std::memory_order_acquire));
+        // Compact installs the table mapping and publishes the same to receipt
+        // before pageDone. The result contract permits this early return only
+        // when the exact to value reaches the product caller.
+        for (size_t i = 0; i < 100 && !waiterReturned.load(std::memory_order_acquire); ++i) {
+            std::this_thread::sleep_for(std::chrono::milliseconds(1));
+        }
+        GC_EXPECT_TRUE(waiterReturned.load(std::memory_order_acquire));
+        GC_EXPECT_TRUE(resolved == reinterpret_cast<BaseObject*>(expected));
         region->MarkForwardingDone();
     }
     waiter.join();
@@ -583,6 +588,87 @@ GC_TEST(ForwardingPublicationProduct, PageWaitThenLookupReadsOriginalCompactRece
     routeDestination->SetRouteDestHold(0);
     region->metadata.liveInfo = nullptr;
     fx.FreePlanted(live);
+}
+
+GC_TEST(ForwardingPublicationProduct, CompletedReceiptResolvesWithoutForwardingTableLookup)
+{
+    GcHeapFixture& fx = ProductFixture();
+    RegionInfo* region = RegionInfo::InitRegion(4, 1, RegionInfo::UnitRole::SMALL_SIZED_UNITS);
+    RegionInfo* routeDestination =
+        RegionInfo::InitRegion(3, 1, RegionInfo::UnitRole::SMALL_SIZED_UNITS);
+    GC_EXPECT_TRUE(region != nullptr && routeDestination != nullptr);
+    region->SetRegionType(RegionInfo::RegionType::THREAD_LOCAL_REGION);
+    routeDestination->SetRegionType(RegionInfo::RegionType::THREAD_LOCAL_REGION);
+    BaseObject* fromObject = fx.PlaceObject(region->GetRegionStart() + 64);
+    BaseObject* expected = fx.obj1;
+    const MAddress from = reinterpret_cast<MAddress>(fromObject);
+    region->SetRegionAllocPtr(from + fromObject->GetSize());
+    routeDestination->SetRegionAllocPtr(routeDestination->GetRegionStart());
+
+    RegionSpace& productSpace = reinterpret_cast<RegionSpace&>(Heap::GetHeap().GetAllocator());
+    RegionManager& manager = productSpace.GetRegionManager();
+    WCollector collector(Heap::GetHeap().GetAllocator(), Heap::GetHeap().GetCollectorResources());
+    collector.SetGCPhase(GCPhase::GC_PHASE_FORWARD);
+    RelocationReceiptTestAccess::BindCollector(Heap::GetHeap().GetCollectorResources(), &collector);
+    LiveInfo* live = PrepareForwardable(fx, region, from);
+    RelocationReceiptTestAccess::ParkFrom(manager, region);
+    AllocBuffer* buffer = AllocBuffer::GetOrCreateAllocBuffer();
+    buffer->SetRegion(routeDestination);
+    GC_EXPECT_TRUE(manager.RouteRegion(region));
+    buffer->ClearRegion();
+    RelocationRequestQueue& queue = manager.GetRelocationRequestQueue();
+    queue.BeginWorkers(1);
+
+    std::atomic<bool> waiterReturned{ false };
+    BaseObject* resolved = nullptr;
+    std::thread waiter([&]() {
+        resolved = RelocationReceiptTestAccess::WaitRoutedTipReady(
+            collector, fromObject, nullptr, region);
+        waiterReturned.store(true, std::memory_order_release);
+    });
+    JoinGuard waiterGuard(waiter);
+    while (queue.PendingCount() == 0 && !waiterReturned.load(std::memory_order_acquire)) {
+        std::this_thread::yield();
+    }
+    const bool enteredProductQueue = queue.PendingCount() == 1;
+    GC_EXPECT_TRUE(enteredProductQueue);
+
+    if (enteredProductQueue) {
+        // Receipt-first order: publish a valid to value without installing any
+        // forwarding-table mapping. The product consumer must use the receipt;
+        // a post-wait lookup would miss and incorrectly keep from.
+        GC_EXPECT_EQ(ForwardingTable::FindTo(from), static_cast<MAddress>(0));
+        GC_EXPECT_TRUE(queue.Publish(from, reinterpret_cast<MAddress>(expected)));
+        for (size_t i = 0; i < 100 && !waiterReturned.load(std::memory_order_acquire); ++i) {
+            std::this_thread::sleep_for(std::chrono::milliseconds(1));
+        }
+        region->MarkForwardingDone();
+    }
+    waiter.join();
+
+    const bool resolvedExpected = resolved == expected;
+    const bool resolvedMoved = resolved != fromObject;
+    const bool tableStayedEmpty = ForwardingTable::FindTo(from) == 0;
+    const bool generationClosed = queue.SynchronizePoll().workersDone;
+
+    collector.SetGCPhase(GCPhase::GC_PHASE_IDLE);
+    RelocationReceiptTestAccess::BindCollector(Heap::GetHeap().GetCollectorResources(), nullptr);
+    ForwardingTable::ClearEntries(region->GetRegionStart(), region->GetRegionSize());
+    ForwardingTable::DropRetiredCovering(region->GetRegionStart(), region->GetRegionSize());
+    if (region->IsGhostFromRegion()) {
+        region->DispelGhostFromRegion();
+    }
+    routeDestination->SetRouteDestHold(0);
+    region->metadata.liveInfo = nullptr;
+    fx.FreePlanted(live);
+
+    // Keep fault-injection failures after all product/global cleanup. The test
+    // harness reports assertions with exceptions; throwing before this point
+    // would contaminate later publication cases and turn one cut into rc=134.
+    GC_EXPECT_TRUE(resolvedExpected);
+    GC_EXPECT_TRUE(resolvedMoved);
+    GC_EXPECT_TRUE(tableStayedEmpty);
+    GC_EXPECT_TRUE(generationClosed);
 }
 
 // Product compact-request entry: the request is registered before compaction;

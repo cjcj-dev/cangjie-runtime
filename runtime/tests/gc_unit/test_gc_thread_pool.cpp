@@ -285,6 +285,75 @@ GC_TEST(GCThreadPool, ActualForwardTaskClosesClaimedRequestExactlyOnceWhenOwnerE
     GC_EXPECT_EQ(queue.CompletionCount(), static_cast<uint64_t>(1));
     GC_EXPECT_EQ(queue.PendingCount(), static_cast<size_t>(0));
 }
+
+GC_TEST(GCThreadPool, ClaimLoserWaitsForOrdinaryOwnerReceiptInsteadOfKeepingFrom)
+{
+    GcHeapFixture fx;
+    RegionManager manager;
+    RegionList emptyFromSpace("gc-unit-ordinary-owner-won");
+    RelocationRequestQueue& queue = manager.GetRelocationRequestQueue();
+    queue.BeginWorkers(2);
+    const MAddress from = reinterpret_cast<MAddress>(fx.obj0);
+    const MAddress to = reinterpret_cast<MAddress>(fx.obj1);
+    const auto added = queue.Add(fx.region0, from);
+    GC_EXPECT_TRUE(added.accepted);
+
+    std::atomic<bool> pageDone{ false };
+    std::atomic<bool> waiterReturned{ false };
+    std::atomic<MAddress> answer{ from };
+    std::thread waiter([&]() {
+        answer.store(queue.WaitUntil(
+            added.request, [&]() { return pageDone.load(std::memory_order_acquire); }),
+            std::memory_order_release);
+        waiterReturned.store(true, std::memory_order_release);
+    });
+    JoinGuard waiterGuard(waiter);
+
+    // This is the real product task and real TryDeleteRegion loser branch. The
+    // owner is absent because an ordinary worker has already removed it. With
+    // two registered workers the task then parks at generation synchronization,
+    // giving the test a deterministic point before the ordinary owner publishes.
+    ForwardTask<Generation::Old> task(manager, emptyFromSpace);
+    std::thread requestWorker([&]() { task.Execute(0); });
+    JoinGuard requestWorkerGuard(requestWorker);
+    while (queue.SynchronizedWorkerCount() == 0) {
+        std::this_thread::yield();
+    }
+
+    const bool claimedBeforePublication =
+        added.request->state() == RelocationRequestQueue::State::CLAIMED;
+    const bool returnedBeforePublication = waiterReturned.load(std::memory_order_acquire);
+    const MAddress answerBeforePublication = answer.load(std::memory_order_acquire);
+
+    // Ordinary-owner publication is the second signal. pageDone remains false,
+    // so the only legal early return is the exact to receipt, never keep-from.
+    const bool published = queue.Publish(from, to);
+    for (size_t i = 0; i < 100 && !waiterReturned.load(std::memory_order_acquire); ++i) {
+        std::this_thread::sleep_for(std::chrono::milliseconds(1));
+    }
+    const bool returnedByReceipt = waiterReturned.load(std::memory_order_acquire);
+    const bool pageDoneBeforeClose = pageDone.load(std::memory_order_acquire);
+    const MAddress publishedAnswer = answer.load(std::memory_order_acquire);
+
+    // Always close both signals before asserting. GC_EXPECT throws, so an
+    // assertion before this cleanup would make a deliberate loser cut wait on
+    // requestWorker's generation rendezvous instead of reporting one red item.
+    pageDone.store(true, std::memory_order_release);
+    const bool generationClosed = queue.SynchronizePoll().workersDone;
+    requestWorker.join();
+    waiter.join();
+
+    GC_EXPECT_TRUE(claimedBeforePublication);
+    GC_EXPECT_FALSE(returnedBeforePublication);
+    GC_EXPECT_EQ(answerBeforePublication, from);
+    GC_EXPECT_TRUE(published);
+    GC_EXPECT_TRUE(returnedByReceipt);
+    GC_EXPECT_FALSE(pageDoneBeforeClose);
+    GC_EXPECT_EQ(publishedAnswer, to);
+    GC_EXPECT_TRUE(generationClosed);
+    GC_EXPECT_EQ(queue.CompletionCount(), static_cast<uint64_t>(1));
+    GC_EXPECT_EQ(queue.PendingCount(), static_cast<size_t>(0));
+}
 #endif
 
 GC_TEST(GCThreadPool, ProductParallelEntryRegistersWorkersAndClosesGeneration)
