@@ -10,10 +10,14 @@
 
 #include <cstdint>
 #include <cstring>
+#include <algorithm>
 #include <atomic>
+#include <csignal>
 #include <dlfcn.h>
 #include <limits>
 #include <thread>
+#include <sys/wait.h>
+#include <unistd.h>
 
 #include "gc_heap_fixture.hpp"
 #include "gc_unittest.hpp"
@@ -300,6 +304,101 @@ GC_TEST(LiveMap, RetainedCaptureRejectsOldFromFaceWhenNewCycleMarksNothing)
     region->RetireFromPageMetadata();
     region->FreeRetainedMarkWords();
     fx.FreePlanted(previous);
+}
+
+// Relocsel's unselected-page arm may carry a live-byte census without a
+// current mark face.  The bounded preserve records that this page was not
+// examined instead of applying PreserveRetainedLiveInfo's examined-page CHECK.
+GC_TEST(LiveMap, UnexaminedRelocselPageKeepsWithoutSnapshot)
+{
+    GcHeapFixture fx;
+    RegionInfo* region = fx.region0;
+    region->SetRegionType(RegionInfo::RegionType::UNMOVABLE_FROM_REGION);
+    region->AddLiveByteCount(64);
+    GC_EXPECT_FALSE(region->HasEverPreservedRetainedLiveInfo());
+    region->PreserveRetainedLiveInfoUpTo(
+        std::min(region->GetCensusBoundary(), region->GetRegionAllocPtr()));
+    GC_EXPECT_TRUE(region->GetRetainedLiveInfo() == nullptr);
+    GC_EXPECT_FALSE(region->HasEverPreservedRetainedLiveInfo());
+    GC_EXPECT_EQ(static_cast<unsigned>(region->GetRetainedLiveInfoState()),
+                 static_cast<unsigned>(RegionInfo::RetainedLiveInfoState::NEVER_EXAMINED));
+}
+
+// Positive control: first publish a valid snapshot, then clear/unbind its
+// borrowed LiveInfo.  The bounded API must retain the examined-then-lost
+// distinction and abort; this is not the initial NEVER_EXAMINED fixture.
+GC_TEST(LiveMap, ExaminedPageWithoutSnapshotStillAborts)
+{
+    GcHeapFixture fx;
+    RegionInfo* region = fx.region0;
+    region->SetRegionType(RegionInfo::RegionType::UNMOVABLE_FROM_REGION);
+    LiveInfo* live = fx.PlantLiveInfo(region);
+    RegionBitmap* bm = fx.PlantMarkBitmap(live, region->GetRegionSize());
+    (void)bm->MarkBits(0, 8, region->GetRegionSize());
+    GC_EXPECT_FALSE(region->HasEverPreservedRetainedLiveInfo());
+    region->PreserveRetainedLiveInfo();
+    GC_EXPECT_TRUE(region->HasEverPreservedRetainedLiveInfo());
+    GC_EXPECT_EQ(static_cast<unsigned>(region->GetRetainedLiveInfoState()),
+                 static_cast<unsigned>(RegionInfo::RetainedLiveInfoState::SNAPSHOT_VALID));
+    // The production unbind path may have no owned carrier (for example
+    // after its arena is retired); exercise that borrowed-pointer loss path
+    // explicitly before CheckAndClearLiveInfo stamps SNAPSHOT_LOST.
+    region->FreeRetainedMarkWords();
+    region->CheckAndClearLiveInfo(live);
+    region->AddLiveByteCount(64);
+    GC_EXPECT_EQ(static_cast<unsigned>(region->GetRetainedLiveInfoState()),
+                 static_cast<unsigned>(RegionInfo::RetainedLiveInfoState::SNAPSHOT_LOST));
+    pid_t pid = fork();
+    GC_EXPECT_TRUE(pid >= 0);
+    if (pid == 0) {
+        region->PreserveRetainedLiveInfoUpTo(
+            std::min(region->GetCensusBoundary(), region->GetRegionAllocPtr()));
+        _exit(0);
+    }
+    int status = 0;
+    GC_EXPECT_TRUE(waitpid(pid, &status, 0) == pid);
+    GC_EXPECT_TRUE(WIFSIGNALED(status));
+    GC_EXPECT_EQ(WTERMSIG(status), SIGABRT);
+    fx.FreePlanted(live);
+}
+
+// Owned-copy positive arm: CheckAndClearLiveInfo deliberately returns early
+// while the private bitmap still carries the valid snapshot.  The following
+// bounded Preserve replaces that owned carrier, finds no current LiveInfo,
+// and must derive LOST from the monotonic ever-preserved bit.
+GC_TEST(LiveMap, OwnedCopyExaminedPageWithoutSnapshotStillAborts)
+{
+    GcHeapFixture fx;
+    RegionInfo* region = fx.region0;
+    region->SetRegionType(RegionInfo::RegionType::UNMOVABLE_FROM_REGION);
+    LiveInfo* live = fx.PlantLiveInfo(region);
+    RegionBitmap* bm = fx.PlantMarkBitmap(live, region->GetRegionSize());
+    (void)bm->MarkBits(0, 8, region->GetRegionSize());
+    GC_EXPECT_FALSE(region->HasEverPreservedRetainedLiveInfo());
+    region->PreserveRetainedLiveInfo();
+    GC_EXPECT_TRUE(region->HasEverPreservedRetainedLiveInfo());
+    GC_EXPECT_TRUE(region->HasRetainedMarkWords());
+    GC_EXPECT_EQ(static_cast<unsigned>(region->GetRetainedLiveInfoState()),
+                 static_cast<unsigned>(RegionInfo::RetainedLiveInfoState::SNAPSHOT_VALID));
+
+    region->CheckAndClearLiveInfo(live);
+    GC_EXPECT_TRUE(region->HasRetainedMarkWords());
+    GC_EXPECT_EQ(static_cast<unsigned>(region->GetRetainedLiveInfoState()),
+                 static_cast<unsigned>(RegionInfo::RetainedLiveInfoState::SNAPSHOT_VALID));
+    region->AddLiveByteCount(64);
+    pid_t pid = fork();
+    GC_EXPECT_TRUE(pid >= 0);
+    if (pid == 0) {
+        region->PreserveRetainedLiveInfoUpTo(
+            std::min(region->GetCensusBoundary(), region->GetRegionAllocPtr()));
+        _exit(0);
+    }
+    int status = 0;
+    GC_EXPECT_TRUE(waitpid(pid, &status, 0) == pid);
+    GC_EXPECT_TRUE(WIFSIGNALED(status));
+    GC_EXPECT_EQ(WTERMSIG(status), SIGABRT);
+    region->FreeRetainedMarkWords();
+    fx.FreePlanted(live);
 }
 
 GC_TEST(LiveMap, RetainedCaptureUnionsYoungLargeFlagBeforePromotion)
