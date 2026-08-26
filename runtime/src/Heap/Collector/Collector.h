@@ -266,10 +266,14 @@ public:
     // 新代码应经 to_object(zaddress) 出口。
     // tipnull barriernull: live non-null ref must never become nullptr for mutator
     // (cjpm+0x31061a test [rax+0xc] after CJ_MCC_ReadRefField with rax=0).
-    // loadfc (zBarrier.inline.hpp:294-344, zGeneration.inline.hpp:131-140): a slow-path miss must
-    // not fold back to the from-address when that address is structurally unusable (FORWARDED
-    // without a resolvable to / zero header after ClearUnits reuse) -- that is the A-zeroed
-    // hand-out chain. Fail closed instead.
+    //
+    // loadfc scope note (0826 measured, kkk2 gate nwdet e_256MB.txt): make_load_good is NOT
+    // exclusively a mutator hand-out funnel -- the GC mark walk calls it too (Mark.cpp) and
+    // already owns a tolerance policy for cleared from-addresses ([MARKSTALE]; dozens per cycle
+    // are routine). Failing loudly here killed a green nwdet wave from inside mark, at no
+    // hand-out. The mutator-facing postcondition lives at the load exits
+    // (Barrier::FinalizeLoadForMutator), which intercept every value this function returns
+    // before a mutator can see it.
     BaseObject* make_load_good(RefField<>& ref) const
     {
         // 凭什么 to_object: GetTargetObject 已剥色；null 或 load-good 可直接用。
@@ -279,17 +283,7 @@ public:
         }
 
         BaseObject* remapped = relocate_or_remap_object(target, remap_generation(ref));
-        BaseObject* out = remapped != nullptr ? remapped : target;
-        if (out == target && JudgeHandOutTarget(out) != HandVerdict::Usable) {
-            // Last resort before failing loudly: the active-table view. Only a verified current
-            // version may leave; anything else stops in [LOADFC] (0825 用户令: no fold-back).
-            BaseObject* resolved = FindToVersion(out).GetOrFailClosed("Collector::make_load_good");
-            if (resolved != nullptr && resolved != out && JudgeHandOutTarget(resolved) == HandVerdict::Usable) {
-                return resolved;
-            }
-            FailClosedLoad("make_load_good", out, static_cast<uintptr_t>(raw(ref.GetFieldValue())));
-        }
-        return out;
+        return remapped == nullptr ? target : remapped;
     }
 
     // OpenJDK ZPointer::is_mark_good (zAddress.inline.hpp:658-664): mark-good includes load-good,
