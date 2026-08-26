@@ -388,6 +388,26 @@ GC_TEST(M0Exit, ReadRuntimeEntryForwardedWithMappingResolvesToVersion)
     GC_EXPECT_EQ(reinterpret_cast<uintptr_t>(got), reinterpret_cast<uintptr_t>(publishedCopy));
 }
 
+GC_TEST(M0Exit, ReadRuntimeEntryResolvedPathCountsM0Exit)
+{
+    ReadEntryFixture fx;
+    Barrier baseBarrier(fx.collector, fx.rememberedSet);
+    InstalledBarrierScope baseInstalled(baseBarrier);
+    BaseObject* publishedCopy = fx.heap.PlaceObject(fx.heap.heapStart + 256);
+    std::memcpy(publishedCopy, fx.heap.obj0, fx.heap.obj0->GetSize());
+    fx.heap.obj0->SetStateCode(ObjectState::FORWARDED);
+    fx.collector.answer = publishedCopy;
+    const M0ExitDiagnostics::Counts before = M0ExitDiagnostics::GetCounts();
+
+    ObjectPtr got = CJ_MCC_ReadRefField(fx.heap.obj1, fx.field);
+
+    const M0ExitDiagnostics::Counts after = M0ExitDiagnostics::GetCounts();
+    GC_EXPECT_EQ(reinterpret_cast<uintptr_t>(got), reinterpret_cast<uintptr_t>(publishedCopy));
+    GC_EXPECT_EQ(after.total, before.total + 1);
+    GC_EXPECT_EQ(after.s1, before.s1 + 1);
+    GC_EXPECT_EQ(after.readBarrier, before.readBarrier + 1);
+}
+
 GC_OTHER_VM_TEST(M0Exit, ReadStructRuntimeEntryFailsClosedOnZeroHeaderFromAddress)
 {
     ReadEntryFixture fx;

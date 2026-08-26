@@ -324,8 +324,9 @@ void Collector::RequestGC(GCReason reason, bool async)
     RequestGCInternal(reason, async);
 }
 
-// loadfc: shared hand-out verdict. Same header-word shape as Barrier.cpp's staleguard judge
-// (StateWord.h:215-228: bits 0-47 TypeInfo, bits 48-49 stateCode; FORWARDED=3).
+// loadfc: best-effort detection verdict. Same header-word shape as Barrier.cpp's former staleguard
+// judge (StateWord.h:215-228: bits 0-47 TypeInfo, bits 48-49 stateCode; FORWARDED=3). This one
+// relaxed read classifies the observed word; it does not establish object lifetime or happens-before.
 HandVerdict Collector::JudgeHandOutTarget(BaseObject* target)
 {
     if (target == nullptr || !Heap::IsHeapAddress(target)) {

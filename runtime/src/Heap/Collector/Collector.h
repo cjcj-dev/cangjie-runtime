@@ -47,9 +47,10 @@ enum CollectorType {
     COLLECTOR_TYPE_COUNT,
 };
 
-// loadfc (zBarrier.inline.hpp:327-343): the shared hand-out verdict. ZGC structurally cannot
-// hand a from-address back after a slow-path miss (zGeneration.inline.hpp:131-140 has no
-// "lookup miss ⇒ return from" exit); the two unusable shapes we must never hand to a mutator:
+// loadfc (zBarrier.inline.hpp:327-343): best-effort detection verdict for slow/runtime hand-outs.
+// The single relaxed header read classifies the observed word but establishes no lifetime
+// guarantee. ZGC structurally cannot hand a from-address back after a slow-path miss
+// (zGeneration.inline.hpp:131-140 has no "lookup miss ⇒ return from" exit); detected shapes are:
 //   Forwarded   header stateCode=3, a to-version exists and must be found
 //   ZeroHeader  payload cleared by reclamation (ClearUnits reuse) -- nothing to resolve
 enum class HandVerdict : uint8_t { Usable, Forwarded, ZeroHeader };
@@ -271,9 +272,10 @@ public:
     // exclusively a mutator hand-out funnel -- the GC mark walk calls it too (Mark.cpp) and
     // already owns a tolerance policy for cleared from-addresses ([MARKSTALE]; dozens per cycle
     // are routine). Failing loudly here killed a green nwdet wave from inside mark, at no
-    // hand-out. The mutator-facing postcondition lives at the load exits
-    // (Barrier::FinalizeLoadForMutator), which intercept every value this function returns
-    // before a mutator can see it.
+    // hand-out. Slow/runtime exits close with Barrier::FinalizeLoadForMutator; the finalizer
+    // consumer now uses the public ReadStaticRef runtime path instead of this helper. Compiler
+    // colour-good fast paths retain ZGC's direct-uncolour form and depend on the producer-side
+    // colour/lifetime invariant.
     BaseObject* make_load_good(RefField<>& ref) const
     {
         // 凭什么 to_object: GetTargetObject 已剥色；null 或 load-good 可直接用。
