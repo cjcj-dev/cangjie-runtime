@@ -84,6 +84,7 @@ using CrossRefHandler = void(*)(BaseObject*, BaseObject*);
 class WCollector : public CopyCollector {
 #if defined(MRT_TESTABLE_INTERNALS)
     friend struct MutatorPublishTestAccess;
+    friend struct PartialArrayTestAccess;
     friend struct RelocationReceiptTestAccess;
 #endif
 
