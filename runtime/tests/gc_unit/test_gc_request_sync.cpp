@@ -107,7 +107,10 @@ public:
         requestProgress.notify_all();
         return ignoreRequests;
     }
-    BaseObject* FindToVersion(BaseObject*) const override { return nullptr; }
+    FindToVersionResult FindToVersion(BaseObject*) const override
+    {
+        return FindToVersionResult::NotForwarded();
+    }
     bool TryUpdateRefField(BaseObject*, RefField<>&, BaseObject*&) const override { return false; }
     bool IsOldPointer(RefField<>&) const override { return false; }
     RefField<> GetAndTryTagRefField(BaseObject* obj) const override
