@@ -116,10 +116,6 @@ public:
         NEVER_EXAMINED,
         SNAPSHOT_VALID,
         SNAPSHOT_EMPTY,
-        // A retained snapshot was published in this snapshot cycle and its
-        // carrier is no longer current.  This is derived from the monotonic
-        // ever-preserved bit; clear/unbind exits never write this state.
-        SNAPSHOT_LOST,
     };
 
     // holderlive (F2): the only object-level holder-liveness filter we have reads
@@ -128,8 +124,7 @@ public:
     // distinct producers and the state word cannot tell them apart:
     //   - nobody ever called Preserve* on this region during its current life,
     //   - Preserve* ran but had no live info to keep (it writes NEVER_EXAMINED itself),
-    //   - Preserve* ran and stored a snapshot, then a clear path wiped it
-    //     (SNAPSHOT_LOST, which is now distinguishable from NEVER_EXAMINED).
+    //   - Preserve* ran and stored a snapshot, then a clear path wiped it.
     // These counters name which one happened. Maintained unconditionally (three stores on
     // cold region-lifecycle paths); read only under MRT_GCV2_RETLIVE_PROBE.
     enum RetainedOp : uint8_t {
@@ -214,7 +209,7 @@ public:
 
     uint64_t GetSnapshotEpoch() const
     {
-        return __atomic_load_n(&metadata.snapshotEpoch, std::memory_order_acquire);
+        return __atomic_load_n(&metadata.snapshotEpoch, std::memory_order_acquire) >> 1;
     }
 
     uint8_t GetRegionLifeSeq() const
@@ -263,7 +258,21 @@ public:
 
     void BumpSnapshotEpoch()
     {
-        __atomic_fetch_add(&metadata.snapshotEpoch, 1, std::memory_order_acq_rel);
+        uint64_t observed = __atomic_load_n(&metadata.snapshotEpoch, __ATOMIC_ACQUIRE);
+        uint64_t next;
+        do {
+            // One monotonic value carries both generation and publication:
+            // even = no first paint, odd = current face published. Advancing
+            // always lands on the next even generation and retires publication.
+            next = (((observed >> 1) + 1) << 1);
+            // Raw zero is reserved for an uninitialized region.  Skip it on
+            // the sole tagged-generation wrap so the next first paint still
+            // satisfies PublishCurrentMarkFace's non-zero generation check.
+            if (next == 0) {
+                next = 2;
+            }
+        } while (!__atomic_compare_exchange_n(&metadata.snapshotEpoch, &observed, next, true,
+                                              __ATOMIC_ACQ_REL, __ATOMIC_ACQUIRE));
     }
 
     template<Generation G>
@@ -395,6 +404,15 @@ public:
     }
 
     LiveInfo* GetLiveInfo()
+    {
+        LiveInfo* liveInfo = __atomic_load_n(&metadata.liveInfo, std::memory_order_acquire);
+        if (reinterpret_cast<MAddress>(liveInfo) == LiveInfo::TEMPORARY_PTR) {
+            return nullptr;
+        }
+        return liveInfo;
+    }
+
+    LiveInfo* GetLiveInfo() const
     {
         LiveInfo* liveInfo = __atomic_load_n(&metadata.liveInfo, std::memory_order_acquire);
         if (reinterpret_cast<MAddress>(liveInfo) == LiveInfo::TEMPORARY_PTR) {
@@ -696,7 +714,8 @@ public:
         metadata.fromPage.liveByteCount =
             __atomic_load_n(&metadata.liveByteCount, std::memory_order_acquire);
         metadata.fromPage.owner = GetOwnerGeneration();
-        metadata.fromPage.largeMarked = metadata.isMarked != 0 || metadata.isResurrected != 0;
+        metadata.fromPage.largeMarked = (IsLargeRegion() ? IsCurrentFacePublished() : metadata.isMarked != 0) ||
+            metadata.isResurrected != 0;
         __atomic_store_n(&metadata.fromPage.lifeId, life, __ATOMIC_RELEASE);
         RegionLifeClock::Publish(RegionLifeClock::Carrier::MARK_SNAPSHOT, life);
         if (metadata.regionEnd0 == 0 || metadata.regionEnd0 < metadata.regionEnd) {
@@ -707,14 +726,7 @@ public:
     bool IsRetainedLifeCurrent() const
     {
         const RegionLifeId stamp = __atomic_load_n(&metadata.retainedLifeId, __ATOMIC_ACQUIRE);
-        const RegionLifeId current = GetRegionLifeId();
-        const bool auditAccepts =
-            RegionLifeClock::Validate(RegionLifeClock::Carrier::RETAINED_COPY, stamp, current);
-        // Validate is audit-only unless enforcement is enabled and therefore
-        // deliberately accepts missing/stale stamps in ordinary product runs.
-        // Snapshot-state derivation needs the structural answer in every
-        // configuration: zero is not a carrier, and only this life is current.
-        return stamp != 0 && stamp == current && auditAccepts;
+        return RegionLifeClock::Validate(RegionLifeClock::Carrier::RETAINED_COPY, stamp, GetRegionLifeId());
     }
 
     LiveInfo* GetRetainedLiveInfo() const
@@ -724,19 +736,11 @@ public:
 
     RetainedLiveInfoState GetRetainedLiveInfoState() const
     {
-        if (metadata.retainedEverPreserved == 0) {
-            return RetainedLiveInfoState::NEVER_EXAMINED;
+        if (metadata.retainedLiveInfoState == RetainedLiveInfoState::NEVER_EXAMINED) {
+            return metadata.retainedLiveInfoState;
         }
-        if (!IsRetainedLifeCurrent()) {
-            return RetainedLiveInfoState::SNAPSHOT_LOST;
-        }
-        return metadata.retainedLiveInfoCoveredUpTo <= GetRegionStart() &&
-                GetRegionAllocPtr() <= GetRegionStart()
-            ? RetainedLiveInfoState::SNAPSHOT_EMPTY
-            : RetainedLiveInfoState::SNAPSHOT_VALID;
+        return IsRetainedLifeCurrent() ? metadata.retainedLiveInfoState : RetainedLiveInfoState::NEVER_EXAMINED;
     }
-
-    bool HasEverPreservedRetainedLiveInfo() const { return metadata.retainedEverPreserved != 0; }
 
     uint64_t GetRetainedLiveInfoEpoch() const
     {
@@ -849,32 +853,39 @@ public:
         metadata.retainedMarkWordCnt = 0;
     }
 
-    uint32_t GetRetainedPreserveCount() const { return metadata.retainedPreserveCnt; }
+    uint32_t GetRetainedPreserveCount() const
+    {
+        return __atomic_load_n(&metadata.retainedPreserveCnt, __ATOMIC_ACQUIRE) &
+            ~FORWARDING_FACE_RESET_BIT;
+    }
 
     uint32_t GetRetainedClearCount() const { return metadata.retainedClearCnt; }
 
     uint8_t GetRetainedLastOp() const { return metadata.retainedLastOp; }
 
-    // A Preserve attempt replaces the previous publication.  Keep the
-    // monotonic history armed, but invalidate the carrier until this attempt
-    // proves that it has a snapshot and publishes it in NoteRetainedPreserve.
-    ALWAYS_INLINE void BeginRetainedPreserve()
-    {
-        __atomic_store_n(&metadata.retainedLifeId, static_cast<RegionLifeId>(0), __ATOMIC_RELEASE);
-    }
-
     void PreserveRetainedLiveInfo()
     {
-        BeginRetainedPreserve();
         metadata.retainedLiveInfo = GetLiveInfo();
         metadata.retainedLiveInfoEpoch = GetSnapshotEpoch();
-        uint8_t largeMarked = metadata.isMarked;
+        // Preserve consumes the large face bit and its live bytes as one
+        // snapshot.  They share liveByteCount, so do not split this into two
+        // loads that could manufacture a half-published view.
+        const bool largeRegion = IsLargeRegion();
+        const uint64_t largeState = largeRegion
+            ? __atomic_load_n(&metadata.liveByteCount, std::memory_order_acquire) : 0;
+        const uint64_t largeLiveBytes = largeState & LIVE_BYTES_MASK;
+        uint8_t largeMarked = largeRegion
+            ? ((largeState & LIVE_FACE_PUBLISHED_BIT) != 0) : metadata.isMarked;
         if (metadata.retainedLiveInfo == nullptr && HasFromPageMetadata()) {
             metadata.retainedLiveInfo = metadata.fromPage.liveInfo;
             metadata.retainedLiveInfoEpoch = metadata.fromPage.epoch;
             largeMarked = metadata.fromPage.largeMarked;
         }
-        if (IsYoungRegion() && IsForwardingDone()) {
+        // A done bit may outlive the face it described.  Suppress the young
+        // face while it is still the forwarding face, but keep a later face
+        // published by the current snapshot (ZGC's page-face identity rule).
+        if (IsYoungRegion() && IsForwardingDone() &&
+            (!IsCurrentFacePublished() || IsForwardingFaceCurrent())) {
             metadata.retainedLiveInfo = nullptr;
             largeMarked = 0;
         }
@@ -883,19 +894,30 @@ public:
             CaptureRetainedMarkWords(metadata.retainedLiveInfo, metadata.retainedLiveInfoEpoch, largeMarked);
         }
         if (IsLargeRegion()) {
-            if (GetLiveByteCount() == 0) {
-                NoteRetainedPreserve(GetRegionAllocPtr() <= GetRegionStart());
+            // A stale byte count without the publication bit belongs to the
+            // retired face (for example while ClearLiveInfo is sealing it),
+            // never to a current SNAPSHOT_VALID carrier.
+            if (largeLiveBytes == 0 || largeMarked == 0) {
+                metadata.retainedLiveInfoState = GetRegionAllocPtr() <= GetRegionStart()
+                    ? RetainedLiveInfoState::SNAPSHOT_EMPTY
+                    : RetainedLiveInfoState::NEVER_EXAMINED;
+                NoteRetainedPreserve();
                 return;
             }
-            NoteRetainedPreserve(true);
+            metadata.retainedLiveInfoState = RetainedLiveInfoState::SNAPSHOT_VALID;
+            NoteRetainedPreserve();
             return;
         }
         if (metadata.retainedLiveInfo != nullptr) {
-            NoteRetainedPreserve(true);
+            metadata.retainedLiveInfoState = RetainedLiveInfoState::SNAPSHOT_VALID;
+            NoteRetainedPreserve();
             return;
         }
         CHECK(GetLiveByteCount() == 0);
-        NoteRetainedPreserve(GetRegionAllocPtr() <= GetRegionStart());
+        metadata.retainedLiveInfoState = GetRegionAllocPtr() <= GetRegionStart()
+            ? RetainedLiveInfoState::SNAPSHOT_EMPTY
+            : RetainedLiveInfoState::NEVER_EXAMINED;
+        NoteRetainedPreserve();
     }
 
     MAddress GetCensusBoundary() const
@@ -919,16 +941,16 @@ public:
             PreserveRetainedLiveInfo();
             return;
         }
-        BeginRetainedPreserve();
         metadata.retainedLiveInfo = GetLiveInfo();
         metadata.retainedLiveInfoEpoch = GetSnapshotEpoch();
-        uint8_t largeMarked = metadata.isMarked;
+        uint8_t largeMarked = IsLargeRegion() ? IsCurrentFacePublished() : metadata.isMarked;
         if (metadata.retainedLiveInfo == nullptr && HasFromPageMetadata()) {
             metadata.retainedLiveInfo = metadata.fromPage.liveInfo;
             metadata.retainedLiveInfoEpoch = metadata.fromPage.epoch;
             largeMarked = metadata.fromPage.largeMarked;
         }
-        if (IsYoungRegion() && IsForwardingDone()) {
+        if (IsYoungRegion() && IsForwardingDone() &&
+            (!IsCurrentFacePublished() || IsForwardingFaceCurrent())) {
             metadata.retainedLiveInfo = nullptr;
             largeMarked = 0;
         }
@@ -936,45 +958,39 @@ public:
         if (RetainedOwnCopyEnabled()) {
             CaptureRetainedMarkWords(metadata.retainedLiveInfo, metadata.retainedLiveInfoEpoch, largeMarked);
         }
-        if (metadata.retainedLiveInfo == nullptr) {
-            // This decision is derived after CaptureRetainedMarkWords has
-            // replaced the previous owned carrier.  Once a successful
-            // Preserve armed the monotonic bit, carrier absence is LOST on
-            // every exit; no clear/unbind exit has to remember to write it.
-            CHECK(GetRetainedLiveInfoState() != RetainedLiveInfoState::SNAPSHOT_LOST);
-            NoteRetainedPreserve(false);
+        if (metadata.retainedLiveInfo == nullptr && boundary > GetRegionStart()) {
+            metadata.retainedLiveInfoState = RetainedLiveInfoState::NEVER_EXAMINED;
+            NoteRetainedPreserve();
             return;
         }
-        NoteRetainedPreserve(true);
+        metadata.retainedLiveInfoState = RetainedLiveInfoState::SNAPSHOT_VALID;
+        NoteRetainedPreserve();
     }
 
     ALWAYS_INLINE void PreserveRetainedLiveInfo(MAddress coveredUpToOverride)
     {
         if (coveredUpToOverride == GetRegionStart() && GetRegionAllocPtr() != GetRegionStart()) {
             CHECK(GetLiveByteCount() == 0);
-            BeginRetainedPreserve();
             metadata.retainedLiveInfo = GetLiveInfo();
             metadata.retainedLiveInfoEpoch = GetSnapshotEpoch();
             metadata.retainedLiveInfoCoveredUpTo = coveredUpToOverride;
-            NoteRetainedPreserve(true);
+            metadata.retainedLiveInfoState = RetainedLiveInfoState::SNAPSHOT_VALID;
+            NoteRetainedPreserve();
             return;
         }
         CHECK(coveredUpToOverride == GetRegionAllocPtr());
         PreserveRetainedLiveInfo();
     }
 
-    // holderlive (F2): record the outcome of a Preserve* attempt. Only a
-    // successful publication arms the monotonic bit and carrier stamp.
-    ALWAYS_INLINE void NoteRetainedPreserve(bool succeeded)
+    // holderlive (F2): record the outcome of a Preserve* call. Called after the state word
+    // is already written, so the op code is derived from it rather than duplicated.
+    ALWAYS_INLINE void NoteRetainedPreserve()
     {
-        ++metadata.retainedPreserveCnt;
-        if (succeeded) {
-            metadata.retainedEverPreserved = 1;
-            // Publish last: an acquiring reader that accepts this life also
-            // observes the retained pointer/owned words and covered boundary.
-            StampRetainedSnapshot();
-        }
-        switch (GetRetainedLiveInfoState()) {
+        // The high bits share this word with first-paint publication. Marking
+        // may publish from multiple workers, so keep the counter increment in
+        // the same atomic modification order instead of losing either flag.
+        (void)__atomic_fetch_add(&metadata.retainedPreserveCnt, 1U, __ATOMIC_ACQ_REL);
+        switch (metadata.retainedLiveInfoState) {
             case RetainedLiveInfoState::SNAPSHOT_VALID:
                 metadata.retainedLastOp = RETAINED_OP_PRESERVE_VALID;
                 break;
@@ -985,12 +1001,15 @@ public:
                 metadata.retainedLastOp = RETAINED_OP_PRESERVE_NEVER;
                 break;
         }
+        // Publish the carrier stamp last: an acquiring reader that accepts
+        // this life also observes the retained pointer/state/owned words.
+        StampRetainedSnapshot();
     }
 
     // holderlive (F2): a clear only destroys information if there was a snapshot to destroy.
     ALWAYS_INLINE void NoteRetainedClear(RetainedOp op)
     {
-        if (GetRetainedLiveInfoState() == RetainedLiveInfoState::NEVER_EXAMINED) {
+        if (metadata.retainedLiveInfoState == RetainedLiveInfoState::NEVER_EXAMINED) {
             return;
         }
         ++metadata.retainedClearCnt;
@@ -999,9 +1018,7 @@ public:
 
     bool IsRetainedSnapshotValid() const
     {
-        RetainedLiveInfoState state = GetRetainedLiveInfoState();
-        if (state == RetainedLiveInfoState::NEVER_EXAMINED ||
-            state == RetainedLiveInfoState::SNAPSHOT_LOST) {
+        if (metadata.retainedLiveInfoState == RetainedLiveInfoState::NEVER_EXAMINED) {
             return false;
         }
         if (!IsRetainedLifeCurrent()) {
@@ -1184,12 +1201,15 @@ public:
         if (!ValidateMarkView(view)) {
             return 0;
         }
-        // Large pages use the same single page-liveness authority as ordinary
-        // pages. A captured view from an earlier metadata incarnation must not
-        // observe a later incarnation's reused bit.
+        // Large pages use one atomic face sequence as both their liveness bit and
+        // publication marker. A captured view from an earlier metadata incarnation
+        // must not observe a later incarnation's reused bit.
         if (view.GetEpoch() != GetMarkSnapshotEpoch<G>()) {
             return HasFromPageMetadata() && metadata.fromPage.owner == G &&
                 metadata.fromPage.epoch == view.GetEpoch() ? metadata.fromPage.largeMarked : 0;
+        }
+        if (IsLargeRegion()) {
+            return IsCurrentFacePublished() ? 1 : 0;
         }
         return metadata.regionStateBitField.GetAtomicValue(RegionStateBitPos::MARKED_REGION_FLAG, 1) != 0;
     }
@@ -1199,6 +1219,18 @@ public:
     {
         CHECK(view.GetRegion() == this);
         CHECK(view.GetEpoch() == GetMarkSnapshotEpoch<G>());
+        if (IsLargeRegion()) {
+            if (flag != 0) {
+                // Setup/STW callers do not always have an object size.  The
+                // sized MarkObject path uses TryPublishLargeFace directly so
+                // its first paint and byte accounting are one atomic RMW.
+                (void)TryPublishLargeFace(view, 0);
+                PublishCurrentMarkFace();
+            } else {
+                ClearCurrentMarkFace();
+            }
+            return;
+        }
         metadata.regionStateBitField.SetAtomicValue(RegionStateBitPos::MARKED_REGION_FLAG, 1, flag);
     }
 
@@ -1312,9 +1344,8 @@ public:
         }
         VerifyMarkFaceOwner<G>(obj, "RegionInfo::MarkObject.unsized");
         if (IsLargeRegion()) {
-            if (GetMarkedRegionFlag(view) != 1) {
-                SetMarkedRegionFlag(view, 1);
-                AddLiveByteCount(obj->GetSize());
+            if (TryPublishLargeFace(view, obj->GetSize())) {
+                PublishCurrentMarkFace();
                 NotePageOwnerFirstPaint<G>();
                 return false;
             }
@@ -1332,6 +1363,7 @@ public:
         bool already = writeBm->MarkBits(offset, objSize, regionSize);
         if (!already) {
             AddLiveByteCount(objSize);
+            PublishCurrentMarkFace();
             NotePageOwnerFirstPaint<G>();
         }
         (void)TagReuseProbe::NoteMarkBitsSticky(this, offset, true, "MarkObject_sized0", G);
@@ -1347,11 +1379,8 @@ public:
         CHECK(view.GetRegion() == this);
         VerifyMarkFaceOwner<G>(obj, "RegionInfo::MarkObject.sized");
         if (IsLargeRegion()) {
-            if (GetMarkedRegionFlag(view) != 1) {
-                SetMarkedRegionFlag(view, 1);
-                if (accountLive) {
-                    AddLiveByteCount(objSize);
-                }
+            if (TryPublishLargeFace(view, accountLive ? objSize : 0)) {
+                PublishCurrentMarkFace();
                 NotePageOwnerFirstPaint<G>();
                 return false;
             }
@@ -1370,6 +1399,7 @@ public:
             if (accountLive) {
                 AddLiveByteCount(objSize);
             }
+            PublishCurrentMarkFace();
             NotePageOwnerFirstPaint<G>();
         }
         (void)TagReuseProbe::NoteMarkBitsSticky(this, offset, true, "MarkObject_sized", G);
@@ -2194,7 +2224,8 @@ public:
         metadata.fromPage.liveByteCount =
             __atomic_load_n(&metadata.liveByteCount, std::memory_order_acquire);
         metadata.fromPage.owner = G;
-        metadata.fromPage.largeMarked = metadata.isMarked != 0 || metadata.isResurrected != 0;
+        metadata.fromPage.largeMarked = (IsLargeRegion() ? IsCurrentFacePublished() : metadata.isMarked != 0) ||
+            metadata.isResurrected != 0;
         __atomic_store_n(&metadata.fromPage.lifeId, life, __ATOMIC_RELEASE);
         RegionLifeClock::Publish(RegionLifeClock::Carrier::MARK_SNAPSHOT, life);
     }
@@ -2211,6 +2242,8 @@ public:
         // after detach (count 0) is refused; carrier and token are published
         // by this single product operation.
         ZForwardingLife::ResetForForwarding(metadata.fwdRefCount, metadata.fwdClaimed, metadata.fwdDone);
+        ClearForwardingFaceReset();
+        ClearCurrentMarkFace();
         metadata.copyInflight.store(0, std::memory_order_relaxed);
         metadata.regionEnd0 = metadata.regionEnd;
         metadata.routeInfo.Clear();
@@ -2438,6 +2471,7 @@ public:
             if (metadata.retainedMarkWords != nullptr) {
                 return;
             }
+            metadata.retainedLiveInfoState = RetainedLiveInfoState::NEVER_EXAMINED;
             metadata.retainedLiveInfoEpoch = 0;
             metadata.retainedLiveInfoCoveredUpTo = 0;
             metadata.retainedLifeId = 0;
@@ -2468,6 +2502,11 @@ public:
             SetMarkedRegionFlag(view, 0);
         }
         BumpSnapshotEpochFromClearLiveInfo<G>();
+        // As in ZLiveMap::set(), a new cycle owns no current face until its
+        // first object is actually painted.  Clear retires the prior cycle's
+        // publication; MarkObject/allocate-black publish on
+        // their first 0→1 liveness write.
+        ClearCurrentMarkFace();
         // A mark start publishes fresh current-page liveness. Any historical
         // from-page liveness is owned by the forwarding carrier and is not
         // detached here.
@@ -2480,12 +2519,10 @@ public:
             // clears deliberately leave this old/major authority intact.
             FreeRetainedMarkWords();
             metadata.retainedLiveInfo = nullptr;
+            metadata.retainedLiveInfoState = RetainedLiveInfoState::NEVER_EXAMINED;
             metadata.retainedLiveInfoEpoch = 0;
             metadata.retainedLiveInfoCoveredUpTo = 0;
             metadata.retainedLifeId = 0;
-            // ClearLiveInfo<Old> starts a new retained-snapshot cycle.  It is
-            // the only same-region-life boundary allowed to disarm the bit.
-            metadata.retainedEverPreserved = 0;
         }
         // Start of a mark cycle for this region: live=0 is authoritative until proven otherwise.
         __atomic_store_n(&metadata.liveByteCount, LIVE_AUTHORITY_BIT, std::memory_order_release);
@@ -2524,6 +2561,7 @@ public:
             if (metadata.retainedMarkWords != nullptr) {
                 return;
             }
+            metadata.retainedLiveInfoState = RetainedLiveInfoState::NEVER_EXAMINED;
             metadata.retainedLiveInfoEpoch = 0;
             metadata.retainedLiveInfoCoveredUpTo = 0;
             metadata.retainedLifeId = 0;
@@ -2575,9 +2613,102 @@ public:
 
     bool ClaimForwarding() { return ZForwardingLife::claim(metadata.fwdClaimed); }
 
-    void MarkForwardingDone() { ZForwardingLife::mark_done(metadata.fwdDone); }
+    void MarkForwardingDone()
+    {
+        ZForwardingLife::mark_done(metadata.fwdDone);
+    }
 
     bool IsForwardingDone() const { return ZForwardingLife::is_done(metadata.fwdDone); }
+
+    bool IsForwardingFaceCurrent() const
+    {
+        // Prefer the current LiveInfo face, just as ZGC's page seqnum check
+        // does.  A fresh face means forwarding-done is stale even if the
+        // immutable from-page carrier has already retired.  Otherwise the
+        // carrier epoch distinguishes a real copy (same face) from an older
+        // forwarding completion; absent both identities, keep the historical
+        // conservative guard.
+        const uint64_t snapshotEpoch = GetSnapshotEpoch();
+        LiveInfo* liveInfo = GetLiveInfo();
+        if (liveInfo != nullptr &&
+            liveInfo->GetMarkFace().epoch.load(std::memory_order_acquire) == snapshotEpoch) {
+            return false;
+        }
+        if (HasFromPageMetadata()) {
+            return metadata.fromPage.epoch == snapshotEpoch;
+        }
+        if (IsCurrentFacePublished()) {
+            return false;
+        }
+        return true;
+    }
+
+    static constexpr uint32_t FORWARDING_FACE_RESET_BIT = (1U << 31);
+
+    bool IsForwardingFaceReset() const
+    {
+        return (__atomic_load_n(&metadata.retainedPreserveCnt, __ATOMIC_ACQUIRE) &
+            FORWARDING_FACE_RESET_BIT) != 0;
+    }
+
+    void SetForwardingFaceReset()
+    {
+        (void)__atomic_fetch_or(&metadata.retainedPreserveCnt, FORWARDING_FACE_RESET_BIT, __ATOMIC_ACQ_REL);
+    }
+
+    void ClearForwardingFaceReset()
+    {
+        (void)__atomic_fetch_and(&metadata.retainedPreserveCnt, ~FORWARDING_FACE_RESET_BIT, __ATOMIC_ACQ_REL);
+    }
+
+    void PublishCurrentMarkFace()
+    {
+        CHECK(GetSnapshotEpoch() != 0);
+        (void)__atomic_fetch_or(&metadata.snapshotEpoch, 1ULL, __ATOMIC_RELEASE);
+    }
+
+    void ClearCurrentMarkFace()
+    {
+        if (IsLargeRegion()) {
+            (void)__atomic_fetch_and(&metadata.liveByteCount, ~LIVE_FACE_PUBLISHED_BIT, __ATOMIC_ACQ_REL);
+        }
+        (void)__atomic_fetch_and(&metadata.snapshotEpoch, ~1ULL, __ATOMIC_ACQ_REL);
+    }
+
+    bool IsCurrentFacePublished() const
+    {
+        if (IsLargeRegion()) {
+            return (__atomic_load_n(&metadata.liveByteCount, std::memory_order_acquire) &
+                    LIVE_FACE_PUBLISHED_BIT) != 0;
+        }
+        return (__atomic_load_n(&metadata.snapshotEpoch, __ATOMIC_ACQUIRE) & 1ULL) != 0;
+    }
+
+    // Large pages have one liveness bit, but Preserve also consumes their byte
+    // count. Keep publication and count in the same atomic word so a reader
+    // cannot capture SNAPSHOT_VALID between those writes. The old publication
+    // bit identifies the sole first-paint winner.
+    template<Generation G>
+    bool TryPublishLargeFace(MarkView<G> view, uint64_t liveBytes)
+    {
+        CHECK(view.GetRegion() == this);
+        CHECK(view.GetEpoch() == GetMarkSnapshotEpoch<G>());
+        CHECK(liveBytes <= LIVE_BYTES_MASK);
+        uint64_t observed = __atomic_load_n(&metadata.liveByteCount, __ATOMIC_ACQUIRE);
+        for (;;) {
+            if ((observed & LIVE_FACE_PUBLISHED_BIT) != 0) {
+                return false;
+            }
+            const uint64_t bytes = observed & LIVE_BYTES_MASK;
+            CHECK(liveBytes <= LIVE_BYTES_MASK - bytes);
+            const uint64_t next = observed | LIVE_FACE_PUBLISHED_BIT | liveBytes |
+                (liveBytes == 0 ? 0 : LIVE_AUTHORITY_BIT);
+            if (__atomic_compare_exchange_n(&metadata.liveByteCount, &observed, next, true,
+                                            __ATOMIC_ACQ_REL, __ATOMIC_ACQUIRE)) {
+                return true;
+            }
+        }
+    }
 
     // ZGC has no terminal kept: a page not selected this cycle is an ordinary
     // candidate next cycle (zRelocationSetSelector.cpp:114-196 rebuilds from
@@ -2594,6 +2725,8 @@ public:
             }
         }
         ZForwardingLife::ResetIdle(metadata.fwdRefCount, metadata.fwdClaimed, metadata.fwdDone);
+        ClearForwardingFaceReset();
+        ClearCurrentMarkFace();
         metadata.copyInflight.store(0, std::memory_order_relaxed);
     }
 
@@ -3027,11 +3160,14 @@ public:
             static_cast<UnitRole>(metadata.unitRole) == UnitRole::LARGE_SIZED_UNITS;
     }
 
-    // liveByteCount: bit63 = LIVE_AUTHORITY (mark-period established), bits0-62 = live bytes.
+    // liveByteCount: bit63 = LIVE_AUTHORITY, bit62 = large-face publication,
+    // bits0-61 = live bytes.  The large path updates the latter two fields in
+    // one atomic word; small pages continue to use the seqnum publication bit.
     // densify / fragmentation still use the byte count; reclaim-empty uses IsKnownEmpty()
     // which mirrors ZGC page->is_marked() (mark face epoch), not the byte counter alone.
     static constexpr uint64_t LIVE_AUTHORITY_BIT = 1ull << 63;
-    static constexpr uint64_t LIVE_BYTES_MASK = LIVE_AUTHORITY_BIT - 1ull;
+    static constexpr uint64_t LIVE_FACE_PUBLISHED_BIT = 1ull << 62;
+    static constexpr uint64_t LIVE_BYTES_MASK = LIVE_FACE_PUBLISHED_BIT - 1ull;
 
     // livesame crosscheck (ZGC ZPage::verify_live): live book vs mark face.
     static std::atomic<size_t> liveCrossMismatchCount;
@@ -3224,6 +3360,8 @@ public:
         if (!IsLargeRegion()) {
             PreserveRetainedLiveInfo();
         }
+        SetForwardingFaceReset();
+        ClearCurrentMarkFace();
         __atomic_store_n(&metadata.liveByteCount, LIVE_AUTHORITY_BIT, std::memory_order_release);
         if (IsLargeRegion()) {
             SetMarkedRegionFlag(view, 0);
@@ -3233,9 +3371,17 @@ public:
 
     void AddLiveByteCount(uint64_t count)
     {
-        uint64_t prev = __atomic_fetch_add(&metadata.liveByteCount, count, __ATOMIC_ACQ_REL);
-        if ((prev & LIVE_AUTHORITY_BIT) == 0) {
-            (void)__atomic_fetch_or(&metadata.liveByteCount, LIVE_AUTHORITY_BIT, __ATOMIC_ACQ_REL);
+        CHECK(count <= LIVE_BYTES_MASK);
+        uint64_t observed = __atomic_load_n(&metadata.liveByteCount, __ATOMIC_ACQUIRE);
+        for (;;) {
+            const uint64_t bytes = observed & LIVE_BYTES_MASK;
+            CHECK(count <= LIVE_BYTES_MASK - bytes);
+            const uint64_t next = (observed & ~LIVE_BYTES_MASK) | (bytes + count) |
+                LIVE_AUTHORITY_BIT;
+            if (__atomic_compare_exchange_n(&metadata.liveByteCount, &observed, next, true,
+                                            __ATOMIC_ACQ_REL, __ATOMIC_ACQUIRE)) {
+                return;
+            }
         }
     }
 
@@ -3455,9 +3601,7 @@ private:
         RegionInfo* ownerRegion0 = nullptr; // if unit is SUBORDINATE_UNIT
 
         LiveInfo* retainedLiveInfo = nullptr;
-        // Monotonic within a retained-snapshot cycle: only successful
-        // Preserve arms it; old-mark start or region-life bump disarms it.
-        uint8_t retainedEverPreserved = 0;
+        RetainedLiveInfoState retainedLiveInfoState = RetainedLiveInfoState::NEVER_EXAMINED;
         uint64_t retainedLiveInfoEpoch = 0;
         MAddress retainedLiveInfoCoveredUpTo = 0;
         RegionLifeId retainedLifeId = 0;
@@ -3517,7 +3661,6 @@ private:
         uintptr_t markStartAllocPtr;
         RouteInfo routeInfo;
         uint64_t snapshotEpoch = 0;
-
         // used to traverse ghost region.
         uint32_t nextRegionIdx0;
 
@@ -3764,7 +3907,8 @@ private:
         RegionLifeClock::NoteZeroAcrossBoundary(RegionLifeClock::Carrier::RETAINED_COPY,
                                                 metadata.retainedLiveInfo != nullptr ||
                                                     metadata.retainedMarkWords != nullptr ||
-                                                    metadata.retainedEverPreserved != 0,
+                                                    metadata.retainedLiveInfoState !=
+                                                        RetainedLiveInfoState::NEVER_EXAMINED,
                                                 metadata.retainedLifeId);
     }
 
@@ -3780,9 +3924,6 @@ private:
             }
             if (metadata.regionLifeId.compare_exchange_weak(old, old + 1, std::memory_order_release,
                                                             std::memory_order_relaxed)) {
-                // A new region life is the hard boundary for the monotonic
-                // retained Preserve history.
-                metadata.retainedEverPreserved = 0;
                 return;
             }
         }
@@ -3837,10 +3978,12 @@ private:
         metadata.censusBoundaryOffset = 0;
         __atomic_store_n(&metadata.liveByteCount, 0, std::memory_order_release);
         metadata.liveInfo = nullptr;
+        ClearCurrentMarkFace();
         RetireFromPageMetadata();
         FreeCompactRouteTable();
         FreeRetainedMarkWords();
         metadata.retainedLiveInfo = nullptr;
+        metadata.retainedLiveInfoState = RetainedLiveInfoState::NEVER_EXAMINED;
         metadata.retainedLiveInfoEpoch = 0;
         metadata.retainedLiveInfoCoveredUpTo = 0;
         metadata.retainedLifeId = 0;
