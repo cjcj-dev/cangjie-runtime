@@ -47,6 +47,42 @@ enum CollectorType {
     COLLECTOR_TYPE_COUNT,
 };
 
+// Public answer to a forwarding lookup. The three miss states deliberately do
+// not convert to BaseObject*: a lifecycle failure must remain visible until the
+// consumer either handles it explicitly or takes the controlled fail-closed
+// path (zForwarding.cpp:183-186; zRelocate.cpp:412-415).
+class FindToVersionResult {
+public:
+    enum class State : uint8_t { Found, NotManaged, NotForwarded, Unavailable };
+
+    static FindToVersionResult Found(BaseObject* object)
+    {
+        CHECK(object != nullptr);
+        return FindToVersionResult(State::Found, object);
+    }
+    static FindToVersionResult NotManaged() { return FindToVersionResult(State::NotManaged, nullptr); }
+    static FindToVersionResult NotForwarded() { return FindToVersionResult(State::NotForwarded, nullptr); }
+    static FindToVersionResult Unavailable() { return FindToVersionResult(State::Unavailable, nullptr); }
+
+    State state() const { return lookupState; }
+    BaseObject* found() const { return lookupState == State::Found ? object : nullptr; }
+    bool is_unavailable() const { return lookupState == State::Unavailable; }
+
+    BaseObject* GetOrFailClosed(const char* consumer) const
+    {
+        CHECK_DETAIL(lookupState != State::Unavailable,
+                     "[FINDTO][fail-closed] consumer=%s forwarding carrier unavailable",
+                     consumer == nullptr ? "unknown" : consumer);
+        return found();
+    }
+
+private:
+    FindToVersionResult(State state, BaseObject* object) : lookupState(state), object(object) {}
+
+    State lookupState;
+    BaseObject* object;
+};
+
 // c4unify MASKEQUIV: dual-run the published bad masks against a verbatim copy of the literal
 // expressions WCollector::set_good_masks carried before the formula was lifted into
 // ColourMask.h::ComputeBadMasks, and count divergences. Same three-piece shape as GATEEQUIV
@@ -108,11 +144,10 @@ public:
     {
         AbortUnimplemented("Collector::IsUnmovableFromObject");
     }
-    // nullptr means either (1) no routed to-version for a heap from-object, or
-    // (2) obj is non-heap/null (gate) — not "dead". Callers must not treat (2) as
-    // stale residue and must not CAS-null non-heap slots (may be RO static roots).
-    // F5 (Collector.cpp) covers (1) on the FindLatestVersion path only.
-    virtual BaseObject* FindToVersion(BaseObject* obj) const = 0;
+    // Every miss has a public state. Consumers may treat NotManaged and
+    // NotForwarded as their existing soft misses; Unavailable must never fall
+    // through to object-field access.
+    virtual FindToVersionResult FindToVersion(BaseObject* obj) const = 0;
 
     // OpenJDK zBarrier.inline.hpp:695-716 store_barrier / color_store_good:
     // a stored reference must already be the current version (remap included).

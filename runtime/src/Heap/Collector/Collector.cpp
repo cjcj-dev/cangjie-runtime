@@ -273,7 +273,7 @@ BaseObject* Collector::FindLatestVersion(BaseObject* obj) const
         return nullptr;
     }
 
-    BaseObject* to = FindToVersion(obj);
+    BaseObject* to = FindToVersion(obj).GetOrFailClosed("Collector::FindLatestVersion");
     if (to != nullptr) {
         if (to != obj && Heap::IsHeapAddress(to) && !to->IsValidObject()) {
             CHECK_DETAIL(obj->IsValidObject(),

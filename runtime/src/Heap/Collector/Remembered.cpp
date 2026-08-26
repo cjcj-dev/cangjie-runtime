@@ -1016,7 +1016,9 @@ void WCollector::RescanRememberedSet(WorkStack& workStack, const MinorSlotSet& r
         }
     };
     auto plannedTo = [this, stw](BaseObject* from) -> BaseObject* {
-        return stw != nullptr ? PlanRouteUnderStw(from, *stw).dest : FindToVersion(from);
+        return stw != nullptr
+            ? PlanRouteUnderStw(from, *stw).dest
+            : FindToVersion(from).GetOrFailClosed("WCollector::RescanRememberedSet");
     };
 
     // HotSpot G1RemSet scrub analogue. ORDER matters (STEER2 / defect⑤):

@@ -211,7 +211,7 @@ void WCollector::EnumAndTagRawRoot(ObjectRef& ref, RootSet& rootSet) const
         return;
     }
     if (IsGhostFromObject(root)) {
-        BaseObject* to = FindToVersion(root);
+        BaseObject* to = FindToVersion(root).GetOrFailClosed("WCollector::MarkStackRoots");
         if (to != nullptr) {
             root = to;
         }
