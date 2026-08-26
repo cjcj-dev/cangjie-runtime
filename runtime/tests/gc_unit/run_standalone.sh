@@ -71,6 +71,17 @@ if nm -D --defined-only "$RUNTIME_LIB_DIR/libcangjie-runtime.so" 2>/dev/null | c
   M0_CORRELATION_ENV=(MRT_GCV2_DIAG=m0corr)
 fi
 
+# Compile the publication TU with the same testability shape as the linked
+# product SO. The default (OFF) SO has no retain hook, so it must not silently
+# register a test that can only skip; the ON arm keeps the explicit precondition
+# assertion in clear_entries_product_unit.cpp.
+PUBLICATION_TESTABLE_FLAGS=()
+if nm -D --defined-only "$RUNTIME_LIB_DIR/libcangjie-runtime.so" 2>/dev/null |
+    c++filt | /usr/bin/grep 'ForwardingTable::SetLookupRetainHook' >/dev/null; then
+  PUBLICATION_TESTABLE_FLAGS=(-DMRT_FINDTO_RETAIN_TEST=1)
+fi
+echo "PUBLICATION_TESTABLE=$((${#PUBLICATION_TESTABLE_FLAGS[@]} != 0))"
+
 BOUNDS_INC="$ROOT/runtime/third_party/third_party_bounds_checking_function/include"
 TESTABLE_FLAGS=()
 if [[ "${MRT_TESTABLE_INTERNALS:-0}" == "1" ]]; then
@@ -197,6 +208,7 @@ $CXX -std=gnu++17 -O0 -g -Wall -Wextra -pthread -fno-rtti \
   -fvisibility-inlines-hidden \
   "${TEST_DEFINES[@]}" \
   -DMRT_TESTABLE_INTERNALS=1 \
+  "${PUBLICATION_TESTABLE_FLAGS[@]}" \
   "${INC_FLAGS[@]}" \
   "$SRC/gc_unit_main.cpp" \
   "$SRC/clear_entries_product_unit.cpp" \

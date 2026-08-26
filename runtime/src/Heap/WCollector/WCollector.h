@@ -848,17 +848,20 @@ protected:
         }
         RegionInfo* live = RegionInfo::TryGetRegionInfoAt(reinterpret_cast<MAddress>(target));
         if (live == nullptr || live->IsFreeRegion()) {
-            BaseObject* to = FindToVersion(target).GetOrFailClosed("WCollector::GetAndTryTagRefField.free");
+            const FindToVersionResult result = FindToVersion(target);
+            BaseObject* to = result.GetOrFailClosed("WCollector::GetAndTryTagRefField.free");
             if (to != nullptr) {
                 target = to;
             } else {
-                // oracle Q3 ④: FREE + retired miss = poison. Paint load-bad
-                // (⛔ null = silent drop; ⛔ store-good = delayed bomb).
+                // FREE + a NotForwarded/NotManaged miss is the stale-colour
+                // family: retain the original address and paint load-bad.
+                // Unavailable has already taken the single fail-closed exit.
                 return ColourStaleLoadBad(to_zaddress_unsafe(reinterpret_cast<Uptr>(target)));
             }
         }
         if (IsStaleStoreValue(target)) {
-            BaseObject* to = FindToVersion(target).GetOrFailClosed("WCollector::GetAndTryTagRefField.stale");
+            const FindToVersionResult result = FindToVersion(target);
+            BaseObject* to = result.GetOrFailClosed("WCollector::GetAndTryTagRefField.stale");
             if (to != nullptr) {
                 target = to;
             }

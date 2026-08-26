@@ -893,17 +893,21 @@ MAddress ForwardingTable::LookupTo(MAddress from, ToAnswer* answer)
         }
         return retired;
     }
+    // A carrier found in the active slot but refused by retain is a lifecycle
+    // failure. It must not be downgraded to an ordinary armed miss merely
+    // because the retired scan also saw ArmedMiss (zForwarding.cpp:171-181).
+    if (activeRejected || retiredAnswer == ToAnswer::Unavailable ||
+        PublicationClosedAt(from)) {
+        g_unavailable.fetch_add(1, std::memory_order_relaxed);
+        if (answer != nullptr) {
+            *answer = ToAnswer::Unavailable;
+        }
+        return 0;
+    }
     if (activeSearched || retiredAnswer == ToAnswer::ArmedMiss) {
         g_armedMiss.fetch_add(1, std::memory_order_relaxed);
         if (answer != nullptr) {
             *answer = ToAnswer::ArmedMiss;
-        }
-        return 0;
-    }
-    if (activeRejected || retiredAnswer == ToAnswer::Unavailable || PublicationClosedAt(from)) {
-        g_unavailable.fetch_add(1, std::memory_order_relaxed);
-        if (answer != nullptr) {
-            *answer = ToAnswer::Unavailable;
         }
         return 0;
     }
