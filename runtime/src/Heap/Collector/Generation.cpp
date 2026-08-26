@@ -814,9 +814,6 @@ void WCollector::DoYoungGarbageCollection()
 #else
         mergeY2yDirtyHolders(enumRoots);
 #endif
-#if defined(MRT_TESTABLE_INTERNALS)
-        NoteY2yAfterRootTestReceipt(pendingY2yDirtyHolderCount());
-#endif
         if (stackScanEpoch != 0) {
             SatbBuffer::Instance().GetRetiredObjects(enumRoots);
         }
@@ -851,6 +848,9 @@ void WCollector::DoYoungGarbageCollection()
             }
             workStack.push_back(MarkStackEntry::MarkOnly(object));
         }, stackScanEpoch);
+#if defined(MRT_TESTABLE_INTERNALS)
+        NoteY2yAfterRootTestReceipt(enumRoots.size());
+#endif
     };
     if (!youngConcFollow) {
         produceYoungRoots();

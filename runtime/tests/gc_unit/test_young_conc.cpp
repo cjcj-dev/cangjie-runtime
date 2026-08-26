@@ -613,6 +613,9 @@ GC_OTHER_VM_TEST(YoungConc, Y2yBeforeReleaseReceiptIsMeasured)
     GC_EXPECT_TRUE(receipt.beforeRelease > 0);
 #endif
     GC_EXPECT_TRUE(receipt.phase0 >= 1);
+    // phase1 proves that zero is the sampled post-consumption root-container
+    // state, rather than the reset value from an omitted receipt.
+    GC_EXPECT_TRUE(receipt.phase1 >= 1);
     GC_EXPECT_EQ(receipt.afterRoot, 0u);
     GC_EXPECT_EQ(receipt.afterStw2, 0u);
 #endif
