@@ -9,9 +9,12 @@
 // (zMark.cpp:208-263). Criterion is set equality, not "did not crash".
 
 #include <cstdint>
+#include <csignal>
 #include <cstring>
 #include <set>
 #include <sys/mman.h>
+#include <sys/wait.h>
+#include <unistd.h>
 #include <vector>
 
 #include "Base/Globals.h"
@@ -109,7 +112,7 @@ std::set<size_t> OnSet(Slot* addr, size_t length)
     return s;
 }
 
-void ExpectSame(Slot* addr, size_t length)
+std::set<size_t> ExpectSame(Slot* addr, size_t length)
 {
     const MAddress savedStart = Heap::heapStartAddr;
     const MAddress savedEnd = Heap::heapCurrentEnd;
@@ -124,6 +127,7 @@ void ExpectSame(Slot* addr, size_t length)
     GC_EXPECT_EQ(off.size(), on.size());
     GC_EXPECT_TRUE(off == on);
     GC_EXPECT_EQ(off.size(), length);
+    return on;
 }
 
 struct SlotBuf {
@@ -175,6 +179,47 @@ GC_TEST(PartialArray, EncodeDecodeRoundtrip)
     Heap::OnHeapExtended(savedEnd);
 }
 
+GC_TEST(PartialArray, HeapStartRequiresMinSizeAlignment)
+{
+    const pid_t child = fork();
+    GC_EXPECT_TRUE(child >= 0);
+    if (child == 0) {
+        Heap::OnHeapCreated(MarkPartialArray::MIN_SIZE + 1);
+        _exit(0);
+    }
+    int status = 0;
+    GC_EXPECT_EQ(waitpid(child, &status, 0), child);
+    GC_EXPECT_TRUE(WIFSIGNALED(status));
+    GC_EXPECT_EQ(WTERMSIG(status), SIGABRT);
+}
+
+GC_TEST(PartialArray, PageOffsetChunkRoundtrips)
+{
+    GcHeapFixture fx;
+    SlotBuf buf(MarkPartialArray::MIN_LENGTH * 4);
+    const MAddress savedStart = Heap::heapStartAddr;
+    const MAddress savedEnd = Heap::heapCurrentEnd;
+    Heap::OnHeapCreated(reinterpret_cast<MAddress>(buf.slots));
+    Heap::OnHeapExtended(reinterpret_cast<MAddress>(buf.slots) + buf.bytes);
+    constexpr size_t offsets[] = { 1, 8, 1776 };
+    for (size_t offset : offsets) {
+        const MAddress arrayStart = reinterpret_cast<MAddress>(buf.slots) + offset;
+        const MAddress chunkStart = AlignUp(arrayStart + sizeof(Slot),
+                                            static_cast<MAddress>(MarkPartialArray::MIN_SIZE));
+        GC_EXPECT_TRUE(MarkPartialArray::Encodable(reinterpret_cast<const void*>(chunkStart),
+                                                   MarkPartialArray::MIN_LENGTH));
+        const MarkStackEntry entry = MarkPartialArray::Encode(
+            reinterpret_cast<const void*>(chunkStart), MarkPartialArray::MIN_LENGTH);
+        MAddress decoded = 0;
+        size_t decodedLength = 0;
+        MarkPartialArray::Decode(entry, decoded, decodedLength);
+        GC_EXPECT_EQ(decoded, chunkStart);
+        GC_EXPECT_EQ(decodedLength, MarkPartialArray::MIN_LENGTH);
+    }
+    Heap::OnHeapCreated(savedStart);
+    Heap::OnHeapExtended(savedEnd);
+}
+
 GC_TEST(PartialArray, EmptyAndSingle)
 {
     GcHeapFixture fx;
@@ -220,12 +265,11 @@ GC_OTHER_VM_TEST(PartialArray, BoundaryRefs)
     GcHeapFixture fx;
     const size_t n = MarkPartialArray::MIN_LENGTH * 3;
     SlotBuf buf(n);
-    const std::set<size_t> on = OnSet(buf.slots, n);
+    const std::set<size_t> on = ExpectSame(buf.slots, n);
     GC_EXPECT_TRUE(on.count(0) == 1);
     GC_EXPECT_TRUE(on.count(MarkPartialArray::MIN_LENGTH - 1) == 1);
     GC_EXPECT_TRUE(on.count(MarkPartialArray::MIN_LENGTH) == 1);
     GC_EXPECT_TRUE(on.count(n - 1) == 1);
-    ExpectSame(buf.slots, n);
 }
 
 GC_TEST(PartialArray, UnalignedStart)
