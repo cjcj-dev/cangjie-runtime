@@ -188,6 +188,48 @@ GC_TEST(RelocationRequestQueue, PageCompletionTerminatesWaitWithoutObjectReceipt
     GC_EXPECT_TRUE(queue.SynchronizePoll().workersDone);
 }
 
+GC_TEST(RelocationRequestQueue, FailedRequestTerminatesPageWaitWithoutPublication)
+{
+    RelocationRequestQueue queue;
+    queue.BeginWorkers(1);
+    int owner = 0;
+    constexpr MAddress kFrom = 0xA010;
+    const auto added = queue.Add(&owner, kFrom);
+    GC_EXPECT_TRUE(added.accepted);
+    const auto claimed = queue.PruneAndClaim();
+    GC_EXPECT_TRUE(claimed == added.request);
+
+    std::atomic<bool> pageDone{ false };
+    std::atomic<bool> returned{ false };
+    std::thread waiter([&]() {
+        queue.WaitUntil(added.request, [&]() { return pageDone.load(std::memory_order_acquire); });
+        returned.store(true, std::memory_order_release);
+    });
+    JoinGuard waiterGuard(waiter);
+
+    // The page never publishes.  A failed request is the only progress event
+    // and must wake the page waiter, which then lets the product keep-from
+    // fallback run.
+    std::this_thread::sleep_for(std::chrono::milliseconds(10));
+    GC_EXPECT_FALSE(returned.load(std::memory_order_acquire));
+    GC_EXPECT_TRUE(queue.Fail(kFrom));
+    for (size_t i = 0; i < 100 && !returned.load(std::memory_order_acquire); ++i) {
+        std::this_thread::sleep_for(std::chrono::milliseconds(1));
+    }
+    const bool returnedByFailure = returned.load(std::memory_order_acquire);
+    // Deliberate cut arm: if WaitUntil no longer observes FAILED, release the
+    // finite test waiter through the page predicate so the suite reports this
+    // item red instead of hanging the runner.
+    if (!returnedByFailure) {
+        pageDone.store(true, std::memory_order_release);
+    }
+    waiter.join();
+    GC_EXPECT_TRUE(returnedByFailure);
+    GC_EXPECT_TRUE(added.request->state() == RelocationRequestQueue::State::FAILED);
+    GC_EXPECT_EQ(queue.PendingCount(), static_cast<size_t>(0));
+    GC_EXPECT_TRUE(queue.SynchronizePoll().workersDone);
+}
+
 GC_TEST(RelocationRequestQueue, FailedOwnerCompletionReleasesWaiterWithoutReceipt)
 {
     RelocationRequestQueue queue;
