@@ -373,7 +373,10 @@ uint64_t WCollectorFlipSeqForProbe() { return WCollector::FlipSeq().load(std::me
 BaseObject* ProbeFindToVersion(BaseObject* obj)
 {
     Collector& c = Heap::GetHeap().GetCollector();
-    return c.FindToVersion(obj).GetOrFailClosed("ZgcInvariants::ProbeFindToVersion");
+    // This diagnostic observer does not consume the object. Keep Unavailable
+    // observable without taking the product consumers' fail-closed exit.
+    const FindToVersionResult observed = c.FindToVersion(obj);
+    return observed.found();
 }
 } // namespace ZgcInvariants
 } // namespace MapleRuntime
