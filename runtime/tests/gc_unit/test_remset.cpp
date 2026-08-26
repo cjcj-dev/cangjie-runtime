@@ -34,6 +34,7 @@
 #include "Heap/Heap.h"
 #include "Heap/WCollector/IdleBarrier.h"
 #include "Heap/WCollector/RememberedHolderPolicy.h"
+#include "Heap/Verify/NwDropAudit.h"
 #include "ObjectModel/RefField.inline.h"
 #include "gc_heap_fixture.hpp"
 #include "Heap/WCollector/WCollector.h"
@@ -95,6 +96,42 @@ struct RemsetRearmTestAccess {
 } // namespace MapleRuntime
 
 namespace {
+
+// Receipt-channel positive controls.  These deliberately exercise each
+// test-only counter with distinct fixed slots, then reset the native buffer
+// and require an exact all-zero baseline.  Product-path wiring is covered by
+// StoreGoodAfterProductConsumerRearm below; this arm only proves that the
+// four reason channels cannot collapse into one another.
+GC_TEST(Remset, Wave8FilterReceiptPositiveControls)
+{
+#if defined(MRT_GC_UNIT_TESTS)
+    ResetRemsetFilterTestReceipt();
+    NoteRemsetFilterTestReceipt(0x1000, RemsetFilterReceiptReason::kStale, false);
+    NoteRemsetFilterTestReceipt(0x2000, RemsetFilterReceiptReason::kDeadHolder, false);
+    NoteRemsetFilterTestReceipt(0x3000, RemsetFilterReceiptReason::kNoOrigin, false);
+    NoteRemsetFilterTestReceipt(0x4000, RemsetFilterReceiptReason::kBadTarget, false);
+    const auto positive = ReadRemsetFilterTestReceipt();
+    std::fprintf(stderr,
+                 "DETAIL wave8_filter_controls stale=%zu dead_holder=%zu no_origin=%zu bad_target=%zu\n",
+                 static_cast<size_t>(positive.stale), static_cast<size_t>(positive.deadHolder),
+                 static_cast<size_t>(positive.noOrigin), static_cast<size_t>(positive.badTarget));
+    GC_EXPECT_EQ(positive.stale, 1u);
+    GC_EXPECT_EQ(positive.deadHolder, 1u);
+    GC_EXPECT_EQ(positive.noOrigin, 1u);
+    GC_EXPECT_EQ(positive.badTarget, 1u);
+    ResetRemsetFilterTestReceipt();
+    const auto zero = ReadRemsetFilterTestReceipt();
+    std::fprintf(stderr,
+                 "DETAIL wave8_filter_controls_reset stale=%zu dead_holder=%zu no_origin=%zu bad_target=%zu\n",
+                 static_cast<size_t>(zero.stale), static_cast<size_t>(zero.deadHolder),
+                 static_cast<size_t>(zero.noOrigin), static_cast<size_t>(zero.badTarget));
+    GC_EXPECT_EQ(zero.seen, 0u);
+    GC_EXPECT_EQ(zero.stale, 0u);
+    GC_EXPECT_EQ(zero.deadHolder, 0u);
+    GC_EXPECT_EQ(zero.noOrigin, 0u);
+    GC_EXPECT_EQ(zero.badTarget, 0u);
+#endif
+}
 
 class InstalledBarrierScope {
 public:
@@ -341,11 +378,18 @@ GC_OTHER_VM_TEST(Remset, StoreGoodAfterProductConsumerRearm)
     field->StoreColoured(zpointer::null);
     barrier.WriteReference(fx.obj0, *field, fx.obj1);
     RemsetRearmTestAccess::BeginMinor(collector);
+#if defined(MRT_GC_UNIT_TESTS)
+    ResetRemsetFilterTestReceipt();
+#endif
     std::unordered_set<MAddress> firstMinor;
     const size_t firstDrainCount = rs.DrainForMinor(firstMinor);
     const size_t firstCount = firstMinor.count(slot);
     const size_t sizeAfterFirstDrain = rs.Size();
     const auto firstConsume = RemsetRearmTestAccess::ConsumePrevious(collector, firstMinor, fx.obj0);
+#if defined(MRT_GC_UNIT_TESTS)
+    const auto firstReceipt = ReadRemsetFilterTestReceipt();
+    NwDropAudit::Report("wave8_receipt");
+#endif
     const size_t sizeAfterFirstConsume = rs.Size();
 
     // LLVM store-good hit analogue: coloured volatile store, no runtime hand-off.
@@ -371,6 +415,10 @@ GC_OTHER_VM_TEST(Remset, StoreGoodAfterProductConsumerRearm)
                  "second_consumer_work=%zu second_consumed=%zu second_stats_consumed=%zu "
                  "second_skipped_not_heap=%zu second_skipped_weak=%zu "
                  "size_after_second_consume=%zu target_young=%u "
+#if defined(MRT_GC_UNIT_TESTS)
+                 "receipt_seen=%zu receipt_consumed=%zu receipt_stale=%zu receipt_dead=%zu "
+                 "receipt_no_origin=%zu receipt_bad_target=%zu "
+#endif
                  "invariant=slot_present_after_bare_store\n",
                  static_cast<size_t>(slot), firstDrainCount, firstCount, sizeAfterFirstDrain,
                  firstConsume.work, firstConsume.consumedLedger, firstConsume.stats.consumed,
@@ -381,7 +429,15 @@ GC_OTHER_VM_TEST(Remset, StoreGoodAfterProductConsumerRearm)
                  sizeAfterSecondDrain, secondConsume.work, secondConsume.consumedLedger,
                  secondConsume.stats.consumed, secondConsume.stats.skippedNotHeap,
                  secondConsume.stats.skippedWeak, sizeAfterSecondConsume,
-                 static_cast<unsigned>(fx.region1->IsYoungRegion()));
+#if defined(MRT_GC_UNIT_TESTS)
+                 static_cast<unsigned>(fx.region1->IsYoungRegion()), static_cast<size_t>(firstReceipt.seen),
+                 static_cast<size_t>(firstReceipt.consumed), static_cast<size_t>(firstReceipt.stale),
+                 static_cast<size_t>(firstReceipt.deadHolder), static_cast<size_t>(firstReceipt.noOrigin),
+                 static_cast<size_t>(firstReceipt.badTarget)
+#else
+                 static_cast<unsigned>(fx.region1->IsYoungRegion())
+#endif
+                 );
     std::fflush(stderr);
 
     GC_EXPECT_TRUE(firstCount == 1);

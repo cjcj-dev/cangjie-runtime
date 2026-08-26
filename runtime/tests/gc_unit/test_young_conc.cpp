@@ -471,7 +471,8 @@ GC_OTHER_VM_TEST(YoungConc, LateEdgeFollowReceiptReachesYoungRuntimeDispatch)
 {
     GC_EXPECT_EQ(CJ_ScheduleManagerInit(), 0);
     GC_EXPECT_EQ(setenv("MRT_GCV2_YOUNG_CONC_MARK", "1", 1), 0);
-    GC_EXPECT_EQ(setenv("MRT_GCV2_YOUNG_CONC_FOLLOW", "0", 1), 0);
+    GC_EXPECT_EQ(setenv("MRT_GCV2_YOUNG_CONC_FOLLOW", "1", 1), 0);
+    GC_EXPECT_EQ(setenv("MRT_GCV2_EPOCH_HANDSHAKE", "1", 1), 0);
     GC_EXPECT_EQ(setenv("MRT_GCV2_MARKPAR_FORCE_SERIAL", "1", 1), 0);
     MutatorManager mutatorManager;
     YoungConcTestRuntime runtime(mutatorManager);
@@ -516,6 +517,14 @@ GC_OTHER_VM_TEST(YoungConc, LateEdgeFollowReceiptReachesYoungRuntimeDispatch)
     resources.SetGcStarted(true);
     resources.GetGCStats().reason = GC_REASON_YOUNG;
 
+#if defined(MRT_GC_UNIT_TESTS)
+    ResetY2yHandoffTestReceipt();
+    // H0 enters through the real mutator allocation buffer; the collection
+    // dispatch below performs the phase-0 product merge and records it.
+    AllocBuffer* y2yBuffer = AllocBuffer::GetOrCreateAllocBuffer();
+    y2yBuffer->PushY2yDirtyHolder(fx.obj0);
+#endif
+
     auto* holderField = &HeapSlotAt<>(reinterpret_cast<MAddress>(fx.obj0) + TYPEINFO_PTR_SIZE);
     barrier.Record(fx.obj0, reinterpret_cast<MAddress>(holderField), fx.obj1);
     mutator.FlushSatbBuffer();
@@ -523,17 +532,34 @@ GC_OTHER_VM_TEST(YoungConc, LateEdgeFollowReceiptReachesYoungRuntimeDispatch)
 
     std::fprintf(stderr, "DETAIL late_edge_consumer stage=before_young_runtime_entry\n");
     RelocationReceiptTestAccess::RunCollectionDispatch(collector);
+#if defined(MRT_GC_UNIT_TESTS)
+    const auto y2yReceipt = ReadY2yHandoffTestReceipt();
+#endif
     const bool stayedYoung = fx.region1->IsYoungRegion();
     const bool childMarked = stayedYoung
         ? fx.region1->IsMarkedObject(fx.region1->GetMarkView<Generation::Young>(), child)
         : fx.region1->IsMarkedObject(fx.region1->GetMarkView<Generation::Old>(), child);
     std::fprintf(stderr,
-                 "DETAIL late_edge_consumer stage=after_young_runtime_entry child_marked=%d stayed_young=%d\n",
-                 static_cast<int>(childMarked), static_cast<int>(stayedYoung));
+                 "DETAIL late_edge_consumer stage=after_young_runtime_entry child_marked=%d stayed_young=%d "
+#if defined(MRT_GC_UNIT_TESTS)
+                 "y2y_phase0=%zu y2y_phase1=%zu y2y_phase2=%zu before_release=%zu after_root=%zu after_stw2=%zu\n",
+#else
+                 "\n",
+#endif
+                 static_cast<int>(childMarked), static_cast<int>(stayedYoung)
+#if defined(MRT_GC_UNIT_TESTS)
+                 , static_cast<size_t>(y2yReceipt.phase0), static_cast<size_t>(y2yReceipt.phase1),
+                 static_cast<size_t>(y2yReceipt.phase2), static_cast<size_t>(y2yReceipt.beforeRelease),
+                 static_cast<size_t>(y2yReceipt.afterRoot), static_cast<size_t>(y2yReceipt.afterStw2)
+#endif
+                 );
 
     resources.SetGcStarted(startedBefore);
     resources.GetGCStats().reason = reasonBefore;
     GC_EXPECT_TRUE(childMarked);
+#if defined(MRT_GC_UNIT_TESTS)
+    GC_EXPECT_TRUE(y2yReceipt.phase0 >= 1);
+#endif
 
     RelocationReceiptTestAccess::BindThreadPool(resources, nullptr);
     std::fprintf(stderr, "DETAIL late_edge_consumer stage=before_pool_exit\n");
