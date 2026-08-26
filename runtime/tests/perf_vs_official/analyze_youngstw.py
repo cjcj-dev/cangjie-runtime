@@ -103,6 +103,110 @@ def evac_ghost_regions(
         for timestamp, body in report_lines)
 
 
+def _ghost_count(
+    report_lines: list[tuple[dt.datetime, str]],
+    start: dt.datetime,
+    end: dt.datetime,
+) -> int:
+    """Count one emitted ghost-dispel record per matching report line."""
+    return sum(
+        start < timestamp <= end and "[GCV2][ghost-dispel]" in body
+        for timestamp, body in report_lines)
+
+
+def validate_run(
+    directory: Path,
+    phases: dict[str, float],
+    stw: dict[str, int],
+    timer_end: dict[str, tuple[dt.datetime, int]],
+    report_lines: list[tuple[dt.datetime, str]],
+    counters: dict[str, int],
+    postmark_gap_us: float,
+) -> None:
+    """Reject a structurally plausible log whose derived ledger is impossible.
+
+    These are semantic contracts of the r4 boundary change, rather than fixed
+    campaign values: the new evacuation-tail interval is a subset of the old
+    bulk-end interval, every derived interval has non-negative elapsed time,
+    and counters which partition a visited population cannot exceed it.
+    """
+    required_timers = (
+        "young.mark_from_remset",
+        "young.pre_evac_clear",
+        "young.ref_fix_bulk",
+        "young.evac_finish",
+        "young.evac_prepare_next",
+    )
+    missing_timers = [name for name in required_timers if name not in timer_end]
+    if missing_timers:
+        raise ValueError(f"{directory}: missing timer ledger entries {missing_timers}")
+
+    evac_finish_end, evac_finish_us = timer_end["young.evac_finish"]
+    tail_start = evac_finish_end - dt.timedelta(microseconds=evac_finish_us)
+    bulk_end = timer_end["young.ref_fix_bulk"][0]
+    tail_end = timer_end["young.evac_prepare_next"][0]
+    if bulk_end > tail_start:
+        raise ValueError(
+            f"{directory}: boundary order violated: bulk_end={bulk_end.isoformat()} "
+            f"tail_start={tail_start.isoformat()}"
+        )
+    if tail_start > tail_end:
+        raise ValueError(
+            f"{directory}: evacuation tail ends before it starts: "
+            f"start={tail_start.isoformat()} end={tail_end.isoformat()}"
+        )
+
+    old_count = _ghost_count(report_lines, bulk_end, tail_end)
+    new_count = _ghost_count(report_lines, tail_start, tail_end)
+    if new_count > old_count:
+        raise ValueError(
+            f"{directory}: ghost boundary is not a subset: old={old_count} new={new_count}"
+        )
+    if counters["evac_ghost_regions"] != new_count:
+        raise ValueError(
+            f"{directory}: evac_ghost_regions counter disagrees with boundary: "
+            f"counter={counters['evac_ghost_regions']} measured={new_count}"
+        )
+
+    collection_boundary_us = (
+        stw["young_collection"] / 1000.0
+        - sum(phases[name] for name in COLLECTION_PHASES)
+        - postmark_gap_us
+    )
+    evac_tail_us = phases["young.evac_finish"] - phases["young.evac_prepare_next"]
+    evac_other_us = evac_tail_us - counters["domain_ns"] / 1000.0
+    post_boundary_us = stw["young_post-relocate"] / 1000.0 - (
+        phases["young.ref_fix_bulk"] + phases["young.evac_finish"])
+    derived = {
+        "postmark_gap_us": postmark_gap_us,
+        "collection_boundary_us": collection_boundary_us,
+        "evac_tail_us": evac_tail_us,
+        "evac_other_us": evac_other_us,
+        "post_boundary_us": post_boundary_us,
+    }
+    negative = {name: value for name, value in derived.items() if value < 0}
+    if negative:
+        raise ValueError(f"{directory}: negative derived ledger values {negative}")
+
+    bounded = (
+        ("remset_live", "recorded"),
+        ("consumed", "recorded"),
+        ("interiors", "recorded"),
+        ("static_miss", "static_ensure"),
+    )
+    for child, parent in bounded:
+        if counters[child] > counters[parent]:
+            raise ValueError(
+                f"{directory}: counter invariant {child} <= {parent} violated: "
+                f"{counters[child]} > {counters[parent]}"
+            )
+    if counters["cas_ok"] + counters["cas_fail"] > counters["n_slot"]:
+        raise ValueError(
+            f"{directory}: counter invariant cas_ok + cas_fail <= n_slot violated: "
+            f"{counters['cas_ok']} + {counters['cas_fail']} > {counters['n_slot']}"
+        )
+
+
 def load_run(directory: Path) -> dict[str, object]:
     if (directory / "classification").read_text().strip() != "COMPLETE":
         raise ValueError(f"{directory}: not COMPLETE")
@@ -173,6 +277,9 @@ def load_run(directory: Path) -> dict[str, object]:
     post_held_us = stw["young_post-relocate"] / 1000.0
     post_boundary_us = post_held_us - (
         phases["young.ref_fix_bulk"] + phases["young.evac_finish"])
+
+    validate_run(
+        directory, phases, stw, timer_end, report_lines, counters, postmark_gap_us)
 
     return {
         "run": directory.name,
@@ -248,7 +355,12 @@ def main() -> int:
     parser.add_argument("root", type=Path)
     parser.add_argument("--compact", action="store_true")
     args = parser.parse_args()
-    print(json.dumps(summarize(args.root), ensure_ascii=False,
+    try:
+        result = summarize(args.root)
+    except (OSError, KeyError, ValueError) as exc:
+        print(f"ANALYZER_REJECT: {exc}", file=sys.stderr)
+        return 1
+    print(json.dumps(result, ensure_ascii=False,
                      indent=None if args.compact else 2, sort_keys=True))
     return 0
 
