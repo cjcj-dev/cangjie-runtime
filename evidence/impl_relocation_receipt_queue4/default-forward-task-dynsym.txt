@@ -1,6 +1,0 @@
-COMMAND: nm -D -C libcangjie-runtime.so | /usr/bin/grep 'ForwardTask<.*>::Execute'
-CONFIG: MRT_TESTABLE_INTERNALS=OFF
-ELF_SHA256: f41481bdbb1679dad99d4c3490191fb89a29f49daaefe3b3f83bf9b697cc948f
-MATCH_COUNT: 0
-SYMBOLS:
-

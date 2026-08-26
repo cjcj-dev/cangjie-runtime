@@ -1,7 +1,0 @@
-COMMAND: nm -D -C libcangjie-runtime.so | /usr/bin/grep 'ForwardTask<.*>::Execute'
-CONFIG: MRT_TESTABLE_INTERNALS=ON
-ELF_SHA256: b5e6c458220db31d40e05b6faa1596e303124efc6f44d8b34ab177f5a3c7d414
-MATCH_COUNT: 2
-SYMBOLS:
-00000000004d0130 W MapleRuntime::ForwardTask<(MapleRuntime::Generation)0>::Execute(unsigned long)@@CANGJIE
-00000000004d04a0 W MapleRuntime::ForwardTask<(MapleRuntime::Generation)1>::Execute(unsigned long)@@CANGJIE
