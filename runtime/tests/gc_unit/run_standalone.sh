@@ -94,7 +94,12 @@ if /usr/bin/grep -q 'ShouldWaitForIgnoredGcRequest' "$OUT/runtime-dynamic-symbol
   GC_UNIT_DEFS+=(-DMRT_GC_UNIT_TESTS=1)
 fi
 
+# Keep this hand-driven entry point structurally identical to the CMake
+# cj_gc_unit target: product inline/template helpers stay hidden and static
+# archives cannot re-export weak copies of the product symbols exercised via
+# dlsym in test_live_map.cpp.
 $CXX -std=gnu++17 -O0 -g -Wall -Wextra -pthread -fno-rtti \
+  -fvisibility-inlines-hidden \
   "${RANGE_REGISTRY_FLAGS[@]}" \
   "${GC_UNIT_DEFS[@]}" \
   "${TEST_DEFINES[@]}" \
@@ -158,20 +163,44 @@ $CXX -std=gnu++17 -O0 -g -Wall -Wextra -pthread -fno-rtti \
     "$SRC/test_segmented_array_init.cpp" \
     "$SRC/test_verify_roots.cpp" \
     "$SRC/test_mem_map.cpp" \
-  -L"$RUNTIME_LIB_DIR" -Wl,-rpath,"$RUNTIME_LIB_DIR" \
+  -L"$RUNTIME_LIB_DIR" -Wl,-rpath,"$RUNTIME_LIB_DIR" -Wl,--exclude-libs,ALL \
   -lcangjie-runtime -lboundscheck \
   -o "$OUT/cj_gc_unit"
+
+# The standalone script is the frozen gate's real build entry point.  Keep the
+# same structural invariant as the CMake target at that point, before any test
+# process can run: none of the product consumers exercised through dlsym may
+# be dynamically defined by this executable itself.  A removed visibility or
+# archive-exclusion flag therefore fails closed instead of silently restoring
+# the old self-satisfying weak copies.
+STANDALONE_SYMBOLS=(
+  _ZN12MapleRuntime10RegionInfo10MarkObjectILNS_10GenerationE0EEEbNS_8MarkViewIXT_EEEPKNS_10BaseObjectEmb
+  _ZN12MapleRuntime10RegionInfo10MarkObjectILNS_10GenerationE1EEEbNS_8MarkViewIXT_EEEPKNS_10BaseObjectEmb
+  _ZN12MapleRuntime10RegionInfo13ClearLiveInfoILNS_10GenerationE0EEEvNS_8MarkViewIXT_EEE
+  _ZN12MapleRuntime10RegionInfo24PreserveRetainedLiveInfoEv
+  _ZN12MapleRuntime10RegionInfo31BumpSnapshotEpochFromInitRegionEv
+)
+STANDALONE_SYMBOL_DYN="$OUT/cj_gc_unit.dynamic-defined.txt"
+nm -D --defined-only "$OUT/cj_gc_unit" >"$STANDALONE_SYMBOL_DYN"
+for symbol in "${STANDALONE_SYMBOLS[@]}"; do
+  if /usr/bin/grep -F -q "$symbol" "$STANDALONE_SYMBOL_DYN"; then
+    echo "GC_UNIT_STANDALONE_SYMBOL_GUARD_FAIL symbol=$symbol" >&2
+    exit 7
+  fi
+done
+echo "GATE_STANDALONE_SYMBOLS_OK elf=$OUT/cj_gc_unit"
 
 # Fresh-process product-link arm for the one-shot ForwardingTable.  It binds
 # CompactRegion/ClearEntries from the same runtime SO as the full suite; no
 # forwarding component is rebuilt into this executable.
 $CXX -std=gnu++17 -O0 -g -Wall -Wextra -pthread -fno-rtti \
+  -fvisibility-inlines-hidden \
   "${TEST_DEFINES[@]}" \
   -DMRT_TESTABLE_INTERNALS=1 \
   "${INC_FLAGS[@]}" \
   "$SRC/gc_unit_main.cpp" \
   "$SRC/clear_entries_product_unit.cpp" \
-  -L"$RUNTIME_LIB_DIR" -Wl,-rpath,"$RUNTIME_LIB_DIR" \
+  -L"$RUNTIME_LIB_DIR" -Wl,-rpath,"$RUNTIME_LIB_DIR" -Wl,--exclude-libs,ALL \
   -lcangjie-runtime -lboundscheck \
   -o "$OUT/cj_gc_forwarding_publication_unit"
 

@@ -79,6 +79,11 @@ target_compile_features(cj_gc_unit PRIVATE cxx_std_17)
 # The product target disables C++ exceptions globally, while this deliberately
 # tiny test runner reports assertion failures with throw/catch.
 target_compile_options(cj_gc_unit PRIVATE -fno-rtti -fexceptions -std=gnu++17)
+# Keep inline product helpers out of the test ELF's dynamic definition table.
+# Product-path tests below resolve their entry points explicitly with dlsym;
+# this prevents unrelated fixture TUs from exporting weak inline copies.
+target_compile_options(cj_gc_unit PRIVATE -fvisibility-inlines-hidden)
+target_link_options(cj_gc_unit PRIVATE -Wl,--exclude-libs,ALL)
 # The suite tests the real ZStat implementation regardless of whether the product .so was
 # built with MRT_ZSTAT: it compiles Base/ZStat.cpp itself with the compile-time gate open.
 target_compile_definitions(cj_gc_unit PRIVATE
