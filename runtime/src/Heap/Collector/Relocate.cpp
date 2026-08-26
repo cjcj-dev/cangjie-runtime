@@ -778,10 +778,11 @@ BaseObject* WCollector::ResolveMinorReference(RefField<>& field, const ScopedSto
         }
         FindToVersionResult resolved = FindToVersion(from);
         if (resolved.is_unavailable()) {
-            // Concurrent remembered-slot scan: holders need not be live and the
-            // young forwarding carrier can retire between slot observation and
-            // this query. Post-lifecycle soft miss — count it, leave the slot
-            // untouched; never hand the answer to object-field access.
+            // This is one of the three deliberate non-dereference consumers:
+            // a concurrent remembered-slot scan may observe a carrier retiring
+            // between slot observation and this query.  Unavailable therefore
+            // has one strategy here—drop this scan item, leave the slot
+            // untouched, and never hand the answer to object-field access.
             g_findtoPostLifecycleSoft.fetch_add(1, std::memory_order_relaxed);
             return nullptr;
         }
@@ -984,6 +985,9 @@ BaseObject* WCollector::ResolveMinorReference(RootSlot& root, const ScopedStopTh
         }
         FindToVersionResult resolved = FindToVersion(from);
         if (resolved.is_unavailable()) {
+            // Root-slot scan counterpart of the field scan above.  No object
+            // field is dereferenced on this branch; the root remains pending
+            // for the owning pass rather than being converted to a value.
             g_findtoPostLifecycleSoft.fetch_add(1, std::memory_order_relaxed);
             return nullptr;
         }
@@ -2576,11 +2580,6 @@ BaseObject* WCollector::ResolveStoreValue(BaseObject* ref) const
     // color_store_good includes remap. A movable ghost-from value must go
     // through the same relocate_or_remap funnel as the load barrier
     // (zRelocate.cpp:382-416) before it is painted store-good.
-    // Flip false for the perturbation SO (W1 returns, crash returns).
-    static constexpr bool kResolveStoreValue = true;
-    if constexpr (!kResolveStoreValue) {
-        return ref;
-    }
     if (ref == nullptr || !Heap::IsHeapAddress(ref)) {
         return ref;
     }

@@ -1022,6 +1022,10 @@ void WCollector::RescanRememberedSet(WorkStack& workStack, const MinorSlotSet& r
         }
         FindToVersionResult resolved = FindToVersion(from);
         if (resolved.is_unavailable()) {
+            // The remembered-set scrub is the third non-dereference consumer:
+            // an unavailable carrier drops this scan item and never installs a
+            // null/old value into the slot.  Product barriers retain the
+            // fail-closed abort; this scrub's single strategy is deferral.
             g_findtoPostLifecycleSoft.fetch_add(1, std::memory_order_relaxed);
             return nullptr;
         }

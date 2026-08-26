@@ -319,7 +319,7 @@ GC_OTHER_VM_TEST(FindToPublicState, UnavailableIsObservable)
     fx.FreePlanted(live);
 }
 
-#if defined(MRT_TESTABLE_INTERNALS)
+#if defined(MRT_TESTABLE_INTERNALS) && defined(MRT_FINDTO_RETAIN_TEST)
 struct RetainWindowState {
     std::mutex mutex;
     std::condition_variable cv;
@@ -353,6 +353,9 @@ static ProductSetLookupRetainHook ProductSetLookupRetainHookFn()
     GC_EXPECT_TRUE(handle != nullptr);
     auto fn = reinterpret_cast<ProductSetLookupRetainHook>(
         dlsym(handle, "_ZN12MapleRuntime15ForwardingTable19SetLookupRetainHookEPFvPvES1_"));
+    // This test is the positive retain-window arm.  A product built without
+    // the test hook is not a passing observation; it is a missing precondition.
+    GC_EXPECT_TRUE(fn != nullptr);
     return fn;
 }
 
@@ -363,16 +366,6 @@ GC_OTHER_VM_TEST(FindToRetainWindow, ActiveLookupPinsCarrierUntilQueryReturns)
     WCollector collector(Heap::GetHeap().GetAllocator(), Heap::GetHeap().GetCollectorResources());
     RelocationReceiptTestAccess::BindCollector(Heap::GetHeap().GetCollectorResources(), &collector);
     ProductSetLookupRetainHook setHook = ProductSetLookupRetainHookFn();
-    if (setHook == nullptr) {
-        // Default product configuration exports no testability hook; the
-        // retain window itself is exercised on the MRT_TESTABLE_INTERNALS ON
-        // configuration (this arm is compiled in whenever the TU sees the
-        // macro, but it can only pin the carrier through the ON export).
-        std::puts("FindToRetainWindow.ActiveLookupPinsCarrierUntilQueryReturns: SKIP "
-                  "reason=PRODUCT_SO_LACKS_LOOKUP_RETAIN_HOOK");
-        RelocationReceiptTestAccess::BindCollector(Heap::GetHeap().GetCollectorResources(), nullptr);
-        return;
-    }
     BaseObject* from = fx.PlaceObject(region->GetRegionStart() + 64);
     region->SetRegionType(RegionInfo::RegionType::THREAD_LOCAL_REGION);
     region->SetRegionAllocPtr(reinterpret_cast<MAddress>(from) + from->GetSize());
@@ -416,7 +409,9 @@ GC_OTHER_VM_TEST(FindToRetainWindow, ActiveLookupPinsCarrierUntilQueryReturns)
     query.join();
     clear.join();
     setHook(nullptr, nullptr);
-    GC_EXPECT_TRUE(queryResult.state() == FindToVersionResult::State::NotForwarded);
+    // A carrier that was present in the active slot but refused retain is a
+    // lifecycle failure, not an ordinary armed miss (ForwardingTable.cpp:896).
+    GC_EXPECT_TRUE(queryResult.state() == FindToVersionResult::State::Unavailable);
     GC_EXPECT_TRUE(state.clearDone);
 
     RelocationReceiptTestAccess::BindCollector(Heap::GetHeap().GetCollectorResources(), nullptr);
