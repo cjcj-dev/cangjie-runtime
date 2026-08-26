@@ -788,9 +788,10 @@ void WCollector::DoYoungGarbageCollection()
     // youngConcMark / youngConcFollow computed above (before remset drain).
     // portyoungconc L1 (ZGC zGeneration.cpp:550-555): mark_end() returning false leaves the
     // safepoint and runs concurrent_mark_continue() = mark_follow() before re-entering.
-    // A non-converged mark end must re-enter; FORCE=<n> makes the first n mark-ends report
-    // "not converged" so the edge has a positive control (a re-entry that is never taken
-    // cannot be shown to work).
+    // A non-converged mark end must re-enter; FORCE=<n> makes exactly the first n mark-ends
+    // report "not converged" so the edge has a positive control. The product loop has no
+    // re-entry budget, matching zGeneration.cpp:550-555; the diagnostic request remains
+    // self-limiting through concWindow.reenters < youngMarkEndForceReenter.
     static const size_t youngMarkEndForceReenter = []() -> size_t {
         const char* v = std::getenv("MRT_GCV2_YOUNG_MARK_END_FORCE_REENTER");
         if (v == nullptr) {
@@ -928,7 +929,6 @@ void WCollector::DoYoungGarbageCollection()
         // leave the safepoint, run mark_follow() concurrently, and come back. Our STW2
         // fixpoint is that safepoint body -- but today it logs NON_CONVERGED and evacuates
         // anyway, i.e. it has no false branch. This loop supplies it.
-        constexpr size_t kMaxMarkEndReenters = 4;
         bool markEndDone = false;
         while (!markEndDone) {
         stw = std::make_unique<ScopedStopTheWorld>("young post-mark", true,
@@ -1229,17 +1229,6 @@ void WCollector::DoYoungGarbageCollection()
             // an untaken branch cannot be shown to work.
             const bool forcedNotDone = concWindow.reenters < youngMarkEndForceReenter;
             const bool needsReenter = !converged || forcedNotDone;
-            if (needsReenter && concWindow.reenters >= kMaxMarkEndReenters) {
-                VLOG(REPORT,
-                     "[GCV2][youngconc] mark_end fail-closed: reentry budget exhausted "
-                     "reenters=%zu max=%zu converged=%d forced=%d",
-                     concWindow.reenters, kMaxMarkEndReenters, static_cast<int>(converged),
-                     static_cast<int>(forcedNotDone));
-                CHECK_DETAIL(false,
-                             "young mark non-converged after reentry budget exhausted: "
-                             "reenters=%zu max=%zu converged=%d",
-                             concWindow.reenters, kMaxMarkEndReenters, static_cast<int>(converged));
-            }
             const bool wantReenter = needsReenter;
             markEndDone = !wantReenter;
             if (!converged) {

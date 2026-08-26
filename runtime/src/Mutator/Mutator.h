@@ -465,6 +465,29 @@ public:
     ATTR_NO_INLINE void RememberObjectInSatbBuffer(const BaseObject* target);
     ATTR_NO_INLINE void RememberObjectInSatbBuffer(const BaseObject* target, const BaseObject* knownBase);
 
+    // Publish a TRACE-window young allocate-black target into the same
+    // retired/in-flight termination domain as SATB. The follow bit is kept
+    // even though the object is already painted, so its children are scanned.
+    ATTR_NO_INLINE void PublishYoungAllocBlack(BaseObject* target)
+    {
+        if (target == nullptr) {
+            return;
+        }
+        if (LIKELY(satbNode != nullptr && satbNode->Push(target, nullptr, true))) {
+            return;
+        }
+        SatbBuffer::Instance().EnsureGoodNode(satbNode);
+        // EnsureGoodNode may leave the node null when this mutator has no
+        // SATB arena available (for example during runtime-thread setup or
+        // after the collector has handed the last node back).  Publishing a
+        // young edge is best-effort in that context; never dereference the
+        // absent node here.
+        if (satbNode == nullptr) {
+            return;
+        }
+        (void)satbNode->Push(target, nullptr, true);
+    }
+
     inline uintptr_t GetStackTopAddr() { return stackTopAddr; }
     inline void SetStackTopAddr(uintptr_t sta) { stackTopAddr = sta; }
     inline uintptr_t GetStackSize() { return stackSize; }

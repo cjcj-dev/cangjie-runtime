@@ -112,14 +112,14 @@ void SatbBuffer::Filter(Node* node)
     while (sourceIndex != node->index) {
         Node::Entry entry = node->entryContainer[--sourceIndex];
         BaseObject* objectToMark = entry.knownBase != nullptr ? entry.knownBase : entry.target;
-        if (Heap::IsHeapAddress(objectToMark) && ShouldEnqueue(objectToMark)) {
+        if (Heap::IsHeapAddress(objectToMark) && (entry.follow || ShouldEnqueue(objectToMark))) {
             node->entryContainer[--retainedIndex] = entry;
         } else {
             NoteFilterDrop(objectToMark);
         }
     }
     while (node->index != retainedIndex) {
-        node->entryContainer[node->index++] = { nullptr, nullptr };
+        node->entryContainer[node->index++] = { nullptr, nullptr, false };
     }
 }
 

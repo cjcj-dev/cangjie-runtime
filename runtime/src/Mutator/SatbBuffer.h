@@ -37,13 +37,13 @@ public:
             }
             index = CONTAINER_CAPACITY;
         }
-        bool Push(const BaseObject* target, const BaseObject* knownBase)
+        bool Push(const BaseObject* target, const BaseObject* knownBase, bool follow = false)
         {
             if (UNLIKELY(IsFull())) {
                 return false;
             }
             entryContainer[--index] = {
-                const_cast<BaseObject*>(target), const_cast<BaseObject*>(knownBase)
+                const_cast<BaseObject*>(target), const_cast<BaseObject*>(knownBase), follow
             };
             return true;
         }
@@ -55,7 +55,19 @@ public:
                 BaseObject* objectToMark = entry.knownBase != nullptr ? entry.knownBase : entry.target;
                 NwDropAudit::NoteSatbObj(objectToMark);
                 stack.push_back(objectToMark);
-                entry = { nullptr, nullptr };
+                entry = { nullptr, nullptr, false };
+            }
+        }
+
+        template<typename F>
+        void GetEntries(F&& visitor)
+        {
+            while (index != CONTAINER_CAPACITY) {
+                Entry& entry = entryContainer[index++];
+                BaseObject* objectToMark = entry.knownBase != nullptr ? entry.knownBase : entry.target;
+                NwDropAudit::NoteSatbObj(objectToMark);
+                visitor(objectToMark, entry.follow);
+                entry = { nullptr, nullptr, false };
             }
         }
 
@@ -76,6 +88,7 @@ public:
         struct Entry {
             BaseObject* target;
             BaseObject* knownBase;
+            bool follow;
         };
 #if defined(_WIN64)
         static constexpr size_t CONTAINER_CAPACITY = 69;
@@ -271,6 +284,21 @@ public:
         }
     }
 
+    // Follow entries share the SATB retired/in-flight publication domain, but
+    // retain the distinction needed by young allocate-black consumers.
+    template<typename F>
+    void GetRetiredEntries(F&& visitor)
+    {
+        Node* head = retiredNodes.PopAll();
+        while (head != nullptr) {
+            head->GetEntries(visitor);
+            Node* oldHead = head;
+            head = head->next;
+            oldHead->Clear();
+            freeNodes.Push(oldHead);
+        }
+    }
+
     // Observe-only: walk retired SATB without PopAll (Stw2CurrentAudit).
     template<typename F>
     void PeekRetired(F&& f) const
@@ -279,6 +307,10 @@ public:
             n->PeekEntries(f);
         }
     }
+
+    // Mark-end termination observes the same publication domain consumed by
+    // GetRetiredEntries(), without walking the published entries in the pause.
+    bool IsRetiredEmpty() const { return retiredNodes.PeekHead() == nullptr; }
 
     void ClearBuffer()
     {
