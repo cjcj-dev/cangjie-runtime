@@ -962,10 +962,10 @@ static inline void NoteHandedOut(BaseObject* target, BaseObject* holder, const R
 // again inside the fast path itself with the accepted value (colourBits = Remapped00 = the current
 // good colour, flipSeq = 24, i.e. a colour that has come back around).
 //
-// This is not the barrier tolerating a stale value: it refuses to hand out an object whose own
-// header says it has moved, and resolves instead.  The cost is one relaxed header load on the
-// hand-out path, paid only where the colour said good.
-static constexpr bool kStaleGuard = true;
+// This is not the barrier tolerating a stale value: slow/runtime hand-outs always refuse an object
+// whose sampled header says it has moved, and resolve instead. This correctness check has no source
+// or runtime gate. The relaxed header sample is detection-layer best-effort only: it does not
+// establish a lifetime guarantee; that guarantee belongs to the producer-side lifecycle protocol.
 
 // Two ways a handed-out target can be unusable, and they need different handling:
 //   FORWARDED   the object moved and its to-version exists -- resolvable, and the census shows the
@@ -1006,9 +1006,9 @@ BaseObject* Barrier::ResolveFromCopyForMutator(BaseObject* target) const
     return target;
 }
 
-// loadfc (zBarrier.inline.hpp:294-344): the single hand-out postcondition. A value may leave for
-// a mutator only as a verified current version; an unresolvable FORWARDED / ZeroHeader from-address
-// stops here with a controlled [LOADFC] abort instead of becoming the next wild SEGV.
+// loadfc (zBarrier.inline.hpp:294-344): slow/runtime hand-out postcondition. A sampled non-Usable
+// value must resolve or stop here with a controlled [LOADFC] abort. Compiler colour-good fast paths
+// follow ZGC's direct-uncolour shape and rely on the producer-side colour/lifetime invariant.
 BaseObject* Barrier::FinalizeLoadForMutator(BaseObject* handed, BaseObject* holder,
                                             const RefField<false>* field, const char* site) const
 {
@@ -1065,21 +1065,19 @@ BaseObject* Barrier::ReadReference(BaseObject* obj, RefField<false>& field) cons
         BaseObject* handed = DispatchPhase(phase, *this, [&](const auto& barrier) {
             return barrier.ReadReference(obj, field);
         });
-        if (kStaleGuard) {
-            // loadfc: unified hand-out postcondition -- verified to-version or controlled abort.
-            BaseObject* finalized = FinalizeLoadForMutator(handed, obj, &field, "Barrier::ReadReference");
-            if (finalized != handed) {
-                if (finalized != nullptr && Heap::IsHeapAddress(finalized)) {
-                    RefField<> goodField = theCollector.GetAndTryTagRefField(finalized);
-                    handed = ZgcSelfHealLoadGood(field, field.GetFieldValue(), goodField.GetFieldValue(),
-                                                 HealSite::IdleReadReference);
-                } else {
-                    handed = finalized;
-                }
+        // loadfc: unconditional slow/runtime hand-out postcondition.
+        BaseObject* finalized = FinalizeLoadForMutator(handed, obj, &field, "Barrier::ReadReference");
+        if (finalized != handed) {
+            if (finalized != nullptr && Heap::IsHeapAddress(finalized)) {
+                RefField<> goodField = theCollector.GetAndTryTagRefField(finalized);
+                handed = ZgcSelfHealLoadGood(field, field.GetFieldValue(), goodField.GetFieldValue(),
+                                             HealSite::IdleReadReference);
+            } else {
+                handed = finalized;
             }
         }
-        // I1 is checked here because this is the single point every reference reaches the mutator:
-        // whatever the fast path decided, the value leaves through this return.
+        // I1 is checked here because every runtime ReadReference result leaves through this return.
+        // Compiler colour-good fast paths bypass the runtime entry by design.
         ZgcInvariants::CheckLoadGoodTarget(handed, theCollector, static_cast<uint8_t>(phase));
         const uintptr_t slotRead1 = static_cast<uintptr_t>(raw(field.GetFieldValue()));
         const uintptr_t slotRead2 = static_cast<uintptr_t>(raw(field.GetFieldValue()));
@@ -1094,8 +1092,8 @@ BaseObject* Barrier::ReadReference(BaseObject* obj, RefField<false>& field) cons
         return FinalizeLoadForMutator(toVersion, obj, &field, "Barrier::ReadReference.stw");
     } else {
         BaseObject* target = to_object(field.GetTargetObject());
-        // loadfc: STW hand-out shares the postcondition (crash family pc=CreateNewFileInfo/
-        // AttributePack::TestAttr fires with the stwBarrier installed, reclaim_satb_phase).
+        // loadfc: the base/STW barrier-phase branch shares the runtime postcondition. Barrier
+        // installation follows GC phase; it does not prove that the world is currently stopped.
         return FinalizeLoadForMutator(target, obj, &field, "Barrier::ReadReference.stw");
     }
 }

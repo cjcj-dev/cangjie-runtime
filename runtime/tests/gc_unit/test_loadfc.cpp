@@ -19,6 +19,7 @@
 #include "Heap/Barrier/Barrier.h"
 #include "Heap/Barrier/RememberedSet.h"
 #include "Heap/Collector/Collector.h"
+#include "Heap/Collector/FinalizerProcessor.h"
 #include "Heap/Heap.h"
 #include "Heap/WCollector/IdleBarrier.h"
 #include "ObjectModel/RefField.inline.h"
@@ -266,4 +267,17 @@ GC_TEST(LoadFc, BulkCopyHealthySourceReturnsNormally)
                         reinterpret_cast<MAddress>(field), sizeof(*field));
 
     GC_EXPECT_EQ(static_cast<uintptr_t>(raw(copied.LoadPlain())), reinterpret_cast<uintptr_t>(fx.heap.obj0));
+}
+
+// ---- finalizer hand-out (FinalizerProcessor runtime consumer) ----
+GC_OTHER_VM_TEST(LoadFc, FinalizerHandOutFailsClosedOnZeroHeader)
+{
+    LoadFcFixture fx;
+    fx.ClearTarget();
+    FinalizerProcessor processor;
+    processor.RegisterFinalizer(fx.heap.obj0);
+
+    ExpectControlledAbort([&]() {
+        processor.EnqueueFinalizables([](BaseObject*) { return false; }, 1);
+    });
 }
