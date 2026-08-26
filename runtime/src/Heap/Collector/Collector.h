@@ -47,6 +47,14 @@ enum CollectorType {
     COLLECTOR_TYPE_COUNT,
 };
 
+// loadfc (zBarrier.inline.hpp:327-343): best-effort detection verdict for slow/runtime hand-outs.
+// The single relaxed header read classifies the observed word but establishes no lifetime
+// guarantee. ZGC structurally cannot hand a from-address back after a slow-path miss
+// (zGeneration.inline.hpp:131-140 has no "lookup miss ⇒ return from" exit); detected shapes are:
+//   Forwarded   header stateCode=3, a to-version exists and must be found
+//   ZeroHeader  payload cleared by reclamation (ClearUnits reuse) -- nothing to resolve
+enum class HandVerdict : uint8_t { Usable, Forwarded, ZeroHeader };
+
 // Public answer to a forwarding lookup. The three miss states deliberately do
 // not convert to BaseObject*: a lifecycle failure must remain visible until the
 // consumer either handles it explicitly or takes the controlled fail-closed
@@ -132,6 +140,13 @@ public:
     // Named aborts: virtual defaults for collectors that do not implement this method.
     // Bodies live in Collector.cpp so headers stay free of FormatLog / string literals.
     [[noreturn]] static void AbortUnimplemented(const char* method);
+
+    // loadfc: shared hand-out verdict (header word only, one relaxed load). Out-of-line because
+    // Heap::IsHeapAddress lives behind Barrier.h which must not be included from here.
+    static HandVerdict JudgeHandOutTarget(BaseObject* target);
+    // loadfc: the loud failure for "resolution failed and the from-address is not Usable"
+    // (0825 用户令: no silent fold-back to the original address).
+    [[noreturn]] static void FailClosedLoad(const char* site, BaseObject* target, uintptr_t slotBits);
 
     virtual GCStats& GetGCStats() { AbortUnimplemented("Collector::GetGCStats"); }
 
@@ -251,8 +266,16 @@ public:
     // make_load_good: 带色槽 → 可解引用对象。内部仍返 BaseObject* 以兼容现有调用面；
     // 新代码应经 to_object(zaddress) 出口。
     // tipnull barriernull: live non-null ref must never become nullptr for mutator
-    // (cjpm+0x31061a test [rax+0xc] after CJ_MCC_ReadRefField with rax=0). If remap
-    // cannot produce a to (abandon DispelGhost / Route miss), keep from.
+    // (cjpm+0x31061a test [rax+0xc] after CJ_MCC_ReadRefField with rax=0).
+    //
+    // loadfc scope note (0826 measured, kkk2 gate nwdet e_256MB.txt): make_load_good is NOT
+    // exclusively a mutator hand-out funnel -- the GC mark walk calls it too (Mark.cpp) and
+    // already owns a tolerance policy for cleared from-addresses ([MARKSTALE]; dozens per cycle
+    // are routine). Failing loudly here killed a green nwdet wave from inside mark, at no
+    // hand-out. Slow/runtime exits close with Barrier::FinalizeLoadForMutator; the finalizer
+    // consumer now uses the public ReadStaticRef runtime path instead of this helper. Compiler
+    // colour-good fast paths retain ZGC's direct-uncolour form and depend on the producer-side
+    // colour/lifetime invariant.
     BaseObject* make_load_good(RefField<>& ref) const
     {
         // 凭什么 to_object: GetTargetObject 已剥色；null 或 load-good 可直接用。

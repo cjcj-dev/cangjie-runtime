@@ -160,6 +160,14 @@ protected:
     // SkipLaunderingHeal may refuse to write from into the slot; the return value
     // still resolves. zBarrier.inline.hpp:294-340 relocate-or-remap then self-heal to.
     BaseObject* ResolveFromCopyForMutator(BaseObject* target) const;
+
+    // loadfc (zBarrier.inline.hpp:294-344): fail-closed postcondition for slow/runtime hand-outs.
+    // Compiler colour-good fast paths follow ZGC's direct-uncolour shape and do not call this;
+    // their correctness depends on the producer-side colour/lifetime invariant. FinalizerProcessor
+    // enters through the public ReadStaticRef runtime path.
+    BaseObject* FinalizeLoadForMutator(BaseObject* handed, BaseObject* holder,
+                                       const RefField<false>* field, const char* site) const;
+
     // zBarrier.inline.hpp:294-340 make_load_good then mutate the to-address.
     // WriteGenericImpl used to HasRefField the from-copy after ClearUnits.
     BaseObject* RelocateHolderForWrite(BaseObject* obj, void*& fieldPtr) const;

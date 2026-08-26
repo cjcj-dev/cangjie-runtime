@@ -962,10 +962,10 @@ static inline void NoteHandedOut(BaseObject* target, BaseObject* holder, const R
 // again inside the fast path itself with the accepted value (colourBits = Remapped00 = the current
 // good colour, flipSeq = 24, i.e. a colour that has come back around).
 //
-// This is not the barrier tolerating a stale value: it refuses to hand out an object whose own
-// header says it has moved, and resolves instead.  The cost is one relaxed header load on the
-// hand-out path, paid only where the colour said good.
-static constexpr bool kStaleGuard = true;
+// This is not the barrier tolerating a stale value: slow/runtime hand-outs always refuse an object
+// whose sampled header says it has moved, and resolve instead. This correctness check has no source
+// or runtime gate. The relaxed header sample is detection-layer best-effort only: it does not
+// establish a lifetime guarantee; that guarantee belongs to the producer-side lifecycle protocol.
 
 // Two ways a handed-out target can be unusable, and they need different handling:
 //   FORWARDED   the object moved and its to-version exists -- resolvable, and the census shows the
@@ -979,17 +979,15 @@ enum class TargetVerdict { Usable, Forwarded, ZeroHeader };
 
 static inline TargetVerdict JudgeTarget(BaseObject* target)
 {
-    if (!kStaleGuard || target == nullptr || !Heap::IsHeapAddress(target)) {
-        return TargetVerdict::Usable;
+    // loadfc: single shared verdict (Collector.cpp); Barrier keeps its historic spelling.
+    switch (Collector::JudgeHandOutTarget(target)) {
+        case HandVerdict::Forwarded:
+            return TargetVerdict::Forwarded;
+        case HandVerdict::ZeroHeader:
+            return TargetVerdict::ZeroHeader;
+        default:
+            return TargetVerdict::Usable;
     }
-    const uint64_t hdr = __atomic_load_n(reinterpret_cast<const uint64_t*>(target), __ATOMIC_RELAXED);
-    if (((hdr >> 48) & 0x3u) == 3u) { // ObjectState::FORWARDED
-        return TargetVerdict::Forwarded;
-    }
-    if ((hdr & 0xffffffffffffull) == 0) {
-        return TargetVerdict::ZeroHeader;
-    }
-    return TargetVerdict::Usable;
 }
 
 BaseObject* Barrier::ResolveFromCopyForMutator(BaseObject* target) const
@@ -1006,6 +1004,35 @@ BaseObject* Barrier::ResolveFromCopyForMutator(BaseObject* target) const
         return to;
     }
     return target;
+}
+
+// loadfc (zBarrier.inline.hpp:294-344): slow/runtime hand-out postcondition. A sampled non-Usable
+// value must resolve or stop here with a controlled [LOADFC] abort. Compiler colour-good fast paths
+// follow ZGC's direct-uncolour shape and rely on the producer-side colour/lifetime invariant.
+BaseObject* Barrier::FinalizeLoadForMutator(BaseObject* handed, BaseObject* holder,
+                                            const RefField<false>* field, const char* site) const
+{
+    if (handed == nullptr || !Heap::IsHeapAddress(handed)) {
+        return handed;
+    }
+    const TargetVerdict verdict = JudgeTarget(handed);
+    if (verdict == TargetVerdict::Usable) {
+        return handed;
+    }
+    BaseObject* resolved = theCollector.FindToVersion(handed).GetOrFailClosed(site);
+    ZgcInvariants::NoteStaleGuardFired(verdict == TargetVerdict::ZeroHeader, resolved != nullptr, handed,
+                                       holder, field);
+    if (resolved != nullptr && resolved != handed && JudgeTarget(resolved) == TargetVerdict::Usable) {
+        M0ExitDiagnostics::Note(M0ExitDiagnostics::Exit::ReadBarrier, handed, field, holder,
+                                static_cast<uint8_t>(phase));
+        return resolved;
+    }
+    M0ExitDiagnostics::Note(M0ExitDiagnostics::Exit::ReadBarrier, handed, field, holder,
+                            static_cast<uint8_t>(phase));
+    theCollector.FailClosedLoad(site, handed,
+                                field != nullptr
+                                    ? static_cast<uintptr_t>(raw(field->GetFieldValue()))
+                                    : 0);
 }
 
 BaseObject* Barrier::RelocateHolderForWrite(BaseObject* obj, void*& fieldPtr) const
@@ -1038,26 +1065,19 @@ BaseObject* Barrier::ReadReference(BaseObject* obj, RefField<false>& field) cons
         BaseObject* handed = DispatchPhase(phase, *this, [&](const auto& barrier) {
             return barrier.ReadReference(obj, field);
         });
-        if (kStaleGuard) {
-            const TargetVerdict verdict = JudgeTarget(handed);
-            if (verdict != TargetVerdict::Usable) {
-                BaseObject* resolved =
-                    theCollector.FindToVersion(handed).GetOrFailClosed("Barrier::ReadReference");
-                ZgcInvariants::NoteStaleGuardFired(verdict == TargetVerdict::ZeroHeader, resolved != nullptr, handed,
-                                                   obj, &field);
-                if (resolved != nullptr && resolved != handed) {
-                    handed = resolved;
-                    RefField<> goodField = theCollector.GetAndTryTagRefField(handed);
-                    handed = ZgcSelfHealLoadGood(field, field.GetFieldValue(), goodField.GetFieldValue(),
-                                                 HealSite::IdleReadReference);
-                } else {
-                    M0ExitDiagnostics::Note(M0ExitDiagnostics::Exit::ReadBarrier, handed, &field, obj,
-                                            static_cast<uint8_t>(phase));
-                }
+        // loadfc: unconditional slow/runtime hand-out postcondition.
+        BaseObject* finalized = FinalizeLoadForMutator(handed, obj, &field, "Barrier::ReadReference");
+        if (finalized != handed) {
+            if (finalized != nullptr && Heap::IsHeapAddress(finalized)) {
+                RefField<> goodField = theCollector.GetAndTryTagRefField(finalized);
+                handed = ZgcSelfHealLoadGood(field, field.GetFieldValue(), goodField.GetFieldValue(),
+                                             HealSite::IdleReadReference);
+            } else {
+                handed = finalized;
             }
         }
-        // I1 is checked here because this is the single point every reference reaches the mutator:
-        // whatever the fast path decided, the value leaves through this return.
+        // I1 is checked here because every runtime ReadReference result leaves through this return.
+        // Compiler colour-good fast paths bypass the runtime entry by design.
         ZgcInvariants::CheckLoadGoodTarget(handed, theCollector, static_cast<uint8_t>(phase));
         const uintptr_t slotRead1 = static_cast<uintptr_t>(raw(field.GetFieldValue()));
         const uintptr_t slotRead2 = static_cast<uintptr_t>(raw(field.GetFieldValue()));
@@ -1069,26 +1089,36 @@ BaseObject* Barrier::ReadReference(BaseObject* obj, RefField<false>& field) cons
     }
     BaseObject* toVersion = nullptr;
     if (theCollector.TryUpdateRefField(obj, field, toVersion)) {
-        return toVersion;
+        return FinalizeLoadForMutator(toVersion, obj, &field, "Barrier::ReadReference.stw");
     } else {
         BaseObject* target = to_object(field.GetTargetObject());
-        return target;
+        // loadfc: the base/STW barrier-phase branch shares the runtime postcondition. Barrier
+        // installation follows GC phase; it does not prove that the world is currently stopped.
+        return FinalizeLoadForMutator(target, obj, &field, "Barrier::ReadReference.stw");
     }
 }
 
 BaseObject* Barrier::ReadWeakRef(BaseObject* obj, RefField<false>& field) const
 {
     if (phase != BarrierPhase::STW) {
-        return DispatchPhase(phase, *this, [&](const auto& barrier) {
+        BaseObject* handed = DispatchPhase(phase, *this, [&](const auto& barrier) {
             return barrier.ReadWeakRef(obj, field);
         });
+        // loadfc: weak shares the ordinary hand-out postcondition (zBarrier.inline.hpp:456-466).
+        BaseObject* finalized = FinalizeLoadForMutator(handed, obj, &field, "Barrier::ReadWeakRef");
+        if (finalized != handed && finalized != nullptr && Heap::IsHeapAddress(finalized)) {
+            RefField<> goodField = theCollector.GetAndTryTagRefField(finalized);
+            return ZgcSelfHealLoadGood(field, field.GetFieldValue(), goodField.GetFieldValue(),
+                                       HealSite::IdleReadReference);
+        }
+        return finalized;
     }
     BaseObject* toVersion = nullptr;
     if (theCollector.TryUpdateRefField(obj, field, toVersion)) {
-        return toVersion;
+        return FinalizeLoadForMutator(toVersion, obj, &field, "Barrier::ReadWeakRef.stw");
     } else {
         BaseObject* target = to_object(field.GetTargetObject());
-        return target;
+        return FinalizeLoadForMutator(target, obj, &field, "Barrier::ReadWeakRef.stw");
     }
 }
 
@@ -1109,6 +1139,11 @@ BaseObject* Barrier::ReadStaticRef(RootSlot& field) const
         target = theCollector.FindLatestVersion(target);
     }
     const bool resolvedChanged = target != beforeRoute;
+    // loadfc: static roots share the same hand-out postcondition; a cleared/re-used static target
+    // must resolve or stop, never be handed back (zBarrier.inline.hpp:294-344).
+    BaseObject* finalized =
+        FinalizeLoadForMutator(target, nullptr, nullptr, "Barrier::ReadStaticRef");
+    target = finalized;
     const bool healAttempted = target != nullptr && raw(observed) != reinterpret_cast<uintptr_t>(target);
     const bool statHealDiagEnabled = UNLIKELY(StatHealDiag::Enabled());
     bool healSucceeded = false;
@@ -1171,6 +1206,9 @@ BaseObject* Barrier::AtomicSwapReference(BaseObject* obj, RefField<true>& field,
     RefField<> prev(field.GetFieldValue(order));
     const bool prevStoreGood = PrevIsStoreGoodForTarget(theCollector, prev, newRef);
     BaseObject* oldRef = AtomicSwapReferenceImpl(obj, field, newRef, order);
+    // loadfc: the swapped-out old value is a mutator hand-out too (zBarrier.inline.hpp:456-466);
+    // the phase-local impl decodes it without a guard.
+    oldRef = FinalizeLoadForMutator(oldRef, obj, nullptr, "Barrier::AtomicSwapReference.old");
     SurvNodeDiag::NoteStore(&field, oldRef, newRef, SurvNodeDiag::STORE_SWAP);
     if (prevStoreGood) {
         NoteStoreFastPath();
@@ -1204,13 +1242,16 @@ BaseObject* Barrier::AtomicReadReference(BaseObject* obj, RefField<true>& field,
         BaseObject* handed = DispatchPhase(phase, *this, [&](const auto& barrier) {
             return barrier.AtomicReadReference(obj, field, order);
         });
-        BaseObject* resolved = ResolveFromCopyForMutator(handed);
-        if (resolved != handed && resolved != nullptr) {
+        // loadfc: atomic loads share the ordinary hand-out postcondition; the phase-local fast
+        // path has no guard of its own (ForwardBarrier.cpp AtomicReadReference).
+        BaseObject* resolved =
+            FinalizeLoadForMutator(handed, obj, nullptr, "Barrier::AtomicReadReference");
+        if (resolved != handed && resolved != nullptr && Heap::IsHeapAddress(resolved)) {
             RefField<> goodField = theCollector.GetAndTryTagRefField(resolved);
             return ZgcSelfHealLoadGood(field, field.GetFieldValue(order), goodField.GetFieldValue(),
                                        HealSite::IdleAtomicReadReference);
         }
-        return handed;
+        return resolved;
     }
     RefField<false> tmpField(field.GetFieldValue(order));
     if (theCollector.IsOldPointer(tmpField)) {
@@ -1224,7 +1265,7 @@ BaseObject* Barrier::AtomicReadReference(BaseObject* obj, RefField<true>& field,
 
     BaseObject* target = to_object(tmpField.GetTargetObject());
     DLOG(BARRIER, "atomic read obj %p ref@%p: %#zx -> %p", obj, &field, raw(tmpField.GetFieldValue()), target);
-    return target;
+    return FinalizeLoadForMutator(target, obj, nullptr, "Barrier::AtomicReadReference.stw");
 }
 
 bool Barrier::CompareAndSwapReference(BaseObject* obj, RefField<true>& field, BaseObject* oldRef, BaseObject* newRef,

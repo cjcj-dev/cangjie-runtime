@@ -11,6 +11,7 @@
 #include "Common/ScopedObjectAccess.h"
 #include "ExceptionManager.inline.h"
 #include "Heap/Allocator/HeapFiller.h"
+#include "Heap/Barrier/Barrier.h"
 #include "Heap/Heap.h"
 #include "Mutator/Mutator.h"
 #include "ObjectModel/MObject.h"
@@ -21,13 +22,9 @@ constexpr U32 DEFAULT_FINALIZER_TIMEOUT_MS = 2000;
 
 static BaseObject* LoadFinalizerGood(RootSlot& slot)
 {
-    Collector& collector = Heap::GetHeap().GetCollector();
-    HeapSlot<> tmp(to_zpointer(raw(slot.LoadPlain())));
-    BaseObject* obj = collector.make_load_good(tmp);
-    if (obj != nullptr && raw(slot.LoadPlain()) != reinterpret_cast<MAddress>(obj)) {
-        HealRoot(slot, from_object(obj), HealSite::TracingCollectorResurrectFinalizer);
-    }
-    return obj;
+    // FinalizerProcessor is part of the mutator set. Route this retained root through the public
+    // runtime load exit so resolution, root healing and the fail-closed postcondition stay one path.
+    return Heap::GetBarrier().ReadStaticRef(slot);
 }
 
 // Note: can only be called by FinalizerProcessor thread

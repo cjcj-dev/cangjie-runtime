@@ -320,64 +320,119 @@ struct RootEntryFixture {
 
 } // namespace
 
-GC_TEST(M0Exit, ReadRuntimeEntryClassifiesNoCopyAsS0)
+// loadfc: a zero-header from-address must never be handed out; every one of these arms pins the
+// controlled [LOADFC] abort (SIGABRT) of a specific product load exit, and each has a healthy
+// positive arm asserting the same exit still returns normally.
+namespace {
+void ExpectControlledAbort(const std::function<void()>& body)
+{
+    const pid_t child = fork();
+    GC_EXPECT_TRUE(child >= 0);
+    if (child == 0) {
+        (void)signal(SIGABRT, SIG_DFL);
+        body();
+        _exit(0);
+    }
+    int status = 0;
+    GC_EXPECT_EQ(waitpid(child, &status, 0), child);
+    GC_EXPECT_TRUE(WIFSIGNALED(status));
+    GC_EXPECT_EQ(WTERMSIG(status), SIGABRT);
+}
+} // namespace
+
+GC_OTHER_VM_TEST(M0Exit, ReadRuntimeEntryFailsClosedOnZeroHeaderFromAddress)
 {
     ReadEntryFixture fx;
-    *reinterpret_cast<uint64_t*>(fx.heap.obj0) = 0; // deterministic no-copy/cleared from state
-    const M0ExitDiagnostics::Counts before = M0ExitDiagnostics::GetCounts();
+    *reinterpret_cast<uint64_t*>(fx.heap.obj0) = 0; // deterministic cleared-from state
+
+    ExpectControlledAbort([&]() { (void)CJ_MCC_ReadRefField(fx.heap.obj1, fx.field); });
+}
+
+GC_TEST(M0Exit, ReadRuntimeEntryHealthyTargetStillReturnsNormally)
+{
+    ReadEntryFixture fx;
+    GC_EXPECT_TRUE(fx.heap.obj0->IsValidObject());
 
     ObjectPtr got = CJ_MCC_ReadRefField(fx.heap.obj1, fx.field);
 
-    const M0ExitDiagnostics::Counts after = M0ExitDiagnostics::GetCounts();
     GC_EXPECT_EQ(reinterpret_cast<uintptr_t>(got), reinterpret_cast<uintptr_t>(fx.heap.obj0));
-    GC_EXPECT_EQ(after.total, before.total + 1);
-    GC_EXPECT_EQ(after.s0, before.s0 + 1);
-    GC_EXPECT_EQ(after.s1, before.s1);
-    GC_EXPECT_EQ(after.readBarrier, before.readBarrier + 1);
 }
 
-GC_TEST(M0Exit, ReadRuntimeEntryClassifiesPublishedCopyAsS1)
+GC_OTHER_VM_TEST(M0Exit, ReadRuntimeEntryFailsClosedOnForwardedWithoutMapping)
 {
     ReadEntryFixture fx;
     BaseObject* publishedCopy = fx.heap.PlaceObject(fx.heap.heapStart + 256);
     std::memcpy(publishedCopy, fx.heap.obj0, fx.heap.obj0->GetSize());
     GC_EXPECT_TRUE(publishedCopy->IsValidObject());
     // Copy bytes exist, and FORWARDED is the product's post-copy publication witness. Deliberately
-    // omit the active/retired lookup entry to construct the S1 lifetime/query-loss state.
+    // omit the active/retired lookup entry: an unresolvable FORWARDED hand-out is exactly the
+    // zRelocate.cpp:412-416 shape ZGC forbids.
     fx.heap.obj0->SetStateCode(ObjectState::FORWARDED);
+
+    ExpectControlledAbort([&]() { (void)CJ_MCC_ReadRefField(fx.heap.obj1, fx.field); });
+}
+
+GC_TEST(M0Exit, ReadRuntimeEntryForwardedWithMappingResolvesToVersion)
+{
+    ReadEntryFixture fx;
+    BaseObject* publishedCopy = fx.heap.PlaceObject(fx.heap.heapStart + 256);
+    std::memcpy(publishedCopy, fx.heap.obj0, fx.heap.obj0->GetSize());
+    GC_EXPECT_TRUE(publishedCopy->IsValidObject());
+    fx.heap.obj0->SetStateCode(ObjectState::FORWARDED);
+    fx.collector.answer = publishedCopy;
+
+    ObjectPtr got = CJ_MCC_ReadRefField(fx.heap.obj1, fx.field);
+
+    // Positive control: a resolvable to-version is handed out, proving the abort above is precise
+    // (missing mapping, not the FORWARDED colour itself).
+    GC_EXPECT_EQ(reinterpret_cast<uintptr_t>(got), reinterpret_cast<uintptr_t>(publishedCopy));
+}
+
+GC_TEST(M0Exit, ReadRuntimeEntryResolvedPathCountsM0Exit)
+{
+    ReadEntryFixture fx;
+    Barrier baseBarrier(fx.collector, fx.rememberedSet);
+    InstalledBarrierScope baseInstalled(baseBarrier);
+    BaseObject* publishedCopy = fx.heap.PlaceObject(fx.heap.heapStart + 256);
+    std::memcpy(publishedCopy, fx.heap.obj0, fx.heap.obj0->GetSize());
+    fx.heap.obj0->SetStateCode(ObjectState::FORWARDED);
+    fx.collector.answer = publishedCopy;
     const M0ExitDiagnostics::Counts before = M0ExitDiagnostics::GetCounts();
 
     ObjectPtr got = CJ_MCC_ReadRefField(fx.heap.obj1, fx.field);
 
     const M0ExitDiagnostics::Counts after = M0ExitDiagnostics::GetCounts();
-    GC_EXPECT_EQ(reinterpret_cast<uintptr_t>(got), reinterpret_cast<uintptr_t>(fx.heap.obj0));
+    GC_EXPECT_EQ(reinterpret_cast<uintptr_t>(got), reinterpret_cast<uintptr_t>(publishedCopy));
     GC_EXPECT_EQ(after.total, before.total + 1);
     GC_EXPECT_EQ(after.s1, before.s1 + 1);
-    GC_EXPECT_EQ(after.s0, before.s0);
     GC_EXPECT_EQ(after.readBarrier, before.readBarrier + 1);
 }
 
-GC_TEST(M0Exit, ReadStructRuntimeEntryClassifiesNoCopyAsS0)
+GC_OTHER_VM_TEST(M0Exit, ReadStructRuntimeEntryFailsClosedOnZeroHeaderFromAddress)
 {
     ReadEntryFixture fx;
     *reinterpret_cast<uint64_t*>(fx.heap.obj0) = 0;
     RootSlot copied;
-    const M0ExitDiagnostics::Counts before = M0ExitDiagnostics::GetCounts();
 
-    // Product chain: CJ_MCC_ReadStructField -> Barrier::ReadStruct -> the inherited
-    // CopyStructPlainToNonHeap helper -> its unqualified ReadReference call.
+    ExpectControlledAbort([&]() {
+        CJ_MCC_ReadStructField(reinterpret_cast<MAddress>(&copied), fx.heap.obj1,
+                               reinterpret_cast<MAddress>(fx.field), sizeof(*fx.field), GCTib {});
+    });
+}
+
+GC_TEST(M0Exit, ReadStructRuntimeEntryHealthyTargetStillReturnsNormally)
+{
+    ReadEntryFixture fx;
+    GC_EXPECT_TRUE(fx.heap.obj0->IsValidObject());
+    RootSlot copied;
+
     CJ_MCC_ReadStructField(reinterpret_cast<MAddress>(&copied), fx.heap.obj1,
                            reinterpret_cast<MAddress>(fx.field), sizeof(*fx.field), GCTib {});
 
-    const M0ExitDiagnostics::Counts after = M0ExitDiagnostics::GetCounts();
     GC_EXPECT_EQ(static_cast<uintptr_t>(raw(copied.LoadPlain())), reinterpret_cast<uintptr_t>(fx.heap.obj0));
-    GC_EXPECT_EQ(after.total, before.total + 1);
-    GC_EXPECT_EQ(after.s0, before.s0 + 1);
-    GC_EXPECT_EQ(after.s1, before.s1);
-    GC_EXPECT_EQ(after.readBarrier, before.readBarrier + 1);
 }
 
-GC_TEST(M0Exit, ReadStructRuntimeEntryClassifiesPublishedCopyAsS1)
+GC_OTHER_VM_TEST(M0Exit, ReadStructRuntimeEntryFailsClosedOnForwardedWithoutMapping)
 {
     ReadEntryFixture fx;
     BaseObject* publishedCopy = fx.heap.PlaceObject(fx.heap.heapStart + 256);
@@ -385,55 +440,64 @@ GC_TEST(M0Exit, ReadStructRuntimeEntryClassifiesPublishedCopyAsS1)
     GC_EXPECT_TRUE(publishedCopy->IsValidObject());
     fx.heap.obj0->SetStateCode(ObjectState::FORWARDED);
     RootSlot copied;
-    const M0ExitDiagnostics::Counts before = M0ExitDiagnostics::GetCounts();
 
-    CJ_MCC_ReadStructField(reinterpret_cast<MAddress>(&copied), fx.heap.obj1,
-                           reinterpret_cast<MAddress>(fx.field), sizeof(*fx.field), GCTib {});
-
-    const M0ExitDiagnostics::Counts after = M0ExitDiagnostics::GetCounts();
-    GC_EXPECT_EQ(static_cast<uintptr_t>(raw(copied.LoadPlain())), reinterpret_cast<uintptr_t>(fx.heap.obj0));
-    GC_EXPECT_EQ(after.total, before.total + 1);
-    GC_EXPECT_EQ(after.s1, before.s1 + 1);
-    GC_EXPECT_EQ(after.s0, before.s0);
-    GC_EXPECT_EQ(after.readBarrier, before.readBarrier + 1);
+    ExpectControlledAbort([&]() {
+        CJ_MCC_ReadStructField(reinterpret_cast<MAddress>(&copied), fx.heap.obj1,
+                               reinterpret_cast<MAddress>(fx.field), sizeof(*fx.field), GCTib {});
+    });
 }
 
-GC_TEST(M0Exit, ReadStaticStructRuntimeEntryUsesBaseHelper)
+GC_OTHER_VM_TEST(M0Exit, ReadStaticStructRuntimeEntryFailsClosedOnZeroHeaderFromAddress)
 {
     ReadEntryFixture fx;
     *reinterpret_cast<uint64_t*>(fx.heap.obj0) = 0;
     RootSlot copied;
-    const M0ExitDiagnostics::Counts before = M0ExitDiagnostics::GetCounts();
+
+    ExpectControlledAbort([&]() {
+        CJ_MCC_ReadStaticStruct(reinterpret_cast<MAddress>(&copied), sizeof(copied),
+                                reinterpret_cast<MAddress>(fx.field), sizeof(*fx.field), fx.heap.obj1->GetGCTib());
+    });
+}
+
+GC_TEST(M0Exit, ReadStaticStructRuntimeEntryHealthyTargetStillReturnsNormally)
+{
+    ReadEntryFixture fx;
+    GC_EXPECT_TRUE(fx.heap.obj0->IsValidObject());
+    RootSlot copied;
 
     CJ_MCC_ReadStaticStruct(reinterpret_cast<MAddress>(&copied), sizeof(copied),
                             reinterpret_cast<MAddress>(fx.field), sizeof(*fx.field), fx.heap.obj1->GetGCTib());
 
-    const M0ExitDiagnostics::Counts after = M0ExitDiagnostics::GetCounts();
     GC_EXPECT_EQ(static_cast<uintptr_t>(raw(copied.LoadPlain())), reinterpret_cast<uintptr_t>(fx.heap.obj0));
-    GC_EXPECT_EQ(after.total, before.total + 1);
-    GC_EXPECT_EQ(after.s0, before.s0 + 1);
-    GC_EXPECT_EQ(after.readBarrier, before.readBarrier + 1);
 }
 
-GC_TEST(M0Exit, CopyStructArrayRuntimeEntryUsesBaseHelper)
+GC_OTHER_VM_TEST(M0Exit, CopyStructArrayRuntimeEntryFailsClosedOnZeroHeaderFromAddress)
 {
     ReadEntryFixture fx;
     RefArraySource source(fx);
     *reinterpret_cast<uint64_t*>(fx.heap.obj0) = 0;
     RootSlot copied;
-    const M0ExitDiagnostics::Counts before = M0ExitDiagnostics::GetCounts();
+
+    ExpectControlledAbort([&]() {
+        CJ_MCC_ArrayCopyStruct(nullptr, reinterpret_cast<MAddress>(&copied), sizeof(copied), source.array,
+                               reinterpret_cast<MAddress>(source.field), sizeof(*source.field));
+    });
+}
+
+GC_TEST(M0Exit, CopyStructArrayRuntimeEntryHealthyTargetStillReturnsNormally)
+{
+    ReadEntryFixture fx;
+    RefArraySource source(fx);
+    GC_EXPECT_TRUE(fx.heap.obj0->IsValidObject());
+    RootSlot copied;
 
     CJ_MCC_ArrayCopyStruct(nullptr, reinterpret_cast<MAddress>(&copied), sizeof(copied), source.array,
                            reinterpret_cast<MAddress>(source.field), sizeof(*source.field));
 
-    const M0ExitDiagnostics::Counts after = M0ExitDiagnostics::GetCounts();
     GC_EXPECT_EQ(static_cast<uintptr_t>(raw(copied.LoadPlain())), reinterpret_cast<uintptr_t>(fx.heap.obj0));
-    GC_EXPECT_EQ(after.total, before.total + 1);
-    GC_EXPECT_EQ(after.s0, before.s0 + 1);
-    GC_EXPECT_EQ(after.readBarrier, before.readBarrier + 1);
 }
 
-GC_TEST(M0Exit, CopyRefArrayForwardRuntimeEntryUsesBaseHelper)
+GC_OTHER_VM_TEST(M0Exit, CopyRefArrayForwardRuntimeEntryFailsClosedOnZeroHeaderFromAddress)
 {
     ReadEntryFixture fx;
     *reinterpret_cast<uint64_t*>(fx.heap.obj0) = 0;
@@ -441,18 +505,27 @@ GC_TEST(M0Exit, CopyRefArrayForwardRuntimeEntryUsesBaseHelper)
     const MAddress dst = reinterpret_cast<MAddress>(&copied);
     const MAddress src = reinterpret_cast<MAddress>(fx.field);
     GC_EXPECT_TRUE(dst < src);
-    const M0ExitDiagnostics::Counts before = M0ExitDiagnostics::GetCounts();
+
+    ExpectControlledAbort([&]() {
+        CJ_MCC_ArrayCopyRef(nullptr, dst, sizeof(copied), fx.heap.obj1, src, sizeof(*fx.field));
+    });
+}
+
+GC_TEST(M0Exit, CopyRefArrayForwardRuntimeEntryHealthyTargetStillReturnsNormally)
+{
+    ReadEntryFixture fx;
+    GC_EXPECT_TRUE(fx.heap.obj0->IsValidObject());
+    static RootSlot copied;
+    const MAddress dst = reinterpret_cast<MAddress>(&copied);
+    const MAddress src = reinterpret_cast<MAddress>(fx.field);
+    GC_EXPECT_TRUE(dst < src);
 
     CJ_MCC_ArrayCopyRef(nullptr, dst, sizeof(copied), fx.heap.obj1, src, sizeof(*fx.field));
 
-    const M0ExitDiagnostics::Counts after = M0ExitDiagnostics::GetCounts();
     GC_EXPECT_EQ(static_cast<uintptr_t>(raw(copied.LoadPlain())), reinterpret_cast<uintptr_t>(fx.heap.obj0));
-    GC_EXPECT_EQ(after.total, before.total + 1);
-    GC_EXPECT_EQ(after.s0, before.s0 + 1);
-    GC_EXPECT_EQ(after.readBarrier, before.readBarrier + 1);
 }
 
-GC_TEST(M0Exit, CopyRefArrayBackwardRuntimeEntryUsesBaseHelper)
+GC_OTHER_VM_TEST(M0Exit, CopyRefArrayBackwardRuntimeEntryFailsClosedOnZeroHeaderFromAddress)
 {
     ReadEntryFixture fx;
     *reinterpret_cast<uint64_t*>(fx.heap.obj0) = 0;
@@ -460,33 +533,50 @@ GC_TEST(M0Exit, CopyRefArrayBackwardRuntimeEntryUsesBaseHelper)
     const MAddress dst = reinterpret_cast<MAddress>(&copied);
     const MAddress src = reinterpret_cast<MAddress>(fx.field);
     GC_EXPECT_TRUE(dst > src);
-    const M0ExitDiagnostics::Counts before = M0ExitDiagnostics::GetCounts();
+
+    ExpectControlledAbort([&]() {
+        CJ_MCC_ArrayCopyRef(nullptr, dst, sizeof(copied), fx.heap.obj1, src, sizeof(*fx.field));
+    });
+}
+
+GC_TEST(M0Exit, CopyRefArrayBackwardRuntimeEntryHealthyTargetStillReturnsNormally)
+{
+    ReadEntryFixture fx;
+    GC_EXPECT_TRUE(fx.heap.obj0->IsValidObject());
+    RootSlot copied;
+    const MAddress dst = reinterpret_cast<MAddress>(&copied);
+    const MAddress src = reinterpret_cast<MAddress>(fx.field);
+    GC_EXPECT_TRUE(dst > src);
 
     CJ_MCC_ArrayCopyRef(nullptr, dst, sizeof(copied), fx.heap.obj1, src, sizeof(*fx.field));
 
-    const M0ExitDiagnostics::Counts after = M0ExitDiagnostics::GetCounts();
     GC_EXPECT_EQ(static_cast<uintptr_t>(raw(copied.LoadPlain())), reinterpret_cast<uintptr_t>(fx.heap.obj0));
-    GC_EXPECT_EQ(after.total, before.total + 1);
-    GC_EXPECT_EQ(after.s0, before.s0 + 1);
-    GC_EXPECT_EQ(after.readBarrier, before.readBarrier + 1);
 }
 
-GC_TEST(M0Exit, WriteStaticStructRuntimeEntryUsesBaseHelper)
+GC_OTHER_VM_TEST(M0Exit, WriteStaticStructRuntimeEntryFailsClosedOnZeroHeaderFromAddress)
 {
     ReadEntryFixture fx;
     *reinterpret_cast<uint64_t*>(fx.heap.obj0) = 0;
     RefField<> source(fx.field->GetFieldValue());
     RootSlot copied;
-    const M0ExitDiagnostics::Counts before = M0ExitDiagnostics::GetCounts();
+
+    ExpectControlledAbort([&]() {
+        MCC_WriteStaticStruct(reinterpret_cast<MAddress>(&copied), sizeof(copied),
+                              reinterpret_cast<MAddress>(&source), sizeof(source), fx.heap.obj1->GetGCTib());
+    });
+}
+
+GC_TEST(M0Exit, WriteStaticStructRuntimeEntryHealthyTargetStillReturnsNormally)
+{
+    ReadEntryFixture fx;
+    GC_EXPECT_TRUE(fx.heap.obj0->IsValidObject());
+    RefField<> source(fx.field->GetFieldValue());
+    RootSlot copied;
 
     MCC_WriteStaticStruct(reinterpret_cast<MAddress>(&copied), sizeof(copied),
                           reinterpret_cast<MAddress>(&source), sizeof(source), fx.heap.obj1->GetGCTib());
 
-    const M0ExitDiagnostics::Counts after = M0ExitDiagnostics::GetCounts();
     GC_EXPECT_EQ(static_cast<uintptr_t>(raw(copied.LoadPlain())), reinterpret_cast<uintptr_t>(fx.heap.obj0));
-    GC_EXPECT_EQ(after.total, before.total + 1);
-    GC_EXPECT_EQ(after.s0, before.s0 + 1);
-    GC_EXPECT_EQ(after.readBarrier, before.readBarrier + 1);
 }
 
 GC_TEST(M0Exit, ReadRuntimeEntryResolvedNormalPathIsSilent)
@@ -577,10 +667,11 @@ GC_OTHER_VM_TEST(M0Exit, RootFixClassifiesRetiredOnlyUnusableCopyAsS1)
                  reinterpret_cast<uintptr_t>(fx.heap.obj0));
 }
 
-GC_TEST(M0Exit, ReadRuntimeEntryBoundsDetailsAndCountsSuppressed)
+// loadfc: the zero-header runtime-entry arm above now aborts by design, so the detailed-sample
+// cap is pinned directly against the product sampler (M0ExitDiagnostics::Note); entry wiring of
+// the resolved path stays covered by ReadRuntimeEntryForwardedWithMappingResolvesToVersion.
+GC_TEST(M0Exit, SamplerCapsDetailedSamplesAndCountsSuppression)
 {
-    ReadEntryFixture fx;
-    *reinterpret_cast<uint64_t*>(fx.heap.obj0) = 0;
     const M0ExitDiagnostics::Counts before = M0ExitDiagnostics::GetCounts();
     GC_EXPECT_TRUE(before.sampled <= M0ExitDiagnostics::kDetailedSampleLimit);
     const uint64_t toLimit = M0ExitDiagnostics::kDetailedSampleLimit - before.sampled;
@@ -588,14 +679,11 @@ GC_TEST(M0Exit, ReadRuntimeEntryBoundsDetailsAndCountsSuppressed)
     const uint64_t attempts = toLimit + kBeyondLimit;
 
     for (uint64_t i = 0; i < attempts; ++i) {
-        ObjectPtr got = CJ_MCC_ReadRefField(fx.heap.obj1, fx.field);
-        GC_EXPECT_EQ(reinterpret_cast<uintptr_t>(got), reinterpret_cast<uintptr_t>(fx.heap.obj0));
+        M0ExitDiagnostics::Note(M0ExitDiagnostics::Exit::ReadBarrier, nullptr, nullptr, nullptr, 0);
     }
 
     const M0ExitDiagnostics::Counts after = M0ExitDiagnostics::GetCounts();
     GC_EXPECT_EQ(after.total, before.total + attempts);
-    GC_EXPECT_EQ(after.s0, before.s0 + attempts);
-    GC_EXPECT_EQ(after.readBarrier, before.readBarrier + attempts);
     GC_EXPECT_EQ(after.sampled, M0ExitDiagnostics::kDetailedSampleLimit);
     GC_EXPECT_EQ(after.suppressed, before.suppressed + kBeyondLimit);
 }
