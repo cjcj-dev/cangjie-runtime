@@ -324,6 +324,37 @@ void Collector::RequestGC(GCReason reason, bool async)
     RequestGCInternal(reason, async);
 }
 
+// loadfc: shared hand-out verdict. Same header-word shape as Barrier.cpp's staleguard judge
+// (StateWord.h:215-228: bits 0-47 TypeInfo, bits 48-49 stateCode; FORWARDED=3).
+HandVerdict Collector::JudgeHandOutTarget(BaseObject* target)
+{
+    if (target == nullptr || !Heap::IsHeapAddress(target)) {
+        return HandVerdict::Usable;
+    }
+    const uint64_t hdr = __atomic_load_n(reinterpret_cast<const uint64_t*>(target), __ATOMIC_RELAXED);
+    if (((hdr >> 48) & 0x3u) == 3u) {
+        return HandVerdict::Forwarded;
+    }
+    if ((hdr & 0xffffffffffffull) == 0) {
+        return HandVerdict::ZeroHeader;
+    }
+    return HandVerdict::Usable;
+}
+
+// loadfc (zBarrier.inline.hpp:327-343): the slow path must produce a verified current version or
+// stop the mutator in a controlled, attributable place -- never hand back a structurally dead
+// from-address. The [LOADFC] tag is the population-accounting signature.
+[[noreturn]] void Collector::FailClosedLoad(const char* site, BaseObject* target, uintptr_t slotBits)
+{
+    const HandVerdict verdict = JudgeHandOutTarget(target);
+    Logger::GetLogger().FormatLog(RTLOG_FATAL, true,
+                                  "[LOADFC][fail-closed] site=%s target=%p verdict=%u slotBits=%#zx "
+                                  "unresolved non-Usable from-address must not be handed out",
+                                  site != nullptr ? site : "?", static_cast<void*>(target),
+                                  static_cast<unsigned>(verdict), slotBits);
+    std::abort();
+}
+
 // Virtual default: this collector type does not implement the method. Always abort;
 // body is out-of-line so Collector.h stays free of FormatLog / string payloads.
 [[noreturn]] void Collector::AbortUnimplemented(const char* method)

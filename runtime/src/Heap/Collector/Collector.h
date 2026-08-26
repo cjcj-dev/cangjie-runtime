@@ -47,6 +47,13 @@ enum CollectorType {
     COLLECTOR_TYPE_COUNT,
 };
 
+// loadfc (zBarrier.inline.hpp:327-343): the shared hand-out verdict. ZGC structurally cannot
+// hand a from-address back after a slow-path miss (zGeneration.inline.hpp:131-140 has no
+// "lookup miss ⇒ return from" exit); the two unusable shapes we must never hand to a mutator:
+//   Forwarded   header stateCode=3, a to-version exists and must be found
+//   ZeroHeader  payload cleared by reclamation (ClearUnits reuse) -- nothing to resolve
+enum class HandVerdict : uint8_t { Usable, Forwarded, ZeroHeader };
+
 // Public answer to a forwarding lookup. The three miss states deliberately do
 // not convert to BaseObject*: a lifecycle failure must remain visible until the
 // consumer either handles it explicitly or takes the controlled fail-closed
@@ -132,6 +139,13 @@ public:
     // Named aborts: virtual defaults for collectors that do not implement this method.
     // Bodies live in Collector.cpp so headers stay free of FormatLog / string literals.
     [[noreturn]] static void AbortUnimplemented(const char* method);
+
+    // loadfc: shared hand-out verdict (header word only, one relaxed load). Out-of-line because
+    // Heap::IsHeapAddress lives behind Barrier.h which must not be included from here.
+    static HandVerdict JudgeHandOutTarget(BaseObject* target);
+    // loadfc: the loud failure for "resolution failed and the from-address is not Usable"
+    // (0825 用户令: no silent fold-back to the original address).
+    [[noreturn]] static void FailClosedLoad(const char* site, BaseObject* target, uintptr_t slotBits);
 
     virtual GCStats& GetGCStats() { AbortUnimplemented("Collector::GetGCStats"); }
 
@@ -251,8 +265,11 @@ public:
     // make_load_good: 带色槽 → 可解引用对象。内部仍返 BaseObject* 以兼容现有调用面；
     // 新代码应经 to_object(zaddress) 出口。
     // tipnull barriernull: live non-null ref must never become nullptr for mutator
-    // (cjpm+0x31061a test [rax+0xc] after CJ_MCC_ReadRefField with rax=0). If remap
-    // cannot produce a to (abandon DispelGhost / Route miss), keep from.
+    // (cjpm+0x31061a test [rax+0xc] after CJ_MCC_ReadRefField with rax=0).
+    // loadfc (zBarrier.inline.hpp:294-344, zGeneration.inline.hpp:131-140): a slow-path miss must
+    // not fold back to the from-address when that address is structurally unusable (FORWARDED
+    // without a resolvable to / zero header after ClearUnits reuse) -- that is the A-zeroed
+    // hand-out chain. Fail closed instead.
     BaseObject* make_load_good(RefField<>& ref) const
     {
         // 凭什么 to_object: GetTargetObject 已剥色；null 或 load-good 可直接用。
@@ -262,7 +279,17 @@ public:
         }
 
         BaseObject* remapped = relocate_or_remap_object(target, remap_generation(ref));
-        return remapped == nullptr ? target : remapped;
+        BaseObject* out = remapped != nullptr ? remapped : target;
+        if (out == target && JudgeHandOutTarget(out) != HandVerdict::Usable) {
+            // Last resort before failing loudly: the active-table view. Only a verified current
+            // version may leave; anything else stops in [LOADFC] (0825 用户令: no fold-back).
+            BaseObject* resolved = FindToVersion(out).GetOrFailClosed("Collector::make_load_good");
+            if (resolved != nullptr && resolved != out && JudgeHandOutTarget(resolved) == HandVerdict::Usable) {
+                return resolved;
+            }
+            FailClosedLoad("make_load_good", out, static_cast<uintptr_t>(raw(ref.GetFieldValue())));
+        }
+        return out;
     }
 
     // OpenJDK ZPointer::is_mark_good (zAddress.inline.hpp:658-664): mark-good includes load-good,

@@ -160,6 +160,7 @@ $CXX -std=gnu++17 -O0 -g -Wall -Wextra -pthread -fno-rtti \
      "$SRC/test_fillerobj.cpp" \
     "$SRC/test_i2_readref.cpp" \
     "${M0_TEST_ARGS[@]}" \
+    "$SRC/test_loadfc.cpp" \
     "${M0_CORRELATION_TEST_ARGS[@]}" \
     "$SRC/test_fwdreturn.cpp" \
     "$SRC/test_ghost_region_lookup.cpp" \

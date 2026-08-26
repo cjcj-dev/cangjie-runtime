@@ -56,6 +56,7 @@ set(GC_UNIT_SOURCES
     test_fillerobj.cpp
     test_i2_readref.cpp
     test_m0_exit.cpp
+    test_loadfc.cpp
     test_m0_correlation.cpp
     test_fwdreturn.cpp
     test_ghost_region_lookup.cpp
