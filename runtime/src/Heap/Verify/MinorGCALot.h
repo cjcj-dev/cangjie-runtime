@@ -12,7 +12,7 @@
 
 namespace MapleRuntime {
 
-// MinorGCALot — HotSpot ScavengeALot intent (force young GC every N mutator allocs).
+// MinorGCALot — HotSpot ScavengeALot intent (trigger young GC every N mutator allocs).
 // Forensic recipe only — never a performance recipe (wall under ALot is not product).
 // Flip kMinorGCALotInterval (e.g. 2000) and rebuild. 0 = off.
 // Trigger: AllocBuffer::Allocate after a successful mutator allocation (RegionSpace.cpp).

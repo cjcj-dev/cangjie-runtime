@@ -27,7 +27,7 @@ class Mutator;
 //   STACK_OBJECT — stack-address object via CheckAndPush. Can verify S.
 //   STACK_PTR    — stack-grow tables; N/A for GC liveness S.
 //
-// Gate: MRT_GCV2_VERIFY_ROOTS=1 (default off). Diagnostics only — never replaces CHECK_DETAIL.
+// Gate: unified VerifyFace::Roots (legacy MRT_GCV2_VERIFY_ROOTS=1 remains an alias).
 
 enum class RootKind : uint8_t {
     SLOT_STACK = 0,

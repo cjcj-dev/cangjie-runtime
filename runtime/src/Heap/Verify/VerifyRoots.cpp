@@ -9,14 +9,13 @@
 #include <atomic>
 #include <cstdint>
 #include <cstdio>
-#include <cstdlib>
-#include <cstring>
 
 #include "Common/ColourPredicates.h"
 #include "Common/StateWord.h"
 #include "Heap/Heap.h"
 #include "Heap/Collector/ManagedObjectGate.h"
 #include "Heap/Verify/Zap.h"
+#include "Heap/Verify/VerifyPhase.h"
 #include "Mutator/Mutator.h"
 #include "ObjectModel/MClass.inline.h"
 #include "TypeInfoManager.h"
@@ -26,12 +25,6 @@ namespace {
 std::atomic<size_t> g_badRootCount{ 0 };  // defect channel
 std::atomic<size_t> g_infoRootCount{ 0 }; // INFO channel (misaligned etc.)
 
-bool EnvIsOne(const char* name)
-{
-    const char* v = std::getenv(name);
-    return v != nullptr && std::strcmp(v, "1") == 0;
-}
-
 // Defect vs INFO split (gcvheap2): typeinfo-misaligned is a true phenomenon but not
 // defect D; keep reporting it, never filter it out — only demote off BAD_ROOT.
 enum class RootVerifyChannel : uint8_t { Ok = 0, Defect, Info };
@@ -39,8 +32,7 @@ enum class RootVerifyChannel : uint8_t { Ok = 0, Defect, Info };
 
 bool VerifyRoots::Enabled()
 {
-    static const bool on = EnvIsOne("MRT_GCV2_VERIFY_ROOTS");
-    return on;
+    return VerifyFaceEnabled(VerifyFace::Roots);
 }
 
 const char* VerifyRoots::KindName(RootKind kind)
@@ -109,7 +101,7 @@ AddrRegion VerifyRoots::ClassifyAddress(uintptr_t addr)
 
 void VerifyRoots::VerifyRootPayload(const RootVerifyContext& ctx, void* slotOrRegAddr, BaseObject* obj)
 {
-    if (!Enabled()) {
+    if (!VerifyPhaseEnter(VerifyFace::Roots, ctx.phase)) {
         return;
     }
     const uintptr_t objAddr = ctx.hasRawValue ? ctx.rawValue : reinterpret_cast<uintptr_t>(obj);
