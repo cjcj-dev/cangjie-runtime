@@ -26,8 +26,8 @@
 // edge. Classify is a pure function of those four booleans so gc_unit can
 // drive the table without a heap.
 //
-// Observation only. Default off (MRT_GCV2_MARKCOMPLETE_INTEDGE / token
-// "intedge"). Does not change okInteriorBase / deadFrom / any product path.
+// Observation only and admitted by the Marking face. Does not change
+// okInteriorBase / deadFrom / any product path.
 
 namespace MapleRuntime {
 namespace InteriorEdgeClass {
