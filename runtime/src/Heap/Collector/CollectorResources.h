@@ -14,6 +14,7 @@
 #include "Heap/GcThreadPool.h"
 #include "Inspector/CjHeapData.h"
 #include "TaskQueue.h"
+#include "DriverPort.h"
 
 namespace MapleRuntime {
 class Collector;
@@ -27,6 +28,8 @@ class CollectorResources {
 public:
     // the collector thread entry routine.
     MRT_EXPORT static void* GCMainThreadEntry(void* arg);
+    MRT_EXPORT static void* MinorDriverThreadEntry(void* arg);
+    MRT_EXPORT static void* MajorDriverThreadEntry(void* arg);
 
     // a collectorResources without a collector entity is functionless
     explicit CollectorResources(CollectorProxy& proxy) : collectorProxy(proxy) {}
@@ -67,6 +70,15 @@ public:
     GCStats& GetGCStats() { return gcStats; }
     void RequestHeapDump(GCTask::TaskType gcTask);
 
+    // ZGC-style per-generation request ports.  Requests on one port never
+    // consume or coalesce requests from the other generation.
+    GCDriverPort& GetMinorDriverPort() { return minorDriverPort; }
+    GCDriverPort& GetMajorDriverPort() { return majorDriverPort; }
+    void RequestAbort(GCDriverKind kind)
+    {
+        (kind == GCDriverKind::MINOR ? minorDriverPort : majorDriverPort).Abort().Request();
+    }
+
 #if defined(MRT_TESTABLE_INTERNALS)
     friend struct RelocationReceiptTestAccess;
 #endif
@@ -79,12 +91,14 @@ private:
     void StartGCThreads();
     void TerminateGCTask();
     void StopGCThreads();
+    void RunDriverLoop(GCDriverKind kind);
     // Notify the GC thread to start GC, and doesn't wait.
     // Called by mutator.
     // reason: The reason for this GC.
     void RequestAsyncGC(GCReason reason);
     void RequestGCAndWait(GCReason reason);
     void PostIgnoredGcRequest(bool shouldWait);
+    bool ExecuteDriverRequest(const GCDriverRequest& request);
 #if defined(MRT_TESTABLE_INTERNALS)
     MRT_EXPORT static bool ShouldWaitForIgnoredGcRequest(GCReason reason, bool async);
     MRT_EXPORT static bool HasSyncTaskCompleted(uint64_t finishedIndex, uint64_t awaitedIndex);
@@ -120,6 +134,8 @@ private:
     GCThreadPool* evacuationThreadPool = nullptr;
     int32_t gcThreadCount = 1;
     TaskQueue<GCExecutor>* taskQueue = nullptr;
+    GCDriverPort minorDriverPort { GCDriverKind::MINOR };
+    GCDriverPort majorDriverPort { GCDriverKind::MAJOR };
 #if defined(MRT_GC_UNIT_TESTS)
     // Deterministic unit builds can replace only the task executor.  The
     // default product retains CollectorProxy as its sole owner and ABI shape.
@@ -128,6 +144,8 @@ private:
 
     // the collector thread handle.
     pthread_t gcMainThread = 0;
+    pthread_t minorDriverThread = 0;
+    pthread_t majorDriverThread = 0;
     int32_t concurrentGcThreadCount = 1;
     std::atomic<pid_t> gcTid{ 0 };
     std::atomic<bool> gcThreadRunning = { false };

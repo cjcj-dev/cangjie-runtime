@@ -28,6 +28,7 @@
 #include "Heap/Allocator/RegionSpace.h"
 #include "Heap/Collector/CollectorProxy.h"
 #include "Heap/Collector/CollectorResources.h"
+#include "Heap/Collector/DriverPort.h"
 #include "Heap/Collector/GcStats.h"
 #include "Heap/Heap.h"
 #include "Inspector/ProfilerAgentImpl.h"
@@ -51,6 +52,8 @@ public:
             productCollectorInitialized = true;
         }
         resources.testCollector = &collector;
+        resources.GetMinorDriverPort().Reset();
+        resources.GetMajorDriverPort().Reset();
         resources.taskQueue = new TaskQueue<GCExecutor>;
         resources.taskQueue->Init();
         if (startNearReceiptWrap) {
@@ -70,6 +73,16 @@ public:
         TaskQueue<GCExecutor>::TaskFilter filter = [](GCExecutor&, GCExecutor&) { return false; };
         GCExecutor task(GCTask::TaskType::TASK_TYPE_TERMINATE_GC);
         (void)resources.taskQueue->EnqueueSync(task, filter);
+    }
+
+    static bool ExecuteDriverRequest(CollectorResources& resources, const GCDriverRequest& request)
+    {
+        return resources.ExecuteDriverRequest(request);
+    }
+
+    static void RunDriverLoop(CollectorResources& resources, GCDriverKind kind)
+    {
+        resources.RunDriverLoop(kind);
     }
 
     static void Destroy(CollectorResources& resources)
@@ -120,6 +133,11 @@ public:
 
     void RunGarbageCollection(uint64_t gcIndex, GCReason reason) override
     {
+        const size_t activeNow = activeRuns.fetch_add(1, std::memory_order_acq_rel) + 1;
+        size_t observed = maxActiveRuns.load(std::memory_order_relaxed);
+        while (activeNow > observed &&
+               !maxActiveRuns.compare_exchange_weak(observed, activeNow, std::memory_order_relaxed)) {
+        }
         if (advanceEpoch) {
             resources->SetGcStarted(true);
         }
@@ -135,6 +153,7 @@ public:
         if (advanceEpoch) {
             g_gcCount.fetch_add(1, std::memory_order_release);
         }
+        activeRuns.fetch_sub(1, std::memory_order_acq_rel);
         resources->NotifyGCFinished(gcIndex);
     }
 
@@ -208,6 +227,8 @@ public:
         return reasons.at(position);
     }
 
+    size_t MaxConcurrentRuns() const { return maxActiveRuns.load(std::memory_order_acquire); }
+
 private:
     CollectorResources* resources = nullptr;
     std::mutex mutex;
@@ -217,6 +238,8 @@ private:
     std::condition_variable release;
     bool ignoreRequests = false;
     bool advanceEpoch = false;
+    std::atomic<size_t> activeRuns { 0 };
+    std::atomic<size_t> maxActiveRuns { 0 };
     bool requesterReturned = false;
     size_t ignoreChecks = 0;
     size_t releasedRuns = 0;
@@ -377,6 +400,121 @@ GC_TEST(GcRequestSync, CompilerSyncEntryWaitsForOwnCompletion)
 {
     SyncResult result = RunSynchronousRequest([](RequestHarness&) { MCC_InvokeGCImpl(true); });
     ExpectCompletedSync(result, GC_REASON_USER);
+}
+
+GC_TEST(GcRequestSync, GenerationPortsDoNotCoalesceAcrossDrivers)
+{
+    GCDriverPort minor(GCDriverKind::MINOR);
+    GCDriverPort major(GCDriverKind::MAJOR);
+    minor.EnqueueAsync(GC_REASON_YOUNG);
+    major.EnqueueAsync(GC_REASON_HEU);
+    major.EnqueueAsync(GC_REASON_HEU); // same-port async requests are deduplicated
+
+    GCDriverRequest request {};
+    GC_EXPECT_TRUE(minor.TryDequeue(request));
+    GC_EXPECT_EQ(request.reason, GC_REASON_YOUNG);
+    GC_EXPECT_TRUE(major.TryDequeue(request));
+    GC_EXPECT_EQ(request.reason, GC_REASON_HEU);
+    GC_EXPECT_FALSE(major.TryDequeue(request));
+}
+
+GC_TEST(GcRequestSync, DriverPortSyncSequenceAcknowledges)
+{
+    GCDriverPort port(GCDriverKind::MINOR);
+    const uint64_t sequence = port.EnqueueSync(GC_REASON_YOUNG);
+    GCDriverRequest request {};
+    GC_EXPECT_TRUE(port.TryDequeue(request));
+    GC_EXPECT_EQ(request.sequence, sequence);
+    std::atomic<bool> completed { false };
+    std::thread waiter([&] {
+        completed.store(port.WaitForAck(sequence), std::memory_order_release);
+    });
+    std::this_thread::sleep_for(std::chrono::milliseconds(1));
+    GC_EXPECT_FALSE(completed.load(std::memory_order_acquire));
+    port.Acknowledge(sequence);
+    waiter.join();
+    GC_EXPECT_TRUE(completed.load(std::memory_order_acquire));
+}
+
+GC_TEST(GcRequestSync, DriverAbortIsCooperativeAndResettable)
+{
+    GCDriverPort port(GCDriverKind::MAJOR);
+    GC_EXPECT_FALSE(port.Abort().Poll());
+    port.Abort().Request();
+    GC_EXPECT_TRUE(port.Abort().Poll());
+    port.Abort().Reset();
+    GC_EXPECT_FALSE(port.Abort().Poll());
+}
+
+GC_TEST(GcRequestSync, StoppedPortWakesSynchronousWaiter)
+{
+    GCDriverPort port(GCDriverKind::MAJOR);
+    const uint64_t sequence = port.EnqueueSync(GC_REASON_FORCE);
+    std::promise<bool> resultPromise;
+    std::future<bool> result = resultPromise.get_future();
+    std::thread waiter([&] { resultPromise.set_value(port.WaitForAck(sequence)); });
+    std::this_thread::sleep_for(std::chrono::milliseconds(1));
+    port.Stop();
+    GC_EXPECT_EQ(result.wait_for(std::chrono::seconds(1)), std::future_status::ready);
+    GC_EXPECT_FALSE(result.get());
+    waiter.join();
+    GC_EXPECT_TRUE(port.IsStopped());
+}
+
+GC_TEST(GcRequestSync, MajorAbortpointSkipsOldAfterYoungPrelude)
+{
+    CollectorResources& resources = Heap::GetHeap().GetCollectorResources();
+    BlockingCollector collector;
+    collector.SetResources(resources);
+    CollectorResourcesTestPeer::Init(resources, collector, false);
+    collector.ReleaseAll();
+    resources.GetMajorDriverPort().Abort().Request();
+    const bool completed = CollectorResourcesTestPeer::ExecuteDriverRequest(
+        resources, GCDriverRequest { 2, GC_REASON_FORCE, false });
+    GC_EXPECT_FALSE(completed);
+    GC_EXPECT_EQ(collector.RunCount(), 1u);
+    GC_EXPECT_EQ(collector.ReasonAt(0), GC_REASON_YOUNG);
+    resources.GetMajorDriverPort().Abort().Reset();
+    CollectorResourcesTestPeer::Destroy(resources);
+}
+
+GC_TEST(GcRequestSync, DriverWaitInjectsTimeoutBackupRequest)
+{
+    CollectorResources& resources = Heap::GetHeap().GetCollectorResources();
+    BlockingCollector collector;
+    collector.SetResources(resources);
+    CollectorResourcesTestPeer::Init(resources, collector, false);
+    collector.ReleaseAll();
+    Heap::GetHeap().EnableGC(true);
+    std::thread driver([&] { CollectorResourcesTestPeer::RunDriverLoop(resources, GCDriverKind::MAJOR); });
+    const bool observed = collector.WaitForRuns(1);
+    GC_EXPECT_TRUE(observed);
+    GC_EXPECT_EQ(collector.ReasonAt(0), GC_REASON_BACKUP);
+    resources.GetMajorDriverPort().Stop();
+    driver.join();
+    CollectorResourcesTestPeer::Destroy(resources);
+}
+
+GC_TEST(GcRequestSync, MinorAndMajorDriversRunConcurrently)
+{
+    CollectorResources& resources = Heap::GetHeap().GetCollectorResources();
+    BlockingCollector collector;
+    collector.SetResources(resources);
+    CollectorResourcesTestPeer::Init(resources, collector, false);
+    std::thread minor([&] { CollectorResourcesTestPeer::RunDriverLoop(resources, GCDriverKind::MINOR); });
+    std::thread major([&] { CollectorResourcesTestPeer::RunDriverLoop(resources, GCDriverKind::MAJOR); });
+    resources.GetMinorDriverPort().EnqueueAsync(GC_REASON_YOUNG);
+    resources.GetMajorDriverPort().EnqueueAsync(GC_REASON_FORCE);
+    const bool enteredBoth = collector.WaitForRuns(2);
+    GC_EXPECT_TRUE(enteredBoth);
+    GC_EXPECT_TRUE(collector.MaxConcurrentRuns() >= 2);
+    collector.ReleaseAll();
+    GC_EXPECT_TRUE(collector.WaitForRuns(3)); // minor + major young prelude + old
+    resources.GetMinorDriverPort().Stop();
+    resources.GetMajorDriverPort().Stop();
+    minor.join();
+    major.join();
+    CollectorResourcesTestPeer::Destroy(resources);
 }
 
 GC_TEST(GcRequestSync, YoungSyncReturnsAfterEpochAndIdle)
