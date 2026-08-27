@@ -8,6 +8,7 @@
 #include "CollectorResources.h"
 
 #include <algorithm>
+#include <chrono>
 #include <cstdlib>
 #include <cstring>
 #if defined(__linux__) || defined(hongmeng)
@@ -61,8 +62,28 @@ void* CollectorResources::GCMainThreadEntry(void* arg)
     return nullptr;
 }
 
+void* CollectorResources::MinorDriverThreadEntry(void* arg)
+{
+    auto* resources = reinterpret_cast<CollectorResources*>(arg);
+    MRT_ASSERT(resources != nullptr, "MinorDriverThreadEntry arg=nullptr");
+    ThreadLocal::SetThreadType(ThreadType::GC_THREAD);
+    resources->RunDriverLoop(GCDriverKind::MINOR);
+    return nullptr;
+}
+
+void* CollectorResources::MajorDriverThreadEntry(void* arg)
+{
+    auto* resources = reinterpret_cast<CollectorResources*>(arg);
+    MRT_ASSERT(resources != nullptr, "MajorDriverThreadEntry arg=nullptr");
+    ThreadLocal::SetThreadType(ThreadType::GC_THREAD);
+    resources->RunDriverLoop(GCDriverKind::MAJOR);
+    return nullptr;
+}
+
 void CollectorResources::Init()
 {
+    minorDriverPort.Reset();
+    majorDriverPort.Reset();
     taskQueue = new TaskQueue<GCExecutor>;
     taskQueue->Init();
     finishedGcIndex = GCTask::SYNC_TASK_MIN_INDEX;
@@ -79,11 +100,18 @@ void CollectorResources::Fini()
     taskQueue->Fini();
     delete taskQueue;
     taskQueue = nullptr;
+    minorDriverPort.Stop();
+    majorDriverPort.Stop();
 }
 
 void CollectorResources::StopGCWork()
 {
     finalizerProcessor.Stop();
+    // Close both ports before joining either driver.  This is the shutdown
+    // acknowledgement for synchronous callers: WaitForAck observes stopped
+    // and returns immediately instead of enqueueing into an abandoned queue.
+    minorDriverPort.Stop();
+    majorDriverPort.Stop();
     TerminateGCTask();
     StopGCThreads();
 }
@@ -106,8 +134,10 @@ void CollectorResources::StopGCThreads()
     if (gcThreadRunning.load(std::memory_order_acquire) == false) {
         return;
     }
-    int ret = ::pthread_join(gcMainThread, nullptr);
-    CHECK_E(UNLIKELY(ret != 0), "::pthread_join() in StopGCThreads() return %d", ret);
+    int ret = ::pthread_join(minorDriverThread, nullptr);
+    CHECK_E(UNLIKELY(ret != 0), "::pthread_join(minor) in StopGCThreads() return %d", ret);
+    ret = ::pthread_join(majorDriverThread, nullptr);
+    CHECK_E(UNLIKELY(ret != 0), "::pthread_join(major) in StopGCThreads() return %d", ret);
     // wait the thread pool stopped.
     if (gcThreadPool != nullptr) {
         gcThreadPool->Exit();
@@ -124,14 +154,135 @@ void CollectorResources::StopGCThreads()
 
 void CollectorResources::RunTaskLoop()
 {
+    // Compatibility loop used by the deterministic gc_unit harness. Product
+    // startup uses two dedicated loops below; this loop retains the old
+    // single-consumer shape solely for tests that inject a fake Collector.
     gcTid.store(MapleRuntime::GetTid(), std::memory_order_release);
+    // Keep the control queue (termination/heap dump) separate from the two
+    // generation ports.  Round-robin polling gives each driver progress even
+    // when the other generation is continuously requesting collections.
+    while (true) {
+        GCDriverRequest request {};
+        bool haveRequest = minorDriverPort.TryDequeue(request);
+        GCDriverPort* port = &minorDriverPort;
+        if (!haveRequest) {
+            haveRequest = majorDriverPort.TryDequeue(request);
+            port = &majorDriverPort;
+        }
+        if (haveRequest) {
+            if (!port->Abort().Poll()) {
+                ExecuteDriverRequest(request);
+            }
+            port->Acknowledge(request.sequence);
+            continue;
+        }
+
+        GCExecutor controlTask;
+        if (taskQueue != nullptr && taskQueue->TryDequeue(controlTask)) {
 #if defined(MRT_GC_UNIT_TESTS)
-    taskQueue->DrainTaskQueue(testCollector != nullptr ? static_cast<void*>(testCollector)
-                                                      : static_cast<void*>(&collectorProxy));
+            void* owner = testCollector != nullptr ? static_cast<void*>(testCollector)
+                                                   : static_cast<void*>(&collectorProxy);
 #else
-    taskQueue->DrainTaskQueue(&collectorProxy);
+            void* owner = static_cast<void*>(&collectorProxy);
 #endif
+            if (!controlTask.Execute(owner)) {
+                break;
+            }
+            continue;
+        }
+        std::this_thread::sleep_for(std::chrono::milliseconds(1));
+    }
     NotifyGCFinished(GCTask::TASK_INDEX_FOR_EXIT);
+}
+
+void CollectorResources::RunDriverLoop(GCDriverKind kind)
+{
+    gcTid.store(MapleRuntime::GetTid(), std::memory_order_release);
+    GCDriverPort& port = kind == GCDriverKind::MINOR ? minorDriverPort : majorDriverPort;
+    const bool ownsControlQueue = kind == GCDriverKind::MAJOR;
+    auto nextTimeout = std::chrono::steady_clock::now() + std::chrono::seconds(1);
+    while (true) {
+        GCDriverRequest request {};
+        if (port.TryDequeue(request)) {
+            if (!port.Abort().Poll()) {
+                ExecuteDriverRequest(request);
+            }
+            port.Acknowledge(request.sequence);
+            continue;
+        }
+        // Stop closes the port and wakes all waiters.  A driver exits once its
+        // in-flight request has reached the acknowledgement point.
+        if (port.IsStopped()) {
+            break;
+        }
+
+        if (ownsControlQueue) {
+            GCExecutor controlTask;
+            if (taskQueue != nullptr && taskQueue->TryDequeue(controlTask)) {
+#if defined(MRT_GC_UNIT_TESTS)
+                void* owner = testCollector != nullptr ? static_cast<void*>(testCollector)
+                                                       : static_cast<void*>(&collectorProxy);
+#else
+                void* owner = static_cast<void*>(&collectorProxy);
+#endif
+                if (!controlTask.Execute(owner)) {
+                    break;
+                }
+                nextTimeout = std::chrono::steady_clock::now() + std::chrono::seconds(1);
+                continue;
+            }
+            // TaskQueue::Dequeue historically injected TASK_TYPE_TIMEOUT_GC
+            // after one second of idleness. Keep that observable semantic in
+            // the split-driver wait path (OpenJDK zDriver timeout/backup arm).
+            const auto now = std::chrono::steady_clock::now();
+            if (now >= nextTimeout) {
+                if (taskQueue != nullptr && Heap::GetHeap().IsGCEnabled()) {
+                    taskQueue->EnqueueAsync(GCExecutor(GCTask::TaskType::TASK_TYPE_TIMEOUT_GC));
+                }
+                nextTimeout = now + std::chrono::seconds(1);
+            }
+        }
+        std::this_thread::sleep_for(std::chrono::milliseconds(1));
+    }
+    NotifyGCFinished(GCTask::TASK_INDEX_FOR_EXIT);
+}
+
+bool CollectorResources::ExecuteDriverRequest(const GCDriverRequest& request)
+{
+#if defined(MRT_GC_UNIT_TESTS)
+    Collector* collector = testCollector != nullptr ? testCollector : static_cast<Collector*>(&collectorProxy);
+#else
+    Collector* collector = static_cast<Collector*>(&collectorProxy);
+#endif
+    // A major cycle is the old driver plus its young prelude.  The prelude is
+    // submitted through the minor identity instead of mutating WCollector's
+    // reason/statistics fields mid-cycle.
+    if (request.reason != GC_REASON_YOUNG) {
+        // Major's young prelude is a real request consumed by the minor
+        // driver.  The abortpoint below is deliberately between prelude and
+        // old, matching zDriver.cpp:416-452: cancellation prevents old work.
+#if defined(MRT_GC_UNIT_TESTS)
+        collector->RunGarbageCollection(GCTask::ASYNC_TASK_INDEX, GC_REASON_YOUNG);
+        if (majorDriverPort.Abort().Poll()) {
+            return false;
+        }
+#else
+        const uint64_t prelude = minorDriverPort.EnqueueSync(GC_REASON_YOUNG);
+        if (!minorDriverPort.WaitForAck(prelude) || majorDriverPort.Abort().Poll()) {
+            return false;
+        }
+#endif
+    }
+    if (request.reason != GC_REASON_YOUNG && majorDriverPort.Abort().Poll()) {
+        return false;
+    }
+    VLOG(GCPHASE, "[GCV2][driver] kind=%s seq=%llu reason=%u ack=pending",
+         request.reason == GC_REASON_YOUNG ? "minor" : "major",
+         static_cast<unsigned long long>(request.sequence), request.reason);
+    collector->RunGarbageCollection(request.asynchronous ? GCTask::ASYNC_TASK_INDEX : request.sequence,
+                                    request.reason);
+    NotifyGCFinished(request.asynchronous ? GCTask::ASYNC_TASK_INDEX : request.sequence);
+    return true;
 }
 
 // For the ignored gc request, check whether need to wait for current gc finish
@@ -171,37 +322,17 @@ bool CollectorResources::HasSyncTaskCompleted(uint64_t finishedIndex, uint64_t a
 
 void CollectorResources::RequestAsyncGC(GCReason reason)
 {
-    // Static synchronous reasons must never be connected to the non-blocking
-    // request port.  USER remains legal because its mode is selected per call.
-    // This void port has no error channel: returning would drop a required GC,
-    // while falling back to a blocking request can deadlock its unsafe caller.
-    // A fatal check is therefore the lightest non-silent rejection available.
-    CHECK(!g_gcRequests[reason].IsSyncGC());
-    GCExecutor gcTask(GCTask::TaskType::TASK_TYPE_INVOKE_GC, reason);
-    // we use async enqueue because this doesn't have locks, lowering the risk
-    // of timeouts when entering safe region due to thread scheduling
-    taskQueue->EnqueueAsync(gcTask);
+    GCDriverPort& port = reason == GC_REASON_YOUNG ? minorDriverPort : majorDriverPort;
+    port.EnqueueAsync(reason);
 }
 
 void CollectorResources::RequestGCAndWait(GCReason reason)
 {
     // Enter saferegion since current thread may blocked by locks.
     ScopedEnterSaferegion enterSaferegion(false);
-    GCExecutor gcTask(GCTask::TaskType::TASK_TYPE_INVOKE_GC, reason);
-
-    TaskQueue<GCExecutor>::TaskFilter filter = [](GCExecutor& oldTask, GCExecutor& newTask) {
-        return oldTask.GetGCReason() == newTask.GetGCReason();
-    };
-
-    // The caller selected the synchronous path. Add this task to the sync FIFO
-    // and wait for the completion index assigned to this request.
-    std::unique_lock<std::mutex> lock(gcFinishedCondMutex);
-    uint64_t curThreadSyncIndex = taskQueue->EnqueueSync(gcTask, filter);
-    // wait until GC finished
-    std::function<bool()> pred = [this, curThreadSyncIndex] {
-        return HasSyncTaskCompleted(finishedGcIndex.load(std::memory_order_acquire), curThreadSyncIndex);
-    };
-    gcFinishedCondVar.wait(lock, pred);
+    GCDriverPort& port = reason == GC_REASON_YOUNG ? minorDriverPort : majorDriverPort;
+    const uint64_t sequence = port.EnqueueSync(reason);
+    (void)port.WaitForAck(sequence);
 }
 
 void CollectorResources::RequestGC(GCReason reason, bool async)
@@ -335,13 +466,22 @@ void CollectorResources::StartGCThreads()
         }
     }
 
-    // create the collector thread.
-    if (::pthread_create(&gcMainThread, nullptr, CollectorResources::GCMainThreadEntry, this) != 0) {
-        MRT_ASSERT(0, "pthread_create failed!");
+    // ZGC shape: two independent drivers, each consuming only its generation
+    // port. The major driver also owns the legacy control/timeout queue.
+    if (::pthread_create(&minorDriverThread, nullptr, CollectorResources::MinorDriverThreadEntry, this) != 0) {
+        MRT_ASSERT(0, "pthread_create minor driver failed!");
     }
+    if (::pthread_create(&majorDriverThread, nullptr, CollectorResources::MajorDriverThreadEntry, this) != 0) {
+        minorDriverPort.Stop();
+        (void)::pthread_join(minorDriverThread, nullptr);
+        MRT_ASSERT(0, "pthread_create major driver failed!");
+    }
+    // Keep the historical handle as an alias for diagnostics that name the
+    // collector's main thread; shutdown joins both concrete driver handles.
+    gcMainThread = majorDriverThread;
     // set thread name.
 #ifdef __WIN64
-    int ret = pthread_setname_np(gcMainThread, "gc-main-thread");
+    int ret = pthread_setname_np(majorDriverThread, "gc-major-driver");
     CHECK_E(UNLIKELY(ret != 0), "pthread_setname_np() in CollectorResources::StartGCThreads() return %d rather than 0",
             ret);
 #endif
