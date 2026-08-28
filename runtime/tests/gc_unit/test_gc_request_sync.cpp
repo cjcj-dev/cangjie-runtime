@@ -80,6 +80,12 @@ public:
         return resources.ExecuteDriverRequest(request);
     }
 
+    static bool TryAcquireDriverLock(CollectorResources& resources)
+    {
+        std::unique_lock<std::mutex> lock(resources.driverLock, std::try_to_lock);
+        return lock.owns_lock();
+    }
+
     static void RunDriverLoop(CollectorResources& resources, GCDriverKind kind)
     {
         resources.RunDriverLoop(kind);
@@ -281,11 +287,14 @@ private:
 };
 
 struct SyncResult {
-    bool entered;
-    bool returnedBeforeRelease;
+    bool youngEntered;
+    bool oldEntered;
+    bool returnedBeforeYoungRelease;
+    bool returnedBeforeOldRelease;
     bool returnedAfterRelease;
     size_t runCount;
-    GCReason reason;
+    GCReason youngReason;
+    GCReason oldReason;
 };
 
 SyncResult RunSynchronousRequest(const std::function<void(RequestHarness&)>& request)
@@ -304,10 +313,15 @@ SyncResult RunSynchronousRequest(const std::function<void(RequestHarness&)>& req
     JoinGuard requesterGuard(requester);
 
     bool requestMadeProgress = harness.collector.WaitForRequestDecisionOrReturn();
-    bool entered = requestMadeProgress && !harness.collector.HasRequesterReturned() &&
+    bool youngEntered = requestMadeProgress && !harness.collector.HasRequesterReturned() &&
         harness.collector.WaitForRuns(1);
-    bool returnedBeforeRelease = returned.wait_for(std::chrono::seconds(0)) == std::future_status::ready;
-    if (entered) {
+    bool returnedBeforeYoungRelease = returned.wait_for(std::chrono::seconds(0)) == std::future_status::ready;
+    if (youngEntered) {
+        harness.collector.ReleaseOne();
+    }
+    bool oldEntered = youngEntered && harness.collector.WaitForRuns(2);
+    bool returnedBeforeOldRelease = returned.wait_for(std::chrono::seconds(0)) == std::future_status::ready;
+    if (oldEntered) {
         harness.collector.ReleaseOne();
     }
     bool returnedAfterRelease = returned.wait_for(kHarnessHangLimit) == std::future_status::ready;
@@ -316,18 +330,23 @@ SyncResult RunSynchronousRequest(const std::function<void(RequestHarness&)>& req
     }
     requester.join();
     size_t runCount = harness.collector.RunCount();
-    GCReason observedReason = entered ? harness.collector.ReasonAt(0) : GC_REASON_INVALID;
+    GCReason youngReason = youngEntered ? harness.collector.ReasonAt(0) : GC_REASON_INVALID;
+    GCReason oldReason = oldEntered ? harness.collector.ReasonAt(1) : GC_REASON_INVALID;
     harness.Stop();
-    return { entered, returnedBeforeRelease, returnedAfterRelease, runCount, observedReason };
+    return { youngEntered, oldEntered, returnedBeforeYoungRelease, returnedBeforeOldRelease,
+             returnedAfterRelease, runCount, youngReason, oldReason };
 }
 
 void ExpectCompletedSync(const SyncResult& result, GCReason reason)
 {
-    GC_EXPECT_TRUE(result.entered);
-    GC_EXPECT_FALSE(result.returnedBeforeRelease);
+    GC_EXPECT_TRUE(result.youngEntered);
+    GC_EXPECT_TRUE(result.oldEntered);
+    GC_EXPECT_FALSE(result.returnedBeforeYoungRelease);
+    GC_EXPECT_FALSE(result.returnedBeforeOldRelease);
     GC_EXPECT_TRUE(result.returnedAfterRelease);
-    GC_EXPECT_EQ(result.runCount, 1u);
-    GC_EXPECT_EQ(result.reason, reason);
+    GC_EXPECT_EQ(result.runCount, 2u);
+    GC_EXPECT_EQ(result.youngReason, GC_REASON_YOUNG);
+    GC_EXPECT_EQ(result.oldReason, reason);
 }
 
 struct BoundaryResult {
@@ -349,7 +368,7 @@ BoundaryResult RunSynchronousRequestsAcrossReceiptWrap()
 {
     RequestHarness harness(true);
 
-    auto runOne = [&](size_t expectedRuns) {
+    auto runOne = [&](size_t expectedYoungRun, size_t expectedOldRun) {
         std::promise<void> returnedPromise;
         std::future<void> returned = returnedPromise.get_future();
         std::thread requester([&] {
@@ -359,9 +378,15 @@ BoundaryResult RunSynchronousRequestsAcrossReceiptWrap()
         });
         JoinGuard requesterGuard(requester);
 
-        bool entered = harness.collector.WaitForRuns(expectedRuns);
+        bool entered = harness.collector.WaitForRuns(expectedYoungRun);
+        if (entered) {
+            harness.collector.ReleaseOne();
+            entered = harness.collector.WaitForRuns(expectedOldRun);
+        }
         bool returnedBeforeCompletion = returned.wait_for(std::chrono::seconds(0)) == std::future_status::ready;
-        harness.collector.ReleaseOne();
+        if (entered) {
+            harness.collector.ReleaseOne();
+        }
         bool returnedAfterCompletion = returned.wait_for(kHarnessHangLimit) == std::future_status::ready;
         if (!returnedAfterCompletion) {
             harness.Stop();
@@ -370,13 +395,13 @@ BoundaryResult RunSynchronousRequestsAcrossReceiptWrap()
         return RequestCompletionResult{ entered, returnedBeforeCompletion, returnedAfterCompletion };
     };
 
-    RequestCompletionResult first = runOne(1);
+    RequestCompletionResult first = runOne(1, 2);
     if (!first.entered || !first.returnedAfterCompletion) {
         harness.Stop();
         return { first.entered, first.returnedBeforeCompletion, first.returnedAfterCompletion,
                  false, false, false };
     }
-    RequestCompletionResult second = runOne(2);
+    RequestCompletionResult second = runOne(3, 4);
     harness.Stop();
     return { first.entered, first.returnedBeforeCompletion, first.returnedAfterCompletion,
              second.entered, second.returnedBeforeCompletion, second.returnedAfterCompletion };
@@ -467,10 +492,18 @@ GC_TEST(GcRequestSync, MajorAbortpointSkipsOldAfterYoungPrelude)
     BlockingCollector collector;
     collector.SetResources(resources);
     CollectorResourcesTestPeer::Init(resources, collector, false);
-    collector.ReleaseAll();
+    std::promise<bool> completedPromise;
+    std::future<bool> completedFuture = completedPromise.get_future();
+    std::thread driver([&] {
+        completedPromise.set_value(CollectorResourcesTestPeer::ExecuteDriverRequest(
+            resources, GCDriverRequest { 2, GC_REASON_FORCE, false }));
+    });
+    GC_EXPECT_TRUE(collector.WaitForRuns(1));
     resources.GetMajorDriverPort().Abort().Request();
-    const bool completed = CollectorResourcesTestPeer::ExecuteDriverRequest(
-        resources, GCDriverRequest { 2, GC_REASON_FORCE, false });
+    collector.ReleaseOne();
+    GC_EXPECT_EQ(completedFuture.wait_for(std::chrono::seconds(1)), std::future_status::ready);
+    const bool completed = completedFuture.get();
+    driver.join();
     GC_EXPECT_FALSE(completed);
     GC_EXPECT_EQ(collector.RunCount(), 1u);
     GC_EXPECT_EQ(collector.ReasonAt(0), GC_REASON_YOUNG);
@@ -487,15 +520,18 @@ GC_TEST(GcRequestSync, DriverWaitInjectsTimeoutBackupRequest)
     collector.ReleaseAll();
     Heap::GetHeap().EnableGC(true);
     std::thread driver([&] { CollectorResourcesTestPeer::RunDriverLoop(resources, GCDriverKind::MAJOR); });
-    const bool observed = collector.WaitForRuns(1);
-    GC_EXPECT_TRUE(observed);
-    GC_EXPECT_EQ(collector.ReasonAt(0), GC_REASON_BACKUP);
+    const bool youngObserved = collector.WaitForRuns(1);
+    const bool backupObserved = collector.WaitForRuns(2);
+    GC_EXPECT_TRUE(youngObserved);
+    GC_EXPECT_TRUE(backupObserved);
+    GC_EXPECT_EQ(collector.ReasonAt(0), GC_REASON_YOUNG);
+    GC_EXPECT_EQ(collector.ReasonAt(1), GC_REASON_BACKUP);
     resources.GetMajorDriverPort().Stop();
     driver.join();
     CollectorResourcesTestPeer::Destroy(resources);
 }
 
-GC_TEST(GcRequestSync, MinorAndMajorDriversRunConcurrently)
+GC_TEST(GcRequestSync, MinorAndMajorDriversSerializeCollections)
 {
     CollectorResources& resources = Heap::GetHeap().GetCollectorResources();
     BlockingCollector collector;
@@ -504,17 +540,36 @@ GC_TEST(GcRequestSync, MinorAndMajorDriversRunConcurrently)
     std::thread minor([&] { CollectorResourcesTestPeer::RunDriverLoop(resources, GCDriverKind::MINOR); });
     std::thread major([&] { CollectorResourcesTestPeer::RunDriverLoop(resources, GCDriverKind::MAJOR); });
     resources.GetMinorDriverPort().EnqueueAsync(GC_REASON_YOUNG);
+    const bool minorEntered = collector.WaitForRuns(1);
+    const bool driverLockHeld = !CollectorResourcesTestPeer::TryAcquireDriverLock(resources);
+
     resources.GetMajorDriverPort().EnqueueAsync(GC_REASON_FORCE);
-    const bool enteredBoth = collector.WaitForRuns(2);
-    GC_EXPECT_TRUE(enteredBoth);
-    GC_EXPECT_TRUE(collector.MaxConcurrentRuns() >= 2);
-    collector.ReleaseAll();
-    GC_EXPECT_TRUE(collector.WaitForRuns(3)); // minor + major young prelude + old
+    collector.ReleaseOne();
+    const bool majorYoungEntered = collector.WaitForRuns(2);
+    collector.ReleaseOne();
+    const bool majorOldEntered = collector.WaitForRuns(3);
+    collector.ReleaseOne();
+    const size_t maxConcurrentRuns = collector.MaxConcurrentRuns();
+    const GCReason firstReason = collector.ReasonAt(0);
+    const GCReason secondReason = collector.ReasonAt(1);
+    const GCReason thirdReason = collector.ReasonAt(2);
     resources.GetMinorDriverPort().Stop();
     resources.GetMajorDriverPort().Stop();
     minor.join();
     major.join();
     CollectorResourcesTestPeer::Destroy(resources);
+
+    // Assert only after both product driver loops are joined. A deliberate
+    // lock cut must report this one test as red, not terminate the whole suite
+    // through a joinable std::thread destructor.
+    GC_EXPECT_TRUE(minorEntered);
+    GC_EXPECT_TRUE(driverLockHeld);
+    GC_EXPECT_TRUE(majorYoungEntered);
+    GC_EXPECT_TRUE(majorOldEntered);
+    GC_EXPECT_EQ(maxConcurrentRuns, 1u);
+    GC_EXPECT_EQ(firstReason, GC_REASON_YOUNG);
+    GC_EXPECT_EQ(secondReason, GC_REASON_YOUNG);
+    GC_EXPECT_EQ(thirdReason, GC_REASON_FORCE);
 }
 
 GC_TEST(GcRequestSync, YoungSyncReturnsAfterEpochAndIdle)
@@ -763,16 +818,25 @@ GC_TEST(GcRequestSync, CompilerAsyncEntryReturnsAndMergesPendingRequest)
     if (requester.joinable()) {
         requester.join();
     }
-    bool pendingEntered = harness.collector.WaitForRuns(2);
+    bool firstOldEntered = harness.collector.WaitForRuns(2);
+    harness.collector.ReleaseOne();
+    bool pendingYoungEntered = harness.collector.WaitForRuns(3);
+    harness.collector.ReleaseOne();
+    bool pendingOldEntered = harness.collector.WaitForRuns(4);
+    harness.collector.ReleaseOne();
     harness.Stop();
 
     GC_EXPECT_TRUE(firstEntered);
     GC_EXPECT_TRUE(returnedBeforeRelease);
     GC_EXPECT_EQ(runsBeforeRelease, 1u);
-    GC_EXPECT_TRUE(pendingEntered);
-    GC_EXPECT_EQ(harness.collector.RunCount(), 2u);
-    GC_EXPECT_EQ(harness.collector.ReasonAt(0), GC_REASON_USER);
+    GC_EXPECT_TRUE(firstOldEntered);
+    GC_EXPECT_TRUE(pendingYoungEntered);
+    GC_EXPECT_TRUE(pendingOldEntered);
+    GC_EXPECT_EQ(harness.collector.RunCount(), 4u);
+    GC_EXPECT_EQ(harness.collector.ReasonAt(0), GC_REASON_YOUNG);
     GC_EXPECT_EQ(harness.collector.ReasonAt(1), GC_REASON_USER);
+    GC_EXPECT_EQ(harness.collector.ReasonAt(2), GC_REASON_YOUNG);
+    GC_EXPECT_EQ(harness.collector.ReasonAt(3), GC_REASON_USER);
 }
 
 } // namespace MapleRuntime

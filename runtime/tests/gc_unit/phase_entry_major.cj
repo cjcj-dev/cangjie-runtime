@@ -1,6 +1,7 @@
 // End-to-end major forwarding-carrier entry regression.  The bounded escaped
-// object wave reaches WCollector::PostTrace; explicit heavy collection remains
-// as a fallback, and the harness disables standalone automatic minors.
+// object wave reaches WCollector::PostTrace through an explicit heavy collect.
+// The bounded wave stays well below the product's 32 MiB automatic-minor
+// waterline, so the only young cycle is the major driver's owned prelude.
 import std.runtime.*
 
 class MajorEntryPayload {
@@ -12,13 +13,13 @@ class MajorEntryPayload {
 }
 
 main(): Int64 {
-    let slots: Int64 = 200000
+    let slots: Int64 = 16384
     var live = Array<?MajorEntryPayload>(slots, {_ => None})
     var checksum: Int64 = 0
 
-    // Two escaped generations per slot create selected ordinary pages while
-    // remaining bounded; either the deterministic heuristic entry or the
-    // explicit user entry reaches PostTrace.
+    // Two escaped generations per slot create ordinary pages while remaining
+    // far below the automatic-minor waterline. The explicit heavy entry below
+    // is the sole request source.
     for (i in 0..slots) {
         live[i] = MajorEntryPayload(i)
         live[i] = MajorEntryPayload(i + slots)
