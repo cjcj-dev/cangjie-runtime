@@ -963,6 +963,8 @@ public:
             PreserveRetainedLiveInfo();
             return;
         }
+        const bool reuseOwnedCopy = IsRetainedSnapshotValid() && metadata.retainedMarkWords != nullptr &&
+            metadata.retainedLiveInfoCoveredUpTo >= boundary;
         BeginRetainedPreserve();
         metadata.retainedLiveInfo = GetLiveInfo();
         metadata.retainedLiveInfoEpoch = GetSnapshotEpoch();
@@ -978,15 +980,18 @@ public:
             largeMarked = 0;
         }
         metadata.retainedLiveInfoCoveredUpTo = boundary;
-        if (RetainedOwnCopyEnabled()) {
+        if (RetainedOwnCopyEnabled() && metadata.retainedLiveInfo != nullptr) {
             CaptureRetainedMarkWords(metadata.retainedLiveInfo, metadata.retainedLiveInfoEpoch, largeMarked);
+        } else if (!reuseOwnedCopy) {
+            FreeRetainedMarkWords();
         }
-        if (metadata.retainedLiveInfo == nullptr) {
-            // This decision is derived after CaptureRetainedMarkWords has
-            // replaced the previous owned carrier.  Once a successful
-            // Preserve armed the monotonic bit, carrier absence is LOST on
-            // every exit; no clear/unbind exit has to remember to write it.
-            CHECK(GetRetainedLiveInfoState() != RetainedLiveInfoState::SNAPSHOT_LOST);
+        if (metadata.retainedLiveInfo == nullptr && !reuseOwnedCopy) {
+            CHECK_DETAIL(GetRetainedLiveInfoState() != RetainedLiveInfoState::SNAPSHOT_LOST,
+                         "retained snapshot lost after current/from-page/owned-copy repair life=%llu retainedLife=%llu "
+                         "alloc=%#zx boundary=%#zx",
+                         static_cast<unsigned long long>(GetRegionLifeId()),
+                         static_cast<unsigned long long>(metadata.retainedLifeId),
+                         static_cast<size_t>(GetRegionAllocPtr()), static_cast<size_t>(boundary));
             NoteRetainedPreserve(false);
             return;
         }

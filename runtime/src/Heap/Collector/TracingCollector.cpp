@@ -10,6 +10,7 @@
 #include "Common/Runtime.h"
 #include "Concurrency/Concurrency.h"
 #include "Heap/Allocator/AllocBuffer.h"
+#include "Heap/Barrier/StoreBarrierBuffer.h"
 #include "Heap/Collector/MarkPartialArray.h"
 #include "Heap/Verify/NwDropAudit.h"
 #include "Heap/Verify/MarkCompleteVerify.h"
@@ -875,7 +876,8 @@ bool TracingCollector::MarkSatbBuffer(WorkStack& workStack)
             ScopedStopTheWorld stw("mark terminate", true, GCPhase::GC_PHASE_CLEAR_SATB_BUFFER);
             NoteMarkTerminatePause();
             const size_t seenBefore = satbSeen;
-            MutatorManager::Instance().VisitAllMutators([](Mutator& mutator) { mutator.FlushSatbBuffer(); });
+            StoreBarrierBuffer::FlushAll(Heap::GetHeap().GetRememberedSet());
+            MutatorManager::Instance().VisitAllMutators([](Mutator& mutator) { mutator.FlushSatbBuffer(false); });
             visitSatbObj();
             NoteMarkTerminateFlushed(satbSeen - seenBefore);
             terminated = workStack.empty();

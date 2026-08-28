@@ -2660,7 +2660,7 @@ EXPORTS
     _ZNK12MapleRuntime7Barrier16ReadStaticStructEyyyNS_5GCTibE @2683
     _ZNK12MapleRuntime7Barrier16WriteGenericImplEPNS_10BaseObjectEPvS2_y @2684
     _ZNK12MapleRuntime7Barrier17WriteStaticStructEyyyyNS_5GCTibE @2685
-    _ZNK12MapleRuntime7Barrier18RecordCrossGenEdgeEPNS_10BaseObjectEyS2_ @2686
+    _ZNK12MapleRuntime7Barrier18RecordCrossGenEdgeEPNS_10BaseObjectEyS2_NS_8zpointerE @2686
     _ZNK12MapleRuntime7Barrier18WriteReferenceImplEPNS_10BaseObjectERNS_8HeapSlotILb0EEES2_ @2687
     _ZNK12MapleRuntime7Barrier19AtomicReadReferenceEPNS_10BaseObjectERNS_8HeapSlotILb1EEENSt3__112memory_orderE @2688
     _ZNK12MapleRuntime7Barrier19AtomicSwapReferenceEPNS_10BaseObjectERNS_8HeapSlotILb1EEES2_NSt3__112memory_orderE @2689

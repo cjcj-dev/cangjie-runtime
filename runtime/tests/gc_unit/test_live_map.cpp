@@ -81,6 +81,7 @@ ProductMarkObject<Generation::Old> ProductMarkObjectFn<Generation::Old>()
 
 using ProductClearLiveInfo = void (*)(RegionInfo*, MarkView<Generation::Young>);
 using ProductPreserveRetained = void (*)(RegionInfo*);
+using ProductPreserveRetainedUpTo = void (*)(RegionInfo*, MAddress);
 using ProductBumpEpoch = void (*)(RegionInfo*);
 
 ProductClearLiveInfo ProductClearLiveInfoFn()
@@ -95,6 +96,13 @@ ProductPreserveRetained ProductPreserveRetainedFn()
 {
     static auto fn = reinterpret_cast<ProductPreserveRetained>(dlsym(
         ProductRuntimeHandle(), "_ZN12MapleRuntime10RegionInfo24PreserveRetainedLiveInfoEv"));
+    return fn;
+}
+
+ProductPreserveRetainedUpTo ProductPreserveRetainedUpToFn()
+{
+    static auto fn = reinterpret_cast<ProductPreserveRetainedUpTo>(dlsym(
+        ProductRuntimeHandle(), "_ZN12MapleRuntime10RegionInfo28PreserveRetainedLiveInfoUpToEm"));
     return fn;
 }
 
@@ -316,12 +324,65 @@ GC_TEST(LiveMap, UnexaminedRelocselPageKeepsWithoutSnapshot)
     region->SetRegionType(RegionInfo::RegionType::UNMOVABLE_FROM_REGION);
     region->AddLiveByteCount(64);
     GC_EXPECT_FALSE(region->HasEverPreservedRetainedLiveInfo());
-    region->PreserveRetainedLiveInfoUpTo(
-        std::min(region->GetCensusBoundary(), region->GetRegionAllocPtr()));
+    ProductPreserveRetainedUpToFn()(
+        region, std::min(region->GetCensusBoundary(), region->GetRegionAllocPtr()));
     GC_EXPECT_TRUE(region->GetRetainedLiveInfo() == nullptr);
     GC_EXPECT_FALSE(region->HasEverPreservedRetainedLiveInfo());
     GC_EXPECT_EQ(static_cast<unsigned>(region->GetRetainedLiveInfoState()),
                  static_cast<unsigned>(RegionInfo::RetainedLiveInfoState::NEVER_EXAMINED));
+}
+
+// The bounded product entry first repairs from the current mark face before it
+// publishes the retained carrier.  Calling it through the loaded runtime keeps
+// this test from materializing a second inline copy in the test ELF.
+GC_TEST(LiveMap, BoundedPreserveProductRepairsCurrentFace)
+{
+    GcHeapFixture fx;
+    RegionInfo* region = fx.region0;
+    region->SetRegionType(RegionInfo::RegionType::UNMOVABLE_FROM_REGION);
+    LiveInfo* live = fx.PlantLiveInfo(region);
+    RegionBitmap* bitmap = fx.PlantMarkBitmap(live, region->GetRegionSize());
+    const size_t offset = region->GetAddressOffset(reinterpret_cast<MAddress>(fx.obj0));
+    (void)bitmap->MarkBits(offset, fx.obj0->GetSize(), region->GetRegionSize());
+
+    ProductPreserveRetainedUpToFn()(region, region->GetRegionAllocPtr());
+
+    GC_EXPECT_EQ(static_cast<unsigned>(region->GetRetainedLiveInfoState()),
+                 static_cast<unsigned>(RegionInfo::RetainedLiveInfoState::SNAPSHOT_VALID));
+    GC_EXPECT_TRUE(region->HasRetainedMarkWords());
+    GC_EXPECT_TRUE(region->RetainedMarkWordsSay(offset));
+    GC_EXPECT_EQ(region->GetRetainedLiveInfoCoveredUpTo(), region->GetRegionAllocPtr());
+    region->FreeRetainedMarkWords();
+    region->metadata.liveInfo = nullptr;
+    fx.FreePlanted(live);
+}
+
+// If the current LiveInfo has already been unbound, forwarding's from-page
+// carrier is the second repair source.  The retained owned copy must contain
+// the same marked holder before the hard postcondition is checked.
+GC_TEST(LiveMap, BoundedPreserveProductRepairsFromPageFace)
+{
+    GcHeapFixture fx;
+    RegionInfo* region = fx.region0;
+    region->SetRegionType(RegionInfo::RegionType::FROM_REGION);
+    LiveInfo* live = fx.PlantLiveInfo(region);
+    RegionBitmap* bitmap = fx.PlantMarkBitmap<Generation::Old>(live, region->GetRegionSize());
+    const size_t offset = region->GetAddressOffset(reinterpret_cast<MAddress>(fx.obj0));
+    (void)bitmap->MarkBits(offset, fx.obj0->GetSize(), region->GetRegionSize());
+    region->PublishFromPageMetadata(region->GetMarkView<Generation::Old>());
+    region->CheckAndClearLiveInfo(live);
+    GC_EXPECT_TRUE(region->GetLiveInfo() == nullptr);
+    GC_EXPECT_TRUE(region->HasFromPageMetadata());
+
+    ProductPreserveRetainedUpToFn()(region, region->GetRegionAllocPtr());
+
+    GC_EXPECT_EQ(static_cast<unsigned>(region->GetRetainedLiveInfoState()),
+                 static_cast<unsigned>(RegionInfo::RetainedLiveInfoState::SNAPSHOT_VALID));
+    GC_EXPECT_TRUE(region->HasRetainedMarkWords());
+    GC_EXPECT_TRUE(region->RetainedMarkWordsSay(offset));
+    region->RetireFromPageMetadata();
+    region->FreeRetainedMarkWords();
+    fx.FreePlanted(live);
 }
 
 // Positive control: first publish a valid snapshot, then clear/unbind its
@@ -351,8 +412,8 @@ GC_TEST(LiveMap, ExaminedPageWithoutSnapshotStillAborts)
     pid_t pid = fork();
     GC_EXPECT_TRUE(pid >= 0);
     if (pid == 0) {
-        region->PreserveRetainedLiveInfoUpTo(
-            std::min(region->GetCensusBoundary(), region->GetRegionAllocPtr()));
+        ProductPreserveRetainedUpToFn()(
+            region, std::min(region->GetCensusBoundary(), region->GetRegionAllocPtr()));
         _exit(0);
     }
     int status = 0;
@@ -362,11 +423,10 @@ GC_TEST(LiveMap, ExaminedPageWithoutSnapshotStillAborts)
     fx.FreePlanted(live);
 }
 
-// Owned-copy positive arm: CheckAndClearLiveInfo deliberately returns early
-// while the private bitmap still carries the valid snapshot.  The following
-// bounded Preserve replaces that owned carrier, finds no current LiveInfo,
-// and must derive LOST from the monotonic ever-preserved bit.
-GC_TEST(LiveMap, OwnedCopyExaminedPageWithoutSnapshotStillAborts)
+// If neither borrowed face remains, a private copy that already covers the
+// requested boundary is the third repair source. The product entry must retain
+// that carrier instead of destroying it and converting a repairable page to LOST.
+GC_TEST(LiveMap, BoundedPreserveProductRepairsOwnedCopy)
 {
     GcHeapFixture fx;
     RegionInfo* region = fx.region0;
@@ -385,18 +445,13 @@ GC_TEST(LiveMap, OwnedCopyExaminedPageWithoutSnapshotStillAborts)
     GC_EXPECT_TRUE(region->HasRetainedMarkWords());
     GC_EXPECT_EQ(static_cast<unsigned>(region->GetRetainedLiveInfoState()),
                  static_cast<unsigned>(RegionInfo::RetainedLiveInfoState::SNAPSHOT_VALID));
-    region->AddLiveByteCount(64);
-    pid_t pid = fork();
-    GC_EXPECT_TRUE(pid >= 0);
-    if (pid == 0) {
-        region->PreserveRetainedLiveInfoUpTo(
-            std::min(region->GetCensusBoundary(), region->GetRegionAllocPtr()));
-        _exit(0);
-    }
-    int status = 0;
-    GC_EXPECT_TRUE(waitpid(pid, &status, 0) == pid);
-    GC_EXPECT_TRUE(WIFSIGNALED(status));
-    GC_EXPECT_EQ(WTERMSIG(status), SIGABRT);
+    const MAddress covered = region->GetRetainedLiveInfoCoveredUpTo();
+    ProductPreserveRetainedUpToFn()(region, covered);
+    GC_EXPECT_TRUE(region->HasRetainedMarkWords());
+    GC_EXPECT_TRUE(region->RetainedMarkWordsSay(0));
+    GC_EXPECT_EQ(static_cast<unsigned>(region->GetRetainedLiveInfoState()),
+                 static_cast<unsigned>(RegionInfo::RetainedLiveInfoState::SNAPSHOT_VALID));
+    GC_EXPECT_EQ(region->GetRetainedLiveInfoCoveredUpTo(), covered);
     region->FreeRetainedMarkWords();
     fx.FreePlanted(live);
 }
