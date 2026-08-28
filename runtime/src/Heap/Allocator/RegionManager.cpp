@@ -1897,16 +1897,6 @@ RegionInfo* RegionManager::TakeRegion(size_t num, RegionInfo::UnitRole type, boo
         if (kGcTriggerAllocRateEnabled && !kGcTriggerPinYoung32MB) {
             youngRegionTriggerBytes = gcStats.youngTriggerBytes.load(std::memory_order_acquire);
         }
-        // genperf: default-off arm B — raise young trigger out of reach so minor never fires;
-        // barriers/remset still run. Unset must match product path bit-for-bit.
-        // gchot: TakeRegion is alloc-hot; cache once (genperf sets env at process start).
-        static const bool disableMinor = []() {
-            const char* disableMinorEnv = std::getenv("MRT_GCV2_DISABLE_MINOR");
-            return disableMinorEnv != nullptr && std::strcmp(disableMinorEnv, "1") == 0;
-        }();
-        if (disableMinor) {
-            youngRegionTriggerBytes = std::numeric_limits<size_t>::max();
-        }
         size_t youngAllocated = GetYoungAllocatedSize();
         size_t allocated = Heap::GetHeap().GetAllocator().AllocatedBytes();
         // Occupancy young stays on the latched line (survival). Director uses the
@@ -1914,7 +1904,7 @@ RegionInfo* RegionManager::TakeRegion(size_t num, RegionInfo::UnitRole type, boo
         // (12-wave NW). zDirector.cpp:296-306 / :331-381.
         const size_t directorMinorBytes = kGcTriggerYoungFixedBytes;
         bool requested = false;
-        if (kGcTriggerAllocRateEnabled && !disableMinor) {
+        if (kGcTriggerAllocRateEnabled) {
             MutatorAllocRateStats rate = MutatorAllocRate::stats();
             const uint64_t nowNs = TimeUtil::NanoSeconds();
             const uint64_t prevFinish = GCStats::GetPrevGCFinishTime();
