@@ -238,6 +238,7 @@ public:
         return epochHandshakeActive.load(std::memory_order_acquire) != 0;
     }
 #if defined(MRT_TESTABLE_INTERNALS)
+    void SetRuntimeMutatorLifecycleOnlyForTest(bool enabled);
     uint64_t BeginEpochHandshakeLifecycleTest();
     void EndEpochHandshakeLifecycleTest();
     size_t RuntimeMutatorRegistrySizeForTest();

@@ -25,6 +25,9 @@
 namespace MapleRuntime {
 namespace {
 thread_local bool inEpochHandshake = false;
+#if defined(MRT_TESTABLE_INTERNALS)
+thread_local bool runtimeMutatorLifecycleOnlyForTest = false;
+#endif
 
 uint64_t GetEpochHandshakeTimeoutMillis()
 {
@@ -271,7 +274,7 @@ Mutator* MutatorManager::CreateRuntimeMutator(ThreadType threadType)
     // The lifecycle contract tests run without a scheduler-owned managed frame.
     // Stop after the real registration/born-clean path; product builds do not
     // contain this branch and all normal runtime mutators still enter managed code.
-    if (std::getenv("MRT_GC_UNIT_RUNTIME_MUTATOR_LIFECYCLE_ONLY") != nullptr) {
+    if (runtimeMutatorLifecycleOnlyForTest) {
         return mutator;
     }
 #endif
@@ -413,6 +416,11 @@ void MutatorManager::RecordEpochHandshakeExitTransition()
 }
 
 #if defined(MRT_TESTABLE_INTERNALS)
+void MutatorManager::SetRuntimeMutatorLifecycleOnlyForTest(bool enabled)
+{
+    runtimeMutatorLifecycleOnlyForTest = enabled;
+}
+
 uint64_t MutatorManager::BeginEpochHandshakeLifecycleTest()
 {
     CHECK_DETAIL(!EpochHandshakeActive(), "nested lifecycle test epoch");
@@ -726,15 +734,17 @@ void MutatorManager::VisitAllMutators(MutatorVisitor func)
         }
 #endif
     }
-    Mutator* mutator = Heap::GetHeap().GetFinalizerProcessor().GetMutator();
-    if (mutator != nullptr) {
-        visitOnce(*mutator);
-    }
 }
 
 void MutatorManager::VisitAllMutatorsExceptFinalizer(MutatorVisitor func)
 {
-    ScheduleAllCJThreadVisitMutator(VisitMuatorHelper, &func);
+    Mutator* finalizerMutator = Heap::GetHeap().GetFinalizerProcessor().GetMutator();
+    MutatorVisitor visitExceptFinalizer = [&func, finalizerMutator](Mutator& mutator) {
+        if (&mutator != finalizerMutator) {
+            func(mutator);
+        }
+    };
+    ScheduleAllCJThreadVisitMutator(VisitMuatorHelper, &visitExceptFinalizer);
 }
 
 void MutatorManager::StopTheWorld(bool syncGCPhase, GCPhase phase)

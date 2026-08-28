@@ -298,7 +298,7 @@ GC_OTHER_VM_TEST(YoungConc, RuntimeMutatorCreateDuringActiveEpochIsBornClean)
     MRT_CjRuntimeInit();
     MutatorManager& manager = MutatorManager::Instance();
     Heap::GetHeap().SetGCPhase(GCPhase::GC_PHASE_ENUM);
-    GC_EXPECT_EQ(setenv("MRT_GC_UNIT_RUNTIME_MUTATOR_LIFECYCLE_ONLY", "1", 1), 0);
+    manager.SetRuntimeMutatorLifecycleOnlyForTest(true);
     std::fprintf(stderr, "DETAIL runtime_lifecycle_create stage=before_begin\n");
     const uint64_t epoch = manager.BeginEpochHandshakeLifecycleTest();
     std::fprintf(stderr, "DETAIL runtime_lifecycle_create stage=before_create epoch=%zu\n",
@@ -311,7 +311,7 @@ GC_OTHER_VM_TEST(YoungConc, RuntimeMutatorCreateDuringActiveEpochIsBornClean)
     manager.DestroyRuntimeMutator(ThreadType::HOT_UPDATE_THREAD);
     std::fprintf(stderr, "DETAIL runtime_lifecycle_create stage=after_destroy\n");
     manager.EndEpochHandshakeLifecycleTest();
-    GC_EXPECT_EQ(unsetenv("MRT_GC_UNIT_RUNTIME_MUTATOR_LIFECYCLE_ONLY"), 0);
+    manager.SetRuntimeMutatorLifecycleOnlyForTest(false);
     Heap::GetHeap().SetGCPhase(GCPhase::GC_PHASE_IDLE);
 }
 
@@ -321,7 +321,7 @@ GC_OTHER_VM_TEST(YoungConc, RuntimeMutatorDestroyDuringActiveEpochDefersStorage)
     MRT_CjRuntimeInit();
     MutatorManager& manager = MutatorManager::Instance();
     Heap::GetHeap().SetGCPhase(GCPhase::GC_PHASE_ENUM);
-    GC_EXPECT_EQ(setenv("MRT_GC_UNIT_RUNTIME_MUTATOR_LIFECYCLE_ONLY", "1", 1), 0);
+    manager.SetRuntimeMutatorLifecycleOnlyForTest(true);
     std::fprintf(stderr, "DETAIL runtime_lifecycle_destroy stage=before_begin\n");
     (void)manager.BeginEpochHandshakeLifecycleTest();
     std::fprintf(stderr, "DETAIL runtime_lifecycle_destroy stage=before_create\n");
@@ -333,7 +333,7 @@ GC_OTHER_VM_TEST(YoungConc, RuntimeMutatorDestroyDuringActiveEpochDefersStorage)
     GC_EXPECT_EQ(manager.RuntimeMutatorRegistrySizeForTest(), 0u);
     GC_EXPECT_EQ(manager.EpochHandshakeDestroyDeferredForTest(), 1u);
     manager.EndEpochHandshakeLifecycleTest();
-    GC_EXPECT_EQ(unsetenv("MRT_GC_UNIT_RUNTIME_MUTATOR_LIFECYCLE_ONLY"), 0);
+    manager.SetRuntimeMutatorLifecycleOnlyForTest(false);
     Heap::GetHeap().SetGCPhase(GCPhase::GC_PHASE_IDLE);
 }
 
@@ -348,14 +348,15 @@ GC_OTHER_VM_TEST(YoungConc, RuntimeMutatorActiveEpochCreateDestroyInterleavingIs
     MRT_CjRuntimeInit();
     MutatorManager& manager = MutatorManager::Instance();
     Heap::GetHeap().SetGCPhase(GCPhase::GC_PHASE_ENUM);
-    GC_EXPECT_EQ(setenv("MRT_GC_UNIT_RUNTIME_MUTATOR_LIFECYCLE_ONLY", "1", 1), 0);
     const uint64_t epoch = manager.BeginEpochHandshakeLifecycleTest();
     std::atomic<bool> created{ false };
     std::atomic<bool> finished{ false };
     std::thread worker([&]() {
+        manager.SetRuntimeMutatorLifecycleOnlyForTest(true);
         Mutator* mutator = manager.CreateRuntimeMutator(ThreadType::HOT_UPDATE_THREAD);
         created.store(mutator != nullptr && mutator->FinishedEpochHandshake(epoch), std::memory_order_release);
         manager.DestroyRuntimeMutator(ThreadType::HOT_UPDATE_THREAD);
+        manager.SetRuntimeMutatorLifecycleOnlyForTest(false);
         finished.store(true, std::memory_order_release);
     });
     while (!created.load(std::memory_order_acquire)) {
@@ -368,7 +369,6 @@ GC_OTHER_VM_TEST(YoungConc, RuntimeMutatorActiveEpochCreateDestroyInterleavingIs
     GC_EXPECT_EQ(manager.RuntimeMutatorRegistrySizeForTest(), 0u);
     GC_EXPECT_TRUE(manager.EpochHandshakeDestroyDeferredForTest() >= 1u);
     manager.EndEpochHandshakeLifecycleTest();
-    GC_EXPECT_EQ(unsetenv("MRT_GC_UNIT_RUNTIME_MUTATOR_LIFECYCLE_ONLY"), 0);
     Heap::GetHeap().SetGCPhase(GCPhase::GC_PHASE_IDLE);
 }
 
@@ -378,16 +378,17 @@ GC_OTHER_VM_TEST(YoungConc, RuntimeMutatorDestroyInactiveCheckCannotCrossEpochPu
     MRT_CjRuntimeInit();
     MutatorManager& manager = MutatorManager::Instance();
     Heap::GetHeap().SetGCPhase(GCPhase::GC_PHASE_ENUM);
-    GC_EXPECT_EQ(setenv("MRT_GC_UNIT_RUNTIME_MUTATOR_LIFECYCLE_ONLY", "1", 1), 0);
 
     std::atomic<bool> ready{ false };
     std::atomic<Mutator*> victim{ nullptr };
     manager.ArmDestroyMutatorInterleavingForTest();
     std::thread destroyer([&]() {
+        manager.SetRuntimeMutatorLifecycleOnlyForTest(true);
         Mutator* mutator = manager.CreateRuntimeMutator(ThreadType::HOT_UPDATE_THREAD);
         victim.store(mutator, std::memory_order_release);
         ready.store(true, std::memory_order_release);
         manager.DestroyRuntimeMutator(ThreadType::HOT_UPDATE_THREAD);
+        manager.SetRuntimeMutatorLifecycleOnlyForTest(false);
     });
     while (!ready.load(std::memory_order_acquire)) {
         (void)sched_yield();
@@ -419,7 +420,6 @@ GC_OTHER_VM_TEST(YoungConc, RuntimeMutatorDestroyInactiveCheckCannotCrossEpochPu
                  static_cast<void*>(victim.load()));
     GC_EXPECT_FALSE(crossed);
     manager.EndEpochHandshakeLifecycleTest();
-    GC_EXPECT_EQ(unsetenv("MRT_GC_UNIT_RUNTIME_MUTATOR_LIFECYCLE_ONLY"), 0);
     Heap::GetHeap().SetGCPhase(GCPhase::GC_PHASE_IDLE);
 }
 
@@ -458,7 +458,6 @@ GC_OTHER_VM_TEST(YoungConc, ForcedEpochHandshakeCoversAllParticipantSources)
 
     ParticipantLoadContext foreign;
     std::thread foreignThread([&]() {
-        CleanThreadLocalData cleaner;
         std::fprintf(stderr, "DETAIL four_source foreign_before_attach\n");
         const bool attached = MRT_NewForeignCJThread();
         std::fprintf(stderr, "DETAIL four_source foreign_after_attach=%d\n", attached ? 1 : 0);
@@ -479,9 +478,8 @@ GC_OTHER_VM_TEST(YoungConc, ForcedEpochHandshakeCoversAllParticipantSources)
 
     ParticipantLoadContext runtime;
     std::thread runtimeThread([&]() {
-        CleanThreadLocalData cleaner;
         std::fprintf(stderr, "DETAIL four_source runtime_before_create\n");
-        (void)setenv("MRT_GC_UNIT_RUNTIME_MUTATOR_LIFECYCLE_ONLY", "1", 1);
+        manager.SetRuntimeMutatorLifecycleOnlyForTest(true);
         Mutator* mutator = manager.CreateRuntimeMutator(ThreadType::HOT_UPDATE_THREAD);
         std::fprintf(stderr, "DETAIL four_source runtime_after_create=%p\n", static_cast<void*>(mutator));
         runtime.mutator.store(mutator, std::memory_order_release);
@@ -492,26 +490,18 @@ GC_OTHER_VM_TEST(YoungConc, ForcedEpochHandshakeCoversAllParticipantSources)
         }
         (void)mutator->LeaveSaferegion();
         manager.DestroyRuntimeMutator(ThreadType::HOT_UPDATE_THREAD);
-        (void)unsetenv("MRT_GC_UNIT_RUNTIME_MUTATOR_LIFECYCLE_ONLY");
+        manager.SetRuntimeMutatorLifecycleOnlyForTest(false);
     });
 
     ParticipantLoadContext finalizer;
     std::thread finalizerThread([&]() {
-        CleanThreadLocalData cleaner;
         std::fprintf(stderr, "DETAIL four_source finalizer_before_create\n");
-        Mutator* finalizerParticipant = manager.CreateRuntimeMutator(ThreadType::FP_THREAD);
-        manager.RegisterMutatorForTest(finalizerParticipant);
-        Heap::GetHeap().GetFinalizerProcessor().InitFinalizerCJThread();
-        void* handle = ThreadLocal::GetForeignCJThread();
+        void* handle = NewFinalizerCJThread();
         std::fprintf(stderr, "DETAIL four_source finalizer_after_create=%p\n", handle);
         Mutator* mutator = ThreadLocal::GetMutator();
-        // The finalizer processor owns the participant that the handshake
-        // roster visits; keep the lifecycle thread mutator alive while using
-        // that processor-owned pointer for participant attribution.
-        Mutator* participant = Heap::GetHeap().GetFinalizerProcessor().GetMutator();
         std::fprintf(stderr, "DETAIL four_source finalizer_thread_mutator=%p finalizer_participant=%p\n",
-                     static_cast<void*>(mutator), static_cast<void*>(participant));
-        finalizer.mutator.store(finalizerParticipant, std::memory_order_release);
+                     static_cast<void*>(mutator), static_cast<void*>(mutator));
+        finalizer.mutator.store(mutator, std::memory_order_release);
         if (handle != nullptr && mutator != nullptr) {
             (void)mutator->EnterSaferegion(true);
             finalizer.ready.store(true, std::memory_order_release);
@@ -520,7 +510,6 @@ GC_OTHER_VM_TEST(YoungConc, ForcedEpochHandshakeCoversAllParticipantSources)
             }
             (void)mutator->LeaveSaferegion();
             EndFinalizerCJThread();
-            manager.UnregisterMutatorForTest(finalizerParticipant);
         } else {
             finalizer.ready.store(true, std::memory_order_release);
         }
@@ -536,7 +525,6 @@ GC_OTHER_VM_TEST(YoungConc, ForcedEpochHandshakeCoversAllParticipantSources)
     Mutator* foreignMutator = foreign.mutator.load(std::memory_order_acquire);
     Mutator* runtimeMutator = runtime.mutator.load(std::memory_order_acquire);
     Mutator* finalizerMutator = finalizer.mutator.load(std::memory_order_acquire);
-    manager.RegisterMutatorForTest(finalizerMutator);
     GC_EXPECT_TRUE(ordinaryMutator != nullptr);
     GC_EXPECT_TRUE(foreignMutator != nullptr);
     GC_EXPECT_TRUE(runtimeMutator != nullptr);
@@ -557,16 +545,19 @@ GC_OTHER_VM_TEST(YoungConc, ForcedEpochHandshakeCoversAllParticipantSources)
     GC_EXPECT_TRUE(manager.EpochHandshakeWasLastParticipantForTest(runtimeMutator));
     GC_EXPECT_TRUE(manager.EpochHandshakeWasLastParticipantForTest(finalizerMutator));
 
+    // The invariant under test ends with the participant receipt above. Tear the four
+    // schedulers down one at a time so this roster test does not also become a concurrent
+    // sub-scheduler-destruction test.
     ordinary.release.store(true, std::memory_order_release);
-    foreign.release.store(true, std::memory_order_release);
-    runtime.release.store(true, std::memory_order_release);
-    finalizer.release.store(true, std::memory_order_release);
-    foreignThread.join();
-    runtimeThread.join();
-    finalizerThread.join();
     void* ordinaryResult = nullptr;
     GC_EXPECT_EQ(GetTaskRet(ordinaryHandle, &ordinaryResult), E_OK);
     ReleaseHandle(ordinaryHandle);
+    foreign.release.store(true, std::memory_order_release);
+    foreignThread.join();
+    runtime.release.store(true, std::memory_order_release);
+    runtimeThread.join();
+    finalizer.release.store(true, std::memory_order_release);
+    finalizerThread.join();
     Heap::GetHeap().SetGCPhase(GCPhase::GC_PHASE_IDLE);
 }
 
@@ -576,7 +567,7 @@ GC_OTHER_VM_TEST(YoungConc, ForcedEpochHandshakeReportsPositiveRequested)
     MRT_CjRuntimeInit();
     MutatorManager& manager = MutatorManager::Instance();
     Heap::GetHeap().SetGCPhase(GCPhase::GC_PHASE_ENUM);
-    GC_EXPECT_EQ(setenv("MRT_GC_UNIT_RUNTIME_MUTATOR_LIFECYCLE_ONLY", "1", 1), 0);
+    manager.SetRuntimeMutatorLifecycleOnlyForTest(true);
     Mutator* mutator = manager.CreateRuntimeMutator(ThreadType::HOT_UPDATE_THREAD);
     GC_EXPECT_TRUE(mutator != nullptr);
     (void)mutator->EnterSaferegion(true);
@@ -588,7 +579,7 @@ GC_OTHER_VM_TEST(YoungConc, ForcedEpochHandshakeReportsPositiveRequested)
     GC_EXPECT_TRUE(stats.requested > 0);
     GC_EXPECT_EQ(stats.stackScanned + stats.stackFallback, stats.requested);
     manager.DestroyRuntimeMutator(ThreadType::HOT_UPDATE_THREAD);
-    GC_EXPECT_EQ(unsetenv("MRT_GC_UNIT_RUNTIME_MUTATOR_LIFECYCLE_ONLY"), 0);
+    manager.SetRuntimeMutatorLifecycleOnlyForTest(false);
 }
 
 GC_OTHER_VM_TEST(YoungConc, FinalizerCreateDuringActiveEpochIsBornClean)
