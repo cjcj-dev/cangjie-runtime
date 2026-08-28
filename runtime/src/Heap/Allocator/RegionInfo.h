@@ -838,7 +838,8 @@ public:
         return IsRetainedLifeCurrent() && metadata.retainedMarkWords != nullptr;
     }
 
-    // Same indexing as RegionBitmap::IsMarked.
+    // Same paired-bit indexing as RegionBitmap::IsLive. Retained words answer
+    // liveness, so they read the low bit of each live/strong pair.
     bool RetainedMarkWordsSay(size_t offset) const
     {
         if (!IsRetainedLifeCurrent()) {
@@ -847,7 +848,7 @@ public:
         if (metadata.retainedMarkWords == nullptr) {
             return false;
         }
-        size_t bitIdx = offset / kMarkedBytesPerBit;
+        size_t bitIdx = 2 * (offset / kMarkedBytesPerBit);
         size_t wordIdx = bitIdx / kBitsPerWord;
         if (wordIdx >= metadata.retainedMarkWordCnt) {
             return false;

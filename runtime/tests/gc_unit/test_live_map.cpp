@@ -193,6 +193,86 @@ GC_TEST(ZLiveMapPort, DuplicateSatbPublicationConvergesAtStrongMark)
     fx.FreePlanted(live);
 }
 
+// The sequential duplicate-publication test above proves idempotence, but it
+// cannot distinguish one atomic RMW from a load followed by a store.  Start two
+// workers at the same call boundary on every round and let the scheduler decide
+// whether their product operations overlap.  The window is real but is not
+// forced inside MarkBits: a faulty non-atomic implementation therefore has many
+// opportunities to expose two 0->1 strong receipts, while the atomic product
+// must have exactly one winner on every round.
+GC_TEST(ZLiveMapPort, ConcurrentDuplicateSatbPublicationHasOneStrongReceipt)
+{
+    constexpr size_t kPageSize = 4096;
+    constexpr size_t kRounds = 20000;
+    constexpr size_t kObjectOffset = 64;
+    RegionBitmap* bitmap = GcHeapFixture::AllocPlantedBitmap(kPageSize);
+    const size_t words = bitmap->wordCnt.load(std::memory_order_relaxed);
+
+    std::atomic<size_t> phase{ 0 };
+    std::atomic<size_t> arrived{ 0 };
+    std::atomic<size_t> completed{ 0 };
+    std::atomic<bool> already[2];
+    std::atomic<bool> incLive[2];
+
+    auto publish = [&](size_t worker) {
+        for (size_t round = 1; round <= kRounds; ++round) {
+            while (phase.load(std::memory_order_acquire) < round) {
+                std::this_thread::yield();
+            }
+            arrived.fetch_add(1, std::memory_order_acq_rel);
+            while (arrived.load(std::memory_order_acquire) < 2 * round) {
+                std::this_thread::yield();
+            }
+            bool localIncLive = false;
+            const bool localAlready = bitmap->MarkBits(kObjectOffset, 8, kPageSize, localIncLive);
+            already[worker].store(localAlready, std::memory_order_relaxed);
+            incLive[worker].store(localIncLive, std::memory_order_relaxed);
+            completed.fetch_add(1, std::memory_order_release);
+        }
+    };
+
+    std::thread first(publish, 0);
+    std::thread second(publish, 1);
+    JoinGuard firstGuard(first);
+    JoinGuard secondGuard(second);
+    size_t duplicateReceiptRounds = 0;
+    size_t duplicateIncLiveRounds = 0;
+    size_t doubleLiveBytesRounds = 0;
+    for (size_t round = 1; round <= kRounds; ++round) {
+        bitmap->liveBytes.store(0, std::memory_order_relaxed);
+        for (auto& part : bitmap->partLiveBytes) {
+            part.store(0, std::memory_order_relaxed);
+        }
+        for (size_t idx = 0; idx < words; ++idx) {
+            bitmap->markWords[idx].store(0, std::memory_order_relaxed);
+        }
+
+        phase.store(round, std::memory_order_release);
+        while (completed.load(std::memory_order_acquire) < 2 * round) {
+            std::this_thread::yield();
+        }
+
+        const size_t receiptClaims = static_cast<size_t>(!already[0].load(std::memory_order_relaxed)) +
+            static_cast<size_t>(!already[1].load(std::memory_order_relaxed));
+        const size_t incLiveClaims = static_cast<size_t>(incLive[0].load(std::memory_order_relaxed)) +
+            static_cast<size_t>(incLive[1].load(std::memory_order_relaxed));
+        duplicateReceiptRounds += receiptClaims != 1 ? 1 : 0;
+        duplicateIncLiveRounds += incLiveClaims != 1 ? 1 : 0;
+        doubleLiveBytesRounds += bitmap->GetLiveBytes() != static_cast<size_t>(8) ? 1 : 0;
+    }
+    first.join();
+    second.join();
+
+    std::fprintf(stderr,
+                 "DETAIL concurrent_duplicate rounds=%zu duplicate_receipt=%zu duplicate_inc_live=%zu "
+                 "double_live_bytes=%zu\n",
+                 kRounds, duplicateReceiptRounds, duplicateIncLiveRounds, doubleLiveBytesRounds);
+    GC_EXPECT_EQ(duplicateReceiptRounds, static_cast<size_t>(0));
+    GC_EXPECT_EQ(duplicateIncLiveRounds, static_cast<size_t>(0));
+    GC_EXPECT_EQ(doubleLiveBytesRounds, static_cast<size_t>(0));
+    GcHeapFixture::FreePlantedBitmap(bitmap);
+}
+
 // U4: product mark then IsSurvivedObject.
 GC_TEST(LiveMap, MarkAndSurvive)
 {
