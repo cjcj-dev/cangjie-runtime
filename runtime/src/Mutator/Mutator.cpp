@@ -770,10 +770,9 @@ intptr_t Mutator::FixExtendedStack(intptr_t frameBase, uint32_t adjustedSize, vo
         } else {
             UnwindContext& stackGrowContext = Mutator::GetMutator()->GetUnwindContext();
             UnwindContext caller;
-            // This caller computation is the second stack-growth unwind
-            // consumer.  Keep the same before/after ordering as the full
-            // StackGrowStackInfo walk so an unscanned caller is handled before
-            // its frame address is used for stack relocation.
+            // This caller computation is the stack-growth unwind consumer that
+            // publishes a managed caller for continued execution. Protect an
+            // unscanned caller before its frame address is used for relocation.
             const size_t exposingFrameIndex = stackWatermark.GetCursorIndex();
             StackExposureHook::OnBeforeUnwind(*this, exposingFrameIndex);
 #ifdef _WIN64
