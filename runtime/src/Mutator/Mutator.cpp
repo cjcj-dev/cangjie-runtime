@@ -28,6 +28,7 @@
 #include "MutatorManager.h"
 #include "StackManager.h"
 #include "UnwindStack/StackFrameCursor.h"
+#include "UnwindStack/StackExposureHook.h"
 #include "ExceptionManager.h"
 #include "schedule.h"
 #ifdef _WIN64
@@ -769,12 +770,19 @@ intptr_t Mutator::FixExtendedStack(intptr_t frameBase, uint32_t adjustedSize, vo
         } else {
             UnwindContext& stackGrowContext = Mutator::GetMutator()->GetUnwindContext();
             UnwindContext caller;
+            // This caller computation is the second stack-growth unwind
+            // consumer.  Keep the same before/after ordering as the full
+            // StackGrowStackInfo walk so an unscanned caller is handled before
+            // its frame address is used for stack relocation.
+            const size_t exposingFrameIndex = stackWatermark.GetCursorIndex();
+            StackExposureHook::OnBeforeUnwind(*this, exposingFrameIndex);
 #ifdef _WIN64
             UnwindContextStatus ucs = stackGrowContext.GetUnwindContextStatus();
             stackGrowContext.frameInfo.mFrame.UnwindToCallerMachineFrame(caller.frameInfo, ucs);
 #else
             stackGrowContext.frameInfo.mFrame.UnwindToCallerMachineFrame(caller.frameInfo.mFrame);
 #endif
+            StackExposureHook::OnAfterUnwind(*this, exposingFrameIndex);
             caller.frameInfo.ResolveProcInfo();
             ElfUnloadQuiescence::ReadScope metadataReader;
 #ifdef __APPLE__

@@ -16,6 +16,8 @@
 
 namespace MapleRuntime {
 
+class Mutator;
+
 // Frame exposure hooks (stackwm #5).
 //
 // OpenJDK correspondence (ref 5b2d6991 stackWatermark.inline.hpp):
@@ -36,8 +38,8 @@ namespace MapleRuntime {
 //   A frame at index F may be exposed only if watermark.cursorIndex > F
 //   (exclusive end of processed range covers F), or phase is DONE / not active.
 //
-// Default product path: hooks are no-ops unless MRT_GCV2_STACK_EXPOSURE_HOOK=1.
-// Structural CHECKs / counters need MRT_GCV2_STACK_EXPOSURE_VERIFY=1.
+// Product wiring is unconditional. Structural CHECKs / counters remain
+// diagnostic and use MRT_GCV2_STACK_EXPOSURE_VERIFY=1.
 class StackExposureHook {
 public:
     // processFn(wm, needUpToExclusive) must process frames so that after return
@@ -57,14 +59,20 @@ public:
     // OpenJDK after_unwind: top frame just became current; ensure it is safe.
     static bool OnAfterUnwind(StackWatermark& wm, size_t topFrameIndex, const ProcessFn& processFn);
 
+    // Product entry points.  These bind the hook to the current mutator's
+    // watermark and deliberately use the SELF owner only; GC-owned scans are
+    // completed by the GC consumer and must not be advanced by the mutator.
+    static bool OnBeforeUnwind(Mutator& mutator, size_t exposingFrameIndex);
+    static bool OnAfterUnwind(Mutator& mutator, size_t topFrameIndex);
+
     // Empty process: records fire but does not advance watermark (positive control for ②).
     static size_t NoopProcess(StackWatermark& wm, size_t needUpToExclusive);
 
     // Default process for structural tests: AdvanceTo(needUpToExclusive) under SELF owner.
     static size_t AdvanceOnlyProcess(StackWatermark& wm, size_t needUpToExclusive);
 
-    // Gates (default off).
-    static bool ProductEnabled(); // MRT_GCV2_STACK_EXPOSURE_HOOK=1
+    // Product wiring is always enabled; only diagnostics are gated.
+    static bool ProductEnabled();
     static bool VerifyEnabled();  // MRT_GCV2_STACK_EXPOSURE_VERIFY=1
 
     // Counters (verify / harness).

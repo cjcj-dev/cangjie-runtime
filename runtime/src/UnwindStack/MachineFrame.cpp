@@ -181,6 +181,10 @@ bool MachineFrame::UnwindToCallerMachineFrame(FrameInfo& caller, UnwindContextSt
 
 bool MachineFrame::UnwindToCallerMachineFrame(MachineFrame& caller) const
 {
+    // The caller frame is published to the runtime immediately after this
+    // primitive returns.  Product callers that can expose it (stack growth)
+    // bracket this operation with StackExposureHook before/after checks,
+    // matching ZGC stackWatermark.inline.hpp:86-125 ordering.
     FrameAddress* curFp = this->fa; // backup current frame address
     FrameAddress* callerFp = curFp->callerFrameAddress;
     caller.fa = callerFp;

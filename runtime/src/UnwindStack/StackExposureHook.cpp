@@ -10,6 +10,7 @@
 #include <cstring>
 
 #include "Base/Log.h"
+#include "Mutator/Mutator.h"
 
 namespace MapleRuntime {
 namespace {
@@ -30,8 +31,9 @@ bool EnvIsOne(const char* name)
 
 bool StackExposureHook::ProductEnabled()
 {
-    static const bool on = false /* pinned:MRT_GCV2_STACK_EXPOSURE_HOOK */;
-    return on;
+    // Correctness hook: product wiring is unconditional.  Verification is
+    // separately controlled by MRT_GCV2_STACK_EXPOSURE_VERIFY.
+    return true;
 }
 
 bool StackExposureHook::VerifyEnabled()
@@ -118,14 +120,32 @@ bool StackExposureHook::RunSlowPath(StackWatermark& wm, size_t exposingFrameInde
 
 bool StackExposureHook::OnBeforeUnwind(StackWatermark& wm, size_t exposingFrameIndex, const ProcessFn& processFn)
 {
-    // Product gate: when hook product flag is off, still allow verify/harness callers
-    // that pass processFn explicitly — ProductEnabled only gates auto-wired product paths.
+    // Product wiring is unconditional; callers provide the processing policy
+    // (the product overload binds it to the mutator watermark).
     return RunSlowPath(wm, exposingFrameIndex, processFn, "before_unwind");
 }
 
 bool StackExposureHook::OnAfterUnwind(StackWatermark& wm, size_t topFrameIndex, const ProcessFn& processFn)
 {
     return RunSlowPath(wm, topFrameIndex, processFn, "after_unwind");
+}
+
+bool StackExposureHook::OnBeforeUnwind(Mutator& mutator, size_t exposingFrameIndex)
+{
+    StackWatermark& wm = mutator.GetStackWatermark();
+    if (!wm.IsScanning() || wm.GetOwner() != StackWatermark::WM_OWNER_SELF) {
+        return false;
+    }
+    return OnBeforeUnwind(wm, exposingFrameIndex, ProcessFn(AdvanceOnlyProcess));
+}
+
+bool StackExposureHook::OnAfterUnwind(Mutator& mutator, size_t topFrameIndex)
+{
+    StackWatermark& wm = mutator.GetStackWatermark();
+    if (!wm.IsScanning() || wm.GetOwner() != StackWatermark::WM_OWNER_SELF) {
+        return false;
+    }
+    return OnAfterUnwind(wm, topFrameIndex, ProcessFn(AdvanceOnlyProcess));
 }
 
 bool StackExposureHook::ObserveCrossWithoutProcess(const StackWatermark& wm, size_t exposingFrameIndex)
