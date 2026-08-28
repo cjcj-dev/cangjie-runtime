@@ -5,8 +5,8 @@
 // See https://cangjie-lang.cn/pages/LICENSE for license information.
 
 // Eth: RegionBitmap geometry (JDK test_zBitMap shape, no GPL).
-// Anchors: LiveInfo.h RegionBitmap; RegionInfo.h nullroute bitCover=
-//   wordCnt * kMarkedBytesPerBit * kBitsPerWord (8 * 64 = 512 bytes/word).
+// Anchors: LiveInfo.h RegionBitmap; one pair word covers
+//   kRegionBytesPerWord = 32 * 8 = 256 bytes.
 // iorfix excluded bitCover OOB family from the route bug; this suite watches geometry.
 
 #include <cstdint>
@@ -87,9 +87,15 @@ GC_TEST(RegionBitmap, BitCoverMatchesRegionSize)
     LiveInfo* live = fx.PlantLiveInfo(fx.region0);
     RegionBitmap* bm = fx.PlantMarkBitmap(live, regionSize);
     size_t wordCnt = bm->wordCnt.load();
-    size_t bitCover = wordCnt * kMarkedBytesPerBit * kBitsPerWord;
-    // Geometry: mark words cover the whole region (iorfix OOB family).
+    size_t bitCover = wordCnt * RegionBitmap::kRegionBytesPerWord;
+    // Geometry: pair words cover the whole region (iorfix OOB family).
     GC_EXPECT_TRUE(bitCover >= regionSize);
+    GC_EXPECT_EQ(wordCnt, regionSize / RegionBitmap::kRegionBytesPerWord);
+    // Positive control for the geometry尺: a known one-half allocation must
+    // be rejected by this same pair invariant, so the old 512B/word formula
+    // cannot mask an under-allocation.
+    const size_t underAllocatedWords = wordCnt / 2;
+    GC_EXPECT_TRUE(underAllocatedWords * RegionBitmap::kRegionBytesPerWord < regionSize);
     // Last byte of region is in-range for IsMarked/MarkBits.
     size_t lastOff = regionSize - 8;
     GC_EXPECT_FALSE(bm->IsMarked(lastOff));
@@ -170,8 +176,9 @@ GC_TEST(RegionBitmap, NearEndOffsetsInCover)
     GC_EXPECT_TRUE(mem != nullptr);
     auto* bm = new (mem) RegionBitmap(kBig);
     size_t wordCnt = bm->wordCnt.load();
-    size_t bitCover = wordCnt * kMarkedBytesPerBit * kBitsPerWord;
+    size_t bitCover = wordCnt * RegionBitmap::kRegionBytesPerWord;
     GC_EXPECT_TRUE(bitCover >= kBig);
+    GC_EXPECT_EQ(wordCnt, kBig / RegionBitmap::kRegionBytesPerWord);
     for (size_t off : {size_t(65504), size_t(65520), size_t(65528)}) {
         if (off + 8 <= kBig) {
             GC_EXPECT_FALSE(bm->IsMarked(off));

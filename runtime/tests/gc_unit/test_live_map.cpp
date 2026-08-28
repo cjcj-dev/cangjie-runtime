@@ -206,7 +206,6 @@ GC_TEST(ZLiveMapPort, ConcurrentDuplicateSatbPublicationHasOneStrongReceipt)
     constexpr size_t kRounds = 20000;
     constexpr size_t kObjectOffset = 64;
     RegionBitmap* bitmap = GcHeapFixture::AllocPlantedBitmap(kPageSize);
-    const size_t words = bitmap->wordCnt.load(std::memory_order_relaxed);
 
     std::atomic<size_t> phase{ 0 };
     std::atomic<size_t> arrived{ 0 };
@@ -239,13 +238,7 @@ GC_TEST(ZLiveMapPort, ConcurrentDuplicateSatbPublicationHasOneStrongReceipt)
     size_t duplicateIncLiveRounds = 0;
     size_t doubleLiveBytesRounds = 0;
     for (size_t round = 1; round <= kRounds; ++round) {
-        bitmap->liveBytes.store(0, std::memory_order_relaxed);
-        for (auto& part : bitmap->partLiveBytes) {
-            part.store(0, std::memory_order_relaxed);
-        }
-        for (size_t idx = 0; idx < words; ++idx) {
-            bitmap->markWords[idx].store(0, std::memory_order_relaxed);
-        }
+        bitmap->Reset();
 
         phase.store(round, std::memory_order_release);
         while (completed.load(std::memory_order_acquire) < 2 * round) {
