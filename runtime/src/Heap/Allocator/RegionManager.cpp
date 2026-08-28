@@ -893,11 +893,6 @@ inline void RegionManager::UntagHugePage(RegionInfo* region, size_t num) const
 void FreeRegionManager::AddReleaseUnits(UnitIndex idx, UnitCount num)
 {
     ScopedEnterSaferegion enterSaferegion(true);
-    RegionInfo* region = RegionInfo::TryGetRegionInfoAt(RegionInfo::GetUnitAddress(idx));
-    if (!ExtentReadyForReleasedCache(region)) {
-        AddDetachQuarantineUnits(idx, num, true, false);
-        return;
-    }
     std::lock_guard<std::mutex> lg(releasedUnitTreeMutex);
     if (UNLIKELY(!releasedUnitTree.MergeInsert(idx, num, true))) {
         LOG(RTLOG_FATAL, "tid %d: failed to add release units [%u+%u, %u)", GetTid(), idx, num, idx + num);
@@ -922,11 +917,10 @@ size_t FreeRegionManager::ReleaseGarbageRegions(size_t targetCachedSize)
         RegionInfo* region = RegionInfo::TryGetRegionInfoAt(RegionInfo::GetUnitAddress(idx));
         const bool detachReady = FromPageDetach::FromPageDetachCheck(
             region, FromPageDetach::Site::RELEASE_GARBAGE_UNITS);
-        const bool carrierReady = ExtentReadyForReleasedCache(region);
         CHECK_DETAIL(dirtyUnitTree.TakeUnits(num, idx, false),
                      "tid %d: failed to detach dirty units[%u+%u, %u)", GetTid(), idx, num, idx + num);
 
-        if (!detachReady || !carrierReady) {
+        if (!detachReady) {
             AddDetachQuarantineUnits(idx, num, false, false);
             dirtyBytes = dirtyUnitTree.GetTotalCount() * RegionInfo::UNIT_SIZE;
             continue;
@@ -1379,8 +1373,7 @@ void RegionManager::ReclaimRegionToMarkQuarantine(RegionInfo* region)
 
 size_t RegionManager::ReleaseRegion(RegionInfo* region)
 {
-    if (!FromPageDetach::FromPageDetachCheck(region, FromPageDetach::Site::RELEASE_REGION) ||
-        !FreeRegionManager::ExtentReadyForReleasedCache(region)) {
+    if (!FromPageDetach::FromPageDetachCheck(region, FromPageDetach::Site::RELEASE_REGION)) {
         const size_t heldBytes = region->GetRegionSize();
         freeRegionManager.AddDetachQuarantineRegion(region, true);
         return heldBytes;
