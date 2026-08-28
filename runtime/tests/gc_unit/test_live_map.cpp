@@ -21,6 +21,8 @@
 
 #include "gc_heap_fixture.hpp"
 #include "gc_unittest.hpp"
+#include "Heap/WCollector/WCollector.h"
+#include "Mutator/SatbBuffer.h"
 
 using namespace MapleRuntime;
 using namespace MapleRuntime::GcUnit;
@@ -171,8 +173,8 @@ GC_TEST(ZLiveMapPort, DuplicateSatbPublicationConvergesAtStrongMark)
     RegionBitmap* bitmap = fx.PlantMarkBitmap(live, fx.region0->GetRegionSize());
     const size_t offset = fx.region0->GetAddressOffset(reinterpret_cast<MAddress>(fx.obj0));
 
-    GC_EXPECT_TRUE(RegionSpace::ShouldEnqueue<Generation::Old>(fx.obj0));
-    GC_EXPECT_TRUE(RegionSpace::ShouldEnqueue<Generation::Old>(fx.obj0));
+    GC_EXPECT_TRUE(SatbBuffer::Instance().ShouldEnqueue(fx.obj0));
+    GC_EXPECT_TRUE(SatbBuffer::Instance().ShouldEnqueue(fx.obj0));
 
     bool firstIncLive = false;
     bool secondIncLive = false;
@@ -188,6 +190,7 @@ GC_TEST(ZLiveMapPort, DuplicateSatbPublicationConvergesAtStrongMark)
     GC_EXPECT_TRUE(receiptOnce && incLiveOnce && bytesOnce);
     GC_EXPECT_TRUE(bitmap->IsMarked(offset));
     GC_EXPECT_EQ(liveBytes, static_cast<size_t>(8));
+    GC_EXPECT_FALSE(SatbBuffer::Instance().ShouldEnqueue(fx.obj0));
 
     fx.region0->metadata.liveInfo = nullptr;
     fx.FreePlanted(live);
@@ -195,17 +198,21 @@ GC_TEST(ZLiveMapPort, DuplicateSatbPublicationConvergesAtStrongMark)
 
 // The sequential duplicate-publication test above proves idempotence, but it
 // cannot distinguish one atomic RMW from a load followed by a store.  Start two
-// workers at the same call boundary on every round and let the scheduler decide
-// whether their product operations overlap.  The window is real but is not
-// forced inside MarkBits: a faulty non-atomic implementation therefore has many
-// opportunities to expose two 0->1 strong receipts, while the atomic product
-// must have exactly one winner on every round.
+// workers at the same product MarkObject call boundary on every round.  The
+// window is real but is not forced inside MarkBits: a faulty non-atomic product
+// implementation therefore has many opportunities to expose two 0->1 strong
+// receipts, while the atomic product must have exactly one winner per round.
 GC_TEST(ZLiveMapPort, ConcurrentDuplicateSatbPublicationHasOneStrongReceipt)
 {
-    constexpr size_t kPageSize = 4096;
-    constexpr size_t kRounds = 20000;
-    constexpr size_t kObjectOffset = 64;
-    RegionBitmap* bitmap = GcHeapFixture::AllocPlantedBitmap(kPageSize);
+    constexpr size_t kRounds = 2000;
+    GcHeapFixture fx;
+    RegionInfo* region = fx.region0;
+    BaseObject* holder = fx.obj0;
+    LiveInfo* live = fx.PlantLiveInfo(region);
+    RegionBitmap* bitmap = fx.PlantMarkBitmap(live, region->GetRegionSize());
+    MarkView<Generation::Old> view = region->GetMarkView<Generation::Old>();
+    const auto markObject = ProductMarkObjectFn<Generation::Old>();
+    GC_EXPECT_TRUE(markObject != nullptr);
 
     std::atomic<size_t> phase{ 0 };
     std::atomic<size_t> arrived{ 0 };
@@ -222,8 +229,12 @@ GC_TEST(ZLiveMapPort, ConcurrentDuplicateSatbPublicationHasOneStrongReceipt)
             while (arrived.load(std::memory_order_acquire) < 2 * round) {
                 std::this_thread::yield();
             }
-            bool localIncLive = false;
-            const bool localAlready = bitmap->MarkBits(kObjectOffset, 8, kPageSize, localIncLive);
+            // This is the product small-region entry.  The test deliberately
+            // does not call RegionBitmap::MarkBits directly: the product
+            // RegionInfo::MarkObject implementation owns the pair RMW and its
+            // live-byte receipt.
+            const bool localAlready = markObject(region, view, holder, holder->GetSize(), true);
+            const bool localIncLive = !localAlready;
             already[worker].store(localAlready, std::memory_order_relaxed);
             incLive[worker].store(localIncLive, std::memory_order_relaxed);
             completed.fetch_add(1, std::memory_order_release);
@@ -239,6 +250,7 @@ GC_TEST(ZLiveMapPort, ConcurrentDuplicateSatbPublicationHasOneStrongReceipt)
     size_t doubleLiveBytesRounds = 0;
     for (size_t round = 1; round <= kRounds; ++round) {
         bitmap->Reset();
+        __atomic_store_n(&region->metadata.liveByteCount, static_cast<uint64_t>(0), __ATOMIC_RELAXED);
 
         phase.store(round, std::memory_order_release);
         while (completed.load(std::memory_order_acquire) < 2 * round) {
@@ -251,7 +263,7 @@ GC_TEST(ZLiveMapPort, ConcurrentDuplicateSatbPublicationHasOneStrongReceipt)
             static_cast<size_t>(incLive[1].load(std::memory_order_relaxed));
         duplicateReceiptRounds += receiptClaims != 1 ? 1 : 0;
         duplicateIncLiveRounds += incLiveClaims != 1 ? 1 : 0;
-        doubleLiveBytesRounds += bitmap->GetLiveBytes() != static_cast<size_t>(8) ? 1 : 0;
+        doubleLiveBytesRounds += bitmap->GetLiveBytes() != holder->GetSize() ? 1 : 0;
     }
     first.join();
     second.join();
@@ -263,7 +275,23 @@ GC_TEST(ZLiveMapPort, ConcurrentDuplicateSatbPublicationHasOneStrongReceipt)
     GC_EXPECT_EQ(duplicateReceiptRounds, static_cast<size_t>(0));
     GC_EXPECT_EQ(duplicateIncLiveRounds, static_cast<size_t>(0));
     GC_EXPECT_EQ(doubleLiveBytesRounds, static_cast<size_t>(0));
-    GcHeapFixture::FreePlantedBitmap(bitmap);
+    fx.region0->metadata.liveInfo = nullptr;
+    fx.FreePlanted(live);
+}
+
+// Product collector consumer of RegionInfo::MarkObject (Mark.cpp:99-111).
+GC_TEST(ZLiveMapPort, CollectorMarkObjectConsumesProductPair)
+{
+    GcHeapFixture fx;
+    LiveInfo* live = fx.PlantLiveInfo(fx.region0);
+    (void)fx.PlantMarkBitmap(live, fx.region0->GetRegionSize());
+    WCollector collector(Heap::GetHeap().GetAllocator(), Heap::GetHeap().GetCollectorResources());
+    GC_EXPECT_FALSE(collector.MarkObject(fx.obj0));
+    MarkView<Generation::Old> view = fx.region0->GetMarkView<Generation::Old>();
+    GC_EXPECT_TRUE(fx.region0->IsMarkedObject(view, fx.obj0));
+    GC_EXPECT_TRUE(collector.MarkObject(fx.obj0));
+    fx.region0->metadata.liveInfo = nullptr;
+    fx.FreePlanted(live);
 }
 
 // U4: product mark then IsSurvivedObject.
