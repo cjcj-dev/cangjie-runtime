@@ -42,6 +42,7 @@ public:
     static bool CutCancelWake();
     static bool CutCacheOwnership();
     static bool CutPartialPropagation();
+    static bool CutReleaseBackend();
 };
 } // namespace MapleRuntime
 #endif // MRT_UNCOMMITTER_H

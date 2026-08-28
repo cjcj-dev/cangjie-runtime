@@ -190,7 +190,7 @@ size_t RegionSpace::DrainUncommitIdleMemory()
     if (flush == 0) {
         return 0;
     }
-    return regionManager.UncommitIdleUnits(flush, static_cast<uint64_t>(-1));
+    return regionManager.UncommitIdleUnits(flush, static_cast<uint64_t>(-1), false);
 }
 
 void RegionSpace::Init(const HeapParam& vmHeapParam)

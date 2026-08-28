@@ -31,6 +31,7 @@
 #include "Collector/Uncommitter.h"
 #include "Common/BaseObject.h"
 #include "Common/ScopedObjectAccess.h"
+#include "Mutator/ThreadLocal.h"
 #include "Heap.h"
 #include "Heap/Barrier/RememberedSet.h"
 #include "Heap/HeapWork.h"
@@ -924,9 +925,20 @@ size_t FreeRegionManager::ReleaseGarbageRegions(size_t targetCachedSize)
     return releasedBytes;
 }
 
-size_t FreeRegionManager::UncommitIdleUnits(size_t maxBytes, uint64_t idleBeforeNs)
+size_t FreeRegionManager::UncommitIdleUnits(size_t maxBytes, uint64_t idleBeforeNs, bool honorCancel)
 {
-    ScopedEnterSaferegion enterSaferegion(true);
+    // Finalizer/mutator threads bind a mutator; gc_unit does not.  Calling
+    // ScopedEnterSaferegion without a ThreadLocal mutator hits CJ_CJThreadGetMutator
+    // at 0 (Barrier.cpp:383-388).
+    if (ThreadLocal::GetMutator() != nullptr) {
+        ScopedEnterSaferegion enterSaferegion(true);
+        return UncommitIdleUnitsImpl(maxBytes, idleBeforeNs, honorCancel);
+    }
+    return UncommitIdleUnitsImpl(maxBytes, idleBeforeNs, honorCancel);
+}
+
+size_t FreeRegionManager::UncommitIdleUnitsImpl(size_t maxBytes, uint64_t idleBeforeNs, bool honorCancel)
+{
     if (maxBytes < RegionInfo::UNIT_SIZE) {
         return 0;
     }
@@ -941,7 +953,7 @@ size_t FreeRegionManager::UncommitIdleUnits(size_t maxBytes, uint64_t idleBefore
                 break;
             }
         }
-        if (Uncommitter::ShouldStopUncommit()) {
+        if (honorCancel && Uncommitter::ShouldStopUncommit()) {
             std::lock_guard<std::mutex> lockCancel(releasedUnitTreeMutex);
             CHECK_DETAIL(releasedUnitTree.MergeInsert(idx, num, true),
                          "tid %d: failed to restore canceled uncommit units[%u+%u, %u)", GetTid(), idx, num,

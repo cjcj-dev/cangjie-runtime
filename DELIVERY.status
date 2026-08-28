@@ -1,0 +1,11 @@
+ M runtime/src/Heap/Allocator/FreeRegionManager.h
+ M runtime/src/Heap/Allocator/RegionInfo.h
+ M runtime/src/Heap/Allocator/RegionManager.cpp
+ M runtime/src/Heap/Allocator/RegionManager.h
+ M runtime/src/Heap/Allocator/RegionSpace.cpp
+ M runtime/src/Heap/Collector/Uncommitter.cpp
+ M runtime/src/Heap/Collector/Uncommitter.h
+ M runtime/tests/gc_unit/product_path_manifest.tsv
+ M runtime/tests/gc_unit/test_uncommitter.cpp
+?? DELIVERY.patch
+?? DELIVERY.status

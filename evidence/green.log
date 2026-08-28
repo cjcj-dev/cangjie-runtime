@@ -1,0 +1,123 @@
+[  RUN   ] Uncommitter.ParseDelayDefaultAndOff
+[  PASS  ] Uncommitter.ParseDelayDefaultAndOff
+[  RUN   ] Uncommitter.TickIsMinDelayOverTenAnd30s
+[  PASS  ] Uncommitter.TickIsMinDelayOverTenAnd30s
+[  RUN   ] Uncommitter.MinCapacityIsLivePlusYoungReserve
+[  PASS  ] Uncommitter.MinCapacityIsLivePlusYoungReserve
+[  RUN   ] Uncommitter.FlushKeepsMinCapacityAndCapsChunk
+[  PASS  ] Uncommitter.FlushKeepsMinCapacityAndCapsChunk
+[  RUN   ] Uncommitter.FlushZeroWhenAlreadyAtFloor
+[  PASS  ] Uncommitter.FlushZeroWhenAlreadyAtFloor
+[  RUN   ] Uncommitter.FlushZeroWhenDisabledChunk
+[  PASS  ] Uncommitter.FlushZeroWhenDisabledChunk
+[  RUN   ] Uncommitter.ChunkLimitAtLeastPageAndAtMost256M
+[  PASS  ] Uncommitter.ChunkLimitAtLeastPageAndAtMost256M
+[  RUN   ] Uncommitter.IdleTreeHonorsVirtualClockAndChunkOwnership
+[  PASS  ] Uncommitter.IdleTreeHonorsVirtualClockAndChunkOwnership
+[  RUN   ] Uncommitter.CycleCancelStopsUncommit
+[  PASS  ] Uncommitter.CycleCancelStopsUncommit
+[  RUN   ] Uncommitter.PartialPrefixIsRetainedNotRounded
+[  PASS  ] Uncommitter.PartialPrefixIsRetainedNotRounded
+[  RUN   ] Uncommitter.DrainClockIgnoresDelayThreshold
+[  PASS  ] Uncommitter.DrainClockIgnoresDelayThreshold
+[  RUN   ] Uncommitter.AllocationTakeBumpsIdleClock
+[  PASS  ] Uncommitter.AllocationTakeBumpsIdleClock
+[  RUN   ] Uncommitter.UncommitIdleUnitsReleasesPhysical
+[  RUN   ] Uncommitter.UncommitIdleUnitsReleasesPhysical
+DETAIL probe n=8 meta=4096 total=36864
+DETAIL probe mapped base=0x71a3e1caa000 heapStart=0x71a3e1cab000
+DETAIL probe initialized
+DETAIL probe tree ready
+DETAIL probe releasedCount=1
+DETAIL backendReleased=4096 honorCancel=1 cancelFirst=0 unit=4096
+GC_UNIT_OTHER_VM_OKIDOKI Uncommitter.UncommitIdleUnitsReleasesPhysical
+[GCV2][detach-check] phase=measure site=collect_from_garbage checks=0 evidence=0 blocked=0 active_table=0 retired_table=0 route_dest_held=0 fwd_positive=0 fwd_readers=0 fwd_claimed=0 fwd_released=0 copy_inflight=0
+[GCV2][detach-check] phase=measure site=take_garbage checks=0 evidence=0 blocked=0 active_table=0 retired_table=0 route_dest_held=0 fwd_positive=0 fwd_readers=0 fwd_claimed=0 fwd_released=0 copy_inflight=0
+[GCV2][detach-check] phase=measure site=take_after_dispel checks=0 evidence=0 blocked=0 active_table=0 retired_table=0 route_dest_held=0 fwd_positive=0 fwd_readers=0 fwd_claimed=0 fwd_released=0 copy_inflight=0
+[GCV2][detach-check] phase=measure site=reclaim_dirty checks=0 evidence=0 blocked=0 active_table=0 retired_table=0 route_dest_held=0 fwd_positive=0 fwd_readers=0 fwd_claimed=0 fwd_released=0 copy_inflight=0
+[GCV2][detach-check] phase=measure site=reclaim_mark_quarantine checks=0 evidence=0 blocked=0 active_table=0 retired_table=0 route_dest_held=0 fwd_positive=0 fwd_readers=0 fwd_claimed=0 fwd_released=0 copy_inflight=0
+[GCV2][detach-check] phase=measure site=release_region checks=0 evidence=0 blocked=0 active_table=0 retired_table=0 route_dest_held=0 fwd_positive=0 fwd_readers=0 fwd_claimed=0 fwd_released=0 copy_inflight=0
+[GCV2][detach-check] phase=measure site=release_garbage_units checks=0 evidence=0 blocked=0 active_table=0 retired_table=0 route_dest_held=0 fwd_positive=0 fwd_readers=0 fwd_claimed=0 fwd_released=0 copy_inflight=0
+[GCV2][detach-check] phase=measure site=take_garbage_reuse checks=0 evidence=0 blocked=0 active_table=0 retired_table=0 route_dest_held=0 fwd_positive=0 fwd_readers=0 fwd_claimed=0 fwd_released=0 copy_inflight=0
+[GCV2][detach-check] phase=measure site=take_dirty_reuse checks=0 evidence=0 blocked=0 active_table=0 retired_table=0 route_dest_held=0 fwd_positive=0 fwd_readers=0 fwd_claimed=0 fwd_released=0 copy_inflight=0
+[GCV2][detach-check] phase=measure site=take_released_reuse checks=0 evidence=0 blocked=0 active_table=0 retired_table=0 route_dest_held=0 fwd_positive=0 fwd_readers=0 fwd_claimed=0 fwd_released=0 copy_inflight=0
+[GCV2][detach-check] phase=measure site=clear_units checks=0 evidence=0 blocked=0 active_table=0 retired_table=0 route_dest_held=0 fwd_positive=0 fwd_readers=0 fwd_claimed=0 fwd_released=0 copy_inflight=0
+[GCV2][detach-check] phase=measure site=release_units checks=1 evidence=0 blocked=0 active_table=0 retired_table=0 route_dest_held=0 fwd_positive=0 fwd_readers=0 fwd_claimed=0 fwd_released=0 copy_inflight=0
+[GCV2][detach-check] phase=measure site=init_free_units checks=0 evidence=0 blocked=0 active_table=0 retired_table=0 route_dest_held=0 fwd_positive=0 fwd_readers=0 fwd_claimed=0 fwd_released=0 copy_inflight=0
+[GCV2][detach-check] phase=measure site=init_region_info checks=2 evidence=0 blocked=0 active_table=0 retired_table=0 route_dest_held=0 fwd_positive=0 fwd_readers=0 fwd_claimed=0 fwd_released=0 copy_inflight=0
+[GCV2][detach-check] phase=measure site=major_recheck checks=0 evidence=0 blocked=0 active_table=0 retired_table=0 route_dest_held=0 fwd_positive=0 fwd_readers=0 fwd_claimed=0 fwd_released=0 copy_inflight=0
+[GCV2][detach-quarantine] gate=0 admitted=0 released=0 recheck_held=0 peak_entries=0 max_entries=65536 max_rechecks=8
+[GCV2][zlife] atexit refuse_released=0 refuse_claimed=0 detach_waited=0
+[  PASS  ] Uncommitter.UncommitIdleUnitsReleasesPhysical
+[  RUN   ] Uncommitter.DrainAfterCancelStillReleasesPhysical
+[  RUN   ] Uncommitter.DrainAfterCancelStillReleasesPhysical
+DETAIL probe n=8 meta=4096 total=36864
+DETAIL probe mapped base=0x7363a5c1d000 heapStart=0x7363a5c1e000
+DETAIL probe initialized
+DETAIL probe tree ready
+DETAIL probe releasedCount=1
+DETAIL backendReleased=4096 honorCancel=0 cancelFirst=1 unit=4096
+GC_UNIT_OTHER_VM_OKIDOKI Uncommitter.DrainAfterCancelStillReleasesPhysical
+[GCV2][detach-check] phase=measure site=collect_from_garbage checks=0 evidence=0 blocked=0 active_table=0 retired_table=0 route_dest_held=0 fwd_positive=0 fwd_readers=0 fwd_claimed=0 fwd_released=0 copy_inflight=0
+[GCV2][detach-check] phase=measure site=take_garbage checks=0 evidence=0 blocked=0 active_table=0 retired_table=0 route_dest_held=0 fwd_positive=0 fwd_readers=0 fwd_claimed=0 fwd_released=0 copy_inflight=0
+[GCV2][detach-check] phase=measure site=take_after_dispel checks=0 evidence=0 blocked=0 active_table=0 retired_table=0 route_dest_held=0 fwd_positive=0 fwd_readers=0 fwd_claimed=0 fwd_released=0 copy_inflight=0
+[GCV2][detach-check] phase=measure site=reclaim_dirty checks=0 evidence=0 blocked=0 active_table=0 retired_table=0 route_dest_held=0 fwd_positive=0 fwd_readers=0 fwd_claimed=0 fwd_released=0 copy_inflight=0
+[GCV2][detach-check] phase=measure site=reclaim_mark_quarantine checks=0 evidence=0 blocked=0 active_table=0 retired_table=0 route_dest_held=0 fwd_positive=0 fwd_readers=0 fwd_claimed=0 fwd_released=0 copy_inflight=0
+[GCV2][detach-check] phase=measure site=release_region checks=0 evidence=0 blocked=0 active_table=0 retired_table=0 route_dest_held=0 fwd_positive=0 fwd_readers=0 fwd_claimed=0 fwd_released=0 copy_inflight=0
+[GCV2][detach-check] phase=measure site=release_garbage_units checks=0 evidence=0 blocked=0 active_table=0 retired_table=0 route_dest_held=0 fwd_positive=0 fwd_readers=0 fwd_claimed=0 fwd_released=0 copy_inflight=0
+[GCV2][detach-check] phase=measure site=take_garbage_reuse checks=0 evidence=0 blocked=0 active_table=0 retired_table=0 route_dest_held=0 fwd_positive=0 fwd_readers=0 fwd_claimed=0 fwd_released=0 copy_inflight=0
+[GCV2][detach-check] phase=measure site=take_dirty_reuse checks=0 evidence=0 blocked=0 active_table=0 retired_table=0 route_dest_held=0 fwd_positive=0 fwd_readers=0 fwd_claimed=0 fwd_released=0 copy_inflight=0
+[GCV2][detach-check] phase=measure site=take_released_reuse checks=0 evidence=0 blocked=0 active_table=0 retired_table=0 route_dest_held=0 fwd_positive=0 fwd_readers=0 fwd_claimed=0 fwd_released=0 copy_inflight=0
+[GCV2][detach-check] phase=measure site=clear_units checks=0 evidence=0 blocked=0 active_table=0 retired_table=0 route_dest_held=0 fwd_positive=0 fwd_readers=0 fwd_claimed=0 fwd_released=0 copy_inflight=0
+[GCV2][detach-check] phase=measure site=release_units checks=1 evidence=0 blocked=0 active_table=0 retired_table=0 route_dest_held=0 fwd_positive=0 fwd_readers=0 fwd_claimed=0 fwd_released=0 copy_inflight=0
+[GCV2][detach-check] phase=measure site=init_free_units checks=0 evidence=0 blocked=0 active_table=0 retired_table=0 route_dest_held=0 fwd_positive=0 fwd_readers=0 fwd_claimed=0 fwd_released=0 copy_inflight=0
+[GCV2][detach-check] phase=measure site=init_region_info checks=2 evidence=0 blocked=0 active_table=0 retired_table=0 route_dest_held=0 fwd_positive=0 fwd_readers=0 fwd_claimed=0 fwd_released=0 copy_inflight=0
+[GCV2][detach-check] phase=measure site=major_recheck checks=0 evidence=0 blocked=0 active_table=0 retired_table=0 route_dest_held=0 fwd_positive=0 fwd_readers=0 fwd_claimed=0 fwd_released=0 copy_inflight=0
+[GCV2][detach-quarantine] gate=0 admitted=0 released=0 recheck_held=0 peak_entries=0 max_entries=65536 max_rechecks=8
+[GCV2][zlife] atexit refuse_released=0 refuse_claimed=0 detach_waited=0
+[  PASS  ] Uncommitter.DrainAfterCancelStillReleasesPhysical
+[  RUN   ] Uncommitter.PeriodicUncommitStopsAfterCancel
+[  RUN   ] Uncommitter.PeriodicUncommitStopsAfterCancel
+DETAIL probe n=8 meta=4096 total=36864
+DETAIL probe mapped base=0x7ff73619d000 heapStart=0x7ff73619e000
+DETAIL probe initialized
+DETAIL probe tree ready
+DETAIL probe releasedCount=1
+DETAIL backendReleased=0 honorCancel=1 cancelFirst=1 unit=4096
+GC_UNIT_OTHER_VM_OKIDOKI Uncommitter.PeriodicUncommitStopsAfterCancel
+[GCV2][detach-check] phase=measure site=collect_from_garbage checks=0 evidence=0 blocked=0 active_table=0 retired_table=0 route_dest_held=0 fwd_positive=0 fwd_readers=0 fwd_claimed=0 fwd_released=0 copy_inflight=0
+[GCV2][detach-check] phase=measure site=take_garbage checks=0 evidence=0 blocked=0 active_table=0 retired_table=0 route_dest_held=0 fwd_positive=0 fwd_readers=0 fwd_claimed=0 fwd_released=0 copy_inflight=0
+[GCV2][detach-check] phase=measure site=take_after_dispel checks=0 evidence=0 blocked=0 active_table=0 retired_table=0 route_dest_held=0 fwd_positive=0 fwd_readers=0 fwd_claimed=0 fwd_released=0 copy_inflight=0
+[GCV2][detach-check] phase=measure site=reclaim_dirty checks=0 evidence=0 blocked=0 active_table=0 retired_table=0 route_dest_held=0 fwd_positive=0 fwd_readers=0 fwd_claimed=0 fwd_released=0 copy_inflight=0
+[GCV2][detach-check] phase=measure site=reclaim_mark_quarantine checks=0 evidence=0 blocked=0 active_table=0 retired_table=0 route_dest_held=0 fwd_positive=0 fwd_readers=0 fwd_claimed=0 fwd_released=0 copy_inflight=0
+[GCV2][detach-check] phase=measure site=release_region checks=0 evidence=0 blocked=0 active_table=0 retired_table=0 route_dest_held=0 fwd_positive=0 fwd_readers=0 fwd_claimed=0 fwd_released=0 copy_inflight=0
+[GCV2][detach-check] phase=measure site=release_garbage_units checks=0 evidence=0 blocked=0 active_table=0 retired_table=0 route_dest_held=0 fwd_positive=0 fwd_readers=0 fwd_claimed=0 fwd_released=0 copy_inflight=0
+[GCV2][detach-check] phase=measure site=take_garbage_reuse checks=0 evidence=0 blocked=0 active_table=0 retired_table=0 route_dest_held=0 fwd_positive=0 fwd_readers=0 fwd_claimed=0 fwd_released=0 copy_inflight=0
+[GCV2][detach-check] phase=measure site=take_dirty_reuse checks=0 evidence=0 blocked=0 active_table=0 retired_table=0 route_dest_held=0 fwd_positive=0 fwd_readers=0 fwd_claimed=0 fwd_released=0 copy_inflight=0
+[GCV2][detach-check] phase=measure site=take_released_reuse checks=0 evidence=0 blocked=0 active_table=0 retired_table=0 route_dest_held=0 fwd_positive=0 fwd_readers=0 fwd_claimed=0 fwd_released=0 copy_inflight=0
+[GCV2][detach-check] phase=measure site=clear_units checks=0 evidence=0 blocked=0 active_table=0 retired_table=0 route_dest_held=0 fwd_positive=0 fwd_readers=0 fwd_claimed=0 fwd_released=0 copy_inflight=0
+[GCV2][detach-check] phase=measure site=release_units checks=0 evidence=0 blocked=0 active_table=0 retired_table=0 route_dest_held=0 fwd_positive=0 fwd_readers=0 fwd_claimed=0 fwd_released=0 copy_inflight=0
+[GCV2][detach-check] phase=measure site=init_free_units checks=0 evidence=0 blocked=0 active_table=0 retired_table=0 route_dest_held=0 fwd_positive=0 fwd_readers=0 fwd_claimed=0 fwd_released=0 copy_inflight=0
+[GCV2][detach-check] phase=measure site=init_region_info checks=2 evidence=0 blocked=0 active_table=0 retired_table=0 route_dest_held=0 fwd_positive=0 fwd_readers=0 fwd_claimed=0 fwd_released=0 copy_inflight=0
+[GCV2][detach-check] phase=measure site=major_recheck checks=0 evidence=0 blocked=0 active_table=0 retired_table=0 route_dest_held=0 fwd_positive=0 fwd_readers=0 fwd_claimed=0 fwd_released=0 copy_inflight=0
+[GCV2][detach-quarantine] gate=0 admitted=0 released=0 recheck_held=0 peak_entries=0 max_entries=65536 max_rechecks=8
+[GCV2][zlife] atexit refuse_released=0 refuse_claimed=0 detach_waited=0
+[GCV2][detach-check] phase=measure site=collect_from_garbage checks=0 evidence=0 blocked=0 active_table=0 retired_table=0 route_dest_held=0 fwd_positive=0 fwd_readers=0 fwd_claimed=0 fwd_released=0 copy_inflight=0
+[GCV2][detach-check] phase=measure site=take_garbage checks=0 evidence=0 blocked=0 active_table=0 retired_table=0 route_dest_held=0 fwd_positive=0 fwd_readers=0 fwd_claimed=0 fwd_released=0 copy_inflight=0
+[GCV2][detach-check] phase=measure site=take_after_dispel checks=0 evidence=0 blocked=0 active_table=0 retired_table=0 route_dest_held=0 fwd_positive=0 fwd_readers=0 fwd_claimed=0 fwd_released=0 copy_inflight=0
+[GCV2][detach-check] phase=measure site=reclaim_dirty checks=0 evidence=0 blocked=0 active_table=0 retired_table=0 route_dest_held=0 fwd_positive=0 fwd_readers=0 fwd_claimed=0 fwd_released=0 copy_inflight=0
+[GCV2][detach-check] phase=measure site=reclaim_mark_quarantine checks=0 evidence=0 blocked=0 active_table=0 retired_table=0 route_dest_held=0 fwd_positive=0 fwd_readers=0 fwd_claimed=0 fwd_released=0 copy_inflight=0
+[GCV2][detach-check] phase=measure site=release_region checks=0 evidence=0 blocked=0 active_table=0 retired_table=0 route_dest_held=0 fwd_positive=0 fwd_readers=0 fwd_claimed=0 fwd_released=0 copy_inflight=0
+[GCV2][detach-check] phase=measure site=release_garbage_units checks=0 evidence=0 blocked=0 active_table=0 retired_table=0 route_dest_held=0 fwd_positive=0 fwd_readers=0 fwd_claimed=0 fwd_released=0 copy_inflight=0
+[GCV2][detach-check] phase=measure site=take_garbage_reuse checks=0 evidence=0 blocked=0 active_table=0 retired_table=0 route_dest_held=0 fwd_positive=0 fwd_readers=0 fwd_claimed=0 fwd_released=0 copy_inflight=0
+[GCV2][detach-check] phase=measure site=take_dirty_reuse checks=0 evidence=0 blocked=0 active_table=0 retired_table=0 route_dest_held=0 fwd_positive=0 fwd_readers=0 fwd_claimed=0 fwd_released=0 copy_inflight=0
+[GCV2][detach-check] phase=measure site=take_released_reuse checks=0 evidence=0 blocked=0 active_table=0 retired_table=0 route_dest_held=0 fwd_positive=0 fwd_readers=0 fwd_claimed=0 fwd_released=0 copy_inflight=0
+[GCV2][detach-check] phase=measure site=clear_units checks=0 evidence=0 blocked=0 active_table=0 retired_table=0 route_dest_held=0 fwd_positive=0 fwd_readers=0 fwd_claimed=0 fwd_released=0 copy_inflight=0
+[GCV2][detach-check] phase=measure site=release_units checks=0 evidence=0 blocked=0 active_table=0 retired_table=0 route_dest_held=0 fwd_positive=0 fwd_readers=0 fwd_claimed=0 fwd_released=0 copy_inflight=0
+[GCV2][detach-check] phase=measure site=init_free_units checks=0 evidence=0 blocked=0 active_table=0 retired_table=0 route_dest_held=0 fwd_positive=0 fwd_readers=0 fwd_claimed=0 fwd_released=0 copy_inflight=0
+[GCV2][detach-check] phase=measure site=init_region_info checks=0 evidence=0 blocked=0 active_table=0 retired_table=0 route_dest_held=0 fwd_positive=0 fwd_readers=0 fwd_claimed=0 fwd_released=0 copy_inflight=0
+[GCV2][detach-check] phase=measure site=major_recheck checks=0 evidence=0 blocked=0 active_table=0 retired_table=0 route_dest_held=0 fwd_positive=0 fwd_readers=0 fwd_claimed=0 fwd_released=0 copy_inflight=0
+[GCV2][detach-quarantine] gate=0 admitted=0 released=0 recheck_held=0 peak_entries=0 max_entries=65536 max_rechecks=8
+[GCV2][zlife] atexit refuse_released=0 refuse_claimed=0 detach_waited=0
+[  PASS  ] Uncommitter.PeriodicUncommitStopsAfterCancel
+[========] 15 tests: 15 passed, 0 failed
