@@ -1,5 +1,0 @@
-COMMAND: bash /root/cj_build/tools/box.sh kkk2 "hostname; uptime"
-Control socket connect(/tmp/audit/cm/root@121.43.126.198:7001): Operation not permitted
-socket: Operation not permitted
-ssh: connect to host 121.43.126.198 port 7001: failure
-RC: 255

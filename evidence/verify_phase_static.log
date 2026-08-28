@@ -1,3 +1,0 @@
-COMMAND: python3 structural five-face check (source tree)
-RESULT: VERIFY_PHASE_STATIC_OK faces=5 consumers=5 removed_bypass=3
-RC: 0
