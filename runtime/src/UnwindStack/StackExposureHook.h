@@ -87,6 +87,7 @@ public:
     static size_t FireCount();
     static size_t AdvanceCount();
     static size_t ProcessOneCount();
+    static size_t VisitorHitCount();
     static size_t CrossWithoutProcessCount(); // observed cross with process disabled/empty
     static size_t StopTheWorldCallsInHook();
     static void ResetStats();
