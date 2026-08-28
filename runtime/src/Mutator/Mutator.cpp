@@ -1302,6 +1302,11 @@ inline void Mutator::GCPhasePreForward(GCPhase newPhase)
 
 inline void Mutator::HandleGCPhase(GCPhase newPhase)
 {
+    HandleGCPhase(newPhase, true);
+}
+
+inline void Mutator::HandleGCPhase(GCPhase newPhase, bool bySelf)
+{
     if (newPhase == GCPhase::GC_PHASE_FINISH || newPhase == GCPhase::GC_PHASE_FORWARD) {
         std::lock_guard<std::mutex> lg(mutatorLock);
         if (satbNode != nullptr) {
@@ -1312,7 +1317,7 @@ inline void Mutator::HandleGCPhase(GCPhase newPhase)
     } else if (newPhase == GCPhase::GC_PHASE_PREFORWARD) {
         GCPhasePreForward(newPhase);
     } else if (newPhase == GCPhase::GC_PHASE_CLEAR_SATB_BUFFER || newPhase == GCPhase::GC_PHASE_RECLAIM_SATB_NODE) {
-        FlushSatbBuffer();
+        FlushSatbBuffer(bySelf);
     } else if (newPhase == GCPhase::GC_PHASE_IDLE) {
         HandleGCPhaseIDLE();
     }
@@ -1336,7 +1341,12 @@ inline void Mutator::HandleGCPhaseIDLE()
 
 void Mutator::TransitionToGCPhaseExclusive(GCPhase newPhase)
 {
-    HandleGCPhase(newPhase);
+    TransitionToGCPhaseExclusive(newPhase, true);
+}
+
+void Mutator::TransitionToGCPhaseExclusive(GCPhase newPhase, bool bySelf)
+{
+    HandleGCPhase(newPhase, bySelf);
     SetSafepointActive(false);
     // Clear mutator's suspend request after phase transition
     ClearSuspensionFlag(SUSPENSION_FOR_GC_PHASE);
@@ -1369,6 +1379,7 @@ void Mutator::ReleaseForeignThread()
     AllocBuffer* buffer = foreignThreadInfo.allocBuffer;
     foreignThreadInfo.allocBuffer = nullptr;
     markFlushAllocBuffer = nullptr;
+    storeBarrierRememberedSet = nullptr;
     if (buffer != nullptr) {
         buffer->Fini();
         delete buffer;

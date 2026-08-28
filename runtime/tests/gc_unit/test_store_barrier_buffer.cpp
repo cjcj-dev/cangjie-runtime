@@ -240,6 +240,9 @@ GC_TEST(StoreBuf, ProductPhaseFlushHandsPairedPrevToSatb)
     Mutator mutator;
     mutator.SetMutatorPhase(GCPhase::GC_PHASE_TRACE);
     mutator.SetMarkFlushAllocBuffer(&alloc);
+#if defined(MRT_TESTABLE_INTERNALS)
+    mutator.SetStoreBarrierRememberedSetForTest(&rs);
+#endif
     Mutator* const mutatorBefore = ThreadLocal::GetMutator();
     ThreadLocal::SetMutator(&mutator);
     barrier.WriteReference(fx.obj0, field, fx.obj1);
@@ -260,6 +263,57 @@ GC_TEST(StoreBuf, ProductPhaseFlushHandsPairedPrevToSatb)
     }
     GC_EXPECT_EQ(oldCount, 1u);
     GC_EXPECT_EQ(newCount, 1u);
+}
+
+GC_TEST(StoreBuf, GcAssistedPhaseFlushDefersStoreBuffer)
+{
+    GcHeapFixture fx;
+    fx.region0->SetYoungRegionFlag(0);
+    fx.region1->SetYoungRegionFlag(1);
+
+    RememberedSet rs;
+    rs.Initialize(fx.heapStart, 2 * RegionInfo::UNIT_SIZE);
+    StoreBufferCollector collector;
+    TraceBarrier barrier(collector, rs);
+    AllocBuffer alloc;
+    AllocBufferScope allocScope(alloc);
+
+    HeapSlot<>& field = HeapSlotAt<>(reinterpret_cast<MAddress>(fx.obj0) + TYPEINFO_PTR_SIZE);
+    field.StoreColoured(RefField<>(fx.obj0, ::g_cjStoreGoodMask).GetFieldValue());
+
+    Heap& heap = Heap::GetHeap();
+    CollectorResources& resources = heap.GetCollectorResources();
+    RelocationReceiptTestAccess::EnsureCollectorProxyBound(resources);
+    const bool startedBefore = resources.IsGcStarted();
+    const GCReason reasonBefore = resources.GetGCStats().reason;
+    const GCPhase phaseBefore = heap.GetGCPhase();
+    resources.SetGcStarted(true);
+    resources.GetGCStats().reason = GC_REASON_USER;
+    heap.SetGCPhase(GCPhase::GC_PHASE_TRACE);
+
+    Mutator mutator;
+    mutator.SetMutatorPhase(GCPhase::GC_PHASE_TRACE);
+    mutator.SetMarkFlushAllocBuffer(&alloc);
+#if defined(MRT_TESTABLE_INTERNALS)
+    mutator.SetStoreBarrierRememberedSetForTest(&rs);
+#endif
+    Mutator* const mutatorBefore = ThreadLocal::GetMutator();
+    ThreadLocal::SetMutator(&mutator);
+    barrier.WriteReference(fx.obj0, field, fx.obj1);
+    GC_EXPECT_EQ(alloc.GetStoreBarrierBuffer().Pending(), 1u);
+
+    // A GC worker assisting a saferegion transition must not consume the
+    // paired store entry: ZGC on_new_phase runs in the Java-thread flush.
+    mutator.TransitionToGCPhaseExclusive(GCPhase::GC_PHASE_CLEAR_SATB_BUFFER, false);
+    GC_EXPECT_EQ(alloc.GetStoreBarrierBuffer().Pending(), 1u);
+    // The mutator-side transition (or the next explicit safepoint) consumes it.
+    mutator.TransitionToGCPhaseExclusive(GCPhase::GC_PHASE_CLEAR_SATB_BUFFER, true);
+    GC_EXPECT_TRUE(alloc.GetStoreBarrierBuffer().IsEmpty());
+
+    ThreadLocal::SetMutator(mutatorBefore);
+    heap.SetGCPhase(phaseBefore);
+    resources.GetGCStats().reason = reasonBefore;
+    resources.SetGcStarted(startedBefore);
 }
 
 GC_TEST(StoreBuf, NonNullPrevPublishesSatbBeforeRememberingSlot)
