@@ -13,15 +13,9 @@
 
 namespace MapleRuntime {
 namespace {
-bool EnvIsOne(const char* name)
+bool ValueIsOne(const char* value)
 {
-    const char* value = std::getenv(name);
     return value != nullptr && std::strcmp(value, "1") == 0;
-}
-
-bool LegacyOrAlias(const char* legacy, const char* alias, const char* token)
-{
-    return EnvIsOne(legacy) || EnvIsOne(alias) || DiagGate::TokenOn(token);
 }
 } // namespace
 
@@ -39,22 +33,34 @@ const char* VerifyFaceName(VerifyFace face)
 
 bool VerifyFaceEnabled(VerifyFace face)
 {
-    static const bool roots = LegacyOrAlias("MRT_GCV2_VERIFY_ROOTS", "MRT_GCV2_VERIFY_ROOTS", "roots");
-    static const bool objects = LegacyOrAlias("MRT_GCV2_VERIFY_HEAP", "MRT_GCV2_VERIFY_OBJECTS", "objects");
-    static const bool marking = LegacyOrAlias("MRT_GCV2_MARKCOMPLETE", "MRT_GCV2_VERIFY_MARKING", "marking");
-    static const bool remembered = LegacyOrAlias("MRT_GCV2_VERIFY_REMSET", "MRT_GCV2_VERIFY_REMEMBERED", "remembered");
-    static const bool oops = LegacyOrAlias("MRT_GCV2_VERIFY_REGIONS", "MRT_GCV2_VERIFY_OOPS", "oops");
     switch (face) {
-        case VerifyFace::Roots:
-            return roots;
-        case VerifyFace::Objects:
-            return objects;
-        case VerifyFace::Marking:
-            return marking;
-        case VerifyFace::Remembered:
-            return remembered;
-        case VerifyFace::Oops:
-            return oops;
+        // ZGC verification flags are runtime constants. Preserve that one-time
+        // read without letting the first queried face freeze the other four.
+        case VerifyFace::Roots: {
+            static const bool enabled =
+                ValueIsOne(std::getenv("MRT_GCV2_VERIFY_ROOTS")) || DiagGate::TokenOn("roots");
+            return enabled;
+        }
+        case VerifyFace::Objects: {
+            static const bool enabled = ValueIsOne(std::getenv("MRT_GCV2_VERIFY_HEAP")) ||
+                ValueIsOne(std::getenv("MRT_GCV2_VERIFY_OBJECTS")) || DiagGate::TokenOn("objects");
+            return enabled;
+        }
+        case VerifyFace::Marking: {
+            static const bool enabled = ValueIsOne(std::getenv("MRT_GCV2_MARKCOMPLETE")) ||
+                ValueIsOne(std::getenv("MRT_GCV2_VERIFY_MARKING")) || DiagGate::TokenOn("marking");
+            return enabled;
+        }
+        case VerifyFace::Remembered: {
+            static const bool enabled = ValueIsOne(std::getenv("MRT_GCV2_VERIFY_REMSET")) ||
+                ValueIsOne(std::getenv("MRT_GCV2_VERIFY_REMEMBERED")) || DiagGate::TokenOn("remembered");
+            return enabled;
+        }
+        case VerifyFace::Oops: {
+            static const bool enabled = ValueIsOne(std::getenv("MRT_GCV2_VERIFY_REGIONS")) ||
+                ValueIsOne(std::getenv("MRT_GCV2_VERIFY_OOPS")) || DiagGate::TokenOn("oops");
+            return enabled;
+        }
         default:
             return false;
     }
