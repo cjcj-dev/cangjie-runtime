@@ -286,6 +286,7 @@ while IFS=$'\t' read -r test_name anchor carrier consumer cut_site; do
     continue
   fi
   if [[ "$test_name" == Uncommitter.* ]]; then
+    echo "SKIP_PRODUCT_PATH_UNCOMMIT test_name=$test_name anchor=$anchor carrier=$carrier consumer=$consumer cut_site=$cut_site"
     continue
   fi
   [[ "$anchor" == "_ZN12MapleRuntime10RegionInfo28PreserveRetainedLiveInfoUpToEm" ]]
