@@ -114,6 +114,7 @@ void MutatorManager::BindMutator(Mutator& mutator) const
     if (UNLIKELY(tlData->buffer == nullptr)) {
         (void)AllocBuffer::GetOrCreateAllocBuffer();
     }
+    mutator.SetMarkFlushAllocBuffer(tlData->buffer);
     mutator.SetSafepointStatePtr(&tlData->safepointState);
     mutator.SetSafepointActive(false);
     tlData->SetMutator(&mutator);
@@ -124,6 +125,7 @@ void MutatorManager::UnbindMutator(Mutator& mutator) const
     ThreadLocalData* tlData = ThreadLocal::GetThreadLocalData();
     MRT_ASSERT(tlData->mutator == &mutator, "mutator in ThreadLocalData doesn't match in cjthread");
     tlData->SetMutator(nullptr);
+    mutator.SetMarkFlushAllocBuffer(nullptr);
     mutator.SetSafepointStatePtr(nullptr);
 }
 

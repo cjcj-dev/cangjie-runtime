@@ -1287,8 +1287,7 @@ inline void Mutator::HandleGCPhase(GCPhase newPhase)
     } else if (newPhase == GCPhase::GC_PHASE_PREFORWARD) {
         GCPhasePreForward(newPhase);
     } else if (newPhase == GCPhase::GC_PHASE_CLEAR_SATB_BUFFER || newPhase == GCPhase::GC_PHASE_RECLAIM_SATB_NODE) {
-        std::lock_guard<std::mutex> lg(mutatorLock);
-        SatbBuffer::Instance().FlushQueue(satbNode);
+        FlushSatbBuffer();
     } else if (newPhase == GCPhase::GC_PHASE_IDLE) {
         HandleGCPhaseIDLE();
     }
@@ -1344,6 +1343,7 @@ void Mutator::ReleaseForeignThread()
 {
     AllocBuffer* buffer = foreignThreadInfo.allocBuffer;
     foreignThreadInfo.allocBuffer = nullptr;
+    markFlushAllocBuffer = nullptr;
     if (buffer != nullptr) {
         buffer->Fini();
         delete buffer;
