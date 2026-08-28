@@ -189,15 +189,64 @@ STANDALONE_SYMBOLS=(
   _ZN12MapleRuntime10RegionInfo24PreserveRetainedLiveInfoEv
   _ZN12MapleRuntime10RegionInfo31BumpSnapshotEpochFromInitRegionEv
 )
+STANDALONE_FULL_SYMBOLS=(
+  _ZN12MapleRuntime10RegionInfo28PreserveRetainedLiveInfoUpToEm
+)
 STANDALONE_SYMBOL_DYN="$OUT/cj_gc_unit.dynamic-defined.txt"
+STANDALONE_SYMBOL_FULL="$OUT/cj_gc_unit.full-defined.txt"
 nm -D --defined-only "$OUT/cj_gc_unit" >"$STANDALONE_SYMBOL_DYN"
+nm --defined-only "$OUT/cj_gc_unit" >"$STANDALONE_SYMBOL_FULL"
+if ! /usr/bin/grep -Eq '[[:space:]]main$' "$STANDALONE_SYMBOL_FULL"; then
+  echo "GC_UNIT_STANDALONE_SYMBOL_GUARD_BROKEN positive_control=main" >&2
+  exit 7
+fi
 for symbol in "${STANDALONE_SYMBOLS[@]}"; do
   if /usr/bin/grep -F -q "$symbol" "$STANDALONE_SYMBOL_DYN"; then
     echo "GC_UNIT_STANDALONE_SYMBOL_GUARD_FAIL symbol=$symbol" >&2
     exit 7
   fi
 done
+for symbol in "${STANDALONE_FULL_SYMBOLS[@]}"; do
+  if /usr/bin/grep -F -q "$symbol" "$STANDALONE_SYMBOL_DYN" ||
+      /usr/bin/grep -F -q "$symbol" "$STANDALONE_SYMBOL_FULL"; then
+    echo "GC_UNIT_STANDALONE_SYMBOL_GUARD_FAIL symbol=$symbol" >&2
+    exit 7
+  fi
+done
 echo "GATE_STANDALONE_SYMBOLS_OK elf=$OUT/cj_gc_unit"
+
+# The target set is independent of the dlsym calls currently left in the test
+# source.  Deleting a test/call or shrinking the manifest therefore fails
+# closed instead of silently reducing the binding guard's coverage.
+PRODUCT_PATH_MANIFEST="$SRC/product_path_manifest.tsv"
+EXPECTED_BOUNDED_TESTS=(
+  LiveMap.UnexaminedRelocselPageKeepsWithoutSnapshot
+  LiveMap.BoundedPreserveProductRepairsCurrentFace
+  LiveMap.BoundedPreserveProductRepairsFromPageFace
+  LiveMap.ExaminedPageWithoutSnapshotStillAborts
+  LiveMap.BoundedPreserveProductRepairsOwnedCopy
+)
+manifest_rows=0
+while IFS=$'\t' read -r test_name anchor carrier consumer cut_site; do
+  if [[ "$test_name" == "test_name" ]]; then
+    continue
+  fi
+  [[ "$anchor" == "_ZN12MapleRuntime10RegionInfo28PreserveRetainedLiveInfoUpToEm" ]]
+  [[ "$carrier" == "product_so" ]]
+  [[ "$consumer" == "ProductPreserveRetainedUpToFn" ]]
+  /usr/bin/grep -F -q "$cut_site" "$ROOT/runtime/src/Heap/Allocator/RegionInfo.h"
+  suite="${test_name%%.*}"
+  name="${test_name#*.}"
+  /usr/bin/grep -F -q "GC_TEST($suite, $name)" "$SRC/test_live_map.cpp"
+  manifest_rows=$((manifest_rows + 1))
+done <"$PRODUCT_PATH_MANIFEST"
+[[ "$manifest_rows" -eq "${#EXPECTED_BOUNDED_TESTS[@]}" ]]
+for test_name in "${EXPECTED_BOUNDED_TESTS[@]}"; do
+  /usr/bin/grep -F -q "$test_name" "$PRODUCT_PATH_MANIFEST"
+done
+actual_bounded_calls=$(/usr/bin/grep -F -c 'ProductPreserveRetainedUpToFn()(' "$SRC/test_live_map.cpp")
+[[ "$actual_bounded_calls" -eq "$manifest_rows" ]]
+echo "GATE_PRODUCT_PATH_MANIFEST_OK rows=$manifest_rows bounded_calls=$actual_bounded_calls"
 
 # Fresh-process product-link arm for the one-shot ForwardingTable.  It binds
 # CompactRegion/ClearEntries from the same runtime SO as the full suite; no
