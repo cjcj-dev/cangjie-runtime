@@ -7,6 +7,7 @@
 
 #include "MutatorManager.h"
 
+#include <algorithm>
 #include <thread>
 #include <cstdlib>
 #include <cstring>
@@ -169,6 +170,14 @@ void MutatorManager::TransitMutatorToExit()
 
 void MutatorManager::DestroyExpiredMutators()
 {
+    // Coordinate the drain with epoch publication and retirement.  A mutator
+    // removed by a racing destroy must not be reclaimed while a handshake is
+    // still able to hold its participant pointer; the same ledger lock also
+    // closes the check-then-drain window at epoch end.
+    std::lock_guard<std::mutex> ledgerLock(epochHandshakeLedgerMutex);
+    if (epochHandshakeActive.load(std::memory_order_acquire) != 0) {
+        return;
+    }
     expiringMutatorListLock.lock();
     ExpiredMutatorList workList;
     workList.swap(expiringMutators);
@@ -181,13 +190,19 @@ void MutatorManager::DestroyExpiredMutators()
 
 void MutatorManager::DestroyMutator(Mutator* mutator)
 {
+    // Serialize the active-epoch test with epoch publication/retirement.  The
+    // old atomic-only check could observe inactive just before Begin published
+    // the epoch and delete a pointer that the snapshot was about to claim.
+    std::unique_lock<std::mutex> ledgerLock(epochHandshakeLedgerMutex);
     // dynjoin: while an epoch handshake is active, never free a participant (or a
     // racing create) under the old R-lock path — that used to be serialised by the
     // full-handshake W-lock. Defer to expiringMutators; PostGC drains them.
     if (EpochHandshakeActive()) {
         epochHandshakeDestroyDeferred.fetch_add(1, std::memory_order_relaxed);
         expiringMutatorListLock.lock();
-        expiringMutators.push_back(mutator);
+        if (std::find(expiringMutators.begin(), expiringMutators.end(), mutator) == expiringMutators.end()) {
+            expiringMutators.push_back(mutator);
+        }
         expiringMutatorListLock.unlock();
         return;
     }
@@ -196,7 +211,9 @@ void MutatorManager::DestroyMutator(Mutator* mutator)
         MutatorManagementRUnlock();
     } else {
         expiringMutatorListLock.lock();
-        expiringMutators.push_back(mutator);
+        if (std::find(expiringMutators.begin(), expiringMutators.end(), mutator) == expiringMutators.end()) {
+            expiringMutators.push_back(mutator);
+        }
         expiringMutatorListLock.unlock();
     }
 }
@@ -394,9 +411,9 @@ uint64_t MutatorManager::BeginEpochHandshakeLifecycleTest()
         std::lock_guard<std::mutex> lock(epochHandshakeLedgerMutex);
         epochHandshakeParticipants.clear();
         epochHandshakeAckedMutators.clear();
+        epochHandshakeDestroyDeferred.store(0, std::memory_order_relaxed);
+        epochHandshakeActive.store(epoch, std::memory_order_release);
     }
-    epochHandshakeDestroyDeferred.store(0, std::memory_order_relaxed);
-    epochHandshakeActive.store(epoch, std::memory_order_release);
     return epoch;
 }
 
@@ -405,8 +422,8 @@ void MutatorManager::EndEpochHandshakeLifecycleTest()
     {
         std::lock_guard<std::mutex> lock(epochHandshakeLedgerMutex);
         epochHandshakeParticipants.clear();
+        epochHandshakeActive.store(0, std::memory_order_release);
     }
-    epochHandshakeActive.store(0, std::memory_order_release);
     DestroyExpiredMutators();
 }
 
@@ -459,11 +476,11 @@ EpochHandshakeStats MutatorManager::RunEpochHandshake(const char* source)
         std::lock_guard<std::mutex> lock(epochHandshakeLedgerMutex);
         epochHandshakeAckedMutators.clear();
         epochHandshakeParticipants.clear();
+        // Publish active BEFORE snapshot so concurrent CreateMutator sees active
+        // and takes the born-clean path.  Keep publication under the same lock
+        // used by DestroyMutator's retirement check.
+        epochHandshakeActive.store(stats.epoch, std::memory_order_release);
     }
-    // Publish active BEFORE snapshot so concurrent CreateMutator sees active and
-    // takes the born-clean path. Snapshot then only captures pre-existing mutators;
-    // anyone who raced past is either in the list or born-clean (not both in wait).
-    epochHandshakeActive.store(stats.epoch, std::memory_order_release);
 
     std::list<Mutator*> snapshotted;
     VisitAllMutators([&snapshotted](Mutator& mutator) { snapshotted.push_back(&mutator); });
@@ -556,8 +573,8 @@ EpochHandshakeStats MutatorManager::RunEpochHandshake(const char* source)
     {
         std::lock_guard<std::mutex> lock(epochHandshakeLedgerMutex);
         epochHandshakeParticipants.clear();
+        epochHandshakeActive.store(0, std::memory_order_release);
     }
-    epochHandshakeActive.store(0, std::memory_order_release);
     syncMutex.unlock();
     inEpochHandshake = false;
     if (callerEnteredSaferegion) {

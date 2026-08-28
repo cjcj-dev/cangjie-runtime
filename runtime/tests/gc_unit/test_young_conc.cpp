@@ -1,3 +1,5 @@
+#if defined(MRT_TESTABLE_INTERNALS)
+
 // Copyright (c) Huawei Technologies Co., Ltd. 2025. All rights reserved.
 // This source file is part of the Cangjie project, licensed under Apache-2.0
 // with Runtime Library Exception.
@@ -9,16 +11,16 @@
 //   3. young→young overwrite (not remset; dirty-holder compensation)
 // Shape: ZGC gtest construct-state → assert (test_zLiveMap / test_zBitMap).
 
-// This TU needs the existing test-peer friendship to reach the private product
-// consumer.  Product builds do not compile this file, and no product shape or
-// export is changed by enabling the test-only declarations here.
-#ifndef MRT_TESTABLE_INTERNALS
-#define MRT_TESTABLE_INTERNALS 1
-#endif
+// Keep this TU in the same testability configuration as the product SO.  The
+// standalone gate supplies MRT_TESTABLE_INTERNALS only when those product
+// hooks exist; the top-level guard makes the default build an empty TU.
 
 #include <cstdint>
+#include <atomic>
 #include <cstdio>
 #include <cstring>
+#include <sched.h>
+#include <thread>
 #include <unordered_set>
 #include <vector>
 
@@ -67,12 +69,10 @@ struct RelocationReceiptTestAccess {
         resources.gcThreadPool = threadPool;
     }
 
-#if defined(MRT_TESTABLE_INTERNALS)
     static void InitCollectorProxy(CollectorResources& resources)
     {
         resources.collectorProxy.Init();
     }
-#endif
 
     static bool ConsumeYoungSatbAndReach(WCollector& collector, BaseObject* expected)
     {
@@ -289,7 +289,6 @@ GC_TEST(YoungConc, EpochHandshakeIsRequired)
     GC_EXPECT_TRUE(MutatorManager::ConcurrentStackScanEnabled());
 }
 
-#if defined(MRT_TESTABLE_INTERNALS)
 GC_OTHER_VM_TEST(YoungConc, RuntimeMutatorCreateDuringActiveEpochIsBornClean)
 {
     GC_EXPECT_EQ(CJ_ScheduleManagerInit(), 0);
@@ -335,6 +334,62 @@ GC_OTHER_VM_TEST(YoungConc, RuntimeMutatorDestroyDuringActiveEpochDefersStorage)
     Heap::GetHeap().SetGCPhase(GCPhase::GC_PHASE_IDLE);
 }
 
+// Deterministic cross-thread interleaving: publish the epoch first, then let a
+// foreign runtime thread complete the real create/exit/destroy path while the
+// epoch remains active.  The main thread only closes the epoch after the worker
+// has retired its entry, so the participant pin and deferred-storage decision
+// are exercised without relying on a probabilistic sleep window.
+GC_OTHER_VM_TEST(YoungConc, RuntimeMutatorActiveEpochCreateDestroyInterleavingIsSerialized)
+{
+    GC_EXPECT_EQ(CJ_ScheduleManagerInit(), 0);
+    MRT_CjRuntimeInit();
+    MutatorManager& manager = MutatorManager::Instance();
+    Heap::GetHeap().SetGCPhase(GCPhase::GC_PHASE_ENUM);
+    GC_EXPECT_EQ(setenv("MRT_GC_UNIT_RUNTIME_MUTATOR_LIFECYCLE_ONLY", "1", 1), 0);
+    const uint64_t epoch = manager.BeginEpochHandshakeLifecycleTest();
+    std::atomic<bool> created{ false };
+    std::atomic<bool> finished{ false };
+    std::thread worker([&]() {
+        Mutator* mutator = manager.CreateRuntimeMutator(ThreadType::HOT_UPDATE_THREAD);
+        created.store(mutator != nullptr && mutator->FinishedEpochHandshake(epoch), std::memory_order_release);
+        manager.DestroyRuntimeMutator(ThreadType::HOT_UPDATE_THREAD);
+        finished.store(true, std::memory_order_release);
+    });
+    while (!created.load(std::memory_order_acquire)) {
+        (void)sched_yield();
+    }
+    while (!finished.load(std::memory_order_acquire)) {
+        (void)sched_yield();
+    }
+    worker.join();
+    GC_EXPECT_EQ(manager.RuntimeMutatorRegistrySizeForTest(), 0u);
+    GC_EXPECT_TRUE(manager.EpochHandshakeDestroyDeferredForTest() >= 1u);
+    manager.EndEpochHandshakeLifecycleTest();
+    GC_EXPECT_EQ(unsetenv("MRT_GC_UNIT_RUNTIME_MUTATOR_LIFECYCLE_ONLY"), 0);
+    Heap::GetHeap().SetGCPhase(GCPhase::GC_PHASE_IDLE);
+}
+
+GC_OTHER_VM_TEST(YoungConc, ForcedEpochHandshakeReportsPositiveRequested)
+{
+    GC_EXPECT_EQ(CJ_ScheduleManagerInit(), 0);
+    MRT_CjRuntimeInit();
+    MutatorManager& manager = MutatorManager::Instance();
+    Heap::GetHeap().SetGCPhase(GCPhase::GC_PHASE_ENUM);
+    GC_EXPECT_EQ(setenv("MRT_GC_UNIT_RUNTIME_MUTATOR_LIFECYCLE_ONLY", "1", 1), 0);
+    Mutator* mutator = manager.CreateRuntimeMutator(ThreadType::HOT_UPDATE_THREAD);
+    GC_EXPECT_TRUE(mutator != nullptr);
+    (void)mutator->EnterSaferegion(true);
+    EpochHandshakeStats stats = manager.RunEpochHandshake("r6-forced-minor");
+    std::fprintf(stderr,
+                 "DETAIL forced_epoch requested=%zu scanned=%zu fallback=%zu epoch=%zu\n",
+                 stats.requested, stats.stackScanned, stats.stackFallback,
+                 static_cast<size_t>(stats.epoch));
+    GC_EXPECT_TRUE(stats.requested > 0);
+    GC_EXPECT_EQ(stats.stackScanned + stats.stackFallback, stats.requested);
+    manager.DestroyRuntimeMutator(ThreadType::HOT_UPDATE_THREAD);
+    GC_EXPECT_EQ(unsetenv("MRT_GC_UNIT_RUNTIME_MUTATOR_LIFECYCLE_ONLY"), 0);
+}
+
 GC_OTHER_VM_TEST(YoungConc, FinalizerCreateDuringActiveEpochIsBornClean)
 {
     GC_EXPECT_EQ(CJ_ScheduleManagerInit(), 0);
@@ -366,8 +421,6 @@ GC_OTHER_VM_TEST(YoungConc, FinalizerEndDuringActiveEpochDefersStorage)
     manager.EndEpochHandshakeLifecycleTest();
     Heap::GetHeap().SetGCPhase(GCPhase::GC_PHASE_IDLE);
 }
-#endif
-
 // Paint-then-claim-skip: already-marked MarkObject returns true; without grey ledger
 // TraceYoungClosure would drop reachableVec/fields (WCollector.cpp:8110-8136).
 GC_TEST(YoungConc, PaintWithoutGreyLedgerMissesWorkStack)
@@ -795,7 +848,6 @@ GC_TEST(YoungConc, OldToYoungStillRecorded)
 // new target to the SATB consumer.  This is the regression arm for the
 // RecordCrossGenEdgesInStruct early return; it observes retired entries after
 // flushing the mutator node rather than merely checking that a helper ran.
-#if defined(MRT_TESTABLE_INTERNALS)
 GC_OTHER_VM_TEST(YoungConc, BulkWritePublishesSatbWithoutYoungRegions)
 {
     GcHeapFixture fx;
@@ -836,8 +888,6 @@ GC_OTHER_VM_TEST(YoungConc, BulkWritePublishesSatbWithoutYoungRegions)
     GC_EXPECT_EQ(retired.size(), 1u);
     GC_EXPECT_EQ(reinterpret_cast<uintptr_t>(retired[0]), reinterpret_cast<uintptr_t>(fx.obj1));
 }
-#endif
-
 // mark_and_remember mark half (zBarrier.inline.hpp:735-739): TRACE + young GC
 // paints the new young target. STW/Idle TestBarrier must not (phase gate).
 // gc_unit never Heap::Init; IsGcStarted is the same fixture latch SATB uses.
@@ -1062,3 +1112,5 @@ GC_TEST(YoungConc, LegacyTerminationMissesUnfullSatbNode)
     fx.region0->metadata.liveInfo = nullptr;
     fx.FreePlanted(live);
 }
+
+#endif // MRT_TESTABLE_INTERNALS

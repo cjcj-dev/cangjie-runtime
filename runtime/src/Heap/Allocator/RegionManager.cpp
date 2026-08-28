@@ -610,6 +610,15 @@ const size_t RegionManager::MAX_UNIT_COUNT_PER_REGION = (128 * KB) / MapleRuntim
 const size_t RegionManager::HUGE_PAGE = (2048 * KB) / MapleRuntime::MRT_PAGE_SIZE;;
 
 #if defined(MRT_TESTABLE_INTERNALS)
+// Keep the standalone product-link arm bound to the runtime SO.  The test
+// executable declares these templates as extern; without an out-of-line
+// instantiation in the product target the dlsym lookup for ClearLiveInfo would
+// be null despite the ON configuration compiling the test itself.
+template void RegionInfo::ClearLiveInfo<Generation::Young>(MarkView<Generation::Young>);
+template void RegionInfo::ClearLiveInfo<Generation::Old>(MarkView<Generation::Old>);
+#endif
+
+#if defined(MRT_TESTABLE_INTERNALS)
 template<Generation G>
 void ForwardTask<G>::Execute(size_t)
 {
