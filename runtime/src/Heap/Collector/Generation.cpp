@@ -989,7 +989,9 @@ void WCollector::DoYoungGarbageCollection()
 #endif
         stw = std::make_unique<ScopedStopTheWorld>("young mark terminate", true,
                                                    GCPhase::GC_PHASE_CLEAR_SATB_BUFFER);
+#if defined(MRT_TESTABLE_INTERNALS)
         const size_t y2yBatchAtMarkEnd = pendingY2yDirtyHolderCount();
+#endif
         theAllocator.VisitAllocBuffers([&workStack](AllocBuffer& buffer) {
             // The CLEAR_SATB transition also closes each mutator's epoch stack
             // publication. Late stack roots are mark work, just like ZGC's
