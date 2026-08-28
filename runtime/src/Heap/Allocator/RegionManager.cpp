@@ -28,6 +28,7 @@
 #include "Collector/GcTrigger.h"
 #include "Collector/MutatorAllocRate.h"
 #include "Collector/TenuringThreshold.h"
+#include "Collector/Uncommitter.h"
 #include "Common/BaseObject.h"
 #include "Common/ScopedObjectAccess.h"
 #include "Heap.h"
@@ -886,12 +887,16 @@ size_t FreeRegionManager::ReleaseGarbageRegions(size_t targetCachedSize)
         std::lock_guard<std::mutex> lock1(dirtyUnitTreeMutex);
         auto node = dirtyUnitTree.RootNode();
         if (node == nullptr) { break; }
-        Index idx = node->GetIndex();
+        UnitIndex idx = node->GetIndex();
         UnitCount num = node->GetCount();
         RegionInfo* region = RegionInfo::TryGetRegionInfoAt(RegionInfo::GetUnitAddress(idx));
         const bool detachReady = FromPageDetach::FromPageDetachCheck(
             region, FromPageDetach::Site::RELEASE_GARBAGE_UNITS);
-        dirtyUnitTree.ReleaseRootNode();
+        // Remove the eligible extent from the dirty inventory only.  Physical
+        // backing is deliberately deferred to UncommitIdleUnits after the
+        // route/lifetime gate and delay have both passed.
+        CHECK_DETAIL(dirtyUnitTree.TakeUnits(num, idx, false),
+                     "tid %d: failed to detach dirty units[%u+%u, %u)", GetTid(), idx, num, idx + num);
 
         if (!detachReady) {
             AddDetachQuarantineUnits(idx, num, false, false);
@@ -909,6 +914,52 @@ size_t FreeRegionManager::ReleaseGarbageRegions(size_t targetCachedSize)
     VLOG(REPORT, "release heap garbage memory %zu bytes, cache %zu(%zu) bytes",
          releasedBytes, dirtyBytes, targetCachedSize);
     return releasedBytes;
+}
+
+size_t FreeRegionManager::UncommitIdleUnits(size_t maxBytes, uint64_t idleBeforeNs)
+{
+    ScopedEnterSaferegion enterSaferegion(true);
+    if (maxBytes < RegionInfo::UNIT_SIZE) {
+        return 0;
+    }
+    size_t uncommittedBytes = 0;
+    while (uncommittedBytes + RegionInfo::UNIT_SIZE <= maxBytes) {
+        UnitIndex idx = 0;
+        UnitCount num = 0;
+        {
+            std::lock_guard<std::mutex> lock1(releasedUnitTreeMutex);
+            UnitCount remain = static_cast<UnitCount>((maxBytes - uncommittedBytes) / RegionInfo::UNIT_SIZE);
+            if (remain == 0 || !releasedUnitTree.TakeIdleUnits(idleBeforeNs, remain, idx, num)) {
+                break;
+            }
+        }
+        if (Uncommitter::ShouldStopUncommit()) {
+            std::lock_guard<std::mutex> lockCancel(releasedUnitTreeMutex);
+            CHECK_DETAIL(releasedUnitTree.MergeInsert(idx, num, true),
+                         "tid %d: failed to restore canceled uncommit units[%u+%u, %u)", GetTid(), idx, num,
+                         idx + num);
+            break;
+        }
+        const size_t requestedBytes = static_cast<size_t>(num) * RegionInfo::UNIT_SIZE;
+        const size_t backendReleased = RegionInfo::ReleaseUnitsPartial(idx, num);
+        const size_t released = Uncommitter::AccountReleased(requestedBytes, backendReleased);
+        {
+            std::lock_guard<std::mutex> lock2(releasedUnitTreeMutex);
+            CHECK_DETAIL(releasedUnitTree.MergeInsert(idx, num, true),
+                         "tid %d: failed to retain uncommit units[%u+%u, %u)", GetTid(), idx, num,
+                         idx + num);
+        }
+        if (released != 0) {
+            uncommittedBytes += released;
+        }
+        if (Uncommitter::ShouldRetryPartial(requestedBytes, backendReleased)) {
+            break;
+        }
+    }
+    if (uncommittedBytes > 0) {
+        VLOG(REPORT, "uncommit idle heap memory %zu bytes", uncommittedBytes);
+    }
+    return uncommittedBytes;
 }
 
 void FreeRegionManager::AddDetachQuarantineRegion(RegionInfo* region, bool releasePhysical)
@@ -1210,10 +1261,10 @@ size_t RegionManager::ReleaseRegion(RegionInfo* region)
         ForwardingTable::DropRetiredCovering(RegionInfo::GetUnitAddress(unitIndex),
                                              num * RegionInfo::UNIT_SIZE);
     }
-    {
-        FromPageDetach::ReusePermitScope reusePermit;
-        RegionInfo::ReleaseUnits(unitIndex, num);
-    }
+    // Physical backing is released asynchronously by the partition-owned
+    // uncommit worker after this eligible extent enters the released cache.
+    // Keep reservation/metadata ownership synchronous and leave quarantine
+    // entries out of the cache until their gate has closed.
     freeRegionManager.AddReleaseUnits(unitIndex, num);
     return res;
 }

@@ -146,6 +146,7 @@ $CXX -std=gnu++17 -O0 -g -Wall -Wextra -pthread -fno-rtti \
     "$SRC/test_gc_trigger.cpp" \
     "$SRC/test_gc_request_sync.cpp" \
     "$SRC/test_mutator_relocate.cpp" \
+    "$SRC/test_uncommitter.cpp" \
     "$SRC/test_relocation_request_queue.cpp" \
     "$SRC/test_gc_thread_pool.cpp" \
     "$SRC/test_expire_kept.cpp" \

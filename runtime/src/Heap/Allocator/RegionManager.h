@@ -591,6 +591,10 @@ public:
 
     // targetSize: size of memory which we do not release and keep it as cache for future allocation.
     size_t ReleaseGarbageRegions(size_t targetSize) { return freeRegionManager.ReleaseGarbageRegions(targetSize); }
+    size_t UncommitIdleUnits(size_t maxBytes, uint64_t idleBeforeNs)
+    {
+        return freeRegionManager.UncommitIdleUnits(maxBytes, idleBeforeNs);
+    }
 
     // Ignore dynamic pinned regions and from regions whose garbage objects are quite few, return the garbage size that
     // can be reclaimed.
@@ -631,6 +635,8 @@ public:
     }
 
     size_t GetDirtyUnitCount() const { return freeRegionManager.GetDirtyUnitCount(); }
+    size_t GetReleasedUnitCount() const { return freeRegionManager.GetReleasedUnitCount(); }
+    size_t GetGarbageUnitCount() const { return garbageRegionList.GetUnitCount(); }
 
     size_t GetInactiveUnitCount() const { return (regionHeapEnd - inactiveZone) / RegionInfo::UNIT_SIZE; }
 
