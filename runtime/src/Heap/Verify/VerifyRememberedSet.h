@@ -25,15 +25,14 @@ class BaseObject;
 // MISSING_ROOT_REACHABLE count the correctness-relevant root-reachable subset.
 // Counts direct field edges only (no reachability cascade).
 //
-// Gate: MRT_GCV2_VERIFY_REMSET=1 (default off). Report-only, every invocation,
+// Gate: unified VerifyFace::Remembered (legacy MRT_GCV2_VERIFY_REMSET=1 is an alias).
+// Report-only, every invocation,
 // with the historical detailed-failure cap fixed at its default of 20.
 //
 // remsetSnapshot: non-owning view of remset slots at the verification point
 // (typically the post-AcquireRecordsForMinor local set; live remset is empty then).
-// force=true: run even when MRT_GCV2_VERIFY_REMSET is unset (post-evac hook uses this).
 // rootReachableHolders: completed independent full-root closure, or nullptr when not measured.
 void VerifyRememberedSetInvariant(const char* point, const std::unordered_set<MAddress>& remsetSnapshot,
-                                  bool force = false,
                                   const std::unordered_set<BaseObject*>* rootReachableHolders = nullptr);
 } // namespace MapleRuntime
 

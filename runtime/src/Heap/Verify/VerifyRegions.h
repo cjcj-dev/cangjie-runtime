@@ -5,8 +5,7 @@
 // See https://cangjie-lang.cn/pages/LICENSE for license information.
 //
 // Region/heap structural verifier (HotSpot G1HeapVerifier::verify_region_sets intent).
-// Gated by MRT_GCV2_VERIFY_REGIONS=1 (default off). Optional fatal: MRT_GCV2_VERIFY_REGIONS_FATAL=1.
-// Optional start-at: MRT_GCV2_VERIFY_REGIONS_START_AT=<N> (skip until N-th young GC, 1-based).
+// Gate: unified VerifyFace::Oops (legacy MRT_GCV2_VERIFY_REGIONS=1 is an alias).
 
 #ifndef MRT_VERIFY_REGIONS_H
 #define MRT_VERIFY_REGIONS_H
@@ -34,8 +33,6 @@ public:
                                      const char* point);
 
     static bool IsEnabled();
-    static bool IsFatal();
-    static bool ShouldRunAt(size_t youngRunIndex);
 
 private:
     static void ReportAndMaybeAbort(bool failed, const char* detail);

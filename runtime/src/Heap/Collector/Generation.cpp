@@ -591,7 +591,7 @@ void WCollector::DoYoungGarbageCollection()
     if (kVerifyPostEvac) {
         VLOG(REPORT, "[GCV2][verify][post-evac] enter point=stw-enter run=%zu priorMinors=%zu",
              minorTotalRuns + 1, minorTotalRuns);
-        VerifyHeapObjects("stw-enter", true);
+        VerifyHeapObjects("stw-enter");
         VLOG(REPORT, "[GCV2][verify][post-evac] point=stw-enter run=%zu", minorTotalRuns + 1);
     }
     if (!concurrentStackScan) {
@@ -638,7 +638,7 @@ void WCollector::DoYoungGarbageCollection()
     if (kVerifyPostEvac) {
         VLOG(REPORT, "[GCV2][verify][post-evac] enter point=post-prepare-young run=%zu",
              minorTotalRuns + 1);
-        VerifyHeapObjects("post-prepare-young", true);
+        VerifyHeapObjects("post-prepare-young");
         VLOG(REPORT, "[GCV2][verify][post-evac] point=post-prepare-young run=%zu", minorTotalRuns + 1);
     }
     if (stats.candidateRegions == 0) {
@@ -1571,7 +1571,7 @@ void WCollector::DoYoungGarbageCollection()
     // No independent full-root closure is available after deleting the empty
     // explainer. nullptr means "not measured"; an empty set must mean a closure
     // actually ran and found no holders.
-    VerifyRememberedSetInvariant("pre-evacuate", rememberedSlots, false, nullptr);
+    VerifyRememberedSetInvariant("pre-evacuate", rememberedSlots, nullptr);
 
     // Full-heap object invariant H (HotSpot G1HeapVerifier::verify inventory #10).
     // Independent ForEachObj walk; gated by MRT_GCV2_VERIFY_HEAP (default off).
@@ -1579,10 +1579,10 @@ void WCollector::DoYoungGarbageCollection()
     // does not require global VERIFY_HEAP.
     if (kVerifyPostEvac) {
         VLOG(REPORT, "[GCV2][verify][post-evac] enter point=post-mark run=%zu", minorTotalRuns + 1);
-        VerifyHeapObjects("post-mark", true, nullptr);
+        VerifyHeapObjects("post-mark", nullptr);
         VLOG(REPORT, "[GCV2][verify][post-evac] point=post-mark run=%zu", minorTotalRuns + 1);
     } else {
-        VerifyHeapObjects("pre-evacuate", false, nullptr);
+        VerifyHeapObjects("pre-evacuate", nullptr);
     }
 
     size_t liveBytes = 0;
@@ -1663,9 +1663,9 @@ void WCollector::DoYoungGarbageCollection()
     // Gate default off: kVerifyPostEvac. force=true so this does not
     // require MRT_GCV2_VERIFY_HEAP/REMSET (avoids pre-evacuate side effects).
     if (kVerifyPostEvac) {
-        VerifyHeapObjects("post-evacuate", true);
+        VerifyHeapObjects("post-evacuate");
         std::unordered_set<MAddress> remsetSnap = Heap::GetHeap().GetRememberedSet().Snapshot();
-        VerifyRememberedSetInvariant("post-evacuate", remsetSnap, true);
+        VerifyRememberedSetInvariant("post-evacuate", remsetSnap);
         ValidateMinorReferences("post-evacuate", nullptr);
         VLOG(REPORT,
              "[GCV2][verify][post-evac] point=post-evacuate run=%zu "

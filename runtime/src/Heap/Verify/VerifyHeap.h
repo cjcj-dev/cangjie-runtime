@@ -21,15 +21,15 @@ class BaseObject;
 //   H3  each ref field is null or points at an object that itself satisfies H1+H2+H4
 //   H4  holder (and H3 target) region is not free/garbage
 //
-// Gate (default off): MRT_GCV2_VERIFY_HEAP=1. Report-only, every invocation,
+// Gate (default off): unified VerifyFace::Objects (legacy MRT_GCV2_VERIFY_HEAP=1 is an alias).
+// Report-only, every invocation,
 // with the historical failure cap fixed at its default of 20 (HotSpot G1MaxVerifyFailures).
 //
 // Enumeration is independent of minor reachableObjects / TraceYoungClosure / remset.
-// force=true: run even when MRT_GCV2_VERIFY_HEAP is unset (post-evac hook uses this).
 // rootReachableHolders, when supplied, is a completed independent full-root closure.
 // nullptr means the closure was not measured; an empty non-null set means it ran and
 // found no holders. H3 uses a valid closure to split dead inventory from reachable edges.
-void VerifyHeapObjects(const char* point, bool force = false,
+void VerifyHeapObjects(const char* point,
                        const std::unordered_set<BaseObject*>* rootReachableHolders = nullptr);
 
 } // namespace MapleRuntime

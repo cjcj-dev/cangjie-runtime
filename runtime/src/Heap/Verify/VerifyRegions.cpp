@@ -14,7 +14,6 @@
 
 #include "Verify/VerifyRegions.h"
 
-#include <cstdlib>
 #include <cstring>
 #include <string>
 #include <unordered_map>
@@ -26,6 +25,7 @@
 #include "Base/LogFile.h"
 #include "Base/TimeUtils.h"
 #include "Common/BaseObject.h"
+#include "Heap/Verify/VerifyPhase.h"
 
 namespace MapleRuntime {
 namespace {
@@ -75,26 +75,6 @@ struct RegionMembership {
     const char* listName = nullptr;
     size_t hits = 0;
 };
-
-bool EnvIsOne(const char* name)
-{
-    const char* v = std::getenv(name);
-    return v != nullptr && std::strcmp(v, "1") == 0;
-}
-
-size_t EnvAsSize(const char* name, size_t defaultValue)
-{
-    const char* v = std::getenv(name);
-    if (v == nullptr || v[0] == '\0') {
-        return defaultValue;
-    }
-    char* end = nullptr;
-    unsigned long parsed = std::strtoul(v, &end, 10);
-    if (end == v) {
-        return defaultValue;
-    }
-    return static_cast<size_t>(parsed);
-}
 
 // Expected RegionType for list membership (RegionInfo.h RegionType ↔ RegionManager list comments).
 // Returns true if type is acceptable for the named list.
@@ -225,22 +205,7 @@ void WalkGhostList(const char* listName, RegionList& list, ListWalkStats& stats,
 
 bool VerifyRegions::IsEnabled()
 {
-    return false /* pinned:MRT_GCV2_VERIFY_REGIONS */;
-}
-
-bool VerifyRegions::IsFatal()
-{
-    return false /* pinned:MRT_GCV2_VERIFY_REGIONS_FATAL */;
-}
-
-bool VerifyRegions::ShouldRunAt(size_t youngRunIndex)
-{
-    // youngRunIndex is 1-based invocation counter for this young collection (minorTotalRuns+1).
-    size_t startAt = (0) /* pinned:MRT_GCV2_VERIFY_REGIONS_START_AT */;
-    if (startAt == 0) {
-        return true;
-    }
-    return youngRunIndex >= startAt;
+    return VerifyFaceEnabled(VerifyFace::Oops);
 }
 
 void VerifyRegions::ReportAndMaybeAbort(bool failed, const char* detail)
@@ -249,15 +214,12 @@ void VerifyRegions::ReportAndMaybeAbort(bool failed, const char* detail)
         return;
     }
     VLOG(REPORT, "[GCV2][verify][regions] FAIL %s", detail);
-    if (IsFatal()) {
-        CHECK_DETAIL(false, "MRT_GCV2_VERIFY_REGIONS_FATAL: %s", detail);
-    }
 }
 
 void VerifyRegions::VerifyAfterPrepareYoung(RegionManager& manager, const CandidateSet& candidates,
                                             size_t youngRunIndex, const char* point)
 {
-    if (!IsEnabled() || !ShouldRunAt(youngRunIndex)) {
+    if (!VerifyPhaseEnter(VerifyFace::Oops, point)) {
         return;
     }
     uint64_t t0 = TimeUtil::NanoSeconds();
@@ -461,7 +423,7 @@ void VerifyRegions::VerifyAfterPrepareYoung(RegionManager& manager, const Candid
 void VerifyRegions::VerifyAfterYoungMark(RegionManager& manager, const CandidateSet& candidates, size_t youngRunIndex,
                                          const char* point)
 {
-    if (!IsEnabled() || !ShouldRunAt(youngRunIndex)) {
+    if (!VerifyPhaseEnter(VerifyFace::Oops, point)) {
         return;
     }
     uint64_t t0 = TimeUtil::NanoSeconds();

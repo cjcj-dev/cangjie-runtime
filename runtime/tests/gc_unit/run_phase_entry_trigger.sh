@@ -77,7 +77,7 @@ LD_LIBRARY_PATH="$RUNTIME_LIB_DIR:$SDK_RUNTIME${LD_LIBRARY_PATH:+:$LD_LIBRARY_PA
   timeout 60s "$MINOR_BIN" >"$MINOR_RUN_LOG" 2>&1
 minor_rc=$?
 LD_LIBRARY_PATH="$RUNTIME_LIB_DIR:$SDK_RUNTIME${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}" \
-  MRT_GC_LOG=1 MRT_GCV2_DISABLE_MINOR=1 MRT_LOG_LEVEL=e cjGCInterval=3600s cjHeapSize=1GB \
+  MRT_GC_LOG=1 MRT_LOG_LEVEL=e cjGCInterval=3600s cjHeapSize=1GB \
   timeout 60s "$MAJOR_BIN" >"$MAJOR_RUN_LOG" 2>&1
 major_rc=$?
 LD_LIBRARY_PATH="$RUNTIME_LIB_DIR:$SDK_RUNTIME${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}" \
@@ -120,6 +120,13 @@ if mode in ("minor", "major"):
         errors.append("completion=0")
     if not any(record.kind == mode for record in records.cycles):
         errors.append(f"{mode}_cycle=0")
+    if mode == "major":
+        # The source stays below the automatic-minor waterline and makes one
+        # explicit heavy request. ZGC's major shape is one owned young prelude
+        # followed immediately by old collection.
+        cycle_kinds = [record.kind for record in records.cycles]
+        if cycle_kinds != ["minor", "major"]:
+            errors.append("major_explicit_shape=" + ",".join(cycle_kinds))
     if records.phase_leaves and not any(">" in record.path for record in records.phase_leaves):
         errors.append("nested_leaf_path=0")
 else:

@@ -10,8 +10,6 @@
 #include <atomic>
 #include <cerrno>
 #include <cstdint>
-#include <cstdlib>
-#include <cstring>
 
 #if defined(_WIN64)
 #include <windows.h>
@@ -30,6 +28,7 @@
 #include "ObjectModel/MClass.inline.h"
 #include "ObjectModel/RefField.h"
 #include "TypeInfoManager.h"
+#include "Heap/Verify/VerifyPhase.h"
 
 namespace MapleRuntime {
 namespace {
@@ -143,26 +142,6 @@ struct HeapVerifyStats {
     std::array<void*, kSampleLimit> samples{};
     size_t sampleCount = 0;
 };
-
-bool EnvEnabled(const char* name)
-{
-    const char* value = std::getenv(name);
-    return value != nullptr && std::strcmp(value, "1") == 0;
-}
-
-size_t EnvSizeT(const char* name, size_t defaultValue)
-{
-    const char* value = std::getenv(name);
-    if (value == nullptr || value[0] == '\0') {
-        return defaultValue;
-    }
-    char* end = nullptr;
-    unsigned long parsed = std::strtoul(value, &end, 10);
-    if (end == value) {
-        return defaultValue;
-    }
-    return static_cast<size_t>(parsed);
-}
 
 void PushSample(HeapVerifyStats& stats, void* addr)
 {
@@ -401,15 +380,9 @@ void ReportH3BadRegion(HeapVerifyStats& stats, size_t maxFailures, const char* p
 }
 } // namespace
 
-void VerifyHeapObjects(const char* point, bool force, const std::unordered_set<BaseObject*>* rootReachableHolders)
+void VerifyHeapObjects(const char* point, const std::unordered_set<BaseObject*>* rootReachableHolders)
 {
-    // Default off — HotSpot VerifyBeforeGC/VerifyAfterGC DIAGNOSTIC pattern.
-    // force=true lets post-evac run without enabling the global pre-evacuate gate.
-    static const bool verifyHeapEnabled = []() {
-        const char* value = std::getenv("MRT_GCV2_VERIFY_HEAP");
-        return value != nullptr && std::strcmp(value, "1") == 0;
-    }();
-    if (!force && !verifyHeapEnabled) {
+    if (!VerifyPhaseEnter(VerifyFace::Objects, point)) {
         return;
     }
 

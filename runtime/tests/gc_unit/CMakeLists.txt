@@ -67,6 +67,7 @@ set(GC_UNIT_SOURCES
     test_partial_array.cpp
     test_segmented_array_init.cpp
     test_verify_roots.cpp
+    test_verify_phase.cpp
     test_mem_map.cpp
 )
 

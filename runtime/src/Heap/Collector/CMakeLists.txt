@@ -11,6 +11,7 @@ set(SRC_LIST
     "Collector.cpp"
     "CollectorProxy.cpp"
     "CollectorResources.cpp"
+    "DriverPort.cpp"
     "TracingCollector.cpp"
     "MarkPartialArray.cpp"
     "MarkStripe.cpp"
