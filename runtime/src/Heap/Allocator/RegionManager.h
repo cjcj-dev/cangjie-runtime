@@ -9,11 +9,13 @@
 
 #include <cstdlib>
 #include <cstring>
+#include <functional>
 #include <list>
 #include <map>
 #include <set>
 #include <thread>
 #include <unordered_set>
+#include <utility>
 #include <vector>
 
 #include "AllocBuffer.h"
@@ -203,14 +205,20 @@ public:
     // Allocation-stall protocol (ZGC zPageAllocator.cpp:404-420, 525-531):
     // one request enters the allocator-owned FIFO, the first waiter asks GC,
     // and reclamation dequeues/satisfies requests under the allocator boundary.
-    bool StallAllocation(size_t size);
+    size_t StallAllocation(size_t size);
+    void FinishStalledAllocation(size_t claimedUnits);
     void SatisfyStalledAllocations();
-    void FailStalledAllocations() { allocationStallQueue.FailAll(); }
-    size_t PendingStalledAllocations() const { return allocationStallQueue.Pending(); }
-    size_t EnqueuedStalledAllocations() const { return allocationStallQueue.EnqueuedCount(); }
-    size_t DequeuedStalledAllocations() const { return allocationStallQueue.DequeuedCount(); }
-    size_t SatisfiedStalledAllocations() const { return allocationStallQueue.SatisfiedCount(); }
-    size_t FailedStalledAllocations() const { return allocationStallQueue.FailedCount(); }
+#if defined(MRT_GC_UNIT_TESTS)
+    using AllocationStallTestHook = std::function<void(RegionManager&)>;
+    MRT_EXPORT void SetAllocationStallTestHooks(AllocationStallTestHook beforeWave,
+                                                AllocationStallTestHook requestGc,
+                                                AllocationStallTestHook beforeWait);
+    MRT_EXPORT size_t PendingStalledAllocations() const;
+    MRT_EXPORT size_t EnqueuedStalledAllocations() const;
+    MRT_EXPORT size_t DequeuedStalledAllocations() const;
+    MRT_EXPORT size_t SatisfiedStalledAllocations() const;
+    MRT_EXPORT size_t FailedStalledAllocations() const;
+#endif
     size_t CompleteRelocationRequests(RegionInfo* region);
     // Before clearing the young flag on a promoted region, record every live
     // old→young out-edge that mutators skipped while the source was still young.
@@ -1171,6 +1179,11 @@ private:
     RegionList fromRegionList;
     RelocationRequestQueue relocationRequestQueue;
     AllocationStallQueue allocationStallQueue;
+#if defined(MRT_GC_UNIT_TESTS)
+    AllocationStallTestHook allocationStallBeforeWaveTestHook;
+    AllocationStallTestHook allocationStallGcTestHook;
+    AllocationStallTestHook allocationStallBeforeWaitTestHook;
+#endif
     RegionList ghostFromRegionList;
 
     // regions exempted by ExemptFromRegions, which will not be moved during current GC.

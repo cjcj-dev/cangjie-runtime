@@ -1155,31 +1155,100 @@ void RegionManager::ReclaimRegion(RegionInfo* region)
     SatisfyStalledAllocations();
 }
 
-bool RegionManager::StallAllocation(size_t size)
+size_t RegionManager::StallAllocation(size_t size)
 {
     AllocationStallRequest request(size);
     const bool requestGc = allocationStallQueue.Enqueue(request);
     if (requestGc) {
-        // Synchronous request preserves enqueue -> GC -> dequeue ordering and
-        // avoids mutator-side retry/yield loops.  Reclamation satisfies the
-        // queue while the collector owns the allocator boundary.
-        Heap::GetHeap().GetCollector().RequestGC(GC_REASON_OOM, false);
-        SatisfyStalledAllocations();
-        if (allocationStallQueue.Pending() != 0) {
-            // A completed GC that could not make enough room is a terminal OOM
-            // for all requests from this wave; no waiter is left stranded.
-            allocationStallQueue.FailAll();
-        }
+        bool anotherWave = false;
+        do {
+#if defined(MRT_GC_UNIT_TESTS)
+            if (allocationStallBeforeWaveTestHook) {
+                allocationStallBeforeWaveTestHook(*this);
+            }
+#endif
+            const uint64_t waveBoundary = allocationStallQueue.CaptureWaveBoundary();
+#if defined(MRT_GC_UNIT_TESTS)
+            if (allocationStallGcTestHook) {
+                allocationStallGcTestHook(*this);
+            } else
+#endif
+            {
+                Heap::GetHeap().GetCollector().RequestGC(GC_REASON_OOM, false);
+            }
+            SatisfyStalledAllocations();
+            anotherWave = allocationStallQueue.CompleteWave(waveBoundary);
+        } while (anotherWave);
     }
-    return request.Wait();
+
+#if !defined(MRT_ALLOCATION_STALL_CUT_SAFEREGION)
+    ScopedEnterSaferegion enterSaferegion(false);
+#endif
+#if defined(MRT_GC_UNIT_TESTS)
+    const bool satisfied = request.Wait(allocationStallBeforeWaitTestHook
+        ? [this] { allocationStallBeforeWaitTestHook(*this); }
+        : std::function<void()> {});
+#else
+    const bool satisfied = request.Wait();
+#endif
+    return satisfied ? request.GetClaimedUnits() : 0;
 }
+
+void RegionManager::FinishStalledAllocation(size_t claimedUnits)
+{
+    allocationStallQueue.ReleaseClaim(claimedUnits);
+    SatisfyStalledAllocations();
+}
+
+#if defined(MRT_GC_UNIT_TESTS)
+void RegionManager::SetAllocationStallTestHooks(AllocationStallTestHook beforeWave,
+                                                AllocationStallTestHook requestGc,
+                                                AllocationStallTestHook beforeWait)
+{
+    allocationStallBeforeWaveTestHook = std::move(beforeWave);
+    allocationStallGcTestHook = std::move(requestGc);
+    allocationStallBeforeWaitTestHook = std::move(beforeWait);
+}
+
+size_t RegionManager::PendingStalledAllocations() const
+{
+    return allocationStallQueue.Pending();
+}
+
+size_t RegionManager::EnqueuedStalledAllocations() const
+{
+    return allocationStallQueue.EnqueuedCount();
+}
+
+size_t RegionManager::DequeuedStalledAllocations() const
+{
+    return allocationStallQueue.DequeuedCount();
+}
+
+size_t RegionManager::SatisfiedStalledAllocations() const
+{
+    return allocationStallQueue.SatisfiedCount();
+}
+
+size_t RegionManager::FailedStalledAllocations() const
+{
+    return allocationStallQueue.FailedCount();
+}
+#endif
 
 void RegionManager::SatisfyStalledAllocations()
 {
-    allocationStallQueue.SatisfyAvailable([this](size_t bytes) {
+    allocationStallQueue.SatisfyAvailable([this](size_t bytes, size_t alreadyClaimed) {
         const size_t units = (bytes + RegionInfo::UNIT_SIZE - 1) / RegionInfo::UNIT_SIZE;
-        return units <= GetInactiveUnitCount() || units <= freeRegionManager.GetDirtyMaxBlock() ||
-            units <= freeRegionManager.GetReleasedMaxBlock();
+        const size_t largestExtent = std::max(
+            GetInactiveUnitCount(),
+            std::max<size_t>(freeRegionManager.GetDirtyMaxBlock(), freeRegionManager.GetReleasedMaxBlock()));
+#if defined(MRT_ALLOCATION_STALL_CUT_CLAIM)
+        (void)alreadyClaimed;
+        return units <= largestExtent ? units : 0;
+#else
+        return units <= largestExtent && alreadyClaimed <= largestExtent - units ? units : 0;
+#endif
     });
 }
 

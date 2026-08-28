@@ -2478,7 +2478,6 @@ EXPORTS
     _ZNK12MapleRuntime11RegionSpace18GetCurrentCapacityEv @2501
     _ZNK12MapleRuntime11RegionSpace18GetSpaceEndAddressEv @2502
     _ZNK12MapleRuntime11RegionSpace20GetSpaceStartAddressEv @2503
-    _ZNK12MapleRuntime11RegionSpace21ShouldRetryAllocationERyy @2504
     _ZNK12MapleRuntime12CJFileLoader10FindSymbolENS_7CStringES1_ @2505
     _ZNK12MapleRuntime12CJFileLoader11DoInitImageEPNS_8BaseFileE @2506
     _ZNK12MapleRuntime12CJFileLoader11GetBaseFileENS_7CStringE @2507
