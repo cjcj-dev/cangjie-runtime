@@ -18,6 +18,7 @@ set(SRC_LIST
     "TaskQueue.cpp"
     "FinalizerProcessor.cpp"
     "ReferenceProcessor.cpp"
+    "Uncommitter.cpp"
     "CopyCollector.cpp"
     "LiveInfo.cpp"
     "ForwardDataManager.cpp"

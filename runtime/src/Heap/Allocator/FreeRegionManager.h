@@ -8,10 +8,12 @@
 #ifndef MRT_FREE_REGION_MANAGER_H
 #define MRT_FREE_REGION_MANAGER_H
 
+#include <cstdint>
 #include <vector>
 
 #include "CartesianTree.h"
 #include "RegionInfo.h"
+#include "Heap/Collector/Uncommitter.h"
 #include "Common/ScopedObjectAccess.h"
 
 namespace MapleRuntime {
@@ -119,6 +121,7 @@ public:
                     }
                     FromPageDetach::ReusePermitScope reusePermit;
                     RegionInfo::CommitUnits(idx, num);
+                    Uncommitter::CancelCycle();
                     DLOG(REGION, "c-tree %p alloc released units[%u+%u, %u) @[0x%zx, 0x%zx), %u released-units left",
                         &releasedUnitTree, idx, num, idx + num, RegionInfo::GetUnitAddress(idx),
                         RegionInfo::GetUnitAddress(idx + num), releasedUnitTree.GetTotalCount());
@@ -177,7 +180,9 @@ public:
             }
             UnitIndex idx = node->GetIndex();
             UnitCount num = node->GetCount();
-            markQuarantineTree.ReleaseRootNode();
+            CHECK_DETAIL(markQuarantineTree.TakeUnits(num, idx, false),
+                         "tid %d: failed to promote mark-quarantine units[%u+%u, %u)", GetTid(), idx, num,
+                         idx + num);
             if (UNLIKELY(!dirtyUnitTree.MergeInsert(idx, num, true))) {
                 LOG(RTLOG_FATAL, "tid %d: failed to promote mark-quarantine units [%u+%u, %u) to dirty",
                     GetTid(), idx, num, idx + num);
@@ -245,6 +250,7 @@ public:
 
     size_t CalculateBytesToRelease() const;
     size_t ReleaseGarbageRegions(size_t targetCachedSize);
+    size_t UncommitIdleUnits(size_t maxBytes, uint64_t idleBeforeNs);
 
     // Phase-2 FROM_PAGE_DETACH_GATE. Entries are withheld from both allocator
     // trees until a major mark closure rechecks the same central predicate.

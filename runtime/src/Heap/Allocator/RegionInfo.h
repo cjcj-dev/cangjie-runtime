@@ -1840,6 +1840,16 @@ public:
 
     static void ReleaseUnits(size_t idx, size_t cnt)
     {
+        const size_t released = ReleaseUnitsPartial(idx, cnt);
+        CHECK_DETAIL(released == cnt * RegionInfo::UNIT_SIZE,
+                     "release outside heap reservation idx=%zu units=%zu released=%zu", idx, cnt, released);
+    }
+
+    // Release physical backing and return the exact successful byte prefix.
+    // Delayed uncommit uses this form so a backend partition failure remains
+    // observable and retryable instead of tripping the synchronous CHECK path.
+    static size_t ReleaseUnitsPartial(size_t idx, size_t cnt)
+    {
         void* unitAddress = reinterpret_cast<void*>(RegionInfo::GetUnitAddress(idx));
         size_t size = cnt * RegionInfo::UNIT_SIZE;
         RegionInfo* wipeRegion = RegionInfo::TryGetRegionInfoAt(reinterpret_cast<uintptr_t>(unitAddress));
@@ -1851,11 +1861,12 @@ public:
              unitAddress, size, RegionInfo::GetUnitAddress(idx + cnt));
         const size_t released = UnitInfo::memoryOwner == nullptr ? 0 :
                                 UnitInfo::memoryOwner->ReleaseMemory(unitAddress, size);
-        CHECK_DETAIL(released == size,
-                     "release outside heap reservation idx=%zu units=%zu", idx, cnt);
 #ifdef CANGJIE_ASAN_SUPPORT
-        Sanitizer::OnHeapMadvise(unitAddress, size);
+        if (released != 0) {
+            Sanitizer::OnHeapMadvise(unitAddress, released);
+        }
 #endif
+        return released;
     }
 
     BaseObject* GetFirstObject() const { return from_region_addr(GetRegionStart()); }

@@ -13,6 +13,9 @@
 
 #include "Collector/Collector.h"
 #include "Collector/CollectorResources.h"
+#include "Collector/GcTrigger.h"
+#include "Collector/Uncommitter.h"
+#include "Base/TimeUtils.h"
 #if defined(CANGJIE_SANITIZER_SUPPORT) || defined(CANGJIE_GWPASAN_SUPPORT)
 #include "Sanitizer/SanitizerInterface.h"
 #endif
@@ -108,6 +111,62 @@ MAddress RegionSpace::Allocate(size_t size, AllocType allocType)
 #endif
     return internalAddr + HEADER_SIZE;
 }
+
+size_t RegionSpace::UncommitIdleMemory()
+{
+    if (!Uncommitter::Enabled()) {
+        return 0;
+    }
+    if (Heap::GetHeap().IsGcStarted() || Uncommitter::ShouldStopUncommit()) {
+        return 0;
+    }
+    uint64_t delayNs = Uncommitter::DelayNs();
+    uint64_t now = TimeUtil::NanoSeconds();
+    if (now < delayNs) {
+        return 0;
+    }
+    Uncommitter::ActivateCycle();
+    size_t total = 0;
+    const uint64_t idleBefore = now - delayNs;
+    while (!Heap::GetHeap().IsGcStarted() && !Uncommitter::ShouldStopUncommit()) {
+        size_t usedBytes = regionManager.GetUsedRegionSize();
+        size_t dirtyBytes = regionManager.GetDirtyUnitCount() * RegionInfo::UNIT_SIZE;
+        size_t releasedBytes = regionManager.GetReleasedUnitCount() * RegionInfo::UNIT_SIZE;
+        size_t garbageBytes = regionManager.GetGarbageUnitCount() * RegionInfo::UNIT_SIZE;
+        size_t minCapacity = Uncommitter::MinCapacity(usedBytes, kGcTriggerYoungFixedBytes);
+        size_t chunk = Uncommitter::ChunkLimit(GetMaxCapacity());
+        size_t flush = Uncommitter::FlushBytes(usedBytes, releasedBytes, minCapacity, chunk);
+        LOG(RTLOG_INFO,
+            "Uncommit: tick used=%zu dirty=%zu released=%zu garbage=%zu min=%zu flush=%zu",
+            usedBytes, dirtyBytes, releasedBytes, garbageBytes, minCapacity, flush);
+        if (flush == 0) {
+            break;
+        }
+        size_t n = regionManager.UncommitIdleUnits(flush, idleBefore);
+        if (n == 0) {
+            break;
+        }
+        total += n;
+    }
+    return total;
+}
+
+size_t RegionSpace::DrainUncommitIdleMemory()
+{
+    size_t usedBytes = regionManager.GetUsedRegionSize();
+    size_t releasedBytes = regionManager.GetReleasedUnitCount() * RegionInfo::UNIT_SIZE;
+    size_t minCapacity = Uncommitter::MinCapacity(usedBytes, kGcTriggerYoungFixedBytes);
+    size_t chunk = Uncommitter::ChunkLimit(GetMaxCapacity());
+    size_t flush = Uncommitter::FlushBytes(usedBytes, releasedBytes, minCapacity, chunk);
+    if (flush == 0) {
+        flush = releasedBytes;
+    }
+    if (flush == 0) {
+        return 0;
+    }
+    return regionManager.UncommitIdleUnits(flush, static_cast<uint64_t>(-1));
+}
+
 void RegionSpace::Init(const HeapParam& vmHeapParam)
 {
     MemMap::Option opt = MemMap::DEFAULT_OPTIONS;

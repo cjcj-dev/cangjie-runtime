@@ -13,6 +13,7 @@
 
 #include "Base/LogFile.h"
 #include "Base/Panic.h"
+#include "Base/TimeUtils.h"
 #include "LocalDeque.h"
 
 #if defined(MRT_DEBUG)
@@ -77,6 +78,7 @@ public:
 
         root = nullptr;
         totalCount = 0;
+        lastUsedNs = 0;
     }
 
     Count GetTotalCount() const { return totalCount; }
@@ -98,6 +100,7 @@ public:
     // if num is 0U, it always fails
     bool MergeInsert(Index idx, Count num, bool refreshRegionInfo)
     {
+        lastUsedNs = TimeUtil::NanoSeconds();
         if (root == nullptr) {
             root = new (nodeAllocator.Allocate()) Node(idx, num, refreshRegionInfo);
             CTREE_ASSERT(root != nullptr, "failed to allocate a new node");
@@ -179,7 +182,6 @@ public:
         }
 
         void RefreshFreeRegionInfo();
-        void ReleaseMemory();
 
         Node* l;
         Node* r;
@@ -260,12 +262,15 @@ public:
 
     inline bool Empty() const { return root == nullptr; }
     inline const Node* RootNode() const { return root; }
+    inline uint64_t GetLastUsedNs() const { return lastUsedNs; }
+    bool TakeIdleUnits(uint64_t idleBeforeNs, Count maxCount, Index& idx, Count& num);
     size_t GetNodeCount() const;
 
     // root node records the largest block of memory.
     void ReleaseRootNode()
     {
-        root->ReleaseMemory();
+        // Logical removal only; physical backing is owned by the delayed
+        // uncommit worker rather than this tree helper.
         RemoveNode(root);
     }
 
@@ -277,6 +282,7 @@ public:
 
 private:
     Count totalCount = 0u; // sum of all node counts.
+    uint64_t lastUsedNs = 0;
     Node* root = nullptr;
     SingleUseDeque<Node**> sud;
     SingleUseDeque<Node*> traversalSud;

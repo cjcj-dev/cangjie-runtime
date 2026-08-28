@@ -21,6 +21,7 @@
 #include "CollectorProxy.h"
 #include "Common/Runtime.h"
 #include "MutatorAllocRate.h"
+#include "Collector/Uncommitter.h"
 #include "Common/RunType.h"
 #include "Common/ScopedObjectAccess.h"
 #include "LoaderManager.h"
@@ -93,6 +94,12 @@ void CollectorResources::Init()
     finalizerProcessor.Start();
     gcStats.Init();
     MutatorAllocRate::initialize();
+    if (Uncommitter::Enabled()) {
+        LOG(RTLOG_INFO, "Uncommit: Enabled delay=%zus tick=%ums",
+            static_cast<size_t>(Uncommitter::DelayNs() / SECOND_TO_NANO_SECOND), Uncommitter::TickMs());
+    } else {
+        LOG(RTLOG_INFO, "Uncommit: Disabled");
+    }
 }
 
 void CollectorResources::Fini()

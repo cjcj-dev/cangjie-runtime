@@ -7,12 +7,14 @@
 
 #include "Collector/FinalizerProcessor.h"
 
+#include <algorithm>
 #include "Base/Macros.h"
+#include "Collector/Uncommitter.h"
 #include "Common/ScopedObjectAccess.h"
 #include "ExceptionManager.inline.h"
+#include "Heap/Heap.h"
 #include "Heap/Allocator/HeapFiller.h"
 #include "Heap/Barrier/Barrier.h"
-#include "Heap/Heap.h"
 #include "Mutator/Mutator.h"
 #include "ObjectModel/MObject.h"
 #include "CjScheduler.h"
@@ -83,6 +85,9 @@ FinalizerProcessor::FinalizerProcessor()
 {
     started = false;
     running.store(false, std::memory_order_relaxed);
+    uint32_t uncommitTickMs = Uncommitter::TickMs();
+    iterationWaitTime = uncommitTickMs == 0 ? DEFAULT_FINALIZER_TIMEOUT_MS :
+        std::min(DEFAULT_FINALIZER_TIMEOUT_MS, uncommitTickMs);
     timeProcessorBegin = 0;
     timeProcessUsed = 0;
     timeCurrentProcessBegin = 0;
@@ -109,11 +114,13 @@ void FinalizerProcessor::Run()
                 if (hasPendingFinalizableJob || hasPendingReclaimHeapGarbage || hasPendingFeedHungryBuffers) {
                     break;
                 }
-                Wait();
+                Wait(iterationWaitTime);
+                UncommitIdleMemory();
             }
         }
 
         if (!running.load(std::memory_order_acquire)) {
+            DrainUncommitIdleMemory();
             break;
         }
 
@@ -137,6 +144,7 @@ void FinalizerProcessor::Run()
         if (hasPendingReclaimHeapGarbage) {
             ReclaimHeapGarbage();
         }
+
     }
     Fini();
 }
@@ -415,6 +423,19 @@ void FinalizerProcessor::ReclaimHeapGarbage()
 {
     ScopedEntryTrace trace("CJRT_GC_RECLAIM");
     Heap::GetHeap().GetAllocator().ReclaimGarbageMemory(false);
+}
+
+void FinalizerProcessor::UncommitIdleMemory()
+{
+    if (!Uncommitter::Enabled()) {
+        return;
+    }
+    Heap::GetHeap().GetAllocator().UncommitIdleMemory();
+}
+
+void FinalizerProcessor::DrainUncommitIdleMemory()
+{
+    Heap::GetHeap().GetAllocator().DrainUncommitIdleMemory();
 }
 
 void FinalizerProcessor::FeedHungryBuffers()

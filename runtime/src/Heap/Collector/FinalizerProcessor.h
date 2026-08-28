@@ -116,6 +116,8 @@ private:
     void ProcessFinalizables();
     void ProcessFinalizableList();
     void ReclaimHeapGarbage();
+    void UncommitIdleMemory();
+    void DrainUncommitIdleMemory();
     void FeedHungryBuffers();
 
     std::mutex wakeLock;
