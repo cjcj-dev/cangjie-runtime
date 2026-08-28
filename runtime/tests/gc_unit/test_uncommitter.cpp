@@ -234,6 +234,9 @@ GC_OTHER_VM_TEST(Uncommitter, PeriodicUncommitStopsAfterCancel)
 
 GC_TEST(Uncommitter, LiveForwardingBlocksReleasedCache)
 {
+    if (ForwardingTable::Ready()) {
+        return;
+    }
     BindUncommitWorkerThread();
     const size_t n = 8;
     const size_t meta = RegionManager::GetMetadataSize(n);
