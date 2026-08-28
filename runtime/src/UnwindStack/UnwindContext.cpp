@@ -29,6 +29,10 @@ bool UnwindContext::UnwindToCallerContextFromN2CStub(UnwindContext& caller) cons
 
 bool UnwindContext::UnwindToCallerContext(UnwindContext& caller) const
 {
+    // Read-only stack walkers call this primitive directly.  The sole product
+    // exposure caller (stack growth) brackets it with StackExposureHook at
+    // its entry point; keeping the primitive itself side-effect free avoids
+    // turning GC/printing/Inspector traversals into exposure consumers.
     DLOG(UNWIND, "UnwindToCallerContext");
     DLOG(UNWIND, "Current UnwindContext status : %p",
          static_cast<std::underlying_type<UnwindContextStatus>::type>(status));

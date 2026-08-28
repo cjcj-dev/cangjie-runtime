@@ -28,6 +28,7 @@
 #include "MutatorManager.h"
 #include "StackManager.h"
 #include "UnwindStack/StackFrameCursor.h"
+#include "UnwindStack/StackExposureHook.h"
 #include "ExceptionManager.h"
 #include "schedule.h"
 #ifdef _WIN64
@@ -447,7 +448,9 @@ void Mutator::VisitStackRoots(const RootVisitor& func, const RootVisitor& invisi
                 "env=MRT_GCV2_STACK_EXPOSURE_VERIFY=1");
         }
     }
+    BindExposureVisitors(&func, nullptr);
     StackManager::VisitStackRoots(uwContext, func, *this);
+    UnbindExposureVisitors();
     VisitRawObjects(visitedInvisibleRootVisitor);
     DecObserver();
     MutatorUnlock();
@@ -509,8 +512,10 @@ void Mutator::VisitHeapReferencesOnStack(const RootVisitor& regRootVisitor, cons
 #if defined(GCINFO_DEBUG) && GCINFO_DEBUG
     CreateCurrentGCInfo();
 #endif
+    BindExposureVisitors(&regRootVisitor, &derivedPtrVisitor);
     StackManager::VisitHeapReferencesOnStack(
         uwContext, regRootVisitor, slotRootVisitor, derivedPtrVisitor, *this);
+    UnbindExposureVisitors();
     VisitRawObjects(rawObjectVisitor);
     DecObserver();
     MutatorUnlock();
@@ -769,12 +774,18 @@ intptr_t Mutator::FixExtendedStack(intptr_t frameBase, uint32_t adjustedSize, vo
         } else {
             UnwindContext& stackGrowContext = Mutator::GetMutator()->GetUnwindContext();
             UnwindContext caller;
+            // This caller computation is the stack-growth unwind consumer that
+            // publishes a managed caller for continued execution. Protect an
+            // unscanned caller before its frame address is used for relocation.
+            const size_t exposingFrameIndex = stackWatermark.GetCursorIndex();
+            StackExposureHook::OnBeforeUnwind(*this, exposingFrameIndex);
 #ifdef _WIN64
             UnwindContextStatus ucs = stackGrowContext.GetUnwindContextStatus();
             stackGrowContext.frameInfo.mFrame.UnwindToCallerMachineFrame(caller.frameInfo, ucs);
 #else
             stackGrowContext.frameInfo.mFrame.UnwindToCallerMachineFrame(caller.frameInfo.mFrame);
 #endif
+            StackExposureHook::OnAfterUnwind(*this, exposingFrameIndex);
             caller.frameInfo.ResolveProcInfo();
             ElfUnloadQuiescence::ReadScope metadataReader;
 #ifdef __APPLE__
@@ -1030,6 +1041,7 @@ bool Mutator::DrainStackWatermark(const RootVisitor& visitor, const RootVisitor&
     StackFrameCursor cursor(uwContext);
     bool began = stackWatermark.TryBegin(epoch, owner, cursor.FrameCount());
     if (began) {
+        BindExposureVisitors(&visitor, derivedPtrVisitor);
         while (cursor.ProcessOne(visitor, *this, derivedPtrVisitor)) {
             stackWatermark.AdvanceTo(cursor.Cursor(), owner);
         }
@@ -1038,6 +1050,7 @@ bool Mutator::DrainStackWatermark(const RootVisitor& visitor, const RootVisitor&
         // size of the snapshot and therefore cannot prove that the cursor
         // actually processed it.
         scannedFrames = cursor.Cursor();
+        UnbindExposureVisitors();
     }
     bool complete = began && scannedFrames == stackWatermark.GetFrameCount();
     if (began) {

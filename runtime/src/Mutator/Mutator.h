@@ -26,6 +26,7 @@
 #include "Interpreter/Options.h"
 #include "Interpreter/RTInterface.h"
 #include "ObjectModel/RefField.h"
+#include "StackMap/StackMapTypeDef.h"
 #include "UnwindStack/StackWatermark.h"
 
 
@@ -777,9 +778,27 @@ private:
     // Layout-safe: after handshake fields, runtime-only, not compiler-hardcoded.
     StackWatermark stackWatermark;
 
+    // Bound while DrainStackWatermark / VisitHeapReferencesOnStack is on the
+    // stack. Exposure process_one uses these — not a no-op lambda.
+    const RootVisitor* exposureRootVisitor = nullptr;
+    const DerivedPtrVisitor* exposureDerivedVisitor = nullptr;
+
 public:
     StackWatermark& GetStackWatermark() { return stackWatermark; }
     const StackWatermark& GetStackWatermark() const { return stackWatermark; }
+
+    void BindExposureVisitors(const RootVisitor* root, const DerivedPtrVisitor* derived)
+    {
+        exposureRootVisitor = root;
+        exposureDerivedVisitor = derived;
+    }
+    void UnbindExposureVisitors()
+    {
+        exposureRootVisitor = nullptr;
+        exposureDerivedVisitor = nullptr;
+    }
+    const RootVisitor* GetExposureRootVisitor() const { return exposureRootVisitor; }
+    const DerivedPtrVisitor* GetExposureDerivedVisitor() const { return exposureDerivedVisitor; }
 
 #ifdef INTERPRETER_ENABLED
     void InitInterpreterPart();
