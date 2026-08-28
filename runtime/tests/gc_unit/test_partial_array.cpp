@@ -508,6 +508,15 @@ void CheckBoundaryRefs(Slot* slots, size_t length)
     GC_EXPECT_TRUE(on.count(length - 1) == 1);
 }
 
+void EnablePartialArrayForThisVm()
+{
+    // MarkPartialArray is intentionally default-off in the product.  These
+    // product-path arms run under GC_OTHER_VM_TEST so they can opt in before
+    // Enabled() caches the environment, independent of the gate's defaults.
+    GC_EXPECT_EQ(setenv("MRT_GCV2_PARTIAL_ARRAY", "1", 1), 0);
+    GC_EXPECT_TRUE(MarkPartialArray::Enabled());
+}
+
 void CheckBoundaryRefsProduct(size_t n, size_t contentPhase, bool misalignedBase)
 {
     GcHeapFixture fx;
@@ -604,6 +613,7 @@ void CheckBoundaryRefsProduct(size_t n, size_t contentPhase, bool misalignedBase
 
 GC_OTHER_VM_TEST(PartialArray, BoundaryRefs)
 {
+    EnablePartialArrayForThisVm();
     const size_t n = MarkPartialArray::MIN_LENGTH * 3;
     constexpr size_t kRepeats = 20;
     constexpr size_t kPageAligned = 0;
@@ -615,6 +625,7 @@ GC_OTHER_VM_TEST(PartialArray, BoundaryRefs)
 
 GC_OTHER_VM_TEST(PartialArray, BoundaryRefsPlusSlot)
 {
+    EnablePartialArrayForThisVm();
     const size_t n = MarkPartialArray::MIN_LENGTH * 3;
     constexpr size_t kRepeats = 20;
     constexpr size_t kAfterHeader = sizeof(Slot);
@@ -625,8 +636,9 @@ GC_OTHER_VM_TEST(PartialArray, BoundaryRefsPlusSlot)
 }
 
 #ifdef MRT_TESTABLE_INTERNALS
-GC_TEST(PartialArray, BoundaryRefsMisalignedBase)
+GC_OTHER_VM_TEST(PartialArray, BoundaryRefsMisalignedBase)
 {
+    EnablePartialArrayForThisVm();
     // Deliberately put the heap base one byte into the page while keeping the
     // array page aligned.  The fixed relative Encodable predicate must take
     // the inline fallback and preserve the full element set.  A regression to
