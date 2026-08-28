@@ -42,12 +42,7 @@ public:
         if (del->GetRegionType() != oldType) {
             return false;
         }
-        // Type maps 1:1 to list except the window after this CAS-like claim
-        // unlinks and before the caller Prepends onto the destination list.
-        // An unlisted node has prev==null and is not head (DeleteRegionLocked
-        // clears both links). Refuse so a concurrent TryDelete on the dest
-        // list cannot DecCounts a list that does not own the node.
-        if (listHead != del && del->GetPrevRegion() == nullptr) {
+        if (del->GetRegionListOwner() != this) {
             return false;
         }
         DeleteRegionLocked(del);
@@ -170,12 +165,17 @@ public:
     {
         std::lock_guard<std::mutex> lock(listMutex);
         targetList.AssignWith(*this);
+        for (RegionInfo* node = targetList.listHead; node != nullptr; node = node->GetNextRegion()) {
+            node->SetRegionListOwner(&targetList);
+        }
         this->ClearList();
     }
 
     void CopyListTo(RegionList& dstList)
     {
         std::lock_guard<std::mutex> lock(listMutex);
+        // Snapshot aliases (notably ghostFromRegionList) never claim authority;
+        // the source list remains the sole owner of every node.
         dstList.listHead = this->listHead;
         dstList.listTail = this->listTail;
         dstList.regionCount = this->regionCount;

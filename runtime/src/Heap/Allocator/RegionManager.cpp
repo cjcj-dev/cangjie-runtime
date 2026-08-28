@@ -766,6 +766,9 @@ void RegionList::MergeRegionList(RegionList& srcList, RegionInfo::RegionType reg
         listHead->SetPrevRegion(tail);
         listHead = head;
     }
+    for (RegionInfo* node = head; node != nullptr; node = node->GetNextRegion()) {
+        node->SetRegionListOwner(this);
+    }
 }
 
 void RegionList::PrependRegion(RegionInfo* region, RegionInfo::RegionType type)
@@ -780,11 +783,14 @@ void RegionList::PrependRegionLocked(RegionInfo* region, RegionInfo::RegionType 
         return;
     }
 
+    CHECK_DETAIL(region->GetRegionListOwner() == nullptr, "region already belongs to a list");
+
     DLOG(REGION, "list %p (%zu, %zu)+(%zu, %zu) prepend region %p@[%#zx+%zu, %#zx) type %u->%u", this,
         regionCount, unitCount, 1llu, region->GetUnitCount(), region, region->GetRegionStart(),
         region->GetRegionAllocatedSize(), region->GetRegionEnd(), region->GetRegionType(), type);
 
     region->SetRegionType(type);
+    region->SetRegionListOwner(this);
     region->SetPrevRegion(nullptr);
     IncCounts(1, region->GetUnitCount());
     region->SetNextRegion(listHead);
@@ -800,12 +806,14 @@ void RegionList::PrependRegionLocked(RegionInfo* region, RegionInfo::RegionType 
 void RegionList::DeleteRegionLocked(RegionInfo* del)
 {
     MRT_ASSERT(listHead != nullptr && listTail != nullptr, "illegal region list");
+    CHECK_DETAIL(del != nullptr && del->GetRegionListOwner() == this, "region belongs to another list");
 
     RegionInfo* pre = del->GetPrevRegion();
     RegionInfo* next = del->GetNextRegion();
 
     del->SetNextRegion(nullptr);
     del->SetPrevRegion(nullptr);
+    del->SetRegionListOwner(nullptr);
 
     DLOG(REGION, "list %p (%zu, %zu)-(%zu, %zu) delete region %p@[%#zx+%zu, %#zx) type %u", this,
         regionCount, unitCount, 1llu, del->GetUnitCount(),

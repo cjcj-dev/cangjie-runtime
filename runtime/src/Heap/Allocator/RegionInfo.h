@@ -59,6 +59,7 @@
 #endif
 
 namespace MapleRuntime {
+class RegionList;
 template<typename T>
 class BitField {
 public:
@@ -1799,12 +1800,11 @@ public:
         // markwater: markStartAllocPtr sits next to regionEnd0 (same snapshot
         // format). 8 bytes per 4 KiB unit is another 0.195% of heap capacity.
         // lifeclock: independent 64-bit region identity plus the five region-local
-        // The explicit from-page metadata carrier grows the per-unit metadata
-        // from 272 to 296 bytes (+24, 0.586% per 4 KiB unit). Together with the
-        // preceding life-clock fields the total 208 -> 296 delta is 2.148%.
-        // This is correctness-owned page identity, not test-only shape, so it
-        // is deliberately present in product builds.
-        static_assert(sizeof(UnitInfo) == 296, "per-unit metadata size changed; it is per-page, so price it");
+        // The explicit from-page metadata carrier and list-authority token keep
+        // the per-unit metadata at the measured 304-byte layout. This is
+        // correctness-owned page identity/membership, not test-only shape.
+        // It is deliberately present in product builds.
+        static_assert(sizeof(UnitInfo) == 304, "per-unit metadata size changed; it is per-page, so price it");
     }
 
     static RegionInfo* GetRegionInfo(uint32_t idx)
@@ -3131,6 +3131,12 @@ public:
         return reinterpret_cast<RegionInfo*>(UnitInfo::GetUnitInfo(metadata.prevRegionIdx));
     }
 
+    // Intrusive-list authority. A region has at most one owning RegionList;
+    // ghost snapshots intentionally do not modify this token.
+    RegionList* GetRegionListOwner() const { return metadata.regionListOwner.load(std::memory_order_acquire); }
+
+    void SetRegionListOwner(RegionList* owner) { metadata.regionListOwner.store(owner, std::memory_order_release); }
+
     void SetPrevRegion(const RegionInfo* r)
     {
         if (UNLIKELY(r == nullptr)) {
@@ -3620,6 +3626,9 @@ private:
             uint32_t censusBoundaryOffset;
         };
 
+        // Authoritative intrusive-list membership; ghost snapshots do not claim it.
+        std::atomic<RegionList*> regionListOwner{ nullptr };
+
         // ZGC page seqnum analogue: an independent, non-wrapping incarnation
         // identity. It is deliberately not packed into routeDestHold.
         std::atomic<RegionLifeId> regionLifeId{ 0 };
@@ -3977,6 +3986,7 @@ private:
     // bracket can be reordered with the payload stores between them.
     void InitRegionInfo(size_t nUnit, UnitRole uClass)
     {
+        CHECK_DETAIL(GetRegionListOwner() == nullptr, "reinitializing a region still owned by a list");
         CHECK_DETAIL(FromPageDetach::FromPageDetachCheck(this, FromPageDetach::Site::INIT_REGION_INFO),
                      "CJRT_FROM_REUSE_GATE bypass reached InitRegionInfo region=%p units=%zu", this, nUnit);
         M0Correlation::InvalidateRegionBindings(GetRegionStart(), GetRegionLifeId());
@@ -4009,6 +4019,7 @@ private:
         // region that still named its previous-life successor kept a retired
         // from-space chain alive across InitRegion (RegionManager.h:782).
         metadata.nextRegionIdx0 = NULLPTR_IDX;
+        metadata.regionListOwner = nullptr;
         metadata.censusBoundaryOffset = 0;
         __atomic_store_n(&metadata.liveByteCount, 0, std::memory_order_release);
         metadata.liveInfo = nullptr;
