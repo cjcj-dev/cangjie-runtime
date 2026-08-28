@@ -198,14 +198,19 @@ public:
         return markQuarantineTree.GetTotalCount();
     }
 
-    void AddReleaseUnits(UnitIndex idx, UnitCount num)
+    static bool ExtentReadyForReleasedCache(RegionInfo* region)
     {
-        ScopedEnterSaferegion enterSaferegion(true);
-        std::lock_guard<std::mutex> lg(releasedUnitTreeMutex);
-        if (UNLIKELY(!releasedUnitTree.MergeInsert(idx, num, true))) {
-            LOG(RTLOG_FATAL, "tid %d: failed to add release units [%u+%u, %u)", GetTid(), idx, num, idx + num);
+        if (region == nullptr) {
+            return true;
         }
+        if (region->ForwardingRefCount() != 0) {
+            return false;
+        }
+        return !ForwardingTable::HasLiveCarrier(region->GetRegionStart(),
+                                                region->GetRegionSizeForDetachCheck());
     }
+
+    void AddReleaseUnits(UnitIndex idx, UnitCount num);
 
     UnitCount GetDirtyUnitCount() const
     {

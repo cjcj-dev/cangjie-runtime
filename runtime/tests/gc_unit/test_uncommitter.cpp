@@ -11,6 +11,7 @@
 #include "Heap/Allocator/FreeRegionManager.h"
 #include "Heap/Allocator/RegionManager.h"
 #undef private
+#include "Heap/Allocator/ForwardingTable.h"
 #include "Heap/Allocator/MemMap.h"
 #include "Heap/Allocator/RegionSpace.h"
 #include "Heap/Collector/Uncommitter.h"
@@ -229,3 +230,50 @@ GC_OTHER_VM_TEST(Uncommitter, PeriodicUncommitStopsAfterCancel)
     const size_t backendReleased = ProbeProductUncommit(true, true);
     GC_EXPECT_EQ(backendReleased, 0U);
 }
+
+GC_TEST(Uncommitter, LiveForwardingBlocksReleasedCache)
+{
+    BindUncommitWorkerThread();
+    const size_t n = 8;
+    const size_t meta = RegionManager::GetMetadataSize(n);
+    const size_t heapBytes = n * RegionInfo::UNIT_SIZE;
+    const size_t total = meta + heapBytes;
+    MemMap* map = MemMap::MapMemory(total, total);
+    GC_EXPECT_TRUE(map != nullptr);
+    const uintptr_t heapStart = reinterpret_cast<uintptr_t>(map->GetBaseAddr()) + meta;
+    RegionInfo::Initialize(n, heapStart, map);
+    RegionInfo* region = RegionInfo::InitRegion(0, 1, RegionInfo::UnitRole::FREE_UNITS);
+    GC_EXPECT_TRUE(region != nullptr);
+    ForwardingTable::Initialize(static_cast<MAddress>(heapStart), heapBytes, RegionInfo::UNIT_SIZE);
+    RegionManager rm;
+    FreeRegionManager frm(rm);
+    frm.Initialize(n);
+
+    frm.AddReleaseUnits(0, 1);
+    GC_EXPECT_EQ(frm.GetReleasedUnitCount(), 1U);
+    CartesianTree::Index idx = 0;
+    GC_EXPECT_TRUE(frm.releasedUnitTree.TakeUnits(1, idx, false));
+
+    if (!ForwardingTable::InsertProvisional(region->GetRegionStart(), region->GetRegionSize(), region)) {
+        GC_EXPECT_TRUE(ForwardingTable::PreparePublicationGeneration(
+            region->GetRegionStart(), region->GetRegionSize()));
+        GC_EXPECT_TRUE(ForwardingTable::InsertProvisional(
+            region->GetRegionStart(), region->GetRegionSize(), region));
+    }
+    GC_EXPECT_TRUE(ForwardingTable::GetEntries(region->GetRegionStart()) != nullptr);
+    GC_EXPECT_FALSE(FreeRegionManager::ExtentReadyForReleasedCache(region));
+
+    frm.AddReleaseUnits(0, 1);
+    std::fprintf(stderr, "DETAIL liveFwd released=%u quarantine=%d\n",
+                 frm.GetReleasedUnitCount(), frm.HasDetachQuarantine() ? 1 : 0);
+    std::fflush(stderr);
+    GC_EXPECT_EQ(frm.GetReleasedUnitCount(), 0U);
+    GC_EXPECT_TRUE(frm.HasDetachQuarantine());
+
+    ForwardingTable::ClearEntries(region->GetRegionStart(), region->GetRegionSize());
+    ForwardingTable::DropRetiredCovering(region->GetRegionStart(), region->GetRegionSize());
+    ForwardingTable::Remove(region->GetRegionStart(), region->GetRegionSize());
+    MemMap::DestroyMemMap(map);
+}
+
+
