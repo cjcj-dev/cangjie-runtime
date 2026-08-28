@@ -95,8 +95,9 @@ bool WCollector::MarkObjectImpl(BaseObject* obj, bool youngClaim, MarkLiveCache*
     // names the running closure, not the target object's face.
     // When liveCache is set, mark bits stay atomic and live bytes are coalesced
     // per worker (ZGC zMarkCache.hpp).
-    bool marked = region->MarkObjectByOwner(obj, objectSize, liveCache == nullptr);
-    if (!marked && liveCache != nullptr) {
+    bool incLive = false;
+    bool marked = region->MarkObjectByOwner(obj, objectSize, liveCache == nullptr, incLive);
+    if (incLive && liveCache != nullptr) {
         liveCache->IncLive(region, objectSize);
     }
     if (!marked) {
@@ -2187,11 +2188,8 @@ void WCollector::MarkNewObject(BaseObject* obj)
 
 void WCollector::ProcessFinalizers()
 {
-    std::function<bool(BaseObject*)> finalizable = [this](BaseObject* obj) {
-        return !IsMarkedObject<Generation::Old>(obj);
-    };
     FinalizerProcessor& fp = collectorResources.GetFinalizerProcessor();
-    fp.EnqueueFinalizables(finalizable, snapshotFinalizerNum);
-    fp.Notify();
+    fp.ProcessReferences(
+        [this](BaseObject* obj) { return IsMarkedObject<Generation::Old>(obj); });
 }
 } // namespace MapleRuntime

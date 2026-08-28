@@ -91,8 +91,7 @@ const char* PathName(RegisterPath p)
 // Match RecordPromotedCrossGenEdges liveness gate (RegionManager.cpp:324-326).
 bool UseLiveOnly(RegionInfo* region, MarkView<Generation::Young> view)
 {
-    bool hasObjectLiveness = region->IsLargeRegion() || region->GetMarkBitmap(view) != nullptr ||
-        region->GetResurrectBitmap() != nullptr;
+    bool hasObjectLiveness = region->IsLargeRegion() || region->GetMarkBitmap(view) != nullptr;
     return hasObjectLiveness && region->IsLiveCountAuthoritative();
 }
 
@@ -189,8 +188,7 @@ void SnapshotDomainEdgesAtRegister(RegionInfo* region, MarkView<Generation::Youn
         return;
     }
     static const bool skipOne = false /* pinned:MRT_GCV2_PROMO_DOMAIN_SKIP_ONE */;
-    bool hasObjectLiveness = region->IsLargeRegion() || region->GetMarkBitmap(view) != nullptr ||
-        region->GetResurrectBitmap() != nullptr;
+    bool hasObjectLiveness = region->IsLargeRegion() || region->GetMarkBitmap(view) != nullptr;
     bool useLiveOnly = UseLiveOnly(region, view);
     region->VisitAllObjects([&](BaseObject* object) {
         if (object == nullptr || !object->HasRefField()) {
@@ -347,8 +345,7 @@ size_t DischargeAll(const std::function<BaseObject*(RefField<>&)>& resolve,
         if (region->IsSafeKnownYoungEmpty(view)) {
             continue;
         }
-        bool hasObjectLiveness = region->IsLargeRegion() || region->GetMarkBitmap(view) != nullptr ||
-            region->GetResurrectBitmap() != nullptr;
+        bool hasObjectLiveness = region->IsLargeRegion() || region->GetMarkBitmap(view) != nullptr;
         bool useLiveOnly = UseLiveOnly(region, view);
 
         // ZGC remap_and_maybe_add_remset (zRelocate.cpp:1227-1255): resolve first

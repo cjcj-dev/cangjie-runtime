@@ -102,6 +102,25 @@ if [[ -d "$ROOT/runtime/output/temp/include" ]]; then
   INC_FLAGS+=(-I"$ROOT/runtime/output/temp/include")
 fi
 
+# A weak referent is a discovery input, not a strong tracing root. Keep this
+# source-level consumer guard next to the product-linked behavior tests: the
+# positive anchor proves the guard inspected the active collector source, and
+# reintroducing the old referent traversal fails before any test can pass.
+WEAK_DISCOVERY_SOURCE="$ROOT/runtime/src/Heap/Collector/TracingCollector.cpp"
+if ! /usr/bin/grep -F -q \
+    'collector.DiscoverWeakReference(obj, workStack)' "$WEAK_DISCOVERY_SOURCE" ||
+    ! /usr/bin/grep -F -q \
+    'DiscoverReference(reference, ReferenceType::WEAK)' "$WEAK_DISCOVERY_SOURCE"; then
+  echo "GC_UNIT_WEAK_DISCOVERY_ANCHOR_MISSING" >&2
+  exit 11
+fi
+if /usr/bin/grep -F -q \
+    'TraceObjectRefFields(referent, workStack)' "$WEAK_DISCOVERY_SOURCE"; then
+  echo "GC_UNIT_WEAK_REFERENT_TRACED_STRONGLY" >&2
+  exit 12
+fi
+echo "GATE_WEAK_DISCOVERY_NO_STRONG_TRACE_OK source=$WEAK_DISCOVERY_SOURCE"
+
 # Keep this hand-driven entry point structurally identical to the CMake
 # cj_gc_unit target: product inline/template helpers stay hidden and static
 # archives cannot re-export weak copies of the product symbols exercised via
@@ -165,6 +184,7 @@ $CXX -std=gnu++17 -O0 -g -Wall -Wextra -pthread -fno-rtti \
     "$SRC/test_fwdreturn.cpp" \
     "$SRC/test_ghost_region_lookup.cpp" \
     "$SRC/test_fnlz_roots.cpp" \
+    "$SRC/test_reference_processor.cpp" \
     "$SRC/test_mark_stack_entry.cpp" \
     "$SRC/test_mark_stripe.cpp" \
     "$SRC/test_partial_array.cpp" \
@@ -197,6 +217,35 @@ for symbol in "${STANDALONE_SYMBOLS[@]}"; do
   fi
 done
 echo "GATE_STANDALONE_SYMBOLS_OK elf=$OUT/cj_gc_unit"
+
+# ReferenceProcessor is an independently replaceable product carrier. Guard
+# full symbols (not only the dynamic table) so no local/weak test copy can
+# satisfy its consumers, then require the executable to import those methods.
+REFERENCE_PROCESSOR_CONSUMERS=(
+  'MapleRuntime::ReferenceProcessor::DiscoverReference('
+  'MapleRuntime::ReferenceProcessor::ProcessReferences('
+  'MapleRuntime::ReferenceProcessor::EnqueueReferences('
+  'MapleRuntime::TracingCollector::DiscoverWeakReference('
+)
+REFERENCE_PROCESSOR_FULL="$OUT/cj_gc_unit.full-defined.txt"
+REFERENCE_PROCESSOR_UNDEFINED="$OUT/cj_gc_unit.undefined.txt"
+nm --defined-only "$OUT/cj_gc_unit" | c++filt >"$REFERENCE_PROCESSOR_FULL"
+nm -u "$OUT/cj_gc_unit" | c++filt >"$REFERENCE_PROCESSOR_UNDEFINED"
+if ! /usr/bin/grep -Eq '[[:space:]]main$' "$REFERENCE_PROCESSOR_FULL"; then
+  echo "GC_UNIT_FULL_NM_POSITIVE_CONTROL_FAIL symbol=main" >&2
+  exit 8
+fi
+for consumer in "${REFERENCE_PROCESSOR_CONSUMERS[@]}"; do
+  if /usr/bin/grep -F -q "$consumer" "$REFERENCE_PROCESSOR_FULL"; then
+    echo "GC_UNIT_REFERENCE_PROCESSOR_LOCAL_DEFINITION symbol=$consumer" >&2
+    exit 9
+  fi
+  if ! /usr/bin/grep -F -q "$consumer" "$REFERENCE_PROCESSOR_UNDEFINED"; then
+    echo "GC_UNIT_REFERENCE_PROCESSOR_IMPORT_MISSING symbol=$consumer" >&2
+    exit 10
+  fi
+done
+echo "GATE_REFERENCE_PROCESSOR_BINDING_OK elf=$OUT/cj_gc_unit"
 
 # Fresh-process product-link arm for the one-shot ForwardingTable.  It binds
 # CompactRegion/ClearEntries from the same runtime SO as the full suite; no

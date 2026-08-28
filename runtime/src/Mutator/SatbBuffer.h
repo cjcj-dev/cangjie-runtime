@@ -373,27 +373,6 @@ private:
     LockedList<Node> retiredNodes; // has been filled by mutator, ready for scan
 };
 
-class WeakRefBuffer {
-public:
-    static WeakRefBuffer& Instance() noexcept;
-    void ClearWeakRefBuffer()
-    {
-        for (BaseObject* obj : refObjBuffer) {
-            HeapSlot<>& referentField = HeapSlotAt<>(reinterpret_cast<uintptr_t>(obj) + TYPEINFO_PTR_SIZE);
-            Heap::GetBarrier().ReadWeakRef(obj, referentField);
-        }
-        refObjBuffer.clear();
-    }
-    // insert weakref obj into buffer
-    void Insert(BaseObject* obj)
-    {
-        std::lock_guard<std::mutex> lock(mtx); // For potential concurrency problems
-        refObjBuffer.insert(obj);
-    }
-private:
-    std::unordered_set<BaseObject*> refObjBuffer;
-    std::mutex mtx;
-};
 } // namespace MapleRuntime
 
 #endif // MRT_SATB_BUFFER_H

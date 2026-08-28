@@ -128,6 +128,63 @@ GC_TEST(ZLiveMapPort, OneObjectPageMarkAccountsLiveOnce)
     GcHeapFixture::FreePlantedBitmap(bitmap);
 }
 
+// ZLiveMap::set uses a bit pair: finalizable paints only live, while a
+// subsequent strong mark upgrades the same pair without charging bytes twice.
+GC_TEST(ZLiveMapPort, FinalizableAndStrongShareOnePair)
+{
+    constexpr size_t kPageSize = 4096;
+    RegionBitmap* bitmap = GcHeapFixture::AllocPlantedBitmap(kPageSize);
+    bool incLive = false;
+
+    GC_EXPECT_FALSE(bitmap->MarkFinalizableBits(64, 16, kPageSize, incLive));
+    GC_EXPECT_TRUE(incLive);
+    GC_EXPECT_TRUE(bitmap->IsLive(64));
+    GC_EXPECT_TRUE(bitmap->IsFinalizable(64));
+    GC_EXPECT_FALSE(bitmap->IsMarked(64));
+    GC_EXPECT_EQ(bitmap->GetLiveBytes(), static_cast<size_t>(16));
+
+    GC_EXPECT_FALSE(bitmap->MarkBits(64, 16, kPageSize, incLive));
+    GC_EXPECT_FALSE(incLive);
+    GC_EXPECT_TRUE(bitmap->IsLive(64));
+    GC_EXPECT_FALSE(bitmap->IsFinalizable(64));
+    GC_EXPECT_TRUE(bitmap->IsMarked(64));
+    GC_EXPECT_EQ(bitmap->GetLiveBytes(), static_cast<size_t>(16));
+
+    GcHeapFixture::FreePlantedBitmap(bitmap);
+}
+
+// SATB producers may publish the same object more than once. The strong half
+// of the pair is the consumer-side receipt: exactly one 0->1 owns live-byte
+// accounting, matching ZLiveMap::set/par_set_bit_pair.
+GC_TEST(ZLiveMapPort, DuplicateSatbPublicationConvergesAtStrongMark)
+{
+    GcHeapFixture fx;
+    LiveInfo* live = fx.PlantLiveInfo(fx.region0);
+    RegionBitmap* bitmap = fx.PlantMarkBitmap(live, fx.region0->GetRegionSize());
+    const size_t offset = fx.region0->GetAddressOffset(reinterpret_cast<MAddress>(fx.obj0));
+
+    GC_EXPECT_TRUE(RegionSpace::ShouldEnqueue<Generation::Old>(fx.obj0));
+    GC_EXPECT_TRUE(RegionSpace::ShouldEnqueue<Generation::Old>(fx.obj0));
+
+    bool firstIncLive = false;
+    bool secondIncLive = false;
+    const bool firstAlready = bitmap->MarkBits(offset, 8, fx.region0->GetRegionSize(), firstIncLive);
+    const bool secondAlready = bitmap->MarkBits(offset, 8, fx.region0->GetRegionSize(), secondIncLive);
+    const size_t liveBytes = bitmap->GetLiveBytes();
+    const bool receiptOnce = !firstAlready && secondAlready;
+    const bool incLiveOnce = firstIncLive && !secondIncLive;
+    const bool bytesOnce = liveBytes == static_cast<size_t>(8);
+    std::fprintf(stderr,
+                 "DETAIL duplicate_consumer receipt_once=%d inc_live_once=%d bytes_once=%d live_bytes=%zu\n",
+                 receiptOnce, incLiveOnce, bytesOnce, liveBytes);
+    GC_EXPECT_TRUE(receiptOnce && incLiveOnce && bytesOnce);
+    GC_EXPECT_TRUE(bitmap->IsMarked(offset));
+    GC_EXPECT_EQ(liveBytes, static_cast<size_t>(8));
+
+    fx.region0->metadata.liveInfo = nullptr;
+    fx.FreePlanted(live);
+}
+
 // U4: product mark then IsSurvivedObject.
 GC_TEST(LiveMap, MarkAndSurvive)
 {
@@ -261,7 +318,12 @@ GC_TEST(LiveMap, RetainedCaptureKeepsCurrentYoungFaceAfterStaleForwardingDone)
     MarkView<Generation::Young> clearView = region->GetMarkView<Generation::Young>();
     ProductClearLiveInfoFn()(region, clearView);
     MarkView<Generation::Young> currentView = region->GetMarkView<Generation::Young>();
-    (void)ProductMarkObjectFn<Generation::Young>()(region, currentView, fx.obj0, 8, true);
+    ProductMarkObject<Generation::Young> markObject = ProductMarkObjectFn<Generation::Young>();
+    GC_EXPECT_TRUE(markObject != nullptr);
+    if (markObject == nullptr) {
+        return;
+    }
+    (void)markObject(region, currentView, fx.obj0, 8, true);
     ProductPreserveRetainedFn()(region);
     GC_EXPECT_TRUE(region->RetainedMarkWordsSay(holderOffset));
 
@@ -288,7 +350,12 @@ GC_TEST(LiveMap, RetainedCaptureRejectsOldFromFaceWhenNewCycleMarksNothing)
     // real forwarding publication/reset path.  No epoch, flag, from-page or
     // retained field is written by the test.
     MarkView<Generation::Young> previousView = region->GetMarkView<Generation::Young>();
-    GC_EXPECT_FALSE(ProductMarkObjectFn<Generation::Young>()(region, previousView, fx.obj0, 8, true));
+    ProductMarkObject<Generation::Young> markObject = ProductMarkObjectFn<Generation::Young>();
+    GC_EXPECT_TRUE(markObject != nullptr);
+    if (markObject == nullptr) {
+        return;
+    }
+    GC_EXPECT_FALSE(markObject(region, previousView, fx.obj0, 8, true));
     GC_EXPECT_TRUE(previousBitmap->IsMarked(holderOffset));
     region->PublishFromPageMetadata(previousView);
     region->MarkForwardingDone();

@@ -66,7 +66,11 @@ struct RegionBitmap {
 
     static size_t GetRegionBitmapSize(size_t regionSize)
     {
-        return sizeof(RegionBitmap) + ((regionSize / (kMarkedBytesPerBit * kBitsPerWord)) * sizeof(uint64_t));
+        const size_t words = regionSize / (kMarkedBytesPerBit * kBitsPerWord);
+        // ZLiveMap stores a pair per object: live/finalizable and strong.  Keep
+        // the same two planes in one allocation so an epoch can never publish
+        // an ordinary mark bitmap without its finalizable counterpart.
+        return sizeof(RegionBitmap) + (2 * words * sizeof(uint64_t));
     }
 
     struct BitMaskInfo {
@@ -106,7 +110,34 @@ struct RegionBitmap {
         }
     }
 
-    bool ApplyBitMaskInfo(const BitMaskInfo& maskInfo, size_t byteCnt, size_t regionSize)
+    bool SetMask(std::atomic<uint64_t>* words, const BitMaskInfo& maskInfo)
+    {
+        const uint64_t old = words[maskInfo.headWordIdx].fetch_or(maskInfo.headMaskBits);
+        if (maskInfo.tailWordCnt == 0) {
+            return (old & maskInfo.startBitMask) != 0;
+        }
+        const size_t lastWordIdx = maskInfo.headWordIdx + maskInfo.tailWordCnt;
+        const size_t fullEnd = maskInfo.lastMaskBits == 0 ? lastWordIdx + 1 : lastWordIdx;
+        for (size_t idx = maskInfo.headWordIdx + 1; idx < fullEnd; ++idx) {
+            words[idx].fetch_or(~static_cast<uint64_t>(0));
+        }
+        if (maskInfo.lastMaskBits != 0) {
+            words[lastWordIdx].fetch_or(maskInfo.lastMaskBits);
+        }
+        return (old & maskInfo.startBitMask) != 0;
+    }
+
+    std::atomic<uint64_t>* StrongWords()
+    {
+        return markWords + wordCnt.load(std::memory_order_relaxed);
+    }
+
+    const std::atomic<uint64_t>* StrongWords() const
+    {
+        return markWords + wordCnt.load(std::memory_order_relaxed);
+    }
+
+    bool ApplyLiveBitMaskInfo(const BitMaskInfo& maskInfo, size_t byteCnt, size_t regionSize)
     {
         uint64_t old = markWords[maskInfo.headWordIdx].load();
         // Already = start bit only (same predicate as IsMarked / IsMarkedObject).
@@ -154,21 +185,49 @@ struct RegionBitmap {
     explicit RegionBitmap(size_t regionSize) : liveBytes(0), wordCnt(regionSize / (kMarkedBytesPerBit * kBitsPerWord))
     {}
 
-    bool MarkBits(size_t start, size_t byteCnt, size_t regionSize)
+    bool MarkBits(size_t start, size_t byteCnt, size_t regionSize, bool& incLive)
     {
         BitMaskInfo maskInfo;
         GetBitMaskInfo(start, byteCnt, maskInfo);
-        return ApplyBitMaskInfo(maskInfo, byteCnt, regionSize);
+        const bool liveAlready = ApplyLiveBitMaskInfo(maskInfo, byteCnt, regionSize);
+        incLive = !liveAlready;
+        std::atomic<uint64_t>* strong = StrongWords();
+        return SetMask(strong, maskInfo);
     }
 
-    bool IsMarked(size_t start)
+    bool MarkBits(size_t start, size_t byteCnt, size_t regionSize)
+    {
+        bool incLive = false;
+        return MarkBits(start, byteCnt, regionSize, incLive);
+    }
+
+    bool MarkFinalizableBits(size_t start, size_t byteCnt, size_t regionSize, bool& incLive)
+    {
+        BitMaskInfo maskInfo;
+        GetBitMaskInfo(start, byteCnt, maskInfo);
+        const bool liveAlready = ApplyLiveBitMaskInfo(maskInfo, byteCnt, regionSize);
+        incLive = !liveAlready;
+        return liveAlready;
+    }
+
+    bool IsMarked(size_t start) const
     {
         size_t headWordIdx = (start / kMarkedBytesPerBit) / kBitsPerWord;
         size_t headMaskBitStart = (start / kMarkedBytesPerBit) % kBitsPerWord;
         uint64_t mask = static_cast<uint64_t>(1) << headMaskBitStart;
-        bool ret = ((markWords[headWordIdx].load() & mask) != 0);
+        bool ret = ((StrongWords()[headWordIdx].load(std::memory_order_acquire) & mask) != 0);
         return ret;
     }
+
+    bool IsLive(size_t start) const
+    {
+        size_t headWordIdx = (start / kMarkedBytesPerBit) / kBitsPerWord;
+        size_t headMaskBitStart = (start / kMarkedBytesPerBit) % kBitsPerWord;
+        uint64_t mask = static_cast<uint64_t>(1) << headMaskBitStart;
+        return (markWords[headWordIdx].load(std::memory_order_acquire) & mask) != 0;
+    }
+
+    bool IsFinalizable(size_t start) const { return IsLive(start) && !IsMarked(start); }
 
     struct PreMaskInfo {
         int8_t partIndex;
@@ -231,8 +290,6 @@ struct RegionBitmap {
 struct LiveInfo {
     static constexpr MAddress TEMPORARY_PTR = 0x1234;
     RegionInfo* bindedRegion = nullptr;
-    RegionBitmap* resurrectBitmap = nullptr;
-    RegionBitmap* enqueueBitmap = nullptr;
 
     template<Generation G>
     bool IsSurvivedObject(MarkView<G> view, size_t offset) const
@@ -240,13 +297,10 @@ struct LiveInfo {
         const MarkFace& face = GetMarkFace();
         RegionBitmap* markBitmap = __atomic_load_n(&face.bitmap, std::memory_order_acquire);
         if (face.epoch.load(std::memory_order_acquire) == view.GetEpoch() && markBitmap != nullptr &&
-            reinterpret_cast<MAddress>(markBitmap) != TEMPORARY_PTR && markBitmap->IsMarked(offset)) {
+            reinterpret_cast<MAddress>(markBitmap) != TEMPORARY_PTR && markBitmap->IsLive(offset)) {
             return true;
         }
-        // Resurrection is a major/old decision.  A young closure is not complete
-        // for old/large objects and must not inherit an old resurrection verdict.
-        return G == Generation::Old && resurrectBitmap != nullptr &&
-            reinterpret_cast<MAddress>(resurrectBitmap) != TEMPORARY_PTR && resurrectBitmap->IsMarked(offset);
+        return false;
     }
 
     template<Generation G>
@@ -255,8 +309,7 @@ struct LiveInfo {
         const MarkFace& face = GetMarkFace();
         RegionBitmap* markBitmap = __atomic_load_n(&face.bitmap, std::memory_order_acquire);
         const bool current = face.epoch.load(std::memory_order_acquire) == view.GetEpoch();
-        return (!current || markBitmap == nullptr ? 0 : markBitmap->GetLiveBytes()) +
-            (G != Generation::Old || resurrectBitmap == nullptr ? 0 : resurrectBitmap->GetLiveBytes());
+        return !current || markBitmap == nullptr ? 0 : markBitmap->GetLiveBytes();
     }
 
     template<Generation G>
@@ -265,8 +318,7 @@ struct LiveInfo {
         const MarkFace& face = GetMarkFace();
         RegionBitmap* markBitmap = __atomic_load_n(&face.bitmap, std::memory_order_acquire);
         const bool current = face.epoch.load(std::memory_order_acquire) == view.GetEpoch();
-        return (!current || markBitmap == nullptr ? 0 : markBitmap->RecomputeLiveBytes()) +
-            (G != Generation::Old || resurrectBitmap == nullptr ? 0 : resurrectBitmap->RecomputeLiveBytes());
+        return !current || markBitmap == nullptr ? 0 : markBitmap->RecomputeLiveBytes();
     }
 
 private:
@@ -304,9 +356,6 @@ private:
         RegionBitmap* markBitmap = __atomic_load_n(&face.bitmap, std::memory_order_acquire);
         if (face.epoch.load(std::memory_order_acquire) == view.GetEpoch() && markBitmap != nullptr) {
             liveBytes += markBitmap->GetPreLiveBytes(maskInfo);
-        }
-        if (G == Generation::Old && resurrectBitmap != nullptr) {
-            liveBytes += resurrectBitmap->GetPreLiveBytes(maskInfo);
         }
         return liveBytes;
     }

@@ -2011,7 +2011,7 @@ struct PermHoleFacts {
     unsigned long long faceEpoch = 0;
     unsigned long long regionEpoch = 0;
     unsigned markBmNull = 1;
-    unsigned resBmNull = 1;
+    unsigned finalizableOnly = 0;
     unsigned ghost0Null = 1;
     unsigned ghostSurv = 0;
     unsigned curSurv = 0;
@@ -2090,8 +2090,10 @@ void CollectPermHoleMeta(RegionInfo* r, BaseObject* from, PermHoleFacts& f)
             MarkView<Generation::Old> view = r->GetRouteMarkView<Generation::Old>();
             f.faceEpoch = static_cast<unsigned long long>(r->GetMarkEpoch(view, ghost));
         }
-        f.markBmNull = static_cast<unsigned>(r->GetRouteMarkBitmap(ghost) == nullptr);
-        f.resBmNull = static_cast<unsigned>(ghost->resurrectBitmap == nullptr);
+        RegionBitmap* routeBitmap = r->GetRouteMarkBitmap(ghost);
+        f.markBmNull = static_cast<unsigned>(routeBitmap == nullptr);
+        f.finalizableOnly =
+            static_cast<unsigned>(routeBitmap != nullptr && routeBitmap->IsFinalizable(f.fromOffset));
         f.ghostSurv = static_cast<unsigned>(r->IsRouteSurvivedObject(f.fromOffset));
         // GetPreMaskInfo divides by the ghost region size; a zero size would fault inside
         // the diagnostic rather than reporting anything.
@@ -2283,11 +2285,11 @@ BaseObject* WCollector::WaitRoutedTipReady(BaseObject* from, BaseObject* to, Reg
             f.fromFree, f.fromGarbage, f.liveInfoSame);
         LOG(RTLOG_ERROR,
             "[GCV2][permwho] books region=%p live=%zu liveAuth=%u knownEmpty=%u faceEpoch=%llu "
-            "regionEpoch=%llu ghost0Null=%u markBmNull=%u resBmNull=%u ghostSurv=%u curSurv=%u "
+            "regionEpoch=%llu ghost0Null=%u markBmNull=%u finalizableOnly=%u ghostSurv=%u curSurv=%u "
             "fromOff=%zu allocOff=%zu ghostSize=%zu preLiveFrom=%llu "
             "enter=%llu tipReady=%llu giveUp=%llu",
             forwarding, live, f.liveAuth, f.knownEmpty, f.faceEpoch, f.regionEpoch, f.ghost0Null,
-            f.markBmNull, f.resBmNull, f.ghostSurv, f.curSurv, f.fromOffset, f.allocOff, f.ghostSize,
+            f.markBmNull, f.finalizableOnly, f.ghostSurv, f.curSurv, f.fromOffset, f.allocOff, f.ghostSize,
             f.preLiveFrom, static_cast<unsigned long long>(enterCount.load(std::memory_order_relaxed)),
             static_cast<unsigned long long>(tipReadyCount.load(std::memory_order_relaxed)),
             static_cast<unsigned long long>(giveUpCount.load(std::memory_order_relaxed)));

@@ -49,9 +49,8 @@ bool SatbBuffer::ShouldEnqueue(const BaseObject* obj)
 // Why an entry was dropped, re-derived off the hot path. ShouldEnqueue answers
 // yes/no, and the difference between its reasons is the difference between two
 // unrelated defects: "target sits in a trace region" discards a record for a whole
-// class of pages, while the EnqueueObject dedupe discards a record because the same
-// object was already enqueued once this cycle -- which is wrong if that earlier
-// record was consumed without the object ending up marked.
+// class of pages, while the paired livemap permits publication until strong mark is
+// visible. Any remaining false result is classified explicitly as unaccounted.
 // Gated with MarkCompleteVerify, which is what reports the dead edges these drops
 // are suspected of producing; costs nothing when that gate is off.
 namespace {
@@ -59,7 +58,7 @@ std::atomic<uint64_t> g_filterDropNonHeap{ 0 };
 std::atomic<uint64_t> g_filterDropDeadRegion{ 0 };
 std::atomic<uint64_t> g_filterDropTraceRegion{ 0 };
 std::atomic<uint64_t> g_filterDropAlreadyMarked{ 0 };
-std::atomic<uint64_t> g_filterDropDedupe{ 0 };
+std::atomic<uint64_t> g_filterDropUnaccounted{ 0 };
 } // namespace
 
 void SatbBuffer::NoteFilterDrop(BaseObject* obj)
@@ -84,10 +83,7 @@ void SatbBuffer::NoteFilterDrop(BaseObject* obj)
         g_filterDropAlreadyMarked.fetch_add(1, std::memory_order_relaxed);
         return;
     }
-    // Not dead, not a trace region, not marked -- so ShouldEnqueue said no because
-    // EnqueueObject reported this object already enqueued this cycle. That is the
-    // one drop class that can lose a record the mark closure still needed.
-    g_filterDropDedupe.fetch_add(1, std::memory_order_relaxed);
+    g_filterDropUnaccounted.fetch_add(1, std::memory_order_relaxed);
 }
 
 void SatbBuffer::ReportFilterDrops(const char* point)
@@ -96,13 +92,14 @@ void SatbBuffer::ReportFilterDrops(const char* point)
         return;
     }
     LOG(RTLOG_ERROR,
-        "[GCV2][satbdrop] point=%s nonHeap=%llu deadRegion=%llu traceRegion=%llu alreadyMarked=%llu dedupe=%llu",
+        "[GCV2][satbdrop] point=%s nonHeap=%llu deadRegion=%llu traceRegion=%llu alreadyMarked=%llu "
+        "unaccounted=%llu",
         point == nullptr ? "?" : point,
         static_cast<unsigned long long>(g_filterDropNonHeap.load(std::memory_order_relaxed)),
         static_cast<unsigned long long>(g_filterDropDeadRegion.load(std::memory_order_relaxed)),
         static_cast<unsigned long long>(g_filterDropTraceRegion.load(std::memory_order_relaxed)),
         static_cast<unsigned long long>(g_filterDropAlreadyMarked.load(std::memory_order_relaxed)),
-        static_cast<unsigned long long>(g_filterDropDedupe.load(std::memory_order_relaxed)));
+        static_cast<unsigned long long>(g_filterDropUnaccounted.load(std::memory_order_relaxed)));
 }
 
 void SatbBuffer::Filter(Node* node)
@@ -137,7 +134,4 @@ void SatbBuffer::FlushQueue(Node*& node)
     node = nullptr;
 }
 
-static ImmortalWrapper<WeakRefBuffer> g_weakRefBuffer;
-
-WeakRefBuffer& WeakRefBuffer::Instance() noexcept { return *g_weakRefBuffer; }
 } // namespace MapleRuntime

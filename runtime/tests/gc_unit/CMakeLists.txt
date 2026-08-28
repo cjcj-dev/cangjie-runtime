@@ -61,6 +61,7 @@ set(GC_UNIT_SOURCES
     test_fwdreturn.cpp
     test_ghost_region_lookup.cpp
     test_fnlz_roots.cpp
+    test_reference_processor.cpp
     test_mark_stack_entry.cpp
     test_mark_stripe.cpp
     test_partial_array.cpp

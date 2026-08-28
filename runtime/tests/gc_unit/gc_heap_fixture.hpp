@@ -98,12 +98,8 @@ struct GcHeapFixture {
         return obj;
     }
 
-    // Product GetOrAlloc* faces go through ForwardDataManager (RegionInfo.h:832/873/912).
-    // gc_unit never Heap::Init, so FDM's arena starts at 0 and AllocateRegionBitmap
-    // CHECKs bitmap != nullptr. Union order hits this after ForwardingNoGeometry arms
-    // the table: YoungConc.StaleOldMarkDoesNotSkipYoungEnqueue → ShouldEnqueue →
-    // EnqueueObject → GetOrAllocEnqueueBitmap (enqueue face was never planted).
-    // youngconcmark §3b: fixture Init FDM, do not relax the CHECK.
+    // Product mark faces go through ForwardDataManager. gc_unit never Heap::Init,
+    // so initialize the arena before any test asks the product to publish a pair.
     static void EnsureForwardData(MAddress heapStart)
     {
         static bool ready = false;
@@ -149,8 +145,6 @@ struct GcHeapFixture {
         live->bindedRegion = region;
         live->GetMarkFace().epoch.store(region->GetSnapshotEpoch(), std::memory_order_relaxed);
         live->GetMarkFace().bitmap = nullptr;
-        live->resurrectBitmap = nullptr;
-        live->enqueueBitmap = AllocPlantedBitmap(region->GetRegionSize());
         region->metadata.liveInfo = live;
         return live;
     }
@@ -177,8 +171,6 @@ struct GcHeapFixture {
             FreePlantedBitmap(mark);
             live->GetMarkFace().bitmap = nullptr;
         }
-        FreePlantedBitmap(live->enqueueBitmap);
-        FreePlantedBitmap(live->resurrectBitmap);
         delete live;
     }
 

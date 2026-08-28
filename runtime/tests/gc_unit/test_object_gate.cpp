@@ -106,9 +106,9 @@ GC_TEST(ObjectGate, HeaderConsumersRejectFreeRegion)
     SlotList slots;
     GC_EXPECT_FALSE(slots.ClearExtraContent(fx.obj0));
 
-    // sizecaller: EnqueueObject is the third header-inline GetSize caller.
-    // Gate reject must report already-enqueued so ShouldEnqueue does not SATB-push.
-    GC_EXPECT_TRUE(fx.region0->EnqueueObject(fx.obj0, 0));
+    // The retired enqueue side map no longer dereferences the object header.
+    // ShouldEnqueue rejects the dead region at the ownership gate.
+    GC_EXPECT_FALSE(RegionSpace::ShouldEnqueue<Generation::Old>(fx.obj0));
 }
 
 namespace MapleRuntime {

@@ -328,6 +328,12 @@ public:
 
     bool ShouldIgnoreRequest(GCRequest& request) override { return request.ShouldBeIgnored(); }
 
+    ReferenceStatus DiscoverReference(BaseObject* reference, ReferenceType type)
+    {
+        return collectorResources.GetFinalizerProcessor().GetReferenceProcessor().DiscoverReference(reference, type);
+    }
+    void DiscoverWeakReference(BaseObject* reference, WorkStack& workStack);
+
     // live but not resurrected object.  The generation is part of the predicate;
     // there is intentionally no IsMarkedObject(BaseObject*) compatibility API.
     template<Generation G>
@@ -435,7 +441,6 @@ protected:
     // Also provides the resource access interfaces, such as invokeGC, waitGC.
     // This resource should be singleton and shared for multi-collectors
     CollectorResources& collectorResources;
-    U32 snapshotFinalizerNum = 0;
 
     // reason for current GC.
     GCReason gcReason = GC_REASON_USER;
