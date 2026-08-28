@@ -161,6 +161,15 @@ bool Uncommitter::CutPartialPropagation()
 #endif
 }
 
+bool Uncommitter::CutReleaseBackend()
+{
+#if defined(MRT_GC_UNIT_TESTS)
+    return EnvIsSet("MRT_UNCOMMIT_CUT_RELEASE");
+#else
+    return false;
+#endif
+}
+
 bool Uncommitter::ShouldStopUncommit()
 {
     if (CutCancelWake()) {

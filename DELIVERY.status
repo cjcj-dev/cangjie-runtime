@@ -1,17 +1,11 @@
-baseline=2fa5d70f8993a60e8855a0e6a6a12b8754ce185f
-patch_sha256=0efa78b5ed50a3cbf42110636966ef99cde941c2b37c9856434a19094cc915c3
-tracked_delta=runtime/src/CjScheduler.cpp
-tracked_delta=runtime/src/Heap/Collector/Generation.cpp
-tracked_delta=runtime/src/Heap/Collector/Mark.cpp
-tracked_delta=runtime/src/Heap/Collector/TracingCollector.cpp
-tracked_delta=runtime/src/Heap/Collector/TracingCollector.h
-tracked_delta=runtime/src/Heap/WCollector/WCollector.h
-tracked_delta=runtime/src/Mutator/MutatorManager.cpp
-tracked_delta=runtime/src/Mutator/MutatorManager.h
-tracked_delta=runtime/tests/gc_unit/test_young_conc.cpp
-evidence=receipt_manifest.tsv sha256=569c6ce151376bc57eaec2f6d67aa04b0a97a0aad3411481e9f31b113cd62ae5
-fault_arm=y2y_mark_end_discard.cut.patch sha256=c222d69898a413ed0976ee16a51232d79a2af62c2d20b481d12580fee278a701
-fault_arm=mark_end_commit_with_work.cut.patch sha256=87718d79f77621e8b60b7d471518d8f456137bf79d6c4a5afbf654b395b53029
-fault_arm=lifecycle_epoch_wiring.cut.patch sha256=bc1109dd20e02f40557b38cd21a59e1144bc2c4b585e0a03ae0ed17382486eaa
-fault_arm=receipt_all_active.cut.patch sha256=504cbe313d5893a48ff018e25213c07829774cea8ebb783c0e463e731890bed2
-note=unrelated/prior-delivery dirty files are intentionally excluded from DELIVERY.patch
+ M runtime/src/Heap/Allocator/FreeRegionManager.h
+ M runtime/src/Heap/Allocator/RegionInfo.h
+ M runtime/src/Heap/Allocator/RegionManager.cpp
+ M runtime/src/Heap/Allocator/RegionManager.h
+ M runtime/src/Heap/Allocator/RegionSpace.cpp
+ M runtime/src/Heap/Collector/Uncommitter.cpp
+ M runtime/src/Heap/Collector/Uncommitter.h
+ M runtime/tests/gc_unit/product_path_manifest.tsv
+ M runtime/tests/gc_unit/test_uncommitter.cpp
+?? DELIVERY.patch
+?? DELIVERY.status

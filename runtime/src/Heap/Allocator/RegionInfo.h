@@ -57,6 +57,9 @@
 #ifdef CANGJIE_ASAN_SUPPORT
 #include "Sanitizer/SanitizerInterface.h"
 #endif
+#if defined(MRT_GC_UNIT_TESTS)
+#include "Heap/Collector/Uncommitter.h"
+#endif
 
 namespace MapleRuntime {
 class RegionList;
@@ -1850,6 +1853,11 @@ public:
     // observable and retryable instead of tripping the synchronous CHECK path.
     static size_t ReleaseUnitsPartial(size_t idx, size_t cnt)
     {
+#if defined(MRT_GC_UNIT_TESTS)
+        if (Uncommitter::CutReleaseBackend()) {
+            return 0;
+        }
+#endif
         void* unitAddress = reinterpret_cast<void*>(RegionInfo::GetUnitAddress(idx));
         size_t size = cnt * RegionInfo::UNIT_SIZE;
         RegionInfo* wipeRegion = RegionInfo::TryGetRegionInfoAt(reinterpret_cast<uintptr_t>(unitAddress));

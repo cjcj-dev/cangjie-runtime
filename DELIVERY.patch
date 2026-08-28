@@ -1,964 +1,240 @@
-diff --git a/runtime/src/CjScheduler.cpp b/runtime/src/CjScheduler.cpp
-index d5fd673d5..cfa2021dc 100644
---- a/runtime/src/CjScheduler.cpp
-+++ b/runtime/src/CjScheduler.cpp
-@@ -536,6 +536,7 @@ static void FiniAndFreeFinalizerScheduler(ScheduleHandle scheduler)
+diff --git a/runtime/src/Heap/Allocator/FreeRegionManager.h b/runtime/src/Heap/Allocator/FreeRegionManager.h
+index 006618c9f..309045ebb 100644
+--- a/runtime/src/Heap/Allocator/FreeRegionManager.h
++++ b/runtime/src/Heap/Allocator/FreeRegionManager.h
+@@ -250,7 +250,7 @@ public:
  
- void* NewFinalizerCJThread()
- {
-+    MutatorManager::Instance().RecordEpochHandshakeCreateAttempt();
-     // prepare foreign scheduler
-     ScheduleHandle scheduler = nullptr;
-     auto runtime = reinterpret_cast<MapleRuntime::CangjieRuntime*>(&MapleRuntime::Runtime::Current());
-@@ -578,6 +579,8 @@ void* NewFinalizerCJThread()
-     mutator->SetManagedContext(false);
-     MutatorManager::Instance().BindMutator(*mutator);
-     ThreadLocal::SetMutator(mutator);
-+    mutator->SetMutatorPhase(Heap::GetHeap().GetGCPhase());
-+    MutatorManager::Instance().ExcludeNewMutatorFromActiveEpoch(*mutator);
-     MutatorManager::Instance().MutatorManagementRUnlock();
-     ThreadLocalData* threadData = reinterpret_cast<ThreadLocalData*>(MRT_GetThreadLocalData());
-     // Managed-entry setup may block on sync/STW, so do not hold the mutator
-@@ -593,11 +596,9 @@ void EndFinalizerCJThread()
-     auto* schedule = reinterpret_cast<ScheduleHandle>(ThreadLocal::GetSchedule());
-     Mutator* mutator = ThreadLocal::GetMutator();
-     CHECK_DETAIL(mutator != nullptr, "EndFinalizerCJThread with null mutator");
--    MutatorManager::Instance().MutatorManagementRLock();
--    (void)mutator->LeaveSaferegion();
--    mutator->ResetMutator();
--    MutatorManager::Instance().UnbindMutator(*mutator);
--    MutatorManager::Instance().MutatorManagementRUnlock();
-+    // Same EXITING receipt path as ordinary CJThread teardown. If an epoch is
-+    // active, scheduler destruction reaches DestroyMutator and defers storage.
-+    MutatorManager::Instance().TransitMutatorToExit();
+     size_t CalculateBytesToRelease() const;
+     size_t ReleaseGarbageRegions(size_t targetCachedSize);
+-    size_t UncommitIdleUnits(size_t maxBytes, uint64_t idleBeforeNs);
++    size_t UncommitIdleUnits(size_t maxBytes, uint64_t idleBeforeNs, bool honorCancel = true);
  
-     // Free finalizer scheduler, cjthread and mutator
-     FiniAndFreeFinalizerScheduler(schedule);
-diff --git a/runtime/src/Heap/Collector/Generation.cpp b/runtime/src/Heap/Collector/Generation.cpp
-index 0c5a625c8..e0e5ab54a 100644
---- a/runtime/src/Heap/Collector/Generation.cpp
-+++ b/runtime/src/Heap/Collector/Generation.cpp
-@@ -80,6 +80,12 @@ struct Y2yHandoffReceiptState {
-     std::atomic<uint64_t> afterStw2 { 0 };
- };
- Y2yHandoffReceiptState g_y2yHandoffReceipt;
-+std::atomic<BaseObject*> g_y2yAfterReleaseHolder { nullptr };
-+std::atomic<uint64_t> g_y2yAfterReleasePublications { 0 };
-+std::atomic<Mutator*> g_satbBeforeMarkEndProducer { nullptr };
-+std::atomic<BaseObject*> g_satbBeforeMarkEndFirst { nullptr };
-+std::atomic<BaseObject*> g_satbBeforeMarkEndSecond { nullptr };
-+std::atomic<uint64_t> g_satbBeforeMarkEndPublications { 0 };
- }
- 
- void ResetY2yHandoffTestReceipt()
-@@ -90,6 +96,8 @@ void ResetY2yHandoffTestReceipt()
-     g_y2yHandoffReceipt.beforeRelease.store(0, std::memory_order_relaxed);
-     g_y2yHandoffReceipt.afterRoot.store(0, std::memory_order_relaxed);
-     g_y2yHandoffReceipt.afterStw2.store(0, std::memory_order_relaxed);
-+    g_y2yAfterReleaseHolder.store(nullptr, std::memory_order_relaxed);
-+    g_y2yAfterReleasePublications.store(0, std::memory_order_relaxed);
- }
- 
- Y2yHandoffTestReceipt ReadY2yHandoffTestReceipt()
-@@ -114,6 +122,59 @@ void NoteY2yAfterRootTestReceipt(uint64_t pending)
-     g_y2yHandoffReceipt.afterRoot.store(pending, std::memory_order_relaxed);
- }
- 
-+void NoteY2yAfterStw2TestReceipt(uint64_t pending)
-+{
-+    g_y2yHandoffReceipt.phase2.fetch_add(1, std::memory_order_relaxed);
-+    g_y2yHandoffReceipt.afterStw2.fetch_add(pending, std::memory_order_relaxed);
-+}
-+
-+void ArmY2yAfterReleaseTestReceipt(BaseObject* holder, uint64_t publications)
-+{
-+    g_y2yAfterReleaseHolder.store(holder, std::memory_order_release);
-+    g_y2yAfterReleasePublications.store(publications, std::memory_order_release);
-+}
-+
-+void PublishY2yAfterReleaseTestReceipt()
-+{
-+    uint64_t remaining = g_y2yAfterReleasePublications.load(std::memory_order_acquire);
-+    while (remaining != 0 &&
-+           !g_y2yAfterReleasePublications.compare_exchange_weak(remaining, remaining - 1,
-+                                                                 std::memory_order_acq_rel,
-+                                                                 std::memory_order_acquire)) {}
-+    if (remaining == 0) {
-+        return;
-+    }
-+    BaseObject* holder = g_y2yAfterReleaseHolder.load(std::memory_order_acquire);
-+    CHECK_DETAIL(holder != nullptr, "armed y2y after-release receipt without holder");
-+    AllocBuffer::GetOrCreateAllocBuffer()->PushY2yDirtyHolder(holder);
-+}
-+
-+void ArmSatbBeforeMarkEndTestReceipt(Mutator* producer, BaseObject* first, BaseObject* second)
-+{
-+    g_satbBeforeMarkEndProducer.store(producer, std::memory_order_release);
-+    g_satbBeforeMarkEndFirst.store(first, std::memory_order_release);
-+    g_satbBeforeMarkEndSecond.store(second, std::memory_order_release);
-+    g_satbBeforeMarkEndPublications.store(2, std::memory_order_release);
-+}
-+
-+void PublishSatbBeforeMarkEndTestReceipt()
-+{
-+    uint64_t remaining = g_satbBeforeMarkEndPublications.load(std::memory_order_acquire);
-+    while (remaining != 0 &&
-+           !g_satbBeforeMarkEndPublications.compare_exchange_weak(remaining, remaining - 1,
-+                                                                  std::memory_order_acq_rel,
-+                                                                  std::memory_order_acquire)) {}
-+    if (remaining == 0) {
-+        return;
-+    }
-+    Mutator* producer = g_satbBeforeMarkEndProducer.load(std::memory_order_acquire);
-+    BaseObject* object = remaining == 2 ? g_satbBeforeMarkEndFirst.load(std::memory_order_acquire)
-+                                       : g_satbBeforeMarkEndSecond.load(std::memory_order_acquire);
-+    CHECK_DETAIL(producer != nullptr && object != nullptr, "armed SATB mark-end receipt without producer/object");
-+    producer->RememberObjectInSatbBuffer(object);
-+    producer->FlushSatbBuffer();
-+}
-+
- #endif
- namespace {
- bool VerifyStackRootPostconditionEnabled()
-@@ -830,6 +891,9 @@ void WCollector::DoYoungGarbageCollection()
-         NoteY2yBeforeReleaseTestReceipt(pendingY2yDirtyHolderCount());
- #endif
-         stw.reset();
-+#if defined(MRT_TESTABLE_INTERNALS)
-+        PublishY2yAfterReleaseTestReceipt();
-+#endif
-         concWindowStartNs = TimeUtil::NanoSeconds();
-         produceYoungRoots();
-         VLOG(REPORT,
-@@ -902,31 +966,67 @@ void WCollector::DoYoungGarbageCollection()
-         TraceYoungClosure(workStack, fullYoungScan, reachableObjects, reachableVec, reachableSlots, weakSlots,
-                           useBitmapLedger, reachableSlotDomain);
+     // Phase-2 FROM_PAGE_DETACH_GATE. Entries are withheld from both allocator
+     // trees until a major mark closure rechecks the same central predicate.
+@@ -265,6 +265,8 @@ public:
      }
-+    for (;;) {
-+        // Concurrent mark-follow drains work published by the previous pause.
-+        // Its worker completion is coordinated by YoungMarkTerminate (the
-+        // ZMarkTerminate worker-count/wakeup state machine), not pool polling.
-+        const bool workersTerminated =
-+            MarkYoungSatbBuffer(workStack, fullYoungScan, reachableObjects, reachableVec, reachableSlots,
-+                                weakSlots, useBitmapLedger, &concWindow);
-+        CHECK_DETAIL(workersTerminated, "young concurrent mark workers did not terminate");
-+#if defined(MRT_TESTABLE_INTERNALS)
-+        // Adversarial mutator publication point: workers have terminated, but
-+        // the pause has not started. The pause must flush once and return
-+        // failure; it must not consume closure in an in-pause loop.
-+        PublishSatbBeforeMarkEndTestReceipt();
-+#endif
+ 
+ private:
++    size_t UncommitIdleUnitsImpl(size_t maxBytes, uint64_t idleBeforeNs, bool honorCancel);
 +
-+        // ZGenerationYoung::pause_mark_end() does one flush. Work found here is
-+        // not processed in the pause: releasing this owner and restoring TRACE
-+        // is the existing concurrent_mark_continue edge.
-+#if defined(MRT_TESTABLE_INTERNALS)
-+        const uint64_t markEndPauseStartNs = TimeUtil::NanoSeconds();
+     struct DetachQuarantineEntry {
+         UnitIndex idx;
+         UnitCount num;
+diff --git a/runtime/src/Heap/Allocator/RegionInfo.h b/runtime/src/Heap/Allocator/RegionInfo.h
+index d9bec489a..92769d47b 100644
+--- a/runtime/src/Heap/Allocator/RegionInfo.h
++++ b/runtime/src/Heap/Allocator/RegionInfo.h
+@@ -57,6 +57,9 @@
+ #ifdef CANGJIE_ASAN_SUPPORT
+ #include "Sanitizer/SanitizerInterface.h"
+ #endif
++#if defined(MRT_GC_UNIT_TESTS)
++#include "Heap/Collector/Uncommitter.h"
 +#endif
-+        stw = std::make_unique<ScopedStopTheWorld>("young mark terminate", true,
-+                                                   GCPhase::GC_PHASE_CLEAR_SATB_BUFFER);
-+        const size_t y2yBatchAtMarkEnd = pendingY2yDirtyHolderCount();
-+        theAllocator.VisitAllocBuffers([&workStack](AllocBuffer& buffer) {
-+            // The CLEAR_SATB transition also closes each mutator's epoch stack
-+            // publication. Late stack roots are mark work, just like ZGC's
-+            // thread-local mark stacks flushed by ZMark::try_end().
-+            buffer.MergeRoots(workStack);
-+            buffer.MergeYoungAllocBlack(workStack);
-+            buffer.MergeY2yDirtyHolders(workStack);
-+        });
-+#if defined(MRT_TESTABLE_INTERNALS)
-+        NoteY2yAfterStw2TestReceipt(y2yBatchAtMarkEnd);
-+#endif
-+        const bool markEndSucceeded = TryEndYoungMark(workStack, &concWindow);
-+#if defined(MRT_TESTABLE_INTERNALS)
-+        NoteMarkTerminatePauseDuration(TimeUtil::NanoSeconds() - markEndPauseStartNs);
-+#endif
-+        if (workersTerminated && markEndSucceeded) {
-+            break;
-+        }
-+        NoteMarkTerminateContinue(workStack.size());
-+        ++concWindow.reenters;
-+        stw.reset();
-+        TransitionToGCPhase(GCPhase::GC_PHASE_TRACE, true);
-+#if defined(MRT_TESTABLE_INTERNALS)
-+        PublishY2yAfterReleaseTestReceipt();
-+#endif
-+    }
-+    ReportMarkTerminateContinue();
+ 
+ namespace MapleRuntime {
+ class RegionList;
+@@ -1961,6 +1964,11 @@ public:
+     // observable and retryable instead of tripping the synchronous CHECK path.
+     static size_t ReleaseUnitsPartial(size_t idx, size_t cnt)
      {
--        // SATB termination while concurrent (major MarkSatbBuffer shape). Ends in CLEAR_SATB.
--        CHECK_DETAIL(MarkYoungSatbBuffer(workStack, fullYoungScan, reachableObjects, reachableVec, reachableSlots,
--                                         weakSlots, useBitmapLedger, &concWindow),
--                     "young concurrent mark SATB not cleared");
-         // Window closes here: the next statement asks every mutator to stop. Read the pair
-         // (windowNs, MarkedInWindow) together -- duration alone proves nothing.
-         concWindow.markedAtExit = reachableVec.size();
-         if (concWindowStartNs != 0) {
-             concWindow.windowNs = TimeUtil::NanoSeconds() - concWindowStartNs;
-         }
--        // MarkYoungSatbBuffer performs the ZGC-shaped terminate/flush test.
--        // Once it returns, mark-end has no pause-local discovery authority;
--        // this pause exists only to hand the completed mark state to evacuation.
--        stw = std::make_unique<ScopedStopTheWorld>("young post-mark", true,
--                                                   GCPhase::GC_PHASE_CLEAR_SATB_BUFFER);
--        // Allocation/y2y ledgers are redundant receipts now that their work is
--        // published to the SATB termination domain. Retire their storage after
--        // termination without feeding either ledger back into marking.
--        std::vector<BaseObject*> retiredLocalReceipts;
--        theAllocator.VisitAllocBuffers([&retiredLocalReceipts](AllocBuffer& buffer) {
--            buffer.MergeYoungAllocBlack(retiredLocalReceipts);
--            buffer.MergeY2yDirtyHolders(retiredLocalReceipts);
--        });
--        retiredLocalReceipts.clear();
-+        // The successful mark-end owner is retained for evacuation handoff.
-+        // Every allocator/y2y batch was either empty at this pause or forced a
-+        // failed mark-end and was processed by concurrent_mark_continue.
-         // Rebuild liveRememberedSlots after concurrent remset merge (stats/audit only;
-         // EvacuateYoungRegions remset authority is consumedSlots — fysfixa 3f27f0c4).
-         liveRememberedSlots.clear();
-diff --git a/runtime/src/Heap/Collector/Mark.cpp b/runtime/src/Heap/Collector/Mark.cpp
-index d5b83289f..22d7c4f7d 100644
---- a/runtime/src/Heap/Collector/Mark.cpp
-+++ b/runtime/src/Heap/Collector/Mark.cpp
-@@ -19,6 +19,7 @@
- #include <cstdlib>
- #include <cstring>
- #include <algorithm>
-+#include <condition_variable>
- #include <iterator>
- #include <limits>
- #include <memory>
-@@ -1348,6 +1349,70 @@ struct alignas(64) YoungStripedWorkerOutput {
-     bool touched = false;
- };
++#if defined(MRT_GC_UNIT_TESTS)
++        if (Uncommitter::CutReleaseBackend()) {
++            return 0;
++        }
++#endif
+         void* unitAddress = reinterpret_cast<void*>(RegionInfo::GetUnitAddress(idx));
+         size_t size = cnt * RegionInfo::UNIT_SIZE;
+         RegionInfo* wipeRegion = RegionInfo::TryGetRegionInfoAt(reinterpret_cast<uintptr_t>(unitAddress));
+diff --git a/runtime/src/Heap/Allocator/RegionManager.cpp b/runtime/src/Heap/Allocator/RegionManager.cpp
+index 06d995ac4..d6c121da5 100644
+--- a/runtime/src/Heap/Allocator/RegionManager.cpp
++++ b/runtime/src/Heap/Allocator/RegionManager.cpp
+@@ -31,6 +31,7 @@
+ #include "Collector/Uncommitter.h"
+ #include "Common/BaseObject.h"
+ #include "Common/ScopedObjectAccess.h"
++#include "Mutator/ThreadLocal.h"
+ #include "Heap.h"
+ #include "Heap/Barrier/RememberedSet.h"
+ #include "Heap/HeapWork.h"
+@@ -924,9 +925,20 @@ size_t FreeRegionManager::ReleaseGarbageRegions(size_t targetCachedSize)
+     return releasedBytes;
+ }
  
-+// ZMarkTerminate.inline.hpp:66-123 analogue. A worker becomes non-working
-+// while it waits; the last non-working worker may terminate only after the
-+// published stripe set is empty. Publishing work wakes one waiter instead of
-+// relying on yield polling.
-+class YoungMarkTerminate {
-+public:
-+    void Reset(size_t workers)
-+    {
-+        CHECK_DETAIL(workers != 0, "young mark termination needs a worker");
-+        std::lock_guard<std::mutex> lock(mutex);
-+        workerCount = workers;
-+        working = workers;
-+        awakening = 0;
-+        terminated = false;
+-size_t FreeRegionManager::UncommitIdleUnits(size_t maxBytes, uint64_t idleBeforeNs)
++size_t FreeRegionManager::UncommitIdleUnits(size_t maxBytes, uint64_t idleBeforeNs, bool honorCancel)
++{
++    // Finalizer/mutator threads bind a mutator; gc_unit does not.  Calling
++    // ScopedEnterSaferegion without a ThreadLocal mutator hits CJ_CJThreadGetMutator
++    // at 0 (Barrier.cpp:383-388).
++    if (ThreadLocal::GetMutator() != nullptr) {
++        ScopedEnterSaferegion enterSaferegion(true);
++        return UncommitIdleUnitsImpl(maxBytes, idleBeforeNs, honorCancel);
 +    }
++    return UncommitIdleUnitsImpl(maxBytes, idleBeforeNs, honorCancel);
++}
 +
-+    bool TryTerminate(const MarkStripeSet& stripes)
-+    {
-+        std::unique_lock<std::mutex> lock(mutex);
-+        CHECK_DETAIL(working != 0, "young mark worker left termination twice");
-+        --working;
-+        if (working == 0 && stripes.IsEmpty()) {
-+            terminated = true;
-+            condition.notify_all();
-+            return true;
-+        }
-+        if (!stripes.IsEmpty()) {
-+            ++working;
-+            return false;
-+        }
-+        condition.wait(lock, [this]() { return terminated || awakening != 0; });
-+        if (terminated) {
-+            return true;
-+        }
-+        --awakening;
-+        ++working;
-+        return false;
-+    }
-+
-+    void WakeUp()
-+    {
-+        std::lock_guard<std::mutex> lock(mutex);
-+        if (terminated || working == 0 || working + awakening == workerCount) {
-+            return;
-+        }
-+        ++awakening;
-+        condition.notify_one();
-+    }
-+
-+    bool Saturated() const
-+    {
-+        std::lock_guard<std::mutex> lock(mutex);
-+        return terminated && working == 0;
-+    }
-+
-+private:
-+    size_t workerCount = 0;
-+    size_t working = 0;
-+    size_t awakening = 0;
-+    bool terminated = false;
-+    mutable std::mutex mutex;
-+    std::condition_variable condition;
-+};
-+
- struct YoungStripedShared {
-     WCollector* collector = nullptr;
-     const std::unordered_set<MAddress>* reachableSlotDomain = nullptr;
-@@ -1359,8 +1424,7 @@ struct YoungStripedShared {
-     std::unique_ptr<MarkingSMR> smr;
-     std::vector<std::unique_ptr<YoungMarkStripeSeen>> seen;
-     std::vector<std::unique_ptr<YoungStripedWorkerOutput>> outputs;
--    std::atomic<size_t> idleWorkers{ 0 };
--    std::atomic<bool> done{ false };
-+    YoungMarkTerminate terminate;
-     std::atomic<size_t> stealSuccess{ 0 };
-     std::atomic<size_t> stealFailure{ 0 };
- 
-@@ -1392,7 +1456,9 @@ public:
-             if (TrySteal()) {
-                 continue;
-             }
--            (void)context.Stacks().Flush(stripes, false);
-+            if (context.Stacks().Flush(stripes, false)) {
-+                shared.terminate.WakeUp();
-+            }
-             if (WaitForWorkOrDone()) {
++size_t FreeRegionManager::UncommitIdleUnitsImpl(size_t maxBytes, uint64_t idleBeforeNs, bool honorCancel)
+ {
+-    ScopedEnterSaferegion enterSaferegion(true);
+     if (maxBytes < RegionInfo::UNIT_SIZE) {
+         return 0;
+     }
+@@ -941,7 +953,7 @@ size_t FreeRegionManager::UncommitIdleUnits(size_t maxBytes, uint64_t idleBefore
                  break;
              }
-@@ -1428,19 +1494,7 @@ private:
+         }
+-        if (Uncommitter::ShouldStopUncommit()) {
++        if (honorCancel && Uncommitter::ShouldStopUncommit()) {
+             std::lock_guard<std::mutex> lockCancel(releasedUnitTreeMutex);
+             CHECK_DETAIL(releasedUnitTree.MergeInsert(idx, num, true),
+                          "tid %d: failed to restore canceled uncommit units[%u+%u, %u)", GetTid(), idx, num,
+diff --git a/runtime/src/Heap/Allocator/RegionManager.h b/runtime/src/Heap/Allocator/RegionManager.h
+index adb8e1ebe..b85a241f3 100644
+--- a/runtime/src/Heap/Allocator/RegionManager.h
++++ b/runtime/src/Heap/Allocator/RegionManager.h
+@@ -591,9 +591,9 @@ public:
  
-     bool WaitForWorkOrDone()
+     // targetSize: size of memory which we do not release and keep it as cache for future allocation.
+     size_t ReleaseGarbageRegions(size_t targetSize) { return freeRegionManager.ReleaseGarbageRegions(targetSize); }
+-    size_t UncommitIdleUnits(size_t maxBytes, uint64_t idleBeforeNs)
++    size_t UncommitIdleUnits(size_t maxBytes, uint64_t idleBeforeNs, bool honorCancel = true)
      {
--        size_t idle = shared.idleWorkers.fetch_add(1, std::memory_order_acq_rel) + 1;
--        if (idle == shared.workerCount && shared.stripes->IsEmpty()) {
--            shared.done.store(true, std::memory_order_release);
--            return true;
--        }
--        while (!shared.done.load(std::memory_order_acquire)) {
--            if (!shared.stripes->IsEmpty()) {
--                shared.idleWorkers.fetch_sub(1, std::memory_order_acq_rel);
--                return false;
--            }
--            std::this_thread::yield();
--        }
--        return true;
-+        return shared.terminate.TryTerminate(*shared.stripes);
+-        return freeRegionManager.UncommitIdleUnits(maxBytes, idleBeforeNs);
++        return freeRegionManager.UncommitIdleUnits(maxBytes, idleBeforeNs, honorCancel);
      }
  
-     void PushObject(BaseObject* object)
-@@ -1448,6 +1502,9 @@ private:
-         const size_t stripeIndex = shared.StripeFor(object);
-         const bool publish = stripeIndex != context.StripeId();
-         context.Stacks().Push(*shared.stripes, stripeIndex, MarkStackEntry::MarkAndFollow(object), publish);
-+        if (publish) {
-+            shared.terminate.WakeUp();
-+        }
+     // Ignore dynamic pinned regions and from regions whose garbage objects are quite few, return the garbage size that
+diff --git a/runtime/src/Heap/Allocator/RegionSpace.cpp b/runtime/src/Heap/Allocator/RegionSpace.cpp
+index 5a319eb1f..e0c2b8f43 100644
+--- a/runtime/src/Heap/Allocator/RegionSpace.cpp
++++ b/runtime/src/Heap/Allocator/RegionSpace.cpp
+@@ -190,7 +190,7 @@ size_t RegionSpace::DrainUncommitIdleMemory()
+     if (flush == 0) {
+         return 0;
      }
- 
-     bool ClaimSeen(BaseObject* object)
-@@ -1925,6 +1982,7 @@ void WCollector::TraceYoungClosureStriped(WorkStack& workStack, bool fullYoungSc
-     shared.useBitmapLedger = useBitmapLedger;
-     shared.recordSlots = fullYoungScan;
-     shared.workerCount = static_cast<size_t>(workers);
-+    shared.terminate.Reset(shared.workerCount);
-     shared.stripes = std::make_unique<MarkStripeSet>(stripeCount);
-     shared.smr = std::make_unique<MarkingSMR>(shared.workerCount);
-     shared.outputs.reserve(shared.workerCount);
-@@ -1959,6 +2017,8 @@ void WCollector::TraceYoungClosureStriped(WorkStack& workStack, bool fullYoungSc
-     YoungStripedMarkingWork mainTask(shared, 0);
-     mainTask.Execute(0);
-     threadPool->WaitFinish();
-+    CHECK_DETAIL(shared.terminate.Saturated(),
-+                 "young striped closure returned without coordinated worker termination");
-     if (wantActive != prevActive) {
-         threadPool->SetMaxActiveThreadNum(prevActive);
-     }
-@@ -2063,7 +2123,6 @@ bool WCollector::MarkYoungSatbBuffer(WorkStack& workStack, bool fullYoungScan, M
-                                      YoungConcWindowStats* windowStats)
- {
-     MRT_PHASE_TIMER("young.mark_satb");
--    workStack.clear();
-     // portyoungconc: count what the window actually consumes. A retired SATB object that
-     // Push* discards (non-heap / already marked / not young) is still SATB traffic, so it
-     // is counted at the pop, not at the push -- the question this answers is "did the
-@@ -2100,62 +2159,44 @@ bool WCollector::MarkYoungSatbBuffer(WorkStack& workStack, bool fullYoungScan, M
-             workStack.push_back(entry);
-         }
-     };
-+    // ZMark::mark_follow() runs the coordinated worker termination once. Local
-+    // mutator buffers are deliberately not flushed here; pause-mark-end owns one
-+    // flush and returns failure to Generation when that flush discovers work.
-     visitSatbObj();
--    do {
-+    if (windowStats != nullptr) {
-+        ++windowStats->satbIters;
-+    }
-+    if (!workStack.empty()) {
-         if (windowStats != nullptr) {
--            ++windowStats->satbIters;
-+            ++windowStats->closureCalls;
-         }
--        if (!workStack.empty()) {
--            if (windowStats != nullptr) {
--                ++windowStats->closureCalls;
--            }
--            TraceYoungClosure(workStack, fullYoungScan, reachableObjects, reachableVec, reachableSlots, weakSlots,
--                              useBitmapLedger);
--        }
--        visitSatbObj();
--        if (!workStack.empty()) {
--            continue;
--        }
--        // Handshake, not a pause: a mutator that already acknowledged CLEAR_SATB
--        // runs on and may enqueue again. Same as MarkSatbBuffer (TracingCollector.cpp).
--        if (Heap::GetHeap().GetGCPhase() != GCPhase::GC_PHASE_CLEAR_SATB_BUFFER) {
--            TransitionToGCPhase(GCPhase::GC_PHASE_CLEAR_SATB_BUFFER, true);
--            visitSatbObj();
--            if (!workStack.empty()) {
--                TransitionToGCPhase(GCPhase::GC_PHASE_TRACE, true);
--                continue;
--            }
--        }
--        // TraceYoungClosure's parallel path returns through WaitFinish(); its
--        // serial path owns the whole stack. Therefore owner-empty + no published
--        // pool task is our global-empty proof, without shared lock-free stripes.
--        CHECK_DETAIL(workStack.empty(), "strict young mark termination with owner work");
--        CHECK_DETAIL(GetThreadPool()->GetWorkCount() == 0,
--                     "strict young mark termination with published worker work");
--        bool terminated = false;
--        {
--            ScopedStopTheWorld stw("young mark terminate", true, GCPhase::GC_PHASE_CLEAR_SATB_BUFFER);
--            NoteMarkTerminatePause();
--            const size_t seenBefore = satbSeen;
--            MutatorManager::Instance().VisitAllMutators([](Mutator& mutator) { mutator.FlushSatbBuffer(); });
--            visitSatbObj();
--            NoteMarkTerminateFlushed(satbSeen - seenBefore);
--            terminated = workStack.empty();
-+        TraceYoungClosure(workStack, fullYoungScan, reachableObjects, reachableVec, reachableSlots, weakSlots,
-+                          useBitmapLedger);
-+    }
-+    CHECK_DETAIL(workStack.empty(), "young concurrent follow returned with owner work");
-+    return true;
-+}
-+
-+bool WCollector::TryEndYoungMark(WorkStack& workStack, YoungConcWindowStats* windowStats)
-+{
-+    CHECK_DETAIL(MutatorManager::Instance().WorldStopped(), "young mark-end flush requires stopped mutators");
-+    NoteMarkTerminatePause();
-+    size_t flushed = 0;
-+    MutatorManager::Instance().VisitAllMutators([](Mutator& mutator) { mutator.FlushSatbBuffer(); });
-+    SatbBuffer::Instance().GetRetiredEntries([this, &workStack, windowStats, &flushed](BaseObject* object,
-+                                                                                     bool follow) {
-+        ++flushed;
-+        if (windowStats != nullptr) {
-+            ++windowStats->satbObjects;
-         }
--        if (terminated) {
--            break;
-+        if (follow) {
-+            workStack.push_back(MarkStackEntry::FollowOnly(object));
-+        } else if (Heap::IsHeapAddress(object)) {
-+            PushYoungObject(object, workStack, "young_mark_end");
-         }
--        NoteMarkTerminateContinue(workStack.size());
--        if (windowStats != nullptr) {
--            ++windowStats->reenters;
--        }
--        // ZGenerationYoung::collect resumes concurrent_mark_continue after a
--        // failed mark-end pause.  Leaving mutators in CLEAR here repeatedly
--        // republishes closing-edge work instead of running mark-follow.
--        TransitionToGCPhase(GCPhase::GC_PHASE_TRACE, true);
--    } while (true);
--    ReportMarkTerminateContinue();
--    return true;
-+    });
-+    NoteMarkTerminateFlushed(flushed);
-+    return workStack.empty();
- }
- void WCollector::MarkNewObject(BaseObject* obj)
- {
-diff --git a/runtime/src/Heap/Collector/TracingCollector.cpp b/runtime/src/Heap/Collector/TracingCollector.cpp
-index 593fc05f7..c5d22b478 100644
---- a/runtime/src/Heap/Collector/TracingCollector.cpp
-+++ b/runtime/src/Heap/Collector/TracingCollector.cpp
-@@ -27,6 +27,9 @@ std::atomic<size_t> g_markTerminateContinue{ 0 };
- std::atomic<size_t> g_markTerminatePauses{ 0 };
- std::atomic<size_t> g_markTerminateFlushed{ 0 };
- std::atomic<bool> g_markTerminateAtexitInstalled{ false };
-+#if defined(MRT_TESTABLE_INTERNALS)
-+std::atomic<uint64_t> g_markTerminateMaxPauseNs{ 0 };
-+#endif
- 
- void NoteMarkTerminatePause() { g_markTerminatePauses.fetch_add(1, std::memory_order_relaxed); }
- 
-@@ -54,6 +57,31 @@ void ReportMarkTerminateContinue()
-     }
+-    return regionManager.UncommitIdleUnits(flush, static_cast<uint64_t>(-1));
++    return regionManager.UncommitIdleUnits(flush, static_cast<uint64_t>(-1), false);
  }
  
-+#if defined(MRT_TESTABLE_INTERNALS)
-+void ResetMarkTerminateTestReceipt()
-+{
-+    g_markTerminateContinue.store(0, std::memory_order_relaxed);
-+    g_markTerminatePauses.store(0, std::memory_order_relaxed);
-+    g_markTerminateFlushed.store(0, std::memory_order_relaxed);
-+    g_markTerminateMaxPauseNs.store(0, std::memory_order_relaxed);
-+}
-+
-+MarkTerminateTestReceipt ReadMarkTerminateTestReceipt()
-+{
-+    return { g_markTerminatePauses.load(std::memory_order_relaxed),
-+             g_markTerminateFlushed.load(std::memory_order_relaxed),
-+             g_markTerminateContinue.load(std::memory_order_relaxed),
-+             g_markTerminateMaxPauseNs.load(std::memory_order_relaxed) };
-+}
-+
-+void NoteMarkTerminatePauseDuration(uint64_t pauseNs)
-+{
-+    uint64_t observed = g_markTerminateMaxPauseNs.load(std::memory_order_relaxed);
-+    while (observed < pauseNs &&
-+           !g_markTerminateMaxPauseNs.compare_exchange_weak(observed, pauseNs, std::memory_order_relaxed)) {}
-+}
-+#endif
-+
- namespace {
- struct SkippedStackMapCounts {
-     std::atomic<size_t> zeroEntries{ 0 };
-diff --git a/runtime/src/Heap/Collector/TracingCollector.h b/runtime/src/Heap/Collector/TracingCollector.h
-index 64c8f7d34..fe2f4c17e 100644
---- a/runtime/src/Heap/Collector/TracingCollector.h
-+++ b/runtime/src/Heap/Collector/TracingCollector.h
-@@ -40,6 +40,17 @@ void NoteMarkTerminatePause();
- void NoteMarkTerminateFlushed(size_t n);
- void NoteMarkTerminateContinue(size_t stackSize);
- void ReportMarkTerminateContinue();
-+#if defined(MRT_TESTABLE_INTERNALS)
-+struct MarkTerminateTestReceipt {
-+    size_t pauses = 0;
-+    size_t flushed = 0;
-+    size_t continues = 0;
-+    uint64_t maxPauseNs = 0;
-+};
-+void ResetMarkTerminateTestReceipt();
-+MarkTerminateTestReceipt ReadMarkTerminateTestReceipt();
-+void NoteMarkTerminatePauseDuration(uint64_t pauseNs);
-+#endif
- 
- // prefetch distance for mark.
- #define MACRO_MARK_PREFETCH_DISTANCE 16    // this macro is used for check when pre-compiling.
-diff --git a/runtime/src/Heap/WCollector/WCollector.h b/runtime/src/Heap/WCollector/WCollector.h
-index 62213c356..9766ec610 100644
---- a/runtime/src/Heap/WCollector/WCollector.h
-+++ b/runtime/src/Heap/WCollector/WCollector.h
-@@ -74,6 +74,11 @@ void ResetY2yHandoffTestReceipt();
- Y2yHandoffTestReceipt ReadY2yHandoffTestReceipt();
- void NoteY2yBeforeReleaseTestReceipt(uint64_t pending);
- void NoteY2yAfterRootTestReceipt(uint64_t pending);
-+void NoteY2yAfterStw2TestReceipt(uint64_t pending);
-+void ArmY2yAfterReleaseTestReceipt(BaseObject* holder, uint64_t publications);
-+void PublishY2yAfterReleaseTestReceipt();
-+void ArmSatbBeforeMarkEndTestReceipt(Mutator* producer, BaseObject* first, BaseObject* second);
-+void PublishSatbBeforeMarkEndTestReceipt();
+ void RegionSpace::Init(const HeapParam& vmHeapParam)
+diff --git a/runtime/src/Heap/Collector/Uncommitter.cpp b/runtime/src/Heap/Collector/Uncommitter.cpp
+index 30b368177..217fab176 100644
+--- a/runtime/src/Heap/Collector/Uncommitter.cpp
++++ b/runtime/src/Heap/Collector/Uncommitter.cpp
+@@ -161,6 +161,15 @@ bool Uncommitter::CutPartialPropagation()
  #endif
- 
- // portyoungconc: work accounting for the concurrent young mark window.
-@@ -1209,6 +1214,9 @@ private:
-                              std::vector<BaseObject*>& reachableVec, MinorSlotSet& reachableSlots,
-                              MinorSlotSet& weakSlots, bool useBitmapLedger,
-                              YoungConcWindowStats* windowStats = nullptr);
-+    // ZMark::try_end sibling: called with mutators stopped; performs exactly one
-+    // local-buffer flush and reports whether concurrent-mark-continue is needed.
-+    bool TryEndYoungMark(WorkStack& workStack, YoungConcWindowStats* windowStats = nullptr);
-     friend class YoungMarkingWork;
-     friend class YoungStripedMarkingWork;
-     void RescanRememberedSet(WorkStack& workStack, const MinorSlotSet& rememberedSlots,
-diff --git a/runtime/src/Mutator/MutatorManager.cpp b/runtime/src/Mutator/MutatorManager.cpp
-index b92985d6b..b4477a8c8 100644
---- a/runtime/src/Mutator/MutatorManager.cpp
-+++ b/runtime/src/Mutator/MutatorManager.cpp
-@@ -203,6 +203,7 @@ void MutatorManager::DestroyMutator(Mutator* mutator)
- 
- Mutator* MutatorManager::CreateRuntimeMutator(ThreadType threadType)
- {
-+    RecordEpochHandshakeCreateAttempt();
-     // Because TSAN tool can't identify the RwLock implemented by ourselves,
-     // we use a global instance fpMutatorInstance instead of an instance created on
-     // heap in order to prevent false positives.
-@@ -224,6 +225,14 @@ Mutator* MutatorManager::CreateRuntimeMutator(ThreadType threadType)
-     mutator->SetManagedContext(false);
-     MutatorManager::Instance().BindMutator(*mutator);
-     mutator->SetMutatorPhase(Heap::GetHeap().GetGCPhase());
-+    {
-+        std::lock_guard<std::mutex> lock(runtimeMutatorRegistryMutex);
-+        runtimeMutators.insert(mutator);
-+    }
-+    // Same born-clean/participant race closure as CreateMutator and foreign
-+    // attach. Registration precedes exclusion so the epoch snapshot sees the
-+    // mutator or exclusion completes it, never neither.
-+    ExcludeNewMutatorFromActiveEpoch(*mutator);
-     ThreadLocal::SetMutator(mutator);
-     ThreadLocal::SetThreadType(threadType);
-     ThreadLocal::SetCJProcessorFlag(true);
-@@ -231,6 +240,14 @@ Mutator* MutatorManager::CreateRuntimeMutator(ThreadType threadType)
-     ThreadLocalData* threadData = reinterpret_cast<ThreadLocalData*>(MRT_GetThreadLocalData());
-     // Managed-entry setup may block on sync/STW, so do not hold the mutator
-     // management lock across it.
-+#if defined(MRT_TESTABLE_INTERNALS)
-+    // The lifecycle contract tests run without a scheduler-owned managed frame.
-+    // Stop after the real registration/born-clean path; product builds do not
-+    // contain this branch and all normal runtime mutators still enter managed code.
-+    if (std::getenv("MRT_GC_UNIT_RUNTIME_MUTATOR_LIFECYCLE_ONLY") != nullptr) {
-+        return mutator;
-+    }
-+#endif
-     MRT_PreRunManagedCode(mutator, 2, threadData); // 2 layers
-     // only running mutator can enter saferegion.
-     return mutator;
-@@ -241,19 +258,25 @@ void MutatorManager::DestroyRuntimeMutator(ThreadType threadType)
-     Mutator* mutator = ThreadLocal::GetMutator();
-     CHECK_DETAIL(mutator != nullptr, "Fini UpdateThreads with null mutator");
- 
--    MutatorManagementRLock();
--    (void)mutator->LeaveSaferegion();
--    // fp mutator is a static instance, we can't delete it, we reset the mutator to avoid invalid memory
--    // access when static instance destruction.
--    if (threadType != ThreadType::FP_THREAD) {
--        delete mutator;
--    } else {
--        mutator->ResetMutator();
-+    // Reuse the ordinary CJThread exit transition: an active participant first
-+    // acknowledges as EXITING, is reset/unbound, and its storage remains pinned
-+    // by DestroyMutator until the epoch closes.
-+    TransitMutatorToExit();
-+    {
-+        std::lock_guard<std::mutex> lock(runtimeMutatorRegistryMutex);
-+        runtimeMutators.erase(mutator);
-     }
-     ThreadLocal::SetAllocBuffer(nullptr);
--    ThreadLocal::SetMutator(nullptr);
-     ThreadLocal::SetCJProcessorFlag(false);
--    MutatorManagementRUnlock();
-+    if (threadType != ThreadType::FP_THREAD) {
-+        DestroyMutator(mutator);
-+    } else {
-+        // The FP runtime mutator is static. There is no storage to retire, but
-+        // do not permit reuse while an epoch can still hold its participant pin.
-+        while (EpochHandshakeActive()) {
-+            (void)sched_yield();
-+        }
-+    }
  }
  
- void MutatorManager::Init()
-@@ -362,6 +385,38 @@ void MutatorManager::RecordEpochHandshakeExitTransition()
-     }
- }
- 
-+#if defined(MRT_TESTABLE_INTERNALS)
-+uint64_t MutatorManager::BeginEpochHandshakeLifecycleTest()
++bool Uncommitter::CutReleaseBackend()
 +{
-+    CHECK_DETAIL(!EpochHandshakeActive(), "nested lifecycle test epoch");
-+    const uint64_t epoch = epochHandshakeSequence.fetch_add(1, std::memory_order_relaxed) + 1;
-+    {
-+        std::lock_guard<std::mutex> lock(epochHandshakeLedgerMutex);
-+        epochHandshakeParticipants.clear();
-+        epochHandshakeAckedMutators.clear();
-+    }
-+    epochHandshakeDestroyDeferred.store(0, std::memory_order_relaxed);
-+    epochHandshakeActive.store(epoch, std::memory_order_release);
-+    return epoch;
-+}
-+
-+void MutatorManager::EndEpochHandshakeLifecycleTest()
-+{
-+    {
-+        std::lock_guard<std::mutex> lock(epochHandshakeLedgerMutex);
-+        epochHandshakeParticipants.clear();
-+    }
-+    epochHandshakeActive.store(0, std::memory_order_release);
-+    DestroyExpiredMutators();
-+}
-+
-+size_t MutatorManager::RuntimeMutatorRegistrySizeForTest()
-+{
-+    std::lock_guard<std::mutex> lock(runtimeMutatorRegistryMutex);
-+    return runtimeMutators.size();
-+}
++#if defined(MRT_GC_UNIT_TESTS)
++    return EnvIsSet("MRT_UNCOMMIT_CUT_RELEASE");
++#else
++    return false;
 +#endif
++}
 +
- EpochHandshakeStats MutatorManager::RunEpochHandshake(const char* source)
+ bool Uncommitter::ShouldStopUncommit()
  {
-     EpochHandshakeStats stats;
-@@ -493,6 +548,9 @@ EpochHandshakeStats MutatorManager::RunEpochHandshake(const char* source)
-     CHECK_DETAIL(stats.acked == stats.requested && stats.ackedTwice == 0 && stats.stopTheWorldCalls == 0,
-                  "epoch handshake accounting failed: requested=%zu acked=%zu acked_twice=%zu stw_calls=%zu",
-                  stats.requested, stats.acked, stats.ackedTwice, stats.stopTheWorldCalls);
-+    CHECK_DETAIL(stats.stackScanned + stats.stackFallback == stats.requested,
-+                 "epoch handshake stack receipt mismatch: requested=%zu scanned=%zu fallback=%zu",
-+                 stats.requested, stats.stackScanned, stats.stackFallback);
-     CHECK_DETAIL(!WorldStopped(), "epoch handshake changed worldStopped");
+     if (CutCancelWake()) {
+diff --git a/runtime/src/Heap/Collector/Uncommitter.h b/runtime/src/Heap/Collector/Uncommitter.h
+index 924b9c000..b8be8fce1 100644
+--- a/runtime/src/Heap/Collector/Uncommitter.h
++++ b/runtime/src/Heap/Collector/Uncommitter.h
+@@ -42,6 +42,7 @@ public:
+     static bool CutCancelWake();
+     static bool CutCacheOwnership();
+     static bool CutPartialPropagation();
++    static bool CutReleaseBackend();
+ };
+ } // namespace MapleRuntime
+ #endif // MRT_UNCOMMITTER_H
+diff --git a/runtime/tests/gc_unit/product_path_manifest.tsv b/runtime/tests/gc_unit/product_path_manifest.tsv
+index e42093d95..2494df9ee 100644
+--- a/runtime/tests/gc_unit/product_path_manifest.tsv
++++ b/runtime/tests/gc_unit/product_path_manifest.tsv
+@@ -4,3 +4,5 @@ LiveMap.BoundedPreserveProductRepairsCurrentFace	_ZN12MapleRuntime10RegionInfo28
+ LiveMap.BoundedPreserveProductRepairsFromPageFace	_ZN12MapleRuntime10RegionInfo28PreserveRetainedLiveInfoUpToEm	product_so	ProductPreserveRetainedUpToFn	metadata.retainedLiveInfo = GetLiveInfo()
+ LiveMap.ExaminedPageWithoutSnapshotStillAborts	_ZN12MapleRuntime10RegionInfo28PreserveRetainedLiveInfoUpToEm	product_so	ProductPreserveRetainedUpToFn	metadata.retainedLiveInfo = GetLiveInfo()
+ LiveMap.BoundedPreserveProductRepairsOwnedCopy	_ZN12MapleRuntime10RegionInfo28PreserveRetainedLiveInfoUpToEm	product_so	ProductPreserveRetainedUpToFn	metadata.retainedLiveInfo = GetLiveInfo()
++Uncommitter.UncommitIdleUnitsReleasesPhysical	_ZN12MapleRuntime17FreeRegionManager17UncommitIdleUnitsEmmb	product_so	frm.UncommitIdleUnits	RegionInfo::ReleaseUnitsPartial
++Uncommitter.DrainAfterCancelStillReleasesPhysical	_ZN12MapleRuntime17FreeRegionManager17UncommitIdleUnitsEmmb	product_so	frm.UncommitIdleUnits honorCancel=false	RegionInfo::ReleaseUnitsPartial
+diff --git a/runtime/tests/gc_unit/test_uncommitter.cpp b/runtime/tests/gc_unit/test_uncommitter.cpp
+index 7c563d15a..b90a5b841 100644
+--- a/runtime/tests/gc_unit/test_uncommitter.cpp
++++ b/runtime/tests/gc_unit/test_uncommitter.cpp
+@@ -7,6 +7,11 @@
+ #include <limits>
  
-     {
-@@ -570,10 +628,24 @@ bool MutatorManager::AcquireMutatorManagementWLockForCpuProfile()
- // Visit all mutators, hold mutatorListLock firstly
- void MutatorManager::VisitAllMutators(MutatorVisitor func)
- {
--    ScheduleAllCJThreadVisitMutator(VisitMuatorHelper, &func);
-+    std::unordered_set<Mutator*> visited;
-+    MutatorVisitor visitOnce = [&func, &visited](Mutator& mutator) {
-+        if (visited.insert(&mutator).second) {
-+            func(mutator);
-+        }
-+    };
-+    ScheduleAllCJThreadVisitMutator(VisitMuatorHelper, &visitOnce);
-+    {
-+        std::lock_guard<std::mutex> lock(runtimeMutatorRegistryMutex);
-+        for (Mutator* runtimeMutator : runtimeMutators) {
-+            if (runtimeMutator != nullptr) {
-+                visitOnce(*runtimeMutator);
-+            }
-+        }
-+    }
-     Mutator* mutator = Heap::GetHeap().GetFinalizerProcessor().GetMutator();
-     if (mutator != nullptr) {
--        func(*mutator);
-+        visitOnce(*mutator);
-     }
- }
- 
-diff --git a/runtime/src/Mutator/MutatorManager.h b/runtime/src/Mutator/MutatorManager.h
-index 9f5ebd30b..43705306f 100644
---- a/runtime/src/Mutator/MutatorManager.h
-+++ b/runtime/src/Mutator/MutatorManager.h
-@@ -237,6 +237,15 @@ public:
-     {
-         return epochHandshakeActive.load(std::memory_order_acquire) != 0;
-     }
-+#if defined(MRT_TESTABLE_INTERNALS)
-+    uint64_t BeginEpochHandshakeLifecycleTest();
-+    void EndEpochHandshakeLifecycleTest();
-+    size_t RuntimeMutatorRegistrySizeForTest();
-+    size_t EpochHandshakeDestroyDeferredForTest() const
-+    {
-+        return epochHandshakeDestroyDeferred.load(std::memory_order_relaxed);
-+    }
-+#endif
- 
-     void EnsureCpuProfileFinish(std::list<Mutator*> &undoneMutators);
-     void TransitionAllMutatorsToCpuProfile();
-@@ -380,6 +389,10 @@ private:
-     // Participants of the active epoch; DestroyMutator must not free these while
-     // active != 0 (replaces the old full-handshake W-lock serialisation).
-     std::unordered_set<Mutator*> epochHandshakeParticipants;
-+    // Runtime mutators are not necessarily owned by a scheduler CJThread, so
-+    // keep them in the same participant inventory explicitly.
-+    std::mutex runtimeMutatorRegistryMutex;
-+    std::unordered_set<Mutator*> runtimeMutators;
- 
- #if defined(_WIN64) || defined (__APPLE__)
-     std::condition_variable mutatorSuspensionCV;
-diff --git a/runtime/tests/gc_unit/test_young_conc.cpp b/runtime/tests/gc_unit/test_young_conc.cpp
-index 643ae428b..1d7e6d177 100644
---- a/runtime/tests/gc_unit/test_young_conc.cpp
-+++ b/runtime/tests/gc_unit/test_young_conc.cpp
-@@ -23,6 +23,7 @@
- #include <vector>
- 
- #include "Common/Runtime.h"
-+#include "CjScheduler.h"
- 
- #include "gc_heap_fixture.hpp"
+ #include "Heap/Allocator/CartesianTree.h"
++#define private public
++#include "Heap/Allocator/FreeRegionManager.h"
++#undef private
++#include "Heap/Allocator/MemMap.h"
++#include "Heap/Allocator/RegionManager.h"
+ #include "Heap/Collector/Uncommitter.h"
  #include "gc_unittest.hpp"
-@@ -288,6 +289,85 @@ GC_TEST(YoungConc, EpochHandshakeIsRequired)
-     GC_EXPECT_TRUE(MutatorManager::ConcurrentStackScanEnabled());
+ 
+@@ -131,3 +136,60 @@ GC_TEST(Uncommitter, AllocationTakeBumpsIdleClock)
+     GC_EXPECT_FALSE(tree.TakeIdleUnits(before, 2, idx, count));
+     tree.Fini();
  }
- 
-+#if defined(MRT_TESTABLE_INTERNALS)
-+GC_OTHER_VM_TEST(YoungConc, RuntimeMutatorCreateDuringActiveEpochIsBornClean)
++
++static size_t ProbeProductUncommit(bool cancelFirst, bool honorCancel)
 +{
-+    GC_EXPECT_EQ(CJ_ScheduleManagerInit(), 0);
-+    MRT_CjRuntimeInit();
-+    MutatorManager& manager = MutatorManager::Instance();
-+    Heap::GetHeap().SetGCPhase(GCPhase::GC_PHASE_ENUM);
-+    GC_EXPECT_EQ(setenv("MRT_GC_UNIT_RUNTIME_MUTATOR_LIFECYCLE_ONLY", "1", 1), 0);
-+    std::fprintf(stderr, "DETAIL runtime_lifecycle_create stage=before_begin\n");
-+    const uint64_t epoch = manager.BeginEpochHandshakeLifecycleTest();
-+    std::fprintf(stderr, "DETAIL runtime_lifecycle_create stage=before_create epoch=%zu\n",
-+                 static_cast<size_t>(epoch));
-+    Mutator* mutator = manager.CreateRuntimeMutator(ThreadType::HOT_UPDATE_THREAD);
-+    std::fprintf(stderr, "DETAIL runtime_lifecycle_create stage=after_create mutator=%p\n", mutator);
-+    GC_EXPECT_TRUE(mutator != nullptr);
-+    GC_EXPECT_TRUE(mutator->FinishedEpochHandshake(epoch));
-+    GC_EXPECT_EQ(manager.RuntimeMutatorRegistrySizeForTest(), 1u);
-+    manager.DestroyRuntimeMutator(ThreadType::HOT_UPDATE_THREAD);
-+    std::fprintf(stderr, "DETAIL runtime_lifecycle_create stage=after_destroy\n");
-+    manager.EndEpochHandshakeLifecycleTest();
-+    GC_EXPECT_EQ(unsetenv("MRT_GC_UNIT_RUNTIME_MUTATOR_LIFECYCLE_ONLY"), 0);
-+    Heap::GetHeap().SetGCPhase(GCPhase::GC_PHASE_IDLE);
-+}
-+
-+GC_OTHER_VM_TEST(YoungConc, RuntimeMutatorDestroyDuringActiveEpochDefersStorage)
-+{
-+    GC_EXPECT_EQ(CJ_ScheduleManagerInit(), 0);
-+    MRT_CjRuntimeInit();
-+    MutatorManager& manager = MutatorManager::Instance();
-+    Heap::GetHeap().SetGCPhase(GCPhase::GC_PHASE_ENUM);
-+    GC_EXPECT_EQ(setenv("MRT_GC_UNIT_RUNTIME_MUTATOR_LIFECYCLE_ONLY", "1", 1), 0);
-+    std::fprintf(stderr, "DETAIL runtime_lifecycle_destroy stage=before_begin\n");
-+    (void)manager.BeginEpochHandshakeLifecycleTest();
-+    std::fprintf(stderr, "DETAIL runtime_lifecycle_destroy stage=before_create\n");
-+    (void)manager.CreateRuntimeMutator(ThreadType::HOT_UPDATE_THREAD);
-+    std::fprintf(stderr, "DETAIL runtime_lifecycle_destroy stage=before_destroy\n");
-+    manager.DestroyRuntimeMutator(ThreadType::HOT_UPDATE_THREAD);
-+    std::fprintf(stderr, "DETAIL runtime_lifecycle_destroy stage=after_destroy deferred=%zu\n",
-+                 manager.EpochHandshakeDestroyDeferredForTest());
-+    GC_EXPECT_EQ(manager.RuntimeMutatorRegistrySizeForTest(), 0u);
-+    GC_EXPECT_EQ(manager.EpochHandshakeDestroyDeferredForTest(), 1u);
-+    manager.EndEpochHandshakeLifecycleTest();
-+    GC_EXPECT_EQ(unsetenv("MRT_GC_UNIT_RUNTIME_MUTATOR_LIFECYCLE_ONLY"), 0);
-+    Heap::GetHeap().SetGCPhase(GCPhase::GC_PHASE_IDLE);
-+}
-+
-+GC_OTHER_VM_TEST(YoungConc, FinalizerCreateDuringActiveEpochIsBornClean)
-+{
-+    GC_EXPECT_EQ(CJ_ScheduleManagerInit(), 0);
-+    MRT_CjRuntimeInit();
-+    MutatorManager& manager = MutatorManager::Instance();
-+    Heap::GetHeap().SetGCPhase(GCPhase::GC_PHASE_ENUM);
-+    const uint64_t epoch = manager.BeginEpochHandshakeLifecycleTest();
-+    void* cjthread = NewFinalizerCJThread();
-+    GC_EXPECT_TRUE(cjthread != nullptr);
-+    Mutator* mutator = ThreadLocal::GetMutator();
-+    GC_EXPECT_TRUE(mutator != nullptr);
-+    GC_EXPECT_TRUE(mutator->FinishedEpochHandshake(epoch));
-+    EndFinalizerCJThread();
-+    manager.EndEpochHandshakeLifecycleTest();
-+    Heap::GetHeap().SetGCPhase(GCPhase::GC_PHASE_IDLE);
-+}
-+
-+GC_OTHER_VM_TEST(YoungConc, FinalizerEndDuringActiveEpochDefersStorage)
-+{
-+    GC_EXPECT_EQ(CJ_ScheduleManagerInit(), 0);
-+    MRT_CjRuntimeInit();
-+    MutatorManager& manager = MutatorManager::Instance();
-+    Heap::GetHeap().SetGCPhase(GCPhase::GC_PHASE_ENUM);
-+    (void)manager.BeginEpochHandshakeLifecycleTest();
-+    GC_EXPECT_TRUE(NewFinalizerCJThread() != nullptr);
-+    EndFinalizerCJThread();
-+    GC_EXPECT_TRUE(ThreadLocal::GetMutator() == nullptr);
-+    GC_EXPECT_TRUE(manager.EpochHandshakeDestroyDeferredForTest() >= 1u);
-+    manager.EndEpochHandshakeLifecycleTest();
-+    Heap::GetHeap().SetGCPhase(GCPhase::GC_PHASE_IDLE);
-+}
-+#endif
-+
- // Paint-then-claim-skip: already-marked MarkObject returns true; without grey ledger
- // TraceYoungClosure would drop reachableVec/fields (WCollector.cpp:8110-8136).
- GC_TEST(YoungConc, PaintWithoutGreyLedgerMissesWorkStack)
-@@ -514,7 +594,7 @@ GC_OTHER_VM_TEST(YoungConc, LateEdgeFollowReceiptReachesYoungRuntimeDispatch)
- 
- // H receipt arm: default product dispatch with a real mutator-local y2y
- // holder. The pre-window batch must be empty at the release boundary.
--GC_OTHER_VM_TEST(YoungConc, Y2yBeforeReleaseReceiptIsMeasured)
-+GC_OTHER_VM_TEST(YoungConc, Y2yAfterReleaseBatchForcesContinueAndReachesClosure)
- {
-     GC_EXPECT_EQ(CJ_ScheduleManagerInit(), 0);
-     GC_EXPECT_EQ(setenv("MRT_GCV2_MARKPAR_FORCE_SERIAL", "1", 1), 0);
-@@ -553,25 +633,30 @@ GC_OTHER_VM_TEST(YoungConc, Y2yBeforeReleaseReceiptIsMeasured)
-     resources.GetGCStats().reason = GC_REASON_YOUNG;
- #if defined(MRT_GC_UNIT_TESTS)
-     ResetY2yHandoffTestReceipt();
-+    // The old holder exercises the pre-release merge. The young holder is
-+    // injected only after stw.reset(), so the first mark-end must fail and the
-+    // existing continue edge must follow it before a second mark-end succeeds.
-     AllocBuffer::GetOrCreateAllocBuffer()->PushY2yDirtyHolder(fx.obj0);
-+    ArmY2yAfterReleaseTestReceipt(fx.obj1, 2);
- #endif
--    auto* holderField = &HeapSlotAt<>(reinterpret_cast<MAddress>(fx.obj0) + TYPEINFO_PTR_SIZE);
--    barrier.Record(fx.obj0, reinterpret_cast<MAddress>(holderField), fx.obj1);
--    mutator.FlushSatbBuffer();
-     ThreadLocal::SetMutator(nullptr);
-     RelocationReceiptTestAccess::RunCollectionDispatch(collector);
- #if defined(MRT_GC_UNIT_TESTS)
-     const auto receipt = ReadY2yHandoffTestReceipt();
-     std::fprintf(stderr,
--                 "DETAIL y2y_h_receipt before_release=%zu after_root=%zu phase0=%zu phase1=%zu\n",
-+                 "DETAIL y2y_h_receipt before_release=%zu after_root=%zu mark_end_batch=%zu "
-+                 "phase0=%zu phase1=%zu phase2=%zu\n",
-                  static_cast<size_t>(receipt.beforeRelease), static_cast<size_t>(receipt.afterRoot),
--                 static_cast<size_t>(receipt.phase0), static_cast<size_t>(receipt.phase1));
-+                 static_cast<size_t>(receipt.afterStw2), static_cast<size_t>(receipt.phase0),
-+                 static_cast<size_t>(receipt.phase1), static_cast<size_t>(receipt.phase2));
-     GC_EXPECT_EQ(receipt.beforeRelease, 0u);
-     GC_EXPECT_TRUE(receipt.phase0 >= 1);
-     // phase1 proves that zero is the sampled post-consumption root-container
-     // state, rather than the reset value from an omitted receipt.
-     GC_EXPECT_TRUE(receipt.phase1 >= 1);
-     GC_EXPECT_EQ(receipt.afterRoot, 0u);
-+    GC_EXPECT_TRUE(receipt.afterStw2 >= 2);
-+    GC_EXPECT_TRUE(receipt.phase2 >= 3);
- #endif
-     resources.SetGcStarted(startedBefore);
-     resources.GetGCStats().reason = reasonBefore;
-@@ -586,6 +671,67 @@ GC_OTHER_VM_TEST(YoungConc, Y2yBeforeReleaseReceiptIsMeasured)
-     (void)live;
- }
- 
-+// A mutator publishes ordinary SATB work after coordinated mark workers have
-+// terminated but before pause-mark-end starts. Each pause is allowed exactly
-+// one flush. Two publications therefore require two continue edges followed by
-+// a third, successful pause; an in-pause retry loop or premature commit breaks
-+// the exact receipt.
-+GC_OTHER_VM_TEST(YoungConc, SatbAfterWorkerTerminationUsesBoundedMarkEndContinue)
-+{
-+    GC_EXPECT_EQ(CJ_ScheduleManagerInit(), 0);
-+    GC_EXPECT_EQ(setenv("MRT_GCV2_MARKPAR_FORCE_SERIAL", "1", 1), 0);
-+    MutatorManager mutatorManager;
-+    YoungConcTestRuntime runtime(mutatorManager);
-+    GcHeapFixture fx;
-+    fx.region1->SetYoungRegionFlag(1);
-+    fx.region1->SetYoungAge(1);
-+    LiveInfo* live = fx.PlantLiveInfo(fx.region1);
-+    (void)fx.PlantMarkBitmap<Generation::Young>(live, fx.region1->GetRegionSize());
-+    BaseObject* first = fx.PlaceObject(reinterpret_cast<MAddress>(fx.obj1) + 64);
-+    BaseObject* second = fx.PlaceObject(reinterpret_cast<MAddress>(fx.obj1) + 128);
-+    fx.region1->SetRegionAllocPtr(reinterpret_cast<MAddress>(second) + 64);
-+
-+    CollectorResources& resources = Heap::GetHeap().GetCollectorResources();
-+    WCollector collector(Heap::GetHeap().GetAllocator(), resources);
-+    RelocationReceiptTestAccess::BindCollector(resources, &collector);
-+    collector.SetGCPhase(GCPhase::GC_PHASE_CLEAR_SATB_BUFFER);
-+    GCThreadPool threadPool("gc-unit-satb-mark-end", 0, GCPoolThread::GC_THREAD_PRIORITY);
-+    RelocationReceiptTestAccess::BindThreadPool(resources, &threadPool);
-+    RegionSpace& space = reinterpret_cast<RegionSpace&>(Heap::GetHeap().GetAllocator());
-+    space.GetRegionManager().EnlistFullThreadLocalRegion(fx.region1);
-+    space.GetRegionManager().AddRawPointerObject(first);
-+    space.GetRegionManager().AddRawPointerObject(second);
-+    Heap::GetHeap().GetRememberedSet().Initialize(fx.heapStart, 2 * RegionInfo::UNIT_SIZE);
-+    Mutator producer;
-+    const bool startedBefore = resources.IsGcStarted();
-+    const GCReason reasonBefore = resources.GetGCStats().reason;
-+    resources.SetGcStarted(true);
-+    resources.GetGCStats().reason = GC_REASON_YOUNG;
-+    ResetMarkTerminateTestReceipt();
-+    ArmSatbBeforeMarkEndTestReceipt(&producer, first, second);
-+
-+    RelocationReceiptTestAccess::RunCollectionDispatch(collector);
-+    const auto receipt = ReadMarkTerminateTestReceipt();
++    const size_t n = 8;
++    const size_t meta = RegionManager::GetMetadataSize(n);
++    const size_t heapBytes = n * RegionInfo::UNIT_SIZE;
++    const size_t total = meta + heapBytes;
++    std::fprintf(stderr, "DETAIL probe n=%zu meta=%zu total=%zu\n", n, meta, total);
++    std::fflush(stderr);
++    MemMap* map = MemMap::MapMemory(total, total);
++    GC_EXPECT_TRUE(map != nullptr);
++    const uintptr_t heapStart = reinterpret_cast<uintptr_t>(map->GetBaseAddr()) + meta;
++    std::fprintf(stderr, "DETAIL probe mapped base=%p heapStart=%#zx\n", map->GetBaseAddr(), heapStart);
++    std::fflush(stderr);
++    RegionInfo::Initialize(n, heapStart, map);
++    std::fprintf(stderr, "DETAIL probe initialized\n");
++    std::fflush(stderr);
++    RegionManager rm;
++    FreeRegionManager frm(rm);
++    frm.Initialize(n);
++    std::fprintf(stderr, "DETAIL probe tree ready\n");
++    std::fflush(stderr);
++    (void)RegionInfo::InitRegion(0, 1, RegionInfo::UnitRole::FREE_UNITS);
++    GC_EXPECT_TRUE(frm.releasedUnitTree.MergeInsert(0, 1, false));
++    std::fprintf(stderr, "DETAIL probe releasedCount=%u\n", frm.GetReleasedUnitCount());
++    std::fflush(stderr);
++    Uncommitter::ActivateCycle();
++    if (cancelFirst) {
++        Uncommitter::CancelCycle();
++    }
++    const size_t backendReleased =
++        frm.UncommitIdleUnits(RegionInfo::UNIT_SIZE, static_cast<uint64_t>(-1), honorCancel);
 +    std::fprintf(stderr,
-+                 "DETAIL satb_mark_end pauses=%zu flushed=%zu continues=%zu max_pause_ns=%zu\n",
-+                 receipt.pauses, receipt.flushed, receipt.continues,
-+                 static_cast<size_t>(receipt.maxPauseNs));
-+    GC_EXPECT_EQ(receipt.pauses, 3u);
-+    GC_EXPECT_EQ(receipt.flushed, 2u);
-+    GC_EXPECT_EQ(receipt.continues, 2u);
-+    GC_EXPECT_TRUE(receipt.maxPauseNs < 1000000000ULL);
-+    const auto view = fx.region1->GetMarkView<Generation::Young>();
-+    GC_EXPECT_TRUE(fx.region1->IsMarkedObject(view, first));
-+    GC_EXPECT_TRUE(fx.region1->IsMarkedObject(view, second));
-+
-+    resources.SetGcStarted(startedBefore);
-+    resources.GetGCStats().reason = reasonBefore;
-+    RelocationReceiptTestAccess::BindThreadPool(resources, nullptr);
-+    threadPool.Exit();
-+    RelocationReceiptTestAccess::BindCollector(resources, nullptr);
-+    (void)live;
++                 "DETAIL backendReleased=%zu honorCancel=%d cancelFirst=%d unit=%zu\n",
++                 backendReleased, honorCancel ? 1 : 0, cancelFirst ? 1 : 0, RegionInfo::UNIT_SIZE);
++    std::fflush(stderr);
++    MemMap::DestroyMemMap(map);
++    return backendReleased;
 +}
 +
- // 3. young→young overwrite is not remset (ZGC remember only if slot old; zBarrier:729-733).
- GC_TEST(YoungConc, YoungToYoungWriteNotInRemset)
- {
++GC_OTHER_VM_TEST(Uncommitter, UncommitIdleUnitsReleasesPhysical)
++{
++    const size_t backendReleased = ProbeProductUncommit(false, true);
++    GC_EXPECT_TRUE(backendReleased > 0);
++}
++
++GC_OTHER_VM_TEST(Uncommitter, DrainAfterCancelStillReleasesPhysical)
++{
++    const size_t backendReleased = ProbeProductUncommit(true, false);
++    GC_EXPECT_TRUE(backendReleased > 0);
++}
++
++GC_OTHER_VM_TEST(Uncommitter, PeriodicUncommitStopsAfterCancel)
++{
++    const size_t backendReleased = ProbeProductUncommit(true, true);
++    GC_EXPECT_EQ(backendReleased, 0U);
++}

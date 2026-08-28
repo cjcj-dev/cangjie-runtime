@@ -7,6 +7,11 @@
 #include <limits>
 
 #include "Heap/Allocator/CartesianTree.h"
+#define private public
+#include "Heap/Allocator/FreeRegionManager.h"
+#undef private
+#include "Heap/Allocator/MemMap.h"
+#include "Heap/Allocator/RegionManager.h"
 #include "Heap/Collector/Uncommitter.h"
 #include "gc_unittest.hpp"
 
@@ -130,4 +135,61 @@ GC_TEST(Uncommitter, AllocationTakeBumpsIdleClock)
     CartesianTree::Count count = 0;
     GC_EXPECT_FALSE(tree.TakeIdleUnits(before, 2, idx, count));
     tree.Fini();
+}
+
+static size_t ProbeProductUncommit(bool cancelFirst, bool honorCancel)
+{
+    const size_t n = 8;
+    const size_t meta = RegionManager::GetMetadataSize(n);
+    const size_t heapBytes = n * RegionInfo::UNIT_SIZE;
+    const size_t total = meta + heapBytes;
+    std::fprintf(stderr, "DETAIL probe n=%zu meta=%zu total=%zu\n", n, meta, total);
+    std::fflush(stderr);
+    MemMap* map = MemMap::MapMemory(total, total);
+    GC_EXPECT_TRUE(map != nullptr);
+    const uintptr_t heapStart = reinterpret_cast<uintptr_t>(map->GetBaseAddr()) + meta;
+    std::fprintf(stderr, "DETAIL probe mapped base=%p heapStart=%#zx\n", map->GetBaseAddr(), heapStart);
+    std::fflush(stderr);
+    RegionInfo::Initialize(n, heapStart, map);
+    std::fprintf(stderr, "DETAIL probe initialized\n");
+    std::fflush(stderr);
+    RegionManager rm;
+    FreeRegionManager frm(rm);
+    frm.Initialize(n);
+    std::fprintf(stderr, "DETAIL probe tree ready\n");
+    std::fflush(stderr);
+    (void)RegionInfo::InitRegion(0, 1, RegionInfo::UnitRole::FREE_UNITS);
+    GC_EXPECT_TRUE(frm.releasedUnitTree.MergeInsert(0, 1, false));
+    std::fprintf(stderr, "DETAIL probe releasedCount=%u\n", frm.GetReleasedUnitCount());
+    std::fflush(stderr);
+    Uncommitter::ActivateCycle();
+    if (cancelFirst) {
+        Uncommitter::CancelCycle();
+    }
+    const size_t backendReleased =
+        frm.UncommitIdleUnits(RegionInfo::UNIT_SIZE, static_cast<uint64_t>(-1), honorCancel);
+    std::fprintf(stderr,
+                 "DETAIL backendReleased=%zu honorCancel=%d cancelFirst=%d unit=%zu\n",
+                 backendReleased, honorCancel ? 1 : 0, cancelFirst ? 1 : 0, RegionInfo::UNIT_SIZE);
+    std::fflush(stderr);
+    MemMap::DestroyMemMap(map);
+    return backendReleased;
+}
+
+GC_OTHER_VM_TEST(Uncommitter, UncommitIdleUnitsReleasesPhysical)
+{
+    const size_t backendReleased = ProbeProductUncommit(false, true);
+    GC_EXPECT_TRUE(backendReleased > 0);
+}
+
+GC_OTHER_VM_TEST(Uncommitter, DrainAfterCancelStillReleasesPhysical)
+{
+    const size_t backendReleased = ProbeProductUncommit(true, false);
+    GC_EXPECT_TRUE(backendReleased > 0);
+}
+
+GC_OTHER_VM_TEST(Uncommitter, PeriodicUncommitStopsAfterCancel)
+{
+    const size_t backendReleased = ProbeProductUncommit(true, true);
+    GC_EXPECT_EQ(backendReleased, 0U);
 }

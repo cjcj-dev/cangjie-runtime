@@ -250,7 +250,7 @@ public:
 
     size_t CalculateBytesToRelease() const;
     size_t ReleaseGarbageRegions(size_t targetCachedSize);
-    size_t UncommitIdleUnits(size_t maxBytes, uint64_t idleBeforeNs);
+    size_t UncommitIdleUnits(size_t maxBytes, uint64_t idleBeforeNs, bool honorCancel = true);
 
     // Phase-2 FROM_PAGE_DETACH_GATE. Entries are withheld from both allocator
     // trees until a major mark closure rechecks the same central predicate.
@@ -265,6 +265,8 @@ public:
     }
 
 private:
+    size_t UncommitIdleUnitsImpl(size_t maxBytes, uint64_t idleBeforeNs, bool honorCancel);
+
     struct DetachQuarantineEntry {
         UnitIndex idx;
         UnitCount num;
