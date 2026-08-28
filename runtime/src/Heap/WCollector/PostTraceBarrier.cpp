@@ -7,6 +7,7 @@
 
 #include "PostTraceBarrier.h"
 
+#include "Heap/Collector/ReferenceProcessor.h"
 #include "Mutator/Mutator.h"
 #include "ObjectModel/MArray.h"
 #include "ObjectModel/RefField.inline.h"
@@ -67,11 +68,13 @@ BaseObject* PostTraceBarrier::ReadWeakRef(BaseObject* obj, RefField<false>& fiel
     RegionInfo* regionInfo = RegionInfo::GetRegionInfoAt(reinterpret_cast<MAddress>(referent));
     MarkView<Generation::Old> view = regionInfo->GetMarkView<Generation::Old>();
     bool isMarked = regionInfo->IsMarkedObject(view, referent);
-    if (!isMarked) { // skip live referents
-        void** referentAddr = reinterpret_cast<void**>(reinterpret_cast<uintptr_t>(obj) + TYPEINFO_PTR_SIZE);
-        DLOG(BARRIER, "update referent@%p: 0x%zx -> %p", referentAddr, *referentAddr, nullptr);
-        *referentAddr = nullptr; // set referent field as null
-        return nullptr;
+    if (!isMarked) { // skip strongly live referents
+        if (ReferenceProcessor::CleanWeakReference(obj)) {
+            return nullptr;
+        }
+        // A concurrent update won the cleaning CAS. Reapply the ordinary load
+        // barrier to that newer value instead of returning the stale referent.
+        return ReadReference(obj, field);
     }
     return referent;
 }

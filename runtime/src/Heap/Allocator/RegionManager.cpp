@@ -388,8 +388,7 @@ size_t RegionManager::RecordPromotedCrossGenEdges(RegionInfo* region)
     }
     RememberedSet& rememberedSet = Heap::GetHeap().GetRememberedSet();
     size_t recorded = 0;
-    bool hasObjectLiveness = region->IsLargeRegion() || region->GetMarkBitmap(view) != nullptr ||
-        region->GetResurrectBitmap() != nullptr;
+    bool hasObjectLiveness = region->IsLargeRegion() || region->GetMarkBitmap(view) != nullptr;
     bool useLiveOnly = hasObjectLiveness && region->IsLiveCountAuthoritative();
     auto recordFromObject = [region, view, &rememberedSet, &recorded, hasObjectLiveness,
                              useLiveOnly](BaseObject* object) {
@@ -3872,6 +3871,17 @@ template class ForwardTask<Generation::Old>;
 #endif
 template void RegionManager::ForwardRegion<Generation::Young>(RegionInfo*);
 template void RegionManager::ForwardRegion<Generation::Old>(RegionInfo*);
+
+// Product carriers consumed by gc_unit through dlsym. Keep explicit
+// instantiations when an internal overload becomes fully inlineable.
+template bool RegionInfo::MarkObject<Generation::Young>(
+    MarkView<Generation::Young>, const BaseObject*);
+template bool RegionInfo::MarkObject<Generation::Old>(
+    MarkView<Generation::Old>, const BaseObject*);
+template bool RegionInfo::MarkObject<Generation::Young>(
+    MarkView<Generation::Young>, const BaseObject*, size_t, bool);
+template bool RegionInfo::MarkObject<Generation::Old>(
+    MarkView<Generation::Old>, const BaseObject*, size_t, bool);
 } // namespace MapleRuntime
 
 namespace MapleRuntime {

@@ -60,6 +60,27 @@
 using namespace MapleRuntime;
 using namespace MapleRuntime::GcUnit;
 
+GC_TEST(ReferenceProcessor, WeakDiscoveryPublishesNoStrongMarkWork)
+{
+    GcHeapFixture fx;
+    fx.typeInfo->SetType(TypeKind::TYPE_KIND_WEAKREF_CLASS);
+    HeapSlot<>& referent =
+        HeapSlotAt<>(reinterpret_cast<uintptr_t>(fx.obj0) + TYPEINFO_PTR_SIZE);
+    referent.StoreColoured(to_zpointer(reinterpret_cast<MAddress>(fx.obj1)));
+    WCollector collector(Heap::GetHeap().GetAllocator(), Heap::GetHeap().GetCollectorResources());
+    TracingCollector::WorkStack workStack;
+    MarkView<Generation::Old> view = fx.region1->GetMarkView<Generation::Old>();
+
+    collector.DiscoverWeakReference(fx.obj0, workStack);
+
+    GC_EXPECT_TRUE(workStack.empty());
+    GC_EXPECT_FALSE(fx.region1->IsMarkedObject(view, fx.obj1));
+    ReferenceProcessor& processor =
+        Heap::GetHeap().GetCollectorResources().GetFinalizerProcessor().GetReferenceProcessor();
+    processor.ProcessReferences([](BaseObject*) { return true; });
+    processor.EnqueueReferences([](BaseObject*) {});
+}
+
 extern "C" int CJ_ScheduleManagerInit();
 
 namespace MapleRuntime {

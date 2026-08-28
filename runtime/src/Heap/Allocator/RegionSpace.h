@@ -233,12 +233,11 @@ public:
             regionInfo->GetRegionType() == RegionInfo::RegionType::FREE_REGION) {
             return false;
         }
-        size_t offset = regionInfo->GetAddressOffset(reinterpret_cast<MAddress>(obj));
         MarkView<G> view = regionInfo->GetMarkView<G>();
-        if (regionInfo->IsMarkedObject(view, offset)) {
-            return false;
-        }
-        return !regionInfo->EnqueueObject(obj, offset);
+        // ZGC SATB entries are not suppressed by an independent enqueue
+        // bitmap.  The mark pair is the sole epoch authority; until the strong
+        // bit is visible, every observation remains eligible for publication.
+        return !regionInfo->IsMarkedObject(view, obj);
     }
 
     static bool IsResurrectedObject(const BaseObject* obj)
