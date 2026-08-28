@@ -1,6 +1,0 @@
-GOOD COMMAND: python3 runtime/tests/gc_unit/check_verify_phase_matrix.py runtime/src/Heap/Verify
-GOOD RESULT: VERIFY_PHASE_MATRIX roots=GREEN objects=GREEN marking=GREEN remembered=GREEN oops=GREEN
-GOOD RC: 0
-CUT COMMAND: removed VerifyPhaseEnter(VerifyFace::Objects, point) in /tmp/verify_phase_cut/VerifyHeap.cpp
-CUT RESULT: VERIFY_PHASE_MATRIX roots=GREEN objects=RED marking=GREEN remembered=GREEN oops=GREEN
-CUT RC: 1
