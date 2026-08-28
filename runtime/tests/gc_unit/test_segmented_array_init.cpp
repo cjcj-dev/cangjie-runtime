@@ -478,11 +478,6 @@ int RunRuntimeCase(CJTaskFunc task, uintptr_t argument, U32 processorCount = 1)
 #if defined(__linux__)
     const pid_t child = fork();
     if (child == 0) {
-        if (argument == static_cast<uintptr_t>(YieldGc::FULL)) {
-            (void)setenv("MRT_GCV2_CONCURRENT_STACK_SCAN", "1", 1);
-        } else {
-            (void)unsetenv("MRT_GCV2_CONCURRENT_STACK_SCAN");
-        }
         (void)setenv("cjProcessorNum", processorCount == 1 ? "1" : "2", 1);
         RuntimeParam param {};
         param.heapParam.heapSize = 32 * 1024;

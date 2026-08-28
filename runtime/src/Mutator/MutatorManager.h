@@ -237,6 +237,15 @@ public:
     {
         return epochHandshakeActive.load(std::memory_order_acquire) != 0;
     }
+#if defined(MRT_TESTABLE_INTERNALS)
+    uint64_t BeginEpochHandshakeLifecycleTest();
+    void EndEpochHandshakeLifecycleTest();
+    size_t RuntimeMutatorRegistrySizeForTest();
+    size_t EpochHandshakeDestroyDeferredForTest() const
+    {
+        return epochHandshakeDestroyDeferred.load(std::memory_order_relaxed);
+    }
+#endif
 
     void EnsureCpuProfileFinish(std::list<Mutator*> &undoneMutators);
     void TransitionAllMutatorsToCpuProfile();
@@ -380,6 +389,10 @@ private:
     // Participants of the active epoch; DestroyMutator must not free these while
     // active != 0 (replaces the old full-handshake W-lock serialisation).
     std::unordered_set<Mutator*> epochHandshakeParticipants;
+    // Runtime mutators are not necessarily owned by a scheduler CJThread, so
+    // keep them in the same participant inventory explicitly.
+    std::mutex runtimeMutatorRegistryMutex;
+    std::unordered_set<Mutator*> runtimeMutators;
 
 #if defined(_WIN64) || defined (__APPLE__)
     std::condition_variable mutatorSuspensionCV;

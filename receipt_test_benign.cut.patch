@@ -1,0 +1,12 @@
+diff --git a/runtime/tests/gc_unit/test_young_conc.cpp b/runtime/tests/gc_unit/test_young_conc.cpp
+--- a/runtime/tests/gc_unit/test_young_conc.cpp
++++ b/runtime/tests/gc_unit/test_young_conc.cpp
+@@ -416,7 +416,7 @@ GC_OTHER_VM_TEST(YoungConc, LateEdgeFollowReceiptReachesYoungMarkConsumer)
+     mutator.FlushSatbBuffer();
+     ThreadLocal::SetMutator(nullptr);
+ 
+-    std::fprintf(stderr, "DETAIL late_edge_consumer stage=before_consume\n");
++    std::fprintf(stderr, "DETAIL late_edge_consumer stage=before_consume_matrix_t1\n");
+     const bool childReached = RelocationReceiptTestAccess::ConsumeYoungSatbAndReach(collector, child);
+     std::fprintf(stderr, "DETAIL late_edge_consumer stage=after_consume child_reached=%d\n",
+                  static_cast<int>(childReached));

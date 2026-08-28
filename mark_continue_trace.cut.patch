@@ -1,0 +1,11 @@
+diff --git a/runtime/src/Heap/Collector/Mark.cpp b/runtime/src/Heap/Collector/Mark.cpp
+--- a/runtime/src/Heap/Collector/Mark.cpp
++++ b/runtime/src/Heap/Collector/Mark.cpp
+@@ -2149,7 +2149,6 @@ bool WCollector::MarkYoungSatbBuffer(WorkStack& workStack, bool fullYoungScan, M
+         // ZGenerationYoung::collect resumes concurrent_mark_continue after a
+         // failed mark-end pause.  Leaving mutators in CLEAR here repeatedly
+         // republishes closing-edge work instead of running mark-follow.
+-        TransitionToGCPhase(GCPhase::GC_PHASE_TRACE, true);
+     } while (true);
+     ReportMarkTerminateContinue();
+     return true;

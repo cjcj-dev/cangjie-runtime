@@ -75,17 +75,19 @@ Y2yHandoffTestReceipt ReadY2yHandoffTestReceipt();
 void NoteY2yBeforeReleaseTestReceipt(uint64_t pending);
 void NoteY2yAfterRootTestReceipt(uint64_t pending);
 void NoteY2yAfterStw2TestReceipt(uint64_t pending);
+void ArmY2yAfterReleaseTestReceipt(BaseObject* holder, uint64_t publications);
+void PublishY2yAfterReleaseTestReceipt();
+void ArmSatbBeforeMarkEndTestReceipt(Mutator* producer, BaseObject* first, BaseObject* second);
+void PublishSatbBeforeMarkEndTestReceipt();
 #endif
 
 // portyoungconc: work accounting for the concurrent young mark window.
 // ZGC anchor: ZGenerationYoung::concurrent_mark() = mark_roots() + mark_follow()
 // (zGeneration.cpp:665-669) — everything a young collector does between
 // pause_mark_start and pause_mark_end runs with mutators alive.
-// Every field below counts GC work performed *while the world is running*, so the
-// closed arm (MRT_GCV2_YOUNG_CONC_MARK unset) reports all-zero by construction:
-// there is no window there. A non-zero windowNs with markedInWindow()==0 and
-// satbObjects==0 means the window exists but carries no marking work — report that,
-// do not read a duration as evidence of concurrency.
+// Every field below counts GC work performed while the world is running. A
+// non-zero windowNs with markedInWindow()==0 and satbObjects==0 means the
+// window carries no marking work; do not read duration alone as concurrency.
 struct YoungConcWindowStats {
     uint64_t windowNs = 0;    // world-released → STW2 requested
     size_t satbObjects = 0;   // objects popped out of SATB inside the window
@@ -1212,6 +1214,9 @@ private:
                              std::vector<BaseObject*>& reachableVec, MinorSlotSet& reachableSlots,
                              MinorSlotSet& weakSlots, bool useBitmapLedger,
                              YoungConcWindowStats* windowStats = nullptr);
+    // ZMark::try_end sibling: called with mutators stopped; performs exactly one
+    // local-buffer flush and reports whether concurrent-mark-continue is needed.
+    bool TryEndYoungMark(WorkStack& workStack, YoungConcWindowStats* windowStats = nullptr);
     friend class YoungMarkingWork;
     friend class YoungStripedMarkingWork;
     void RescanRememberedSet(WorkStack& workStack, const MinorSlotSet& rememberedSlots,
