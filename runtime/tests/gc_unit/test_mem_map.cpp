@@ -348,6 +348,8 @@ GC_TEST(MemMapContract, InitialPartialCommitRollsBackPrefixBeforeDestroy)
 #if !defined(_WIN64)
 struct ProductWiringBackend final : MemMapBackend {
     size_t commitCalls{ 0 };
+    size_t failCommitCall{ 0 };
+    int releaseEventFd{ -1 };
 
     void* Reserve(void* requested, size_t size, unsigned int, const char*, bool exact) override
     {
@@ -365,11 +367,20 @@ struct ProductWiringBackend final : MemMapBackend {
     bool Commit(void*, size_t, int, uint32_t, bool) override
     {
         ++commitCalls;
-        return true;
+        return failCommitCall == 0 || commitCalls != failCommitCall;
     }
 
     bool Protect(void*, size_t, int) override { return true; }
-    bool Release(void*, size_t, uint32_t) override { return true; }
+    bool Release(void*, size_t size, uint32_t) override
+    {
+        if (releaseEventFd >= 0) {
+            const ssize_t written = write(releaseEventFd, &size, sizeof(size));
+            if (written != static_cast<ssize_t>(sizeof(size))) {
+                return false;
+            }
+        }
+        return true;
+    }
     bool Unreserve(void* addr, size_t size) override { return munmap(addr, size) == 0; }
 };
 
@@ -410,6 +421,54 @@ GC_TEST(MemMapContract, RegionManagerInactiveAllocationUsesMemMapOwner)
     GC_EXPECT_EQ(waitpid(child, &status, 0), child);
     GC_EXPECT_TRUE(WIFEXITED(status));
     GC_EXPECT_EQ(WEXITSTATUS(status), 0);
+}
+
+int ExerciseRegionPartialCommitCleanup(int releaseEventFd)
+{
+    constexpr size_t units = 2;
+    const size_t metadataSize = RegionManager::GetMetadataSize(units);
+    const size_t totalSize = metadataSize + units * RegionInfo::UNIT_SIZE;
+    ProductWiringBackend backend;
+    backend.releaseEventFd = releaseEventFd;
+    MemMap* map = MemMap::TryMapMemory(totalSize, metadataSize, MemMap::DEFAULT_OPTIONS,
+                                       LargeBudget(), NumaTopology::Seal({ 3, 7 }), backend);
+    if (map == nullptr) {
+        return 2;
+    }
+    RegionManager manager;
+    HeapParam heapParam{};
+    heapParam.regionSize = 64;
+    heapParam.exemptionThreshold = 0.8;
+    manager.Initialize(units, reinterpret_cast<uintptr_t>(map->GetBaseAddr()), *map, heapParam, 0.5);
+    backend.failCommitCall = backend.commitCalls + 2;
+
+    // The two-unit inactive allocation crosses the two product MemMap NUMA
+    // partitions.  Its second backend commit fails after one committed unit;
+    // RegionInfo::CommitUnits must release that prefix before its fatal CHECK.
+    (void)manager.TakeRegion(units, RegionInfo::UnitRole::SMALL_SIZED_UNITS, false, false);
+    return 3;
+}
+
+GC_TEST(MemMapContract, RegionManagerPartialCommitCleansPrefixBeforeFailure)
+{
+    int releaseEvents[2];
+    GC_EXPECT_EQ(pipe(releaseEvents), 0);
+    const pid_t child = fork();
+    GC_EXPECT_TRUE(child >= 0);
+    if (child == 0) {
+        (void)close(releaseEvents[0]);
+        _exit(ExerciseRegionPartialCommitCleanup(releaseEvents[1]));
+    }
+    (void)close(releaseEvents[1]);
+    int status = 0;
+    GC_EXPECT_EQ(waitpid(child, &status, 0), child);
+
+    size_t cleaned = 0;
+    const ssize_t eventBytes = read(releaseEvents[0], &cleaned, sizeof(cleaned));
+    (void)close(releaseEvents[0]);
+    GC_EXPECT_TRUE(WIFSIGNALED(status) || (WIFEXITED(status) && WEXITSTATUS(status) != 0));
+    GC_EXPECT_EQ(eventBytes, static_cast<ssize_t>(sizeof(cleaned)));
+    GC_EXPECT_EQ(cleaned, RegionInfo::UNIT_SIZE);
 }
 #endif
 
