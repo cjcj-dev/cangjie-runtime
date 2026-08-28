@@ -190,3 +190,23 @@ GC_TEST(ZListAuthority, GhostSnapshotResetDoesNotOwnRegion)
     GC_EXPECT_TRUE(fixture.region0->GetNextGhostRegion() == nullptr);
     GC_EXPECT_TRUE(fixture.region0->GetRegionListOwner() == nullptr);
 }
+
+GC_TEST(ZListAuthority, OwnerMustBeReleasedBeforeRegionLifeReset)
+{
+#if defined(__linux__)
+    GcHeapFixture fixture;
+    const RegionLifeId oldLife = fixture.region0->GetRegionLifeId();
+    ExpectListAbort([&]() {
+        RegionList owner("zlist-life-owner");
+        owner.PrependRegion(fixture.region0, RegionInfo::RegionType::FROM_REGION);
+        fixture.region0->InitRegionInfo(1, RegionInfo::UnitRole::SMALL_SIZED_UNITS);
+    });
+
+    RegionList owner("zlist-life-release");
+    owner.PrependRegion(fixture.region0, RegionInfo::RegionType::FROM_REGION);
+    owner.DeleteRegion(fixture.region0);
+    fixture.region0->InitRegionInfo(1, RegionInfo::UnitRole::SMALL_SIZED_UNITS);
+    GC_EXPECT_TRUE(fixture.region0->GetRegionListOwner() == nullptr);
+    GC_EXPECT_EQ(fixture.region0->GetRegionLifeId(), oldLife + 1);
+#endif
+}
