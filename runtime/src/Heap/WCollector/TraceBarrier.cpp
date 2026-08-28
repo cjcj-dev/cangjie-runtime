@@ -128,9 +128,9 @@ void TraceBarrier::WriteReferenceImpl(BaseObject* obj, RefField<false>& field, B
     }
 
     Mutator* mutator = Mutator::GetMutator();
-    if (rememberedObject != nullptr) {
-        mutator->RememberObjectInSatbBuffer(rememberedObject);
-    }
+    // The paired StoreBarrierBuffer producer in Barrier::WriteReference owns
+    // retirement of the overwritten value.  Keeping a direct SATB enqueue here
+    // would retire the same previous value twice during TRACE.
     RememberNewReference(mutator, ref);
     DLOG(BARRIER, "write obj %p ref-field@%p: %#zx -> %p", obj, &field, rememberedObject, ref);
     std::atomic_thread_fence(std::memory_order_seq_cst);
@@ -164,13 +164,9 @@ void TraceBarrier::WriteStructImpl(BaseObject* obj, MAddress dst, size_t dstLen,
     if (obj != nullptr) {
         MRT_ASSERT(dst > reinterpret_cast<MAddress>(obj), "WriteStruct struct addr is less than obj!");
         Mutator* mutator = Mutator::GetMutator();
-        if (mutator != nullptr) {
-            obj->ForEachRefInStruct(
-                [=](RefField<>& refField) {
-                    mutator->RememberObjectInSatbBuffer(ReadReference(obj, refField));
-                },
-                dst, dst + dstLen);
-        }
+        // Barrier::WriteStruct snapshots every overwritten field before this
+        // implementation runs.  Its paired buffer is the sole old-value
+        // producer for heap struct writes during TRACE.
         obj->ForEachRefInStruct(
             [=](RefField<>& refField) {
                 MAddress offset = reinterpret_cast<MAddress>(&refField) - dst;
@@ -253,12 +249,12 @@ void TraceBarrier::AtomicWriteReferenceImpl(BaseObject* obj, RefField<true>& fie
     RefField<> oldField(field.GetFieldValue(order));
     MAddress oldValue = raw(oldField.GetFieldValue());
     (void)oldValue;
-    BaseObject* oldRef = ReadReference(nullptr, oldField);
     Mutator* mutator = Mutator::GetMutator();
     RememberNewReference(mutator, newRef);
     RefField<> newField = theCollector.GetAndTryTagRefField(newRef);
     field.StoreColoured(newField.GetFieldValue(), order);
-    mutator->RememberObjectInSatbBuffer(oldRef);
+    // Barrier::AtomicWriteReference captured oldField before dispatch and owns
+    // retirement through the paired store buffer.
     if (obj != nullptr) {
         DLOG(TBARRIER, "atomic write obj %p<%p>(%zu) ref@%p: %#zx -> %#zx", obj, obj->GetTypeInfo(), obj->GetSize(),
              &field, oldValue, raw(newField.GetFieldValue()));
@@ -276,7 +272,7 @@ BaseObject* TraceBarrier::AtomicSwapReferenceImpl(BaseObject* obj, RefField<true
     MAddress oldValue = raw(field.Exchange(newField.GetFieldValue(), order));
     RefField<> oldField(oldValue);
     BaseObject* oldRef = ReadReference(nullptr, oldField);
-    mutator->RememberObjectInSatbBuffer(oldRef);
+    // The wrapper captured the same pre-exchange word for paired retirement.
     DLOG(TRACE, "atomic swap obj %p<%p>(%zu) ref-field@%p: old %#zx(%p), new %#zx(%p)", obj, obj->GetTypeInfo(),
          obj->GetSize(), &field, oldValue, oldRef, raw(field.GetFieldValue()), newRef);
     return oldRef;
@@ -296,7 +292,7 @@ bool TraceBarrier::CompareAndSwapReferenceImpl(BaseObject* obj, RefField<true>& 
         RefField<> newField = theCollector.GetAndTryTagRefField(newRef);
         if (HealSlot(field, to_zpointer(oldFieldValue), newField.GetFieldValue(),
                      HealSite::TraceCompareAndSwapReference, HealNull::Allow, succOrder, failOrder)) {
-            mutator->RememberObjectInSatbBuffer(oldRef);
+            // Successful CAS is retired once by Barrier::CompareAndSwapReference.
             return true;
         }
         oldFieldValue = raw(field.GetFieldValue(std::memory_order_seq_cst));
@@ -339,13 +335,8 @@ void TraceBarrier::CopyStructArrayImpl(BaseObject* dstObj, MAddress dstField, MI
     MArray* srcArray = static_cast<MArray*>(srcObj);
     srcArray->ForEachRefFieldInRange(srcVisitor, srcField, srcField + srcSize);
 
-    RefFieldVisitor dstVisitor = [this, mutator](RefField<false>& field) {
-        RefField<> oldField(field);
-        BaseObject* target = ReadReference(nullptr, oldField);
-        mutator->RememberObjectInSatbBuffer(target);
-    };
-    MArray* dstArray = static_cast<MArray*>(dstObj);
-    dstArray->ForEachRefFieldInRange(dstVisitor, dstField, dstField + srcSize);
+    // Barrier::CopyStructArray captured each destination word before dispatch;
+    // the paired buffer is the sole old-value producer for this heap write.
 
     CHECK_DETAIL(memmove_s(reinterpret_cast<void*>(dstField), dstSize, reinterpret_cast<void*>(srcField), srcSize) ==
                      EOK,

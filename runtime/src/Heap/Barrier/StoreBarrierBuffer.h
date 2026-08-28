@@ -12,37 +12,61 @@
 #include "Common/TypeDef.h"
 
 namespace MapleRuntime {
+class Collector;
 class RememberedSet;
 
-// Compile-time switch (ZGC ZBufferStoreBarriers). No MRT_GCV2_* env var.
-constexpr bool kBufferStoreBarriers = true;
-constexpr size_t kStoreBarrierBufferLength = 32;
+// ZGC ZStoreBarrierEntry keeps the field and the overwritten coloured value together
+// (zStoreBarrierBuffer.hpp:33-39).  The installation state is needed when an entry
+// crosses a colour publication: ownership follows the install-time generation and
+// mark colour recorded on the entry (zStoreBarrierBuffer.cpp:190-218).
+struct StoreBarrierInstallState {
+    uint8_t phase = 0;
+    bool youngMark = false;
+    uintptr_t storeGood = 0;
+};
 
-// ZGC ZStoreBarrierEntry is (p, prev): heap_store_slow_path buffers SATB mark of the
-// overwritten pointer plus remember(p) (zBarrier.cpp:253-261, flush at
-// zStoreBarrierBuffer.cpp:278-282). We only defer RememberedSet::Record (bitmap
-// fetch_or). Slot address is enough; prev is unused here.
 struct StoreBarrierEntry {
     MAddress p = 0;
+    zpointer prev = zpointer::null;
+    StoreBarrierInstallState installed {};
 };
+
+#if defined(MRT_GC_UNIT_TESTS)
+enum class StoreBarrierFlushEvent : uint8_t {
+    PREVIOUS_RETIRED,
+    SLOT_REMEMBERED,
+};
+using StoreBarrierFlushObserver = void (*)(StoreBarrierFlushEvent, const StoreBarrierEntry&);
+#endif
 
 class StoreBarrierBuffer {
 public:
-    StoreBarrierBuffer() : current(kBufferStoreBarriers ? kStoreBarrierBufferLength : 0) {}
+    StoreBarrierBuffer() : current(BufferLength) {}
 
-    bool IsEmpty() const { return current == kStoreBarrierBufferLength; }
-    size_t Pending() const { return kStoreBarrierBufferLength - current; }
+    static constexpr size_t Capacity() { return BufferLength; }
+    bool IsEmpty() const { return current == BufferLength; }
+    size_t Pending() const { return BufferLength - current; }
     size_t Current() const { return current; }
 
-    void Add(MAddress fieldAddress, RememberedSet& rs);
+    void Add(MAddress fieldAddress, zpointer prev, RememberedSet& rs);
     void Flush(RememberedSet& rs);
-    // Test-only: drop pending without Record. Used to prove Flush-before-Drain.
-    void Discard();
 
     static void FlushAll(RememberedSet& rs);
+#if defined(MRT_GC_UNIT_TESTS)
+    static void SetFlushObserverForTest(StoreBarrierFlushObserver observer);
+#endif
 
 private:
-    StoreBarrierEntry buffer[kStoreBarrierBufferLength] {};
+    static constexpr size_t BufferLength = 32;
+
+    static StoreBarrierInstallState CaptureInstallState();
+    static bool InstalledDuringCurrentMark(const StoreBarrierEntry& entry);
+    static bool RetirePrevious(const StoreBarrierEntry& entry, Collector& collector);
+    static void MarkAndRemember(const StoreBarrierEntry& entry, RememberedSet& rs);
+    void Add(MAddress fieldAddress, zpointer prev, StoreBarrierInstallState installed, RememberedSet& rs);
+    void Flush(RememberedSet& rs, Collector& collector);
+
+    StoreBarrierEntry buffer[BufferLength] {};
     size_t current;
 };
 } // namespace MapleRuntime

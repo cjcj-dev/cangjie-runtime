@@ -409,18 +409,21 @@ extern "C" MRT_EXPORT void MRT_ResetStoreBarrierPathCounts()
     g_storeBarrierSlowPath.store(0, std::memory_order_relaxed);
 }
 
-// Pre-write snapshot of (field address → decoded target) for slots that are already
-// store-good. Bulk paths (WriteStruct / Copy*) destroy prev bits via memcpy/memmove,
-// so the gate must sample before the store (single-field paths read prev inline).
+// Pre-write snapshot of (field address → raw previous value, decoded target,
+// store-good bit). Bulk paths (WriteStruct / Copy*) destroy prev bits via
+// memcpy/memmove, so paired SATB and the store-good gate both sample before the
+// store (single-field paths read prev inline).
 // Nested type declared in Barrier.h; definition lives here next to the bulk gates.
 struct Barrier::StoreGoodPrevSnapshot {
-    void Push(MAddress addr, BaseObject* target)
+    void Push(MAddress addr, zpointer prev, BaseObject* target, bool storeGood)
     {
         if (size_ < CACHE_CAPACITY) {
             cacheAddr_[size_] = addr;
+            cachePrev_[size_] = prev;
             cacheTarget_[size_] = target;
+            cacheStoreGood_[size_] = storeGood;
         } else {
-            excessive_.emplace_back(addr, target);
+            excessive_.emplace_back(addr, Entry { prev, target, storeGood });
         }
         ++size_;
     }
@@ -430,25 +433,48 @@ struct Barrier::StoreGoodPrevSnapshot {
         const size_t n = size_ < CACHE_CAPACITY ? size_ : CACHE_CAPACITY;
         for (size_t i = 0; i < n; ++i) {
             if (cacheAddr_[i] == addr && cacheTarget_[i] == target) {
-                return true;
+                return cacheStoreGood_[i];
             }
         }
         for (const auto& e : excessive_) {
-            if (e.first == addr && e.second == target) {
-                return true;
+            if (e.first == addr && e.second.target == target) {
+                return e.second.storeGood;
             }
         }
         return false;
+    }
+
+    zpointer Previous(MAddress addr) const
+    {
+        const size_t n = size_ < CACHE_CAPACITY ? size_ : CACHE_CAPACITY;
+        for (size_t i = 0; i < n; ++i) {
+            if (cacheAddr_[i] == addr) {
+                return cachePrev_[i];
+            }
+        }
+        for (const auto& e : excessive_) {
+            if (e.first == addr) {
+                return e.second.prev;
+            }
+        }
+        return zpointer::null;
     }
 
     bool Empty() const { return size_ == 0; }
 
 private:
     static constexpr size_t CACHE_CAPACITY = 16;
+    struct Entry {
+        zpointer prev;
+        BaseObject* target;
+        bool storeGood;
+    };
     MAddress cacheAddr_[CACHE_CAPACITY] {};
+    zpointer cachePrev_[CACHE_CAPACITY] {};
     BaseObject* cacheTarget_[CACHE_CAPACITY] {};
+    bool cacheStoreGood_[CACHE_CAPACITY] {};
     size_t size_ { 0 };
-    std::vector<std::pair<MAddress, BaseObject*>> excessive_;
+    std::vector<std::pair<MAddress, Entry>> excessive_;
 };
 
 #if defined(MRT_GENERATIONAL_BARRIER_PROBE)
@@ -610,7 +636,8 @@ void Barrier::WriteReference(BaseObject* obj, RefField<false>& field, BaseObject
     } else {
         NoteStoreSlowPath();
     }
-    RecordCrossGenEdge(obj, reinterpret_cast<MAddress>(&field), to_object(field.GetTargetObject()));
+    RecordCrossGenEdge(obj, reinterpret_cast<MAddress>(&field), to_object(field.GetTargetObject()),
+                       prev.GetFieldValue());
     // Journal only the 4,800 slots that survival_dense later probes. This
     // binds a missing edge to its actual last store without adding atomic
     // traffic to the other ~15.4M array writes.
@@ -645,7 +672,11 @@ void Barrier::PostWriteReference(BaseObject* obj, RefField<false>& field, BaseOb
     // and same-colour writes to a different target are both admitted there.
     // The hit arm has already performed color_store_good, so execute only the
     // product side effects that the skipped WriteReference still owes.
-    RecordCrossGenEdge(obj, reinterpret_cast<MAddress>(&field), to_object(field.GetTargetObject()));
+    // This post-store ABI is entered after the compiler has performed the
+    // coloured store and carries no pre-store word.  Null explicitly means
+    // that this legacy exit has no recoverable SATB half.
+    RecordCrossGenEdge(obj, reinterpret_cast<MAddress>(&field), to_object(field.GetTargetObject()),
+                       zpointer::null);
 }
 
 void Barrier::WriteReferenceImpl(BaseObject* obj, RefField<false>& field, BaseObject* ref) const
@@ -668,13 +699,12 @@ void Barrier::WriteStruct(BaseObject* obj, MAddress dst, size_t dstLen, MAddress
     // then skips slots whose post-write target still matches a pre-store store-good edge
     // (second bulk write of the same old→young edges must not re-enter Record).
     StoreGoodPrevSnapshot snap;
-    if (obj != nullptr && Heap::IsHeapAddress(obj) && HasYoungRegionsForRecording()) {
+    if (obj != nullptr && Heap::IsHeapAddress(obj)) {
         obj->ForEachRefInStruct(
             [this, &snap](RefField<>& field) {
                 RefField<> prev(field.GetFieldValue());
-                if (theCollector.is_store_good(prev)) {
-                    snap.Push(reinterpret_cast<MAddress>(&field), to_object(prev.GetTargetObject()));
-                }
+                snap.Push(reinterpret_cast<MAddress>(&field), prev.GetFieldValue(),
+                          to_object(prev.GetTargetObject()), theCollector.is_store_good(prev));
             },
             dst, dst + dstLen);
     }
@@ -1163,7 +1193,8 @@ void Barrier::AtomicWriteReference(BaseObject* obj, RefField<true>& field, BaseO
     } else {
         NoteStoreSlowPath();
     }
-    RecordCrossGenEdge(obj, reinterpret_cast<MAddress>(&field), to_object(field.GetTargetObject()));
+    RecordCrossGenEdge(obj, reinterpret_cast<MAddress>(&field), to_object(field.GetTargetObject()),
+                       prev.GetFieldValue());
 }
 
 void Barrier::AtomicWriteReferenceImpl(BaseObject* obj, RefField<true>& field, BaseObject* ref, MemoryOrder order) const
@@ -1205,7 +1236,8 @@ BaseObject* Barrier::AtomicSwapReference(BaseObject* obj, RefField<true>& field,
     } else {
         NoteStoreSlowPath();
     }
-    RecordCrossGenEdge(obj, reinterpret_cast<MAddress>(&field), to_object(field.GetTargetObject()));
+    RecordCrossGenEdge(obj, reinterpret_cast<MAddress>(&field), to_object(field.GetTargetObject()),
+                       prev.GetFieldValue());
     return oldRef;
 }
 
@@ -1279,7 +1311,8 @@ bool Barrier::CompareAndSwapReference(BaseObject* obj, RefField<true>& field, Ba
         } else {
             NoteStoreSlowPath();
         }
-        RecordCrossGenEdge(obj, reinterpret_cast<MAddress>(&field), to_object(field.GetTargetObject()));
+        RecordCrossGenEdge(obj, reinterpret_cast<MAddress>(&field), to_object(field.GetTargetObject()),
+                           prev.GetFieldValue());
     }
     return success;
 }
@@ -1329,14 +1362,12 @@ void Barrier::CopyRefArray(BaseObject* dstObj, MAddress dstField, MIndex dstSize
 {
     // storecov: bulk ref-array — snapshot store-good slots before memmove/recolour.
     StoreGoodPrevSnapshot snap;
-    if (dstObj != nullptr && Heap::IsHeapAddress(dstObj) && HasYoungRegionsForRecording()) {
+    if (dstObj != nullptr && Heap::IsHeapAddress(dstObj)) {
         MAddress end = dstField + dstSize;
         for (MAddress current = dstField; current + sizeof(HeapSlot<>) <= end; current += sizeof(HeapSlot<>)) {
             HeapSlot<>& slot = HeapSlotAt<>(current);
             RefField<> prev(slot.GetFieldValue());
-            if (theCollector.is_store_good(prev)) {
-                snap.Push(current, to_object(prev.GetTargetObject()));
-            }
+            snap.Push(current, prev.GetFieldValue(), to_object(prev.GetTargetObject()), theCollector.is_store_good(prev));
         }
     }
     CopyRefArrayImpl(dstObj, dstField, dstSize, srcObj, srcField, srcSize);
@@ -1394,13 +1425,12 @@ void Barrier::CopyStructArray(BaseObject* dstObj, MAddress dstField, MIndex dstS
 {
     // storecov: bulk struct-array — same pre-store snapshot gate as WriteStruct.
     StoreGoodPrevSnapshot snap;
-    if (dstObj != nullptr && Heap::IsHeapAddress(dstObj) && HasYoungRegionsForRecording()) {
+    if (dstObj != nullptr && Heap::IsHeapAddress(dstObj)) {
         dstObj->ForEachRefInStruct(
             [this, &snap](RefField<>& field) {
                 RefField<> prev(field.GetFieldValue());
-                if (theCollector.is_store_good(prev)) {
-                    snap.Push(reinterpret_cast<MAddress>(&field), to_object(prev.GetTargetObject()));
-                }
+                snap.Push(reinterpret_cast<MAddress>(&field), prev.GetFieldValue(),
+                          to_object(prev.GetTargetObject()), theCollector.is_store_good(prev));
             },
             dstField, dstField + dstSize);
     }
@@ -1791,19 +1821,32 @@ void Barrier::ReadGenericImpl(const ObjectPtr dstObj, ObjectPtr obj, void* field
     }
 }
 
-void Barrier::RecordCrossGenEdge(BaseObject* obj, MAddress fieldAddress, BaseObject* ref) const
+void Barrier::RecordCrossGenEdge(BaseObject* obj, MAddress fieldAddress, BaseObject* ref, zpointer prev) const
 {
-    if (ref == nullptr || !Heap::IsHeapAddress(ref)) {
-        return;
-    }
-
     // Keep mark and remset recording independent for the single-field store
     // exits that call this function directly: Write/PostWrite/AtomicWrite,
     // AtomicSwap, and successful CAS. Their new value must be marked even when
     // there are no young regions, while slot recording may return early below.
     // Bulk aggregation paths reach this function per field and no longer gate
     // on young regions before it, so their new values are marked here too.
-    MarkAndRememberNewValue(this->phase, ref);
+    if (ref != nullptr && Heap::IsHeapAddress(ref)) {
+        MarkAndRememberNewValue(this->phase, ref);
+    }
+
+    // Retire the overwritten value even when the new value is null/non-heap or
+    // when no young regions currently exist.  The SATB half is keyed by the
+    // pre-store word, not by the post-store target.
+    AllocBuffer* alloc = AllocBuffer::GetAllocBuffer();
+    const bool heapSlot = Heap::IsHeapAddress(fieldAddress) && obj != nullptr && Heap::IsHeapAddress(obj);
+    bool buffered = false;
+    if (alloc != nullptr && heapSlot && !is_null(prev)) {
+        alloc->GetStoreBarrierBuffer().Add(fieldAddress, prev, theRememberedSet);
+        buffered = true;
+    }
+
+    if (ref == nullptr || !Heap::IsHeapAddress(ref)) {
+        return;
+    }
 
     if (!HasYoungRegionsForRecording()) {
         return;
@@ -1824,14 +1867,9 @@ void Barrier::RecordCrossGenEdge(BaseObject* obj, MAddress fieldAddress, BaseObj
             }
             return;
         }
-        if (kBufferStoreBarriers) {
-            AllocBuffer* alloc = AllocBuffer::GetAllocBuffer();
-            if (alloc != nullptr) {
-                alloc->GetStoreBarrierBuffer().Add(fieldAddress, theRememberedSet);
-            } else {
-                theRememberedSet.Record(fieldAddress, /*fromMutatorBarrier=*/true);
-            }
-        } else {
+        if (alloc != nullptr && !buffered) {
+            alloc->GetStoreBarrierBuffer().Add(fieldAddress, prev, theRememberedSet);
+        } else if (alloc == nullptr) {
             theRememberedSet.Record(fieldAddress, /*fromMutatorBarrier=*/true);
         }
         return;
@@ -1858,9 +1896,8 @@ void Barrier::RecordCrossGenEdgesInStruct(BaseObject* obj, MAddress start, size_
             // storecov: when a pre-store snapshot is supplied, skip remset for slots that
             // were already store-good for this target; count fast/slow only on gated calls
             // (nullptr snap = legacy always-Record, no counter noise for ReadGeneric).
-            // With no young regions the producer snapshot is intentionally empty, so every
-            // bulk field is a counted slow miss. This is an observable diagnostic-semantic
-            // change of the bulk no-young fix, not a claim that remset work was required.
+            // The snapshot is captured regardless of young-region presence so
+            // SATB still receives the true overwritten value during old-only marks.
             if (prevSnap != nullptr) {
                 if (prevSnap->Matches(addr, ref)) {
                     NoteStoreFastPath();
@@ -1868,7 +1905,8 @@ void Barrier::RecordCrossGenEdgesInStruct(BaseObject* obj, MAddress start, size_
                 }
                 NoteStoreSlowPath();
             }
-            RecordCrossGenEdge(obj, addr, ref);
+            RecordCrossGenEdge(obj, addr, ref,
+                               prevSnap != nullptr ? prevSnap->Previous(addr) : zpointer::null);
         },
         start, start + size);
 }
@@ -1892,7 +1930,8 @@ void Barrier::RecordCrossGenEdgesInRefArray(BaseObject* obj, MAddress start, siz
             }
             NoteStoreSlowPath();
         }
-        RecordCrossGenEdge(obj, current, ref);
+        RecordCrossGenEdge(obj, current, ref,
+                           prevSnap != nullptr ? prevSnap->Previous(current) : zpointer::null);
     }
 }
 

@@ -590,8 +590,14 @@ public:
         foreignThreadInfo.isForeignThread = true;
         foreignThreadInfo.isExit = false;
         foreignThreadInfo.allocBuffer = ThreadLocal::GetAllocBuffer();
+        markFlushAllocBuffer = foreignThreadInfo.allocBuffer;
         foreignThreadInfo.schedule = ThreadLocal::GetThreadLocalData()->schedule;
     }
+
+    // Bind the allocation-owned store barrier buffer to this mutator so a
+    // phase transition performed by the GC thread can still flush the right
+    // thread's pending entries (the GC thread's own TLS is not that owner).
+    void SetMarkFlushAllocBuffer(AllocBuffer* buffer) { markFlushAllocBuffer = buffer; }
 
     bool IsForeignThreadExit() const
     {
@@ -614,7 +620,10 @@ public:
     // flushes before Census; peek still covers a node that HandleGCPhase missed.
     SatbBuffer::Node* PeekSatbNode() const { return satbNode; }
 
-    // Hand this mutator's in-flight SATB node over unconditionally.
+    // Hand this mutator's two marking buffers over unconditionally.  ZGC's
+    // ZMark::flush(Thread*) first flushes ZStoreBarrierBuffer and then its mark
+    // stacks (zMark.cpp:998-1006); paired prev must reach retired SATB before
+    // the direct node can participate in the termination test.
     // ZMark::flush(Thread*) (zMark.cpp:998-1006) is what the mark-termination
     // handshake calls on every thread, and it does not ask whether that thread
     // already ran a phase transition. HandleGCPhase(CLEAR_SATB_BUFFER) is not a
@@ -624,6 +633,9 @@ public:
     void FlushSatbBuffer()
     {
         std::lock_guard<std::mutex> lg(mutatorLock);
+        if (markFlushAllocBuffer != nullptr) {
+            markFlushAllocBuffer->GetStoreBarrierBuffer().Flush(Heap::GetHeap().GetRememberedSet());
+        }
         SatbBuffer::Instance().FlushQueue(satbNode);
     }
 
@@ -731,6 +743,10 @@ private:
         AllocBuffer* allocBuffer = { nullptr };
         ScheduleHandle schedule = { nullptr };
     } foreignThreadInfo;
+
+    // Runtime-only tail field; compiler-generated Mutator prefix offsets are
+    // unchanged.  Ownership is installed/cleared by MutatorManager::Bind/Unbind.
+    AllocBuffer* markFlushAllocBuffer = nullptr;
 
     // Step-0 no-op epoch handshake state. Keep these fields at the end of Mutator's
     // existing product layout: compiler-generated code has hard-coded offsets in the
