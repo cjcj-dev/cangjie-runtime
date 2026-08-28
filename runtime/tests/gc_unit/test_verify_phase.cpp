@@ -5,69 +5,88 @@
 #include "Heap/Verify/VerifyPhase.h"
 #include "gc_unittest.hpp"
 
-#if defined(__linux__)
-#include <sys/wait.h>
-#include <unistd.h>
-#endif
-
 #include <cstdlib>
 
 using namespace MapleRuntime;
 using namespace MapleRuntime::GcUnit;
 
-#if defined(__linux__)
 namespace {
-int CheckFace(VerifyFace face, const char* legacy, const char* alias, const char* token, int mode)
+struct FaceCase {
+    VerifyFace face;
+    const char* legacy;
+    const char* alias;
+};
+
+const FaceCase kFaces[] = {{VerifyFace::Roots, "MRT_GCV2_VERIFY_ROOTS", "MRT_GCV2_VERIFY_ROOTS"},
+                           {VerifyFace::Objects, "MRT_GCV2_VERIFY_HEAP", "MRT_GCV2_VERIFY_OBJECTS"},
+                           {VerifyFace::Marking, "MRT_GCV2_MARKCOMPLETE", "MRT_GCV2_VERIFY_MARKING"},
+                           {VerifyFace::Remembered, "MRT_GCV2_VERIFY_REMSET", "MRT_GCV2_VERIFY_REMEMBERED"},
+                           {VerifyFace::Oops, "MRT_GCV2_VERIFY_REGIONS", "MRT_GCV2_VERIFY_OOPS"}};
+
+void ClearFaceEnvironment()
 {
-    const pid_t child = fork();
-    if (child == 0) {
-        const char* names[] = {"MRT_GCV2_VERIFY_ROOTS", "MRT_GCV2_VERIFY_HEAP", "MRT_GCV2_VERIFY_OBJECTS",
-                               "MRT_GCV2_MARKCOMPLETE", "MRT_GCV2_VERIFY_MARKING", "MRT_GCV2_VERIFY_REMSET",
-                               "MRT_GCV2_VERIFY_REMEMBERED", "MRT_GCV2_VERIFY_REGIONS", "MRT_GCV2_VERIFY_OOPS",
-                               "MRT_GCV2_DIAG"};
-        for (const char* name : names) {
-            unsetenv(name);
-        }
-        if (mode == 1) {
-            setenv(legacy, "1", 1);
-        } else if (mode == 2) {
-            setenv(alias, "1", 1);
-        } else if (mode == 3) {
-            setenv("MRT_GCV2_DIAG", token, 1);
-        }
-        _exit(VerifyFaceEnabled(face) == (mode != 0) ? 0 : 1);
+    for (const auto& item : kFaces) {
+        unsetenv(item.legacy);
+        unsetenv(item.alias);
     }
-    if (child < 0) {
-        return -1;
+    unsetenv("MRT_GCV2_DIAG");
+}
+
+void ExpectAllFaces(bool enabled)
+{
+    for (const auto& item : kFaces) {
+        GC_EXPECT_EQ(VerifyFaceEnabled(item.face), enabled);
     }
-    int status = 0;
-    return waitpid(child, &status, 0) == child && WIFEXITED(status) ? WEXITSTATUS(status) : -1;
 }
 } // namespace
-#endif
 
-GC_TEST(VerifyPhase, FiveFaceLegacyAliasAndTokenMatrix)
+GC_OTHER_VM_TEST(VerifyPhase, FiveFaceDefaultOffArm)
 {
 #if defined(__linux__)
-    struct Case {
-        VerifyFace face;
-        const char* legacy;
-        const char* alias;
-        const char* token;
-    };
-    const Case cases[] = {{VerifyFace::Roots, "MRT_GCV2_VERIFY_ROOTS", "MRT_GCV2_VERIFY_ROOTS", "roots"},
-                          {VerifyFace::Objects, "MRT_GCV2_VERIFY_HEAP", "MRT_GCV2_VERIFY_OBJECTS", "objects"},
-                          {VerifyFace::Marking, "MRT_GCV2_MARKCOMPLETE", "MRT_GCV2_VERIFY_MARKING", "marking"},
-                          {VerifyFace::Remembered, "MRT_GCV2_VERIFY_REMSET", "MRT_GCV2_VERIFY_REMEMBERED",
-                           "remembered"},
-                          {VerifyFace::Oops, "MRT_GCV2_VERIFY_REGIONS", "MRT_GCV2_VERIFY_OOPS", "oops"}};
-    for (const auto& item : cases) {
-        GC_EXPECT_EQ(CheckFace(item.face, item.legacy, item.alias, item.token, 0), 0);
-        GC_EXPECT_EQ(CheckFace(item.face, item.legacy, item.alias, item.token, 1), 0);
-        GC_EXPECT_EQ(CheckFace(item.face, item.legacy, item.alias, item.token, 2), 0);
-        GC_EXPECT_EQ(CheckFace(item.face, item.legacy, item.alias, item.token, 3), 0);
-    }
+    ClearFaceEnvironment();
+    ExpectAllFaces(false);
 #else
     GC_EXPECT_TRUE(true);
 #endif
+}
+
+GC_OTHER_VM_TEST(VerifyPhase, FiveFaceLegacyArm)
+{
+    ClearFaceEnvironment();
+    for (const auto& item : kFaces) {
+        setenv(item.legacy, "1", 1);
+    }
+    ExpectAllFaces(true);
+}
+
+GC_OTHER_VM_TEST(VerifyPhase, FiveFaceAliasArm)
+{
+    ClearFaceEnvironment();
+    for (const auto& item : kFaces) {
+        setenv(item.alias, "1", 1);
+    }
+    ExpectAllFaces(true);
+}
+
+GC_OTHER_VM_TEST(VerifyPhase, FiveFaceTokenArm)
+{
+    ClearFaceEnvironment();
+    setenv("MRT_GCV2_DIAG", "roots,objects,marking,remembered,oops", 1);
+    ExpectAllFaces(true);
+}
+
+GC_OTHER_VM_TEST(VerifyPhase, QueryingOneFaceDoesNotFreezeAnother)
+{
+    ClearFaceEnvironment();
+    GC_EXPECT_FALSE(VerifyFaceEnabled(VerifyFace::Roots));
+    setenv("MRT_GCV2_VERIFY_OOPS", "1", 1);
+    GC_EXPECT_TRUE(VerifyFaceEnabled(VerifyFace::Oops));
+}
+
+GC_OTHER_VM_TEST(VerifyPhase, LateSetenvDoesNotRetuneInitializedFace)
+{
+    ClearFaceEnvironment();
+    GC_EXPECT_FALSE(VerifyFaceEnabled(VerifyFace::Roots));
+    setenv("MRT_GCV2_VERIFY_ROOTS", "1", 1);
+    GC_EXPECT_FALSE(VerifyFaceEnabled(VerifyFace::Roots));
 }

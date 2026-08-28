@@ -11,6 +11,8 @@ namespace MapleRuntime {
 enum class VerifyFace { Roots = 0, Objects, Marking, Remembered, Oops };
 
 const char* VerifyFaceName(VerifyFace face);
+// Each face snapshots its startup environment/token on first use. Runtime
+// setenv does not retune a face that has already been queried.
 bool VerifyFaceEnabled(VerifyFace face);
 bool VerifyPhaseEnter(VerifyFace face, const char* phase);
 
