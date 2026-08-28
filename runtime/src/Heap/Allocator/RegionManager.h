@@ -240,6 +240,11 @@ public:
     void CompactRegion(RegionInfo* region, RegionInfo* toRegion1);
 
     void ExemptFromRegion(RegionInfo* region);
+    // Unlink the node from whichever list currently owns it, then set newType.
+    // Prepend without this is the forward_phase owner CHECK (RegionList.cpp Prepend).
+    // ZGC: alloc_page / free_page are table ops (zHeap.cpp:257, :277); we have one
+    // intrusive node, so every rehome must drop the previous list first.
+    bool TryUnlinkRegionForMove(RegionInfo* region, RegionInfo::RegionType newType);
     // Rehome onto unmovableFrom without publishing kept. PrepareYoung parks
     // leftover from-pages here; they were expired at cycle start and must not
     // be re-published as this cycle's done (zRelocationSetSelector.cpp:114-196).
@@ -521,16 +526,19 @@ public:
         ScrubRememberedSetForRegion(region);
 
         region->LockWriteRegion();
+        (void)TryUnlinkRegionForMove(region, RegionInfo::RegionType::GARBAGE_REGION);
+        if (region->GetRegionListOwner() == nullptr) {
 #if defined(__OHOS__)
-        // Do not publish an installed ghost carrier to dirtyTree before its dispel point.
-        if (region->IsGhostFromRegion()) {
-            garbageRegionList.PrependRegion(region, RegionInfo::RegionType::GARBAGE_REGION);
-        } else {
-            ReclaimRegion(region);
-        }
+            // Do not publish an installed ghost carrier to dirtyTree before its dispel point.
+            if (region->IsGhostFromRegion()) {
+                garbageRegionList.PrependRegion(region, RegionInfo::RegionType::GARBAGE_REGION);
+            } else {
+                ReclaimRegion(region);
+            }
 #else
-        garbageRegionList.PrependRegion(region, RegionInfo::RegionType::GARBAGE_REGION);
+            garbageRegionList.PrependRegion(region, RegionInfo::RegionType::GARBAGE_REGION);
 #endif
+        }
         region->UnlockWriteRegion();
 
         if (region->IsLargeRegion()) {

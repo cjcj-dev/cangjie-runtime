@@ -2276,16 +2276,70 @@ void WaitCopiedObjectsUnlocked(RegionInfo* region)
 }
 } // namespace
 
+bool RegionManager::TryUnlinkRegionForMove(RegionInfo* region, RegionInfo::RegionType newType)
+{
+    if (region == nullptr) {
+        return false;
+    }
+    const RegionInfo::RegionType type = region->GetRegionType();
+    if (type == newType && region->GetRegionListOwner() == nullptr) {
+        return true;
+    }
+    if (type == newType && region->GetRegionListOwner() != nullptr) {
+        return false;
+    }
+    bool claimed = false;
+    if (type == RegionInfo::RegionType::FROM_REGION) {
+        claimed = fromRegionList.TryDeleteRegion(region, type, newType);
+    } else if (type == RegionInfo::RegionType::GARBAGE_REGION) {
+        claimed = garbageRegionList.TryDeleteRegion(region, type, newType);
+    } else if (type == RegionInfo::RegionType::THREAD_LOCAL_REGION) {
+        claimed = tlRegionList.TryDeleteRegion(region, type, newType);
+    } else if (type == RegionInfo::RegionType::RECENT_FULL_REGION) {
+        const size_t units = region->GetUnitCount();
+        claimed = recentFullRegionList.TryDeleteRegion(region, type, newType);
+        if (claimed) {
+            RecentFullAccounting::Dequeue(1, units);
+        }
+    } else if (type == RegionInfo::RegionType::UNMOVABLE_FROM_REGION) {
+        claimed = unmovableFromRegionList.TryDeleteRegion(region, type, newType);
+    } else if (type == RegionInfo::RegionType::RAW_POINTER_PINNED_REGION) {
+        claimed = rawPointerPinnedRegionList.TryDeleteRegion(region, type, newType);
+    } else if (type == RegionInfo::RegionType::LARGE_REGION) {
+        claimed = oldLargeRegionList.TryDeleteRegion(region, type, newType);
+    } else if (type == RegionInfo::RegionType::RECENT_LARGE_REGION) {
+        claimed = recentLargeRegionList.TryDeleteRegion(region, type, newType);
+    } else if (type == RegionInfo::RegionType::LONE_FROM_REGION) {
+        if (region->GetRegionListOwner() == nullptr) {
+            region->SetRegionType(newType);
+            return true;
+        }
+        claimed = fromRegionList.TryDeleteRegion(region, RegionInfo::RegionType::FROM_REGION, newType);
+        if (!claimed && region->GetRegionListOwner() == nullptr) {
+            region->SetRegionType(newType);
+            return true;
+        }
+    } else if (region->GetRegionListOwner() == nullptr) {
+        region->SetRegionType(newType);
+        return true;
+    }
+    return claimed;
+}
+
 void RegionManager::ParkUnmovableFromRegion(RegionInfo* region)
 {
-    // youngconcfollow: callers already unlink the FROM node — TryDelete FROM here
-    // would DecCounts a second time ("error count 1-0 16-0"). Only a GARBAGE node
-    // can still sit on garbageRegionList (the CHECK at
-    // TryTakeGarbageRegionAfterDispel, RegionManager.h:984); unlink it before the
-    // rehome below so the garbage list cannot name a non-GARBAGE region.
-    if (region != nullptr && region->IsGarbageRegion()) {
-        garbageRegionList.TryDeleteRegion(region, RegionInfo::RegionType::GARBAGE_REGION,
-                                          RegionInfo::RegionType::UNMOVABLE_FROM_REGION);
+    if (region == nullptr) {
+        return;
+    }
+    if (region->GetRegionType() == RegionInfo::RegionType::UNMOVABLE_FROM_REGION &&
+        region->GetRegionListOwner() == &unmovableFromRegionList) {
+        return;
+    }
+    if (!TryUnlinkRegionForMove(region, RegionInfo::RegionType::UNMOVABLE_FROM_REGION)) {
+        if (region->GetRegionListOwner() != nullptr) {
+            return;
+        }
+        region->SetRegionType(RegionInfo::RegionType::UNMOVABLE_FROM_REGION);
     }
     unmovableFromRegionList.PrependRegion(region, RegionInfo::RegionType::UNMOVABLE_FROM_REGION);
 }
@@ -3230,8 +3284,11 @@ void RegionManager::EnlistCompactedRegionForAllocator(RegionInfo* region)
         claimed = fromRegionList.TryDeleteRegion(region, RegionInfo::RegionType::FROM_REGION,
                                                  RegionInfo::RegionType::THREAD_LOCAL_REGION);
     } else if (type == RegionInfo::RegionType::LONE_FROM_REGION) {
-        region->SetRegionType(RegionInfo::RegionType::THREAD_LOCAL_REGION);
-        claimed = true;
+        claimed = TryUnlinkRegionForMove(region, RegionInfo::RegionType::THREAD_LOCAL_REGION);
+        if (!claimed && region->GetRegionListOwner() == nullptr) {
+            region->SetRegionType(RegionInfo::RegionType::THREAD_LOCAL_REGION);
+            claimed = true;
+        }
     } else if (type == RegionInfo::RegionType::GARBAGE_REGION) {
         claimed = garbageRegionList.TryDeleteRegion(region, RegionInfo::RegionType::GARBAGE_REGION,
                                                     RegionInfo::RegionType::THREAD_LOCAL_REGION);
@@ -3415,11 +3472,13 @@ void RegionManager::EnlistStayYoungSurvivor(RegionInfo* region)
         claimed = fromRegionList.TryDeleteRegion(region, RegionInfo::RegionType::FROM_REGION,
                                                  RegionInfo::RegionType::RECENT_FULL_REGION);
     } else if (type == RegionInfo::RegionType::LONE_FROM_REGION) {
-        // TakeHeadRegion already unlinked it (RegionManager.cpp:1712). Type still
-        // LONE_FROM until Prepend; kLoneFromIsFrom readers would keep treating it
-        // as from-space if we skipped the store (WCollector.h:495).
-        region->SetRegionType(RegionInfo::RegionType::RECENT_FULL_REGION);
-        claimed = true;
+        // TakeHeadRegion already unlinked it. If a concurrent compact-in-place
+        // rehome already listed the node, TryUnlink drops that owner first.
+        claimed = TryUnlinkRegionForMove(region, RegionInfo::RegionType::RECENT_FULL_REGION);
+        if (!claimed && region->GetRegionListOwner() == nullptr) {
+            region->SetRegionType(RegionInfo::RegionType::RECENT_FULL_REGION);
+            claimed = true;
+        }
     } else if (type == RegionInfo::RegionType::GARBAGE_REGION) {
         claimed = garbageRegionList.TryDeleteRegion(region, RegionInfo::RegionType::GARBAGE_REGION,
                                                     RegionInfo::RegionType::RECENT_FULL_REGION);
