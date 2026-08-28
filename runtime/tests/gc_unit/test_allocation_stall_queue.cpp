@@ -2,7 +2,7 @@
 // This source file is part of the Cangjie project, licensed under Apache-2.0
 // with Runtime Library Exception.
 
-#if defined(MRT_GC_UNIT_TESTS)
+#if defined(MRT_GC_UNIT_TESTS) || defined(MRT_TESTABLE_INTERNALS)
 
 #include <atomic>
 #include <chrono>
@@ -223,4 +223,4 @@ GC_OTHER_VM_TEST(AllocationStall, CompletedWaveDoesNotFailLateWaiter)
     GC_EXPECT_EQ(fixture.manager.PendingStalledAllocations(), static_cast<size_t>(0));
 }
 
-#endif // MRT_GC_UNIT_TESTS
+#endif // MRT_GC_UNIT_TESTS || MRT_TESTABLE_INTERNALS

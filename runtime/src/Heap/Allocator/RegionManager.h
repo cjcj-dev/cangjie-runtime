@@ -208,7 +208,7 @@ public:
     size_t StallAllocation(size_t size);
     void FinishStalledAllocation(size_t claimedUnits);
     void SatisfyStalledAllocations();
-#if defined(MRT_GC_UNIT_TESTS)
+#if defined(MRT_ALLOCATION_STALL_OBSERVE)
     using AllocationStallTestHook = std::function<void(RegionManager&)>;
     MRT_EXPORT void SetAllocationStallTestHooks(AllocationStallTestHook beforeWave,
                                                 AllocationStallTestHook requestGc,
@@ -1179,7 +1179,7 @@ private:
     RegionList fromRegionList;
     RelocationRequestQueue relocationRequestQueue;
     AllocationStallQueue allocationStallQueue;
-#if defined(MRT_GC_UNIT_TESTS)
+#if defined(MRT_ALLOCATION_STALL_OBSERVE)
     AllocationStallTestHook allocationStallBeforeWaveTestHook;
     AllocationStallTestHook allocationStallGcTestHook;
     AllocationStallTestHook allocationStallBeforeWaitTestHook;
