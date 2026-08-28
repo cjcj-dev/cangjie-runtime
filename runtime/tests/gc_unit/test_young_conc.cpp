@@ -25,6 +25,7 @@
 #include <vector>
 
 #include "Common/Runtime.h"
+#include "Cangjie.h"
 #include "CjScheduler.h"
 
 #include "gc_heap_fixture.hpp"
@@ -55,6 +56,8 @@ using namespace MapleRuntime;
 using namespace MapleRuntime::GcUnit;
 
 extern "C" int CJ_ScheduleManagerInit();
+extern "C" bool MRT_NewForeignCJThread();
+extern "C" bool MRT_EndForeignCJThread();
 
 namespace MapleRuntime {
 
@@ -366,6 +369,204 @@ GC_OTHER_VM_TEST(YoungConc, RuntimeMutatorActiveEpochCreateDestroyInterleavingIs
     GC_EXPECT_TRUE(manager.EpochHandshakeDestroyDeferredForTest() >= 1u);
     manager.EndEpochHandshakeLifecycleTest();
     GC_EXPECT_EQ(unsetenv("MRT_GC_UNIT_RUNTIME_MUTATOR_LIFECYCLE_ONLY"), 0);
+    Heap::GetHeap().SetGCPhase(GCPhase::GC_PHASE_IDLE);
+}
+
+GC_OTHER_VM_TEST(YoungConc, RuntimeMutatorDestroyInactiveCheckCannotCrossEpochPublish)
+{
+    GC_EXPECT_EQ(CJ_ScheduleManagerInit(), 0);
+    MRT_CjRuntimeInit();
+    MutatorManager& manager = MutatorManager::Instance();
+    Heap::GetHeap().SetGCPhase(GCPhase::GC_PHASE_ENUM);
+    GC_EXPECT_EQ(setenv("MRT_GC_UNIT_RUNTIME_MUTATOR_LIFECYCLE_ONLY", "1", 1), 0);
+
+    std::atomic<bool> ready{ false };
+    std::atomic<Mutator*> victim{ nullptr };
+    manager.ArmDestroyMutatorInterleavingForTest();
+    std::thread destroyer([&]() {
+        Mutator* mutator = manager.CreateRuntimeMutator(ThreadType::HOT_UPDATE_THREAD);
+        victim.store(mutator, std::memory_order_release);
+        ready.store(true, std::memory_order_release);
+        manager.DestroyRuntimeMutator(ThreadType::HOT_UPDATE_THREAD);
+    });
+    while (!ready.load(std::memory_order_acquire)) {
+        (void)sched_yield();
+    }
+    while (!manager.DestroyMutatorInterleavingEnteredForTest()) {
+        (void)sched_yield();
+    }
+
+    // The destroyer has already performed its inactive check and is parked at
+    // the publish boundary.  The ledger must still be held, so an epoch
+    // publisher cannot pass this point until destroy is released.
+    const bool ledgerWasFree = manager.EpochHandshakeLedgerTryLockForTest();
+    std::atomic<bool> published{ false };
+    std::atomic<bool> publishAttempted{ false };
+    std::thread publisher([&]() {
+        publishAttempted.store(true, std::memory_order_release);
+        (void)manager.BeginEpochHandshakeLifecycleTest();
+        published.store(true, std::memory_order_release);
+    });
+    while (!publishAttempted.load(std::memory_order_acquire)) {
+        (void)sched_yield();
+    }
+    manager.ReleaseDestroyMutatorInterleavingForTest();
+    destroyer.join();
+    publisher.join();
+    const bool crossed = ledgerWasFree;
+    std::fprintf(stderr, "DETAIL interleaving ledger_free=%d published=%d victim=%p\n",
+                 crossed ? 1 : 0, published.load() ? 1 : 0,
+                 static_cast<void*>(victim.load()));
+    GC_EXPECT_FALSE(crossed);
+    manager.EndEpochHandshakeLifecycleTest();
+    GC_EXPECT_EQ(unsetenv("MRT_GC_UNIT_RUNTIME_MUTATOR_LIFECYCLE_ONLY"), 0);
+    Heap::GetHeap().SetGCPhase(GCPhase::GC_PHASE_IDLE);
+}
+
+struct ParticipantLoadContext {
+    std::atomic<bool> ready{ false };
+    std::atomic<bool> release{ false };
+    std::atomic<Mutator*> mutator{ nullptr };
+};
+
+void* OrdinaryParticipantTask(void* raw)
+{
+    auto* context = static_cast<ParticipantLoadContext*>(raw);
+    Mutator* mutator = Mutator::GetMutator();
+    context->mutator.store(mutator, std::memory_order_release);
+    (void)mutator->EnterSaferegion(true);
+    context->ready.store(true, std::memory_order_release);
+    while (!context->release.load(std::memory_order_acquire)) {
+        (void)sched_yield();
+    }
+    (void)mutator->LeaveSaferegion();
+    return nullptr;
+}
+
+GC_OTHER_VM_TEST(YoungConc, ForcedEpochHandshakeCoversAllParticipantSources)
+{
+    RuntimeParam runtimeParam {};
+    runtimeParam.heapParam.heapSize = 64 * 1024;
+    runtimeParam.coParam.processorNum = 2;
+    GC_EXPECT_EQ(InitCJRuntime(&runtimeParam), E_OK);
+    MutatorManager& manager = MutatorManager::Instance();
+    Heap::GetHeap().SetGCPhase(GCPhase::GC_PHASE_ENUM);
+
+    ParticipantLoadContext ordinary;
+    CJThreadHandle ordinaryHandle = RunCJTask(OrdinaryParticipantTask, &ordinary);
+    GC_EXPECT_TRUE(ordinaryHandle != nullptr);
+
+    ParticipantLoadContext foreign;
+    std::thread foreignThread([&]() {
+        CleanThreadLocalData cleaner;
+        std::fprintf(stderr, "DETAIL four_source foreign_before_attach\n");
+        const bool attached = MRT_NewForeignCJThread();
+        std::fprintf(stderr, "DETAIL four_source foreign_after_attach=%d\n", attached ? 1 : 0);
+        Mutator* mutator = ThreadLocal::GetMutator();
+        foreign.mutator.store(mutator, std::memory_order_release);
+        if (attached && mutator != nullptr) {
+            (void)mutator->EnterSaferegion(true);
+            foreign.ready.store(true, std::memory_order_release);
+            while (!foreign.release.load(std::memory_order_acquire)) {
+                (void)sched_yield();
+            }
+            (void)mutator->LeaveSaferegion();
+            (void)MRT_EndForeignCJThread();
+        } else {
+            foreign.ready.store(true, std::memory_order_release);
+        }
+    });
+
+    ParticipantLoadContext runtime;
+    std::thread runtimeThread([&]() {
+        CleanThreadLocalData cleaner;
+        std::fprintf(stderr, "DETAIL four_source runtime_before_create\n");
+        (void)setenv("MRT_GC_UNIT_RUNTIME_MUTATOR_LIFECYCLE_ONLY", "1", 1);
+        Mutator* mutator = manager.CreateRuntimeMutator(ThreadType::HOT_UPDATE_THREAD);
+        std::fprintf(stderr, "DETAIL four_source runtime_after_create=%p\n", static_cast<void*>(mutator));
+        runtime.mutator.store(mutator, std::memory_order_release);
+        (void)mutator->EnterSaferegion(true);
+        runtime.ready.store(true, std::memory_order_release);
+        while (!runtime.release.load(std::memory_order_acquire)) {
+            (void)sched_yield();
+        }
+        (void)mutator->LeaveSaferegion();
+        manager.DestroyRuntimeMutator(ThreadType::HOT_UPDATE_THREAD);
+        (void)unsetenv("MRT_GC_UNIT_RUNTIME_MUTATOR_LIFECYCLE_ONLY");
+    });
+
+    ParticipantLoadContext finalizer;
+    std::thread finalizerThread([&]() {
+        CleanThreadLocalData cleaner;
+        std::fprintf(stderr, "DETAIL four_source finalizer_before_create\n");
+        Mutator* finalizerParticipant = manager.CreateRuntimeMutator(ThreadType::FP_THREAD);
+        manager.RegisterMutatorForTest(finalizerParticipant);
+        Heap::GetHeap().GetFinalizerProcessor().InitFinalizerCJThread();
+        void* handle = ThreadLocal::GetForeignCJThread();
+        std::fprintf(stderr, "DETAIL four_source finalizer_after_create=%p\n", handle);
+        Mutator* mutator = ThreadLocal::GetMutator();
+        // The finalizer processor owns the participant that the handshake
+        // roster visits; keep the lifecycle thread mutator alive while using
+        // that processor-owned pointer for participant attribution.
+        Mutator* participant = Heap::GetHeap().GetFinalizerProcessor().GetMutator();
+        std::fprintf(stderr, "DETAIL four_source finalizer_thread_mutator=%p finalizer_participant=%p\n",
+                     static_cast<void*>(mutator), static_cast<void*>(participant));
+        finalizer.mutator.store(finalizerParticipant, std::memory_order_release);
+        if (handle != nullptr && mutator != nullptr) {
+            (void)mutator->EnterSaferegion(true);
+            finalizer.ready.store(true, std::memory_order_release);
+            while (!finalizer.release.load(std::memory_order_acquire)) {
+                (void)sched_yield();
+            }
+            (void)mutator->LeaveSaferegion();
+            EndFinalizerCJThread();
+            manager.UnregisterMutatorForTest(finalizerParticipant);
+        } else {
+            finalizer.ready.store(true, std::memory_order_release);
+        }
+    });
+
+    while (!ordinary.ready.load(std::memory_order_acquire) ||
+           !foreign.ready.load(std::memory_order_acquire) ||
+           !runtime.ready.load(std::memory_order_acquire) ||
+           !finalizer.ready.load(std::memory_order_acquire)) {
+        (void)sched_yield();
+    }
+    Mutator* ordinaryMutator = ordinary.mutator.load(std::memory_order_acquire);
+    Mutator* foreignMutator = foreign.mutator.load(std::memory_order_acquire);
+    Mutator* runtimeMutator = runtime.mutator.load(std::memory_order_acquire);
+    Mutator* finalizerMutator = finalizer.mutator.load(std::memory_order_acquire);
+    manager.RegisterMutatorForTest(finalizerMutator);
+    GC_EXPECT_TRUE(ordinaryMutator != nullptr);
+    GC_EXPECT_TRUE(foreignMutator != nullptr);
+    GC_EXPECT_TRUE(runtimeMutator != nullptr);
+    GC_EXPECT_TRUE(finalizerMutator != nullptr);
+
+    EpochHandshakeStats stats = manager.RunEpochHandshake("r7-four-source");
+    std::fprintf(stderr,
+                 "DETAIL four_source requested=%zu scanned=%zu fallback=%zu ordinary=%d foreign=%d runtime=%d finalizer=%d\n",
+                 stats.requested, stats.stackScanned, stats.stackFallback,
+                 manager.EpochHandshakeWasLastParticipantForTest(ordinaryMutator) ? 1 : 0,
+                 manager.EpochHandshakeWasLastParticipantForTest(foreignMutator) ? 1 : 0,
+                 manager.EpochHandshakeWasLastParticipantForTest(runtimeMutator) ? 1 : 0,
+                 manager.EpochHandshakeWasLastParticipantForTest(finalizerMutator) ? 1 : 0);
+    GC_EXPECT_TRUE(stats.requested >= 4);
+    GC_EXPECT_EQ(stats.stackScanned + stats.stackFallback, stats.requested);
+    GC_EXPECT_TRUE(manager.EpochHandshakeWasLastParticipantForTest(ordinaryMutator));
+    GC_EXPECT_TRUE(manager.EpochHandshakeWasLastParticipantForTest(foreignMutator));
+    GC_EXPECT_TRUE(manager.EpochHandshakeWasLastParticipantForTest(runtimeMutator));
+    GC_EXPECT_TRUE(manager.EpochHandshakeWasLastParticipantForTest(finalizerMutator));
+
+    ordinary.release.store(true, std::memory_order_release);
+    foreign.release.store(true, std::memory_order_release);
+    runtime.release.store(true, std::memory_order_release);
+    finalizer.release.store(true, std::memory_order_release);
+    foreignThread.join();
+    runtimeThread.join();
+    finalizerThread.join();
+    void* ordinaryResult = nullptr;
+    GC_EXPECT_EQ(GetTaskRet(ordinaryHandle, &ordinaryResult), E_OK);
+    ReleaseHandle(ordinaryHandle);
     Heap::GetHeap().SetGCPhase(GCPhase::GC_PHASE_IDLE);
 }
 

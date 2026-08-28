@@ -18,7 +18,9 @@ tests=(
   YoungConc.RuntimeMutatorCreateDuringActiveEpochIsBornClean
   YoungConc.RuntimeMutatorDestroyDuringActiveEpochDefersStorage
   YoungConc.RuntimeMutatorActiveEpochCreateDestroyInterleavingIsSerialized
+  YoungConc.RuntimeMutatorDestroyInactiveCheckCannotCrossEpochPublish
   YoungConc.ForcedEpochHandshakeReportsPositiveRequested
+  YoungConc.ForcedEpochHandshakeCoversAllParticipantSources
   YoungConc.FinalizerCreateDuringActiveEpochIsBornClean
   YoungConc.FinalizerEndDuringActiveEpochDefersStorage
 )
