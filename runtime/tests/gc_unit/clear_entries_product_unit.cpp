@@ -31,6 +31,21 @@ struct RelocationReceiptTestAccess {
         manager.fromRegionList.PrependRegion(region, RegionInfo::RegionType::FROM_REGION);
     }
 
+    static void ReleaseListOwnership(RegionInfo* region)
+    {
+        RegionList* owner = region == nullptr ? nullptr : region->GetRegionListOwner();
+        GC_EXPECT_TRUE(owner != nullptr);
+        if (owner != nullptr) {
+            // Balance ParkFrom while the owning RegionManager is still alive.
+            // CompactRegion may have transferred the node from fromRegionList
+            // to tlRegionList, so the authority token, rather than the old
+            // region type/prev-link heuristic, identifies the product list
+            // whose counts and links must be updated.
+            owner->DeleteRegion(region);
+        }
+        GC_EXPECT_TRUE(region == nullptr || region->GetRegionListOwner() == nullptr);
+    }
+
     static void BindCollector(CollectorResources& resources, TracingCollector* collector)
     {
         resources.collectorProxy.currentCollector = collector;
@@ -192,6 +207,7 @@ PartialCompactState PreparePartialCompact(GcHeapFixture& fx, WCollector& collect
 
 void CleanupPartialCompact(GcHeapFixture& fx, PartialCompactState& state)
 {
+    RelocationReceiptTestAccess::ReleaseListOwnership(state.region);
     ForwardingTable::ClearEntries(state.region->GetRegionStart(), state.region->GetRegionSize());
     ForwardingTable::DropRetiredCovering(state.region->GetRegionStart(), state.region->GetRegionSize());
     if (state.region->IsGhostFromRegion()) {
@@ -580,6 +596,7 @@ GC_TEST(ForwardingPublicationProduct, PageWaitThenLookupReadsOriginalCompactRece
 
     collector.SetGCPhase(GCPhase::GC_PHASE_IDLE);
     RelocationReceiptTestAccess::BindCollector(Heap::GetHeap().GetCollectorResources(), nullptr);
+    RelocationReceiptTestAccess::ReleaseListOwnership(region);
     ForwardingTable::ClearEntries(region->GetRegionStart(), region->GetRegionSize());
     ForwardingTable::DropRetiredCovering(region->GetRegionStart(), region->GetRegionSize());
     if (region->IsGhostFromRegion()) {
@@ -653,6 +670,7 @@ GC_TEST(ForwardingPublicationProduct, CompletedReceiptResolvesWithoutForwardingT
 
     collector.SetGCPhase(GCPhase::GC_PHASE_IDLE);
     RelocationReceiptTestAccess::BindCollector(Heap::GetHeap().GetCollectorResources(), nullptr);
+    RelocationReceiptTestAccess::ReleaseListOwnership(region);
     ForwardingTable::ClearEntries(region->GetRegionStart(), region->GetRegionSize());
     ForwardingTable::DropRetiredCovering(region->GetRegionStart(), region->GetRegionSize());
     if (region->IsGhostFromRegion()) {
@@ -706,6 +724,7 @@ GC_TEST(ForwardingPublicationProduct, CompactRequestReturnsReceiptBeforeFromClea
     GC_EXPECT_TRUE(reinterpret_cast<BaseObject*>(resolved)->IsValidObject());
 
     RelocationReceiptTestAccess::BindCollector(Heap::GetHeap().GetCollectorResources(), nullptr);
+    RelocationReceiptTestAccess::ReleaseListOwnership(region);
     ForwardingTable::ClearEntries(start, region->GetRegionSize());
     ForwardingTable::DropRetiredCovering(start, region->GetRegionSize());
     region->metadata.liveInfo = nullptr;

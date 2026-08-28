@@ -2112,7 +2112,8 @@ bool WCollector::MarkYoungSatbBuffer(WorkStack& workStack, bool fullYoungScan, M
         if (++iterationCnt > maxIterationLoopNum && (TimeUtil::NanoSeconds() - iterationStartTime) > maxIterationTime) {
             ScopedStopTheWorld stw("MarkYoungSatbBuffer timeout", true, GCPhase::GC_PHASE_CLEAR_SATB_BUFFER);
             VLOG(REPORT, "[GCV2][youngconc] MarkYoungSatbBuffer timeout STW drain");
-            MutatorManager::Instance().VisitAllMutators([](Mutator& mutator) { mutator.FlushSatbBuffer(); });
+            StoreBarrierBuffer::FlushAll(Heap::GetHeap().GetRememberedSet());
+            MutatorManager::Instance().VisitAllMutators([](Mutator& mutator) { mutator.FlushSatbBuffer(false); });
             visitSatbObj();
             if (windowStats != nullptr) {
                 ++windowStats->closureCalls;
@@ -2163,7 +2164,8 @@ bool WCollector::MarkYoungSatbBuffer(WorkStack& workStack, bool fullYoungScan, M
             ScopedStopTheWorld stw("young mark terminate", true, GCPhase::GC_PHASE_CLEAR_SATB_BUFFER);
             NoteMarkTerminatePause();
             const size_t seenBefore = satbSeen;
-            MutatorManager::Instance().VisitAllMutators([](Mutator& mutator) { mutator.FlushSatbBuffer(); });
+            StoreBarrierBuffer::FlushAll(Heap::GetHeap().GetRememberedSet());
+            MutatorManager::Instance().VisitAllMutators([](Mutator& mutator) { mutator.FlushSatbBuffer(false); });
             visitSatbObj();
             NoteMarkTerminateFlushed(satbSeen - seenBefore);
             terminated = workStack.empty();

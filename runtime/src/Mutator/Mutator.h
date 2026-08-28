@@ -14,6 +14,7 @@
 
 #include "Exception/Exception.h"
 #include "Heap/Allocator/Allocator.h"
+#include "Heap/Barrier/RememberedSet.h"
 #include "Heap/Collector/GcInfos.h"
 #include "LoaderManager.h"
 #include "Mutator/ThreadLocal.h"
@@ -373,6 +374,7 @@ public:
                              const DerivedPtrVisitor* derivedPtrVisitor, size_t& scannedFrames);
     inline void GCPhasePreForward(GCPhase newPhase);
     inline void HandleGCPhase(GCPhase newPhase);
+    inline void HandleGCPhase(GCPhase newPhase, bool bySelf);
     inline void HandleGCPhaseIDLE();
     inline void ForwardLocalFinalizers(Collector& collector);
     static DerivedPtrVisitor MakePreForwardDerivedVisitor(Collector& collector);
@@ -380,6 +382,7 @@ public:
     inline void HandleCpuProfile();
 
     void TransitionToGCPhaseExclusive(GCPhase newPhase);
+    void TransitionToGCPhaseExclusive(GCPhase newPhase, bool bySelf);
 
     void TransitionToCpuProfileExclusive();
 
@@ -588,8 +591,22 @@ public:
         foreignThreadInfo.isForeignThread = true;
         foreignThreadInfo.isExit = false;
         foreignThreadInfo.allocBuffer = ThreadLocal::GetAllocBuffer();
+        markFlushAllocBuffer = foreignThreadInfo.allocBuffer;
         foreignThreadInfo.schedule = ThreadLocal::GetThreadLocalData()->schedule;
     }
+
+    // Bind the allocation-owned store barrier buffer to this mutator so a
+    // phase transition performed by the GC thread can still flush the right
+    // thread's pending entries (the GC thread's own TLS is not that owner).
+    void SetMarkFlushAllocBuffer(AllocBuffer* buffer) { markFlushAllocBuffer = buffer; }
+#if defined(MRT_TESTABLE_INTERNALS)
+    // Unit fixtures use a private remembered-set range; keep the product phase
+    // handshake while routing its paired flush into that fixture.
+    void SetStoreBarrierRememberedSetForTest(RememberedSet* rememberedSet)
+    {
+        storeBarrierRememberedSet = rememberedSet;
+    }
+#endif
 
     bool IsForeignThreadExit() const
     {
@@ -612,16 +629,31 @@ public:
     // flushes before Census; peek still covers a node that HandleGCPhase missed.
     SatbBuffer::Node* PeekSatbNode() const { return satbNode; }
 
-    // Hand this mutator's in-flight SATB node over unconditionally.
+    // Hand this mutator's two marking buffers over unconditionally.  ZGC's
+    // ZMark::flush(Thread*) first flushes ZStoreBarrierBuffer and then its mark
+    // stacks (zMark.cpp:998-1006); paired prev must reach retired SATB before
+    // the direct node can participate in the termination test.
     // ZMark::flush(Thread*) (zMark.cpp:998-1006) is what the mark-termination
     // handshake calls on every thread, and it does not ask whether that thread
     // already ran a phase transition. HandleGCPhase(CLEAR_SATB_BUFFER) is not a
     // substitute: EnsurePhaseTransition (MutatorManager.cpp:806-811) erases any
     // mutator already parked in the target phase without re-running the handler,
     // so a second transition to the same phase flushes nobody.
-    void FlushSatbBuffer()
+    void FlushSatbBuffer(bool flushStoreBarrier = true)
     {
         std::lock_guard<std::mutex> lg(mutatorLock);
+        // ZGC's ZMark::flush(Thread*) drains the Java thread's store-barrier
+        // buffer; a GC worker only drains its own mark stacks.  A GC-assisted
+        // phase transition must therefore leave the paired store entries for
+        // the mutator (or the next explicit safepoint) instead of resolving
+        // them against a retained snapshot that may already be retired.
+        RememberedSet* rememberedSet = storeBarrierRememberedSet;
+        if (rememberedSet == nullptr) {
+            rememberedSet = &Heap::GetHeap().GetRememberedSet();
+        }
+        if (flushStoreBarrier && markFlushAllocBuffer != nullptr && rememberedSet->IsInitialized()) {
+            markFlushAllocBuffer->GetStoreBarrierBuffer().Flush(*rememberedSet);
+        }
         SatbBuffer::Instance().FlushQueue(satbNode);
     }
 
@@ -727,6 +759,11 @@ private:
         AllocBuffer* allocBuffer = { nullptr };
         ScheduleHandle schedule = { nullptr };
     } foreignThreadInfo;
+
+    // Runtime-only tail field; compiler-generated Mutator prefix offsets are
+    // unchanged.  Ownership is installed/cleared by MutatorManager::Bind/Unbind.
+    AllocBuffer* markFlushAllocBuffer = nullptr;
+    RememberedSet* storeBarrierRememberedSet = nullptr;
 
     // Step-0 no-op epoch handshake state. Keep these fields at the end of Mutator's
     // existing product layout: compiler-generated code has hard-coded offsets in the
