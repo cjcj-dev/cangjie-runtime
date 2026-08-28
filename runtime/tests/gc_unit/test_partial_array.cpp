@@ -19,6 +19,14 @@
 #include <unistd.h>
 #include <vector>
 
+#if !defined(MRT_TESTABLE_INTERNALS)
+// WCollector's friend declaration is test-gated.  Keep this TU buildable in
+// the default standalone configuration by opening that gate while the header
+// is parsed, without enabling the test-only product arm below.
+#define MRT_TESTABLE_INTERNALS 1
+#define MRT_PARTIAL_ARRAY_FORCED_INTERNALS 1
+#endif
+
 #include "Base/Globals.h"
 #include "Heap/Collector/CollectorResources.h"
 #include "Heap/Collector/MarkPartialArray.h"
@@ -27,13 +35,17 @@
 #include "gc_unittest.hpp"
 #include "ObjectModel/MArray.inline.h"
 
+#if defined(MRT_PARTIAL_ARRAY_FORCED_INTERNALS)
+#undef MRT_TESTABLE_INTERNALS
+#endif
+
 using namespace MapleRuntime;
 using namespace MapleRuntime::GcUnit;
 
 namespace MapleRuntime {
 
 struct PartialArrayTestAccess {
-#if defined(MRT_TESTABLE_INTERNALS)
+#if defined(MRT_TESTABLE_INTERNALS) || defined(MRT_PARTIAL_ARRAY_FORCED_INTERNALS)
     static void Push(const WCollector& collector, RefField<>* addr, size_t length,
                      TracingCollector::WorkStack& workStack)
     {
@@ -396,7 +408,7 @@ GC_TEST(PartialArray, PageOffsetChunkRoundtrips)
     Heap::OnHeapExtended(savedEnd);
 }
 
-#ifdef MRT_TESTABLE_INTERNALS
+#if defined(MRT_TESTABLE_INTERNALS) && !defined(MRT_PARTIAL_ARRAY_FORCED_INTERNALS)
 GC_TEST(PartialArray, EncodableRejectsAbsoluteOnlyAlignment)
 {
     // B=4097 and any page-aligned A form the absolute-only counterexample:
@@ -545,8 +557,19 @@ void CheckBoundaryRefsProduct(size_t n, size_t contentPhase, bool misalignedBase
     collector.TraceObjectRefFields(reinterpret_cast<BaseObject*>(buf.array), workStack);
 
     bool sawPartial = false;
-    for (const MarkStackEntry& entry : workStack) {
+    std::vector<MarkStackEntry> pending;
+    pending.reserve(workStack.size());
+    while (!workStack.empty()) {
+        const MarkStackEntry entry = workStack.back();
+        workStack.pop_back();
         sawPartial = sawPartial || MarkPartialArray::IsPartialArrayEntry(entry);
+        pending.push_back(entry);
+    }
+    // MarkStack intentionally exposes only push/pop/drain operations; restore
+    // the entries after the inspection so the product consumer below drains
+    // the exact same work set.
+    for (auto it = pending.rbegin(); it != pending.rend(); ++it) {
+        workStack.push_back(*it);
     }
     // The relative predicate must inline the misaligned-base arm, while both
     // legal phases must enqueue at least one partial chunk.  This assertion is
