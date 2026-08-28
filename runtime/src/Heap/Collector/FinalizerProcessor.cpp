@@ -18,7 +18,11 @@
 #include "CjScheduler.h"
 
 namespace MapleRuntime {
-constexpr U32 DEFAULT_FINALIZER_TIMEOUT_MS = 2000;
+#if defined(MRT_TESTABLE_INTERNALS)
+namespace {
+FinalizerProcessor::BeforeFinalizableIdleCheck g_beforeFinalizableIdleCheckForTest;
+}
+#endif
 
 static BaseObject* LoadFinalizerGood(RootSlot& slot)
 {
@@ -69,8 +73,8 @@ void FinalizerProcessor::Start()
 // Should only invoke once.
 void FinalizerProcessor::Stop()
 {
-    CHECK_DETAIL(running == true, "invalid finalizerProcessor status");
-    running = false;
+    CHECK_DETAIL(running.load(std::memory_order_acquire), "invalid finalizerProcessor status");
+    running.store(false, std::memory_order_release);
     Notify();
     WaitStop();
 }
@@ -78,12 +82,10 @@ void FinalizerProcessor::Stop()
 FinalizerProcessor::FinalizerProcessor()
 {
     started = false;
-    running = false;
-    iterationWaitTime = DEFAULT_FINALIZER_TIMEOUT_MS;
+    running.store(false, std::memory_order_relaxed);
     timeProcessorBegin = 0;
     timeProcessUsed = 0;
     timeCurrentProcessBegin = 0;
-    hasFinalizableJob.store(false, std::memory_order_relaxed);
     shouldReclaimHeapGarbage.store(false, std::memory_order_relaxed);
     shouldFeedHungryBuffers.store(false, std::memory_order_relaxed);
 }
@@ -92,14 +94,14 @@ void FinalizerProcessor::Run()
 {
     Init();
     NotifyStarted();
-    while (running) {
+    while (running.load(std::memory_order_acquire)) {
         bool hasPendingFinalizableJob = false;
         bool hasPendingReclaimHeapGarbage = false;
         bool hasPendingFeedHungryBuffers = false;
         {
             MRT_PHASE_TIMER("finalizerProcessor waitting time", FINALIZE);
-            while (running) {
-                hasPendingFinalizableJob = hasFinalizableJob.load(std::memory_order_relaxed);
+            while (running.load(std::memory_order_acquire)) {
+                hasPendingFinalizableJob = HasFinalizableJob();
                 hasPendingReclaimHeapGarbage =
                     shouldReclaimHeapGarbage.exchange(false, std::memory_order_acq_rel);
                 hasPendingFeedHungryBuffers =
@@ -107,11 +109,11 @@ void FinalizerProcessor::Run()
                 if (hasPendingFinalizableJob || hasPendingReclaimHeapGarbage || hasPendingFeedHungryBuffers) {
                     break;
                 }
-                Wait(iterationWaitTime);
+                Wait();
             }
         }
 
-        if (!running) {
+        if (!running.load(std::memory_order_acquire)) {
             break;
         }
 
@@ -146,7 +148,7 @@ void FinalizerProcessor::Init()
     MutatorManager::Instance().MutatorManagementRLock();
     fpMutator = nullptr;
     MutatorManager::Instance().MutatorManagementRUnlock();
-    running = true;
+    running.store(true, std::memory_order_release);
     timeProcessorBegin = TimeUtil::MicroSeconds();
     timeProcessUsed = 0;
     LOG(RTLOG_INFO, "FinalizerProcessor thread started");
@@ -176,13 +178,21 @@ void FinalizerProcessor::WaitStop()
     threadHandle = 0;
 }
 
-void FinalizerProcessor::Notify() { wakeCondition.notify_one(); }
+void FinalizerProcessor::Notify()
+{
+    std::lock_guard<std::mutex> lock(wakeLock);
+    wakeCondition.notify_one();
+}
 
-void FinalizerProcessor::Wait(U32 timeoutMilliSeconds)
+void FinalizerProcessor::Wait()
 {
     std::unique_lock<std::mutex> lock(wakeLock);
-    std::chrono::milliseconds epoch(timeoutMilliSeconds);
-    wakeCondition.wait_for(lock, epoch);
+    wakeCondition.wait(lock, [this] {
+        return !running.load(std::memory_order_acquire) ||
+            HasFinalizableJob() ||
+            shouldReclaimHeapGarbage.load(std::memory_order_acquire) ||
+            shouldFeedHungryBuffers.load(std::memory_order_acquire);
+    });
 }
 
 void FinalizerProcessor::NotifyStarted()
@@ -204,31 +214,56 @@ void FinalizerProcessor::WaitStarted()
     startedCondition.wait(lock, [this] { return started; });
 }
 
-void FinalizerProcessor::EnqueueFinalizables(const std::function<bool(BaseObject*)>& finalizable, U32 countLimit)
+bool FinalizerProcessor::EnqueueFinalizableReference(BaseObject* candidate)
 {
     std::lock_guard<std::mutex> l(listLock);
-    U32 enqueued = 0;
     auto it = finalizers.begin();
-    while (it != finalizers.end() && countLimit != 0) {
+    while (it != finalizers.end()) {
         BaseObject* obj = LoadFinalizerGood(*it);
-        --countLimit;
         if (obj == nullptr || HeapFiller::IsFiller(obj)) {
             it = finalizers.erase(it);
             continue;
         }
-        if (finalizable(obj)) {
-            finalizables.push_back(*it);
-            it = finalizers.erase(it);
-            ++enqueued;
-        } else {
+        if (obj != candidate) {
             ++it;
+            continue;
         }
+        finalizables.splice(finalizables.end(), finalizers, it);
+        hasFinalizableJob = true;
+        VLOG(REPORT, "enqueued finalizer %p", candidate);
+        return true;
     }
+    return false;
+}
 
-    if (!finalizables.empty()) {
-        hasFinalizableJob.store(true, std::memory_order_relaxed);
+void FinalizerProcessor::ProcessReferences(const ReferenceProcessor::IsStronglyLive& isStronglyLive)
+{
+    referenceProcessor.ProcessReferences(isStronglyLive);
+    bool enqueued = false;
+    referenceProcessor.EnqueueReferences(
+        [this, &enqueued](BaseObject* obj) { enqueued = EnqueueFinalizableReference(obj) || enqueued; });
+    if (enqueued) {
+        Notify();
     }
-    VLOG(REPORT, "enqueued finalizers %u", enqueued);
+}
+
+bool FinalizerProcessor::HasFinalizableJob()
+{
+    std::lock_guard<std::mutex> l(listLock);
+    CHECK_DETAIL(hasFinalizableJob == !finalizables.empty(),
+                 "finalizable job predicate must match queue state");
+    return hasFinalizableJob;
+}
+
+void FinalizerProcessor::FinishFinalizableBatch()
+{
+#if defined(MRT_TESTABLE_INTERNALS)
+    if (g_beforeFinalizableIdleCheckForTest) {
+        g_beforeFinalizableIdleCheckForTest();
+    }
+#endif
+    std::lock_guard<std::mutex> l(listLock);
+    hasFinalizableJob = !finalizables.empty();
 }
 
 // Process finalizable list
@@ -239,7 +274,7 @@ void FinalizerProcessor::EnqueueFinalizables(const std::function<bool(BaseObject
 void FinalizerProcessor::ProcessFinalizableList()
 {
     auto itor = workingFinalizables.begin();
-    while (itor != workingFinalizables.end() && running) {
+    while (itor != workingFinalizables.end() && running.load(std::memory_order_acquire)) {
         // keep GC thread from visiting roots when workingFinalizables list is updating
         ScopedObjectAccess soa;
         CHECK_DETAIL(ExceptionManager::GetPendingException() == nullptr, "should not exist pending exception");
@@ -291,10 +326,37 @@ void FinalizerProcessor::ProcessFinalizables()
     }
     DLOG(FINALIZE, "finalizer: working size %zu", workingFinalizables.size());
     ProcessFinalizableList();
-    if (finalizables.empty()) {
-        hasFinalizableJob.store(false, std::memory_order_relaxed);
-    }
+    FinishFinalizableBatch();
 }
+
+#if defined(MRT_TESTABLE_INTERNALS)
+void FinalizerProcessor::SetBeforeFinalizableIdleCheckForTest(BeforeFinalizableIdleCheck hook)
+{
+    g_beforeFinalizableIdleCheckForTest = std::move(hook);
+}
+
+void FinalizerProcessor::EnqueueFinalizableForTest(BaseObject* obj)
+{
+    RootSlot root;
+    StorePlain(root, from_object(obj));
+    {
+        std::lock_guard<std::mutex> l(listLock);
+        finalizables.push_back(root);
+        hasFinalizableJob = true;
+    }
+    Notify();
+}
+
+void FinalizerProcessor::FinishFinalizableBatchForTest()
+{
+    FinishFinalizableBatch();
+}
+
+bool FinalizerProcessor::HasFinalizableJobForTest()
+{
+    return HasFinalizableJob();
+}
+#endif
 
 void FinalizerProcessor::InitFinalizerCJThread()
 {

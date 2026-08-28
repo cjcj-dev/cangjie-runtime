@@ -793,8 +793,8 @@ public:
     // (zLiveMap.inline.hpp:38-40,86-90); this copy is the equivalent persistent carrier.
     static constexpr bool RetainedOwnCopyEnabled() { return true; }
 
-    // Copy the page's one ordinary livemap plus resurrection bits into the
-    // retained owner. No generation-dependent face union is needed.
+    // Copy the page's paired livemap into the retained owner. markWords is the
+    // live plane, so it already includes finalizable-only objects.
     void CaptureRetainedMarkWords(LiveInfo* liveInfo, uint64_t epoch, uint8_t largeMarked)
     {
         FreeRetainedMarkWords();
@@ -819,24 +819,15 @@ public:
         LiveInfo::MarkFace& markFace = liveInfo->GetMarkFace();
         RegionBitmap* mark = markFace.epoch.load(std::memory_order_acquire) == epoch
             ? __atomic_load_n(&markFace.bitmap, std::memory_order_acquire) : nullptr;
-        RegionBitmap* resurrect = liveInfo->resurrectBitmap;
         size_t markWords = mark == nullptr ? 0 : mark->wordCnt.load(std::memory_order_acquire);
-        size_t resurrectWords = resurrect == nullptr ? 0 : resurrect->wordCnt.load(std::memory_order_acquire);
-        size_t wordCnt = std::max(markWords, resurrectWords);
+        size_t wordCnt = markWords;
         if (wordCnt == 0) {
             return;
         }
         uint64_t* words = static_cast<uint64_t*>(malloc(wordCnt * sizeof(uint64_t)));
         CHECK(words != nullptr);
         for (size_t i = 0; i < wordCnt; ++i) {
-            uint64_t bits = 0;
-            if (i < markWords) {
-                bits |= mark->markWords[i].load(std::memory_order_acquire);
-            }
-            if (i < resurrectWords) {
-                bits |= resurrect->markWords[i].load(std::memory_order_acquire);
-            }
-            words[i] = bits;
+            words[i] = mark->markWords[i].load(std::memory_order_acquire);
         }
         metadata.retainedMarkWords = words;
         metadata.retainedMarkWordCnt = static_cast<uint32_t>(wordCnt);
@@ -847,7 +838,8 @@ public:
         return IsRetainedLifeCurrent() && metadata.retainedMarkWords != nullptr;
     }
 
-    // Same indexing as RegionBitmap::IsMarked.
+    // Same paired-bit indexing as RegionBitmap::IsLive. Retained words answer
+    // liveness, so they read the low bit of each live/strong pair.
     bool RetainedMarkWordsSay(size_t offset) const
     {
         if (!IsRetainedLifeCurrent()) {
@@ -856,7 +848,7 @@ public:
         if (metadata.retainedMarkWords == nullptr) {
             return false;
         }
-        size_t bitIdx = offset / kMarkedBytesPerBit;
+        size_t bitIdx = 2 * (offset / kMarkedBytesPerBit);
         size_t wordIdx = bitIdx / kBitsPerWord;
         if (wordIdx >= metadata.retainedMarkWordCnt) {
             return false;
@@ -1086,8 +1078,6 @@ public:
                 allocatedLiveInfo->bindedRegion = this;
                 allocatedLiveInfo->GetMarkFace().epoch = 0;
                 allocatedLiveInfo->GetMarkFace().bitmap = nullptr;
-                allocatedLiveInfo->resurrectBitmap = nullptr;
-                allocatedLiveInfo->enqueueBitmap = nullptr;
                 __atomic_store_n(&metadata.liveInfo, allocatedLiveInfo, std::memory_order_release);
                 DLOG(REGION, "region %p@%#zx liveinfo %p", this, GetRegionStart(), metadata.liveInfo);
                 return allocatedLiveInfo;
@@ -1152,84 +1142,6 @@ public:
         return nullptr;
     }
 
-    RegionBitmap* GetResurrectBitmap()
-    {
-        LiveInfo* liveInfo = GetLiveInfo();
-        if (liveInfo == nullptr) {
-            return nullptr;
-        }
-        RegionBitmap* bitmap = __atomic_load_n(&liveInfo->resurrectBitmap, std::memory_order_acquire);
-        if (reinterpret_cast<MAddress>(bitmap) == LiveInfo::TEMPORARY_PTR) {
-            return nullptr;
-        }
-        return bitmap;
-    }
-
-    RegionBitmap* GetOrAllocResurrectBitmap()
-    {
-        LiveInfo* liveInfo = GetOrAllocLiveInfo();
-        do {
-            RegionBitmap* bitmap = __atomic_load_n(&liveInfo->resurrectBitmap, std::memory_order_acquire);
-            if (UNLIKELY(reinterpret_cast<uintptr_t>(bitmap) == LiveInfo::TEMPORARY_PTR)) {
-                continue;
-            }
-            if (LIKELY(bitmap != nullptr)) {
-                return bitmap;
-            }
-            RegionBitmap* newValue = reinterpret_cast<RegionBitmap*>(LiveInfo::TEMPORARY_PTR);
-            if (__atomic_compare_exchange_n(&liveInfo->resurrectBitmap, &bitmap, newValue, false,
-                                            std::memory_order_seq_cst, std::memory_order_relaxed)) {
-                RegionBitmap* allocated =
-                    ForwardDataManager::GetForwardDataManager().AllocateRegionBitmap(GetRegionSize());
-                __atomic_store_n(&liveInfo->resurrectBitmap, allocated, std::memory_order_release);
-                DLOG(REGION, "region %p@%#zx resurrectbitmap %p", this, GetRegionStart(),
-                     metadata.liveInfo->resurrectBitmap);
-                return allocated;
-            }
-        } while (true);
-
-        return nullptr;
-    }
-
-    RegionBitmap* GetEnqueueBitmap()
-    {
-        LiveInfo* liveInfo = GetLiveInfo();
-        if (liveInfo == nullptr) {
-            return nullptr;
-        }
-        RegionBitmap* bitmap = __atomic_load_n(&liveInfo->enqueueBitmap, std::memory_order_acquire);
-        if (reinterpret_cast<MAddress>(bitmap) == LiveInfo::TEMPORARY_PTR) {
-            return nullptr;
-        }
-        return bitmap;
-    }
-
-    RegionBitmap* GetOrAllocEnqueueBitmap()
-    {
-        LiveInfo* liveInfo = GetOrAllocLiveInfo();
-        do {
-            RegionBitmap* bitmap = __atomic_load_n(&liveInfo->enqueueBitmap, std::memory_order_acquire);
-            if (UNLIKELY(reinterpret_cast<uintptr_t>(bitmap) == LiveInfo::TEMPORARY_PTR)) {
-                continue;
-            }
-            if (LIKELY(bitmap != nullptr)) {
-                return bitmap;
-            }
-            RegionBitmap* newValue = reinterpret_cast<RegionBitmap*>(LiveInfo::TEMPORARY_PTR);
-            if (__atomic_compare_exchange_n(&liveInfo->enqueueBitmap, &bitmap, newValue, false,
-                                            std::memory_order_seq_cst, std::memory_order_relaxed)) {
-                RegionBitmap* allocated =
-                    ForwardDataManager::GetForwardDataManager().AllocateRegionBitmap(GetRegionSize());
-                __atomic_store_n(&liveInfo->enqueueBitmap, allocated, std::memory_order_release);
-                DLOG(REGION, "region %p@%#zx enqueuebitmap %p", this, GetRegionStart(),
-                     metadata.liveInfo->enqueueBitmap);
-                return allocated;
-            }
-        } while (true);
-
-        return nullptr;
-    }
-
     template<Generation G>
     uint8_t GetMarkedRegionFlag(MarkView<G> view) const
     {
@@ -1280,7 +1192,6 @@ public:
             PreserveRetainedLiveInfo();
         }
         SetMarkedRegionFlag(view, 0);
-        SetEnqueuedRegionFlag(0);
         SetResurrectedRegionFlag(0);
     }
 
@@ -1380,7 +1291,8 @@ public:
         }
         VerifyMarkFaceOwner<G>(obj, "RegionInfo::MarkObject.unsized");
         if (IsLargeRegion()) {
-            if (TryPublishLargeFace(view, obj->GetSize())) {
+            const uint64_t bytes = metadata.isResurrected == 1 ? 0 : obj->GetSize();
+            if (TryPublishLargeFace(view, bytes)) {
                 PublishCurrentMarkFace();
                 NotePageOwnerFirstPaint<G>();
                 return false;
@@ -1396,8 +1308,9 @@ public:
         size_t regionSize = regionEnd - regionStart;
         RegionBitmap* writeBm = GetOrAllocMarkBitmap(view);
 
-        bool already = writeBm->MarkBits(offset, objSize, regionSize);
-        if (!already) {
+        bool incLive = false;
+        bool already = writeBm->MarkBits(offset, objSize, regionSize, incLive);
+        if (incLive) {
             AddLiveByteCount(objSize);
             PublishCurrentMarkFace();
             NotePageOwnerFirstPaint<G>();
@@ -1410,16 +1323,19 @@ public:
     }
 
     template<Generation G>
-    bool MarkObject(MarkView<G> view, const BaseObject* obj, size_t objSize, bool accountLive = true)
+    bool MarkObject(MarkView<G> view, const BaseObject* obj, size_t objSize, bool accountLive, bool& incLive)
     {
         CHECK(view.GetRegion() == this);
         VerifyMarkFaceOwner<G>(obj, "RegionInfo::MarkObject.sized");
         if (IsLargeRegion()) {
-            if (TryPublishLargeFace(view, accountLive ? objSize : 0)) {
+            incLive = metadata.isResurrected != 1;
+            const uint64_t bytes = accountLive && incLive ? objSize : 0;
+            if (TryPublishLargeFace(view, bytes)) {
                 PublishCurrentMarkFace();
                 NotePageOwnerFirstPaint<G>();
                 return false;
             }
+            incLive = false;
             return true;
         }
         MAddress objAddr = reinterpret_cast<MAddress>(obj);
@@ -1430,8 +1346,9 @@ public:
         size_t regionSize = regionEnd - regionStart;
         RegionBitmap* writeBm = GetOrAllocMarkBitmap(view);
 
-        bool already = writeBm->MarkBits(offset, objSize, regionSize);
-        if (!already) {
+        incLive = false;
+        bool already = writeBm->MarkBits(offset, objSize, regionSize, incLive);
+        if (incLive) {
             if (accountLive) {
                 AddLiveByteCount(objSize);
             }
@@ -1443,6 +1360,13 @@ public:
                                               "MarkObject_sized", G);
         CHECK(IsMarkedObject(view, offset));
         return already;
+    }
+
+    template<Generation G>
+    bool MarkObject(MarkView<G> view, const BaseObject* obj, size_t objSize, bool accountLive = true)
+    {
+        bool incLive = false;
+        return MarkObject(view, obj, objSize, accountLive, incLive);
     }
 
     bool MarkObjectByOwner(const BaseObject* obj)
@@ -1461,9 +1385,21 @@ public:
         return MarkObject(GetMarkView<Generation::Old>(), obj, objSize, accountLive);
     }
 
+    bool MarkObjectByOwner(const BaseObject* obj, size_t objSize, bool accountLive, bool& incLive)
+    {
+        if (IsYoungRegion()) {
+            return MarkObject(GetMarkView<Generation::Young>(), obj, objSize, accountLive, incLive);
+        }
+        return MarkObject(GetMarkView<Generation::Old>(), obj, objSize, accountLive, incLive);
+    }
+
     bool ResurrectObject(const BaseObject* obj, size_t offset)
     {
         if (IsLargeRegion()) {
+            MarkView<Generation::Old> view = GetMarkView<Generation::Old>();
+            if (GetMarkedRegionFlag(view) != 0) {
+                return true;
+            }
             if (metadata.isResurrected != 1) {
                 SetResurrectedRegionFlag(1);
                 AddLiveByteCount(obj->GetSize());
@@ -1476,72 +1412,43 @@ public:
         MAddress regionEnd = GetRegionEnd();
         CheckObjectSize(obj, objSize, regionStart, regionEnd);
         size_t regionSize = regionEnd - regionStart;
-        RegionBitmap* bitmap = GetOrAllocResurrectBitmap();
-
-        bool already = bitmap->MarkBits(offset, objSize, regionSize);
-        if (!already) {
+        MarkView<Generation::Old> view = GetMarkView<Generation::Old>();
+        RegionBitmap* bitmap = GetOrAllocMarkBitmap(view);
+        bool incLive = false;
+        bool already = bitmap->MarkFinalizableBits(offset, objSize, regionSize, incLive);
+        if (incLive) {
             AddLiveByteCount(objSize);
+            PublishCurrentMarkFace();
         }
-        CHECK(bitmap->IsMarked(offset));
+        CHECK(bitmap->IsLive(offset));
         return already;
-    }
-
-    bool EnqueueObject(const BaseObject* obj, size_t offset)
-    {
-        if (IsFreeRegion() || IsGarbageRegion() || GetRegionType() == RegionType::FREE_REGION) {
-            return true;
-        }
-        if (!PlausibleManagedObjectGate("RegionInfo::EnqueueObject", const_cast<BaseObject*>(obj))) {
-            // Rejected objects are reported as already enqueued: ShouldEnqueue
-            // treats true as "do not SATB-push". Lost work is the SATB entry and
-            // the later mark/trace of this address; if the gate ever rejects a
-            // real object, that object's SATB-driven liveness is the miss.
-            return true;
-        }
-        if (IsLargeRegion()) {
-            if (metadata.isEnqueued != 1) {
-                SetEnqueuedRegionFlag(1);
-                return false;
-            }
-            return true;
-        }
-        U32 objSize = obj->GetSize();
-        MAddress regionStart = GetRegionStart();
-        MAddress regionEnd = GetRegionEnd();
-        CheckObjectSize(obj, objSize, regionStart, regionEnd);
-        size_t regionSize = regionEnd - regionStart;
-        CHECK(regionSize > 0);
-        RegionBitmap* bitmap = GetOrAllocEnqueueBitmap();
-        // enqueue face is not the route geometry face; still report if mark-face sealed.
-
-        bool marked = bitmap->MarkBits(offset, objSize, regionSize);
-        CHECK(bitmap->IsMarked(offset));
-        return marked;
     }
 
     bool IsResurrectedObject(const BaseObject* obj)
     {
         if (IsLargeRegion()) {
-            return (metadata.isResurrected == 1);
+            MarkView<Generation::Old> view = GetMarkView<Generation::Old>();
+            return metadata.isResurrected == 1 && GetMarkedRegionFlag(view) == 0;
         }
-        RegionBitmap* resurrectBitmap = GetResurrectBitmap();
-        if (resurrectBitmap == nullptr) {
+        RegionBitmap* bitmap = GetMarkBitmap(GetMarkView<Generation::Old>());
+        if (bitmap == nullptr) {
             return false;
         }
         size_t offset = GetAddressOffset(reinterpret_cast<MAddress>(obj));
-        return resurrectBitmap->IsMarked(offset);
+        return bitmap->IsFinalizable(offset);
     }
 
     bool IsResurrectedObject(size_t offset)
     {
         if (IsLargeRegion()) {
-            return (metadata.isResurrected == 1);
+            MarkView<Generation::Old> view = GetMarkView<Generation::Old>();
+            return metadata.isResurrected == 1 && GetMarkedRegionFlag(view) == 0;
         }
-        RegionBitmap* resurrectBitmap = GetResurrectBitmap();
-        if (resurrectBitmap == nullptr) {
+        RegionBitmap* bitmap = GetMarkBitmap(GetMarkView<Generation::Old>());
+        if (bitmap == nullptr) {
             return false;
         }
-        return resurrectBitmap->IsMarked(offset);
+        return bitmap->IsFinalizable(offset);
     }
 
     // markepoch: count reads of a LiveInfo whose markEpoch != region snapshotEpoch.
@@ -1710,29 +1617,11 @@ public:
             RegionBitmap* markBitmap =
                 __atomic_load_n(&liveInfo->GetMarkFace().bitmap, std::memory_order_acquire);
             if (markBitmap != nullptr && reinterpret_cast<MAddress>(markBitmap) != LiveInfo::TEMPORARY_PTR &&
-                markBitmap->IsMarked(offset)) {
-                return true;
-            }
-        }
-        if (G == Generation::Old) {
-            RegionBitmap* resurrectBitmap =
-                __atomic_load_n(&liveInfo->resurrectBitmap, std::memory_order_acquire);
-            if (resurrectBitmap != nullptr &&
-                reinterpret_cast<MAddress>(resurrectBitmap) != LiveInfo::TEMPORARY_PTR &&
-                resurrectBitmap->IsMarked(offset)) {
+                markBitmap->IsLive(offset)) {
                 return true;
             }
         }
         return false;
-    }
-
-    bool IsEnqueuedObject(size_t offset)
-    {
-        RegionBitmap* enqueBitmap = GetEnqueueBitmap();
-        if (enqueBitmap == nullptr) {
-            return false;
-        }
-        return enqueBitmap->IsMarked(offset);
     }
 
     ALWAYS_INLINE size_t GetAddressOffset(MAddress address)
@@ -2947,10 +2836,6 @@ public:
         metadata.regionStateBitField.SetAtomicValue(RegionStateBitPos::MARKED_REGION_FLAG, 1, flag);
     }
 
-    void SetEnqueuedRegionFlag(uint8_t flag)
-    {
-        metadata.regionStateBitField.SetAtomicValue(RegionStateBitPos::ENQUEUED_REGION_FLAG, 1, flag);
-    }
     void SetResurrectedRegionFlag(uint8_t flag)
     {
         metadata.regionStateBitField.SetAtomicValue(RegionStateBitPos::RESURRECTED_REGION_FLAG, 1, flag);
@@ -2978,7 +2863,6 @@ public:
                      "cannot promote region %p through a stale young mark view", this);
         __atomic_store_n(&metadata.liveInfo, static_cast<LiveInfo*>(nullptr), std::memory_order_release);
         SetOldMarkedRegionFlag(0);
-        SetEnqueuedRegionFlag(0);
         SetResurrectedRegionFlag(0);
         __atomic_store_n(&metadata.liveByteCount, LIVE_AUTHORITY_BIT, std::memory_order_release);
         metadata.markStartAllocPtr = 0;
@@ -3378,7 +3262,7 @@ public:
         }
         // Examined: either large, or we had a mark face this cycle that is now stale/null
         // (authority already required by IsKnownEmpty). Residual bitmap pointer may remain.
-        return GetMarkBitmap(view) != nullptr || GetResurrectBitmap() != nullptr || IsLargeRegion() ||
+        return GetMarkBitmap(view) != nullptr || IsLargeRegion() ||
             __atomic_load_n(&metadata.liveInfo, std::memory_order_acquire) != nullptr;
     }
 
@@ -3609,7 +3493,6 @@ private:
         TRACE_REGION_FLAG = BIT_LENGTH,
         IN_GHOST_FROM_REGION_FLAG,
         MARKED_REGION_FLAG,
-        ENQUEUED_REGION_FLAG,
         RESURRECTED_REGION_FLAG,
         YOUNG_REGION_FLAG,
         YOUNG_AGE_FLAG
@@ -3700,7 +3583,7 @@ private:
         std::atomic<bool> fwdClaimed{ false };
         std::atomic<bool> fwdDone{ false };
         std::atomic<int32_t> fwdRefCount{ 0 };
-        // holderlive (F2): owned copy of the retained mark bits (mark | resurrect). Null unless
+        // holderlive (F2): owned copy of the paired livemap's live plane. Null unless
         // MRT_GCV2_RETAINED_OWN_COPY=1. Freed by ClearLiveInfo / InitRegionInfo.
         uint64_t* retainedMarkWords = nullptr;
         uint32_t retainedMarkWordCnt = 0;
@@ -3749,7 +3632,6 @@ private:
                 // FindToVersion().
                 uint8_t inGhostFromRegion : 1;
                 uint8_t isMarked : 1;
-                uint8_t isEnqueued : 1;
                 uint8_t isResurrected : 1;
             };
             BitField<uint16_t> regionStateBitField;
@@ -3875,11 +3757,6 @@ private:
         void SetOldMarkedRegionFlag(uint8_t flag)
         {
             metadata.regionStateBitField.SetAtomicValue(RegionStateBitPos::MARKED_REGION_FLAG, 1, flag);
-        }
-
-        void SetEnqueuedRegionFlag(uint8_t flag)
-        {
-            metadata.regionStateBitField.SetAtomicValue(RegionStateBitPos::ENQUEUED_REGION_FLAG, 1, flag);
         }
 
         void SetResurrectedRegionFlag(uint8_t flag)
@@ -4079,7 +3956,6 @@ private:
         // TakeRegion reuses garbage without DispelGhostFromRegion (RegionInfo.h:667-698).
         SetInGhostRegion(0);
         SetOldMarkedRegionFlag(0);
-        SetEnqueuedRegionFlag(0);
         SetResurrectedRegionFlag(0);
         SetYoungRegionFlag(0);
         SetMarkFaceSealed(false);

@@ -126,14 +126,11 @@ static_assert(REMEMBERED_BITS <= TAG_ID_PADDING_BITS,
 // is permanently mark-bad and a strong mark/keep-alive barrier is forced down the slow path,
 // where the object is upgraded to strongly reachable (zBarrier.inline.hpp:610-620).
 //
-// We do not carry that state in the pointer. Our equivalent lives in a side table:
-// LiveInfo.h:204 resurrectBitmap, folded into liveness by LiveInfo.h:210 / Heap.cpp:76, and
-// filled by TracingCollector.cpp:696-697 DoResurrection -- which runs inside the concurrent
-// marking segment (TracingCollector.cpp:680-698), so "unreachable by schedule" is not available
-// as an argument. The bits are reserved here, and only reserved: kFinalizableWired says so, no
-// live mask includes them, and nothing publishes them. What this buys is that the padding budget
-// is now checked by the compiler instead of by a comment, and that the state machine table
-// (runtime/tests/colour_state_machine_probe.cpp) can name the cell we are missing.
+// We do not carry that state in the pointer. The product equivalent is the live/strong pair in
+// RegionBitmap (LiveInfo.h), published by the same MarkFace epoch. The bits below remain reserved
+// only for a future pointer fast path: kFinalizableWired describes pointer colouring, not whether
+// the livemap pair exists. This keeps the compiler ABI atom unchanged while reference processing
+// gains the ZLiveMap state distinction.
 constexpr unsigned FINALIZABLE_BITS = 2u;
 constexpr unsigned FINALIZABLE_SHIFT = REMEMBERED_SHIFT + REMEMBERED_BITS;
 constexpr uintptr_t FINALIZABLE_0 = uintptr_t(1) << FINALIZABLE_SHIFT;

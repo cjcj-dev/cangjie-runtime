@@ -17,6 +17,7 @@ set(SRC_LIST
     "MarkStripe.cpp"
     "TaskQueue.cpp"
     "FinalizerProcessor.cpp"
+    "ReferenceProcessor.cpp"
     "CopyCollector.cpp"
     "LiveInfo.cpp"
     "ForwardDataManager.cpp"

@@ -316,17 +316,10 @@ public:
                     continue;
                 }
                 SurvNodeDiag::NoteFollowHolder(obj, SurvNodeDiag::FOLLOW_SCAN);
-                // Skip marking the weakRef itself, but trace its children node
+                // A weak referent is only discovery input.  Any strong work
+                // published here would keep the referent graph alive.
                 if (UNLIKELY(obj->IsWeakRef())) {
-                    HeapSlot<>& referentField =
-                        HeapSlotAt<>(reinterpret_cast<uintptr_t>(obj) + TYPEINFO_PTR_SIZE);
-                    BaseObject* referent =
-                        collector.GetAndTryTagObj(TracingCollector::RefSlotKind::WEAK_REFERENT, obj, referentField);
-                    if (referent != nullptr) {
-                        DLOG(TRACE, "trace weakref obj %p ref@%p: 0x%zx", obj, &referent, referent);
-                        collector.TraceObjectRefFields(referent, workStack);
-                        WeakRefBuffer::Instance().Insert(obj); // record live weakref objects
-                    } // If referent is set to none, the corresponding weakref does not need to be recorded.
+                    collector.DiscoverWeakReference(obj, workStack);
                 } else {
                     collector.TraceObjectRefFields(obj, workStack);
                 }
@@ -487,6 +480,21 @@ void TracingCollector::VisitStackRoots(const RootVisitor& visitor, RegSlotsMap& 
 #endif
     heapMap.RecordCalleeSaved(regSlotsMap);
 
+}
+
+void TracingCollector::DiscoverWeakReference(BaseObject* reference, WorkStack& workStack)
+{
+    HeapSlot<>& referentField =
+        HeapSlotAt<>(reinterpret_cast<uintptr_t>(reference) + TYPEINFO_PTR_SIZE);
+    BaseObject* referent = GetAndTryTagObj(RefSlotKind::WEAK_REFERENT, reference, referentField);
+    if (referent == nullptr) {
+        return;
+    }
+    DLOG(TRACE, "trace weakref obj %p ref@%p: 0x%zx", reference, &referent, referent);
+    CHECK(DiscoverReference(reference, ReferenceType::WEAK) == ReferenceStatus::DISCOVERED);
+    // Deliberately no push/TraceObjectRefFields(referent): discovery must not
+    // publish the weak referent into the strong marking work stack.
+    (void)workStack;
 }
 
 void TracingCollector::VisitHeapReferencesOnStack(const RootVisitor& rootVisitor,
@@ -907,6 +915,7 @@ void TracingCollector::DoResurrection(WorkStack& workStack)
         BaseObject* finalizerObj = to_object(tmpField.GetTargetObject());
         if (!IsMarkedObject<Generation::Old>(finalizerObj)) {
             DLOG(TRACE, "resurrectable obj @%p:%p", &ref, finalizerObj);
+            CHECK(DiscoverReference(finalizerObj, ReferenceType::FINAL) == ReferenceStatus::DISCOVERED);
             workStack.push_back(finalizerObj);
         }
         if (raw(ref.LoadPlain()) != reinterpret_cast<MAddress>(finalizerObj)) {
@@ -914,7 +923,7 @@ void TracingCollector::DoResurrection(WorkStack& workStack)
             DLOG(FIX, "heal finalizer %p@%p", finalizerObj, &ref);
         }
     };
-    snapshotFinalizerNum = collectorResources.GetFinalizerProcessor().VisitFinalizers(func);
+    (void)collectorResources.GetFinalizerProcessor().VisitFinalizers(func);
 
     size_t resurrectdObjects = 0;
     while (!workStack.empty()) {

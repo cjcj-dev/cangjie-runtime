@@ -17,6 +17,7 @@
 #include "Common/PageAllocator.h"
 #include "Common/TypeDef.h"
 #include "Heap/Collector/Collector.h"
+#include "Heap/Collector/ReferenceProcessor.h"
 
 namespace MapleRuntime {
 
@@ -77,15 +78,28 @@ public:
     void Fini();
     void WaitStop();
 
-    void EnqueueFinalizables(const std::function<bool(BaseObject*)>& finalizable, U32 countLimit = UINT_MAX);
     void RegisterFinalizer(BaseObject* obj);
     void RegisterFinalizers(ManagedList<RootSlot>& objs);
-    bool IsRunning() const { return running; }
+    bool IsRunning() const { return running.load(std::memory_order_acquire); }
     uint32_t GetTid() const { return tid; }
+    ReferenceProcessor& GetReferenceProcessor() { return referenceProcessor; }
+    void ProcessReferences(const ReferenceProcessor::IsStronglyLive& isStronglyLive);
+
+#if defined(MRT_TESTABLE_INTERNALS)
+    using BeforeFinalizableIdleCheck = std::function<void()>;
+    void SetBeforeFinalizableIdleCheckForTest(BeforeFinalizableIdleCheck hook);
+    void EnqueueFinalizableForTest(BaseObject* obj);
+    void FinishFinalizableBatchForTest();
+    bool HasFinalizableJobForTest();
+#endif
 
     Mutator* GetMutator() const { return fpMutator; }
 
-    void NotifyToReclaimGarbage() { shouldReclaimHeapGarbage.store(true); }
+    void NotifyToReclaimGarbage()
+    {
+        shouldReclaimHeapGarbage.store(true, std::memory_order_release);
+        Notify();
+    }
     void NotifyToFeedAllocBuffers()
     {
         shouldFeedHungryBuffers.store(true, std::memory_order_release);
@@ -95,7 +109,10 @@ public:
 private:
     void InitFinalizerCJThread();
     void NotifyStarted();
-    void Wait(U32 timeoutMilliSeconds);
+    void Wait();
+    bool EnqueueFinalizableReference(BaseObject* obj);
+    bool HasFinalizableJob();
+    void FinishFinalizableBatch();
     void ProcessFinalizables();
     void ProcessFinalizableList();
     void ReclaimHeapGarbage();
@@ -108,9 +125,7 @@ private:
     std::condition_variable startedCondition; // notify finalizerProcessor thread is started
     volatile bool started;
 
-    volatile bool running; // Initially false and set true after finalizerProcessor thread start, set false when stop
-
-    U32 iterationWaitTime;
+    std::atomic<bool> running{ false };
 
     // finalization
     std::mutex listLock;                 // lock for finalizers & finalizables & workingFinalizables
@@ -120,8 +135,11 @@ private:
     ManagedList<RootSlot> finalizables;
 
     ManagedList<RootSlot> workingFinalizables; // FP working list, swap from finalizables
+    ReferenceProcessor referenceProcessor;
 
-    std::atomic<bool> hasFinalizableJob;
+    // Protected by listLock.  Queue non-emptiness and the cached predicate are
+    // one synchronization decision, so a worker cannot clear a later enqueue.
+    bool hasFinalizableJob = false;
     std::atomic<bool> shouldReclaimHeapGarbage;
     std::atomic<bool> shouldFeedHungryBuffers;
 #if defined(MRT_DEBUG) && (MRT_DEBUG == 1)

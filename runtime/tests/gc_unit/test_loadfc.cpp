@@ -273,11 +273,15 @@ GC_TEST(LoadFc, BulkCopyHealthySourceReturnsNormally)
 GC_OTHER_VM_TEST(LoadFc, FinalizerHandOutFailsClosedOnZeroHeader)
 {
     LoadFcFixture fx;
-    fx.ClearTarget();
     FinalizerProcessor processor;
     processor.RegisterFinalizer(fx.heap.obj0);
+    const size_t offset = fx.heap.region0->GetAddressOffset(reinterpret_cast<MAddress>(fx.heap.obj0));
+    GC_EXPECT_FALSE(fx.heap.region0->ResurrectObject(fx.heap.obj0, offset));
+    GC_EXPECT_TRUE(processor.GetReferenceProcessor().DiscoverReference(
+                       fx.heap.obj0, ReferenceType::FINAL) == ReferenceStatus::DISCOVERED);
+    fx.ClearTarget();
 
     ExpectControlledAbort([&]() {
-        processor.EnqueueFinalizables([](BaseObject*) { return false; }, 1);
+        processor.ProcessReferences([](BaseObject*) { return false; });
     });
 }
