@@ -1170,13 +1170,13 @@ size_t RegionManager::StallAllocation(size_t size)
     if (requestGc) {
         bool anotherWave = false;
         do {
-#if defined(MRT_GC_UNIT_TESTS)
+#if defined(MRT_ALLOCATION_STALL_OBSERVE)
             if (allocationStallBeforeWaveTestHook) {
                 allocationStallBeforeWaveTestHook(*this);
             }
 #endif
             const uint64_t waveBoundary = allocationStallQueue.CaptureWaveBoundary();
-#if defined(MRT_GC_UNIT_TESTS)
+#if defined(MRT_ALLOCATION_STALL_OBSERVE)
             if (allocationStallGcTestHook) {
                 allocationStallGcTestHook(*this);
             } else
@@ -1192,7 +1192,7 @@ size_t RegionManager::StallAllocation(size_t size)
 #if !defined(MRT_ALLOCATION_STALL_CUT_SAFEREGION)
     ScopedEnterSaferegion enterSaferegion(false);
 #endif
-#if defined(MRT_GC_UNIT_TESTS)
+#if defined(MRT_ALLOCATION_STALL_OBSERVE)
     const bool satisfied = request.Wait(allocationStallBeforeWaitTestHook
         ? [this] { allocationStallBeforeWaitTestHook(*this); }
         : std::function<void()> {});
@@ -1208,7 +1208,7 @@ void RegionManager::FinishStalledAllocation(size_t claimedUnits)
     SatisfyStalledAllocations();
 }
 
-#if defined(MRT_GC_UNIT_TESTS)
+#if defined(MRT_ALLOCATION_STALL_OBSERVE)
 void RegionManager::SetAllocationStallTestHooks(AllocationStallTestHook beforeWave,
                                                 AllocationStallTestHook requestGc,
                                                 AllocationStallTestHook beforeWait)

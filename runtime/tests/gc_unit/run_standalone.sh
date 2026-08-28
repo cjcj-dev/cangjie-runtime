@@ -46,13 +46,20 @@ fi
 # suites into this executable so a partial product configuration fails at link.
 nm -D "$RUNTIME_LIB_DIR/libcangjie-runtime.so" >"$OUT/runtime-dynamic-symbols.txt"
 if /usr/bin/grep -Eq \
-    'ShouldWaitForIgnoredGcRequest|CJ_MRT_SetLargeArrayInitTestHooks' \
+    'ShouldWaitForIgnoredGcRequest|CJ_MRT_SetLargeArrayInitTestHooks|SetAllocationStallTestHooks|PendingStalledAllocations' \
     "$OUT/runtime-dynamic-symbols.txt"; then
   TEST_DEFINES+=(-DMRT_GC_UNIT_TESTS=1)
   echo "GC_UNIT_PRODUCT_CONFIGURATION=MRT_GC_UNIT_TESTS"
 else
   echo "GC_UNIT_PRODUCT_CONFIGURATION=DEFAULT"
 fi
+if /usr/bin/grep -Eq 'SetAllocationStallTestHooks|PendingStalledAllocations' \
+    "$OUT/runtime-dynamic-symbols.txt"; then
+  STALL_PRODUCT_OBSERVE=1
+else
+  STALL_PRODUCT_OBSERVE=0
+fi
+echo "STALL_PRODUCT_OBSERVE=$STALL_PRODUCT_OBSERVE"
 
 # The M0 counter accessor is deliberately absent from the default product. Compile its five
 # observer tests only when the linked SO was built with MRT_GC_UNIT_TESTS=ON.
@@ -199,6 +206,19 @@ for symbol in "${STANDALONE_SYMBOLS[@]}"; do
   fi
 done
 echo "GATE_STANDALONE_SYMBOLS_OK elf=$OUT/cj_gc_unit"
+STALL_TEST_DEFINED=$(nm "$OUT/cj_gc_unit" | /usr/bin/grep -c 'AllocationStall' || true)
+echo "STALL_TEST_DEFINED=$STALL_TEST_DEFINED"
+if [[ "$STALL_PRODUCT_OBSERVE" -eq 1 && "$STALL_TEST_DEFINED" -eq 0 ]]; then
+  echo "GC_UNIT_GATE_FAIL: product SO exports stall observers but the test ELF registered no AllocationStall tests" >&2
+  exit 8
+fi
+if [[ "$STALL_PRODUCT_OBSERVE" -eq 0 && "$STALL_TEST_DEFINED" -ne 0 ]]; then
+  echo "GC_UNIT_GATE_FAIL: stall tests compiled against a product SO with no stall observers" >&2
+  exit 8
+fi
+if [[ "$STALL_PRODUCT_OBSERVE" -eq 0 ]]; then
+  echo "STALL_SUITE=SKIP_DEFAULT_SO"
+fi
 
 # Fresh-process product-link arm for the one-shot ForwardingTable.  It binds
 # CompactRegion/ClearEntries from the same runtime SO as the full suite; no

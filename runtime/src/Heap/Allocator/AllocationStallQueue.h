@@ -12,6 +12,10 @@
 #include <functional>
 #include <mutex>
 
+#if defined(MRT_GC_UNIT_TESTS) || defined(MRT_TESTABLE_INTERNALS)
+#define MRT_ALLOCATION_STALL_OBSERVE 1
+#endif
+
 namespace MapleRuntime {
 
 // One object represents one blocked allocation.  It is deliberately owned by
@@ -72,7 +76,7 @@ public:
         gcInProgress = true;
         request.sequence = ++lastSequence;
         requests.push_back(&request);
-#if defined(MRT_GC_UNIT_TESTS)
+#if defined(MRT_ALLOCATION_STALL_OBSERVE)
         ++enqueued;
 #endif
 #if defined(MRT_ALLOCATION_STALL_CUT_ENQUEUE)
@@ -114,7 +118,7 @@ public:
             request->Satisfy(true);
 #endif
             ++satisfied;
-#if defined(MRT_GC_UNIT_TESTS)
+#if defined(MRT_ALLOCATION_STALL_OBSERVE)
             ++dequeued;
             ++satisfiedCount;
 #endif
@@ -130,7 +134,7 @@ public:
             AllocationStallRequest* request = requests.front();
             requests.pop_front();
             request->Satisfy(false);
-#if defined(MRT_GC_UNIT_TESTS)
+#if defined(MRT_ALLOCATION_STALL_OBSERVE)
             ++dequeued;
             ++failedCount;
 #endif
@@ -150,7 +154,7 @@ public:
         }
     }
 
-#if defined(MRT_GC_UNIT_TESTS)
+#if defined(MRT_ALLOCATION_STALL_OBSERVE)
     size_t Pending() const
     {
         std::lock_guard<std::mutex> lock(mutex);
@@ -184,7 +188,7 @@ private:
     uint64_t lastSequence{ 0 };
     size_t claimedUnits{ 0 };
     bool gcInProgress{ false };
-#if defined(MRT_GC_UNIT_TESTS)
+#if defined(MRT_ALLOCATION_STALL_OBSERVE)
     size_t enqueued{ 0 };
     size_t dequeued{ 0 };
     size_t satisfiedCount{ 0 };
