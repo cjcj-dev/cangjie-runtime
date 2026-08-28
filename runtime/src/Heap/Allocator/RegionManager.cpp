@@ -882,6 +882,20 @@ inline void RegionManager::UntagHugePage(RegionInfo* region, size_t num) const
 #endif
 }
 
+void FreeRegionManager::AddReleaseUnits(UnitIndex idx, UnitCount num)
+{
+    ScopedEnterSaferegion enterSaferegion(true);
+    RegionInfo* region = RegionInfo::TryGetRegionInfoAt(RegionInfo::GetUnitAddress(idx));
+    if (!ExtentReadyForReleasedCache(region)) {
+        AddDetachQuarantineUnits(idx, num, true, false);
+        return;
+    }
+    std::lock_guard<std::mutex> lg(releasedUnitTreeMutex);
+    if (UNLIKELY(!releasedUnitTree.MergeInsert(idx, num, true))) {
+        LOG(RTLOG_FATAL, "tid %d: failed to add release units [%u+%u, %u)", GetTid(), idx, num, idx + num);
+    }
+}
+
 size_t FreeRegionManager::ReleaseGarbageRegions(size_t targetCachedSize)
 {
     size_t dirtyBytes = dirtyUnitTree.GetTotalCount() * RegionInfo::UNIT_SIZE;
@@ -900,10 +914,11 @@ size_t FreeRegionManager::ReleaseGarbageRegions(size_t targetCachedSize)
         RegionInfo* region = RegionInfo::TryGetRegionInfoAt(RegionInfo::GetUnitAddress(idx));
         const bool detachReady = FromPageDetach::FromPageDetachCheck(
             region, FromPageDetach::Site::RELEASE_GARBAGE_UNITS);
+        const bool carrierReady = ExtentReadyForReleasedCache(region);
         CHECK_DETAIL(dirtyUnitTree.TakeUnits(num, idx, false),
                      "tid %d: failed to detach dirty units[%u+%u, %u)", GetTid(), idx, num, idx + num);
 
-        if (!detachReady) {
+        if (!detachReady || !carrierReady) {
             AddDetachQuarantineUnits(idx, num, false, false);
             dirtyBytes = dirtyUnitTree.GetTotalCount() * RegionInfo::UNIT_SIZE;
             continue;
@@ -950,6 +965,21 @@ size_t FreeRegionManager::UncommitIdleUnitsImpl(size_t maxBytes, uint64_t idleBe
                          idx + num);
             break;
         }
+        RegionInfo* region = RegionInfo::TryGetRegionInfoAt(RegionInfo::GetUnitAddress(idx));
+        bool inRelocate = false;
+        if (Heap::GetHeap().IsGcStarted()) {
+            const GCPhase phase = Heap::GetHeap().GetGCPhase();
+            inRelocate = phase == GCPhase::GC_PHASE_POST_TRACE ||
+                         phase == GCPhase::GC_PHASE_PREFORWARD ||
+                         phase == GCPhase::GC_PHASE_FORWARD;
+        }
+        if (inRelocate || !ExtentReadyForReleasedCache(region)) {
+            std::lock_guard<std::mutex> lockHold(releasedUnitTreeMutex);
+            CHECK_DETAIL(releasedUnitTree.MergeInsert(idx, num, true),
+                         "tid %d: failed to restore uncommit units under live forwarding [%u+%u, %u)",
+                         GetTid(), idx, num, idx + num);
+            break;
+        }
         const size_t requestedBytes = static_cast<size_t>(num) * RegionInfo::UNIT_SIZE;
         const size_t backendReleased = RegionInfo::ReleaseUnitsPartial(idx, num);
         const size_t released = Uncommitter::AccountReleased(requestedBytes, backendReleased);
@@ -992,9 +1022,6 @@ void FreeRegionManager::AddDetachQuarantineUnits(UnitIndex idx, UnitCount num, b
 
 size_t FreeRegionManager::ReleaseDetachQuarantineAfterMajor()
 {
-    if (!FromPageDetach::GateEnabled()) {
-        return 0;
-    }
     static constexpr uint8_t kMaxRechecks = 8;
     std::vector<DetachQuarantineEntry> pending;
     {
@@ -1012,14 +1039,17 @@ size_t FreeRegionManager::ReleaseDetachQuarantineAfterMajor()
         // post-PrepareForwardTable major closure retired the only route
         // generation that could have stamped the withheld address.
         region->SetRouteDestHold(0);
-        if (!FromPageDetach::FromPageDetachCheck(region, FromPageDetach::Site::MAJOR_RECHECK,
-                                                 FromPageDetach::Action::MAJOR_CLOSE)) {
+        (void)FromPageDetach::FromPageDetachCheck(region, FromPageDetach::Site::MAJOR_RECHECK,
+                                                  FromPageDetach::Action::MAJOR_CLOSE);
+        if (!ExtentReadyForReleasedCache(region)) {
             ++entry.rechecks;
             FromPageDetach::NoteQuarantineRecheckHeld();
-            CHECK_DETAIL(entry.rechecks <= kMaxRechecks,
-                         "CJRT_FROM_REUSE_GATE detach quarantine did not close idx=%u units=%u rechecks=%u max=%u",
-                         entry.idx, entry.num, static_cast<unsigned>(entry.rechecks),
-                         static_cast<unsigned>(kMaxRechecks));
+            if (FromPageDetach::GateEnabled()) {
+                CHECK_DETAIL(entry.rechecks <= kMaxRechecks,
+                             "CJRT_FROM_REUSE_GATE detach quarantine did not close idx=%u units=%u rechecks=%u max=%u",
+                             entry.idx, entry.num, static_cast<unsigned>(entry.rechecks),
+                             static_cast<unsigned>(kMaxRechecks));
+            }
             held.push_back(entry);
             continue;
         }
@@ -1341,7 +1371,8 @@ void RegionManager::ReclaimRegionToMarkQuarantine(RegionInfo* region)
 
 size_t RegionManager::ReleaseRegion(RegionInfo* region)
 {
-    if (!FromPageDetach::FromPageDetachCheck(region, FromPageDetach::Site::RELEASE_REGION)) {
+    if (!FromPageDetach::FromPageDetachCheck(region, FromPageDetach::Site::RELEASE_REGION) ||
+        !FreeRegionManager::ExtentReadyForReleasedCache(region)) {
         const size_t heldBytes = region->GetRegionSize();
         freeRegionManager.AddDetachQuarantineRegion(region, true);
         return heldBytes;

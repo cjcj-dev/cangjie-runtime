@@ -88,6 +88,9 @@ public:
     // generation still contains a forwarding whose from range overlaps this
     // region. It never changes table lifetime.
     static bool RetiredCovers(MAddress regionStart, size_t regionSize);
+    // Product hard condition for released-cache enqueue (zForwarding.cpp:171-181
+    // detach_page waits ref_count==0). Not gated by FromPageDetach GateEnabled.
+    static bool HasLiveCarrier(MAddress regionStart, size_t regionSize);
 
     // zForwardingTable.inline.hpp:43-62
     static ZForwarding* get(MAddress addr);

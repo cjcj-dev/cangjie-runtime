@@ -546,6 +546,17 @@ bool ForwardingTable::RetiredCovers(MAddress regionStart, size_t regionSize)
     return covers(g_retired) || covers(g_retiredAged);
 }
 
+bool ForwardingTable::HasLiveCarrier(MAddress regionStart, size_t regionSize)
+{
+    if (!Ready() || regionSize == 0) {
+        return false;
+    }
+    if (GetEntries(regionStart) != nullptr) {
+        return true;
+    }
+    return RetiredCovers(regionStart, regionSize);
+}
+
 ZForwarding* ForwardingTable::GetEntries(MAddress addr)
 {
     if (!Ready()) {

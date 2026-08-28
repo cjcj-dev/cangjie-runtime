@@ -120,6 +120,11 @@ size_t RegionSpace::UncommitIdleMemory()
     if (Heap::GetHeap().IsGcStarted() || Uncommitter::ShouldStopUncommit()) {
         return 0;
     }
+    const GCPhase startPhase = Heap::GetHeap().GetGCPhase();
+    if (startPhase == GCPhase::GC_PHASE_POST_TRACE || startPhase == GCPhase::GC_PHASE_PREFORWARD ||
+        startPhase == GCPhase::GC_PHASE_FORWARD) {
+        return 0;
+    }
     uint64_t delayNs = Uncommitter::DelayNs();
     uint64_t now = TimeUtil::NanoSeconds();
     if (now < delayNs) {
@@ -129,6 +134,11 @@ size_t RegionSpace::UncommitIdleMemory()
     size_t total = 0;
     const uint64_t idleBefore = now - delayNs;
     while (!Heap::GetHeap().IsGcStarted() && !Uncommitter::ShouldStopUncommit()) {
+        const GCPhase tickPhase = Heap::GetHeap().GetGCPhase();
+        if (tickPhase == GCPhase::GC_PHASE_POST_TRACE || tickPhase == GCPhase::GC_PHASE_PREFORWARD ||
+            tickPhase == GCPhase::GC_PHASE_FORWARD) {
+            break;
+        }
         size_t usedBytes = regionManager.GetUsedRegionSize();
         size_t dirtyBytes = regionManager.GetDirtyUnitCount() * RegionInfo::UNIT_SIZE;
         size_t releasedBytes = regionManager.GetReleasedUnitCount() * RegionInfo::UNIT_SIZE;
