@@ -198,6 +198,9 @@ public:
         return markQuarantineTree.GetTotalCount();
     }
 
+    // Physical uncommit only. Live forwarding keeps the extent in the released
+    // allocation cache (zPageCache analogue); madvise is deferred until both
+    // refcount and live carrier are gone.
     static bool ExtentReadyForReleasedCache(RegionInfo* region)
     {
         if (region == nullptr) {

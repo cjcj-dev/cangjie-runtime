@@ -15,6 +15,7 @@
 #include "Heap/Allocator/MemMap.h"
 #include "Heap/Allocator/RegionSpace.h"
 #include "Heap/Collector/Uncommitter.h"
+#include "Heap/Collector/ZForwardingLife.h"
 #include "Heap/Heap.h"
 #include "Mutator/ThreadLocal.h"
 #include "gc_unittest.hpp"
@@ -267,12 +268,49 @@ GC_TEST(Uncommitter, LiveForwardingBlocksReleasedCache)
     std::fprintf(stderr, "DETAIL liveFwd released=%u quarantine=%d\n",
                  frm.GetReleasedUnitCount(), frm.HasDetachQuarantine() ? 1 : 0);
     std::fflush(stderr);
-    GC_EXPECT_EQ(frm.GetReleasedUnitCount(), 0U);
-    GC_EXPECT_TRUE(frm.HasDetachQuarantine());
+    GC_EXPECT_EQ(frm.GetReleasedUnitCount(), 1U);
+    GC_EXPECT_FALSE(frm.HasDetachQuarantine());
+
+    CartesianTree::Index takeIdx = 0;
+    GC_EXPECT_TRUE(frm.releasedUnitTree.TakeUnits(1, takeIdx, false));
+    GC_EXPECT_EQ(takeIdx, 0U);
+    GC_EXPECT_TRUE(frm.releasedUnitTree.MergeInsert(0, 1, false));
 
     ForwardingTable::ClearEntries(region->GetRegionStart(), region->GetRegionSize());
     ForwardingTable::DropRetiredCovering(region->GetRegionStart(), region->GetRegionSize());
     ForwardingTable::Remove(region->GetRegionStart(), region->GetRegionSize());
+    MemMap::DestroyMemMap(map);
+}
+
+GC_TEST(Uncommitter, LiveForwardingRefCountKeepsReleasedAllocatable)
+{
+    BindUncommitWorkerThread();
+    const size_t n = 8;
+    const size_t meta = RegionManager::GetMetadataSize(n);
+    const size_t heapBytes = n * RegionInfo::UNIT_SIZE;
+    const size_t total = meta + heapBytes;
+    MemMap* map = MemMap::MapMemory(total, total);
+    GC_EXPECT_TRUE(map != nullptr);
+    const uintptr_t heapStart = reinterpret_cast<uintptr_t>(map->GetBaseAddr()) + meta;
+    RegionInfo::Initialize(n, heapStart, map);
+    RegionInfo* region = RegionInfo::InitRegion(0, 1, RegionInfo::UnitRole::FREE_UNITS);
+    GC_EXPECT_TRUE(region != nullptr);
+    RegionManager rm;
+    FreeRegionManager frm(rm);
+    frm.Initialize(n);
+    frm.AddReleaseUnits(0, 1);
+    ZForwardingLife::ResetForForwarding(region->metadata.fwdRefCount, region->metadata.fwdClaimed,
+                                        region->metadata.fwdDone);
+    GC_EXPECT_TRUE(region->RetainForwarding());
+    GC_EXPECT_TRUE(region->ForwardingRefCount() != 0);
+    GC_EXPECT_FALSE(FreeRegionManager::ExtentReadyForReleasedCache(region));
+    GC_EXPECT_EQ(frm.GetReleasedUnitCount(), 1U);
+    GC_EXPECT_FALSE(frm.HasDetachQuarantine());
+    std::fprintf(stderr, "DETAIL refCount released=%u quarantine=%d ref=%d ready=%d\n",
+                 frm.GetReleasedUnitCount(), frm.HasDetachQuarantine() ? 1 : 0,
+                 region->ForwardingRefCount(),
+                 FreeRegionManager::ExtentReadyForReleasedCache(region) ? 1 : 0);
+    std::fflush(stderr);
     MemMap::DestroyMemMap(map);
 }
 
