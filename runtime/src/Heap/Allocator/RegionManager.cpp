@@ -1150,6 +1150,37 @@ void RegionManager::ReclaimRegion(RegionInfo* region)
                                              num * RegionInfo::UNIT_SIZE);
     }
     freeRegionManager.AddGarbageUnits(unitIndex, num);
+    // The free-tree insertion is the allocator lock boundary at which a
+    // blocked allocation can be directed to its newly available extent.
+    SatisfyStalledAllocations();
+}
+
+bool RegionManager::StallAllocation(size_t size)
+{
+    AllocationStallRequest request(size);
+    const bool requestGc = allocationStallQueue.Enqueue(request);
+    if (requestGc) {
+        // Synchronous request preserves enqueue -> GC -> dequeue ordering and
+        // avoids mutator-side retry/yield loops.  Reclamation satisfies the
+        // queue while the collector owns the allocator boundary.
+        Heap::GetHeap().GetCollector().RequestGC(GC_REASON_OOM, false);
+        SatisfyStalledAllocations();
+        if (allocationStallQueue.Pending() != 0) {
+            // A completed GC that could not make enough room is a terminal OOM
+            // for all requests from this wave; no waiter is left stranded.
+            allocationStallQueue.FailAll();
+        }
+    }
+    return request.Wait();
+}
+
+void RegionManager::SatisfyStalledAllocations()
+{
+    allocationStallQueue.SatisfyAvailable([this](size_t bytes) {
+        const size_t units = (bytes + RegionInfo::UNIT_SIZE - 1) / RegionInfo::UNIT_SIZE;
+        return units <= GetInactiveUnitCount() || units <= freeRegionManager.GetDirtyMaxBlock() ||
+            units <= freeRegionManager.GetReleasedMaxBlock();
+    });
 }
 
 void RegionManager::ReclaimRegionToMarkQuarantine(RegionInfo* region)
