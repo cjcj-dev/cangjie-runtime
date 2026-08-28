@@ -1577,7 +1577,7 @@ void WCollector::EvacuateYoungRegions(const std::vector<BaseObject*>& reachableV
         // Breadcrumb first (survives if VerifyHeap SEGV); force=true skips VERIFY_HEAP env.
         VLOG(REPORT, "[GCV2][verify][post-evac] enter point=%s run=%zu", point, minorTotalRuns + 1);
         if (runHeap) {
-            VerifyHeapObjects(point, true);
+            VerifyHeapObjects(point);
             VLOG(REPORT, "[GCV2][verify][post-evac] point=%s run=%zu", point, minorTotalRuns + 1);
         }
     };

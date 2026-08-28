@@ -22,6 +22,7 @@ set(SRC_LIST
     "StackWatermarkOracle.cpp"
     "StackExposureOracle.cpp"
     "DiagGate.cpp"
+    "VerifyPhase.cpp"
     "MutatorRelocate.cpp"
     "GarbRegionDiag.cpp"
     "PermWhoAdmit.cpp"

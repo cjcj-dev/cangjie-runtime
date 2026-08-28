@@ -8,8 +8,6 @@
 
 #include <array>
 #include <atomic>
-#include <cstdlib>
-#include <cstring>
 #include <unordered_set>
 
 #include "Base/Log.h"
@@ -21,6 +19,7 @@
 #include "Heap/Heap.h"
 #include "ObjectModel/MClass.h"
 #include "ObjectModel/RefField.h"
+#include "Heap/Verify/VerifyPhase.h"
 
 namespace MapleRuntime {
 namespace {
@@ -47,15 +46,6 @@ struct RemsetVerifyStats {
     size_t staleSampleCount = 0;
     size_t danglingSampleCount = 0;
 };
-
-bool VerifyRemsetEnabled()
-{
-    static const bool enabled = []() {
-        const char* value = std::getenv("MRT_GCV2_VERIFY_REMSET");
-        return value != nullptr && std::strcmp(value, "1") == 0;
-    }();
-    return enabled;
-}
 
 void PushSample(std::array<MAddress, kSampleLimit>& samples, size_t& count, MAddress slot)
 {
@@ -177,12 +167,10 @@ void ClassifyRemsetOnlySlots(const std::unordered_set<MAddress>& remsetSnapshot,
 }
 } // namespace
 
-void VerifyRememberedSetInvariant(const char* point, const std::unordered_set<MAddress>& remsetSnapshot, bool force,
+void VerifyRememberedSetInvariant(const char* point, const std::unordered_set<MAddress>& remsetSnapshot,
                                   const std::unordered_set<BaseObject*>* rootReachableHolders)
 {
-    // Default off — HotSpot VerifyBeforeGC/VerifyAfterGC pattern (gc_globals DIAGNOSTIC false).
-    // force=true lets post-evac run without enabling the global pre-evacuate gate.
-    if (!force && !VerifyRemsetEnabled()) {
+    if (!VerifyPhaseEnter(VerifyFace::Remembered, point)) {
         return;
     }
 
@@ -212,7 +200,7 @@ void VerifyRememberedSetInvariant(const char* point, const std::unordered_set<MA
     stats.costNs = TimeUtil::NanoSeconds() - startNs;
 
     // MISSING = correctness-relevant subset. When the independent root closure was
-    // not supplied (POST_EVAC force path, or VERIFY_REMSET unset), that subset is
+    // not supplied (POST_EVAC path, or VERIFY_REMSET unset), that subset is
     // the full inventory — do not print missingRootReachable (stays 0) as MISSING.
     size_t correctnessMissing = rootReachableHolders == nullptr ? stats.missing : stats.missingRootReachable;
 

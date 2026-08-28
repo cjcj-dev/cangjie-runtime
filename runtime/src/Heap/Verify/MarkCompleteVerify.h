@@ -41,12 +41,10 @@
 // They are counted in their own columns so a zero in the defect column cannot be
 // confused with "the walk never reached anything".
 //
-// Gate: MRT_GCV2_MARKCOMPLETE=1 or MRT_GCV2_DIAG token "markcomplete".  Default off,
+// Gate: unified VerifyFace::Marking (legacy MRT_GCV2_MARKCOMPLETE=1 and token
+// "marking" remain aliases). Default off,
 // and the product path early-returns before any counter or STW.
-// Fail-closed variant: MRT_GCV2_MARKCOMPLETE_FATAL=1 (report-only otherwise).
-// Nested deadInterior census: MRT_GCV2_MARKCOMPLETE_INTEDGE=1 / token "intedge"
-// (no-op unless MARKCOMPLETE is already on). Observation only; does not change
-// the okInteriorBase exemption or the deadFrom arm.
+// The verifier is report-only; there is no independent fatal or interior-edge gate.
 
 namespace MapleRuntime {
 class BaseObject;
@@ -56,7 +54,7 @@ namespace MarkCompleteVerify {
 bool Enabled();
 
 // Runs under its own ScopedStopTheWorld, so it must be called from the GC thread
-// outside any existing STW scope.  Report-only unless the FATAL gate is set.
+// outside any existing STW scope. Report-only.
 void RunAtMarkEnd(const char* point);
 
 // Retrace census integrated with the completeness verifier. A dead-edge holder

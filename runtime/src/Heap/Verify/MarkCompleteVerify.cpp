@@ -20,8 +20,8 @@
 #include "Heap/Allocator/RegionSpace.h"
 #include "Heap/Collector/Collector.h"
 #include "Heap/Heap.h"
-#include "Heap/Verify/DiagGate.h"
 #include "Heap/Verify/InteriorEdgeClass.h"
+#include "Heap/Verify/VerifyPhase.h"
 #include "Heap/Verify/SurvNodeDiag.h"
 #include "Mutator/MutatorManager.h"
 #include "ObjectModel/MArray.h"
@@ -84,7 +84,7 @@ struct Stats {
     size_t deadInOther = 0;
     size_t deadNoRegion = 0;
     size_t deadInterior = 0;
-    // Nested intedge census (MRT_GCV2_MARKCOMPLETE_INTEDGE). Sum of the four
+    // Nested interior-edge census. Sum of the four
     // equals deadInterior when the nested gate is on; stays 0 when it is off
     // so a parser that subtracts them from deadInterior cannot invent a drop
     // on the deadFrom arm. Survnode reads deadFrom; these columns must not
@@ -464,19 +464,11 @@ void CensusWalkCoverage(Stats& stats)
     });
 }
 
-bool FatalOnFailure()
-{
-    static const bool on = DiagGate::LegacyOrToken("MRT_GCV2_MARKCOMPLETE_FATAL", "markcompletefatal");
-    return on;
-}
-
-// Nested census of deadInterior. Off unless MARKCOMPLETE is already on AND
-// MRT_GCV2_MARKCOMPLETE_INTEDGE=1 / token "intedge". Size-walk and GCTib
-// lookup only run on the deadInterior arm, so deadFrom is untouched.
+// Nested interior-edge census is part of the Marking face. It does not create a
+// second admission token, so all marking detail is controlled by one flag.
 bool IntedgeEnabled()
 {
-    static const bool on = DiagGate::LegacyOrToken("MRT_GCV2_MARKCOMPLETE_INTEDGE", "intedge");
-    return on;
+    return Enabled();
 }
 
 bool GctibBitIsRef(GCTib gcTib, size_t wordIndex)
@@ -763,13 +755,12 @@ void ReportHolderTraces(const char* point)
 
 bool Enabled()
 {
-    static const bool on = DiagGate::LegacyOrToken("MRT_GCV2_MARKCOMPLETE", "markcomplete");
-    return on;
+    return VerifyFaceEnabled(VerifyFace::Marking);
 }
 
 void RunAtMarkEnd(const char* point)
 {
-    if (!Enabled()) {
+    if (!VerifyPhaseEnter(VerifyFace::Marking, point)) {
         return;
     }
     static std::atomic<size_t> invokeCount{ 0 };
@@ -839,13 +830,6 @@ void RunAtMarkEnd(const char* point)
         static_cast<unsigned long long>(stats.costNs), stats.deadIntSlotNotRef, stats.deadIntRecoverFail,
         stats.deadIntBaseUnmarked, stats.deadIntValueCorrupt);
     SurvNodeDiag::ReportAtMarkEnd(point);
-    if (FatalOnFailure() && (stats.deadTarget != 0 || stats.rootDead != 0)) {
-        CHECK_DETAIL(false,
-                     "MRT_GCV2_MARKCOMPLETE_FATAL: mark is not complete at %s: deadTarget=%zu "
-                     "deadKnownEmpty=%zu deadRoots=%zu liveHolders=%zu edges=%zu",
-                     point == nullptr ? "?" : point, stats.deadTarget, stats.deadTargetKnownEmpty, stats.rootDead,
-                     stats.liveHolders, stats.edgesSeen);
-    }
 }
 
 } // namespace MarkCompleteVerify
