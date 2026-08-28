@@ -39,6 +39,11 @@ public:
 
     void Initialize(MAddress start, size_t size);
 
+    // Phase handshakes can reach a newly-created mutator before the heap's
+    // remembered-set backing has been published.  Callers that merely want to
+    // defer a flush may inspect this state without tripping CheckInitialized().
+    bool IsInitialized() const { return initialized; }
+
     // Called at the beginning of a minor collection while the mutators are stopped.
     // Atomically makes an empty bitmap active, drains the previous active bitmap into
     // records, and clears it for the next cycle.

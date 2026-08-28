@@ -1619,7 +1619,8 @@ size_t RegionManager::ExemptFromRegions()
     rawPointerPinnedRegionList.VisitAllRegions([](RegionInfo* region) {
         if (region->GetLiveByteCount() > 0) {
             region->PreserveRetainedLiveInfoUpTo(
-                std::min(region->GetCensusBoundary(), region->GetRegionAllocPtr()));
+                std::min(region->GetCensusBoundary(), region->GetRegionAllocPtr()), true,
+                "cset-raw-pointer-pinned");
         }
     });
     std::vector<RegionInfo*> snapshot;
@@ -1799,7 +1800,8 @@ size_t RegionManager::ExemptFromRegions()
             // current mark face (NEVER_EXAMINED), so use the bounded preserve
             // form rather than asserting that every live page has a snapshot.
             del->PreserveRetainedLiveInfoUpTo(
-                std::min(del->GetCensusBoundary(), del->GetRegionAllocPtr()));
+                std::min(del->GetCensusBoundary(), del->GetRegionAllocPtr()), true,
+                "cset-relocsel");
             ExemptFromRegion(del);
             floatingGarbage += (del->GetRegionSize() - del->GetLiveByteCount());
         }
@@ -1869,7 +1871,8 @@ void RegionManager::PromoteAllRegions()
             size_t liveBytes = region->GetLiveByteCount();
             if (liveBytes > 0) {
                 region->PreserveRetainedLiveInfoUpTo(
-                    std::min(region->GetCensusBoundary(), region->GetRegionAllocPtr()));
+                    std::min(region->GetCensusBoundary(), region->GetRegionAllocPtr()), true,
+                    "promote-all-regions");
             } else if (region->GetRawPointerObjectCount() == 0) {
                 region->PreserveRetainedLiveInfo(region->GetRegionStart());
             }
@@ -3735,7 +3738,7 @@ uintptr_t RegionManager::AllocPinnedFromFreeList(size_t size)
         M0Correlation::InvalidateStampBinding(allocPtr, M0Correlation::BindingInvalidation::PINNED_SLOT_REUSE);
         RegionInfo* region = RegionInfo::GetRegionInfoAt(allocPtr);
         region->ResetCensusBoundary();
-        region->PreserveRetainedLiveInfoUpTo(region->GetRegionStart());
+        region->PreserveRetainedLiveInfoUpTo(region->GetRegionStart(), true, "alloc-pinned-reuse");
     }
     // For making bitmap comform with live object count, do not mark object repeated.
     bool barrierClosedMarking = mutatorPhase == GCPhase::GC_PHASE_ENUM ||

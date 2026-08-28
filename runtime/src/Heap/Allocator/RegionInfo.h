@@ -955,7 +955,14 @@ public:
 
     void ResetCensusBoundary() { metadata.censusBoundaryOffset = 0; }
 
+    // Keep the historical one-argument entry point/export intact; product
+    // callers that know their consumer use the explicit diagnostic overload.
     void PreserveRetainedLiveInfoUpTo(MAddress boundary)
+    {
+        PreserveRetainedLiveInfoUpTo(boundary, false, "unknown");
+    }
+
+    void PreserveRetainedLiveInfoUpTo(MAddress boundary, bool tolerateLost, const char* consumer)
     {
         CHECK(boundary >= GetRegionStart() && boundary <= GetRegionAllocPtr());
         if (IsLargeRegion()) {
@@ -985,7 +992,25 @@ public:
             // replaced the previous owned carrier.  Once a successful
             // Preserve armed the monotonic bit, carrier absence is LOST on
             // every exit; no clear/unbind exit has to remember to write it.
-            CHECK(GetRetainedLiveInfoState() != RetainedLiveInfoState::SNAPSHOT_LOST);
+            const RetainedLiveInfoState state = GetRetainedLiveInfoState();
+            if (state == RetainedLiveInfoState::SNAPSHOT_LOST && tolerateLost) {
+                VLOG(REPORT,
+                     "[GCV2][retained] consumer=%s state=SNAPSHOT_LOST ever=%u life=%llu retainedLife=%llu "
+                     "alloc=%#zx boundary=%#zx",
+                     consumer == nullptr ? "unknown" : consumer,
+                     static_cast<unsigned>(metadata.retainedEverPreserved),
+                     static_cast<unsigned long long>(GetRegionLifeId()),
+                     static_cast<unsigned long long>(metadata.retainedLifeId),
+                     static_cast<size_t>(GetRegionAllocPtr()), static_cast<size_t>(boundary));
+            }
+            CHECK_DETAIL(state != RetainedLiveInfoState::SNAPSHOT_LOST || tolerateLost,
+                         "retained snapshot consumer=%s state=%u ever=%u life=%llu retainedLife=%llu "
+                         "alloc=%#zx boundary=%#zx",
+                         consumer == nullptr ? "unknown" : consumer,
+                         static_cast<unsigned>(state), static_cast<unsigned>(metadata.retainedEverPreserved),
+                         static_cast<unsigned long long>(GetRegionLifeId()),
+                         static_cast<unsigned long long>(metadata.retainedLifeId),
+                         static_cast<size_t>(GetRegionAllocPtr()), static_cast<size_t>(boundary));
             NoteRetainedPreserve(false);
             return;
         }
