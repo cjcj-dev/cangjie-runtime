@@ -403,9 +403,18 @@ MemMap* MemMap::TryMapMemory(size_t reqSize, size_t initSize, const Option& opt,
         return nullptr;
     }
     const size_t initialCommit = opt.protAll ? mappedSize : initSize;
-    if (initialCommit != 0 && !memMap->CommitMemory(base, initialCommit)) {
-        delete memMap;
-        return nullptr;
+    if (initialCommit != 0) {
+        const size_t committed = memMap->CommitMemory(base, initialCommit);
+        if (committed != initialCommit) {
+            // Commit proceeds partition by partition.  If only a prefix was
+            // committed, release exactly that prefix before tearing down the
+            // reservation so allocation failure leaves no hidden side effect.
+            if (committed != 0) {
+                (void)memMap->ReleaseMemory(base, committed);
+            }
+            delete memMap;
+            return nullptr;
+        }
     }
     return memMap;
 }
@@ -436,16 +445,16 @@ MemMap::MemMap(void* baseAddr, size_t initSize, size_t mappedSize, int prot, Res
     memMappedEndAddr = reinterpret_cast<void*>(reservationRegistry.Ranges().back().End());
 }
 
-bool MemMap::ApplyByPartition(void* addr, size_t size, uint32_t* requiredNode, bool release)
+size_t MemMap::ApplyByPartition(void* addr, size_t size, uint32_t* requiredNode, bool release)
 {
     const uintptr_t start = reinterpret_cast<uintptr_t>(addr);
     if (!IsValidRange(start, size) || !reservationRegistry.Contains(start, size)) {
-        return false;
+        return 0;
     }
     // Validate an explicit owner before the first backend call.  A cross-node
     // free must be rejected atomically, not after partially releasing one side.
     if (requiredNode != nullptr && !numaPartitions.Owns(start, size, *requiredNode)) {
-        return false;
+        return 0;
     }
     const uintptr_t end = start + size;
     uintptr_t cursor = start;
@@ -456,39 +465,39 @@ bool MemMap::ApplyByPartition(void* addr, size_t size, uint32_t* requiredNode, b
             continue;
         }
         if (partStart != cursor || (requiredNode != nullptr && *requiredNode != partition.node)) {
-            return false;
+            return static_cast<size_t>(cursor - start);
         }
         const bool ok = release ? backend->Release(reinterpret_cast<void*>(partStart), partEnd - partStart,
                                                    partition.node)
                                 : backend->Commit(reinterpret_cast<void*>(partStart), partEnd - partStart, commitProt,
                                                   partition.node, bindNuma);
         if (!ok) {
-            return false;
+            return static_cast<size_t>(cursor - start);
         }
         cursor = partEnd;
         if (cursor == end) {
-            return true;
+            return size;
         }
     }
-    return false;
+    return static_cast<size_t>(cursor - start);
 }
 
-bool MemMap::CommitMemory(void* addr, size_t size)
+size_t MemMap::CommitMemory(void* addr, size_t size)
 {
     return ApplyByPartition(addr, size, nullptr, false);
 }
 
-bool MemMap::CommitMemory(void* addr, size_t size, uint32_t numaNode)
+size_t MemMap::CommitMemory(void* addr, size_t size, uint32_t numaNode)
 {
     return ApplyByPartition(addr, size, &numaNode, false);
 }
 
-bool MemMap::ReleaseMemory(void* addr, size_t size)
+size_t MemMap::ReleaseMemory(void* addr, size_t size)
 {
     return ApplyByPartition(addr, size, nullptr, true);
 }
 
-bool MemMap::ReleaseMemory(void* addr, size_t size, uint32_t numaNode)
+size_t MemMap::ReleaseMemory(void* addr, size_t size, uint32_t numaNode)
 {
     return ApplyByPartition(addr, size, &numaNode, true);
 }

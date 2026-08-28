@@ -29,6 +29,10 @@ struct FakeMemMapBackend final : MemMapBackend {
 
     size_t maxReserveSize{ std::numeric_limits<size_t>::max() };
     size_t successfulReserveLimit{ std::numeric_limits<size_t>::max() };
+    size_t failCommitCall{ 0 };
+    size_t failReleaseCall{ 0 };
+    size_t commitCalls{ 0 };
+    size_t releaseCalls{ 0 };
     uintptr_t nextBase{ 0x10000000U };
     size_t reserveCalls{ 0 };
     std::vector<Op> reserves;
@@ -54,8 +58,9 @@ struct FakeMemMapBackend final : MemMapBackend {
 
     bool Commit(void* addr, size_t size, int, uint32_t node, bool bindNuma) override
     {
+        ++commitCalls;
         commits.push_back(Op{ reinterpret_cast<uintptr_t>(addr), size, node, bindNuma });
-        return true;
+        return failCommitCall == 0 || commitCalls != failCommitCall;
     }
 
     bool Protect(void* addr, size_t size, int) override
@@ -66,8 +71,9 @@ struct FakeMemMapBackend final : MemMapBackend {
 
     bool Release(void* addr, size_t size, uint32_t node) override
     {
+        ++releaseCalls;
         releases.push_back(Op{ reinterpret_cast<uintptr_t>(addr), size, node, false });
-        return true;
+        return failReleaseCall == 0 || releaseCalls != failReleaseCall;
     }
 
     bool Unreserve(void* addr, size_t size) override
@@ -252,9 +258,98 @@ GC_TEST(MemMapContract, TwoNodeOwnershipRejectsCrossNodeFree)
     MemMap::DestroyMemMap(map);
 }
 
+GC_TEST(MemMapContract, PartitionCommitReportsPrefixAndCallerCleansIt)
+{
+    FakeMemMapBackend backend;
+    const size_t total = 2U * ALLOC_UTIL_PAGE_SIZE;
+    MemMap* map = MemMap::TryMapMemory(total, 0, MemMap::DEFAULT_OPTIONS, LargeBudget(),
+                                       NumaTopology::Seal({ 3, 7 }), backend);
+    GC_EXPECT_TRUE(map != nullptr);
+    const uintptr_t base = reinterpret_cast<uintptr_t>(map->GetBaseAddr());
+    backend.failCommitCall = backend.commitCalls + 2;
+
+    const size_t committed = map->CommitMemory(reinterpret_cast<void*>(base), total);
+    GC_EXPECT_EQ(committed, ALLOC_UTIL_PAGE_SIZE);
+    GC_EXPECT_EQ(backend.commits.size(), 2U);
+    GC_EXPECT_EQ(backend.commits[0].size, committed);
+
+    const size_t cleaned = map->ReleaseMemory(reinterpret_cast<void*>(base), committed);
+    GC_EXPECT_EQ(cleaned, committed);
+    GC_EXPECT_EQ(backend.releases.size(), 1U);
+    GC_EXPECT_EQ(backend.releases[0].size, cleaned);
+    MemMap::DestroyMemMap(map);
+}
+
+GC_TEST(MemMapContract, PartitionReleaseReportsPrefixOnSecondFailure)
+{
+    FakeMemMapBackend backend;
+    const size_t total = 2U * ALLOC_UTIL_PAGE_SIZE;
+    MemMap* map = MemMap::TryMapMemory(total, 0, MemMap::DEFAULT_OPTIONS, LargeBudget(),
+                                       NumaTopology::Seal({ 3, 7 }), backend);
+    GC_EXPECT_TRUE(map != nullptr);
+    const uintptr_t base = reinterpret_cast<uintptr_t>(map->GetBaseAddr());
+    GC_EXPECT_EQ(map->CommitMemory(reinterpret_cast<void*>(base), total), total);
+    backend.failReleaseCall = backend.releaseCalls + 2;
+
+    const size_t released = map->ReleaseMemory(reinterpret_cast<void*>(base), total);
+    GC_EXPECT_EQ(released, ALLOC_UTIL_PAGE_SIZE);
+    GC_EXPECT_EQ(backend.releases.size(), 2U);
+    GC_EXPECT_EQ(backend.releases[0].size, released);
+    MemMap::DestroyMemMap(map);
+}
+
+GC_TEST(MemMapContract, PartitionFirstFailureIsZeroPositiveControl)
+{
+    FakeMemMapBackend backend;
+    const size_t total = 2U * ALLOC_UTIL_PAGE_SIZE;
+    MemMap* map = MemMap::TryMapMemory(total, 0, MemMap::DEFAULT_OPTIONS, LargeBudget(),
+                                       NumaTopology::Seal({ 3, 7 }), backend);
+    GC_EXPECT_TRUE(map != nullptr);
+    const uintptr_t base = reinterpret_cast<uintptr_t>(map->GetBaseAddr());
+    backend.failCommitCall = backend.commitCalls + 1;
+    GC_EXPECT_EQ(map->CommitMemory(reinterpret_cast<void*>(base), total), 0U);
+    GC_EXPECT_EQ(backend.commits.size(), 1U);
+    GC_EXPECT_EQ(backend.releases.size(), 0U);
+    MemMap::DestroyMemMap(map);
+}
+
+GC_TEST(MemMapContract, PartitionReleaseFirstFailureIsZeroPositiveControl)
+{
+    FakeMemMapBackend backend;
+    const size_t total = 2U * ALLOC_UTIL_PAGE_SIZE;
+    MemMap* map = MemMap::TryMapMemory(total, 0, MemMap::DEFAULT_OPTIONS, LargeBudget(),
+                                       NumaTopology::Seal({ 3, 7 }), backend);
+    GC_EXPECT_TRUE(map != nullptr);
+    const uintptr_t base = reinterpret_cast<uintptr_t>(map->GetBaseAddr());
+    GC_EXPECT_EQ(map->CommitMemory(reinterpret_cast<void*>(base), total), total);
+    backend.failReleaseCall = backend.releaseCalls + 1;
+    GC_EXPECT_EQ(map->ReleaseMemory(reinterpret_cast<void*>(base), total), 0U);
+    GC_EXPECT_EQ(backend.releases.size(), 1U);
+    MemMap::DestroyMemMap(map);
+}
+
+GC_TEST(MemMapContract, InitialPartialCommitRollsBackPrefixBeforeDestroy)
+{
+    FakeMemMapBackend backend;
+    MemMap::Option options = MemMap::DEFAULT_OPTIONS;
+    options.protAll = true;
+    const size_t total = 2U * ALLOC_UTIL_PAGE_SIZE;
+    backend.failCommitCall = 2;
+
+    MemMap* map = MemMap::TryMapMemory(total, 0, options, LargeBudget(), NumaTopology::Seal({ 3, 7 }), backend);
+    GC_EXPECT_TRUE(map == nullptr);
+    GC_EXPECT_EQ(backend.commits.size(), 2U);
+    GC_EXPECT_EQ(backend.commits[0].size, ALLOC_UTIL_PAGE_SIZE);
+    GC_EXPECT_EQ(backend.releases.size(), 1U);
+    GC_EXPECT_EQ(backend.releases[0].size, ALLOC_UTIL_PAGE_SIZE);
+    GC_EXPECT_EQ(backend.unreserves.size(), 1U);
+}
+
 #if !defined(_WIN64)
 struct ProductWiringBackend final : MemMapBackend {
     size_t commitCalls{ 0 };
+    size_t failCommitCall{ 0 };
+    int releaseEventFd{ -1 };
 
     void* Reserve(void* requested, size_t size, unsigned int, const char*, bool exact) override
     {
@@ -272,11 +367,20 @@ struct ProductWiringBackend final : MemMapBackend {
     bool Commit(void*, size_t, int, uint32_t, bool) override
     {
         ++commitCalls;
-        return true;
+        return failCommitCall == 0 || commitCalls != failCommitCall;
     }
 
     bool Protect(void*, size_t, int) override { return true; }
-    bool Release(void*, size_t, uint32_t) override { return true; }
+    bool Release(void*, size_t size, uint32_t) override
+    {
+        if (releaseEventFd >= 0) {
+            const ssize_t written = write(releaseEventFd, &size, sizeof(size));
+            if (written != static_cast<ssize_t>(sizeof(size))) {
+                return false;
+            }
+        }
+        return true;
+    }
     bool Unreserve(void* addr, size_t size) override { return munmap(addr, size) == 0; }
 };
 
@@ -317,6 +421,54 @@ GC_TEST(MemMapContract, RegionManagerInactiveAllocationUsesMemMapOwner)
     GC_EXPECT_EQ(waitpid(child, &status, 0), child);
     GC_EXPECT_TRUE(WIFEXITED(status));
     GC_EXPECT_EQ(WEXITSTATUS(status), 0);
+}
+
+int ExerciseRegionPartialCommitCleanup(int releaseEventFd)
+{
+    constexpr size_t units = 2;
+    const size_t metadataSize = RegionManager::GetMetadataSize(units);
+    const size_t totalSize = metadataSize + units * RegionInfo::UNIT_SIZE;
+    ProductWiringBackend backend;
+    backend.releaseEventFd = releaseEventFd;
+    MemMap* map = MemMap::TryMapMemory(totalSize, metadataSize, MemMap::DEFAULT_OPTIONS,
+                                       LargeBudget(), NumaTopology::Seal({ 3, 7 }), backend);
+    if (map == nullptr) {
+        return 2;
+    }
+    RegionManager manager;
+    HeapParam heapParam{};
+    heapParam.regionSize = 64;
+    heapParam.exemptionThreshold = 0.8;
+    manager.Initialize(units, reinterpret_cast<uintptr_t>(map->GetBaseAddr()), *map, heapParam, 0.5);
+    backend.failCommitCall = backend.commitCalls + 2;
+
+    // The two-unit inactive allocation crosses the two product MemMap NUMA
+    // partitions.  Its second backend commit fails after one committed unit;
+    // RegionInfo::CommitUnits must release that prefix before its fatal CHECK.
+    (void)manager.TakeRegion(units, RegionInfo::UnitRole::SMALL_SIZED_UNITS, false, false);
+    return 3;
+}
+
+GC_TEST(MemMapContract, RegionManagerPartialCommitCleansPrefixBeforeFailure)
+{
+    int releaseEvents[2];
+    GC_EXPECT_EQ(pipe(releaseEvents), 0);
+    const pid_t child = fork();
+    GC_EXPECT_TRUE(child >= 0);
+    if (child == 0) {
+        (void)close(releaseEvents[0]);
+        _exit(ExerciseRegionPartialCommitCleanup(releaseEvents[1]));
+    }
+    (void)close(releaseEvents[1]);
+    int status = 0;
+    GC_EXPECT_EQ(waitpid(child, &status, 0), child);
+
+    size_t cleaned = 0;
+    const ssize_t eventBytes = read(releaseEvents[0], &cleaned, sizeof(cleaned));
+    (void)close(releaseEvents[0]);
+    GC_EXPECT_TRUE(WIFSIGNALED(status) || (WIFEXITED(status) && WEXITSTATUS(status) != 0));
+    GC_EXPECT_EQ(eventBytes, static_cast<ssize_t>(sizeof(cleaned)));
+    GC_EXPECT_EQ(cleaned, RegionInfo::UNIT_SIZE);
 }
 #endif
 
