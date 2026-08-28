@@ -17,6 +17,7 @@
 #include <vector>
 
 #include "AllocBuffer.h"
+#include "AllocationStallQueue.h"
 #include "Allocator.h"
 #include "Base/Log.h"
 #include "Common/BaseObject.h"
@@ -199,6 +200,17 @@ public:
     template<Generation G>
     void ForwardRegion(RegionInfo* region);
     RelocationRequestQueue& GetRelocationRequestQueue() { return relocationRequestQueue; }
+    // Allocation-stall protocol (ZGC zPageAllocator.cpp:404-420, 525-531):
+    // one request enters the allocator-owned FIFO, the first waiter asks GC,
+    // and reclamation dequeues/satisfies requests under the allocator boundary.
+    bool StallAllocation(size_t size);
+    void SatisfyStalledAllocations();
+    void FailStalledAllocations() { allocationStallQueue.FailAll(); }
+    size_t PendingStalledAllocations() const { return allocationStallQueue.Pending(); }
+    size_t EnqueuedStalledAllocations() const { return allocationStallQueue.EnqueuedCount(); }
+    size_t DequeuedStalledAllocations() const { return allocationStallQueue.DequeuedCount(); }
+    size_t SatisfiedStalledAllocations() const { return allocationStallQueue.SatisfiedCount(); }
+    size_t FailedStalledAllocations() const { return allocationStallQueue.FailedCount(); }
     size_t CompleteRelocationRequests(RegionInfo* region);
     // Before clearing the young flag on a promoted region, record every live
     // old→young out-edge that mutators skipped while the source was still young.
@@ -590,7 +602,12 @@ public:
     size_t CollectFreePinnedSlots(RegionInfo* region);
 
     // targetSize: size of memory which we do not release and keep it as cache for future allocation.
-    size_t ReleaseGarbageRegions(size_t targetSize) { return freeRegionManager.ReleaseGarbageRegions(targetSize); }
+    size_t ReleaseGarbageRegions(size_t targetSize)
+    {
+        size_t released = freeRegionManager.ReleaseGarbageRegions(targetSize);
+        SatisfyStalledAllocations();
+        return released;
+    }
 
     // Ignore dynamic pinned regions and from regions whose garbage objects are quite few, return the garbage size that
     // can be reclaimed.
@@ -917,6 +934,7 @@ public:
         const size_t detachReleased = freeRegionManager.ReleaseDetachQuarantineAfterMajor();
         VLOG(REPORT, "[GCV2][detach-quarantine] major_released_units=%zu major_released_bytes=%zu",
              detachReleased, detachReleased * RegionInfo::UNIT_SIZE);
+        SatisfyStalledAllocations();
     }
 
     void ClearAllLiveInfo()
@@ -1152,6 +1170,7 @@ private:
     // region type must be FROM_REGION.
     RegionList fromRegionList;
     RelocationRequestQueue relocationRequestQueue;
+    AllocationStallQueue allocationStallQueue;
     RegionList ghostFromRegionList;
 
     // regions exempted by ExemptFromRegions, which will not be moved during current GC.

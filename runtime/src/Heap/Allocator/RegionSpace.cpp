@@ -109,24 +109,29 @@ bool RegionSpace::ShouldRetryAllocation(size_t& tryTimes, size_t size) const
 
 MAddress RegionSpace::Allocate(size_t size, AllocType allocType)
 {
-    size_t tryTimes = 0;
     uintptr_t internalAddr = 0;
     size_t allocSize = ToAllocSize(size);
-    do {
-        tryTimes++;
-        internalAddr = TryAllocateOnce(allocSize, allocType);
-        if (LIKELY(internalAddr != 0)) {
-            break;
-        }
+    internalAddr = TryAllocateOnce(allocSize, allocType);
+    if (UNLIKELY(internalAddr == 0)) {
+        // GC workers are strictly non-blocking: inability to obtain a region
+        // means this move cannot be completed in the current collection.
         if (IsGcThread()) {
-            return 0; // it means gc doesn't have enough space to move this object.
+            return 0;
         }
-        if (!ShouldRetryAllocation(tryTimes, size)) {
-            break;
+        // A mutator creates exactly one request for this blocking allocation.
+        // The allocator queue owns GC triggering and directed satisfaction;
+        // there is no reschedule/attempt counter loop on this path.
+        if (!regionManager.StallAllocation(allocSize)) {
+            regionManager.DumpRegionStats("region statistics when gc ends", true);
+            VLOG(REPORT, "Cannot allocate memory of %zu(B), throw an OutOfMemory exception", size);
+            LOG(RTLOG_ERROR, "Cannot allocate memory of %zu(B), throw an OutOfMemory exception", size);
+            ExceptionManager::OutOfMemory();
+            return 0;
         }
-        (void)sched_yield();
-    } while (true);
+        internalAddr = TryAllocateOnce(allocSize, allocType);
+    }
     if (internalAddr == 0) {
+        VLOG(REPORT, "Allocation request was satisfied but allocation still failed: size=%zu", size);
         return 0;
     }
 #if defined(CANGJIE_TSAN_SUPPORT)
