@@ -2413,6 +2413,9 @@ public:
         }
     }
     template<Generation G>
+#if defined(MRT_TESTABLE_INTERNALS)
+    MRT_EXPORT
+#endif
     void ClearLiveInfo(MarkView<G> view)
     {
         CHECK(view.GetRegion() == this);

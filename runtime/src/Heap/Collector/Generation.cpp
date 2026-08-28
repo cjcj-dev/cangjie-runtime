@@ -51,7 +51,6 @@
 #include "Heap/Verify/DiagGate.h"
 #include "Heap/Verify/NwDropAudit.h"
 #include "Heap/Verify/GarbRegionDiag.h"
-#include "Heap/Verify/Stw2CurrentAudit.h"
 #include "Heap/Verify/NullRouteCaller.h"
 #include "Heap/Verify/SurvNodeDiag.h"
 #include "Heap/Collector/PromotedRegionDomain.h"
@@ -81,6 +80,12 @@ struct Y2yHandoffReceiptState {
     std::atomic<uint64_t> afterStw2 { 0 };
 };
 Y2yHandoffReceiptState g_y2yHandoffReceipt;
+std::atomic<BaseObject*> g_y2yAfterReleaseHolder { nullptr };
+std::atomic<uint64_t> g_y2yAfterReleasePublications { 0 };
+std::atomic<Mutator*> g_satbBeforeMarkEndProducer { nullptr };
+std::atomic<BaseObject*> g_satbBeforeMarkEndFirst { nullptr };
+std::atomic<BaseObject*> g_satbBeforeMarkEndSecond { nullptr };
+std::atomic<uint64_t> g_satbBeforeMarkEndPublications { 0 };
 }
 
 void ResetY2yHandoffTestReceipt()
@@ -91,6 +96,8 @@ void ResetY2yHandoffTestReceipt()
     g_y2yHandoffReceipt.beforeRelease.store(0, std::memory_order_relaxed);
     g_y2yHandoffReceipt.afterRoot.store(0, std::memory_order_relaxed);
     g_y2yHandoffReceipt.afterStw2.store(0, std::memory_order_relaxed);
+    g_y2yAfterReleaseHolder.store(nullptr, std::memory_order_relaxed);
+    g_y2yAfterReleasePublications.store(0, std::memory_order_relaxed);
 }
 
 Y2yHandoffTestReceipt ReadY2yHandoffTestReceipt()
@@ -118,7 +125,54 @@ void NoteY2yAfterRootTestReceipt(uint64_t pending)
 void NoteY2yAfterStw2TestReceipt(uint64_t pending)
 {
     g_y2yHandoffReceipt.phase2.fetch_add(1, std::memory_order_relaxed);
-    g_y2yHandoffReceipt.afterStw2.store(pending, std::memory_order_relaxed);
+    g_y2yHandoffReceipt.afterStw2.fetch_add(pending, std::memory_order_relaxed);
+}
+
+void ArmY2yAfterReleaseTestReceipt(BaseObject* holder, uint64_t publications)
+{
+    g_y2yAfterReleaseHolder.store(holder, std::memory_order_release);
+    g_y2yAfterReleasePublications.store(publications, std::memory_order_release);
+}
+
+void PublishY2yAfterReleaseTestReceipt()
+{
+    uint64_t remaining = g_y2yAfterReleasePublications.load(std::memory_order_acquire);
+    while (remaining != 0 &&
+           !g_y2yAfterReleasePublications.compare_exchange_weak(remaining, remaining - 1,
+                                                                 std::memory_order_acq_rel,
+                                                                 std::memory_order_acquire)) {}
+    if (remaining == 0) {
+        return;
+    }
+    BaseObject* holder = g_y2yAfterReleaseHolder.load(std::memory_order_acquire);
+    CHECK_DETAIL(holder != nullptr, "armed y2y after-release receipt without holder");
+    AllocBuffer::GetOrCreateAllocBuffer()->PushY2yDirtyHolder(holder);
+}
+
+void ArmSatbBeforeMarkEndTestReceipt(Mutator* producer, BaseObject* first, BaseObject* second)
+{
+    g_satbBeforeMarkEndProducer.store(producer, std::memory_order_release);
+    g_satbBeforeMarkEndFirst.store(first, std::memory_order_release);
+    g_satbBeforeMarkEndSecond.store(second, std::memory_order_release);
+    g_satbBeforeMarkEndPublications.store(2, std::memory_order_release);
+}
+
+void PublishSatbBeforeMarkEndTestReceipt()
+{
+    uint64_t remaining = g_satbBeforeMarkEndPublications.load(std::memory_order_acquire);
+    while (remaining != 0 &&
+           !g_satbBeforeMarkEndPublications.compare_exchange_weak(remaining, remaining - 1,
+                                                                  std::memory_order_acq_rel,
+                                                                  std::memory_order_acquire)) {}
+    if (remaining == 0) {
+        return;
+    }
+    Mutator* producer = g_satbBeforeMarkEndProducer.load(std::memory_order_acquire);
+    BaseObject* object = remaining == 2 ? g_satbBeforeMarkEndFirst.load(std::memory_order_acquire)
+                                       : g_satbBeforeMarkEndSecond.load(std::memory_order_acquire);
+    CHECK_DETAIL(producer != nullptr && object != nullptr, "armed SATB mark-end receipt without producer/object");
+    producer->RememberObjectInSatbBuffer(object);
+    producer->FlushSatbBuffer();
 }
 
 #endif
@@ -570,16 +624,8 @@ void WCollector::FlushAllocationRegions()
 void WCollector::DoYoungGarbageCollection()
 {
     uint64_t start = TimeUtil::NanoSeconds();
-    const bool concurrentStackScan = MutatorManager::ConcurrentStackScanEnabled();
-    if (UNLIKELY(!concurrentStackScan && MutatorManager::EpochHandshakeEnabled())) {
-        (void)MutatorManager::Instance().RunEpochHandshake("pre-minor");
-    }
-    std::unique_ptr<ScopedStopTheWorld> stw;
-    if (concurrentStackScan) {
-        stw = std::make_unique<ScopedStopTheWorld>("young prepare", false);
-    } else {
-        stw = std::make_unique<ScopedStopTheWorld>("young collection", true, GCPhase::GC_PHASE_ENUM);
-    }
+    std::unique_ptr<ScopedStopTheWorld> stw =
+        std::make_unique<ScopedStopTheWorld>("young prepare", false);
     // plaincensus Phase 1a: measure plain HeapSlots before young mark mutates colours.
     // This STW entry is the young-only mark start; old marking does not participate in a minor.
     flip_young_mark_start();
@@ -593,9 +639,6 @@ void WCollector::DoYoungGarbageCollection()
              minorTotalRuns + 1, minorTotalRuns);
         VerifyHeapObjects("stw-enter");
         VLOG(REPORT, "[GCV2][verify][post-evac] point=stw-enter run=%zu", minorTotalRuns + 1);
-    }
-    if (!concurrentStackScan) {
-        TransitionToGCPhase(GCPhase::GC_PHASE_CLEAR_SATB_BUFFER, true);
     }
     {
         // minortime: ① FlushAllocationRegions
@@ -665,22 +708,9 @@ void WCollector::DoYoungGarbageCollection()
     PromotedRegionDomain::ResetForNextMinor(minorTotalRuns + 1);
     // flippromo: open broad-vs-product window for regions demoted last minor.
 
-    // Flags must be known before remset drain: FOLLOW STW1 only flips
-    // (zRememberedSet.cpp:36), scan is concurrent (zRemembered.cpp:561-576).
-    static const bool youngConcMark = []() {
-        const char* v = std::getenv("MRT_GCV2_YOUNG_CONC_MARK");
-        return v != nullptr && std::strcmp(v, "1") == 0;
-    }();
-    static const bool youngConcFollowRequested = []() {
-        const char* v = std::getenv("MRT_GCV2_YOUNG_CONC_FOLLOW");
-        return v != nullptr && std::strcmp(v, "1") == 0;
-    }();
-    const bool youngConcFollow = youngConcFollowRequested && youngConcMark;
-    // FOLLOW cannot publish stack roots without an epoch receipt.  Reuse the
-    // existing handshake even when only the explicit epoch knob is enabled;
-    // otherwise fail closed before releasing the world.
-    const bool concurrentYoungRoots = concurrentStackScan ||
-        (youngConcFollow && MutatorManager::EpochHandshakeEnabled());
+    // ZGC zGeneration.cpp:541-555 has one young sequence: pause-mark-start,
+    // concurrent mark/follow, then pause-mark-end.  Flip the previous remset
+    // face here; there is no STW young-mark configuration or rollback branch.
     MinorSlotSet rememberedSlots;
     {
         // minortime: ④ remset / cross-gen edge consume (drain + pinned stamp; rescan below)
@@ -695,18 +725,14 @@ void WCollector::DoYoungGarbageCollection()
         // walk put back — the residual is what FYS=0 really loses. Observe only, default off.
 
         StoreBarrierBuffer::FlushAll(rememberedSet);
-        if (youngConcFollow) {
-            // S5 flip only (YOUNG_CONCURRENT.md). ScanPreviousForMinor runs after
-            // world-release with mark_follow (zRemembered.cpp:561-576).
-            rememberedSet.FlipForMinor();
-        } else {
-            rememberedSet.DrainForMinor(rememberedSlots);
-        }
+        // S5 flip only (YOUNG_CONCURRENT.md). ScanPreviousForMinor runs after
+        // world-release with mark_follow (zRemembered.cpp:561-576).
+        rememberedSet.FlipForMinor();
 
     }
 
     uint64_t stackScanEpoch = 0;
-    if (concurrentYoungRoots) {
+    {
         // Publish S1/S3/S5 while every mutator is stopped. SetGCPhase is the
         // release publication point; AcknowledgeEpochHandshake asserts ENUM
         // before it is allowed to snapshot a single frame.
@@ -747,7 +773,7 @@ void WCollector::DoYoungGarbageCollection()
     constexpr bool fullYoungScan = false;
     // remsetdrain: hash-work reduction defaults on; `=0` is the immediate rollback.
     // The drain side uses the bitmap's exact distinct count to reserve its destination.
-    // The FYS-only consumed-ledger elision is decided later, after youngConcMark is known.
+    // The FYS-only consumed-ledger elision is fixed by the sole concurrent path.
     static const bool remsetHashOptRequested = []() {
         const char* value = std::getenv("MRT_GCV2_REMSET_HASH_OPT");
         return value == nullptr || std::strcmp(value, "1") == 0;
@@ -788,10 +814,6 @@ void WCollector::DoYoungGarbageCollection()
         return pending;
     };
 #endif
-#if defined(MRT_WAVE8_Y2Y_FIXED_ARM)
-    WorkStack fixedArmFirstBatch = NewWorkStack();
-    bool fixedArmFirstBatchMerged = false;
-#endif
     // ZGC zGeneration.cpp:665-669: root production belongs to concurrent_mark.
     // Keep one producer (the existing owner-specific VisitMinorRoots/epoch path),
     // selecting only its phase boundary. MARK-only remains a diagnostic arm and
@@ -802,18 +824,6 @@ void WCollector::DoYoungGarbageCollection()
         MRT_PHASE_TIMER("young.root_enum");
         WorkStack enumRoots = NewWorkStack();
         theAllocator.VisitAllocBuffers([&enumRoots](AllocBuffer& buffer) { buffer.MergeRoots(enumRoots); });
-        // Mainline order: roots first, then the y2y holder batch.  The fixed
-        // experiment consumes FOLLOW's first batch before release and only
-        // transfers that already-consumed batch here.
-#if defined(MRT_WAVE8_Y2Y_FIXED_ARM)
-        if (fixedArmFirstBatchMerged) {
-            enumRoots.insert(fixedArmFirstBatch);
-        } else {
-            mergeY2yDirtyHolders(enumRoots);
-        }
-#else
-        mergeY2yDirtyHolders(enumRoots);
-#endif
         if (stackScanEpoch != 0) {
             SatbBuffer::Instance().GetRetiredObjects(enumRoots);
         }
@@ -852,58 +862,38 @@ void WCollector::DoYoungGarbageCollection()
         NoteY2yAfterRootTestReceipt(enumRoots.size());
 #endif
     };
-    if (!youngConcFollow) {
-        produceYoungRoots();
-    }
-    // youngconc: concurrent young mark (mutator-concurrent, not only STW-parallel).
-    // Default OFF until STW2 remset/root fixpoint is checksum-clean (see REPORT-youngconc).
-    // MRT_GCV2_YOUNG_CONC_MARK=1 enables; reuses major TRACE barrier + SATB (no second family).
-    // MARK-only diagnostic arm keeps root enum/closure in STW1;
-    // MARK+FOLLOW publishes only the start state in STW1 and runs roots/follow concurrently.
-    // STW2 = concurrent remset drain + re-enum + evacuate.
-    // youngConcMark / youngConcFollow computed above (before remset drain).
-    // portyoungconc L1 (ZGC zGeneration.cpp:550-555): mark_end() returning false leaves the
-    // safepoint and runs concurrent_mark_continue() = mark_follow() before re-entering.
-    // A non-converged mark end must re-enter; FORCE=<n> makes exactly the first n mark-ends
-    // report "not converged" so the edge has a positive control. The product loop has no
-    // re-entry budget, matching zGeneration.cpp:550-555; the diagnostic request remains
-    // self-limiting through concWindow.reenters < youngMarkEndForceReenter.
-    static const size_t youngMarkEndForceReenter = []() -> size_t {
-        const char* v = std::getenv("MRT_GCV2_YOUNG_MARK_END_FORCE_REENTER");
-        if (v == nullptr) {
-            return 0;
-        }
-        long parsed = std::strtol(v, nullptr, 10);
-        return parsed > 0 ? static_cast<size_t>(parsed) : 0;
-    }();
+    // ZGC zGeneration.cpp:665-692: roots and follow are the single concurrent
+    // young-mark path.  Mark-end convergence is owned by MarkYoungSatbBuffer's
+    // termination protocol, not by a pause-local discovery loop.
     YoungConcWindowStats concWindow;
     uint64_t concWindowStartNs = 0;
     // markstw: reachableSlots is queried only with members of rememberedSlots in the
     // non-concurrent FYS path.  Keep the exact intersection instead of materialising
     // every reachable heap field.  Concurrent young marking is deliberately excluded:
     // its STW2 admits slots recorded after this initial remset snapshot.
-    // Keep opt-in (`=1`): `=0` or unset preserves the unrestricted-ledger path.
     const MinorSlotSet* reachableSlotDomain = nullptr;
     // portyoungconc L2: this is ZGC's boundary. Everything above is pause_mark_start
     // (colour flip, retire, remset flip) only; roots and follow are concurrent_mark().
     // Release here before invoking the existing root producer so mark_follow runs
     // with mutators alive.
-    if (youngConcFollow && stw != nullptr) {
+    {
+        CHECK_DETAIL(stw != nullptr, "young concurrent mark start without pause owner");
         CHECK_DETAIL(stackScanEpoch != 0,
                      "young FOLLOW requires an epoch-backed concurrent stack-root receipt");
         concWindow.markedAtEntry = reachableVec.size();
         TransitionToGCPhase(GCPhase::GC_PHASE_TRACE, true);
         reinterpret_cast<RegionSpace&>(theAllocator).PrepareTrace();
-#if defined(MRT_WAVE8_Y2Y_FIXED_ARM)
-        mergeY2yDirtyHolders(fixedArmFirstBatch);
-        fixedArmFirstBatchMerged = true;
-#endif
+        // wave8 y2y handoff (8d4253522 content): consume the pre-window batch
+        // before reset releases mutators. New stores after reset remain owned
+        // by the STW2 consumer and cannot race this allocator-buffer merge.
+        mergeY2yDirtyHolders(workStack);
 #if defined(MRT_TESTABLE_INTERNALS)
-        // Observation only: read the live per-mutator containers at the exact
-        // release boundary.  Default code does not consume them here.
         NoteY2yBeforeReleaseTestReceipt(pendingY2yDirtyHolderCount());
 #endif
         stw.reset();
+#if defined(MRT_TESTABLE_INTERNALS)
+        PublishY2yAfterReleaseTestReceipt();
+#endif
         concWindowStartNs = TimeUtil::NanoSeconds();
         produceYoungRoots();
         VLOG(REPORT,
@@ -913,18 +903,15 @@ void WCollector::DoYoungGarbageCollection()
     }
     {
         // minortime: ⑤ mark closure pass-1 (from roots)
-        // MARK-only runs this closure under STW; MARK+FOLLOW reaches this block after
-        // the release above, matching ZGC mark_roots()+mark_follow in concurrent_mark.
+        // The release above makes this ZGC mark_roots()+mark_follow work concurrent.
         MRT_PHASE_TIMER("young.mark_closure");
-        if (youngConcFollow) {
-            ++concWindow.closureCalls;
-        }
+        ++concWindow.closureCalls;
         TraceYoungClosure(workStack, fullYoungScan, reachableObjects, reachableVec, reachableSlots, weakSlots,
                           useBitmapLedger, reachableSlotDomain);
     }
     const bool remsetConsumedLedgerElideActive = false;
 
-    if (youngConcFollow && rememberedSlots.empty()) {
+    if (rememberedSlots.empty()) {
         // scan_and_follow (zRemembered.cpp:561-576): previous face as grey
         // roots, mutators alive. Flip already happened under STW1.
         concWindow.remsetSlots =
@@ -968,386 +955,80 @@ void WCollector::DoYoungGarbageCollection()
              "consumedLedger=%zu interiors=%zu fys=%u youngConc=%u",
               static_cast<unsigned>(remsetConsumedLedgerElideActive), rememberedSlots.size(), remsetStats.live,
               remsetStats.consumed, consumedSlots.size(), remsetInteriorBases.size(),
-              static_cast<unsigned>(fullYoungScan), static_cast<unsigned>(youngConcMark));
+              static_cast<unsigned>(fullYoungScan), 1U);
     }
     // fysaudit: D2 retained-drop + D4 live-not-consumed (product path already FYS=0 under audit).
 
-    size_t reachableBeforeRemsetClosure = reachableVec.size();
     {
         MRT_PHASE_TIMER("young.mark_from_remset");
-        if (youngConcFollow) {
-            ++concWindow.closureCalls;
-            concWindow.remsetSlots = remsetStats.consumed;
-        }
+        ++concWindow.closureCalls;
+        concWindow.remsetSlots = remsetStats.consumed;
         TraceYoungClosure(workStack, fullYoungScan, reachableObjects, reachableVec, reachableSlots, weakSlots,
                           useBitmapLedger, reachableSlotDomain);
     }
-    if (youngConcMark && stw != nullptr) {
-        // concwin: release only after the STW1 snapshot (roots + remset drain) is marked.
-        // Mutators then run under TraceBarrier/SATB; STW2 still reseals + evacuates.
-        // Not reached under YOUNG_CONC_FOLLOW: that arm already released above.
-        concWindow.markedAtEntry = reachableVec.size();
-        TransitionToGCPhase(GCPhase::GC_PHASE_TRACE, true);
-        reinterpret_cast<RegionSpace&>(theAllocator).PrepareTrace();
+    for (;;) {
+        // Concurrent mark-follow drains work published by the previous pause.
+        // Its worker completion is coordinated by YoungMarkTerminate (the
+        // ZMarkTerminate worker-count/wakeup state machine), not pool polling.
+        const bool workersTerminated =
+            MarkYoungSatbBuffer(workStack, fullYoungScan, reachableObjects, reachableVec, reachableSlots,
+                                weakSlots, useBitmapLedger, &concWindow);
+        CHECK_DETAIL(workersTerminated, "young concurrent mark workers did not terminate");
+#if defined(MRT_TESTABLE_INTERNALS)
+        // Adversarial mutator publication point: workers have terminated, but
+        // the pause has not started. The pause must flush once and return
+        // failure; it must not consume closure in an in-pause loop.
+        PublishSatbBeforeMarkEndTestReceipt();
+#endif
+
+        // ZGenerationYoung::pause_mark_end() does one flush. Work found here is
+        // not processed in the pause: releasing this owner and restoring TRACE
+        // is the existing concurrent_mark_continue edge.
+#if defined(MRT_TESTABLE_INTERNALS)
+        const uint64_t markEndPauseStartNs = TimeUtil::NanoSeconds();
+#endif
+        stw = std::make_unique<ScopedStopTheWorld>("young mark terminate", true,
+                                                   GCPhase::GC_PHASE_CLEAR_SATB_BUFFER);
+#if defined(MRT_TESTABLE_INTERNALS)
+        const size_t y2yBatchAtMarkEnd = pendingY2yDirtyHolderCount();
+#endif
+        theAllocator.VisitAllocBuffers([&workStack](AllocBuffer& buffer) {
+            // The CLEAR_SATB transition also closes each mutator's epoch stack
+            // publication. Late stack roots are mark work, just like ZGC's
+            // thread-local mark stacks flushed by ZMark::try_end().
+            buffer.MergeRoots(workStack);
+            buffer.MergeYoungAllocBlack(workStack);
+            buffer.MergeY2yDirtyHolders(workStack);
+        });
+#if defined(MRT_TESTABLE_INTERNALS)
+        NoteY2yAfterStw2TestReceipt(y2yBatchAtMarkEnd);
+#endif
+        const bool markEndSucceeded = TryEndYoungMark(workStack, &concWindow);
+#if defined(MRT_TESTABLE_INTERNALS)
+        NoteMarkTerminatePauseDuration(TimeUtil::NanoSeconds() - markEndPauseStartNs);
+#endif
+        if (workersTerminated && markEndSucceeded) {
+            break;
+        }
+        NoteMarkTerminateContinue(workStack.size());
+        ++concWindow.reenters;
         stw.reset();
-        concWindowStartNs = TimeUtil::NanoSeconds();
-        VLOG(REPORT, "[GCV2][youngconc] concurrent young mark start (mutators running; STW1 snapshot marked)");
+        TransitionToGCPhase(GCPhase::GC_PHASE_TRACE, true);
+#if defined(MRT_TESTABLE_INTERNALS)
+        PublishY2yAfterReleaseTestReceipt();
+#endif
     }
-    if (youngConcMark) {
-        // SATB termination while concurrent (major MarkSatbBuffer shape). Ends in CLEAR_SATB.
-        CHECK_DETAIL(MarkYoungSatbBuffer(workStack, fullYoungScan, reachableObjects, reachableVec, reachableSlots,
-                                         weakSlots, useBitmapLedger, &concWindow),
-                     "young concurrent mark SATB not cleared");
+    ReportMarkTerminateContinue();
+    {
         // Window closes here: the next statement asks every mutator to stop. Read the pair
         // (windowNs, MarkedInWindow) together -- duration alone proves nothing.
         concWindow.markedAtExit = reachableVec.size();
         if (concWindowStartNs != 0) {
             concWindow.windowNs = TimeUtil::NanoSeconds() - concWindowStartNs;
         }
-        // STW2: freeze world for post-mark verify + evacuate (still STW today).
-        // youngmiss2 §1①: sync CLEAR_SATB so every mutator HandleGCPhase flushes its current
-        // satbNode into retiredNodes (GetRetiredObjects only pops retired — in-flight node is
-        // otherwise invisible). Same shape as MarkSatbBuffer timeout STW.
-        // portyoungconc L1 (ZGC zGeneration.cpp:550-555):
-        //     while (!pause_mark_end()) { concurrent_mark_continue(); }
-        // pause_mark_end() is a safepoint that answers "did marking terminate"; false means
-        // leave the safepoint, run mark_follow() concurrently, and come back. Our STW2
-        // fixpoint is that safepoint body -- but today it logs NON_CONVERGED and evacuates
-        // anyway, i.e. it has no false branch. This loop supplies it.
-        bool markEndDone = false;
-        while (!markEndDone) {
-        stw = std::make_unique<ScopedStopTheWorld>("young post-mark", true,
-                                                   GCPhase::GC_PHASE_CLEAR_SATB_BUFFER);
-        // youngmiss / youngconc M1: the write barrier marks concurrent-window targets before it
-        // records their slots. Keep those slots on current, as ZGC does, instead of consuming the
-        // same edge into this collection's marking work a second time at mark end.
-        //
-        // ZGC shape (zGeneration.cpp:542-558 mark_end re-enter): under STW2 mutators are frozen,
-        // so roots+SATB+field-rescan loop to a quiet fixpoint; the current-face Snapshot is
-        // consumed for this cycle's reference fixing and retained for the next flip.
-        //
-        // (1) flush current and take the non-destructive Snapshot
-        // (2) fixpoint: roots + retired SATB + reachableVec field rescan (young→young)
-        // (3) quiet = no new greys this iter (work empty, no field extra, reachableVec stable)
-        {
-            MRT_PHASE_TIMER("young.stw2_fixpoint");
-            // STW2 slimming: the STW1 snapshot has already had every reachable field
-            // scanned by TraceYoungClosure.  Keep a cursor at that sealed prefix and
-            // only revisit holders added after the concurrent window.  Mutator y2y
-            // writes are covered by the existing per-AllocBuffer dirty-holder face;
-            // merging it under STW2 is the incremental replacement for rescanning the
-            // whole reachableVec on every fixpoint iteration.
-            size_t fieldScanCursor = reachableVec.size();
-            size_t totalConcRemset = 0;
-            size_t deferredCurrentRemset = 0;
-            {
-                MinorSlotSet concurrentRemset;
-                RememberedSet& rememberedSet = Heap::GetHeap().GetRememberedSet();
-                StoreBarrierBuffer::FlushAll(rememberedSet);
-                // Keep current for the next minor, but scan it now as ZGC does
-                // for an entry that crossed the young-mark flip
-                // (zStoreBarrierBuffer.cpp:170-187). Snapshot is deliberately
-                // non-destructive: this cycle scans it and the next flip retains it.
-                concurrentRemset = rememberedSet.Snapshot();
-                deferredCurrentRemset = concurrentRemset.size();
-                Stw2CurrentAudit::Census(concurrentRemset, &theAllocator);
-                if (!concurrentRemset.empty()) {
-                    rememberedSlots.insert(concurrentRemset.begin(), concurrentRemset.end());
-                    remsetStats.recorded = rememberedSlots.size();
-                    RescanRememberedSet(workStack, concurrentRemset, reachableSlots, weakSlots,
-                                        currentMinorRoots,
-                                        /*fullYoungScan=*/false, &consumedSlots, &remsetStats,
-                                        &remsetInteriorBases, stw.get());
-                    for (MAddress slot : concurrentRemset) {
-                        if (Heap::IsHeapAddress(slot)) {
-                            (void)LedgerInsert(reachableSlots, slot);
-                        }
-                    }
-                    if (!workStack.empty()) {
-                        TraceYoungClosure(workStack, fullYoungScan, reachableObjects, reachableVec,
-                                          reachableSlots, weakSlots, useBitmapLedger);
-                    }
-                }
-            }
-            // youngconc Ⅱ: TRACE-window allocate-black greys (painted at alloc). Claim skip in
-            // TraceYoungClosure would drop reachableVec/fields — force ledger + child greys.
-            // Skip incomplete headers (STW mid-construct); paint still covers GetRoute face.
-            size_t allocBlackN = 0;
-            {
-                WorkStack allocBlack = NewWorkStack();
-                theAllocator.VisitAllocBuffers(
-                    [&allocBlack](AllocBuffer& buffer) { buffer.MergeYoungAllocBlack(allocBlack); });
-                allocBlackN = allocBlack.size();
-                while (!allocBlack.empty()) {
-                    BaseObject* object = allocBlack.back().object();
-                    allocBlack.pop_back();
-                    if (object == nullptr || !Heap::IsHeapAddress(object)) {
-                        continue;
-                    }
-                    if (!Collector::PlausibleManagedObjectGate("youngconc.alloc_black", object)) {
-                        continue;
-                    }
-                    if (!object->IsValidObject()) {
-                        continue;
-                    }
-                    RegionInfo* region = RegionInfo::GetRegionInfoAt(reinterpret_cast<MAddress>(object));
-                    if (region == nullptr || !region->IsYoungRegion()) {
-                        continue;
-                    }
-                    (void)MarkObject(object);
-                    reachableVec.push_back(object);
-                    if (!object->HasRefField() || object->IsWeakRef()) {
-                        continue;
-                    }
-                    if (useBitmapLedger && fullYoungScan) {
-                        object->ForEachRefField([this, &reachableSlots](RefField<>& field) {
-                            MAddress slot = reinterpret_cast<MAddress>(&field);
-                            if (Heap::IsHeapAddress(slot)) {
-                                (void)LedgerInsert(reachableSlots, slot);
-                            }
-                        });
-                    }
-                    object->ForEachRefField([this, &workStack, object](RefField<>& field) {
-                        BaseObject* target = ResolveMinorReference(field);
-                        if (target == nullptr || !Heap::IsHeapAddress(target)) {
-                            return;
-                        }
-                        if (fullYoungScan) {
-                            PushAdmittedYoung(target, workStack, "young_alloc_black.fys", &field, object);
-                        } else {
-                            PushYoungObject(target, workStack, "young_alloc_black");
-                        }
-                    });
-                }
-                if (!workStack.empty()) {
-                    TraceYoungClosure(workStack, fullYoungScan, reachableObjects, reachableVec, reachableSlots,
-                                      weakSlots, useBitmapLedger);
-                }
-            }
-            constexpr size_t kMaxStw2Iters = 16;
-            size_t totalFieldExtra = 0;
-            size_t iters = 0;
-            bool converged = false;
-            for (; iters < kMaxStw2Iters; ++iters) {
-                const size_t reachableBefore = reachableVec.size();
-                size_t rootExtraN = 0;
-                size_t satbExtraN = 0;
-                {
-                    WorkStack finalRoots = NewWorkStack();
-                    theAllocator.VisitAllocBuffers(
-                        [&finalRoots](AllocBuffer& buffer) { buffer.MergeRoots(finalRoots); });
-                    SatbBuffer::Instance().GetRetiredObjects(finalRoots);
-                    while (!finalRoots.empty()) {
-                        const MarkStackEntry entry = finalRoots.back();
-                        BaseObject* object = entry.object();
-                        finalRoots.pop_back();
-                        if (Heap::IsHeapAddress(object)) {
-                            allocationRoots.insert(object);
-                        }
-                        if (!entry.follow()) {
-                            if (Heap::IsHeapAddress(object)) {
-                                workStack.push_back(MarkStackEntry::MarkOnly(object));
-                                ++rootExtraN;
-                            }
-                        } else if (fullYoungScan) {
-                            size_t before = workStack.size();
-                            PushAdmittedYoung(object, workStack, "alloc_buffer_final.fys");
-                            if (workStack.size() > before) {
-                                ++rootExtraN;
-                            }
-                        } else {
-                            size_t before = workStack.size();
-                            PushYoungObject(object, workStack, "alloc_buffer_final");
-                            if (workStack.size() > before) {
-                                ++rootExtraN;
-                            }
-                        }
-                    }
-                    VisitMinorRoots([this, &workStack, &rootExtraN, &currentMinorRoots](BaseObject* object) {
-                        if (Heap::IsHeapAddress(object)) {
-                            RegionInfo* region =
-                                RegionInfo::TryGetRegionInfoAt(reinterpret_cast<MAddress>(object));
-                            if (region != nullptr && !region->IsYoungRegion()) {
-                                currentMinorRoots.insert(object);
-                            }
-                        }
-                        if (fullYoungScan) {
-                            size_t before = workStack.size();
-                            PushAdmittedYoung(object, workStack, "minor_root_final.fys");
-                            if (workStack.size() > before) {
-                                ++rootExtraN;
-                            }
-                        } else {
-                            size_t before = workStack.size();
-                            PushYoungObject(object, workStack, "minor_root_final");
-                            if (workStack.size() > before) {
-                                ++rootExtraN;
-                            }
-                        }
-                    }, [&workStack, &rootExtraN, &currentMinorRoots](BaseObject* object) {
-                        if (!Heap::IsHeapAddress(object)) {
-                            return;
-                        }
-                        RegionInfo* region =
-                            RegionInfo::TryGetRegionInfoAt(reinterpret_cast<MAddress>(object));
-                        if (region != nullptr && !region->IsYoungRegion()) {
-                            currentMinorRoots.insert(object);
-                        }
-                        workStack.push_back(MarkStackEntry::MarkOnly(object));
-                        ++rootExtraN;
-                    });
-                    if (!workStack.empty()) {
-                        TraceYoungClosure(workStack, fullYoungScan, reachableObjects, reachableVec, reachableSlots,
-                                          weakSlots, useBitmapLedger);
-                    }
-                }
-                {
-                    WorkStack finalSatb = NewWorkStack();
-                    SatbBuffer::Instance().GetRetiredObjects(finalSatb);
-                    while (!finalSatb.empty()) {
-                        BaseObject* obj = finalSatb.back().object();
-                        finalSatb.pop_back();
-                        if (!Heap::IsHeapAddress(obj)) {
-                            continue;
-                        }
-                        if (fullYoungScan) {
-                            size_t before = workStack.size();
-                            PushAdmittedYoung(obj, workStack, "young_satb_final.fys");
-                            if (workStack.size() > before) {
-                                ++satbExtraN;
-                            }
-                        } else {
-                            size_t before = workStack.size();
-                            PushYoungObject(obj, workStack, "young_satb_final");
-                            if (workStack.size() > before) {
-                                ++satbExtraN;
-                            }
-                        }
-                    }
-                    if (!workStack.empty()) {
-                        TraceYoungClosure(workStack, fullYoungScan, reachableObjects, reachableVec, reachableSlots,
-                                          weakSlots, useBitmapLedger);
-                    }
-                }
-                // youngmiss2 §1③: old→young remset does not contain concurrent y2y
-                // stores.  The write barrier already records their holder objects in
-                // y2yDirtyHolders.  Scan those holders plus the reachableVec suffix
-                // added after STW1, rather than the sealed STW1 prefix.
-                size_t fieldExtraN = 0;
-                {
-                    WorkStack fieldHolders = NewWorkStack();
-                    mergeY2yDirtyHolders(fieldHolders);
-#if defined(MRT_TESTABLE_INTERNALS)
-                    NoteY2yAfterStw2TestReceipt(pendingY2yDirtyHolderCount());
-#endif
-                    const size_t incrementalEnd = reachableVec.size();
-                    for (size_t i = fieldScanCursor; i < incrementalEnd; ++i) {
-                        fieldHolders.push_back(reachableVec[i]);
-                    }
-                    fieldScanCursor = incrementalEnd;
-
-                    WorkStack fieldExtra = NewWorkStack();
-                    while (!fieldHolders.empty()) {
-                        BaseObject* object = fieldHolders.back().object();
-                        fieldHolders.pop_back();
-                        if (object == nullptr || !Heap::IsHeapAddress(object)) {
-                            continue;
-                        }
-                        if (!Collector::PlausibleManagedObjectGate("youngconc.field_rescan.holder", object)) {
-                            continue;
-                        }
-                        if (!object->HasRefField()) {
-                            continue;
-                        }
-                        object->ForEachRefField([this, &fieldExtra, &reachableSlots,
-                                                object](RefField<>& field) {
-                            MAddress slot = reinterpret_cast<MAddress>(&field);
-                            if (fullYoungScan && Heap::IsHeapAddress(slot)) {
-                                (void)LedgerInsert(reachableSlots, slot);
-                            }
-                            BaseObject* target = ResolveMinorReference(field);
-                            if (target == nullptr || !Heap::IsHeapAddress(target)) {
-                                return;
-                            }
-                            if (!Collector::PlausibleManagedObjectGate("youngconc.field_rescan.target", target)) {
-                                BaseObject* host = Collector::TryRecoverInteriorBase(target);
-                                if (host != nullptr && host != target) {
-                                    target = host;
-                                } else {
-                                    return;
-                                }
-                            }
-                            RegionInfo* region = RegionInfo::GetRegionInfoAt(reinterpret_cast<MAddress>(target));
-                            if (region == nullptr || !region->IsYoungRegion()) {
-                                return;
-                            }
-                            if (region->IsMarkedObject(
-                                    region->GetMarkView<Generation::Young>(), target)) {
-                                return;
-                            }
-
-                            PushAdmittedYoung(target, fieldExtra, "youngconc.field_rescan", &field, object);
-                        });
-                    }
-                    fieldExtraN = fieldExtra.size();
-                    totalFieldExtra += fieldExtraN;
-                    if (!fieldExtra.empty()) {
-                        TraceYoungClosure(fieldExtra, fullYoungScan, reachableObjects, reachableVec, reachableSlots,
-                                          weakSlots, useBitmapLedger);
-                    }
-                }
-                // Quiet: no new grey work this iteration. rootExtraN may re-push already-marked
-                // roots under FYS (PushYoungObject skips marked); only field/satb/vec growth count.
-                if (satbExtraN == 0 && fieldExtraN == 0 && workStack.empty() &&
-                    reachableVec.size() == reachableBefore) {
-                    converged = true;
-                    break;
-                }
-                (void)rootExtraN;
-            }
-            VLOG(REPORT,
-                 "[GCV2][youngconc] stw2_fixpoint iters=%zu conc_remset_total=%zu "
-                 "deferred_current=%zu field_extra_total=%zu alloc_black=%zu reachable=%zu converged=%d",
-                 iters + 1, totalConcRemset, deferredCurrentRemset, totalFieldExtra, allocBlackN,
-                 reachableVec.size(), static_cast<int>(converged));
-            // ZGC mark_end(): true = terminated, fall through to relocate; false = go back to
-            // concurrent mark. FORCE_REENTER makes the first n ends answer false, so the edge
-            // has a positive control on a workload that converges in one pass every time --
-            // an untaken branch cannot be shown to work.
-            const bool forcedNotDone = concWindow.reenters < youngMarkEndForceReenter;
-            const bool needsReenter = !converged || forcedNotDone;
-            const bool wantReenter = needsReenter;
-            markEndDone = !wantReenter;
-            if (!converged) {
-                VLOG(REPORT,
-                     "[GCV2][youngconc] stw2_fixpoint NON_CONVERGED max_iters=%zu reachable=%zu "
-                     "conc_remset_total=%zu field_extra_total=%zu alloc_black=%zu reenter=%d",
-                     kMaxStw2Iters, reachableVec.size(), totalConcRemset, totalFieldExtra, allocBlackN,
-                     static_cast<int>(wantReenter));
-            }
-            if (wantReenter) {
-                VLOG(REPORT,
-                     "[GCV2][youngconc] mark_end=false -> concurrent_mark_continue reenter=%zu forced=%d "
-                     "converged=%d reachable=%zu",
-                     concWindow.reenters + 1, static_cast<int>(forcedNotDone), static_cast<int>(converged),
-                     reachableVec.size());
-            }
-        }
-        if (!markEndDone) {
-            // concurrent_mark_continue() == mark_follow() only (zGeneration.cpp:689-692).
-            // Deliberately no PrepareTrace here: that is a mark-start action (it clears
-            // notRelocatableThisCycle), and re-running it would drop stamps the window set.
-            ++concWindow.reenters;
-            TransitionToGCPhase(GCPhase::GC_PHASE_TRACE, true);
-            stw.reset();
-            const uint64_t reenterStartNs = TimeUtil::NanoSeconds();
-            CHECK_DETAIL(MarkYoungSatbBuffer(workStack, fullYoungScan, reachableObjects, reachableVec,
-                                             reachableSlots, weakSlots, useBitmapLedger, &concWindow),
-                         "young concurrent mark continue SATB not cleared");
-            concWindow.windowNs += TimeUtil::NanoSeconds() - reenterStartNs;
-            concWindow.markedAtExit = reachableVec.size();
-        }
-        }
+        // The successful mark-end owner is retained for evacuation handoff.
+        // Every allocator/y2y batch was either empty at this pause or forced a
+        // failed mark-end and was processed by concurrent_mark_continue.
         // Rebuild liveRememberedSlots after concurrent remset merge (stats/audit only;
         // EvacuateYoungRegions remset authority is consumedSlots — fysfixa 3f27f0c4).
         liveRememberedSlots.clear();
@@ -1361,67 +1042,8 @@ void WCollector::DoYoungGarbageCollection()
             }
         }
         remsetStats.live = liveRememberedCount;
-        VLOG(REPORT, "[GCV2][youngconc] concurrent young mark done; STW2 post-mark+evac reachable=%zu",
+        VLOG(REPORT, "[GCV2][youngconc] concurrent young mark done; STW2 evacuation handoff reachable=%zu",
              reachableVec.size());
-        // youngstatic: seal static-root young targets into mark face under STW2.
-        // Probe showed VisitStaticRoots enumerates (staticYoung≫0) but PushYoungObject is
-        // bypassed under FYS (direct workStack). Residual unmarked static young still reach
-        // FixMinor as ghost-from with live0Surv=0. Force MarkObject here (not only push).
-        {
-            size_t sealed = 0;
-            size_t already = 0;
-            size_t staticYoung = 0;
-            size_t staticOld = 0;
-            size_t gateSkip = 0;
-            Heap::GetHeap().VisitStaticRoots([this, &sealed, &already, &staticYoung, &staticOld, &gateSkip,
-                                             &workStack](RootSlot& root) {
-                zaddress_unsafe observed = root.LoadPlain();
-                HeapSlot<> bits(to_zpointer(raw(observed)));
-                BaseObject* obj = to_object(bits.GetTargetObject());
-                if (obj == nullptr || !Heap::IsHeapAddress(obj)) {
-                    return;
-                }
-                if (!Collector::PlausibleManagedObjectGate("youngstatic.seal", obj)) {
-                    BaseObject* host = Collector::TryRecoverInteriorBase(obj);
-                    if (host == nullptr || host == obj) {
-                        ++gateSkip;
-                        return;
-                    }
-                    obj = host;
-                }
-                if (!obj->IsValidObject()) {
-                    ++gateSkip;
-                    return;
-                }
-                RegionInfo* region = RegionInfo::TryGetRegionInfoAt(reinterpret_cast<MAddress>(obj));
-                if (region == nullptr) {
-                    ++gateSkip;
-                    return;
-                }
-                if (!region->IsYoungRegion()) {
-                    ++staticOld;
-                    return;
-                }
-                ++staticYoung;
-                if (region->IsMarkedObject(region->GetMarkView<Generation::Young>(), obj)) {
-                    ++already;
-                    return;
-                }
-                // Direct paint (do not rely solely on workStack drain under concurrent residue).
-
-                (void)MarkObject(obj);
-                PushAdmittedYoung(MarkStackEntry::FollowOnly(obj), workStack, "youngstatic.seal");
-                ++sealed;
-            });
-            if (!workStack.empty()) {
-                TraceYoungClosure(workStack, fullYoungScan, reachableObjects, reachableVec, reachableSlots,
-                                  weakSlots, useBitmapLedger);
-            }
-            LOG(RTLOG_ERROR,
-                "[GCV2][youngstatic] stw2_static_seal sealed=%zu already=%zu staticYoung=%zu "
-                "staticOld=%zu gateSkip=%zu reachable=%zu",
-                sealed, already, staticYoung, staticOld, gateSkip, reachableVec.size());
-        }
     }
     // portyoungconc positive control. Emitted on EVERY minor, including the closed arm, so
     // "no line" and "a line of zeros" are distinguishable. window_ns is the only field that
@@ -1431,143 +1053,13 @@ void WCollector::DoYoungGarbageCollection()
          "[GCV2][youngconc][concwork] run=%zu conc=%d follow=%d window_ns=%llu marked_in_window=%zu "
          "satb_objects=%zu satb_iters=%zu closure_calls=%zu remset_slots=%zu reenters=%zu "
          "marked_at_entry=%zu reachable_total=%zu",
-         minorTotalRuns + 1, static_cast<int>(youngConcMark), static_cast<int>(youngConcFollow),
+         minorTotalRuns + 1, 1, 1,
          static_cast<unsigned long long>(concWindow.windowNs), concWindow.MarkedInWindow(),
          concWindow.satbObjects, concWindow.satbIters, concWindow.closureCalls, concWindow.remsetSlots,
          concWindow.reenters, concWindow.markedAtEntry, reachableVec.size());
     VLOG(REPORT, "[GCV2][setbitmap] use=%d reachable_n=%zu set_n=%zu fullYoung=%d youngConc=%d",
          static_cast<int>(useBitmapLedger), reachableVec.size(), reachableObjects.size(),
-         static_cast<int>(fullYoungScan), static_cast<int>(youngConcMark));
-    // iorfix / blackmark: product post-mark fixpoint.
-    // PrepareYoung ClearLiveInfo drops pre-mark allocation-black bits; live holders in
-    // reachableVec used to hold fields to unmarked young (live0Surv=0 at GetRoute). The
-    // wasMarked residual walk (e533489f7) now closes that root frontier in-place. A later
-    // remset/SATB closure can still expand the reachable set and expose the old residual
-    // shape, so re-walk only when work arrived after the root closure. This preserves the
-    // correctness fallback without rescanning a closed root-only graph every minor.
-    // Orthogonal to allocate-black paint (youngconc-only after §5.2 delete of MRT_GCV2_ALLOC_BLACK);
-    // IOR samples are FixMinorEvacuatedSlot×liveobj with ROUTED+surv0 (REPORT-iorsource).
-    size_t fixpointTotalExtra = 0;
-    size_t fixpointRoundScans = 0;
-    size_t fixpointClosureRounds = 0;
-    size_t fixpointHolderVisits = 0;
-    size_t fixpointHolderNonHeap = 0;
-    size_t fixpointHolderGateSkip = 0;
-    size_t fixpointRefHolders = 0;
-    size_t fixpointRefFields = 0;
-    size_t fixpointTargetNull = 0;
-    size_t fixpointTargetNonHeap = 0;
-    size_t fixpointTargetRecovered = 0;
-    size_t fixpointTargetGateSkip = 0;
-    size_t fixpointTargetNotYoung = 0;
-    size_t fixpointTargetAlreadyMarked = 0;
-    size_t fixpointAdmitted = 0;
-    size_t fixpointReachableAdded = 0;
-    uint64_t fixpointScanNs = 0;
-    uint64_t fixpointClosureNs = 0;
-    const size_t lateReachableAdded = reachableVec.size() - reachableBeforeRemsetClosure;
-    const bool fixpointTriggered = lateReachableAdded != 0;
-    {
-        MRT_PHASE_TIMER("young.postmark_fixpoint");
-        size_t rounds = 0;
-        constexpr size_t kMaxFixpointRounds = 8;
-        for (; fixpointTriggered && rounds < kMaxFixpointRounds; ++rounds) {
-            WorkStack blackmarkExtra = NewWorkStack();
-            const size_t nHolders = reachableVec.size();
-            ++fixpointRoundScans;
-            const uint64_t scanStart = TimeUtil::NanoSeconds();
-            for (size_t i = 0; i < nHolders; ++i) {
-                ++fixpointHolderVisits;
-                BaseObject* object = reachableVec[i];
-                if (object == nullptr || !Heap::IsHeapAddress(object)) {
-                    ++fixpointHolderNonHeap;
-                    continue;
-                }
-                if (!Collector::PlausibleManagedObjectGate("iorfix.fixpoint.holder", object)) {
-                    ++fixpointHolderGateSkip;
-                    continue;
-                }
-                if (!object->HasRefField()) {
-                    continue;
-                }
-                ++fixpointRefHolders;
-                object->ForEachRefField([this, &blackmarkExtra, object, &fixpointRefFields,
-                                         &fixpointTargetNull, &fixpointTargetNonHeap,
-                                         &fixpointTargetRecovered, &fixpointTargetGateSkip,
-                                         &fixpointTargetNotYoung, &fixpointTargetAlreadyMarked,
-                                         &fixpointAdmitted](RefField<>& field) {
-                    ++fixpointRefFields;
-                    BaseObject* target = ResolveMinorReference(field);
-                    if (target == nullptr || !Heap::IsHeapAddress(target)) {
-                        if (target == nullptr) {
-                            ++fixpointTargetNull;
-                        } else {
-                            ++fixpointTargetNonHeap;
-                        }
-
-                        return;
-                    }
-                    if (!Collector::PlausibleManagedObjectGate("iorfix.fixpoint.target", target)) {
-                        BaseObject* host = Collector::TryRecoverInteriorBase(target);
-                        if (host != nullptr && host != target) {
-                            target = host;
-                            ++fixpointTargetRecovered;
-                        } else {
-                            ++fixpointTargetGateSkip;
-
-                            return;
-                        }
-                    }
-                    RegionInfo* region = RegionInfo::GetRegionInfoAt(reinterpret_cast<MAddress>(target));
-                    if (region == nullptr || !region->IsYoungRegion()) {
-                        ++fixpointTargetNotYoung;
-
-                        return;
-                    }
-                    if (region->IsMarkedObject(region->GetMarkView<Generation::Young>(), target)) {
-                        ++fixpointTargetAlreadyMarked;
-
-                        return;
-                    }
-                    ++fixpointAdmitted;
-
-
-                    blackmarkExtra.push_back(target);
-                });
-            }
-            fixpointScanNs += TimeUtil::NanoSeconds() - scanStart;
-            if (blackmarkExtra.empty()) {
-                break;
-            }
-            size_t before = reachableVec.size();
-            size_t extraN = blackmarkExtra.size();
-            const uint64_t closureStart = TimeUtil::NanoSeconds();
-            TraceYoungClosure(blackmarkExtra, fullYoungScan, reachableObjects, reachableVec, reachableSlots,
-                              weakSlots, useBitmapLedger);
-            fixpointClosureNs += TimeUtil::NanoSeconds() - closureStart;
-            ++fixpointClosureRounds;
-            fixpointTotalExtra += extraN;
-            fixpointReachableAdded += reachableVec.size() - before;
-            if (reachableVec.size() == before) {
-                break;
-            }
-        }
-    }
-    VLOG(REPORT,
-         "[GCV2][candfix] postmark_fixpoint trigger=%u root_reachable=%zu late_added=%zu "
-         "round_scans=%zu closure_rounds=%zu holder_visits=%zu "
-         "holder_nonheap=%zu holder_gate_skip=%zu ref_holders=%zu ref_fields=%zu target_null=%zu "
-         "target_nonheap=%zu target_recovered=%zu target_gate_skip=%zu target_not_young=%zu "
-         "target_already_marked=%zu admitted=%zu closure_inputs=%zu reachable_added=%zu "
-         "reachable_after=%zu scan_ns=%llu closure_ns=%llu",
-         static_cast<unsigned>(fixpointTriggered), reachableBeforeRemsetClosure, lateReachableAdded,
-         fixpointRoundScans, fixpointClosureRounds, fixpointHolderVisits, fixpointHolderNonHeap,
-         fixpointHolderGateSkip, fixpointRefHolders, fixpointRefFields, fixpointTargetNull,
-         fixpointTargetNonHeap, fixpointTargetRecovered, fixpointTargetGateSkip, fixpointTargetNotYoung,
-         fixpointTargetAlreadyMarked, fixpointAdmitted, fixpointTotalExtra, fixpointReachableAdded,
-         reachableVec.size(), static_cast<unsigned long long>(fixpointScanNs),
-         static_cast<unsigned long long>(fixpointClosureNs));
-
+         static_cast<int>(fullYoungScan), 1);
     // No independent full-root closure is available after deleting the empty
     // explainer. nullptr means "not measured"; an empty set must mean a closure
     // actually ran and found no holders.
@@ -1650,7 +1142,7 @@ void WCollector::DoYoungGarbageCollection()
     // In non-concurrent FYS, RescanRememberedSet only consumes slots in reachableSlots;
     // their holders are in reachableVec and will be scanned by FixMinorObjectSlots.
     // Concurrent mark force-admits slots without that proof.
-    const bool refFixSlotsCoveredByReachable = fullYoungScan && !youngConcMark;
+    const bool refFixSlotsCoveredByReachable = false;
     EvacuateYoungRegions(reachableVec, consumedSlots, currentMinorRoots, refFixSlotsCoveredByReachable,
                          remsetInteriorBases, &stw);
     size_t allocatedAfter = space.AllocatedBytes();

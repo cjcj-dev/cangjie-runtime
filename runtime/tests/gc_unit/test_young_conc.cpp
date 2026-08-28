@@ -1,37 +1,32 @@
+#if defined(MRT_TESTABLE_INTERNALS)
+
 // Copyright (c) Huawei Technologies Co., Ltd. 2025. All rights reserved.
 // This source file is part of the Cangjie project, licensed under Apache-2.0
 // with Runtime Library Exception.
 
 // Young concurrent-mark window invariants (REPORT-youngconc 6/20).
-// Product YOUNG_CONC_MARK stays pinned-off (RegionSpace.cpp:307-310).
-// These tests reconstruct the three mutator actions inside the TRACE window:
+// These tests exercise the three mutator actions inside the TRACE window:
 //   1. TraceBarrier-shaped SATB pre-image (ShouldEnqueue skip after paint)
 //   2. TRACE-window AllocBlack (paint + grey ledger)
 //   3. young→young overwrite (not remset; dirty-holder compensation)
 // Shape: ZGC gtest construct-state → assert (test_zLiveMap / test_zBitMap).
-//
-// Compile-time arm (not MRT_GCV2_* env):
-//   GC_UNIT_YOUNG_CONC_MARK_ON=0 default — models product pin
-//   =1 — models allocate-black paint+ledger as if the constexpr were true
 
-#ifndef GC_UNIT_YOUNG_CONC_MARK_ON
-#define GC_UNIT_YOUNG_CONC_MARK_ON 0
-#endif
-
-// This TU needs the existing test-peer friendship to reach the private product
-// consumer.  Product builds do not compile this file, and no product shape or
-// export is changed by enabling the test-only declarations here.
-#ifndef MRT_TESTABLE_INTERNALS
-#define MRT_TESTABLE_INTERNALS 1
-#endif
+// Keep this TU in the same testability configuration as the product SO.  The
+// standalone gate supplies MRT_TESTABLE_INTERNALS only when those product
+// hooks exist; the top-level guard makes the default build an empty TU.
 
 #include <cstdint>
+#include <atomic>
 #include <cstdio>
 #include <cstring>
+#include <sched.h>
+#include <thread>
 #include <unordered_set>
 #include <vector>
 
 #include "Common/Runtime.h"
+#include "Cangjie.h"
+#include "CjScheduler.h"
 
 #include "gc_heap_fixture.hpp"
 #include "gc_unittest.hpp"
@@ -51,7 +46,6 @@
 #include "Heap/Collector/CollectorProxy.h"
 #include "Heap/Collector/CollectorResources.h"
 #include "Heap/Collector/TracingCollector.h"
-#include "Heap/Verify/Stw2CurrentAudit.h"
 #include "Heap/WCollector/WCollector.h"
 #include "Mutator/SatbBuffer.h"
 #include "Mutator/MutatorManager.h"
@@ -83,6 +77,8 @@ GC_TEST(ReferenceProcessor, WeakDiscoveryPublishesNoStrongMarkWork)
 }
 
 extern "C" int CJ_ScheduleManagerInit();
+extern "C" bool MRT_NewForeignCJThread();
+extern "C" bool MRT_EndForeignCJThread();
 
 namespace MapleRuntime {
 
@@ -97,12 +93,10 @@ struct RelocationReceiptTestAccess {
         resources.gcThreadPool = threadPool;
     }
 
-#if defined(MRT_TESTABLE_INTERNALS)
     static void InitCollectorProxy(CollectorResources& resources)
     {
         resources.collectorProxy.Init();
     }
-#endif
 
     static bool ConsumeYoungSatbAndReach(WCollector& collector, BaseObject* expected)
     {
@@ -126,8 +120,6 @@ struct RelocationReceiptTestAccess {
 } // namespace MapleRuntime
 
 namespace {
-
-constexpr bool kYoungConcMarkOn = (GC_UNIT_YOUNG_CONC_MARK_ON != 0);
 
 class TestCollector final : public Collector {
 public:
@@ -198,10 +190,11 @@ private:
     Concurrency concurrency;
 };
 
-// Product AllocBlack (RegionSpace.cpp:326-346) when youngConcMarkOn.
-void ProductAllocBlackPaint(RegionInfo* reg, BaseObject* obj, size_t totalSize, AllocBuffer* ledger)
+// Bitmap/ledger mechanism model. Product-path attribution is covered by the
+// runtime-dispatch tests below, not by this helper.
+void ModelAllocBlackPaint(RegionInfo* reg, BaseObject* obj, size_t totalSize, AllocBuffer* ledger)
 {
-    if (!kYoungConcMarkOn || reg == nullptr || reg->IsLargeRegion() || !reg->IsYoungRegion()) {
+    if (reg == nullptr || reg->IsLargeRegion() || !reg->IsYoungRegion()) {
         return;
     }
     MAddress addr = reinterpret_cast<MAddress>(obj);
@@ -292,42 +285,16 @@ GC_TEST(YoungConc, TraceRegionSkipsSatbWithoutPaint)
     fx.FreePlanted(live);
 }
 
-// 2. AllocBlack: pin-off leaves white; constexpr-on paints + greys (RegionSpace.cpp:299-346).
-GC_TEST(YoungConc, AllocBlackWhiteWhenConcMarkOff)
+// 2. AllocBlack mechanism: the sole young-concurrent configuration paints and publishes grey work.
+GC_TEST(YoungConc, AllocBlackPaintAndGreyMechanism)
 {
-    if (kYoungConcMarkOn) {
-        return;
-    }
     GcHeapFixture fx;
     fx.region0->SetYoungRegionFlag(1);
     fx.region0->SetYoungAge(1);
     LiveInfo* live = fx.PlantLiveInfo(fx.region0);
     (void)fx.PlantMarkBitmap<Generation::Young>(live, fx.region0->GetRegionSize());
     auto* buf = new AllocBuffer();
-    ProductAllocBlackPaint(fx.region0, fx.obj0, 8, buf);
-
-    size_t off = fx.region0->GetAddressOffset(reinterpret_cast<MAddress>(fx.obj0));
-    GC_EXPECT_FALSE(fx.region0->IsMarkedObject(fx.region0->GetMarkView<Generation::Young>(), off));
-    std::vector<BaseObject*> stack;
-    buf->MergeYoungAllocBlack(stack);
-    GC_EXPECT_EQ(stack.size(), 0u);
-
-    fx.region0->metadata.liveInfo = nullptr;
-    fx.FreePlanted(live);
-}
-
-GC_TEST(YoungConc, AllocBlackPaintAndGreyWhenConcMarkOn)
-{
-    if (!kYoungConcMarkOn) {
-        return;
-    }
-    GcHeapFixture fx;
-    fx.region0->SetYoungRegionFlag(1);
-    fx.region0->SetYoungAge(1);
-    LiveInfo* live = fx.PlantLiveInfo(fx.region0);
-    (void)fx.PlantMarkBitmap<Generation::Young>(live, fx.region0->GetRegionSize());
-    auto* buf = new AllocBuffer();
-    ProductAllocBlackPaint(fx.region0, fx.obj0, 8, buf);
+    ModelAllocBlackPaint(fx.region0, fx.obj0, 8, buf);
 
     size_t off = fx.region0->GetAddressOffset(reinterpret_cast<MAddress>(fx.obj0));
     GC_EXPECT_TRUE(fx.region0->IsMarkedObject(fx.region0->GetMarkView<Generation::Young>(), off));
@@ -340,6 +307,333 @@ GC_TEST(YoungConc, AllocBlackPaintAndGreyWhenConcMarkOn)
     fx.FreePlanted(live);
 }
 
+GC_TEST(YoungConc, EpochHandshakeIsRequired)
+{
+    GC_EXPECT_TRUE(MutatorManager::EpochHandshakeEnabled());
+    GC_EXPECT_TRUE(MutatorManager::ConcurrentStackScanEnabled());
+}
+
+GC_OTHER_VM_TEST(YoungConc, RuntimeMutatorCreateDuringActiveEpochIsBornClean)
+{
+    GC_EXPECT_EQ(CJ_ScheduleManagerInit(), 0);
+    MRT_CjRuntimeInit();
+    MutatorManager& manager = MutatorManager::Instance();
+    Heap::GetHeap().SetGCPhase(GCPhase::GC_PHASE_ENUM);
+    manager.SetRuntimeMutatorLifecycleOnlyForTest(true);
+    std::fprintf(stderr, "DETAIL runtime_lifecycle_create stage=before_begin\n");
+    const uint64_t epoch = manager.BeginEpochHandshakeLifecycleTest();
+    std::fprintf(stderr, "DETAIL runtime_lifecycle_create stage=before_create epoch=%zu\n",
+                 static_cast<size_t>(epoch));
+    Mutator* mutator = manager.CreateRuntimeMutator(ThreadType::HOT_UPDATE_THREAD);
+    std::fprintf(stderr, "DETAIL runtime_lifecycle_create stage=after_create mutator=%p\n", mutator);
+    GC_EXPECT_TRUE(mutator != nullptr);
+    GC_EXPECT_TRUE(mutator->FinishedEpochHandshake(epoch));
+    GC_EXPECT_EQ(manager.RuntimeMutatorRegistrySizeForTest(), 1u);
+    manager.DestroyRuntimeMutator(ThreadType::HOT_UPDATE_THREAD);
+    std::fprintf(stderr, "DETAIL runtime_lifecycle_create stage=after_destroy\n");
+    manager.EndEpochHandshakeLifecycleTest();
+    manager.SetRuntimeMutatorLifecycleOnlyForTest(false);
+    Heap::GetHeap().SetGCPhase(GCPhase::GC_PHASE_IDLE);
+}
+
+GC_OTHER_VM_TEST(YoungConc, RuntimeMutatorDestroyDuringActiveEpochDefersStorage)
+{
+    GC_EXPECT_EQ(CJ_ScheduleManagerInit(), 0);
+    MRT_CjRuntimeInit();
+    MutatorManager& manager = MutatorManager::Instance();
+    Heap::GetHeap().SetGCPhase(GCPhase::GC_PHASE_ENUM);
+    manager.SetRuntimeMutatorLifecycleOnlyForTest(true);
+    std::fprintf(stderr, "DETAIL runtime_lifecycle_destroy stage=before_begin\n");
+    (void)manager.BeginEpochHandshakeLifecycleTest();
+    std::fprintf(stderr, "DETAIL runtime_lifecycle_destroy stage=before_create\n");
+    (void)manager.CreateRuntimeMutator(ThreadType::HOT_UPDATE_THREAD);
+    std::fprintf(stderr, "DETAIL runtime_lifecycle_destroy stage=before_destroy\n");
+    manager.DestroyRuntimeMutator(ThreadType::HOT_UPDATE_THREAD);
+    std::fprintf(stderr, "DETAIL runtime_lifecycle_destroy stage=after_destroy deferred=%zu\n",
+                 manager.EpochHandshakeDestroyDeferredForTest());
+    GC_EXPECT_EQ(manager.RuntimeMutatorRegistrySizeForTest(), 0u);
+    GC_EXPECT_EQ(manager.EpochHandshakeDestroyDeferredForTest(), 1u);
+    manager.EndEpochHandshakeLifecycleTest();
+    manager.SetRuntimeMutatorLifecycleOnlyForTest(false);
+    Heap::GetHeap().SetGCPhase(GCPhase::GC_PHASE_IDLE);
+}
+
+// Deterministic cross-thread interleaving: publish the epoch first, then let a
+// foreign runtime thread complete the real create/exit/destroy path while the
+// epoch remains active.  The main thread only closes the epoch after the worker
+// has retired its entry, so the participant pin and deferred-storage decision
+// are exercised without relying on a probabilistic sleep window.
+GC_OTHER_VM_TEST(YoungConc, RuntimeMutatorActiveEpochCreateDestroyInterleavingIsSerialized)
+{
+    GC_EXPECT_EQ(CJ_ScheduleManagerInit(), 0);
+    MRT_CjRuntimeInit();
+    MutatorManager& manager = MutatorManager::Instance();
+    Heap::GetHeap().SetGCPhase(GCPhase::GC_PHASE_ENUM);
+    const uint64_t epoch = manager.BeginEpochHandshakeLifecycleTest();
+    std::atomic<bool> created{ false };
+    std::atomic<bool> finished{ false };
+    std::thread worker([&]() {
+        manager.SetRuntimeMutatorLifecycleOnlyForTest(true);
+        Mutator* mutator = manager.CreateRuntimeMutator(ThreadType::HOT_UPDATE_THREAD);
+        created.store(mutator != nullptr && mutator->FinishedEpochHandshake(epoch), std::memory_order_release);
+        manager.DestroyRuntimeMutator(ThreadType::HOT_UPDATE_THREAD);
+        manager.SetRuntimeMutatorLifecycleOnlyForTest(false);
+        finished.store(true, std::memory_order_release);
+    });
+    while (!created.load(std::memory_order_acquire)) {
+        (void)sched_yield();
+    }
+    while (!finished.load(std::memory_order_acquire)) {
+        (void)sched_yield();
+    }
+    worker.join();
+    GC_EXPECT_EQ(manager.RuntimeMutatorRegistrySizeForTest(), 0u);
+    GC_EXPECT_TRUE(manager.EpochHandshakeDestroyDeferredForTest() >= 1u);
+    manager.EndEpochHandshakeLifecycleTest();
+    Heap::GetHeap().SetGCPhase(GCPhase::GC_PHASE_IDLE);
+}
+
+GC_OTHER_VM_TEST(YoungConc, RuntimeMutatorDestroyInactiveCheckCannotCrossEpochPublish)
+{
+    GC_EXPECT_EQ(CJ_ScheduleManagerInit(), 0);
+    MRT_CjRuntimeInit();
+    MutatorManager& manager = MutatorManager::Instance();
+    Heap::GetHeap().SetGCPhase(GCPhase::GC_PHASE_ENUM);
+
+    std::atomic<bool> ready{ false };
+    std::atomic<Mutator*> victim{ nullptr };
+    manager.ArmDestroyMutatorInterleavingForTest();
+    std::thread destroyer([&]() {
+        manager.SetRuntimeMutatorLifecycleOnlyForTest(true);
+        Mutator* mutator = manager.CreateRuntimeMutator(ThreadType::HOT_UPDATE_THREAD);
+        victim.store(mutator, std::memory_order_release);
+        ready.store(true, std::memory_order_release);
+        manager.DestroyRuntimeMutator(ThreadType::HOT_UPDATE_THREAD);
+        manager.SetRuntimeMutatorLifecycleOnlyForTest(false);
+    });
+    while (!ready.load(std::memory_order_acquire)) {
+        (void)sched_yield();
+    }
+    while (!manager.DestroyMutatorInterleavingEnteredForTest()) {
+        (void)sched_yield();
+    }
+
+    // The destroyer has already performed its inactive check and is parked at
+    // the publish boundary.  The ledger must still be held, so an epoch
+    // publisher cannot pass this point until destroy is released.
+    const bool ledgerWasFree = manager.EpochHandshakeLedgerTryLockForTest();
+    std::atomic<bool> published{ false };
+    std::atomic<bool> publishAttempted{ false };
+    std::thread publisher([&]() {
+        publishAttempted.store(true, std::memory_order_release);
+        (void)manager.BeginEpochHandshakeLifecycleTest();
+        published.store(true, std::memory_order_release);
+    });
+    while (!publishAttempted.load(std::memory_order_acquire)) {
+        (void)sched_yield();
+    }
+    manager.ReleaseDestroyMutatorInterleavingForTest();
+    destroyer.join();
+    publisher.join();
+    const bool crossed = ledgerWasFree;
+    std::fprintf(stderr, "DETAIL interleaving ledger_free=%d published=%d victim=%p\n",
+                 crossed ? 1 : 0, published.load() ? 1 : 0,
+                 static_cast<void*>(victim.load()));
+    GC_EXPECT_FALSE(crossed);
+    manager.EndEpochHandshakeLifecycleTest();
+    Heap::GetHeap().SetGCPhase(GCPhase::GC_PHASE_IDLE);
+}
+
+struct ParticipantLoadContext {
+    std::atomic<bool> ready{ false };
+    std::atomic<bool> release{ false };
+    std::atomic<Mutator*> mutator{ nullptr };
+};
+
+void* OrdinaryParticipantTask(void* raw)
+{
+    auto* context = static_cast<ParticipantLoadContext*>(raw);
+    Mutator* mutator = Mutator::GetMutator();
+    context->mutator.store(mutator, std::memory_order_release);
+    (void)mutator->EnterSaferegion(true);
+    context->ready.store(true, std::memory_order_release);
+    while (!context->release.load(std::memory_order_acquire)) {
+        (void)sched_yield();
+    }
+    (void)mutator->LeaveSaferegion();
+    return nullptr;
+}
+
+GC_OTHER_VM_TEST(YoungConc, ForcedEpochHandshakeCoversAllParticipantSources)
+{
+    RuntimeParam runtimeParam {};
+    runtimeParam.heapParam.heapSize = 64 * 1024;
+    runtimeParam.coParam.processorNum = 2;
+    GC_EXPECT_EQ(InitCJRuntime(&runtimeParam), E_OK);
+    MutatorManager& manager = MutatorManager::Instance();
+    Heap::GetHeap().SetGCPhase(GCPhase::GC_PHASE_ENUM);
+
+    ParticipantLoadContext ordinary;
+    CJThreadHandle ordinaryHandle = RunCJTask(OrdinaryParticipantTask, &ordinary);
+    GC_EXPECT_TRUE(ordinaryHandle != nullptr);
+
+    ParticipantLoadContext foreign;
+    std::thread foreignThread([&]() {
+        std::fprintf(stderr, "DETAIL four_source foreign_before_attach\n");
+        const bool attached = MRT_NewForeignCJThread();
+        std::fprintf(stderr, "DETAIL four_source foreign_after_attach=%d\n", attached ? 1 : 0);
+        Mutator* mutator = ThreadLocal::GetMutator();
+        foreign.mutator.store(mutator, std::memory_order_release);
+        if (attached && mutator != nullptr) {
+            (void)mutator->EnterSaferegion(true);
+            foreign.ready.store(true, std::memory_order_release);
+            while (!foreign.release.load(std::memory_order_acquire)) {
+                (void)sched_yield();
+            }
+            (void)mutator->LeaveSaferegion();
+            (void)MRT_EndForeignCJThread();
+        } else {
+            foreign.ready.store(true, std::memory_order_release);
+        }
+    });
+
+    ParticipantLoadContext runtime;
+    std::thread runtimeThread([&]() {
+        std::fprintf(stderr, "DETAIL four_source runtime_before_create\n");
+        manager.SetRuntimeMutatorLifecycleOnlyForTest(true);
+        Mutator* mutator = manager.CreateRuntimeMutator(ThreadType::HOT_UPDATE_THREAD);
+        std::fprintf(stderr, "DETAIL four_source runtime_after_create=%p\n", static_cast<void*>(mutator));
+        runtime.mutator.store(mutator, std::memory_order_release);
+        (void)mutator->EnterSaferegion(true);
+        runtime.ready.store(true, std::memory_order_release);
+        while (!runtime.release.load(std::memory_order_acquire)) {
+            (void)sched_yield();
+        }
+        (void)mutator->LeaveSaferegion();
+        manager.DestroyRuntimeMutator(ThreadType::HOT_UPDATE_THREAD);
+        manager.SetRuntimeMutatorLifecycleOnlyForTest(false);
+    });
+
+    ParticipantLoadContext finalizer;
+    std::thread finalizerThread([&]() {
+        std::fprintf(stderr, "DETAIL four_source finalizer_before_create\n");
+        void* handle = NewFinalizerCJThread();
+        std::fprintf(stderr, "DETAIL four_source finalizer_after_create=%p\n", handle);
+        Mutator* mutator = ThreadLocal::GetMutator();
+        std::fprintf(stderr, "DETAIL four_source finalizer_thread_mutator=%p finalizer_participant=%p\n",
+                     static_cast<void*>(mutator), static_cast<void*>(mutator));
+        finalizer.mutator.store(mutator, std::memory_order_release);
+        if (handle != nullptr && mutator != nullptr) {
+            (void)mutator->EnterSaferegion(true);
+            finalizer.ready.store(true, std::memory_order_release);
+            while (!finalizer.release.load(std::memory_order_acquire)) {
+                (void)sched_yield();
+            }
+            (void)mutator->LeaveSaferegion();
+            EndFinalizerCJThread();
+        } else {
+            finalizer.ready.store(true, std::memory_order_release);
+        }
+    });
+
+    while (!ordinary.ready.load(std::memory_order_acquire) ||
+           !foreign.ready.load(std::memory_order_acquire) ||
+           !runtime.ready.load(std::memory_order_acquire) ||
+           !finalizer.ready.load(std::memory_order_acquire)) {
+        (void)sched_yield();
+    }
+    Mutator* ordinaryMutator = ordinary.mutator.load(std::memory_order_acquire);
+    Mutator* foreignMutator = foreign.mutator.load(std::memory_order_acquire);
+    Mutator* runtimeMutator = runtime.mutator.load(std::memory_order_acquire);
+    Mutator* finalizerMutator = finalizer.mutator.load(std::memory_order_acquire);
+    GC_EXPECT_TRUE(ordinaryMutator != nullptr);
+    GC_EXPECT_TRUE(foreignMutator != nullptr);
+    GC_EXPECT_TRUE(runtimeMutator != nullptr);
+    GC_EXPECT_TRUE(finalizerMutator != nullptr);
+
+    EpochHandshakeStats stats = manager.RunEpochHandshake("r7-four-source");
+    std::fprintf(stderr,
+                 "DETAIL four_source requested=%zu scanned=%zu fallback=%zu ordinary=%d foreign=%d runtime=%d finalizer=%d\n",
+                 stats.requested, stats.stackScanned, stats.stackFallback,
+                 manager.EpochHandshakeWasLastParticipantForTest(ordinaryMutator) ? 1 : 0,
+                 manager.EpochHandshakeWasLastParticipantForTest(foreignMutator) ? 1 : 0,
+                 manager.EpochHandshakeWasLastParticipantForTest(runtimeMutator) ? 1 : 0,
+                 manager.EpochHandshakeWasLastParticipantForTest(finalizerMutator) ? 1 : 0);
+    GC_EXPECT_TRUE(stats.requested >= 4);
+    GC_EXPECT_EQ(stats.stackScanned + stats.stackFallback, stats.requested);
+    GC_EXPECT_TRUE(manager.EpochHandshakeWasLastParticipantForTest(ordinaryMutator));
+    GC_EXPECT_TRUE(manager.EpochHandshakeWasLastParticipantForTest(foreignMutator));
+    GC_EXPECT_TRUE(manager.EpochHandshakeWasLastParticipantForTest(runtimeMutator));
+    GC_EXPECT_TRUE(manager.EpochHandshakeWasLastParticipantForTest(finalizerMutator));
+
+    // The invariant under test ends with the participant receipt above. Tear the four
+    // schedulers down one at a time so this roster test does not also become a concurrent
+    // sub-scheduler-destruction test.
+    ordinary.release.store(true, std::memory_order_release);
+    void* ordinaryResult = nullptr;
+    GC_EXPECT_EQ(GetTaskRet(ordinaryHandle, &ordinaryResult), E_OK);
+    ReleaseHandle(ordinaryHandle);
+    foreign.release.store(true, std::memory_order_release);
+    foreignThread.join();
+    runtime.release.store(true, std::memory_order_release);
+    runtimeThread.join();
+    finalizer.release.store(true, std::memory_order_release);
+    finalizerThread.join();
+    Heap::GetHeap().SetGCPhase(GCPhase::GC_PHASE_IDLE);
+}
+
+GC_OTHER_VM_TEST(YoungConc, ForcedEpochHandshakeReportsPositiveRequested)
+{
+    GC_EXPECT_EQ(CJ_ScheduleManagerInit(), 0);
+    MRT_CjRuntimeInit();
+    MutatorManager& manager = MutatorManager::Instance();
+    Heap::GetHeap().SetGCPhase(GCPhase::GC_PHASE_ENUM);
+    manager.SetRuntimeMutatorLifecycleOnlyForTest(true);
+    Mutator* mutator = manager.CreateRuntimeMutator(ThreadType::HOT_UPDATE_THREAD);
+    GC_EXPECT_TRUE(mutator != nullptr);
+    (void)mutator->EnterSaferegion(true);
+    EpochHandshakeStats stats = manager.RunEpochHandshake("r6-forced-minor");
+    std::fprintf(stderr,
+                 "DETAIL forced_epoch requested=%zu scanned=%zu fallback=%zu epoch=%zu\n",
+                 stats.requested, stats.stackScanned, stats.stackFallback,
+                 static_cast<size_t>(stats.epoch));
+    GC_EXPECT_TRUE(stats.requested > 0);
+    GC_EXPECT_EQ(stats.stackScanned + stats.stackFallback, stats.requested);
+    manager.DestroyRuntimeMutator(ThreadType::HOT_UPDATE_THREAD);
+    manager.SetRuntimeMutatorLifecycleOnlyForTest(false);
+}
+
+GC_OTHER_VM_TEST(YoungConc, FinalizerCreateDuringActiveEpochIsBornClean)
+{
+    GC_EXPECT_EQ(CJ_ScheduleManagerInit(), 0);
+    MRT_CjRuntimeInit();
+    MutatorManager& manager = MutatorManager::Instance();
+    Heap::GetHeap().SetGCPhase(GCPhase::GC_PHASE_ENUM);
+    const uint64_t epoch = manager.BeginEpochHandshakeLifecycleTest();
+    void* cjthread = NewFinalizerCJThread();
+    GC_EXPECT_TRUE(cjthread != nullptr);
+    Mutator* mutator = ThreadLocal::GetMutator();
+    GC_EXPECT_TRUE(mutator != nullptr);
+    GC_EXPECT_TRUE(mutator->FinishedEpochHandshake(epoch));
+    EndFinalizerCJThread();
+    manager.EndEpochHandshakeLifecycleTest();
+    Heap::GetHeap().SetGCPhase(GCPhase::GC_PHASE_IDLE);
+}
+
+GC_OTHER_VM_TEST(YoungConc, FinalizerEndDuringActiveEpochDefersStorage)
+{
+    GC_EXPECT_EQ(CJ_ScheduleManagerInit(), 0);
+    MRT_CjRuntimeInit();
+    MutatorManager& manager = MutatorManager::Instance();
+    Heap::GetHeap().SetGCPhase(GCPhase::GC_PHASE_ENUM);
+    (void)manager.BeginEpochHandshakeLifecycleTest();
+    GC_EXPECT_TRUE(NewFinalizerCJThread() != nullptr);
+    EndFinalizerCJThread();
+    GC_EXPECT_TRUE(ThreadLocal::GetMutator() == nullptr);
+    GC_EXPECT_TRUE(manager.EpochHandshakeDestroyDeferredForTest() >= 1u);
+    manager.EndEpochHandshakeLifecycleTest();
+    Heap::GetHeap().SetGCPhase(GCPhase::GC_PHASE_IDLE);
+}
 // Paint-then-claim-skip: already-marked MarkObject returns true; without grey ledger
 // TraceYoungClosure would drop reachableVec/fields (WCollector.cpp:8110-8136).
 GC_TEST(YoungConc, PaintWithoutGreyLedgerMissesWorkStack)
@@ -491,8 +785,6 @@ GC_OTHER_VM_TEST(YoungConc, LateEdgeFollowReceiptReachesYoungMarkConsumer)
 GC_OTHER_VM_TEST(YoungConc, LateEdgeFollowReceiptReachesYoungRuntimeDispatch)
 {
     GC_EXPECT_EQ(CJ_ScheduleManagerInit(), 0);
-    GC_EXPECT_EQ(setenv("MRT_GCV2_YOUNG_CONC_MARK", "1", 1), 0);
-    GC_EXPECT_EQ(setenv("MRT_GCV2_YOUNG_CONC_FOLLOW", "0", 1), 0);
     GC_EXPECT_EQ(setenv("MRT_GCV2_MARKPAR_FORCE_SERIAL", "1", 1), 0);
     MutatorManager mutatorManager;
     YoungConcTestRuntime runtime(mutatorManager);
@@ -566,16 +858,11 @@ GC_OTHER_VM_TEST(YoungConc, LateEdgeFollowReceiptReachesYoungRuntimeDispatch)
     (void)live;
 }
 
-// H receipt arm: the same product dispatch is run with FOLLOW enabled and a
-// real mutator-local y2y holder.  The expected beforeRelease value is tied to
-// the compile-time fixed arm, so swapping only the product SO is a precise
-// 0 -> red -> 0 control.
-GC_OTHER_VM_TEST(YoungConc, Y2yBeforeReleaseReceiptIsMeasured)
+// H receipt arm: default product dispatch with a real mutator-local y2y
+// holder. The pre-window batch must be empty at the release boundary.
+GC_OTHER_VM_TEST(YoungConc, Y2yAfterReleaseBatchForcesContinueAndReachesClosure)
 {
     GC_EXPECT_EQ(CJ_ScheduleManagerInit(), 0);
-    GC_EXPECT_EQ(setenv("MRT_GCV2_YOUNG_CONC_MARK", "1", 1), 0);
-    GC_EXPECT_EQ(setenv("MRT_GCV2_YOUNG_CONC_FOLLOW", "1", 1), 0);
-    GC_EXPECT_EQ(setenv("MRT_GCV2_EPOCH_HANDSHAKE", "1", 1), 0);
     GC_EXPECT_EQ(setenv("MRT_GCV2_MARKPAR_FORCE_SERIAL", "1", 1), 0);
     MutatorManager mutatorManager;
     YoungConcTestRuntime runtime(mutatorManager);
@@ -612,33 +899,30 @@ GC_OTHER_VM_TEST(YoungConc, Y2yBeforeReleaseReceiptIsMeasured)
     resources.GetGCStats().reason = GC_REASON_YOUNG;
 #if defined(MRT_GC_UNIT_TESTS)
     ResetY2yHandoffTestReceipt();
+    // The old holder exercises the pre-release merge. The young holder is
+    // injected only after stw.reset(), so the first mark-end must fail and the
+    // existing continue edge must follow it before a second mark-end succeeds.
     AllocBuffer::GetOrCreateAllocBuffer()->PushY2yDirtyHolder(fx.obj0);
+    ArmY2yAfterReleaseTestReceipt(fx.obj1, 2);
 #endif
-    auto* holderField = &HeapSlotAt<>(reinterpret_cast<MAddress>(fx.obj0) + TYPEINFO_PTR_SIZE);
-    barrier.Record(fx.obj0, reinterpret_cast<MAddress>(holderField), fx.obj1);
-    mutator.FlushSatbBuffer();
     ThreadLocal::SetMutator(nullptr);
     RelocationReceiptTestAccess::RunCollectionDispatch(collector);
 #if defined(MRT_GC_UNIT_TESTS)
     const auto receipt = ReadY2yHandoffTestReceipt();
     std::fprintf(stderr,
-                 "DETAIL y2y_h_receipt before_release=%zu after_root=%zu after_stw2=%zu "
+                 "DETAIL y2y_h_receipt before_release=%zu after_root=%zu mark_end_batch=%zu "
                  "phase0=%zu phase1=%zu phase2=%zu\n",
                  static_cast<size_t>(receipt.beforeRelease), static_cast<size_t>(receipt.afterRoot),
                  static_cast<size_t>(receipt.afterStw2), static_cast<size_t>(receipt.phase0),
                  static_cast<size_t>(receipt.phase1), static_cast<size_t>(receipt.phase2));
-    // The fixed arm consumes before release; the default arm only observes.
-#if defined(MRT_WAVE8_Y2Y_FIXED_ARM)
     GC_EXPECT_EQ(receipt.beforeRelease, 0u);
-#else
-    GC_EXPECT_TRUE(receipt.beforeRelease > 0);
-#endif
     GC_EXPECT_TRUE(receipt.phase0 >= 1);
     // phase1 proves that zero is the sampled post-consumption root-container
     // state, rather than the reset value from an omitted receipt.
     GC_EXPECT_TRUE(receipt.phase1 >= 1);
     GC_EXPECT_EQ(receipt.afterRoot, 0u);
-    GC_EXPECT_EQ(receipt.afterStw2, 0u);
+    GC_EXPECT_TRUE(receipt.afterStw2 >= 2);
+    GC_EXPECT_TRUE(receipt.phase2 >= 3);
 #endif
     resources.SetGcStarted(startedBefore);
     resources.GetGCStats().reason = reasonBefore;
@@ -647,6 +931,67 @@ GC_OTHER_VM_TEST(YoungConc, Y2yBeforeReleaseReceiptIsMeasured)
         ? fx.region1->IsMarkedObject(fx.region1->GetMarkView<Generation::Young>(), child)
         : fx.region1->IsMarkedObject(fx.region1->GetMarkView<Generation::Old>(), child);
     GC_EXPECT_TRUE(childMarked);
+    RelocationReceiptTestAccess::BindThreadPool(resources, nullptr);
+    threadPool.Exit();
+    RelocationReceiptTestAccess::BindCollector(resources, nullptr);
+    (void)live;
+}
+
+// A mutator publishes ordinary SATB work after coordinated mark workers have
+// terminated but before pause-mark-end starts. Each pause is allowed exactly
+// one flush. Two publications therefore require two continue edges followed by
+// a third, successful pause; an in-pause retry loop or premature commit breaks
+// the exact receipt.
+GC_OTHER_VM_TEST(YoungConc, SatbAfterWorkerTerminationUsesBoundedMarkEndContinue)
+{
+    GC_EXPECT_EQ(CJ_ScheduleManagerInit(), 0);
+    GC_EXPECT_EQ(setenv("MRT_GCV2_MARKPAR_FORCE_SERIAL", "1", 1), 0);
+    MutatorManager mutatorManager;
+    YoungConcTestRuntime runtime(mutatorManager);
+    GcHeapFixture fx;
+    fx.region1->SetYoungRegionFlag(1);
+    fx.region1->SetYoungAge(1);
+    LiveInfo* live = fx.PlantLiveInfo(fx.region1);
+    (void)fx.PlantMarkBitmap<Generation::Young>(live, fx.region1->GetRegionSize());
+    BaseObject* first = fx.PlaceObject(reinterpret_cast<MAddress>(fx.obj1) + 64);
+    BaseObject* second = fx.PlaceObject(reinterpret_cast<MAddress>(fx.obj1) + 128);
+    fx.region1->SetRegionAllocPtr(reinterpret_cast<MAddress>(second) + 64);
+
+    CollectorResources& resources = Heap::GetHeap().GetCollectorResources();
+    WCollector collector(Heap::GetHeap().GetAllocator(), resources);
+    RelocationReceiptTestAccess::BindCollector(resources, &collector);
+    collector.SetGCPhase(GCPhase::GC_PHASE_CLEAR_SATB_BUFFER);
+    GCThreadPool threadPool("gc-unit-satb-mark-end", 0, GCPoolThread::GC_THREAD_PRIORITY);
+    RelocationReceiptTestAccess::BindThreadPool(resources, &threadPool);
+    RegionSpace& space = reinterpret_cast<RegionSpace&>(Heap::GetHeap().GetAllocator());
+    space.GetRegionManager().EnlistFullThreadLocalRegion(fx.region1);
+    space.GetRegionManager().AddRawPointerObject(first);
+    space.GetRegionManager().AddRawPointerObject(second);
+    Heap::GetHeap().GetRememberedSet().Initialize(fx.heapStart, 2 * RegionInfo::UNIT_SIZE);
+    Mutator producer;
+    const bool startedBefore = resources.IsGcStarted();
+    const GCReason reasonBefore = resources.GetGCStats().reason;
+    resources.SetGcStarted(true);
+    resources.GetGCStats().reason = GC_REASON_YOUNG;
+    ResetMarkTerminateTestReceipt();
+    ArmSatbBeforeMarkEndTestReceipt(&producer, first, second);
+
+    RelocationReceiptTestAccess::RunCollectionDispatch(collector);
+    const auto receipt = ReadMarkTerminateTestReceipt();
+    std::fprintf(stderr,
+                 "DETAIL satb_mark_end pauses=%zu flushed=%zu continues=%zu max_pause_ns=%zu\n",
+                 receipt.pauses, receipt.flushed, receipt.continues,
+                 static_cast<size_t>(receipt.maxPauseNs));
+    GC_EXPECT_EQ(receipt.pauses, 3u);
+    GC_EXPECT_EQ(receipt.flushed, 2u);
+    GC_EXPECT_EQ(receipt.continues, 2u);
+    GC_EXPECT_TRUE(receipt.maxPauseNs < 1000000000ULL);
+    const auto view = fx.region1->GetMarkView<Generation::Young>();
+    GC_EXPECT_TRUE(fx.region1->IsMarkedObject(view, first));
+    GC_EXPECT_TRUE(fx.region1->IsMarkedObject(view, second));
+
+    resources.SetGcStarted(startedBefore);
+    resources.GetGCStats().reason = reasonBefore;
     RelocationReceiptTestAccess::BindThreadPool(resources, nullptr);
     threadPool.Exit();
     RelocationReceiptTestAccess::BindCollector(resources, nullptr);
@@ -716,7 +1061,6 @@ GC_TEST(YoungConc, OldToYoungStillRecorded)
 // new target to the SATB consumer.  This is the regression arm for the
 // RecordCrossGenEdgesInStruct early return; it observes retired entries after
 // flushing the mutator node rather than merely checking that a helper ran.
-#if defined(MRT_TESTABLE_INTERNALS)
 GC_OTHER_VM_TEST(YoungConc, BulkWritePublishesSatbWithoutYoungRegions)
 {
     GcHeapFixture fx;
@@ -757,8 +1101,6 @@ GC_OTHER_VM_TEST(YoungConc, BulkWritePublishesSatbWithoutYoungRegions)
     GC_EXPECT_EQ(retired.size(), 1u);
     GC_EXPECT_EQ(reinterpret_cast<uintptr_t>(retired[0]), reinterpret_cast<uintptr_t>(fx.obj1));
 }
-#endif
-
 // mark_and_remember mark half (zBarrier.inline.hpp:735-739): TRACE + young GC
 // paints the new young target. STW/Idle TestBarrier must not (phase gate).
 // gc_unit never Heap::Init; IsGcStarted is the same fixture latch SATB uses.
@@ -830,7 +1172,7 @@ GC_TEST(YoungConc, IdleStoreDoesNotMarkNewYoungTarget)
     fx.FreePlanted(live);
 }
 
-// Peek must not consume the grey-list MergeYoungAllocBlack still owns (Stw2CurrentAudit).
+// Peek must not consume the local cleanup ledger drained after mark termination.
 GC_TEST(YoungConc, PeekYoungAllocBlackDoesNotConsume)
 {
     GcHeapFixture fx;
@@ -845,82 +1187,81 @@ GC_TEST(YoungConc, PeekYoungAllocBlackDoesNotConsume)
     GC_EXPECT_EQ(reinterpret_cast<uintptr_t>(merged[0]), reinterpret_cast<uintptr_t>(fx.obj0));
 }
 
-// Positive control: ArmInject forces uncovered+=1 so a zero cannot mean dead probe.
-// Product default kStw2CurrentAudit=false (rec=stw |Δ|=6.4%); skip when off.
-GC_TEST(YoungConc, Stw2CurrentInjectForcesUncovered)
+// The three retired runtime switches are not alternate configurations. These
+// guards pin the required predicates even when a parent process still exports
+// a stale value.
+GC_TEST(YoungConc, LegacyMarkEnvCannotDisableRequiredEpochHandshake)
 {
-    if (!Stw2CurrentAudit::Enabled()) {
-        return;
-    }
-    const size_t before = Stw2CurrentAudit::Uncovered();
-    Stw2CurrentAudit::ArmInject();
-    std::unordered_set<MAddress> empty;
-    Stw2CurrentAudit::Census(empty, nullptr);
-    GC_EXPECT_EQ(Stw2CurrentAudit::Uncovered(), before + 1);
+    GC_EXPECT_EQ(setenv("MRT_GCV2_YOUNG_CONC_MARK", "0", 1), 0);
+    GC_EXPECT_TRUE(MutatorManager::EpochHandshakeEnabled());
+    GC_EXPECT_EQ(unsetenv("MRT_GCV2_YOUNG_CONC_MARK"), 0);
 }
 
-GC_TEST(YoungConc, ClassifyWaterBeatsMark)
+GC_TEST(YoungConc, LegacyFollowEnvCannotDisableRequiredEpochHandshake)
 {
-    GcHeapFixture fx;
-    fx.region0->SetYoungRegionFlag(1);
-    fx.region0->SetYoungAge(1);
-    fx.region0->metadata.markStartAllocPtr = reinterpret_cast<uintptr_t>(fx.obj0);
-    std::unordered_set<BaseObject*> none;
-    GC_EXPECT_EQ(static_cast<unsigned>(Stw2CurrentAudit::ClassifyTarget(fx.obj0, none, none)),
-                 static_cast<unsigned>(Stw2CurrentAudit::Stw2Cover::Water));
+    GC_EXPECT_EQ(setenv("MRT_GCV2_YOUNG_CONC_FOLLOW", "0", 1), 0);
+    GC_EXPECT_TRUE(MutatorManager::EpochHandshakeEnabled());
+    GC_EXPECT_EQ(unsetenv("MRT_GCV2_YOUNG_CONC_FOLLOW"), 0);
 }
 
-GC_TEST(YoungConc, ClassifyMarkedWhenNoWater)
+GC_TEST(YoungConc, LegacyStackScanEnvCannotDisableRequiredStackScan)
 {
-    GcHeapFixture fx;
-    fx.region0->SetYoungRegionFlag(1);
-    fx.region0->SetYoungAge(1);
-    fx.region0->metadata.markStartAllocPtr = 0;
-    LiveInfo* live = fx.PlantLiveInfo(fx.region0);
-    (void)fx.PlantMarkBitmap<Generation::Young>(live, fx.region0->GetRegionSize());
-    size_t off = fx.region0->GetAddressOffset(reinterpret_cast<MAddress>(fx.obj0));
-    MarkView<Generation::Young> view = fx.region0->GetMarkView<Generation::Young>();
-    bool first = fx.region0->GetMarkBitmap(view)->MarkBits(off, 8, fx.region0->GetRegionSize());
-    GC_EXPECT_FALSE(first);
-    std::unordered_set<BaseObject*> none;
-    GC_EXPECT_EQ(static_cast<unsigned>(Stw2CurrentAudit::ClassifyTarget(fx.obj0, none, none)),
-                 static_cast<unsigned>(Stw2CurrentAudit::Stw2Cover::Marked));
-    fx.region0->metadata.liveInfo = nullptr;
-    fx.FreePlanted(live);
+    GC_EXPECT_EQ(setenv("MRT_GCV2_CONCURRENT_STACK_SCAN", "0", 1), 0);
+    GC_EXPECT_TRUE(MutatorManager::ConcurrentStackScanEnabled());
+    GC_EXPECT_EQ(unsetenv("MRT_GCV2_CONCURRENT_STACK_SCAN"), 0);
 }
 
-GC_TEST(YoungConc, ClassifyAllocBlackWhenUnmarked)
+// RegionSpace publishes allocate-black work with the Follow receipt consumed by
+// MarkYoungSatbBuffer. Pin that carrier independently of the bitmap paint.
+GC_TEST(YoungConc, PublishYoungAllocBlackRetiresFollowReceipt)
 {
     GcHeapFixture fx;
-    fx.region0->SetYoungRegionFlag(1);
-    fx.region0->SetYoungAge(1);
-    fx.region0->metadata.markStartAllocPtr = 0;
-    std::unordered_set<BaseObject*> allocBlack;
-    allocBlack.insert(fx.obj0);
-    std::unordered_set<BaseObject*> none;
-    GC_EXPECT_EQ(static_cast<unsigned>(Stw2CurrentAudit::ClassifyTarget(fx.obj0, allocBlack, none)),
-                 static_cast<unsigned>(Stw2CurrentAudit::Stw2Cover::AllocBlack));
+    Mutator mutator;
+    mutator.satbNode = new SatbBuffer::Node();
+    mutator.PublishYoungAllocBlack(fx.obj0);
+    mutator.FlushSatbBuffer();
+
+    BaseObject* object = nullptr;
+    bool follow = false;
+    SatbBuffer::Instance().GetRetiredEntries([&](BaseObject* entry, bool shouldFollow) {
+        object = entry;
+        follow = shouldFollow;
+    });
+    GC_EXPECT_EQ(reinterpret_cast<uintptr_t>(object), reinterpret_cast<uintptr_t>(fx.obj0));
+    GC_EXPECT_TRUE(follow);
 }
 
-GC_TEST(YoungConc, ClassifyUncoveredYoung)
+// FlipForMinor is an O(1) handoff: pre-flip records are scanned now while a
+// record produced after the flip remains on the active face for the next cycle.
+GC_TEST(YoungConc, FlipForMinorSeparatesConcurrentProducerFace)
 {
     GcHeapFixture fx;
-    fx.region0->SetYoungRegionFlag(1);
-    fx.region0->SetYoungAge(1);
-    fx.region0->metadata.markStartAllocPtr = 0;
-    std::unordered_set<BaseObject*> none;
-    GC_EXPECT_EQ(static_cast<unsigned>(Stw2CurrentAudit::ClassifyTarget(fx.obj0, none, none)),
-                 static_cast<unsigned>(Stw2CurrentAudit::Stw2Cover::Uncovered));
+    RememberedSet rememberedSet;
+    rememberedSet.Initialize(fx.heapStart, 2 * RegionInfo::UNIT_SIZE);
+    const MAddress before = fx.heapStart + 8 * sizeof(void*);
+    const MAddress during = fx.heapStart + 9 * sizeof(void*);
+    rememberedSet.Record(before);
+    rememberedSet.FlipForMinor();
+    rememberedSet.Record(during);
+
+    std::unordered_set<MAddress> previous;
+    rememberedSet.ScanPreviousForMinor(previous);
+    GC_EXPECT_EQ(previous.size(), 1u);
+    GC_EXPECT_TRUE(previous.count(before) == 1);
+    GC_EXPECT_TRUE(rememberedSet.Snapshot().count(during) == 1);
 }
 
-GC_TEST(YoungConc, ClassifySkipOldHolderTarget)
+GC_TEST(YoungConc, YoungAllocBlackCleanupLedgerIsOneShot)
 {
     GcHeapFixture fx;
-    fx.region0->SetYoungRegionFlag(0);
-    fx.region0->metadata.markStartAllocPtr = 0;
-    std::unordered_set<BaseObject*> none;
-    GC_EXPECT_EQ(static_cast<unsigned>(Stw2CurrentAudit::ClassifyTarget(fx.obj0, none, none)),
-                 static_cast<unsigned>(Stw2CurrentAudit::Stw2Cover::Skip));
+    auto* buffer = new AllocBuffer();
+    buffer->PushYoungAllocBlack(fx.obj0);
+    std::vector<BaseObject*> first;
+    std::vector<BaseObject*> second;
+    buffer->MergeYoungAllocBlack(first);
+    buffer->MergeYoungAllocBlack(second);
+    GC_EXPECT_EQ(first.size(), 1u);
+    GC_EXPECT_TRUE(second.empty());
 }
 
 // Product must not return to retired-only termination. Flipping the constant is
@@ -984,3 +1325,5 @@ GC_TEST(YoungConc, LegacyTerminationMissesUnfullSatbNode)
     fx.region0->metadata.liveInfo = nullptr;
     fx.FreePlanted(live);
 }
+
+#endif // MRT_TESTABLE_INTERNALS

@@ -396,7 +396,11 @@ void* MCC_NewCJThread(void* execute, void* future, void* scheduler)
     return handle;
 }
 
+#if defined(MRT_TESTABLE_INTERNALS)
+MRT_EXPORT bool MRT_NewForeignCJThread()
+#else
 bool MRT_NewForeignCJThread()
+#endif
 {
     if (ThreadLocal::IsCJProcessor() || ThreadLocal::GetMutator() != nullptr) {
         return false;
@@ -456,7 +460,11 @@ bool MRT_NewForeignCJThread()
     return true;
 }
 
+#if defined(MRT_TESTABLE_INTERNALS)
+MRT_EXPORT bool MRT_EndForeignCJThread()
+#else
 bool MRT_EndForeignCJThread()
+#endif
 {
     if (ThreadLocal::IsCJProcessor()) {
         return false;
@@ -536,6 +544,7 @@ static void FiniAndFreeFinalizerScheduler(ScheduleHandle scheduler)
 
 void* NewFinalizerCJThread()
 {
+    MutatorManager::Instance().RecordEpochHandshakeCreateAttempt();
     // prepare foreign scheduler
     ScheduleHandle scheduler = nullptr;
     auto runtime = reinterpret_cast<MapleRuntime::CangjieRuntime*>(&MapleRuntime::Runtime::Current());
@@ -578,6 +587,8 @@ void* NewFinalizerCJThread()
     mutator->SetManagedContext(false);
     MutatorManager::Instance().BindMutator(*mutator);
     ThreadLocal::SetMutator(mutator);
+    mutator->SetMutatorPhase(Heap::GetHeap().GetGCPhase());
+    MutatorManager::Instance().ExcludeNewMutatorFromActiveEpoch(*mutator);
     MutatorManager::Instance().MutatorManagementRUnlock();
     ThreadLocalData* threadData = reinterpret_cast<ThreadLocalData*>(MRT_GetThreadLocalData());
     // Managed-entry setup may block on sync/STW, so do not hold the mutator
@@ -593,11 +604,9 @@ void EndFinalizerCJThread()
     auto* schedule = reinterpret_cast<ScheduleHandle>(ThreadLocal::GetSchedule());
     Mutator* mutator = ThreadLocal::GetMutator();
     CHECK_DETAIL(mutator != nullptr, "EndFinalizerCJThread with null mutator");
-    MutatorManager::Instance().MutatorManagementRLock();
-    (void)mutator->LeaveSaferegion();
-    mutator->ResetMutator();
-    MutatorManager::Instance().UnbindMutator(*mutator);
-    MutatorManager::Instance().MutatorManagementRUnlock();
+    // Same EXITING receipt path as ordinary CJThread teardown. If an epoch is
+    // active, scheduler destruction reaches DestroyMutator and defers storage.
+    MutatorManager::Instance().TransitMutatorToExit();
 
     // Free finalizer scheduler, cjthread and mutator
     FiniAndFreeFinalizerScheduler(schedule);

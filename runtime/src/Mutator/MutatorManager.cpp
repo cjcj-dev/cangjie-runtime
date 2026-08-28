@@ -7,6 +7,7 @@
 
 #include "MutatorManager.h"
 
+#include <algorithm>
 #include <thread>
 #include <cstdlib>
 #include <cstring>
@@ -24,6 +25,9 @@
 namespace MapleRuntime {
 namespace {
 thread_local bool inEpochHandshake = false;
+#if defined(MRT_TESTABLE_INTERNALS)
+thread_local bool runtimeMutatorLifecycleOnlyForTest = false;
+#endif
 
 uint64_t GetEpochHandshakeTimeoutMillis()
 {
@@ -171,6 +175,14 @@ void MutatorManager::TransitMutatorToExit()
 
 void MutatorManager::DestroyExpiredMutators()
 {
+    // Coordinate the drain with epoch publication and retirement.  A mutator
+    // removed by a racing destroy must not be reclaimed while a handshake is
+    // still able to hold its participant pointer; the same ledger lock also
+    // closes the check-then-drain window at epoch end.
+    std::lock_guard<std::mutex> ledgerLock(epochHandshakeLedgerMutex);
+    if (epochHandshakeActive.load(std::memory_order_acquire) != 0) {
+        return;
+    }
     expiringMutatorListLock.lock();
     ExpiredMutatorList workList;
     workList.swap(expiringMutators);
@@ -183,13 +195,29 @@ void MutatorManager::DestroyExpiredMutators()
 
 void MutatorManager::DestroyMutator(Mutator* mutator)
 {
+    // Serialize the active-epoch test with epoch publication/retirement.  The
+    // old atomic-only check could observe inactive just before Begin published
+    // the epoch and delete a pointer that the snapshot was about to claim.
+    std::unique_lock<std::mutex> ledgerLock(epochHandshakeLedgerMutex);
+    const bool activeAtCheck = EpochHandshakeActive();
+#if defined(MRT_TESTABLE_INTERNALS)
+    if (epochHandshakeDestroyInterleavingArmed.load(std::memory_order_acquire)) {
+        epochHandshakeDestroyInterleavingEntered.store(true, std::memory_order_release);
+        while (!epochHandshakeDestroyInterleavingRelease.load(std::memory_order_acquire)) {
+            (void)sched_yield();
+        }
+        epochHandshakeDestroyInterleavingArmed.store(false, std::memory_order_release);
+    }
+#endif
     // dynjoin: while an epoch handshake is active, never free a participant (or a
     // racing create) under the old R-lock path — that used to be serialised by the
     // full-handshake W-lock. Defer to expiringMutators; PostGC drains them.
-    if (EpochHandshakeActive()) {
+    if (activeAtCheck) {
         epochHandshakeDestroyDeferred.fetch_add(1, std::memory_order_relaxed);
         expiringMutatorListLock.lock();
-        expiringMutators.push_back(mutator);
+        if (std::find(expiringMutators.begin(), expiringMutators.end(), mutator) == expiringMutators.end()) {
+            expiringMutators.push_back(mutator);
+        }
         expiringMutatorListLock.unlock();
         return;
     }
@@ -198,13 +226,16 @@ void MutatorManager::DestroyMutator(Mutator* mutator)
         MutatorManagementRUnlock();
     } else {
         expiringMutatorListLock.lock();
-        expiringMutators.push_back(mutator);
+        if (std::find(expiringMutators.begin(), expiringMutators.end(), mutator) == expiringMutators.end()) {
+            expiringMutators.push_back(mutator);
+        }
         expiringMutatorListLock.unlock();
     }
 }
 
 Mutator* MutatorManager::CreateRuntimeMutator(ThreadType threadType)
 {
+    RecordEpochHandshakeCreateAttempt();
     // Because TSAN tool can't identify the RwLock implemented by ourselves,
     // we use a global instance fpMutatorInstance instead of an instance created on
     // heap in order to prevent false positives.
@@ -226,6 +257,14 @@ Mutator* MutatorManager::CreateRuntimeMutator(ThreadType threadType)
     mutator->SetManagedContext(false);
     MutatorManager::Instance().BindMutator(*mutator);
     mutator->SetMutatorPhase(Heap::GetHeap().GetGCPhase());
+    {
+        std::lock_guard<std::mutex> lock(runtimeMutatorRegistryMutex);
+        runtimeMutators.insert(mutator);
+    }
+    // Same born-clean/participant race closure as CreateMutator and foreign
+    // attach. Registration precedes exclusion so the epoch snapshot sees the
+    // mutator or exclusion completes it, never neither.
+    ExcludeNewMutatorFromActiveEpoch(*mutator);
     ThreadLocal::SetMutator(mutator);
     ThreadLocal::SetThreadType(threadType);
     ThreadLocal::SetCJProcessorFlag(true);
@@ -233,6 +272,14 @@ Mutator* MutatorManager::CreateRuntimeMutator(ThreadType threadType)
     ThreadLocalData* threadData = reinterpret_cast<ThreadLocalData*>(MRT_GetThreadLocalData());
     // Managed-entry setup may block on sync/STW, so do not hold the mutator
     // management lock across it.
+#if defined(MRT_TESTABLE_INTERNALS)
+    // The lifecycle contract tests run without a scheduler-owned managed frame.
+    // Stop after the real registration/born-clean path; product builds do not
+    // contain this branch and all normal runtime mutators still enter managed code.
+    if (runtimeMutatorLifecycleOnlyForTest) {
+        return mutator;
+    }
+#endif
     MRT_PreRunManagedCode(mutator, 2, threadData); // 2 layers
     // only running mutator can enter saferegion.
     return mutator;
@@ -243,19 +290,25 @@ void MutatorManager::DestroyRuntimeMutator(ThreadType threadType)
     Mutator* mutator = ThreadLocal::GetMutator();
     CHECK_DETAIL(mutator != nullptr, "Fini UpdateThreads with null mutator");
 
-    MutatorManagementRLock();
-    (void)mutator->LeaveSaferegion();
-    // fp mutator is a static instance, we can't delete it, we reset the mutator to avoid invalid memory
-    // access when static instance destruction.
-    if (threadType != ThreadType::FP_THREAD) {
-        delete mutator;
-    } else {
-        mutator->ResetMutator();
+    // Reuse the ordinary CJThread exit transition: an active participant first
+    // acknowledges as EXITING, is reset/unbound, and its storage remains pinned
+    // by DestroyMutator until the epoch closes.
+    TransitMutatorToExit();
+    {
+        std::lock_guard<std::mutex> lock(runtimeMutatorRegistryMutex);
+        runtimeMutators.erase(mutator);
     }
     ThreadLocal::SetAllocBuffer(nullptr);
-    ThreadLocal::SetMutator(nullptr);
     ThreadLocal::SetCJProcessorFlag(false);
-    MutatorManagementRUnlock();
+    if (threadType != ThreadType::FP_THREAD) {
+        DestroyMutator(mutator);
+    } else {
+        // The FP runtime mutator is static. There is no storage to retire, but
+        // do not permit reuse while an epoch can still hold its participant pin.
+        while (EpochHandshakeActive()) {
+            (void)sched_yield();
+        }
+    }
 }
 
 void MutatorManager::Init()
@@ -271,20 +324,16 @@ MutatorManager& MutatorManager::Instance() noexcept { return Runtime::Current().
 
 bool MutatorManager::EpochHandshakeEnabled()
 {
-    static const bool enabled = []() {
-        const char* value = std::getenv("MRT_GCV2_EPOCH_HANDSHAKE");
-        return value != nullptr && std::strcmp(value, "1") == 0;
-    }();
-    return enabled || ConcurrentStackScanEnabled();
+    // Epoch receipts are part of the only young-generation mark protocol.
+    // ZGC has no young configuration that omits concurrent root publication.
+    return true;
 }
 
 bool MutatorManager::ConcurrentStackScanEnabled()
 {
-    static const bool enabled = []() {
-        const char* value = std::getenv("MRT_GCV2_CONCURRENT_STACK_SCAN");
-        return value != nullptr && std::strcmp(value, "1") == 0;
-    }();
-    return enabled;
+    // Young and old marking share the required stack-watermark protocol.
+    // ZGC does not retain a runtime configuration without concurrent roots.
+    return true;
 }
 
 void MutatorManager::RecordEpochHandshakeAck(Mutator& mutator, uint64_t epoch, bool bySelf)
@@ -368,6 +417,90 @@ void MutatorManager::RecordEpochHandshakeExitTransition()
     }
 }
 
+#if defined(MRT_TESTABLE_INTERNALS)
+void MutatorManager::SetRuntimeMutatorLifecycleOnlyForTest(bool enabled)
+{
+    runtimeMutatorLifecycleOnlyForTest = enabled;
+}
+
+uint64_t MutatorManager::BeginEpochHandshakeLifecycleTest()
+{
+    CHECK_DETAIL(!EpochHandshakeActive(), "nested lifecycle test epoch");
+    const uint64_t epoch = epochHandshakeSequence.fetch_add(1, std::memory_order_relaxed) + 1;
+    {
+        std::lock_guard<std::mutex> lock(epochHandshakeLedgerMutex);
+        epochHandshakeParticipants.clear();
+        epochHandshakeAckedMutators.clear();
+        epochHandshakeDestroyDeferred.store(0, std::memory_order_relaxed);
+        epochHandshakeActive.store(epoch, std::memory_order_release);
+    }
+    return epoch;
+}
+
+void MutatorManager::EndEpochHandshakeLifecycleTest()
+{
+    {
+        std::lock_guard<std::mutex> lock(epochHandshakeLedgerMutex);
+        epochHandshakeParticipants.clear();
+        epochHandshakeActive.store(0, std::memory_order_release);
+    }
+    DestroyExpiredMutators();
+}
+
+size_t MutatorManager::RuntimeMutatorRegistrySizeForTest()
+{
+    std::lock_guard<std::mutex> lock(runtimeMutatorRegistryMutex);
+    return runtimeMutators.size();
+}
+
+bool MutatorManager::EpochHandshakeWasLastParticipantForTest(Mutator* mutator) const
+{
+    std::lock_guard<std::mutex> lock(const_cast<std::mutex&>(epochHandshakeLedgerMutex));
+    return epochHandshakeLastParticipants.find(mutator) != epochHandshakeLastParticipants.end();
+}
+
+void MutatorManager::RegisterMutatorForTest(Mutator* mutator)
+{
+    if (mutator == nullptr) {
+        return;
+    }
+    std::lock_guard<std::mutex> lock(runtimeMutatorRegistryMutex);
+    epochHandshakeTestMutators.insert(mutator);
+}
+
+void MutatorManager::UnregisterMutatorForTest(Mutator* mutator)
+{
+    std::lock_guard<std::mutex> lock(runtimeMutatorRegistryMutex);
+    epochHandshakeTestMutators.erase(mutator);
+}
+
+bool MutatorManager::EpochHandshakeLedgerTryLockForTest()
+{
+    if (!epochHandshakeLedgerMutex.try_lock()) {
+        return false;
+    }
+    epochHandshakeLedgerMutex.unlock();
+    return true;
+}
+
+void MutatorManager::ArmDestroyMutatorInterleavingForTest()
+{
+    epochHandshakeDestroyInterleavingEntered.store(false, std::memory_order_release);
+    epochHandshakeDestroyInterleavingRelease.store(false, std::memory_order_release);
+    epochHandshakeDestroyInterleavingArmed.store(true, std::memory_order_release);
+}
+
+bool MutatorManager::DestroyMutatorInterleavingEnteredForTest() const
+{
+    return epochHandshakeDestroyInterleavingEntered.load(std::memory_order_acquire);
+}
+
+void MutatorManager::ReleaseDestroyMutatorInterleavingForTest()
+{
+    epochHandshakeDestroyInterleavingRelease.store(true, std::memory_order_release);
+}
+#endif
+
 EpochHandshakeStats MutatorManager::RunEpochHandshake(const char* source)
 {
     EpochHandshakeStats stats;
@@ -410,11 +543,12 @@ EpochHandshakeStats MutatorManager::RunEpochHandshake(const char* source)
         std::lock_guard<std::mutex> lock(epochHandshakeLedgerMutex);
         epochHandshakeAckedMutators.clear();
         epochHandshakeParticipants.clear();
+        epochHandshakeLastParticipants.clear();
+        // Publish active BEFORE snapshot so concurrent CreateMutator sees active
+        // and takes the born-clean path.  Keep publication under the same lock
+        // used by DestroyMutator's retirement check.
+        epochHandshakeActive.store(stats.epoch, std::memory_order_release);
     }
-    // Publish active BEFORE snapshot so concurrent CreateMutator sees active and
-    // takes the born-clean path. Snapshot then only captures pre-existing mutators;
-    // anyone who raced past is either in the list or born-clean (not both in wait).
-    epochHandshakeActive.store(stats.epoch, std::memory_order_release);
 
     std::list<Mutator*> snapshotted;
     VisitAllMutators([&snapshotted](Mutator& mutator) { snapshotted.push_back(&mutator); });
@@ -499,13 +633,17 @@ EpochHandshakeStats MutatorManager::RunEpochHandshake(const char* source)
     CHECK_DETAIL(stats.acked == stats.requested && stats.ackedTwice == 0 && stats.stopTheWorldCalls == 0,
                  "epoch handshake accounting failed: requested=%zu acked=%zu acked_twice=%zu stw_calls=%zu",
                  stats.requested, stats.acked, stats.ackedTwice, stats.stopTheWorldCalls);
+    CHECK_DETAIL(stats.stackScanned + stats.stackFallback == stats.requested,
+                 "epoch handshake stack receipt mismatch: requested=%zu scanned=%zu fallback=%zu",
+                 stats.requested, stats.stackScanned, stats.stackFallback);
     CHECK_DETAIL(!WorldStopped(), "epoch handshake changed worldStopped");
 
     {
         std::lock_guard<std::mutex> lock(epochHandshakeLedgerMutex);
+        epochHandshakeLastParticipants = epochHandshakeParticipants;
         epochHandshakeParticipants.clear();
+        epochHandshakeActive.store(0, std::memory_order_release);
     }
-    epochHandshakeActive.store(0, std::memory_order_release);
     syncMutex.unlock();
     inEpochHandshake = false;
     if (callerEnteredSaferegion) {
@@ -517,7 +655,7 @@ EpochHandshakeStats MutatorManager::RunEpochHandshake(const char* source)
          "self=%zu gc_assisted=%zu starting=%zu running=%zu parked=%zu exiting=%zu "
          "deferred_create=%zu born_clean=%zu exit_transition=%zu destroy_deferred=%zu stw_calls=%zu "
          "stack_scanned=%zu stack_fallback=%zu stack_frames=%zu wlock_us=%llu timeout_ms=%llu "
-         "env=MRT_GCV2_EPOCH_HANDSHAKE=1 env_scan=MRT_GCV2_CONCURRENT_STACK_SCAN",
+         "epoch_handshake=required stack_scan=required",
          source, static_cast<unsigned long long>(stats.epoch), stats.requested, stats.acked, stats.ackedTwice,
          stats.selfAck, stats.gcAssistedAck, stats.startingAck, stats.runningAck, stats.parkedAck,
          stats.exitingAck, stats.deferredCreates, stats.bornCleanJoins, stats.exitTransitions,
@@ -576,16 +714,39 @@ bool MutatorManager::AcquireMutatorManagementWLockForCpuProfile()
 // Visit all mutators, hold mutatorListLock firstly
 void MutatorManager::VisitAllMutators(MutatorVisitor func)
 {
-    ScheduleAllCJThreadVisitMutator(VisitMuatorHelper, &func);
-    Mutator* mutator = Heap::GetHeap().GetFinalizerProcessor().GetMutator();
-    if (mutator != nullptr) {
-        func(*mutator);
+    std::unordered_set<Mutator*> visited;
+    MutatorVisitor visitOnce = [&func, &visited](Mutator& mutator) {
+        if (visited.insert(&mutator).second) {
+            func(mutator);
+        }
+    };
+    ScheduleAllCJThreadVisitMutator(VisitMuatorHelper, &visitOnce);
+    {
+        std::lock_guard<std::mutex> lock(runtimeMutatorRegistryMutex);
+        for (Mutator* runtimeMutator : runtimeMutators) {
+            if (runtimeMutator != nullptr) {
+                visitOnce(*runtimeMutator);
+            }
+        }
+#if defined(MRT_TESTABLE_INTERNALS)
+        for (Mutator* testMutator : epochHandshakeTestMutators) {
+            if (testMutator != nullptr) {
+                visitOnce(*testMutator);
+            }
+        }
+#endif
     }
 }
 
 void MutatorManager::VisitAllMutatorsExceptFinalizer(MutatorVisitor func)
 {
-    ScheduleAllCJThreadVisitMutator(VisitMuatorHelper, &func);
+    Mutator* finalizerMutator = Heap::GetHeap().GetFinalizerProcessor().GetMutator();
+    MutatorVisitor visitExceptFinalizer = [&func, finalizerMutator](Mutator& mutator) {
+        if (&mutator != finalizerMutator) {
+            func(mutator);
+        }
+    };
+    ScheduleAllCJThreadVisitMutator(VisitMuatorHelper, &visitExceptFinalizer);
 }
 
 void MutatorManager::StopTheWorld(bool syncGCPhase, GCPhase phase)

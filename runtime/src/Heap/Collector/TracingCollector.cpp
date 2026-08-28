@@ -28,6 +28,9 @@ std::atomic<size_t> g_markTerminateContinue{ 0 };
 std::atomic<size_t> g_markTerminatePauses{ 0 };
 std::atomic<size_t> g_markTerminateFlushed{ 0 };
 std::atomic<bool> g_markTerminateAtexitInstalled{ false };
+#if defined(MRT_TESTABLE_INTERNALS)
+std::atomic<uint64_t> g_markTerminateMaxPauseNs{ 0 };
+#endif
 
 void NoteMarkTerminatePause() { g_markTerminatePauses.fetch_add(1, std::memory_order_relaxed); }
 
@@ -54,6 +57,31 @@ void ReportMarkTerminateContinue()
         });
     }
 }
+
+#if defined(MRT_TESTABLE_INTERNALS)
+void ResetMarkTerminateTestReceipt()
+{
+    g_markTerminateContinue.store(0, std::memory_order_relaxed);
+    g_markTerminatePauses.store(0, std::memory_order_relaxed);
+    g_markTerminateFlushed.store(0, std::memory_order_relaxed);
+    g_markTerminateMaxPauseNs.store(0, std::memory_order_relaxed);
+}
+
+MarkTerminateTestReceipt ReadMarkTerminateTestReceipt()
+{
+    return { g_markTerminatePauses.load(std::memory_order_relaxed),
+             g_markTerminateFlushed.load(std::memory_order_relaxed),
+             g_markTerminateContinue.load(std::memory_order_relaxed),
+             g_markTerminateMaxPauseNs.load(std::memory_order_relaxed) };
+}
+
+void NoteMarkTerminatePauseDuration(uint64_t pauseNs)
+{
+    uint64_t observed = g_markTerminateMaxPauseNs.load(std::memory_order_relaxed);
+    while (observed < pauseNs &&
+           !g_markTerminateMaxPauseNs.compare_exchange_weak(observed, pauseNs, std::memory_order_relaxed)) {}
+}
+#endif
 
 namespace {
 struct SkippedStackMapCounts {
@@ -923,7 +951,7 @@ void TracingCollector::DoResurrection(WorkStack& workStack)
             DLOG(FIX, "heal finalizer %p@%p", finalizerObj, &ref);
         }
     };
-    (void)collectorResources.GetFinalizerProcessor().VisitFinalizers(func);
+    snapshotFinalizerNum = collectorResources.GetFinalizerProcessor().VisitFinalizers(func);
 
     size_t resurrectdObjects = 0;
     while (!workStack.empty()) {
