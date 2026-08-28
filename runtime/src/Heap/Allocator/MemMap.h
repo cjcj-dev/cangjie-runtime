@@ -139,10 +139,14 @@ public:
         }
     }
 
-    bool CommitMemory(void* addr, size_t size);
-    bool CommitMemory(void* addr, size_t size, uint32_t numaNode);
-    bool ReleaseMemory(void* addr, size_t size);
-    bool ReleaseMemory(void* addr, size_t size, uint32_t numaNode);
+    // Return the number of bytes whose backing operation completed.  A value
+    // smaller than `size` is a real partial outcome: callers must account for
+    // (and, where appropriate, clean up) that prefix instead of treating the
+    // multi-partition operation as an atomic bool.
+    size_t CommitMemory(void* addr, size_t size);
+    size_t CommitMemory(void* addr, size_t size, uint32_t numaNode);
+    size_t ReleaseMemory(void* addr, size_t size);
+    size_t ReleaseMemory(void* addr, size_t size, uint32_t numaNode);
     bool ProtectMemory(void* addr, size_t size, int prot);
 
     void* GetBaseAddr() const { return memBaseAddr; }
@@ -161,7 +165,7 @@ public:
 
 private:
     static bool IsValidRange(uintptr_t start, size_t size);
-    bool ApplyByPartition(void* addr, size_t size, uint32_t* requiredNode, bool release);
+    size_t ApplyByPartition(void* addr, size_t size, uint32_t* requiredNode, bool release);
 
     void* memBaseAddr{ nullptr };
     void* memCurrEndAddr{ nullptr };
