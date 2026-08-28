@@ -2210,11 +2210,8 @@ void WCollector::MarkNewObject(BaseObject* obj)
 
 void WCollector::ProcessFinalizers()
 {
-    std::function<bool(BaseObject*)> finalizable = [this](BaseObject* obj) {
-        return !IsMarkedObject<Generation::Old>(obj);
-    };
     FinalizerProcessor& fp = collectorResources.GetFinalizerProcessor();
-    fp.EnqueueFinalizables(finalizable, snapshotFinalizerNum);
-    fp.Notify();
+    fp.ProcessReferences(
+        [this](BaseObject* obj) { return IsMarkedObject<Generation::Old>(obj); });
 }
 } // namespace MapleRuntime
