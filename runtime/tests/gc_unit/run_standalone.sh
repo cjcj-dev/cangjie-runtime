@@ -208,12 +208,25 @@ STANDALONE_SYMBOLS=(
   _ZN12MapleRuntime10RegionInfo13ClearLiveInfoILNS_10GenerationE0EEEvNS_8MarkViewIXT_EEE
   _ZN12MapleRuntime10RegionInfo24PreserveRetainedLiveInfoEv
   _ZN12MapleRuntime10RegionInfo31BumpSnapshotEpochFromInitRegionEv
+  _ZNK12MapleRuntime10WCollector10MarkObjectEPNS_10BaseObjectE
+  _ZN12MapleRuntime10SatbBuffer13ShouldEnqueueEPKNS_10BaseObjectE
 )
+# RegionInfo::MarkObject templates are instantiated by other TUs in this ELF.
+# The concurrent item binds the 4-arg Old instantiation via dlsym only; Tcut×P0
+# is the structural proof that item does not use the local copy.
 STANDALONE_SYMBOL_DYN="$OUT/cj_gc_unit.dynamic-defined.txt"
 nm -D --defined-only "$OUT/cj_gc_unit" >"$STANDALONE_SYMBOL_DYN"
 for symbol in "${STANDALONE_SYMBOLS[@]}"; do
   if /usr/bin/grep -F -q "$symbol" "$STANDALONE_SYMBOL_DYN"; then
     echo "GC_UNIT_STANDALONE_SYMBOL_GUARD_FAIL symbol=$symbol" >&2
+    exit 7
+  fi
+done
+STANDALONE_SYMBOL_FULL="$OUT/cj_gc_unit.full-defined-product.txt"
+nm --defined-only "$OUT/cj_gc_unit" >"$STANDALONE_SYMBOL_FULL"
+for symbol in "${STANDALONE_SYMBOLS[@]}"; do
+  if /usr/bin/grep -F -q "$symbol" "$STANDALONE_SYMBOL_FULL"; then
+    echo "GC_UNIT_STANDALONE_FULL_NM_GUARD_FAIL symbol=$symbol" >&2
     exit 7
   fi
 done
