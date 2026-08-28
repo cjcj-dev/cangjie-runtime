@@ -222,7 +222,7 @@ for symbol in "${STANDALONE_FULL_SYMBOLS[@]}"; do
   fi
 done
 echo "GATE_STANDALONE_SYMBOLS_OK elf=$OUT/cj_gc_unit"
-STALL_TEST_DEFINED=$(nm --defined-only "$OUT/cj_gc_unit" | /usr/bin/grep -c 'AllocationStall' || true)
+STALL_TEST_DEFINED=$(nm --defined-only "$OUT/cj_gc_unit" | /usr/bin/grep -c 'AllocationStall_' || true)
 echo "STALL_TEST_DEFINED=$STALL_TEST_DEFINED"
 if [[ "$STALL_PRODUCT_OBSERVE" -eq 1 && "$STALL_TEST_DEFINED" -eq 0 ]]; then
   echo "GC_UNIT_GATE_FAIL: product SO exports stall observers but the test ELF registered no AllocationStall tests" >&2
