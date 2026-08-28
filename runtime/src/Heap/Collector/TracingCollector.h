@@ -40,6 +40,17 @@ void NoteMarkTerminatePause();
 void NoteMarkTerminateFlushed(size_t n);
 void NoteMarkTerminateContinue(size_t stackSize);
 void ReportMarkTerminateContinue();
+#if defined(MRT_TESTABLE_INTERNALS)
+struct MarkTerminateTestReceipt {
+    size_t pauses = 0;
+    size_t flushed = 0;
+    size_t continues = 0;
+    uint64_t maxPauseNs = 0;
+};
+void ResetMarkTerminateTestReceipt();
+MarkTerminateTestReceipt ReadMarkTerminateTestReceipt();
+void NoteMarkTerminatePauseDuration(uint64_t pauseNs);
+#endif
 
 // prefetch distance for mark.
 #define MACRO_MARK_PREFETCH_DISTANCE 16    // this macro is used for check when pre-compiling.

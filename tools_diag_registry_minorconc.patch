@@ -1,0 +1,13 @@
+diff --git a/tools/diag_registry.sh b/tools/diag_registry.sh
+--- a/tools/diag_registry.sh
++++ b/tools/diag_registry.sh
+@@ -25,3 +25,3 @@ MAP='
+ 挂起|hang|HANG|活锁|死锁|livelock|deadlock|spin|MRT_GC_LOG|⭐⭐⭐ 每次收集/每相位一条记录 ⇒ 多少轮、每轮进展多少、什么在重复触发（⛔ 别先上 gdb —— gdb 只给两张快照，⭐ 日志给整条时间序列）
+-young|minor|疏散|evac|晋升|MRT_GCV2_YOUNG_MARK_END_FORCE_REENTER,MRT_GCV2_DISABLE_MINOR,MRT_GCV2_MINOR_DEFERS_HEU,MRT_GCV2_YOUNG_CONC_MARK,MRT_GCV2_YOUNG_CONC_FOLLOW|⭐ 真 getenv，可 export：mark-end 重入阳性对照 / minor 回滚与策略对照臂。⚠⭐⭐⭐ 0825 更正：⛔ 本行原写着「YOUNG_CONC_MARK / YOUNG_CONC_FOLLOW / EPOCH_HANDSHAKE 已随翻默认删除」——⭐⭐ **那是假的**。⭐ 现读 Generation.cpp:618-625：两者都是**活 getenv 且默认 false**（`v!=nullptr && strcmp(v,"1")==0`）⇒ ⭐⭐⭐ `:648-653` 产品默认走**破坏性** `DrainForMinor`，⭐ 而 ZGC 形态的 `FlipForMinor`（STW1 只 flip、扫描并发）**没人开** ⇒ ⭐⭐ 这条直接撞 0825 红线「不许加开关默认走旧的」。⛔ 别再据本行判「哪些臂还存在」——⭐ 一律去读源码那一行
++young|minor|疏散|evac|晋升|MRT_GCV2_DISABLE_MINOR,MRT_GCV2_MINOR_DEFERS_HEU|⭐ 0828 minorconc 结构收口：并发 minor 已成唯一构型，两开关与 FORCE_REENTER 已删
+ remset|跨代|cross-gen|着色|颜色|colour|color|带色|剥色|root|根|栈图|stackmap|MRT_GCV2_REMSET_HASH_OPT,MRT_GCV2_PROMO_DOMAIN,MRT_GCV2_SETBITMAP,MRT_GCV2_PLAIN_ROOTS,MRT_GCV2_VERIFY_REMSET,MRT_GCV2_VERIFY_HEAP,MRT_GCV2_VERIFY_STACK_ROOTS_COMPLETE,MRT_GCV2_STACK_WATERMARK_VERIFY,MRT_GCV2_ASSERT_COLOURED_WRITES|⭐ pinaudit/krestore K 真 getenv，可 export：remset / heap / stack-root / watermark / coloured-write 校验与回滚对照臂
+@@ -29,3 +29,3 @@ MAP='
+ 预翻转|preflip|残留|residue|MRT_GCV2_PREFLIP_VERIFY,MRT_GCV2_PREFLIP_VERIFY_FATAL|⭐ krestore K 真 getenv，可 export：恢复 preflip 保险遍历；FATAL 仅在发现 residue 时中止
+-并发扫栈|concurrent stack|handshake|握手|MRT_GCV2_EPOCH_HANDSHAKE_TIMEOUT_MS,MRT_GCV2_CONCURRENT_STACK_SCAN|⭐ 真 getenv，可 export：握手超时剂量与并发栈扫描。⛔ 握手本身已无开关（恒开）
++并发扫栈|concurrent stack|handshake|握手|MRT_GCV2_EPOCH_HANDSHAKE_TIMEOUT_MS|⭐ 真 getenv，可 export：握手超时剂量。⛔ 握手与并发栈扫描已是 young/old 共用的唯一构型
+ 性能|吞吐|开销|cost|throughput|MRT_PHASE_TIMER|⭐ 分项开销（LEDGER_COST/SCRUB_COST 探针已删；计时用 task-clock）

@@ -1175,8 +1175,8 @@ bool Mutator::GcPhaseEnum(GCPhase newPhase, uint64_t stackScanEpoch, bool bySelf
     // ZGC marks base and derived together in the oopmap walk (zMark.cpp:691-692
     // ZUncoloredRoot::mark).
     //
-    // MRT_GCV2_CONCURRENT_STACK_SCAN exercises this path; MRT_GCV2_EPOCH_HANDSHAKE
-    // uses the same acknowledgement lifecycle without the stack traversal.
+    // The required epoch handshake always carries the stack traversal; young
+    // and old marking share this stack-watermark path.
     size_t frames = 0;
     StackWatermark::Owner owner = bySelf ? StackWatermark::WM_OWNER_SELF : StackWatermark::WM_OWNER_GC;
     bool scanned = DrainStackWatermark(

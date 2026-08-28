@@ -19,6 +19,7 @@
 #include <cstdlib>
 #include <cstring>
 #include <algorithm>
+#include <condition_variable>
 #include <iterator>
 #include <limits>
 #include <memory>
@@ -777,7 +778,7 @@ void WCollector::VisitMinorRootSlots(RootVisitor& rawRootVisitor, RootVisitor& i
     if (stackScanEpoch != 0) {
         LOG(RTLOG_ERROR,
             "[GCV2][stack-scan-fallback] epoch=%llu concurrent_done=%zu stw_fallback=%zu "
-            "env=MRT_GCV2_CONCURRENT_STACK_SCAN=1",
+            "stack_scan=required",
             static_cast<unsigned long long>(stackScanEpoch), concurrentDone, stwFallback);
     }
     gMinorRootOrigin = "static";
@@ -1349,6 +1350,70 @@ struct alignas(64) YoungStripedWorkerOutput {
     bool touched = false;
 };
 
+// ZMarkTerminate.inline.hpp:66-123 analogue. A worker becomes non-working
+// while it waits; the last non-working worker may terminate only after the
+// published stripe set is empty. Publishing work wakes one waiter instead of
+// relying on yield polling.
+class YoungMarkTerminate {
+public:
+    void Reset(size_t workers)
+    {
+        CHECK_DETAIL(workers != 0, "young mark termination needs a worker");
+        std::lock_guard<std::mutex> lock(mutex);
+        workerCount = workers;
+        working = workers;
+        awakening = 0;
+        terminated = false;
+    }
+
+    bool TryTerminate(const MarkStripeSet& stripes)
+    {
+        std::unique_lock<std::mutex> lock(mutex);
+        CHECK_DETAIL(working != 0, "young mark worker left termination twice");
+        --working;
+        if (working == 0 && stripes.IsEmpty()) {
+            terminated = true;
+            condition.notify_all();
+            return true;
+        }
+        if (!stripes.IsEmpty()) {
+            ++working;
+            return false;
+        }
+        condition.wait(lock, [this]() { return terminated || awakening != 0; });
+        if (terminated) {
+            return true;
+        }
+        --awakening;
+        ++working;
+        return false;
+    }
+
+    void WakeUp()
+    {
+        std::lock_guard<std::mutex> lock(mutex);
+        if (terminated || working == 0 || working + awakening == workerCount) {
+            return;
+        }
+        ++awakening;
+        condition.notify_one();
+    }
+
+    bool Saturated() const
+    {
+        std::lock_guard<std::mutex> lock(mutex);
+        return terminated && working == 0;
+    }
+
+private:
+    size_t workerCount = 0;
+    size_t working = 0;
+    size_t awakening = 0;
+    bool terminated = false;
+    mutable std::mutex mutex;
+    std::condition_variable condition;
+};
+
 struct YoungStripedShared {
     WCollector* collector = nullptr;
     const std::unordered_set<MAddress>* reachableSlotDomain = nullptr;
@@ -1360,8 +1425,7 @@ struct YoungStripedShared {
     std::unique_ptr<MarkingSMR> smr;
     std::vector<std::unique_ptr<YoungMarkStripeSeen>> seen;
     std::vector<std::unique_ptr<YoungStripedWorkerOutput>> outputs;
-    std::atomic<size_t> idleWorkers{ 0 };
-    std::atomic<bool> done{ false };
+    YoungMarkTerminate terminate;
     std::atomic<size_t> stealSuccess{ 0 };
     std::atomic<size_t> stealFailure{ 0 };
 
@@ -1393,7 +1457,9 @@ public:
             if (TrySteal()) {
                 continue;
             }
-            (void)context.Stacks().Flush(stripes, false);
+            if (context.Stacks().Flush(stripes, false)) {
+                shared.terminate.WakeUp();
+            }
             if (WaitForWorkOrDone()) {
                 break;
             }
@@ -1429,19 +1495,7 @@ private:
 
     bool WaitForWorkOrDone()
     {
-        size_t idle = shared.idleWorkers.fetch_add(1, std::memory_order_acq_rel) + 1;
-        if (idle == shared.workerCount && shared.stripes->IsEmpty()) {
-            shared.done.store(true, std::memory_order_release);
-            return true;
-        }
-        while (!shared.done.load(std::memory_order_acquire)) {
-            if (!shared.stripes->IsEmpty()) {
-                shared.idleWorkers.fetch_sub(1, std::memory_order_acq_rel);
-                return false;
-            }
-            std::this_thread::yield();
-        }
-        return true;
+        return shared.terminate.TryTerminate(*shared.stripes);
     }
 
     void PushObject(BaseObject* object)
@@ -1449,6 +1503,9 @@ private:
         const size_t stripeIndex = shared.StripeFor(object);
         const bool publish = stripeIndex != context.StripeId();
         context.Stacks().Push(*shared.stripes, stripeIndex, MarkStackEntry::MarkAndFollow(object), publish);
+        if (publish) {
+            shared.terminate.WakeUp();
+        }
     }
 
     bool ClaimSeen(BaseObject* object)
@@ -1926,6 +1983,7 @@ void WCollector::TraceYoungClosureStriped(WorkStack& workStack, bool fullYoungSc
     shared.useBitmapLedger = useBitmapLedger;
     shared.recordSlots = fullYoungScan;
     shared.workerCount = static_cast<size_t>(workers);
+    shared.terminate.Reset(shared.workerCount);
     shared.stripes = std::make_unique<MarkStripeSet>(stripeCount);
     shared.smr = std::make_unique<MarkingSMR>(shared.workerCount);
     shared.outputs.reserve(shared.workerCount);
@@ -1960,6 +2018,8 @@ void WCollector::TraceYoungClosureStriped(WorkStack& workStack, bool fullYoungSc
     YoungStripedMarkingWork mainTask(shared, 0);
     mainTask.Execute(0);
     threadPool->WaitFinish();
+    CHECK_DETAIL(shared.terminate.Saturated(),
+                 "young striped closure returned without coordinated worker termination");
     if (wantActive != prevActive) {
         threadPool->SetMaxActiveThreadNum(prevActive);
     }
@@ -2056,17 +2116,14 @@ void WCollector::TraceYoungClosure(WorkStack& workStack, bool fullYoungScan, Min
 // Mutators run under TraceBarrier (InstallBarrier TRACE).
 // Termination: ZMark::end -> try_end (zMark.cpp:954-971) + ZMark::flush
 // (zMark.cpp:587-605 / :998-1006). Young mark uses the same ZMark
-// (zMark.cpp:757-780). kMarkTerminateInPause is the default-on strict cut shared
-// with major marking.
+// (zMark.cpp:757-780). A failed pause_mark_end resumes concurrent mark-follow
+// before trying the pause again (zGeneration.cpp:549-555).
 bool WCollector::MarkYoungSatbBuffer(WorkStack& workStack, bool fullYoungScan, MinorObjectSet& reachableObjects,
                                      std::vector<BaseObject*>& reachableVec, MinorSlotSet& reachableSlots,
                                      MinorSlotSet& weakSlots, bool useBitmapLedger,
                                      YoungConcWindowStats* windowStats)
 {
     MRT_PHASE_TIMER("young.mark_satb");
-    workStack.clear();
-    constexpr uint64_t maxIterationTime = 120ULL * 1000 * 1000 * 1000;
-    constexpr uint64_t maxIterationLoopNum = 1000;
     // portyoungconc: count what the window actually consumes. A retired SATB object that
     // Push* discards (non-heap / already marked / not young) is still SATB traffic, so it
     // is counted at the pop, not at the push -- the question this answers is "did the
@@ -2103,81 +2160,43 @@ bool WCollector::MarkYoungSatbBuffer(WorkStack& workStack, bool fullYoungScan, M
             workStack.push_back(entry);
         }
     };
+    // ZMark::mark_follow() runs the coordinated worker termination once. Local
+    // mutator buffers are deliberately not flushed here; pause-mark-end owns one
+    // flush and returns failure to Generation when that flush discovers work.
     visitSatbObj();
-    uint64_t iterationCnt = 0;
-    uint64_t iterationStartTime = TimeUtil::NanoSeconds();
-    do {
+    if (windowStats != nullptr) {
+        ++windowStats->satbIters;
+    }
+    if (!workStack.empty()) {
         if (windowStats != nullptr) {
-            ++windowStats->satbIters;
+            ++windowStats->closureCalls;
         }
-        if (++iterationCnt > maxIterationLoopNum && (TimeUtil::NanoSeconds() - iterationStartTime) > maxIterationTime) {
-            ScopedStopTheWorld stw("MarkYoungSatbBuffer timeout", true, GCPhase::GC_PHASE_CLEAR_SATB_BUFFER);
-            VLOG(REPORT, "[GCV2][youngconc] MarkYoungSatbBuffer timeout STW drain");
-            StoreBarrierBuffer::FlushAll(Heap::GetHeap().GetRememberedSet());
-            MutatorManager::Instance().VisitAllMutators([](Mutator& mutator) { mutator.FlushSatbBuffer(false); });
-            visitSatbObj();
-            if (windowStats != nullptr) {
-                ++windowStats->closureCalls;
-            }
-            TraceYoungClosure(workStack, fullYoungScan, reachableObjects, reachableVec, reachableSlots, weakSlots,
-                              useBitmapLedger);
-            ReportMarkTerminateContinue();
-            return workStack.empty();
+        TraceYoungClosure(workStack, fullYoungScan, reachableObjects, reachableVec, reachableSlots, weakSlots,
+                          useBitmapLedger);
+    }
+    CHECK_DETAIL(workStack.empty(), "young concurrent follow returned with owner work");    return true;
+}
+
+bool WCollector::TryEndYoungMark(WorkStack& workStack, YoungConcWindowStats* windowStats)
+{
+    CHECK_DETAIL(MutatorManager::Instance().WorldStopped(), "young mark-end flush requires stopped mutators");
+    NoteMarkTerminatePause();
+    size_t flushed = 0;
+    MutatorManager::Instance().VisitAllMutators([](Mutator& mutator) { mutator.FlushSatbBuffer(); });
+    SatbBuffer::Instance().GetRetiredEntries([this, &workStack, windowStats, &flushed](BaseObject* object,
+                                                                                     bool follow) {
+        ++flushed;
+        if (windowStats != nullptr) {
+            ++windowStats->satbObjects;
         }
-        if (!workStack.empty()) {
-            if (windowStats != nullptr) {
-                ++windowStats->closureCalls;
-            }
-            TraceYoungClosure(workStack, fullYoungScan, reachableObjects, reachableVec, reachableSlots, weakSlots,
-                              useBitmapLedger);
+        if (follow) {
+            workStack.push_back(MarkStackEntry::FollowOnly(object));
+        } else if (Heap::IsHeapAddress(object)) {
+            PushYoungObject(object, workStack, "young_mark_end");
         }
-        visitSatbObj();
-        if (!workStack.empty()) {
-            continue;
-        }
-        // Handshake, not a pause: a mutator that already acknowledged CLEAR_SATB
-        // runs on and may enqueue again. Same as MarkSatbBuffer (TracingCollector.cpp).
-        if (Heap::GetHeap().GetGCPhase() != GCPhase::GC_PHASE_CLEAR_SATB_BUFFER) {
-            TransitionToGCPhase(GCPhase::GC_PHASE_CLEAR_SATB_BUFFER, true);
-            visitSatbObj();
-            if (!workStack.empty()) {
-                continue;
-            }
-        }
-        if (!MarkTerminateInPauseEnabled()) {
-            // Fault-injection/negative-control arm; product strict termination
-            // never commits from a retired-only sample.
-            TransitionToGCPhase(GCPhase::GC_PHASE_CLEAR_SATB_BUFFER, true);
-            visitSatbObj();
-            if (workStack.empty()) {
-                break;
-            }
-            continue;
-        }
-        // TraceYoungClosure's parallel path returns through WaitFinish(); its
-        // serial path owns the whole stack. Therefore owner-empty + no published
-        // pool task is our global-empty proof, without shared lock-free stripes.
-        CHECK_DETAIL(workStack.empty(), "strict young mark termination with owner work");
-        CHECK_DETAIL(GetThreadPool()->GetWorkCount() == 0,
-                     "strict young mark termination with published worker work");
-        bool terminated = false;
-        {
-            ScopedStopTheWorld stw("young mark terminate", true, GCPhase::GC_PHASE_CLEAR_SATB_BUFFER);
-            NoteMarkTerminatePause();
-            const size_t seenBefore = satbSeen;
-            StoreBarrierBuffer::FlushAll(Heap::GetHeap().GetRememberedSet());
-            MutatorManager::Instance().VisitAllMutators([](Mutator& mutator) { mutator.FlushSatbBuffer(false); });
-            visitSatbObj();
-            NoteMarkTerminateFlushed(satbSeen - seenBefore);
-            terminated = workStack.empty();
-        }
-        if (terminated) {
-            break;
-        }
-        NoteMarkTerminateContinue(workStack.size());
-    } while (true);
-    ReportMarkTerminateContinue();
-    return true;
+    });
+    NoteMarkTerminateFlushed(flushed);
+    return workStack.empty();
 }
 void WCollector::MarkNewObject(BaseObject* obj)
 {

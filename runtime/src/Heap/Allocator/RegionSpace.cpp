@@ -257,19 +257,15 @@ MAddress AllocBuffer::Allocate(size_t totalSize, AllocType allocType)
             }
             AllocPhaseDiag::Record(reinterpret_cast<void*>(addr), regionStart, regionEnd, mutP, heapP, isTrace);
         }
-        // youngconc allocate-black (MRT_GCV2_YOUNG_CONC_MARK=1 only): paint mark bits + grey-list
-        // for TRACE/CLEAR window young allocs. Experimental MRT_GCV2_ALLOC_BLACK full paint removed
-        // (ZGC_CONVERGENCE_RULING §5.2; default-off + author-marked incomplete; product relies on
-        // post-mark fixpoint at WCollector.cpp iorfix/blackmark loop). Ordinary MOVEABLE alloc
-        // never MarkNewObject; pin reuse did MarkObject. GetRoute reads ghost liveInfo0 — also
-        // mark ghost when present. isTraceRegion alone makes ShouldEnqueue skip SATB; without
+        // youngconc allocate-black: paint mark bits + grey-list for TRACE/CLEAR
+        // window young allocs. Ordinary MOVEABLE alloc never MarkNewObject; pin reuse did
+        // MarkObject. GetRoute reads ghost liveInfo0, so also mark that face when present.
+        // The Follow receipt below makes the object part of mark termination rather than
+        // relying on a pause-local post-mark scan.
+        // isTraceRegion alone makes ShouldEnqueue skip SATB; without
         // paint those objects stay live0Surv=0 at route under concurrent young mark.
         {
-            static const bool youngConcMarkOn = []() {
-                const char* v = std::getenv("MRT_GCV2_YOUNG_CONC_MARK");
-                return v != nullptr && std::strcmp(v, "1") == 0;
-            }();
-            if (youngConcMarkOn && reg != nullptr && !reg->IsLargeRegion()) {
+            if (reg != nullptr && !reg->IsLargeRegion()) {
                 GCPhase mutP = GCPhase::GC_PHASE_UNDEF;
                 Mutator* m = Mutator::GetMutator();
                 if (m != nullptr) {
@@ -305,9 +301,15 @@ MAddress AllocBuffer::Allocate(size_t totalSize, AllocType allocType)
 
                             (void)ghostBitmap->MarkBits(offset, totalSize, regionSize);
                         }
-                        // grey-list so STW2 can force reachableVec + field scan
-                        // (TraceYoungClosure claim-skips already-marked → would miss children).
-                        PushYoungAllocBlack(reinterpret_cast<BaseObject*>(addr));
+                        // Paint claims the mark bit, so publish an explicit Follow
+                        // receipt into the same termination domain as barrier work.
+                        // The local ledger is retained only until mark-end cleanup;
+                        // it is no longer a pause-local discovery authority.
+                        BaseObject* allocated = reinterpret_cast<BaseObject*>(addr);
+                        PushYoungAllocBlack(allocated);
+                        if (m != nullptr && m->IsManagedContext()) {
+                            m->PublishYoungAllocBlack(allocated);
+                        }
                     }
                 }
             }

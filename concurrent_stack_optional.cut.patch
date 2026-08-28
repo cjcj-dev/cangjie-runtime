@@ -1,0 +1,18 @@
+diff --git a/runtime/src/Mutator/MutatorManager.cpp b/runtime/src/Mutator/MutatorManager.cpp
+--- a/runtime/src/Mutator/MutatorManager.cpp
++++ b/runtime/src/Mutator/MutatorManager.cpp
+@@ -275,9 +275,11 @@ bool MutatorManager::EpochHandshakeEnabled()
+ 
+ bool MutatorManager::ConcurrentStackScanEnabled()
+ {
+-    // Young and old marking share the required stack-watermark protocol.
+-    // ZGC does not retain a runtime configuration without concurrent roots.
+-    return true;
++    static const bool enabled = []() {
++        const char* value = std::getenv("MRT_GCV2_CONCURRENT_STACK_SCAN");
++        return value != nullptr && std::strcmp(value, "1") == 0;
++    }();
++    return enabled;
+ }
+ 
+ void MutatorManager::RecordEpochHandshakeAck(Mutator& mutator, uint64_t epoch, bool bySelf)

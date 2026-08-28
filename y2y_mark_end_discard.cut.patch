@@ -1,0 +1,22 @@
+diff --git a/runtime/src/Heap/Collector/Generation.cpp b/runtime/src/Heap/Collector/Generation.cpp
+--- a/runtime/src/Heap/Collector/Generation.cpp
++++ b/runtime/src/Heap/Collector/Generation.cpp
+@@ -918,13 +918,15 @@ void WCollector::DoYoungGarbageCollection()
+         stw = std::make_unique<ScopedStopTheWorld>("young mark terminate", true,
+                                                    GCPhase::GC_PHASE_CLEAR_SATB_BUFFER);
+         const size_t y2yBatchAtMarkEnd = pendingY2yDirtyHolderCount();
+-        theAllocator.VisitAllocBuffers([&workStack](AllocBuffer& buffer) {
++        std::vector<BaseObject*> discardedY2y;
++        theAllocator.VisitAllocBuffers([&workStack, &discardedY2y](AllocBuffer& buffer) {
+             // The CLEAR_SATB transition also closes each mutator's epoch stack
+             // publication. Late stack roots are mark work, just like ZGC's
+             // thread-local mark stacks flushed by ZMark::try_end().
+             buffer.MergeRoots(workStack);
+             buffer.MergeYoungAllocBlack(workStack);
+-            buffer.MergeY2yDirtyHolders(workStack);
++            buffer.MergeY2yDirtyHolders(discardedY2y);
+         });
++        discardedY2y.clear();
+ #if defined(MRT_TESTABLE_INTERNALS)
+         NoteY2yAfterStw2TestReceipt(y2yBatchAtMarkEnd);
+ #endif
