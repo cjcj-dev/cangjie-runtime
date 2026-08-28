@@ -3460,3 +3460,8 @@ EXPORTS
     wcstoull @3483
     wcstoumax @3484
     CJ_MCC_PostWriteRefField @3487
+    _ZN12MapleRuntime17StackExposureHook11OnIterationERNS_7MutatorEy @3488
+    _ZN12MapleRuntime17StackExposureHook13OnAfterUnwindERNS_7MutatorEy @3489
+    _ZN12MapleRuntime17StackExposureHook14OnBeforeUnwindERNS_7MutatorEy @3490
+    _ZN12MapleRuntime17StackExposureHook14ProcessOneCountEv @3491
+    _ZN12MapleRuntime17StackExposureHook17ProcessFrameRootsERNS_14StackWatermarkEy @3492

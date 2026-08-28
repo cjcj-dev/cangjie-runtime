@@ -11,6 +11,8 @@
 #include "Common/StackType.h"
 #include "Interpreter/Options.h"
 #include "Loader/ElfUnloadQuiescence.h"
+#include "Mutator/Mutator.h"
+#include "UnwindStack/StackExposureHook.h"
 
 namespace MapleRuntime {
 void EHStackInfo::FillInStackTrace()
@@ -31,6 +33,9 @@ void EHStackInfo::FillInStackTrace()
         stack.emplace_back(uwContext.frameInfo);
         DLOG(INTERPRETER, "  Added frame to EH stack info, frame type: %d, name: %s",
             uwContext.frameInfo.GetFrameType(), uwContext.frameInfo.GetFuncName().Str());
+        if (Mutator* mutator = Mutator::GetMutator()) {
+            StackExposureHook::OnIteration(*mutator, stack.size() - 1, stack.back());
+        }
 
         UnwindContext caller;
         lastFrameType = uwContext.frameInfo.GetFrameType();
