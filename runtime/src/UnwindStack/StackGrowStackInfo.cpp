@@ -13,6 +13,7 @@
 #include "Common/StackType.h"
 #include "Interpreter/InterpreterSpecific.h"
 #include "Loader/ElfUnloadQuiescence.h"
+#include "UnwindStack/StackExposureHook.h"
 
 namespace MapleRuntime {
 void StackGrowStackInfo::FillInStackTrace()
@@ -39,6 +40,12 @@ void StackGrowStackInfo::FillInStackTrace()
         stack.emplace_back(uwContext.frameInfo);
         UnwindContext caller;
         lastFrameType = uwContext.frameInfo.GetFrameType();
+        // Stack growth is the runtime path that exposes a managed caller to
+        // execution.  Protect the caller before publishing it, then verify
+        // the newly-current frame after the unwind.  GC/printing/inspector
+        // walkers do not use this product entry and remain read-only.
+        const size_t exposingFrameIndex = stack.size();
+        StackExposureHook::OnBeforeUnwind(*mutator, exposingFrameIndex);
 #ifndef _WIN64
         if (uwContext.UnwindToCallerContext(caller) == false) {
 #else
@@ -47,6 +54,7 @@ void StackGrowStackInfo::FillInStackTrace()
             return;
         }
         uwContext = caller;
+        StackExposureHook::OnAfterUnwind(*mutator, exposingFrameIndex);
     }
 }
 
