@@ -242,6 +242,25 @@ public:
         taskQueueCondVar.notify_all();
     }
 
+    // Non-blocking control-plane dequeue used by the generation drivers.  GC
+    // work itself lives in GCDriverPort; this method only services shutdown and
+    // diagnostic tasks without allowing one generation to consume the other.
+    bool TryDequeue(T& task)
+    {
+        std::unique_lock<std::recursive_mutex> lock(taskQueueLock);
+        if (!syncTaskQueue.empty()) {
+            task = syncTaskQueue.front();
+            syncTaskQueue.pop_front();
+            return true;
+        }
+        T candidate = asyncTaskQueue.Pop();
+        if (candidate.IsInvalid()) {
+            return false;
+        }
+        task = candidate;
+        return true;
+    }
+
     // Get one gc task from task queue
     // Firstly get from syncTaskQueue, then get from asyncTaskQueue
     T Dequeue()

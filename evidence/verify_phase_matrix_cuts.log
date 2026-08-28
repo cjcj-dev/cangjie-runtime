@@ -1,0 +1,26 @@
+BASE_COMMAND: python3 runtime/tests/gc_unit/check_verify_phase_matrix.py runtime/src/Heap/Verify
+VERIFY_PHASE_MATRIX roots=GREEN objects=GREEN marking=GREEN remembered=GREEN oops=GREEN
+VERIFY_PHASE_CALLS roots=actual:['VerifyRoots.cpp:104'] expected:['VerifyRoots.cpp:104']
+VERIFY_PHASE_CALLS objects=actual:['VerifyHeap.cpp:385'] expected:['VerifyHeap.cpp:385']
+VERIFY_PHASE_CALLS marking=actual:['MarkCompleteVerify.cpp:763'] expected:['MarkCompleteVerify.cpp:763']
+VERIFY_PHASE_CALLS remembered=actual:['VerifyRememberedSet.cpp:173'] expected:['VerifyRememberedSet.cpp:173']
+VERIFY_PHASE_CALLS oops=actual:['VerifyRegions.cpp:222', 'VerifyRegions.cpp:426'] expected:['VerifyRegions.cpp:222', 'VerifyRegions.cpp:426']
+BASE_RC: 0
+CUT_LABEL: cut_oops_222
+CUT_COMMAND: sed -i '222d' /tmp/verify-phase-cut_oops_222.jYvFxg/VerifyRegions.cpp && python3 runtime/tests/gc_unit/check_verify_phase_matrix.py /tmp/verify-phase-cut_oops_222.jYvFxg
+VERIFY_PHASE_MATRIX roots=GREEN objects=GREEN marking=GREEN remembered=GREEN oops=RED
+VERIFY_PHASE_CALLS roots=actual:['VerifyRoots.cpp:104'] expected:['VerifyRoots.cpp:104']
+VERIFY_PHASE_CALLS objects=actual:['VerifyHeap.cpp:385'] expected:['VerifyHeap.cpp:385']
+VERIFY_PHASE_CALLS marking=actual:['MarkCompleteVerify.cpp:763'] expected:['MarkCompleteVerify.cpp:763']
+VERIFY_PHASE_CALLS remembered=actual:['VerifyRememberedSet.cpp:173'] expected:['VerifyRememberedSet.cpp:173']
+VERIFY_PHASE_CALLS oops=actual:['VerifyRegions.cpp:425'] expected:['VerifyRegions.cpp:222', 'VerifyRegions.cpp:426']
+CUT_RC: 1
+CUT_LABEL: cut_oops_426
+CUT_COMMAND: sed -i '426d' /tmp/verify-phase-cut_oops_426.as5X1n/VerifyRegions.cpp && python3 runtime/tests/gc_unit/check_verify_phase_matrix.py /tmp/verify-phase-cut_oops_426.as5X1n
+VERIFY_PHASE_MATRIX roots=GREEN objects=GREEN marking=GREEN remembered=GREEN oops=RED
+VERIFY_PHASE_CALLS roots=actual:['VerifyRoots.cpp:104'] expected:['VerifyRoots.cpp:104']
+VERIFY_PHASE_CALLS objects=actual:['VerifyHeap.cpp:385'] expected:['VerifyHeap.cpp:385']
+VERIFY_PHASE_CALLS marking=actual:['MarkCompleteVerify.cpp:763'] expected:['MarkCompleteVerify.cpp:763']
+VERIFY_PHASE_CALLS remembered=actual:['VerifyRememberedSet.cpp:173'] expected:['VerifyRememberedSet.cpp:173']
+VERIFY_PHASE_CALLS oops=actual:['VerifyRegions.cpp:222'] expected:['VerifyRegions.cpp:222', 'VerifyRegions.cpp:426']
+CUT_RC: 1

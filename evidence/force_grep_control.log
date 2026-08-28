@@ -1,0 +1,5 @@
+POSITIVE_COMMAND: /usr/bin/grep -cw force /tmp/force-grep-control.haGsw0/control.cpp
+1
+POSITIVE_RC: 0
+CANDIDATE_COMMAND: git grep -cw force -- runtime/src/Heap/Verify
+CANDIDATE_RC: 1
