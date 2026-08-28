@@ -449,7 +449,9 @@ void Mutator::VisitStackRoots(const RootVisitor& func, const RootVisitor& invisi
                 "env=MRT_GCV2_STACK_EXPOSURE_VERIFY=1");
         }
     }
+    BindExposureVisitors(&func, nullptr);
     StackManager::VisitStackRoots(uwContext, func, *this);
+    UnbindExposureVisitors();
     VisitRawObjects(visitedInvisibleRootVisitor);
     DecObserver();
     MutatorUnlock();
@@ -534,8 +536,10 @@ void Mutator::VisitHeapReferencesOnStack(const RootVisitor& regRootVisitor, cons
 #if defined(GCINFO_DEBUG) && GCINFO_DEBUG
     CreateCurrentGCInfo();
 #endif
+    BindExposureVisitors(&regRootVisitor, &derivedPtrVisitor);
     StackManager::VisitHeapReferencesOnStack(
         uwContext, regRootVisitor, slotRootVisitor, derivedPtrVisitor, *this);
+    UnbindExposureVisitors();
     VisitRawObjects(rawObjectVisitor);
     DecObserver();
     MutatorUnlock();
@@ -1062,6 +1066,7 @@ bool Mutator::DrainStackWatermark(const RootVisitor& visitor, const RootVisitor&
     StackFrameCursor cursor(uwContext);
     bool began = stackWatermark.TryBegin(epoch, owner, cursor.FrameCount());
     if (began) {
+        BindExposureVisitors(&visitor, derivedPtrVisitor);
         while (cursor.ProcessOne(visitor, *this, derivedPtrVisitor)) {
             stackWatermark.AdvanceTo(cursor.Cursor(), owner);
         }
@@ -1070,6 +1075,7 @@ bool Mutator::DrainStackWatermark(const RootVisitor& visitor, const RootVisitor&
         // size of the snapshot and therefore cannot prove that the cursor
         // actually processed it.
         scannedFrames = cursor.Cursor();
+        UnbindExposureVisitors();
     }
     bool complete = began && scannedFrames == stackWatermark.GetFrameCount();
     if (began) {

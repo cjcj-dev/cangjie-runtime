@@ -4,6 +4,7 @@
 #include <cstdlib>
 
 #include "Mutator/Mutator.h"
+#include "UnwindStack/GcStackInfo.h"
 #include "UnwindStack/StackExposureHook.h"
 
 using MapleRuntime::Mutator;
@@ -32,6 +33,12 @@ extern "C" void RevSeedExposure()
                  watermark.GetFrameCount());
 }
 
+extern "C" void RevFireGcWalk()
+{
+    MapleRuntime::GCStackInfo gc;
+    gc.FillInStackTrace();
+}
+
 extern "C" uint64_t RevReportExposure()
 {
     Mutator* mutator = Mutator::GetMutator();
@@ -43,12 +50,14 @@ extern "C" uint64_t RevReportExposure()
     const size_t fire = StackExposureHook::FireCount();
     const size_t advance = StackExposureHook::AdvanceCount();
     const size_t processOne = StackExposureHook::ProcessOneCount();
+    const size_t visitorHits = StackExposureHook::VisitorHitCount();
     const size_t cross = StackExposureHook::CrossWithoutProcessCount();
     const size_t stw = StackExposureHook::StopTheWorldCallsInHook();
     std::fprintf(stderr,
-                 "GATE_SUMMARY fire=%zu advance=%zu processOne=%zu cross=%zu stw=%zu cursor=%zu phase=%u owner=%u\n",
-                 fire, advance, processOne, cross, stw, watermark.GetCursorIndex(),
+                 "GATE_SUMMARY fire=%zu advance=%zu processOne=%zu visitorHits=%zu cross=%zu stw=%zu "
+                 "cursor=%zu phase=%u owner=%u\n",
+                 fire, advance, processOne, visitorHits, cross, stw, watermark.GetCursorIndex(),
                  static_cast<unsigned>(watermark.GetPhase()),
                  static_cast<unsigned>(watermark.GetOwner()));
-    return (static_cast<uint64_t>(fire) << 32) | static_cast<uint64_t>(processOne);
+    return (static_cast<uint64_t>(processOne) << 32) | static_cast<uint64_t>(visitorHits);
 }

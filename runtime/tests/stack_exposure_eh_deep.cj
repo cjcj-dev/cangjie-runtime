@@ -1,18 +1,27 @@
 foreign func RevSeedExposure(): Unit
 foreign func RevReportExposure(): UInt64
 
+class Box {
+    var n: Int64
+    init(v: Int64) { n = v }
+}
+
+func deep(k: Int64, acc: Box): Unit {
+    let live = acc.n
+    if (k <= 0) {
+        throw Exception()
+    }
+    deep(k - 1, Box(k + live))
+}
+
 main(): Int64 {
     unsafe { RevSeedExposure() }
     try {
-        throw Exception()
+        deep(16, Box(0))
     } catch (_: Exception) {}
     let summary = unsafe { RevReportExposure() }
     let processOne = summary >> 32
     let visitorHits = summary & 0xffffffff
     println("PRODUCT_ENTRY_DONE summary=${summary} processOne=${processOne} visitorHits=${visitorHits}")
-    // rc=0 only when both processOne and visitorHits moved. fire packed in high
-    // bits previously let processOne=0 still look green.
-    // Shallow throw has no live heap object roots (visitorHits may be 0).
-    // rc follows processOne so fire<<32 cannot hide a zero processOne.
-    return if (processOne > 0) { 0 } else { 41 }
+    return if (processOne > 0 && visitorHits > 0) { 0 } else { 41 }
 }

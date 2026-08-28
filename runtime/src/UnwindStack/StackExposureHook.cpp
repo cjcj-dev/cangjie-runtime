@@ -10,6 +10,8 @@
 #include <cstring>
 
 #include "Base/Log.h"
+#include "Heap/Heap.h"
+#include "Heap/WCollector/WCollector.h"
 #include "Mutator/Mutator.h"
 #include "StackMap/StackMapTypeDef.h"
 #include "UnwindStack/StackFrameCursor.h"
@@ -19,6 +21,7 @@ namespace {
 std::atomic<size_t> g_fireCount{ 0 };
 std::atomic<size_t> g_advanceCount{ 0 };
 std::atomic<size_t> g_processOneCount{ 0 };
+std::atomic<size_t> g_visitorHitCount{ 0 };
 std::atomic<size_t> g_crossWithoutProcess{ 0 };
 std::atomic<size_t> g_stwInHook{ 0 };
 
@@ -31,6 +34,61 @@ bool EnvIsOne(const char* name)
 {
     const char* v = std::getenv(name);
     return v != nullptr && std::strcmp(v, "1") == 0;
+}
+
+bool DropVisitor() { return EnvIsOne("MRT_GCV2_EXPOSURE_DROP_VISITOR"); }
+
+void CountVisitorHit() { g_visitorHitCount.fetch_add(1, std::memory_order_relaxed); }
+
+RootVisitor MakeCountedVisitor(const RootVisitor* bound)
+{
+    if (DropVisitor() || bound == nullptr) {
+        return [](ObjectRef&) {};
+    }
+    return [bound](ObjectRef& root) {
+        CountVisitorHit();
+        (*bound)(root);
+    };
+}
+
+DerivedPtrVisitor MakeCountedDerived(const DerivedPtrVisitor* bound)
+{
+    if (DropVisitor() || bound == nullptr) {
+        return [](BasePtrType, DerivedSlot&) {};
+    }
+    return [bound](BasePtrType base, DerivedSlot& slot) { (*bound)(base, slot); };
+}
+
+RootVisitor MakeCollectorFallbackVisitor()
+{
+    return [](ObjectRef& root) {
+        CountVisitorHit();
+        Collector& collector = Heap::GetHeap().GetCollector();
+        (void)static_cast<WCollector&>(collector).ForwardUpdateRawRef(root);
+    };
+}
+
+DerivedPtrVisitor MakeCollectorFallbackDerived()
+{
+    return [](BasePtrType, DerivedSlot&) {};
+}
+
+void ResolveVisitors(Mutator& mutator, RootVisitor& rootOut, DerivedPtrVisitor& derivedOut)
+{
+    if (DropVisitor()) {
+        rootOut = [](ObjectRef&) {};
+        derivedOut = [](BasePtrType, DerivedSlot&) {};
+        return;
+    }
+    const RootVisitor* bound = mutator.GetExposureRootVisitor();
+    const DerivedPtrVisitor* boundDerived = mutator.GetExposureDerivedVisitor();
+    if (bound != nullptr) {
+        rootOut = MakeCountedVisitor(bound);
+        derivedOut = MakeCountedDerived(boundDerived);
+        return;
+    }
+    rootOut = MakeCollectorFallbackVisitor();
+    derivedOut = MakeCollectorFallbackDerived();
 }
 } // namespace
 
@@ -97,8 +155,9 @@ size_t StackExposureHook::ProcessFrameRoots(StackWatermark& wm, size_t needUpToE
         --g_processRootsDepth;
         return start;
     }
-    RootVisitor visitor = [](ObjectRef&) {};
-    DerivedPtrVisitor derived = [](BasePtrType, DerivedSlot&) {};
+    RootVisitor visitor;
+    DerivedPtrVisitor derived;
+    ResolveVisitors(*mutator, visitor, derived);
     size_t target = needUpToExclusive;
     if (target > cursor.FrameCount()) {
         target = cursor.FrameCount();
@@ -203,8 +262,9 @@ bool StackExposureHook::OnIteration(Mutator& mutator, size_t exposingFrameIndex,
     if (exposingFrameIndex == 0) {
         g_iterationRegs = RegSlotsMap();
     }
-    RootVisitor visitor = [](ObjectRef&) {};
-    DerivedPtrVisitor derived = [](BasePtrType, DerivedSlot&) {};
+    RootVisitor visitor;
+    DerivedPtrVisitor derived;
+    ResolveVisitors(mutator, visitor, derived);
     StackFrameCursor::ProcessFrame(frame, g_iterationRegs, visitor, mutator, &derived);
     g_processOneCount.fetch_add(1, std::memory_order_relaxed);
     StackWatermark::Owner o = wm.GetOwner();
@@ -237,6 +297,7 @@ void StackExposureHook::NoteStopTheWorldFromHook()
 size_t StackExposureHook::FireCount() { return g_fireCount.load(std::memory_order_relaxed); }
 size_t StackExposureHook::AdvanceCount() { return g_advanceCount.load(std::memory_order_relaxed); }
 size_t StackExposureHook::ProcessOneCount() { return g_processOneCount.load(std::memory_order_relaxed); }
+size_t StackExposureHook::VisitorHitCount() { return g_visitorHitCount.load(std::memory_order_relaxed); }
 size_t StackExposureHook::CrossWithoutProcessCount()
 {
     return g_crossWithoutProcess.load(std::memory_order_relaxed);
@@ -248,6 +309,7 @@ void StackExposureHook::ResetStats()
     g_fireCount.store(0, std::memory_order_relaxed);
     g_advanceCount.store(0, std::memory_order_relaxed);
     g_processOneCount.store(0, std::memory_order_relaxed);
+    g_visitorHitCount.store(0, std::memory_order_relaxed);
     g_crossWithoutProcess.store(0, std::memory_order_relaxed);
     g_stwInHook.store(0, std::memory_order_relaxed);
 }
