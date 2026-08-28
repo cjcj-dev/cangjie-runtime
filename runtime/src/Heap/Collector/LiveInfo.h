@@ -57,6 +57,11 @@ private:
 
 struct RegionBitmap {
     static constexpr uint8_t factor = 16;
+    // A 64-bit mark word carries one live/finalizable + strong pair per slot.
+    // Keep this geometry in one named constant so allocation and test fixtures
+    // cannot silently drift back to the pre-pair 512-byte rule.
+    static constexpr size_t kRegionBytesPerWord =
+        (kMarkedBytesPerBit * kBitsPerWord) / 2;
     std::atomic<uint16_t> partLiveBytes[factor];
     std::atomic<size_t> liveBytes;
     // Two adjacent bits describe each 8-byte slot: live/finalizable then
@@ -66,7 +71,7 @@ struct RegionBitmap {
 
     static size_t GetRegionBitmapSize(size_t regionSize)
     {
-        const size_t words = regionSize / ((kMarkedBytesPerBit * kBitsPerWord) / 2);
+        const size_t words = regionSize / kRegionBytesPerWord;
         return sizeof(RegionBitmap) + (words * sizeof(uint64_t));
     }
 
@@ -129,7 +134,7 @@ struct RegionBitmap {
 
     void AddLiveBytesForMask(const BitMaskInfo& maskInfo, size_t byteCnt, size_t regionSize)
     {
-        size_t markWordSize = regionSize / ((kMarkedBytesPerBit * kBitsPerWord) / 2);
+        size_t markWordSize = regionSize / kRegionBytesPerWord;
         uint8_t calFactor = factor > markWordSize ? markWordSize : factor;
         if (markWordSize % calFactor) {
             markWordSize = markWordSize + calFactor - markWordSize % calFactor;
@@ -153,8 +158,23 @@ struct RegionBitmap {
     }
 
     explicit RegionBitmap(size_t regionSize)
-        : liveBytes(0), wordCnt(regionSize / ((kMarkedBytesPerBit * kBitsPerWord) / 2))
+        : liveBytes(0), wordCnt(regionSize / kRegionBytesPerWord)
     {}
+
+    // Reset the bitmap state without exposing markWords/wordCnt to tests.
+    // Keeping this operation on the carrier makes the concurrent invariant
+    // independent of the number of words or any future pair packing.
+    void Reset()
+    {
+        liveBytes.store(0, std::memory_order_relaxed);
+        for (auto& part : partLiveBytes) {
+            part.store(0, std::memory_order_relaxed);
+        }
+        const size_t words = wordCnt.load(std::memory_order_relaxed);
+        for (size_t idx = 0; idx < words; ++idx) {
+            markWords[idx].store(0, std::memory_order_relaxed);
+        }
+    }
 
     bool MarkBits(size_t start, size_t byteCnt, size_t regionSize, bool& incLive)
     {
@@ -222,7 +242,7 @@ struct RegionBitmap {
     {
         const size_t pairBit = 2 * (offset / kMarkedBytesPerBit);
         maskInfo.index = pairBit / kBitsPerWord;
-        size_t markWordSize = regionSize / ((kMarkedBytesPerBit * kBitsPerWord) / 2);
+        size_t markWordSize = regionSize / kRegionBytesPerWord;
         uint8_t calFactor = factor > markWordSize ? markWordSize : factor;
         if (markWordSize % calFactor) {
             // The markWordSize needs to be rounded up to ensure it is divisible by calFactor.
