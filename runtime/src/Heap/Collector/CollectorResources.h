@@ -136,6 +136,11 @@ private:
     TaskQueue<GCExecutor>* taskQueue = nullptr;
     GCDriverPort minorDriverPort { GCDriverKind::MINOR };
     GCDriverPort majorDriverPort { GCDriverKind::MAJOR };
+    // zDriver.cpp:59-72,201-224,463-487: the generation ports are
+    // independent, but one driver owns the complete collection lifecycle at a
+    // time. This also keeps the collector's phase, reason and forwarding
+    // retirement epochs single-writer.
+    std::mutex driverLock;
 #if defined(MRT_GC_UNIT_TESTS)
     // Deterministic unit builds can replace only the task executor.  The
     // default product retains CollectorProxy as its sole owner and ABI shape.

@@ -17,7 +17,9 @@
 #include <thread>
 
 #include "Base/SysCall.h"
+#include "CangjieRuntime.h"
 #include "CollectorProxy.h"
+#include "Common/Runtime.h"
 #include "MutatorAllocRate.h"
 #include "Common/RunType.h"
 #include "Common/ScopedObjectAccess.h"
@@ -185,6 +187,7 @@ void CollectorResources::RunTaskLoop()
 #else
             void* owner = static_cast<void*>(&collectorProxy);
 #endif
+            std::lock_guard<std::mutex> lock(driverLock);
             if (!controlTask.Execute(owner)) {
                 break;
             }
@@ -225,19 +228,28 @@ void CollectorResources::RunDriverLoop(GCDriverKind kind)
 #else
                 void* owner = static_cast<void*>(&collectorProxy);
 #endif
+                // The legacy queue still owns timeout and heap-dump work.
+                // Serialize it with both generation drivers because timeout
+                // can enter RunGarbageCollection as a major request.
+                std::lock_guard<std::mutex> lock(driverLock);
                 if (!controlTask.Execute(owner)) {
                     break;
                 }
                 nextTimeout = std::chrono::steady_clock::now() + std::chrono::seconds(1);
                 continue;
             }
-            // TaskQueue::Dequeue historically injected TASK_TYPE_TIMEOUT_GC
-            // after one second of idleness. Keep that observable semantic in
-            // the split-driver wait path (OpenJDK zDriver timeout/backup arm).
+            // Preserve the legacy one-second decision cadence, but send a due
+            // backup through the major port. ZGC routes _z_timer to the major
+            // driver (zDriver.cpp:334-357), so it receives the same owned
+            // young prelude and lifecycle lock as every other major request.
             const auto now = std::chrono::steady_clock::now();
             if (now >= nextTimeout) {
-                if (taskQueue != nullptr && Heap::GetHeap().IsGCEnabled()) {
-                    taskQueue->EnqueueAsync(GCExecutor(GCTask::TaskType::TASK_TYPE_TIMEOUT_GC));
+                const uint64_t nowNs = TimeUtil::NanoSeconds();
+                const bool backupDue = Runtime::CurrentRef() == nullptr ||
+                    (nowNs - GCStats::GetPrevGCStartTime()) > CangjieRuntime::GetGCParam().backupGCInterval;
+                if (Heap::GetHeap().IsGCEnabled() && backupDue) {
+                    GCStats::SetPrevGCStartTime(nowNs);
+                    majorDriverPort.EnqueueAsync(GC_REASON_BACKUP);
                 }
                 nextTimeout = now + std::chrono::seconds(1);
             }
@@ -249,32 +261,30 @@ void CollectorResources::RunDriverLoop(GCDriverKind kind)
 
 bool CollectorResources::ExecuteDriverRequest(const GCDriverRequest& request)
 {
+    // OpenJDK has two driver threads and two ports, but both run_thread loops
+    // hold the same ZDriverLocker around the whole collection
+    // (zDriver.cpp:201-224,463-487). Forwarding retirement and the collector's
+    // phase/reason fields rely on that single lifecycle owner.
+    std::lock_guard<std::mutex> lock(driverLock);
 #if defined(MRT_GC_UNIT_TESTS)
     Collector* collector = testCollector != nullptr ? testCollector : static_cast<Collector*>(&collectorProxy);
 #else
     Collector* collector = static_cast<Collector*>(&collectorProxy);
 #endif
-    // A major cycle is the old driver plus its young prelude.  The prelude is
-    // submitted through the minor identity instead of mutating WCollector's
-    // reason/statistics fields mid-cycle.
+    GCDriverPort& port = request.reason == GC_REASON_YOUNG ? minorDriverPort : majorDriverPort;
+    if (port.Abort().Poll()) {
+        return false;
+    }
+
+    // A major request owns its young prelude while holding the driver lock,
+    // exactly like ZDriverMajor::collect_young followed by collect_old
+    // (zDriver.cpp:416-452). Sending a synchronous request back through the
+    // minor port would deadlock once both drivers share the ZGC lock.
     if (request.reason != GC_REASON_YOUNG) {
-        // Major's young prelude is a real request consumed by the minor
-        // driver.  The abortpoint below is deliberately between prelude and
-        // old, matching zDriver.cpp:416-452: cancellation prevents old work.
-#if defined(MRT_GC_UNIT_TESTS)
         collector->RunGarbageCollection(GCTask::ASYNC_TASK_INDEX, GC_REASON_YOUNG);
         if (majorDriverPort.Abort().Poll()) {
             return false;
         }
-#else
-        const uint64_t prelude = minorDriverPort.EnqueueSync(GC_REASON_YOUNG);
-        if (!minorDriverPort.WaitForAck(prelude) || majorDriverPort.Abort().Poll()) {
-            return false;
-        }
-#endif
-    }
-    if (request.reason != GC_REASON_YOUNG && majorDriverPort.Abort().Poll()) {
-        return false;
     }
     VLOG(GCPHASE, "[GCV2][driver] kind=%s seq=%llu reason=%u ack=pending",
          request.reason == GC_REASON_YOUNG ? "minor" : "major",
@@ -322,6 +332,10 @@ bool CollectorResources::HasSyncTaskCompleted(uint64_t finishedIndex, uint64_t a
 
 void CollectorResources::RequestAsyncGC(GCReason reason)
 {
+    // Static synchronous reasons have no legal non-blocking completion
+    // contract. Keep the pre-driver fail-closed boundary before selecting a
+    // generation port; USER remains legal because its mode is per request.
+    CHECK(!g_gcRequests[reason].IsSyncGC());
     GCDriverPort& port = reason == GC_REASON_YOUNG ? minorDriverPort : majorDriverPort;
     port.EnqueueAsync(reason);
 }
@@ -467,7 +481,7 @@ void CollectorResources::StartGCThreads()
     }
 
     // ZGC shape: two independent drivers, each consuming only its generation
-    // port. The major driver also owns the legacy control/timeout queue.
+    // port. The major driver also owns the legacy non-GC control queue.
     if (::pthread_create(&minorDriverThread, nullptr, CollectorResources::MinorDriverThreadEntry, this) != 0) {
         MRT_ASSERT(0, "pthread_create minor driver failed!");
     }
