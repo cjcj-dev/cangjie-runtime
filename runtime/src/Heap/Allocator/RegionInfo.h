@@ -1935,7 +1935,17 @@ public:
     {
         void* unitAddress = reinterpret_cast<void*>(RegionInfo::GetUnitAddress(idx));
         size_t size = cnt * RegionInfo::UNIT_SIZE;
-        CHECK_DETAIL(UnitInfo::memoryOwner != nullptr && UnitInfo::memoryOwner->CommitMemory(unitAddress, size),
+        const size_t committed = UnitInfo::memoryOwner == nullptr ? 0 :
+                                 UnitInfo::memoryOwner->CommitMemory(unitAddress, size);
+        if (committed != size && committed != 0 && UnitInfo::memoryOwner != nullptr) {
+            // A multi-partition commit may leave a committed prefix.  Roll
+            // that prefix back before reporting allocation failure.
+            const size_t cleaned = UnitInfo::memoryOwner->ReleaseMemory(unitAddress, committed);
+            CHECK_DETAIL(cleaned == committed,
+                         "partial commit cleanup failed idx=%zu units=%zu committed=%zu cleaned=%zu", idx, cnt,
+                         committed, cleaned);
+        }
+        CHECK_DETAIL(committed == size,
                      "commit outside heap reservation idx=%zu units=%zu", idx, cnt);
     }
 
@@ -1950,7 +1960,9 @@ public:
                      "CJRT_FROM_REUSE_GATE bypass reached ReleaseUnits idx=%zu units=%zu", idx, cnt);
         DLOG(REGION, "release physical memory for units [%zu+%zu, %zu) @[%p+%zu, 0x%zx)", idx, cnt, idx + cnt,
              unitAddress, size, RegionInfo::GetUnitAddress(idx + cnt));
-        CHECK_DETAIL(UnitInfo::memoryOwner != nullptr && UnitInfo::memoryOwner->ReleaseMemory(unitAddress, size),
+        const size_t released = UnitInfo::memoryOwner == nullptr ? 0 :
+                                UnitInfo::memoryOwner->ReleaseMemory(unitAddress, size);
+        CHECK_DETAIL(released == size,
                      "release outside heap reservation idx=%zu units=%zu", idx, cnt);
 #ifdef CANGJIE_ASAN_SUPPORT
         Sanitizer::OnHeapMadvise(unitAddress, size);
