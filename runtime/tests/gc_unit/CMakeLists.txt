@@ -110,6 +110,33 @@ if (MRT_M0_CORRELATION_EXPERIMENT)
     set_tests_properties(cj_gc_unit PROPERTIES ENVIRONMENT "MRT_GCV2_DIAG=m0corr")
 endif()
 
+# Isolated product-path arm for allocation stalls. The aggregate target can be
+# blocked by an unrelated suite link failure; this target still binds every
+# stall consumer from the same MRT_GC_UNIT_TESTS product SO.
+add_executable(cj_gc_allocation_stall_unit
+    gc_unit_main.cpp
+    test_allocation_stall_queue.cpp
+)
+target_include_directories(cj_gc_allocation_stall_unit PRIVATE
+    ${CMAKE_CURRENT_SOURCE_DIR}
+    ${CMAKE_SOURCE_DIR}/src
+    ${CMAKE_SOURCE_DIR}/src/Heap
+    ${CMAKE_SOURCE_DIR}/include
+)
+target_compile_features(cj_gc_allocation_stall_unit PRIVATE cxx_std_17)
+target_compile_options(cj_gc_allocation_stall_unit PRIVATE -fno-rtti -fexceptions -std=gnu++17)
+target_compile_definitions(cj_gc_allocation_stall_unit PRIVATE MRT_GC_UNIT_TESTS=1)
+if (TARGET cangjie-runtime)
+    target_link_libraries(cj_gc_allocation_stall_unit PRIVATE cangjie-runtime)
+elseif (DEFINED GCV2_RUNTIME_LIB_DIR)
+    target_link_directories(cj_gc_allocation_stall_unit PRIVATE ${GCV2_RUNTIME_LIB_DIR})
+    target_link_libraries(cj_gc_allocation_stall_unit PRIVATE cangjie-runtime boundscheck)
+    set_target_properties(cj_gc_allocation_stall_unit PROPERTIES
+        BUILD_RPATH "${GCV2_RUNTIME_LIB_DIR}"
+        INSTALL_RPATH "${GCV2_RUNTIME_LIB_DIR}")
+endif()
+add_test(NAME cj_gc_allocation_stall_unit COMMAND cj_gc_allocation_stall_unit)
+
 # Product-link proof for ForwardingTable::ClearEntries.  Keep this in a fresh
 # process because ForwardingTable::Initialize is deliberately one-shot and the
 # main suite already owns that process-global table.

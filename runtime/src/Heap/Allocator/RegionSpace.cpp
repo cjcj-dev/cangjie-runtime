@@ -74,39 +74,6 @@ MAddress RegionSpace::TryAllocateOnce(size_t allocSize, AllocType allocType)
     return allocBuffer->Allocate(allocSize, allocType);
 }
 
-bool RegionSpace::ShouldRetryAllocation(size_t& tryTimes, size_t size) const
-{
-    if (!IsRuntimeThread() && tryTimes <= static_cast<size_t>(TryAllocationThreshold::RESCHEDULE)) {
-        CJThreadResched(); // reschedule this thread for throughput.
-        return true;
-    }
-    if (tryTimes < static_cast<size_t>(TryAllocationThreshold::TRIGGER_OOM)) {
-        if (Heap::GetHeap().IsGcStarted()) {
-            ScopedEnterSaferegion enterSaferegion(false);
-            Heap::GetHeap().GetCollectorResources().WaitForGCFinish();
-        } else {
-            Heap::GetHeap().GetCollector().RequestGC(GC_REASON_HEU, false);
-        }
-        return true;
-    }
-    if (tryTimes == static_cast<size_t>(TryAllocationThreshold::TRIGGER_OOM)) {
-        if (!Heap::GetHeap().IsGcStarted()) {
-            VLOG(REPORT, "gc is triggered for OOM");
-            Heap::GetHeap().GetCollector().RequestGC(GC_REASON_OOM, false);
-        } else {
-            ScopedEnterSaferegion enterSaferegion(false);
-            Heap::GetHeap().GetCollectorResources().WaitForGCFinish();
-            tryTimes--;
-        }
-        return true;
-    }
-    regionManager.DumpRegionStats("region statistics when gc ends", true);
-    VLOG(REPORT, "Cannot allocate memory of %zu(B), throw an OutOfMemory exception", size);
-    LOG(RTLOG_ERROR, "Cannot allocate memory of %zu(B), throw an OutOfMemory exception", size);
-    ExceptionManager::OutOfMemory();
-    return false;
-}
-
 MAddress RegionSpace::Allocate(size_t size, AllocType allocType)
 {
     uintptr_t internalAddr = 0;
@@ -121,7 +88,8 @@ MAddress RegionSpace::Allocate(size_t size, AllocType allocType)
         // A mutator creates exactly one request for this blocking allocation.
         // The allocator queue owns GC triggering and directed satisfaction;
         // there is no reschedule/attempt counter loop on this path.
-        if (!regionManager.StallAllocation(allocSize)) {
+        const size_t claimedUnits = regionManager.StallAllocation(allocSize);
+        if (claimedUnits == 0) {
             regionManager.DumpRegionStats("region statistics when gc ends", true);
             VLOG(REPORT, "Cannot allocate memory of %zu(B), throw an OutOfMemory exception", size);
             LOG(RTLOG_ERROR, "Cannot allocate memory of %zu(B), throw an OutOfMemory exception", size);
@@ -129,6 +97,7 @@ MAddress RegionSpace::Allocate(size_t size, AllocType allocType)
             return 0;
         }
         internalAddr = TryAllocateOnce(allocSize, allocType);
+        regionManager.FinishStalledAllocation(claimedUnits);
     }
     if (internalAddr == 0) {
         VLOG(REPORT, "Allocation request was satisfied but allocation still failed: size=%zu", size);

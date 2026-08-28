@@ -7,6 +7,7 @@
 
 #include <condition_variable>
 #include <cstddef>
+#include <cstdint>
 #include <deque>
 #include <functional>
 #include <mutex>
@@ -23,10 +24,14 @@ public:
     AllocationStallRequest& operator=(const AllocationStallRequest&) = delete;
 
     size_t GetSize() const { return size; }
+    size_t GetClaimedUnits() const { return claimedUnits; }
 
-    bool Wait()
+    bool Wait(const std::function<void()>& beforeWait = {})
     {
         std::unique_lock<std::mutex> lock(mutex);
+        if (!completed && beforeWait) {
+            beforeWait();
+        }
         condition.wait(lock, [this] { return completed; });
         return result;
     }
@@ -45,7 +50,11 @@ public:
     }
 
 private:
+    friend class AllocationStallQueue;
+
     const size_t size;
+    uint64_t sequence{ 0 };
+    size_t claimedUnits{ 0 };
     std::mutex mutex;
     std::condition_variable condition;
     bool completed{ false };
@@ -59,9 +68,13 @@ public:
     bool Enqueue(AllocationStallRequest& request)
     {
         std::lock_guard<std::mutex> lock(mutex);
-        const bool requestGc = requests.empty();
+        const bool requestGc = !gcInProgress;
+        gcInProgress = true;
+        request.sequence = ++lastSequence;
         requests.push_back(&request);
+#if defined(MRT_GC_UNIT_TESTS)
         ++enqueued;
+#endif
 #if defined(MRT_ALLOCATION_STALL_CUT_ENQUEUE)
         (void)requestGc;
         return false;
@@ -70,46 +83,74 @@ public:
 #endif
     }
 
-    size_t SatisfyAvailable(const std::function<bool(size_t)>& available)
+    uint64_t CaptureWaveBoundary() const
+    {
+        std::lock_guard<std::mutex> lock(mutex);
+        return lastSequence;
+    }
+
+    size_t SatisfyAvailable(const std::function<size_t(size_t, size_t)>& claim)
     {
 #if defined(MRT_ALLOCATION_STALL_CUT_SATISFY)
-        (void)available;
+        (void)claim;
         return 0;
 #else
         size_t satisfied = 0;
         std::lock_guard<std::mutex> lock(mutex);
         while (!requests.empty()) {
             AllocationStallRequest* request = requests.front();
-            if (!available(request->GetSize())) {
+            const size_t units = claim(request->GetSize(), claimedUnits);
+            if (units == 0) {
                 break;
             }
-            requests.pop_front();
+#if defined(MRT_ALLOCATION_STALL_CUT_DEQUEUE)
+            request->claimedUnits = units;
+            claimedUnits += units;
             request->Satisfy(true);
-            ++satisfied;
-#if !defined(MRT_ALLOCATION_STALL_CUT_DEQUEUE)
-            ++dequeued;
+#else
+            requests.pop_front();
+            request->claimedUnits = units;
+            claimedUnits += units;
+            request->Satisfy(true);
 #endif
+            ++satisfied;
+#if defined(MRT_GC_UNIT_TESTS)
+            ++dequeued;
             ++satisfiedCount;
+#endif
         }
         return satisfied;
 #endif
     }
 
-    size_t FailAll()
+    bool CompleteWave(uint64_t boundary)
     {
-        size_t failed = 0;
         std::lock_guard<std::mutex> lock(mutex);
-        while (!requests.empty()) {
+        while (!requests.empty() && requests.front()->sequence <= boundary) {
             AllocationStallRequest* request = requests.front();
             requests.pop_front();
             request->Satisfy(false);
-            ++failed;
+#if defined(MRT_GC_UNIT_TESTS)
             ++dequeued;
             ++failedCount;
+#endif
         }
-        return failed;
+        if (requests.empty()) {
+            gcInProgress = false;
+            return false;
+        }
+        return true;
     }
 
+    void ReleaseClaim(size_t units)
+    {
+        std::lock_guard<std::mutex> lock(mutex);
+        if (units <= claimedUnits) {
+            claimedUnits -= units;
+        }
+    }
+
+#if defined(MRT_GC_UNIT_TESTS)
     size_t Pending() const
     {
         std::lock_guard<std::mutex> lock(mutex);
@@ -135,14 +176,20 @@ public:
         std::lock_guard<std::mutex> lock(mutex);
         return failedCount;
     }
+#endif
 
 private:
     mutable std::mutex mutex;
     std::deque<AllocationStallRequest*> requests;
+    uint64_t lastSequence{ 0 };
+    size_t claimedUnits{ 0 };
+    bool gcInProgress{ false };
+#if defined(MRT_GC_UNIT_TESTS)
     size_t enqueued{ 0 };
     size_t dequeued{ 0 };
     size_t satisfiedCount{ 0 };
     size_t failedCount{ 0 };
+#endif
 };
 
 } // namespace MapleRuntime
