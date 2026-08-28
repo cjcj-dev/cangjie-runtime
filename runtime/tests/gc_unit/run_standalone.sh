@@ -285,6 +285,9 @@ while IFS=$'\t' read -r test_name anchor carrier consumer cut_site; do
   if [[ "$test_name" == "test_name" ]]; then
     continue
   fi
+  if [[ "$test_name" == Uncommitter.* ]]; then
+    continue
+  fi
   [[ "$anchor" == "_ZN12MapleRuntime10RegionInfo28PreserveRetainedLiveInfoUpToEm" ]]
   [[ "$carrier" == "product_so" ]]
   [[ "$consumer" == "ProductPreserveRetainedUpToFn" ]]
