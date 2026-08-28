@@ -7,6 +7,8 @@
 
 #include "CartesianTree.h"
 
+#include <cstdlib>
+
 #include "Allocator/RegionInfo.h"
 
 namespace MapleRuntime {
@@ -128,13 +130,6 @@ void CartesianTree::Node::RefreshFreeRegionInfo()
     RegionInfo::InitFreeRegion(idx, cnt);
 }
 
-void CartesianTree::Node::ReleaseMemory()
-{
-    Index idx = GetIndex();
-    Count cnt = GetCount();
-    RegionInfo::ReleaseUnits(idx, cnt);
-}
-
 size_t CartesianTree::GetNodeCount() const
 {
     size_t nodeCount = 0;
@@ -143,6 +138,30 @@ size_t CartesianTree::GetNodeCount() const
         ++nodeCount;
     }
     return nodeCount;
+}
+
+bool CartesianTree::TakeIdleUnits(uint64_t idleBeforeNs, Count maxCount, Index& idx, Count& num)
+{
+    if (root == nullptr || maxCount == 0 || lastUsedNs > idleBeforeNs) {
+        return false;
+    }
+    Count want = maxCount;
+    if (root->GetCount() < want) {
+        want = root->GetCount();
+    }
+#if defined(MRT_GC_UNIT_TESTS)
+    const char* cut = std::getenv("MRT_UNCOMMIT_CUT_OWNERSHIP");
+    if (cut != nullptr && cut[0] != '\0' && !(cut[0] == '0' && cut[1] == '\0')) {
+        idx = root->GetIndex();
+        num = want;
+        return true;
+    }
+#endif
+    if (!TakeUnitsImpl(want, idx, false)) {
+        return false;
+    }
+    num = want;
+    return true;
 }
 
 bool CartesianTree::TakeUnitsImpl(Count num, Index& idx, bool refershRegionInfo)
@@ -170,6 +189,7 @@ bool CartesianTree::TakeUnitsImpl(Count num, Index& idx, bool refershRegionInfo)
     node = *nodePtr;
     idx = node->GetIndex();
     auto count = node->GetCount();
+    lastUsedNs = TimeUtil::NanoSeconds();
 
     node->UpdateNode(idx + num, count - num, refershRegionInfo);
     DecTotalCount(num);

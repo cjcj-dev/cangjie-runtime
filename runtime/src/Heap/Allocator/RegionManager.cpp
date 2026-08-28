@@ -26,6 +26,7 @@
 #include "Collector/CollectorResources.h"
 #include "Collector/CopyCollector.h"
 #include "Collector/GcTrigger.h"
+#include "Collector/Uncommitter.h"
 #include "Collector/MutatorAllocRate.h"
 #include "Collector/TenuringThreshold.h"
 #include "Common/BaseObject.h"
@@ -889,6 +890,15 @@ inline void RegionManager::UntagHugePage(RegionInfo* region, size_t num) const
 #endif
 }
 
+void FreeRegionManager::AddReleaseUnits(UnitIndex idx, UnitCount num)
+{
+    ScopedEnterSaferegion enterSaferegion(true);
+    std::lock_guard<std::mutex> lg(releasedUnitTreeMutex);
+    if (UNLIKELY(!releasedUnitTree.MergeInsert(idx, num, true))) {
+        LOG(RTLOG_FATAL, "tid %d: failed to add release units [%u+%u, %u)", GetTid(), idx, num, idx + num);
+    }
+}
+
 size_t FreeRegionManager::ReleaseGarbageRegions(size_t targetCachedSize)
 {
     size_t dirtyBytes = dirtyUnitTree.GetTotalCount() * RegionInfo::UNIT_SIZE;
@@ -902,12 +912,13 @@ size_t FreeRegionManager::ReleaseGarbageRegions(size_t targetCachedSize)
         std::lock_guard<std::mutex> lock1(dirtyUnitTreeMutex);
         auto node = dirtyUnitTree.RootNode();
         if (node == nullptr) { break; }
-        Index idx = node->GetIndex();
+        UnitIndex idx = node->GetIndex();
         UnitCount num = node->GetCount();
         RegionInfo* region = RegionInfo::TryGetRegionInfoAt(RegionInfo::GetUnitAddress(idx));
         const bool detachReady = FromPageDetach::FromPageDetachCheck(
             region, FromPageDetach::Site::RELEASE_GARBAGE_UNITS);
-        dirtyUnitTree.ReleaseRootNode();
+        CHECK_DETAIL(dirtyUnitTree.TakeUnits(num, idx, false),
+                     "tid %d: failed to detach dirty units[%u+%u, %u)", GetTid(), idx, num, idx + num);
 
         if (!detachReady) {
             AddDetachQuarantineUnits(idx, num, false, false);
@@ -925,6 +936,72 @@ size_t FreeRegionManager::ReleaseGarbageRegions(size_t targetCachedSize)
     VLOG(REPORT, "release heap garbage memory %zu bytes, cache %zu(%zu) bytes",
          releasedBytes, dirtyBytes, targetCachedSize);
     return releasedBytes;
+}
+
+size_t FreeRegionManager::UncommitIdleUnits(size_t maxBytes, uint64_t idleBeforeNs, bool honorCancel)
+{
+    ScopedEnterSaferegion enterSaferegion(true);
+    return UncommitIdleUnitsImpl(maxBytes, idleBeforeNs, honorCancel);
+}
+
+size_t FreeRegionManager::UncommitIdleUnitsImpl(size_t maxBytes, uint64_t idleBeforeNs, bool honorCancel)
+{
+    if (maxBytes < RegionInfo::UNIT_SIZE) {
+        return 0;
+    }
+    size_t uncommittedBytes = 0;
+    while (uncommittedBytes + RegionInfo::UNIT_SIZE <= maxBytes) {
+        UnitIndex idx = 0;
+        UnitCount num = 0;
+        {
+            std::lock_guard<std::mutex> lock1(releasedUnitTreeMutex);
+            UnitCount remain = static_cast<UnitCount>((maxBytes - uncommittedBytes) / RegionInfo::UNIT_SIZE);
+            if (remain == 0 || !releasedUnitTree.TakeIdleUnits(idleBeforeNs, remain, idx, num)) {
+                break;
+            }
+        }
+        if (honorCancel && Uncommitter::ShouldStopUncommit()) {
+            std::lock_guard<std::mutex> lockCancel(releasedUnitTreeMutex);
+            CHECK_DETAIL(releasedUnitTree.MergeInsert(idx, num, true),
+                         "tid %d: failed to restore canceled uncommit units[%u+%u, %u)", GetTid(), idx, num,
+                         idx + num);
+            break;
+        }
+        RegionInfo* region = RegionInfo::TryGetRegionInfoAt(RegionInfo::GetUnitAddress(idx));
+        bool inRelocate = false;
+        if (Heap::GetHeap().IsGcStarted()) {
+            const GCPhase phase = Heap::GetHeap().GetGCPhase();
+            inRelocate = phase == GCPhase::GC_PHASE_POST_TRACE ||
+                         phase == GCPhase::GC_PHASE_PREFORWARD ||
+                         phase == GCPhase::GC_PHASE_FORWARD;
+        }
+        if (inRelocate || !ExtentReadyForReleasedCache(region)) {
+            std::lock_guard<std::mutex> lockHold(releasedUnitTreeMutex);
+            CHECK_DETAIL(releasedUnitTree.MergeInsert(idx, num, true),
+                         "tid %d: failed to restore uncommit units under live forwarding [%u+%u, %u)",
+                         GetTid(), idx, num, idx + num);
+            break;
+        }
+        const size_t requestedBytes = static_cast<size_t>(num) * RegionInfo::UNIT_SIZE;
+        const size_t backendReleased = RegionInfo::ReleaseUnitsPartial(idx, num);
+        const size_t released = Uncommitter::AccountReleased(requestedBytes, backendReleased);
+        {
+            std::lock_guard<std::mutex> lock2(releasedUnitTreeMutex);
+            CHECK_DETAIL(releasedUnitTree.MergeInsert(idx, num, true),
+                         "tid %d: failed to retain uncommit units[%u+%u, %u)", GetTid(), idx, num,
+                         idx + num);
+        }
+        if (released != 0) {
+            uncommittedBytes += released;
+        }
+        if (Uncommitter::ShouldRetryPartial(requestedBytes, backendReleased)) {
+            break;
+        }
+    }
+    if (uncommittedBytes > 0) {
+        VLOG(REPORT, "uncommit idle heap memory %zu bytes", uncommittedBytes);
+    }
+    return uncommittedBytes;
 }
 
 void FreeRegionManager::AddDetachQuarantineRegion(RegionInfo* region, bool releasePhysical)
@@ -947,9 +1024,6 @@ void FreeRegionManager::AddDetachQuarantineUnits(UnitIndex idx, UnitCount num, b
 
 size_t FreeRegionManager::ReleaseDetachQuarantineAfterMajor()
 {
-    if (!FromPageDetach::GateEnabled()) {
-        return 0;
-    }
     static constexpr uint8_t kMaxRechecks = 8;
     std::vector<DetachQuarantineEntry> pending;
     {
@@ -967,14 +1041,17 @@ size_t FreeRegionManager::ReleaseDetachQuarantineAfterMajor()
         // post-PrepareForwardTable major closure retired the only route
         // generation that could have stamped the withheld address.
         region->SetRouteDestHold(0);
-        if (!FromPageDetach::FromPageDetachCheck(region, FromPageDetach::Site::MAJOR_RECHECK,
-                                                 FromPageDetach::Action::MAJOR_CLOSE)) {
+        (void)FromPageDetach::FromPageDetachCheck(region, FromPageDetach::Site::MAJOR_RECHECK,
+                                                  FromPageDetach::Action::MAJOR_CLOSE);
+        if (!ExtentReadyForReleasedCache(region)) {
             ++entry.rechecks;
             FromPageDetach::NoteQuarantineRecheckHeld();
-            CHECK_DETAIL(entry.rechecks <= kMaxRechecks,
-                         "CJRT_FROM_REUSE_GATE detach quarantine did not close idx=%u units=%u rechecks=%u max=%u",
-                         entry.idx, entry.num, static_cast<unsigned>(entry.rechecks),
-                         static_cast<unsigned>(kMaxRechecks));
+            if (FromPageDetach::GateEnabled()) {
+                CHECK_DETAIL(entry.rechecks <= kMaxRechecks,
+                             "CJRT_FROM_REUSE_GATE detach quarantine did not close idx=%u units=%u rechecks=%u max=%u",
+                             entry.idx, entry.num, static_cast<unsigned>(entry.rechecks),
+                             static_cast<unsigned>(kMaxRechecks));
+            }
             held.push_back(entry);
             continue;
         }
@@ -1325,10 +1402,6 @@ size_t RegionManager::ReleaseRegion(RegionInfo* region)
     if (FromPageDetach::GateEnabled()) {
         ForwardingTable::DropRetiredCovering(RegionInfo::GetUnitAddress(unitIndex),
                                              num * RegionInfo::UNIT_SIZE);
-    }
-    {
-        FromPageDetach::ReusePermitScope reusePermit;
-        RegionInfo::ReleaseUnits(unitIndex, num);
     }
     freeRegionManager.AddReleaseUnits(unitIndex, num);
     return res;
