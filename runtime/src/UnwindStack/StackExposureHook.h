@@ -12,6 +12,7 @@
 #include <cstdint>
 #include <functional>
 
+#include "Common/StackType.h"
 #include "UnwindStack/StackWatermark.h"
 
 namespace MapleRuntime {
@@ -59,17 +60,24 @@ public:
     // OpenJDK after_unwind: top frame just became current; ensure it is safe.
     static bool OnAfterUnwind(StackWatermark& wm, size_t topFrameIndex, const ProcessFn& processFn);
 
-    // Product entry points.  These bind the hook to the current mutator's
-    // watermark and deliberately use the SELF owner only; GC-owned scans are
-    // completed by the GC consumer and must not be advanced by the mutator.
+    // Product entry points. Bind to the current mutator watermark. SCANNING
+    // under SELF or GC: the mutator may finish unprocessed frames (ZGC
+    // ensure_safe / process_one) so an exposed caller is covered before ret/EH.
     static bool OnBeforeUnwind(Mutator& mutator, size_t exposingFrameIndex);
     static bool OnAfterUnwind(Mutator& mutator, size_t topFrameIndex);
+
+    // ZGC on_iteration: walker discovered frame `exposingFrameIndex`.
+    static bool OnIteration(Mutator& mutator, size_t exposingFrameIndex);
+    static bool OnIteration(Mutator& mutator, size_t exposingFrameIndex, const FrameInfo& frame);
 
     // Empty process: records fire but does not advance watermark (positive control for ②).
     static size_t NoopProcess(StackWatermark& wm, size_t needUpToExclusive);
 
-    // Default process for structural tests: AdvanceTo(needUpToExclusive) under SELF owner.
+    // Structural tests only: AdvanceTo without visiting frame roots.
     static size_t AdvanceOnlyProcess(StackWatermark& wm, size_t needUpToExclusive);
+
+    // Product process_one: StackFrameCursor::ProcessOne over frame roots, then AdvanceTo.
+    static size_t ProcessFrameRoots(StackWatermark& wm, size_t needUpToExclusive);
 
     // Product wiring is always enabled; only diagnostics are gated.
     static bool ProductEnabled();
@@ -78,6 +86,7 @@ public:
     // Counters (verify / harness).
     static size_t FireCount();
     static size_t AdvanceCount();
+    static size_t ProcessOneCount();
     static size_t CrossWithoutProcessCount(); // observed cross with process disabled/empty
     static size_t StopTheWorldCallsInHook();
     static void ResetStats();

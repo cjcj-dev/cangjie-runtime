@@ -1,0 +1,16 @@
+Classification from `git grep -n -E 'UnwindToCaller(MachineFrame|Context)' -- runtime/src`
+
+PRODUCT consumers (execution exposure: landing pad / return-into-unscanned / GC read of unprocessed frame roots):
+- runtime/src/Mutator/Mutator.cpp FixExtendedStack caller-SP: before/after around UnwindToCallerMachineFrame (stack-growth metadata that publishes a managed caller).
+- runtime/src/UnwindStack/EhStackInfo.cpp FillInStackTrace: each discovered frame calls OnIteration; BuildEHFrameInfo → RestoreContext → RestoreContextForEH.S landing pad.
+- runtime/src/Exception/Exception.cpp RestoreContext: OnAfterUnwind(0) before restoring callee-saved context and jumping to the landing pad.
+- runtime/src/UnwindStack/GcStackInfo.cpp FillInStackTrace (GCStackInfo only): OnIteration per frame before UnwindToCaller; VisitHeapReferencesOnStack then reads those frames.
+
+NON-consumer:
+- RecordStackInfo / CJThreadStackInfo in GcStackInfo.cpp: inspector/dump snapshots, not execution exposure.
+- PrintStackInfo / PrintSignalStackInfo / Inspector CjAllocData: diagnostic snapshots.
+- StackGrowStackInfo: Mutator::RecordStackPtrs → VisitStackPtrMap relocation pointer walk.
+- StackFrameCursor CursorFillStackInfo: process_one substrate; hooking it would recurse from ProcessFrameRoots.
+
+IMPLEMENTATION primitives (side-effect free):
+- UnwindContext.cpp / MachineFrame.cpp UnwindToCaller*
