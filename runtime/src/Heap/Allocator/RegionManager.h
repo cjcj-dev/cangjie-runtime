@@ -9,14 +9,17 @@
 
 #include <cstdlib>
 #include <cstring>
+#include <functional>
 #include <list>
 #include <map>
 #include <set>
 #include <thread>
 #include <unordered_set>
+#include <utility>
 #include <vector>
 
 #include "AllocBuffer.h"
+#include "AllocationStallQueue.h"
 #include "Allocator.h"
 #include "Base/Log.h"
 #include "Common/BaseObject.h"
@@ -199,6 +202,23 @@ public:
     template<Generation G>
     void ForwardRegion(RegionInfo* region);
     RelocationRequestQueue& GetRelocationRequestQueue() { return relocationRequestQueue; }
+    // Allocation-stall protocol (ZGC zPageAllocator.cpp:404-420, 525-531):
+    // one request enters the allocator-owned FIFO, the first waiter asks GC,
+    // and reclamation dequeues/satisfies requests under the allocator boundary.
+    size_t StallAllocation(size_t size);
+    void FinishStalledAllocation(size_t claimedUnits);
+    void SatisfyStalledAllocations();
+#if defined(MRT_ALLOCATION_STALL_OBSERVE)
+    using AllocationStallTestHook = std::function<void(RegionManager&)>;
+    MRT_EXPORT void SetAllocationStallTestHooks(AllocationStallTestHook beforeWave,
+                                                AllocationStallTestHook requestGc,
+                                                AllocationStallTestHook beforeWait);
+    MRT_EXPORT size_t PendingStalledAllocations() const;
+    MRT_EXPORT size_t EnqueuedStalledAllocations() const;
+    MRT_EXPORT size_t DequeuedStalledAllocations() const;
+    MRT_EXPORT size_t SatisfiedStalledAllocations() const;
+    MRT_EXPORT size_t FailedStalledAllocations() const;
+#endif
     size_t CompleteRelocationRequests(RegionInfo* region);
     // Before clearing the young flag on a promoted region, record every live
     // old→young out-edge that mutators skipped while the source was still young.
@@ -590,10 +610,11 @@ public:
     size_t CollectFreePinnedSlots(RegionInfo* region);
 
     // targetSize: size of memory which we do not release and keep it as cache for future allocation.
-    size_t ReleaseGarbageRegions(size_t targetSize) { return freeRegionManager.ReleaseGarbageRegions(targetSize); }
-    size_t UncommitIdleUnits(size_t maxBytes, uint64_t idleBeforeNs, bool honorCancel = true)
+    size_t ReleaseGarbageRegions(size_t targetSize)
     {
-        return freeRegionManager.UncommitIdleUnits(maxBytes, idleBeforeNs, honorCancel);
+        size_t released = freeRegionManager.ReleaseGarbageRegions(targetSize);
+        SatisfyStalledAllocations();
+        return released;
     }
 
     // Ignore dynamic pinned regions and from regions whose garbage objects are quite few, return the garbage size that
@@ -637,6 +658,10 @@ public:
     size_t GetDirtyUnitCount() const { return freeRegionManager.GetDirtyUnitCount(); }
     size_t GetReleasedUnitCount() const { return freeRegionManager.GetReleasedUnitCount(); }
     size_t GetGarbageUnitCount() const { return garbageRegionList.GetUnitCount(); }
+    size_t UncommitIdleUnits(size_t maxBytes, uint64_t idleBeforeNs, bool honorCancel = true)
+    {
+        return freeRegionManager.UncommitIdleUnits(maxBytes, idleBeforeNs, honorCancel);
+    }
 
     size_t GetInactiveUnitCount() const { return (regionHeapEnd - inactiveZone) / RegionInfo::UNIT_SIZE; }
 
@@ -923,6 +948,7 @@ public:
         const size_t detachReleased = freeRegionManager.ReleaseDetachQuarantineAfterMajor();
         VLOG(REPORT, "[GCV2][detach-quarantine] major_released_units=%zu major_released_bytes=%zu",
              detachReleased, detachReleased * RegionInfo::UNIT_SIZE);
+        SatisfyStalledAllocations();
     }
 
     void ClearAllLiveInfo()
@@ -1158,6 +1184,12 @@ private:
     // region type must be FROM_REGION.
     RegionList fromRegionList;
     RelocationRequestQueue relocationRequestQueue;
+    AllocationStallQueue allocationStallQueue;
+#if defined(MRT_ALLOCATION_STALL_OBSERVE)
+    AllocationStallTestHook allocationStallBeforeWaveTestHook;
+    AllocationStallTestHook allocationStallGcTestHook;
+    AllocationStallTestHook allocationStallBeforeWaitTestHook;
+#endif
     RegionList ghostFromRegionList;
 
     // regions exempted by ExemptFromRegions, which will not be moved during current GC.

@@ -26,12 +26,11 @@
 #include "Collector/CollectorResources.h"
 #include "Collector/CopyCollector.h"
 #include "Collector/GcTrigger.h"
+#include "Collector/Uncommitter.h"
 #include "Collector/MutatorAllocRate.h"
 #include "Collector/TenuringThreshold.h"
-#include "Collector/Uncommitter.h"
 #include "Common/BaseObject.h"
 #include "Common/ScopedObjectAccess.h"
-#include "Mutator/ThreadLocal.h"
 #include "Heap.h"
 #include "Heap/Barrier/RememberedSet.h"
 #include "Heap/HeapWork.h"
@@ -901,9 +900,6 @@ size_t FreeRegionManager::ReleaseGarbageRegions(size_t targetCachedSize)
         RegionInfo* region = RegionInfo::TryGetRegionInfoAt(RegionInfo::GetUnitAddress(idx));
         const bool detachReady = FromPageDetach::FromPageDetachCheck(
             region, FromPageDetach::Site::RELEASE_GARBAGE_UNITS);
-        // Remove the eligible extent from the dirty inventory only.  Physical
-        // backing is deliberately deferred to UncommitIdleUnits after the
-        // route/lifetime gate and delay have both passed.
         CHECK_DETAIL(dirtyUnitTree.TakeUnits(num, idx, false),
                      "tid %d: failed to detach dirty units[%u+%u, %u)", GetTid(), idx, num, idx + num);
 
@@ -927,13 +923,7 @@ size_t FreeRegionManager::ReleaseGarbageRegions(size_t targetCachedSize)
 
 size_t FreeRegionManager::UncommitIdleUnits(size_t maxBytes, uint64_t idleBeforeNs, bool honorCancel)
 {
-    // Finalizer/mutator threads bind a mutator; gc_unit does not.  Calling
-    // ScopedEnterSaferegion without a ThreadLocal mutator hits CJ_CJThreadGetMutator
-    // at 0 (Barrier.cpp:383-388).
-    if (ThreadLocal::GetMutator() != nullptr) {
-        ScopedEnterSaferegion enterSaferegion(true);
-        return UncommitIdleUnitsImpl(maxBytes, idleBeforeNs, honorCancel);
-    }
+    ScopedEnterSaferegion enterSaferegion(true);
     return UncommitIdleUnitsImpl(maxBytes, idleBeforeNs, honorCancel);
 }
 
@@ -1221,6 +1211,106 @@ void RegionManager::ReclaimRegion(RegionInfo* region)
                                              num * RegionInfo::UNIT_SIZE);
     }
     freeRegionManager.AddGarbageUnits(unitIndex, num);
+    // The free-tree insertion is the allocator lock boundary at which a
+    // blocked allocation can be directed to its newly available extent.
+    SatisfyStalledAllocations();
+}
+
+size_t RegionManager::StallAllocation(size_t size)
+{
+    AllocationStallRequest request(size);
+    const bool requestGc = allocationStallQueue.Enqueue(request);
+    if (requestGc) {
+        bool anotherWave = false;
+        do {
+#if defined(MRT_ALLOCATION_STALL_OBSERVE)
+            if (allocationStallBeforeWaveTestHook) {
+                allocationStallBeforeWaveTestHook(*this);
+            }
+#endif
+            const uint64_t waveBoundary = allocationStallQueue.CaptureWaveBoundary();
+#if defined(MRT_ALLOCATION_STALL_OBSERVE)
+            if (allocationStallGcTestHook) {
+                allocationStallGcTestHook(*this);
+            } else
+#endif
+            {
+                Heap::GetHeap().GetCollector().RequestGC(GC_REASON_OOM, false);
+            }
+            SatisfyStalledAllocations();
+            anotherWave = allocationStallQueue.CompleteWave(waveBoundary);
+        } while (anotherWave);
+    }
+
+#if !defined(MRT_ALLOCATION_STALL_CUT_SAFEREGION)
+    ScopedEnterSaferegion enterSaferegion(false);
+#endif
+#if defined(MRT_ALLOCATION_STALL_OBSERVE)
+    const bool satisfied = request.Wait(allocationStallBeforeWaitTestHook
+        ? [this] { allocationStallBeforeWaitTestHook(*this); }
+        : std::function<void()> {});
+#else
+    const bool satisfied = request.Wait();
+#endif
+    return satisfied ? request.GetClaimedUnits() : 0;
+}
+
+void RegionManager::FinishStalledAllocation(size_t claimedUnits)
+{
+    allocationStallQueue.ReleaseClaim(claimedUnits);
+    SatisfyStalledAllocations();
+}
+
+#if defined(MRT_ALLOCATION_STALL_OBSERVE)
+void RegionManager::SetAllocationStallTestHooks(AllocationStallTestHook beforeWave,
+                                                AllocationStallTestHook requestGc,
+                                                AllocationStallTestHook beforeWait)
+{
+    allocationStallBeforeWaveTestHook = std::move(beforeWave);
+    allocationStallGcTestHook = std::move(requestGc);
+    allocationStallBeforeWaitTestHook = std::move(beforeWait);
+}
+
+size_t RegionManager::PendingStalledAllocations() const
+{
+    return allocationStallQueue.Pending();
+}
+
+size_t RegionManager::EnqueuedStalledAllocations() const
+{
+    return allocationStallQueue.EnqueuedCount();
+}
+
+size_t RegionManager::DequeuedStalledAllocations() const
+{
+    return allocationStallQueue.DequeuedCount();
+}
+
+size_t RegionManager::SatisfiedStalledAllocations() const
+{
+    return allocationStallQueue.SatisfiedCount();
+}
+
+size_t RegionManager::FailedStalledAllocations() const
+{
+    return allocationStallQueue.FailedCount();
+}
+#endif
+
+void RegionManager::SatisfyStalledAllocations()
+{
+    allocationStallQueue.SatisfyAvailable([this](size_t bytes, size_t alreadyClaimed) {
+        const size_t units = (bytes + RegionInfo::UNIT_SIZE - 1) / RegionInfo::UNIT_SIZE;
+        const size_t largestExtent = std::max(
+            GetInactiveUnitCount(),
+            std::max<size_t>(freeRegionManager.GetDirtyMaxBlock(), freeRegionManager.GetReleasedMaxBlock()));
+#if defined(MRT_ALLOCATION_STALL_CUT_CLAIM)
+        (void)alreadyClaimed;
+        return units <= largestExtent ? units : 0;
+#else
+        return units <= largestExtent && alreadyClaimed <= largestExtent - units ? units : 0;
+#endif
+    });
 }
 
 void RegionManager::ReclaimRegionToMarkQuarantine(RegionInfo* region)
@@ -1281,10 +1371,6 @@ size_t RegionManager::ReleaseRegion(RegionInfo* region)
         ForwardingTable::DropRetiredCovering(RegionInfo::GetUnitAddress(unitIndex),
                                              num * RegionInfo::UNIT_SIZE);
     }
-    // Physical backing is released asynchronously by the partition-owned
-    // uncommit worker after this eligible extent enters the released cache.
-    // Keep reservation/metadata ownership synchronous and leave quarantine
-    // entries out of the cache until their gate has closed.
     freeRegionManager.AddReleaseUnits(unitIndex, num);
     return res;
 }

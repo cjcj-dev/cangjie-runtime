@@ -136,3 +136,30 @@ elseif (DEFINED GCV2_RUNTIME_LIB_DIR)
         INSTALL_RPATH "${GCV2_RUNTIME_LIB_DIR}")
 endif()
 add_test(NAME cj_gc_clear_entries_unit COMMAND cj_gc_clear_entries_unit)
+
+add_executable(cj_gc_uncommit_unit
+    gc_unit_main.cpp
+    gc_unit_stubs.cpp
+    test_uncommitter.cpp
+)
+target_include_directories(cj_gc_uncommit_unit PRIVATE
+    ${CMAKE_CURRENT_SOURCE_DIR}
+    ${CMAKE_SOURCE_DIR}/src
+    ${CMAKE_SOURCE_DIR}/src/Heap
+    ${CMAKE_SOURCE_DIR}/include
+)
+target_compile_features(cj_gc_uncommit_unit PRIVATE cxx_std_17)
+target_compile_options(cj_gc_uncommit_unit PRIVATE -fno-rtti -fexceptions -std=gnu++17)
+target_compile_definitions(cj_gc_uncommit_unit PRIVATE
+    MRT_TESTABLE_INTERNALS=1
+    MRT_GC_UNIT_TESTS=1)
+if (TARGET cangjie-runtime)
+    target_link_libraries(cj_gc_uncommit_unit PRIVATE cangjie-runtime)
+elseif (DEFINED GCV2_RUNTIME_LIB_DIR)
+    target_link_directories(cj_gc_uncommit_unit PRIVATE ${GCV2_RUNTIME_LIB_DIR})
+    target_link_libraries(cj_gc_uncommit_unit PRIVATE cangjie-runtime boundscheck)
+    set_target_properties(cj_gc_uncommit_unit PROPERTIES
+        BUILD_RPATH "${GCV2_RUNTIME_LIB_DIR}"
+        INSTALL_RPATH "${GCV2_RUNTIME_LIB_DIR}")
+endif()
+add_test(NAME cj_gc_uncommit_unit COMMAND cj_gc_uncommit_unit)

@@ -9,10 +9,13 @@
 #include "Heap/Allocator/CartesianTree.h"
 #define private public
 #include "Heap/Allocator/FreeRegionManager.h"
+#include "Heap/Allocator/RegionManager.h"
 #undef private
 #include "Heap/Allocator/MemMap.h"
-#include "Heap/Allocator/RegionManager.h"
+#include "Heap/Allocator/RegionSpace.h"
 #include "Heap/Collector/Uncommitter.h"
+#include "Heap/Heap.h"
+#include "Mutator/ThreadLocal.h"
 #include "gc_unittest.hpp"
 
 using namespace MapleRuntime;
@@ -137,8 +140,14 @@ GC_TEST(Uncommitter, AllocationTakeBumpsIdleClock)
     tree.Fini();
 }
 
+static void BindUncommitWorkerThread()
+{
+    ThreadLocal::SetThreadType(ThreadType::FP_THREAD);
+}
+
 static size_t ProbeProductUncommit(bool cancelFirst, bool honorCancel)
 {
+    BindUncommitWorkerThread();
     const size_t n = 8;
     const size_t meta = RegionManager::GetMetadataSize(n);
     const size_t heapBytes = n * RegionInfo::UNIT_SIZE;
@@ -182,9 +191,36 @@ GC_OTHER_VM_TEST(Uncommitter, UncommitIdleUnitsReleasesPhysical)
     GC_EXPECT_TRUE(backendReleased > 0);
 }
 
+static size_t ProbeProductDrainAfterCancel()
+{
+    BindUncommitWorkerThread();
+    const size_t n = 8;
+    const size_t meta = RegionManager::GetMetadataSize(n);
+    const size_t heapBytes = n * RegionInfo::UNIT_SIZE;
+    const size_t total = meta + heapBytes;
+    MemMap* map = MemMap::MapMemory(total, total);
+    GC_EXPECT_TRUE(map != nullptr);
+    const uintptr_t heapStart = reinterpret_cast<uintptr_t>(map->GetBaseAddr()) + meta;
+    RegionInfo::Initialize(n, heapStart, map);
+    RegionSpace& space = static_cast<RegionSpace&>(Heap::GetHeap().GetAllocator());
+    FreeRegionManager& frm = space.GetRegionManager().freeRegionManager;
+    frm.Initialize(n);
+    (void)RegionInfo::InitRegion(0, 1, RegionInfo::UnitRole::FREE_UNITS);
+    GC_EXPECT_TRUE(frm.releasedUnitTree.MergeInsert(0, 1, false));
+    Uncommitter::ActivateCycle();
+    Uncommitter::CancelCycle();
+    const size_t backendReleased = space.RegionSpace::DrainUncommitIdleMemory();
+    std::fprintf(stderr,
+                 "DETAIL backendReleased=%zu honorCancel=drain cancelFirst=1 unit=%zu\n",
+                 backendReleased, RegionInfo::UNIT_SIZE);
+    std::fflush(stderr);
+    MemMap::DestroyMemMap(map);
+    return backendReleased;
+}
+
 GC_OTHER_VM_TEST(Uncommitter, DrainAfterCancelStillReleasesPhysical)
 {
-    const size_t backendReleased = ProbeProductUncommit(true, false);
+    const size_t backendReleased = ProbeProductDrainAfterCancel();
     GC_EXPECT_TRUE(backendReleased > 0);
 }
 
