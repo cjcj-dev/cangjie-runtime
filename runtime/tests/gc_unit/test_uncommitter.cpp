@@ -235,6 +235,8 @@ GC_OTHER_VM_TEST(Uncommitter, PeriodicUncommitStopsAfterCancel)
 GC_TEST(Uncommitter, LiveForwardingBlocksReleasedCache)
 {
     if (ForwardingTable::Ready()) {
+        std::fprintf(stderr,
+            "SKIP_ALREADY_OWNED reason=granule_map_already_bound_by_this_process test=Uncommitter.LiveForwardingBlocksReleasedCache\n");
         return;
     }
     BindUncommitWorkerThread();
@@ -316,5 +318,4 @@ GC_TEST(Uncommitter, LiveForwardingRefCountKeepsReleasedAllocatable)
     std::fflush(stderr);
     MemMap::DestroyMemMap(map);
 }
-
 
