@@ -1151,8 +1151,8 @@ bool WCollector::FixMinorEvacuatedSlot(RefField<>& field, BaseObject* knownBase,
                 MAddress oldVal = raw(oldField.GetFieldValue());
                 MAddress interiorAddress = reinterpret_cast<MAddress>(toHost) + offset;
                 if (oldVal != interiorAddress) {
-                    (void)CasInstallInteriorPlain(field, to_zpointer(oldVal), toHost, offset,
-                                                  HealSite::WCollectorMinorFixInteriorForward);
+                    (void)CasInstallInteriorColoured(field, to_zpointer(oldVal), toHost, offset,
+                                                     HealSite::WCollectorMinorFixInteriorForward);
                 }
                 return true;
             }
@@ -1162,8 +1162,8 @@ bool WCollector::FixMinorEvacuatedSlot(RefField<>& field, BaseObject* knownBase,
         MAddress oldVal = raw(oldField.GetFieldValue());
         MAddress interiorAddress = reinterpret_cast<MAddress>(target);
         if (oldVal != interiorAddress) {
-            (void)CasInstallInteriorPlain(field, to_zpointer(oldVal), target,
-                                          HealSite::WCollectorMinorFixInteriorPreserve);
+            (void)CasInstallInteriorColoured(field, to_zpointer(oldVal), target,
+                                             HealSite::WCollectorMinorFixInteriorPreserve);
         }
         return false;
     }
@@ -1195,8 +1195,8 @@ bool WCollector::FixMinorEvacuatedSlot(RefField<>& field, BaseObject* knownBase,
         MAddress oldVal = raw(field.GetFieldValue());
         MAddress interiorAddress = reinterpret_cast<MAddress>(current);
         if (oldVal != interiorAddress) {
-            (void)CasInstallInteriorPlain(field, to_zpointer(oldVal), current,
-                                          HealSite::WCollectorMinorFixInteriorPostForward);
+            (void)CasInstallInteriorColoured(field, to_zpointer(oldVal), current,
+                                             HealSite::WCollectorMinorFixInteriorPostForward);
         }
         return false;
     }

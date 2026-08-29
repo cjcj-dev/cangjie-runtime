@@ -70,6 +70,11 @@ struct RemsetRearmTestAccess {
         collector.flip_young_mark_start();
     }
 
+    static bool FixInteriorSlot(WCollector& collector, RefField<>& field, BaseObject* knownBase)
+    {
+        return collector.FixMinorEvacuatedSlot(field, knownBase, nullptr, false);
+    }
+
     static ConsumeResult ConsumePrevious(WCollector& collector, const std::unordered_set<MAddress>& previous,
                                           BaseObject* currentMinorRoot)
     {
@@ -96,6 +101,37 @@ struct RemsetRearmTestAccess {
 } // namespace MapleRuntime
 
 namespace {
+
+// Product-path guard for the three relocate interior writebacks. The slot
+// starts load-good but not store-good, so deleting the product call leaves a
+// legal yet stale colour and this exact assertion fails.
+GC_TEST(RelocateInterior, MinorFixPublishesCurrentStoreGoodColour)
+{
+    GcHeapFixture fx;
+    auto* field = &HeapSlotAt<>(reinterpret_cast<MAddress>(fx.obj0) + TYPEINFO_PTR_SIZE);
+    BaseObject* interior = reinterpret_cast<BaseObject*>(
+        reinterpret_cast<MAddress>(fx.obj1) + TYPEINFO_PTR_SIZE);
+    const uintptr_t desired = MakeStoreGoodSlotWord(
+        reinterpret_cast<uintptr_t>(interior), static_cast<uintptr_t>(::g_cjStoreGoodMask));
+    // Change only the remembered epoch.  The word remains load/mark-good, so
+    // ResolveMinorReference returns the payload without rewriting the slot;
+    // the interior StoreGood publication below is therefore the sole repair.
+    const uintptr_t initial = desired ^ REMEMBERED_MASK;
+    field->StoreColoured(to_zpointer(initial));
+
+    WCollector collector(Heap::GetHeap().GetAllocator(), Heap::GetHeap().GetCollectorResources());
+    const bool changed = RemsetRearmTestAccess::FixInteriorSlot(collector, *field, fx.obj1);
+    const uintptr_t finalWord = raw(field->GetFieldValue());
+    std::fprintf(stderr,
+                 "DETAIL relocate_interior initial=%#zx desired=%#zx final=%#zx changed=%u "
+                 "verdict=%u\n",
+                 static_cast<size_t>(initial), static_cast<size_t>(desired),
+                 static_cast<size_t>(finalWord), static_cast<unsigned>(changed),
+                 static_cast<unsigned>(ClassifySlotWord(finalWord)));
+    GC_EXPECT_NE(initial, desired);
+    GC_EXPECT_EQ(finalWord, desired);
+    GC_EXPECT_TRUE(ClassifySlotWord(finalWord) == SlotWordVerdict::kColoured);
+}
 
 // Receipt-channel positive controls.  These deliberately exercise each
 // test-only counter with distinct fixed slots, then reset the native buffer
