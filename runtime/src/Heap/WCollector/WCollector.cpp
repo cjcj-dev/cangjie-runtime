@@ -52,7 +52,6 @@
 #include "Heap/Verify/NwDropAudit.h"
 #include "Heap/Verify/GarbRegionDiag.h"
 #include "Heap/Verify/Stw2CurrentAudit.h"
-#include "Heap/Verify/NullRouteCaller.h"
 #include "Heap/Verify/SurvNodeDiag.h"
 #include "Heap/Collector/PromotedRegionDomain.h"
 #include "Heap/Verify/CsetEmptyWho.h"
@@ -278,13 +277,6 @@ void WCollector::PostResolveCycleTask()
 }
 void WCollector::DoGarbageCollection()
 {
-    // Free the forwarding entry tables retired during the previous cycle. ZGC recycles its
-    // forwarding arena at the next cycle's ZRelocationSetInstallTask (zRelocationSet.cpp:91-96),
-    // one whole phase after ZHeap::free_page released the page the forwarding described; that gap
-    // is why ZForwarding::find may run holding no reference (zRelocate.cpp:382-393). Reclaiming at
-    // the head of a cycle gives ours the same gap: by now every reader that could have loaded one
-    // of these pointers has been through a phase transition.
-    ForwardingTable::ReclaimRetired("cycle-start");
     // ZGC: not-selected pages are ordinary candidates next cycle
     // (zRelocationSetSelector.cpp:114-196). Expire last cycle's Exempt-kept
     // before Assemble / PrepareYoung so they re-enter the selector.
@@ -311,16 +303,9 @@ void WCollector::DoGarbageCollection()
     PostResolveCycleTask();
     FlipTagID();
     ForwardDataManager::GetForwardDataManager().SetTagID(currentTagID);
-    // FlipTagID just turned this cycle's current-tags into IsOldPointer. F3 pre-flip only
-    // saw the previous tag generation. This pass must NOT filter IsSurvivedObject:
-    // after Forward, live holders are in to-space without mark bits at the new addr.
-    //
-    // This walk exists because a reference could not say for itself that its colour was stale, so
-    // someone had to strip the old tag off every one of them before the tag was reused. Once the
-    // read barrier heals a stale colour on the way past (FixOldTaggedRefField), the walk has
-    // nothing left to do -- but that claim needs measuring before the walk goes away for good, so
-    // it is a switch rather than a deletion. Nobody has measured what this pass costs.
-    InvalidateOldTaggedRefs(false);
+    // ZGC has no post-flip whole-heap heal pass.  Old roots and remembered
+    // fields are remapped before the old flip (zGeneration.cpp:1490-1523),
+    // while ordinary fields are healed by their load barrier.
     reinterpret_cast<RegionSpace&>(theAllocator).GetRegionManager().ExpireKeptFromPreviousCycle();
     if (HealCoverage::kHealCoverageCensus) {
         HealCoverage::CensusAfterPublication(

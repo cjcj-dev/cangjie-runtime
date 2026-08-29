@@ -214,11 +214,12 @@ GC_TEST(ZForwardingLife, DetachCheckMeasuresAndHonorsGate)
     fx.region0->NoteCopyInflight();
 
     const bool allowed = FromPageDetach::FromPageDetachCheck(fx.region0, site);
-    GC_EXPECT_EQ(allowed, !FromPageDetach::GateEnabled());
+    GC_EXPECT_TRUE(FromPageDetach::GateEnabled());
+    GC_EXPECT_FALSE(allowed);
     const FromPageDetach::Counters after = FromPageDetach::GetCounters(site);
     GC_EXPECT_EQ(after.checks, before.checks + 1);
     GC_EXPECT_EQ(after.withEvidence, before.withEvidence + 1);
-    GC_EXPECT_EQ(after.blocked, before.blocked + (FromPageDetach::GateEnabled() ? 1 : 0));
+    GC_EXPECT_EQ(after.blocked, before.blocked + 1);
     GC_EXPECT_EQ(after.routeDestHeld, before.routeDestHeld + 1);
     GC_EXPECT_EQ(after.forwardingPositive, before.forwardingPositive + 1);
     GC_EXPECT_EQ(after.forwardingReaders, before.forwardingReaders);

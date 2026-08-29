@@ -28,7 +28,6 @@
 #include "MutatorManager.h"
 #include "StackManager.h"
 #include "UnwindStack/StackFrameCursor.h"
-#include "UnwindStack/StackExposureHook.h"
 #include "ExceptionManager.h"
 #include "schedule.h"
 #ifdef _WIN64
@@ -449,9 +448,7 @@ void Mutator::VisitStackRoots(const RootVisitor& func, const RootVisitor& invisi
                 "env=MRT_GCV2_STACK_EXPOSURE_VERIFY=1");
         }
     }
-    BindExposureVisitors(&func, nullptr);
     StackManager::VisitStackRoots(uwContext, func, *this);
-    UnbindExposureVisitors();
     VisitRawObjects(visitedInvisibleRootVisitor);
     DecObserver();
     MutatorUnlock();
@@ -536,10 +533,8 @@ void Mutator::VisitHeapReferencesOnStack(const RootVisitor& regRootVisitor, cons
 #if defined(GCINFO_DEBUG) && GCINFO_DEBUG
     CreateCurrentGCInfo();
 #endif
-    BindExposureVisitors(&regRootVisitor, &derivedPtrVisitor);
     StackManager::VisitHeapReferencesOnStack(
         uwContext, regRootVisitor, slotRootVisitor, derivedPtrVisitor, *this);
-    UnbindExposureVisitors();
     VisitRawObjects(rawObjectVisitor);
     DecObserver();
     MutatorUnlock();
@@ -799,18 +794,12 @@ intptr_t Mutator::FixExtendedStack(intptr_t frameBase, uint32_t adjustedSize, vo
         } else {
             UnwindContext& stackGrowContext = Mutator::GetMutator()->GetUnwindContext();
             UnwindContext caller;
-            // This caller computation is the stack-growth unwind consumer that
-            // publishes a managed caller for continued execution. Protect an
-            // unscanned caller before its frame address is used for relocation.
-            const size_t exposingFrameIndex = stackWatermark.GetCursorIndex();
-            StackExposureHook::OnBeforeUnwind(*this, exposingFrameIndex);
 #ifdef _WIN64
             UnwindContextStatus ucs = stackGrowContext.GetUnwindContextStatus();
             stackGrowContext.frameInfo.mFrame.UnwindToCallerMachineFrame(caller.frameInfo, ucs);
 #else
             stackGrowContext.frameInfo.mFrame.UnwindToCallerMachineFrame(caller.frameInfo.mFrame);
 #endif
-            StackExposureHook::OnAfterUnwind(*this, exposingFrameIndex);
             caller.frameInfo.ResolveProcInfo();
             ElfUnloadQuiescence::ReadScope metadataReader;
 #ifdef __APPLE__
@@ -1066,7 +1055,6 @@ bool Mutator::DrainStackWatermark(const RootVisitor& visitor, const RootVisitor&
     StackFrameCursor cursor(uwContext);
     bool began = stackWatermark.TryBegin(epoch, owner, cursor.FrameCount());
     if (began) {
-        BindExposureVisitors(&visitor, derivedPtrVisitor);
         while (cursor.ProcessOne(visitor, *this, derivedPtrVisitor)) {
             stackWatermark.AdvanceTo(cursor.Cursor(), owner);
         }
@@ -1075,7 +1063,6 @@ bool Mutator::DrainStackWatermark(const RootVisitor& visitor, const RootVisitor&
         // size of the snapshot and therefore cannot prove that the cursor
         // actually processed it.
         scannedFrames = cursor.Cursor();
-        UnbindExposureVisitors();
     }
     bool complete = began && scannedFrames == stackWatermark.GetFrameCount();
     if (began) {
@@ -1224,9 +1211,11 @@ inline void Mutator::GCPhasePreForward(GCPhase newPhase)
             !collector.IsUnmovableFromObject(oldObj)) {
             if (!rootFieldSet.insert((void*)(&refFieldAddr)).second) { return; }
             BaseObject* toObj = collector.ForwardObject(oldObj);
-            if (toObj != nullptr && oldObj != toObj) {
-                HealRoot(rootField, from_object(toObj), HealSite::MutatorPreForwardStackField);
+            if (toObj == nullptr) {
+                Collector::FailClosedLoad("Mutator::GCPhasePreForward.stack-unresolved",
+                                          oldObj, reinterpret_cast<uintptr_t>(&rootField));
             }
+            HealRoot(rootField, from_object(toObj), HealSite::MutatorPreForwardStackField);
         } else if (IsStackAddr(reinterpret_cast<uintptr_t>(oldObj))) {
             if (IsHeaderedStackObject(oldObj)) {
                 CheckAndPush(oldObj, rootSet, rootStack, this);
@@ -1249,11 +1238,13 @@ inline void Mutator::GCPhasePreForward(GCPhase newPhase)
                 !collector.IsUnmovableFromObject(host)) {
                 if (rootFieldSet.insert((void*)(&root)).second) {
                     BaseObject* toHost = collector.ForwardObject(host);
-                    if (toHost != nullptr && toHost != host) {
-                        HealRoot(root, to_zaddress(reinterpret_cast<MAddress>(toHost) +
-                            (reinterpret_cast<MAddress>(oldObj) - reinterpret_cast<MAddress>(host))),
-                            HealSite::MutatorPreForwardInterior);
+                    if (toHost == nullptr) {
+                        Collector::FailClosedLoad("Mutator::GCPhasePreForward.interior-unresolved",
+                                                  host, reinterpret_cast<uintptr_t>(&root));
                     }
+                    HealRoot(root, to_zaddress(reinterpret_cast<MAddress>(toHost) +
+                        (reinterpret_cast<MAddress>(oldObj) - reinterpret_cast<MAddress>(host))),
+                        HealSite::MutatorPreForwardInterior);
                 }
             }
             return;
@@ -1261,10 +1252,22 @@ inline void Mutator::GCPhasePreForward(GCPhase newPhase)
         if (Heap::IsHeapAddress(oldObj) && collector.IsGhostFromObject(oldObj) &&
             !collector.IsUnmovableFromObject(oldObj)) {
             if (!rootFieldSet.insert((void*)(&root)).second) { return; }
+            // interiorstart: a livemap-driven "recover the base of an interior root" branch
+            // stood here and has been deleted -- it read IsOwnerSurvivedObject as a start
+            // predicate when MarkBits makes it a coverage predicate (RegionInfo.h AdmitForRoute
+            // states this), so the base it recovered was the last covered slot of the *previous*
+            // object.  Measured on this workload: root offset 29368, "base" 29360, which is 40
+            // bytes inside a 48-byte object at 29320.  The root itself reads rootSurvived=0
+            // rootMarked=0 -- mark did not mark it -- so there was never an interior to rebase,
+            // and the refusal below is the honest report of that.  ZGC's counterpart assert
+            // (zRelocate.cpp:412-416) encodes the same invariant: an address a root names is a
+            // live object start, or the collector is already wrong.
             BaseObject* toObj = collector.ForwardObject(oldObj);
-            if (toObj != nullptr && oldObj != toObj) {
-                HealRoot(root, from_object(toObj), HealSite::MutatorPreForwardRoot);
+            if (toObj == nullptr) {
+                Collector::FailClosedLoad("Mutator::GCPhasePreForward.root-unresolved",
+                                          oldObj, reinterpret_cast<uintptr_t>(&root));
             }
+            HealRoot(root, from_object(toObj), HealSite::MutatorPreForwardRoot);
         } else if (IsStackAddr(reinterpret_cast<uintptr_t>(oldObj))) {
             if (IsHeaderedStackObject(oldObj)) {
                 CheckAndPush(oldObj, rootSet, rootStack, this);

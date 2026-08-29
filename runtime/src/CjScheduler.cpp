@@ -396,11 +396,7 @@ void* MCC_NewCJThread(void* execute, void* future, void* scheduler)
     return handle;
 }
 
-#if defined(MRT_TESTABLE_INTERNALS)
-MRT_EXPORT bool MRT_NewForeignCJThread()
-#else
 bool MRT_NewForeignCJThread()
-#endif
 {
     if (ThreadLocal::IsCJProcessor() || ThreadLocal::GetMutator() != nullptr) {
         return false;
@@ -460,11 +456,7 @@ bool MRT_NewForeignCJThread()
     return true;
 }
 
-#if defined(MRT_TESTABLE_INTERNALS)
-MRT_EXPORT bool MRT_EndForeignCJThread()
-#else
 bool MRT_EndForeignCJThread()
-#endif
 {
     if (ThreadLocal::IsCJProcessor()) {
         return false;

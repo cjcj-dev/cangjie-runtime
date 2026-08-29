@@ -447,9 +447,8 @@ extern "C" MRT_EXPORT void MRT_ResetStoreBarrierPathCounts()
 }
 
 // Pre-write snapshot of (field address → raw previous value, decoded target,
-// store-good bit). Bulk paths (WriteStruct / Copy*) destroy prev bits via
-// memcpy/memmove, so paired SATB and the store-good gate both sample before the
-// store (single-field paths read prev inline).
+// store-good bit). Bulk paths destroy prev bits via memcpy/memmove, so paired
+// SATB and the store-good gate both sample before the store.
 // Nested type declared in Barrier.h; definition lives here next to the bulk gates.
 struct Barrier::StoreGoodPrevSnapshot {
     void Push(MAddress addr, zpointer prev, BaseObject* target, bool storeGood)
@@ -709,9 +708,6 @@ void Barrier::PostWriteReference(BaseObject* obj, RefField<false>& field, BaseOb
     // and same-colour writes to a different target are both admitted there.
     // The hit arm has already performed color_store_good, so execute only the
     // product side effects that the skipped WriteReference still owes.
-    // This post-store ABI is entered after the compiler has performed the
-    // coloured store and carries no pre-store word.  Null explicitly means
-    // that this legacy exit has no recoverable SATB half.
     RecordCrossGenEdge(obj, reinterpret_cast<MAddress>(&field), to_object(field.GetTargetObject()),
                        zpointer::null);
 }
@@ -1044,12 +1040,11 @@ BaseObject* Barrier::ResolveFromCopyForMutator(BaseObject* target) const
     if (JudgeTarget(target) == TargetVerdict::Usable) {
         return target;
     }
-    BaseObject* to =
-        theCollector.FindToVersion(target).GetOrFailClosed("Barrier::ResolveFromCopyForMutator");
-    if (to != nullptr && to != target) {
+    BaseObject* to = theCollector.ResolveStoreValue(target);
+    if (to != nullptr && JudgeTarget(to) == TargetVerdict::Usable) {
         return to;
     }
-    return target;
+    theCollector.FailClosedLoad("Barrier::ResolveFromCopyForMutator", target, 0);
 }
 
 // loadfc (zBarrier.inline.hpp:294-344): slow/runtime hand-out postcondition. A sampled non-Usable
@@ -1065,10 +1060,10 @@ BaseObject* Barrier::FinalizeLoadForMutator(BaseObject* handed, BaseObject* hold
     if (verdict == TargetVerdict::Usable) {
         return handed;
     }
-    BaseObject* resolved = theCollector.FindToVersion(handed).GetOrFailClosed(site);
+    BaseObject* resolved = theCollector.ResolveStoreValue(handed);
     ZgcInvariants::NoteStaleGuardFired(verdict == TargetVerdict::ZeroHeader, resolved != nullptr, handed,
                                        holder, field);
-    if (resolved != nullptr && resolved != handed && JudgeTarget(resolved) == TargetVerdict::Usable) {
+    if (resolved != nullptr && JudgeTarget(resolved) == TargetVerdict::Usable) {
         M0ExitDiagnostics::Note(M0ExitDiagnostics::Exit::ReadBarrier, handed, field, holder,
                                 static_cast<uint8_t>(phase));
         return resolved;
@@ -1087,14 +1082,7 @@ BaseObject* Barrier::RelocateHolderForWrite(BaseObject* obj, void*& fieldPtr) co
         return obj;
     }
     BaseObject* to = ResolveFromCopyForMutator(obj);
-    if (to == nullptr || to == obj) {
-        if (JudgeTarget(obj) != TargetVerdict::Usable) {
-            to = theCollector.FindLatestVersion(obj);
-        } else {
-            return obj;
-        }
-    }
-    if (to == nullptr || to == obj) {
+    if (to == obj) {
         return obj;
     }
     const uintptr_t from = reinterpret_cast<uintptr_t>(obj);
@@ -1393,7 +1381,8 @@ void Barrier::CopyRefArray(BaseObject* dstObj, MAddress dstField, MIndex dstSize
         for (MAddress current = dstField; current + sizeof(HeapSlot<>) <= end; current += sizeof(HeapSlot<>)) {
             HeapSlot<>& slot = HeapSlotAt<>(current);
             RefField<> prev(slot.GetFieldValue());
-            snap.Push(current, prev.GetFieldValue(), to_object(prev.GetTargetObject()), theCollector.is_store_good(prev));
+            snap.Push(current, prev.GetFieldValue(), to_object(prev.GetTargetObject()),
+                      theCollector.is_store_good(prev));
         }
     }
     CopyRefArrayImpl(dstObj, dstField, dstSize, srcObj, srcField, srcSize);
@@ -1909,14 +1898,11 @@ void Barrier::RecordCrossGenEdge(BaseObject* obj, MAddress fieldAddress, BaseObj
         MarkAndRememberNewValue(this->phase, ref);
     }
 
-    // Retire the overwritten value even when the new value is null/non-heap or
-    // when no young regions currently exist.  The SATB half is keyed by the
-    // pre-store word, not by the post-store target.
     AllocBuffer* alloc = AllocBuffer::GetAllocBuffer();
     const bool heapSlot = Heap::IsHeapAddress(fieldAddress) && obj != nullptr && Heap::IsHeapAddress(obj);
     bool buffered = false;
     if (alloc != nullptr && heapSlot && !is_null(prev)) {
-        alloc->GetStoreBarrierBuffer().Add(fieldAddress, prev, theRememberedSet);
+        alloc->GetStoreBarrierBuffer().Add(fieldAddress, obj, prev, theRememberedSet);
         buffered = true;
     }
 
@@ -1944,7 +1930,7 @@ void Barrier::RecordCrossGenEdge(BaseObject* obj, MAddress fieldAddress, BaseObj
             return;
         }
         if (alloc != nullptr && !buffered) {
-            alloc->GetStoreBarrierBuffer().Add(fieldAddress, prev, theRememberedSet);
+            alloc->GetStoreBarrierBuffer().Add(fieldAddress, obj, prev, theRememberedSet);
         } else if (alloc == nullptr) {
             theRememberedSet.Record(fieldAddress, /*fromMutatorBarrier=*/true);
         }
@@ -1972,8 +1958,9 @@ void Barrier::RecordCrossGenEdgesInStruct(BaseObject* obj, MAddress start, size_
             // storecov: when a pre-store snapshot is supplied, skip remset for slots that
             // were already store-good for this target; count fast/slow only on gated calls
             // (nullptr snap = legacy always-Record, no counter noise for ReadGeneric).
-            // The snapshot is captured regardless of young-region presence so
-            // SATB still receives the true overwritten value during old-only marks.
+            // With no young regions the producer snapshot is intentionally empty, so every
+            // bulk field is a counted slow miss. This is an observable diagnostic-semantic
+            // change of the bulk no-young fix, not a claim that remset work was required.
             if (prevSnap != nullptr) {
                 if (prevSnap->Matches(addr, ref)) {
                     NoteStoreFastPath();

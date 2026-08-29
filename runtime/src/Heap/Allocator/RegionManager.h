@@ -9,13 +9,11 @@
 
 #include <cstdlib>
 #include <cstring>
-#include <functional>
 #include <list>
 #include <map>
 #include <set>
 #include <thread>
 #include <unordered_set>
-#include <utility>
 #include <vector>
 
 #include "AllocBuffer.h"
@@ -32,7 +30,6 @@
 #include "RegionList.h"
 #include "Heap/Verify/GarbRegionDiag.h"
 #include "Heap/Verify/TraceClear.h"
-#include "Heap/Verify/PermWhoAdmit.h"
 #include "securec.h"
 #include "SlotList.h"
 #include "Sync/Sync.h"
@@ -221,9 +218,6 @@ public:
     template<Generation G>
     void ForwardRegion(RegionInfo* region);
     RelocationRequestQueue& GetRelocationRequestQueue() { return relocationRequestQueue; }
-    // Allocation-stall protocol (ZGC zPageAllocator.cpp:404-420, 525-531):
-    // one request enters the allocator-owned FIFO, the first waiter asks GC,
-    // and reclamation dequeues/satisfies requests under the allocator boundary.
     size_t StallAllocation(size_t size);
     void FinishStalledAllocation(size_t claimedUnits);
     void SatisfyStalledAllocations();
@@ -259,11 +253,6 @@ public:
     void CompactRegion(RegionInfo* region, RegionInfo* toRegion1);
 
     void ExemptFromRegion(RegionInfo* region);
-    // Unlink the node from whichever list currently owns it, then set newType.
-    // Prepend without this is the forward_phase owner CHECK (RegionList.cpp Prepend).
-    // ZGC: alloc_page / free_page are table ops (zHeap.cpp:257, :277); we have one
-    // intrusive node, so every rehome must drop the previous list first.
-    bool TryUnlinkRegionForMove(RegionInfo* region, RegionInfo::RegionType newType);
     // Rehome onto unmovableFrom without publishing kept. PrepareYoung parks
     // leftover from-pages here; they were expired at cycle start and must not
     // be re-published as this cycle's done (zRelocationSetSelector.cpp:114-196).
@@ -273,20 +262,28 @@ public:
     // Kept (IsForwardingDone via Exempt) is in-cycle only.
     void ExpireKeptFromPreviousCycle();
     // zRelocate.cpp:1041-1047: relocate() returns only after every page in the
-    // relocation set is done. CONC_RELOCATE left ROUTED pages unpublished
-    // (oracle r5 regionTimeout=527/got=0). Finish them or publish kept.
+    // relocation set is done. Finish every ROUTED page or publish it kept.
     void FinishIncompleteFromRegions();
     // zRelocate.cpp:1346-1352 flip_survived: keep the page, reset age, leave young.
     // Must not remain LONE_FROM / FROM after TakeHead — barriers treat those as from-space.
-    void EnlistStayYoungSurvivor(RegionInfo* region);
+    void EnlistStayYoungSurvivor(RegionInfo* region, bool advanceAge = true);
     static void BumpYoungSurvivorAge(RegionInfo* region);
-    static void FinishStayYoungInPlace(RegionInfo* region);
+    static void FinishStayYoungInPlace(RegionInfo* region, bool advanceAge = true);
+
+    // ZGeneration::select_relocation_set iterates only pages owned by that
+    // generation (zGeneration.cpp:195-221).  An old relocation pass may
+    // observe a young page in our shared list, but it must not relocate or
+    // promote it using the old mark view.
+    static constexpr bool GenerationMayRelocateYoung(Generation generation)
+    {
+        return generation == Generation::Young;
+    }
 
 #if defined(GCINFO_DEBUG) && GCINFO_DEBUG
     void DumpRegionInfo() const;
 #endif
 
-    void DumpRegionStats(const char* msg, bool dumpToError = false) const;
+    void DumpRegionStats(const char* msg) const;
 
     uintptr_t GetInactiveZone() const { return inactiveZone; }
 
@@ -545,19 +542,16 @@ public:
         ScrubRememberedSetForRegion(region);
 
         region->LockWriteRegion();
-        (void)TryUnlinkRegionForMove(region, RegionInfo::RegionType::GARBAGE_REGION);
-        if (region->GetRegionListOwner() == nullptr) {
 #if defined(__OHOS__)
-            // Do not publish an installed ghost carrier to dirtyTree before its dispel point.
-            if (region->IsGhostFromRegion()) {
-                garbageRegionList.PrependRegion(region, RegionInfo::RegionType::GARBAGE_REGION);
-            } else {
-                ReclaimRegion(region);
-            }
-#else
+        // Do not publish an installed ghost carrier to dirtyTree before its dispel point.
+        if (region->IsGhostFromRegion()) {
             garbageRegionList.PrependRegion(region, RegionInfo::RegionType::GARBAGE_REGION);
-#endif
+        } else {
+            ReclaimRegion(region);
         }
+#else
+        garbageRegionList.PrependRegion(region, RegionInfo::RegionType::GARBAGE_REGION);
+#endif
         region->UnlockWriteRegion();
 
         if (region->IsLargeRegion()) {

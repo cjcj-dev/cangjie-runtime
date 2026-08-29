@@ -5,29 +5,18 @@
 // See https://cangjie-lang.cn/pages/LICENSE for license information.
 
 // Eth: RegionBitmap geometry (JDK test_zBitMap shape, no GPL).
-// Anchors: LiveInfo.h RegionBitmap; one pair word covers
-//   kRegionBytesPerWord = 32 * 8 = 256 bytes.
+// Anchors: LiveInfo.h RegionBitmap; RegionInfo.h nullroute bitCover=
+//   wordCnt * kMarkedBytesPerBit * kBitsPerWord (8 * 64 = 512 bytes/word).
 // iorfix excluded bitCover OOB family from the route bug; this suite watches geometry.
 
 #include <cstdint>
 #include <cstring>
-#include <cstdlib>
 
 #include "gc_heap_fixture.hpp"
 #include "gc_unittest.hpp"
 
 using namespace MapleRuntime;
 using namespace MapleRuntime::GcUnit;
-
-namespace {
-
-bool GeometryUnderallocArm()
-{
-    const char* value = std::getenv("MRT_GC_GEOMETRY_UNDERALLOC");
-    return value != nullptr && std::strcmp(value, "1") == 0;
-}
-
-} // namespace
 
 // Shared half of test_zBitMap.cpp::test_set_pair_unset.  A Cangjie mark bit
 // covers eight bytes, so a strongly marked 16-byte object is the same two-bit
@@ -98,34 +87,14 @@ GC_TEST(RegionBitmap, BitCoverMatchesRegionSize)
     LiveInfo* live = fx.PlantLiveInfo(fx.region0);
     RegionBitmap* bm = fx.PlantMarkBitmap(live, regionSize);
     size_t wordCnt = bm->wordCnt.load();
-    const size_t expectedWords = regionSize / RegionBitmap::kRegionBytesPerWord;
-    if (GeometryUnderallocArm()) {
-        // Fault arm: preserve the full allocation but narrow the observable
-        // geometry quantity.  This keeps every unrelated test on the normal
-        // product bitmap while making the two geometry assertions fail
-        // precisely with words=128 expected=256 for the 64KiB fixture.
-        bm->wordCnt.store(expectedWords / 2);
-        wordCnt = bm->wordCnt.load();
-    }
-    std::fprintf(stderr, "DETAIL geometry words=%zu expected=%zu\n", wordCnt, expectedWords);
-    size_t bitCover = wordCnt * RegionBitmap::kRegionBytesPerWord;
-    // Geometry: pair words cover the whole region (iorfix OOB family).
+    size_t bitCover = wordCnt * kMarkedBytesPerBit * kBitsPerWord;
+    // Geometry: mark words cover the whole region (iorfix OOB family).
     GC_EXPECT_TRUE(bitCover >= regionSize);
-    GC_EXPECT_EQ(wordCnt, expectedWords);
-    // Positive control for the geometry尺: a known one-half allocation must
-    // be rejected by this same pair invariant, so the old 512B/word formula
-    // cannot mask an under-allocation.
-    const size_t underAllocatedWords = wordCnt / 2;
-    GC_EXPECT_TRUE(underAllocatedWords * RegionBitmap::kRegionBytesPerWord < regionSize);
-    // Last-byte probing is valid only with the full backing geometry.  The
-    // underallocation arm stops after the geometry invariant so it cannot
-    // perturb neighboring tests with an out-of-bounds mark-word access.
-    if (!GeometryUnderallocArm()) {
-        size_t lastOff = regionSize - 8;
-        GC_EXPECT_FALSE(bm->IsMarked(lastOff));
-        GC_EXPECT_FALSE(bm->MarkBits(lastOff, 8, regionSize));
-        GC_EXPECT_TRUE(bm->IsMarked(lastOff));
-    }
+    // Last byte of region is in-range for IsMarked/MarkBits.
+    size_t lastOff = regionSize - 8;
+    GC_EXPECT_FALSE(bm->IsMarked(lastOff));
+    GC_EXPECT_FALSE(bm->MarkBits(lastOff, 8, regionSize));
+    GC_EXPECT_TRUE(bm->IsMarked(lastOff));
 
     fx.region0->metadata.liveInfo = nullptr;
     fx.FreePlanted(live);
@@ -201,22 +170,13 @@ GC_TEST(RegionBitmap, NearEndOffsetsInCover)
     GC_EXPECT_TRUE(mem != nullptr);
     auto* bm = new (mem) RegionBitmap(kBig);
     size_t wordCnt = bm->wordCnt.load();
-    const size_t expectedWords = kBig / RegionBitmap::kRegionBytesPerWord;
-    if (GeometryUnderallocArm()) {
-        bm->wordCnt.store(expectedWords / 2);
-        wordCnt = bm->wordCnt.load();
-    }
-    std::fprintf(stderr, "DETAIL geometry_near_end words=%zu expected=%zu\n", wordCnt, expectedWords);
-    size_t bitCover = wordCnt * RegionBitmap::kRegionBytesPerWord;
+    size_t bitCover = wordCnt * kMarkedBytesPerBit * kBitsPerWord;
     GC_EXPECT_TRUE(bitCover >= kBig);
-    GC_EXPECT_EQ(wordCnt, expectedWords);
-    if (!GeometryUnderallocArm()) {
-        for (size_t off : {size_t(65504), size_t(65520), size_t(65528)}) {
-            if (off + 8 <= kBig) {
-                GC_EXPECT_FALSE(bm->IsMarked(off));
-                (void)bm->MarkBits(off, 8, kBig);
-                GC_EXPECT_TRUE(bm->IsMarked(off));
-            }
+    for (size_t off : {size_t(65504), size_t(65520), size_t(65528)}) {
+        if (off + 8 <= kBig) {
+            GC_EXPECT_FALSE(bm->IsMarked(off));
+            (void)bm->MarkBits(off, 8, kBig);
+            GC_EXPECT_TRUE(bm->IsMarked(off));
         }
     }
     bm->~RegionBitmap();

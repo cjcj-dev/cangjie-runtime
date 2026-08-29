@@ -258,7 +258,7 @@ LiveInfo* PrepareForwardable(GcHeapFixture& fx, RegionInfo* region, MAddress liv
 void CleanupForwardable(GcHeapFixture& fx, RegionInfo* region, LiveInfo* live)
 {
     ForwardingTable::ClearEntries(region->GetRegionStart(), region->GetRegionSize());
-    ForwardingTable::DropRetiredCovering(region->GetRegionStart(), region->GetRegionSize());
+    ForwardingTable::ReclaimRetired("gc-unit-explicit-coverage");
     if (region->IsGhostFromRegion()) {
         region->DispelGhostFromRegion();
     }

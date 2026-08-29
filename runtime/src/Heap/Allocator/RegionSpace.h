@@ -195,9 +195,9 @@ public:
         regionManager.AssembleLargeGarbageCandidates();
     }
 
-    void DumpRegionStats(const char* msg, bool dumpToError = false) const
+    void DumpRegionStats(const char* msg) const
     {
-        regionManager.DumpRegionStats(msg, dumpToError);
+        regionManager.DumpRegionStats(msg);
     }
 
     void CountLiveObject(const BaseObject* obj) { regionManager.CountLiveObject(obj); }

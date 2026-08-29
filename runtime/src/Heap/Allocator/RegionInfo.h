@@ -37,10 +37,10 @@
 #include "Heap/Collector/GcInfos.h"
 #include "Heap/Collector/LiveInfo.h"
 #include "Heap/Collector/ManagedObjectGate.h"
+#include "Heap/Collector/Uncommitter.h"
 #include "Heap/Allocator/RouteTicket.h"
 #include "Heap/Verify/AllocPhaseDiag.h"
 #include "Heap/Verify/DiagGate.h"
-#include "Heap/Verify/NullRouteCaller.h"
 #include "Heap/Verify/TraceClear.h"
 #include "Heap/Verify/FillerZeroDiag.h"
 #include "Heap/Verify/TagReuseProbe.h"
@@ -56,9 +56,6 @@
 #include "securec.h"
 #ifdef CANGJIE_ASAN_SUPPORT
 #include "Sanitizer/SanitizerInterface.h"
-#endif
-#if defined(MRT_GC_UNIT_TESTS)
-#include "Heap/Collector/Uncommitter.h"
 #endif
 
 namespace MapleRuntime {
@@ -566,6 +563,17 @@ public:
         return IsRouteSurvivedObject(offset);
     }
 
+    // A "greatest survived start at or below offset" scan used to live here.  It was unsound
+    // and is deleted rather than bounded: IsOwnerSurvivedObject is a *coverage* predicate, not
+    // a start predicate.  MarkBits paints every 8B slot an object covers (the property this
+    // header already states at AdmitForRoute below), so scanning down from an offset returns
+    // the last covered slot of the preceding object, never that object's start.  Measured:
+    // a 96-slot window around one such refusal reported 82 "starts" for ~7 objects, and the
+    // address handed back was 40 bytes inside a 48-byte object -- a garbage base that only the
+    // fail-closed load kept out of a root slot.  ZGC has no such ambiguity because ZLiveMap
+    // carries one bit pair per object *start* and ZPage::object_iterate is _livemap.iterate
+    // (zPage.inline.hpp:320-331); a coverage bitmap cannot be read as if it were that.
+
     bool IsOwnerKnownEmpty()
     {
         return IsRouteKnownEmpty();
@@ -796,8 +804,75 @@ public:
     // (zLiveMap.inline.hpp:38-40,86-90); this copy is the equivalent persistent carrier.
     static constexpr bool RetainedOwnCopyEnabled() { return true; }
 
-    // Copy the page's paired livemap into the retained owner. markWords is the
-    // live plane, so it already includes finalizable-only objects.
+    // ZGC's page owns its livemap and ZRelocateAddRemsetForFlipPromoted iterates that
+    // page-owned map (zRelocate.cpp:1256-1279 / zPage.inline.hpp:320-331). Our LiveInfo
+    // faces live in an epoch-recycled arena, so a consumer registered in one phase and
+    // run in a later one cannot hold a view token and expect it to still resolve: the
+    // face is gone and every liveness query answers false. Such a consumer takes its own
+    // copy of the bits at registration instead. Same union as CaptureRetainedMarkWords
+    // (ordinary mark | resurrect); false means there was no face to copy.
+    template<Generation G>
+    bool CopyMarkWordsForView(MarkView<G> view, std::vector<uint64_t>& out)
+    {
+        out.clear();
+        CHECK(view.GetRegion() == this);
+        if (IsLargeRegion()) {
+            // ZGC large pages hold one object at page start (zPage.inline.hpp:53-58) but
+            // still express its liveness through the page livemap (228-240).
+            if (metadata.isMarked == 0 && metadata.isResurrected != 1) {
+                return false;
+            }
+            out.assign(1, static_cast<uint64_t>(1));
+            return true;
+        }
+        if (!ValidateMarkView(view)) {
+            return false;
+        }
+        LiveInfo* liveInfo = GetLiveInfoForView(view);
+        if (liveInfo == nullptr) {
+            return false;
+        }
+        LiveInfo::MarkFace& markFace = liveInfo->GetMarkFace();
+        RegionBitmap* mark = markFace.epoch.load(std::memory_order_acquire) == view.GetEpoch()
+            ? __atomic_load_n(&markFace.bitmap, std::memory_order_acquire) : nullptr;
+        if (reinterpret_cast<MAddress>(mark) == LiveInfo::TEMPORARY_PTR) {
+            mark = nullptr;
+        }
+        RegionBitmap* resurrect = liveInfo->resurrectBitmap;
+        size_t markWords = mark == nullptr ? 0 : mark->wordCnt.load(std::memory_order_acquire);
+        size_t resurrectWords = resurrect == nullptr ? 0 : resurrect->wordCnt.load(std::memory_order_acquire);
+        size_t wordCnt = std::max(markWords, resurrectWords);
+        if (wordCnt == 0) {
+            return false;
+        }
+        out.assign(wordCnt, 0);
+        for (size_t i = 0; i < wordCnt; ++i) {
+            uint64_t bits = 0;
+            if (i < markWords) {
+                bits |= mark->markWords[i].load(std::memory_order_acquire);
+            }
+            if (i < resurrectWords) {
+                bits |= resurrect->markWords[i].load(std::memory_order_acquire);
+            }
+            out[i] = bits;
+        }
+        return true;
+    }
+
+    // Same indexing as RegionBitmap::IsMarked / RetainedMarkWordsSay, over a copy the
+    // caller owns.
+    static bool SnapshotMarkWordsSay(const std::vector<uint64_t>& words, size_t offset)
+    {
+        size_t bitIdx = 2 * (offset / kMarkedBytesPerBit);
+        size_t wordIdx = bitIdx / kBitsPerWord;
+        if (wordIdx >= words.size()) {
+            return false;
+        }
+        return (words[wordIdx] & (static_cast<uint64_t>(1) << (bitIdx % kBitsPerWord))) != 0;
+    }
+
+    // Copy the page's one ordinary livemap plus resurrection bits into the
+    // retained owner. No generation-dependent face union is needed.
     void CaptureRetainedMarkWords(LiveInfo* liveInfo, uint64_t epoch, uint8_t largeMarked)
     {
         FreeRetainedMarkWords();
@@ -822,15 +897,24 @@ public:
         LiveInfo::MarkFace& markFace = liveInfo->GetMarkFace();
         RegionBitmap* mark = markFace.epoch.load(std::memory_order_acquire) == epoch
             ? __atomic_load_n(&markFace.bitmap, std::memory_order_acquire) : nullptr;
+        RegionBitmap* resurrect = liveInfo->resurrectBitmap;
         size_t markWords = mark == nullptr ? 0 : mark->wordCnt.load(std::memory_order_acquire);
-        size_t wordCnt = markWords;
+        size_t resurrectWords = resurrect == nullptr ? 0 : resurrect->wordCnt.load(std::memory_order_acquire);
+        size_t wordCnt = std::max(markWords, resurrectWords);
         if (wordCnt == 0) {
             return;
         }
         uint64_t* words = static_cast<uint64_t*>(malloc(wordCnt * sizeof(uint64_t)));
         CHECK(words != nullptr);
         for (size_t i = 0; i < wordCnt; ++i) {
-            words[i] = mark->markWords[i].load(std::memory_order_acquire);
+            uint64_t bits = 0;
+            if (i < markWords) {
+                bits |= mark->markWords[i].load(std::memory_order_acquire);
+            }
+            if (i < resurrectWords) {
+                bits |= resurrect->markWords[i].load(std::memory_order_acquire);
+            }
+            words[i] = bits;
         }
         metadata.retainedMarkWords = words;
         metadata.retainedMarkWordCnt = static_cast<uint32_t>(wordCnt);
@@ -841,8 +925,7 @@ public:
         return IsRetainedLifeCurrent() && metadata.retainedMarkWords != nullptr;
     }
 
-    // Same paired-bit indexing as RegionBitmap::IsLive. Retained words answer
-    // liveness, so they read the low bit of each live/strong pair.
+    // Same indexing as RegionBitmap::IsMarked.
     bool RetainedMarkWordsSay(size_t offset) const
     {
         if (!IsRetainedLifeCurrent()) {
@@ -958,8 +1041,6 @@ public:
             PreserveRetainedLiveInfo();
             return;
         }
-        const bool reuseOwnedCopy = IsRetainedSnapshotValid() && metadata.retainedMarkWords != nullptr &&
-            metadata.retainedLiveInfoCoveredUpTo >= boundary;
         BeginRetainedPreserve();
         metadata.retainedLiveInfo = GetLiveInfo();
         metadata.retainedLiveInfoEpoch = GetSnapshotEpoch();
@@ -975,18 +1056,15 @@ public:
             largeMarked = 0;
         }
         metadata.retainedLiveInfoCoveredUpTo = boundary;
-        if (RetainedOwnCopyEnabled() && metadata.retainedLiveInfo != nullptr) {
+        if (RetainedOwnCopyEnabled()) {
             CaptureRetainedMarkWords(metadata.retainedLiveInfo, metadata.retainedLiveInfoEpoch, largeMarked);
-        } else if (!reuseOwnedCopy) {
-            FreeRetainedMarkWords();
         }
-        if (metadata.retainedLiveInfo == nullptr && !reuseOwnedCopy) {
-            CHECK_DETAIL(GetRetainedLiveInfoState() != RetainedLiveInfoState::SNAPSHOT_LOST,
-                         "retained snapshot lost after current/from-page/owned-copy repair life=%llu retainedLife=%llu "
-                         "alloc=%#zx boundary=%#zx",
-                         static_cast<unsigned long long>(GetRegionLifeId()),
-                         static_cast<unsigned long long>(metadata.retainedLifeId),
-                         static_cast<size_t>(GetRegionAllocPtr()), static_cast<size_t>(boundary));
+        if (metadata.retainedLiveInfo == nullptr) {
+            // This decision is derived after CaptureRetainedMarkWords has
+            // replaced the previous owned carrier.  Once a successful
+            // Preserve armed the monotonic bit, carrier absence is LOST on
+            // every exit; no clear/unbind exit has to remember to write it.
+            CHECK(GetRetainedLiveInfoState() != RetainedLiveInfoState::SNAPSHOT_LOST);
             NoteRetainedPreserve(false);
             return;
         }
@@ -1081,6 +1159,8 @@ public:
                 allocatedLiveInfo->bindedRegion = this;
                 allocatedLiveInfo->GetMarkFace().epoch = 0;
                 allocatedLiveInfo->GetMarkFace().bitmap = nullptr;
+                allocatedLiveInfo->resurrectBitmap = nullptr;
+                allocatedLiveInfo->enqueueBitmap = nullptr;
                 __atomic_store_n(&metadata.liveInfo, allocatedLiveInfo, std::memory_order_release);
                 DLOG(REGION, "region %p@%#zx liveinfo %p", this, GetRegionStart(), metadata.liveInfo);
                 return allocatedLiveInfo;
@@ -1145,6 +1225,84 @@ public:
         return nullptr;
     }
 
+    RegionBitmap* GetResurrectBitmap()
+    {
+        LiveInfo* liveInfo = GetLiveInfo();
+        if (liveInfo == nullptr) {
+            return nullptr;
+        }
+        RegionBitmap* bitmap = __atomic_load_n(&liveInfo->resurrectBitmap, std::memory_order_acquire);
+        if (reinterpret_cast<MAddress>(bitmap) == LiveInfo::TEMPORARY_PTR) {
+            return nullptr;
+        }
+        return bitmap;
+    }
+
+    RegionBitmap* GetOrAllocResurrectBitmap()
+    {
+        LiveInfo* liveInfo = GetOrAllocLiveInfo();
+        do {
+            RegionBitmap* bitmap = __atomic_load_n(&liveInfo->resurrectBitmap, std::memory_order_acquire);
+            if (UNLIKELY(reinterpret_cast<uintptr_t>(bitmap) == LiveInfo::TEMPORARY_PTR)) {
+                continue;
+            }
+            if (LIKELY(bitmap != nullptr)) {
+                return bitmap;
+            }
+            RegionBitmap* newValue = reinterpret_cast<RegionBitmap*>(LiveInfo::TEMPORARY_PTR);
+            if (__atomic_compare_exchange_n(&liveInfo->resurrectBitmap, &bitmap, newValue, false,
+                                            std::memory_order_seq_cst, std::memory_order_relaxed)) {
+                RegionBitmap* allocated =
+                    ForwardDataManager::GetForwardDataManager().AllocateRegionBitmap(GetRegionSize());
+                __atomic_store_n(&liveInfo->resurrectBitmap, allocated, std::memory_order_release);
+                DLOG(REGION, "region %p@%#zx resurrectbitmap %p", this, GetRegionStart(),
+                     metadata.liveInfo->resurrectBitmap);
+                return allocated;
+            }
+        } while (true);
+
+        return nullptr;
+    }
+
+    RegionBitmap* GetEnqueueBitmap()
+    {
+        LiveInfo* liveInfo = GetLiveInfo();
+        if (liveInfo == nullptr) {
+            return nullptr;
+        }
+        RegionBitmap* bitmap = __atomic_load_n(&liveInfo->enqueueBitmap, std::memory_order_acquire);
+        if (reinterpret_cast<MAddress>(bitmap) == LiveInfo::TEMPORARY_PTR) {
+            return nullptr;
+        }
+        return bitmap;
+    }
+
+    RegionBitmap* GetOrAllocEnqueueBitmap()
+    {
+        LiveInfo* liveInfo = GetOrAllocLiveInfo();
+        do {
+            RegionBitmap* bitmap = __atomic_load_n(&liveInfo->enqueueBitmap, std::memory_order_acquire);
+            if (UNLIKELY(reinterpret_cast<uintptr_t>(bitmap) == LiveInfo::TEMPORARY_PTR)) {
+                continue;
+            }
+            if (LIKELY(bitmap != nullptr)) {
+                return bitmap;
+            }
+            RegionBitmap* newValue = reinterpret_cast<RegionBitmap*>(LiveInfo::TEMPORARY_PTR);
+            if (__atomic_compare_exchange_n(&liveInfo->enqueueBitmap, &bitmap, newValue, false,
+                                            std::memory_order_seq_cst, std::memory_order_relaxed)) {
+                RegionBitmap* allocated =
+                    ForwardDataManager::GetForwardDataManager().AllocateRegionBitmap(GetRegionSize());
+                __atomic_store_n(&liveInfo->enqueueBitmap, allocated, std::memory_order_release);
+                DLOG(REGION, "region %p@%#zx enqueuebitmap %p", this, GetRegionStart(),
+                     metadata.liveInfo->enqueueBitmap);
+                return allocated;
+            }
+        } while (true);
+
+        return nullptr;
+    }
+
     template<Generation G>
     uint8_t GetMarkedRegionFlag(MarkView<G> view) const
     {
@@ -1195,6 +1353,7 @@ public:
             PreserveRetainedLiveInfo();
         }
         SetMarkedRegionFlag(view, 0);
+        SetEnqueuedRegionFlag(0);
         SetResurrectedRegionFlag(0);
     }
 
@@ -1294,8 +1453,7 @@ public:
         }
         VerifyMarkFaceOwner<G>(obj, "RegionInfo::MarkObject.unsized");
         if (IsLargeRegion()) {
-            const uint64_t bytes = metadata.isResurrected == 1 ? 0 : obj->GetSize();
-            if (TryPublishLargeFace(view, bytes)) {
+            if (TryPublishLargeFace(view, obj->GetSize())) {
                 PublishCurrentMarkFace();
                 NotePageOwnerFirstPaint<G>();
                 return false;
@@ -1326,19 +1484,16 @@ public:
     }
 
     template<Generation G>
-    bool MarkObject(MarkView<G> view, const BaseObject* obj, size_t objSize, bool accountLive, bool& incLive)
+    bool MarkObject(MarkView<G> view, const BaseObject* obj, size_t objSize, bool accountLive = true)
     {
         CHECK(view.GetRegion() == this);
         VerifyMarkFaceOwner<G>(obj, "RegionInfo::MarkObject.sized");
         if (IsLargeRegion()) {
-            incLive = metadata.isResurrected != 1;
-            const uint64_t bytes = accountLive && incLive ? objSize : 0;
-            if (TryPublishLargeFace(view, bytes)) {
+            if (TryPublishLargeFace(view, accountLive ? objSize : 0)) {
                 PublishCurrentMarkFace();
                 NotePageOwnerFirstPaint<G>();
                 return false;
             }
-            incLive = false;
             return true;
         }
         MAddress objAddr = reinterpret_cast<MAddress>(obj);
@@ -1349,7 +1504,7 @@ public:
         size_t regionSize = regionEnd - regionStart;
         RegionBitmap* writeBm = GetOrAllocMarkBitmap(view);
 
-        incLive = false;
+        bool incLive = false;
         bool already = writeBm->MarkBits(offset, objSize, regionSize, incLive);
         if (incLive) {
             if (accountLive) {
@@ -1363,13 +1518,6 @@ public:
                                               "MarkObject_sized", G);
         CHECK(IsMarkedObject(view, offset));
         return already;
-    }
-
-    template<Generation G>
-    bool MarkObject(MarkView<G> view, const BaseObject* obj, size_t objSize, bool accountLive = true)
-    {
-        bool incLive = false;
-        return MarkObject(view, obj, objSize, accountLive, incLive);
     }
 
     bool MarkObjectByOwner(const BaseObject* obj)
@@ -1386,14 +1534,6 @@ public:
             return MarkObject(GetMarkView<Generation::Young>(), obj, objSize, accountLive);
         }
         return MarkObject(GetMarkView<Generation::Old>(), obj, objSize, accountLive);
-    }
-
-    bool MarkObjectByOwner(const BaseObject* obj, size_t objSize, bool accountLive, bool& incLive)
-    {
-        if (IsYoungRegion()) {
-            return MarkObject(GetMarkView<Generation::Young>(), obj, objSize, accountLive, incLive);
-        }
-        return MarkObject(GetMarkView<Generation::Old>(), obj, objSize, accountLive, incLive);
     }
 
     bool ResurrectObject(const BaseObject* obj, size_t offset)
@@ -1425,6 +1565,39 @@ public:
         }
         CHECK(bitmap->IsLive(offset));
         return already;
+    }
+
+    bool EnqueueObject(const BaseObject* obj, size_t offset)
+    {
+        if (IsFreeRegion() || IsGarbageRegion() || GetRegionType() == RegionType::FREE_REGION) {
+            return true;
+        }
+        if (!PlausibleManagedObjectGate("RegionInfo::EnqueueObject", const_cast<BaseObject*>(obj))) {
+            // Rejected objects are reported as already enqueued: ShouldEnqueue
+            // treats true as "do not SATB-push". Lost work is the SATB entry and
+            // the later mark/trace of this address; if the gate ever rejects a
+            // real object, that object's SATB-driven liveness is the miss.
+            return true;
+        }
+        if (IsLargeRegion()) {
+            if (metadata.isEnqueued != 1) {
+                SetEnqueuedRegionFlag(1);
+                return false;
+            }
+            return true;
+        }
+        U32 objSize = obj->GetSize();
+        MAddress regionStart = GetRegionStart();
+        MAddress regionEnd = GetRegionEnd();
+        CheckObjectSize(obj, objSize, regionStart, regionEnd);
+        size_t regionSize = regionEnd - regionStart;
+        CHECK(regionSize > 0);
+        RegionBitmap* bitmap = GetOrAllocEnqueueBitmap();
+        // enqueue face is not the route geometry face; still report if mark-face sealed.
+
+        bool marked = bitmap->MarkBits(offset, objSize, regionSize);
+        CHECK(bitmap->IsMarked(offset));
+        return marked;
     }
 
     bool IsResurrectedObject(const BaseObject* obj)
@@ -1624,7 +1797,25 @@ public:
                 return true;
             }
         }
+        if (G == Generation::Old) {
+            RegionBitmap* resurrectBitmap =
+                __atomic_load_n(&liveInfo->resurrectBitmap, std::memory_order_acquire);
+            if (resurrectBitmap != nullptr &&
+                reinterpret_cast<MAddress>(resurrectBitmap) != LiveInfo::TEMPORARY_PTR &&
+                resurrectBitmap->IsMarked(offset)) {
+                return true;
+            }
+        }
         return false;
+    }
+
+    bool IsEnqueuedObject(size_t offset)
+    {
+        RegionBitmap* enqueBitmap = GetEnqueueBitmap();
+        if (enqueBitmap == nullptr) {
+            return false;
+        }
+        return enqueBitmap->IsMarked(offset);
     }
 
     ALWAYS_INLINE size_t GetAddressOffset(MAddress address)
@@ -1700,7 +1891,6 @@ public:
         // The explicit from-page metadata carrier and list-authority token keep
         // the per-unit metadata at the measured 304-byte layout. This is
         // correctness-owned page identity/membership, not test-only shape.
-        // It is deliberately present in product builds.
         static_assert(sizeof(UnitInfo) == 304, "per-unit metadata size changed; it is per-page, so price it");
     }
 
@@ -1830,8 +2020,6 @@ public:
         const size_t committed = UnitInfo::memoryOwner == nullptr ? 0 :
                                  UnitInfo::memoryOwner->CommitMemory(unitAddress, size);
         if (committed != size && committed != 0 && UnitInfo::memoryOwner != nullptr) {
-            // A multi-partition commit may leave a committed prefix.  Roll
-            // that prefix back before reporting allocation failure.
             const size_t cleaned = UnitInfo::memoryOwner->ReleaseMemory(unitAddress, committed);
             CHECK_DETAIL(cleaned == committed,
                          "partial commit cleanup failed idx=%zu units=%zu committed=%zu cleaned=%zu", idx, cnt,
@@ -1848,9 +2036,6 @@ public:
                      "release outside heap reservation idx=%zu units=%zu released=%zu", idx, cnt, released);
     }
 
-    // Release physical backing and return the exact successful byte prefix.
-    // Delayed uncommit uses this form so a backend partition failure remains
-    // observable and retryable instead of tripping the synchronous CHECK path.
     static size_t ReleaseUnitsPartial(size_t idx, size_t cnt)
     {
 #if defined(MRT_GC_UNIT_TESTS)
@@ -2114,6 +2299,23 @@ public:
         return from_region_addr(it->second);
     }
 
+    bool IsCompactRouteDestination(MAddress address) const
+    {
+        // RouteState::COMPACTED is published only after CompactRegion has
+        // finished recording the dense-pack table. ZGC similarly blocks page
+        // access until in-place relocation is complete, then exposes the
+        // relocated objects (zRelocate.cpp:862-925,1013-1037).
+        if (GetRouteState() != RouteState::COMPACTED) {
+            return false;
+        }
+        const CompactRouteTable* table = LoadCompactRouteTable();
+        if (table == nullptr) {
+            return false;
+        }
+        return std::any_of(table->begin(), table->end(),
+                           [address](const auto& route) { return route.second == address; });
+    }
+
     // A phase transition is a mutator grace period. Tables detached in generation N
     // survive two completed transitions so a detach racing the transition boundary is
     // conservatively assigned to either side without endangering a reader.
@@ -2252,7 +2454,6 @@ public:
         // [IKEKEEP-01] same shape). ZGC destroys forwarding at the next
         // ZRelocationSetInstallTask (zRelocationSet.cpp:91-96).
         ForwardingTable::ClearEntries(GetRegionStart(), GetRegionSize());
-        ForwardingTable::DropRetiredCovering(GetRegionStart(), GetRegionSize());
         CHECK_DETAIL(ForwardingTable::PreparePublicationGeneration(GetRegionStart(), GetRegionSize()),
                      "forwarding generation prepare failed region=%p range=[%#zx,%#zx)",
                      this, static_cast<size_t>(GetRegionStart()), static_cast<size_t>(GetRegionEnd()));
@@ -2344,7 +2545,7 @@ public:
         // PORT_ZFORWARDING step 1: the retirement edge.  ZGC's equivalent is refcount-driven
         // (ZForwarding::detach_page waits for _ref_count == 0); recording the removal here first
         // lets step 3 change *when* it happens without changing *where*.
-        ForwardingTable::Remove(GetRegionStart(), GetRegionSize());
+        ForwardingTable::RetireMembershipAtDispel(GetRegionStart(), GetRegionSize());
         dispelGhostCount.fetch_add(1, std::memory_order_relaxed);
         size_t nUnit = GetGhostRegionUnitCount();
         TraceClear::NoteRegionEvent(GetRegionStart(), nUnit * UNIT_SIZE, "dispel", this, GetLiveByteCount(),
@@ -2432,9 +2633,6 @@ public:
         }
     }
     template<Generation G>
-#if defined(MRT_TESTABLE_INTERNALS)
-    MRT_EXPORT
-#endif
     void ClearLiveInfo(MarkView<G> view)
     {
         CHECK(view.GetRegion() == this);
@@ -2858,6 +3056,10 @@ public:
         metadata.regionStateBitField.SetAtomicValue(RegionStateBitPos::MARKED_REGION_FLAG, 1, flag);
     }
 
+    void SetEnqueuedRegionFlag(uint8_t flag)
+    {
+        metadata.regionStateBitField.SetAtomicValue(RegionStateBitPos::ENQUEUED_REGION_FLAG, 1, flag);
+    }
     void SetResurrectedRegionFlag(uint8_t flag)
     {
         metadata.regionStateBitField.SetAtomicValue(RegionStateBitPos::RESURRECTED_REGION_FLAG, 1, flag);
@@ -2885,6 +3087,7 @@ public:
                      "cannot promote region %p through a stale young mark view", this);
         __atomic_store_n(&metadata.liveInfo, static_cast<LiveInfo*>(nullptr), std::memory_order_release);
         SetOldMarkedRegionFlag(0);
+        SetEnqueuedRegionFlag(0);
         SetResurrectedRegionFlag(0);
         __atomic_store_n(&metadata.liveByteCount, LIVE_AUTHORITY_BIT, std::memory_order_release);
         metadata.markStartAllocPtr = 0;
@@ -3284,7 +3487,7 @@ public:
         }
         // Examined: either large, or we had a mark face this cycle that is now stale/null
         // (authority already required by IsKnownEmpty). Residual bitmap pointer may remain.
-        return GetMarkBitmap(view) != nullptr || IsLargeRegion() ||
+        return GetMarkBitmap(view) != nullptr || GetResurrectBitmap() != nullptr || IsLargeRegion() ||
             __atomic_load_n(&metadata.liveInfo, std::memory_order_acquire) != nullptr;
     }
 
@@ -3515,6 +3718,7 @@ private:
         TRACE_REGION_FLAG = BIT_LENGTH,
         IN_GHOST_FROM_REGION_FLAG,
         MARKED_REGION_FLAG,
+        ENQUEUED_REGION_FLAG,
         RESURRECTED_REGION_FLAG,
         YOUNG_REGION_FLAG,
         YOUNG_AGE_FLAG
@@ -3605,7 +3809,7 @@ private:
         std::atomic<bool> fwdClaimed{ false };
         std::atomic<bool> fwdDone{ false };
         std::atomic<int32_t> fwdRefCount{ 0 };
-        // holderlive (F2): owned copy of the paired livemap's live plane. Null unless
+        // holderlive (F2): owned copy of the retained mark bits (mark | resurrect). Null unless
         // MRT_GCV2_RETAINED_OWN_COPY=1. Freed by ClearLiveInfo / InitRegionInfo.
         uint64_t* retainedMarkWords = nullptr;
         uint32_t retainedMarkWordCnt = 0;
@@ -3654,6 +3858,7 @@ private:
                 // FindToVersion().
                 uint8_t inGhostFromRegion : 1;
                 uint8_t isMarked : 1;
+                uint8_t isEnqueued : 1;
                 uint8_t isResurrected : 1;
             };
             BitField<uint16_t> regionStateBitField;
@@ -3779,6 +3984,11 @@ private:
         void SetOldMarkedRegionFlag(uint8_t flag)
         {
             metadata.regionStateBitField.SetAtomicValue(RegionStateBitPos::MARKED_REGION_FLAG, 1, flag);
+        }
+
+        void SetEnqueuedRegionFlag(uint8_t flag)
+        {
+            metadata.regionStateBitField.SetAtomicValue(RegionStateBitPos::ENQUEUED_REGION_FLAG, 1, flag);
         }
 
         void SetResurrectedRegionFlag(uint8_t flag)
@@ -3935,7 +4145,7 @@ private:
         // region that still named its previous-life successor kept a retired
         // from-space chain alive across InitRegion (RegionManager.h:782).
         metadata.nextRegionIdx0 = NULLPTR_IDX;
-        metadata.regionListOwner = nullptr;
+        metadata.regionListOwner.store(nullptr, std::memory_order_relaxed);
         metadata.censusBoundaryOffset = 0;
         __atomic_store_n(&metadata.liveByteCount, 0, std::memory_order_release);
         metadata.liveInfo = nullptr;
@@ -3978,6 +4188,7 @@ private:
         // TakeRegion reuses garbage without DispelGhostFromRegion (RegionInfo.h:667-698).
         SetInGhostRegion(0);
         SetOldMarkedRegionFlag(0);
+        SetEnqueuedRegionFlag(0);
         SetResurrectedRegionFlag(0);
         SetYoungRegionFlag(0);
         SetMarkFaceSealed(false);

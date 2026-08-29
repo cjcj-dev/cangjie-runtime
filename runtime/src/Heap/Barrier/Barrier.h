@@ -170,9 +170,8 @@ protected:
     BaseObject* ZgcSelfHealLoadGood(RefField<true>& field, zpointer observed, zpointer healPtr,
                                     HealSite site) const;
 
-    // I2: FORWARDED/zero-header from-copy → FindToVersion to. Never hand from.
-    // SkipLaunderingHeal may refuse to write from into the slot; the return value
-    // still resolves. zBarrier.inline.hpp:294-340 relocate-or-remap then self-heal to.
+    // I2: FORWARDED/zero-header from-copy → make-load-good to. Never hand from.
+    // zBarrier.inline.hpp:294-340 relocates or remaps before self-healing to.
     BaseObject* ResolveFromCopyForMutator(BaseObject* target) const;
 
     // loadfc (zBarrier.inline.hpp:294-344): fail-closed postcondition for slow/runtime hand-outs.

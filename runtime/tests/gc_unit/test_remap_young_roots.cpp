@@ -9,10 +9,25 @@
 // load-good again at N+2 unless roots are remapped between young flips.
 
 #include "Heap/WCollector/RemapYoungRoots.h"
+#include "Heap/Collector/PromotedRegionDomain.h"
 #include "gc_unittest.hpp"
 
 using namespace MapleRuntime;
 using namespace MapleRuntime::GcUnit;
+
+GC_TEST(PromotedRegionDomain, ResidualPromotionRequiresClosedLiveness)
+{
+    GC_EXPECT_TRUE(PromotedRegionDomain::ResidualPromotionHasClosedLiveness(false, true, true));
+    GC_EXPECT_FALSE(PromotedRegionDomain::ResidualPromotionHasClosedLiveness(true, true, true));
+    GC_EXPECT_FALSE(PromotedRegionDomain::ResidualPromotionHasClosedLiveness(false, false, true));
+    GC_EXPECT_FALSE(PromotedRegionDomain::ResidualPromotionHasClosedLiveness(false, true, false));
+}
+
+GC_TEST(PromotedRegionDomain, YoungPromotionDefersItsOnlyFieldScan)
+{
+    GC_EXPECT_TRUE(PromotedRegionDomain::DeferPromotedFieldScan(true));
+    GC_EXPECT_FALSE(PromotedRegionDomain::DeferPromotedFieldScan(false));
+}
 using namespace MapleRuntime::RemapYoungRootsLogic;
 
 namespace {
@@ -42,6 +57,25 @@ GC_TEST(RemapYoungRoots, TwoYoungFlipsWithoutRemapMakeOldColourGoodAgain)
     GC_EXPECT_EQ(Classify(published, FlipYoungMask(kYoungMask0), kOldMask0), Kind::OldOnlyGood);
     GC_EXPECT_EQ(Classify(published, FlipYoungMask(FlipYoungMask(kYoungMask0)), kOldMask0),
                  Kind::LoadGood);
+}
+
+GC_TEST(RemapYoungRoots, OnlyLoadBadColoursEnterForwardingLookup)
+{
+    const uintptr_t published = kAddr | CurrentRemapBit(kYoungMask0, kOldMask0);
+    const uintptr_t wrappedYoung = FlipYoungMask(FlipYoungMask(kYoungMask0));
+    const Kind wrapped = Classify(published, wrappedYoung, kOldMask0);
+    GC_EXPECT_EQ(wrapped, Kind::LoadGood);
+    GC_EXPECT_FALSE(NeedsForwardingLookup(wrapped));
+    GC_EXPECT_FALSE(NeedsForwardingLookup(Kind::Uncoloured));
+    GC_EXPECT_TRUE(NeedsForwardingLookup(Kind::YoungOnlyGood));
+    GC_EXPECT_TRUE(NeedsForwardingLookup(Kind::OldOnlyGood));
+    GC_EXPECT_TRUE(NeedsForwardingLookup(Kind::DoubleBad));
+}
+
+GC_TEST(RemapYoungRoots, DeadRememberedHolderIsNotARoot)
+{
+    GC_EXPECT_TRUE(ShouldRemapRememberedSlot(true));
+    GC_EXPECT_FALSE(ShouldRemapRememberedSlot(false));
 }
 
 GC_TEST(RemapYoungRoots, Phase8KeepsRootsFromWrappingToGood)

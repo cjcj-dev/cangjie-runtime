@@ -234,12 +234,15 @@ const char g_cjRuntimeProvenance[] = "CJRT-COMMIT:" CJ_RUNTIME_COMMIT;
 // of a silent demotion to dynamic initialisation -- which would leave the masks reading 0 during
 // static init, i.e. every reference load-good, i.e. no barrier at all.
 namespace {
+constexpr unsigned long kLoadGood0 = static_cast<unsigned long>(MapleRuntime::kInitialBadMasks.remapColour);
 constexpr unsigned long kLoadBad0 = static_cast<unsigned long>(MapleRuntime::kInitialBadMasks.loadBad);
 constexpr unsigned long kMarkBad0 = static_cast<unsigned long>(MapleRuntime::kInitialBadMasks.markBad);
 constexpr unsigned long kStoreBad0 = static_cast<unsigned long>(MapleRuntime::kInitialBadMasks.storeBad);
 constexpr unsigned long kStoreGood0 = static_cast<unsigned long>(MapleRuntime::kInitialBadMasks.storeGood);
 
 // Witnesses: the literal expressions this file carried before c4unify, verbatim.
+static_assert(kLoadGood0 == MapleRuntime::ZPointerRemapped00,
+              "g_cjLoadGoodMask initial value changed");
 static_assert(kLoadBad0 == (MapleRuntime::TAGGED_BITS_MASK |
                             (MapleRuntime::REMAP_COLOUR_MASK ^ MapleRuntime::ZPointerRemapped00)),
               "g_cjLoadBadMask initial value changed");
@@ -266,6 +269,8 @@ static_assert(kStoreGood0 == (MapleRuntime::ZPointerRemapped00 | MapleRuntime::M
 static_assert((kStoreGood0 ^ static_cast<unsigned long>(MapleRuntime::STORE_METADATA_MASK)) == kStoreBad0,
               "g_cjStoreGoodMask ^ STORE_METADATA_MASK != g_cjStoreBadMask at init");
 } // namespace
+
+extern "C" MRT_EXPORT unsigned long g_cjLoadGoodMask = kLoadGood0;
 
 extern "C" unsigned long g_cjLoadBadMask = kLoadBad0;
 

@@ -94,6 +94,10 @@ struct GcHeapFixture {
 
     ~GcHeapFixture()
     {
+        // Destroying this synthetic heap is its explicit remap-coverage
+        // boundary. Do not carry forwarding authority into a later fixture
+        // whose mmap may reuse the same virtual range.
+        ForwardingTable::ReclaimRetired("gc-unit-fixture-coverage-complete");
         // SetYoungRegionFlag owns the process-wide youngRegionCount. Fixtures
         // are mapped per test, so leaving their flags set before munmap makes
         // later tests observe young regions that no longer exist.
@@ -115,8 +119,12 @@ struct GcHeapFixture {
         return obj;
     }
 
-    // Product mark faces go through ForwardDataManager. gc_unit never Heap::Init,
-    // so initialize the arena before any test asks the product to publish a pair.
+    // Product GetOrAlloc* faces go through ForwardDataManager (RegionInfo.h:832/873/912).
+    // gc_unit never Heap::Init, so FDM's arena starts at 0 and AllocateRegionBitmap
+    // CHECKs bitmap != nullptr. Union order hits this after ForwardingNoGeometry arms
+    // the table: YoungConc.StaleOldMarkDoesNotSkipYoungEnqueue → ShouldEnqueue →
+    // EnqueueObject → GetOrAllocEnqueueBitmap (enqueue face was never planted).
+    // youngconcmark §3b: fixture Init FDM, do not relax the CHECK.
     static void EnsureForwardData(MAddress heapStart)
     {
         static bool ready = false;
@@ -162,6 +170,8 @@ struct GcHeapFixture {
         live->bindedRegion = region;
         live->GetMarkFace().epoch.store(region->GetSnapshotEpoch(), std::memory_order_relaxed);
         live->GetMarkFace().bitmap = nullptr;
+        live->resurrectBitmap = nullptr;
+        live->enqueueBitmap = AllocPlantedBitmap(region->GetRegionSize());
         region->metadata.liveInfo = live;
         return live;
     }
@@ -188,6 +198,8 @@ struct GcHeapFixture {
             FreePlantedBitmap(mark);
             live->GetMarkFace().bitmap = nullptr;
         }
+        FreePlantedBitmap(live->enqueueBitmap);
+        FreePlantedBitmap(live->resurrectBitmap);
         delete live;
     }
 

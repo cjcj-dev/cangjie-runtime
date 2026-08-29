@@ -316,6 +316,41 @@ void ForwardingTable::Remove(MAddress regionStart, size_t regionSize)
 }
 
 namespace {
+void DrainPublicationOwners(ZForwarding* forwarding);
+} // namespace
+
+void ForwardingTable::RetireMembershipAtDispel(MAddress regionStart, size_t regionSize)
+{
+    if (!Ready() || regionSize == 0) {
+        return;
+    }
+    std::lock_guard<std::mutex> lock(g_installLock);
+    // Seal before unlinking, the same order ClearEntries uses: a would-be publisher that loses
+    // this lock then observes the tombstone instead of an open generation. DispelGhostFromRegion
+    // runs after DrainScope has refused late retainers and waited out existing readers, so no
+    // Publication owner can still need this generation open (zForwarding.cpp:171-181).
+    SealPublicationLocked(regionStart, regionSize);
+    // One unlink edge, the way ZGC has one: ZRelocationSet::reset destroys every ZForwarding the
+    // finished set owned (zRelocationSet.cpp:191-197), ZForwardingTable::get answers only for a
+    // page still in the live set (zForwardingTable.inline.hpp:36-46), and a ZForwarding detaches
+    // when the relocation that created it ends (zForwarding.cpp:171-181).  Keeping the entry map
+    // linked until a later free left the finished cycle's receipts queryable, and under in-place
+    // compaction a finished cycle's destinations are live addresses of the next cycle: querying
+    // them a second time returns the destination the *same* shift already produced, one shift
+    // further down the page.  Unlink both maps here so the finished set can answer nothing.
+    ZForwarding* tab = MapGet(g_entries, regionStart);
+    if (tab != nullptr && tab->start() == regionStart) {
+        DrainPublicationOwners(tab);
+    }
+    (void)MapExchange(g_entries, regionStart, nullptr);
+    MapPut(g_entries, regionStart, regionSize, nullptr);
+    MapPut(g_membership, regionStart, regionSize, nullptr);
+    if (tab != nullptr && tab->start() == regionStart) {
+        Retire(tab);
+    }
+}
+
+namespace {
 void DrainPublicationOwners(ZForwarding* forwarding)
 {
     if (forwarding == nullptr) {
@@ -440,42 +475,9 @@ static void UnlinkThenDestroy(ZForwarding* tab)
 namespace {
 std::mutex g_retiredLock;
 std::vector<ZForwarding*> g_retired;
-std::vector<ZForwarding*> g_retiredAged;
 std::atomic<uint64_t> g_retiredTotal{ 0 };
 std::atomic<uint64_t> g_reclaimedTotal{ 0 };
-std::atomic<uint64_t> g_retiredHeldPeak{ 0 };
 } // namespace
-
-void ForwardingTable::DropRetiredCovering(MAddress regionStart, size_t regionSize)
-{
-    if (regionSize == 0) {
-        return;
-    }
-    const MAddress regionEnd = regionStart + regionSize;
-    std::vector<ZForwarding*> victims;
-    {
-        std::lock_guard<std::mutex> lock(g_retiredLock);
-        auto drop = [&](std::vector<ZForwarding*>& gens) {
-            std::vector<ZForwarding*> keep;
-            keep.reserve(gens.size());
-            for (ZForwarding* tab : gens) {
-                const MAddress tabStart = tab == nullptr ? 0 : tab->start();
-                const MAddress tabEnd = tab == nullptr ? 0 : tabStart + tab->size();
-                if (tab != nullptr && tabStart < regionEnd && regionStart < tabEnd) {
-                    victims.push_back(tab);
-                } else {
-                    keep.push_back(tab);
-                }
-            }
-            gens.swap(keep);
-        };
-        drop(g_retired);
-        drop(g_retiredAged);
-    }
-    for (ZForwarding* tab : victims) {
-        UnlinkThenDestroy(tab);
-    }
-}
 
 void ForwardingTable::Retire(ZForwarding* tab)
 {
@@ -491,7 +493,6 @@ void ForwardingTable::Retire(ZForwarding* tab)
 void ForwardingTable::ReclaimRetired(const char* why)
 {
     std::vector<ZForwarding*> victims;
-    size_t heldNow = 0;
     {
         std::lock_guard<std::mutex> lock(g_retiredLock);
         for (ZForwarding* tab : g_retired) {
@@ -499,26 +500,16 @@ void ForwardingTable::ReclaimRetired(const char* why)
                                                     tab != nullptr,
                                                     tab == nullptr ? 0 : tab->page_life_id());
         }
-        for (ZForwarding* tab : g_retiredAged) {
-            RegionLifeClock::NoteZeroAcrossBoundary(RegionLifeClock::Carrier::RETIRED_ENTRY,
-                                                    tab != nullptr,
-                                                    tab == nullptr ? 0 : tab->page_life_id());
-        }
-        victims.swap(g_retiredAged);
-        g_retiredAged.swap(g_retired);
-        heldNow = g_retiredAged.size();
-    }
-    uint64_t peak = g_retiredHeldPeak.load(std::memory_order_relaxed);
-    while (heldNow > peak && !g_retiredHeldPeak.compare_exchange_weak(peak, heldNow, std::memory_order_relaxed)) {
+        victims.swap(g_retired);
     }
     for (ZForwarding* tab : victims) {
         UnlinkThenDestroy(tab);
     }
-    if (!victims.empty() || heldNow != 0) {
+    if (!victims.empty()) {
         const uint64_t done = g_reclaimedTotal.fetch_add(victims.size(), std::memory_order_relaxed) + victims.size();
         LOG(RTLOG_ERROR,
-            "[FWDTABLE][reclaim] why=%s freed=%zu aged_held=%zu held_peak=%lu retired_total=%lu reclaimed_total=%lu",
-            why == nullptr ? "?" : why, victims.size(), heldNow, g_retiredHeldPeak.load(std::memory_order_relaxed),
+            "[FWDTABLE][reclaim] why=%s freed=%zu coverage_complete=1 retired_total=%lu reclaimed_total=%lu",
+            why == nullptr ? "?" : why, victims.size(),
             g_retiredTotal.load(std::memory_order_relaxed), done);
     }
 }
@@ -543,7 +534,7 @@ bool ForwardingTable::RetiredCovers(MAddress regionStart, size_t regionSize)
         }
         return false;
     };
-    return covers(g_retired) || covers(g_retiredAged);
+    return covers(g_retired);
 }
 
 bool ForwardingTable::HasLiveCarrier(MAddress regionStart, size_t regionSize)
@@ -787,19 +778,14 @@ static MAddress FindRetiredToImpl(MAddress from, ForwardingTable::ToAnswer* answ
 {
     std::lock_guard<std::mutex> lock(g_retiredLock);
     bool searched = false;
-    bool rejected = false;
     auto scan = [&](const std::vector<ZForwarding*>& gens) -> MAddress {
         for (auto it = gens.rbegin(); it != gens.rend(); ++it) {
             ZForwarding* tab = *it;
-            // A retired generation can outlive the address space which owned an unrelated table.
-            // Geometry is self-contained in ZForwarding, so reject non-candidates before touching
-            // the page pointer.  For a covering candidate the incarnation check still happens
-            // before reading its forwarding payload, which is the required fail-closed order.
+            // A retired forwarding is independent of its source page. The page
+            // may already have returned to the allocator, while this immutable
+            // span and its entries remain live until relocation-set reset
+            // (zRelocate.cpp:1041-1047; zRelocationSet.cpp:191-197).
             if (tab == nullptr || !tab->covers(from)) {
-                continue;
-            }
-            if (!tab->page_life_current(RegionLifeClock::Carrier::RETIRED_ENTRY)) {
-                rejected = true;
                 continue;
             }
             searched = true;
@@ -817,19 +803,14 @@ static MAddress FindRetiredToImpl(MAddress from, ForwardingTable::ToAnswer* answ
         }
         return fresh;
     }
-    const MAddress aged = scan(g_retiredAged);
     if (answer != nullptr) {
-        if (aged != 0) {
-            *answer = ForwardingTable::ToAnswer::ArmedHit;
-        } else if (searched) {
+        if (searched) {
             *answer = ForwardingTable::ToAnswer::ArmedMiss;
-        } else if (rejected) {
-            *answer = ForwardingTable::ToAnswer::Unavailable;
         } else {
             *answer = ForwardingTable::ToAnswer::Unarmed;
         }
     }
-    return aged;
+    return 0;
 }
 
 MAddress ForwardingTable::FindRetiredTo(MAddress from) { return FindRetiredToImpl(from, nullptr); }
@@ -852,7 +833,7 @@ MAddress ForwardingTable::FindTo(MAddress from)
             return to;
         }
     }
-    return FindRetiredTo(from);
+    return 0;
 }
 
 bool ForwardingTable::EntriesArmed(MAddress from) { return GetEntries(from) != nullptr; }

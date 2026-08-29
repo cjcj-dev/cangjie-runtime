@@ -197,12 +197,12 @@ private:
         heapSize = RoundUp<size_t>(heapSize, REGION_UNIT_SIZE);
         size_t unitCnt = heapSize / REGION_UNIT_SIZE;
         regionUnitCount = unitCnt;
-        // One paired livemap allocation contains live/finalizable + strong.
-        // Reserve two allocation footprints per unit for simultaneous current
-        // and from-page carriers; no resurrection/enqueue side maps exist.
-        constexpr uint8_t bitmapAllocationCount = 2;
+        // 64: bitmap 1 bit marks the 64 bits in region.
+        constexpr uint8_t bitMarksSize = 64;
+        // 4 bitmaps for each region: young mark, old mark, resurrect, enqueue.
+        constexpr uint8_t bitmapNum = 4;
         return unitCnt * sizeof(LiveInfo) +
-            unitCnt * RegionBitmap::GetRegionBitmapSize(REGION_UNIT_SIZE) * bitmapAllocationCount;
+            unitCnt * (sizeof(RegionBitmap) + (REGION_UNIT_SIZE / bitMarksSize)) * bitmapNum;
     }
     ForwardDataSpace liveInfoData[TAG_ID_COUNT];
     size_t regionUnitCount = 0;

@@ -74,8 +74,6 @@ BaseObject* PostTraceBarrier::ReadWeakRef(BaseObject* obj, RefField<false>& fiel
         if (ReferenceProcessor::CleanWeakReference(obj)) {
             return nullptr;
         }
-        // A concurrent update won the cleaning CAS. Reapply the ordinary load
-        // barrier to that newer value instead of returning the stale referent.
         return ReadReference(obj, field);
     }
     return referent;

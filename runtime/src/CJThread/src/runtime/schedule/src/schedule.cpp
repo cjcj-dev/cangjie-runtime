@@ -1513,7 +1513,6 @@ void ScheduleAllThreadListAdd(struct Thread *thread, struct Schedule *schedule)
 
 int ScheduleAllCJThreadListAdd(struct CJThread *cjthread, CJThreadCreateSource createSource)
 {
-    (void)createSource;
     ScheduleState scheduleState = cjthread->schedule->state.load();
     if (scheduleState != SCHEDULE_RUNNING &&
         scheduleState != SCHEDULE_INIT &&
@@ -1525,10 +1524,11 @@ int ScheduleAllCJThreadListAdd(struct CJThread *cjthread, CJThreadCreateSource c
     }
     cjthread->mutator = MapleRuntime::Mutator::NewMutator();
     cjthread->mutator->MapleRuntime::Mutator::SetCjthreadPtr(static_cast<void*>(cjthread));
-    // Every CJThread that can execute managed code uses the same participant list. In
-    // particular, the finalizer must not rely on a second FinalizerProcessor-owned
-    // registry: epoch handshakes take one allCJThreadList snapshot, matching HotSpot's
-    // one-ThreadsList shape (handshake.cpp:257-275).
+    // Finalizer cjthread is not added to the list to avoid accessing the finalizer mutator twice in
+    // VisitAllMutators, and to prevent cjthread dfx from counting the cjthread of the finalizer
+    if (UNLIKELY(createSource == CJTHREAD_CREATE_SOURCE_FINALIZER)) {
+        return 0;
+    }
     pthread_mutex_lock(&g_scheduleManager.allCJThreadListLock);
     DulinkAdd(&(cjthread->allCJThreadDulink), &(g_scheduleManager.allCJThreadList));
     pthread_mutex_unlock(&g_scheduleManager.allCJThreadListLock);

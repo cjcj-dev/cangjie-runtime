@@ -301,8 +301,9 @@ constexpr Colour Project(Colour p, Drop d)
         q.rO = q.rY;
     } else if (d == Drop::Finalizable) {
         // This is the live configuration. Without the family, a resurrection-marked target is
-        // indistinguishable in pointer metadata. The runtime livemap now retains the distinction
-        // in one live/strong pair, while pointer colouring deliberately remains unsupported.
+        // indistinguishable from a strongly marked one -- which is exactly what the runtime does
+        // today: LiveInfo.h:210 / Heap.cpp:76 OR markBitmap with resurrectBitmap into a single
+        // liveness answer, and the reference is healed to plain mark-good either way.
         q.fin = 0u;
     }
     return q;
@@ -488,8 +489,8 @@ struct Witness {
 // p1: load-good, stamped with the current young and old mark epochs -> mark-good -> fast path.
 //     Our shape of it: the target's markBitmap bit is set (LiveInfo.h:48-117).
 // p2: identical, except the old-mark stamp is finalizable rather than strong.
-//     Our shape of it: the target's live bit is set and its paired strong bit is clear
-//     (LiveInfo.h), which DoResurrection produces inside the concurrent marking segment
+//     Our shape of it: the target's resurrectBitmap bit is set and markBitmap is clear
+//     (LiveInfo.h:204), which DoResurrection produces inside the concurrent marking segment
 //     (TracingCollector.cpp:680-698).
 // ZGC answers UpgradeStrong here (zBarrier.inline.hpp:610-620). We answer Fastpath, because the
 // two colours are the same colour.
@@ -500,13 +501,11 @@ constexpr Witness kWitnessFin = { Colour{ 0u, 0u, 0u, 0u, 0u, 0u, 0u, 0u, 0u },
 // Part 5 -- recorded divergences: stated, checked, NOT changed by this commit
 // ---------------------------------------------------------------------------
 
-// (a) A non-null word carrying no metadata at all is load-good today. Collector.h:132-140 says
-//     so deliberately, following zAddress.inline.hpp:635-643. Narrowing it is a behaviour change
-//     that pushes those values onto a slow path which has nothing to say about them -- i.e. it
-//     trades a silent admit for a silent drop. Recorded here so the next person finds it as a
-//     fact with a line number rather than as a rumour.
+// (a) A non-null word carrying no metadata still passes the negative mask by
+//     itself. The compiler pairs that mask with the positive current-remap
+//     export; keep this witness so neither half is mistaken for the predicate.
 constexpr uintptr_t kPlainNonNullWord = 0x1000u;
-constexpr bool kPlainNonNullIsLoadGoodToday =
+constexpr bool kLoadBadMaskAloneAdmitsPlainNonNull =
     (kPlainNonNullWord & ComputeBadMasks(MapleRuntime::kInitialEpochColours).loadBad) == 0;
 
 // (b) The mask predicate also admits a word that carries remap colour but no mark stamp at all.
@@ -575,7 +574,8 @@ static_assert(Action(kWitnessFin.p2, kWitnessFin.ei, kWitnessFin.ev) == Act::Upg
               "C4TABLE_WITNESS: a finalizable-marked reference should be upgraded to strong.");
 
 // Recorded, not enforced as desirable: these three say what is true today.
-static_assert(kPlainNonNullIsLoadGoodToday, "KNOWN_DIVERGENCE (a) changed; that is a behaviour change.");
+static_assert(kLoadBadMaskAloneAdmitsPlainNonNull,
+              "LOAD_GOOD_WITNESS: the negative mask unexpectedly observes a missing current bit.");
 static_assert(kMaskAdmitsUnstampedWord, "KNOWN_DIVERGENCE (b) changed; that is a behaviour change.");
 static_assert(kLiveMarkMaskCannotSeeFinalizable,
               "KNOWN_DIVERGENCE (c): the Finalizable family became visible to a live mask. That is C4 "

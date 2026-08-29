@@ -452,6 +452,7 @@ protected:
     // Also provides the resource access interfaces, such as invokeGC, waitGC.
     // This resource should be singleton and shared for multi-collectors
     CollectorResources& collectorResources;
+    U32 snapshotFinalizerNum = 0;
 
     // reason for current GC.
     GCReason gcReason = GC_REASON_USER;

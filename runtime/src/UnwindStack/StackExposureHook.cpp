@@ -10,93 +10,28 @@
 #include <cstring>
 
 #include "Base/Log.h"
-#include "Heap/Heap.h"
-#include "Heap/WCollector/WCollector.h"
-#include "Mutator/Mutator.h"
-#include "StackMap/StackMapTypeDef.h"
-#include "UnwindStack/StackFrameCursor.h"
 
 namespace MapleRuntime {
 namespace {
 std::atomic<size_t> g_fireCount{ 0 };
 std::atomic<size_t> g_advanceCount{ 0 };
-std::atomic<size_t> g_processOneCount{ 0 };
-std::atomic<size_t> g_visitorHitCount{ 0 };
 std::atomic<size_t> g_crossWithoutProcess{ 0 };
 std::atomic<size_t> g_stwInHook{ 0 };
 
 // Nesting depth of hook slow path — StopTheWorld probes this.
 thread_local int g_hookDepth = 0;
-thread_local int g_processRootsDepth = 0;
-thread_local RegSlotsMap g_iterationRegs;
 
 bool EnvIsOne(const char* name)
 {
     const char* v = std::getenv(name);
     return v != nullptr && std::strcmp(v, "1") == 0;
 }
-
-bool DropVisitor() { return EnvIsOne("MRT_GCV2_EXPOSURE_DROP_VISITOR"); }
-
-void CountVisitorHit() { g_visitorHitCount.fetch_add(1, std::memory_order_relaxed); }
-
-RootVisitor MakeCountedVisitor(const RootVisitor* bound)
-{
-    if (DropVisitor() || bound == nullptr) {
-        return [](ObjectRef&) {};
-    }
-    return [bound](ObjectRef& root) {
-        CountVisitorHit();
-        (*bound)(root);
-    };
-}
-
-DerivedPtrVisitor MakeCountedDerived(const DerivedPtrVisitor* bound)
-{
-    if (DropVisitor() || bound == nullptr) {
-        return [](BasePtrType, DerivedSlot&) {};
-    }
-    return [bound](BasePtrType base, DerivedSlot& slot) { (*bound)(base, slot); };
-}
-
-RootVisitor MakeCollectorFallbackVisitor()
-{
-    return [](ObjectRef& root) {
-        CountVisitorHit();
-        Collector& collector = Heap::GetHeap().GetCollector();
-        (void)static_cast<WCollector&>(collector).ForwardUpdateRawRef(root);
-    };
-}
-
-DerivedPtrVisitor MakeCollectorFallbackDerived()
-{
-    return [](BasePtrType, DerivedSlot&) {};
-}
-
-void ResolveVisitors(Mutator& mutator, RootVisitor& rootOut, DerivedPtrVisitor& derivedOut)
-{
-    if (DropVisitor()) {
-        rootOut = [](ObjectRef&) {};
-        derivedOut = [](BasePtrType, DerivedSlot&) {};
-        return;
-    }
-    const RootVisitor* bound = mutator.GetExposureRootVisitor();
-    const DerivedPtrVisitor* boundDerived = mutator.GetExposureDerivedVisitor();
-    if (bound != nullptr) {
-        rootOut = MakeCountedVisitor(bound);
-        derivedOut = MakeCountedDerived(boundDerived);
-        return;
-    }
-    rootOut = MakeCollectorFallbackVisitor();
-    derivedOut = MakeCollectorFallbackDerived();
-}
 } // namespace
 
 bool StackExposureHook::ProductEnabled()
 {
-    // Correctness hook: product wiring is unconditional.  Verification is
-    // separately controlled by MRT_GCV2_STACK_EXPOSURE_VERIFY.
-    return true;
+    static const bool on = false /* pinned:MRT_GCV2_STACK_EXPOSURE_HOOK */;
+    return on;
 }
 
 bool StackExposureHook::VerifyEnabled()
@@ -142,38 +77,6 @@ size_t StackExposureHook::AdvanceOnlyProcess(StackWatermark& wm, size_t needUpTo
     return target;
 }
 
-size_t StackExposureHook::ProcessFrameRoots(StackWatermark& wm, size_t needUpToExclusive)
-{
-    Mutator* mutator = Mutator::GetMutator();
-    if (mutator == nullptr || !mutator->IsManagedContext() || g_processRootsDepth > 0) {
-        return wm.GetCursorIndex();
-    }
-    ++g_processRootsDepth;
-    StackFrameCursor cursor(mutator->GetUnwindContext());
-    size_t start = wm.GetCursorIndex();
-    if (!cursor.ResumeAt(start, *mutator)) {
-        --g_processRootsDepth;
-        return start;
-    }
-    RootVisitor visitor;
-    DerivedPtrVisitor derived;
-    ResolveVisitors(*mutator, visitor, derived);
-    size_t target = needUpToExclusive;
-    if (target > cursor.FrameCount()) {
-        target = cursor.FrameCount();
-    }
-    while (cursor.Cursor() < target && !cursor.Done()) {
-        (void)cursor.ProcessOne(visitor, *mutator, &derived);
-        g_processOneCount.fetch_add(1, std::memory_order_relaxed);
-    }
-    StackWatermark::Owner o = wm.GetOwner();
-    if (o != StackWatermark::WM_OWNER_NONE) {
-        wm.AdvanceTo(cursor.Cursor(), o);
-    }
-    --g_processRootsDepth;
-    return cursor.Cursor();
-}
-
 bool StackExposureHook::RunSlowPath(StackWatermark& wm, size_t exposingFrameIndex, const ProcessFn& processFn,
                                     const char* site)
 {
@@ -215,67 +118,14 @@ bool StackExposureHook::RunSlowPath(StackWatermark& wm, size_t exposingFrameInde
 
 bool StackExposureHook::OnBeforeUnwind(StackWatermark& wm, size_t exposingFrameIndex, const ProcessFn& processFn)
 {
-    // Product wiring is unconditional; callers provide the processing policy
-    // (the product overload binds it to the mutator watermark).
+    // Product gate: when hook product flag is off, still allow verify/harness callers
+    // that pass processFn explicitly — ProductEnabled only gates auto-wired product paths.
     return RunSlowPath(wm, exposingFrameIndex, processFn, "before_unwind");
 }
 
 bool StackExposureHook::OnAfterUnwind(StackWatermark& wm, size_t topFrameIndex, const ProcessFn& processFn)
 {
     return RunSlowPath(wm, topFrameIndex, processFn, "after_unwind");
-}
-
-bool StackExposureHook::OnBeforeUnwind(Mutator& mutator, size_t exposingFrameIndex)
-{
-    StackWatermark& wm = mutator.GetStackWatermark();
-    if (!wm.IsScanning() || !mutator.IsManagedContext()) {
-        return false;
-    }
-    return OnBeforeUnwind(wm, exposingFrameIndex, ProcessFn(ProcessFrameRoots));
-}
-
-bool StackExposureHook::OnAfterUnwind(Mutator& mutator, size_t topFrameIndex)
-{
-    StackWatermark& wm = mutator.GetStackWatermark();
-    if (!wm.IsScanning() || !mutator.IsManagedContext()) {
-        return false;
-    }
-    return OnAfterUnwind(wm, topFrameIndex, ProcessFn(ProcessFrameRoots));
-}
-
-bool StackExposureHook::OnIteration(Mutator& mutator, size_t exposingFrameIndex)
-{
-    return OnBeforeUnwind(mutator, exposingFrameIndex);
-}
-
-bool StackExposureHook::OnIteration(Mutator& mutator, size_t exposingFrameIndex, const FrameInfo& frame)
-{
-    StackWatermark& wm = mutator.GetStackWatermark();
-    if (!wm.IsScanning() || !mutator.IsManagedContext()) {
-        return false;
-    }
-    if (!NeedsProcess(wm, exposingFrameIndex)) {
-        return false;
-    }
-    g_fireCount.fetch_add(1, std::memory_order_relaxed);
-    ++g_hookDepth;
-    if (exposingFrameIndex == 0) {
-        g_iterationRegs = RegSlotsMap();
-    }
-    RootVisitor visitor;
-    DerivedPtrVisitor derived;
-    ResolveVisitors(mutator, visitor, derived);
-    StackFrameCursor::ProcessFrame(frame, g_iterationRegs, visitor, mutator, &derived);
-    g_processOneCount.fetch_add(1, std::memory_order_relaxed);
-    StackWatermark::Owner o = wm.GetOwner();
-    size_t before = wm.GetCursorIndex();
-    size_t after = exposingFrameIndex + 1;
-    if (o != StackWatermark::WM_OWNER_NONE && after > before) {
-        wm.AdvanceTo(after, o);
-        g_advanceCount.fetch_add(1, std::memory_order_relaxed);
-    }
-    --g_hookDepth;
-    return true;
 }
 
 bool StackExposureHook::ObserveCrossWithoutProcess(const StackWatermark& wm, size_t exposingFrameIndex)
@@ -296,8 +146,6 @@ void StackExposureHook::NoteStopTheWorldFromHook()
 
 size_t StackExposureHook::FireCount() { return g_fireCount.load(std::memory_order_relaxed); }
 size_t StackExposureHook::AdvanceCount() { return g_advanceCount.load(std::memory_order_relaxed); }
-size_t StackExposureHook::ProcessOneCount() { return g_processOneCount.load(std::memory_order_relaxed); }
-size_t StackExposureHook::VisitorHitCount() { return g_visitorHitCount.load(std::memory_order_relaxed); }
 size_t StackExposureHook::CrossWithoutProcessCount()
 {
     return g_crossWithoutProcess.load(std::memory_order_relaxed);
@@ -308,8 +156,6 @@ void StackExposureHook::ResetStats()
 {
     g_fireCount.store(0, std::memory_order_relaxed);
     g_advanceCount.store(0, std::memory_order_relaxed);
-    g_processOneCount.store(0, std::memory_order_relaxed);
-    g_visitorHitCount.store(0, std::memory_order_relaxed);
     g_crossWithoutProcess.store(0, std::memory_order_relaxed);
     g_stwInHook.store(0, std::memory_order_relaxed);
 }

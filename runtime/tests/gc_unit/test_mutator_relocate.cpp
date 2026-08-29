@@ -1,5 +1,6 @@
 // Mutator self-relocate policy (zRelocate.cpp:382-416, zForwarding.inline.hpp:267-304).
-// Unpublished table miss = keep from, never wait.
+// A table miss is either still in flight or an invariant failure; it is never a
+// usable from-address.
 
 #include <atomic>
 #include <thread>
@@ -21,12 +22,12 @@ using namespace MapleRuntime::GcUnit;
 // the very computation its own tests checked.
 //
 // What is worth pinning is the decision the switch feeds, which holds either way.
-GC_TEST(MutatorRelocate, UnpublishedTargetIsKeptRatherThanWaitedFor)
+GC_TEST(MutatorRelocate, PublishedMissIsInvariantFailure)
 {
-    // Published + table miss = VisitLive hole. Keep-from is legal
-    // (zRelocate.cpp:403-416 / oraclecut §4).
+    // zRelocate.cpp:382-416 returns only a forwarding receipt. Once page
+    // publication is complete, a miss cannot be converted into a usable value.
     GC_EXPECT_TRUE(MutatorRelocate::AnswerUnpublished(false, true, false) ==
-                   MutatorRelocate::UnpublishedAnswer::KeepFrom);
+                   MutatorRelocate::UnpublishedAnswer::InvariantFailure);
 }
 
 GC_TEST(MutatorRelocate, UnpublishedRegionWaitsForPublish)
@@ -34,12 +35,10 @@ GC_TEST(MutatorRelocate, UnpublishedRegionWaitsForPublish)
     // oraclecut §4: !regionPublished ⇒ wait for the region-level publish
     // (FORWARDED / COMPACTED / kept). Not the object-level empty wait
     // 47595a33 deleted.
-    if (MutatorRelocate::kWaitRegionPublish) {
-        GC_EXPECT_TRUE(MutatorRelocate::AnswerUnpublished(false, false, false) ==
-                       MutatorRelocate::UnpublishedAnswer::Wait);
-        GC_EXPECT_TRUE(MutatorRelocate::AnswerUnpublished(false, false, true) ==
-                       MutatorRelocate::UnpublishedAnswer::Wait);
-    }
+    GC_EXPECT_TRUE(MutatorRelocate::AnswerUnpublished(false, false, false) ==
+                   MutatorRelocate::UnpublishedAnswer::Wait);
+    GC_EXPECT_TRUE(MutatorRelocate::AnswerUnpublished(false, false, true) ==
+                   MutatorRelocate::UnpublishedAnswer::Wait);
 }
 
 GC_TEST(MutatorRelocate, TwoThreadsInsertSameFromLoserTakesWinner)
@@ -131,13 +130,13 @@ GC_TEST(MutatorRelocate, ForwardedPublicationRequiresNonNullReceipt)
     GC_EXPECT_TRUE(ForwardingTable::ReceiptAllowsForwarded(0x2000));
 }
 
-GC_TEST(MutatorRelocate, ForwardedRegionNoEntryKeepsFrom)
+GC_TEST(MutatorRelocate, ForwardedRegionNoEntryCannotReturnFrom)
 {
     const bool tableHit = false;
     const bool regionPublished = true;
     const bool retainRefused = false;
     GC_EXPECT_TRUE(MutatorRelocate::AnswerUnpublished(tableHit, regionPublished, retainRefused) ==
-                   MutatorRelocate::UnpublishedAnswer::KeepFrom);
+                   MutatorRelocate::UnpublishedAnswer::InvariantFailure);
     ForwardingEntries* tab = ForwardingEntries::Create(4, 0x1000, 0);
     GC_EXPECT_EQ(tab->find(0x1010), static_cast<MAddress>(0));
     tab->Destroy();
@@ -152,7 +151,7 @@ GC_TEST(FwdSpin, LockedWaiterSeesInsertBeforeUnlock)
     GC_EXPECT_TRUE(MutatorRelocate::AnswerLockedWaiter(true, false) ==
                    MutatorRelocate::LockedWaiterAnswer::UseTo);
     GC_EXPECT_TRUE(MutatorRelocate::AnswerLockedWaiter(false, true) ==
-                   MutatorRelocate::LockedWaiterAnswer::UsePlanned);
+                   MutatorRelocate::LockedWaiterAnswer::InvariantFailure);
     GC_EXPECT_TRUE(MutatorRelocate::AnswerLockedWaiter(false, false) ==
                    MutatorRelocate::LockedWaiterAnswer::Yield);
 

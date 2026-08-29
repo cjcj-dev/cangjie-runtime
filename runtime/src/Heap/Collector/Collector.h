@@ -284,8 +284,12 @@ public:
             return target;
         }
 
-        BaseObject* remapped = relocate_or_remap_object(target, remap_generation(ref));
-        return remapped == nullptr ? target : remapped;
+        // ZGC's relocate_or_remap_object has no "return the from oop" exit
+        // (zRelocate.cpp:382-416).  A failed lookup is therefore represented
+        // as null for internal walkers; callers that hand values to mutators
+        // must use the load-barrier slow path, which fails closed rather than
+        // laundering the unresolved address into a load-good value.
+        return relocate_or_remap_object(target, remap_generation(ref));
     }
 
     // OpenJDK ZPointer::is_mark_good (zAddress.inline.hpp:658-664): mark-good includes load-good,

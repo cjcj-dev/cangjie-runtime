@@ -62,11 +62,9 @@ const DumpAtExit g_dumpAtExit;
 
 bool GateEnabled()
 {
-    static const bool enabled = []() {
-        const char* value = std::getenv("CJRT_FROM_REUSE_GATE");
-        return value != nullptr && std::strcmp(value, "1") == 0;
-    }();
-    return enabled;
+    // Page detach is a correctness precondition, not an optional diagnostic
+    // mode (zRelocate.cpp:1041-1047).
+    return true;
 }
 
 ReusePermitScope::ReusePermitScope() { ++g_reusePermitDepth; }
@@ -111,7 +109,7 @@ bool FromPageDetachCheck(const RegionInfo* region, Site site, Action action)
     const MAddress start = region->GetRegionStart();
     const size_t size = region->GetRegionSizeForDetachCheck();
     const bool activeTable = ForwardingTable::GetEntries(start) != nullptr;
-    bool retiredTable = ForwardingTable::RetiredCovers(start, size);
+    const bool retiredTable = ForwardingTable::RetiredCovers(start, size);
     const bool retiredObserved = retiredTable;
     const bool routeDestHeld = region->IsRouteDestHeld();
     const int32_t refCount = region->ForwardingRefCount();
@@ -126,22 +124,16 @@ bool FromPageDetachCheck(const RegionInfo* region, Site site, Action action)
     const bool forwardingClaimActive = refCount < 0 || (region->ForwardingClaimed() && refCount != 0);
     const bool forwardingReleased = refCount == 0 && region->IsForwardingDone();
     const bool copyInflight = region->CopyInflight() != 0;
-    // An active table and its construction token are normal until detach. Keep
-    // them visible in the census, but do not call them an unhealed reader. A
-    // retired covering table is different: reuse can erase the only remaining
-    // answer for a stale slot, which is the i2 two-clock population.
-    const bool otherEvidence = routeDestHeld || forwardingReaders || forwardingClaimActive || copyInflight;
-    if (action == Action::MAJOR_CLOSE && GateEnabled() && retiredTable && !otherEvidence) {
-        // zRelocate.cpp:1018-1047: the remap closure is complete. No retained
-        // reader or route destination still names this page, so the retired
-        // answer has reached its actual grace condition and can be detached.
-        ForwardingTable::DropRetiredCovering(start, size);
-        retiredTable = ForwardingTable::RetiredCovers(start, size);
-    }
-    const bool any = retiredTable || otherEvidence;
+    // Forwarding objects are off-page metadata. Keep active and retired tables
+    // visible in the census, but page reuse depends only on page-local detach
+    // state. The retired object remains queryable until relocation-set coverage
+    // reclaims it (zRelocate.cpp:1041-1047; zRelocationSet.cpp:191-197).
+    const bool pageEvidence = routeDestHeld || forwardingReaders || forwardingClaimActive || copyInflight;
+    (void)action;
+    const bool any = pageEvidence;
 
     out.withEvidence.fetch_add(any ? 1 : 0, std::memory_order_relaxed);
-    const bool blocked = GateEnabled() && g_reusePermitDepth == 0 && any;
+    const bool blocked = g_reusePermitDepth == 0 && any;
     out.blocked.fetch_add(blocked ? 1 : 0, std::memory_order_relaxed);
     out.activeTable.fetch_add(activeTable ? 1 : 0, std::memory_order_relaxed);
     out.retiredTable.fetch_add(retiredObserved ? 1 : 0, std::memory_order_relaxed);
@@ -191,7 +183,7 @@ void DumpSummary()
                      "[GCV2][detach-check] phase=%s site=%s checks=%llu evidence=%llu blocked=%llu "
                      "active_table=%llu retired_table=%llu route_dest_held=%llu fwd_positive=%llu "
                      "fwd_readers=%llu fwd_claimed=%llu fwd_released=%llu copy_inflight=%llu\n",
-                     GateEnabled() ? "enforce" : "measure", SiteName(site),
+                     "enforce", SiteName(site),
                      static_cast<unsigned long long>(c.checks),
                      static_cast<unsigned long long>(c.withEvidence),
                      static_cast<unsigned long long>(c.blocked),

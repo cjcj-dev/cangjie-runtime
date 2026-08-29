@@ -229,7 +229,6 @@ GC_OTHER_VM_TEST(LoadFc, SwapOldValueFailsClosedOnZeroHeader)
         (void)CJ_MCC_AtomicSwapReference(newRef, fx.heap.obj1, &field, std::memory_order_seq_cst);
     });
 }
-
 GC_TEST(LoadFc, SwapOldValueHealthyTargetReturnsNormally)
 {
     LoadFcFixture fx;

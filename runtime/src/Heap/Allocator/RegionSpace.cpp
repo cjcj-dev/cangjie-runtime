@@ -94,7 +94,7 @@ MAddress RegionSpace::Allocate(size_t size, AllocType allocType)
         // there is no reschedule/attempt counter loop on this path.
         const size_t claimedUnits = regionManager.StallAllocation(allocSize);
         if (claimedUnits == 0) {
-            regionManager.DumpRegionStats("region statistics when gc ends", true);
+            regionManager.DumpRegionStats("region statistics when gc ends");
             VLOG(REPORT, "Cannot allocate memory of %zu(B), throw an OutOfMemory exception", size);
             LOG(RTLOG_ERROR, "Cannot allocate memory of %zu(B), throw an OutOfMemory exception", size);
             ExceptionManager::OutOfMemory();

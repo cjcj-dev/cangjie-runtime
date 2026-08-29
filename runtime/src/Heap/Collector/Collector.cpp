@@ -353,6 +353,8 @@ HandVerdict Collector::JudgeHandOutTarget(BaseObject* target)
                                   "unresolved non-Usable from-address must not be handed out",
                                   site != nullptr ? site : "?", static_cast<void*>(target),
                                   static_cast<unsigned>(verdict), slotBits);
+    (void)fflush(stderr);
+    (void)fflush(stdout);
     std::abort();
 }
 

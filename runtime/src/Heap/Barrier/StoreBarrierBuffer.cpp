@@ -18,8 +18,8 @@
 
 namespace MapleRuntime {
 
-#if defined(MRT_GC_UNIT_TESTS)
 namespace {
+#if defined(MRT_GC_UNIT_TESTS)
 thread_local StoreBarrierFlushObserver g_flushObserver = nullptr;
 
 void NotifyFlushObserver(StoreBarrierFlushEvent event, const StoreBarrierEntry& entry)
@@ -28,8 +28,30 @@ void NotifyFlushObserver(StoreBarrierFlushEvent event, const StoreBarrierEntry& 
         g_flushObserver(event, entry);
     }
 }
+#endif
+
+MAddress RemapPendingField(const StoreBarrierEntry& entry)
+{
+    if (entry.pBase == nullptr) {
+        return entry.p;
+    }
+    const GCPhase phase = Heap::GetHeap().GetGCPhase();
+    if (phase != GCPhase::GC_PHASE_PREFORWARD && phase != GCPhase::GC_PHASE_FORWARD) {
+        return entry.p;
+    }
+
+    // ZStoreBarrierBuffer::on_new_phase_relocate: make the base load-good,
+    // then reconstruct p with the offset captured while the from object was
+    // still readable (zStoreBarrierBuffer.cpp:130-153).
+    BaseObject* const remappedBase = Heap::GetHeap().GetCollector().ResolveStoreValue(entry.pBase);
+    CHECK_DETAIL(remappedBase != nullptr && Heap::IsHeapAddress(remappedBase),
+                 "store-buffer holder did not resolve base=%p slot=%#zx phase=%u",
+                 entry.pBase, entry.p, static_cast<unsigned>(phase));
+    return entry.Remap(remappedBase);
+}
 } // namespace
 
+#if defined(MRT_GC_UNIT_TESTS)
 void StoreBarrierBuffer::SetFlushObserverForTest(StoreBarrierFlushObserver observer)
 {
     g_flushObserver = observer;
@@ -49,19 +71,46 @@ StoreBarrierInstallState StoreBarrierBuffer::CaptureInstallState()
                                       static_cast<uintptr_t>(::g_cjStoreGoodMask) };
 }
 
+void StoreBarrierBuffer::Add(MAddress fieldAddress, BaseObject* fieldBase, RememberedSet& rs)
+{
+    Add(fieldAddress, fieldBase, zpointer::null, CaptureInstallState(), rs);
+}
+
 void StoreBarrierBuffer::Add(MAddress fieldAddress, zpointer prev, RememberedSet& rs)
 {
-    Add(fieldAddress, prev, CaptureInstallState(), rs);
+    Add(fieldAddress, nullptr, prev, CaptureInstallState(), rs);
+}
+
+void StoreBarrierBuffer::Add(MAddress fieldAddress, BaseObject* fieldBase, zpointer prev, RememberedSet& rs)
+{
+    Add(fieldAddress, fieldBase, prev, CaptureInstallState(), rs);
 }
 
 void StoreBarrierBuffer::Add(MAddress fieldAddress, zpointer prev, StoreBarrierInstallState installed,
                              RememberedSet& rs)
 {
+    Add(fieldAddress, nullptr, prev, installed, rs);
+}
+
+void StoreBarrierBuffer::Add(MAddress fieldAddress, BaseObject* fieldBase, zpointer prev,
+                             StoreBarrierInstallState installed, RememberedSet& rs)
+{
+    if (!kBufferStoreBarriers) {
+        rs.Record(fieldAddress, true);
+        return;
+    }
     if (current == 0) {
         Flush(rs);
     }
+    CHECK_DETAIL(fieldBase == nullptr || fieldAddress >= reinterpret_cast<MAddress>(fieldBase),
+                 "store-buffer field precedes holder slot=%#zx holder=%p", fieldAddress, fieldBase);
     --current;
-    buffer[current] = StoreBarrierEntry { fieldAddress, prev, installed };
+    buffer[current].p = fieldAddress;
+    buffer[current].pBase = fieldBase;
+    buffer[current].pOffset = fieldBase == nullptr ? 0 :
+        static_cast<size_t>(fieldAddress - reinterpret_cast<MAddress>(fieldBase));
+    buffer[current].prev = prev;
+    buffer[current].installed = installed;
 }
 
 bool StoreBarrierBuffer::InstalledDuringCurrentMark(const StoreBarrierEntry& entry)
@@ -71,11 +120,6 @@ bool StoreBarrierBuffer::InstalledDuringCurrentMark(const StoreBarrierEntry& ent
         phase != GCPhase::GC_PHASE_CLEAR_SATB_BUFFER) {
         return false;
     }
-
-    // ZGC processes each pending entry with the buffer's last processed
-    // colour (zStoreBarrierBuffer.cpp:194-218).  Comparing only the generation
-    // whose mark owned this entry preserves it across an unrelated-generation
-    // flip, but rejects it after its own mark epoch has changed.
     const uintptr_t epochMask = entry.installed.youngMark ? MARKED_YOUNG_MASK : MARKED_OLD_MASK;
     return (entry.installed.storeGood & epochMask) ==
         (static_cast<uintptr_t>(::g_cjStoreGoodMask) & epochMask);
@@ -86,13 +130,11 @@ bool StoreBarrierBuffer::RetirePrevious(const StoreBarrierEntry& entry, Collecto
     if (is_null(entry.prev) || !InstalledDuringCurrentMark(entry)) {
         return false;
     }
-
     RefField<> previous(entry.prev);
     BaseObject* const resolved = collector.make_load_good(previous);
     if (resolved == nullptr || !Heap::IsHeapAddress(resolved)) {
         return false;
     }
-
     SatbBuffer::Node* node = nullptr;
     SatbBuffer& satb = SatbBuffer::Instance();
     satb.EnsureGoodNode(node);
@@ -106,21 +148,21 @@ bool StoreBarrierBuffer::RetirePrevious(const StoreBarrierEntry& entry, Collecto
 
 void StoreBarrierBuffer::MarkAndRemember(const StoreBarrierEntry& entry, RememberedSet& rs)
 {
-    // ZBarrier::remember only publishes old-holder slots.  Young-holder
-    // entries still carry a valid SATB half, but putting their addresses in
-    // the old-to-young remembered set lets the slot outlive its young region.
-    if (!Heap::IsHeapAddress(entry.p) || RegionInfo::GetRegionInfoAt(entry.p)->IsYoungRegion()) {
+    StoreBarrierEntry remapped = entry;
+    remapped.p = RemapPendingField(entry);
+    if (!Heap::IsHeapAddress(remapped.p) || RegionInfo::GetRegionInfoAt(remapped.p)->IsYoungRegion()) {
         return;
     }
-    rs.Record(entry.p, true);
+    rs.Record(remapped.p, true);
 }
 
 void StoreBarrierBuffer::Flush(RememberedSet& rs, Collector& collector)
 {
-    for (size_t i = current; i < BufferLength; ++i) {
+    if (!kBufferStoreBarriers) {
+        return;
+    }
+    for (size_t i = current; i < kStoreBarrierBufferLength; ++i) {
         const StoreBarrierEntry& entry = buffer[i];
-        // ZGC flush order: make_load_good(prev) and retain it first, then
-        // mark_and_remember(p) (zStoreBarrierBuffer.cpp:278-282).
         if (RetirePrevious(entry, collector)) {
 #if defined(MRT_GC_UNIT_TESTS)
             NotifyFlushObserver(StoreBarrierFlushEvent::PREVIOUS_RETIRED, entry);
@@ -132,29 +174,37 @@ void StoreBarrierBuffer::Flush(RememberedSet& rs, Collector& collector)
 #endif
         buffer[i] = {};
     }
-    current = BufferLength;
+    current = kStoreBarrierBufferLength;
 }
 
 void StoreBarrierBuffer::Flush(RememberedSet& rs)
 {
-    for (size_t i = current; i < BufferLength; ++i) {
+    if (!kBufferStoreBarriers) {
+        return;
+    }
+    for (size_t i = current; i < kStoreBarrierBufferLength; ++i) {
         if (!is_null(buffer[i].prev) && InstalledDuringCurrentMark(buffer[i])) {
             Flush(rs, Heap::GetHeap().GetCollector());
             return;
         }
     }
-
-    // Idle entries have no SATB half. Avoid asking CollectorProxy for a current
-    // collector before Heap::Init; gc_unit exercises this same product path.
-    for (size_t i = current; i < BufferLength; ++i) {
+    for (size_t i = current; i < kStoreBarrierBufferLength; ++i) {
         MarkAndRemember(buffer[i], rs);
         buffer[i] = {};
     }
-    current = BufferLength;
+    current = kStoreBarrierBufferLength;
+}
+
+void StoreBarrierBuffer::Discard()
+{
+    current = kStoreBarrierBufferLength;
 }
 
 void StoreBarrierBuffer::FlushAll(RememberedSet& rs)
 {
+    if (!kBufferStoreBarriers) {
+        return;
+    }
     Heap::GetHeap().GetAllocator().VisitAllocBuffers([&rs](AllocBuffer& alloc) {
         alloc.GetStoreBarrierBuffer().Flush(rs);
     });

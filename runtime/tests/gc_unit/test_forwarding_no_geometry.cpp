@@ -73,7 +73,7 @@ GC_TEST(ForwardingNoGeometry, ArmedMissIsNullNotGeometry)
 
     const MAddress stored = fx.heapStart + RegionInfo::UNIT_SIZE + 128;
     ForwardingTable::ClearEntries(fx.region0->GetRegionStart(), fx.region0->GetRegionSize());
-    ForwardingTable::DropRetiredCovering(fx.region0->GetRegionStart(), fx.region0->GetRegionSize());
+    ForwardingTable::ReclaimRetired("gc-unit-explicit-coverage");
     GC_EXPECT_TRUE(ForwardingTable::PreparePublicationGeneration(
         fx.region0->GetRegionStart(), fx.region0->GetRegionSize()));
     GC_EXPECT_TRUE(ForwardingTable::InstallPublicationBeforeCopy(
@@ -89,7 +89,7 @@ GC_TEST(ForwardingNoGeometry, ArmedMissIsNullNotGeometry)
 
     ForwardingTable::Remove(fx.region0->GetRegionStart(), fx.region0->GetRegionSize());
     ForwardingTable::ClearEntries(fx.region0->GetRegionStart(), fx.region0->GetRegionSize());
-    ForwardingTable::DropRetiredCovering(fx.region0->GetRegionStart(), fx.region0->GetRegionSize());
+    ForwardingTable::ReclaimRetired("gc-unit-explicit-coverage");
     fx.region0->SetRouteState(RegionInfo::NORMAL);
     fx.region0->RetireFromPageMetadata();
     fx.region0->metadata.liveInfo = nullptr;
@@ -141,7 +141,7 @@ GC_TEST(ForwardingNoGeometry, ArmedLookupAndSuccessfulExclusiveCopyPublishProduc
 
     const MAddress stored = fx.heapStart + RegionInfo::UNIT_SIZE + 128;
     ForwardingTable::ClearEntries(fx.region0->GetRegionStart(), fx.region0->GetRegionSize());
-    ForwardingTable::DropRetiredCovering(fx.region0->GetRegionStart(), fx.region0->GetRegionSize());
+    ForwardingTable::ReclaimRetired("gc-unit-explicit-coverage");
     GC_EXPECT_TRUE(ForwardingTable::PreparePublicationGeneration(
         fx.region0->GetRegionStart(), fx.region0->GetRegionSize()));
     GC_EXPECT_TRUE(ForwardingTable::InstallPublicationBeforeCopy(
@@ -198,7 +198,7 @@ GC_TEST(ForwardingNoGeometry, ArmedLookupAndSuccessfulExclusiveCopyPublishProduc
 
     ForwardingTable::Remove(fx.region0->GetRegionStart(), fx.region0->GetRegionSize());
     ForwardingTable::ClearEntries(fx.region0->GetRegionStart(), fx.region0->GetRegionSize());
-    ForwardingTable::DropRetiredCovering(fx.region0->GetRegionStart(), fx.region0->GetRegionSize());
+    ForwardingTable::ReclaimRetired("gc-unit-explicit-coverage");
     fx.region0->SetRouteState(RegionInfo::NORMAL);
     fx.region0->RetireFromPageMetadata();
     fx.region0->metadata.liveInfo = nullptr;

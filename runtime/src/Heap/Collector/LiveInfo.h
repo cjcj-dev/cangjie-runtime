@@ -294,6 +294,8 @@ struct RegionBitmap {
 struct LiveInfo {
     static constexpr MAddress TEMPORARY_PTR = 0x1234;
     RegionInfo* bindedRegion = nullptr;
+    RegionBitmap* resurrectBitmap = nullptr;
+    RegionBitmap* enqueueBitmap = nullptr;
 
     template<Generation G>
     bool IsSurvivedObject(MarkView<G> view, size_t offset) const
@@ -304,7 +306,10 @@ struct LiveInfo {
             reinterpret_cast<MAddress>(markBitmap) != TEMPORARY_PTR && markBitmap->IsLive(offset)) {
             return true;
         }
-        return false;
+        // Resurrection is a major/old decision.  A young closure is not complete
+        // for old/large objects and must not inherit an old resurrection verdict.
+        return G == Generation::Old && resurrectBitmap != nullptr &&
+            reinterpret_cast<MAddress>(resurrectBitmap) != TEMPORARY_PTR && resurrectBitmap->IsMarked(offset);
     }
 
     template<Generation G>
@@ -313,7 +318,8 @@ struct LiveInfo {
         const MarkFace& face = GetMarkFace();
         RegionBitmap* markBitmap = __atomic_load_n(&face.bitmap, std::memory_order_acquire);
         const bool current = face.epoch.load(std::memory_order_acquire) == view.GetEpoch();
-        return !current || markBitmap == nullptr ? 0 : markBitmap->GetLiveBytes();
+        return (!current || markBitmap == nullptr ? 0 : markBitmap->GetLiveBytes()) +
+            (G != Generation::Old || resurrectBitmap == nullptr ? 0 : resurrectBitmap->GetLiveBytes());
     }
 
     template<Generation G>
@@ -322,7 +328,8 @@ struct LiveInfo {
         const MarkFace& face = GetMarkFace();
         RegionBitmap* markBitmap = __atomic_load_n(&face.bitmap, std::memory_order_acquire);
         const bool current = face.epoch.load(std::memory_order_acquire) == view.GetEpoch();
-        return !current || markBitmap == nullptr ? 0 : markBitmap->RecomputeLiveBytes();
+        return (!current || markBitmap == nullptr ? 0 : markBitmap->RecomputeLiveBytes()) +
+            (G != Generation::Old || resurrectBitmap == nullptr ? 0 : resurrectBitmap->RecomputeLiveBytes());
     }
 
 private:
@@ -360,6 +367,9 @@ private:
         RegionBitmap* markBitmap = __atomic_load_n(&face.bitmap, std::memory_order_acquire);
         if (face.epoch.load(std::memory_order_acquire) == view.GetEpoch() && markBitmap != nullptr) {
             liveBytes += markBitmap->GetPreLiveBytes(maskInfo);
+        }
+        if (G == Generation::Old && resurrectBitmap != nullptr) {
+            liveBytes += resurrectBitmap->GetPreLiveBytes(maskInfo);
         }
         return liveBytes;
     }

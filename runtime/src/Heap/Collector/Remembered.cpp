@@ -54,7 +54,6 @@
 #include "Heap/Verify/NwDropAudit.h"
 #include "Heap/Verify/GarbRegionDiag.h"
 #include "Heap/Verify/Stw2CurrentAudit.h"
-#include "Heap/Verify/NullRouteCaller.h"
 #include "Heap/Verify/SurvNodeDiag.h"
 #include "Heap/Collector/PromotedRegionDomain.h"
 #include "Heap/Verify/CsetEmptyWho.h"
@@ -445,235 +444,43 @@ void NoteResolveRootNull(void* rootSlot, BaseObject* from, BaseObject* to, Regio
 #endif
 void WCollector::FixOldTaggedRefField(BaseObject* holder, RefField<>& field, const ScopedStopTheWorld& stw)
 {
-    RefField<> oldField(field);
-    const bool oldPointer = IsOldPointer(oldField);
-    BaseObject* fromObj = to_object(oldField.GetTargetObject());
-    // ZGC heals the concrete oop slot after resolving through its forwarding
-    // table (zBarrier.inline.hpp:318-340), and remap_young_roots applies that
-    // barrier to every selected root/remset slot before the next relocate flip
-    // (zGeneration.cpp:1408-1523). A remap colour can wrap here, so colour alone
-    // cannot prove that the address is already the to-version. The postflip
-    // full-heap closure already owns every slot under STW; consume the current
-    // forwarding receipt before the table is retired.
-    BaseObject* receipt = nullptr;
-    if (!oldPointer && fromObj != nullptr && Heap::IsHeapAddress(fromObj)) {
-        ZForwarding* forwarding = ForwardingTable::GetEntries(reinterpret_cast<MAddress>(fromObj));
-        if (forwarding != nullptr) {
-            const MAddress to = forwarding->find(reinterpret_cast<MAddress>(fromObj));
-            const MAddress live = to == 0 ? 0 : forwarding->resolve_live(to);
-            if (live != 0) {
-                receipt = reinterpret_cast<BaseObject*>(live);
-            } else if (to != 0) {
-                ZForwarding::StaleToLifeCount().fetch_add(1, std::memory_order_relaxed);
-            }
-        }
-    }
-    if (!oldPointer && receipt == nullptr) {
+    (void)holder;
+    (void)stw;
+    RefField<> observed(field);
+    BaseObject* from = to_object(observed.GetTargetObject());
+    if (from == nullptr) {
         return;
     }
-    // The non-heap arm below (:1845) already knows this field can hold a TypeInfo*, a binary
-    // constant or immortal metadata -- but it tested `latest`, i.e. after the route lookup had
-    // already run on `fromObj`. PlanRouteUnderStw -> PlanRoute -> PlanRouteLookup ->
-    // GetGhostFromRegionAt -> GetUnitIdxAt asserts OOB for an address outside the heap, so a
-    // non-heap old-tagged field aborts the process before the arm meant to handle it is reached:
-    //
-    //   F GetUnitIdxAt OOB addr=0x6282f2cd8c40 heap=[0x719247600000, 0x719257600000)
-    //     ra0=RegionManager::PlanRouteLookup  ra1=WCollector::FixOldTaggedRefField
-    //
-    // 0x6282f2... is the compiler's own image (the same range as start_ip in the SKIPPED_WHO
-    // lines of that run), not the heap.  Reproduced first try: cjcj::cjc --package
-    // packages/basic/src --output-type=staticlib on a coloured host runtime.
-    //
-    // The three sibling sites all gate before the lookup -- ResolveMinorReference (:2849),
-    // FindToVersion (WCollector.h:495) and ForwardUpdateRawRef (:1611).  This one did not.
-    BaseObject* latest = receipt != nullptr ? receipt : fromObj;
-    if (receipt == nullptr && fromObj != nullptr && Heap::IsHeapAddress(fromObj)) {
-        BaseObject* dest = PlanRouteUnderStw(fromObj, stw).dest;
-        if (dest != nullptr) {
-            latest = dest;
-        }
+    // ZGC remaps selected roots and live object fields; dead holders are not
+    // consumers and therefore do not need a manufactured replacement value.
+    if (!HolderObjectIsLive(holder)) {
+        return;
     }
-    // Non-heap targets (TypeInfo*, binary constants, immortal metadata): address is
-    // outside the managed heap, so IsHeapAddress/IsValidObject are structurally false.
-    // After Flip their colour is IsOldPointer, but the payload is still the live
-    // non-heap pointer. Recolour only — never CAS null.
-    // nullslot evidence (selfhost×main probe): reason=latest_not_heap was 58-60/64 of
-    // f3_fix_oldtag null writes; nulling those slots is what zeros TypeInfo* →
-    // GetMTable(rdi=0) and sibling null-field SEGV under in_par_fix.
-    // Same non-heap arm as ResolveMinorReference (never CAS null on non-heap).
-    if (latest != nullptr && !Heap::IsHeapAddress(latest)) {
-        RefField<> newField = RootSlotWriteback(latest, field);
-        if (oldField.GetFieldValue() != newField.GetFieldValue()) {
-            (void)HealSlot(field, oldField.GetFieldValue(), newField.GetFieldValue(),
+    if (!Heap::IsHeapAddress(from)) {
+        RefField<> plain = RootSlotWriteback(from, field);
+        if (observed.GetFieldValue() != plain.GetFieldValue()) {
+            (void)HealSlot(field, observed.GetFieldValue(), plain.GetFieldValue(),
                            HealSite::WCollectorFixOldTaggedNonHeap);
         }
         return;
     }
-    // Classify latest for the dead-residue arm. Two different failures share
-    // !latestLive and must NOT share the same write:
-    //
-    //   true dead (region null/free/garbage, or latest null): one-gen-stale
-    //   remset/root residue after Flip — soft-null so major F5 is not hit on a
-    //   detector path (e8e092f6).
-    //
-    //   invalid_object in an *active* region (RECENT_FULL etc.): FindToVersion /
-    //   RouteObject returned a to-address whose TypeInfo tip is null (heap-hole
-    //   shape: reserved to-space not filled — HEAP_HOLE_AUDIT_0805 H1). Nulling
-    //   that slot zeros a field of a still-valid holder (nullslot run16:
-    //   holderValid=1, rtype=2, latestValid=0) → mutator si=0x18 / same-fn hang
-    //   under colourrt/satbspin. Prefer a still-valid from (ghosts live until
-    //   Unbind); otherwise leave the old-tag alone (9870d148 leave-alone).
-    //   Never invent null on that arm.
-    RegionInfo* latestRegion = nullptr;
-    bool latestInActiveRegion = false;
-    bool latestValidObj = false;
-    if (Heap::IsHeapAddress(latest)) {
-        latestRegion = RegionInfo::TryGetRegionInfoAt(reinterpret_cast<MAddress>(latest));
-        latestInActiveRegion = latestRegion != nullptr && !latestRegion->IsFreeRegion() &&
-                               !latestRegion->IsGarbageRegion();
-        if (latestInActiveRegion) {
-            latestValidObj = latest->IsValidObject();
-        }
-    }
-    bool latestLive = latestInActiveRegion && latestValidObj;
-    if (!latestLive) {
-        const char* reason = "unknown";
-        unsigned rtype = 0;
-        int latestValid = -1;
-        if (latest == nullptr) {
-            reason = "latest_null";
-        } else if (!Heap::IsHeapAddress(latest)) {
-            reason = "latest_not_heap";
-        } else if (latestRegion == nullptr) {
-            reason = "region_null";
-        } else if (latestRegion->IsFreeRegion()) {
-            reason = "region_free";
-            rtype = static_cast<unsigned>(latestRegion->GetRegionType());
-            GarbRegionDiag::NoteF3Join(latestRegion, latest, reason);
-        } else if (latestRegion->IsGarbageRegion()) {
-            reason = "region_garbage";
-            rtype = static_cast<unsigned>(latestRegion->GetRegionType());
 
-            GarbRegionDiag::NoteF3Join(latestRegion, latest, reason);
-        } else {
-            latestValid = latestValidObj ? 1 : 0;
-            reason = latestValid ? "valid_but_not_live" : "invalid_object";
-            rtype = static_cast<unsigned>(latestRegion->GetRegionType());
-        }
-        size_t whyN = g_nullslotF3.load(std::memory_order_relaxed);
-        if (NullslotProbeEnabled() && whyN < 64) {
-            LOG(RTLOG_ERROR,
-                "[GCV2][nullslot][f3why] n=%zu reason=%s rtype=%u latestValid=%d "
-                "holder=%p field=%p from=%p latest=%p",
-                whyN, reason, rtype, latestValid, holder, &field, fromObj, latest);
-        }
+    // zBarrier.inline.hpp:294-343: resolve through forwarding, completing
+    // relocation on this thread when necessary, before self-healing the slot.
+    // No route miss, invalid tip, or stale from-address is an installable value.
+    BaseObject* resolved = ResolveStoreValue(from);
+    CHECK_DETAIL(resolved != nullptr && Heap::IsHeapAddress(resolved),
+                 "old-tag heal requires a resolved heap address from=%p", from);
+    CHECK_DETAIL(Collector::JudgeHandOutTarget(resolved) == HandVerdict::Usable,
+                 "old-tag heal requires a usable target from=%p resolved=%p", from, resolved);
+    CHECK_DETAIL(!IsStaleStoreValue(resolved),
+                 "old-tag heal must not install a relocation-set address from=%p resolved=%p",
+                 from, resolved);
 
-        // Active-region bad tip: do not CAS-null. Try identity from, else leave alone.
-        if (latestInActiveRegion && !latestValidObj) {
-            (void)NoteF3DeadarmHit("invalid_object", holder);
-            bool fromLive = false;
-            if (fromObj != nullptr && Heap::IsHeapAddress(fromObj) && fromObj != latest) {
-                RegionInfo* fromRegion = RegionInfo::TryGetRegionInfoAt(reinterpret_cast<MAddress>(fromObj));
-                fromLive = fromRegion != nullptr && !fromRegion->IsFreeRegion() &&
-                           !fromRegion->IsGarbageRegion() && fromObj->IsValidObject();
-            }
-            if (fromLive) {
-                static std::atomic<size_t> g_f3BadTipFrom{ 0 };
-                size_t n = g_f3BadTipFrom.fetch_add(1, std::memory_order_relaxed);
-                if (n < 16) {
-                    VLOG(REPORT,
-                         "[GCV2][F3-badtip] holder=%p field=%p from=%p latest=%p — recolour from",
-                         holder, &field, fromObj, latest);
-                }
-                latest = fromObj;
-                // Fall through to RootSlotWriteback(latest).
-            } else {
-                static std::atomic<size_t> g_f3BadTipSkip{ 0 };
-                size_t n = g_f3BadTipSkip.fetch_add(1, std::memory_order_relaxed);
-                if (n < 16) {
-                    VLOG(REPORT,
-                         "[GCV2][F3-badtip] holder=%p field=%p from=%p latest=%p — leave old-tag",
-                         holder, &field, fromObj, latest);
-                }
-                return;
-            }
-        } else if (fromObj != nullptr && Heap::IsHeapAddress(fromObj) && fromObj->IsValidObject() &&
-                   latestRegion != nullptr && latestRegion->IsGhostFromRegion() &&
-                   !latestRegion->IsFreeRegion()) {
-            // cjpmnull / 47595a33: kUnpublishedMeansKeepFrom leaves live holders pointing
-            // at a from-copy whose region is already GARBAGE (CollectRegion after VisitLive).
-            // Linux keeps the mapping; the payload is still a ValidObject. Soft-null here
-            // zeros a keep-from slot (garbregion f3_liveGt0 == f3_garbage). Recolour from
-            // — same write as the non-heap arm. Not an IsValidObject / Plausible gate change.
-            static std::atomic<size_t> g_f3KeepFromGhost{ 0 };
-            size_t n = g_f3KeepFromGhost.fetch_add(1, std::memory_order_relaxed) + 1;
-            if (n <= 8 || (n & (n - 1)) == 0) {
-                LOG(RTLOG_ERROR,
-                    "[GCV2][F3-keep-from-ghost] n=%zu holder=%p field=%p from=%p latest=%p "
-                    "reason=%s rtype=%u — recolour from",
-                    n, holder, &field, fromObj, latest, reason, rtype);
-            }
-            latest = fromObj;
-            // Fall through to RootSlotWriteback(latest).
-        } else {
-            // True dead residue: soft-null by default (e8e092f6).
-            // f3arm: always-on classified counters.
-            // f3weak: holder passed so weak_holder overlay can count IsWeakRef holders.
-            // oraclegate: layer true-dead by HOLDER liveness. Reachability: a marked (live)
-            // holder cannot hold a strong ref to a dead target -- when the classifier says it
-            // does, an earlier pass failed (mark hole / premature region free) and the slot is
-            // corruption evidence, not residue. Nulling it here is what turned that evidence
-            // into the delayed compiled-fast-path null crash (cjpm 1s: a live String's bytes
-            // slot nulled, read later with no barrier -- si_addr=0x10 movzbl 0x10(%r13,%r10)).
-            // Leave the old-tag: the reader slow path still gets FindTo -> FindRetiredTo (the
-            // retired generation may hold the true to-version) -- a real recovery path that a
-            // null destroys. Dead holders (the ~6.6k region_free bulk) keep the null: the F5
-            // no-stale-tags contract is unchanged where it matters, and in a correct heap this
-            // exemption set is empty by reachability, so it cannot retain true dead residue.
-            if (HolderObjectIsLive(holder)) {
-                static std::atomic<size_t> g_f3LiveHole{ 0 };
-                size_t lh = g_f3LiveHole.fetch_add(1, std::memory_order_relaxed) + 1;
-                if (lh <= 16 || (lh & (lh - 1)) == 0) {
-                    LOG(RTLOG_ERROR,
-                        "[GCV2][f3-livehole] n=%zu reason=%s rtype=%u holder=%p field=%p "
-                        "from=%p latest=%p — live holder, dead-classified target: keep slot",
-                        lh, reason, rtype, holder, &field, fromObj, latest);
-                }
-                return;
-            }
-            const char* deadReason = NoteF3DeadarmHit(reason, holder);
-            static std::atomic<size_t> g_f3DeadLogged{ 0 };
-            size_t n = g_f3DeadLogged.fetch_add(1, std::memory_order_relaxed);
-            if (n < 16) {
-                VLOG(REPORT,
-                     "[GCV2][F3-dead] holder=%p field=%p from=%p latest=%p reason=%s — null slot",
-                     holder, &field, fromObj, latest, deadReason);
-            }
-            NoteNullslotWrite("f3_fix_oldtag", holder, &field, fromObj, latest, &g_nullslotF3);
-            RefField<> nullField(nullptr);
-            (void)HealSlot(field, oldField.GetFieldValue(), nullField.GetFieldValue(),
-                           HealSite::WCollectorFixOldTaggedDead, HealNull::Allow);
-            return;
-        }
-    }
-    // Phase C heap: write the current colour back, not a bare pointer.
-    // plainroots non-heap root slots: write plain latest (ZGC uncolored root heal).
-    //
-    // The old comment here read "Always write a plain pointer... Re-tagging a still-from survivor
-    // as current recreates the next generation of one-gen-stale after Flip". That was true while a
-    // tag meant "mid-evacuation": re-tagging did manufacture a stale reference for the next cycle.
-    // With a colour it is the opposite -- writing the current colour is what makes this reference
-    // survive the next flip's test, and writing a bare pointer would put back the very trust state
-    // this phase removes. This is the self-heal half of the barrier, the same shape as ZGC's
-    // self_heal (jdk zBarrier.inline.hpp:330-340), except we already had the resolve step.
-    RefField<> newField = RootSlotWriteback(latest, field);
-    if (oldField.GetFieldValue() == newField.GetFieldValue()) {
-        return;
-    }
-    if (HealSlot(field, oldField.GetFieldValue(), newField.GetFieldValue(),
-                 HealSite::WCollectorFixOldTaggedLive)) {
-        DLOG(FIX, "F3 fix old-tag holder %p field@%p: %#zx => %#zx -> %p", holder, &field,
-             raw(oldField.GetFieldValue()), raw(newField.GetFieldValue()), latest);
+    RefField<> desired = ColourStoreGood(from_object(resolved));
+    if (observed.GetFieldValue() != desired.GetFieldValue()) {
+        (void)HealSlot(field, observed.GetFieldValue(), desired.GetFieldValue(),
+                       HealSite::WCollectorFixOldTaggedLive);
     }
 }
 
@@ -1040,9 +847,6 @@ void WCollector::InvalidateOldTaggedRefs(bool requireSurvivedMark)
     if (heapTotals.rebuilt != 0) {
         VLOG(REPORT, "[GCV2][remset] rebuilt after full GC recorded=%zu", heapTotals.rebuilt);
     }
-    // Always-on F3 dead-arm class totals (soft-null + bad-tip). Greppable every F3 walk.
-    ReportF3DeadarmCounts(requireSurvivedMark ? "preflip" : "postflip");
-
     GarbRegionDiag::Report(requireSurvivedMark ? "preflip" : "postflip");
     if (requireSurvivedMark && preflipVerify) {
         static const bool preflipVerifyFatal = []() {
@@ -1463,22 +1267,28 @@ void WCollector::RescanRememberedSet(WorkStack& workStack, const MinorSlotSet& r
                 ++retainedDrop;
             }
         }
-        // The current MinorRaw/value-root walk is newer liveness evidence than
-        // the retained old snapshot. Keep the normal dead-holder pruning, but
-        // let a holder observed as a root in this minor win. This mirrors
-        // ZRemembered::scan_field (zRemembered.cpp:578-588): scan a live field
-        // consumed from the previous face and re-arm it if it still points young.
+        // A young collection has no authority over old-generation liveness, so it may not
+        // prune a remembered field because the old mark's retained snapshot does not claim
+        // its holder.  ZRemembered::scan_field consults no holder liveness at all: it runs
+        // the young-good barrier on the field, marks whatever young object it finds, and
+        // re-arms the entry if the healed value is still young (zRemembered.cpp:578-589).
+        // The old page's own liveness is settled by the *old* mark, which for a page promoted
+        // by the previous young cycle has not run yet -- the retained snapshot cannot contain
+        // it, so it reads "dead" for every such holder.
+        //
+        // Measured on NW256/256MB, three shots, at the first young cycle after a promoting
+        // one: 550,016 of 550,025 remembered slots were dropped here and 9 admitted, the
+        // young closure collapsed to ~1.9K objects against a 124 MB collection set, and all
+        // 1,896 of its pages were then freed with no live map at all -- including the page a
+        // live stack-rooted object still pointed into three cycles later.  The pruning is
+        // deleted rather than gated: keeping it behind a switch would leave the aligned path
+        // untested (0825).  keepByRetainedSnapshot / keepByCurrentRoot stay as observations.
         bool keepByCurrentRoot =
             retainedHolder != nullptr && currentMinorRoots.count(retainedHolder) != 0;
         if (!KeepRememberedHolder(keepByRetainedSnapshot, keepByCurrentRoot)) {
-#if defined(MRT_TESTABLE_INTERNALS)
-            NoteRemsetFilterTestReceipt(slot, RemsetFilterReceiptReason::kDeadHolder, false);
-#endif
-            noteRemsetOutcome(slot, 4, 0);
             ++scrubbedDeadHolder;
             ++retainedDeadDropped;
             NwDropAudit::Note(NwDropAudit::kRetained);
-            continue;
         }
         if (!keepByRetainedSnapshot && keepByCurrentRoot) {
             ++rootedRetainedKept;
@@ -1517,10 +1327,10 @@ void WCollector::RescanRememberedSet(WorkStack& workStack, const MinorSlotSet& r
                 NoteRemsetFilterTestReceipt(slot, RemsetFilterReceiptReason::kStale, false);
 #endif
                 NwDropAudit::Note(NwDropAudit::kStaleOldTag);
-                // N2: CAS null install (same slot may race with ResolveMinorReference under FYS=1).
-                NoteNullslotWrite("remset_stale_oldtag", nullptr, field, rawTarget, to, &g_nullslotRemset);
-                (void)CasInstallResolvedTarget(*field, raw(peek.GetFieldValue()), nullptr,
-                                               HealSite::WCollectorRemsetResolveDead, HealNull::Allow);
+                // zBarrier.inline.hpp:294-343 heals only a successfully resolved
+                // load-good value. This dead-holder remset cleanup therefore
+                // removes the remembered-set record without manufacturing a
+                // replacement field value.
                 size_t n = g_remsetScrubLogged.fetch_add(1, std::memory_order_relaxed);
                 if (n < 16) {
                     VLOG(REPORT,

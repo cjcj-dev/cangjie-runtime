@@ -60,14 +60,17 @@ void Expect(const char* what, MAddress got, MAddress want)
 //              the slot first. That makes the next CAS lose deterministically.
 class ScriptedFastPath {
 public:
-    ScriptedFastPath(MAddress* word, MAddress goodValue, MAddress bumpTo)
-        : word(word), goodValue(goodValue), bumpTo(bumpTo)
+    ScriptedFastPath(MAddress* word, MAddress additionalGoodValue, MAddress bumpTo)
+        : word(word), additionalGoodValue(additionalGoodValue), bumpTo(bumpTo)
     {}
 
     bool operator()(zpointer value)
     {
         const MAddress observed = static_cast<MAddress>(raw(value));
-        if (goodValue != 0 && observed == goodValue) {
+        // Every test heal value models make_load_good's proven result. The
+        // optional second value scripts zBarrier.inline.hpp:98-101, where a
+        // competing barrier has already installed another accepted value.
+        if (observed == kHeal || (additionalGoodValue != 0 && observed == additionalGoodValue)) {
             return true;
         }
         if (bumpTo != 0 && observed == *word) {
@@ -79,7 +82,7 @@ public:
 
 private:
     MAddress* word;
-    MAddress goodValue;
+    MAddress additionalGoodValue;
     MAddress bumpTo;
 };
 
@@ -141,6 +144,9 @@ public:
     bool operator()(zpointer value)
     {
         const MAddress observed = static_cast<MAddress>(raw(value));
+        if (observed == kHeal) {
+            return true;
+        }
         if (budget > 0 && observed == *word) {
             ++served;
             *word = kOther1 + static_cast<MAddress>(served) * 0x1000ULL;

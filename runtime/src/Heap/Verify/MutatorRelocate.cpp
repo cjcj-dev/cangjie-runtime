@@ -18,7 +18,6 @@ static std::atomic<uint64_t> g_fallback[static_cast<size_t>(Fallback::FALLBACK_C
 static std::atomic<uint64_t> g_alreadyFwd{ 0 };
 static std::atomic<uint64_t> g_selfCopy[static_cast<size_t>(Role::ROLE_COUNT)]{};
 static std::atomic<uint64_t> g_anyCopy[static_cast<size_t>(Role::ROLE_COUNT)]{};
-static std::atomic<uint64_t> g_funnel[static_cast<size_t>(Role::ROLE_COUNT)]{};
 static std::atomic<uint64_t> g_waitEnter{ 0 };
 static std::atomic<uint64_t> g_waitGiveUp{ 0 };
 static std::atomic<uint64_t> g_waitReceipt{ 0 };
@@ -26,9 +25,6 @@ static std::atomic<uint64_t> g_waitFatal{ 0 };
 static std::atomic<uint64_t> g_regionWaitEnter{ 0 };
 static std::atomic<uint64_t> g_regionWaitGot{ 0 };
 static std::atomic<uint64_t> g_regionWaitPubMiss{ 0 };
-static std::atomic<uint64_t> g_regionWaitTimeout{ 0 };
-static std::atomic<uint64_t> g_regionWaitSpinSum{ 0 };
-static std::atomic<uint64_t> g_regionWaitSpinMax{ 0 };
 static thread_local bool t_inScope = false;
 static std::atomic<bool> g_atexit{ false };
 
@@ -40,10 +36,7 @@ static void InstallAtexit()
     }
 }
 
-bool Enabled() { return kMutatorSelfRelocate; }
-bool DrainEnabled() { return false; }
 bool StatsOn() { return kStats; }
-bool InjectOn() { return false; }
 
 void NoteAttempt()
 {
@@ -113,17 +106,6 @@ void NoteAnyCopy(Role role)
     }
 }
 
-void NoteFunnelCall(Role role)
-{
-    if (!kStats) {
-        return;
-    }
-    const size_t i = static_cast<size_t>(role);
-    if (i < static_cast<size_t>(Role::ROLE_COUNT)) {
-        g_funnel[i].fetch_add(1, std::memory_order_relaxed);
-    }
-}
-
 void NoteWaitEnter()
 {
     if (!kStats) {
@@ -181,26 +163,6 @@ void NoteRegionWaitPublishedMiss()
     g_regionWaitPubMiss.fetch_add(1, std::memory_order_relaxed);
 }
 
-void NoteRegionWaitTimeout()
-{
-    if (!kStats) {
-        return;
-    }
-    g_regionWaitTimeout.fetch_add(1, std::memory_order_relaxed);
-}
-
-void NoteRegionWaitSpins(int spins)
-{
-    if (!kStats || spins < 0) {
-        return;
-    }
-    const uint64_t n = static_cast<uint64_t>(spins);
-    g_regionWaitSpinSum.fetch_add(n, std::memory_order_relaxed);
-    uint64_t cur = g_regionWaitSpinMax.load(std::memory_order_relaxed);
-    while (n > cur && !g_regionWaitSpinMax.compare_exchange_weak(cur, n, std::memory_order_relaxed)) {
-    }
-}
-
 void NoteDrain(Retire site, uint64_t spunNanos, bool contended)
 {
     (void)site;
@@ -214,16 +176,13 @@ void DumpSummary()
         return;
     }
     const uint64_t rwEnter = g_regionWaitEnter.load(std::memory_order_relaxed);
-    const uint64_t rwSum = g_regionWaitSpinSum.load(std::memory_order_relaxed);
     std::fprintf(stderr,
                  "[GCV2][mutrelo] atexit attempt=%llu retain=%llu alreadyFwd=%llu "
                  "fb_retain=%llu fb_copy=%llu fb_phase=%llu "
                  "self_mut=%llu self_gc=%llu self_rt=%llu "
                  "any_mut=%llu any_gc=%llu any_rt=%llu "
-                 "funnel_mut=%llu funnel_gc=%llu "
                  "waitEnter=%llu waitGiveUp=%llu waitReceipt=%llu waitFatal=%llu "
-                 "regionWait=%llu regionGot=%llu regionPubMiss=%llu regionTimeout=%llu "
-                 "regionSpinSum=%llu regionSpinMax=%llu regionSpinAvg=%llu\n",
+                 "regionWait=%llu regionGot=%llu regionPubMiss=%llu\n",
                  static_cast<unsigned long long>(g_attempt.load(std::memory_order_relaxed)),
                  static_cast<unsigned long long>(g_retainOk.load(std::memory_order_relaxed)),
                  static_cast<unsigned long long>(g_alreadyFwd.load(std::memory_order_relaxed)),
@@ -236,19 +195,13 @@ void DumpSummary()
                  static_cast<unsigned long long>(g_anyCopy[0].load(std::memory_order_relaxed)),
                  static_cast<unsigned long long>(g_anyCopy[1].load(std::memory_order_relaxed)),
                  static_cast<unsigned long long>(g_anyCopy[2].load(std::memory_order_relaxed)),
-                 static_cast<unsigned long long>(g_funnel[0].load(std::memory_order_relaxed)),
-                 static_cast<unsigned long long>(g_funnel[1].load(std::memory_order_relaxed)),
                  static_cast<unsigned long long>(g_waitEnter.load(std::memory_order_relaxed)),
                  static_cast<unsigned long long>(g_waitGiveUp.load(std::memory_order_relaxed)),
                  static_cast<unsigned long long>(g_waitReceipt.load(std::memory_order_relaxed)),
                  static_cast<unsigned long long>(g_waitFatal.load(std::memory_order_relaxed)),
                  static_cast<unsigned long long>(rwEnter),
                  static_cast<unsigned long long>(g_regionWaitGot.load(std::memory_order_relaxed)),
-                 static_cast<unsigned long long>(g_regionWaitPubMiss.load(std::memory_order_relaxed)),
-                 static_cast<unsigned long long>(g_regionWaitTimeout.load(std::memory_order_relaxed)),
-                 static_cast<unsigned long long>(rwSum),
-                 static_cast<unsigned long long>(g_regionWaitSpinMax.load(std::memory_order_relaxed)),
-                 static_cast<unsigned long long>(rwEnter == 0 ? 0 : rwSum / rwEnter));
+                 static_cast<unsigned long long>(g_regionWaitPubMiss.load(std::memory_order_relaxed)));
     std::fflush(stderr);
 }
 

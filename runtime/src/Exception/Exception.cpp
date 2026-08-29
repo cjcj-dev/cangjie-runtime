@@ -17,7 +17,6 @@
 #include "Interpreter/InterpreterSpecific.h"
 #include "Mutator/MutatorManager.h"
 #include "UnwindStack/EhStackInfo.h"
-#include "UnwindStack/StackExposureHook.h"
 #include "schedule.h"
 
 namespace MapleRuntime {
@@ -50,9 +49,6 @@ extern "C" uintptr_t MRT_GetTopManagedPC()
 
 void ExceptionWrapper::RestoreContext(CalleeSavedRegisterContext& context)
 {
-    if (Mutator* mutator = Mutator::GetMutator()) {
-        StackExposureHook::OnAfterUnwind(*mutator, 0);
-    }
 #ifdef GENERAL_ASAN_SUPPORT_INTERFACE
 #if defined(__x86_64__)
     auto oldRsp = context.rsp;

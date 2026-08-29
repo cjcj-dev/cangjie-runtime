@@ -138,6 +138,37 @@ public:
         return entry.populated() ? ForwardingEntry() : entry;
     }
 
+    // In-place relocation reuses one page for both layouts.  ClassifyCompactedMiss
+    // must therefore be able to establish that an address below the new top is a
+    // published destination before consulting the old liveness face
+    // (ZGC zForwarding.cpp:55-64; zHeap.cpp:202-208).
+    bool find_from_by_to(MAddress to, MAddress* fromOut) const
+    {
+        auto* words = entries();
+        for (size_t i = 0; i < _entries.length(); ++i) {
+            const ForwardingEntry entry = ForwardingEntry::FromRaw(words[i].load(std::memory_order_acquire));
+            if (!entry.populated()) {
+                continue;
+            }
+            if (_heapBase + static_cast<MAddress>(entry.to_offset()) == to) {
+                if (fromOut != nullptr) {
+                    *fromOut = _start + (static_cast<MAddress>(entry.from_index()) << kAlignShift);
+                }
+                return true;
+            }
+        }
+        std::lock_guard<std::mutex> lock(_overflowLock);
+        for (const auto& kv : _overflow) {
+            if (kv.second == to) {
+                if (fromOut != nullptr) {
+                    *fromOut = kv.first;
+                }
+                return true;
+            }
+        }
+        return false;
+    }
+
     // zForwarding.inline.hpp:248-252 — miss is null, never geometry.
     MAddress find(MAddress from) const
     {

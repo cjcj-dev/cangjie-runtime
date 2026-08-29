@@ -28,7 +28,14 @@ namespace {
 struct Entry {
     Entry(RegionInfo* regionIn, RegisterPath pathIn)
         : region(regionIn), path(pathIn), youngView(regionIn->GetMarkView<Generation::Young>())
-    {}
+    {
+        // ZGC's flip-promoted page owns the livemap that
+        // ZRelocateAddRemsetForFlipPromoted later iterates (zRelocate.cpp:1256-1279).
+        // Our faces are epoch-recycled, so the view token alone does not survive to
+        // discharge: by then GetMarkBitmap(view) is null and every liveness query
+        // answers false. Copy the bits here, where the face is still resolvable.
+        liveWordsValid = regionIn->CopyMarkWordsForView(youngView, liveWords);
+    }
 
     RegionInfo* region;
     RegisterPath path;
@@ -36,6 +43,9 @@ struct Entry {
     // Captured before in-place promotion clears the region's young ownership.
     // The view remains a young-closure token; no Young view is minted from an old region.
     MarkView<Generation::Young> youngView;
+    // Registration-time copy of (mark | resurrect) for this region.
+    std::vector<uint64_t> liveWords;
+    bool liveWordsValid = false;
 };
 
 std::mutex g_mu;
@@ -91,7 +101,8 @@ const char* PathName(RegisterPath p)
 // Match RecordPromotedCrossGenEdges liveness gate (RegionManager.cpp:324-326).
 bool UseLiveOnly(RegionInfo* region, MarkView<Generation::Young> view)
 {
-    bool hasObjectLiveness = region->IsLargeRegion() || region->GetMarkBitmap(view) != nullptr;
+    bool hasObjectLiveness = region->IsLargeRegion() || region->GetMarkBitmap(view) != nullptr ||
+        region->GetResurrectBitmap() != nullptr;
     return hasObjectLiveness && region->IsLiveCountAuthoritative();
 }
 
@@ -153,16 +164,9 @@ void DiffAndStore(size_t minorRunIndex, const char* tag)
 
 bool Enabled()
 {
-    // domainon: default ON. MRT_GCV2_PROMO_DOMAIN=0 disables; unset or any other value keeps on.
-    // Old RecordPromotedCrossGenEdges still runs as shadow (not deleted this lane).
-    static const bool on = []() {
-        const char* v = std::getenv("MRT_GCV2_PROMO_DOMAIN");
-        if (v == nullptr) {
-            return true;
-        }
-        return std::strcmp(v, "0") != 0;
-    }();
-    return on;
+    // The flip-promoted domain is part of the young relocation protocol, not an
+    // optional fallback (zRelocate.cpp:1289-1306).
+    return true;
 }
 
 bool ReconcileEnabled()
@@ -188,7 +192,8 @@ void SnapshotDomainEdgesAtRegister(RegionInfo* region, MarkView<Generation::Youn
         return;
     }
     static const bool skipOne = false /* pinned:MRT_GCV2_PROMO_DOMAIN_SKIP_ONE */;
-    bool hasObjectLiveness = region->IsLargeRegion() || region->GetMarkBitmap(view) != nullptr;
+    bool hasObjectLiveness = region->IsLargeRegion() || region->GetMarkBitmap(view) != nullptr ||
+        region->GetResurrectBitmap() != nullptr;
     bool useLiveOnly = UseLiveOnly(region, view);
     region->VisitAllObjects([&](BaseObject* object) {
         if (object == nullptr || !object->HasRefField()) {
@@ -325,6 +330,8 @@ size_t DischargeAll(const std::function<BaseObject*(RefField<>&)>& resolve,
         MarkView<Generation::Young> view;
         RegisterPath path;
         bool injectLeave;
+        std::vector<uint64_t> liveWords;
+        bool liveWordsValid;
     };
     std::vector<WorkItem> work;
     {
@@ -335,7 +342,7 @@ size_t DischargeAll(const std::function<BaseObject*(RefField<>&)>& resolve,
                 continue;
             }
             const bool injectLeave = injectUndischarged && e.region == g_entries.front().region;
-            work.push_back({ e.region, e.youngView, e.path, injectLeave });
+            work.push_back({ e.region, e.youngView, e.path, injectLeave, e.liveWords, e.liveWordsValid });
         }
     }
 
@@ -345,8 +352,35 @@ size_t DischargeAll(const std::function<BaseObject*(RefField<>&)>& resolve,
         if (region->IsSafeKnownYoungEmpty(view)) {
             continue;
         }
-        bool hasObjectLiveness = region->IsLargeRegion() || region->GetMarkBitmap(view) != nullptr;
-        bool useLiveOnly = UseLiveOnly(region, view);
+        bool hasObjectLiveness = region->IsLargeRegion() || region->GetMarkBitmap(view) != nullptr ||
+            region->GetResurrectBitmap() != nullptr;
+
+        // ZGC ZRelocateAddRemsetForFlipPromoted::work (zRelocate.cpp:1256-1279) walks
+        // page->object_iterate, and ZPage::object_iterate is the livemap iteration
+        // (zPage.inline.hpp:320-331). It has no all-objects arm: a dead object's ref
+        // fields are stale, and resolving one hands the load barrier a from-address
+        // that the relocation never receipted. That is the receiptless forward this
+        // walk was producing -- a holder in the linear size-walk still pointed at an
+        // object below the pre-compaction top that no livemap bit covers, so
+        // WaitRoutedTipReady had no answer and closed.
+        //
+        // The previous `useLiveOnly` arm dropped to VisitAllObjects exactly when the
+        // liveness face looked unavailable. A missing liveness face on a region that
+        // is being discharged is a broken invariant, not a licence to read dead
+        // objects' fields, so it closes here instead of widening the walk.
+        const bool haveSnapshot = item.liveWordsValid;
+        CHECK_DETAIL(hasObjectLiveness || haveSnapshot,
+                     "promoted region discharged without a liveness face region=%p "
+                     "range=[%#zx,%#zx) large=%u markBm=%u resBm=%u liveAuth=%u snapshot=%u "
+                     "snapWords=%zu path=%s",
+                     region, static_cast<size_t>(region->GetRegionStart()),
+                     static_cast<size_t>(region->GetRegionEnd()),
+                     static_cast<unsigned>(region->IsLargeRegion()),
+                     static_cast<unsigned>(region->GetMarkBitmap(view) != nullptr),
+                     static_cast<unsigned>(region->GetResurrectBitmap() != nullptr),
+                     static_cast<unsigned>(region->IsLiveCountAuthoritative()),
+                     static_cast<unsigned>(haveSnapshot), item.liveWords.size(),
+                     PathName(item.path));
 
         // ZGC remap_and_maybe_add_remset (zRelocate.cpp:1227-1255): resolve first
         // (load barrier + CAS self-heal), then classify the healed target.
@@ -356,7 +390,14 @@ size_t DischargeAll(const std::function<BaseObject*(RefField<>&)>& resolve,
             if (object == nullptr || !object->HasRefField()) {
                 return;
             }
-            if (useLiveOnly && !ObjectSurvived(region, view, object, hasObjectLiveness)) {
+            // The registration-time copy is the authority when it exists: it is the
+            // page's own livemap in ZGC terms, and it is the only reading that still
+            // describes the mark that selected this region.
+            const bool survived = haveSnapshot
+                ? RegionInfo::SnapshotMarkWordsSay(
+                      item.liveWords, region->GetAddressOffset(reinterpret_cast<MAddress>(object)))
+                : ObjectSurvived(region, view, object, hasObjectLiveness);
+            if (!survived) {
                 return;
             }
             object->ForEachRefField([&](RefField<>& field) {

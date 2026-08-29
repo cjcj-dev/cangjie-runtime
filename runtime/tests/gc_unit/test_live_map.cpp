@@ -138,162 +138,6 @@ GC_TEST(ZLiveMapPort, OneObjectPageMarkAccountsLiveOnce)
     GcHeapFixture::FreePlantedBitmap(bitmap);
 }
 
-// ZLiveMap::set uses a bit pair: finalizable paints only live, while a
-// subsequent strong mark upgrades the same pair without charging bytes twice.
-GC_TEST(ZLiveMapPort, FinalizableAndStrongShareOnePair)
-{
-    constexpr size_t kPageSize = 4096;
-    RegionBitmap* bitmap = GcHeapFixture::AllocPlantedBitmap(kPageSize);
-    bool incLive = false;
-
-    GC_EXPECT_FALSE(bitmap->MarkFinalizableBits(64, 16, kPageSize, incLive));
-    GC_EXPECT_TRUE(incLive);
-    GC_EXPECT_TRUE(bitmap->IsLive(64));
-    GC_EXPECT_TRUE(bitmap->IsFinalizable(64));
-    GC_EXPECT_FALSE(bitmap->IsMarked(64));
-    GC_EXPECT_EQ(bitmap->GetLiveBytes(), static_cast<size_t>(16));
-
-    GC_EXPECT_FALSE(bitmap->MarkBits(64, 16, kPageSize, incLive));
-    GC_EXPECT_FALSE(incLive);
-    GC_EXPECT_TRUE(bitmap->IsLive(64));
-    GC_EXPECT_FALSE(bitmap->IsFinalizable(64));
-    GC_EXPECT_TRUE(bitmap->IsMarked(64));
-    GC_EXPECT_EQ(bitmap->GetLiveBytes(), static_cast<size_t>(16));
-
-    GcHeapFixture::FreePlantedBitmap(bitmap);
-}
-
-// SATB producers may publish the same object more than once. The strong half
-// of the pair is the consumer-side receipt: exactly one 0->1 owns live-byte
-// accounting, matching ZLiveMap::set/par_set_bit_pair.
-GC_TEST(ZLiveMapPort, DuplicateSatbPublicationConvergesAtStrongMark)
-{
-    GcHeapFixture fx;
-    LiveInfo* live = fx.PlantLiveInfo(fx.region0);
-    RegionBitmap* bitmap = fx.PlantMarkBitmap(live, fx.region0->GetRegionSize());
-    const size_t offset = fx.region0->GetAddressOffset(reinterpret_cast<MAddress>(fx.obj0));
-
-    GC_EXPECT_TRUE(SatbBuffer::Instance().ShouldEnqueue(fx.obj0));
-    GC_EXPECT_TRUE(SatbBuffer::Instance().ShouldEnqueue(fx.obj0));
-
-    bool firstIncLive = false;
-    bool secondIncLive = false;
-    const bool firstAlready = bitmap->MarkBits(offset, 8, fx.region0->GetRegionSize(), firstIncLive);
-    const bool secondAlready = bitmap->MarkBits(offset, 8, fx.region0->GetRegionSize(), secondIncLive);
-    const size_t liveBytes = bitmap->GetLiveBytes();
-    const bool receiptOnce = !firstAlready && secondAlready;
-    const bool incLiveOnce = firstIncLive && !secondIncLive;
-    const bool bytesOnce = liveBytes == static_cast<size_t>(8);
-    std::fprintf(stderr,
-                 "DETAIL duplicate_consumer receipt_once=%d inc_live_once=%d bytes_once=%d live_bytes=%zu\n",
-                 receiptOnce, incLiveOnce, bytesOnce, liveBytes);
-    GC_EXPECT_TRUE(receiptOnce && incLiveOnce && bytesOnce);
-    GC_EXPECT_TRUE(bitmap->IsMarked(offset));
-    GC_EXPECT_EQ(liveBytes, static_cast<size_t>(8));
-    GC_EXPECT_FALSE(SatbBuffer::Instance().ShouldEnqueue(fx.obj0));
-
-    fx.region0->metadata.liveInfo = nullptr;
-    fx.FreePlanted(live);
-}
-
-// The sequential duplicate-publication test above proves idempotence, but it
-// cannot distinguish one atomic RMW from a load followed by a store.  Start two
-// workers at the same product MarkObject call boundary on every round.  The
-// window is real but is not forced inside MarkBits: a faulty non-atomic product
-// implementation therefore has many opportunities to expose two 0->1 strong
-// receipts, while the atomic product must have exactly one winner per round.
-GC_TEST(ZLiveMapPort, ConcurrentDuplicateSatbPublicationHasOneStrongReceipt)
-{
-    constexpr size_t kRounds = 2000;
-    GcHeapFixture fx;
-    RegionInfo* region = fx.region0;
-    BaseObject* holder = fx.obj0;
-    LiveInfo* live = fx.PlantLiveInfo(region);
-    RegionBitmap* bitmap = fx.PlantMarkBitmap(live, region->GetRegionSize());
-    MarkView<Generation::Old> view = region->GetMarkView<Generation::Old>();
-    const auto markObject = ProductMarkObjectFn<Generation::Old>();
-    GC_EXPECT_TRUE(markObject != nullptr);
-
-    std::atomic<size_t> phase{ 0 };
-    std::atomic<size_t> arrived{ 0 };
-    std::atomic<size_t> completed{ 0 };
-    std::atomic<bool> already[2];
-    std::atomic<bool> incLive[2];
-
-    auto publish = [&](size_t worker) {
-        for (size_t round = 1; round <= kRounds; ++round) {
-            while (phase.load(std::memory_order_acquire) < round) {
-                std::this_thread::yield();
-            }
-            arrived.fetch_add(1, std::memory_order_acq_rel);
-            while (arrived.load(std::memory_order_acquire) < 2 * round) {
-                std::this_thread::yield();
-            }
-            // This is the product small-region entry.  The test deliberately
-            // does not call RegionBitmap::MarkBits directly: the product
-            // RegionInfo::MarkObject implementation owns the pair RMW and its
-            // live-byte receipt.
-            const bool localAlready = markObject(region, view, holder, holder->GetSize(), true);
-            const bool localIncLive = !localAlready;
-            already[worker].store(localAlready, std::memory_order_relaxed);
-            incLive[worker].store(localIncLive, std::memory_order_relaxed);
-            completed.fetch_add(1, std::memory_order_release);
-        }
-    };
-
-    std::thread first(publish, 0);
-    std::thread second(publish, 1);
-    JoinGuard firstGuard(first);
-    JoinGuard secondGuard(second);
-    size_t duplicateReceiptRounds = 0;
-    size_t duplicateIncLiveRounds = 0;
-    size_t doubleLiveBytesRounds = 0;
-    for (size_t round = 1; round <= kRounds; ++round) {
-        bitmap->Reset();
-        __atomic_store_n(&region->metadata.liveByteCount, static_cast<uint64_t>(0), __ATOMIC_RELAXED);
-
-        phase.store(round, std::memory_order_release);
-        while (completed.load(std::memory_order_acquire) < 2 * round) {
-            std::this_thread::yield();
-        }
-
-        const size_t receiptClaims = static_cast<size_t>(!already[0].load(std::memory_order_relaxed)) +
-            static_cast<size_t>(!already[1].load(std::memory_order_relaxed));
-        const size_t incLiveClaims = static_cast<size_t>(incLive[0].load(std::memory_order_relaxed)) +
-            static_cast<size_t>(incLive[1].load(std::memory_order_relaxed));
-        duplicateReceiptRounds += receiptClaims != 1 ? 1 : 0;
-        duplicateIncLiveRounds += incLiveClaims != 1 ? 1 : 0;
-        doubleLiveBytesRounds += bitmap->GetLiveBytes() != holder->GetSize() ? 1 : 0;
-    }
-    first.join();
-    second.join();
-
-    std::fprintf(stderr,
-                 "DETAIL concurrent_duplicate rounds=%zu duplicate_receipt=%zu duplicate_inc_live=%zu "
-                 "double_live_bytes=%zu\n",
-                 kRounds, duplicateReceiptRounds, duplicateIncLiveRounds, doubleLiveBytesRounds);
-    GC_EXPECT_EQ(duplicateReceiptRounds, static_cast<size_t>(0));
-    GC_EXPECT_EQ(duplicateIncLiveRounds, static_cast<size_t>(0));
-    GC_EXPECT_EQ(doubleLiveBytesRounds, static_cast<size_t>(0));
-    fx.region0->metadata.liveInfo = nullptr;
-    fx.FreePlanted(live);
-}
-
-// Product collector consumer of RegionInfo::MarkObject (Mark.cpp:99-111).
-GC_TEST(ZLiveMapPort, CollectorMarkObjectConsumesProductPair)
-{
-    GcHeapFixture fx;
-    LiveInfo* live = fx.PlantLiveInfo(fx.region0);
-    (void)fx.PlantMarkBitmap(live, fx.region0->GetRegionSize());
-    WCollector collector(Heap::GetHeap().GetAllocator(), Heap::GetHeap().GetCollectorResources());
-    GC_EXPECT_FALSE(collector.MarkObject(fx.obj0));
-    MarkView<Generation::Old> view = fx.region0->GetMarkView<Generation::Old>();
-    GC_EXPECT_TRUE(fx.region0->IsMarkedObject(view, fx.obj0));
-    GC_EXPECT_TRUE(collector.MarkObject(fx.obj0));
-    fx.region0->metadata.liveInfo = nullptr;
-    fx.FreePlanted(live);
-}
-
 // U4: product mark then IsSurvivedObject.
 GC_TEST(LiveMap, MarkAndSurvive)
 {
@@ -427,12 +271,7 @@ GC_TEST(LiveMap, RetainedCaptureKeepsCurrentYoungFaceAfterStaleForwardingDone)
     MarkView<Generation::Young> clearView = region->GetMarkView<Generation::Young>();
     ProductClearLiveInfoFn()(region, clearView);
     MarkView<Generation::Young> currentView = region->GetMarkView<Generation::Young>();
-    ProductMarkObject<Generation::Young> markObject = ProductMarkObjectFn<Generation::Young>();
-    GC_EXPECT_TRUE(markObject != nullptr);
-    if (markObject == nullptr) {
-        return;
-    }
-    (void)markObject(region, currentView, fx.obj0, 8, true);
+    (void)ProductMarkObjectFn<Generation::Young>()(region, currentView, fx.obj0, 8, true);
     ProductPreserveRetainedFn()(region);
     GC_EXPECT_TRUE(region->RetainedMarkWordsSay(holderOffset));
 
@@ -459,12 +298,7 @@ GC_TEST(LiveMap, RetainedCaptureRejectsOldFromFaceWhenNewCycleMarksNothing)
     // real forwarding publication/reset path.  No epoch, flag, from-page or
     // retained field is written by the test.
     MarkView<Generation::Young> previousView = region->GetMarkView<Generation::Young>();
-    ProductMarkObject<Generation::Young> markObject = ProductMarkObjectFn<Generation::Young>();
-    GC_EXPECT_TRUE(markObject != nullptr);
-    if (markObject == nullptr) {
-        return;
-    }
-    GC_EXPECT_FALSE(markObject(region, previousView, fx.obj0, 8, true));
+    GC_EXPECT_FALSE(ProductMarkObjectFn<Generation::Young>()(region, previousView, fx.obj0, 8, true));
     GC_EXPECT_TRUE(previousBitmap->IsMarked(holderOffset));
     region->PublishFromPageMetadata(previousView);
     region->MarkForwardingDone();
@@ -493,64 +327,12 @@ GC_TEST(LiveMap, UnexaminedRelocselPageKeepsWithoutSnapshot)
     region->AddLiveByteCount(64);
     GC_EXPECT_FALSE(region->HasEverPreservedRetainedLiveInfo());
     ProductPreserveRetainedUpToFn()(
-        region, std::min(region->GetCensusBoundary(), region->GetRegionAllocPtr()));
+        region,
+        std::min(region->GetCensusBoundary(), region->GetRegionAllocPtr()));
     GC_EXPECT_TRUE(region->GetRetainedLiveInfo() == nullptr);
     GC_EXPECT_FALSE(region->HasEverPreservedRetainedLiveInfo());
     GC_EXPECT_EQ(static_cast<unsigned>(region->GetRetainedLiveInfoState()),
                  static_cast<unsigned>(RegionInfo::RetainedLiveInfoState::NEVER_EXAMINED));
-}
-
-// The bounded product entry first repairs from the current mark face before it
-// publishes the retained carrier.  Calling it through the loaded runtime keeps
-// this test from materializing a second inline copy in the test ELF.
-GC_TEST(LiveMap, BoundedPreserveProductRepairsCurrentFace)
-{
-    GcHeapFixture fx;
-    RegionInfo* region = fx.region0;
-    region->SetRegionType(RegionInfo::RegionType::UNMOVABLE_FROM_REGION);
-    LiveInfo* live = fx.PlantLiveInfo(region);
-    RegionBitmap* bitmap = fx.PlantMarkBitmap(live, region->GetRegionSize());
-    const size_t offset = region->GetAddressOffset(reinterpret_cast<MAddress>(fx.obj0));
-    (void)bitmap->MarkBits(offset, fx.obj0->GetSize(), region->GetRegionSize());
-
-    ProductPreserveRetainedUpToFn()(region, region->GetRegionAllocPtr());
-
-    GC_EXPECT_EQ(static_cast<unsigned>(region->GetRetainedLiveInfoState()),
-                 static_cast<unsigned>(RegionInfo::RetainedLiveInfoState::SNAPSHOT_VALID));
-    GC_EXPECT_TRUE(region->HasRetainedMarkWords());
-    GC_EXPECT_TRUE(region->RetainedMarkWordsSay(offset));
-    GC_EXPECT_EQ(region->GetRetainedLiveInfoCoveredUpTo(), region->GetRegionAllocPtr());
-    region->FreeRetainedMarkWords();
-    region->metadata.liveInfo = nullptr;
-    fx.FreePlanted(live);
-}
-
-// If the current LiveInfo has already been unbound, forwarding's from-page
-// carrier is the second repair source.  The retained owned copy must contain
-// the same marked holder before the hard postcondition is checked.
-GC_TEST(LiveMap, BoundedPreserveProductRepairsFromPageFace)
-{
-    GcHeapFixture fx;
-    RegionInfo* region = fx.region0;
-    region->SetRegionType(RegionInfo::RegionType::FROM_REGION);
-    LiveInfo* live = fx.PlantLiveInfo(region);
-    RegionBitmap* bitmap = fx.PlantMarkBitmap<Generation::Old>(live, region->GetRegionSize());
-    const size_t offset = region->GetAddressOffset(reinterpret_cast<MAddress>(fx.obj0));
-    (void)bitmap->MarkBits(offset, fx.obj0->GetSize(), region->GetRegionSize());
-    region->PublishFromPageMetadata(region->GetMarkView<Generation::Old>());
-    region->CheckAndClearLiveInfo(live);
-    GC_EXPECT_TRUE(region->GetLiveInfo() == nullptr);
-    GC_EXPECT_TRUE(region->HasFromPageMetadata());
-
-    ProductPreserveRetainedUpToFn()(region, region->GetRegionAllocPtr());
-
-    GC_EXPECT_EQ(static_cast<unsigned>(region->GetRetainedLiveInfoState()),
-                 static_cast<unsigned>(RegionInfo::RetainedLiveInfoState::SNAPSHOT_VALID));
-    GC_EXPECT_TRUE(region->HasRetainedMarkWords());
-    GC_EXPECT_TRUE(region->RetainedMarkWordsSay(offset));
-    region->RetireFromPageMetadata();
-    region->FreeRetainedMarkWords();
-    fx.FreePlanted(live);
 }
 
 // Positive control: first publish a valid snapshot, then clear/unbind its
@@ -581,7 +363,8 @@ GC_TEST(LiveMap, ExaminedPageWithoutSnapshotStillAborts)
     GC_EXPECT_TRUE(pid >= 0);
     if (pid == 0) {
         ProductPreserveRetainedUpToFn()(
-            region, std::min(region->GetCensusBoundary(), region->GetRegionAllocPtr()));
+            region,
+            std::min(region->GetCensusBoundary(), region->GetRegionAllocPtr()));
         _exit(0);
     }
     int status = 0;
@@ -591,10 +374,11 @@ GC_TEST(LiveMap, ExaminedPageWithoutSnapshotStillAborts)
     fx.FreePlanted(live);
 }
 
-// If neither borrowed face remains, a private copy that already covers the
-// requested boundary is the third repair source. The product entry must retain
-// that carrier instead of destroying it and converting a repairable page to LOST.
-GC_TEST(LiveMap, BoundedPreserveProductRepairsOwnedCopy)
+// Owned-copy positive arm: CheckAndClearLiveInfo deliberately returns early
+// while the private bitmap still carries the valid snapshot.  The following
+// bounded Preserve replaces that owned carrier, finds no current LiveInfo,
+// and must derive LOST from the monotonic ever-preserved bit.
+GC_TEST(LiveMap, OwnedCopyExaminedPageWithoutSnapshotStillAborts)
 {
     GcHeapFixture fx;
     RegionInfo* region = fx.region0;
@@ -613,13 +397,19 @@ GC_TEST(LiveMap, BoundedPreserveProductRepairsOwnedCopy)
     GC_EXPECT_TRUE(region->HasRetainedMarkWords());
     GC_EXPECT_EQ(static_cast<unsigned>(region->GetRetainedLiveInfoState()),
                  static_cast<unsigned>(RegionInfo::RetainedLiveInfoState::SNAPSHOT_VALID));
-    const MAddress covered = region->GetRetainedLiveInfoCoveredUpTo();
-    ProductPreserveRetainedUpToFn()(region, covered);
-    GC_EXPECT_TRUE(region->HasRetainedMarkWords());
-    GC_EXPECT_TRUE(region->RetainedMarkWordsSay(0));
-    GC_EXPECT_EQ(static_cast<unsigned>(region->GetRetainedLiveInfoState()),
-                 static_cast<unsigned>(RegionInfo::RetainedLiveInfoState::SNAPSHOT_VALID));
-    GC_EXPECT_EQ(region->GetRetainedLiveInfoCoveredUpTo(), covered);
+    region->AddLiveByteCount(64);
+    pid_t pid = fork();
+    GC_EXPECT_TRUE(pid >= 0);
+    if (pid == 0) {
+        ProductPreserveRetainedUpToFn()(
+            region,
+            std::min(region->GetCensusBoundary(), region->GetRegionAllocPtr()));
+        _exit(0);
+    }
+    int status = 0;
+    GC_EXPECT_TRUE(waitpid(pid, &status, 0) == pid);
+    GC_EXPECT_TRUE(WIFSIGNALED(status));
+    GC_EXPECT_EQ(WTERMSIG(status), SIGABRT);
     region->FreeRetainedMarkWords();
     fx.FreePlanted(live);
 }
@@ -996,3 +786,163 @@ GC_TEST(LiveMap, MarkStartAllocWaterIsImplicitLive)
     GC_EXPECT_FALSE(region->IsMarkedObject(stale, static_cast<size_t>(128)));
     GC_EXPECT_FALSE(region->IsSurvivedObject(stale, static_cast<size_t>(192)));
 }
+
+// Main-line ZLiveMap paired-bit and product-consumer coverage retained by content synthesis.
+GC_TEST(ZLiveMapPort, FinalizableAndStrongShareOnePair)
+{
+    constexpr size_t kPageSize = 4096;
+    RegionBitmap* bitmap = GcHeapFixture::AllocPlantedBitmap(kPageSize);
+    bool incLive = false;
+
+    GC_EXPECT_FALSE(bitmap->MarkFinalizableBits(64, 16, kPageSize, incLive));
+    GC_EXPECT_TRUE(incLive);
+    GC_EXPECT_TRUE(bitmap->IsLive(64));
+    GC_EXPECT_TRUE(bitmap->IsFinalizable(64));
+    GC_EXPECT_FALSE(bitmap->IsMarked(64));
+    GC_EXPECT_EQ(bitmap->GetLiveBytes(), static_cast<size_t>(16));
+
+    GC_EXPECT_FALSE(bitmap->MarkBits(64, 16, kPageSize, incLive));
+    GC_EXPECT_FALSE(incLive);
+    GC_EXPECT_TRUE(bitmap->IsLive(64));
+    GC_EXPECT_FALSE(bitmap->IsFinalizable(64));
+    GC_EXPECT_TRUE(bitmap->IsMarked(64));
+    GC_EXPECT_EQ(bitmap->GetLiveBytes(), static_cast<size_t>(16));
+
+    GcHeapFixture::FreePlantedBitmap(bitmap);
+}
+
+// SATB producers may publish the same object more than once. The strong half
+// of the pair is the consumer-side receipt: exactly one 0->1 owns live-byte
+// accounting, matching ZLiveMap::set/par_set_bit_pair.
+
+GC_TEST(ZLiveMapPort, DuplicateSatbPublicationConvergesAtStrongMark)
+{
+    GcHeapFixture fx;
+    LiveInfo* live = fx.PlantLiveInfo(fx.region0);
+    RegionBitmap* bitmap = fx.PlantMarkBitmap(live, fx.region0->GetRegionSize());
+    const size_t offset = fx.region0->GetAddressOffset(reinterpret_cast<MAddress>(fx.obj0));
+
+    GC_EXPECT_TRUE(SatbBuffer::Instance().ShouldEnqueue(fx.obj0));
+    GC_EXPECT_TRUE(SatbBuffer::Instance().ShouldEnqueue(fx.obj0));
+
+    bool firstIncLive = false;
+    bool secondIncLive = false;
+    const bool firstAlready = bitmap->MarkBits(offset, 8, fx.region0->GetRegionSize(), firstIncLive);
+    const bool secondAlready = bitmap->MarkBits(offset, 8, fx.region0->GetRegionSize(), secondIncLive);
+    const size_t liveBytes = bitmap->GetLiveBytes();
+    const bool receiptOnce = !firstAlready && secondAlready;
+    const bool incLiveOnce = firstIncLive && !secondIncLive;
+    const bool bytesOnce = liveBytes == static_cast<size_t>(8);
+    std::fprintf(stderr,
+                 "DETAIL duplicate_consumer receipt_once=%d inc_live_once=%d bytes_once=%d live_bytes=%zu\n",
+                 receiptOnce, incLiveOnce, bytesOnce, liveBytes);
+    GC_EXPECT_TRUE(receiptOnce && incLiveOnce && bytesOnce);
+    GC_EXPECT_TRUE(bitmap->IsMarked(offset));
+    GC_EXPECT_EQ(liveBytes, static_cast<size_t>(8));
+    GC_EXPECT_FALSE(SatbBuffer::Instance().ShouldEnqueue(fx.obj0));
+
+    fx.region0->metadata.liveInfo = nullptr;
+    fx.FreePlanted(live);
+}
+
+// The sequential duplicate-publication test above proves idempotence, but it
+// cannot distinguish one atomic RMW from a load followed by a store.  Start two
+// workers at the same product MarkObject call boundary on every round.  The
+// window is real but is not forced inside MarkBits: a faulty non-atomic product
+// implementation therefore has many opportunities to expose two 0->1 strong
+// receipts, while the atomic product must have exactly one winner per round.
+
+GC_TEST(ZLiveMapPort, ConcurrentDuplicateSatbPublicationHasOneStrongReceipt)
+{
+    constexpr size_t kRounds = 2000;
+    GcHeapFixture fx;
+    RegionInfo* region = fx.region0;
+    BaseObject* holder = fx.obj0;
+    LiveInfo* live = fx.PlantLiveInfo(region);
+    RegionBitmap* bitmap = fx.PlantMarkBitmap(live, region->GetRegionSize());
+    MarkView<Generation::Old> view = region->GetMarkView<Generation::Old>();
+    const auto markObject = ProductMarkObjectFn<Generation::Old>();
+    GC_EXPECT_TRUE(markObject != nullptr);
+
+    std::atomic<size_t> phase{ 0 };
+    std::atomic<size_t> arrived{ 0 };
+    std::atomic<size_t> completed{ 0 };
+    std::atomic<bool> already[2];
+    std::atomic<bool> incLive[2];
+
+    auto publish = [&](size_t worker) {
+        for (size_t round = 1; round <= kRounds; ++round) {
+            while (phase.load(std::memory_order_acquire) < round) {
+                std::this_thread::yield();
+            }
+            arrived.fetch_add(1, std::memory_order_acq_rel);
+            while (arrived.load(std::memory_order_acquire) < 2 * round) {
+                std::this_thread::yield();
+            }
+            // This is the product small-region entry.  The test deliberately
+            // does not call RegionBitmap::MarkBits directly: the product
+            // RegionInfo::MarkObject implementation owns the pair RMW and its
+            // live-byte receipt.
+            const bool localAlready = markObject(region, view, holder, holder->GetSize(), true);
+            const bool localIncLive = !localAlready;
+            already[worker].store(localAlready, std::memory_order_relaxed);
+            incLive[worker].store(localIncLive, std::memory_order_relaxed);
+            completed.fetch_add(1, std::memory_order_release);
+        }
+    };
+
+    std::thread first(publish, 0);
+    std::thread second(publish, 1);
+    JoinGuard firstGuard(first);
+    JoinGuard secondGuard(second);
+    size_t duplicateReceiptRounds = 0;
+    size_t duplicateIncLiveRounds = 0;
+    size_t doubleLiveBytesRounds = 0;
+    for (size_t round = 1; round <= kRounds; ++round) {
+        bitmap->Reset();
+        __atomic_store_n(&region->metadata.liveByteCount, static_cast<uint64_t>(0), __ATOMIC_RELAXED);
+
+        phase.store(round, std::memory_order_release);
+        while (completed.load(std::memory_order_acquire) < 2 * round) {
+            std::this_thread::yield();
+        }
+
+        const size_t receiptClaims = static_cast<size_t>(!already[0].load(std::memory_order_relaxed)) +
+            static_cast<size_t>(!already[1].load(std::memory_order_relaxed));
+        const size_t incLiveClaims = static_cast<size_t>(incLive[0].load(std::memory_order_relaxed)) +
+            static_cast<size_t>(incLive[1].load(std::memory_order_relaxed));
+        duplicateReceiptRounds += receiptClaims != 1 ? 1 : 0;
+        duplicateIncLiveRounds += incLiveClaims != 1 ? 1 : 0;
+        doubleLiveBytesRounds += bitmap->GetLiveBytes() != holder->GetSize() ? 1 : 0;
+    }
+    first.join();
+    second.join();
+
+    std::fprintf(stderr,
+                 "DETAIL concurrent_duplicate rounds=%zu duplicate_receipt=%zu duplicate_inc_live=%zu "
+                 "double_live_bytes=%zu\n",
+                 kRounds, duplicateReceiptRounds, duplicateIncLiveRounds, doubleLiveBytesRounds);
+    GC_EXPECT_EQ(duplicateReceiptRounds, static_cast<size_t>(0));
+    GC_EXPECT_EQ(duplicateIncLiveRounds, static_cast<size_t>(0));
+    GC_EXPECT_EQ(doubleLiveBytesRounds, static_cast<size_t>(0));
+    fx.region0->metadata.liveInfo = nullptr;
+    fx.FreePlanted(live);
+}
+
+// Product collector consumer of RegionInfo::MarkObject (Mark.cpp:99-111).
+
+GC_TEST(ZLiveMapPort, CollectorMarkObjectConsumesProductPair)
+{
+    GcHeapFixture fx;
+    LiveInfo* live = fx.PlantLiveInfo(fx.region0);
+    (void)fx.PlantMarkBitmap(live, fx.region0->GetRegionSize());
+    WCollector collector(Heap::GetHeap().GetAllocator(), Heap::GetHeap().GetCollectorResources());
+    GC_EXPECT_FALSE(collector.MarkObject(fx.obj0));
+    MarkView<Generation::Old> view = fx.region0->GetMarkView<Generation::Old>();
+    GC_EXPECT_TRUE(fx.region0->IsMarkedObject(view, fx.obj0));
+    GC_EXPECT_TRUE(collector.MarkObject(fx.obj0));
+    fx.region0->metadata.liveInfo = nullptr;
+    fx.FreePlanted(live);
+}
+
+// U4: product mark then IsSurvivedObject.

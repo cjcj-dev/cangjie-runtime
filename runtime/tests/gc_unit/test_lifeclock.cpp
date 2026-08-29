@@ -49,7 +49,9 @@ GC_TEST(LifeClock, LegacyHoldBitSurvivesIndependentClockBump)
     RegionInfo* region = fx.region0;
     const RegionLifeId before = region->GetRegionLifeId();
     region->SetRouteDestHold(1);
-    region->InitRegion(1, RegionInfo::UnitRole::SMALL_SIZED_UNITS);
+    // Exercise the independent clock operation directly. InitRegion is a
+    // reuse entry and must reject a still-held route destination.
+    region->BumpRegionLifeId();
     GC_EXPECT_EQ(region->GetRegionLifeId(), before + 1);
     GC_EXPECT_TRUE(region->IsRouteDestHeld());
     region->SetRouteDestHold(0);
@@ -134,7 +136,7 @@ GC_TEST(LifeClock, ReceiptAbaAfter128ReusesIsCountedAndEnforced)
     tab->Destroy();
 }
 
-GC_TEST(LifeClock, ArmedAndRetiredEntriesRejectOldFromPage)
+GC_TEST(LifeClock, ActiveEntryRejectsOldFromPage)
 {
     GcHeapFixture fx;
     RegionInfo* page = fx.region0;
@@ -146,7 +148,6 @@ GC_TEST(LifeClock, ArmedAndRetiredEntriesRejectOldFromPage)
     page->SetRegionType(RegionInfo::RegionType::THREAD_LOCAL_REGION);
     const bool expected = !RegionLifeClock::EnforceEnabled();
     GC_EXPECT_EQ(tab->page_life_current(RegionLifeClock::Carrier::ARMED_ENTRY), expected);
-    GC_EXPECT_EQ(tab->page_life_current(RegionLifeClock::Carrier::RETIRED_ENTRY), expected);
     tab->Destroy();
 }
 

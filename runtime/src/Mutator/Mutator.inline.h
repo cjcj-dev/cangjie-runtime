@@ -80,7 +80,7 @@ __attribute__((always_inline)) inline bool Mutator::TransitionGCPhase(bool bySel
         // Current thread set atomic variable to ensure atomicity of phase transition
         CHECK(state == NEED_TRANSITION);
         if (transitionState.compare_exchange_weak(state, IN_TRANSITION)) {
-            TransitionToGCPhaseExclusive(Heap::GetHeap().GetGCPhase(), bySelf);
+            TransitionToGCPhaseExclusive(Heap::GetHeap().GetGCPhase());
             transitionState.store(FINISH_TRANSITION, std::memory_order_release);
             return true;
         }
