@@ -29,6 +29,8 @@ colour_state_machine_probe.cpp            configure  compile-time colour state m
 run_colour_table_witness.sh               manual     host g++/clang++ with C++14 only; prints the readable collision witness and per-family counts. Judgement is the configure arm above
 run_colour_predicates_unit.sh             manual     host g++/clang++ with C++14 only; 17 ZGC-named predicates x positive/negative words, 32 mask epochs, and 16 phase-colour rows
 colour_predicates_unit.cpp                manual     harness for run_colour_predicates_unit.sh; frozen externally for the remove-all-four-files negative arm
+run_colour_encoding_unit.sh               manual     host C++14 runner for low-48 admission, checked geometry, and slot-word encoding classification
+colour_encoding_unit.cpp                  manual     pure ColourEncoding contract table; no product component is recompiled into the test ELF
 
 run_stack_watermark_probe.sh              manual     built runtime SO + cpuset; has its own injection arm
 run_stack_exposure_probe.sh               manual     built runtime SO + cpuset; 6 cases

@@ -71,6 +71,7 @@ set(GC_UNIT_SOURCES
     test_verify_roots.cpp
     test_verify_phase.cpp
     test_mem_map.cpp
+    test_colour_census.cpp
 )
 
 add_executable(cj_gc_unit ${GC_UNIT_SOURCES})

@@ -29,6 +29,7 @@
 #include "ObjectModel/RefField.h"
 #include "TypeInfoManager.h"
 #include "Heap/Verify/VerifyPhase.h"
+#include "Heap/Verify/ColourCensus.h"
 
 namespace MapleRuntime {
 namespace {
@@ -385,6 +386,7 @@ void VerifyHeapObjects(const char* point, const std::unordered_set<BaseObject*>*
     if (!VerifyPhaseEnter(VerifyFace::Objects, point)) {
         return;
     }
+    VerifyColourCensus(point);
 
     static std::atomic<size_t> invokeCount{ 0 };
     size_t invoke = invokeCount.fetch_add(1, std::memory_order_relaxed) + 1;

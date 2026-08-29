@@ -20,6 +20,7 @@
 #include "Sanitizer/SanitizerInterface.h"
 #endif
 #include "Common/ScopedObjectAccess.h"
+#include "Common/ColourEncoding.h"
 #include "Heap.h"
 #include "Heap/Verify/AllocPhaseDiag.h"
 #include "Heap/Verify/MinorGCALot.h"
@@ -181,7 +182,9 @@ void RegionSpace::Init(const HeapParam& vmHeapParam)
 {
     MemMap::Option opt = MemMap::DEFAULT_OPTIONS;
     opt.tag = "cangjie_heap";
-    size_t heapSize = vmHeapParam.heapSize * 1024;
+    size_t heapSize = 0;
+    CHECK_DETAIL(CheckedMulSize(vmHeapParam.heapSize, size_t{1024}, heapSize),
+                 "heap size overflows bytes before reservation: heapSizeKB=%zu", vmHeapParam.heapSize);
     size_t totalSize = RegionManager::GetHeapMemorySize(heapSize);
     size_t unitNum = RegionManager::GetHeapUnitCount(heapSize);
     size_t metadataSize = RegionManager::GetMetadataSize(unitNum);
@@ -197,6 +200,14 @@ void RegionSpace::Init(const HeapParam& vmHeapParam)
 #endif
     // this must succeed otherwise it won't return
     map = MemMap::MapMemory(totalSize, metadataSize, opt, addressBudget, numaTopology);
+    const uintptr_t reservationStart = reinterpret_cast<uintptr_t>(map->GetBaseAddr());
+    uintptr_t reservationEnd = 0;
+    if (IsRepresentableLow48Range(reservationStart, totalSize)) {
+        reservationEnd = reservationStart + totalSize;
+    }
+    CHECK_DETAIL(reservationEnd != 0,
+                 "heap reservation exceeds the 48-bit HeapSlot address carrier: start=%#zx end=%#zx size=%zu",
+                 static_cast<size_t>(reservationStart), static_cast<size_t>(reservationEnd), totalSize);
     // RegionManager indexes units as heapStart + index * UNIT_SIZE. Until that
     // caller is segment-aware, never reinterpret holes between reservations as
     // allocatable units.

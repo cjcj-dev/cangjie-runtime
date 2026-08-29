@@ -4,9 +4,10 @@
 //
 // See https://cangjie-lang.cn/pages/LICENSE for license information.
 
+#include <atomic>
 #include <cstdlib>
 
-#include "Common/ColourMask.h"
+#include "Common/ColourEncoding.h"
 #include "Base/Log.h"
 #include "BaseObject.h"
 #include "Heap/Allocator/RegionInfo.h"
@@ -20,34 +21,68 @@
 #include "ObjectModel/RefField.inline.h"
 
 namespace MapleRuntime {
+namespace {
+struct ColouredWriteCounts {
+    std::atomic<size_t> total{ 0 };
+    std::atomic<size_t> nulls{ 0 };
+    std::atomic<size_t> coloured{ 0 };
+    std::atomic<size_t> legacyPlain{ 0 };
+    std::atomic<size_t> illegal{ 0 };
+};
+
+ColouredWriteCounts g_colouredWriteCounts;
+
+void DumpColouredWriteCounts()
+{
+    LOG(RTLOG_ERROR,
+        "[GCV2][verify][coloured-writes] summary total=%zu null=%zu coloured=%zu plain=%zu illegal=%zu",
+        g_colouredWriteCounts.total.load(std::memory_order_relaxed),
+        g_colouredWriteCounts.nulls.load(std::memory_order_relaxed),
+        g_colouredWriteCounts.coloured.load(std::memory_order_relaxed),
+        g_colouredWriteCounts.legacyPlain.load(std::memory_order_relaxed),
+        g_colouredWriteCounts.illegal.load(std::memory_order_relaxed));
+}
+} // namespace
+
+bool ColouredWritesArmed()
+{
+    static const bool armed = []() {
+        const char* value = std::getenv("MRT_GCV2_ASSERT_COLOURED_WRITES");
+        const bool enabled = value != nullptr && value[0] == '1' && value[1] == '\0';
+        if (enabled) {
+            LOG(RTLOG_ERROR,
+                "[GCV2][verify][coloured-writes] ARMED env=MRT_GCV2_ASSERT_COLOURED_WRITES=1");
+            (void)std::atexit(DumpColouredWriteCounts);
+        }
+        return enabled;
+    }();
+    return armed;
+}
+
 void AssertColouredWriteIfEnabled(const void* slot, MAddress newVal)
 {
-    static const bool assertOn = []() {
-        const char* v = std::getenv("MRT_GCV2_ASSERT_COLOURED_WRITES");
-        return v != nullptr && v[0] == '1' && v[1] == '\0';
-    }();
-    if (LIKELY(!assertOn)) {
+    if (LIKELY(!ColouredWritesArmed()) || !Heap::IsHeapAddress(slot)) {
         return;
     }
-    static const bool reported = []() {
-        LOG(RTLOG_ERROR, "[GCV2][verify][coloured-writes] ARMED env=MRT_GCV2_ASSERT_COLOURED_WRITES=1");
-        return true;
-    }();
-    (void)reported;
-    if (!Heap::IsHeapAddress(slot)) {
-        return;
+    g_colouredWriteCounts.total.fetch_add(1, std::memory_order_relaxed);
+    const SlotWordVerdict verdict = ClassifySlotWord(newVal);
+    switch (verdict) {
+        case SlotWordVerdict::kNull:
+            g_colouredWriteCounts.nulls.fetch_add(1, std::memory_order_relaxed);
+            break;
+        case SlotWordVerdict::kLegacyPlain:
+            g_colouredWriteCounts.legacyPlain.fetch_add(1, std::memory_order_relaxed);
+            break;
+        case SlotWordVerdict::kColoured:
+            g_colouredWriteCounts.coloured.fetch_add(1, std::memory_order_relaxed);
+            break;
+        case SlotWordVerdict::kIllegal:
+            g_colouredWriteCounts.illegal.fetch_add(1, std::memory_order_relaxed);
+            break;
     }
-    if ((newVal & ((MAddress(1) << 48) - 1)) == 0) {
-        return;
-    }
-    constexpr MAddress kColourMask = REMAP_COLOUR_MASK | MARKED_YOUNG_MASK | MARKED_OLD_MASK;
-    bool hasColour = (newVal & kColourMask) != 0;
-    bool tagged = ((newVal >> 48) & 1) != 0;
-    bool loadGood = (newVal & static_cast<MAddress>(::g_cjLoadBadMask)) == 0;
-    CHECK_DETAIL(hasColour && (loadGood || tagged),
-                 "MRT_GCV2_ASSERT_COLOURED_WRITES: plain/bad-colour heap ref write @%p val=%#zx "
-                 "hasColour=%d loadGood=%d tagged=%d",
-                 slot, newVal, hasColour, loadGood, tagged);
+    CHECK_DETAIL(verdict != SlotWordVerdict::kIllegal,
+                 "MRT_GCV2_ASSERT_COLOURED_WRITES: illegal heap slot encoding @%p val=%#zx",
+                 slot, newVal);
 }
 
 TypeInfo* BaseObject::GetTypeInfo() const { return stateWord.GetTypeInfo(); }

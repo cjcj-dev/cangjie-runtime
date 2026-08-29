@@ -207,6 +207,7 @@ $CXX -std=gnu++17 -O0 -g -Wall -Wextra -pthread -fno-rtti \
     "$SRC/test_verify_roots.cpp" \
     "$SRC/test_verify_phase.cpp" \
     "$SRC/test_mem_map.cpp" \
+    "$SRC/test_colour_census.cpp" \
   -L"$RUNTIME_LIB_DIR" -Wl,-rpath,"$RUNTIME_LIB_DIR" -Wl,--exclude-libs,ALL \
   -lcangjie-runtime -lboundscheck \
   -o "$OUT/cj_gc_unit"
@@ -334,6 +335,44 @@ for consumer in "${REFERENCE_PROCESSOR_CONSUMERS[@]}"; do
   fi
 done
 echo "GATE_REFERENCE_PROCESSOR_BINDING_OK elf=$OUT/cj_gc_unit"
+
+# Pointer-colour census tests consume independently replaceable functions from
+# the product SO.  Full nm excludes even local/weak test copies; nm -u proves
+# the calls are imports.  main is the positive control above.
+PTRCOLOUR_PRODUCT_CONSUMERS=(
+  'MapleRuntime::CensusObjectSlots('
+)
+if [[ "${MRT_TESTABLE_INTERNALS:-0}" == "1" ]]; then
+  PTRCOLOUR_PRODUCT_CONSUMERS+=('MapleRuntime::EnforceColourCensusForTesting(')
+fi
+for consumer in "${PTRCOLOUR_PRODUCT_CONSUMERS[@]}"; do
+  if /usr/bin/grep -F -q "$consumer" "$REFERENCE_PROCESSOR_FULL"; then
+    echo "GC_UNIT_PTRCOLOUR_LOCAL_DEFINITION symbol=$consumer" >&2
+    exit 9
+  fi
+  if ! /usr/bin/grep -F -q "$consumer" "$REFERENCE_PROCESSOR_UNDEFINED"; then
+    echo "GC_UNIT_PTRCOLOUR_IMPORT_MISSING symbol=$consumer" >&2
+    exit 10
+  fi
+done
+
+PTRCOLOUR_MANIFEST="$SRC/product_call_manifest_ptrcolour.tsv"
+ptrcolour_rows=0
+while IFS=$'\t' read -r test_name anchor carrier consumer cut_site; do
+  if [[ "$test_name" == "test_name" ]]; then
+    continue
+  fi
+  [[ "$carrier" == "product_so" ]]
+  suite="${test_name%%.*}"
+  name="${test_name#*.}"
+  /usr/bin/grep -F -q "GC_TEST($suite, $name)" "$SRC/test_colour_census.cpp"
+  /usr/bin/grep -F -q "${anchor##*::}" "$ROOT/runtime/src/Heap/Verify/ColourCensus.cpp"
+  /usr/bin/grep -F -q "${consumer#*:}" "$SRC/test_colour_census.cpp"
+  /usr/bin/grep -F -q "${cut_site#*:}" "$ROOT/runtime/src/Heap/Verify/ColourCensus.cpp"
+  ptrcolour_rows=$((ptrcolour_rows + 1))
+done <"$PTRCOLOUR_MANIFEST"
+[[ "$ptrcolour_rows" -eq 2 ]]
+echo "GATE_PTRCOLOUR_PRODUCT_BINDING_OK rows=$ptrcolour_rows elf=$OUT/cj_gc_unit"
 
 # Fresh-process product-link arm for the one-shot ForwardingTable.  It binds
 # CompactRegion/ClearEntries from the same runtime SO as the full suite; no
