@@ -112,13 +112,17 @@ private:
 // address is the object's real home (ForwardBarrier takes the same exemption on resolve).
 std::atomic<uint64_t> g_keepFromHealSkipTotal{ 0 };
 std::atomic<uint64_t> g_keepFromHealSkipSite[64] = {};
+std::atomic<uint64_t> g_plainLoadHealAttempt{ 0 };
 std::atomic<uint64_t> g_plainLoadHealSuccess{ 0 };
+std::atomic<uint64_t> g_plainLoadHealSkip{ 0 };
 
 struct PlainLoadHealReporter {
     ~PlainLoadHealReporter()
     {
-        std::fprintf(stderr, "[ptrcolour][plain-load-heal] success=%llu\n",
-                     static_cast<unsigned long long>(g_plainLoadHealSuccess.load(std::memory_order_relaxed)));
+        std::fprintf(stderr, "[ptrcolour][plain-load-heal] attempt=%llu success=%llu plain_skip=%llu\n",
+                     static_cast<unsigned long long>(g_plainLoadHealAttempt.load(std::memory_order_relaxed)),
+                     static_cast<unsigned long long>(g_plainLoadHealSuccess.load(std::memory_order_relaxed)),
+                     static_cast<unsigned long long>(g_plainLoadHealSkip.load(std::memory_order_relaxed)));
         std::fflush(stderr);
     }
 };
@@ -164,11 +168,18 @@ BaseObject* Barrier::ZgcSelfHealLoadGood(RefField<false>& field, zpointer observ
     BaseObject* returned = to_object(RefField<>(healPtr).GetTargetObject());
     ZgcInvariants::AssertHealMatchesReturn(static_cast<uintptr_t>(raw(healPtr)), returned,
                                            static_cast<uint16_t>(site));
+    const bool plainObserved = IsPlainNonNullSlotWord(static_cast<uintptr_t>(raw(observed)));
+    if (plainObserved) {
+        g_plainLoadHealAttempt.fetch_add(1, std::memory_order_relaxed);
+    }
     if (SkipLaunderingHeal(theCollector, healPtr, site)) {
+        if (plainObserved) {
+            g_plainLoadHealSkip.fetch_add(1, std::memory_order_relaxed);
+        }
         return returned;
     }
     const bool healed = ZgcSelfHeal(field, observed, healPtr, LoadGoodFastPath(theCollector), site);
-    if (healed && IsPlainNonNullSlotWord(static_cast<uintptr_t>(raw(observed)))) {
+    if (healed && plainObserved) {
         g_plainLoadHealSuccess.fetch_add(1, std::memory_order_relaxed);
     }
     return returned;
@@ -180,11 +191,18 @@ BaseObject* Barrier::ZgcSelfHealLoadGood(RefField<true>& field, zpointer observe
     BaseObject* returned = to_object(RefField<>(healPtr).GetTargetObject());
     ZgcInvariants::AssertHealMatchesReturn(static_cast<uintptr_t>(raw(healPtr)), returned,
                                            static_cast<uint16_t>(site));
+    const bool plainObserved = IsPlainNonNullSlotWord(static_cast<uintptr_t>(raw(observed)));
+    if (plainObserved) {
+        g_plainLoadHealAttempt.fetch_add(1, std::memory_order_relaxed);
+    }
     if (SkipLaunderingHeal(theCollector, healPtr, site)) {
+        if (plainObserved) {
+            g_plainLoadHealSkip.fetch_add(1, std::memory_order_relaxed);
+        }
         return returned;
     }
     const bool healed = ZgcSelfHeal(field, observed, healPtr, LoadGoodFastPath(theCollector), site);
-    if (healed && IsPlainNonNullSlotWord(static_cast<uintptr_t>(raw(observed)))) {
+    if (healed && plainObserved) {
         g_plainLoadHealSuccess.fetch_add(1, std::memory_order_relaxed);
     }
     return returned;

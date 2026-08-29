@@ -1933,7 +1933,7 @@ EXPORTS
     _ZN12MapleRuntime22IsHaveCommandInjectionERKNS_7CStringE @1960
     _ZN12MapleRuntime22g_installDomainAlreadyE @1961 DATA
     _ZN12MapleRuntime22g_installDomainTooLateE @1962 DATA
-    _ZN12MapleRuntime23CasInstallInteriorPlainILb0EEEbRNS_8HeapSlotIXT_EEENS_8zpointerEPNS_10BaseObjectEy @1963
+    _ZN12MapleRuntime26CasInstallInteriorColouredILb0EEEbRNS_8HeapSlotIXT_EEENS_8zpointerEPNS_10BaseObjectEy @1963
     _ZN12MapleRuntime23GetStrPoolDictSplitSizeEj @1964
     _ZN12MapleRuntime23ReportForwardRaceCountsEv @1965
     _ZN12MapleRuntime23g_forwardRaceTotalCountE @1966 DATA

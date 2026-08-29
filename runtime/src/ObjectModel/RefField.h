@@ -537,12 +537,11 @@ inline void RebaseDerived(DerivedSlot& slot, const RootSlot& base, size_t offset
     slot.StoreDerived(base, offset, order);
 }
 
-// ABI v1 retains the historical CasInstallInteriorPlain spelling.  Its HeapSlot
-// output is now StoreGood-coloured: only stackmap DerivedSlot remains plain via
-// RebaseDerived.
+// HeapSlot interior references carry a complete StoreGood colour. Only stackmap
+// DerivedSlot remains plain via RebaseDerived.
 template<bool isAtomic = false>
-inline bool CasInstallInteriorPlain(HeapSlot<isAtomic>& field, zpointer expected,
-                                    BaseObject* host, size_t offset, HealSite site)
+inline bool CasInstallInteriorColoured(HeapSlot<isAtomic>& field, zpointer expected,
+                                       BaseObject* host, size_t offset, HealSite site)
 {
     MAddress address = reinterpret_cast<MAddress>(host) + offset;
     return HealSlot(field, expected,
@@ -553,8 +552,8 @@ inline bool CasInstallInteriorPlain(HeapSlot<isAtomic>& field, zpointer expected
 // complete StoreGood word.
 // Prefer the (host, offset) overload when TryRecoverInteriorBase succeeds.
 template<bool isAtomic = false>
-inline bool CasInstallInteriorPlain(HeapSlot<isAtomic>& field, zpointer expected,
-                                    BaseObject* interior, HealSite site)
+inline bool CasInstallInteriorColoured(HeapSlot<isAtomic>& field, zpointer expected,
+                                       BaseObject* interior, HealSite site)
 {
     MAddress address = reinterpret_cast<MAddress>(interior);
     return HealSlot(field, expected,
