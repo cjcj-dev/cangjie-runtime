@@ -886,12 +886,11 @@ protected:
         if (target == nullptr) {
             return RefField<>(static_cast<BaseObject*>(nullptr));
         }
-        // TypeInfo* / binary constants / immortal metadata after Flip
-        // (PlanRouteUnderStw:611-613).  Same heap gate as FindToVersion.
-        // Uncoloured ⇒ load-good high-bits-zero fast path.  Painting
-        // store-good here would send the next load through the barrier.
+        // TypeInfo* / binary constants / immortal metadata are not relocated,
+        // but a non-null HeapSlot word is still coloured.  The load-good mask
+        // fast path peels it without routing through the collector.
         if (!Heap::IsHeapAddress(target)) {
-            return RefField<>(target);
+            return ColourStoreGood(from_object(target));
         }
         RegionInfo* live = RegionInfo::TryGetRegionInfoAt(reinterpret_cast<MAddress>(target));
         if (live == nullptr || live->IsFreeRegion()) {
@@ -1072,37 +1071,9 @@ protected:
         return stale;
     }
 
-    // plainroots: root-slot write-back is plain (ZGC uncolored root); heap-slot write-back
-    // keeps Phase C colour. Gate MRT_GCV2_PLAIN_ROOTS, on by default.
-    //
-    // It shipped off for two hours and that was wrong. The stated reason was that a
-    // hang carries no si_code, no registers and no core and so is a worse base to
-    // debug from -- but hangfloor then diagnosed the hang twice with the gate on,
-    // reading per-cycle reclaim out of MRT_GC_LOG. The premise was false, and what
-    // the default actually did was let the ledger record a known-wrong behaviour as
-    // not-a-blocker.
-    //
-    // The rule is what ops/design/STACK_ROOTS_STAY_PLAIN.md rules and what ZGC does
-    // (zUncoloredRoot.inline.hpp heals a root by writing back zaddress, with the
-    // colour passed alongside as an argument). Colour in a register can only have
-    // come from the collector's root write-back, which is why the same mechanism
-    // surfaced as four separate-looking floor layers. Off means main keeps emitting
-    // the defect those four fixes were about.
-    //
-    // Nothing that works today stops working: hello is 10/10 in all three arms. The
-    // arm that hangs was already failing 10/10 as a SEGV.
-    static bool PlainRootsEnabled()
-    {
-        static const bool on = []() {
-            const char* v = std::getenv("MRT_GCV2_PLAIN_ROOTS");
-            if (v == nullptr) {
-                return true;
-            }
-            return !(v[0] == '0' && v[1] == '\0');
-        }();
-        return on;
-    }
-
+    // Typed, unconditional boundary: HeapSlot write-back is coloured while
+    // stack/register/static RootSlot write-back stays plain, matching ZGC's
+    // ZUncoloredRoot.  There is no runtime switch between the two contracts.
     RefField<> RootSlotWriteback(BaseObject* target, const RefField<>& /*slot*/) const
     {
         return GetAndTryTagRefField(target);
@@ -1110,10 +1081,7 @@ protected:
 
     RefField<> RootSlotWriteback(BaseObject* target, const RootSlot& /*slot*/) const
     {
-        if (PlainRootsEnabled()) {
-            return RefField<>(target);
-        }
-        return GetAndTryTagRefField(target);
+        return RefField<>(target);
     }
 
     bool HealRootWriteback(RootSlot& root, BaseObject* target, HealSite site,

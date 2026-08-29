@@ -16,6 +16,7 @@
 #include <sys/mman.h>
 
 #include "Common/BaseObject.h"
+#include "Common/ColourEncoding.h"
 // Test-only: plant liveInfo/liveInfo0 without product structure change (no 乙).
 // RegionInfo::metadata and RegionSpace reserved span are private; unit tests
 // need them to Init FDM without Heap::Init / InitCJRuntime.
@@ -32,6 +33,22 @@
 
 namespace MapleRuntime {
 namespace GcUnit {
+
+inline zpointer ColouredPointer(BaseObject* object, uintptr_t remap)
+{
+    const uintptr_t address = reinterpret_cast<uintptr_t>(object);
+    if (address == 0) {
+        return zpointer::null;
+    }
+    const uintptr_t nonRemapFamilies = static_cast<uintptr_t>(::g_cjStoreGoodMask) & ~REMAP_COLOUR_MASK;
+    return to_zpointer(address | remap | nonRemapFamilies);
+}
+
+inline zpointer StoreGoodPointer(BaseObject* object)
+{
+    return to_zpointer(MakeStoreGoodSlotWord(reinterpret_cast<uintptr_t>(object),
+                                             static_cast<uintptr_t>(::g_cjStoreGoodMask)));
+}
 
 struct GcHeapFixture {
     // Six permits the intrusive RegionList port to exercise the same six-node

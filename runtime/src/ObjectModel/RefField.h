@@ -18,6 +18,7 @@
 
 #include "Base/Log.h"
 #include "Common/ColourMask.h"
+#include "Common/ColourEncoding.h"
 #include "Common/ColourPredicates.h"
 #include "Common/TypeDef.h"
 #if defined(CANGJIE_TSAN_SUPPORT)
@@ -54,22 +55,15 @@ enum class HealSite : uint16_t {
     BaseObjectCompareExchangeRefField,
     BarrierReadStaticReference,
     BarrierCompareAndSwapReference,
-    BarrierCopyRefArrayRecolour,
-    BarrierCopyStructArrayRecolour,
-    BarrierWriteStructRecolour,
     EnumCompareAndSwapReference,
     EnumCopyStructArrayRecolour,
     EnumReadReference,
-    EnumWriteStructRecolour,
     ForwardAtomicReadReference,
     ForwardCompareAndSwapReference,
-    ForwardCopyStructArrayRecolour,
     ForwardReadReference,
     IdleAtomicReadReference,
     IdleCompareAndSwapReference,
-    IdleCopyStructArrayRecolour,
     IdleReadReference,
-    IdleWriteStructRecolour,
     MutatorPreForwardHeaderlessRecord,
     MutatorPreForwardInterior,
     MutatorPreForwardRoot,
@@ -79,15 +73,12 @@ enum class HealSite : uint16_t {
     PostTraceCompareAndSwapReference,
     PostTraceCopyStructArrayRecolour,
     PostTraceReadReference,
-    PostTraceWriteStructRecolour,
     PreforwardAtomicReadReference,
     PreforwardCompareAndSwapReference,
-    PreforwardCopyStructArrayRecolour,
     PreforwardReadReference,
     TraceCompareAndSwapReference,
     TraceCopyStructArrayRecolour,
     TraceReadReference,
-    TraceWriteStructRecolour,
     TracingCollectorResurrectFinalizer,
     TracingCollectorTraceRefField,
     WCollectorEnumRawInteriorRoot,
@@ -142,8 +133,8 @@ inline bool HealSlot(HeapSlot<isAtomic>& slot, zpointer expected, zpointer desir
                      std::memory_order failOrder = std::memory_order_relaxed,
                      zpointer* observedOut = nullptr);
 
-// COLOUR_WRITEBACK_AUDIT §六 判据 1：堆内非 null 写必须带色。定义在 RefField.inline.h /
-// BaseObject.cpp；默认关（MRT_GCV2_ASSERT_COLOURED_WRITES=1 打开）。
+// Full-colour write funnel: every HeapSlot write is checked unconditionally;
+// RootSlot/DerivedSlot addresses remain outside this heap-only admission.
 void AssertColouredWriteIfEnabled(const void* slot, MAddress newVal);
 
 /* there are several similar terms about object address:
@@ -376,7 +367,7 @@ inline bool HealSlot(HeapSlot<isAtomic>& slot, zpointer expected, zpointer desir
 // same slot and break it. CheckTransitionMonotonicity is the instrument for that question,
 // which is why it counts rather than aborts (MRT_GCV2_ZGC_SELFHEAL_ABORT=1 makes it fatal).
 template<bool isAtomic, typename FastPath>
-inline void ZgcSelfHeal(HeapSlot<isAtomic>& slot, zpointer ptr, zpointer healPtr, FastPath fastPath,
+inline bool ZgcSelfHeal(HeapSlot<isAtomic>& slot, zpointer ptr, zpointer healPtr, FastPath fastPath,
                         HealSite site, HealNull allowNull = HealNull::Disallow)
 {
     // :73-79  Never heal with null since it interacts badly with reference processing.
@@ -386,7 +377,7 @@ inline void ZgcSelfHeal(HeapSlot<isAtomic>& slot, zpointer ptr, zpointer healPtr
     if (allowNull == HealNull::Disallow && is_null(healPtr) &&
         ColourPredicates::has_address(static_cast<uintptr_t>(raw(ptr)))) {
         ZgcSelfHealDiag::NoteNullSkip();
-        return;
+        return false;
     }
 
     ZgcSelfHealDiag::NoteEnter();
@@ -407,13 +398,13 @@ inline void ZgcSelfHeal(HeapSlot<isAtomic>& slot, zpointer ptr, zpointer healPtr
                      std::memory_order_relaxed, &prevPtr)) {
             // :93-96  Success
             ZgcSelfHealDiag::NoteHealed(iterations);
-            return;
+            return true;
         }
 
         if (fastPath(prevPtr)) {
             // :98-101  Must not self heal
             ZgcSelfHealDiag::NoteFastPathExit(iterations);
-            return;
+            return false;
         }
 
         // :103-107  The oop location was healed by another barrier, but still needs upgrading.
@@ -546,27 +537,28 @@ inline void RebaseDerived(DerivedSlot& slot, const RootSlot& base, size_t offset
     slot.StoreDerived(base, offset, order);
 }
 
-// Named HeapSlot write for a derived *value* (base+offset interior). The storage is still a
-// HeapSlot (object field / remset), but the payload is not an object root and must stay plain
-// (03fc21ed / interiorsrc2). DerivedSlot itself cannot CAS into HeapSlot storage — stackmap
-// DerivedSlots use RebaseDerived; these HeapSlot sites keep CAS and express provenance via
-// (host, offset) in the call. Do not colour the installed value.
+// ABI v1 retains the historical CasInstallInteriorPlain spelling.  Its HeapSlot
+// output is now StoreGood-coloured: only stackmap DerivedSlot remains plain via
+// RebaseDerived.
 template<bool isAtomic = false>
 inline bool CasInstallInteriorPlain(HeapSlot<isAtomic>& field, zpointer expected,
                                     BaseObject* host, size_t offset, HealSite site)
 {
-    MAddress plainVal = reinterpret_cast<MAddress>(host) + offset;
-    return HealSlot(field, expected, to_zpointer(plainVal), site);
+    MAddress address = reinterpret_cast<MAddress>(host) + offset;
+    return HealSlot(field, expected,
+                    to_zpointer(MakeStoreGoodSlotWord(address, ::g_cjStoreGoodMask)), site);
 }
 
-// When the host is unknown, still install a plain interior address (same 03fc21ed rule).
+// When the host is unknown, preserve the interior payload but still publish a
+// complete StoreGood word.
 // Prefer the (host, offset) overload when TryRecoverInteriorBase succeeds.
 template<bool isAtomic = false>
 inline bool CasInstallInteriorPlain(HeapSlot<isAtomic>& field, zpointer expected,
                                     BaseObject* interior, HealSite site)
 {
-    MAddress plainVal = reinterpret_cast<MAddress>(interior);
-    return HealSlot(field, expected, to_zpointer(plainVal), site);
+    MAddress address = reinterpret_cast<MAddress>(interior);
+    return HealSlot(field, expected,
+                    to_zpointer(MakeStoreGoodSlotWord(address, ::g_cjStoreGoodMask)), site);
 }
 
 static_assert(sizeof(HeapSlot<>) == sizeof(MAddress), "HeapSlot must remain one machine word");

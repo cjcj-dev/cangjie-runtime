@@ -64,7 +64,7 @@ public:
     RefField<> GetAndTryTagRefField(BaseObject* object) const override
     {
         const uintptr_t remap = ColourPredicates::current_remapped(static_cast<uintptr_t>(::g_cjLoadBadMask));
-        return RefField<>(to_zpointer(reinterpret_cast<MAddress>(object) | remap));
+        return RefField<>(GcUnit::ColouredPointer(object, remap));
     }
     ZGenerationId remap_generation(RefField<>&) const override { return ZGenerationId::old; }
     BaseObject* relocate_or_remap_object(BaseObject* object, ZGenerationId) const override { return object; }
@@ -102,7 +102,7 @@ struct LoadFcFixture {
     RefField<>* MakePlainField()
     {
         field = &HeapSlotAt<>(reinterpret_cast<MAddress>(heap.obj1) + TYPEINFO_PTR_SIZE);
-        field->StoreColoured(to_zpointer(reinterpret_cast<MAddress>(heap.obj0)));
+        field->StoreColoured(GcUnit::StoreGoodPointer(heap.obj0));
         return field;
     }
 

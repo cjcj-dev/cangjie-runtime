@@ -149,8 +149,6 @@ private:
 
 class TestCollector final : public Collector {
 public:
-    explicit TestCollector(bool colourStores = false) : colourStores(colourStores) {}
-
     void Init() override {}
     void RunGarbageCollection(uint64_t, GCReason) override {}
     bool ShouldIgnoreRequest(GCRequest&) override { return false; }
@@ -162,14 +160,8 @@ public:
     bool IsOldPointer(RefField<>&) const override { return false; }
     RefField<> GetAndTryTagRefField(BaseObject* obj) const override
     {
-        if (colourStores) {
-            return RefField<>(obj, ::g_cjStoreGoodMask);
-        }
-        return RefField<>(to_zpointer(reinterpret_cast<MAddress>(obj)));
+        return RefField<>(GcUnit::StoreGoodPointer(obj));
     }
-
-private:
-    bool colourStores;
 };
 
 class TestBarrier final : public Barrier {
@@ -179,7 +171,7 @@ public:
 protected:
     void WriteReferenceImpl(BaseObject*, RefField<false>& field, BaseObject* ref) const
     {
-        field.StoreColoured(to_zpointer(reinterpret_cast<MAddress>(ref)));
+        field.StoreColoured(GcUnit::StoreGoodPointer(ref));
     }
 };
 
@@ -290,9 +282,10 @@ GC_TEST(Remset, OldToYoungRecordedByBarrier)
     GC_EXPECT_TRUE(ExpectRecorded(rs, reinterpret_cast<MAddress>(field)));
 }
 
-// Case A: a non-null plain previous word is not store-good.  The product barrier must still
-// register the old slot; the cheap compiler-side negative-mask predicate cannot be used as the
-// remembered-set witness for this value.
+// Case A: ZGC's single-negative-mask predicate classifies a non-null plain
+// previous word as store-good, while the heap-slot encoding gate classifies
+// the same word as illegal.  The product barrier must still register the old
+// slot; encoding legality must not be inferred from the fast-path predicate.
 GC_TEST(Remset, PlainPreviousWordStillRecordsOldToYoung)
 {
     GcHeapFixture fx;
@@ -302,14 +295,16 @@ GC_TEST(Remset, PlainPreviousWordStillRecordsOldToYoung)
 
     auto* field = &HeapSlotAt<>(reinterpret_cast<MAddress>(fx.obj0) + TYPEINFO_PTR_SIZE);
     const MAddress slot = reinterpret_cast<MAddress>(field);
-    TestCollector collector(true);
+    TestCollector collector;
     RememberedSet rs;
     rs.Initialize(fx.heapStart, 2 * RegionInfo::UNIT_SIZE);
     Barrier barrier(collector, rs);
 
     // Deliberately install a non-null, uncoloured previous word (case A).
-    field->StoreColoured(to_zpointer(reinterpret_cast<MAddress>(fx.obj1)));
-    GC_EXPECT_FALSE(collector.is_store_good(*field));
+    const uintptr_t plain = reinterpret_cast<uintptr_t>(fx.obj1);
+    std::memcpy(field, &plain, sizeof(plain));
+    GC_EXPECT_TRUE(collector.is_store_good(*field));
+    GC_EXPECT_EQ(ClassifySlotWord(plain), SlotWordVerdict::kIllegal);
     barrier.WriteReference(fx.obj0, *field, fx.obj1);
 
     GC_EXPECT_TRUE(rs.Contains(slot));
@@ -327,7 +322,7 @@ GC_TEST(Remset, StoreGoodRewriteReregistersAfterDrain)
 
     auto* field = &HeapSlotAt<>(reinterpret_cast<MAddress>(fx.obj0) + TYPEINFO_PTR_SIZE);
     const MAddress slot = reinterpret_cast<MAddress>(field);
-    TestCollector collector(true);
+    TestCollector collector;
     RememberedSet rs;
     rs.Initialize(fx.heapStart, 2 * RegionInfo::UNIT_SIZE);
     Barrier barrier(collector, rs);
@@ -528,14 +523,16 @@ GC_TEST(Remset, CompilerPostStoreRecordsPlainPreviousWord)
 
     auto* field = &HeapSlotAt<>(reinterpret_cast<MAddress>(fx.obj0) + TYPEINFO_PTR_SIZE);
     const MAddress slot = reinterpret_cast<MAddress>(field);
-    TestCollector collector(true);
+    TestCollector collector;
     RememberedSet rs;
     rs.Initialize(fx.heapStart, 2 * RegionInfo::UNIT_SIZE);
     Barrier barrier(collector, rs);
     InstalledBarrierScope installedBarrier(barrier);
 
-    field->StoreColoured(to_zpointer(reinterpret_cast<MAddress>(fx.obj0)));
-    GC_EXPECT_FALSE(collector.is_store_good(*field));
+    const uintptr_t plain = reinterpret_cast<uintptr_t>(fx.obj0);
+    std::memcpy(field, &plain, sizeof(plain));
+    GC_EXPECT_TRUE(collector.is_store_good(*field));
+    GC_EXPECT_EQ(ClassifySlotWord(plain), SlotWordVerdict::kIllegal);
     RefField<> installed = collector.GetAndTryTagRefField(fx.obj1);
     field->StoreColoured(installed.GetFieldValue());
     GC_EXPECT_FALSE(rs.Contains(slot)); // positive control: the direct store alone does not record
@@ -555,7 +552,7 @@ GC_TEST(Remset, CompilerPostStoreRecordsChangedTargetAfterNoYoung)
 
     auto* field = &HeapSlotAt<>(reinterpret_cast<MAddress>(fx.obj0) + TYPEINFO_PTR_SIZE);
     const MAddress slot = reinterpret_cast<MAddress>(field);
-    TestCollector collector(true);
+    TestCollector collector;
     RememberedSet rs;
     rs.Initialize(fx.heapStart, 2 * RegionInfo::UNIT_SIZE);
     Barrier barrier(collector, rs);
@@ -584,7 +581,7 @@ GC_TEST(Remset, AtomicWriteRecordsOldToYoung)
     fx.region1->SetYoungAge(1);
     auto* field = &HeapSlotAt<true>(reinterpret_cast<MAddress>(fx.obj0) + TYPEINFO_PTR_SIZE);
     const MAddress slot = reinterpret_cast<MAddress>(field);
-    TestCollector collector(true);
+    TestCollector collector;
     RememberedSet rs;
     rs.Initialize(fx.heapStart, 2 * RegionInfo::UNIT_SIZE);
     Barrier barrier(collector, rs);
@@ -602,7 +599,7 @@ GC_TEST(Remset, AtomicSwapRecordsOldToYoung)
     fx.region1->SetYoungAge(1);
     auto* field = &HeapSlotAt<true>(reinterpret_cast<MAddress>(fx.obj0) + TYPEINFO_PTR_SIZE);
     const MAddress slot = reinterpret_cast<MAddress>(field);
-    TestCollector collector(true);
+    TestCollector collector;
     RememberedSet rs;
     rs.Initialize(fx.heapStart, 2 * RegionInfo::UNIT_SIZE);
     Barrier barrier(collector, rs);
@@ -621,7 +618,7 @@ GC_TEST(Remset, CompareAndSwapRecordsOnlySuccessfulStore)
     fx.region1->SetYoungAge(1);
     auto* field = &HeapSlotAt<true>(reinterpret_cast<MAddress>(fx.obj0) + TYPEINFO_PTR_SIZE);
     const MAddress slot = reinterpret_cast<MAddress>(field);
-    TestCollector collector(true);
+    TestCollector collector;
     RememberedSet rs;
     rs.Initialize(fx.heapStart, 2 * RegionInfo::UNIT_SIZE);
     Barrier barrier(collector, rs);

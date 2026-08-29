@@ -332,11 +332,12 @@ echo "GATE_REFERENCE_PROCESSOR_BINDING_OK elf=$OUT/cj_gc_unit"
 # Pointer-colour census tests consume independently replaceable functions from
 # the product SO.  Full nm excludes even local/weak test copies; nm -u proves
 # the calls are imports.  main is the positive control above.
-PTRCOLOUR_PRODUCT_CONSUMERS=(
-  'MapleRuntime::CensusObjectSlots('
-)
+PTRCOLOUR_PRODUCT_CONSUMERS=()
+PTRCOLOUR_PRODUCT_CONSUMERS+=('MapleRuntime::EnumBarrier::ReadReference(')
 if [[ "${MRT_TESTABLE_INTERNALS:-0}" == "1" ]]; then
+  PTRCOLOUR_PRODUCT_CONSUMERS+=('MapleRuntime::CensusObjectSlots(')
   PTRCOLOUR_PRODUCT_CONSUMERS+=('MapleRuntime::EnforceColourCensusForTesting(')
+  PTRCOLOUR_PRODUCT_CONSUMERS+=('MapleRuntime::AssertColouredWriteIfEnabled(')
 fi
 for consumer in "${PTRCOLOUR_PRODUCT_CONSUMERS[@]}"; do
   if /usr/bin/grep -F -q "$consumer" "$REFERENCE_PROCESSOR_FULL"; then
@@ -358,14 +359,39 @@ while IFS=$'\t' read -r test_name anchor carrier consumer cut_site; do
   [[ "$carrier" == "product_so" ]]
   suite="${test_name%%.*}"
   name="${test_name#*.}"
-  /usr/bin/grep -F -q "GC_TEST($suite, $name)" "$SRC/test_colour_census.cpp"
-  /usr/bin/grep -F -q "${anchor##*::}" "$ROOT/runtime/src/Heap/Verify/ColourCensus.cpp"
-  /usr/bin/grep -F -q "${consumer#*:}" "$SRC/test_colour_census.cpp"
-  /usr/bin/grep -F -q "${cut_site#*:}" "$ROOT/runtime/src/Heap/Verify/ColourCensus.cpp"
+  case "$test_name" in
+    ColourCensus.*) test_source="$SRC/test_colour_census.cpp" ;;
+    I2ReadRef.*) test_source="$SRC/test_i2_readref.cpp" ;;
+    *) echo "GC_UNIT_PTRCOLOUR_UNKNOWN_TEST test_name=$test_name" >&2; exit 10 ;;
+  esac
+  /usr/bin/grep -F -q "GC_TEST($suite, $name)" "$test_source"
+  /usr/bin/grep -R -F -q "${anchor##*::}" "$ROOT/runtime/src"
+  /usr/bin/grep -F -q "${consumer#*:}" "$test_source"
+  /usr/bin/grep -R -F -q "${cut_site#*:}" "$ROOT/runtime/src"
   ptrcolour_rows=$((ptrcolour_rows + 1))
 done <"$PTRCOLOUR_MANIFEST"
-[[ "$ptrcolour_rows" -eq 2 ]]
+[[ "$ptrcolour_rows" -eq 4 ]]
 echo "GATE_PTRCOLOUR_PRODUCT_BINDING_OK rows=$ptrcolour_rows elf=$OUT/cj_gc_unit"
+
+# The classifier's four required colour-family rows are coupled to this stable
+# producer set.  A producer/anchor removal, an empty set, or a partial family
+# declaration fails before the behavioral suite can lend it a green result.
+PTRCOLOUR_PRODUCER_MANIFEST="$SRC/product_colour_producer_manifest.tsv"
+EXPECTED_PTRCOLOUR_PRODUCERS=(store_good stale_load_bad interior_store_good bulk_store_good)
+ptrcolour_producer_rows=0
+while IFS=$'\t' read -r producer_name source_file stable_anchor required_families; do
+  if [[ "$producer_name" == "producer_name" ]]; then
+    continue
+  fi
+  [[ "$required_families" == "remap,marked_young,marked_old,remembered" ]]
+  /usr/bin/grep -F -q "$stable_anchor" "$ROOT/$source_file"
+  ptrcolour_producer_rows=$((ptrcolour_producer_rows + 1))
+done <"$PTRCOLOUR_PRODUCER_MANIFEST"
+[[ "$ptrcolour_producer_rows" -eq "${#EXPECTED_PTRCOLOUR_PRODUCERS[@]}" ]]
+for producer_name in "${EXPECTED_PTRCOLOUR_PRODUCERS[@]}"; do
+  /usr/bin/grep -q "^${producer_name}"$'\t' "$PTRCOLOUR_PRODUCER_MANIFEST"
+done
+echo "GATE_PTRCOLOUR_PRODUCER_MANIFEST_OK rows=$ptrcolour_producer_rows families=4"
 
 # Fresh-process product-link arm for the one-shot ForwardingTable.  It binds
 # CompactRegion/ClearEntries from the same runtime SO as the full suite; no

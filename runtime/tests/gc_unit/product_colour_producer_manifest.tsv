@@ -1,0 +1,5 @@
+producer_name	source_file	stable_anchor	required_families
+store_good	runtime/src/Heap/WCollector/WCollector.h	currentRemapColour | currentMarkedYoung | currentMarkedOld | currentRemembered	remap,marked_young,marked_old,remembered
+stale_load_bad	runtime/src/Heap/WCollector/WCollector.h	staleOneHot | currentMarkedYoung | currentMarkedOld | currentRemembered	remap,marked_young,marked_old,remembered
+interior_store_good	runtime/src/ObjectModel/RefField.h	MakeStoreGoodSlotWord(address, ::g_cjStoreGoodMask)	remap,marked_young,marked_old,remembered
+bulk_store_good	runtime/src/Heap/Barrier/Barrier.cpp	collector.GetAndTryTagRefField(target)	remap,marked_young,marked_old,remembered

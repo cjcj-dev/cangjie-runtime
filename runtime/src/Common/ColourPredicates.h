@@ -20,13 +20,10 @@
 // ComputeBadMasks(EpochColours). The published masks therefore remain the
 // only run-time truth.
 //
-// Our heap still contains deliberately plain RootSlot/DerivedSlot values and
-// is part-way through eliminating plain HeapSlot values. ZGC can implement
-// *_good_or_null as merely "not bad" because every non-null oop is coloured.
-// Doing that here would newly admit a plain non-null word. The good predicates
-// consequently require both a payload address and the current remap bit. This
-// preserves Collector::is_load_good's existing fail-closed rule while keeping
-// the decision a pure colour-bit test.
+// HeapSlot is now full-colour: every non-null heap word is admitted by the
+// producer-derived encoding validator before publication.  The predicates can
+// therefore use ZGC's single mask test; plain RootSlot/DerivedSlot values never
+// enter this domain.
 
 namespace MapleRuntime {
 namespace ColourPredicates {
@@ -95,9 +92,9 @@ constexpr uintptr_t current_remembered(uintptr_t storeBadMask)
 
 // ZPointer::is_load_bad -- true when a non-current remap bit is present.
 // Mid-evacuation is not a pointer bit (zAddress.hpp:60-128). A plain word is
-// not mask-bad, but is_load_good below still rejects it because it has no
-// current remap bit. The answer can change when the remap epoch flips in
-// GC_PHASE_PREFORWARD.
+// not mask-bad; HeapSlot encoding legality is enforced at publication and the
+// legacy-generation load-heal path explicitly diverts it before this predicate.
+// The answer can change when the remap epoch flips in GC_PHASE_PREFORWARD.
 constexpr bool is_load_bad(uintptr_t value, uintptr_t loadBadMask)
 {
     return (value & loadBadMask) != 0;
@@ -111,21 +108,21 @@ constexpr bool is_remapped(uintptr_t value, uintptr_t loadBadMask)
     return remapped != 0 && (value & remapped) != 0;
 }
 
-// ZPointer::is_load_good -- a non-null heap payload with the current combined
-// remap bit and no tagged/stale-remap bit. It is phase-independent; the answer
-// changes only when g_cjLoadBadMask is republished at relocate start.
+// ZPointer::is_load_good (zAddress.inline.hpp:631-633).
 constexpr bool is_load_good(uintptr_t value, uintptr_t loadBadMask)
 {
-    return has_address(value) && !is_load_bad(value, loadBadMask) && is_remapped(value, loadBadMask);
+    return value != 0 && !is_load_bad(value, loadBadMask);
 }
 
 constexpr bool is_load_good_or_null(uintptr_t value, uintptr_t loadBadMask)
 {
-    return value == 0 || is_load_good(value, loadBadMask);
+    (void)value;
+    return !is_load_bad(value, loadBadMask);
 }
 
-// ZPointer::is_load_good_or_null above is true only for raw null or strict
-// load-good; it deliberately rejects a plain non-null word in every phase.
+// As in ZGC, the negative-mask predicate alone does not establish encoding
+// legality: a plain non-null word is not mask-bad. HeapSlot publication is
+// separately fail-closed through ClassifySlotWord.
 //
 // ZPointer::is_young_load_good/is_old_load_good -- true when the word's remap
 // bit belongs to the current conceptual young/old half of the four-way colour.
@@ -150,22 +147,23 @@ constexpr bool is_mark_bad(uintptr_t value, uintptr_t markBadMask)
     return (value & markBadMask) != 0;
 }
 
-// ZPointer::is_mark_good -- load-good plus current MarkedYoung/MarkedOld.
-// Those mark epochs flip at GC_PHASE_ENUM; no phase read participates here.
+// ZPointer::is_mark_good (zAddress.inline.hpp:658-664).
 constexpr bool is_mark_good(uintptr_t value, uintptr_t loadBadMask, uintptr_t markBadMask)
 {
-    return is_load_good(value, loadBadMask) && !is_mark_bad(value, markBadMask) &&
-        (value & current_marked_young(markBadMask)) != 0 && (value & current_marked_old(markBadMask)) != 0;
+    (void)loadBadMask;
+    return value != 0 && !is_mark_bad(value, markBadMask);
 }
 
 constexpr bool is_mark_good_or_null(uintptr_t value, uintptr_t loadBadMask, uintptr_t markBadMask)
 {
-    return value == 0 || is_mark_good(value, loadBadMask, markBadMask);
+    (void)value;
+    (void)loadBadMask;
+    return !is_mark_bad(value, markBadMask);
 }
 
-// ZPointer::is_mark_good_or_null above is true only for raw null or a word
-// carrying current remap + MarkedYoung + MarkedOld bits. It follows the ENUM
-// mark flips and PREFORWARD remap flips through the explicit masks.
+// Encoding completeness is checked at HeapSlot publication, not repeated in
+// this phase predicate. ENUM/PREFORWARD changes are represented by the bad
+// masks passed here.
 //
 // ZPointer::is_store_bad -- true for any mark-bad bit or a stale Remembered
 // bit. Remembered changes with MarkedYoung around GC_PHASE_ENUM.
@@ -174,23 +172,22 @@ constexpr bool is_store_bad(uintptr_t value, uintptr_t storeBadMask)
     return (value & storeBadMask) != 0;
 }
 
-// ZPointer::is_store_good -- load/mark-good plus the current Remembered epoch.
-// Remembered flips with MarkedYoung at GC_PHASE_ENUM.
+// ZPointer::is_store_good (zAddress.inline.hpp:683-685).
 constexpr bool is_store_good(uintptr_t value, uintptr_t loadBadMask, uintptr_t storeBadMask)
 {
-    return is_load_good(value, loadBadMask) && !is_store_bad(value, storeBadMask) &&
-        (value & current_marked_young(storeBadMask)) != 0 && (value & current_marked_old(storeBadMask)) != 0 &&
-        (value & current_remembered(storeBadMask)) != 0;
+    (void)loadBadMask;
+    return value != 0 && !is_store_bad(value, storeBadMask);
 }
 
 constexpr bool is_store_good_or_null(uintptr_t value, uintptr_t loadBadMask, uintptr_t storeBadMask)
 {
-    return value == 0 || is_store_good(value, loadBadMask, storeBadMask);
+    (void)value;
+    (void)loadBadMask;
+    return !is_store_bad(value, storeBadMask);
 }
 
-// ZPointer::is_store_good_or_null above is true only for raw null or current
-// remap + mark + Remembered bits. Stores in every GC_PHASE use this state; the
-// relevant epochs change at ENUM and PREFORWARD as recorded above.
+// Encoding completeness is checked at HeapSlot publication, not repeated in
+// this phase predicate. This function is the ZGC single-not-bad test.
 
 // ZPointer::is_marked_finalizable -- tests the current reserved finalizable
 // epoch. Synthetic words can exercise it, but kFinalizableWired documents that

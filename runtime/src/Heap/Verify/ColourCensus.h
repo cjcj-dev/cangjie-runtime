@@ -10,13 +10,21 @@
 
 namespace MapleRuntime {
 
+#if defined(MRT_TESTABLE_INTERNALS)
+#define MRT_PTRCOLOUR_TEST_API __attribute__((visibility("default")))
+#else
+#define MRT_PTRCOLOUR_TEST_API __attribute__((visibility("hidden")))
+#endif
+
 class BaseObject;
 
 struct ColourCensusStats {
+    size_t slots = 0;
+    // Non-null slots.  The full-colour gate is coloured == total.
     size_t total = 0;
     size_t nulls = 0;
     size_t coloured = 0;
-    size_t legacyPlain = 0;
+    size_t plain = 0;
     size_t illegal = 0;
     const void* firstPlainSlot = nullptr;
     uintptr_t firstPlainValue = 0;
@@ -25,22 +33,22 @@ struct ColourCensusStats {
     uintptr_t firstIllegalValue = 0;
     BaseObject* firstIllegalHolder = nullptr;
 
-    void Observe(const void* slot, uintptr_t value, BaseObject* holder);
+    MRT_PTRCOLOUR_TEST_API void Observe(const void* slot, uintptr_t value, BaseObject* holder);
 };
 
 // Iterates only fields named by the object's GCTib.  The StateWord header is
 // never passed to ClassifySlotWord (POINTER_COLOUR_CAMPAIGN R7).
-void CensusObjectSlots(BaseObject* object, ColourCensusStats& stats);
+MRT_PTRCOLOUR_TEST_API void CensusObjectSlots(BaseObject* object, ColourCensusStats& stats);
 
 // Safe-point heap walk, wired through the existing Objects verification face.
-void VerifyColourCensus(const char* point);
+__attribute__((visibility("hidden"))) void VerifyColourCensus(const char* point);
 
 #if defined(MRT_TESTABLE_INTERNALS)
-// The production enforcement branch with an explicit armed value lets the GC
-// death test avoid process-global getenv caching.  It is absent from default
-// product builds; correctness does not depend on this seam.
-void EnforceColourCensusForTesting(const ColourCensusStats& stats, bool armed);
+// Test-only entry to the same unconditional production enforcement branch.
+MRT_PTRCOLOUR_TEST_API void EnforceColourCensusForTesting(const ColourCensusStats& stats);
 #endif
+
+#undef MRT_PTRCOLOUR_TEST_API
 
 } // namespace MapleRuntime
 

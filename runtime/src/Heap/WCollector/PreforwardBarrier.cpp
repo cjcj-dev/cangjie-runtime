@@ -24,7 +24,9 @@ BaseObject* PreforwardBarrier::ReadReference(BaseObject* obj, RefField<false>& f
     for (;;) {
         RefField<> oldField(field);
         BaseObject* oldTarget = to_object(oldField.GetTargetObject());
-        if (oldTarget == nullptr || LIKELY(theCollector.is_load_good(oldField))) {
+        if (oldTarget == nullptr ||
+            LIKELY(!IsPlainNonNullSlotWord(static_cast<uintptr_t>(raw(oldField.GetFieldValue()))) &&
+                   theCollector.is_load_good(oldField))) {
             BaseObject* resolved = ResolveFromCopyForMutator(oldTarget);
             if (resolved == oldTarget || resolved == nullptr) {
                 return resolved;
@@ -80,15 +82,8 @@ void PreforwardBarrier::ReadStruct(MAddress dst, BaseObject* obj, MAddress src, 
         CopyStructPlainToNonHeap(dst, obj, src, size);
         return;
     }
-    if (obj != nullptr) {
-        obj->ForEachRefInStruct(
-            [this, obj](RefField<false>& field) {
-                (void)ReadReference(obj, field);
-            },
-            src, src + size);
-    }
-    CHECK_DETAIL(memcpy_s(reinterpret_cast<void*>(dst), size, reinterpret_cast<void*>(src), size) == EOK,
-                 "read struct memcpy_s failed");
+    CHECK(obj != nullptr);
+    CopyObjectStructColouredToHeap(obj, src, dst, size, src, size);
 }
 
 void PreforwardBarrier::ReadStaticStruct(MAddress dst, MAddress src, size_t size, const GCTib gctib) const
@@ -97,14 +92,7 @@ void PreforwardBarrier::ReadStaticStruct(MAddress dst, MAddress src, size_t size
         CopyStaticStructPlainToNonHeap(dst, src, size, gctib);
         return;
     }
-    CHECK_DETAIL(memcpy_s(reinterpret_cast<void*>(dst), size, reinterpret_cast<void*>(src), size) == EOK,
-                 "read struct memcpy_s failed");
-    gctib.ForEachBitmapWord(dst, [=](RefField<>& field) {
-        RefField<> oldField(field);
-        BaseObject* target = ReadReference(nullptr, field);
-        (void)target;
-        DLOG(FIX, "read static ref-field(in struct)@%p: 0x%zx -> %p", &field, raw(oldField.GetFieldValue()), target);
-    });
+    CopyStaticStructColouredToHeap(dst, size, src, size, gctib);
 }
 
 BaseObject* PreforwardBarrier::AtomicReadReference(BaseObject* obj, RefField<true>& field, MemoryOrder order) const
@@ -113,7 +101,9 @@ BaseObject* PreforwardBarrier::AtomicReadReference(BaseObject* obj, RefField<tru
     for (;;) {
         RefField<false> oldField(field.GetFieldValue(order));
         BaseObject* oldTarget = to_object(oldField.GetTargetObject());
-        if (oldTarget == nullptr || LIKELY(theCollector.is_load_good(oldField))) {
+        if (oldTarget == nullptr ||
+            LIKELY(!IsPlainNonNullSlotWord(static_cast<uintptr_t>(raw(oldField.GetFieldValue()))) &&
+                   theCollector.is_load_good(oldField))) {
             DLOG(PBARRIER, "atomic read obj %p ref@%p: %#zx -> %p", obj, &field, raw(oldField.GetFieldValue()), oldTarget);
             return oldTarget;
         }
@@ -216,22 +206,7 @@ void PreforwardBarrier::CopyStructArrayImpl(BaseObject* dstObj, MAddress dstFiel
     RefFieldVisitor srcVisitor = [this, srcArray](RefField<false>& field) { (void)ReadReference(srcArray, field); };
     srcArray->ForEachRefFieldInRange(srcVisitor, srcField, srcField + srcSize);
 
-    CHECK(memmove_s(reinterpret_cast<void*>(dstField), dstSize, reinterpret_cast<void*>(srcField), srcSize) == EOK);
-
-    // R9 bulk：堆 dst 补色（与 Idle/base 同形）。
-    if (dstObj != nullptr && Heap::IsHeapAddress(dstObj) && dstObj->HasRefField()) {
-        RefFieldVisitor recolour = [this](RefField<false>& field) {
-            RefField<> oldField(field);
-            MAddress oldValue = raw(oldField.GetFieldValue());
-            BaseObject* latest = ReadReference(nullptr, oldField);
-            RefField<> newField = theCollector.GetAndTryTagRefField(latest);
-            if (oldValue != raw(newField.GetFieldValue())) {
-                HealSlot(field, to_zpointer(oldValue), newField.GetFieldValue(),
-                         HealSite::PreforwardCopyStructArrayRecolour);
-            }
-        };
-        static_cast<MArray*>(dstObj)->ForEachRefFieldInRange(recolour, dstField, dstField + srcSize);
-    }
+    CopyStructArrayColouredToHeap(dstObj, dstField, dstSize, srcField, srcSize);
 
 #if defined(CANGJIE_TSAN_SUPPORT)
     Sanitizer::TsanWriteMemoryRange(reinterpret_cast<void*>(dstField), dstSize);

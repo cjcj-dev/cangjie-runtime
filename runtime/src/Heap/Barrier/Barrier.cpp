@@ -34,6 +34,7 @@
 #include "Sanitizer/SanitizerInterface.h"
 #endif
 #include <atomic>
+#include <algorithm>
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
@@ -84,7 +85,8 @@ public:
     bool operator()(zpointer value) const
     {
         RefField<> probe(value);
-        return is_null(probe.GetTargetObject()) || theCollector.is_load_good(probe);
+        return is_null(probe.GetTargetObject()) ||
+            (!IsPlainNonNullSlotWord(static_cast<uintptr_t>(raw(value))) && theCollector.is_load_good(probe));
     }
 
 private:
@@ -110,6 +112,17 @@ private:
 // address is the object's real home (ForwardBarrier takes the same exemption on resolve).
 std::atomic<uint64_t> g_keepFromHealSkipTotal{ 0 };
 std::atomic<uint64_t> g_keepFromHealSkipSite[64] = {};
+std::atomic<uint64_t> g_plainLoadHealSuccess{ 0 };
+
+struct PlainLoadHealReporter {
+    ~PlainLoadHealReporter()
+    {
+        std::fprintf(stderr, "[ptrcolour][plain-load-heal] success=%llu\n",
+                     static_cast<unsigned long long>(g_plainLoadHealSuccess.load(std::memory_order_relaxed)));
+        std::fflush(stderr);
+    }
+};
+PlainLoadHealReporter g_plainLoadHealReporter;
 
 bool SkipLaunderingHeal(Collector& collector, zpointer healPtr, HealSite site)
 {
@@ -154,7 +167,10 @@ BaseObject* Barrier::ZgcSelfHealLoadGood(RefField<false>& field, zpointer observ
     if (SkipLaunderingHeal(theCollector, healPtr, site)) {
         return returned;
     }
-    ZgcSelfHeal(field, observed, healPtr, LoadGoodFastPath(theCollector), site);
+    const bool healed = ZgcSelfHeal(field, observed, healPtr, LoadGoodFastPath(theCollector), site);
+    if (healed && IsPlainNonNullSlotWord(static_cast<uintptr_t>(raw(observed)))) {
+        g_plainLoadHealSuccess.fetch_add(1, std::memory_order_relaxed);
+    }
     return returned;
 }
 
@@ -167,7 +183,10 @@ BaseObject* Barrier::ZgcSelfHealLoadGood(RefField<true>& field, zpointer observe
     if (SkipLaunderingHeal(theCollector, healPtr, site)) {
         return returned;
     }
-    ZgcSelfHeal(field, observed, healPtr, LoadGoodFastPath(theCollector), site);
+    const bool healed = ZgcSelfHeal(field, observed, healPtr, LoadGoodFastPath(theCollector), site);
+    if (healed && IsPlainNonNullSlotWord(static_cast<uintptr_t>(raw(observed)))) {
+        g_plainLoadHealSuccess.fetch_add(1, std::memory_order_relaxed);
+    }
     return returned;
 }
 
@@ -729,22 +748,11 @@ void Barrier::WriteStructImpl(BaseObject* obj, MAddress dst, size_t dstLen, MAdd
             return barrier.WriteStructImpl(obj, dst, dstLen, src, srcLen);
         });
     }
-    // R9 bulk：memcpy 会把栈上 plain 整块灌进堆；post-copy 补色环模板 = PostTraceBarrier.cpp:117-128。
-    CHECK_DETAIL(memcpy_s(reinterpret_cast<void*>(dst), dstLen, reinterpret_cast<void*>(src), srcLen) == EOK,
-                 "memcpy_s failed");
-    if (obj != nullptr) {
-        obj->ForEachRefInStruct(
-            [=](RefField<>& refField) {
-                RefField<> oldField(refField);
-                MAddress oldValue = raw(oldField.GetFieldValue());
-                BaseObject* latest = ReadReference(nullptr, oldField);
-                RefField<> newField = theCollector.GetAndTryTagRefField(latest);
-                if (oldValue != raw(newField.GetFieldValue())) {
-                    HealSlot(refField, to_zpointer(oldValue), newField.GetFieldValue(),
-                             HealSite::BarrierWriteStructRecolour);
-                }
-            },
-            dst, dst + dstLen);
+    if (obj != nullptr && Heap::IsHeapAddress(obj)) {
+        CopyObjectStructColouredToHeap(obj, dst, dst, dstLen, src, srcLen);
+    } else {
+        CHECK_DETAIL(memcpy_s(reinterpret_cast<void*>(dst), dstLen, reinterpret_cast<void*>(src), srcLen) == EOK,
+                     "plain non-heap struct copy failed");
     }
 #if defined(CANGJIE_TSAN_SUPPORT)
     CHECK_EQ(srcLen, dstLen);
@@ -1404,25 +1412,7 @@ void Barrier::CopyRefArrayImpl(BaseObject* dstObj, MAddress dstField, MIndex dst
         return;
     }
     (void)srcObj;
-    CHECK_DETAIL(memmove_s(reinterpret_cast<void*>(dstField), dstSize, reinterpret_cast<void*>(srcField), srcSize) ==
-                     EOK,
-                 "memmove_s failed");
-    // R9：堆 dst 上 memmove 可能灌入栈 plain；逐槽补色。
-    // heap→heap 已有色时 GetAndTryTagRefField 幂等（Y6 不新增 plain，补色也无害）。
-    if (dstObj != nullptr && Heap::IsHeapAddress(dstObj)) {
-        MAddress end = dstField + dstSize;
-        for (MAddress cur = dstField; cur + sizeof(HeapSlot<>) <= end; cur += sizeof(HeapSlot<>)) {
-            HeapSlot<>& refField = HeapSlotAt<>(cur);
-            RefField<> oldField(refField);
-            MAddress oldValue = raw(oldField.GetFieldValue());
-            BaseObject* latest = ReadReference(nullptr, oldField);
-            RefField<> newField = theCollector.GetAndTryTagRefField(latest);
-            if (oldValue != raw(newField.GetFieldValue())) {
-                HealSlot(refField, to_zpointer(oldValue), newField.GetFieldValue(),
-                         HealSite::BarrierCopyRefArrayRecolour);
-            }
-        }
-    }
+    CopyRefArrayColouredToHeap(dstField, dstSize, srcField, srcSize);
 #if defined(CANGJIE_TSAN_SUPPORT)
     size_t copyLen = (dstSize < srcSize ? dstSize : srcSize);
     Sanitizer::TsanWriteMemoryRange(reinterpret_cast<void*>(dstField), copyLen);
@@ -1461,23 +1451,7 @@ void Barrier::CopyStructArrayImpl(BaseObject* dstObj, MAddress dstField, MIndex 
         return;
     }
     (void)srcObj;
-    CHECK_DETAIL(memmove_s(reinterpret_cast<void*>(dstField), dstSize, reinterpret_cast<void*>(srcField), srcSize) ==
-                     EOK,
-                 "memmove_s failed");
-    // R9 bulk：struct 数组 memmove 后对堆 dst 引用槽补色（模板 PostTrace WriteStruct post-copy）。
-    if (dstObj != nullptr && dstObj->HasRefField() && Heap::IsHeapAddress(dstObj)) {
-        RefFieldVisitor recolour = [this](RefField<false>& field) {
-            RefField<> oldField(field);
-            MAddress oldValue = raw(oldField.GetFieldValue());
-            BaseObject* latest = ReadReference(nullptr, oldField);
-            RefField<> newField = theCollector.GetAndTryTagRefField(latest);
-            if (oldValue != raw(newField.GetFieldValue())) {
-                HealSlot(field, to_zpointer(oldValue), newField.GetFieldValue(),
-                         HealSite::BarrierCopyStructArrayRecolour);
-            }
-        };
-        static_cast<MArray*>(dstObj)->ForEachRefFieldInRange(recolour, dstField, dstField + srcSize);
-    }
+    CopyStructArrayColouredToHeap(dstObj, dstField, dstSize, srcField, srcSize);
 #if defined(CANGJIE_TSAN_SUPPORT)
     size_t copyLen = (dstSize < srcSize ? dstSize : srcSize);
     Sanitizer::TsanWriteMemoryRange(reinterpret_cast<void*>(dstField), copyLen);
@@ -1533,6 +1507,103 @@ void Barrier::CopyStructPlainToNonHeap(MAddress dst, BaseObject* srcObj, MAddres
     Sanitizer::TsanWriteMemoryRange(reinterpret_cast<void*>(dst), size);
     Sanitizer::TsanReadMemoryRange(reinterpret_cast<void*>(src), size);
 #endif
+}
+
+namespace {
+void CopyColouredSlotsToHeap(const Barrier& barrier, Collector& collector,
+                             MAddress dst, size_t dstLen, MAddress src, size_t srcLen,
+                             std::vector<size_t> offsets)
+{
+    CHECK_DETAIL(srcLen <= dstLen, "full-colour copy source does not fit: dstLen=%zu srcLen=%zu", dstLen, srcLen);
+    if (srcLen == 0) {
+        return;
+    }
+    std::vector<uint8_t> snapshot(srcLen);
+    CHECK_DETAIL(memcpy_s(snapshot.data(), snapshot.size(), reinterpret_cast<void*>(src), srcLen) == EOK,
+                 "full-colour source snapshot failed");
+    std::sort(offsets.begin(), offsets.end());
+    offsets.erase(std::unique(offsets.begin(), offsets.end()), offsets.end());
+    size_t cursor = 0;
+    for (size_t offset : offsets) {
+        CHECK_DETAIL(offset >= cursor && offset + sizeof(HeapSlot<>) <= srcLen,
+                     "full-colour ref offset outside copy: offset=%zu cursor=%zu srcLen=%zu", offset, cursor, srcLen);
+        if (offset > cursor) {
+            const size_t gap = offset - cursor;
+            CHECK_DETAIL(memcpy_s(reinterpret_cast<void*>(dst + cursor), gap,
+                                  snapshot.data() + cursor, gap) == EOK,
+                         "full-colour primitive-gap copy failed");
+        }
+        uintptr_t sourceWord = 0;
+        std::memcpy(&sourceWord, snapshot.data() + offset, sizeof(sourceWord));
+        HeapSlot<> source(to_zpointer(sourceWord));
+        BaseObject* target = barrier.ReadReference(nullptr, source);
+        RefField<> coloured = collector.GetAndTryTagRefField(target);
+        CHECK_DETAIL(ClassifySlotWord(raw(coloured.GetFieldValue())) != SlotWordVerdict::kIllegal,
+                     "full-colour producer emitted illegal word: src=%#zx dst_slot=%p target=%p",
+                     sourceWord, reinterpret_cast<void*>(dst + offset), target);
+        HeapSlotAt<>(dst + offset).StoreColoured(coloured.GetFieldValue());
+        cursor = offset + sizeof(HeapSlot<>);
+    }
+    if (cursor < srcLen) {
+        const size_t tail = srcLen - cursor;
+        CHECK_DETAIL(memcpy_s(reinterpret_cast<void*>(dst + cursor), tail,
+                              snapshot.data() + cursor, tail) == EOK,
+                     "full-colour primitive-tail copy failed");
+    }
+}
+} // namespace
+
+void Barrier::CopyObjectStructColouredToHeap(BaseObject* layoutObj, MAddress layoutStart,
+                                              MAddress dst, size_t dstLen,
+                                              MAddress src, size_t srcLen) const
+{
+    CHECK(layoutObj != nullptr && Heap::IsHeapAddress(dst));
+    std::vector<size_t> offsets;
+    layoutObj->ForEachRefInStruct(
+        [&offsets, layoutStart, srcLen](RefField<>& field) {
+            MAddress address = reinterpret_cast<MAddress>(&field);
+            if (address >= layoutStart && address + sizeof(HeapSlot<>) <= layoutStart + srcLen) {
+                offsets.push_back(static_cast<size_t>(address - layoutStart));
+            }
+        }, layoutStart, layoutStart + srcLen);
+    CopyColouredSlotsToHeap(*this, theCollector, dst, dstLen, src, srcLen, std::move(offsets));
+}
+
+void Barrier::CopyStaticStructColouredToHeap(MAddress dst, size_t dstLen, MAddress src,
+                                              size_t srcLen, const GCTib gctib) const
+{
+    CHECK(Heap::IsHeapAddress(dst));
+    std::vector<size_t> offsets;
+    gctib.ForEachBitmapWordInRange(
+        src,
+        [&offsets, src](RefField<>& field) {
+            offsets.push_back(static_cast<size_t>(reinterpret_cast<MAddress>(&field) - src));
+        }, src, src + srcLen);
+    CopyColouredSlotsToHeap(*this, theCollector, dst, dstLen, src, srcLen, std::move(offsets));
+}
+
+void Barrier::CopyStructArrayColouredToHeap(BaseObject* dstObj, MAddress dst, size_t dstLen,
+                                             MAddress src, size_t srcLen) const
+{
+    CHECK(dstObj != nullptr && Heap::IsHeapAddress(dstObj));
+    std::vector<size_t> offsets;
+    static_cast<MArray*>(dstObj)->ForEachRefFieldInRange(
+        [&offsets, dst](RefField<>& field) {
+            offsets.push_back(static_cast<size_t>(reinterpret_cast<MAddress>(&field) - dst));
+        }, dst, dst + srcLen);
+    CopyColouredSlotsToHeap(*this, theCollector, dst, dstLen, src, srcLen, std::move(offsets));
+}
+
+void Barrier::CopyRefArrayColouredToHeap(MAddress dst, size_t dstLen, MAddress src, size_t srcLen) const
+{
+    CHECK(Heap::IsHeapAddress(dst));
+    CHECK_DETAIL(srcLen <= dstLen && srcLen % sizeof(HeapSlot<>) == 0,
+                 "full-colour ref-array copy shape invalid: dstLen=%zu srcLen=%zu", dstLen, srcLen);
+    std::vector<size_t> offsets;
+    for (size_t offset = 0; offset < srcLen; offset += sizeof(HeapSlot<>)) {
+        offsets.push_back(offset);
+    }
+    CopyColouredSlotsToHeap(*this, theCollector, dst, dstLen, src, srcLen, std::move(offsets));
 }
 
 void Barrier::CopyStaticStructPlainToNonHeap(MAddress dst, MAddress src, size_t size, const GCTib gctib) const
@@ -1720,16 +1791,8 @@ void Barrier::ReadStruct(MAddress dst, BaseObject* obj, MAddress src, size_t siz
         CopyStructPlainToNonHeap(dst, obj, src, size);
         return;
     }
-    if (obj != nullptr) {
-        obj->ForEachRefInStruct(
-            [this, obj](RefField<false>& field) {
-                BaseObject* toVersion = nullptr;
-                theCollector.TryUpdateRefField(obj, field, toVersion);
-            },
-            src, src + size);
-    }
-    CHECK_DETAIL(memcpy_s(reinterpret_cast<void*>(dst), size, reinterpret_cast<void*>(src), size) == EOK,
-                 "read struct memcpy_s failed");
+    CHECK(obj != nullptr);
+    CopyObjectStructColouredToHeap(obj, src, dst, size, src, size);
 }
 
 void Barrier::ReadStaticStruct(MAddress dst, MAddress src, size_t size, const GCTib gctib) const
@@ -1743,12 +1806,7 @@ void Barrier::ReadStaticStruct(MAddress dst, MAddress src, size_t size, const GC
         CopyStaticStructPlainToNonHeap(dst, src, size, gctib);
         return;
     }
-    CHECK_DETAIL(memcpy_s(reinterpret_cast<void*>(dst), size, reinterpret_cast<void*>(src), size) == EOK,
-                 "read struct memcpy_s failed");
-    gctib.ForEachBitmapWord(dst, [this](RefField<>& refField) {
-        BaseObject* toVersion = nullptr;
-        theCollector.TryUpdateRefField(nullptr, refField, toVersion);
-    });
+    CopyStaticStructColouredToHeap(dst, size, src, size, gctib);
 }
 
 void Barrier::WriteGeneric(const ObjectPtr obj, void* fieldPtr, const ObjectPtr src, size_t size) const

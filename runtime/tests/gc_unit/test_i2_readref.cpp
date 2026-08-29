@@ -38,7 +38,7 @@ public:
     RefField<> GetAndTryTagRefField(BaseObject* obj) const override
     {
         const uintptr_t remap = ColourPredicates::current_remapped(static_cast<uintptr_t>(::g_cjLoadBadMask));
-        return RefField<>(to_zpointer(reinterpret_cast<MAddress>(obj) | remap));
+        return RefField<>(GcUnit::ColouredPointer(obj, remap));
     }
 };
 
@@ -58,9 +58,28 @@ GC_TEST(I2ReadRef, ForwardedFromReturnsTo)
 
     auto* field = &HeapSlotAt<>(reinterpret_cast<MAddress>(fx.obj0) + TYPEINFO_PTR_SIZE);
     const uintptr_t remap = ColourPredicates::current_remapped(static_cast<uintptr_t>(::g_cjLoadBadMask));
-    field->StoreColoured(to_zpointer(reinterpret_cast<MAddress>(fx.obj0) | remap));
+    field->StoreColoured(GcUnit::ColouredPointer(fx.obj0, remap));
 
     BaseObject* got = barrier.ReadReference(fx.obj0, *field);
     GC_EXPECT_EQ(reinterpret_cast<uintptr_t>(got), reinterpret_cast<uintptr_t>(fx.obj1));
     GC_EXPECT_TRUE(got != fx.obj0);
+}
+
+GC_TEST(I2ReadRef, PlainHeapSlotIsHealedToCurrentColour)
+{
+    GcHeapFixture fx;
+    ToCollector collector;
+    RememberedSet rs;
+    rs.Initialize(fx.heapStart, 2 * RegionInfo::UNIT_SIZE);
+    EnumBarrier barrier(collector, rs);
+
+    auto* field = &HeapSlotAt<>(reinterpret_cast<MAddress>(fx.obj1) + TYPEINFO_PTR_SIZE);
+    const uintptr_t plain = reinterpret_cast<uintptr_t>(fx.obj0);
+    std::memcpy(field, &plain, sizeof(plain));
+
+    BaseObject* got = barrier.ReadReference(fx.obj1, *field);
+    GC_EXPECT_TRUE(got == fx.obj0);
+    GC_EXPECT_TRUE(ClassifySlotWord(static_cast<uintptr_t>(raw(field->GetFieldValue()))) ==
+                   SlotWordVerdict::kColoured);
+    GC_EXPECT_TRUE(static_cast<uintptr_t>(raw(field->GetFieldValue())) != plain);
 }

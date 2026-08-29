@@ -34,6 +34,7 @@
 #include "Heap/WCollector/WCollector.h"
 #include "gc_unittest.hpp"
 #include "ObjectModel/MArray.inline.h"
+#include "ObjectModel/RefField.inline.h"
 
 #if defined(MRT_PARTIAL_ARRAY_FORCED_INTERNALS)
 #undef MRT_TESTABLE_INTERNALS
