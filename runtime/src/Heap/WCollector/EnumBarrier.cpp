@@ -21,7 +21,9 @@ BaseObject* EnumBarrier::ReadReference(BaseObject* obj, RefField<false>& field) 
     for (;;) {
         RefField<> oldField(field);
         BaseObject* oldTarget = to_object(oldField.GetTargetObject());
-        if (oldTarget == nullptr || LIKELY(theCollector.is_load_good(oldField))) {
+        if (oldTarget == nullptr ||
+            LIKELY(!IsPlainNonNullSlotWord(static_cast<uintptr_t>(raw(oldField.GetFieldValue()))) &&
+                   theCollector.is_load_good(oldField))) {
             BaseObject* resolved = ResolveFromCopyForMutator(oldTarget);
             if (resolved == oldTarget || resolved == nullptr) {
                 return resolved;
@@ -70,14 +72,8 @@ void EnumBarrier::ReadStruct(MAddress dst, BaseObject* obj, MAddress src, size_t
         CopyStructPlainToNonHeap(dst, obj, src, size);
         return;
     }
-    if (obj != nullptr) {
-        obj->ForEachRefInStruct(
-            [this, obj](RefField<false>& field) {
-                (void)ReadReference(obj, field);
-            },
-            src, src + size);
-    }
-    CHECK(memcpy_s(reinterpret_cast<void*>(dst), size, reinterpret_cast<void*>(src), size) == EOK);
+    CHECK(obj != nullptr);
+    CopyObjectStructColouredToHeap(obj, src, dst, size, src, size);
 }
 
 void EnumBarrier::ReadStaticStruct(MAddress dst, MAddress src, size_t size, const GCTib gctib) const
@@ -86,18 +82,7 @@ void EnumBarrier::ReadStaticStruct(MAddress dst, MAddress src, size_t size, cons
         CopyStaticStructPlainToNonHeap(dst, src, size, gctib);
         return;
     }
-    CHECK(memcpy_s(reinterpret_cast<void*>(dst), size, reinterpret_cast<void*>(src), size) == EOK);
-    LocalRefFieldContainer refFields;
-    gctib.ForEachBitmapWordInRange(
-        src,
-        [&refFields, dst, src](RefField<>& srcField) {
-            MAddress offset = reinterpret_cast<MAddress>(&srcField) - src;
-            refFields.Push(&HeapSlotAt<>(dst + offset));
-        },
-        src, src + size);
-    refFields.VisitRefField([this](RefField<>& dstRef) {
-        (void)ReadReference(nullptr, dstRef);
-    });
+    CopyStaticStructColouredToHeap(dst, size, src, size, gctib);
 }
 
 void EnumBarrier::WriteReferenceImpl(BaseObject* obj, RefField<false>& field, BaseObject* ref) const
@@ -160,22 +145,11 @@ void EnumBarrier::WriteStructImpl(BaseObject* obj, MAddress dst, size_t dstLen, 
             dst, dst + srcLen);
     }
     std::atomic_thread_fence(std::memory_order_seq_cst);
-    CHECK_DETAIL(memcpy_s(reinterpret_cast<void*>(dst), dstLen, reinterpret_cast<void*>(src), srcLen) == EOK,
-                 "memcpy_s failed");
-
-    if (obj != nullptr) {
-        obj->ForEachRefInStruct(
-            [=](RefField<>& refField) {
-                RefField<> oldField(refField);
-                RefField<> toBeUpdated(oldField);
-                BaseObject* untagged = ReadReference(nullptr, toBeUpdated);
-                RefField<> newField = theCollector.GetAndTryTagRefField(untagged);
-                if (oldField.GetFieldValue() != newField.GetFieldValue()) {
-                    HealSlot(refField, oldField.GetFieldValue(), newField.GetFieldValue(),
-                             HealSite::EnumWriteStructRecolour);
-                }
-            },
-            dst, dst + dstLen);
+    if (obj != nullptr && Heap::IsHeapAddress(obj)) {
+        CopyObjectStructColouredToHeap(obj, dst, dst, dstLen, src, srcLen);
+    } else {
+        CHECK_DETAIL(memcpy_s(reinterpret_cast<void*>(dst), dstLen, reinterpret_cast<void*>(src), srcLen) == EOK,
+                     "plain non-heap struct copy failed");
     }
 
 #if defined(CANGJIE_TSAN_SUPPORT)
@@ -332,9 +306,7 @@ void EnumBarrier::CopyStructArrayImpl(BaseObject* dstObj, MAddress dstField, MIn
     MArray* dstArray = static_cast<MArray*>(dstObj);
     dstArray->ForEachRefFieldInRange(dstVisitor, dstField, dstField + srcSize);
 
-    CHECK_DETAIL(memmove_s(reinterpret_cast<void*>(dstField), dstSize, reinterpret_cast<void*>(srcField), srcSize) ==
-                     EOK,
-                 "memmove_s failed");
+    CopyStructArrayColouredToHeap(dstObj, dstField, dstSize, srcField, srcSize);
 
 #if defined(CANGJIE_TSAN_SUPPORT)
     Sanitizer::TsanWriteMemoryRange(reinterpret_cast<void*>(dstField), dstSize);

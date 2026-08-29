@@ -59,7 +59,7 @@ GC_TEST(ReferenceProcessor, WeakDiscoveryPublishesNoStrongMarkWork)
     fx.typeInfo->SetType(TypeKind::TYPE_KIND_WEAKREF_CLASS);
     HeapSlot<>& referent =
         HeapSlotAt<>(reinterpret_cast<uintptr_t>(fx.obj0) + TYPEINFO_PTR_SIZE);
-    referent.StoreColoured(to_zpointer(reinterpret_cast<MAddress>(fx.obj1)));
+    referent.StoreColoured(GcUnit::StoreGoodPointer(fx.obj1));
     WCollector collector(Heap::GetHeap().GetAllocator(), Heap::GetHeap().GetCollectorResources());
     TracingCollector::WorkStack workStack;
     MarkView<Generation::Old> view = fx.region1->GetMarkView<Generation::Old>();
@@ -135,7 +135,7 @@ public:
     bool IsOldPointer(RefField<>&) const override { return false; }
     RefField<> GetAndTryTagRefField(BaseObject* obj) const override
     {
-        return RefField<>(to_zpointer(reinterpret_cast<MAddress>(obj)));
+        return RefField<>(GcUnit::StoreGoodPointer(obj));
     }
 };
 
@@ -150,7 +150,7 @@ public:
 protected:
     void WriteReferenceImpl(BaseObject*, RefField<false>& field, BaseObject* ref) const
     {
-        field.StoreColoured(to_zpointer(reinterpret_cast<MAddress>(ref)));
+        field.StoreColoured(GcUnit::StoreGoodPointer(ref));
     }
 };
 
@@ -166,7 +166,7 @@ public:
 protected:
     void WriteReferenceImpl(BaseObject*, RefField<false>& field, BaseObject* ref) const
     {
-        field.StoreColoured(to_zpointer(reinterpret_cast<MAddress>(ref)));
+        field.StoreColoured(GcUnit::StoreGoodPointer(ref));
     }
 };
 
@@ -738,7 +738,7 @@ GC_OTHER_VM_TEST(YoungConc, LateEdgeFollowReceiptReachesYoungMarkConsumer)
     BaseObject* child = fx.PlaceObject(reinterpret_cast<MAddress>(fx.obj1) + 64);
     fx.region1->SetRegionAllocPtr(reinterpret_cast<MAddress>(child) + 64);
     auto* parentField = &HeapSlotAt<>(reinterpret_cast<MAddress>(fx.obj1) + TYPEINFO_PTR_SIZE);
-    parentField->StoreColoured(to_zpointer(reinterpret_cast<MAddress>(child)));
+    parentField->StoreColoured(GcUnit::StoreGoodPointer(child));
 
     CollectorResources& resources = Heap::GetHeap().GetCollectorResources();
     WCollector collector(Heap::GetHeap().GetAllocator(), resources);
@@ -800,7 +800,7 @@ GC_OTHER_VM_TEST(YoungConc, LateEdgeFollowReceiptReachesYoungRuntimeDispatch)
     BaseObject* child = fx.PlaceObject(reinterpret_cast<MAddress>(fx.obj1) + 64);
     fx.region1->SetRegionAllocPtr(reinterpret_cast<MAddress>(child) + 64);
     auto* parentField = &HeapSlotAt<>(reinterpret_cast<MAddress>(fx.obj1) + TYPEINFO_PTR_SIZE);
-    parentField->StoreColoured(to_zpointer(reinterpret_cast<MAddress>(child)));
+    parentField->StoreColoured(GcUnit::StoreGoodPointer(child));
 
     CollectorResources& resources = Heap::GetHeap().GetCollectorResources();
     WCollector collector(Heap::GetHeap().GetAllocator(), resources);
@@ -876,7 +876,7 @@ GC_OTHER_VM_TEST(YoungConc, Y2yAfterReleaseBatchForcesContinueAndReachesClosure)
     BaseObject* child = fx.PlaceObject(reinterpret_cast<MAddress>(fx.obj1) + 64);
     fx.region1->SetRegionAllocPtr(reinterpret_cast<MAddress>(child) + 64);
     auto* parentField = &HeapSlotAt<>(reinterpret_cast<MAddress>(fx.obj1) + TYPEINFO_PTR_SIZE);
-    parentField->StoreColoured(to_zpointer(reinterpret_cast<MAddress>(child)));
+    parentField->StoreColoured(GcUnit::StoreGoodPointer(child));
 
     CollectorResources& resources = Heap::GetHeap().GetCollectorResources();
     WCollector collector(Heap::GetHeap().GetAllocator(), resources);
@@ -1089,6 +1089,8 @@ GC_OTHER_VM_TEST(YoungConc, BulkWritePublishesSatbWithoutYoungRegions)
     BaseObject* source = fx.obj1;
     MAddress dstField = reinterpret_cast<MAddress>(fx.obj0) + TYPEINFO_PTR_SIZE;
     barrier.WriteStruct(fx.obj0, dstField, sizeof(source), reinterpret_cast<MAddress>(&source), sizeof(source));
+    GC_EXPECT_TRUE(ClassifySlotWord(raw(HeapSlotAt<>(dstField).GetFieldValue())) ==
+                   SlotWordVerdict::kColoured);
 
     mutator.FlushSatbBuffer();
     std::vector<BaseObject*> retired;
@@ -1126,7 +1128,7 @@ GC_TEST(YoungConc, TraceStoreMarksNewYoungTarget)
     resources.SetGcStarted(true);
     resources.GetGCStats().reason = GC_REASON_YOUNG;
 
-    field->StoreColoured(to_zpointer(reinterpret_cast<MAddress>(fx.obj1)));
+    field->StoreColoured(GcUnit::StoreGoodPointer(fx.obj1));
     // RecordCrossGenEdge is the remember half; TRACE phase adds the mark half.
     // Do not WriteReference: DispatchPhase would static_cast to product TraceBarrier
     // and SATB-push with a null mutator (gc_unit has no Mutator).
@@ -1163,7 +1165,7 @@ GC_TEST(YoungConc, IdleStoreDoesNotMarkNewYoungTarget)
     // Do not SetGcStarted: heap-phase fallback would Heap::GetGCPhase() against
     // a null CollectorProxy::currentCollector (gc_unit never Init). Phase STW
     // plus !IsGcStarted is the product Idle/STW gate.
-    field->StoreColoured(to_zpointer(reinterpret_cast<MAddress>(fx.obj1)));
+    field->StoreColoured(GcUnit::StoreGoodPointer(fx.obj1));
     barrier.Record(fx.obj0, reinterpret_cast<MAddress>(field), fx.obj1);
 
     MarkView<Generation::Young> view = fx.region1->GetMarkView<Generation::Young>();

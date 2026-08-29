@@ -126,7 +126,7 @@ public:
     bool IsOldPointer(RefField<>&) const override { return false; }
     RefField<> GetAndTryTagRefField(BaseObject* obj) const override
     {
-        return RefField<>(to_zpointer(reinterpret_cast<MAddress>(obj)));
+        return RefField<>(obj, ::g_cjStoreGoodMask);
     }
 
     void RunGarbageCollection(uint64_t gcIndex, GCReason reason) override

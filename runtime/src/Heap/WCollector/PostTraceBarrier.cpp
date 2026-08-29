@@ -24,7 +24,9 @@ BaseObject* PostTraceBarrier::ReadReference(BaseObject* obj, RefField<false>& fi
     for (;;) {
         RefField<> oldField(field);
         BaseObject* oldTarget = to_object(oldField.GetTargetObject());
-        if (oldTarget == nullptr || LIKELY(theCollector.is_load_good(oldField))) {
+        if (oldTarget == nullptr ||
+            LIKELY(!IsPlainNonNullSlotWord(static_cast<uintptr_t>(raw(oldField.GetFieldValue()))) &&
+                   theCollector.is_load_good(oldField))) {
             BaseObject* resolved = ResolveFromCopyForMutator(oldTarget);
             if (resolved == oldTarget || resolved == nullptr) {
                 return resolved;
@@ -85,14 +87,8 @@ void PostTraceBarrier::ReadStruct(MAddress dst, BaseObject* obj, MAddress src, s
         CopyStructPlainToNonHeap(dst, obj, src, size);
         return;
     }
-    if (obj != nullptr) {
-        obj->ForEachRefInStruct(
-            [this, obj](RefField<false>& field) {
-                (void)ReadReference(obj, field);
-            },
-            src, src + size);
-    }
-    CHECK(memcpy_s(reinterpret_cast<void*>(dst), size, reinterpret_cast<void*>(src), size) == EOK);
+    CHECK(obj != nullptr);
+    CopyObjectStructColouredToHeap(obj, src, dst, size, src, size);
 }
 
 void PostTraceBarrier::ReadStaticStruct(MAddress dst, MAddress src, size_t size, const GCTib gctib) const
@@ -101,18 +97,7 @@ void PostTraceBarrier::ReadStaticStruct(MAddress dst, MAddress src, size_t size,
         CopyStaticStructPlainToNonHeap(dst, src, size, gctib);
         return;
     }
-    gctib.ForEachBitmapWordInRange(
-        src,
-        [this](RefField<>& srcField) {
-            (void)ReadReference(nullptr, srcField);
-        },
-        src, src + size);
-
-    CHECK(memcpy_s(reinterpret_cast<void*>(dst), size, reinterpret_cast<void*>(src), size) == EOK);
-    // Heap dst residual path (should be rare for ReadStaticStruct): peel via ReadReference only.
-    gctib.ForEachBitmapWord(dst, [this](RefField<>& dstRef) {
-        (void)ReadReference(nullptr, dstRef);
-    });
+    CopyStaticStructColouredToHeap(dst, size, src, size, gctib);
 }
 
 void PostTraceBarrier::WriteReferenceImpl(BaseObject* obj, RefField<false>& field, BaseObject* ref) const
@@ -136,22 +121,7 @@ void PostTraceBarrier::WriteStaticRef(RootSlot& field, BaseObject* ref) const
 void PostTraceBarrier::WriteStructImpl(BaseObject* obj, MAddress dst, size_t dstLen, MAddress src, size_t srcLen) const
 {
     CHECK(obj != nullptr);
-    CHECK(memcpy_s(reinterpret_cast<void*>(dst), dstLen, reinterpret_cast<void*>(src), srcLen) == EOK);
-
-    if (obj != nullptr) {
-        obj->ForEachRefInStruct(
-            [=](RefField<>& refField) {
-                RefField<> oldField(refField);
-                MAddress oldValue = raw(oldField.GetFieldValue());
-                BaseObject* latestVerison = ReadReference(nullptr, oldField);
-                RefField<> newField = theCollector.GetAndTryTagRefField(latestVerison);
-                if (oldValue != raw(newField.GetFieldValue())) {
-                    HealSlot(refField, to_zpointer(oldValue), newField.GetFieldValue(),
-                             HealSite::PostTraceWriteStructRecolour);
-                }
-            },
-            dst, dst + dstLen);
-    }
+    CopyObjectStructColouredToHeap(obj, dst, dst, dstLen, src, srcLen);
 
 #if defined(CANGJIE_TSAN_SUPPORT)
     Sanitizer::TsanWriteMemoryRange(reinterpret_cast<void*>(dst), dstLen);
@@ -186,7 +156,9 @@ BaseObject* PostTraceBarrier::AtomicReadReference(BaseObject* obj, RefField<true
     for (;;) {
         RefField<false> oldField(field.GetFieldValue(order));
         BaseObject* oldTarget = to_object(oldField.GetTargetObject());
-        if (oldTarget == nullptr || LIKELY(theCollector.is_load_good(oldField))) {
+        if (oldTarget == nullptr ||
+            LIKELY(!IsPlainNonNullSlotWord(static_cast<uintptr_t>(raw(oldField.GetFieldValue()))) &&
+                   theCollector.is_load_good(oldField))) {
             DLOG(TBARRIER, "atomic read obj %p ref@%p: %#zx -> %p", obj, &field, raw(oldField.GetFieldValue()), oldTarget);
             return oldTarget;
         }
@@ -280,9 +252,7 @@ void PostTraceBarrier::CopyStructArrayImpl(BaseObject* dstObj, MAddress dstField
     };
     MArray* srcArray = static_cast<MArray*>(srcObj);
     srcArray->ForEachRefFieldInRange(srcVisitor, srcField, srcField + srcSize);
-    CHECK_DETAIL(memmove_s(reinterpret_cast<void*>(dstField), dstSize, reinterpret_cast<void*>(srcField), srcSize) ==
-                     EOK,
-                 "memmove_s failed");
+    CopyStructArrayColouredToHeap(dstObj, dstField, dstSize, srcField, srcSize);
 
 #if defined(CANGJIE_TSAN_SUPPORT)
     Sanitizer::TsanWriteMemoryRange(reinterpret_cast<void*>(dstField), dstSize);

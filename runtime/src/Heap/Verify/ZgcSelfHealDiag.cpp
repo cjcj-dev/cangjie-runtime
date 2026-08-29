@@ -46,8 +46,8 @@ std::atomic<uint64_t> g_monoSampleLogged{ 0 };
 // is proved to terminate by the metadata lattice, and assert_transition_monotonicity
 // is the thing that guards that proof. On our side the proof's premise is not
 // established -- ColourMask.h:202-206 records that Forward-phase writers can re-tag a
-// slot, and ColourPredicates.h:23-25 records that plain HeapSlot values still exist,
-// either of which is a competing write that is not an upgrade.
+// slot. A legacy-generation plain word may enter only through the explicit
+// fail-closed load-heal diversion; it is not a legal producer state.
 //
 // So the loop needs something that can *see* the premise fail. It reports and keeps
 // going: giving up, or falling back to the bounded loop, would swap ZGC's convergence

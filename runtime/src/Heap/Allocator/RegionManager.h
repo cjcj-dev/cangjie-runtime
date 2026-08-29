@@ -150,7 +150,7 @@ public:
         1. region info for each region, part of heap metadata
         2. region space for allocation, i.e., the heap
     */
-    static size_t GetHeapMemorySize(size_t heapSize)
+    __attribute__((visibility("hidden"))) static size_t GetHeapMemorySize(size_t heapSize)
     {
         size_t unitNum = GetHeapUnitCount(heapSize);
         size_t metadataSize = GetMetadataSize(unitNum);
@@ -165,7 +165,7 @@ public:
         return totalSize;
     }
 
-    static size_t GetHeapUnitCount(size_t heapSize)
+    __attribute__((visibility("hidden"))) static size_t GetHeapUnitCount(size_t heapSize)
     {
         size_t roundedHeapSize = 0;
         CHECK_DETAIL(CheckedRoundUpSize(heapSize, RegionInfo::UNIT_SIZE, roundedHeapSize),
@@ -178,7 +178,7 @@ public:
 
     // get metadataSize by regionNum or unitNumber
     // RegionInfo and UnitInfo have the same sizeof
-    static size_t GetMetadataSize(size_t num)
+    __attribute__((visibility("hidden"))) static size_t GetMetadataSize(size_t num)
     {
         size_t metadataSize = 0;
         CHECK_DETAIL(CheckedMulSize(num, sizeof(RegionInfo), metadataSize),

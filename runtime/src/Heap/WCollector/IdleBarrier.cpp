@@ -30,7 +30,9 @@ BaseObject* IdleBarrier::ReadReference(BaseObject* obj, RefField<false>& field) 
         // instrument as Barrier::ReadStaticRef, on the slot class that does carry colour.
         // Only the first attempt is recorded, so a self-heal retry is not a second read.
 
-        if (oldTarget == nullptr || LIKELY(theCollector.is_load_good(oldField))) {
+        if (oldTarget == nullptr ||
+            LIKELY(!IsPlainNonNullSlotWord(static_cast<uintptr_t>(raw(oldField.GetFieldValue()))) &&
+                   theCollector.is_load_good(oldField))) {
             BaseObject* resolved = ResolveFromCopyForMutator(oldTarget);
             if (resolved == oldTarget || resolved == nullptr) {
                 return resolved;
@@ -74,7 +76,9 @@ BaseObject* IdleBarrier::AtomicReadReference(BaseObject* obj, RefField<true>& fi
     for (;;) {
         RefField<false> oldField(field.GetFieldValue(order));
         BaseObject* oldTarget = to_object(oldField.GetTargetObject());
-        if (oldTarget == nullptr || LIKELY(theCollector.is_load_good(oldField))) {
+        if (oldTarget == nullptr ||
+            LIKELY(!IsPlainNonNullSlotWord(static_cast<uintptr_t>(raw(oldField.GetFieldValue()))) &&
+                   theCollector.is_load_good(oldField))) {
             DLOG(BARRIER, "atomic read obj %p ref@%p: %#zx -> %p", obj, &field, raw(oldField.GetFieldValue()),
                  oldTarget);
             return oldTarget;
@@ -97,15 +101,8 @@ void IdleBarrier::ReadStruct(MAddress dst, BaseObject* obj, MAddress src, size_t
         CopyStructPlainToNonHeap(dst, obj, src, size);
         return;
     }
-    if (obj != nullptr) {
-        obj->ForEachRefInStruct(
-            [this, obj](RefField<false>& field) {
-                (void)ReadReference(obj, field);
-            },
-            src, src + size);
-    }
-    CHECK_DETAIL(memcpy_s(reinterpret_cast<void*>(dst), size, reinterpret_cast<void*>(src), size) == EOK,
-                 "read struct memcpy_s failed");
+    CHECK(obj != nullptr);
+    CopyObjectStructColouredToHeap(obj, src, dst, size, src, size);
 }
 
 void IdleBarrier::ReadStaticStruct(MAddress dst, MAddress src, size_t size, const GCTib gctib) const
@@ -114,11 +111,7 @@ void IdleBarrier::ReadStaticStruct(MAddress dst, MAddress src, size_t size, cons
         CopyStaticStructPlainToNonHeap(dst, src, size, gctib);
         return;
     }
-    CHECK_DETAIL(memcpy_s(reinterpret_cast<void*>(dst), size, reinterpret_cast<void*>(src), size) == EOK,
-                 "read struct memcpy_s failed");
-    gctib.ForEachBitmapWord(dst, [=](RefField<>& field) {
-        (void)ReadReference(nullptr, field);
-    });
+    CopyStaticStructColouredToHeap(dst, size, src, size, gctib);
 }
 
 void IdleBarrier::AtomicWriteReferenceImpl(BaseObject* obj, RefField<true>& field, BaseObject* newRef,
@@ -181,21 +174,10 @@ void IdleBarrier::WriteReferenceImpl(BaseObject* obj, RefField<false>& field, Ba
 
 void IdleBarrier::WriteStructImpl(BaseObject* obj, MAddress dst, size_t dstLen, MAddress src, size_t srcLen) const
 {
-    // R9 bulk：Idle 墙钟 memcpy 灌 plain；post-copy 补色环 = PostTraceBarrier.cpp:117-128。
-    CHECK(memcpy_s(reinterpret_cast<void*>(dst), dstLen, reinterpret_cast<void*>(src), srcLen) == EOK);
-    if (obj != nullptr) {
-        obj->ForEachRefInStruct(
-            [=](RefField<>& refField) {
-                RefField<> oldField(refField);
-                MAddress oldValue = raw(oldField.GetFieldValue());
-                BaseObject* latest = Barrier::ReadReference(nullptr, oldField);
-                RefField<> newField = theCollector.GetAndTryTagRefField(latest);
-                if (oldValue != raw(newField.GetFieldValue())) {
-                    HealSlot(refField, to_zpointer(oldValue), newField.GetFieldValue(),
-                             HealSite::IdleWriteStructRecolour);
-                }
-            },
-            dst, dst + dstLen);
+    if (obj != nullptr && Heap::IsHeapAddress(obj)) {
+        CopyObjectStructColouredToHeap(obj, dst, dst, dstLen, src, srcLen);
+    } else {
+        CHECK(memcpy_s(reinterpret_cast<void*>(dst), dstLen, reinterpret_cast<void*>(src), srcLen) == EOK);
     }
 #if defined(CANGJIE_TSAN_SUPPORT)
     CHECK(srcLen == dstLen);
@@ -295,28 +277,8 @@ void IdleBarrier::CopyStructArrayImpl(BaseObject* dstObj, MAddress dstField, MIn
         CopyStructArrayPlainToNonHeap(dstField, srcObj, srcField, srcSize);
         return;
     }
-    MArray* srcArray = static_cast<MArray*>(srcObj);
-    RefFieldVisitor srcVisitor = [this, srcArray](RefField<false>& field) { (void)ReadReference(srcArray, field); };
-    srcArray->ForEachRefFieldInRange(srcVisitor, srcField, srcField + srcSize);
-
-    CHECK_DETAIL(memmove_s(reinterpret_cast<void*>(dstField), dstSize, reinterpret_cast<void*>(srcField), srcSize) ==
-                     EOK,
-                 "memmove_s failed");
-
-    // R9 bulk：堆 dst 上 memmove 后补规范色（栈源恒 plain）。
-    if (dstObj != nullptr && Heap::IsHeapAddress(dstObj) && dstObj->HasRefField()) {
-        RefFieldVisitor recolour = [this](RefField<false>& field) {
-            RefField<> oldField(field);
-            MAddress oldValue = raw(oldField.GetFieldValue());
-            BaseObject* latest = ReadReference(nullptr, oldField);
-            RefField<> newField = theCollector.GetAndTryTagRefField(latest);
-            if (oldValue != raw(newField.GetFieldValue())) {
-                HealSlot(field, to_zpointer(oldValue), newField.GetFieldValue(),
-                         HealSite::IdleCopyStructArrayRecolour);
-            }
-        };
-        static_cast<MArray*>(dstObj)->ForEachRefFieldInRange(recolour, dstField, dstField + srcSize);
-    }
+    (void)srcObj;
+    CopyStructArrayColouredToHeap(dstObj, dstField, dstSize, srcField, srcSize);
 
 #if defined(CANGJIE_TSAN_SUPPORT)
     Sanitizer::TsanWriteMemoryRange(reinterpret_cast<void*>(dstField), dstSize);

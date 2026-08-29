@@ -121,7 +121,9 @@ BaseObject* ForwardBarrier::ReadReference(BaseObject* obj, RefField<false>& fiel
     for (;;) {
         RefField<> oldField(field);
         BaseObject* oldTarget = to_object(oldField.GetTargetObject());
-        if (oldTarget == nullptr || LIKELY(theCollector.is_load_good(oldField))) {
+        if (oldTarget == nullptr ||
+            LIKELY(!IsPlainNonNullSlotWord(static_cast<uintptr_t>(raw(oldField.GetFieldValue()))) &&
+                   theCollector.is_load_good(oldField))) {
             if (oldTarget != nullptr) {
 
                 NoteZeroHeaderTarget("ForwardRead.fast", field, obj, oldTarget);
@@ -224,7 +226,9 @@ BaseObject* ForwardBarrier::AtomicReadReference(BaseObject* obj, RefField<true>&
     for (;;) {
         RefField<false> oldField(field.GetFieldValue(order));
         BaseObject* oldTarget = to_object(oldField.GetTargetObject());
-        if (oldTarget == nullptr || LIKELY(theCollector.is_load_good(oldField))) {
+        if (oldTarget == nullptr ||
+            LIKELY(!IsPlainNonNullSlotWord(static_cast<uintptr_t>(raw(oldField.GetFieldValue()))) &&
+                   theCollector.is_load_good(oldField))) {
             if (oldTarget != nullptr) {
 
             }
@@ -338,22 +342,7 @@ void ForwardBarrier::CopyStructArrayImpl(BaseObject* dstObj, MAddress dstField, 
     RefFieldVisitor srcVisitor = [this, srcArray](RefField<false>& field) { (void)ReadReference(srcArray, field); };
     srcArray->ForEachRefFieldInRange(srcVisitor, srcField, srcField + srcSize);
 
-    CHECK(memmove_s(reinterpret_cast<void*>(dstField), dstSize, reinterpret_cast<void*>(srcField), srcSize) == EOK);
-
-    // R9 bulk：堆 dst 补色（与 Idle/base 同形）。
-    if (dstObj != nullptr && Heap::IsHeapAddress(dstObj) && dstObj->HasRefField()) {
-        RefFieldVisitor recolour = [this](RefField<false>& field) {
-            RefField<> oldField(field);
-            MAddress oldValue = raw(oldField.GetFieldValue());
-            BaseObject* latest = ReadReference(nullptr, oldField);
-            RefField<> newField = theCollector.GetAndTryTagRefField(latest);
-            if (oldValue != raw(newField.GetFieldValue())) {
-                HealSlot(field, to_zpointer(oldValue), newField.GetFieldValue(),
-                         HealSite::ForwardCopyStructArrayRecolour);
-            }
-        };
-        static_cast<MArray*>(dstObj)->ForEachRefFieldInRange(recolour, dstField, dstField + srcSize);
-    }
+    CopyStructArrayColouredToHeap(dstObj, dstField, dstSize, srcField, srcSize);
 
 #if defined(CANGJIE_TSAN_SUPPORT)
     Sanitizer::TsanWriteMemoryRange(reinterpret_cast<void*>(dstField), dstSize);

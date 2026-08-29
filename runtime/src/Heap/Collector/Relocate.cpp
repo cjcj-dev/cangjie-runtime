@@ -1123,8 +1123,8 @@ bool WCollector::FixMinorEvacuatedSlot(RefField<>& field, BaseObject* knownBase,
         return true;
     }
     // interiorsrc2 / introot: value may be RawArray+8 (derived interior). Relocate via host;
-    // write plain only. Storage is still HeapSlot (fields/remset) — DerivedSlot cannot CAS
-    // into it; CasInstallInteriorPlain names the (host,offset) provenance (derivedtype).
+    // keep the interior payload. Storage is HeapSlot (fields/remset), so publish
+    // it with StoreGood; stackmap DerivedSlot remains plain.
     // ScopedPlainWriter tags DerivedLegal column, not K1 HeapSlot plain.
     if (knownBase != nullptr) {
         MAddress targetAddress = reinterpret_cast<MAddress>(target);
@@ -1149,18 +1149,19 @@ bool WCollector::FixMinorEvacuatedSlot(RefField<>& field, BaseObject* knownBase,
                 size_t offset = static_cast<size_t>(reinterpret_cast<uintptr_t>(target) -
                                                     reinterpret_cast<uintptr_t>(host));
                 MAddress oldVal = raw(oldField.GetFieldValue());
-                MAddress plainVal = reinterpret_cast<MAddress>(toHost) + offset;
-                if (oldVal != plainVal) {
+                MAddress interiorAddress = reinterpret_cast<MAddress>(toHost) + offset;
+                if (oldVal != interiorAddress) {
                     (void)CasInstallInteriorPlain(field, to_zpointer(oldVal), toHost, offset,
                                                   HealSite::WCollectorMinorFixInteriorForward);
                 }
                 return true;
             }
         }
-        // Gate rejected; host unknown or not forwarded — still plain interior (03fc21ed).
+        // Gate rejected; host unknown or not forwarded — preserve the interior
+        // address, but the heap carrier is still fully coloured.
         MAddress oldVal = raw(oldField.GetFieldValue());
-        MAddress plainVal = reinterpret_cast<MAddress>(target);
-        if (oldVal != plainVal) {
+        MAddress interiorAddress = reinterpret_cast<MAddress>(target);
+        if (oldVal != interiorAddress) {
             (void)CasInstallInteriorPlain(field, to_zpointer(oldVal), target,
                                           HealSite::WCollectorMinorFixInteriorPreserve);
         }
@@ -1192,8 +1193,8 @@ bool WCollector::FixMinorEvacuatedSlot(RefField<>& field, BaseObject* knownBase,
     // ForwardObject may return the same interior if gated; re-check before colouring.
     if (!Collector::PlausibleManagedObjectGate("FixMinorEvacuatedSlot.postfwd", current)) {
         MAddress oldVal = raw(field.GetFieldValue());
-        MAddress plainVal = reinterpret_cast<MAddress>(current);
-        if (oldVal != plainVal) {
+        MAddress interiorAddress = reinterpret_cast<MAddress>(current);
+        if (oldVal != interiorAddress) {
             (void)CasInstallInteriorPlain(field, to_zpointer(oldVal), current,
                                           HealSite::WCollectorMinorFixInteriorPostForward);
         }

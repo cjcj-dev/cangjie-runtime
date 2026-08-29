@@ -54,14 +54,48 @@ int main()
                                                                     kPointerAddressLimit + 1 }),
            "address-layout-seal-high-typeinfo-rejected");
     const uintptr_t address = 0x12345000;
-    const uintptr_t storeGood = address | ZPointerRemapped00 | MARKED_YOUNG_0 |
-        MARKED_OLD_0 | REMEMBERED_0;
-    const uintptr_t staleLoadBad = address | ZPointerRemapped01 | MARKED_YOUNG_0 |
-        MARKED_OLD_0 | REMEMBERED_0;
     Expect(ClassifySlotWord(0) == SlotWordVerdict::kNull, "slot-null");
-    Expect(ClassifySlotWord(address) == SlotWordVerdict::kLegacyPlain, "slot-legacy-plain");
-    Expect(ClassifySlotWord(storeGood) == SlotWordVerdict::kColoured, "slot-store-good");
-    Expect(ClassifySlotWord(staleLoadBad) == SlotWordVerdict::kColoured, "slot-stale-load-bad");
+    Expect(ClassifySlotWord(address) == SlotWordVerdict::kIllegal, "slot-plain-illegal");
+    constexpr uintptr_t expectedProducerFamilies[] = {
+        REMAP_COLOUR_MASK,
+        MARKED_YOUNG_MASK,
+        MARKED_OLD_MASK,
+        REMEMBERED_MASK,
+    };
+    Expect(kHeapSlotRequiredColourFamilyCount ==
+               sizeof(expectedProducerFamilies) / sizeof(expectedProducerFamilies[0]),
+           "slot-producer-manifest-family-count");
+    for (size_t i = 0;
+         i < kHeapSlotRequiredColourFamilyCount &&
+             i < sizeof(expectedProducerFamilies) / sizeof(expectedProducerFamilies[0]);
+         ++i) {
+        Expect(kHeapSlotRequiredColourFamilies[i] == expectedProducerFamilies[i],
+               "slot-producer-manifest-family-row");
+    }
+    unsigned expectedProducerWords = 1;
+    uintptr_t canonicalProducerWord = address;
+    for (size_t i = 0; i < kHeapSlotRequiredColourFamilyCount; ++i) {
+        const uintptr_t family = kHeapSlotRequiredColourFamilies[i];
+        expectedProducerWords *= static_cast<unsigned>(__builtin_popcountll(family));
+        canonicalProducerWord |= family & (~family + 1);
+    }
+    unsigned producerWords = 0;
+    for (uintptr_t metadata = 0; metadata < (uintptr_t(1) << 12); ++metadata) {
+        if (ClassifySlotWord(address | (metadata << 48u)) == SlotWordVerdict::kColoured) {
+            ++producerWords;
+        }
+    }
+    Expect(producerWords == expectedProducerWords, "slot-producer-matrix-cardinality");
+    for (size_t i = 0; i < kHeapSlotRequiredColourFamilyCount; ++i) {
+        Expect(ClassifySlotWord(canonicalProducerWord & ~kHeapSlotRequiredColourFamilies[i]) ==
+                   SlotWordVerdict::kIllegal,
+               "slot-producer-matrix-missing-family");
+    }
+    Expect(ClassifySlotWord(address | ZPointerRemapped00) == SlotWordVerdict::kIllegal,
+           "slot-partial-remap-only");
+    Expect(ClassifySlotWord(address | ZPointerRemapped00 | MARKED_YOUNG_0 | MARKED_OLD_0) ==
+               SlotWordVerdict::kIllegal,
+           "slot-partial-missing-remembered");
     Expect(ClassifySlotWord(address | ZPointerRemapped00 | ZPointerRemapped01) == SlotWordVerdict::kIllegal,
            "slot-illegal-remap-popcount");
     Expect(ClassifySlotWord(address | MARKED_YOUNG_0 | MARKED_YOUNG_1) == SlotWordVerdict::kIllegal,
@@ -77,7 +111,8 @@ int main()
     Expect(ClassifySlotWord(ZPointerRemapped00) == SlotWordVerdict::kIllegal,
            "slot-illegal-colour-without-address");
     if (failures == 0) {
-        std::fprintf(stderr, "COLOUR_ENCODING_UNIT_OK tests=25\n");
+        std::fprintf(stderr, "COLOUR_ENCODING_UNIT_OK producer_words=%u families=%zu\n",
+                     producerWords, kHeapSlotRequiredColourFamilyCount);
     }
     return failures == 0 ? 0 : 1;
 }

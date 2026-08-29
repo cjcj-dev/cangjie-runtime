@@ -12,29 +12,47 @@
 
 namespace MapleRuntime {
 namespace {
-void EnforceColourCensus(const ColourCensusStats& stats, bool armed)
+const char* HolderTypeName(BaseObject* holder)
 {
-    CHECK_DETAIL(!armed || stats.illegal == 0,
-                 "armed pointer-colour census found illegal heap slot: slot=%p value=%#zx holder=%p illegal=%zu",
+    if (holder == nullptr) {
+        return "?";
+    }
+    TypeInfo* typeInfo = holder->GetTypeInfo();
+    return typeInfo == nullptr || typeInfo->GetName() == nullptr ? "?" : typeInfo->GetName();
+}
+
+void EnforceColourCensus(const ColourCensusStats& stats)
+{
+    CHECK_DETAIL(stats.coloured == stats.total && stats.plain == 0 && stats.illegal == 0,
+                 "full-colour census rejected heap slot: slots=%zu total=%zu coloured=%zu "
+                 "plain_slot=%p plain_value=%#zx plain_holder=%p plain_holder_type=%s plain=%zu "
+                 "illegal_slot=%p illegal_value=%#zx illegal_holder=%p illegal_holder_type=%s illegal=%zu",
+                 stats.slots, stats.total, stats.coloured,
+                 stats.firstPlainSlot, static_cast<size_t>(stats.firstPlainValue),
+                 stats.firstPlainHolder, HolderTypeName(stats.firstPlainHolder), stats.plain,
                  stats.firstIllegalSlot, static_cast<size_t>(stats.firstIllegalValue),
-                 stats.firstIllegalHolder, stats.illegal);
+                 stats.firstIllegalHolder, HolderTypeName(stats.firstIllegalHolder), stats.illegal);
 }
 } // namespace
 
 void ColourCensusStats::Observe(const void* slot, uintptr_t value, BaseObject* holder)
 {
-    ++total;
+    ++slots;
+    if (value != 0) {
+        ++total;
+    }
+    if (IsPlainNonNullSlotWord(value)) {
+        ++plain;
+        if (firstPlainSlot == nullptr) {
+            firstPlainSlot = slot;
+            firstPlainValue = value;
+            firstPlainHolder = holder;
+        }
+        return;
+    }
     switch (ClassifySlotWord(value)) {
         case SlotWordVerdict::kNull:
             ++nulls;
-            break;
-        case SlotWordVerdict::kLegacyPlain:
-            ++legacyPlain;
-            if (firstPlainSlot == nullptr) {
-                firstPlainSlot = slot;
-                firstPlainValue = value;
-                firstPlainHolder = holder;
-            }
             break;
         case SlotWordVerdict::kColoured:
             ++coloured;
@@ -64,13 +82,13 @@ void VerifyColourCensus(const char* point)
 {
     ColourCensusStats stats;
     Heap::GetHeap().ForEachObj([&stats](BaseObject* object) { CensusObjectSlots(object, stats); }, false);
-    VLOG(REPORT, "[ptrcolour][census] total=%zu null=%zu coloured=%zu plain=%zu illegal=%zu",
-         stats.total, stats.nulls, stats.coloured, stats.legacyPlain, stats.illegal);
-    if (stats.legacyPlain != 0) {
+    VLOG(REPORT, "[ptrcolour][census] slots=%zu total=%zu null=%zu coloured=%zu plain=%zu illegal=%zu",
+         stats.slots, stats.total, stats.nulls, stats.coloured, stats.plain, stats.illegal);
+    if (stats.plain != 0) {
         VLOG(REPORT,
              "[ptrcolour][census][plain-first] point=%s slot=%p value=%#zx holder=%p count=%zu",
              point == nullptr ? "?" : point, stats.firstPlainSlot,
-             static_cast<size_t>(stats.firstPlainValue), stats.firstPlainHolder, stats.legacyPlain);
+             static_cast<size_t>(stats.firstPlainValue), stats.firstPlainHolder, stats.plain);
     }
     if (stats.illegal != 0) {
         VLOG(REPORT,
@@ -78,13 +96,13 @@ void VerifyColourCensus(const char* point)
              point == nullptr ? "?" : point, stats.firstIllegalSlot,
              static_cast<size_t>(stats.firstIllegalValue), stats.firstIllegalHolder, stats.illegal);
     }
-    EnforceColourCensus(stats, ColouredWritesArmed());
+    EnforceColourCensus(stats);
 }
 
 #if defined(MRT_TESTABLE_INTERNALS)
-void EnforceColourCensusForTesting(const ColourCensusStats& stats, bool armed)
+void EnforceColourCensusForTesting(const ColourCensusStats& stats)
 {
-    EnforceColourCensus(stats, armed);
+    EnforceColourCensus(stats);
 }
 #endif
 

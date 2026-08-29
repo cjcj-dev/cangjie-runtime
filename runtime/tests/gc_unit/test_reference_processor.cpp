@@ -72,7 +72,7 @@ GC_TEST(ReferenceProcessor, StrongWeakReferentIsNotCleared)
     GcHeapFixture fx;
     HeapSlot<>& referent =
         HeapSlotAt<>(reinterpret_cast<uintptr_t>(fx.obj0) + TYPEINFO_PTR_SIZE);
-    referent.StoreColoured(to_zpointer(reinterpret_cast<MAddress>(fx.obj1)));
+    referent.StoreColoured(GcUnit::StoreGoodPointer(fx.obj1));
 
     ReferenceProcessor processor;
     GC_EXPECT_TRUE(processor.DiscoverReference(fx.obj0, ReferenceType::WEAK) ==
@@ -89,7 +89,7 @@ GC_TEST(ReferenceProcessor, DeadWeakReferentIsCleanedByCas)
     GcHeapFixture fx;
     HeapSlot<>& referent =
         HeapSlotAt<>(reinterpret_cast<uintptr_t>(fx.obj0) + TYPEINFO_PTR_SIZE);
-    referent.StoreColoured(to_zpointer(reinterpret_cast<MAddress>(fx.obj1)));
+    referent.StoreColoured(GcUnit::StoreGoodPointer(fx.obj1));
 
     ReferenceProcessor processor;
     GC_EXPECT_TRUE(processor.DiscoverReference(fx.obj0, ReferenceType::WEAK) ==
@@ -108,14 +108,14 @@ GC_TEST(ReferenceProcessor, EnqueueConsumerReloadsWinningWeakCasValue)
     BaseObject* replacement = fx.PlaceObject(fx.heapStart + 128);
     HeapSlot<>& referent =
         HeapSlotAt<>(reinterpret_cast<uintptr_t>(fx.obj0) + TYPEINFO_PTR_SIZE);
-    referent.StoreColoured(to_zpointer(reinterpret_cast<MAddress>(fx.obj1)));
+    referent.StoreColoured(GcUnit::StoreGoodPointer(fx.obj1));
 
     ReferenceProcessor processor;
     GC_EXPECT_TRUE(processor.DiscoverReference(fx.obj0, ReferenceType::WEAK) ==
                    ReferenceStatus::DISCOVERED);
     processor.ProcessReferences([](BaseObject*) { return false; });
     ReferenceProcessor::SetBeforeWeakCleanCasForTest([&] {
-        referent.StoreColoured(to_zpointer(reinterpret_cast<MAddress>(replacement)));
+        referent.StoreColoured(GcUnit::StoreGoodPointer(replacement));
     });
     BaseObject* consumerTerminal = nullptr;
     processor.EnqueueReferences([](BaseObject*) {},
@@ -133,7 +133,7 @@ GC_TEST(ReferenceProcessor, DuplicateWeakPendingAcceptedOnce)
     GcHeapFixture fx;
     HeapSlot<>& referent =
         HeapSlotAt<>(reinterpret_cast<uintptr_t>(fx.obj0) + TYPEINFO_PTR_SIZE);
-    referent.StoreColoured(to_zpointer(reinterpret_cast<MAddress>(fx.obj1)));
+    referent.StoreColoured(GcUnit::StoreGoodPointer(fx.obj1));
 
     ReferenceProcessor processor;
     GC_EXPECT_TRUE(processor.DiscoverReference(fx.obj0, ReferenceType::WEAK) ==

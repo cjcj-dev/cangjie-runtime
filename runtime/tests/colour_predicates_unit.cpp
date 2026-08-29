@@ -54,11 +54,11 @@ static_assert(!is_load_bad(LOAD_GOOD, MASKS.loadBad), "COLOURPRED_NEG_is_load_ba
 
 // 2. is_load_good
 static_assert(is_load_good(LOAD_GOOD, MASKS.loadBad), "COLOURPRED_POS_is_load_good");
-static_assert(!is_load_good(PAYLOAD, MASKS.loadBad), "COLOURPRED_NEG_is_load_good_plain");
+static_assert(is_load_good(PAYLOAD, MASKS.loadBad), "COLOURPRED_ZGC_is_load_good_plain_mask_shape");
 
 // 3. is_load_good_or_null
 static_assert(is_load_good_or_null(0, MASKS.loadBad), "COLOURPRED_POS_is_load_good_or_null");
-static_assert(!is_load_good_or_null(PAYLOAD, MASKS.loadBad), "COLOURPRED_NEG_is_load_good_or_null_plain");
+static_assert(is_load_good_or_null(PAYLOAD, MASKS.loadBad), "COLOURPRED_ZGC_is_load_good_or_null_plain");
 
 // 4. is_old_load_good
 static_assert(is_old_load_good(LOAD_GOOD, MASKS.loadBad), "COLOURPRED_POS_is_old_load_good");
@@ -78,8 +78,8 @@ static_assert(!is_mark_good(STALE_MARK, MASKS.loadBad, MASKS.markBad), "COLOURPR
 
 // 8. is_mark_good_or_null
 static_assert(is_mark_good_or_null(0, MASKS.loadBad, MASKS.markBad), "COLOURPRED_POS_is_mark_good_or_null");
-static_assert(!is_mark_good_or_null(PAYLOAD, MASKS.loadBad, MASKS.markBad),
-              "COLOURPRED_NEG_is_mark_good_or_null_plain");
+static_assert(is_mark_good_or_null(PAYLOAD, MASKS.loadBad, MASKS.markBad),
+              "COLOURPRED_ZGC_is_mark_good_or_null_plain");
 
 // 9. is_store_bad
 static_assert(is_store_bad(STALE_REMEMBERED, MASKS.storeBad), "COLOURPRED_POS_is_store_bad");
@@ -87,14 +87,14 @@ static_assert(!is_store_bad(STORE_GOOD, MASKS.storeBad), "COLOURPRED_NEG_is_stor
 
 // 10. is_store_good
 static_assert(is_store_good(STORE_GOOD, MASKS.loadBad, MASKS.storeBad), "COLOURPRED_POS_is_store_good");
-static_assert(!is_store_good(MISSING_REMEMBERED, MASKS.loadBad, MASKS.storeBad),
-              "COLOURPRED_NEG_is_store_good_missing_remembered");
+static_assert(!is_store_good(STALE_REMEMBERED, MASKS.loadBad, MASKS.storeBad),
+              "COLOURPRED_NEG_is_store_good_stale_remembered");
 
 // 11. is_store_good_or_null
 static_assert(is_store_good_or_null(0, MASKS.loadBad, MASKS.storeBad),
               "COLOURPRED_POS_is_store_good_or_null");
-static_assert(!is_store_good_or_null(MISSING_REMEMBERED, MASKS.loadBad, MASKS.storeBad),
-              "COLOURPRED_NEG_is_store_good_or_null_missing_remembered");
+static_assert(!is_store_good_or_null(STALE_REMEMBERED, MASKS.loadBad, MASKS.storeBad),
+              "COLOURPRED_NEG_is_store_good_or_null_stale_remembered");
 
 // 12. is_marked_finalizable
 static_assert(is_marked_finalizable(PAYLOAD | FINALIZABLE_0, MASKS.markBad),

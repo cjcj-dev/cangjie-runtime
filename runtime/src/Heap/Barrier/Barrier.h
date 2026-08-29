@@ -9,6 +9,7 @@
 #define MRT_BARRIER_H
 
 #include "Common/BaseObject.h"
+#include "Common/ColourEncoding.h"
 #include "Heap/Barrier/RememberedSet.h"
 #include "ObjectModel/Field.h"
 #include "ObjectModel/MClass.h"
@@ -142,6 +143,19 @@ protected:
     void CopyStaticStructPlainToNonHeap(MAddress dst, MAddress src, size_t size, const GCTib gctib) const;
     void CopyStructArrayPlainToNonHeap(MAddress dstField, BaseObject* srcObj, MAddress srcField, size_t srcSize) const;
     void CopyRefArrayPlainToNonHeap(MAddress dst, BaseObject* srcObj, MAddress src, MIndex dstSize, MIndex srcSize) const;
+
+    // Full-colour inverse boundary: snapshot the source for overlap safety,
+    // copy primitive gaps, and publish each heap reference slot directly with
+    // its current colour. No memcpy-written plain window is permitted.
+    __attribute__((visibility("hidden"))) void CopyObjectStructColouredToHeap(
+        BaseObject* layoutObj, MAddress layoutStart, MAddress dst, size_t dstLen,
+        MAddress src, size_t srcLen) const;
+    __attribute__((visibility("hidden"))) void CopyStaticStructColouredToHeap(
+        MAddress dst, size_t dstLen, MAddress src, size_t srcLen, const GCTib gctib) const;
+    __attribute__((visibility("hidden"))) void CopyStructArrayColouredToHeap(
+        BaseObject* dstObj, MAddress dst, size_t dstLen, MAddress src, size_t srcLen) const;
+    __attribute__((visibility("hidden"))) void CopyRefArrayColouredToHeap(
+        MAddress dst, size_t dstLen, MAddress src, size_t srcLen) const;
 
     // Shared post-copy fixup for every WriteStaticStruct phase specialization: resolve forwarding,
     // store plain. Typed on RootSlot so a coloured write cannot be spelled (see Barrier.cpp).

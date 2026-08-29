@@ -34,6 +34,7 @@
 #include <cstdint>
 
 #include "Common/ColourMask.h"
+#include "Common/ColourEncoding.h"
 #include "Common/ColourPredicates.h"
 #include "gc_unittest.hpp"
 
@@ -141,15 +142,14 @@ void CheckOneColour(const Epoch& epoch, uintptr_t address, Colour c)
     const bool sameYoungMark = youngMarkBit == epoch.e.markedYoung;
     const bool sameOldMark = oldMarkBit == epoch.e.markedOld;
     const bool sameRemembered = rememberBit == epoch.e.remembered;
-    const bool hasAddress = address != 0;
-
-    const bool expectLoadGood = hasAddress && sameYoungRemap && sameOldRemap;
-    const bool expectMarkGood = expectLoadGood && sameYoungMark && sameOldMark;
-    const bool expectStoreGood = expectMarkGood && sameRemembered;
+    const bool nonNullWord = value != 0;
     const bool expectLoadBad = remapBit != 0 && !(sameYoungRemap && sameOldRemap);
     const bool expectMarkBad = expectLoadBad || (youngMarkBit != 0 && !sameYoungMark) ||
         (oldMarkBit != 0 && !sameOldMark);
     const bool expectStoreBad = expectMarkBad || (rememberBit != 0 && !sameRemembered);
+    const bool expectLoadGood = nonNullWord && !expectLoadBad;
+    const bool expectMarkGood = nonNullWord && !expectMarkBad;
+    const bool expectStoreGood = nonNullWord && !expectStoreBad;
 
     GC_EXPECT_EQ(ColourPredicates::is_marked_finalizable(value, m.markBad), false);
     GC_EXPECT_EQ(ColourPredicates::is_marked_any_old(value, m.markBad), sameOldMark);
@@ -171,11 +171,11 @@ void CheckOneColour(const Epoch& epoch, uintptr_t address, Colour c)
     GC_EXPECT_EQ(ColourPredicates::is_mark_bad(value, m.markBad), expectMarkBad);
     GC_EXPECT_EQ(ColourPredicates::is_store_bad(value, m.storeBad), expectStoreBad);
     // *_or_null differ from the plain form only at raw zero, and a coloured null is not raw zero.
-    GC_EXPECT_EQ(ColourPredicates::is_load_good_or_null(value, m.loadBad), value == 0 || expectLoadGood);
+    GC_EXPECT_EQ(ColourPredicates::is_load_good_or_null(value, m.loadBad), !expectLoadBad);
     GC_EXPECT_EQ(ColourPredicates::is_mark_good_or_null(value, m.loadBad, m.markBad),
-                 value == 0 || expectMarkGood);
+                 !expectMarkBad);
     GC_EXPECT_EQ(ColourPredicates::is_store_good_or_null(value, m.loadBad, m.storeBad),
-                 value == 0 || expectStoreGood);
+                 !expectStoreBad);
 }
 
 void CheckAllColours(const Epoch& epoch)
@@ -269,16 +269,17 @@ GC_TEST(ColourIsChecks, EveryColourAcrossAnIrregularFlipSchedule)
 // the two lets it through unexamined.  That is correct while the good colour is zero and wrong the
 // moment it is not, which is the state we are in.  Pinning it so the asymmetry is a stated property
 // rather than something a reader has to rediscover from a crash.
-GC_TEST(ColourIsChecks, UncolouredValueIsNeitherLoadGoodNorLoadBad)
+GC_TEST(ColourIsChecks, PlainNonNullIsMaskGoodButEncodingIllegal)
 {
     Epoch epoch;
     const BadMasks m = epoch.Masks();
     const uintptr_t plain = kValidAddress; // address, no colour bits at all
 
-    GC_EXPECT_TRUE(!ColourPredicates::is_load_good(plain, m.loadBad));
+    GC_EXPECT_TRUE(ColourPredicates::is_load_good(plain, m.loadBad));
     GC_EXPECT_TRUE(!ColourPredicates::is_load_bad(plain, m.loadBad));
-    GC_EXPECT_TRUE(!ColourPredicates::is_mark_good(plain, m.loadBad, m.markBad));
-    GC_EXPECT_TRUE(!ColourPredicates::is_store_good(plain, m.loadBad, m.storeBad));
+    GC_EXPECT_TRUE(ColourPredicates::is_mark_good(plain, m.loadBad, m.markBad));
+    GC_EXPECT_TRUE(ColourPredicates::is_store_good(plain, m.loadBad, m.storeBad));
+    GC_EXPECT_EQ(ClassifySlotWord(plain), SlotWordVerdict::kIllegal);
 }
 
 // Raw zero is the one value the _or_null forms exist for.
@@ -371,11 +372,12 @@ static void CheckStoreGoodComplement(const Epoch& epoch)
         }
     }
 
-    // Plain uncoloured non-null: (v & StoreBad)==0 (no bad bit present) but it does
-    // not carry StoreGood's required bits, so it is not store-good. Same for raw null.
+    // ZGC mask semantics deliberately accept a plain non-null word. The
+    // producer-derived HeapSlot admission gate rejects it before publication.
     GC_EXPECT_EQ(kValidAddress & m.storeBad, uintptr_t(0));
     GC_EXPECT_TRUE((kValidAddress & m.storeGood) != m.storeGood);
-    GC_EXPECT_TRUE(!ColourPredicates::is_store_good(kValidAddress, m.loadBad, m.storeBad));
+    GC_EXPECT_TRUE(ColourPredicates::is_store_good(kValidAddress, m.loadBad, m.storeBad));
+    GC_EXPECT_EQ(ClassifySlotWord(kValidAddress), SlotWordVerdict::kIllegal);
     GC_EXPECT_EQ(uintptr_t(0) & m.storeBad, uintptr_t(0));
     GC_EXPECT_TRUE(!ColourPredicates::is_store_good(0, m.loadBad, m.storeBad));
 }

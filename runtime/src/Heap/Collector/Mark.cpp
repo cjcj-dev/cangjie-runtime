@@ -622,7 +622,7 @@ void WCollector::TraceHeap()
     // assemble garbage candidates for tracing.
     reinterpret_cast<RegionSpace&>(theAllocator).AssembleGarbageCandidates();
 
-    // plaincensus Phase 1a: measure plain HeapSlots before major mark.
+    // Full-colour gate: reject any plain HeapSlot before major mark.
 
     const bool concurrentStackScan = MutatorManager::ConcurrentStackScanEnabled();
     uint64_t stackScanEpoch = 0;

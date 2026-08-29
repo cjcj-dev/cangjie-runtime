@@ -160,7 +160,7 @@ public:
     RefField<> GetAndTryTagRefField(BaseObject* object) const override
     {
         const uintptr_t remap = ColourPredicates::current_remapped(static_cast<uintptr_t>(::g_cjLoadBadMask));
-        return RefField<>(to_zpointer(reinterpret_cast<MAddress>(object) | remap));
+        return RefField<>(GcUnit::ColouredPointer(object, remap));
     }
     ZGenerationId remap_generation(RefField<>&) const override { return ZGenerationId::old; }
     BaseObject* relocate_or_remap_object(BaseObject* object, ZGenerationId) const override { return object; }
@@ -191,7 +191,7 @@ struct ReadEntryFixture {
         heap.region0->SetRegionAllocPtr(reinterpret_cast<MAddress>(heap.obj0) + 128);
         heap.region1->SetRegionAllocPtr(reinterpret_cast<MAddress>(heap.obj1) + 128);
         field = &HeapSlotAt<>(reinterpret_cast<MAddress>(heap.obj1) + TYPEINFO_PTR_SIZE);
-        field->StoreColoured(to_zpointer(reinterpret_cast<MAddress>(heap.obj0)));
+        field->StoreColoured(GcUnit::StoreGoodPointer(heap.obj0));
     }
 
     GcHeapFixture heap;
@@ -216,7 +216,7 @@ struct RefArraySource {
         array->SetClassInfo(arrayType);
         array->SetLength(1);
         field = &HeapSlotAt<>(reinterpret_cast<MAddress>(array) + MArray::GetContentOffset());
-        field->StoreColoured(to_zpointer(reinterpret_cast<MAddress>(fx.heap.obj0)));
+        field->StoreColoured(GcUnit::StoreGoodPointer(fx.heap.obj0));
     }
 
     alignas(TypeInfo) unsigned char arrayTypeStorage[sizeof(TypeInfo)];

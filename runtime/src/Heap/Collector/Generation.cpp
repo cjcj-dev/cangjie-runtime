@@ -626,7 +626,7 @@ void WCollector::DoYoungGarbageCollection()
     uint64_t start = TimeUtil::NanoSeconds();
     std::unique_ptr<ScopedStopTheWorld> stw =
         std::make_unique<ScopedStopTheWorld>("young prepare", false);
-    // plaincensus Phase 1a: measure plain HeapSlots before young mark mutates colours.
+    // Full-colour gate: reject any plain HeapSlot before young mark mutates colours.
     // This STW entry is the young-only mark start; old marking does not participate in a minor.
     flip_young_mark_start();
 

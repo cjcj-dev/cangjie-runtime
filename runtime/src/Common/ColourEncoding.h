@@ -38,28 +38,29 @@ struct StateWordTypeInfoRange {
 // by a 48-bit carrier.  An exclusive end exactly at 2^48 is valid: its final
 // represented byte is 2^48-1.  The subtraction form also rejects addition
 // overflow without first evaluating the overflowing sum.
-constexpr bool IsRepresentableLow48Range(uintptr_t start, size_t size)
+__attribute__((visibility("hidden"))) constexpr bool IsRepresentableLow48Range(uintptr_t start, size_t size)
 {
     return start < kPointerAddressLimit && size <= kPointerAddressLimit - start;
 }
 
-constexpr bool IsAddressLayoutSealValid(HeapSlotAddressRange heap, StateWordTypeInfoRange typeInfo)
+__attribute__((visibility("hidden"))) constexpr bool IsAddressLayoutSealValid(
+    HeapSlotAddressRange heap, StateWordTypeInfoRange typeInfo)
 {
     return heap.start < heap.end && typeInfo.start < typeInfo.end &&
         heap.end <= kPointerAddressLimit && typeInfo.end <= kPointerAddressLimit;
 }
 
-inline bool CheckedMulSize(size_t left, size_t right, size_t& result)
+__attribute__((visibility("hidden"))) inline bool CheckedMulSize(size_t left, size_t right, size_t& result)
 {
     return !__builtin_mul_overflow(left, right, &result);
 }
 
-inline bool CheckedAddSize(size_t left, size_t right, size_t& result)
+__attribute__((visibility("hidden"))) inline bool CheckedAddSize(size_t left, size_t right, size_t& result)
 {
     return !__builtin_add_overflow(left, right, &result);
 }
 
-inline bool CheckedRoundUpSize(size_t value, size_t alignment, size_t& result)
+__attribute__((visibility("hidden"))) inline bool CheckedRoundUpSize(size_t value, size_t alignment, size_t& result)
 {
     if (alignment == 0 || (alignment & (alignment - 1)) != 0) {
         return false;
@@ -74,51 +75,71 @@ inline bool CheckedRoundUpSize(size_t value, size_t alignment, size_t& result)
 
 enum class SlotWordVerdict : uint8_t {
     kNull,
-    kLegacyPlain,
     kColoured,
     kIllegal,
 };
 
-constexpr bool ColourFamilyHasMultipleBits(uintptr_t value, uintptr_t familyMask)
+__attribute__((visibility("hidden"))) constexpr bool ColourFamilyHasExactlyOneBit(
+    uintptr_t value, uintptr_t familyMask)
 {
     const uintptr_t family = value & familyMask;
-    return family != 0 && (family & (family - 1)) != 0;
+    return family != 0 && (family & (family - 1)) == 0;
 }
 
-// Structural admission for the HeapSlot carrier.  This deliberately does not
-// require every metadata family: migration can leave weaker but structurally
-// producible colours.  It rejects only words no enumerated producer can make:
-// ColourStoreGood and ColourStaleLoadBad choose at most one bit from each live
-// family; StoreColoured and self-heal preserve that shape.  Like ZGC's complete
-// pointer validation (zAddress.inline.hpp:320-389), a mask hit alone is not an
-// encoding proof.
-constexpr SlotWordVerdict ClassifySlotWord(uintptr_t value)
+// Single source of truth for the full-colour producer/consumer contract.  A
+// non-null HeapSlot word contains exactly one bit from every row.  Tests derive
+// both the accepted cardinality and the missing-family negatives from this
+// table, so removing a wired family cannot silently weaken the oracle.
+constexpr uintptr_t kHeapSlotRequiredColourFamilies[] = {
+    REMAP_COLOUR_MASK,
+    MARKED_YOUNG_MASK,
+    MARKED_OLD_MASK,
+    REMEMBERED_MASK,
+};
+constexpr size_t kHeapSlotRequiredColourFamilyCount =
+    sizeof(kHeapSlotRequiredColourFamilies) / sizeof(kHeapSlotRequiredColourFamilies[0]);
+
+__attribute__((visibility("hidden"))) constexpr bool IsPlainNonNullSlotWord(uintptr_t value)
+{
+    constexpr uintptr_t allMetadata =
+        REMAP_COLOUR_MASK | MARKED_YOUNG_MASK | MARKED_OLD_MASK |
+        REMEMBERED_MASK | FINALIZABLE_MASK | (uintptr_t(0xf) << 60u);
+    return (value & kPointerAddressMask) != 0 && (value & allMetadata) == 0;
+}
+
+// Fail-closed admission for the full-colour HeapSlot carrier.  The producer
+// matrix has two non-null rows (current store-good and stale-load-bad); both
+// write exactly one bit from every wired family.  Keeping the accepted set as
+// the conjunction of those family rows makes a removed/partial producer shrink
+// the test oracle instead of silently widening this classifier.
+__attribute__((visibility("hidden"))) constexpr SlotWordVerdict ClassifySlotWord(uintptr_t value)
 {
     if (value == 0) {
         return SlotWordVerdict::kNull;
     }
-    constexpr uintptr_t liveColourMask =
-        REMAP_COLOUR_MASK | MARKED_YOUNG_MASK | MARKED_OLD_MASK | REMEMBERED_MASK;
     constexpr uintptr_t unusedHighMask = uintptr_t(0xf) << 60u;
     if ((value & unusedHighMask) != 0 ||
         (!kFinalizableWired && (value & FINALIZABLE_MASK) != 0) ||
-        ColourFamilyHasMultipleBits(value, REMAP_COLOUR_MASK) ||
-        ColourFamilyHasMultipleBits(value, MARKED_YOUNG_MASK) ||
-        ColourFamilyHasMultipleBits(value, MARKED_OLD_MASK) ||
-        ColourFamilyHasMultipleBits(value, REMEMBERED_MASK)) {
+        (value & kPointerAddressMask) == 0) {
         return SlotWordVerdict::kIllegal;
     }
-    const bool hasAddress = (value & kPointerAddressMask) != 0;
-    const bool hasColour = (value & liveColourMask) != 0;
-    if (!hasAddress) {
-        return SlotWordVerdict::kIllegal;
+    for (size_t i = 0; i < kHeapSlotRequiredColourFamilyCount; ++i) {
+        if (!ColourFamilyHasExactlyOneBit(value, kHeapSlotRequiredColourFamilies[i])) {
+            return SlotWordVerdict::kIllegal;
+        }
     }
-    return hasColour ? SlotWordVerdict::kColoured : SlotWordVerdict::kLegacyPlain;
+    return SlotWordVerdict::kColoured;
 }
 
-// One runtime gate backs both the heap-write validator and the safe-point
-// census.  The definition owns the one-shot ARMED and process-exit summaries.
-bool ColouredWritesArmed();
+// ZAddress::store_good (zAddress.inline.hpp:806-808) for the frozen low-48
+// layout.  Used by producers whose payload is a derived/interior address and
+// therefore cannot be routed through a BaseObject classifier.
+__attribute__((visibility("hidden"))) constexpr uintptr_t MakeStoreGoodSlotWord(
+    uintptr_t address, uintptr_t storeGoodMask)
+{
+    const uintptr_t payload = address & kPointerAddressMask;
+    return payload == 0 ? 0 : payload | storeGoodMask;
+}
 
 } // namespace MapleRuntime
 

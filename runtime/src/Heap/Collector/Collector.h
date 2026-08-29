@@ -291,22 +291,22 @@ public:
     // OpenJDK ZPointer::is_mark_good (zAddress.inline.hpp:658-664): mark-good includes load-good,
     // the current young mark epoch, and the current old mark epoch; raw null is not mark-good.
     //
-    // Also require is_load_good (positive remap colour bits). Mask-only (value & mark_bad)==0
-    // admits plain uncoloured non-null (all colour bits 0), which ZGC never stores: every heap
-    // ref is coloured on write. During partial migration those plains exist and must take the
-    // slow path (make_load_good + IsHeapAddress), not the mark-good fast path.
+    // Encoding completeness is enforced at HeapSlot publication. As in ZGC,
+    // this phase predicate is only the single not-bad-mask test.
     bool is_mark_good(RefField<>& ref) const
     {
-        zpointer v = ref.GetFieldValue();
-        return (raw(v) & ::g_cjMarkBadMask) == 0 && !is_null(v) && is_load_good(ref);
+        return ColourPredicates::is_mark_good(static_cast<uintptr_t>(raw(ref.GetFieldValue())),
+                                              static_cast<uintptr_t>(::g_cjLoadBadMask),
+                                              static_cast<uintptr_t>(::g_cjMarkBadMask));
     }
 
     // OpenJDK ZPointer::is_store_good (zAddress.inline.hpp:679-684): store-good includes
     // mark-good plus the current Remembered epoch bit. Fast path for write barrier.
     bool is_store_good(RefField<>& ref) const
     {
-        zpointer v = ref.GetFieldValue();
-        return (raw(v) & ::g_cjStoreBadMask) == 0 && !is_null(v) && is_load_good(ref);
+        return ColourPredicates::is_store_good(static_cast<uintptr_t>(raw(ref.GetFieldValue())),
+                                               static_cast<uintptr_t>(::g_cjLoadBadMask),
+                                               static_cast<uintptr_t>(::g_cjStoreBadMask));
     }
 
     bool is_store_bad(RefField<>& ref) const
