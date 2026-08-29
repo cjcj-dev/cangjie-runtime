@@ -3950,6 +3950,9 @@ template void RegionManager::ForwardRegion<Generation::Old>(RegionInfo*);
 // instead of instantiating a second copy in the test executable.
 template void RegionInfo::ClearLiveInfo<Generation::Young>(MarkView<Generation::Young>);
 template void RegionInfo::ClearLiveInfo<Generation::Old>(MarkView<Generation::Old>);
+using GcUnitBumpSnapshotEpoch = void (RegionInfo::*)();
+[[gnu::used]] static GcUnitBumpSnapshotEpoch const gcUnitBumpSnapshotEpoch =
+    &RegionInfo::BumpSnapshotEpochFromInitRegion;
 #endif
 } // namespace MapleRuntime
 
