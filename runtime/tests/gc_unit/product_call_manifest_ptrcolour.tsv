@@ -1,0 +1,3 @@
+test_name	stable_product_anchor	carrier	consumer_callsite	cut_site
+ColourCensus.PlainObjectSlotMovesCounter	MapleRuntime::CensusObjectSlots	product_so	test_colour_census.cpp:CensusObjectSlots	ColourCensus.cpp:stats.Observe
+ColourCensus.IllegalSlotOnlyFailsWhenArmed	MapleRuntime::EnforceColourCensusForTesting	product_so	test_colour_census.cpp:EnforceColourCensusForTesting	ColourCensus.cpp:EnforceColourCensus

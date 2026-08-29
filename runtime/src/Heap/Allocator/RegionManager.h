@@ -23,6 +23,7 @@
 #include "Allocator.h"
 #include "Base/Log.h"
 #include "Common/BaseObject.h"
+#include "Common/ColourEncoding.h"
 #include "RoutePublish.h"
 #include "Common/RunType.h"
 #include "FreeRegionManager.h"
@@ -153,13 +154,24 @@ public:
     {
         size_t unitNum = GetHeapUnitCount(heapSize);
         size_t metadataSize = GetMetadataSize(unitNum);
-        size_t totalSize = metadataSize + RoundUp<size_t>(heapSize, RegionInfo::UNIT_SIZE);
+        size_t roundedHeapSize = 0;
+        CHECK_DETAIL(CheckedRoundUpSize(heapSize, RegionInfo::UNIT_SIZE, roundedHeapSize),
+                     "heap size round-up overflows: heapSize=%zu unitSize=%zu", heapSize,
+                     RegionInfo::UNIT_SIZE);
+        size_t totalSize = 0;
+        CHECK_DETAIL(CheckedAddSize(metadataSize, roundedHeapSize, totalSize),
+                     "heap reservation geometry overflows: metadataSize=%zu heapSize=%zu",
+                     metadataSize, roundedHeapSize);
         return totalSize;
     }
 
     static size_t GetHeapUnitCount(size_t heapSize)
     {
-        heapSize = RoundUp<size_t>(heapSize, RegionInfo::UNIT_SIZE);
+        size_t roundedHeapSize = 0;
+        CHECK_DETAIL(CheckedRoundUpSize(heapSize, RegionInfo::UNIT_SIZE, roundedHeapSize),
+                     "heap unit geometry overflows: heapSize=%zu unitSize=%zu", heapSize,
+                     RegionInfo::UNIT_SIZE);
+        heapSize = roundedHeapSize;
         size_t unitNum = heapSize / RegionInfo::UNIT_SIZE;
         return unitNum;
     }
@@ -168,8 +180,15 @@ public:
     // RegionInfo and UnitInfo have the same sizeof
     static size_t GetMetadataSize(size_t num)
     {
-        size_t metadataSize = num * sizeof(RegionInfo);
-        return RoundUp<size_t>(metadataSize, MapleRuntime::MRT_PAGE_SIZE);
+        size_t metadataSize = 0;
+        CHECK_DETAIL(CheckedMulSize(num, sizeof(RegionInfo), metadataSize),
+                     "region metadata geometry overflows: units=%zu regionInfoSize=%zu", num,
+                     sizeof(RegionInfo));
+        size_t roundedMetadataSize = 0;
+        CHECK_DETAIL(CheckedRoundUpSize(metadataSize, MapleRuntime::MRT_PAGE_SIZE, roundedMetadataSize),
+                     "region metadata round-up overflows: metadataSize=%zu pageSize=%zu", metadataSize,
+                     MapleRuntime::MRT_PAGE_SIZE);
+        return roundedMetadataSize;
     }
 #if defined(__EULER__)
     void SetCacheRatio(double minSize, double maxSize, double defaultParam);

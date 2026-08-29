@@ -8,7 +8,11 @@
 #include "TypeInfoManager.h"
 #include "Base/CString.h"
 #include "Base/MemUtils.h"
+#include "Common/ColourEncoding.h"
+#include "Common/StateWord.h"
+#include "Heap/Heap.h"
 #include "ObjectModel/MClass.h"
+#include "ObjectModel/RefField.h"
 #include "ObjectManager.inline.h"
 #include "Sync/Sync.h"
 
@@ -143,6 +147,26 @@ TypeInfoManager& TypeInfoManager::GetTypeInfoManager() { return *typeInfoManager
 void TypeInfoManager::Init()
 {
     NewMMap(mapMemory);
+    static_assert(sizeof(HeapSlot<>) == sizeof(uintptr_t),
+                  "HeapSlot carrier must remain one 64-bit word");
+    static_assert(sizeof(StateWord) == sizeof(uintptr_t),
+                  "StateWord carrier must remain one 64-bit word");
+    static_assert(StateWord::ADDRESS_BIT_COUNT == kPointerAddressBits,
+                  "StateWord and HeapSlot must agree on address width");
+
+    const HeapSlotAddressRange heapRange{ Heap::GetHeap().GetStartAddress(),
+                                          Heap::GetHeap().GetSpaceEndAddress() };
+    const StateWordTypeInfoRange typeInfoRange{ startAddress, endAddress };
+    CHECK_DETAIL(IsAddressLayoutSealValid(heapRange, typeInfoRange),
+                 "pointer address layout seal failed: heapStart=%#zx heapEnd=%#zx "
+                 "typeinfoStart=%#zx typeinfoEnd=%#zx addressBits=%u",
+                 static_cast<size_t>(heapRange.start), static_cast<size_t>(heapRange.end),
+                 static_cast<size_t>(typeInfoRange.start), static_cast<size_t>(typeInfoRange.end),
+                 kPointerAddressBits);
+    VLOG(REPORT,
+         "[ptrcolour][seal] heapStart=%p heapEnd=%p addressBits=48 typeinfoArena=%p..%p",
+         reinterpret_cast<void*>(heapRange.start), reinterpret_cast<void*>(heapRange.end),
+         reinterpret_cast<void*>(typeInfoRange.start), reinterpret_cast<void*>(typeInfoRange.end));
 }
 
 void TypeInfoManager::Fini()
@@ -177,7 +201,15 @@ void TypeInfoManager::NewMMap(size_t size)
 #endif
     }
 #endif
-    startAddress = reinterpret_cast<uintptr_t>(start);
+    const uintptr_t mappedStart = reinterpret_cast<uintptr_t>(start);
+    uintptr_t mappedEnd = 0;
+    if (IsRepresentableLow48Range(mappedStart, size)) {
+        mappedEnd = mappedStart + size;
+    }
+    CHECK_DETAIL(mappedEnd != 0,
+                 "TypeInfo arena exceeds the 48-bit StateWord address carrier: start=%#zx end=%#zx size=%zu",
+                 static_cast<size_t>(mappedStart), static_cast<size_t>(mappedEnd), size);
+    startAddress = mappedStart;
     endAddress = startAddress + size;
     position = startAddress;
     mmapList.push_back(std::make_pair(startAddress, size));
@@ -292,6 +324,13 @@ void TypeInfoManager::NoteTypeInfoImage(uintptr_t base, size_t size)
     if (base == 0 || size == 0) {
         return;
     }
+    uintptr_t end = 0;
+    if (IsRepresentableLow48Range(base, size)) {
+        end = base + size;
+    }
+    CHECK_DETAIL(end != 0,
+                 "TypeInfo image exceeds the 48-bit StateWord address carrier: start=%#zx end=%#zx size=%zu",
+                 static_cast<size_t>(base), static_cast<size_t>(end), size);
     std::lock_guard<std::recursive_mutex> lock(tiMutex);
     for (const auto& m : imageList) {
         if (m.first == base && m.second == size) {

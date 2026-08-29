@@ -44,6 +44,7 @@
 #include "CpuProfiler/CpuProfiler.h"
 #include "Heap/Collector/GcRequest.h"
 #include "Common/ScopedObjectAccess.h"
+#include "Common/ColourEncoding.h"
 #include "HeapManager.h"
 #include "HeapManager.inline.h"
 
@@ -95,7 +96,10 @@ static bool CheckInitConfig(const struct RuntimeParam& param)
         LOG(RTLOG_ERROR, "RuntimeParam.coParam.coStackSize must be in range [64KB, 1GB].\n");
         return false;
     }
-    size_t paramHeapSize = param.heapParam.heapSize * MapleRuntime::KB;
+    size_t paramHeapSize = 0;
+    CHECK_DETAIL(MapleRuntime::CheckedMulSize(param.heapParam.heapSize, MapleRuntime::KB, paramHeapSize),
+                 "RuntimeParam.heapParam.heapSize overflows bytes: heapSizeKB=%zu",
+                 param.heapParam.heapSize);
     // Check heap configuration, min heapsize 4MB.
     if (paramHeapSize != 0 && (paramHeapSize < 4 * MapleRuntime::MB || paramHeapSize > g_sysmemSize)) {
         LOG(RTLOG_ERROR, "RuntimeParam.heapParam.heapSize must be in range [4MB, system memory size].\n");
