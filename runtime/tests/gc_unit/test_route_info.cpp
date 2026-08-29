@@ -38,6 +38,7 @@ GC_TEST(RouteInfo, MissingDomainReturnsNullNotGarbage)
     GcHeapFixture fx;
     RegionInfo* region = fx.region0;
     BaseObject* obj = fx.obj0;
+    region->SetRegionType(RegionInfo::RegionType::FROM_REGION);
     region->SetRouteInfo(0x20000000u, 4096);
     // ROUTED up front, not just before the positive arm: RegionInfo::GetRoute(RouteTicket) refuses
     // any region still in NORMAL (RegionInfo.h:1806-1809), so with the state left at NORMAL the
@@ -82,7 +83,7 @@ GC_TEST(RouteInfo, MissingDomainReturnsNullNotGarbage)
     GC_EXPECT_EQ(reinterpret_cast<uintptr_t>(to), 0x20000000u + pre);
 
     region->SetRouteState(RegionInfo::NORMAL);
-    region->RetireFromPageMetadata();
+    ForwardingTable::ClearEntries(region->GetRegionStart(), region->GetRegionSize());
     region->metadata.liveInfo = nullptr;
     fx.FreePlanted(live);
 }
@@ -131,6 +132,7 @@ GC_TEST(RouteInfo, BindLiveInfo0FromLiveIfNull)
 {
     GcHeapFixture fx;
     RegionInfo* region = fx.region0;
+    region->SetRegionType(RegionInfo::RegionType::FROM_REGION);
     LiveInfo* liveA = fx.PlantLiveInfo(region);
     LiveInfo* liveB = new LiveInfo();
     liveB->bindedRegion = region;
@@ -145,17 +147,21 @@ GC_TEST(RouteInfo, BindLiveInfo0FromLiveIfNull)
     GC_EXPECT_EQ(reinterpret_cast<uintptr_t>(region->GetLiveInfo0ForProbe()),
                  reinterpret_cast<uintptr_t>(liveA));
 
-    region->RetireFromPageMetadata();
+    ForwardingTable::ClearEntries(region->GetRegionStart(), region->GetRegionSize());
     region->metadata.liveInfo = nullptr;
     region->BindLiveInfo0FromLiveIfNull();
     GC_EXPECT_TRUE(region->GetLiveInfo0ForProbe() == nullptr);
 
     region->metadata.liveInfo = liveA;
+    GC_EXPECT_TRUE(ForwardingTable::PreparePublicationGeneration(
+        region->GetRegionStart(), region->GetRegionSize()));
+    GC_EXPECT_TRUE(ForwardingTable::InsertProvisional(
+        region->GetRegionStart(), region->GetRegionSize(), region));
     region->BindLiveInfo0FromLiveIfNull();
     GC_EXPECT_EQ(reinterpret_cast<uintptr_t>(region->GetLiveInfo0ForProbe()),
                  reinterpret_cast<uintptr_t>(liveA));
 
-    region->RetireFromPageMetadata();
+    ForwardingTable::ClearEntries(region->GetRegionStart(), region->GetRegionSize());
     region->metadata.liveInfo = nullptr;
     fx.FreePlanted(liveA);
     delete liveB;

@@ -71,7 +71,6 @@ void PrepareOwnerRegion(GcHeapFixture& fx)
     // Product PrepareForwardableRegion snapshots the ghost extent before a
     // worker can claim the region.  gc_unit parks directly on a from-list, so
     // plant the same consumed state without invoking unrelated selection code.
-    fx.region0->metadata.regionEnd0 = fx.region0->GetRegionEnd();
     fx.region0->SetInGhostRegion(1);
 }
 

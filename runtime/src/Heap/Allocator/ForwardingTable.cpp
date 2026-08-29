@@ -130,7 +130,22 @@ bool ForwardingTable::Ready() { return g_ready.load(std::memory_order_acquire); 
 bool ForwardingTable::Initialize(MAddress heapStart, size_t heapSize, size_t unitSize)
 {
     if (g_ready.load(std::memory_order_acquire)) {
+#if defined(MRT_GC_UNIT_TESTS)
+        if (g_entries.base() != heapStart) {
+            // Aggregate gc_unit creates a fresh synthetic mmap per test. Each
+            // fixture destructor has already drained/reclaimed its carriers;
+            // rebase only the test build so the next fixture exercises the
+            // same product address checks rather than an obsolete map base.
+            g_membership.ResetForTest();
+            g_entries.ResetForTest();
+            g_publicationState.ResetForTest();
+            g_ready.store(false, std::memory_order_release);
+        } else {
+            return true;
+        }
+#else
         return true;
+#endif
     }
     if (unitSize == 0 || heapSize == 0) {
         return false;
@@ -558,6 +573,36 @@ ZForwarding* ForwardingTable::GetEntries(MAddress addr)
         return nullptr;
     }
     return forwarding;
+}
+
+bool ForwardingTable::PublishFromPageView(RegionInfo* region, LiveInfo* liveInfo, uint64_t epoch,
+                                          MAddress topAtStart, MAddress markStartAllocPtr,
+                                          uint64_t liveByteCount, uint8_t owner,
+                                          uint8_t largeMarked, RegionLifeId lifeId)
+{
+    if (region == nullptr || lifeId == 0 || region->GetRegionLifeId() != lifeId) {
+        return false;
+    }
+    ZForwarding* carrier = GetEntries(region->GetRegionStart());
+    if (carrier == nullptr || carrier->page() != region) {
+        return false;
+    }
+    carrier->publish_from_page_view(liveInfo, epoch, topAtStart, markStartAllocPtr,
+                                    liveByteCount, owner, largeMarked, lifeId);
+    RegionLifeClock::Publish(RegionLifeClock::Carrier::MARK_SNAPSHOT, lifeId);
+    return true;
+}
+
+const ZForwarding::FromPageView* ForwardingTable::GetFromPageView(RegionInfo* region)
+{
+    if (region == nullptr) {
+        return nullptr;
+    }
+    ZForwarding* carrier = GetEntries(region->GetRegionStart());
+    if (carrier == nullptr || carrier->page() != region) {
+        return nullptr;
+    }
+    return carrier->from_page_view(region->GetRegionLifeId());
 }
 
 bool ZForwarding::page_life_current(RegionLifeClock::Carrier carrier) const

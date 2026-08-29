@@ -338,6 +338,8 @@ echo "GATE_REFERENCE_PROCESSOR_BINDING_OK elf=$OUT/cj_gc_unit"
 # consumers.  The manifest is independent of the calls currently present in
 # the test source, so deleting a test or anchor shrinks neither guard silently.
 LOADHEAL_PRODUCT_CONSUMERS=(
+  'MapleRuntime::ForwardingTable::PublishFromPageView('
+  'MapleRuntime::ForwardingTable::GetFromPageView('
   'MapleRuntime::PromotedRegionDomain::DischargeAll('
   'MapleRuntime::RememberedSet::MoveInPlaceSlots('
   'MapleRuntime::RegionManager::RecordPinnedCrossGenEdges('
@@ -345,6 +347,8 @@ LOADHEAL_PRODUCT_CONSUMERS=(
 )
 LOADHEAL_MANIFEST="$SRC/product_call_manifest_loadheal.tsv"
 EXPECTED_LOADHEAL_TESTS=(
+  LoadHealDeliveryProduct.DualCarrierProducerCapturesOldTopAndLivemap
+  LoadHealDeliveryProduct.DualCarrierConsumerSurvivesCurrentPageResetUntilRetire
   LoadHealDeliveryProduct.PromotedSnapshotDischargesOnlyLiveHolder
   LoadHealDeliveryProduct.InPlaceRemsetMovesBitAndFeedsConsumer
   LoadHealDeliveryProduct.CrossGenRangeGateRecordsLegalAndRejectsBeyondTop

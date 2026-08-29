@@ -76,6 +76,7 @@ GC_TEST(DefectRegress, PregrantBeforeRouteDomainFreeze)
 {
     GcHeapFixture fx;
     RegionInfo* region = fx.region0;
+    region->SetRegionType(RegionInfo::RegionType::FROM_REGION);
     BaseObject* objA = fx.obj0;
     BaseObject* objB = fx.PlaceObject(reinterpret_cast<MAddress>(objA) + 128);
     region->SetRegionAllocPtr(reinterpret_cast<MAddress>(objB) + 64);
@@ -112,7 +113,7 @@ GC_TEST(DefectRegress, PregrantBeforeRouteDomainFreeze)
     // Domain still frozen on ghost without B ⇒ Admit/GetRouteForProbe must miss.
     GC_EXPECT_TRUE(region->GetRouteForProbe(objB) == nullptr);
 
-    region->RetireFromPageMetadata();
+    ForwardingTable::ClearEntries(region->GetRegionStart(), region->GetRegionSize());
     region->metadata.liveInfo = nullptr;
     lateBm->~RegionBitmap();
     std::free(lateBm);

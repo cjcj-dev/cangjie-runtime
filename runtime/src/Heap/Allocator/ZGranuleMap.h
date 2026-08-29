@@ -47,6 +47,18 @@ public:
         _map = nullptr;
     }
 
+#if defined(MRT_GC_UNIT_TESTS)
+    void ResetForTest()
+    {
+        std::free(_map);
+        _map = nullptr;
+        _size = 0;
+        _base = 0;
+        _heapSize = 0;
+        _granule = 0;
+    }
+#endif
+
     bool Ready() const { return _map != nullptr; }
 
     // Sole MAddress -> zoffset gate for this heap address space. The upper

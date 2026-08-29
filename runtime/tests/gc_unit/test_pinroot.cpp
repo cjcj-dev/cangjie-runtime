@@ -168,7 +168,6 @@ GC_TEST(RegionRetirement, StayYoungAfterCompactInPlaceDoesNotRelinkRecentFull)
     // Minimal ghost geometry normally installed by PrepareForwardableRegion;
     // the unit fixture has no CollectorProxy, so plant only the state consumed
     // by FinishStayYoungInPlace/DispelGhostFromRegion.
-    region->metadata.regionEnd0 = region->GetRegionEnd();
     region->SetInGhostRegion(1);
     region->SetRouteState(RegionInfo::RouteState::COMPACTED);
 
@@ -190,7 +189,6 @@ GC_TEST(RegionRetirement, StayYoungTransfersCompletedCompactTailFromThreadLocal)
     RegionManager manager;
     RegionInfo* region = fx.region0;
     region->SetYoungRegionFlag(1);
-    region->metadata.regionEnd0 = region->GetRegionEnd();
     region->SetInGhostRegion(1);
     region->SetRouteState(RegionInfo::RouteState::COMPACTED);
 

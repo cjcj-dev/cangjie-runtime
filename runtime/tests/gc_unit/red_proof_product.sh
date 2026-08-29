@@ -73,9 +73,6 @@ backup_and_break "$REGION_H" \
             return;
         }
         metadata.liveInfo0 = live;
-        if (metadata.regionEnd0 == 0 || metadata.regionEnd0 < metadata.regionEnd) {
-            metadata.regionEnd0 = metadata.regionEnd;
-        }
     }' \
   'void BindLiveInfo0FromLiveIfNull()
     {
