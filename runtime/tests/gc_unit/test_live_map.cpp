@@ -276,7 +276,7 @@ GC_TEST(LiveMap, RetainedCaptureKeepsCurrentYoungFaceAfterStaleForwardingDone)
     GC_EXPECT_TRUE(region->RetainedMarkWordsSay(holderOffset));
 
     region->metadata.liveInfo = nullptr;
-    region->RetireFromPageMetadata();
+    ForwardingTable::ClearEntries(region->GetRegionStart(), region->GetRegionSize());
     region->FreeRetainedMarkWords();
     fx.FreePlanted(previous);
 }
@@ -311,7 +311,7 @@ GC_TEST(LiveMap, RetainedCaptureRejectsOldFromFaceWhenNewCycleMarksNothing)
     GC_EXPECT_FALSE(region->RetainedMarkWordsSay(holderOffset));
 
     region->metadata.liveInfo = nullptr;
-    region->RetireFromPageMetadata();
+    ForwardingTable::ClearEntries(region->GetRegionStart(), region->GetRegionSize());
     region->FreeRetainedMarkWords();
     fx.FreePlanted(previous);
 }
@@ -464,6 +464,7 @@ GC_TEST(LiveMap, LiveInfo0SnapshotSurvivesClear)
 {
     GcHeapFixture fx;
     RegionInfo* region = fx.region0;
+    region->SetRegionType(RegionInfo::RegionType::FROM_REGION);
     size_t regionSize = region->GetRegionSize();
     LiveInfo* live = fx.PlantLiveInfo(region);
     RegionBitmap* bm = fx.PlantMarkBitmap(live, regionSize);
@@ -480,7 +481,7 @@ GC_TEST(LiveMap, LiveInfo0SnapshotSurvivesClear)
     GC_EXPECT_TRUE(region->GetLiveInfo0ForProbe() != nullptr);
     GC_EXPECT_TRUE(region->IsRouteSurvivedObject(256));
 
-    region->RetireFromPageMetadata();
+    ForwardingTable::ClearEntries(region->GetRegionStart(), region->GetRegionSize());
     fx.FreePlanted(live);
 }
 
@@ -489,11 +490,12 @@ GC_TEST(LiveMap, BindLiveInfo0AfterLateMark)
 {
     GcHeapFixture fx;
     RegionInfo* region = fx.region0;
+    region->SetRegionType(RegionInfo::RegionType::FROM_REGION);
     size_t regionSize = region->GetRegionSize();
 
     // PrepareForwardable saw null liveInfo → ghost stays null.
     region->metadata.liveInfo = nullptr;
-    region->RetireFromPageMetadata();
+    region->PublishForwardingCarrier(region->GetMarkView<Generation::Old>());
     GC_EXPECT_TRUE(region->GetLiveInfo0ForProbe() == nullptr);
 
     LiveInfo* live = fx.PlantLiveInfo(region);
@@ -505,7 +507,7 @@ GC_TEST(LiveMap, BindLiveInfo0AfterLateMark)
                  reinterpret_cast<uintptr_t>(live));
     GC_EXPECT_TRUE(region->IsRouteSurvivedObject(8));
 
-    region->RetireFromPageMetadata();
+    ForwardingTable::ClearEntries(region->GetRegionStart(), region->GetRegionSize());
     region->metadata.liveInfo = nullptr;
     fx.FreePlanted(live);
 }
@@ -620,7 +622,7 @@ GC_TEST(LiveMap, FromPageOwnerAndLivemapStayIdenticalAcrossPromotion)
     (void)region->PromoteYoungRegion(ownerView);
     GC_EXPECT_TRUE(region->IsOwnerSurvivedObject(offset));
 
-    region->RetireFromPageMetadata();
+    ForwardingTable::ClearEntries(region->GetRegionStart(), region->GetRegionSize());
     fx.FreePlanted(live);
 }
 
@@ -664,10 +666,9 @@ GC_TEST(LiveMap, PromotionCarrierLivesUntilForwardingRelease)
     fx.FreePlanted(youngLive);
 
     // The same replacement rule applies to the one-bit large-page livemap.
-    GcHeapFixture largeFx;
-    RegionInfo* large = largeFx.region0;
+    RegionInfo* large = fx.region1;
     large->SetUnitRole(RegionInfo::UnitRole::LARGE_SIZED_UNITS);
-    large->SetRegionType(RegionInfo::RegionType::RECENT_LARGE_REGION);
+    large->SetRegionType(RegionInfo::RegionType::FROM_REGION);
     large->SetYoungRegionFlag(1);
     MarkView<Generation::Young> largeYoung = large->GetMarkView<Generation::Young>();
     large->SetMarkedRegionFlag(largeYoung, 1);
@@ -675,7 +676,7 @@ GC_TEST(LiveMap, PromotionCarrierLivesUntilForwardingRelease)
     MarkView<Generation::Old> largeOld = large->PromoteYoungRegion(largeYoung);
     GC_EXPECT_EQ(large->GetMarkedRegionFlag(largeYoung), 1u);
     GC_EXPECT_EQ(large->GetMarkedRegionFlag(largeOld), 0u);
-    large->RetireFromPageMetadata();
+    ForwardingTable::ClearEntries(large->GetRegionStart(), large->GetRegionSize());
 }
 
 // Large pages follow the same single-livemap rule, represented by one bit.

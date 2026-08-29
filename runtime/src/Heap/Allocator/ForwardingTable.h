@@ -16,6 +16,7 @@
 namespace MapleRuntime {
 class RegionInfo;
 class BaseObject;
+class LiveInfo;
 
 // zForwardingTable.hpp:32-52 — granule map of ZForwarding*.
 // Two maps: membership (get/insert/remove) unlinks at Dispel; entries live until
@@ -105,6 +106,14 @@ public:
 
     static ZForwarding* Get(MAddress addr) { return get(addr); }
     static ZForwarding* GetEntries(MAddress addr);
+    // Product connection points for the dual carrier. Publication copies the
+    // from-page view into the already-installed ZForwarding; every consumer
+    // resolves the view back through the table rather than RegionInfo storage.
+    static bool PublishFromPageView(RegionInfo* region, LiveInfo* liveInfo, uint64_t epoch,
+                                    MAddress topAtStart, MAddress markStartAllocPtr,
+                                    uint64_t liveByteCount, uint8_t owner,
+                                    uint8_t largeMarked, RegionLifeId lifeId);
+    static const ZForwarding::FromPageView* GetFromPageView(RegionInfo* region);
 
     // Copy producer: may allocate/install the explicitly prepared generation,
     // then retains it across copy and receipt publication.

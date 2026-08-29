@@ -23,6 +23,7 @@
 namespace MapleRuntime {
 
 class RegionInfo;
+class LiveInfo;
 
 // zForwarding.hpp:44-110 — one off-heap object per relocated page.
 // _entries is a ZAttachedArray sitting after this object (zAttachedArray.inline.hpp:44-54).
@@ -37,6 +38,21 @@ public:
     struct Receipt {
         MAddress address;
         bool installed;
+    };
+
+    // zForwarding.cpp:55-84 — the old top and livemap belong to the
+    // forwarding/from-page incarnation, not to the reusable page metadata.
+    // The carrier is installed before relocation and retired as a unit after
+    // the last from-page reader drains.
+    struct FromPageView {
+        LiveInfo* liveInfo = nullptr;
+        uint64_t epoch = 0;
+        MAddress topAtStart = 0;
+        MAddress markStartAllocPtr = 0;
+        uint64_t liveByteCount = 0;
+        uint8_t owner = 1;
+        uint8_t largeMarked = 0;
+        RegionLifeId lifeId = 0;
     };
 
     static uint32_t nentries(uint32_t liveObjects)
@@ -79,13 +95,36 @@ public:
     MAddress start() const { return _start; }
     size_t size() const { return _size; }
     size_t regionSize() const { return _size; }
-    RegionInfo* page() { return _page; }
+    RegionInfo* page() const { return _page; }
     RegionLifeId page_life_id() const { return _page_life_id; }
     uint64_t publication_generation() const { return _publication_generation; }
     void set_publication_generation(uint64_t generation) { _publication_generation = generation; }
     bool page_life_current(RegionLifeClock::Carrier carrier) const;
     uint32_t length() const { return static_cast<uint32_t>(_entries.length()); }
     bool is_provisional() const { return _provisional; }
+
+    void publish_from_page_view(LiveInfo* liveInfo, uint64_t epoch, MAddress topAtStart,
+                                MAddress markStartAllocPtr, uint64_t liveByteCount,
+                                uint8_t owner, uint8_t largeMarked, RegionLifeId lifeId)
+    {
+        // lifeId is the publication word. Readers either reject the zero word
+        // or acquire the complete immutable replacement.
+        __atomic_store_n(&_from_page.lifeId, static_cast<RegionLifeId>(0), __ATOMIC_RELEASE);
+        _from_page.liveInfo = liveInfo;
+        _from_page.epoch = epoch;
+        _from_page.topAtStart = topAtStart;
+        _from_page.markStartAllocPtr = markStartAllocPtr;
+        _from_page.liveByteCount = liveByteCount;
+        _from_page.owner = owner;
+        _from_page.largeMarked = largeMarked;
+        __atomic_store_n(&_from_page.lifeId, lifeId, __ATOMIC_RELEASE);
+    }
+
+    const FromPageView* from_page_view(RegionLifeId currentLife) const
+    {
+        const RegionLifeId life = __atomic_load_n(&_from_page.lifeId, __ATOMIC_ACQUIRE);
+        return life != 0 && life == currentLife ? &_from_page : nullptr;
+    }
 
     // zPage.inline.hpp:176-185 seqnum bounds livemap/forwarding to one page life.
     // Record the to-region start+regionLifeSeq at insert; consume rejects when
@@ -335,7 +374,8 @@ private:
           _overflow(),
           _to_life_n(0),
           _kept_seen_expire(false),
-          _provisional(provisional)
+          _provisional(provisional),
+          _from_page()
     {
         _to_lives[0] = ToLife{};
         _to_lives[1] = ToLife{};
@@ -366,6 +406,7 @@ private:
     uint8_t _to_life_n;
     bool _kept_seen_expire;
     const bool _provisional;
+    FromPageView _from_page;
 };
 
 // Existing tests and ClearEntries still spell this name.

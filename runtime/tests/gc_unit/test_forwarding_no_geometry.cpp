@@ -91,7 +91,6 @@ GC_TEST(ForwardingNoGeometry, ArmedMissIsNullNotGeometry)
     ForwardingTable::ClearEntries(fx.region0->GetRegionStart(), fx.region0->GetRegionSize());
     ForwardingTable::ReclaimRetired("gc-unit-explicit-coverage");
     fx.region0->SetRouteState(RegionInfo::NORMAL);
-    fx.region0->RetireFromPageMetadata();
     fx.region0->metadata.liveInfo = nullptr;
     fx.FreePlanted(live);
 }
@@ -200,7 +199,6 @@ GC_TEST(ForwardingNoGeometry, ArmedLookupAndSuccessfulExclusiveCopyPublishProduc
     ForwardingTable::ClearEntries(fx.region0->GetRegionStart(), fx.region0->GetRegionSize());
     ForwardingTable::ReclaimRetired("gc-unit-explicit-coverage");
     fx.region0->SetRouteState(RegionInfo::NORMAL);
-    fx.region0->RetireFromPageMetadata();
     fx.region0->metadata.liveInfo = nullptr;
     fx.FreePlanted(live);
 }

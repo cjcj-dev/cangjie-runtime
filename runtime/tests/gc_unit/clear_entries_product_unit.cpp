@@ -1511,6 +1511,65 @@ GC_TEST(ForwardingPublicationProduct, ExclusiveCopyPublishesProductReceipt)
 
 // ZGC zRelocate.cpp:1256-1279: the promoted page keeps the relocation-set
 // livemap selected at registration, and discharge walks only that live set.
+GC_TEST(LoadHealDeliveryProduct, DualCarrierProducerCapturesOldTopAndLivemap)
+{
+    GcHeapFixture& fx = ProductFixture();
+    RegionInfo* region = ResetDeliveryUnit(fx, 0);
+    WCollector collector(Heap::GetHeap().GetAllocator(), Heap::GetHeap().GetCollectorResources());
+    RelocationReceiptTestAccess::BindCollector(Heap::GetHeap().GetCollectorResources(), &collector);
+    BaseObject* liveObject = fx.PlaceObject(region->GetRegionStart() + 64);
+    region->SetRegionAllocPtr(reinterpret_cast<MAddress>(liveObject) + liveObject->GetSize());
+    const MAddress oldTop = region->GetRegionAllocPtr();
+    const size_t offset = region->GetAddressOffset(reinterpret_cast<MAddress>(liveObject));
+
+    LiveInfo* live = PrepareForwardable(fx, region, reinterpret_cast<MAddress>(liveObject));
+    const ZForwarding::FromPageView* from = ForwardingTable::GetFromPageView(region);
+    GC_EXPECT_TRUE(from != nullptr);
+    GC_EXPECT_EQ(from == nullptr ? 0 : from->topAtStart, oldTop);
+    GC_EXPECT_TRUE(from != nullptr && from->liveInfo == live);
+    GC_EXPECT_TRUE(from != nullptr && from->epoch != 0);
+    GC_EXPECT_TRUE(region->IsOwnerSurvivedObject(offset));
+
+    region->DispelGhostFromRegion();
+    ForwardingTable::ReclaimRetired("gc-unit-dual-carrier-producer");
+    RelocationReceiptTestAccess::BindCollector(Heap::GetHeap().GetCollectorResources(), nullptr);
+    region->metadata.liveInfo = nullptr;
+    fx.FreePlanted(live);
+}
+
+// zForwarding.cpp:55-84 / zRelocate.cpp:871-877: resetting the to-page
+// allocation top must not retarget the from-page iteration view. The consumer
+// keeps using the forwarding carrier until Dispel retires it.
+GC_TEST(LoadHealDeliveryProduct, DualCarrierConsumerSurvivesCurrentPageResetUntilRetire)
+{
+    GcHeapFixture& fx = ProductFixture();
+    RegionInfo* region = ResetDeliveryUnit(fx, 0);
+    WCollector collector(Heap::GetHeap().GetAllocator(), Heap::GetHeap().GetCollectorResources());
+    RelocationReceiptTestAccess::BindCollector(Heap::GetHeap().GetCollectorResources(), &collector);
+    BaseObject* liveObject = fx.PlaceObject(region->GetRegionStart() + 64);
+    region->SetRegionAllocPtr(reinterpret_cast<MAddress>(liveObject) + liveObject->GetSize());
+    const MAddress oldTop = region->GetRegionAllocPtr();
+    const size_t offset = region->GetAddressOffset(reinterpret_cast<MAddress>(liveObject));
+
+    LiveInfo* live = PrepareForwardable(fx, region, reinterpret_cast<MAddress>(liveObject));
+    region->SetRegionAllocPtr(region->GetRegionStart());
+    region->metadata.liveInfo = nullptr;
+
+    const ZForwarding::FromPageView* from = ForwardingTable::GetFromPageView(region);
+    GC_EXPECT_TRUE(from != nullptr);
+    GC_EXPECT_EQ(from == nullptr ? 0 : from->topAtStart, oldTop);
+    GC_EXPECT_TRUE(region->IsOwnerSurvivedObject(offset));
+
+    region->DispelGhostFromRegion();
+    GC_EXPECT_TRUE(ForwardingTable::GetFromPageView(region) == nullptr);
+    GC_EXPECT_FALSE(region->IsOwnerSurvivedObject(offset));
+    ForwardingTable::ReclaimRetired("gc-unit-dual-carrier-consumer");
+    RelocationReceiptTestAccess::BindCollector(Heap::GetHeap().GetCollectorResources(), nullptr);
+    fx.FreePlanted(live);
+}
+
+// ZGC zRelocate.cpp:1256-1279: the promoted page keeps the relocation-set
+// livemap selected at registration, and discharge walks only that live set.
 GC_TEST(LoadHealDeliveryProduct, PromotedSnapshotDischargesOnlyLiveHolder)
 {
     GcHeapFixture& fx = ProductFixture();

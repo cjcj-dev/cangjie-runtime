@@ -435,29 +435,43 @@ public:
             current->GetMarkFace().epoch.load(std::memory_order_acquire) == view.GetEpoch()) {
             return current;
         }
-        if (HasFromPageMetadata() && metadata.fromPage.owner == G && metadata.fromPage.epoch == view.GetEpoch()) {
-            return metadata.fromPage.liveInfo;
+        const ZForwarding::FromPageView* from = GetFromPageView();
+        if (from != nullptr && from->owner == static_cast<uint8_t>(G) && from->epoch == view.GetEpoch()) {
+            return from->liveInfo;
         }
         return nullptr;
     }
 
+    ZForwarding* GetFromPageCarrier() const
+    {
+        ZForwarding* carrier = ForwardingTable::GetEntries(GetRegionStart());
+        return carrier != nullptr && carrier->page() == this ? carrier : nullptr;
+    }
+
+    const ZForwarding::FromPageView* GetFromPageView() const
+    {
+        return ForwardingTable::GetFromPageView(const_cast<RegionInfo*>(this));
+    }
+
     bool HasFromPageMetadata() const
     {
-        const RegionLifeId life = __atomic_load_n(&metadata.fromPage.lifeId, __ATOMIC_ACQUIRE);
-        return life != 0 && RegionLifeClock::Validate(RegionLifeClock::Carrier::MARK_SNAPSHOT,
-                                                      life, GetRegionLifeId());
+        const ZForwarding::FromPageView* from = GetFromPageView();
+        return from != nullptr && RegionLifeClock::Validate(RegionLifeClock::Carrier::MARK_SNAPSHOT,
+                                                            from->lifeId, GetRegionLifeId());
     }
 
     // Probe-only compatibility surface. The storage is no longer a second
     // current face; it belongs to the immutable from-page metadata carrier.
     LiveInfo* GetLiveInfo0ForProbe() const
     {
-        return HasFromPageMetadata() ? metadata.fromPage.liveInfo : nullptr;
+        const ZForwarding::FromPageView* from = GetFromPageView();
+        return from == nullptr ? nullptr : from->liveInfo;
     }
 
     Generation GetRouteMarkGeneration() const
     {
-        return HasFromPageMetadata() ? metadata.fromPage.owner : GetOwnerGeneration();
+        const ZForwarding::FromPageView* from = GetFromPageView();
+        return from == nullptr ? GetOwnerGeneration() : static_cast<Generation>(from->owner);
     }
 
     template<Generation G>
@@ -466,10 +480,11 @@ public:
         CHECK_DETAIL(GetRouteMarkGeneration() == G,
                      "route mark generation mismatch region=%p have=%u want=%u", this,
                      static_cast<unsigned>(GetRouteMarkGeneration()), static_cast<unsigned>(G));
-        if (!HasFromPageMetadata()) {
+        const ZForwarding::FromPageView* from = GetFromPageView();
+        if (from == nullptr) {
             return GetMarkView<G>();
         }
-        return MarkView<G>(this, metadata.fromPage.epoch, metadata.fromPage.lifeId);
+        return MarkView<G>(this, from->epoch, from->lifeId);
     }
 
     template<Generation G>
@@ -510,26 +525,29 @@ public:
 
     bool FromPageAllocatedAfterMarkStart(size_t offset) const
     {
-        return HasFromPageMetadata() && metadata.fromPage.markStartAllocPtr != 0 &&
-            GetRegionStart() + offset >= metadata.fromPage.markStartAllocPtr;
+        const ZForwarding::FromPageView* from = GetFromPageView();
+        return from != nullptr && from->markStartAllocPtr != 0 &&
+            GetRegionStart() + offset >= from->markStartAllocPtr;
     }
 
     bool HasFromPageMarkStartAllocGap() const
     {
-        return HasFromPageMetadata() && metadata.fromPage.markStartAllocPtr != 0 &&
-            metadata.fromPage.allocPtr > metadata.fromPage.markStartAllocPtr;
+        const ZForwarding::FromPageView* from = GetFromPageView();
+        return from != nullptr && from->markStartAllocPtr != 0 &&
+            from->topAtStart > from->markStartAllocPtr;
     }
 
     template<Generation G>
     bool IsFromPageSurvivedObject(MarkView<G> view, size_t offset) const
     {
-        if (!HasFromPageMetadata()) {
+        const ZForwarding::FromPageView* from = GetFromPageView();
+        if (from == nullptr) {
             return false;
         }
         if (IsLargeRegion()) {
-            return metadata.fromPage.largeMarked != 0 || FromPageAllocatedAfterMarkStart(offset);
+            return from->largeMarked != 0 || FromPageAllocatedAfterMarkStart(offset);
         }
-        return IsSurvivedObject(view, metadata.fromPage.liveInfo, offset) || FromPageAllocatedAfterMarkStart(offset);
+        return IsSurvivedObject(view, from->liveInfo, offset) || FromPageAllocatedAfterMarkStart(offset);
     }
 
     bool IsRouteSurvivedObject(size_t offset)
@@ -586,7 +604,8 @@ public:
 
     bool IsRouteMarkedObject(size_t offset)
     {
-        if (!HasFromPageMetadata()) {
+        const ZForwarding::FromPageView* from = GetFromPageView();
+        if (from == nullptr) {
             if (IsYoungRegion()) {
                 return IsMarkedObject(GetMarkView<Generation::Young>(), offset);
             }
@@ -601,9 +620,9 @@ public:
                 return true;
             }
             if (IsLargeRegion()) {
-                return metadata.fromPage.largeMarked != 0;
+                return from->largeMarked != 0;
             }
-            RegionBitmap* bitmap = GetMarkBitmap(view, metadata.fromPage.liveInfo);
+            RegionBitmap* bitmap = GetMarkBitmap(view, from->liveInfo);
             return bitmap != nullptr && bitmap->IsMarked(offset);
         }
         MarkView<Generation::Old> view = GetRouteMarkView<Generation::Old>();
@@ -614,9 +633,9 @@ public:
             return true;
         }
         if (IsLargeRegion()) {
-            return metadata.fromPage.largeMarked != 0;
+            return from->largeMarked != 0;
         }
-        RegionBitmap* bitmap = GetMarkBitmap(view, metadata.fromPage.liveInfo);
+        RegionBitmap* bitmap = GetMarkBitmap(view, from->liveInfo);
         return bitmap != nullptr && bitmap->IsMarked(offset);
     }
 
@@ -627,7 +646,8 @@ public:
 
     bool IsRouteKnownEmpty()
     {
-        if (!HasFromPageMetadata()) {
+        const ZForwarding::FromPageView* from = GetFromPageView();
+        if (from == nullptr) {
             if (IsYoungRegion()) {
                 return IsKnownYoungEmpty(GetMarkView<Generation::Young>());
             }
@@ -636,22 +656,23 @@ public:
         if (HasFromPageMarkStartAllocGap()) {
             return false;
         }
-        const uint64_t raw = metadata.fromPage.liveByteCount;
+        const uint64_t raw = from->liveByteCount;
         if ((raw & LIVE_AUTHORITY_BIT) == 0) {
             return false;
         }
         if (IsLargeRegion()) {
-            return metadata.fromPage.largeMarked == 0;
+            return from->largeMarked == 0;
         }
-        LiveInfo* live = metadata.fromPage.liveInfo;
+        LiveInfo* live = from->liveInfo;
         return live != nullptr && live->GetMarkFace().epoch.load(std::memory_order_acquire) ==
-            metadata.fromPage.epoch && (raw & LIVE_BYTES_MASK) == 0;
+            from->epoch && (raw & LIVE_BYTES_MASK) == 0;
     }
 
     RegionBitmap* GetRouteMarkBitmap(LiveInfo* face = nullptr)
     {
+        const ZForwarding::FromPageView* from = GetFromPageView();
         LiveInfo* selected = face != nullptr ? face
-            : (HasFromPageMetadata() ? GetLiveInfo0ForProbe() : GetLiveInfo());
+            : (from != nullptr ? from->liveInfo : GetLiveInfo());
         if (GetRouteMarkGeneration() == Generation::Young) {
             return GetMarkBitmap(GetRouteMarkView<Generation::Young>(), selected);
         }
@@ -668,7 +689,8 @@ public:
 
     uint64_t GetRouteMarkSnapshotEpoch() const
     {
-        return HasFromPageMetadata() ? metadata.fromPage.epoch : GetSnapshotEpoch();
+        const ZForwarding::FromPageView* from = GetFromPageView();
+        return from == nullptr ? GetSnapshotEpoch() : from->epoch;
     }
 
     size_t RecomputeRouteBitmapLiveBytes(LiveInfo* face)
@@ -720,24 +742,14 @@ public:
         }
         const uint64_t epoch = live->GetMarkFace().epoch.load(std::memory_order_acquire);
         const RegionLifeId life = GetRegionLifeId();
-        // Replace an empty pre-seal carrier as a whole. lifeId is the release
-        // publication word; readers either see the previous null carrier or
-        // this complete immutable replacement.
-        __atomic_store_n(&metadata.fromPage.lifeId, static_cast<RegionLifeId>(0), __ATOMIC_RELEASE);
-        metadata.fromPage.liveInfo = live;
-        metadata.fromPage.epoch = epoch;
-        metadata.fromPage.allocPtr = GetRegionAllocPtr();
-        metadata.fromPage.markStartAllocPtr = metadata.markStartAllocPtr;
-        metadata.fromPage.liveByteCount =
-            __atomic_load_n(&metadata.liveByteCount, std::memory_order_acquire);
-        metadata.fromPage.owner = GetOwnerGeneration();
-        metadata.fromPage.largeMarked = (IsLargeRegion() ? IsCurrentFacePublished() : metadata.isMarked != 0) ||
-            metadata.isResurrected != 0;
-        __atomic_store_n(&metadata.fromPage.lifeId, life, __ATOMIC_RELEASE);
-        RegionLifeClock::Publish(RegionLifeClock::Carrier::MARK_SNAPSHOT, life);
-        if (metadata.regionEnd0 == 0 || metadata.regionEnd0 < metadata.regionEnd) {
-            metadata.regionEnd0 = metadata.regionEnd;
-        }
+        CHECK_DETAIL(ForwardingTable::PublishFromPageView(
+                         this, live, epoch, GetRegionAllocPtr(), metadata.markStartAllocPtr,
+                         __atomic_load_n(&metadata.liveByteCount, std::memory_order_acquire),
+                         static_cast<uint8_t>(GetOwnerGeneration()),
+                         static_cast<uint8_t>((IsLargeRegion() ? IsCurrentFacePublished() : metadata.isMarked != 0) ||
+                                              metadata.isResurrected != 0),
+                         life),
+                     "from-page forwarding carrier missing while binding live face region=%p", this);
     }
 
     bool IsRetainedLifeCurrent() const
@@ -984,10 +996,11 @@ public:
         const uint64_t largeLiveBytes = largeState & LIVE_BYTES_MASK;
         uint8_t largeMarked = largeRegion
             ? ((largeState & LIVE_FACE_PUBLISHED_BIT) != 0) : metadata.isMarked;
-        if (metadata.retainedLiveInfo == nullptr && HasFromPageMetadata()) {
-            metadata.retainedLiveInfo = metadata.fromPage.liveInfo;
-            metadata.retainedLiveInfoEpoch = metadata.fromPage.epoch;
-            largeMarked = metadata.fromPage.largeMarked;
+        const ZForwarding::FromPageView* from = GetFromPageView();
+        if (metadata.retainedLiveInfo == nullptr && from != nullptr) {
+            metadata.retainedLiveInfo = from->liveInfo;
+            metadata.retainedLiveInfoEpoch = from->epoch;
+            largeMarked = from->largeMarked;
         }
         // A done bit may outlive the face it described.  Suppress the young
         // face while it is still the forwarding face, but keep a later face
@@ -1045,10 +1058,11 @@ public:
         metadata.retainedLiveInfo = GetLiveInfo();
         metadata.retainedLiveInfoEpoch = GetSnapshotEpoch();
         uint8_t largeMarked = IsLargeRegion() ? IsCurrentFacePublished() : metadata.isMarked;
-        if (metadata.retainedLiveInfo == nullptr && HasFromPageMetadata()) {
-            metadata.retainedLiveInfo = metadata.fromPage.liveInfo;
-            metadata.retainedLiveInfoEpoch = metadata.fromPage.epoch;
-            largeMarked = metadata.fromPage.largeMarked;
+        const ZForwarding::FromPageView* from = GetFromPageView();
+        if (metadata.retainedLiveInfo == nullptr && from != nullptr) {
+            metadata.retainedLiveInfo = from->liveInfo;
+            metadata.retainedLiveInfoEpoch = from->epoch;
+            largeMarked = from->largeMarked;
         }
         if (IsYoungRegion() && IsForwardingDone() &&
             (!IsCurrentFacePublished() || IsForwardingFaceCurrent())) {
@@ -1314,8 +1328,9 @@ public:
         // publication marker. A captured view from an earlier metadata incarnation
         // must not observe a later incarnation's reused bit.
         if (view.GetEpoch() != GetMarkSnapshotEpoch<G>()) {
-            return HasFromPageMetadata() && metadata.fromPage.owner == G &&
-                metadata.fromPage.epoch == view.GetEpoch() ? metadata.fromPage.largeMarked : 0;
+            const ZForwarding::FromPageView* from = GetFromPageView();
+            return from != nullptr && from->owner == static_cast<uint8_t>(G) &&
+                from->epoch == view.GetEpoch() ? from->largeMarked : 0;
         }
         if (IsLargeRegion()) {
             return IsCurrentFacePublished() ? 1 : 0;
@@ -1694,8 +1709,9 @@ public:
         }
         const uint64_t face = markFace.epoch.load(std::memory_order_acquire);
         const uint64_t now = GetMarkSnapshotEpoch<G>();
+        const ZForwarding::FromPageView* from = GetFromPageView();
         const bool currentOrFrom = view.GetEpoch() == now ||
-            (HasFromPageMetadata() && metadata.fromPage.owner == G && metadata.fromPage.epoch == view.GetEpoch());
+            (from != nullptr && from->owner == static_cast<uint8_t>(G) && from->epoch == view.GetEpoch());
         if (currentOrFrom && face == view.GetEpoch()) {
             return true;
         }
@@ -1885,13 +1901,12 @@ public:
         // readable" finds out immediately.
         // genface: the independent young mark epoch costs 8 bytes per 4 KiB
         // unit (0.195% of heap capacity); both bitmap faces remain lazy.
-        // markwater: markStartAllocPtr sits next to regionEnd0 (same snapshot
-        // format). 8 bytes per 4 KiB unit is another 0.195% of heap capacity.
+        // markwater: the current mark-start pointer is page-owned; the copied
+        // from-page watermark is carried by ZForwarding.
         // lifeclock: independent 64-bit region identity plus the five region-local
-        // The explicit from-page metadata carrier and list-authority token keep
-        // the per-unit metadata at the measured 304-byte layout. This is
-        // correctness-owned page identity/membership, not test-only shape.
-        static_assert(sizeof(UnitInfo) == 304, "per-unit metadata size changed; it is per-page, so price it");
+        // Moving the old top/livemap view to ZForwarding removes it from every
+        // reusable UnitInfo; pin the resulting heap-wide metadata cost.
+        static_assert(sizeof(UnitInfo) == 240, "per-unit metadata size changed; it is per-page, so price it");
     }
 
     static RegionInfo* GetRegionInfo(uint32_t idx)
@@ -2092,9 +2107,11 @@ public:
 
     size_t GetGhostRegionSize() const
     {
-        MAddress regionStart = GetRegionStart();
-        DCHECK(metadata.regionEnd0 > GetRegionStart());
-        return metadata.regionEnd0 - regionStart;
+        // The old extent follows the forwarding incarnation. If no carrier is
+        // installed (idle/test setup), the only valid extent is the page's
+        // current own size.
+        ZForwarding* carrier = GetFromPageCarrier();
+        return carrier == nullptr ? GetRegionSize() : carrier->size();
     }
 
     size_t GetGhostRegionUnitCount() const { return GetGhostRegionSize() / UNIT_SIZE; }
@@ -2175,7 +2192,7 @@ public:
         // mark-start allocate-black object Compact copied must Admit so
         // GetRoute can look up that dest. Routed prefix-sum has no slot for
         // it, so water alone does not Admit on the ROUTED arm.
-        if (!survived && AllocatedAfterMarkStart(offset) && LoadCompactRouteTable() != nullptr) {
+        if (!survived && FromPageAllocatedAfterMarkStart(offset) && LoadCompactRouteTable() != nullptr) {
             survived = true;
         }
         // Large region: single object at start; tip check is the start test for small.
@@ -2373,18 +2390,14 @@ public:
     {
         CHECK(view.GetRegion() == this);
         const RegionLifeId life = view.GetLifeId();
-        __atomic_store_n(&metadata.fromPage.lifeId, static_cast<RegionLifeId>(0), __ATOMIC_RELEASE);
-        metadata.fromPage.liveInfo = GetLiveInfo();
-        metadata.fromPage.epoch = view.GetEpoch();
-        metadata.fromPage.allocPtr = GetRegionAllocPtr();
-        metadata.fromPage.markStartAllocPtr = metadata.markStartAllocPtr;
-        metadata.fromPage.liveByteCount =
-            __atomic_load_n(&metadata.liveByteCount, std::memory_order_acquire);
-        metadata.fromPage.owner = G;
-        metadata.fromPage.largeMarked = (IsLargeRegion() ? IsCurrentFacePublished() : metadata.isMarked != 0) ||
-            metadata.isResurrected != 0;
-        __atomic_store_n(&metadata.fromPage.lifeId, life, __ATOMIC_RELEASE);
-        RegionLifeClock::Publish(RegionLifeClock::Carrier::MARK_SNAPSHOT, life);
+        CHECK_DETAIL(ForwardingTable::PublishFromPageView(
+                         this, GetLiveInfo(), view.GetEpoch(), GetRegionAllocPtr(), metadata.markStartAllocPtr,
+                         __atomic_load_n(&metadata.liveByteCount, std::memory_order_acquire),
+                         static_cast<uint8_t>(G),
+                         static_cast<uint8_t>((IsLargeRegion() ? IsCurrentFacePublished() : metadata.isMarked != 0) ||
+                                              metadata.isResurrected != 0),
+                         life),
+                     "forwarding carrier missing at from-page publication region=%p", this);
     }
 
     // Product publication edge shared by forwarding and from-page liveness.
@@ -2402,7 +2415,6 @@ public:
         ClearForwardingFaceReset();
         ClearCurrentMarkFace();
         metadata.copyInflight.store(0, std::memory_order_relaxed);
-        metadata.regionEnd0 = metadata.regionEnd;
         metadata.routeInfo.Clear();
         metadata._generation_id = G == Generation::Young ? ZGenerationId::young : ZGenerationId::old;
         // Always install ghost membership, including a zero-live page. This is
@@ -2422,18 +2434,6 @@ public:
             mdata.ownerRegion0 = this;
             array[i].SetInGhostRegion(1, GetRegionLifeId());
         }
-    }
-
-    void RetireFromPageMetadata()
-    {
-        __atomic_store_n(&metadata.fromPage.lifeId, static_cast<RegionLifeId>(0), __ATOMIC_RELEASE);
-        metadata.fromPage.liveInfo = nullptr;
-        metadata.fromPage.epoch = 0;
-        metadata.fromPage.allocPtr = 0;
-        metadata.fromPage.markStartAllocPtr = 0;
-        metadata.fromPage.liveByteCount = 0;
-        metadata.fromPage.largeMarked = 0;
-        metadata.fromPage.owner = Generation::Old;
     }
 
     template<Generation G>
@@ -2545,9 +2545,9 @@ public:
         // PORT_ZFORWARDING step 1: the retirement edge.  ZGC's equivalent is refcount-driven
         // (ZForwarding::detach_page waits for _ref_count == 0); recording the removal here first
         // lets step 3 change *when* it happens without changing *where*.
+        const size_t nUnit = GetGhostRegionUnitCount();
         ForwardingTable::RetireMembershipAtDispel(GetRegionStart(), GetRegionSize());
         dispelGhostCount.fetch_add(1, std::memory_order_relaxed);
-        size_t nUnit = GetGhostRegionUnitCount();
         TraceClear::NoteRegionEvent(GetRegionStart(), nUnit * UNIT_SIZE, "dispel", this, GetLiveByteCount(),
                                     static_cast<unsigned int>(IsGhostFromRegion()),
                                     static_cast<unsigned int>(GetRegionType()),
@@ -2568,11 +2568,8 @@ public:
         SetRouteState(NORMAL);
         FreeCompactRouteTable();
         SetMarkFaceSealed(false);
-        // Shared boundary with forwarding retirement: DrainScope has refused
-        // late retainers and waited existing readers before this point. Retire
-        // the immutable from-page metadata in the same operation that removes
-        // the forwarding route; subsequent queries fail closed.
-        RetireFromPageMetadata();
+        // The old top/livemap disappeared with the forwarding carrier above;
+        // only page-owned ghost/route state is reset in this body.
     }
 
     bool IsGhostFromRegion() const
@@ -2706,9 +2703,8 @@ public:
             __atomic_store_n(&metadata.liveByteCount, 0, std::memory_order_release);
         }
         if (inRange(GetLiveInfo0ForProbe())) {
-            // Structural last line of defence at arena release. The semantic
-            // retirement edge is DrainScope/RetireFromPageMetadata.
-            RetireFromPageMetadata();
+            // The livemap is inseparable from its forwarding incarnation.
+            ForwardingTable::ClearEntries(GetRegionStart(), GetRegionSize());
         }
         if (inRange(metadata.retainedLiveInfo)) {
             NoteRetainedClear(RETAINED_OP_CLEAR_RANGE);
@@ -2791,7 +2787,8 @@ public:
             return false;
         }
         if (HasFromPageMetadata()) {
-            return metadata.fromPage.epoch == snapshotEpoch;
+            const ZForwarding::FromPageView* from = GetFromPageView();
+            return from != nullptr && from->epoch == snapshotEpoch;
         }
         if (IsCurrentFacePublished()) {
             return false;
@@ -3639,14 +3636,15 @@ private:
     // callers cannot reach preLiveBytes without a ticket (ROUTE_DOMAIN.md §2).
     size_t GetPreLiveBytesInGhostRegion(MAddress address)
     {
-        DCHECK(GetLiveInfo0ForProbe() != nullptr);
+        const ZForwarding::FromPageView* from = GetFromPageView();
+        DCHECK(from != nullptr && from->liveInfo != nullptr);
         size_t offset = GetAddressOffset(address);
         if (GetRouteMarkGeneration() == Generation::Young) {
             MarkView<Generation::Young> view = GetRouteMarkView<Generation::Young>();
-            return metadata.fromPage.liveInfo->GetPreLiveBytes(view, offset, GetGhostRegionSize());
+            return from->liveInfo->GetPreLiveBytes(view, offset, GetGhostRegionSize());
         }
         MarkView<Generation::Old> view = GetRouteMarkView<Generation::Old>();
-        return metadata.fromPage.liveInfo->GetPreLiveBytes(view, offset, GetGhostRegionSize());
+        return from->liveInfo->GetPreLiveBytes(view, offset, GetGhostRegionSize());
     }
 
     ALWAYS_INLINE void CheckObjectSize(
@@ -3724,20 +3722,6 @@ private:
         YOUNG_AGE_FLAG
     };
 
-    struct FromPageMetadata {
-        // Written as one replacement and published by lifeId. After publication
-        // these fields describe only the old page incarnation; current mark
-        // clears and promotion never retarget them.
-        LiveInfo* liveInfo = nullptr;
-        uint64_t epoch = 0;
-        uintptr_t allocPtr = 0;
-        uintptr_t markStartAllocPtr = 0;
-        uint64_t liveByteCount = 0;
-        Generation owner = Generation::Old;
-        uint8_t largeMarked = 0;
-        RegionLifeId lifeId = 0;
-    };
-
     struct UnitMetadata {
         struct { // basic data for RegionInfo
             // for fast allocation, always at the start.
@@ -3762,7 +3746,6 @@ private:
         LiveInfo* liveInfo = nullptr;
         RegionInfo* ownerRegion = nullptr; // if unit is SUBORDINATE_UNIT
 
-        FromPageMetadata fromPage;
         RegionInfo* ownerRegion0 = nullptr; // if unit is SUBORDINATE_UNIT
 
         LiveInfo* retainedLiveInfo = nullptr;
@@ -3805,7 +3788,7 @@ private:
         uint8_t routeDestHold = 0;
         // ZForwarding.hpp:66-69. Fits the 6-byte hole after routeDestHold:
         // hold(1)+claimed(1)+done(1)+pad(1)+ref(4) = 8, then retainedMarkWords
-        // stays 8-aligned. markStartAllocPtr sits next to regionEnd0 (+8).
+        // stays 8-aligned.
         std::atomic<bool> fwdClaimed{ false };
         std::atomic<bool> fwdDone{ false };
         std::atomic<int32_t> fwdRefCount{ 0 };
@@ -3821,10 +3804,9 @@ private:
         // Table maps from-offset → actual dest for COMPACTED regions only.
         void* compactRouteTable = nullptr;
 
-        uintptr_t regionEnd0;
         // ZGC zPage allocate-black: objects at offset >= this allocPtr, snapshotted
         // at ClearLiveInfo / mark-start, are implicitly live (zPage.inline.hpp:180-185
-        // is_allocating). Same snapshot format as regionEnd0. 0 = no mark-start yet.
+        // is_allocating). 0 = no mark-start yet.
         uintptr_t markStartAllocPtr;
         RouteInfo routeInfo;
         uint64_t snapshotEpoch = 0;
@@ -4069,8 +4051,9 @@ private:
         RegionLifeClock::NoteZeroAcrossBoundary(RegionLifeClock::Carrier::GHOST,
                                                 metadata.inGhostFromRegion != 0,
                                                 metadata.ghostLifeId);
+        const ZForwarding::FromPageView* from = GetFromPageView();
         RegionLifeClock::NoteZeroAcrossBoundary(RegionLifeClock::Carrier::MARK_SNAPSHOT,
-                                                HasFromPageMetadata(), metadata.fromPage.lifeId);
+                                                from != nullptr, from == nullptr ? 0 : from->lifeId);
         RegionLifeClock::NoteZeroAcrossBoundary(RegionLifeClock::Carrier::RETAINED_COPY,
                                                 metadata.retainedLiveInfo != nullptr ||
                                                     metadata.retainedMarkWords != nullptr ||
@@ -4150,7 +4133,6 @@ private:
         __atomic_store_n(&metadata.liveByteCount, 0, std::memory_order_release);
         metadata.liveInfo = nullptr;
         ClearCurrentMarkFace();
-        RetireFromPageMetadata();
         FreeCompactRouteTable();
         FreeRetainedMarkWords();
         metadata.retainedLiveInfo = nullptr;

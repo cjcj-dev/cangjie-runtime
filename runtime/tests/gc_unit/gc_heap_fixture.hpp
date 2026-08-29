@@ -68,6 +68,14 @@ struct GcHeapFixture {
         RegionInfo::Initialize(kUnits, heapStart);
         region0 = RegionInfo::InitRegion(0, 1, RegionInfo::UnitRole::SMALL_SIZED_UNITS);
         region1 = RegionInfo::InitRegion(1, 1, RegionInfo::UnitRole::SMALL_SIZED_UNITS);
+        ForwardingTable::Initialize(heapStart, kUnits * RegionInfo::UNIT_SIZE, RegionInfo::UNIT_SIZE);
+        // InitRegionInfo closes any previous incarnation at a reused mmap
+        // address. A fixture is a new relocation generation, so reopen it
+        // explicitly before a test changes the page to FROM.
+        (void)ForwardingTable::PreparePublicationGeneration(
+            region0->GetRegionStart(), region0->GetRegionSize());
+        (void)ForwardingTable::PreparePublicationGeneration(
+            region1->GetRegionStart(), region1->GetRegionSize());
         region0->SetRegionType(RegionInfo::RegionType::THREAD_LOCAL_REGION);
         region1->SetRegionType(RegionInfo::RegionType::THREAD_LOCAL_REGION);
         Heap::OnHeapCreated(heapStart);
@@ -97,6 +105,19 @@ struct GcHeapFixture {
         // Destroying this synthetic heap is its explicit remap-coverage
         // boundary. Do not carry forwarding authority into a later fixture
         // whose mmap may reuse the same virtual range.
+        // Some life-clock tests intentionally keep several fixtures alive.
+        // RegionInfo's unit map is process-global, so only the most recently
+        // installed fixture may translate its metadata pointer here.
+        if (RegionInfo::UnitInfo::heapStartAddress == heapStart) {
+            if (region0 != nullptr) {
+                ForwardingTable::ClearEntries(region0->GetRegionStart(), region0->GetRegionSize());
+                ForwardingTable::Remove(region0->GetRegionStart(), region0->GetRegionSize());
+            }
+            if (region1 != nullptr) {
+                ForwardingTable::ClearEntries(region1->GetRegionStart(), region1->GetRegionSize());
+                ForwardingTable::Remove(region1->GetRegionStart(), region1->GetRegionSize());
+            }
+        }
         ForwardingTable::ReclaimRetired("gc-unit-fixture-coverage-complete");
         // SetYoungRegionFlag owns the process-wide youngRegionCount. Fixtures
         // are mapped per test, so leaving their flags set before munmap makes
