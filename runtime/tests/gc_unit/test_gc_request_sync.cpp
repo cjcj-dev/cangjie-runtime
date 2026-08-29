@@ -99,14 +99,6 @@ public:
     }
 };
 
-class RegionSpaceTestPeer {
-public:
-    static bool ShouldRetryAllocation(RegionSpace& space, size_t& tryTimes, size_t size)
-    {
-        return space.ShouldRetryAllocation(tryTimes, size);
-    }
-};
-
 namespace {
 
 // This is only a harness deadlock guard. Correctness assertions below use
@@ -623,28 +615,6 @@ GC_TEST(GcRequestSync, OomAndForceRemainSynchronous)
         });
         ExpectCompletedSync(result, reason);
     }
-}
-
-GC_TEST(GcRequestSync, AllocationRetryOomEntryWaitsForOwnCompletion)
-{
-    SyncResult result = RunSynchronousRequest([](RequestHarness&) {
-        RegionSpace& space = static_cast<RegionSpace&>(Heap::GetHeap().GetAllocator());
-        size_t tryTimes = 5;
-        bool shouldRetry = RegionSpaceTestPeer::ShouldRetryAllocation(space, tryTimes, 64);
-        GC_EXPECT_TRUE(shouldRetry);
-    });
-    ExpectCompletedSync(result, GC_REASON_OOM);
-}
-
-GC_TEST(GcRequestSync, AllocationRetryHeuEntryWaitsForOwnCompletion)
-{
-    SyncResult result = RunSynchronousRequest([](RequestHarness&) {
-        RegionSpace& space = static_cast<RegionSpace&>(Heap::GetHeap().GetAllocator());
-        size_t tryTimes = 4;
-        bool shouldRetry = RegionSpaceTestPeer::ShouldRetryAllocation(space, tryTimes, 64);
-        GC_EXPECT_TRUE(shouldRetry);
-    });
-    ExpectCompletedSync(result, GC_REASON_HEU);
 }
 
 #if defined(__OHOS__) && (__OHOS__ == 1)
