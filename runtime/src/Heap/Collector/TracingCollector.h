@@ -452,6 +452,7 @@ protected:
     // Also provides the resource access interfaces, such as invokeGC, waitGC.
     // This resource should be singleton and shared for multi-collectors
     CollectorResources& collectorResources;
+    U32 snapshotFinalizerNum = 0;
 
     // reason for current GC.
     GCReason gcReason = GC_REASON_USER;
@@ -461,7 +462,6 @@ protected:
     bool fixReferences = false;
 
     std::atomic<size_t> markedObjectCount = { 0 };
-    U32 snapshotFinalizerNum = 0;
     std::mutex externMtx;
     std::unordered_map<BaseObject*, std::list<BaseObject*>> discoveredExternObjects;
     std::mutex cycleWorkStackMtx;

@@ -83,7 +83,7 @@ public:
     }
     void Remove(MAddress start, size_t size) const { remove(start, size); }
     void ClearEntries(MAddress start, size_t size) const { clearEntries(start, size); }
-    void DropRetiredCovering(MAddress start, size_t size) const { dropRetiredCovering(start, size); }
+    void ReclaimRetired() const { reclaimRetired("gc-unit-explicit-coverage"); }
     ZForwarding* GetEntries(MAddress from) const { return getEntries(from); }
     MAddress FindRetiredTo(MAddress from) const { return findRetiredTo(from); }
 
@@ -114,8 +114,8 @@ private:
             handle, "_ZN12MapleRuntime15ForwardingTable13InsertMappingERKNS0_11PublicationEmm");
         remove = Resolve<RangeFn>(handle, "_ZN12MapleRuntime15ForwardingTable6RemoveEmm");
         clearEntries = Resolve<RangeFn>(handle, "_ZN12MapleRuntime15ForwardingTable12ClearEntriesEmm");
-        dropRetiredCovering =
-            Resolve<RangeFn>(handle, "_ZN12MapleRuntime15ForwardingTable19DropRetiredCoveringEmm");
+        reclaimRetired =
+            Resolve<ReclaimFn>(handle, "_ZN12MapleRuntime15ForwardingTable14ReclaimRetiredEPKc");
         getEntries = Resolve<GetEntriesFn>(handle, "_ZN12MapleRuntime15ForwardingTable10GetEntriesEm");
         findRetiredTo = Resolve<FindRetiredToFn>(handle, "_ZN12MapleRuntime15ForwardingTable13FindRetiredToEm");
     }
@@ -126,6 +126,7 @@ private:
     using EnsurePublicationBeforeCopyFn = ForwardingTable::Publication (*)(RegionInfo*, MAddress);
     using InsertMappingFn = MAddress (*)(const ForwardingTable::Publication&, MAddress, MAddress);
     using RangeFn = void (*)(MAddress, size_t);
+    using ReclaimFn = void (*)(const char*);
     using GetEntriesFn = ZForwarding* (*)(MAddress);
     using FindRetiredToFn = MAddress (*)(MAddress);
 
@@ -137,7 +138,7 @@ private:
     InsertMappingFn insertMapping = nullptr;
     RangeFn remove = nullptr;
     RangeFn clearEntries = nullptr;
-    RangeFn dropRetiredCovering = nullptr;
+    ReclaimFn reclaimRetired = nullptr;
     GetEntriesFn getEntries = nullptr;
     FindRetiredToFn findRetiredTo = nullptr;
 };
@@ -280,12 +281,12 @@ struct RootEntryFixture {
         auto& forwarding = ProductForwardingApi::Get();
         forwarding.Remove(heap.region0->GetRegionStart(), heap.region0->GetRegionSize());
         forwarding.ClearEntries(heap.region0->GetRegionStart(), heap.region0->GetRegionSize());
-        forwarding.DropRetiredCovering(heap.region0->GetRegionStart(), heap.region0->GetRegionSize());
+        forwarding.ReclaimRetired();
         // Keep the standalone-only duplicate clean as well. In the CMake product-linked test these
         // calls resolve to the same already-cleared product instance and are harmless no-ops.
         ForwardingTable::Remove(heap.region0->GetRegionStart(), heap.region0->GetRegionSize());
         ForwardingTable::ClearEntries(heap.region0->GetRegionStart(), heap.region0->GetRegionSize());
-        ForwardingTable::DropRetiredCovering(heap.region0->GetRegionStart(), heap.region0->GetRegionSize());
+        ForwardingTable::ReclaimRetired("gc-unit-explicit-coverage");
     }
 
     MAddress PublishUnusableActiveWitness()

@@ -12,6 +12,7 @@
 #include <cstdint>
 #include <memory>
 #include <unordered_set>
+#include <vector>
 #if defined(MRT_REMSET_BITMAP_CROSSCHECK)
 #include <mutex>
 #include <unordered_map>
@@ -40,9 +41,35 @@ public:
     void Initialize(MAddress start, size_t size);
 
     // Phase handshakes can reach a newly-created mutator before the heap's
-    // remembered-set backing has been published.  Callers that merely want to
+    // remembered-set backing has been published. Callers that merely want to
     // defer a flush may inspect this state without tripping CheckInitialized().
     bool IsInitialized() const { return initialized; }
+
+    // One remembered-set bit lifted off a region that is about to be relocated in place,
+    // together with the face it was found in.
+    struct InPlaceSlot {
+        MAddress field;
+        uint8_t face;
+    };
+
+    // ZGC ZRelocateWork::start_in_place_relocation_prepare_remset (zRelocate.cpp:838-861) plus
+    // clear_remset_before_in_place_reuse (zRelocate.cpp:1027-1035).  An in-place relocated page
+    // is its own to-page, so its old remset bits are both the thing the copy walk has to read and
+    // the thing the copy walk overwrites; ZGC resolves that by swapping the page's two bitmaps so
+    // the copy reads a stashed snapshot and writes a cleared face, then dropping the snapshot at
+    // the end.  This bitmap is heap-wide and address-partitioned rather than per-page, so the
+    // equivalent is to lift the region's bits out into `out` and clear both faces in one step.
+    // Everything the copy walk does not hand back through MoveInPlaceSlots is the "old bits"
+    // that ZGC drops.  Returns the number of bits taken.
+    size_t TakeInPlaceSlots(MAddress start, MAddress end, std::vector<InPlaceSlot>& out);
+
+    // ZGC ZRelocateWork::update_remset_old_to_old (zRelocate.cpp:652-731): a remset bit covering
+    // a from copy names a field offset inside that object, so it follows the object to its new
+    // address, into the same face it came from (zRelocate.cpp:698-710 keeps current and previous
+    // apart because the young generation is mid-scan of one of them).  `taken` must be the
+    // ascending vector TakeInPlaceSlots filled.  Returns the number of bits re-recorded.
+    size_t MoveInPlaceSlots(const std::vector<InPlaceSlot>& taken, MAddress fromBase, MAddress toBase,
+                            size_t size);
 
     // Called at the beginning of a minor collection while the mutators are stopped.
     // Atomically makes an empty bitmap active, drains the previous active bitmap into

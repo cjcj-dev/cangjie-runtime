@@ -49,6 +49,20 @@ constexpr bool IsDoubleRemapBad(uintptr_t value, uintptr_t youngMask, uintptr_t 
     return Classify(value, youngMask, oldMask) == Kind::DoubleBad;
 }
 
+// ZBarrier::make_load_good returns directly for load-good values and enters
+// relocate_or_remap only for load-bad values (zBarrier.inline.hpp:294-307).
+// Remap coverage prevents a two-beat wrap; it must not be replaced by forcing
+// a forwarding lookup for a value that already satisfies the fast path.
+constexpr bool NeedsForwardingLookup(Kind kind)
+{
+    return kind == Kind::YoungOnlyGood || kind == Kind::OldOnlyGood || kind == Kind::DoubleBad;
+}
+
+// ZRemapYoungRootsTask reaches remembered fields by iterating live old pages;
+// a bitmap record whose holder is not live is not a root and must not invoke a
+// load barrier on the dead holder payload (zGeneration.cpp:1483-1523).
+constexpr bool ShouldRemapRememberedSlot(bool holderIsLive) { return holderIsLive; }
+
 constexpr uintptr_t CurrentRemapBit(uintptr_t youngMask, uintptr_t oldMask)
 {
     return youngMask & oldMask;

@@ -15,20 +15,33 @@ namespace MapleRuntime {
 class Collector;
 class RememberedSet;
 
-// ZGC ZStoreBarrierEntry keeps the field and the overwritten coloured value together
-// (zStoreBarrierBuffer.hpp:33-39).  The installation state is needed when an entry
-// crosses a colour publication: ownership follows the install-time generation and
-// mark colour recorded on the entry (zStoreBarrierBuffer.cpp:190-218).
+// Compile-time switch (ZGC ZBufferStoreBarriers). No MRT_GCV2_* env var.
+constexpr bool kBufferStoreBarriers = true;
+constexpr size_t kStoreBarrierBufferLength = 32;
+
 struct StoreBarrierInstallState {
     uint8_t phase = 0;
     bool youngMark = false;
     uintptr_t storeGood = 0;
 };
 
+// ZGC ZStoreBarrierEntry is (p, prev), with a parallel _base_pointers array.
+// Before relocation destroys the page liveness map, ZRelocate installs the base
+// object for every pending p; a phase flush then relocates the base and rebuilds
+// p at the same field offset (zStoreBarrierBuffer.cpp:52-102,130-153;
+// zRelocate.cpp:1048-1080,1289-1296).  Keeping only p is not sufficient: a
+// pending entry may still name a from-space holder when it is consumed.
 struct StoreBarrierEntry {
     MAddress p = 0;
+    BaseObject* pBase = nullptr;
+    size_t pOffset = 0;
     zpointer prev = zpointer::null;
     StoreBarrierInstallState installed {};
+
+    MAddress Remap(BaseObject* remappedBase) const
+    {
+        return remappedBase == nullptr ? p : reinterpret_cast<MAddress>(remappedBase) + pOffset;
+    }
 };
 
 #if defined(MRT_GC_UNIT_TESTS)
@@ -41,15 +54,19 @@ using StoreBarrierFlushObserver = void (*)(StoreBarrierFlushEvent, const StoreBa
 
 class StoreBarrierBuffer {
 public:
-    StoreBarrierBuffer() : current(BufferLength) {}
+    StoreBarrierBuffer() : current(kBufferStoreBarriers ? kStoreBarrierBufferLength : 0) {}
 
-    static constexpr size_t Capacity() { return BufferLength; }
-    bool IsEmpty() const { return current == BufferLength; }
-    size_t Pending() const { return BufferLength - current; }
+    bool IsEmpty() const { return current == kStoreBarrierBufferLength; }
+    size_t Pending() const { return kStoreBarrierBufferLength - current; }
     size_t Current() const { return current; }
+    static constexpr size_t Capacity() { return kStoreBarrierBufferLength; }
 
+    void Add(MAddress fieldAddress, BaseObject* fieldBase, RememberedSet& rs);
     void Add(MAddress fieldAddress, zpointer prev, RememberedSet& rs);
+    void Add(MAddress fieldAddress, BaseObject* fieldBase, zpointer prev, RememberedSet& rs);
     void Flush(RememberedSet& rs);
+    // Test-only: drop pending without Record. Used to prove Flush-before-Drain.
+    void Discard();
 
     static void FlushAll(RememberedSet& rs);
 #if defined(MRT_GC_UNIT_TESTS)
@@ -57,16 +74,16 @@ public:
 #endif
 
 private:
-    static constexpr size_t BufferLength = 32;
-
     static StoreBarrierInstallState CaptureInstallState();
     static bool InstalledDuringCurrentMark(const StoreBarrierEntry& entry);
     static bool RetirePrevious(const StoreBarrierEntry& entry, Collector& collector);
     static void MarkAndRemember(const StoreBarrierEntry& entry, RememberedSet& rs);
     void Add(MAddress fieldAddress, zpointer prev, StoreBarrierInstallState installed, RememberedSet& rs);
+    void Add(MAddress fieldAddress, BaseObject* fieldBase, zpointer prev,
+             StoreBarrierInstallState installed, RememberedSet& rs);
     void Flush(RememberedSet& rs, Collector& collector);
 
-    StoreBarrierEntry buffer[BufferLength] {};
+    StoreBarrierEntry buffer[kStoreBarrierBufferLength] {};
     size_t current;
 };
 } // namespace MapleRuntime

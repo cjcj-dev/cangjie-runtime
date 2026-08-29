@@ -76,20 +76,26 @@ public:
     // until PrepareForwardableRegion has a closed mark face.
     static bool InsertProvisional(MAddress regionStart, size_t regionSize, RegionInfo* region);
     static void Remove(MAddress regionStart, size_t regionSize);
+    // The relocation-set reset edge. ZRelocationSet::reset destroys every ZForwarding the set
+    // owned (zRelocationSet.cpp:191-197) and ZForwardingTable::get answers only for a page still
+    // in the live set (zForwardingTable.inline.hpp:36-46), so once a relocation ends nothing of
+    // it can be handed to a later reader. Removing membership alone leaves the publication open,
+    // and an open publication lets a later region-type change re-publish the finished cycle's
+    // carrier as current membership. Seal and unlink in one operation.
+    static void RetireMembershipAtDispel(MAddress regionStart, size_t regionSize);
     static void ClearEntries(MAddress regionStart, size_t regionSize);
-    // After-copy Exempt parks a live table; ClearEntries unlinks it into the
-    // retired generation. FindTo/LookupTo still scan that generation, so a
-    // kept page re-armed next cycle would find() last cycle's dest. Drop the
-    // covering tables at the next install (zRelocationSet.cpp:91-96).
-    static void DropRetiredCovering(MAddress regionStart, size_t regionSize);
     static void Retire(ZForwarding* tab);
+    // The sole retired-table destruction edge. The caller is the old
+    // remap-young-roots coverage closure, after ClearEntries has already
+    // drained every retained publication owner (zGeneration.cpp:1458-1523;
+    // zForwarding.cpp:171-181).
     static void ReclaimRetired(const char* why);
     // Measurement face for FROM_PAGE_DETACH_GATE. True while either retired
     // generation still contains a forwarding whose from range overlaps this
     // region. It never changes table lifetime.
     static bool RetiredCovers(MAddress regionStart, size_t regionSize);
     // Product hard condition for released-cache enqueue (zForwarding.cpp:171-181
-    // detach_page waits ref_count==0). Not gated by FromPageDetach GateEnabled.
+    // detach_page waits ref_count==0). Not gated by diagnostic switches.
     static bool HasLiveCarrier(MAddress regionStart, size_t regionSize);
 
     // zForwardingTable.inline.hpp:43-62

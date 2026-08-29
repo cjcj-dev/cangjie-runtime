@@ -56,7 +56,6 @@
 #include "Heap/Verify/NwDropAudit.h"
 #include "Heap/Verify/GarbRegionDiag.h"
 #include "Heap/Verify/Stw2CurrentAudit.h"
-#include "Heap/Verify/NullRouteCaller.h"
 #include "Heap/Verify/MarkCompleteVerify.h"
 #include "Heap/Verify/SurvNodeDiag.h"
 #include "Heap/Collector/PromotedRegionDomain.h"
@@ -96,9 +95,8 @@ bool WCollector::MarkObjectImpl(BaseObject* obj, bool youngClaim, MarkLiveCache*
     // names the running closure, not the target object's face.
     // When liveCache is set, mark bits stay atomic and live bytes are coalesced
     // per worker (ZGC zMarkCache.hpp).
-    bool incLive = false;
-    bool marked = region->MarkObjectByOwner(obj, objectSize, liveCache == nullptr, incLive);
-    if (incLive && liveCache != nullptr) {
+    bool marked = region->MarkObjectByOwner(obj, objectSize, liveCache == nullptr);
+    if (!marked && liveCache != nullptr) {
         liveCache->IncLive(region, objectSize);
     }
     if (!marked) {
@@ -333,7 +331,7 @@ void WCollector::TraceRefField(BaseObject* obj, RefField<>& field, WorkStack& wo
     CHECK_DETAIL(latest->IsValidObject(), "Invalid object %p is referenced by strong object %p: %s and offset %zd",
                  latest, obj, obj == nullptr ? "<partial-array chunk>" : obj->GetTypeInfo()->GetName(),
                  obj == nullptr ? static_cast<ssize_t>(-1) : BaseObject::FieldOffset(obj, &field));
-    RefField<> newField = GetAndTryTagRefField(latest);
+    RefField<> newField = ColourResolvedRefField(latest);
     if (oldField.GetFieldValue() == newField.GetFieldValue()) {
         DLOG(TRACE, "trace obj %p ref@%p: %p<%p>(%zu)", obj, &field, latest, latest->GetTypeInfo(), latest->GetSize());
     } else if ([&]() {
@@ -1088,12 +1086,13 @@ bool ScrubMinorFreeTarget(RefField<>& field, BaseObject* target, bool /*fromFix*
         return false;
     }
     RefField<> oldField(field);
-    MAddress oldVal = raw(oldField.GetFieldValue());
-    if (oldVal != 0) {
-        (void)HealSlot(field, to_zpointer(oldVal), zpointer::null,
-                       HealSite::WCollectorMinorFixForwardNull, HealNull::Allow);
-    }
-    return true;
+    const MAddress oldVal = raw(oldField.GetFieldValue());
+    // zBarrier.inline.hpp:294-343 has no unresolved-to-null installation arm.
+    // A free/garbage target means forwarding authority was retired before
+    // coverage completed; fail closed instead of manufacturing a null heal.
+    (void)HealSlot(field, oldField.GetFieldValue(), zpointer::null,
+                   HealSite::WCollectorMinorFixForwardNull, HealNull::Disallow);
+    Collector::FailClosedLoad("WCollector::ScrubMinorFreeTarget.unresolved", target, oldVal);
 }
 
 } // namespace WCollectorInternal
@@ -2211,7 +2210,6 @@ void WCollector::MarkNewObject(BaseObject* obj)
 void WCollector::ProcessFinalizers()
 {
     FinalizerProcessor& fp = collectorResources.GetFinalizerProcessor();
-    fp.ProcessReferences(
-        [this](BaseObject* obj) { return IsMarkedObject<Generation::Old>(obj); });
+    fp.ProcessReferences([this](BaseObject* obj) { return IsMarkedObject<Generation::Old>(obj); });
 }
 } // namespace MapleRuntime

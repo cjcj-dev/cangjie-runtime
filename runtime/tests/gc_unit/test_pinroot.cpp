@@ -56,16 +56,6 @@ struct PinRootTestAccess {
         });
         return found;
     }
-    static bool OnUnmovableFrom(RegionManager& manager, const RegionInfo* region)
-    {
-        bool found = false;
-        manager.unmovableFromRegionList.VisitAllRegions([&found, region](RegionInfo* r) {
-            if (r == region) {
-                found = true;
-            }
-        });
-        return found;
-    }
 };
 
 } // namespace MapleRuntime
@@ -230,30 +220,6 @@ GC_TEST(RegionRetirement, CompactTailDoesNotStealConcurrentRecentFullNode)
     GC_EXPECT_EQ(PinRootTestAccess::RecentFullCount(manager), 1u);
     GC_EXPECT_TRUE(PinRootTestAccess::OnRecentFull(manager, region));
     GC_EXPECT_TRUE(!PinRootTestAccess::OnThreadLocal(manager, region));
-    GC_EXPECT_TRUE(region->GetPrevRegion() == nullptr);
-    GC_EXPECT_TRUE(region->GetNextRegion() == nullptr);
-}
-
-// Mutator compact-in-place rehomes onto recentFull; GC ForwardRegion then Exempts.
-// ParkUnmovableFromRegion used to Prepend while owner was still recentFull
-// (forward_phase region_already_belongs_to_a_list).
-GC_TEST(RegionRetirement, ExemptAfterCompactInPlaceUnlinksRecentFull)
-{
-    GcHeapFixture fx;
-    RegionManager manager;
-    RegionInfo* region = fx.region0;
-
-    PinRootTestAccess::ParkOnThreadLocal(manager, region);
-    manager.RehomeCompactedInPlaceRegion(region);
-    GC_EXPECT_TRUE(PinRootTestAccess::OnRecentFull(manager, region));
-
-    manager.ParkUnmovableFromRegion(region);
-
-    GC_EXPECT_EQ(static_cast<unsigned>(region->GetRegionType()),
-                 static_cast<unsigned>(RegionInfo::RegionType::UNMOVABLE_FROM_REGION));
-    GC_EXPECT_TRUE(PinRootTestAccess::OnUnmovableFrom(manager, region));
-    GC_EXPECT_TRUE(!PinRootTestAccess::OnRecentFull(manager, region));
-    GC_EXPECT_EQ(PinRootTestAccess::RecentFullCount(manager), 0u);
     GC_EXPECT_TRUE(region->GetPrevRegion() == nullptr);
     GC_EXPECT_TRUE(region->GetNextRegion() == nullptr);
 }

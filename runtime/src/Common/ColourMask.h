@@ -30,6 +30,10 @@ extern "C" {
 // drift between compiler versions.
 extern unsigned long g_cjLoadBadMask;
 
+// Positive half of the compiler load-good predicate. It is published in the
+// same set_good_masks round as g_cjLoadBadMask (OpenJDK zAddress.cpp:81-85).
+extern unsigned long g_cjLoadGoodMask;
+
 // ⭐ 构建溯源符号的**声明**；⭐ 定义在 `ColourMask.cpp`（⛔ 头里放定义会多重定义）
 extern "C" const char g_cjRuntimeProvenance[];
 
@@ -68,7 +72,8 @@ constexpr unsigned TAG_ID_BITS =
 // relocated" lives on the region (GetRegionInfoAt / GetLiveInfo), not in the pointer.
 //
 // A generation relocate-start flip changes the accepted one-hot subset and republishes
-// g_cjLoadBadMask; see WCollector::flip_young_relocate_start/flip_old_relocate_start.
+// g_cjLoadGoodMask/g_cjLoadBadMask; see
+// WCollector::flip_young_relocate_start/flip_old_relocate_start.
 constexpr unsigned REMAP_COLOUR_BITS = 4u;
 // MarkedYoung[0,1] and MarkedOld[0,1] are independent one-hot epochs. Each family needs two
 // physical bits so that a mark-start flip makes the previous epoch bad without a zero-bit trust
@@ -126,11 +131,14 @@ static_assert(REMEMBERED_BITS <= TAG_ID_PADDING_BITS,
 // is permanently mark-bad and a strong mark/keep-alive barrier is forced down the slow path,
 // where the object is upgraded to strongly reachable (zBarrier.inline.hpp:610-620).
 //
-// We do not carry that state in the pointer. The product equivalent is the live/strong pair in
-// RegionBitmap (LiveInfo.h), published by the same MarkFace epoch. The bits below remain reserved
-// only for a future pointer fast path: kFinalizableWired describes pointer colouring, not whether
-// the livemap pair exists. This keeps the compiler ABI atom unchanged while reference processing
-// gains the ZLiveMap state distinction.
+// We do not carry that state in the pointer. Our equivalent lives in a side table:
+// LiveInfo.h:204 resurrectBitmap, folded into liveness by LiveInfo.h:210 / Heap.cpp:76, and
+// filled by TracingCollector.cpp:696-697 DoResurrection -- which runs inside the concurrent
+// marking segment (TracingCollector.cpp:680-698), so "unreachable by schedule" is not available
+// as an argument. The bits are reserved here, and only reserved: kFinalizableWired says so, no
+// live mask includes them, and nothing publishes them. What this buys is that the padding budget
+// is now checked by the compiler instead of by a comment, and that the state machine table
+// (runtime/tests/colour_state_machine_probe.cpp) can name the cell we are missing.
 constexpr unsigned FINALIZABLE_BITS = 2u;
 constexpr unsigned FINALIZABLE_SHIFT = REMEMBERED_SHIFT + REMEMBERED_BITS;
 constexpr uintptr_t FINALIZABLE_0 = uintptr_t(1) << FINALIZABLE_SHIFT;

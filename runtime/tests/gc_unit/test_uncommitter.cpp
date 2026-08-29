@@ -282,7 +282,7 @@ GC_TEST(Uncommitter, LiveForwardingBlocksReleasedCache)
     GC_EXPECT_TRUE(frm.releasedUnitTree.MergeInsert(0, 1, false));
 
     ForwardingTable::ClearEntries(region->GetRegionStart(), region->GetRegionSize());
-    ForwardingTable::DropRetiredCovering(region->GetRegionStart(), region->GetRegionSize());
+    ForwardingTable::ReclaimRetired("Uncommitter.LiveForwardingTableBlocksReleasedCache.cleanup");
     ForwardingTable::Remove(region->GetRegionStart(), region->GetRegionSize());
     MemMap::DestroyMemMap(map);
 }
@@ -318,4 +318,3 @@ GC_TEST(Uncommitter, LiveForwardingRefCountKeepsReleasedAllocatable)
     std::fflush(stderr);
     MemMap::DestroyMemMap(map);
 }
-

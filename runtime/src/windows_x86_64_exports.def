@@ -1039,6 +1039,7 @@ EXPORTS
     _ZN12MapleRuntime10RegionInfo10NullRegionEv @1033
     _ZN12MapleRuntime10RegionInfo12ReleaseUnitsEyy @1034
     _ZN12MapleRuntime10RegionInfo13ClearLiveInfoEv @1035
+    _ZN12MapleRuntime10RegionInfo13EnqueueObjectEPKNS_10BaseObjectEy @1036
     _ZN12MapleRuntime10RegionInfo13InitFreeUnitsEv @1037
     _ZN12MapleRuntime10RegionInfo13tipInHeapHitsE @1038 DATA
     _ZN12MapleRuntime10RegionInfo14InitRegionInfoEyNS0_8UnitRoleE @1039
@@ -1061,9 +1062,11 @@ EXPORTS
     _ZN12MapleRuntime10RegionInfo20GetOrAllocMarkBitmapEv @1056
     _ZN12MapleRuntime10RegionInfo20youngRegionFlagMutexE @1057 DATA
     _ZN12MapleRuntime10RegionInfo21DispelGhostFromRegionEv @1058
+    _ZN12MapleRuntime10RegionInfo23GetOrAllocEnqueueBitmapEv @1059
     _ZN12MapleRuntime10RegionInfo24IncRawPointerObjectCountEv @1060
     _ZN12MapleRuntime10RegionInfo24PrepareForwardableRegionEv @1061
     _ZN12MapleRuntime10RegionInfo24PreserveRetainedLiveInfoEv @1062
+    _ZN12MapleRuntime10RegionInfo25GetOrAllocResurrectBitmapEv @1063
     _ZN12MapleRuntime10RegionInfo26VisitLiveObjectsUntilFalseEOKNSt3__18functionIFbPNS_10BaseObjectEEEE @1064
     _ZN12MapleRuntime10RegionInfo27BindLiveInfo0FromLiveIfNullEv @1065
     _ZN12MapleRuntime10RegionInfo13AdmitForRouteEPNS_10BaseObjectE @1066
@@ -1522,6 +1525,8 @@ EXPORTS
     _ZN12MapleRuntime13VerifyRegions23VerifyAfterPrepareYoungERNS_13RegionManagerERKNSt3__113unordered_setIPNS_10RegionInfoENS3_4hashIS6_EENS3_8equal_toIS6_EENS3_9allocatorIS6_EEEEyPKc @1526
     _ZN12MapleRuntime13VerifyRegions7IsFatalEv @1527
     _ZN12MapleRuntime13VerifyRegions9IsEnabledEv @1528
+    _ZN12MapleRuntime13WeakRefBuffer6InsertEPNS_10BaseObjectE @1529
+    _ZN12MapleRuntime13WeakRefBuffer8InstanceEv @1530
     _ZN12MapleRuntime13g_initializedE @1531 DATA
     _ZN12MapleRuntime13g_injectStateE @1532 DATA
     _ZN12MapleRuntime14ATraceEndAsyncEPKci @1533
@@ -1863,6 +1868,7 @@ EXPORTS
     _ZN12MapleRuntime18FinalizerProcessor4FiniEv @1885
     _ZN12MapleRuntime18FinalizerProcessor4InitEv @1886
     _ZN12MapleRuntime18FinalizerProcessor4StopEv @1887
+    _ZN12MapleRuntime18FinalizerProcessor4WaitEj @1888
     _ZN12MapleRuntime18FinalizerProcessor5StartEv @1889
     _ZN12MapleRuntime18FinalizerProcessor6NotifyEv @1890
     _ZN12MapleRuntime18FinalizerProcessor8WaitStopEv @1891
@@ -3309,6 +3315,7 @@ EXPORTS
     g_cjRuntimeProvenance @3342 DATA
     g_cjStoreBadMask @3485 DATA
     g_cjStoreGoodMask @3486 DATA
+    g_cjLoadGoodMask @3487 DATA
     getntptimeofday @3343
     gettimeofday @3344
     mingw_gettimeofday @3345
@@ -3452,8 +3459,3 @@ EXPORTS
     wcstoull @3483
     wcstoumax @3484
     CJ_MCC_PostWriteRefField @3487
-    _ZN12MapleRuntime17StackExposureHook11OnIterationERNS_7MutatorEy @3488
-    _ZN12MapleRuntime17StackExposureHook13OnAfterUnwindERNS_7MutatorEy @3489
-    _ZN12MapleRuntime17StackExposureHook14OnBeforeUnwindERNS_7MutatorEy @3490
-    _ZN12MapleRuntime17StackExposureHook14ProcessOneCountEv @3491
-    _ZN12MapleRuntime17StackExposureHook17ProcessFrameRootsERNS_14StackWatermarkEy @3492

@@ -23,12 +23,13 @@ class WCollector;
 // restartable discharge task (ZGC zRelocationSet._flip_promoted_pages +
 // ZRelocateAddRemsetForFlipPromoted / remap_and_maybe_add_remset).
 //
-// Default ON (domainon). Product still runs RecordPromotedCrossGenEdges as shadow
-// until a later lane deletes the broad old scan / sync walk. Dual-run reconcile
-// (env) proves edge-set equivalence. Set MRT_GCV2_PROMO_DOMAIN=0 to disable.
+// Young collection uses this domain as the sole flip-promoted field walk.  This
+// matches ZRelocateAddRemsetForFlipPromoted (zRelocate.cpp:1257-1306): promotion
+// registers the page and relocation later remaps its fields.  The synchronous
+// RecordPromotedCrossGenEdges walk remains only for non-young collections, which
+// have no young relocate discharge phase.
 //
 // Gates:
-//   MRT_GCV2_PROMO_DOMAIN=0              — disable register + discharge (default on)
 //   MRT_GCV2_PROMO_DOMAIN_RECONCILE=1    — dual-run bidirectional set diff
 //   MRT_GCV2_PROMO_DOMAIN_SKIP_ONE=1     — positive: skip first domain edge
 //   MRT_GCV2_PROMO_DOMAIN_INJECT_UNDISCHARGED=1 — positive: leave one undischarged
@@ -42,6 +43,25 @@ class WCollector;
 //   ResetForNextMinor at next minor start — CHECK registered==discharged first.
 
 namespace PromotedRegionDomain {
+
+// ZGC registers flip-promoted pages from an already selected relocation set;
+// that set has a closed livemap (zGeneration.cpp:211-221;
+// zRelocate.cpp:1289-1306).  A residual page without authoritative liveness
+// must remain young: scanning all of it after relocation can discover a field
+// whose target was never admitted to the relocation set.
+inline bool ResidualPromotionHasClosedLiveness(bool hasMarkStartAllocGap, bool liveCountAuthoritative,
+                                               bool hasObjectLiveness)
+{
+    return !hasMarkStartAllocGap && liveCountAuthoritative && hasObjectLiveness;
+}
+
+// ZRelocate::relocate defers the field walk for young flip-promoted pages until
+// after relocation (zRelocate.cpp:1289-1306).  Other collection modes have no
+// corresponding discharge phase and retain their synchronous scan.
+inline bool DeferPromotedFieldScan(bool isYoungCollection)
+{
+    return isYoungCollection;
+}
 
 enum class RegisterPath : uint8_t {
     InPlace = 0,

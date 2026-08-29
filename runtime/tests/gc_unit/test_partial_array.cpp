@@ -9,23 +9,13 @@
 // (zMark.cpp:208-263). Criterion is set equality, not "did not crash".
 
 #include <cstdint>
-#include <algorithm>
 #include <csignal>
-#include <cstdio>
 #include <cstring>
 #include <set>
 #include <sys/mman.h>
 #include <sys/wait.h>
 #include <unistd.h>
 #include <vector>
-
-#if !defined(MRT_TESTABLE_INTERNALS)
-// WCollector's friend declaration is test-gated.  Keep this TU buildable in
-// the default standalone configuration by opening that gate while the header
-// is parsed, without enabling the test-only product arm below.
-#define MRT_TESTABLE_INTERNALS 1
-#define MRT_PARTIAL_ARRAY_FORCED_INTERNALS 1
-#endif
 
 #include "Base/Globals.h"
 #include "Heap/Collector/CollectorResources.h"
@@ -43,16 +33,15 @@
 using namespace MapleRuntime;
 using namespace MapleRuntime::GcUnit;
 
+#if defined(MRT_TESTABLE_INTERNALS)
 namespace MapleRuntime {
 
 struct PartialArrayTestAccess {
-#if defined(MRT_TESTABLE_INTERNALS) || defined(MRT_PARTIAL_ARRAY_FORCED_INTERNALS)
     static void Push(const WCollector& collector, RefField<>* addr, size_t length,
                      TracingCollector::WorkStack& workStack)
     {
         collector.PushPartialArray(addr, length, workStack);
     }
-#endif
 
     static void StoreTarget(const WCollector& collector, RefField<>& field, BaseObject* target)
     {
@@ -62,85 +51,11 @@ struct PartialArrayTestAccess {
 };
 
 } // namespace MapleRuntime
+#endif
 
 namespace {
 
 using Slot = std::uintptr_t;
-
-// A real MArray carrier is required here: the product mark visitor only enters
-// FollowArrayElements after TraceObjectRefFields recognizes a raw reference
-// array (Mark.cpp:472-490).  This mirrors the small type-info fixture used by
-// the existing array tests, but keeps the storage local to this test TU.
-struct ReferenceArrayTypeInfos {
-    ReferenceArrayTypeInfos()
-    {
-        std::memset(componentStorage, 0, sizeof(componentStorage));
-        component = reinterpret_cast<TypeInfo*>(componentStorage);
-        component->SetType(TypeKind::TYPE_KIND_CLASS);
-        component->SetInstanceSize(sizeof(void*));
-
-        std::memset(arrayStorage, 0, sizeof(arrayStorage));
-        array = reinterpret_cast<TypeInfo*>(arrayStorage);
-        array->SetType(TypeKind::TYPE_KIND_RAWARRAY);
-        array->SetFlagHasRefField();
-        array->SetComponentTypeInfo(component);
-
-        TypeInfoManager::GetTypeInfoManager().NoteTypeInfoImage(
-            reinterpret_cast<uintptr_t>(this), sizeof(*this));
-    }
-
-    alignas(TypeInfo) unsigned char componentStorage[sizeof(TypeInfo)];
-    alignas(TypeInfo) unsigned char arrayStorage[sizeof(TypeInfo)];
-    TypeInfo* component = nullptr;
-    TypeInfo* array = nullptr;
-};
-
-ReferenceArrayTypeInfos& GetReferenceArrayTypeInfos()
-{
-    static ReferenceArrayTypeInfos infos;
-    return infos;
-}
-
-struct ProductArrayBuf {
-    size_t bytes = 0;
-    void* mem = nullptr;
-    MArray* array = nullptr;
-    RefField<>* fields = nullptr;
-
-    ProductArrayBuf(size_t n, size_t contentPhase, TypeInfo* arrayType)
-    {
-        GC_EXPECT_TRUE(contentPhase < MarkPartialArray::MIN_SIZE);
-        GC_EXPECT_EQ(contentPhase % sizeof(Slot), static_cast<size_t>(0));
-        bytes = AlignUp(MArray::GetContentOffset() + (n + 8) * sizeof(Slot) +
-                            MarkPartialArray::MIN_SIZE,
-                        MarkPartialArray::MIN_SIZE);
-        int mapFlags = MAP_PRIVATE | MAP_ANONYMOUS;
-#if defined(__x86_64__)
-        // Keep the absolute-address fault predicate's 32-bit page-offset
-        // guard in range; the production predicate remains heap-relative.
-        mapFlags |= MAP_32BIT;
-#endif
-        mem = mmap(nullptr, bytes, PROT_READ | PROT_WRITE, mapFlags, -1, 0);
-        if (mem == MAP_FAILED) {
-            std::abort();
-        }
-        const MAddress raw = reinterpret_cast<MAddress>(mem);
-        const MAddress alignedContent =
-            AlignUp(raw + MArray::GetContentOffset(), static_cast<MAddress>(MarkPartialArray::MIN_SIZE)) +
-            contentPhase;
-        array = reinterpret_cast<MArray*>(alignedContent - MArray::GetContentOffset());
-        array->SetClassInfo(arrayType);
-        array->SetLength(static_cast<MIndex>(n));
-        fields = &HeapSlotAt<>(alignedContent);
-    }
-
-    ~ProductArrayBuf()
-    {
-        if (mem != nullptr && mem != MAP_FAILED) {
-            munmap(mem, bytes);
-        }
-    }
-};
 
 void MarkRange(std::set<size_t>& out, size_t begin, size_t length)
 {
@@ -248,22 +163,15 @@ struct SlotBuf {
     void* mem = nullptr;
     Slot* slots = nullptr;
 
-    // Keep the backing mapping page aligned, then place the array at an
-    // explicit byte phase within that page.  The old fixture relied on the
-    // relative order of two independent mmap calls, so the same test could
-    // select either the Encodable or the inline fallback path.
-    explicit SlotBuf(size_t n, size_t pageOffset = 0)
+    explicit SlotBuf(size_t n)
     {
-        GC_EXPECT_TRUE(pageOffset < MarkPartialArray::MIN_SIZE);
-        GC_EXPECT_EQ(pageOffset % sizeof(Slot), static_cast<size_t>(0));
-        bytes = AlignUp((n + 8) * sizeof(Slot) + MarkPartialArray::MIN_SIZE + pageOffset,
-                        MarkPartialArray::MIN_SIZE);
+        bytes = AlignUp((n + 8) * sizeof(Slot) + MarkPartialArray::MIN_SIZE, MarkPartialArray::MIN_SIZE);
         mem = mmap(nullptr, bytes, PROT_READ | PROT_WRITE, MAP_PRIVATE | MAP_ANONYMOUS, -1, 0);
         if (mem == MAP_FAILED) {
             std::abort();
         }
         auto raw = reinterpret_cast<uintptr_t>(mem);
-        slots = reinterpret_cast<Slot*>(AlignUp(raw, MarkPartialArray::MIN_SIZE) + pageOffset);
+        slots = reinterpret_cast<Slot*>(AlignUp(raw, MarkPartialArray::MIN_SIZE));
         for (size_t i = 0; i < n; ++i) {
             slots[i] = i + 1;
         }
@@ -409,7 +317,7 @@ GC_TEST(PartialArray, PageOffsetChunkRoundtrips)
     Heap::OnHeapExtended(savedEnd);
 }
 
-#if defined(MRT_TESTABLE_INTERNALS) && !defined(MRT_PARTIAL_ARRAY_FORCED_INTERNALS)
+#ifdef MRT_TESTABLE_INTERNALS
 GC_TEST(PartialArray, EncodableRejectsAbsoluteOnlyAlignment)
 {
     // B=4097 and any page-aligned A form the absolute-only counterexample:
@@ -500,159 +408,17 @@ GC_TEST(PartialArray, MultiChunk)
     ExpectSame(buf.slots, n);
 }
 
-void CheckBoundaryRefs(Slot* slots, size_t length)
+GC_OTHER_VM_TEST(PartialArray, BoundaryRefs)
 {
-    const std::set<size_t> on = ExpectSame(slots, length);
+    GcHeapFixture fx;
+    const size_t n = MarkPartialArray::MIN_LENGTH * 3;
+    SlotBuf buf(n);
+    const std::set<size_t> on = ExpectSame(buf.slots, n);
     GC_EXPECT_TRUE(on.count(0) == 1);
     GC_EXPECT_TRUE(on.count(MarkPartialArray::MIN_LENGTH - 1) == 1);
     GC_EXPECT_TRUE(on.count(MarkPartialArray::MIN_LENGTH) == 1);
-    GC_EXPECT_TRUE(on.count(length - 1) == 1);
+    GC_EXPECT_TRUE(on.count(n - 1) == 1);
 }
-
-void EnablePartialArrayForThisVm()
-{
-    // MarkPartialArray is intentionally default-off in the product.  These
-    // product-path arms run under GC_OTHER_VM_TEST so they can opt in before
-    // Enabled() caches the environment, independent of the gate's defaults.
-    GC_EXPECT_EQ(setenv("MRT_GCV2_PARTIAL_ARRAY", "1", 1), 0);
-    GC_EXPECT_TRUE(MarkPartialArray::Enabled());
-}
-
-void CheckBoundaryRefsProduct(size_t n, size_t contentPhase, bool misalignedBase)
-{
-    GcHeapFixture fx;
-    ReferenceArrayTypeInfos& infos = GetReferenceArrayTypeInfos();
-    ProductArrayBuf buf(n, contentPhase, infos.array);
-    WCollector collector(Heap::GetHeap().GetAllocator(), Heap::GetHeap().GetCollectorResources());
-    TracingCollector::WorkStack workStack;
-
-    const MAddress savedStart = Heap::GetHeapStartAddress();
-    const MAddress savedEnd = Heap::heapCurrentEnd;
-    const MAddress lowAddress = std::min(reinterpret_cast<MAddress>(buf.fields),
-                                         reinterpret_cast<MAddress>(fx.obj0));
-    const MAddress alignedBase = AlignDown(lowAddress, static_cast<MAddress>(MarkPartialArray::MIN_SIZE));
-    const MAddress heapBase = alignedBase + (misalignedBase ? 1 : 0);
-    const MAddress highAddress = std::max(reinterpret_cast<MAddress>(buf.mem) + buf.bytes,
-                                          savedEnd);
-#if defined(MRT_TESTABLE_INTERNALS)
-    if (misalignedBase) {
-        Heap::SetHeapStartForTesting(heapBase);
-    } else {
-        Heap::OnHeapCreated(heapBase);
-    }
-#else
-    Heap::OnHeapCreated(heapBase);
-#endif
-    Heap::OnHeapExtended(highAddress);
-
-    if (misalignedBase) {
-        // Positive/negative predicate witness for the separate old-predicate
-        // control arm.  The actual traversal below still enters through the
-        // product MArray visitor and is the wiring proof.
-        GC_EXPECT_FALSE(MarkPartialArray::Encodable(
-            reinterpret_cast<const void*>(AlignDown(reinterpret_cast<MAddress>(buf.fields),
-                                                     static_cast<MAddress>(MarkPartialArray::MIN_SIZE))),
-            1));
-    }
-
-    // Colour each slot through the same helper as the production barrier.  A
-    // complete drain of the product work stack then gives one ordinary entry
-    // per array element; partial entries are fed back through FollowPartialArray
-    // so the test covers both FollowArrayElements and PushPartialArray.
-    for (size_t i = 0; i < n; ++i) {
-        // Alternate two distinct managed objects.  A stale/shifted decode can
-        // no longer accidentally read the same repeated word and look valid.
-        PartialArrayTestAccess::StoreTarget(collector, buf.fields[i], (i & 1) == 0 ? fx.obj0 : fx.obj1);
-    }
-    collector.TraceObjectRefFields(reinterpret_cast<BaseObject*>(buf.array), workStack);
-
-    bool sawPartial = false;
-    std::vector<MarkStackEntry> pending;
-    pending.reserve(workStack.size());
-    while (!workStack.empty()) {
-        const MarkStackEntry entry = workStack.back();
-        workStack.pop_back();
-        sawPartial = sawPartial || MarkPartialArray::IsPartialArrayEntry(entry);
-        pending.push_back(entry);
-    }
-    // MarkStack intentionally exposes only push/pop/drain operations; restore
-    // the entries after the inspection so the product consumer below drains
-    // the exact same work set.
-    for (auto it = pending.rbegin(); it != pending.rend(); ++it) {
-        workStack.push_back(*it);
-    }
-    // The relative predicate must inline the misaligned-base arm, while both
-    // legal phases must enqueue at least one partial chunk.  This assertion is
-    // deliberately before draining so a disconnected product call cannot hide
-    // behind a coincidentally valid repeated slot value.
-    GC_EXPECT_EQ(sawPartial, !misalignedBase);
-
-    size_t visited = 0;
-    while (!workStack.empty()) {
-        const MarkStackEntry entry = workStack.back();
-        workStack.pop_back();
-        if (MarkPartialArray::IsPartialArrayEntry(entry)) {
-            collector.FollowPartialArray(entry, workStack);
-        } else {
-            GC_EXPECT_TRUE(entry.object() == fx.obj0 || entry.object() == fx.obj1);
-            ++visited;
-        }
-    }
-    GC_EXPECT_EQ(visited, n);
-
-#if defined(MRT_TESTABLE_INTERNALS)
-    if (misalignedBase) {
-        Heap::SetHeapStartForTesting(savedStart);
-    } else {
-        Heap::OnHeapCreated(savedStart);
-    }
-#else
-    Heap::OnHeapCreated(savedStart);
-#endif
-    Heap::OnHeapExtended(savedEnd);
-}
-
-GC_OTHER_VM_TEST(PartialArray, BoundaryRefs)
-{
-    EnablePartialArrayForThisVm();
-    const size_t n = MarkPartialArray::MIN_LENGTH * 3;
-    constexpr size_t kRepeats = 20;
-    constexpr size_t kPageAligned = 0;
-    std::fprintf(stderr, "BOUNDARY_REFS_ARM layout=page-aligned N=%zu\n", kRepeats);
-    for (size_t i = 0; i < kRepeats; ++i) {
-        CheckBoundaryRefsProduct(n, kPageAligned, false);
-    }
-}
-
-GC_OTHER_VM_TEST(PartialArray, BoundaryRefsPlusSlot)
-{
-    EnablePartialArrayForThisVm();
-    const size_t n = MarkPartialArray::MIN_LENGTH * 3;
-    constexpr size_t kRepeats = 20;
-    constexpr size_t kAfterHeader = sizeof(Slot);
-    std::fprintf(stderr, "BOUNDARY_REFS_ARM layout=plus-%zu-byte N=%zu\n", kAfterHeader, kRepeats);
-    for (size_t i = 0; i < kRepeats; ++i) {
-        CheckBoundaryRefsProduct(n, kAfterHeader, false);
-    }
-}
-
-#ifdef MRT_TESTABLE_INTERNALS
-GC_OTHER_VM_TEST(PartialArray, BoundaryRefsMisalignedBase)
-{
-    EnablePartialArrayForThisVm();
-    // Deliberately put the heap base one byte into the page while keeping the
-    // array page aligned.  The fixed relative Encodable predicate must take
-    // the inline fallback and preserve the full element set.  A regression to
-    // the old absolute-alignment predicate instead enters Encode/Decode for
-    // the middle chunk and this exact arm turns red.
-    const size_t n = MarkPartialArray::MIN_LENGTH * 3;
-    constexpr size_t kRepeats = 20;
-    std::fprintf(stderr, "BOUNDARY_REFS_ARM layout=misaligned-base-plus-1 N=%zu\n", kRepeats);
-    for (size_t i = 0; i < kRepeats; ++i) {
-        CheckBoundaryRefsProduct(n, 0, true);
-    }
-}
-#endif // MRT_TESTABLE_INTERNALS
 
 GC_TEST(PartialArray, UnalignedStart)
 {

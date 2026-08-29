@@ -4,10 +4,7 @@
 //
 // See https://cangjie-lang.cn/pages/LICENSE for license information.
 
-// cjpmnull3: NoteAttempt / NoteRetainOk / NoteSelfCopy / atexit DumpSummary restored
-// (PermWhoAdmit.cpp shape). Enabled() is still kMutatorSelfRelocate — counters do not
-// turn the leg off. A zero attempt with funnel_mut>0 would mean the remap path never
-// reached retain; a non-zero retain is the positive that self-relocate is live.
+// Mutator self-relocation follows the ZGC retain/copy/wait protocol below.
 #ifndef MRT_MUTATOR_RELOCATE_H
 #define MRT_MUTATOR_RELOCATE_H
 
@@ -22,7 +19,7 @@ class RegionInfo;
 // the from-page pin that path depends on (ZForwarding::retain_page / release_page /
 // detach_page, zForwarding.cpp:86-108 / :134-169 / :171-181).
 //
-// What ZGC does, and what we did instead:
+// ZGC's corresponding path:
 //
 //   ZRelocate::relocate_object(forwarding, from_addr):
 //       to = forwarding->find(from_addr, &cursor);      // pure table lookup
@@ -35,24 +32,9 @@ class RegionInfo;
 //       }
 //       return forward_object(forwarding, from_addr);
 //
-// WCollector::relocate_or_remap_object (WCollector.h) reaches the same point -- a route
-// exists, the object is not FORWARDED yet -- and has no "copy it yourself" leg at all. It
-// either hands the mutator the *from* pointer back (the `!IsLockedState()` arm) or spins in
-// WaitRoutedTipReady for up to kMaxSpins=4096 and then takes a FATAL (WCollector.cpp:8816,
-// :8885). This unit adds the missing leg, behind a gate.
-//
-// The two halves are separately observable because they answer different questions:
-//
-//   MRT_GCV2_MUTATOR_RELOCATE=0   Off-switch. Default on (zconc / ZGC relocate_object).
-//                                 Drain is unconditional via ZForwardingLife.
-//   MRT_GCV2_MUTRELOC_DRAIN=1     The pin's drain half only (detach_page), with no mutator
-//                                 relocation. Lets the drain be measured on its own.
-//   MRT_GCV2_MUTRELOC_STATS=1     Counters only, no behaviour change. This is what makes the
-//                                 off-arm readable: the wait-leg counters are gated on this
-//                                 rather than on the feature, so "how often did we fall into
-//                                 the 4096-spin wait" is measurable with the feature OFF and
-//                                 the two arms can be compared. A feature-gated counter would
-//                                 read 0 in the off arm for the trivial reason.
+// WCollector::relocate_or_remap_object reaches the same point and must take
+// these same three exits. Correctness is unconditional; counters only observe
+// which exit supplied the forwarding receipt.
 //
 // The pin is NOT a new mechanism. RegionInfo::metadata.rwLock already is ZGC's _ref_count and
 // _ref_lock in one object: a read lock is a retain (many holders, each visible in lockCount),
@@ -63,27 +45,13 @@ class RegionInfo;
 // and TakeRegion's garbage reuse calls ClearUnits with no lock held at all.
 namespace MutatorRelocate {
 
-// Compile-time on. zRelocate.cpp:382-410: mutator copies on the spot; no MRT_GCV2_* gate.
-constexpr bool kMutatorSelfRelocate = true;
 // zRelocate.cpp:382-416: find() miss after retain_page failed means the worker
-// holds the page and is copying — wait, do not keep from. Keep-from is only the
-// VisitLive hole: page already published and the table still has no entry.
-// ANALYSIS-crashoracle H1 / LEAD 0819-12:2x: (void)retainRefused handed out a
-// naked from while ClearUnits ran on the same page.
-constexpr bool kUnpublishedMeansKeepFrom = true;
-constexpr int kInflightWaitSpins = 4096;
-// oraclecut §4 / cjpmnull5: movable ghost from is never handed out.
-// !regionPublished ⇒ bounded wait for the region-level publish
-// (FORWARDED / COMPACTED / kept). Region publish is reached every cycle;
-// this is not the object-level empty wait 47595a33 deleted.
-// Flip to false for gate ④ (crash returns in 1s).
-constexpr bool kWaitRegionPublish = true;
-constexpr int kRegionWaitSpins = 4096;
-
+// holds the page and is copying — wait. A published page without an object
+// receipt violates the relocation invariant; there is no from-address answer.
 enum class UnpublishedAnswer : uint32_t {
     UseTo = 0,
-    KeepFrom = 1,
-    Wait = 2,
+    Wait = 1,
+    InvariantFailure = 2,
 };
 
 inline UnpublishedAnswer AnswerUnpublished(bool tableHit, bool regionPublished, bool retainRefused)
@@ -92,21 +60,14 @@ inline UnpublishedAnswer AnswerUnpublished(bool tableHit, bool regionPublished, 
         return UnpublishedAnswer::UseTo;
     }
     if (regionPublished) {
-        return UnpublishedAnswer::KeepFrom;
+        return UnpublishedAnswer::InvariantFailure;
     }
     // !published: region has not reached FORWARDED/COMPACTED/kept this cycle.
-    // Wait for that region-level publish (oraclecut §4). retainRefused is
-    // one reason the page is unpublished (worker holds it); the wait covers
-    // that and every other unpublished state. After publish, a table miss
-    // is the VisitLive hole and KeepFrom is legal.
-    if constexpr (kWaitRegionPublish) {
-        (void)retainRefused;
-        return UnpublishedAnswer::Wait;
-    }
-    if (retainRefused) {
-        return UnpublishedAnswer::Wait;
-    }
-    return UnpublishedAnswer::KeepFrom;
+    // zRelocate.cpp:382-410 retains and completes the copy, or waits for the
+    // current copier. retainRefused is one reason to wait, not an alternative
+    // result.
+    (void)retainRefused;
+    return UnpublishedAnswer::Wait;
 }
 
 // ForwardObjectImpl LOCKED wait (WCollector.cpp). zRelocate.cpp:386-389 find() hit
@@ -117,8 +78,8 @@ inline UnpublishedAnswer AnswerUnpublished(bool tableHit, bool regionPublished, 
 // is the same exit as a published region: leftover LOCKED is not a live copier.
 enum class LockedWaiterAnswer : uint32_t {
     UseTo = 0,
-    UsePlanned = 1,
-    Yield = 2,
+    Yield = 1,
+    InvariantFailure = 2,
 };
 
 inline LockedWaiterAnswer AnswerLockedWaiter(bool tableHit, bool pagePublished)
@@ -127,7 +88,7 @@ inline LockedWaiterAnswer AnswerLockedWaiter(bool tableHit, bool pagePublished)
         return LockedWaiterAnswer::UseTo;
     }
     if (pagePublished) {
-        return LockedWaiterAnswer::UsePlanned;
+        return LockedWaiterAnswer::InvariantFailure;
     }
     return LockedWaiterAnswer::Yield;
 }
@@ -151,15 +112,8 @@ enum class Fallback : uint32_t {
     FALLBACK_COUNT = 3
 };
 
-// Relocate leg on. Implies DrainEnabled().
-bool Enabled();
-// Drain half on (implied by Enabled(), or standalone via MRT_GCV2_MUTRELOC_DRAIN=1).
-bool DrainEnabled();
-// Counters on. True whenever either half is on, or standalone via MRT_GCV2_MUTRELOC_STATS=1.
+// Counters observe the unconditional relocate path.
 bool StatsOn();
-// Positive control (MRT_GCV2_MUTRELOC_INJECT=1). See MutatorRelocate.cpp for what it forces
-// and why attempts=0 on its own cannot be read as either success or failure.
-bool InjectOn();
 
 // --- relocate leg ---------------------------------------------------------------------
 void NoteAttempt();
@@ -200,28 +154,16 @@ void NoteSelfCopy(size_t bytes, Role role);
 // the per-role self_copies counts are a share of.
 void NoteAnyCopy(Role role);
 
-// Every entry into WCollector::relocate_or_remap_object, bucketed by role.
-//
-// This is the control for the role predicate itself. "role=mutator is absent from the copy
-// census" has two readings -- no mutator ever relocated, or IsGcThread/IsRuntimeThread are
-// not discriminating here -- and they call for opposite conclusions. The remap funnel is
-// entered from make_load_good inside the six barriers, which user code runs, so a working
-// predicate has to produce a non-zero mutator count here. If this census is also gc-only,
-// the copy census says nothing about roles and must not be read as if it did.
-void NoteFunnelCall(Role role);
-
 // --- the leg we are trying to displace, counted in BOTH arms (gate: StatsOn) ------------
 void NoteWaitEnter();   // entered WaitRoutedTipReady
-void NoteWaitGiveUp();  // left it without a to-version (spin bound hit, or copy not started)
+void NoteWaitGiveUp();  // completed without a receipt and entered fail-closed handling
 void NoteWaitReceipt(); // left it with a to-version
-void NoteWaitFatal();   // reached the permanentHole CHECK_DETAIL -- the 4096-spin FATAL leg
+void NoteWaitFatal();   // reached the permanentHole CHECK_DETAIL
 // Region-level publish wait (oraclecut §4). Distinct from the retain-refused
 // object-FORWARDED spin: this one waits for FORWARDED/COMPACTED/kept.
 void NoteRegionWaitEnter();
 void NoteRegionWaitGot();            // published and table hit
-void NoteRegionWaitPublishedMiss();  // published, table miss → legal keep-from
-void NoteRegionWaitTimeout();        // spin bound, keep-from
-void NoteRegionWaitSpins(int spins);
+void NoteRegionWaitPublishedMiss();  // published, table miss -> invariant failure
 
 // --- pin / drain ------------------------------------------------------------------------
 void NoteDrain(Retire site, uint64_t spunNanos, bool contended);

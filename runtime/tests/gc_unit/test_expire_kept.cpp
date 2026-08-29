@@ -83,11 +83,11 @@ GC_TEST(IkeKeep, ExpireClearsKeptButLeavesForwarded)
     GC_EXPECT_TRUE(IkeKeepTestAccess::OnFrom(manager, forwarded));
 }
 
-GC_TEST(ExemptLife, DropRetiredCoveringRemovesFindTo)
+GC_TEST(ExemptLife, CoverageClosureRemovesRetiredFindTo)
 {
     // After-copy Exempt ClearEntries unlinks into the retired generation.
-    // FindTo still scans it; the next install must drop covering tables
-    // (zRelocationSet.cpp:91-96). Addresses below any live heap base so
+    // FindTo still scans it until the explicit root-remap coverage closure.
+    // Addresses below any live heap base so
     // GetEntries cannot hit a previous fixture's map.
     constexpr MAddress kStart = 0x10000;
     constexpr size_t kSize = 0x1000;
@@ -97,9 +97,9 @@ GC_TEST(ExemptLife, DropRetiredCoveringRemovesFindTo)
     const MAddress stale = 0x2000;
     GC_EXPECT_EQ(tab->insert(from, stale), stale);
     ForwardingTable::Retire(tab);
-    GC_EXPECT_EQ(ForwardingTable::FindTo(from), stale);
-    ForwardingTable::DropRetiredCovering(kStart, kSize);
-    GC_EXPECT_EQ(ForwardingTable::FindTo(from), static_cast<MAddress>(0));
+    GC_EXPECT_EQ(ForwardingTable::FindRetiredTo(from), stale);
+    ForwardingTable::ReclaimRetired("gc-unit-explicit-coverage");
+    GC_EXPECT_EQ(ForwardingTable::FindRetiredTo(from), static_cast<MAddress>(0));
 }
 
 // fwdlifetime: once Dispel has removed membership/ghost, the bad-colour
@@ -118,6 +118,6 @@ GC_TEST(ExemptLife, RetiredOnlyLookupSurvivesGhostLoss)
     ForwardingTable::Retire(tab);
 
     GC_EXPECT_EQ(ForwardingTable::FindRetiredTo(from), to);
-    ForwardingTable::DropRetiredCovering(kStart, kSize);
+    ForwardingTable::ReclaimRetired("gc-unit-explicit-coverage");
     GC_EXPECT_EQ(ForwardingTable::FindRetiredTo(from), static_cast<MAddress>(0));
 }

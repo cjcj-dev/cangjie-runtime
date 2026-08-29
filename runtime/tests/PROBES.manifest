@@ -46,10 +46,6 @@ run_string_dedup_product.sh               manual     rebuilt std.core module + p
 
 stack_watermark_harness.cpp               manual     harness for run_stack_watermark_probe.sh
 stack_exposure_harness.cpp                manual     harness for run_stack_exposure_probe.sh
-stack_exposure_eh_entry.cj                manual     built runtime SO; unwind EH processOne/visitorHits ELF (impl_zgc_unwind)
-stack_exposure_eh_deep.cj                 manual     built runtime SO; deep-stack visitorHits ELF
-stack_exposure_gc_entry.cj                manual     built runtime SO; GC stack-exposure ELF
-stack_exposure_seed.cpp                   manual     seed TU for stack_exposure_* ELF; not a configure probe
 stack_grow_harness.cpp                    manual     harness for run_stack_grow_probe.sh
 object_size_guard_harness.cpp             manual     harness for run_object_size_guard_probe.sh
 mutator_lock_liveness_harness.cpp         manual     harness for run_mutator_lock_liveness_probe.sh

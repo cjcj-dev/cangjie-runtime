@@ -52,7 +52,6 @@
 #include "Heap/Verify/NwDropAudit.h"
 #include "Heap/Verify/GarbRegionDiag.h"
 #include "Heap/Verify/Stw2CurrentAudit.h"
-#include "Heap/Verify/NullRouteCaller.h"
 #include "Heap/Verify/SurvNodeDiag.h"
 #include "Heap/Collector/PromotedRegionDomain.h"
 #include "Heap/Verify/CsetEmptyWho.h"
@@ -76,6 +75,8 @@ void WCollector::PostTrace()
     TransitionToGCPhase(GC_PHASE_POST_TRACE, true);
     RegionSpace& space = reinterpret_cast<RegionSpace&>(theAllocator);
     space.GetRegionManager().HandleTraceRegions();
+    // clear weakRef List, set the referent as null
+    WeakRefBuffer::Instance().ClearWeakRefBuffer();
     // clear satb buffer when gc finish tracing.
     SatbBuffer::Instance().ClearBuffer();
     // reclaim large objects immediately after tracing is done.
@@ -83,10 +84,9 @@ void WCollector::PostTrace()
     CollectLargeGarbage();
     CollectPinnedGarbage();
     RefineFromSpace();
-    // F3: dispel previous ghost from-regions next; kill one-gen-stale tags first so
-    // IsOldPointer cannot outlive FindToVersion's ghost gate (D phase).
-    // Anchor main 9ad991c4e8660c26d6bfe575f6425e1b227bdf94.
-    InvalidateOldTaggedRefsBeforeDispel();
+    // Root/remset remapping is the pre-flip coverage authority; ZGC does not
+    // scan every heap field before retiring a relocation set
+    // (zGeneration.cpp:1490-1523).
     fwdTable.PrepareForwardTable<Generation::Old>();
     // OPTION_2 mark-epoch release: TRACE+CLEAR_SATB done; publish quarantined post-dispel
     // units (from this PrepareForwardTable and any prior minor) to dirty for reuse.

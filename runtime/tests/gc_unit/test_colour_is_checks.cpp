@@ -299,6 +299,16 @@ GC_TEST(ColourIsChecks, RawNullIsGoodOrNullAndNeverBad)
     GC_EXPECT_TRUE(!ColourPredicates::is_store_bad(0, m.storeBad));
 }
 
+GC_TEST(ColourIsChecks, ExportedLoadGoodIsCurrentOneHotComplement)
+{
+    const uintptr_t loadGood = static_cast<uintptr_t>(::g_cjLoadGoodMask);
+    const uintptr_t loadBad = static_cast<uintptr_t>(::g_cjLoadBadMask);
+    GC_EXPECT_NE(loadGood, uintptr_t(0));
+    GC_EXPECT_EQ(loadGood & (loadGood - 1), uintptr_t(0));
+    GC_EXPECT_EQ(loadGood, REMAP_COLOUR_MASK & ~loadBad);
+    GC_EXPECT_EQ(loadGood & loadBad, uintptr_t(0));
+}
+
 // The four remap values are a bijection with the (young epoch, old epoch) pair, and the colour
 // currently handed out is the intersection of the two masks.  If that ever stopped holding, a stale
 // colour could sit in the accepted set and every load-good test above would agree with a broken

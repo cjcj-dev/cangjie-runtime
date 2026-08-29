@@ -8,13 +8,12 @@
 #ifndef MRT_FREE_REGION_MANAGER_H
 #define MRT_FREE_REGION_MANAGER_H
 
-#include <cstdint>
 #include <vector>
 
 #include "CartesianTree.h"
 #include "RegionInfo.h"
-#include "Heap/Collector/Uncommitter.h"
 #include "Common/ScopedObjectAccess.h"
+#include "Heap/Collector/Uncommitter.h"
 
 namespace MapleRuntime {
 class RegionManager;
@@ -180,9 +179,7 @@ public:
             }
             UnitIndex idx = node->GetIndex();
             UnitCount num = node->GetCount();
-            CHECK_DETAIL(markQuarantineTree.TakeUnits(num, idx, false),
-                         "tid %d: failed to promote mark-quarantine units[%u+%u, %u)", GetTid(), idx, num,
-                         idx + num);
+            markQuarantineTree.ReleaseRootNode();
             if (UNLIKELY(!dirtyUnitTree.MergeInsert(idx, num, true))) {
                 LOG(RTLOG_FATAL, "tid %d: failed to promote mark-quarantine units [%u+%u, %u) to dirty",
                     GetTid(), idx, num, idx + num);
@@ -198,9 +195,6 @@ public:
         return markQuarantineTree.GetTotalCount();
     }
 
-    // Physical uncommit only. Live forwarding keeps the extent in the released
-    // allocation cache (zPageCache analogue); madvise is deferred until both
-    // refcount and live carrier are gone.
     static bool ExtentReadyForReleasedCache(RegionInfo* region)
     {
         if (region == nullptr) {
@@ -213,7 +207,14 @@ public:
                                                 region->GetRegionSizeForDetachCheck());
     }
 
-    void AddReleaseUnits(UnitIndex idx, UnitCount num);
+    void AddReleaseUnits(UnitIndex idx, UnitCount num)
+    {
+        ScopedEnterSaferegion enterSaferegion(true);
+        std::lock_guard<std::mutex> lg(releasedUnitTreeMutex);
+        if (UNLIKELY(!releasedUnitTree.MergeInsert(idx, num, true))) {
+            LOG(RTLOG_FATAL, "tid %d: failed to add release units [%u+%u, %u)", GetTid(), idx, num, idx + num);
+        }
+    }
 
     UnitCount GetDirtyUnitCount() const
     {

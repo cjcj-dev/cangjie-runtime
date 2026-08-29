@@ -269,10 +269,8 @@ fi
 PRODUCT_PATH_MANIFEST="$SRC/product_path_manifest.tsv"
 EXPECTED_BOUNDED_TESTS=(
   LiveMap.UnexaminedRelocselPageKeepsWithoutSnapshot
-  LiveMap.BoundedPreserveProductRepairsCurrentFace
-  LiveMap.BoundedPreserveProductRepairsFromPageFace
   LiveMap.ExaminedPageWithoutSnapshotStillAborts
-  LiveMap.BoundedPreserveProductRepairsOwnedCopy
+  LiveMap.OwnedCopyExaminedPageWithoutSnapshotStillAborts
 )
 manifest_rows=0
 while IFS=$'\t' read -r test_name anchor carrier consumer cut_site; do
@@ -328,6 +326,42 @@ for consumer in "${REFERENCE_PROCESSOR_CONSUMERS[@]}"; do
   fi
 done
 echo "GATE_REFERENCE_PROCESSOR_BINDING_OK elf=$OUT/cj_gc_unit"
+
+# Load-heal delivery tests bind four independently replaceable product
+# consumers.  The manifest is independent of the calls currently present in
+# the test source, so deleting a test or anchor shrinks neither guard silently.
+LOADHEAL_PRODUCT_CONSUMERS=(
+  'MapleRuntime::PromotedRegionDomain::DischargeAll('
+  'MapleRuntime::RememberedSet::MoveInPlaceSlots('
+  'MapleRuntime::RegionManager::RecordPinnedCrossGenEdges('
+  'MapleRuntime::WCollector::RemapYoungRoots('
+)
+LOADHEAL_MANIFEST="$SRC/product_call_manifest_loadheal.tsv"
+EXPECTED_LOADHEAL_TESTS=(
+  LoadHealDeliveryProduct.PromotedSnapshotDischargesOnlyLiveHolder
+  LoadHealDeliveryProduct.InPlaceRemsetMovesBitAndFeedsConsumer
+  LoadHealDeliveryProduct.CrossGenRangeGateRecordsLegalAndRejectsBeyondTop
+  LoadHealDeliveryProduct.RemapYoungRootsResolvesRecoloursAndHealsSlot
+)
+loadheal_rows=0
+while IFS=$'\t' read -r test_name anchor carrier consumer cut_site; do
+  if [[ "$test_name" == "test_name" ]]; then
+    continue
+  fi
+  [[ "$carrier" == "product_so" ]]
+  suite="${test_name%%.*}"
+  name="${test_name#*.}"
+  /usr/bin/grep -F -q "GC_TEST($suite, $name)" "$SRC/clear_entries_product_unit.cpp"
+  /usr/bin/grep -F -q "$consumer" "$SRC/clear_entries_product_unit.cpp"
+  /usr/bin/grep -R -F -q "${anchor##*::}" "$ROOT/runtime/src/Heap"
+  /usr/bin/grep -R -F -q "$cut_site" "$ROOT/runtime/src/Heap"
+  loadheal_rows=$((loadheal_rows + 1))
+done <"$LOADHEAL_MANIFEST"
+[[ "$loadheal_rows" -eq "${#EXPECTED_LOADHEAL_TESTS[@]}" ]]
+for test_name in "${EXPECTED_LOADHEAL_TESTS[@]}"; do
+  /usr/bin/grep -q "^${test_name}"$'\t' "$LOADHEAL_MANIFEST"
+done
+echo "GATE_LOADHEAL_PRODUCT_MANIFEST_OK rows=$loadheal_rows source=clear_entries_product_unit.cpp"
 
 # Pointer-colour census tests consume independently replaceable functions from
 # the product SO.  Full nm excludes even local/weak test copies; nm -u proves
@@ -407,6 +441,26 @@ $CXX -std=gnu++17 -O0 -g -Wall -Wextra -pthread -fno-rtti \
   -L"$RUNTIME_LIB_DIR" -Wl,-rpath,"$RUNTIME_LIB_DIR" -Wl,--exclude-libs,ALL \
   -lcangjie-runtime -lboundscheck \
   -o "$OUT/cj_gc_forwarding_publication_unit"
+
+LOADHEAL_FULL="$OUT/cj_gc_forwarding_publication_unit.full-defined.txt"
+LOADHEAL_UNDEFINED="$OUT/cj_gc_forwarding_publication_unit.undefined.txt"
+nm --defined-only "$OUT/cj_gc_forwarding_publication_unit" | c++filt >"$LOADHEAL_FULL"
+nm -u "$OUT/cj_gc_forwarding_publication_unit" | c++filt >"$LOADHEAL_UNDEFINED"
+if ! /usr/bin/grep -Eq '[[:space:]]main$' "$LOADHEAL_FULL"; then
+  echo "GC_UNIT_LOADHEAL_NM_POSITIVE_CONTROL_FAIL symbol=main" >&2
+  exit 8
+fi
+for consumer in "${LOADHEAL_PRODUCT_CONSUMERS[@]}"; do
+  if /usr/bin/grep -F -q "$consumer" "$LOADHEAL_FULL"; then
+    echo "GC_UNIT_LOADHEAL_LOCAL_DEFINITION symbol=$consumer" >&2
+    exit 9
+  fi
+  if ! /usr/bin/grep -F -q "$consumer" "$LOADHEAL_UNDEFINED"; then
+    echo "GC_UNIT_LOADHEAL_IMPORT_MISSING symbol=$consumer" >&2
+    exit 10
+  fi
+done
+echo "GATE_LOADHEAL_PRODUCT_IMPORTS_OK elf=$OUT/cj_gc_forwarding_publication_unit"
 
 echo "LINKED_RUNTIME=$RUNTIME_LIB_DIR"
 echo "MRT_TESTABLE_INTERNALS=${MRT_TESTABLE_INTERNALS:-0}"

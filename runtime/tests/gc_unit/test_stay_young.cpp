@@ -49,6 +49,12 @@ GC_TEST(StayYoung, BelowThresholdDoesNotPromote)
     GC_EXPECT_TRUE(ShouldPromoteAge(2, 2));
 }
 
+GC_TEST(StayYoung, OldGenerationCannotRelocateYoungRegion)
+{
+    GC_EXPECT_TRUE(RegionManager::GenerationMayRelocateYoung(Generation::Young));
+    GC_EXPECT_FALSE(RegionManager::GenerationMayRelocateYoung(Generation::Old));
+}
+
 GC_TEST(StayYoung, BumpAgesAndKeepsYoung)
 {
     GcHeapFixture fx;

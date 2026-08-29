@@ -4,6 +4,7 @@
 //
 // See https://cangjie-lang.cn/pages/LICENSE for license information.
 
+#include <algorithm>
 #include "Heap/Barrier/RememberedSet.h"
 
 #include <cstdlib>
@@ -127,6 +128,97 @@ void RememberedSet::Record(MAddress fieldAddress, bool fromMutatorBarrier)
     std::lock_guard<std::mutex> guard(oracleLock);
     oracleRecords[buffer].insert(fieldAddress);
 #endif
+}
+
+size_t RememberedSet::TakeInPlaceSlots(MAddress start, MAddress end, std::vector<InPlaceSlot>& out)
+{
+    CheckInitialized();
+    if (start >= end) {
+        return 0;
+    }
+    CHECK_DETAIL(start >= heapStart && end <= heapStart + heapSize,
+                 "in-place remembered-set range [%#zx, %#zx) outside heap [%#zx, %#zx)", start, end,
+                 heapStart, heapStart + heapSize);
+    CHECK_DETAIL((start - heapStart) % kFieldBytes == 0 && (end - heapStart) % kFieldBytes == 0,
+                 "in-place remembered-set range [%#zx, %#zx) is not field-aligned", start, end);
+    size_t firstBit = (start - heapStart) / kFieldBytes;
+    size_t endBit = (end - heapStart) / kFieldBytes;
+    if (endBit > bitCount) {
+        endBit = bitCount;
+    }
+    if (firstBit >= endBit) {
+        return 0;
+    }
+    const size_t firstWord = firstBit / kBitsPerWord;
+    const size_t lastWord = (endBit - 1) / kBitsPerWord;
+    size_t taken = 0;
+    for (size_t buffer = 0; buffer < kBufferCount; ++buffer) {
+        for (size_t wordIdx = firstWord; wordIdx <= lastWord; ++wordIdx) {
+            const size_t first = wordIdx == firstWord ? firstBit % kBitsPerWord : 0;
+            const size_t last = wordIdx == lastWord ? (endBit - 1) % kBitsPerWord + 1 : kBitsPerWord;
+            const uint64_t lowMask = first == 0 ? 0 : (static_cast<uint64_t>(1) << first) - 1;
+            const uint64_t highMask = last == kBitsPerWord ? ~static_cast<uint64_t>(0)
+                                                           : (static_cast<uint64_t>(1) << last) - 1;
+            uint64_t word = bitmaps[buffer][wordIdx].load(std::memory_order_relaxed) &
+                (highMask & ~lowMask);
+            while (word != 0) {
+                const unsigned bitInWord = static_cast<unsigned>(__builtin_ctzll(word));
+                const size_t bit = wordIdx * kBitsPerWord + bitInWord;
+                out.push_back(InPlaceSlot{ heapStart + bit * kFieldBytes, static_cast<uint8_t>(buffer) });
+                ++taken;
+                word &= word - 1;
+            }
+        }
+    }
+    if (taken == 0) {
+        return 0;
+    }
+    // The copy walk below re-records what survives; anything left here would name the tail the
+    // compaction is about to zero-fill (zRelocate.cpp:1027-1035).
+    for (size_t buffer = 0; buffer < kBufferCount; ++buffer) {
+        (void)ClearRangeInBuffer(buffer, firstBit, endBit, nullptr);
+    }
+    std::stable_sort(out.begin(), out.end(),
+                     [](const InPlaceSlot& a, const InPlaceSlot& b) { return a.field < b.field; });
+    return taken;
+}
+
+size_t RememberedSet::MoveInPlaceSlots(const std::vector<InPlaceSlot>& taken, MAddress fromBase,
+                                       MAddress toBase, size_t size)
+{
+    if (taken.empty() || size < kFieldBytes) {
+        return 0;
+    }
+    CheckInitialized();
+    const MAddress fromEnd = fromBase + size;
+    auto it = std::lower_bound(taken.begin(), taken.end(), fromBase,
+                               [](const InPlaceSlot& slot, MAddress addr) { return slot.field < addr; });
+    size_t moved = 0;
+    for (; it != taken.end() && it->field < fromEnd; ++it) {
+        const MAddress toSlot = toBase + (it->field - fromBase);
+        if (toSlot < heapStart || toSlot >= heapStart + heapSize) {
+            continue;
+        }
+        const size_t buffer = it->face < kBufferCount ? it->face : 0;
+        const size_t bit = AddressToBit(toSlot);
+        const size_t word = bit / kBitsPerWord;
+        const uint64_t mask = static_cast<uint64_t>(1) << (bit % kBitsPerWord);
+        const uint64_t old = bitmaps[buffer][word].fetch_or(mask, std::memory_order_relaxed);
+        MarkWordDirty(buffer, word);
+        if ((old & mask) == 0) {
+            recordCounts[buffer].fetch_add(1, std::memory_order_relaxed);
+        }
+        ProbeReadRouteDiag::NoteRemsetEvent(it->field, ProbeReadRouteDiag::REMSET_TRANSFER_OUT,
+                                            static_cast<uint8_t>(buffer), toSlot);
+#if defined(MRT_REMSET_BITMAP_CROSSCHECK)
+        {
+            std::lock_guard<std::mutex> guard(oracleLock);
+            oracleRecords[buffer].insert(toSlot);
+        }
+#endif
+        ++moved;
+    }
+    return moved;
 }
 
 size_t RememberedSet::TransferObjectSlots(MAddress fromBase, MAddress toBase, size_t size)

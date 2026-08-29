@@ -10,6 +10,7 @@
 #include "gc_unittest.hpp"
 
 #if defined(__linux__)
+#include <csignal>
 #include <sys/wait.h>
 #include <unistd.h>
 #endif

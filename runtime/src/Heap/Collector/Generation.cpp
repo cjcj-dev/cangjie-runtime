@@ -51,7 +51,6 @@
 #include "Heap/Verify/DiagGate.h"
 #include "Heap/Verify/NwDropAudit.h"
 #include "Heap/Verify/GarbRegionDiag.h"
-#include "Heap/Verify/NullRouteCaller.h"
 #include "Heap/Verify/SurvNodeDiag.h"
 #include "Heap/Collector/PromotedRegionDomain.h"
 #include "Heap/Verify/CsetEmptyWho.h"
@@ -1098,9 +1097,6 @@ void WCollector::DoYoungGarbageCollection()
         gcStats.liveByAge[i] = tenuringIn.liveByAge[i];
     }
     gcStats.tenuringThreshold = ComputeTenuringThreshold(tenuringIn);
-    VLOG(REPORT, "[GCV2][pageage] threshold=%u live0=%zu live1=%zu garbage=%zu allocated=%zu",
-         gcStats.tenuringThreshold, tenuringIn.liveByAge[0], tenuringIn.liveByAge[1],
-         tenuringIn.youngGarbage, tenuringIn.youngAllocated);
     if (fullYoungScan) {
         // Run structural verify before mark-equivalence CHECK (may abort).
         VerifyRegionSets("after-young-mark");
@@ -1116,6 +1112,21 @@ void WCollector::DoYoungGarbageCollection()
         // minortime: ⑧ pre-evac finish (phase + weak/satb clear)
         MRT_PHASE_TIMER("young.pre_evac_clear");
         TransitionToGCPhase(GCPhase::GC_PHASE_POST_TRACE, true);
+        // tracecache: PrepareTrace above switched the TRACE-phase region caches on
+        // (RegionManager.h:726-727), and this is the young mark's post-trace point -- the
+        // same place WCollector::PostTrace drains them for a major (RelocationSet.cpp:73-78).
+        // Without this call the minor leaves the cache active forever, so every region a
+        // mutator fills afterwards is diverted off recentFullRegionList and is invisible to
+        // both collection-set builders (PrepareYoungGarbageCandidates and
+        // AssembleSmallGarbageCandidates) until the next major's PostTrace.  Measured on
+        // NW256: 3744 regions / 245 MB parked in the cache at the end of the first minor,
+        // so the first major's collection set was 23 MB of a 256 MB full heap.
+        // ZGC keeps every page in the page table and lets ZGeneration::select_relocation_set
+        // walk all of them, skipping only pages allocated during this very cycle
+        // (zGeneration.cpp:206-218; ZPage::is_relocatable, zPage.inline.hpp:184-186).  A page
+        // filled during marking is an ordinary candidate next cycle; it is never removed
+        // from the structure the selector iterates.
+        space.GetRegionManager().HandleTraceRegions();
         SatbBuffer::Instance().ClearBuffer();
     }
 

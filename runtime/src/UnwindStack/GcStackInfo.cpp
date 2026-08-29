@@ -12,8 +12,6 @@
 #include "Collector/TracingCollector.h"
 #include "Common/StackType.h"
 #include "Interpreter/InterpreterSpecific.h"
-#include "Mutator/Mutator.h"
-#include "UnwindStack/StackExposureHook.h"
 #include "UnwindStack/StackFrameCursor.h"
 
 namespace MapleRuntime {
@@ -246,9 +244,6 @@ void GCStackInfo::FillInStackTrace()
     while (!uwContext.frameInfo.mFrame.IsAnchorFrame(anchorFA)) {
         AnalyseAndSetFrameType(uwContext);
         stack.emplace_back(uwContext.frameInfo);
-        if (Mutator* mutator = Mutator::GetMutator()) {
-            StackExposureHook::OnIteration(*mutator, stack.size() - 1, stack.back());
-        }
         UnwindContext caller;
         lastFrameType = uwContext.frameInfo.GetFrameType();
 #ifndef _WIN64

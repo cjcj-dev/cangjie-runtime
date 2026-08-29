@@ -84,7 +84,6 @@ enum class HealSite : uint16_t {
     WCollectorEnumRawInteriorRoot,
     WCollectorEnumRawRoot,
     WCollectorEnumRefFieldRoot,
-    WCollectorFixOldTaggedDead,
     WCollectorFixOldTaggedLive,
     WCollectorFixOldTaggedNonHeap,
     WCollectorFixRootForwarded,
@@ -98,17 +97,12 @@ enum class HealSite : uint16_t {
     WCollectorMinorFixInteriorForward,
     WCollectorMinorFixInteriorPostForward,
     WCollectorMinorFixInteriorPreserve,
-    WCollectorMinorResolveDead,
     WCollectorMinorResolveLoadGoodForward,
     WCollectorMinorResolveOldForward,
-    WCollectorMinorResolveOldIdentity,
-    WCollectorNormalizeOldRoot,
     WCollectorNormalizeRawRoot,
     WCollectorPreserveRawInterior,
     WCollectorPreserveRootInterior,
     WCollectorRemapYoungRoots,
-    WCollectorRemsetResolveDead,
-    WCollectorResolveDeadRoot,
     WCollectorResolveRootLoadGoodForward,
     WCollectorResolveRootOldForward,
     WCollectorTraceRefField,
@@ -362,10 +356,9 @@ inline bool HealSlot(HeapSlot<isAtomic>& slot, zpointer expected, zpointer desir
 // carries two definitions of load-good (Collector.h:161-182) and the exit test has to be
 // the one this caller would itself have accepted.
 //
-// The loop is unbounded, exactly as ZGC's is. ZGC terminates on colour monotonicity;
-// ColourMask.h:202-206 records the suspicion that our Forward-phase writers can re-tag the
-// same slot and break it. CheckTransitionMonotonicity is the instrument for that question,
-// which is why it counts rather than aborts (MRT_GCV2_ZGC_SELFHEAL_ABORT=1 makes it fatal).
+// The loop is unbounded, exactly as ZGC's is. Entry enforces ZGC's value
+// qualification: the observed word is load-bad and the resolved heal word is
+// load-good. Transition diagnostics then witness monotonic convergence.
 template<bool isAtomic, typename FastPath>
 inline bool ZgcSelfHeal(HeapSlot<isAtomic>& slot, zpointer ptr, zpointer healPtr, FastPath fastPath,
                         HealSite site, HealNull allowNull = HealNull::Disallow)
@@ -383,7 +376,11 @@ inline bool ZgcSelfHeal(HeapSlot<isAtomic>& slot, zpointer ptr, zpointer healPtr
     ZgcSelfHealDiag::NoteEnter();
     // :82-87  assert_is_valid / assert(!fast_path(ptr)) / assert(fast_path(heal_ptr)) /
     //         assert(ZPointer::is_remapped(heal_ptr))
-    ZgcSelfHealDiag::NotePreconditions(fastPath(ptr), fastPath(healPtr), healPtr);
+    const bool ptrFastPath = fastPath(ptr);
+    const bool healFastPath = fastPath(healPtr);
+    ZgcSelfHealDiag::NotePreconditions(ptrFastPath, healFastPath, healPtr);
+    CHECK_DETAIL(!ptrFastPath, "ZBarrier::self_heal input must be load-bad");
+    CHECK_DETAIL(healFastPath, "ZBarrier::self_heal value must be load-good");
 
     // :89
     for (unsigned iterations = 0;; ++iterations) {

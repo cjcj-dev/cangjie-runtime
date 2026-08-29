@@ -54,7 +54,6 @@
 #include "Heap/Verify/NwDropAudit.h"
 #include "Heap/Verify/GarbRegionDiag.h"
 #include "Heap/Verify/Stw2CurrentAudit.h"
-#include "Heap/Verify/NullRouteCaller.h"
 #include "Heap/Verify/SurvNodeDiag.h"
 #include "Heap/Collector/PromotedRegionDomain.h"
 #include "Heap/Verify/CsetEmptyWho.h"
@@ -311,23 +310,41 @@ BaseObject* WCollector::ForwardUpdateRawRef(ObjectRef& root)
     // Relocate via host object; write plain interior (toHost+offset) back.
     if (!Collector::PlausibleManagedObjectGate("ForwardUpdateRawRef", oldObj)) {
         BaseObject* host = Collector::TryRecoverInteriorBase(oldObj);
-        if (host != nullptr && IsGhostFromObject(host) && !IsUnmovableFromObject(host)) {
+        RegionInfo* hostRegion = host == nullptr ? nullptr :
+            RegionInfo::GetGhostFromRegionAt(reinterpret_cast<MAddress>(host));
+        const bool hostHasForwardingFace = hostRegion != nullptr && hostRegion->GetLiveInfo0ForProbe() != nullptr;
+        if (hostHasForwardingFace && IsGhostFromObject(host) && !IsUnmovableFromObject(host)) {
             BaseObject* toHost = TryForwardObject(host);
-            if (toHost != nullptr && toHost != host) {
-                BaseObject* toInterior = reinterpret_cast<BaseObject*>(
-                    reinterpret_cast<uintptr_t>(toHost) +
-                    (reinterpret_cast<uintptr_t>(oldObj) - reinterpret_cast<uintptr_t>(host)));
-                HealRootWriteback(root, toInterior, HealSite::WCollectorForwardRawInterior);
-                return toInterior;
+            if (toHost == nullptr) {
+                Collector::FailClosedLoad("WCollector::ForwardUpdateRawRef.interior-unresolved",
+                                          host, reinterpret_cast<uintptr_t>(&root));
             }
+            BaseObject* toInterior = reinterpret_cast<BaseObject*>(
+                reinterpret_cast<uintptr_t>(toHost) +
+                (reinterpret_cast<uintptr_t>(oldObj) - reinterpret_cast<uintptr_t>(host)));
+            HealRootWriteback(root, toInterior, HealSite::WCollectorForwardRawInterior);
+            return toInterior;
         }
         HealRootWriteback(root, oldObj, HealSite::WCollectorPreserveRawInterior);
         return oldObj;
     }
     if (IsGhostFromObject(oldObj)) {
+        const MAddress mappedAddr = ForwardingTable::FindTo(reinterpret_cast<MAddress>(oldObj));
+        if (mappedAddr != 0) {
+            BaseObject* mapped = reinterpret_cast<BaseObject*>(mappedAddr);
+            HealRootWriteback(root, mapped, HealSite::WCollectorForwardRawGhost);
+            DLOG(FIX, "fix raw-ref @%p: %p -> %p", &root, oldObj, mapped);
+            return mapped;
+        }
+        const GCPhase phase = GetGCPhase();
+        if (phase != GCPhase::GC_PHASE_PREFORWARD && phase != GCPhase::GC_PHASE_FORWARD) {
+            Collector::FailClosedLoad("WCollector::ForwardUpdateRawRef.unresolved",
+                                      oldObj, reinterpret_cast<uintptr_t>(&root));
+        }
         BaseObject* toVersion = TryForwardObject(oldObj);
         if (toVersion == nullptr) {
-            return oldObj;
+            Collector::FailClosedLoad("WCollector::ForwardUpdateRawRef.unresolved",
+                                      oldObj, reinterpret_cast<uintptr_t>(&root));
         }
         HealRootWriteback(root, toVersion, HealSite::WCollectorForwardRawGhost);
         DLOG(FIX, "fix raw-ref @%p: %p -> %p", &root, oldObj, toVersion);
@@ -367,6 +384,11 @@ void WCollector::RemapYoungRoots()
     size_t staticDoubleBad = 0;
     size_t stackSeen = 0;
     size_t stackColoured = 0;
+    size_t stackRemapped = 0;
+    size_t otherSeen = 0;
+    size_t otherColoured = 0;
+    size_t otherRemapped = 0;
+    size_t otherDoubleBad = 0;
 
     auto remapField = [&](RefField<>& field, size_t& seen, size_t& coloured, size_t& remapped,
                           size_t& doubleBad) {
@@ -374,24 +396,38 @@ void WCollector::RemapYoungRoots()
         RefField<> oldField(field);
         const uintptr_t rawVal = raw(oldField.GetFieldValue());
         const auto kind = RemapYoungRootsLogic::Classify(rawVal, youngMask, oldMask);
-        if (kind == RemapYoungRootsLogic::Kind::Uncoloured) {
+        if (!RemapYoungRootsLogic::NeedsForwardingLookup(kind)) {
             return;
         }
         ++coloured;
         if (kind == RemapYoungRootsLogic::Kind::DoubleBad) {
             ++doubleBad;
         }
-        if (kind == RemapYoungRootsLogic::Kind::LoadGood) {
+        BaseObject* observed = to_object(oldField.GetTargetObject());
+        if (!Heap::IsHeapAddress(observed)) {
             return;
         }
-        BaseObject* latest = make_load_good(oldField);
+        // ZRemapOopClosure calls load_barrier_on_oop_field for every coloured
+        // root (zGeneration.cpp:1408-1418,1483-1499).  Do the address-level
+        // forwarding lookup even when the four-value colour has wrapped back
+        // to load-good; only an absent forwarding may preserve `observed`.
+        BaseObject* latest = ResolveStoreValue(observed);
         if (!Heap::IsHeapAddress(latest)) {
             return;
         }
         if (!Collector::PlausibleManagedObjectGate("RemapYoungRoots", latest)) {
             return;
         }
-        RefField<> newField = GetAndTryTagRefField(latest);
+        // ZGC resolves a field word exactly once: ZBarrier::barrier runs one make_load_good
+        // (zBarrier.inline.hpp:294-343) and then rebuilds the word with ZPointer::uncolor /
+        // ZAddress::store_good, which never consult a forwarding table
+        // (zAddress.inline.hpp:609-624,806-811).  GetAndTryTagRefField resolves a second time,
+        // and under in-place compaction that second resolve is not idempotent: from- and
+        // to-addresses share one page span, so an address this page already produced is itself a
+        // from-index of the same table.  `latest` above is already the make-load-good answer, so
+        // colour it -- ColourResolvedRefField keeps all three checks and drops only the repeat
+        // lookup, the same shape already used by the mark closure (Mark.cpp:361).
+        RefField<> newField = ColourResolvedRefField(latest);
         if (oldField.GetFieldValue() != newField.GetFieldValue()) {
             if (HealSlot(field, oldField.GetFieldValue(), newField.GetFieldValue(),
                          HealSite::WCollectorRemapYoungRoots)) {
@@ -405,61 +441,78 @@ void WCollector::RemapYoungRoots()
         if (slot == 0) {
             continue;
         }
+        if (!RemapYoungRootsLogic::ShouldRemapRememberedSlot(
+                WCollectorInternal::SlotHeldByLiveObject(reinterpret_cast<void*>(slot)))) {
+            continue;
+        }
+        // slotwitness: the fail-closed records reached from here print tag/edge/host/slot and the
+        // slot owner's region facts, and this walk was the only remap producer that set none of
+        // them -- every permhole witness from RemapYoungRoots reads `tag=none slot=0`, so the
+        // record cannot say whether the refused value came out of a live holder or out of a
+        // from-copy this cycle already compacted.  ZGC never has to ask: remap_current iterates
+        // per *page* out of the page table and a page's remembered bitmap dies with the page
+        // (zGeneration.cpp:1483-1499; zRemembered.cpp:451-461).  Ours is a flat address set, so
+        // the holder has to be named on the record.
         remapField(*reinterpret_cast<RefField<>*>(slot), remsetSeen, remsetColoured, remsetRemapped,
                    remsetDoubleBad);
     }
 
-    RootSlotVisitor staticVisitor = [&](RootSlot& root) {
-        ++staticSeen;
+    auto remapRoot = [this, youngMask, oldMask](ObjectRef& root, size_t& seen, size_t& coloured,
+                                                size_t& remapped, size_t& doubleBad) {
+        ++seen;
         const uintptr_t rawVal = raw(root.LoadPlain());
         const auto kind = RemapYoungRootsLogic::Classify(rawVal, youngMask, oldMask);
-        if (kind == RemapYoungRootsLogic::Kind::Uncoloured) {
-            return;
+        if (kind != RemapYoungRootsLogic::Kind::Uncoloured) {
+            ++coloured;
         }
-        ++staticColoured;
         if (kind == RemapYoungRootsLogic::Kind::DoubleBad) {
-            ++staticDoubleBad;
+            ++doubleBad;
         }
-        if (kind == RemapYoungRootsLogic::Kind::LoadGood) {
-            return;
+        ForwardUpdateRawRef(root);
+        if (raw(root.LoadPlain()) != rawVal) {
+            ++remapped;
         }
-        RefField<> asField(to_zpointer(rawVal));
-        BaseObject* latest = make_load_good(asField);
-        if (!Heap::IsHeapAddress(latest)) {
-            return;
-        }
-        if (!Collector::PlausibleManagedObjectGate("RemapYoungRoots.static", latest)) {
-            return;
-        }
-        HealRootWriteback(root, latest, HealSite::WCollectorRemapYoungRoots);
-        ++staticRemapped;
+    };
+
+    RootSlotVisitor staticVisitor = [&](RootSlot& root) {
+        remapRoot(root, staticSeen, staticColoured, staticRemapped, staticDoubleBad);
     };
     Heap::GetHeap().VisitStaticRoots(staticVisitor);
 
     MutatorManager::Instance().VisitAllMutators([&](Mutator& mutator) {
-        if (!mutator.IsManagedContext()) {
-            return;
-        }
-        mutator.MutatorLock();
-        StackFrameCursor cursor(mutator.GetUnwindContext());
         RootVisitor visitor = [&](ObjectRef& root) {
-            ++stackSeen;
-            if ((raw(root.LoadPlain()) & REMAP_COLOUR_MASK) != 0) {
-                ++stackColoured;
-            }
+            size_t doubleBad = 0;
+            remapRoot(root, stackSeen, stackColoured, stackRemapped, doubleBad);
         };
-        while (!cursor.Done()) {
-            cursor.ProcessOne(visitor, mutator);
-        }
-        mutator.MutatorUnlock();
+        DerivedPtrVisitor derivedVisitor = [this](BasePtrType basePtr, DerivedSlot& derived) {
+            BaseObject* knownBase = is_null(basePtr) ? nullptr :
+                to_object(safe(uncolor_bits(to_zpointer(raw(basePtr)))));
+            (void)FixMinorEvacuatedSlot(derived, knownBase, nullptr);
+        };
+        mutator.VisitHeapReferences(visitor, derivedVisitor);
     });
+
+    RootVisitor otherVisitor = [&](ObjectRef& root) {
+        remapRoot(root, otherSeen, otherColoured, otherRemapped, otherDoubleBad);
+    };
+    Runtime::Current().GetConcurrencyModel().VisitGCRoots(&otherVisitor);
+    collectorResources.GetFinalizerProcessor().VisitRawPointers(otherVisitor);
+    Heap::GetHeap().VisitAllExportRoots(otherVisitor);
+
+    // ZGenerationOld::remap_young_roots completes colored roots, uncolored
+    // roots, and the current remembered set before old relocate-start
+    // (zGeneration.cpp:1458-1523). Only that coverage completion retires the
+    // forwarding authority; a cycle count is not a lifetime proof.
+    ForwardingTable::ReclaimRetired("old-remap-young-roots-complete");
 
     LOG(RTLOG_ERROR,
         "[A8REMAP] remset seen=%zu coloured=%zu remapped=%zu doubleBad=%zu "
         "static seen=%zu coloured=%zu remapped=%zu doubleBad=%zu "
-        "stack seen=%zu coloured=%zu flipSeq=%lu",
+        "stack seen=%zu coloured=%zu remapped=%zu "
+        "other seen=%zu coloured=%zu remapped=%zu doubleBad=%zu flipSeq=%lu",
         remsetSeen, remsetColoured, remsetRemapped, remsetDoubleBad, staticSeen, staticColoured,
-        staticRemapped, staticDoubleBad, stackSeen, stackColoured,
+        staticRemapped, staticDoubleBad, stackSeen, stackColoured, stackRemapped,
+        otherSeen, otherColoured, otherRemapped, otherDoubleBad,
         static_cast<unsigned long>(FlipSeq().load(std::memory_order_relaxed)));
 }
 void WCollector::PreforwardFinalizerProcessorRoots()
@@ -485,10 +538,18 @@ void WCollector::PreforwardDiscoveredExternObjects()
         BaseObject* latest = exportObj;
         if (IsGhostFromObject(exportObj) && !IsUnmovableFromObject(exportObj)) {
             latest = ForwardObject(exportObj);
+            if (latest == nullptr) {
+                Collector::FailClosedLoad("WCollector::PreforwardDiscoveredExternObjects.unresolved",
+                                          exportObj, 0);
+            }
         }
         for (auto &externObj : it->second) {
             if (IsGhostFromObject(externObj) && !IsUnmovableFromObject(externObj)) {
                 BaseObject* toObj = ForwardObject(externObj);
+                if (toObj == nullptr) {
+                    Collector::FailClosedLoad("WCollector::PreforwardDiscoveredExternObjects.unresolved",
+                                              externObj, 0);
+                }
                 externObj = toObj;
             }
         }
@@ -514,6 +575,10 @@ void WCollector::PreforwardAllResurrectExportFromObjects()
         BaseObject* latest = exportObj;
         if (IsGhostFromObject(exportObj) && !IsUnmovableFromObject(exportObj)) {
             latest = ForwardObject(exportObj);
+            if (latest == nullptr) {
+                Collector::FailClosedLoad("WCollector::PreforwardAllResurrectExportFromObjects.unresolved",
+                                          exportObj, 0);
+            }
         }
         if (latest != exportObj) {
             tmp.insert(latest);
@@ -753,10 +818,19 @@ bool ForceRootRouteDomainWhileForwardable(WCollector* collector, BaseObject* obj
 // Install a logical resolved target into a heap field. Callers cannot supply a
 // pre-encoded RefField: this controlled entry applies the current heap colour here.
 // On CAS fail, accept the peer's update (major TryUpdateRefFieldImpl shape).
-bool WCollector::CasInstallResolvedTarget(RefField<>& field, MAddress expected, BaseObject* target,
+bool WCollector::CasInstallResolvedTarget(RefField<>& field, MAddress expected, zaddress target,
                                           HealSite site, HealNull allowNull) const
 {
-    zpointer desired = RootSlotWriteback(target, field).GetFieldValue();
+    BaseObject* object = to_object(target);
+    if (object != nullptr) {
+        CHECK_DETAIL(Heap::IsHeapAddress(object),
+                     "resolved heal target must be a heap address target=%p", object);
+        CHECK_DETAIL(Collector::JudgeHandOutTarget(object) == HandVerdict::Usable,
+                     "resolved heal target must be usable target=%p", object);
+        CHECK_DETAIL(!IsStaleStoreValue(object),
+                     "resolved heal target must not remain in forwarding domain target=%p", object);
+    }
+    zpointer desired = is_null(target) ? zpointer::null : ColourStoreGood(target).GetFieldValue();
     if (expected == raw(desired)) {
         return true;
     }
@@ -772,333 +846,60 @@ BaseObject* WCollector::ResolveMinorReference(RefField<>& field, const ScopedSto
                                               bool holderIsCurrentMinorRoot,
                                               bool* preservedByCurrentRoot) const
 {
-    auto plannedTo = [this, stw](BaseObject* from) -> BaseObject* {
-        if (stw != nullptr) {
-            return PlanRouteUnderStw(from, *stw).dest;
-        }
-        FindToVersionResult resolved = FindToVersion(from);
-        if (resolved.is_unavailable()) {
-            // This is one of the three deliberate non-dereference consumers:
-            // a concurrent remembered-slot scan may observe a carrier retiring
-            // between slot observation and this query.  Unavailable therefore
-            // has one strategy here—drop this scan item, leave the slot
-            // untouched, and never hand the answer to object-field access.
-            g_findtoPostLifecycleSoft.fetch_add(1, std::memory_order_relaxed);
-            return nullptr;
-        }
-        return resolved.GetOrFailClosed("WCollector::ResolveMinorReference.field");
-    };
+    (void)stw;
+    (void)holderIsCurrentMinorRoot;
+    (void)preservedByCurrentRoot;
 
-    RefField<> value(field);
-    BaseObject* object = to_object(value.GetTargetObject());
-    if (!IsOldPointer(value)) {
-        // zBarrier.inline.hpp:318-340 resolves through the forwarding before
-        // self-healing the concrete oop slot. zRelocate.cpp:1018-1047 keeps
-        // that receipt available until relocated fields have been repaired.
-        // After-copy Exempt makes our page UNMOVABLE_FROM before this bulk
-        // ref-fix runs, so the ghost-only arm below cannot observe a completed
-        // copy. Consume its still-active receipt before PrepareForwardTable
-        // retires the table.
-        if (object != nullptr && Heap::IsHeapAddress(object)) {
-            RegionInfo* fromRegion = RegionInfo::TryGetRegionInfoAt(reinterpret_cast<MAddress>(object));
-            ZForwarding* forwarding = fromRegion != nullptr && fromRegion->IsForwardingDone()
-                ? ForwardingTable::GetEntries(reinterpret_cast<MAddress>(object))
-                : nullptr;
-            if (forwarding != nullptr) {
-                const MAddress receipt = forwarding->find(reinterpret_cast<MAddress>(object));
-                const MAddress live = receipt == 0 ? 0 : forwarding->resolve_live(receipt);
-                if (live != 0) {
-                    BaseObject* to = reinterpret_cast<BaseObject*>(live);
-                    MAddress expected = raw(value.GetFieldValue());
-                    (void)CasInstallResolvedTarget(field, expected, to,
-                                                   HealSite::WCollectorMinorResolveLoadGoodForward);
-                    return to;
-                }
-                if (receipt != 0) {
-                    ZForwarding::StaleToLifeCount().fetch_add(1, std::memory_order_relaxed);
-                }
-            }
-        }
-        // hangfloor: plain stack/reg roots (and any load-good colour) make IsOldPointer
-        // structurally false — that predicate needs IsLoadBad, which plain never is.
-        // After young prepare, from-space still needs ghost routing; without it
-        // FixMinor/VisitMinor keep the from address and young GC thrash (10/10 HANG).
-        if (object != nullptr && Heap::IsHeapAddress(object) && IsGhostFromObject(object) &&
-            !IsUnmovableFromObject(object)) {
-            // installdomain: admit into route domain before any install/forward consumes it.
-            EnsureRouteDomainMembership(const_cast<WCollector*>(this), object);
-            BaseObject* to = plannedTo(object);
-            // satbfix: only install a to that is a live object tip; a RECENT_FULL hole
-            // address must not be written into the slot (same invalid_object family).
-            if (to != nullptr && Heap::IsHeapAddress(to)) {
-                RegionInfo* toRegion = RegionInfo::TryGetRegionInfoAt(reinterpret_cast<MAddress>(to));
-                if (toRegion != nullptr && !toRegion->IsFreeRegion() && !toRegion->IsGarbageRegion() &&
-                    to->IsValidObject()) {
-                    MAddress expected = raw(value.GetFieldValue());
-                    (void)CasInstallResolvedTarget(field, expected, to,
-                                                   HealSite::WCollectorMinorResolveLoadGoodForward);
-                    return to;
-                }
-            }
-        }
-        return object;
+    RefField<> observed(field);
+    BaseObject* from = to_object(observed.GetTargetObject());
+    if (from == nullptr || !Heap::IsHeapAddress(from)) {
+        return from;
     }
-    // Minor path must not call FindLatestVersion: after a full GC Flip, remset/root
-    // slots can still hold one-gen-stale tags whose from-copy was reclaimed (ghost
-    // gone, header zeroed). F5 would abort a detector path; here we soft-resolve:
-    //   routed to-version → RootSlotWriteback(to)
-    //   unmoved valid from → RootSlotWriteback(from)
-    //   true dead (free/garbage/null) → null the slot (caller drops the edge)
-    //   active-region bad tip → leave alone / return from (never invent null)
-    // N2: CAS (FYS=1 multi-writer safe; product default FYS=1).
-    // hangfloor: use RootSlotWriteback so heap remset/fields keep Phase C colour.
-    MAddress expected = raw(value.GetFieldValue());
-    BaseObject* to = plannedTo(object);
-    bool toActiveBadTip = false;
-    if (to != nullptr && Heap::IsHeapAddress(to)) {
-        RegionInfo* toRegion = RegionInfo::TryGetRegionInfoAt(reinterpret_cast<MAddress>(to));
-        if (toRegion != nullptr && !toRegion->IsFreeRegion() && !toRegion->IsGarbageRegion()) {
-            if (to->IsValidObject()) {
-                (void)CasInstallResolvedTarget(field, expected, to,
-                                               HealSite::WCollectorMinorResolveOldForward);
-                return to;
-            }
-            // Active region, tip invalid — same family as F3 invalid_object (rtype=2).
-            toActiveBadTip = true;
-        }
-    }
-    if (Heap::IsHeapAddress(object)) {
-        RegionInfo* fromRegion = RegionInfo::TryGetRegionInfoAt(reinterpret_cast<MAddress>(object));
-        if (fromRegion != nullptr && !fromRegion->IsFreeRegion() && !fromRegion->IsGarbageRegion() &&
-            object->IsValidObject()) {
-            // installdomain: identity arm is the A-only fork (IsValidObject without liveInfo0).
-            EnsureRouteDomainMembership(const_cast<WCollector*>(this), object);
-            (void)CasInstallResolvedTarget(field, expected, object,
-                                           HealSite::WCollectorMinorResolveOldIdentity);
-            return object;
-        }
-    }
-    // Non-heap (static/binary constants, etc.): FindToVersion nullptr means "not a heap
-    // object", not "dead residue". Return as-is; never CAS (slot may be RO static root).
-    // See reports/REPORT-zcdnull.md — CAS-null on RO static SEGV (si_addr=&field).
-    if (object != nullptr && !Heap::IsHeapAddress(object)) {
-        return object;
-    }
-    // Active-region bad tip with no valid from: leave the old-tag alone (satbfix).
-    // Mutator read path still routes; inventing null zeros live holder fields.
-    if (toActiveBadTip) {
-        static std::atomic<size_t> g_resolveBadTipSkip{ 0 };
-        size_t n = g_resolveBadTipSkip.fetch_add(1, std::memory_order_relaxed);
-        if (n < 16) {
-            VLOG(REPORT,
-                 "[GCV2][minor-badtip] field=%p from=%p to=%p — leave old-tag",
-                 &field, object, to);
-        }
-        return object;
-    }
-    static std::atomic<size_t> g_staleOldTagLogged{ 0 };
-    size_t n = g_staleOldTagLogged.fetch_add(1, std::memory_order_relaxed);
-    if (n < 16) {
-        VLOG(REPORT,
-             "[GCV2][minor-stale-oldtag] field=%p raw=%#zx from=%p to=%p "
-             "(drop; full-GC remset/root residue after Flip)",
-             &field, static_cast<size_t>(raw(value.GetFieldValue())), object, to);
-    }
-    bool holderLiveBySnapshot = SlotHeldByLiveObject(&field);
-    if (KeepRememberedHolder(holderLiveBySnapshot, holderIsCurrentMinorRoot)) {
-        if (!holderLiveBySnapshot && holderIsCurrentMinorRoot && preservedByCurrentRoot != nullptr) {
-            *preservedByCurrentRoot = true;
-        }
-        return object;
-    }
-    NoteNullslotWrite("fix_resolve_cas", nullptr, &field, object, to, &g_nullslotResolve);
-    (void)CasInstallResolvedTarget(field, expected, nullptr, HealSite::WCollectorMinorResolveDead,
-                                   HealNull::Allow);
-    return nullptr;
+
+    // zBarrier.inline.hpp:294-343: both old-colour and apparently current
+    // references pass through make-load-good before the concrete slot is
+    // healed. Colour alone is not forwarding provenance.
+    BaseObject* resolved = ResolveStoreValue(from);
+    CHECK_DETAIL(resolved != nullptr && Heap::IsHeapAddress(resolved),
+                 "minor resolve requires a heap to-address from=%p", from);
+    CHECK_DETAIL(Collector::JudgeHandOutTarget(resolved) == HandVerdict::Usable,
+                 "minor resolve requires a usable target from=%p resolved=%p", from, resolved);
+    CHECK_DETAIL(!IsStaleStoreValue(resolved),
+                 "minor resolve must not install a relocation-set address from=%p resolved=%p",
+                 from, resolved);
+
+    const HealSite site = IsOldPointer(observed)
+        ? HealSite::WCollectorMinorResolveOldForward
+        : HealSite::WCollectorMinorResolveLoadGoodForward;
+    (void)CasInstallResolvedTarget(field, raw(observed.GetFieldValue()), from_object(resolved), site);
+    return resolved;
 }
-
-// rootgate positive control (default off: MRT_GCV2_ROOTGATE_ACCOUNT=1 or MRT_GCV2_DIAG=rootgate).
-// The liveness gate added to the load-good arm of ResolveMinorReference(RootSlot&) below is
-// only allowed to claim it fixes something if it can be shown to refuse something. Counting
-// every refusal here is what makes "0" reportable as "this gate never fired on this workload"
-// instead of being read as "the defect is fixed". The gate itself is unconditional product
-// code; only the accounting is gated, so the arm cannot be silently disabled by the env.
-static std::atomic<size_t> g_rootGateRefused{ 0 };
-static std::atomic<size_t> g_rootGateNoRegion{ 0 };
-static std::atomic<size_t> g_rootGateFreeOrGarbage{ 0 };
-static std::atomic<size_t> g_rootGateBadTip{ 0 };
-static std::atomic<bool> g_rootGateAtexit{ false };
-
-static void DumpRootGateSummary()
-{
-    LOG(RTLOG_ERROR,
-        "[GCV2][rootgate] SUMMARY refused=%zu no_region=%zu free_or_garbage=%zu bad_tip=%zu "
-        "(load-good arm of ResolveMinorReference(RootSlot&); 0 = gate never fired on this workload)",
-        g_rootGateRefused.load(std::memory_order_relaxed), g_rootGateNoRegion.load(std::memory_order_relaxed),
-        g_rootGateFreeOrGarbage.load(std::memory_order_relaxed), g_rootGateBadTip.load(std::memory_order_relaxed));
-}
-
-static bool RootGateAccountOn()
-{
-    static const bool on = DiagGate::LegacyOrToken("MRT_GCV2_ROOTGATE_ACCOUNT", "rootgate");
-    return on;
-}
-
-static void NoteRootGateRefusal(const RootSlot& root, BaseObject* from, BaseObject* to, RegionInfo* toRegion)
-{
-    if (!RootGateAccountOn()) {
-        return;
-    }
-    bool expected = false;
-    if (g_rootGateAtexit.compare_exchange_strong(expected, true, std::memory_order_relaxed)) {
-        (void)std::atexit([]() { DumpRootGateSummary(); });
-    }
-    if (toRegion == nullptr) {
-        g_rootGateNoRegion.fetch_add(1, std::memory_order_relaxed);
-    } else if (toRegion->IsFreeRegion() || toRegion->IsGarbageRegion()) {
-        g_rootGateFreeOrGarbage.fetch_add(1, std::memory_order_relaxed);
-    } else {
-        g_rootGateBadTip.fetch_add(1, std::memory_order_relaxed);
-    }
-    size_t n = g_rootGateRefused.fetch_add(1, std::memory_order_relaxed) + 1;
-    if (n <= 16) {
-        VLOG(REPORT,
-             "[GCV2][rootgate] refuse root=%p from=%p to=%p toRegion=%p free=%u garbage=%u validTip=%u "
-             "— would have installed a non-live to-address into a root slot",
-             static_cast<const void*>(&root), from, to, toRegion,
-             static_cast<unsigned>(toRegion != nullptr && toRegion->IsFreeRegion()),
-             static_cast<unsigned>(toRegion != nullptr && toRegion->IsGarbageRegion()),
-             static_cast<unsigned>(to != nullptr && to->IsValidObject()));
-    }
-    // The workloads this runs under die on SIGSEGV, which skips atexit. Emit at every power
-    // of two so the count survives the crash it is meant to explain.
-    if ((n & (n - 1)) == 0) {
-        DumpRootGateSummary();
-    }
-}
-
 BaseObject* WCollector::ResolveMinorReference(RootSlot& root, const ScopedStopTheWorld* stw) const
 {
-    auto plannedTo = [this, stw](BaseObject* from) -> BaseObject* {
-        if (stw != nullptr) {
-            return PlanRouteUnderStw(from, *stw).dest;
-        }
-        FindToVersionResult resolved = FindToVersion(from);
-        if (resolved.is_unavailable()) {
-            // Root-slot scan counterpart of the field scan above.  No object
-            // field is dereferenced on this branch; the root remains pending
-            // for the owning pass rather than being converted to a value.
-            g_findtoPostLifecycleSoft.fetch_add(1, std::memory_order_relaxed);
-            return nullptr;
-        }
-        return resolved.GetOrFailClosed("WCollector::ResolveMinorReference.root");
-    };
-
+    (void)stw;
     zaddress_unsafe observed = root.LoadPlain();
     HeapSlot<> observedBits(to_zpointer(raw(observed)));
-    BaseObject* object = to_object(observedBits.GetTargetObject());
-    const bool isOld = IsOldPointer(observedBits);
-    {
-        size_t en = g_resolveRootEntry.fetch_add(1, std::memory_order_relaxed);
-        if (isOld) {
-            g_resolveRootOld.fetch_add(1, std::memory_order_relaxed);
-        }
-        // Entry sample: prove FixMinorRootSlots reaches this function before Mode A.
-        if (NullslotProbeEnabled() && en < 32) {
-            GCPhase phase = Heap::GetHeap().GetGCPhase();
-            std::fprintf(stderr,
-                         "[GCV2][nullslot] path=resolve_root_entry n=%zu root=%p obj=%p raw=%#zx "
-                         "isOld=%u phase=%s(%u)\n",
-                         en, static_cast<void*>(&root), object, static_cast<size_t>(raw(observed)),
-                         static_cast<unsigned>(isOld), Collector::GetGCPhaseName(phase),
-                         static_cast<unsigned>(phase));
-            std::fflush(stderr);
-        }
-    }
-    if (!isOld) {
-        if (object != nullptr && Heap::IsHeapAddress(object) && IsGhostFromObject(object) &&
-            !IsUnmovableFromObject(object)) {
-            EnsureRouteDomainMembership(const_cast<WCollector*>(this), object);
-            BaseObject* to = plannedTo(object);
-            // satbfix parity. Three arms resolve a from-object to a to-address and install it;
-            // this was the only one without the liveness gate:
-            //   RefField<>& overload, load-good arm  :2641-2644  — has it, and its comment
-            //       names the failure: "a RECENT_FULL hole address must not be written into
-            //       the slot" (same invalid_object family as F3 rtype=2).
-            //   this overload, old-tag arm           :2758-2761  — has it.
-            //   this overload, load-good arm         (here)      — had only IsHeapAddress.
-            // Not a design trade-off: this arm writes a *root* slot, so an unchecked
-            // to-address is committed before VisitMinorRoots' PlausibleManagedObjectGate
-            // (:2933) ever inspects the value, and that gate is a tip check which cannot see
-            // free/garbage region state anyway. Refusal falls through to `return object;`,
-            // which is exactly what both sibling arms do.
-            if (to != nullptr && Heap::IsHeapAddress(to)) {
-                RegionInfo* toRegion = RegionInfo::TryGetRegionInfoAt(reinterpret_cast<MAddress>(to));
-                if (toRegion != nullptr && !toRegion->IsFreeRegion() && !toRegion->IsGarbageRegion() &&
-                    to->IsValidObject()) {
-                    HealRootWriteback(root, to, HealSite::WCollectorResolveRootLoadGoodForward);
-                    return to;
-                }
-                NoteRootGateRefusal(root, object, to, toRegion);
-            }
-        }
-        return object;
+    BaseObject* from = to_object(observedBits.GetTargetObject());
+    if (from == nullptr || !Heap::IsHeapAddress(from)) {
+        return from;
     }
 
-    BaseObject* to = plannedTo(object);
-    if (to != nullptr && Heap::IsHeapAddress(to)) {
-        RegionInfo* toRegion = RegionInfo::TryGetRegionInfoAt(reinterpret_cast<MAddress>(to));
-        if (toRegion != nullptr && !toRegion->IsFreeRegion() && !toRegion->IsGarbageRegion() &&
-            to->IsValidObject()) {
-            HealRootWriteback(root, to, HealSite::WCollectorResolveRootOldForward);
-            return to;
-        }
-    }
-    if (Heap::IsHeapAddress(object)) {
-        RegionInfo* fromRegion = RegionInfo::TryGetRegionInfoAt(reinterpret_cast<MAddress>(object));
-        if (fromRegion != nullptr && !fromRegion->IsFreeRegion() && !fromRegion->IsGarbageRegion() &&
-            object->IsValidObject()) {
-            EnsureRouteDomainMembership(const_cast<WCollector*>(this), object);
-            HealRootWriteback(root, object, HealSite::WCollectorNormalizeOldRoot);
-            return object;
-        }
-    }
-    if (object != nullptr && !Heap::IsHeapAddress(object)) {
-        return object;
-    }
-    // rootdrop probe: classify why to/from both failed live predicates before drop-null.
-    // Gate = MRT_GCV2_NULLSLOT (same as nullslot); default off.
-    {
-        RegionInfo* toRegion =
-            (to != nullptr && Heap::IsHeapAddress(to))
-                ? RegionInfo::TryGetRegionInfoAt(reinterpret_cast<MAddress>(to))
-                : nullptr;
-        RegionInfo* fromRegion =
-            (object != nullptr && Heap::IsHeapAddress(object))
-                ? RegionInfo::TryGetRegionInfoAt(reinterpret_cast<MAddress>(object))
-                : nullptr;
-        const char* toWhy = nullptr;
-        if (to == nullptr) {
-            toWhy = "to_null";
-        } else if (!Heap::IsHeapAddress(to)) {
-            toWhy = "to_not_heap";
-        } else {
-            toWhy = ClassifyRootLiveFail(to, toRegion);
-        }
-        const char* fromWhy = ClassifyRootLiveFail(object, fromRegion);
-        NoteResolveRootNull(&root, object, to, fromRegion, toRegion, toWhy, fromWhy);
-    }
-    static std::atomic<size_t> g_staleOldRootLogged{ 0 };
-    size_t n = g_staleOldRootLogged.fetch_add(1, std::memory_order_relaxed);
-    if (n < 16) {
-        VLOG(REPORT,
-             "[GCV2][minor-stale-oldtag] root=%p raw=%#zx from=%p to=%p "
-             "(drop; full-GC root residue after Flip)",
-             &root, static_cast<size_t>(raw(observed)), object, to);
-    }
-    g_resolveRootHealNull.fetch_add(1, std::memory_order_relaxed);
-    HealRoot(root, zaddress::null, HealSite::WCollectorResolveDeadRoot, HealNull::Allow);
-    return nullptr;
+    // ZUncoloredRootProcessOopClosure applies the load barrier and writes the
+    // resolved address back uncolored (zGeneration.cpp:1458-1523).
+    BaseObject* resolved = ResolveStoreValue(from);
+    CHECK_DETAIL(resolved != nullptr && Heap::IsHeapAddress(resolved),
+                 "minor root resolve requires a heap to-address from=%p", from);
+    CHECK_DETAIL(Collector::JudgeHandOutTarget(resolved) == HandVerdict::Usable,
+                 "minor root resolve requires a usable target from=%p resolved=%p", from, resolved);
+    CHECK_DETAIL(!IsStaleStoreValue(resolved),
+                 "minor root resolve must not install a relocation-set address from=%p resolved=%p",
+                 from, resolved);
+
+    const HealSite site = IsOldPointer(observedBits)
+        ? HealSite::WCollectorResolveRootOldForward
+        : HealSite::WCollectorResolveRootLoadGoodForward;
+    HealRootWriteback(root, resolved, site);
+    return resolved;
 }
 bool WCollector::FixMinorEvacuatedSlot(RefField<>& field, BaseObject* knownBase,
                                       const ScopedStopTheWorld* stw,
@@ -1107,6 +908,39 @@ bool WCollector::FixMinorEvacuatedSlot(RefField<>& field, BaseObject* knownBase,
     // N1: major-style CAS tolerate (TryUpdateRefFieldImpl family). Under multi-worker
     // fix, CAS fail is normal (peer already updated) — abort assertion was serial-only.
     RefField<> oldField(field);
+    BaseObject* observedTarget = to_object(oldField.GetTargetObject());
+    // A derived value is not an oop and must never enter the ordinary
+    // forwarding lookup. Resolve the proven base first, then reconstruct the
+    // same offset from the load-good base (ZGC derived-root/base-pointer
+    // ordering; zBarrier.inline.hpp:294-343).
+    if (knownBase != nullptr && observedTarget != nullptr &&
+        Heap::IsHeapAddress(observedTarget) && Heap::IsHeapAddress(knownBase)) {
+        const MAddress targetAddress = reinterpret_cast<MAddress>(observedTarget);
+        const MAddress baseAddress = reinterpret_cast<MAddress>(knownBase);
+        RegionInfo* targetRegion = RegionInfo::TryGetRegionInfoAt(targetAddress);
+        RegionInfo* baseRegion = RegionInfo::TryGetRegionInfoAt(baseAddress);
+        const bool baseValid = targetAddress > baseAddress && targetRegion == baseRegion &&
+            Collector::PlausibleManagedObjectGate("FixMinorEvacuatedSlot.knownBase", knownBase);
+        if (!baseValid) {
+            return false;
+        }
+        const size_t offset = static_cast<size_t>(targetAddress - baseAddress);
+        if (offset >= RegionSpace::GetAllocSize(*knownBase)) {
+            return false;
+        }
+        BaseObject* resolvedBase = ResolveStoreValue(knownBase);
+        CHECK_DETAIL(resolvedBase != nullptr && Heap::IsHeapAddress(resolvedBase) &&
+                         Collector::JudgeHandOutTarget(resolvedBase) == HandVerdict::Usable,
+                     "derived heal requires a resolved base base=%p resolved=%p offset=%zu",
+                     knownBase, resolvedBase, offset);
+        const MAddress oldVal = raw(oldField.GetFieldValue());
+        const MAddress interiorAddress = reinterpret_cast<MAddress>(resolvedBase) + offset;
+        if (oldVal != interiorAddress) {
+            (void)CasInstallInteriorColoured(field, to_zpointer(oldVal), resolvedBase, offset,
+                                             HealSite::WCollectorMinorFixInteriorForward);
+        }
+        return true;
+    }
     BaseObject* target = ResolveMinorReference(field, stw, holderIsCurrentMinorRoot);
     // Static / RO slots may hold non-heap objects (never evacuated). Colouring them
     // changes the bit pattern so equal-skip misses, then CAS faults on RELRO.
@@ -1142,20 +976,27 @@ bool WCollector::FixMinorEvacuatedSlot(RefField<>& field, BaseObject* knownBase,
     }
     if (knownBase != nullptr || !Collector::PlausibleManagedObjectGate("FixMinorEvacuatedSlot", target)) {
         BaseObject* host = knownBase != nullptr ? knownBase : Collector::TryRecoverInteriorBase(target);
-        if (host != nullptr && IsGhostFromObject(host) && !IsUnmovableFromObject(host)) {
+        RegionInfo* hostRegion = host == nullptr ? nullptr :
+            RegionInfo::GetGhostFromRegionAt(reinterpret_cast<MAddress>(host));
+        const bool hostHasForwardingFace = knownBase != nullptr ||
+            (hostRegion != nullptr && hostRegion->GetLiveInfo0ForProbe() != nullptr);
+        if (hostHasForwardingFace && host != nullptr && IsGhostFromObject(host) &&
+            !IsUnmovableFromObject(host)) {
             EnsureRouteDomainMembership(const_cast<WCollector*>(this), host);
             BaseObject* toHost = const_cast<WCollector*>(this)->ForwardObject(host);
-            if (toHost != nullptr && toHost != host) {
-                size_t offset = static_cast<size_t>(reinterpret_cast<uintptr_t>(target) -
-                                                    reinterpret_cast<uintptr_t>(host));
-                MAddress oldVal = raw(oldField.GetFieldValue());
-                MAddress interiorAddress = reinterpret_cast<MAddress>(toHost) + offset;
-                if (oldVal != interiorAddress) {
-                    (void)CasInstallInteriorColoured(field, to_zpointer(oldVal), toHost, offset,
-                                                     HealSite::WCollectorMinorFixInteriorForward);
-                }
-                return true;
+            if (toHost == nullptr) {
+                Collector::FailClosedLoad("WCollector::FixMinorEvacuatedSlot.field-interior-unresolved",
+                                          host, reinterpret_cast<uintptr_t>(&field));
             }
+            size_t offset = static_cast<size_t>(reinterpret_cast<uintptr_t>(target) -
+                                                reinterpret_cast<uintptr_t>(host));
+            MAddress oldVal = raw(oldField.GetFieldValue());
+            MAddress interiorAddress = reinterpret_cast<MAddress>(toHost) + offset;
+            if (oldVal != interiorAddress) {
+                (void)CasInstallInteriorColoured(field, to_zpointer(oldVal), toHost, offset,
+                                                 HealSite::WCollectorMinorFixInteriorForward);
+            }
+            return true;
         }
         // Gate rejected; host unknown or not forwarded — preserve the interior
         // address, but the heap carrier is still fully coloured.
@@ -1172,9 +1013,13 @@ bool WCollector::FixMinorEvacuatedSlot(RefField<>& field, BaseObject* knownBase,
     // resolveto: Resolve already rewrote FROM→TO. TO sits in a Compacted ghost
     // (in-place pack). Forward/Admit indexes liveInfo0 by from-offset — feeding TO
     // misses → leave-alone. Keep the already-installed to.
-    const bool alreadyTo = (target != oldObj);
+    RegionInfo* targetRegion = RegionInfo::GetGhostFromRegionAt(reinterpret_cast<MAddress>(target));
+    const bool compactDestination = targetRegion != nullptr &&
+        targetRegion->IsCompactRouteDestination(reinterpret_cast<MAddress>(target));
+    const bool alreadyTo = (target != oldObj) || compactDestination;
     BaseObject* current = target;
-    if (!alreadyTo && IsGhostFromObject(target) && !IsUnmovableFromObject(target)) {
+    const bool hasForwardingFace = targetRegion != nullptr && targetRegion->GetLiveInfo0ForProbe() != nullptr;
+    if (!alreadyTo && hasForwardingFace && IsGhostFromObject(target) && !IsUnmovableFromObject(target)) {
         // installdomain: route-domain grant before ForwardObject → GetRoute.
         EnsureRouteDomainMembership(const_cast<WCollector*>(this), target);
         current = const_cast<WCollector*>(this)->ForwardObject(target);
@@ -1182,13 +1027,14 @@ bool WCollector::FixMinorEvacuatedSlot(RefField<>& field, BaseObject* knownBase,
     // ForwardObject null = movable ghost with no to-version (survivor-gate miss).
     // Drop the edge; do not reinstall the from address that is about to be reclaimed.
     if (current == nullptr) {
-        if (KeepRememberedHolder(SlotHeldByLiveObject(&field), holderIsCurrentMinorRoot)) {
-            return false;
-        }
-        MAddress oldVal = raw(field.GetFieldValue());
-        (void)HealSlot(field, to_zpointer(oldVal), zpointer::null,
-                       HealSite::WCollectorMinorFixForwardNull, HealNull::Allow);
-        return false;
+        // zBarrier.inline.hpp:294-343 never publishes a null substitute for a
+        // non-null reference whose forwarding lookup missed. The current thread
+        // must finish relocation (or fail closed); HealSlot's null arm is not a
+        // substitute for an unresolved product.
+        (void)HealSlot(field, field.GetFieldValue(), zpointer::null,
+                       HealSite::WCollectorMinorFixForwardNull, HealNull::Disallow);
+        Collector::FailClosedLoad("WCollector::FixMinorEvacuatedSlot.unresolved", target,
+                                  static_cast<uintptr_t>(raw(field.GetFieldValue())));
     }
     // ForwardObject may return the same interior if gated; re-check before colouring.
     if (!Collector::PlausibleManagedObjectGate("FixMinorEvacuatedSlot.postfwd", current)) {
@@ -1232,34 +1078,69 @@ bool WCollector::FixMinorEvacuatedSlot(RefField<>& field, BaseObject* knownBase,
 bool WCollector::FixMinorEvacuatedSlot(RootSlot& root, const ScopedStopTheWorld* stw) const
 {
     MAddress oldValue = raw(root.LoadPlain());
-    BaseObject* target = ResolveMinorReference(root, stw);
-    if (target == nullptr || !Heap::IsHeapAddress(target)) {
+    HeapSlot<> observedBits(to_zpointer(oldValue));
+    BaseObject* observed = to_object(observedBits.GetTargetObject());
+    if (observed != nullptr && Heap::IsHeapAddress(observed) &&
+        !Collector::PlausibleManagedObjectGate("FixMinorEvacuatedSlot", observed)) {
+        BaseObject* host = Collector::TryRecoverInteriorBase(observed);
+        if (host != nullptr && IsGhostFromObject(host) && !IsUnmovableFromObject(host)) {
+            // A bare ForwardingTable::FindTo asks for a receipt that only exists once the
+            // host has actually been relocated.  While its page is still FORWARDABLE no
+            // receipt has been written yet, so the miss says nothing about the host -- and
+            // measured, that is the miss this branch was reporting: route=1 compacted=0
+            // young=1 marked=1 survived=1 isStart=1, a live object whose page had not been
+            // routed.  ZGC has one rule here and the barrier is the *producer*:
+            // ZRelocate::relocate_object looks the address up and, on a miss, performs the
+            // relocation itself (zRelocate.cpp:382-416).  The base branch below already
+            // spells that out (ForceRootRouteDomainWhileForwardable + ForwardObject, retried
+            // once, then the versioned table).  Resolve the interior host through the same
+            // producer so the two halves of one mechanism cannot disagree about when a
+            // from-address is resolvable.
+            BaseObject* toHost = nullptr;
+            RegionInfo* hostRegion = RegionInfo::GetGhostFromRegionAt(reinterpret_cast<MAddress>(host));
+            if (hostRegion != nullptr && hostRegion->GetLiveInfo0ForProbe() != nullptr) {
+                (void)ForceRootRouteDomainWhileForwardable(const_cast<WCollector*>(this), host);
+                toHost = const_cast<WCollector*>(this)->ForwardObject(host);
+                if (toHost == nullptr &&
+                    ForceRootRouteDomainWhileForwardable(const_cast<WCollector*>(this), host)) {
+                    toHost = const_cast<WCollector*>(this)->ForwardObject(host);
+                }
+            }
+            if (toHost == nullptr) {
+                BaseObject* viaTable =
+                    FindToVersion(host).GetOrFailClosed("WCollector::FixMinorEvacuatedSlot.interior");
+                if (viaTable != nullptr && Heap::IsHeapAddress(viaTable) && viaTable->IsValidObject()) {
+                    toHost = viaTable;
+                }
+            }
+            if (toHost == nullptr) {
+                Collector::FailClosedLoad("WCollector::FixMinorEvacuatedSlot.interior-unresolved",
+                                          host, reinterpret_cast<uintptr_t>(&root));
+            }
+            BaseObject* toInterior = reinterpret_cast<BaseObject*>(
+                reinterpret_cast<uintptr_t>(toHost) +
+                (reinterpret_cast<uintptr_t>(observed) - reinterpret_cast<uintptr_t>(host)));
+            HealRootWriteback(root, toInterior, HealSite::WCollectorFixRootInteriorForward);
+            return toInterior != observed;
+        }
+        HealRootWriteback(root, observed, HealSite::WCollectorPreserveRootInterior);
         return false;
     }
-    if (!Collector::PlausibleManagedObjectGate("FixMinorEvacuatedSlot", target)) {
-        BaseObject* host = Collector::TryRecoverInteriorBase(target);
-        if (host != nullptr && IsGhostFromObject(host) && !IsUnmovableFromObject(host)) {
-            // grant-before-route: paint only; bulk grant pass already did peers.
-            (void)ForceRootRouteDomainWhileForwardable(const_cast<WCollector*>(this), host);
-            BaseObject* toHost = const_cast<WCollector*>(this)->ForwardObject(host);
-            if (toHost != nullptr && toHost != host) {
-                BaseObject* toInterior = reinterpret_cast<BaseObject*>(
-                    reinterpret_cast<uintptr_t>(toHost) +
-                    (reinterpret_cast<uintptr_t>(target) - reinterpret_cast<uintptr_t>(host)));
-                HealRootWriteback(root, toInterior, HealSite::WCollectorFixRootInteriorForward);
-                return true;
-            }
-        }
-        HealRootWriteback(root, target, HealSite::WCollectorPreserveRootInterior);
+    BaseObject* target = ResolveMinorReference(root, stw);
+    if (target == nullptr || !Heap::IsHeapAddress(target)) {
         return false;
     }
     HeapSlot<> oldBits(to_zpointer(oldValue));
     BaseObject* oldObj = to_object(oldBits.GetTargetObject());
     // resolveto: Resolve already remapped FROM→TO. Do not Admit the to-address
     // against the from-offset bitmap (offpast same-target probe: sameObj=0).
-    const bool alreadyTo = (target != oldObj);
+    RegionInfo* targetRegion = RegionInfo::GetGhostFromRegionAt(reinterpret_cast<MAddress>(target));
+    const bool compactDestination = targetRegion != nullptr &&
+        targetRegion->IsCompactRouteDestination(reinterpret_cast<MAddress>(target));
+    const bool alreadyTo = (target != oldObj) || compactDestination;
     BaseObject* current = target;
-    if (!alreadyTo && IsGhostFromObject(target) && !IsUnmovableFromObject(target)) {
+    const bool hasForwardingFace = targetRegion != nullptr && targetRegion->GetLiveInfo0ForProbe() != nullptr;
+    if (!alreadyTo && hasForwardingFace && IsGhostFromObject(target) && !IsUnmovableFromObject(target)) {
         // Last-chance domain paint while FORWARDABLE (grant pass covers the bulk case;
         // this catches roots dirtied after the grant pass or parallel races).
         (void)ForceRootRouteDomainWhileForwardable(const_cast<WCollector*>(this), target);
@@ -1285,17 +1166,8 @@ bool WCollector::FixMinorEvacuatedSlot(RootSlot& root, const ScopedStopTheWorld*
             HealRootWriteback(root, viaTable, HealSite::WCollectorFixRootForwarded);
             return true;
         }
-        M0ExitDiagnostics::Note(M0ExitDiagnostics::Exit::RootFix, target, &root, nullptr,
-                                static_cast<uint8_t>(GetGCPhase()));
-        static std::atomic<size_t> g_ysRootLeaveAlone{ 0 };
-        size_t la = g_ysRootLeaveAlone.fetch_add(1, std::memory_order_relaxed) + 1;
-        if (la <= 32) {
-            LOG(RTLOG_ERROR,
-                "[GCV2][youngstatic] root_fwd_null_leave_alone n=%zu root=%p target=%p "
-                "(ZGC never-heal-null; table miss after force-domain)",
-                la, static_cast<void*>(&root), static_cast<void*>(target));
-        }
-        return false;
+        Collector::FailClosedLoad("WCollector::FixMinorEvacuatedSlot.unresolved",
+                                  target, reinterpret_cast<uintptr_t>(&root));
     }
     if (!Collector::PlausibleManagedObjectGate("FixMinorEvacuatedSlot.postfwd", current)) {
         HealRootWriteback(root, current, HealSite::WCollectorFixRootPostForwardInterior);
@@ -1330,14 +1202,16 @@ bool WCollector::FixMinorEvacuatedSlot(DerivedSlot& derived, BaseObject* knownBa
     // fix visitor must instead preserve the pair's offset and rewrite its real slot,
     // exactly as GCPhasePreForward does after forwarding the host.
     BaseObject* currentBase = knownBase;
+    RegionInfo* baseRegion = RegionInfo::GetGhostFromRegionAt(reinterpret_cast<MAddress>(knownBase));
     if (Heap::IsHeapAddress(knownBase) &&
         Collector::PlausibleManagedObjectGate("FixMinorEvacuatedSlot.derivedBase", knownBase) &&
+        baseRegion != nullptr && baseRegion->GetLiveInfo0ForProbe() != nullptr &&
         IsGhostFromObject(knownBase) && !IsUnmovableFromObject(knownBase)) {
         (void)ForceRootRouteDomainWhileForwardable(const_cast<WCollector*>(this), knownBase);
         currentBase = const_cast<WCollector*>(this)->ForwardObject(knownBase);
         if (currentBase == nullptr) {
-
-            return false;
+            Collector::FailClosedLoad("WCollector::FixMinorEvacuatedSlot.derived-base-unresolved",
+                                      knownBase, reinterpret_cast<uintptr_t>(&derived));
         }
     }
 
@@ -1399,8 +1273,6 @@ void WCollector::FixMinorRootSlots(const ScopedStopTheWorld* stw)
         NoteLargeArrayInitRootVisit(LargeArrayRootVisitSite::MINOR_RELOCATE,
                                     to_object(safe(root.LoadPlain(std::memory_order_acquire))));
 #endif
-        NullRouteCaller::ScopedEdge _edge("root", nullptr, reinterpret_cast<uintptr_t>(&root));
-        NullRouteCaller::ScopedTag _nrTag("FixMinorEvacuatedSlot");
         (void)FixMinorEvacuatedSlot(root, stw);
     };
     DerivedPtrVisitor derivedVisitor = [this, stw](BasePtrType basePtr, DerivedSlot& derived) {
@@ -1480,8 +1352,6 @@ void WCollector::FixMinorObjectSlots(BaseObject* object, const ScopedStopTheWorl
     // nullgate names the edge inside. Both are gated and neither subsumes the other.
 
     object->ForEachRefField([this, object, stw](RefField<>& field) {
-        NullRouteCaller::ScopedEdge _edge("liveobj", object, reinterpret_cast<uintptr_t>(&field));
-        NullRouteCaller::ScopedTag _nrTag("FixMinorEvacuatedSlot");
         (void)FixMinorEvacuatedSlot(field, nullptr, stw);
     });
 
@@ -1528,8 +1398,6 @@ void WCollector::FixMinorRootSlotsParallel(GCThreadPool* threadPool, const Scope
         NoteLargeArrayInitRootVisit(LargeArrayRootVisitSite::MINOR_RELOCATE,
                                     to_object(safe(root.LoadPlain(std::memory_order_acquire))));
 #endif
-        NullRouteCaller::ScopedEdge _edge("root", nullptr, reinterpret_cast<uintptr_t>(&root));
-        NullRouteCaller::ScopedTag _nrTag("FixMinorEvacuatedSlot");
         (void)FixMinorEvacuatedSlot(root, stw);
     };
     DerivedPtrVisitor derivedFix = [this, stw](BasePtrType basePtr, DerivedSlot& derived) {
@@ -1582,15 +1450,18 @@ void WCollector::EvacuateYoungRegions(const std::vector<BaseObject*>& reachableV
             VLOG(REPORT, "[GCV2][verify][post-evac] point=%s run=%zu", point, minorTotalRuns + 1);
         }
     };
-    // fixinput: grant route-domain before holder Forward (same as FixMinorEvacuatedSlot).
-    // Do not rewrite holders or soft-skip Forward here — gold regressed when from_fallback
-    // left unfixed from-faces. Bad to-tip is refused at FixMinorObjectSlots (reader gate).
+    // ZGC scans holders only through load-good addresses after relocate
+    // (zBarrier.inline.hpp:294-343; zGeneration.cpp:1490-1523). reachableVec
+    // was captured before Compact/Forward and therefore contains from-space
+    // object addresses; passing those directly to ForwardObject after compact
+    // reinterprets a cleared old location as a new relocation request.
     auto currentObject = [this](BaseObject* object) {
-        if (IsGhostFromObject(object) && !IsUnmovableFromObject(object)) {
-            EnsureRouteDomainMembership(const_cast<WCollector*>(this), object);
-            return ForwardObject(object);
-        }
-        return object;
+        BaseObject* const resolved = ResolveStoreValue(object);
+        CHECK_DETAIL(resolved != nullptr && Heap::IsHeapAddress(resolved) &&
+                         Collector::JudgeHandOutTarget(resolved) == HandVerdict::Usable,
+                     "minor holder must resolve load-good before field scan from=%p resolved=%p",
+                     object, resolved);
+        return resolved;
     };
 
     // ZGC Phase 7/8 (zGeneration.cpp:573-580, 918-931, 850-853): pause_relocate_start
@@ -1634,8 +1505,6 @@ void WCollector::EvacuateYoungRegions(const std::vector<BaseObject*>& reachableV
         for (size_t i = beginSlot; i < endSlot; ++i) {
             MAddress slot = remsetVec[i];
             if (Heap::IsHeapAddress(slot)) {
-                NullRouteCaller::ScopedEdge _edge("remset", nullptr, static_cast<uintptr_t>(slot));
-                NullRouteCaller::ScopedTag _nrTag("FixMinorEvacuatedSlot");
                 auto known = interiorBases.find(slot);
                 BaseObject* knownBase = known != interiorBases.end() ? known->second : nullptr;
                 (void)FixMinorEvacuatedSlot(HeapSlotAt<>(slot), knownBase, evacStw,
@@ -1896,10 +1765,14 @@ void WCollector::EvacuateYoungRegions(const std::vector<BaseObject*>& reachableV
                 // markwater2: allocating pages never entered the route plan
                 // (zGeneration.cpp:211-213). Leave them young on unmovableFrom;
                 // next PrepareYoung ClearLiveInfo re-snapshots the watermark.
-                if (region->HasMarkStartAllocGap()) {
+                MarkView<Generation::Young> promotionView = region->GetMarkView<Generation::Young>();
+                const bool hasObjectLiveness = region->IsLargeRegion() ||
+                    region->GetMarkBitmap(promotionView) != nullptr || region->GetResurrectBitmap() != nullptr;
+                if (!PromotedRegionDomain::ResidualPromotionHasClosedLiveness(
+                        region->HasMarkStartAllocGap(), region->IsLiveCountAuthoritative(),
+                        hasObjectLiveness)) {
                     continue;
                 }
-                MarkView<Generation::Young> promotionView = region->GetMarkView<Generation::Young>();
                 if (kPageAgeAdaptiveTenuring &&
                     !ShouldPromoteAge(region->GetYoungAge(), GetGCStats().tenuringThreshold)) {
                     if (region->IsLoneFromRegion() || region->IsFromRegion()) {
@@ -1980,8 +1853,8 @@ void WCollector::EvacuateYoungRegions(const std::vector<BaseObject*>& reachableV
 //
 // Contract of this wait:
 //   ① return tip-valid to (receipt), or
-//   ② return from while region still mid-route (from is a live object; mutator continues),
-//   ③ never return a null-tip geometric address, and never CAS one into a slot.
+//   ② fail the relocation invariant;
+//   ③ never return a from address or a null-tip geometric address.
 // Distinct from 4e75f2cc: that path is RouteObject *miss* (no plan) on a ghost about to
 // be reclaimed — returning from there reinstalls a dying address. Here RouteObject *hit*
 // with no tip yet: while still ROUTED/ROUTING, from is not yet CollectRegion'd.
@@ -1989,332 +1862,129 @@ void WCollector::EvacuateYoungRegions(const std::vector<BaseObject*>& reachableV
 // missing tip = permanent hole = invariant violation → CHECK (not hang, not geometric to).
 //
 // Diag: MRT_GCV2_WAITFWD=1 counts enter / tip-ready / give-up (gate before counter work).
-namespace {
-// permwho: what the permhole CHECK could not say.
+
+// inplaceto: after an in-place compaction the from-layout and the to-layout occupy the *same*
+// page span, so the page-scoped ghost-from predicate cannot tell a stale from-address from an
+// address that has already been relocated.  ZGC never has to tell them apart: a to-pointer
+// carries the remapped colour, its barrier fast path returns before the forwarding table is
+// consulted, and zRelocate.cpp:382-389 is therefore only ever entered with a from-address.
+// Our root words are plain (no colour), so the discriminator has to be rebuilt from the page's
+// own geometry -- the same geometry ZGC records for this exact overlap in
+// ZForwarding::in_place_relocation_start (zForwarding.cpp:55-64, _in_place_top_at_start) and
+// consumes in ZHeap::is_in (zHeap.cpp:202-208).
 //
-// ① Two ledgers. The report printed live= from GetLiveByteCount(), but livesame moved the
-//    reclaim predicate onto the mark face: IsKnownEmpty() (RegionInfo.h:1620) reads
-//    liveInfo->markEpoch vs snapshotEpoch, and GetLiveByteCount() now only feeds densify
-//    (RegionInfo.h:1593-1595). A break reported from one ledger cannot say whether the two
-//    agree at that instant, so record both faces.
-// ② Which invariant. AdmitForRoute (RegionInfo.h:940-945) admits any 8-byte offset whose bit
-//    is set in liveInfo0; MarkBits paints one bit per 8 bytes across the whole object
-//    (RegionInfo.h:478 → LiveInfo.h:123), so every interior word of a marked object is
-//    admissible. CopyObject writes a tip only at an object *start* (WCollector.cpp:6215).
-//    A size-walk of the from-region separates the two candidate breaks:
-//      isObjStart=1 containerFwd=0 ⇒ a survivor *start* reached FORWARDED without a Copy
-//                                    (receipt-gate / ordering break)
-//      isObjStart=0 containerFwd=1 ⇒ interior admission: no path ever fills that tip, and
-//                                    to == containerTo + delta proves the plan is geometric
-struct PermHoleFacts {
-    unsigned knownEmpty = 0;
-    unsigned liveAuth = 0;
-    unsigned long long faceEpoch = 0;
-    unsigned long long regionEpoch = 0;
-    unsigned markBmNull = 1;
-    unsigned finalizableOnly = 0;
-    unsigned ghost0Null = 1;
-    unsigned ghostSurv = 0;
-    unsigned curSurv = 0;
-    size_t fromOffset = 0;
-    size_t allocOff = 0;
-    size_t ghostSize = 0;
-    unsigned long long preLiveFrom = 0;
-    // walk results
-    unsigned walkDone = 0;
-    unsigned isObjStart = 0;
-    unsigned containerFound = 0;
-    unsigned containerFwd = 0;
-    uintptr_t containerAddr = 0;
-    size_t containerSize = 0;
-    size_t delta = 0;
-    unsigned long long preLiveContainer = 0;
-    uintptr_t containerToGuess = 0;
-    unsigned containerToValid = 0;
-    size_t walkSteps = 0;
-    // from-region carrier state
-    unsigned fromGhost = 0;
-    unsigned fromFree = 0;
-    unsigned fromGarbage = 0;
-    unsigned liveInfoSame = 0;
-    // to-region state: separates "no path ever wrote this tip" from "a tip was written and
-    // the to-region has since been reclaimed/reused" — the CHECK message cannot tell them
-    // apart, and they have opposite fixes.
-    unsigned toFound = 0;
-    unsigned toRtype = 0;
-    unsigned toRoute = 0;
-    unsigned toFree = 0;
-    unsigned toGarbage = 0;
-    unsigned toGhost = 0;
-    unsigned toYoung = 0;
-    uintptr_t toRegStart = 0;
-    uintptr_t toRegAllocPtr = 0;
-    // permhit: the recorded plan itself, and the first words of the memory it points at.
-    // RouteInfo (LiveInfo.h:244-260) has no epoch, so plan and reality can only be told
-    // apart by comparing them; ClearUnits (RegionInfo.h:842-851) zeroes reused memory, so
-    // toWord0==0 with the address inside a live alloc prefix is the reuse signature
-    // remsetlife measured on the remset face.
-    uintptr_t planTo1 = 0;
-    unsigned planTo1Used = 0;
-    unsigned planTo2Idx = 0;
-    unsigned toInAllocPrefix = 0;
-    unsigned toWordsRead = 0;
-    unsigned long long toWord0 = 0;
-    unsigned long long toWord1 = 0;
-    size_t toOffInReg = 0;
-};
+// The three cases are mutually exclusive and jointly exhaustive for a compacted page whose
+// forwarding lookup missed:
+//
+//   survived(off)              the from-livemap covers this offset, so PublishKeptInPlaceReceipts
+//                              (RegionManager.cpp:2151-2199) owed a receipt for it and there is
+//                              none -> the invariant is broken, refuse.
+//   off < allocPtr             the in-place compaction wrote the to-layout over this offset; no
+//                              from object is covered here and none ever was, so the address is
+//                              a to-address (or an interior of one) and is already current.
+//   off >= allocPtr            the abandoned tail above the new top: the from copy is gone and no
+//                              to-object was written here -> nothing can be named, refuse.
+//
+// Measured on NW256/256MB, 3/3 verbatim: a base register root held from-offset 33480 at mark and
+// to-offset 27320+2048 at the major PreForward, with the table mapping 33480 onto 27320
+// (revBaseHit=1 revBaseFromOff=33480).  The root was current; the walk asked anyway.
+// kAlreadyTo is split by what the page's own size walk says the address *is*.  ZGC's heap oop
+// fields hold object starts by construction -- interior pointers exist only as derived oops
+// paired with a base in an oop map (oopMap.cpp:404-424) and never in a field -- so an interior
+// reaching a heap-field consumer is not a to-address that needs recognising, it is a value that
+// names nothing.  Only the root-side consumers, where an interior is a legal register value, may
+// take kAlreadyToInterior.
+enum class CompactedMissClass : uint8_t { kReceiptOwed, kAlreadyToStart, kAlreadyToInterior,
+                                          kAbandonedTail };
 
-// Metadata only — safe even after CollectRegion turned the payload into free memory.
-void CollectPermHoleMeta(RegionInfo* r, BaseObject* from, PermHoleFacts& f)
+static CompactedMissClass ClassifyCompactedMiss(RegionInfo* region, BaseObject* obj)
 {
-    if (r == nullptr) {
-        return;
+    const MAddress addr = reinterpret_cast<MAddress>(obj);
+    const MAddress start = region->GetRegionStart();
+    const MAddress allocPtr = region->GetRegionAllocPtr();
+    if (addr < start) {
+        return CompactedMissClass::kAbandonedTail;
     }
-    f.knownEmpty = static_cast<unsigned>(r->IsRouteKnownEmpty());
-    f.liveAuth = static_cast<unsigned>(r->IsLiveCountAuthoritative());
-    f.regionEpoch = static_cast<unsigned long long>(r->GetSnapshotEpoch());
-    f.ghostSize = r->GetGhostRegionSize();
-    MAddress start = r->GetRegionStart();
-    MAddress allocPtr = r->GetRegionAllocPtr();
-    f.allocOff = allocPtr > start ? static_cast<size_t>(allocPtr - start) : 0;
-    MAddress fromAddr = reinterpret_cast<MAddress>(from);
-    if (from != nullptr && fromAddr >= start) {
-        f.fromOffset = static_cast<size_t>(fromAddr - start);
-    }
-    LiveInfo* ghost = r->GetLiveInfo0ForProbe();
-    f.ghost0Null = static_cast<unsigned>(ghost == nullptr);
-    if (ghost != nullptr) {
-        if (r->GetRouteMarkGeneration() == Generation::Young) {
-            MarkView<Generation::Young> view = r->GetRouteMarkView<Generation::Young>();
-            f.faceEpoch = static_cast<unsigned long long>(r->GetMarkEpoch(view, ghost));
-        } else {
-            MarkView<Generation::Old> view = r->GetRouteMarkView<Generation::Old>();
-            f.faceEpoch = static_cast<unsigned long long>(r->GetMarkEpoch(view, ghost));
+    const size_t off = static_cast<size_t>(addr - start);
+    // Inside an in-place compaction the from- and to-layouts share one span, so
+    // "the from-livemap covers off" and "off is a published destination" are both true of the
+    // same address whenever some from-object landed on top of another from-object's start.  The
+    // three cases above are therefore NOT disjoint in that overlap, and asking the livemap first
+    // classified a live to-object start as an owed receipt: measured on NW256/256MB, a root at
+    // to-offset 18584 with survived=1 isStart=1 whose reverse lookup named from-offset 37256 as
+    // the object copied there (revHit=1 revBaseHit=1) was refused as try.compacted-no-receipt.
+    // Provenance is a claim only the page's own table can attest, so ask the table before the
+    // livemap -- ZGC resolves the identical overlap from ZForwarding::_in_place_top_at_start plus
+    // the forwarding entry, never from liveness (zForwarding.cpp:55-64; zHeap.cpp:202-208).
+    if (addr < allocPtr) {
+        ZForwarding* provenance = ForwardingTable::GetEntries(start);
+        if (provenance == nullptr) {
+            provenance = ForwardingTable::Get(start);
         }
-        RegionBitmap* routeBitmap = r->GetRouteMarkBitmap(ghost);
-        f.markBmNull = static_cast<unsigned>(routeBitmap == nullptr);
-        f.finalizableOnly =
-            static_cast<unsigned>(routeBitmap != nullptr && routeBitmap->IsFinalizable(f.fromOffset));
-        f.ghostSurv = static_cast<unsigned>(r->IsRouteSurvivedObject(f.fromOffset));
-        // GetPreMaskInfo divides by the ghost region size; a zero size would fault inside
-        // the diagnostic rather than reporting anything.
-        if (f.ghostSize > 0) {
-            f.preLiveFrom =
-                static_cast<unsigned long long>(r->GetPreLiveBytesInGhostRegionForProbe(fromAddr));
+        MAddress revFrom = 0;
+        if (provenance != nullptr && provenance->find_from_by_to(addr, &revFrom) && revFrom >= start) {
+            return CompactedMissClass::kAlreadyToStart;
         }
     }
-    LiveInfo* current = r->GetLiveInfo();
-    if (r->GetRouteMarkGeneration() == Generation::Young) {
-        MarkView<Generation::Young> view = r->GetRouteMarkView<Generation::Young>();
-        f.curSurv = static_cast<unsigned>(r->IsSurvivedObject(view, current, f.fromOffset));
+    if (region->IsOwnerSurvivedObject(off)) {
+        return CompactedMissClass::kReceiptOwed;
+    }
+    if (addr >= allocPtr) {
+        return CompactedMissClass::kAbandonedTail;
+    }
+    // The to-layout size walk is the discriminator, so it runs before the class is decided, not
+    // only for the diagnostic below.  A page whose walk cannot name a container for this address
+    // has published nothing that covers it: refuse.
+    size_t contOff = 0;
+    size_t contSize = 0;
+    size_t contDelta = 0;
+    unsigned contFound = 0;
+    if (region->IsLargeRegion()) {
+        contFound = 1;
+        contOff = 0;
+        contSize = static_cast<size_t>(allocPtr - start);
+        contDelta = off;
     } else {
-        MarkView<Generation::Old> view = r->GetRouteMarkView<Generation::Old>();
-        f.curSurv = static_cast<unsigned>(r->IsSurvivedObject(view, current, f.fromOffset));
-    }
-    f.fromGhost = static_cast<unsigned>(r->IsGhostFromRegion());
-    f.fromFree = static_cast<unsigned>(r->IsFreeRegion());
-    f.fromGarbage = static_cast<unsigned>(r->IsGarbageRegion());
-    f.liveInfoSame = static_cast<unsigned>(r->GetLiveInfo() == ghost);
-}
-
-// The geometric to lands in some region; its carrier state says whether a tip could still
-// be there at all.
-void CollectPermHoleToRegion(BaseObject* geometricTo, PermHoleFacts& f)
-{
-    if (geometricTo == nullptr || !Heap::IsHeapAddress(geometricTo)) {
-        return;
-    }
-    RegionInfo* tr = RegionInfo::TryGetRegionInfoAt(reinterpret_cast<uintptr_t>(geometricTo));
-    if (tr == nullptr) {
-        return;
-    }
-    f.toFound = 1;
-    f.toRtype = static_cast<unsigned>(tr->GetRegionType());
-    f.toRoute = static_cast<unsigned>(tr->GetRouteState());
-    f.toFree = static_cast<unsigned>(tr->IsFreeRegion());
-    f.toGarbage = static_cast<unsigned>(tr->IsGarbageRegion());
-    f.toGhost = static_cast<unsigned>(tr->IsGhostFromRegion());
-    f.toYoung = static_cast<unsigned>(tr->IsYoungRegion());
-    f.toRegStart = static_cast<uintptr_t>(tr->GetRegionStart());
-    f.toRegAllocPtr = static_cast<uintptr_t>(tr->GetRegionAllocPtr());
-    uintptr_t toAddr = reinterpret_cast<uintptr_t>(geometricTo);
-    f.toOffInReg = toAddr >= f.toRegStart ? static_cast<size_t>(toAddr - f.toRegStart) : 0;
-    f.toInAllocPrefix = static_cast<unsigned>(toAddr >= f.toRegStart && toAddr < f.toRegAllocPtr);
-    // Mapped heap memory: readable whatever its contents. A zero first word is the state
-    // ClearUnits leaves behind, and is also what an unwritten tip looks like.
-    if (f.toInAllocPrefix != 0 && toAddr + 2 * sizeof(uint64_t) <= f.toRegAllocPtr) {
-        const uint64_t* w = reinterpret_cast<const uint64_t*>(toAddr);
-        f.toWord0 = static_cast<unsigned long long>(w[0]);
-        f.toWord1 = static_cast<unsigned long long>(w[1]);
-        f.toWordsRead = 1;
-    }
-}
-
-// The plan the from-region is still serving, read straight out of its RouteInfo.
-void CollectPermHolePlan(RegionInfo* r, PermHoleFacts& f)
-{
-    if (r == nullptr) {
-        return;
-    }
-    RouteInfo plan = r->GetRouteInfoForProbe();
-    f.planTo1 = plan.toRegion1StartAddress;
-    f.planTo1Used = static_cast<unsigned>(plan.GetToRegion1UsedBytes());
-    f.planTo2Idx = static_cast<unsigned>(plan.GetToRegion2Idx());
-}
-
-// Payload walk — reads from-region memory, which CollectRegion may already have released.
-// Called only after the metadata line is already on the record.
-void CollectPermHoleWalk(RegionInfo* r, BaseObject* from, BaseObject* geometricTo, PermHoleFacts& f)
-{
-    if (r == nullptr || from == nullptr || !r->IsSmallRegion()) {
-        return;
-    }
-    MAddress start = r->GetRegionStart();
-    MAddress allocPtr = r->GetRegionAllocPtr();
-    MAddress fromAddr = reinterpret_cast<MAddress>(from);
-    if (fromAddr < start || allocPtr <= start) {
-        return;
-    }
-    constexpr size_t kMaxWalkSteps = 1u << 20;
-    MAddress position = start;
-    while (position < allocPtr && f.walkSteps < kMaxWalkSteps) {
-        BaseObject* o = from_region_addr(position);
-        if (!Collector::PlausibleManagedObjectGate("permwho-walk", o)) {
-            break;
-        }
-        size_t allocSize = RegionSpace::GetAllocSize(*o);
-        if (allocSize == 0) {
-            break;
-        }
-        ++f.walkSteps;
-        if (position == fromAddr) {
-            f.isObjStart = 1;
-        }
-        if (fromAddr >= position && fromAddr < position + allocSize) {
-            f.containerFound = 1;
-            f.containerAddr = static_cast<uintptr_t>(position);
-            f.containerSize = allocSize;
-            f.delta = static_cast<size_t>(fromAddr - position);
-            f.containerFwd = static_cast<unsigned>(o->IsForwarded());
-            LiveInfo* ghost = r->GetLiveInfo0ForProbe();
-            if (ghost != nullptr && r->GetGhostRegionSize() > 0) {
-                f.preLiveContainer =
-                    static_cast<unsigned long long>(r->GetPreLiveBytesInGhostRegionForProbe(position));
+        MAddress position = start;
+        for (size_t steps = 0; position < allocPtr && steps < (1u << 20); ++steps) {
+            BaseObject* o = reinterpret_cast<BaseObject*>(position);
+            if (!MapleRuntime::PlausibleManagedObjectGate("inplacepop-walk", o)) {
+                break;
             }
-            if (geometricTo != nullptr && reinterpret_cast<uintptr_t>(geometricTo) > f.delta) {
-                uintptr_t guess = reinterpret_cast<uintptr_t>(geometricTo) - f.delta;
-                f.containerToGuess = guess;
-                BaseObject* cto = from_region_addr(guess);
-                if (Heap::IsHeapAddress(cto)) {
-                    f.containerToValid = static_cast<unsigned>(cto->IsValidObject());
-                }
+            const size_t allocSize = RegionSpace::GetAllocSize(*o);
+            if (allocSize == 0) {
+                break;
             }
-            break;
+            if (addr >= position && addr < position + allocSize) {
+                contFound = 1;
+                contOff = static_cast<size_t>(position - start);
+                contSize = allocSize;
+                contDelta = static_cast<size_t>(addr - position);
+                break;
+            }
+            position += allocSize;
         }
-        position += allocSize;
     }
-    f.walkDone = 1;
+    if (contFound == 0) {
+        return CompactedMissClass::kAbandonedTail;
+    }
+    return contDelta == 0 ? CompactedMissClass::kAlreadyToStart
+                          : CompactedMissClass::kAlreadyToInterior;
 }
-} // namespace
 
 BaseObject* WCollector::WaitRoutedTipReady(BaseObject* from, BaseObject* to, RegionInfo* forwarding) const
 {
-    static std::atomic<uint64_t> enterCount{0};
-    static std::atomic<uint64_t> tipReadyCount{0};
-    static std::atomic<uint64_t> giveUpCount{0};
-    constexpr int diagOn = 0;
-    if (diagOn) {
-        // permwho: the three counters were incremented but never read anywhere, so
-        // MRT_GCV2_WAITFWD=1 produced no output at all and "enter != 0" was unanswerable.
-        // Capture-less lambda may odr-use these function-local statics without capturing.
-        static std::atomic<bool> waitfwdAtexitInstalled{ false };
-        bool expected = false;
-        if (waitfwdAtexitInstalled.compare_exchange_strong(expected, true, std::memory_order_relaxed)) {
-            std::atexit([]() {
-                std::fprintf(stderr, "[GCV2][waitfwd] atexit enter=%llu tipReady=%llu giveUp=%llu\n",
-                             static_cast<unsigned long long>(enterCount.load(std::memory_order_relaxed)),
-                             static_cast<unsigned long long>(tipReadyCount.load(std::memory_order_relaxed)),
-                             static_cast<unsigned long long>(giveUpCount.load(std::memory_order_relaxed)));
-                std::fflush(stderr);
-            });
-        }
-        enterCount.fetch_add(1, std::memory_order_relaxed);
-    }
-
     RegionSpace& space = reinterpret_cast<RegionSpace&>(theAllocator);
     // Bound mid-copy waits only while route is still in flight. Permanent publish-without-tip
     // is an invariant break (CHECK below), not a longer spin.
-    auto permanentHole = [&](const char* reason, int spins, BaseObject* geometricTo) -> BaseObject* {
-        if (diagOn) {
-            giveUpCount.fetch_add(1, std::memory_order_relaxed);
-        }
-        // portmutreloc: the 4096-spin FATAL leg. Counted, never removed -- the port adds a
-        // first choice ahead of this wait, it does not take the fallback away. If mutator
-        // relocation is worth anything, this is the number that drops.
+    auto permanentHole = [&](const char* reason, int /*spins*/, BaseObject* /*geometricTo*/) -> BaseObject* {
+        // This is the fail-closed witness for a completed relocation without a
+        // forwarding receipt; it is not an alternate answer.
         if (MutatorRelocate::StatsOn()) {
             MutatorRelocate::NoteWaitFatal();
         }
-        RegionInfo::RouteState rs =
-            forwarding != nullptr ? forwarding->GetRouteState() : RegionInfo::RouteState::NORMAL;
-        GCPhase phase = GetGCPhase();
-        MAddress regStart = forwarding != nullptr ? forwarding->GetRegionStart() : 0;
-        MAddress regEnd = forwarding != nullptr ? forwarding->GetRegionEnd() : 0;
-        unsigned rtype = forwarding != nullptr ? static_cast<unsigned>(forwarding->GetRegionType()) : 0;
-        unsigned young = forwarding != nullptr ? static_cast<unsigned>(forwarding->IsYoungRegion()) : 0;
-        size_t live = forwarding != nullptr ? forwarding->GetLiveByteCount() : 0;
-        bool fromFwd = from != nullptr && from->IsForwarded();
-        // permwho: both ledgers, then the size-walk that names which invariant broke.
-        // Metadata line first: the walk touches from-region payload that CollectRegion may
-        // already have released, so the cheap facts must be on the record before it runs.
-        PermHoleFacts f;
-        CollectPermHoleMeta(forwarding, from, f);
-        CollectPermHoleToRegion(geometricTo, f);
-        CollectPermHolePlan(forwarding, f);
-        LOG(RTLOG_ERROR,
-            "[GCV2][permhit] plan region=%p planTo1=%#zx planTo1Used=%u planTo2Idx=%u "
-            "to=%p toOffInReg=%zu toInAllocPrefix=%u toWordsRead=%u toWord0=%#llx toWord1=%#llx "
-            "preLiveFrom=%llu fromOff=%zu",
-            forwarding, static_cast<size_t>(f.planTo1), f.planTo1Used, f.planTo2Idx, geometricTo,
-            f.toOffInReg, f.toInAllocPrefix, f.toWordsRead, f.toWord0, f.toWord1, f.preLiveFrom,
-            f.fromOffset);
-        LOG(RTLOG_ERROR,
-            "[GCV2][permwho] toregion to=%p toFound=%u toRtype=%u toRoute=%u toFree=%u toGarbage=%u "
-            "toGhost=%u toYoung=%u toRegStart=%#zx toRegAlloc=%#zx fromGhost=%u fromFree=%u "
-            "fromGarbage=%u liveInfoSame=%u",
-            geometricTo, f.toFound, f.toRtype, f.toRoute, f.toFree, f.toGarbage, f.toGhost, f.toYoung,
-            static_cast<size_t>(f.toRegStart), static_cast<size_t>(f.toRegAllocPtr), f.fromGhost,
-            f.fromFree, f.fromGarbage, f.liveInfoSame);
-        LOG(RTLOG_ERROR,
-            "[GCV2][permwho] books region=%p live=%zu liveAuth=%u knownEmpty=%u faceEpoch=%llu "
-            "regionEpoch=%llu ghost0Null=%u markBmNull=%u finalizableOnly=%u ghostSurv=%u curSurv=%u "
-            "fromOff=%zu allocOff=%zu ghostSize=%zu preLiveFrom=%llu "
-            "enter=%llu tipReady=%llu giveUp=%llu",
-            forwarding, live, f.liveAuth, f.knownEmpty, f.faceEpoch, f.regionEpoch, f.ghost0Null,
-            f.markBmNull, f.finalizableOnly, f.ghostSurv, f.curSurv, f.fromOffset, f.allocOff, f.ghostSize,
-            f.preLiveFrom, static_cast<unsigned long long>(enterCount.load(std::memory_order_relaxed)),
-            static_cast<unsigned long long>(tipReadyCount.load(std::memory_order_relaxed)),
-            static_cast<unsigned long long>(giveUpCount.load(std::memory_order_relaxed)));
-        CollectPermHoleWalk(forwarding, from, geometricTo, f);
-        LOG(RTLOG_ERROR,
-            "[GCV2][permwho] walk region=%p walkDone=%u steps=%zu isObjStart=%u containerFound=%u "
-            "container=%#zx containerSize=%zu containerFwd=%u delta=%zu preLiveContainer=%llu "
-            "containerToGuess=%#zx containerToValid=%u",
-            forwarding, f.walkDone, f.walkSteps, f.isObjStart, f.containerFound,
-            static_cast<size_t>(f.containerAddr), f.containerSize, f.containerFwd, f.delta,
-            f.preLiveContainer, static_cast<size_t>(f.containerToGuess), f.containerToValid);
-        CHECK_DETAIL(false,
-                     "[GCV2][permhole] WaitRoutedTipReady %s spins=%d phase=%d routeState=%u "
-                     "region=%p range=[%#zx,%#zx) rtype=%u young=%u live=%zu knownEmpty=%u "
-                     "ghostSurv=%u isObjStart=%u containerFwd=%u delta=%zu containerToValid=%u "
-                     "toRtype=%u toFree=%u toGarbage=%u "
-                     "from=%p fromFwd=%u to=%p tipValid=0 — publish without receipt",
-                     reason, spins, static_cast<int>(phase), static_cast<unsigned>(rs), forwarding,
-                     static_cast<size_t>(regStart), static_cast<size_t>(regEnd), rtype, young, live,
-                     f.knownEmpty, f.ghostSurv, f.isObjStart, f.containerFwd, f.delta, f.containerToValid,
-                     f.toRtype, f.toFree, f.toGarbage,
-                     from, static_cast<unsigned>(fromFwd), geometricTo);
-        // Unreachable after FATAL; keep from (never geometric null-tip) if CHECK is non-abort builds.
-        return from;
+        CHECK_DETAIL(false, "WCollector::WaitRoutedTipReady.%s", reason);
+        return nullptr;
     };
 
     bool publicationClosed = false;
@@ -2348,25 +2018,23 @@ BaseObject* WCollector::WaitRoutedTipReady(BaseObject* from, BaseObject* to, Reg
     };
     BaseObject* again = lookupTo();
     if (again != nullptr && Heap::IsHeapAddress(again) && again->IsValidObject()) {
-        if (diagOn) {
-            tipReadyCount.fetch_add(1, std::memory_order_relaxed);
-        }
         if (MutatorRelocate::StatsOn()) {
             MutatorRelocate::NoteWaitReceipt();
         }
         return again;
     }
     if (publicationClosed) {
-        return nullptr;
+        return permanentHole("publication-closed", 0, again);
     }
     const bool tableHit = again != nullptr;
     const RegionInfo::RouteState rs = forwarding->GetRouteState();
     const bool regionPublished =
         rs == RegionInfo::RouteState::FORWARDED || rs == RegionInfo::RouteState::COMPACTED ||
         forwarding->IsForwardingDone();
+
     // LEAD 12:2x: retain refused = worker holds the page (retain_page n<0 / n==0).
-    // oraclecut §4: unpublished (any reason) waits for the region-level publish;
-    // keep-from only after publish + table miss (VisitLive hole).
+    // An unpublished page waits for its copier; a published miss is an
+    // invariant failure (zRelocate.cpp:382-416).
     bool retainRefused = false;
     if (!regionPublished && !forwarding->IsForwardingDone()) {
         if (forwarding->TryLockReadFromRegion()) {
@@ -2380,6 +2048,31 @@ BaseObject* WCollector::WaitRoutedTipReady(BaseObject* from, BaseObject* to, Reg
     if (ans == MutatorRelocate::UnpublishedAnswer::UseTo && again != nullptr) {
         return again;
     }
+    if (ans == MutatorRelocate::UnpublishedAnswer::InvariantFailure) {
+        // inplaceto: the second consumer of the same ambiguity.  A page compacted in place
+        // publishes receipts only for the from-object starts its livemap carried, so a lookup
+        // miss on an offset the livemap never covered, below the page's post-compaction top, is
+        // reporting an address that has already been relocated -- not a receipt that was owed.
+        // Measured, NW256/256MB 3/3 verbatim: YoungStripedMarkingWork::ProcessObject traced a
+        // reference to regionStart+4856 on a COMPACTED page with ghostSurv=0 curSurv=0 and
+        // allocOff=43720, and the page's current layout holds a 48-byte object at 4840 that
+        // contains it (delta=16).  ZGC reaches this call only with a from-address because its
+        // to-pointers are colour-good (zRelocate.cpp:382-389); ours are plain.
+        // fieldstart: this consumer is reached from YoungStripedMarkingWork::ProcessObject, i.e.
+        // from a *heap ref field*, and a heap ref field names an object start by construction --
+        // BaseObject.cpp:104-116 hands reference-array elements to the visitor as object
+        // references, and ZGC's oop fields carry no derived pointers at all (oopMap.cpp:404-424).
+        // Measured NW256/256MB 3/3: the refused word is element 129 of a live RawArray<Node> that
+        // the page table confirms is the current copy (from 696 -> to 680), holding an address 16
+        // bytes inside a 48-byte Node -- and 223 of that array's 512 elements name no object start
+        // at all.  Admitting the interior here reports "already relocated" about a word that names
+        // nothing, so only the object-start class may pass.
+        if (forwarding != nullptr && forwarding->IsCompacted() &&
+            ClassifyCompactedMiss(forwarding, from) == CompactedMissClass::kAlreadyToStart) {
+            return from;
+        }
+        return permanentHole("published-without-receipt", 0, again);
+    }
     // Wait for the region-level publish (FORWARDED / COMPACTED / kept), not
     // an object-level empty spin (47595a33). ExemptFromRegion publishes kept
     // immediately so this wait is bounded every cycle.
@@ -2389,25 +2082,13 @@ BaseObject* WCollector::WaitRoutedTipReady(BaseObject* from, BaseObject* to, Reg
     // Only wait while a publisher still exists this cycle.
     const GCPhase waitPhase = GetGCPhase();
     // POST_TRACE already RouteRegion's (PrepareForwardTable); copy is still
-    // ahead. Skipping the wait there keep-froms a page ForwardFromSpace is
-    // about to empty (r5 n=64 phase=12 route=3). IDLE/FINISH/RECLAIM have
+    // ahead. IDLE/FINISH/RECLAIM have
     // no publisher — those are the structurally-false waits (oracle r5).
     const bool waitEligible = (waitPhase == GCPhase::GC_PHASE_POST_TRACE ||
                                waitPhase == GCPhase::GC_PHASE_PREFORWARD ||
                                waitPhase == GCPhase::GC_PHASE_FORWARD) &&
         forwarding != nullptr && !forwarding->IsFreeRegion() && !forwarding->IsGarbageRegion();
     if (ans == MutatorRelocate::UnpublishedAnswer::Wait && !waitEligible) {
-        static std::atomic<size_t> g_waitIneligible{ 0 };
-        const size_t n = g_waitIneligible.fetch_add(1, std::memory_order_relaxed) + 1;
-        if (n <= 8 || (n & (n - 1)) == 0) {
-            LOG(RTLOG_ERROR,
-                "[GCV2][wait-ineligible] n=%zu from=%p region=%p phase=%d route=%u done=%u "
-                "free=%u garbage=%u — FindTo/FindRetiredTo/keep-from",
-                n, from, forwarding, static_cast<int>(waitPhase), static_cast<unsigned>(rs),
-                static_cast<unsigned>(forwarding != nullptr && forwarding->IsForwardingDone()),
-                static_cast<unsigned>(forwarding != nullptr && forwarding->IsFreeRegion()),
-                static_cast<unsigned>(forwarding != nullptr && forwarding->IsGarbageRegion()));
-        }
         BaseObject* retired = lookupTo();
         if (retired != nullptr && Heap::IsHeapAddress(retired) && retired->IsValidObject()) {
             if (MutatorRelocate::StatsOn()) {
@@ -2421,34 +2102,33 @@ BaseObject* WCollector::WaitRoutedTipReady(BaseObject* from, BaseObject* to, Reg
         if (MutatorRelocate::StatsOn()) {
             MutatorRelocate::NoteWaitGiveUp();
         }
-        return from;
+        return permanentHole("published-without-receipt", 0, retired);
     }
     if (ans == MutatorRelocate::UnpublishedAnswer::Wait) {
-        static std::atomic<size_t> g_regionWait{ 0 };
-        static std::atomic<size_t> g_regionGot{ 0 };
-        const size_t wn = g_regionWait.fetch_add(1, std::memory_order_relaxed) + 1;
         if (MutatorRelocate::StatsOn()) {
             MutatorRelocate::NoteRegionWaitEnter();
         }
-        if (wn <= 8 || (wn & (wn - 1)) == 0) {
-            LOG(RTLOG_ERROR,
-                "[GCV2][region-wait] n=%zu from=%p region=%p route=%u done=%u — queue receipt request",
-                wn, from, forwarding, static_cast<unsigned>(rs),
-                static_cast<unsigned>(forwarding->IsForwardingDone()));
-        }
         auto regionIsPublished = [forwarding]() -> bool {
             const RegionInfo::RouteState now = forwarding->GetRouteState();
-            return now == RegionInfo::RouteState::FORWARDED ||
-                now == RegionInfo::RouteState::COMPACTED || forwarding->IsForwardingDone();
+            // Route publication only reserves the destination; a FORWARDED
+            // region may still have objects in flight.  ZGC's request wait
+            // remains parked until the forwarding operation itself closes
+            // (zRelocate.cpp:382-416), at which point a receipt is mandatory.
+            (void)now;
+            return forwarding->IsForwardingDone();
         };
         // zRelocate.cpp:382-406 enters add_and_wait only after retain_page
-        // succeeded. RetainForwarding may itself observe a concurrent page
-        // completion and refuse; keep-from is then the legal late answer.
+        // succeeded. If retain observes concurrent completion, only the
+        // forwarding receipt is a legal late answer.
         if (!forwarding->TryLockReadFromRegion()) {
             if (MutatorRelocate::StatsOn()) {
                 MutatorRelocate::NoteWaitGiveUp();
             }
-            return from;
+            BaseObject* published = lookupTo();
+            if (published != nullptr && Heap::IsHeapAddress(published) && published->IsValidObject()) {
+                return published;
+            }
+            return permanentHole("retain-refused-without-receipt", 0, published);
         }
         forwarding->UnlockReadFromRegion();
 
@@ -2459,16 +2139,6 @@ BaseObject* WCollector::WaitRoutedTipReady(BaseObject* from, BaseObject* to, Reg
         RelocationRequestQueue& requests = space.GetRegionManager().GetRelocationRequestQueue();
         RelocationRequestQueue::EnqueueResult queued =
             requests.Add(forwarding, reinterpret_cast<MAddress>(from));
-#if defined(MRT_GCV2_REGION_WAIT_DIAG)
-        static std::atomic<size_t> g_regionWaitAdd{ 0 };
-        const size_t addN = g_regionWaitAdd.fetch_add(1, std::memory_order_relaxed) + 1;
-        if (addN <= 8 || (addN & (addN - 1)) == 0) {
-            LOG(RTLOG_ERROR,
-                "[GCV2][region-wait-add] n=%zu from=%p accepted=%u inserted=%u state=%u pending=%zu",
-                addN, from, static_cast<unsigned>(queued.accepted), static_cast<unsigned>(queued.inserted),
-                static_cast<unsigned>(queued.request->state()), requests.PendingCount());
-        }
-#endif
 
         // Close publish-before-enqueue: installation may have won between the
         // first lookup and Add(). Publishing an already-existing receipt is the
@@ -2482,7 +2152,6 @@ BaseObject* WCollector::WaitRoutedTipReady(BaseObject* from, BaseObject* to, Reg
         if (completedReceipt != 0) {
             BaseObject* completed = reinterpret_cast<BaseObject*>(completedReceipt);
             if (Heap::IsHeapAddress(completed) && completed->IsValidObject()) {
-                g_regionGot.fetch_add(1, std::memory_order_relaxed);
                 if (MutatorRelocate::StatsOn()) {
                     MutatorRelocate::NoteRegionWaitGot();
                     MutatorRelocate::NoteWaitReceipt();
@@ -2492,11 +2161,10 @@ BaseObject* WCollector::WaitRoutedTipReady(BaseObject* from, BaseObject* to, Reg
         }
 
         // Page completion or a proven no-publisher failure has no object
-        // receipt. Ask the table after that terminal; a miss is the VisitLive
-        // hole recorded in MutatorRelocate.h:68-80 and legally keeps from.
+        // receipt. Ask the table once after that terminal; a miss violates the
+        // relocation invariant.
         BaseObject* ready = lookupTo();
         if (ready != nullptr && Heap::IsHeapAddress(ready) && ready->IsValidObject()) {
-            g_regionGot.fetch_add(1, std::memory_order_relaxed);
             if (MutatorRelocate::StatsOn()) {
                 MutatorRelocate::NoteRegionWaitGot();
                 MutatorRelocate::NoteWaitReceipt();
@@ -2507,16 +2175,9 @@ BaseObject* WCollector::WaitRoutedTipReady(BaseObject* from, BaseObject* to, Reg
             MutatorRelocate::NoteRegionWaitPublishedMiss();
             MutatorRelocate::NoteWaitGiveUp();
         }
-        return from;
+        return permanentHole("request-complete-without-receipt", 0, ready);
     }
-    if constexpr (MutatorRelocate::kUnpublishedMeansKeepFrom) {
-        if (MutatorRelocate::StatsOn()) {
-            MutatorRelocate::NoteWaitGiveUp();
-        }
-        return from;
-    }
-    (void)permanentHole;
-    return from;
+    return permanentHole("forwarding-table-miss", 0, again);
 }
 
 // portmutreloc: ZRelocate::relocate_object's retain/copy/release leg (zRelocate.cpp:391-406).
@@ -2537,13 +2198,11 @@ BaseObject* WCollector::WaitRoutedTipReady(BaseObject* from, BaseObject* to, Reg
 // funnel: relocate_or_remap_object never had this leg, so a mutator that arrived before the
 // copy either got the from pointer back or waited for a worker.
 //
-// nullptr means "fall through to the legs that were already there". Never a hard failure:
-// every refusal here is a state the old code handled anyway.
+// nullptr means the current thread did not acquire the page. The caller may
+// consume a receipt installed by the owning copier, but may not use the from
+// address as an alternate result.
 BaseObject* WCollector::TryMutatorRelocate(BaseObject* obj, RegionInfo* forwarding) const
 {
-    if (!MutatorRelocate::Enabled()) {
-        return nullptr;
-    }
     MutatorRelocate::NoteAttempt();
     // ForwardObjectImpl opens with CHECK(phase == PREFORWARD || FORWARD). relocate_or_remap
     // is reachable from barriers in other phases, so screen here rather than trip that CHECK.
@@ -2604,45 +2263,141 @@ BaseObject* WCollector::ResolveStoreValue(BaseObject* ref) const
     // color_store_good includes remap. A movable ghost-from value must go
     // through the same relocate_or_remap funnel as the load barrier
     // (zRelocate.cpp:382-416) before it is painted store-good.
-    if (ref == nullptr || !Heap::IsHeapAddress(ref)) {
-        return ref;
-    }
-    const MAddress fromAddr = reinterpret_cast<MAddress>(ref);
-    RegionInfo* ghost = RegionInfo::GetGhostFromRegionAt(fromAddr);
-    if (ghost == nullptr || ghost->IsUnmovableFromRegion()) {
-        // oracle Q3 ④: resolve-time FREE is a lost reference. FindRetiredTo
-        // first (FindToVersion already walks the retired generation); miss
-        // keeps the value for ColourStaleLoadBad — never null, never store-good.
-        RegionInfo* live = RegionInfo::TryGetRegionInfoAt(fromAddr);
-        if (ghost == nullptr && (live == nullptr || live->IsFreeRegion())) {
-            BaseObject* retired = FindToVersion(ref).GetOrFailClosed("WCollector::ResolveStoreValue");
-            if (retired != nullptr) {
-                return retired;
-            }
-            static std::atomic<size_t> g_lostRef{ 0 };
-            const size_t n = g_lostRef.fetch_add(1, std::memory_order_relaxed) + 1;
-            if (n <= 8 || (n & (n - 1)) == 0) {
-                LOG(RTLOG_ERROR,
-                    "[GCV2][lostref] n=%zu ref=%p region=%p free=%u — retired miss, keep load-bad",
-                    n, ref, live, static_cast<unsigned>(live != nullptr && live->IsFreeRegion()));
-            }
+    BaseObject* current = ref;
+    for (;;) {
+        if (current == nullptr || !Heap::IsHeapAddress(current)) {
+            return current;
         }
-        return ref;
+        const MAddress currentAddr = reinterpret_cast<MAddress>(current);
+        RegionInfo* currentRegion = RegionInfo::GetGhostFromRegionAt(currentAddr);
+        if (currentRegion != nullptr && currentRegion->IsCompactRouteDestination(currentAddr) &&
+            Collector::JudgeHandOutTarget(current) == HandVerdict::Usable) {
+            // Dense in-place destinations share the from page's address range.
+            // Their presence in the completed compact route table is the
+            // positive relocation receipt; region membership alone must not
+            // reinterpret the packed to-address as another from-address.
+            return current;
+        }
+        // inplaceto: the test above pairs a structural question (is this a compact-route
+        // destination?) with a content heuristic on the header word, so an *interior* of a
+        // relocated object -- whose header word is zero by construction, HandVerdict::ZeroHeader
+        // -- can never satisfy it.  Measured, NW256/256MB 3/3: regionStart+4856 refused here with
+        // verdict=2, while the table maps from 4872 onto to 4840 and the page layout holds a
+        // 48-byte object at 4840 containing it (revBaseHit=1 revBaseFromOff=4872 contDelta=16).
+        // The page geometry answers the structural question without reading the payload, which is
+        // the order ZGC uses: the forwarding read never depends on the from copy's bytes
+        // (zRelocate.cpp:382-389).
+        if (currentRegion != nullptr && currentRegion->IsCompacted() &&
+            ClassifyCompactedMiss(currentRegion, current) == CompactedMissClass::kAlreadyToStart) {
+            return current;
+        }
+        FindToVersionResult found = FindToVersion(current);
+        // A forwarding entry qualifies one hop, not necessarily the final
+        // load-good value. The destination can already belong to the next
+        // relocation set; follow that address-keyed forwarding generation too.
+        // ZGC's load barrier returns only after remap/relocate has produced the
+        // current address (zBarrier.inline.hpp:294-343; zRelocate.cpp:382-416).
+        if (BaseObject* to = found.found()) {
+            const HandVerdict verdict = Collector::JudgeHandOutTarget(to);
+            if (verdict == HandVerdict::Usable) {
+                // from->from is the explicit whole-page in-place receipt
+                // (zRelocate.cpp:862-925,1013-1037), not a lookup miss.
+                return to;
+            }
+            if (to != current) {
+                current = to;
+                continue;
+            }
+            // Identity with a still-forwarded header is not a hop. Finish
+            // relocate_or_remap (zRelocate.cpp:382-416).
+        }
+
+        // A missing receipt is not a terminal miss while the from-region is
+        // retained: the current thread completes relocation before publishing
+        // the healed value (zBarrier.inline.hpp:294-343).
+        RegionInfo* ghost = currentRegion;
+        if (ghost == nullptr) {
+            RegionInfo* live = RegionInfo::TryGetRegionInfoAt(currentAddr);
+            if (live != nullptr && !live->IsFreeRegion() && !live->IsGarbageRegion() &&
+                Collector::JudgeHandOutTarget(current) == HandVerdict::Usable &&
+                !current->IsForwarded()) {
+                return current;
+            }
+            FailClosedLoad("WCollector::ResolveStoreValue.no-forwarding", current, 0);
+        }
+        // A pointer with ghost membership belongs to a published forwarding
+        // generation. Even after its route state changes it cannot be
+        // reclassified as a non-member; only an explicit receipt or completed
+        // relocation qualifies a value (zRelocate.cpp:408-415).
+        if (ghost->IsUnmovableFromRegion() &&
+            Collector::JudgeHandOutTarget(current) == HandVerdict::Usable) {
+            return current;
+        }
+        BaseObject* resolved = relocate_or_remap_object(current, ghost->generation_id());
+        if (resolved == nullptr) {
+            FailClosedLoad("WCollector::ResolveStoreValue.unresolved", current, 0);
+        }
+        if (resolved == current) {
+            // In-place completion must have published its identity receipt;
+            // without it, returning current would recreate the removed
+            // lookup-miss fallback.
+            FindToVersionResult identity = FindToVersion(current);
+            if (identity.found() == current &&
+                Collector::JudgeHandOutTarget(current) == HandVerdict::Usable) {
+                return current;
+            }
+            // zGeneration.inline.hpp:131-135: forwarding table gone → safe(addr).
+            // Ghost can be dispelled between the membership check and
+            // relocate_or_remap; that is not a missing identity receipt.
+            if (Collector::JudgeHandOutTarget(current) == HandVerdict::Usable &&
+                !current->IsForwarded() &&
+                RegionInfo::GetGhostFromRegionAt(currentAddr) == nullptr) {
+                return current;
+            }
+            FailClosedLoad("WCollector::ResolveStoreValue.missing-identity", current, 0);
+        }
+        current = resolved;
     }
-    BaseObject* resolved = relocate_or_remap_object(ref, ghost->generation_id());
-    if (resolved != nullptr) {
-        return resolved;
-    }
-    return ref;
 }
 
 BaseObject* WCollector::ForwardObject(BaseObject* obj)
 {
+    // ZGC returns the original address only when forwarding-table membership
+    // is absent (zGeneration.inline.hpp:131-140).  A stale RegionInfo face is
+    // still membership and must resolve through a receipt or fail closed.
     // markfloor: stack/reg roots may hold RawArray+8 interiors (tip=length). Do not
     // GetSize/CopyObject them; leave the slot unchanged (caller keeps obj).
     if (!Collector::PlausibleManagedObjectGate("WCollector::ForwardObject", obj)) {
         // tipnull: uncopied movable ghost is not VisitLive success.
         if (IsGhostFromObject(obj) && !IsUnmovableFromObject(obj)) {
+            // receiptfirst: ZRelocate::relocate_object opens with
+            // `forwarding->find(from_addr, &cursor)` and returns on a hit
+            // (zRelocate.cpp:382-389); forward_object then asserts that read answers
+            // (zRelocate.cpp:411-415).  The receipt is consulted *before* anything is
+            // read out of the from copy, and it has to be: relocation copies the object
+            // away and reclamation is allowed to clear the from payload afterwards --
+            // that cleared payload is exactly what HandVerdict::ZeroHeader names.  So a
+            // content heuristic (PlausibleManagedObjectGate reads the tip word) must
+            // never be a precondition for reading the table; ordering it first refuses
+            // addresses whose to-version is already published.  A ghost-from movable
+            // address is precisely the population ZGC calls relocate_object on -- a page
+            // with a live ZForwarding -- so the table read belongs here, not after.
+            if (BaseObject* published = FindToVersion(obj).found()) {
+                return published;
+            }
+            // inplaceto: an interior of an *already relocated* object fails the content gate the
+            // same way a stale from-address does, and on a compacted-in-place page both live in
+            // the one span.  Classify by geometry rather than by the gate's answer.
+            RegionInfo* ghostRegion = RegionInfo::GetGhostFromRegionAt(reinterpret_cast<MAddress>(obj));
+            if (ghostRegion != nullptr && ghostRegion->IsCompacted()) {
+                const CompactedMissClass cls = ClassifyCompactedMiss(ghostRegion, obj);
+                // Registers may hold interiors; heap fields may not, which is why the field
+                // consumers above take only the start class.
+                if (cls == CompactedMissClass::kAlreadyToStart ||
+                    cls == CompactedMissClass::kAlreadyToInterior) {
+                    return obj;
+                }
+            }
             return nullptr;
         }
         return obj;
@@ -2664,6 +2419,15 @@ BaseObject* WCollector::ForwardObject(BaseObject* obj)
 BaseObject* WCollector::TryForwardObject(BaseObject* obj)
 {
     if (!Collector::PlausibleManagedObjectGate("WCollector::TryForwardObject", obj)) {
+        // receiptfirst: same order as ForwardObject above -- zRelocate.cpp:382-389 reads
+        // the forwarding table before the from copy is touched at all.  TryForwardObject
+        // is the direct entry point for ForwardUpdateRawRef / FixMinorEvacuatedSlot, so
+        // the published receipt has to be reachable from here too.
+        if (IsGhostFromObject(obj) && !IsUnmovableFromObject(obj)) {
+            if (BaseObject* published = FindToVersion(obj).found()) {
+                return published;
+            }
+        }
         return nullptr;
     }
     RegionInfo* region = RegionInfo::GetGhostFromRegionAt(reinterpret_cast<MAddress>(obj));
@@ -2671,20 +2435,29 @@ BaseObject* WCollector::TryForwardObject(BaseObject* obj)
         return nullptr;
     }
 
-    if (fwdTable.RouteRegion(region)) {
-        // portmutreloc positive control (MRT_GCV2_MUTRELOC_INJECT=1). The loop below already
-        // is retain / copy / release -- it is where the ported leg's three pieces came from.
-        // Routing it through TryMutatorRelocate once makes those pieces execute on a path this
-        // workload actually reaches, so retain, the scoped copy and the attribution in
-        // ForwardObjectExclusive are all exercised and self_copies must come out non-zero.
-        // On refusal it falls straight into the unchanged loop, so behaviour is unchanged
-        // apart from which frame ran the copy.
-        if (MutatorRelocate::InjectOn()) {
-            BaseObject* injected = TryMutatorRelocate(obj, region);
-            if (injected != nullptr) {
-                return injected;
-            }
+    if (BaseObject* mapped = FindToVersion(obj).found()) {
+        return mapped;
+    }
+    if (region->IsCompacted()) {
+        // Compacted page: PublishKeptInPlaceReceipts installs identity forwarding for every
+        // live object start recorded in the livemap (RegionManager.cpp:2151-2199).  A table
+        // miss here is classified by the page's own geometry (see ClassifyCompactedMiss).
+        switch (ClassifyCompactedMiss(region, obj)) {
+            case CompactedMissClass::kAlreadyToStart:
+            case CompactedMissClass::kAlreadyToInterior:
+                return obj;
+            case CompactedMissClass::kReceiptOwed:
+                return nullptr;
+            case CompactedMissClass::kAbandonedTail:
+                return nullptr;
         }
+    }
+    const GCPhase phase = GetGCPhase();
+    if (phase != GCPhase::GC_PHASE_PREFORWARD && phase != GCPhase::GC_PHASE_FORWARD) {
+        return nullptr;
+    }
+
+    if (fwdTable.RouteRegion(region)) {
         // secondclass ①: GetRoute is geometric plan; retain before copying or
         // consuming from-side state (else null-tip → HasRefField SEGV si_addr=0x8).
         if (region->TryLockReadFromRegion()) {
@@ -2707,10 +2480,44 @@ BaseObject* WCollector::TryForwardObject(BaseObject* obj)
         // so a table miss is allowed here. Returning null makes ForwardRegion's
         // receipt audit keep the page instead of spinning outside a safepoint.
         return FindToVersion(obj).GetOrFailClosed("WCollector::TryForwardObject.retain");
-    } else if (region->IsCompacted()) {
-        // Compact copies under region write-lock before COMPACTED is published.
-        return FindToVersion(obj).GetOrFailClosed("WCollector::TryForwardObject.compacted");
     }
+    // ZRelocate::relocate_object ends *every* path that did not itself produce a to-address with
+    // ZRelocate::forward_object -- one last read of the forwarding table (zRelocate.cpp:382-410,
+    // the trailing `return forward_object(forwarding, from_addr)` at :409).  It has to: the page
+    // may have been relocated in place while we were asking, and in-place relocation is what
+    // populates the table.
+    //
+    // RegionManager::RouteRegion returning false is exactly that case.  It answers false in two
+    // structurally different ways (RegionManager.h:806-825): the page is already COMPACTED, or
+    // RouteOrCompactRegionImpl just compacted it in place and set COMPACTED.  Neither means "no
+    // to-version"; both mean "the to-version is an identity receipt published from the livemap by
+    // the in-place compaction" (RegionManager.cpp:2151-2199 PublishKeptInPlaceReceipts).  The
+    // IsCompacted() test above cannot cover it -- it runs *before* this call, and this call is
+    // what makes the page compacted.
+    //
+    // RegionManager::ComputeRoute already spells the predicate as
+    // `RouteRegion(r) || r->IsCompacted()` (RegionManager.h:1012); this consumer read only the
+    // first half, so a root naming a live object on a compacted-in-place page was refused with the
+    // answer sitting in the table.  Observed: NW256/256MB 3/3 abort at
+    // Mutator::GCPhasePreForward.root-unresolved with route=COMPACTED marked=1 inRange=1.
+    if (region->IsCompacted()) {
+        // A miss here is not "unset": RouteRegion answered false because this call is what
+        // compacted the page in place.  Which of the three compacted-miss cases it is comes from
+        // the page geometry, not from the fact that the lookup missed (see ClassifyCompactedMiss).
+        switch (ClassifyCompactedMiss(region, obj)) {
+            case CompactedMissClass::kAlreadyToStart:
+            case CompactedMissClass::kAlreadyToInterior:
+                return obj;
+            case CompactedMissClass::kReceiptOwed:
+                return FindToVersion(obj).GetOrFailClosed("WCollector::TryForwardObject.compact-in-place");
+            case CompactedMissClass::kAbandonedTail:
+                return FindToVersion(obj).GetOrFailClosed("WCollector::TryForwardObject.compact-in-place");
+        }
+    }
+    // Not routed and not compacted: RouteRegion took its ghost soft-miss return
+    // (RegionManager.h:796-805), i.e. the ghost bit was cleared under us and this page is no
+    // longer in the route domain at all.  ZGC's counterpart is ZForwardingTable::get == NULL
+    // (zForwardingTable.inline.hpp:36-46): the page was never selected.
     return nullptr;
 }
 
@@ -2724,6 +2531,22 @@ BaseObject* WCollector::ForwardObjectImpl(BaseObject* obj, RegionInfo* ghostFrom
     // (zRelocate.cpp:354-372) does alloc+copy+insert with no safepoint; 乙1 is
     // the same rule for the object lock that routefix already applied to ROUTING.
     BaseObject* planned = fwdTable.PlanRoute(obj, CopierRouteMint::Make()).dest;
+    if (planned == nullptr) {
+        LOG(RTLOG_ERROR, "[GCV2][first-visitor] PlanRoute returned null obj=%p page=%p phase=%d route=%u",
+            obj, ghostFromRegion, static_cast<int>(GetGCPhase()),
+            ghostFromRegion == nullptr ? 0U : static_cast<unsigned>(ghostFromRegion->GetRouteState()));
+        // zRelocate.cpp:354-372 allocates the destination lazily in the
+        // first visitor.  A ROUTED page with no geometric ticket therefore
+        // still relocates through the regular relocation allocator; the
+        // forwarding receipt below is the sole publication of the result.
+        if (ghostFromRegion != nullptr && ghostFromRegion->GetRouteState() == RegionInfo::RouteState::ROUTED) {
+            const size_t size = RegionSpace::GetAllocSize(*obj);
+            planned = reinterpret_cast<BaseObject*>(
+                AllocBuffer::GetOrCreateAllocBuffer()->Allocate(size, AllocType::MOVEABLE_OBJECT));
+            LOG(RTLOG_ERROR, "[GCV2][first-visitor] lazy relocation allocation obj=%p size=%zu to=%p",
+                obj, size, planned);
+        }
+    }
     do {
         StateWord oldWord = obj->GetStateWord();
 
@@ -2758,13 +2581,16 @@ BaseObject* WCollector::ForwardObjectImpl(BaseObject* obj, RegionInfo* ghostFrom
             if (ans == MutatorRelocate::LockedWaiterAnswer::UseTo) {
                 return toObj;
             }
-            if (ans == MutatorRelocate::LockedWaiterAnswer::UsePlanned) {
+            if (ans == MutatorRelocate::LockedWaiterAnswer::InvariantFailure) {
                 // Page done + leftover LOCKED is not a live copier
                 // (zForwarding.cpp:138-151). PlanRoute dest is uncopied after
                 // the table was retired (zRelocationSet.cpp:91-96). Keep from
-                // (same as AnswerUnpublished KeepFrom) — do not return planned,
-                // do not yield-wait (REPORT-llstore hang_live).
-                return obj;
+                // A published page without the corresponding receipt cannot
+                // produce a load-good answer.
+                CHECK_DETAIL(false,
+                             "published forwarding page has no object receipt from=%p page=%p",
+                             obj, ghostFromRegion);
+                return nullptr;
             }
             sched_yield();
             continue;
@@ -2826,12 +2652,22 @@ BaseObject* WCollector::ForwardObjectExclusive(BaseObject* obj, BaseObject* toOb
         return nullptr;
     }
     if (toObj == nullptr) {
+        LOG(RTLOG_ERROR, "[GCV2][first-visitor] destination null obj=%p page=%p", obj, copyPage);
         obj->UnlockObject(ObjectState::NORMAL);
         return nullptr;
     }
     ForwardingTable::Publication publication = ForwardingTable::EnsurePublicationBeforeCopy(
         copyPage, reinterpret_cast<MAddress>(obj));
     if (!publication) {
+        const MAddress fromAddr = reinterpret_cast<MAddress>(obj);
+        const MAddress pageStart = copyPage == nullptr ? 0 : copyPage->GetRegionStart();
+        const uint64_t entries = ForwardingTable::GetEntries(fromAddr) == nullptr ? 0 : 1;
+        LOG(RTLOG_ERROR,
+            "[GCV2][first-visitor] publication refused obj=%p page=%p pageStart=%#zx entries=%llu route=%u done=%u ref=%d",
+            obj, copyPage, static_cast<size_t>(pageStart), static_cast<unsigned long long>(entries),
+            copyPage == nullptr ? 0U : static_cast<unsigned>(copyPage->GetRouteState()),
+            copyPage == nullptr ? 0U : static_cast<unsigned>(copyPage->IsForwardingDone()),
+            copyPage == nullptr ? 0 : copyPage->ForwardingRefCount());
         // Installation/allocation failure is propagated before CopyObject. Once
         // bytes are copied, publication is an invariant and cannot be a miss.
         obj->UnlockObject(ObjectState::NORMAL);

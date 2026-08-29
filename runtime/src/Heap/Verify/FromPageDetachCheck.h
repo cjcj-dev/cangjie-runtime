@@ -13,12 +13,13 @@ namespace MapleRuntime {
 class RegionInfo;
 
 // FROM_PAGE_DETACH_GATE central checkpoint. Every from-page free/reuse funnel
-// calls the same evidence predicate. The product-default OFF arm only measures;
-// CJRT_FROM_REUSE_GATE=1 refuses reuse and lets the caller quarantine the range.
+// calls the same evidence predicate and refuses reuse until relocation has
+// detached the page-local state.
 //
-// ZGC anchors: zForwarding.cpp:171-181 waits for ref_count==0 in detach_page;
-// zForwarding.inline.hpp makes retain/release the admission protocol; and
-// zRelocate.cpp:1018-1047 releases the page only after the remap closure.
+// ZGC keeps page memory and forwarding metadata on separate clocks:
+// zRelocate.cpp:1041-1047 frees the page when that page's relocation completes,
+// zForwarding.cpp:86-116 retains the independent forwarding object, and
+// zRelocationSet.cpp:191-197 destroys forwardings only at relocation-set reset.
 namespace FromPageDetach {
 
 enum class Site : uint8_t {
@@ -63,12 +64,12 @@ struct QuarantineCounters {
 
 enum class Action : uint8_t {
     OBSERVE = 0,
-    // A major remap closure is the grace point that may consume a retired
-    // answer, but only after every other evidence leg is absent.
+    // The major close rechecks page-local detach evidence. Retired forwarding
+    // metadata is independently owned and is not a page-reuse condition.
     MAJOR_CLOSE = 1,
 };
 
-// Product default is OFF. Only the exact value "1" enables phase-2 blocking.
+// Page-local relocation retention is always enforced (zRelocate.cpp:1041-1047).
 bool GateEnabled();
 
 // A caller may carry a successful precheck across a compound reuse operation
@@ -82,8 +83,10 @@ public:
     ReusePermitScope& operator=(const ReusePermitScope&) = delete;
 };
 
-// The sole evidence predicate. With the product-default OFF it is a measuring
-// arm and always returns true; CJRT_FROM_REUSE_GATE=1 refuses evidence.
+// The sole page evidence predicate. A range with an active page reader,
+// in-flight copy, or attached route owner is not reusable. Active and retired
+// forwarding objects are counted here, but their independent lifetime does not
+// hold page memory (zForwarding.cpp:86-116; zRelocationSet.cpp:191-197).
 bool FromPageDetachCheck(const RegionInfo* region, Site site, Action action = Action::OBSERVE);
 
 Counters GetCounters(Site site);

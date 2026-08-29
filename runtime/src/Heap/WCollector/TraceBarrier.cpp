@@ -117,7 +117,7 @@ void TraceBarrier::WriteReferenceImpl(BaseObject* obj, RefField<false>& field, B
 
     Mutator* mutator = Mutator::GetMutator();
     // The paired StoreBarrierBuffer producer in Barrier::WriteReference owns
-    // retirement of the overwritten value.  Keeping a direct SATB enqueue here
+    // retirement of the overwritten value. Keeping a direct SATB enqueue here
     // would retire the same previous value twice during TRACE.
     RememberNewReference(mutator, ref);
     DLOG(BARRIER, "write obj %p ref-field@%p: %#zx -> %p", obj, &field, rememberedObject, ref);
@@ -153,7 +153,7 @@ void TraceBarrier::WriteStructImpl(BaseObject* obj, MAddress dst, size_t dstLen,
         MRT_ASSERT(dst > reinterpret_cast<MAddress>(obj), "WriteStruct struct addr is less than obj!");
         Mutator* mutator = Mutator::GetMutator();
         // Barrier::WriteStruct snapshots every overwritten field before this
-        // implementation runs.  Its paired buffer is the sole old-value
+        // implementation runs. Its paired buffer is the sole old-value
         // producer for heap struct writes during TRACE.
         obj->ForEachRefInStruct(
             [=](RefField<>& refField) {

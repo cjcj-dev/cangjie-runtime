@@ -389,7 +389,8 @@ size_t RegionManager::RecordPromotedCrossGenEdges(RegionInfo* region)
     }
     RememberedSet& rememberedSet = Heap::GetHeap().GetRememberedSet();
     size_t recorded = 0;
-    bool hasObjectLiveness = region->IsLargeRegion() || region->GetMarkBitmap(view) != nullptr;
+    bool hasObjectLiveness = region->IsLargeRegion() || region->GetMarkBitmap(view) != nullptr ||
+        region->GetResurrectBitmap() != nullptr;
     bool useLiveOnly = hasObjectLiveness && region->IsLiveCountAuthoritative();
     auto recordFromObject = [region, view, &rememberedSet, &recorded, hasObjectLiveness,
                              useLiveOnly](BaseObject* object) {
@@ -466,8 +467,33 @@ size_t RegionManager::RecordPinnedCrossGenEdges()
                 if (target == nullptr || !Heap::IsHeapAddress(target)) {
                     return;
                 }
-                RegionInfo* targetRegion = RegionInfo::GetRegionInfoAt(reinterpret_cast<MAddress>(target));
+                const MAddress targetAddr = reinterpret_cast<MAddress>(target);
+                RegionInfo* targetRegion = RegionInfo::GetRegionInfoAt(targetAddr);
                 if (targetRegion != nullptr && targetRegion->IsYoungRegion()) {
+                    // ZGC sets a remembered bit only for a value its barrier has just
+                    // resolved to a live young address: ZRemembered::scan_field calls
+                    // remember(p) on the result of remset_barrier_on_oop_field
+                    // (zRemembered.cpp:578-589), and remap_and_maybe_add_remset calls
+                    // ZRelocate::add_remset only after load_barrier_on_oop_field_preloaded
+                    // (zRelocate.cpp:1240-1255).  This walk has no such proof.  Qualifying
+                    // the *holder* is not available either -- measured, NW256/256MB: all
+                    // 1875-2761 regions it scans carry no liveness face, 0 of 3.68M objects
+                    // answer survived, so a holder filter here would delete 100% of the
+                    // 551,449 bits it produces rather than filter them.
+                    //
+                    // The *value* is qualifiable without any liveness face.  A young page's
+                    // allocated range is [start, allocPtr); this walk runs with every
+                    // mutator stopped (Generation.cpp:627,745) and allocation bumps that
+                    // same pointer (RegionInfo.h:3320,3330), so an address at or beyond it
+                    // designates no object in the page's current life.  Recording a bit for
+                    // one produces an edge no consumer can honour: the rescan hands it to
+                    // ResolveStoreValue, which fail-closes on the zero header.  Measured
+                    // 3/3 at page+0xbf80 with allocOff=10560, and before that at
+                    // page+0xd100 with allocOff=0, both from 48-byte holders with
+                    // survived=0 marked=0.
+                    if (targetAddr >= targetRegion->GetRegionAllocPtr()) {
+                        return;
+                    }
                     MAddress slot = reinterpret_cast<MAddress>(&field);
                     rememberedSet.Record(slot);
                     recorded.fetch_add(1, std::memory_order_relaxed);
@@ -608,15 +634,6 @@ const size_t RegionInfo::LARGE_OBJECT_DEFAULT_THRESHOLD = MapleRuntime::MRT_PAGE
 const size_t RegionManager::MAX_UNIT_COUNT_PER_REGION = (128 * KB) / MapleRuntime::MRT_PAGE_SIZE;
 // size of huge page is 2048KB.
 const size_t RegionManager::HUGE_PAGE = (2048 * KB) / MapleRuntime::MRT_PAGE_SIZE;;
-
-#if defined(MRT_TESTABLE_INTERNALS)
-// Keep the standalone product-link arm bound to the runtime SO.  The test
-// executable declares these templates as extern; without an out-of-line
-// instantiation in the product target the dlsym lookup for ClearLiveInfo would
-// be null despite the ON configuration compiling the test itself.
-template void RegionInfo::ClearLiveInfo<Generation::Young>(MarkView<Generation::Young>);
-template void RegionInfo::ClearLiveInfo<Generation::Old>(MarkView<Generation::Old>);
-#endif
 
 #if defined(MRT_TESTABLE_INTERNALS)
 template<Generation G>
@@ -890,15 +907,6 @@ inline void RegionManager::UntagHugePage(RegionInfo* region, size_t num) const
 #endif
 }
 
-void FreeRegionManager::AddReleaseUnits(UnitIndex idx, UnitCount num)
-{
-    ScopedEnterSaferegion enterSaferegion(true);
-    std::lock_guard<std::mutex> lg(releasedUnitTreeMutex);
-    if (UNLIKELY(!releasedUnitTree.MergeInsert(idx, num, true))) {
-        LOG(RTLOG_FATAL, "tid %d: failed to add release units [%u+%u, %u)", GetTid(), idx, num, idx + num);
-    }
-}
-
 size_t FreeRegionManager::ReleaseGarbageRegions(size_t targetCachedSize)
 {
     size_t dirtyBytes = dirtyUnitTree.GetTotalCount() * RegionInfo::UNIT_SIZE;
@@ -912,13 +920,12 @@ size_t FreeRegionManager::ReleaseGarbageRegions(size_t targetCachedSize)
         std::lock_guard<std::mutex> lock1(dirtyUnitTreeMutex);
         auto node = dirtyUnitTree.RootNode();
         if (node == nullptr) { break; }
-        UnitIndex idx = node->GetIndex();
+        Index idx = node->GetIndex();
         UnitCount num = node->GetCount();
         RegionInfo* region = RegionInfo::TryGetRegionInfoAt(RegionInfo::GetUnitAddress(idx));
         const bool detachReady = FromPageDetach::FromPageDetachCheck(
             region, FromPageDetach::Site::RELEASE_GARBAGE_UNITS);
-        CHECK_DETAIL(dirtyUnitTree.TakeUnits(num, idx, false),
-                     "tid %d: failed to detach dirty units[%u+%u, %u)", GetTid(), idx, num, idx + num);
+        dirtyUnitTree.ReleaseRootNode();
 
         if (!detachReady) {
             AddDetachQuarantineUnits(idx, num, false, false);
@@ -1041,17 +1048,14 @@ size_t FreeRegionManager::ReleaseDetachQuarantineAfterMajor()
         // post-PrepareForwardTable major closure retired the only route
         // generation that could have stamped the withheld address.
         region->SetRouteDestHold(0);
-        (void)FromPageDetach::FromPageDetachCheck(region, FromPageDetach::Site::MAJOR_RECHECK,
-                                                  FromPageDetach::Action::MAJOR_CLOSE);
-        if (!ExtentReadyForReleasedCache(region)) {
+        if (!FromPageDetach::FromPageDetachCheck(region, FromPageDetach::Site::MAJOR_RECHECK,
+                                                 FromPageDetach::Action::MAJOR_CLOSE)) {
             ++entry.rechecks;
             FromPageDetach::NoteQuarantineRecheckHeld();
-            if (FromPageDetach::GateEnabled()) {
-                CHECK_DETAIL(entry.rechecks <= kMaxRechecks,
-                             "CJRT_FROM_REUSE_GATE detach quarantine did not close idx=%u units=%u rechecks=%u max=%u",
-                             entry.idx, entry.num, static_cast<unsigned>(entry.rechecks),
-                             static_cast<unsigned>(kMaxRechecks));
-            }
+            CHECK_DETAIL(entry.rechecks <= kMaxRechecks,
+                         "CJRT_FROM_REUSE_GATE detach quarantine did not close idx=%u units=%u rechecks=%u max=%u",
+                         entry.idx, entry.num, static_cast<unsigned>(entry.rechecks),
+                         static_cast<unsigned>(kMaxRechecks));
             held.push_back(entry);
             continue;
         }
@@ -1228,23 +1232,13 @@ void RegionManager::ReclaimRegion(RegionInfo* region)
     // STEER3: scrub is at CollectRegion only (see header). Reclaim/TakeRegion reuse
     // must not re-scan O(N) under remset mutex.
 
-    if (FromPageDetach::GateEnabled()) {
+    {
         RegionInfo::DrainScope drain(region, MutatorRelocate::Retire::RECLAIM_DIRTY);
     }
     // gcvroot Z2: poison reclaimed payload so use-after-free roots are identifiable (MRT_GCV2_ZAP_RECLAIM=1).
     HeapZap::ZapReclaimedRegion(region->GetRegionStart(), region->GetRegionEnd());
     region->InitFreeUnits();
-    if (FromPageDetach::GateEnabled()) {
-        // The entry check proved there was no older retired debt; DrainScope
-        // completed the current remap reader closure. ClearEntries inside
-        // InitFreeUnits therefore produced a table that can be detached now,
-        // not a new reason to wait another major cycle.
-        ForwardingTable::DropRetiredCovering(RegionInfo::GetUnitAddress(unitIndex),
-                                             num * RegionInfo::UNIT_SIZE);
-    }
     freeRegionManager.AddGarbageUnits(unitIndex, num);
-    // The free-tree insertion is the allocator lock boundary at which a
-    // blocked allocation can be directed to its newly available extent.
     SatisfyStalledAllocations();
 }
 
@@ -1303,30 +1297,11 @@ void RegionManager::SetAllocationStallTestHooks(AllocationStallTestHook beforeWa
     allocationStallBeforeWaitTestHook = std::move(beforeWait);
 }
 
-size_t RegionManager::PendingStalledAllocations() const
-{
-    return allocationStallQueue.Pending();
-}
-
-size_t RegionManager::EnqueuedStalledAllocations() const
-{
-    return allocationStallQueue.EnqueuedCount();
-}
-
-size_t RegionManager::DequeuedStalledAllocations() const
-{
-    return allocationStallQueue.DequeuedCount();
-}
-
-size_t RegionManager::SatisfiedStalledAllocations() const
-{
-    return allocationStallQueue.SatisfiedCount();
-}
-
-size_t RegionManager::FailedStalledAllocations() const
-{
-    return allocationStallQueue.FailedCount();
-}
+size_t RegionManager::PendingStalledAllocations() const { return allocationStallQueue.Pending(); }
+size_t RegionManager::EnqueuedStalledAllocations() const { return allocationStallQueue.EnqueuedCount(); }
+size_t RegionManager::DequeuedStalledAllocations() const { return allocationStallQueue.DequeuedCount(); }
+size_t RegionManager::SatisfiedStalledAllocations() const { return allocationStallQueue.SatisfiedCount(); }
+size_t RegionManager::FailedStalledAllocations() const { return allocationStallQueue.FailedCount(); }
 #endif
 
 void RegionManager::SatisfyStalledAllocations()
@@ -1359,15 +1334,11 @@ void RegionManager::ReclaimRegionToMarkQuarantine(RegionInfo* region)
     }
     DLOG(REGION, "mark-quarantine region %p @[%#zx+%zu, %#zx) type %u", region, region->GetRegionStart(),
          region->GetRegionAllocatedSize(), region->GetRegionEnd(), region->GetRegionType());
-    if (FromPageDetach::GateEnabled()) {
+    {
         RegionInfo::DrainScope drain(region, MutatorRelocate::Retire::RECLAIM_MARK_QUARANTINE);
     }
     HeapZap::ZapReclaimedRegion(region->GetRegionStart(), region->GetRegionEnd());
     region->InitFreeUnits();
-    if (FromPageDetach::GateEnabled()) {
-        ForwardingTable::DropRetiredCovering(RegionInfo::GetUnitAddress(unitIndex),
-                                             num * RegionInfo::UNIT_SIZE);
-    }
     freeRegionManager.AddMarkQuarantineUnits(unitIndex, num);
 }
 
@@ -1395,13 +1366,13 @@ size_t RegionManager::ReleaseRegion(RegionInfo* region)
     DLOG(REGION, "release region %p @[%#zx+%zu, %#zx) type %u", region, region->GetRegionStart(),
         region->GetRegionAllocatedSize(), region->GetRegionEnd(), region->GetRegionType());
 
-    if (FromPageDetach::GateEnabled()) {
+    {
         RegionInfo::DrainScope drain(region, MutatorRelocate::Retire::RELEASE_REGION);
     }
     region->InitFreeUnits();
-    if (FromPageDetach::GateEnabled()) {
-        ForwardingTable::DropRetiredCovering(RegionInfo::GetUnitAddress(unitIndex),
-                                             num * RegionInfo::UNIT_SIZE);
+    {
+        FromPageDetach::ReusePermitScope reusePermit;
+        RegionInfo::ReleaseUnits(unitIndex, num);
     }
     freeRegionManager.AddReleaseUnits(unitIndex, num);
     return res;
@@ -2201,7 +2172,7 @@ RegionInfo* RegionManager::TakeRegion(size_t num, RegionInfo::UnitRole type, boo
         // transition explicit before allocation. ReclaimRegion drains the
         // current readers, retires the table, and detaches that now-closed
         // answer before publishing the range to the free tree.
-        if (head != nullptr && head->GetUnitCount() == num && FromPageDetach::GateEnabled()) {
+        if (head != nullptr && head->GetUnitCount() == num) {
             ReclaimRegion(head);
             head = nullptr;
         }
@@ -2299,7 +2270,7 @@ RegionInfo* RegionManager::TakeRegion(size_t num, RegionInfo::UnitRole type, boo
     // condition: no page means no progress towards the next major. Request
     // that closure here; GC threads and ROUTING critical sections must not
     // synchronously request a collection from inside their own operation.
-    if (FromPageDetach::GateEnabled() && allowSaferegion && !IsGcThread() &&
+    if (allowSaferegion && !IsGcThread() &&
         freeRegionManager.HasDetachQuarantine()) {
         Heap::GetHeap().GetCollector().RequestGC(GC_REASON_HEU, true);
     }
@@ -2347,72 +2318,71 @@ void WaitCopiedObjectsUnlocked(RegionInfo* region)
     }
     region->WaitCopiedInflight();
 }
-} // namespace
 
-bool RegionManager::TryUnlinkRegionForMove(RegionInfo* region, RegionInfo::RegionType newType)
+template<typename Fn>
+void ForEachLiveObjectStart(RegionInfo* region, MAddress start, MAddress allocPtr, Fn&& fn)
 {
-    if (region == nullptr) {
-        return false;
-    }
-    const RegionInfo::RegionType type = region->GetRegionType();
-    if (type == newType && region->GetRegionListOwner() == nullptr) {
-        return true;
-    }
-    if (type == newType && region->GetRegionListOwner() != nullptr) {
-        return false;
-    }
-    bool claimed = false;
-    if (type == RegionInfo::RegionType::FROM_REGION) {
-        claimed = fromRegionList.TryDeleteRegion(region, type, newType);
-    } else if (type == RegionInfo::RegionType::GARBAGE_REGION) {
-        claimed = garbageRegionList.TryDeleteRegion(region, type, newType);
-    } else if (type == RegionInfo::RegionType::THREAD_LOCAL_REGION) {
-        claimed = tlRegionList.TryDeleteRegion(region, type, newType);
-    } else if (type == RegionInfo::RegionType::RECENT_FULL_REGION) {
-        const size_t units = region->GetUnitCount();
-        claimed = recentFullRegionList.TryDeleteRegion(region, type, newType);
-        if (claimed) {
-            RecentFullAccounting::Dequeue(1, units);
+    const size_t regionBytes = allocPtr > start ? static_cast<size_t>(allocPtr - start) : 0;
+    for (size_t offset = 0; offset < regionBytes; offset += kMarkedBytesPerBit) {
+        if (!region->IsOwnerSurvivedObject(offset)) {
+            continue;
         }
-    } else if (type == RegionInfo::RegionType::UNMOVABLE_FROM_REGION) {
-        claimed = unmovableFromRegionList.TryDeleteRegion(region, type, newType);
-    } else if (type == RegionInfo::RegionType::RAW_POINTER_PINNED_REGION) {
-        claimed = rawPointerPinnedRegionList.TryDeleteRegion(region, type, newType);
-    } else if (type == RegionInfo::RegionType::LARGE_REGION) {
-        claimed = oldLargeRegionList.TryDeleteRegion(region, type, newType);
-    } else if (type == RegionInfo::RegionType::RECENT_LARGE_REGION) {
-        claimed = recentLargeRegionList.TryDeleteRegion(region, type, newType);
-    } else if (type == RegionInfo::RegionType::LONE_FROM_REGION) {
-        if (region->GetRegionListOwner() == nullptr) {
-            region->SetRegionType(newType);
-            return true;
+        BaseObject* object = from_region_addr(start + offset);
+        if (!Collector::PlausibleManagedObjectGate("ForEachLiveObjectStart", object)) {
+            continue;
         }
-        claimed = fromRegionList.TryDeleteRegion(region, RegionInfo::RegionType::FROM_REGION, newType);
-        if (!claimed && region->GetRegionListOwner() == nullptr) {
-            region->SetRegionType(newType);
-            return true;
-        }
-    } else if (region->GetRegionListOwner() == nullptr) {
-        region->SetRegionType(newType);
-        return true;
+        fn(object, offset);
     }
-    return claimed;
 }
+
+size_t PublishKeptInPlaceReceipts(RegionInfo* region)
+{
+    if (region == nullptr || !region->IsGhostFromRegion()) {
+        return 0;
+    }
+    // ZGC iterates the livemap's object-start bits (zPage.inline.hpp:320-331).
+    size_t published = 0;
+    const MAddress start = region->GetRegionStart();
+    const MAddress allocPtr = region->GetRegionAllocPtr();
+    ZForwarding* active = ForwardingTable::GetEntries(start);
+    ForEachLiveObjectStart(region, start, allocPtr, [&](BaseObject* object, size_t) {
+        CHECK_DETAIL(active != nullptr,
+                     "kept page lacks active forwarding table before identity publish object=%p region=%p",
+                     object, region);
+        const MAddress pos = reinterpret_cast<MAddress>(object);
+        const MAddress existing = active->find(pos);
+        if (object->IsForwarded()) {
+            CHECK_DETAIL(existing != 0,
+                         "forwarded object lacks receipt before kept-page retirement object=%p region=%p",
+                         object, region);
+        } else if (existing == 0) {
+            ForwardingTable::Publication publication =
+                ForwardingTable::RetainOpenPublicationAfterCopy(region, pos);
+            CHECK_DETAIL(static_cast<bool>(publication),
+                         "kept page lost forwarding carrier before identity publish object=%p region=%p",
+                         object, region);
+            const ZForwarding::Receipt receipt =
+                ForwardingTable::InstallMapping(publication, pos, pos);
+            CHECK_DETAIL(receipt.address == pos,
+                         "kept identity receipt changed address from=%#zx to=%#zx",
+                         static_cast<size_t>(pos), static_cast<size_t>(receipt.address));
+            ++published;
+        }
+    });
+    return published;
+}
+} // namespace
 
 void RegionManager::ParkUnmovableFromRegion(RegionInfo* region)
 {
-    if (region == nullptr) {
-        return;
-    }
-    if (region->GetRegionType() == RegionInfo::RegionType::UNMOVABLE_FROM_REGION &&
-        region->GetRegionListOwner() == &unmovableFromRegionList) {
-        return;
-    }
-    if (!TryUnlinkRegionForMove(region, RegionInfo::RegionType::UNMOVABLE_FROM_REGION)) {
-        if (region->GetRegionListOwner() != nullptr) {
-            return;
-        }
-        region->SetRegionType(RegionInfo::RegionType::UNMOVABLE_FROM_REGION);
+    // youngconcfollow: callers already unlink the FROM node — TryDelete FROM here
+    // would DecCounts a second time ("error count 1-0 16-0"). Only a GARBAGE node
+    // can still sit on garbageRegionList (the CHECK at
+    // TryTakeGarbageRegionAfterDispel, RegionManager.h:984); unlink it before the
+    // rehome below so the garbage list cannot name a non-GARBAGE region.
+    if (region != nullptr && region->IsGarbageRegion()) {
+        garbageRegionList.TryDeleteRegion(region, RegionInfo::RegionType::GARBAGE_REGION,
+                                          RegionInfo::RegionType::UNMOVABLE_FROM_REGION);
     }
     unmovableFromRegionList.PrependRegion(region, RegionInfo::RegionType::UNMOVABLE_FROM_REGION);
 }
@@ -2425,14 +2395,15 @@ void RegionManager::ExemptFromRegion(RegionInfo* region)
     // (cjpmnull3 wide-definition OOM). Hole pages are not collected this
     // cycle (cjpmnull2 Exempt).
     WaitCopiedObjectsUnlocked(region);
+    const size_t identityReceipts = PublishKeptInPlaceReceipts(region);
     if (region != nullptr && !region->IsForwardingDone()) {
         static std::atomic<size_t> g_exemptKept{ 0 };
         const size_t n = g_exemptKept.fetch_add(1, std::memory_order_relaxed) + 1;
         if (n <= 8 || (n & (n - 1)) == 0) {
             LOG(RTLOG_ERROR,
-                "[GCV2][exempt-kept] n=%zu region=%p start=%#zx route=%u live=%zu",
+                "[GCV2][exempt-kept] n=%zu region=%p start=%#zx route=%u live=%zu identity=%zu",
                 n, region, region->GetRegionStart(),
-                static_cast<unsigned>(region->GetRouteState()), region->GetLiveByteCount());
+                static_cast<unsigned>(region->GetRouteState()), region->GetLiveByteCount(), identityReceipts);
         }
         region->MarkForwardingDone();
     }
@@ -2456,13 +2427,7 @@ bool IncompleteRouteUnpublished(RegionInfo* region)
 
 void RegionManager::FinishIncompleteFromRegions()
 {
-    // Flip false for gate ⑥ (regionTimeout / W1 return). Product default on.
     // zRelocate.cpp:1041-1047: relocate() does not return with a half-copied page.
-    static constexpr bool kFinishIncompleteFromRegions = true;
-    if constexpr (!kFinishIncompleteFromRegions) {
-        return;
-    }
-
     std::vector<RegionInfo*> snap;
     auto push = [&snap](RegionInfo* region) {
         if (region != nullptr) {
@@ -2798,7 +2763,7 @@ void RegionManager::DumpRegionInfo() const
 }
 #endif
 
-void RegionManager::DumpRegionStats(const char* msg, bool dumpToError) const
+void RegionManager::DumpRegionStats(const char* msg) const
 {
     size_t totalSize = regionHeapEnd - regionHeapStart;
     size_t totalUnits = totalSize / RegionInfo::UNIT_SIZE;
@@ -2899,13 +2864,7 @@ void RegionManager::DumpRegionStats(const char* msg, bool dumpToError) const
     double usedObjFragRate = 1.0 - usedObjectCapacity;
     double usedUnitFragRate = 1.0 - usedUnitCapacity;
 
-#define DUMP_REGION_STATS_LOG(format, ...)                  \
-    do {                                                    \
-        VLOG(REPORT, format, ##__VA_ARGS__);                \
-        if (dumpToError) {                                  \
-            LOG(RTLOG_ERROR, format, ##__VA_ARGS__);        \
-        }                                                   \
-    } while (false)
+#define DUMP_REGION_STATS_LOG(format, ...) VLOG(REPORT, format, ##__VA_ARGS__)
 
     DUMP_REGION_STATS_LOG("%s", msg);
 
@@ -3290,45 +3249,35 @@ void RegionManager::CompactRegion(RegionInfo* region)
                  "compact forwarding table unavailable before copy region=%p range=[%#zx,%#zx)",
                  region, static_cast<size_t>(regionStart), static_cast<size_t>(region->GetRegionEnd()));
     CopyCollector& collector = reinterpret_cast<CopyCollector&>(Heap::GetHeap().GetCollector());
-    // uafclose: Admit/GetRoute/VisitLive use liveInfo0 after PrepareForwardable. Compact must
-    // copy the same set — region->IsSurvivedObject reads current liveInfo (+ mark-epoch), which
-    // can disagree with the ghost face. Wrong face ⇒ copy nothing / wrong set, memset free-tail
-    // that still holds root-named from → leave-alone → reclaim → GetSize UAF (FYS1 deadold).
-    auto survivedAt = [region](size_t offset) -> bool { return region->IsOwnerSurvivedObject(offset); };
-    // resolveto: keep dense pack (no holes). Record fromOff→dest so GetRoute on
-    // COMPACTED answers the packed slot, not the prefix-sum hole.
     region->FreeCompactRouteTable();
     region->EnsureCompactRouteTable();
     region->SetRegionAllocPtr(regionStart);
-    bool walkBroke = false;
-    for (MAddress currentPtr = regionStart; currentPtr < regionLimit;) {
-        BaseObject* currentObj = from_region_addr(currentPtr);
-        if (!Collector::PlausibleManagedObjectGate("CompactRegion", currentObj)) {
-            walkBroke = true;
-            break;
-        }
+    // ZGC zRelocate.cpp:838-861 start_in_place_relocation_prepare_remset: this page is its own
+    // to-page, so its old remembered-set bits have to leave the face before the copy walk starts
+    // writing the new ones.  What the walk does not hand back is dropped, which is
+    // clear_remset_before_in_place_reuse (zRelocate.cpp:1027-1035).
+    RememberedSet& rememberedSet = Heap::GetHeap().GetRememberedSet();
+    std::vector<RememberedSet::InPlaceSlot> takenSlots;
+    rememberedSet.TakeInPlaceSlots(regionStart, region->GetRegionEnd(), takenSlots);
+    ForEachLiveObjectStart(region, regionStart, regionLimit, [&](BaseObject* currentObj, size_t offset) {
+        const MAddress currentPtr = regionStart + offset;
         size_t size = currentObj->GetSize();
-        size_t offset = currentPtr - regionStart;
-        if (survivedAt(offset)) {
-            MAddress toAddress = region->Alloc(size);
-            BaseObject* toObj = from_region_addr(toAddress);
-            DLOG(FORWARD, "compact obj %p<%p>(%zu) to %p", currentObj, currentObj->GetTypeInfo(), size, toObj);
+        MAddress toAddress = region->Alloc(size);
+        BaseObject* toObj = from_region_addr(toAddress);
+        DLOG(FORWARD, "compact obj %p<%p>(%zu) to %p", currentObj, currentObj->GetTypeInfo(), size, toObj);
+        collector.CopyObject(*currentObj, *toObj, size);
+        toObj->SetStateCode(ObjectState::NORMAL);
+        std::atomic_thread_fence(std::memory_order_release);
+        const MAddress receipt = ForwardingTable::InsertMapping(publication, currentPtr, toAddress);
+        (void)relocationRequestQueue.Publish(currentPtr, receipt);
+        region->RecordCompactRoute(offset, toAddress);
+        // ZGC zRelocate.cpp:652-731 update_remset_old_to_old: the bits covering the from copy
+        // name field offsets inside this object, so they follow it to its new address.
+        rememberedSet.MoveInPlaceSlots(takenSlots, currentPtr, toAddress, size);
+    });
 
-            collector.CopyObject(*currentObj, *toObj, size);
-            toObj->SetStateCode(ObjectState::NORMAL);
-            std::atomic_thread_fence(std::memory_order_release);
-            const MAddress receipt = ForwardingTable::InsertMapping(publication, currentPtr, toAddress);
-            (void)relocationRequestQueue.Publish(currentPtr, receipt);
-            region->RecordCompactRoute(offset, toAddress);
-
-        }
-        currentPtr += size;
-    }
-
-    // clear unused space which is free after compaction.
-    // Walk-break leftovers are still live at from — do not memset them.
     MAddress cur = region->GetRegionAllocPtr();
-    if (!walkBroke && regionLimit > cur) {
+    if (regionLimit > cur) {
         size_t reclaimSize = regionLimit - cur;
         TraceClear::NoteRange(cur, reclaimSize, "compact", region, region->GetLiveByteCount());
         if (!TraceClear::SkipCompactMemset()) {
@@ -3342,8 +3291,10 @@ void RegionManager::CompactRegion(RegionInfo* region)
 
     region->ResetCensusBoundary();
 
-
-    EnlistCompactedRegionForAllocator(region);
+    // zForwarding.cpp:171-181 / zRelocate.cpp:1001-1047: the forwarding table
+    // outlives page reuse. Do not put this page on the mutator TLAB list while
+    // its table is live — RehomeCompactedInPlaceRegion keeps it collector-visible.
+    RehomeCompactedInPlaceRegion(region);
 }
 
 void RegionManager::EnlistCompactedRegionForAllocator(RegionInfo* region)
@@ -3357,11 +3308,8 @@ void RegionManager::EnlistCompactedRegionForAllocator(RegionInfo* region)
         claimed = fromRegionList.TryDeleteRegion(region, RegionInfo::RegionType::FROM_REGION,
                                                  RegionInfo::RegionType::THREAD_LOCAL_REGION);
     } else if (type == RegionInfo::RegionType::LONE_FROM_REGION) {
-        claimed = TryUnlinkRegionForMove(region, RegionInfo::RegionType::THREAD_LOCAL_REGION);
-        if (!claimed && region->GetRegionListOwner() == nullptr) {
-            region->SetRegionType(RegionInfo::RegionType::THREAD_LOCAL_REGION);
-            claimed = true;
-        }
+        region->SetRegionType(RegionInfo::RegionType::THREAD_LOCAL_REGION);
+        claimed = true;
     } else if (type == RegionInfo::RegionType::GARBAGE_REGION) {
         claimed = garbageRegionList.TryDeleteRegion(region, RegionInfo::RegionType::GARBAGE_REGION,
                                                     RegionInfo::RegionType::THREAD_LOCAL_REGION);
@@ -3399,11 +3347,24 @@ void RegionManager::RehomeCompactedInPlaceRegion(RegionInfo* region)
     if (region == nullptr) {
         return;
     }
-    if (region->GetRegionType() != RegionInfo::RegionType::THREAD_LOCAL_REGION) {
+    const RegionInfo::RegionType type = region->GetRegionType();
+    bool claimed = false;
+    if (type == RegionInfo::RegionType::FROM_REGION) {
+        claimed = fromRegionList.TryDeleteRegion(region, RegionInfo::RegionType::FROM_REGION,
+                                                 RegionInfo::RegionType::RECENT_FULL_REGION);
+    } else if (type == RegionInfo::RegionType::LONE_FROM_REGION) {
+        region->SetRegionType(RegionInfo::RegionType::RECENT_FULL_REGION);
+        claimed = true;
+    } else if (type == RegionInfo::RegionType::GARBAGE_REGION) {
+        claimed = garbageRegionList.TryDeleteRegion(region, RegionInfo::RegionType::GARBAGE_REGION,
+                                                    RegionInfo::RegionType::RECENT_FULL_REGION);
+    } else if (type == RegionInfo::RegionType::THREAD_LOCAL_REGION) {
+        claimed = tlRegionList.TryDeleteRegion(region, RegionInfo::RegionType::THREAD_LOCAL_REGION,
+                                               RegionInfo::RegionType::RECENT_FULL_REGION);
+    } else if (type == RegionInfo::RegionType::RECENT_FULL_REGION) {
         return;
     }
-    if (!tlRegionList.TryDeleteRegion(region, RegionInfo::RegionType::THREAD_LOCAL_REGION,
-                                      RegionInfo::RegionType::RECENT_FULL_REGION)) {
+    if (!claimed) {
         return;
     }
     recentFullRegionList.PrependRegion(region, RegionInfo::RegionType::RECENT_FULL_REGION);
@@ -3416,69 +3377,40 @@ void RegionManager::CompactRegion(RegionInfo* region, RegionInfo* toRegion1)
     DLOG(REGION, "compact region %p@[%#zx+%zu, %#zx) type %u to region %p@%#zx:%#zx",
         region, regionStart, region->GetLiveByteCount(), region->GetRegionEnd(), region->GetRegionType(),
         toRegion1, toRegion1->GetRegionStart(), toRegion1->GetRegionAllocPtr());
-    MAddress currentPtr = regionStart;
     ForwardingTable::Publication publication =
         ForwardingTable::EnsurePublicationBeforeCopy(region, regionStart);
     CHECK_DETAIL(static_cast<bool>(publication),
                  "partial compact forwarding table unavailable before copy region=%p range=[%#zx,%#zx)",
                  region, static_cast<size_t>(regionStart), static_cast<size_t>(region->GetRegionEnd()));
-    BaseObject* currentObj = from_region_addr(currentPtr);
     CopyCollector& collector = reinterpret_cast<CopyCollector&>(Heap::GetHeap().GetCollector());
-    // uafclose: same ghost-face survivor as CompactRegion(region) / VisitLive / Admit.
-    auto survivedAt = [region](size_t offset) -> bool { return region->IsOwnerSurvivedObject(offset); };
-    region->FreeCompactRouteTable();
-    while (true) {
-        CHECK(currentPtr>=regionStart);
-        size_t offset = currentPtr - regionStart;
-        if (!Collector::PlausibleManagedObjectGate("CompactRegion", currentObj)) {
-            break;
-        }
-        size_t size = currentObj->GetSize();
-        if (survivedAt(offset)) {
-            MAddress toAddress = toRegion1->Alloc(size);
-            if (toAddress == 0) {
-                break;
-            }
-            BaseObject* toObj = from_region_addr(toAddress);
-            DLOG(FORWARD, "compact obj %p<%p>(%zu) to %p", currentObj, currentObj->GetTypeInfo(), size, toObj);
-
-            collector.CopyObject(*currentObj, *toObj, size);
-            toObj->SetStateCode(ObjectState::NORMAL);
-            std::atomic_thread_fence(std::memory_order_release);
-            const MAddress receipt = ForwardingTable::InsertMapping(publication, currentPtr, toAddress);
-            (void)relocationRequestQueue.Publish(currentPtr, receipt);
-            region->RecordCompactRoute(offset, toAddress);
-
-        }
-        currentPtr += size;
-        currentObj = from_region_addr(currentPtr);
-    };
-
     MAddress regionLimit = region->GetRegionAllocPtr();
+    region->FreeCompactRouteTable();
+    region->EnsureCompactRouteTable();
     region->SetRegionAllocPtr(regionStart);
-    while (currentPtr < regionLimit) {
-        CHECK(currentPtr >= regionStart);
-        size_t offset = currentPtr - regionStart;
-        BaseObject* currentObj = from_region_addr(currentPtr);
-        if (!Collector::PlausibleManagedObjectGate("CompactRegion", currentObj)) {
-            break;
-        }
+    // zRelocate.cpp:838-861, as in the whole-page arm above.
+    RememberedSet& rememberedSet = Heap::GetHeap().GetRememberedSet();
+    std::vector<RememberedSet::InPlaceSlot> takenSlots;
+    rememberedSet.TakeInPlaceSlots(regionStart, region->GetRegionEnd(), takenSlots);
+    ForEachLiveObjectStart(region, regionStart, regionLimit, [&](BaseObject* currentObj, size_t offset) {
+        const MAddress currentPtr = regionStart + offset;
         size_t size = currentObj->GetSize();
-        if (survivedAt(offset)) {
-            MAddress toAddress = region->Alloc(size);
-            BaseObject* toObj = from_region_addr(toAddress);
-            DLOG(FORWARD, "compact obj %p<%p>(%zu) to %p", currentObj, currentObj->GetTypeInfo(), size, toObj);
-
-            collector.CopyObject(*currentObj, *toObj, size);
-            toObj->SetStateCode(ObjectState::NORMAL);
-            std::atomic_thread_fence(std::memory_order_release);
-            const MAddress receipt = ForwardingTable::InsertMapping(publication, currentPtr, toAddress);
-            (void)relocationRequestQueue.Publish(currentPtr, receipt);
-            region->RecordCompactRoute(offset, toAddress);
-
+        MAddress toAddress = toRegion1->Alloc(size);
+        if (toAddress == 0) {
+            toAddress = region->Alloc(size);
         }
-        currentPtr += size;
-    }
+        BaseObject* toObj = from_region_addr(toAddress);
+        DLOG(FORWARD, "compact obj %p<%p>(%zu) to %p", currentObj, currentObj->GetTypeInfo(), size, toObj);
+        collector.CopyObject(*currentObj, *toObj, size);
+        toObj->SetStateCode(ObjectState::NORMAL);
+        std::atomic_thread_fence(std::memory_order_release);
+        const MAddress receipt = ForwardingTable::InsertMapping(publication, currentPtr, toAddress);
+        (void)relocationRequestQueue.Publish(currentPtr, receipt);
+        region->RecordCompactRoute(offset, toAddress);
+        // zRelocate.cpp:652-731, as in the whole-page arm above.  toAddress may be in toRegion1,
+        // which is what ZGC means by "even with in-place relocation, the to_page could be another
+        // page" (zRelocate.cpp:666-667).
+        rememberedSet.MoveInPlaceSlots(takenSlots, currentPtr, toAddress, size);
+    });
 
     // clear unused space which is free after compaction.
     MAddress cur = region->GetRegionAllocPtr();
@@ -3496,17 +3428,10 @@ void RegionManager::CompactRegion(RegionInfo* region, RegionInfo* toRegion1)
 
     region->ResetCensusBoundary();
 
-
-    EnlistCompactedRegionForAllocator(region);
+    RehomeCompactedInPlaceRegion(region);
 }
 
 namespace {
-void PermhitReceiptAudit(RegionInfo* region, const char* point)
-{
-    (void)region;
-    (void)point;
-}
-
 bool StayYoungThisCycle(RegionInfo* region)
 {
     if (!kPageAgeAdaptiveTenuring) {
@@ -3526,15 +3451,20 @@ void RegionManager::BumpYoungSurvivorAge(RegionInfo* region)
     }
 }
 
-void RegionManager::FinishStayYoungInPlace(RegionInfo* region)
+void RegionManager::FinishStayYoungInPlace(RegionInfo* region, bool advanceAge)
 {
-    BumpYoungSurvivorAge(region);
+    if (advanceAge) {
+        BumpYoungSurvivorAge(region);
+    }
+    WaitCopiedObjectsUnlocked(region);
+    (void)PublishKeptInPlaceReceipts(region);
+    region->MarkForwardingDone();
     region->DispelGhostFromRegion();
 }
 
-void RegionManager::EnlistStayYoungSurvivor(RegionInfo* region)
+void RegionManager::EnlistStayYoungSurvivor(RegionInfo* region, bool advanceAge)
 {
-    FinishStayYoungInPlace(region);
+    FinishStayYoungInPlace(region, advanceAge);
     // evac_finish calls this on FROM regions still linked in fromRegionList.
     // PrependRegion overwrites next/prev without unlinking — later
     // CollectFromSpaceGarbage MergeRegionList walks a chain that now points
@@ -3545,13 +3475,11 @@ void RegionManager::EnlistStayYoungSurvivor(RegionInfo* region)
         claimed = fromRegionList.TryDeleteRegion(region, RegionInfo::RegionType::FROM_REGION,
                                                  RegionInfo::RegionType::RECENT_FULL_REGION);
     } else if (type == RegionInfo::RegionType::LONE_FROM_REGION) {
-        // TakeHeadRegion already unlinked it. If a concurrent compact-in-place
-        // rehome already listed the node, TryUnlink drops that owner first.
-        claimed = TryUnlinkRegionForMove(region, RegionInfo::RegionType::RECENT_FULL_REGION);
-        if (!claimed && region->GetRegionListOwner() == nullptr) {
-            region->SetRegionType(RegionInfo::RegionType::RECENT_FULL_REGION);
-            claimed = true;
-        }
+        // TakeHeadRegion already unlinked it (RegionManager.cpp:1712). Type still
+        // LONE_FROM until Prepend; kLoneFromIsFrom readers would keep treating it
+        // as from-space if we skipped the store (WCollector.h:495).
+        region->SetRegionType(RegionInfo::RegionType::RECENT_FULL_REGION);
+        claimed = true;
     } else if (type == RegionInfo::RegionType::GARBAGE_REGION) {
         claimed = garbageRegionList.TryDeleteRegion(region, RegionInfo::RegionType::GARBAGE_REGION,
                                                     RegionInfo::RegionType::RECENT_FULL_REGION);
@@ -3576,7 +3504,6 @@ void RegionManager::EnlistStayYoungSurvivor(RegionInfo* region)
 template<Generation G>
 void RegionManager::ForwardRegion(RegionInfo* region)
 {
-    MarkView<G> markView = region->GetRouteMarkView<G>();
     CHECK_DETAIL(region->IsFromRegion() || region->IsLoneFromRegion() || (region->IsThreadLocalRegion() &&
         (region->IsRoutingState() || region->IsCompacted())), "region type %u", region->GetRegionType());
 
@@ -3585,6 +3512,14 @@ void RegionManager::ForwardRegion(RegionInfo* region)
         region->GetRegionType(), region->GetLiveByteCount());
 
     bool youngRegion = region->IsYoungRegion();
+    if (youngRegion && !GenerationMayRelocateYoung(G)) {
+        // The old generation has no authority to interpret a young page's
+        // liveness or promote it.  Keep it for the young generation without
+        // advancing survivor age (zGeneration.cpp:195-221).
+        EnlistStayYoungSurvivor(region, false);
+        return;
+    }
+    MarkView<G> markView = region->GetRouteMarkView<G>();
     // oracleblack: the generational contract also guards this arm. The OLD pass stamps a
     // current-epoch mark face on young regions it never actually examines, so
     // "markedThisCycle ∧ live==0" holds vacuously for them and the residual f3-livehole
@@ -3652,18 +3587,18 @@ void RegionManager::ForwardRegion(RegionInfo* region)
             region->PreserveRetainedLiveInfo();
             {
                 GCReason r = Heap::GetHeap().GetCollector().GetGCStats().reason;
-                const bool doReg = (r == GC_REASON_YOUNG);
-                if (doReg) {
+                const bool deferred = PromotedRegionDomain::DeferPromotedFieldScan(r == GC_REASON_YOUNG);
+                if (deferred) {
                     PromotedRegionDomain::Register(region, PromotedRegionDomain::RegisterPath::Abandon);
                 }
-                PromotedRegionDomain::NoteRegisterGate(static_cast<uint32_t>(r), /*site*/ 1, doReg);
-                size_t recEdges = RecordPromotedCrossGenEdges(region);
+                PromotedRegionDomain::NoteRegisterGate(static_cast<uint32_t>(r), /*site*/ 1, deferred);
+                size_t recEdges = deferred ? 0 : RecordPromotedCrossGenEdges(region);
                 PromotedRegionDomain::NoteRecordCall(static_cast<uint32_t>(r), /*site*/ 1, recEdges);
             }
             (void)region->PromoteYoungRegion(promotionView);
         }
-        region->DispelGhostFromRegion();
         ExemptFromRegion(region);
+        region->DispelGhostFromRegion();
         return;
         }
     }
@@ -3674,21 +3609,58 @@ void RegionManager::ForwardRegion(RegionInfo* region)
             EnlistStayYoungSurvivor(region);
             return;
         }
+        // In-place relocation that copied nothing leaves the alloc pointer back at the
+        // region start, so the size-walk over [start, start) is empty (RegionManager.cpp:
+        // 665-668): the page holds no object to promote, no field to record an edge for and
+        // nothing for a later discharge to walk.  ZGC reclaims such a page rather than
+        // promoting it -- select_relocation_set hands every relocatable page its own mark
+        // did not mark to register_empty_page and free_empty_pages frees it in bulk
+        // (zGeneration.cpp:216-221 / 169-176).  And ZGC never routes an in-place relocated
+        // from page into the flip-promoted remset walk at all: ZRelocateAddRemsetForFlipPromoted
+        // is constructed over flip_promoted_pages() only (zRelocate.cpp:1304), the pages
+        // promoted *without* relocation (ZFlipAgePagesTask, zRelocate.cpp:1334-1363).  The
+        // in-place relocated from page goes on _in_place_relocate_promoted_pages
+        // (zRelocate.cpp:896), and that array is read exactly once -- by
+        // ZRelocationSet::reset's destroy_and_clear (zRelocationSet.cpp:200).
+        if (region->GetRegionAllocPtr() <= region->GetRegionStart() &&
+            !(youngRegion && G == Generation::Old)) {
+            // ZGC frees such a page: select_relocation_set hands every relocatable page its
+            // own mark did not mark to register_empty_page, and free_empty_pages returns it
+            // to the page cache (zGeneration.cpp:216-221 / 169-176).  Keeping it homed on
+            // recentFullRegionList instead leaves a *young* region whose alloc pointer has
+            // been rewound to its start, and that has two measured consequences:
+            //   - every stale pointer into its former contents still answers "my target is
+            //     young" to the cross-gen edge walks, so a dead old object's field is
+            //     replayed into the remembered set and then refused at ResolveStoreValue
+            //     (NW256/256MB 3/3: slot=holder+0x2910 in an old RECENT_FULL region with
+            //     holderSurvived=0 holderMarked=0, target=page+0xd100 with allocOff=0);
+            //   - the page is re-selected as an empty relocation candidate every cycle --
+            //     the same page re-entered this arm a cycle later with entryAllocOff=0.
+            // RehomeCompactedInPlaceRegion (RegionManager.cpp:3766) put it on
+            // recentFullRegionList, which is why CollectRegion's PrependRegion refused it
+            // (GetRegionListOwner() == nullptr).  Take it back off that list first; the
+            // ordinary empty-page arm above reaches CollectRegion the same way.
+            if (region->GetRegionListOwner() == &recentFullRegionList) {
+                const size_t units = region->GetUnitCount();
+                recentFullRegionList.DeleteRegion(region);
+                RecentFullAccounting::Dequeue(1, units);
+            }
+            CollectRegion<G>(region);
+            return;
+        }
         if (youngRegion) {
             MarkView<Generation::Young> promotionView = region->GetMarkView<Generation::Young>();
-            // In-place promote (compacted / unrouted): scan before clearing young flag.
-            // promodomain §A.3: register durable domain (default off); old scan stays.
-            // Register only during young GC (discharge runs in young.evac_finish only).
+            // ZRelocate::relocate registers flip-promoted pages and defers their
+            // field walk until after relocation (zRelocate.cpp:1289-1306).
             region->PreserveRetainedLiveInfo();
             {
                 GCReason r = Heap::GetHeap().GetCollector().GetGCStats().reason;
-                const bool doReg = (r == GC_REASON_YOUNG);
-                if (doReg) {
+                const bool deferred = PromotedRegionDomain::DeferPromotedFieldScan(r == GC_REASON_YOUNG);
+                if (deferred) {
                     PromotedRegionDomain::Register(region, PromotedRegionDomain::RegisterPath::InPlace);
                 }
-                // domainon COVERAGE: Register gate vs Record site (inplace=0).
-                PromotedRegionDomain::NoteRegisterGate(static_cast<uint32_t>(r), /*site*/ 0, doReg);
-                size_t recEdges = RecordPromotedCrossGenEdges(region);
+                PromotedRegionDomain::NoteRegisterGate(static_cast<uint32_t>(r), /*site*/ 0, deferred);
+                size_t recEdges = deferred ? 0 : RecordPromotedCrossGenEdges(region);
                 PromotedRegionDomain::NoteRecordCall(static_cast<uint32_t>(r), /*site*/ 0, recEdges);
             }
             (void)region->PromoteYoungRegion(promotionView);
@@ -3849,74 +3821,34 @@ void RegionManager::ForwardRegion(RegionInfo* region)
     }
 
     if (!forwarded || !allLiveBitsHaveReceipt()) {
-        // permhit: same audit on the refusing arm — the copy pass is already done here too.
-        PermhitReceiptAudit(region, "abandon");
-        static std::atomic<size_t> abandonN{ 0 };
-        size_t n = abandonN.fetch_add(1, std::memory_order_relaxed) + 1;
-        if (n <= 32) {
-            LOG(RTLOG_ERROR,
-                "[GCV2][tipnull] abandon-route region=%p start=%#zx live=%zu route=%u n=%zu "
-                "— live bit without receipt; DispelGhost (no FORWARDED)",
-                region, region->GetRegionStart(), region->GetLiveByteCount(),
-                static_cast<unsigned>(region->GetRouteState()), n);
-        }
-        // permwho: this arm's assumption ("RouteObject miss ⇒ mutator keeps from") only holds
-        // for objects this pass did not copy. Objects it did copy already carry
-        // ObjectState::FORWARDED in their own header, and nothing clears that. Count them
-        // before the region is exempted and can be routed again under a fresh RouteInfo.
-        if (PermWhoAdmit::Enabled() && region->IsSmallRegion()) {
-            size_t walked = 0;
-            size_t forwarded = 0;
-            uintptr_t pos = region->GetRegionStart();
-            uintptr_t end = region->GetRegionAllocPtr();
-            while (pos < end) {
-                BaseObject* o = from_region_addr(pos);
-                if (!Collector::PlausibleManagedObjectGate("permwho-abandon", o)) {
-                    break;
-                }
-                size_t sz = RegionSpace::GetAllocSize(*o);
-                if (sz == 0) {
-                    break;
-                }
-                ++walked;
-                if (o->IsForwarded()) {
-                    ++forwarded;
-                }
-                pos += sz;
-            }
-            PermWhoAdmit::NoteAbandon(region, walked, forwarded);
-        }
         if (youngRegion && StayYoungThisCycle(region)) {
             EnlistStayYoungSurvivor(region);
             return;
         }
         if (youngRegion) {
             MarkView<Generation::Young> promotionView = region->GetMarkView<Generation::Young>();
-            // promodomain §A.3 abandon arm: register + old sync walk (default domain off).
-            // Register only on young GC (domain discharge is minor-only).
+            // Flip-promoted pages are registered here and walked once by the
+            // post-relocation discharge (zRelocate.cpp:1289-1306).
             region->PreserveRetainedLiveInfo();
             {
                 GCReason r = Heap::GetHeap().GetCollector().GetGCStats().reason;
-                const bool doReg = (r == GC_REASON_YOUNG);
-                if (doReg) {
+                const bool deferred = PromotedRegionDomain::DeferPromotedFieldScan(r == GC_REASON_YOUNG);
+                if (deferred) {
                     PromotedRegionDomain::Register(region, PromotedRegionDomain::RegisterPath::Abandon);
                 }
-                // domainon COVERAGE: Register gate vs Record site (abandon=1).
-                PromotedRegionDomain::NoteRegisterGate(static_cast<uint32_t>(r), /*site*/ 1, doReg);
-                size_t recEdges = RecordPromotedCrossGenEdges(region);
+                PromotedRegionDomain::NoteRegisterGate(static_cast<uint32_t>(r), /*site*/ 1, deferred);
+                size_t recEdges = deferred ? 0 : RecordPromotedCrossGenEdges(region);
                 PromotedRegionDomain::NoteRecordCall(static_cast<uint32_t>(r), /*site*/ 1, recEdges);
             }
             (void)region->PromoteYoungRegion(promotionView);
         }
-        // DispelGhost → NORMAL + clear ghost bit: GetGhostFromRegionAt null ⇒ RouteObject
-        // miss ⇒ mutator keeps from (valid). Do not SetRouteInfo(0): that sets
-        // toRegion2Idx=INVALID and GetRoute CHECKs when preLive >= to1used (wb gate).
-        region->DispelGhostFromRegion();
+        // Complete the ZGC in-place shape first: Exempt publishes an identity
+        // receipt for every kept object, then Dispel may retire the route.
         ExemptFromRegion(region);
+        region->DispelGhostFromRegion();
         return;
     }
     {
-        PermhitReceiptAudit(region, "publish");
         // insert-before-unlock (MutatorRelocate.h:124): a concurrent copier may
         // still hold LOCKED after insert. Do not publish FORWARDED/done while
         // those headers remain LOCKED — waiters treat done as "no live copier".
@@ -4012,17 +3944,6 @@ template class ForwardTask<Generation::Old>;
 #endif
 template void RegionManager::ForwardRegion<Generation::Young>(RegionInfo*);
 template void RegionManager::ForwardRegion<Generation::Old>(RegionInfo*);
-
-// Product carriers consumed by gc_unit through dlsym. Keep explicit
-// instantiations when an internal overload becomes fully inlineable.
-template bool RegionInfo::MarkObject<Generation::Young>(
-    MarkView<Generation::Young>, const BaseObject*);
-template bool RegionInfo::MarkObject<Generation::Old>(
-    MarkView<Generation::Old>, const BaseObject*);
-template bool RegionInfo::MarkObject<Generation::Young>(
-    MarkView<Generation::Young>, const BaseObject*, size_t, bool);
-template bool RegionInfo::MarkObject<Generation::Old>(
-    MarkView<Generation::Old>, const BaseObject*, size_t, bool);
 } // namespace MapleRuntime
 
 namespace MapleRuntime {

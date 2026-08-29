@@ -25,7 +25,6 @@ set(SRC_LIST
     "VerifyPhase.cpp"
     "MutatorRelocate.cpp"
     "GarbRegionDiag.cpp"
-    "PermWhoAdmit.cpp"
     "HealPairDiag.cpp"
     "ZgcSelfHealDiag.cpp"
     "ZgcInvariants.cpp"
