@@ -168,32 +168,6 @@ public:
         slot.activeState = true;
         return PackExportHandle(static_cast<U32>(index), nextGen);
     }
-#if defined(MRT_EXPORT_ROOT_HANDLE_TESTS)
-    // Handle-generation tests use synthetic non-heap values and therefore
-    // deliberately bypass the managed-root publication contract.
-    U64 RegisterExportRootPlainForHandleTesting(BaseObject* exportObj)
-    {
-        std::lock_guard<std::mutex> lg(tableMutex);
-        if (accessableId.empty()) {
-            exportRoots.emplace_back(true);
-            U32 index = static_cast<U32>(exportRoots.size() - 1);
-            StorePlain(exportRoots[index].exportObj, from_object(exportObj));
-            return PackExportHandle(index, exportRoots[index].generation);
-        }
-        U64 index = accessableId.front();
-        accessableId.pop_front();
-        ExportObjectInfo& slot = exportRoots[index];
-        U32 nextGen = slot.generation + 1;
-        if (nextGen == 0) {
-            nextGen = 1;
-        }
-        slot.generation = nextGen;
-        StorePlain(slot.exportObj, from_object(exportObj));
-        slot.occupied = true;
-        slot.activeState = true;
-        return PackExportHandle(static_cast<U32>(index), nextGen);
-    }
-#endif
     BaseObject* GetExportRoot(U64 handle)
     {
         std::lock_guard<std::mutex> lg(tableMutex);
