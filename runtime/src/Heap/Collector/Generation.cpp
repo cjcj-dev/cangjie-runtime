@@ -85,6 +85,16 @@ std::atomic<Mutator*> g_satbBeforeMarkEndProducer { nullptr };
 std::atomic<BaseObject*> g_satbBeforeMarkEndFirst { nullptr };
 std::atomic<BaseObject*> g_satbBeforeMarkEndSecond { nullptr };
 std::atomic<uint64_t> g_satbBeforeMarkEndPublications { 0 };
+std::atomic<Mutator*> g_exportRootAfterT1Producer { nullptr };
+std::atomic<BaseObject*> g_exportRootAfterT1Holder { nullptr };
+std::atomic<BaseObject*> g_exportRootAfterT1Child { nullptr };
+std::atomic<uint64_t> g_exportRootAfterT1Armed { 0 };
+std::atomic<uint64_t> g_exportRootRegistrationsAfterT1 { 0 };
+std::atomic<uint64_t> g_exportRootProducerFlushes { 0 };
+std::atomic<uint64_t> g_exportRootObservedAtT2 { 0 };
+std::atomic<U64> g_exportRootHandle { std::numeric_limits<U64>::max() };
+std::atomic<bool> g_exportRootHolderMarked { false };
+std::atomic<bool> g_exportRootChildMarked { false };
 }
 
 void ResetY2yHandoffTestReceipt()
@@ -172,6 +182,84 @@ void PublishSatbBeforeMarkEndTestReceipt()
     CHECK_DETAIL(producer != nullptr && object != nullptr, "armed SATB mark-end receipt without producer/object");
     producer->RememberObjectInSatbBuffer(object);
     producer->FlushSatbBuffer();
+}
+
+void ResetExportRootPublicationTestReceipt()
+{
+    g_exportRootAfterT1Producer.store(nullptr, std::memory_order_relaxed);
+    g_exportRootAfterT1Holder.store(nullptr, std::memory_order_relaxed);
+    g_exportRootAfterT1Child.store(nullptr, std::memory_order_relaxed);
+    g_exportRootAfterT1Armed.store(0, std::memory_order_relaxed);
+    g_exportRootRegistrationsAfterT1.store(0, std::memory_order_relaxed);
+    g_exportRootProducerFlushes.store(0, std::memory_order_relaxed);
+    g_exportRootObservedAtT2.store(0, std::memory_order_relaxed);
+    g_exportRootHandle.store(std::numeric_limits<U64>::max(), std::memory_order_relaxed);
+    g_exportRootHolderMarked.store(false, std::memory_order_relaxed);
+    g_exportRootChildMarked.store(false, std::memory_order_relaxed);
+}
+
+void ArmExportRootAfterT1TestReceipt(Mutator* producer, BaseObject* holder, BaseObject* child)
+{
+    CHECK_DETAIL(producer != nullptr && holder != nullptr && child != nullptr,
+                 "export-root T1 receipt requires producer, holder, and child");
+    g_exportRootAfterT1Producer.store(producer, std::memory_order_release);
+    g_exportRootAfterT1Holder.store(holder, std::memory_order_release);
+    g_exportRootAfterT1Child.store(child, std::memory_order_release);
+    g_exportRootAfterT1Armed.store(1, std::memory_order_release);
+}
+
+void PublishExportRootAfterT1TestReceipt()
+{
+    if (g_exportRootAfterT1Armed.exchange(0, std::memory_order_acq_rel) == 0) {
+        return;
+    }
+    Mutator* producer = g_exportRootAfterT1Producer.load(std::memory_order_acquire);
+    BaseObject* holder = g_exportRootAfterT1Holder.load(std::memory_order_acquire);
+    CHECK_DETAIL(producer != nullptr && holder != nullptr, "armed export-root T1 receipt is incomplete");
+    Mutator* previous = ThreadLocal::GetMutator();
+    ThreadLocal::SetMutator(producer);
+    const U64 handle = Heap::GetHeap().RegisterExportRoot(holder);
+    ThreadLocal::SetMutator(previous);
+    g_exportRootHandle.store(handle, std::memory_order_release);
+    g_exportRootRegistrationsAfterT1.fetch_add(1, std::memory_order_relaxed);
+}
+
+void FlushExportRootAfterT1TestReceipt()
+{
+    if (g_exportRootRegistrationsAfterT1.load(std::memory_order_acquire) == 0 ||
+        g_exportRootProducerFlushes.exchange(1, std::memory_order_acq_rel) != 0) {
+        return;
+    }
+    Mutator* producer = g_exportRootAfterT1Producer.load(std::memory_order_acquire);
+    CHECK_DETAIL(producer != nullptr, "registered export-root T1 receipt has no producer");
+    producer->FlushSatbBuffer();
+}
+
+void NoteExportRootPublicationAtT2TestReceipt()
+{
+    if (g_exportRootRegistrationsAfterT1.load(std::memory_order_acquire) == 0) {
+        return;
+    }
+    BaseObject* holder = g_exportRootAfterT1Holder.load(std::memory_order_acquire);
+    BaseObject* child = g_exportRootAfterT1Child.load(std::memory_order_acquire);
+    auto isMarked = [](BaseObject* object) {
+        RegionInfo* region = RegionInfo::TryGetRegionInfoAt(reinterpret_cast<MAddress>(object));
+        return region != nullptr &&
+            region->IsMarkedObject(region->GetMarkView<Generation::Young>(), object);
+    };
+    g_exportRootHolderMarked.store(isMarked(holder), std::memory_order_relaxed);
+    g_exportRootChildMarked.store(isMarked(child), std::memory_order_relaxed);
+    g_exportRootObservedAtT2.fetch_add(1, std::memory_order_relaxed);
+}
+
+ExportRootPublicationTestReceipt ReadExportRootPublicationTestReceipt()
+{
+    return { g_exportRootRegistrationsAfterT1.load(std::memory_order_relaxed),
+             g_exportRootProducerFlushes.load(std::memory_order_relaxed),
+             g_exportRootObservedAtT2.load(std::memory_order_relaxed),
+             g_exportRootHandle.load(std::memory_order_relaxed),
+             g_exportRootHolderMarked.load(std::memory_order_relaxed),
+             g_exportRootChildMarked.load(std::memory_order_relaxed) };
 }
 
 #endif
@@ -965,6 +1053,11 @@ void WCollector::DoYoungGarbageCollection()
         TraceYoungClosure(workStack, fullYoungScan, reachableObjects, reachableVec, reachableSlots, weakSlots,
                           useBitmapLedger, reachableSlotDomain);
     }
+#if defined(MRT_TESTABLE_INTERNALS)
+    // Deterministic T1->T2 export-root window: root enumeration has returned,
+    // and the first shared-domain SATB consumer has not started yet.
+    PublishExportRootAfterT1TestReceipt();
+#endif
     for (;;) {
         // Concurrent mark-follow drains work published by the previous pause.
         // Its worker completion is coordinated by YoungMarkTerminate (the
@@ -974,6 +1067,7 @@ void WCollector::DoYoungGarbageCollection()
                                 weakSlots, useBitmapLedger, &concWindow);
         CHECK_DETAIL(workersTerminated, "young concurrent mark workers did not terminate");
 #if defined(MRT_TESTABLE_INTERNALS)
+        FlushExportRootAfterT1TestReceipt();
         // Adversarial mutator publication point: workers have terminated, but
         // the pause has not started. The pause must flush once and return
         // failure; it must not consume closure in an in-pause loop.
@@ -1007,6 +1101,9 @@ void WCollector::DoYoungGarbageCollection()
         NoteMarkTerminatePauseDuration(TimeUtil::NanoSeconds() - markEndPauseStartNs);
 #endif
         if (workersTerminated && markEndSucceeded) {
+#if defined(MRT_TESTABLE_INTERNALS)
+            NoteExportRootPublicationAtT2TestReceipt();
+#endif
             break;
         }
         NoteMarkTerminateContinue(workStack.size());

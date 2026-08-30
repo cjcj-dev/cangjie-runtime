@@ -129,10 +129,7 @@ private:
 };
 
 struct ExportObjectInfo {
-    ExportObjectInfo(BaseObject* obj, bool state) : generation(1), occupied(true), activeState(state)
-    {
-        StorePlain(exportObj, from_object(obj));
-    }
+    explicit ExportObjectInfo(bool state) : generation(1), occupied(true), activeState(state) {}
     RootSlot exportObj;
     U32 generation = 0;
     bool occupied = false;
@@ -153,8 +150,34 @@ public:
     {
         std::lock_guard<std::mutex> lg(tableMutex);
         if (accessableId.empty()) {
-            exportRoots.emplace_back(exportObj, true);
+            exportRoots.emplace_back(true);
             U32 index = static_cast<U32>(exportRoots.size() - 1);
+            PublishRegisteredRoot(exportRoots[index], exportObj);
+            return PackExportHandle(index, exportRoots[index].generation);
+        }
+        U64 index = accessableId.front();
+        accessableId.pop_front();
+        ExportObjectInfo& slot = exportRoots[index];
+        U32 nextGen = slot.generation + 1;
+        if (nextGen == 0) {
+            nextGen = 1;
+        }
+        slot.generation = nextGen;
+        PublishRegisteredRoot(slot, exportObj);
+        slot.occupied = true;
+        slot.activeState = true;
+        return PackExportHandle(static_cast<U32>(index), nextGen);
+    }
+#if defined(MRT_EXPORT_ROOT_HANDLE_TESTS)
+    // Handle-generation tests use synthetic non-heap values and therefore
+    // deliberately bypass the managed-root publication contract.
+    U64 RegisterExportRootPlainForHandleTesting(BaseObject* exportObj)
+    {
+        std::lock_guard<std::mutex> lg(tableMutex);
+        if (accessableId.empty()) {
+            exportRoots.emplace_back(true);
+            U32 index = static_cast<U32>(exportRoots.size() - 1);
+            StorePlain(exportRoots[index].exportObj, from_object(exportObj));
             return PackExportHandle(index, exportRoots[index].generation);
         }
         U64 index = accessableId.front();
@@ -170,6 +193,7 @@ public:
         slot.activeState = true;
         return PackExportHandle(static_cast<U32>(index), nextGen);
     }
+#endif
     BaseObject* GetExportRoot(U64 handle)
     {
         std::lock_guard<std::mutex> lg(tableMutex);
@@ -216,6 +240,14 @@ public:
         return info.activeState;
     }
 private:
+    static void PublishRegisteredRoot(ExportObjectInfo& slot, BaseObject* exportObj)
+    {
+        // ZGC zBarrier.inline.hpp:735-740: inserting a reference after its
+        // container may have been scanned is mark-and-remember work.  Export
+        // handles are root membership, so publish before returning the handle.
+        Heap::GetBarrier().WriteStaticRef(slot.exportObj, exportObj);
+    }
+
     bool ResolveLiveIndex(U64 handle, U64& index) const
     {
         U32 rawIndex = ExportHandleIndex(handle);

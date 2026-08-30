@@ -17,6 +17,7 @@
 #include <cstdlib>
 #include <cstring>
 #include <memory>
+#include <limits>
 #include <unordered_map>
 #include <unordered_set>
 
@@ -79,6 +80,21 @@ void ArmY2yAfterReleaseTestReceipt(BaseObject* holder, uint64_t publications);
 void PublishY2yAfterReleaseTestReceipt();
 void ArmSatbBeforeMarkEndTestReceipt(Mutator* producer, BaseObject* first, BaseObject* second);
 void PublishSatbBeforeMarkEndTestReceipt();
+
+struct ExportRootPublicationTestReceipt {
+    uint64_t registrationsAfterT1 = 0;
+    uint64_t producerFlushes = 0;
+    uint64_t observedAtT2 = 0;
+    U64 handle = std::numeric_limits<U64>::max();
+    bool holderMarked = false;
+    bool childMarked = false;
+};
+void ResetExportRootPublicationTestReceipt();
+void ArmExportRootAfterT1TestReceipt(Mutator* producer, BaseObject* holder, BaseObject* child);
+void PublishExportRootAfterT1TestReceipt();
+void FlushExportRootAfterT1TestReceipt();
+void NoteExportRootPublicationAtT2TestReceipt();
+ExportRootPublicationTestReceipt ReadExportRootPublicationTestReceipt();
 #endif
 
 // portyoungconc: work accounting for the concurrent young mark window.
