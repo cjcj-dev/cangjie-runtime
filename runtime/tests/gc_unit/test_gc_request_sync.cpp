@@ -41,23 +41,35 @@ namespace MapleRuntime {
 
 extern "C" void MCC_InvokeGCImpl(bool sync);
 
+class GCDriverPortTestPeer {
+public:
+    static void SetNextSequence(GCDriverPort& port, uint64_t sequence)
+    {
+        std::lock_guard<std::mutex> lock(port.mutex);
+        port.nextSequence = sequence;
+    }
+
+    static bool WaitUntilReceiptWaits(GCDriverPort& port)
+    {
+        std::unique_lock<std::mutex> lock(port.mutex);
+        return port.condition.wait_for(lock, std::chrono::seconds(1),
+                                       [&port] { return port.waitingReceipts != 0; });
+    }
+};
+
 class CollectorResourcesTestPeer {
 public:
     static void Init(CollectorResources& resources, Collector& collector, bool startNearReceiptWrap)
     {
         MRT_ASSERT(resources.taskQueue == nullptr, "gc_unit requires an uninitialized product task queue");
-        static bool productCollectorInitialized = false;
-        if (!productCollectorInitialized) {
-            resources.collectorProxy.Init();
-            productCollectorInitialized = true;
-        }
         resources.testCollector = &collector;
         resources.GetMinorDriverPort().Reset();
         resources.GetMajorDriverPort().Reset();
         resources.taskQueue = new TaskQueue<GCExecutor>;
         resources.taskQueue->Init();
         if (startNearReceiptWrap) {
-            resources.taskQueue->syncTaskIndex = GCTask::ASYNC_TASK_INDEX - 2;
+            GCDriverPortTestPeer::SetNextSequence(resources.GetMajorDriverPort(),
+                                                  std::numeric_limits<uint64_t>::max() - 1);
         }
         resources.finishedGcIndex.store(resources.taskQueue->syncTaskIndex, std::memory_order_release);
         resources.isGCActive.store(true, std::memory_order_release);
@@ -80,6 +92,37 @@ public:
         return resources.ExecuteDriverRequest(request);
     }
 
+    static bool ProcessDriverRequest(CollectorResources& resources, GCDriverPort& port,
+                                     const GCDriverRequest& request)
+    {
+        return resources.ProcessDriverRequest(port, request);
+    }
+
+    static void ResetCompletionCount(CollectorResources& resources)
+    {
+        resources.testCompletionCount.store(0, std::memory_order_release);
+    }
+
+    static size_t CompletionCount(CollectorResources& resources)
+    {
+        return resources.testCompletionCount.load(std::memory_order_acquire);
+    }
+
+    static void SetAfterYoungPrelude(CollectorResources& resources, std::function<void()> hook)
+    {
+        resources.testAfterYoungPrelude = std::move(hook);
+    }
+
+    static void SetLegacyTaskSequence(TaskQueue<GCExecutor>& queue, uint64_t sequence)
+    {
+        queue.syncTaskIndex = sequence;
+    }
+
+    static uint64_t LegacyTaskSequence(TaskQueue<GCExecutor>& queue)
+    {
+        return queue.syncTaskIndex;
+    }
+
     static bool TryAcquireDriverLock(CollectorResources& resources)
     {
         std::unique_lock<std::mutex> lock(resources.driverLock, std::try_to_lock);
@@ -96,6 +139,7 @@ public:
         delete resources.taskQueue;
         resources.taskQueue = nullptr;
         resources.testCollector = nullptr;
+        resources.testAfterYoungPrelude = {};
     }
 };
 
@@ -152,7 +196,7 @@ public:
             g_gcCount.fetch_add(1, std::memory_order_release);
         }
         activeRuns.fetch_sub(1, std::memory_order_acq_rel);
-        resources->NotifyGCFinished(gcIndex);
+        resources->NotifyGCPhaseFinished(gcIndex);
     }
 
     bool WaitForRuns(size_t count)
@@ -438,17 +482,17 @@ GC_TEST(GcRequestSync, GenerationPortsDoNotCoalesceAcrossDrivers)
 GC_TEST(GcRequestSync, DriverPortSyncSequenceAcknowledges)
 {
     GCDriverPort port(GCDriverKind::MINOR);
-    const uint64_t sequence = port.EnqueueSync(GC_REASON_YOUNG);
+    const GCDriverReceipt receipt = port.EnqueueSync(GC_REASON_YOUNG);
     GCDriverRequest request {};
     GC_EXPECT_TRUE(port.TryDequeue(request));
-    GC_EXPECT_EQ(request.sequence, sequence);
+    GC_EXPECT_EQ(request.sequence, receipt.Sequence());
     std::atomic<bool> completed { false };
     std::thread waiter([&] {
-        completed.store(port.WaitForAck(sequence), std::memory_order_release);
+        completed.store(port.WaitForAck(receipt), std::memory_order_release);
     });
     std::this_thread::sleep_for(std::chrono::milliseconds(1));
     GC_EXPECT_FALSE(completed.load(std::memory_order_acquire));
-    port.Acknowledge(sequence);
+    port.Acknowledge(request);
     waiter.join();
     GC_EXPECT_TRUE(completed.load(std::memory_order_acquire));
 }
@@ -466,16 +510,283 @@ GC_TEST(GcRequestSync, DriverAbortIsCooperativeAndResettable)
 GC_TEST(GcRequestSync, StoppedPortWakesSynchronousWaiter)
 {
     GCDriverPort port(GCDriverKind::MAJOR);
-    const uint64_t sequence = port.EnqueueSync(GC_REASON_FORCE);
+    const GCDriverReceipt receipt = port.EnqueueSync(GC_REASON_FORCE);
     std::promise<bool> resultPromise;
     std::future<bool> result = resultPromise.get_future();
-    std::thread waiter([&] { resultPromise.set_value(port.WaitForAck(sequence)); });
+    std::thread waiter([&] { resultPromise.set_value(port.WaitForAck(receipt)); });
     std::this_thread::sleep_for(std::chrono::milliseconds(1));
     port.Stop();
     GC_EXPECT_EQ(result.wait_for(std::chrono::seconds(1)), std::future_status::ready);
     GC_EXPECT_FALSE(result.get());
     waiter.join();
     GC_EXPECT_TRUE(port.IsStopped());
+}
+
+GC_TEST(GcRequestSync, DriverReceiptNormalCompletesExactlyOnce)
+{
+    CollectorResources& resources = Heap::GetHeap().GetCollectorResources();
+    BlockingCollector collector;
+    collector.SetResources(resources);
+    CollectorResourcesTestPeer::Init(resources, collector, false);
+    collector.ReleaseAll();
+    GCDriverPort& port = resources.GetMinorDriverPort();
+    const GCDriverReceipt receipt = port.EnqueueSync(GC_REASON_YOUNG);
+    GCDriverRequest request {};
+    const bool dequeued = port.TryDequeue(request);
+    const bool executed = dequeued && CollectorResourcesTestPeer::ProcessDriverRequest(resources, port, request);
+    const size_t executeCount = collector.RunCount();
+    const bool ack = port.WaitForAck(receipt);
+    CollectorResourcesTestPeer::Destroy(resources);
+
+    std::fprintf(stderr, "DETAIL receipt_normal execute=%zu ack=%d\n", executeCount, ack);
+    GC_EXPECT_TRUE(executed);
+    GC_EXPECT_EQ(executeCount, 1u);
+    GC_EXPECT_TRUE(ack);
+}
+
+GC_TEST(GcRequestSync, DriverReceiptStopBeforeDequeueIsFalse)
+{
+    CollectorResources& resources = Heap::GetHeap().GetCollectorResources();
+    BlockingCollector collector;
+    collector.SetResources(resources);
+    CollectorResourcesTestPeer::Init(resources, collector, false);
+    GCDriverPort& port = resources.GetMinorDriverPort();
+    const GCDriverReceipt receipt = port.EnqueueSync(GC_REASON_YOUNG);
+    port.Stop();
+    const bool ack = port.WaitForAck(receipt);
+    const size_t executeCount = collector.RunCount();
+    CollectorResourcesTestPeer::Destroy(resources);
+
+    std::fprintf(stderr, "DETAIL receipt_stop_before_dequeue execute=%zu ack=%d\n", executeCount, ack);
+    GC_EXPECT_EQ(executeCount, 0u);
+    GC_EXPECT_FALSE(ack);
+}
+
+GC_TEST(GcRequestSync, DriverReceiptEnqueueAfterStopIsFalse)
+{
+    CollectorResources& resources = Heap::GetHeap().GetCollectorResources();
+    BlockingCollector collector;
+    collector.SetResources(resources);
+    CollectorResourcesTestPeer::Init(resources, collector, false);
+    GCDriverPort& port = resources.GetMinorDriverPort();
+    port.Stop();
+    const GCDriverReceipt receipt = port.EnqueueSync(GC_REASON_YOUNG);
+    const bool ack = port.WaitForAck(receipt);
+    const size_t executeCount = collector.RunCount();
+    CollectorResourcesTestPeer::Destroy(resources);
+
+    std::fprintf(stderr, "DETAIL receipt_enqueue_after_stop execute=%zu ack=%d\n", executeCount, ack);
+    GC_EXPECT_EQ(executeCount, 0u);
+    GC_EXPECT_FALSE(ack);
+}
+
+GC_TEST(GcRequestSync, DriverReceiptAbortAfterDequeueIsFalse)
+{
+    CollectorResources& resources = Heap::GetHeap().GetCollectorResources();
+    BlockingCollector collector;
+    collector.SetResources(resources);
+    CollectorResourcesTestPeer::Init(resources, collector, false);
+    GCDriverPort& port = resources.GetMinorDriverPort();
+    const GCDriverReceipt receipt = port.EnqueueSync(GC_REASON_YOUNG);
+    GCDriverRequest request {};
+    const bool dequeued = port.TryDequeue(request);
+    port.Abort().Request();
+    const bool executed = dequeued && CollectorResourcesTestPeer::ProcessDriverRequest(resources, port, request);
+    const bool ack = port.WaitForAck(receipt);
+    const size_t executeCount = collector.RunCount();
+    port.Abort().Reset();
+    CollectorResourcesTestPeer::Destroy(resources);
+
+    std::fprintf(stderr, "DETAIL receipt_abort_after_dequeue execute=%zu ack=%d\n", executeCount, ack);
+    GC_EXPECT_FALSE(executed);
+    GC_EXPECT_EQ(executeCount, 0u);
+    GC_EXPECT_FALSE(ack);
+}
+
+GC_TEST(GcRequestSync, DriverReceiptWaitIgnoresWrappedHighWater)
+{
+    GCDriverPort port(GCDriverKind::MAJOR);
+    GCDriverPortTestPeer::SetNextSequence(port, std::numeric_limits<uint64_t>::max() - 1);
+
+    const GCDriverReceipt boundaryReceipt = port.EnqueueSync(GC_REASON_FORCE);
+    GCDriverRequest boundaryRequest {};
+    GC_EXPECT_TRUE(port.TryDequeue(boundaryRequest));
+    port.Acknowledge(boundaryRequest);
+    const bool boundaryAck = port.WaitForAck(boundaryReceipt);
+
+    const GCDriverReceipt wrappedReceipt = port.EnqueueSync(GC_REASON_FORCE);
+    GCDriverRequest wrappedRequest {};
+    GC_EXPECT_TRUE(port.TryDequeue(wrappedRequest));
+    std::promise<bool> resultPromise;
+    std::future<bool> result = resultPromise.get_future();
+    std::thread waiter([&] { resultPromise.set_value(port.WaitForAck(wrappedReceipt)); });
+    JoinGuard waiterGuard(waiter);
+    const bool waiterBlocked = GCDriverPortTestPeer::WaitUntilReceiptWaits(port);
+    const bool returnedBeforeCompletion = result.wait_for(std::chrono::seconds(0)) == std::future_status::ready;
+    port.Acknowledge(wrappedRequest);
+    const bool returnedAfterCompletion = result.wait_for(kHarnessHangLimit) == std::future_status::ready;
+    const bool wrappedAck = returnedAfterCompletion && result.get();
+    waiter.join();
+
+    GCDriverPort ordinary(GCDriverKind::MINOR);
+    const GCDriverReceipt ordinaryReceipt = ordinary.EnqueueSync(GC_REASON_YOUNG);
+    GCDriverRequest ordinaryRequest {};
+    GC_EXPECT_TRUE(ordinary.TryDequeue(ordinaryRequest));
+    ordinary.Acknowledge(ordinaryRequest);
+    const bool ordinaryAck = ordinary.WaitForAck(ordinaryReceipt);
+
+    std::fprintf(stderr,
+                 "DETAIL receipt_wrap boundary_seq=%llu boundary_ack=%d wrapped_seq=%llu waiter_blocked=%d "
+                 "returned_before=%d wrapped_ack=%d ordinary_seq=%llu ordinary_ack=%d\n",
+                 static_cast<unsigned long long>(boundaryReceipt.Sequence()), boundaryAck,
+                 static_cast<unsigned long long>(wrappedReceipt.Sequence()), waiterBlocked,
+                 returnedBeforeCompletion, wrappedAck,
+                 static_cast<unsigned long long>(ordinaryReceipt.Sequence()), ordinaryAck);
+    GC_EXPECT_EQ(boundaryReceipt.Sequence(), std::numeric_limits<uint64_t>::max() - 1);
+    GC_EXPECT_TRUE(boundaryAck);
+    GC_EXPECT_EQ(wrappedReceipt.Sequence(), 2u);
+    GC_EXPECT_TRUE(waiterBlocked);
+    GC_EXPECT_FALSE(returnedBeforeCompletion);
+    GC_EXPECT_TRUE(wrappedAck);
+    GC_EXPECT_EQ(ordinaryReceipt.Sequence(), 2u);
+    GC_EXPECT_TRUE(ordinaryAck);
+}
+
+GC_TEST(GcRequestSync, HistoricalTaskQueueWrapRulerDoesNotTouchDriverWrap)
+{
+    TaskQueue<GCExecutor> legacyQueue;
+    legacyQueue.Init();
+    CollectorResourcesTestPeer::SetLegacyTaskSequence(legacyQueue, GCTask::ASYNC_TASK_INDEX - 2);
+    const uint64_t legacySequence = CollectorResourcesTestPeer::LegacyTaskSequence(legacyQueue);
+
+    GCDriverPort port(GCDriverKind::MAJOR);
+    const GCDriverReceipt receipt = port.EnqueueSync(GC_REASON_FORCE);
+    GCDriverRequest request {};
+    const bool dequeued = port.TryDequeue(request);
+    if (dequeued) {
+        port.Acknowledge(request);
+    }
+    const bool ack = port.WaitForAck(receipt);
+    legacyQueue.Fini();
+
+    std::fprintf(stderr,
+                 "DETAIL historical_wrap_ruler legacy_task_seq=%llu driver_seq=%llu dequeued=%d ack=%d\n",
+                 static_cast<unsigned long long>(legacySequence),
+                 static_cast<unsigned long long>(receipt.Sequence()), dequeued, ack);
+    GC_EXPECT_EQ(legacySequence, GCTask::ASYNC_TASK_INDEX - 2);
+    GC_EXPECT_EQ(receipt.Sequence(), 2u);
+    GC_EXPECT_TRUE(dequeued);
+    GC_EXPECT_TRUE(ack);
+}
+
+GC_TEST(GcRequestSync, MajorPublishesOneCompletionAfterOld)
+{
+    CollectorResources& resources = Heap::GetHeap().GetCollectorResources();
+    BlockingCollector collector;
+    collector.SetResources(resources);
+    CollectorResourcesTestPeer::Init(resources, collector, false);
+    collector.ReleaseAll();
+    CollectorResourcesTestPeer::ResetCompletionCount(resources);
+
+    std::promise<void> gapEnteredPromise;
+    std::future<void> gapEntered = gapEnteredPromise.get_future();
+    std::promise<void> gapReleasePromise;
+    std::shared_future<void> gapRelease = gapReleasePromise.get_future().share();
+    CollectorResourcesTestPeer::SetAfterYoungPrelude(resources, [&] {
+        gapEnteredPromise.set_value();
+        gapRelease.wait();
+    });
+
+    GCDriverPort& port = resources.GetMajorDriverPort();
+    const GCDriverReceipt receipt = port.EnqueueSync(GC_REASON_FORCE);
+    GCDriverRequest request {};
+    GC_EXPECT_TRUE(port.TryDequeue(request));
+
+    std::promise<bool> ackPromise;
+    std::future<bool> ack = ackPromise.get_future();
+    std::thread waiter([&] { ackPromise.set_value(port.WaitForAck(receipt)); });
+    JoinGuard waiterGuard(waiter);
+    std::promise<bool> processPromise;
+    std::future<bool> processed = processPromise.get_future();
+    std::thread driver([&] {
+        processPromise.set_value(CollectorResourcesTestPeer::ProcessDriverRequest(resources, port, request));
+    });
+    JoinGuard driverGuard(driver);
+
+    const bool gapObserved = gapEntered.wait_for(kHarnessHangLimit) == std::future_status::ready;
+    const size_t runsAtGap = collector.RunCount();
+    const size_t completionsAtGap = CollectorResourcesTestPeer::CompletionCount(resources);
+    const bool receiptAtGap = ack.wait_for(std::chrono::seconds(0)) == std::future_status::ready;
+    gapReleasePromise.set_value();
+    const bool processReturned = processed.wait_for(kHarnessHangLimit) == std::future_status::ready;
+    const bool executed = processReturned && processed.get();
+    const bool receiptReturned = ack.wait_for(kHarnessHangLimit) == std::future_status::ready;
+    const bool receiptAck = receiptReturned && ack.get();
+    driver.join();
+    waiter.join();
+    const size_t runsAfter = collector.RunCount();
+    const size_t completionsAfter = CollectorResourcesTestPeer::CompletionCount(resources);
+    CollectorResourcesTestPeer::Destroy(resources);
+
+    std::fprintf(stderr,
+                 "DETAIL major_completion gap=%d runs_at_gap=%zu completion_at_gap=%zu receipt_at_gap=%d "
+                 "executed=%d runs_after=%zu completion_after=%zu receipt_after=%d\n",
+                 gapObserved, runsAtGap, completionsAtGap, receiptAtGap, executed, runsAfter,
+                 completionsAfter, receiptAck);
+    GC_EXPECT_TRUE(gapObserved);
+    GC_EXPECT_EQ(runsAtGap, 1u);
+    GC_EXPECT_EQ(completionsAtGap, 0u);
+    GC_EXPECT_FALSE(receiptAtGap);
+    GC_EXPECT_TRUE(executed);
+    GC_EXPECT_EQ(runsAfter, 2u);
+    GC_EXPECT_EQ(completionsAfter, 1u);
+    GC_EXPECT_TRUE(receiptAck);
+}
+
+GC_TEST(GcRequestSync, MinorPublishesOneCompletionControl)
+{
+    CollectorResources& resources = Heap::GetHeap().GetCollectorResources();
+    BlockingCollector collector;
+    collector.SetResources(resources);
+    CollectorResourcesTestPeer::Init(resources, collector, false);
+    collector.ReleaseAll();
+    CollectorResourcesTestPeer::ResetCompletionCount(resources);
+    GCDriverPort& port = resources.GetMinorDriverPort();
+    const GCDriverReceipt receipt = port.EnqueueSync(GC_REASON_YOUNG);
+    GCDriverRequest request {};
+    const bool dequeued = port.TryDequeue(request);
+    const bool executed = dequeued && CollectorResourcesTestPeer::ProcessDriverRequest(resources, port, request);
+    const bool ack = port.WaitForAck(receipt);
+    const size_t runs = collector.RunCount();
+    const size_t completions = CollectorResourcesTestPeer::CompletionCount(resources);
+    CollectorResourcesTestPeer::Destroy(resources);
+
+    std::fprintf(stderr, "DETAIL minor_completion executed=%d runs=%zu completion=%zu receipt=%d\n",
+                 executed, runs, completions, ack);
+    GC_EXPECT_TRUE(executed);
+    GC_EXPECT_EQ(runs, 1u);
+    GC_EXPECT_EQ(completions, 1u);
+    GC_EXPECT_TRUE(ack);
+}
+
+GC_TEST(GcRequestSync, InvalidReasonsFailClosedBeforeLookup)
+{
+    int results[2] = { 0, 0 };
+    const GCReason reasons[2] = { GC_REASON_MAX, GC_REASON_INVALID };
+    for (size_t i = 0; i < 2; ++i) {
+        const pid_t pid = fork();
+        GC_EXPECT_TRUE(pid >= 0);
+        if (pid == 0) {
+            (void)signal(SIGABRT, SIG_DFL);
+            Heap::GetHeap().GetCollectorResources().RequestGC(reasons[i], false);
+            _exit(0);
+        }
+        results[i] = WaitChild(pid);
+    }
+
+    std::fprintf(stderr, "DETAIL invalid_reason max_rc=%d invalid_rc=%d\n", results[0], results[1]);
+    GC_EXPECT_NE(results[0], 0);
+    GC_EXPECT_NE(results[1], 0);
 }
 
 GC_TEST(GcRequestSync, MajorAbortpointSkipsOldAfterYoungPrelude)
@@ -488,7 +799,7 @@ GC_TEST(GcRequestSync, MajorAbortpointSkipsOldAfterYoungPrelude)
     std::future<bool> completedFuture = completedPromise.get_future();
     std::thread driver([&] {
         completedPromise.set_value(CollectorResourcesTestPeer::ExecuteDriverRequest(
-            resources, GCDriverRequest { 2, GC_REASON_FORCE, false }));
+            resources, GCDriverRequest { 2, GC_REASON_FORCE, false, {} }));
     });
     GC_EXPECT_TRUE(collector.WaitForRuns(1));
     resources.GetMajorDriverPort().Abort().Request();

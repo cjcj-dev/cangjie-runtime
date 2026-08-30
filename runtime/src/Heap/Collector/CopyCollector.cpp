@@ -137,7 +137,7 @@ void CopyCollector::RunGarbageCollection(uint64_t gcIndex, GCReason reason)
         }
         gcStats.isTimeTrustable.store(true, std::memory_order_relaxed);
     }
-    collectorResources.NotifyGCFinished(gcIndex);
+    collectorResources.NotifyGCPhaseFinished(gcIndex);
 }
 
 void CopyCollector::ForwardFromSpace()
