@@ -48,6 +48,7 @@ set(GC_UNIT_SOURCES
     test_gc_thread_pool.cpp
     test_expire_kept.cpp
     test_receipt_life.cpp
+    test_receipt_life_registry.cpp
     test_lifeclock.cpp
     test_exempt_unlock.cpp
     test_heal_coverage.cpp

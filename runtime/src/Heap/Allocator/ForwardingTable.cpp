@@ -113,6 +113,8 @@ std::atomic<uint64_t> g_unarmed{ 0 };
 #if defined(MRT_TESTABLE_INTERNALS)
 std::atomic<ForwardingTable::LookupRetainHook> g_lookupRetainHook{ nullptr };
 std::atomic<void*> g_lookupRetainHookContext{ nullptr };
+std::atomic<ForwardingTable::ReceiptLifeRegisterHook> g_receiptLifeRegisterHook{ nullptr };
+std::atomic<void*> g_receiptLifeRegisterHookContext{ nullptr };
 #endif
 
 bool PublicationClosedAt(MAddress addr)
@@ -699,10 +701,15 @@ ZForwarding::Receipt ForwardingTable::InstallMapping(
     CHECK_DETAIL(tab != nullptr && !tab->is_provisional() && tab->covers(from),
                  "forwarding publication responsibility missing from=%#zx to=%#zx tab=%p",
                  static_cast<size_t>(from), static_cast<size_t>(to), tab);
-    const ZForwarding::Receipt receipt = tab->insert_receipt(from, to);
-    if (receipt.installed) {
-        tab->note_to_life(receipt.address);
-    }
+    const ZForwarding::Receipt receipt = tab->install_receipt_with_life(from, to, []() {
+#if defined(MRT_TESTABLE_INTERNALS)
+        ForwardingTable::ReceiptLifeRegisterHook hook =
+            g_receiptLifeRegisterHook.load(std::memory_order_acquire);
+        if (hook != nullptr) {
+            hook(g_receiptLifeRegisterHookContext.load(std::memory_order_acquire));
+        }
+#endif
+    });
     M0Correlation::PropagateForwarding(from, receipt.address, receipt.address, receipt.installed);
     return receipt;
 }
@@ -754,27 +761,71 @@ uint64_t ForwardingTable::StaleToLifeCount()
 
 void ZForwarding::note_to_life(MAddress to)
 {
+    const uint8_t optimisticCount = _to_life_n.load(std::memory_order_relaxed);
+    std::lock_guard<std::mutex> lock(_receiptInstallLock);
+    (void)register_to_life_locked(to, optimisticCount);
+}
+
+ZForwarding::Receipt::Status ZForwarding::register_to_life_locked(MAddress to, uint8_t optimisticCount)
+{
+    (void)optimisticCount;
     RegionInfo* toRegion = RegionInfo::TryGetRegionInfoAt(to);
     if (toRegion == nullptr) {
-        return;
+        return Receipt::Status::DESTINATION_UNTRACKED;
     }
     const MAddress start = toRegion->GetRegionStart();
     const uint8_t seq = toRegion->GetRegionLifeSeq();
     const RegionLifeId life = toRegion->GetRegionLifeId();
-    for (uint8_t i = 0; i < _to_life_n; ++i) {
+    if (life == 0) {
+        return Receipt::Status::DESTINATION_UNTRACKED;
+    }
+    const uint8_t count = _to_life_n.load(std::memory_order_relaxed);
+    for (uint8_t i = 0; i < count; ++i) {
         if (_to_lives[i].start == start) {
-            return;
+            return _to_lives[i].lifeId == life && _to_lives[i].legacySeq == seq
+                ? Receipt::Status::EXISTING
+                : Receipt::Status::DESTINATION_LIFE_CONFLICT;
         }
     }
-    if (_to_life_n < 3) {
-        _to_lives[_to_life_n].start = start;
-        _to_lives[_to_life_n].legacySeq = seq;
-        _to_lives[_to_life_n].lifeId = life;
-        ++_to_life_n;
-        RegionLifeClock::Publish(RegionLifeClock::Carrier::RECEIPT, life);
-    } else {
+    if (count >= kToLifeCapacity) {
         RegionLifeClock::NoteCapWouldOverflow(RegionLifeClock::Carrier::RECEIPT);
+        return Receipt::Status::LIFE_REGISTRY_FULL;
     }
+    _to_lives[count].start = start;
+    _to_lives[count].legacySeq = seq;
+    _to_lives[count].lifeId = life;
+    RegionLifeClock::Publish(RegionLifeClock::Carrier::RECEIPT, life);
+    _to_life_n.store(static_cast<uint8_t>(count + 1), std::memory_order_release);
+    return Receipt::Status::INSTALLED;
+}
+
+ZForwarding::Receipt ZForwarding::install_receipt_with_life(
+    MAddress from, MAddress to, const std::function<void()>& beforeRegister)
+{
+    const MAddress existingBeforeLock = find(from);
+    if (existingBeforeLock != 0) {
+        return Receipt{ existingBeforeLock, false, Receipt::Status::EXISTING };
+    }
+
+    // The snapshot is intentionally taken before the deterministic test hook.
+    // Correct code reloads it under _receiptInstallLock; the negative control
+    // restores the old plain-count use and makes both rendezvoused installers
+    // select the same slot.
+    const uint8_t optimisticCount = _to_life_n.load(std::memory_order_relaxed);
+    if (beforeRegister) {
+        beforeRegister();
+    }
+
+    std::lock_guard<std::mutex> lock(_receiptInstallLock);
+    const MAddress existing = find(from);
+    if (existing != 0) {
+        return Receipt{ existing, false, Receipt::Status::EXISTING };
+    }
+    const Receipt::Status lifeStatus = register_to_life_locked(to, optimisticCount);
+    if (lifeStatus != Receipt::Status::INSTALLED && lifeStatus != Receipt::Status::EXISTING) {
+        return Receipt{ 0, false, lifeStatus };
+    }
+    return insert_receipt(from, to);
 }
 
 bool ZForwarding::DestUsable(MAddress to)
@@ -797,28 +848,29 @@ bool ZForwarding::DestUsable(MAddress to)
     return st != ObjectState::FORWARDED && st != ObjectState::FORWARDING;
 }
 
-MAddress ZForwarding::resolve_live(MAddress to) const
+MAddress ZForwarding::resolve_life(MAddress to) const
 {
-    if (to == 0 || !Heap::IsHeapAddress(to)) {
+    if (to == 0) {
         return 0;
     }
-    BaseObject* obj = reinterpret_cast<BaseObject*>(to);
-    if (!obj->IsValidObject()) {
-        return 0;
+    // Raw insert() is retained for pre-existing exempt/retired carriers whose
+    // synthetic or non-heap destination has no RegionLifeId to validate.  The
+    // product publication path cannot create such a receipt: InstallMapping
+    // rejects DESTINATION_UNTRACKED before its release CAS.
+    if (!Heap::IsHeapAddress(to)) {
+        return to;
     }
     RegionInfo* toRegion = RegionInfo::TryGetRegionInfoAt(to);
     if (toRegion == nullptr || toRegion->IsFreeRegion() || toRegion->IsGarbageRegion()) {
         return 0;
     }
-    if (to < toRegion->GetRegionStart() || to >= toRegion->GetRegionAllocPtr()) {
-        return 0;
-    }
-    if (_to_life_n != 0) {
+    const uint8_t toLifeCount = _to_life_n.load(std::memory_order_acquire);
+    if (toLifeCount != 0) {
         const MAddress start = toRegion->GetRegionStart();
         const uint8_t seq = toRegion->GetRegionLifeSeq();
         const RegionLifeId life = toRegion->GetRegionLifeId();
         bool tracked = false;
-        for (uint8_t i = 0; i < _to_life_n; ++i) {
+        for (uint8_t i = 0; i < toLifeCount; ++i) {
             if (_to_lives[i].start == start) {
                 tracked = true;
                 const bool lifeCurrent = RegionLifeClock::Validate(
@@ -843,6 +895,23 @@ MAddress ZForwarding::resolve_live(MAddress to) const
                                        toRegion->GetRegionLifeId())) {
             return 0;
         }
+    }
+    return to;
+}
+
+MAddress ZForwarding::resolve_live(MAddress to) const
+{
+    to = resolve_life(to);
+    if (to == 0) {
+        return 0;
+    }
+    BaseObject* obj = reinterpret_cast<BaseObject*>(to);
+    if (!obj->IsValidObject()) {
+        return 0;
+    }
+    RegionInfo* toRegion = RegionInfo::TryGetRegionInfoAt(to);
+    if (toRegion == nullptr || to < toRegion->GetRegionStart() || to >= toRegion->GetRegionAllocPtr()) {
+        return 0;
     }
     if (DestUsable(to)) {
         return to;
@@ -875,7 +944,7 @@ static MAddress FindRetiredToImpl(MAddress from, ForwardingTable::ToAnswer* answ
                 continue;
             }
             searched = true;
-            const MAddress to = tab->find(from);
+            const MAddress to = tab->resolve_life(tab->find(from));
             if (to != 0) {
                 if (require) {
                     tab->note_retired_required();
@@ -922,7 +991,7 @@ MAddress ForwardingTable::FindTo(MAddress from)
                     static_cast<unsigned long long>(n));
             }
         }
-        const MAddress to = tab->find(from);
+        const MAddress to = tab->resolve_life(tab->find(from));
         if (to != 0) {
             return to;
         }
@@ -960,7 +1029,7 @@ MAddress ForwardingTable::LookupTo(MAddress from, ToAnswer* answer)
             hook(g_lookupRetainHookContext.load(std::memory_order_acquire));
         }
 #endif
-        const MAddress to = retained->find(from);
+        const MAddress to = retained->resolve_life(retained->find(from));
         retained->release_page();
         if (to != 0) {
             g_armedHit.fetch_add(1, std::memory_order_relaxed);
@@ -1014,6 +1083,12 @@ void ForwardingTable::SetLookupRetainHook(LookupRetainHook hook, void* context)
 {
     g_lookupRetainHookContext.store(context, std::memory_order_release);
     g_lookupRetainHook.store(hook, std::memory_order_release);
+}
+
+void ForwardingTable::SetReceiptLifeRegisterHook(ReceiptLifeRegisterHook hook, void* context)
+{
+    g_receiptLifeRegisterHookContext.store(context, std::memory_order_release);
+    g_receiptLifeRegisterHook.store(hook, std::memory_order_release);
 }
 #endif
 

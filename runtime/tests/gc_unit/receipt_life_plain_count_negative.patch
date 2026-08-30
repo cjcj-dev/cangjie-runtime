@@ -1,0 +1,28 @@
+diff --git a/runtime/src/Heap/Collector/ZForwarding.h b/runtime/src/Heap/Collector/ZForwarding.h
+--- a/runtime/src/Heap/Collector/ZForwarding.h
++++ b/runtime/src/Heap/Collector/ZForwarding.h
+@@ -448 +448 @@
+-    std::atomic<uint8_t> _to_life_n;
++    uint8_t _to_life_n;
+diff --git a/runtime/src/Heap/Allocator/ForwardingTable.cpp b/runtime/src/Heap/Allocator/ForwardingTable.cpp
+--- a/runtime/src/Heap/Allocator/ForwardingTable.cpp
++++ b/runtime/src/Heap/Allocator/ForwardingTable.cpp
+@@ -764 +764 @@
+-    const uint8_t optimisticCount = _to_life_n.load(std::memory_order_relaxed);
++    const uint8_t optimisticCount = _to_life_n;
+@@ -771 +770,0 @@ ZForwarding::Receipt::Status ZForwarding::register_to_life_locked(MAddress to, uint8_t optimisticCount)
+-    (void)optimisticCount;
+@@ -782 +781 @@ ZForwarding::Receipt::Status ZForwarding::register_to_life_locked(MAddress to, uint8_t optimisticCount)
+-    const uint8_t count = _to_life_n.load(std::memory_order_relaxed);
++    const uint8_t count = optimisticCount;
+@@ -798 +797 @@ ZForwarding::Receipt::Status ZForwarding::register_to_life_locked(MAddress to, uint8_t optimisticCount)
+-    _to_life_n.store(static_cast<uint8_t>(count + 1), std::memory_order_release);
++    _to_life_n++;
+@@ -814 +813 @@ ZForwarding::Receipt ZForwarding::install_receipt_with_life(
+-    const uint8_t optimisticCount = _to_life_n.load(std::memory_order_relaxed);
++    const uint8_t optimisticCount = _to_life_n;
+@@ -819 +818,0 @@ ZForwarding::Receipt ZForwarding::install_receipt_with_life(
+-    std::lock_guard<std::mutex> lock(_receiptInstallLock);
+@@ -860 +858 @@ MAddress ZForwarding::resolve_life(MAddress to) const
+-    const uint8_t toLifeCount = _to_life_n.load(std::memory_order_acquire);
++    const uint8_t toLifeCount = _to_life_n;

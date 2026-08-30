@@ -1,0 +1,19 @@
+diff --git a/runtime/src/Heap/Allocator/ForwardingTable.cpp b/runtime/src/Heap/Allocator/ForwardingTable.cpp
+--- a/runtime/src/Heap/Allocator/ForwardingTable.cpp
++++ b/runtime/src/Heap/Allocator/ForwardingTable.cpp
+@@ -704,9 +704,10 @@ ZForwarding::Receipt ForwardingTable::InstallMapping(
+-    const ZForwarding::Receipt receipt = tab->install_receipt_with_life(from, to, []() {
++    const ZForwarding::Receipt receipt = tab->insert_receipt(from, to);
++    []() {
+ #if defined(MRT_TESTABLE_INTERNALS)
+         ForwardingTable::ReceiptLifeRegisterHook hook =
+             g_receiptLifeRegisterHook.load(std::memory_order_acquire);
+-        if (hook != nullptr) {
++        if (hook != nullptr) {
+-            hook(g_receiptLifeRegisterHookContext.load(std::memory_order_acquire));
++            hook(g_receiptLifeRegisterHookContext.load(std::memory_order_acquire));
+-        }
++        }
+ #endif
+-    });
++    }();
