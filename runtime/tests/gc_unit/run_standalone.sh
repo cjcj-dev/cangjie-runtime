@@ -7,8 +7,45 @@ set -euo pipefail
 ROOT="$(cd "$(dirname "$0")/../../.." && pwd)"
 SRC="$ROOT/runtime/tests/gc_unit"
 OUT="${GC_UNIT_OUT:-$ROOT/runtime/tests/gc_unit/build_standalone}"
-mkdir -p "$OUT"
 CXX="${CXX:-clang++}"
+
+# Mutual-wait receipts have an independent, fixed target set.  Do not derive
+# it from the ProductFindToVersion calls that happen to remain in the source:
+# deleting a test/call must shrink neither the manifest nor this guard.
+MUTUALWAIT_MANIFEST="$SRC/product_call_manifest_mutualwait.tsv"
+MUTUALWAIT_ANALYZER="$SRC/check_mutualwait_manifest.py"
+MUTUALWAIT_SOURCE="$SRC/clear_entries_product_unit.cpp"
+EXPECTED_MUTUALWAIT_TESTS=(
+  ForwardingPublicationProduct.KeptActiveReceiptRemainsRequiredAfterTableRetires
+  ForwardingPublicationProduct.ExemptPreservesRetiredReceiptAcrossActiveGeneration
+  ForwardingPublicationProduct.ReclaimRetiredDefersResidualUntilActiveReceipt
+  ForwardingPublicationProduct.ReclaimRetiredPreservesNewActiveReceiptHeader
+  ForwardingPublicationProduct.FinishIncompleteUnmovablePublishesIdentityBeforeDone
+  ForwardingPublicationProduct.FinishIncompleteNonFromResidualPublishesIdentityBeforeDone
+  ForwardingPublicationProduct.ExemptRejectsForwardedWithoutAnyReceipt
+)
+
+validate_mutualwait_manifest() {
+  local test_name compile_arg
+  local analyzer_args=(
+    --source "$MUTUALWAIT_SOURCE"
+    --manifest "$MUTUALWAIT_MANIFEST"
+    --product-root "$ROOT/runtime/src/Heap"
+    --compiler "$CXX"
+  )
+  for test_name in "${EXPECTED_MUTUALWAIT_TESTS[@]}"; do
+    analyzer_args+=(--expected-test "$test_name")
+  done
+  for compile_arg in \
+      -std=gnu++17 -fno-rtti -fvisibility-inlines-hidden \
+      "${TEST_DEFINES[@]}" -DMRT_TESTABLE_INTERNALS=1 \
+      "${PUBLICATION_TESTABLE_FLAGS[@]}" "${INC_FLAGS[@]}"; do
+    analyzer_args+=("--compile-arg=$compile_arg")
+  done
+  python3 "$MUTUALWAIT_ANALYZER" "${analyzer_args[@]}" || return 11
+}
+
+mkdir -p "$OUT"
 
 RUNTIME_LIB_DIR="${GCV2_RUNTIME_LIB_DIR:-}"
 if [[ -z "$RUNTIME_LIB_DIR" ]]; then
@@ -115,8 +152,12 @@ GC_UNIT_DEFS=(-DMRT_ZSTAT_COMPILED=1)
 nm -D "$RUNTIME_LIB_DIR/libcangjie-runtime.so" >"$OUT/runtime-dynamic-symbols.txt"
 if /usr/bin/grep -q 'ShouldWaitForIgnoredGcRequest' "$OUT/runtime-dynamic-symbols.txt"; then
   GC_UNIT_DEFS+=(-DMRT_GC_UNIT_TESTS=1)
-fi# A weak referent is a discovery input, not a strong tracing root. Keep this
-# source-level consumer guard next to the product-linked behavior tests: the
+fi# A weak referent is a discovery input, not a strong tracing root. Keep thisif [[ "${GC_UNIT_MUTUALWAIT_MANIFEST_ONLY:-0}" == "1" ]]; then
+  validate_mutualwait_manifest
+  exit $?
+fi
+
+# A weak referent is a discovery input, not a strong tracing root. Keep this# source-level consumer guard next to the product-linked behavior tests: the
 # positive anchor proves the guard inspected the active collector source, and
 # reintroducing the old referent traversal fails before any test can pass.
 WEAK_DISCOVERY_SOURCE="$ROOT/runtime/src/Heap/Collector/TracingCollector.cpp"
@@ -388,6 +429,8 @@ LOADHEAL_PRODUCT_CONSUMERS=(
   'MapleRuntime::RememberedSet::MoveInPlaceSlots('
   'MapleRuntime::RegionManager::RecordPinnedCrossGenEdges('
   'MapleRuntime::WCollector::RemapYoungRoots('
+  'MapleRuntime::RegionManager::FinishIncompleteFromRegions('
+  'MapleRuntime::ForwardingTable::ReclaimRetired('
 )
 LOADHEAL_MANIFEST="$SRC/product_call_manifest_loadheal.tsv"
 EXPECTED_LOADHEAL_TESTS=(
@@ -417,6 +460,8 @@ for test_name in "${EXPECTED_LOADHEAL_TESTS[@]}"; do
   /usr/bin/grep -q "^${test_name}"$'\t' "$LOADHEAL_MANIFEST"
 done
 echo "GATE_LOADHEAL_PRODUCT_MANIFEST_OK rows=$loadheal_rows source=clear_entries_product_unit.cpp"
+
+validate_mutualwait_manifest
 
 # Pointer-colour census tests consume independently replaceable functions from
 # the product SO.  Full nm excludes even local/weak test copies; nm -u proves
@@ -515,6 +560,19 @@ for consumer in "${LOADHEAL_PRODUCT_CONSUMERS[@]}"; do
     exit 10
   fi
 done
+MUTUALWAIT_SO_EXPORTS="$OUT/cj_gc_forwarding_publication_unit.so-exports.txt"
+nm -D --defined-only "$RUNTIME_LIB_DIR/libcangjie-runtime.so" | c++filt >"$MUTUALWAIT_SO_EXPORTS"
+for consumer in 'MapleRuntime::WCollector::FindToVersion(' 'MapleRuntime::ForwardingTable::LookupTo('; do
+  if /usr/bin/grep -F -q "$consumer" "$LOADHEAL_FULL"; then
+    echo "GC_UNIT_MUTUALWAIT_LOCAL_DEFINITION symbol=$consumer" >&2
+    exit 9
+  fi
+  if ! /usr/bin/grep -F -q "$consumer" "$MUTUALWAIT_SO_EXPORTS"; then
+    echo "GC_UNIT_MUTUALWAIT_PRODUCT_EXPORT_MISSING symbol=$consumer" >&2
+    exit 10
+  fi
+done
+echo "GATE_MUTUALWAIT_PRODUCT_IMPORTS_OK elf=$OUT/cj_gc_forwarding_publication_unit"
 echo "GATE_LOADHEAL_PRODUCT_IMPORTS_OK elf=$OUT/cj_gc_forwarding_publication_unit"
 
 echo "LINKED_RUNTIME=$RUNTIME_LIB_DIR"
