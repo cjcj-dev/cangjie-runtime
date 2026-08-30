@@ -36,7 +36,7 @@ class ReferenceProcessor {
 public:
     static constexpr size_t REFERENCE_TYPE_COUNT = static_cast<size_t>(ReferenceType::COUNT);
     using IsStronglyLive = std::function<bool(BaseObject*)>;
-    using EnqueueFinal = std::function<void(BaseObject*)>;
+    using EnqueueFinal = std::function<bool(BaseObject*)>;
     using ObserveWeakFinal = std::function<void(BaseObject*, BaseObject*)>;
 
     ReferenceProcessor();

@@ -40,7 +40,10 @@ GC_TEST(ReferenceProcessor, FinalDiscoveryProcessEnqueue)
 
     processor.ProcessReferences([](BaseObject*) { return false; });
     BaseObject* enqueued = nullptr;
-    processor.EnqueueReferences([&](BaseObject* value) { enqueued = value; });
+    processor.EnqueueReferences([&](BaseObject* value) {
+        enqueued = value;
+        return true;
+    });
 
     GC_EXPECT_TRUE(enqueued == fx.obj0);
     GC_EXPECT_EQ(processor.Enqueued(ReferenceType::FINAL), static_cast<size_t>(1));
@@ -60,7 +63,10 @@ GC_TEST(ReferenceProcessor, StrongUpgradeDropsFinalReference)
                    ReferenceStatus::DISCOVERED);
     processor.ProcessReferences([](BaseObject*) { return false; });
     size_t enqueued = 0;
-    processor.EnqueueReferences([&](BaseObject*) { ++enqueued; });
+    processor.EnqueueReferences([&](BaseObject*) {
+        ++enqueued;
+        return true;
+    });
 
     GC_EXPECT_EQ(enqueued, static_cast<size_t>(0));
     GC_EXPECT_FALSE(fx.region0->IsResurrectedObject(fx.obj0));
@@ -78,7 +84,7 @@ GC_TEST(ReferenceProcessor, StrongWeakReferentIsNotCleared)
     GC_EXPECT_TRUE(processor.DiscoverReference(fx.obj0, ReferenceType::WEAK) ==
                    ReferenceStatus::DISCOVERED);
     processor.ProcessReferences([&](BaseObject* value) { return value == fx.obj1; });
-    processor.EnqueueReferences([](BaseObject*) {});
+    processor.EnqueueReferences([](BaseObject*) { return true; });
 
     GC_EXPECT_TRUE(to_object(referent.GetTargetObject()) == fx.obj1);
     GC_EXPECT_EQ(processor.Enqueued(ReferenceType::WEAK), static_cast<size_t>(0));
@@ -95,7 +101,7 @@ GC_TEST(ReferenceProcessor, DeadWeakReferentIsCleanedByCas)
     GC_EXPECT_TRUE(processor.DiscoverReference(fx.obj0, ReferenceType::WEAK) ==
                    ReferenceStatus::DISCOVERED);
     processor.ProcessReferences([](BaseObject*) { return false; });
-    processor.EnqueueReferences([](BaseObject*) {});
+    processor.EnqueueReferences([](BaseObject*) { return true; });
 
     GC_EXPECT_TRUE(is_null(referent.GetTargetObject()));
     GC_EXPECT_EQ(processor.Enqueued(ReferenceType::WEAK), static_cast<size_t>(1));
@@ -118,7 +124,7 @@ GC_TEST(ReferenceProcessor, EnqueueConsumerReloadsWinningWeakCasValue)
         referent.StoreColoured(GcUnit::StoreGoodPointer(replacement));
     });
     BaseObject* consumerTerminal = nullptr;
-    processor.EnqueueReferences([](BaseObject*) {},
+    processor.EnqueueReferences([](BaseObject*) { return true; },
         [&](BaseObject*, BaseObject* terminal) { consumerTerminal = terminal; });
     ReferenceProcessor::SetBeforeWeakCleanCasForTest({});
 
@@ -141,7 +147,7 @@ GC_TEST(ReferenceProcessor, DuplicateWeakPendingAcceptedOnce)
     GC_EXPECT_TRUE(processor.DiscoverReference(fx.obj0, ReferenceType::WEAK) ==
                    ReferenceStatus::DISCOVERED);
     processor.ProcessReferences([](BaseObject*) { return false; });
-    processor.EnqueueReferences([](BaseObject*) {});
+    processor.EnqueueReferences([](BaseObject*) { return true; });
 
     GC_EXPECT_TRUE(is_null(referent.GetTargetObject()));
     GC_EXPECT_EQ(processor.Enqueued(ReferenceType::WEAK), static_cast<size_t>(1));
@@ -180,7 +186,10 @@ GC_TEST(ReferenceProcessor, ConcurrentWorkersPublishOnePendingList)
 
     processor.ProcessReferences([](BaseObject*) { return false; });
     std::atomic<size_t> count{ 0 };
-    processor.EnqueueReferences([&](BaseObject*) { count.fetch_add(1, std::memory_order_relaxed); });
+    processor.EnqueueReferences([&](BaseObject*) {
+        count.fetch_add(1, std::memory_order_relaxed);
+        return true;
+    });
     GC_EXPECT_EQ(count.load(std::memory_order_relaxed), kWorkers * kPerWorker);
     GC_EXPECT_EQ(processor.Discovered(ReferenceType::FINAL), kWorkers * kPerWorker);
     GC_EXPECT_TRUE(processor.Empty());

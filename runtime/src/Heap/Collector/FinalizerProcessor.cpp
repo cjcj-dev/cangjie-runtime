@@ -257,7 +257,11 @@ void FinalizerProcessor::ProcessReferences(const ReferenceProcessor::IsStronglyL
     referenceProcessor.ProcessReferences(isStronglyLive);
     bool enqueued = false;
     referenceProcessor.EnqueueReferences(
-        [this, &enqueued](BaseObject* obj) { enqueued = EnqueueFinalizableReference(obj) || enqueued; });
+        [this, &enqueued](BaseObject* obj) {
+            const bool accepted = EnqueueFinalizableReference(obj);
+            enqueued = accepted || enqueued;
+            return accepted;
+        });
     if (enqueued) {
         Notify();
     }

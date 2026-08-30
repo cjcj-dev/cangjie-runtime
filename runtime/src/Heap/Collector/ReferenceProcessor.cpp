@@ -167,8 +167,7 @@ void ReferenceProcessor::EnqueueReferencesImpl(const EnqueueFinal& enqueueFinal,
                 observeWeakFinal(node->reference, result.terminalReferent);
             }
         } else if (node->type == ReferenceType::FINAL) {
-            enqueueFinal(node->reference);
-            accepted = true;
+            accepted = enqueueFinal(node->reference);
         }
         if (accepted) {
             enqueued[TypeIndex(node->type)].fetch_add(1, std::memory_order_relaxed);
