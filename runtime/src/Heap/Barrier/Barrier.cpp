@@ -27,6 +27,7 @@
 #include "Heap/WCollector/PreforwardBarrier.h"
 #include "Heap/WCollector/TraceBarrier.h"
 #include "Mutator/Mutator.h"
+#include "Mutator/SatbBuffer.h"
 #include "ObjectModel/Field.inline.h"
 #include "ObjectModel/MArray.h"
 #include "ObjectModel/RefField.inline.h"
@@ -201,7 +202,37 @@ BaseObject* Barrier::ZgcSelfHealLoadGood(RefField<true>& field, zpointer observe
         }
         return returned;
     }
-    const bool healed = ZgcSelfHeal(field, observed, healPtr, LoadGoodFastPath(theCollector), site);
+    // Atomic loads have already linearized on `observed`. Unlike ZGC's metadata-only
+    // upgrades, this tree permits a competing writer to retarget the slot while the
+    // reader is resolving it. A lost CAS therefore belongs to that writer and must not
+    // be retried with the stale resolved target. One compare-exchange is both sufficient
+    // for uncontended healing and the explicit wait-free upper bound for this path.
+    bool healed = false;
+    switch (site) {
+        case HealSite::TraceReadReference:
+            healed = HealSlot(field, observed, healPtr, HealSite::TraceReadReference, HealNull::Disallow,
+                              std::memory_order_relaxed, std::memory_order_relaxed, nullptr);
+            break;
+        case HealSite::IdleAtomicReadReference:
+            healed = HealSlot(field, observed, healPtr, HealSite::IdleAtomicReadReference, HealNull::Disallow,
+                              std::memory_order_relaxed, std::memory_order_relaxed, nullptr);
+            break;
+        case HealSite::PostTraceAtomicReadReference:
+            healed = HealSlot(field, observed, healPtr, HealSite::PostTraceAtomicReadReference, HealNull::Disallow,
+                              std::memory_order_relaxed, std::memory_order_relaxed, nullptr);
+            break;
+        case HealSite::PreforwardAtomicReadReference:
+            healed = HealSlot(field, observed, healPtr, HealSite::PreforwardAtomicReadReference, HealNull::Disallow,
+                              std::memory_order_relaxed, std::memory_order_relaxed, nullptr);
+            break;
+        case HealSite::ForwardAtomicReadReference:
+            healed = HealSlot(field, observed, healPtr, HealSite::ForwardAtomicReadReference, HealNull::Disallow,
+                              std::memory_order_relaxed, std::memory_order_relaxed, nullptr);
+            break;
+        default:
+            CHECK_DETAIL(false, "unsupported atomic self-heal site=%u", static_cast<unsigned>(site));
+            break;
+    }
     if (healed && plainObserved) {
         g_plainLoadHealSuccess.fetch_add(1, std::memory_order_relaxed);
     }
@@ -437,6 +468,46 @@ void MarkAndRememberNewValue(BarrierPhase barrierPhase, BaseObject* ref)
     if (mutator != nullptr) {
         mutator->RememberObjectInSatbBuffer(ref);
     }
+}
+
+// A thread without an AllocBuffer still owes the same SATB deletion receipt as
+// a buffered mutator.  Publish directly to the global SATB owner instead of
+// letting the batching optimization decide whether the pre-value survives.
+// This is the no-buffer peer of ZBarrier::heap_store_slow_path's direct
+// mark_and_remember arm (zBarrier.cpp:253-261).
+void RetirePreviousWithoutAllocBuffer(BarrierPhase barrierPhase, zpointer prev, Collector& collector)
+{
+    if (is_null(prev)) {
+        return;
+    }
+    CollectorResources& resources = Heap::GetHeap().GetCollectorResources();
+    if (!resources.IsGcStarted()) {
+        return;
+    }
+    if (barrierPhase != BarrierPhase::ENUM && barrierPhase != BarrierPhase::TRACE) {
+        const GCPhase heapPhase = Heap::GetHeap().GetGCPhase();
+        if (heapPhase != GCPhase::GC_PHASE_ENUM && heapPhase != GCPhase::GC_PHASE_TRACE &&
+            heapPhase != GCPhase::GC_PHASE_CLEAR_SATB_BUFFER) {
+            return;
+        }
+    }
+
+    RefField<> previous(prev);
+    BaseObject* const resolved = collector.make_load_good(previous);
+    if (resolved == nullptr || !Heap::IsHeapAddress(resolved)) {
+        return;
+    }
+
+    SatbBuffer& satb = SatbBuffer::Instance();
+    SatbBuffer::Node* node = nullptr;
+    satb.EnsureGoodNode(node);
+    CHECK_DETAIL(node != nullptr,
+                 "direct SATB publication unavailable prev=%#zx barrier_phase=%u",
+                 static_cast<size_t>(raw(prev)), static_cast<unsigned>(barrierPhase));
+    CHECK_DETAIL(node->Push(resolved, Collector::TryRecoverInteriorBase(resolved)),
+                 "fresh direct SATB node unexpectedly full prev=%#zx resolved=%p",
+                 static_cast<size_t>(raw(prev)), resolved);
+    satb.FlushQueue(node);
 }
 } // namespace
 
@@ -1914,6 +1985,8 @@ void Barrier::RecordCrossGenEdge(BaseObject* obj, MAddress fieldAddress, BaseObj
     if (alloc != nullptr && heapSlot && !is_null(prev)) {
         alloc->GetStoreBarrierBuffer().Add(fieldAddress, obj, prev, theRememberedSet);
         buffered = true;
+    } else if (alloc == nullptr && heapSlot && !is_null(prev)) {
+        RetirePreviousWithoutAllocBuffer(this->phase, prev, theCollector);
     }
 
     if (ref == nullptr || !Heap::IsHeapAddress(ref)) {

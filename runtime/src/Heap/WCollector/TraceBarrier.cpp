@@ -203,17 +203,35 @@ void TraceBarrier::WriteStaticStruct(MAddress dst, size_t dstLen, MAddress src, 
 
 BaseObject* TraceBarrier::AtomicReadReference(BaseObject* obj, RefField<true>& field, MemoryOrder order) const
 {
-    BaseObject* target = nullptr;
-    RefField<false> oldField(field.GetFieldValue(order));
-    if (theCollector.IsCurrentPointer(oldField)) {
-        target = ResolveFromCopyForMutator(to_object(oldField.GetTargetObject()));
-        DLOG(TBARRIER, "atomic read obj %p ref@%p: %#zx -> %p", obj, &field, raw(oldField.GetFieldValue()), target);
-        return target;
+    const zpointer observed = field.GetFieldValue(order);
+    RefField<> oldField(observed);
+    BaseObject* const oldTarget = to_object(oldField.GetTargetObject());
+    if (oldTarget == nullptr) {
+        return nullptr;
     }
 
-    target = ReadReference(nullptr, oldField);
-    DLOG(TBARRIER, "katomic read obj %p ref@%p: %#zx -> %p", obj, &field, raw(oldField.GetFieldValue()), target);
-    return target;
+    if (!IsPlainNonNullSlotWord(static_cast<uintptr_t>(raw(observed))) && theCollector.is_load_good(oldField)) {
+        BaseObject* const resolved = ResolveFromCopyForMutator(oldTarget);
+        if (resolved == oldTarget || resolved == nullptr || !Heap::IsHeapAddress(resolved)) {
+            return resolved;
+        }
+        const RefField<> goodField = theCollector.GetAndTryTagRefField(resolved);
+        (void)HealSlot(field, observed, goodField.GetFieldValue(), HealSite::TraceReadReference,
+                       HealNull::Disallow, std::memory_order_relaxed, std::memory_order_relaxed, nullptr);
+        return resolved;
+    }
+
+    BaseObject* loadGood = theCollector.make_load_good(oldField);
+    if (loadGood != nullptr && !Heap::IsHeapAddress(loadGood)) {
+        return loadGood;
+    }
+    loadGood = ResolveFromCopyForMutator(loadGood);
+    if (loadGood == nullptr) {
+        return nullptr;
+    }
+    const RefField<> goodField = theCollector.GetAndTryTagRefField(loadGood);
+    DLOG(TBARRIER, "atomic read obj %p ref@%p: %#zx -> %p", obj, &field, raw(observed), loadGood);
+    return ZgcSelfHealLoadGood(field, observed, goodField.GetFieldValue(), HealSite::TraceReadReference);
 }
 
 void TraceBarrier::AtomicWriteReferenceImpl(BaseObject* obj, RefField<true>& field, BaseObject* newRef,
