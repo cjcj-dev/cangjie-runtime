@@ -225,6 +225,7 @@ $CXX -std=gnu++17 -O0 -g -Wall -Wextra -pthread -fno-rtti \
     "$SRC/test_gc_thread_pool.cpp" \
     "$SRC/test_expire_kept.cpp" \
     "$SRC/test_receipt_life.cpp" \
+    "$SRC/test_receipt_life_registry.cpp" \
     "$SRC/test_lifeclock.cpp" \
     "$SRC/test_exempt_unlock.cpp" \
     "$SRC/test_heal_coverage.cpp" \
@@ -298,6 +299,31 @@ for symbol in "${STANDALONE_SYMBOLS[@]}"; do
   fi
 done
 echo "GATE_STANDALONE_SYMBOLS_OK elf=$OUT/cj_gc_unit"
+
+# Receipt-life product binding: nm of the test ELF vs product SO.
+# Wiring evidence is the fault-arm patches + seven-cut behavioral tests.
+# No static manifest lint — see rev_mw_r7 net-value judgment.
+
+RECEIPT_LIFE_FULL="$OUT/cj_gc_unit.full-defined-receipt-life.txt"
+RECEIPT_LIFE_UNDEFINED="$OUT/cj_gc_unit.undefined-receipt-life.txt"
+RECEIPT_LIFE_EXPORTS="$OUT/runtime.exports-receipt-life.txt"
+nm --defined-only "$OUT/cj_gc_unit" | c++filt >"$RECEIPT_LIFE_FULL"
+nm -u "$OUT/cj_gc_unit" | c++filt >"$RECEIPT_LIFE_UNDEFINED"
+nm -D --defined-only "$RUNTIME_LIB_DIR/libcangjie-runtime.so" | c++filt >"$RECEIPT_LIFE_EXPORTS"
+for symbol in 'MapleRuntime::ForwardingTable::InstallMapping(' \
+              'MapleRuntime::ForwardingTable::FindTo('; do
+  if /usr/bin/grep -F -q "$symbol" "$RECEIPT_LIFE_FULL"; then
+    echo "GC_UNIT_RECEIPT_LIFE_BINDING_FAIL local_definition=$symbol" >&2
+    exit 7
+  fi
+  /usr/bin/grep -F -q "$symbol" "$RECEIPT_LIFE_UNDEFINED"
+  /usr/bin/grep -F -q "$symbol" "$RECEIPT_LIFE_EXPORTS"
+done
+if ! /usr/bin/grep -F -q 'ReceiptLifeRegistry_' "$RECEIPT_LIFE_FULL"; then
+  echo "GC_UNIT_RECEIPT_LIFE_BINDING_FAIL positive_control=ReceiptLifeRegistry" >&2
+  exit 7
+fi
+echo "GATE_RECEIPT_LIFE_PRODUCT_BINDING_OK elf=$OUT/cj_gc_unit"
 
 # The compiler old-value test is a product-path test with an independently
 # replaceable carrier.  Keep its target set outside the test call itself so

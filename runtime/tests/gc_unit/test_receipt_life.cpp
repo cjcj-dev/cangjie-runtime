@@ -7,6 +7,8 @@
 // Receipt consume/keep bound by to-region snapshotEpoch (zPage.inline.hpp:176-185)
 // and by one subsequent ExpireKept (zRelocate.cpp:1018-1047).
 // Does not rebind ForwardingTable::Initialize (one-shot process map).
+// Wiring evidence is the fault-arm patches + seven-cut behavioral tests;
+// no static manifest lint — see rev_mw_r7 net-value judgment.
 
 #include "Heap/Collector/ZForwarding.h"
 #include "gc_heap_fixture.hpp"

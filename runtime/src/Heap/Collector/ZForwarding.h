@@ -36,9 +36,20 @@ public:
     static constexpr size_t kNotStored = SIZE_MAX;
 
     struct Receipt {
+        enum class Status : uint8_t {
+            INSTALLED,
+            EXISTING,
+            DESTINATION_UNTRACKED,
+            LIFE_REGISTRY_FULL,
+            DESTINATION_LIFE_CONFLICT,
+        };
+
         MAddress address;
         bool installed;
+        Status status;
     };
+
+    static constexpr uint8_t kToLifeCapacity = 3;
 
     // zForwarding.cpp:55-84 — the old top and livemap belong to the
     // forwarding/from-page incarnation, not to the reusable page metadata.
@@ -131,6 +142,9 @@ public:
     // InitRegionInfo has bumped that seq (RegionInfo.h:InitRegionInfo).
     void note_to_life(MAddress to);
     static bool DestUsable(MAddress to);
+    // Validate only the destination region incarnation. Header/route consumers
+    // keep their existing object-shape checks after this life gate.
+    MAddress resolve_life(MAddress to) const;
     MAddress resolve_live(MAddress to) const;
     bool receipt_live(MAddress to) const;
     void note_kept_expire() { _kept_seen_expire = true; }
@@ -249,7 +263,7 @@ public:
         auto* words = entries();
         for (size_t attempt = 0; attempt < _entries.length(); ++attempt) {
             uint64_t expected = 0;
-            if (words[*cursor].compare_exchange_strong(expected, neu.raw(), std::memory_order_relaxed,
+            if (words[*cursor].compare_exchange_strong(expected, neu.raw(), std::memory_order_release,
                                                        std::memory_order_relaxed)) {
                 if (installed != nullptr) {
                     *installed = true;
@@ -323,7 +337,8 @@ public:
         if (encodable) {
             const ForwardingEntry existing = find(fromIndex, &cursor);
             if (existing.populated()) {
-                return Receipt{ _heapBase + static_cast<MAddress>(existing.to_offset()), false };
+                return Receipt{ _heapBase + static_cast<MAddress>(existing.to_offset()), false,
+                                Receipt::Status::EXISTING };
             }
             if (beforeFirstCas) {
                 beforeFirstCas();
@@ -331,7 +346,8 @@ public:
             bool installed = false;
             const size_t finalOff = insert(fromIndex, toOffset, &cursor, &installed);
             if (finalOff != kNotStored) {
-                return Receipt{ _heapBase + static_cast<MAddress>(finalOff), installed };
+                return Receipt{ _heapBase + static_cast<MAddress>(finalOff), installed,
+                                installed ? Receipt::Status::INSTALLED : Receipt::Status::EXISTING };
             }
         } else {
             OverflowRefusals().fetch_add(1, std::memory_order_relaxed);
@@ -347,12 +363,19 @@ public:
             ForwardingCursor retryCursor = 0;
             const ForwardingEntry existing = find(fromIndex, &retryCursor);
             if (existing.populated()) {
-                return Receipt{ _heapBase + static_cast<MAddress>(existing.to_offset()), false };
+                return Receipt{ _heapBase + static_cast<MAddress>(existing.to_offset()), false,
+                                Receipt::Status::EXISTING };
             }
         }
         auto inserted = _overflow.emplace(from, to);
-        return Receipt{ inserted.first->second, inserted.second };
+        return Receipt{ inserted.first->second, inserted.second,
+                        inserted.second ? Receipt::Status::INSTALLED : Receipt::Status::EXISTING };
     }
+
+    // The destination life is committed before the receipt's release CAS.  A
+    // consumer that observes the receipt can therefore never outrun its life
+    // registry entry.  Product callers enter through ForwardingTable::InstallMapping.
+    Receipt install_receipt_with_life(MAddress from, MAddress to, const std::function<void()>& beforeRegister = {});
 
     MAddress insert(MAddress from, MAddress to)
     {
@@ -390,6 +413,7 @@ private:
           _done(false),
           _overflowLock(),
           _overflow(),
+          _receiptInstallLock(),
           _to_life_n(0),
           _kept_seen_expire(false),
           _retired_required(false),
@@ -416,13 +440,15 @@ private:
     std::atomic<bool> _done;
     mutable std::mutex _overflowLock;
     std::unordered_map<MAddress, MAddress> _overflow;
+    mutable std::mutex _receiptInstallLock;
     struct ToLife {
         MAddress start;
         uint8_t legacySeq;
         RegionLifeId lifeId;
     };
-    ToLife _to_lives[3];
-    uint8_t _to_life_n;
+    Receipt::Status register_to_life_locked(MAddress to, uint8_t optimisticCount);
+    ToLife _to_lives[kToLifeCapacity];
+    std::atomic<uint8_t> _to_life_n;
     bool _kept_seen_expire;
     std::atomic<bool> _retired_required;
     const bool _provisional;

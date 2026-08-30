@@ -145,6 +145,10 @@ public:
 #if defined(MRT_TESTABLE_INTERNALS)
     using LookupRetainHook = void (*)(void*);
     static void SetLookupRetainHook(LookupRetainHook hook, void* context);
+    // Deterministic rendezvous immediately before a fresh receipt enters the
+    // destination-life registration critical section.
+    using ReceiptLifeRegisterHook = void (*)(void*);
+    static void SetReceiptLifeRegisterHook(ReceiptLifeRegisterHook hook, void* context);
 #endif
 
     static void NoteCompare(MAddress addr, bool legacy);
