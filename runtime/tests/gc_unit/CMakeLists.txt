@@ -36,6 +36,7 @@ set(GC_UNIT_SOURCES
     test_young_conc.cpp
     test_relocation_set_selector.cpp
     test_store_barrier_buffer.cpp
+    test_barrier_old_atomic.cpp
     test_page_age.cpp
     test_range_registry.cpp
     test_stay_young.cpp

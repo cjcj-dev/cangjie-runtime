@@ -214,6 +214,7 @@ $CXX -std=gnu++17 -O0 -g -Wall -Wextra -pthread -fno-rtti \
     "$SRC/test_young_conc.cpp" \
     "$SRC/test_relocation_set_selector.cpp" \
     "$SRC/test_store_barrier_buffer.cpp" \
+    "$SRC/test_barrier_old_atomic.cpp" \
     "$SRC/test_page_age.cpp" \
     "${RANGE_REGISTRY_SOURCES[@]}" \
     "$SRC/test_stay_young.cpp" \
