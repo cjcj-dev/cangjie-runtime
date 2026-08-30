@@ -179,10 +179,7 @@ void CollectorResources::RunTaskLoop()
             port = &majorDriverPort;
         }
         if (haveRequest) {
-            if (!port->Abort().Poll()) {
-                ExecuteDriverRequest(request);
-            }
-            port->Acknowledge(request.sequence);
+            (void)ProcessDriverRequest(*port, request);
             continue;
         }
 
@@ -214,10 +211,7 @@ void CollectorResources::RunDriverLoop(GCDriverKind kind)
     while (true) {
         GCDriverRequest request {};
         if (port.TryDequeue(request)) {
-            if (!port.Abort().Poll()) {
-                ExecuteDriverRequest(request);
-            }
-            port.Acknowledge(request.sequence);
+            (void)ProcessDriverRequest(port, request);
             continue;
         }
         // Stop closes the port and wakes all waiters.  A driver exits once its
@@ -268,6 +262,7 @@ void CollectorResources::RunDriverLoop(GCDriverKind kind)
 
 bool CollectorResources::ExecuteDriverRequest(const GCDriverRequest& request)
 {
+    CHECK(request.reason < GC_REASON_MAX);
     // OpenJDK has two driver threads and two ports, but both run_thread loops
     // hold the same ZDriverLocker around the whole collection
     // (zDriver.cpp:201-224,463-487). Forwarding retirement and the collector's
@@ -282,6 +277,8 @@ bool CollectorResources::ExecuteDriverRequest(const GCDriverRequest& request)
     if (port.Abort().Poll()) {
         return false;
     }
+    MRT_ASSERT(!driverRequestActive, "nested driver request lifecycle");
+    driverRequestActive = true;
 
     // A major request owns its young prelude while holding the driver lock,
     // exactly like ZDriverMajor::collect_young followed by collect_old
@@ -289,7 +286,14 @@ bool CollectorResources::ExecuteDriverRequest(const GCDriverRequest& request)
     // minor port would deadlock once both drivers share the ZGC lock.
     if (request.reason != GC_REASON_YOUNG) {
         collector->RunGarbageCollection(GCTask::ASYNC_TASK_INDEX, GC_REASON_YOUNG);
+#if defined(MRT_GC_UNIT_TESTS)
+        if (testAfterYoungPrelude) {
+            testAfterYoungPrelude();
+        }
+#endif
         if (majorDriverPort.Abort().Poll()) {
+            driverRequestActive = false;
+            CancelDriverRequestLifecycle();
             return false;
         }
     }
@@ -298,8 +302,26 @@ bool CollectorResources::ExecuteDriverRequest(const GCDriverRequest& request)
          static_cast<unsigned long long>(request.sequence), request.reason);
     collector->RunGarbageCollection(request.asynchronous ? GCTask::ASYNC_TASK_INDEX : request.sequence,
                                     request.reason);
+    driverRequestActive = false;
     NotifyGCFinished(request.asynchronous ? GCTask::ASYNC_TASK_INDEX : request.sequence);
     return true;
+}
+
+bool CollectorResources::ProcessDriverRequest(GCDriverPort& port, const GCDriverRequest& request)
+{
+    if (port.Abort().Poll() || !ExecuteDriverRequest(request)) {
+        port.Cancel(request);
+        return false;
+    }
+    port.Acknowledge(request);
+    return true;
+}
+
+void CollectorResources::CancelDriverRequestLifecycle()
+{
+    std::unique_lock<std::mutex> lock(gcFinishedCondMutex);
+    isGcStarted.store(false, std::memory_order_release);
+    gcFinishedCondVar.notify_all();
 }
 
 // For the ignored gc request, check whether need to wait for current gc finish
@@ -339,6 +361,7 @@ bool CollectorResources::HasSyncTaskCompleted(uint64_t finishedIndex, uint64_t a
 
 void CollectorResources::RequestAsyncGC(GCReason reason)
 {
+    CHECK(reason < GC_REASON_MAX);
     // Static synchronous reasons have no legal non-blocking completion
     // contract. Keep the pre-driver fail-closed boundary before selecting a
     // generation port; USER remains legal because its mode is per request.
@@ -349,15 +372,17 @@ void CollectorResources::RequestAsyncGC(GCReason reason)
 
 void CollectorResources::RequestGCAndWait(GCReason reason)
 {
+    CHECK(reason < GC_REASON_MAX);
     // Enter saferegion since current thread may blocked by locks.
     ScopedEnterSaferegion enterSaferegion(false);
     GCDriverPort& port = reason == GC_REASON_YOUNG ? minorDriverPort : majorDriverPort;
-    const uint64_t sequence = port.EnqueueSync(reason);
-    (void)port.WaitForAck(sequence);
+    const GCDriverReceipt receipt = port.EnqueueSync(reason);
+    (void)port.WaitForAck(receipt);
 }
 
 void CollectorResources::RequestGC(GCReason reason, bool async)
 {
+    CHECK(reason < GC_REASON_MAX);
     if (!IsGCActive()) {
         return;
     }
@@ -382,6 +407,9 @@ void CollectorResources::RequestGC(GCReason reason, bool async)
 
 void CollectorResources::NotifyGCFinished(uint64_t gcIndex)
 {
+#if defined(MRT_GC_UNIT_TESTS)
+    testCompletionCount.fetch_add(1, std::memory_order_relaxed);
+#endif
     std::unique_lock<std::mutex> lock(gcFinishedCondMutex);
     isGcStarted.store(false, std::memory_order_release);
     if (gcIndex != GCTask::ASYNC_TASK_INDEX) { // sync gc, need set taskIndex
@@ -389,6 +417,13 @@ void CollectorResources::NotifyGCFinished(uint64_t gcIndex)
     }
     gcFinishedCondVar.notify_all();
     BroadcastGCCompletion();
+}
+
+void CollectorResources::NotifyGCPhaseFinished(uint64_t gcIndex)
+{
+    if (!driverRequestActive) {
+        NotifyGCFinished(gcIndex);
+    }
 }
 
 void CollectorResources::WaitForGCFinish()

@@ -7,6 +7,24 @@
 
 namespace MapleRuntime {
 
+struct GCDriverReceiptState {
+    explicit GCDriverReceiptState(uint64_t sequence) : sequence(sequence) {}
+
+    const uint64_t sequence;
+    bool resolved { false };
+    bool completed { false };
+};
+
+uint64_t GCDriverReceipt::Sequence() const
+{
+    return state == nullptr ? 0 : state->sequence;
+}
+
+bool GCDriverReceipt::IsValid() const
+{
+    return state != nullptr;
+}
+
 uint64_t GCDriverPort::NextSequenceLocked()
 {
     const uint64_t sequence = nextSequence;
@@ -17,28 +35,32 @@ uint64_t GCDriverPort::NextSequenceLocked()
     return sequence;
 }
 
-uint64_t GCDriverPort::EnqueueSync(GCReason reason)
+GCDriverReceipt GCDriverPort::EnqueueSync(GCReason reason)
 {
     std::lock_guard<std::mutex> lock(mutex);
     if (stopped) {
-        return acknowledged;
+        return {};
     }
-    for (const auto& pending : requests) {
+    for (auto& pending : requests) {
         if (pending.reason == reason) {
-            return pending.sequence;
+            if (!pending.receipt.IsValid()) {
+                pending.receipt = GCDriverReceipt(std::make_shared<GCDriverReceiptState>(pending.sequence));
+            }
+            return pending.receipt;
         }
     }
     const uint64_t sequence = NextSequenceLocked();
-    requests.push_back({ sequence, reason, false });
+    GCDriverReceipt receipt(std::make_shared<GCDriverReceiptState>(sequence));
+    requests.push_back({ sequence, reason, false, receipt });
     condition.notify_all();
-    return sequence;
+    return receipt;
 }
 
 uint64_t GCDriverPort::EnqueueAsync(GCReason reason)
 {
     std::lock_guard<std::mutex> lock(mutex);
     if (stopped) {
-        return acknowledged;
+        return 0;
     }
     // Async requests are intentionally deduplicated only within this port.
     for (const auto& pending : requests) {
@@ -47,7 +69,7 @@ uint64_t GCDriverPort::EnqueueAsync(GCReason reason)
         }
     }
     const uint64_t sequence = NextSequenceLocked();
-    requests.push_back({ sequence, reason, true });
+    requests.push_back({ sequence, reason, true, {} });
     condition.notify_all();
     return sequence;
 }
@@ -63,20 +85,44 @@ bool GCDriverPort::TryDequeue(GCDriverRequest& request)
     return true;
 }
 
-void GCDriverPort::Acknowledge(uint64_t sequence)
+void GCDriverPort::Acknowledge(const GCDriverRequest& request)
 {
     std::lock_guard<std::mutex> lock(mutex);
-    if (sequence > acknowledged) {
-        acknowledged = sequence;
+    if (request.receipt.state != nullptr) {
+        request.receipt.state->completed = true;
+        request.receipt.state->resolved = true;
+    }
+    if (request.sequence > highestAcknowledged) {
+        highestAcknowledged = request.sequence;
     }
     condition.notify_all();
 }
 
-bool GCDriverPort::WaitForAck(uint64_t sequence)
+void GCDriverPort::Cancel(const GCDriverRequest& request)
+{
+    std::lock_guard<std::mutex> lock(mutex);
+    if (request.receipt.state != nullptr) {
+        request.receipt.state->resolved = true;
+    }
+    condition.notify_all();
+}
+
+bool GCDriverPort::WaitForAck(const GCDriverReceipt& receipt)
 {
     std::unique_lock<std::mutex> lock(mutex);
-    condition.wait(lock, [this, sequence] { return stopped || acknowledged >= sequence; });
-    return acknowledged >= sequence;
+    if (receipt.state == nullptr) {
+        return false;
+    }
+#if defined(MRT_GC_UNIT_TESTS)
+    ++waitingReceipts;
+    condition.notify_all();
+#endif
+    condition.wait(lock, [this, &receipt] { return stopped || receipt.state->resolved; });
+#if defined(MRT_GC_UNIT_TESTS)
+    --waitingReceipts;
+    condition.notify_all();
+#endif
+    return receipt.state->completed;
 }
 
 void GCDriverPort::Stop()
@@ -84,6 +130,11 @@ void GCDriverPort::Stop()
     std::lock_guard<std::mutex> lock(mutex);
     stopped = true;
     abort.Request();
+    for (auto& request : requests) {
+        if (request.receipt.state != nullptr) {
+            request.receipt.state->resolved = true;
+        }
+    }
     condition.notify_all();
 }
 
@@ -93,7 +144,7 @@ void GCDriverPort::Reset()
     requests.clear();
     stopped = false;
     nextSequence = 2;
-    acknowledged = 1;
+    highestAcknowledged = 1;
     abort.Reset();
 }
 

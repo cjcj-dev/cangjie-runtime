@@ -8,6 +8,8 @@
 #ifndef MRT_COLLECTOR_RESOURCES_H
 #define MRT_COLLECTOR_RESOURCES_H
 
+#include <functional>
+
 #include "Base/Macros.h"
 #include "FinalizerProcessor.h"
 #include "Heap/Collector/TaskQueue.h"
@@ -45,6 +47,9 @@ public:
     // Notify that GC has finished.
     // Must be called by gc thread only
     void NotifyGCFinished(uint64_t gcIndex);
+    // A collector phase completes here. A driver-owned multi-phase request
+    // suppresses this intermediate publication and publishes once at its end.
+    void NotifyGCPhaseFinished(uint64_t gcIndex);
     int32_t GetGCThreadCount(const bool isConcurrent) const;
 
     GCThreadPool* GetThreadPool() const { return gcThreadPool; }
@@ -99,6 +104,8 @@ private:
     void RequestGCAndWait(GCReason reason);
     void PostIgnoredGcRequest(bool shouldWait);
     bool ExecuteDriverRequest(const GCDriverRequest& request);
+    bool ProcessDriverRequest(GCDriverPort& port, const GCDriverRequest& request);
+    void CancelDriverRequestLifecycle();
 #if defined(MRT_TESTABLE_INTERNALS)
     MRT_EXPORT static bool ShouldWaitForIgnoredGcRequest(GCReason reason, bool async);
     MRT_EXPORT static bool HasSyncTaskCompleted(uint64_t finishedIndex, uint64_t awaitedIndex);
@@ -141,10 +148,13 @@ private:
     // time. This also keeps the collector's phase, reason and forwarding
     // retirement epochs single-writer.
     std::mutex driverLock;
+    bool driverRequestActive = false;
 #if defined(MRT_GC_UNIT_TESTS)
     // Deterministic unit builds can replace only the task executor.  The
     // default product retains CollectorProxy as its sole owner and ABI shape.
     Collector* testCollector = nullptr;
+    std::function<void()> testAfterYoungPrelude;
+    std::atomic<size_t> testCompletionCount { 0 };
 #endif
 
     // the collector thread handle.
