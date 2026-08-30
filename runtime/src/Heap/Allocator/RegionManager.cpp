@@ -2352,22 +2352,39 @@ size_t PublishKeptInPlaceReceipts(RegionInfo* region)
         const MAddress pos = reinterpret_cast<MAddress>(object);
         const MAddress existing = active->find(pos);
         if (object->IsForwarded()) {
-            CHECK_DETAIL(existing != 0,
+            // A previous generation can still own the receipt after the next
+            // active generation is installed. ZGC removes old forwarding from
+            // the lookup table before destroying it (zGeneration.cpp:276-285;
+            // zRelocationSet.cpp:191-200); do not shadow that provenance with
+            // a guessed identity receipt.
+            const MAddress receipt = existing != 0 ? existing : ForwardingTable::RequireRetiredTo(pos);
+            CHECK_DETAIL(receipt != 0,
                          "forwarded object lacks receipt before kept-page retirement object=%p region=%p",
                          object, region);
-        } else if (existing == 0) {
-            ForwardingTable::Publication publication =
-                ForwardingTable::RetainOpenPublicationAfterCopy(region, pos);
-            CHECK_DETAIL(static_cast<bool>(publication),
-                         "kept page lost forwarding carrier before identity publish object=%p region=%p",
-                         object, region);
-            const ZForwarding::Receipt receipt =
-                ForwardingTable::InstallMapping(publication, pos, pos);
-            CHECK_DETAIL(receipt.address == pos,
-                         "kept identity receipt changed address from=%#zx to=%#zx",
-                         static_cast<size_t>(pos), static_cast<size_t>(receipt.address));
-            ++published;
+            if (existing != 0) {
+                // The kept producer consumed this active carrier. Preserve that
+                // requirement when ClearEntries subsequently retires the table.
+                active->note_retired_required();
+            }
+            return;
         }
+        if (existing != 0) {
+            return;
+        }
+        // Identity is a producer receipt for a survivor that was not copied,
+        // matching ZGC's copy-then-insert(from, allocated) ordering even when
+        // allocated==from (zRelocate.cpp:610-649).
+        ForwardingTable::Publication publication =
+            ForwardingTable::RetainOpenPublicationAfterCopy(region, pos);
+        CHECK_DETAIL(static_cast<bool>(publication),
+                     "kept page lost forwarding carrier before identity publish object=%p region=%p",
+                     object, region);
+        const ZForwarding::Receipt receipt =
+            ForwardingTable::InstallMapping(publication, pos, pos);
+        CHECK_DETAIL(receipt.address == pos,
+                     "kept identity receipt changed address from=%#zx to=%#zx",
+                     static_cast<size_t>(pos), static_cast<size_t>(receipt.address));
+        ++published;
     });
     return published;
 }
@@ -2453,6 +2470,8 @@ void RegionManager::FinishIncompleteFromRegions()
             continue;
         }
         if (region->IsUnmovableFromRegion()) {
+            WaitCopiedObjectsUnlocked(region);
+            (void)PublishKeptInPlaceReceipts(region);
             region->MarkForwardingDone();
             ++kept;
             continue;
@@ -2491,6 +2510,8 @@ void RegionManager::FinishIncompleteFromRegions()
         if (region->IsLoneFromRegion() || region->IsFromRegion() || wasFrom) {
             ExemptFromRegion(region);
         } else {
+            WaitCopiedObjectsUnlocked(region);
+            (void)PublishKeptInPlaceReceipts(region);
             region->MarkForwardingDone();
         }
         ++kept;

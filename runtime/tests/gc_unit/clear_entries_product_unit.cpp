@@ -311,12 +311,14 @@ LateBackfillState PrepareLateBackfill(GcHeapFixture& fx, WCollector& collector)
 
 void CleanupLateBackfill(GcHeapFixture& fx, LateBackfillState& state)
 {
+    // The scenario has consumed its receipt. Normalize the planted header
+    // before asking product retirement to prove no source still needs it.
+    state.from->SetStateCode(ObjectState::NORMAL);
     if (state.region->IsGhostFromRegion()) {
         state.region->DispelGhostFromRegion();
     }
     ForwardingTable::ClearEntries(state.region->GetRegionStart(), state.region->GetRegionSize());
     ForwardingTable::ReclaimRetired("gc-unit-explicit-coverage");
-    state.from->SetStateCode(ObjectState::NORMAL);
     state.region->metadata.liveInfo = nullptr;
     fx.FreePlanted(state.live);
 }
@@ -723,6 +725,54 @@ GC_TEST(ForwardingPublicationProduct, KeptInPlacePublishesIdentityBeforeRetire)
     RelocationReceiptTestAccess::BindCollector(Heap::GetHeap().GetCollectorResources(), nullptr);
 }
 
+GC_TEST(ForwardingPublicationProduct, KeptActiveReceiptRemainsRequiredAfterTableRetires)
+{
+    GcHeapFixture& fx = ProductFixture();
+    RelocationReceiptTestAccess::ReleaseListOwnership(RegionInfo::GetRegionInfo(4));
+    RelocationReceiptTestAccess::ReleaseListOwnership(RegionInfo::GetRegionInfo(3));
+    RegionInfo* region = RegionInfo::InitRegion(4, 1, RegionInfo::UnitRole::SMALL_SIZED_UNITS);
+    RegionInfo* destination = RegionInfo::InitRegion(3, 1, RegionInfo::UnitRole::SMALL_SIZED_UNITS);
+    GC_EXPECT_TRUE(region != nullptr && destination != nullptr);
+    region->SetRegionType(RegionInfo::RegionType::THREAD_LOCAL_REGION);
+    destination->SetRegionType(RegionInfo::RegionType::THREAD_LOCAL_REGION);
+    BaseObject* from = fx.PlaceObject(region->GetRegionStart());
+    BaseObject* to = fx.PlaceObject(destination->GetRegionStart());
+    region->SetRegionAllocPtr(reinterpret_cast<MAddress>(from) + from->GetSize());
+    destination->SetRegionAllocPtr(reinterpret_cast<MAddress>(to) + to->GetSize());
+    WCollector collector(Heap::GetHeap().GetAllocator(), Heap::GetHeap().GetCollectorResources());
+    RelocationReceiptTestAccess::BindCollector(Heap::GetHeap().GetCollectorResources(), &collector);
+    LiveInfo* live = PrepareForwardable(fx, region, reinterpret_cast<MAddress>(from));
+    ForwardingTable::Publication publication =
+        ForwardingTable::EnsurePublicationBeforeCopy(region, reinterpret_cast<MAddress>(from));
+    GC_EXPECT_TRUE(static_cast<bool>(publication));
+    GC_EXPECT_EQ(ForwardingTable::InstallMapping(publication, reinterpret_cast<MAddress>(from),
+                                                 reinterpret_cast<MAddress>(to)).address,
+                 reinterpret_cast<MAddress>(to));
+    publication = ForwardingTable::Publication();
+    from->SetStateCode(ObjectState::FORWARDED);
+    region->SetRouteState(RegionInfo::RouteState::ROUTED);
+
+    RegionManager manager;
+    RelocationReceiptTestAccess::Exempt(manager, region);
+    ForwardingTable::ClearEntries(region->GetRegionStart(), region->GetRegionSize());
+    ForwardingTable::ReclaimRetired("gc-unit-kept-active-receipt");
+    GC_EXPECT_EQ(ForwardingTable::FindRetiredTo(reinterpret_cast<MAddress>(from)),
+                 reinterpret_cast<MAddress>(to));
+    GC_EXPECT_TRUE(RelocationReceiptTestAccess::ProductFindToVersion(collector, from).found() == to);
+
+    from->SetStateCode(ObjectState::NORMAL);
+    ForwardingTable::ReclaimRetired("gc-unit-kept-active-receipt-cleanup");
+    GC_EXPECT_EQ(ForwardingTable::FindRetiredTo(reinterpret_cast<MAddress>(from)), 0);
+    if (region->IsGhostFromRegion()) {
+        region->DispelGhostFromRegion();
+    }
+    RelocationReceiptTestAccess::ReleaseListOwnership(region);
+    RelocationReceiptTestAccess::ReleaseListOwnership(destination);
+    region->metadata.liveInfo = nullptr;
+    fx.FreePlanted(live);
+    RelocationReceiptTestAccess::BindCollector(Heap::GetHeap().GetCollectorResources(), nullptr);
+}
+
 GC_TEST(ForwardingPublicationProduct, KeptInPlaceLivemapStartsSurviveOverwrittenPrefix)
 {
     GcHeapFixture& fx = ProductFixture();
@@ -757,6 +807,336 @@ GC_TEST(ForwardingPublicationProduct, KeptInPlaceLivemapStartsSurviveOverwritten
     RelocationReceiptTestAccess::ReleaseListOwnership(region);
     ForwardingTable::ClearEntries(region->GetRegionStart(), region->GetRegionSize());
     ForwardingTable::ReclaimRetired("gc-unit-explicit-coverage");
+    region->metadata.liveInfo = nullptr;
+    fx.FreePlanted(live);
+    RelocationReceiptTestAccess::BindCollector(Heap::GetHeap().GetCollectorResources(), nullptr);
+}
+
+// zRelocationSet.cpp:91-96 and zRelocate.cpp:1013-1047: retiring the old
+// forwarding generation and installing the next one must not leave an object
+// header claiming FORWARDED after the receipt that justified it is gone.
+GC_TEST(ForwardingPublicationProduct, PrepareForwardableClearsNormalRouteResidualHeader)
+{
+    GcHeapFixture& fx = ProductFixture();
+    RelocationReceiptTestAccess::ReleaseListOwnership(RegionInfo::GetRegionInfo(5));
+    RegionInfo* region = RegionInfo::InitRegion(5, 1, RegionInfo::UnitRole::SMALL_SIZED_UNITS);
+    RegionInfo* destination = RegionInfo::InitRegion(2, 1, RegionInfo::UnitRole::SMALL_SIZED_UNITS);
+    GC_EXPECT_TRUE(region != nullptr && destination != nullptr);
+    region->SetRegionType(RegionInfo::RegionType::THREAD_LOCAL_REGION);
+    destination->SetRegionType(RegionInfo::RegionType::THREAD_LOCAL_REGION);
+    BaseObject* from = fx.PlaceObject(region->GetRegionStart());
+    BaseObject* to = fx.PlaceObject(destination->GetRegionStart());
+    region->SetRegionAllocPtr(reinterpret_cast<MAddress>(from) + from->GetSize());
+    destination->SetRegionAllocPtr(reinterpret_cast<MAddress>(to) + to->GetSize());
+
+    WCollector collector(Heap::GetHeap().GetAllocator(), Heap::GetHeap().GetCollectorResources());
+    RelocationReceiptTestAccess::BindCollector(Heap::GetHeap().GetCollectorResources(), &collector);
+    LiveInfo* live = PrepareForwardable(fx, region, reinterpret_cast<MAddress>(from));
+    ForwardingTable::Publication publication =
+        ForwardingTable::EnsurePublicationBeforeCopy(region, reinterpret_cast<MAddress>(from));
+    GC_EXPECT_TRUE(static_cast<bool>(publication));
+    const ZForwarding::Receipt receipt = ForwardingTable::InstallMapping(
+        publication, reinterpret_cast<MAddress>(from), reinterpret_cast<MAddress>(to));
+    GC_EXPECT_EQ(receipt.address, reinterpret_cast<MAddress>(to));
+    publication = ForwardingTable::Publication();
+    from->SetStateCode(ObjectState::FORWARDED);
+    region->SetRouteState(RegionInfo::RouteState::FORWARDED);
+
+    region->DispelGhostFromRegion();
+    GC_EXPECT_TRUE(region->GetRouteState() == RegionInfo::RouteState::NORMAL);
+    GC_EXPECT_TRUE(from->IsForwarded());
+    GC_EXPECT_EQ(ForwardingTable::FindRetiredTo(reinterpret_cast<MAddress>(from)),
+                 reinterpret_cast<MAddress>(to));
+
+    region->PrepareForwardableRegion(region->GetMarkView<Generation::Old>());
+    GC_EXPECT_FALSE(from->IsForwarded());
+    GC_EXPECT_TRUE(ForwardingTable::EntriesArmed(reinterpret_cast<MAddress>(from)));
+    GC_EXPECT_EQ(ForwardingTable::FindTo(reinterpret_cast<MAddress>(from)), 0);
+
+    if (region->IsGhostFromRegion()) {
+        region->DispelGhostFromRegion();
+    }
+    ForwardingTable::ReclaimRetired("gc-unit-normal-route-residual");
+    RelocationReceiptTestAccess::ReleaseListOwnership(region);
+    RelocationReceiptTestAccess::BindCollector(Heap::GetHeap().GetCollectorResources(), nullptr);
+    region->metadata.liveInfo = nullptr;
+    fx.FreePlanted(live);
+}
+
+// Second family-8 path: a ROUTED page can retain a prior from->to receipt after
+// raw-pin clears ghost and the next generation installs an empty active table.
+// Retirement must preserve that receipt; active miss is not identity evidence.
+GC_TEST(ForwardingPublicationProduct, ExemptPreservesRetiredReceiptAcrossActiveGeneration)
+{
+    GcHeapFixture& fx = ProductFixture();
+    RelocationReceiptTestAccess::ReleaseListOwnership(RegionInfo::GetRegionInfo(4));
+    RelocationReceiptTestAccess::ReleaseListOwnership(RegionInfo::GetRegionInfo(3));
+    RegionInfo* region = RegionInfo::InitRegion(4, 1, RegionInfo::UnitRole::SMALL_SIZED_UNITS);
+    RegionInfo* destination = RegionInfo::InitRegion(3, 1, RegionInfo::UnitRole::SMALL_SIZED_UNITS);
+    GC_EXPECT_TRUE(region != nullptr && destination != nullptr);
+    region->SetRegionType(RegionInfo::RegionType::THREAD_LOCAL_REGION);
+    destination->SetRegionType(RegionInfo::RegionType::THREAD_LOCAL_REGION);
+    BaseObject* from = fx.PlaceObject(region->GetRegionStart());
+    BaseObject* to = fx.PlaceObject(destination->GetRegionStart());
+    region->SetRegionAllocPtr(reinterpret_cast<MAddress>(from) + from->GetSize());
+    destination->SetRegionAllocPtr(reinterpret_cast<MAddress>(to) + to->GetSize());
+    WCollector collector(Heap::GetHeap().GetAllocator(), Heap::GetHeap().GetCollectorResources());
+    RelocationReceiptTestAccess::BindCollector(Heap::GetHeap().GetCollectorResources(), &collector);
+    LiveInfo* live = PrepareForwardable(fx, region, reinterpret_cast<MAddress>(from));
+
+    ForwardingTable::Publication oldPublication =
+        ForwardingTable::EnsurePublicationBeforeCopy(region, reinterpret_cast<MAddress>(from));
+    GC_EXPECT_TRUE(static_cast<bool>(oldPublication));
+    const ZForwarding::Receipt oldReceipt = ForwardingTable::InstallMapping(
+        oldPublication, reinterpret_cast<MAddress>(from), reinterpret_cast<MAddress>(to));
+    GC_EXPECT_EQ(oldReceipt.address, reinterpret_cast<MAddress>(to));
+    oldPublication = ForwardingTable::Publication();
+    from->SetStateCode(ObjectState::FORWARDED);
+    region->SetRouteState(RegionInfo::RouteState::ROUTED);
+    GC_EXPECT_TRUE(from->IsForwarded());
+    GC_EXPECT_EQ(ForwardingTable::FindTo(reinterpret_cast<MAddress>(from)),
+                 reinterpret_cast<MAddress>(to));
+    GC_EXPECT_TRUE(region->IsGhostFromRegion());
+
+    // POST_TRACE raw-pin clears ghost without normalizing ROUTED, then the
+    // next generation installs an empty active table for the same range.
+    region->ClearGhostRegionBit();
+    GC_EXPECT_FALSE(region->IsGhostFromRegion());
+    region->SetRegionType(RegionInfo::RegionType::FROM_REGION);
+    region->PrepareForwardableRegion(region->GetMarkView<Generation::Old>());
+
+    GC_EXPECT_TRUE(from->IsForwarded());
+    GC_EXPECT_EQ(ForwardingTable::FindTo(reinterpret_cast<MAddress>(from)), 0);
+    GC_EXPECT_EQ(ForwardingTable::FindRetiredTo(reinterpret_cast<MAddress>(from)),
+                 reinterpret_cast<MAddress>(to));
+
+    RegionManager manager;
+    RelocationReceiptTestAccess::Exempt(manager, region);
+
+    GC_EXPECT_TRUE(region->IsForwardingDone());
+    GC_EXPECT_TRUE(from->IsForwarded());
+    GC_EXPECT_EQ(ForwardingTable::FindTo(reinterpret_cast<MAddress>(from)), 0);
+    GC_EXPECT_EQ(ForwardingTable::FindRetiredTo(reinterpret_cast<MAddress>(from)),
+                 reinterpret_cast<MAddress>(to));
+    BaseObject* consumer = RelocationReceiptTestAccess::ProductFindToVersion(collector, from).found();
+    std::fprintf(stderr,
+                 "MUTUALWAIT_DETAIL from=%p expected_to=%p active=%p retired=%p consumer=%p\n",
+                 from, to,
+                 reinterpret_cast<void*>(ForwardingTable::FindTo(reinterpret_cast<MAddress>(from))),
+                 reinterpret_cast<void*>(ForwardingTable::FindRetiredTo(reinterpret_cast<MAddress>(from))),
+                 consumer);
+    GC_EXPECT_TRUE(consumer == to);
+
+    from->SetStateCode(ObjectState::NORMAL);
+    if (region->IsGhostFromRegion()) {
+        region->DispelGhostFromRegion();
+    }
+    RelocationReceiptTestAccess::ReleaseListOwnership(region);
+    ForwardingTable::ClearEntries(region->GetRegionStart(), region->GetRegionSize());
+    ForwardingTable::ReclaimRetired("gc-unit-explicit-coverage");
+    RelocationReceiptTestAccess::ReleaseListOwnership(destination);
+    region->metadata.liveInfo = nullptr;
+    fx.FreePlanted(live);
+    RelocationReceiptTestAccess::BindCollector(Heap::GetHeap().GetCollectorResources(), nullptr);
+}
+
+// zGeneration.cpp:276-285 resets the old relocation set only after remap has
+// consumed every source reference. A residual FORWARDED source proves that the
+// port has not reached that state: keep its old receipt until a newer active
+// generation publishes a successor instead of inferring identity at retirement.
+GC_TEST(ForwardingPublicationProduct, ReclaimRetiredDefersResidualUntilActiveReceipt)
+{
+    GcHeapFixture& fx = ProductFixture();
+    RelocationReceiptTestAccess::ReleaseListOwnership(RegionInfo::GetRegionInfo(4));
+    RelocationReceiptTestAccess::ReleaseListOwnership(RegionInfo::GetRegionInfo(3));
+    RegionInfo* region = RegionInfo::InitRegion(4, 1, RegionInfo::UnitRole::SMALL_SIZED_UNITS);
+    RegionInfo* destination = RegionInfo::InitRegion(3, 1, RegionInfo::UnitRole::SMALL_SIZED_UNITS);
+    GC_EXPECT_TRUE(region != nullptr && destination != nullptr);
+    region->SetRegionType(RegionInfo::RegionType::THREAD_LOCAL_REGION);
+    destination->SetRegionType(RegionInfo::RegionType::THREAD_LOCAL_REGION);
+    BaseObject* from = fx.PlaceObject(region->GetRegionStart());
+    BaseObject* to = fx.PlaceObject(destination->GetRegionStart());
+    region->SetRegionAllocPtr(reinterpret_cast<MAddress>(from) + from->GetSize());
+    destination->SetRegionAllocPtr(reinterpret_cast<MAddress>(to) + to->GetSize());
+    WCollector collector(Heap::GetHeap().GetAllocator(), Heap::GetHeap().GetCollectorResources());
+    RelocationReceiptTestAccess::BindCollector(Heap::GetHeap().GetCollectorResources(), &collector);
+    LiveInfo* live = PrepareForwardable(fx, region, reinterpret_cast<MAddress>(from));
+
+    ForwardingTable::Publication oldPublication =
+        ForwardingTable::EnsurePublicationBeforeCopy(region, reinterpret_cast<MAddress>(from));
+    GC_EXPECT_TRUE(static_cast<bool>(oldPublication));
+    GC_EXPECT_EQ(ForwardingTable::InstallMapping(oldPublication, reinterpret_cast<MAddress>(from),
+                                                 reinterpret_cast<MAddress>(to)).address,
+                 reinterpret_cast<MAddress>(to));
+    oldPublication = ForwardingTable::Publication();
+    from->SetStateCode(ObjectState::FORWARDED);
+    region->SetRouteState(RegionInfo::RouteState::ROUTED);
+    region->ClearGhostRegionBit();
+    region->SetRegionType(RegionInfo::RegionType::FROM_REGION);
+    region->PrepareForwardableRegion(region->GetMarkView<Generation::Old>());
+
+    GC_EXPECT_TRUE(from->IsForwarded());
+    GC_EXPECT_EQ(ForwardingTable::FindTo(reinterpret_cast<MAddress>(from)), 0);
+    GC_EXPECT_EQ(ForwardingTable::FindRetiredTo(reinterpret_cast<MAddress>(from)),
+                 reinterpret_cast<MAddress>(to));
+    RegionManager manager;
+    RelocationReceiptTestAccess::Exempt(manager, region);
+    ForwardingTable::ReclaimRetired("gc-unit-last-receipt");
+    GC_EXPECT_TRUE(from->IsForwarded());
+    GC_EXPECT_EQ(ForwardingTable::FindRetiredTo(reinterpret_cast<MAddress>(from)),
+                 reinterpret_cast<MAddress>(to));
+    GC_EXPECT_TRUE(RelocationReceiptTestAccess::ProductFindToVersion(collector, from).found() == to);
+
+    ForwardingTable::Publication activePublication =
+        ForwardingTable::EnsurePublicationBeforeCopy(region, reinterpret_cast<MAddress>(from));
+    GC_EXPECT_TRUE(static_cast<bool>(activePublication));
+    GC_EXPECT_EQ(ForwardingTable::InstallMapping(activePublication, reinterpret_cast<MAddress>(from),
+                                                 reinterpret_cast<MAddress>(to)).address,
+                 reinterpret_cast<MAddress>(to));
+    activePublication = ForwardingTable::Publication();
+    ForwardingTable::ReclaimRetired("gc-unit-successor-receipt");
+    GC_EXPECT_EQ(ForwardingTable::FindRetiredTo(reinterpret_cast<MAddress>(from)), 0);
+    GC_EXPECT_EQ(ForwardingTable::FindTo(reinterpret_cast<MAddress>(from)),
+                 reinterpret_cast<MAddress>(to));
+    GC_EXPECT_TRUE(from->IsForwarded());
+
+    from->SetStateCode(ObjectState::NORMAL);
+    if (region->IsGhostFromRegion()) {
+        region->DispelGhostFromRegion();
+    }
+    RelocationReceiptTestAccess::ReleaseListOwnership(region);
+    ForwardingTable::ClearEntries(region->GetRegionStart(), region->GetRegionSize());
+    ForwardingTable::ReclaimRetired("gc-unit-last-receipt-cleanup");
+    RelocationReceiptTestAccess::ReleaseListOwnership(destination);
+    region->metadata.liveInfo = nullptr;
+    fx.FreePlanted(live);
+    RelocationReceiptTestAccess::BindCollector(Heap::GetHeap().GetCollectorResources(), nullptr);
+}
+
+GC_TEST(ForwardingPublicationProduct, ReclaimRetiredPreservesNewActiveReceiptHeader)
+{
+    GcHeapFixture& fx = ProductFixture();
+    RelocationReceiptTestAccess::ReleaseListOwnership(RegionInfo::GetRegionInfo(4));
+    RelocationReceiptTestAccess::ReleaseListOwnership(RegionInfo::GetRegionInfo(3));
+    RelocationReceiptTestAccess::ReleaseListOwnership(RegionInfo::GetRegionInfo(2));
+    RegionInfo* region = RegionInfo::InitRegion(4, 1, RegionInfo::UnitRole::SMALL_SIZED_UNITS);
+    RegionInfo* oldDestination = RegionInfo::InitRegion(3, 1, RegionInfo::UnitRole::SMALL_SIZED_UNITS);
+    RegionInfo* newDestination = RegionInfo::InitRegion(2, 1, RegionInfo::UnitRole::SMALL_SIZED_UNITS);
+    GC_EXPECT_TRUE(region != nullptr && oldDestination != nullptr && newDestination != nullptr);
+    region->SetRegionType(RegionInfo::RegionType::THREAD_LOCAL_REGION);
+    oldDestination->SetRegionType(RegionInfo::RegionType::THREAD_LOCAL_REGION);
+    newDestination->SetRegionType(RegionInfo::RegionType::THREAD_LOCAL_REGION);
+    BaseObject* from = fx.PlaceObject(region->GetRegionStart());
+    BaseObject* oldTo = fx.PlaceObject(oldDestination->GetRegionStart());
+    BaseObject* newTo = fx.PlaceObject(newDestination->GetRegionStart());
+    region->SetRegionAllocPtr(reinterpret_cast<MAddress>(from) + from->GetSize());
+    oldDestination->SetRegionAllocPtr(reinterpret_cast<MAddress>(oldTo) + oldTo->GetSize());
+    newDestination->SetRegionAllocPtr(reinterpret_cast<MAddress>(newTo) + newTo->GetSize());
+    WCollector collector(Heap::GetHeap().GetAllocator(), Heap::GetHeap().GetCollectorResources());
+    RelocationReceiptTestAccess::BindCollector(Heap::GetHeap().GetCollectorResources(), &collector);
+    LiveInfo* live = PrepareForwardable(fx, region, reinterpret_cast<MAddress>(from));
+
+    ForwardingTable::Publication oldPublication =
+        ForwardingTable::EnsurePublicationBeforeCopy(region, reinterpret_cast<MAddress>(from));
+    GC_EXPECT_EQ(ForwardingTable::InstallMapping(oldPublication, reinterpret_cast<MAddress>(from),
+                                                 reinterpret_cast<MAddress>(oldTo)).address,
+                 reinterpret_cast<MAddress>(oldTo));
+    oldPublication = ForwardingTable::Publication();
+    from->SetStateCode(ObjectState::FORWARDED);
+    region->SetRouteState(RegionInfo::RouteState::ROUTED);
+    region->ClearGhostRegionBit();
+    region->SetRegionType(RegionInfo::RegionType::FROM_REGION);
+    region->PrepareForwardableRegion(region->GetMarkView<Generation::Old>());
+    ForwardingTable::Publication activePublication =
+        ForwardingTable::EnsurePublicationBeforeCopy(region, reinterpret_cast<MAddress>(from));
+    GC_EXPECT_EQ(ForwardingTable::InstallMapping(activePublication, reinterpret_cast<MAddress>(from),
+                                                 reinterpret_cast<MAddress>(newTo)).address,
+                 reinterpret_cast<MAddress>(newTo));
+    activePublication = ForwardingTable::Publication();
+
+    ForwardingTable::ReclaimRetired("gc-unit-active-receipt");
+    GC_EXPECT_TRUE(from->IsForwarded());
+    GC_EXPECT_EQ(ForwardingTable::FindRetiredTo(reinterpret_cast<MAddress>(from)), 0);
+    GC_EXPECT_EQ(ForwardingTable::FindTo(reinterpret_cast<MAddress>(from)),
+                 reinterpret_cast<MAddress>(newTo));
+    GC_EXPECT_TRUE(RelocationReceiptTestAccess::ProductFindToVersion(collector, from).found() == newTo);
+
+    from->SetStateCode(ObjectState::NORMAL);
+    if (region->IsGhostFromRegion()) {
+        region->DispelGhostFromRegion();
+    }
+    RelocationReceiptTestAccess::ReleaseListOwnership(region);
+    ForwardingTable::ClearEntries(region->GetRegionStart(), region->GetRegionSize());
+    ForwardingTable::ReclaimRetired("gc-unit-active-receipt-cleanup");
+    RelocationReceiptTestAccess::ReleaseListOwnership(oldDestination);
+    RelocationReceiptTestAccess::ReleaseListOwnership(newDestination);
+    region->metadata.liveInfo = nullptr;
+    fx.FreePlanted(live);
+    RelocationReceiptTestAccess::BindCollector(Heap::GetHeap().GetCollectorResources(), nullptr);
+}
+
+GC_TEST(ForwardingPublicationProduct, FinishIncompleteUnmovablePublishesIdentityBeforeDone)
+{
+    GcHeapFixture& fx = ProductFixture();
+    RelocationReceiptTestAccess::ReleaseListOwnership(RegionInfo::GetRegionInfo(4));
+    RegionInfo* region = RegionInfo::InitRegion(4, 1, RegionInfo::UnitRole::SMALL_SIZED_UNITS);
+    GC_EXPECT_TRUE(region != nullptr);
+    region->SetRegionType(RegionInfo::RegionType::THREAD_LOCAL_REGION);
+    BaseObject* survivor = fx.PlaceObject(region->GetRegionStart());
+    region->SetRegionAllocPtr(reinterpret_cast<MAddress>(survivor) + survivor->GetSize());
+    WCollector collector(Heap::GetHeap().GetAllocator(), Heap::GetHeap().GetCollectorResources());
+    RelocationReceiptTestAccess::BindCollector(Heap::GetHeap().GetCollectorResources(), &collector);
+    LiveInfo* live = PrepareForwardable(fx, region, reinterpret_cast<MAddress>(survivor));
+
+    RegionManager manager;
+    manager.ParkUnmovableFromRegion(region);
+    manager.FinishIncompleteFromRegions();
+
+    GC_EXPECT_TRUE(region->IsForwardingDone());
+    BaseObject* consumer = RelocationReceiptTestAccess::ProductFindToVersion(collector, survivor).found();
+    GC_EXPECT_TRUE(consumer == survivor);
+    GC_EXPECT_EQ(ForwardingTable::FindTo(reinterpret_cast<MAddress>(survivor)),
+                 reinterpret_cast<MAddress>(survivor));
+
+    RelocationReceiptTestAccess::ReleaseListOwnership(region);
+    if (region->IsGhostFromRegion()) {
+        region->DispelGhostFromRegion();
+    }
+    ForwardingTable::ReclaimRetired("gc-unit-finish-unmovable");
+    region->metadata.liveInfo = nullptr;
+    fx.FreePlanted(live);
+    RelocationReceiptTestAccess::BindCollector(Heap::GetHeap().GetCollectorResources(), nullptr);
+}
+
+GC_TEST(ForwardingPublicationProduct, FinishIncompleteNonFromResidualPublishesIdentityBeforeDone)
+{
+    GcHeapFixture& fx = ProductFixture();
+    RelocationReceiptTestAccess::ReleaseListOwnership(RegionInfo::GetRegionInfo(4));
+    RegionInfo* region = RegionInfo::InitRegion(4, 1, RegionInfo::UnitRole::SMALL_SIZED_UNITS);
+    GC_EXPECT_TRUE(region != nullptr);
+    region->SetRegionType(RegionInfo::RegionType::THREAD_LOCAL_REGION);
+    BaseObject* survivor = fx.PlaceObject(region->GetRegionStart());
+    region->SetRegionAllocPtr(reinterpret_cast<MAddress>(survivor) + survivor->GetSize());
+    WCollector collector(Heap::GetHeap().GetAllocator(), Heap::GetHeap().GetCollectorResources());
+    RelocationReceiptTestAccess::BindCollector(Heap::GetHeap().GetCollectorResources(), &collector);
+    LiveInfo* live = PrepareForwardable(fx, region, reinterpret_cast<MAddress>(survivor));
+
+    RegionManager manager;
+    RelocationReceiptTestAccess::ParkFrom(manager, region);
+    region->SetRegionType(RegionInfo::RegionType::THREAD_LOCAL_REGION);
+    manager.FinishIncompleteFromRegions();
+
+    GC_EXPECT_TRUE(region->IsForwardingDone());
+    BaseObject* consumer = RelocationReceiptTestAccess::ProductFindToVersion(collector, survivor).found();
+    GC_EXPECT_TRUE(consumer == survivor);
+    GC_EXPECT_EQ(ForwardingTable::FindTo(reinterpret_cast<MAddress>(survivor)),
+                 reinterpret_cast<MAddress>(survivor));
+
+    RelocationReceiptTestAccess::ReleaseListOwnership(region);
+    if (region->IsGhostFromRegion()) {
+        region->DispelGhostFromRegion();
+    }
+    ForwardingTable::ReclaimRetired("gc-unit-finish-nonfrom");
     region->metadata.liveInfo = nullptr;
     fx.FreePlanted(live);
     RelocationReceiptTestAccess::BindCollector(Heap::GetHeap().GetCollectorResources(), nullptr);
@@ -834,6 +1214,7 @@ void ExpectRootAbortAt(const char* siteSubstr, Fn&& fn)
     const pid_t child = fork();
     GC_EXPECT_TRUE(child >= 0);
     if (child == 0) {
+        (void)signal(SIGABRT, SIG_DFL);
         close(pipefd[0]);
         (void)dup2(pipefd[1], STDERR_FILENO);
         (void)dup2(pipefd[1], STDOUT_FILENO);
@@ -868,6 +1249,36 @@ template <typename Fn>
 void ExpectRootAbort(Fn&& fn)
 {
     ExpectRootAbortAt("[LOADFC][fail-closed]", fn);
+}
+
+GC_TEST(ForwardingPublicationProduct, ExemptRejectsForwardedWithoutAnyReceipt)
+{
+    GcHeapFixture& fx = ProductFixture();
+    RelocationReceiptTestAccess::ReleaseListOwnership(RegionInfo::GetRegionInfo(4));
+    RegionInfo* region = RegionInfo::InitRegion(4, 1, RegionInfo::UnitRole::SMALL_SIZED_UNITS);
+    GC_EXPECT_TRUE(region != nullptr);
+    region->SetRegionType(RegionInfo::RegionType::THREAD_LOCAL_REGION);
+    BaseObject* from = fx.PlaceObject(region->GetRegionStart());
+    region->SetRegionAllocPtr(reinterpret_cast<MAddress>(from) + from->GetSize());
+    WCollector collector(Heap::GetHeap().GetAllocator(), Heap::GetHeap().GetCollectorResources());
+    RelocationReceiptTestAccess::BindCollector(Heap::GetHeap().GetCollectorResources(), &collector);
+    LiveInfo* live = PrepareForwardable(fx, region, reinterpret_cast<MAddress>(from));
+    from->SetStateCode(ObjectState::FORWARDED);
+    GC_EXPECT_EQ(ForwardingTable::FindTo(reinterpret_cast<MAddress>(from)), 0);
+    GC_EXPECT_EQ(ForwardingTable::FindRetiredTo(reinterpret_cast<MAddress>(from)), 0);
+
+    RegionManager manager;
+    ExpectRootAbortAt("forwarded object lacks receipt before kept-page retirement", [&]() {
+        manager.ExemptFromRegion(region);
+    });
+
+    if (region->IsGhostFromRegion()) {
+        region->DispelGhostFromRegion();
+    }
+    ForwardingTable::ReclaimRetired("gc-unit-forwarded-without-receipt");
+    region->metadata.liveInfo = nullptr;
+    fx.FreePlanted(live);
+    RelocationReceiptTestAccess::BindCollector(Heap::GetHeap().GetCollectorResources(), nullptr);
 }
 #endif
 

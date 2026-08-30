@@ -132,6 +132,9 @@ public:
     // lost ghost/membership. The retired table is self-contained; requiring
     // the ghost first would make this answer unreachable.
     static MAddress FindRetiredTo(MAddress from);
+    // Kept producer acknowledgement: the observed FORWARDED header still
+    // consumes this retired receipt after active generation takeover.
+    static MAddress RequireRetiredTo(MAddress from);
     static bool EntriesArmed(MAddress from);
     static MAddress LookupTo(MAddress from, ToAnswer* answer = nullptr);
     static uint64_t ArmedHitCount();
