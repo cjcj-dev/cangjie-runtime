@@ -74,22 +74,31 @@ void PrepareOwnerRegion(GcHeapFixture& fx)
     fx.region0->SetInGhostRegion(1);
 }
 
-bool InstallOwnerReceipt(MAddress& from, MAddress& to)
+bool InstallOwnerReceipt(GcHeapFixture& fx, MAddress& from, MAddress& to)
 {
-    // Model a receipt installed by another copier.  Retired forwarding is the
-    // product generation consulted after region ownership has moved, and its
-    // geometry is self-contained (unlike the process-global active table whose
-    // page belongs to an earlier gc_unit fixture).
-    constexpr MAddress kStart = 0x73100000;
-    constexpr size_t kSize = 0x1000;
-    from = kStart + 64;
-    to = 0x451000;
-    ForwardingEntries* entries = ForwardingEntries::Create(4, kStart, 0, kSize);
+    // CompleteRelocationRequests consumes the current relocation set through
+    // ForwardingTable::FindTo.  Build that exact active product state instead
+    // of planting a retired table (which FindTo deliberately stopped scanning
+    // when relocation-set reset was aligned with ZGC).
+    RegionInfo* region = fx.region0;
+    region->SetRegionType(RegionInfo::RegionType::FROM_REGION);
+    LiveInfo* live = fx.PlantLiveInfo(region);
+    RegionBitmap* bitmap = fx.PlantMarkBitmap<Generation::Old>(live, region->GetRegionSize());
+    from = reinterpret_cast<MAddress>(fx.obj0);
+    to = reinterpret_cast<MAddress>(fx.obj1);
+    (void)bitmap->MarkBits(region->GetAddressOffset(from), fx.obj0->GetSize(), region->GetRegionSize());
+    region->AddLiveByteCount(fx.obj0->GetSize());
+    ForwardingEntries* entries = ForwardingTable::GetEntries(region->GetRegionStart());
     if (entries == nullptr || entries->insert(from, to) != to) {
         return false;
     }
-    ForwardingTable::Retire(entries);
-    return ForwardingTable::FindTo(from) == to;
+    // This station owns queue completion, not object copying.  A marked old
+    // page with a completed in-place route takes ForwardRegion's region
+    // exit, after which the real task must consume this active receipt through
+    // CompleteRelocationRequests.
+    region->SetInGhostRegion(1);
+    region->SetRouteState(RegionInfo::RouteState::COMPACTED);
+    return true;
 }
 
 bool RunParallelProductEntryClosesGeneration()
@@ -188,10 +197,9 @@ bool RunActualTaskClaimedOwnerSuccess()
     RegionList fromSpace("gc-unit-request-owner-from");
     MAddress from = 0;
     MAddress to = 0;
-    if (!InstallOwnerReceipt(from, to)) {
+    if (!InstallOwnerReceipt(fx, from, to)) {
         return false;
     }
-    PrepareOwnerRegion(fx);
 
     RelocationRequestQueue& queue = manager.GetRelocationRequestQueue();
     queue.BeginWorkers(1);
