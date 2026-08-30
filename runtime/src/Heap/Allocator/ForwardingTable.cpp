@@ -14,6 +14,7 @@
 #include <cstdlib>
 #include <cstring>
 #include <mutex>
+#include <unordered_set>
 #include <utility>
 #include <vector>
 
@@ -507,24 +508,64 @@ void ForwardingTable::Retire(ZForwarding* tab)
 
 void ForwardingTable::ReclaimRetired(const char* why)
 {
+    std::vector<ZForwarding*> candidates;
+    std::vector<ZForwarding*> deferred;
     std::vector<ZForwarding*> victims;
     {
-        std::lock_guard<std::mutex> lock(g_retiredLock);
+        // ClearEntries/EnsureEntries take install before Retire takes retired;
+        // keep that lock order. Retired lookups block here instead of observing
+        // a transient empty vector while a required carrier is classified.
+        std::lock_guard<std::mutex> installLock(g_installLock);
+        std::lock_guard<std::mutex> retiredLock(g_retiredLock);
+        candidates = g_retired;
         for (ZForwarding* tab : g_retired) {
             RegionLifeClock::NoteZeroAcrossBoundary(RegionLifeClock::Carrier::RETIRED_ENTRY,
                                                     tab != nullptr,
                                                     tab == nullptr ? 0 : tab->page_life_id());
         }
-        victims.swap(g_retired);
+        const std::unordered_set<ZForwarding*> candidateSet(candidates.begin(), candidates.end());
+        for (ZForwarding* tab : candidates) {
+            bool needsReceipt = false;
+            if (tab == nullptr || !tab->retired_required() ||
+                !tab->page_life_current(RegionLifeClock::Carrier::RETIRED_ENTRY)) {
+                victims.push_back(tab);
+                continue;
+            }
+            // ZGC destroys a forwarding only after remap coverage has removed every
+            // source reference (zGeneration.cpp:276-285; zRelocationSet.cpp:191-200).
+            // A current source header is deterministic evidence that this port has
+            // not reached that condition. Keep its immutable receipt queryable until
+            // a newer active generation publishes the successor receipt; never turn
+            // the source into identity at the retirement point.
+            tab->for_each_from([&](MAddress from) {
+                if (needsReceipt) {
+                    return;
+                }
+                ZForwarding* active = MapGet(g_entries, from);
+                if (active != nullptr && candidateSet.count(active) == 0 && active->find(from) != 0) {
+                    return;
+                }
+                BaseObject* object = from_region_addr(from);
+                if (!Collector::PlausibleManagedObjectGate("ReclaimRetired", object) || !object->IsForwarded()) {
+                    return;
+                }
+                needsReceipt = true;
+            });
+            (needsReceipt ? deferred : victims).push_back(tab);
+        }
+        g_retired = deferred;
     }
     for (ZForwarding* tab : victims) {
         UnlinkThenDestroy(tab);
     }
-    if (!victims.empty()) {
-        const uint64_t done = g_reclaimedTotal.fetch_add(victims.size(), std::memory_order_relaxed) + victims.size();
+    if (!candidates.empty()) {
+        const uint64_t done = victims.empty()
+            ? g_reclaimedTotal.load(std::memory_order_relaxed)
+            : g_reclaimedTotal.fetch_add(victims.size(), std::memory_order_relaxed) + victims.size();
         LOG(RTLOG_ERROR,
-            "[FWDTABLE][reclaim] why=%s freed=%zu coverage_complete=1 retired_total=%lu reclaimed_total=%lu",
-            why == nullptr ? "?" : why, victims.size(),
+            "[FWDTABLE][reclaim] why=%s freed=%zu deferred=%zu coverage_complete=%u "
+            "retired_total=%lu reclaimed_total=%lu",
+            why == nullptr ? "?" : why, victims.size(), deferred.size(), deferred.empty() ? 1u : 0u,
             g_retiredTotal.load(std::memory_order_relaxed), done);
     }
 }
@@ -819,7 +860,7 @@ MAddress ZForwarding::resolve_live(MAddress to) const
 
 bool ZForwarding::receipt_live(MAddress to) const { return resolve_live(to) != 0; }
 
-static MAddress FindRetiredToImpl(MAddress from, ForwardingTable::ToAnswer* answer)
+static MAddress FindRetiredToImpl(MAddress from, ForwardingTable::ToAnswer* answer, bool require = false)
 {
     std::lock_guard<std::mutex> lock(g_retiredLock);
     bool searched = false;
@@ -836,6 +877,9 @@ static MAddress FindRetiredToImpl(MAddress from, ForwardingTable::ToAnswer* answ
             searched = true;
             const MAddress to = tab->find(from);
             if (to != 0) {
+                if (require) {
+                    tab->note_retired_required();
+                }
                 return to;
             }
         }
@@ -859,6 +903,11 @@ static MAddress FindRetiredToImpl(MAddress from, ForwardingTable::ToAnswer* answ
 }
 
 MAddress ForwardingTable::FindRetiredTo(MAddress from) { return FindRetiredToImpl(from, nullptr); }
+
+MAddress ForwardingTable::RequireRetiredTo(MAddress from)
+{
+    return FindRetiredToImpl(from, nullptr, true);
+}
 
 MAddress ForwardingTable::FindTo(MAddress from)
 {

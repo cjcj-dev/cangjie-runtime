@@ -2457,10 +2457,11 @@ public:
         CHECK_DETAIL(ForwardingTable::PreparePublicationGeneration(GetRegionStart(), GetRegionSize()),
                      "forwarding generation prepare failed region=%p range=[%#zx,%#zx)",
                      this, static_cast<size_t>(GetRegionStart()), static_cast<size_t>(GetRegionEnd()));
-        // Only last-cycle after-copy Exempt pages carry FORWARDED headers
-        // (RegionManager.cpp:3533 then Exempt). Walking every from is the
-        // rec=stw tax (B2.1 |Δ|=+4.53%). Snapshot prevRoute before paint.
-        if (prevRoute == FORWARDED || prevRoute == COMPACTED) {
+        // A retained page can re-enter with its route generation already
+        // normalized even though copied-object headers still say FORWARDED.
+        // Clear only route states known to carry such residuals; walking every
+        // from is the rec=stw tax (B2.1 |Δ|=+4.53%). Snapshot prevRoute before paint.
+        if (prevRoute == NORMAL || prevRoute == FORWARDED || prevRoute == COMPACTED) {
             ClearRelocationResiduals();
         }
         // PORT_ZFORWARDING step 1: same event, recorded address-keyed as well.  Populated in

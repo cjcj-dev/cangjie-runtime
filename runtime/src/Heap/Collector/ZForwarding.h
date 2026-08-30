@@ -135,6 +135,8 @@ public:
     bool receipt_live(MAddress to) const;
     void note_kept_expire() { _kept_seen_expire = true; }
     bool kept_seen_expire() const { return _kept_seen_expire; }
+    void note_retired_required() { _retired_required.store(true, std::memory_order_release); }
+    bool retired_required() const { return _retired_required.load(std::memory_order_acquire); }
     static std::atomic<uint64_t>& StaleToLifeCount();
 
     bool covers(MAddress addr) const { return _size != 0 && addr >= _start && addr < _start + _size; }
@@ -222,6 +224,22 @@ public:
         std::lock_guard<std::mutex> lock(_overflowLock);
         auto found = _overflow.find(from);
         return found == _overflow.end() ? 0 : found->second;
+    }
+
+    template<typename Fn>
+    void for_each_from(Fn&& fn) const
+    {
+        auto* words = entries();
+        for (size_t i = 0; i < _entries.length(); ++i) {
+            const ForwardingEntry entry = ForwardingEntry::FromRaw(words[i].load(std::memory_order_acquire));
+            if (entry.populated()) {
+                fn(_start + (static_cast<MAddress>(entry.from_index()) << kAlignShift));
+            }
+        }
+        std::lock_guard<std::mutex> lock(_overflowLock);
+        for (const auto& kv : _overflow) {
+            fn(kv.first);
+        }
     }
 
     size_t insert(uintptr_t fromIndex, size_t toOffset, ForwardingCursor* cursor, bool* installed = nullptr)
@@ -374,6 +392,7 @@ private:
           _overflow(),
           _to_life_n(0),
           _kept_seen_expire(false),
+          _retired_required(false),
           _provisional(provisional),
           _from_page()
     {
@@ -405,6 +424,7 @@ private:
     ToLife _to_lives[3];
     uint8_t _to_life_n;
     bool _kept_seen_expire;
+    std::atomic<bool> _retired_required;
     const bool _provisional;
     FromPageView _from_page;
 };
