@@ -206,8 +206,15 @@ public:
         T* head;
     };
 
-    void EnsureGoodNode(Node*& node)
+    void EnsureGoodNode(Node*& node, bool nodeAvailable = true)
     {
+        // Store-buffer flushes must be able to prove the allocation-failure arm
+        // without exhausting the process address space.  Production callers use
+        // the default; the product test hook passes false and exercises the same
+        // null result that a missing arena node produces.
+        if (node == nullptr && UNLIKELY(!nodeAvailable)) {
+            return;
+        }
         if (node == nullptr) {
             node = freeNodes.Pop();
         } else if (node->IsFull()) {

@@ -7,6 +7,12 @@
 #include <unordered_set>
 #include <vector>
 
+#if defined(__linux__)
+#include <csignal>
+#include <sys/wait.h>
+#include <unistd.h>
+#endif
+
 // Match the existing test_young_conc test-peer shape: this TU alone needs the
 // CollectorProxy friendship to publish a real product TRACE phase.  Product
 // libraries retain their configured macro set.
@@ -471,6 +477,159 @@ GC_TEST(StoreBuf, NullPrevOnlyRemembersSlot)
     GC_EXPECT_TRUE(retired.empty());
     GC_EXPECT_TRUE(rs.Contains(slot));
 }
+
+GC_TEST(StoreBuf, NullAndNonCurrentPreviousAreNormalSkips)
+{
+    GcHeapFixture fx;
+    RememberedSet rs;
+    rs.Initialize(fx.heapStart, 2 * RegionInfo::UNIT_SIZE);
+    StoreBufferCollector collector;
+    StoreBarrierBuffer buf;
+    std::vector<BaseObject*> retired;
+    SatbBuffer::Instance().GetRetiredObjects(retired);
+    retired.clear();
+
+    const uintptr_t currentColour = static_cast<uintptr_t>(::g_cjStoreGoodMask);
+    const zpointer previous = RefField<>(fx.obj0, currentColour).GetFieldValue();
+    const MAddress nullSlot = SlotAt(fx, 8);
+    const MAddress nonCurrentSlot = SlotAt(fx, 9);
+    buf.Add(nullSlot, zpointer::null,
+            StoreBarrierInstallState { static_cast<uint8_t>(GCPhase::GC_PHASE_TRACE), false, currentColour }, rs);
+    buf.Add(nonCurrentSlot, previous,
+            StoreBarrierInstallState { static_cast<uint8_t>(GCPhase::GC_PHASE_TRACE), false,
+                                       currentColour ^ MARKED_OLD_MASK }, rs);
+
+    buf.Flush(rs, collector);
+    SatbBuffer::Instance().GetRetiredObjects(retired);
+    std::fprintf(stderr,
+                 "DETAIL arm=normal_skip null_prev=1 non_current=1 retired_receipts=%zu current=%zu "
+                 "null_remembered=%u non_current_remembered=%u\n",
+                 retired.size(), buf.Current(), static_cast<unsigned>(rs.Contains(nullSlot)),
+                 static_cast<unsigned>(rs.Contains(nonCurrentSlot)));
+    std::fflush(stderr);
+
+    GC_EXPECT_TRUE(retired.empty());
+    GC_EXPECT_EQ(buf.Current(), StoreBarrierBuffer::Capacity());
+    GC_EXPECT_TRUE(rs.Contains(nullSlot));
+    GC_EXPECT_TRUE(rs.Contains(nonCurrentSlot));
+}
+
+GC_TEST(StoreBuf, ResolvedInvalidPreviousIsClassifiedAndCleared)
+{
+    GcHeapFixture fx;
+    RememberedSet rs;
+    rs.Initialize(fx.heapStart, 2 * RegionInfo::UNIT_SIZE);
+    StoreBufferCollector collector;
+    StoreBarrierBuffer buf;
+    std::vector<BaseObject*> retired;
+    SatbBuffer::Instance().GetRetiredObjects(retired);
+    retired.clear();
+
+    uintptr_t outsideHeap = 0;
+    const zpointer previous = RefField<>(reinterpret_cast<BaseObject*>(&outsideHeap),
+                                         static_cast<uintptr_t>(::g_cjStoreGoodMask)).GetFieldValue();
+    const uintptr_t colour = static_cast<uintptr_t>(::g_cjStoreGoodMask);
+    const MAddress slot = SlotAt(fx, 8);
+#if defined(MRT_GC_UNIT_TESTS)
+    std::vector<StoreBarrierFlushEvent> events;
+    FlushObserverScope observe(events);
+#endif
+    buf.Add(slot, previous,
+            StoreBarrierInstallState { static_cast<uint8_t>(GCPhase::GC_PHASE_TRACE), false, colour }, rs);
+    buf.Flush(rs, collector);
+    SatbBuffer::Instance().GetRetiredObjects(retired);
+
+    std::fprintf(stderr,
+                 "DETAIL arm=resolved_invalid prev=%#zx installed_phase=%u installed_store_good=%#zx "
+                 "retired_receipts=%zu current=%zu slot_remembered=%u\n",
+                 static_cast<size_t>(raw(previous)), static_cast<unsigned>(GCPhase::GC_PHASE_TRACE),
+                 static_cast<size_t>(colour), retired.size(), buf.Current(),
+                 static_cast<unsigned>(rs.Contains(slot)));
+    std::fflush(stderr);
+    GC_EXPECT_TRUE(retired.empty());
+    GC_EXPECT_EQ(buf.Current(), StoreBarrierBuffer::Capacity());
+    GC_EXPECT_TRUE(rs.Contains(slot));
+#if defined(MRT_GC_UNIT_TESTS)
+    GC_EXPECT_EQ(events.size(), 2u);
+    GC_EXPECT_EQ(events[0], StoreBarrierFlushEvent::PREVIOUS_INVALID);
+    GC_EXPECT_EQ(events[1], StoreBarrierFlushEvent::SLOT_REMEMBERED);
+#endif
+}
+
+#if defined(MRT_GC_UNIT_TESTS) && defined(__linux__)
+GC_TEST(StoreBuf, SatbNodeUnavailableFailsClosedBeforeClear)
+{
+    GcHeapFixture fx;
+    RememberedSet rs;
+    rs.Initialize(fx.heapStart, 2 * RegionInfo::UNIT_SIZE);
+    AllocBuffer alloc;
+    AllocBufferScope allocScope(alloc);
+    StoreBarrierBuffer& buf = alloc.GetStoreBarrierBuffer();
+    std::vector<BaseObject*> retired;
+    SatbBuffer::Instance().GetRetiredObjects(retired);
+    retired.clear();
+
+    const uintptr_t colour = static_cast<uintptr_t>(::g_cjStoreGoodMask);
+    const zpointer previous = RefField<>(fx.obj0, colour).GetFieldValue();
+    const MAddress slot = SlotAt(fx, 8);
+    buf.Add(slot, previous,
+            StoreBarrierInstallState { static_cast<uint8_t>(GCPhase::GC_PHASE_TRACE), false, colour }, rs);
+    const StoreBarrierEntry entry = buf.buffer[buf.current];
+    const size_t currentBefore = buf.Current();
+
+    Heap& heap = Heap::GetHeap();
+    CollectorResources& resources = heap.GetCollectorResources();
+    RelocationReceiptTestAccess::EnsureCollectorProxyBound(resources);
+    const bool startedBefore = resources.IsGcStarted();
+    const GCReason reasonBefore = resources.GetGCStats().reason;
+    const GCPhase phaseBefore = heap.GetGCPhase();
+    resources.SetGcStarted(true);
+    resources.GetGCStats().reason = GC_REASON_USER;
+    heap.SetGCPhase(GCPhase::GC_PHASE_TRACE);
+
+    Mutator mutator;
+    mutator.SetMutatorPhase(GCPhase::GC_PHASE_TRACE);
+    mutator.SetMarkFlushAllocBuffer(&alloc);
+    mutator.SetStoreBarrierRememberedSetForTest(&rs);
+
+    std::fflush(nullptr);
+    const pid_t child = fork();
+    GC_EXPECT_TRUE(child >= 0);
+    if (child == 0) {
+        (void)signal(SIGABRT, SIG_DFL);
+        StoreBarrierBuffer::SetSatbNodeUnavailableForTest(true);
+        ThreadLocal::SetMutator(&mutator);
+        std::fprintf(stderr,
+                     "DETAIL arm=node_null stage=before_flush slot=%#zx prev=%#zx installed_phase=%u "
+                     "installed_store_good=%#zx retired_receipts=0 current=%zu\n",
+                     entry.p, static_cast<size_t>(raw(entry.prev)), static_cast<unsigned>(entry.installed.phase),
+                     static_cast<size_t>(entry.installed.storeGood), currentBefore);
+        std::fflush(stderr);
+        mutator.TransitionToGCPhaseExclusive(GCPhase::GC_PHASE_CLEAR_SATB_BUFFER);
+        SatbBuffer::Instance().GetRetiredObjects(retired);
+        std::fprintf(stderr,
+                     "DETAIL arm=node_null stage=after_flush retired_receipts=%zu current=%zu slot_remembered=%u\n",
+                     retired.size(), buf.Current(), static_cast<unsigned>(rs.Contains(slot)));
+        std::fflush(stderr);
+        _exit(0);
+    }
+
+    int status = 0;
+    GC_EXPECT_EQ(waitpid(child, &status, 0), child);
+    heap.SetGCPhase(phaseBefore);
+    resources.GetGCStats().reason = reasonBefore;
+    resources.SetGcStarted(startedBefore);
+    const int processRc = WIFSIGNALED(status) ? 128 + WTERMSIG(status) :
+        (WIFEXITED(status) ? WEXITSTATUS(status) : 255);
+    std::fprintf(stderr,
+                 "DETAIL arm=node_null stage=receipt process_rc=%d expected_rc=134 current_before=%zu "
+                 "retired_receipts_before=0\n",
+                 processRc, currentBefore);
+    std::fflush(stderr);
+    GC_EXPECT_TRUE(WIFSIGNALED(status));
+    GC_EXPECT_EQ(WTERMSIG(status), SIGABRT);
+}
+#endif
 
 GC_TEST(StoreBuf, YoungHolderRetiresPrevWithoutRememberingSlot)
 {
