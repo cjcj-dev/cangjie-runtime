@@ -18,6 +18,12 @@
 #include <string>
 #include <unordered_set>
 
+#if defined(__linux__)
+#include <sys/mman.h>
+#include <sys/wait.h>
+#include <unistd.h>
+#endif
+
 // RememberedSet::Record is private with `friend class Barrier` -- friendship a derived TestBarrier
 // does not inherit.  The minor's own consumer (WCollector::RescanRememberedSet) calls Record
 // directly when it re-arms a scanned slot, so a test that cannot call it cannot model the re-arm at
@@ -927,11 +933,96 @@ void RecordFlipSlots(RememberedSet& rememberedSet, const std::unordered_set<MAdd
     }
 }
 
+enum class RemsetWordBacking : uint8_t {
+    BITMAP,
+    DIRTY_MAP,
+};
+
+enum class RemsetProbeOperation : uint8_t {
+    FLIP,
+    CLEAR_ACTIVE,
+};
+
+size_t ProbeRemsetWordAccess(RememberedSet& rememberedSet, RemsetWordBacking backing,
+                             RemsetProbeOperation operation)
+{
+#if defined(__linux__)
+    std::fflush(nullptr);
+    const pid_t child = fork();
+    GC_EXPECT_TRUE(child >= 0);
+    if (child == 0) {
+        const long pageSize = sysconf(_SC_PAGESIZE);
+        if (pageSize <= 0) {
+            _exit(120);
+        }
+        void* sentinel = mmap(nullptr, static_cast<size_t>(pageSize), PROT_NONE,
+                              MAP_PRIVATE | MAP_ANONYMOUS, -1, 0);
+        if (sentinel == MAP_FAILED) {
+            _exit(121);
+        }
+        auto* words = static_cast<std::atomic<uint64_t>*>(sentinel);
+        for (size_t buffer = 0; buffer < RememberedSet::kBufferCount; ++buffer) {
+            if (backing == RemsetWordBacking::BITMAP) {
+                (void)rememberedSet.bitmaps[buffer].release();
+                rememberedSet.bitmaps[buffer].reset(words);
+            } else {
+                (void)rememberedSet.dirtyMaps[buffer].release();
+                rememberedSet.dirtyMaps[buffer].reset(words);
+            }
+        }
+
+        if (operation == RemsetProbeOperation::FLIP) {
+            const size_t before = rememberedSet.activeBuffer.load(std::memory_order_relaxed);
+            rememberedSet.FlipForMinor();
+            const size_t after = rememberedSet.activeBuffer.load(std::memory_order_relaxed);
+            _exit(after == (before ^ 1U) ? 42 : 122);
+        } else {
+            const size_t active = rememberedSet.activeBuffer.load(std::memory_order_relaxed);
+            const size_t removed = rememberedSet.ClearBuffer(active);
+            _exit(removed != 0 ? 42 : 122);
+        }
+    }
+
+    int status = 0;
+    pid_t waited;
+    do {
+        waited = waitpid(child, &status, 0);
+    } while (waited < 0 && errno == EINTR);
+    GC_EXPECT_EQ(waited, child);
+    // Exit 42 proves the invoked operation reached its publication/removal
+    // postcondition without touching the protected backing.
+    if (WIFEXITED(status) && WEXITSTATUS(status) == 42) {
+        return 0;
+    }
+    if (WIFSIGNALED(status) && WTERMSIG(status) == SIGSEGV) {
+        // The first trapped access is sufficient because the invariant is zero
+        // backing-word accesses, independent of capacity or representation.
+        return 1;
+    }
+    GC_EXPECT_TRUE(false);
+    return 0;
+#else
+    (void)rememberedSet;
+    (void)backing;
+    (void)operation;
+    GC_EXPECT_TRUE(false);
+    return 0;
+#endif
+}
+
+RememberedSet::FlipTouchCounts ProbeFlipWordAccesses(RememberedSet& rememberedSet)
+{
+    return RememberedSet::FlipTouchCounts {
+        ProbeRemsetWordAccess(rememberedSet, RemsetWordBacking::BITMAP, RemsetProbeOperation::FLIP),
+        ProbeRemsetWordAccess(rememberedSet, RemsetWordBacking::DIRTY_MAP, RemsetProbeOperation::FLIP),
+    };
+}
+
 } // namespace
 
-// Positive control for the word-touch receipt. A real ClearBuffer over a
-// non-empty face must be visible in both channels; otherwise a zero reported
-// by the O(1) guard below would not be evidence.
+// Positive control for the backing-word sentinel. A real ClearBuffer over a
+// non-empty face must fault against both protected backings; otherwise a zero
+// reported by the O(1) guard below would not be evidence.
 GC_TEST(Remset, FlipTouchReceiptPositiveControl)
 {
     constexpr MAddress start = 0x100000000ULL;
@@ -940,13 +1031,16 @@ GC_TEST(Remset, FlipTouchReceiptPositiveControl)
     rs.Initialize(start, capacity);
     rs.Record(start);
 
-    const size_t active = rs.activeBuffer.load(std::memory_order_relaxed);
-    const auto touches = rs.MeasureClearBufferTouchesForTest(active);
-    std::fprintf(stderr, "DETAIL remset_flip_touch_control bitmap_words=%zu dirty_words=%zu\n",
-                 touches.bitmapWords, touches.dirtyWords);
-    GC_EXPECT_TRUE(touches.bitmapWords > 0);
-    GC_EXPECT_TRUE(touches.dirtyWords > 0);
-    GC_EXPECT_EQ(rs.Size(), 0u);
+    const size_t bitmapAccesses = ProbeRemsetWordAccess(
+        rs, RemsetWordBacking::BITMAP, RemsetProbeOperation::CLEAR_ACTIVE);
+    const size_t dirtyAccesses = ProbeRemsetWordAccess(
+        rs, RemsetWordBacking::DIRTY_MAP, RemsetProbeOperation::CLEAR_ACTIVE);
+    std::fprintf(stderr, "DETAIL remset_flip_touch_control bitmap_word_accesses=%zu "
+                         "dirty_word_accesses=%zu\n",
+                 bitmapAccesses, dirtyAccesses);
+    GC_EXPECT_EQ(bitmapAccesses, 1u);
+    GC_EXPECT_EQ(dirtyAccesses, 1u);
+    GC_EXPECT_EQ(rs.Size(), 1u);
 }
 
 // Two bitmap capacities x two cardinalities. Flip itself must touch no bitmap
@@ -975,16 +1069,15 @@ GC_TEST(Remset, FlipIsConstantTimeAndPreservesFaceEpochs)
         const auto post = MakeFlipSlots(start, testCase.capacity, testCase.postCount, 1);
         RecordFlipSlots(rs, pre);
 
-        rs.ResetFlipTouchCountsForTest();
+        const auto firstFlip = ProbeFlipWordAccesses(rs);
         rs.FlipForMinor();
-        const auto firstFlip = rs.ReadFlipTouchCountsForTest();
         RecordFlipSlots(rs, post);
         std::unordered_set<MAddress> previous;
         const size_t previousCount = rs.ScanPreviousForMinor(previous);
         const auto current = rs.Snapshot();
         std::fprintf(stderr,
-                     "DETAIL remset_flip capacity=%zu pre=%zu post=%zu first_bitmap_words=%zu "
-                     "first_dirty_words=%zu previous=%zu current=%zu\n",
+                     "DETAIL remset_flip capacity=%zu pre=%zu post=%zu first_bitmap_word_accesses=%zu "
+                     "first_dirty_word_accesses=%zu previous=%zu current=%zu\n",
                      testCase.capacity, testCase.preCount, testCase.postCount, firstFlip.bitmapWords,
                      firstFlip.dirtyWords, previousCount, current.size());
         GC_EXPECT_EQ(firstFlip.bitmapWords, 0u);
@@ -997,15 +1090,14 @@ GC_TEST(Remset, FlipIsConstantTimeAndPreservesFaceEpochs)
         // The first deferred consumer cleared the face that becomes current
         // here. The second consumer must return exactly the post-flip set,
         // leaving neither pre-flip residue nor current-face residue behind.
-        rs.ResetFlipTouchCountsForTest();
+        const auto secondFlip = ProbeFlipWordAccesses(rs);
         rs.FlipForMinor();
-        const auto secondFlip = rs.ReadFlipTouchCountsForTest();
         std::unordered_set<MAddress> secondPrevious;
         const size_t secondPreviousCount = rs.ScanPreviousForMinor(secondPrevious);
         const auto secondCurrent = rs.Snapshot();
         std::fprintf(stderr,
-                     "DETAIL remset_flip_reuse capacity=%zu pre=%zu post=%zu second_bitmap_words=%zu "
-                     "second_dirty_words=%zu previous=%zu current=%zu\n",
+                     "DETAIL remset_flip_reuse capacity=%zu pre=%zu post=%zu second_bitmap_word_accesses=%zu "
+                     "second_dirty_word_accesses=%zu previous=%zu current=%zu\n",
                      testCase.capacity, testCase.preCount, testCase.postCount, secondFlip.bitmapWords,
                      secondFlip.dirtyWords, secondPreviousCount, secondCurrent.size());
         GC_EXPECT_EQ(secondFlip.bitmapWords, 0u);
