@@ -1,0 +1,9 @@
+diff --git a/runtime/src/Heap/Collector/TracingCollector.cpp b/runtime/src/Heap/Collector/TracingCollector.cpp
+--- a/runtime/src/Heap/Collector/TracingCollector.cpp
++++ b/runtime/src/Heap/Collector/TracingCollector.cpp
+@@ -698,4 +698,4 @@ void TracingCollector::TracingImpl(WorkStack& workStack, WorkStack& foreignRoots
+ {
+-    if (workStack.empty() && foreignRootsSet.empty()) {
++    if (workStack.empty()) { // Deliberate fault: common roots control export admission.
+         return;
+     }

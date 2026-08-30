@@ -1,0 +1,11 @@
+diff --git a/runtime/src/Heap/Collector/TracingCollector.cpp b/runtime/src/Heap/Collector/TracingCollector.cpp
+--- a/runtime/src/Heap/Collector/TracingCollector.cpp
++++ b/runtime/src/Heap/Collector/TracingCollector.cpp
+@@ -1180,6 +1180,6 @@ void TracingCollector::DFSTraceExportObject(BaseObject *exportObj)
+     while (!workStack.empty()) {
+         BaseObject* obj = workStack.back().object();
+         workStack.pop_back();
+-        if (UNLIKELY(obj->IsWeakRef())) {
++        if (false && UNLIKELY(obj->IsWeakRef())) { // Deliberate fault: bypass discovery.
+             DiscoverWeakReference(obj, workStack);
+             continue;

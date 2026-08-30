@@ -1,0 +1,12 @@
+diff --git a/runtime/src/Heap/Collector/Remembered.cpp b/runtime/src/Heap/Collector/Remembered.cpp
+--- a/runtime/src/Heap/Collector/Remembered.cpp
++++ b/runtime/src/Heap/Collector/Remembered.cpp
+@@ -1133,7 +1133,7 @@ void WCollector::RescanRememberedSet(WorkStack& workStack, const MinorSlotSet& re
+             NwDropAudit::Note(NwDropAudit::kNotHeap);
+             continue;
+         }
+-        if (LedgerCount(weakSlots, slot) != 0) {
++        if (false && LedgerCount(weakSlots, slot) != 0) {
+             noteRemsetOutcome(slot, 2, 0);
+             if (statsOut != nullptr) {
+                 ++statsOut->skippedWeak;

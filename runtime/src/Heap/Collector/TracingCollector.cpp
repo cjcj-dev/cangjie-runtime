@@ -30,6 +30,7 @@ std::atomic<size_t> g_markTerminateFlushed{ 0 };
 std::atomic<bool> g_markTerminateAtexitInstalled{ false };
 #if defined(MRT_TESTABLE_INTERNALS)
 std::atomic<uint64_t> g_markTerminateMaxPauseNs{ 0 };
+std::atomic<size_t> g_weakDiscoveryCount{ 0 };
 #endif
 
 void NoteMarkTerminatePause() { g_markTerminatePauses.fetch_add(1, std::memory_order_relaxed); }
@@ -80,6 +81,16 @@ void NoteMarkTerminatePauseDuration(uint64_t pauseNs)
     uint64_t observed = g_markTerminateMaxPauseNs.load(std::memory_order_relaxed);
     while (observed < pauseNs &&
            !g_markTerminateMaxPauseNs.compare_exchange_weak(observed, pauseNs, std::memory_order_relaxed)) {}
+}
+
+void ResetWeakDiscoveryTestReceipt()
+{
+    g_weakDiscoveryCount.store(0, std::memory_order_relaxed);
+}
+
+WeakDiscoveryTestReceipt ReadWeakDiscoveryTestReceipt()
+{
+    return { g_weakDiscoveryCount.load(std::memory_order_relaxed) };
 }
 #endif
 
@@ -520,6 +531,9 @@ void TracingCollector::DiscoverWeakReference(BaseObject* reference, WorkStack& w
     }
     DLOG(TRACE, "trace weakref obj %p ref@%p: 0x%zx", reference, &referent, referent);
     CHECK(DiscoverReference(reference, ReferenceType::WEAK) == ReferenceStatus::DISCOVERED);
+#if defined(MRT_TESTABLE_INTERNALS)
+    g_weakDiscoveryCount.fetch_add(1, std::memory_order_relaxed);
+#endif
     // Deliberately no push/TraceObjectRefFields(referent): discovery must not
     // publish the weak referent into the strong marking work stack.
     (void)workStack;
@@ -684,14 +698,14 @@ void TracingCollector::AddExportObjectsTracingWork(RootSet &exportRoots)
 
 void TracingCollector::TracingImpl(WorkStack& workStack, WorkStack& foreignRootsSet, bool parallel)
 {
-    if (workStack.empty()) {
+    if (workStack.empty() && foreignRootsSet.empty()) {
         return;
     }
 
     // enable parallel marking if we have thread pool.
     GCThreadPool* threadPool = GetThreadPool();
     MRT_ASSERT(threadPool != nullptr, "thread pool is null");
-    if (parallel) { // parallel marking.
+    if (!workStack.empty() && parallel) { // parallel marking.
         threadPool->Start();
         // add work fails, let mainGC run init task & fork tasks to poolThread for workload balance
         if (!AddConcurrentTracingWork(workStack)) {
@@ -699,7 +713,7 @@ void TracingCollector::TracingImpl(WorkStack& workStack, WorkStack& foreignRoots
             markTask.Execute(0);
         }
         threadPool->WaitFinish();
-    } else {
+    } else if (!workStack.empty()) {
         // serial marking with a single mark task.
         ConcurrentMarkingWork markTask(*this, std::move(workStack));
         markTask.Execute(0);
@@ -1166,6 +1180,10 @@ void TracingCollector::DFSTraceExportObject(BaseObject *exportObj)
     while (!workStack.empty()) {
         BaseObject* obj = workStack.back().object();
         workStack.pop_back();
+        if (UNLIKELY(obj->IsWeakRef())) {
+            DiscoverWeakReference(obj, workStack);
+            continue;
+        }
         obj->ForEachRefField([&workStack, obj, this, &externObjs](RefField<>& field) {
             (void)obj;
             RefField<> oldField(field);

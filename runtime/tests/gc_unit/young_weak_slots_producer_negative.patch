@@ -1,0 +1,12 @@
+diff --git a/runtime/src/Heap/Collector/Mark.cpp b/runtime/src/Heap/Collector/Mark.cpp
+--- a/runtime/src/Heap/Collector/Mark.cpp
++++ b/runtime/src/Heap/Collector/Mark.cpp
+@@ -1825,7 +1825,7 @@ void WCollector::TraceYoungClosureSerial(WorkStack& workStack, bool fullYoungSca
+         }
+         if (UNLIKELY(object->IsWeakRef())) {
+             HeapSlot<>& referentField = HeapSlotAt<>(reinterpret_cast<MAddress>(object) + TYPEINFO_PTR_SIZE);
+-            (void)LedgerInsert(weakSlots, reinterpret_cast<MAddress>(&referentField));
++            (void)referentField;
+ #if defined(MRT_TESTABLE_INTERNALS)
+             NoteYoungWeakClosureDiscovery(YoungWeakClosureVariant::SERIAL);
+ #endif
