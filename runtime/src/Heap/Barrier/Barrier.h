@@ -53,7 +53,7 @@ public:
     // Compiler store-good hit arm has already installed the coloured word. It
     // still owes the value-side mark and slot-side remember performed by the
     // product barrier; this exit supplies those effects without a second store.
-    void PostWriteReference(BaseObject* obj, RefField<false>& field, BaseObject* ref) const;
+    void PostWriteReference(BaseObject* obj, RefField<false>& field, BaseObject* ref, zpointer prev) const;
     void WriteStaticRef(RootSlot& field, BaseObject* ref) const;
     void WriteStruct(BaseObject* obj, MAddress dst, size_t dstLen, MAddress src, size_t srcLen) const;
     void WriteStaticStruct(MAddress dst, size_t dstLen, MAddress src, size_t srcLen, const GCTib gctib) const;

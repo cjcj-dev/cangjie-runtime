@@ -701,15 +701,15 @@ void Barrier::WriteReference(BaseObject* obj, RefField<false>& field, BaseObject
     }
 }
 
-void Barrier::PostWriteReference(BaseObject* obj, RefField<false>& field, BaseObject* ref) const
+void Barrier::PostWriteReference(BaseObject* obj, RefField<false>& field, BaseObject* ref, zpointer prev) const
 {
-    // Unlike ZGC, our compiler hit predicate cannot use store-good as proof
-    // that this slot already has a current remset entry: plain previous words
-    // and same-colour writes to a different target are both admitted there.
-    // The hit arm has already performed color_store_good, so execute only the
-    // product side effects that the skipped WriteReference still owes.
+    // The compiler loaded prev before its store-good hit overwrote the slot,
+    // matching ZGC store_barrier_on_heap_oop_field (zBarrier.inline.hpp:695-706).
+    // Preserve that deletion record through the same paired store-buffer path
+    // used by runtime, atomic and bulk overwrites; the installed new word cannot
+    // stand in for prev at a later mark-phase flush (zStoreBarrierBuffer.cpp:190-240).
     RecordCrossGenEdge(obj, reinterpret_cast<MAddress>(&field), to_object(field.GetTargetObject()),
-                       zpointer::null);
+                       prev);
 }
 
 void Barrier::WriteReferenceImpl(BaseObject* obj, RefField<false>& field, BaseObject* ref) const

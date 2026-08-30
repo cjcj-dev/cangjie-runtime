@@ -407,9 +407,10 @@ extern "C" void MCC_WriteRefField(const ObjectPtr ref, const ObjectPtr obj, RefF
 }
 
 extern "C" MRT_EXPORT void CJ_MCC_PostWriteRefField(const ObjectPtr ref, const ObjectPtr obj,
-                                                     RefField<false>* field)
+                                                     RefField<false>* field, uintptr_t observedPrev)
 {
-    Heap::GetBarrier().PostWriteReference(PlainObjectPtr(obj), *PlainRefFieldPtr(field), PlainObjectPtr(ref));
+    Heap::GetBarrier().PostWriteReference(PlainObjectPtr(obj), *PlainRefFieldPtr(field), PlainObjectPtr(ref),
+                                          to_zpointer(observedPrev));
 }
 
 extern "C" void MCC_WriteStructField(ObjectPtr obj, MAddress dst, size_t dstLen, MAddress src, size_t srcLen,
