@@ -47,6 +47,7 @@ struct StoreBarrierEntry {
 #if defined(MRT_GC_UNIT_TESTS)
 enum class StoreBarrierFlushEvent : uint8_t {
     PREVIOUS_RETIRED,
+    PREVIOUS_INVALID,
     SLOT_REMEMBERED,
 };
 using StoreBarrierFlushObserver = void (*)(StoreBarrierFlushEvent, const StoreBarrierEntry&);
@@ -71,12 +72,20 @@ public:
     static void FlushAll(RememberedSet& rs);
 #if defined(MRT_GC_UNIT_TESTS)
     static void SetFlushObserverForTest(StoreBarrierFlushObserver observer);
+    static void SetSatbNodeUnavailableForTest(bool unavailable);
 #endif
 
 private:
+    enum class PreviousRetirement : uint8_t {
+        NOT_REQUIRED,
+        RETIRED,
+        INVALID_PREVIOUS,
+        RESOURCE_UNAVAILABLE,
+    };
+
     static StoreBarrierInstallState CaptureInstallState();
     static bool InstalledDuringCurrentMark(const StoreBarrierEntry& entry);
-    static bool RetirePrevious(const StoreBarrierEntry& entry, Collector& collector);
+    static PreviousRetirement RetirePrevious(const StoreBarrierEntry& entry, Collector& collector);
     static void MarkAndRemember(const StoreBarrierEntry& entry, RememberedSet& rs);
     void Add(MAddress fieldAddress, zpointer prev, StoreBarrierInstallState installed, RememberedSet& rs);
     void Add(MAddress fieldAddress, BaseObject* fieldBase, zpointer prev,

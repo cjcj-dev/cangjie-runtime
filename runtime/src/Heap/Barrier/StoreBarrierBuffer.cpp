@@ -21,6 +21,7 @@ namespace MapleRuntime {
 namespace {
 #if defined(MRT_GC_UNIT_TESTS)
 thread_local StoreBarrierFlushObserver g_flushObserver = nullptr;
+thread_local bool g_satbNodeUnavailable = false;
 
 void NotifyFlushObserver(StoreBarrierFlushEvent event, const StoreBarrierEntry& entry)
 {
@@ -55,6 +56,11 @@ MAddress RemapPendingField(const StoreBarrierEntry& entry)
 void StoreBarrierBuffer::SetFlushObserverForTest(StoreBarrierFlushObserver observer)
 {
     g_flushObserver = observer;
+}
+
+void StoreBarrierBuffer::SetSatbNodeUnavailableForTest(bool unavailable)
+{
+    g_satbNodeUnavailable = unavailable;
 }
 #endif
 
@@ -125,25 +131,30 @@ bool StoreBarrierBuffer::InstalledDuringCurrentMark(const StoreBarrierEntry& ent
         (static_cast<uintptr_t>(::g_cjStoreGoodMask) & epochMask);
 }
 
-bool StoreBarrierBuffer::RetirePrevious(const StoreBarrierEntry& entry, Collector& collector)
+StoreBarrierBuffer::PreviousRetirement StoreBarrierBuffer::RetirePrevious(const StoreBarrierEntry& entry,
+                                                                          Collector& collector)
 {
     if (is_null(entry.prev) || !InstalledDuringCurrentMark(entry)) {
-        return false;
+        return PreviousRetirement::NOT_REQUIRED;
     }
     RefField<> previous(entry.prev);
     BaseObject* const resolved = collector.make_load_good(previous);
     if (resolved == nullptr || !Heap::IsHeapAddress(resolved)) {
-        return false;
+        return PreviousRetirement::INVALID_PREVIOUS;
     }
     SatbBuffer::Node* node = nullptr;
     SatbBuffer& satb = SatbBuffer::Instance();
+#if defined(MRT_GC_UNIT_TESTS)
+    satb.EnsureGoodNode(node, !g_satbNodeUnavailable);
+#else
     satb.EnsureGoodNode(node);
+#endif
     if (node == nullptr) {
-        return false;
+        return PreviousRetirement::RESOURCE_UNAVAILABLE;
     }
     (void)node->Push(resolved, Collector::TryRecoverInteriorBase(resolved));
     satb.FlushQueue(node);
-    return true;
+    return PreviousRetirement::RETIRED;
 }
 
 void StoreBarrierBuffer::MarkAndRemember(const StoreBarrierEntry& entry, RememberedSet& rs)
@@ -163,11 +174,22 @@ void StoreBarrierBuffer::Flush(RememberedSet& rs, Collector& collector)
     }
     for (size_t i = current; i < kStoreBarrierBufferLength; ++i) {
         const StoreBarrierEntry& entry = buffer[i];
-        if (RetirePrevious(entry, collector)) {
+        const PreviousRetirement retirement = RetirePrevious(entry, collector);
+        CHECK_DETAIL(retirement != PreviousRetirement::RESOURCE_UNAVAILABLE,
+                     "store-buffer SATB publication unavailable slot=%#zx prev=%#zx installed_phase=%u "
+                     "installed_store_good=%#zx current=%zu index=%zu",
+                     entry.p, static_cast<size_t>(raw(entry.prev)), static_cast<unsigned>(entry.installed.phase),
+                     static_cast<size_t>(entry.installed.storeGood), current, i);
+        if (retirement == PreviousRetirement::RETIRED) {
 #if defined(MRT_GC_UNIT_TESTS)
             NotifyFlushObserver(StoreBarrierFlushEvent::PREVIOUS_RETIRED, entry);
 #endif
         }
+#if defined(MRT_GC_UNIT_TESTS)
+        if (retirement == PreviousRetirement::INVALID_PREVIOUS) {
+            NotifyFlushObserver(StoreBarrierFlushEvent::PREVIOUS_INVALID, entry);
+        }
+#endif
         MarkAndRemember(entry, rs);
 #if defined(MRT_GC_UNIT_TESTS)
         NotifyFlushObserver(StoreBarrierFlushEvent::SLOT_REMEMBERED, entry);
