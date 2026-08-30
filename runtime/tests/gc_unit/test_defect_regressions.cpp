@@ -7,6 +7,8 @@
 // Phase-2 defect regression net (甲): each case anchors a shipped fix commit + product site.
 // Contracts only — not implementation trivia. Product symbols where the harness can reach them.
 
+#define MRT_EXPORT_ROOT_HANDLE_TESTS 1
+
 #include <cstdint>
 #include <cstring>
 #include <sys/mman.h>
@@ -429,11 +431,11 @@ GC_TEST(DefectRegress, ExportHandleDoubleRemoveNoAlias)
     BaseObject* objA = reinterpret_cast<BaseObject*>(static_cast<uintptr_t>(0x1000));
     BaseObject* objB = reinterpret_cast<BaseObject*>(static_cast<uintptr_t>(0x2000));
     BaseObject* objC = reinterpret_cast<BaseObject*>(static_cast<uintptr_t>(0x3000));
-    U64 pa = table.RegisterExportRoot(objA);
+    U64 pa = table.RegisterExportRootPlainForHandleTesting(objA);
     table.RemoveExportRoot(pa);
     table.RemoveExportRoot(pa);
-    U64 pb = table.RegisterExportRoot(objB);
-    U64 pc = table.RegisterExportRoot(objC);
+    U64 pb = table.RegisterExportRootPlainForHandleTesting(objB);
+    U64 pc = table.RegisterExportRootPlainForHandleTesting(objC);
     GC_EXPECT_NE(pb, pc);
     GC_EXPECT_TRUE(table.CheckActiveState(pb, objB));
     GC_EXPECT_TRUE(table.CheckActiveState(pc, objC));
@@ -477,9 +479,9 @@ GC_TEST(DefectRegress, ExportHandleStaleReuseDoesNotTouchNewOccupant)
     ExportRootTable table;
     BaseObject* objA = reinterpret_cast<BaseObject*>(static_cast<uintptr_t>(0x4000));
     BaseObject* objB = reinterpret_cast<BaseObject*>(static_cast<uintptr_t>(0x5000));
-    U64 ha = table.RegisterExportRoot(objA);
+    U64 ha = table.RegisterExportRootPlainForHandleTesting(objA);
     table.RemoveExportRoot(ha);
-    U64 hb = table.RegisterExportRoot(objB);
+    U64 hb = table.RegisterExportRootPlainForHandleTesting(objB);
     GC_EXPECT_NE(ha, hb);
     GC_EXPECT_EQ(ExportRootTable::ExportHandleIndex(ha), ExportRootTable::ExportHandleIndex(hb));
     GC_EXPECT_NE(ExportRootTable::ExportHandleGeneration(ha), ExportRootTable::ExportHandleGeneration(hb));

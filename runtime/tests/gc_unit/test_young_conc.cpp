@@ -748,6 +748,92 @@ GC_OTHER_VM_TEST(YoungConc, SatbAfterWorkerTerminationUsesBoundedMarkEndContinue
     (void)live;
 }
 
+// Export roots are mutable root-container membership. Register after the sole
+// T1 enumeration and require the product static-root barrier receipt to enter
+// the same termination domain consumed before T2 can commit.
+GC_OTHER_VM_TEST(YoungConc, ExportRootRegisteredAfterT1ReachesT2Closure)
+{
+    GC_EXPECT_EQ(CJ_ScheduleManagerInit(), 0);
+    GC_EXPECT_EQ(setenv("MRT_GCV2_MARKPAR_FORCE_SERIAL", "1", 1), 0);
+    MutatorManager mutatorManager;
+    YoungConcTestRuntime runtime(mutatorManager);
+    GcHeapFixture fx;
+    fx.region0->SetYoungRegionFlag(0);
+    fx.region1->SetYoungRegionFlag(1);
+    fx.region1->SetYoungAge(1);
+    LiveInfo* live = fx.PlantLiveInfo(fx.region1);
+    (void)fx.PlantMarkBitmap<Generation::Young>(live, fx.region1->GetRegionSize());
+
+    // Both objects predate mark-start. Until the after-T1 hook runs, holder is
+    // present only in native test storage; child is reachable only from holder.
+    BaseObject* holder = fx.obj1;
+    BaseObject* child = fx.PlaceObject(reinterpret_cast<MAddress>(holder) + 64);
+    fx.region1->SetRegionAllocPtr(reinterpret_cast<MAddress>(child) + 64);
+    auto* holderField = &HeapSlotAt<>(reinterpret_cast<MAddress>(holder) + TYPEINFO_PTR_SIZE);
+    holderField->StoreColoured(GcUnit::StoreGoodPointer(child));
+
+    CollectorResources& resources = Heap::GetHeap().GetCollectorResources();
+    WCollector collector(Heap::GetHeap().GetAllocator(), resources);
+    RelocationReceiptTestAccess::BindCollector(resources, &collector);
+    collector.SetGCPhase(GCPhase::GC_PHASE_IDLE);
+    GCThreadPool threadPool("gc-unit-export-root-receipt", 0, GCPoolThread::GC_THREAD_PRIORITY);
+    RelocationReceiptTestAccess::BindThreadPool(resources, &threadPool);
+    RegionSpace& space = reinterpret_cast<RegionSpace&>(Heap::GetHeap().GetAllocator());
+    space.GetRegionManager().EnlistFullThreadLocalRegion(fx.region1);
+    // Native raw-pointer pinning only increments the region counter; it adds
+    // neither a mark bit nor a root-set entry (RegionManager.cpp:2636-2637).
+    // Keep the fixture region in place after T2 without giving T1 a producer.
+    space.GetRegionManager().AddRawPointerObject(holder);
+    Heap::GetHeap().GetRememberedSet().Initialize(fx.heapStart, 2 * RegionInfo::UNIT_SIZE);
+
+    const bool startedBefore = resources.IsGcStarted();
+    const GCReason reasonBefore = resources.GetGCStats().reason;
+    Heap::GetHeap().InstallBarrier(GCPhase::GC_PHASE_IDLE);
+    Heap::GetHeap().SetGCPhase(GCPhase::GC_PHASE_IDLE);
+    const U64 seedHandle = Heap::GetHeap().RegisterExportRoot(fx.obj0);
+    Heap::GetHeap().RemoveExportObject(seedHandle);
+
+    Mutator producer;
+    producer.SetMutatorPhase(GCPhase::GC_PHASE_TRACE);
+    resources.SetGcStarted(true);
+    resources.GetGCStats().reason = GC_REASON_YOUNG;
+    ResetMarkTerminateTestReceipt();
+    ResetExportRootPublicationTestReceipt();
+    ArmExportRootAfterT1TestReceipt(&producer, holder, child);
+
+    RelocationReceiptTestAccess::RunCollectionDispatch(collector);
+    const ExportRootPublicationTestReceipt exportReceipt = ReadExportRootPublicationTestReceipt();
+    const MarkTerminateTestReceipt terminateReceipt = ReadMarkTerminateTestReceipt();
+    std::fprintf(stderr,
+                 "DETAIL export_root_t1 registration_after_t1=%zu publication_flushes=%zu "
+                 "mark_end_flushed=%zu continues=%zu observed_t2=%zu holder_marked=%d child_marked=%d "
+                 "handle=%zu seed_index=%u registered_index=%u\n",
+                 static_cast<size_t>(exportReceipt.registrationsAfterT1),
+                 static_cast<size_t>(exportReceipt.producerFlushes), terminateReceipt.flushed,
+                 terminateReceipt.continues, static_cast<size_t>(exportReceipt.observedAtT2),
+                 static_cast<int>(exportReceipt.holderMarked), static_cast<int>(exportReceipt.childMarked),
+                 static_cast<size_t>(exportReceipt.handle), ExportRootTable::ExportHandleIndex(seedHandle),
+                 ExportRootTable::ExportHandleIndex(exportReceipt.handle));
+
+    GC_EXPECT_EQ(exportReceipt.registrationsAfterT1, 1u);
+    GC_EXPECT_EQ(exportReceipt.producerFlushes, 1u);
+    GC_EXPECT_EQ(ExportRootTable::ExportHandleIndex(exportReceipt.handle),
+                 ExportRootTable::ExportHandleIndex(seedHandle));
+    GC_EXPECT_TRUE(terminateReceipt.flushed >= 1u);
+    GC_EXPECT_TRUE(terminateReceipt.continues >= 1u);
+    GC_EXPECT_EQ(exportReceipt.observedAtT2, 1u);
+    GC_EXPECT_TRUE(exportReceipt.holderMarked);
+    GC_EXPECT_TRUE(exportReceipt.childMarked);
+
+    Heap::GetHeap().RemoveExportObject(exportReceipt.handle);
+    resources.SetGcStarted(startedBefore);
+    resources.GetGCStats().reason = reasonBefore;
+    RelocationReceiptTestAccess::BindThreadPool(resources, nullptr);
+    threadPool.Exit();
+    RelocationReceiptTestAccess::BindCollector(resources, nullptr);
+    (void)live;
+}
+
 // 3. young→young overwrite is not remset (ZGC remember only if slot old; zBarrier:729-733).
 GC_TEST(YoungConc, YoungToYoungWriteNotInRemset)
 {
