@@ -223,6 +223,7 @@ STANDALONE_SYMBOLS=(
 )
 STANDALONE_FULL_SYMBOLS=(
   _ZN12MapleRuntime10RegionInfo28PreserveRetainedLiveInfoUpToEm
+  CJ_MCC_PostWriteRefField
 )
 # RegionInfo::MarkObject templates are instantiated by other TUs in this ELF.
 # The concurrent item binds the 4-arg Old instantiation via dlsym only; Tcut×P0
@@ -249,6 +250,49 @@ for symbol in "${STANDALONE_FULL_SYMBOLS[@]}"; do
   fi
 done
 echo "GATE_STANDALONE_SYMBOLS_OK elf=$OUT/cj_gc_unit"
+
+# The compiler old-value test is a product-path test with an independently
+# replaceable carrier.  Keep its target set outside the test call itself so
+# deleting the consumer cannot silently shrink this guard.  Full nm excludes
+# local/weak copies; the undefined import and product export bind the call to
+# the runtime SO used by the 2x2 cut/restore matrix.
+OLDVALUE_MANIFEST="$SRC/product_call_manifest_oldvalue.tsv"
+EXPECTED_OLDVALUE_TESTS=(
+  StoreBuf.CompilerFastOverwriteHandsObservedOldToSatb
+)
+oldvalue_rows=0
+while IFS=$'\t' read -r test_name anchor carrier consumer cut_site; do
+  if [[ "$test_name" == "test_name" ]]; then
+    continue
+  fi
+  [[ "$anchor" == "CJ_MCC_PostWriteRefField" ]]
+  [[ "$carrier" == "product_so" ]]
+  [[ "$consumer" == "CJ_MCC_PostWriteRefField(newReferent, holder, &field, observedPrev)" ]]
+  suite="${test_name%%.*}"
+  name="${test_name#*.}"
+  /usr/bin/grep -F -q "GC_TEST($suite, $name)" "$SRC/test_store_barrier_buffer.cpp"
+  /usr/bin/grep -F -q "$anchor" "$ROOT/runtime/src/CompilerCalls.cpp"
+  /usr/bin/grep -F -q "$consumer" "$SRC/test_store_barrier_buffer.cpp"
+  /usr/bin/grep -F -q "$cut_site" "$ROOT/runtime/src/Heap/Barrier/Barrier.cpp"
+  oldvalue_rows=$((oldvalue_rows + 1))
+done <"$OLDVALUE_MANIFEST"
+[[ "$oldvalue_rows" -eq "${#EXPECTED_OLDVALUE_TESTS[@]}" ]]
+for test_name in "${EXPECTED_OLDVALUE_TESTS[@]}"; do
+  /usr/bin/grep -q "^${test_name}"$'\t' "$OLDVALUE_MANIFEST"
+done
+[[ $(/usr/bin/grep -F -c 'CJ_MCC_PostWriteRefField(newReferent, holder, &field, observedPrev)' \
+  "$SRC/test_store_barrier_buffer.cpp") -eq "$oldvalue_rows" ]]
+OLDVALUE_UNDEFINED="$OUT/cj_gc_unit.undefined-oldvalue.txt"
+nm -u "$OUT/cj_gc_unit" >"$OLDVALUE_UNDEFINED"
+if ! /usr/bin/grep -F -q 'CJ_MCC_PostWriteRefField' "$OLDVALUE_UNDEFINED"; then
+  echo "GC_UNIT_OLDVALUE_IMPORT_MISSING symbol=CJ_MCC_PostWriteRefField" >&2
+  exit 10
+fi
+if ! /usr/bin/grep -F -q 'CJ_MCC_PostWriteRefField' "$OUT/runtime-dynamic-symbols.txt"; then
+  echo "GC_UNIT_OLDVALUE_EXPORT_MISSING symbol=CJ_MCC_PostWriteRefField" >&2
+  exit 10
+fi
+echo "GATE_OLDVALUE_PRODUCT_BINDING_OK rows=$oldvalue_rows elf=$OUT/cj_gc_unit"
 STALL_TEST_DEFINED=$(nm --defined-only "$OUT/cj_gc_unit" | /usr/bin/grep -c 'AllocationStall_' || true)
 echo "STALL_TEST_DEFINED=$STALL_TEST_DEFINED"
 if [[ "$STALL_PRODUCT_OBSERVE" -eq 1 && "$STALL_TEST_DEFINED" -eq 0 ]]; then

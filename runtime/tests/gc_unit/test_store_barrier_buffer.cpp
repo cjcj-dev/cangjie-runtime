@@ -36,6 +36,9 @@
 using namespace MapleRuntime;
 using namespace MapleRuntime::GcUnit;
 
+extern "C" void CJ_MCC_PostWriteRefField(ObjectPtr ref, ObjectPtr obj, RefField<false>* field,
+                                          uintptr_t observedPrev);
+
 namespace MapleRuntime {
 
 struct RelocationReceiptTestAccess {
@@ -118,6 +121,20 @@ public:
 private:
     AllocBuffer& alloc;
     AllocBuffer* saved;
+};
+
+class InstalledBarrierScope final {
+public:
+    explicit InstalledBarrierScope(Barrier& barrier) : previous(Heap::currentBarrierPtr), installed(&barrier)
+    {
+        Heap::currentBarrierPtr = &installed;
+    }
+
+    ~InstalledBarrierScope() { Heap::currentBarrierPtr = previous; }
+
+private:
+    Barrier** previous;
+    Barrier* installed;
 };
 
 } // namespace
@@ -263,6 +280,91 @@ GC_TEST(StoreBuf, ProductPhaseFlushHandsPairedPrevToSatb)
     }
     GC_EXPECT_EQ(oldCount, 1u);
     GC_EXPECT_TRUE(newCount >= 1u);
+}
+
+// Deterministic compiler-hit object graph: oldReferent is reachable only from
+// holder.field before the overwrite; newReferent is reachable from that field
+// afterwards. The compiler ABI must carry the pre-store word so the current
+// old-mark epoch retires oldReferent when the paired store buffer is flushed.
+GC_TEST(StoreBuf, CompilerFastOverwriteHandsObservedOldToSatb)
+{
+    GcHeapFixture fx;
+    fx.region0->SetYoungRegionFlag(0);
+    fx.region1->SetYoungRegionFlag(1);
+
+    BaseObject* const holder = fx.obj0;
+    BaseObject* const oldReferent = fx.PlaceObject(fx.heapStart + 256);
+    BaseObject* const newReferent = fx.obj1;
+    HeapSlot<>& field = HeapSlotAt<>(reinterpret_cast<MAddress>(holder) + TYPEINFO_PTR_SIZE);
+
+    RememberedSet rs;
+    rs.Initialize(fx.heapStart, 2 * RegionInfo::UNIT_SIZE);
+    StoreBufferCollector collector;
+    TraceBarrier barrier(collector, rs);
+    InstalledBarrierScope installedBarrier(barrier);
+    AllocBuffer alloc;
+    AllocBufferScope allocScope(alloc);
+
+    const zpointer oldWord = StoreGoodPointer(oldReferent);
+    field.StoreColoured(oldWord);
+    const uintptr_t observedPrev = raw(field.GetFieldValue());
+    const bool compilerHit = (observedPrev & static_cast<uintptr_t>(::g_cjStoreBadMask)) == 0;
+    const zpointer newWord = StoreGoodPointer(newReferent);
+
+    Heap& heap = Heap::GetHeap();
+    CollectorResources& resources = heap.GetCollectorResources();
+    RelocationReceiptTestAccess::EnsureCollectorProxyBound(resources);
+    const bool startedBefore = resources.IsGcStarted();
+    const GCReason reasonBefore = resources.GetGCStats().reason;
+    const GCPhase phaseBefore = heap.GetGCPhase();
+    resources.SetGcStarted(true);
+    resources.GetGCStats().reason = GC_REASON_USER;
+    heap.SetGCPhase(GCPhase::GC_PHASE_TRACE);
+
+    std::vector<BaseObject*> retired;
+    SatbBuffer::Instance().GetRetiredObjects(retired);
+    retired.clear();
+    Mutator mutator;
+    mutator.SetMutatorPhase(GCPhase::GC_PHASE_TRACE);
+    mutator.SetMarkFlushAllocBuffer(&alloc);
+#if defined(MRT_TESTABLE_INTERNALS)
+    mutator.SetStoreBarrierRememberedSetForTest(&rs);
+#endif
+    Mutator* const mutatorBefore = ThreadLocal::GetMutator();
+    ThreadLocal::SetMutator(&mutator);
+
+    // This is the compiler hit-arm ordering: capture, overwrite, then ABI exit.
+    field.StoreColoured(newWord);
+    CJ_MCC_PostWriteRefField(newReferent, holder, &field, observedPrev);
+    const size_t pending = alloc.GetStoreBarrierBuffer().Pending();
+    mutator.TransitionToGCPhaseExclusive(GCPhase::GC_PHASE_CLEAR_SATB_BUFFER);
+
+    ThreadLocal::SetMutator(mutatorBefore);
+    heap.SetGCPhase(phaseBefore);
+    resources.GetGCStats().reason = reasonBefore;
+    resources.SetGcStarted(startedBefore);
+
+    SatbBuffer::Instance().GetRetiredObjects(retired);
+    size_t oldReceipts = 0;
+    size_t newReceipts = 0;
+    for (BaseObject* object : retired) {
+        oldReceipts += object == oldReferent ? 1u : 0u;
+        newReceipts += object == newReferent ? 1u : 0u;
+    }
+    std::fprintf(stderr,
+                 "DETAIL arm=compiler_fast_overwrite compiler_hit=%u observed_prev=0x%zx installed=0x%zx "
+                 "pending=%zu old_receipts=%zu new_receipts=%zu field_target=%p\n",
+                 static_cast<unsigned>(compilerHit), static_cast<size_t>(observedPrev),
+                 static_cast<size_t>(raw(field.GetFieldValue())), pending, oldReceipts, newReceipts,
+                 static_cast<void*>(to_object(field.GetTargetObject())));
+    std::fflush(stderr);
+
+    GC_EXPECT_TRUE(compilerHit);
+    GC_EXPECT_EQ(pending, 1u);
+    GC_EXPECT_TRUE(alloc.GetStoreBarrierBuffer().IsEmpty());
+    GC_EXPECT_EQ(oldReceipts, 1u);
+    GC_EXPECT_TRUE(newReceipts >= 1u);
+    GC_EXPECT_EQ(raw(field.GetTargetObject()), reinterpret_cast<MAddress>(newReferent));
 }
 
 GC_TEST(StoreBuf, GcAssistedPhaseFlushDefersStoreBuffer)

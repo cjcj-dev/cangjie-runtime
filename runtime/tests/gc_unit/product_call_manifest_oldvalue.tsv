@@ -1,0 +1,2 @@
+test_name	stable_product_anchor	carrier	consumer_callsite	cut_site
+StoreBuf.CompilerFastOverwriteHandsObservedOldToSatb	CJ_MCC_PostWriteRefField	product_so	CJ_MCC_PostWriteRefField(newReferent, holder, &field, observedPrev)	RecordCrossGenEdge(obj, reinterpret_cast<MAddress>(&field), to_object(field.GetTargetObject()),

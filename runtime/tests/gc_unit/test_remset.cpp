@@ -43,7 +43,8 @@
 using namespace MapleRuntime;
 using namespace MapleRuntime::GcUnit;
 
-extern "C" void CJ_MCC_PostWriteRefField(ObjectPtr ref, ObjectPtr obj, RefField<false>* field);
+extern "C" void CJ_MCC_PostWriteRefField(ObjectPtr ref, ObjectPtr obj, RefField<false>* field,
+                                          uintptr_t observedPrev);
 
 namespace MapleRuntime {
 
@@ -516,10 +517,11 @@ GC_OTHER_VM_TEST(Remset, PostStoreControlRegistersAfterDrain)
     const size_t sizeAfterFirstDrain = rs.Size();
 
     RefField<> taggedB = RemsetRearmTestAccess::Tag(collector, objectB);
+    const uintptr_t observedPrev = raw(field->GetFieldValue());
     field->StoreColoured(taggedB.GetFieldValue());
     const uintptr_t fieldBeforeHook = raw(field->GetFieldValue());
     const bool containsBeforeHook = rs.Contains(slot);
-    CJ_MCC_PostWriteRefField(objectB, fx.obj0, field);
+    CJ_MCC_PostWriteRefField(objectB, fx.obj0, field, observedPrev);
     const uintptr_t fieldAfterHook = raw(field->GetFieldValue());
     const bool containsAfterHook = rs.Contains(slot);
     const size_t sizeAfterHook = rs.Size();
@@ -573,7 +575,7 @@ GC_TEST(Remset, CompilerPostStoreRecordsPlainPreviousWord)
     field->StoreColoured(installed.GetFieldValue());
     GC_EXPECT_FALSE(rs.Contains(slot)); // positive control: the direct store alone does not record
 
-    CJ_MCC_PostWriteRefField(fx.obj1, fx.obj0, field);
+    CJ_MCC_PostWriteRefField(fx.obj1, fx.obj0, field, plain);
     GC_EXPECT_TRUE(rs.Contains(slot));
 }
 
@@ -602,10 +604,11 @@ GC_TEST(Remset, CompilerPostStoreRecordsChangedTargetAfterNoYoung)
     fx.region1->SetYoungRegionFlag(1);
     fx.region1->SetYoungAge(1);
     RefField<> installed = collector.GetAndTryTagRefField(fx.obj1);
+    const uintptr_t observedPrev = raw(field->GetFieldValue());
     field->StoreColoured(installed.GetFieldValue());
     GC_EXPECT_FALSE(rs.Contains(slot)); // pre-fix compiler hit result
 
-    CJ_MCC_PostWriteRefField(fx.obj1, fx.obj0, field);
+    CJ_MCC_PostWriteRefField(fx.obj1, fx.obj0, field, observedPrev);
     GC_EXPECT_TRUE(rs.Contains(slot));
 }
 
