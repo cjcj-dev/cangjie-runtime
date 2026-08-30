@@ -1,4 +1,5 @@
 #include "Heap/Collector/FinalizerProcessor.h"
+#include "gc_heap_fixture.hpp"
 #include "gc_unittest.hpp"
 
 #include <condition_variable>
@@ -34,6 +35,44 @@ GC_TEST(FnlzRoots, VisitFinalizersCountMatchesRegister)
 
     U32 finalizers = fp.VisitFinalizers([](RootSlot&) {});
     GC_EXPECT_EQ(finalizers, static_cast<U32>(2));
+}
+
+GC_TEST(FnlzRoots, RegistryMissDoesNotCountAsFinalEnqueue)
+{
+    GcHeapFixture fx;
+    FinalizerProcessor fp;
+    ReferenceProcessor& processor = fp.GetReferenceProcessor();
+    const size_t offset = fx.region0->GetAddressOffset(reinterpret_cast<MAddress>(fx.obj0));
+    GC_EXPECT_FALSE(fx.region0->ResurrectObject(fx.obj0, offset));
+    GC_EXPECT_TRUE(processor.DiscoverReference(fx.obj0, ReferenceType::FINAL) ==
+                   ReferenceStatus::DISCOVERED);
+
+    fp.ProcessReferences([](BaseObject*) { return false; });
+
+    GC_EXPECT_EQ(processor.Enqueued(ReferenceType::FINAL), static_cast<size_t>(0));
+    size_t queuedRoots = 0;
+    fp.VisitGCRoots([&](RootSlot&) { ++queuedRoots; });
+    GC_EXPECT_EQ(queuedRoots, static_cast<size_t>(0));
+}
+
+GC_TEST(FnlzRoots, RegisteredFinalizerMovesAndCountsExactlyOnce)
+{
+    GcHeapFixture fx;
+    FinalizerProcessor fp;
+    ReferenceProcessor& processor = fp.GetReferenceProcessor();
+    fp.RegisterFinalizer(fx.obj0);
+    const size_t offset = fx.region0->GetAddressOffset(reinterpret_cast<MAddress>(fx.obj0));
+    GC_EXPECT_FALSE(fx.region0->ResurrectObject(fx.obj0, offset));
+    GC_EXPECT_TRUE(processor.DiscoverReference(fx.obj0, ReferenceType::FINAL) ==
+                   ReferenceStatus::DISCOVERED);
+
+    fp.ProcessReferences([](BaseObject*) { return false; });
+
+    GC_EXPECT_EQ(processor.Enqueued(ReferenceType::FINAL), static_cast<size_t>(1));
+    size_t queuedRoots = 0;
+    fp.VisitGCRoots([&](RootSlot&) { ++queuedRoots; });
+    GC_EXPECT_EQ(queuedRoots, static_cast<size_t>(1));
+    GC_EXPECT_EQ(fp.VisitFinalizers([](RootSlot&) {}), static_cast<U32>(0));
 }
 
 #if defined(MRT_TESTABLE_INTERNALS)

@@ -67,7 +67,7 @@ GC_TEST(ReferenceProcessor, WeakDiscoveryPublishesNoStrongMarkWork)
     ReferenceProcessor& processor =
         Heap::GetHeap().GetCollectorResources().GetFinalizerProcessor().GetReferenceProcessor();
     processor.ProcessReferences([](BaseObject*) { return true; });
-    processor.EnqueueReferences([](BaseObject*) {});
+    processor.EnqueueReferences([](BaseObject*) { return true; });
 }
 
 #if defined(MRT_TESTABLE_INTERNALS)
