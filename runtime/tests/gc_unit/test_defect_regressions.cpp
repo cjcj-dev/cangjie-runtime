@@ -7,8 +7,6 @@
 // Phase-2 defect regression net (甲): each case anchors a shipped fix commit + product site.
 // Contracts only — not implementation trivia. Product symbols where the harness can reach them.
 
-#define MRT_EXPORT_ROOT_HANDLE_TESTS 1
-
 #include <cstdint>
 #include <cstring>
 #include <sys/mman.h>
@@ -16,8 +14,11 @@
 
 #include "Common/ColourMask.h"
 #include "Common/ColourTypes.h"
+#include "Heap/Barrier/Barrier.h"
+#include "Heap/Barrier/RememberedSet.h"
 #include "Heap/Collector/Collector.h"
 #include "Heap/Collector/GcStats.h"
+#include "Heap/Heap.h"
 #include "ObjectModel/RefField.h"
 
 extern "C" size_t MCC_GetGCCount();
@@ -67,6 +68,56 @@ Uptr ModelStripFieldPlace(Uptr maybeColouredPlace)
 {
     return RefField<>(maybeColouredPlace).GetAddress();
 }
+
+class ExportHandleTestCollector final : public Collector {
+public:
+    void Init() override {}
+    void RunGarbageCollection(uint64_t, GCReason) override {}
+    bool ShouldIgnoreRequest(GCRequest&) override { return false; }
+    FindToVersionResult FindToVersion(BaseObject*) const override
+    {
+        return FindToVersionResult::NotForwarded();
+    }
+    bool TryUpdateRefField(BaseObject*, RefField<>&, BaseObject*&) const override { return false; }
+    bool IsOldPointer(RefField<>&) const override { return false; }
+    RefField<> GetAndTryTagRefField(BaseObject* obj) const override
+    {
+        return RefField<>(GcUnit::StoreGoodPointer(obj));
+    }
+};
+
+class InstalledExportHandleBarrier final {
+public:
+    explicit InstalledExportHandleBarrier(Barrier& barrier)
+        : previous(Heap::currentBarrierPtr), installed(&barrier)
+    {
+        Heap::currentBarrierPtr = &installed;
+    }
+
+    ~InstalledExportHandleBarrier() { Heap::currentBarrierPtr = previous; }
+
+private:
+    Barrier** previous;
+    Barrier* installed;
+};
+
+struct ExportHandleFixture {
+    ExportHandleFixture() : barrier(collector, rememberedSet), installed(barrier) {}
+
+    BaseObject* PlaceThirdObject()
+    {
+        const MAddress address = reinterpret_cast<MAddress>(heap.obj0) + 128;
+        BaseObject* object = heap.PlaceObject(address);
+        heap.region0->SetRegionAllocPtr(address + 64);
+        return object;
+    }
+
+    GcHeapFixture heap;
+    ExportHandleTestCollector collector;
+    RememberedSet rememberedSet;
+    Barrier barrier;
+    InstalledExportHandleBarrier installed;
+};
 
 } // namespace
 
@@ -427,15 +478,16 @@ GC_TEST(DefectRegress, GcCountExportReadsAtomic)
 // Broken sibling is in red_proof.cpp (double-remove recycles the same index twice).
 GC_TEST(DefectRegress, ExportHandleDoubleRemoveNoAlias)
 {
+    ExportHandleFixture fx;
     ExportRootTable table;
-    BaseObject* objA = reinterpret_cast<BaseObject*>(static_cast<uintptr_t>(0x1000));
-    BaseObject* objB = reinterpret_cast<BaseObject*>(static_cast<uintptr_t>(0x2000));
-    BaseObject* objC = reinterpret_cast<BaseObject*>(static_cast<uintptr_t>(0x3000));
-    U64 pa = table.RegisterExportRootPlainForHandleTesting(objA);
+    BaseObject* objA = fx.heap.obj0;
+    BaseObject* objB = fx.heap.obj1;
+    BaseObject* objC = fx.PlaceThirdObject();
+    U64 pa = table.RegisterExportRoot(objA);
     table.RemoveExportRoot(pa);
     table.RemoveExportRoot(pa);
-    U64 pb = table.RegisterExportRootPlainForHandleTesting(objB);
-    U64 pc = table.RegisterExportRootPlainForHandleTesting(objC);
+    U64 pb = table.RegisterExportRoot(objB);
+    U64 pc = table.RegisterExportRoot(objC);
     GC_EXPECT_NE(pb, pc);
     GC_EXPECT_TRUE(table.CheckActiveState(pb, objB));
     GC_EXPECT_TRUE(table.CheckActiveState(pc, objC));
@@ -476,12 +528,13 @@ GC_TEST(DefectRegress, LiveHolderOnAllocatingPageKeepsSlot)
 
 GC_TEST(DefectRegress, ExportHandleStaleReuseDoesNotTouchNewOccupant)
 {
+    ExportHandleFixture fx;
     ExportRootTable table;
-    BaseObject* objA = reinterpret_cast<BaseObject*>(static_cast<uintptr_t>(0x4000));
-    BaseObject* objB = reinterpret_cast<BaseObject*>(static_cast<uintptr_t>(0x5000));
-    U64 ha = table.RegisterExportRootPlainForHandleTesting(objA);
+    BaseObject* objA = fx.heap.obj0;
+    BaseObject* objB = fx.heap.obj1;
+    U64 ha = table.RegisterExportRoot(objA);
     table.RemoveExportRoot(ha);
-    U64 hb = table.RegisterExportRootPlainForHandleTesting(objB);
+    U64 hb = table.RegisterExportRoot(objB);
     GC_EXPECT_NE(ha, hb);
     GC_EXPECT_EQ(ExportRootTable::ExportHandleIndex(ha), ExportRootTable::ExportHandleIndex(hb));
     GC_EXPECT_NE(ExportRootTable::ExportHandleGeneration(ha), ExportRootTable::ExportHandleGeneration(hb));
