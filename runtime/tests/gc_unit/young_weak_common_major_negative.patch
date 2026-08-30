@@ -1,0 +1,13 @@
+diff --git a/runtime/src/Heap/Collector/TracingCollector.cpp b/runtime/src/Heap/Collector/TracingCollector.cpp
+--- a/runtime/src/Heap/Collector/TracingCollector.cpp
++++ b/runtime/src/Heap/Collector/TracingCollector.cpp
+@@ -358,7 +358,8 @@ public:
+                 // A weak referent is only discovery input.  Any strong work
+                 // published here would keep the referent graph alive.
+                 if (UNLIKELY(obj->IsWeakRef())) {
+-                    collector.DiscoverWeakReference(obj, workStack);
++                    // Deliberate fault: common-root tracing bypasses weak discovery.
++                    collector.TraceObjectRefFields(obj, workStack);
+                 } else {
+                     collector.TraceObjectRefFields(obj, workStack);
+                 }

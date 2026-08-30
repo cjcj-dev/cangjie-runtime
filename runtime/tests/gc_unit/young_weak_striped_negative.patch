@@ -1,0 +1,13 @@
+diff --git a/runtime/src/Heap/Collector/Mark.cpp b/runtime/src/Heap/Collector/Mark.cpp
+--- a/runtime/src/Heap/Collector/Mark.cpp
++++ b/runtime/src/Heap/Collector/Mark.cpp
+@@ -1689,5 +1689,9 @@ private:
+ #if defined(MRT_TESTABLE_INTERNALS)
+             NoteYoungWeakClosureDiscovery(YoungWeakClosureVariant::STRIPED);
+ #endif
++            BaseObject* referent = collector->ResolveMinorReference(referentField);
++            if (Heap::IsHeapAddress(referent)) {
++                referent->ForEachRefField([&pushTarget](RefField<>& field) { pushTarget(field); });
++            }
+             return;
+         }

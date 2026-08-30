@@ -34,6 +34,7 @@ set(GC_UNIT_SOURCES
     test_forwarding_no_geometry.cpp
     test_z_forwarding_table.cpp
     test_young_conc.cpp
+    test_young_weak.cpp
     test_relocation_set_selector.cpp
     test_store_barrier_buffer.cpp
     test_barrier_old_atomic.cpp

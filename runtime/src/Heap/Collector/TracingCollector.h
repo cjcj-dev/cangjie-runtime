@@ -50,6 +50,12 @@ struct MarkTerminateTestReceipt {
 void ResetMarkTerminateTestReceipt();
 MarkTerminateTestReceipt ReadMarkTerminateTestReceipt();
 void NoteMarkTerminatePauseDuration(uint64_t pauseNs);
+
+struct WeakDiscoveryTestReceipt {
+    size_t discovered = 0;
+};
+void ResetWeakDiscoveryTestReceipt();
+WeakDiscoveryTestReceipt ReadWeakDiscoveryTestReceipt();
 #endif
 
 // prefetch distance for mark.

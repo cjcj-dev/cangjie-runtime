@@ -1,0 +1,14 @@
+diff --git a/runtime/src/Heap/Collector/Mark.cpp b/runtime/src/Heap/Collector/Mark.cpp
+--- a/runtime/src/Heap/Collector/Mark.cpp
++++ b/runtime/src/Heap/Collector/Mark.cpp
+@@ -1339,5 +1339,10 @@ public:
+ #if defined(MRT_TESTABLE_INTERNALS)
+                 NoteYoungWeakClosureDiscovery(YoungWeakClosureVariant::LEGACY_PARALLEL);
+ #endif
++                BaseObject* referent = collector->ResolveMinorReference(referentField);
++                if (Heap::IsHeapAddress(referent)) {
++                    // Deliberate fault: leak referent children into strong work.
++                    referent->ForEachRefField([&pushTarget](RefField<>& field) { pushTarget(field); });
++                }
+                 if (shared.pool != nullptr) {
+                     TryForkTask();

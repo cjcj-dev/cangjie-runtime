@@ -207,6 +207,7 @@ $CXX -std=gnu++17 -O0 -g -Wall -Wextra -pthread -fno-rtti \
   "$SRC/test_z_forwarding_table.cpp" \
   "$SRC/test_allocation_stall_queue.cpp" \
     "$SRC/test_young_conc.cpp" \
+    "$SRC/test_young_weak.cpp" \
     "$SRC/test_relocation_set_selector.cpp" \
     "$SRC/test_store_barrier_buffer.cpp" \
     "$SRC/test_barrier_old_atomic.cpp" \
@@ -439,6 +440,28 @@ for consumer in "${REFERENCE_PROCESSOR_CONSUMERS[@]}"; do
   fi
 done
 echo "GATE_REFERENCE_PROCESSOR_BINDING_OK elf=$OUT/cj_gc_unit"
+
+if [[ "${MRT_TESTABLE_INTERNALS:-0}" == "1" ]]; then
+  YOUNG_WEAK_PRODUCT_CONSUMERS=(
+    'MapleRuntime::WCollector::DoGarbageCollection()'
+    'MapleRuntime::WCollector::TraceHeap()'
+    'MapleRuntime::ResetYoungWeakClosureTestReceipt()'
+    'MapleRuntime::ReadYoungWeakClosureTestReceipt()'
+    'MapleRuntime::ResetWeakDiscoveryTestReceipt()'
+    'MapleRuntime::ReadWeakDiscoveryTestReceipt()'
+  )
+  for consumer in "${YOUNG_WEAK_PRODUCT_CONSUMERS[@]}"; do
+    if /usr/bin/grep -F -q "$consumer" "$REFERENCE_PROCESSOR_FULL"; then
+      echo "GC_UNIT_YOUNG_WEAK_LOCAL_DEFINITION symbol=$consumer" >&2
+      exit 14
+    fi
+    if ! /usr/bin/grep -F -q "$consumer" "$REFERENCE_PROCESSOR_UNDEFINED"; then
+      echo "GC_UNIT_YOUNG_WEAK_IMPORT_MISSING symbol=$consumer" >&2
+      exit 15
+    fi
+  done
+  echo "GATE_YOUNG_WEAK_PRODUCT_BINDING_OK elf=$OUT/cj_gc_unit"
+fi
 
 # Load-heal delivery tests bind four independently replaceable product
 # consumers.  The manifest is independent of the calls currently present in

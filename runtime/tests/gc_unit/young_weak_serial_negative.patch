@@ -1,0 +1,14 @@
+diff --git a/runtime/src/Heap/Collector/Mark.cpp b/runtime/src/Heap/Collector/Mark.cpp
+--- a/runtime/src/Heap/Collector/Mark.cpp
++++ b/runtime/src/Heap/Collector/Mark.cpp
+@@ -1827,5 +1827,10 @@ void WCollector::TraceYoungClosureSerial(WorkStack& workStack, bool fullYoungSca
+ #if defined(MRT_TESTABLE_INTERNALS)
+             NoteYoungWeakClosureDiscovery(YoungWeakClosureVariant::SERIAL);
+ #endif
++            BaseObject* referent = ResolveMinorReference(referentField);
++            if (!Heap::IsHeapAddress(referent)) {
++                continue;
++            }
++            referent->ForEachRefField([&pushTarget](RefField<>& field) { pushTarget(field); });
+             continue;
+         }

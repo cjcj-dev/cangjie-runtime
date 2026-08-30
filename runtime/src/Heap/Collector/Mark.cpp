@@ -74,6 +74,43 @@
 #include "Heap/WCollector/WCollectorInternal.h"
 
 namespace MapleRuntime {
+#if defined(MRT_TESTABLE_INTERNALS)
+namespace {
+std::atomic<uint64_t> g_youngWeakSerialDiscoveries{ 0 };
+std::atomic<uint64_t> g_youngWeakLegacyParallelDiscoveries{ 0 };
+std::atomic<uint64_t> g_youngWeakStripedDiscoveries{ 0 };
+} // namespace
+
+void ResetYoungWeakClosureTestReceipt()
+{
+    g_youngWeakSerialDiscoveries.store(0, std::memory_order_relaxed);
+    g_youngWeakLegacyParallelDiscoveries.store(0, std::memory_order_relaxed);
+    g_youngWeakStripedDiscoveries.store(0, std::memory_order_relaxed);
+}
+
+void NoteYoungWeakClosureDiscovery(YoungWeakClosureVariant variant)
+{
+    switch (variant) {
+        case YoungWeakClosureVariant::SERIAL:
+            g_youngWeakSerialDiscoveries.fetch_add(1, std::memory_order_relaxed);
+            return;
+        case YoungWeakClosureVariant::LEGACY_PARALLEL:
+            g_youngWeakLegacyParallelDiscoveries.fetch_add(1, std::memory_order_relaxed);
+            return;
+        case YoungWeakClosureVariant::STRIPED:
+            g_youngWeakStripedDiscoveries.fetch_add(1, std::memory_order_relaxed);
+            return;
+    }
+}
+
+YoungWeakClosureTestReceipt ReadYoungWeakClosureTestReceipt()
+{
+    return { g_youngWeakSerialDiscoveries.load(std::memory_order_relaxed),
+             g_youngWeakLegacyParallelDiscoveries.load(std::memory_order_relaxed),
+             g_youngWeakStripedDiscoveries.load(std::memory_order_relaxed) };
+}
+#endif
+
 bool WCollector::MarkObject(BaseObject* obj) const
 {
     return MarkObjectImpl(obj, false);
@@ -1301,15 +1338,9 @@ public:
             if (UNLIKELY(object->IsWeakRef())) {
                 HeapSlot<>& referentField = HeapSlotAt<>(reinterpret_cast<MAddress>(object) + TYPEINFO_PTR_SIZE);
                 localWeaks.push_back(reinterpret_cast<MAddress>(&referentField));
-                BaseObject* referent = collector->ResolveMinorReference(referentField);
-                if (!Heap::IsHeapAddress(referent)) {
-                    if (shared.pool != nullptr) {
-                        TryForkTask();
-                    }
-                    continue;
-                }
-                // weak referent double-scan: do not claim referent; N2 CAS converge.
-                referent->ForEachRefField([&pushTarget](RefField<>& field) { pushTarget(field); });
+#if defined(MRT_TESTABLE_INTERNALS)
+                NoteYoungWeakClosureDiscovery(YoungWeakClosureVariant::LEGACY_PARALLEL);
+#endif
                 if (shared.pool != nullptr) {
                     TryForkTask();
                 }
@@ -1657,11 +1688,9 @@ private:
         if (UNLIKELY(object->IsWeakRef())) {
             HeapSlot<>& referentField = HeapSlotAt<>(reinterpret_cast<MAddress>(object) + TYPEINFO_PTR_SIZE);
             localWeaks.push_back(reinterpret_cast<MAddress>(&referentField));
-            BaseObject* referent = collector->ResolveMinorReference(referentField);
-            if (!Heap::IsHeapAddress(referent)) {
-                return;
-            }
-            referent->ForEachRefField([&pushTarget](RefField<>& field) { pushTarget(field); });
+#if defined(MRT_TESTABLE_INTERNALS)
+            NoteYoungWeakClosureDiscovery(YoungWeakClosureVariant::STRIPED);
+#endif
             return;
         }
         object->ForEachRefField([this, &localSlots, &pushTarget](RefField<>& field) {
@@ -1797,11 +1826,9 @@ void WCollector::TraceYoungClosureSerial(WorkStack& workStack, bool fullYoungSca
         if (UNLIKELY(object->IsWeakRef())) {
             HeapSlot<>& referentField = HeapSlotAt<>(reinterpret_cast<MAddress>(object) + TYPEINFO_PTR_SIZE);
             (void)LedgerInsert(weakSlots, reinterpret_cast<MAddress>(&referentField));
-            BaseObject* referent = ResolveMinorReference(referentField);
-            if (!Heap::IsHeapAddress(referent)) {
-                continue;
-            }
-            referent->ForEachRefField([&pushTarget](RefField<>& field) { pushTarget(field); });
+#if defined(MRT_TESTABLE_INTERNALS)
+            NoteYoungWeakClosureDiscovery(YoungWeakClosureVariant::SERIAL);
+#endif
             continue;
         }
         object->ForEachRefField([&recordReachableSlot, &pushTarget, recordSlots](RefField<>& field) {
@@ -2075,6 +2102,30 @@ void WCollector::TraceYoungClosure(WorkStack& workStack, bool fullYoungScan, Min
         return;
     }
     GCThreadPool* threadPool = GetThreadPool();
+#if defined(MRT_TESTABLE_INTERNALS)
+    // The unit product SO reaches each shipping closure through the real minor
+    // dispatcher.  Default builds have no selector and retain the production
+    // striped decision below.
+    if (const char* variant = std::getenv("MRT_GC_UNIT_YOUNG_WEAK_VARIANT")) {
+        if (std::strcmp(variant, "serial") == 0) {
+            TraceYoungClosureSerial(workStack, fullYoungScan, reachableObjects, reachableVec, reachableSlots,
+                                    weakSlots, useBitmapLedger, reachableSlotDomain);
+            return;
+        }
+        CHECK_DETAIL(threadPool != nullptr, "young weak variant %s requires a GC thread pool", variant);
+        if (std::strcmp(variant, "legacy-parallel") == 0) {
+            TraceYoungClosureParallel(workStack, fullYoungScan, reachableObjects, reachableVec, reachableSlots,
+                                      weakSlots, useBitmapLedger, threadPool, reachableSlotDomain);
+            return;
+        }
+        if (std::strcmp(variant, "striped") == 0) {
+            TraceYoungClosureStriped(workStack, fullYoungScan, reachableObjects, reachableVec, reachableSlots,
+                                     weakSlots, useBitmapLedger, threadPool, reachableSlotDomain);
+            return;
+        }
+        CHECK_DETAIL(false, "unknown MRT_GC_UNIT_YOUNG_WEAK_VARIANT=%s", variant);
+    }
+#endif
     static const bool forceSerial = []() {
         const char* value = std::getenv("MRT_GCV2_MARKPAR_FORCE_SERIAL");
         return value != nullptr && std::strcmp(value, "1") == 0;
