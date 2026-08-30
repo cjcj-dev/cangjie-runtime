@@ -153,6 +153,10 @@ public:
     {
         return answer == nullptr ? FindToVersionResult::NotForwarded() : FindToVersionResult::Found(answer);
     }
+    BaseObject* ResolveStoreValue(BaseObject* ref) const override
+    {
+        return answer == nullptr ? ref : answer;
+    }
     bool TryUpdateRefField(BaseObject*, RefField<>&, BaseObject*&) const override { return false; }
     bool IsOldPointer(RefField<>&) const override { return false; }
     bool IsFromObject(BaseObject*) const override { return false; }
@@ -193,6 +197,14 @@ struct ReadEntryFixture {
         heap.region1->SetRegionAllocPtr(reinterpret_cast<MAddress>(heap.obj1) + 128);
         field = &HeapSlotAt<>(reinterpret_cast<MAddress>(heap.obj1) + TYPEINFO_PTR_SIZE);
         field->StoreColoured(GcUnit::StoreGoodPointer(heap.obj0));
+    }
+
+    void MakeFieldLoadBad()
+    {
+        const uintptr_t staleRemaps = static_cast<uintptr_t>(::g_cjLoadBadMask) & REMAP_COLOUR_MASK;
+        const uintptr_t staleRemap = staleRemaps & (~staleRemaps + 1);
+        GC_EXPECT_TRUE(staleRemap != 0);
+        field->StoreColoured(GcUnit::ColouredPointer(heap.obj0, staleRemap));
     }
 
     GcHeapFixture heap;
@@ -369,11 +381,12 @@ GC_OTHER_VM_TEST(M0Exit, ReadRuntimeEntryFailsClosedOnForwardedWithoutMapping)
     // omit the active/retired lookup entry: an unresolvable FORWARDED hand-out is exactly the
     // zRelocate.cpp:412-416 shape ZGC forbids.
     fx.heap.obj0->SetStateCode(ObjectState::FORWARDED);
+    fx.MakeFieldLoadBad();
 
     ExpectControlledAbort([&]() { (void)CJ_MCC_ReadRefField(fx.heap.obj1, fx.field); });
 }
 
-GC_TEST(M0Exit, ReadRuntimeEntryForwardedWithMappingResolvesToVersion)
+GC_OTHER_VM_TEST(M0Exit, ReadRuntimeEntryForwardedWithMappingResolvesToVersion)
 {
     ReadEntryFixture fx;
     BaseObject* publishedCopy = fx.heap.PlaceObject(fx.heap.heapStart + 256);
@@ -381,6 +394,7 @@ GC_TEST(M0Exit, ReadRuntimeEntryForwardedWithMappingResolvesToVersion)
     GC_EXPECT_TRUE(publishedCopy->IsValidObject());
     fx.heap.obj0->SetStateCode(ObjectState::FORWARDED);
     fx.collector.answer = publishedCopy;
+    fx.MakeFieldLoadBad();
 
     ObjectPtr got = CJ_MCC_ReadRefField(fx.heap.obj1, fx.field);
 
@@ -398,6 +412,7 @@ GC_TEST(M0Exit, ReadRuntimeEntryResolvedPathCountsM0Exit)
     std::memcpy(publishedCopy, fx.heap.obj0, fx.heap.obj0->GetSize());
     fx.heap.obj0->SetStateCode(ObjectState::FORWARDED);
     fx.collector.answer = publishedCopy;
+    fx.MakeFieldLoadBad();
     const M0ExitDiagnostics::Counts before = M0ExitDiagnostics::GetCounts();
 
     ObjectPtr got = CJ_MCC_ReadRefField(fx.heap.obj1, fx.field);
@@ -585,6 +600,7 @@ GC_TEST(M0Exit, ReadRuntimeEntryResolvedNormalPathIsSilent)
     ReadEntryFixture fx;
     fx.heap.obj0->SetStateCode(ObjectState::FORWARDED);
     fx.collector.answer = fx.heap.obj1;
+    fx.MakeFieldLoadBad();
     const M0ExitDiagnostics::Counts before = M0ExitDiagnostics::GetCounts();
 
     ObjectPtr got = CJ_MCC_ReadRefField(fx.heap.obj1, fx.field);
