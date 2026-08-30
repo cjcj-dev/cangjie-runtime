@@ -83,6 +83,20 @@ public:
     // mutators alive. Callers must FlipForMinor first. DrainForMinor = Flip + Scan.
     size_t ScanPreviousForMinor(std::unordered_set<MAddress>& records);
 
+#if defined(MRT_GC_UNIT_TESTS)
+    struct FlipTouchCounts {
+        size_t bitmapWords;
+        size_t dirtyWords;
+    };
+
+    // Structural complexity receipt for the STW operation. These counters are
+    // absent from product builds; the default build retains the exact flip body
+    // without test accounting branches or storage.
+    void ResetFlipTouchCountsForTest();
+    FlipTouchCounts ReadFlipTouchCountsForTest() const;
+    FlipTouchCounts MeasureClearBufferTouchesForTest(size_t buffer);
+#endif
+
     // Non-destructive view of the active (next-cycle) records for verification.
     std::unordered_set<MAddress> Snapshot() const;
     bool Contains(MAddress fieldAddress) const;
