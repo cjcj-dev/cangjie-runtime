@@ -21,6 +21,14 @@
 #include "Heap/Verify/ProbeReadRouteDiag.h"
 
 namespace MapleRuntime {
+#if defined(MRT_GC_UNIT_TESTS)
+namespace {
+thread_local bool flipTouchAccountingActive = false;
+thread_local size_t flipBitmapWordTouches = 0;
+thread_local size_t flipDirtyWordTouches = 0;
+} // namespace
+#endif
+
 RememberedSet::RememberedSet()
 {
     for (size_t buffer = 0; buffer < kBufferCount; ++buffer) {
@@ -271,10 +279,17 @@ void RememberedSet::FlipForMinor()
     CheckInitialized();
     size_t scanBuffer = activeBuffer.load(std::memory_order_relaxed);
     size_t nextBuffer = scanBuffer ^ 1U;
-    CHECK_DETAIL(ClearBuffer(nextBuffer) == 0 && recordCounts[nextBuffer].load(std::memory_order_relaxed) == 0,
-                 "remembered-set next buffer is not empty at minor swap");
+#if defined(MRT_GC_UNIT_TESTS)
+    flipTouchAccountingActive = true;
+#endif
+    // As in ZRememberedSet::flip (zRememberedSet.cpp:34-38), the STW
+    // operation only publishes the other face. ScanPreviousForMinor is the
+    // owner of consuming and clearing the face selected before this flip.
     activeBuffer.store(static_cast<uint8_t>(nextBuffer), std::memory_order_release);
     ProbeReadRouteDiag::NoteRemsetFlip();
+#if defined(MRT_GC_UNIT_TESTS)
+    flipTouchAccountingActive = false;
+#endif
 }
 
 size_t RememberedSet::ScanPreviousForMinor(std::unordered_set<MAddress>& records)
@@ -488,11 +503,21 @@ size_t RememberedSet::ClearBuffer(size_t buffer)
 {
     size_t removed = 0;
     for (size_t dirtyIdx = 0; dirtyIdx < dirtyWordCount; ++dirtyIdx) {
+#if defined(MRT_GC_UNIT_TESTS)
+        if (flipTouchAccountingActive) {
+            ++flipDirtyWordTouches;
+        }
+#endif
         uint64_t dirty = dirtyMaps[buffer][dirtyIdx].exchange(0, std::memory_order_relaxed);
         while (dirty != 0) {
             unsigned wordInDirty = static_cast<unsigned>(__builtin_ctzll(dirty));
             size_t word = dirtyIdx * kBitsPerWord + wordInDirty;
             if (word < wordCount) {
+#if defined(MRT_GC_UNIT_TESTS)
+                if (flipTouchAccountingActive) {
+                    ++flipBitmapWordTouches;
+                }
+#endif
                 removed += static_cast<size_t>(
                     __builtin_popcountll(bitmaps[buffer][word].exchange(0, std::memory_order_relaxed)));
             }
@@ -503,6 +528,29 @@ size_t RememberedSet::ClearBuffer(size_t buffer)
     CHECK_DETAIL(removed == expected, "remembered-set dirty index mismatch: bitmap=%zu count=%zu", removed, expected);
     return removed;
 }
+
+#if defined(MRT_GC_UNIT_TESTS)
+void RememberedSet::ResetFlipTouchCountsForTest()
+{
+    flipBitmapWordTouches = 0;
+    flipDirtyWordTouches = 0;
+}
+
+RememberedSet::FlipTouchCounts RememberedSet::ReadFlipTouchCountsForTest() const
+{
+    return FlipTouchCounts { flipBitmapWordTouches, flipDirtyWordTouches };
+}
+
+RememberedSet::FlipTouchCounts RememberedSet::MeasureClearBufferTouchesForTest(size_t buffer)
+{
+    CHECK_DETAIL(buffer < kBufferCount, "invalid remembered-set test buffer %zu", buffer);
+    ResetFlipTouchCountsForTest();
+    flipTouchAccountingActive = true;
+    (void)ClearBuffer(buffer);
+    flipTouchAccountingActive = false;
+    return ReadFlipTouchCountsForTest();
+}
+#endif
 
 uint8_t RememberedSet::BeginFullClear()
 {

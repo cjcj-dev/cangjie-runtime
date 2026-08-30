@@ -903,3 +903,116 @@ GC_TEST(Remset, ReRecordWhileConsumingLandsInTheNextCycleBuffer)
     rs.DrainForMinor(thirdMinor);
     GC_EXPECT_EQ(thirdMinor.size(), 0u);
 }
+
+#if defined(MRT_GC_UNIT_TESTS)
+namespace {
+
+std::unordered_set<MAddress> MakeFlipSlots(MAddress start, size_t capacity, size_t count, size_t phase)
+{
+    const size_t available = capacity / sizeof(RefField<>);
+    const size_t stride = available / count;
+    std::unordered_set<MAddress> slots;
+    slots.reserve(count);
+    for (size_t i = 0; i < count; ++i) {
+        const size_t bit = (phase + i * stride) % available;
+        slots.insert(start + bit * sizeof(RefField<>));
+    }
+    return slots;
+}
+
+void RecordFlipSlots(RememberedSet& rememberedSet, const std::unordered_set<MAddress>& slots)
+{
+    for (MAddress slot : slots) {
+        rememberedSet.Record(slot);
+    }
+}
+
+} // namespace
+
+// Positive control for the word-touch receipt. A real ClearBuffer over a
+// non-empty face must be visible in both channels; otherwise a zero reported
+// by the O(1) guard below would not be evidence.
+GC_TEST(Remset, FlipTouchReceiptPositiveControl)
+{
+    constexpr MAddress start = 0x100000000ULL;
+    constexpr size_t capacity = 64 * 1024;
+    RememberedSet rs;
+    rs.Initialize(start, capacity);
+    rs.Record(start);
+
+    const size_t active = rs.activeBuffer.load(std::memory_order_relaxed);
+    const auto touches = rs.MeasureClearBufferTouchesForTest(active);
+    std::fprintf(stderr, "DETAIL remset_flip_touch_control bitmap_words=%zu dirty_words=%zu\n",
+                 touches.bitmapWords, touches.dirtyWords);
+    GC_EXPECT_TRUE(touches.bitmapWords > 0);
+    GC_EXPECT_TRUE(touches.dirtyWords > 0);
+    GC_EXPECT_EQ(rs.Size(), 0u);
+}
+
+// Two bitmap capacities x two cardinalities. Flip itself must touch no bitmap
+// or dirty-map word. The post-flip producer writes before the deferred consumer
+// runs, so exact set equality on both faces also proves that the consumer reads
+// the pre-flip contents and does not mix in records from the new current face.
+GC_TEST(Remset, FlipIsConstantTimeAndPreservesFaceEpochs)
+{
+    struct FlipCase {
+        size_t capacity;
+        size_t preCount;
+        size_t postCount;
+    };
+    constexpr MAddress start = 0x200000000ULL;
+    const FlipCase cases[] = {
+        { 64 * 1024, 1, 2 },
+        { 64 * 1024, 257, 131 },
+        { 8 * 1024 * 1024, 1, 2 },
+        { 8 * 1024 * 1024, 257, 131 },
+    };
+
+    for (const FlipCase& testCase : cases) {
+        RememberedSet rs;
+        rs.Initialize(start, testCase.capacity);
+        const auto pre = MakeFlipSlots(start, testCase.capacity, testCase.preCount, 0);
+        const auto post = MakeFlipSlots(start, testCase.capacity, testCase.postCount, 1);
+        RecordFlipSlots(rs, pre);
+
+        rs.ResetFlipTouchCountsForTest();
+        rs.FlipForMinor();
+        const auto firstFlip = rs.ReadFlipTouchCountsForTest();
+        RecordFlipSlots(rs, post);
+        std::unordered_set<MAddress> previous;
+        const size_t previousCount = rs.ScanPreviousForMinor(previous);
+        const auto current = rs.Snapshot();
+        std::fprintf(stderr,
+                     "DETAIL remset_flip capacity=%zu pre=%zu post=%zu first_bitmap_words=%zu "
+                     "first_dirty_words=%zu previous=%zu current=%zu\n",
+                     testCase.capacity, testCase.preCount, testCase.postCount, firstFlip.bitmapWords,
+                     firstFlip.dirtyWords, previousCount, current.size());
+        GC_EXPECT_EQ(firstFlip.bitmapWords, 0u);
+        GC_EXPECT_EQ(firstFlip.dirtyWords, 0u);
+        GC_EXPECT_EQ(previousCount, testCase.preCount);
+        GC_EXPECT_TRUE(previous == pre);
+        GC_EXPECT_EQ(current.size(), testCase.postCount);
+        GC_EXPECT_TRUE(current == post);
+
+        // The first deferred consumer cleared the face that becomes current
+        // here. The second consumer must return exactly the post-flip set,
+        // leaving neither pre-flip residue nor current-face residue behind.
+        rs.ResetFlipTouchCountsForTest();
+        rs.FlipForMinor();
+        const auto secondFlip = rs.ReadFlipTouchCountsForTest();
+        std::unordered_set<MAddress> secondPrevious;
+        const size_t secondPreviousCount = rs.ScanPreviousForMinor(secondPrevious);
+        const auto secondCurrent = rs.Snapshot();
+        std::fprintf(stderr,
+                     "DETAIL remset_flip_reuse capacity=%zu pre=%zu post=%zu second_bitmap_words=%zu "
+                     "second_dirty_words=%zu previous=%zu current=%zu\n",
+                     testCase.capacity, testCase.preCount, testCase.postCount, secondFlip.bitmapWords,
+                     secondFlip.dirtyWords, secondPreviousCount, secondCurrent.size());
+        GC_EXPECT_EQ(secondFlip.bitmapWords, 0u);
+        GC_EXPECT_EQ(secondFlip.dirtyWords, 0u);
+        GC_EXPECT_EQ(secondPreviousCount, testCase.postCount);
+        GC_EXPECT_TRUE(secondPrevious == post);
+        GC_EXPECT_TRUE(secondCurrent.empty());
+    }
+}
+#endif
