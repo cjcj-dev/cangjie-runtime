@@ -605,8 +605,7 @@ Value MethodInfo::ApplyCJMethodImpl(ArgValue* argValues, void** sretSlot)
 
 void MethodInfo::PrepareSRet(ArgValue* argValues, void**& sretSlot, TypeInfo* retType)
 {
-    U32 size = retType->IsVArray() ? retType->GetFieldNum() *
-        retType->GetComponentTypeInfo()->GetInstanceSize() : retType->GetInstanceSize();
+    U32 size = retType->GetInstanceSize();
     sretSlot = static_cast<void**>(MemoryAlloc(1, sizeof(void*)));
     CHECK_DETAIL(sretSlot != nullptr, "PrepareSRet: allocate native sret slot failed");
     if (HasSRetNotGeneric() || HasSRetWithKnowGenericStruct()) {
