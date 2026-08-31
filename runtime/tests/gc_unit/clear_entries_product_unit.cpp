@@ -144,6 +144,27 @@ struct RelocationReceiptTestAccess {
         return result;
     }
 
+    static BaseObject* ProductRelocateOrRemap(
+        WCollector& collector, BaseObject* from, ZGenerationId generation)
+    {
+        using ProductFn = BaseObject* (*)(const WCollector*, BaseObject*, ZGenerationId);
+        void* handle = dlopen("libcangjie-runtime.so", RTLD_NOW | RTLD_NOLOAD);
+        GC_EXPECT_TRUE(handle != nullptr);
+        void* symbol = handle == nullptr ? nullptr : dlsym(
+            handle,
+            "_ZNK12MapleRuntime10WCollector24relocate_or_remap_objectEPNS_10BaseObjectENS_13ZGenerationIdE");
+        GC_EXPECT_TRUE(symbol != nullptr);
+        Dl_info info {};
+        GC_EXPECT_TRUE(symbol != nullptr && dladdr(symbol, &info) != 0 && info.dli_fname != nullptr &&
+                       std::strstr(info.dli_fname, "libcangjie-runtime.so") != nullptr);
+        BaseObject* result = symbol == nullptr ? nullptr :
+            reinterpret_cast<ProductFn>(symbol)(&collector, from, generation);
+        if (handle != nullptr) {
+            (void)dlclose(handle);
+        }
+        return result;
+    }
+
     static BaseObject* ForwardExclusive(
         WCollector& collector, BaseObject* from, BaseObject* to, RegionInfo* copyPage)
     {
@@ -253,6 +274,18 @@ std::mutex CopyAdmissionBarrier::mu;
 std::condition_variable CopyAdmissionBarrier::cv;
 bool CopyAdmissionBarrier::entered = false;
 bool CopyAdmissionBarrier::released = false;
+
+struct CopyAdmissionWitness {
+    static void Reset() { hits.store(0, std::memory_order_relaxed); }
+
+    static void Hook(RegionInfo*, BaseObject*) { hits.fetch_add(1, std::memory_order_relaxed); }
+
+    static uint32_t Hits() { return hits.load(std::memory_order_relaxed); }
+
+    static std::atomic<uint32_t> hits;
+};
+
+std::atomic<uint32_t> CopyAdmissionWitness::hits { 0 };
 
 using ProductSetCopyAdmissionTestHook = void (*)(void (*)(RegionInfo*, BaseObject*));
 
@@ -483,6 +516,89 @@ GC_TEST(ForwardingPublicationProduct, BarrierResolvesForwardedFromThroughCollect
 
     CleanupLateBackfill(fx, state);
     RelocationReceiptTestAccess::BindCollector(Heap::GetHeap().GetCollectorResources(), nullptr);
+}
+
+// ZGC zRelocate.cpp:382-409: the mutator runtime entry itself must retain the
+// forwarding page and perform the first copy before falling back to a worker.
+// ResolveBarrier's completed-route case above returns at WCollector.h:448-454;
+// call the exported product entry here so that this arm cannot borrow that fast
+// return or a test-ELF inline definition.
+GC_TEST(ForwardingPublicationProduct, MutatorRuntimeEntryReachesCopyAdmission)
+{
+    ProductSetCopyAdmissionTestHook setCopyAdmissionHook = ProductSetCopyAdmissionTestHookFn();
+    if (setCopyAdmissionHook == nullptr) {
+        std::fprintf(stderr, "MUTATOR_ENTRY_TEST_NOT_RUN reason=HOOK_ABSENT\n");
+        return;
+    }
+
+    GcHeapFixture& fx = ProductFixture();
+    RelocationReceiptTestAccess::ReleaseListOwnership(RegionInfo::GetRegionInfo(4));
+    RelocationReceiptTestAccess::ReleaseListOwnership(RegionInfo::GetRegionInfo(3));
+    RegionInfo* region = RegionInfo::InitRegion(4, 1, RegionInfo::UnitRole::SMALL_SIZED_UNITS);
+    RegionInfo* destination = RegionInfo::InitRegion(3, 1, RegionInfo::UnitRole::SMALL_SIZED_UNITS);
+    GC_EXPECT_TRUE(region != nullptr && destination != nullptr);
+    region->SetRegionType(RegionInfo::RegionType::FROM_REGION);
+    destination->SetRegionType(RegionInfo::RegionType::THREAD_LOCAL_REGION);
+
+    BaseObject* from = fx.PlaceObject(region->GetRegionStart() + 64);
+    const size_t objectSize = from->GetSize();
+    BaseObject* expected = fx.PlaceObject(destination->GetRegionStart() + 64);
+    region->SetRegionAllocPtr(reinterpret_cast<MAddress>(from) + objectSize);
+    destination->SetRegionAllocPtr(reinterpret_cast<MAddress>(expected) + objectSize);
+
+    LiveInfo* live = fx.PlantLiveInfo(region);
+    RegionBitmap* bitmap = fx.PlantMarkBitmap<Generation::Old>(live, region->GetRegionSize());
+    (void)bitmap->MarkBits(region->GetAddressOffset(reinterpret_cast<MAddress>(from)),
+                           objectSize, region->GetRegionSize());
+    region->AddLiveByteCount(objectSize);
+
+    WCollector collector(Heap::GetHeap().GetAllocator(), Heap::GetHeap().GetCollectorResources());
+    collector.SetGCPhase(GCPhase::GC_PHASE_FORWARD);
+    RelocationReceiptTestAccess::BindCollector(Heap::GetHeap().GetCollectorResources(), &collector);
+    region->PrepareForwardableRegion(region->GetMarkView<Generation::Old>());
+    region->SetRouteInfo(reinterpret_cast<MAddress>(expected), static_cast<uint32_t>(objectSize));
+    region->SetRouteState(RegionInfo::RouteState::ROUTED);
+
+    RegionSpace& productSpace = reinterpret_cast<RegionSpace&>(Heap::GetHeap().GetAllocator());
+    RelocationRequestQueue& queue = productSpace.GetRegionManager().GetRelocationRequestQueue();
+    queue.BeginWorkers(1);
+    const MAddress fromAddress = reinterpret_cast<MAddress>(from);
+    const auto request = queue.Add(region, fromAddress);
+    GC_EXPECT_TRUE(request.accepted);
+
+    CopyAdmissionWitness::Reset();
+    setCopyAdmissionHook(&CopyAdmissionWitness::Hook);
+    BaseObject* resolved = RelocationReceiptTestAccess::ProductRelocateOrRemap(
+        collector, from, region->generation_id());
+    setCopyAdmissionHook(nullptr);
+
+    const bool published = request.request->state() == RelocationRequestQueue::State::COMPLETED;
+    if (!published) {
+        (void)queue.Fail(fromAddress);
+    }
+    const uint32_t admissionHits = CopyAdmissionWitness::Hits();
+    const bool headerForwarded = from->IsForwarded();
+    const MAddress receipt = ForwardingTable::FindTo(fromAddress);
+    const int32_t copyCount = region->CopyInflight();
+    const bool workersDone = queue.SynchronizePoll().workersDone;
+
+    collector.SetGCPhase(GCPhase::GC_PHASE_IDLE);
+    RelocationReceiptTestAccess::BindCollector(Heap::GetHeap().GetCollectorResources(), nullptr);
+    ForwardingTable::ClearEntries(region->GetRegionStart(), region->GetRegionSize());
+    ForwardingTable::ReclaimRetired("gc-unit-mutator-entry");
+    if (region->IsGhostFromRegion()) {
+        region->DispelGhostFromRegion();
+    }
+    region->metadata.liveInfo = nullptr;
+    fx.FreePlanted(live);
+
+    GC_EXPECT_EQ(admissionHits, 1u);
+    GC_EXPECT_TRUE(resolved == expected);
+    GC_EXPECT_TRUE(published);
+    GC_EXPECT_TRUE(headerForwarded);
+    GC_EXPECT_EQ(receipt, reinterpret_cast<MAddress>(expected));
+    GC_EXPECT_EQ(copyCount, 0);
+    GC_EXPECT_TRUE(workersDone);
 }
 
 GC_TEST(ForwardingPublicationProduct, LateWaitBackfillCannotReopenSealedGeneration)
