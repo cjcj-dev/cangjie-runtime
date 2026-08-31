@@ -1124,7 +1124,8 @@ void WCollector::DoYoungGarbageCollection()
         }
         // The successful mark-end owner is retained for evacuation handoff.
         // Every allocator/y2y batch was either empty at this pause or forced a
-        // failed mark-end and was processed by concurrent_mark_continue.        // Rebuild liveRememberedSlots after concurrent remset merge (stats/audit only;
+        // failed mark-end and was processed by concurrent_mark_continue.
+        // Rebuild liveRememberedSlots after concurrent remset merge (stats/audit only;
         // EvacuateYoungRegions remset authority is consumedSlots — fysfixa 3f27f0c4).
         liveRememberedSlots.clear();
         liveRememberedCount = 0;

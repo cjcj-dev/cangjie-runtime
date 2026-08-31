@@ -180,23 +180,22 @@ void SigHandlerFrameinfo::PrintManagedFrame(char* methodName, char* fileName, ch
     CHECK_IN_SIG(sprintf_s(fileName, maxPrcessSize, "%s", funcDesc->GetFuncDir().Str()) != -1);
     if (*fileName != '\0') {
 #ifdef _WIN64
-        CHECK_IN_SIG(sprintf_s(fileName, maxPrcessSize, "%s%s", fileName, "\\") != -1);
-        CHECK_IN_SIG(sprintf_s(fileName, maxPrcessSize, "%s%s", fileName, funcDesc->GetFuncFilename().Str()) != -1);
+        SigAppend(fileName, maxPrcessSize, "%s", "\\");
+        SigAppend(fileName, maxPrcessSize, "%s", funcDesc->GetFuncFilename().Str());
 #else
-        CHECK_IN_SIG(sprintf_s(fileName, maxPrcessSize, "%s%s", fileName, "/") != -1);
-        CHECK_IN_SIG(sprintf_s(fileName, maxPrcessSize, "%s%s", fileName, funcDesc->GetFuncFilename().Str()) != -1);
+        SigAppend(fileName, maxPrcessSize, "%s", "/");
+        SigAppend(fileName, maxPrcessSize, "%s", funcDesc->GetFuncFilename().Str());
 #endif
     }
     StackMapBuilder stackMapBuild(reinterpret_cast<uintptr_t>(GetFuncStartPC()),
         reinterpret_cast<uintptr_t>(mFrame.GetIP()), reinterpret_cast<uintptr_t>(mFrame.GetFA()));
     MethodMap methodMap = stackMapBuild.Build<MethodMap>();
     lineNumber = methodMap.IsValid() ? methodMap.GetLineNum() : 0;
-    CHECK_IN_SIG(sprintf_s(outputStr, maxPrcessSize, "%s in %s", outputStr,
-        *methodName == '\0' ? "?" : methodName) != -1);
+    SigAppend(outputStr, maxPrcessSize, " in %s", *methodName == '\0' ? "?" : methodName);
     if (*fileName != '\0') {
-        CHECK_IN_SIG(sprintf_s(outputStr, maxPrcessSize, "%s at %s", outputStr, fileName) != -1);
+        SigAppend(outputStr, maxPrcessSize, " at %s", fileName);
         if (lineNumber != 0) {
-            CHECK_IN_SIG(sprintf_s(outputStr, maxPrcessSize, "%s:%d", outputStr, lineNumber) != -1);
+            SigAppend(outputStr, maxPrcessSize, ":%d", lineNumber);
         }
     }
 }
@@ -208,10 +207,9 @@ void SigHandlerFrameinfo::PrintNativeFrame(char* methodName, char* fileName, cha
     CHECK_IN_SIG(Os::Loader::GetBinaryInfoFromAddress(mFrame.GetIP(), &binInfo) != -1);
     CHECK_IN_SIG(sprintf_s(fileName, maxPrcessSize, "%s", binInfo.filePathName.Str()) != -1);
     CHECK_IN_SIG(sprintf_s(methodName, maxPrcessSize, "%s", binInfo.symbolName.Str()) != -1);
-    CHECK_IN_SIG(sprintf_s(outputStr, maxPrcessSize, "%s in %s", outputStr,
-        *methodName == '\0' ? "?" : methodName) != -1);
+    SigAppend(outputStr, maxPrcessSize, " in %s", *methodName == '\0' ? "?" : methodName);
     if (*fileName != '\0') {
-        CHECK_IN_SIG(sprintf_s(outputStr, maxPrcessSize, "%s from %s", outputStr, fileName) != -1);
+        SigAppend(outputStr, maxPrcessSize, " from %s", fileName);
     }
 }
 

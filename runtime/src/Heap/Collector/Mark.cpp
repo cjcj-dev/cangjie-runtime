@@ -2224,7 +2224,8 @@ bool WCollector::MarkYoungSatbBuffer(WorkStack& workStack, bool fullYoungScan, M
         TraceYoungClosure(workStack, fullYoungScan, reachableObjects, reachableVec, reachableSlots, weakSlots,
                           useBitmapLedger);
     }
-    CHECK_DETAIL(workStack.empty(), "young concurrent follow returned with owner work");    return true;
+    CHECK_DETAIL(workStack.empty(), "young concurrent follow returned with owner work");
+    return true;
 }
 
 bool WCollector::TryEndYoungMark(WorkStack& workStack, YoungConcWindowStats* windowStats)

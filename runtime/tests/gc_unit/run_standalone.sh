@@ -78,17 +78,14 @@ if [[ "${MRT_TESTABLE_INTERNALS:-0}" == "1" ]]; then
 fi
 
 # Keep the standalone test translation units in the same compile-time
-# configuration as the product SO they bind.  The default SO deliberately has
-# no segmented-array test hooks; an MRT_GC_UNIT_TESTS SO exports the hook and
-# must compile the corresponding integration tests into this executable.
-if nm -D "$RUNTIME_LIB_DIR/libcangjie-runtime.so" 2>/dev/null | \
-    /usr/bin/grep 'CJ_MRT_SetLargeArrayInitTestHooks' >/dev/null; then# configuration as the product SO they bind. The default SO deliberately has
+# configuration as the product SO they bind. The default SO deliberately has
 # neither test-only export; an MRT_GC_UNIT_TESTS SO must compile both integration
 # suites into this executable so a partial product configuration fails at link.
 nm -D "$RUNTIME_LIB_DIR/libcangjie-runtime.so" >"$OUT/runtime-dynamic-symbols.txt"
 if /usr/bin/grep -Eq \
     'ShouldWaitForIgnoredGcRequest|CJ_MRT_SetLargeArrayInitTestHooks|SetAllocationStallTestHooks|PendingStalledAllocations' \
-    "$OUT/runtime-dynamic-symbols.txt"; then  TEST_DEFINES+=(-DMRT_GC_UNIT_TESTS=1)
+    "$OUT/runtime-dynamic-symbols.txt"; then
+  TEST_DEFINES+=(-DMRT_GC_UNIT_TESTS=1)
   echo "GC_UNIT_PRODUCT_CONFIGURATION=MRT_GC_UNIT_TESTS"
 else
   echo "GC_UNIT_PRODUCT_CONFIGURATION=DEFAULT"
@@ -100,6 +97,7 @@ else
   STALL_PRODUCT_OBSERVE=0
 fi
 echo "STALL_PRODUCT_OBSERVE=$STALL_PRODUCT_OBSERVE"
+
 # The M0 counter accessor is deliberately absent from the default product. Compile its five
 # observer tests only when the linked SO was built with MRT_GC_UNIT_TESTS=ON.
 M0_TEST_ARGS=()
@@ -148,16 +146,13 @@ if [[ -d "$ROOT/runtime/output/temp/include" ]]; then
   INC_FLAGS+=(-I"$ROOT/runtime/output/temp/include")
 fi
 
-GC_UNIT_DEFS=(-DMRT_ZSTAT_COMPILED=1)
-nm -D "$RUNTIME_LIB_DIR/libcangjie-runtime.so" >"$OUT/runtime-dynamic-symbols.txt"
-if /usr/bin/grep -q 'ShouldWaitForIgnoredGcRequest' "$OUT/runtime-dynamic-symbols.txt"; then
-  GC_UNIT_DEFS+=(-DMRT_GC_UNIT_TESTS=1)
-fi# A weak referent is a discovery input, not a strong tracing root. Keep thisif [[ "${GC_UNIT_MUTUALWAIT_MANIFEST_ONLY:-0}" == "1" ]]; then
+if [[ "${GC_UNIT_MUTUALWAIT_MANIFEST_ONLY:-0}" == "1" ]]; then
   validate_mutualwait_manifest
   exit $?
 fi
 
-# A weak referent is a discovery input, not a strong tracing root. Keep this# source-level consumer guard next to the product-linked behavior tests: the
+# A weak referent is a discovery input, not a strong tracing root. Keep this
+# source-level consumer guard next to the product-linked behavior tests: the
 # positive anchor proves the guard inspected the active collector source, and
 # reintroducing the old referent traversal fails before any test can pass.
 WEAK_DISCOVERY_SOURCE="$ROOT/runtime/src/Heap/Collector/TracingCollector.cpp"
@@ -174,6 +169,7 @@ if /usr/bin/grep -F -q \
   exit 12
 fi
 echo "GATE_WEAK_DISCOVERY_NO_STRONG_TRACE_OK source=$WEAK_DISCOVERY_SOURCE"
+
 # Keep this hand-driven entry point structurally identical to the CMake
 # cj_gc_unit target: product inline/template helpers stay hidden and static
 # archives cannot re-export weak copies of the product symbols exercised via
@@ -181,7 +177,6 @@ echo "GATE_WEAK_DISCOVERY_NO_STRONG_TRACE_OK source=$WEAK_DISCOVERY_SOURCE"
 $CXX -std=gnu++17 -O0 -g -Wall -Wextra -pthread -fno-rtti \
   -fvisibility-inlines-hidden \
   "${RANGE_REGISTRY_FLAGS[@]}" \
-  "${GC_UNIT_DEFS[@]}" \
   "${TEST_DEFINES[@]}" \
   "${TESTABLE_FLAGS[@]}" \
   "${INC_FLAGS[@]}" \
@@ -273,10 +268,12 @@ STANDALONE_SYMBOLS=(
 )
 STANDALONE_FULL_SYMBOLS=(
   _ZN12MapleRuntime10RegionInfo28PreserveRetainedLiveInfoUpToEm
-)# RegionInfo::MarkObject templates are instantiated by other TUs in this ELF.  CJ_MCC_PostWriteRefField
+  CJ_MCC_PostWriteRefField
 )
-# RegionInfo::MarkObject templates are instantiated by other TUs in this ELF.# The concurrent item binds the 4-arg Old instantiation via dlsym only; Tcut×P0
-# is the structural proof that item does not use the local copy.STANDALONE_SYMBOL_DYN="$OUT/cj_gc_unit.dynamic-defined.txt"
+# RegionInfo::MarkObject templates are instantiated by other TUs in this ELF.
+# The concurrent item binds the 4-arg Old instantiation via dlsym only; Tcut×P0
+# is the structural proof that item does not use the local copy.
+STANDALONE_SYMBOL_DYN="$OUT/cj_gc_unit.dynamic-defined.txt"
 STANDALONE_SYMBOL_FULL="$OUT/cj_gc_unit.full-defined.txt"
 nm -D --defined-only "$OUT/cj_gc_unit" >"$STANDALONE_SYMBOL_DYN"
 nm --defined-only "$OUT/cj_gc_unit" >"$STANDALONE_SYMBOL_FULL"
@@ -293,11 +290,8 @@ done
 for symbol in "${STANDALONE_FULL_SYMBOLS[@]}"; do
   if /usr/bin/grep -F -q "$symbol" "$STANDALONE_SYMBOL_DYN" ||
       /usr/bin/grep -F -q "$symbol" "$STANDALONE_SYMBOL_FULL"; then
-    echo "GC_UNIT_STANDALONE_SYMBOL_GUARD_FAIL symbol=$symbol" >&2STANDALONE_SYMBOL_FULL="$OUT/cj_gc_unit.full-defined-product.txt"
-nm --defined-only "$OUT/cj_gc_unit" >"$STANDALONE_SYMBOL_FULL"
-for symbol in "${STANDALONE_SYMBOLS[@]}"; do
-  if /usr/bin/grep -F -q "$symbol" "$STANDALONE_SYMBOL_FULL"; then
-    echo "GC_UNIT_STANDALONE_FULL_NM_GUARD_FAIL symbol=$symbol" >&2    exit 7
+    echo "GC_UNIT_STANDALONE_SYMBOL_GUARD_FAIL symbol=$symbol" >&2
+    exit 7
   fi
 done
 echo "GATE_STANDALONE_SYMBOLS_OK elf=$OUT/cj_gc_unit"

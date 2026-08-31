@@ -1,8 +1,0 @@
-runtime/src/Heap/Allocator/RegionInfo.h:1746:    static bool InGhostFromRegion(BaseObject* obj)
-runtime/src/Heap/Allocator/RegionInfo.h:1747:    {
-runtime/src/Heap/Allocator/RegionInfo.h:1748:        return GetGhostFromRegionAt(reinterpret_cast<uintptr_t>(obj)) != nullptr;
-runtime/src/Heap/Allocator/RegionInfo.h:1749:    }
-runtime/src/Heap/Allocator/RegionInfo.h:1750:
-runtime/src/Heap/Allocator/RegionInfo.h:1751:    static RegionInfo* GetGhostFromRegionAt(uintptr_t allocAddr)
-runtime/src/Heap/Collector/Relocate.cpp:192:    if (RegionInfo::InGhostFromRegion(obj)) {
-runtime/src/Heap/Collector/Relocate.cpp:193:        regionInfo = RegionInfo::GetGhostFromRegionAt(reinterpret_cast<uintptr_t>(obj));
