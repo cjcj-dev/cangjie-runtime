@@ -399,7 +399,7 @@ GC_TEST(M0Correlation, OrdinaryRelocationPropagatesProductToken)
     GC_EXPECT_TRUE(requested.accepted);
     StateWord oldWord = fx.obj0->GetStateWord();
     GC_EXPECT_TRUE(fx.obj0->TryLockObject(oldWord));
-    fx.region0->NoteCopyInflight();
+    GC_EXPECT_TRUE(fx.region0->NoteCopyInflight());
 
     BaseObject* relocated = RelocationReceiptTestAccess::ForwardExclusive(
         collector, fx.obj0, fx.obj1, fx.region0);

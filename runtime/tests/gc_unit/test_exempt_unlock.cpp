@@ -47,7 +47,8 @@ GC_TEST(ExemptLife, ExemptWaitsForLockedThenPublishesDone)
     fx.region0->SetRegionAllocPtr(reinterpret_cast<MAddress>(obj) + 64);
     fx.region0->SetRegionType(RegionInfo::RegionType::FROM_REGION);
     obj->SetStateCode(ObjectState::LOCKED);
-    fx.region0->NoteCopyInflight();
+    ZForwardingLife::reset_copy_open(fx.region0->metadata.copyInflight);
+    GC_EXPECT_TRUE(fx.region0->NoteCopyInflight());
     GC_EXPECT_TRUE(obj->GetStateWord().IsLockedWord());
     GC_EXPECT_EQ(fx.region0->CopyInflight(), 1);
 
@@ -148,7 +149,8 @@ GC_TEST(ZForwardingLife, DrainScopeWaitsCopiedWhenRefCountZero)
     // LEAD-NOTE 0820 21:1x: DrainScope used to return when fwdRefCount==0,
     // so TakeRegion ClearUnits raced a LOCKED copier that never retained.
     GcHeapFixture fx;
-    fx.region0->NoteCopyInflight();
+    ZForwardingLife::reset_copy_open(fx.region0->metadata.copyInflight);
+    GC_EXPECT_TRUE(fx.region0->NoteCopyInflight());
     GC_EXPECT_EQ(fx.region0->CopyInflight(), 1);
     GC_EXPECT_EQ(fx.region0->metadata.fwdRefCount.load(std::memory_order_acquire), 0);
 

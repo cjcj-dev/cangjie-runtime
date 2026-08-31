@@ -1995,17 +1995,29 @@ public:
             return;
         }
         const int32_t inflight = region->CopyInflight();
-        if (inflight == 0) {
-            return;
+        const unsigned admission = static_cast<unsigned>(region->CopyAdmission());
+        const int32_t fwdRef = region->ForwardingRefCount();
+        const unsigned fwdClaimed = static_cast<unsigned>(region->ForwardingClaimed());
+        const unsigned route = static_cast<unsigned>(region->GetRouteState());
+        const unsigned long long life = static_cast<unsigned long long>(region->GetRegionLifeId());
+        DLOG(REGION,
+             "[GCV2][lockstate] payload-drain site=%s copyAdmission=%u copyCount=%d fwdRef=%d "
+             "fwdClaimed=%u route=%u life=%llu region=%p",
+             site != nullptr ? site : "?", admission, inflight, fwdRef, fwdClaimed, route, life,
+             static_cast<void*>(region));
+        if (inflight != 0) {
+            std::fprintf(stderr,
+                         "[GCV2][lockstate] ZERO_UNDER_COPY site=%s copyAdmission=%u copyCount=%d "
+                         "fwdRef=%d fwdClaimed=%u route=%u life=%llu region=%p start=%#zx "
+                         "regionType=%u unitRole=%u copyWait=1\n",
+                         site != nullptr ? site : "?", admission, inflight, fwdRef, fwdClaimed, route, life,
+                         static_cast<void*>(region), static_cast<size_t>(region->GetRegionStart()),
+                         static_cast<unsigned>(region->GetRegionType()),
+                         static_cast<unsigned>(region->GetUnitRole()));
+            std::fflush(stderr);
         }
-        std::fprintf(stderr,
-                     "[GCV2][lockstate] ZERO_UNDER_COPY site=%s inflight=%d region=%p start=%#zx "
-                     "regionType=%u unitRole=%u copyWait=1\n",
-                     site != nullptr ? site : "?", inflight, static_cast<void*>(region),
-                     static_cast<size_t>(region->GetRegionStart()),
-                     static_cast<unsigned>(region->GetRegionType()),
-                     static_cast<unsigned>(region->GetUnitRole()));
-        std::fflush(stderr);
+        // Even an OPEN gate with count 0 must be sealed. A zero snapshot does
+        // not prevent a copier from entering after this read.
         region->WaitCopiedInflight();
     }
 
@@ -2414,7 +2426,7 @@ public:
         ZForwardingLife::ResetForForwarding(metadata.fwdRefCount, metadata.fwdClaimed, metadata.fwdDone);
         ClearForwardingFaceReset();
         ClearCurrentMarkFace();
-        metadata.copyInflight.store(0, std::memory_order_relaxed);
+        ZForwardingLife::reset_copy_open(metadata.copyInflight);
         metadata.routeInfo.Clear();
         metadata._generation_id = G == Generation::Young ? ZGenerationId::young : ZGenerationId::old;
         // Always install ghost membership, including a zero-live page. This is
@@ -2877,20 +2889,33 @@ public:
             if (rs != RouteState::FORWARDED && rs != RouteState::COMPACTED && rs != RouteState::NORMAL) {
                 SetRouteState(NORMAL);
             }
+            // The non-ghost expiry arm is still a forwarding-life boundary.
+            // Seal before resetting the carrier words so an admitted copier
+            // cannot be relabelled as belonging to the next life.
+            WaitCopiedInflight();
         }
         ZForwardingLife::ResetIdle(metadata.fwdRefCount, metadata.fwdClaimed, metadata.fwdDone);
         ClearForwardingFaceReset();
         ClearCurrentMarkFace();
-        metadata.copyInflight.store(0, std::memory_order_relaxed);
+        ZForwardingLife::reset_copy_sealed(metadata.copyInflight);
     }
 
-    void NoteCopyInflight() { ZForwardingLife::note_copy(metadata.copyInflight); }
+    bool BeginCopyAdmission() { return ZForwardingLife::begin_copy(metadata.copyInflight); }
+
+    void CommitCopyAdmission() { ZForwardingLife::commit_copy(metadata.copyInflight); }
+
+    bool NoteCopyInflight() { return ZForwardingLife::note_copy(metadata.copyInflight); }
 
     void EndCopyInflight() { ZForwardingLife::end_copy(metadata.copyInflight); }
 
     void WaitCopiedInflight() { ZForwardingLife::wait_copied(metadata.copyInflight); }
 
-    int32_t CopyInflight() const { return metadata.copyInflight.load(std::memory_order_acquire); }
+    int32_t CopyInflight() const { return ZForwardingLife::copy_count(metadata.copyInflight); }
+
+    ZForwardingLife::CopyAdmissionState CopyAdmission() const
+    {
+        return ZForwardingLife::copy_admission_state(metadata.copyInflight);
+    }
 
     int32_t ForwardingRefCount() const { return metadata.fwdRefCount.load(std::memory_order_acquire); }
 
@@ -3799,7 +3824,7 @@ private:
         uint32_t retainedMarkWordCnt = 0;
         // In-flight copiers that hold LOCKED (TryLock success → Unlock). Fills the
         // 4-byte hole after retainedMarkWordCnt; sizeof(UnitInfo) stays 208.
-        std::atomic<int32_t> copyInflight{ 0 };
+        std::atomic<int32_t> copyInflight{ ZForwardingLife::CopyAdmissionSealedWord() };
 
         // resolveto: Compact packs densely; GetRoute prefix-sum dests are holes.
         // Table maps from-offset → actual dest for COMPACTED regions only.
@@ -4116,7 +4141,7 @@ private:
         SetRouteState(NORMAL);
         ZForwardingLife::ResetIdle(metadata.fwdRefCount, metadata.fwdClaimed, metadata.fwdDone);
         WaitCopiedBeforePayloadWipe(this, "InitRegionInfo");
-        metadata.copyInflight.store(0, std::memory_order_relaxed);
+        ZForwardingLife::reset_copy_sealed(metadata.copyInflight);
         ForwardingTable::ClearEntries(GetRegionStart(), nUnit * RegionInfo::UNIT_SIZE);
         metadata.allocPtr = GetRegionStart();
         metadata.regionEnd = metadata.allocPtr + nUnit * RegionInfo::UNIT_SIZE;

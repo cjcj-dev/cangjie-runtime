@@ -174,7 +174,8 @@ GC_TEST(ForwardingNoGeometry, ArmedLookupAndSuccessfulExclusiveCopyPublishProduc
 
     StateWord oldWord = copyFrom->GetStateWord();
     GC_EXPECT_TRUE(copyFrom->TryLockObject(oldWord));
-    fx.region0->NoteCopyInflight();
+    ZForwardingLife::reset_copy_open(fx.region0->metadata.copyInflight);
+    GC_EXPECT_TRUE(fx.region0->NoteCopyInflight());
     WCollector collector(Heap::GetHeap().GetAllocator(), Heap::GetHeap().GetCollectorResources());
     BaseObject* relocated = MutatorPublishTestAccess::ForwardExclusive(
         collector, copyFrom, copyTo, fx.region0);

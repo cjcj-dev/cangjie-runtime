@@ -74,6 +74,23 @@ namespace MapleRuntime {
 struct CopierRouteMint {
     static CopierRouteToken Make() { return CopierRouteToken(); }
 };
+#if defined(MRT_TESTABLE_INTERNALS)
+using CopyAdmissionTestHook = void (*)(RegionInfo*, BaseObject*);
+static std::atomic<CopyAdmissionTestHook> g_copyAdmissionTestHook{ nullptr };
+
+extern "C" MRT_EXPORT void MRT_SetCopyAdmissionTestHook(CopyAdmissionTestHook hook)
+{
+    g_copyAdmissionTestHook.store(hook, std::memory_order_release);
+}
+
+static void RunCopyAdmissionTestHook(RegionInfo* region, BaseObject* object)
+{
+    CopyAdmissionTestHook hook = g_copyAdmissionTestHook.load(std::memory_order_acquire);
+    if (hook != nullptr) {
+        hook(region, object);
+    }
+}
+#endif
 namespace WCollectorInternal {
 } // namespace WCollectorInternal
 // Frame-colour census after relocate-start flip. Compile-time off; no MRT_GCV2_ env.
@@ -2539,7 +2556,14 @@ BaseObject* WCollector::ForwardObjectImpl(BaseObject* obj, RegionInfo* ghostFrom
         // first visitor.  A ROUTED page with no geometric ticket therefore
         // still relocates through the regular relocation allocator; the
         // forwarding receipt below is the sole publication of the result.
-        if (ghostFromRegion != nullptr && ghostFromRegion->GetRouteState() == RegionInfo::RouteState::ROUTED) {
+        // Once copier admission is sealed, however, the retain-side route
+        // lookup is expected to refuse. Do not allocate a destination that
+        // cannot be consumed; take the object lock below and let the shared
+        // admission CAS linearize the refusal and rollback.
+        const bool copySealed = ghostFromRegion != nullptr &&
+            ghostFromRegion->CopyAdmission() == ZForwardingLife::CopyAdmissionState::SEALED;
+        if (!copySealed && ghostFromRegion != nullptr &&
+            ghostFromRegion->GetRouteState() == RegionInfo::RouteState::ROUTED) {
             const size_t size = RegionSpace::GetAllocSize(*obj);
             planned = reinterpret_cast<BaseObject*>(
                 AllocBuffer::GetOrCreateAllocBuffer()->Allocate(size, AllocType::MOVEABLE_OBJECT));
@@ -2598,9 +2622,9 @@ BaseObject* WCollector::ForwardObjectImpl(BaseObject* obj, RegionInfo* ghostFrom
 
         // 3. hope we can forward this object
         if (obj->TryLockObject(oldWord)) {
-            // zForwarding.cpp:86-108: retain at the moment this thread copies,
-            // not later in Exclusive — Exempt WaitCopied must observe the token
-            // before MarkForwardingDone (REPORT-lockdrain A 1→6 on Exclusive-only +1).
+            // zForwarding.cpp:86-131: admission and drain share one linearized
+            // state. ENTERING is published immediately after TryLockObject so
+            // DrainScope cannot pass the lock->count interval.
             RegionInfo* page = ghostFromRegion;
             if (page == nullptr) {
                 page = RegionInfo::GetGhostFromRegionAt(reinterpret_cast<MAddress>(obj));
@@ -2609,7 +2633,17 @@ BaseObject* WCollector::ForwardObjectImpl(BaseObject* obj, RegionInfo* ghostFrom
                 }
             }
             if (page != nullptr) {
-                page->NoteCopyInflight();
+                if (!page->BeginCopyAdmission()) {
+                    // The old forwarding life is sealed. This object never
+                    // entered its copier set, so restore the header and consume
+                    // only a receipt that the retiring owner already published.
+                    obj->UnlockObject(ObjectState::NORMAL);
+                    return FindToVersion(obj).found();
+                }
+#if defined(MRT_TESTABLE_INTERNALS)
+                RunCopyAdmissionTestHook(page, obj);
+#endif
+                page->CommitCopyAdmission();
             }
             return ForwardObjectExclusive(obj, planned, page);
         }
@@ -2626,8 +2660,9 @@ BaseObject* WCollector::ForwardObjectExclusive(BaseObject* obj)
     if (page == nullptr) {
         page = RegionInfo::TryGetRegionInfoAt(reinterpret_cast<MAddress>(obj));
     }
-    if (page != nullptr) {
-        page->NoteCopyInflight();
+    if (page != nullptr && !page->NoteCopyInflight()) {
+        obj->UnlockObject(ObjectState::NORMAL);
+        return FindToVersion(obj).found();
     }
     return ForwardObjectExclusive(obj, fwdTable.PlanRoute(obj, CopierRouteMint::Make()).dest, page);
 }

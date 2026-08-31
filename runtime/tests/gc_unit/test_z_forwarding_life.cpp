@@ -117,15 +117,17 @@ GC_TEST(ZForwardingLife, ClaimInvertsAndLateRetainRefusesImmediately)
 GC_TEST(ZForwardingLife, CopyInflightPairing)
 {
     std::atomic<int32_t> copy{ 0 };
-    ZForwardingLife::note_copy(copy);
-    ZForwardingLife::note_copy(copy);
-    GC_EXPECT_EQ(copy.load(), 2);
+    GC_EXPECT_TRUE(ZForwardingLife::note_copy(copy));
+    GC_EXPECT_TRUE(ZForwardingLife::note_copy(copy));
+    GC_EXPECT_EQ(ZForwardingLife::copy_count(copy), 2);
     ZForwardingLife::end_copy(copy);
-    GC_EXPECT_EQ(copy.load(), 1);
+    GC_EXPECT_EQ(ZForwardingLife::copy_count(copy), 1);
     ZForwardingLife::end_copy(copy);
-    GC_EXPECT_EQ(copy.load(), 0);
+    GC_EXPECT_EQ(ZForwardingLife::copy_count(copy), 0);
     ZForwardingLife::wait_copied(copy);
-    GC_EXPECT_EQ(copy.load(), 0);
+    GC_EXPECT_EQ(ZForwardingLife::copy_count(copy), 0);
+    GC_EXPECT_TRUE(ZForwardingLife::copy_admission_state(copy) ==
+                   ZForwardingLife::CopyAdmissionState::SEALED);
 }
 
 GC_TEST(ZForwardingLife, RouteDestHoldDecisionDistribution)
@@ -165,7 +167,7 @@ GC_TEST(ZForwardingLife, RouteDestHoldDecisionDistribution)
 GC_TEST(ZForwardingLife, CopyInflightDrainWakes)
 {
     std::atomic<int32_t> copy{ 0 };
-    ZForwardingLife::note_copy(copy);
+    GC_EXPECT_TRUE(ZForwardingLife::note_copy(copy));
     std::atomic<bool> entered{ false };
     std::atomic<bool> finished{ false };
     std::thread waiter([&]() {
@@ -183,7 +185,59 @@ GC_TEST(ZForwardingLife, CopyInflightDrainWakes)
     waiter.join();
     GC_EXPECT_FALSE(finishedBeforeEndCopy);
     GC_EXPECT_TRUE(finished.load(std::memory_order_acquire));
-    GC_EXPECT_EQ(copy.load(), 0);
+    GC_EXPECT_EQ(ZForwardingLife::copy_count(copy), 0);
+    GC_EXPECT_TRUE(ZForwardingLife::copy_admission_state(copy) ==
+                   ZForwardingLife::CopyAdmissionState::SEALED);
+}
+
+GC_TEST(ZForwardingLife, CopyAdmissionEnteringBlocksSealAndLateAdmissionRefuses)
+{
+    std::atomic<int32_t> copy{ ZForwardingLife::CopyAdmissionOpenWord() };
+    GC_EXPECT_TRUE(ZForwardingLife::begin_copy(copy));
+    GC_EXPECT_TRUE(ZForwardingLife::copy_admission_state(copy) ==
+                   ZForwardingLife::CopyAdmissionState::ENTERING);
+
+    std::atomic<bool> drainStarted{ false };
+    std::atomic<bool> drainDone{ false };
+    std::thread drain([&]() {
+        drainStarted.store(true, std::memory_order_release);
+        ZForwardingLife::wait_copied(copy);
+        drainDone.store(true, std::memory_order_release);
+    });
+    JoinGuard drainGuard(drain);
+    while (!drainStarted.load(std::memory_order_acquire)) {
+        std::this_thread::yield();
+    }
+    std::this_thread::sleep_for(std::chrono::milliseconds(5));
+    const bool returnedInEnteringGap = drainDone.load(std::memory_order_acquire);
+
+    ZForwardingLife::commit_copy(copy);
+    while (ZForwardingLife::copy_admission_state(copy) !=
+           ZForwardingLife::CopyAdmissionState::SEALED) {
+        std::this_thread::yield();
+    }
+    const bool returnedWithCopyInflight = drainDone.load(std::memory_order_acquire);
+    GC_EXPECT_EQ(ZForwardingLife::copy_count(copy), 1);
+    ZForwardingLife::end_copy(copy);
+    drain.join();
+
+    const int32_t beforeLateAdmission = ZForwardingLife::copy_count(copy);
+    const bool lateAdmission = ZForwardingLife::note_copy(copy);
+    const int32_t afterLateAdmission = ZForwardingLife::copy_count(copy);
+
+    GC_EXPECT_FALSE(returnedInEnteringGap);
+    GC_EXPECT_FALSE(returnedWithCopyInflight);
+    GC_EXPECT_TRUE(drainDone.load(std::memory_order_acquire));
+    GC_EXPECT_FALSE(lateAdmission);
+    GC_EXPECT_EQ(beforeLateAdmission, 0);
+    GC_EXPECT_EQ(afterLateAdmission, beforeLateAdmission);
+
+    // Positive control: a new forwarding life explicitly reopens the same
+    // word, and serial admission then changes the count.
+    ZForwardingLife::reset_copy_open(copy);
+    GC_EXPECT_TRUE(ZForwardingLife::note_copy(copy));
+    GC_EXPECT_EQ(ZForwardingLife::copy_count(copy), 1);
+    ZForwardingLife::end_copy(copy);
 }
 
 GC_TEST(ZForwardingLife, ClaimedRetainRefusesImmediatelyAndResetIdle)
@@ -211,7 +265,8 @@ GC_TEST(ZForwardingLife, DetachCheckMeasuresAndHonorsGate)
     fx.region0->SetRouteDestHold(1);
     ZForwardingLife::ResetForForwarding(fx.region0->metadata.fwdRefCount, fx.region0->metadata.fwdClaimed,
                                         fx.region0->metadata.fwdDone);
-    fx.region0->NoteCopyInflight();
+    ZForwardingLife::reset_copy_open(fx.region0->metadata.copyInflight);
+    GC_EXPECT_TRUE(fx.region0->NoteCopyInflight());
 
     const bool allowed = FromPageDetach::FromPageDetachCheck(fx.region0, site);
     GC_EXPECT_TRUE(FromPageDetach::GateEnabled());

@@ -48,6 +48,34 @@ void ZForwardingLife::WaitUntilRef(std::atomic<int32_t>& refCount, int32_t expec
     }
 }
 
+void ZForwardingLife::WaitUntilCopyAdmissionSettled(std::atomic<int32_t>& copyWord)
+{
+    while (copy_admission_state(copyWord) == CopyAdmissionState::ENTERING) {
+        sched_yield();
+    }
+}
+
+void ZForwardingLife::wait_copied(std::atomic<int32_t>& copyWord)
+{
+    for (;;) {
+        int32_t word = copyWord.load(std::memory_order_acquire);
+        const CopyAdmissionState state = copy_admission_state(word);
+        if (state == CopyAdmissionState::ENTERING) {
+            WaitUntilCopyAdmissionSettled(copyWord);
+            continue;
+        }
+        if (state == CopyAdmissionState::OPEN) {
+            const int32_t sealed = PackCopyWord(CopyAdmissionState::SEALED, copy_count(word));
+            if (!copyWord.compare_exchange_weak(
+                    word, sealed, std::memory_order_acq_rel, std::memory_order_acquire)) {
+                continue;
+            }
+        }
+        WaitUntilRef(copyWord, CopyAdmissionSealedWord());
+        return;
+    }
+}
+
 void ZForwardingLife::WaitUntilDone(std::atomic<int32_t>& refCount, const std::atomic<bool>& done)
 {
     // zForwarding.cpp:96-100 add_and_wait: wait until is_done. Also treat

@@ -149,6 +149,11 @@ struct RelocationReceiptTestAccess {
     {
         return collector.ForwardObjectExclusive(from, to, copyPage);
     }
+
+    static BaseObject* ForwardImpl(WCollector& collector, BaseObject* from, RegionInfo* copyPage)
+    {
+        return collector.ForwardObjectImpl(from, copyPage);
+    }
 };
 
 // The four delivery fixtures enter the same private product methods that their
@@ -208,6 +213,58 @@ struct LoadHealDeliveryTestAccess {
 } // namespace MapleRuntime
 
 namespace {
+
+struct CopyAdmissionBarrier {
+    static void Reset()
+    {
+        std::lock_guard<std::mutex> guard(mu);
+        entered = false;
+        released = false;
+    }
+
+    static void Hook(RegionInfo*, BaseObject*)
+    {
+        std::unique_lock<std::mutex> lock(mu);
+        entered = true;
+        cv.notify_all();
+        cv.wait(lock, []() { return released; });
+    }
+
+    static void WaitEntered()
+    {
+        std::unique_lock<std::mutex> lock(mu);
+        cv.wait(lock, []() { return entered; });
+    }
+
+    static void Release()
+    {
+        std::lock_guard<std::mutex> guard(mu);
+        released = true;
+        cv.notify_all();
+    }
+
+    static std::mutex mu;
+    static std::condition_variable cv;
+    static bool entered;
+    static bool released;
+};
+
+std::mutex CopyAdmissionBarrier::mu;
+std::condition_variable CopyAdmissionBarrier::cv;
+bool CopyAdmissionBarrier::entered = false;
+bool CopyAdmissionBarrier::released = false;
+
+using ProductSetCopyAdmissionTestHook = void (*)(void (*)(RegionInfo*, BaseObject*));
+
+ProductSetCopyAdmissionTestHook ProductSetCopyAdmissionTestHookFn()
+{
+    void* handle = dlopen("libcangjie-runtime.so", RTLD_NOW | RTLD_NOLOAD);
+    if (handle == nullptr) {
+        handle = dlopen("libcangjie-runtime.so", RTLD_NOW);
+    }
+    return handle == nullptr ? nullptr : reinterpret_cast<ProductSetCopyAdmissionTestHook>(
+        dlsym(handle, "MRT_SetCopyAdmissionTestHook"));
+}
 
 class ResolveBarrier final : public Barrier {
 public:
@@ -1893,7 +1950,7 @@ GC_TEST(ForwardingPublicationProduct, ExclusiveCopyPublishesProductReceipt)
 
     StateWord oldWord = fromObject->GetStateWord();
     GC_EXPECT_TRUE(fromObject->TryLockObject(oldWord));
-    region->NoteCopyInflight();
+    GC_EXPECT_TRUE(region->NoteCopyInflight());
     BaseObject* relocated =
         RelocationReceiptTestAccess::ForwardExclusive(collector, fromObject, toObject, region);
 
@@ -1918,6 +1975,184 @@ GC_TEST(ForwardingPublicationProduct, ExclusiveCopyPublishesProductReceipt)
     }
     region->metadata.liveInfo = nullptr;
     fx.FreePlanted(live);
+}
+
+// The deterministic barrier is inside the product ForwardObjectImpl after the
+// object lock is acquired and ENTERING is published, but before the copier
+// count is committed. DrainScope must wait through that interval, then through
+// the real CopyObject/receipt/Unlock path. Once sealed, a second real entry is
+// refused and rolls its object header back without changing the count.
+GC_TEST(ForwardingPublicationProduct, CopyAdmissionSealWaitsRealCopierAndRejectsLateEntry)
+{
+    ProductSetCopyAdmissionTestHook setCopyAdmissionHook = ProductSetCopyAdmissionTestHookFn();
+    if (setCopyAdmissionHook == nullptr) {
+        std::fprintf(stderr, "COPY_ADMISSION_TEST_NOT_RUN reason=HOOK_ABSENT\n");
+        return;
+    }
+
+    GcHeapFixture& fx = ProductFixture();
+    RegionInfo* region = RegionInfo::InitRegion(2, 1, RegionInfo::UnitRole::SMALL_SIZED_UNITS);
+    RegionInfo* destination = RegionInfo::InitRegion(3, 1, RegionInfo::UnitRole::SMALL_SIZED_UNITS);
+    GC_EXPECT_TRUE(region != nullptr && destination != nullptr);
+    region->SetRegionType(RegionInfo::RegionType::FROM_REGION);
+    destination->SetRegionType(RegionInfo::RegionType::THREAD_LOCAL_REGION);
+
+    BaseObject* serial = fx.PlaceObject(region->GetRegionStart() + 64);
+    const size_t objectSize = serial->GetSize();
+    BaseObject* first = fx.PlaceObject(reinterpret_cast<MAddress>(serial) + objectSize);
+    BaseObject* late = fx.PlaceObject(reinterpret_cast<MAddress>(first) + objectSize);
+    BaseObject* serialTo = fx.PlaceObject(destination->GetRegionStart() + 64);
+    BaseObject* firstTo = fx.PlaceObject(reinterpret_cast<MAddress>(serialTo) + objectSize);
+    BaseObject* lateTo = fx.PlaceObject(reinterpret_cast<MAddress>(firstTo) + objectSize);
+    region->SetRegionAllocPtr(reinterpret_cast<MAddress>(late) + objectSize);
+    destination->SetRegionAllocPtr(reinterpret_cast<MAddress>(lateTo) + objectSize);
+
+    LiveInfo* live = fx.PlantLiveInfo(region);
+    RegionBitmap* bitmap = fx.PlantMarkBitmap<Generation::Old>(live, region->GetRegionSize());
+    const size_t serialOffset = region->GetAddressOffset(reinterpret_cast<MAddress>(serial));
+    const size_t firstOffset = region->GetAddressOffset(reinterpret_cast<MAddress>(first));
+    const size_t lateOffset = region->GetAddressOffset(reinterpret_cast<MAddress>(late));
+    (void)bitmap->MarkBits(serialOffset, objectSize, region->GetRegionSize());
+    (void)bitmap->MarkBits(firstOffset, objectSize, region->GetRegionSize());
+    (void)bitmap->MarkBits(lateOffset, objectSize, region->GetRegionSize());
+    region->AddLiveByteCount(3 * objectSize);
+
+    WCollector collector(Heap::GetHeap().GetAllocator(), Heap::GetHeap().GetCollectorResources());
+    collector.SetGCPhase(GCPhase::GC_PHASE_FORWARD);
+    RelocationReceiptTestAccess::BindCollector(Heap::GetHeap().GetCollectorResources(), &collector);
+    region->PrepareForwardableRegion(region->GetMarkView<Generation::Old>());
+    region->SetRouteInfo(reinterpret_cast<MAddress>(serialTo), static_cast<uint32_t>(3 * objectSize));
+    region->SetRouteState(RegionInfo::RouteState::ROUTED);
+
+    RegionSpace& productSpace = reinterpret_cast<RegionSpace&>(Heap::GetHeap().GetAllocator());
+    RelocationRequestQueue& queue = productSpace.GetRegionManager().GetRelocationRequestQueue();
+    queue.BeginWorkers(1);
+    const MAddress serialAddress = reinterpret_cast<MAddress>(serial);
+    const auto serialRequest = queue.Add(region, serialAddress);
+    GC_EXPECT_TRUE(serialRequest.accepted);
+
+    CopyAdmissionBarrier::Reset();
+    setCopyAdmissionHook(&CopyAdmissionBarrier::Hook);
+    BaseObject* serialResult = nullptr;
+    std::thread serialCopier([&]() {
+        serialResult = RelocationReceiptTestAccess::ForwardImpl(collector, serial, region);
+    });
+    CopyAdmissionBarrier::WaitEntered();
+    const auto serialStateInAdmission = region->CopyAdmission();
+    CopyAdmissionBarrier::Release();
+    serialCopier.join();
+    const bool serialPublished =
+        serialRequest.request->state() == RelocationRequestQueue::State::COMPLETED;
+    if (!serialPublished) {
+        (void)queue.Fail(serialAddress);
+    }
+    const auto serialStateAfterCopy = region->CopyAdmission();
+    const int32_t serialCountAfterCopy = region->CopyInflight();
+    const bool serialHeaderForwarded = serial->IsForwarded();
+
+    const MAddress firstAddress = reinterpret_cast<MAddress>(first);
+    const auto request = queue.Add(region, firstAddress);
+    GC_EXPECT_TRUE(request.accepted);
+
+    CopyAdmissionBarrier::Reset();
+    BaseObject* firstResult = nullptr;
+    std::thread copier([&]() {
+        firstResult = RelocationReceiptTestAccess::ForwardImpl(collector, first, region);
+    });
+    CopyAdmissionBarrier::WaitEntered();
+
+    const bool objectLockedInGap = first->GetStateWord().IsLockedWord();
+    const auto stateInGap = region->CopyAdmission();
+    const int32_t countInGap = region->CopyInflight();
+    std::atomic<bool> drainStarted{ false };
+    std::atomic<bool> drainAcquired{ false };
+    std::atomic<bool> allowWipe{ false };
+    std::atomic<bool> wipeDone{ false };
+    std::atomic<bool> drainDone{ false };
+    std::thread drainer([&]() {
+        drainStarted.store(true, std::memory_order_release);
+        {
+            FromPageDetach::ReusePermitScope reusePermit;
+            RegionInfo::DrainScope drain(region, MutatorRelocate::Retire::TAKE_GARBAGE);
+            drainAcquired.store(true, std::memory_order_release);
+            while (!allowWipe.load(std::memory_order_acquire)) {
+                std::this_thread::yield();
+            }
+            RegionInfo::ClearUnits(
+                region->GetUnitIdx(), region->GetUnitCount(), FillerZeroDiag::Site::TAKE_GARBAGE);
+            wipeDone.store(true, std::memory_order_release);
+        }
+        drainDone.store(true, std::memory_order_release);
+    });
+    while (!drainStarted.load(std::memory_order_acquire)) {
+        std::this_thread::yield();
+    }
+    std::this_thread::sleep_for(std::chrono::milliseconds(5));
+    const bool drainReturnedInGap = drainAcquired.load(std::memory_order_acquire);
+
+    CopyAdmissionBarrier::Release();
+    copier.join();
+    const bool firstPublished =
+        request.request->state() == RelocationRequestQueue::State::COMPLETED;
+    if (!firstPublished) {
+        (void)queue.Fail(firstAddress);
+    }
+    while (!drainAcquired.load(std::memory_order_acquire)) {
+        std::this_thread::yield();
+    }
+    const bool firstHeaderForwarded = first->IsForwarded();
+    const int32_t countAfterDrain = region->CopyInflight();
+    const auto stateAfterDrain = region->CopyAdmission();
+
+    // This call starts from the same real product entry. It acquires the
+    // second object's lock, observes SEALED, rolls back NORMAL, and never
+    // reaches CopyObject or the test hook.
+    const int32_t countBeforeLate = region->CopyInflight();
+    BaseObject* lateResult = reinterpret_cast<BaseObject*>(1);
+    if (!drainReturnedInGap) {
+        lateResult = RelocationReceiptTestAccess::ForwardImpl(collector, late, region);
+    }
+    const int32_t countAfterLate = region->CopyInflight();
+    const auto lateHeader = late->GetStateWord().GetStateCode();
+
+    allowWipe.store(true, std::memory_order_release);
+    drainer.join();
+    setCopyAdmissionHook(nullptr);
+
+    const bool workersDone = queue.SynchronizePoll().workersDone;
+    collector.SetGCPhase(GCPhase::GC_PHASE_IDLE);
+    RelocationReceiptTestAccess::BindCollector(Heap::GetHeap().GetCollectorResources(), nullptr);
+    ForwardingTable::ClearEntries(region->GetRegionStart(), region->GetRegionSize());
+    ForwardingTable::ReclaimRetired("gc-unit-explicit-coverage");
+    if (region->IsGhostFromRegion()) {
+        region->DispelGhostFromRegion();
+    }
+    region->metadata.liveInfo = nullptr;
+    fx.FreePlanted(live);
+
+    GC_EXPECT_TRUE(serialStateInAdmission == ZForwardingLife::CopyAdmissionState::ENTERING);
+    GC_EXPECT_TRUE(serialPublished);
+    GC_EXPECT_TRUE(serialResult == serialTo);
+    GC_EXPECT_TRUE(serialHeaderForwarded);
+    GC_EXPECT_TRUE(serialStateAfterCopy == ZForwardingLife::CopyAdmissionState::OPEN);
+    GC_EXPECT_EQ(serialCountAfterCopy, 0);
+    GC_EXPECT_TRUE(objectLockedInGap);
+    GC_EXPECT_TRUE(stateInGap == ZForwardingLife::CopyAdmissionState::ENTERING);
+    GC_EXPECT_EQ(countInGap, 0);
+    GC_EXPECT_FALSE(drainReturnedInGap);
+    GC_EXPECT_TRUE(drainDone.load(std::memory_order_acquire));
+    GC_EXPECT_TRUE(firstPublished);
+    GC_EXPECT_TRUE(firstResult == firstTo);
+    GC_EXPECT_EQ(request.request->receipt(), reinterpret_cast<MAddress>(firstTo));
+    GC_EXPECT_TRUE(firstHeaderForwarded);
+    GC_EXPECT_EQ(countAfterDrain, 0);
+    GC_EXPECT_TRUE(stateAfterDrain == ZForwardingLife::CopyAdmissionState::SEALED);
+    GC_EXPECT_TRUE(lateResult == nullptr);
+    GC_EXPECT_TRUE(lateHeader == ObjectState::NORMAL);
+    GC_EXPECT_EQ(countBeforeLate, countAfterLate);
+    GC_EXPECT_EQ(countAfterLate, 0);
+    GC_EXPECT_TRUE(wipeDone.load(std::memory_order_acquire));
+    GC_EXPECT_TRUE(workersDone);
 }
 
 // ZGC zRelocate.cpp:1256-1279: the promoted page keeps the relocation-set
