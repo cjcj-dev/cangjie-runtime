@@ -20,6 +20,7 @@
 #include "CjScheduler.h"
 
 namespace MapleRuntime {
+constexpr U32 DEFAULT_FINALIZER_TIMEOUT_MS = 2000;
 #if defined(MRT_TESTABLE_INTERNALS)
 namespace {
 FinalizerProcessor::BeforeFinalizableIdleCheck g_beforeFinalizableIdleCheckForTest;
@@ -201,6 +202,13 @@ void FinalizerProcessor::Wait()
             shouldReclaimHeapGarbage.load(std::memory_order_acquire) ||
             shouldFeedHungryBuffers.load(std::memory_order_acquire);
     });
+}
+
+void FinalizerProcessor::Wait(U32 timeoutMilliSeconds)
+{
+    std::unique_lock<std::mutex> lock(wakeLock);
+    std::chrono::milliseconds epoch(timeoutMilliSeconds);
+    wakeCondition.wait_for(lock, epoch);
 }
 
 void FinalizerProcessor::NotifyStarted()

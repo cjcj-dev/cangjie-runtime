@@ -498,7 +498,8 @@ void Mutator::VisitNativeFrameRoots(const RootVisitor& func)
 
 ObjectRef* Mutator::AddNativeFrameRoot(BaseObject* obj)
 {
-    nativeFrameRoots.emplace_back(ObjectRef{ obj });
+    nativeFrameRoots.emplace_back();
+    StorePlain(nativeFrameRoots.back(), from_object(obj));
     return &nativeFrameRoots.back();
 }
 

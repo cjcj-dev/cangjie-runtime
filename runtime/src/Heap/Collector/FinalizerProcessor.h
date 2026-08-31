@@ -110,6 +110,7 @@ private:
     void InitFinalizerCJThread();
     void NotifyStarted();
     void Wait();
+    void Wait(U32 timeoutMilliSeconds);
     bool EnqueueFinalizableReference(BaseObject* obj);
     bool HasFinalizableJob();
     void FinishFinalizableBatch();
@@ -128,6 +129,7 @@ private:
     volatile bool started;
 
     std::atomic<bool> running{ false };
+    U32 iterationWaitTime;
 
     // finalization
     std::mutex listLock;                 // lock for finalizers & finalizables & workingFinalizables

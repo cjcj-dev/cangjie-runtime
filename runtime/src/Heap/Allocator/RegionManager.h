@@ -637,11 +637,6 @@ public:
         SatisfyStalledAllocations();
         return released;
     }
-    size_t UncommitIdleUnits(size_t maxBytes, uint64_t idleBeforeNs, bool honorCancel = true)
-    {
-        return freeRegionManager.UncommitIdleUnits(maxBytes, idleBeforeNs, honorCancel);
-    }
-
     // Ignore dynamic pinned regions and from regions whose garbage objects are quite few, return the garbage size that
     // can be reclaimed.
     size_t ExemptFromRegions();

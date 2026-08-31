@@ -18,7 +18,7 @@ namespace MapleRuntime {
 class TypeInfo;
 class GenericTypeInfo;
 class Mutator;
-struct ObjectRef;
+class RootSlot;
 class ATTR_PACKED(4) ParameterInfo {
 public:
     U32 GetIndex() { return idx; }
@@ -66,7 +66,7 @@ public:
 private:
     std::vector<void*> argBuffers;
     Mutator* mutator = nullptr;
-    std::vector<ObjectRef*> nativeFrameRoots;
+    std::vector<RootSlot*> nativeFrameRoots;
 };
 
 class ATTR_PACKED(4) MethodInfo {
