@@ -62,6 +62,14 @@ enum class HandVerdict : uint8_t { Usable, Forwarded, ZeroHeader };
 class FindToVersionResult {
 public:
     enum class State : uint8_t { Found, NotManaged, NotForwarded, Unavailable };
+    enum class UnavailableRoute : uint8_t {
+        Unknown,
+        LookupUnavailable,
+        NoGhostForwarded,
+        PublicationRetainFailed,
+        GeometricMissForwarded,
+        LegacyGeometricMiss,
+    };
 
     static FindToVersionResult Found(BaseObject* object)
     {
@@ -70,25 +78,81 @@ public:
     }
     static FindToVersionResult NotManaged() { return FindToVersionResult(State::NotManaged, nullptr); }
     static FindToVersionResult NotForwarded() { return FindToVersionResult(State::NotForwarded, nullptr); }
-    static FindToVersionResult Unavailable() { return FindToVersionResult(State::Unavailable, nullptr); }
+    static FindToVersionResult Unavailable()
+    {
+        return FindToVersionResult(State::Unavailable, nullptr);
+    }
+    static FindToVersionResult Unavailable(UnavailableRoute route, bool forwarded,
+                                           bool fromRegionInfoNull, const char* lookupAnswer,
+                                           uint8_t routeState)
+    {
+        return FindToVersionResult(route, forwarded, fromRegionInfoNull, lookupAnswer, routeState);
+    }
 
     State state() const { return lookupState; }
     BaseObject* found() const { return lookupState == State::Found ? object : nullptr; }
     bool is_unavailable() const { return lookupState == State::Unavailable; }
+    UnavailableRoute unavailable_route() const { return unavailableRoute; }
+    bool unavailable_forwarded() const { return unavailableForwarded; }
+    bool unavailable_from_region_info_null() const { return unavailableFromRegionInfoNull; }
+    const char* unavailable_lookup_answer() const { return unavailableLookupAnswer; }
+    uint8_t unavailable_route_state() const { return unavailableRouteState; }
+
+    const char* unavailable_route_name() const
+    {
+        switch (unavailableRoute) {
+            case UnavailableRoute::LookupUnavailable:
+                return "lookup_unavailable";
+            case UnavailableRoute::NoGhostForwarded:
+                return "no_ghost_forwarded";
+            case UnavailableRoute::PublicationRetainFailed:
+                return "publication_retain_failed";
+            case UnavailableRoute::GeometricMissForwarded:
+                return "geometric_miss_forwarded";
+            case UnavailableRoute::LegacyGeometricMiss:
+                return "legacy_geometric_miss";
+            case UnavailableRoute::Unknown:
+                return "unknown";
+        }
+        return "unknown";
+    }
 
     BaseObject* GetOrFailClosed(const char* consumer) const
     {
         CHECK_DETAIL(lookupState != State::Unavailable,
-                     "[FINDTO][fail-closed] consumer=%s forwarding carrier unavailable",
-                     consumer == nullptr ? "unknown" : consumer);
+                     "[FINDTO][fail-closed] consumer=%s forwarding carrier unavailable "
+                     "route=%s forwarded=%u fromRegionInfo_null=%u lookup=%s route_state=%u",
+                     consumer == nullptr ? "unknown" : consumer, unavailable_route_name(),
+                     static_cast<unsigned>(unavailableForwarded),
+                     static_cast<unsigned>(unavailableFromRegionInfoNull), unavailableLookupAnswer,
+                     static_cast<unsigned>(unavailableRouteState));
         return found();
     }
 
 private:
-    FindToVersionResult(State state, BaseObject* object) : lookupState(state), object(object) {}
+    FindToVersionResult(State state, BaseObject* object)
+        : lookupState(state), object(object), unavailableRoute(UnavailableRoute::Unknown),
+          unavailableForwarded(false), unavailableFromRegionInfoNull(true),
+          unavailableLookupAnswer("unknown"), unavailableRouteState(0xff)
+    {
+    }
+
+    FindToVersionResult(UnavailableRoute route, bool forwarded, bool fromRegionInfoNull,
+                        const char* lookupAnswer, uint8_t routeState)
+        : lookupState(State::Unavailable), object(nullptr), unavailableRoute(route),
+          unavailableForwarded(forwarded), unavailableFromRegionInfoNull(fromRegionInfoNull),
+          unavailableLookupAnswer(lookupAnswer == nullptr ? "unknown" : lookupAnswer),
+          unavailableRouteState(routeState)
+    {
+    }
 
     State lookupState;
     BaseObject* object;
+    UnavailableRoute unavailableRoute;
+    bool unavailableForwarded;
+    bool unavailableFromRegionInfoNull;
+    const char* unavailableLookupAnswer;
+    uint8_t unavailableRouteState;
 };
 
 // c4unify MASKEQUIV: dual-run the published bad masks against a verbatim copy of the literal

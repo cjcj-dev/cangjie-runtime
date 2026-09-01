@@ -726,6 +726,62 @@ GC_OTHER_VM_TEST(FindToPublicState, UnavailableIsObservable)
     fx.FreePlanted(live);
 }
 
+// A single product-linked construction exercises two distinct Unavailable producers.  It proves
+// the route witness is not a constant formatter: one arm closes an installed publication while
+// keeping its ghost region, and the other uses an unarmed, non-ghost region with a FORWARDED
+// header. Both answers come from WCollector::FindToVersion in libcangjie-runtime.so.
+GC_OTHER_VM_TEST(FindToRouteDiagnostics, DistinguishesLookupUnavailableFromNoGhostForwarded)
+{
+    GcHeapFixture& fx = ProductFixture();
+    WCollector collector(Heap::GetHeap().GetAllocator(), Heap::GetHeap().GetCollectorResources());
+    RelocationReceiptTestAccess::BindCollector(Heap::GetHeap().GetCollectorResources(), &collector);
+
+    RegionInfo* lookupRegion = fx.region0;
+    BaseObject* lookupFrom = fx.PlaceObject(lookupRegion->GetRegionStart() + 64);
+    lookupRegion->SetRegionType(RegionInfo::RegionType::THREAD_LOCAL_REGION);
+    lookupRegion->SetRegionAllocPtr(reinterpret_cast<MAddress>(lookupFrom) + lookupFrom->GetSize());
+    LiveInfo* live = PrepareForwardable(fx, lookupRegion, reinterpret_cast<MAddress>(lookupFrom));
+    ForwardingTable::ClearEntries(lookupRegion->GetRegionStart(), lookupRegion->GetRegionSize());
+    ForwardingTable::ReclaimRetired("gc-unit-route-diagnostics-lookup");
+
+    FindToVersionResult lookup =
+        RelocationReceiptTestAccess::ProductFindToVersion(collector, lookupFrom);
+    GC_EXPECT_TRUE(lookup.state() == FindToVersionResult::State::Unavailable);
+    GC_EXPECT_TRUE(lookup.unavailable_route() ==
+                   FindToVersionResult::UnavailableRoute::LookupUnavailable);
+    GC_EXPECT_FALSE(lookup.unavailable_forwarded());
+    GC_EXPECT_FALSE(lookup.unavailable_from_region_info_null());
+    GC_EXPECT_TRUE(std::strcmp(lookup.unavailable_lookup_answer(), "unavailable") == 0);
+    GC_EXPECT_TRUE(std::strcmp(lookup.unavailable_route_name(), "lookup_unavailable") == 0);
+    GC_EXPECT_EQ(lookup.unavailable_route_state(),
+                 static_cast<uint8_t>(lookupRegion->GetRouteState()));
+
+    RegionInfo* noGhostRegion = fx.region1;
+    BaseObject* noGhostFrom = fx.PlaceObject(noGhostRegion->GetRegionStart() + 64);
+    noGhostRegion->SetRegionType(RegionInfo::RegionType::THREAD_LOCAL_REGION);
+    noGhostRegion->SetRegionAllocPtr(reinterpret_cast<MAddress>(noGhostFrom) + noGhostFrom->GetSize());
+    GC_EXPECT_TRUE(RegionInfo::GetGhostFromRegionAt(reinterpret_cast<MAddress>(noGhostFrom)) == nullptr);
+    GC_EXPECT_FALSE(ForwardingTable::EntriesArmed(reinterpret_cast<MAddress>(noGhostFrom)));
+    noGhostFrom->SetStateCode(ObjectState::FORWARDED);
+
+    FindToVersionResult noGhost =
+        RelocationReceiptTestAccess::ProductFindToVersion(collector, noGhostFrom);
+    GC_EXPECT_TRUE(noGhost.state() == FindToVersionResult::State::Unavailable);
+    GC_EXPECT_TRUE(noGhost.unavailable_route() ==
+                   FindToVersionResult::UnavailableRoute::NoGhostForwarded);
+    GC_EXPECT_TRUE(noGhost.unavailable_forwarded());
+    GC_EXPECT_TRUE(noGhost.unavailable_from_region_info_null());
+    GC_EXPECT_TRUE(std::strcmp(noGhost.unavailable_lookup_answer(), "unarmed") == 0);
+    GC_EXPECT_TRUE(std::strcmp(noGhost.unavailable_route_name(), "no_ghost_forwarded") == 0);
+    GC_EXPECT_EQ(noGhost.unavailable_route_state(), static_cast<uint8_t>(0xff));
+    GC_EXPECT_NE(lookup.unavailable_route(), noGhost.unavailable_route());
+
+    noGhostFrom->SetStateCode(ObjectState::NORMAL);
+    RelocationReceiptTestAccess::BindCollector(Heap::GetHeap().GetCollectorResources(), nullptr);
+    lookupRegion->metadata.liveInfo = nullptr;
+    fx.FreePlanted(live);
+}
+
 #if defined(MRT_TESTABLE_INTERNALS) && defined(MRT_FINDTO_RETAIN_TEST)
 struct RetainWindowState {
     std::mutex mutex;

@@ -712,6 +712,28 @@ public:
         }
         const MAddress fromAddr = reinterpret_cast<MAddress>(obj);
         ForwardingTable::ToAnswer ans = ForwardingTable::ToAnswer::Unarmed;
+        const auto answerName = [](ForwardingTable::ToAnswer answer) -> const char* {
+            switch (answer) {
+                case ForwardingTable::ToAnswer::ArmedHit:
+                    return "armed_hit";
+                case ForwardingTable::ToAnswer::ArmedMiss:
+                    return "armed_miss";
+                case ForwardingTable::ToAnswer::Unavailable:
+                    return "unavailable";
+                case ForwardingTable::ToAnswer::Unarmed:
+                    return "unarmed";
+            }
+            return "unknown";
+        };
+        const auto unavailable = [&](FindToVersionResult::UnavailableRoute route, bool forwarded,
+                                     RegionInfo* fromRegionInfo) -> FindToVersionResult {
+            const bool regionNull = fromRegionInfo == nullptr;
+            const uint8_t routeState = regionNull
+                ? static_cast<uint8_t>(0xff)
+                : static_cast<uint8_t>(fromRegionInfo->GetRouteState());
+            return FindToVersionResult::Unavailable(
+                route, forwarded, regionNull, answerName(ans), routeState);
+        };
         BaseObject* stored = nullptr;
         if constexpr (ForwardingTable::kConsumeEntries) {
             const MAddress to = ForwardingTable::LookupTo(fromAddr, &ans);
@@ -724,7 +746,9 @@ public:
                                                   : FindToVersionResult::NotForwarded();
                 }
                 if (ans == ForwardingTable::ToAnswer::Unavailable) {
-                    return FindToVersionResult::Unavailable();
+                    RegionInfo* unavailableRegion = RegionInfo::GetGhostFromRegionAt(fromAddr);
+                    return unavailable(FindToVersionResult::UnavailableRoute::LookupUnavailable,
+                                       obj->IsForwarded(), unavailableRegion);
                 }
                 if (ans == ForwardingTable::ToAnswer::ArmedMiss && !obj->IsForwarded()) {
                     return FindToVersionResult::NotForwarded();
@@ -739,8 +763,11 @@ public:
             if (stored != nullptr) {
                 return FindToVersionResult::Found(stored);
             }
-            return obj->IsForwarded() ? FindToVersionResult::Unavailable()
-                                      : FindToVersionResult::NotForwarded();
+            const bool forwarded = obj->IsForwarded();
+            return forwarded
+                ? unavailable(FindToVersionResult::UnavailableRoute::NoGhostForwarded,
+                              forwarded, fromRegionInfo)
+                : FindToVersionResult::NotForwarded();
         }
         RegionSpace& space = reinterpret_cast<RegionSpace&>(theAllocator);
         BaseObject* geometric = space.GetRegionManager().FindPublishedRoute(obj).dest;
@@ -753,7 +780,9 @@ public:
                 ForwardingTable::Publication publication =
                     ForwardingTable::RetainOpenPublicationAfterCopy(fromRegionInfo, fromAddr);
                 if (!publication) {
-                    return FindToVersionResult::Unavailable();
+                    return unavailable(
+                        FindToVersionResult::UnavailableRoute::PublicationRetainFailed,
+                        obj->IsForwarded(), fromRegionInfo);
                 }
                 const MAddress receipt = ForwardingTable::InsertMapping(
                     publication, fromAddr, reinterpret_cast<MAddress>(geometric));
@@ -766,14 +795,20 @@ public:
             if (stored != nullptr) {
                 return FindToVersionResult::Found(stored);
             }
-            return obj->IsForwarded() ? FindToVersionResult::Unavailable()
-                                      : FindToVersionResult::NotForwarded();
+            const bool forwarded = obj->IsForwarded();
+            return forwarded
+                ? unavailable(FindToVersionResult::UnavailableRoute::GeometricMissForwarded,
+                              forwarded, fromRegionInfo)
+                : FindToVersionResult::NotForwarded();
         }
         if (geometric != nullptr && ToHeaderCovered(geometric)) {
             return FindToVersionResult::Found(geometric);
         }
-        return obj->IsForwarded() ? FindToVersionResult::Unavailable()
-                                  : FindToVersionResult::NotForwarded();
+        const bool forwarded = obj->IsForwarded();
+        return forwarded
+            ? unavailable(FindToVersionResult::UnavailableRoute::LegacyGeometricMiss,
+                          forwarded, fromRegionInfo)
+            : FindToVersionResult::NotForwarded();
     }
 
 protected:
