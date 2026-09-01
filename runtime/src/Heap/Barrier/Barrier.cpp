@@ -1970,7 +1970,10 @@ void Barrier::RecordCrossGenEdge(BaseObject* obj, MAddress fieldAddress, BaseObj
     }
 
     AllocBuffer* alloc = AllocBuffer::GetAllocBuffer();
-    const bool heapSlot = Heap::IsHeapAddress(fieldAddress) && obj != nullptr && Heap::IsHeapAddress(obj);
+    // The slot address is authoritative for storage class.  Some compiler
+    // calls have no recoverable holder object, but a heap-resident slot still
+    // needs the same remembered-set bit and previous-value retirement.
+    const bool heapSlot = Heap::IsHeapAddress(fieldAddress);
     bool buffered = false;
     if (alloc != nullptr && heapSlot && !is_null(prev)) {
         alloc->GetStoreBarrierBuffer().Add(fieldAddress, obj, prev, theRememberedSet);
@@ -1990,14 +1993,11 @@ void Barrier::RecordCrossGenEdge(BaseObject* obj, MAddress fieldAddress, BaseObj
     // OpenJDK keys its remembered set on the slot, whose generation is stable,
     // rather than on the target, whose generation can change during promotion.
     if (Heap::IsHeapAddress(fieldAddress)) {
-        if (obj == nullptr || !Heap::IsHeapAddress(obj)) {
-            return;
-        }
         RegionInfo* sourceRegion = RegionInfo::GetRegionInfoAt(fieldAddress);
         if (sourceRegion->IsYoungRegion()) {
             // Preserve the product young-holder dirty list.
             AllocBuffer* buffer = AllocBuffer::GetAllocBuffer();
-            if (buffer != nullptr) {
+            if (buffer != nullptr && obj != nullptr) {
                 buffer->PushY2yDirtyHolder(obj);
             }
             return;

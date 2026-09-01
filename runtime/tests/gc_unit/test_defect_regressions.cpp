@@ -22,6 +22,8 @@
 #include "ObjectModel/RefField.h"
 
 extern "C" size_t MCC_GetGCCount();
+extern "C" void MCC_WriteRefField(const MapleRuntime::ObjectPtr ref, const MapleRuntime::ObjectPtr obj,
+                                   MapleRuntime::RefField<false>* field);
 #include "gc_heap_fixture.hpp"
 #include "gc_unittest.hpp"
 #include "Heap/Collector/TracingCollector.h"
@@ -321,6 +323,43 @@ GC_TEST(DefectRegress, FieldPlaceColourMustStripAtAbi)
     Uptr colouredBase = reinterpret_cast<Uptr>(fx.obj0) | ZPointerRemapped01;
     Uptr leaPlace = colouredBase + 16;
     GC_EXPECT_EQ(ModelStripFieldPlace(leaPlace), (reinterpret_cast<Uptr>(fx.obj0) + 16) & kAddrMask);
+}
+
+// T6: the compiler may provide no holder object for a field GEP.  The product
+// call must classify the destination slot itself, publishing a coloured heap
+// word and retaining the slot-keyed remembered-set obligation.
+GC_TEST(DefectRegress, CompilerWriteNullHolderHeapSlotPublishesColour)
+{
+    ExportHandleFixture fx;
+    fx.rememberedSet.Initialize(fx.heap.heapStart, 2 * RegionInfo::UNIT_SIZE);
+    fx.heap.region0->SetYoungRegionFlag(0);
+    fx.heap.region1->SetYoungRegionFlag(1);
+    fx.heap.region1->SetYoungAge(1);
+
+    auto* field = &HeapSlotAt<>(reinterpret_cast<MAddress>(fx.heap.obj0) + TYPEINFO_PTR_SIZE);
+    const MAddress slot = reinterpret_cast<MAddress>(field);
+    std::memset(field, 0, sizeof(*field));
+
+    // obj == nullptr is the triggering ABI shape; field is demonstrably in heap.
+    GC_EXPECT_TRUE(Heap::IsHeapAddress(field));
+    MCC_WriteRefField(fx.heap.obj1, nullptr, reinterpret_cast<RefField<false>*>(field));
+
+    const uintptr_t installed = static_cast<uintptr_t>(raw(field->GetFieldValue()));
+    GC_EXPECT_EQ(ClassifySlotWord(installed), SlotWordVerdict::kColoured);
+    GC_EXPECT_TRUE(fx.rememberedSet.Contains(slot));
+}
+
+// T6 control arm: a non-heap destination remains a root slot even when the
+// optional holder is null, and therefore keeps the plain RootSlot encoding.
+GC_TEST(DefectRegress, CompilerWriteNullHolderStaticSlotUsesRootPath)
+{
+    ExportHandleFixture fx;
+    RefField<false> staticField(zpointer::null);
+    MCC_WriteRefField(fx.heap.obj0, nullptr, &staticField);
+
+    const uintptr_t installed = static_cast<uintptr_t>(raw(staticField.GetFieldValue()));
+    GC_EXPECT_EQ(installed, reinterpret_cast<uintptr_t>(fx.heap.obj0));
+    GC_EXPECT_EQ(ClassifySlotWord(installed), SlotWordVerdict::kIllegal);
 }
 
 // hunt-coll BUG: GC published finishedGcIndex / isGcStarted before stats and
