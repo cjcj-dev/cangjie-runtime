@@ -1,0 +1,11 @@
+diff --git a/runtime/src/Mutator/Mutator.cpp b/runtime/src/Mutator/Mutator.cpp
+--- a/runtime/src/Mutator/Mutator.cpp
++++ b/runtime/src/Mutator/Mutator.cpp
+@@ -1059,7 +1059,6 @@ bool Mutator::DrainStackWatermark(const RootVisitor& visitor, const RootVisitor&
+         while (cursor.ProcessOne(visitor, *this, derivedPtrVisitor)) {
+             stackWatermark.AdvanceTo(cursor.Cursor(), owner);
+         }
+-        VisitRawObjects(visitedInvisibleRootVisitor);
+         // Frame coverage is the completion quantity.  FrameCount alone is the
+         // size of the snapshot and therefore cannot prove that the cursor
+         // actually processed it.
