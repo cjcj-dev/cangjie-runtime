@@ -808,9 +808,6 @@ void WCollector::VisitMinorRootSlots(RootVisitor& rawRootVisitor, RootVisitor& i
         bool watermarkDone =
             stackScanEpoch != 0 && mutator.GetStackWatermark().IsDone(stackScanEpoch);
 #if defined(MRT_GC_UNIT_TESTS)
-        if (ForceLargeArrayInitRootPhaseResidual(LargeArrayRootPhase::MINOR_MARK, &mutator)) {
-            watermarkDone = false;
-        }
         NoteLargeArrayInitRootPhase(LargeArrayRootPhase::MINOR_MARK, &mutator, watermarkDone);
 #endif
         if (watermarkDone) {

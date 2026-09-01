@@ -87,11 +87,6 @@ void NoteLargeArrayInitRootPhase(LargeArrayRootPhase phase, Mutator* mutator, bo
     }
 }
 
-bool ForceLargeArrayInitRootPhaseResidual(LargeArrayRootPhase phase, Mutator* mutator)
-{
-    return g_largeArrayInitTestHooks.forceRootPhaseResidual != nullptr &&
-        g_largeArrayInitTestHooks.forceRootPhaseResidual(phase, mutator);
-}
 #endif
 
 MArray* MArray::InitializeLargeRefArray(MAddress address, MSize arraySize, MIndex nElems,

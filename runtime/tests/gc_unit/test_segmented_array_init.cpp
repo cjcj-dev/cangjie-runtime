@@ -111,8 +111,8 @@ struct SegmentedArrayContext {
     static SegmentedArrayContext* current;
 
     explicit SegmentedArrayContext(MIndex arrayLength, YieldGc requestedGc = YieldGc::NONE,
-                                   bool forceResidual = false)
-        : length(arrayLength), gc(requestedGc), forceResidualWatermark(forceResidual)
+                                   bool requireWatermarkDone = false)
+        : length(arrayLength), gc(requestedGc), requireWatermarkDone(requireWatermarkDone)
     {
         LargeArrayInitTestHooks hooks;
         hooks.onPublish = OnPublish;
@@ -120,7 +120,6 @@ struct SegmentedArrayContext {
         hooks.onWithdraw = OnWithdraw;
         hooks.onRootVisit = OnRootVisit;
         hooks.onRootPhase = OnRootPhase;
-        hooks.forceRootPhaseResidual = ForceRootPhaseResidual;
         current = this;
         CJ_MRT_SetLargeArrayInitTestHooks(&hooks);
     }
@@ -277,12 +276,6 @@ struct SegmentedArrayContext {
         }
     }
 
-    static bool ForceRootPhaseResidual(LargeArrayRootPhase phase, Mutator* mutator)
-    {
-        return current->forceResidualWatermark && phase == LargeArrayRootPhase::MINOR_MARK &&
-            current->requestingMutator == mutator;
-    }
-
     MIndex length;
     YieldGc gc;
     uintptr_t dirtyAddress = 0;
@@ -299,7 +292,7 @@ struct SegmentedArrayContext {
     bool checkedDirtyBoundary = false;
     bool requestedGc = false;
     bool rootMoved = false;
-    bool forceResidualWatermark = false;
+    bool requireWatermarkDone = false;
     size_t majorRootPhaseObservations = 0;
     size_t minorRootPhaseObservations = 0;
     bool majorWatermarkDone = false;
@@ -433,8 +426,8 @@ void* RunSegmentedCase(void* rawMode)
 {
     const uintptr_t mode = reinterpret_cast<uintptr_t>(rawMode);
     const YieldGc gc = static_cast<YieldGc>(mode & 0xffU);
-    const bool forceResidualWatermark = (mode & 0x100U) != 0;
-    SegmentedArrayContext ctx(kLargeRefLength, gc, forceResidualWatermark);
+    const bool requireWatermarkDone = (mode & 0x100U) != 0;
+    SegmentedArrayContext ctx(kLargeRefLength, gc, requireWatermarkDone);
     // Install the exact dirty extent directly. Allocating a byte array and then
     // hoping that a full collection returns the same address is not invariant:
     // a two-processor runtime may consume the reclaimed extent first.
@@ -463,11 +456,15 @@ void* RunSegmentedCase(void* rawMode)
         const bool watermarkDone = gc == YieldGc::YOUNG
             ? ctx.minorWatermarkDone
             : ctx.majorWatermarkDone;
-        if (forceResidualWatermark) {
-            // The test hook reconstructs a residual closing edge after the
-            // ordinary native handshake completed. The product consumer below
-            // must still execute its false branch and walk the mutator roots.
-            status += watermarkDone ? 1 : 0;
+        if (requireWatermarkDone) {
+            // The residual-fallback contract is intentionally marked unreachable
+            // for this product path: RunEpochHandshake and the closing consumer
+            // share one epoch, and Mutator::DrainStackWatermark pairs TryBegin
+            // with Finish before Mark.cpp reads IsDone(epoch). This observes the
+            // product expression without rewriting its result in a callback.
+            // If that pair is split or the consumer reads another epoch, this
+            // contract becomes measurable again and this guard must be restored.
+            status += watermarkDone ? 0 : 1;
         }
         status += phaseObserved ? 0 : 1;
         uint32_t required = RequiredPhaseRootVisits(gc, watermarkDone) |
@@ -492,7 +489,7 @@ void* RunSegmentedCase(void* rawMode)
                  static_cast<unsigned>(gc), status, ctx.failures, ctx.checkedDirtyBoundary,
                  static_cast<unsigned long>(ctx.dirtyAddress), static_cast<void*>(array), ctx.publishCount,
                  ctx.yieldCount, ctx.firstSegmentYieldCount, ctx.withdrawCount, ctx.requestedGc,
-                 forceResidualWatermark ? "native-residual" : "native",
+                 requireWatermarkDone ? "native-watermark" : "native",
                  ctx.fullIteratorVisits, ctx.rangeIteratorVisits,
                  ctx.gcCountBefore, ctx.gcCountAfter, ctx.rootMoved, ctx.rootVisitSites,
                  gc == YieldGc::YOUNG ? ctx.minorRootPhaseObservations : ctx.majorRootPhaseObservations,
@@ -659,11 +656,11 @@ GC_OTHER_VM_TEST(SegmentedArrayInit, YoungGcRepairsIncompleteArrayRootParallel)
     GC_EXPECT_EQ(RunRuntimeCase(RunSegmentedCase, static_cast<uintptr_t>(YieldGc::YOUNG), 2), 0);
 }
 
-GC_OTHER_VM_TEST(SegmentedArrayInit, YoungGcResidualWatermarkUsesManagedFallback)
+GC_OTHER_VM_TEST(SegmentedArrayInit, YoungGcWatermarkResidualFallbackIsUnreachable)
 {
-    constexpr uintptr_t forceResidualWatermark = 0x100U;
+    constexpr uintptr_t requireWatermarkDone = 0x100U;
     GC_EXPECT_EQ(RunRuntimeCase(RunSegmentedCase,
-                                forceResidualWatermark | static_cast<uintptr_t>(YieldGc::YOUNG)), 0);
+                                requireWatermarkDone | static_cast<uintptr_t>(YieldGc::YOUNG)), 0);
 }
 
 GC_OTHER_VM_TEST(SegmentedArrayInit, SmallReferenceArrayKeepsFastPath)

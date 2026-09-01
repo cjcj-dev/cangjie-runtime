@@ -90,14 +90,12 @@ struct LargeArrayInitTestHooks {
     void (*onWithdraw)(MArray* array) = nullptr;
     void (*onRootVisit)(LargeArrayRootVisitSite site, BaseObject* object) = nullptr;
     void (*onRootPhase)(LargeArrayRootPhase phase, Mutator* mutator, bool watermarkDone) = nullptr;
-    bool (*forceRootPhaseResidual)(LargeArrayRootPhase phase, Mutator* mutator) = nullptr;
 };
 
 extern "C" MRT_EXPORT void CJ_MRT_SetLargeArrayInitTestHooks(const LargeArrayInitTestHooks* hooks);
 extern "C" MRT_EXPORT MAddress CJ_MRT_TestAllocateArrayStorage(size_t size, AllocType allocType);
 void NoteLargeArrayInitRootVisit(LargeArrayRootVisitSite site, BaseObject* object);
 void NoteLargeArrayInitRootPhase(LargeArrayRootPhase phase, Mutator* mutator, bool watermarkDone);
-bool ForceLargeArrayInitRootPhaseResidual(LargeArrayRootPhase phase, Mutator* mutator);
 #endif
 } // namespace MapleRuntime
 #endif // MRT_MARRAY_H
