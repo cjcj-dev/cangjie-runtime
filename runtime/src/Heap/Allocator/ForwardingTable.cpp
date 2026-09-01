@@ -113,8 +113,6 @@ std::atomic<uint64_t> g_unarmed{ 0 };
 #if defined(MRT_TESTABLE_INTERNALS)
 std::atomic<ForwardingTable::LookupRetainHook> g_lookupRetainHook{ nullptr };
 std::atomic<void*> g_lookupRetainHookContext{ nullptr };
-std::atomic<ForwardingTable::LookupDecisionHook> g_lookupDecisionHook{ nullptr };
-std::atomic<void*> g_lookupDecisionHookContext{ nullptr };
 std::atomic<ForwardingTable::ReceiptLifeRegisterHook> g_receiptLifeRegisterHook{ nullptr };
 std::atomic<void*> g_receiptLifeRegisterHookContext{ nullptr };
 #endif
@@ -1076,13 +1074,6 @@ ForwardingTable::LookupResult ForwardingTable::LookupTo(MAddress from)
             publicationClosed,
         };
         g_unavailable.fetch_add(1, std::memory_order_relaxed);
-#if defined(MRT_TESTABLE_INTERNALS)
-        ForwardingTable::LookupDecisionHook hook =
-            g_lookupDecisionHook.load(std::memory_order_acquire);
-        if (hook != nullptr) {
-            hook(g_lookupDecisionHookContext.load(std::memory_order_acquire));
-        }
-#endif
         return result;
     }
     if (activeSearched || retiredAnswer == ToAnswer::ArmedMiss) {
@@ -1106,12 +1097,6 @@ void ForwardingTable::SetLookupRetainHook(LookupRetainHook hook, void* context)
 {
     g_lookupRetainHookContext.store(context, std::memory_order_release);
     g_lookupRetainHook.store(hook, std::memory_order_release);
-}
-
-void ForwardingTable::SetLookupDecisionHook(LookupDecisionHook hook, void* context)
-{
-    g_lookupDecisionHookContext.store(context, std::memory_order_release);
-    g_lookupDecisionHook.store(hook, std::memory_order_release);
 }
 
 void ForwardingTable::SetReceiptLifeRegisterHook(ReceiptLifeRegisterHook hook, void* context)

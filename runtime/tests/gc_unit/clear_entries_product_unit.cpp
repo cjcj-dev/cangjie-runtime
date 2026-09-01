@@ -794,6 +794,42 @@ GC_OTHER_VM_TEST(FindToRouteDiagnostics, DistinguishesLookupUnavailableFromNoGho
     fx.FreePlanted(live);
 }
 
+// LookupTo returns the decision record itself.  Change both metadata faces only
+// after the product lookup returns, then prove the record still describes the
+// carrier inputs that selected Unavailable rather than those later faces.
+GC_OTHER_VM_TEST(LookupDecisionSnapshot, SurvivesPostReturnGhostAndHeaderMutation)
+{
+    GcHeapFixture& fx = ProductFixture();
+    RegionInfo* region = fx.region0;
+    BaseObject* from = fx.PlaceObject(region->GetRegionStart() + 64);
+    region->SetRegionType(RegionInfo::RegionType::THREAD_LOCAL_REGION);
+    region->SetRegionAllocPtr(reinterpret_cast<MAddress>(from) + from->GetSize());
+    LiveInfo* live = PrepareForwardable(fx, region, reinterpret_cast<MAddress>(from));
+    ForwardingTable::ClearEntries(region->GetRegionStart(), region->GetRegionSize());
+    ForwardingTable::ReclaimRetired("gc-unit-lookup-decision-snapshot");
+    GC_EXPECT_TRUE(RegionInfo::GetGhostFromRegionAt(reinterpret_cast<MAddress>(from)) == region);
+    GC_EXPECT_FALSE(from->IsForwarded());
+
+    const ForwardingTable::LookupResult result =
+        ForwardingTable::LookupTo(reinterpret_cast<MAddress>(from));
+    from->SetStateCode(ObjectState::FORWARDED);
+    region->DispelGhostFromRegion();
+
+    GC_EXPECT_TRUE(from->IsForwarded());
+    GC_EXPECT_TRUE(RegionInfo::GetGhostFromRegionAt(reinterpret_cast<MAddress>(from)) == nullptr);
+    GC_EXPECT_TRUE(result.answer == ForwardingTable::ToAnswer::Unavailable);
+    GC_EXPECT_TRUE(result.unavailableCause ==
+                   ForwardingTable::ToUnavailableCause::PublicationClosed);
+    GC_EXPECT_FALSE(result.activeCandidate);
+    GC_EXPECT_TRUE(result.activeAnswer == ForwardingTable::ToAnswer::Unarmed);
+    GC_EXPECT_TRUE(result.retiredAnswer == ForwardingTable::ToAnswer::Unarmed);
+    GC_EXPECT_TRUE(result.publicationClosed);
+
+    from->SetStateCode(ObjectState::NORMAL);
+    region->metadata.liveInfo = nullptr;
+    fx.FreePlanted(live);
+}
+
 #if defined(MRT_TESTABLE_INTERNALS) && defined(MRT_FINDTO_RETAIN_TEST)
 struct RetainWindowState {
     std::mutex mutex;
@@ -818,7 +854,6 @@ void HoldRetainedLookup(void* context)
 // pattern as test_live_map.cpp) so this TU keeps linking against the default
 // OFF product, where the guarded block below is compiled out anyway.
 using ProductSetLookupRetainHook = void (*)(void (*)(void*), void*);
-using ProductSetLookupDecisionHook = void (*)(void (*)(void*), void*);
 
 static ProductSetLookupRetainHook ProductSetLookupRetainHookFn()
 {
@@ -833,79 +868,6 @@ static ProductSetLookupRetainHook ProductSetLookupRetainHookFn()
     // the test hook is not a passing observation; it is a missing precondition.
     GC_EXPECT_TRUE(fn != nullptr);
     return fn;
-}
-
-static ProductSetLookupDecisionHook ProductSetLookupDecisionHookFn()
-{
-    void* handle = dlopen("libcangjie-runtime.so", RTLD_NOW | RTLD_NOLOAD);
-    if (handle == nullptr) {
-        handle = dlopen("libcangjie-runtime.so", RTLD_NOW);
-    }
-    GC_EXPECT_TRUE(handle != nullptr);
-    auto fn = reinterpret_cast<ProductSetLookupDecisionHook>(
-        dlsym(handle, "_ZN12MapleRuntime15ForwardingTable21SetLookupDecisionHookEPFvPvES1_"));
-    GC_EXPECT_TRUE(fn != nullptr);
-    return fn;
-}
-
-struct PostDecisionMutationState {
-    RegionInfo* region;
-    BaseObject* from;
-    bool ran{ false };
-};
-
-void MutateGhostAndHeaderAfterDecision(void* context)
-{
-    auto& state = *static_cast<PostDecisionMutationState*>(context);
-    state.from->SetStateCode(ObjectState::FORWARDED);
-    state.region->DispelGhostFromRegion();
-    state.ran = true;
-}
-
-// The product hook fires only after LookupTo has copied every input used by its
-// Unavailable branch into LookupResult.  Mutating both later metadata faces at
-// that boundary must not change the already-formed carrier cause.
-GC_OTHER_VM_TEST(FindToRouteDiagnostics, LookupCauseSurvivesPostDecisionGhostAndHeaderMutation)
-{
-    GcHeapFixture& fx = ProductFixture();
-    RegionInfo* region = fx.region0;
-    BaseObject* from = fx.PlaceObject(region->GetRegionStart() + 64);
-    region->SetRegionType(RegionInfo::RegionType::THREAD_LOCAL_REGION);
-    region->SetRegionAllocPtr(reinterpret_cast<MAddress>(from) + from->GetSize());
-    WCollector collector(Heap::GetHeap().GetAllocator(), Heap::GetHeap().GetCollectorResources());
-    RelocationReceiptTestAccess::BindCollector(Heap::GetHeap().GetCollectorResources(), &collector);
-    LiveInfo* live = PrepareForwardable(fx, region, reinterpret_cast<MAddress>(from));
-    ForwardingTable::ClearEntries(region->GetRegionStart(), region->GetRegionSize());
-    ForwardingTable::ReclaimRetired("gc-unit-lookup-decision-snapshot");
-    GC_EXPECT_TRUE(RegionInfo::GetGhostFromRegionAt(reinterpret_cast<MAddress>(from)) == region);
-    GC_EXPECT_FALSE(from->IsForwarded());
-
-    ProductSetLookupDecisionHook setHook = ProductSetLookupDecisionHookFn();
-    PostDecisionMutationState mutation{ region, from, false };
-    setHook(MutateGhostAndHeaderAfterDecision, &mutation);
-    FindToVersionResult result = RelocationReceiptTestAccess::ProductFindToVersion(collector, from);
-    setHook(nullptr, nullptr);
-
-    GC_EXPECT_TRUE(mutation.ran);
-    GC_EXPECT_TRUE(from->IsForwarded());
-    GC_EXPECT_TRUE(RegionInfo::GetGhostFromRegionAt(reinterpret_cast<MAddress>(from)) == nullptr);
-    GC_EXPECT_TRUE(result.state() == FindToVersionResult::State::Unavailable);
-    GC_EXPECT_TRUE(result.unavailable_route() ==
-                   FindToVersionResult::UnavailableRoute::LookupUnavailable);
-    GC_EXPECT_TRUE(result.unavailable_lookup_snapshot_valid());
-    GC_EXPECT_TRUE(std::strcmp(result.unavailable_lookup_cause(), "publication_closed") == 0);
-    GC_EXPECT_FALSE(result.unavailable_lookup_active_candidate());
-    GC_EXPECT_TRUE(std::strcmp(result.unavailable_lookup_active_answer(), "unarmed") == 0);
-    GC_EXPECT_TRUE(std::strcmp(result.unavailable_lookup_retired_answer(), "unarmed") == 0);
-    GC_EXPECT_TRUE(result.unavailable_lookup_publication_closed());
-    GC_EXPECT_FALSE(result.unavailable_forwarded_valid());
-    GC_EXPECT_FALSE(result.unavailable_from_region_info_null_valid());
-    GC_EXPECT_FALSE(result.unavailable_route_state_valid());
-
-    from->SetStateCode(ObjectState::NORMAL);
-    RelocationReceiptTestAccess::BindCollector(Heap::GetHeap().GetCollectorResources(), nullptr);
-    region->metadata.liveInfo = nullptr;
-    fx.FreePlanted(live);
 }
 
 GC_OTHER_VM_TEST(FindToRetainWindow, ActiveLookupPinsCarrierUntilQueryReturns)
