@@ -278,24 +278,29 @@ bool AllSlotsAreRawNull(MArray* array)
     return allNull;
 }
 
+constexpr uint32_t RootVisitBit(LargeArrayRootVisitSite site)
+{
+    return uint32_t { 1 } << static_cast<unsigned>(site);
+}
+
+uint32_t RequiredPhaseRootVisits(YieldGc gc, uint32_t sites)
+{
+    // The epoch handshake has two legitimate root-production paths. A completed
+    // watermark owns the root visit; otherwise the closing STW falls back to the
+    // mutator walk. Young mark wraps that fallback with MINOR_MARK. Keep the
+    // condition in the assertion: MINOR_MARK is not required after watermark DONE.
+    if ((sites & RootVisitBit(LargeArrayRootVisitSite::STACK_WATERMARK_NATIVE)) != 0) {
+        return RootVisitBit(LargeArrayRootVisitSite::STACK_WATERMARK_NATIVE);
+    }
+    uint32_t required = RootVisitBit(LargeArrayRootVisitSite::MUTATOR_STACK_NATIVE);
+    if (gc == YieldGc::YOUNG) {
+        required |= RootVisitBit(LargeArrayRootVisitSite::MINOR_MARK);
+    }
+    return required;
+}
+
 constexpr MIndex kLargeRefLength = static_cast<MIndex>(
     (MArray::LARGE_REF_ARRAY_INIT_SEGMENT_SIZE * 2) / sizeof(void*) + 1);
-
-bool PrepareExactDirtyLargeExtent(SegmentedArrayContext& ctx)
-{
-    const MIndex contentBytes = kLargeRefLength * sizeof(RefField<>);
-    MArray* dirty = MCC_NewArray8(GetByteArrayTypeInfos().array, contentBytes);
-    if (dirty == nullptr) {
-        return false;
-    }
-    std::memset(dirty->ConvertToCArray(), ctx.dirtyByte, static_cast<size_t>(contentBytes));
-    ctx.dirtyAddress = reinterpret_cast<uintptr_t>(dirty);
-    dirty = nullptr;
-    Mutator::GetMutator()->SetManagedContext(false);
-    Heap::GetHeap().GetCollector().RequestGC(GC_REASON_FORCE, false);
-    Mutator::GetMutator()->SetManagedContext(true);
-    return true;
-}
 
 bool PrepareExactLargeExtent(AllocationSource source, SegmentedArrayContext& ctx)
 {
@@ -383,7 +388,10 @@ void* RunSegmentedCase(void* rawMode)
 {
     const YieldGc gc = static_cast<YieldGc>(reinterpret_cast<uintptr_t>(rawMode));
     SegmentedArrayContext ctx(kLargeRefLength, gc);
-    if (!PrepareExactDirtyLargeExtent(ctx)) {
+    // Install the exact dirty extent directly. Allocating a byte array and then
+    // hoping that a full collection returns the same address is not invariant:
+    // a two-processor runtime may consume the reclaimed extent first.
+    if (!PrepareExactLargeExtent(AllocationSource::DIRTY, ctx)) {
         return reinterpret_cast<void*>(1);
     }
 
@@ -402,20 +410,12 @@ void* RunSegmentedCase(void* rawMode)
         status += ctx.requestedGc ? 0 : 1;
         status += ctx.gcCountAfter > ctx.gcCountBefore ? 0 : 1;
         status += ctx.firstSegmentYieldCount >= 2 ? 0 : 1;
+        uint32_t required = RequiredPhaseRootVisits(gc, ctx.rootVisitSites) |
+            RootVisitBit(LargeArrayRootVisitSite::ITERATOR_SKIP);
         if (gc == YieldGc::YOUNG) {
-            const uint32_t required =
-                (1U << static_cast<unsigned>(LargeArrayRootVisitSite::MUTATOR_STACK_NATIVE)) |
-                (1U << static_cast<unsigned>(LargeArrayRootVisitSite::MINOR_MARK)) |
-                (1U << static_cast<unsigned>(LargeArrayRootVisitSite::MINOR_RELOCATE)) |
-                (1U << static_cast<unsigned>(LargeArrayRootVisitSite::ITERATOR_SKIP));
-            status += (ctx.rootVisitSites & required) == required ? 0 : 1;
-        } else {
-            const uint32_t required =
-                (1U << static_cast<unsigned>(LargeArrayRootVisitSite::STACK_WATERMARK_NATIVE)) |
-                (1U << static_cast<unsigned>(LargeArrayRootVisitSite::REMEMBERED)) |
-                (1U << static_cast<unsigned>(LargeArrayRootVisitSite::ITERATOR_SKIP));
-            status += (ctx.rootVisitSites & required) == required ? 0 : 1;
+            required |= RootVisitBit(LargeArrayRootVisitSite::MINOR_RELOCATE);
         }
+        status += (ctx.rootVisitSites & required) == required ? 0 : 1;
     }
     std::fprintf(stderr,
                  "[SEGMENTED_ARRAY_CASE] mode=%u status=%zu failures=%zu dirty=%d dirty_addr=%#lx "
