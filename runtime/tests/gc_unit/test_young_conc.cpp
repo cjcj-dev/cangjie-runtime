@@ -910,7 +910,7 @@ GC_TEST(YoungConc, YoungToYoungNullHolderQueuesSlotWork)
     GC_EXPECT_EQ(slots.size(), 1u);
     GC_EXPECT_EQ(slots[0], reinterpret_cast<MAddress>(field));
     GC_EXPECT_EQ(targets.size(), 1u);
-    GC_EXPECT_EQ(targets[0], fx.obj1);
+    GC_EXPECT_EQ(reinterpret_cast<MAddress>(targets[0]), reinterpret_cast<MAddress>(fx.obj1));
     GC_EXPECT_EQ(buffer->Y2yDirtySlotCount(), 0u);
 }
 
