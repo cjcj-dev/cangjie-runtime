@@ -660,7 +660,7 @@ GC_TEST(M0Exit, ReadRuntimeEntryResolvedNormalPathIsSilent)
     GC_EXPECT_EQ(after.s1, before.s1);
 }
 
-GC_OTHER_VM_TEST(M0Exit, RootFixRuntimeEnumerationClassifiesNoCopyAsS0)
+GC_OTHER_VM_TEST(M0Exit, RootFixFailsClosedOnUnmappedForwardedRoot)
 {
     SharedRootSlot sharedRoot;
     RootEntryFixture fx(sharedRoot.slot);
@@ -693,7 +693,7 @@ GC_OTHER_VM_TEST(M0Exit, RootFixRuntimeEnumerationFailsClosedWithoutPublishedMap
     GC_EXPECT_EQ(WTERMSIG(status), SIGABRT);
 }
 
-GC_OTHER_VM_TEST(M0Exit, RootFixClassifiesActiveOnlyUnusableCopyAsS1)
+GC_OTHER_VM_TEST(M0Exit, RootFixFailsClosedOnUnusableActiveWitness)
 {
     SharedRootSlot sharedRoot;
     RootEntryFixture fx(sharedRoot.slot);
@@ -702,7 +702,7 @@ GC_OTHER_VM_TEST(M0Exit, RootFixClassifiesActiveOnlyUnusableCopyAsS1)
                                  reinterpret_cast<MAddress>(fx.heap.obj0));
 }
 
-GC_OTHER_VM_TEST(M0Exit, RootFixClassifiesRetiredOnlyUnusableCopyAsS1)
+GC_OTHER_VM_TEST(M0Exit, RootFixFailsClosedOnUnusableRetiredWitness)
 {
     SharedRootSlot sharedRoot;
     RootEntryFixture fx(sharedRoot.slot);
