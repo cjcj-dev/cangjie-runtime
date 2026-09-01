@@ -1,0 +1,46 @@
+[  RUN   ] M0Exit.RootFixFailsClosedOnUnusableActiveWitness
+[  RUN   ] M0Exit.RootFixFailsClosedOnUnusableActiveWitness
+2026-09-02 02:44:35.875176 3194507 E [FWDTABLE] armed base=0x77b34f5bd000 size=24576 unit=4096 entries=6
+2026-09-02 02:44:35.875876 3194508 E [GCV2][mutrelo] attempt n=1 retain=0
+2026-09-02 02:44:35.876000 3194508 F [LOADFC][fail-closed] site=WCollector::ResolveStoreValue.no-forwarding target=0x77b34f5be040 verdict=2 slotBits=0 unresolved non-Usable from-address must not be handed out
+2026-09-02 02:44:35.876229 3194507 E [FWDTABLE][reclaim] why=gc-unit-explicit-coverage freed=2 deferred=0 coverage_complete=1 retired_total=2 reclaimed_total=2
+GC_UNIT_OTHER_VM_OKIDOKI M0Exit.RootFixFailsClosedOnUnusableActiveWitness
+[FWDTABLE][refuse] atexit full=0 overflow=0 fallbackFull=0 fallbackOverflow=0 armedHit=0 armedMiss=0 unavailable=0 unarmed=0
+[GCV2][detach-check] phase=enforce site=collect_from_garbage checks=0 evidence=0 blocked=0 active_table=0 retired_table=0 route_dest_held=0 fwd_positive=0 fwd_readers=0 fwd_claimed=0 fwd_released=0 copy_inflight=0
+[GCV2][detach-check] phase=enforce site=take_garbage checks=0 evidence=0 blocked=0 active_table=0 retired_table=0 route_dest_held=0 fwd_positive=0 fwd_readers=0 fwd_claimed=0 fwd_released=0 copy_inflight=0
+[GCV2][detach-check] phase=enforce site=take_after_dispel checks=0 evidence=0 blocked=0 active_table=0 retired_table=0 route_dest_held=0 fwd_positive=0 fwd_readers=0 fwd_claimed=0 fwd_released=0 copy_inflight=0
+[GCV2][detach-check] phase=enforce site=reclaim_dirty checks=0 evidence=0 blocked=0 active_table=0 retired_table=0 route_dest_held=0 fwd_positive=0 fwd_readers=0 fwd_claimed=0 fwd_released=0 copy_inflight=0
+[GCV2][detach-check] phase=enforce site=reclaim_mark_quarantine checks=0 evidence=0 blocked=0 active_table=0 retired_table=0 route_dest_held=0 fwd_positive=0 fwd_readers=0 fwd_claimed=0 fwd_released=0 copy_inflight=0
+[GCV2][detach-check] phase=enforce site=release_region checks=0 evidence=0 blocked=0 active_table=0 retired_table=0 route_dest_held=0 fwd_positive=0 fwd_readers=0 fwd_claimed=0 fwd_released=0 copy_inflight=0
+[GCV2][detach-check] phase=enforce site=release_garbage_units checks=0 evidence=0 blocked=0 active_table=0 retired_table=0 route_dest_held=0 fwd_positive=0 fwd_readers=0 fwd_claimed=0 fwd_released=0 copy_inflight=0
+[GCV2][detach-check] phase=enforce site=take_garbage_reuse checks=0 evidence=0 blocked=0 active_table=0 retired_table=0 route_dest_held=0 fwd_positive=0 fwd_readers=0 fwd_claimed=0 fwd_released=0 copy_inflight=0
+[GCV2][detach-check] phase=enforce site=take_dirty_reuse checks=0 evidence=0 blocked=0 active_table=0 retired_table=0 route_dest_held=0 fwd_positive=0 fwd_readers=0 fwd_claimed=0 fwd_released=0 copy_inflight=0
+[GCV2][detach-check] phase=enforce site=take_released_reuse checks=0 evidence=0 blocked=0 active_table=0 retired_table=0 route_dest_held=0 fwd_positive=0 fwd_readers=0 fwd_claimed=0 fwd_released=0 copy_inflight=0
+[GCV2][detach-check] phase=enforce site=clear_units checks=0 evidence=0 blocked=0 active_table=0 retired_table=0 route_dest_held=0 fwd_positive=0 fwd_readers=0 fwd_claimed=0 fwd_released=0 copy_inflight=0
+[GCV2][detach-check] phase=enforce site=release_units checks=0 evidence=0 blocked=0 active_table=0 retired_table=0 route_dest_held=0 fwd_positive=0 fwd_readers=0 fwd_claimed=0 fwd_released=0 copy_inflight=0
+[GCV2][detach-check] phase=enforce site=init_free_units checks=0 evidence=0 blocked=0 active_table=0 retired_table=0 route_dest_held=0 fwd_positive=0 fwd_readers=0 fwd_claimed=0 fwd_released=0 copy_inflight=0
+[GCV2][detach-check] phase=enforce site=init_region_info checks=2 evidence=0 blocked=0 active_table=0 retired_table=0 route_dest_held=0 fwd_positive=0 fwd_readers=0 fwd_claimed=0 fwd_released=0 copy_inflight=0
+[GCV2][detach-check] phase=enforce site=major_recheck checks=0 evidence=0 blocked=0 active_table=0 retired_table=0 route_dest_held=0 fwd_positive=0 fwd_readers=0 fwd_claimed=0 fwd_released=0 copy_inflight=0
+[GCV2][detach-quarantine] gate=1 admitted=0 released=0 recheck_held=0 peak_entries=0 max_entries=65536 max_rechecks=8
+[GCV2][zlife] atexit refuse_released=0 refuse_claimed=0 detach_waited=0
+[ptrcolour][plain-load-heal] attempt=0 success=0 plain_skip=0
+[GCV2][detach-check] phase=enforce site=collect_from_garbage checks=0 evidence=0 blocked=0 active_table=0 retired_table=0 route_dest_held=0 fwd_positive=0 fwd_readers=0 fwd_claimed=0 fwd_released=0 copy_inflight=0
+[GCV2][detach-check] phase=enforce site=take_garbage checks=0 evidence=0 blocked=0 active_table=0 retired_table=0 route_dest_held=0 fwd_positive=0 fwd_readers=0 fwd_claimed=0 fwd_released=0 copy_inflight=0
+[GCV2][detach-check] phase=enforce site=take_after_dispel checks=0 evidence=0 blocked=0 active_table=0 retired_table=0 route_dest_held=0 fwd_positive=0 fwd_readers=0 fwd_claimed=0 fwd_released=0 copy_inflight=0
+[GCV2][detach-check] phase=enforce site=reclaim_dirty checks=0 evidence=0 blocked=0 active_table=0 retired_table=0 route_dest_held=0 fwd_positive=0 fwd_readers=0 fwd_claimed=0 fwd_released=0 copy_inflight=0
+[GCV2][detach-check] phase=enforce site=reclaim_mark_quarantine checks=0 evidence=0 blocked=0 active_table=0 retired_table=0 route_dest_held=0 fwd_positive=0 fwd_readers=0 fwd_claimed=0 fwd_released=0 copy_inflight=0
+[GCV2][detach-check] phase=enforce site=release_region checks=0 evidence=0 blocked=0 active_table=0 retired_table=0 route_dest_held=0 fwd_positive=0 fwd_readers=0 fwd_claimed=0 fwd_released=0 copy_inflight=0
+[GCV2][detach-check] phase=enforce site=release_garbage_units checks=0 evidence=0 blocked=0 active_table=0 retired_table=0 route_dest_held=0 fwd_positive=0 fwd_readers=0 fwd_claimed=0 fwd_released=0 copy_inflight=0
+[GCV2][detach-check] phase=enforce site=take_garbage_reuse checks=0 evidence=0 blocked=0 active_table=0 retired_table=0 route_dest_held=0 fwd_positive=0 fwd_readers=0 fwd_claimed=0 fwd_released=0 copy_inflight=0
+[GCV2][detach-check] phase=enforce site=take_dirty_reuse checks=0 evidence=0 blocked=0 active_table=0 retired_table=0 route_dest_held=0 fwd_positive=0 fwd_readers=0 fwd_claimed=0 fwd_released=0 copy_inflight=0
+[GCV2][detach-check] phase=enforce site=take_released_reuse checks=0 evidence=0 blocked=0 active_table=0 retired_table=0 route_dest_held=0 fwd_positive=0 fwd_readers=0 fwd_claimed=0 fwd_released=0 copy_inflight=0
+[GCV2][detach-check] phase=enforce site=clear_units checks=0 evidence=0 blocked=0 active_table=0 retired_table=0 route_dest_held=0 fwd_positive=0 fwd_readers=0 fwd_claimed=0 fwd_released=0 copy_inflight=0
+[GCV2][detach-check] phase=enforce site=release_units checks=0 evidence=0 blocked=0 active_table=0 retired_table=0 route_dest_held=0 fwd_positive=0 fwd_readers=0 fwd_claimed=0 fwd_released=0 copy_inflight=0
+[GCV2][detach-check] phase=enforce site=init_free_units checks=0 evidence=0 blocked=0 active_table=0 retired_table=0 route_dest_held=0 fwd_positive=0 fwd_readers=0 fwd_claimed=0 fwd_released=0 copy_inflight=0
+[GCV2][detach-check] phase=enforce site=init_region_info checks=0 evidence=0 blocked=0 active_table=0 retired_table=0 route_dest_held=0 fwd_positive=0 fwd_readers=0 fwd_claimed=0 fwd_released=0 copy_inflight=0
+[GCV2][detach-check] phase=enforce site=major_recheck checks=0 evidence=0 blocked=0 active_table=0 retired_table=0 route_dest_held=0 fwd_positive=0 fwd_readers=0 fwd_claimed=0 fwd_released=0 copy_inflight=0
+[GCV2][detach-quarantine] gate=1 admitted=0 released=0 recheck_held=0 peak_entries=0 max_entries=65536 max_rechecks=8
+[GCV2][zlife] atexit refuse_released=0 refuse_claimed=0 detach_waited=0
+[ptrcolour][plain-load-heal] attempt=0 success=0 plain_skip=0
+[  PASS  ] M0Exit.RootFixFailsClosedOnUnusableActiveWitness
+[========] 1 tests: 1 passed, 0 failed
