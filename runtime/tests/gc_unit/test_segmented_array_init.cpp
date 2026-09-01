@@ -413,7 +413,11 @@ void* RunSegmentedCase(void* rawMode)
         uint32_t required = RequiredPhaseRootVisits(gc, ctx.rootVisitSites) |
             RootVisitBit(LargeArrayRootVisitSite::ITERATOR_SKIP);
         if (gc == YieldGc::YOUNG) {
-            required |= RootVisitBit(LargeArrayRootVisitSite::MINOR_RELOCATE);
+            // Relocation's grant pass independently enumerates the native side
+            // root before MINOR_RELOCATE consumes it. This remains required even
+            // when mark used the completed watermark path.
+            required |= RootVisitBit(LargeArrayRootVisitSite::MUTATOR_STACK_NATIVE) |
+                RootVisitBit(LargeArrayRootVisitSite::MINOR_RELOCATE);
         }
         status += (ctx.rootVisitSites & required) == required ? 0 : 1;
     }
