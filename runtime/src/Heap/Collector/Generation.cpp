@@ -887,16 +887,21 @@ void WCollector::DoYoungGarbageCollection()
         // normally.  Capacity does not admit or discard a slot.
         reachableSlots.reserve(rememberedSlots.size());
     }
-    auto mergeY2yDirtyHolders = [&](WorkStack& destination) {
-        theAllocator.VisitAllocBuffers([&destination](AllocBuffer& buffer) {
+    auto mergeY2yDirtyWork = [&](WorkStack& destination) {
+        theAllocator.VisitAllocBuffers([this, &destination](AllocBuffer& buffer) {
             buffer.MergeY2yDirtyHolders(destination);
+            buffer.MergeY2yDirtySlots([this, &destination](MAddress slot) {
+                RefField<>& field = HeapSlotAt<>(slot);
+                BaseObject* target = ResolveMinorReference(field);
+                PushYoungObject(target, destination, "y2y_slot");
+            });
         });
     };
 #if defined(MRT_TESTABLE_INTERNALS)
-    auto pendingY2yDirtyHolderCount = [&]() {
+    auto pendingY2yDirtyWorkCount = [&]() {
         size_t pending = 0;
         theAllocator.VisitAllocBuffers([&pending](AllocBuffer& buffer) {
-            pending += buffer.Y2yDirtyHolderCount();
+            pending += buffer.Y2yDirtyHolderCount() + buffer.Y2yDirtySlotCount();
         });
         return pending;
     };
@@ -973,9 +978,9 @@ void WCollector::DoYoungGarbageCollection()
         // wave8 y2y handoff (8d4253522 content): consume the pre-window batch
         // before reset releases mutators. New stores after reset remain owned
         // by the STW2 consumer and cannot race this allocator-buffer merge.
-        mergeY2yDirtyHolders(workStack);
+        mergeY2yDirtyWork(workStack);
 #if defined(MRT_TESTABLE_INTERNALS)
-        NoteY2yBeforeReleaseTestReceipt(pendingY2yDirtyHolderCount());
+        NoteY2yBeforeReleaseTestReceipt(pendingY2yDirtyWorkCount());
 #endif
         stw.reset();
 #if defined(MRT_TESTABLE_INTERNALS)
@@ -1083,7 +1088,7 @@ void WCollector::DoYoungGarbageCollection()
         stw = std::make_unique<ScopedStopTheWorld>("young mark terminate", true,
                                                    GCPhase::GC_PHASE_CLEAR_SATB_BUFFER);
 #if defined(MRT_TESTABLE_INTERNALS)
-        const size_t y2yBatchAtMarkEnd = pendingY2yDirtyHolderCount();
+        const size_t y2yBatchAtMarkEnd = pendingY2yDirtyWorkCount();
 #endif
         theAllocator.VisitAllocBuffers([&workStack](AllocBuffer& buffer) {
             // The CLEAR_SATB transition also closes each mutator's epoch stack
@@ -1091,8 +1096,8 @@ void WCollector::DoYoungGarbageCollection()
             // thread-local mark stacks flushed by ZMark::try_end().
             buffer.MergeRoots(workStack);
             buffer.MergeYoungAllocBlack(workStack);
-            buffer.MergeY2yDirtyHolders(workStack);
         });
+        mergeY2yDirtyWork(workStack);
 #if defined(MRT_TESTABLE_INTERNALS)
         NoteY2yAfterStw2TestReceipt(y2yBatchAtMarkEnd);
 #endif

@@ -871,6 +871,49 @@ GC_TEST(YoungConc, YoungToYoungDirtyHolderReachesWorkStack)
     GC_EXPECT_EQ(buf->Y2yDirtyHolderCount(), 0u);
 }
 
+// A1: y2y + empty holder is the ABI grid point that the holder-only handoff
+// could not represent.  It remains out of remset and reaches the slot-grey
+// queue exactly once; removing Barrier::PushY2yDirtySlot reds only this case.
+GC_TEST(YoungConc, YoungToYoungNullHolderQueuesSlotWork)
+{
+    GcHeapFixture fx;
+    fx.region0->SetYoungRegionFlag(1);
+    fx.region0->SetYoungAge(1);
+    fx.region1->SetYoungRegionFlag(1);
+    fx.region1->SetYoungAge(1);
+
+    auto* field = &HeapSlotAt<>(reinterpret_cast<MAddress>(fx.obj0) + TYPEINFO_PTR_SIZE);
+    TestCollector collector;
+    RememberedSet rs;
+    rs.Initialize(fx.heapStart, 2 * RegionInfo::UNIT_SIZE);
+    TestBarrier barrier(collector, rs);
+    auto* buffer = new AllocBuffer();
+    AllocBuffer* saved = ThreadLocal::GetAllocBuffer();
+    ThreadLocal::SetAllocBuffer(buffer);
+
+    field->StoreColoured(zpointer::null);
+    barrier.WriteReference(nullptr, *field, fx.obj1);
+
+    ThreadLocal::SetAllocBuffer(saved);
+    std::unordered_set<MAddress> records;
+    rs.DrainForMinor(records);
+    GC_EXPECT_TRUE(records.empty());
+    GC_EXPECT_EQ(buffer->Y2yDirtyHolderCount(), 0u);
+    GC_EXPECT_EQ(buffer->Y2yDirtySlotCount(), 1u);
+
+    std::vector<MAddress> slots;
+    std::vector<BaseObject*> targets;
+    buffer->MergeY2yDirtySlots([&](MAddress slot) {
+        slots.push_back(slot);
+        targets.push_back(to_object(HeapSlotAt<>(slot).GetTargetObject()));
+    });
+    GC_EXPECT_EQ(slots.size(), 1u);
+    GC_EXPECT_EQ(slots[0], reinterpret_cast<MAddress>(field));
+    GC_EXPECT_EQ(targets.size(), 1u);
+    GC_EXPECT_EQ(targets[0], fx.obj1);
+    GC_EXPECT_EQ(buffer->Y2yDirtySlotCount(), 0u);
+}
+
 // old→young still remset (control: TRACE window must not drop the only remset edge).
 GC_TEST(YoungConc, OldToYoungStillRecorded)
 {

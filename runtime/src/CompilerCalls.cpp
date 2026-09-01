@@ -376,6 +376,11 @@ extern "C" void MCC_WriteRefField(const ObjectPtr ref, const ObjectPtr obj, RefF
     // Storage class is determined by the destination slot.  The compiler may
     // pass a null/opaque holder for a GEP into a managed object; classifying by
     // that holder would misroute a heap slot through RootSlot::StorePlain.
+    // IsGlobalStruct cannot overlap this branch for a valid compiler call:
+    // x86_64/Android use base==1 only for a global-var struct argument, while
+    // non-Android AArch64 tags that global field address itself.  Both storage
+    // forms are outside Heap.  Keeping the heap-slot decision authoritative
+    // also fails safe for a malformed contradictory pair.
     if (Heap::IsHeapAddress(plainField)) {
         // Heap holder + stack value: PEA stack-promoted RawArray/NewObject stored
         // via WriteRefField (HashMap.init buckets). Use Mutator::IsStackAddr so

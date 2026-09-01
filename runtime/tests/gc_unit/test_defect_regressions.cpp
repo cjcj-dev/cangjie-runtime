@@ -362,6 +362,28 @@ GC_TEST(DefectRegress, CompilerWriteNullHolderStaticSlotUsesRootPath)
     GC_EXPECT_EQ(ClassifySlotWord(installed), SlotWordVerdict::kIllegal);
 }
 
+// The compiler's global-struct marker is paired with global storage, not a
+// managed HeapSlot.  Preserve that legal marked call while heap classification
+// remains authoritative for contradictory inputs.
+GC_TEST(DefectRegress, CompilerWriteTaggedGlobalStructUsesRootPath)
+{
+    ExportHandleFixture fx;
+    RefField<false> globalField(zpointer::null);
+#if defined(__aarch64__) && !defined(__ANDROID__)
+    constexpr uintptr_t globalFlag = 1ULL << 63;
+    auto* taggedField = reinterpret_cast<RefField<false>*>(
+        reinterpret_cast<uintptr_t>(&globalField) | globalFlag);
+    MCC_WriteRefField(fx.heap.obj0, nullptr, taggedField);
+#else
+    auto* globalMarker = reinterpret_cast<BaseObject*>(static_cast<uintptr_t>(1));
+    MCC_WriteRefField(fx.heap.obj0, globalMarker, &globalField);
+#endif
+    const uintptr_t installed = static_cast<uintptr_t>(raw(globalField.GetFieldValue()));
+    GC_EXPECT_FALSE(Heap::IsHeapAddress(&globalField));
+    GC_EXPECT_EQ(installed, reinterpret_cast<uintptr_t>(fx.heap.obj0));
+    GC_EXPECT_EQ(ClassifySlotWord(installed), SlotWordVerdict::kIllegal);
+}
+
 // hunt-coll BUG: GC published finishedGcIndex / isGcStarted before stats and
 // prevGcFinishTime. Waiter could read stale MCC_GetGC* and a HEU in that window
 // would not see the just-finished cycle. Product: CopyCollector.cpp RunGarbageCollection

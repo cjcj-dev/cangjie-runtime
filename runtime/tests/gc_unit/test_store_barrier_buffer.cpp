@@ -288,6 +288,53 @@ GC_TEST(StoreBuf, ProductPhaseFlushHandsPairedPrevToSatb)
     GC_EXPECT_TRUE(newCount >= 1u);
 }
 
+// A2: an empty holder must never create the pBase=null pending form that skips
+// relocation remap.  The product barrier discharges it immediately.
+GC_TEST(StoreBuf, ProductNullHolderBypassesPendingRelocationEntry)
+{
+    GcHeapFixture fx;
+    fx.region0->SetYoungRegionFlag(0);
+    fx.region1->SetYoungRegionFlag(1);
+    RememberedSet rs;
+    rs.Initialize(fx.heapStart, 2 * RegionInfo::UNIT_SIZE);
+    StoreBufferCollector collector;
+    TraceBarrier barrier(collector, rs);
+    AllocBuffer alloc;
+    AllocBufferScope allocScope(alloc);
+    HeapSlot<>& field = HeapSlotAt<>(reinterpret_cast<MAddress>(fx.obj0) + TYPEINFO_PTR_SIZE);
+    field.StoreColoured(StoreGoodPointer(fx.obj0));
+
+    barrier.WriteReference(nullptr, field, fx.obj1);
+
+    GC_EXPECT_EQ(alloc.GetStoreBarrierBuffer().Pending(), 0u);
+    GC_EXPECT_TRUE(rs.Contains(reinterpret_cast<MAddress>(&field)));
+}
+
+// B2: a non-null non-heap holder has the same immediate discipline as null;
+// it is never interpreted as a relocatable managed base.
+GC_TEST(StoreBuf, ProductNonHeapHolderBypassesPendingRelocationEntry)
+{
+    GcHeapFixture fx;
+    fx.region0->SetYoungRegionFlag(0);
+    fx.region1->SetYoungRegionFlag(1);
+    RememberedSet rs;
+    rs.Initialize(fx.heapStart, 2 * RegionInfo::UNIT_SIZE);
+    StoreBufferCollector collector;
+    TraceBarrier barrier(collector, rs);
+    AllocBuffer alloc;
+    AllocBufferScope allocScope(alloc);
+    HeapSlot<>& field = HeapSlotAt<>(reinterpret_cast<MAddress>(fx.obj0) + TYPEINFO_PTR_SIZE);
+    field.StoreColoured(StoreGoodPointer(fx.obj0));
+    BaseObject* nonHeapHolder = reinterpret_cast<BaseObject*>(fx.typeInfo);
+    GC_EXPECT_TRUE(nonHeapHolder != nullptr);
+    GC_EXPECT_FALSE(Heap::IsHeapAddress(nonHeapHolder));
+
+    barrier.WriteReference(nonHeapHolder, field, fx.obj1);
+
+    GC_EXPECT_EQ(alloc.GetStoreBarrierBuffer().Pending(), 0u);
+    GC_EXPECT_TRUE(rs.Contains(reinterpret_cast<MAddress>(&field)));
+}
+
 // Deterministic compiler-hit object graph: oldReferent is reachable only from
 // holder.field before the overwrite; newReferent is reachable from that field
 // afterwards. The compiler ABI must carry the pre-store word so the current
