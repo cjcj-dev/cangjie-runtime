@@ -298,7 +298,7 @@ GC_TEST(StoreBuf, ProductNullHolderBypassesPendingRelocationEntry)
     RememberedSet rs;
     rs.Initialize(fx.heapStart, 2 * RegionInfo::UNIT_SIZE);
     StoreBufferCollector collector;
-    TraceBarrier barrier(collector, rs);
+    Barrier barrier(collector, rs);
     AllocBuffer alloc;
     AllocBufferScope allocScope(alloc);
     HeapSlot<>& field = HeapSlotAt<>(reinterpret_cast<MAddress>(fx.obj0) + TYPEINFO_PTR_SIZE);
@@ -320,7 +320,7 @@ GC_TEST(StoreBuf, ProductNonHeapHolderBypassesPendingRelocationEntry)
     RememberedSet rs;
     rs.Initialize(fx.heapStart, 2 * RegionInfo::UNIT_SIZE);
     StoreBufferCollector collector;
-    TraceBarrier barrier(collector, rs);
+    Barrier barrier(collector, rs);
     AllocBuffer alloc;
     AllocBufferScope allocScope(alloc);
     HeapSlot<>& field = HeapSlotAt<>(reinterpret_cast<MAddress>(fx.obj0) + TYPEINFO_PTR_SIZE);
