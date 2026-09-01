@@ -1,0 +1,24 @@
+2026-09-02 03:05:54.943145 3483094 E [FWDTABLE] armed base=0x743ff0200000 size=67108864 unit=4096 entries=16384
+2026-09-02 03:05:54.945642 3483096 E [ZCOLOR2][mark-mask-flip] generation=young count=1 g_cjMarkBadMask=0x9e000000000000 g_cjStoreBadMask=0x19e000000000000
+2026-09-02 03:05:54.945754 3483096 E [GCV2][epoch-handshake] source=pre-minor-stack epoch=1 requested=1 acked=1 acked_twice=0 self=0 gc_assisted=1 starting=0 running=1 parked=0 exiting=0 deferred_create=0 born_clean=0 exit_transition=0 destroy_deferred=0 stw_calls=0 stack_scanned=1 stack_fallback=0 stack_frames=6 wlock_us=0 timeout_ms=30000 epoch_handshake=required stack_scan=required
+2026-09-02 03:05:54.945797 3483096 E [GCV2][stack-scan-fallback] epoch=1 concurrent_done=1 stw_fallback=0 stack_scan=required
+2026-09-02 03:05:54.946030 3483096 E [GhostRetention] retained_regions=0 retained_bytes=0
+2026-09-02 03:05:54.946045 3483096 E [ENROLTIME] afterFlip=0 n=1 phase=12 before=1 after=0
+2026-09-02 03:05:54.946075 3483096 E [FLIPORDER] young flip arm=after-fromspace
+2026-09-02 03:05:54.946191 3483096 E [GCV2][mutrelo] attempt n=1 retain=0
+2026-09-02 03:05:54.946202 3483096 E [GCV2][mutrelo] attempt n=2 retain=1
+2026-09-02 03:05:54.946210 3483096 E [GCV2][mutrelo] attempt n=3 retain=2
+2026-09-02 03:05:54.946219 3483096 E [GCV2][mutrelo] attempt n=4 retain=3
+2026-09-02 03:05:54.946227 3483096 E [GCV2][mutrelo] attempt n=5 retain=4
+2026-09-02 03:05:54.946235 3483096 E [GCV2][mutrelo] attempt n=6 retain=5
+2026-09-02 03:05:54.946243 3483096 E [GCV2][mutrelo] attempt n=7 retain=6
+2026-09-02 03:05:54.946251 3483096 E [GCV2][mutrelo] attempt n=8 retain=7
+2026-09-02 03:05:54.946395 3483096 E [COLOURWHO] armed first sc=0
+2026-09-02 03:05:54.946433 3483096 E [GCV2][expire-kept] n=1 bytes=65536
+2026-09-02 03:05:54.946468 3483096 E [GhostRetention] retained_regions=0 retained_bytes=0
+2026-09-02 03:05:54.946616 3483094 F Check failed: (sites & required) == required
+2026-09-02 03:05:54.946625 3483094 F language-level segmented-array GC missed managed root consumer: required=0xaa actual=0xa2
+3483094 E CJNative Handle signal: 6.
+3483094 E signal SIGABRT (6) pc=0x743ff86969bc fa=0x3525d6 si_addr=0x3525d6
+[GCLOG] v=3 rec=crash seq=0 signo=6 signame=SIGABRT si_code=-6 si_codename=SI_TKILL si_addr=0x3525d6 pc=0x743ff86969bc pc_mod=libc.so.6 pc_off=0x969bc sym=pthread_kill rbp=0x3525d6 gc_phase=reclaim_satb_phase gc_kind=active in_par_fix=0 regs=rax=0x0,rbx=0x744004b78980,rcx=0x743ff86969bc,rdx=0x6,rsi=0x3525d6,rdi=0x3525d6,rbp=0x3525d6,rsp=0x743ff84ea800,r8=0x743ff84ea8d0,r9=0x7f,r10=0x8,r11=0x246,r12=0x6,r13=0x16,r14=0x743ff84eaae0,r15=0x743ff8d20598,rip=0x743ff86969bc insn=4189c541f7dd3d00f0ffffb800000000 assert=language-level_segmented-array_GC_missed_managed_root_consumer:_required=0xaa_actual=0xa2
+[GCV2][whozero] CRASH-SCAN hits=0 ring=0 n=0 r13=0x16 rcx=0x743ff86969bc rsi=0x3525d6 rbx=0x744004b78980 r12=0x6
