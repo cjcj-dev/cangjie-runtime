@@ -624,9 +624,13 @@ GC_OTHER_VM_TEST(YoungConc, Y2yAfterReleaseBatchForcesContinueAndReachesClosure)
     LiveInfo* live = fx.PlantLiveInfo(fx.region1);
     (void)fx.PlantMarkBitmap<Generation::Young>(live, fx.region1->GetRegionSize());
     BaseObject* child = fx.PlaceObject(reinterpret_cast<MAddress>(fx.obj1) + 64);
-    fx.region1->SetRegionAllocPtr(reinterpret_cast<MAddress>(child) + 64);
+    BaseObject* slotParent = fx.PlaceObject(reinterpret_cast<MAddress>(child) + 64);
+    BaseObject* slotChild = fx.PlaceObject(reinterpret_cast<MAddress>(slotParent) + 64);
+    fx.region1->SetRegionAllocPtr(reinterpret_cast<MAddress>(slotChild) + 64);
     auto* parentField = &HeapSlotAt<>(reinterpret_cast<MAddress>(fx.obj1) + TYPEINFO_PTR_SIZE);
     parentField->StoreColoured(GcUnit::StoreGoodPointer(child));
+    auto* slotParentField = &HeapSlotAt<>(reinterpret_cast<MAddress>(slotParent) + TYPEINFO_PTR_SIZE);
+    slotParentField->StoreColoured(GcUnit::StoreGoodPointer(slotChild));
 
     CollectorResources& resources = Heap::GetHeap().GetCollectorResources();
     WCollector collector(Heap::GetHeap().GetAllocator(), resources);
@@ -637,6 +641,7 @@ GC_OTHER_VM_TEST(YoungConc, Y2yAfterReleaseBatchForcesContinueAndReachesClosure)
     RegionSpace& space = reinterpret_cast<RegionSpace&>(Heap::GetHeap().GetAllocator());
     space.GetRegionManager().EnlistFullThreadLocalRegion(fx.region1);
     space.GetRegionManager().AddRawPointerObject(child);
+    space.GetRegionManager().AddRawPointerObject(slotChild);
     RememberedSet& runtimeRememberedSet = Heap::GetHeap().GetRememberedSet();
     runtimeRememberedSet.Initialize(fx.heapStart, 2 * RegionInfo::UNIT_SIZE);
     RememberedSet producerRememberedSet;
@@ -655,7 +660,7 @@ GC_OTHER_VM_TEST(YoungConc, Y2yAfterReleaseBatchForcesContinueAndReachesClosure)
     // existing continue edge must follow it before a second mark-end succeeds.
     AllocBuffer::GetOrCreateAllocBuffer()->PushY2yDirtyHolder(fx.obj0);
     ArmY2yAfterReleaseTestReceipt(fx.obj1, 2);
-    ArmY2ySlotAfterReleaseTestReceipt(reinterpret_cast<MAddress>(parentField), 2);
+    ArmY2ySlotAfterReleaseTestReceipt(reinterpret_cast<MAddress>(slotParentField), 2);
 #endif
     ThreadLocal::SetMutator(nullptr);
     RelocationReceiptTestAccess::RunCollectionDispatch(collector);
@@ -682,7 +687,11 @@ GC_OTHER_VM_TEST(YoungConc, Y2yAfterReleaseBatchForcesContinueAndReachesClosure)
     const bool childMarked = stayedYoung
         ? fx.region1->IsMarkedObject(fx.region1->GetMarkView<Generation::Young>(), child)
         : fx.region1->IsMarkedObject(fx.region1->GetMarkView<Generation::Old>(), child);
+    const bool slotChildMarked = stayedYoung
+        ? fx.region1->IsMarkedObject(fx.region1->GetMarkView<Generation::Young>(), slotChild)
+        : fx.region1->IsMarkedObject(fx.region1->GetMarkView<Generation::Old>(), slotChild);
     GC_EXPECT_TRUE(childMarked);
+    GC_EXPECT_TRUE(slotChildMarked);
     RelocationReceiptTestAccess::BindThreadPool(resources, nullptr);
     threadPool.Exit();
     RelocationReceiptTestAccess::BindCollector(resources, nullptr);
