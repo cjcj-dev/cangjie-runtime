@@ -64,6 +64,26 @@ public:
     // means a carrier or closed publication exists but can no longer be
     // queried. Unarmed remains the pre-publication route-geometry state.
     enum class ToAnswer : uint8_t { ArmedHit, ArmedMiss, Unavailable, Unarmed };
+    enum class ToUnavailableCause : uint8_t {
+        None = 0,
+        ActiveRetainRejected = 1,
+        RetiredUnavailable = 2,
+        PublicationClosed = 4,
+    };
+
+    // Decision record from one LookupTo invocation.  These are the exact local
+    // values consumed by its final classification; no caller re-queries the
+    // active/retired/publication carriers to construct diagnostics.
+    struct LookupResult {
+        MAddress to;
+        ToAnswer answer;
+        ToUnavailableCause unavailableCause;
+        bool activeCandidate;
+        bool activeRetained;
+        ToAnswer activeAnswer;
+        ToAnswer retiredAnswer;
+        bool publicationClosed;
+    };
 
     static bool Initialize(MAddress heapStart, size_t heapSize, size_t unitSize);
 
@@ -136,7 +156,7 @@ public:
     // consumes this retired receipt after active generation takeover.
     static MAddress RequireRetiredTo(MAddress from);
     static bool EntriesArmed(MAddress from);
-    static MAddress LookupTo(MAddress from, ToAnswer* answer = nullptr);
+    static LookupResult LookupTo(MAddress from);
     static uint64_t ArmedHitCount();
     static uint64_t ArmedMissCount();
     static uint64_t UnavailableCount();
@@ -145,6 +165,10 @@ public:
 #if defined(MRT_TESTABLE_INTERNALS)
     using LookupRetainHook = void (*)(void*);
     static void SetLookupRetainHook(LookupRetainHook hook, void* context);
+    // Deterministic rendezvous after LookupTo has formed its decision record,
+    // but before the caller can inspect any later ghost/header state.
+    using LookupDecisionHook = void (*)(void*);
+    static void SetLookupDecisionHook(LookupDecisionHook hook, void* context);
     // Deterministic rendezvous immediately before a fresh receipt enters the
     // destination-life registration critical section.
     using ReceiptLifeRegisterHook = void (*)(void*);

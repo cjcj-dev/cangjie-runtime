@@ -113,6 +113,8 @@ std::atomic<uint64_t> g_unarmed{ 0 };
 #if defined(MRT_TESTABLE_INTERNALS)
 std::atomic<ForwardingTable::LookupRetainHook> g_lookupRetainHook{ nullptr };
 std::atomic<void*> g_lookupRetainHookContext{ nullptr };
+std::atomic<ForwardingTable::LookupDecisionHook> g_lookupDecisionHook{ nullptr };
+std::atomic<void*> g_lookupDecisionHookContext{ nullptr };
 std::atomic<ForwardingTable::ReceiptLifeRegisterHook> g_receiptLifeRegisterHook{ nullptr };
 std::atomic<void*> g_receiptLifeRegisterHookContext{ nullptr };
 #endif
@@ -1001,16 +1003,18 @@ MAddress ForwardingTable::FindTo(MAddress from)
 
 bool ForwardingTable::EntriesArmed(MAddress from) { return GetEntries(from) != nullptr; }
 
-MAddress ForwardingTable::LookupTo(MAddress from, ToAnswer* answer)
+ForwardingTable::LookupResult ForwardingTable::LookupTo(MAddress from)
 {
     // zForwarding.cpp:86-108,134-181. Resolve the active slot and retain it
     // under the same install lock that seals/unlinks it. The lookup may then
     // run lock-free while ClearEntries drains this exact ownership token.
     ZForwarding* retained = nullptr;
+    bool activeCandidate = false;
     bool activeRejected = false;
     {
         std::lock_guard<std::mutex> lock(g_installLock);
         ZForwarding* candidate = Ready() ? MapGet(g_entries, from) : nullptr;
+        activeCandidate = candidate != nullptr;
         if (candidate != nullptr) {
             if (!candidate->page_life_current(RegionLifeClock::Carrier::ARMED_ENTRY) ||
                 !candidate->retain_page()) {
@@ -1033,44 +1037,63 @@ MAddress ForwardingTable::LookupTo(MAddress from, ToAnswer* answer)
         retained->release_page();
         if (to != 0) {
             g_armedHit.fetch_add(1, std::memory_order_relaxed);
-            if (answer != nullptr) {
-                *answer = ToAnswer::ArmedHit;
-            }
-            return to;
+            return { to, ToAnswer::ArmedHit, ToUnavailableCause::None, activeCandidate,
+                     true, ToAnswer::ArmedHit, ToAnswer::Unarmed, false };
         }
     }
     ToAnswer retiredAnswer = ToAnswer::Unarmed;
     const MAddress retired = FindRetiredToImpl(from, &retiredAnswer);
     if (retired != 0) {
         g_armedHit.fetch_add(1, std::memory_order_relaxed);
-        if (answer != nullptr) {
-            *answer = ToAnswer::ArmedHit;
-        }
-        return retired;
+        return { retired, ToAnswer::ArmedHit, ToUnavailableCause::None, activeCandidate,
+                 activeSearched, activeSearched ? ToAnswer::ArmedMiss : ToAnswer::Unarmed,
+                 ToAnswer::ArmedHit, false };
     }
     // A carrier found in the active slot but refused by retain is a lifecycle
     // failure. It must not be downgraded to an ordinary armed miss merely
     // because the retired scan also saw ArmedMiss (zForwarding.cpp:171-181).
-    if (activeRejected || retiredAnswer == ToAnswer::Unavailable ||
-        PublicationClosedAt(from)) {
-        g_unavailable.fetch_add(1, std::memory_order_relaxed);
-        if (answer != nullptr) {
-            *answer = ToAnswer::Unavailable;
+    const bool publicationClosed = PublicationClosedAt(from);
+    if (activeRejected || retiredAnswer == ToAnswer::Unavailable || publicationClosed) {
+        uint8_t causeBits = 0;
+        if (activeRejected) {
+            causeBits |= static_cast<uint8_t>(ToUnavailableCause::ActiveRetainRejected);
         }
-        return 0;
+        if (retiredAnswer == ToAnswer::Unavailable) {
+            causeBits |= static_cast<uint8_t>(ToUnavailableCause::RetiredUnavailable);
+        }
+        if (publicationClosed) {
+            causeBits |= static_cast<uint8_t>(ToUnavailableCause::PublicationClosed);
+        }
+        const LookupResult result{
+            0,
+            ToAnswer::Unavailable,
+            static_cast<ToUnavailableCause>(causeBits),
+            activeCandidate,
+            activeSearched,
+            activeRejected ? ToAnswer::Unavailable
+                           : (activeSearched ? ToAnswer::ArmedMiss : ToAnswer::Unarmed),
+            retiredAnswer,
+            publicationClosed,
+        };
+        g_unavailable.fetch_add(1, std::memory_order_relaxed);
+#if defined(MRT_TESTABLE_INTERNALS)
+        ForwardingTable::LookupDecisionHook hook =
+            g_lookupDecisionHook.load(std::memory_order_acquire);
+        if (hook != nullptr) {
+            hook(g_lookupDecisionHookContext.load(std::memory_order_acquire));
+        }
+#endif
+        return result;
     }
     if (activeSearched || retiredAnswer == ToAnswer::ArmedMiss) {
         g_armedMiss.fetch_add(1, std::memory_order_relaxed);
-        if (answer != nullptr) {
-            *answer = ToAnswer::ArmedMiss;
-        }
-        return 0;
+        return { 0, ToAnswer::ArmedMiss, ToUnavailableCause::None, activeCandidate,
+                 activeSearched, activeSearched ? ToAnswer::ArmedMiss : ToAnswer::Unarmed,
+                 retiredAnswer, publicationClosed };
     }
     g_unarmed.fetch_add(1, std::memory_order_relaxed);
-    if (answer != nullptr) {
-        *answer = ToAnswer::Unarmed;
-    }
-    return 0;
+    return { 0, ToAnswer::Unarmed, ToUnavailableCause::None, activeCandidate, false,
+             ToAnswer::Unarmed, retiredAnswer, publicationClosed };
 }
 
 uint64_t ForwardingTable::ArmedHitCount() { return g_armedHit.load(std::memory_order_relaxed); }
@@ -1083,6 +1106,12 @@ void ForwardingTable::SetLookupRetainHook(LookupRetainHook hook, void* context)
 {
     g_lookupRetainHookContext.store(context, std::memory_order_release);
     g_lookupRetainHook.store(hook, std::memory_order_release);
+}
+
+void ForwardingTable::SetLookupDecisionHook(LookupDecisionHook hook, void* context)
+{
+    g_lookupDecisionHookContext.store(context, std::memory_order_release);
+    g_lookupDecisionHook.store(hook, std::memory_order_release);
 }
 
 void ForwardingTable::SetReceiptLifeRegisterHook(ReceiptLifeRegisterHook hook, void* context)
