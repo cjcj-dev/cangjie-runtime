@@ -10,7 +10,9 @@
 #include <csignal>
 #include <dlfcn.h>
 #include <mutex>
+#include <new>
 #include <sstream>
+#include <sys/mman.h>
 #include <sys/wait.h>
 #include <unistd.h>
 
@@ -266,8 +268,10 @@ struct RootEntryFixture {
         Concurrency concurrency;
     };
 
-    RootEntryFixture() : collector(Heap::GetHeap().GetAllocator(), Heap::GetHeap().GetCollectorResources())
+    explicit RootEntryFixture(RootSlot* externalRoot = nullptr)
+        : collector(Heap::GetHeap().GetAllocator(), Heap::GetHeap().GetCollectorResources())
     {
+        registeredRoot = externalRoot != nullptr ? externalRoot : &root;
         ProductRootRuntime::Ensure();
         auto& forwarding = ProductForwardingApi::Get();
         forwarding.Initialize(heap.heapStart, GcHeapFixture::kUnits * RegionInfo::UNIT_SIZE,
@@ -282,8 +286,8 @@ struct RootEntryFixture {
             GC_EXPECT_TRUE(forwarding.InstallPublicationBeforeCopy(
                 heap.region0->GetRegionStart(), heap.region0->GetRegionSize(), heap.region0));
         }
-        StorePlain(root, from_object(heap.obj0));
-        registeredRoots[0] = &root;
+        StorePlain(*registeredRoot, from_object(heap.obj0));
+        registeredRoots[0] = registeredRoot;
         Heap::GetHeap().RegisterStaticRoots(reinterpret_cast<Uptr>(registeredRoots), 1);
     }
 
@@ -328,6 +332,7 @@ struct RootEntryFixture {
     GcHeapFixture heap;
     WCollector collector;
     RootSlot root;
+    RootSlot* registeredRoot = nullptr;
     RootSlot* registeredRoots[1] = {};
 };
 
@@ -350,6 +355,49 @@ void ExpectControlledAbort(const std::function<void()>& body)
     GC_EXPECT_EQ(waitpid(child, &status, 0), child);
     GC_EXPECT_TRUE(WIFSIGNALED(status));
     GC_EXPECT_EQ(WTERMSIG(status), SIGABRT);
+}
+
+struct SharedRootSlot {
+    SharedRootSlot()
+    {
+        storage = mmap(nullptr, sizeof(RootSlot), PROT_READ | PROT_WRITE,
+                       MAP_SHARED | MAP_ANONYMOUS, -1, 0);
+        GC_EXPECT_TRUE(storage != MAP_FAILED);
+        slot = new (storage) RootSlot();
+    }
+
+    ~SharedRootSlot()
+    {
+        if (slot != nullptr) {
+            slot->~RootSlot();
+        }
+        if (storage != MAP_FAILED) {
+            (void)munmap(storage, sizeof(RootSlot));
+        }
+    }
+
+    void* storage = MAP_FAILED;
+    RootSlot* slot = nullptr;
+};
+
+void ExpectRootFixControlledAbort(RootEntryFixture& fx, RootSlot& sharedRoot,
+                                  MAddress expectedFrom)
+{
+    const pid_t child = fork();
+    GC_EXPECT_TRUE(child >= 0);
+    if (child == 0) {
+        (void)signal(SIGABRT, SIG_DFL);
+        fx.collector.FixMinorRootSlots(nullptr);
+        _exit(0);
+    }
+    int status = 0;
+    GC_EXPECT_EQ(waitpid(child, &status, 0), child);
+    GC_EXPECT_TRUE(WIFSIGNALED(status));
+    GC_EXPECT_EQ(WTERMSIG(status), SIGABRT);
+    // The shared slot lets the parent verify the safety invariant across the
+    // controlled termination: unresolved forwarding never writes a fabricated to.
+    GC_EXPECT_EQ(static_cast<uintptr_t>(raw(sharedRoot.LoadPlain())),
+                 static_cast<uintptr_t>(expectedFrom));
 }
 } // namespace
 
@@ -612,19 +660,16 @@ GC_TEST(M0Exit, ReadRuntimeEntryResolvedNormalPathIsSilent)
     GC_EXPECT_EQ(after.s1, before.s1);
 }
 
-GC_OTHER_VM_TEST(M0Exit, RootFixRuntimeEnumerationClassifiesNoCopyAsS0)
+GC_OTHER_VM_TEST(M0Exit, RootFixFailsClosedOnUnmappedForwardedRoot)
 {
-    RootEntryFixture fx;
-    const M0ExitDiagnostics::Counts before = M0ExitDiagnostics::GetCounts();
-
-    fx.collector.FixMinorRootSlots(nullptr);
-
-    const M0ExitDiagnostics::Counts after = M0ExitDiagnostics::GetCounts();
-    GC_EXPECT_EQ(after.total, before.total + 1);
-    GC_EXPECT_EQ(after.s0, before.s0 + 1);
-    GC_EXPECT_EQ(after.rootFix, before.rootFix + 1);
-    GC_EXPECT_EQ(static_cast<uintptr_t>(raw(fx.root.LoadPlain())),
-                 reinterpret_cast<uintptr_t>(fx.heap.obj0));
+    SharedRootSlot sharedRoot;
+    RootEntryFixture fx(sharedRoot.slot);
+    std::memcpy(fx.heap.obj1, fx.heap.obj0, fx.heap.obj0->GetSize());
+    fx.heap.obj0->SetStateCode(ObjectState::FORWARDED);
+    GC_EXPECT_TRUE(fx.collector.FindToVersion(fx.heap.obj0).state() ==
+                   FindToVersionResult::State::Unavailable);
+    ExpectRootFixControlledAbort(fx, *sharedRoot.slot,
+                                 reinterpret_cast<MAddress>(fx.heap.obj0));
 }
 
 GC_OTHER_VM_TEST(M0Exit, RootFixRuntimeEnumerationFailsClosedWithoutPublishedMapping)
@@ -648,40 +693,22 @@ GC_OTHER_VM_TEST(M0Exit, RootFixRuntimeEnumerationFailsClosedWithoutPublishedMap
     GC_EXPECT_EQ(WTERMSIG(status), SIGABRT);
 }
 
-GC_OTHER_VM_TEST(M0Exit, RootFixClassifiesActiveOnlyUnusableCopyAsS1)
+GC_OTHER_VM_TEST(M0Exit, RootFixFailsClosedOnUnusableActiveWitness)
 {
-    RootEntryFixture fx;
+    SharedRootSlot sharedRoot;
+    RootEntryFixture fx(sharedRoot.slot);
     (void)fx.PublishUnusableActiveWitness();
-    const M0ExitDiagnostics::Counts before = M0ExitDiagnostics::GetCounts();
-
-    fx.collector.FixMinorRootSlots(nullptr);
-
-    const M0ExitDiagnostics::Counts after = M0ExitDiagnostics::GetCounts();
-    GC_EXPECT_EQ(after.total, before.total + 1);
-    GC_EXPECT_EQ(after.s1, before.s1 + 1);
-    GC_EXPECT_EQ(after.activeWitness, before.activeWitness + 1);
-    GC_EXPECT_EQ(after.retiredWitness, before.retiredWitness);
-    GC_EXPECT_EQ(after.copyPublishedWitness, before.copyPublishedWitness);
-    GC_EXPECT_EQ(static_cast<uintptr_t>(raw(fx.root.LoadPlain())),
-                 reinterpret_cast<uintptr_t>(fx.heap.obj0));
+    ExpectRootFixControlledAbort(fx, *sharedRoot.slot,
+                                 reinterpret_cast<MAddress>(fx.heap.obj0));
 }
 
-GC_OTHER_VM_TEST(M0Exit, RootFixClassifiesRetiredOnlyUnusableCopyAsS1)
+GC_OTHER_VM_TEST(M0Exit, RootFixFailsClosedOnUnusableRetiredWitness)
 {
-    RootEntryFixture fx;
+    SharedRootSlot sharedRoot;
+    RootEntryFixture fx(sharedRoot.slot);
     (void)fx.PublishUnusableRetiredWitness();
-    const M0ExitDiagnostics::Counts before = M0ExitDiagnostics::GetCounts();
-
-    fx.collector.FixMinorRootSlots(nullptr);
-
-    const M0ExitDiagnostics::Counts after = M0ExitDiagnostics::GetCounts();
-    GC_EXPECT_EQ(after.total, before.total + 1);
-    GC_EXPECT_EQ(after.s1, before.s1 + 1);
-    GC_EXPECT_EQ(after.activeWitness, before.activeWitness);
-    GC_EXPECT_EQ(after.retiredWitness, before.retiredWitness + 1);
-    GC_EXPECT_EQ(after.copyPublishedWitness, before.copyPublishedWitness);
-    GC_EXPECT_EQ(static_cast<uintptr_t>(raw(fx.root.LoadPlain())),
-                 reinterpret_cast<uintptr_t>(fx.heap.obj0));
+    ExpectRootFixControlledAbort(fx, *sharedRoot.slot,
+                                 reinterpret_cast<MAddress>(fx.heap.obj0));
 }
 
 // loadfc: the zero-header runtime-entry arm above now aborts by design, so the detailed-sample

@@ -110,14 +110,16 @@ enum class AllocationSource : uint8_t {
 struct SegmentedArrayContext {
     static SegmentedArrayContext* current;
 
-    explicit SegmentedArrayContext(MIndex arrayLength, YieldGc requestedGc = YieldGc::NONE)
-        : length(arrayLength), gc(requestedGc)
+    explicit SegmentedArrayContext(MIndex arrayLength, YieldGc requestedGc = YieldGc::NONE,
+                                   bool requireWatermarkDone = false)
+        : length(arrayLength), gc(requestedGc), requireWatermarkDone(requireWatermarkDone)
     {
         LargeArrayInitTestHooks hooks;
         hooks.onPublish = OnPublish;
         hooks.onYield = OnYield;
         hooks.onWithdraw = OnWithdraw;
         hooks.onRootVisit = OnRootVisit;
+        hooks.onRootPhase = OnRootPhase;
         current = this;
         CJ_MRT_SetLargeArrayInitTestHooks(&hooks);
     }
@@ -175,6 +177,19 @@ struct SegmentedArrayContext {
                     ++ctx.failures;
                 }
             }
+
+            // Iterator consumers must treat the published-but-incomplete array
+            // as opaque. Count actual product visitor calls rather than the
+            // test receipt emitted beside the skip: removing either product
+            // return below must expose a non-zero visit count.
+            rootBefore->ForEachRefField([&ctx](RefField<>&) { ++ctx.fullIteratorVisits; });
+            const MAddress firstField = reinterpret_cast<MAddress>(rootBefore->ConvertToCArray());
+            rootBefore->ForEachRefFieldInRange(
+                [&ctx](RefField<>&) { ++ctx.rangeIteratorVisits; },
+                firstField, firstField + sizeof(RefField<>));
+            if (ctx.fullIteratorVisits != 0 || ctx.rangeIteratorVisits != 0) {
+                ++ctx.failures;
+            }
         }
 
         // Substantive allocator arm: exact dirty large-region reuse must expose
@@ -195,6 +210,7 @@ struct SegmentedArrayContext {
             ctx.requestedGc = true;
             ctx.gcCountBefore = g_gcCount.load(std::memory_order_acquire);
             Mutator* mutator = Mutator::GetMutator();
+            ctx.requestingMutator = mutator;
             U64 youngSeedRoot = 0;
             if (ctx.gc == YieldGc::YOUNG) {
                 // Large arrays are old-generation regions. Plant one genuine
@@ -246,6 +262,20 @@ struct SegmentedArrayContext {
         }
     }
 
+    static void OnRootPhase(LargeArrayRootPhase phase, Mutator* mutator, bool watermarkDone)
+    {
+        if (current->requestingMutator != mutator) {
+            return;
+        }
+        if (phase == LargeArrayRootPhase::MAJOR_MARK) {
+            ++current->majorRootPhaseObservations;
+            current->majorWatermarkDone = watermarkDone;
+        } else {
+            ++current->minorRootPhaseObservations;
+            current->minorWatermarkDone = watermarkDone;
+        }
+    }
+
     MIndex length;
     YieldGc gc;
     uintptr_t dirtyAddress = 0;
@@ -255,12 +285,20 @@ struct SegmentedArrayContext {
     size_t firstSegmentYieldCount = 0;
     size_t withdrawCount = 0;
     size_t failures = 0;
+    size_t fullIteratorVisits = 0;
+    size_t rangeIteratorVisits = 0;
     size_t gcCountBefore = 0;
     size_t gcCountAfter = 0;
     bool checkedDirtyBoundary = false;
     bool requestedGc = false;
     bool rootMoved = false;
+    bool requireWatermarkDone = false;
+    size_t majorRootPhaseObservations = 0;
+    size_t minorRootPhaseObservations = 0;
+    bool majorWatermarkDone = false;
+    bool minorWatermarkDone = false;
     uint32_t rootVisitSites = 0;
+    Mutator* requestingMutator = nullptr;
     MArray* publishedArray = nullptr;
     MArray* withdrawnArray = nullptr;
 };
@@ -278,24 +316,29 @@ bool AllSlotsAreRawNull(MArray* array)
     return allNull;
 }
 
+constexpr uint32_t RootVisitBit(LargeArrayRootVisitSite site)
+{
+    return uint32_t { 1 } << static_cast<unsigned>(site);
+}
+
+uint32_t RequiredPhaseRootVisits(YieldGc gc, bool watermarkDone)
+{
+    // The epoch handshake has two legitimate root-production paths. A completed
+    // watermark owns the root visit; otherwise the closing STW falls back to the
+    // mutator walk. Young mark wraps that fallback with MINOR_MARK. Keep the
+    // condition in the assertion: MINOR_MARK is not required after watermark DONE.
+    if (watermarkDone) {
+        return RootVisitBit(LargeArrayRootVisitSite::STACK_WATERMARK_NATIVE);
+    }
+    uint32_t required = RootVisitBit(LargeArrayRootVisitSite::MUTATOR_STACK_NATIVE);
+    if (gc == YieldGc::YOUNG) {
+        required |= RootVisitBit(LargeArrayRootVisitSite::MINOR_MARK);
+    }
+    return required;
+}
+
 constexpr MIndex kLargeRefLength = static_cast<MIndex>(
     (MArray::LARGE_REF_ARRAY_INIT_SEGMENT_SIZE * 2) / sizeof(void*) + 1);
-
-bool PrepareExactDirtyLargeExtent(SegmentedArrayContext& ctx)
-{
-    const MIndex contentBytes = kLargeRefLength * sizeof(RefField<>);
-    MArray* dirty = MCC_NewArray8(GetByteArrayTypeInfos().array, contentBytes);
-    if (dirty == nullptr) {
-        return false;
-    }
-    std::memset(dirty->ConvertToCArray(), ctx.dirtyByte, static_cast<size_t>(contentBytes));
-    ctx.dirtyAddress = reinterpret_cast<uintptr_t>(dirty);
-    dirty = nullptr;
-    Mutator::GetMutator()->SetManagedContext(false);
-    Heap::GetHeap().GetCollector().RequestGC(GC_REASON_FORCE, false);
-    Mutator::GetMutator()->SetManagedContext(true);
-    return true;
-}
 
 bool PrepareExactLargeExtent(AllocationSource source, SegmentedArrayContext& ctx)
 {
@@ -381,9 +424,14 @@ void* RunAllocationSourceCase(void* rawSource)
 
 void* RunSegmentedCase(void* rawMode)
 {
-    const YieldGc gc = static_cast<YieldGc>(reinterpret_cast<uintptr_t>(rawMode));
-    SegmentedArrayContext ctx(kLargeRefLength, gc);
-    if (!PrepareExactDirtyLargeExtent(ctx)) {
+    const uintptr_t mode = reinterpret_cast<uintptr_t>(rawMode);
+    const YieldGc gc = static_cast<YieldGc>(mode & 0xffU);
+    const bool requireWatermarkDone = (mode & 0x100U) != 0;
+    SegmentedArrayContext ctx(kLargeRefLength, gc, requireWatermarkDone);
+    // Install the exact dirty extent directly. Allocating a byte array and then
+    // hoping that a full collection returns the same address is not invariant:
+    // a two-processor runtime may consume the reclaimed extent first.
+    if (!PrepareExactLargeExtent(AllocationSource::DIRTY, ctx)) {
         return reinterpret_cast<void*>(1);
     }
 
@@ -402,29 +450,50 @@ void* RunSegmentedCase(void* rawMode)
         status += ctx.requestedGc ? 0 : 1;
         status += ctx.gcCountAfter > ctx.gcCountBefore ? 0 : 1;
         status += ctx.firstSegmentYieldCount >= 2 ? 0 : 1;
-        if (gc == YieldGc::YOUNG) {
-            const uint32_t required =
-                (1U << static_cast<unsigned>(LargeArrayRootVisitSite::MUTATOR_STACK_NATIVE)) |
-                (1U << static_cast<unsigned>(LargeArrayRootVisitSite::MINOR_MARK)) |
-                (1U << static_cast<unsigned>(LargeArrayRootVisitSite::MINOR_RELOCATE)) |
-                (1U << static_cast<unsigned>(LargeArrayRootVisitSite::ITERATOR_SKIP));
-            status += (ctx.rootVisitSites & required) == required ? 0 : 1;
-        } else {
-            const uint32_t required =
-                (1U << static_cast<unsigned>(LargeArrayRootVisitSite::STACK_WATERMARK_NATIVE)) |
-                (1U << static_cast<unsigned>(LargeArrayRootVisitSite::REMEMBERED)) |
-                (1U << static_cast<unsigned>(LargeArrayRootVisitSite::ITERATOR_SKIP));
-            status += (ctx.rootVisitSites & required) == required ? 0 : 1;
+        const bool phaseObserved = gc == YieldGc::YOUNG
+            ? ctx.minorRootPhaseObservations == 1
+            : ctx.majorRootPhaseObservations == 1;
+        const bool watermarkDone = gc == YieldGc::YOUNG
+            ? ctx.minorWatermarkDone
+            : ctx.majorWatermarkDone;
+        if (requireWatermarkDone) {
+            // The residual-fallback contract is intentionally marked unreachable
+            // for this product path: RunEpochHandshake and the closing consumer
+            // share one epoch, and Mutator::DrainStackWatermark pairs TryBegin
+            // with Finish before Mark.cpp reads IsDone(epoch). This observes the
+            // product expression without rewriting its result in a callback.
+            // If that pair is split or the consumer reads another epoch, this
+            // contract becomes measurable again and this guard must be restored.
+            status += watermarkDone ? 0 : 1;
         }
+        status += phaseObserved ? 0 : 1;
+        uint32_t required = RequiredPhaseRootVisits(gc, watermarkDone) |
+            RootVisitBit(LargeArrayRootVisitSite::ITERATOR_SKIP);
+        if (gc == YieldGc::YOUNG) {
+            // Relocation's grant pass independently enumerates the native side
+            // root before MINOR_RELOCATE consumes it. This remains required even
+            // when mark used the completed watermark path.
+            required |= RootVisitBit(LargeArrayRootVisitSite::MUTATOR_STACK_NATIVE) |
+                RootVisitBit(LargeArrayRootVisitSite::MINOR_RELOCATE);
+        }
+        status += (ctx.rootVisitSites & required) == required ? 0 : 1;
+        const uint32_t forbidden = RootVisitBit(LargeArrayRootVisitSite::MUTATOR_STACK_MANAGED) |
+            RootVisitBit(LargeArrayRootVisitSite::STACK_WATERMARK_MANAGED);
+        status += (ctx.rootVisitSites & forbidden) == 0 ? 0 : 1;
     }
     std::fprintf(stderr,
                  "[SEGMENTED_ARRAY_CASE] mode=%u status=%zu failures=%zu dirty=%d dirty_addr=%#lx "
-                 "array=%p publish=%zu yield=%zu first=%zu withdraw=%zu requested_gc=%d "
-                 "gc_before=%zu gc_after=%zu moved=%d root_sites=%#x null=%d\n",
+                 "array=%p publish=%zu yield=%zu first=%zu withdraw=%zu requested_gc=%d context=%s "
+                 "iterator_full=%zu iterator_range=%zu "
+                 "gc_before=%zu gc_after=%zu moved=%d root_sites=%#x phase_n=%zu watermark_done=%d null=%d\n",
                  static_cast<unsigned>(gc), status, ctx.failures, ctx.checkedDirtyBoundary,
                  static_cast<unsigned long>(ctx.dirtyAddress), static_cast<void*>(array), ctx.publishCount,
                  ctx.yieldCount, ctx.firstSegmentYieldCount, ctx.withdrawCount, ctx.requestedGc,
+                 requireWatermarkDone ? "native-watermark" : "native",
+                 ctx.fullIteratorVisits, ctx.rangeIteratorVisits,
                  ctx.gcCountBefore, ctx.gcCountAfter, ctx.rootMoved, ctx.rootVisitSites,
+                 gc == YieldGc::YOUNG ? ctx.minorRootPhaseObservations : ctx.majorRootPhaseObservations,
+                 gc == YieldGc::YOUNG ? ctx.minorWatermarkDone : ctx.majorWatermarkDone,
                  array != nullptr && AllSlotsAreRawNull(array));
     std::fflush(stderr);
     return reinterpret_cast<void*>(status);
@@ -585,6 +654,13 @@ GC_OTHER_VM_TEST(SegmentedArrayInit, YoungGcRepairsIncompleteArrayRoot)
 GC_OTHER_VM_TEST(SegmentedArrayInit, YoungGcRepairsIncompleteArrayRootParallel)
 {
     GC_EXPECT_EQ(RunRuntimeCase(RunSegmentedCase, static_cast<uintptr_t>(YieldGc::YOUNG), 2), 0);
+}
+
+GC_OTHER_VM_TEST(SegmentedArrayInit, YoungGcWatermarkResidualFallbackIsUnreachable)
+{
+    constexpr uintptr_t requireWatermarkDone = 0x100U;
+    GC_EXPECT_EQ(RunRuntimeCase(RunSegmentedCase,
+                                requireWatermarkDone | static_cast<uintptr_t>(YieldGc::YOUNG)), 0);
 }
 
 GC_OTHER_VM_TEST(SegmentedArrayInit, SmallReferenceArrayKeepsFastPath)

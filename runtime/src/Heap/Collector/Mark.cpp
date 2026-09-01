@@ -711,6 +711,10 @@ void WCollector::TraceHeap()
                     if (!mutator.GetStackWatermark().IsDone(stackScanEpoch)) {
                         (void)mutator.GcPhaseEnum(GCPhase::GC_PHASE_ENUM);
                     }
+#if defined(MRT_GC_UNIT_TESTS)
+                    NoteLargeArrayInitRootPhase(LargeArrayRootPhase::MAJOR_MARK, &mutator,
+                                                mutator.GetStackWatermark().IsDone(stackScanEpoch));
+#endif
                 });
                 // CLEAR freezes further ENUM pushes before releasing the
                 // mutator-list lock owned by StopTheWorld. DoEnumeration cannot
@@ -801,7 +805,12 @@ void WCollector::VisitMinorRootSlots(RootVisitor& rawRootVisitor, RootVisitor& i
     size_t concurrentDone = 0;
     size_t stwFallback = 0;
     MutatorManager::Instance().VisitAllMutators([&](Mutator& mutator) {
-        if (stackScanEpoch != 0 && mutator.GetStackWatermark().IsDone(stackScanEpoch)) {
+        bool watermarkDone =
+            stackScanEpoch != 0 && mutator.GetStackWatermark().IsDone(stackScanEpoch);
+#if defined(MRT_GC_UNIT_TESTS)
+        NoteLargeArrayInitRootPhase(LargeArrayRootPhase::MINOR_MARK, &mutator, watermarkDone);
+#endif
+        if (watermarkDone) {
             ++concurrentDone;
             return;
         }
