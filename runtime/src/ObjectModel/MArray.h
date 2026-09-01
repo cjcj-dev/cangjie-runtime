@@ -63,6 +63,8 @@ private:
 };
 
 #if defined(MRT_GC_UNIT_TESTS)
+class Mutator;
+
 enum class LargeArrayRootVisitSite : uint8_t {
     MUTATOR_STACK_NATIVE,
     MUTATOR_STACK_MANAGED,
@@ -74,6 +76,11 @@ enum class LargeArrayRootVisitSite : uint8_t {
     ITERATOR_SKIP,
 };
 
+enum class LargeArrayRootPhase : uint8_t {
+    MAJOR_MARK,
+    MINOR_MARK,
+};
+
 // Test-only product hooks. They are compiled out of the default product shape;
 // the deterministic suite still enters through MCC_NewObjArray in the product SO.
 struct LargeArrayInitTestHooks {
@@ -82,11 +89,13 @@ struct LargeArrayInitTestHooks {
     void (*onYield)(size_t segmentIndex) = nullptr;
     void (*onWithdraw)(MArray* array) = nullptr;
     void (*onRootVisit)(LargeArrayRootVisitSite site, BaseObject* object) = nullptr;
+    void (*onRootPhase)(LargeArrayRootPhase phase, Mutator* mutator, bool watermarkDone) = nullptr;
 };
 
 extern "C" MRT_EXPORT void CJ_MRT_SetLargeArrayInitTestHooks(const LargeArrayInitTestHooks* hooks);
 extern "C" MRT_EXPORT MAddress CJ_MRT_TestAllocateArrayStorage(size_t size, AllocType allocType);
 void NoteLargeArrayInitRootVisit(LargeArrayRootVisitSite site, BaseObject* object);
+void NoteLargeArrayInitRootPhase(LargeArrayRootPhase phase, Mutator* mutator, bool watermarkDone);
 #endif
 } // namespace MapleRuntime
 #endif // MRT_MARRAY_H

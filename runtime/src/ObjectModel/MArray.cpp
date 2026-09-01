@@ -79,6 +79,13 @@ void NoteLargeArrayInitRootVisit(LargeArrayRootVisitSite site, BaseObject* objec
         g_largeArrayInitTestHooks.onRootVisit(site, object);
     }
 }
+
+void NoteLargeArrayInitRootPhase(LargeArrayRootPhase phase, Mutator* mutator, bool watermarkDone)
+{
+    if (g_largeArrayInitTestHooks.onRootPhase != nullptr) {
+        g_largeArrayInitTestHooks.onRootPhase(phase, mutator, watermarkDone);
+    }
+}
 #endif
 
 MArray* MArray::InitializeLargeRefArray(MAddress address, MSize arraySize, MIndex nElems,
