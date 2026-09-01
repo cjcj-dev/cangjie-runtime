@@ -1,7 +1,0 @@
-arm	mode	rc
-cut-mutator-managed	full	134
-cut-mutator-managed	young	134
-cut-watermark-managed	full	134
-cut-watermark-managed	young	134
-restored	full	0
-restored	young	0

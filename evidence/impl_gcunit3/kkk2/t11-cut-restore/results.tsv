@@ -1,9 +1,0 @@
-arm	test	rc
-cut	M0Exit.RootFixRuntimeEnumerationClassifiesNoCopyAsS0	1
-cut	M0Exit.RootFixClassifiesActiveOnlyUnusableCopyAsS1	1
-cut	M0Exit.RootFixClassifiesRetiredOnlyUnusableCopyAsS1	1
-cut	M0Exit.ReadRuntimeEntryFailsClosedOnForwardedWithoutMapping	0
-restored	M0Exit.RootFixRuntimeEnumerationClassifiesNoCopyAsS0	0
-restored	M0Exit.RootFixClassifiesActiveOnlyUnusableCopyAsS1	0
-restored	M0Exit.RootFixClassifiesRetiredOnlyUnusableCopyAsS1	0
-restored	M0Exit.ReadRuntimeEntryFailsClosedOnForwardedWithoutMapping	0
