@@ -22,9 +22,13 @@
 #include "ObjectModel/RefField.h"
 
 extern "C" size_t MCC_GetGCCount();
+extern "C" void MCC_WriteRefField(const MapleRuntime::ObjectPtr ref, const MapleRuntime::ObjectPtr obj,
+                                   MapleRuntime::RefField<false>* field);
 #include "gc_heap_fixture.hpp"
 #include "gc_unittest.hpp"
+#include "Heap/Allocator/AllocBuffer.h"
 #include "Heap/Collector/TracingCollector.h"
+#include "Mutator/ThreadLocal.h"
 
 using namespace MapleRuntime;
 using namespace MapleRuntime::GcUnit;
@@ -99,6 +103,25 @@ public:
 private:
     Barrier** previous;
     Barrier* installed;
+};
+
+class InstalledExportAllocBuffer final {
+public:
+    explicit InstalledExportAllocBuffer(AllocBuffer& allocBuffer)
+        : alloc(allocBuffer), previous(ThreadLocal::GetAllocBuffer())
+    {
+        ThreadLocal::SetAllocBuffer(&alloc);
+    }
+
+    ~InstalledExportAllocBuffer()
+    {
+        ThreadLocal::SetAllocBuffer(previous);
+        alloc.SetRegion(nullptr);
+    }
+
+private:
+    AllocBuffer& alloc;
+    AllocBuffer* previous;
 };
 
 struct ExportHandleFixture {
@@ -321,6 +344,99 @@ GC_TEST(DefectRegress, FieldPlaceColourMustStripAtAbi)
     Uptr colouredBase = reinterpret_cast<Uptr>(fx.obj0) | ZPointerRemapped01;
     Uptr leaPlace = colouredBase + 16;
     GC_EXPECT_EQ(ModelStripFieldPlace(leaPlace), (reinterpret_cast<Uptr>(fx.obj0) + 16) & kAddrMask);
+}
+
+// T6: the compiler may provide no holder object for a field GEP.  The product
+// call must classify the destination slot itself, publishing a coloured heap
+// word and retaining the slot-keyed remembered-set obligation.
+GC_TEST(DefectRegress, CompilerWriteNullHolderHeapSlotPublishesColour)
+{
+    ExportHandleFixture fx;
+    fx.rememberedSet.Initialize(fx.heap.heapStart, 2 * RegionInfo::UNIT_SIZE);
+    fx.heap.region0->SetYoungRegionFlag(0);
+    fx.heap.region1->SetYoungRegionFlag(1);
+    fx.heap.region1->SetYoungAge(1);
+
+    auto* field = &HeapSlotAt<>(reinterpret_cast<MAddress>(fx.heap.obj0) + TYPEINFO_PTR_SIZE);
+    const MAddress slot = reinterpret_cast<MAddress>(field);
+    std::memset(field, 0, sizeof(*field));
+
+    // obj == nullptr is the triggering ABI shape; field is demonstrably in heap.
+    GC_EXPECT_TRUE(Heap::IsHeapAddress(field));
+    MCC_WriteRefField(fx.heap.obj1, nullptr, reinterpret_cast<RefField<false>*>(field));
+
+    const uintptr_t installed = static_cast<uintptr_t>(raw(field->GetFieldValue()));
+    GC_EXPECT_EQ(ClassifySlotWord(installed), SlotWordVerdict::kColoured);
+    GC_EXPECT_TRUE(fx.rememberedSet.Contains(slot));
+}
+
+// Public ABI shape: callers may provide a non-null opaque/non-heap holder while
+// the destination field itself resides in the managed heap.  The exported
+// entry must classify by slot and take the same immediate remset path as the
+// null-holder case; it must not manufacture a pending relocation entry whose
+// base cannot be remapped.
+GC_TEST(DefectRegress, CompilerWriteNonHeapHolderHeapSlotUsesImmediatePath)
+{
+    ExportHandleFixture fx;
+    fx.rememberedSet.Initialize(fx.heap.heapStart, 2 * RegionInfo::UNIT_SIZE);
+    fx.heap.region0->SetYoungRegionFlag(0);
+    fx.heap.region1->SetYoungRegionFlag(1);
+    fx.heap.region1->SetYoungAge(1);
+
+    auto* field = &HeapSlotAt<>(reinterpret_cast<MAddress>(fx.heap.obj0) + TYPEINFO_PTR_SIZE);
+    const MAddress slot = reinterpret_cast<MAddress>(field);
+    const uintptr_t initial = raw(StoreGoodPointer(fx.heap.obj0));
+    std::memcpy(field, &initial, sizeof(initial));
+
+    AllocBuffer alloc;
+    InstalledExportAllocBuffer installedAlloc(alloc);
+
+    auto* nonHeapHolder = reinterpret_cast<BaseObject*>(fx.heap.typeInfo);
+    GC_EXPECT_TRUE(nonHeapHolder != nullptr);
+    GC_EXPECT_FALSE(Heap::IsHeapAddress(nonHeapHolder));
+    GC_EXPECT_TRUE(Heap::IsHeapAddress(field));
+
+    // This is the exported product ABI, not a direct Barrier invocation.
+    MCC_WriteRefField(fx.heap.obj1, nonHeapHolder,
+                      reinterpret_cast<RefField<false>*>(field));
+
+    GC_EXPECT_EQ(alloc.GetStoreBarrierBuffer().Pending(), 0u);
+    GC_EXPECT_EQ(fx.rememberedSet.Contains(slot), true);
+}
+
+// T6 control arm: a non-heap destination remains a root slot even when the
+// optional holder is null, and therefore keeps the plain RootSlot encoding.
+GC_TEST(DefectRegress, CompilerWriteNullHolderStaticSlotUsesRootPath)
+{
+    ExportHandleFixture fx;
+    RefField<false> staticField(zpointer::null);
+    MCC_WriteRefField(fx.heap.obj0, nullptr, &staticField);
+
+    const uintptr_t installed = static_cast<uintptr_t>(raw(staticField.GetFieldValue()));
+    GC_EXPECT_EQ(installed, reinterpret_cast<uintptr_t>(fx.heap.obj0));
+    GC_EXPECT_EQ(ClassifySlotWord(installed), SlotWordVerdict::kIllegal);
+}
+
+// The compiler's global-struct marker is paired with global storage, not a
+// managed HeapSlot.  Preserve that legal marked call while heap classification
+// remains authoritative for contradictory inputs.
+GC_TEST(DefectRegress, CompilerWriteTaggedGlobalStructUsesRootPath)
+{
+    ExportHandleFixture fx;
+    RefField<false> globalField(zpointer::null);
+#if defined(__aarch64__) && !defined(__ANDROID__)
+    constexpr uintptr_t globalFlag = 1ULL << 63;
+    auto* taggedField = reinterpret_cast<RefField<false>*>(
+        reinterpret_cast<uintptr_t>(&globalField) | globalFlag);
+    MCC_WriteRefField(fx.heap.obj0, nullptr, taggedField);
+#else
+    auto* globalMarker = reinterpret_cast<BaseObject*>(static_cast<uintptr_t>(1));
+    MCC_WriteRefField(fx.heap.obj0, globalMarker, &globalField);
+#endif
+    const uintptr_t installed = static_cast<uintptr_t>(raw(globalField.GetFieldValue()));
+    GC_EXPECT_FALSE(Heap::IsHeapAddress(&globalField));
+    GC_EXPECT_EQ(installed, reinterpret_cast<uintptr_t>(fx.heap.obj0));
+    GC_EXPECT_EQ(ClassifySlotWord(installed), SlotWordVerdict::kIllegal);
 }
 
 // hunt-coll BUG: GC published finishedGcIndex / isGcStarted before stats and

@@ -608,8 +608,9 @@ GC_OTHER_VM_TEST(YoungConc, LateEdgeFollowReceiptReachesYoungRuntimeDispatch)
     (void)live;
 }
 
-// H receipt arm: default product dispatch with a real mutator-local y2y
-// holder. The pre-window batch must be empty at the release boundary.
+// H receipt arm: product barrier publishes holder-independent slot work before
+// mark starts, while a real mutator-local holder is published after release.
+// Both forms must reach their respective product merge boundaries.
 GC_OTHER_VM_TEST(YoungConc, Y2yAfterReleaseBatchForcesContinueAndReachesClosure)
 {
     GC_EXPECT_EQ(CJ_ScheduleManagerInit(), 0);
@@ -623,9 +624,13 @@ GC_OTHER_VM_TEST(YoungConc, Y2yAfterReleaseBatchForcesContinueAndReachesClosure)
     LiveInfo* live = fx.PlantLiveInfo(fx.region1);
     (void)fx.PlantMarkBitmap<Generation::Young>(live, fx.region1->GetRegionSize());
     BaseObject* child = fx.PlaceObject(reinterpret_cast<MAddress>(fx.obj1) + 64);
-    fx.region1->SetRegionAllocPtr(reinterpret_cast<MAddress>(child) + 64);
+    BaseObject* slotParent = fx.PlaceObject(reinterpret_cast<MAddress>(child) + 64);
+    BaseObject* slotChild = fx.PlaceObject(reinterpret_cast<MAddress>(slotParent) + 64);
+    fx.region1->SetRegionAllocPtr(reinterpret_cast<MAddress>(slotChild) + 64);
     auto* parentField = &HeapSlotAt<>(reinterpret_cast<MAddress>(fx.obj1) + TYPEINFO_PTR_SIZE);
     parentField->StoreColoured(GcUnit::StoreGoodPointer(child));
+    auto* slotParentField = &HeapSlotAt<>(reinterpret_cast<MAddress>(slotParent) + TYPEINFO_PTR_SIZE);
+    slotParentField->StoreColoured(GcUnit::StoreGoodPointer(slotChild));
 
     CollectorResources& resources = Heap::GetHeap().GetCollectorResources();
     WCollector collector(Heap::GetHeap().GetAllocator(), resources);
@@ -645,10 +650,18 @@ GC_OTHER_VM_TEST(YoungConc, Y2yAfterReleaseBatchForcesContinueAndReachesClosure)
     ThreadLocal::SetMutator(&mutator);
     const bool startedBefore = resources.IsGcStarted();
     const GCReason reasonBefore = resources.GetGCStats().reason;
+#if defined(MRT_GC_UNIT_TESTS)
+    ResetY2yHandoffTestReceipt();
+    // Produce the holderless y2y slot through the product barrier before mark
+    // starts. MarkAndRememberNewValue is therefore inactive, leaving the
+    // pre-window slot merge as the only path that can discover slotChild.
+    AllocBuffer* producerBuffer = AllocBuffer::GetOrCreateAllocBuffer();
+    barrier.PostWriteReference(nullptr, *slotParentField, slotChild, zpointer::null);
+    GC_EXPECT_EQ(producerBuffer->Y2yDirtySlotCount(), 1u);
+#endif
     resources.SetGcStarted(true);
     resources.GetGCStats().reason = GC_REASON_YOUNG;
 #if defined(MRT_GC_UNIT_TESTS)
-    ResetY2yHandoffTestReceipt();
     // The old holder exercises the pre-release merge. The young holder is
     // injected only after stw.reset(), so the first mark-end must fail and the
     // existing continue edge must follow it before a second mark-end succeeds.
@@ -680,7 +693,11 @@ GC_OTHER_VM_TEST(YoungConc, Y2yAfterReleaseBatchForcesContinueAndReachesClosure)
     const bool childMarked = stayedYoung
         ? fx.region1->IsMarkedObject(fx.region1->GetMarkView<Generation::Young>(), child)
         : fx.region1->IsMarkedObject(fx.region1->GetMarkView<Generation::Old>(), child);
+    const bool slotChildMarked = stayedYoung
+        ? fx.region1->IsMarkedObject(fx.region1->GetMarkView<Generation::Young>(), slotChild)
+        : fx.region1->IsMarkedObject(fx.region1->GetMarkView<Generation::Old>(), slotChild);
     GC_EXPECT_TRUE(childMarked);
+    GC_EXPECT_TRUE(slotChildMarked);
     RelocationReceiptTestAccess::BindThreadPool(resources, nullptr);
     threadPool.Exit();
     RelocationReceiptTestAccess::BindCollector(resources, nullptr);
@@ -869,6 +886,49 @@ GC_TEST(YoungConc, YoungToYoungDirtyHolderReachesWorkStack)
     GC_EXPECT_EQ(stack.size(), 1u);
     GC_EXPECT_EQ(reinterpret_cast<uintptr_t>(stack[0]), reinterpret_cast<uintptr_t>(fx.obj0));
     GC_EXPECT_EQ(buf->Y2yDirtyHolderCount(), 0u);
+}
+
+// A1: y2y + empty holder is the ABI grid point that the holder-only handoff
+// could not represent.  It remains out of remset and reaches the slot-grey
+// queue exactly once; removing Barrier::PushY2yDirtySlot reds only this case.
+GC_TEST(YoungConc, YoungToYoungNullHolderQueuesSlotWork)
+{
+    GcHeapFixture fx;
+    fx.region0->SetYoungRegionFlag(1);
+    fx.region0->SetYoungAge(1);
+    fx.region1->SetYoungRegionFlag(1);
+    fx.region1->SetYoungAge(1);
+
+    auto* field = &HeapSlotAt<>(reinterpret_cast<MAddress>(fx.obj0) + TYPEINFO_PTR_SIZE);
+    TestCollector collector;
+    RememberedSet rs;
+    rs.Initialize(fx.heapStart, 2 * RegionInfo::UNIT_SIZE);
+    TestBarrier barrier(collector, rs);
+    auto* buffer = new AllocBuffer();
+    AllocBuffer* saved = ThreadLocal::GetAllocBuffer();
+    ThreadLocal::SetAllocBuffer(buffer);
+
+    field->StoreColoured(zpointer::null);
+    barrier.WriteReference(nullptr, *field, fx.obj1);
+
+    ThreadLocal::SetAllocBuffer(saved);
+    std::unordered_set<MAddress> records;
+    rs.DrainForMinor(records);
+    GC_EXPECT_TRUE(records.empty());
+    GC_EXPECT_EQ(buffer->Y2yDirtyHolderCount(), 0u);
+    GC_EXPECT_EQ(buffer->Y2yDirtySlotCount(), 1u);
+
+    std::vector<MAddress> slots;
+    std::vector<BaseObject*> targets;
+    buffer->MergeY2yDirtySlots([&](MAddress slot) {
+        slots.push_back(slot);
+        targets.push_back(to_object(HeapSlotAt<>(slot).GetTargetObject()));
+    });
+    GC_EXPECT_EQ(slots.size(), 1u);
+    GC_EXPECT_EQ(slots[0], reinterpret_cast<MAddress>(field));
+    GC_EXPECT_EQ(targets.size(), 1u);
+    GC_EXPECT_EQ(reinterpret_cast<MAddress>(targets[0]), reinterpret_cast<MAddress>(fx.obj1));
+    GC_EXPECT_EQ(buffer->Y2yDirtySlotCount(), 0u);
 }
 
 // old→young still remset (control: TRACE window must not drop the only remset edge).

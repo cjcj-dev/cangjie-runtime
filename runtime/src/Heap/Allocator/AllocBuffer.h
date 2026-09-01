@@ -122,6 +122,29 @@ public:
 
     size_t Y2yDirtyHolderCount() const { return y2yDirtyHolders.size(); }
 
+    // A compiler barrier may know that the destination is a heap slot without
+    // carrying a usable holder object.  Young slots are deliberately absent
+    // from the remembered set, so retain the exact slot as mark work instead.
+    // The young-mark owner consumes this list before relocation starts and
+    // resolves the current target from the product HeapSlot.
+    void PushY2yDirtySlot(MAddress slot)
+    {
+        if (slot != 0) {
+            y2yDirtySlots.insert(slot);
+        }
+    }
+
+    template<class Visitor>
+    inline void MergeY2yDirtySlots(Visitor&& visitor)
+    {
+        for (MAddress slot : y2yDirtySlots) {
+            visitor(slot);
+        }
+        y2yDirtySlots.clear();
+    }
+
+    size_t Y2yDirtySlotCount() const { return y2yDirtySlots.size(); }
+
     void FlushRegion();
 
     StoreBarrierBuffer& GetStoreBarrierBuffer() { return storeBarrierBuffer; }
@@ -147,6 +170,8 @@ private:
     std::list<BaseObject*> youngAllocBlack;
     // h3seed2: mutator-local young→young dirty holders (see PushY2yDirtyHolder)
     std::unordered_set<BaseObject*> y2yDirtyHolders;
+    // Holder-independent peer for compiler ABI calls that carry only a heap slot.
+    std::unordered_set<MAddress> y2yDirtySlots;
     StoreBarrierBuffer storeBarrierBuffer;
 };
 } // namespace MapleRuntime

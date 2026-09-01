@@ -1970,12 +1970,22 @@ void Barrier::RecordCrossGenEdge(BaseObject* obj, MAddress fieldAddress, BaseObj
     }
 
     AllocBuffer* alloc = AllocBuffer::GetAllocBuffer();
-    const bool heapSlot = Heap::IsHeapAddress(fieldAddress) && obj != nullptr && Heap::IsHeapAddress(obj);
+    // The slot address is authoritative for storage class.  Some compiler
+    // calls have no recoverable holder object, but a heap-resident slot still
+    // needs the same remembered-set bit and previous-value retirement.
+    const bool heapSlot = Heap::IsHeapAddress(fieldAddress);
+    // ZStoreBarrierBuffer installs a base pointer for every pending slot on a
+    // relocating page (zStoreBarrierBuffer.cpp:67-102,130-153).  Our buffer
+    // carries that base at insertion time, so an absent/opaque holder cannot be
+    // admitted: pBase=null would make RemapPendingField retain a from-slot.
+    // Such calls perform their SATB/remset duty immediately; a young source has
+    // the separate slot-grey handoff below.
+    const bool bufferableHolder = obj != nullptr && Heap::IsHeapAddress(obj);
     bool buffered = false;
-    if (alloc != nullptr && heapSlot && !is_null(prev)) {
+    if (alloc != nullptr && heapSlot && bufferableHolder && !is_null(prev)) {
         alloc->GetStoreBarrierBuffer().Add(fieldAddress, obj, prev, theRememberedSet);
         buffered = true;
-    } else if (alloc == nullptr && heapSlot && !is_null(prev)) {
+    } else if (heapSlot && !is_null(prev) && (alloc == nullptr || !bufferableHolder)) {
         RetirePreviousWithoutAllocBuffer(this->phase, prev, theCollector);
     }
 
@@ -1990,21 +2000,24 @@ void Barrier::RecordCrossGenEdge(BaseObject* obj, MAddress fieldAddress, BaseObj
     // OpenJDK keys its remembered set on the slot, whose generation is stable,
     // rather than on the target, whose generation can change during promotion.
     if (Heap::IsHeapAddress(fieldAddress)) {
-        if (obj == nullptr || !Heap::IsHeapAddress(obj)) {
-            return;
-        }
         RegionInfo* sourceRegion = RegionInfo::GetRegionInfoAt(fieldAddress);
         if (sourceRegion->IsYoungRegion()) {
-            // Preserve the product young-holder dirty list.
+            // Preserve the holder list when the ABI carries one.  Otherwise
+            // hand the exact slot to the same young-mark merge boundary; young
+            // slots are intentionally not represented in the remembered set.
             AllocBuffer* buffer = AllocBuffer::GetAllocBuffer();
             if (buffer != nullptr) {
-                buffer->PushY2yDirtyHolder(obj);
+                if (bufferableHolder) {
+                    buffer->PushY2yDirtyHolder(obj);
+                } else {
+                    buffer->PushY2yDirtySlot(fieldAddress);
+                }
             }
             return;
         }
-        if (alloc != nullptr && !buffered) {
+        if (alloc != nullptr && bufferableHolder && !buffered) {
             alloc->GetStoreBarrierBuffer().Add(fieldAddress, obj, prev, theRememberedSet);
-        } else if (alloc == nullptr) {
+        } else if (!buffered) {
             theRememberedSet.Record(fieldAddress, /*fromMutatorBarrier=*/true);
         }
         return;

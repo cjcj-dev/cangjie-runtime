@@ -373,37 +373,46 @@ extern "C" void MCC_WriteRefField(const ObjectPtr ref, const ObjectPtr obj, RefF
     ObjectPtr plainObj = PlainObjectPtr(obj);
     RefField<false>* plainField = PlainRefFieldPtr(field);
     ObjectPtr plainRef = PlainObjectPtr(ref);
+    // Storage class is determined by the destination slot.  The compiler may
+    // pass a null/opaque holder for a GEP into a managed object; classifying by
+    // that holder would misroute a heap slot through RootSlot::StorePlain.
+    // IsGlobalStruct cannot overlap this branch for a valid compiler call:
+    // x86_64/Android use base==1 only for a global-var struct argument, while
+    // non-Android AArch64 tags that global field address itself.  Both storage
+    // forms are outside Heap.  Keeping the heap-slot decision authoritative
+    // also fails safe for a malformed contradictory pair.
+    if (Heap::IsHeapAddress(plainField)) {
+        // Heap holder + stack value: PEA stack-promoted RawArray/NewObject stored
+        // via WriteRefField (HashMap.init buckets). Use Mutator::IsStackAddr so
+        // legitimate non-heap constants / image pointers are not false-positive.
+        if (StackrefGuardEnabled()) {
+            g_stackrefChecks.fetch_add(1, std::memory_order_relaxed);
+            Mutator* mu = Mutator::GetMutator();
+            if (plainRef != nullptr && mu != nullptr &&
+                mu->IsStackAddr(reinterpret_cast<uintptr_t>(plainRef))) {
+                g_stackrefHits.fetch_add(1, std::memory_order_relaxed);
+                fprintf(stderr,
+                        "[GCV2][stackref] stack value written into heap field: "
+                        "ref=%p obj=%p field=%p checks=%llu hits=%llu\n",
+                        reinterpret_cast<void*>(plainRef), reinterpret_cast<void*>(plainObj),
+                        reinterpret_cast<void*>(plainField),
+                        static_cast<unsigned long long>(g_stackrefChecks.load(std::memory_order_relaxed)),
+                        static_cast<unsigned long long>(g_stackrefHits.load(std::memory_order_relaxed)));
+                fflush(stderr);
+                abort();
+            }
+        }
+        Heap::GetBarrier().WriteReference(plainObj, *plainField, plainRef);
+        return;
+    }
     if (IsGlobalStruct(plainObj, reinterpret_cast<MAddress>(plainField))) {
         VLOG(REPORT, "found and writing a global struct ref field");
         Heap::GetBarrier().WriteStaticRef(RootSlotAt(static_cast<void*>(plainField)), plainRef); // Global field is root storage.
         return;
     }
-    if (!Heap::IsHeapAddress(plainObj)) {
-        // Non-heap holder (static/global): same remset duty as WriteStaticRef.
-        Heap::GetBarrier().WriteStaticRef(RootSlotAt(static_cast<void*>(plainField)), plainRef); // Static field is root storage.
-        return;
-    }
-    // Heap holder + stack value: PEA stack-promoted RawArray/NewObject stored
-    // via WriteRefField (HashMap.init buckets). Use Mutator::IsStackAddr so
-    // legitimate non-heap constants / image pointers are not false-positive.
-    if (StackrefGuardEnabled()) {
-        g_stackrefChecks.fetch_add(1, std::memory_order_relaxed);
-        Mutator* mu = Mutator::GetMutator();
-        if (plainRef != nullptr && mu != nullptr &&
-            mu->IsStackAddr(reinterpret_cast<uintptr_t>(plainRef))) {
-            g_stackrefHits.fetch_add(1, std::memory_order_relaxed);
-            fprintf(stderr,
-                    "[GCV2][stackref] stack value written into heap field: "
-                    "ref=%p obj=%p field=%p checks=%llu hits=%llu\n",
-                    reinterpret_cast<void*>(plainRef), reinterpret_cast<void*>(plainObj),
-                    reinterpret_cast<void*>(plainField),
-                    static_cast<unsigned long long>(g_stackrefChecks.load(std::memory_order_relaxed)),
-                    static_cast<unsigned long long>(g_stackrefHits.load(std::memory_order_relaxed)));
-            fflush(stderr);
-            abort();
-        }
-    }
-    Heap::GetBarrier().WriteReference(plainObj, *plainField, plainRef);
+    // Non-heap destination (static/global): same remset duty as WriteStaticRef.
+    // This remains the root path even when the optional holder is null.
+    Heap::GetBarrier().WriteStaticRef(RootSlotAt(static_cast<void*>(plainField)), plainRef);
 }
 
 extern "C" MRT_EXPORT void CJ_MCC_PostWriteRefField(const ObjectPtr ref, const ObjectPtr obj,
