@@ -26,7 +26,9 @@ extern "C" void MCC_WriteRefField(const MapleRuntime::ObjectPtr ref, const Maple
                                    MapleRuntime::RefField<false>* field);
 #include "gc_heap_fixture.hpp"
 #include "gc_unittest.hpp"
+#include "Heap/Allocator/AllocBuffer.h"
 #include "Heap/Collector/TracingCollector.h"
+#include "Mutator/ThreadLocal.h"
 
 using namespace MapleRuntime;
 using namespace MapleRuntime::GcUnit;
@@ -101,6 +103,25 @@ public:
 private:
     Barrier** previous;
     Barrier* installed;
+};
+
+class InstalledExportAllocBuffer final {
+public:
+    explicit InstalledExportAllocBuffer(AllocBuffer& allocBuffer)
+        : alloc(allocBuffer), previous(ThreadLocal::GetAllocBuffer())
+    {
+        ThreadLocal::SetAllocBuffer(&alloc);
+    }
+
+    ~InstalledExportAllocBuffer()
+    {
+        ThreadLocal::SetAllocBuffer(previous);
+        alloc.SetRegion(nullptr);
+    }
+
+private:
+    AllocBuffer& alloc;
+    AllocBuffer* previous;
 };
 
 struct ExportHandleFixture {
@@ -347,6 +368,40 @@ GC_TEST(DefectRegress, CompilerWriteNullHolderHeapSlotPublishesColour)
     const uintptr_t installed = static_cast<uintptr_t>(raw(field->GetFieldValue()));
     GC_EXPECT_EQ(ClassifySlotWord(installed), SlotWordVerdict::kColoured);
     GC_EXPECT_TRUE(fx.rememberedSet.Contains(slot));
+}
+
+// Public ABI shape: callers may provide a non-null opaque/non-heap holder while
+// the destination field itself resides in the managed heap.  The exported
+// entry must classify by slot and take the same immediate remset path as the
+// null-holder case; it must not manufacture a pending relocation entry whose
+// base cannot be remapped.
+GC_TEST(DefectRegress, CompilerWriteNonHeapHolderHeapSlotUsesImmediatePath)
+{
+    ExportHandleFixture fx;
+    fx.rememberedSet.Initialize(fx.heap.heapStart, 2 * RegionInfo::UNIT_SIZE);
+    fx.heap.region0->SetYoungRegionFlag(0);
+    fx.heap.region1->SetYoungRegionFlag(1);
+    fx.heap.region1->SetYoungAge(1);
+
+    auto* field = &HeapSlotAt<>(reinterpret_cast<MAddress>(fx.heap.obj0) + TYPEINFO_PTR_SIZE);
+    const MAddress slot = reinterpret_cast<MAddress>(field);
+    const uintptr_t initial = raw(StoreGoodPointer(fx.heap.obj0));
+    std::memcpy(field, &initial, sizeof(initial));
+
+    AllocBuffer alloc;
+    InstalledExportAllocBuffer installedAlloc(alloc);
+
+    auto* nonHeapHolder = reinterpret_cast<BaseObject*>(fx.heap.typeInfo);
+    GC_EXPECT_TRUE(nonHeapHolder != nullptr);
+    GC_EXPECT_FALSE(Heap::IsHeapAddress(nonHeapHolder));
+    GC_EXPECT_TRUE(Heap::IsHeapAddress(field));
+
+    // This is the exported product ABI, not a direct Barrier invocation.
+    MCC_WriteRefField(fx.heap.obj1, nonHeapHolder,
+                      reinterpret_cast<RefField<false>*>(field));
+
+    GC_EXPECT_EQ(alloc.GetStoreBarrierBuffer().Pending(), 0u);
+    GC_EXPECT_EQ(fx.rememberedSet.Contains(slot), true);
 }
 
 // T6 control arm: a non-heap destination remains a root slot even when the
