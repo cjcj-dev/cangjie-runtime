@@ -1,0 +1,8 @@
+	linux-vdso.so.1 (0x00007fffebd45000)
+	libcangjie-runtime.so => /root/sodepot/impl_gcunit3/t11-t12-candidate/libcangjie-runtime.so (0x0000782711400000)
+	libboundscheck.so => /root/sodepot/impl_gcunit3/t11-t12-candidate/libboundscheck.so (0x000078271da19000)
+	libstdc++.so.6 => /lib/x86_64-linux-gnu/libstdc++.so.6 (0x0000782711000000)
+	libm.so.6 => /lib/x86_64-linux-gnu/libm.so.6 (0x000078271d922000)
+	libgcc_s.so.1 => /lib/x86_64-linux-gnu/libgcc_s.so.1 (0x000078271d902000)
+	libc.so.6 => /lib/x86_64-linux-gnu/libc.so.6 (0x0000782710c00000)
+	/lib64/ld-linux-x86-64.so.2 (0x000078271da30000)

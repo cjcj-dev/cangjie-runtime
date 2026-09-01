@@ -1,0 +1,10 @@
+2026-09-01T20:52:42,629279500+08:00
+ 20:52:42 up 41 days, 22:03,  1 user,  load average: 9.33, 9.81, 9.70
+文件系统        大小  已用  可用 已用% 挂载点
+/dev/nvme0n1p5  443G  383G   38G   92% /
+aa48a3cec46a97076718a6f5da6cc1d77411a48b
+## HEAD（非分支）
+?? evidence/
+CONFIGURATION=MRT_GC_UNIT_TESTS=ON,MRT_TESTABLE_INTERNALS=ON
+CORES=16-31
+pid 2440392 的当前亲和力列表：16-31

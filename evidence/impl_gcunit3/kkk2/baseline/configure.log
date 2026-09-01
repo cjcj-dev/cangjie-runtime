@@ -1,0 +1,75 @@
+-- The C compiler identification is GNU 11.4.0
+-- The CXX compiler identification is GNU 11.4.0
+-- The ASM compiler identification is GNU
+-- Found assembler: /usr/bin/cc
+-- Detecting C compiler ABI info
+-- Detecting C compiler ABI info - done
+-- Check for working C compiler: /usr/bin/cc - skipped
+-- Detecting C compile features
+-- Detecting C compile features - done
+-- Detecting CXX compiler ABI info
+-- Detecting CXX compiler ABI info - done
+-- Check for working CXX compiler: /usr/bin/c++ - skipped
+-- Detecting CXX compile features
+-- Detecting CXX compile features - done
+-- Using compiler cache: /usr/bin/ccache
+-- install path: /root/impl_gcunit3-aa48-run/runtime/output/cj
+-- DOPRA_FLAG : 1
+-- COV : 0
+-- ASAN_FLAG : 0
+-- HWASAN_FLAG : 0
+-- OHOS_FLAG : 0
+-- WINDOWS_FLAG : 0
+-- ANDROID_FLAG : 0
+-- MACOS_FLAG : 0
+-- IOS_FLAG : 0
+-- IOS_SIMULATOR_FLAG : 0
+-- GLOBAL_EXPORT_FLAG : 1
+-- ASAN_SUPPORT_FLAG : 0
+-- TSAN_SUPPORT_FLAG : 0
+-- HWASAN_SUPPORT_FLAG : 0
+-- GWPASAN_SUPPORT_FLAG : 1
+-- SANITIZER_SUPPORT_FLAG : 0
+-- CMAKE_HOST_SYSTEM_PROCESSOR : x86_64
+-- cmake_host_system_processor : x86_64
+-- HOST_SYSTEM_NAME is not set. Use pre-installed clang.
+-- Found LLVM 
+-- System: Linux
+-- Host processor:x86_64
+-- CMAKE_LIBRARY_OUTPUT_DIRECTORY: /root/impl_gcunit3-aa48-run/runtime/output/temp/lib/x86_64_Release
+-- CMAKE_ARCHIVE_OUTPUT_DIRECTORY: /root/impl_gcunit3-aa48-run/runtime/output/temp/ar/x86_64_Release
+-- CMAKE_RUNTIME_OUTPUT_DIRECTORY: /root/impl_gcunit3-aa48-run/runtime/output/temp/bin/x86_64_Release
+-- CMAKE_AR : /usr/bin/ar
+-- OUTPUT_TEMP_PATH : /root/impl_gcunit3-aa48-run/runtime/output/temp
+-- Set boundscheck REPOSITORY_PATH: https://gitcode.com/openharmony/third_party_bounds_checking_function
+正克隆到 '/root/impl_gcunit3-aa48-run/runtime/third_party/third_party_bounds_checking_function'...
+warning: 重定向到 https://gitcode.com/openharmony/third_party_bounds_checking_function.git/
+注意：正在切换到 '2ae82839ecaaa7d031e66ccbd2076d671acfd615'。
+
+您正处于分离头指针状态。您可以查看、做试验性的修改及提交，并且您可以在切换
+回一个分支时，丢弃在此状态下所做的提交而不对分支造成影响。
+
+如果您想要通过创建分支来保留在此状态下所做的提交，您可以通过在 switch 命令
+中添加参数 -c 来实现（现在或稍后）。例如：
+
+  git switch -c <新分支名>
+
+或者撤销此操作：
+
+  git switch -
+
+通过将配置变量 advice.detachedHead 设置为 false 来关闭此建议
+
+-- <CMAKE_AR> deterministic mode (-D) is set.
+-- <CMAKE_RANLIB> deterministic mode (-D) is set.
+-- BUILD_CJTHREAD: ON
+-- BUILD_RUNTIME: ON
+build cjthread for x86_64
+bash: build/build_cjthread.sh: 没有那个文件或目录
+build cjthread done!!!
+CMake Error at CMakeLists.txt:283 (message):
+  CJ_SDK_VERSION must be defined (pass -DCJ_SDK_VERSION=<version>)
+
+
+-- Configuring incomplete, errors occurred!
+See also "/root/impl_gcunit3-aa48-run/runtime/CMakebuild_gcunit3/CMakeFiles/CMakeOutput.log".
