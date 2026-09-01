@@ -655,8 +655,9 @@ GC_OTHER_VM_TEST(YoungConc, Y2yAfterReleaseBatchForcesContinueAndReachesClosure)
     // Produce the holderless y2y slot through the product barrier before mark
     // starts. MarkAndRememberNewValue is therefore inactive, leaving the
     // pre-window slot merge as the only path that can discover slotChild.
+    AllocBuffer* producerBuffer = AllocBuffer::GetOrCreateAllocBuffer();
     barrier.PostWriteReference(nullptr, *slotParentField, slotChild, zpointer::null);
-    GC_EXPECT_EQ(AllocBuffer::GetOrCreateAllocBuffer()->Y2yDirtySlotCount(), 1u);
+    GC_EXPECT_EQ(producerBuffer->Y2yDirtySlotCount(), 1u);
 #endif
     resources.SetGcStarted(true);
     resources.GetGCStats().reason = GC_REASON_YOUNG;
