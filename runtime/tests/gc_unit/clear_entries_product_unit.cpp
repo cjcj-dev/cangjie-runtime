@@ -782,7 +782,12 @@ GC_OTHER_VM_TEST(FindToRouteDiagnostics, DistinguishesLookupUnavailableFromNoGho
     GC_EXPECT_TRUE(noGhost.unavailable_from_region_info_null_valid());
     GC_EXPECT_TRUE(noGhost.unavailable_from_region_info_null());
     GC_EXPECT_TRUE(std::strcmp(noGhost.unavailable_lookup_answer(), "unarmed") == 0);
-    GC_EXPECT_FALSE(noGhost.unavailable_lookup_snapshot_valid());
+    GC_EXPECT_TRUE(noGhost.unavailable_lookup_snapshot_valid());
+    GC_EXPECT_TRUE(std::strcmp(noGhost.unavailable_lookup_cause(), "none") == 0);
+    GC_EXPECT_FALSE(noGhost.unavailable_lookup_active_candidate());
+    GC_EXPECT_TRUE(std::strcmp(noGhost.unavailable_lookup_active_answer(), "unarmed") == 0);
+    GC_EXPECT_TRUE(std::strcmp(noGhost.unavailable_lookup_retired_answer(), "unarmed") == 0);
+    GC_EXPECT_FALSE(noGhost.unavailable_lookup_publication_closed());
     GC_EXPECT_TRUE(std::strcmp(noGhost.unavailable_route_name(), "no_ghost_forwarded") == 0);
     GC_EXPECT_FALSE(noGhost.unavailable_route_state_valid());
     GC_EXPECT_EQ(noGhost.unavailable_route_state(), static_cast<uint8_t>(0));
@@ -1529,6 +1534,45 @@ template <typename Fn>
 void ExpectRootAbort(Fn&& fn)
 {
     ExpectRootAbortAt("[LOADFC][fail-closed]", fn);
+}
+
+// A non-LookupUnavailable route may carry lookup-shaped fields from a caller,
+// but with the snapshot validity bit cleared they must never be rendered as
+// legal-looking zero values.
+GC_TEST(FindToRouteDiagnostics, InvalidLookupSnapshotPrintsNa)
+{
+    FindToVersionResult::UnavailableWitness witness;
+    witness.lookupAnswer = "unarmed";
+    witness.lookupSnapshotValid = true;
+    witness.lookupCause = "publication_closed";
+    witness.lookupActiveCandidate = true;
+    witness.lookupActiveAnswer = "armed_hit";
+    witness.lookupRetiredAnswer = "armed_miss";
+    witness.lookupPublicationClosed = true;
+    // Deliberately clear the one validity bit for this whole LookupTo record.
+    // Every lookup-shaped value above must consequently render as n/a.
+    witness.lookupSnapshotValid = false;
+    const FindToVersionResult result = FindToVersionResult::Unavailable(
+        FindToVersionResult::UnavailableRoute::NoGhostForwarded, witness);
+
+    ExpectRootAbortAt("lookup=n/a", [&]() {
+        (void)result.GetOrFailClosed("FindToRouteDiagnostics.InvalidLookupSnapshotPrintsNa");
+    });
+    ExpectRootAbortAt("cause=n/a", [&]() {
+        (void)result.GetOrFailClosed("FindToRouteDiagnostics.InvalidLookupSnapshotPrintsNa");
+    });
+    ExpectRootAbortAt("active_candidate=n/a", [&]() {
+        (void)result.GetOrFailClosed("FindToRouteDiagnostics.InvalidLookupSnapshotPrintsNa");
+    });
+    ExpectRootAbortAt("active_lookup=n/a", [&]() {
+        (void)result.GetOrFailClosed("FindToRouteDiagnostics.InvalidLookupSnapshotPrintsNa");
+    });
+    ExpectRootAbortAt("retired_lookup=n/a", [&]() {
+        (void)result.GetOrFailClosed("FindToRouteDiagnostics.InvalidLookupSnapshotPrintsNa");
+    });
+    ExpectRootAbortAt("publication_closed=n/a", [&]() {
+        (void)result.GetOrFailClosed("FindToRouteDiagnostics.InvalidLookupSnapshotPrintsNa");
+    });
 }
 
 GC_TEST(ForwardingPublicationProduct, ExemptRejectsForwardedWithoutAnyReceipt)

@@ -145,6 +145,14 @@ public:
         const char* forwarded = unavailableForwardedValid ? (unavailableForwarded ? "1" : "0") : "n/a";
         const char* fromRegionInfoNull = unavailableFromRegionInfoNullValid
             ? (unavailableFromRegionInfoNull ? "1" : "0") : "n/a";
+        const char* lookup = unavailableLookupSnapshotValid ? unavailableLookupAnswer : "n/a";
+        const char* lookupCause = unavailableLookupSnapshotValid ? unavailableLookupCause : "n/a";
+        const char* activeCandidate = unavailableLookupSnapshotValid
+            ? (unavailableLookupActiveCandidate ? "1" : "0") : "n/a";
+        const char* activeLookup = unavailableLookupSnapshotValid ? unavailableLookupActiveAnswer : "n/a";
+        const char* retiredLookup = unavailableLookupSnapshotValid ? unavailableLookupRetiredAnswer : "n/a";
+        const char* publicationClosed = unavailableLookupSnapshotValid
+            ? (unavailableLookupPublicationClosed ? "1" : "0") : "n/a";
         const char* routeState = unavailableRouteStateValid
             ? (unavailableRouteState == 0 ? "0" :
                unavailableRouteState == 1 ? "1" :
@@ -156,14 +164,12 @@ public:
         CHECK_DETAIL(lookupState != State::Unavailable,
                      "[FINDTO][fail-closed] consumer=%s forwarding carrier unavailable "
                      "route=%s forwarded=%s fromRegionInfo_null=%s lookup=%s "
-                     "lookup_snapshot_valid=%u cause=%s active_candidate=%u active_lookup=%s "
-                     "retired_lookup=%s publication_closed=%u route_state=%s",
+                     "lookup_snapshot_valid=%u cause=%s active_candidate=%s active_lookup=%s "
+                     "retired_lookup=%s publication_closed=%s route_state=%s",
                      consumer == nullptr ? "unknown" : consumer, unavailable_route_name(),
-                     forwarded, fromRegionInfoNull, unavailableLookupAnswer,
-                     static_cast<unsigned>(unavailableLookupSnapshotValid), unavailableLookupCause,
-                     static_cast<unsigned>(unavailableLookupActiveCandidate), unavailableLookupActiveAnswer,
-                     unavailableLookupRetiredAnswer,
-                     static_cast<unsigned>(unavailableLookupPublicationClosed), routeState);
+                     forwarded, fromRegionInfoNull, lookup,
+                     static_cast<unsigned>(unavailableLookupSnapshotValid), lookupCause,
+                     activeCandidate, activeLookup, retiredLookup, publicationClosed, routeState);
         return found();
     }
 

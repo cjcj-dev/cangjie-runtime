@@ -749,6 +749,7 @@ public:
                                               ForwardingTable::ToUnavailableCause::None, false, false,
                                               ForwardingTable::ToAnswer::Unarmed,
                                               ForwardingTable::ToAnswer::Unarmed, false };
+        bool lookupQueried = false;
         const auto unavailable = [&](FindToVersionResult::UnavailableRoute route, bool forwardedValid,
                                      bool forwarded, bool fromRegionInfoNullValid,
                                      bool fromRegionInfoNull) -> FindToVersionResult {
@@ -757,12 +758,24 @@ public:
             witness.forwarded = forwarded;
             witness.fromRegionInfoNullValid = fromRegionInfoNullValid;
             witness.fromRegionInfoNull = fromRegionInfoNull;
-            witness.lookupAnswer = answerName(lookup.answer);
+            // All lookup fields are a single snapshot.  When LookupTo was not
+            // reached (the legacy compile-time route), leave the snapshot
+            // invalid so consumers print n/a instead of defaults.
+            witness.lookupSnapshotValid = lookupQueried;
+            if (lookupQueried) {
+                witness.lookupAnswer = answerName(lookup.answer);
+                witness.lookupCause = causeName(lookup.unavailableCause);
+                witness.lookupActiveCandidate = lookup.activeCandidate;
+                witness.lookupActiveAnswer = answerName(lookup.activeAnswer);
+                witness.lookupRetiredAnswer = answerName(lookup.retiredAnswer);
+                witness.lookupPublicationClosed = lookup.publicationClosed;
+            }
             return FindToVersionResult::Unavailable(route, witness);
         };
         BaseObject* stored = nullptr;
         if constexpr (ForwardingTable::kConsumeEntries) {
             lookup = ForwardingTable::LookupTo(fromAddr);
+            lookupQueried = true;
             if (lookup.to != 0) {
                 stored = reinterpret_cast<BaseObject*>(lookup.to);
             }
