@@ -32,7 +32,6 @@
 #include "Base/SysCall.h"
 #endif
 #include "Concurrency/Concurrency.h"
-#include "Heap/Barrier/Barrier.h"
 #include "Heap/Barrier/StoreBarrierBuffer.h"
 #include "Heap/Collector/GcTriggerFlags.h"
 #include "Heap/Collector/MarkPartialArray.h"
@@ -82,8 +81,6 @@ struct Y2yHandoffReceiptState {
 Y2yHandoffReceiptState g_y2yHandoffReceipt;
 std::atomic<BaseObject*> g_y2yAfterReleaseHolder { nullptr };
 std::atomic<uint64_t> g_y2yAfterReleasePublications { 0 };
-std::atomic<MAddress> g_y2ySlotAfterRelease { 0 };
-std::atomic<uint64_t> g_y2ySlotAfterReleasePublications { 0 };
 std::atomic<Mutator*> g_satbBeforeMarkEndProducer { nullptr };
 std::atomic<BaseObject*> g_satbBeforeMarkEndFirst { nullptr };
 std::atomic<BaseObject*> g_satbBeforeMarkEndSecond { nullptr };
@@ -110,8 +107,6 @@ void ResetY2yHandoffTestReceipt()
     g_y2yHandoffReceipt.afterStw2.store(0, std::memory_order_relaxed);
     g_y2yAfterReleaseHolder.store(nullptr, std::memory_order_relaxed);
     g_y2yAfterReleasePublications.store(0, std::memory_order_relaxed);
-    g_y2ySlotAfterRelease.store(0, std::memory_order_relaxed);
-    g_y2ySlotAfterReleasePublications.store(0, std::memory_order_relaxed);
 }
 
 Y2yHandoffTestReceipt ReadY2yHandoffTestReceipt()
@@ -148,12 +143,6 @@ void ArmY2yAfterReleaseTestReceipt(BaseObject* holder, uint64_t publications)
     g_y2yAfterReleasePublications.store(publications, std::memory_order_release);
 }
 
-void ArmY2ySlotAfterReleaseTestReceipt(MAddress slot, uint64_t publications)
-{
-    g_y2ySlotAfterRelease.store(slot, std::memory_order_release);
-    g_y2ySlotAfterReleasePublications.store(publications, std::memory_order_release);
-}
-
 void PublishY2yAfterReleaseTestReceipt()
 {
     auto claimPublication = [](std::atomic<uint64_t>& publications) {
@@ -168,12 +157,6 @@ void PublishY2yAfterReleaseTestReceipt()
         BaseObject* holder = g_y2yAfterReleaseHolder.load(std::memory_order_acquire);
         CHECK_DETAIL(holder != nullptr, "armed y2y after-release receipt without holder");
         AllocBuffer::GetOrCreateAllocBuffer()->PushY2yDirtyHolder(holder);
-    }
-    if (claimPublication(g_y2ySlotAfterReleasePublications)) {
-        MAddress slot = g_y2ySlotAfterRelease.load(std::memory_order_acquire);
-        CHECK_DETAIL(slot != 0, "armed y2y after-release receipt without slot");
-        RefField<>& field = HeapSlotAt<>(slot);
-        Heap::GetBarrier().PostWriteReference(nullptr, field, to_object(field.GetTargetObject()), zpointer::null);
     }
 }
 

@@ -608,9 +608,9 @@ GC_OTHER_VM_TEST(YoungConc, LateEdgeFollowReceiptReachesYoungRuntimeDispatch)
     (void)live;
 }
 
-// H receipt arm: default product dispatch with real mutator-local y2y holder
-// and holder-independent slot work. The pre-window batch must be empty at the
-// release boundary; both forms published afterward must reach STW2 closure.
+// H receipt arm: product barrier publishes holder-independent slot work before
+// mark starts, while a real mutator-local holder is published after release.
+// Both forms must reach their respective product merge boundaries.
 GC_OTHER_VM_TEST(YoungConc, Y2yAfterReleaseBatchForcesContinueAndReachesClosure)
 {
     GC_EXPECT_EQ(CJ_ScheduleManagerInit(), 0);
@@ -641,7 +641,6 @@ GC_OTHER_VM_TEST(YoungConc, Y2yAfterReleaseBatchForcesContinueAndReachesClosure)
     RegionSpace& space = reinterpret_cast<RegionSpace&>(Heap::GetHeap().GetAllocator());
     space.GetRegionManager().EnlistFullThreadLocalRegion(fx.region1);
     space.GetRegionManager().AddRawPointerObject(child);
-    space.GetRegionManager().AddRawPointerObject(slotChild);
     RememberedSet& runtimeRememberedSet = Heap::GetHeap().GetRememberedSet();
     runtimeRememberedSet.Initialize(fx.heapStart, 2 * RegionInfo::UNIT_SIZE);
     RememberedSet producerRememberedSet;
@@ -651,16 +650,22 @@ GC_OTHER_VM_TEST(YoungConc, Y2yAfterReleaseBatchForcesContinueAndReachesClosure)
     ThreadLocal::SetMutator(&mutator);
     const bool startedBefore = resources.IsGcStarted();
     const GCReason reasonBefore = resources.GetGCStats().reason;
+#if defined(MRT_GC_UNIT_TESTS)
+    ResetY2yHandoffTestReceipt();
+    // Produce the holderless y2y slot through the product barrier before mark
+    // starts. MarkAndRememberNewValue is therefore inactive, leaving the
+    // pre-window slot merge as the only path that can discover slotChild.
+    barrier.PostWriteReference(nullptr, *slotParentField, slotChild, zpointer::null);
+    GC_EXPECT_EQ(AllocBuffer::GetOrCreateAllocBuffer()->Y2yDirtySlotCount(), 1u);
+#endif
     resources.SetGcStarted(true);
     resources.GetGCStats().reason = GC_REASON_YOUNG;
 #if defined(MRT_GC_UNIT_TESTS)
-    ResetY2yHandoffTestReceipt();
     // The old holder exercises the pre-release merge. The young holder is
     // injected only after stw.reset(), so the first mark-end must fail and the
     // existing continue edge must follow it before a second mark-end succeeds.
     AllocBuffer::GetOrCreateAllocBuffer()->PushY2yDirtyHolder(fx.obj0);
     ArmY2yAfterReleaseTestReceipt(fx.obj1, 2);
-    ArmY2ySlotAfterReleaseTestReceipt(reinterpret_cast<MAddress>(slotParentField), 2);
 #endif
     ThreadLocal::SetMutator(nullptr);
     RelocationReceiptTestAccess::RunCollectionDispatch(collector);
@@ -678,7 +683,7 @@ GC_OTHER_VM_TEST(YoungConc, Y2yAfterReleaseBatchForcesContinueAndReachesClosure)
     // state, rather than the reset value from an omitted receipt.
     GC_EXPECT_TRUE(receipt.phase1 >= 1);
     GC_EXPECT_EQ(receipt.afterRoot, 0u);
-    GC_EXPECT_TRUE(receipt.afterStw2 >= 4);
+    GC_EXPECT_TRUE(receipt.afterStw2 >= 2);
     GC_EXPECT_TRUE(receipt.phase2 >= 3);
 #endif
     resources.SetGcStarted(startedBefore);

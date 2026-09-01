@@ -77,7 +77,6 @@ void NoteY2yBeforeReleaseTestReceipt(uint64_t pending);
 void NoteY2yAfterRootTestReceipt(uint64_t pending);
 void NoteY2yAfterStw2TestReceipt(uint64_t pending);
 void ArmY2yAfterReleaseTestReceipt(BaseObject* holder, uint64_t publications);
-void ArmY2ySlotAfterReleaseTestReceipt(MAddress slot, uint64_t publications);
 void PublishY2yAfterReleaseTestReceipt();
 void ArmSatbBeforeMarkEndTestReceipt(Mutator* producer, BaseObject* first, BaseObject* second);
 void PublishSatbBeforeMarkEndTestReceipt();
