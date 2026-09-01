@@ -178,6 +178,19 @@ struct SegmentedArrayContext {
                     ++ctx.failures;
                 }
             }
+
+            // Iterator consumers must treat the published-but-incomplete array
+            // as opaque. Count actual product visitor calls rather than the
+            // test receipt emitted beside the skip: removing either product
+            // return below must expose a non-zero visit count.
+            rootBefore->ForEachRefField([&ctx](RefField<>&) { ++ctx.fullIteratorVisits; });
+            const MAddress firstField = reinterpret_cast<MAddress>(rootBefore->ConvertToCArray());
+            rootBefore->ForEachRefFieldInRange(
+                [&ctx](RefField<>&) { ++ctx.rangeIteratorVisits; },
+                firstField, firstField + sizeof(RefField<>));
+            if (ctx.fullIteratorVisits != 0 || ctx.rangeIteratorVisits != 0) {
+                ++ctx.failures;
+            }
         }
 
         // Substantive allocator arm: exact dirty large-region reuse must expose
@@ -279,6 +292,8 @@ struct SegmentedArrayContext {
     size_t firstSegmentYieldCount = 0;
     size_t withdrawCount = 0;
     size_t failures = 0;
+    size_t fullIteratorVisits = 0;
+    size_t rangeIteratorVisits = 0;
     size_t gcCountBefore = 0;
     size_t gcCountAfter = 0;
     bool checkedDirtyBoundary = false;
@@ -472,11 +487,13 @@ void* RunSegmentedCase(void* rawMode)
     std::fprintf(stderr,
                  "[SEGMENTED_ARRAY_CASE] mode=%u status=%zu failures=%zu dirty=%d dirty_addr=%#lx "
                  "array=%p publish=%zu yield=%zu first=%zu withdraw=%zu requested_gc=%d context=%s "
+                 "iterator_full=%zu iterator_range=%zu "
                  "gc_before=%zu gc_after=%zu moved=%d root_sites=%#x phase_n=%zu watermark_done=%d null=%d\n",
                  static_cast<unsigned>(gc), status, ctx.failures, ctx.checkedDirtyBoundary,
                  static_cast<unsigned long>(ctx.dirtyAddress), static_cast<void*>(array), ctx.publishCount,
                  ctx.yieldCount, ctx.firstSegmentYieldCount, ctx.withdrawCount, ctx.requestedGc,
                  forceResidualWatermark ? "native-residual" : "native",
+                 ctx.fullIteratorVisits, ctx.rangeIteratorVisits,
                  ctx.gcCountBefore, ctx.gcCountAfter, ctx.rootMoved, ctx.rootVisitSites,
                  gc == YieldGc::YOUNG ? ctx.minorRootPhaseObservations : ctx.majorRootPhaseObservations,
                  gc == YieldGc::YOUNG ? ctx.minorWatermarkDone : ctx.majorWatermarkDone,
