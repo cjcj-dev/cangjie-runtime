@@ -32,6 +32,7 @@
 #include "Base/SysCall.h"
 #endif
 #include "Concurrency/Concurrency.h"
+#include "Heap/Barrier/Barrier.h"
 #include "Heap/Barrier/StoreBarrierBuffer.h"
 #include "Heap/Collector/GcTriggerFlags.h"
 #include "Heap/Collector/MarkPartialArray.h"
@@ -171,7 +172,8 @@ void PublishY2yAfterReleaseTestReceipt()
     if (claimPublication(g_y2ySlotAfterReleasePublications)) {
         MAddress slot = g_y2ySlotAfterRelease.load(std::memory_order_acquire);
         CHECK_DETAIL(slot != 0, "armed y2y after-release receipt without slot");
-        AllocBuffer::GetOrCreateAllocBuffer()->PushY2yDirtySlot(slot);
+        RefField<>& field = HeapSlotAt<>(slot);
+        Heap::GetBarrier().PostWriteReference(nullptr, field, to_object(field.GetTargetObject()), zpointer::null);
     }
 }
 
