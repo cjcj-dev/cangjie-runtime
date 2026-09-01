@@ -804,6 +804,8 @@ GC_OTHER_VM_TEST(LookupDecisionSnapshot, SurvivesPostReturnGhostAndHeaderMutatio
     BaseObject* from = fx.PlaceObject(region->GetRegionStart() + 64);
     region->SetRegionType(RegionInfo::RegionType::THREAD_LOCAL_REGION);
     region->SetRegionAllocPtr(reinterpret_cast<MAddress>(from) + from->GetSize());
+    WCollector collector(Heap::GetHeap().GetAllocator(), Heap::GetHeap().GetCollectorResources());
+    RelocationReceiptTestAccess::BindCollector(Heap::GetHeap().GetCollectorResources(), &collector);
     LiveInfo* live = PrepareForwardable(fx, region, reinterpret_cast<MAddress>(from));
     ForwardingTable::ClearEntries(region->GetRegionStart(), region->GetRegionSize());
     ForwardingTable::ReclaimRetired("gc-unit-lookup-decision-snapshot");
@@ -812,8 +814,8 @@ GC_OTHER_VM_TEST(LookupDecisionSnapshot, SurvivesPostReturnGhostAndHeaderMutatio
 
     const ForwardingTable::LookupResult result =
         ForwardingTable::LookupTo(reinterpret_cast<MAddress>(from));
-    from->SetStateCode(ObjectState::FORWARDED);
     region->DispelGhostFromRegion();
+    from->SetStateCode(ObjectState::FORWARDED);
 
     GC_EXPECT_TRUE(from->IsForwarded());
     GC_EXPECT_TRUE(RegionInfo::GetGhostFromRegionAt(reinterpret_cast<MAddress>(from)) == nullptr);
@@ -826,6 +828,7 @@ GC_OTHER_VM_TEST(LookupDecisionSnapshot, SurvivesPostReturnGhostAndHeaderMutatio
     GC_EXPECT_TRUE(result.publicationClosed);
 
     from->SetStateCode(ObjectState::NORMAL);
+    RelocationReceiptTestAccess::BindCollector(Heap::GetHeap().GetCollectorResources(), nullptr);
     region->metadata.liveInfo = nullptr;
     fx.FreePlanted(live);
 }
