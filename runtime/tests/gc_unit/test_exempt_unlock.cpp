@@ -10,11 +10,13 @@
 
 #include <atomic>
 #include <chrono>
+#include <iostream>
 #include <thread>
 
 #include "gc_heap_fixture.hpp"
 #include "gc_unittest.hpp"
 #include "Heap/Allocator/RegionManager.h"
+#include "Heap/WCollector/WCollector.h"
 
 using namespace MapleRuntime;
 using namespace MapleRuntime::GcUnit;
@@ -92,6 +94,131 @@ GC_TEST(ExemptLife, InPlaceCopyMustNotPaintNormalBeforeUnlock)
     obj->UnlockObject(ObjectState::FORWARDED);
     GC_EXPECT_TRUE(obj->IsForwarded());
     GC_EXPECT_FALSE(obj->GetStateWord().IsLockedWord());
+}
+
+namespace {
+class ExemptUnlockCollector final : public WCollector {
+public:
+    using WCollector::WCollector;
+
+    BaseObject* ForwardExclusive(BaseObject* from, BaseObject* to, RegionInfo* copyPage)
+    {
+        return ForwardObjectExclusive(from, to, copyPage);
+    }
+};
+
+void ExerciseOverlappingCopy(intptr_t destinationDelta)
+{
+    GcHeapFixture fx;
+    RegionInfo* region = fx.region0;
+    const MAddress fromAddress = region->GetRegionStart() + 128;
+    BaseObject* from = fx.PlaceObject(fromAddress);
+    region->SetRegionAllocPtr(fromAddress + 0x18);
+    WCollector collector(Heap::GetHeap().GetAllocator(), Heap::GetHeap().GetCollectorResources());
+    TypeInfo* const typeInfoBeforeCopy = from->GetTypeInfo();
+    StateWord oldWord = from->GetStateWord();
+    GC_EXPECT_TRUE(from->TryLockObject(oldWord));
+    GC_EXPECT_TRUE(from->GetStateWord().IsLockedWord());
+    BaseObject* to = reinterpret_cast<BaseObject*>(static_cast<uintptr_t>(
+        static_cast<intptr_t>(fromAddress) + destinationDelta));
+    // This is the shipped CopyCollector::CopyObject entry, reached through
+    // WCollector; no test-side copy of the relocation implementation exists.
+    collector.CopyObject(*from, *to, 0x18);
+    if (destinationDelta == -0x10) {
+        // Observation only: CopyObject restores the source stateCode needed by
+        // UnlockObject, but does not promise to restore the overwritten typeInfo.
+        // Keep both values in the evidence log without asserting equivalence.
+        std::cout << "SDOVL_FROM_TYPEINFO before="
+                  << reinterpret_cast<uintptr_t>(typeInfoBeforeCopy) << " after="
+                  << reinterpret_cast<uintptr_t>(from->GetTypeInfo()) << std::endl;
+    }
+    from->UnlockObject(ObjectState::FORWARDED);
+    GC_EXPECT_TRUE(from->IsForwarded());
+}
+
+void ExerciseExclusiveCopy(intptr_t destinationDelta, bool primeSourceHeaderFromPayload)
+{
+    GcHeapFixture fx;
+    RegionInfo* region = fx.region0;
+    region->SetRegionType(RegionInfo::RegionType::FROM_REGION);
+    const MAddress fromAddress = region->GetRegionStart() + 128;
+    BaseObject* from = fx.PlaceObject(fromAddress);
+    BaseObject* to = reinterpret_cast<BaseObject*>(static_cast<uintptr_t>(
+        static_cast<intptr_t>(fromAddress) + destinationDelta));
+    const size_t size = RegionSpace::GetAllocSize(*from);
+    GC_EXPECT_EQ(size, 2 * sizeof(uint64_t));
+    region->SetRegionAllocPtr(fromAddress + size);
+
+    LiveInfo* live = fx.PlantLiveInfo(region);
+    RegionBitmap* bitmap = fx.PlantMarkBitmap<Generation::Old>(live, region->GetRegionSize());
+    (void)bitmap->MarkBits(region->GetAddressOffset(fromAddress), from->GetSize(), region->GetRegionSize());
+    region->AddLiveByteCount(from->GetSize());
+    // SetRegionType installs a provisional carrier. Replace it at the same
+    // product publication boundary used by PrepareForwardableRegion, without
+    // asking the standalone fixture for an initialized CollectorProxy phase.
+    ForwardingTable::ClearEntries(region->GetRegionStart(), region->GetRegionSize());
+    ForwardingTable::ReclaimRetired("gc-unit-overlap-rearm");
+    GC_EXPECT_TRUE(ForwardingTable::PreparePublicationGeneration(
+        region->GetRegionStart(), region->GetRegionSize()));
+    GC_EXPECT_TRUE(ForwardingTable::InstallPublicationBeforeCopy(
+        region->GetRegionStart(), region->GetRegionSize(), region));
+    ZForwardingLife::reset_copy_open(region->metadata.copyInflight);
+    GC_EXPECT_TRUE(region->NoteCopyInflight());
+    StateWord oldWord = from->GetStateWord();
+    GC_EXPECT_TRUE(from->TryLockObject(oldWord));
+    if (primeSourceHeaderFromPayload) {
+        // A to=from-8 memmove replaces the source header with this payload
+        // word. Priming it with the locked header makes this test independent
+        // of CopyObject's restoreLocked branch while retaining a LOCKED to-head.
+        *reinterpret_cast<uint64_t*>(fromAddress + sizeof(uint64_t)) =
+            *reinterpret_cast<const uint64_t*>(fromAddress);
+    }
+
+    ExemptUnlockCollector collector(Heap::GetHeap().GetAllocator(), Heap::GetHeap().GetCollectorResources());
+    BaseObject* relocated = collector.ForwardExclusive(from, to, region);
+
+    GC_EXPECT_TRUE(relocated == to);
+    const ObjectState::ObjectStateCode destinationState = to->GetStateWord().GetStateCode();
+    std::cout << "SDOVL_DEST_STATE stateCode=" << static_cast<unsigned>(destinationState) << std::endl;
+    GC_EXPECT_NE(destinationState, ObjectState::LOCKED);
+    GC_EXPECT_TRUE(from->IsForwarded());
+    GC_EXPECT_EQ(region->CopyInflight(), 0);
+
+    ForwardingTable::ClearEntries(region->GetRegionStart(), region->GetRegionSize());
+    ForwardingTable::ReclaimRetired("gc-unit-explicit-coverage");
+    region->metadata.liveInfo = nullptr;
+    fx.FreePlanted(live);
+}
+} // namespace
+
+// The destination starts 0x10 bytes before the source and extends into its
+// header. Before the fix, CopyObject overwrote LOCKED and UnlockObject aborted.
+GC_OTHER_VM_TEST(ExemptLife, PartialOverlapCopyPreservesLockedSource)
+{
+    ExerciseOverlappingCopy(-0x10);
+}
+
+// A 16-byte copy from `from` to `from - 8` overlaps by one aligned word, while
+// the two 8-byte headers do not overlap. ForwardObjectExclusive must therefore
+// normalize the copied destination header without clearing the source lock.
+GC_OTHER_VM_TEST(ExemptLife, PartialOverlapDestinationIsNotLocked)
+{
+    ExerciseExclusiveCopy(-static_cast<intptr_t>(sizeof(uint64_t)), true);
+}
+
+GC_OTHER_VM_TEST(ExemptLife, NonOverlapCopyBeforeSourceRemainsGreen)
+{
+    ExerciseOverlappingCopy(-0x18);
+}
+
+GC_OTHER_VM_TEST(ExemptLife, NonOverlapCopyFarBeforeSourceRemainsGreen)
+{
+    ExerciseOverlappingCopy(-0x20);
+}
+
+GC_OTHER_VM_TEST(ExemptLife, IdentityCopyRemainsGreen)
+{
+    ExerciseExclusiveCopy(0, false);
 }
 
 GC_TEST(ExemptLife, FindHitDoesNotEnterCopyInflight)

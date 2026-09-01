@@ -2715,7 +2715,7 @@ BaseObject* WCollector::ForwardObjectExclusive(BaseObject* obj, BaseObject* toOb
     // publish of a completed copy; SetStateCode must precede InsertMapping so a
     // find() hit never observes the from-copy's LOCKED header bits on to.
     // In-place (GetRoute keep-from: to==from) the header is still LOCKED —
-    // painting NORMAL here makes UnlockObject CHECK fail (StateWord.h:183).
+    // painting NORMAL here makes UnlockObject CHECK fail (StateWord.h:198).
     // That is the A_locked abort after exempt-kept (REPORT-lockdrain /
     // REPORT-exemptlife §4).
     if (toObj != obj) {
