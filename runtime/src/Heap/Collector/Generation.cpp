@@ -81,6 +81,8 @@ struct Y2yHandoffReceiptState {
 Y2yHandoffReceiptState g_y2yHandoffReceipt;
 std::atomic<BaseObject*> g_y2yAfterReleaseHolder { nullptr };
 std::atomic<uint64_t> g_y2yAfterReleasePublications { 0 };
+std::atomic<MAddress> g_y2ySlotAfterRelease { 0 };
+std::atomic<uint64_t> g_y2ySlotAfterReleasePublications { 0 };
 std::atomic<Mutator*> g_satbBeforeMarkEndProducer { nullptr };
 std::atomic<BaseObject*> g_satbBeforeMarkEndFirst { nullptr };
 std::atomic<BaseObject*> g_satbBeforeMarkEndSecond { nullptr };
@@ -107,6 +109,8 @@ void ResetY2yHandoffTestReceipt()
     g_y2yHandoffReceipt.afterStw2.store(0, std::memory_order_relaxed);
     g_y2yAfterReleaseHolder.store(nullptr, std::memory_order_relaxed);
     g_y2yAfterReleasePublications.store(0, std::memory_order_relaxed);
+    g_y2ySlotAfterRelease.store(0, std::memory_order_relaxed);
+    g_y2ySlotAfterReleasePublications.store(0, std::memory_order_relaxed);
 }
 
 Y2yHandoffTestReceipt ReadY2yHandoffTestReceipt()
@@ -143,19 +147,32 @@ void ArmY2yAfterReleaseTestReceipt(BaseObject* holder, uint64_t publications)
     g_y2yAfterReleasePublications.store(publications, std::memory_order_release);
 }
 
+void ArmY2ySlotAfterReleaseTestReceipt(MAddress slot, uint64_t publications)
+{
+    g_y2ySlotAfterRelease.store(slot, std::memory_order_release);
+    g_y2ySlotAfterReleasePublications.store(publications, std::memory_order_release);
+}
+
 void PublishY2yAfterReleaseTestReceipt()
 {
-    uint64_t remaining = g_y2yAfterReleasePublications.load(std::memory_order_acquire);
-    while (remaining != 0 &&
-           !g_y2yAfterReleasePublications.compare_exchange_weak(remaining, remaining - 1,
-                                                                 std::memory_order_acq_rel,
-                                                                 std::memory_order_acquire)) {}
-    if (remaining == 0) {
-        return;
+    auto claimPublication = [](std::atomic<uint64_t>& publications) {
+        uint64_t remaining = publications.load(std::memory_order_acquire);
+        while (remaining != 0 &&
+               !publications.compare_exchange_weak(remaining, remaining - 1,
+                                                   std::memory_order_acq_rel,
+                                                   std::memory_order_acquire)) {}
+        return remaining != 0;
+    };
+    if (claimPublication(g_y2yAfterReleasePublications)) {
+        BaseObject* holder = g_y2yAfterReleaseHolder.load(std::memory_order_acquire);
+        CHECK_DETAIL(holder != nullptr, "armed y2y after-release receipt without holder");
+        AllocBuffer::GetOrCreateAllocBuffer()->PushY2yDirtyHolder(holder);
     }
-    BaseObject* holder = g_y2yAfterReleaseHolder.load(std::memory_order_acquire);
-    CHECK_DETAIL(holder != nullptr, "armed y2y after-release receipt without holder");
-    AllocBuffer::GetOrCreateAllocBuffer()->PushY2yDirtyHolder(holder);
+    if (claimPublication(g_y2ySlotAfterReleasePublications)) {
+        MAddress slot = g_y2ySlotAfterRelease.load(std::memory_order_acquire);
+        CHECK_DETAIL(slot != 0, "armed y2y after-release receipt without slot");
+        AllocBuffer::GetOrCreateAllocBuffer()->PushY2yDirtySlot(slot);
+    }
 }
 
 void ArmSatbBeforeMarkEndTestReceipt(Mutator* producer, BaseObject* first, BaseObject* second)

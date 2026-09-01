@@ -608,8 +608,9 @@ GC_OTHER_VM_TEST(YoungConc, LateEdgeFollowReceiptReachesYoungRuntimeDispatch)
     (void)live;
 }
 
-// H receipt arm: default product dispatch with a real mutator-local y2y
-// holder. The pre-window batch must be empty at the release boundary.
+// H receipt arm: default product dispatch with real mutator-local y2y holder
+// and holder-independent slot work. The pre-window batch must be empty at the
+// release boundary; both forms published afterward must reach STW2 closure.
 GC_OTHER_VM_TEST(YoungConc, Y2yAfterReleaseBatchForcesContinueAndReachesClosure)
 {
     GC_EXPECT_EQ(CJ_ScheduleManagerInit(), 0);
@@ -654,6 +655,7 @@ GC_OTHER_VM_TEST(YoungConc, Y2yAfterReleaseBatchForcesContinueAndReachesClosure)
     // existing continue edge must follow it before a second mark-end succeeds.
     AllocBuffer::GetOrCreateAllocBuffer()->PushY2yDirtyHolder(fx.obj0);
     ArmY2yAfterReleaseTestReceipt(fx.obj1, 2);
+    ArmY2ySlotAfterReleaseTestReceipt(reinterpret_cast<MAddress>(parentField), 2);
 #endif
     ThreadLocal::SetMutator(nullptr);
     RelocationReceiptTestAccess::RunCollectionDispatch(collector);
@@ -671,7 +673,7 @@ GC_OTHER_VM_TEST(YoungConc, Y2yAfterReleaseBatchForcesContinueAndReachesClosure)
     // state, rather than the reset value from an omitted receipt.
     GC_EXPECT_TRUE(receipt.phase1 >= 1);
     GC_EXPECT_EQ(receipt.afterRoot, 0u);
-    GC_EXPECT_TRUE(receipt.afterStw2 >= 2);
+    GC_EXPECT_TRUE(receipt.afterStw2 >= 4);
     GC_EXPECT_TRUE(receipt.phase2 >= 3);
 #endif
     resources.SetGcStarted(startedBefore);
