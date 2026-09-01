@@ -65,9 +65,9 @@ GC_TEST(ForwardingNoGeometry, ArmedMissIsNullNotGeometry)
 
     BaseObject* geometric = fx.region0->GetRouteForProbe(fx.obj0);
     GC_EXPECT_TRUE(geometric != nullptr);
-    ForwardingTable::ToAnswer ans = ForwardingTable::ToAnswer::Unarmed;
-    const MAddress looked = ForwardingTable::LookupTo(from, &ans);
-    GC_EXPECT_TRUE(ans == ForwardingTable::ToAnswer::ArmedMiss);
+    ForwardingTable::LookupResult lookup = ForwardingTable::LookupTo(from);
+    const MAddress looked = lookup.to;
+    GC_EXPECT_TRUE(lookup.answer == ForwardingTable::ToAnswer::ArmedMiss);
     GC_EXPECT_EQ(looked, static_cast<MAddress>(0));
     GC_EXPECT_TRUE(looked != reinterpret_cast<MAddress>(geometric));
 
@@ -83,9 +83,9 @@ GC_TEST(ForwardingNoGeometry, ArmedMissIsNullNotGeometry)
     GC_EXPECT_TRUE(static_cast<bool>(publication));
     GC_EXPECT_EQ(ForwardingTable::InsertMapping(publication, from, stored), stored);
     publication = ForwardingTable::Publication();
-    ans = ForwardingTable::ToAnswer::Unarmed;
-    GC_EXPECT_EQ(ForwardingTable::LookupTo(from, &ans), stored);
-    GC_EXPECT_TRUE(ans == ForwardingTable::ToAnswer::ArmedHit);
+    lookup = ForwardingTable::LookupTo(from);
+    GC_EXPECT_EQ(lookup.to, stored);
+    GC_EXPECT_TRUE(lookup.answer == ForwardingTable::ToAnswer::ArmedHit);
 
     ForwardingTable::Remove(fx.region0->GetRegionStart(), fx.region0->GetRegionSize());
     ForwardingTable::ClearEntries(fx.region0->GetRegionStart(), fx.region0->GetRegionSize());
@@ -132,9 +132,9 @@ GC_TEST(ForwardingNoGeometry, ArmedLookupAndSuccessfulExclusiveCopyPublishProduc
     GC_EXPECT_TRUE(reinterpret_cast<MAddress>(geometric) == 0x20000000u ||
                    reinterpret_cast<MAddress>(geometric) != 0);
 
-    ForwardingTable::ToAnswer ans = ForwardingTable::ToAnswer::Unarmed;
-    const MAddress looked = ForwardingTable::LookupTo(from, &ans);
-    GC_EXPECT_TRUE(ans == ForwardingTable::ToAnswer::ArmedMiss);
+    ForwardingTable::LookupResult lookup = ForwardingTable::LookupTo(from);
+    const MAddress looked = lookup.to;
+    GC_EXPECT_TRUE(lookup.answer == ForwardingTable::ToAnswer::ArmedMiss);
     GC_EXPECT_EQ(looked, static_cast<MAddress>(0));
     GC_EXPECT_TRUE(looked != reinterpret_cast<MAddress>(geometric));
 
@@ -151,9 +151,9 @@ GC_TEST(ForwardingNoGeometry, ArmedLookupAndSuccessfulExclusiveCopyPublishProduc
     GC_EXPECT_EQ(ForwardingTable::InsertMapping(publication, from, stored), stored);
     publication = ForwardingTable::Publication();
     GC_EXPECT_FALSE(ForwardingTable::GetEntries(from)->is_provisional());
-    ans = ForwardingTable::ToAnswer::Unarmed;
-    GC_EXPECT_EQ(ForwardingTable::LookupTo(from, &ans), stored);
-    GC_EXPECT_TRUE(ans == ForwardingTable::ToAnswer::ArmedHit);
+    lookup = ForwardingTable::LookupTo(from);
+    GC_EXPECT_EQ(lookup.to, stored);
+    GC_EXPECT_TRUE(lookup.answer == ForwardingTable::ToAnswer::ArmedHit);
 
 #if defined(MRT_TESTABLE_INTERNALS)
     // Drive the product success path itself: CopyObject -> InstallMapping ->

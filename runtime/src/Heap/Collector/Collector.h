@@ -62,6 +62,30 @@ enum class HandVerdict : uint8_t { Usable, Forwarded, ZeroHeader };
 class FindToVersionResult {
 public:
     enum class State : uint8_t { Found, NotManaged, NotForwarded, Unavailable };
+    enum class UnavailableRoute : uint8_t {
+        Unknown,
+        LookupUnavailable,
+        NoGhostForwarded,
+        PublicationRetainFailed,
+        GeometricMissForwarded,
+        LegacyGeometricMiss,
+    };
+
+    struct UnavailableWitness {
+        bool forwardedValid{ false };
+        bool forwarded{ false };
+        bool fromRegionInfoNullValid{ false };
+        bool fromRegionInfoNull{ false };
+        const char* lookupAnswer{ "not_queried" };
+        bool lookupSnapshotValid{ false };
+        const char* lookupCause{ "n/a" };
+        bool lookupActiveCandidate{ false };
+        const char* lookupActiveAnswer{ "n/a" };
+        const char* lookupRetiredAnswer{ "n/a" };
+        bool lookupPublicationClosed{ false };
+        bool routeStateValid{ false };
+        uint8_t routeState{ 0 };
+    };
 
     static FindToVersionResult Found(BaseObject* object)
     {
@@ -70,25 +94,133 @@ public:
     }
     static FindToVersionResult NotManaged() { return FindToVersionResult(State::NotManaged, nullptr); }
     static FindToVersionResult NotForwarded() { return FindToVersionResult(State::NotForwarded, nullptr); }
-    static FindToVersionResult Unavailable() { return FindToVersionResult(State::Unavailable, nullptr); }
+    static FindToVersionResult Unavailable()
+    {
+        return FindToVersionResult(State::Unavailable, nullptr);
+    }
+    static FindToVersionResult Unavailable(UnavailableRoute route, const UnavailableWitness& witness)
+    {
+        return FindToVersionResult(route, witness);
+    }
 
     State state() const { return lookupState; }
     BaseObject* found() const { return lookupState == State::Found ? object : nullptr; }
     bool is_unavailable() const { return lookupState == State::Unavailable; }
+    UnavailableRoute unavailable_route() const { return unavailableRoute; }
+    bool unavailable_forwarded_valid() const { return unavailableForwardedValid; }
+    bool unavailable_forwarded() const { return unavailableForwarded; }
+    bool unavailable_from_region_info_null_valid() const { return unavailableFromRegionInfoNullValid; }
+    bool unavailable_from_region_info_null() const { return unavailableFromRegionInfoNull; }
+    const char* unavailable_lookup_answer() const { return unavailableLookupAnswer; }
+    bool unavailable_lookup_snapshot_valid() const { return unavailableLookupSnapshotValid; }
+    const char* unavailable_lookup_cause() const { return unavailableLookupCause; }
+    bool unavailable_lookup_active_candidate() const { return unavailableLookupActiveCandidate; }
+    const char* unavailable_lookup_active_answer() const { return unavailableLookupActiveAnswer; }
+    const char* unavailable_lookup_retired_answer() const { return unavailableLookupRetiredAnswer; }
+    bool unavailable_lookup_publication_closed() const { return unavailableLookupPublicationClosed; }
+    bool unavailable_route_state_valid() const { return unavailableRouteStateValid; }
+    uint8_t unavailable_route_state() const { return unavailableRouteState; }
+
+    const char* unavailable_route_name() const
+    {
+        switch (unavailableRoute) {
+            case UnavailableRoute::LookupUnavailable:
+                return "lookup_unavailable";
+            case UnavailableRoute::NoGhostForwarded:
+                return "no_ghost_forwarded";
+            case UnavailableRoute::PublicationRetainFailed:
+                return "publication_retain_failed";
+            case UnavailableRoute::GeometricMissForwarded:
+                return "geometric_miss_forwarded";
+            case UnavailableRoute::LegacyGeometricMiss:
+                return "legacy_geometric_miss";
+            case UnavailableRoute::Unknown:
+                return "unknown";
+        }
+        return "unknown";
+    }
 
     BaseObject* GetOrFailClosed(const char* consumer) const
     {
+        const char* forwarded = unavailableForwardedValid ? (unavailableForwarded ? "1" : "0") : "n/a";
+        const char* fromRegionInfoNull = unavailableFromRegionInfoNullValid
+            ? (unavailableFromRegionInfoNull ? "1" : "0") : "n/a";
+        const char* lookup = unavailableLookupSnapshotValid ? unavailableLookupAnswer : "n/a";
+        const char* lookupCause = unavailableLookupSnapshotValid ? unavailableLookupCause : "n/a";
+        const char* activeCandidate = unavailableLookupSnapshotValid
+            ? (unavailableLookupActiveCandidate ? "1" : "0") : "n/a";
+        const char* activeLookup = unavailableLookupSnapshotValid ? unavailableLookupActiveAnswer : "n/a";
+        const char* retiredLookup = unavailableLookupSnapshotValid ? unavailableLookupRetiredAnswer : "n/a";
+        const char* publicationClosed = unavailableLookupSnapshotValid
+            ? (unavailableLookupPublicationClosed ? "1" : "0") : "n/a";
+        const char* routeState = unavailableRouteStateValid
+            ? (unavailableRouteState == 0 ? "0" :
+               unavailableRouteState == 1 ? "1" :
+               unavailableRouteState == 2 ? "2" :
+               unavailableRouteState == 3 ? "3" :
+               unavailableRouteState == 4 ? "4" :
+               unavailableRouteState == 5 ? "5" : "invalid")
+            : "n/a";
         CHECK_DETAIL(lookupState != State::Unavailable,
-                     "[FINDTO][fail-closed] consumer=%s forwarding carrier unavailable",
-                     consumer == nullptr ? "unknown" : consumer);
+                     "[FINDTO][fail-closed] consumer=%s forwarding carrier unavailable "
+                     "route=%s forwarded=%s fromRegionInfo_null=%s lookup=%s "
+                     "lookup_snapshot_valid=%u cause=%s active_candidate=%s active_lookup=%s "
+                     "retired_lookup=%s publication_closed=%s route_state=%s",
+                     consumer == nullptr ? "unknown" : consumer, unavailable_route_name(),
+                     forwarded, fromRegionInfoNull, lookup,
+                     static_cast<unsigned>(unavailableLookupSnapshotValid), lookupCause,
+                     activeCandidate, activeLookup, retiredLookup, publicationClosed, routeState);
         return found();
     }
 
 private:
-    FindToVersionResult(State state, BaseObject* object) : lookupState(state), object(object) {}
+    FindToVersionResult(State state, BaseObject* object)
+        : lookupState(state), object(object), unavailableRoute(UnavailableRoute::Unknown),
+          unavailableForwardedValid(false), unavailableForwarded(false),
+          unavailableFromRegionInfoNullValid(false), unavailableFromRegionInfoNull(false),
+          unavailableLookupAnswer("not_queried"), unavailableLookupSnapshotValid(false),
+          unavailableLookupCause("n/a"), unavailableLookupActiveCandidate(false),
+          unavailableLookupActiveAnswer("n/a"), unavailableLookupRetiredAnswer("n/a"),
+          unavailableLookupPublicationClosed(false), unavailableRouteStateValid(false),
+          unavailableRouteState(0)
+    {
+    }
+
+    FindToVersionResult(UnavailableRoute route, const UnavailableWitness& witness)
+        : lookupState(State::Unavailable), object(nullptr), unavailableRoute(route),
+          unavailableForwardedValid(witness.forwardedValid), unavailableForwarded(witness.forwarded),
+          unavailableFromRegionInfoNullValid(witness.fromRegionInfoNullValid),
+          unavailableFromRegionInfoNull(witness.fromRegionInfoNull),
+          unavailableLookupAnswer(witness.lookupAnswer == nullptr ? "unknown" : witness.lookupAnswer),
+          unavailableLookupSnapshotValid(witness.lookupSnapshotValid),
+          unavailableLookupCause(witness.lookupCause == nullptr ? "unknown" : witness.lookupCause),
+          unavailableLookupActiveCandidate(witness.lookupActiveCandidate),
+          unavailableLookupActiveAnswer(witness.lookupActiveAnswer == nullptr ? "unknown"
+                                                                              : witness.lookupActiveAnswer),
+          unavailableLookupRetiredAnswer(witness.lookupRetiredAnswer == nullptr ? "unknown"
+                                                                                : witness.lookupRetiredAnswer),
+          unavailableLookupPublicationClosed(witness.lookupPublicationClosed),
+          unavailableRouteStateValid(witness.routeStateValid),
+          unavailableRouteState(witness.routeState)
+    {
+    }
 
     State lookupState;
     BaseObject* object;
+    UnavailableRoute unavailableRoute;
+    bool unavailableForwardedValid;
+    bool unavailableForwarded;
+    bool unavailableFromRegionInfoNullValid;
+    bool unavailableFromRegionInfoNull;
+    const char* unavailableLookupAnswer;
+    bool unavailableLookupSnapshotValid;
+    const char* unavailableLookupCause;
+    bool unavailableLookupActiveCandidate;
+    const char* unavailableLookupActiveAnswer;
+    const char* unavailableLookupRetiredAnswer;
+    bool unavailableLookupPublicationClosed;
+    bool unavailableRouteStateValid;
+    uint8_t unavailableRouteState;
 };
 
 // c4unify MASKEQUIV: dual-run the published bad masks against a verbatim copy of the literal

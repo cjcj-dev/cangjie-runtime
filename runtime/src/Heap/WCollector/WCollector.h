@@ -711,22 +711,92 @@ public:
             return FindToVersionResult::NotManaged();
         }
         const MAddress fromAddr = reinterpret_cast<MAddress>(obj);
-        ForwardingTable::ToAnswer ans = ForwardingTable::ToAnswer::Unarmed;
+        const auto answerName = [](ForwardingTable::ToAnswer answer) -> const char* {
+            switch (answer) {
+                case ForwardingTable::ToAnswer::ArmedHit:
+                    return "armed_hit";
+                case ForwardingTable::ToAnswer::ArmedMiss:
+                    return "armed_miss";
+                case ForwardingTable::ToAnswer::Unavailable:
+                    return "unavailable";
+                case ForwardingTable::ToAnswer::Unarmed:
+                    return "unarmed";
+            }
+            return "unknown";
+        };
+        const auto causeName = [](ForwardingTable::ToUnavailableCause cause) -> const char* {
+            switch (static_cast<uint8_t>(cause)) {
+                case 1:
+                    return "active_retain_rejected";
+                case 2:
+                    return "retired_unavailable";
+                case 3:
+                    return "active_retain_rejected+retired_unavailable";
+                case 4:
+                    return "publication_closed";
+                case 5:
+                    return "active_retain_rejected+publication_closed";
+                case 6:
+                    return "retired_unavailable+publication_closed";
+                case 7:
+                    return "active_retain_rejected+retired_unavailable+publication_closed";
+                case 0:
+                    return "none";
+            }
+            return "unknown";
+        };
+        ForwardingTable::LookupResult lookup{ 0, ForwardingTable::ToAnswer::Unarmed,
+                                              ForwardingTable::ToUnavailableCause::None, false, false,
+                                              ForwardingTable::ToAnswer::Unarmed,
+                                              ForwardingTable::ToAnswer::Unarmed, false };
+        bool lookupQueried = false;
+        const auto unavailable = [&](FindToVersionResult::UnavailableRoute route, bool forwardedValid,
+                                     bool forwarded, bool fromRegionInfoNullValid,
+                                     bool fromRegionInfoNull) -> FindToVersionResult {
+            FindToVersionResult::UnavailableWitness witness;
+            witness.forwardedValid = forwardedValid;
+            witness.forwarded = forwarded;
+            witness.fromRegionInfoNullValid = fromRegionInfoNullValid;
+            witness.fromRegionInfoNull = fromRegionInfoNull;
+            // All lookup fields are a single snapshot.  When LookupTo was not
+            // reached (the legacy compile-time route), leave the snapshot
+            // invalid so consumers print n/a instead of defaults.
+            witness.lookupSnapshotValid = lookupQueried;
+            if (lookupQueried) {
+                witness.lookupAnswer = answerName(lookup.answer);
+                witness.lookupCause = causeName(lookup.unavailableCause);
+                witness.lookupActiveCandidate = lookup.activeCandidate;
+                witness.lookupActiveAnswer = answerName(lookup.activeAnswer);
+                witness.lookupRetiredAnswer = answerName(lookup.retiredAnswer);
+                witness.lookupPublicationClosed = lookup.publicationClosed;
+            }
+            return FindToVersionResult::Unavailable(route, witness);
+        };
         BaseObject* stored = nullptr;
         if constexpr (ForwardingTable::kConsumeEntries) {
-            const MAddress to = ForwardingTable::LookupTo(fromAddr, &ans);
-            if (to != 0) {
-                stored = reinterpret_cast<BaseObject*>(to);
+            lookup = ForwardingTable::LookupTo(fromAddr);
+            lookupQueried = true;
+            if (lookup.to != 0) {
+                stored = reinterpret_cast<BaseObject*>(lookup.to);
             }
             if constexpr (ForwardingTable::kEntriesSoleWhenArmed) {
-                if (ans == ForwardingTable::ToAnswer::ArmedHit) {
+                if (lookup.answer == ForwardingTable::ToAnswer::ArmedHit) {
                     return ToHeaderCovered(stored) ? FindToVersionResult::Found(stored)
                                                   : FindToVersionResult::NotForwarded();
                 }
-                if (ans == ForwardingTable::ToAnswer::Unavailable) {
-                    return FindToVersionResult::Unavailable();
+                if (lookup.answer == ForwardingTable::ToAnswer::Unavailable) {
+                    FindToVersionResult::UnavailableWitness witness;
+                    witness.lookupAnswer = answerName(lookup.answer);
+                    witness.lookupSnapshotValid = true;
+                    witness.lookupCause = causeName(lookup.unavailableCause);
+                    witness.lookupActiveCandidate = lookup.activeCandidate;
+                    witness.lookupActiveAnswer = answerName(lookup.activeAnswer);
+                    witness.lookupRetiredAnswer = answerName(lookup.retiredAnswer);
+                    witness.lookupPublicationClosed = lookup.publicationClosed;
+                    return FindToVersionResult::Unavailable(
+                        FindToVersionResult::UnavailableRoute::LookupUnavailable, witness);
                 }
-                if (ans == ForwardingTable::ToAnswer::ArmedMiss && !obj->IsForwarded()) {
+                if (lookup.answer == ForwardingTable::ToAnswer::ArmedMiss && !obj->IsForwarded()) {
                     return FindToVersionResult::NotForwarded();
                 }
             }
@@ -739,8 +809,11 @@ public:
             if (stored != nullptr) {
                 return FindToVersionResult::Found(stored);
             }
-            return obj->IsForwarded() ? FindToVersionResult::Unavailable()
-                                      : FindToVersionResult::NotForwarded();
+            const bool forwarded = obj->IsForwarded();
+            return forwarded
+                ? unavailable(FindToVersionResult::UnavailableRoute::NoGhostForwarded,
+                              true, forwarded, true, true)
+                : FindToVersionResult::NotForwarded();
         }
         RegionSpace& space = reinterpret_cast<RegionSpace&>(theAllocator);
         BaseObject* geometric = space.GetRegionManager().FindPublishedRoute(obj).dest;
@@ -753,7 +826,9 @@ public:
                 ForwardingTable::Publication publication =
                     ForwardingTable::RetainOpenPublicationAfterCopy(fromRegionInfo, fromAddr);
                 if (!publication) {
-                    return FindToVersionResult::Unavailable();
+                    return unavailable(
+                        FindToVersionResult::UnavailableRoute::PublicationRetainFailed,
+                        false, false, true, false);
                 }
                 const MAddress receipt = ForwardingTable::InsertMapping(
                     publication, fromAddr, reinterpret_cast<MAddress>(geometric));
@@ -766,14 +841,20 @@ public:
             if (stored != nullptr) {
                 return FindToVersionResult::Found(stored);
             }
-            return obj->IsForwarded() ? FindToVersionResult::Unavailable()
-                                      : FindToVersionResult::NotForwarded();
+            const bool forwarded = obj->IsForwarded();
+            return forwarded
+                ? unavailable(FindToVersionResult::UnavailableRoute::GeometricMissForwarded,
+                              true, forwarded, true, false)
+                : FindToVersionResult::NotForwarded();
         }
         if (geometric != nullptr && ToHeaderCovered(geometric)) {
             return FindToVersionResult::Found(geometric);
         }
-        return obj->IsForwarded() ? FindToVersionResult::Unavailable()
-                                  : FindToVersionResult::NotForwarded();
+        const bool forwarded = obj->IsForwarded();
+        return forwarded
+            ? unavailable(FindToVersionResult::UnavailableRoute::LegacyGeometricMiss,
+                          true, forwarded, true, false)
+            : FindToVersionResult::NotForwarded();
     }
 
 protected:

@@ -726,6 +726,118 @@ GC_OTHER_VM_TEST(FindToPublicState, UnavailableIsObservable)
     fx.FreePlanted(live);
 }
 
+// A single product-linked construction exercises two distinct Unavailable producers.  It proves
+// the route witness is not a constant formatter: one arm closes an installed publication while
+// keeping its ghost region, and the other uses an unarmed, non-ghost region with a FORWARDED
+// header. Both answers come from WCollector::FindToVersion in libcangjie-runtime.so.
+GC_OTHER_VM_TEST(FindToRouteDiagnostics, DistinguishesLookupUnavailableFromNoGhostForwarded)
+{
+    GcHeapFixture& fx = ProductFixture();
+    WCollector collector(Heap::GetHeap().GetAllocator(), Heap::GetHeap().GetCollectorResources());
+    RelocationReceiptTestAccess::BindCollector(Heap::GetHeap().GetCollectorResources(), &collector);
+
+    RegionInfo* lookupRegion = fx.region0;
+    BaseObject* lookupFrom = fx.PlaceObject(lookupRegion->GetRegionStart() + 64);
+    lookupRegion->SetRegionType(RegionInfo::RegionType::THREAD_LOCAL_REGION);
+    lookupRegion->SetRegionAllocPtr(reinterpret_cast<MAddress>(lookupFrom) + lookupFrom->GetSize());
+    LiveInfo* live = PrepareForwardable(fx, lookupRegion, reinterpret_cast<MAddress>(lookupFrom));
+    ForwardingTable::ClearEntries(lookupRegion->GetRegionStart(), lookupRegion->GetRegionSize());
+    ForwardingTable::ReclaimRetired("gc-unit-route-diagnostics-lookup");
+
+    FindToVersionResult lookup =
+        RelocationReceiptTestAccess::ProductFindToVersion(collector, lookupFrom);
+    GC_EXPECT_TRUE(lookup.state() == FindToVersionResult::State::Unavailable);
+    GC_EXPECT_TRUE(lookup.unavailable_route() ==
+                   FindToVersionResult::UnavailableRoute::LookupUnavailable);
+    GC_EXPECT_FALSE(lookup.unavailable_forwarded_valid());
+    GC_EXPECT_FALSE(lookup.unavailable_forwarded());
+    GC_EXPECT_FALSE(lookup.unavailable_from_region_info_null_valid());
+    GC_EXPECT_FALSE(lookup.unavailable_from_region_info_null());
+    GC_EXPECT_TRUE(std::strcmp(lookup.unavailable_lookup_answer(), "unavailable") == 0);
+    GC_EXPECT_TRUE(lookup.unavailable_lookup_snapshot_valid());
+    GC_EXPECT_TRUE(std::strcmp(lookup.unavailable_lookup_cause(), "publication_closed") == 0);
+    GC_EXPECT_FALSE(lookup.unavailable_lookup_active_candidate());
+    GC_EXPECT_TRUE(std::strcmp(lookup.unavailable_lookup_active_answer(), "unarmed") == 0);
+    GC_EXPECT_TRUE(std::strcmp(lookup.unavailable_lookup_retired_answer(), "unarmed") == 0);
+    GC_EXPECT_TRUE(lookup.unavailable_lookup_publication_closed());
+    GC_EXPECT_TRUE(std::strcmp(lookup.unavailable_route_name(), "lookup_unavailable") == 0);
+    GC_EXPECT_FALSE(lookup.unavailable_route_state_valid());
+    GC_EXPECT_EQ(lookup.unavailable_route_state(), static_cast<uint8_t>(0));
+
+    RegionInfo* noGhostRegion = fx.region1;
+    BaseObject* noGhostFrom = fx.PlaceObject(noGhostRegion->GetRegionStart() + 64);
+    noGhostRegion->SetRegionType(RegionInfo::RegionType::THREAD_LOCAL_REGION);
+    noGhostRegion->SetRegionAllocPtr(reinterpret_cast<MAddress>(noGhostFrom) + noGhostFrom->GetSize());
+    GC_EXPECT_TRUE(RegionInfo::GetGhostFromRegionAt(reinterpret_cast<MAddress>(noGhostFrom)) == nullptr);
+    GC_EXPECT_FALSE(ForwardingTable::EntriesArmed(reinterpret_cast<MAddress>(noGhostFrom)));
+    noGhostFrom->SetStateCode(ObjectState::FORWARDED);
+
+    FindToVersionResult noGhost =
+        RelocationReceiptTestAccess::ProductFindToVersion(collector, noGhostFrom);
+    GC_EXPECT_TRUE(noGhost.state() == FindToVersionResult::State::Unavailable);
+    GC_EXPECT_TRUE(noGhost.unavailable_route() ==
+                   FindToVersionResult::UnavailableRoute::NoGhostForwarded);
+    GC_EXPECT_TRUE(noGhost.unavailable_forwarded_valid());
+    GC_EXPECT_TRUE(noGhost.unavailable_forwarded());
+    GC_EXPECT_TRUE(noGhost.unavailable_from_region_info_null_valid());
+    GC_EXPECT_TRUE(noGhost.unavailable_from_region_info_null());
+    GC_EXPECT_TRUE(std::strcmp(noGhost.unavailable_lookup_answer(), "unarmed") == 0);
+    GC_EXPECT_TRUE(noGhost.unavailable_lookup_snapshot_valid());
+    GC_EXPECT_TRUE(std::strcmp(noGhost.unavailable_lookup_cause(), "none") == 0);
+    GC_EXPECT_FALSE(noGhost.unavailable_lookup_active_candidate());
+    GC_EXPECT_TRUE(std::strcmp(noGhost.unavailable_lookup_active_answer(), "unarmed") == 0);
+    GC_EXPECT_TRUE(std::strcmp(noGhost.unavailable_lookup_retired_answer(), "unarmed") == 0);
+    GC_EXPECT_FALSE(noGhost.unavailable_lookup_publication_closed());
+    GC_EXPECT_TRUE(std::strcmp(noGhost.unavailable_route_name(), "no_ghost_forwarded") == 0);
+    GC_EXPECT_FALSE(noGhost.unavailable_route_state_valid());
+    GC_EXPECT_EQ(noGhost.unavailable_route_state(), static_cast<uint8_t>(0));
+    GC_EXPECT_NE(lookup.unavailable_route(), noGhost.unavailable_route());
+
+    noGhostFrom->SetStateCode(ObjectState::NORMAL);
+    RelocationReceiptTestAccess::BindCollector(Heap::GetHeap().GetCollectorResources(), nullptr);
+    lookupRegion->metadata.liveInfo = nullptr;
+    fx.FreePlanted(live);
+}
+
+// LookupTo returns the decision record itself.  Change both metadata faces only
+// after the product lookup returns, then prove the record still describes the
+// carrier inputs that selected Unavailable rather than those later faces.
+GC_OTHER_VM_TEST(LookupDecisionSnapshot, SurvivesPostReturnGhostAndHeaderMutation)
+{
+    GcHeapFixture& fx = ProductFixture();
+    RegionInfo* region = fx.region0;
+    BaseObject* from = fx.PlaceObject(region->GetRegionStart() + 64);
+    region->SetRegionType(RegionInfo::RegionType::THREAD_LOCAL_REGION);
+    region->SetRegionAllocPtr(reinterpret_cast<MAddress>(from) + from->GetSize());
+    WCollector collector(Heap::GetHeap().GetAllocator(), Heap::GetHeap().GetCollectorResources());
+    RelocationReceiptTestAccess::BindCollector(Heap::GetHeap().GetCollectorResources(), &collector);
+    LiveInfo* live = PrepareForwardable(fx, region, reinterpret_cast<MAddress>(from));
+    ForwardingTable::ClearEntries(region->GetRegionStart(), region->GetRegionSize());
+    ForwardingTable::ReclaimRetired("gc-unit-lookup-decision-snapshot");
+    GC_EXPECT_TRUE(RegionInfo::GetGhostFromRegionAt(reinterpret_cast<MAddress>(from)) == region);
+    GC_EXPECT_FALSE(from->IsForwarded());
+
+    const ForwardingTable::LookupResult result =
+        ForwardingTable::LookupTo(reinterpret_cast<MAddress>(from));
+    region->DispelGhostFromRegion();
+    from->SetStateCode(ObjectState::FORWARDED);
+
+    GC_EXPECT_TRUE(from->IsForwarded());
+    GC_EXPECT_TRUE(RegionInfo::GetGhostFromRegionAt(reinterpret_cast<MAddress>(from)) == nullptr);
+    GC_EXPECT_TRUE(result.answer == ForwardingTable::ToAnswer::Unavailable);
+    GC_EXPECT_TRUE(result.unavailableCause ==
+                   ForwardingTable::ToUnavailableCause::PublicationClosed);
+    GC_EXPECT_FALSE(result.activeCandidate);
+    GC_EXPECT_TRUE(result.activeAnswer == ForwardingTable::ToAnswer::Unarmed);
+    GC_EXPECT_TRUE(result.retiredAnswer == ForwardingTable::ToAnswer::Unarmed);
+    GC_EXPECT_TRUE(result.publicationClosed);
+
+    from->SetStateCode(ObjectState::NORMAL);
+    RelocationReceiptTestAccess::BindCollector(Heap::GetHeap().GetCollectorResources(), nullptr);
+    region->metadata.liveInfo = nullptr;
+    fx.FreePlanted(live);
+}
+
 #if defined(MRT_TESTABLE_INTERNALS) && defined(MRT_FINDTO_RETAIN_TEST)
 struct RetainWindowState {
     std::mutex mutex;
@@ -1422,6 +1534,45 @@ template <typename Fn>
 void ExpectRootAbort(Fn&& fn)
 {
     ExpectRootAbortAt("[LOADFC][fail-closed]", fn);
+}
+
+// A non-LookupUnavailable route may carry lookup-shaped fields from a caller,
+// but with the snapshot validity bit cleared they must never be rendered as
+// legal-looking zero values.
+GC_TEST(FindToRouteDiagnostics, InvalidLookupSnapshotPrintsNa)
+{
+    FindToVersionResult::UnavailableWitness witness;
+    witness.lookupAnswer = "unarmed";
+    witness.lookupSnapshotValid = true;
+    witness.lookupCause = "publication_closed";
+    witness.lookupActiveCandidate = true;
+    witness.lookupActiveAnswer = "armed_hit";
+    witness.lookupRetiredAnswer = "armed_miss";
+    witness.lookupPublicationClosed = true;
+    // Deliberately clear the one validity bit for this whole LookupTo record.
+    // Every lookup-shaped value above must consequently render as n/a.
+    witness.lookupSnapshotValid = false;
+    const FindToVersionResult result = FindToVersionResult::Unavailable(
+        FindToVersionResult::UnavailableRoute::NoGhostForwarded, witness);
+
+    ExpectRootAbortAt("lookup=n/a", [&]() {
+        (void)result.GetOrFailClosed("FindToRouteDiagnostics.InvalidLookupSnapshotPrintsNa");
+    });
+    ExpectRootAbortAt("cause=n/a", [&]() {
+        (void)result.GetOrFailClosed("FindToRouteDiagnostics.InvalidLookupSnapshotPrintsNa");
+    });
+    ExpectRootAbortAt("active_candidate=n/a", [&]() {
+        (void)result.GetOrFailClosed("FindToRouteDiagnostics.InvalidLookupSnapshotPrintsNa");
+    });
+    ExpectRootAbortAt("active_lookup=n/a", [&]() {
+        (void)result.GetOrFailClosed("FindToRouteDiagnostics.InvalidLookupSnapshotPrintsNa");
+    });
+    ExpectRootAbortAt("retired_lookup=n/a", [&]() {
+        (void)result.GetOrFailClosed("FindToRouteDiagnostics.InvalidLookupSnapshotPrintsNa");
+    });
+    ExpectRootAbortAt("publication_closed=n/a", [&]() {
+        (void)result.GetOrFailClosed("FindToRouteDiagnostics.InvalidLookupSnapshotPrintsNa");
+    });
 }
 
 GC_TEST(ForwardingPublicationProduct, ExemptRejectsForwardedWithoutAnyReceipt)
