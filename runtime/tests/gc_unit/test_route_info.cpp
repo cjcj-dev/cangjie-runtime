@@ -11,12 +11,222 @@
 
 #include <cstdint>
 #include <cstring>
+#include <atomic>
+#include <thread>
 
 #include "gc_heap_fixture.hpp"
+#include "Heap/WCollector/WCollector.h"
 #include "gc_unittest.hpp"
 
 using namespace MapleRuntime;
 using namespace MapleRuntime::GcUnit;
+
+namespace {
+
+struct ExactRouteFixture {
+    GcHeapFixture fx;
+    RegionInfo* region;
+    BaseObject* first;
+    BaseObject* second;
+    LiveInfo* live;
+
+    ExactRouteFixture() : region(fx.region0), first(nullptr), second(nullptr), live(nullptr)
+    {
+        constexpr size_t kObjectSize = 48;
+        fx.typeInfo->SetInstanceSize(kObjectSize - TYPEINFO_PTR_SIZE);
+        const MAddress start = region->GetRegionStart();
+        for (size_t offset = 0; offset < 2 * kObjectSize; offset += sizeof(uint64_t)) {
+            *reinterpret_cast<uint64_t*>(start + offset) = reinterpret_cast<uintptr_t>(fx.typeInfo);
+        }
+        first = from_region_addr(start);
+        second = from_region_addr(start + kObjectSize);
+        fx.obj0 = first;
+        region->SetRegionAllocPtr(start + 2 * kObjectSize);
+        region->SetRegionType(RegionInfo::RegionType::FROM_REGION);
+
+        live = fx.PlantLiveInfo(region);
+        RegionBitmap* bitmap = fx.PlantMarkBitmap(live, region->GetRegionSize());
+        (void)bitmap->MarkBits(0, kObjectSize, region->GetRegionSize());
+        (void)bitmap->MarkBits(kObjectSize, kObjectSize, region->GetRegionSize());
+        region->BindLiveInfo0FromLiveIfNull();
+        region->RecordRouteStart(0);
+        region->RecordRouteStart(kObjectSize);
+    }
+
+    ~ExactRouteFixture()
+    {
+        region->SetRouteState(RegionInfo::NORMAL);
+        region->FreeCompactRouteTable();
+        region->FreeRouteStartTable();
+        region->metadata.liveInfo = nullptr;
+        fx.FreePlanted(live);
+    }
+
+    void ExpectOnlyExactStartsAdmitted()
+    {
+        const MAddress start = region->GetRegionStart();
+        unsigned admittedMask = 0;
+        for (size_t offset = 0; offset <= 40; offset += 8) {
+            OptionalRouteTicket ticket = region->AdmitForRoute(from_region_addr(start + offset));
+            admittedMask |= ticket.has_value() ? (1U << (offset / 8)) : 0U;
+            GC_EXPECT_EQ(ticket.has_value(), offset == 0);
+        }
+        const bool secondAdmitted = region->AdmitForRoute(second).has_value();
+        GC_EXPECT_TRUE(secondAdmitted);
+        std::fprintf(stderr,
+                     "DETAIL exact_start state=%u object_size=48 offsets=0,8,16,24,32,40 admitted_mask=%#x second_start=48 second_admitted=%u\n",
+                     static_cast<unsigned>(region->GetRouteState()), admittedMask,
+                     static_cast<unsigned>(secondAdmitted));
+    }
+
+    ForwardingTable::Publication InstallReceipts()
+    {
+        const MAddress start = region->GetRegionStart();
+        ForwardingTable::ClearEntries(start, region->GetRegionSize());
+        ForwardingTable::ReclaimRetired("exact-route-fixture-reset");
+        GC_EXPECT_TRUE(ForwardingTable::PreparePublicationGeneration(start, region->GetRegionSize()));
+        GC_EXPECT_TRUE(ForwardingTable::InstallPublicationBeforeCopy(start, region->GetRegionSize(), region));
+        ForwardingTable::Publication publication =
+            ForwardingTable::EnsurePublicationBeforeCopy(region, start);
+        GC_EXPECT_TRUE(static_cast<bool>(publication));
+        return publication;
+    }
+};
+
+std::atomic<bool> gRouteStateReaderPaused { false };
+std::atomic<bool> gRouteStateReaderResume { false };
+
+#if defined(MRT_GC_UNIT_TESTS)
+void PauseAfterRouteSnapshotLoad(RegionInfo*)
+{
+    gRouteStateReaderPaused.store(true, std::memory_order_release);
+    while (!gRouteStateReaderResume.load(std::memory_order_acquire)) {
+        std::this_thread::yield();
+    }
+}
+#endif
+
+} // namespace
+
+GC_TEST(RouteInfo, ExactStartCapabilityAcrossRouteStates)
+{
+    {
+        ExactRouteFixture route;
+        route.region->SetRouteInfo(route.fx.region1->GetRegionStart(), 96);
+        route.region->SetRouteState(RegionInfo::ROUTED);
+        route.ExpectOnlyExactStartsAdmitted();
+    }
+    {
+        ExactRouteFixture compact;
+        compact.region->EnsureCompactRouteTable();
+        compact.region->RecordCompactRoute(0, reinterpret_cast<MAddress>(compact.first));
+        compact.region->RecordCompactRoute(48, reinterpret_cast<MAddress>(compact.second));
+        compact.region->SetRouteState(RegionInfo::COMPACTED);
+        compact.ExpectOnlyExactStartsAdmitted();
+    }
+    {
+        ExactRouteFixture forwarded;
+        ForwardingTable::Publication publication = forwarded.InstallReceipts();
+        const MAddress first = reinterpret_cast<MAddress>(forwarded.first);
+        const MAddress second = reinterpret_cast<MAddress>(forwarded.second);
+        GC_EXPECT_EQ(ForwardingTable::InsertMapping(publication, first, first), first);
+        GC_EXPECT_EQ(ForwardingTable::InsertMapping(publication, second, second), second);
+        publication = ForwardingTable::Publication();
+        forwarded.region->SetRouteState(RegionInfo::FORWARDED);
+        forwarded.ExpectOnlyExactStartsAdmitted();
+    }
+}
+
+GC_TEST(RouteInfo, CompactExactMissFailsClosedAndIdentityReceiptIsExplicit)
+{
+    ExactRouteFixture compact;
+    const MAddress from = reinterpret_cast<MAddress>(compact.first);
+    compact.region->EnsureCompactRouteTable();
+    compact.region->RecordCompactRoute(0, from);
+    compact.region->SetRouteState(RegionInfo::COMPACTED);
+
+    OptionalRouteTicket ticket = compact.region->AdmitForRoute(compact.first);
+    GC_EXPECT_TRUE(ticket.has_value());
+    RegionInfo::CompactRouteTable* routes = compact.region->LoadCompactRouteTable();
+    GC_EXPECT_TRUE(routes != nullptr);
+    GC_EXPECT_EQ(routes->erase(0), static_cast<size_t>(1));
+    GC_EXPECT_TRUE(compact.region->GetRoute(ticket.value()) == nullptr);
+
+    WCollector collector(Heap::GetHeap().GetAllocator(), Heap::GetHeap().GetCollectorResources());
+    GC_EXPECT_TRUE(collector.FindToVersion(compact.first).state() ==
+                   FindToVersionResult::State::NotForwarded);
+
+    ForwardingTable::Publication publication = compact.InstallReceipts();
+    GC_EXPECT_EQ(ForwardingTable::InsertMapping(publication, from, from), from);
+    publication = ForwardingTable::Publication();
+    const ForwardingTable::LookupResult lookup = ForwardingTable::LookupTo(from);
+    GC_EXPECT_EQ(lookup.to, from);
+    GC_EXPECT_TRUE(lookup.answer == ForwardingTable::ToAnswer::ArmedHit);
+    GC_EXPECT_TRUE(compact.region->GetRoute(ticket.value()) == compact.first);
+    BaseObject* productIdentity = collector.FindToVersion(compact.first).found();
+    GC_EXPECT_TRUE(productIdentity == compact.first);
+    std::fprintf(stderr,
+                 "DETAIL compact_exact_miss erased=1 miss_route=null identity_receipt=%p from=%p product_find=%p\n",
+                 compact.first, compact.first, productIdentity);
+}
+
+GC_TEST(RouteInfo, RouteStateAndLifeAreOneReaderSnapshot)
+{
+#if defined(MRT_GC_UNIT_TESTS)
+    GcHeapFixture fx;
+    RegionInfo* region = fx.region0;
+    region->SetRouteState(RegionInfo::COMPACTED);
+    gRouteStateReaderPaused.store(false, std::memory_order_relaxed);
+    gRouteStateReaderResume.store(false, std::memory_order_relaxed);
+    RegionInfo::SetRouteStateReadTestHook(PauseAfterRouteSnapshotLoad);
+
+    std::atomic<RegionInfo::RouteState> observed { RegionInfo::COMPACTED };
+    std::thread reader([&]() { observed.store(region->GetRouteState(), std::memory_order_release); });
+    while (!gRouteStateReaderPaused.load(std::memory_order_acquire)) {
+        std::this_thread::yield();
+    }
+    region->BumpRegionLifeId();
+    region->SetRouteState(RegionInfo::NORMAL);
+    gRouteStateReaderResume.store(true, std::memory_order_release);
+    reader.join();
+    const size_t hookCalls = RegionInfo::RouteStateReadTestHookCalls();
+    RegionInfo::SetRouteStateReadTestHook(nullptr);
+
+    GC_EXPECT_EQ(hookCalls, static_cast<size_t>(1));
+    const RegionInfo::RouteState resumed = observed.load(std::memory_order_acquire);
+    GC_EXPECT_TRUE(resumed == RegionInfo::NORMAL);
+    GC_EXPECT_TRUE(region->GetRouteState() == RegionInfo::NORMAL);
+    std::fprintf(stderr,
+                 "DETAIL route_snapshot hook_calls=1 writer_state=%u reader_resumed=%u life=%llu stamp=%llu\n",
+                 static_cast<unsigned>(region->GetRouteState()), static_cast<unsigned>(resumed),
+                 static_cast<unsigned long long>(region->GetRegionLifeId()),
+                 static_cast<unsigned long long>(region->GetRouteStateLifeId()));
+#endif
+}
+
+GC_TEST(RouteInfo, FailedRouteStateCasDoesNotStampOldStateIntoNewLife)
+{
+    GcHeapFixture fx;
+    RegionInfo* region = fx.region0;
+    region->SetRouteState(RegionInfo::FORWARDED);
+    region->BumpRegionLifeId();
+    GC_EXPECT_FALSE(region->CompareExchangeRouteState(RegionInfo::ROUTED, RegionInfo::NORMAL));
+    const RegionInfo::RouteState observed = region->GetRouteState();
+    const RegionLifeId stamp = region->GetRouteStateLifeId();
+    const RegionLifeId life = region->GetRegionLifeId();
+    GC_EXPECT_TRUE(observed == RegionInfo::NORMAL);
+    GC_EXPECT_NE(stamp, life);
+
+    region->SetRouteState(RegionInfo::ROUTED);
+    GC_EXPECT_TRUE(region->CompareExchangeRouteState(RegionInfo::ROUTED, RegionInfo::FORWARDED));
+    GC_EXPECT_TRUE(region->GetRouteState() == RegionInfo::FORWARDED);
+    GC_EXPECT_EQ(region->GetRouteStateLifeId(), region->GetRegionLifeId());
+    std::fprintf(stderr,
+                 "DETAIL route_cas_fail cas_success=0 observed=%u life=%llu stale_stamp=%llu same_life_cas=1 forwarded=%u\n",
+                 static_cast<unsigned>(observed), static_cast<unsigned long long>(life),
+                 static_cast<unsigned long long>(stamp),
+                 static_cast<unsigned>(region->GetRouteState()));
+}
 
 // U3: product RouteInfo::GetRoute region1 geometry (LiveInfo.cpp:15-18).
 GC_TEST(RouteInfo, InsertLookupIdempotentRegion1)
@@ -61,6 +271,7 @@ GC_TEST(RouteInfo, MissingDomainReturnsNullNotGarbage)
     BaseObject* sibling = fx.PlaceObject(reinterpret_cast<MAddress>(obj) + 128);
     region->BindLiveInfo0FromLiveIfNull();
     GC_EXPECT_TRUE(region->GetRouteForProbe(sibling) == nullptr);
+    region->RecordRouteStart(offset);
 
     // Positive control, and it needs the route to actually exist.  Geometry plus a survivor bit is
     // not a forwarding: RegionInfo::GetRoute(RouteTicket) (RegionInfo.h:1806-1809) refuses unless

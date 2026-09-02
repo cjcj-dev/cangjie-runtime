@@ -141,11 +141,29 @@ size_t RegionInfo::UnitInfo::GetUnitIdxAtOOB(uintptr_t allocAddr)
         ra0, s0, ra1, s1, ra2, s2);
     return 0;
 }
+RegionInfo::RouteState RegionInfo::GetRouteState() const
+{
+    const uint64_t snapshot = metadata.routeStateSnapshot.load(std::memory_order_acquire);
+#if defined(MRT_GC_UNIT_TESTS)
+    RunRouteStateReadTestHook(const_cast<RegionInfo*>(this));
+#endif
+    const RouteState state = RouteStateFromSnapshot(snapshot);
+    const RegionLifeId stamp = RouteLifeFromSnapshot(snapshot);
+    const RegionLifeId current = GetRegionLifeId();
+    (void)RegionLifeClock::Validate(RegionLifeClock::Carrier::ROUTE_STATE, stamp, current);
+    if (stamp != current) {
+        return RouteState::NORMAL;
+    }
+    return state;
+}
+
 std::atomic<size_t> RegionInfo::youngRegionCount { 0 };
 std::atomic<size_t> RegionInfo::dispelGhostCount { 0 };
 #if defined(MRT_GC_UNIT_TESTS)
 std::atomic<RegionInfo::GhostLookupTestHook> RegionInfo::ghostLookupTestHook { nullptr };
 std::atomic<size_t> RegionInfo::ghostLookupTestHookCalls { 0 };
+std::atomic<RegionInfo::RouteStateReadTestHook> RegionInfo::routeStateReadTestHook { nullptr };
+std::atomic<size_t> RegionInfo::routeStateReadTestHookCalls { 0 };
 
 void RegionInfo::SetGhostLookupTestHook(GhostLookupTestHook hook)
 {
@@ -163,6 +181,26 @@ void RegionInfo::RunGhostLookupTestHook(RegionInfo* region)
     GhostLookupTestHook hook = ghostLookupTestHook.exchange(nullptr, std::memory_order_acq_rel);
     if (hook != nullptr) {
         ghostLookupTestHookCalls.fetch_add(1, std::memory_order_relaxed);
+        hook(region);
+    }
+}
+
+void RegionInfo::SetRouteStateReadTestHook(RouteStateReadTestHook hook)
+{
+    routeStateReadTestHookCalls.store(0, std::memory_order_relaxed);
+    routeStateReadTestHook.store(hook, std::memory_order_release);
+}
+
+size_t RegionInfo::RouteStateReadTestHookCalls()
+{
+    return routeStateReadTestHookCalls.load(std::memory_order_acquire);
+}
+
+void RegionInfo::RunRouteStateReadTestHook(RegionInfo* region)
+{
+    RouteStateReadTestHook hook = routeStateReadTestHook.load(std::memory_order_acquire);
+    if (hook != nullptr) {
+        routeStateReadTestHookCalls.fetch_add(1, std::memory_order_relaxed);
         hook(region);
     }
 }
@@ -2323,15 +2361,21 @@ template<typename Fn>
 void ForEachLiveObjectStart(RegionInfo* region, MAddress start, MAddress allocPtr, Fn&& fn)
 {
     const size_t regionBytes = allocPtr > start ? static_cast<size_t>(allocPtr - start) : 0;
-    for (size_t offset = 0; offset < regionBytes; offset += kMarkedBytesPerBit) {
-        if (!region->IsOwnerSurvivedObject(offset)) {
-            continue;
-        }
+    size_t offset = 0;
+    while (offset < regionBytes) {
         BaseObject* object = from_region_addr(start + offset);
         if (!Collector::PlausibleManagedObjectGate("ForEachLiveObjectStart", object)) {
-            continue;
+            break;
         }
-        fn(object, offset);
+        const size_t size = RegionSpace::GetAllocSize(*object);
+        if (size == 0 || size > regionBytes - offset) {
+            break;
+        }
+        if (region->IsOwnerSurvivedObject(offset)) {
+            region->RecordRouteStart(offset);
+            fn(object, offset);
+        }
+        offset += size;
     }
 }
 
@@ -2340,12 +2384,24 @@ size_t PublishKeptInPlaceReceipts(RegionInfo* region)
     if (region == nullptr || !region->IsGhostFromRegion()) {
         return 0;
     }
-    // ZGC iterates the livemap's object-start bits (zPage.inline.hpp:320-331).
+    // ZGC iterates object-start bits. Consume the exact set frozen before any
+    // header rewrite; coverage cannot distinguish object interiors.
     size_t published = 0;
     const MAddress start = region->GetRegionStart();
     const MAddress allocPtr = region->GetRegionAllocPtr();
     ZForwarding* active = ForwardingTable::GetEntries(start);
-    ForEachLiveObjectStart(region, start, allocPtr, [&](BaseObject* object, size_t) {
+    const RegionInfo::RouteStartTable* starts = region->LoadRouteStartTable();
+    CHECK_DETAIL(starts != nullptr || !region->HasFromPageMetadata(),
+                 "published kept page lacks exact-start capability region=%p", region);
+    if (starts == nullptr) {
+        return 0;
+    }
+    for (const auto& entry : *starts) {
+        const size_t offset = entry.first;
+        if (offset >= static_cast<size_t>(allocPtr - start) || !region->IsOwnerSurvivedObject(offset)) {
+            continue;
+        }
+        BaseObject* object = from_region_addr(start + offset);
         CHECK_DETAIL(active != nullptr,
                      "kept page lacks active forwarding table before identity publish object=%p region=%p",
                      object, region);
@@ -2366,10 +2422,10 @@ size_t PublishKeptInPlaceReceipts(RegionInfo* region)
                 // requirement when ClearEntries subsequently retires the table.
                 active->note_retired_required();
             }
-            return;
+            continue;
         }
         if (existing != 0) {
-            return;
+            continue;
         }
         // Identity is a producer receipt for a survivor that was not copied,
         // matching ZGC's copy-then-insert(from, allocated) ordering even when
@@ -2385,7 +2441,7 @@ size_t PublishKeptInPlaceReceipts(RegionInfo* region)
                      "kept identity receipt changed address from=%#zx to=%#zx",
                      static_cast<size_t>(pos), static_cast<size_t>(receipt.address));
         ++published;
-    });
+    }
     return published;
 }
 } // namespace
@@ -3106,6 +3162,17 @@ bool RegionManager::RouteOrCompactRegionImpl(RegionInfo* region)
 {
     CHECK(region->IsRoutingState());
     CHECK_DETAIL(region->GetRawPointerObjectCount() <= 0, "pinned region shouldn't be moved");
+
+    // Ordinary product flow freezes starts in PrepareForwardableRegion. Keep
+    // direct callers fail-closed while still deriving only from an exact
+    // allocation walk, never from coverage bits.
+    if (region->LoadRouteStartTable() == nullptr) {
+        region->ResetRouteStartTable();
+        (void)region->VisitLiveObjectsUntilFalse([region](BaseObject* object) {
+            region->RecordRouteStart(region->GetAddressOffset(reinterpret_cast<MAddress>(object)));
+            return true;
+        });
+    }
 
     // densifycut (G6): densify apply+walk+census removed. Product path already never applied
     // (MRT_GCV2_DENSIFY default off). Exit net retained: allLiveBitsHaveReceipt + abandon +

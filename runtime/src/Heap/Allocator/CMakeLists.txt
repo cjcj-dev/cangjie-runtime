@@ -17,3 +17,6 @@ set(SRC_LIST
 
 include_directories(${CMAKE_CURRENT_SOURCE_DIR}/../)
 add_library(Allocator STATIC ${SRC_LIST})
+if (MRT_GC_UNIT_TESTS)
+    target_compile_definitions(Allocator PRIVATE MRT_GC_UNIT_TESTS=1)
+endif()
