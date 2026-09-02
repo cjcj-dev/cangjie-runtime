@@ -114,17 +114,31 @@ struct ExactRouteFixture {
             auto result = collector.PlanRouteLookupForTest(from_region_addr(start + offset));
             GC_EXPECT_TRUE(result.phaseAllowed);
             GC_EXPECT_TRUE(result.heapAddress);
+            GC_EXPECT_TRUE(result.gatePassed);
+            GC_EXPECT_TRUE(result.receiptChecked);
+            GC_EXPECT_TRUE(result.compactedChecked);
+            GC_EXPECT_TRUE(result.routeRegionCalled);
+            GC_EXPECT_TRUE(result.routeRegion);
             GC_EXPECT_TRUE(result.retained);
+            GC_EXPECT_TRUE(result.retainedPhaseAllowed);
+            GC_EXPECT_TRUE(result.hookReached);
             admittedMask |= result.plan.dest != nullptr ? (1U << (offset / 8)) : 0U;
             GC_EXPECT_EQ(result.plan.dest != nullptr, offset == 0);
         }
         auto secondResult = collector.PlanRouteLookupForTest(second);
         GC_EXPECT_TRUE(secondResult.phaseAllowed);
         GC_EXPECT_TRUE(secondResult.heapAddress);
+        GC_EXPECT_TRUE(secondResult.gatePassed);
+        GC_EXPECT_TRUE(secondResult.receiptChecked);
+        GC_EXPECT_TRUE(secondResult.compactedChecked);
+        GC_EXPECT_TRUE(secondResult.routeRegionCalled);
+        GC_EXPECT_TRUE(secondResult.routeRegion);
         GC_EXPECT_TRUE(secondResult.retained);
+        GC_EXPECT_TRUE(secondResult.retainedPhaseAllowed);
+        GC_EXPECT_TRUE(secondResult.hookReached);
         GC_EXPECT_TRUE(secondResult.plan.dest != nullptr);
         std::fprintf(stderr,
-                     "DETAIL exact_start_product_entry state=%u phase=%u object_size=48 offsets=0,8,16,24,32,40 admitted_mask=%#x second_start=48 second_admitted=%u\n",
+                     "DETAIL exact_start_product_entry state=%u phase=%u gate=1 receipt=1 compacted=1 route_region=1 retained=1 retained_phase=1 hook=1 object_size=48 offsets=0,8,16,24,32,40 admitted_mask=%#x second_start=48 second_admitted=%u\n",
                      static_cast<unsigned>(region->GetRouteState()),
                      static_cast<unsigned>(collector.GetGCPhase()), admittedMask,
                      static_cast<unsigned>(secondResult.plan.dest != nullptr));
@@ -162,14 +176,24 @@ GC_TEST(RouteInfo, ExactStartCapabilityAcrossRouteStates)
         collector.SetGCPhase(GCPhase::GC_PHASE_IDLE);
         auto idle = collector.PlanRouteLookupForTest(route.first);
         GC_EXPECT_FALSE(idle.phaseAllowed);
+        GC_EXPECT_FALSE(idle.gatePassed);
         GC_EXPECT_FALSE(idle.retained);
+        GC_EXPECT_FALSE(idle.routeRegionCalled);
         GC_EXPECT_TRUE(idle.plan.dest == nullptr);
         const auto nonHeap = collector.PlanRouteLookupForTest(reinterpret_cast<BaseObject*>(0x1234));
         GC_EXPECT_FALSE(nonHeap.heapAddress);
+        GC_EXPECT_FALSE(nonHeap.gatePassed);
         GC_EXPECT_FALSE(nonHeap.phaseAllowed);
         GC_EXPECT_FALSE(nonHeap.retained);
+        collector.SetGCPhase(GCPhase::GC_PHASE_TRACE);
+        auto trace = collector.PlanRouteLookupForTest(route.first);
+        GC_EXPECT_FALSE(trace.phaseAllowed);
+        GC_EXPECT_FALSE(trace.retained);
+        GC_EXPECT_FALSE(trace.routeRegionCalled);
         collector.SetGCPhase(GCPhase::GC_PHASE_PREFORWARD);
 #endif
+        route.ExpectOnlyExactStartsThroughProductEntry(collector);
+        collector.SetGCPhase(GCPhase::GC_PHASE_FORWARD);
         route.ExpectOnlyExactStartsThroughProductEntry(collector);
     }
     {

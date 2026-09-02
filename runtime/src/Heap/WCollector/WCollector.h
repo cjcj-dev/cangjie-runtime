@@ -187,6 +187,13 @@ public:
         bool phaseAllowed = false;
         bool heapAddress = false;
         bool retained = false;
+        bool gatePassed = false;
+        bool receiptChecked = false;
+        bool compactedChecked = false;
+        bool routeRegionCalled = false;
+        bool routeRegion = false;
+        bool retainedPhaseAllowed = false;
+        bool hookReached = false;
     };
     MRT_EXPORT RouteLookupTestResult PlanRouteLookupForTest(BaseObject* fromObj);
 #endif
