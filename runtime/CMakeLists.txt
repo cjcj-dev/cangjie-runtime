@@ -296,11 +296,10 @@ add_definitions(-DCJ_SDK_VERSION="${CJ_SDK_VERSION}")
 #   ⇒ ⭐ 于是任何"⭐ 这枚 runtime 含不含某修法"的问题都只能靠日期猜 —— ⭐ 而目录日期会骗人
 #     （⭐ `sdk-stageA2` 目录是 08-07，⭐ 里面的 runtime 却更早）
 #   ⇒ ⭐⭐ 判法从此是一条命令：`strings <so> | grep CJRT-COMMIT:`
-# ⭐ 外部显式传入优先（`-DCJ_RUNTIME_COMMIT=<sha>`）——
-#   ⛔ 因为我们常把 `runtime/` 单独 tar 到构建箱，⭐ 那边没有 `.git`
-#   ⇒ ⭐ 没传且无 git ⇒ ⭐⭐ 记 `unknown`，⛔ 而不是悄悄记成某个像样的值
-# ⭐ 顺序：⭐ -D 传入 > ⭐ build 环境变量 > ⭐ build 时 git > ⭐ unknown
-#   ⭐ 环境变量这一档是给"⭐ tar 过去、⭐ 那边没 .git"的常规做法用的
+# ⭐ 身份只从源码导出：有 `.git` 就采 build-time HEAD/status；无 `.git` 就对
+#   runtime 的产品构建输入按路径排序做内容哈希，记为 `src-<sha256>`。
+# ⭐ `-DCJ_RUNTIME_COMMIT` 与同名环境变量只是旧调用者的声明元数据，写入
+#   `CJRT-DECLARED:`；它们不能覆盖 `CJRT-COMMIT:` 身份本体。
 #
 # ⭐⭐⭐ 章必须在 build 期求值。configure 与链接之间允许源码变化；若在这里把
 # HEAD/status 冻进宏，后续不重跑 configure 的链接会继续携带旧章。生成器每次构建都会
@@ -316,9 +315,9 @@ set(CJ_RUNTIME_PROVENANCE_SOURCE
 set(CJ_RUNTIME_PROVENANCE_COMMAND
     ${CMAKE_COMMAND}
     "-DREPOSITORY_DIR=${CMAKE_CURRENT_SOURCE_DIR}/.."
+    "-DSOURCE_DIR=${CMAKE_CURRENT_SOURCE_DIR}"
     "-DOUTPUT_FILE=${CJ_RUNTIME_PROVENANCE_SOURCE}"
     "-DCOMMIT_OVERRIDE=${CJ_RUNTIME_COMMIT_OVERRIDE}"
-    "-DSOURCE_MANIFEST=${CJ_RUNTIME_SOURCE_MANIFEST}"
     -P "${CJ_RUNTIME_PROVENANCE_GENERATOR}")
 
 # Seed the generated source so every CMake generator can inspect the object-library source list.

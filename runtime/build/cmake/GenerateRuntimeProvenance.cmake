@@ -4,19 +4,24 @@
 #
 # See https://cangjie-lang.cn/pages/LICENSE for license information.
 
-if (NOT DEFINED REPOSITORY_DIR OR NOT DEFINED OUTPUT_FILE)
-    message(FATAL_ERROR "REPOSITORY_DIR and OUTPUT_FILE are required")
+if (NOT DEFINED REPOSITORY_DIR OR NOT DEFINED SOURCE_DIR OR NOT DEFINED OUTPUT_FILE)
+    message(FATAL_ERROR "REPOSITORY_DIR, SOURCE_DIR and OUTPUT_FILE are required")
+endif()
+
+# A declaration is build metadata, never the source identity. Keep it only for
+# callers that still annotate tarball builds with CJ_RUNTIME_COMMIT.
+set(runtime_declared "")
+if (DEFINED COMMIT_OVERRIDE AND NOT COMMIT_OVERRIDE STREQUAL "")
+    set(runtime_declared "${COMMIT_OVERRIDE}")
+elseif (DEFINED ENV{CJ_RUNTIME_COMMIT} AND NOT "$ENV{CJ_RUNTIME_COMMIT}" STREQUAL "")
+    set(runtime_declared "$ENV{CJ_RUNTIME_COMMIT}")
+endif()
+if (runtime_declared STREQUAL "")
+    set(runtime_declared "none")
 endif()
 
 set(runtime_commit "")
-set(runtime_commit_source "")
-if (DEFINED COMMIT_OVERRIDE AND NOT COMMIT_OVERRIDE STREQUAL "")
-    set(runtime_commit "${COMMIT_OVERRIDE}")
-    set(runtime_commit_source "override")
-elseif (DEFINED ENV{CJ_RUNTIME_COMMIT} AND NOT "$ENV{CJ_RUNTIME_COMMIT}" STREQUAL "")
-    set(runtime_commit "$ENV{CJ_RUNTIME_COMMIT}")
-    set(runtime_commit_source "environment")
-else()
+if (EXISTS "${REPOSITORY_DIR}/.git")
     execute_process(
         COMMAND git -C "${REPOSITORY_DIR}" rev-parse HEAD
         RESULT_VARIABLE head_rc
@@ -24,63 +29,73 @@ else()
         OUTPUT_STRIP_TRAILING_WHITESPACE
         ERROR_QUIET)
     if (NOT head_rc EQUAL 0)
-        set(runtime_commit "")
-    else()
-        set(runtime_commit_source "git")
+        message(FATAL_ERROR "${REPOSITORY_DIR}/.git exists but HEAD cannot be read")
     endif()
-endif()
 
-if (runtime_commit STREQUAL "")
-    set(runtime_commit "unknown")
-    set(runtime_commit_source "unknown")
-endif()
-
-# An externally declared commit and the source package are independent inputs.
-# Preserve both identities in the binary so an identity oracle can compare them
-# instead of mistaking the declaration for proof of the package's contents.
-set(runtime_manifest_commit "")
-set(runtime_manifest_sha256 "")
-if (runtime_commit_source STREQUAL "override" OR runtime_commit_source STREQUAL "environment")
-    if (NOT DEFINED SOURCE_MANIFEST OR SOURCE_MANIFEST STREQUAL "" OR NOT EXISTS "${SOURCE_MANIFEST}")
-        message(FATAL_ERROR
-            "SOURCE_MANIFEST is required when runtime commit comes from ${runtime_commit_source}")
+    execute_process(
+        COMMAND git -C "${REPOSITORY_DIR}" status --porcelain
+        RESULT_VARIABLE status_rc
+        OUTPUT_VARIABLE runtime_dirty
+        OUTPUT_STRIP_TRAILING_WHITESPACE
+        ERROR_QUIET)
+    if (NOT status_rc EQUAL 0)
+        message(FATAL_ERROR "${REPOSITORY_DIR}/.git exists but status cannot be read")
     endif()
-    file(READ "${SOURCE_MANIFEST}" runtime_manifest LIMIT 4096)
-    string(REGEX MATCH "(^|\n)CJRT-COMMIT=([^\r\n]+)" runtime_manifest_match "${runtime_manifest}")
-    if (NOT runtime_manifest_match)
-        message(FATAL_ERROR "${SOURCE_MANIFEST} has no CJRT-COMMIT=<identity> entry")
+    if (NOT runtime_dirty STREQUAL "")
+        set(runtime_commit "${runtime_commit}-dirty")
     endif()
-    set(runtime_manifest_commit "${CMAKE_MATCH_2}")
-    file(SHA256 "${SOURCE_MANIFEST}" runtime_manifest_sha256)
-elseif (runtime_commit_source STREQUAL "git")
-    # The fallback branch samples its identity directly from this repository.
-    set(runtime_manifest_commit "${runtime_commit}")
-    set(runtime_manifest_sha256 "git")
 else()
-    set(runtime_manifest_commit "unknown")
-    set(runtime_manifest_sha256 "unknown")
+    # Hash source-owned product inputs, not output from a previous build. Paths
+    # are part of the digest so rename-only source changes also change identity.
+    set(runtime_source_files
+        "${SOURCE_DIR}/CMakeLists.txt"
+        "${SOURCE_DIR}/SetupAr.cmake"
+        "${SOURCE_DIR}/build.py"
+        "${SOURCE_DIR}/config.cmake")
+    foreach(source_root build include src tests)
+        file(GLOB_RECURSE source_root_files
+            LIST_DIRECTORIES false
+            RELATIVE "${SOURCE_DIR}"
+            "${SOURCE_DIR}/${source_root}/*")
+        foreach(source_file IN LISTS source_root_files)
+            if (source_file MATCHES "(^|/)(CMakeFiles|CMakebuild[^/]*|__pycache__|output)(/|$)" OR
+                source_file MATCHES "^build/cjthread_build/" OR
+                source_file MATCHES "\\.(pyc|pyo)$")
+                continue()
+            endif()
+            list(APPEND runtime_source_files "${SOURCE_DIR}/${source_file}")
+        endforeach()
+    endforeach()
+    list(REMOVE_DUPLICATES runtime_source_files)
+    list(SORT runtime_source_files)
+
+    set(runtime_source_digest_input "")
+    set(runtime_source_count 0)
+    foreach(source_file IN LISTS runtime_source_files)
+        if (NOT EXISTS "${source_file}" OR IS_DIRECTORY "${source_file}")
+            continue()
+        endif()
+        file(RELATIVE_PATH source_path "${SOURCE_DIR}" "${source_file}")
+        file(SHA256 "${source_file}" source_sha256)
+        string(LENGTH "${source_path}" source_path_length)
+        string(APPEND runtime_source_digest_input
+            "${source_path_length}:${source_path}:${source_sha256}\n")
+        math(EXPR runtime_source_count "${runtime_source_count} + 1")
+    endforeach()
+    if (runtime_source_count EQUAL 0)
+        message(FATAL_ERROR "no runtime source inputs found under ${SOURCE_DIR}")
+    endif()
+    string(SHA256 runtime_source_sha256 "${runtime_source_digest_input}")
+    set(runtime_commit "src-${runtime_source_sha256}")
 endif()
 
-execute_process(
-    COMMAND git -C "${REPOSITORY_DIR}" status --porcelain
-    RESULT_VARIABLE status_rc
-    OUTPUT_VARIABLE runtime_dirty
-    OUTPUT_STRIP_TRAILING_WHITESPACE
-    ERROR_QUIET)
-# No git means status fails and the already-unambiguous "unknown" stamp stays clean.
-if (status_rc EQUAL 0 AND NOT runtime_dirty STREQUAL "")
-    set(runtime_commit "${runtime_commit}-dirty")
-endif()
-
-# Keep the configured override safe as a C++ string literal as well as a single stamp line.
-string(REPLACE "\\" "\\\\" runtime_commit_escaped "${runtime_commit}")
-string(REPLACE "\"" "\\\"" runtime_commit_escaped "${runtime_commit_escaped}")
-string(REPLACE "\n" "\\n" runtime_commit_escaped "${runtime_commit_escaped}")
-string(REPLACE "\r" "\\r" runtime_commit_escaped "${runtime_commit_escaped}")
-string(REPLACE "\\" "\\\\" runtime_manifest_commit_escaped "${runtime_manifest_commit}")
-string(REPLACE "\"" "\\\"" runtime_manifest_commit_escaped "${runtime_manifest_commit_escaped}")
-string(REPLACE "\n" "\\n" runtime_manifest_commit_escaped "${runtime_manifest_commit_escaped}")
-string(REPLACE "\r" "\\r" runtime_manifest_commit_escaped "${runtime_manifest_commit_escaped}")
+# Keep both lines safe as C++ string literal contents and as separate strings(1) records.
+foreach(value_name runtime_commit runtime_declared)
+    string(REPLACE "\\" "\\\\" ${value_name}_escaped "${${value_name}}")
+    string(REPLACE "\"" "\\\"" ${value_name}_escaped "${${value_name}_escaped}")
+    string(REPLACE "\n" "\\n" ${value_name}_escaped "${${value_name}_escaped}")
+    string(REPLACE "\r" "\\r" ${value_name}_escaped "${${value_name}_escaped}")
+endforeach()
 
 get_filename_component(output_dir "${OUTPUT_FILE}" DIRECTORY)
 file(MAKE_DIRECTORY "${output_dir}")
@@ -97,13 +112,8 @@ file(WRITE "${output_tmp}"
     "#  define CJRT_RETAIN\n"
     "#endif\n"
     "extern \"C\" __attribute__((used, visibility(\"default\"))) CJRT_RETAIN\n"
-    "const char g_cjRuntimeProvenance[] = \"CJRT-COMMIT:${runtime_commit_escaped}\";\n"
-    "extern \"C\" __attribute__((used, visibility(\"default\"))) CJRT_RETAIN\n"
-    "const char g_cjRuntimeProvenanceSource[] = \"CJRT-COMMIT-SOURCE:${runtime_commit_source}\";\n"
-    "extern \"C\" __attribute__((used, visibility(\"default\"))) CJRT_RETAIN\n"
-    "const char g_cjRuntimeSourceCommit[] = \"CJRT-SOURCE-COMMIT:${runtime_manifest_commit_escaped}\";\n"
-    "extern \"C\" __attribute__((used, visibility(\"default\"))) CJRT_RETAIN\n"
-    "const char g_cjRuntimeSourceManifestSha256[] = \"CJRT-SOURCE-MANIFEST-SHA256:${runtime_manifest_sha256}\";\n")
+    "const char g_cjRuntimeProvenance[] = \"CJRT-COMMIT:${runtime_commit_escaped}\\n"
+    "CJRT-DECLARED:${runtime_declared_escaped}\";\n")
 execute_process(
     COMMAND "${CMAKE_COMMAND}" -E copy_if_different "${output_tmp}" "${OUTPUT_FILE}"
     RESULT_VARIABLE copy_rc)
