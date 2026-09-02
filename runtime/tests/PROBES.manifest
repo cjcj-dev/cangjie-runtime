@@ -42,7 +42,7 @@ run_threadlocal_init_race_probe.sh        manual     g++ -fsanitize=thread + cpu
 run_typeinfo_reuse_probe.sh               manual     built runtime SO; dlopen/dlclose address-reuse positive/negative arms plus measured registeredTypeInfos RSS
 run_elf_unload_quiescence.sh              manual     testable product runtime SO + Cangjie SDK; real dylib unload reader/directory/type/static-root groups and public PackageInfo snapshot traversal
 run_zgc_self_heal_loop_probe.sh           manual     built runtime SO; scripts a lost CAS to drive the ported ZBarrier::self_heal loop through its :103-107 retry and :98-101 fast-path-exit arms, which the workload leaves cold
-test_runtime_provenance.py                manual     host git+cmake; build-time stamp precedence, dirty transition, repository-free fallback, and unchanged-output mtime
+test_runtime_provenance.py                manual     host git+cmake; build-time stamp precedence, env/source-manifest identity, dirty transition, repository-free fallback, and unchanged-output mtime
 run_string_dedup_product.sh               manual     rebuilt std.core module + product SO + runtime SO; full/range, detach, unequal, and 32-way concurrent request arms
 
 stack_watermark_harness.cpp               manual     harness for run_stack_watermark_probe.sh

@@ -5,6 +5,7 @@
 #
 # See https://cangjie-lang.cn/pages/LICENSE for license information.
 
+import hashlib
 import os
 import pathlib
 import subprocess
@@ -53,6 +54,10 @@ class RuntimeProvenanceGeneratorTest(unittest.TestCase):
         ]
         if override is not None:
             command.append(f"-DCOMMIT_OVERRIDE={override}")
+        if override is not None or env_commit is not None:
+            manifest = self.root / "source.manifest"
+            manifest.write_text(f"CJRT-COMMIT={self.commit}\n", encoding="utf-8")
+            command.append(f"-DSOURCE_MANIFEST={manifest}")
         command.extend(("-P", str(GENERATOR)))
         env = os.environ.copy()
         env.pop("CJ_RUNTIME_COMMIT", None)
@@ -92,14 +97,28 @@ class RuntimeProvenanceGeneratorTest(unittest.TestCase):
     def test_override_precedence_and_repository_free_fallback(self):
         generated = self.generate(override="configured", env_commit="environment")
         self.assertIn("CJRT-COMMIT:configured", generated)
+        self.assertIn("CJRT-COMMIT-SOURCE:override", generated)
 
         generated = self.generate(env_commit="environment")
         self.assertIn("CJRT-COMMIT:environment", generated)
+        self.assertIn("CJRT-COMMIT-SOURCE:environment", generated)
 
         non_repo = self.root / "not-a-repository"
         non_repo.mkdir()
         generated = self.generate(repository=non_repo)
         self.assertIn("CJRT-COMMIT:unknown", generated)
+
+    def test_environment_identity_keeps_declaration_and_source_manifest_independent(self):
+        generated = self.generate(env_commit=self.commit)
+        self.assertIn(f"CJRT-COMMIT:{self.commit}", generated)
+        self.assertIn(f"CJRT-SOURCE-COMMIT:{self.commit}", generated)
+        manifest_sha = hashlib.sha256(f"CJRT-COMMIT={self.commit}\n".encode()).hexdigest()
+        self.assertIn(f"CJRT-SOURCE-MANIFEST-SHA256:{manifest_sha}", generated)
+
+        generated = self.generate(env_commit="different-source")
+        self.assertIn("CJRT-COMMIT:different-source", generated)
+        self.assertIn(f"CJRT-SOURCE-COMMIT:{self.commit}", generated)
+        self.assertNotIn("CJRT-SOURCE-COMMIT:different-source", generated)
 
 
 if __name__ == "__main__":
