@@ -2540,6 +2540,12 @@ public:
         //
         // The staleness predicate is not the hole: over ~2^20 non-NORMAL targets per run, across
         // six runs, zero escaped it.
+        // gc_unit fixtures do not run Heap::Init, so CollectorProxy has no
+        // current collector for this diagnostic-only phase sample.  Skip only
+        // in the test configuration; product (macro off) always samples.
+#if !defined(MRT_GC_UNIT_TESTS)
+        NoteEnrolPhase();
+#endif
         // sealcheck: snapshot is not yet sealed; geometry freeze is at RouteRegion ROUTING.
         SetMarkFaceSealed(false);
         // Shared boundary: publish immutable from-page metadata, forwarding

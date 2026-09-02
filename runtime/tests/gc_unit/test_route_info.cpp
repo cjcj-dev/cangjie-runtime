@@ -175,21 +175,27 @@ GC_TEST(RouteInfo, ExactStartCapabilityAcrossRouteStates)
 #if defined(MRT_GC_UNIT_TESTS)
         collector.SetGCPhase(GCPhase::GC_PHASE_IDLE);
         auto idle = collector.PlanRouteLookupForTest(route.first);
+        GC_EXPECT_TRUE(idle.gatePassed);
+        GC_EXPECT_TRUE(idle.receiptChecked);
+        GC_EXPECT_TRUE(idle.compactedChecked);
         GC_EXPECT_FALSE(idle.phaseAllowed);
-        GC_EXPECT_FALSE(idle.gatePassed);
-        GC_EXPECT_FALSE(idle.retained);
         GC_EXPECT_FALSE(idle.routeRegionCalled);
+        GC_EXPECT_FALSE(idle.retained);
+        GC_EXPECT_FALSE(idle.hookReached);
         GC_EXPECT_TRUE(idle.plan.dest == nullptr);
         const auto nonHeap = collector.PlanRouteLookupForTest(reinterpret_cast<BaseObject*>(0x1234));
         GC_EXPECT_FALSE(nonHeap.heapAddress);
         GC_EXPECT_FALSE(nonHeap.gatePassed);
         GC_EXPECT_FALSE(nonHeap.phaseAllowed);
         GC_EXPECT_FALSE(nonHeap.retained);
+        GC_EXPECT_FALSE(nonHeap.hookReached);
         collector.SetGCPhase(GCPhase::GC_PHASE_TRACE);
         auto trace = collector.PlanRouteLookupForTest(route.first);
+        GC_EXPECT_TRUE(trace.gatePassed);
         GC_EXPECT_FALSE(trace.phaseAllowed);
         GC_EXPECT_FALSE(trace.retained);
         GC_EXPECT_FALSE(trace.routeRegionCalled);
+        GC_EXPECT_FALSE(trace.hookReached);
         collector.SetGCPhase(GCPhase::GC_PHASE_PREFORWARD);
 #endif
         route.ExpectOnlyExactStartsThroughProductEntry(collector);
