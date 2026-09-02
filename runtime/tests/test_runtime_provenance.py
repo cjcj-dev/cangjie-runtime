@@ -74,6 +74,21 @@ class RuntimeProvenanceGeneratorTest(unittest.TestCase):
         self.assertIn(f"CJRT-COMMIT:{self.commit}-dirty", dirty)
         self.assertNotEqual(clean, dirty)
 
+    def test_head_is_sampled_each_run(self):
+        before = self.generate()
+        self.assertIn(f"CJRT-COMMIT:{self.commit}", before)
+
+        (self.repo / "tracked.txt").write_text("committed change\n", encoding="utf-8")
+        self.run_command("git", "add", "tracked.txt", cwd=self.repo)
+        self.run_command("git", "commit", "-q", "-m", "advance fixture head", cwd=self.repo)
+        new_commit = self.run_command("git", "rev-parse", "HEAD", cwd=self.repo).stdout.strip()
+
+        after = self.generate()
+        self.assertNotEqual(self.commit, new_commit)
+        self.assertNotEqual(before, after)
+        self.assertIn(f"CJRT-COMMIT:{new_commit}", after)
+        self.assertNotIn(f"CJRT-COMMIT:{new_commit}-dirty", after)
+
     def test_override_precedence_and_repository_free_fallback(self):
         generated = self.generate(override="configured", env_commit="environment")
         self.assertIn("CJRT-COMMIT:configured", generated)
