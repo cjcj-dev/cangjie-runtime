@@ -152,20 +152,27 @@ class RuntimeProvenanceGeneratorTest(unittest.TestCase):
         changed = self.generate(repository=non_repo, source=source, env_commit="source-a")
         self.assertNotEqual(env_a_stamp, self.stamp(changed))
 
-    def test_repository_free_identity_ignores_boundscheck_git_file(self):
+    def test_repository_free_identity_ignores_git_files(self):
         non_repo = self.root / "not-a-repository"
         source = non_repo / "runtime"
-        boundscheck = source / "third_party" / "third_party_bounds_checking_function"
-        boundscheck.mkdir(parents=True)
-        (boundscheck / "input.c").write_text("product source\n", encoding="utf-8")
-
-        before = self.stamp(self.generate(repository=non_repo, source=source))
-        (boundscheck / ".git").write_text(
-            "gitdir: ../modules/boundscheck\n", encoding="utf-8"
+        git_files = (
+            source / "third_party" / "third_party_bounds_checking_function" / ".git",
+            source / "src" / "nested" / ".git",
+            source / "include" / ".git",
         )
-        after = self.stamp(self.generate(repository=non_repo, source=source))
-
-        self.assertEqual(before, after)
+        for git_file in git_files:
+            with self.subTest(git_file=git_file.relative_to(source)):
+                git_file.parent.mkdir(parents=True, exist_ok=True)
+                (git_file.parent / "input.c").write_text(
+                    "product source\n", encoding="utf-8"
+                )
+                before = self.stamp(self.generate(repository=non_repo, source=source))
+                git_file.write_text("gitdir: ../modules/source\n", encoding="utf-8")
+                try:
+                    after = self.stamp(self.generate(repository=non_repo, source=source))
+                    self.assertEqual(before, after)
+                finally:
+                    git_file.unlink()
 
 
 if __name__ == "__main__":

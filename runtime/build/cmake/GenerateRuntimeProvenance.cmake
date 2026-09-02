@@ -63,7 +63,7 @@ else()
             RELATIVE "${SOURCE_DIR}"
             "${SOURCE_DIR}/${source_root}/*")
         foreach(source_file IN LISTS source_root_files)
-            if (source_file MATCHES "(^|/)(CMakeFiles|CMakebuild[^/]*|__pycache__|output)(/|$)" OR
+            if (source_file MATCHES "(^|/)(\\.git|CMakeFiles|CMakebuild[^/]*|__pycache__|output)(/|$)" OR
                 source_file MATCHES "^build/cjthread_build/" OR
                 source_file MATCHES "^(src|tests|include)/(.*/)?build[^/]*/" OR
                 source_file MATCHES "^third_party/third_party_bounds_checking_function/(.*/)?(\\.git(/|$)|(CMakeFiles|CMakebuild[^/]*|__pycache__|build[^/]*|cmake-build[^/]*|output)/)" OR
