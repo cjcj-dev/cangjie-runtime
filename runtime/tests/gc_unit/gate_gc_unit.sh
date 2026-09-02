@@ -1,8 +1,7 @@
 #!/usr/bin/env bash
-# GC unit gate: the C++ suite fails closed; the language-level finalizer test
-# records NOT_RUN when no matching cjc is available so building the runtime
-# itself does not acquire a compiler dependency.  A composition gate must
-# still reject anything other than GATE=PASS in the status artifact.
+# GC unit gate: the C++ suite fails closed; language-level tests normally run
+# in the same invocation.  A source build may defer them until its matching std
+# exists, but that is recorded separately and must later become LANGUAGE_DONE.
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "$0")/../../.." && pwd)"
@@ -13,10 +12,12 @@ PHASE_ENTRY_SCRIPT="$SRC/run_phase_entry_trigger.sh"
 SEGMENTED_MANAGED_SCRIPT="$SRC/run_segmented_array_managed.sh"
 STATUS_FILE="${GC_UNIT_GATE_STATUS:-${GCV2_RUNTIME_LIB_DIR:+$GCV2_RUNTIME_LIB_DIR/gc_unit_gate.status}}"
 STATUS_FILE="${STATUS_FILE:-$ROOT/runtime/output/gc_unit_gate.status}"
+LANGUAGE_TEST_MODE="${GC_UNIT_GATE_LANGUAGE_TESTS:-all}"
 
 GATE_STATE=FAIL
 CPP_SUITE_STATE=NOT_RUN
 CPP_SUITE_SOURCE=NOT_RUN
+LANGUAGE_TESTS_STATE=NOT_RUN
 FINALIZER_STATE=NOT_RUN
 FINALIZER_SOURCE=NOT_RUN
 PHASE_ENTRY_STATE=NOT_RUN
@@ -35,6 +36,8 @@ write_status() {
   {
     echo "SCHEMA_VERSION=1"
     echo "GATE=$GATE_STATE"
+    echo "LANGUAGE_TEST_MODE=$LANGUAGE_TEST_MODE"
+    echo "LANGUAGE_TESTS=$LANGUAGE_TESTS_STATE"
     echo "CPP_SUITE=$CPP_SUITE_STATE"
     echo "CPP_SUITE_SOURCE=$CPP_SUITE_SOURCE"
     echo "FINALIZER_TRIGGER=$FINALIZER_STATE"
@@ -56,6 +59,15 @@ on_exit() {
   exit "$rc"
 }
 trap on_exit EXIT
+
+case "$LANGUAGE_TEST_MODE" in
+  all|defer|only) ;;
+  *)
+    STATUS_REASON=INVALID_LANGUAGE_TEST_MODE
+    echo "GC_UNIT_GATE_FAIL: GC_UNIT_GATE_LANGUAGE_TESTS must be all, defer, or only (got '$LANGUAGE_TEST_MODE')" >&2
+    exit 2
+    ;;
+esac
 
 # This check exercises the gate's own contract.  It runs before any skip,
 # runtime build, or capability probing so a broken contract cannot be hidden by
@@ -97,7 +109,7 @@ if [[ ! -d "$SRC" ]]; then
   echo "GC_UNIT_GATE_FAIL: missing $SRC" >&2
   exit 2
 fi
-if [[ ! -f "$SCRIPT" ]]; then
+if [[ "$LANGUAGE_TEST_MODE" != "only" && ! -f "$SCRIPT" ]]; then
   echo "GC_UNIT_GATE_FAIL: missing run_standalone.sh" >&2
   exit 2
 fi
@@ -115,7 +127,7 @@ if [[ "$TESTABLE_INTERNALS" == "1" &&
   echo "GC_UNIT_GATE_FAIL: missing managed segmented-array language-level test" >&2
   exit 2
 fi
-if [[ ! -f "$SRC/test_defect_regressions.cpp" ]]; then
+if [[ "$LANGUAGE_TEST_MODE" != "only" && ! -f "$SRC/test_defect_regressions.cpp" ]]; then
   echo "GC_UNIT_GATE_FAIL: missing defect regression suite (Phase 2)" >&2
   exit 2
 fi
@@ -141,7 +153,21 @@ fi
 # PASS instead of the required visible NOT_RUN state.
 CJC_BIN="${CJC:-${CANGJIE_HOME:-}/bin/cjc}"
 FINALIZER_CAN_RUN=0
-if [[ -x "$CJC_BIN" ]]; then
+if [[ "$LANGUAGE_TEST_MODE" == "only" ]]; then
+  if [[ -z "${CANGJIE_HOME:-}" || ! -x "$CANGJIE_HOME/bin/cjc" ]]; then
+    STATUS_REASON=LANGUAGE_SDK_MISSING
+    echo "GC_UNIT_GATE_FAIL: only mode requires CANGJIE_HOME with an executable bin/cjc" >&2
+    exit 2
+  fi
+  if [[ -n "${CJC:-}" && "$(readlink -f "$CJC")" != "$(readlink -f "$CANGJIE_HOME/bin/cjc")" ]]; then
+    STATUS_REASON=LANGUAGE_SDK_MISMATCH
+    echo "GC_UNIT_GATE_FAIL: only mode requires CJC to be CANGJIE_HOME/bin/cjc" >&2
+    exit 2
+  fi
+  CJC_BIN="$CANGJIE_HOME/bin/cjc"
+  FINALIZER_CAN_RUN=1
+  export CJC="$CJC_BIN"
+elif [[ -x "$CJC_BIN" ]]; then
   FINALIZER_CAN_RUN=1
   export CJC="$CJC_BIN"
 fi
@@ -166,6 +192,56 @@ elif [[ "$TESTABLE_INTERNALS" == "1" ]]; then
   echo "GC_UNIT_GATE_FAIL: TESTABLE_INTERNALS=1 but product SO lacks segmented-array test hooks" >&2
   exit 2
 fi
+
+run_language_tests() {
+  LANGUAGE_TESTS_STATE=LANGUAGE_RUNNING
+
+  # Root classification has a language-visible consequence that a C++ fixture
+  # alone cannot prove: unreachable objects must actually execute ~init.
+  FINALIZER_STATE=FAIL
+  FINALIZER_SOURCE=FRESH
+  STATUS_REASON=FINALIZER_TRIGGER_FAILURE
+  if ! bash "$FINALIZER_SCRIPT"; then
+    echo "GC_UNIT_GATE_FAIL: end-to-end finalizer trigger test failed" >&2
+    return 1
+  fi
+  FINALIZER_STATE=PASS
+
+  PHASE_ENTRY_STATE=FAIL
+  PHASE_ENTRY_SOURCE=FRESH
+  STATUS_REASON=PHASE_ENTRY_TRIGGER_FAILURE
+  if ! bash "$PHASE_ENTRY_SCRIPT"; then
+    echo "GC_UNIT_GATE_FAIL: forwarding-carrier phase entry test failed" >&2
+    return 1
+  fi
+  PHASE_ENTRY_STATE=PASS
+
+  if [[ $SEGMENTED_MANAGED_CAN_RUN -eq 1 ]]; then
+    SEGMENTED_MANAGED_STATE=FAIL
+    SEGMENTED_MANAGED_SOURCE=FRESH
+    STATUS_REASON=SEGMENTED_ARRAY_MANAGED_FAILURE
+    if ! bash "$SEGMENTED_MANAGED_SCRIPT"; then
+      echo "GC_UNIT_GATE_FAIL: managed segmented-array product entry test failed" >&2
+      return 1
+    fi
+    SEGMENTED_MANAGED_STATE=PASS
+  fi
+
+  LANGUAGE_TESTS_STATE=LANGUAGE_DONE
+}
+
+# only is deliberately fresh and bypasses the all-mode stamp: a stamp made by
+# another compiler/std pair cannot prove that this source SDK ran the tests.
+if [[ "$LANGUAGE_TEST_MODE" == "only" ]]; then
+  if ! run_language_tests; then
+    exit 1
+  fi
+  GATE_STATE=PASS
+  STATUS_REASON=PASS
+  echo "GC_UNIT_GATE_LANGUAGE_OK mode=only status=$STATUS_FILE"
+  exit 0
+fi
+
 # Two source lists name this suite: CMakeLists.txt (behind MRT_GC_UNIT_TESTS, default OFF) and
 # run_standalone.sh (the one that actually runs).  test_z_forwarding_life.cpp sat in the first and
 # not the second, so its three tests had never executed once.  A file present but not compiled looks
@@ -201,6 +277,13 @@ if [[ -f "$STAMP" && "$STAMP" -nt "$SO" ]]; then
   if [[ -z "$newer" ]]; then
     CPP_SUITE_STATE=PASS
     CPP_SUITE_SOURCE=CACHE
+    if [[ "$LANGUAGE_TEST_MODE" == "defer" ]]; then
+      LANGUAGE_TESTS_STATE=LANGUAGE_DEFERRED
+      GATE_STATE=PASS
+      STATUS_REASON=LANGUAGE_DEFERRED
+      echo "GC_UNIT_GATE_OK language=deferred cpp_suite=PASS(cache) status=$STATUS_FILE"
+      exit 0
+    fi
     if [[ $FINALIZER_CAN_RUN -eq 0 ]]; then
       GATE_STATE=NOT_RUN
       STATUS_REASON=NO_CJC
@@ -215,6 +298,7 @@ if [[ -f "$STAMP" && "$STAMP" -nt "$SO" ]]; then
       SEGMENTED_MANAGED_STATE=PASS
       SEGMENTED_MANAGED_SOURCE=CACHE
     fi
+    LANGUAGE_TESTS_STATE=LANGUAGE_DONE
     GATE_STATE=PASS
     STATUS_REASON=CACHED_PASS
     echo "GC_UNIT_GATE_OK (cached: runtime and suite both older than last green run) status=$STATUS_FILE"
@@ -318,6 +402,14 @@ fi
 CPP_SUITE_STATE=PASS
 CPP_SUITE_SOURCE=FRESH
 
+if [[ "$LANGUAGE_TEST_MODE" == "defer" ]]; then
+  LANGUAGE_TESTS_STATE=LANGUAGE_DEFERRED
+  GATE_STATE=PASS
+  STATUS_REASON=LANGUAGE_DEFERRED
+  echo "GC_UNIT_GATE_OK language=deferred cpp_suite=PASS(fresh) status=$STATUS_FILE"
+  exit 0
+fi
+
 if [[ $FINALIZER_CAN_RUN -eq 0 ]]; then
   GATE_STATE=NOT_RUN
   STATUS_REASON=NO_CJC
@@ -325,35 +417,8 @@ if [[ $FINALIZER_CAN_RUN -eq 0 ]]; then
   exit 0
 fi
 
-# Root classification has a language-visible consequence that a C++ fixture
-# alone cannot prove: unreachable objects must actually execute ~init.
-FINALIZER_STATE=FAIL
-FINALIZER_SOURCE=FRESH
-STATUS_REASON=FINALIZER_TRIGGER_FAILURE
-if ! bash "$FINALIZER_SCRIPT"; then
-  echo "GC_UNIT_GATE_FAIL: end-to-end finalizer trigger test failed" >&2
+if ! run_language_tests; then
   exit 1
-fi
-FINALIZER_STATE=PASS
-
-PHASE_ENTRY_STATE=FAIL
-PHASE_ENTRY_SOURCE=FRESH
-STATUS_REASON=PHASE_ENTRY_TRIGGER_FAILURE
-if ! bash "$PHASE_ENTRY_SCRIPT"; then
-  echo "GC_UNIT_GATE_FAIL: forwarding-carrier phase entry test failed" >&2
-  exit 1
-fi
-PHASE_ENTRY_STATE=PASS
-
-if [[ $SEGMENTED_MANAGED_CAN_RUN -eq 1 ]]; then
-  SEGMENTED_MANAGED_STATE=FAIL
-  SEGMENTED_MANAGED_SOURCE=FRESH
-  STATUS_REASON=SEGMENTED_ARRAY_MANAGED_FAILURE
-  if ! bash "$SEGMENTED_MANAGED_SCRIPT"; then
-    echo "GC_UNIT_GATE_FAIL: managed segmented-array product entry test failed" >&2
-    exit 1
-  fi
-  SEGMENTED_MANAGED_STATE=PASS
 fi
 
 GATE_STATE=PASS
