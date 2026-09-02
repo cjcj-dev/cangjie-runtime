@@ -53,6 +53,14 @@
 #include "Sync/Sync.h"
 
 namespace MapleRuntime {
+
+#if defined(MRT_GC_UNIT_TESTS)
+RoutePlan RegionManager::PlanRouteLookupForTest(BaseObject* fromObj)
+{
+    return PlanRouteLookup(fromObj);
+}
+#endif
+
 namespace RecentFullAccounting {
 namespace {
 std::atomic<size_t> enqueuedRegions{ 0 };
