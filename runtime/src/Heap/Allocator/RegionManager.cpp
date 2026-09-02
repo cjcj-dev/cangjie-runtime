@@ -4049,6 +4049,12 @@ namespace MapleRuntime {
 // enroltime: defined out of line so RegionInfo.h does not have to see Heap/GCPhase.
 void RegionInfo::NoteEnrolPhase()
 {
+    // Diagnostic-only. gc_unit fixtures never Heap::Init, so
+    // CollectorProxy::currentCollector is null and GetGCPhase would fault.
+    // CollectorResources is always constructed; IsGcStarted is false there.
+    if (!Heap::GetHeap().GetCollectorResources().IsGcStarted()) {
+        return;
+    }
     const GCPhase phase = Heap::GetHeap().GetGCPhase();
     const bool afterFlip = (phase == GCPhase::GC_PHASE_PREFORWARD || phase == GCPhase::GC_PHASE_FORWARD);
     std::atomic<uint64_t>& counter = afterFlip ? EnrolAfterFlip() : EnrolBeforeFlip();
