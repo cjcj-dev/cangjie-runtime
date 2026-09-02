@@ -296,36 +296,46 @@ add_definitions(-DCJ_SDK_VERSION="${CJ_SDK_VERSION}")
 #   ⇒ ⭐ 于是任何"⭐ 这枚 runtime 含不含某修法"的问题都只能靠日期猜 —— ⭐ 而目录日期会骗人
 #     （⭐ `sdk-stageA2` 目录是 08-07，⭐ 里面的 runtime 却更早）
 #   ⇒ ⭐⭐ 判法从此是一条命令：`strings <so> | grep CJRT-COMMIT:`
-# ⭐ 外部显式传入优先（`-DCJ_RUNTIME_COMMIT=<sha>`）——
-#   ⛔ 因为我们常把 `runtime/` 单独 tar 到构建箱，⭐ 那边没有 `.git`
-#   ⇒ ⭐ 没传且无 git ⇒ ⭐⭐ 记 `unknown`，⛔ 而不是悄悄记成某个像样的值
-# ⭐ 顺序：⭐ -D 传入 > ⭐ 环境变量 > ⭐ git > ⭐ unknown
-#   ⭐ 环境变量这一档是给"⭐ tar 过去、⭐ 那边没 .git"的常规做法用的
-if (NOT CJ_RUNTIME_COMMIT AND DEFINED ENV{CJ_RUNTIME_COMMIT})
-    set(CJ_RUNTIME_COMMIT "$ENV{CJ_RUNTIME_COMMIT}")
+# ⭐ 身份只从源码导出：有 `.git` 就采 build-time HEAD/status；无 `.git` 就对
+#   runtime 的产品构建输入按路径排序做内容哈希，记为 `src-<sha256>`。
+# ⭐ `-DCJ_RUNTIME_COMMIT` 与同名环境变量只是旧调用者的声明元数据，写入
+#   `CJRT-DECLARED:`；它们不能覆盖 `CJRT-COMMIT:` 身份本体。
+#
+# ⭐⭐⭐ 章必须在 build 期求值。configure 与链接之间允许源码变化；若在这里把
+# HEAD/status 冻进宏，后续不重跑 configure 的链接会继续携带旧章。生成器每次构建都会
+# 运行，但只在内容变化时改写 .cpp，因此同一棵树的连续构建不会重编或重链。
+set(CJ_RUNTIME_COMMIT_OVERRIDE "")
+if (DEFINED CJ_RUNTIME_COMMIT AND NOT CJ_RUNTIME_COMMIT STREQUAL "")
+    set(CJ_RUNTIME_COMMIT_OVERRIDE "${CJ_RUNTIME_COMMIT}")
 endif()
-if (NOT CJ_RUNTIME_COMMIT)
-    execute_process(
-        COMMAND git -C ${CMAKE_CURRENT_SOURCE_DIR}/.. rev-parse HEAD
-        OUTPUT_VARIABLE CJ_RUNTIME_COMMIT
-        OUTPUT_STRIP_TRAILING_WHITESPACE
-        ERROR_QUIET)
-endif()
-if (NOT CJ_RUNTIME_COMMIT)
-    set(CJ_RUNTIME_COMMIT "unknown")
-endif()
+set(CJ_RUNTIME_PROVENANCE_GENERATOR
+    "${CMAKE_CURRENT_SOURCE_DIR}/build/cmake/GenerateRuntimeProvenance.cmake")
+set(CJ_RUNTIME_PROVENANCE_SOURCE
+    "${CMAKE_CURRENT_BINARY_DIR}/generated/RuntimeProvenance.cpp")
+set(CJ_RUNTIME_PROVENANCE_COMMAND
+    ${CMAKE_COMMAND}
+    "-DREPOSITORY_DIR=${CMAKE_CURRENT_SOURCE_DIR}/.."
+    "-DSOURCE_DIR=${CMAKE_CURRENT_SOURCE_DIR}"
+    "-DOUTPUT_FILE=${CJ_RUNTIME_PROVENANCE_SOURCE}"
+    "-DCOMMIT_OVERRIDE=${CJ_RUNTIME_COMMIT_OVERRIDE}"
+    -P "${CJ_RUNTIME_PROVENANCE_GENERATOR}")
+
+# Seed the generated source so every CMake generator can inspect the object-library source list.
 execute_process(
-    COMMAND git -C ${CMAKE_CURRENT_SOURCE_DIR}/.. status --porcelain
-    OUTPUT_VARIABLE CJ_RUNTIME_DIRTY
-    OUTPUT_STRIP_TRAILING_WHITESPACE
-    ERROR_QUIET)
-# ⭐ 无 git 时 status 为空 ⇒ ⛔ 不会误标 dirty；⭐ 而 commit 已是 unknown，⭐ 不会伪装
-if (CJ_RUNTIME_DIRTY)
-    # ⭐ 脏树必须显式标出来 —— ⛔ 否则"⭐ 我改了但没提交"的构建会伪装成某个干净 commit
-    set(CJ_RUNTIME_COMMIT "${CJ_RUNTIME_COMMIT}-dirty")
+    COMMAND ${CJ_RUNTIME_PROVENANCE_COMMAND}
+    RESULT_VARIABLE CJ_RUNTIME_PROVENANCE_CONFIGURE_RC)
+if (NOT CJ_RUNTIME_PROVENANCE_CONFIGURE_RC EQUAL 0)
+    message(FATAL_ERROR "initial runtime provenance generation failed")
 endif()
-add_definitions(-DCJ_RUNTIME_COMMIT="${CJ_RUNTIME_COMMIT}")
-message(STATUS "CJ_RUNTIME_COMMIT=${CJ_RUNTIME_COMMIT}")
+add_custom_target(generate-runtime-provenance
+    COMMAND ${CJ_RUNTIME_PROVENANCE_COMMAND}
+    BYPRODUCTS "${CJ_RUNTIME_PROVENANCE_SOURCE}"
+    COMMENT "Refreshing the runtime provenance stamp from the build-time tree state"
+    VERBATIM)
+set_source_files_properties("${CJ_RUNTIME_PROVENANCE_SOURCE}" PROPERTIES GENERATED TRUE)
+add_library(runtime-provenance OBJECT "${CJ_RUNTIME_PROVENANCE_SOURCE}")
+set_target_properties(runtime-provenance PROPERTIES POSITION_INDEPENDENT_CODE ON)
+add_dependencies(runtime-provenance generate-runtime-provenance)
 
 if (DISABLE_VERSION_CHECK MATCHES 1)
     add_definitions(-DDISABLE_VERSION_CHECK)
@@ -381,6 +391,7 @@ link_directories(${OHOS_LIB})
 include_directories(${BOUNDSCHECK_INCLUDE})
 add_subdirectory(${CMAKE_CURRENT_SOURCE_DIR}/src)
 add_subdirectory(third_party/third_party_bounds_checking_function)
+target_sources(cangjie-runtime PRIVATE $<TARGET_OBJECTS:runtime-provenance>)
 if (MACOS_FLAG MATCHES 1)
     install(TARGETS boundscheck DESTINATION runtime/lib/${TARGET_ARCH}${SANITIZER_SUBPATH})
 endif()
@@ -691,6 +702,7 @@ endif () # CMAKE_BUILD_TYPE MATCHES "^(Release|MinSizeRel)$"
 if (IOS_FLAG MATCHES 1 OR IOS_SIMULATOR_FLAG MATCHES 1 OR IOS_SIMULATOR_FLAG MATCHES 2 OR WINDOWS_FLAG MATCHES 1
     OR MACOS_FLAG MATCHES 1 OR (ANDROID_FLAG MATCHES 0 AND OHOS_FLAG MATCHES 0))
     add_library(cangjie-runtime-static STATIC)
+    target_sources(cangjie-runtime-static PRIVATE $<TARGET_OBJECTS:runtime-provenance>)
     if (WINDOWS_FLAG MATCHES 1)
         target_sources(cangjie-runtime-static PRIVATE
             $<TARGET_OBJECTS:runtime>
