@@ -105,24 +105,29 @@ struct ExactRouteFixture {
         return publication;
     }
 
-    void ExpectOnlyExactStartsThroughProductEntry()
+    void ExpectOnlyExactStartsThroughProductEntry(WCollector& collector)
     {
 #if defined(MRT_GC_UNIT_TESTS)
-        RegionSpace& space = reinterpret_cast<RegionSpace&>(Heap::GetHeap().GetAllocator());
-        RegionManager& manager = space.GetRegionManager();
         const MAddress start = region->GetRegionStart();
         unsigned admittedMask = 0;
         for (size_t offset = 0; offset <= 40; offset += 8) {
-            RoutePlan plan = manager.PlanRouteLookupForTest(from_region_addr(start + offset));
-            admittedMask |= plan.dest != nullptr ? (1U << (offset / 8)) : 0U;
-            GC_EXPECT_EQ(plan.dest != nullptr, offset == 0);
+            auto result = collector.PlanRouteLookupForTest(from_region_addr(start + offset));
+            GC_EXPECT_TRUE(result.phaseAllowed);
+            GC_EXPECT_TRUE(result.heapAddress);
+            GC_EXPECT_TRUE(result.retained);
+            admittedMask |= result.plan.dest != nullptr ? (1U << (offset / 8)) : 0U;
+            GC_EXPECT_EQ(result.plan.dest != nullptr, offset == 0);
         }
-        RoutePlan secondPlan = manager.PlanRouteLookupForTest(second);
-        GC_EXPECT_TRUE(secondPlan.dest != nullptr);
+        auto secondResult = collector.PlanRouteLookupForTest(second);
+        GC_EXPECT_TRUE(secondResult.phaseAllowed);
+        GC_EXPECT_TRUE(secondResult.heapAddress);
+        GC_EXPECT_TRUE(secondResult.retained);
+        GC_EXPECT_TRUE(secondResult.plan.dest != nullptr);
         std::fprintf(stderr,
-                     "DETAIL exact_start_product_entry state=%u object_size=48 offsets=0,8,16,24,32,40 admitted_mask=%#x second_start=48 second_admitted=%u\n",
-                     static_cast<unsigned>(region->GetRouteState()), admittedMask,
-                     static_cast<unsigned>(secondPlan.dest != nullptr));
+                     "DETAIL exact_start_product_entry state=%u phase=%u object_size=48 offsets=0,8,16,24,32,40 admitted_mask=%#x second_start=48 second_admitted=%u\n",
+                     static_cast<unsigned>(region->GetRouteState()),
+                     static_cast<unsigned>(collector.GetGCPhase()), admittedMask,
+                     static_cast<unsigned>(secondResult.plan.dest != nullptr));
 #else
         // The default product SO intentionally omits the test bridge; keep the
         // legacy cell buildable there while the ON construct is the接线证明.
@@ -152,7 +157,20 @@ GC_TEST(RouteInfo, ExactStartCapabilityAcrossRouteStates)
         ExactRouteFixture route(/*useRealProducer=*/true);
         route.region->SetRouteInfo(route.fx.region1->GetRegionStart(), 96);
         route.region->SetRouteState(RegionInfo::ROUTED);
-        route.ExpectOnlyExactStartsThroughProductEntry();
+        WCollector collector(Heap::GetHeap().GetAllocator(), Heap::GetHeap().GetCollectorResources());
+#if defined(MRT_GC_UNIT_TESTS)
+        collector.SetGCPhase(GCPhase::GC_PHASE_IDLE);
+        auto idle = collector.PlanRouteLookupForTest(route.first);
+        GC_EXPECT_FALSE(idle.phaseAllowed);
+        GC_EXPECT_FALSE(idle.retained);
+        GC_EXPECT_TRUE(idle.plan.dest == nullptr);
+        const auto nonHeap = collector.PlanRouteLookupForTest(reinterpret_cast<BaseObject*>(0x1234));
+        GC_EXPECT_FALSE(nonHeap.heapAddress);
+        GC_EXPECT_FALSE(nonHeap.phaseAllowed);
+        GC_EXPECT_FALSE(nonHeap.retained);
+        collector.SetGCPhase(GCPhase::GC_PHASE_PREFORWARD);
+#endif
+        route.ExpectOnlyExactStartsThroughProductEntry(collector);
     }
     {
         ExactRouteFixture compact;

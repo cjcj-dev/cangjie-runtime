@@ -805,14 +805,6 @@ public:
         return PlanRouteLookup(fromObj);
     }
 
-#if defined(MRT_GC_UNIT_TESTS)
-    // Test-only bridge to the same lookup entry used by product routing.  The
-    // bridge is compile-time gated and does not alter the default product ABI
-    // or dispatch; it merely lets gc_unit exercise PlanRouteLookup →
-    // ComputeRoute without manufacturing a stop-the-world token.
-    MRT_EXPORT RoutePlan PlanRouteLookupForTest(BaseObject* fromObj);
-#endif
-
     PublishedRoute FindPublishedRoute(BaseObject* fromObj, RegionInfo* fromRegionInfo)
     {
         BaseObject* to = ComputeRoute(fromObj, fromRegionInfo);

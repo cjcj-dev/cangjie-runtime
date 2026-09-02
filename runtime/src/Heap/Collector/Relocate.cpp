@@ -2538,6 +2538,32 @@ BaseObject* WCollector::TryForwardObject(BaseObject* obj)
     return nullptr;
 }
 
+#if defined(MRT_GC_UNIT_TESTS)
+WCollector::RouteLookupTestResult WCollector::PlanRouteLookupForTest(BaseObject* fromObj)
+{
+    RouteLookupTestResult result;
+    if (fromObj == nullptr || !Heap::IsHeapAddress(fromObj)) {
+        return result;
+    }
+    result.heapAddress = true;
+    const GCPhase phase = GetGCPhase();
+    if (phase != GCPhase::GC_PHASE_PREFORWARD && phase != GCPhase::GC_PHASE_FORWARD) {
+        return result;
+    }
+    result.phaseAllowed = true;
+    RegionInfo* region = RegionInfo::GetGhostFromRegionAt(reinterpret_cast<MAddress>(fromObj));
+    if (region == nullptr || !region->TryLockReadFromRegion()) {
+        return result;
+    }
+    result.retained = true;
+    // CopierRouteMint is the sole construction path for CopierRouteToken;
+    // this is the same route lookup consumed by ForwardObjectImpl.
+    result.plan = fwdTable.PlanRoute(fromObj, CopierRouteMint::Make());
+    region->UnlockReadFromRegion();
+    return result;
+}
+#endif
+
 BaseObject* WCollector::ForwardObjectImpl(BaseObject* obj, RegionInfo* ghostFromRegion)
 {
     CHECK(GetGCPhase() == GCPhase::GC_PHASE_PREFORWARD || GetGCPhase() == GCPhase::GC_PHASE_FORWARD);
