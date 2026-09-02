@@ -152,6 +152,21 @@ class RuntimeProvenanceGeneratorTest(unittest.TestCase):
         changed = self.generate(repository=non_repo, source=source, env_commit="source-a")
         self.assertNotEqual(env_a_stamp, self.stamp(changed))
 
+    def test_repository_free_identity_ignores_boundscheck_git_file(self):
+        non_repo = self.root / "not-a-repository"
+        source = non_repo / "runtime"
+        boundscheck = source / "third_party" / "third_party_bounds_checking_function"
+        boundscheck.mkdir(parents=True)
+        (boundscheck / "input.c").write_text("product source\n", encoding="utf-8")
+
+        before = self.stamp(self.generate(repository=non_repo, source=source))
+        (boundscheck / ".git").write_text(
+            "gitdir: ../modules/boundscheck\n", encoding="utf-8"
+        )
+        after = self.stamp(self.generate(repository=non_repo, source=source))
+
+        self.assertEqual(before, after)
+
 
 if __name__ == "__main__":
     unittest.main()
