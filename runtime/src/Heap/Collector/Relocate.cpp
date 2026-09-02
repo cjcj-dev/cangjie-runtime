@@ -74,6 +74,9 @@ namespace MapleRuntime {
 struct CopierRouteMint {
     static CopierRouteToken Make() { return CopierRouteToken(); }
 };
+#if defined(MRT_GC_UNIT_TESTS)
+static thread_local WCollector::RouteLookupTestResult* g_routeLookupTestContext = nullptr;
+#endif
 #if defined(MRT_TESTABLE_INTERNALS)
 using CopyAdmissionTestHook = void (*)(RegionInfo*, BaseObject*);
 static std::atomic<CopyAdmissionTestHook> g_copyAdmissionTestHook{ nullptr };
@@ -2447,14 +2450,30 @@ BaseObject* WCollector::TryForwardObject(BaseObject* obj)
         }
         return nullptr;
     }
+#if defined(MRT_GC_UNIT_TESTS)
+    if (g_routeLookupTestContext != nullptr) {
+        g_routeLookupTestContext->gatePassed = true;
+        g_routeLookupTestContext->heapAddress = true;
+    }
+#endif
     RegionInfo* region = RegionInfo::GetGhostFromRegionAt(reinterpret_cast<MAddress>(obj));
     if (region == nullptr) {
         return nullptr;
     }
 
+#if defined(MRT_GC_UNIT_TESTS)
+    if (g_routeLookupTestContext != nullptr) {
+        g_routeLookupTestContext->receiptChecked = true;
+    }
+#endif
     if (BaseObject* mapped = FindToVersion(obj).found()) {
         return mapped;
     }
+#if defined(MRT_GC_UNIT_TESTS)
+    if (g_routeLookupTestContext != nullptr) {
+        g_routeLookupTestContext->compactedChecked = true;
+    }
+#endif
     if (region->IsCompacted()) {
         // Compacted page: PublishKeptInPlaceReceipts installs identity forwarding for every
         // live object start recorded in the livemap (RegionManager.cpp:2151-2199).  A table
@@ -2473,20 +2492,49 @@ BaseObject* WCollector::TryForwardObject(BaseObject* obj)
     if (phase != GCPhase::GC_PHASE_PREFORWARD && phase != GCPhase::GC_PHASE_FORWARD) {
         return nullptr;
     }
+#if defined(MRT_GC_UNIT_TESTS)
+    if (g_routeLookupTestContext != nullptr) {
+        g_routeLookupTestContext->phaseAllowed = true;
+    }
+#endif
 
+#if defined(MRT_GC_UNIT_TESTS)
+    const bool routeRegion = fwdTable.RouteRegion(region);
+    if (g_routeLookupTestContext != nullptr) {
+        g_routeLookupTestContext->routeRegionCalled = true;
+        g_routeLookupTestContext->routeRegion = routeRegion;
+    }
+    if (routeRegion) {
+#else
     if (fwdTable.RouteRegion(region)) {
+#endif
         // secondclass ①: GetRoute is geometric plan; retain before copying or
         // consuming from-side state (else null-tip → HasRefField SEGV si_addr=0x8).
         if (region->TryLockReadFromRegion()) {
+#if defined(MRT_GC_UNIT_TESTS)
+            if (g_routeLookupTestContext != nullptr) {
+                g_routeLookupTestContext->retained = true;
+            }
+#endif
             // zRelocate.cpp:393-395: retain_page then assert is_phase_relocate.
             // SetGCPhase can publish IDLE while this thread holds the retain.
             // Release and consume only the forwarding-table answer in that case.
             const GCPhase retainedPhase = GetGCPhase();
             if (retainedPhase != GCPhase::GC_PHASE_PREFORWARD &&
                 retainedPhase != GCPhase::GC_PHASE_FORWARD) {
+#if defined(MRT_GC_UNIT_TESTS)
+                if (g_routeLookupTestContext != nullptr) {
+                    g_routeLookupTestContext->retainedPhaseAllowed = false;
+                }
+#endif
                 region->UnlockReadFromRegion();
                 return FindToVersion(obj).GetOrFailClosed("WCollector::TryForwardObject.phase");
             }
+#if defined(MRT_GC_UNIT_TESTS)
+            if (g_routeLookupTestContext != nullptr) {
+                g_routeLookupTestContext->retainedPhaseAllowed = true;
+            }
+#endif
             BaseObject* toVersion = ForwardObjectImpl(obj, region);
             region->UnlockReadFromRegion();
             return toVersion;
@@ -2538,6 +2586,26 @@ BaseObject* WCollector::TryForwardObject(BaseObject* obj)
     return nullptr;
 }
 
+#if defined(MRT_GC_UNIT_TESTS)
+WCollector::RouteLookupTestResult WCollector::PlanRouteLookupForTest(BaseObject* fromObj)
+{
+    RouteLookupTestResult result;
+    struct ContextScope {
+        WCollector::RouteLookupTestResult*& slot;
+        WCollector::RouteLookupTestResult* previous;
+        explicit ContextScope(WCollector::RouteLookupTestResult*& context,
+                              WCollector::RouteLookupTestResult* current)
+            : slot(context), previous(context)
+        {
+            slot = current;
+        }
+        ~ContextScope() { slot = previous; }
+    } scope(g_routeLookupTestContext, &result);
+    (void)TryForwardObject(fromObj);
+    return result;
+}
+#endif
+
 BaseObject* WCollector::ForwardObjectImpl(BaseObject* obj, RegionInfo* ghostFromRegion)
 {
     CHECK(GetGCPhase() == GCPhase::GC_PHASE_PREFORWARD || GetGCPhase() == GCPhase::GC_PHASE_FORWARD);
@@ -2548,6 +2616,13 @@ BaseObject* WCollector::ForwardObjectImpl(BaseObject* obj, RegionInfo* ghostFrom
     // (zRelocate.cpp:354-372) does alloc+copy+insert with no safepoint; 乙1 is
     // the same rule for the object lock that routefix already applied to ROUTING.
     BaseObject* planned = fwdTable.PlanRoute(obj, CopierRouteMint::Make()).dest;
+#if defined(MRT_GC_UNIT_TESTS)
+    if (g_routeLookupTestContext != nullptr) {
+        g_routeLookupTestContext->plan = RoutePlan{ planned };
+        g_routeLookupTestContext->hookReached = true;
+        return planned;
+    }
+#endif
     if (planned == nullptr) {
         LOG(RTLOG_ERROR, "[GCV2][first-visitor] PlanRoute returned null obj=%p page=%p phase=%d route=%u",
             obj, ghostFromRegion, static_cast<int>(GetGCPhase()),

@@ -112,6 +112,7 @@ private:
 class RegionInfo {
 public:
     using CompactRouteTable = std::unordered_map<size_t, MAddress>;
+    using RouteStartTable = std::unordered_map<size_t, uint8_t>;
 
     enum class RetainedLiveInfoState : uint8_t {
         NEVER_EXAMINED,
@@ -153,6 +154,32 @@ public:
         FORWARDED,
     };
 
+    // State and life are one publication. A reader must never validate an old
+    // terminal state with a new-life stamp (zForwarding.inline.hpp:226-251).
+    static constexpr unsigned ROUTE_STATE_BITS = 3;
+    static constexpr uint64_t ROUTE_STATE_MASK = (uint64_t(1) << ROUTE_STATE_BITS) - 1;
+
+    static uint64_t PackRouteState(RouteState state, RegionLifeId life)
+    {
+        if (UNLIKELY(life > (std::numeric_limits<uint64_t>::max() >> ROUTE_STATE_BITS))) {
+            LOG(RTLOG_FATAL,
+                "[LIFECLOCK][ROUTE_SNAPSHOT_OVERFLOW] life=%llu; packed route life cannot wrap",
+                static_cast<unsigned long long>(life));
+            return 0;
+        }
+        return (life << ROUTE_STATE_BITS) | static_cast<uint64_t>(state);
+    }
+
+    static RouteState RouteStateFromSnapshot(uint64_t snapshot)
+    {
+        return static_cast<RouteState>(snapshot & ROUTE_STATE_MASK);
+    }
+
+    static RegionLifeId RouteLifeFromSnapshot(uint64_t snapshot)
+    {
+        return snapshot >> ROUTE_STATE_BITS;
+    }
+
     static const size_t UNIT_SIZE; // same as system page size
 
     // regarding a object as a large object when the size is greater than 8 units.
@@ -164,38 +191,28 @@ public:
     bool CompareExchangeRouteState(RouteState expected, RouteState newWord)
     {
         const RegionLifeId life = GetRegionLifeId();
-        __atomic_store_n(&metadata.routeStateLifeId, life, __ATOMIC_RELEASE);
-#if defined(__x86_64__)
-        bool success = __atomic_compare_exchange_n(&(metadata.routeState), &expected, newWord, true, __ATOMIC_ACQ_REL,
-                                                   __ATOMIC_ACQUIRE);
-#else
-        // due to "Spurious Failure" of compare_exchange_weak, compare_exchange_strong is chosen.
-        bool success = __atomic_compare_exchange_n(&(metadata.routeState), &expected, newWord, false, __ATOMIC_SEQ_CST,
-                                                   __ATOMIC_ACQUIRE);
-#endif
+        uint64_t expectedSnapshot = PackRouteState(expected, life);
+        const uint64_t newSnapshot = PackRouteState(newWord, life);
+        bool success = metadata.routeStateSnapshot.compare_exchange_strong(
+            expectedSnapshot, newSnapshot, std::memory_order_acq_rel, std::memory_order_acquire);
         if (success) {
             RegionLifeClock::Publish(RegionLifeClock::Carrier::ROUTE_STATE, life);
         }
         return success;
     }
 
-    RouteState GetRouteState() const
-    {
-        RouteState state = __atomic_load_n(&(metadata.routeState), std::memory_order_acquire);
-        if (!RegionLifeClock::Validate(RegionLifeClock::Carrier::ROUTE_STATE,
-                                       __atomic_load_n(&metadata.routeStateLifeId, __ATOMIC_ACQUIRE),
-                                       GetRegionLifeId())) {
-            return RouteState::NORMAL;
-        }
-        return state;
-    }
+    RouteState GetRouteState() const;
 
     void SetRouteState(RouteState state)
     {
         const RegionLifeId life = GetRegionLifeId();
-        __atomic_store_n(&metadata.routeStateLifeId, life, __ATOMIC_RELEASE);
-        __atomic_store_n(&(metadata.routeState), state, std::memory_order_release);
+        metadata.routeStateSnapshot.store(PackRouteState(state, life), std::memory_order_release);
         RegionLifeClock::Publish(RegionLifeClock::Carrier::ROUTE_STATE, life);
+    }
+
+    RegionLifeId GetRouteStateLifeId() const
+    {
+        return RouteLifeFromSnapshot(metadata.routeStateSnapshot.load(std::memory_order_acquire));
     }
 
     // sealcheck: mark face frozen for geometry (M3). Set at RouteRegion ROUTING entry.
@@ -230,8 +247,10 @@ public:
 
     bool IsRouteStateLifeCurrent() const
     {
-        const RegionLifeId stamp = __atomic_load_n(&metadata.routeStateLifeId, __ATOMIC_ACQUIRE);
-        return RegionLifeClock::Validate(RegionLifeClock::Carrier::ROUTE_STATE, stamp, GetRegionLifeId());
+        const RegionLifeId stamp = GetRouteStateLifeId();
+        const RegionLifeId current = GetRegionLifeId();
+        (void)RegionLifeClock::Validate(RegionLifeClock::Carrier::ROUTE_STATE, stamp, current);
+        return stamp == current;
     }
 
     template<Generation G>
@@ -1966,6 +1985,10 @@ public:
     using GhostLookupTestHook = void (*)(RegionInfo*);
     MRT_EXPORT static void SetGhostLookupTestHook(GhostLookupTestHook hook);
     MRT_EXPORT static size_t GhostLookupTestHookCalls();
+
+    using RouteStateReadTestHook = void (*)(RegionInfo*);
+    MRT_EXPORT static void SetRouteStateReadTestHook(RouteStateReadTestHook hook);
+    MRT_EXPORT static size_t RouteStateReadTestHookCalls();
 #endif
 
     static void InitFreeRegion(size_t unitIdx, size_t nUnit)
@@ -2178,67 +2201,46 @@ public:
                                          metadata.routeInfo.GetLifeId(), GetRegionLifeId());
     }
 
-    // Sole mint of RouteTicket. Guard = survived on liveInfo0 AND object start.
-    // MarkBits paints multi-byte ranges (LiveInfo.h MarkBits); IsSurvivedObject(interior)
-    // is true for every 8B covered by a marked object, but VisitLive/Copy only run on
-    // size-walk starts (RegionManager.cpp VisitLiveObjectsUntilFalse). Admit⊃Copy at
-    // address granularity is the permanent hole (permrate/permwho). ROUTE_DOMAIN.md §0-②.
-    // Start predicate = tip word looks like TypeInfo (same reject set as
-    // PlausibleManagedObjectGate tip arm) — interiors carry field data, not TypeInfo*.
-    // Miss = empty OptionalRouteTicket; never silent derive.
+    // Sole mint of RouteTicket. Coverage bits paint every 8B slot of an object,
+    // so they cannot prove an exact start. Terminal states consume only exact
+    // compact keys, forwarding receipts, or the frozen start set.
     // Anchor: ops/design/ROUTE_DOMAIN.md §2; former guard RegionInfo.h GetRoute.
     ATTR_WARN_UNUSED OptionalRouteTicket AdmitForRoute(BaseObject* fromObj)
     {
+        if (fromObj == nullptr) {
+            return OptionalRouteTicket();
+        }
         MAddress fromAddress = reinterpret_cast<MAddress>(fromObj);
+        if (fromAddress < GetRegionStart() || fromAddress >= GetRegionEnd() ||
+            (fromAddress & (kMarkedBytesPerBit - 1)) != 0) {
+            return OptionalRouteTicket();
+        }
         size_t offset = GetAddressOffset(fromAddress);
-        LiveInfo* ghostLiveInfo = GetLiveInfo0ForProbe();
-        bool survived = false;
-        if (GetRouteMarkGeneration() == Generation::Young) {
-            MarkView<Generation::Young> view = GetRouteMarkView<Generation::Young>();
-            survived = IsSurvivedObject(view, ghostLiveInfo, offset);
-        } else {
-            MarkView<Generation::Old> view = GetRouteMarkView<Generation::Old>();
-            survived = IsSurvivedObject(view, ghostLiveInfo, offset);
+        const RouteState routeState = GetRouteState();
+        if (routeState != RouteState::ROUTED && routeState != RouteState::COMPACTED &&
+            routeState != RouteState::FORWARDED) {
+            return OptionalRouteTicket();
         }
-        // Compact packed dest is in compactRouteTable (not prefix-sum). A
-        // mark-start allocate-black object Compact copied must Admit so
-        // GetRoute can look up that dest. Routed prefix-sum has no slot for
-        // it, so water alone does not Admit on the ROUTED arm.
-        if (!survived && FromPageAllocatedAfterMarkStart(offset) && LoadCompactRouteTable() != nullptr) {
-            survived = true;
-        }
-        // Large region: single object at start; tip check is the start test for small.
-        bool startOk = false;
-        if (survived) {
-            if (IsLargeRegion()) {
-                startOk = (offset == 0);
-            } else if (fromObj != nullptr) {
-                // Tip-only read (StateWord). No IsVaildType / GetSize — same shape as
-                // Collector::PlausibleManagedObjectGate tip arm (Collector.cpp).
-                TypeInfo* tip = fromObj->GetTypeInfo();
-                uintptr_t tipAddr = reinterpret_cast<uintptr_t>(tip);
-                constexpr uintptr_t kMinPlausibleTypeInfoAddr = 0x100000000ULL;
-                if (tipAddr != 0 && tipAddr >= kMinPlausibleTypeInfoAddr &&
-                    (tipAddr & StateWord::ADDRESS_ALIGN_MASK) == 0 &&
-                    (tipAddr & 0xffffffffULL) != 0 &&
-                    !Heap::IsHeapAddress(tipAddr)) {
-                    startOk = true;
-                }
-                // uafclose: after CompactRegion copies survivors and memset free-tail, the
-                // from header at the old address is zeroed. RouteState COMPACTED (and
-                // FORWARDED after VisitLive) still needs Admit so FindToVersion can return
-                // the geometric to — tip is no longer a valid start oracle. Survivor bit
-                // on liveInfo0 is the domain membership proof (VisitLive already walked starts).
-                if (!startOk) {
-                    RouteState rsTip = GetRouteState();
-                    if (rsTip == RouteState::COMPACTED || rsTip == RouteState::FORWARDED) {
-                        startOk = true;
-                    }
-                }
-            }
-        }
-        if (!survived || !startOk) {
 
+        const ForwardingTable::LookupResult lookup = ForwardingTable::LookupTo(fromAddress);
+        if (lookup.to != 0 && lookup.answer == ForwardingTable::ToAnswer::ArmedHit) {
+            return OptionalRouteTicket(fromObj);
+        }
+        if (lookup.answer == ForwardingTable::ToAnswer::Unavailable) {
+            return OptionalRouteTicket();
+        }
+
+        CompactRouteTable* compact = LoadCompactRouteTable();
+        if (routeState == RouteState::COMPACTED) {
+            if (compact == nullptr) {
+                return OptionalRouteTicket();
+            }
+            return compact->find(offset) == compact->end()
+                ? OptionalRouteTicket() : OptionalRouteTicket(fromObj);
+        }
+
+        const RouteStartTable* starts = LoadRouteStartTable();
+        if (starts == nullptr || starts->find(offset) == starts->end()) {
             return OptionalRouteTicket();
         }
         return OptionalRouteTicket(fromObj);
@@ -2253,22 +2255,19 @@ public:
             LOG(RTLOG_FATAL,
                 "[LIFECLOCK][MUTATOR_STALE_ROUTE_STATE] region=%p current=%llu stamp=%llu",
                 this, static_cast<unsigned long long>(GetRegionLifeId()),
-                static_cast<unsigned long long>(metadata.routeStateLifeId));
+                static_cast<unsigned long long>(GetRouteStateLifeId()));
         }
         BaseObject* fromObj = t.From();
         MAddress fromAddress = reinterpret_cast<MAddress>(fromObj);
+        const ForwardingTable::LookupResult lookup = ForwardingTable::LookupTo(fromAddress);
+        if (lookup.to != 0 && lookup.answer == ForwardingTable::ToAnswer::ArmedHit) {
+            return from_region_addr(lookup.to);
+        }
         CompactRouteTable* compactRouteTable = LoadCompactRouteTable();
         if (compactRouteTable != nullptr) {
             BaseObject* packed = LookupCompactRoute(GetAddressOffset(fromAddress), compactRouteTable);
-            if (packed != nullptr) {
-                return packed;
-            }
-            // Compacted and not packed: prefix-sum dest is a hole (dense pack).
-            // Keep from if Compact left it in place (walk break); else no to-version.
-            if (fromObj->IsValidObject()) {
-                return fromObj;
-            }
-            return nullptr;
+            // Exact miss is terminal. Identity requires an explicit from→from receipt.
+            return packed;
         }
         // FreeCompactRouteTable publishes NORMAL before detaching a compact table. An
         // already-admitted reader that loses the detach race must soft-miss rather than
@@ -2317,6 +2316,49 @@ public:
         CompactRouteTable* table = LoadCompactRouteTable();
         CHECK(table != nullptr);
         (*table)[fromOff] = dest;
+        RecordRouteStart(fromOff);
+    }
+
+    void EnsureRouteStartTable()
+    {
+        if (LoadRouteStartTable() == nullptr) {
+            RouteStartTable* table = new RouteStartTable();
+            void* expected = nullptr;
+            if (!__atomic_compare_exchange_n(&metadata.routeStartTable, &expected, static_cast<void*>(table),
+                                             false, __ATOMIC_RELEASE, __ATOMIC_ACQUIRE)) {
+                delete table;
+            }
+        }
+    }
+
+    void RecordRouteStart(size_t fromOff)
+    {
+        EnsureRouteStartTable();
+        RouteStartTable* table = LoadRouteStartTable();
+        CHECK(table != nullptr);
+        (*table)[fromOff] = 1;
+    }
+
+    // Called only while the collector owns the route transition. Readers see
+    // the table after ROUTED/FORWARDED release publication.
+    void ResetRouteStartTable()
+    {
+        EnsureRouteStartTable();
+        RouteStartTable* table = LoadRouteStartTable();
+        CHECK(table != nullptr);
+        table->clear();
+    }
+
+    RouteStartTable* LoadRouteStartTable() const
+    {
+        return static_cast<RouteStartTable*>(__atomic_load_n(&metadata.routeStartTable, __ATOMIC_ACQUIRE));
+    }
+
+    void FreeRouteStartTable()
+    {
+        RouteStartTable* table = static_cast<RouteStartTable*>(
+            __atomic_exchange_n(&metadata.routeStartTable, static_cast<void*>(nullptr), __ATOMIC_ACQ_REL));
+        delete table;
     }
 
     BaseObject* LookupCompactRoute(size_t fromOff, const CompactRouteTable* table) const
@@ -2498,12 +2540,24 @@ public:
         //
         // The staleness predicate is not the hole: over ~2^20 non-NORMAL targets per run, across
         // six runs, zero escaped it.
+        // gc_unit fixtures do not run Heap::Init, so CollectorProxy has no
+        // current collector for this diagnostic-only phase sample.  Skip only
+        // in the test configuration; product (macro off) always samples.
+#if !defined(MRT_GC_UNIT_TESTS)
         NoteEnrolPhase();
+#endif
         // sealcheck: snapshot is not yet sealed; geometry freeze is at RouteRegion ROUTING.
         SetMarkFaceSealed(false);
         // Shared boundary: publish immutable from-page metadata, forwarding
         // construction token, and ghost membership through one product edge.
         PublishForwardingCarrier(view);
+        // Freeze exact starts while allocation headers are still readable.
+        // The coverage bitmap cannot reconstruct this set after relocation.
+        ResetRouteStartTable();
+        (void)VisitLiveObjectsUntilFalse([this](BaseObject* object) {
+            RecordRouteStart(GetAddressOffset(reinterpret_cast<MAddress>(object)));
+            return true;
+        });
     }
 
     void ClearGhostRegionBit()
@@ -2531,6 +2585,9 @@ public:
     static std::atomic<GhostLookupTestHook> ghostLookupTestHook;
     static std::atomic<size_t> ghostLookupTestHookCalls;
     static void RunGhostLookupTestHook(RegionInfo* region);
+    static std::atomic<RouteStateReadTestHook> routeStateReadTestHook;
+    static std::atomic<size_t> routeStateReadTestHookCalls;
+    static void RunRouteStateReadTestHook(RegionInfo* region);
 #endif
 
     static size_t GetDispelGhostCount()
@@ -3842,8 +3899,10 @@ private:
             };
             BitField<uint16_t> regionStateBitField;
         };
-        RouteState routeState; // todo: put in RouteInfo
-        RegionLifeId routeStateLifeId = 0;
+        // One atomic snapshot binds state to region life. The exact-start table
+        // reuses the old split-field footprint, preserving UnitInfo size.
+        std::atomic<uint64_t> routeStateSnapshot{ 0 };
+        void* routeStartTable = nullptr;
         RegionLifeId ghostLifeId = 0;
         // twoflags: orthogonal to isTraceRegion.
         // isTraceRegion = implicit-black / ShouldEnqueue skip (cleared by HandleTraceRegions).
@@ -4042,9 +4101,10 @@ private:
         RegionLifeClock::NoteZeroAcrossBoundary(RegionLifeClock::Carrier::ROUTE_INFO,
                                                 metadata.routeInfo.HasRoute(),
                                                 metadata.routeInfo.GetLifeId());
+        const uint64_t routeSnapshot = metadata.routeStateSnapshot.load(std::memory_order_acquire);
         RegionLifeClock::NoteZeroAcrossBoundary(RegionLifeClock::Carrier::ROUTE_STATE,
-                                                metadata.routeState != RouteState::NORMAL,
-                                                metadata.routeStateLifeId);
+                                                RouteStateFromSnapshot(routeSnapshot) != RouteState::NORMAL,
+                                                RouteLifeFromSnapshot(routeSnapshot));
         RegionLifeClock::NoteZeroAcrossBoundary(RegionLifeClock::Carrier::GHOST,
                                                 metadata.inGhostFromRegion != 0,
                                                 metadata.ghostLifeId);
@@ -4131,6 +4191,7 @@ private:
         metadata.liveInfo = nullptr;
         ClearCurrentMarkFace();
         FreeCompactRouteTable();
+        FreeRouteStartTable();
         FreeRetainedMarkWords();
         metadata.retainedLiveInfo = nullptr;
         metadata.retainedLiveInfoEpoch = 0;

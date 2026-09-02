@@ -363,6 +363,10 @@ LiveInfo* PrepareForwardable(GcHeapFixture& fx, RegionInfo* region, MAddress liv
     (void)bitmap->MarkBits(offset, object->GetSize(), region->GetRegionSize());
     region->AddLiveByteCount(object->GetSize());
     region->PrepareForwardableRegion(region->GetMarkView<Generation::Old>());
+    // This synthetic fixture leaves an unmaterialized allocation prefix.
+    // Record the known object start explicitly; production freezes a dense
+    // allocation walk inside PrepareForwardableRegion.
+    region->RecordRouteStart(offset);
     return live;
 }
 
@@ -556,6 +560,7 @@ GC_TEST(ForwardingPublicationProduct, MutatorRuntimeEntryReachesCopyAdmission)
     collector.SetGCPhase(GCPhase::GC_PHASE_FORWARD);
     RelocationReceiptTestAccess::BindCollector(Heap::GetHeap().GetCollectorResources(), &collector);
     region->PrepareForwardableRegion(region->GetMarkView<Generation::Old>());
+    region->RecordRouteStart(region->GetAddressOffset(reinterpret_cast<MAddress>(from)));
     region->SetRouteInfo(reinterpret_cast<MAddress>(expected), static_cast<uint32_t>(objectSize));
     region->SetRouteState(RegionInfo::RouteState::ROUTED);
 
@@ -1075,6 +1080,7 @@ GC_TEST(ForwardingPublicationProduct, KeptInPlaceLivemapStartsSurviveOverwritten
     GC_EXPECT_TRUE(bitmap != nullptr);
     (void)bitmap->MarkBits(region->GetAddressOffset(reinterpret_cast<MAddress>(second)),
                            second->GetSize(), region->GetRegionSize());
+    region->RecordRouteStart(region->GetAddressOffset(reinterpret_cast<MAddress>(second)));
     region->AddLiveByteCount(second->GetSize());
     *reinterpret_cast<uint64_t*>(first) = 0;
     region->SetRouteState(RegionInfo::RouteState::ROUTED);
@@ -2288,6 +2294,9 @@ GC_TEST(ForwardingPublicationProduct, CopyAdmissionSealWaitsRealCopierAndRejects
     collector.SetGCPhase(GCPhase::GC_PHASE_FORWARD);
     RelocationReceiptTestAccess::BindCollector(Heap::GetHeap().GetCollectorResources(), &collector);
     region->PrepareForwardableRegion(region->GetMarkView<Generation::Old>());
+    region->RecordRouteStart(serialOffset);
+    region->RecordRouteStart(firstOffset);
+    region->RecordRouteStart(lateOffset);
     region->SetRouteInfo(reinterpret_cast<MAddress>(serialTo), static_cast<uint32_t>(3 * objectSize));
     region->SetRouteState(RegionInfo::RouteState::ROUTED);
 

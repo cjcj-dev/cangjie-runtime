@@ -49,6 +49,7 @@ GC_TEST(ForwardingNoGeometry, ArmedMissIsNullNotGeometry)
     fx.region0->BindLiveInfo0FromLiveIfNull();
 
     const MAddress from = reinterpret_cast<MAddress>(fx.obj0);
+    fx.region0->RecordRouteStart(offset);
     if (!ForwardingTable::EntriesArmed(from)) {
         // The one-shot map may carry the preceding test's sealed generation.
         // Reopening is explicit; SetRegionType must not do it implicitly.
@@ -113,6 +114,7 @@ GC_TEST(ForwardingNoGeometry, ArmedLookupAndSuccessfulExclusiveCopyPublishProduc
     fx.region0->BindLiveInfo0FromLiveIfNull();
 
     const MAddress from = reinterpret_cast<MAddress>(fx.obj0);
+    fx.region0->RecordRouteStart(offset);
     if (!ForwardingTable::EntriesArmed(from)) {
         // The preceding test sealed this address range. Only an explicit cycle
         // boundary may install this test's provisional carrier.

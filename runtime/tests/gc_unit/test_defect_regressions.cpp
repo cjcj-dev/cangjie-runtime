@@ -166,6 +166,7 @@ GC_TEST(DefectRegress, PregrantBeforeRouteDomainFreeze)
     region->BindLiveInfo0FromLiveIfNull();
     region->SetRouteInfo(0x20000000u, 4096);
     region->SetRouteState(RegionInfo::RouteState::ROUTED);
+    region->RecordRouteStart(offA);
 
     GC_EXPECT_TRUE(region->GetRouteForProbe(objA) != nullptr);
     GC_EXPECT_TRUE(region->GetRouteForProbe(objB) == nullptr);

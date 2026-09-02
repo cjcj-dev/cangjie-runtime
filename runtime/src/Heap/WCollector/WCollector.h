@@ -178,6 +178,26 @@ public:
 
     ~WCollector() override = default;
 
+#if defined(MRT_GC_UNIT_TESTS)
+    // Controlled test wrapper for the copier route consumer. It keeps the
+    // consumer's preconditions visible (heap address, relocation phase and
+    // read retain) while using the same CopierRouteToken mint as production.
+    struct RouteLookupTestResult {
+        RoutePlan plan{};
+        bool phaseAllowed = false;
+        bool heapAddress = false;
+        bool retained = false;
+        bool gatePassed = false;
+        bool receiptChecked = false;
+        bool compactedChecked = false;
+        bool routeRegionCalled = false;
+        bool routeRegion = false;
+        bool retainedPhaseAllowed = false;
+        bool hookReached = false;
+    };
+    MRT_EXPORT RouteLookupTestResult PlanRouteLookupForTest(BaseObject* fromObj);
+#endif
+
     void Init() override { ForwardDataManager::GetForwardDataManager().InitializeForwardData(); }
 
     void MarkNewObject(BaseObject* obj) override;
