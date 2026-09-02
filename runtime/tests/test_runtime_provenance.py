@@ -119,6 +119,9 @@ class RuntimeProvenanceGeneratorTest(unittest.TestCase):
         self.assertRegex(env_a_stamp, r"^src-[0-9a-f]{64}$")
         self.assertIn("CJRT-DECLARED:source-a", env_a)
 
+        generated_build = source / "tests" / "gc_unit" / "build_standalone"
+        generated_build.mkdir(parents=True)
+        (generated_build / "generated.txt").write_text("build output\n", encoding="utf-8")
         env_b = self.generate(repository=non_repo, source=source, env_commit="source-b")
         self.assertEqual(env_a_stamp, self.stamp(env_b))
         self.assertIn("CJRT-DECLARED:source-b", env_b)

@@ -60,6 +60,7 @@ else()
         foreach(source_file IN LISTS source_root_files)
             if (source_file MATCHES "(^|/)(CMakeFiles|CMakebuild[^/]*|__pycache__|output)(/|$)" OR
                 source_file MATCHES "^build/cjthread_build/" OR
+                source_file MATCHES "^(src|tests|include)/(.*/)?build[^/]*/" OR
                 source_file MATCHES "\\.(pyc|pyo)$")
                 continue()
             endif()
