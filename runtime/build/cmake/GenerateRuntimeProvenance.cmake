@@ -52,7 +52,12 @@ else()
         "${SOURCE_DIR}/SetupAr.cmake"
         "${SOURCE_DIR}/build.py"
         "${SOURCE_DIR}/config.cmake")
-    foreach(source_root build include src tests)
+    foreach(source_root
+            build
+            include
+            src
+            tests
+            third_party/third_party_bounds_checking_function)
         file(GLOB_RECURSE source_root_files
             LIST_DIRECTORIES false
             RELATIVE "${SOURCE_DIR}"
@@ -61,6 +66,8 @@ else()
             if (source_file MATCHES "(^|/)(CMakeFiles|CMakebuild[^/]*|__pycache__|output)(/|$)" OR
                 source_file MATCHES "^build/cjthread_build/" OR
                 source_file MATCHES "^(src|tests|include)/(.*/)?build[^/]*/" OR
+                source_file MATCHES "^third_party/third_party_bounds_checking_function/(.*/)?(\\.git|CMakeFiles|CMakebuild[^/]*|__pycache__|build[^/]*|cmake-build[^/]*|output)/" OR
+                source_file MATCHES "^third_party/third_party_bounds_checking_function/(CMakeCache\\.txt|Makefile|cmake_install\\.cmake|install_manifest\\.txt)$" OR
                 source_file MATCHES "\\.(pyc|pyo)$")
                 continue()
             endif()

@@ -113,6 +113,13 @@ class RuntimeProvenanceGeneratorTest(unittest.TestCase):
         (source / "src").mkdir(parents=True)
         source_file = source / "src" / "source.cpp"
         source_file.write_text("source-a\n", encoding="utf-8")
+        boundscheck = source / "third_party" / "third_party_bounds_checking_function"
+        boundscheck_header = boundscheck / "include" / "input.h"
+        boundscheck_header.parent.mkdir(parents=True)
+        boundscheck_header.write_text("boundscheck-a\n", encoding="utf-8")
+        (boundscheck / "src").mkdir()
+        (boundscheck / "src" / "input.c").write_text("product source\n", encoding="utf-8")
+        (boundscheck / "CMakeLists.txt").write_text("product cmake\n", encoding="utf-8")
 
         env_a = self.generate(repository=non_repo, source=source, env_commit="source-a")
         env_a_stamp = self.stamp(env_a)
@@ -122,9 +129,24 @@ class RuntimeProvenanceGeneratorTest(unittest.TestCase):
         generated_build = source / "tests" / "gc_unit" / "build_standalone"
         generated_build.mkdir(parents=True)
         (generated_build / "generated.txt").write_text("build output\n", encoding="utf-8")
+        boundscheck_metadata = boundscheck / ".git"
+        boundscheck_metadata.mkdir()
+        (boundscheck_metadata / "config").write_text("vcs metadata\n", encoding="utf-8")
+        boundscheck_build = boundscheck / "build-release" / "CMakeFiles"
+        boundscheck_build.mkdir(parents=True)
+        (boundscheck_build / "generated.c").write_text("build output\n", encoding="utf-8")
+        (boundscheck / "Makefile").write_text("build output\n", encoding="utf-8")
         env_b = self.generate(repository=non_repo, source=source, env_commit="source-b")
         self.assertEqual(env_a_stamp, self.stamp(env_b))
         self.assertIn("CJRT-DECLARED:source-b", env_b)
+
+        boundscheck_header.write_text("boundscheck-b\n", encoding="utf-8")
+        changed_boundscheck = self.generate(repository=non_repo, source=source, env_commit="source-a")
+        self.assertNotEqual(env_a_stamp, self.stamp(changed_boundscheck))
+
+        boundscheck_header.write_text("boundscheck-a\n", encoding="utf-8")
+        restored = self.generate(repository=non_repo, source=source, env_commit="source-a")
+        self.assertEqual(env_a_stamp, self.stamp(restored))
 
         source_file.write_text("source-b\n", encoding="utf-8")
         changed = self.generate(repository=non_repo, source=source, env_commit="source-a")
