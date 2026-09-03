@@ -1995,6 +1995,10 @@ static CompactedMissClass ClassifyCompactedMiss(RegionInfo* region, BaseObject* 
 BaseObject* WCollector::WaitRoutedTipReady(BaseObject* from, BaseObject* to, RegionInfo* forwarding) const
 {
     RegionSpace& space = reinterpret_cast<RegionSpace&>(theAllocator);
+    ForwardingTable::LookupResult lastLookup{ 0, ForwardingTable::ToAnswer::Unarmed,
+                                              ForwardingTable::ToUnavailableCause::None, false, false,
+                                              ForwardingTable::ToAnswer::Unarmed,
+                                              ForwardingTable::ToAnswer::Unarmed, false };
     // Bound mid-copy waits only while route is still in flight. Permanent publish-without-tip
     // is an invariant break (CHECK below), not a longer spin.
     auto permanentHole = [&](const char* reason, int /*spins*/, BaseObject* /*geometricTo*/) -> BaseObject* {
@@ -2003,38 +2007,26 @@ BaseObject* WCollector::WaitRoutedTipReady(BaseObject* from, BaseObject* to, Reg
         if (MutatorRelocate::StatsOn()) {
             MutatorRelocate::NoteWaitFatal();
         }
-        CHECK_DETAIL(false, "WCollector::WaitRoutedTipReady.%s", reason);
+        CHECK_DETAIL(false,
+                     "WCollector::WaitRoutedTipReady.%s answer=%u cause=%u route=%u fwdDone=%u refs=%d copy=%d",
+                     reason, static_cast<unsigned>(lastLookup.answer),
+                     static_cast<unsigned>(lastLookup.unavailableCause),
+                     static_cast<unsigned>(forwarding->GetRouteState()),
+                     static_cast<unsigned>(forwarding->IsForwardingDone()), forwarding->ForwardingRefCount(),
+                     forwarding->CopyInflight());
         return nullptr;
     };
 
     bool publicationClosed = false;
     auto lookupTo = [&]() -> BaseObject* {
-        if constexpr (ForwardingTable::kEntriesSoleWhenArmed) {
-            const MAddress fromAddr = reinterpret_cast<MAddress>(from);
-            const bool entriesArmed = ForwardingTable::EntriesArmed(fromAddr);
-            if (entriesArmed) {
-                const MAddress stored = ForwardingTable::FindTo(fromAddr);
-                if (stored != 0) {
-                    return reinterpret_cast<BaseObject*>(stored);
-                }
-            }
-            BaseObject* geometric = space.GetRegionManager().FindPublishedRoute(from, forwarding).dest;
-            if (from->IsForwarded() && geometric != nullptr &&
-                ZForwarding::DestUsable(reinterpret_cast<MAddress>(geometric))) {
-                ForwardingTable::Publication publication =
-                    ForwardingTable::RetainOpenPublicationAfterCopy(forwarding, fromAddr);
-                if (!publication) {
-                    publicationClosed = true;
-                    return nullptr;
-                }
-                const MAddress receipt = ForwardingTable::InsertMapping(
-                    publication, fromAddr, reinterpret_cast<MAddress>(geometric));
-                (void)space.GetRegionManager().GetRelocationRequestQueue().Publish(fromAddr, receipt);
-                return reinterpret_cast<BaseObject*>(receipt);
-            }
-            return entriesArmed ? nullptr : geometric;
+        const MAddress fromAddr = reinterpret_cast<MAddress>(from);
+        lastLookup = ForwardingTable::LookupTo(fromAddr);
+        publicationClosed = lastLookup.publicationClosed ||
+            lastLookup.answer == ForwardingTable::ToAnswer::Unavailable;
+        if (lastLookup.to != 0 && lastLookup.answer == ForwardingTable::ToAnswer::ArmedHit) {
+            return reinterpret_cast<BaseObject*>(lastLookup.to);
         }
-        return space.GetRegionManager().FindPublishedRoute(from, forwarding).dest;
+        return nullptr;
     };
     BaseObject* again = lookupTo();
     if (again != nullptr && Heap::IsHeapAddress(again) && again->IsValidObject()) {
@@ -2087,10 +2079,7 @@ BaseObject* WCollector::WaitRoutedTipReady(BaseObject* from, BaseObject* to, Reg
         // bytes inside a 48-byte Node -- and 223 of that array's 512 elements name no object start
         // at all.  Admitting the interior here reports "already relocated" about a word that names
         // nothing, so only the object-start class may pass.
-        if (forwarding != nullptr && forwarding->IsCompacted() &&
-            ClassifyCompactedMiss(forwarding, from) == CompactedMissClass::kAlreadyToStart) {
-            return from;
-        }
+        (void)ClassifyCompactedMiss(forwarding, from);
         return permanentHole("published-without-receipt", 0, again);
     }
     // Wait for the region-level publish (FORWARDED / COMPACTED / kept), not
@@ -2309,7 +2298,17 @@ BaseObject* WCollector::ResolveStoreValue(BaseObject* ref) const
         // (zRelocate.cpp:382-389).
         if (currentRegion != nullptr && currentRegion->IsCompacted() &&
             ClassifyCompactedMiss(currentRegion, current) == CompactedMissClass::kAlreadyToStart) {
-            return current;
+            // An address-shaped compact destination is not, by itself, a
+            // load-good value.  In particular the from header may still be
+            // FORWARDED (or a zero header for an interior-shaped probe), so
+            // kAlreadyToStart is only a geometric classification.  The
+            // resolve postcondition is the same as every other receipt hop:
+            // only a Usable object may leave this function.  Keep the
+            // non-Usable case on the receipt/relocate path below, which either
+            // finds the explicit identity receipt or fails closed.
+            if (Collector::JudgeHandOutTarget(current) == HandVerdict::Usable) {
+                return current;
+            }
         }
         FindToVersionResult found = FindToVersion(current);
         // A forwarding entry qualifies one hop, not necessarily the final
