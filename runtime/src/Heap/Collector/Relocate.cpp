@@ -2160,7 +2160,18 @@ BaseObject* WCollector::WaitRoutedTipReady(BaseObject* from, BaseObject* to, Reg
             (void)requests.Publish(reinterpret_cast<MAddress>(from), reinterpret_cast<MAddress>(raced));
         }
 
-        const MAddress completedReceipt = requests.WaitUntil(queued.request, regionIsPublished);
+        bool waitTimedOut = false;
+        const MAddress completedReceipt = requests.WaitUntil(
+            queued.request, regionIsPublished, MutatorRelocate::kFwdDoneWaitSpins, &waitTimedOut);
+        if (waitTimedOut) {
+            CHECK_DETAIL(false,
+                         "WCollector::WaitRoutedTipReady.fwdDone-timeout from=%p to=%p route=%u "
+                         "fwdDone=%u refs=%d copy=%d",
+                         from, lookupTo(), static_cast<unsigned>(forwarding->GetRouteState()),
+                         static_cast<unsigned>(forwarding->IsForwardingDone()),
+                         forwarding->ForwardingRefCount(), forwarding->CopyInflight());
+            return nullptr;
+        }
         if (completedReceipt != 0) {
             BaseObject* completed = reinterpret_cast<BaseObject*>(completedReceipt);
             if (Heap::IsHeapAddress(completed) && completed->IsValidObject()) {

@@ -74,8 +74,12 @@ MAddress RelocationRequestQueue::Wait(const Handle& request)
     return receipt;
 }
 
-MAddress RelocationRequestQueue::WaitUntil(const Handle& request, const std::function<bool()>& pageDone)
+MAddress RelocationRequestQueue::WaitUntil(const Handle& request, const std::function<bool()>& pageDone,
+                                           size_t maxSpins, bool* timedOut)
 {
+    if (timedOut != nullptr) {
+        *timedOut = false;
+    }
     if (request == nullptr || pageDone()) {
         return 0;
     }
@@ -89,6 +93,7 @@ MAddress RelocationRequestQueue::WaitUntil(const Handle& request, const std::fun
     const bool stateChanged = mutator != nullptr && threadType != ThreadType::FP_THREAD &&
                               threadType != ThreadType::GC_THREAD && mutator->EnterSaferegion(true);
     MAddress receipt = 0;
+    size_t spins = 0;
     std::unique_lock<std::mutex> lock(request->completionMutex);
     while (!pageDone()) {
         const State state = request->requestState.load(std::memory_order_acquire);
@@ -102,7 +107,14 @@ MAddress RelocationRequestQueue::WaitUntil(const Handle& request, const std::fun
         if (state == State::FAILED) {
             break;
         }
+        if (maxSpins != 0 && spins >= maxSpins) {
+            if (timedOut != nullptr) {
+                *timedOut = true;
+            }
+            break;
+        }
         (void)request->completion.wait_for(lock, std::chrono::milliseconds(1));
+        ++spins;
     }
     lock.unlock();
     if (stateChanged) {

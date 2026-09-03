@@ -1767,6 +1767,59 @@ GC_TEST(ForwardingPublicationProduct, LookupCausePublishedWithoutReceipt)
     RelocationReceiptTestAccess::BindCollector(Heap::GetHeap().GetCollectorResources(), nullptr);
 #endif
 }
+
+GC_TEST(ForwardingPublicationProduct, CompactedWithoutFwdDoneWaitsInProductSO)
+{
+#if defined(__linux__)
+    GcHeapFixture& fx = ProductFixture();
+    RelocationReceiptTestAccess::ReleaseListOwnership(RegionInfo::GetRegionInfo(4));
+    RegionInfo* region = RegionInfo::InitRegion(4, 1, RegionInfo::UnitRole::SMALL_SIZED_UNITS);
+    GC_EXPECT_TRUE(region != nullptr);
+    region->SetRegionType(RegionInfo::RegionType::THREAD_LOCAL_REGION);
+    BaseObject* from = fx.PlaceObject(region->GetRegionStart());
+    region->SetRegionAllocPtr(reinterpret_cast<MAddress>(from) + from->GetSize());
+    WCollector collector(Heap::GetHeap().GetAllocator(), Heap::GetHeap().GetCollectorResources());
+    collector.SetGCPhase(GCPhase::GC_PHASE_FORWARD);
+    RelocationReceiptTestAccess::BindCollector(Heap::GetHeap().GetCollectorResources(), &collector);
+    LiveInfo* live = PrepareForwardable(fx, region, reinterpret_cast<MAddress>(from));
+    region->SetRouteState(RegionInfo::RouteState::COMPACTED);
+    GC_EXPECT_FALSE(region->IsForwardingDone());
+    RegionSpace& productSpace = reinterpret_cast<RegionSpace&>(Heap::GetHeap().GetAllocator());
+    RelocationRequestQueue& queue = productSpace.GetRegionManager().GetRelocationRequestQueue();
+    queue.BeginWorkers(1);
+
+    const pid_t child = fork();
+    GC_EXPECT_TRUE(child >= 0);
+    if (child == 0) {
+        (void)signal(SIGABRT, SIG_DFL);
+        (void)RelocationReceiptTestAccess::WaitRoutedTipReady(collector, from, nullptr, region);
+        _exit(0);
+    }
+    int status = 0;
+    bool aborted = false;
+    for (int i = 0; i < 50; ++i) {
+        const pid_t waited = waitpid(child, &status, WNOHANG);
+        if (waited == child) {
+            aborted = WIFSIGNALED(status) && WTERMSIG(status) == SIGABRT;
+            break;
+        }
+        std::this_thread::sleep_for(std::chrono::milliseconds(10));
+    }
+    if (!aborted) {
+        (void)kill(child, SIGKILL);
+        (void)waitpid(child, &status, 0);
+    }
+    GC_EXPECT_FALSE(aborted);
+
+    if (region->IsGhostFromRegion()) {
+        region->DispelGhostFromRegion();
+    }
+    ForwardingTable::ReclaimRetired("gc-unit-compacted-wait-so");
+    region->metadata.liveInfo = nullptr;
+    fx.FreePlanted(live);
+    RelocationReceiptTestAccess::BindCollector(Heap::GetHeap().GetCollectorResources(), nullptr);
+#endif
+}
 #endif
 
 GC_TEST(ForwardingPublicationProduct, ForwardUpdateRawRefWritesBackMappedTo)

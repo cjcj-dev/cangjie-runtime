@@ -63,6 +63,10 @@ inline bool PageReceiptPublished(unsigned route, bool fwdDone)
     return fwdDone || route == kForwarded;
 }
 
+// Bound for WaitUntil 1ms spins on COMPACTED∧!fwdDone (zForwarding.cpp:86-108).
+// Permanent !fwdDone must fail-closed, not hang.
+enum : size_t { kFwdDoneWaitSpins = 10000 };
+
 inline UnpublishedAnswer AnswerUnpublished(bool tableHit, bool regionPublished, bool retainRefused)
 {
     if (tableHit) {

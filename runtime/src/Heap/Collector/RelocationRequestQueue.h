@@ -77,7 +77,10 @@ public:
     // Return a published object receipt when COMPLETED wins the wait. A zero
     // result means page completion or a proven no-publisher FAILED terminal;
     // the caller must then resolve from the forwarding table after the wait.
-    MAddress WaitUntil(const Handle& request, const std::function<bool()>& pageDone);
+    // maxSpins bounds the 1ms wait_for loop (0 = unlimited). timedOut is set
+    // when the bound is hit without pageDone / COMPLETED / FAILED.
+    MAddress WaitUntil(const Handle& request, const std::function<bool()>& pageDone,
+                       size_t maxSpins = 0, bool* timedOut = nullptr);
 
     // Only the first publication for this from-address completes the Request.
     // The notification is per Request, not a queue-wide wakeup.

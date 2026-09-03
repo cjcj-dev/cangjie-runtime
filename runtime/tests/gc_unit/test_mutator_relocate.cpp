@@ -44,6 +44,12 @@ GC_TEST(MutatorRelocate, CompactedWithoutFwdDoneIsNotPublished)
                    MutatorRelocate::UnpublishedAnswer::InvariantFailure);
 }
 
+GC_TEST(MutatorRelocate, FwdDoneWaitSpinsIsFinite)
+{
+    GC_EXPECT_TRUE(MutatorRelocate::kFwdDoneWaitSpins > 0);
+    GC_EXPECT_TRUE(MutatorRelocate::kFwdDoneWaitSpins <= 100000);
+}
+
 GC_TEST(MutatorRelocate, UnpublishedRegionWaitsForPublish)
 {
     // oraclecut §4: !regionPublished ⇒ wait for the region-level publish

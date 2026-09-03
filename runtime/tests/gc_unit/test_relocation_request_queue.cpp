@@ -195,6 +195,29 @@ GC_TEST(RelocationRequestQueue, PageCompletionTerminatesWaitWithoutObjectReceipt
     GC_EXPECT_TRUE(queue.SynchronizePoll().workersDone);
 }
 
+GC_TEST(RelocationRequestQueue, NeverFwdDoneHitsSpinBound)
+{
+    RelocationRequestQueue queue;
+    queue.BeginWorkers(1);
+    int owner = 0;
+    constexpr MAddress kFrom = 0xD010;
+    const auto added = queue.Add(&owner, kFrom);
+    GC_EXPECT_TRUE(added.accepted);
+
+    bool timedOut = false;
+    const auto t0 = std::chrono::steady_clock::now();
+    const MAddress result = queue.WaitUntil(
+        added.request, []() { return false; }, 8, &timedOut);
+    const auto ms = std::chrono::duration_cast<std::chrono::milliseconds>(
+                        std::chrono::steady_clock::now() - t0)
+                        .count();
+    GC_EXPECT_TRUE(timedOut);
+    GC_EXPECT_EQ(result, static_cast<MAddress>(0));
+    GC_EXPECT_TRUE(ms < 5000);
+    GC_EXPECT_TRUE(queue.Fail(kFrom));
+    GC_EXPECT_TRUE(queue.SynchronizePoll().workersDone);
+}
+
 GC_TEST(RelocationRequestQueue, CompletedReceiptReturnsResultBeforePageCompletion)
 {
     RelocationRequestQueue queue;
