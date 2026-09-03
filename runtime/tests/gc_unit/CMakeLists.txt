@@ -75,6 +75,7 @@ set(GC_UNIT_SOURCES
     test_verify_phase.cpp
     test_mem_map.cpp
     test_colour_census.cpp
+    test_payload_clamp.cpp
 )
 
 add_executable(cj_gc_unit ${GC_UNIT_SOURCES})

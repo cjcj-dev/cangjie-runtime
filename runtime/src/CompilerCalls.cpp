@@ -42,6 +42,7 @@
 #include "LoaderManager.h"
 #include "TypeInfoManager.h"
 #include "ObjectModel/Field.inline.h"
+#include "ObjectModel/MArray.inline.h"
 #include "ObjectModel/RefField.inline.h"
 #include <atomic>
 #include <cstdio>
@@ -2412,16 +2413,47 @@ extern "C" void CJ_MCC_AssignGeneric(ObjectPtr dst, ObjectPtr src, TypeInfo* typ
     }
 }
 
+static size_t GenericPayloadLimit(ObjectPtr obj)
+{
+    TypeInfo* typeInfo = obj->GetTypeInfo();
+    if (typeInfo->IsArrayType()) {
+        const MArray* array = reinterpret_cast<const MArray*>(obj);
+        return array->GetMArraySize() - TYPEINFO_PTR_SIZE;
+    }
+    return typeInfo->GetInstanceSize();
+}
+
+// Fail-closed size check: CodeGen is the real bound (ZGC arraycopy_in_heap is
+// similarly type-system guaranteed). Size larger than the instance payload
+// aborts with both values; no silent truncate.
+static void CheckGenericPayloadSize(ObjectPtr obj, size_t size)
+{
+    const size_t limit = GenericPayloadLimit(obj);
+    if (UNLIKELY(size > limit)) {
+        const char* typeName = obj->GetTypeInfo()->GetName();
+        CHECK_DETAIL(false,
+                     "generic payload size %zu exceeds object payload %zu type=%s",
+                     size, limit, typeName != nullptr ? typeName : "(null)");
+    }
+}
+
 extern "C" void CJ_MCC_WriteGenericPayload(ObjectPtr dst, MAddress srcField, size_t srcSize)
 {
     TypeInfo* typeInfo = dst->GetTypeInfo();
     if (srcSize == 0) {
         return;
     }
+    const size_t limit = GenericPayloadLimit(dst);
+    if (UNLIKELY(srcSize > limit)) {
+        const char* typeName = typeInfo->GetName();
+        CHECK_DETAIL(false,
+                     "generic payload size %zu exceeds object payload %zu type=%s",
+                     srcSize, limit, typeName != nullptr ? typeName : "(null)");
+    }
 
     if (!typeInfo->HasRefField()) {
         CHECK_DETAIL(memcpy_s(reinterpret_cast<void*>(reinterpret_cast<uintptr_t>(dst) + TYPEINFO_PTR_SIZE),
-                              GENERIC_PAYLOAD_SIZE,
+                              limit,
                               reinterpret_cast<void*>(srcField),
                               srcSize) == EOK,
                      "MCC_WriteGenericPayload memcpy_s failed");
@@ -2441,6 +2473,7 @@ extern "C" void CJ_MCC_ReadGenericPayload(void* dstNative, ObjectPtr obj, size_t
     if (obj == nullptr || size == 0) {
         return;
     }
+    CheckGenericPayloadSize(obj, size);
     MAddress srcPayload = reinterpret_cast<MAddress>(obj) + TYPEINFO_PTR_SIZE;
     TypeInfo* typeInfo = obj->GetTypeInfo();
     if (!typeInfo->HasRefField()) {
