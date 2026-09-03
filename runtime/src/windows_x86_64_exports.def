@@ -305,6 +305,7 @@ EXPORTS
     CJ_MCC_WaitQueueInit @299
     CJ_MCC_WriteGeneric @300
     CJ_MCC_WriteGenericPayload @301
+    CJ_MCC_ReadGenericPayload
     CJ_MCC_WriteRefField @302
     CJ_MCC_WriteStaticRef @303
     CJ_MCC_WriteStaticStruct @304

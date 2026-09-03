@@ -2431,6 +2431,26 @@ extern "C" void CJ_MCC_WriteGenericPayload(ObjectPtr dst, MAddress srcField, siz
     }
 }
 
+extern "C" void CJ_MCC_ReadGenericPayload(void* dstNative, ObjectPtr obj, size_t size)
+{
+#if defined(MRT_DEBUG) && (MRT_DEBUG == 1)
+    if (Heap::IsHeapAddress(dstNative)) {
+        LOG(RTLOG_FATAL, "dstNative is in heap");
+    }
+#endif
+    if (obj == nullptr || size == 0) {
+        return;
+    }
+    MAddress srcPayload = reinterpret_cast<MAddress>(obj) + TYPEINFO_PTR_SIZE;
+    TypeInfo* typeInfo = obj->GetTypeInfo();
+    if (!typeInfo->HasRefField()) {
+        CHECK_DETAIL(memcpy_s(dstNative, size, reinterpret_cast<void*>(srcPayload), size) == EOK,
+                     "CJ_MCC_ReadGenericPayload memcpy_s failed");
+    } else {
+        Heap::GetBarrier().ReadStruct(reinterpret_cast<MAddress>(dstNative), obj, srcPayload, size);
+    }
+}
+
 extern "C" void CJ_MCC_ReadGeneric(const ObjectPtr dstPtr, ObjectPtr obj, void* fieldPtr, size_t size)
 {
     if (size == 0) {

@@ -48,6 +48,7 @@ extern "C" void CJ_MCC_ReadStructField(MapleRuntime::MAddress dstPtr, MapleRunti
 extern "C" void CJ_MCC_ReadStaticStruct(MapleRuntime::MAddress dstPtr, size_t dstSize,
                                          MapleRuntime::MAddress srcPtr, size_t srcSize,
                                          MapleRuntime::GCTib gctib);
+extern "C" void CJ_MCC_ReadGenericPayload(void* dstNative, MapleRuntime::ObjectPtr obj, size_t size);
 extern "C" void CJ_MCC_ArrayCopyRef(MapleRuntime::ObjectPtr dstObj, MapleRuntime::MAddress dstField,
                                      size_t dstSize, MapleRuntime::ObjectPtr srcObj,
                                      MapleRuntime::MAddress srcField, size_t srcSize);
@@ -493,6 +494,24 @@ GC_TEST(M0Exit, ReadStructRuntimeEntryHealthyTargetStillReturnsNormally)
     CJ_MCC_ReadStructField(reinterpret_cast<MAddress>(&copied), fx.heap.obj1,
                            reinterpret_cast<MAddress>(fx.field), sizeof(*fx.field), GCTib {});
 
+    GC_EXPECT_EQ(static_cast<uintptr_t>(raw(copied.LoadPlain())), reinterpret_cast<uintptr_t>(fx.heap.obj0));
+}
+
+GC_TEST(M0Exit, ReadGenericPayloadCopiesPlainAndReferencePayloads)
+{
+    ReadEntryFixture fx;
+    const MAddress payload = reinterpret_cast<MAddress>(fx.heap.obj1) + TYPEINFO_PTR_SIZE;
+
+    // No-reference payloads take the bounded memcpy arm.
+    fx.heap.typeInfo->SetFlag(0);
+    uint64_t plain = 0;
+    CJ_MCC_ReadGenericPayload(&plain, fx.heap.obj1, sizeof(plain));
+    GC_EXPECT_TRUE(std::memcmp(&plain, reinterpret_cast<void*>(payload), sizeof(plain)) == 0);
+
+    // Reference-bearing payloads must pass through ReadStruct and leave a plain native slot.
+    fx.heap.typeInfo->SetFlagHasRefField();
+    RootSlot copied;
+    CJ_MCC_ReadGenericPayload(&copied, fx.heap.obj1, sizeof(copied));
     GC_EXPECT_EQ(static_cast<uintptr_t>(raw(copied.LoadPlain())), reinterpret_cast<uintptr_t>(fx.heap.obj0));
 }
 
