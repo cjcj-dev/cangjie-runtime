@@ -2040,9 +2040,12 @@ BaseObject* WCollector::WaitRoutedTipReady(BaseObject* from, BaseObject* to, Reg
     }
     const bool tableHit = again != nullptr;
     const RegionInfo::RouteState rs = forwarding->GetRouteState();
-    const bool regionPublished =
-        rs == RegionInfo::RouteState::FORWARDED || rs == RegionInfo::RouteState::COMPACTED ||
-        forwarding->IsForwardingDone();
+    // COMPACTED without MarkForwardingDone is still the in-place copy window
+    // (CompactRegion inserts receipts, then RouteRegion labels COMPACTED).
+    // Align with the wait loop below, which already keys on IsForwardingDone
+    // (zRelocate.cpp:382-415 find-miss ⇒ wait until forwarding completes).
+    const bool regionPublished = MutatorRelocate::PageReceiptPublished(
+        static_cast<unsigned>(rs), forwarding->IsForwardingDone());
 
     // LEAD 12:2x: retain refused = worker holds the page (retain_page n<0 / n==0).
     // An unpublished page waits for its copier; a published miss is an

@@ -30,6 +30,20 @@ GC_TEST(MutatorRelocate, PublishedMissIsInvariantFailure)
                    MutatorRelocate::UnpublishedAnswer::InvariantFailure);
 }
 
+GC_TEST(MutatorRelocate, CompactedWithoutFwdDoneIsNotPublished)
+{
+    // Official NW256: answer=ArmedMiss cause=0 route=4(COMPACTED) fwdDone=0.
+    // That combo is the in-place copier window, not receipt-closed publication.
+    GC_EXPECT_FALSE(MutatorRelocate::PageReceiptPublished(4, false));
+    GC_EXPECT_TRUE(MutatorRelocate::AnswerUnpublished(
+                       false, MutatorRelocate::PageReceiptPublished(4, false), false) ==
+                   MutatorRelocate::UnpublishedAnswer::Wait);
+    GC_EXPECT_TRUE(MutatorRelocate::PageReceiptPublished(4, true));
+    GC_EXPECT_TRUE(MutatorRelocate::AnswerUnpublished(
+                       false, MutatorRelocate::PageReceiptPublished(4, true), false) ==
+                   MutatorRelocate::UnpublishedAnswer::InvariantFailure);
+}
+
 GC_TEST(MutatorRelocate, UnpublishedRegionWaitsForPublish)
 {
     // oraclecut §4: !regionPublished ⇒ wait for the region-level publish

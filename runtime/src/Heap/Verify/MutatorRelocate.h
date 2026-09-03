@@ -54,6 +54,15 @@ enum class UnpublishedAnswer : uint32_t {
     InvariantFailure = 2,
 };
 
+// Receipt publication for WaitRoutedTipReady. COMPACTED (RouteState=4) is the
+// in-place copier terminal *label*; it is not MarkForwardingDone. ZGC waits
+// until forwarding is done, then requires a receipt (zRelocate.cpp:382-415).
+inline bool PageReceiptPublished(unsigned route, bool fwdDone)
+{
+    constexpr unsigned kForwarded = 5; // RegionInfo::RouteState::FORWARDED
+    return fwdDone || route == kForwarded;
+}
+
 inline UnpublishedAnswer AnswerUnpublished(bool tableHit, bool regionPublished, bool retainRefused)
 {
     if (tableHit) {

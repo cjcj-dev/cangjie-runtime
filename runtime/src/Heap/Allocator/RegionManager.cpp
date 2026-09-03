@@ -2463,12 +2463,15 @@ bool VerifyForwardingReceiptsClosed(RegionInfo* region, const char* site)
         return true;
     }
     const MAddress start = region->GetRegionStart();
-    const MAddress allocPtr = region->GetRegionAllocPtr();
+    const MAddress regionEnd = region->GetRegionEnd();
     size_t survivors = 0;
     size_t receipts = 0;
     for (const auto& entry : *starts) {
         const size_t offset = entry.first;
-        if (offset >= static_cast<size_t>(allocPtr - start) || !region->IsOwnerSurvivedObject(offset)) {
+        // After CompactRegion the bump pointer is the packed top, not the
+        // original from-range. Exact starts are from-offsets; bound by the
+        // region, not the post-compact allocPtr.
+        if (offset >= static_cast<size_t>(regionEnd - start) || !region->IsOwnerSurvivedObject(offset)) {
             continue;
         }
         ++survivors;
@@ -3433,6 +3436,8 @@ void RegionManager::CompactRegion(RegionInfo* region)
 
     region->ResetCensusBoundary();
     VerifyForwardingReceiptsClosed(region, "CompactRegion.whole");
+    WaitCopiedObjectsUnlocked(region);
+    region->MarkForwardingDone();
 
     // zForwarding.cpp:171-181 / zRelocate.cpp:1001-1047: the forwarding table
     // outlives page reuse. Do not put this page on the mutator TLAB list while
@@ -3571,6 +3576,8 @@ void RegionManager::CompactRegion(RegionInfo* region, RegionInfo* toRegion1)
 
     region->ResetCensusBoundary();
     VerifyForwardingReceiptsClosed(region, "CompactRegion.partial");
+    WaitCopiedObjectsUnlocked(region);
+    region->MarkForwardingDone();
 
     RehomeCompactedInPlaceRegion(region);
 }

@@ -1476,6 +1476,7 @@ GC_TEST(ForwardingPublicationProduct, CompactRegionDeadFromHasNoForwardingAndIsN
     RegionManager manager;
     RelocationReceiptTestAccess::ParkFrom(manager, region);
     manager.CompactRegion(region);
+    GC_EXPECT_TRUE(region->IsForwardingDone());
 
     const MAddress deadAddr = reinterpret_cast<MAddress>(deadObject);
     const MAddress liveAddr = reinterpret_cast<MAddress>(liveObject);
@@ -2207,6 +2208,7 @@ GC_TEST(ForwardingPublicationProduct, CompactRequestReturnsReceiptBeforeFromClea
     GC_EXPECT_TRUE(request.accepted);
 
     manager.CompactRegion(region);
+    GC_EXPECT_TRUE(region->IsForwardingDone());
 
     const MAddress resolved = queue.Wait(request.request);
     GC_EXPECT_EQ(resolved, start);
