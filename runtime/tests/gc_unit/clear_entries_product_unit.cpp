@@ -1610,6 +1610,155 @@ GC_TEST(ForwardingPublicationProduct, ExemptRejectsForwardedWithoutAnyReceipt)
     fx.FreePlanted(live);
     RelocationReceiptTestAccess::BindCollector(Heap::GetHeap().GetCollectorResources(), nullptr);
 }
+
+// SD forwarding consumer gate: a compacted destination can be classified as
+// kAlreadyToStart by reverse geometry, but that classification is not a
+// load-good receipt. Make the destination header FORWARDED and drive the
+// product ResolveStoreValue entry; the only legal result is fail-closed.
+GC_TEST(ForwardingPublicationProduct, ResolveStoreValueAlreadyToStartRejectsNonUsable)
+{
+#if defined(__linux__)
+    GcHeapFixture& fx = ProductFixture();
+    WCollector collector(Heap::GetHeap().GetAllocator(), Heap::GetHeap().GetCollectorResources());
+    PartialCompactState state = PreparePartialCompact(fx, collector, true);
+
+    RegionManager manager;
+    RelocationReceiptTestAccess::ParkFrom(manager, state.region);
+    manager.CompactRegion(state.region, state.destination);
+    state.region->SetRouteState(RegionInfo::RouteState::COMPACTED);
+
+    BaseObject* compactedStart = from_region_addr(state.region->GetRegionStart());
+    compactedStart->SetStateCode(ObjectState::FORWARDED);
+    ExpectRootAbortAt("[fail-closed]", [&]() {
+        (void)RelocationReceiptTestAccess::ResolveStoreValue(collector, compactedStart);
+    });
+
+    compactedStart->SetStateCode(ObjectState::NORMAL);
+    RelocationReceiptTestAccess::BindCollector(Heap::GetHeap().GetCollectorResources(), nullptr);
+    CleanupPartialCompact(fx, state);
+#endif
+}
+
+GC_TEST(ForwardingPublicationProduct, ResolveStoreValueAlreadyToStartWithUsableTarget)
+{
+#if defined(__linux__)
+    GcHeapFixture& fx = ProductFixture();
+    WCollector collector(Heap::GetHeap().GetAllocator(), Heap::GetHeap().GetCollectorResources());
+    PartialCompactState state = PreparePartialCompact(fx, collector, true);
+
+    RegionManager manager;
+    RelocationReceiptTestAccess::ParkFrom(manager, state.region);
+    manager.CompactRegion(state.region, state.destination);
+    state.region->SetRouteState(RegionInfo::RouteState::COMPACTED);
+
+    BaseObject* compactedStart = from_region_addr(state.region->GetRegionStart());
+    compactedStart->SetStateCode(ObjectState::NORMAL);
+    BaseObject* resolved = RelocationReceiptTestAccess::ResolveStoreValue(collector, compactedStart);
+    GC_EXPECT_TRUE(resolved != nullptr);
+    GC_EXPECT_TRUE(Collector::JudgeHandOutTarget(resolved) == HandVerdict::Usable);
+
+    RelocationReceiptTestAccess::BindCollector(Heap::GetHeap().GetCollectorResources(), nullptr);
+    CleanupPartialCompact(fx, state);
+#endif
+}
+
+GC_TEST(ForwardingPublicationProduct, MarkForwardingDoneClosedReceipts)
+{
+    GcHeapFixture& fx = ProductFixture();
+    RelocationReceiptTestAccess::ReleaseListOwnership(RegionInfo::GetRegionInfo(4));
+    RegionInfo* region = RegionInfo::InitRegion(4, 1, RegionInfo::UnitRole::SMALL_SIZED_UNITS);
+    GC_EXPECT_TRUE(region != nullptr);
+    region->SetRegionType(RegionInfo::RegionType::THREAD_LOCAL_REGION);
+    BaseObject* from = fx.PlaceObject(region->GetRegionStart());
+    region->SetRegionAllocPtr(reinterpret_cast<MAddress>(from) + from->GetSize());
+    WCollector collector(Heap::GetHeap().GetAllocator(), Heap::GetHeap().GetCollectorResources());
+    RelocationReceiptTestAccess::BindCollector(Heap::GetHeap().GetCollectorResources(), &collector);
+    LiveInfo* live = PrepareForwardable(fx, region, reinterpret_cast<MAddress>(from));
+
+    RegionManager manager;
+    manager.ExemptFromRegion(region);
+    GC_EXPECT_TRUE(region->IsForwardingDone());
+    const ForwardingTable::LookupResult lookup = ForwardingTable::LookupTo(reinterpret_cast<MAddress>(from));
+    GC_EXPECT_TRUE(lookup.to == reinterpret_cast<MAddress>(from));
+    GC_EXPECT_TRUE(lookup.answer == ForwardingTable::ToAnswer::ArmedHit);
+
+    RelocationReceiptTestAccess::ReleaseListOwnership(region);
+    if (region->IsGhostFromRegion()) {
+        region->DispelGhostFromRegion();
+    }
+    ForwardingTable::ReclaimRetired("gc-unit-closed-receipts");
+    region->metadata.liveInfo = nullptr;
+    fx.FreePlanted(live);
+    RelocationReceiptTestAccess::BindCollector(Heap::GetHeap().GetCollectorResources(), nullptr);
+}
+
+GC_TEST(ForwardingPublicationProduct, MarkForwardingDoneRejectsReceiptCountMismatch)
+{
+    GcHeapFixture& fx = ProductFixture();
+    RelocationReceiptTestAccess::ReleaseListOwnership(RegionInfo::GetRegionInfo(4));
+    RegionInfo* region = RegionInfo::InitRegion(4, 1, RegionInfo::UnitRole::SMALL_SIZED_UNITS);
+    GC_EXPECT_TRUE(region != nullptr);
+    region->SetRegionType(RegionInfo::RegionType::THREAD_LOCAL_REGION);
+    BaseObject* first = fx.PlaceObject(region->GetRegionStart());
+    BaseObject* second = fx.PlaceObject(region->GetRegionStart() + first->GetSize());
+    region->SetRegionAllocPtr(reinterpret_cast<MAddress>(second) + second->GetSize());
+    WCollector collector(Heap::GetHeap().GetAllocator(), Heap::GetHeap().GetCollectorResources());
+    RelocationReceiptTestAccess::BindCollector(Heap::GetHeap().GetCollectorResources(), &collector);
+    LiveInfo* live = PrepareForwardable(fx, region, reinterpret_cast<MAddress>(first));
+    RegionBitmap* bitmap = region->GetMarkBitmap(region->GetMarkView<Generation::Old>());
+    GC_EXPECT_TRUE(bitmap != nullptr);
+    const size_t secondOff = region->GetAddressOffset(reinterpret_cast<MAddress>(second));
+    (void)bitmap->MarkBits(secondOff, second->GetSize(), region->GetRegionSize());
+    region->AddLiveByteCount(second->GetSize());
+    region->RecordRouteStart(secondOff);
+
+    RegionManager manager;
+    manager.ExemptFromRegion(region);
+    GC_EXPECT_TRUE(region->IsForwardingDone());
+    GC_EXPECT_EQ(ForwardingTable::FindTo(reinterpret_cast<MAddress>(first)),
+                 reinterpret_cast<MAddress>(first));
+    GC_EXPECT_EQ(ForwardingTable::FindTo(reinterpret_cast<MAddress>(second)),
+                 reinterpret_cast<MAddress>(second));
+
+    RelocationReceiptTestAccess::ReleaseListOwnership(region);
+    if (region->IsGhostFromRegion()) {
+        region->DispelGhostFromRegion();
+    }
+    ForwardingTable::ReclaimRetired("gc-unit-receipt-count");
+    region->metadata.liveInfo = nullptr;
+    fx.FreePlanted(live);
+    RelocationReceiptTestAccess::BindCollector(Heap::GetHeap().GetCollectorResources(), nullptr);
+}
+
+GC_TEST(ForwardingPublicationProduct, LookupCausePublishedWithoutReceipt)
+{
+#if defined(__linux__)
+    GcHeapFixture& fx = ProductFixture();
+    RelocationReceiptTestAccess::ReleaseListOwnership(RegionInfo::GetRegionInfo(4));
+    RegionInfo* region = RegionInfo::InitRegion(4, 1, RegionInfo::UnitRole::SMALL_SIZED_UNITS);
+    GC_EXPECT_TRUE(region != nullptr);
+    region->SetRegionType(RegionInfo::RegionType::THREAD_LOCAL_REGION);
+    BaseObject* from = fx.PlaceObject(region->GetRegionStart());
+    region->SetRegionAllocPtr(reinterpret_cast<MAddress>(from) + from->GetSize());
+    WCollector collector(Heap::GetHeap().GetAllocator(), Heap::GetHeap().GetCollectorResources());
+    collector.SetGCPhase(GCPhase::GC_PHASE_IDLE);
+    RelocationReceiptTestAccess::BindCollector(Heap::GetHeap().GetCollectorResources(), &collector);
+    LiveInfo* live = PrepareForwardable(fx, region, reinterpret_cast<MAddress>(from));
+    region->SetRouteState(RegionInfo::RouteState::COMPACTED);
+    region->MarkForwardingDone();
+    const ForwardingTable::LookupResult lookup = ForwardingTable::LookupTo(reinterpret_cast<MAddress>(from));
+    GC_EXPECT_TRUE(lookup.to == 0);
+    GC_EXPECT_TRUE(lookup.answer != ForwardingTable::ToAnswer::ArmedHit);
+
+    if (region->IsGhostFromRegion()) {
+        region->DispelGhostFromRegion();
+    }
+    ForwardingTable::ReclaimRetired("gc-unit-lookup-cause");
+    region->metadata.liveInfo = nullptr;
+    fx.FreePlanted(live);
+    RelocationReceiptTestAccess::BindCollector(Heap::GetHeap().GetCollectorResources(), nullptr);
+#endif
+}
 #endif
 
 GC_TEST(ForwardingPublicationProduct, ForwardUpdateRawRefWritesBackMappedTo)
@@ -1882,6 +2031,8 @@ GC_TEST(ForwardingPublicationProduct, PartialCompactSelfFallbackKeepsReceipt)
 GC_TEST(ForwardingPublicationProduct, PageWaitThenLookupReadsOriginalCompactReceipt)
 {
     GcHeapFixture& fx = ProductFixture();
+    RelocationReceiptTestAccess::ReleaseListOwnership(RegionInfo::GetRegionInfo(4));
+    RelocationReceiptTestAccess::ReleaseListOwnership(RegionInfo::GetRegionInfo(3));
     RegionInfo* region = RegionInfo::InitRegion(4, 1, RegionInfo::UnitRole::SMALL_SIZED_UNITS);
     RegionInfo* routeDestination =
         RegionInfo::InitRegion(3, 1, RegionInfo::UnitRole::SMALL_SIZED_UNITS);
@@ -1949,6 +2100,8 @@ GC_TEST(ForwardingPublicationProduct, PageWaitThenLookupReadsOriginalCompactRece
 GC_TEST(ForwardingPublicationProduct, CompletedReceiptResolvesWithoutForwardingTableLookup)
 {
     GcHeapFixture& fx = ProductFixture();
+    RelocationReceiptTestAccess::ReleaseListOwnership(RegionInfo::GetRegionInfo(4));
+    RelocationReceiptTestAccess::ReleaseListOwnership(RegionInfo::GetRegionInfo(3));
     RegionInfo* region = RegionInfo::InitRegion(4, 1, RegionInfo::UnitRole::SMALL_SIZED_UNITS);
     RegionInfo* routeDestination =
         RegionInfo::InitRegion(3, 1, RegionInfo::UnitRole::SMALL_SIZED_UNITS);

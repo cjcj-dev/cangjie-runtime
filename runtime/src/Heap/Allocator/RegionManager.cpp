@@ -2445,6 +2445,56 @@ size_t PublishKeptInPlaceReceipts(RegionInfo* region)
     }
     return published;
 }
+
+// ZGC's relocate() marks a forwarding life done only after every survivor has
+// a forwarding receipt (zRelocate.cpp:1137-1153). Header state and compact
+// geometry are not receipts: kept/in-place survivors must have an explicit
+// from->from entry in the same active/retired table. Keep this check at the
+// producer boundary so a receipt-less publication fails loudly.
+bool VerifyForwardingReceiptsClosed(RegionInfo* region, const char* site)
+{
+    if (region == nullptr || !region->IsGhostFromRegion()) {
+        return true;
+    }
+    const RegionInfo::RouteStartTable* starts = region->LoadRouteStartTable();
+    if (starts == nullptr) {
+        CHECK_DETAIL(!region->HasFromPageMetadata(),
+                     "%s missing exact-start set before forwarding done region=%p", site, region);
+        return true;
+    }
+    const MAddress start = region->GetRegionStart();
+    const MAddress allocPtr = region->GetRegionAllocPtr();
+    size_t survivors = 0;
+    size_t receipts = 0;
+    for (const auto& entry : *starts) {
+        const size_t offset = entry.first;
+        if (offset >= static_cast<size_t>(allocPtr - start) || !region->IsOwnerSurvivedObject(offset)) {
+            continue;
+        }
+        ++survivors;
+        const MAddress from = start + offset;
+        const ForwardingTable::LookupResult lookup = ForwardingTable::LookupTo(from);
+        const bool hit = lookup.to != 0 &&
+            (lookup.answer == ForwardingTable::ToAnswer::ArmedHit ||
+             lookup.retiredAnswer == ForwardingTable::ToAnswer::ArmedHit);
+        CHECK_DETAIL(hit,
+                     "%s receipt gap region=%p exactStart=%#zx answer=%u cause=%u route=%u fwdDone=%u refs=%d copy=%d",
+                     site, region, static_cast<size_t>(from), static_cast<unsigned>(lookup.answer),
+                     static_cast<unsigned>(lookup.unavailableCause),
+                     static_cast<unsigned>(region->GetRouteState()),
+                     static_cast<unsigned>(region->IsForwardingDone()), region->ForwardingRefCount(),
+                     region->CopyInflight());
+        if (hit) {
+            ++receipts;
+        }
+    }
+    CHECK_DETAIL(receipts == survivors,
+                 "%s receipt count mismatch region=%p survivors=%zu receipts=%zu route=%u fwdDone=%u refs=%d copy=%d",
+                 site, region, survivors, receipts, static_cast<unsigned>(region->GetRouteState()),
+                 static_cast<unsigned>(region->IsForwardingDone()), region->ForwardingRefCount(),
+                 region->CopyInflight());
+    return true;
+}
 } // namespace
 
 void RegionManager::ParkUnmovableFromRegion(RegionInfo* region)
@@ -2470,6 +2520,7 @@ void RegionManager::ExemptFromRegion(RegionInfo* region)
     // cycle (cjpmnull2 Exempt).
     WaitCopiedObjectsUnlocked(region);
     const size_t identityReceipts = PublishKeptInPlaceReceipts(region);
+    VerifyForwardingReceiptsClosed(region, "ExemptFromRegion");
     if (region != nullptr && !region->IsForwardingDone()) {
         static std::atomic<size_t> g_exemptKept{ 0 };
         const size_t n = g_exemptKept.fetch_add(1, std::memory_order_relaxed) + 1;
@@ -2529,6 +2580,7 @@ void RegionManager::FinishIncompleteFromRegions()
         if (region->IsUnmovableFromRegion()) {
             WaitCopiedObjectsUnlocked(region);
             (void)PublishKeptInPlaceReceipts(region);
+            VerifyForwardingReceiptsClosed(region, "FinishIncompleteFromRegions.unmovable");
             region->MarkForwardingDone();
             ++kept;
             continue;
@@ -2569,6 +2621,7 @@ void RegionManager::FinishIncompleteFromRegions()
         } else {
             WaitCopiedObjectsUnlocked(region);
             (void)PublishKeptInPlaceReceipts(region);
+            VerifyForwardingReceiptsClosed(region, "FinishIncompleteFromRegions.kept");
             region->MarkForwardingDone();
         }
         ++kept;
@@ -3379,6 +3432,7 @@ void RegionManager::CompactRegion(RegionInfo* region)
     }
 
     region->ResetCensusBoundary();
+    VerifyForwardingReceiptsClosed(region, "CompactRegion.whole");
 
     // zForwarding.cpp:171-181 / zRelocate.cpp:1001-1047: the forwarding table
     // outlives page reuse. Do not put this page on the mutator TLAB list while
@@ -3516,6 +3570,7 @@ void RegionManager::CompactRegion(RegionInfo* region, RegionInfo* toRegion1)
     }
 
     region->ResetCensusBoundary();
+    VerifyForwardingReceiptsClosed(region, "CompactRegion.partial");
 
     RehomeCompactedInPlaceRegion(region);
 }
@@ -3547,6 +3602,7 @@ void RegionManager::FinishStayYoungInPlace(RegionInfo* region, bool advanceAge)
     }
     WaitCopiedObjectsUnlocked(region);
     (void)PublishKeptInPlaceReceipts(region);
+    VerifyForwardingReceiptsClosed(region, "FinishStayYoungInPlace");
     region->MarkForwardingDone();
     region->DispelGhostFromRegion();
 }
@@ -3945,6 +4001,7 @@ void RegionManager::ForwardRegion(RegionInfo* region)
         region->SetRouteState(RegionInfo::RouteState::FORWARDED);
         FillPublishedRouteGaps(region);
         // zRelocate.cpp:1152 — last act after every object on the page is relocated.
+        VerifyForwardingReceiptsClosed(region, "ForwardRegion");
         region->MarkForwardingDone();
         // livesame ORDER + ZGC reset_livemap (zForwarding.cpp:71-74): one publish for
         // live bytes + mark face (ResetLiveMapAfterForward).
