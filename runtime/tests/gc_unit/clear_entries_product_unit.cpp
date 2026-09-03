@@ -1701,16 +1701,21 @@ GC_TEST(ForwardingPublicationProduct, MarkForwardingDoneRejectsReceiptCountMisma
     region->SetRegionType(RegionInfo::RegionType::THREAD_LOCAL_REGION);
     BaseObject* first = fx.PlaceObject(region->GetRegionStart());
     BaseObject* second = fx.PlaceObject(region->GetRegionStart() + first->GetSize());
-    region->SetRegionAllocPtr(reinterpret_cast<MAddress>(second) + second->GetSize());
+    BaseObject* third = fx.PlaceObject(region->GetRegionStart() + first->GetSize() + second->GetSize());
+    region->SetRegionAllocPtr(reinterpret_cast<MAddress>(third) + third->GetSize());
     WCollector collector(Heap::GetHeap().GetAllocator(), Heap::GetHeap().GetCollectorResources());
     RelocationReceiptTestAccess::BindCollector(Heap::GetHeap().GetCollectorResources(), &collector);
     LiveInfo* live = PrepareForwardable(fx, region, reinterpret_cast<MAddress>(first));
     RegionBitmap* bitmap = region->GetMarkBitmap(region->GetMarkView<Generation::Old>());
     GC_EXPECT_TRUE(bitmap != nullptr);
     const size_t secondOff = region->GetAddressOffset(reinterpret_cast<MAddress>(second));
+    const size_t thirdOff = region->GetAddressOffset(reinterpret_cast<MAddress>(third));
     (void)bitmap->MarkBits(secondOff, second->GetSize(), region->GetRegionSize());
+    (void)bitmap->MarkBits(thirdOff, third->GetSize(), region->GetRegionSize());
     region->AddLiveByteCount(second->GetSize());
+    region->AddLiveByteCount(third->GetSize());
     region->RecordRouteStart(secondOff);
+    region->RecordRouteStart(thirdOff);
 
     RegionManager manager;
     manager.ExemptFromRegion(region);
@@ -1719,6 +1724,8 @@ GC_TEST(ForwardingPublicationProduct, MarkForwardingDoneRejectsReceiptCountMisma
                  reinterpret_cast<MAddress>(first));
     GC_EXPECT_EQ(ForwardingTable::FindTo(reinterpret_cast<MAddress>(second)),
                  reinterpret_cast<MAddress>(second));
+    GC_EXPECT_EQ(ForwardingTable::FindTo(reinterpret_cast<MAddress>(third)),
+                 reinterpret_cast<MAddress>(third));
 
     RelocationReceiptTestAccess::ReleaseListOwnership(region);
     if (region->IsGhostFromRegion()) {
