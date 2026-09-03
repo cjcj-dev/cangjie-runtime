@@ -2036,7 +2036,14 @@ BaseObject* WCollector::WaitRoutedTipReady(BaseObject* from, BaseObject* to, Reg
         return again;
     }
     if (publicationClosed) {
-        return permanentHole("publication-closed", 0, again);
+        const uint8_t cause = static_cast<uint8_t>(lastLookup.unavailableCause);
+        const char* reason = "publication-closed";
+        if ((cause & static_cast<uint8_t>(ForwardingTable::ToUnavailableCause::TableDestroyed)) != 0) {
+            reason = "publication-closed-table-destroyed";
+        } else if ((cause & static_cast<uint8_t>(ForwardingTable::ToUnavailableCause::NeverInstalled)) != 0) {
+            reason = "publication-closed-never-installed";
+        }
+        return permanentHole(reason, 0, again);
     }
     const bool tableHit = again != nullptr;
     const RegionInfo::RouteState rs = forwarding->GetRouteState();

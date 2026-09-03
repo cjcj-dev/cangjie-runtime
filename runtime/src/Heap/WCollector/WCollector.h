@@ -760,6 +760,14 @@ public:
                     return "retired_unavailable+publication_closed";
                 case 7:
                     return "active_retain_rejected+retired_unavailable+publication_closed";
+                case 8:
+                    return "table_destroyed";
+                case 12:
+                    return "publication_closed+table_destroyed";
+                case 16:
+                    return "never_installed";
+                case 20:
+                    return "publication_closed+never_installed";
                 case 0:
                     return "none";
             }

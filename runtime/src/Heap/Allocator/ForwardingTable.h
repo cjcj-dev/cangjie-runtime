@@ -69,6 +69,8 @@ public:
         ActiveRetainRejected = 1,
         RetiredUnavailable = 2,
         PublicationClosed = 4,
+        TableDestroyed = 8,
+        NeverInstalled = 16,
     };
 
     // Decision record from one LookupTo invocation.  These are the exact local
