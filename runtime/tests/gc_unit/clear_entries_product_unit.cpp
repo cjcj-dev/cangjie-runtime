@@ -1810,6 +1810,8 @@ GC_TEST(ForwardingPublicationProduct, CompactedWithoutFwdDoneWaitsInProductSO)
         (void)waitpid(child, &status, 0);
     }
     GC_EXPECT_FALSE(aborted);
+    (void)queue.Fail(reinterpret_cast<MAddress>(from));
+    (void)queue.SynchronizePoll();
 
     if (region->IsGhostFromRegion()) {
         region->DispelGhostFromRegion();
