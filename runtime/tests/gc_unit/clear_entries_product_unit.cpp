@@ -101,6 +101,11 @@ struct RelocationReceiptTestAccess {
         return collector.WaitRoutedTipReady(from, to, forwarding);
     }
 
+    static bool TryUpdateRefField(WCollector& collector, BaseObject* obj, RefField<>& field, BaseObject*& newRef)
+    {
+        return collector.TryUpdateRefField(obj, field, newRef);
+    }
+
     static BaseObject* ProductGetForwardPointer(
         WCollector& collector, BaseObject* from, RegionInfo* forwarding)
     {
@@ -661,9 +666,12 @@ GC_TEST(ForwardingPublicationProduct, LateFindToVersionCannotReopenSealedGenerat
     ForwardingTable::ClearEntries(state.region->GetRegionStart(), state.region->GetRegionSize());
 
     FindToVersionResult resolved = RelocationReceiptTestAccess::ProductFindToVersion(collector, state.from);
-    // The sealed generation still carries a FORWARDED from-object but has no
-    // mapping. ZGC treats this as an assertion state, not an ordinary miss.
+    // Sealed generation, FORWARDED header, no InsertMapping. The retired table
+    // is still present (ClearEntries has not destroyed it). Unavailable here
+    // means never-installed for this from, not "table lifetime too short".
     GC_EXPECT_TRUE(resolved.state() == FindToVersionResult::State::Unavailable);
+    GC_EXPECT_TRUE(resolved.unavailable_lookup_publication_closed());
+    GC_EXPECT_TRUE(std::strstr(resolved.unavailable_lookup_cause(), "never_installed") != nullptr);
     GC_EXPECT_TRUE(ForwardingTable::GetEntries(reinterpret_cast<MAddress>(state.from)) == nullptr);
     ForwardingTable::Publication late =
         ForwardingTable::RetainOpenPublicationAfterCopy(state.region, reinterpret_cast<MAddress>(state.from));
@@ -722,7 +730,11 @@ GC_OTHER_VM_TEST(FindToPublicState, UnavailableIsObservable)
     GC_EXPECT_EQ(ForwardingTable::ArmedMissCount(), static_cast<uint64_t>(0));
     GC_EXPECT_EQ(ForwardingTable::UnavailableCount(), static_cast<uint64_t>(0));
     FindToVersionResult result = RelocationReceiptTestAccess::ProductFindToVersion(collector, from);
+    // PrepareForwardable armed a table but never InsertMapping. ReclaimRetired
+    // may destroy that empty carrier. Unavailable is the never-selected /
+    // never-installed object, not a compact-receipt lifetime hole.
     GC_EXPECT_TRUE(result.state() == FindToVersionResult::State::Unavailable);
+    GC_EXPECT_TRUE(result.unavailable_lookup_publication_closed());
     GC_EXPECT_EQ(ForwardingTable::ArmedMissCount(), static_cast<uint64_t>(0));
     GC_EXPECT_EQ(ForwardingTable::UnavailableCount(), static_cast<uint64_t>(1));
 
@@ -760,7 +772,8 @@ GC_OTHER_VM_TEST(FindToRouteDiagnostics, DistinguishesLookupUnavailableFromNoGho
     GC_EXPECT_FALSE(lookup.unavailable_from_region_info_null());
     GC_EXPECT_TRUE(std::strcmp(lookup.unavailable_lookup_answer(), "unavailable") == 0);
     GC_EXPECT_TRUE(lookup.unavailable_lookup_snapshot_valid());
-    GC_EXPECT_TRUE(std::strcmp(lookup.unavailable_lookup_cause(), "publication_closed") == 0);
+    GC_EXPECT_TRUE(std::strcmp(lookup.unavailable_lookup_cause(),
+                               "publication_closed+table_destroyed") == 0);
     GC_EXPECT_FALSE(lookup.unavailable_lookup_active_candidate());
     GC_EXPECT_TRUE(std::strcmp(lookup.unavailable_lookup_active_answer(), "unarmed") == 0);
     GC_EXPECT_TRUE(std::strcmp(lookup.unavailable_lookup_retired_answer(), "unarmed") == 0);
@@ -830,8 +843,10 @@ GC_OTHER_VM_TEST(LookupDecisionSnapshot, SurvivesPostReturnGhostAndHeaderMutatio
     GC_EXPECT_TRUE(from->IsForwarded());
     GC_EXPECT_TRUE(RegionInfo::GetGhostFromRegionAt(reinterpret_cast<MAddress>(from)) == nullptr);
     GC_EXPECT_TRUE(result.answer == ForwardingTable::ToAnswer::Unavailable);
-    GC_EXPECT_TRUE(result.unavailableCause ==
-                   ForwardingTable::ToUnavailableCause::PublicationClosed);
+    GC_EXPECT_TRUE((static_cast<uint8_t>(result.unavailableCause) &
+                    static_cast<uint8_t>(ForwardingTable::ToUnavailableCause::PublicationClosed)) != 0);
+    GC_EXPECT_TRUE((static_cast<uint8_t>(result.unavailableCause) &
+                    static_cast<uint8_t>(ForwardingTable::ToUnavailableCause::TableDestroyed)) != 0);
     GC_EXPECT_FALSE(result.activeCandidate);
     GC_EXPECT_TRUE(result.activeAnswer == ForwardingTable::ToAnswer::Unarmed);
     GC_EXPECT_TRUE(result.retiredAnswer == ForwardingTable::ToAnswer::Unarmed);
@@ -2277,6 +2292,107 @@ GC_TEST(ForwardingPublicationProduct, CompactRequestReturnsReceiptBeforeFromClea
     ForwardingTable::ReclaimRetired("gc-unit-explicit-coverage");
     region->metadata.liveInfo = nullptr;
     fx.FreePlanted(live);
+}
+
+GC_TEST(ForwardingPublicationProduct, CompactInsertSurvivesVerifyClearAndReclaim)
+{
+    GcHeapFixture& fx = ProductFixture();
+    RelocationReceiptTestAccess::ReleaseListOwnership(RegionInfo::GetRegionInfo(4));
+    RegionInfo* region = RegionInfo::InitRegion(4, 1, RegionInfo::UnitRole::SMALL_SIZED_UNITS);
+    GC_EXPECT_TRUE(region != nullptr);
+    region->SetRegionType(RegionInfo::RegionType::THREAD_LOCAL_REGION);
+    BaseObject* dead = fx.PlaceObject(region->GetRegionStart());
+    const size_t objectSize = dead->GetSize();
+    BaseObject* liveObject = fx.PlaceObject(region->GetRegionStart() + objectSize);
+    const MAddress from = reinterpret_cast<MAddress>(liveObject);
+    region->SetRegionAllocPtr(from + objectSize);
+    WCollector collector(Heap::GetHeap().GetAllocator(), Heap::GetHeap().GetCollectorResources());
+    RelocationReceiptTestAccess::BindCollector(Heap::GetHeap().GetCollectorResources(), &collector);
+    LiveInfo* live = PrepareForwardable(fx, region, from);
+    RegionManager manager;
+    RelocationReceiptTestAccess::ParkFrom(manager, region);
+    manager.CompactRegion(region);
+    const MAddress to = ForwardingTable::FindTo(from);
+    GC_EXPECT_TRUE(to != 0);
+    GC_EXPECT_TRUE(region->IsForwardingDone());
+
+    ForwardingTable::ClearEntries(region->GetRegionStart(), region->GetRegionSize());
+    ForwardingTable::ReclaimRetired("old-remap-young-roots-complete");
+
+    const ForwardingTable::LookupResult lookup = ForwardingTable::LookupTo(from);
+    GC_EXPECT_EQ(lookup.to, to);
+    GC_EXPECT_TRUE(lookup.answer == ForwardingTable::ToAnswer::ArmedHit);
+    GC_EXPECT_TRUE(lookup.answer != ForwardingTable::ToAnswer::Unavailable);
+
+    FindToVersionResult found = RelocationReceiptTestAccess::ProductFindToVersion(collector, liveObject);
+    GC_EXPECT_TRUE(found.state() == FindToVersionResult::State::Found);
+    GC_EXPECT_TRUE(found.found() == reinterpret_cast<BaseObject*>(to));
+
+    if (region->IsGhostFromRegion()) {
+        region->DispelGhostFromRegion();
+    }
+    RelocationReceiptTestAccess::ReleaseListOwnership(region);
+    region->metadata.liveInfo = nullptr;
+    fx.FreePlanted(live);
+    RelocationReceiptTestAccess::BindCollector(Heap::GetHeap().GetCollectorResources(), nullptr);
+}
+
+GC_TEST(ForwardingPublicationProduct, InsertThenReclaimStillServesWaitAndTryUpdate)
+{
+    GcHeapFixture& fx = ProductFixture();
+    RelocationReceiptTestAccess::ReleaseListOwnership(RegionInfo::GetRegionInfo(4));
+    RelocationReceiptTestAccess::ReleaseListOwnership(RegionInfo::GetRegionInfo(3));
+    RegionInfo* region = RegionInfo::InitRegion(4, 1, RegionInfo::UnitRole::SMALL_SIZED_UNITS);
+    RegionInfo* destination = RegionInfo::InitRegion(3, 1, RegionInfo::UnitRole::SMALL_SIZED_UNITS);
+    GC_EXPECT_TRUE(region != nullptr && destination != nullptr);
+    region->SetRegionType(RegionInfo::RegionType::THREAD_LOCAL_REGION);
+    destination->SetRegionType(RegionInfo::RegionType::THREAD_LOCAL_REGION);
+    BaseObject* from = fx.PlaceObject(region->GetRegionStart());
+    BaseObject* to = fx.PlaceObject(destination->GetRegionStart());
+    region->SetRegionAllocPtr(reinterpret_cast<MAddress>(from) + from->GetSize());
+    destination->SetRegionAllocPtr(reinterpret_cast<MAddress>(to) + to->GetSize());
+    WCollector collector(Heap::GetHeap().GetAllocator(), Heap::GetHeap().GetCollectorResources());
+    RelocationReceiptTestAccess::BindCollector(Heap::GetHeap().GetCollectorResources(), &collector);
+    LiveInfo* live = PrepareForwardable(fx, region, reinterpret_cast<MAddress>(from));
+    ForwardingTable::Publication publication =
+        ForwardingTable::EnsurePublicationBeforeCopy(region, reinterpret_cast<MAddress>(from));
+    GC_EXPECT_TRUE(static_cast<bool>(publication));
+    GC_EXPECT_EQ(ForwardingTable::InstallMapping(publication, reinterpret_cast<MAddress>(from),
+                                                 reinterpret_cast<MAddress>(to)).address,
+                 reinterpret_cast<MAddress>(to));
+    publication = ForwardingTable::Publication();
+    from->SetStateCode(ObjectState::FORWARDED);
+    region->SetRouteState(RegionInfo::RouteState::ROUTED);
+    region->MarkForwardingDone();
+    collector.SetGCPhase(GCPhase::GC_PHASE_IDLE);
+
+    ForwardingTable::ClearEntries(region->GetRegionStart(), region->GetRegionSize());
+    ForwardingTable::ReclaimRetired("old-remap-young-roots-complete");
+    GC_EXPECT_EQ(ForwardingTable::LookupTo(reinterpret_cast<MAddress>(from)).to,
+                 reinterpret_cast<MAddress>(to));
+
+    BaseObject* waited = RelocationReceiptTestAccess::WaitRoutedTipReady(
+        collector, from, nullptr, region);
+    GC_EXPECT_TRUE(waited == to);
+
+    const uintptr_t staleRemaps = static_cast<uintptr_t>(::g_cjLoadBadMask) & REMAP_COLOUR_MASK;
+    if (staleRemaps != 0) {
+        RefField<> field(to_zpointer(reinterpret_cast<uintptr_t>(from) | staleRemaps));
+        BaseObject* updated = nullptr;
+        (void)RelocationReceiptTestAccess::TryUpdateRefField(collector, nullptr, field, updated);
+        if (updated != nullptr) {
+            GC_EXPECT_TRUE(updated == to);
+        }
+    }
+
+    if (region->IsGhostFromRegion()) {
+        region->DispelGhostFromRegion();
+    }
+    RelocationReceiptTestAccess::ReleaseListOwnership(region);
+    RelocationReceiptTestAccess::ReleaseListOwnership(destination);
+    region->metadata.liveInfo = nullptr;
+    fx.FreePlanted(live);
+    RelocationReceiptTestAccess::BindCollector(Heap::GetHeap().GetCollectorResources(), nullptr);
 }
 
 // ClearEntries must seal an installed table and wait for the publication owner
