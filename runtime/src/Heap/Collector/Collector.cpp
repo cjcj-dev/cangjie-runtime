@@ -351,7 +351,7 @@ HandVerdict Collector::JudgeHandOutTarget(BaseObject* target)
 {
     const HandVerdict verdict = JudgeHandOutTarget(target);
     const MAddress from = target != nullptr ? reinterpret_cast<MAddress>(target) : 0;
-    RegionInfo* region = from != 0 && Heap::IsHeapAddress(target)
+    RegionInfo* region = (from != 0 && Heap::IsHeapAddress(target) && verdict != HandVerdict::ZeroHeader)
         ? RegionInfo::TryGetRegionInfoAt(from)
         : nullptr;
     const bool canLookup = from != 0 && Heap::IsHeapAddress(target) && verdict != HandVerdict::ZeroHeader;
