@@ -1704,7 +1704,7 @@ GC_TEST(ForwardingPublicationProduct, PreForwardDerivedRebasesFromRemappedBaseWi
             GC_EXPECT_TRUE(old == state.from);
             return state.to;
         });
-    visitor(from_object(state.from), derived);
+    visitor(oldBase.LoadPlain(), derived);
 
     GC_EXPECT_EQ(resolverCalls, static_cast<size_t>(1));
     GC_EXPECT_EQ(raw(derived.LoadDerived()),
