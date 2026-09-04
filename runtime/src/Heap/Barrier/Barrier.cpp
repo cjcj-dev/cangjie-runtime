@@ -483,7 +483,8 @@ void RetirePreviousWithoutAllocBuffer(BarrierPhase barrierPhase, zpointer prev, 
     }
 
     RefField<> previous(prev);
-    BaseObject* const resolved = collector.make_load_good(previous);
+    const ForwardingProvenance provenance{ ForwardingHolderKind::HeapRef, nullptr, &previous };
+    BaseObject* const resolved = collector.make_load_good(previous, provenance);
     if (resolved == nullptr || !Heap::IsHeapAddress(resolved)) {
         return;
     }
@@ -1105,7 +1106,8 @@ static inline TargetVerdict JudgeTarget(BaseObject* target)
     }
 }
 
-BaseObject* Barrier::ResolveFromCopyForMutator(BaseObject* target) const
+BaseObject* Barrier::ResolveFromCopyForMutator(
+    BaseObject* target, const ForwardingProvenance& provenance) const
 {
     if (target == nullptr || !Heap::IsHeapAddress(target)) {
         return target;
@@ -1113,7 +1115,6 @@ BaseObject* Barrier::ResolveFromCopyForMutator(BaseObject* target) const
     if (JudgeTarget(target) == TargetVerdict::Usable) {
         return target;
     }
-    const ForwardingProvenance provenance{ ForwardingHolderKind::Unknown, nullptr, nullptr };
     BaseObject* to = theCollector.ResolveStoreValue(target, provenance);
     if (to != nullptr && JudgeTarget(to) == TargetVerdict::Usable) {
         return to;
@@ -1127,7 +1128,7 @@ BaseObject* Barrier::ResolveFromCopyForMutator(BaseObject* target) const
 // follow ZGC's direct-uncolour shape and rely on the producer-side colour/lifetime invariant.
 BaseObject* Barrier::FinalizeLoadForMutator(BaseObject* handed, BaseObject* holder,
                                             const RefField<false>* field, const char* site,
-                                            const ForwardingProvenance* provenance) const
+                                            const ForwardingProvenance& provenance) const
 {
     if (handed == nullptr || !Heap::IsHeapAddress(handed)) {
         return handed;
@@ -1136,13 +1137,7 @@ BaseObject* Barrier::FinalizeLoadForMutator(BaseObject* handed, BaseObject* hold
     if (verdict == TargetVerdict::Usable) {
         return handed;
     }
-    const ForwardingProvenance inferred{
-        holder != nullptr || field != nullptr ? ForwardingHolderKind::HeapRef
-                                             : ForwardingHolderKind::Unknown,
-        holder, field
-    };
-    const ForwardingProvenance& diagnostic = provenance != nullptr ? *provenance : inferred;
-    BaseObject* resolved = theCollector.ResolveStoreValue(handed, diagnostic);
+    BaseObject* resolved = theCollector.ResolveStoreValue(handed, provenance);
     ZgcInvariants::NoteStaleGuardFired(verdict == TargetVerdict::ZeroHeader, resolved != nullptr, handed,
                                        holder, field);
     if (resolved != nullptr && JudgeTarget(resolved) == TargetVerdict::Usable) {
@@ -1156,7 +1151,7 @@ BaseObject* Barrier::FinalizeLoadForMutator(BaseObject* handed, BaseObject* hold
                                 field != nullptr
                                     ? static_cast<uintptr_t>(raw(field->GetFieldValue()))
                                     : 0,
-                                diagnostic);
+                                provenance);
 }
 
 BaseObject* Barrier::RelocateHolderForWrite(BaseObject* obj, void*& fieldPtr) const
@@ -1164,7 +1159,8 @@ BaseObject* Barrier::RelocateHolderForWrite(BaseObject* obj, void*& fieldPtr) co
     if (obj == nullptr || !Heap::IsHeapAddress(obj)) {
         return obj;
     }
-    BaseObject* to = ResolveFromCopyForMutator(obj);
+    const ForwardingProvenance provenance{ ForwardingHolderKind::HeapRef, obj, fieldPtr };
+    BaseObject* to = ResolveFromCopyForMutator(obj, provenance);
     if (to == obj) {
         return obj;
     }
@@ -1183,7 +1179,9 @@ BaseObject* Barrier::ReadReference(BaseObject* obj, RefField<false>& field) cons
             return barrier.ReadReference(obj, field);
         });
         // loadfc: unconditional slow/runtime hand-out postcondition.
-        BaseObject* finalized = FinalizeLoadForMutator(handed, obj, &field, "Barrier::ReadReference");
+        const ForwardingProvenance provenance{ ForwardingHolderKind::HeapRef, obj, &field };
+        BaseObject* finalized = FinalizeLoadForMutator(
+            handed, obj, &field, "Barrier::ReadReference", provenance);
         if (finalized != handed) {
             if (finalized != nullptr && Heap::IsHeapAddress(finalized)) {
                 RefField<> goodField = theCollector.GetAndTryTagRefField(finalized);
@@ -1206,12 +1204,16 @@ BaseObject* Barrier::ReadReference(BaseObject* obj, RefField<false>& field) cons
     }
     BaseObject* toVersion = nullptr;
     if (theCollector.TryUpdateRefField(obj, field, toVersion)) {
-        return FinalizeLoadForMutator(toVersion, obj, &field, "Barrier::ReadReference.stw");
+        return FinalizeLoadForMutator(
+            toVersion, obj, &field, "Barrier::ReadReference.stw",
+            ForwardingProvenance{ ForwardingHolderKind::HeapRef, obj, &field });
     } else {
         BaseObject* target = to_object(field.GetTargetObject());
         // loadfc: the base/STW barrier-phase branch shares the runtime postcondition. Barrier
         // installation follows GC phase; it does not prove that the world is currently stopped.
-        return FinalizeLoadForMutator(target, obj, &field, "Barrier::ReadReference.stw");
+        return FinalizeLoadForMutator(
+            target, obj, &field, "Barrier::ReadReference.stw",
+            ForwardingProvenance{ ForwardingHolderKind::HeapRef, obj, &field });
     }
 }
 
@@ -1222,7 +1224,9 @@ BaseObject* Barrier::ReadWeakRef(BaseObject* obj, RefField<false>& field) const
             return barrier.ReadWeakRef(obj, field);
         });
         // loadfc: weak shares the ordinary hand-out postcondition (zBarrier.inline.hpp:456-466).
-        BaseObject* finalized = FinalizeLoadForMutator(handed, obj, &field, "Barrier::ReadWeakRef");
+        const ForwardingProvenance provenance{ ForwardingHolderKind::HeapRef, obj, &field };
+        BaseObject* finalized = FinalizeLoadForMutator(
+            handed, obj, &field, "Barrier::ReadWeakRef", provenance);
         if (finalized != handed && finalized != nullptr && Heap::IsHeapAddress(finalized)) {
             RefField<> goodField = theCollector.GetAndTryTagRefField(finalized);
             return ZgcSelfHealLoadGood(field, field.GetFieldValue(), goodField.GetFieldValue(),
@@ -1232,10 +1236,14 @@ BaseObject* Barrier::ReadWeakRef(BaseObject* obj, RefField<false>& field) const
     }
     BaseObject* toVersion = nullptr;
     if (theCollector.TryUpdateRefField(obj, field, toVersion)) {
-        return FinalizeLoadForMutator(toVersion, obj, &field, "Barrier::ReadWeakRef.stw");
+        return FinalizeLoadForMutator(
+            toVersion, obj, &field, "Barrier::ReadWeakRef.stw",
+            ForwardingProvenance{ ForwardingHolderKind::HeapRef, obj, &field });
     } else {
         BaseObject* target = to_object(field.GetTargetObject());
-        return FinalizeLoadForMutator(target, obj, &field, "Barrier::ReadWeakRef.stw");
+        return FinalizeLoadForMutator(
+            target, obj, &field, "Barrier::ReadWeakRef.stw",
+            ForwardingProvenance{ ForwardingHolderKind::HeapRef, obj, &field });
     }
 }
 
@@ -1260,7 +1268,7 @@ BaseObject* Barrier::ReadStaticRef(RootSlot& field) const
     // loadfc: static roots share the same hand-out postcondition; a cleared/re-used static target
     // must resolve or stop, never be handed back (zBarrier.inline.hpp:294-344).
     BaseObject* finalized =
-        FinalizeLoadForMutator(target, nullptr, nullptr, "Barrier::ReadStaticRef", &provenance);
+        FinalizeLoadForMutator(target, nullptr, nullptr, "Barrier::ReadStaticRef", provenance);
     target = finalized;
     const bool healAttempted = target != nullptr && raw(observed) != reinterpret_cast<uintptr_t>(target);
     const bool statHealDiagEnabled = UNLIKELY(StatHealDiag::Enabled());
@@ -1279,7 +1287,10 @@ BaseObject* Barrier::ReadStaticRef(RootSlot& field) const
 // barrier for atomic operation.
 void Barrier::AtomicWriteReference(BaseObject* obj, RefField<true>& field, BaseObject* ref, MemoryOrder order) const
 {
-    ref = theCollector.ResolveStoreValue(ref);
+    const ForwardingProvenance provenance{
+        obj == nullptr ? ForwardingHolderKind::Static : ForwardingHolderKind::HeapRef, obj, &field
+    };
+    ref = theCollector.ResolveStoreValue(ref, provenance);
     NoteW1GhostFromStore(theCollector, ref);
     NoteW1HolderStore(theCollector, obj);
     RefField<> prev(field.GetFieldValue(order));
@@ -1319,7 +1330,10 @@ BaseObject* Barrier::AtomicSwapReference(BaseObject* obj, RefField<true>& field,
     // Read the actual pre-swap slot bits (swap has no expected value) for the
     // fast/slow diagnostic. Remset recording remains unconditional after the
     // successful store because store-good is not a current-entry witness here.
-    newRef = theCollector.ResolveStoreValue(newRef);
+    const ForwardingProvenance provenance{
+        obj == nullptr ? ForwardingHolderKind::Static : ForwardingHolderKind::HeapRef, obj, &field
+    };
+    newRef = theCollector.ResolveStoreValue(newRef, provenance);
     NoteW1GhostFromStore(theCollector, newRef);
     NoteW1HolderStore(theCollector, obj);
     RefField<> prev(field.GetFieldValue(order));
@@ -1327,7 +1341,11 @@ BaseObject* Barrier::AtomicSwapReference(BaseObject* obj, RefField<true>& field,
     BaseObject* oldRef = AtomicSwapReferenceImpl(obj, field, newRef, order);
     // loadfc: the swapped-out old value is a mutator hand-out too (zBarrier.inline.hpp:456-466);
     // the phase-local impl decodes it without a guard.
-    oldRef = FinalizeLoadForMutator(oldRef, obj, nullptr, "Barrier::AtomicSwapReference.old");
+    oldRef = FinalizeLoadForMutator(
+        oldRef, obj, nullptr, "Barrier::AtomicSwapReference.old",
+        ForwardingProvenance{ obj == nullptr ? ForwardingHolderKind::Static
+                                             : ForwardingHolderKind::HeapRef,
+                              obj, &field });
     SurvNodeDiag::NoteStore(&field, oldRef, newRef, SurvNodeDiag::STORE_SWAP);
     if (prevStoreGood) {
         NoteStoreFastPath();
@@ -1364,8 +1382,11 @@ BaseObject* Barrier::AtomicReadReference(BaseObject* obj, RefField<true>& field,
         });
         // loadfc: atomic loads share the ordinary hand-out postcondition; the phase-local fast
         // path has no guard of its own (ForwardBarrier.cpp AtomicReadReference).
-        BaseObject* resolved =
-            FinalizeLoadForMutator(handed, obj, nullptr, "Barrier::AtomicReadReference");
+        BaseObject* resolved = FinalizeLoadForMutator(
+            handed, obj, nullptr, "Barrier::AtomicReadReference",
+            ForwardingProvenance{ obj == nullptr ? ForwardingHolderKind::Static
+                                                 : ForwardingHolderKind::HeapRef,
+                                  obj, &field });
         if (resolved != handed && resolved != nullptr && Heap::IsHeapAddress(resolved)) {
             RefField<> goodField = theCollector.GetAndTryTagRefField(resolved);
             return ZgcSelfHealLoadGood(field, field.GetFieldValue(order), goodField.GetFieldValue(),
@@ -1385,7 +1406,11 @@ BaseObject* Barrier::AtomicReadReference(BaseObject* obj, RefField<true>& field,
 
     BaseObject* target = to_object(tmpField.GetTargetObject());
     DLOG(BARRIER, "atomic read obj %p ref@%p: %#zx -> %p", obj, &field, raw(tmpField.GetFieldValue()), target);
-    return FinalizeLoadForMutator(target, obj, nullptr, "Barrier::AtomicReadReference.stw");
+    return FinalizeLoadForMutator(
+        target, obj, nullptr, "Barrier::AtomicReadReference.stw",
+        ForwardingProvenance{ obj == nullptr ? ForwardingHolderKind::Static
+                                             : ForwardingHolderKind::HeapRef,
+                              obj, &field });
 }
 
 bool Barrier::CompareAndSwapReference(BaseObject* obj, RefField<true>& field, BaseObject* oldRef, BaseObject* newRef,
@@ -1396,7 +1421,10 @@ bool Barrier::CompareAndSwapReference(BaseObject* obj, RefField<true>& field, Ba
     // to newRef rather than oldRef, for the diagnostic fast/slow count. A
     // successful store always calls remset recording; a failed CAS stores
     // nothing and therefore calls neither marking nor recording.
-    newRef = theCollector.ResolveStoreValue(newRef);
+    const ForwardingProvenance provenance{
+        obj == nullptr ? ForwardingHolderKind::Static : ForwardingHolderKind::HeapRef, obj, &field
+    };
+    newRef = theCollector.ResolveStoreValue(newRef, provenance);
     NoteW1GhostFromStore(theCollector, newRef);
     NoteW1HolderStore(theCollector, obj);
     RefField<> prev(field.GetFieldValue(std::memory_order_relaxed));
@@ -1895,7 +1923,8 @@ void Barrier::WriteGeneric(const ObjectPtr obj, void* fieldPtr, const ObjectPtr 
     ObjectPtr dst = obj;
     void* fp = fieldPtr;
     dst = RelocateHolderForWrite(dst, fp);
-    ObjectPtr from = ResolveFromCopyForMutator(src);
+    const ForwardingProvenance provenance{ ForwardingHolderKind::HeapRef, dst, fp };
+    ObjectPtr from = ResolveFromCopyForMutator(src, provenance);
     WriteGenericImpl(dst, fp, from, size);
     RecordCrossGenEdgesInStruct(dst, reinterpret_cast<MAddress>(fp), size);
 }
@@ -1905,7 +1934,8 @@ void Barrier::WriteGenericImpl(const ObjectPtr obj, void* fieldPtr, const Object
     ObjectPtr dst = obj;
     void* fp = fieldPtr;
     dst = RelocateHolderForWrite(dst, fp);
-    ObjectPtr from = ResolveFromCopyForMutator(src);
+    const ForwardingProvenance provenance{ ForwardingHolderKind::HeapRef, dst, fp };
+    ObjectPtr from = ResolveFromCopyForMutator(src, provenance);
     if (phase == BarrierPhase::ENUM) {
         return static_cast<const EnumBarrier&>(*this).WriteGenericImpl(dst, fp, from, size);
     }

@@ -914,7 +914,8 @@ void WCollector::RescanRememberedSet(WorkStack& workStack, const MinorSlotSet& r
             g_findtoPostLifecycleSoft.fetch_add(1, std::memory_order_relaxed);
             return nullptr;
         }
-        return resolved.GetOrFailClosed("WCollector::RescanRememberedSet");
+        const ForwardingProvenance provenance{ ForwardingHolderKind::Remset, this, &from };
+        return resolved.GetOrFailClosed("WCollector::RescanRememberedSet", provenance);
     };
 
     // HotSpot G1RemSet scrub analogue. ORDER matters (STEER2 / defect⑤):

@@ -144,7 +144,8 @@ BaseObject* ForwardBarrier::ReadReference(BaseObject* obj, RefField<false>& fiel
                 // or painted an earlier one whose colour has come back around.
                 ZgcInvariants::NoteFastPathAccept(static_cast<uintptr_t>(raw(oldField.GetFieldValue())), oldTarget);
             }
-            BaseObject* resolved = ResolveFromCopyForMutator(oldTarget);
+            const ForwardingProvenance provenance{ ForwardingHolderKind::HeapRef, obj, &field };
+            BaseObject* resolved = ResolveFromCopyForMutator(oldTarget, provenance);
             if (resolved != oldTarget && resolved != nullptr) {
                 if (!Heap::IsHeapAddress(resolved)) {
                     return resolved;
@@ -154,9 +155,10 @@ BaseObject* ForwardBarrier::ReadReference(BaseObject* obj, RefField<false>& fiel
                 return FinalizeLoadForMutator(
                     ZgcSelfHealLoadGood(field, oldField.GetFieldValue(), goodField.GetFieldValue(),
                                         HealSite::ForwardReadReference),
-                    obj, &field, "ForwardBarrier::ReadReference.fast");
+                    obj, &field, "ForwardBarrier::ReadReference.fast", provenance);
             }
-            return FinalizeLoadForMutator(resolved, obj, &field, "ForwardBarrier::ReadReference.fast");
+            return FinalizeLoadForMutator(
+                resolved, obj, &field, "ForwardBarrier::ReadReference.fast", provenance);
         }
 
 
@@ -164,7 +166,8 @@ BaseObject* ForwardBarrier::ReadReference(BaseObject* obj, RefField<false>& fiel
         unsigned zhSteps = 0;
         if (!theCollector.IsUnmovableFromObject(oldTarget)) {
 
-            loadGood = theCollector.make_load_good(oldField);
+            const ForwardingProvenance provenance{ ForwardingHolderKind::HeapRef, obj, &field };
+            loadGood = theCollector.make_load_good(oldField, provenance);
             zhSteps |= 1u;
             if (theCollector.IsGhostFromObject(loadGood)) {
                 zhSteps |= 2u;
@@ -185,7 +188,8 @@ BaseObject* ForwardBarrier::ReadReference(BaseObject* obj, RefField<false>& fiel
             return loadGood;
         }
 
-        loadGood = ResolveFromCopyForMutator(loadGood);
+        const ForwardingProvenance provenance{ ForwardingHolderKind::HeapRef, obj, &field };
+        loadGood = ResolveFromCopyForMutator(loadGood, provenance);
         if (loadGood == nullptr) {
             return nullptr;
         }
@@ -196,7 +200,8 @@ BaseObject* ForwardBarrier::ReadReference(BaseObject* obj, RefField<false>& fiel
                                        HealSite::ForwardReadReference);
         NoteZeroHeaderTarget("ForwardRead.healed", field, obj, loadGood, oldTarget, zhSteps);
         // loadfc: unified hand-out postcondition before the value leaves.
-        return FinalizeLoadForMutator(loadGood, obj, &field, "ForwardBarrier::ReadReference.slow");
+        return FinalizeLoadForMutator(
+            loadGood, obj, &field, "ForwardBarrier::ReadReference.slow", provenance);
     }
 }
 
@@ -235,14 +240,19 @@ BaseObject* ForwardBarrier::AtomicReadReference(BaseObject* obj, RefField<true>&
             DLOG(FBARRIER, "atomic read obj %p ref@%p: %#zx -> %p", obj, &field, raw(oldField.GetFieldValue()), oldTarget);
             // loadfc: atomic fast path has no other guard; the outer Barrier exit also checks,
             // but bulk/inner callers reach this return directly.
-            return FinalizeLoadForMutator(oldTarget, obj, nullptr, "ForwardBarrier::AtomicReadReference");
+            return FinalizeLoadForMutator(
+                oldTarget, obj, nullptr, "ForwardBarrier::AtomicReadReference",
+                ForwardingProvenance{ obj == nullptr ? ForwardingHolderKind::Static
+                                                     : ForwardingHolderKind::HeapRef,
+                                      obj, &field });
         }
 
 
         BaseObject* loadGood = oldTarget;
         if (!theCollector.IsUnmovableFromObject(oldTarget)) {
 
-            loadGood = theCollector.make_load_good(oldField);
+            const ForwardingProvenance provenance{ ForwardingHolderKind::HeapRef, obj, &field };
+            loadGood = theCollector.make_load_good(oldField, provenance);
             if (theCollector.IsGhostFromObject(loadGood)) {
                 BaseObject* fwd = theCollector.ForwardObject(loadGood);
                 // tipnull: ForwardObject may null on soft miss; never hand null to mutator
@@ -262,10 +272,13 @@ BaseObject* ForwardBarrier::AtomicReadReference(BaseObject* obj, RefField<true>&
         RefField<> goodField = theCollector.GetAndTryTagRefField(loadGood);
         // Replaces the old "not old-tag" assertion with the colour-era self-heal invariant.
         DCHECK(theCollector.is_load_good(goodField));
-        return FinalizeLoadForMutator(ZgcSelfHealLoadGood(field, oldField.GetFieldValue(),
-                                                          goodField.GetFieldValue(),
-                                                          HealSite::ForwardAtomicReadReference),
-                                      obj, nullptr, "ForwardBarrier::AtomicReadReference.slow");
+        return FinalizeLoadForMutator(
+            ZgcSelfHealLoadGood(field, oldField.GetFieldValue(), goodField.GetFieldValue(),
+                                HealSite::ForwardAtomicReadReference),
+            obj, nullptr, "ForwardBarrier::AtomicReadReference.slow",
+            ForwardingProvenance{ obj == nullptr ? ForwardingHolderKind::Static
+                                                 : ForwardingHolderKind::HeapRef,
+                                  obj, &field });
     }
 }
 

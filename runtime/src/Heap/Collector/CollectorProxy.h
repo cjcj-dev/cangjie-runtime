@@ -45,7 +45,7 @@ public:
     {
         return currentCollector->FindToVersion(obj);
     }
-    BaseObject* ResolveStoreValue(BaseObject* ref, const ForwardingProvenance& provenance = {}) const override
+    BaseObject* ResolveStoreValue(BaseObject* ref, const ForwardingProvenance& provenance) const override
     {
         return currentCollector->ResolveStoreValue(ref, provenance);
     }
@@ -61,6 +61,11 @@ public:
     BaseObject* relocate_or_remap_object(BaseObject* obj, ZGenerationId generation) const override
     {
         return currentCollector->relocate_or_remap_object(obj, generation);
+    }
+    BaseObject* relocate_or_remap_object(BaseObject* obj, ZGenerationId generation,
+                                         const ForwardingProvenance& provenance) const override
+    {
+        return currentCollector->relocate_or_remap_object(obj, generation, provenance);
     }
     bool IsFromObject(BaseObject* obj) const override { return currentCollector->IsFromObject(obj); }
     bool IsGhostFromObject(BaseObject* obj) const override { return currentCollector->IsGhostFromObject(obj); }

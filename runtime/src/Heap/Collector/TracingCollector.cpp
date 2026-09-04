@@ -1207,7 +1207,8 @@ void TracingCollector::DFSTraceExportObject(BaseObject *exportObj)
 
             // Slow path: load-good + generation route (OpenJDK ZBarrier::make_load_good),
             // then recolour with current mark/remap. Replaces IsOldPointer/FindLatestVersion.
-            BaseObject* latest = make_load_good(oldField);
+            const ForwardingProvenance provenance{ ForwardingHolderKind::HeapRef, obj, &field };
+            BaseObject* latest = make_load_good(oldField, provenance);
 
             // target object could be null or non-heap for some static variable.
             if (!Heap::IsHeapAddress(latest)) {

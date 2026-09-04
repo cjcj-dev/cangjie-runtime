@@ -197,7 +197,7 @@ public:
     }
 
     BaseObject* GetOrFailClosed(const char* consumer,
-                                const ForwardingProvenance& provenance = {}) const
+                                const ForwardingProvenance& provenance) const
     {
         const char* forwarded = unavailableForwardedValid ? (unavailableForwarded ? "1" : "0") : "n/a";
         const char* fromRegionInfoNull = unavailableFromRegionInfoNullValid
@@ -363,7 +363,7 @@ public:
     // loadfc: the loud failure for "resolution failed and the from-address is not Usable"
     // (0825 用户令: no silent fold-back to the original address).
     [[noreturn]] static void FailClosedLoad(const char* site, BaseObject* target, uintptr_t slotBits,
-                                            const ForwardingProvenance& provenance = {});
+                                            const ForwardingProvenance& provenance);
 
     virtual GCStats& GetGCStats() { AbortUnimplemented("Collector::GetGCStats"); }
 
@@ -385,7 +385,7 @@ public:
     // a stored reference must already be the current version (remap included).
     // Default identity so gc_unit Collector stubs do not abort.
     virtual BaseObject* ResolveStoreValue(BaseObject* ref,
-                                          const ForwardingProvenance& provenance = {}) const
+                                          const ForwardingProvenance& provenance) const
     {
         (void)provenance;
         return ref;
@@ -484,6 +484,11 @@ public:
     {
         AbortUnimplemented("Collector::relocate_or_remap_object");
     }
+    virtual BaseObject* relocate_or_remap_object(
+        BaseObject* object, ZGenerationId generation, const ForwardingProvenance&) const
+    {
+        return relocate_or_remap_object(object, generation);
+    }
 
     // make_load_good: 带色槽 → 可解引用对象。内部仍返 BaseObject* 以兼容现有调用面；
     // 新代码应经 to_object(zaddress) 出口。
@@ -498,7 +503,7 @@ public:
     // consumer now uses the public ReadStaticRef runtime path instead of this helper. Compiler
     // colour-good fast paths retain ZGC's direct-uncolour form and depend on the producer-side
     // colour/lifetime invariant.
-    BaseObject* make_load_good(RefField<>& ref) const
+    BaseObject* make_load_good(RefField<>& ref, const ForwardingProvenance& provenance) const
     {
         // 凭什么 to_object: GetTargetObject 已剥色；null 或 load-good 可直接用。
         BaseObject* target = to_object(ref.GetTargetObject());
@@ -511,7 +516,7 @@ public:
         // as null for internal walkers; callers that hand values to mutators
         // must use the load-barrier slow path, which fails closed rather than
         // laundering the unresolved address into a load-good value.
-        return relocate_or_remap_object(target, remap_generation(ref));
+        return relocate_or_remap_object(target, remap_generation(ref), provenance);
     }
 
     // OpenJDK ZPointer::is_mark_good (zAddress.inline.hpp:658-664): mark-good includes load-good,
@@ -581,7 +586,7 @@ public:
     // F5: to==nullptr must not silently return a dead/zeroed from (REPORT-tagaba F5).
     // Implementation in Collector.cpp — needs complete BaseObject + CHECK_DETAIL.
     // Anchor main 9ad991c4e8660c26d6bfe575f6425e1b227bdf94.
-    BaseObject* FindLatestVersion(BaseObject* obj, const ForwardingProvenance& provenance = {}) const;
+    BaseObject* FindLatestVersion(BaseObject* obj, const ForwardingProvenance& provenance) const;
 
 protected:
     virtual void RequestGCInternal(GCReason, bool) { AbortUnimplemented("Collector::RequestGCInternal"); }

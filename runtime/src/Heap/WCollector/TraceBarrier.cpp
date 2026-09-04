@@ -36,7 +36,8 @@ BaseObject* TraceBarrier::ReadReference(BaseObject* obj, RefField<false>& field)
         if (oldTarget == nullptr ||
             LIKELY(!IsPlainNonNullSlotWord(static_cast<uintptr_t>(raw(oldField.GetFieldValue()))) &&
                    theCollector.is_load_good(oldField))) {
-            BaseObject* resolved = ResolveFromCopyForMutator(oldTarget);
+            const ForwardingProvenance provenance{ ForwardingHolderKind::HeapRef, obj, &field };
+            BaseObject* resolved = ResolveFromCopyForMutator(oldTarget, provenance);
             if (resolved == oldTarget || resolved == nullptr) {
                 return resolved;
             }
@@ -48,13 +49,14 @@ BaseObject* TraceBarrier::ReadReference(BaseObject* obj, RefField<false>& field)
                                        HealSite::TraceReadReference);
         }
 
-        BaseObject* loadGood = theCollector.make_load_good(oldField);
+        const ForwardingProvenance provenance{ ForwardingHolderKind::HeapRef, obj, &field };
+        BaseObject* loadGood = theCollector.make_load_good(oldField, provenance);
         // relroroot / rostatic: non-heap targets (static constants under GNU_RELRO) are never
         // evacuated. Colouring + CAS into those slots faults (si_code=2 ACCERR). Skip write-back.
         if (loadGood != nullptr && !Heap::IsHeapAddress(loadGood)) {
             return loadGood;
         }
-        loadGood = ResolveFromCopyForMutator(loadGood);
+        loadGood = ResolveFromCopyForMutator(loadGood, provenance);
         if (loadGood == nullptr) {
             return nullptr;
         }
@@ -211,7 +213,8 @@ BaseObject* TraceBarrier::AtomicReadReference(BaseObject* obj, RefField<true>& f
     }
 
     if (!IsPlainNonNullSlotWord(static_cast<uintptr_t>(raw(observed))) && theCollector.is_load_good(oldField)) {
-        BaseObject* const resolved = ResolveFromCopyForMutator(oldTarget);
+        const ForwardingProvenance provenance{ ForwardingHolderKind::HeapRef, obj, &field };
+        BaseObject* const resolved = ResolveFromCopyForMutator(oldTarget, provenance);
         if (resolved == oldTarget || resolved == nullptr || !Heap::IsHeapAddress(resolved)) {
             return resolved;
         }
@@ -221,11 +224,12 @@ BaseObject* TraceBarrier::AtomicReadReference(BaseObject* obj, RefField<true>& f
         return resolved;
     }
 
-    BaseObject* loadGood = theCollector.make_load_good(oldField);
+    const ForwardingProvenance provenance{ ForwardingHolderKind::HeapRef, obj, &field };
+    BaseObject* loadGood = theCollector.make_load_good(oldField, provenance);
     if (loadGood != nullptr && !Heap::IsHeapAddress(loadGood)) {
         return loadGood;
     }
-    loadGood = ResolveFromCopyForMutator(loadGood);
+    loadGood = ResolveFromCopyForMutator(loadGood, provenance);
     if (loadGood == nullptr) {
         return nullptr;
     }
@@ -342,7 +346,8 @@ void TraceBarrier::WriteGenericImpl(const ObjectPtr obj, void* fieldPtr, const O
     ObjectPtr dst = obj;
     void* fp = fieldPtr;
     dst = RelocateHolderForWrite(dst, fp);
-    ObjectPtr from = ResolveFromCopyForMutator(src);
+    const ForwardingProvenance provenance{ ForwardingHolderKind::HeapRef, dst, fp };
+    ObjectPtr from = ResolveFromCopyForMutator(src, provenance);
     NoteZeroTip(dst, "TraceBarrier.WriteGenericImpl");
     if ((dst != nullptr && !dst->HasRefField()) || (!Heap::IsHeapAddress(dst) && !Heap::IsHeapAddress(from))) {
         CHECK_DETAIL(memcpy_s(fp, size,

@@ -24,7 +24,8 @@ BaseObject* EnumBarrier::ReadReference(BaseObject* obj, RefField<false>& field) 
         if (oldTarget == nullptr ||
             LIKELY(!IsPlainNonNullSlotWord(static_cast<uintptr_t>(raw(oldField.GetFieldValue()))) &&
                    theCollector.is_load_good(oldField))) {
-            BaseObject* resolved = ResolveFromCopyForMutator(oldTarget);
+            const ForwardingProvenance provenance{ ForwardingHolderKind::HeapRef, obj, &field };
+            BaseObject* resolved = ResolveFromCopyForMutator(oldTarget, provenance);
             if (resolved == oldTarget || resolved == nullptr) {
                 return resolved;
             }
@@ -36,13 +37,14 @@ BaseObject* EnumBarrier::ReadReference(BaseObject* obj, RefField<false>& field) 
                                        HealSite::EnumReadReference);
         }
 
-        BaseObject* loadGood = theCollector.make_load_good(oldField);
+        const ForwardingProvenance provenance{ ForwardingHolderKind::HeapRef, obj, &field };
+        BaseObject* loadGood = theCollector.make_load_good(oldField, provenance);
         // relroroot / rostatic: non-heap targets (static constants under GNU_RELRO) are never
         // evacuated. Colouring + CAS into those slots faults (si_code=2 ACCERR). Skip write-back.
         if (loadGood != nullptr && !Heap::IsHeapAddress(loadGood)) {
             return loadGood;
         }
-        loadGood = ResolveFromCopyForMutator(loadGood);
+        loadGood = ResolveFromCopyForMutator(loadGood, provenance);
         if (loadGood == nullptr) {
             return nullptr;
         }
@@ -189,7 +191,8 @@ BaseObject* EnumBarrier::AtomicReadReference(BaseObject* obj, RefField<true>& fi
     BaseObject* target = nullptr;
     RefField<false> oldField(field.GetFieldValue(order));
     if (theCollector.IsCurrentPointer(oldField)) {
-        target = ResolveFromCopyForMutator(to_object(oldField.GetTargetObject()));
+        const ForwardingProvenance provenance{ ForwardingHolderKind::HeapRef, obj, &field };
+        target = ResolveFromCopyForMutator(to_object(oldField.GetTargetObject()), provenance);
         DLOG(EBARRIER, "atomic read obj %p ref@%p: %#zx -> %p", obj, &field, raw(oldField.GetFieldValue()), target);
         return target;
     }
@@ -319,7 +322,8 @@ void EnumBarrier::WriteGenericImpl(const ObjectPtr obj, void* fieldPtr, const Ob
     ObjectPtr dst = obj;
     void* fp = fieldPtr;
     dst = RelocateHolderForWrite(dst, fp);
-    ObjectPtr from = ResolveFromCopyForMutator(src);
+    const ForwardingProvenance provenance{ ForwardingHolderKind::HeapRef, dst, fp };
+    ObjectPtr from = ResolveFromCopyForMutator(src, provenance);
     NoteZeroTip(dst, "EnumBarrier.WriteGenericImpl");
     if ((dst != nullptr && !dst->HasRefField()) || (!Heap::IsHeapAddress(dst) && !Heap::IsHeapAddress(from))) {
         CHECK_DETAIL(memcpy_s(fp, size,

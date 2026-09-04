@@ -413,7 +413,8 @@ void DumpPromoteGapProbe(const char* tag)
 
 BaseObject* ScanFieldHealedTarget(Collector& collector, RefField<>& field)
 {
-    return collector.make_load_good(field);
+    const ForwardingProvenance provenance{ ForwardingHolderKind::Remset, nullptr, &field };
+    return collector.make_load_good(field, provenance);
 }
 } // namespace
 

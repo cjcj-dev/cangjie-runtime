@@ -144,7 +144,10 @@ StoreBarrierBuffer::PreviousRetirement StoreBarrierBuffer::RetirePrevious(const 
         return PreviousRetirement::NOT_REQUIRED;
     }
     RefField<> previous(entry.prev);
-    BaseObject* const resolved = collector.make_load_good(previous);
+    const ForwardingProvenance provenance{
+        ForwardingHolderKind::StoreBuffer, entry.pBase, reinterpret_cast<const void*>(entry.p)
+    };
+    BaseObject* const resolved = collector.make_load_good(previous, provenance);
     if (resolved == nullptr || !Heap::IsHeapAddress(resolved)) {
         return PreviousRetirement::INVALID_PREVIOUS;
     }

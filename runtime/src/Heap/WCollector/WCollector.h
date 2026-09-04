@@ -212,7 +212,7 @@ public:
     void FollowPartialArray(const MarkStackEntry& entry, WorkStack& workStack) override;
     BaseObject* GetAndTryTagObj(RefSlotKind kind, BaseObject* obj, RefField<>& field) override;
     BaseObject* ForwardObject(BaseObject* fromVersion) override;
-    BaseObject* ResolveStoreValue(BaseObject* ref, const ForwardingProvenance& provenance = {}) const override;
+    BaseObject* ResolveStoreValue(BaseObject* ref, const ForwardingProvenance& provenance) const override;
     void PostResolveCycleTask();
     void PrepareCycleRef()
     {
@@ -422,6 +422,14 @@ public:
     // (zGeneration.inline.hpp:131-140), not a fourth relocate exit.
     BaseObject* relocate_or_remap_object(BaseObject* obj, ZGenerationId generation) const override
     {
+        return relocate_or_remap_object(
+            obj, generation,
+            ForwardingProvenance{ ForwardingHolderKind::StackSlot, this, &obj });
+    }
+
+    BaseObject* relocate_or_remap_object(BaseObject* obj, ZGenerationId generation,
+                                         const ForwardingProvenance& provenance) const override
+    {
         if (!Heap::IsHeapAddress(obj)) {
             return obj;
         }
@@ -474,7 +482,7 @@ public:
             }
         } else if (obj->IsForwarded()) {
             BaseObject* published =
-                FindToVersion(obj).GetOrFailClosed("WCollector::ForwardObjectImpl");
+                FindToVersion(obj).GetOrFailClosed("WCollector::ForwardObjectImpl", provenance);
             if (published != nullptr) {
                 return published;
             }
@@ -499,7 +507,7 @@ public:
         if (MutatorRelocate::StatsOn()) {
             MutatorRelocate::NoteWaitEnter();
         }
-        BaseObject* resolved = WaitRoutedTipReady(obj, to, forwarding);
+        BaseObject* resolved = WaitRoutedTipReady(obj, to, forwarding, provenance);
         if (resolved != nullptr && resolved != obj) {
             return resolved;
         }
@@ -545,7 +553,10 @@ public:
             if (ghost != nullptr && !ghost->IsUnmovableFromRegion()) {
                 const GCPhase p = GetGCPhase();
                 if (p == GCPhase::GC_PHASE_PREFORWARD || p == GCPhase::GC_PHASE_FORWARD) {
-                    obj = ResolveStoreValue(obj);
+                    const ForwardingProvenance provenance{
+                        ForwardingHolderKind::HeapRef, this, &obj
+                    };
+                    obj = ResolveStoreValue(obj, provenance);
                 }
             }
         }
@@ -922,7 +933,8 @@ protected:
 
     // Wait until a forwarding receipt is published; completed miss is an
     // invariant failure (zRelocate.cpp:382-416).
-    BaseObject* WaitRoutedTipReady(BaseObject* from, BaseObject* to, RegionInfo* forwarding) const;
+    BaseObject* WaitRoutedTipReady(BaseObject* from, BaseObject* to, RegionInfo* forwarding,
+                                   const ForwardingProvenance& provenance) const;
 
     // portmutreloc: ZRelocate::relocate_object's middle leg (zRelocate.cpp:391-406) --
     // retain the from-region, relocate the object on this thread, release. Returns the
@@ -1039,7 +1051,8 @@ protected:
         // (zAddress.inline.hpp:609-624,806-811). ResolveStoreValue is our
         // make-load-good producer: a relocation-set address is looked up or copied
         // by this thread; an unresolved address never reaches colouring.
-        target = ResolveStoreValue(target);
+        const ForwardingProvenance provenance{ ForwardingHolderKind::HeapRef, target, &target };
+        target = ResolveStoreValue(target, provenance);
         CHECK_DETAIL(target != nullptr && Heap::IsHeapAddress(target),
                      "store-good requires a resolved heap address");
         CHECK_DETAIL(Collector::JudgeHandOutTarget(target) == HandVerdict::Usable,

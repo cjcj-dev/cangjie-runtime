@@ -173,7 +173,8 @@ protected:
 
     // I2: FORWARDED/zero-header from-copy → make-load-good to. Never hand from.
     // zBarrier.inline.hpp:294-340 relocates or remaps before self-healing to.
-    BaseObject* ResolveFromCopyForMutator(BaseObject* target) const;
+    BaseObject* ResolveFromCopyForMutator(BaseObject* target,
+                                          const ForwardingProvenance& provenance) const;
 
     // loadfc (zBarrier.inline.hpp:294-344): fail-closed postcondition for slow/runtime hand-outs.
     // Compiler colour-good fast paths follow ZGC's direct-uncolour shape and do not call this;
@@ -181,7 +182,7 @@ protected:
     // enters through the public ReadStaticRef runtime path.
     BaseObject* FinalizeLoadForMutator(BaseObject* handed, BaseObject* holder,
                                        const RefField<false>* field, const char* site,
-                                       const ForwardingProvenance* provenance = nullptr) const;
+                                       const ForwardingProvenance& provenance) const;
 
     // zBarrier.inline.hpp:294-340 make_load_good then mutate the to-address.
     // WriteGenericImpl used to HasRefField the from-copy after ClearUnits.

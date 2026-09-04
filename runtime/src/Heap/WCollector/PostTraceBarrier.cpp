@@ -27,7 +27,8 @@ BaseObject* PostTraceBarrier::ReadReference(BaseObject* obj, RefField<false>& fi
         if (oldTarget == nullptr ||
             LIKELY(!IsPlainNonNullSlotWord(static_cast<uintptr_t>(raw(oldField.GetFieldValue()))) &&
                    theCollector.is_load_good(oldField))) {
-            BaseObject* resolved = ResolveFromCopyForMutator(oldTarget);
+            const ForwardingProvenance provenance{ ForwardingHolderKind::HeapRef, obj, &field };
+            BaseObject* resolved = ResolveFromCopyForMutator(oldTarget, provenance);
             if (resolved == oldTarget || resolved == nullptr) {
                 return resolved;
             }
@@ -39,13 +40,14 @@ BaseObject* PostTraceBarrier::ReadReference(BaseObject* obj, RefField<false>& fi
                                        HealSite::PostTraceReadReference);
         }
 
-        BaseObject* loadGood = theCollector.make_load_good(oldField);
+        const ForwardingProvenance provenance{ ForwardingHolderKind::HeapRef, obj, &field };
+        BaseObject* loadGood = theCollector.make_load_good(oldField, provenance);
         // relroroot / rostatic: non-heap targets (static constants under GNU_RELRO) are never
         // evacuated. Colouring + CAS into those slots faults (si_code=2 ACCERR). Skip write-back.
         if (loadGood != nullptr && !Heap::IsHeapAddress(loadGood)) {
             return loadGood;
         }
-        loadGood = ResolveFromCopyForMutator(loadGood);
+        loadGood = ResolveFromCopyForMutator(loadGood, provenance);
         if (loadGood == nullptr) {
             return nullptr;
         }
@@ -161,7 +163,8 @@ BaseObject* PostTraceBarrier::AtomicReadReference(BaseObject* obj, RefField<true
             return oldTarget;
         }
 
-        BaseObject* loadGood = theCollector.make_load_good(oldField);
+        const ForwardingProvenance provenance{ ForwardingHolderKind::HeapRef, obj, &field };
+        BaseObject* loadGood = theCollector.make_load_good(oldField, provenance);
         // relroroot / rostatic: non-heap targets under GNU_RELRO — skip colour CAS write-back.
         if (loadGood != nullptr && !Heap::IsHeapAddress(loadGood)) {
             return loadGood;

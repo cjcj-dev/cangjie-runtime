@@ -27,7 +27,8 @@ BaseObject* PreforwardBarrier::ReadReference(BaseObject* obj, RefField<false>& f
         if (oldTarget == nullptr ||
             LIKELY(!IsPlainNonNullSlotWord(static_cast<uintptr_t>(raw(oldField.GetFieldValue()))) &&
                    theCollector.is_load_good(oldField))) {
-            BaseObject* resolved = ResolveFromCopyForMutator(oldTarget);
+            const ForwardingProvenance provenance{ ForwardingHolderKind::HeapRef, obj, &field };
+            BaseObject* resolved = ResolveFromCopyForMutator(oldTarget, provenance);
             if (resolved == oldTarget || resolved == nullptr) {
                 return resolved;
             }
@@ -41,7 +42,8 @@ BaseObject* PreforwardBarrier::ReadReference(BaseObject* obj, RefField<false>& f
 
         BaseObject* loadGood = oldTarget;
         if (!theCollector.IsUnmovableFromObject(oldTarget)) {
-            loadGood = theCollector.make_load_good(oldField);
+            const ForwardingProvenance provenance{ ForwardingHolderKind::HeapRef, obj, &field };
+            loadGood = theCollector.make_load_good(oldField, provenance);
             if (theCollector.IsGhostFromObject(loadGood)) {
                 BaseObject* fwd = theCollector.ForwardObject(loadGood);
                 // tipnull: ForwardObject may null on soft miss; never hand null to mutator
@@ -57,7 +59,8 @@ BaseObject* PreforwardBarrier::ReadReference(BaseObject* obj, RefField<false>& f
             return loadGood;
         }
 
-        loadGood = ResolveFromCopyForMutator(loadGood);
+        const ForwardingProvenance provenance{ ForwardingHolderKind::HeapRef, obj, &field };
+        loadGood = ResolveFromCopyForMutator(loadGood, provenance);
         if (loadGood == nullptr) {
             return nullptr;
         }
@@ -110,7 +113,8 @@ BaseObject* PreforwardBarrier::AtomicReadReference(BaseObject* obj, RefField<tru
 
         BaseObject* loadGood = oldTarget;
         if (!theCollector.IsUnmovableFromObject(oldTarget)) {
-            loadGood = theCollector.make_load_good(oldField);
+            const ForwardingProvenance provenance{ ForwardingHolderKind::HeapRef, obj, &field };
+            loadGood = theCollector.make_load_good(oldField, provenance);
             if (theCollector.IsGhostFromObject(loadGood)) {
                 BaseObject* fwd = theCollector.ForwardObject(loadGood);
                 // tipnull: ForwardObject may null on soft miss; never hand null to mutator

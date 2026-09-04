@@ -199,7 +199,8 @@ void WCollector::EnumRefFieldRoot(RefField<>& field, RootSet& rootSet) const
         }
     }
 
-    BaseObject* latest = make_load_good(oldField);
+    const ForwardingProvenance provenance{ ForwardingHolderKind::Static, nullptr, &field };
+    BaseObject* latest = make_load_good(oldField, provenance);
 
     // target object could be null or non-heap for some static variable.
     if (!Heap::IsHeapAddress(latest)) {
@@ -248,7 +249,9 @@ void WCollector::EnumAndTagRawRoot(ObjectRef& ref, RootSet& rootSet) const
         return;
     }
     if (IsGhostFromObject(root)) {
-        BaseObject* to = FindToVersion(root).GetOrFailClosed("WCollector::MarkStackRoots");
+        const ForwardingProvenance provenance{ ForwardingHolderKind::StackSlot, this, &ref };
+        BaseObject* to = FindToVersion(root).GetOrFailClosed(
+            "WCollector::MarkStackRoots", provenance);
         if (to != nullptr) {
             root = to;
         }
@@ -348,7 +351,8 @@ void WCollector::TraceRefField(BaseObject* obj, RefField<>& field, WorkStack& wo
         return;
     }
 
-    BaseObject* latest = make_load_good(oldField);
+    const ForwardingProvenance provenance{ ForwardingHolderKind::HeapRef, obj, &field };
+    BaseObject* latest = make_load_good(oldField, provenance);
 
     // target object could be null or non-heap for some static variable.
     if (!Heap::IsHeapAddress(latest)) {
@@ -556,7 +560,8 @@ BaseObject* WCollector::GetAndTryTagObj(RefSlotKind kind, BaseObject* obj, RefFi
                      obj->GetTypeInfo()->GetName(), BaseObject::FieldOffset(obj, &field));
         return targetObj;
     }
-    latest = make_load_good(oldField);
+    const ForwardingProvenance provenance{ ForwardingHolderKind::HeapRef, obj, &field };
+    latest = make_load_good(oldField, provenance);
     // target object could be null or non-heap for some static variable.
     if (!Heap::IsHeapAddress(latest)) {
         return nullptr;
@@ -1138,7 +1143,9 @@ bool ScrubMinorFreeTarget(RefField<>& field, BaseObject* target, bool /*fromFix*
     // coverage completed; fail closed instead of manufacturing a null heal.
     (void)HealSlot(field, oldField.GetFieldValue(), zpointer::null,
                    HealSite::WCollectorMinorFixForwardNull, HealNull::Disallow);
-    Collector::FailClosedLoad("WCollector::ScrubMinorFreeTarget.unresolved", target, oldVal);
+    Collector::FailClosedLoad(
+        "WCollector::ScrubMinorFreeTarget.unresolved", target, oldVal,
+        ForwardingProvenance{ ForwardingHolderKind::Remset, nullptr, &field });
 }
 
 } // namespace WCollectorInternal
