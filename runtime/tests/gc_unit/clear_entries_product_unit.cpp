@@ -2639,6 +2639,10 @@ GC_TEST(ForwardingPublicationProduct, PostRemapResetDestroysAfterA8Coverage)
     manager.CompactRegion(region);
     const MAddress to = ForwardingTable::FindTo(from);
     GC_EXPECT_TRUE(to != 0);
+    ZForwarding* youngTab = ForwardingTable::GetCovering(from);
+    GC_EXPECT_TRUE(youngTab != nullptr);
+    youngTab->note_table_epoch(static_cast<uint8_t>(Generation::Young), youngTab->birth_flip(),
+                               ForwardingTable::MarkCoverageEpoch(Generation::Young) + 1);
 
     ForwardingTable::ClearEntries(region->GetRegionStart(), region->GetRegionSize());
     ForwardingTable::ReclaimRetired("old-remap-young-roots-complete");
@@ -2680,6 +2684,10 @@ GC_TEST(ForwardingPublicationProduct, RetiredYoungTableSurvivesA8UntilNextYoungM
     manager.CompactRegion(region);
     const MAddress to = ForwardingTable::FindTo(from);
     GC_EXPECT_TRUE(to != 0);
+    ZForwarding* youngTab = ForwardingTable::GetCovering(from);
+    GC_EXPECT_TRUE(youngTab != nullptr);
+    youngTab->note_table_epoch(static_cast<uint8_t>(Generation::Young), youngTab->birth_flip(),
+                               ForwardingTable::MarkCoverageEpoch(Generation::Young) + 1);
     ForwardingTable::ClearEntries(region->GetRegionStart(), region->GetRegionSize());
     ForwardingTable::ReclaimRetired("old-remap-young-roots-complete");
     FindToVersionResult found = RelocationReceiptTestAccess::ProductFindToVersion(collector, liveObject);
@@ -2760,6 +2768,10 @@ GC_TEST(ForwardingPublicationProduct, HeldLookupReaderDefersEligibleDestroy)
     manager.CompactRegion(region);
     const MAddress to = ForwardingTable::FindTo(from);
     GC_EXPECT_TRUE(to != 0);
+    ZForwarding* youngTab = ForwardingTable::GetCovering(from);
+    GC_EXPECT_TRUE(youngTab != nullptr);
+    youngTab->note_table_epoch(static_cast<uint8_t>(Generation::Young), youngTab->birth_flip(),
+                               ForwardingTable::MarkCoverageEpoch(Generation::Young) + 1);
     ForwardingTable::ClearEntries(region->GetRegionStart(), region->GetRegionSize());
     ForwardingTable::PublishMarkCoverage(Generation::Young);
     {
@@ -2799,6 +2811,8 @@ GC_TEST(ForwardingPublicationProduct, CoverageEpochAdvancesOnlyAtMarkEnd)
     manager.CompactRegion(region);
     ZForwarding* tab = ForwardingTable::GetCovering(from);
     GC_EXPECT_TRUE(tab != nullptr);
+    tab->note_table_epoch(static_cast<uint8_t>(Generation::Young), tab->birth_flip(),
+                          ForwardingTable::MarkCoverageEpoch(Generation::Young) + 1);
     const uint64_t required = tab->required_mark_epoch();
     const uint64_t before = ForwardingTable::MarkCoverageEpoch(Generation::Young);
     GC_EXPECT_TRUE(before < required);
