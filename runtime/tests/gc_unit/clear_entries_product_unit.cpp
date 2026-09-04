@@ -2395,6 +2395,86 @@ GC_TEST(ForwardingPublicationProduct, InsertThenReclaimStillServesWaitAndTryUpda
     RelocationReceiptTestAccess::BindCollector(Heap::GetHeap().GetCollectorResources(), nullptr);
 }
 
+GC_TEST(ForwardingPublicationProduct, PostTraceResetDestroysDeferredAfterRemapWhy)
+{
+    GcHeapFixture& fx = ProductFixture();
+    RelocationReceiptTestAccess::ReleaseListOwnership(RegionInfo::GetRegionInfo(4));
+    RegionInfo* region = RegionInfo::InitRegion(4, 1, RegionInfo::UnitRole::SMALL_SIZED_UNITS);
+    GC_EXPECT_TRUE(region != nullptr);
+    region->SetRegionType(RegionInfo::RegionType::THREAD_LOCAL_REGION);
+    BaseObject* dead = fx.PlaceObject(region->GetRegionStart());
+    const size_t objectSize = dead->GetSize();
+    BaseObject* liveObject = fx.PlaceObject(region->GetRegionStart() + objectSize);
+    const MAddress from = reinterpret_cast<MAddress>(liveObject);
+    region->SetRegionAllocPtr(from + objectSize);
+    WCollector collector(Heap::GetHeap().GetAllocator(), Heap::GetHeap().GetCollectorResources());
+    RelocationReceiptTestAccess::BindCollector(Heap::GetHeap().GetCollectorResources(), &collector);
+    LiveInfo* live = PrepareForwardable(fx, region, from);
+    RegionManager manager;
+    RelocationReceiptTestAccess::ParkFrom(manager, region);
+    manager.CompactRegion(region);
+    const MAddress to = ForwardingTable::FindTo(from);
+    GC_EXPECT_TRUE(to != 0);
+
+    ForwardingTable::ClearEntries(region->GetRegionStart(), region->GetRegionSize());
+    ForwardingTable::ReclaimRetired("old-remap-young-roots-complete");
+    GC_EXPECT_EQ(ForwardingTable::LookupTo(from).to, to);
+
+    ForwardingTable::ReclaimRetired("post-trace-reset-relocation-set");
+    GC_EXPECT_EQ(ForwardingTable::LookupTo(from).to, to);
+    ForwardingTable::ReclaimRetired("post-trace-reset-relocation-set");
+    GC_EXPECT_EQ(ForwardingTable::LookupTo(from).to, 0);
+
+    if (region->IsGhostFromRegion()) {
+        region->DispelGhostFromRegion();
+    }
+    RelocationReceiptTestAccess::ReleaseListOwnership(region);
+    region->metadata.liveInfo = nullptr;
+    fx.FreePlanted(live);
+    RelocationReceiptTestAccess::BindCollector(Heap::GetHeap().GetCollectorResources(), nullptr);
+}
+
+GC_TEST(ForwardingPublicationProduct, ResolveStoreValueNoForwardingAfterGhostDispelLogs)
+{
+    GcHeapFixture& fx = ProductFixture();
+    RelocationReceiptTestAccess::ReleaseListOwnership(RegionInfo::GetRegionInfo(4));
+    RegionInfo* region = RegionInfo::InitRegion(4, 1, RegionInfo::UnitRole::SMALL_SIZED_UNITS);
+    GC_EXPECT_TRUE(region != nullptr);
+    region->SetRegionType(RegionInfo::RegionType::THREAD_LOCAL_REGION);
+    BaseObject* liveObject = fx.PlaceObject(region->GetRegionStart());
+    const MAddress from = reinterpret_cast<MAddress>(liveObject);
+    region->SetRegionAllocPtr(from + liveObject->GetSize());
+    WCollector collector(Heap::GetHeap().GetAllocator(), Heap::GetHeap().GetCollectorResources());
+    RelocationReceiptTestAccess::BindCollector(Heap::GetHeap().GetCollectorResources(), &collector);
+    LiveInfo* live = PrepareForwardable(fx, region, from);
+    RegionManager manager;
+    RelocationReceiptTestAccess::ParkFrom(manager, region);
+    manager.CompactRegion(region);
+    const MAddress to = ForwardingTable::FindTo(from);
+    GC_EXPECT_TRUE(to != 0);
+
+    ForwardingTable::ClearEntries(region->GetRegionStart(), region->GetRegionSize());
+    ForwardingTable::ReclaimRetired("post-trace-reset-relocation-set");
+    ForwardingTable::ReclaimRetired("post-trace-reset-relocation-set");
+    if (region->IsGhostFromRegion()) {
+        region->DispelGhostFromRegion();
+    }
+    GC_EXPECT_TRUE(RegionInfo::GetGhostFromRegionAt(from) == nullptr);
+
+    __atomic_store_n(reinterpret_cast<uint64_t*>(from), 0, __ATOMIC_RELAXED);
+#if defined(__linux__)
+    ExpectRootAbortAt("[fail-closed]", [&]() {
+        (void)RelocationReceiptTestAccess::ResolveStoreValue(collector, liveObject);
+    });
+#endif
+    GC_EXPECT_EQ(ForwardingTable::LookupTo(from).to, 0);
+
+    RelocationReceiptTestAccess::ReleaseListOwnership(region);
+    region->metadata.liveInfo = nullptr;
+    fx.FreePlanted(live);
+    RelocationReceiptTestAccess::BindCollector(Heap::GetHeap().GetCollectorResources(), nullptr);
+}
+
 // ClearEntries must seal an installed table and wait for the publication owner
 // that crossed the copy boundary.  The owner inserts while clear is waiting;
 // only after the owner releases may clear unlink and retire the table.

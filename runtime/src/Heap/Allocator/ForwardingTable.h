@@ -128,6 +128,10 @@ public:
 
     static ZForwarding* Get(MAddress addr) { return get(addr); }
     static ZForwarding* GetEntries(MAddress addr);
+    // Active entries, then membership, then a retired generation that still
+    // covers `addr`. ClassifyCompactedMiss must see the same carrier LookupTo
+    // uses after ClearEntries (zForwardingTable.inline.hpp:36-46).
+    static ZForwarding* GetCovering(MAddress addr);
     // Product connection points for the dual carrier. Publication copies the
     // from-page view into the already-installed ZForwarding; every consumer
     // resolves the view back through the table rather than RegionInfo storage.

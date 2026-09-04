@@ -813,6 +813,14 @@ public:
                                                   : FindToVersionResult::NotForwarded();
                 }
                 if (lookup.answer == ForwardingTable::ToAnswer::Unavailable) {
+                    const uint8_t causeBits = static_cast<uint8_t>(lookup.unavailableCause);
+                    // zGeneration.inline.hpp:131-135: forwarding table gone → addr.
+                    if ((causeBits & static_cast<uint8_t>(
+                            ForwardingTable::ToUnavailableCause::TableDestroyed)) != 0 &&
+                        Collector::JudgeHandOutTarget(obj) == HandVerdict::Usable &&
+                        !obj->IsForwarded()) {
+                        return FindToVersionResult::NotForwarded();
+                    }
                     FindToVersionResult::UnavailableWitness witness;
                     witness.lookupAnswer = answerName(lookup.answer);
                     witness.lookupSnapshotValid = true;

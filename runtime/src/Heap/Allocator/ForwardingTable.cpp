@@ -493,6 +493,9 @@ static void UnlinkThenDestroy(ZForwarding* tab)
 namespace {
 std::mutex g_retiredLock;
 std::vector<ZForwarding*> g_retired;
+// Previous reset generation. ZGeneration::reset_relocation_set destroys the
+// set installed last cycle, after this cycle's mark (zGeneration.cpp:276-285).
+std::vector<ZForwarding*> g_retiredPrev;
 std::atomic<uint64_t> g_retiredTotal{ 0 };
 std::atomic<uint64_t> g_reclaimedTotal{ 0 };
 } // namespace
@@ -513,6 +516,7 @@ void ForwardingTable::ReclaimRetired(const char* why)
     std::vector<ZForwarding*> candidates;
     std::vector<ZForwarding*> deferred;
     std::vector<ZForwarding*> victims;
+    size_t stillHeld = 0;
     {
         // ClearEntries/EnsureEntries take install before Retire takes retired;
         // keep that lock order. Retired lookups block here instead of observing
@@ -526,10 +530,33 @@ void ForwardingTable::ReclaimRetired(const char* why)
                                                     tab == nullptr ? 0 : tab->page_life_id());
         }
         const std::unordered_set<ZForwarding*> candidateSet(candidates.begin(), candidates.end());
+        // ZGeneration::reset_relocation_set runs after the next cycle's mark
+        // (zGeneration.cpp:276-285,1041-1042), not at remap-young-roots of the
+        // cycle that installed the tables. Production why
+        // old-remap-young-roots-complete therefore defers; PostTrace reset
+        // is the coverage-complete destroy.
+        const bool resetPrevGeneration = why != nullptr &&
+            std::strcmp(why, "post-trace-reset-relocation-set") == 0;
         const bool forceCoverageComplete = why != nullptr &&
             (std::strcmp(why, "gc-unit-fixture-coverage-complete") == 0 ||
              std::strcmp(why, "gc-unit-explicit-coverage") == 0 ||
              std::strstr(why, "cleanup") != nullptr);
+        if (resetPrevGeneration) {
+            for (ZForwarding* tab : g_retiredPrev) {
+                victims.push_back(tab);
+            }
+            g_retiredPrev = candidates;
+            g_retired.clear();
+        } else if (forceCoverageComplete) {
+            for (ZForwarding* tab : g_retiredPrev) {
+                victims.push_back(tab);
+            }
+            g_retiredPrev.clear();
+            for (ZForwarding* tab : candidates) {
+                victims.push_back(tab);
+            }
+            g_retired.clear();
+        } else
         for (ZForwarding* tab : candidates) {
             bool needsReceipt = false;
             if (tab == nullptr || !tab->retired_required() || forceCoverageComplete) {
@@ -554,7 +581,10 @@ void ForwardingTable::ReclaimRetired(const char* why)
             });
             (needsReceipt ? deferred : victims).push_back(tab);
         }
-        g_retired = deferred;
+        if (!resetPrevGeneration && !forceCoverageComplete) {
+            g_retired = deferred;
+        }
+        stillHeld = g_retired.size() + g_retiredPrev.size();
     }
     for (ZForwarding* tab : victims) {
         UnlinkThenDestroy(tab);
@@ -566,7 +596,7 @@ void ForwardingTable::ReclaimRetired(const char* why)
         LOG(RTLOG_ERROR,
             "[FWDTABLE][reclaim] why=%s freed=%zu deferred=%zu coverage_complete=%u "
             "retired_total=%lu reclaimed_total=%lu",
-            why == nullptr ? "?" : why, victims.size(), deferred.size(), deferred.empty() ? 1u : 0u,
+            why == nullptr ? "?" : why, victims.size(), stillHeld, stillHeld == 0 ? 1u : 0u,
             g_retiredTotal.load(std::memory_order_relaxed), done);
     }
 }
@@ -591,7 +621,7 @@ bool ForwardingTable::RetiredCovers(MAddress regionStart, size_t regionSize)
         }
         return false;
     };
-    return covers(g_retired);
+    return covers(g_retired) || covers(g_retiredPrev);
 }
 
 bool ForwardingTable::HasLiveCarrier(MAddress regionStart, size_t regionSize)
@@ -615,6 +645,32 @@ ZForwarding* ForwardingTable::GetEntries(MAddress addr)
         return nullptr;
     }
     return forwarding;
+}
+
+ZForwarding* ForwardingTable::GetCovering(MAddress addr)
+{
+    ZForwarding* armed = GetEntries(addr);
+    if (armed != nullptr) {
+        return armed;
+    }
+    ZForwarding* member = Get(addr);
+    if (member != nullptr) {
+        return member;
+    }
+    std::lock_guard<std::mutex> lock(g_retiredLock);
+    auto scan = [&](const std::vector<ZForwarding*>& gens) -> ZForwarding* {
+        for (auto it = gens.rbegin(); it != gens.rend(); ++it) {
+            ZForwarding* tab = *it;
+            if (tab != nullptr && tab->covers(addr)) {
+                return tab;
+            }
+        }
+        return nullptr;
+    };
+    if (ZForwarding* tab = scan(g_retired)) {
+        return tab;
+    }
+    return scan(g_retiredPrev);
 }
 
 bool ForwardingTable::PublishFromPageView(RegionInfo* region, LiveInfo* liveInfo, uint64_t epoch,
@@ -965,6 +1021,13 @@ static MAddress FindRetiredToImpl(MAddress from, ForwardingTable::ToAnswer* answ
             *answer = ForwardingTable::ToAnswer::ArmedHit;
         }
         return fresh;
+    }
+    const MAddress prev = scan(g_retiredPrev);
+    if (prev != 0) {
+        if (answer != nullptr) {
+            *answer = ForwardingTable::ToAnswer::ArmedHit;
+        }
+        return prev;
     }
     if (answer != nullptr) {
         if (searched) {

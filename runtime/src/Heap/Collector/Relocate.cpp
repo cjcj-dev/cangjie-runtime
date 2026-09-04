@@ -1937,10 +1937,7 @@ static CompactedMissClass ClassifyCompactedMiss(RegionInfo* region, BaseObject* 
     // livemap -- ZGC resolves the identical overlap from ZForwarding::_in_place_top_at_start plus
     // the forwarding entry, never from liveness (zForwarding.cpp:55-64; zHeap.cpp:202-208).
     if (addr < allocPtr) {
-        ZForwarding* provenance = ForwardingTable::GetEntries(start);
-        if (provenance == nullptr) {
-            provenance = ForwardingTable::Get(start);
-        }
+        ZForwarding* provenance = ForwardingTable::GetCovering(start);
         MAddress revFrom = 0;
         if (provenance != nullptr && provenance->find_from_by_to(addr, &revFrom) && revFrom >= start) {
             return CompactedMissClass::kAlreadyToStart;
@@ -2358,11 +2355,31 @@ BaseObject* WCollector::ResolveStoreValue(BaseObject* ref) const
         RegionInfo* ghost = currentRegion;
         if (ghost == nullptr) {
             RegionInfo* live = RegionInfo::TryGetRegionInfoAt(currentAddr);
+            if (live != nullptr && live->IsCompacted()) {
+                const CompactedMissClass cls = ClassifyCompactedMiss(live, current);
+                if (cls == CompactedMissClass::kAlreadyToStart &&
+                    Collector::JudgeHandOutTarget(current) == HandVerdict::Usable) {
+                    return current;
+                }
+            }
             if (live != nullptr && !live->IsFreeRegion() && !live->IsGarbageRegion() &&
                 Collector::JudgeHandOutTarget(current) == HandVerdict::Usable &&
                 !current->IsForwarded()) {
                 return current;
             }
+            const ForwardingTable::LookupResult lookup = ForwardingTable::LookupTo(currentAddr);
+            LOG(RTLOG_ERROR,
+                "[FWDTABLE][resolve-miss] site=no-forwarding from=%p region=%p "
+                "ghost=0 compacted=%u route=%u lookup.to=%p answer=%u cause=%u "
+                "retiredAnswer=%u pubClosed=%u verdict=%u",
+                static_cast<void*>(current), static_cast<void*>(live),
+                live != nullptr && live->IsCompacted() ? 1u : 0u,
+                live != nullptr ? static_cast<unsigned>(live->GetRouteState()) : 0u,
+                reinterpret_cast<void*>(lookup.to), static_cast<unsigned>(lookup.answer),
+                static_cast<unsigned>(lookup.unavailableCause),
+                static_cast<unsigned>(lookup.retiredAnswer),
+                lookup.publicationClosed ? 1u : 0u,
+                static_cast<unsigned>(Collector::JudgeHandOutTarget(current)));
             FailClosedLoad("WCollector::ResolveStoreValue.no-forwarding", current, 0);
         }
         // A pointer with ghost membership belongs to a published forwarding
