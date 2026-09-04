@@ -1322,7 +1322,7 @@ GC_TEST(ForwardingPublicationProduct, ReclaimRetiredDefersResidualUntilActiveRec
                                                  reinterpret_cast<MAddress>(to)).address,
                  reinterpret_cast<MAddress>(to));
     activePublication = ForwardingTable::Publication();
-    ForwardingTable::ReclaimRetired("gc-unit-successor-receipt");
+    ForwardingTable::ReclaimRetired("gc-unit-explicit-coverage");
     GC_EXPECT_EQ(ForwardingTable::FindRetiredTo(reinterpret_cast<MAddress>(from)), 0);
     GC_EXPECT_EQ(ForwardingTable::FindTo(reinterpret_cast<MAddress>(from)),
                  reinterpret_cast<MAddress>(to));
@@ -1382,7 +1382,7 @@ GC_TEST(ForwardingPublicationProduct, ReclaimRetiredPreservesNewActiveReceiptHea
                  reinterpret_cast<MAddress>(newTo));
     activePublication = ForwardingTable::Publication();
 
-    ForwardingTable::ReclaimRetired("gc-unit-active-receipt");
+    ForwardingTable::ReclaimRetired("gc-unit-explicit-coverage");
     GC_EXPECT_TRUE(from->IsForwarded());
     GC_EXPECT_EQ(ForwardingTable::FindRetiredTo(reinterpret_cast<MAddress>(from)), 0);
     GC_EXPECT_EQ(ForwardingTable::FindTo(reinterpret_cast<MAddress>(from)),
@@ -1714,7 +1714,7 @@ GC_TEST(ForwardingPublicationProduct, UnlinkMissReportsTableDestroyed)
     WCollector collector(Heap::GetHeap().GetAllocator(), Heap::GetHeap().GetCollectorResources());
     LateBackfillState state = PrepareLateBackfill(fx, collector);
     ForwardingTable::ClearEntries(state.region->GetRegionStart(), state.region->GetRegionSize());
-    ForwardingTable::ReclaimRetired("gc-unit-unlink-miss-table-destroyed");
+    ForwardingTable::ReclaimRetired("gc-unit-explicit-coverage");
     GC_EXPECT_FALSE(ForwardingTable::RetiredCovers(
         state.region->GetRegionStart(), state.region->GetRegionSize()));
 
