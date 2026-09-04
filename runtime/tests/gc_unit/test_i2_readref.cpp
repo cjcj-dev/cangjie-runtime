@@ -43,7 +43,8 @@ public:
     ZGenerationId remap_generation(RefField<>&) const override { return ZGenerationId::old; }
     BaseObject* relocate_or_remap_object(BaseObject* obj, ZGenerationId) const override
     {
-        return ResolveStoreValue(obj);
+        return ResolveStoreValue(obj, ForwardingProvenance{
+            ForwardingHolderKind::HeapRef, obj, &obj });
     }
     bool TryUpdateRefField(BaseObject*, RefField<>&, BaseObject*&) const override { return false; }
     bool IsOldPointer(RefField<>&) const override { return false; }

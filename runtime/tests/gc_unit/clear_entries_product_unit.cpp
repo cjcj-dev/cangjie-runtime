@@ -73,7 +73,8 @@ struct RelocationReceiptTestAccess {
 
     static BaseObject* ResolveStoreValue(WCollector& collector, BaseObject* value)
     {
-        return collector.ResolveStoreValue(value);
+        const ForwardingProvenance provenance{ ForwardingHolderKind::HeapRef, value, &value };
+        return collector.ResolveStoreValue(value, provenance);
     }
 
     static BaseObject* ForwardUpdateRawRef(WCollector& collector, ObjectRef& root)
@@ -99,7 +100,10 @@ struct RelocationReceiptTestAccess {
     static BaseObject* WaitRoutedTipReady(
         WCollector& collector, BaseObject* from, BaseObject* to, RegionInfo* forwarding)
     {
-        return collector.WaitRoutedTipReady(from, to, forwarding);
+        const ForwardingProvenance provenance{
+            ForwardingHolderKind::HeapRef, forwarding, &from
+        };
+        return collector.WaitRoutedTipReady(from, to, forwarding, provenance);
     }
 
     static bool TryUpdateRefField(WCollector& collector, BaseObject* obj, RefField<>& field, BaseObject*& newRef)
@@ -312,7 +316,11 @@ public:
     {
     }
 
-    BaseObject* Resolve(BaseObject* from) const { return ResolveFromCopyForMutator(from); }
+    BaseObject* Resolve(BaseObject* from) const
+    {
+        const ForwardingProvenance provenance{ ForwardingHolderKind::HeapRef, from, &from };
+        return ResolveFromCopyForMutator(from, provenance);
+    }
 };
 
 GcHeapFixture& ProductFixture()
@@ -1682,8 +1690,12 @@ GC_TEST(ForwardingPublicationProduct, ArmedHitAfterPublicationCloseResolves)
     FindToVersionResult result = RelocationReceiptTestAccess::ProductFindToVersion(collector, state.from);
     GC_EXPECT_TRUE(result.state() == FindToVersionResult::State::Found);
     GC_EXPECT_TRUE(result.found() == state.to);
+    RootSlot slot;
+    StorePlain(slot, from_object(state.from));
+    const ForwardingProvenance provenance{ ForwardingHolderKind::Static, nullptr, &slot };
     GC_EXPECT_TRUE(result.GetOrFailClosed(
-                       "ForwardingPublicationProduct.ArmedHitAfterPublicationCloseResolves") == state.to);
+                       "ForwardingPublicationProduct.ArmedHitAfterPublicationCloseResolves",
+                       provenance) == state.to);
 
     CleanupLateBackfill(fx, state);
     RelocationReceiptTestAccess::BindCollector(Heap::GetHeap().GetCollectorResources(), nullptr);
@@ -1742,24 +1754,26 @@ GC_TEST(FindToRouteDiagnostics, InvalidLookupSnapshotPrintsNa)
     witness.lookupSnapshotValid = false;
     const FindToVersionResult result = FindToVersionResult::Unavailable(
         FindToVersionResult::UnavailableRoute::NoGhostForwarded, witness);
+    RootSlot slot;
+    const ForwardingProvenance provenance{ ForwardingHolderKind::Static, nullptr, &slot };
 
     ExpectRootAbortAt("lookup=n/a", [&]() {
-        (void)result.GetOrFailClosed("FindToRouteDiagnostics.InvalidLookupSnapshotPrintsNa");
+        (void)result.GetOrFailClosed("FindToRouteDiagnostics.InvalidLookupSnapshotPrintsNa", provenance);
     });
     ExpectRootAbortAt("cause=n/a", [&]() {
-        (void)result.GetOrFailClosed("FindToRouteDiagnostics.InvalidLookupSnapshotPrintsNa");
+        (void)result.GetOrFailClosed("FindToRouteDiagnostics.InvalidLookupSnapshotPrintsNa", provenance);
     });
     ExpectRootAbortAt("active_candidate=n/a", [&]() {
-        (void)result.GetOrFailClosed("FindToRouteDiagnostics.InvalidLookupSnapshotPrintsNa");
+        (void)result.GetOrFailClosed("FindToRouteDiagnostics.InvalidLookupSnapshotPrintsNa", provenance);
     });
     ExpectRootAbortAt("active_lookup=n/a", [&]() {
-        (void)result.GetOrFailClosed("FindToRouteDiagnostics.InvalidLookupSnapshotPrintsNa");
+        (void)result.GetOrFailClosed("FindToRouteDiagnostics.InvalidLookupSnapshotPrintsNa", provenance);
     });
     ExpectRootAbortAt("retired_lookup=n/a", [&]() {
-        (void)result.GetOrFailClosed("FindToRouteDiagnostics.InvalidLookupSnapshotPrintsNa");
+        (void)result.GetOrFailClosed("FindToRouteDiagnostics.InvalidLookupSnapshotPrintsNa", provenance);
     });
     ExpectRootAbortAt("publication_closed=n/a", [&]() {
-        (void)result.GetOrFailClosed("FindToRouteDiagnostics.InvalidLookupSnapshotPrintsNa");
+        (void)result.GetOrFailClosed("FindToRouteDiagnostics.InvalidLookupSnapshotPrintsNa", provenance);
     });
 }
 
@@ -1924,25 +1938,72 @@ GC_TEST(ForwardingPublicationProduct, LookupCausePublishedWithoutReceipt)
 #if defined(__linux__)
     GcHeapFixture& fx = ProductFixture();
     RelocationReceiptTestAccess::ReleaseListOwnership(RegionInfo::GetRegionInfo(4));
+    RelocationReceiptTestAccess::ReleaseListOwnership(RegionInfo::GetRegionInfo(3));
     RegionInfo* region = RegionInfo::InitRegion(4, 1, RegionInfo::UnitRole::SMALL_SIZED_UNITS);
-    GC_EXPECT_TRUE(region != nullptr);
+    RegionInfo* destination = RegionInfo::InitRegion(3, 1, RegionInfo::UnitRole::SMALL_SIZED_UNITS);
+    GC_EXPECT_TRUE(region != nullptr && destination != nullptr);
     region->SetRegionType(RegionInfo::RegionType::THREAD_LOCAL_REGION);
+    destination->SetRegionType(RegionInfo::RegionType::THREAD_LOCAL_REGION);
     BaseObject* from = fx.PlaceObject(region->GetRegionStart());
     region->SetRegionAllocPtr(reinterpret_cast<MAddress>(from) + from->GetSize());
+    destination->SetRegionAllocPtr(destination->GetRegionStart());
     WCollector collector(Heap::GetHeap().GetAllocator(), Heap::GetHeap().GetCollectorResources());
     collector.SetGCPhase(GCPhase::GC_PHASE_IDLE);
     RelocationReceiptTestAccess::BindCollector(Heap::GetHeap().GetCollectorResources(), &collector);
     LiveInfo* live = PrepareForwardable(fx, region, reinterpret_cast<MAddress>(from));
-    region->SetRouteState(RegionInfo::RouteState::COMPACTED);
+    region->SetRouteInfo(destination->GetRegionStart(), static_cast<uint32_t>(from->GetSize()));
+    region->SetRouteState(RegionInfo::RouteState::FORWARDED);
     region->MarkForwardingDone();
     const ForwardingTable::LookupResult lookup = ForwardingTable::LookupTo(reinterpret_cast<MAddress>(from));
     GC_EXPECT_TRUE(lookup.to == 0);
     GC_EXPECT_TRUE(lookup.answer != ForwardingTable::ToAnswer::ArmedHit);
 
+    BaseObject* holder = fx.obj0;
+    auto& field = HeapSlotAt<>(reinterpret_cast<MAddress>(holder) + TYPEINFO_PTR_SIZE);
+    ForwardingTable::Publication publication =
+        ForwardingTable::EnsurePublicationBeforeCopy(region, reinterpret_cast<MAddress>(from));
+    GC_EXPECT_TRUE(static_cast<bool>(publication));
+    publication = ForwardingTable::Publication();
+    Barrier barrier(collector, Heap::GetHeap().GetRememberedSet());
+    AbortCapture aborted = CaptureAbort([&]() { barrier.WriteReference(holder, field, from); });
+    GC_EXPECT_TRUE(WIFSIGNALED(aborted.status));
+    GC_EXPECT_EQ(WTERMSIG(aborted.status), SIGABRT);
+    const char* required[] = {
+        "WCollector::WaitRoutedTipReady.published-without-receipt",
+        "holder_kind=heap_ref",
+        "holder=",
+        "slot=",
+        "waiter=",
+        "from=",
+        "from_region=",
+        "table_id=",
+        "expected_publisher=",
+        "lookup_state=",
+        "lookup_cause=",
+        "retired_lookup=",
+        "gc_phase=",
+    };
+    for (const char* token : required) {
+        if (aborted.output.find(token) == std::string::npos) {
+            std::fprintf(stderr, "WAIT_PROVENANCE missing=%s\n---\n%s\n---\n",
+                         token, aborted.output.c_str());
+        }
+        GC_EXPECT_TRUE(aborted.output.find(token) != std::string::npos);
+    }
+    char holderToken[64] {};
+    char slotToken[64] {};
+    (void)std::snprintf(holderToken, sizeof(holderToken), "holder=%p", holder);
+    (void)std::snprintf(slotToken, sizeof(slotToken), "slot=%p", &field);
+    GC_EXPECT_TRUE(aborted.output.find(holderToken) != std::string::npos);
+    GC_EXPECT_TRUE(aborted.output.find(slotToken) != std::string::npos);
+    GC_EXPECT_TRUE(aborted.output.find("holder_kind=unknown") == std::string::npos);
+
     if (region->IsGhostFromRegion()) {
         region->DispelGhostFromRegion();
     }
+    ForwardingTable::ClearEntries(region->GetRegionStart(), region->GetRegionSize());
     ForwardingTable::ReclaimRetired("gc-unit-lookup-cause");
+    RelocationReceiptTestAccess::ReleaseListOwnership(destination);
     region->metadata.liveInfo = nullptr;
     fx.FreePlanted(live);
     RelocationReceiptTestAccess::BindCollector(Heap::GetHeap().GetCollectorResources(), nullptr);
@@ -2635,9 +2696,35 @@ GC_TEST(ForwardingPublicationProduct, ResolveStoreValueNoForwardingAfterGhostDis
 
     __atomic_store_n(reinterpret_cast<uint64_t*>(from), 0, __ATOMIC_RELAXED);
 #if defined(__linux__)
-    ExpectRootAbortAt("[fail-closed]", [&]() {
-        (void)RelocationReceiptTestAccess::ResolveStoreValue(collector, liveObject);
-    });
+    BaseObject* holder = fx.obj0;
+    auto& field = HeapSlotAt<>(reinterpret_cast<MAddress>(holder) + TYPEINFO_PTR_SIZE);
+    Barrier barrier(collector, Heap::GetHeap().GetRememberedSet());
+    AbortCapture aborted = CaptureAbort([&]() { barrier.WriteReference(holder, field, liveObject); });
+    GC_EXPECT_TRUE(WIFSIGNALED(aborted.status));
+    GC_EXPECT_EQ(WTERMSIG(aborted.status), SIGABRT);
+    const char* required[] = {
+        "[LOADFC][fail-closed] site=WCollector::ResolveStoreValue.no-forwarding",
+        "holder_kind=heap_ref",
+        "holder=",
+        "slot=",
+        "from=",
+        "from_region=",
+        "table_id=",
+        "lookup_state=",
+        "lookup_cause=",
+        "retired_lookup=",
+        "gc_phase=",
+    };
+    for (const char* token : required) {
+        GC_EXPECT_TRUE(aborted.output.find(token) != std::string::npos);
+    }
+    char holderToken[64] {};
+    char slotToken[64] {};
+    (void)std::snprintf(holderToken, sizeof(holderToken), "holder=%p", holder);
+    (void)std::snprintf(slotToken, sizeof(slotToken), "slot=%p", &field);
+    GC_EXPECT_TRUE(aborted.output.find(holderToken) != std::string::npos);
+    GC_EXPECT_TRUE(aborted.output.find(slotToken) != std::string::npos);
+    GC_EXPECT_TRUE(aborted.output.find("holder_kind=unknown") == std::string::npos);
 #endif
     GC_EXPECT_EQ(ForwardingTable::LookupTo(from).to, 0);
 

@@ -86,7 +86,8 @@ public:
             hookCv.notify_all();
             hookCv.wait(lock, [this]() { return winnerStored; });
         }
-        return ResolveStoreValue(object);
+        return ResolveStoreValue(object, ForwardingProvenance{
+            ForwardingHolderKind::HeapRef, object, &object });
     }
     RefField<> GetAndTryTagRefField(BaseObject* object) const override
     {
