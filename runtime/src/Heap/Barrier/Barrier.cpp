@@ -1113,11 +1113,13 @@ BaseObject* Barrier::ResolveFromCopyForMutator(BaseObject* target) const
     if (JudgeTarget(target) == TargetVerdict::Usable) {
         return target;
     }
-    BaseObject* to = theCollector.ResolveStoreValue(target);
+    const ForwardingProvenance provenance{ ForwardingHolderKind::Unknown, nullptr, nullptr };
+    BaseObject* to = theCollector.ResolveStoreValue(target, provenance);
     if (to != nullptr && JudgeTarget(to) == TargetVerdict::Usable) {
         return to;
     }
-    theCollector.FailClosedLoad("Barrier::ResolveFromCopyForMutator", target, 0);
+    theCollector.FailClosedLoad("Barrier::ResolveFromCopyForMutator", target, 0, provenance);
+    __builtin_unreachable();
 }
 
 // loadfc (zBarrier.inline.hpp:294-344): slow/runtime hand-out postcondition. A sampled non-Usable
