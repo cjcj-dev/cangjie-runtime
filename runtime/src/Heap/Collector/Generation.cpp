@@ -87,6 +87,8 @@ std::atomic<BaseObject*> g_satbBeforeMarkEndSecond { nullptr };
 std::atomic<uint64_t> g_satbBeforeMarkEndPublications { 0 };
 std::atomic<BaseObject*> g_allocBlackDuringConcurrent { nullptr };
 std::atomic<BaseObject*> g_y2yDuringConcurrent { nullptr };
+std::atomic<BaseObject*> g_leftoverAllocBlackBeforePause { nullptr };
+std::atomic<BaseObject*> g_leftoverY2yBeforePause { nullptr };
 std::atomic<Mutator*> g_exportRootAfterT1Producer { nullptr };
 std::atomic<BaseObject*> g_exportRootAfterT1Holder { nullptr };
 std::atomic<BaseObject*> g_exportRootAfterT1Child { nullptr };
@@ -206,6 +208,24 @@ void PublishConcurrentYoungProducersTestReceipt()
         AllocBuffer::GetOrCreateAllocBuffer()->PushYoungAllocBlack(allocBlack);
     }
     BaseObject* y2y = g_y2yDuringConcurrent.exchange(nullptr, std::memory_order_acq_rel);
+    if (y2y != nullptr) {
+        AllocBuffer::GetOrCreateAllocBuffer()->PushY2yDirtyHolder(y2y);
+    }
+}
+
+void ArmLeftoverBeforePauseTestReceipt(BaseObject* allocBlack, BaseObject* y2yHolder)
+{
+    g_leftoverAllocBlackBeforePause.store(allocBlack, std::memory_order_release);
+    g_leftoverY2yBeforePause.store(y2yHolder, std::memory_order_release);
+}
+
+void PublishLeftoverBeforePauseTestReceipt()
+{
+    BaseObject* allocBlack = g_leftoverAllocBlackBeforePause.exchange(nullptr, std::memory_order_acq_rel);
+    if (allocBlack != nullptr) {
+        AllocBuffer::GetOrCreateAllocBuffer()->PushYoungAllocBlack(allocBlack);
+    }
+    BaseObject* y2y = g_leftoverY2yBeforePause.exchange(nullptr, std::memory_order_acq_rel);
     if (y2y != nullptr) {
         AllocBuffer::GetOrCreateAllocBuffer()->PushY2yDirtyHolder(y2y);
     }
@@ -1104,6 +1124,7 @@ void WCollector::DoYoungGarbageCollection()
         // the pause has not started. The pause must flush once and return
         // failure; it must not consume closure in an in-pause loop.
         PublishSatbBeforeMarkEndTestReceipt();
+        PublishLeftoverBeforePauseTestReceipt();
 #endif
 
         // ZGenerationYoung::pause_mark_end() does one flush. Work found here is

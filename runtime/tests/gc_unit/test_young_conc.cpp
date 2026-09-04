@@ -872,6 +872,68 @@ GC_OTHER_VM_TEST(YoungConc, Y2yDirtyVisibleBeforePauseMarkEnd)
     (void)live;
 }
 
+// Worker termination then mutator leftover alloc-black/y2y before STW.
+// Pause must merge leftover and continue; it must not commit mark-end.
+GC_OTHER_VM_TEST(YoungConc, LeftoverAllocBlackAndY2yAfterWorkerForcesContinue)
+{
+    GC_EXPECT_EQ(CJ_ScheduleManagerInit(), 0);
+    GC_EXPECT_EQ(setenv("MRT_GCV2_MARKPAR_FORCE_SERIAL", "1", 1), 0);
+    MutatorManager mutatorManager;
+    YoungConcTestRuntime runtime(mutatorManager);
+    GcHeapFixture fx;
+    fx.region1->SetYoungRegionFlag(1);
+    fx.region1->SetYoungAge(1);
+    LiveInfo* live = fx.PlantLiveInfo(fx.region1);
+    (void)fx.PlantMarkBitmap<Generation::Young>(live, fx.region1->GetRegionSize());
+    BaseObject* allocChild = fx.PlaceObject(reinterpret_cast<MAddress>(fx.obj1) + 64);
+    BaseObject* y2yHolder = fx.PlaceObject(reinterpret_cast<MAddress>(fx.obj1) + 128);
+    BaseObject* y2yChild = fx.PlaceObject(reinterpret_cast<MAddress>(fx.obj1) + 192);
+    fx.region1->SetRegionAllocPtr(reinterpret_cast<MAddress>(y2yChild) + 64);
+    auto* allocField = &HeapSlotAt<>(reinterpret_cast<MAddress>(fx.obj1) + TYPEINFO_PTR_SIZE);
+    allocField->StoreColoured(GcUnit::StoreGoodPointer(allocChild));
+    (void)fx.region1->MarkObject(fx.region1->GetMarkView<Generation::Young>(), fx.obj1, 8);
+    auto* y2yField = &HeapSlotAt<>(reinterpret_cast<MAddress>(y2yHolder) + TYPEINFO_PTR_SIZE);
+    y2yField->StoreColoured(GcUnit::StoreGoodPointer(y2yChild));
+
+    CollectorResources& resources = Heap::GetHeap().GetCollectorResources();
+    WCollector collector(Heap::GetHeap().GetAllocator(), resources);
+    RelocationReceiptTestAccess::BindCollector(resources, &collector);
+    collector.SetGCPhase(GCPhase::GC_PHASE_CLEAR_SATB_BUFFER);
+    GCThreadPool threadPool("gc-unit-leftover-mark-end", 0, GCPoolThread::GC_THREAD_PRIORITY);
+    RelocationReceiptTestAccess::BindThreadPool(resources, &threadPool);
+    RegionSpace& space = reinterpret_cast<RegionSpace&>(Heap::GetHeap().GetAllocator());
+    space.GetRegionManager().EnlistFullThreadLocalRegion(fx.region1);
+    space.GetRegionManager().AddRawPointerObject(fx.obj1);
+    space.GetRegionManager().AddRawPointerObject(y2yHolder);
+    Heap::GetHeap().GetRememberedSet().Initialize(fx.heapStart, 2 * RegionInfo::UNIT_SIZE);
+    const bool startedBefore = resources.IsGcStarted();
+    const GCReason reasonBefore = resources.GetGCStats().reason;
+    resources.SetGcStarted(true);
+    resources.GetGCStats().reason = GC_REASON_YOUNG;
+    ResetMarkTerminateTestReceipt();
+    ArmLeftoverBeforePauseTestReceipt(fx.obj1, y2yHolder);
+
+    RelocationReceiptTestAccess::RunCollectionDispatch(collector);
+    const auto receipt = ReadMarkTerminateTestReceipt();
+    std::fprintf(stderr,
+                 "DETAIL leftover_mark_end pauses=%zu continues=%zu pauseAllocBlack=%zu pauseY2y=%zu\n",
+                 receipt.pauses, receipt.continues, receipt.pauseAllocBlack, receipt.pauseY2y);
+    GC_EXPECT_TRUE(receipt.continues >= 1u);
+    GC_EXPECT_TRUE(receipt.pauseAllocBlack >= 1u);
+    GC_EXPECT_TRUE(receipt.pauseY2y >= 1u);
+    const auto view = fx.region1->GetMarkView<Generation::Young>();
+    GC_EXPECT_TRUE(fx.region1->IsMarkedObject(view, allocChild));
+    GC_EXPECT_TRUE(fx.region1->IsMarkedObject(view, y2yHolder));
+    GC_EXPECT_TRUE(fx.region1->IsMarkedObject(view, y2yChild));
+
+    resources.SetGcStarted(startedBefore);
+    resources.GetGCStats().reason = reasonBefore;
+    RelocationReceiptTestAccess::BindThreadPool(resources, nullptr);
+    threadPool.Exit();
+    RelocationReceiptTestAccess::BindCollector(resources, nullptr);
+    (void)live;
+}
+
 GC_OTHER_VM_TEST(YoungConc, PauseMarkEndNeverRunsClosure)
 {
     GC_EXPECT_EQ(CJ_ScheduleManagerInit(), 0);
@@ -1022,6 +1084,37 @@ GC_TEST(YoungConc, YoungToYoungWriteNotInRemset)
     std::unordered_set<MAddress> records;
     rs.DrainForMinor(records);
     GC_EXPECT_EQ(records.size(), 0u);
+}
+
+// y2y write is only the dirty-holder producer. The extra SATB alloc-black
+// publication on this path was a second producer of the same holder.
+GC_TEST(YoungConc, YoungToYoungWriteQueuesHolderOnly)
+{
+    GcHeapFixture fx;
+    fx.region0->SetYoungRegionFlag(1);
+    fx.region0->SetYoungAge(1);
+    fx.region1->SetYoungRegionFlag(1);
+    fx.region1->SetYoungAge(1);
+
+    auto* field = &HeapSlotAt<>(reinterpret_cast<MAddress>(fx.obj0) + TYPEINFO_PTR_SIZE);
+    TestCollector collector;
+    RememberedSet rs;
+    rs.Initialize(fx.heapStart, 2 * RegionInfo::UNIT_SIZE);
+    TestBarrier barrier(collector, rs);
+    auto* buffer = new AllocBuffer();
+    AllocBuffer* saved = ThreadLocal::GetAllocBuffer();
+    ThreadLocal::SetAllocBuffer(buffer);
+
+    field->StoreColoured(zpointer::null);
+    barrier.WriteReference(fx.obj0, *field, fx.obj1);
+
+    ThreadLocal::SetAllocBuffer(saved);
+    std::unordered_set<MAddress> records;
+    rs.DrainForMinor(records);
+    GC_EXPECT_TRUE(records.empty());
+    GC_EXPECT_EQ(buffer->Y2yDirtyHolderCount(), 1u);
+    GC_EXPECT_EQ(buffer->Y2yDirtySlotCount(), 0u);
+    GC_EXPECT_EQ(buffer->YoungAllocBlackCount(), 0u);
 }
 
 // Compensation: y2y dirty holder is merged into work stack (AllocBuffer.h:84-105).

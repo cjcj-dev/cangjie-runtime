@@ -2056,10 +2056,6 @@ void Barrier::RecordCrossGenEdge(BaseObject* obj, MAddress fieldAddress, BaseObj
                     buffer->PushY2yDirtySlot(fieldAddress);
                 }
             }
-            Mutator* mutator = ThreadLocal::GetMutator();
-            if (bufferableHolder && mutator != nullptr && mutator->IsManagedContext()) {
-                mutator->PublishYoungAllocBlack(obj);
-            }
             return;
         }
         if (alloc != nullptr && bufferableHolder && !buffered) {

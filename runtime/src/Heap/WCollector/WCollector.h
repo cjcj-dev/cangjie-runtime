@@ -83,6 +83,8 @@ void PublishSatbBeforeMarkEndTestReceipt();
 void ArmAllocBlackDuringConcurrentTestReceipt(BaseObject* object);
 void ArmY2yDuringConcurrentTestReceipt(BaseObject* holder);
 void PublishConcurrentYoungProducersTestReceipt();
+void ArmLeftoverBeforePauseTestReceipt(BaseObject* allocBlack, BaseObject* y2yHolder);
+void PublishLeftoverBeforePauseTestReceipt();
 
 struct ExportRootPublicationTestReceipt {
     uint64_t registrationsAfterT1 = 0;
