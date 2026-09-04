@@ -85,6 +85,8 @@ std::atomic<Mutator*> g_satbBeforeMarkEndProducer { nullptr };
 std::atomic<BaseObject*> g_satbBeforeMarkEndFirst { nullptr };
 std::atomic<BaseObject*> g_satbBeforeMarkEndSecond { nullptr };
 std::atomic<uint64_t> g_satbBeforeMarkEndPublications { 0 };
+std::atomic<BaseObject*> g_allocBlackDuringConcurrent { nullptr };
+std::atomic<BaseObject*> g_y2yDuringConcurrent { nullptr };
 std::atomic<Mutator*> g_exportRootAfterT1Producer { nullptr };
 std::atomic<BaseObject*> g_exportRootAfterT1Holder { nullptr };
 std::atomic<BaseObject*> g_exportRootAfterT1Child { nullptr };
@@ -165,7 +167,7 @@ void ArmSatbBeforeMarkEndTestReceipt(Mutator* producer, BaseObject* first, BaseO
     g_satbBeforeMarkEndProducer.store(producer, std::memory_order_release);
     g_satbBeforeMarkEndFirst.store(first, std::memory_order_release);
     g_satbBeforeMarkEndSecond.store(second, std::memory_order_release);
-    g_satbBeforeMarkEndPublications.store(2, std::memory_order_release);
+    g_satbBeforeMarkEndPublications.store(second == nullptr ? 1 : 2, std::memory_order_release);
 }
 
 void PublishSatbBeforeMarkEndTestReceipt()
@@ -179,11 +181,34 @@ void PublishSatbBeforeMarkEndTestReceipt()
         return;
     }
     Mutator* producer = g_satbBeforeMarkEndProducer.load(std::memory_order_acquire);
-    BaseObject* object = remaining == 2 ? g_satbBeforeMarkEndFirst.load(std::memory_order_acquire)
-                                       : g_satbBeforeMarkEndSecond.load(std::memory_order_acquire);
+    BaseObject* first = g_satbBeforeMarkEndFirst.load(std::memory_order_acquire);
+    BaseObject* second = g_satbBeforeMarkEndSecond.load(std::memory_order_acquire);
+    BaseObject* object = remaining == 2 ? first : (second != nullptr ? second : first);
     CHECK_DETAIL(producer != nullptr && object != nullptr, "armed SATB mark-end receipt without producer/object");
     producer->RememberObjectInSatbBuffer(object);
     producer->FlushSatbBuffer();
+}
+
+void ArmAllocBlackDuringConcurrentTestReceipt(BaseObject* object)
+{
+    g_allocBlackDuringConcurrent.store(object, std::memory_order_release);
+}
+
+void ArmY2yDuringConcurrentTestReceipt(BaseObject* holder)
+{
+    g_y2yDuringConcurrent.store(holder, std::memory_order_release);
+}
+
+void PublishConcurrentYoungProducersTestReceipt()
+{
+    BaseObject* allocBlack = g_allocBlackDuringConcurrent.exchange(nullptr, std::memory_order_acq_rel);
+    if (allocBlack != nullptr) {
+        AllocBuffer::GetOrCreateAllocBuffer()->PushYoungAllocBlack(allocBlack);
+    }
+    BaseObject* y2y = g_y2yDuringConcurrent.exchange(nullptr, std::memory_order_acq_rel);
+    if (y2y != nullptr) {
+        AllocBuffer::GetOrCreateAllocBuffer()->PushY2yDirtyHolder(y2y);
+    }
 }
 
 void ResetExportRootPublicationTestReceipt()
@@ -1093,11 +1118,15 @@ void WCollector::DoYoungGarbageCollection()
         const size_t y2yBatchAtMarkEnd = pendingY2yDirtyWorkCount();
 #endif
         theAllocator.VisitAllocBuffers([&workStack](AllocBuffer& buffer) {
-            // The CLEAR_SATB transition also closes each mutator's epoch stack
-            // publication. Late stack roots are mark work, just like ZGC's
-            // thread-local mark stacks flushed by ZMark::try_end().
+            // Frozen leftovers only. Concurrent MarkYoungSatbBuffer already
+            // merged live alloc-buffer roots / allocate-black / y2y into the
+            // termination domain. Pause must not become the first consumer.
+#if defined(MRT_TESTABLE_INTERNALS)
+            NoteMarkTerminatePauseProducers(buffer.YoungAllocBlackCount(),
+                                            buffer.Y2yDirtyHolderCount() + buffer.Y2yDirtySlotCount());
+#endif
             buffer.MergeRoots(workStack);
-            buffer.MergeYoungAllocBlack(workStack);
+            buffer.MergeYoungAllocBlackFollow(workStack);
         });
         mergeY2yDirtyWork(workStack);
 #if defined(MRT_TESTABLE_INTERNALS)

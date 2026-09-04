@@ -2114,6 +2114,11 @@ void WCollector::TraceYoungClosure(WorkStack& workStack, bool fullYoungScan, Min
                                    MinorSlotSet& weakSlots, bool useBitmapLedger,
                                    const MinorSlotSet* reachableSlotDomain)
 {
+#if defined(MRT_TESTABLE_INTERNALS)
+    if (MutatorManager::Instance().WorldStopped()) {
+        NoteTraceYoungClosureDuringPause();
+    }
+#endif
     if (workStack.empty()) {
         return;
     }
@@ -2226,9 +2231,23 @@ bool WCollector::MarkYoungSatbBuffer(WorkStack& workStack, bool fullYoungScan, M
             workStack.push_back(entry);
         }
     };
-    // ZMark::mark_follow() runs the coordinated worker termination once. Local
-    // mutator buffers are deliberately not flushed here; pause-mark-end owns one
-    // flush and returns failure to Generation when that flush discovers work.
+    // ZMark::mark_follow() consumes SATB plus every mutator-local producer that
+    // can publish grey without filling a SATB node (alloc-buffer roots,
+    // allocate-black Follow, y2y dirty). Pause-mark-end still owns the frozen
+    // non-full node flush; it must not be the first consumer of these producers.
+#if defined(MRT_TESTABLE_INTERNALS)
+    PublishConcurrentYoungProducersTestReceipt();
+#endif
+    theAllocator.VisitAllocBuffers([this, &workStack](AllocBuffer& buffer) {
+        buffer.MergeRoots(workStack);
+        buffer.MergeYoungAllocBlackFollow(workStack);
+        buffer.MergeY2yDirtyHolders(workStack);
+        buffer.MergeY2yDirtySlots([this, &workStack](MAddress slot) {
+            RefField<>& field = HeapSlotAt<>(slot);
+            BaseObject* target = ResolveMinorReference(field);
+            PushYoungObject(target, workStack, "y2y_slot");
+        });
+    });
     visitSatbObj();
     if (windowStats != nullptr) {
         ++windowStats->satbIters;

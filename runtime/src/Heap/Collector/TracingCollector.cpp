@@ -30,6 +30,9 @@ std::atomic<size_t> g_markTerminateFlushed{ 0 };
 std::atomic<bool> g_markTerminateAtexitInstalled{ false };
 #if defined(MRT_TESTABLE_INTERNALS)
 std::atomic<uint64_t> g_markTerminateMaxPauseNs{ 0 };
+std::atomic<size_t> g_markTerminatePauseAllocBlack{ 0 };
+std::atomic<size_t> g_markTerminatePauseY2y{ 0 };
+std::atomic<size_t> g_markTerminateClosureDuringPause{ 0 };
 std::atomic<size_t> g_weakDiscoveryCount{ 0 };
 #endif
 
@@ -66,6 +69,9 @@ void ResetMarkTerminateTestReceipt()
     g_markTerminatePauses.store(0, std::memory_order_relaxed);
     g_markTerminateFlushed.store(0, std::memory_order_relaxed);
     g_markTerminateMaxPauseNs.store(0, std::memory_order_relaxed);
+    g_markTerminatePauseAllocBlack.store(0, std::memory_order_relaxed);
+    g_markTerminatePauseY2y.store(0, std::memory_order_relaxed);
+    g_markTerminateClosureDuringPause.store(0, std::memory_order_relaxed);
 }
 
 MarkTerminateTestReceipt ReadMarkTerminateTestReceipt()
@@ -73,7 +79,10 @@ MarkTerminateTestReceipt ReadMarkTerminateTestReceipt()
     return { g_markTerminatePauses.load(std::memory_order_relaxed),
              g_markTerminateFlushed.load(std::memory_order_relaxed),
              g_markTerminateContinue.load(std::memory_order_relaxed),
-             g_markTerminateMaxPauseNs.load(std::memory_order_relaxed) };
+             g_markTerminateMaxPauseNs.load(std::memory_order_relaxed),
+             g_markTerminatePauseAllocBlack.load(std::memory_order_relaxed),
+             g_markTerminatePauseY2y.load(std::memory_order_relaxed),
+             g_markTerminateClosureDuringPause.load(std::memory_order_relaxed) };
 }
 
 void NoteMarkTerminatePauseDuration(uint64_t pauseNs)
@@ -81,6 +90,17 @@ void NoteMarkTerminatePauseDuration(uint64_t pauseNs)
     uint64_t observed = g_markTerminateMaxPauseNs.load(std::memory_order_relaxed);
     while (observed < pauseNs &&
            !g_markTerminateMaxPauseNs.compare_exchange_weak(observed, pauseNs, std::memory_order_relaxed)) {}
+}
+
+void NoteMarkTerminatePauseProducers(size_t allocBlack, size_t y2y)
+{
+    g_markTerminatePauseAllocBlack.fetch_add(allocBlack, std::memory_order_relaxed);
+    g_markTerminatePauseY2y.fetch_add(y2y, std::memory_order_relaxed);
+}
+
+void NoteTraceYoungClosureDuringPause()
+{
+    g_markTerminateClosureDuringPause.fetch_add(1, std::memory_order_relaxed);
 }
 
 void ResetWeakDiscoveryTestReceipt()

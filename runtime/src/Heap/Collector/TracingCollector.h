@@ -46,10 +46,15 @@ struct MarkTerminateTestReceipt {
     size_t flushed = 0;
     size_t continues = 0;
     uint64_t maxPauseNs = 0;
+    size_t pauseAllocBlack = 0;
+    size_t pauseY2y = 0;
+    size_t closureDuringPause = 0;
 };
 void ResetMarkTerminateTestReceipt();
 MarkTerminateTestReceipt ReadMarkTerminateTestReceipt();
 void NoteMarkTerminatePauseDuration(uint64_t pauseNs);
+void NoteMarkTerminatePauseProducers(size_t allocBlack, size_t y2y);
+void NoteTraceYoungClosureDuringPause();
 
 struct WeakDiscoveryTestReceipt {
     size_t discovered = 0;

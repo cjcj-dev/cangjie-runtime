@@ -74,6 +74,7 @@ public:
     // youngconc: TRACE-window allocate-black greys (mutator-only push; GC merges at STW2).
     // Paint alone makes MarkObject claim skip TraceYoungClosure → never reachableVec/fields.
     void PushYoungAllocBlack(BaseObject* obj) { youngAllocBlack.emplace_back(obj); }
+    size_t YoungAllocBlackCount() const { return youngAllocBlack.size(); }
 
     template<class WorkStack>
     inline void MergeYoungAllocBlack(WorkStack& workStack)
@@ -83,6 +84,20 @@ public:
         }
         for (BaseObject* obj : youngAllocBlack) {
             workStack.push_back(obj);
+        }
+        youngAllocBlack.clear();
+    }
+
+    // Already-painted allocate-black work must keep the Follow bit. A plain
+    // MarkAndFollow push would skip children once the mark bit is claimed.
+    template<class WorkStack>
+    inline void MergeYoungAllocBlackFollow(WorkStack& workStack)
+    {
+        if (youngAllocBlack.empty()) {
+            return;
+        }
+        for (BaseObject* obj : youngAllocBlack) {
+            workStack.push_back(MarkStackEntry::FollowOnly(obj));
         }
         youngAllocBlack.clear();
     }
