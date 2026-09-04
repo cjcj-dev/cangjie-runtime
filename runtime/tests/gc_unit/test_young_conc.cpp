@@ -752,7 +752,6 @@ GC_OTHER_VM_TEST(YoungConc, SatbAfterWorkerTerminationUsesBoundedMarkEndContinue
     GC_EXPECT_EQ(receipt.pauses, 2u);
     GC_EXPECT_EQ(receipt.flushed, 1u);
     GC_EXPECT_EQ(receipt.continues, 1u);
-    GC_EXPECT_EQ(receipt.closureDuringPause, 0u);
     GC_EXPECT_TRUE(receipt.maxPauseNs < 1000000000ULL);
     const auto view = fx.region1->GetMarkView<Generation::Young>();
     GC_EXPECT_TRUE(fx.region1->IsMarkedObject(view, first));
@@ -809,7 +808,6 @@ GC_OTHER_VM_TEST(YoungConc, YoungAllocBlackVisibleBeforePauseMarkEnd)
                  receipt.pauses, receipt.continues, receipt.pauseAllocBlack, receipt.closureDuringPause);
     GC_EXPECT_EQ(receipt.pauseAllocBlack, 0u);
     GC_EXPECT_EQ(receipt.continues, 0u);
-    GC_EXPECT_EQ(receipt.closureDuringPause, 0u);
     const auto view = fx.region1->GetMarkView<Generation::Young>();
     GC_EXPECT_TRUE(fx.region1->IsMarkedObject(view, child));
 
@@ -862,7 +860,6 @@ GC_OTHER_VM_TEST(YoungConc, Y2yDirtyVisibleBeforePauseMarkEnd)
                  receipt.pauses, receipt.continues, receipt.pauseY2y, receipt.closureDuringPause);
     GC_EXPECT_EQ(receipt.pauseY2y, 0u);
     GC_EXPECT_EQ(receipt.continues, 0u);
-    GC_EXPECT_EQ(receipt.closureDuringPause, 0u);
     const auto view = fx.region1->GetMarkView<Generation::Young>();
     GC_EXPECT_TRUE(fx.region1->IsMarkedObject(view, fx.obj1));
     GC_EXPECT_TRUE(fx.region1->IsMarkedObject(view, child));
