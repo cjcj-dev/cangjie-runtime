@@ -379,11 +379,6 @@ HandVerdict Collector::JudgeHandOutTarget(BaseObject* target)
                  static_cast<unsigned>(lookup.unavailableCause),
                  static_cast<unsigned>(lookup.retiredAnswer),
                  static_cast<unsigned>(Heap::GetHeap().GetGCPhase()));
-    Logger::GetLogger().FormatLog(RTLOG_FATAL, true,
-                                  "[LOADFC][fail-closed] site=%s target=%p verdict=%u slotBits=%#zx "
-                                  "unresolved non-Usable from-address must not be handed out",
-                                  site != nullptr ? site : "?", static_cast<void*>(target),
-                                  static_cast<unsigned>(verdict), slotBits);
     (void)fflush(stderr);
     (void)fflush(stdout);
     std::abort();
