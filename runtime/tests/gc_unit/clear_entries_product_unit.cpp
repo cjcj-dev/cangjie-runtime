@@ -329,6 +329,7 @@ GcHeapFixture& ProductFixture()
     }();
     GC_EXPECT_TRUE(initialized);
     GC_EXPECT_TRUE(rememberedInitialized);
+    ForwardingTable::ReclaimRetired("gc-unit-fixture-coverage-complete");
     return fixture;
 }
 
