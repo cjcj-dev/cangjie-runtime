@@ -2398,6 +2398,9 @@ GC_TEST(ForwardingPublicationProduct, InsertThenReclaimStillServesWaitAndTryUpda
 GC_TEST(ForwardingPublicationProduct, PostTraceResetDestroysDeferredAfterRemapWhy)
 {
     GcHeapFixture& fx = ProductFixture();
+    // Drain shared g_retired/g_retiredPrev so the two-generation protocol
+    // starts with an empty prev cohort (zRelocationSet.cpp:191-200).
+    ForwardingTable::ReclaimRetired("gc-unit-fixture-coverage-complete");
     RelocationReceiptTestAccess::ReleaseListOwnership(RegionInfo::GetRegionInfo(4));
     RegionInfo* region = RegionInfo::InitRegion(4, 1, RegionInfo::UnitRole::SMALL_SIZED_UNITS);
     GC_EXPECT_TRUE(region != nullptr);
