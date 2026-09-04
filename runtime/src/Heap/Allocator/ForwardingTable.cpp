@@ -516,7 +516,20 @@ std::atomic<uint64_t> g_retiredTotal{ 0 };
 std::atomic<uint64_t> g_reclaimedTotal{ 0 };
 } // namespace
 
-bool ForwardingTable::RetiredDestroyEligible(ZForwarding* tab)
+static bool ReclaimWhyForceCoverageComplete(const char* why)
+{
+    if (why == nullptr) {
+        return false;
+    }
+    if (std::strcmp(why, "gc-unit-fixture-coverage-complete") == 0 ||
+        std::strcmp(why, "gc-unit-explicit-coverage") == 0 ||
+        std::strstr(why, "cleanup") != nullptr) {
+        return true;
+    }
+    return false;
+}
+
+static bool CoverageEpochSatisfied(ZForwarding* tab)
 {
     if (tab == nullptr) {
         return false;
@@ -525,7 +538,15 @@ bool ForwardingTable::RetiredDestroyEligible(ZForwarding* tab)
     if (idx > 1) {
         return false;
     }
-    if (g_markCoverageEpoch[idx].load(std::memory_order_acquire) < tab->required_mark_epoch()) {
+    return g_markCoverageEpoch[idx].load(std::memory_order_acquire) >= tab->required_mark_epoch();
+}
+
+bool ForwardingTable::RetiredDestroyEligible(ZForwarding* tab)
+{
+    if (tab == nullptr) {
+        return false;
+    }
+    if (!CoverageEpochSatisfied(tab)) {
         return false;
     }
     const int32_t refs = tab->ref_count().load(std::memory_order_acquire);
@@ -565,10 +586,7 @@ void ForwardingTable::ReclaimRetired(const char* why)
                                                     tab != nullptr,
                                                     tab == nullptr ? 0 : tab->page_life_id());
         }
-        const bool forceCoverageComplete = why != nullptr &&
-            (std::strcmp(why, "gc-unit-fixture-coverage-complete") == 0 ||
-             std::strcmp(why, "gc-unit-explicit-coverage") == 0 ||
-             std::strstr(why, "cleanup") != nullptr);
+        const bool forceCoverageComplete = ReclaimWhyForceCoverageComplete(why);
         g_retired.clear();
         g_retiredPrev.clear();
         for (ZForwarding* tab : candidates) {
