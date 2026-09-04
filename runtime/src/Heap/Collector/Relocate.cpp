@@ -2369,7 +2369,13 @@ BaseObject* WCollector::ResolveStoreValue(BaseObject* ref, const ForwardingProve
                 !current->IsForwarded()) {
                 return current;
             }
-            const ForwardingTable::LookupResult lookup = ForwardingTable::LookupTo(currentAddr);
+            const ForwardingTable::LookupResult lookup =
+                Collector::JudgeHandOutTarget(current) == HandVerdict::ZeroHeader
+                    ? ForwardingTable::LookupResult{ 0, ForwardingTable::ToAnswer::Unarmed,
+                                                     ForwardingTable::ToUnavailableCause::None, false, false,
+                                                     ForwardingTable::ToAnswer::Unarmed,
+                                                     ForwardingTable::ToAnswer::Unarmed, false, false, 0 }
+                    : ForwardingTable::LookupTo(currentAddr);
             LOG(RTLOG_ERROR,
                 "[FWDTABLE][resolve-miss] site=no-forwarding holder_kind=%s holder=%p slot=%p "
                 "from=%p from_region=%p region_type=%u generation=%u "

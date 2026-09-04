@@ -354,7 +354,8 @@ HandVerdict Collector::JudgeHandOutTarget(BaseObject* target)
     RegionInfo* region = from != 0 && Heap::IsHeapAddress(target)
         ? RegionInfo::TryGetRegionInfoAt(from)
         : nullptr;
-    const ForwardingTable::LookupResult lookup = from != 0 && Heap::IsHeapAddress(target)
+    const bool canLookup = from != 0 && Heap::IsHeapAddress(target) && verdict != HandVerdict::ZeroHeader;
+    const ForwardingTable::LookupResult lookup = canLookup
         ? ForwardingTable::LookupTo(from)
         : ForwardingTable::LookupResult{ 0, ForwardingTable::ToAnswer::Unarmed,
                                          ForwardingTable::ToUnavailableCause::None, false, false,
