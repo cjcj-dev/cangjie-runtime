@@ -377,7 +377,8 @@ public:
     inline void HandleGCPhase(GCPhase newPhase, bool bySelf);
     inline void HandleGCPhaseIDLE();
     inline void ForwardLocalFinalizers(Collector& collector);
-    static DerivedPtrVisitor MakePreForwardDerivedVisitor(Collector& collector);
+    using PreForwardBaseResolver = std::function<BaseObject*(BaseObject*)>;
+    static DerivedPtrVisitor MakePreForwardDerivedVisitor(const PreForwardBaseResolver& resolveBase);
 
     inline void HandleCpuProfile();
 

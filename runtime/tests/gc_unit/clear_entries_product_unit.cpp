@@ -30,6 +30,7 @@
 #include "Heap/Collector/PromotedRegionDomain.h"
 #include "Heap/Verify/FromPageDetachCheck.h"
 #include "Heap/WCollector/WCollector.h"
+#include "Mutator/Mutator.h"
 #include "Mutator/ThreadLocal.h"
 #include "Mutator/MutatorManager.h"
 #include "ObjectModel/RefField.inline.h"
@@ -1672,6 +1673,52 @@ GC_TEST(ForwardingPublicationProduct, ArmedMissAfterPublicationCloseFailsClosed)
         }
         GC_EXPECT_TRUE(aborted.output.find(token) != std::string::npos);
     }
+
+    CleanupLateBackfill(fx, state);
+    RelocationReceiptTestAccess::BindCollector(Heap::GetHeap().GetCollectorResources(), nullptr);
+}
+
+GC_TEST(ForwardingPublicationProduct, PreForwardDerivedRebasesFromRemappedBaseWithoutLookup)
+{
+    GcHeapFixture& fx = ProductFixture();
+    WCollector collector(Heap::GetHeap().GetAllocator(), Heap::GetHeap().GetCollectorResources());
+    LateBackfillState state = PrepareLateBackfill(fx, collector);
+    ForwardingTable::ClearEntries(state.region->GetRegionStart(), state.region->GetRegionSize());
+    GC_EXPECT_TRUE(ForwardingTable::RetiredCovers(
+        state.region->GetRegionStart(), state.region->GetRegionSize()));
+
+    constexpr size_t derivedOffset = sizeof(uintptr_t);
+    RootSlot oldBase;
+    StorePlain(oldBase, from_object(state.from));
+    DerivedSlot derived;
+    RebaseDerived(derived, oldBase, derivedOffset);
+
+    const uint64_t hitsBefore = ForwardingTable::ArmedHitCount();
+    const uint64_t missesBefore = ForwardingTable::ArmedMissCount();
+    const uint64_t unavailableBefore = ForwardingTable::UnavailableCount();
+    const uint64_t unarmedBefore = ForwardingTable::UnarmedCount();
+    size_t resolverCalls = 0;
+    DerivedPtrVisitor visitor = Mutator::MakePreForwardDerivedVisitor(
+        [&](BaseObject* old) -> BaseObject* {
+            ++resolverCalls;
+            GC_EXPECT_TRUE(old == state.from);
+            return state.to;
+        });
+    visitor(from_object(state.from), derived);
+
+    GC_EXPECT_EQ(resolverCalls, static_cast<size_t>(1));
+    GC_EXPECT_EQ(raw(derived.LoadDerived()),
+                 reinterpret_cast<MAddress>(state.to) + derivedOffset);
+    GC_EXPECT_EQ(ForwardingTable::ArmedHitCount(), hitsBefore);
+    GC_EXPECT_EQ(ForwardingTable::ArmedMissCount(), missesBefore);
+    GC_EXPECT_EQ(ForwardingTable::UnavailableCount(), unavailableBefore);
+    GC_EXPECT_EQ(ForwardingTable::UnarmedCount(), unarmedBefore);
+
+    // Positive control for the zero-lookup assertion above: the same closed carrier and old base
+    // must move the unavailable counter when the forwarding lookup is explicitly invoked.
+    FindToVersionResult lookup = RelocationReceiptTestAccess::ProductFindToVersion(collector, state.from);
+    GC_EXPECT_TRUE(lookup.state() == FindToVersionResult::State::Unavailable);
+    GC_EXPECT_EQ(ForwardingTable::UnavailableCount(), unavailableBefore + 1);
 
     CleanupLateBackfill(fx, state);
     RelocationReceiptTestAccess::BindCollector(Heap::GetHeap().GetCollectorResources(), nullptr);

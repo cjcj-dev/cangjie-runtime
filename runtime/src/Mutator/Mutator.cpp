@@ -8,6 +8,7 @@
 #include "Base/Types.h"
 #include "Common/TypeDef.h"
 #include <cstring>
+#include <map>
 #if defined(_WIN64)
 #define NOGDI
 #include <windows.h>
@@ -1197,11 +1198,42 @@ inline void Mutator::ForwardLocalFinalizers(Collector& collector)
     }
 }
 
+DerivedPtrVisitor Mutator::MakePreForwardDerivedVisitor(const PreForwardBaseResolver& resolveBase)
+{
+    return [resolveBase](BasePtrType basePtr, DerivedSlot& derivedPtr) {
+        // ProcessDerivedOop preserves the offset against the old base, remaps the base as an
+        // ordinary oop, then rebuilds the derived value (oopMap.cpp:412-421).  HeapReferenceMap
+        // deliberately captures basePtr before its root visitor runs, so resolveBase joins that
+        // old value to the value already written by the preceding ordinary-root pass.  Do not
+        // reopen forwarding lookup here: A8REMAP has already closed that authority.
+        BaseObject* oldBase = PlainRootObject(basePtr);
+        BaseObject* oldDerived = PlainRootObject(derivedPtr.LoadDerived());
+        if (oldBase == nullptr || oldDerived == nullptr ||
+            reinterpret_cast<MAddress>(oldDerived) < reinterpret_cast<MAddress>(oldBase)) {
+            return;
+        }
+        const size_t offset = reinterpret_cast<MAddress>(oldDerived) - reinterpret_cast<MAddress>(oldBase);
+
+        BaseObject* currentBase = resolveBase(oldBase);
+        if (currentBase == nullptr) {
+            Collector::FailClosedLoad(
+                "Mutator::MakePreForwardDerivedVisitor.base-not-remapped", oldBase,
+                reinterpret_cast<uintptr_t>(&derivedPtr),
+                ForwardingProvenance{ ForwardingHolderKind::Derived,
+                                      reinterpret_cast<const void*>(raw(basePtr)), &derivedPtr });
+        }
+        RootSlot fixedBase;
+        StorePlain(fixedBase, from_object(currentBase));
+        RebaseDerived(derivedPtr, fixedBase, offset);
+    };
+}
+
 inline void Mutator::GCPhasePreForward(GCPhase newPhase)
 {
     std::set<BaseObject*> rootSet;
     std::set<void*> rootFieldSet;
     std::stack<BaseObject*> rootStack;
+    std::map<BaseObject*, BaseObject*> remappedBases;
     Collector& collector = reinterpret_cast<Collector&>(Heap::GetHeap().GetCollector());
     HeapSlotVisitor refVisitor = [&rootSet, &rootFieldSet, &rootStack, &collector, this](HeapSlot<>& refFieldAddr) {
         // The containing object is stack allocated, so this metadata field is a RootSlot.
@@ -1229,7 +1261,8 @@ inline void Mutator::GCPhasePreForward(GCPhase newPhase)
         }
     };
 
-    RootVisitor visitor = [&rootSet, &rootFieldSet, &rootStack, &collector, this, &refVisitor](ObjectRef& root) {
+    RootVisitor visitor = [&rootSet, &rootFieldSet, &rootStack, &remappedBases, &collector, this,
+                           &refVisitor](ObjectRef& root) {
         // interiorsrc2: peel colour before ghost/forward checks; write plain back so mutator
         // does not resume with a coloured interior (si_code=128 in arrayInitByFunction).
         StripRootObjectColour(root);
@@ -1258,7 +1291,9 @@ inline void Mutator::GCPhasePreForward(GCPhase newPhase)
         }
         if (Heap::IsHeapAddress(oldObj) && collector.IsGhostFromObject(oldObj) &&
             !collector.IsUnmovableFromObject(oldObj)) {
-            if (!rootFieldSet.insert((void*)(&root)).second) { return; }
+            if (!rootFieldSet.insert((void*)(&root)).second) {
+                return;
+            }
             // interiorstart: a livemap-driven "recover the base of an interior root" branch
             // stood here and has been deleted -- it read IsOwnerSurvivedObject as a start
             // predicate when MarkBits makes it a coverage predicate (RegionInfo.h AdmitForRoute
@@ -1278,11 +1313,17 @@ inline void Mutator::GCPhasePreForward(GCPhase newPhase)
                                           oldObj, reinterpret_cast<uintptr_t>(&root), provenance);
             }
             HealRoot(root, from_object(toObj), HealSite::MutatorPreForwardRoot);
-        } else if (IsStackAddr(reinterpret_cast<uintptr_t>(oldObj))) {
-            if (IsHeaderedStackObject(oldObj)) {
-                CheckAndPush(oldObj, rootSet, rootStack, this);
-            } else {
-                PreForwardHeaderlessRecord(oldObj, collector, rootFieldSet);
+            remappedBases[oldObj] = toObj;
+        } else if (oldObj != nullptr) {
+            // HeapReferenceMap saved this value before invoking us.  Record the identity arm as
+            // well, so the later derived pass consumes one uniform old-base -> current-base map.
+            remappedBases[oldObj] = oldObj;
+            if (IsStackAddr(reinterpret_cast<uintptr_t>(oldObj))) {
+                if (IsHeaderedStackObject(oldObj)) {
+                    CheckAndPush(oldObj, rootSet, rootStack, this);
+                } else {
+                    PreForwardHeaderlessRecord(oldObj, collector, rootFieldSet);
+                }
             }
         }
         while (!rootStack.empty()) {
@@ -1292,41 +1333,11 @@ inline void Mutator::GCPhasePreForward(GCPhase newPhase)
         }
     };
 
-    DerivedPtrVisitor derivedPtrVisitor = [&collector](BasePtrType basePtr, DerivedSlot& derivedPtr) {
-        // Peel colour on base/derived before arithmetic; interiors must not be treated as bases.
-        BaseObject* fromVersion = PlainRootObject(basePtr);
-        BaseObject* derivedObj = PlainRootObject(derivedPtr.LoadDerived());
-        if (fromVersion == nullptr || derivedObj == nullptr ||
-            reinterpret_cast<MAddress>(derivedObj) < reinterpret_cast<MAddress>(fromVersion)) {
-            return;
-        }
-        const size_t offset = reinterpret_cast<MAddress>(derivedObj) - reinterpret_cast<MAddress>(fromVersion);
-        // introot: even when derived is an interior (RawArray+8), still relocate via base.
-        // Previous code returned early after plain-strip and left a stale interior if base moved.
-        if (!Heap::IsHeapAddress(fromVersion) ||
-            !Collector::PlausibleManagedObjectGate("GCPhasePreForward.derivedBase", fromVersion) ||
-            !collector.IsGhostFromObject(fromVersion) || collector.IsUnmovableFromObject(fromVersion)) {
-            RootSlot base;
-            StorePlain(base, from_object(fromVersion));
-            RebaseDerived(derivedPtr, base, offset);
-            return;
-        }
-        const ForwardingProvenance provenance{
-            ForwardingHolderKind::Derived,
-            reinterpret_cast<const void*>(raw(basePtr)),
-            &derivedPtr
-        };
-        BaseObject* toVersion = collector.FindLatestVersion(fromVersion, provenance);
-        if (fromVersion != toVersion && toVersion != nullptr) {
-            RootSlot toBase;
-            StorePlain(toBase, from_object(toVersion));
-            RebaseDerived(derivedPtr, toBase, offset);
-        } else {
-            RootSlot base;
-            StorePlain(base, from_object(fromVersion));
-            RebaseDerived(derivedPtr, base, offset);
-        }
-    };
+    DerivedPtrVisitor derivedPtrVisitor = MakePreForwardDerivedVisitor(
+        [&remappedBases](BaseObject* oldBase) -> BaseObject* {
+            const auto found = remappedBases.find(oldBase);
+            return found == remappedBases.end() ? nullptr : found->second;
+        });
     VisitHeapReferences(visitor, derivedPtrVisitor);
     ForwardLocalFinalizers(collector);
 }
