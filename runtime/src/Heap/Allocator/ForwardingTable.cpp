@@ -990,7 +990,8 @@ MAddress ZForwarding::resolve_live(MAddress to) const
 
 bool ZForwarding::receipt_live(MAddress to) const { return resolve_live(to) != 0; }
 
-static MAddress FindRetiredToImpl(MAddress from, ForwardingTable::ToAnswer* answer, bool require = false)
+static MAddress FindRetiredToImpl(MAddress from, ForwardingTable::ToAnswer* answer, bool require = false,
+                                  uintptr_t* tableId = nullptr)
 {
     std::lock_guard<std::mutex> lock(g_retiredLock);
     bool searched = false;
@@ -1005,6 +1006,9 @@ static MAddress FindRetiredToImpl(MAddress from, ForwardingTable::ToAnswer* answ
                 continue;
             }
             searched = true;
+            if (tableId != nullptr && *tableId == 0) {
+                *tableId = reinterpret_cast<uintptr_t>(tab);
+            }
             const MAddress to = tab->resolve_life(tab->find(from));
             if (to != 0) {
                 if (require) {
@@ -1077,11 +1081,15 @@ ForwardingTable::LookupResult ForwardingTable::LookupTo(MAddress from)
     ZForwarding* retained = nullptr;
     bool activeCandidate = false;
     bool activeRejected = false;
+    bool currentMembership = false;
+    uintptr_t tableId = 0;
     {
         std::lock_guard<std::mutex> lock(g_installLock);
         ZForwarding* candidate = Ready() ? MapGet(g_entries, from) : nullptr;
+        currentMembership = Ready() && MapGet(g_membership, from) != nullptr;
         activeCandidate = candidate != nullptr;
         if (candidate != nullptr) {
+            tableId = reinterpret_cast<uintptr_t>(candidate);
             if (!candidate->page_life_current(RegionLifeClock::Carrier::ARMED_ENTRY) ||
                 !candidate->retain_page()) {
                 activeRejected = true;
@@ -1104,16 +1112,17 @@ ForwardingTable::LookupResult ForwardingTable::LookupTo(MAddress from)
         if (to != 0) {
             g_armedHit.fetch_add(1, std::memory_order_relaxed);
             return { to, ToAnswer::ArmedHit, ToUnavailableCause::None, activeCandidate,
-                     true, ToAnswer::ArmedHit, ToAnswer::Unarmed, false };
+                     true, ToAnswer::ArmedHit, ToAnswer::Unarmed, false,
+                     currentMembership, tableId };
         }
     }
     ToAnswer retiredAnswer = ToAnswer::Unarmed;
-    const MAddress retired = FindRetiredToImpl(from, &retiredAnswer);
+    const MAddress retired = FindRetiredToImpl(from, &retiredAnswer, false, &tableId);
     if (retired != 0) {
         g_armedHit.fetch_add(1, std::memory_order_relaxed);
         return { retired, ToAnswer::ArmedHit, ToUnavailableCause::None, activeCandidate,
                  activeSearched, activeSearched ? ToAnswer::ArmedMiss : ToAnswer::Unarmed,
-                 ToAnswer::ArmedHit, false };
+                 ToAnswer::ArmedHit, false, currentMembership, tableId };
     }
     // A carrier found in the active slot but refused by retain is a lifecycle
     // failure. It must not be downgraded to an ordinary armed miss merely
@@ -1145,6 +1154,8 @@ ForwardingTable::LookupResult ForwardingTable::LookupTo(MAddress from)
                            : (activeSearched ? ToAnswer::ArmedMiss : ToAnswer::Unarmed),
             retiredAnswer,
             publicationClosed,
+            currentMembership,
+            tableId,
         };
         g_unavailable.fetch_add(1, std::memory_order_relaxed);
         return result;
@@ -1153,11 +1164,11 @@ ForwardingTable::LookupResult ForwardingTable::LookupTo(MAddress from)
         g_armedMiss.fetch_add(1, std::memory_order_relaxed);
         return { 0, ToAnswer::ArmedMiss, ToUnavailableCause::None, activeCandidate,
                  activeSearched, activeSearched ? ToAnswer::ArmedMiss : ToAnswer::Unarmed,
-                 retiredAnswer, publicationClosed };
+                 retiredAnswer, publicationClosed, currentMembership, tableId };
     }
     g_unarmed.fetch_add(1, std::memory_order_relaxed);
     return { 0, ToAnswer::Unarmed, ToUnavailableCause::None, activeCandidate, false,
-             ToAnswer::Unarmed, retiredAnswer, publicationClosed };
+             ToAnswer::Unarmed, retiredAnswer, publicationClosed, currentMembership, tableId };
 }
 
 uint64_t ForwardingTable::ArmedHitCount() { return g_armedHit.load(std::memory_order_relaxed); }

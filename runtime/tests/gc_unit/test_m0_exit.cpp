@@ -156,7 +156,7 @@ public:
     {
         return answer == nullptr ? FindToVersionResult::NotForwarded() : FindToVersionResult::Found(answer);
     }
-    BaseObject* ResolveStoreValue(BaseObject* ref) const override
+    BaseObject* ResolveStoreValue(BaseObject* ref, const ForwardingProvenance& = {}) const override
     {
         return answer == nullptr ? ref : answer;
     }

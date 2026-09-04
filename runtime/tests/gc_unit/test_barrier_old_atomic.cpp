@@ -67,7 +67,7 @@ public:
         return object == from && to != nullptr ? FindToVersionResult::Found(to) :
                                                 FindToVersionResult::NotForwarded();
     }
-    BaseObject* ResolveStoreValue(BaseObject* object) const override
+    BaseObject* ResolveStoreValue(BaseObject* object, const ForwardingProvenance& = {}) const override
     {
         return object == from && to != nullptr ? to : object;
     }

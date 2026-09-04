@@ -468,7 +468,8 @@ void WCollector::FixOldTaggedRefField(BaseObject* holder, RefField<>& field, con
     // zBarrier.inline.hpp:294-343: resolve through forwarding, completing
     // relocation on this thread when necessary, before self-healing the slot.
     // No route miss, invalid tip, or stale from-address is an installable value.
-    BaseObject* resolved = ResolveStoreValue(from);
+    const ForwardingProvenance provenance{ ForwardingHolderKind::Remset, holder, &field };
+    BaseObject* resolved = ResolveStoreValue(from, provenance);
     CHECK_DETAIL(resolved != nullptr && Heap::IsHeapAddress(resolved),
                  "old-tag heal requires a resolved heap address from=%p", from);
     CHECK_DETAIL(Collector::JudgeHandOutTarget(resolved) == HandVerdict::Usable,

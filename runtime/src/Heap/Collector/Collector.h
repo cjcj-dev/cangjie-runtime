@@ -55,6 +55,46 @@ enum CollectorType {
 //   ZeroHeader  payload cleared by reclamation (ClearUnits reuse) -- nothing to resolve
 enum class HandVerdict : uint8_t { Usable, Forwarded, ZeroHeader };
 
+// Provenance is captured by the runtime entry that owns the slot.  Resolution
+// carries it down to the fail-closed exit instead of trying to reconstruct a
+// holder from an address after the forwarding lookup has failed.
+enum class ForwardingHolderKind : uint8_t {
+    HeapRef,
+    StackSlot,
+    Remset,
+    Static,
+    Derived,
+    StoreBuffer,
+    Unknown,
+};
+
+struct ForwardingProvenance {
+    ForwardingHolderKind kind{ ForwardingHolderKind::Unknown };
+    const void* holder{ nullptr };
+    const void* slot{ nullptr };
+
+    static const char* KindName(ForwardingHolderKind kind)
+    {
+        switch (kind) {
+            case ForwardingHolderKind::HeapRef:
+                return "heap_ref";
+            case ForwardingHolderKind::StackSlot:
+                return "stack_slot";
+            case ForwardingHolderKind::Remset:
+                return "remset";
+            case ForwardingHolderKind::Static:
+                return "static";
+            case ForwardingHolderKind::Derived:
+                return "derived";
+            case ForwardingHolderKind::StoreBuffer:
+                return "store_buffer";
+            case ForwardingHolderKind::Unknown:
+                return "unknown";
+        }
+        return "unknown";
+    }
+};
+
 // Public answer to a forwarding lookup. The three miss states deliberately do
 // not convert to BaseObject*: a lifecycle failure must remain visible until the
 // consumer either handles it explicitly or takes the controlled fail-closed
@@ -85,6 +125,14 @@ public:
         bool lookupPublicationClosed{ false };
         bool routeStateValid{ false };
         uint8_t routeState{ 0 };
+        uintptr_t from{ 0 };
+        uintptr_t fromRegion{ 0 };
+        bool regionSnapshotValid{ false };
+        uint8_t regionType{ 0 };
+        uint8_t generation{ 0 };
+        bool inCurrentRelocationSet{ false };
+        uintptr_t tableId{ 0 };
+        uint8_t gcPhase{ GC_PHASE_UNDEF };
     };
 
     static FindToVersionResult Found(BaseObject* object)
@@ -120,6 +168,14 @@ public:
     bool unavailable_lookup_publication_closed() const { return unavailableLookupPublicationClosed; }
     bool unavailable_route_state_valid() const { return unavailableRouteStateValid; }
     uint8_t unavailable_route_state() const { return unavailableRouteState; }
+    uintptr_t unavailable_from() const { return unavailableFrom; }
+    uintptr_t unavailable_from_region() const { return unavailableFromRegion; }
+    bool unavailable_region_snapshot_valid() const { return unavailableRegionSnapshotValid; }
+    uint8_t unavailable_region_type() const { return unavailableRegionType; }
+    uint8_t unavailable_generation() const { return unavailableGeneration; }
+    bool unavailable_in_current_relocation_set() const { return unavailableInCurrentRelocationSet; }
+    uintptr_t unavailable_table_id() const { return unavailableTableId; }
+    uint8_t unavailable_gc_phase() const { return unavailableGcPhase; }
 
     const char* unavailable_route_name() const
     {
@@ -140,7 +196,8 @@ public:
         return "unknown";
     }
 
-    BaseObject* GetOrFailClosed(const char* consumer) const
+    BaseObject* GetOrFailClosed(const char* consumer,
+                                const ForwardingProvenance& provenance = {}) const
     {
         const char* forwarded = unavailableForwardedValid ? (unavailableForwarded ? "1" : "0") : "n/a";
         const char* fromRegionInfoNull = unavailableFromRegionInfoNullValid
@@ -161,15 +218,27 @@ public:
                unavailableRouteState == 4 ? "4" :
                unavailableRouteState == 5 ? "5" : "invalid")
             : "n/a";
+        const char* regionType = unavailableRegionSnapshotValid ? "present" : "n/a";
         CHECK_DETAIL(lookupState != State::Unavailable,
                      "[FINDTO][fail-closed] consumer=%s forwarding carrier unavailable "
-                     "route=%s forwarded=%s fromRegionInfo_null=%s lookup=%s "
+                     "holder_kind=%s holder=%p slot=%p from=%p from_region=%p "
+                     "region_type=%s(%u) generation=%u in_current_relocation_set=%u table_id=%#zx "
+                     "lookup_state=%s route=%s forwarded=%s fromRegionInfo_null=%s lookup=%s "
                      "lookup_snapshot_valid=%u cause=%s active_candidate=%s active_lookup=%s "
-                     "retired_lookup=%s publication_closed=%s route_state=%s",
-                     consumer == nullptr ? "unknown" : consumer, unavailable_route_name(),
+                     "retired_lookup=%s publication_closed=%s route_state=%s gc_phase=%u",
+                     consumer == nullptr ? "unknown" : consumer,
+                     ForwardingProvenance::KindName(provenance.kind), provenance.holder, provenance.slot,
+                     reinterpret_cast<void*>(unavailableFrom), reinterpret_cast<void*>(unavailableFromRegion),
+                     regionType, static_cast<unsigned>(unavailableRegionType),
+                     static_cast<unsigned>(unavailableGeneration),
+                     unavailableInCurrentRelocationSet ? 1u : 0u,
+                     static_cast<size_t>(unavailableTableId),
+                     lookup,
+                     unavailable_route_name(),
                      forwarded, fromRegionInfoNull, lookup,
                      static_cast<unsigned>(unavailableLookupSnapshotValid), lookupCause,
-                     activeCandidate, activeLookup, retiredLookup, publicationClosed, routeState);
+                     activeCandidate, activeLookup, retiredLookup, publicationClosed, routeState,
+                     static_cast<unsigned>(unavailableGcPhase));
         return found();
     }
 
@@ -182,7 +251,9 @@ private:
           unavailableLookupCause("n/a"), unavailableLookupActiveCandidate(false),
           unavailableLookupActiveAnswer("n/a"), unavailableLookupRetiredAnswer("n/a"),
           unavailableLookupPublicationClosed(false), unavailableRouteStateValid(false),
-          unavailableRouteState(0)
+          unavailableRouteState(0), unavailableFrom(0), unavailableFromRegion(0),
+          unavailableRegionSnapshotValid(false), unavailableRegionType(0), unavailableGeneration(0),
+          unavailableInCurrentRelocationSet(false), unavailableTableId(0), unavailableGcPhase(GC_PHASE_UNDEF)
     {
     }
 
@@ -201,7 +272,12 @@ private:
                                                                                 : witness.lookupRetiredAnswer),
           unavailableLookupPublicationClosed(witness.lookupPublicationClosed),
           unavailableRouteStateValid(witness.routeStateValid),
-          unavailableRouteState(witness.routeState)
+          unavailableRouteState(witness.routeState), unavailableFrom(witness.from),
+          unavailableFromRegion(witness.fromRegion),
+          unavailableRegionSnapshotValid(witness.regionSnapshotValid),
+          unavailableRegionType(witness.regionType), unavailableGeneration(witness.generation),
+          unavailableInCurrentRelocationSet(witness.inCurrentRelocationSet),
+          unavailableTableId(witness.tableId), unavailableGcPhase(witness.gcPhase)
     {
     }
 
@@ -221,6 +297,14 @@ private:
     bool unavailableLookupPublicationClosed;
     bool unavailableRouteStateValid;
     uint8_t unavailableRouteState;
+    uintptr_t unavailableFrom;
+    uintptr_t unavailableFromRegion;
+    bool unavailableRegionSnapshotValid;
+    uint8_t unavailableRegionType;
+    uint8_t unavailableGeneration;
+    bool unavailableInCurrentRelocationSet;
+    uintptr_t unavailableTableId;
+    uint8_t unavailableGcPhase;
 };
 
 // c4unify MASKEQUIV: dual-run the published bad masks against a verbatim copy of the literal
@@ -278,7 +362,8 @@ public:
     static HandVerdict JudgeHandOutTarget(BaseObject* target);
     // loadfc: the loud failure for "resolution failed and the from-address is not Usable"
     // (0825 用户令: no silent fold-back to the original address).
-    [[noreturn]] static void FailClosedLoad(const char* site, BaseObject* target, uintptr_t slotBits);
+    [[noreturn]] static void FailClosedLoad(const char* site, BaseObject* target, uintptr_t slotBits,
+                                            const ForwardingProvenance& provenance = {});
 
     virtual GCStats& GetGCStats() { AbortUnimplemented("Collector::GetGCStats"); }
 
@@ -299,7 +384,12 @@ public:
     // OpenJDK zBarrier.inline.hpp:695-716 store_barrier / color_store_good:
     // a stored reference must already be the current version (remap included).
     // Default identity so gc_unit Collector stubs do not abort.
-    virtual BaseObject* ResolveStoreValue(BaseObject* ref) const { return ref; }
+    virtual BaseObject* ResolveStoreValue(BaseObject* ref,
+                                          const ForwardingProvenance& provenance = {}) const
+    {
+        (void)provenance;
+        return ref;
+    }
 
     virtual bool TryUpdateRefField(BaseObject*, RefField<>&, BaseObject*&) const
     {
@@ -491,7 +581,7 @@ public:
     // F5: to==nullptr must not silently return a dead/zeroed from (REPORT-tagaba F5).
     // Implementation in Collector.cpp — needs complete BaseObject + CHECK_DETAIL.
     // Anchor main 9ad991c4e8660c26d6bfe575f6425e1b227bdf94.
-    BaseObject* FindLatestVersion(BaseObject* obj) const;
+    BaseObject* FindLatestVersion(BaseObject* obj, const ForwardingProvenance& provenance = {}) const;
 
 protected:
     virtual void RequestGCInternal(GCReason, bool) { AbortUnimplemented("Collector::RequestGCInternal"); }

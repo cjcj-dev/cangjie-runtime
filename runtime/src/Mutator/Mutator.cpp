@@ -1213,8 +1213,11 @@ inline void Mutator::GCPhasePreForward(GCPhase newPhase)
             if (!rootFieldSet.insert((void*)(&refFieldAddr)).second) { return; }
             BaseObject* toObj = collector.ForwardObject(oldObj);
             if (toObj == nullptr) {
+                const ForwardingProvenance provenance{
+                    ForwardingHolderKind::StackSlot, this, &rootField
+                };
                 Collector::FailClosedLoad("Mutator::GCPhasePreForward.stack-unresolved",
-                                          oldObj, reinterpret_cast<uintptr_t>(&rootField));
+                                          oldObj, reinterpret_cast<uintptr_t>(&rootField), provenance);
             }
             HealRoot(rootField, from_object(toObj), HealSite::MutatorPreForwardStackField);
         } else if (IsStackAddr(reinterpret_cast<uintptr_t>(oldObj))) {
@@ -1240,8 +1243,11 @@ inline void Mutator::GCPhasePreForward(GCPhase newPhase)
                 if (rootFieldSet.insert((void*)(&root)).second) {
                     BaseObject* toHost = collector.ForwardObject(host);
                     if (toHost == nullptr) {
+                        const ForwardingProvenance provenance{
+                            ForwardingHolderKind::StackSlot, this, &root
+                        };
                         Collector::FailClosedLoad("Mutator::GCPhasePreForward.interior-unresolved",
-                                                  host, reinterpret_cast<uintptr_t>(&root));
+                                                  host, reinterpret_cast<uintptr_t>(&root), provenance);
                     }
                     HealRoot(root, to_zaddress(reinterpret_cast<MAddress>(toHost) +
                         (reinterpret_cast<MAddress>(oldObj) - reinterpret_cast<MAddress>(host))),
@@ -1265,8 +1271,11 @@ inline void Mutator::GCPhasePreForward(GCPhase newPhase)
             // live object start, or the collector is already wrong.
             BaseObject* toObj = collector.ForwardObject(oldObj);
             if (toObj == nullptr) {
+                const ForwardingProvenance provenance{
+                    ForwardingHolderKind::StackSlot, this, &root
+                };
                 Collector::FailClosedLoad("Mutator::GCPhasePreForward.root-unresolved",
-                                          oldObj, reinterpret_cast<uintptr_t>(&root));
+                                          oldObj, reinterpret_cast<uintptr_t>(&root), provenance);
             }
             HealRoot(root, from_object(toObj), HealSite::MutatorPreForwardRoot);
         } else if (IsStackAddr(reinterpret_cast<uintptr_t>(oldObj))) {
@@ -1302,7 +1311,12 @@ inline void Mutator::GCPhasePreForward(GCPhase newPhase)
             RebaseDerived(derivedPtr, base, offset);
             return;
         }
-        BaseObject* toVersion = collector.FindLatestVersion(fromVersion);
+        const ForwardingProvenance provenance{
+            ForwardingHolderKind::Derived,
+            reinterpret_cast<const void*>(raw(basePtr)),
+            &derivedPtr
+        };
+        BaseObject* toVersion = collector.FindLatestVersion(fromVersion, provenance);
         if (fromVersion != toVersion && toVersion != nullptr) {
             RootSlot toBase;
             StorePlain(toBase, from_object(toVersion));

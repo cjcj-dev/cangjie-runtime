@@ -16,6 +16,7 @@
 
 namespace MapleRuntime {
 class Collector;
+struct ForwardingProvenance;
 enum class BarrierPhase : uint8_t {
     STW,
     IDLE,
@@ -179,7 +180,8 @@ protected:
     // their correctness depends on the producer-side colour/lifetime invariant. FinalizerProcessor
     // enters through the public ReadStaticRef runtime path.
     BaseObject* FinalizeLoadForMutator(BaseObject* handed, BaseObject* holder,
-                                       const RefField<false>* field, const char* site) const;
+                                       const RefField<false>* field, const char* site,
+                                       const ForwardingProvenance* provenance = nullptr) const;
 
     // zBarrier.inline.hpp:294-340 make_load_good then mutate the to-address.
     // WriteGenericImpl used to HasRefField the from-copy after ClearUnits.

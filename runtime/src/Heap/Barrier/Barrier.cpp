@@ -726,7 +726,8 @@ void Barrier::WriteReference(BaseObject* obj, RefField<false>& field, BaseObject
     // can otherwise leave an old slot absent from this round's remembered set.
     // remember(p) is keyed by the old slot, not by prev colour or target identity;
     // always RecordCrossGenEdge and retain the fast/slow counters for diagnostics.
-    ref = theCollector.ResolveStoreValue(ref);
+    const ForwardingProvenance provenance{ ForwardingHolderKind::HeapRef, obj, &field };
+    ref = theCollector.ResolveStoreValue(ref, provenance);
     NoteValueSideStore(ref, static_cast<uint8_t>(phase));
     NoteW1GhostFromStore(theCollector, ref);
     NoteW1HolderStore(theCollector, obj);
@@ -838,7 +839,8 @@ void Barrier::WriteStructImpl(BaseObject* obj, MAddress dst, size_t dstLen, MAdd
 
 void Barrier::WriteStaticRef(RootSlot& field, BaseObject* ref) const
 {
-    ref = theCollector.ResolveStoreValue(ref);
+    const ForwardingProvenance provenance{ ForwardingHolderKind::Static, nullptr, &field };
+    ref = theCollector.ResolveStoreValue(ref, provenance);
     if (phase != BarrierPhase::STW) {
         DispatchPhase(phase, *this, [&](const auto& barrier) { return barrier.WriteStaticRef(field, ref); });
         SurvNodeDiag::NoteStore(&field, nullptr, ref, SurvNodeDiag::STORE_WRITE_STATIC);
@@ -1122,7 +1124,8 @@ BaseObject* Barrier::ResolveFromCopyForMutator(BaseObject* target) const
 // value must resolve or stop here with a controlled [LOADFC] abort. Compiler colour-good fast paths
 // follow ZGC's direct-uncolour shape and rely on the producer-side colour/lifetime invariant.
 BaseObject* Barrier::FinalizeLoadForMutator(BaseObject* handed, BaseObject* holder,
-                                            const RefField<false>* field, const char* site) const
+                                            const RefField<false>* field, const char* site,
+                                            const ForwardingProvenance* provenance) const
 {
     if (handed == nullptr || !Heap::IsHeapAddress(handed)) {
         return handed;
@@ -1131,7 +1134,13 @@ BaseObject* Barrier::FinalizeLoadForMutator(BaseObject* handed, BaseObject* hold
     if (verdict == TargetVerdict::Usable) {
         return handed;
     }
-    BaseObject* resolved = theCollector.ResolveStoreValue(handed);
+    const ForwardingProvenance inferred{
+        holder != nullptr || field != nullptr ? ForwardingHolderKind::HeapRef
+                                             : ForwardingHolderKind::Unknown,
+        holder, field
+    };
+    const ForwardingProvenance& diagnostic = provenance != nullptr ? *provenance : inferred;
+    BaseObject* resolved = theCollector.ResolveStoreValue(handed, diagnostic);
     ZgcInvariants::NoteStaleGuardFired(verdict == TargetVerdict::ZeroHeader, resolved != nullptr, handed,
                                        holder, field);
     if (resolved != nullptr && JudgeTarget(resolved) == TargetVerdict::Usable) {
@@ -1144,7 +1153,8 @@ BaseObject* Barrier::FinalizeLoadForMutator(BaseObject* handed, BaseObject* hold
     theCollector.FailClosedLoad(site, handed,
                                 field != nullptr
                                     ? static_cast<uintptr_t>(raw(field->GetFieldValue()))
-                                    : 0);
+                                    : 0,
+                                diagnostic);
 }
 
 BaseObject* Barrier::RelocateHolderForWrite(BaseObject* obj, void*& fieldPtr) const
@@ -1240,14 +1250,15 @@ BaseObject* Barrier::ReadStaticRef(RootSlot& field) const
     const bool ghost =
         target != nullptr && Heap::IsHeapAddress(target) && theCollector.IsGhostFromObject(target);
     BaseObject* beforeRoute = target;
+    const ForwardingProvenance provenance{ ForwardingHolderKind::Static, nullptr, &field };
     if (ghost) {
-        target = theCollector.FindLatestVersion(target);
+        target = theCollector.FindLatestVersion(target, provenance);
     }
     const bool resolvedChanged = target != beforeRoute;
     // loadfc: static roots share the same hand-out postcondition; a cleared/re-used static target
     // must resolve or stop, never be handed back (zBarrier.inline.hpp:294-344).
     BaseObject* finalized =
-        FinalizeLoadForMutator(target, nullptr, nullptr, "Barrier::ReadStaticRef");
+        FinalizeLoadForMutator(target, nullptr, nullptr, "Barrier::ReadStaticRef", &provenance);
     target = finalized;
     const bool healAttempted = target != nullptr && raw(observed) != reinterpret_cast<uintptr_t>(target);
     const bool statHealDiagEnabled = UNLIKELY(StatHealDiag::Enabled());

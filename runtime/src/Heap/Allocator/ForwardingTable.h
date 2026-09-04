@@ -85,6 +85,8 @@ public:
         ToAnswer activeAnswer;
         ToAnswer retiredAnswer;
         bool publicationClosed;
+        bool currentMembership;
+        uintptr_t tableId;
     };
 
     static bool Initialize(MAddress heapStart, size_t heapSize, size_t unitSize);

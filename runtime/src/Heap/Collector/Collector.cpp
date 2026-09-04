@@ -17,6 +17,7 @@
 #include "Common/BaseObject.h"
 #include "Common/ColourPredicates.h"
 #include "Common/StateWord.h"
+#include "Heap/Allocator/ForwardingTable.h"
 #include "Heap/Allocator/RegionInfo.h"
 #include "Heap/Allocator/RegionSpace.h"
 #include "Heap/Collector/ManagedObjectGate.h"
@@ -267,13 +268,13 @@ void Collector::ReportPlausibleManagedObjectGateCounts()
 // Illegal null (D: old tag + ghost already dispelled + from cleared) fails loudly here.
 // See reports/REPORT-nullenum.md LEGAL_NULL_SET; reports/REPORT-tagaba.md F5.
 // Anchor main 9ad991c4e8660c26d6bfe575f6425e1b227bdf94.
-BaseObject* Collector::FindLatestVersion(BaseObject* obj) const
+BaseObject* Collector::FindLatestVersion(BaseObject* obj, const ForwardingProvenance& provenance) const
 {
     if (obj == nullptr) {
         return nullptr;
     }
 
-    BaseObject* to = FindToVersion(obj).GetOrFailClosed("Collector::FindLatestVersion");
+    BaseObject* to = FindToVersion(obj).GetOrFailClosed("Collector::FindLatestVersion", provenance);
     if (to != nullptr) {
         if (to != obj && Heap::IsHeapAddress(to) && !to->IsValidObject()) {
             CHECK_DETAIL(obj->IsValidObject(),
@@ -345,14 +346,38 @@ HandVerdict Collector::JudgeHandOutTarget(BaseObject* target)
 // loadfc (zBarrier.inline.hpp:327-343): the slow path must produce a verified current version or
 // stop the mutator in a controlled, attributable place -- never hand back a structurally dead
 // from-address. The [LOADFC] tag is the population-accounting signature.
-[[noreturn]] void Collector::FailClosedLoad(const char* site, BaseObject* target, uintptr_t slotBits)
+[[noreturn]] void Collector::FailClosedLoad(const char* site, BaseObject* target, uintptr_t slotBits,
+                                            const ForwardingProvenance& provenance)
 {
     const HandVerdict verdict = JudgeHandOutTarget(target);
+    const MAddress from = target != nullptr ? reinterpret_cast<MAddress>(target) : 0;
+    RegionInfo* region = from != 0 && Heap::IsHeapAddress(target)
+        ? RegionInfo::TryGetRegionInfoAt(from)
+        : nullptr;
+    const ForwardingTable::LookupResult lookup = from != 0 && Heap::IsHeapAddress(target)
+        ? ForwardingTable::LookupTo(from)
+        : ForwardingTable::LookupResult{ 0, ForwardingTable::ToAnswer::Unarmed,
+                                         ForwardingTable::ToUnavailableCause::None, false, false,
+                                         ForwardingTable::ToAnswer::Unarmed,
+                                         ForwardingTable::ToAnswer::Unarmed, false, false, 0 };
     Logger::GetLogger().FormatLog(RTLOG_FATAL, true,
                                   "[LOADFC][fail-closed] site=%s target=%p verdict=%u slotBits=%#zx "
+                                  "holder_kind=%s holder=%p slot=%p from=%p from_region=%p "
+                                  "region_type=%u generation=%u in_current_relocation_set=%u "
+                                  "table_id=%#zx lookup_state=%u lookup_cause=%u retired_lookup=%u gc_phase=%u "
                                   "unresolved non-Usable from-address must not be handed out",
                                   site != nullptr ? site : "?", static_cast<void*>(target),
-                                  static_cast<unsigned>(verdict), slotBits);
+                                  static_cast<unsigned>(verdict), slotBits,
+                                  ForwardingProvenance::KindName(provenance.kind),
+                                  provenance.holder, provenance.slot, static_cast<void*>(target),
+                                  static_cast<void*>(region),
+                                  region != nullptr ? static_cast<unsigned>(region->GetRegionType()) : 0xffu,
+                                  region != nullptr ? static_cast<unsigned>(region->generation_id()) : 0xffu,
+                                  lookup.currentMembership ? 1u : 0u,
+                                  static_cast<size_t>(lookup.tableId), static_cast<unsigned>(lookup.answer),
+                                  static_cast<unsigned>(lookup.unavailableCause),
+                                  static_cast<unsigned>(lookup.retiredAnswer),
+                                  static_cast<unsigned>(Heap::GetHeap().GetGCPhase()));
     (void)fflush(stderr);
     (void)fflush(stdout);
     std::abort();

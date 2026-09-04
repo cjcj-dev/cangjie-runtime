@@ -45,9 +45,9 @@ public:
     {
         return currentCollector->FindToVersion(obj);
     }
-    BaseObject* ResolveStoreValue(BaseObject* ref) const override
+    BaseObject* ResolveStoreValue(BaseObject* ref, const ForwardingProvenance& provenance = {}) const override
     {
-        return currentCollector->ResolveStoreValue(ref);
+        return currentCollector->ResolveStoreValue(ref, provenance);
     }
 
     bool IsOldPointer(RefField<>& ref) const override { return currentCollector->IsOldPointer(ref); }

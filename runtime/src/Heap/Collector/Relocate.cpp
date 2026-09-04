@@ -1997,7 +1997,7 @@ BaseObject* WCollector::WaitRoutedTipReady(BaseObject* from, BaseObject* to, Reg
     ForwardingTable::LookupResult lastLookup{ 0, ForwardingTable::ToAnswer::Unarmed,
                                               ForwardingTable::ToUnavailableCause::None, false, false,
                                               ForwardingTable::ToAnswer::Unarmed,
-                                              ForwardingTable::ToAnswer::Unarmed, false };
+                                              ForwardingTable::ToAnswer::Unarmed, false, false, 0 };
     // Bound mid-copy waits only while route is still in flight. Permanent publish-without-tip
     // is an invariant break (CHECK below), not a longer spin.
     auto permanentHole = [&](const char* reason, int /*spins*/, BaseObject* /*geometricTo*/) -> BaseObject* {
@@ -2286,7 +2286,7 @@ BaseObject* WCollector::TryMutatorRelocate(BaseObject* obj, RegionInfo* forwardi
     return toVersion;
 }
 
-BaseObject* WCollector::ResolveStoreValue(BaseObject* ref) const
+BaseObject* WCollector::ResolveStoreValue(BaseObject* ref, const ForwardingProvenance& provenance) const
 {
     // zBarrier.inline.hpp:695-716 store_barrier_on_heap_oop_field:
     // color_store_good includes remap. A movable ghost-from value must go
@@ -2371,18 +2371,24 @@ BaseObject* WCollector::ResolveStoreValue(BaseObject* ref) const
             }
             const ForwardingTable::LookupResult lookup = ForwardingTable::LookupTo(currentAddr);
             LOG(RTLOG_ERROR,
-                "[FWDTABLE][resolve-miss] site=no-forwarding from=%p region=%p "
-                "ghost=0 compacted=%u route=%u lookup.to=%p answer=%u cause=%u "
-                "retiredAnswer=%u pubClosed=%u verdict=%u",
+                "[FWDTABLE][resolve-miss] site=no-forwarding holder_kind=%s holder=%p slot=%p "
+                "from=%p from_region=%p region_type=%u generation=%u "
+                "in_current_relocation_set=%u table_id=%#zx lookup_state=%u lookup_cause=%u "
+                "retired_lookup=%u gc_phase=%u ghost=0 compacted=%u route=%u lookup.to=%p "
+                "publication_closed=%u verdict=%u",
+                ForwardingProvenance::KindName(provenance.kind), provenance.holder, provenance.slot,
                 static_cast<void*>(current), static_cast<void*>(live),
+                live != nullptr ? static_cast<unsigned>(live->GetRegionType()) : 0xffu,
+                live != nullptr ? static_cast<unsigned>(live->generation_id()) : 0xffu,
+                lookup.currentMembership ? 1u : 0u, static_cast<size_t>(lookup.tableId),
+                static_cast<unsigned>(lookup.answer), static_cast<unsigned>(lookup.unavailableCause),
+                static_cast<unsigned>(lookup.retiredAnswer), static_cast<unsigned>(GetGCPhase()),
                 live != nullptr && live->IsCompacted() ? 1u : 0u,
                 live != nullptr ? static_cast<unsigned>(live->GetRouteState()) : 0u,
-                reinterpret_cast<void*>(lookup.to), static_cast<unsigned>(lookup.answer),
-                static_cast<unsigned>(lookup.unavailableCause),
-                static_cast<unsigned>(lookup.retiredAnswer),
+                reinterpret_cast<void*>(lookup.to),
                 lookup.publicationClosed ? 1u : 0u,
                 static_cast<unsigned>(Collector::JudgeHandOutTarget(current)));
-            FailClosedLoad("WCollector::ResolveStoreValue.no-forwarding", current, 0);
+            FailClosedLoad("WCollector::ResolveStoreValue.no-forwarding", current, 0, provenance);
         }
         // A pointer with ghost membership belongs to a published forwarding
         // generation. Even after its route state changes it cannot be
@@ -2394,7 +2400,7 @@ BaseObject* WCollector::ResolveStoreValue(BaseObject* ref) const
         }
         BaseObject* resolved = relocate_or_remap_object(current, ghost->generation_id());
         if (resolved == nullptr) {
-            FailClosedLoad("WCollector::ResolveStoreValue.unresolved", current, 0);
+            FailClosedLoad("WCollector::ResolveStoreValue.unresolved", current, 0, provenance);
         }
         if (resolved == current) {
             // In-place completion must have published its identity receipt;
@@ -2413,7 +2419,7 @@ BaseObject* WCollector::ResolveStoreValue(BaseObject* ref) const
                 RegionInfo::GetGhostFromRegionAt(currentAddr) == nullptr) {
                 return current;
             }
-            FailClosedLoad("WCollector::ResolveStoreValue.missing-identity", current, 0);
+            FailClosedLoad("WCollector::ResolveStoreValue.missing-identity", current, 0, provenance);
         }
         current = resolved;
     }

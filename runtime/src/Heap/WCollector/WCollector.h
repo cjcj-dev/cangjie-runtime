@@ -212,7 +212,7 @@ public:
     void FollowPartialArray(const MarkStackEntry& entry, WorkStack& workStack) override;
     BaseObject* GetAndTryTagObj(RefSlotKind kind, BaseObject* obj, RefField<>& field) override;
     BaseObject* ForwardObject(BaseObject* fromVersion) override;
-    BaseObject* ResolveStoreValue(BaseObject* ref) const override;
+    BaseObject* ResolveStoreValue(BaseObject* ref, const ForwardingProvenance& provenance = {}) const override;
     void PostResolveCycleTask();
     void PrepareCycleRef()
     {
@@ -776,8 +776,23 @@ public:
         ForwardingTable::LookupResult lookup{ 0, ForwardingTable::ToAnswer::Unarmed,
                                               ForwardingTable::ToUnavailableCause::None, false, false,
                                               ForwardingTable::ToAnswer::Unarmed,
-                                              ForwardingTable::ToAnswer::Unarmed, false };
+                                              ForwardingTable::ToAnswer::Unarmed, false, false, 0 };
         bool lookupQueried = false;
+        const auto populateDiagnosticSnapshot = [&](FindToVersionResult::UnavailableWitness& witness) {
+            RegionInfo* region = RegionInfo::TryGetRegionInfoAt(fromAddr);
+            witness.from = fromAddr;
+            witness.fromRegion = reinterpret_cast<uintptr_t>(region);
+            witness.regionSnapshotValid = region != nullptr;
+            if (region != nullptr) {
+                witness.regionType = static_cast<uint8_t>(region->GetRegionType());
+                witness.generation = static_cast<uint8_t>(region->generation_id());
+                witness.routeStateValid = true;
+                witness.routeState = static_cast<uint8_t>(region->GetRouteState());
+            }
+            witness.inCurrentRelocationSet = lookupQueried && lookup.currentMembership;
+            witness.tableId = lookupQueried ? lookup.tableId : 0;
+            witness.gcPhase = static_cast<uint8_t>(GetGCPhase());
+        };
         const auto unavailable = [&](FindToVersionResult::UnavailableRoute route, bool forwardedValid,
                                      bool forwarded, bool fromRegionInfoNullValid,
                                      bool fromRegionInfoNull) -> FindToVersionResult {
@@ -786,6 +801,7 @@ public:
             witness.forwarded = forwarded;
             witness.fromRegionInfoNullValid = fromRegionInfoNullValid;
             witness.fromRegionInfoNull = fromRegionInfoNull;
+            populateDiagnosticSnapshot(witness);
             // All lookup fields are a single snapshot.  When LookupTo was not
             // reached (the legacy compile-time route), leave the snapshot
             // invalid so consumers print n/a instead of defaults.
@@ -829,6 +845,7 @@ public:
                     witness.lookupActiveAnswer = answerName(lookup.activeAnswer);
                     witness.lookupRetiredAnswer = answerName(lookup.retiredAnswer);
                     witness.lookupPublicationClosed = lookup.publicationClosed;
+                    populateDiagnosticSnapshot(witness);
                     return FindToVersionResult::Unavailable(
                         FindToVersionResult::UnavailableRoute::LookupUnavailable, witness);
                 }

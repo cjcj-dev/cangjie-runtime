@@ -36,7 +36,7 @@ public:
     {
         return obj == from ? FindToVersionResult::Found(to) : FindToVersionResult::NotForwarded();
     }
-    BaseObject* ResolveStoreValue(BaseObject* obj) const override
+    BaseObject* ResolveStoreValue(BaseObject* obj, const ForwardingProvenance& = {}) const override
     {
         return obj == from ? to : obj;
     }

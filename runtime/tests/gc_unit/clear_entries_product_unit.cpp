@@ -5,6 +5,7 @@
 // See https://cangjie-lang.cn/pages/LICENSE for license information.
 
 #include <atomic>
+#include <cerrno>
 #include <chrono>
 #include <condition_variable>
 #include <csignal>
@@ -1562,6 +1563,165 @@ template <typename Fn>
 void ExpectRootAbort(Fn&& fn)
 {
     ExpectRootAbortAt("[LOADFC][fail-closed]", fn);
+}
+
+struct AbortCapture {
+    int status;
+    std::string output;
+};
+
+template <typename Fn>
+AbortCapture CaptureAbort(Fn&& fn)
+{
+    int pipefd[2];
+    GC_EXPECT_EQ(pipe(pipefd), 0);
+    const pid_t child = fork();
+    GC_EXPECT_TRUE(child >= 0);
+    if (child == 0) {
+        (void)signal(SIGABRT, SIG_DFL);
+        close(pipefd[0]);
+        (void)dup2(pipefd[1], STDERR_FILENO);
+        (void)dup2(pipefd[1], STDOUT_FILENO);
+        close(pipefd[1]);
+        fn();
+        _exit(0);
+    }
+    close(pipefd[1]);
+    std::string output;
+    char buffer[1024];
+    for (;;) {
+        const ssize_t n = read(pipefd[0], buffer, sizeof(buffer));
+        if (n > 0) {
+            output.append(buffer, static_cast<size_t>(n));
+            continue;
+        }
+        if (n == 0) {
+            break;
+        }
+        GC_EXPECT_EQ(errno, EINTR);
+    }
+    close(pipefd[0]);
+    int status = 0;
+    GC_EXPECT_EQ(waitpid(child, &status, 0), child);
+    return AbortCapture{ status, std::move(output) };
+}
+
+GC_TEST(ForwardingPublicationProduct, ArmedMissAfterPublicationCloseFailsClosed)
+{
+    GcHeapFixture& fx = ProductFixture();
+    WCollector collector(Heap::GetHeap().GetAllocator(), Heap::GetHeap().GetCollectorResources());
+    LateBackfillState state = PrepareLateBackfill(fx, collector);
+    ForwardingTable::ClearEntries(state.region->GetRegionStart(), state.region->GetRegionSize());
+
+    GC_EXPECT_TRUE(ForwardingTable::RetiredCovers(
+        state.region->GetRegionStart(), state.region->GetRegionSize()));
+    FindToVersionResult result = RelocationReceiptTestAccess::ProductFindToVersion(collector, state.from);
+    GC_EXPECT_TRUE(result.state() == FindToVersionResult::State::Unavailable);
+    GC_EXPECT_TRUE(result.unavailable_lookup_publication_closed());
+    GC_EXPECT_TRUE(std::strcmp(result.unavailable_lookup_cause(),
+                               "publication_closed+never_installed") == 0);
+    GC_EXPECT_TRUE(std::strcmp(result.unavailable_lookup_retired_answer(), "armed_miss") == 0);
+    GC_EXPECT_TRUE(result.unavailable_region_snapshot_valid());
+    GC_EXPECT_EQ(result.unavailable_from(), reinterpret_cast<uintptr_t>(state.from));
+    GC_EXPECT_NE(result.unavailable_from_region(), static_cast<uintptr_t>(0));
+    GC_EXPECT_NE(result.unavailable_table_id(), static_cast<uintptr_t>(0));
+
+    RootSlot slot;
+    StorePlain(slot, from_object(state.from));
+    const ForwardingProvenance provenance{ ForwardingHolderKind::HeapRef, state.from, &slot };
+    AbortCapture aborted = CaptureAbort([&]() {
+        (void)result.GetOrFailClosed(
+            "ForwardingPublicationProduct.ArmedMissAfterPublicationCloseFailsClosed", provenance);
+    });
+    GC_EXPECT_TRUE(WIFSIGNALED(aborted.status));
+    GC_EXPECT_EQ(WTERMSIG(aborted.status), SIGABRT);
+    const char* required[] = {
+        "[FINDTO][fail-closed]",
+        "holder_kind=heap_ref",
+        "slot=",
+        "from=",
+        "from_region=",
+        "region_type=",
+        "generation=",
+        "in_current_relocation_set=",
+        "table_id=",
+        "lookup_state=unavailable",
+        "cause=publication_closed+never_installed",
+        "retired_lookup=armed_miss",
+        "gc_phase=",
+    };
+    for (const char* token : required) {
+        if (aborted.output.find(token) == std::string::npos) {
+            std::fprintf(stderr, "ARMED_MISS_ABORT missing=%s\n---\n%s\n---\n",
+                         token, aborted.output.c_str());
+        }
+        GC_EXPECT_TRUE(aborted.output.find(token) != std::string::npos);
+    }
+
+    CleanupLateBackfill(fx, state);
+    RelocationReceiptTestAccess::BindCollector(Heap::GetHeap().GetCollectorResources(), nullptr);
+}
+
+GC_TEST(ForwardingPublicationProduct, ArmedHitAfterPublicationCloseResolves)
+{
+    GcHeapFixture& fx = ProductFixture();
+    WCollector collector(Heap::GetHeap().GetAllocator(), Heap::GetHeap().GetCollectorResources());
+    LateBackfillState state = PrepareLateBackfill(fx, collector);
+    {
+        ForwardingTable::Publication publication =
+            ForwardingTable::RetainOpenPublicationAfterCopy(
+                state.region, reinterpret_cast<MAddress>(state.from));
+        GC_EXPECT_TRUE(static_cast<bool>(publication));
+        GC_EXPECT_EQ(ForwardingTable::InsertMapping(
+                         publication, reinterpret_cast<MAddress>(state.from),
+                         reinterpret_cast<MAddress>(state.to)),
+                     reinterpret_cast<MAddress>(state.to));
+    }
+    ForwardingTable::ClearEntries(state.region->GetRegionStart(), state.region->GetRegionSize());
+
+    FindToVersionResult result = RelocationReceiptTestAccess::ProductFindToVersion(collector, state.from);
+    GC_EXPECT_TRUE(result.state() == FindToVersionResult::State::Found);
+    GC_EXPECT_TRUE(result.found() == state.to);
+    GC_EXPECT_TRUE(result.GetOrFailClosed(
+                       "ForwardingPublicationProduct.ArmedHitAfterPublicationCloseResolves") == state.to);
+
+    CleanupLateBackfill(fx, state);
+    RelocationReceiptTestAccess::BindCollector(Heap::GetHeap().GetCollectorResources(), nullptr);
+}
+
+GC_TEST(ForwardingPublicationProduct, UnlinkMissReportsTableDestroyed)
+{
+    GcHeapFixture& fx = ProductFixture();
+    WCollector collector(Heap::GetHeap().GetAllocator(), Heap::GetHeap().GetCollectorResources());
+    LateBackfillState state = PrepareLateBackfill(fx, collector);
+    ForwardingTable::ClearEntries(state.region->GetRegionStart(), state.region->GetRegionSize());
+    ForwardingTable::ReclaimRetired("gc-unit-unlink-miss-table-destroyed");
+    GC_EXPECT_FALSE(ForwardingTable::RetiredCovers(
+        state.region->GetRegionStart(), state.region->GetRegionSize()));
+
+    FindToVersionResult result = RelocationReceiptTestAccess::ProductFindToVersion(collector, state.from);
+    GC_EXPECT_TRUE(result.state() == FindToVersionResult::State::Unavailable);
+    GC_EXPECT_TRUE(std::strcmp(result.unavailable_lookup_cause(),
+                               "publication_closed+table_destroyed") == 0);
+    GC_EXPECT_TRUE(std::strcmp(result.unavailable_lookup_retired_answer(), "unarmed") == 0);
+    GC_EXPECT_EQ(result.unavailable_table_id(), static_cast<uintptr_t>(0));
+
+    RootSlot slot;
+    StorePlain(slot, from_object(state.from));
+    const ForwardingProvenance provenance{ ForwardingHolderKind::Static, nullptr, &slot };
+    AbortCapture aborted = CaptureAbort([&]() {
+        (void)result.GetOrFailClosed(
+            "ForwardingPublicationProduct.UnlinkMissReportsTableDestroyed", provenance);
+    });
+    GC_EXPECT_TRUE(WIFSIGNALED(aborted.status));
+    GC_EXPECT_EQ(WTERMSIG(aborted.status), SIGABRT);
+    GC_EXPECT_TRUE(aborted.output.find("holder_kind=static") != std::string::npos);
+    GC_EXPECT_TRUE(aborted.output.find("cause=publication_closed+table_destroyed") != std::string::npos);
+    GC_EXPECT_TRUE(aborted.output.find("retired_lookup=unarmed") != std::string::npos);
+    GC_EXPECT_TRUE(aborted.output.find("table_id=0") != std::string::npos);
+
+    CleanupLateBackfill(fx, state);
+    RelocationReceiptTestAccess::BindCollector(Heap::GetHeap().GetCollectorResources(), nullptr);
 }
 
 // A non-LookupUnavailable route may carry lookup-shaped fields from a caller,

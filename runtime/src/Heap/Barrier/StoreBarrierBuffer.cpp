@@ -44,7 +44,13 @@ MAddress RemapPendingField(const StoreBarrierEntry& entry)
     // ZStoreBarrierBuffer::on_new_phase_relocate: make the base load-good,
     // then reconstruct p with the offset captured while the from object was
     // still readable (zStoreBarrierBuffer.cpp:130-153).
-    BaseObject* const remappedBase = Heap::GetHeap().GetCollector().ResolveStoreValue(entry.pBase);
+    const ForwardingProvenance provenance{
+        ForwardingHolderKind::StoreBuffer,
+        entry.pBase,
+        reinterpret_cast<const void*>(entry.p)
+    };
+    BaseObject* const remappedBase =
+        Heap::GetHeap().GetCollector().ResolveStoreValue(entry.pBase, provenance);
     CHECK_DETAIL(remappedBase != nullptr && Heap::IsHeapAddress(remappedBase),
                  "store-buffer holder did not resolve base=%p slot=%#zx phase=%u",
                  entry.pBase, entry.p, static_cast<unsigned>(phase));
