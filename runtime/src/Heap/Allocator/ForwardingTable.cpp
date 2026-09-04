@@ -536,7 +536,7 @@ void ForwardingTable::ReclaimRetired(const char* why)
         // old-remap-young-roots-complete therefore defers; PostTrace reset
         // is the coverage-complete destroy.
         const bool resetPrevGeneration = why != nullptr &&
-            std::strcmp(why, "post-trace-reset-relocation-set") == 0;
+            std::strcmp(why, "post-remap-reset-relocation-set") == 0;
         const bool forceCoverageComplete = why != nullptr &&
             (std::strcmp(why, "gc-unit-fixture-coverage-complete") == 0 ||
              std::strcmp(why, "gc-unit-explicit-coverage") == 0 ||

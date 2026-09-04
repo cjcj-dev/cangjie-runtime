@@ -2401,7 +2401,7 @@ GC_TEST(ForwardingPublicationProduct, InsertThenReclaimStillServesWaitAndTryUpda
     RelocationReceiptTestAccess::BindCollector(Heap::GetHeap().GetCollectorResources(), nullptr);
 }
 
-GC_TEST(ForwardingPublicationProduct, PostTraceResetDestroysDeferredAfterRemapWhy)
+GC_TEST(ForwardingPublicationProduct, PostRemapResetDestroysAfterA8Coverage)
 {
     GcHeapFixture& fx = ProductFixture();
     // Drain shared g_retired/g_retiredPrev so the two-generation protocol
@@ -2431,8 +2431,11 @@ GC_TEST(ForwardingPublicationProduct, PostTraceResetDestroysDeferredAfterRemapWh
 
     ForwardingTable::ReclaimRetired("post-trace-reset-relocation-set");
     GC_EXPECT_EQ(ForwardingTable::LookupTo(from).to, to);
-    ForwardingTable::ReclaimRetired("post-trace-reset-relocation-set");
+    ForwardingTable::ReclaimRetired("post-remap-reset-relocation-set");
+    GC_EXPECT_EQ(ForwardingTable::LookupTo(from).to, to);
+    ForwardingTable::ReclaimRetired("post-remap-reset-relocation-set");
     GC_EXPECT_EQ(ForwardingTable::LookupTo(from).to, 0);
+    GC_EXPECT_TRUE(ForwardingTable::LookupTo(from).answer == ForwardingTable::ToAnswer::Unavailable);
 
     if (region->IsGhostFromRegion()) {
         region->DispelGhostFromRegion();
@@ -2463,8 +2466,8 @@ GC_TEST(ForwardingPublicationProduct, ResolveStoreValueNoForwardingAfterGhostDis
     GC_EXPECT_TRUE(to != 0);
 
     ForwardingTable::ClearEntries(region->GetRegionStart(), region->GetRegionSize());
-    ForwardingTable::ReclaimRetired("post-trace-reset-relocation-set");
-    ForwardingTable::ReclaimRetired("post-trace-reset-relocation-set");
+    ForwardingTable::ReclaimRetired("post-remap-reset-relocation-set");
+    ForwardingTable::ReclaimRetired("post-remap-reset-relocation-set");
     if (region->IsGhostFromRegion()) {
         region->DispelGhostFromRegion();
     }

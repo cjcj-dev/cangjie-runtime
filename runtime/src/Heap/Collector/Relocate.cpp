@@ -534,6 +534,8 @@ void WCollector::RemapYoungRoots()
         staticRemapped, staticDoubleBad, stackSeen, stackColoured, stackRemapped,
         otherSeen, otherColoured, otherRemapped, otherDoubleBad,
         static_cast<unsigned long>(FlipSeq().load(std::memory_order_relaxed)));
+    // Table destroy ⇔ remap coverage finished (zRelocationSet.cpp:191-200).
+    ForwardingTable::ReclaimRetired("post-remap-reset-relocation-set");
 }
 void WCollector::PreforwardFinalizerProcessorRoots()
 {

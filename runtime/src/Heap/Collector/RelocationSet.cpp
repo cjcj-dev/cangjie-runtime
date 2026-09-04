@@ -84,12 +84,9 @@ void WCollector::PostTrace()
     CollectLargeGarbage();
     CollectPinnedGarbage();
     RefineFromSpace();
-    // Root/remset remapping is the pre-flip coverage authority; ZGC does not
-    // scan every heap field before retiring a relocation set
-    // (zGeneration.cpp:1490-1523). Destroy the previous cycle's retired
-    // tables here: ZGeneration::reset_relocation_set is after mark, before
-    // select/install of the new set (zGeneration.cpp:276-285,1041-1050).
-    ForwardingTable::ReclaimRetired("post-trace-reset-relocation-set");
+    // Destroy prev-generation tables after RemapYoungRoots/A8REMAP
+    // (Relocate.cpp post-remap reset), not here: remap still needs the
+    // receipts (zRelocationSet.cpp:191-200; zGeneration.cpp:276-285).
     fwdTable.PrepareForwardTable<Generation::Old>();
     // OPTION_2 mark-epoch release: TRACE+CLEAR_SATB done; publish quarantined post-dispel
     // units (from this PrepareForwardTable and any prior minor) to dirty for reuse.
