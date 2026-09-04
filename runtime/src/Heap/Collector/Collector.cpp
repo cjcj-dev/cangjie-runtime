@@ -20,6 +20,7 @@
 #include "Heap/Allocator/ForwardingTable.h"
 #include "Heap/Allocator/RegionInfo.h"
 #include "Heap/Allocator/RegionSpace.h"
+#include "Heap/Collector/CollectorResources.h"
 #include "Heap/Collector/ManagedObjectGate.h"
 #include "Heap/Heap.h"
 #include "Mutator/Mutator.h"
@@ -361,6 +362,11 @@ HandVerdict Collector::JudgeHandOutTarget(BaseObject* target)
                                          ForwardingTable::ToUnavailableCause::None, false, false,
                                          ForwardingTable::ToAnswer::Unarmed,
                                          ForwardingTable::ToAnswer::Unarmed, false, false, 0 };
+    // This is the last-chance diagnostic (zBarrier.inline.hpp:327-343). Pre-init callers, including
+    // gc_unit other-vm children, have CollectorResources but no CollectorProxy target to query.
+    const unsigned gcPhase = Heap::GetHeap().GetCollectorResources().IsGcStarted()
+        ? static_cast<unsigned>(Heap::GetHeap().GetGCPhase())
+        : 0xffu;
     std::fprintf(stderr,
                  "[LOADFC][fail-closed] site=%s target=%p verdict=%u slotBits=%#zx "
                  "holder_kind=%s holder=%p slot=%p from=%p from_region=%p "
@@ -378,7 +384,7 @@ HandVerdict Collector::JudgeHandOutTarget(BaseObject* target)
                  static_cast<size_t>(lookup.tableId), static_cast<unsigned>(lookup.answer),
                  static_cast<unsigned>(lookup.unavailableCause),
                  static_cast<unsigned>(lookup.retiredAnswer),
-                 static_cast<unsigned>(Heap::GetHeap().GetGCPhase()));
+                 gcPhase);
     (void)fflush(stderr);
     (void)fflush(stdout);
     std::abort();

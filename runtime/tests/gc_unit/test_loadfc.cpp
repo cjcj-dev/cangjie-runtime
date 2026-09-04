@@ -68,10 +68,6 @@ public:
     }
     ZGenerationId remap_generation(RefField<>&) const override { return ZGenerationId::old; }
     BaseObject* relocate_or_remap_object(BaseObject* object, ZGenerationId) const override { return object; }
-    BaseObject* ResolveStoreValue(BaseObject* object, const ForwardingProvenance& provenance) const override
-    {
-        FailClosedLoad("NoAnswerCollector::ResolveStoreValue", object, 0, provenance);
-    }
 };
 
 class InstalledBarrierScope {
