@@ -361,24 +361,29 @@ HandVerdict Collector::JudgeHandOutTarget(BaseObject* target)
                                          ForwardingTable::ToUnavailableCause::None, false, false,
                                          ForwardingTable::ToAnswer::Unarmed,
                                          ForwardingTable::ToAnswer::Unarmed, false, false, 0 };
+    std::fprintf(stderr,
+                 "[LOADFC][fail-closed] site=%s target=%p verdict=%u slotBits=%#zx "
+                 "holder_kind=%s holder=%p slot=%p from=%p from_region=%p "
+                 "region_type=%u generation=%u in_current_relocation_set=%u "
+                 "table_id=%#zx lookup_state=%u lookup_cause=%u retired_lookup=%u gc_phase=%u "
+                 "unresolved non-Usable from-address must not be handed out\n",
+                 site != nullptr ? site : "?", static_cast<void*>(target),
+                 static_cast<unsigned>(verdict), slotBits,
+                 ForwardingProvenance::KindName(provenance.kind),
+                 provenance.holder, provenance.slot, static_cast<void*>(target),
+                 static_cast<void*>(region),
+                 region != nullptr ? static_cast<unsigned>(region->GetRegionType()) : 0xffu,
+                 region != nullptr ? static_cast<unsigned>(region->generation_id()) : 0xffu,
+                 lookup.currentMembership ? 1u : 0u,
+                 static_cast<size_t>(lookup.tableId), static_cast<unsigned>(lookup.answer),
+                 static_cast<unsigned>(lookup.unavailableCause),
+                 static_cast<unsigned>(lookup.retiredAnswer),
+                 static_cast<unsigned>(Heap::GetHeap().GetGCPhase()));
     Logger::GetLogger().FormatLog(RTLOG_FATAL, true,
                                   "[LOADFC][fail-closed] site=%s target=%p verdict=%u slotBits=%#zx "
-                                  "holder_kind=%s holder=%p slot=%p from=%p from_region=%p "
-                                  "region_type=%u generation=%u in_current_relocation_set=%u "
-                                  "table_id=%#zx lookup_state=%u lookup_cause=%u retired_lookup=%u gc_phase=%u "
                                   "unresolved non-Usable from-address must not be handed out",
                                   site != nullptr ? site : "?", static_cast<void*>(target),
-                                  static_cast<unsigned>(verdict), slotBits,
-                                  ForwardingProvenance::KindName(provenance.kind),
-                                  provenance.holder, provenance.slot, static_cast<void*>(target),
-                                  static_cast<void*>(region),
-                                  region != nullptr ? static_cast<unsigned>(region->GetRegionType()) : 0xffu,
-                                  region != nullptr ? static_cast<unsigned>(region->generation_id()) : 0xffu,
-                                  lookup.currentMembership ? 1u : 0u,
-                                  static_cast<size_t>(lookup.tableId), static_cast<unsigned>(lookup.answer),
-                                  static_cast<unsigned>(lookup.unavailableCause),
-                                  static_cast<unsigned>(lookup.retiredAnswer),
-                                  static_cast<unsigned>(Heap::GetHeap().GetGCPhase()));
+                                  static_cast<unsigned>(verdict), slotBits);
     (void)fflush(stderr);
     (void)fflush(stdout);
     std::abort();
