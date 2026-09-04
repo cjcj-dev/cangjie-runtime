@@ -1949,7 +1949,6 @@ GC_TEST(ForwardingPublicationProduct, LookupCausePublishedWithoutReceipt)
     LiveInfo* live = PrepareForwardable(fx, region, reinterpret_cast<MAddress>(from));
     region->SetRouteState(RegionInfo::RouteState::COMPACTED);
     region->MarkForwardingDone();
-    from->SetStateCode(ObjectState::FORWARDED);
     const ForwardingTable::LookupResult lookup = ForwardingTable::LookupTo(reinterpret_cast<MAddress>(from));
     GC_EXPECT_TRUE(lookup.to == 0);
     GC_EXPECT_TRUE(lookup.answer != ForwardingTable::ToAnswer::ArmedHit);
