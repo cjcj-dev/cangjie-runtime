@@ -370,6 +370,11 @@ private:
     Concurrency concurrency;
 };
 
+void PinOwnerGeneration(RegionInfo* region, Generation gen)
+{
+    region->SetYoungRegionFlag(gen == Generation::Young ? 1 : 0);
+}
+
 LiveInfo* PrepareForwardable(GcHeapFixture& fx, RegionInfo* region, MAddress liveObject)
 {
     region->SetRegionType(RegionInfo::RegionType::FROM_REGION);
@@ -2625,6 +2630,7 @@ GC_TEST(ForwardingPublicationProduct, PostRemapResetDestroysAfterA8Coverage)
     RelocationReceiptTestAccess::ReleaseListOwnership(RegionInfo::GetRegionInfo(4));
     RegionInfo* region = RegionInfo::InitRegion(4, 1, RegionInfo::UnitRole::SMALL_SIZED_UNITS);
     GC_EXPECT_TRUE(region != nullptr);
+    PinOwnerGeneration(region, Generation::Young);
     region->SetRegionType(RegionInfo::RegionType::THREAD_LOCAL_REGION);
     BaseObject* dead = fx.PlaceObject(region->GetRegionStart());
     const size_t objectSize = dead->GetSize();
@@ -2641,8 +2647,7 @@ GC_TEST(ForwardingPublicationProduct, PostRemapResetDestroysAfterA8Coverage)
     GC_EXPECT_TRUE(to != 0);
     ZForwarding* youngTab = ForwardingTable::GetCovering(from);
     GC_EXPECT_TRUE(youngTab != nullptr);
-    youngTab->note_table_epoch(static_cast<uint8_t>(Generation::Young), youngTab->birth_flip(),
-                               ForwardingTable::MarkCoverageEpoch(Generation::Young) + 1);
+    GC_EXPECT_EQ(youngTab->table_generation(), static_cast<uint8_t>(Generation::Young));
 
     ForwardingTable::ClearEntries(region->GetRegionStart(), region->GetRegionSize());
     ForwardingTable::ReclaimRetired("old-remap-young-roots-complete");
@@ -2672,6 +2677,7 @@ GC_TEST(ForwardingPublicationProduct, RetiredYoungTableSurvivesA8UntilNextYoungM
     RelocationReceiptTestAccess::ReleaseListOwnership(RegionInfo::GetRegionInfo(4));
     RegionInfo* region = RegionInfo::InitRegion(4, 1, RegionInfo::UnitRole::SMALL_SIZED_UNITS);
     GC_EXPECT_TRUE(region != nullptr);
+    PinOwnerGeneration(region, Generation::Young);
     region->SetRegionType(RegionInfo::RegionType::THREAD_LOCAL_REGION);
     BaseObject* liveObject = fx.PlaceObject(region->GetRegionStart());
     const MAddress from = reinterpret_cast<MAddress>(liveObject);
@@ -2686,8 +2692,7 @@ GC_TEST(ForwardingPublicationProduct, RetiredYoungTableSurvivesA8UntilNextYoungM
     GC_EXPECT_TRUE(to != 0);
     ZForwarding* youngTab = ForwardingTable::GetCovering(from);
     GC_EXPECT_TRUE(youngTab != nullptr);
-    youngTab->note_table_epoch(static_cast<uint8_t>(Generation::Young), youngTab->birth_flip(),
-                               ForwardingTable::MarkCoverageEpoch(Generation::Young) + 1);
+    GC_EXPECT_EQ(youngTab->table_generation(), static_cast<uint8_t>(Generation::Young));
     ForwardingTable::ClearEntries(region->GetRegionStart(), region->GetRegionSize());
     ForwardingTable::ReclaimRetired("old-remap-young-roots-complete");
     FindToVersionResult found = RelocationReceiptTestAccess::ProductFindToVersion(collector, liveObject);
@@ -2713,9 +2718,7 @@ GC_TEST(ForwardingPublicationProduct, RetiredOldTableNotFreedByYoungCoverage)
     RelocationReceiptTestAccess::ReleaseListOwnership(RegionInfo::GetRegionInfo(4));
     RegionInfo* region = RegionInfo::InitRegion(4, 1, RegionInfo::UnitRole::SMALL_SIZED_UNITS);
     GC_EXPECT_TRUE(region != nullptr);
-    if (region->IsYoungRegion()) {
-        region->SetYoungRegionFlag(0);
-    }
+    PinOwnerGeneration(region, Generation::Old);
     region->SetRegionType(RegionInfo::RegionType::THREAD_LOCAL_REGION);
     BaseObject* liveObject = fx.PlaceObject(region->GetRegionStart());
     const MAddress from = reinterpret_cast<MAddress>(liveObject);
@@ -2749,6 +2752,47 @@ GC_TEST(ForwardingPublicationProduct, RetiredOldTableNotFreedByYoungCoverage)
     RelocationReceiptTestAccess::BindCollector(Heap::GetHeap().GetCollectorResources(), nullptr);
 }
 
+GC_TEST(ForwardingPublicationProduct, RetiredYoungTableNotFreedByOldCoverage)
+{
+    GcHeapFixture& fx = ProductFixture();
+    ForwardingTable::ReclaimRetired("gc-unit-fixture-coverage-complete");
+    RelocationReceiptTestAccess::ReleaseListOwnership(RegionInfo::GetRegionInfo(4));
+    RegionInfo* region = RegionInfo::InitRegion(4, 1, RegionInfo::UnitRole::SMALL_SIZED_UNITS);
+    GC_EXPECT_TRUE(region != nullptr);
+    PinOwnerGeneration(region, Generation::Young);
+    region->SetRegionType(RegionInfo::RegionType::THREAD_LOCAL_REGION);
+    BaseObject* liveObject = fx.PlaceObject(region->GetRegionStart());
+    const MAddress from = reinterpret_cast<MAddress>(liveObject);
+    region->SetRegionAllocPtr(from + liveObject->GetSize());
+    WCollector collector(Heap::GetHeap().GetAllocator(), Heap::GetHeap().GetCollectorResources());
+    RelocationReceiptTestAccess::BindCollector(Heap::GetHeap().GetCollectorResources(), &collector);
+    LiveInfo* live = PrepareForwardable(fx, region, from);
+    RegionManager manager;
+    RelocationReceiptTestAccess::ParkFrom(manager, region);
+    manager.CompactRegion(region);
+    const MAddress to = ForwardingTable::FindTo(from);
+    GC_EXPECT_TRUE(to != 0);
+    ZForwarding* tab = ForwardingTable::GetCovering(from);
+    GC_EXPECT_TRUE(tab != nullptr);
+    GC_EXPECT_EQ(tab->table_generation(), static_cast<uint8_t>(Generation::Young));
+    ForwardingTable::ClearEntries(region->GetRegionStart(), region->GetRegionSize());
+    ForwardingTable::PublishMarkCoverage(Generation::Old);
+    ForwardingTable::ReclaimRetired("old-mark-coverage");
+    GC_EXPECT_EQ(ForwardingTable::LookupTo(from).to, to);
+    GC_EXPECT_TRUE(ForwardingTable::LookupTo(from).answer == ForwardingTable::ToAnswer::ArmedHit);
+    ForwardingTable::PublishMarkCoverage(Generation::Young);
+    ForwardingTable::ReclaimRetired("young-mark-coverage");
+    GC_EXPECT_EQ(ForwardingTable::LookupTo(from).to, 0);
+    GC_EXPECT_TRUE(ForwardingTable::LookupTo(from).answer == ForwardingTable::ToAnswer::Unavailable);
+    if (region->IsGhostFromRegion()) {
+        region->DispelGhostFromRegion();
+    }
+    RelocationReceiptTestAccess::ReleaseListOwnership(region);
+    region->metadata.liveInfo = nullptr;
+    fx.FreePlanted(live);
+    RelocationReceiptTestAccess::BindCollector(Heap::GetHeap().GetCollectorResources(), nullptr);
+}
+
 GC_TEST(ForwardingPublicationProduct, HeldLookupReaderDefersEligibleDestroy)
 {
     GcHeapFixture& fx = ProductFixture();
@@ -2756,6 +2800,7 @@ GC_TEST(ForwardingPublicationProduct, HeldLookupReaderDefersEligibleDestroy)
     RelocationReceiptTestAccess::ReleaseListOwnership(RegionInfo::GetRegionInfo(4));
     RegionInfo* region = RegionInfo::InitRegion(4, 1, RegionInfo::UnitRole::SMALL_SIZED_UNITS);
     GC_EXPECT_TRUE(region != nullptr);
+    PinOwnerGeneration(region, Generation::Young);
     region->SetRegionType(RegionInfo::RegionType::THREAD_LOCAL_REGION);
     BaseObject* liveObject = fx.PlaceObject(region->GetRegionStart());
     const MAddress from = reinterpret_cast<MAddress>(liveObject);
@@ -2770,8 +2815,7 @@ GC_TEST(ForwardingPublicationProduct, HeldLookupReaderDefersEligibleDestroy)
     GC_EXPECT_TRUE(to != 0);
     ZForwarding* youngTab = ForwardingTable::GetCovering(from);
     GC_EXPECT_TRUE(youngTab != nullptr);
-    youngTab->note_table_epoch(static_cast<uint8_t>(Generation::Young), youngTab->birth_flip(),
-                               ForwardingTable::MarkCoverageEpoch(Generation::Young) + 1);
+    GC_EXPECT_EQ(youngTab->table_generation(), static_cast<uint8_t>(Generation::Young));
     ForwardingTable::ClearEntries(region->GetRegionStart(), region->GetRegionSize());
     ForwardingTable::PublishMarkCoverage(Generation::Young);
     {
@@ -2799,6 +2843,7 @@ GC_TEST(ForwardingPublicationProduct, CoverageEpochAdvancesOnlyAtMarkEnd)
     RelocationReceiptTestAccess::ReleaseListOwnership(RegionInfo::GetRegionInfo(4));
     RegionInfo* region = RegionInfo::InitRegion(4, 1, RegionInfo::UnitRole::SMALL_SIZED_UNITS);
     GC_EXPECT_TRUE(region != nullptr);
+    PinOwnerGeneration(region, Generation::Young);
     region->SetRegionType(RegionInfo::RegionType::THREAD_LOCAL_REGION);
     BaseObject* liveObject = fx.PlaceObject(region->GetRegionStart());
     const MAddress from = reinterpret_cast<MAddress>(liveObject);
@@ -2811,8 +2856,7 @@ GC_TEST(ForwardingPublicationProduct, CoverageEpochAdvancesOnlyAtMarkEnd)
     manager.CompactRegion(region);
     ZForwarding* tab = ForwardingTable::GetCovering(from);
     GC_EXPECT_TRUE(tab != nullptr);
-    tab->note_table_epoch(static_cast<uint8_t>(Generation::Young), tab->birth_flip(),
-                          ForwardingTable::MarkCoverageEpoch(Generation::Young) + 1);
+    GC_EXPECT_EQ(tab->table_generation(), static_cast<uint8_t>(Generation::Young));
     const uint64_t required = tab->required_mark_epoch();
     const uint64_t before = ForwardingTable::MarkCoverageEpoch(Generation::Young);
     GC_EXPECT_TRUE(before < required);
@@ -2838,6 +2882,7 @@ GC_TEST(ForwardingPublicationProduct, ResolveStoreValueNoForwardingAfterGhostDis
     RelocationReceiptTestAccess::ReleaseListOwnership(RegionInfo::GetRegionInfo(4));
     RegionInfo* region = RegionInfo::InitRegion(4, 1, RegionInfo::UnitRole::SMALL_SIZED_UNITS);
     GC_EXPECT_TRUE(region != nullptr);
+    PinOwnerGeneration(region, Generation::Young);
     region->SetRegionType(RegionInfo::RegionType::THREAD_LOCAL_REGION);
     BaseObject* liveObject = fx.PlaceObject(region->GetRegionStart());
     const MAddress from = reinterpret_cast<MAddress>(liveObject);
@@ -2850,6 +2895,9 @@ GC_TEST(ForwardingPublicationProduct, ResolveStoreValueNoForwardingAfterGhostDis
     manager.CompactRegion(region);
     const MAddress to = ForwardingTable::FindTo(from);
     GC_EXPECT_TRUE(to != 0);
+    ZForwarding* tab = ForwardingTable::GetCovering(from);
+    GC_EXPECT_TRUE(tab != nullptr);
+    GC_EXPECT_EQ(tab->table_generation(), static_cast<uint8_t>(Generation::Young));
 
     ForwardingTable::ClearEntries(region->GetRegionStart(), region->GetRegionSize());
     ForwardingTable::PublishMarkCoverage(Generation::Young);
