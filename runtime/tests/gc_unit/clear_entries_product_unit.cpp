@@ -780,7 +780,7 @@ GC_OTHER_VM_TEST(FindToRouteDiagnostics, DistinguishesLookupUnavailableFromNoGho
     lookupRegion->SetRegionAllocPtr(reinterpret_cast<MAddress>(lookupFrom) + lookupFrom->GetSize());
     LiveInfo* live = PrepareForwardable(fx, lookupRegion, reinterpret_cast<MAddress>(lookupFrom));
     ForwardingTable::ClearEntries(lookupRegion->GetRegionStart(), lookupRegion->GetRegionSize());
-    ForwardingTable::ReclaimRetired("gc-unit-route-diagnostics-lookup");
+    ForwardingTable::ReclaimRetired("gc-unit-explicit-coverage");
     lookupFrom->SetStateCode(ObjectState::FORWARDED);
 
     FindToVersionResult lookup =
@@ -853,7 +853,7 @@ GC_OTHER_VM_TEST(LookupDecisionSnapshot, SurvivesPostReturnGhostAndHeaderMutatio
     RelocationReceiptTestAccess::BindCollector(Heap::GetHeap().GetCollectorResources(), &collector);
     LiveInfo* live = PrepareForwardable(fx, region, reinterpret_cast<MAddress>(from));
     ForwardingTable::ClearEntries(region->GetRegionStart(), region->GetRegionSize());
-    ForwardingTable::ReclaimRetired("gc-unit-lookup-decision-snapshot");
+    ForwardingTable::ReclaimRetired("gc-unit-explicit-coverage");
     GC_EXPECT_TRUE(RegionInfo::GetGhostFromRegionAt(reinterpret_cast<MAddress>(from)) == region);
     GC_EXPECT_FALSE(from->IsForwarded());
 
