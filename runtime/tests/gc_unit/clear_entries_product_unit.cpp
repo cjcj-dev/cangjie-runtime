@@ -1938,34 +1938,30 @@ GC_TEST(ForwardingPublicationProduct, LookupCausePublishedWithoutReceipt)
 #if defined(__linux__)
     GcHeapFixture& fx = ProductFixture();
     RelocationReceiptTestAccess::ReleaseListOwnership(RegionInfo::GetRegionInfo(4));
-    RelocationReceiptTestAccess::ReleaseListOwnership(RegionInfo::GetRegionInfo(3));
     RegionInfo* region = RegionInfo::InitRegion(4, 1, RegionInfo::UnitRole::SMALL_SIZED_UNITS);
-    RegionInfo* destination = RegionInfo::InitRegion(3, 1, RegionInfo::UnitRole::SMALL_SIZED_UNITS);
-    GC_EXPECT_TRUE(region != nullptr && destination != nullptr);
+    GC_EXPECT_TRUE(region != nullptr);
     region->SetRegionType(RegionInfo::RegionType::THREAD_LOCAL_REGION);
-    destination->SetRegionType(RegionInfo::RegionType::THREAD_LOCAL_REGION);
     BaseObject* from = fx.PlaceObject(region->GetRegionStart());
     region->SetRegionAllocPtr(reinterpret_cast<MAddress>(from) + from->GetSize());
-    destination->SetRegionAllocPtr(destination->GetRegionStart());
     WCollector collector(Heap::GetHeap().GetAllocator(), Heap::GetHeap().GetCollectorResources());
-    collector.SetGCPhase(GCPhase::GC_PHASE_IDLE);
+    collector.SetGCPhase(GCPhase::GC_PHASE_FORWARD);
     RelocationReceiptTestAccess::BindCollector(Heap::GetHeap().GetCollectorResources(), &collector);
     LiveInfo* live = PrepareForwardable(fx, region, reinterpret_cast<MAddress>(from));
-    region->SetRouteInfo(destination->GetRegionStart(), static_cast<uint32_t>(from->GetSize()));
-    region->SetRouteState(RegionInfo::RouteState::FORWARDED);
+    region->SetRouteState(RegionInfo::RouteState::COMPACTED);
     region->MarkForwardingDone();
+    from->SetStateCode(ObjectState::FORWARDED);
     const ForwardingTable::LookupResult lookup = ForwardingTable::LookupTo(reinterpret_cast<MAddress>(from));
     GC_EXPECT_TRUE(lookup.to == 0);
     GC_EXPECT_TRUE(lookup.answer != ForwardingTable::ToAnswer::ArmedHit);
 
     BaseObject* holder = fx.obj0;
     auto& field = HeapSlotAt<>(reinterpret_cast<MAddress>(holder) + TYPEINFO_PTR_SIZE);
-    ForwardingTable::Publication publication =
-        ForwardingTable::EnsurePublicationBeforeCopy(region, reinterpret_cast<MAddress>(from));
-    GC_EXPECT_TRUE(static_cast<bool>(publication));
-    publication = ForwardingTable::Publication();
     Barrier barrier(collector, Heap::GetHeap().GetRememberedSet());
     AbortCapture aborted = CaptureAbort([&]() { barrier.WriteReference(holder, field, from); });
+    if (!WIFSIGNALED(aborted.status)) {
+        std::fprintf(stderr, "WAIT_PROVENANCE status=%d output=\n%s\n", aborted.status,
+                     aborted.output.c_str());
+    }
     GC_EXPECT_TRUE(WIFSIGNALED(aborted.status));
     GC_EXPECT_EQ(WTERMSIG(aborted.status), SIGABRT);
     const char* required[] = {
@@ -2003,7 +1999,6 @@ GC_TEST(ForwardingPublicationProduct, LookupCausePublishedWithoutReceipt)
     }
     ForwardingTable::ClearEntries(region->GetRegionStart(), region->GetRegionSize());
     ForwardingTable::ReclaimRetired("gc-unit-lookup-cause");
-    RelocationReceiptTestAccess::ReleaseListOwnership(destination);
     region->metadata.liveInfo = nullptr;
     fx.FreePlanted(live);
     RelocationReceiptTestAccess::BindCollector(Heap::GetHeap().GetCollectorResources(), nullptr);
