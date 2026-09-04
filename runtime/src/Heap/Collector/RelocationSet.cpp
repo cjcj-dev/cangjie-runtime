@@ -79,6 +79,8 @@ void WCollector::PostTrace()
     WeakRefBuffer::Instance().ClearWeakRefBuffer();
     // clear satb buffer when gc finish tracing.
     SatbBuffer::Instance().ClearBuffer();
+    ForwardingTable::PublishMarkCoverage(Generation::Old);
+    ForwardingTable::ReclaimRetired("old-mark-coverage");
     // reclaim large objects immediately after tracing is done.
     PrepareCycleRef();
     CollectLargeGarbage();

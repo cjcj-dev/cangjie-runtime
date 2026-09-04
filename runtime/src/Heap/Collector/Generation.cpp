@@ -1282,6 +1282,8 @@ void WCollector::DoYoungGarbageCollection()
         // from the structure the selector iterates.
         space.GetRegionManager().HandleTraceRegions();
         SatbBuffer::Instance().ClearBuffer();
+        ForwardingTable::PublishMarkCoverage(Generation::Young);
+        ForwardingTable::ReclaimRetired("young-mark-coverage");
     }
 
     size_t allocatedBefore = space.AllocatedBytes();

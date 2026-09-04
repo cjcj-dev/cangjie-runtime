@@ -26,6 +26,8 @@
 #include "Heap/Verify/M0Correlation.h"
 
 namespace MapleRuntime {
+uint64_t WCollectorFlipSeqForProbe();
+
 namespace {
 
 // zForwardingTable.hpp:32-52 — one granule map of ZForwarding*.
@@ -109,6 +111,18 @@ std::atomic<uint64_t> g_armedHit{ 0 };
 std::atomic<uint64_t> g_armedMiss{ 0 };
 std::atomic<uint64_t> g_unavailable{ 0 };
 std::atomic<uint64_t> g_unarmed{ 0 };
+std::atomic<uint64_t> g_markCoverageEpoch[2] = { { 0 }, { 0 } };
+
+void StampTableCoverage(ZForwarding* tab, RegionInfo* region)
+{
+    if (tab == nullptr) {
+        return;
+    }
+    const Generation gen = region == nullptr ? Generation::Young : region->GetOwnerGeneration();
+    const size_t idx = static_cast<size_t>(gen);
+    const uint64_t birth = g_markCoverageEpoch[idx].load(std::memory_order_acquire);
+    tab->note_table_epoch(static_cast<uint8_t>(gen), WCollectorFlipSeqForProbe(), birth + 1);
+}
 
 #if defined(MRT_TESTABLE_INTERNALS)
 std::atomic<ForwardingTable::LookupRetainHook> g_lookupRetainHook{ nullptr };
@@ -317,6 +331,7 @@ bool ForwardingTable::InsertProvisional(MAddress regionStart, size_t regionSize,
             return false;
         }
         created->set_publication_generation(generation);
+        StampTableCoverage(created, region);
         RegionLifeClock::Publish(RegionLifeClock::Carrier::ARMED_ENTRY, created->page_life_id());
         MapPut(g_entries, regionStart, regionSize, created);
         forwarding = created;
@@ -433,6 +448,7 @@ ZForwarding* ForwardingTable::EnsureEntriesLocked(RegionInfo* region)
         return nullptr;
     }
     created->set_publication_generation(generation);
+    StampTableCoverage(created, region);
     RegionLifeClock::Publish(RegionLifeClock::Carrier::ARMED_ENTRY, created->page_life_id());
     // Keep the previous table mapped until every copier carrying it has
     // inserted its receipt. g_installLock prevents a new acquisition while the
@@ -500,12 +516,29 @@ std::atomic<uint64_t> g_retiredTotal{ 0 };
 std::atomic<uint64_t> g_reclaimedTotal{ 0 };
 } // namespace
 
+bool ForwardingTable::RetiredDestroyEligible(ZForwarding* tab)
+{
+    if (tab == nullptr) {
+        return false;
+    }
+    const size_t idx = static_cast<size_t>(tab->table_generation());
+    if (idx > 1) {
+        return false;
+    }
+    if (g_markCoverageEpoch[idx].load(std::memory_order_acquire) < tab->required_mark_epoch()) {
+        return false;
+    }
+    const int32_t refs = tab->ref_count().load(std::memory_order_acquire);
+    return refs == 0 || refs == 1;
+}
+
 void ForwardingTable::Retire(ZForwarding* tab)
 {
     if (tab == nullptr) {
         return;
     }
     std::lock_guard<std::mutex> lock(g_retiredLock);
+    ZForwardingLife::ResetForForwarding(tab->ref_count(), tab->claimed(), tab->done());
     g_retired.push_back(tab);
     RegionLifeClock::Publish(RegionLifeClock::Carrier::RETIRED_ENTRY, tab->page_life_id());
     g_retiredTotal.fetch_add(1, std::memory_order_relaxed);
@@ -524,67 +557,32 @@ void ForwardingTable::ReclaimRetired(const char* why)
         std::lock_guard<std::mutex> installLock(g_installLock);
         std::lock_guard<std::mutex> retiredLock(g_retiredLock);
         candidates = g_retired;
-        for (ZForwarding* tab : g_retired) {
+        for (ZForwarding* tab : g_retiredPrev) {
+            candidates.push_back(tab);
+        }
+        for (ZForwarding* tab : candidates) {
             RegionLifeClock::NoteZeroAcrossBoundary(RegionLifeClock::Carrier::RETIRED_ENTRY,
                                                     tab != nullptr,
                                                     tab == nullptr ? 0 : tab->page_life_id());
         }
-        const std::unordered_set<ZForwarding*> candidateSet(candidates.begin(), candidates.end());
-        // ZGeneration::reset_relocation_set runs after the next cycle's mark
-        // (zGeneration.cpp:276-285,1041-1042), not at remap-young-roots of the
-        // cycle that installed the tables. Production why
-        // old-remap-young-roots-complete therefore defers; PostTrace reset
-        // is the coverage-complete destroy.
-        const bool resetPrevGeneration = why != nullptr &&
-            std::strcmp(why, "post-remap-reset-relocation-set") == 0;
         const bool forceCoverageComplete = why != nullptr &&
             (std::strcmp(why, "gc-unit-fixture-coverage-complete") == 0 ||
              std::strcmp(why, "gc-unit-explicit-coverage") == 0 ||
              std::strstr(why, "cleanup") != nullptr);
-        if (resetPrevGeneration) {
-            for (ZForwarding* tab : g_retiredPrev) {
-                victims.push_back(tab);
-            }
-            g_retiredPrev = candidates;
-            g_retired.clear();
-        } else if (forceCoverageComplete) {
-            for (ZForwarding* tab : g_retiredPrev) {
-                victims.push_back(tab);
-            }
-            g_retiredPrev.clear();
-            for (ZForwarding* tab : candidates) {
-                victims.push_back(tab);
-            }
-            g_retired.clear();
-        } else
+        g_retired.clear();
+        g_retiredPrev.clear();
         for (ZForwarding* tab : candidates) {
-            bool needsReceipt = false;
-            if (tab == nullptr || !tab->retired_required() || forceCoverageComplete) {
-                victims.push_back(tab);
+            if (tab == nullptr) {
                 continue;
             }
-            // Compact in-place overwrites from slots, so a FORWARDED header is not a
-            // lifetime proof. The table itself is the authority until every from has
-            // a successor receipt in a still-active generation
-            // (zGeneration.cpp:276-285; zRelocationSet.cpp:191-200).
-            tab->for_each_from([&](MAddress from) {
-                if (needsReceipt) {
-                    return;
-                }
-                ZForwarding* active = MapGet(g_entries, from);
-                if (active != nullptr && candidateSet.count(active) == 0 && active->find(from) != 0) {
-                    return;
-                }
-                if (tab->find(from) != 0) {
-                    needsReceipt = true;
-                }
-            });
-            (needsReceipt ? deferred : victims).push_back(tab);
+            if (forceCoverageComplete || RetiredDestroyEligible(tab)) {
+                victims.push_back(tab);
+            } else {
+                deferred.push_back(tab);
+            }
         }
-        if (!resetPrevGeneration && !forceCoverageComplete) {
-            g_retired = deferred;
-        }
-        stillHeld = g_retired.size() + g_retiredPrev.size();
+        g_retired = deferred;
+        stillHeld = g_retired.size();
     }
     for (ZForwarding* tab : victims) {
         UnlinkThenDestroy(tab);
@@ -599,6 +597,40 @@ void ForwardingTable::ReclaimRetired(const char* why)
             why == nullptr ? "?" : why, victims.size(), stillHeld, stillHeld == 0 ? 1u : 0u,
             g_retiredTotal.load(std::memory_order_relaxed), done);
     }
+}
+
+void ForwardingTable::PublishMarkCoverage(Generation gen)
+{
+    const size_t idx = static_cast<size_t>(gen);
+    if (idx > 1) {
+        return;
+    }
+    g_markCoverageEpoch[idx].fetch_add(1, std::memory_order_acq_rel);
+}
+
+uint64_t ForwardingTable::MarkCoverageEpoch(Generation gen)
+{
+    const size_t idx = static_cast<size_t>(gen);
+    if (idx > 1) {
+        return 0;
+    }
+    return g_markCoverageEpoch[idx].load(std::memory_order_acquire);
+}
+
+size_t ForwardingTable::RetiredQueueSize()
+{
+    std::lock_guard<std::mutex> lock(g_retiredLock);
+    return g_retired.size() + g_retiredPrev.size();
+}
+
+ForwardingTable::Publication ForwardingTable::RetainCovering(MAddress from)
+{
+    std::lock_guard<std::mutex> lock(g_installLock);
+    ZForwarding* tab = GetCovering(from);
+    if (tab == nullptr || !tab->retain_page()) {
+        return Publication();
+    }
+    return Publication(tab);
 }
 
 bool ForwardingTable::RetiredCovers(MAddress regionStart, size_t regionSize)

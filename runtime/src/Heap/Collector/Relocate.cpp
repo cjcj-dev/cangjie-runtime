@@ -533,6 +533,7 @@ void WCollector::RemapYoungRoots()
     // (zGeneration.cpp:1458-1523). Only that coverage completion retires the
     // forwarding authority; a cycle count is not a lifetime proof.
     ForwardingTable::ReclaimRetired("old-remap-young-roots-complete");
+    // A8 triggers reclaim; it does not publish mark coverage.
 
     LOG(RTLOG_ERROR,
         "[A8REMAP] remset seen=%zu coloured=%zu remapped=%zu doubleBad=%zu "

@@ -14,6 +14,7 @@
 #include "Heap/Collector/ZForwarding.h"
 
 namespace MapleRuntime {
+enum class Generation : uint8_t;
 class RegionInfo;
 class BaseObject;
 class LiveInfo;
@@ -115,6 +116,13 @@ public:
     // drained every retained publication owner (zGeneration.cpp:1458-1523;
     // zForwarding.cpp:171-181).
     static void ReclaimRetired(const char* why);
+    // Next same-generation mark-end coverage receipt. A8 may call ReclaimRetired
+    // but must not manufacture this epoch (zGeneration.cpp:276-285).
+    static void PublishMarkCoverage(Generation gen);
+    static uint64_t MarkCoverageEpoch(Generation gen);
+    static bool RetiredDestroyEligible(ZForwarding* tab);
+    static Publication RetainCovering(MAddress from);
+    static size_t RetiredQueueSize();
     // Measurement face for FROM_PAGE_DETACH_GATE. True while either retired
     // generation still contains a forwarding whose from range overlaps this
     // region. It never changes table lifetime.
