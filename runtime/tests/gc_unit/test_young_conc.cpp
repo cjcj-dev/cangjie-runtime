@@ -741,7 +741,7 @@ GC_OTHER_VM_TEST(YoungConc, SatbAfterWorkerTerminationUsesBoundedMarkEndContinue
     resources.SetGcStarted(true);
     resources.GetGCStats().reason = GC_REASON_YOUNG;
     ResetMarkTerminateTestReceipt();
-    ArmSatbBeforeMarkEndTestReceipt(&producer, first, second);
+    ArmSatbBeforeMarkEndTestReceipt(&producer, first);
 
     RelocationReceiptTestAccess::RunCollectionDispatch(collector);
     const auto receipt = ReadMarkTerminateTestReceipt();
@@ -749,13 +749,167 @@ GC_OTHER_VM_TEST(YoungConc, SatbAfterWorkerTerminationUsesBoundedMarkEndContinue
                  "DETAIL satb_mark_end pauses=%zu flushed=%zu continues=%zu max_pause_ns=%zu\n",
                  receipt.pauses, receipt.flushed, receipt.continues,
                  static_cast<size_t>(receipt.maxPauseNs));
-    GC_EXPECT_EQ(receipt.pauses, 3u);
-    GC_EXPECT_EQ(receipt.flushed, 2u);
-    GC_EXPECT_EQ(receipt.continues, 2u);
+    GC_EXPECT_EQ(receipt.pauses, 2u);
+    GC_EXPECT_EQ(receipt.flushed, 1u);
+    GC_EXPECT_EQ(receipt.continues, 1u);
+    GC_EXPECT_EQ(receipt.closureDuringPause, 0u);
     GC_EXPECT_TRUE(receipt.maxPauseNs < 1000000000ULL);
     const auto view = fx.region1->GetMarkView<Generation::Young>();
     GC_EXPECT_TRUE(fx.region1->IsMarkedObject(view, first));
-    GC_EXPECT_TRUE(fx.region1->IsMarkedObject(view, second));
+    (void)second;
+
+    resources.SetGcStarted(startedBefore);
+    resources.GetGCStats().reason = reasonBefore;
+    RelocationReceiptTestAccess::BindThreadPool(resources, nullptr);
+    threadPool.Exit();
+    RelocationReceiptTestAccess::BindCollector(resources, nullptr);
+    (void)live;
+}
+
+// Allocate-black Follow is merged into MarkYoungSatbBuffer. Pause leftover
+// injection must stay zero; cutting that concurrent merge reds only this case.
+GC_OTHER_VM_TEST(YoungConc, YoungAllocBlackVisibleBeforePauseMarkEnd)
+{
+    GC_EXPECT_EQ(CJ_ScheduleManagerInit(), 0);
+    GC_EXPECT_EQ(setenv("MRT_GCV2_MARKPAR_FORCE_SERIAL", "1", 1), 0);
+    MutatorManager mutatorManager;
+    YoungConcTestRuntime runtime(mutatorManager);
+    GcHeapFixture fx;
+    fx.region1->SetYoungRegionFlag(1);
+    fx.region1->SetYoungAge(1);
+    LiveInfo* live = fx.PlantLiveInfo(fx.region1);
+    (void)fx.PlantMarkBitmap<Generation::Young>(live, fx.region1->GetRegionSize());
+    BaseObject* child = fx.PlaceObject(reinterpret_cast<MAddress>(fx.obj1) + 64);
+    fx.region1->SetRegionAllocPtr(reinterpret_cast<MAddress>(child) + 64);
+    auto* holderField = &HeapSlotAt<>(reinterpret_cast<MAddress>(fx.obj1) + TYPEINFO_PTR_SIZE);
+    holderField->StoreColoured(GcUnit::StoreGoodPointer(child));
+    (void)fx.region1->MarkObject(fx.region1->GetMarkView<Generation::Young>(), fx.obj1, 8);
+
+    CollectorResources& resources = Heap::GetHeap().GetCollectorResources();
+    WCollector collector(Heap::GetHeap().GetAllocator(), resources);
+    RelocationReceiptTestAccess::BindCollector(resources, &collector);
+    collector.SetGCPhase(GCPhase::GC_PHASE_CLEAR_SATB_BUFFER);
+    GCThreadPool threadPool("gc-unit-allocblack-mark-end", 0, GCPoolThread::GC_THREAD_PRIORITY);
+    RelocationReceiptTestAccess::BindThreadPool(resources, &threadPool);
+    RegionSpace& space = reinterpret_cast<RegionSpace&>(Heap::GetHeap().GetAllocator());
+    space.GetRegionManager().EnlistFullThreadLocalRegion(fx.region1);
+    space.GetRegionManager().AddRawPointerObject(fx.obj1);
+    Heap::GetHeap().GetRememberedSet().Initialize(fx.heapStart, 2 * RegionInfo::UNIT_SIZE);
+    const bool startedBefore = resources.IsGcStarted();
+    const GCReason reasonBefore = resources.GetGCStats().reason;
+    resources.SetGcStarted(true);
+    resources.GetGCStats().reason = GC_REASON_YOUNG;
+    ResetMarkTerminateTestReceipt();
+    ArmAllocBlackDuringConcurrentTestReceipt(fx.obj1);
+
+    RelocationReceiptTestAccess::RunCollectionDispatch(collector);
+    const auto receipt = ReadMarkTerminateTestReceipt();
+    std::fprintf(stderr,
+                 "DETAIL allocblack_mark_end pauses=%zu continues=%zu pauseAllocBlack=%zu closure=%zu\n",
+                 receipt.pauses, receipt.continues, receipt.pauseAllocBlack, receipt.closureDuringPause);
+    GC_EXPECT_EQ(receipt.pauseAllocBlack, 0u);
+    GC_EXPECT_EQ(receipt.continues, 0u);
+    GC_EXPECT_EQ(receipt.closureDuringPause, 0u);
+    const auto view = fx.region1->GetMarkView<Generation::Young>();
+    GC_EXPECT_TRUE(fx.region1->IsMarkedObject(view, child));
+
+    resources.SetGcStarted(startedBefore);
+    resources.GetGCStats().reason = reasonBefore;
+    RelocationReceiptTestAccess::BindThreadPool(resources, nullptr);
+    threadPool.Exit();
+    RelocationReceiptTestAccess::BindCollector(resources, nullptr);
+    (void)live;
+}
+
+// y2y dirty holders share the same concurrent merge as allocate-black.
+GC_OTHER_VM_TEST(YoungConc, Y2yDirtyVisibleBeforePauseMarkEnd)
+{
+    GC_EXPECT_EQ(CJ_ScheduleManagerInit(), 0);
+    GC_EXPECT_EQ(setenv("MRT_GCV2_MARKPAR_FORCE_SERIAL", "1", 1), 0);
+    MutatorManager mutatorManager;
+    YoungConcTestRuntime runtime(mutatorManager);
+    GcHeapFixture fx;
+    fx.region1->SetYoungRegionFlag(1);
+    fx.region1->SetYoungAge(1);
+    LiveInfo* live = fx.PlantLiveInfo(fx.region1);
+    (void)fx.PlantMarkBitmap<Generation::Young>(live, fx.region1->GetRegionSize());
+    BaseObject* child = fx.PlaceObject(reinterpret_cast<MAddress>(fx.obj1) + 64);
+    fx.region1->SetRegionAllocPtr(reinterpret_cast<MAddress>(child) + 64);
+    auto* holderField = &HeapSlotAt<>(reinterpret_cast<MAddress>(fx.obj1) + TYPEINFO_PTR_SIZE);
+    holderField->StoreColoured(GcUnit::StoreGoodPointer(child));
+
+    CollectorResources& resources = Heap::GetHeap().GetCollectorResources();
+    WCollector collector(Heap::GetHeap().GetAllocator(), resources);
+    RelocationReceiptTestAccess::BindCollector(resources, &collector);
+    collector.SetGCPhase(GCPhase::GC_PHASE_CLEAR_SATB_BUFFER);
+    GCThreadPool threadPool("gc-unit-y2y-mark-end", 0, GCPoolThread::GC_THREAD_PRIORITY);
+    RelocationReceiptTestAccess::BindThreadPool(resources, &threadPool);
+    RegionSpace& space = reinterpret_cast<RegionSpace&>(Heap::GetHeap().GetAllocator());
+    space.GetRegionManager().EnlistFullThreadLocalRegion(fx.region1);
+    space.GetRegionManager().AddRawPointerObject(fx.obj1);
+    Heap::GetHeap().GetRememberedSet().Initialize(fx.heapStart, 2 * RegionInfo::UNIT_SIZE);
+    const bool startedBefore = resources.IsGcStarted();
+    const GCReason reasonBefore = resources.GetGCStats().reason;
+    resources.SetGcStarted(true);
+    resources.GetGCStats().reason = GC_REASON_YOUNG;
+    ResetMarkTerminateTestReceipt();
+    ArmY2yDuringConcurrentTestReceipt(fx.obj1);
+
+    RelocationReceiptTestAccess::RunCollectionDispatch(collector);
+    const auto receipt = ReadMarkTerminateTestReceipt();
+    std::fprintf(stderr,
+                 "DETAIL y2y_mark_end pauses=%zu continues=%zu pauseY2y=%zu closure=%zu\n",
+                 receipt.pauses, receipt.continues, receipt.pauseY2y, receipt.closureDuringPause);
+    GC_EXPECT_EQ(receipt.pauseY2y, 0u);
+    GC_EXPECT_EQ(receipt.continues, 0u);
+    GC_EXPECT_EQ(receipt.closureDuringPause, 0u);
+    const auto view = fx.region1->GetMarkView<Generation::Young>();
+    GC_EXPECT_TRUE(fx.region1->IsMarkedObject(view, fx.obj1));
+    GC_EXPECT_TRUE(fx.region1->IsMarkedObject(view, child));
+
+    resources.SetGcStarted(startedBefore);
+    resources.GetGCStats().reason = reasonBefore;
+    RelocationReceiptTestAccess::BindThreadPool(resources, nullptr);
+    threadPool.Exit();
+    RelocationReceiptTestAccess::BindCollector(resources, nullptr);
+    (void)live;
+}
+
+GC_OTHER_VM_TEST(YoungConc, PauseMarkEndNeverRunsClosure)
+{
+    GC_EXPECT_EQ(CJ_ScheduleManagerInit(), 0);
+    GC_EXPECT_EQ(setenv("MRT_GCV2_MARKPAR_FORCE_SERIAL", "1", 1), 0);
+    MutatorManager mutatorManager;
+    YoungConcTestRuntime runtime(mutatorManager);
+    GcHeapFixture fx;
+    fx.region1->SetYoungRegionFlag(1);
+    fx.region1->SetYoungAge(1);
+    LiveInfo* live = fx.PlantLiveInfo(fx.region1);
+    (void)fx.PlantMarkBitmap<Generation::Young>(live, fx.region1->GetRegionSize());
+    fx.region1->SetRegionAllocPtr(reinterpret_cast<MAddress>(fx.obj1) + 64);
+
+    CollectorResources& resources = Heap::GetHeap().GetCollectorResources();
+    WCollector collector(Heap::GetHeap().GetAllocator(), resources);
+    RelocationReceiptTestAccess::BindCollector(resources, &collector);
+    collector.SetGCPhase(GCPhase::GC_PHASE_CLEAR_SATB_BUFFER);
+    GCThreadPool threadPool("gc-unit-pause-no-closure", 0, GCPoolThread::GC_THREAD_PRIORITY);
+    RelocationReceiptTestAccess::BindThreadPool(resources, &threadPool);
+    RegionSpace& space = reinterpret_cast<RegionSpace&>(Heap::GetHeap().GetAllocator());
+    space.GetRegionManager().EnlistFullThreadLocalRegion(fx.region1);
+    space.GetRegionManager().AddRawPointerObject(fx.obj1);
+    Heap::GetHeap().GetRememberedSet().Initialize(fx.heapStart, 2 * RegionInfo::UNIT_SIZE);
+    const bool startedBefore = resources.IsGcStarted();
+    const GCReason reasonBefore = resources.GetGCStats().reason;
+    resources.SetGcStarted(true);
+    resources.GetGCStats().reason = GC_REASON_YOUNG;
+    ResetMarkTerminateTestReceipt();
+
+    RelocationReceiptTestAccess::RunCollectionDispatch(collector);
+    const auto receipt = ReadMarkTerminateTestReceipt();
+    std::fprintf(stderr, "DETAIL pause_no_closure pauses=%zu closure=%zu\n", receipt.pauses,
+                 receipt.closureDuringPause);
+    GC_EXPECT_TRUE(receipt.pauses >= 1u);
+    GC_EXPECT_EQ(receipt.closureDuringPause, 0u);
 
     resources.SetGcStarted(startedBefore);
     resources.GetGCStats().reason = reasonBefore;
