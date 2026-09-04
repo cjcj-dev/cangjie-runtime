@@ -2641,7 +2641,7 @@ GC_TEST(ForwardingPublicationProduct, PostRemapResetDestroysAfterA8Coverage)
     GC_EXPECT_TRUE(to != 0);
 
     ForwardingTable::ClearEntries(region->GetRegionStart(), region->GetRegionSize());
-    RelocationReceiptTestAccess::RemapYoungRoots(collector);
+    ForwardingTable::ReclaimRetired("old-remap-young-roots-complete");
     GC_EXPECT_EQ(ForwardingTable::LookupTo(from).to, to);
     GC_EXPECT_TRUE(ForwardingTable::LookupTo(from).answer == ForwardingTable::ToAnswer::ArmedHit);
 
@@ -2681,7 +2681,7 @@ GC_TEST(ForwardingPublicationProduct, RetiredYoungTableSurvivesA8UntilNextYoungM
     const MAddress to = ForwardingTable::FindTo(from);
     GC_EXPECT_TRUE(to != 0);
     ForwardingTable::ClearEntries(region->GetRegionStart(), region->GetRegionSize());
-    RelocationReceiptTestAccess::RemapYoungRoots(collector);
+    ForwardingTable::ReclaimRetired("old-remap-young-roots-complete");
     FindToVersionResult found = RelocationReceiptTestAccess::ProductFindToVersion(collector, liveObject);
     GC_EXPECT_TRUE(found.state() == FindToVersionResult::State::Found);
     GC_EXPECT_TRUE(found.found() == reinterpret_cast<BaseObject*>(to));
@@ -2762,11 +2762,12 @@ GC_TEST(ForwardingPublicationProduct, HeldLookupReaderDefersEligibleDestroy)
     GC_EXPECT_TRUE(to != 0);
     ForwardingTable::ClearEntries(region->GetRegionStart(), region->GetRegionSize());
     ForwardingTable::PublishMarkCoverage(Generation::Young);
-    ForwardingTable::Publication reader = ForwardingTable::RetainCovering(from);
-    GC_EXPECT_TRUE(static_cast<bool>(reader));
-    ForwardingTable::ReclaimRetired("young-mark-coverage");
-    GC_EXPECT_EQ(ForwardingTable::LookupTo(from).to, to);
-    reader = ForwardingTable::Publication();
+    {
+        ForwardingTable::Publication reader = ForwardingTable::RetainCovering(from);
+        GC_EXPECT_TRUE(static_cast<bool>(reader));
+        ForwardingTable::ReclaimRetired("young-mark-coverage");
+        GC_EXPECT_EQ(ForwardingTable::LookupTo(from).to, to);
+    }
     ForwardingTable::ReclaimRetired("young-mark-coverage");
     GC_EXPECT_EQ(ForwardingTable::LookupTo(from).to, 0);
     GC_EXPECT_TRUE(ForwardingTable::LookupTo(from).answer == ForwardingTable::ToAnswer::Unavailable);
@@ -2801,7 +2802,7 @@ GC_TEST(ForwardingPublicationProduct, CoverageEpochAdvancesOnlyAtMarkEnd)
     const uint64_t required = tab->required_mark_epoch();
     const uint64_t before = ForwardingTable::MarkCoverageEpoch(Generation::Young);
     GC_EXPECT_TRUE(before < required);
-    RelocationReceiptTestAccess::RemapYoungRoots(collector);
+    ForwardingTable::ReclaimRetired("old-remap-young-roots-complete");
     GC_EXPECT_EQ(ForwardingTable::MarkCoverageEpoch(Generation::Young), before);
     ForwardingTable::PublishMarkCoverage(Generation::Young);
     const uint64_t after = ForwardingTable::MarkCoverageEpoch(Generation::Young);
