@@ -727,6 +727,9 @@ GC_OTHER_VM_TEST(FindToPublicState, UnavailableIsObservable)
     LiveInfo* live = PrepareForwardable(fx, region, reinterpret_cast<MAddress>(from));
     ForwardingTable::ClearEntries(region->GetRegionStart(), region->GetRegionSize());
     ForwardingTable::ReclaimRetired("gc-unit-explicit-coverage");
+    // Table-gone + Usable is NotForwarded (zGeneration.inline.hpp:131-140).
+    // FORWARDED keeps the fail-closed Unavailable exit.
+    from->SetStateCode(ObjectState::FORWARDED);
 
     GC_EXPECT_EQ(ForwardingTable::ArmedMissCount(), static_cast<uint64_t>(0));
     GC_EXPECT_EQ(ForwardingTable::UnavailableCount(), static_cast<uint64_t>(0));
@@ -739,6 +742,7 @@ GC_OTHER_VM_TEST(FindToPublicState, UnavailableIsObservable)
     GC_EXPECT_EQ(ForwardingTable::ArmedMissCount(), static_cast<uint64_t>(0));
     GC_EXPECT_EQ(ForwardingTable::UnavailableCount(), static_cast<uint64_t>(1));
 
+    from->SetStateCode(ObjectState::NORMAL);
     RelocationReceiptTestAccess::BindCollector(Heap::GetHeap().GetCollectorResources(), nullptr);
     region->metadata.liveInfo = nullptr;
     fx.FreePlanted(live);
@@ -761,6 +765,7 @@ GC_OTHER_VM_TEST(FindToRouteDiagnostics, DistinguishesLookupUnavailableFromNoGho
     LiveInfo* live = PrepareForwardable(fx, lookupRegion, reinterpret_cast<MAddress>(lookupFrom));
     ForwardingTable::ClearEntries(lookupRegion->GetRegionStart(), lookupRegion->GetRegionSize());
     ForwardingTable::ReclaimRetired("gc-unit-route-diagnostics-lookup");
+    lookupFrom->SetStateCode(ObjectState::FORWARDED);
 
     FindToVersionResult lookup =
         RelocationReceiptTestAccess::ProductFindToVersion(collector, lookupFrom);
