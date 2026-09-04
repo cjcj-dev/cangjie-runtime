@@ -24,10 +24,9 @@
 #include "Heap/Allocator/RegionInfo.h"
 #include "Heap/Allocator/ZGranuleMap.h"
 #include "Heap/Verify/M0Correlation.h"
+#include "Heap/WCollector/WCollector.h"
 
 namespace MapleRuntime {
-uint64_t WCollectorFlipSeqForProbe();
-
 namespace {
 
 // zForwardingTable.hpp:32-52 — one granule map of ZForwarding*.
@@ -121,7 +120,8 @@ void StampTableCoverage(ZForwarding* tab, RegionInfo* region)
     const Generation gen = region == nullptr ? Generation::Young : region->GetOwnerGeneration();
     const size_t idx = static_cast<size_t>(gen);
     const uint64_t birth = g_markCoverageEpoch[idx].load(std::memory_order_acquire);
-    tab->note_table_epoch(static_cast<uint8_t>(gen), WCollectorFlipSeqForProbe(), birth + 1);
+    tab->note_table_epoch(static_cast<uint8_t>(gen),
+                         WCollector::FlipSeq().load(std::memory_order_relaxed), birth + 1);
 }
 
 #if defined(MRT_TESTABLE_INTERNALS)

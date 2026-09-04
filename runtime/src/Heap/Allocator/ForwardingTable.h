@@ -17,7 +17,7 @@ namespace MapleRuntime {
 enum class Generation : uint8_t;
 class RegionInfo;
 class BaseObject;
-class LiveInfo;
+struct LiveInfo;
 
 // zForwardingTable.hpp:32-52 — granule map of ZForwarding*.
 // Two maps: membership (get/insert/remove) unlinks at Dispel; entries live until
