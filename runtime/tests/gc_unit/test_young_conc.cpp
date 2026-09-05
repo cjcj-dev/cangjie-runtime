@@ -1135,7 +1135,7 @@ GC_TEST(YoungConc, YoungToYoungDirtyHolderReachesWorkStack)
     GC_EXPECT_EQ(buf->Y2yDirtyHolderCount(), 0u);
 }
 
-#if defined(MRT_GC_UNIT_TESTS)
+#if defined(MRT_TESTABLE_INTERNALS) || defined(MRT_GC_UNIT_TESTS)
 namespace {
 struct Y2yMergePhaseGate {
     std::mutex lock;

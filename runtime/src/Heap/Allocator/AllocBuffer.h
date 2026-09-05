@@ -131,7 +131,7 @@ public:
         decltype(y2yDirtyHolders) pending;
         {
             std::lock_guard<std::mutex> lock(y2yDirtyLock);
-#if defined(MRT_GC_UNIT_TESTS)
+#if defined(MRT_TESTABLE_INTERNALS)
             if (y2yDirtyHolderMergeHook != nullptr) {
                 y2yDirtyHolderMergeHook(y2yDirtyHolderMergeHookContext);
             }
@@ -181,7 +181,7 @@ public:
         return y2yDirtySlots.size();
     }
 
-#if defined(MRT_GC_UNIT_TESTS)
+#if defined(MRT_TESTABLE_INTERNALS)
     using Y2yDirtyHolderMergeHook = void (*)(void*);
     void SetY2yDirtyHolderMergeHookForTest(Y2yDirtyHolderMergeHook hook, void* context)
     {
@@ -219,7 +219,7 @@ private:
     std::unordered_set<BaseObject*> y2yDirtyHolders;
     // Holder-independent peer for compiler ABI calls that carry only a heap slot.
     std::unordered_set<MAddress> y2yDirtySlots;
-#if defined(MRT_GC_UNIT_TESTS)
+#if defined(MRT_TESTABLE_INTERNALS)
     Y2yDirtyHolderMergeHook y2yDirtyHolderMergeHook{ nullptr };
     void* y2yDirtyHolderMergeHookContext{ nullptr };
 #endif
