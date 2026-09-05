@@ -16,6 +16,9 @@
 #include <cstdint>
 #include <cstdio>
 #include <cstring>
+#include <condition_variable>
+#include <mutex>
+#include <thread>
 #include <unordered_set>
 #include <vector>
 
@@ -1132,6 +1135,109 @@ GC_TEST(YoungConc, YoungToYoungDirtyHolderReachesWorkStack)
     GC_EXPECT_EQ(buf->Y2yDirtyHolderCount(), 0u);
 }
 
+#if defined(MRT_TESTABLE_INTERNALS) || defined(MRT_GC_UNIT_TESTS)
+namespace {
+struct Y2yMergePhaseGate {
+    std::mutex lock;
+    std::condition_variable changed;
+    bool mergeOwnsBuffer{ false };
+    bool producerAtPush{ false };
+};
+
+void HoldY2yMergeAtPhaseSwitch(void* context)
+{
+    auto& gate = *static_cast<Y2yMergePhaseGate*>(context);
+    std::unique_lock<std::mutex> lock(gate.lock);
+    gate.mergeOwnsBuffer = true;
+    gate.changed.notify_all();
+    gate.changed.wait(lock, [&gate]() { return gate.producerAtPush; });
+}
+} // namespace
+
+// The young mark consumer and a mutator can meet at the concurrent phase
+// boundary. Freeze that ordering after the consumer owns the buffer but before
+// it takes the batch: the late publication must remain intact for the next
+// batch, never mutate the batch being iterated.
+GC_TEST(YoungConc, Y2yDirtyHolderPhaseSwitchHandsOffWholeBatch)
+{
+    GcHeapFixture fx;
+    auto* buffer = new AllocBuffer();
+    Y2yMergePhaseGate gate;
+    buffer->PushY2yDirtyHolder(fx.obj0);
+    buffer->SetY2yDirtyHolderMergeHookForTest(HoldY2yMergeAtPhaseSwitch, &gate);
+
+    std::thread producer([&]() {
+        {
+            std::unique_lock<std::mutex> lock(gate.lock);
+            gate.changed.wait(lock, [&gate]() { return gate.mergeOwnsBuffer; });
+            gate.producerAtPush = true;
+            gate.changed.notify_all();
+        }
+        buffer->PushY2yDirtyHolder(fx.obj1);
+    });
+    GcUnit::JoinGuard join(producer);
+
+    std::vector<BaseObject*> firstBatch;
+    buffer->MergeY2yDirtyHolders(firstBatch);
+    producer.join();
+    buffer->SetY2yDirtyHolderMergeHookForTest(nullptr, nullptr);
+
+    GC_EXPECT_EQ(firstBatch.size(), 1u);
+    GC_EXPECT_EQ(reinterpret_cast<MAddress>(firstBatch[0]), reinterpret_cast<MAddress>(fx.obj0));
+    GC_EXPECT_EQ(buffer->Y2yDirtyHolderCount(), 1u);
+
+    std::vector<BaseObject*> secondBatch;
+    buffer->MergeY2yDirtyHolders(secondBatch);
+    GC_EXPECT_EQ(secondBatch.size(), 1u);
+    GC_EXPECT_EQ(reinterpret_cast<MAddress>(secondBatch[0]), reinterpret_cast<MAddress>(fx.obj1));
+    GC_EXPECT_EQ(buffer->Y2yDirtyHolderCount(), 0u);
+}
+
+// Load-good colour wrapping a FORWARDED from must remap before store-good
+// colour (zBarrier.inline.hpp:591-623). LookupTo of the coloured address is
+// then a miss on the current table.
+GC_TEST(YoungConc, TraceRefFieldRemapsLoadGoodFromBeforeStoreGood)
+{
+    GcHeapFixture fx;
+    fx.region0->SetRegionType(RegionInfo::RegionType::FROM_REGION);
+    fx.region0->SetYoungRegionFlag(1);
+    fx.region0->SetYoungAge(1);
+    fx.region1->SetYoungRegionFlag(1);
+    fx.region1->SetYoungAge(1);
+    fx.obj0->SetStateCode(ObjectState::FORWARDED);
+
+    const MAddress from = reinterpret_cast<MAddress>(fx.obj0);
+    const MAddress to = reinterpret_cast<MAddress>(fx.obj1);
+    if (!ForwardingTable::EntriesArmed(from)) {
+        if (!ForwardingTable::InstallPublicationBeforeCopy(
+                fx.region0->GetRegionStart(), fx.region0->GetRegionSize(), fx.region0)) {
+            GC_EXPECT_TRUE(ForwardingTable::PreparePublicationGeneration(
+                fx.region0->GetRegionStart(), fx.region0->GetRegionSize()));
+            GC_EXPECT_TRUE(ForwardingTable::InstallPublicationBeforeCopy(
+                fx.region0->GetRegionStart(), fx.region0->GetRegionSize(), fx.region0));
+        }
+    }
+    ForwardingTable::Publication publication =
+        ForwardingTable::EnsurePublicationBeforeCopy(fx.region0, from);
+    GC_EXPECT_TRUE(static_cast<bool>(publication));
+    GC_EXPECT_EQ(ForwardingTable::InsertMapping(publication, from, to), to);
+    publication = ForwardingTable::Publication();
+
+    auto* field = &HeapSlotAt<>(to + TYPEINFO_PTR_SIZE);
+    field->StoreColoured(GcUnit::StoreGoodPointer(fx.obj0));
+    WCollector collector(Heap::GetHeap().GetAllocator(), Heap::GetHeap().GetCollectorResources());
+    TracingCollector::WorkStack workStack;
+    collector.TraceRefField(fx.obj1, *field, workStack);
+
+    BaseObject* healed = to_object(field->GetTargetObject());
+    GC_EXPECT_EQ(reinterpret_cast<MAddress>(healed), to);
+    GC_EXPECT_EQ(static_cast<unsigned>(Collector::JudgeHandOutTarget(healed)),
+                 static_cast<unsigned>(HandVerdict::Usable));
+    ForwardingTable::LookupResult lookup = ForwardingTable::LookupTo(reinterpret_cast<MAddress>(healed));
+    GC_EXPECT_TRUE(lookup.answer != ForwardingTable::ToAnswer::ArmedHit);
+}
+#endif
+
 // A1: y2y + empty holder is the ABI grid point that the holder-only handoff
 // could not represent.  It remains out of remset and reaches the slot-grey
 // queue exactly once; removing Barrier::PushY2yDirtySlot reds only this case.
@@ -1469,3 +1575,46 @@ GC_TEST(YoungConc, LegacyTerminationMissesUnfullSatbNode)
 }
 
 #endif // MRT_TESTABLE_INTERNALS
+
+// After a completed handoff, new inserts belong to the live set, not the
+// already-swapped batch. Header-only MergeY2yDirtyHolders (AllocBuffer.h).
+GC_TEST(YoungConc, Y2yAfterHandoffWritesStayOnLiveSet)
+{
+    GcHeapFixture fx;
+    auto* buffer = new AllocBuffer();
+    buffer->PushY2yDirtyHolder(fx.obj0);
+    std::vector<BaseObject*> firstBatch;
+    buffer->MergeY2yDirtyHolders(firstBatch);
+    buffer->PushY2yDirtyHolder(fx.obj1);
+    GC_EXPECT_EQ(firstBatch.size(), 1u);
+    GC_EXPECT_EQ(reinterpret_cast<MAddress>(firstBatch[0]), reinterpret_cast<MAddress>(fx.obj0));
+    GC_EXPECT_EQ(buffer->Y2yDirtyHolderCount(), 1u);
+    std::vector<BaseObject*> secondBatch;
+    buffer->MergeY2yDirtyHolders(secondBatch);
+    GC_EXPECT_EQ(secondBatch.size(), 1u);
+    GC_EXPECT_EQ(reinterpret_cast<MAddress>(secondBatch[0]), reinterpret_cast<MAddress>(fx.obj1));
+}
+
+GC_TEST(YoungConc, Y2yThreadExitLeavesHoldersForNextMerge)
+{
+    GcHeapFixture fx;
+    auto* buffer = new AllocBuffer();
+    buffer->PushY2yDirtyHolder(fx.obj0);
+    buffer->PushY2yDirtyHolder(fx.obj1);
+    GC_EXPECT_EQ(buffer->Y2yDirtyHolderCount(), 2u);
+    std::vector<BaseObject*> batch;
+    buffer->MergeY2yDirtyHolders(batch);
+    GC_EXPECT_EQ(batch.size(), 2u);
+    GC_EXPECT_EQ(buffer->Y2yDirtyHolderCount(), 0u);
+}
+
+GC_TEST(YoungConc, Y2yPendingCountVisibleForTerminate)
+{
+    GcHeapFixture fx;
+    auto* buffer = new AllocBuffer();
+    buffer->PushY2yDirtyHolder(fx.obj0);
+    std::vector<BaseObject*> firstBatch;
+    buffer->MergeY2yDirtyHolders(firstBatch);
+    buffer->PushY2yDirtyHolder(fx.obj1);
+    GC_EXPECT_EQ(buffer->Y2yDirtyHolderCount(), 1u);
+}

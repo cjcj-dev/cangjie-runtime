@@ -207,6 +207,7 @@ $CXX -std=gnu++17 -O0 -g -Wall -Wextra -pthread -fno-rtti \
   "$SRC/test_z_forwarding_table.cpp" \
   "$SRC/test_allocation_stall_queue.cpp" \
     "$SRC/test_young_conc.cpp" \
+  "$SRC/test_alloc_buffer_handoff.cpp" \
     "$SRC/test_young_weak.cpp" \
     "$SRC/test_relocation_set_selector.cpp" \
     "$SRC/test_store_barrier_buffer.cpp" \

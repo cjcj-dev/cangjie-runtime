@@ -358,6 +358,35 @@ void WCollector::TraceRefField(BaseObject* obj, RefField<>& field, WorkStack& wo
     if (!Heap::IsHeapAddress(latest)) {
         return;
     }
+    // ZBarrier::mark_barrier_on_oop_field remaps via the forwarding table before
+    // it colours (zBarrier.inline.hpp:591-623). make_load_good correctly returns
+    // a load-good address without a table walk; a colour wrap can still name a
+    // previous-cycle from. Consult current then retired tables only — TRACE is
+    // not relocate phase, so do not TryMutatorRelocate / forward_object here.
+    {
+        const MAddress fromAddr = reinterpret_cast<MAddress>(latest);
+        MAddress stored = ForwardingTable::FindTo(fromAddr);
+        if (stored == 0) {
+            stored = ForwardingTable::FindRetiredTo(fromAddr);
+        }
+        if (stored != 0) {
+            BaseObject* to = reinterpret_cast<BaseObject*>(stored);
+            if (ToHeaderCovered(to)) {
+                latest = to;
+            }
+        } else if (latest->IsForwarded()) {
+            RegionInfo* ghost = RegionInfo::GetGhostFromRegionAt(fromAddr);
+            BaseObject* published = GetForwardPointer(latest, ghost);
+            if (published != nullptr) {
+                latest = published;
+            }
+        }
+        if (!Heap::IsHeapAddress(latest)) {
+            return;
+        }
+        // Both tables miss: do not treat the from address as remapped.
+        // ColourResolvedRefField → CheckStoreGoodTarget fail-closes.
+    }
     if (!Collector::PlausibleManagedObjectGate("TraceRefField.slow", latest)) {
         BaseObject* host = Collector::TryRecoverInteriorBase(latest);
         if (host != nullptr && host != latest &&

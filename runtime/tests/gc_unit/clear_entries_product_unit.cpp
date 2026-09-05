@@ -1864,6 +1864,121 @@ GC_OTHER_VM_TEST(NeverInstalledDiagnostic, NeverInstalledRawHeaderVerdict)
     RelocationReceiptTestAccess::BindCollector(Heap::GetHeap().GetCollectorResources(), nullptr);
 }
 
+// ZBarrier::is_good_or_null_fast_path does not send a load-good to-version
+// through the from-side slow path (zBarrier.inline.hpp:294-343).  Reproduce the
+// NW256 identity with two retired carriers: the source carrier retains an
+// explicit from->to receipt, while the destination carrier has no receipt for
+// the same numerical to-address.  Once the destination is no longer a current
+// from range, TRACE incoming must keep the to-address and perform no lookup.
+// The direct resolver arm is the positive control: a real current from-range
+// member still consumes its retired ArmedHit receipt when the already-to TRACE
+// guard is cut.
+GC_TEST(ForwardingPublicationProduct, TraceIncomingAlreadyToOutsideFromSkipsLookup)
+{
+    GcHeapFixture& fx = ProductFixture();
+    WCollector collector(Heap::GetHeap().GetAllocator(), Heap::GetHeap().GetCollectorResources());
+    collector.SetGCPhase(GCPhase::GC_PHASE_TRACE);
+    LateBackfillState reverse = PrepareLateBackfill(fx, collector);
+    LiveInfo* destinationLive = PrepareForwardable(
+        fx, reverse.destination, reinterpret_cast<MAddress>(reverse.to));
+    {
+        ForwardingTable::Publication publication = ForwardingTable::RetainOpenPublicationAfterCopy(
+            reverse.region, reinterpret_cast<MAddress>(reverse.from));
+        GC_EXPECT_TRUE(static_cast<bool>(publication));
+        GC_EXPECT_EQ(ForwardingTable::InsertMapping(
+                         publication, reinterpret_cast<MAddress>(reverse.from),
+                         reinterpret_cast<MAddress>(reverse.to)),
+                     reinterpret_cast<MAddress>(reverse.to));
+    }
+    ForwardingTable::ClearEntries(reverse.region->GetRegionStart(), reverse.region->GetRegionSize());
+    ForwardingTable::ClearEntries(
+        reverse.destination->GetRegionStart(), reverse.destination->GetRegionSize());
+    // Model the observed current to-region without destroying the historical
+    // carrier: current membership is false by route state, while LookupTo can
+    // still demonstrate the retired ArmedMiss that the old path consumed.
+    reverse.destination->SetRouteState(RegionInfo::RouteState::NORMAL);
+
+    GC_EXPECT_FALSE(collector.IsFromObject(reverse.to));
+    GC_EXPECT_TRUE(Collector::JudgeHandOutTarget(reverse.to) == HandVerdict::Usable);
+
+    BaseObject* holder = fx.obj0;
+    auto& field = HeapSlotAt<>(reinterpret_cast<MAddress>(holder) + TYPEINFO_PTR_SIZE);
+    field.StoreColoured(zpointer::null);
+    TraceBarrier barrier(collector, Heap::GetHeap().GetRememberedSet());
+    Mutator mutator;
+    mutator.SetMutatorPhase(GCPhase::GC_PHASE_TRACE);
+    Mutator* const mutatorBefore = ThreadLocal::GetMutator();
+    ThreadLocal::SetMutator(&mutator);
+
+    const uint64_t toHitsBefore = ForwardingTable::ArmedHitCount();
+    const uint64_t toMissesBefore = ForwardingTable::ArmedMissCount();
+    const uint64_t toUnavailableBefore = ForwardingTable::UnavailableCount();
+    AbortCapture alreadyTo = CaptureAbort([&]() {
+        barrier.WriteReference(holder, field, reverse.to);
+        const bool correct = to_object(field.GetTargetObject()) == reverse.to &&
+            collector.is_store_good(field) &&
+            ForwardingTable::ArmedHitCount() == toHitsBefore &&
+            ForwardingTable::ArmedMissCount() == toMissesBefore &&
+            ForwardingTable::UnavailableCount() == toUnavailableBefore;
+        if (!correct) {
+            (void)dprintf(STDERR_FILENO,
+                "ALREADY_TO_TRACE_BAD target=%p expected=%p hit_delta=%llu miss_delta=%llu unavailable_delta=%llu\n",
+                to_object(field.GetTargetObject()), reverse.to,
+                static_cast<unsigned long long>(ForwardingTable::ArmedHitCount() - toHitsBefore),
+                static_cast<unsigned long long>(ForwardingTable::ArmedMissCount() - toMissesBefore),
+                static_cast<unsigned long long>(ForwardingTable::UnavailableCount() - toUnavailableBefore));
+            _exit(88);
+        }
+        (void)dprintf(STDERR_FILENO, "ALREADY_TO_TRACE_OK target=%p lookup_delta=0\n", reverse.to);
+    });
+    const bool alreadyToOk = WIFEXITED(alreadyTo.status) && WEXITSTATUS(alreadyTo.status) == 0 &&
+        alreadyTo.output.find("ALREADY_TO_TRACE_OK") != std::string::npos;
+
+    // Positive control for the zero-lookup claim: the same product resolver
+    // must query and resolve a genuine from-range address.  Keep this to one
+    // resolve so cutting the TRACE de-duplication guard cannot turn the
+    // resulting to-version into a second, unrelated lookup.
+    const uint64_t fromHitsBefore = ForwardingTable::ArmedHitCount();
+    AbortCapture genuineFrom = CaptureAbort([&]() {
+        BaseObject* resolved = RelocationReceiptTestAccess::ResolveStoreValue(collector, reverse.from);
+        const bool correct = resolved == reverse.to &&
+            ForwardingTable::ArmedHitCount() == fromHitsBefore + 1;
+        if (!correct) {
+            (void)dprintf(STDERR_FILENO,
+                "GENUINE_FROM_TRACE_BAD target=%p expected=%p hit_delta=%llu\n",
+                resolved, reverse.to,
+                static_cast<unsigned long long>(ForwardingTable::ArmedHitCount() - fromHitsBefore));
+            _exit(89);
+        }
+        (void)dprintf(STDERR_FILENO, "GENUINE_FROM_TRACE_OK from=%p to=%p hit_delta=1\n",
+                      reverse.from, reverse.to);
+    });
+    const bool genuineFromOk = WIFEXITED(genuineFrom.status) && WEXITSTATUS(genuineFrom.status) == 0 &&
+        genuineFrom.output.find("GENUINE_FROM_TRACE_OK") != std::string::npos;
+
+    field.StoreColoured(zpointer::null);
+    reverse.from->SetStateCode(ObjectState::NORMAL);
+    if (reverse.region->IsGhostFromRegion()) {
+        reverse.region->DispelGhostFromRegion();
+    }
+    if (reverse.destination->IsGhostFromRegion()) {
+        reverse.destination->DispelGhostFromRegion();
+    }
+    ForwardingTable::ReclaimRetired("gc-unit-already-to-trace");
+    reverse.region->metadata.liveInfo = nullptr;
+    reverse.destination->metadata.liveInfo = nullptr;
+    fx.FreePlanted(reverse.live);
+    fx.FreePlanted(destinationLive);
+    ThreadLocal::SetMutator(mutatorBefore);
+    RelocationReceiptTestAccess::BindCollector(Heap::GetHeap().GetCollectorResources(), nullptr);
+    std::fprintf(stderr, "ALREADY_TO_TRACE_CHILD status=%d\n%s\n",
+                 alreadyTo.status, alreadyTo.output.c_str());
+    std::fprintf(stderr, "GENUINE_FROM_TRACE_CHILD status=%d\n%s\n",
+                 genuineFrom.status, genuineFrom.output.c_str());
+    GC_EXPECT_TRUE(alreadyToOk);
+    GC_EXPECT_TRUE(genuineFromOk);
+}
+
 GC_TEST(ForwardingPublicationProduct, TraceOverwritePreviousCarriesRealHeapSource)
 {
     GcHeapFixture& fx = ProductFixture();
