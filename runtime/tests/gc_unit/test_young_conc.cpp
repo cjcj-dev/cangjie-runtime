@@ -1239,6 +1239,50 @@ GC_TEST(YoungConc, Y2yPendingCountVisibleForTerminate)
     buffer->PushY2yDirtyHolder(fx.obj1);
     GC_EXPECT_EQ(buffer->Y2yDirtyHolderCount(), 1u);
 }
+
+// Load-good colour wrapping a FORWARDED from must remap before store-good
+// colour (zBarrier.inline.hpp:591-623). LookupTo of the coloured address is
+// then a miss on the current table.
+GC_TEST(YoungConc, TraceRefFieldRemapsLoadGoodFromBeforeStoreGood)
+{
+    GcHeapFixture fx;
+    fx.region0->SetRegionType(RegionInfo::RegionType::FROM_REGION);
+    fx.region0->SetYoungRegionFlag(1);
+    fx.region0->SetYoungAge(1);
+    fx.region1->SetYoungRegionFlag(1);
+    fx.region1->SetYoungAge(1);
+    fx.obj0->SetStateCode(ObjectState::FORWARDED);
+
+    const MAddress from = reinterpret_cast<MAddress>(fx.obj0);
+    const MAddress to = reinterpret_cast<MAddress>(fx.obj1);
+    if (!ForwardingTable::EntriesArmed(from)) {
+        if (!ForwardingTable::InstallPublicationBeforeCopy(
+                fx.region0->GetRegionStart(), fx.region0->GetRegionSize(), fx.region0)) {
+            GC_EXPECT_TRUE(ForwardingTable::PreparePublicationGeneration(
+                fx.region0->GetRegionStart(), fx.region0->GetRegionSize()));
+            GC_EXPECT_TRUE(ForwardingTable::InstallPublicationBeforeCopy(
+                fx.region0->GetRegionStart(), fx.region0->GetRegionSize(), fx.region0));
+        }
+    }
+    ForwardingTable::Publication publication =
+        ForwardingTable::EnsurePublicationBeforeCopy(fx.region0, from);
+    GC_EXPECT_TRUE(static_cast<bool>(publication));
+    GC_EXPECT_EQ(ForwardingTable::InsertMapping(publication, from, to), to);
+    publication = ForwardingTable::Publication();
+
+    auto* field = &HeapSlotAt<>(to + TYPEINFO_PTR_SIZE);
+    field->StoreColoured(GcUnit::StoreGoodPointer(fx.obj0));
+    WCollector collector(Heap::GetHeap().GetAllocator(), Heap::GetHeap().GetCollectorResources());
+    TracingCollector::WorkStack workStack;
+    collector.TraceRefField(fx.obj1, *field, workStack);
+
+    BaseObject* healed = to_object(field->GetTargetObject());
+    GC_EXPECT_EQ(reinterpret_cast<MAddress>(healed), to);
+    GC_EXPECT_EQ(static_cast<unsigned>(Collector::JudgeHandOutTarget(healed)),
+                 static_cast<unsigned>(HandVerdict::Usable));
+    ForwardingTable::LookupResult lookup = ForwardingTable::LookupTo(reinterpret_cast<MAddress>(healed));
+    GC_EXPECT_TRUE(lookup.answer != ForwardingTable::ToAnswer::ArmedHit);
+}
 #endif
 
 // A1: y2y + empty holder is the ABI grid point that the holder-only handoff

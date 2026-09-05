@@ -358,6 +358,24 @@ void WCollector::TraceRefField(BaseObject* obj, RefField<>& field, WorkStack& wo
     if (!Heap::IsHeapAddress(latest)) {
         return;
     }
+    // ZBarrier::mark_barrier_on_oop_field slow path remaps before it colours
+    // (zBarrier.inline.hpp:591-623 → relocate/remap). make_load_good correctly
+    // returns a load-good address without consulting the table; a colour wrap
+    // can still name a previous-cycle from. Relocate before store-good colour.
+    // Do not call remap_generation on a load-good field (it CHECK-fails).
+    {
+        ZGenerationId gen = ZGenerationId::old;
+        RegionInfo* ghost = RegionInfo::GetGhostFromRegionAt(reinterpret_cast<MAddress>(latest));
+        if (ghost != nullptr) {
+            gen = ghost->generation_id();
+        } else if (RegionInfo* region = RegionInfo::TryGetRegionInfoAt(reinterpret_cast<MAddress>(latest))) {
+            gen = region->generation_id();
+        }
+        latest = relocate_or_remap_object(latest, gen, provenance);
+        if (!Heap::IsHeapAddress(latest)) {
+            return;
+        }
+    }
     if (!Collector::PlausibleManagedObjectGate("TraceRefField.slow", latest)) {
         BaseObject* host = Collector::TryRecoverInteriorBase(latest);
         if (host != nullptr && host != latest &&
