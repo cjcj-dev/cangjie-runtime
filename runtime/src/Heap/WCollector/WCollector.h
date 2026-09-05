@@ -1203,6 +1203,22 @@ protected:
             target->IsForwarded() ? 1 : 0);
     }
 
+    // ZBarrier::is_good_or_null_fast_path keeps an already-remapped value out
+    // of the from-side slow path (zBarrier.inline.hpp:294-343).  The equivalent
+    // invariant here is content plus current relocation-set membership: a
+    // usable managed object outside every current from range is already the
+    // address to hand out.  In particular, a retired carrier may still cover
+    // that numerical address; consulting FindToVersion would reinterpret the
+    // current to-version as a historical from-version.  Do not turn a lookup
+    // miss into success here: current from-range members remain on the normal
+    // receipt/relocate path and therefore retain fail-closed handling.
+    bool IsAlreadyToStoreValue(BaseObject* target) const
+    {
+        return target != nullptr && Heap::IsHeapAddress(target) &&
+            Collector::JudgeHandOutTarget(target) == HandVerdict::Usable &&
+            !IsFromObject(target);
+    }
+
     bool IsStaleStoreValue(BaseObject* target) const
     {
         // FindToVersion / PlanRouteUnderStw / IsFromObject / IsGhostFromObject all
@@ -1213,6 +1229,9 @@ protected:
         // 1f8730a54: target=0x646e65706564 ASCII "depend", si_addr=target+6,
         // insn=movzx 0x6(%r12),%eax @ IsStaleStoreValue, forward/fix.
         if (target == nullptr || !Heap::IsHeapAddress(target)) {
+            return false;
+        }
+        if (IsAlreadyToStoreValue(target)) {
             return false;
         }
         RegionInfo* region = RegionInfo::GetGhostFromRegionAt(reinterpret_cast<MAddress>(target));

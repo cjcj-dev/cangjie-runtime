@@ -2385,6 +2385,9 @@ BaseObject* WCollector::ResolveStoreValue(BaseObject* ref, const ForwardingProve
         if (current == nullptr || !Heap::IsHeapAddress(current)) {
             return current;
         }
+        if (IsAlreadyToStoreValue(current)) {
+            return current;
+        }
         const MAddress currentAddr = reinterpret_cast<MAddress>(current);
         RegionInfo* currentRegion = RegionInfo::GetGhostFromRegionAt(currentAddr);
         if (currentRegion != nullptr && currentRegion->IsCompactRouteDestination(currentAddr) &&
