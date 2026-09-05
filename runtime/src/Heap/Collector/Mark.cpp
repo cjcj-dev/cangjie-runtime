@@ -384,6 +384,8 @@ void WCollector::TraceRefField(BaseObject* obj, RefField<>& field, WorkStack& wo
         if (!Heap::IsHeapAddress(latest)) {
             return;
         }
+        // Both tables miss: do not treat the from address as remapped.
+        // ColourResolvedRefField → CheckStoreGoodTarget fail-closes.
     }
     if (!Collector::PlausibleManagedObjectGate("TraceRefField.slow", latest)) {
         BaseObject* host = Collector::TryRecoverInteriorBase(latest);
