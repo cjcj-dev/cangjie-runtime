@@ -1193,53 +1193,6 @@ GC_TEST(YoungConc, Y2yDirtyHolderPhaseSwitchHandsOffWholeBatch)
     GC_EXPECT_EQ(buffer->Y2yDirtyHolderCount(), 0u);
 }
 
-// After a completed handoff, new inserts belong to the live set, not the
-// already-swapped batch.
-GC_TEST(YoungConc, Y2yAfterHandoffWritesStayOnLiveSet)
-{
-    GcHeapFixture fx;
-    auto* buffer = new AllocBuffer();
-    buffer->PushY2yDirtyHolder(fx.obj0);
-    std::vector<BaseObject*> firstBatch;
-    buffer->MergeY2yDirtyHolders(firstBatch);
-    buffer->PushY2yDirtyHolder(fx.obj1);
-    GC_EXPECT_EQ(firstBatch.size(), 1u);
-    GC_EXPECT_EQ(reinterpret_cast<MAddress>(firstBatch[0]), reinterpret_cast<MAddress>(fx.obj0));
-    GC_EXPECT_EQ(buffer->Y2yDirtyHolderCount(), 1u);
-    std::vector<BaseObject*> secondBatch;
-    buffer->MergeY2yDirtyHolders(secondBatch);
-    GC_EXPECT_EQ(secondBatch.size(), 1u);
-    GC_EXPECT_EQ(reinterpret_cast<MAddress>(secondBatch[0]), reinterpret_cast<MAddress>(fx.obj1));
-}
-
-// Thread exit leaves unmerged holders on the buffer; the next GC merge is the
-// consumer, not a destructor-side drop.
-GC_TEST(YoungConc, Y2yThreadExitLeavesHoldersForNextMerge)
-{
-    GcHeapFixture fx;
-    auto* buffer = new AllocBuffer();
-    buffer->PushY2yDirtyHolder(fx.obj0);
-    buffer->PushY2yDirtyHolder(fx.obj1);
-    GC_EXPECT_EQ(buffer->Y2yDirtyHolderCount(), 2u);
-    std::vector<BaseObject*> batch;
-    buffer->MergeY2yDirtyHolders(batch);
-    GC_EXPECT_EQ(batch.size(), 2u);
-    GC_EXPECT_EQ(buffer->Y2yDirtyHolderCount(), 0u);
-}
-
-// Terminate observes pending via Y2yDirtyHolderCount after one handoff that
-// left a later insert unconsumed.
-GC_TEST(YoungConc, Y2yPendingCountVisibleForTerminate)
-{
-    GcHeapFixture fx;
-    auto* buffer = new AllocBuffer();
-    buffer->PushY2yDirtyHolder(fx.obj0);
-    std::vector<BaseObject*> firstBatch;
-    buffer->MergeY2yDirtyHolders(firstBatch);
-    buffer->PushY2yDirtyHolder(fx.obj1);
-    GC_EXPECT_EQ(buffer->Y2yDirtyHolderCount(), 1u);
-}
-
 // Load-good colour wrapping a FORWARDED from must remap before store-good
 // colour (zBarrier.inline.hpp:591-623). LookupTo of the coloured address is
 // then a miss on the current table.
@@ -1622,3 +1575,46 @@ GC_TEST(YoungConc, LegacyTerminationMissesUnfullSatbNode)
 }
 
 #endif // MRT_TESTABLE_INTERNALS
+
+// After a completed handoff, new inserts belong to the live set, not the
+// already-swapped batch. Header-only MergeY2yDirtyHolders (AllocBuffer.h).
+GC_TEST(YoungConc, Y2yAfterHandoffWritesStayOnLiveSet)
+{
+    GcHeapFixture fx;
+    auto* buffer = new AllocBuffer();
+    buffer->PushY2yDirtyHolder(fx.obj0);
+    std::vector<BaseObject*> firstBatch;
+    buffer->MergeY2yDirtyHolders(firstBatch);
+    buffer->PushY2yDirtyHolder(fx.obj1);
+    GC_EXPECT_EQ(firstBatch.size(), 1u);
+    GC_EXPECT_EQ(reinterpret_cast<MAddress>(firstBatch[0]), reinterpret_cast<MAddress>(fx.obj0));
+    GC_EXPECT_EQ(buffer->Y2yDirtyHolderCount(), 1u);
+    std::vector<BaseObject*> secondBatch;
+    buffer->MergeY2yDirtyHolders(secondBatch);
+    GC_EXPECT_EQ(secondBatch.size(), 1u);
+    GC_EXPECT_EQ(reinterpret_cast<MAddress>(secondBatch[0]), reinterpret_cast<MAddress>(fx.obj1));
+}
+
+GC_TEST(YoungConc, Y2yThreadExitLeavesHoldersForNextMerge)
+{
+    GcHeapFixture fx;
+    auto* buffer = new AllocBuffer();
+    buffer->PushY2yDirtyHolder(fx.obj0);
+    buffer->PushY2yDirtyHolder(fx.obj1);
+    GC_EXPECT_EQ(buffer->Y2yDirtyHolderCount(), 2u);
+    std::vector<BaseObject*> batch;
+    buffer->MergeY2yDirtyHolders(batch);
+    GC_EXPECT_EQ(batch.size(), 2u);
+    GC_EXPECT_EQ(buffer->Y2yDirtyHolderCount(), 0u);
+}
+
+GC_TEST(YoungConc, Y2yPendingCountVisibleForTerminate)
+{
+    GcHeapFixture fx;
+    auto* buffer = new AllocBuffer();
+    buffer->PushY2yDirtyHolder(fx.obj0);
+    std::vector<BaseObject*> firstBatch;
+    buffer->MergeY2yDirtyHolders(firstBatch);
+    buffer->PushY2yDirtyHolder(fx.obj1);
+    GC_EXPECT_EQ(buffer->Y2yDirtyHolderCount(), 1u);
+}
