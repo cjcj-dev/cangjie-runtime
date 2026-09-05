@@ -302,6 +302,7 @@ struct CopyAdmissionWitness {
 std::atomic<uint32_t> CopyAdmissionWitness::hits { 0 };
 
 using ProductSetCopyAdmissionTestHook = void (*)(void (*)(RegionInfo*, BaseObject*));
+using ProductForcePublicationClosedForTest = void (*)(MAddress);
 
 ProductSetCopyAdmissionTestHook ProductSetCopyAdmissionTestHookFn()
 {
@@ -311,6 +312,16 @@ ProductSetCopyAdmissionTestHook ProductSetCopyAdmissionTestHookFn()
     }
     return handle == nullptr ? nullptr : reinterpret_cast<ProductSetCopyAdmissionTestHook>(
         dlsym(handle, "MRT_SetCopyAdmissionTestHook"));
+}
+
+ProductForcePublicationClosedForTest ProductForcePublicationClosedForTestFn()
+{
+    void* handle = dlopen("libcangjie-runtime.so", RTLD_NOW | RTLD_NOLOAD);
+    if (handle == nullptr) {
+        handle = dlopen("libcangjie-runtime.so", RTLD_NOW);
+    }
+    return handle == nullptr ? nullptr : reinterpret_cast<ProductForcePublicationClosedForTest>(
+        dlsym(handle, "_ZN12MapleRuntime15ForwardingTable29ForcePublicationClosedForTestEm"));
 }
 
 class ResolveBarrier final : public Barrier {
@@ -439,6 +450,33 @@ void CleanupLateBackfill(GcHeapFixture& fx, LateBackfillState& state)
     ForwardingTable::ReclaimRetired("gc-unit-explicit-coverage");
     state.region->metadata.liveInfo = nullptr;
     fx.FreePlanted(state.live);
+}
+
+uint64_t RetireAnotherEmptyCarrier(LateBackfillState& state)
+{
+    GC_EXPECT_TRUE(ForwardingTable::PreparePublicationGeneration(
+        state.region->GetRegionStart(), state.region->GetRegionSize()));
+    GC_EXPECT_TRUE(ForwardingTable::InstallPublicationBeforeCopy(
+        state.region->GetRegionStart(), state.region->GetRegionSize(), state.region));
+    ZForwarding* table = ForwardingTable::GetEntries(reinterpret_cast<MAddress>(state.from));
+    GC_EXPECT_TRUE(table != nullptr);
+    const uint64_t generation = table == nullptr ? 0 : table->publication_generation();
+    GC_EXPECT_NE(generation, state.generation);
+    GC_EXPECT_TRUE(ForwardingTable::PublishFromPageView(
+        state.region, state.live, state.region->GetSnapshotEpoch(),
+        state.region->GetRegionAllocPtr(), state.region->GetMarkStartAllocPtr(),
+        state.region->GetLiveByteCount(), 1, 0, state.region->GetRegionLifeId()));
+    ForwardingTable::ClearEntries(state.region->GetRegionStart(), state.region->GetRegionSize());
+    return generation;
+}
+
+size_t CountSubstring(const std::string& text, const std::string& needle)
+{
+    size_t count = 0;
+    for (size_t pos = 0; (pos = text.find(needle, pos)) != std::string::npos; pos += needle.size()) {
+        ++count;
+    }
+    return count;
 }
 
 struct PartialCompactState {
@@ -1623,6 +1661,19 @@ AbortCapture CaptureAbort(Fn&& fn)
     return AbortCapture{ status, std::move(output) };
 }
 
+template <typename BeforeLookup>
+AbortCapture CaptureNeverInstalledAbort(WCollector& collector, BaseObject* target, BeforeLookup&& beforeLookup)
+{
+    return CaptureAbort([&]() {
+        beforeLookup();
+        FindToVersionResult result = RelocationReceiptTestAccess::ProductFindToVersion(collector, target);
+        RootSlot slot;
+        StorePlain(slot, from_object(target));
+        const ForwardingProvenance provenance{ ForwardingHolderKind::HeapRef, target, &slot };
+        (void)result.GetOrFailClosed("NeverInstalledDiagnostic.fixture", provenance);
+    });
+}
+
 RefField<>* gIncomingDestination = nullptr;
 uintptr_t gIncomingDestinationExpected = 0;
 
@@ -1646,6 +1697,171 @@ uintptr_t OneLoadBadRemap()
     const uintptr_t bad = static_cast<uintptr_t>(::g_cjLoadBadMask) & REMAP_COLOUR_MASK;
     GC_EXPECT_TRUE(bad != 0);
     return bad & (~bad + 1);
+}
+
+GC_OTHER_VM_TEST(NeverInstalledDiagnostic, NeverInstalledListsAllCoveringCarriers)
+{
+    GC_EXPECT_EQ(setenv("MRT_GCV2_DIAG", "neverinstalled", 1), 0);
+    GcHeapFixture& fx = ProductFixture();
+    WCollector collector(Heap::GetHeap().GetAllocator(), Heap::GetHeap().GetCollectorResources());
+    LateBackfillState state = PrepareLateBackfill(fx, collector);
+    ForwardingTable::ClearEntries(state.region->GetRegionStart(), state.region->GetRegionSize());
+
+    AbortCapture single = CaptureNeverInstalledAbort(collector, state.from, []() {});
+    GC_EXPECT_TRUE(WIFSIGNALED(single.status));
+    GC_EXPECT_EQ(WTERMSIG(single.status), SIGABRT);
+    GC_EXPECT_TRUE(single.output.find("[FINDTO][never-installed]") != std::string::npos);
+    GC_EXPECT_TRUE(single.output.find("covering_total=1 covering_emitted=1") != std::string::npos);
+    GC_EXPECT_EQ(CountSubstring(single.output, "table_generation="), static_cast<size_t>(1));
+    GC_EXPECT_TRUE(single.output.find("state=retired,answer=armed_miss") != std::string::npos);
+    GC_EXPECT_TRUE(single.output.find("pending_destroy=") != std::string::npos);
+    GC_EXPECT_TRUE(single.output.find("carrier_overflow=0") != std::string::npos);
+    GC_EXPECT_TRUE(single.output.find("never_installed_event=1") != std::string::npos);
+
+    const uint64_t secondGeneration = RetireAnotherEmptyCarrier(state);
+    AbortCapture pair = CaptureNeverInstalledAbort(collector, state.from, []() {});
+    GC_EXPECT_TRUE(WIFSIGNALED(pair.status));
+    GC_EXPECT_EQ(WTERMSIG(pair.status), SIGABRT);
+    GC_EXPECT_TRUE(pair.output.find("covering_total=2 covering_emitted=2") != std::string::npos);
+    GC_EXPECT_EQ(CountSubstring(pair.output, "table_generation="), static_cast<size_t>(2));
+    GC_EXPECT_EQ(CountSubstring(pair.output, "answer=armed_miss"), static_cast<size_t>(2));
+    GC_EXPECT_TRUE(pair.output.find("publication_generation=" + std::to_string(state.generation)) !=
+                   std::string::npos);
+    GC_EXPECT_TRUE(pair.output.find("publication_generation=" + std::to_string(secondGeneration)) !=
+                   std::string::npos);
+    GC_EXPECT_TRUE(pair.output.find("carrier_overflow=0") != std::string::npos);
+
+    // Positive control for the state-machine assertion: manufacture the state
+    // product ClearEntries makes unreachable (closed publication + active
+    // carrier). Default product SOs deliberately omit this test-only export;
+    // the test configuration below requires and executes it.
+    ProductForcePublicationClosedForTest forceClosed = ProductForcePublicationClosedForTestFn();
+#if defined(MRT_FINDTO_RETAIN_TEST)
+    GC_EXPECT_TRUE(forceClosed != nullptr);
+#endif
+    if (forceClosed != nullptr) {
+        GC_EXPECT_TRUE(ForwardingTable::PreparePublicationGeneration(
+            state.region->GetRegionStart(), state.region->GetRegionSize()));
+        GC_EXPECT_TRUE(ForwardingTable::InstallPublicationBeforeCopy(
+            state.region->GetRegionStart(), state.region->GetRegionSize(), state.region));
+        GC_EXPECT_TRUE(ForwardingTable::PublishFromPageView(
+            state.region, state.live, state.region->GetSnapshotEpoch(),
+            state.region->GetRegionAllocPtr(), state.region->GetMarkStartAllocPtr(),
+            state.region->GetLiveByteCount(), 1, 0, state.region->GetRegionLifeId()));
+        AbortCapture impossibleActive = CaptureNeverInstalledAbort(collector, state.from, [&]() {
+            forceClosed(reinterpret_cast<MAddress>(state.from));
+        });
+        GC_EXPECT_TRUE(WIFSIGNALED(impossibleActive.status));
+        GC_EXPECT_EQ(WTERMSIG(impossibleActive.status), SIGABRT);
+        GC_EXPECT_TRUE(impossibleActive.output.find("state=active_closed") != std::string::npos);
+        GC_EXPECT_TRUE(impossibleActive.output.find("state_machine_violation=1") != std::string::npos);
+        GC_EXPECT_TRUE(impossibleActive.output.find("[FINDTO][never-installed-state]") != std::string::npos);
+    }
+
+    CleanupLateBackfill(fx, state);
+    RelocationReceiptTestAccess::BindCollector(Heap::GetHeap().GetCollectorResources(), nullptr);
+}
+
+GC_OTHER_VM_TEST(NeverInstalledDiagnostic, NeverInstalledCurrentIncarnationDelta)
+{
+    GC_EXPECT_EQ(setenv("MRT_GCV2_DIAG", "neverinstalled", 1), 0);
+    GcHeapFixture& fx = ProductFixture();
+    WCollector collector(Heap::GetHeap().GetAllocator(), Heap::GetHeap().GetCollectorResources());
+    LateBackfillState state = PrepareLateBackfill(fx, collector);
+    ForwardingTable::ClearEntries(state.region->GetRegionStart(), state.region->GetRegionSize());
+
+    AbortCapture sameLife = CaptureNeverInstalledAbort(collector, state.from, [&]() {
+        state.region->BumpSnapshotEpoch();
+    });
+    GC_EXPECT_TRUE(WIFSIGNALED(sameLife.status));
+    GC_EXPECT_EQ(WTERMSIG(sameLife.status), SIGABRT);
+    GC_EXPECT_TRUE(sameLife.output.find("witness_epoch_delta=1") != std::string::npos);
+    GC_EXPECT_TRUE(sameLife.output.find("witness_epoch_delta=n/a(reused)") == std::string::npos);
+
+    AbortCapture reused = CaptureNeverInstalledAbort(collector, state.from, [&]() {
+        // InitRegionInfo's incarnation edge is BumpRegionLifeId.  The mutation
+        // is isolated in this fork because product reuse correctly refuses to
+        // pass a live retired carrier.
+        state.region->BumpRegionLifeId();
+    });
+    GC_EXPECT_TRUE(WIFSIGNALED(reused.status));
+    GC_EXPECT_EQ(WTERMSIG(reused.status), SIGABRT);
+    GC_EXPECT_TRUE(reused.output.find("witness_epoch_delta=n/a(reused)") != std::string::npos);
+
+    CleanupLateBackfill(fx, state);
+    RelocationReceiptTestAccess::BindCollector(Heap::GetHeap().GetCollectorResources(), nullptr);
+}
+
+GC_OTHER_VM_TEST(NeverInstalledDiagnostic, NeverInstalledRawHeaderVerdict)
+{
+    GC_EXPECT_EQ(setenv("MRT_GCV2_DIAG", "neverinstalled", 1), 0);
+    GcHeapFixture& fx = ProductFixture();
+    WCollector collector(Heap::GetHeap().GetAllocator(), Heap::GetHeap().GetCollectorResources());
+    LateBackfillState state = PrepareLateBackfill(fx, collector);
+    ForwardingTable::ClearEntries(state.region->GetRegionStart(), state.region->GetRegionSize());
+
+    AbortCapture forwarded = CaptureNeverInstalledAbort(collector, state.from, [&]() {
+        state.from->SetStateCode(ObjectState::FORWARDED);
+    });
+    GC_EXPECT_TRUE(WIFSIGNALED(forwarded.status));
+    GC_EXPECT_EQ(WTERMSIG(forwarded.status), SIGABRT);
+    GC_EXPECT_TRUE(forwarded.output.find("hand_verdict=Forwarded") != std::string::npos);
+
+    AbortCapture zero = CaptureNeverInstalledAbort(collector, state.from, [&]() {
+        *reinterpret_cast<uint64_t*>(state.from) = 0;
+    });
+    GC_EXPECT_TRUE(WIFSIGNALED(zero.status));
+    GC_EXPECT_EQ(WTERMSIG(zero.status), SIGABRT);
+    GC_EXPECT_TRUE(zero.output.find("raw_target_header=0 hand_verdict=ZeroHeader") != std::string::npos);
+
+    AbortCapture usable = CaptureNeverInstalledAbort(collector, state.from, [&]() {
+        (void)fx.PlaceObject(reinterpret_cast<MAddress>(state.from));
+    });
+    GC_EXPECT_TRUE(WIFSIGNALED(usable.status));
+    GC_EXPECT_EQ(WTERMSIG(usable.status), SIGABRT);
+    GC_EXPECT_TRUE(usable.output.find("hand_verdict=Usable") != std::string::npos);
+    GC_EXPECT_TRUE(usable.output.find("reverse_total=0") != std::string::npos);
+
+    CleanupLateBackfill(fx, state);
+    RelocationReceiptTestAccess::BindCollector(Heap::GetHeap().GetCollectorResources(), nullptr);
+
+    // Header-only classification calls both an ordinary object and an
+    // already-remapped destination Usable.  The cold reverse receipt scan is
+    // the conditional fourth diagnostic which distinguishes the latter.
+    LateBackfillState reverse = PrepareLateBackfill(fx, collector);
+    LiveInfo* destinationLive = PrepareForwardable(
+        fx, reverse.destination, reinterpret_cast<MAddress>(reverse.to));
+    {
+        ForwardingTable::Publication publication = ForwardingTable::RetainOpenPublicationAfterCopy(
+            reverse.region, reinterpret_cast<MAddress>(reverse.from));
+        GC_EXPECT_TRUE(static_cast<bool>(publication));
+        GC_EXPECT_EQ(ForwardingTable::InsertMapping(
+                         publication, reinterpret_cast<MAddress>(reverse.from),
+                         reinterpret_cast<MAddress>(reverse.to)),
+                     reinterpret_cast<MAddress>(reverse.to));
+    }
+    ForwardingTable::ClearEntries(reverse.region->GetRegionStart(), reverse.region->GetRegionSize());
+    ForwardingTable::ClearEntries(
+        reverse.destination->GetRegionStart(), reverse.destination->GetRegionSize());
+
+    AbortCapture alreadyTo = CaptureNeverInstalledAbort(collector, reverse.to, []() {});
+    GC_EXPECT_TRUE(WIFSIGNALED(alreadyTo.status));
+    GC_EXPECT_EQ(WTERMSIG(alreadyTo.status), SIGABRT);
+    GC_EXPECT_TRUE(alreadyTo.output.find("hand_verdict=Usable") != std::string::npos);
+    GC_EXPECT_TRUE(alreadyTo.output.find("reverse_total=1 reverse_emitted=1") != std::string::npos);
+    char reverseFrom[40] {};
+    std::snprintf(reverseFrom, sizeof(reverseFrom), "from=%#zx",
+                  reinterpret_cast<size_t>(reverse.from));
+    GC_EXPECT_TRUE(alreadyTo.output.find(reverseFrom) != std::string::npos);
+    GC_EXPECT_TRUE(alreadyTo.output.find("reverse_overflow=0") != std::string::npos);
+
+    reverse.from->SetStateCode(ObjectState::NORMAL);
+    ForwardingTable::ReclaimRetired("gc-unit-explicit-coverage");
+    reverse.region->metadata.liveInfo = nullptr;
+    reverse.destination->metadata.liveInfo = nullptr;
+    fx.FreePlanted(reverse.live);
+    fx.FreePlanted(destinationLive);
+    RelocationReceiptTestAccess::BindCollector(Heap::GetHeap().GetCollectorResources(), nullptr);
 }
 
 GC_TEST(ForwardingPublicationProduct, TraceOverwritePreviousCarriesRealHeapSource)

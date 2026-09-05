@@ -10,6 +10,7 @@
 #include "Common/ColourMask.h"
 #include "Base/TimeUtils.h"
 #include "Heap/Verify/HealCoverage.h"
+#include "Heap/Verify/DiagGate.h"
 #include "Heap/WCollector/RemapYoungRoots.h"
 #include <atomic>
 #include <cstdint>
@@ -866,6 +867,14 @@ public:
                     witness.lookupRetiredAnswer = answerName(lookup.retiredAnswer);
                     witness.lookupPublicationClosed = lookup.publicationClosed;
                     populateDiagnosticSnapshot(witness);
+                    if ((causeBits & static_cast<uint8_t>(
+                            ForwardingTable::ToUnavailableCause::NeverInstalled)) != 0 &&
+                        DiagGate::TokenOn("neverinstalled")) {
+                        witness.neverInstalledEvent = Collector::EmitNeverInstalledDiagnostic(
+                            obj, reinterpret_cast<uintptr_t>(obj), lookup.carrierStart,
+                            lookup.fromPageEpoch, lookup.fromPageLifeId,
+                            lookup.forwardingSnapshotValid);
+                    }
                     return FindToVersionResult::Unavailable(
                         FindToVersionResult::UnavailableRoute::LookupUnavailable, witness);
                 }
