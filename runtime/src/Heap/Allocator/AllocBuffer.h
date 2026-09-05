@@ -9,6 +9,7 @@
 #define MRT_ALLOC_BUFFER_H
 
 #include <functional>
+#include <mutex>
 #include <unordered_set>
 
 #include "Common/MarkWorkStack.h"
@@ -119,6 +120,7 @@ public:
     void PushY2yDirtyHolder(BaseObject* obj)
     {
         if (obj != nullptr) {
+            std::lock_guard<std::mutex> lock(y2yDirtyLock);
             y2yDirtyHolders.insert(obj);
         }
     }
@@ -126,16 +128,26 @@ public:
     template<class WorkStack>
     inline void MergeY2yDirtyHolders(WorkStack& workStack)
     {
-        if (y2yDirtyHolders.empty()) {
-            return;
+        decltype(y2yDirtyHolders) pending;
+        {
+            std::lock_guard<std::mutex> lock(y2yDirtyLock);
+#if defined(MRT_GC_UNIT_TESTS)
+            if (y2yDirtyHolderMergeHook != nullptr) {
+                y2yDirtyHolderMergeHook(y2yDirtyHolderMergeHookContext);
+            }
+#endif
+            pending.swap(y2yDirtyHolders);
         }
-        for (BaseObject* obj : y2yDirtyHolders) {
+        for (BaseObject* obj : pending) {
             workStack.push_back(obj);
         }
-        y2yDirtyHolders.clear();
     }
 
-    size_t Y2yDirtyHolderCount() const { return y2yDirtyHolders.size(); }
+    size_t Y2yDirtyHolderCount() const
+    {
+        std::lock_guard<std::mutex> lock(y2yDirtyLock);
+        return y2yDirtyHolders.size();
+    }
 
     // A compiler barrier may know that the destination is a heap slot without
     // carrying a usable holder object.  Young slots are deliberately absent
@@ -145,6 +157,7 @@ public:
     void PushY2yDirtySlot(MAddress slot)
     {
         if (slot != 0) {
+            std::lock_guard<std::mutex> lock(y2yDirtyLock);
             y2yDirtySlots.insert(slot);
         }
     }
@@ -152,13 +165,31 @@ public:
     template<class Visitor>
     inline void MergeY2yDirtySlots(Visitor&& visitor)
     {
-        for (MAddress slot : y2yDirtySlots) {
+        decltype(y2yDirtySlots) pending;
+        {
+            std::lock_guard<std::mutex> lock(y2yDirtyLock);
+            pending.swap(y2yDirtySlots);
+        }
+        for (MAddress slot : pending) {
             visitor(slot);
         }
-        y2yDirtySlots.clear();
     }
 
-    size_t Y2yDirtySlotCount() const { return y2yDirtySlots.size(); }
+    size_t Y2yDirtySlotCount() const
+    {
+        std::lock_guard<std::mutex> lock(y2yDirtyLock);
+        return y2yDirtySlots.size();
+    }
+
+#if defined(MRT_GC_UNIT_TESTS)
+    using Y2yDirtyHolderMergeHook = void (*)(void*);
+    void SetY2yDirtyHolderMergeHookForTest(Y2yDirtyHolderMergeHook hook, void* context)
+    {
+        std::lock_guard<std::mutex> lock(y2yDirtyLock);
+        y2yDirtyHolderMergeHook = hook;
+        y2yDirtyHolderMergeHookContext = context;
+    }
+#endif
 
     void FlushRegion();
 
@@ -184,9 +215,14 @@ private:
     // youngconc allocate-black greys (see PushYoungAllocBlack)
     std::list<BaseObject*> youngAllocBlack;
     // h3seed2: mutator-local young→young dirty holders (see PushY2yDirtyHolder)
+    mutable std::mutex y2yDirtyLock;
     std::unordered_set<BaseObject*> y2yDirtyHolders;
     // Holder-independent peer for compiler ABI calls that carry only a heap slot.
     std::unordered_set<MAddress> y2yDirtySlots;
+#if defined(MRT_GC_UNIT_TESTS)
+    Y2yDirtyHolderMergeHook y2yDirtyHolderMergeHook{ nullptr };
+    void* y2yDirtyHolderMergeHookContext{ nullptr };
+#endif
     StoreBarrierBuffer storeBarrierBuffer;
 };
 } // namespace MapleRuntime
