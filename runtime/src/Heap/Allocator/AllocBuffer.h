@@ -52,47 +52,65 @@ public:
     }
     void CommitRawPointerRegions();
 
-    // record stack roots in allocBuffer so that mutator can concurrently enumerate roots without lock.
-    void PushRoot(BaseObject* root) { stackRoots.emplace_back(MarkStackEntry::MarkAndFollow(root)); }
+    // Record roots while the mutator enumerates its stack concurrently with GC.
+    void PushRoot(BaseObject* root)
+    {
+        std::lock_guard<std::mutex> lock(handoffLock);
+        stackRoots.emplace_back(MarkStackEntry::MarkAndFollow(root));
+    }
 
     // An incomplete large reference array is live but its dirty suffix must not
     // be traversed. This is ZUncoloredRoot::mark_invisible_object's DontFollow.
-    void PushInvisibleRoot(BaseObject* root) { stackRoots.emplace_back(MarkStackEntry::MarkOnly(root)); }
+    void PushInvisibleRoot(BaseObject* root)
+    {
+        std::lock_guard<std::mutex> lock(handoffLock);
+        stackRoots.emplace_back(MarkStackEntry::MarkOnly(root));
+    }
 
     // move the stack roots to other container so that other threads can visit them.
     template<class WorkStack>
     inline void MergeRoots(WorkStack& workStack)
     {
-        if (stackRoots.empty()) {
-            return;
-        }
-        for (const MarkStackEntry& entry : stackRoots) {
-            workStack.push_back(entry);
+        std::list<MarkStackEntry> pending;
+        {
+            std::lock_guard<std::mutex> lock(handoffLock);
+            pending.swap(stackRoots);
         }
 #if defined(MRT_GC_UNIT_TESTS)
         FireHandoffHook(stackRootsHandoffHook, stackRootsHandoffHookContext);
 #endif
-        stackRoots.clear();
+        for (const MarkStackEntry& entry : pending) {
+            workStack.push_back(entry);
+        }
     }
 
     // youngconc: TRACE-window allocate-black greys (mutator-only push; GC merges at STW2).
     // Paint alone makes MarkObject claim skip TraceYoungClosure → never reachableVec/fields.
-    void PushYoungAllocBlack(BaseObject* obj) { youngAllocBlack.emplace_back(obj); }
-    size_t YoungAllocBlackCount() const { return youngAllocBlack.size(); }
+    void PushYoungAllocBlack(BaseObject* obj)
+    {
+        std::lock_guard<std::mutex> lock(handoffLock);
+        youngAllocBlack.emplace_back(obj);
+    }
+    size_t YoungAllocBlackCount() const
+    {
+        std::lock_guard<std::mutex> lock(handoffLock);
+        return youngAllocBlack.size();
+    }
 
     template<class WorkStack>
     inline void MergeYoungAllocBlack(WorkStack& workStack)
     {
-        if (youngAllocBlack.empty()) {
-            return;
-        }
-        for (BaseObject* obj : youngAllocBlack) {
-            workStack.push_back(obj);
+        std::list<BaseObject*> pending;
+        {
+            std::lock_guard<std::mutex> lock(handoffLock);
+            pending.swap(youngAllocBlack);
         }
 #if defined(MRT_GC_UNIT_TESTS)
         FireHandoffHook(youngAllocBlackHandoffHook, youngAllocBlackHandoffHookContext);
 #endif
-        youngAllocBlack.clear();
+        for (BaseObject* obj : pending) {
+            workStack.push_back(obj);
+        }
     }
 
     // Already-painted allocate-black work must keep the Follow bit. A plain
@@ -100,16 +118,17 @@ public:
     template<class WorkStack>
     inline void MergeYoungAllocBlackFollow(WorkStack& workStack)
     {
-        if (youngAllocBlack.empty()) {
-            return;
-        }
-        for (BaseObject* obj : youngAllocBlack) {
-            workStack.push_back(MarkStackEntry::FollowOnly(obj));
+        std::list<BaseObject*> pending;
+        {
+            std::lock_guard<std::mutex> lock(handoffLock);
+            pending.swap(youngAllocBlack);
         }
 #if defined(MRT_GC_UNIT_TESTS)
         FireHandoffHook(youngAllocBlackHandoffHook, youngAllocBlackHandoffHookContext);
 #endif
-        youngAllocBlack.clear();
+        for (BaseObject* obj : pending) {
+            workStack.push_back(MarkStackEntry::FollowOnly(obj));
+        }
     }
 
     // Observe-only: STW2 current-face audit (Stw2CurrentAudit) classifies without
@@ -117,6 +136,7 @@ public:
     template<class WorkStack>
     inline void PeekYoungAllocBlack(WorkStack& workStack) const
     {
+        std::lock_guard<std::mutex> lock(handoffLock);
         for (BaseObject* obj : youngAllocBlack) {
             workStack.push_back(obj);
         }
@@ -241,6 +261,11 @@ private:
     // tlRegion in AllocBuffer is a shortcut for fast allocation.
     // we should handle failure in RegionManager
     RegionInfo* tlRegion = RegionInfo::NullRegion();
+
+    // Guards the two mutator-owned publication lists below. The concurrent
+    // young-mark consumer (Mark.cpp:2271-2272) runs with mutators live, so the
+    // batch must be taken atomically rather than iterated then cleared.
+    mutable std::mutex handoffLock;
 
     std::atomic<RegionInfo*> preparedRegion = { nullptr };
     // allocate objects which are exposed to runtime thus can not be moved.
