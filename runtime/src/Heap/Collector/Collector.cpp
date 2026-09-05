@@ -369,19 +369,32 @@ HandVerdict Collector::JudgeHandOutTarget(BaseObject* target)
         : 0xffu;
     std::fprintf(stderr,
                  "[LOADFC][fail-closed] site=%s target=%p verdict=%u slotBits=%#zx "
-                 "holder_kind=%s holder=%p slot=%p from=%p from_region=%p "
+                 "consumer=%s holder_kind=%s holder=%p slot=%p stage=%s writer_kind=%s "
+                 "incoming_source_kind=%s source_slot=%p working_copy_slot=%p "
+                 "field_type=%s field_offset=%zu from=%p from_region=%p "
                  "region_type=%u generation=%u in_current_relocation_set=%u "
-                 "table_id=%#zx lookup_state=%u lookup_cause=%u retired_lookup=%u gc_phase=%u "
+                 "table_id=%#zx publication_generation=%llu from_page_epoch=%llu lifeId=%llu "
+                 "lookup_state=%u lookup_cause=%u retired_lookup=%u gc_phase=%u "
                  "unresolved non-Usable from-address must not be handed out\n",
                  site != nullptr ? site : "?", static_cast<void*>(target),
                  static_cast<unsigned>(verdict), slotBits,
+                 site != nullptr ? site : "unknown",
                  ForwardingProvenance::KindName(provenance.kind),
-                 provenance.holder, provenance.slot, static_cast<void*>(target),
+                 provenance.holder, provenance.slot,
+                 ForwardingProvenance::StageName(provenance.stage),
+                 ForwardingProvenance::WriterName(provenance.writerKind),
+                 ForwardingProvenance::SourceName(provenance.incomingSourceKind), provenance.sourceSlot,
+                 provenance.workingCopySlot, ForwardingProvenance::FieldName(provenance.fieldKind),
+                 provenance.fieldOffset, static_cast<void*>(target),
                  static_cast<void*>(region),
                  region != nullptr ? static_cast<unsigned>(region->GetRegionType()) : 0xffu,
                  region != nullptr ? static_cast<unsigned>(region->generation_id()) : 0xffu,
                  lookup.currentMembership ? 1u : 0u,
-                 static_cast<size_t>(lookup.tableId), static_cast<unsigned>(lookup.answer),
+                 static_cast<size_t>(lookup.tableId),
+                 static_cast<unsigned long long>(lookup.publicationGeneration),
+                 static_cast<unsigned long long>(lookup.fromPageEpoch),
+                 static_cast<unsigned long long>(lookup.fromPageLifeId),
+                 static_cast<unsigned>(lookup.answer),
                  static_cast<unsigned>(lookup.unavailableCause),
                  static_cast<unsigned>(lookup.retiredAnswer),
                  gcPhase);

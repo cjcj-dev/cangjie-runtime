@@ -209,9 +209,43 @@ bool WCollector::IsUnmovableFromObject(BaseObject* obj) const
     }
     return regionInfo->IsUnmovableFromRegion();
 }
+
+void WCollector::CheckStoreGoodTarget(const char* consumer, BaseObject* target,
+                                      const ForwardingProvenance& provenance) const
+{
+    const HandVerdict verdict = Collector::JudgeHandOutTarget(target);
+    const bool stale = IsStaleStoreValue(target);
+    if (verdict == HandVerdict::Usable && !stale) {
+        return;
+    }
+    const ForwardingTable::LookupResult lookup = ForwardingTable::LookupTo(
+        reinterpret_cast<MAddress>(target));
+    CHECK_DETAIL(false,
+                 "%s consumer=%s target=%p holder_kind=%s holder=%p slot=%p stage=%s "
+                 "writer_kind=%s incoming_source_kind=%s source_slot=%p working_copy_slot=%p "
+                 "field_type=%s field_offset=%zu table_id=%#zx publication_generation=%llu "
+                 "from_page_epoch=%llu lifeId=%llu lookup_state=%u lookup_cause=%u "
+                 "publication_closed=%u",
+                 verdict != HandVerdict::Usable
+                     ? "store-good requires a usable resolved address"
+                     : "store-good must not colour a relocation-set address",
+                 consumer == nullptr ? "unknown" : consumer, target,
+                 ForwardingProvenance::KindName(provenance.kind), provenance.holder, provenance.slot,
+                 ForwardingProvenance::StageName(provenance.stage),
+                 ForwardingProvenance::WriterName(provenance.writerKind),
+                 ForwardingProvenance::SourceName(provenance.incomingSourceKind), provenance.sourceSlot,
+                 provenance.workingCopySlot, ForwardingProvenance::FieldName(provenance.fieldKind),
+                 provenance.fieldOffset, static_cast<size_t>(lookup.tableId),
+                 static_cast<unsigned long long>(lookup.publicationGeneration),
+                 static_cast<unsigned long long>(lookup.fromPageEpoch),
+                 static_cast<unsigned long long>(lookup.fromPageLifeId),
+                 static_cast<unsigned>(lookup.answer), static_cast<unsigned>(lookup.unavailableCause),
+                 lookup.publicationClosed ? 1u : 0u);
+}
+
 template<bool forward>
 bool WCollector::TryUpdateRefFieldImpl(BaseObject* obj, RefField<>& field, BaseObject*& fromObj,
-                                       BaseObject*& toObj) const
+                                       BaseObject*& toObj, const ForwardingProvenance& provenance) const
 {
     RefField<> oldRef(field);
     if (IsLoadBad(oldRef)) {
@@ -219,7 +253,6 @@ bool WCollector::TryUpdateRefFieldImpl(BaseObject* obj, RefField<>& field, BaseO
         if (forward) {
             toObj = const_cast<WCollector*>(this)->TryForwardObject(fromObj);
         } else {
-            const ForwardingProvenance provenance{ ForwardingHolderKind::HeapRef, obj, &field };
             toObj = FindToVersion(fromObj).GetOrFailClosed(
                 "WCollector::TryUpdateRefFieldImpl", provenance);
         }
@@ -258,13 +291,22 @@ bool WCollector::TryUpdateRefFieldImpl(BaseObject* obj, RefField<>& field, BaseO
 bool WCollector::TryUpdateRefField(BaseObject* obj, RefField<>& field, BaseObject*& newRef) const
 {
     BaseObject* oldRef = nullptr;
-    return TryUpdateRefFieldImpl<false>(obj, field, oldRef, newRef);
+    const ForwardingProvenance provenance{ ForwardingHolderKind::HeapRef, obj, &field };
+    return TryUpdateRefFieldImpl<false>(obj, field, oldRef, newRef, provenance);
+}
+
+bool WCollector::TryUpdateRefFieldWithProvenance(BaseObject* obj, RefField<>& field, BaseObject*& newRef,
+                                                  const ForwardingProvenance& provenance) const
+{
+    BaseObject* oldRef = nullptr;
+    return TryUpdateRefFieldImpl<false>(obj, field, oldRef, newRef, provenance);
 }
 
 bool WCollector::TryForwardRefField(BaseObject* obj, RefField<>& field, BaseObject*& newRef) const
 {
     BaseObject* oldRef = nullptr;
-    return TryUpdateRefFieldImpl<true>(obj, field, oldRef, newRef);
+    const ForwardingProvenance provenance{ ForwardingHolderKind::HeapRef, obj, &field };
+    return TryUpdateRefFieldImpl<true>(obj, field, oldRef, newRef, provenance);
 }
 // this api untags current pointer as well as old pointer, caller should take care of this.
 bool WCollector::TryUntagRefField(BaseObject* obj, RefField<>& field, BaseObject*& target) const
@@ -456,7 +498,7 @@ void WCollector::RemapYoungRoots()
         // from-index of the same table.  `latest` above is already the make-load-good answer, so
         // colour it -- ColourResolvedRefField keeps all three checks and drops only the repeat
         // lookup, the same shape already used by the mark closure (Mark.cpp:361).
-        RefField<> newField = ColourResolvedRefField(latest);
+        RefField<> newField = ColourResolvedRefField(latest, provenance);
         if (oldField.GetFieldValue() != newField.GetFieldValue()) {
             if (HealSlot(field, oldField.GetFieldValue(), newField.GetFieldValue(),
                          HealSite::WCollectorRemapYoungRoots)) {
@@ -2039,14 +2081,27 @@ BaseObject* WCollector::WaitRoutedTipReady(BaseObject* from, BaseObject* to, Reg
             MutatorRelocate::NoteWaitFatal();
         }
         CHECK_DETAIL(false,
-                     "WCollector::WaitRoutedTipReady.%s holder_kind=%s holder=%p slot=%p "
+                     "WCollector::WaitRoutedTipReady.%s consumer=WCollector::WaitRoutedTipReady "
+                     "holder_kind=%s holder=%p slot=%p stage=%s writer_kind=%s "
+                     "incoming_source_kind=%s source_slot=%p working_copy_slot=%p "
+                     "field_type=%s field_offset=%zu "
                      "waiter=%p from=%p from_region=%p table_id=%#zx expected_publisher=%p "
+                     "publication_generation=%llu from_page_epoch=%llu lifeId=%llu "
                      "lookup_state=%u lookup_cause=%u retired_lookup=%u gc_phase=%u "
                      "route=%u fwdDone=%u refs=%d copy=%d",
                      reason, ForwardingProvenance::KindName(provenance.kind), provenance.holder,
-                     provenance.slot, static_cast<const void*>(this), static_cast<void*>(from),
+                     provenance.slot, ForwardingProvenance::StageName(provenance.stage),
+                     ForwardingProvenance::WriterName(provenance.writerKind),
+                     ForwardingProvenance::SourceName(provenance.incomingSourceKind),
+                     provenance.sourceSlot, provenance.workingCopySlot,
+                     ForwardingProvenance::FieldName(provenance.fieldKind), provenance.fieldOffset,
+                     static_cast<const void*>(this), static_cast<void*>(from),
                      static_cast<void*>(forwarding), static_cast<size_t>(lastLookup.tableId),
-                     static_cast<void*>(forwarding), static_cast<unsigned>(lastLookup.answer),
+                     static_cast<void*>(forwarding),
+                     static_cast<unsigned long long>(lastLookup.publicationGeneration),
+                     static_cast<unsigned long long>(lastLookup.fromPageEpoch),
+                     static_cast<unsigned long long>(lastLookup.fromPageLifeId),
+                     static_cast<unsigned>(lastLookup.answer),
                      static_cast<unsigned>(lastLookup.unavailableCause),
                      static_cast<unsigned>(lastLookup.retiredAnswer), static_cast<unsigned>(GetGCPhase()),
                      static_cast<unsigned>(forwarding->GetRouteState()),
@@ -2410,17 +2465,29 @@ BaseObject* WCollector::ResolveStoreValue(BaseObject* ref, const ForwardingProve
                                                      ForwardingTable::ToAnswer::Unarmed, false, false, 0 }
                     : ForwardingTable::LookupTo(currentAddr);
             LOG(RTLOG_ERROR,
-                "[FWDTABLE][resolve-miss] site=no-forwarding holder_kind=%s holder=%p slot=%p "
+                "[FWDTABLE][resolve-miss] site=no-forwarding consumer=WCollector::ResolveStoreValue "
+                "holder_kind=%s holder=%p slot=%p stage=%s writer_kind=%s "
+                "incoming_source_kind=%s source_slot=%p working_copy_slot=%p "
+                "field_type=%s field_offset=%zu "
                 "from=%p from_region=%p region_type=%u generation=%u "
                 "in_current_relocation_set=%u table_id=%#zx lookup_state=%u lookup_cause=%u "
+                "publication_generation=%llu from_page_epoch=%llu lifeId=%llu "
                 "retired_lookup=%u gc_phase=%u ghost=0 compacted=%u route=%u lookup.to=%p "
                 "publication_closed=%u verdict=%u",
                 ForwardingProvenance::KindName(provenance.kind), provenance.holder, provenance.slot,
+                ForwardingProvenance::StageName(provenance.stage),
+                ForwardingProvenance::WriterName(provenance.writerKind),
+                ForwardingProvenance::SourceName(provenance.incomingSourceKind), provenance.sourceSlot,
+                provenance.workingCopySlot, ForwardingProvenance::FieldName(provenance.fieldKind),
+                provenance.fieldOffset,
                 static_cast<void*>(current), static_cast<void*>(live),
                 live != nullptr ? static_cast<unsigned>(live->GetRegionType()) : 0xffu,
                 live != nullptr ? static_cast<unsigned>(live->generation_id()) : 0xffu,
                 lookup.currentMembership ? 1u : 0u, static_cast<size_t>(lookup.tableId),
                 static_cast<unsigned>(lookup.answer), static_cast<unsigned>(lookup.unavailableCause),
+                static_cast<unsigned long long>(lookup.publicationGeneration),
+                static_cast<unsigned long long>(lookup.fromPageEpoch),
+                static_cast<unsigned long long>(lookup.fromPageLifeId),
                 static_cast<unsigned>(lookup.retiredAnswer), static_cast<unsigned>(GetGCPhase()),
                 live != nullptr && live->IsCompacted() ? 1u : 0u,
                 live != nullptr ? static_cast<unsigned>(live->GetRouteState()) : 0u,

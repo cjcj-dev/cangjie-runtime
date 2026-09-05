@@ -805,6 +805,10 @@ public:
             }
             witness.inCurrentRelocationSet = lookupQueried && lookup.currentMembership;
             witness.tableId = lookupQueried ? lookup.tableId : 0;
+            witness.publicationGeneration = lookupQueried ? lookup.publicationGeneration : 0;
+            witness.fromPageEpoch = lookupQueried ? lookup.fromPageEpoch : 0;
+            witness.fromPageLifeId = lookupQueried ? lookup.fromPageLifeId : 0;
+            witness.forwardingSnapshotValid = lookupQueried && lookup.forwardingSnapshotValid;
             witness.gcPhase = static_cast<uint8_t>(GetGCPhase());
             // Route-state remains a separate witness axis from region/table
             // snapshots so LookupUnavailable vs NoGhostForwarded stay distinct.
@@ -927,6 +931,8 @@ public:
     }
 
 protected:
+    void CheckStoreGoodTarget(const char* consumer, BaseObject* target,
+                              const ForwardingProvenance& provenance) const;
     BaseObject* ForwardObjectImpl(BaseObject* obj, RegionInfo* ghostFromRegion);
     BaseObject* ForwardObjectExclusive(BaseObject* obj) override;
     // dest is PlanRoute's answer, computed *before* TryLockObject so the LOCKED
@@ -951,6 +957,8 @@ protected:
     BaseObject* TryForwardObject(BaseObject* fromVersion);
 
     bool TryUpdateRefField(BaseObject* obj, RefField<>& field, BaseObject*& newRef) const override;
+    bool TryUpdateRefFieldWithProvenance(BaseObject* obj, RefField<>& field, BaseObject*& newRef,
+                                         const ForwardingProvenance& provenance) const override;
     bool TryForwardRefField(BaseObject* obj, RefField<>& field, BaseObject*& newRef) const override;
 
     // ── store value side: typed, mirroring ZGC ────────────────────────────────────────────
@@ -1022,7 +1030,8 @@ protected:
     // The three checks are kept, and they now carry the invariant instead of a resolve: the
     // address handed to the colour producer is already resolved, and an unresolved one stops
     // here rather than being laundered into a store-good word.
-    RefField<> ColourResolvedRefField(BaseObject* target) const
+    RefField<> ColourResolvedRefField(BaseObject* target,
+                                      const ForwardingProvenance& provenance = {}) const
     {
         if (target == nullptr) {
             return RefField<>(static_cast<BaseObject*>(nullptr));
@@ -1030,10 +1039,7 @@ protected:
         if (!Heap::IsHeapAddress(target)) {
             return RefField<>(target);
         }
-        CHECK_DETAIL(Collector::JudgeHandOutTarget(target) == HandVerdict::Usable,
-                     "store-good requires a usable resolved address target=%p", target);
-        CHECK_DETAIL(!IsStaleStoreValue(target),
-                     "store-good must not colour a relocation-set address target=%p", target);
+        CheckStoreGoodTarget("ColourResolvedRefField", target, provenance);
         if (kColourWhoProbe) {
             NoteColourStoreGoodOnBadTarget(target);
         }
@@ -1041,6 +1047,13 @@ protected:
     }
 
     RefField<> GetAndTryTagRefField(BaseObject* target) const override
+    {
+        const ForwardingProvenance provenance{ ForwardingHolderKind::HeapRef, target, &target };
+        return GetAndTryTagRefFieldWithProvenance(target, provenance);
+    }
+
+    RefField<> GetAndTryTagRefFieldWithProvenance(BaseObject* target,
+                                                  const ForwardingProvenance& provenance) const override
     {
         // Null carries no colour (ZGC zAddress: null is never load-bad).
         if (target == nullptr) {
@@ -1056,14 +1069,10 @@ protected:
         // (zAddress.inline.hpp:609-624,806-811). ResolveStoreValue is our
         // make-load-good producer: a relocation-set address is looked up or copied
         // by this thread; an unresolved address never reaches colouring.
-        const ForwardingProvenance provenance{ ForwardingHolderKind::HeapRef, target, &target };
         target = ResolveStoreValue(target, provenance);
         CHECK_DETAIL(target != nullptr && Heap::IsHeapAddress(target),
                      "store-good requires a resolved heap address");
-        CHECK_DETAIL(Collector::JudgeHandOutTarget(target) == HandVerdict::Usable,
-                     "store-good requires a usable resolved address target=%p", target);
-        CHECK_DETAIL(!IsStaleStoreValue(target),
-                     "store-good must not colour a relocation-set address target=%p", target);
+        CheckStoreGoodTarget("GetAndTryTagRefField", target, provenance);
         // colourwho: installed-slot checking sits after Barrier::WriteReference, so it only sees the
         // mutator store path.  That path now measures ~0 while the read barrier still hands out
         // load-good slots naming from-versions, which means the writer is on the *collector* side --
@@ -1411,7 +1420,8 @@ private:
     void SeedOldMarkFromYoungSurvivors(WorkStack& workStack, std::vector<BaseObject*>* collectOnly);
     void FlushAllocationRegions();
     template<bool forward>
-    bool TryUpdateRefFieldImpl(BaseObject* obj, RefField<>& ref, BaseObject*& oldRef, BaseObject*& newRef) const;
+    bool TryUpdateRefFieldImpl(BaseObject* obj, RefField<>& ref, BaseObject*& oldRef, BaseObject*& newRef,
+                               const ForwardingProvenance& provenance) const;
     void TraceHeap();
     // F3: rewrite IsOldPointer slots to plain/to so one-gen-stale tags cannot
     // outlive the route table (REPORT-tagaba F3).

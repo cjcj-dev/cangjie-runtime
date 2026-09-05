@@ -727,7 +727,14 @@ void Barrier::WriteReference(BaseObject* obj, RefField<false>& field, BaseObject
     // can otherwise leave an old slot absent from this round's remembered set.
     // remember(p) is keyed by the old slot, not by prev colour or target identity;
     // always RecordCrossGenEdge and retain the fast/slow counters for diagnostics.
-    const ForwardingProvenance provenance{ ForwardingHolderKind::HeapRef, obj, &field };
+    ForwardingProvenance provenance{ ForwardingHolderKind::HeapRef, obj, &field };
+    provenance.stage = ForwardingStage::IncomingNew;
+    provenance.writerKind = ForwardingWriterKind::WriteReference;
+    provenance.incomingSourceKind = ForwardingSourceKind::CallerValue;
+    provenance.workingCopySlot = &ref;
+    provenance.fieldKind = ForwardingFieldKind::RefField;
+    provenance.fieldOffset =
+        obj == nullptr ? static_cast<size_t>(-1) : BaseObject::FieldOffset(obj, &field);
     ref = theCollector.ResolveStoreValue(ref, provenance);
     NoteValueSideStore(ref, static_cast<uint8_t>(phase));
     NoteW1GhostFromStore(theCollector, ref);
@@ -1287,9 +1294,16 @@ BaseObject* Barrier::ReadStaticRef(RootSlot& field) const
 // barrier for atomic operation.
 void Barrier::AtomicWriteReference(BaseObject* obj, RefField<true>& field, BaseObject* ref, MemoryOrder order) const
 {
-    const ForwardingProvenance provenance{
+    ForwardingProvenance provenance{
         obj == nullptr ? ForwardingHolderKind::Static : ForwardingHolderKind::HeapRef, obj, &field
     };
+    provenance.stage = ForwardingStage::IncomingNew;
+    provenance.writerKind = ForwardingWriterKind::AtomicWriteReference;
+    provenance.incomingSourceKind = ForwardingSourceKind::CallerValue;
+    provenance.workingCopySlot = &ref;
+    provenance.fieldKind = ForwardingFieldKind::AtomicRefField;
+    provenance.fieldOffset =
+        obj == nullptr ? static_cast<size_t>(-1) : BaseObject::FieldOffset(obj, &field);
     ref = theCollector.ResolveStoreValue(ref, provenance);
     NoteW1GhostFromStore(theCollector, ref);
     NoteW1HolderStore(theCollector, obj);
@@ -1330,9 +1344,16 @@ BaseObject* Barrier::AtomicSwapReference(BaseObject* obj, RefField<true>& field,
     // Read the actual pre-swap slot bits (swap has no expected value) for the
     // fast/slow diagnostic. Remset recording remains unconditional after the
     // successful store because store-good is not a current-entry witness here.
-    const ForwardingProvenance provenance{
+    ForwardingProvenance provenance{
         obj == nullptr ? ForwardingHolderKind::Static : ForwardingHolderKind::HeapRef, obj, &field
     };
+    provenance.stage = ForwardingStage::IncomingNew;
+    provenance.writerKind = ForwardingWriterKind::AtomicSwapReference;
+    provenance.incomingSourceKind = ForwardingSourceKind::CallerValue;
+    provenance.workingCopySlot = &newRef;
+    provenance.fieldKind = ForwardingFieldKind::AtomicRefField;
+    provenance.fieldOffset =
+        obj == nullptr ? static_cast<size_t>(-1) : BaseObject::FieldOffset(obj, &field);
     newRef = theCollector.ResolveStoreValue(newRef, provenance);
     NoteW1GhostFromStore(theCollector, newRef);
     NoteW1HolderStore(theCollector, obj);
@@ -1421,9 +1442,16 @@ bool Barrier::CompareAndSwapReference(BaseObject* obj, RefField<true>& field, Ba
     // to newRef rather than oldRef, for the diagnostic fast/slow count. A
     // successful store always calls remset recording; a failed CAS stores
     // nothing and therefore calls neither marking nor recording.
-    const ForwardingProvenance provenance{
+    ForwardingProvenance provenance{
         obj == nullptr ? ForwardingHolderKind::Static : ForwardingHolderKind::HeapRef, obj, &field
     };
+    provenance.stage = ForwardingStage::IncomingNew;
+    provenance.writerKind = ForwardingWriterKind::CompareAndSwapReference;
+    provenance.incomingSourceKind = ForwardingSourceKind::CallerValue;
+    provenance.workingCopySlot = &newRef;
+    provenance.fieldKind = ForwardingFieldKind::AtomicRefField;
+    provenance.fieldOffset =
+        obj == nullptr ? static_cast<size_t>(-1) : BaseObject::FieldOffset(obj, &field);
     newRef = theCollector.ResolveStoreValue(newRef, provenance);
     NoteW1GhostFromStore(theCollector, newRef);
     NoteW1HolderStore(theCollector, obj);

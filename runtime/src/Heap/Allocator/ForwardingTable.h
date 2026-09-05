@@ -88,6 +88,10 @@ public:
         bool publicationClosed;
         bool currentMembership;
         uintptr_t tableId;
+        uint64_t publicationGeneration{ 0 };
+        uint64_t fromPageEpoch{ 0 };
+        RegionLifeId fromPageLifeId{ 0 };
+        bool forwardingSnapshotValid{ false };
     };
 
     static bool Initialize(MAddress heapStart, size_t heapSize, size_t unitSize);

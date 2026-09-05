@@ -1040,8 +1040,29 @@ MAddress ZForwarding::resolve_live(MAddress to) const
 
 bool ZForwarding::receipt_live(MAddress to) const { return resolve_live(to) != 0; }
 
+struct LookupCarrierWitness {
+    uint64_t publicationGeneration{ 0 };
+    uint64_t fromPageEpoch{ 0 };
+    RegionLifeId fromPageLifeId{ 0 };
+    bool valid{ false };
+};
+
+static void CaptureLookupCarrier(ZForwarding* table, LookupCarrierWitness* witness)
+{
+    if (table == nullptr || witness == nullptr || witness->valid) {
+        return;
+    }
+    witness->publicationGeneration = table->publication_generation();
+    const ZForwarding::FromPageView* fromPage = table->from_page_snapshot();
+    if (fromPage != nullptr) {
+        witness->fromPageEpoch = fromPage->epoch;
+        witness->fromPageLifeId = fromPage->lifeId;
+    }
+    witness->valid = true;
+}
+
 static MAddress FindRetiredToImpl(MAddress from, ForwardingTable::ToAnswer* answer, bool require = false,
-                                  uintptr_t* tableId = nullptr)
+                                  uintptr_t* tableId = nullptr, LookupCarrierWitness* witness = nullptr)
 {
     std::lock_guard<std::mutex> lock(g_retiredLock);
     bool searched = false;
@@ -1059,6 +1080,7 @@ static MAddress FindRetiredToImpl(MAddress from, ForwardingTable::ToAnswer* answ
             if (tableId != nullptr && *tableId == 0) {
                 *tableId = reinterpret_cast<uintptr_t>(tab);
             }
+            CaptureLookupCarrier(tab, witness);
             const MAddress to = tab->resolve_life(tab->find(from));
             if (to != 0) {
                 if (require) {
@@ -1133,6 +1155,7 @@ ForwardingTable::LookupResult ForwardingTable::LookupTo(MAddress from)
     bool activeRejected = false;
     bool currentMembership = false;
     uintptr_t tableId = 0;
+    LookupCarrierWitness carrierWitness;
     {
         std::lock_guard<std::mutex> lock(g_installLock);
         ZForwarding* candidate = Ready() ? MapGet(g_entries, from) : nullptr;
@@ -1140,6 +1163,7 @@ ForwardingTable::LookupResult ForwardingTable::LookupTo(MAddress from)
         activeCandidate = candidate != nullptr;
         if (candidate != nullptr) {
             tableId = reinterpret_cast<uintptr_t>(candidate);
+            CaptureLookupCarrier(candidate, &carrierWitness);
             if (!candidate->page_life_current(RegionLifeClock::Carrier::ARMED_ENTRY) ||
                 !candidate->retain_page()) {
                 activeRejected = true;
@@ -1163,16 +1187,19 @@ ForwardingTable::LookupResult ForwardingTable::LookupTo(MAddress from)
             g_armedHit.fetch_add(1, std::memory_order_relaxed);
             return { to, ToAnswer::ArmedHit, ToUnavailableCause::None, activeCandidate,
                      true, ToAnswer::ArmedHit, ToAnswer::Unarmed, false,
-                     currentMembership, tableId };
+                     currentMembership, tableId, carrierWitness.publicationGeneration,
+                     carrierWitness.fromPageEpoch, carrierWitness.fromPageLifeId, carrierWitness.valid };
         }
     }
     ToAnswer retiredAnswer = ToAnswer::Unarmed;
-    const MAddress retired = FindRetiredToImpl(from, &retiredAnswer, false, &tableId);
+    const MAddress retired = FindRetiredToImpl(from, &retiredAnswer, false, &tableId, &carrierWitness);
     if (retired != 0) {
         g_armedHit.fetch_add(1, std::memory_order_relaxed);
         return { retired, ToAnswer::ArmedHit, ToUnavailableCause::None, activeCandidate,
                  activeSearched, activeSearched ? ToAnswer::ArmedMiss : ToAnswer::Unarmed,
-                 ToAnswer::ArmedHit, false, currentMembership, tableId };
+                 ToAnswer::ArmedHit, false, currentMembership, tableId,
+                 carrierWitness.publicationGeneration, carrierWitness.fromPageEpoch,
+                 carrierWitness.fromPageLifeId, carrierWitness.valid };
     }
     // A carrier found in the active slot but refused by retain is a lifecycle
     // failure. It must not be downgraded to an ordinary armed miss merely
@@ -1206,6 +1233,10 @@ ForwardingTable::LookupResult ForwardingTable::LookupTo(MAddress from)
             publicationClosed,
             currentMembership,
             tableId,
+            carrierWitness.publicationGeneration,
+            carrierWitness.fromPageEpoch,
+            carrierWitness.fromPageLifeId,
+            carrierWitness.valid,
         };
         g_unavailable.fetch_add(1, std::memory_order_relaxed);
         return result;
@@ -1214,11 +1245,15 @@ ForwardingTable::LookupResult ForwardingTable::LookupTo(MAddress from)
         g_armedMiss.fetch_add(1, std::memory_order_relaxed);
         return { 0, ToAnswer::ArmedMiss, ToUnavailableCause::None, activeCandidate,
                  activeSearched, activeSearched ? ToAnswer::ArmedMiss : ToAnswer::Unarmed,
-                 retiredAnswer, publicationClosed, currentMembership, tableId };
+                 retiredAnswer, publicationClosed, currentMembership, tableId,
+                 carrierWitness.publicationGeneration, carrierWitness.fromPageEpoch,
+                 carrierWitness.fromPageLifeId, carrierWitness.valid };
     }
     g_unarmed.fetch_add(1, std::memory_order_relaxed);
     return { 0, ToAnswer::Unarmed, ToUnavailableCause::None, activeCandidate, false,
-             ToAnswer::Unarmed, retiredAnswer, publicationClosed, currentMembership, tableId };
+             ToAnswer::Unarmed, retiredAnswer, publicationClosed, currentMembership, tableId,
+             carrierWitness.publicationGeneration, carrierWitness.fromPageEpoch,
+             carrierWitness.fromPageLifeId, carrierWitness.valid };
 }
 
 uint64_t ForwardingTable::ArmedHitCount() { return g_armedHit.load(std::memory_order_relaxed); }

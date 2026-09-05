@@ -2390,8 +2390,9 @@ size_t PublishKeptInPlaceReceipts(RegionInfo* region)
     // header rewrite; coverage cannot distinguish object interiors.
     size_t published = 0;
     const MAddress start = region->GetRegionStart();
-    const MAddress allocPtr = region->GetRegionAllocPtr();
     ZForwarding* active = ForwardingTable::GetEntries(start);
+    const ZForwarding::FromPageView* fromPage = active == nullptr ? nullptr : active->from_page_snapshot();
+    const MAddress frozenTop = fromPage == nullptr ? region->GetRegionEnd() : fromPage->topAtStart;
     const RegionInfo::RouteStartTable* starts = region->LoadRouteStartTable();
     CHECK_DETAIL(starts != nullptr || !region->HasFromPageMetadata(),
                  "published kept page lacks exact-start capability region=%p", region);
@@ -2400,7 +2401,13 @@ size_t PublishKeptInPlaceReceipts(RegionInfo* region)
     }
     for (const auto& entry : *starts) {
         const size_t offset = entry.first;
-        if (offset >= static_cast<size_t>(allocPtr - start) || !region->IsOwnerSurvivedObject(offset)) {
+        // RouteStartTable is the frozen live exact-start set built from this
+        // forwarding generation's from-page view. Re-reading the mutable mark
+        // carrier here can disagree with that snapshot after the current face
+        // advances, which silently drops the identity receipt the frozen set
+        // requires (zRelocate.cpp:1137-1153).
+        if (entry.second == 0 || frozenTop < start ||
+            offset >= static_cast<size_t>(frozenTop - start)) {
             continue;
         }
         BaseObject* object = from_region_addr(start + offset);
@@ -2465,6 +2472,9 @@ bool VerifyForwardingReceiptsClosed(RegionInfo* region, const char* site)
     }
     const MAddress start = region->GetRegionStart();
     const MAddress regionEnd = region->GetRegionEnd();
+    ZForwarding* active = ForwardingTable::GetEntries(start);
+    const ZForwarding::FromPageView* fromPage = active == nullptr ? nullptr : active->from_page_snapshot();
+    const MAddress frozenTop = fromPage == nullptr ? regionEnd : fromPage->topAtStart;
     size_t survivors = 0;
     size_t receipts = 0;
     for (const auto& entry : *starts) {
@@ -2472,7 +2482,8 @@ bool VerifyForwardingReceiptsClosed(RegionInfo* region, const char* site)
         // After CompactRegion the bump pointer is the packed top, not the
         // original from-range. Exact starts are from-offsets; bound by the
         // region, not the post-compact allocPtr.
-        if (offset >= static_cast<size_t>(regionEnd - start) || !region->IsOwnerSurvivedObject(offset)) {
+        if (entry.second == 0 || frozenTop < start ||
+            offset >= static_cast<size_t>(frozenTop - start)) {
             continue;
         }
         ++survivors;

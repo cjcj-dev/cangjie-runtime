@@ -105,10 +105,20 @@ void TraceBarrier::ReadStaticStruct(MAddress dst, MAddress src, size_t size, con
 void TraceBarrier::WriteReferenceImpl(BaseObject* obj, RefField<false>& field, BaseObject* ref) const
 {
     RefField<> tmpField(field);
+    ForwardingProvenance overwriteProvenance{ ForwardingHolderKind::HeapRef, obj, &field };
+    overwriteProvenance.stage = ForwardingStage::OverwritePrevious;
+    overwriteProvenance.writerKind = ForwardingWriterKind::WriteReference;
+    overwriteProvenance.incomingSourceKind = ForwardingSourceKind::HeapRefField;
+    overwriteProvenance.sourceSlot = &field;
+    overwriteProvenance.workingCopySlot = &tmpField;
+    overwriteProvenance.fieldKind = ForwardingFieldKind::RefField;
+    overwriteProvenance.fieldOffset =
+        obj == nullptr ? static_cast<size_t>(-1) : BaseObject::FieldOffset(obj, &field);
     BaseObject* rememberedObject = nullptr;
     if (theCollector.IsOldPointer(tmpField)) {
         BaseObject* toVersion = nullptr;
-        if (theCollector.TryUpdateRefField(obj, tmpField, toVersion)) {
+        if (theCollector.TryUpdateRefFieldWithProvenance(obj, tmpField, toVersion,
+                                                         overwriteProvenance)) {
             rememberedObject = toVersion;
         } else {
             rememberedObject = to_object(field.GetTargetObject());
@@ -124,7 +134,12 @@ void TraceBarrier::WriteReferenceImpl(BaseObject* obj, RefField<false>& field, B
     RememberNewReference(mutator, ref);
     DLOG(BARRIER, "write obj %p ref-field@%p: %#zx -> %p", obj, &field, rememberedObject, ref);
     std::atomic_thread_fence(std::memory_order_seq_cst);
-    RefField<> newField = theCollector.GetAndTryTagRefField(ref);
+    ForwardingProvenance incomingProvenance = overwriteProvenance;
+    incomingProvenance.stage = ForwardingStage::IncomingNew;
+    incomingProvenance.incomingSourceKind = ForwardingSourceKind::CallerValue;
+    incomingProvenance.sourceSlot = nullptr;
+    incomingProvenance.workingCopySlot = &ref;
+    RefField<> newField = theCollector.GetAndTryTagRefFieldWithProvenance(ref, incomingProvenance);
     field.StoreColoured(newField.GetFieldValue());
 }
 

@@ -146,6 +146,11 @@ public:
         return life != 0 && life == currentLife ? &_from_page : nullptr;
     }
 
+    const FromPageView* from_page_snapshot() const
+    {
+        return __atomic_load_n(&_from_page.lifeId, __ATOMIC_ACQUIRE) == 0 ? nullptr : &_from_page;
+    }
+
     // zPage.inline.hpp:176-185 seqnum bounds livemap/forwarding to one page life.
     // Record the to-region start+regionLifeSeq at insert; consume rejects when
     // InitRegionInfo has bumped that seq (RegionInfo.h:InitRegionInfo).

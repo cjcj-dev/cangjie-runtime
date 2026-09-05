@@ -30,6 +30,7 @@
 #include "Heap/Collector/PromotedRegionDomain.h"
 #include "Heap/Verify/FromPageDetachCheck.h"
 #include "Heap/WCollector/WCollector.h"
+#include "Heap/WCollector/TraceBarrier.h"
 #include "Mutator/Mutator.h"
 #include "Mutator/ThreadLocal.h"
 #include "Mutator/MutatorManager.h"
@@ -1620,6 +1621,233 @@ AbortCapture CaptureAbort(Fn&& fn)
     int status = 0;
     GC_EXPECT_EQ(waitpid(child, &status, 0), child);
     return AbortCapture{ status, std::move(output) };
+}
+
+RefField<>* gIncomingDestination = nullptr;
+uintptr_t gIncomingDestinationExpected = 0;
+
+void IncomingAbortWitness(int)
+{
+    const uintptr_t observed = gIncomingDestination == nullptr
+        ? static_cast<uintptr_t>(-1)
+        : raw(gIncomingDestination->GetFieldValue());
+    static constexpr char kUnchanged[] = "INCOMING_DESTINATION_UNCHANGED\n";
+    static constexpr char kChanged[] = "INCOMING_DESTINATION_CHANGED\n";
+    if (observed == gIncomingDestinationExpected) {
+        (void)write(STDERR_FILENO, kUnchanged, sizeof(kUnchanged) - 1);
+        _exit(86);
+    }
+    (void)write(STDERR_FILENO, kChanged, sizeof(kChanged) - 1);
+    _exit(87);
+}
+
+uintptr_t OneLoadBadRemap()
+{
+    const uintptr_t bad = static_cast<uintptr_t>(::g_cjLoadBadMask) & REMAP_COLOUR_MASK;
+    GC_EXPECT_TRUE(bad != 0);
+    return bad & (~bad + 1);
+}
+
+GC_TEST(ForwardingPublicationProduct, TraceOverwritePreviousCarriesRealHeapSource)
+{
+    GcHeapFixture& fx = ProductFixture();
+    WCollector collector(Heap::GetHeap().GetAllocator(), Heap::GetHeap().GetCollectorResources());
+    collector.SetGCPhase(GCPhase::GC_PHASE_TRACE);
+    LateBackfillState state = PrepareLateBackfill(fx, collector);
+    ZForwarding* table = ForwardingTable::GetEntries(reinterpret_cast<MAddress>(state.from));
+    GC_EXPECT_TRUE(table != nullptr);
+    const ZForwarding::FromPageView* fromPage = table->from_page_snapshot();
+    GC_EXPECT_TRUE(fromPage != nullptr);
+    const uint64_t generation = table->publication_generation();
+    const uint64_t epoch = fromPage->epoch;
+    const RegionLifeId lifeId = fromPage->lifeId;
+    ForwardingTable::ClearEntries(state.region->GetRegionStart(), state.region->GetRegionSize());
+
+    BaseObject* holder = fx.obj0;
+    auto& actualField = HeapSlotAt<>(reinterpret_cast<MAddress>(holder) + TYPEINFO_PTR_SIZE);
+    actualField.StoreColoured(ColouredPointer(state.from, OneLoadBadRemap()));
+    TraceBarrier barrier(collector, Heap::GetHeap().GetRememberedSet());
+    AbortCapture aborted = CaptureAbort([&]() { barrier.WriteReference(holder, actualField, nullptr); });
+    GC_EXPECT_TRUE(WIFSIGNALED(aborted.status));
+    GC_EXPECT_EQ(WTERMSIG(aborted.status), SIGABRT);
+
+    char sourceToken[64] {};
+    char generationToken[96] {};
+    char epochToken[96] {};
+    char lifeToken[96] {};
+    (void)std::snprintf(sourceToken, sizeof(sourceToken), "source_slot=%p", &actualField);
+    (void)std::snprintf(generationToken, sizeof(generationToken), "publication_generation=%llu",
+                        static_cast<unsigned long long>(generation));
+    (void)std::snprintf(epochToken, sizeof(epochToken), "from_page_epoch=%llu",
+                        static_cast<unsigned long long>(epoch));
+    (void)std::snprintf(lifeToken, sizeof(lifeToken), "lifeId=%llu",
+                        static_cast<unsigned long long>(lifeId));
+    const char* required[] = {
+        "consumer=WCollector::TryUpdateRefFieldImpl",
+        "stage=overwrite_previous",
+        "writer_kind=write_reference",
+        "incoming_source_kind=heap_ref_field",
+        "field_type=ref_field",
+        "field_offset=8",
+        sourceToken,
+        generationToken,
+        epochToken,
+        lifeToken,
+    };
+    for (const char* token : required) {
+        GC_EXPECT_TRUE(aborted.output.find(token) != std::string::npos);
+    }
+    const std::string falseWorking = std::string("working_copy_slot=") +
+        std::string(sourceToken + std::strlen("source_slot="));
+    GC_EXPECT_TRUE(aborted.output.find("working_copy_slot=0x") != std::string::npos);
+    GC_EXPECT_TRUE(aborted.output.find(falseWorking) == std::string::npos);
+
+    actualField.StoreColoured(zpointer::null);
+    CleanupLateBackfill(fx, state);
+    RelocationReceiptTestAccess::BindCollector(Heap::GetHeap().GetCollectorResources(), nullptr);
+}
+
+GC_TEST(ForwardingPublicationProduct, IncomingRefStopsBeforeDestinationStore)
+{
+    GcHeapFixture& fx = ProductFixture();
+    RelocationReceiptTestAccess::ReleaseListOwnership(RegionInfo::GetRegionInfo(4));
+    RegionInfo* region = RegionInfo::InitRegion(4, 1, RegionInfo::UnitRole::SMALL_SIZED_UNITS);
+    GC_EXPECT_TRUE(region != nullptr);
+    region->SetRegionType(RegionInfo::RegionType::THREAD_LOCAL_REGION);
+    BaseObject* incoming = fx.PlaceObject(region->GetRegionStart());
+    region->SetRegionAllocPtr(reinterpret_cast<MAddress>(incoming) + incoming->GetSize());
+    WCollector collector(Heap::GetHeap().GetAllocator(), Heap::GetHeap().GetCollectorResources());
+    collector.SetGCPhase(GCPhase::GC_PHASE_RECLAIM_SATB_NODE);
+    RelocationReceiptTestAccess::BindCollector(Heap::GetHeap().GetCollectorResources(), &collector);
+    LiveInfo* live = PrepareForwardable(fx, region, reinterpret_cast<MAddress>(incoming));
+    region->SetRouteState(RegionInfo::RouteState::COMPACTED);
+    region->MarkForwardingDone();
+
+    BaseObject* holder = fx.obj0;
+    auto& field = HeapSlotAt<>(reinterpret_cast<MAddress>(holder) + TYPEINFO_PTR_SIZE);
+    field.StoreColoured(StoreGoodPointer(fx.obj1));
+    gIncomingDestination = &field;
+    gIncomingDestinationExpected = raw(field.GetFieldValue());
+    Barrier barrier(collector, Heap::GetHeap().GetRememberedSet());
+    AbortCapture stopped = CaptureAbort([&]() {
+        (void)signal(SIGABRT, IncomingAbortWitness);
+        barrier.WriteReference(holder, field, incoming);
+    });
+    GC_EXPECT_TRUE(WIFEXITED(stopped.status));
+    GC_EXPECT_EQ(WEXITSTATUS(stopped.status), 86);
+    GC_EXPECT_TRUE(stopped.output.find("INCOMING_DESTINATION_UNCHANGED") != std::string::npos);
+    GC_EXPECT_TRUE(stopped.output.find("stage=incoming_new") != std::string::npos);
+    GC_EXPECT_TRUE(stopped.output.find("writer_kind=write_reference") != std::string::npos);
+    GC_EXPECT_TRUE(stopped.output.find("incoming_source_kind=caller_value") != std::string::npos);
+    GC_EXPECT_EQ(raw(field.GetFieldValue()), gIncomingDestinationExpected);
+    gIncomingDestination = nullptr;
+
+    field.StoreColoured(zpointer::null);
+    if (region->IsGhostFromRegion()) {
+        region->DispelGhostFromRegion();
+    }
+    ForwardingTable::ClearEntries(region->GetRegionStart(), region->GetRegionSize());
+    ForwardingTable::ReclaimRetired("gc-unit-incoming-stage");
+    region->metadata.liveInfo = nullptr;
+    fx.FreePlanted(live);
+    RelocationReceiptTestAccess::BindCollector(Heap::GetHeap().GetCollectorResources(), nullptr);
+}
+
+GC_TEST(ForwardingPublicationProduct, LiveExactStartReceiptBeforeTraceOverwrite)
+{
+    GcHeapFixture& fx = ProductFixture();
+    RelocationReceiptTestAccess::ReleaseListOwnership(RegionInfo::GetRegionInfo(4));
+    RegionInfo* region = RegionInfo::InitRegion(4, 1, RegionInfo::UnitRole::SMALL_SIZED_UNITS);
+    GC_EXPECT_TRUE(region != nullptr);
+    region->SetRegionType(RegionInfo::RegionType::THREAD_LOCAL_REGION);
+    BaseObject* from = fx.PlaceObject(region->GetRegionStart());
+    region->SetRegionAllocPtr(reinterpret_cast<MAddress>(from) + from->GetSize());
+    WCollector collector(Heap::GetHeap().GetAllocator(), Heap::GetHeap().GetCollectorResources());
+    collector.SetGCPhase(GCPhase::GC_PHASE_TRACE);
+    RelocationReceiptTestAccess::BindCollector(Heap::GetHeap().GetCollectorResources(), &collector);
+    LiveInfo* live = PrepareForwardable(fx, region, reinterpret_cast<MAddress>(from));
+    RegionBitmap* mutableBitmap = live->GetMarkFace().bitmap;
+    GC_EXPECT_TRUE(mutableBitmap != nullptr);
+    GC_EXPECT_TRUE(region->LoadRouteStartTable()->count(0) == 1);
+    // The exact-start set is the frozen producer input. Move the mutable face
+    // to a later state so the test detects any producer that re-reads it.
+    mutableBitmap->Reset();
+    GC_EXPECT_FALSE(region->IsOwnerSurvivedObject(0));
+
+    RegionManager manager;
+    RelocationReceiptTestAccess::Exempt(manager, region);
+    GC_EXPECT_TRUE(region->IsForwardingDone());
+    GC_EXPECT_EQ(ForwardingTable::FindTo(reinterpret_cast<MAddress>(from)),
+                 reinterpret_cast<MAddress>(from));
+    ForwardingTable::ClearEntries(region->GetRegionStart(), region->GetRegionSize());
+    const ForwardingTable::LookupResult identity = ForwardingTable::LookupTo(
+        reinterpret_cast<MAddress>(from));
+    GC_EXPECT_TRUE(identity.answer == ForwardingTable::ToAnswer::ArmedHit);
+    GC_EXPECT_EQ(identity.to, reinterpret_cast<MAddress>(from));
+
+    BaseObject* holder = fx.obj0;
+    auto& field = HeapSlotAt<>(reinterpret_cast<MAddress>(holder) + TYPEINFO_PTR_SIZE);
+    field.StoreColoured(ColouredPointer(from, OneLoadBadRemap()));
+    TraceBarrier barrier(collector, Heap::GetHeap().GetRememberedSet());
+    Mutator mutator;
+    mutator.SetMutatorPhase(GCPhase::GC_PHASE_TRACE);
+    Mutator* const mutatorBefore = ThreadLocal::GetMutator();
+    ThreadLocal::SetMutator(&mutator);
+    barrier.WriteReference(holder, field, nullptr);
+    ThreadLocal::SetMutator(mutatorBefore);
+    GC_EXPECT_EQ(raw(field.GetFieldValue()), static_cast<uintptr_t>(0));
+
+    RelocationReceiptTestAccess::ReleaseListOwnership(region);
+    if (region->IsGhostFromRegion()) {
+        region->DispelGhostFromRegion();
+    }
+    ForwardingTable::ReclaimRetired("gc-unit-live-exact-trace");
+    region->metadata.liveInfo = nullptr;
+    fx.FreePlanted(live);
+    RelocationReceiptTestAccess::BindCollector(Heap::GetHeap().GetCollectorResources(), nullptr);
+}
+
+GC_TEST(ForwardingPublicationProduct, DeadOrUnselectedFromStillFailsClosed)
+{
+    GcHeapFixture& fx = ProductFixture();
+    RelocationReceiptTestAccess::ReleaseListOwnership(RegionInfo::GetRegionInfo(4));
+    RegionInfo* region = RegionInfo::InitRegion(4, 1, RegionInfo::UnitRole::SMALL_SIZED_UNITS);
+    GC_EXPECT_TRUE(region != nullptr);
+    region->SetRegionType(RegionInfo::RegionType::THREAD_LOCAL_REGION);
+    BaseObject* dead = fx.PlaceObject(region->GetRegionStart());
+    BaseObject* liveObject = fx.PlaceObject(region->GetRegionStart() + 64);
+    region->SetRegionAllocPtr(reinterpret_cast<MAddress>(liveObject) + liveObject->GetSize());
+    WCollector collector(Heap::GetHeap().GetAllocator(), Heap::GetHeap().GetCollectorResources());
+    collector.SetGCPhase(GCPhase::GC_PHASE_TRACE);
+    RelocationReceiptTestAccess::BindCollector(Heap::GetHeap().GetCollectorResources(), &collector);
+    LiveInfo* live = PrepareForwardable(fx, region, reinterpret_cast<MAddress>(liveObject));
+    GC_EXPECT_TRUE(region->LoadRouteStartTable()->count(0) == 0);
+
+    RegionManager manager;
+    RelocationReceiptTestAccess::Exempt(manager, region);
+    ForwardingTable::ClearEntries(region->GetRegionStart(), region->GetRegionSize());
+    GC_EXPECT_TRUE(ForwardingTable::LookupTo(reinterpret_cast<MAddress>(dead)).answer ==
+                   ForwardingTable::ToAnswer::Unavailable);
+
+    BaseObject* holder = fx.obj0;
+    auto& field = HeapSlotAt<>(reinterpret_cast<MAddress>(holder) + TYPEINFO_PTR_SIZE);
+    field.StoreColoured(ColouredPointer(dead, OneLoadBadRemap()));
+    TraceBarrier barrier(collector, Heap::GetHeap().GetRememberedSet());
+    AbortCapture aborted = CaptureAbort([&]() { barrier.WriteReference(holder, field, nullptr); });
+    GC_EXPECT_TRUE(WIFSIGNALED(aborted.status));
+    GC_EXPECT_EQ(WTERMSIG(aborted.status), SIGABRT);
+    GC_EXPECT_TRUE(aborted.output.find("stage=overwrite_previous") != std::string::npos);
+    GC_EXPECT_TRUE(aborted.output.find("cause=publication_closed+never_installed") != std::string::npos);
+
+    field.StoreColoured(zpointer::null);
+    RelocationReceiptTestAccess::ReleaseListOwnership(region);
+    if (region->IsGhostFromRegion()) {
+        region->DispelGhostFromRegion();
+    }
+    ForwardingTable::ReclaimRetired("gc-unit-dead-exact-trace");
+    region->metadata.liveInfo = nullptr;
+    fx.FreePlanted(live);
+    RelocationReceiptTestAccess::BindCollector(Heap::GetHeap().GetCollectorResources(), nullptr);
 }
 
 GC_TEST(ForwardingPublicationProduct, ArmedMissAfterPublicationCloseFailsClosed)

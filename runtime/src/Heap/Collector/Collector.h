@@ -68,10 +68,45 @@ enum class ForwardingHolderKind : uint8_t {
     Unknown,
 };
 
+enum class ForwardingStage : uint8_t {
+    Unknown,
+    IncomingNew,
+    OverwritePrevious,
+};
+
+enum class ForwardingWriterKind : uint8_t {
+    Unknown,
+    WriteReference,
+    AtomicWriteReference,
+    AtomicSwapReference,
+    CompareAndSwapReference,
+    CollectorHeal,
+};
+
+enum class ForwardingSourceKind : uint8_t {
+    Unknown,
+    CallerValue,
+    HeapRefField,
+};
+
+enum class ForwardingFieldKind : uint8_t {
+    Unknown,
+    RefField,
+    AtomicRefField,
+    RootSlot,
+};
+
 struct ForwardingProvenance {
     ForwardingHolderKind kind{ ForwardingHolderKind::Unknown };
     const void* holder{ nullptr };
     const void* slot{ nullptr };
+    ForwardingStage stage{ ForwardingStage::Unknown };
+    ForwardingWriterKind writerKind{ ForwardingWriterKind::Unknown };
+    ForwardingSourceKind incomingSourceKind{ ForwardingSourceKind::Unknown };
+    const void* sourceSlot{ nullptr };
+    const void* workingCopySlot{ nullptr };
+    ForwardingFieldKind fieldKind{ ForwardingFieldKind::Unknown };
+    size_t fieldOffset{ static_cast<size_t>(-1) };
 
     static const char* KindName(ForwardingHolderKind kind)
     {
@@ -89,6 +124,66 @@ struct ForwardingProvenance {
             case ForwardingHolderKind::StoreBuffer:
                 return "store_buffer";
             case ForwardingHolderKind::Unknown:
+                return "unknown";
+        }
+        return "unknown";
+    }
+
+    static const char* StageName(ForwardingStage stage)
+    {
+        switch (stage) {
+            case ForwardingStage::IncomingNew:
+                return "incoming_new";
+            case ForwardingStage::OverwritePrevious:
+                return "overwrite_previous";
+            case ForwardingStage::Unknown:
+                return "unknown";
+        }
+        return "unknown";
+    }
+
+    static const char* WriterName(ForwardingWriterKind writer)
+    {
+        switch (writer) {
+            case ForwardingWriterKind::WriteReference:
+                return "write_reference";
+            case ForwardingWriterKind::AtomicWriteReference:
+                return "atomic_write_reference";
+            case ForwardingWriterKind::AtomicSwapReference:
+                return "atomic_swap_reference";
+            case ForwardingWriterKind::CompareAndSwapReference:
+                return "compare_and_swap_reference";
+            case ForwardingWriterKind::CollectorHeal:
+                return "collector_heal";
+            case ForwardingWriterKind::Unknown:
+                return "unknown";
+        }
+        return "unknown";
+    }
+
+    static const char* SourceName(ForwardingSourceKind source)
+    {
+        switch (source) {
+            case ForwardingSourceKind::CallerValue:
+                return "caller_value";
+            case ForwardingSourceKind::HeapRefField:
+                return "heap_ref_field";
+            case ForwardingSourceKind::Unknown:
+                return "unknown";
+        }
+        return "unknown";
+    }
+
+    static const char* FieldName(ForwardingFieldKind field)
+    {
+        switch (field) {
+            case ForwardingFieldKind::RefField:
+                return "ref_field";
+            case ForwardingFieldKind::AtomicRefField:
+                return "atomic_ref_field";
+            case ForwardingFieldKind::RootSlot:
+                return "root_slot";
+            case ForwardingFieldKind::Unknown:
                 return "unknown";
         }
         return "unknown";
@@ -132,6 +227,10 @@ public:
         uint8_t generation{ 0 };
         bool inCurrentRelocationSet{ false };
         uintptr_t tableId{ 0 };
+        uint64_t publicationGeneration{ 0 };
+        uint64_t fromPageEpoch{ 0 };
+        uint64_t fromPageLifeId{ 0 };
+        bool forwardingSnapshotValid{ false };
         uint8_t gcPhase{ GC_PHASE_UNDEF };
     };
 
@@ -175,6 +274,10 @@ public:
     uint8_t unavailable_generation() const { return unavailableGeneration; }
     bool unavailable_in_current_relocation_set() const { return unavailableInCurrentRelocationSet; }
     uintptr_t unavailable_table_id() const { return unavailableTableId; }
+    uint64_t unavailable_publication_generation() const { return unavailablePublicationGeneration; }
+    uint64_t unavailable_from_page_epoch() const { return unavailableFromPageEpoch; }
+    uint64_t unavailable_from_page_life_id() const { return unavailableFromPageLifeId; }
+    bool unavailable_forwarding_snapshot_valid() const { return unavailableForwardingSnapshotValid; }
     uint8_t unavailable_gc_phase() const { return unavailableGcPhase; }
 
     const char* unavailable_route_name() const
@@ -221,18 +324,29 @@ public:
         const char* regionType = unavailableRegionSnapshotValid ? "present" : "n/a";
         CHECK_DETAIL(lookupState != State::Unavailable,
                      "[FINDTO][fail-closed] consumer=%s forwarding carrier unavailable "
-                     "holder_kind=%s holder=%p slot=%p from=%p from_region=%p "
+                     "holder_kind=%s holder=%p slot=%p stage=%s writer_kind=%s "
+                     "incoming_source_kind=%s source_slot=%p working_copy_slot=%p "
+                     "field_type=%s field_offset=%zu from=%p from_region=%p "
                      "region_type=%s(%u) generation=%u in_current_relocation_set=%u table_id=%#zx "
+                     "publication_generation=%llu from_page_epoch=%llu lifeId=%llu "
                      "lookup_state=%s route=%s forwarded=%s fromRegionInfo_null=%s lookup=%s "
                      "lookup_snapshot_valid=%u cause=%s active_candidate=%s active_lookup=%s "
                      "retired_lookup=%s publication_closed=%s route_state=%s gc_phase=%u",
                      consumer == nullptr ? "unknown" : consumer,
                      ForwardingProvenance::KindName(provenance.kind), provenance.holder, provenance.slot,
+                     ForwardingProvenance::StageName(provenance.stage),
+                     ForwardingProvenance::WriterName(provenance.writerKind),
+                     ForwardingProvenance::SourceName(provenance.incomingSourceKind), provenance.sourceSlot,
+                     provenance.workingCopySlot, ForwardingProvenance::FieldName(provenance.fieldKind),
+                     provenance.fieldOffset,
                      reinterpret_cast<void*>(unavailableFrom), reinterpret_cast<void*>(unavailableFromRegion),
                      regionType, static_cast<unsigned>(unavailableRegionType),
                      static_cast<unsigned>(unavailableGeneration),
                      unavailableInCurrentRelocationSet ? 1u : 0u,
                      static_cast<size_t>(unavailableTableId),
+                     static_cast<unsigned long long>(unavailablePublicationGeneration),
+                     static_cast<unsigned long long>(unavailableFromPageEpoch),
+                     static_cast<unsigned long long>(unavailableFromPageLifeId),
                      lookup,
                      unavailable_route_name(),
                      forwarded, fromRegionInfoNull, lookup,
@@ -253,7 +367,9 @@ private:
           unavailableLookupPublicationClosed(false), unavailableRouteStateValid(false),
           unavailableRouteState(0), unavailableFrom(0), unavailableFromRegion(0),
           unavailableRegionSnapshotValid(false), unavailableRegionType(0), unavailableGeneration(0),
-          unavailableInCurrentRelocationSet(false), unavailableTableId(0), unavailableGcPhase(GC_PHASE_UNDEF)
+          unavailableInCurrentRelocationSet(false), unavailableTableId(0),
+          unavailablePublicationGeneration(0), unavailableFromPageEpoch(0), unavailableFromPageLifeId(0),
+          unavailableForwardingSnapshotValid(false), unavailableGcPhase(GC_PHASE_UNDEF)
     {
     }
 
@@ -277,7 +393,12 @@ private:
           unavailableRegionSnapshotValid(witness.regionSnapshotValid),
           unavailableRegionType(witness.regionType), unavailableGeneration(witness.generation),
           unavailableInCurrentRelocationSet(witness.inCurrentRelocationSet),
-          unavailableTableId(witness.tableId), unavailableGcPhase(witness.gcPhase)
+          unavailableTableId(witness.tableId),
+          unavailablePublicationGeneration(witness.publicationGeneration),
+          unavailableFromPageEpoch(witness.fromPageEpoch),
+          unavailableFromPageLifeId(witness.fromPageLifeId),
+          unavailableForwardingSnapshotValid(witness.forwardingSnapshotValid),
+          unavailableGcPhase(witness.gcPhase)
     {
     }
 
@@ -304,6 +425,10 @@ private:
     uint8_t unavailableGeneration;
     bool unavailableInCurrentRelocationSet;
     uintptr_t unavailableTableId;
+    uint64_t unavailablePublicationGeneration;
+    uint64_t unavailableFromPageEpoch;
+    uint64_t unavailableFromPageLifeId;
+    bool unavailableForwardingSnapshotValid;
     uint8_t unavailableGcPhase;
 };
 
@@ -395,6 +520,11 @@ public:
     {
         AbortUnimplemented("Collector::TryUpdateRefField");
     }
+    virtual bool TryUpdateRefFieldWithProvenance(BaseObject* obj, RefField<>& field, BaseObject*& to,
+                                                 const ForwardingProvenance&) const
+    {
+        return TryUpdateRefField(obj, field, to);
+    }
     virtual bool TryForwardRefField(BaseObject*, RefField<>&, BaseObject*&) const
     {
         AbortUnimplemented("Collector::TryForwardRefField");
@@ -443,6 +573,11 @@ public:
     virtual RefField<> GetAndTryTagRefField(BaseObject*) const
     {
         AbortUnimplemented("Collector::GetAndTryTagRefField");
+    }
+    virtual RefField<> GetAndTryTagRefFieldWithProvenance(BaseObject* obj,
+                                                          const ForwardingProvenance&) const
+    {
+        return GetAndTryTagRefField(obj);
     }
 
     // "Does this reference need the barrier before use?" -- the question every consumer of the

@@ -30,7 +30,10 @@ public:
     void Init() override;
     void Fini() override;
 
-    GCPhase GetGCPhase() const override { return currentCollector->GetGCPhase(); }
+    GCPhase GetGCPhase() const override
+    {
+        return currentCollector != nullptr ? currentCollector->GetGCPhase() : GCPhase::GC_PHASE_UNDEF;
+    }
 
     void SetGCPhase(const GCPhase phase) override { currentCollector->SetGCPhase(phase); }
 
@@ -81,6 +84,12 @@ public:
         return currentCollector->TryUpdateRefField(obj, field, toVersion);
     }
 
+    bool TryUpdateRefFieldWithProvenance(BaseObject* obj, RefField<>& field, BaseObject*& toVersion,
+                                         const ForwardingProvenance& provenance) const override
+    {
+        return currentCollector->TryUpdateRefFieldWithProvenance(obj, field, toVersion, provenance);
+    }
+
     bool TryForwardRefField(BaseObject* obj, RefField<>& field, BaseObject*& toVersion) const override
     {
         return currentCollector->TryForwardRefField(obj, field, toVersion);
@@ -94,6 +103,13 @@ public:
     RefField<> GetAndTryTagRefField(BaseObject* obj) const override
     {
         return currentCollector->GetAndTryTagRefField(obj);
+    }
+
+
+    RefField<> GetAndTryTagRefFieldWithProvenance(BaseObject* obj,
+                                                  const ForwardingProvenance& provenance) const override
+    {
+        return currentCollector->GetAndTryTagRefFieldWithProvenance(obj, provenance);
     }
 
 #if defined(MRT_TESTABLE_INTERNALS)
