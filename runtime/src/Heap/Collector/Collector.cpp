@@ -8,6 +8,7 @@
 #include "Collector/Collector.h"
 
 #include <atomic>
+#include <cstdarg>
 #include <cstdio>
 #include <cstdlib>
 
@@ -37,6 +38,86 @@ std::atomic<size_t> g_markGoodHeapGateReject{ 0 };
 
 std::atomic<size_t> g_geomCrossEndReject{ 0 };
 std::atomic<bool> g_geomAtexit{ false };
+std::atomic<uint64_t> g_neverInstalledEvent{ 0 };
+
+HandVerdict ClassifyRawHeader(uint64_t header)
+{
+    if (((header >> 48) & 0x3u) == 3u) {
+        return HandVerdict::Forwarded;
+    }
+    if ((header & 0xffffffffffffull) == 0) {
+        return HandVerdict::ZeroHeader;
+    }
+    return HandVerdict::Usable;
+}
+
+const char* HandVerdictName(HandVerdict verdict)
+{
+    switch (verdict) {
+        case HandVerdict::Forwarded: return "Forwarded";
+        case HandVerdict::ZeroHeader: return "ZeroHeader";
+        case HandVerdict::Usable: return "Usable";
+    }
+    return "Unknown";
+}
+
+const char* CarrierStateName(ForwardingTable::CarrierState state)
+{
+    switch (state) {
+        case ForwardingTable::CarrierState::ActiveUnpublished: return "active_unpublished";
+        case ForwardingTable::CarrierState::ActiveOpen: return "active_open";
+        case ForwardingTable::CarrierState::ActiveClosed: return "active_closed";
+        case ForwardingTable::CarrierState::Retired: return "retired";
+    }
+    return "unknown";
+}
+
+const char* ToAnswerName(ForwardingTable::ToAnswer answer)
+{
+    switch (answer) {
+        case ForwardingTable::ToAnswer::ArmedHit: return "armed_hit";
+        case ForwardingTable::ToAnswer::ArmedMiss: return "armed_miss";
+        case ForwardingTable::ToAnswer::Unavailable: return "unavailable";
+        case ForwardingTable::ToAnswer::Unarmed: return "unarmed";
+    }
+    return "unknown";
+}
+
+class BoundedDiagnosticBuffer {
+public:
+    BoundedDiagnosticBuffer(char* storage, size_t capacity) : data(storage), cap(capacity)
+    {
+        if (cap != 0) {
+            data[0] = '\0';
+        }
+    }
+
+    void Append(const char* format, ...)
+    {
+        if (truncated || used >= cap) {
+            truncated = true;
+            return;
+        }
+        va_list args;
+        va_start(args, format);
+        const int n = std::vsnprintf(data + used, cap - used, format, args);
+        va_end(args);
+        if (n < 0 || static_cast<size_t>(n) >= cap - used) {
+            used = cap == 0 ? 0 : cap - 1;
+            truncated = true;
+            return;
+        }
+        used += static_cast<size_t>(n);
+    }
+
+    bool Truncated() const { return truncated; }
+
+private:
+    char* data;
+    size_t cap;
+    size_t used{ 0 };
+    bool truncated{ false };
+};
 
 void EnsureGeomAtexit()
 {
@@ -335,13 +416,120 @@ HandVerdict Collector::JudgeHandOutTarget(BaseObject* target)
         return HandVerdict::Usable;
     }
     const uint64_t hdr = __atomic_load_n(reinterpret_cast<const uint64_t*>(target), __ATOMIC_RELAXED);
-    if (((hdr >> 48) & 0x3u) == 3u) {
-        return HandVerdict::Forwarded;
+    return ClassifyRawHeader(hdr);
+}
+
+uint64_t Collector::EmitNeverInstalledDiagnostic(BaseObject* target, uintptr_t rawSlotBits,
+                                                 MAddress witnessStart, uint64_t witnessEpoch,
+                                                 uint64_t witnessLife, bool witnessValid)
+{
+    const uint64_t event = g_neverInstalledEvent.fetch_add(1, std::memory_order_relaxed) + 1;
+    const MAddress address = target == nullptr ? 0 : reinterpret_cast<MAddress>(target);
+    const uint64_t rawHeader = (target != nullptr && Heap::IsHeapAddress(target))
+        ? __atomic_load_n(reinterpret_cast<const uint64_t*>(target), __ATOMIC_RELAXED)
+        : 0;
+    const HandVerdict verdict = ClassifyRawHeader(rawHeader);
+    const ForwardingTable::NeverInstalledSnapshot snapshot =
+        ForwardingTable::CaptureNeverInstalledSnapshot(address);
+
+    RegionInfo* region = (target != nullptr && Heap::IsHeapAddress(target))
+        ? RegionInfo::TryGetRegionInfoAt(address)
+        : nullptr;
+    const MAddress regionStart = region == nullptr ? 0 : region->GetRegionStart();
+    const unsigned regionType = region == nullptr ? 0xffu : static_cast<unsigned>(region->GetRegionType());
+    const unsigned generation = region == nullptr ? 0xffu : static_cast<unsigned>(region->generation_id());
+    const uint64_t currentEpoch = region == nullptr ? 0 : region->GetSnapshotEpoch();
+    const RegionLifeId currentLife = region == nullptr ? 0 : region->GetRegionLifeId();
+    const bool sameWitnessIncarnation = witnessValid && region != nullptr && witnessStart == regionStart &&
+        witnessLife != 0 && witnessLife == currentLife;
+    char witnessEpochDelta[48];
+    if (sameWitnessIncarnation) {
+        (void)std::snprintf(witnessEpochDelta, sizeof(witnessEpochDelta), "%lld",
+                            static_cast<long long>(static_cast<int64_t>(currentEpoch) -
+                                                   static_cast<int64_t>(witnessEpoch)));
+    } else {
+        (void)std::snprintf(witnessEpochDelta, sizeof(witnessEpochDelta), "%s",
+                            witnessValid && region != nullptr && witnessLife != 0
+                                ? "n/a(reused)" : "n/a(no-incarnation)");
     }
-    if ((hdr & 0xffffffffffffull) == 0) {
-        return HandVerdict::ZeroHeader;
+    bool stateMachineViolation = false;
+    for (size_t i = 0; i < snapshot.carrierCount; ++i) {
+        const ForwardingTable::CarrierState state = snapshot.carriers[i].state;
+        if (state == ForwardingTable::CarrierState::ActiveUnpublished ||
+            state == ForwardingTable::CarrierState::ActiveOpen ||
+            state == ForwardingTable::CarrierState::ActiveClosed) {
+            stateMachineViolation = true;
+        }
     }
-    return HandVerdict::Usable;
+
+    char carriers[6144];
+    BoundedDiagnosticBuffer carrierText(carriers, sizeof(carriers));
+    carrierText.Append("[");
+    for (size_t i = 0; i < snapshot.carrierCount; ++i) {
+        const ForwardingTable::CarrierIdentity& carrier = snapshot.carriers[i];
+        const bool sameIncarnation = region != nullptr && carrier.start == regionStart &&
+            carrier.fromPageLifeId != 0 && carrier.fromPageLifeId == currentLife;
+        carrierText.Append(
+            "%s{table_id=%#zx,start=%#zx,size=%zu,table_generation=%u,publication_generation=%llu,"
+            "from_page_epoch=%llu,lifeId=%llu,state=%s,answer=%s,pending_destroy=%u,epoch_delta=",
+            i == 0 ? "" : ",", static_cast<size_t>(carrier.tableId),
+            static_cast<size_t>(carrier.start), carrier.size,
+            static_cast<unsigned>(carrier.tableGeneration),
+            static_cast<unsigned long long>(carrier.publicationGeneration),
+            static_cast<unsigned long long>(carrier.fromPageEpoch),
+            static_cast<unsigned long long>(carrier.fromPageLifeId),
+            CarrierStateName(carrier.state), ToAnswerName(carrier.answer), carrier.pendingDestroy ? 1u : 0u);
+        if (sameIncarnation) {
+            const int64_t delta = static_cast<int64_t>(currentEpoch) -
+                static_cast<int64_t>(carrier.fromPageEpoch);
+            carrierText.Append("%lld}", static_cast<long long>(delta));
+        } else if (region != nullptr && carrier.fromPageLifeId != 0) {
+            carrierText.Append("n/a(reused)}");
+        } else {
+            carrierText.Append("n/a(no-incarnation)}");
+        }
+    }
+    carrierText.Append("]");
+
+    char receipts[2048];
+    BoundedDiagnosticBuffer receiptText(receipts, sizeof(receipts));
+    receiptText.Append("[");
+    for (size_t i = 0; i < snapshot.reverseCount; ++i) {
+        const ForwardingTable::ReverseReceiptIdentity& receipt = snapshot.reverseReceipts[i];
+        receiptText.Append("%s{table_id=%#zx,publication_generation=%llu,from=%#zx}",
+                           i == 0 ? "" : ",", static_cast<size_t>(receipt.tableId),
+                           static_cast<unsigned long long>(receipt.publicationGeneration),
+                           static_cast<size_t>(receipt.from));
+    }
+    receiptText.Append("]");
+
+    std::fprintf(
+        stderr,
+        "[FINDTO][never-installed] never_installed_event=%llu target=%p raw_slot_bits=%#zx raw_target_header=%#llx "
+        "hand_verdict=%s current_region_start=%#zx current_region_type=%u current_generation=%u "
+        "current_page_epoch=%llu current_lifeId=%llu witness_start=%#zx witness_from_page_epoch=%llu "
+        "witness_lifeId=%llu witness_epoch_delta="
+        "%s covering_total=%zu covering_emitted=%zu "
+        "carrier_overflow=%u carriers=%s reverse_total=%zu reverse_emitted=%zu reverse_overflow=%u "
+        "reverse_receipts=%s scan_overflow=%u format_overflow=%u historical_writer=unknown "
+        "historical_slot_colour=unknown current_writer_role=consumer state_machine_violation=%u\n",
+        static_cast<unsigned long long>(event), static_cast<void*>(target),
+        static_cast<size_t>(rawSlotBits), static_cast<unsigned long long>(rawHeader),
+        HandVerdictName(verdict), static_cast<size_t>(regionStart), regionType, generation,
+        static_cast<unsigned long long>(currentEpoch), static_cast<unsigned long long>(currentLife),
+        static_cast<size_t>(witnessStart), static_cast<unsigned long long>(witnessEpoch),
+        static_cast<unsigned long long>(witnessLife),
+        witnessEpochDelta,
+        snapshot.carrierTotal, snapshot.carrierCount, snapshot.carrierOverflow ? 1u : 0u, carriers,
+        snapshot.reverseTotal, snapshot.reverseCount, snapshot.reverseOverflow ? 1u : 0u, receipts,
+        snapshot.scanOverflow ? 1u : 0u,
+        (carrierText.Truncated() || receiptText.Truncated()) ? 1u : 0u,
+        stateMachineViolation ? 1u : 0u);
+    (void)std::fflush(stderr);
+    CHECK_DETAIL(!stateMachineViolation,
+                 "[FINDTO][never-installed-state] event=%llu active carrier survived publication close",
+                 static_cast<unsigned long long>(event));
+    return event;
 }
 
 // loadfc (zBarrier.inline.hpp:327-343): the slow path must produce a verified current version or

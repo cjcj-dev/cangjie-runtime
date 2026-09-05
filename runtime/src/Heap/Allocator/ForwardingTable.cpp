@@ -1041,6 +1041,7 @@ MAddress ZForwarding::resolve_live(MAddress to) const
 bool ZForwarding::receipt_live(MAddress to) const { return resolve_live(to) != 0; }
 
 struct LookupCarrierWitness {
+    MAddress start{ 0 };
     uint64_t publicationGeneration{ 0 };
     uint64_t fromPageEpoch{ 0 };
     RegionLifeId fromPageLifeId{ 0 };
@@ -1052,6 +1053,7 @@ static void CaptureLookupCarrier(ZForwarding* table, LookupCarrierWitness* witne
     if (table == nullptr || witness == nullptr || witness->valid) {
         return;
     }
+    witness->start = table->start();
     witness->publicationGeneration = table->publication_generation();
     const ZForwarding::FromPageView* fromPage = table->from_page_snapshot();
     if (fromPage != nullptr) {
@@ -1187,7 +1189,7 @@ ForwardingTable::LookupResult ForwardingTable::LookupTo(MAddress from)
             g_armedHit.fetch_add(1, std::memory_order_relaxed);
             return { to, ToAnswer::ArmedHit, ToUnavailableCause::None, activeCandidate,
                      true, ToAnswer::ArmedHit, ToAnswer::Unarmed, false,
-                     currentMembership, tableId, carrierWitness.publicationGeneration,
+                     currentMembership, tableId, carrierWitness.start, carrierWitness.publicationGeneration,
                      carrierWitness.fromPageEpoch, carrierWitness.fromPageLifeId, carrierWitness.valid };
         }
     }
@@ -1197,7 +1199,7 @@ ForwardingTable::LookupResult ForwardingTable::LookupTo(MAddress from)
         g_armedHit.fetch_add(1, std::memory_order_relaxed);
         return { retired, ToAnswer::ArmedHit, ToUnavailableCause::None, activeCandidate,
                  activeSearched, activeSearched ? ToAnswer::ArmedMiss : ToAnswer::Unarmed,
-                 ToAnswer::ArmedHit, false, currentMembership, tableId,
+                 ToAnswer::ArmedHit, false, currentMembership, tableId, carrierWitness.start,
                  carrierWitness.publicationGeneration, carrierWitness.fromPageEpoch,
                  carrierWitness.fromPageLifeId, carrierWitness.valid };
     }
@@ -1233,6 +1235,7 @@ ForwardingTable::LookupResult ForwardingTable::LookupTo(MAddress from)
             publicationClosed,
             currentMembership,
             tableId,
+            carrierWitness.start,
             carrierWitness.publicationGeneration,
             carrierWitness.fromPageEpoch,
             carrierWitness.fromPageLifeId,
@@ -1245,15 +1248,103 @@ ForwardingTable::LookupResult ForwardingTable::LookupTo(MAddress from)
         g_armedMiss.fetch_add(1, std::memory_order_relaxed);
         return { 0, ToAnswer::ArmedMiss, ToUnavailableCause::None, activeCandidate,
                  activeSearched, activeSearched ? ToAnswer::ArmedMiss : ToAnswer::Unarmed,
-                 retiredAnswer, publicationClosed, currentMembership, tableId,
+                 retiredAnswer, publicationClosed, currentMembership, tableId, carrierWitness.start,
                  carrierWitness.publicationGeneration, carrierWitness.fromPageEpoch,
                  carrierWitness.fromPageLifeId, carrierWitness.valid };
     }
     g_unarmed.fetch_add(1, std::memory_order_relaxed);
     return { 0, ToAnswer::Unarmed, ToUnavailableCause::None, activeCandidate, false,
-             ToAnswer::Unarmed, retiredAnswer, publicationClosed, currentMembership, tableId,
+             ToAnswer::Unarmed, retiredAnswer, publicationClosed, currentMembership, tableId, carrierWitness.start,
              carrierWitness.publicationGeneration, carrierWitness.fromPageEpoch,
              carrierWitness.fromPageLifeId, carrierWitness.valid };
+}
+
+ForwardingTable::NeverInstalledSnapshot ForwardingTable::CaptureNeverInstalledSnapshot(MAddress target)
+{
+    NeverInstalledSnapshot snapshot;
+
+    // Keep the established install -> retired lock order.  The snapshot copies
+    // scalar identity while every candidate remains protected from teardown.
+    std::lock_guard<std::mutex> installLock(g_installLock);
+    std::lock_guard<std::mutex> retiredLock(g_retiredLock);
+
+    auto visit = [&](ZForwarding* tab, bool active) {
+        if (tab == nullptr) {
+            return;
+        }
+        CarrierState state;
+        if (!active) {
+            state = CarrierState::Retired;
+        } else if (tab->is_provisional()) {
+            state = CarrierState::ActiveUnpublished;
+        } else if (PublicationOpen(PublicationStateAt(tab->start()))) {
+            state = CarrierState::ActiveOpen;
+        } else {
+            state = CarrierState::ActiveClosed;
+        }
+
+        if (tab->covers(target)) {
+            const MAddress to = tab->resolve_life(tab->find(target));
+            ++snapshot.carrierTotal;
+            if (snapshot.carrierCount < kNeverInstalledCarrierLimit) {
+                CarrierIdentity& out = snapshot.carriers[snapshot.carrierCount++];
+                out.tableId = reinterpret_cast<uintptr_t>(tab);
+                out.start = tab->start();
+                out.size = tab->size();
+                out.tableGeneration = tab->table_generation();
+                out.publicationGeneration = tab->publication_generation();
+                const ZForwarding::FromPageView* fromPage = tab->from_page_snapshot();
+                if (fromPage != nullptr) {
+                    out.fromPageEpoch = fromPage->epoch;
+                    out.fromPageLifeId = fromPage->lifeId;
+                }
+                out.state = state;
+                out.answer = to == 0 ? ToAnswer::ArmedMiss : ToAnswer::ArmedHit;
+                out.pendingDestroy = !active && RetiredDestroyEligible(tab);
+            } else {
+                snapshot.carrierOverflow = true;
+            }
+        }
+
+        // Raw header cannot distinguish an ordinary Usable object from an
+        // already-remapped to-object.  Reverse scan is therefore performed
+        // only here, on the diagnostic fail-closed path; publication remains
+        // unchanged and no reverse index is maintained on the hot path.
+        MAddress receiptFrom = 0;
+        if (tab->find_from_by_to(target, &receiptFrom)) {
+            ++snapshot.reverseTotal;
+            if (snapshot.reverseCount < kNeverInstalledReverseLimit) {
+                ReverseReceiptIdentity& out = snapshot.reverseReceipts[snapshot.reverseCount++];
+                out.tableId = reinterpret_cast<uintptr_t>(tab);
+                out.publicationGeneration = tab->publication_generation();
+                out.from = receiptFrom;
+            } else {
+                snapshot.reverseOverflow = true;
+            }
+        }
+    };
+    auto visitActiveMap = [&](const ZGranuleMap<ZForwarding*>& map) {
+        ZForwarding* previous = nullptr;
+        for (size_t i = 0; i < map.size(); ++i) {
+            ZForwarding* tab = map.get(static_cast<zoffset>(i * map.granule()));
+            if (tab != previous) {
+                visit(tab, true);
+                previous = tab;
+            }
+        }
+    };
+    // These are exactly LookupTo's queryable carrier domains. Membership is a
+    // second pointer to an active or retired carrier, not another carrier; do
+    // not enumerate it and then need a bounded dedup ledger which could hide a
+    // later covering table.
+    visitActiveMap(g_entries);
+    for (auto it = g_retired.rbegin(); it != g_retired.rend(); ++it) {
+        visit(*it, false);
+    }
+    for (auto it = g_retiredPrev.rbegin(); it != g_retiredPrev.rend(); ++it) {
+        visit(*it, false);
+    }
+    return snapshot;
 }
 
 uint64_t ForwardingTable::ArmedHitCount() { return g_armedHit.load(std::memory_order_relaxed); }
@@ -1266,6 +1357,16 @@ void ForwardingTable::SetLookupRetainHook(LookupRetainHook hook, void* context)
 {
     g_lookupRetainHookContext.store(context, std::memory_order_release);
     g_lookupRetainHook.store(hook, std::memory_order_release);
+}
+
+void ForwardingTable::ForcePublicationClosedForTest(MAddress address)
+{
+    std::lock_guard<std::mutex> lock(g_installLock);
+    ZForwarding* active = Ready() ? MapGet(g_entries, address) : nullptr;
+    CHECK_DETAIL(active != nullptr && active->covers(address),
+                 "NeverInstalled test fault needs an active covering carrier address=%p",
+                 reinterpret_cast<void*>(address));
+    SealPublicationLocked(active->start(), active->size());
 }
 
 void ForwardingTable::SetReceiptLifeRegisterHook(ReceiptLifeRegisterHook hook, void* context)

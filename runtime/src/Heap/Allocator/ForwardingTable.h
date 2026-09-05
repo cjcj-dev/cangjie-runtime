@@ -74,6 +74,46 @@ public:
         NeverInstalled = 16,
     };
 
+    // Bounded, value-only snapshot for the NeverInstalled fail-closed
+    // diagnostic.  Capture is performed while install/retired ownership is
+    // held; no ZForwarding pointer escapes the capture call.
+    enum class CarrierState : uint8_t {
+        ActiveUnpublished,
+        ActiveOpen,
+        ActiveClosed,
+        Retired,
+    };
+    static constexpr size_t kNeverInstalledCarrierLimit = 16;
+    static constexpr size_t kNeverInstalledReverseLimit = 8;
+    struct CarrierIdentity {
+        uintptr_t tableId{ 0 };
+        MAddress start{ 0 };
+        size_t size{ 0 };
+        uint8_t tableGeneration{ 0 };
+        uint64_t publicationGeneration{ 0 };
+        uint64_t fromPageEpoch{ 0 };
+        RegionLifeId fromPageLifeId{ 0 };
+        CarrierState state{ CarrierState::Retired };
+        ToAnswer answer{ ToAnswer::Unarmed };
+        bool pendingDestroy{ false };
+    };
+    struct ReverseReceiptIdentity {
+        uintptr_t tableId{ 0 };
+        uint64_t publicationGeneration{ 0 };
+        MAddress from{ 0 };
+    };
+    struct NeverInstalledSnapshot {
+        CarrierIdentity carriers[kNeverInstalledCarrierLimit]{};
+        ReverseReceiptIdentity reverseReceipts[kNeverInstalledReverseLimit]{};
+        size_t carrierCount{ 0 };
+        size_t carrierTotal{ 0 };
+        size_t reverseCount{ 0 };
+        size_t reverseTotal{ 0 };
+        bool carrierOverflow{ false };
+        bool reverseOverflow{ false };
+        bool scanOverflow{ false };
+    };
+
     // Decision record from one LookupTo invocation.  These are the exact local
     // values consumed by its final classification; no caller re-queries the
     // active/retired/publication carriers to construct diagnostics.
@@ -88,6 +128,7 @@ public:
         bool publicationClosed;
         bool currentMembership;
         uintptr_t tableId;
+        MAddress carrierStart{ 0 };
         uint64_t publicationGeneration{ 0 };
         uint64_t fromPageEpoch{ 0 };
         RegionLifeId fromPageLifeId{ 0 };
@@ -177,6 +218,10 @@ public:
     static MAddress RequireRetiredTo(MAddress from);
     static bool EntriesArmed(MAddress from);
     static LookupResult LookupTo(MAddress from);
+    // Fail-closed diagnostic only: enumerate all live carriers which cover the
+    // target and, conditionally needed for an already-to target, reverse-scan
+    // existing receipts.  This does not retain, publish, retire or destroy.
+    static NeverInstalledSnapshot CaptureNeverInstalledSnapshot(MAddress target);
     static uint64_t ArmedHitCount();
     static uint64_t ArmedMissCount();
     static uint64_t UnavailableCount();
@@ -185,6 +230,9 @@ public:
 #if defined(MRT_TESTABLE_INTERNALS)
     using LookupRetainHook = void (*)(void*);
     static void SetLookupRetainHook(LookupRetainHook hook, void* context);
+    // Fault injection for the NeverInstalled state-machine assertion. Product
+    // ClearEntries never leaves a closed carrier in the active map.
+    static void ForcePublicationClosedForTest(MAddress address);
     // Deterministic rendezvous immediately before a fresh receipt enters the
     // destination-life registration critical section.
     using ReceiptLifeRegisterHook = void (*)(void*);

@@ -231,6 +231,7 @@ public:
         uint64_t fromPageEpoch{ 0 };
         uint64_t fromPageLifeId{ 0 };
         bool forwardingSnapshotValid{ false };
+        uint64_t neverInstalledEvent{ 0 };
         uint8_t gcPhase{ GC_PHASE_UNDEF };
     };
 
@@ -278,6 +279,7 @@ public:
     uint64_t unavailable_from_page_epoch() const { return unavailableFromPageEpoch; }
     uint64_t unavailable_from_page_life_id() const { return unavailableFromPageLifeId; }
     bool unavailable_forwarding_snapshot_valid() const { return unavailableForwardingSnapshotValid; }
+    uint64_t unavailable_never_installed_event() const { return unavailableNeverInstalledEvent; }
     uint8_t unavailable_gc_phase() const { return unavailableGcPhase; }
 
     const char* unavailable_route_name() const
@@ -331,7 +333,7 @@ public:
                      "publication_generation=%llu from_page_epoch=%llu lifeId=%llu "
                      "lookup_state=%s route=%s forwarded=%s fromRegionInfo_null=%s lookup=%s "
                      "lookup_snapshot_valid=%u cause=%s active_candidate=%s active_lookup=%s "
-                     "retired_lookup=%s publication_closed=%s route_state=%s gc_phase=%u",
+                     "retired_lookup=%s publication_closed=%s route_state=%s never_installed_event=%llu gc_phase=%u",
                      consumer == nullptr ? "unknown" : consumer,
                      ForwardingProvenance::KindName(provenance.kind), provenance.holder, provenance.slot,
                      ForwardingProvenance::StageName(provenance.stage),
@@ -352,6 +354,7 @@ public:
                      forwarded, fromRegionInfoNull, lookup,
                      static_cast<unsigned>(unavailableLookupSnapshotValid), lookupCause,
                      activeCandidate, activeLookup, retiredLookup, publicationClosed, routeState,
+                     static_cast<unsigned long long>(unavailableNeverInstalledEvent),
                      static_cast<unsigned>(unavailableGcPhase));
         return found();
     }
@@ -369,7 +372,8 @@ private:
           unavailableRegionSnapshotValid(false), unavailableRegionType(0), unavailableGeneration(0),
           unavailableInCurrentRelocationSet(false), unavailableTableId(0),
           unavailablePublicationGeneration(0), unavailableFromPageEpoch(0), unavailableFromPageLifeId(0),
-          unavailableForwardingSnapshotValid(false), unavailableGcPhase(GC_PHASE_UNDEF)
+          unavailableForwardingSnapshotValid(false), unavailableNeverInstalledEvent(0),
+          unavailableGcPhase(GC_PHASE_UNDEF)
     {
     }
 
@@ -398,6 +402,7 @@ private:
           unavailableFromPageEpoch(witness.fromPageEpoch),
           unavailableFromPageLifeId(witness.fromPageLifeId),
           unavailableForwardingSnapshotValid(witness.forwardingSnapshotValid),
+          unavailableNeverInstalledEvent(witness.neverInstalledEvent),
           unavailableGcPhase(witness.gcPhase)
     {
     }
@@ -429,6 +434,7 @@ private:
     uint64_t unavailableFromPageEpoch;
     uint64_t unavailableFromPageLifeId;
     bool unavailableForwardingSnapshotValid;
+    uint64_t unavailableNeverInstalledEvent;
     uint8_t unavailableGcPhase;
 };
 
@@ -485,6 +491,11 @@ public:
     // loadfc: shared hand-out verdict (header word only, one relaxed load). Out-of-line because
     // Heap::IsHeapAddress lives behind Barrier.h which must not be included from here.
     static HandVerdict JudgeHandOutTarget(BaseObject* target);
+    // Emit the gated NeverInstalled identity record from one relaxed raw-header
+    // read and one ownership-protected carrier snapshot. Returns its event id.
+    static uint64_t EmitNeverInstalledDiagnostic(BaseObject* target, uintptr_t rawSlotBits,
+                                                 MAddress witnessStart, uint64_t witnessEpoch,
+                                                 uint64_t witnessLife, bool witnessValid);
     // loadfc: the loud failure for "resolution failed and the from-address is not Usable"
     // (0825 用户令: no silent fold-back to the original address).
     [[noreturn]] static void FailClosedLoad(const char* site, BaseObject* target, uintptr_t slotBits,
