@@ -69,6 +69,9 @@ public:
         for (const MarkStackEntry& entry : stackRoots) {
             workStack.push_back(entry);
         }
+#if defined(MRT_GC_UNIT_TESTS)
+        FireHandoffHook(stackRootsHandoffHook, stackRootsHandoffHookContext);
+#endif
         stackRoots.clear();
     }
 
@@ -86,6 +89,9 @@ public:
         for (BaseObject* obj : youngAllocBlack) {
             workStack.push_back(obj);
         }
+#if defined(MRT_GC_UNIT_TESTS)
+        FireHandoffHook(youngAllocBlackHandoffHook, youngAllocBlackHandoffHookContext);
+#endif
         youngAllocBlack.clear();
     }
 
@@ -100,6 +106,9 @@ public:
         for (BaseObject* obj : youngAllocBlack) {
             workStack.push_back(MarkStackEntry::FollowOnly(obj));
         }
+#if defined(MRT_GC_UNIT_TESTS)
+        FireHandoffHook(youngAllocBlackHandoffHook, youngAllocBlackHandoffHookContext);
+#endif
         youngAllocBlack.clear();
     }
 
@@ -191,11 +200,39 @@ public:
     }
 #endif
 
+#if defined(MRT_GC_UNIT_TESTS)
+    // gc_unit only.  Fires at the one instant the unsynchronised handoff has and
+    // a swap handoff does not: the consumer has determined the batch it will
+    // deliver, and has not yet retired that batch from the mutator-owned
+    // container.  A publication that lands in this interval is dropped by the
+    // following clear() and never reaches any batch.
+    using HandoffHook = void (*)(void*);
+    void SetStackRootsHandoffHookForTest(HandoffHook hook, void* context)
+    {
+        stackRootsHandoffHook = hook;
+        stackRootsHandoffHookContext = context;
+    }
+    void SetYoungAllocBlackHandoffHookForTest(HandoffHook hook, void* context)
+    {
+        youngAllocBlackHandoffHook = hook;
+        youngAllocBlackHandoffHookContext = context;
+    }
+#endif
+
     void FlushRegion();
 
     StoreBarrierBuffer& GetStoreBarrierBuffer() { return storeBarrierBuffer; }
 
 private:
+#if defined(MRT_GC_UNIT_TESTS)
+    static void FireHandoffHook(HandoffHook hook, void* context)
+    {
+        if (hook != nullptr) {
+            hook(context);
+        }
+    }
+#endif
+
     // slow path
     MAddress TryAllocateOnce(size_t totalSize, AllocType allocType);
     MAddress AllocateImpl(size_t totalSize, AllocType allocType);
@@ -224,6 +261,13 @@ private:
     void* y2yDirtyHolderMergeHookContext{ nullptr };
 #endif
     StoreBarrierBuffer storeBarrierBuffer;
+#if defined(MRT_GC_UNIT_TESTS)
+    // Last, so tlRegion keeps offset 0 (RegionSpace.cpp:255 static_assert).
+    HandoffHook stackRootsHandoffHook{ nullptr };
+    void* stackRootsHandoffHookContext{ nullptr };
+    HandoffHook youngAllocBlackHandoffHook{ nullptr };
+    void* youngAllocBlackHandoffHookContext{ nullptr };
+#endif
 };
 } // namespace MapleRuntime
 #endif // MRT_ALLOC_BUFFER_H
