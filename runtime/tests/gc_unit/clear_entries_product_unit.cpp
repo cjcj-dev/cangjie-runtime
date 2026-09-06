@@ -4265,7 +4265,7 @@ GC_TEST(ForwardingPublicationProduct, GhostHeldBlocksYoungMarkCoverage)
     GC_EXPECT_TRUE(to != 0);
     ForwardingTable::ClearEntries(region->GetRegionStart(), region->GetRegionSize());
     ForwardingTable::PublishMarkCoverage(Generation::Young);
-    ForwardingTable::ReclaimRetired("gc-unit-explicit-coverage");
+    ForwardingTable::ReclaimRetired("young-mark-coverage");
     const ForwardingTable::LookupResult kept = ForwardingTable::LookupTo(from);
     GC_EXPECT_TRUE(region->IsGhostFromRegion());
     GC_EXPECT_EQ(kept.to, to);
