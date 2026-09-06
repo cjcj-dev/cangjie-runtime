@@ -2601,6 +2601,16 @@ public:
         dispelGhostCount.fetch_add(1, std::memory_order_relaxed);
     }
 
+    void ClearGhostFromRegionBits()
+    {
+        const size_t nUnit = GetGhostRegionUnitCount();
+        UnitInfo* unit = reinterpret_cast<UnitInfo*>(this);
+        UnitInfo::UnitInfoArray array = UnitInfo::UnitInfoArray(unit, nUnit);
+        for (size_t i = 0; i < nUnit; i++) {
+            array[i].SetInGhostRegion(0, GetRegionLifeId());
+        }
+    }
+
     void DispelGhostFromRegion()
     {
         // fwdinflight: this is one of the three edges that retire from-side route state, and
@@ -2617,6 +2627,8 @@ public:
         // lets step 3 change *when* it happens without changing *where*.
         const size_t nUnit = GetGhostRegionUnitCount();
         ForwardingTable::RetireMembershipAtDispel(GetRegionStart(), GetRegionSize());
+        // Ghost bits are cleared under g_retiredLock inside RetireMembershipAtDispel
+        // so ReclaimRetired's GhostCarrierHeld sample cannot race the clear.
         dispelGhostCount.fetch_add(1, std::memory_order_relaxed);
         TraceClear::NoteRegionEvent(GetRegionStart(), nUnit * UNIT_SIZE, "dispel", this, GetLiveByteCount(),
                                     static_cast<unsigned int>(IsGhostFromRegion()),
@@ -2628,11 +2640,6 @@ public:
              this, GetRegionStart(), nUnit, GetLiveByteCount(),
              static_cast<unsigned int>(GetRouteState()),
              static_cast<unsigned>(IsYoungRegion()));
-        UnitInfo* unit = reinterpret_cast<UnitInfo*>(this);
-        UnitInfo::UnitInfoArray array = UnitInfo::UnitInfoArray(unit, nUnit);
-        for (size_t i = 0; i < nUnit; i++) {
-            array[i].SetInGhostRegion(0, GetRegionLifeId());
-        }
         // Publish route retirement before detaching the table. A reader that observes
         // the atomic nullptr then also observes NORMAL and soft-misses in GetRoute.
         SetRouteState(NORMAL);
