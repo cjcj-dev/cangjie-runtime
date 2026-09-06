@@ -92,6 +92,13 @@ std::atomic<bool> g_ready{ false };
 // Installation is rare and phase-scoped. Serialize provisional-to-full replacement so
 // readers never observe a freed membership carrier while the attached array is resized.
 std::mutex g_installLock;
+std::mutex g_retiredLock;
+std::vector<ZForwarding*> g_retired;
+// Previous reset generation. ZGeneration::reset_relocation_set destroys the
+// set installed last cycle, after this cycle's mark (zGeneration.cpp:276-285).
+std::vector<ZForwarding*> g_retiredPrev;
+std::atomic<uint64_t> g_retiredTotal{ 0 };
+std::atomic<uint64_t> g_reclaimedTotal{ 0 };
 
 std::atomic<uint64_t> g_cmpTotal{ 0 };
 std::atomic<uint64_t> g_cmpAgree{ 0 };
@@ -381,6 +388,13 @@ void ForwardingTable::RetireMembershipAtDispel(MAddress regionStart, size_t regi
     if (tab != nullptr && tab->start() == regionStart) {
         Retire(tab);
     }
+    {
+        std::lock_guard<std::mutex> retiredLock(g_retiredLock);
+        RegionInfo* page = RegionInfo::TryGetRegionInfoAt(regionStart);
+        if (page != nullptr && page->IsGhostFromRegion()) {
+            page->ClearGhostFromRegionBits();
+        }
+    }
 }
 
 namespace {
@@ -506,16 +520,6 @@ static void UnlinkThenDestroy(ZForwarding* tab)
     tab->Destroy();
 }
 
-namespace {
-std::mutex g_retiredLock;
-std::vector<ZForwarding*> g_retired;
-// Previous reset generation. ZGeneration::reset_relocation_set destroys the
-// set installed last cycle, after this cycle's mark (zGeneration.cpp:276-285).
-std::vector<ZForwarding*> g_retiredPrev;
-std::atomic<uint64_t> g_retiredTotal{ 0 };
-std::atomic<uint64_t> g_reclaimedTotal{ 0 };
-} // namespace
-
 static bool ReclaimWhyForceCoverageComplete(const char* why)
 {
     if (why == nullptr) {
@@ -541,6 +545,18 @@ static bool CoverageEpochSatisfied(ZForwarding* tab)
     return g_markCoverageEpoch[idx].load(std::memory_order_acquire) >= tab->required_mark_epoch();
 }
 
+static bool GhostCarrierHeld(ZForwarding* tab)
+{
+    if (tab == nullptr) {
+        return false;
+    }
+    RegionInfo* page = tab->page();
+    if (page == nullptr || page->GetRegionLifeId() != tab->page_life_id()) {
+        return false;
+    }
+    return page->IsGhostFromRegion();
+}
+
 bool ForwardingTable::RetiredDestroyEligible(ZForwarding* tab)
 {
     if (tab == nullptr) {
@@ -550,7 +566,7 @@ bool ForwardingTable::RetiredDestroyEligible(ZForwarding* tab)
         return false;
     }
     const int32_t refs = tab->ref_count().load(std::memory_order_acquire);
-    return refs == 0 || refs == 1;
+    return (refs == 0 || refs == 1) && !GhostCarrierHeld(tab);
 }
 
 void ForwardingTable::Retire(ZForwarding* tab)
@@ -591,6 +607,11 @@ void ForwardingTable::ReclaimRetired(const char* why)
         g_retiredPrev.clear();
         for (ZForwarding* tab : candidates) {
             if (tab == nullptr) {
+                continue;
+            }
+            const bool ghostHeldNow = GhostCarrierHeld(tab);
+            if (ghostHeldNow) {
+                deferred.push_back(tab);
                 continue;
             }
             if (forceCoverageComplete || RetiredDestroyEligible(tab)) {
