@@ -4272,15 +4272,21 @@ GC_TEST(ForwardingPublicationProduct, GhostHeldRetainsResolvableCarrier)
     // Force every release condition except the independent ghost-held guard.
     ForwardingTable::ReclaimRetired("gc-unit-explicit-coverage");
     const ForwardingTable::LookupResult kept = ForwardingTable::LookupTo(from);
-    GC_EXPECT_TRUE(region->IsGhostFromRegion());
-    GC_EXPECT_TRUE(ForwardingTable::RetiredCovers(region->GetRegionStart(), region->GetRegionSize()));
-    GC_EXPECT_EQ(kept.to, to);
-    GC_EXPECT_TRUE(kept.answer == ForwardingTable::ToAnswer::ArmedHit);
+    const bool ghostHeld = region->IsGhostFromRegion();
+    const bool retiredCovers =
+        ForwardingTable::RetiredCovers(region->GetRegionStart(), region->GetRegionSize());
     DestroyAfterGhostCleared(region, "gc-unit-explicit-coverage");
     RelocationReceiptTestAccess::ReleaseListOwnership(region);
     region->metadata.liveInfo = nullptr;
     fx.FreePlanted(live);
     RelocationReceiptTestAccess::BindCollector(Heap::GetHeap().GetCollectorResources(), nullptr);
+
+    // Keep the deliberate-red arm isolated: record product observations first,
+    // always restore fixture state, then let the assertions report the cut.
+    GC_EXPECT_TRUE(ghostHeld);
+    GC_EXPECT_TRUE(retiredCovers);
+    GC_EXPECT_EQ(kept.to, to);
+    GC_EXPECT_TRUE(kept.answer == ForwardingTable::ToAnswer::ArmedHit);
 }
 
 GC_TEST(ForwardingPublicationProduct, GhostClearedAllowsEligibleCarrierReclaim)
