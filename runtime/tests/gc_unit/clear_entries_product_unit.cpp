@@ -903,14 +903,17 @@ GC_OTHER_VM_TEST(LookupDecisionSnapshot, SurvivesPostReturnGhostAndHeaderMutatio
     RelocationReceiptTestAccess::BindCollector(Heap::GetHeap().GetCollectorResources(), &collector);
     LiveInfo* live = PrepareForwardable(fx, region, reinterpret_cast<MAddress>(from));
     ForwardingTable::ClearEntries(region->GetRegionStart(), region->GetRegionSize());
-    DestroyAfterGhostCleared(region, "gc-unit-explicit-coverage");
-    GC_EXPECT_TRUE(RegionInfo::GetGhostFromRegionAt(reinterpret_cast<MAddress>(from)) == nullptr);
+    ForwardingTable::PublishMarkCoverage(Generation::Young);
+    ForwardingTable::PublishMarkCoverage(Generation::Old);
+    ForwardingTable::ReclaimRetired("young-mark-coverage");
+    GC_EXPECT_TRUE(RegionInfo::GetGhostFromRegionAt(reinterpret_cast<MAddress>(from)) == region);
     GC_EXPECT_FALSE(from->IsForwarded());
 
     const ForwardingTable::LookupResult result =
         ForwardingTable::LookupTo(reinterpret_cast<MAddress>(from));
     region->DispelGhostFromRegion();
     from->SetStateCode(ObjectState::FORWARDED);
+    ForwardingTable::ReclaimRetired("gc-unit-explicit-coverage");
 
     GC_EXPECT_TRUE(from->IsForwarded());
     GC_EXPECT_TRUE(RegionInfo::GetGhostFromRegionAt(reinterpret_cast<MAddress>(from)) == nullptr);
@@ -918,11 +921,12 @@ GC_OTHER_VM_TEST(LookupDecisionSnapshot, SurvivesPostReturnGhostAndHeaderMutatio
     GC_EXPECT_TRUE((static_cast<uint8_t>(result.unavailableCause) &
                     static_cast<uint8_t>(ForwardingTable::ToUnavailableCause::PublicationClosed)) != 0);
     GC_EXPECT_TRUE((static_cast<uint8_t>(result.unavailableCause) &
-                    static_cast<uint8_t>(ForwardingTable::ToUnavailableCause::TableDestroyed)) != 0);
+                    static_cast<uint8_t>(ForwardingTable::ToUnavailableCause::NeverInstalled)) != 0);
     GC_EXPECT_FALSE(result.activeCandidate);
     GC_EXPECT_TRUE(result.activeAnswer == ForwardingTable::ToAnswer::Unarmed);
-    GC_EXPECT_TRUE(result.retiredAnswer == ForwardingTable::ToAnswer::Unarmed);
+    GC_EXPECT_TRUE(result.retiredAnswer == ForwardingTable::ToAnswer::ArmedMiss);
     GC_EXPECT_TRUE(result.publicationClosed);
+    GC_EXPECT_TRUE(result.forwardingSnapshotValid);
 
     from->SetStateCode(ObjectState::NORMAL);
     RelocationReceiptTestAccess::BindCollector(Heap::GetHeap().GetCollectorResources(), nullptr);
@@ -4242,7 +4246,7 @@ GC_TEST(LoadHealDeliveryProduct, RemapYoungRootsResolvesRecoloursAndHealsSlot)
     youngRegion->SetYoungRegionFlag(0);
 }
 
-GC_TEST(ForwardingPublicationProduct, GhostHeldBlocksYoungMarkCoverage)
+GC_TEST(ForwardingPublicationProduct, GhostHeldRetainsResolvableCarrier)
 {
     GcHeapFixture& fx = ProductFixture();
     ForwardingTable::ReclaimRetired("gc-unit-fixture-coverage-complete");
@@ -4265,15 +4269,54 @@ GC_TEST(ForwardingPublicationProduct, GhostHeldBlocksYoungMarkCoverage)
     GC_EXPECT_TRUE(to != 0);
     ForwardingTable::ClearEntries(region->GetRegionStart(), region->GetRegionSize());
     ForwardingTable::PublishMarkCoverage(Generation::Young);
-    ForwardingTable::ReclaimRetired("young-mark-coverage");
+    // Force every release condition except the independent ghost-held guard.
+    ForwardingTable::ReclaimRetired("gc-unit-explicit-coverage");
     const ForwardingTable::LookupResult kept = ForwardingTable::LookupTo(from);
     GC_EXPECT_TRUE(region->IsGhostFromRegion());
+    GC_EXPECT_TRUE(ForwardingTable::RetiredCovers(region->GetRegionStart(), region->GetRegionSize()));
     GC_EXPECT_EQ(kept.to, to);
-    GC_EXPECT_TRUE(kept.answer != ForwardingTable::ToAnswer::Unavailable ||
-                   (static_cast<uint8_t>(kept.unavailableCause) &
-                    static_cast<uint8_t>(ForwardingTable::ToUnavailableCause::TableDestroyed)) == 0);
-    DestroyAfterGhostCleared(region, "young-mark-coverage");
-    GC_EXPECT_TRUE(ForwardingTable::LookupTo(from).answer == ForwardingTable::ToAnswer::Unavailable);
+    GC_EXPECT_TRUE(kept.answer == ForwardingTable::ToAnswer::ArmedHit);
+    DestroyAfterGhostCleared(region, "gc-unit-explicit-coverage");
+    RelocationReceiptTestAccess::ReleaseListOwnership(region);
+    region->metadata.liveInfo = nullptr;
+    fx.FreePlanted(live);
+    RelocationReceiptTestAccess::BindCollector(Heap::GetHeap().GetCollectorResources(), nullptr);
+}
+
+GC_TEST(ForwardingPublicationProduct, GhostClearedAllowsEligibleCarrierReclaim)
+{
+    GcHeapFixture& fx = ProductFixture();
+    ForwardingTable::ReclaimRetired("gc-unit-fixture-coverage-complete");
+    RelocationReceiptTestAccess::ReleaseListOwnership(RegionInfo::GetRegionInfo(4));
+    RegionInfo* region = RegionInfo::InitRegion(4, 1, RegionInfo::UnitRole::SMALL_SIZED_UNITS);
+    GC_EXPECT_TRUE(region != nullptr);
+    PinOwnerGeneration(region, Generation::Young);
+    region->SetRegionType(RegionInfo::RegionType::THREAD_LOCAL_REGION);
+    BaseObject* liveObject = fx.PlaceObject(region->GetRegionStart());
+    const MAddress from = reinterpret_cast<MAddress>(liveObject);
+    region->SetRegionAllocPtr(from + liveObject->GetSize());
+    WCollector collector(Heap::GetHeap().GetAllocator(), Heap::GetHeap().GetCollectorResources());
+    RelocationReceiptTestAccess::BindCollector(Heap::GetHeap().GetCollectorResources(), &collector);
+    LiveInfo* live = PrepareForwardable(fx, region, from);
+    RegionManager manager;
+    RelocationReceiptTestAccess::ParkFrom(manager, region);
+    manager.CompactRegion(region);
+    const MAddress to = ForwardingTable::FindTo(from);
+    GC_EXPECT_TRUE(to != 0);
+    ForwardingTable::ClearEntries(region->GetRegionStart(), region->GetRegionSize());
+    ForwardingTable::PublishMarkCoverage(Generation::Young);
+    GC_EXPECT_TRUE(region->IsGhostFromRegion());
+    GC_EXPECT_TRUE(ForwardingTable::RetiredCovers(region->GetRegionStart(), region->GetRegionSize()));
+
+    region->DispelGhostFromRegion();
+    ForwardingTable::ReclaimRetired("gc-unit-explicit-coverage");
+
+    GC_EXPECT_FALSE(region->IsGhostFromRegion());
+    GC_EXPECT_FALSE(ForwardingTable::RetiredCovers(region->GetRegionStart(), region->GetRegionSize()));
+    const ForwardingTable::LookupResult reclaimed = ForwardingTable::LookupTo(from);
+    GC_EXPECT_TRUE(reclaimed.answer == ForwardingTable::ToAnswer::Unavailable);
+    GC_EXPECT_TRUE((static_cast<uint8_t>(reclaimed.unavailableCause) &
+                    static_cast<uint8_t>(ForwardingTable::ToUnavailableCause::TableDestroyed)) != 0);
     RelocationReceiptTestAccess::ReleaseListOwnership(region);
     region->metadata.liveInfo = nullptr;
     fx.FreePlanted(live);
