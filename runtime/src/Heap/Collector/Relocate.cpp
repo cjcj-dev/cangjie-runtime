@@ -80,10 +80,17 @@ static thread_local WCollector::RouteLookupTestResult* g_routeLookupTestContext 
 #if defined(MRT_TESTABLE_INTERNALS)
 using CopyAdmissionTestHook = void (*)(RegionInfo*, BaseObject*);
 static std::atomic<CopyAdmissionTestHook> g_copyAdmissionTestHook{ nullptr };
+using LockedRelocationWaiterTestHook = void (*)(BaseObject*);
+static std::atomic<LockedRelocationWaiterTestHook> g_lockedRelocationWaiterTestHook{ nullptr };
 
 extern "C" MRT_EXPORT void MRT_SetCopyAdmissionTestHook(CopyAdmissionTestHook hook)
 {
     g_copyAdmissionTestHook.store(hook, std::memory_order_release);
+}
+
+extern "C" MRT_EXPORT void MRT_SetLockedRelocationWaiterTestHook(LockedRelocationWaiterTestHook hook)
+{
+    g_lockedRelocationWaiterTestHook.store(hook, std::memory_order_release);
 }
 
 static void RunCopyAdmissionTestHook(RegionInfo* region, BaseObject* object)
@@ -91,6 +98,14 @@ static void RunCopyAdmissionTestHook(RegionInfo* region, BaseObject* object)
     CopyAdmissionTestHook hook = g_copyAdmissionTestHook.load(std::memory_order_acquire);
     if (hook != nullptr) {
         hook(region, object);
+    }
+}
+
+static void RunLockedRelocationWaiterTestHook(BaseObject* object)
+{
+    LockedRelocationWaiterTestHook hook = g_lockedRelocationWaiterTestHook.load(std::memory_order_acquire);
+    if (hook != nullptr) {
+        hook(object);
     }
 }
 #endif
@@ -2303,11 +2318,10 @@ BaseObject* WCollector::WaitRoutedTipReady(BaseObject* from, BaseObject* to, Reg
 //
 //   forwarding->retain_page(&_queue)   ->  RegionInfo::TryLockReadFromRegion()
 //   relocate_object_inner(...)         ->  ForwardObjectImpl(obj, forwarding), whose
-//                                          ForwardObjectExclusive does RouteObject (= ZGC's
-//                                          alloc_object_for_relocation, except our
-//                                          to-address is pre-planned so it cannot fail for
-//                                          want of memory), CopyObject (= object_copy_disjoint)
-//                                          and UnlockObject(FORWARDED) (= forwarding->insert)
+//                                          ForwardObjectExclusive consumes a planned route or
+//                                          immediately tries a relocation-only destination,
+//                                          then CopyObject (= object_copy_disjoint) and
+//                                          UnlockObject(FORWARDED) (= forwarding->insert)
 //   forwarding->release_page()         ->  RegionInfo::UnlockReadFromRegion()
 //
 // TryForwardObject (below) already composes exactly these three, which is why this is a reuse
@@ -2788,24 +2802,9 @@ BaseObject* WCollector::ForwardObjectImpl(BaseObject* obj, RegionInfo* ghostFrom
         LOG(RTLOG_ERROR, "[GCV2][first-visitor] PlanRoute returned null obj=%p page=%p phase=%d route=%u",
             obj, ghostFromRegion, static_cast<int>(GetGCPhase()),
             ghostFromRegion == nullptr ? 0U : static_cast<unsigned>(ghostFromRegion->GetRouteState()));
-        // zRelocate.cpp:354-372 allocates the destination lazily in the
-        // first visitor.  A ROUTED page with no geometric ticket therefore
-        // still relocates through the regular relocation allocator; the
-        // forwarding receipt below is the sole publication of the result.
-        // Once copier admission is sealed, however, the retain-side route
-        // lookup is expected to refuse. Do not allocate a destination that
-        // cannot be consumed; take the object lock below and let the shared
-        // admission CAS linearize the refusal and rollback.
-        const bool copySealed = ghostFromRegion != nullptr &&
-            ghostFromRegion->CopyAdmission() == ZForwardingLife::CopyAdmissionState::SEALED;
-        if (!copySealed && ghostFromRegion != nullptr &&
-            ghostFromRegion->GetRouteState() == RegionInfo::RouteState::ROUTED) {
-            const size_t size = RegionSpace::GetAllocSize(*obj);
-            planned = reinterpret_cast<BaseObject*>(
-                AllocBuffer::GetOrCreateAllocBuffer()->Allocate(size, AllocType::MOVEABLE_OBJECT));
-            LOG(RTLOG_ERROR, "[GCV2][first-visitor] lazy relocation allocation obj=%p size=%zu to=%p",
-                obj, size, planned);
-        }
+        // Do not reserve here. The object lock, copy admission, and forwarding
+        // publication below must all accept responsibility before the immediate
+        // relocation allocator advances a destination page.
     }
     do {
         StateWord oldWord = obj->GetStateWord();
@@ -2830,6 +2829,9 @@ BaseObject* WCollector::ForwardObjectImpl(BaseObject* obj, RegionInfo* ghostFrom
         // hung gc-main at WCollector.cpp:9570 while the mutator sat in SuspendForSync
         // (REPORT-llstore hang_live).
         if (oldWord.IsLockedWord()) {
+#if defined(MRT_TESTABLE_INTERNALS)
+            RunLockedRelocationWaiterTestHook(obj);
+#endif
             auto toObj = GetForwardPointer(obj, ghostFromRegion);
             const bool tableHit = toObj != nullptr;
             const bool pagePublished = ghostFromRegion != nullptr &&
@@ -2922,11 +2924,6 @@ BaseObject* WCollector::ForwardObjectExclusive(BaseObject* obj, BaseObject* toOb
         obj->UnlockObject(ObjectState::NORMAL);
         return nullptr;
     }
-    if (toObj == nullptr) {
-        LOG(RTLOG_ERROR, "[GCV2][first-visitor] destination null obj=%p page=%p", obj, copyPage);
-        obj->UnlockObject(ObjectState::NORMAL);
-        return nullptr;
-    }
     ForwardingTable::Publication publication = ForwardingTable::EnsurePublicationBeforeCopy(
         copyPage, reinterpret_cast<MAddress>(obj));
     if (!publication) {
@@ -2945,6 +2942,18 @@ BaseObject* WCollector::ForwardObjectExclusive(BaseObject* obj, BaseObject* toOb
         return nullptr;
     }
     size_t size = RegionSpace::GetAllocSize(*obj);
+    if (toObj == nullptr && copyPage != nullptr &&
+        copyPage->GetRouteState() == RegionInfo::RouteState::ROUTED) {
+        toObj = reinterpret_cast<BaseObject*>(
+            AllocBuffer::GetOrCreateAllocBuffer()->TryAllocateForRelocation(size));
+        LOG(RTLOG_ERROR, "[GCV2][first-visitor] lazy relocation allocation obj=%p size=%zu to=%p",
+            obj, size, toObj);
+    }
+    if (toObj == nullptr) {
+        LOG(RTLOG_ERROR, "[GCV2][first-visitor] destination null obj=%p page=%p", obj, copyPage);
+        obj->UnlockObject(ObjectState::NORMAL);
+        return nullptr;
+    }
     DLOG(FORWARD, "forward obj %p<%p>(%zu) to %p", obj, obj->GetTypeInfo(), size, toObj);
     CopyObject(*obj, *toObj, size);
     // Publish a fully-initialized to-object. ZGC insert (zRelocate.cpp:368-372) is the

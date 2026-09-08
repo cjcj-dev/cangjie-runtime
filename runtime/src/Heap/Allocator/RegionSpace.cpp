@@ -31,6 +31,11 @@ namespace MapleRuntime {
 namespace {
 std::atomic<size_t> g_allocIntoCSetCount{ 0 };
 std::atomic<size_t> g_allocIntoCSetRetired{ 0 };
+#if defined(MRT_TESTABLE_INTERNALS)
+std::atomic<size_t> g_ordinaryAllocationCalls{ 0 };
+std::atomic<size_t> g_relocationAllocationCalls{ 0 };
+std::atomic<bool> g_forceRelocationAllocationFailure{ false };
+#endif
 
 bool RegionIsInRelocationSet(const RegionInfo* reg)
 {
@@ -267,6 +272,9 @@ void AllocBuffer::Fini()
 
 MAddress AllocBuffer::Allocate(size_t totalSize, AllocType allocType)
 {
+#if defined(MRT_TESTABLE_INTERNALS)
+    g_ordinaryAllocationCalls.fetch_add(1, std::memory_order_relaxed);
+#endif
     // a hoisted specific fast path which can be inlined
     MAddress addr = 0;
     if (UNLIKELY(allocType == AllocType::RAW_POINTER_OBJECT)) {
@@ -401,6 +409,90 @@ MAddress AllocBuffer::Allocate(size_t totalSize, AllocType allocType)
     DLOG(ALLOC, "alloc 0x%zx(%zu)", addr, totalSize);
     return addr;
 }
+
+MAddress AllocBuffer::TryAllocateForRelocation(size_t totalSize)
+{
+#if defined(MRT_TESTABLE_INTERNALS)
+    g_relocationAllocationCalls.fetch_add(1, std::memory_order_relaxed);
+    if (g_forceRelocationAllocationFailure.load(std::memory_order_acquire)) {
+        return 0;
+    }
+#endif
+    RegionSpace& allocator = reinterpret_cast<RegionSpace&>(Heap::GetHeap().GetAllocator());
+    RegionManager& manager = allocator.GetRegionManager();
+
+    // Reusing the current thread-local page is an immediate bump. A page that
+    // entered the relocation set cannot be a destination in this cycle.
+    if (tlRegion != RegionInfo::NullRegion() && RegionIsInRelocationSet(tlRegion)) {
+        if (tlRegion->IsThreadLocalRegion()) {
+            manager.RemoveThreadLocalRegion(tlRegion);
+            manager.EnlistFullThreadLocalRegion(tlRegion);
+        }
+        tlRegion = RegionInfo::NullRegion();
+    }
+    if (tlRegion != RegionInfo::NullRegion()) {
+        const MAddress addr = tlRegion->Alloc(totalSize);
+        if (addr != 0) {
+            tlRegion->SetNotRelocatableThisCycle(1);
+            return addr;
+        }
+
+        // This page is full. Retire it without invoking the ordinary allocation
+        // policy; all operations below are allocator bookkeeping and contain no
+        // saferegion or allocation-stall entry.
+        CHECK(tlRegion->IsThreadLocalRegion());
+        manager.RemoveThreadLocalRegion(tlRegion);
+        manager.EnlistFullThreadLocalRegion(tlRegion);
+        tlRegion = RegionInfo::NullRegion();
+    }
+
+    // Large objects need a dedicated multi-unit region; the lazy small-object
+    // path cannot acquire that without entering the ordinary large allocator.
+    if (totalSize >= manager.GetLargeObjectThreshold()) {
+        return 0;
+    }
+
+    // The false allowSaferegion argument is the relocation-only contract. It
+    // excludes RequestForRegion and all ScopedEnterSaferegion reclaim arms in
+    // TakeRegion. Failure is returned directly instead of stalling or asking GC.
+    CJThreadPreemptOffCntAdd();
+    RegionInfo* region = manager.AllocateThreadLocalRegion(
+        /*expectPhysicalMem=*/false, /*youngRegion=*/true, /*allowSaferegion=*/false);
+    CJThreadPreemptOffCntSub();
+    if (region == nullptr) {
+        return 0;
+    }
+    tlRegion = region;
+    const MAddress addr = region->Alloc(totalSize);
+    CHECK_DETAIL(addr != 0,
+                 "fresh relocation destination region cannot fit object size=%zu regionSize=%zu",
+                 totalSize, region->GetRegionSize());
+    region->SetNotRelocatableThisCycle(1);
+    return addr;
+}
+
+#if defined(MRT_TESTABLE_INTERNALS)
+void AllocBuffer::ResetAllocationPathCountersForTest()
+{
+    g_ordinaryAllocationCalls.store(0, std::memory_order_relaxed);
+    g_relocationAllocationCalls.store(0, std::memory_order_relaxed);
+}
+
+size_t AllocBuffer::OrdinaryAllocationCallsForTest()
+{
+    return g_ordinaryAllocationCalls.load(std::memory_order_relaxed);
+}
+
+size_t AllocBuffer::RelocationAllocationCallsForTest()
+{
+    return g_relocationAllocationCalls.load(std::memory_order_relaxed);
+}
+
+void AllocBuffer::ForceRelocationAllocationFailureForTest(bool force)
+{
+    g_forceRelocationAllocationFailure.store(force, std::memory_order_release);
+}
+#endif
 
 // try an allocation but do not handle failure
 MAddress AllocBuffer::AllocateImpl(size_t totalSize, AllocType allocType)

@@ -30,6 +30,17 @@ public:
     static AllocBuffer* GetAllocBuffer();
 
     MAddress Allocate(size_t size, AllocType allocType);
+    // Relocation must never enter the ordinary mutator allocation contract:
+    // no allocation stall, GC request, saferegion, allocate-black accounting,
+    // or MinorGCALot side effect. This is an immediate try; zero hands the
+    // object back to the relocation request path.
+    MAddress TryAllocateForRelocation(size_t size);
+#if defined(MRT_TESTABLE_INTERNALS)
+    static void ResetAllocationPathCountersForTest();
+    static size_t OrdinaryAllocationCallsForTest();
+    static size_t RelocationAllocationCallsForTest();
+    static void ForceRelocationAllocationFailureForTest(bool force);
+#endif
     RegionInfo* GetRegion() { return tlRegion; }
     RegionList& GetTlRawPointerRegions() { return tlRawPointerRegions; }
     RegionList& GetTlLargeRawPointerRegions() { return tlLargeRawPointerRegions; }
