@@ -1417,7 +1417,8 @@ private:
                              const MinorObjectSet& currentMinorRoots, bool fullYoungScan,
                              MinorSlotSet* consumedOut = nullptr, RemsetScanStats* statsOut = nullptr,
                              MinorInteriorBaseMap* interiorBasesOut = nullptr,
-                             const ScopedStopTheWorld* stw = nullptr);
+                             const ScopedStopTheWorld* stw = nullptr,
+                             MinorSlotSet* unavailableOut = nullptr);
     bool FixMinorEvacuatedSlot(RefField<>& field, BaseObject* knownBase = nullptr,
                                const ScopedStopTheWorld* stw = nullptr,
                                bool holderIsCurrentMinorRoot = false) const;
