@@ -3134,6 +3134,50 @@ GC_TEST(NormalRouteGeneration, OldRouteRejectsYoungRelocationTarget)
     GC_EXPECT_TRUE(routeStayedOld);
 }
 
+// Young-source behavior is deliberately outside the old-source restriction:
+// a compatible young relocation target remains eligible on the normal route.
+GC_TEST(NormalRouteGeneration, YoungRouteAcceptsYoungRelocationTarget)
+{
+    GcHeapFixture& fx = ProductFixture();
+    RegionInfo* source = ResetDeliveryUnit(fx, 5);
+    RegionInfo* compatible = ResetDeliveryUnit(fx, 3);
+    PinOwnerGeneration(source, Generation::Young);
+    PinOwnerGeneration(compatible, Generation::Young);
+
+    BaseObject* from = fx.PlaceObject(source->GetRegionStart());
+    source->SetRegionAllocPtr(reinterpret_cast<MAddress>(from) + from->GetSize());
+    LiveInfo* live = PrepareForwardable(fx, source, reinterpret_cast<MAddress>(from));
+
+    RegionManager manager;
+    manager.SetMaxUnitCountForRegion(RegionInfo::UNIT_SIZE / KB);
+    manager.freeRegionManager.Initialize(GcHeapFixture::kUnits);
+    RelocationReceiptTestAccess::ParkFrom(manager, source);
+    RelocationReceiptTestAccess::ParkThreadLocal(manager, compatible);
+    AllocBuffer* buffer = AllocBuffer::GetOrCreateAllocBuffer();
+    buffer->ClearRegion();
+    buffer->SetRelocationRegion(compatible);
+
+    (void)manager.RouteRegion(source);
+    const RouteInfo plan = source->GetRouteInfoForProbe();
+    RegionInfo* plannedTarget = RegionInfo::TryGetRegionInfoAt(plan.toRegion1StartAddress);
+    const bool acceptedYoungTarget = plannedTarget == compatible;
+    const bool routeStayedYoung = plannedTarget != nullptr && plannedTarget->IsYoungRegion();
+
+    buffer->ClearRelocationRegion();
+    buffer->ClearRegion();
+    if (plannedTarget != nullptr && plannedTarget != source) {
+        plannedTarget->SetRouteDestHold(0);
+    }
+    RelocationReceiptTestAccess::ReleaseListOwnership(source);
+    RelocationReceiptTestAccess::ReleaseListOwnership(compatible);
+    DestroyAfterGhostCleared(source, "normal-route-young-boundary");
+    source->metadata.liveInfo = nullptr;
+    fx.FreePlanted(live);
+
+    GC_EXPECT_TRUE(acceptedYoungTarget);
+    GC_EXPECT_TRUE(routeStayedYoung);
+}
+
 GC_TEST(ForwardingPublicationProduct, CompletedReceiptResolvesWithoutForwardingTableLookup)
 {
     GcHeapFixture& fx = ProductFixture();
