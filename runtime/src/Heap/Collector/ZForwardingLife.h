@@ -242,9 +242,11 @@ public:
         for (;;) {
             int32_t word = copyWord.load(std::memory_order_acquire);
             const CopyAdmissionState state = copy_admission_state(word);
-            CHECK(state != CopyAdmissionState::ENTERING);
             const int32_t count = copy_count(word);
             CHECK(count > 0);
+            // A peer may own the begin/commit interval while this admitted
+            // copier exits. Preserve that admission state and return only this
+            // copier's responsibility (zForwarding.cpp:110,134).
             const int32_t ended = PackCopyWord(state, count - 1);
             if (!copyWord.compare_exchange_weak(
                     word, ended, std::memory_order_acq_rel, std::memory_order_acquire)) {
