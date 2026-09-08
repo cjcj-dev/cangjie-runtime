@@ -250,16 +250,20 @@ struct LoadHealDeliveryTestAccess {
 namespace {
 
 struct CopyAdmissionBarrier {
-    static void Reset()
+    static void Reset(BaseObject* object = nullptr)
     {
         std::lock_guard<std::mutex> guard(mu);
+        target = object;
         entered = false;
         released = false;
     }
 
-    static void Hook(RegionInfo*, BaseObject*)
+    static void Hook(RegionInfo*, BaseObject* object)
     {
         std::unique_lock<std::mutex> lock(mu);
+        if (target != nullptr && object != target) {
+            return;
+        }
         entered = true;
         cv.notify_all();
         cv.wait(lock, []() { return released; });
@@ -280,14 +284,45 @@ struct CopyAdmissionBarrier {
 
     static std::mutex mu;
     static std::condition_variable cv;
+    static BaseObject* target;
     static bool entered;
     static bool released;
 };
 
 std::mutex CopyAdmissionBarrier::mu;
 std::condition_variable CopyAdmissionBarrier::cv;
+BaseObject* CopyAdmissionBarrier::target = nullptr;
 bool CopyAdmissionBarrier::entered = false;
 bool CopyAdmissionBarrier::released = false;
+
+struct CopyCompletionBarrier {
+    std::mutex mu;
+    std::condition_variable cv;
+    bool entered = false;
+    bool released = false;
+
+    static void Hook(void* context)
+    {
+        auto& barrier = *static_cast<CopyCompletionBarrier*>(context);
+        std::unique_lock<std::mutex> lock(barrier.mu);
+        barrier.entered = true;
+        barrier.cv.notify_all();
+        barrier.cv.wait(lock, [&barrier]() { return barrier.released; });
+    }
+
+    void WaitEntered()
+    {
+        std::unique_lock<std::mutex> lock(mu);
+        cv.wait(lock, [this]() { return entered; });
+    }
+
+    void Release()
+    {
+        std::lock_guard<std::mutex> guard(mu);
+        released = true;
+        cv.notify_all();
+    }
+};
 
 struct CopyAdmissionWitness {
     static void Reset() { hits.store(0, std::memory_order_relaxed); }
@@ -302,6 +337,7 @@ struct CopyAdmissionWitness {
 std::atomic<uint32_t> CopyAdmissionWitness::hits { 0 };
 
 using ProductSetCopyAdmissionTestHook = void (*)(void (*)(RegionInfo*, BaseObject*));
+using ProductSetReceiptLifeRegisterHook = void (*)(void (*)(void*), void*);
 using ProductForcePublicationClosedForTest = void (*)(MAddress);
 
 ProductSetCopyAdmissionTestHook ProductSetCopyAdmissionTestHookFn()
@@ -312,6 +348,16 @@ ProductSetCopyAdmissionTestHook ProductSetCopyAdmissionTestHookFn()
     }
     return handle == nullptr ? nullptr : reinterpret_cast<ProductSetCopyAdmissionTestHook>(
         dlsym(handle, "MRT_SetCopyAdmissionTestHook"));
+}
+
+ProductSetReceiptLifeRegisterHook ProductSetReceiptLifeRegisterHookFn()
+{
+    void* handle = dlopen("libcangjie-runtime.so", RTLD_NOW | RTLD_NOLOAD);
+    if (handle == nullptr) {
+        handle = dlopen("libcangjie-runtime.so", RTLD_NOW);
+    }
+    return handle == nullptr ? nullptr : reinterpret_cast<ProductSetReceiptLifeRegisterHook>(
+        dlsym(handle, "_ZN12MapleRuntime15ForwardingTable26SetReceiptLifeRegisterHookEPFvPvES1_"));
 }
 
 ProductForcePublicationClosedForTest ProductForcePublicationClosedForTestFn()
@@ -3934,6 +3980,145 @@ GC_TEST(ForwardingPublicationProduct, CopyAdmissionSealWaitsRealCopierAndRejects
     GC_EXPECT_EQ(countBeforeLate, countAfterLate);
     GC_EXPECT_EQ(countAfterLate, 0);
     GC_EXPECT_TRUE(wipeDone.load(std::memory_order_acquire));
+    GC_EXPECT_TRUE(workersDone);
+}
+
+// I03, zForwarding.cpp:110,134: an admitted copier must release its one
+// responsibility even while a peer owns the begin/commit admission interval.
+// Both objects enter through product ForwardObjectImpl. The receipt hook holds
+// the first after CommitCopyAdmission; the admission hook then holds the peer in
+// ENTERING; releasing the first forces its real RAII EndCopyInflight through the
+// target state without manufacturing the shared word in the test.
+GC_TEST(ForwardingPublicationProduct, AdmittedCopierExitsWhilePeerEntering)
+{
+    ProductSetCopyAdmissionTestHook setCopyAdmissionHook = ProductSetCopyAdmissionTestHookFn();
+    ProductSetReceiptLifeRegisterHook setReceiptHook = ProductSetReceiptLifeRegisterHookFn();
+    if (setCopyAdmissionHook == nullptr || setReceiptHook == nullptr) {
+        std::fprintf(stderr,
+                     "I03_TEST_NOT_REACHED reason=HOOK_ABSENT admission=%u receipt=%u\n",
+                     setCopyAdmissionHook != nullptr, setReceiptHook != nullptr);
+        GC_EXPECT_TRUE(false);
+        return;
+    }
+
+    GcHeapFixture& fx = ProductFixture();
+    RegionInfo* region = RegionInfo::InitRegion(2, 1, RegionInfo::UnitRole::SMALL_SIZED_UNITS);
+    RegionInfo* destination = RegionInfo::InitRegion(3, 1, RegionInfo::UnitRole::SMALL_SIZED_UNITS);
+    GC_EXPECT_TRUE(region != nullptr && destination != nullptr);
+    region->SetRegionType(RegionInfo::RegionType::FROM_REGION);
+    destination->SetRegionType(RegionInfo::RegionType::THREAD_LOCAL_REGION);
+
+    BaseObject* admitted = fx.PlaceObject(region->GetRegionStart() + 64);
+    const size_t objectSize = admitted->GetSize();
+    BaseObject* entering = fx.PlaceObject(reinterpret_cast<MAddress>(admitted) + objectSize);
+    BaseObject* admittedTo = fx.PlaceObject(destination->GetRegionStart() + 64);
+    BaseObject* enteringTo = fx.PlaceObject(reinterpret_cast<MAddress>(admittedTo) + objectSize);
+    region->SetRegionAllocPtr(reinterpret_cast<MAddress>(entering) + objectSize);
+    destination->SetRegionAllocPtr(reinterpret_cast<MAddress>(enteringTo) + objectSize);
+
+    LiveInfo* live = fx.PlantLiveInfo(region);
+    RegionBitmap* bitmap = fx.PlantMarkBitmap<Generation::Old>(live, region->GetRegionSize());
+    const size_t admittedOffset = region->GetAddressOffset(reinterpret_cast<MAddress>(admitted));
+    const size_t enteringOffset = region->GetAddressOffset(reinterpret_cast<MAddress>(entering));
+    (void)bitmap->MarkBits(admittedOffset, objectSize, region->GetRegionSize());
+    (void)bitmap->MarkBits(enteringOffset, objectSize, region->GetRegionSize());
+    region->AddLiveByteCount(2 * objectSize);
+
+    WCollector collector(Heap::GetHeap().GetAllocator(), Heap::GetHeap().GetCollectorResources());
+    collector.SetGCPhase(GCPhase::GC_PHASE_FORWARD);
+    RelocationReceiptTestAccess::BindCollector(Heap::GetHeap().GetCollectorResources(), &collector);
+    region->PrepareForwardableRegion(region->GetMarkView<Generation::Old>());
+    region->RecordRouteStart(admittedOffset);
+    region->RecordRouteStart(enteringOffset);
+    region->SetRouteInfo(reinterpret_cast<MAddress>(admittedTo), static_cast<uint32_t>(2 * objectSize));
+    region->SetRouteState(RegionInfo::RouteState::ROUTED);
+
+    RegionSpace& productSpace = reinterpret_cast<RegionSpace&>(Heap::GetHeap().GetAllocator());
+    RelocationRequestQueue& queue = productSpace.GetRegionManager().GetRelocationRequestQueue();
+    queue.BeginWorkers(1);
+    const MAddress admittedAddress = reinterpret_cast<MAddress>(admitted);
+    const MAddress enteringAddress = reinterpret_cast<MAddress>(entering);
+    const auto admittedRequest = queue.Add(region, admittedAddress);
+    const auto enteringRequest = queue.Add(region, enteringAddress);
+    GC_EXPECT_TRUE(admittedRequest.accepted);
+    GC_EXPECT_TRUE(enteringRequest.accepted);
+
+    CopyCompletionBarrier completionBarrier;
+    CopyAdmissionBarrier::Reset(entering);
+    setCopyAdmissionHook(&CopyAdmissionBarrier::Hook);
+    setReceiptHook(&CopyCompletionBarrier::Hook, &completionBarrier);
+
+    BaseObject* admittedResult = nullptr;
+    std::thread admittedCopier([&]() {
+        admittedResult = RelocationReceiptTestAccess::ForwardImpl(collector, admitted, region);
+    });
+    completionBarrier.WaitEntered();
+    const auto stateWithAdmittedCopy = region->CopyAdmission();
+    const int32_t countWithAdmittedCopy = region->CopyInflight();
+
+    // Only the first installer uses the completion barrier. The peer must be
+    // free to publish after its admission interval is released.
+    setReceiptHook(nullptr, nullptr);
+    BaseObject* enteringResult = nullptr;
+    std::thread enteringCopier([&]() {
+        enteringResult = RelocationReceiptTestAccess::ForwardImpl(collector, entering, region);
+    });
+    CopyAdmissionBarrier::WaitEntered();
+    const bool enteringHeaderLocked = entering->GetStateWord().IsLockedWord();
+    const auto stateBeforeExit = region->CopyAdmission();
+    const int32_t countBeforeExit = region->CopyInflight();
+    std::fprintf(stderr,
+                 "I03_TARGET_REACHED state=%u count=%d admitted_locked=%u entering_locked=%u\n",
+                 static_cast<unsigned>(stateBeforeExit), countBeforeExit,
+                 admitted->GetStateWord().IsLockedWord(), enteringHeaderLocked);
+    std::fflush(stderr);
+
+    completionBarrier.Release();
+    admittedCopier.join();
+    const auto stateAfterAdmittedExit = region->CopyAdmission();
+    const int32_t countAfterAdmittedExit = region->CopyInflight();
+
+    CopyAdmissionBarrier::Release();
+    enteringCopier.join();
+    setCopyAdmissionHook(nullptr);
+
+    const bool admittedPublished =
+        admittedRequest.request->state() == RelocationRequestQueue::State::COMPLETED;
+    const bool enteringPublished =
+        enteringRequest.request->state() == RelocationRequestQueue::State::COMPLETED;
+    if (!admittedPublished) {
+        (void)queue.Fail(admittedAddress);
+    }
+    if (!enteringPublished) {
+        (void)queue.Fail(enteringAddress);
+    }
+    const auto finalState = region->CopyAdmission();
+    const int32_t finalCount = region->CopyInflight();
+    const bool workersDone = queue.SynchronizePoll().workersDone;
+
+    collector.SetGCPhase(GCPhase::GC_PHASE_IDLE);
+    RelocationReceiptTestAccess::BindCollector(Heap::GetHeap().GetCollectorResources(), nullptr);
+    ForwardingTable::ClearEntries(region->GetRegionStart(), region->GetRegionSize());
+    ForwardingTable::ReclaimRetired("gc-unit-i03-peer-entering");
+    if (region->IsGhostFromRegion()) {
+        region->DispelGhostFromRegion();
+    }
+    region->metadata.liveInfo = nullptr;
+    fx.FreePlanted(live);
+
+    GC_EXPECT_TRUE(stateWithAdmittedCopy == ZForwardingLife::CopyAdmissionState::OPEN);
+    GC_EXPECT_EQ(countWithAdmittedCopy, 1);
+    GC_EXPECT_TRUE(enteringHeaderLocked);
+    GC_EXPECT_TRUE(stateBeforeExit == ZForwardingLife::CopyAdmissionState::ENTERING);
+    GC_EXPECT_EQ(countBeforeExit, 1);
+    GC_EXPECT_TRUE(admittedResult == admittedTo);
+    GC_EXPECT_TRUE(admittedPublished);
+    GC_EXPECT_TRUE(stateAfterAdmittedExit == ZForwardingLife::CopyAdmissionState::ENTERING);
+    GC_EXPECT_EQ(countAfterAdmittedExit, 0);
+    GC_EXPECT_TRUE(enteringResult == enteringTo);
+    GC_EXPECT_TRUE(enteringPublished);
+    GC_EXPECT_TRUE(finalState == ZForwardingLife::CopyAdmissionState::OPEN);
+    GC_EXPECT_EQ(finalCount, 0);
     GC_EXPECT_TRUE(workersDone);
 }
 
