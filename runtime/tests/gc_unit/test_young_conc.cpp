@@ -672,9 +672,11 @@ GC_OTHER_VM_TEST(YoungConc, UnavailableRemsetReachesMarkEndRuntimeDispatch)
 
     resources.SetGcStarted(startedBefore);
     resources.GetGCStats().reason = reasonBefore;
+    // Keep the semantic deadline assertion first: a product cut must fail on
+    // the unmarked current target, not be masked by the diagnostic receipts.
+    GC_EXPECT_TRUE(targetMarked);
     GC_EXPECT_EQ(receipt.forcedUnavailable, 1u);
     GC_EXPECT_EQ(receipt.pendingAtDeadline, 1u);
-    GC_EXPECT_TRUE(targetMarked);
 
     RelocationReceiptTestAccess::BindThreadPool(resources, nullptr);
     threadPool.Exit();
