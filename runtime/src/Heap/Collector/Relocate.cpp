@@ -512,8 +512,15 @@ void WCollector::RemapYoungRoots()
         if (slot == 0) {
             continue;
         }
-        if (!RemapYoungRootsLogic::ShouldRemapRememberedSlot(
-                WCollectorInternal::SlotHeldByLiveObject(reinterpret_cast<void*>(slot)))) {
+        // ZRemsetTableIterator admits the current old page, then remap_current applies the
+        // load barrier to every bit in that page's current remembered face; it does not ask
+        // whether the containing object is live (zRemembered.cpp:395-458).  Our bitmap is
+        // heap-wide instead of page-local, so reproduce only that page-level admission here.
+        // ClearRegion removes both faces before page reuse, and the region checks keep a stale
+        // address from being dereferenced after its old page has left the page table.
+        RegionInfo* holderPage = RegionInfo::TryGetRegionInfoAt(slot);
+        if (holderPage == nullptr || !holderPage->IsValidRegion() || holderPage->IsFreeRegion() ||
+            holderPage->IsGarbageRegion() || holderPage->IsYoungRegion()) {
             continue;
         }
         // slotwitness: the fail-closed records reached from here print tag/edge/host/slot and the

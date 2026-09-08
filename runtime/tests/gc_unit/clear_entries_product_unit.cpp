@@ -4180,10 +4180,10 @@ GC_TEST(LoadHealDeliveryProduct, CrossGenRangeGateRecordsLegalAndRejectsBeyondTo
     targetRegion->SetYoungRegionFlag(0);
 }
 
-// Product route: ResolveStoreValue -> ColourResolvedRefField -> HealSlot.  The
-// producer assertion is the final address; the consumer assertion is the
-// current store-good colour installed in the actual heap slot.
-GC_TEST(LoadHealDeliveryProduct, RemapYoungRootsResolvesRecoloursAndHealsSlot)
+// Product route: current RememberedSet::Snapshot -> WCollector::RemapYoungRoots ->
+// ResolveStoreValue -> ColourResolvedRefField -> HealSlot.  Like ZRemembered::remap_current,
+// the consumer must visit a current old-page bit without consulting object liveness.
+GC_TEST(LoadHealDeliveryProduct, CurrentRemsetRemapsWithoutObjectLivenessFilter)
 {
     LoadHealDeliveryRuntime::Ensure();
     GcHeapFixture& fx = ProductFixture();
@@ -4210,6 +4210,16 @@ GC_TEST(LoadHealDeliveryProduct, RemapYoungRootsResolvesRecoloursAndHealsSlot)
     }
     GC_EXPECT_TRUE(remembered.Contains(slot));
 
+    // Close the allocating-page exception and leave this otherwise valid old page without a
+    // livemap.  SlotHeldByLiveObject now says false, while ZGC's current-remset page iterator
+    // still admits the field (zRemembered.cpp:395-458).
+    holderRegion->SetRegionType(RegionInfo::RegionType::LARGE_REGION);
+    holderRegion->metadata.liveInfo = nullptr;
+    GC_EXPECT_TRUE(holderRegion->IsValidRegion());
+    GC_EXPECT_FALSE(holderRegion->IsYoungRegion());
+    GC_EXPECT_FALSE(holderRegion->IsFreeRegion());
+    GC_EXPECT_FALSE(holderRegion->IsGarbageRegion());
+
     LateBackfillState forwarding = PrepareLateBackfill(fx, collector);
     // Publish a legal current word first.  The relocate-start epoch changes make that same
     // heap word double-bad without ever publishing a forbidden colour.
@@ -4228,7 +4238,8 @@ GC_TEST(LoadHealDeliveryProduct, RemapYoungRootsResolvesRecoloursAndHealsSlot)
     const bool colourInstalled = collector.is_store_good(*field);
     std::fprintf(stderr,
                  "DETAIL loadheal_remap before=0x%zx after=0x%zx from=%p expected_to=%p "
-                 "actual_to=%p address_resolved=%u store_good=%u\n",
+                 "actual_to=%p address_resolved=%u store_good=%u current_old_page=1 "
+                 "object_liveness_required=0\n",
                  static_cast<size_t>(before), static_cast<size_t>(after), forwarding.from,
                  forwarding.to, healedTarget, static_cast<unsigned>(addressResolved),
                  static_cast<unsigned>(colourInstalled));

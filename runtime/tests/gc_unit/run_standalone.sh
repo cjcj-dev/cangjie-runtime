@@ -485,7 +485,7 @@ EXPECTED_LOADHEAL_TESTS=(
   LoadHealDeliveryProduct.PromotedSnapshotDischargesOnlyLiveHolder
   LoadHealDeliveryProduct.InPlaceRemsetMovesBitAndFeedsConsumer
   LoadHealDeliveryProduct.CrossGenRangeGateRecordsLegalAndRejectsBeyondTop
-  LoadHealDeliveryProduct.RemapYoungRootsResolvesRecoloursAndHealsSlot
+  LoadHealDeliveryProduct.CurrentRemsetRemapsWithoutObjectLivenessFilter
 )
 loadheal_rows=0
 while IFS=$'\t' read -r test_name anchor carrier consumer cut_site; do
