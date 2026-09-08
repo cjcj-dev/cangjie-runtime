@@ -87,6 +87,44 @@ struct RemsetFilterReceiptState {
     std::atomic<MAddress> lastBadTargetSlot { 0 };
 };
 RemsetFilterReceiptState g_remsetFilterReceipt;
+std::atomic<MAddress> g_remsetUnavailableOnceSlot { 0 };
+std::atomic<uint64_t> g_remsetForcedUnavailable { 0 };
+std::atomic<uint64_t> g_remsetPendingAtDeadline { 0 };
+}
+
+void ResetRemsetPendingTestReceipt()
+{
+    g_remsetUnavailableOnceSlot.store(0, std::memory_order_relaxed);
+    g_remsetForcedUnavailable.store(0, std::memory_order_relaxed);
+    g_remsetPendingAtDeadline.store(0, std::memory_order_relaxed);
+}
+
+void ArmRemsetUnavailableOnceForTest(MAddress slot)
+{
+    CHECK(slot != 0);
+    g_remsetUnavailableOnceSlot.store(slot, std::memory_order_release);
+}
+
+bool ConsumeRemsetUnavailableOnceForTest(MAddress slot)
+{
+    MAddress expected = slot;
+    if (slot == 0 || !g_remsetUnavailableOnceSlot.compare_exchange_strong(
+                         expected, 0, std::memory_order_acq_rel, std::memory_order_acquire)) {
+        return false;
+    }
+    g_remsetForcedUnavailable.fetch_add(1, std::memory_order_relaxed);
+    return true;
+}
+
+void NoteRemsetPendingDeadlineTestReceipt(size_t pending)
+{
+    g_remsetPendingAtDeadline.store(pending, std::memory_order_release);
+}
+
+RemsetPendingTestReceipt ReadRemsetPendingTestReceipt()
+{
+    return { g_remsetForcedUnavailable.load(std::memory_order_acquire),
+             g_remsetPendingAtDeadline.load(std::memory_order_acquire) };
 }
 
 void ResetRemsetFilterTestReceipt()
@@ -1168,6 +1206,23 @@ void WCollector::RescanRememberedSet(WorkStack& workStack, const MinorSlotSet& r
             }
             continue;
         }
+
+#if defined(MRT_TESTABLE_INTERNALS)
+        // Deterministic product-path injection for the runtime-entry test. It
+        // changes only the first forwarding answer for this exact slot; the
+        // mark-end rescan must still reload and consume the real field word.
+        if (unavailableOut != nullptr && ConsumeRemsetUnavailableOnceForTest(slot)) {
+            const bool inserted = unavailableOut->insert(slot).second;
+            CHECK_DETAIL(unavailableOut->size() <= rememberedSlots.size(),
+                         "remset unavailable pending exceeded drained face: pending=%zu drained=%zu",
+                         unavailableOut->size(), rememberedSlots.size());
+            if (inserted && statsOut != nullptr) {
+                ++statsOut->deferredUnavailable;
+            }
+            noteRemsetOutcome(slot, 11, 0);
+            continue;
+        }
+#endif
 
         bool keepByRetainedSnapshot = true;
         BaseObject* retainedHolder = nullptr;

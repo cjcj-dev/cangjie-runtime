@@ -138,6 +138,17 @@ struct YoungWeakClosureTestReceipt {
 void ResetYoungWeakClosureTestReceipt();
 void NoteYoungWeakClosureDiscovery(YoungWeakClosureVariant variant);
 YoungWeakClosureTestReceipt ReadYoungWeakClosureTestReceipt();
+
+struct RemsetPendingTestReceipt {
+    uint64_t forcedUnavailable;
+    uint64_t pendingAtDeadline;
+};
+
+void ResetRemsetPendingTestReceipt();
+void ArmRemsetUnavailableOnceForTest(MAddress slot);
+bool ConsumeRemsetUnavailableOnceForTest(MAddress slot);
+void NoteRemsetPendingDeadlineTestReceipt(size_t pending);
+RemsetPendingTestReceipt ReadRemsetPendingTestReceipt();
 #endif
 
 class ForwardTable {

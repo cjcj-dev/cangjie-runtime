@@ -1161,6 +1161,9 @@ void WCollector::DoYoungGarbageCollection()
 #endif
         if (!unavailableRememberedSlots.empty()) {
             const size_t pendingAtDeadline = unavailableRememberedSlots.size();
+#if defined(MRT_TESTABLE_INTERNALS)
+            NoteRemsetPendingDeadlineTestReceipt(pendingAtDeadline);
+#endif
             RescanRememberedSet(workStack, unavailableRememberedSlots, reachableSlots, weakSlots,
                                 currentMinorRoots, fullYoungScan,
                                 remsetConsumedLedgerElideActive ? nullptr : &consumedSlots, &remsetStats,
