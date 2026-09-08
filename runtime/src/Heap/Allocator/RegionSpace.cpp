@@ -255,6 +255,7 @@ void AllocBuffer::Init()
     static_assert(offsetof(AllocBuffer, tlRegion) == 0,
                   "need to modify the offset of this value in llvm-project at the same time");
     tlRegion = RegionInfo::NullRegion();
+    relocationRegion = RegionInfo::NullRegion();
     ThreadLocal::InitializeCleaner();
     Heap::GetHeap().RegisterAllocBuffer(*this);
 }
@@ -561,6 +562,13 @@ void AllocBuffer::FlushRegion()
         manager.RemoveThreadLocalRegion(tlRegion);
         manager.EnlistFullThreadLocalRegion(tlRegion);
         tlRegion = RegionInfo::NullRegion();
+    }
+    if (LIKELY(relocationRegion != RegionInfo::NullRegion()) && relocationRegion != nullptr) {
+        RegionSpace& theAllocator = reinterpret_cast<RegionSpace&>(Heap::GetHeap().GetAllocator());
+        RegionManager& manager = theAllocator.GetRegionManager();
+        manager.RemoveThreadLocalRegion(relocationRegion);
+        manager.EnlistFullThreadLocalRegion(relocationRegion);
+        relocationRegion = RegionInfo::NullRegion();
     }
     RegionInfo* prepared = preparedRegion.load();
     if (LIKELY(prepared != RegionInfo::NullRegion()) && prepared != nullptr) {

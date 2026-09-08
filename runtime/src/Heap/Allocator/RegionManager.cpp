@@ -3274,11 +3274,11 @@ bool RegionManager::RouteOrCompactRegionImpl(RegionInfo* region)
     }
     // permwho: fromBytes now sizes the reservation to cover the prefix-sum face.
     AllocBuffer* buffer = AllocBuffer::GetOrCreateAllocBuffer();
-    RegionInfo* toRegion1 = buffer->GetRegion();
+    RegionInfo* toRegion1 = buffer->GetRelocationRegion();
     // Keep compacted/from pages out of another source's destination domain.
     if (toRegion1 != RegionInfo::NullRegion() &&
         (toRegion1->IsCompacted() || toRegion1->IsGhostFromRegion() || toRegion1 == region)) {
-        buffer->ClearRegion();
+        buffer->ClearRelocationRegion();
         toRegion1 = RegionInfo::NullRegion();
     }
     // Apply the source's target-generation constraint before reserving either
@@ -3288,7 +3288,7 @@ bool RegionManager::RouteOrCompactRegionImpl(RegionInfo* region)
         CHECK(toRegion1->IsThreadLocalRegion());
         RemoveThreadLocalRegion(toRegion1);
         EnlistFullThreadLocalRegion(toRegion1);
-        buffer->ClearRegion();
+        buffer->ClearRelocationRegion();
         toRegion1 = RegionInfo::NullRegion();
     }
     CHECK(region != toRegion1);
@@ -3311,7 +3311,7 @@ bool RegionManager::RouteOrCompactRegionImpl(RegionInfo* region)
             CompactRegion(region);
             toRegion1 = region;
             result = false;
-            buffer->ClearRegion();
+            buffer->ClearRelocationRegion();
             RehomeCompactedInPlaceRegion(region);
             DLOG(FORWARD, "route region %p@[%#zx+%zu, %#zx) => compact-in-place %p@[%#zx~%#zx, %#zx)",
                 region, region->GetRegionStart(), fromBytes, region->GetRegionEnd(), toRegion1,
@@ -3322,7 +3322,7 @@ bool RegionManager::RouteOrCompactRegionImpl(RegionInfo* region)
             toRegion1->Alloc(fromBytes);
             FillRouteReserve(reserved, fromBytes);
             result = true;
-            buffer->SetRegion(toRegion1);
+            buffer->SetRelocationRegion(toRegion1);
         }
         size_t toRegion1Start = toRegion1->GetRegionStart();
         // routedest: hold the destination before the plan naming it becomes readable.
@@ -3371,6 +3371,7 @@ bool RegionManager::RouteOrCompactRegionImpl(RegionInfo* region)
     {
         RemoveThreadLocalRegion(toRegion1);
         EnlistFullThreadLocalRegion(toRegion1);
+        buffer->ClearRelocationRegion();
     }
 
     RegionInfo* toRegion2 = AllocateThreadLocalRegion(false, /*youngRegion=*/false, /*allowSaferegion=*/false);
@@ -3382,7 +3383,7 @@ bool RegionManager::RouteOrCompactRegionImpl(RegionInfo* region)
         CHECK(toRegion2->Alloc(usedBytes2) != 0);
         FillRouteReserve(r2, usedBytes2);
         result = true;
-        buffer->SetRegion(toRegion2);
+        buffer->SetRelocationRegion(toRegion2);
     } else {
         // Publish the split plan before Compact so leftover objects land at GetRoute dests.
         toRegion1->SetRouteDestHold(1);
@@ -3390,7 +3391,7 @@ bool RegionManager::RouteOrCompactRegionImpl(RegionInfo* region)
         CompactRegion(region, toRegion1);
         toRegion2 = region; // region is partially compacted into itself.
         result = false;
-        buffer->ClearRegion();
+        buffer->ClearRelocationRegion();
         RehomeCompactedInPlaceRegion(region);
     }
     uint32_t toRegion2Idx = toRegion2->GetUnitIdx();

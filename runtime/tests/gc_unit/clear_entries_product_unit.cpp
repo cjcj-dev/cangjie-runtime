@@ -49,6 +49,11 @@ struct RelocationReceiptTestAccess {
         manager.fromRegionList.PrependRegion(region, RegionInfo::RegionType::FROM_REGION);
     }
 
+    static void ParkThreadLocal(RegionManager& manager, RegionInfo* region)
+    {
+        manager.tlRegionList.PrependRegion(region, RegionInfo::RegionType::THREAD_LOCAL_REGION);
+    }
+
     static void ReleaseListOwnership(RegionInfo* region)
     {
         RegionList* owner = region == nullptr ? nullptr : region->GetRegionListOwner();
@@ -2983,10 +2988,10 @@ GC_TEST(ForwardingPublicationProduct, PageWaitThenLookupReadsOriginalCompactRece
     LiveInfo* live = PrepareForwardable(fx, region, from);
     RelocationReceiptTestAccess::ParkFrom(manager, region);
     AllocBuffer* buffer = AllocBuffer::GetOrCreateAllocBuffer();
-    buffer->SetRegion(routeDestination);
+    buffer->SetRelocationRegion(routeDestination);
     GC_EXPECT_TRUE(manager.RouteRegion(region));
     GC_EXPECT_TRUE(region->GetRouteState() == RegionInfo::RouteState::ROUTED);
-    buffer->ClearRegion();
+    buffer->ClearRelocationRegion();
     RelocationRequestQueue& queue = manager.GetRelocationRequestQueue();
     queue.BeginWorkers(1);
 
@@ -3026,6 +3031,103 @@ GC_TEST(ForwardingPublicationProduct, PageWaitThenLookupReadsOriginalCompactRece
     fx.FreePlanted(live);
 }
 
+// zRelocate.cpp:418-435,610-628 keeps relocation targets in a cache selected
+// by forwarding age. The mutator's ordinary allocation cache is a separate
+// owner: planning an old route must not replace the next young allocation.
+GC_TEST(NormalRouteGeneration, OldRouteLeavesOrdinaryYoungAllocationCache)
+{
+    LoadHealDeliveryRuntime::Ensure();
+    GcHeapFixture& fx = ProductFixture();
+    RegionInfo* source = ResetDeliveryUnit(fx, 5);
+    RegionInfo* ordinary = ResetDeliveryUnit(fx, 4);
+    RegionInfo* relocation = ResetDeliveryUnit(fx, 3);
+    PinOwnerGeneration(source, Generation::Old);
+    PinOwnerGeneration(ordinary, Generation::Young);
+    PinOwnerGeneration(relocation, Generation::Old);
+
+    BaseObject* from = fx.PlaceObject(source->GetRegionStart());
+    const size_t objectSize = from->GetSize();
+    source->SetRegionAllocPtr(reinterpret_cast<MAddress>(from) + objectSize);
+    LiveInfo* live = PrepareForwardable(fx, source, reinterpret_cast<MAddress>(from));
+
+    RegionSpace& space = reinterpret_cast<RegionSpace&>(Heap::GetHeap().GetAllocator());
+    RegionManager& manager = space.GetRegionManager();
+    WCollector collector(Heap::GetHeap().GetAllocator(), Heap::GetHeap().GetCollectorResources());
+    collector.SetGCPhase(GCPhase::GC_PHASE_IDLE);
+    RelocationReceiptTestAccess::BindCollector(Heap::GetHeap().GetCollectorResources(), &collector);
+    RelocationReceiptTestAccess::ParkFrom(manager, source);
+    AllocBuffer* buffer = AllocBuffer::GetOrCreateAllocBuffer();
+    buffer->SetRegion(ordinary);
+    buffer->SetRelocationRegion(relocation);
+
+    const bool routed = manager.RouteRegion(source);
+    const RouteInfo plan = source->GetRouteInfoForProbe();
+    RegionInfo* plannedTarget = RegionInfo::TryGetRegionInfoAt(plan.toRegion1StartAddress);
+    const bool ordinaryCachePreserved = buffer->GetRegion() == ordinary;
+    const MAddress ordinaryAllocation = buffer->Allocate(objectSize, AllocType::MOVEABLE_OBJECT);
+    RegionInfo* ordinaryTarget = RegionInfo::TryGetRegionInfoAt(ordinaryAllocation);
+    const bool routeStayedOld = plannedTarget != nullptr && !plannedTarget->IsYoungRegion();
+    const bool ordinaryStayedYoung = ordinaryTarget == ordinary && ordinaryTarget->IsYoungRegion();
+
+    buffer->ClearRegion();
+    buffer->ClearRelocationRegion();
+    relocation->SetRouteDestHold(0);
+    RelocationReceiptTestAccess::ReleaseListOwnership(source);
+    DestroyAfterGhostCleared(source, "normal-route-cache-separation");
+    RelocationReceiptTestAccess::BindCollector(Heap::GetHeap().GetCollectorResources(), nullptr);
+    source->metadata.liveInfo = nullptr;
+    fx.FreePlanted(live);
+
+    GC_EXPECT_TRUE(routed);
+    GC_EXPECT_TRUE(ordinaryCachePreserved);
+    GC_EXPECT_TRUE(routeStayedOld);
+    GC_EXPECT_TRUE(ordinaryStayedYoung);
+}
+
+// The generation cut is independent of cache separation: even a relocation
+// cache entry is rejected when an old source would otherwise route into young.
+GC_TEST(NormalRouteGeneration, OldRouteRejectsYoungRelocationTarget)
+{
+    GcHeapFixture& fx = ProductFixture();
+    RegionInfo* source = ResetDeliveryUnit(fx, 5);
+    RegionInfo* incompatible = ResetDeliveryUnit(fx, 3);
+    PinOwnerGeneration(source, Generation::Old);
+    PinOwnerGeneration(incompatible, Generation::Young);
+
+    BaseObject* from = fx.PlaceObject(source->GetRegionStart());
+    source->SetRegionAllocPtr(reinterpret_cast<MAddress>(from) + from->GetSize());
+    LiveInfo* live = PrepareForwardable(fx, source, reinterpret_cast<MAddress>(from));
+
+    RegionManager manager;
+    manager.SetMaxUnitCountForRegion(RegionInfo::UNIT_SIZE / KB);
+    manager.freeRegionManager.Initialize(GcHeapFixture::kUnits);
+    RelocationReceiptTestAccess::ParkFrom(manager, source);
+    RelocationReceiptTestAccess::ParkThreadLocal(manager, incompatible);
+    AllocBuffer* buffer = AllocBuffer::GetOrCreateAllocBuffer();
+    buffer->ClearRegion();
+    buffer->SetRelocationRegion(incompatible);
+
+    (void)manager.RouteRegion(source);
+    const RouteInfo plan = source->GetRouteInfoForProbe();
+    RegionInfo* plannedTarget = RegionInfo::TryGetRegionInfoAt(plan.toRegion1StartAddress);
+    const bool rejectedYoungTarget = plannedTarget != incompatible;
+    const bool routeStayedOld = plannedTarget != nullptr && !plannedTarget->IsYoungRegion();
+
+    buffer->ClearRelocationRegion();
+    buffer->ClearRegion();
+    if (plannedTarget != nullptr && plannedTarget != source) {
+        plannedTarget->SetRouteDestHold(0);
+    }
+    RelocationReceiptTestAccess::ReleaseListOwnership(source);
+    RelocationReceiptTestAccess::ReleaseListOwnership(incompatible);
+    DestroyAfterGhostCleared(source, "normal-route-generation-selection");
+    source->metadata.liveInfo = nullptr;
+    fx.FreePlanted(live);
+
+    GC_EXPECT_TRUE(rejectedYoungTarget);
+    GC_EXPECT_TRUE(routeStayedOld);
+}
+
 GC_TEST(ForwardingPublicationProduct, CompletedReceiptResolvesWithoutForwardingTableLookup)
 {
     GcHeapFixture& fx = ProductFixture();
@@ -3050,9 +3152,9 @@ GC_TEST(ForwardingPublicationProduct, CompletedReceiptResolvesWithoutForwardingT
     LiveInfo* live = PrepareForwardable(fx, region, from);
     RelocationReceiptTestAccess::ParkFrom(manager, region);
     AllocBuffer* buffer = AllocBuffer::GetOrCreateAllocBuffer();
-    buffer->SetRegion(routeDestination);
+    buffer->SetRelocationRegion(routeDestination);
     GC_EXPECT_TRUE(manager.RouteRegion(region));
-    buffer->ClearRegion();
+    buffer->ClearRelocationRegion();
     RelocationRequestQueue& queue = manager.GetRelocationRequestQueue();
     queue.BeginWorkers(1);
 
