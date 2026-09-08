@@ -3053,7 +3053,7 @@ GC_TEST(NormalRouteGeneration, OldRouteLeavesOrdinaryYoungAllocationCache)
     RegionSpace& space = reinterpret_cast<RegionSpace&>(Heap::GetHeap().GetAllocator());
     RegionManager& manager = space.GetRegionManager();
     WCollector collector(Heap::GetHeap().GetAllocator(), Heap::GetHeap().GetCollectorResources());
-    collector.SetGCPhase(GCPhase::GC_PHASE_IDLE);
+    collector.SetGCPhase(GCPhase::GC_PHASE_FORWARD);
     RelocationReceiptTestAccess::BindCollector(Heap::GetHeap().GetCollectorResources(), &collector);
     RelocationReceiptTestAccess::ParkFrom(manager, source);
     AllocBuffer* buffer = AllocBuffer::GetOrCreateAllocBuffer();
@@ -3063,10 +3063,14 @@ GC_TEST(NormalRouteGeneration, OldRouteLeavesOrdinaryYoungAllocationCache)
     const bool routed = manager.RouteRegion(source);
     const RouteInfo plan = source->GetRouteInfoForProbe();
     RegionInfo* plannedTarget = RegionInfo::TryGetRegionInfoAt(plan.toRegion1StartAddress);
+    BaseObject* forwarded = RelocationReceiptTestAccess::ForwardImpl(collector, from, source);
+    RegionInfo* forwardedTarget =
+        forwarded == nullptr ? nullptr : RegionInfo::TryGetRegionInfoAt(reinterpret_cast<MAddress>(forwarded));
     const bool ordinaryCachePreserved = buffer->GetRegion() == ordinary;
     const MAddress ordinaryAllocation = buffer->Allocate(objectSize, AllocType::MOVEABLE_OBJECT);
     RegionInfo* ordinaryTarget = RegionInfo::TryGetRegionInfoAt(ordinaryAllocation);
     const bool routeStayedOld = plannedTarget != nullptr && !plannedTarget->IsYoungRegion();
+    const bool forwardedObjectStayedOld = forwardedTarget != nullptr && !forwardedTarget->IsYoungRegion();
     const bool ordinaryStayedYoung = ordinaryTarget == ordinary && ordinaryTarget->IsYoungRegion();
 
     buffer->ClearRegion();
@@ -3079,6 +3083,8 @@ GC_TEST(NormalRouteGeneration, OldRouteLeavesOrdinaryYoungAllocationCache)
     fx.FreePlanted(live);
 
     GC_EXPECT_TRUE(routed);
+    GC_EXPECT_TRUE(forwarded != nullptr && forwarded != from);
+    GC_EXPECT_TRUE(forwardedObjectStayedOld);
     GC_EXPECT_TRUE(ordinaryCachePreserved);
     GC_EXPECT_TRUE(routeStayedOld);
     GC_EXPECT_TRUE(ordinaryStayedYoung);
