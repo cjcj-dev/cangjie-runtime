@@ -66,6 +66,7 @@ fi
 TEST_DEFINES=(-DMRT_ZSTAT_COMPILED=1)
 RANGE_REGISTRY_FLAGS=()
 RANGE_REGISTRY_SOURCES=()
+LAZY_RELOCATION_SOURCES=()
 if [[ "${MRT_TESTABLE_INTERNALS:-0}" == "1" ]]; then
   range_registry_symbols=$(nm -D "$RUNTIME_LIB_DIR/libcangjie-runtime.so" 2>/dev/null | \
     /usr/bin/grep -c 'RangeRegistry' || true)
@@ -75,6 +76,7 @@ if [[ "${MRT_TESTABLE_INTERNALS:-0}" == "1" ]]; then
   fi
   RANGE_REGISTRY_FLAGS=(-DMRT_TESTABLE_INTERNALS=1)
   RANGE_REGISTRY_SOURCES=("$SRC/test_range_registry.cpp")
+  LAZY_RELOCATION_SOURCES=("$SRC/test_lazy_relocation_destination.cpp")
 fi
 
 # Keep the standalone test translation units in the same compile-time
@@ -249,6 +251,7 @@ $CXX -std=gnu++17 -O0 -g -Wall -Wextra -pthread -fno-rtti \
     "$SRC/test_mem_map.cpp" \
     "$SRC/test_colour_census.cpp" \
     "$SRC/test_payload_clamp.cpp" \
+    "${LAZY_RELOCATION_SOURCES[@]}" \
   -L"$RUNTIME_LIB_DIR" -Wl,-rpath,"$RUNTIME_LIB_DIR" -Wl,--exclude-libs,ALL \
   -lcangjie-runtime -lboundscheck \
   -o "$OUT/cj_gc_unit"

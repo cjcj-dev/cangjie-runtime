@@ -77,6 +77,7 @@ set(GC_UNIT_SOURCES
     test_mem_map.cpp
     test_colour_census.cpp
     test_payload_clamp.cpp
+    test_lazy_relocation_destination.cpp
 )
 
 add_executable(cj_gc_unit ${GC_UNIT_SOURCES})
@@ -171,6 +172,33 @@ elseif (DEFINED GCV2_RUNTIME_LIB_DIR)
         INSTALL_RPATH "${GCV2_RUNTIME_LIB_DIR}")
 endif()
 add_test(NAME cj_gc_clear_entries_unit COMMAND cj_gc_clear_entries_unit)
+
+# Lazy relocation allocation uses a product-only immediate allocator and must
+# be checked in fresh processes because each arm mutates the one-shot
+# forwarding publication generation.
+add_executable(cj_gc_lazy_relocation_unit
+    gc_unit_main.cpp
+    test_lazy_relocation_destination.cpp
+)
+target_include_directories(cj_gc_lazy_relocation_unit PRIVATE
+    ${CMAKE_CURRENT_SOURCE_DIR}
+    ${CMAKE_SOURCE_DIR}/src
+    ${CMAKE_SOURCE_DIR}/src/Heap
+    ${CMAKE_SOURCE_DIR}/include
+)
+target_compile_features(cj_gc_lazy_relocation_unit PRIVATE cxx_std_17)
+target_compile_options(cj_gc_lazy_relocation_unit PRIVATE -fno-rtti -fexceptions -std=gnu++17)
+target_compile_definitions(cj_gc_lazy_relocation_unit PRIVATE MRT_TESTABLE_INTERNALS=1)
+if (TARGET cangjie-runtime)
+    target_link_libraries(cj_gc_lazy_relocation_unit PRIVATE cangjie-runtime)
+elseif (DEFINED GCV2_RUNTIME_LIB_DIR)
+    target_link_directories(cj_gc_lazy_relocation_unit PRIVATE ${GCV2_RUNTIME_LIB_DIR})
+    target_link_libraries(cj_gc_lazy_relocation_unit PRIVATE cangjie-runtime boundscheck)
+    set_target_properties(cj_gc_lazy_relocation_unit PROPERTIES
+        BUILD_RPATH "${GCV2_RUNTIME_LIB_DIR}"
+        INSTALL_RPATH "${GCV2_RUNTIME_LIB_DIR}")
+endif()
+add_test(NAME cj_gc_lazy_relocation_unit COMMAND cj_gc_lazy_relocation_unit)
 
 add_executable(cj_gc_uncommit_unit
     gc_unit_main.cpp
