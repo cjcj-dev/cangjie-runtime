@@ -198,6 +198,8 @@ struct LoadHealDeliveryTestAccess {
     struct RemsetConsumeResult {
         size_t work;
         size_t consumed;
+        size_t pending;
+        RemsetScanStats stats;
     };
 
     static void PublishColours(WCollector& collector) { collector.set_good_masks(); }
@@ -220,28 +222,38 @@ struct LoadHealDeliveryTestAccess {
         collector.flip_old_relocate_start();
     }
 
-    static RemsetConsumeResult ConsumeRemembered(WCollector& collector,
-                                                  const std::unordered_set<MAddress>& previous,
-                                                  BaseObject* currentMinorRoot)
+    static RemsetConsumeResult ScanRemembered(WCollector& collector,
+                                               const std::unordered_set<MAddress>& slots,
+                                               BaseObject* currentMinorRoot,
+                                               std::unordered_set<MAddress>* pending)
     {
-        collector.flip_young_mark_start();
         WCollector::WorkStack workStack = collector.NewWorkStack();
         WCollector::MinorSlotSet reachableSlots;
         WCollector::MinorSlotSet weakSlots;
         WCollector::MinorObjectSet currentMinorRoots;
         WCollector::MinorSlotSet consumed;
         RemsetScanStats stats;
-        stats.recorded = previous.size();
+        stats.recorded = slots.size();
         if (currentMinorRoot != nullptr) {
             currentMinorRoots.insert(currentMinorRoot);
         }
-        collector.RescanRememberedSet(workStack, previous, reachableSlots, weakSlots,
-                                      currentMinorRoots, false, &consumed, &stats);
+        collector.RescanRememberedSet(workStack, slots, reachableSlots, weakSlots,
+                                      currentMinorRoots, false, &consumed, &stats,
+                                      nullptr, nullptr, pending);
         const size_t work = workStack.size();
         while (!workStack.empty()) {
             workStack.pop_back();
         }
-        return RemsetConsumeResult { work, consumed.size() };
+        return RemsetConsumeResult { work, consumed.size(),
+                                      pending == nullptr ? 0 : pending->size(), stats };
+    }
+
+    static RemsetConsumeResult ConsumeRemembered(WCollector& collector,
+                                                  const std::unordered_set<MAddress>& previous,
+                                                  BaseObject* currentMinorRoot)
+    {
+        collector.flip_young_mark_start();
+        return ScanRemembered(collector, previous, currentMinorRoot, nullptr);
     }
 };
 
@@ -4132,6 +4144,139 @@ GC_TEST(LoadHealDeliveryProduct, InPlaceRemsetMovesBitAndFeedsConsumer)
     targetRegion->metadata.liveInfo = nullptr;
     fx.FreePlanted(targetLive);
     targetRegion->SetYoungRegionFlag(0);
+}
+
+// zRemembered.cpp:284-320,561-589: a failed forwarding retain keeps the exact
+// field in the scan domain. The concurrent attempt may not discard it; the
+// mark-end stop reloads the current word and either admits/re-arms its young
+// target or proves that the edge is now invalid.
+GC_TEST(LoadHealDeliveryProduct, UnavailableRemsetIsBoundedAndConsumesCurrentWordAtDeadline)
+{
+    GcHeapFixture& fx = ProductFixture();
+    RegionInfo* holderRegion = ResetDeliveryUnit(fx, 0);
+    RegionInfo* youngRegion = ResetDeliveryUnit(fx, 1);
+    youngRegion->SetYoungRegionFlag(1);
+    youngRegion->SetYoungAge(1);
+
+    BaseObject* holder = fx.PlaceObject(holderRegion->GetRegionStart());
+    BaseObject* youngTarget = fx.PlaceObject(youngRegion->GetRegionStart());
+    fx.typeInfo->SetUUID(1);
+    TypeInfoManager::GetTypeInfoManager().AddTypeInfo(fx.typeInfo);
+    GC_EXPECT_TRUE(TypeInfoManager::GetTypeInfoManager().ContainsTypeInfo(fx.typeInfo));
+    holderRegion->SetRegionAllocPtr(reinterpret_cast<MAddress>(holder) + holder->GetSize());
+    youngRegion->SetRegionAllocPtr(reinterpret_cast<MAddress>(youngTarget) + youngTarget->GetSize());
+    auto* field = &HeapSlotAt<>(reinterpret_cast<MAddress>(holder) + TYPEINFO_PTR_SIZE);
+    const MAddress slot = reinterpret_cast<MAddress>(field);
+    LiveInfo* targetLive = fx.PlantLiveInfo(youngRegion);
+    (void)fx.PlantMarkBitmap<Generation::Young>(targetLive, youngRegion->GetRegionSize());
+
+    WCollector collector(Heap::GetHeap().GetAllocator(), Heap::GetHeap().GetCollectorResources());
+    LoadHealDeliveryTestAccess::PublishColours(collector);
+    LateBackfillState forwarding = PrepareLateBackfill(fx, collector);
+    ForwardingTable::ClearEntries(forwarding.region->GetRegionStart(), forwarding.region->GetRegionSize());
+    GC_EXPECT_TRUE(RelocationReceiptTestAccess::ProductFindToVersion(collector, forwarding.from).is_unavailable());
+
+    field->StoreColoured(GcUnit::StoreGoodPointer(forwarding.from));
+    LoadHealDeliveryTestAccess::FlipYoungRelocateStart(collector);
+    LoadHealDeliveryTestAccess::FlipOldRelocateStart(collector);
+    GC_EXPECT_TRUE(collector.IsOldPointer(*field));
+
+    // Make fromLive false so this is the old-tag precheck named by the issue;
+    // the allocating holder keeps the first policy arm true.
+    TypeInfo* forwardingType = forwarding.from->GetTypeInfo();
+    forwarding.from->SetClassInfo(nullptr);
+    std::unordered_set<MAddress> initial { slot };
+    std::unordered_set<MAddress> pending;
+    const auto deferred = LoadHealDeliveryTestAccess::ScanRemembered(
+        collector, initial, holder, &pending);
+    GC_EXPECT_EQ(deferred.pending, 1u);
+    GC_EXPECT_EQ(deferred.stats.deferredUnavailable, 1u);
+    GC_EXPECT_EQ(deferred.consumed, 0u);
+    GC_EXPECT_EQ(deferred.work, 0u);
+
+    // A mutator changed the field while it was pending. The deadline consumer
+    // must reload this word, never revive forwarding.from, and re-arm the slot.
+    forwarding.from->SetClassInfo(forwardingType);
+    LoadHealDeliveryTestAccess::PublishColours(collector);
+    field->StoreColoured(GcUnit::StoreGoodPointer(youngTarget));
+    const auto consumed = LoadHealDeliveryTestAccess::ScanRemembered(
+        collector, pending, holder, nullptr);
+    const bool rearmed = Heap::GetHeap().GetRememberedSet().Contains(slot);
+    std::fprintf(stderr,
+                 "DETAIL remset_pending keep=1 initial=%zu pending=%zu deadline_consumed=%zu "
+                 "deadline_work=%zu rearmed=%u current=%p\n",
+                 initial.size(), deferred.pending, consumed.consumed, consumed.work,
+                 static_cast<unsigned>(rearmed), to_object(field->GetTargetObject()));
+    std::fflush(stderr);
+    GC_EXPECT_EQ(consumed.consumed, 1u);
+    GC_EXPECT_EQ(consumed.work, 1u);
+    GC_EXPECT_TRUE(rearmed);
+    GC_EXPECT_TRUE(to_object(field->GetTargetObject()) == youngTarget);
+
+    field->StoreColoured(zpointer::null);
+    EmptyBothRememberedFaces(Heap::GetHeap().GetRememberedSet());
+    LoadHealDeliveryTestAccess::FlipOldRelocateStart(collector);
+    LoadHealDeliveryTestAccess::FlipYoungRelocateStart(collector);
+    CleanupLateBackfill(fx, forwarding);
+    RelocationReceiptTestAccess::BindCollector(Heap::GetHeap().GetCollectorResources(), nullptr);
+    youngRegion->metadata.liveInfo = nullptr;
+    fx.FreePlanted(targetLive);
+    youngRegion->SetYoungRegionFlag(0);
+}
+
+GC_TEST(LoadHealDeliveryProduct, UnavailableRemsetDoesNotReviveInvalidatedEdgeAtDeadline)
+{
+    GcHeapFixture& fx = ProductFixture();
+    RegionInfo* holderRegion = ResetDeliveryUnit(fx, 0);
+    RegionInfo* youngRegion = ResetDeliveryUnit(fx, 1);
+    youngRegion->SetYoungRegionFlag(1);
+
+    BaseObject* holder = fx.PlaceObject(holderRegion->GetRegionStart());
+    BaseObject* youngTarget = fx.PlaceObject(youngRegion->GetRegionStart());
+    holderRegion->SetRegionAllocPtr(reinterpret_cast<MAddress>(holder) + holder->GetSize());
+    youngRegion->SetRegionAllocPtr(reinterpret_cast<MAddress>(youngTarget) + youngTarget->GetSize());
+    auto* field = &HeapSlotAt<>(reinterpret_cast<MAddress>(holder) + TYPEINFO_PTR_SIZE);
+    const MAddress slot = reinterpret_cast<MAddress>(field);
+
+    WCollector collector(Heap::GetHeap().GetAllocator(), Heap::GetHeap().GetCollectorResources());
+    LoadHealDeliveryTestAccess::PublishColours(collector);
+    LateBackfillState forwarding = PrepareLateBackfill(fx, collector);
+    ForwardingTable::ClearEntries(forwarding.region->GetRegionStart(), forwarding.region->GetRegionSize());
+    field->StoreColoured(GcUnit::StoreGoodPointer(forwarding.from));
+    LoadHealDeliveryTestAccess::FlipYoungRelocateStart(collector);
+    LoadHealDeliveryTestAccess::FlipOldRelocateStart(collector);
+
+    TypeInfo* forwardingType = forwarding.from->GetTypeInfo();
+    forwarding.from->SetClassInfo(nullptr);
+    holderRegion->SetRegionType(RegionInfo::RegionType::FROM_REGION);
+    std::unordered_set<MAddress> initial { slot };
+    std::unordered_set<MAddress> pending;
+    const auto deferred = LoadHealDeliveryTestAccess::ScanRemembered(
+        collector, initial, nullptr, &pending);
+    GC_EXPECT_EQ(deferred.pending, 1u);
+    GC_EXPECT_EQ(deferred.stats.deferredUnavailable, 1u);
+
+    forwarding.from->SetClassInfo(forwardingType);
+    field->StoreColoured(zpointer::null);
+    const auto dropped = LoadHealDeliveryTestAccess::ScanRemembered(
+        collector, pending, nullptr, nullptr);
+    const bool rearmed = Heap::GetHeap().GetRememberedSet().Contains(slot);
+    std::fprintf(stderr,
+                 "DETAIL remset_pending keep=0 initial=%zu pending=%zu deadline_consumed=%zu "
+                 "deadline_work=%zu rearmed=%u current=%p\n",
+                 initial.size(), deferred.pending, dropped.consumed, dropped.work,
+                 static_cast<unsigned>(rearmed), to_object(field->GetTargetObject()));
+    std::fflush(stderr);
+    GC_EXPECT_EQ(dropped.consumed, 0u);
+    GC_EXPECT_EQ(dropped.work, 0u);
+    GC_EXPECT_FALSE(rearmed);
+    GC_EXPECT_TRUE(to_object(field->GetTargetObject()) == nullptr);
+
+    LoadHealDeliveryTestAccess::FlipOldRelocateStart(collector);
+    LoadHealDeliveryTestAccess::FlipYoungRelocateStart(collector);
+    CleanupLateBackfill(fx, forwarding);
+    RelocationReceiptTestAccess::BindCollector(Heap::GetHeap().GetCollectorResources(), nullptr);
+    youngRegion->SetYoungRegionFlag(0);
 }
 
 // The conservative pinned producer is accepted only for a value inside the
