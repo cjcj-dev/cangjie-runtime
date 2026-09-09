@@ -262,8 +262,24 @@ void CollectorResources::RunDriverLoop(GCDriverKind kind)
     NotifyGCFinished(GCTask::TASK_INDEX_FOR_EXIT);
 }
 
-CycleContext& CollectorResources::BeginCycle(uint64_t taskIndex, GCReason reason)
+CycleToken CollectorResources::GetExecutionToken() const
 {
+    CycleContext& context = GetExecutionContext();
+    return { context.generation, context.sequence.load(std::memory_order_acquire) };
+}
+
+CycleContext& CollectorResources::GetCycleContext(const CycleToken& token)
+{
+    CycleContext& context = GetCycleContext(token.generation);
+    CHECK_DETAIL(token.sequence != 0 && GetCycleSnapshot().Active(token.generation) &&
+        context.sequence.load(std::memory_order_acquire) == token.sequence,
+        "cycle token does not own the active generation slot");
+    return context;
+}
+
+CycleToken CollectorResources::BeginCycle(uint64_t taskIndex, GCReason reason)
+{
+    std::unique_lock<std::mutex> lifecycleLock(cycleLifecycleLock);
     // I10 migrates ownership with the driver/STW locks retained. Shared page,
     // task and root domains must be migrated before I16 removes this guard.
     CHECK_DETAIL(!GetCycleSnapshot().AnyActive(), "parallel cycle execution requires I11-I15 domains");
@@ -275,7 +291,8 @@ CycleContext& CollectorResources::BeginCycle(uint64_t taskIndex, GCReason reason
     context.stats.heapThreshold.store(gcStats.GetThreshold(), std::memory_order_relaxed);
     context.stats.garbageRatio = gcStats.garbageRatio;
     context.stats.collectionRate = gcStats.collectionRate;
-    context.sequence.store(GcLog::BeginCycle(CycleSlot(context.generation)), std::memory_order_release);
+    const uint64_t sequence = GcLog::BeginCycle(CycleSlot(context.generation));
+    context.sequence.store(sequence, std::memory_order_release);
     executionContext.store(&context, std::memory_order_release);
     const uint32_t slot = CycleSnapshot::ActiveBit(context.generation) |
         (static_cast<uint32_t>(GC_PHASE_IDLE) << (CycleSlot(context.generation) * 8));
@@ -283,23 +300,35 @@ CycleContext& CollectorResources::BeginCycle(uint64_t taskIndex, GCReason reason
     while (!cycleState.compare_exchange_weak(previous,
         (previous & ~CycleSnapshot::SlotMask(context.generation)) | slot,
         std::memory_order_acq_rel, std::memory_order_acquire)) {}
-    return context;
+    return { context.generation, sequence };
 }
 
-void CollectorResources::PublishCyclePhase(CycleContext& context, GCPhase phase)
+bool CollectorResources::PublishCyclePhase(const CycleToken& token, GCPhase phase)
 {
-    const size_t shift = CycleSlot(context.generation) * 8;
+    std::unique_lock<std::mutex> lifecycleLock(cycleLifecycleLock);
+    CycleContext& context = GetCycleContext(token.generation);
+    if (token.sequence == 0 || !GetCycleSnapshot().Active(token.generation) ||
+        context.sequence.load(std::memory_order_acquire) != token.sequence) {
+        return false;
+    }
+    const size_t shift = CycleSlot(token.generation) * 8;
     const uint32_t phaseMask = 0x7fu << shift;
     uint32_t previous = cycleState.load(std::memory_order_acquire);
     while (!cycleState.compare_exchange_weak(previous, (previous & ~phaseMask) |
         (static_cast<uint32_t>(phase) << shift), std::memory_order_acq_rel, std::memory_order_acquire)) {}
+    return true;
 }
 
-void CollectorResources::EndCycle(CycleContext& context)
+bool CollectorResources::EndCycle(const CycleToken& token)
 {
-    CHECK_DETAIL(GetCycleSnapshot().Active(context.generation), "cycle completed without activity owner");
+    std::unique_lock<std::mutex> lifecycleLock(cycleLifecycleLock);
+    CycleContext& context = GetCycleContext(token.generation);
+    if (token.sequence == 0 || !GetCycleSnapshot().Active(token.generation) ||
+        context.sequence.load(std::memory_order_acquire) != token.sequence) {
+        return false;
+    }
     context.request = nullptr;
-    GcLog::CompleteCycle(context.sequence.load(std::memory_order_acquire), CycleSlot(context.generation));
+    GcLog::CompleteCycle(token.sequence, CycleSlot(token.generation));
     // The global policy observes a completed cycle at this explicit merge point.
     // CollectionSample/model changes remain with I28; no request receipt is issued here.
     gcStats.reason = context.reason;
@@ -312,8 +341,10 @@ void CollectorResources::EndCycle(CycleContext& context)
     gcStats.garbageRatio = context.stats.garbageRatio;
     gcStats.heapThreshold.store(context.stats.GetThreshold(), std::memory_order_release);
     std::unique_lock<std::mutex> lock(gcFinishedCondMutex);
-    cycleState.fetch_and(~CycleSnapshot::SlotMask(context.generation), std::memory_order_acq_rel);
+    cycleState.fetch_and(~CycleSnapshot::SlotMask(token.generation), std::memory_order_acq_rel);
+    context.sequence.store(0, std::memory_order_release);
     gcFinishedCondVar.notify_all();
+    return true;
 }
 
 bool CollectorResources::ExecuteDriverRequest(const GCDriverRequest& request)
