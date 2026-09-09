@@ -64,6 +64,8 @@ struct RemsetRearmTestAccess {
         size_t work = 0;
         size_t consumedLedger = 0;
         RemsetScanStats stats;
+        std::unordered_set<MAddress> processedSlots;
+        std::unordered_set<MAddress> consumedSlots;
     };
 
     static RefField<> Tag(WCollector& collector, BaseObject* object)
@@ -91,18 +93,20 @@ struct RemsetRearmTestAccess {
         WCollector::MinorSlotSet weakSlots;
         WCollector::MinorObjectSet currentMinorRoots;
         WCollector::MinorSlotSet consumed;
+        WCollector::MinorSlotSet processed;
         RemsetScanStats stats;
         stats.recorded = previous.size();
         if (currentMinorRoot != nullptr) {
             currentMinorRoots.insert(currentMinorRoot);
         }
         collector.RescanRememberedSet(workStack, previous, reachableSlots, weakSlots, currentMinorRoots,
-                                      /*fullYoungScan=*/false, &consumed, &stats);
+                                      /*fullYoungScan=*/false, &consumed, &stats, nullptr, nullptr,
+                                      &processed);
         const size_t work = workStack.size();
         while (!workStack.empty()) {
             workStack.pop_back();
         }
-        return ConsumeResult { work, consumed.size(), stats };
+        return ConsumeResult { work, consumed.size(), stats, std::move(processed), std::move(consumed) };
     }
 };
 
@@ -113,6 +117,36 @@ namespace {
 struct RemsetPublicationObserverContext {
     const ForwardingTable::Publication* publication;
 };
+
+struct RemsetConsumerTarget {
+    RegionInfo* region;
+    BaseObject* object;
+    LiveInfo* live;
+};
+
+RemsetConsumerTarget PrepareRemsetConsumerTarget(GcHeapFixture& fx)
+{
+    RegionInfo* region = RegionInfo::InitRegion(2, 1, RegionInfo::UnitRole::SMALL_SIZED_UNITS);
+    GC_EXPECT_TRUE(region != nullptr);
+    region->SetRegionType(RegionInfo::RegionType::THREAD_LOCAL_REGION);
+    region->SetYoungRegionFlag(1);
+    region->SetYoungAge(1);
+    BaseObject* object = fx.PlaceObject(region->GetRegionStart() + 64);
+    region->SetRegionAllocPtr(reinterpret_cast<MAddress>(object) + 64);
+    LiveInfo* live = fx.PlantLiveInfo(region);
+    (void)fx.PlantMarkBitmap<Generation::Young>(live, region->GetRegionSize());
+    fx.typeInfo->SetUUID(1);
+    TypeInfoManager::GetTypeInfoManager().AddTypeInfo(fx.typeInfo);
+    GC_EXPECT_TRUE(TypeInfoManager::GetTypeInfoManager().ContainsTypeInfo(fx.typeInfo));
+    return RemsetConsumerTarget { region, object, live };
+}
+
+void CleanupRemsetConsumerTarget(GcHeapFixture& fx, RemsetConsumerTarget& target)
+{
+    target.region->metadata.liveInfo = nullptr;
+    fx.FreePlanted(target.live);
+    target.region->SetYoungRegionFlag(0);
+}
 
 void PublishRemsetReceiptForTest(void* rawContext, MAddress fromSlot, MAddress toSlot,
                                  uint8_t sourceFace, uint8_t destinationFace,
@@ -1090,7 +1124,7 @@ GC_TEST(Remset, FlipIsConstantTimeAndPreservesFaceEpochs)
         RecordFlipSlots(rs, post);
         std::unordered_set<MAddress> previous;
         const size_t previousCount = rs.ScanPreviousForMinor(previous);
-        rs.CompleteScanForMinor(previous);
+        rs.CompleteScanForMinor(previous, {});
         const auto current = rs.Snapshot();
         std::fprintf(stderr,
                      "DETAIL remset_flip capacity=%zu pre=%zu post=%zu first_bitmap_word_accesses=%zu "
@@ -1111,7 +1145,7 @@ GC_TEST(Remset, FlipIsConstantTimeAndPreservesFaceEpochs)
         rs.FlipForMinor();
         std::unordered_set<MAddress> secondPrevious;
         const size_t secondPreviousCount = rs.ScanPreviousForMinor(secondPrevious);
-        rs.CompleteScanForMinor(secondPrevious);
+        rs.CompleteScanForMinor(secondPrevious, {});
         const auto secondCurrent = rs.Snapshot();
         std::fprintf(stderr,
                      "DETAIL remset_flip_reuse capacity=%zu pre=%zu post=%zu second_bitmap_word_accesses=%zu "
@@ -1135,7 +1169,7 @@ GC_OTHER_VM_TEST(RemsetNetwork, PublicationFirstIsAcceptedThenConsumed)
 #if defined(__linux__)
     (void)setenv("MRT_GCV2_VERIFY_REMEMBERED", "1", 1);
     GcHeapFixture fx;
-    RememberedSet rs;
+    RememberedSet& rs = Heap::GetHeap().GetRememberedSet();
     rs.Initialize(fx.heapStart, GcHeapFixture::kUnits * RegionInfo::UNIT_SIZE);
     const MAddress fromBase = reinterpret_cast<MAddress>(fx.obj0);
     const MAddress toBase = reinterpret_cast<MAddress>(fx.obj1);
@@ -1151,6 +1185,13 @@ GC_OTHER_VM_TEST(RemsetNetwork, PublicationFirstIsAcceptedThenConsumed)
     GC_EXPECT_TRUE(mapping.installed);
     GC_EXPECT_EQ(mapping.address, toBase);
 
+    RemsetConsumerTarget target = PrepareRemsetConsumerTarget(fx);
+    WCollector collector(Heap::GetHeap().GetAllocator(), Heap::GetHeap().GetCollectorResources());
+    RemsetRearmTestAccess::BeginMinor(collector);
+    auto* fromField = &HeapSlotAt<>(fromSlot);
+    fromField->StoreColoured(RemsetRearmTestAccess::Tag(collector, target.object).GetFieldValue());
+    std::memcpy(reinterpret_cast<void*>(toBase), reinterpret_cast<const void*>(fromBase), objectSize);
+    reinterpret_cast<BaseObject*>(toBase)->SetStateCode(ObjectState::NORMAL);
     rs.Record(fromSlot);
     rs.FlipForMinor();
     std::vector<RememberedSet::InPlaceSlot> captured;
@@ -1184,19 +1225,26 @@ GC_OTHER_VM_TEST(RemsetNetwork, PublicationFirstIsAcceptedThenConsumed)
     GC_EXPECT_EQ(rs.ScanPreviousForMinor(scanned), 2u);
     GC_EXPECT_EQ(scanned.count(toSlot), 1u);
     const auto accepted = table->remset_receipt_counts();
-    rs.CompleteScanForMinor(scanned);
+    const auto consumer = RemsetRearmTestAccess::ConsumePrevious(
+        collector, scanned, reinterpret_cast<BaseObject*>(toBase));
+    rs.CompleteScanForMinor(consumer.processedSlots, consumer.consumedSlots);
     const auto consumed = table->remset_receipt_counts();
     std::fprintf(stderr,
                  "DETAIL remset_network arm=publication-first mapping=%u from_present=%zu moved=%zu "
-                 "published=%zu accepted=%zu scanned_to=%zu consumed=%zu retire_guard_signal=%d\n",
+                 "published=%zu accepted=%zu scanned_to=%zu processed_to=%zu consumer_to=%zu "
+                 "consumed=%zu retire_guard_signal=%d\n",
                  static_cast<unsigned>(mapping.installed), captured.size(), moved,
-                 published.published, accepted.accepted, scanned.count(toSlot), consumed.consumed,
+                 published.published, accepted.accepted, scanned.count(toSlot),
+                 consumer.processedSlots.count(toSlot), consumer.consumedSlots.count(toSlot), consumed.consumed,
                  WTERMSIG(status));
     std::fflush(stderr);
     GC_EXPECT_EQ(moved, 1u);
     GC_EXPECT_EQ(published.published, 1u);
     GC_EXPECT_EQ(accepted.accepted, 1u);
+    GC_EXPECT_EQ(consumer.processedSlots.count(toSlot), 1u);
+    GC_EXPECT_EQ(consumer.consumedSlots.count(toSlot), 1u);
     GC_EXPECT_EQ(consumed.consumed, 1u);
+    CleanupRemsetConsumerTarget(fx, target);
 #else
     GC_EXPECT_TRUE(false);
 #endif
@@ -1209,7 +1257,7 @@ GC_OTHER_VM_TEST(RemsetNetwork, ScanFirstIsRejectedThenReRemembered)
 {
     (void)setenv("MRT_GCV2_VERIFY_REMEMBERED", "1", 1);
     GcHeapFixture fx;
-    RememberedSet rs;
+    RememberedSet& rs = Heap::GetHeap().GetRememberedSet();
     rs.Initialize(fx.heapStart, GcHeapFixture::kUnits * RegionInfo::UNIT_SIZE);
     const MAddress fromBase = reinterpret_cast<MAddress>(fx.obj0);
     const MAddress toBase = reinterpret_cast<MAddress>(fx.obj1);
@@ -1224,6 +1272,11 @@ GC_OTHER_VM_TEST(RemsetNetwork, ScanFirstIsRejectedThenReRemembered)
         ForwardingTable::InstallMapping(publication, fromBase, toBase);
     GC_EXPECT_TRUE(mapping.installed);
 
+    RemsetConsumerTarget target = PrepareRemsetConsumerTarget(fx);
+    WCollector collector(Heap::GetHeap().GetAllocator(), Heap::GetHeap().GetCollectorResources());
+    RemsetRearmTestAccess::BeginMinor(collector);
+    auto* fromField = &HeapSlotAt<>(fromSlot);
+    fromField->StoreColoured(RemsetRearmTestAccess::Tag(collector, target.object).GetFieldValue());
     rs.Record(fromSlot);
     rs.FlipForMinor();
     std::vector<RememberedSet::InPlaceSlot> captured;
@@ -1232,6 +1285,9 @@ GC_OTHER_VM_TEST(RemsetNetwork, ScanFirstIsRejectedThenReRemembered)
     std::unordered_set<MAddress> scanned;
     GC_EXPECT_EQ(rs.ScanPreviousForMinor(scanned), 1u);
     GC_EXPECT_EQ(scanned.count(fromSlot), 1u);
+
+    std::memcpy(reinterpret_cast<void*>(toBase), reinterpret_cast<const void*>(fromBase), objectSize);
+    reinterpret_cast<BaseObject*>(toBase)->SetStateCode(ObjectState::NORMAL);
 
     RemsetPublicationObserverContext context { &publication };
     rs.InstallTransferContext(&captured, PublishRemsetReceiptForTest, &context);
@@ -1242,18 +1298,24 @@ GC_OTHER_VM_TEST(RemsetNetwork, ScanFirstIsRejectedThenReRemembered)
     GC_EXPECT_TRUE(table != nullptr);
     const auto rejected = table->remset_receipt_counts();
     const bool reRemembered = rs.Contains(toSlot);
-    rs.CompleteScanForMinor(scanned);
+    const auto consumer = RemsetRearmTestAccess::ConsumePrevious(collector, scanned, fx.obj0);
+    rs.CompleteScanForMinor(consumer.processedSlots, consumer.consumedSlots);
     const auto consumed = table->remset_receipt_counts();
     std::fprintf(stderr,
                  "DETAIL remset_network arm=scan-first mapping=%u from_scanned=%zu moved=%zu "
-                 "rejected=%zu re_remembered=%u consumed=%zu\n",
+                 "rejected=%zu re_remembered=%u processed_from=%zu consumer_from=%zu consumed=%zu\n",
                  static_cast<unsigned>(mapping.installed), scanned.count(fromSlot), moved,
-                 rejected.rejectedByYoung, static_cast<unsigned>(reRemembered), consumed.consumed);
+                 rejected.rejectedByYoung, static_cast<unsigned>(reRemembered),
+                 consumer.processedSlots.count(fromSlot), consumer.consumedSlots.count(fromSlot),
+                 consumed.consumed);
     std::fflush(stderr);
     GC_EXPECT_EQ(moved, 1u);
     GC_EXPECT_EQ(rejected.rejectedByYoung, 1u);
     GC_EXPECT_TRUE(reRemembered);
+    GC_EXPECT_EQ(consumer.processedSlots.count(fromSlot), 1u);
+    GC_EXPECT_EQ(consumer.consumedSlots.count(fromSlot), 1u);
     GC_EXPECT_EQ(consumed.consumed, 1u);
+    CleanupRemsetConsumerTarget(fx, target);
 }
 
 // Current-face in-place arm: Take clears both physical faces before the copy,

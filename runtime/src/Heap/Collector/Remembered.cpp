@@ -880,7 +880,8 @@ void WCollector::RescanRememberedSet(WorkStack& workStack, const MinorSlotSet& r
                                      const MinorSlotSet& reachableSlots, const MinorSlotSet& weakSlots,
                                      const MinorObjectSet& currentMinorRoots, bool fullYoungScan,
                                      MinorSlotSet* consumedOut, RemsetScanStats* statsOut,
-                                     MinorInteriorBaseMap* interiorBasesOut, const ScopedStopTheWorld* stw)
+                                     MinorInteriorBaseMap* interiorBasesOut, const ScopedStopTheWorld* stw,
+                                     MinorSlotSet* processedOut)
 {
     auto noteRemsetOutcome = [](MAddress slot, uint8_t outcome, MAddress target) {
         if (!ProbeReadRouteDiag::RootTrackingEnabled() || slot == 0) {
@@ -1128,6 +1129,12 @@ void WCollector::RescanRememberedSet(WorkStack& workStack, const MinorSlotSet& r
     };
     NwDropAudit::EnsureAtexit();
     for (MAddress slot : rememberedSlots) {
+        // This ledger is deliberately written by the real consumer, before
+        // any classification branch.  Forwarding receipts use it to
+        // distinguish "offered to the consumer" from "consumer actually ran".
+        if (processedOut != nullptr) {
+            processedOut->insert(slot);
+        }
         if (!Heap::IsHeapAddress(slot)) {
             if (statsOut != nullptr) {
                 ++statsOut->skippedNotHeap;

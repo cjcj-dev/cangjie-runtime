@@ -90,7 +90,8 @@ public:
     // returned by ScanPreviousForMinor have passed through the product remset
     // rescan/follow path.  It closes per-forwarding publication receipts for
     // this young sequence and rejects a skipped destructive scan.
-    void CompleteScanForMinor(const std::unordered_set<MAddress>& scannedSlots);
+    void CompleteScanForMinor(const std::unordered_set<MAddress>& processedSlots,
+                              const std::unordered_set<MAddress>& consumedSlots);
 
 #if defined(MRT_GC_UNIT_TESTS)
     struct FlipTouchCounts {

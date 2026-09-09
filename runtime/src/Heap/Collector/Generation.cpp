@@ -1077,8 +1077,10 @@ void WCollector::DoYoungGarbageCollection()
     remsetStats.recorded = rememberedSlots.size();
     remsetStats.live = liveRememberedCount;
     MinorSlotSet consumedSlots;
+    MinorSlotSet processedRemsetSlots;
     if (remsetHashOptRequested && !remsetConsumedLedgerElideActive) {
         consumedSlots.reserve(rememberedSlots.size());
+        processedRemsetSlots.reserve(rememberedSlots.size());
     }
     MinorInteriorBaseMap remsetInteriorBases;
     {
@@ -1087,7 +1089,7 @@ void WCollector::DoYoungGarbageCollection()
         RescanRememberedSet(workStack, rememberedSlots, reachableSlots, weakSlots, currentMinorRoots,
                             fullYoungScan,
                             remsetConsumedLedgerElideActive ? nullptr : &consumedSlots, &remsetStats,
-                            &remsetInteriorBases, stw.get());
+                            &remsetInteriorBases, stw.get(), &processedRemsetSlots);
     }
     if (remsetHashOptRequested) {
         VLOG(REPORT,
@@ -1218,7 +1220,11 @@ void WCollector::DoYoungGarbageCollection()
     // scan has now passed through rescan and the complete concurrent follow.
     // Publications that lost the scan race must instead be present on the new
     // current face before their forwarding generation can retire.
-    Heap::GetHeap().GetRememberedSet().CompleteScanForMinor(rememberedSlots);
+    // Only the ledger written by RescanRememberedSet proves that the product
+    // consumer admitted a slot.  The destructive-drain input merely proves
+    // that a slot was offered; using it here would let a skipped consumer
+    // close an accepted forwarding receipt.
+    Heap::GetHeap().GetRememberedSet().CompleteScanForMinor(processedRemsetSlots, consumedSlots);
 #if defined(MRT_GC_UNIT_TESTS)
     NoteRememberedAfterScanCompleteForTest();
 #endif

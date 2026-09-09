@@ -800,7 +800,7 @@ GC_TEST(StoreBuf, PhaseFlipLeavesOnePreviousAndOneCurrentSlot)
 
     std::unordered_set<MAddress> previous;
     GC_EXPECT_EQ(rs.ScanPreviousForMinor(previous), 1u);
-    rs.CompleteScanForMinor(previous);
+    rs.CompleteScanForMinor(previous, {});
     GC_EXPECT_EQ(previous.size(), 1u);
     GC_EXPECT_TRUE(previous.count(previousSlot) == 1);
     const std::unordered_set<MAddress> current = rs.Snapshot();

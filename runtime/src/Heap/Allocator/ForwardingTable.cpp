@@ -850,7 +850,8 @@ void ZForwarding::accept_remset_receipts(uint64_t youngSeq)
 }
 
 void ZForwarding::complete_remset_receipts(uint64_t youngSeq,
-                                           const std::unordered_set<MAddress>& scannedSlots,
+                                           const std::unordered_set<MAddress>& processedSlots,
+                                           const std::unordered_set<MAddress>& consumedSlots,
                                            const RememberedSet& rememberedSet)
 {
     std::lock_guard<std::mutex> lock(_remsetReceiptLock);
@@ -859,8 +860,8 @@ void ZForwarding::complete_remset_receipts(uint64_t youngSeq,
             continue;
         }
         if (receipt.status == RemsetReceiptStatus::ACCEPTED) {
-            CHECK_DETAIL(scannedSlots.count(receipt.toSlot) != 0,
-                         "after-scan accepted receipt missing scanned to-slot table=%p generation=%llu "
+            CHECK_DETAIL(consumedSlots.count(receipt.toSlot) != 0,
+                         "after-scan accepted receipt missing consumed to-slot table=%p generation=%llu "
                          "from-slot=%#zx to-slot=%#zx face=%u young-seq=%llu",
                          this, static_cast<unsigned long long>(_publication_generation),
                          static_cast<size_t>(receipt.fromSlot), static_cast<size_t>(receipt.toSlot),
@@ -870,6 +871,14 @@ void ZForwarding::complete_remset_receipts(uint64_t youngSeq,
             continue;
         }
         if (receipt.status == RemsetReceiptStatus::REJECTED_BY_YOUNG) {
+            CHECK_DETAIL(processedSlots.count(receipt.fromSlot) != 0,
+                         "after-scan rejected receipt source-slot-not-processed table=%p generation=%llu "
+                         "from-slot=%#zx to-slot=%#zx source-face=%u destination-face=%u young-seq=%llu",
+                         this, static_cast<unsigned long long>(_publication_generation),
+                         static_cast<size_t>(receipt.fromSlot), static_cast<size_t>(receipt.toSlot),
+                         static_cast<unsigned>(receipt.sourceFace),
+                         static_cast<unsigned>(receipt.destinationFace),
+                         static_cast<unsigned long long>(receipt.youngSeq));
             CHECK_DETAIL(rememberedSet.ContainsInFace(receipt.toSlot, receipt.destinationFace),
                          "after-scan rejected receipt missing re-remembered to-slot table=%p generation=%llu "
                          "from-slot=%#zx to-slot=%#zx source-face=%u destination-face=%u young-seq=%llu",
@@ -1035,7 +1044,8 @@ void ForwardingTable::AcceptRemsetPublications(uint64_t youngSeq)
 }
 
 void ForwardingTable::CompleteRemsetPublications(
-    uint64_t youngSeq, const std::unordered_set<MAddress>& scannedSlots,
+    uint64_t youngSeq, const std::unordered_set<MAddress>& processedSlots,
+    const std::unordered_set<MAddress>& consumedSlots,
     const RememberedSet& rememberedSet)
 {
     if (!VerifyFaceEnabled(VerifyFace::Remembered)) {
@@ -1043,7 +1053,7 @@ void ForwardingTable::CompleteRemsetPublications(
     }
     std::lock_guard<std::mutex> lock(g_remsetTablesLock);
     for (ZForwarding* table : g_remsetTables) {
-        table->complete_remset_receipts(youngSeq, scannedSlots, rememberedSet);
+        table->complete_remset_receipts(youngSeq, processedSlots, consumedSlots, rememberedSet);
     }
 }
 

@@ -466,15 +466,16 @@ size_t RememberedSet::ScanPreviousForMinor(std::unordered_set<MAddress>& records
     return records.size();
 }
 
-void RememberedSet::CompleteScanForMinor(const std::unordered_set<MAddress>& scannedSlots)
+void RememberedSet::CompleteScanForMinor(const std::unordered_set<MAddress>& processedSlots,
+                                         const std::unordered_set<MAddress>& consumedSlots)
 {
     CheckInitialized();
     std::lock_guard<std::mutex> publicationGuard(publicationLock);
     CHECK_DETAIL(previousScanState == PreviousScanState::DRAINED,
                  "after-scan receipt-not-consumed young-seq=%llu state=%u scanned=%zu",
                  static_cast<unsigned long long>(youngSequence), static_cast<unsigned>(previousScanState),
-                 scannedSlots.size());
-    ForwardingTable::CompleteRemsetPublications(youngSequence, scannedSlots, *this);
+                 consumedSlots.size());
+    ForwardingTable::CompleteRemsetPublications(youngSequence, processedSlots, consumedSlots, *this);
     previousScanState = PreviousScanState::COMPLETE;
 }
 
@@ -500,7 +501,8 @@ size_t RememberedSet::DrainForMinor(std::unordered_set<MAddress>& records)
 {
     FlipForMinor();
     const size_t count = ScanPreviousForMinor(records);
-    CompleteScanForMinor(records);
+    const std::unordered_set<MAddress> consumed;
+    CompleteScanForMinor(records, consumed);
     return count;
 }
 

@@ -212,7 +212,8 @@ public:
                                  uint8_t sourceFace);
     static void AcceptRemsetPublications(uint64_t youngSeq);
     static void CompleteRemsetPublications(uint64_t youngSeq,
-                                           const std::unordered_set<MAddress>& scannedSlots,
+                                           const std::unordered_set<MAddress>& processedSlots,
+                                           const std::unordered_set<MAddress>& consumedSlots,
                                            const class RememberedSet& rememberedSet);
     // Out of line so the unit runner exercises the product SO's publication
     // decision instead of compiling a private test copy.
