@@ -273,6 +273,34 @@ bool RunStaleCycleTokenCannotEndReplacement()
         afterStaleEnd.Phase(CycleGeneration::Young) == GCPhase::GC_PHASE_IDLE;
 }
 
+bool RunLegacyControlActivityOwnsMarkWindow()
+{
+    if (CJ_ScheduleManagerInit() != 0) {
+        return false;
+    }
+    MutatorManager mutatorManager;
+    YoungForwardTestRuntime runtime(mutatorManager);
+    GcHeapFixture fx;
+    CollectorResources& resources = Heap::GetHeap().GetCollectorResources();
+    CycleContextProductCollector collector(Heap::GetHeap().GetAllocator(), resources);
+    const GCReason reasonBefore = resources.GetGCStats().reason;
+
+    resources.SetGcStarted(true);
+    resources.GetGCStats().reason = GC_REASON_USER;
+    collector.SetGCPhase(GCPhase::GC_PHASE_TRACE);
+    const CycleToken token = resources.GetExecutionToken();
+    const CycleSnapshot during = resources.GetCycleSnapshot();
+    const bool owned = token.sequence != 0 && during.Active(CycleGeneration::Old) &&
+        !during.Active(CycleGeneration::Young) && during.Phase(CycleGeneration::Old) == GCPhase::GC_PHASE_TRACE &&
+        resources.GetCycleContext(token).reason == GC_REASON_USER;
+
+    collector.SetGCPhase(GCPhase::GC_PHASE_IDLE);
+    resources.GetGCStats().reason = reasonBefore;
+    resources.SetGcStarted(false);
+    const CycleSnapshot after = resources.GetCycleSnapshot();
+    return owned && !after.AnyActive() && GcLog::CurrentSeq() == 0;
+}
+
 bool RunYoungRuntimeProductEntry()
 {
     // gc_unit does not start the language scheduler.  The product phase
@@ -504,6 +532,11 @@ GC_TEST(GCThreadPool, StaleCycleTokenCannotPublishIntoReplacementCycle)
 GC_TEST(GCThreadPool, StaleCycleTokenCannotEndReplacementCycle)
 {
     ExpectIsolatedScenarioPasses<RunStaleCycleTokenCannotEndReplacement>();
+}
+
+GC_TEST(GCThreadPool, LegacyControlActivityPublishesAndClearsOwnedCycle)
+{
+    ExpectIsolatedScenarioPasses<RunLegacyControlActivityOwnsMarkWindow>();
 }
 #endif
 
