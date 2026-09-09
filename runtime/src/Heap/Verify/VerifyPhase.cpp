@@ -17,6 +17,20 @@ bool ValueIsOne(const char* value)
 {
     return value != nullptr && std::strcmp(value, "1") == 0;
 }
+
+// Match ZGC's trueInDebug defaults: debug builds enable roots, marking, and
+// remembered-set verification. Product builds keep every optional face off,
+// while objects and per-oop verification remain opt-in in every build
+// (z_globals.hpp:78-119).
+bool BuildDefault(VerifyFace face)
+{
+#if defined(MRT_DEBUG) && (MRT_DEBUG == 1)
+    return face == VerifyFace::Roots || face == VerifyFace::Marking || face == VerifyFace::Remembered;
+#else
+    (void)face;
+    return false;
+#endif
+}
 } // namespace
 
 const char* VerifyFaceName(VerifyFace face)
@@ -38,26 +52,27 @@ bool VerifyFaceEnabled(VerifyFace face)
         // read without letting the first queried face freeze the other four.
         case VerifyFace::Roots: {
             static const bool enabled =
-                ValueIsOne(std::getenv("MRT_GCV2_VERIFY_ROOTS")) || DiagGate::TokenOn("roots");
+                BuildDefault(face) || ValueIsOne(std::getenv("MRT_GCV2_VERIFY_ROOTS")) ||
+                DiagGate::TokenOn("roots");
             return enabled;
         }
         case VerifyFace::Objects: {
-            static const bool enabled = ValueIsOne(std::getenv("MRT_GCV2_VERIFY_HEAP")) ||
+            static const bool enabled = BuildDefault(face) || ValueIsOne(std::getenv("MRT_GCV2_VERIFY_HEAP")) ||
                 ValueIsOne(std::getenv("MRT_GCV2_VERIFY_OBJECTS")) || DiagGate::TokenOn("objects");
             return enabled;
         }
         case VerifyFace::Marking: {
-            static const bool enabled = ValueIsOne(std::getenv("MRT_GCV2_MARKCOMPLETE")) ||
+            static const bool enabled = BuildDefault(face) || ValueIsOne(std::getenv("MRT_GCV2_MARKCOMPLETE")) ||
                 ValueIsOne(std::getenv("MRT_GCV2_VERIFY_MARKING")) || DiagGate::TokenOn("marking");
             return enabled;
         }
         case VerifyFace::Remembered: {
-            static const bool enabled = ValueIsOne(std::getenv("MRT_GCV2_VERIFY_REMSET")) ||
+            static const bool enabled = BuildDefault(face) || ValueIsOne(std::getenv("MRT_GCV2_VERIFY_REMSET")) ||
                 ValueIsOne(std::getenv("MRT_GCV2_VERIFY_REMEMBERED")) || DiagGate::TokenOn("remembered");
             return enabled;
         }
         case VerifyFace::Oops: {
-            static const bool enabled = ValueIsOne(std::getenv("MRT_GCV2_VERIFY_REGIONS")) ||
+            static const bool enabled = BuildDefault(face) || ValueIsOne(std::getenv("MRT_GCV2_VERIFY_REGIONS")) ||
                 ValueIsOne(std::getenv("MRT_GCV2_VERIFY_OOPS")) || DiagGate::TokenOn("oops");
             return enabled;
         }
