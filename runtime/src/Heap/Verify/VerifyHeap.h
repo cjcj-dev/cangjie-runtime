@@ -22,8 +22,8 @@ class BaseObject;
 //   H4  holder (and H3 target) region is not free/garbage
 //
 // Gate (default off): unified VerifyFace::Objects (legacy MRT_GCV2_VERIFY_HEAP=1 is an alias).
-// Report-only, every invocation,
-// with the historical failure cap fixed at its default of 20 (HotSpot G1MaxVerifyFailures).
+// Reports the bounded inventory and then fails closed once per invocation;
+// the historical detail cap stays fixed at its default of 20 (HotSpot G1MaxVerifyFailures).
 //
 // Enumeration is independent of minor reachableObjects / TraceYoungClosure / remset.
 // rootReachableHolders, when supplied, is a completed independent full-root closure.
