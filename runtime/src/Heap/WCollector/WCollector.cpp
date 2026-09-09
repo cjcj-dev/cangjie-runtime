@@ -225,18 +225,23 @@ CrossRefHandler WCollector::GetCrossRefHandler(BaseObject *foreignProxy)
 
 void WCollector::ResolveCycleRef()
 {
-#if defined (__OHOS__)
+#if defined (__OHOS__) || defined(MRT_GC_UNIT_TESTS)
+    // Leave saferegion before acquiring the cycle-root owner.  LeaveSaferegion
+    // may park for an in-flight GC, whose root/preforward consumers need the
+    // same mutex.  Declaration order also makes every return release the cycle
+    // mutex before ScopedObjectAccess restores the saferegion state.
+    ScopedObjectAccess soa;
     size_t i = 0;
-    if (!cycleWorkStackMtx.try_lock()) {
+    std::unique_lock<std::mutex> cycleLock(cycleWorkStackMtx, std::try_to_lock);
+    if (!cycleLock.owns_lock()) {
         CJ_MRT_RolveCycleRef();
         return;
     }
     for (auto it = cycleRefWorkStack.begin(); it != cycleRefWorkStack.end(); i++) {
-        ScopedObjectAccess soa;
         auto phase = GetGCPhase();
         static constexpr size_t taskNum = 100;
         if (phase == GC_PHASE_PREFORWARD || i >= taskNum) {
-            cycleWorkStackMtx.unlock();
+            cycleLock.unlock();
             CJ_MRT_RolveCycleRef();
             return;
         }
@@ -261,7 +266,7 @@ void WCollector::ResolveCycleRef()
         heap.SetExportObjActiveState(id, false);
         it++;
     }
-    cycleWorkStackMtx.unlock();
+    cycleLock.unlock();
     resurrectedExportObjectes.clear();
     resurrectedExportObjectesForwardPhase.clear();
 #endif
