@@ -728,7 +728,7 @@ void WCollector::TraceHeap()
     }
 
     {
-        MRT_PHASE_TIMER("enum roots & update old pointers within");
+        MRT_PHASE_TIMER("enum roots & update old pointers within", REPORT, GetCycleContext().sequence.load(std::memory_order_acquire));
         if (concurrentStackScan) {
             // This is major's root-enumeration closing edge. StopTheWorld establishes
             // InSaferegion for the fixed mutator roster, so WM_OWNER_GC may finish a
@@ -771,7 +771,7 @@ void WCollector::TraceHeap()
     }
 
     {
-        MRT_PHASE_TIMER("trace live objects & update old pointers in ref-fields");
+        MRT_PHASE_TIMER("trace live objects & update old pointers in ref-fields", REPORT, GetCycleContext().sequence.load(std::memory_order_acquire));
         markedObjectCount.store(0, std::memory_order_relaxed);
         if (!concurrentStackScan) {
             TransitionToGCPhase(GCPhase::GC_PHASE_TRACE, true);
@@ -2226,7 +2226,7 @@ bool WCollector::MarkYoungSatbBuffer(WorkStack& workStack, bool fullYoungScan, M
                                      MinorSlotSet& weakSlots, bool useBitmapLedger,
                                      YoungConcWindowStats* windowStats)
 {
-    MRT_PHASE_TIMER("young.mark_satb");
+    MRT_PHASE_TIMER("young.mark_satb", REPORT, GetCycleContext().sequence.load(std::memory_order_acquire));
     // portyoungconc: count what the window actually consumes. A retired SATB object that
     // Push* discards (non-heap / already marked / not young) is still SATB traffic, so it
     // is counted at the pop, not at the push -- the question this answers is "did the
@@ -2234,7 +2234,7 @@ bool WCollector::MarkYoungSatbBuffer(WorkStack& workStack, bool fullYoungScan, M
     size_t satbSeen = 0;
     auto visitSatbObj = [this, &workStack, windowStats, &satbSeen]() {
         WorkStack remarkStack;
-        SatbBuffer::Instance().GetRetiredEntries([&](BaseObject* obj, bool follow) {
+        SatbBuffer::Instance(GetCycleContext().generation).GetRetiredEntries([&](BaseObject* obj, bool follow) {
             ++satbSeen;
             if (windowStats != nullptr) {
                 ++windowStats->satbObjects;
@@ -2301,7 +2301,7 @@ bool WCollector::TryEndYoungMark(WorkStack& workStack, YoungConcWindowStats* win
     NoteMarkTerminatePause();
     size_t flushed = 0;
     MutatorManager::Instance().VisitAllMutators([](Mutator& mutator) { mutator.FlushSatbBuffer(); });
-    SatbBuffer::Instance().GetRetiredEntries([this, &workStack, windowStats, &flushed](BaseObject* object,
+    SatbBuffer::Instance(GetCycleContext().generation).GetRetiredEntries([this, &workStack, windowStats, &flushed](BaseObject* object,
                                                                                      bool follow) {
         ++flushed;
         if (windowStats != nullptr) {

@@ -20,25 +20,9 @@
 #include "Base/Macros.h"
 #include "GcRequest.h"
 #include "GcStats.h"
+#include "CycleContext.h"
 
 namespace MapleRuntime {
-// GCPhase describes phases for stw/concurrent gc.
-enum GCPhase : uint8_t {
-    GC_PHASE_UNDEF = 0,
-    GC_PHASE_IDLE = 1,
-    GC_PHASE_FINISH = 2,
-    GC_PHASE_RECLAIM_SATB_NODE = 3,
-    GC_PHASE_INIT = 8,
-
-    // only gc phase after GC_PHASE_INIT ( enum value > GC_PHASE_INIT) needs barrier.
-    GC_PHASE_ENUM = 9,
-    GC_PHASE_TRACE = 10,
-    GC_PHASE_CLEAR_SATB_BUFFER = 11,
-    GC_PHASE_POST_TRACE = 12,
-    GC_PHASE_PREFORWARD = 13,
-    GC_PHASE_FORWARD = 14,
-};
-
 enum CollectorType {
     NO_COLLECTOR = 0, // No Collector
     PROXY_COLLECTOR,  // Proxy of Collector
@@ -473,9 +457,13 @@ public:
     //         In order to prevent deadlocks, async trigger only add one async gc task and will not block.
     void RequestGC(GCReason reason, bool async);
 
-    virtual GCPhase GetGCPhase() const { return gcPhase.load(std::memory_order_acquire); }
+    virtual GCPhase GetGCPhase() const;
+    CycleContext& GetCycleContext() const;
+    GCPhase GetGCPhase(CycleGeneration generation) const;
+    bool IsYoungCycle() const { return GetCycleContext().IsYoung(); }
+    GCReason GetGCReason() const { return GetCycleContext().reason; }
 
-    virtual void SetGCPhase(const GCPhase phase) { gcPhase.store(phase, std::memory_order_release); }
+    virtual void SetGCPhase(const GCPhase phase);
 
     // determine how we treat new object during gc.
     virtual void MarkNewObject(BaseObject*) {}
@@ -738,7 +726,6 @@ protected:
     virtual void RequestGCInternal(GCReason, bool) { AbortUnimplemented("Collector::RequestGCInternal"); }
 
     CollectorType collectorType = CollectorType::NO_COLLECTOR;
-    std::atomic<GCPhase> gcPhase = { GCPhase::GC_PHASE_IDLE };
 };
 } // namespace MapleRuntime
 

@@ -204,6 +204,13 @@ Allocator& HeapImpl::GetAllocator() { return *theSpace; }
 
 void HeapImpl::InstallBarrier(const GCPhase phase)
 {
+    // The virtual barrier selects the serialized executor's relocation behavior.
+    // Store/SATB paths consume CollectorResources::GetCycleSnapshot() for every
+    // active marking owner. SetGCPhase publishes that snapshot after installation.
+    CycleContext& context = collectorResources.GetExecutionContext();
+    CHECK_DETAIL(!collectorResources.GetCycleSnapshot().Active(
+        context.IsYoung() ? CycleGeneration::Old : CycleGeneration::Young),
+        "combined relocation barrier requires I12/I15 publication domains");
     if (phase == GCPhase::GC_PHASE_ENUM) {
         currentBarrier = &enumBarrier;
     } else if (phase == GCPhase::GC_PHASE_TRACE || phase == GCPhase::GC_PHASE_CLEAR_SATB_BUFFER) {
