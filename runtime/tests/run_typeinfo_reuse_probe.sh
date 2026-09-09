@@ -29,8 +29,9 @@ INC_FLAGS=(
     -I"$ROOT/runtime/include"
     -I"$ROOT/runtime/third_party/third_party_bounds_checking_function/include"
 )
-if [[ -d "$ROOT/runtime/output/temp/include" ]]; then
-    INC_FLAGS+=(-I"$ROOT/runtime/output/temp/include")
+RUNTIME_OUTPUT_ROOT="${TYPEINFO_RUNTIME_OUTPUT_ROOT:-$(realpath -m "$RUNTIME_LIB_DIR/../..")}"
+if [[ -d "$RUNTIME_OUTPUT_ROOT/include" ]]; then
+    INC_FLAGS+=(-I"$RUNTIME_OUTPUT_ROOT/include")
 fi
 COMMON_FLAGS=(-std=gnu++17 -O2 -g -Wall -Wextra -pthread -fno-rtti "${INC_FLAGS[@]}")
 POSITIVE_LINK_FLAGS=(-L"$RUNTIME_LIB_DIR" -Wl,-rpath,"$RUNTIME_LIB_DIR" -lcangjie-runtime -lboundscheck -ldl)
