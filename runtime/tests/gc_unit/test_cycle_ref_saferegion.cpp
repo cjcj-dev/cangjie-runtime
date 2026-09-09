@@ -99,6 +99,24 @@ void SafepointingCycleRefHandler(BaseObject* exportObj, BaseObject* externObj)
     context->returned.store(true, std::memory_order_release);
 }
 
+struct PhaseFlipContext {
+    WCollector* collector = nullptr;
+    std::atomic<size_t> calls{ 0 };
+};
+
+PhaseFlipContext* phaseFlipContext = nullptr;
+
+void FlipToPreforwardAfterFirstHandler(BaseObject*, BaseObject*)
+{
+    PhaseFlipContext* context = phaseFlipContext;
+    const size_t call = context->calls.fetch_add(1, std::memory_order_acq_rel) + 1;
+    if (call == 1) {
+        // Publish the product phase value that can change while the carrier
+        // lock is released around a managed callback.
+        context->collector->SetGCPhase(GCPhase::GC_PHASE_PREFORWARD);
+    }
+}
+
 GC_TEST(CycleRefSaferegion, ResolverParksBeforeCycleRootLock)
 {
     MutatorManager manager;
@@ -297,6 +315,62 @@ GC_TEST(CycleRefSaferegion, HandlerSafepointKeepsCycleRootsConsumable)
     GC_EXPECT_EQ(reinterpret_cast<uintptr_t>(observedExport), reinterpret_cast<uintptr_t>(exportRoot));
     GC_EXPECT_EQ(reinterpret_cast<uintptr_t>(observedExtern), reinterpret_cast<uintptr_t>(externRoot));
     GC_EXPECT_TRUE(roots.empty());
+}
+
+GC_TEST(CycleRefSaferegion, PreforwardRepostResumesRemainingCallbacksExactlyOnce)
+{
+    MutatorManager manager;
+    CycleRefTestRuntime runtime(manager);
+    GcHeapFixture fixture;
+    WCollector collector(Heap::GetHeap().GetAllocator(), Heap::GetHeap().GetCollectorResources());
+    RelocationReceiptTestAccess::BindCollector(Heap::GetHeap().GetCollectorResources(), &collector);
+    Mutator resolverMutator;
+    resolverMutator.SetInSaferegion(Mutator::SAFE_REGION_TRUE);
+
+    auto* exportRoot = reinterpret_cast<ExportObject*>(fixture.obj0);
+    BaseObject* externRoot = fixture.obj1;
+    const U64 exportHandle = Heap::GetHeap().RegisterExportRoot(exportRoot);
+    const U32 exportId = ExportRootTable::ExportHandleIndex(exportHandle);
+    *reinterpret_cast<U32*>(reinterpret_cast<uintptr_t>(exportRoot) + TYPEINFO_PTR_SIZE) = exportId;
+    collector.cycleRefWorkStack[exportRoot].push_back(externRoot);
+    collector.cycleRefWorkStack[exportRoot].push_back(externRoot);
+
+    PhaseFlipContext context;
+    context.collector = &collector;
+    phaseFlipContext = &context;
+    collector.SetCycleRefHandlerForTest(&FlipToPreforwardAfterFirstHandler);
+    collector.SetGCPhase(GCPhase::GC_PHASE_IDLE);
+    ThreadLocal::SetMutator(&resolverMutator);
+
+    collector.ResolveCycleRef();
+    const size_t callsBeforeResume = context.calls.load(std::memory_order_acquire);
+    const auto phaseBeforeResume = collector.GetGCPhase();
+
+    collector.SetGCPhase(GCPhase::GC_PHASE_IDLE);
+    collector.ResolveCycleRef();
+    const size_t callsAfterResume = context.calls.load(std::memory_order_acquire);
+    collector.ResolveCycleRef();
+    const size_t callsAfterDrain = context.calls.load(std::memory_order_acquire);
+
+    std::fprintf(stderr,
+                 "CYCLE_REF_PREFORWARD_RESUME_TARGET_ASSERT reached before=%zu after=%zu drained=%zu phase=%u\n",
+                 callsBeforeResume, callsAfterResume, callsAfterDrain,
+                 static_cast<unsigned>(phaseBeforeResume));
+
+    ThreadLocal::SetMutator(nullptr);
+    collector.SetCycleRefHandlerForTest(nullptr);
+    phaseFlipContext = nullptr;
+    collector.cycleRefWorkStack.clear();
+    Heap::GetHeap().RemoveExportObject(exportHandle);
+    RelocationReceiptTestAccess::BindCollector(Heap::GetHeap().GetCollectorResources(), nullptr);
+
+    // Product callback results drive all three values. A missing phase recheck
+    // makes before=2; a non-persistent cursor makes after=3; either fails here.
+    GC_EXPECT_EQ(callsBeforeResume, 1u);
+    GC_EXPECT_EQ(static_cast<unsigned>(phaseBeforeResume),
+                 static_cast<unsigned>(GCPhase::GC_PHASE_PREFORWARD));
+    GC_EXPECT_EQ(callsAfterResume, 2u);
+    GC_EXPECT_EQ(callsAfterDrain, 2u);
 }
 
 } // namespace
