@@ -11,6 +11,7 @@
 #include <unistd.h>
 
 #include "gc_heap_fixture.hpp"
+#include "Base/GcLog.h"
 #include "Heap/GcThreadPool.h"
 #include "Heap/Allocator/ForwardingTable.h"
 #include "Heap/Allocator/RegionManager.h"
@@ -160,6 +161,69 @@ public:
     RuntimeParam GetRuntimeParam() const override { return RuntimeParam {}; }
     void SetGCThreshold(uint64_t) override {}
 };
+
+class CycleContextProductCollector final : public WCollector {
+public:
+    CycleContextProductCollector(Allocator& allocator, CollectorResources& resources)
+        : WCollector(allocator, resources), resources(resources) {}
+
+    bool SawOwnedYoungCycle() const
+    {
+        return sawPre && sawBody && sawPost && sequence != 0 && reason == GC_REASON_YOUNG &&
+            phase == GCPhase::GC_PHASE_TRACE && startTimeSet && activeYoung && !activeOld;
+    }
+
+protected:
+    void PreGarbageCollection(bool, uint64_t) override
+    {
+        sawPre = GetCycleContext().IsYoung() && GetGCReason() == GC_REASON_YOUNG;
+        SetGCPhase(GCPhase::GC_PHASE_TRACE);
+    }
+
+    void DoGarbageCollection() override
+    {
+        const CycleSnapshot snapshot = resources.GetCycleSnapshot();
+        sequence = GetCycleContext().sequence.load(std::memory_order_acquire);
+        reason = GetGCReason();
+        phase = snapshot.Phase(CycleGeneration::Young);
+        startTimeSet = GetCycleContext().stats.gcStartTime != 0;
+        activeYoung = snapshot.Active(CycleGeneration::Young);
+        activeOld = snapshot.Active(CycleGeneration::Old);
+        sawBody = true;
+    }
+
+    void PostGarbageCollection(uint64_t) override
+    {
+        sawPost = resources.GetCycleSnapshot().Active(CycleGeneration::Young);
+    }
+
+private:
+    CollectorResources& resources;
+    uint64_t sequence{ 0 };
+    GCReason reason{ GC_REASON_USER };
+    GCPhase phase{ GCPhase::GC_PHASE_UNDEF };
+    bool activeYoung{ false };
+    bool activeOld{ false };
+    bool startTimeSet{ false };
+    bool sawPre{ false };
+    bool sawBody{ false };
+    bool sawPost{ false };
+};
+
+bool RunCycleContextProductEntry()
+{
+    if (CJ_ScheduleManagerInit() != 0) {
+        return false;
+    }
+    MutatorManager mutatorManager;
+    YoungForwardTestRuntime runtime(mutatorManager);
+    GcHeapFixture fx;
+    CollectorResources& resources = Heap::GetHeap().GetCollectorResources();
+    CycleContextProductCollector collector(Heap::GetHeap().GetAllocator(), resources);
+    collector.RunGarbageCollection(17, GC_REASON_YOUNG);
+    const CycleSnapshot after = resources.GetCycleSnapshot();
+    return collector.SawOwnedYoungCycle() && !after.AnyActive() && GcLog::CurrentSeq() == 0;
+}
 
 bool RunYoungRuntimeProductEntry()
 {
@@ -377,6 +441,11 @@ GC_TEST(GCThreadPool, ProductSerialEntryRegistersWorkerAndClosesGeneration)
 GC_TEST(GCThreadPool, ProductYoungRuntimeEntryClosesRelocationRequestGeneration)
 {
     ExpectIsolatedScenarioPasses<RunYoungRuntimeProductEntry>();
+}
+
+GC_TEST(GCThreadPool, ProductCollectionPublishesAndClearsOwnedYoungCycle)
+{
+    ExpectIsolatedScenarioPasses<RunCycleContextProductEntry>();
 }
 #endif
 
