@@ -117,6 +117,7 @@ public:
     {
         ThreadLocal::SetAllocBuffer(previous);
         alloc.SetRegion(nullptr);
+        alloc.SetRelocationRegion(nullptr);
     }
 
 private:
