@@ -261,6 +261,7 @@ void WCollector::ResolveCycleRef()
                 resurrectedExportObjectes.find(candidate) != resurrectedExportObjectes.end() ||
                 resurrectedExportObjectesForwardPhase.find(candidate) !=
                     resurrectedExportObjectesForwardPhase.end()) {
+                cycleRefProgress.erase(candidateId);
                 it = cycleRefWorkStack.erase(it);
                 continue;
             }
@@ -279,7 +280,7 @@ void WCollector::ResolveCycleRef()
         }
 
         U32 id = static_cast<ExportObject*>(it->first)->GetId();
-        size_t externIndex = 0;
+        size_t externIndex = cycleRefProgress[id];
         void* returnUnit = nullptr;
         for (;;) {
             // A GC preforward pass may replace the map key and list elements
@@ -291,6 +292,11 @@ void WCollector::ResolveCycleRef()
                 });
             if (it == cycleRefWorkStack.end() || externIndex >= it->second.size()) {
                 break;
+            }
+            if (GetGCPhase() == GC_PHASE_PREFORWARD) {
+                cycleLock.unlock();
+                CJ_MRT_RolveCycleRef();
+                return;
             }
             BaseObject* exportObj = it->first;
             auto externIt = it->second.begin();
@@ -317,11 +323,23 @@ void WCollector::ResolveCycleRef()
             ResolveCycleRefStub(resolveHook, exportObj, externObj, &returnUnit);
 #endif
             cycleLock.lock();
+
+            // The callback was delivered while the full entry stayed in the
+            // GC-visible carrier. Commit that delivery before observing a
+            // phase change so a PREFORWARD repost resumes at the next item
+            // instead of delivering this one again.
             ++externIndex;
+            cycleRefProgress[id] = externIndex;
+            if (GetGCPhase() == GC_PHASE_PREFORWARD) {
+                cycleLock.unlock();
+                CJ_MRT_RolveCycleRef();
+                return;
+            }
         }
 
         auto& heap = Heap::GetHeap();
         heap.SetExportObjActiveState(id, false);
+        cycleRefProgress.erase(id);
         resolvedIds.insert(id);
         ++i;
     }

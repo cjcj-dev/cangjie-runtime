@@ -487,6 +487,11 @@ protected:
     std::mutex cycleResolverMtx;
     std::mutex cycleWorkStackMtx;
     std::unordered_map<BaseObject*, std::list<BaseObject*>> cycleRefWorkStack;
+    // Number of callbacks already delivered for each stable export id. A
+    // resolver can be reposted when PREFORWARD is published while a managed
+    // callback is running, so progress must outlive one ResolveCycleRef call.
+    // Protected by cycleWorkStackMtx together with the root carrier.
+    std::unordered_map<U32, size_t> cycleRefProgress;
     std::mutex resurrectExportMtx;
     std::unordered_set<BaseObject*> resurrectedExportObjectes;
     std::unordered_set<BaseObject*> resurrectedExportObjectesForwardPhase;
