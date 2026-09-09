@@ -298,7 +298,12 @@ bool RunLegacyControlActivityOwnsMarkWindow()
     resources.GetGCStats().reason = reasonBefore;
     resources.SetGcStarted(false);
     const CycleSnapshot after = resources.GetCycleSnapshot();
-    return owned && !after.AnyActive() && GcLog::CurrentSeq() == 0;
+    const bool completedOwnerVisible = resources.IsCompletedControlCycle(CycleGeneration::Old, token.sequence);
+    const CycleToken replacement = resources.BeginCycle(301, GC_REASON_USER);
+    const bool staleOwnerCleared = !resources.IsCompletedControlCycle(CycleGeneration::Old, token.sequence);
+    const bool replacementEnded = resources.EndCycle(replacement);
+    return owned && !after.AnyActive() && completedOwnerVisible && staleOwnerCleared && replacementEnded &&
+        GcLog::CurrentSeq() == 0;
 }
 
 bool RunYoungRuntimeProductEntry()
