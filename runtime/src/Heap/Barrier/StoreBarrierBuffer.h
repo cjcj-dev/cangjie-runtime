@@ -70,6 +70,10 @@ public:
     void Discard();
 
     static void FlushAll(RememberedSet& rs);
+    // STW verifier support: sum the pending entries of every registered
+    // allocation buffer.  FlushAll and this census deliberately use the same
+    // registry so a newly registered mutator cannot be omitted by the check.
+    static size_t PendingAll();
 #if defined(MRT_GC_UNIT_TESTS)
     static void SetFlushObserverForTest(StoreBarrierFlushObserver observer);
     static void SetSatbNodeUnavailableForTest(bool unavailable);

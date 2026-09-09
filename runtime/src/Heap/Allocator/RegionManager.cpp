@@ -39,6 +39,7 @@
 #include "Heap/Verify/TraceClear.h"
 #include "Heap/Verify/FillerZeroDiag.h"
 #include "Heap/Verify/HoleWhoDiag.h"
+#include "Heap/Verify/VerifyRememberedSet.h"
 #include "Heap/Allocator/HeapFiller.h"
 #include "Heap/Allocator/ForwardingTable.h"
 #include "Heap/WCollector/RelocationSetSelector.h"
@@ -53,6 +54,32 @@
 #include "Sync/Sync.h"
 
 namespace MapleRuntime {
+
+namespace {
+void PublishRemsetTransferReceipt(void* context, MAddress fromSlot, MAddress toSlot,
+                                  uint8_t sourceFace, uint8_t destinationFace,
+                                  uint64_t youngSeq, bool rejectedByYoung,
+                                  bool consumerAlreadyComplete)
+{
+    auto* publication = static_cast<const ForwardingTable::Publication*>(context);
+    ForwardingTable::PublishRemsetReceipt(*publication, fromSlot, toSlot, sourceFace,
+                                          destinationFace, youngSeq, rejectedByYoung,
+                                          consumerAlreadyComplete);
+}
+
+std::vector<RememberedSet::InPlaceSlot> ObjectRememberedSlots(
+    const std::vector<RememberedSet::InPlaceSlot>& slots, MAddress fromBase, size_t size)
+{
+    std::vector<RememberedSet::InPlaceSlot> result;
+    const MAddress end = fromBase + size;
+    for (const RememberedSet::InPlaceSlot& slot : slots) {
+        if (slot.field >= fromBase && slot.field < end) {
+            result.push_back(slot);
+        }
+    }
+    return result;
+}
+} // namespace
 
 namespace RecentFullAccounting {
 namespace {
@@ -3414,11 +3441,15 @@ void RegionManager::CompactRegion(RegionInfo* region)
     // writing the new ones.  What the walk does not hand back is dropped, which is
     // clear_remset_before_in_place_reuse (zRelocate.cpp:1027-1035).
     RememberedSet& rememberedSet = Heap::GetHeap().GetRememberedSet();
+    std::vector<RememberedSet::InPlaceSlot> beforeSlots;
+    rememberedSet.CaptureObjectSlots(regionStart, region->GetRegionSize(), beforeSlots);
+    VerifyRememberedBeforeForwarding(beforeSlots, regionStart, region->GetRegionSize(), rememberedSet);
     std::vector<RememberedSet::InPlaceSlot> takenSlots;
     rememberedSet.TakeInPlaceSlots(regionStart, region->GetRegionEnd(), takenSlots);
     ForEachLiveObjectStart(region, regionStart, regionLimit, [&](BaseObject* currentObj, size_t offset) {
         const MAddress currentPtr = regionStart + offset;
         size_t size = currentObj->GetSize();
+        const auto objectSlots = ObjectRememberedSlots(takenSlots, currentPtr, size);
         MAddress toAddress = region->Alloc(size);
         BaseObject* toObj = from_region_addr(toAddress);
         DLOG(FORWARD, "compact obj %p<%p>(%zu) to %p", currentObj, currentObj->GetTypeInfo(), size, toObj);
@@ -3430,7 +3461,10 @@ void RegionManager::CompactRegion(RegionInfo* region)
         region->RecordCompactRoute(offset, toAddress);
         // ZGC zRelocate.cpp:652-731 update_remset_old_to_old: the bits covering the from copy
         // name field offsets inside this object, so they follow it to its new address.
+        rememberedSet.InstallTransferContext(&takenSlots, PublishRemsetTransferReceipt, &publication);
         rememberedSet.MoveInPlaceSlots(takenSlots, currentPtr, toAddress, size);
+        rememberedSet.ClearTransferContext();
+        VerifyRememberedAfterForwarding(objectSlots, currentPtr, toAddress, size, publication);
     });
 
     MAddress cur = region->GetRegionAllocPtr();
@@ -3549,11 +3583,15 @@ void RegionManager::CompactRegion(RegionInfo* region, RegionInfo* toRegion1)
     region->SetRegionAllocPtr(regionStart);
     // zRelocate.cpp:838-861, as in the whole-page arm above.
     RememberedSet& rememberedSet = Heap::GetHeap().GetRememberedSet();
+    std::vector<RememberedSet::InPlaceSlot> beforeSlots;
+    rememberedSet.CaptureObjectSlots(regionStart, region->GetRegionSize(), beforeSlots);
+    VerifyRememberedBeforeForwarding(beforeSlots, regionStart, region->GetRegionSize(), rememberedSet);
     std::vector<RememberedSet::InPlaceSlot> takenSlots;
     rememberedSet.TakeInPlaceSlots(regionStart, region->GetRegionEnd(), takenSlots);
     ForEachLiveObjectStart(region, regionStart, regionLimit, [&](BaseObject* currentObj, size_t offset) {
         const MAddress currentPtr = regionStart + offset;
         size_t size = currentObj->GetSize();
+        const auto objectSlots = ObjectRememberedSlots(takenSlots, currentPtr, size);
         MAddress toAddress = toRegion1->Alloc(size);
         if (toAddress == 0) {
             toAddress = region->Alloc(size);
@@ -3569,7 +3607,10 @@ void RegionManager::CompactRegion(RegionInfo* region, RegionInfo* toRegion1)
         // zRelocate.cpp:652-731, as in the whole-page arm above.  toAddress may be in toRegion1,
         // which is what ZGC means by "even with in-place relocation, the to_page could be another
         // page" (zRelocate.cpp:666-667).
+        rememberedSet.InstallTransferContext(&takenSlots, PublishRemsetTransferReceipt, &publication);
         rememberedSet.MoveInPlaceSlots(takenSlots, currentPtr, toAddress, size);
+        rememberedSet.ClearTransferContext();
+        VerifyRememberedAfterForwarding(objectSlots, currentPtr, toAddress, size, publication);
     });
 
     // clear unused space which is free after compaction.
@@ -3841,8 +3882,17 @@ void RegionManager::ForwardRegion(RegionInfo* region)
     size_t o2yOnToForOld = 0;
     size_t recordedOnToForOld = 0;
     bool forwarded = region->VisitLiveObjectsUntilFalse(
-        [&collector, youngRegion, &rememberedSet, &promotedRecords, &oldObjForwarded,
+        [&collector, youngRegion, &rememberedSet, &promotedRecords, &oldObjForwarded, region,
          &o2yOnToForOld, &recordedOnToForOld](BaseObject* obj) {
+            const MAddress fromBase = reinterpret_cast<MAddress>(obj);
+            const size_t objectSize = RegionSpace::GetAllocSize(*obj);
+            std::vector<RememberedSet::InPlaceSlot> forwardingSlots;
+            ForwardingTable::Publication remsetPublication;
+            if (!youngRegion) {
+                remsetPublication = ForwardingTable::EnsurePublicationBeforeCopy(region, fromBase);
+                rememberedSet.CaptureObjectSlots(fromBase, objectSize, forwardingSlots);
+                VerifyRememberedBeforeForwarding(forwardingSlots, fromBase, objectSize, rememberedSet);
+            }
             BaseObject* toObj = collector.ForwardObject(obj);
             // Remset slots must address the surviving (to-space) holder, not the from copy
             // that CollectRegion is about to reclaim.
@@ -3882,11 +3932,15 @@ void RegionManager::ForwardRegion(RegionInfo* region)
                 if (!Collector::PlausibleManagedObjectGate("ForwardRegion.to", toObj)) {
                     NoteFwdToGateRefuse("old", toObj);
                 } else {
-                size_t sz = RegionSpace::GetAllocSize(*obj);
-                MAddress fromBase = reinterpret_cast<MAddress>(obj);
                 MAddress toBase = reinterpret_cast<MAddress>(toObj);
+                size_t sz = objectSize;
+                rememberedSet.InstallTransferContext(&forwardingSlots, PublishRemsetTransferReceipt,
+                                                      &remsetPublication);
                 size_t moved = rememberedSet.TransferObjectSlots(fromBase, toBase, sz);
+                rememberedSet.ClearTransferContext();
                 recordedOnToForOld += moved;
+                VerifyRememberedAfterForwarding(forwardingSlots, fromBase, toBase, objectSize,
+                                                 remsetPublication);
 
                 }
             }
