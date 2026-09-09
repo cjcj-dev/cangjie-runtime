@@ -22,6 +22,7 @@ using namespace MapleRuntime::GcUnit;
 #if defined(MRT_GC_UNIT_TESTS)
 namespace MapleRuntime {
 extern "C" ObjRef MCC_NewObject(const TypeInfo* klass, MSize size);
+extern "C" ObjRef MCC_NewFinalizer(const TypeInfo* klass, MSize size);
 }
 
 namespace {
@@ -60,13 +61,16 @@ void* InstallLiveWeakEdge(void*)
         MCC_NewObject(ProductTypeInfo(TypeKind::TYPE_KIND_WEAKREF_CLASS), ProductObjectSize()));
     BaseObject* referent = reinterpret_cast<BaseObject*>(
         MCC_NewObject(ProductTypeInfo(TypeKind::TYPE_KIND_CLASS), ProductObjectSize()));
-    if (holder == nullptr || referent == nullptr) {
+    BaseObject* finalizer = reinterpret_cast<BaseObject*>(
+        MCC_NewFinalizer(ProductTypeInfo(TypeKind::TYPE_KIND_CLASS), ProductObjectSize()));
+    if (holder == nullptr || referent == nullptr || finalizer == nullptr) {
         return reinterpret_cast<void*>(1);
     }
     HeapSlot<>& field = HeapSlotAt<>(reinterpret_cast<uintptr_t>(holder) + TYPEINFO_PTR_SIZE);
     field.StoreColoured(GcUnit::StoreGoodPointer(referent));
     (void)Heap::GetHeap().RegisterExportRoot(holder);
     (void)Heap::GetHeap().RegisterExportRoot(referent);
+    (void)Heap::GetHeap().RegisterExportRoot(finalizer);
     return nullptr;
 }
 } // namespace
@@ -108,7 +112,8 @@ GC_OTHER_VM_TEST(MarkCompleteScenes, MajorGcRunsStrongThenWeakComplete)
     GC_EXPECT_TRUE(ordered);
 
     const bool policy = receipt.strongOnlyIncludedWeak == 0 && receipt.weakCompleteIncludedWeak == 1 &&
-        receipt.strongOnlyRootsSeen >= 2 && receipt.weakCompleteRootsSeen >= 2 && receipt.weakEdgesSeen >= 1;
+        receipt.strongOnlyRootsSeen >= 3 && receipt.weakCompleteRootsSeen >= 3 && receipt.weakRootsSeen >= 1 &&
+        receipt.weakEdgesSeen >= 1;
     std::fprintf(stderr,
                  "TARGET_SCENE_POLICY_ASSERT_EXECUTED strongIncludesWeak=%llu weakIncludesWeak=%llu policy=%u "
                  "strongRoots=%llu weakRoots=%llu weakRootFamily=%llu weakEdges=%llu\n",
