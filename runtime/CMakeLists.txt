@@ -91,6 +91,29 @@ if (MRT_GC_UNIT_OHOS_HOST)
         "$<$<COMPILE_LANGUAGE:CXX>:string>")
 endif()
 
+# Keep the configuration-to-output mapping executable as part of every runtime
+# configure.  A standalone script which no build invokes cannot prevent a new
+# product-changing -D axis from aliasing an existing output directory.
+execute_process(
+    COMMAND ${CMAKE_COMMAND}
+        "-DTEST_RUNTIME_SOURCE_DIR=${CMAKE_CURRENT_SOURCE_DIR}"
+        -P "${CMAKE_CURRENT_SOURCE_DIR}/tests/test_runtime_output_layout.cmake"
+    RESULT_VARIABLE RUNTIME_OUTPUT_LAYOUT_TEST_RC
+    OUTPUT_VARIABLE RUNTIME_OUTPUT_LAYOUT_TEST_OUT
+    ERROR_VARIABLE RUNTIME_OUTPUT_LAYOUT_TEST_ERR)
+if(NOT RUNTIME_OUTPUT_LAYOUT_TEST_RC EQUAL 0)
+    message(FATAL_ERROR
+        "RUNTIME_OUTPUT_LAYOUT test failed (rc=${RUNTIME_OUTPUT_LAYOUT_TEST_RC}):\n"
+        "${RUNTIME_OUTPUT_LAYOUT_TEST_OUT}${RUNTIME_OUTPUT_LAYOUT_TEST_ERR}")
+endif()
+string(REGEX MATCH "RUNTIME_OUTPUT_LAYOUT_OK[^\r\n]*"
+    RUNTIME_OUTPUT_LAYOUT_TEST_TOKEN
+    "${RUNTIME_OUTPUT_LAYOUT_TEST_OUT}${RUNTIME_OUTPUT_LAYOUT_TEST_ERR}")
+if(NOT RUNTIME_OUTPUT_LAYOUT_TEST_TOKEN)
+    message(FATAL_ERROR "RUNTIME_OUTPUT_LAYOUT test ran without its proof-of-life token")
+endif()
+message(STATUS "${RUNTIME_OUTPUT_LAYOUT_TEST_TOKEN}")
+
 if (MRT_GC_UNIT_TESTS)
     # Test-only visibility for observers such as M0ExitDiagnostics::GetCounts.
     # Correctness/diagnostic product paths must remain outside this definition.
