@@ -58,11 +58,6 @@ constexpr bool NeedsForwardingLookup(Kind kind)
     return kind == Kind::YoungOnlyGood || kind == Kind::OldOnlyGood || kind == Kind::DoubleBad;
 }
 
-// ZRemapYoungRootsTask reaches remembered fields by iterating live old pages;
-// a bitmap record whose holder is not live is not a root and must not invoke a
-// load barrier on the dead holder payload (zGeneration.cpp:1483-1523).
-constexpr bool ShouldRemapRememberedSlot(bool holderIsLive) { return holderIsLive; }
-
 constexpr uintptr_t CurrentRemapBit(uintptr_t youngMask, uintptr_t oldMask)
 {
     return youngMask & oldMask;

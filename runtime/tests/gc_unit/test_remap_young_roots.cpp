@@ -72,12 +72,6 @@ GC_TEST(RemapYoungRoots, OnlyLoadBadColoursEnterForwardingLookup)
     GC_EXPECT_TRUE(NeedsForwardingLookup(Kind::DoubleBad));
 }
 
-GC_TEST(RemapYoungRoots, DeadRememberedHolderIsNotARoot)
-{
-    GC_EXPECT_TRUE(ShouldRemapRememberedSlot(true));
-    GC_EXPECT_FALSE(ShouldRemapRememberedSlot(false));
-}
-
 GC_TEST(RemapYoungRoots, Phase8KeepsRootsFromWrappingToGood)
 {
     const uintptr_t published = kAddr | CurrentRemapBit(kYoungMask0, kOldMask0);
