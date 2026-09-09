@@ -39,11 +39,17 @@ PATH="$mw_fixture/bin:$PATH" CXX="$mw_fixture/bin/cxx" CJRT_HEAP_FILLER=0 \
   MUTUALWAIT_FIXTURE_COUNT="$mw_count" GCV2_RUNTIME_LIB_DIR="$mw_fixture/lib" \
   GC_UNIT_OUT="$mw_out" GC_UNIT_MUTUALWAIT_MANIFEST_ONLY=1 \
   bash "$mw_fixture/runtime/tests/gc_unit/run_standalone.sh" >"$mw_fixture/filler.log" 2>&1
-[[ "$(wc -l <"$mw_count")" -eq 1 ]]
-[[ "$(/usr/bin/grep -c GATE_MUTUALWAIT_PRODUCT_MANIFEST_ROW_OK "$mw_fixture/default.log")" -eq 7 ]]
-/usr/bin/grep -q GATE_MUTUALWAIT_AST_EXECUTE "$mw_fixture/default.log"
-/usr/bin/grep -q GATE_MUTUALWAIT_AST_RECEIPT_CONSUMED "$mw_fixture/filler.log"
-echo "MUTUALWAIT_RUN_STANDALONE_PAIR_OK analyzer_invocations=1 rows=7"
+mw_invocations=0
+if [[ -f "$mw_count" ]]; then
+  mw_invocations=$(wc -l <"$mw_count")
+fi
+mw_rows=$(/usr/bin/grep -c GATE_MUTUALWAIT_PRODUCT_MANIFEST_ROW_OK "$mw_fixture/default.log" || true)
+mw_execute=$(/usr/bin/grep -c GATE_MUTUALWAIT_AST_EXECUTE "$mw_fixture/default.log" || true)
+mw_consumed=$(/usr/bin/grep -c GATE_MUTUALWAIT_AST_RECEIPT_CONSUMED "$mw_fixture/filler.log" || true)
+printf 'MUTUALWAIT_RUN_STANDALONE_PAIR_ASSERT analyzer_invocations=%s rows=%s execute=%s consumed=%s\n' \
+  "$mw_invocations" "$mw_rows" "$mw_execute" "$mw_consumed"
+[[ "$mw_invocations" -eq 1 && "$mw_rows" -eq 7 && "$mw_execute" -eq 1 && "$mw_consumed" -eq 1 ]]
+echo "MUTUALWAIT_RUN_STANDALONE_PAIR_OK"
 
 # The parent gate supplies its own compiler, runtime, status, mode, and skip
 # controls.  Each fixture arm below owns all of those inputs; inheriting even
