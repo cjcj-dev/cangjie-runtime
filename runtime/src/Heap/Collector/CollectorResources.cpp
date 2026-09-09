@@ -344,6 +344,9 @@ CycleToken CollectorResources::BeginCycle(uint64_t taskIndex, GCReason reason)
     context.stats.heapThreshold.store(gcStats.GetThreshold(), std::memory_order_relaxed);
     context.stats.garbageRatio = gcStats.garbageRatio;
     context.stats.collectionRate = gcStats.collectionRate;
+    std::atomic<uint64_t>& completedControl = context.generation == CycleGeneration::Young ?
+        completedYoungControlCycle : completedOldControlCycle;
+    completedControl.store(0, std::memory_order_release);
     const uint64_t sequence = GcLog::BeginCycle(CycleSlot(context.generation));
     context.sequence.store(sequence, std::memory_order_release);
     executionContext.store(&context, std::memory_order_release);
