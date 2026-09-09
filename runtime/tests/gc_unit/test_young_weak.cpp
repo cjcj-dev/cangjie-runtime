@@ -13,6 +13,7 @@
 #include "gc_unittest.hpp"
 
 #include "Concurrency/Concurrency.h"
+#include "Heap/Allocator/ForwardingTable.h"
 #include "Heap/Allocator/RegionSpace.h"
 #include "Heap/Barrier/Barrier.h"
 #include "Heap/Collector/CollectorProxy.h"
@@ -55,6 +56,56 @@ struct RelocationReceiptTestAccess {
         collector.SetGCReason(GC_REASON_USER);
         collector.TraceHeap();
     }
+
+    static void RunPostTrace(WCollector& collector) { collector.PostTrace(); }
+
+    static void SeedValueRoots(WCollector& collector, BaseObject* value)
+    {
+        {
+            std::lock_guard<std::mutex> lock(collector.resurrectExportMtx);
+            collector.resurrectedExportObjectes.clear();
+            collector.resurrectedExportObjectesForwardPhase.clear();
+            collector.resurrectedExportObjectes.insert(value);
+            collector.resurrectedExportObjectesForwardPhase.insert(value);
+        }
+        std::lock_guard<std::mutex> lock(collector.cycleWorkStackMtx);
+        collector.cycleRefWorkStack.clear();
+        collector.discoveredExternObjects.clear();
+        collector.cycleRefWorkStack[value].push_back(value);
+    }
+
+    static void ReplaceCycleWithDiscovered(WCollector& collector, BaseObject* value)
+    {
+        std::lock_guard<std::mutex> lock(collector.cycleWorkStackMtx);
+        collector.cycleRefWorkStack.clear();
+        collector.discoveredExternObjects.clear();
+        collector.discoveredExternObjects[value].push_back(value);
+    }
+
+    static bool AllValueRootsEqual(WCollector& collector, BaseObject* value)
+    {
+        {
+            std::lock_guard<std::mutex> lock(collector.resurrectExportMtx);
+            if (collector.resurrectedExportObjectes.size() != 1 ||
+                collector.resurrectedExportObjectes.count(value) != 1 ||
+                collector.resurrectedExportObjectesForwardPhase.size() != 1 ||
+                collector.resurrectedExportObjectesForwardPhase.count(value) != 1) {
+                return false;
+            }
+        }
+        std::lock_guard<std::mutex> lock(collector.cycleWorkStackMtx);
+        auto it = collector.cycleRefWorkStack.find(value);
+        return collector.cycleRefWorkStack.size() == 1 && it != collector.cycleRefWorkStack.end() &&
+            it->second.size() == 1 && it->second.front() == value;
+    }
+
+    static bool CycleHandoffEquals(WCollector& collector, BaseObject* value)
+    {
+        std::lock_guard<std::mutex> lock(collector.cycleWorkStackMtx);
+        auto it = collector.cycleRefWorkStack.find(value);
+        return collector.discoveredExternObjects.empty() && collector.cycleRefWorkStack.size() == 1 &&
+            it != collector.cycleRefWorkStack.end() && it->second.size() == 1 && it->second.front() == value;
+    }
 };
 
 } // namespace MapleRuntime
@@ -81,6 +132,64 @@ public:
 private:
     Concurrency concurrency;
 };
+
+struct ValueRootRoute {
+    RegionInfo* source = nullptr;
+    RegionInfo* destination = nullptr;
+    BaseObject* from = nullptr;
+    BaseObject* to = nullptr;
+    LiveInfo* sourceLive = nullptr;
+    LiveInfo* destinationLive = nullptr;
+};
+
+ValueRootRoute PrepareValueRootRoute(GcHeapFixture& fx, bool destinationYoung)
+{
+    ValueRootRoute route;
+    route.source = fx.region0;
+    route.destination = fx.region1;
+    route.from = fx.PlaceObject(route.source->GetRegionStart());
+    route.to = fx.PlaceObject(route.destination->GetRegionStart());
+    route.source->SetRegionAllocPtr(reinterpret_cast<MAddress>(route.from) + 64);
+    route.destination->SetRegionAllocPtr(reinterpret_cast<MAddress>(route.to) + 64);
+    route.source->SetYoungRegionFlag(0);
+    route.destination->SetYoungRegionFlag(destinationYoung ? 1 : 0);
+    if (destinationYoung) {
+        route.destination->SetYoungAge(1);
+    }
+
+    route.source->SetRegionType(RegionInfo::RegionType::FROM_REGION);
+    route.sourceLive = fx.PlantLiveInfo(route.source);
+    RegionBitmap* sourceBitmap =
+        fx.PlantMarkBitmap<Generation::Old>(route.sourceLive, route.source->GetRegionSize());
+    const size_t sourceOffset = route.source->GetAddressOffset(reinterpret_cast<MAddress>(route.from));
+    (void)sourceBitmap->MarkBits(sourceOffset, route.from->GetSize(), route.source->GetRegionSize());
+    route.source->AddLiveByteCount(route.from->GetSize());
+    route.source->PrepareForwardableRegion(route.source->GetMarkView<Generation::Old>());
+    route.source->RecordRouteStart(sourceOffset);
+    route.source->SetRouteInfo(route.destination->GetRegionStart(),
+                               static_cast<uint32_t>(route.from->GetSize()));
+    route.source->SetRouteState(RegionInfo::RouteState::FORWARDED);
+    route.from->SetStateCode(ObjectState::FORWARDED);
+    ForwardingTable::Publication publication = ForwardingTable::EnsurePublicationBeforeCopy(
+        route.source, reinterpret_cast<MAddress>(route.from));
+    GC_EXPECT_TRUE(static_cast<bool>(publication));
+    GC_EXPECT_EQ(ForwardingTable::InsertMapping(
+                     publication, reinterpret_cast<MAddress>(route.from),
+                     reinterpret_cast<MAddress>(route.to)),
+                 reinterpret_cast<MAddress>(route.to));
+
+    route.destinationLive = fx.PlantLiveInfo(route.destination);
+    (void)fx.PlantMarkBitmap<Generation::Young>(route.destinationLive,
+                                                route.destination->GetRegionSize());
+    return route;
+}
+
+bool IsValueRootMarked(const ValueRootRoute& route)
+{
+    return route.destination->IsYoungRegion()
+        ? route.destination->IsMarkedObject(route.destination->GetMarkView<Generation::Young>(), route.to)
+        : route.destination->IsMarkedObject(route.destination->GetMarkView<Generation::Old>(), route.to);
+}
 
 struct WeakGraph {
     explicit WeakGraph(GcHeapFixture& fixture, RegionInfo* region, RegionInfo* targetRegion = nullptr)
@@ -417,6 +526,109 @@ GC_OTHER_VM_TEST(YoungWeakClosure, ExportOnlyMajorRootOwnsItsClosure)
     RelocationReceiptTestAccess::BindCollector(resources, nullptr);
     GC_EXPECT_TRUE(rootMarked);
     GC_EXPECT_TRUE(childMarked);
+}
+
+GC_OTHER_VM_TEST(ValueRootCurrentization, MinorRuntimeDispatchMarksCurrentAndWritesBack)
+{
+    GC_EXPECT_EQ(CJ_ScheduleManagerInit(), 0);
+    GC_EXPECT_EQ(setenv("MRT_GCV2_MARKPAR_FORCE_SERIAL", "1", 1), 0);
+    MutatorManager mutatorManager;
+    WeakClosureTestRuntime runtime(mutatorManager);
+    GcHeapFixture fx;
+    ValueRootRoute route = PrepareValueRootRoute(fx, true);
+
+    CollectorResources& resources = Heap::GetHeap().GetCollectorResources();
+    WCollector collector(Heap::GetHeap().GetAllocator(), resources);
+    RelocationReceiptTestAccess::BindCollector(resources, &collector);
+    collector.SetGCPhase(GCPhase::GC_PHASE_CLEAR_SATB_BUFFER);
+    GCThreadPool threadPool("gc-unit-value-root-minor", 0, GCPoolThread::GC_THREAD_PRIORITY);
+    RelocationReceiptTestAccess::BindThreadPool(resources, &threadPool);
+    RegionSpace& space = reinterpret_cast<RegionSpace&>(Heap::GetHeap().GetAllocator());
+    space.GetRegionManager().EnlistFullThreadLocalRegion(route.destination);
+    space.GetRegionManager().AddRawPointerObject(route.to);
+    Heap::GetHeap().GetRememberedSet().Initialize(
+        fx.heapStart, GcHeapFixture::kUnits * RegionInfo::UNIT_SIZE);
+    RelocationReceiptTestAccess::SeedValueRoots(collector, route.from);
+
+    const bool startedBefore = resources.IsGcStarted();
+    const GCReason reasonBefore = resources.GetGCStats().reason;
+    resources.SetGcStarted(true);
+    resources.GetGCStats().reason = GC_REASON_YOUNG;
+    RelocationReceiptTestAccess::RunYoungCollection(collector);
+
+    const bool currentMarked = IsValueRootMarked(route);
+    const bool carrierCurrent = RelocationReceiptTestAccess::AllValueRootsEqual(collector, route.to);
+    ForwardingTable::PublishMarkCoverage(Generation::Old);
+    ForwardingTable::ReclaimRetired("value-root-minor-runtime-dispatch");
+    const auto afterCoverage = ForwardingTable::LookupTo(reinterpret_cast<MAddress>(route.from));
+    const bool independentAfterCoverage =
+        RelocationReceiptTestAccess::AllValueRootsEqual(collector, route.to);
+    std::fprintf(stderr,
+                 "VALUE_ROOT_RUNTIME_ASSERT minor current_marked=%d carrier_current=%d "
+                 "after_coverage=%d lookup=%u\n",
+                 static_cast<int>(currentMarked), static_cast<int>(carrierCurrent),
+                 static_cast<int>(independentAfterCoverage),
+                 static_cast<unsigned>(afterCoverage.answer));
+
+    resources.SetGcStarted(startedBefore);
+    resources.GetGCStats().reason = reasonBefore;
+    RelocationReceiptTestAccess::BindThreadPool(resources, nullptr);
+    threadPool.Exit();
+    RelocationReceiptTestAccess::BindCollector(resources, nullptr);
+    GC_EXPECT_TRUE(currentMarked);
+    GC_EXPECT_TRUE(carrierCurrent);
+    GC_EXPECT_TRUE(independentAfterCoverage);
+    GC_EXPECT_TRUE(afterCoverage.answer == ForwardingTable::ToAnswer::Unavailable);
+    (void)route;
+}
+
+GC_OTHER_VM_TEST(ValueRootCurrentization, MajorRuntimeMarkAndPostTraceHandoffPrecedeCoverage)
+{
+    GC_EXPECT_EQ(CJ_ScheduleManagerInit(), 0);
+    MutatorManager mutatorManager;
+    WeakClosureTestRuntime runtime(mutatorManager);
+    GcHeapFixture fx;
+    ValueRootRoute route = PrepareValueRootRoute(fx, false);
+
+    CollectorResources& resources = Heap::GetHeap().GetCollectorResources();
+    WCollector collector(Heap::GetHeap().GetAllocator(), resources);
+    RelocationReceiptTestAccess::BindCollector(resources, &collector);
+    collector.SetGCPhase(GCPhase::GC_PHASE_IDLE);
+    GCThreadPool threadPool("gc-unit-value-root-major", 0, GCPoolThread::GC_THREAD_PRIORITY);
+    RelocationReceiptTestAccess::BindThreadPool(resources, &threadPool);
+    RegionSpace& space = reinterpret_cast<RegionSpace&>(Heap::GetHeap().GetAllocator());
+    space.GetRegionManager().EnlistFullThreadLocalRegion(route.destination);
+    space.GetRegionManager().AddRawPointerObject(route.to);
+    RelocationReceiptTestAccess::SeedValueRoots(collector, route.from);
+
+    RelocationReceiptTestAccess::RunMajorMark(collector);
+    const bool currentMarked = IsValueRootMarked(route);
+    const bool carrierCurrent = RelocationReceiptTestAccess::AllValueRootsEqual(collector, route.to);
+
+    // Construct the product handoff state after tracing, exactly where
+    // PostTrace owns discoveredExternObjects -> cycleRefWorkStack.
+    RelocationReceiptTestAccess::ReplaceCycleWithDiscovered(collector, route.from);
+    RelocationReceiptTestAccess::RunPostTrace(collector);
+    const bool handoffCurrent = RelocationReceiptTestAccess::CycleHandoffEquals(collector, route.to);
+    const auto afterCoverage = ForwardingTable::LookupTo(reinterpret_cast<MAddress>(route.from));
+    const bool independentAfterCoverage =
+        RelocationReceiptTestAccess::CycleHandoffEquals(collector, route.to);
+    std::fprintf(stderr,
+                 "VALUE_ROOT_RUNTIME_ASSERT major current_marked=%d carrier_current=%d "
+                 "handoff_current=%d after_coverage=%d lookup=%u\n",
+                 static_cast<int>(currentMarked), static_cast<int>(carrierCurrent),
+                 static_cast<int>(handoffCurrent), static_cast<int>(independentAfterCoverage),
+                 static_cast<unsigned>(afterCoverage.answer));
+
+    RelocationReceiptTestAccess::BindThreadPool(resources, nullptr);
+    threadPool.Exit();
+    RelocationReceiptTestAccess::BindCollector(resources, nullptr);
+    GC_EXPECT_TRUE(currentMarked);
+    GC_EXPECT_TRUE(carrierCurrent);
+    GC_EXPECT_TRUE(handoffCurrent);
+    GC_EXPECT_TRUE(independentAfterCoverage);
+    GC_EXPECT_TRUE(afterCoverage.answer == ForwardingTable::ToAnswer::Unavailable);
+    (void)route;
 }
 
 #endif // MRT_TESTABLE_INTERNALS
