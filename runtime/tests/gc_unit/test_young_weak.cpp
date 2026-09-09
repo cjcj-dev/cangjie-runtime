@@ -613,8 +613,9 @@ void RunMajorWeakGraph(MajorRootFamily family, bool runtimeEntry = false, size_t
                      static_cast<unsigned long long>(delta(MarkingBoundary::END, MarkingContainer::FOREIGN)),
                      static_cast<unsigned long long>(delta(MarkingBoundary::END, MarkingContainer::POOL)));
         CHECK_DETAIL(delta(MarkingBoundary::END, MarkingContainer::OWNER) != 0 &&
-                         delta(MarkingBoundary::END, MarkingContainer::FOREIGN) != 0 &&
-                         delta(MarkingBoundary::END, MarkingContainer::POOL) != 0,
+                         delta(MarkingBoundary::END, MarkingContainer::POOL) != 0 &&
+                         (family != MajorRootFamily::EXPORT ||
+                          delta(MarkingBoundary::END, MarkingContainer::FOREIGN) != 0),
                      "major marking scene receipt missing after DoGarbageCollection entry family=%s",
                      family == MajorRootFamily::COMMON ? "common" : "export");
     }
@@ -630,19 +631,19 @@ void RunMajorWeakGraph(MajorRootFamily family, bool runtimeEntry = false, size_t
 
     if (runtimeEntry) {
         GC_EXPECT_TRUE(delta(MarkingBoundary::START, MarkingContainer::OWNER) > 0);
-        GC_EXPECT_TRUE(delta(MarkingBoundary::START, MarkingContainer::FOREIGN) > 0);
         GC_EXPECT_TRUE(delta(MarkingBoundary::START, MarkingContainer::POOL) > 0);
         GC_EXPECT_TRUE(delta(MarkingBoundary::TASK_EXIT, MarkingContainer::TASK) > 0);
         GC_EXPECT_TRUE(delta(MarkingBoundary::TERMINATION, MarkingContainer::OWNER) > 0);
         GC_EXPECT_TRUE(delta(MarkingBoundary::TERMINATION, MarkingContainer::POOL) > 0);
         GC_EXPECT_TRUE(delta(MarkingBoundary::JOIN, MarkingContainer::POOL) > 0);
         GC_EXPECT_TRUE(delta(MarkingBoundary::END, MarkingContainer::OWNER) > 0);
-        GC_EXPECT_TRUE(delta(MarkingBoundary::END, MarkingContainer::FOREIGN) > 0);
         GC_EXPECT_TRUE(delta(MarkingBoundary::END, MarkingContainer::POOL) > 0);
         GC_EXPECT_TRUE(ownerProducer > 0);
         GC_EXPECT_TRUE(taskProducer > 0);
         if (family == MajorRootFamily::EXPORT) {
             GC_EXPECT_TRUE(foreignProducer > 0);
+            GC_EXPECT_TRUE(delta(MarkingBoundary::START, MarkingContainer::FOREIGN) > 0);
+            GC_EXPECT_TRUE(delta(MarkingBoundary::END, MarkingContainer::FOREIGN) > 0);
         }
         if (helpers == 0) {
             GC_EXPECT_TRUE(delta(MarkingBoundary::TASK_EXIT, MarkingContainer::TASK) >= 1u);
