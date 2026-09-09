@@ -69,14 +69,15 @@ void CopyCollector::RunGarbageCollection(uint64_t gcIndex, GCReason reason)
     ScopedSTWLock stwLock;
     // ScopedStopTheWorld stw;
 
-    CycleContext& context = collectorResources.BeginCycle(gcIndex, reason);
-    RunGarbageCollection(context);
-    collectorResources.EndCycle(context);
+    const CycleToken token = collectorResources.BeginCycle(gcIndex, reason);
+    RunGarbageCollection(token);
+    CHECK_DETAIL(collectorResources.EndCycle(token), "collector completion lost its cycle owner");
     collectorResources.NotifyGCPhaseFinished(gcIndex);
 }
 
-void CopyCollector::RunGarbageCollection(CycleContext& context)
+void CopyCollector::RunGarbageCollection(const CycleToken& token)
 {
+    CycleContext& context = collectorResources.GetCycleContext(token);
     const uint64_t gcIndex = context.taskIndex;
     const GCReason reason = context.reason;
     const uint64_t cycleSeq = context.sequence.load(std::memory_order_acquire);
