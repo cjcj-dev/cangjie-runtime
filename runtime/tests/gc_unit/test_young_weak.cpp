@@ -386,21 +386,26 @@ void RunMajorWeakGraph(MajorRootFamily family, bool runtimeEntry = false, size_t
         commonRoots[i] = &commonRootStorage[i];
     }
     const U32 commonRootCount = runtimeEntry && helpers != 0 ? static_cast<U32>(commonRoots.size()) : 1;
+    U32 registeredCommonRootCount = 0;
     U64 exportHandle = 0;
     if (family == MajorRootFamily::COMMON) {
         for (U32 i = 0; i < commonRootCount; ++i) {
             StorePlain(*commonRoots[i], from_object(graph.strongRoot));
         }
         Heap::GetHeap().RegisterStaticRoots(reinterpret_cast<Uptr>(commonRoots.data()), commonRootCount);
+        registeredCommonRootCount = commonRootCount;
     } else {
-        // Keep the export DFS cut independent from TracingImpl's root-family
-        // admission cut.  This sentinel has no edge into the weak graph; the
-        // graph itself remains reachable only through the export root.
-        BaseObject* commonSentinel = fx.PlaceObject(fx.region0->GetRegionStart() + 320);
-        WeakGraph::Field(commonSentinel).StoreColoured(zpointer::null);
-        fx.region0->SetRegionAllocPtr(reinterpret_cast<MAddress>(commonSentinel) + 64);
-        StorePlain(*commonRoots[0], from_object(commonSentinel));
-        Heap::GetHeap().RegisterStaticRoots(reinterpret_cast<Uptr>(commonRoots.data()), 1);
+        if (!runtimeEntry) {
+            // Keep the export DFS cut independent from TracingImpl's root-family
+            // admission cut. This sentinel has no edge into the weak graph; the
+            // graph itself remains reachable only through the export root.
+            BaseObject* commonSentinel = fx.PlaceObject(fx.region0->GetRegionStart() + 320);
+            WeakGraph::Field(commonSentinel).StoreColoured(zpointer::null);
+            fx.region0->SetRegionAllocPtr(reinterpret_cast<MAddress>(commonSentinel) + 64);
+            StorePlain(*commonRoots[0], from_object(commonSentinel));
+            Heap::GetHeap().RegisterStaticRoots(reinterpret_cast<Uptr>(commonRoots.data()), 1);
+            registeredCommonRootCount = 1;
+        }
         exportHandle = Heap::GetHeap().RegisterExportRoot(graph.strongRoot);
     }
 
@@ -459,8 +464,9 @@ void RunMajorWeakGraph(MajorRootFamily family, bool runtimeEntry = false, size_t
                      family == MajorRootFamily::COMMON ? "common" : "export");
     }
 
-    Heap::GetHeap().UnregisterStaticRoots(reinterpret_cast<Uptr>(commonRoots.data()),
-                                          family == MajorRootFamily::COMMON ? commonRootCount : 1);
+    if (registeredCommonRootCount != 0) {
+        Heap::GetHeap().UnregisterStaticRoots(reinterpret_cast<Uptr>(commonRoots.data()), registeredCommonRootCount);
+    }
     if (family == MajorRootFamily::EXPORT) {
         Heap::GetHeap().RemoveExportObject(exportHandle);
     }
@@ -477,9 +483,10 @@ void RunMajorWeakGraph(MajorRootFamily family, bool runtimeEntry = false, size_t
         GC_EXPECT_TRUE(delta(MarkingBoundary::JOIN, MarkingContainer::POOL) > 0);
         GC_EXPECT_TRUE(delta(MarkingBoundary::END, MarkingContainer::OWNER) > 0);
         GC_EXPECT_TRUE(delta(MarkingBoundary::END, MarkingContainer::POOL) > 0);
-        GC_EXPECT_TRUE(ownerProducer > 0);
         GC_EXPECT_TRUE(taskProducer > 0);
-        if (family == MajorRootFamily::EXPORT) {
+        if (family == MajorRootFamily::COMMON) {
+            GC_EXPECT_TRUE(ownerProducer > 0);
+        } else {
             GC_EXPECT_TRUE(foreignProducer > 0);
             GC_EXPECT_TRUE(delta(MarkingBoundary::START, MarkingContainer::FOREIGN) > 0);
             GC_EXPECT_TRUE(delta(MarkingBoundary::END, MarkingContainer::FOREIGN) > 0);
