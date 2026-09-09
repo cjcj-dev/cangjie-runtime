@@ -57,16 +57,6 @@ validate_mutualwait_manifest() {
 mkdir -p "$OUT"
 
 RUNTIME_LIB_DIR="${GCV2_RUNTIME_LIB_DIR:-}"
-if [[ -z "$RUNTIME_LIB_DIR" ]]; then
-  for cand in \
-    "$ROOT/runtime/output/temp/lib/x86_64_Release" \
-    "$ROOT/runtime/output/temp/lib/x86_64_Relwithdebinfo"; do
-    if [[ -f "$cand/libcangjie-runtime.so" ]]; then
-      RUNTIME_LIB_DIR="$cand"
-      break
-    fi
-  done
-fi
 if [[ -z "$RUNTIME_LIB_DIR" || ! -f "$RUNTIME_LIB_DIR/libcangjie-runtime.so" ]]; then
   echo "error: set GCV2_RUNTIME_LIB_DIR to a dir containing libcangjie-runtime.so" >&2
   exit 2
@@ -380,8 +370,9 @@ INC_FLAGS=(
   -I"$ROOT/runtime/include"
   -I"$BOUNDS_INC"
 )
-if [[ -d "$ROOT/runtime/output/temp/include" ]]; then
-  INC_FLAGS+=(-I"$ROOT/runtime/output/temp/include")
+RUNTIME_OUTPUT_ROOT="${GCV2_RUNTIME_OUTPUT_ROOT:-$(realpath -m "$RUNTIME_LIB_DIR/../..")}"
+if [[ -d "$RUNTIME_OUTPUT_ROOT/include" ]]; then
+  INC_FLAGS+=(-I"$RUNTIME_OUTPUT_ROOT/include")
 fi
 
 validate_mutualwait_manifest
