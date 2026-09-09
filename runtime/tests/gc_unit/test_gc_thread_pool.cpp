@@ -306,6 +306,26 @@ bool RunLegacyControlActivityOwnsMarkWindow()
         GcLog::CurrentSeq() == 0;
 }
 
+bool RunControlActivityCannotReplaceProductCycle()
+{
+    if (CJ_ScheduleManagerInit() != 0) {
+        return false;
+    }
+    MutatorManager mutatorManager;
+    YoungForwardTestRuntime runtime(mutatorManager);
+    GcHeapFixture fx;
+    CollectorResources& resources = Heap::GetHeap().GetCollectorResources();
+
+    const CycleToken product = resources.BeginCycle(302, GC_REASON_USER);
+    resources.SetGcStarted(true);
+    const CycleToken afterControlStart = resources.GetExecutionToken();
+    const CycleSnapshot during = resources.GetCycleSnapshot();
+    const bool productStillOwns = afterControlStart.generation == product.generation &&
+        afterControlStart.sequence == product.sequence && during.Active(product.generation);
+    const bool productEnded = resources.EndCycle(product);
+    return productStillOwns && productEnded && !resources.IsGcStarted() && GcLog::CurrentSeq() == 0;
+}
+
 bool RunYoungRuntimeProductEntry()
 {
     // gc_unit does not start the language scheduler.  The product phase
@@ -542,6 +562,11 @@ GC_TEST(GCThreadPool, StaleCycleTokenCannotEndReplacementCycle)
 GC_TEST(GCThreadPool, LegacyControlActivityPublishesAndClearsOwnedCycle)
 {
     ExpectIsolatedScenarioPasses<RunLegacyControlActivityOwnsMarkWindow>();
+}
+
+GC_TEST(GCThreadPool, ControlActivityCannotReplaceProductCycle)
+{
+    ExpectIsolatedScenarioPasses<RunControlActivityCannotReplaceProductCycle>();
 }
 #endif
 
