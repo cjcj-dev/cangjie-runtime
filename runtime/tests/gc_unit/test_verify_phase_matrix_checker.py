@@ -17,6 +17,9 @@ TARGETS = (
     ("oops_mark", "VerifyRegions.cpp", "void VerifyRegions::VerifyAfterYoungMark("),
 )
 
+OBJECTS_DECLARATION = "void VerifyHeapObjects("
+OBJECTS_CALL = "VerifyPhaseEnter(VerifyFace::Objects, point)"
+
 
 def function_span(text: str, anchor: str):
     if text.count(anchor) != 1:
@@ -118,6 +121,43 @@ def main() -> int:
         print_arm("line_shift", rc, faces, output, ok)
         failures += not ok
 
+    # Symbol identity is token-based: harmless declaration formatting is not an
+    # identity change.
+    with tempfile.TemporaryDirectory(prefix="verify_phase_whitespace_") as temporary:
+        verify_root = copy_verify(repo, temporary)
+        source = verify_root / "VerifyHeap.cpp"
+        text = source.read_text(encoding="utf-8")
+        source.write_text(
+            text.replace(OBJECTS_DECLARATION, "void\n  VerifyHeapObjects (", 1),
+            encoding="utf-8",
+        )
+        rc, faces, output = run_checker(checker, verify_root)
+        ok = rc == 0 and set(faces.values()) == {"GREEN"}
+        print_arm("signature_whitespace", rc, faces, output, ok)
+        failures += not ok
+
+    # A token in a comment, literal, or definitely disabled preprocessor branch
+    # is not an executable admission. Each arm removes the real Objects call and
+    # must therefore make exactly that face red.
+    replacements = (
+        ("comment_token", f"false /* {OBJECTS_CALL} */"),
+        ("string_token", f'false && "{OBJECTS_CALL}"'),
+        ("if_zero_token", f"\n#if 0\n{OBJECTS_CALL}\n#endif\nfalse"),
+    )
+    for arm, replacement in replacements:
+        with tempfile.TemporaryDirectory(prefix=f"verify_phase_{arm}_") as temporary:
+            verify_root = copy_verify(repo, temporary)
+            source = verify_root / "VerifyHeap.cpp"
+            text = source.read_text(encoding="utf-8")
+            if text.count(OBJECTS_CALL) != 1:
+                raise RuntimeError("expected exactly one Objects admission")
+            source.write_text(text.replace(OBJECTS_CALL, replacement, 1), encoding="utf-8")
+            rc, faces, output = run_checker(checker, verify_root)
+            red = {name for name, state in faces.items() if state == "RED"}
+            ok = rc == 1 and red == {"objects"}
+            print_arm(arm, rc, faces, output, ok)
+            failures += not ok
+
     for arm, source_name, anchor in TARGETS:
         face = arm.split("_", 1)[0]
         with tempfile.TemporaryDirectory(prefix=f"verify_phase_{arm}_") as temporary:
@@ -146,7 +186,7 @@ def main() -> int:
         print_arm("unexpected", rc, faces, output, ok)
         failures += not ok
 
-    print(f"VERIFY_PHASE_FAULT_ARMS total=10 failures={failures}")
+    print(f"VERIFY_PHASE_FAULT_ARMS total=14 failures={failures}")
     return 1 if failures else 0
 
 
