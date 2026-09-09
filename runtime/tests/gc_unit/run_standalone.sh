@@ -12,8 +12,11 @@ CXX="${CXX:-clang++}"
 # This source-tree gate is part of the standalone entry, not an opt-in probe.
 # Stable symbol identities make harmless line shifts invisible, while the fault
 # arms prove that removing any declared admission fails exactly its own face.
-PYTHONDONTWRITEBYTECODE=1 python3 "$SRC/check_verify_phase_matrix.py" \
-  "$ROOT/runtime/src/Heap/Verify"
+if ! PYTHONDONTWRITEBYTECODE=1 python3 "$SRC/check_verify_phase_matrix.py" \
+    "$ROOT/runtime/src/Heap/Verify"; then
+  echo "GC_UNIT_STANDALONE_FAIL: verification face matrix is incomplete" >&2
+  exit 2
+fi
 echo "GATE_VERIFY_PHASE_MATRIX_OK entry=standalone"
 PYTHONDONTWRITEBYTECODE=1 python3 "$SRC/test_verify_phase_matrix_checker.py" "$ROOT"
 echo "GATE_VERIFY_PHASE_FAULT_ARMS_OK entry=standalone"
