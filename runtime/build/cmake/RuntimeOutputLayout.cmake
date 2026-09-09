@@ -10,8 +10,9 @@ function(cj_runtime_configure_output_layout)
     # Every user-provided CMake cache input is part of the build identity.  A
     # hand-maintained option list is unsafe here: a newly introduced -D axis
     # can change the produced libraries while silently retaining an old output
-    # directory.  Keep only this module's derived cache entries out of the
-    # digest so repeated configuration is stable.
+    # directory.  INTERNAL and STATIC are legal -D types too; retain those
+    # command-line inputs while excluding CMake's generated bookkeeping, whose
+    # presence and binary-directory values change across equivalent configures.
     set(_signature "SCHEMA_VERSION=2\n")
     get_cmake_property(_cache_variables CACHE_VARIABLES)
     list(SORT _cache_variables)
@@ -22,7 +23,11 @@ function(cj_runtime_configure_output_layout)
         endif()
         get_property(_cache_type CACHE "${_variable}" PROPERTY TYPE)
         if(_cache_type STREQUAL "INTERNAL" OR _cache_type STREQUAL "STATIC")
-            continue()
+            get_property(_cache_help CACHE "${_variable}" PROPERTY HELPSTRING)
+            if(NOT _cache_help STREQUAL
+                    "No help, variable specified on the command line.")
+                continue()
+            endif()
         endif()
         get_property(_cache_value CACHE "${_variable}" PROPERTY VALUE)
         string(APPEND _signature
