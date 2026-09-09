@@ -51,11 +51,44 @@ class BaseObject;
 
 namespace MarkCompleteVerify {
 
+// ZVerify has two distinct old-mark verification scenes. StrongOnly runs after
+// the strong mark closure and before resurrection/reference processing;
+// WeakComplete runs after that processing and includes weak roots/fields.
+enum class Scene : uint8_t { StrongOnly = 0, WeakComplete };
+
 bool Enabled();
 
 // Runs under its own ScopedStopTheWorld, so it must be called from the GC thread
 // outside any existing STW scope. Report-only.
-void RunAtMarkEnd(const char* point);
+void RunAtMarkEnd(const char* point, Scene scene);
+
+#if defined(MRT_GC_UNIT_TESTS)
+struct SceneTestReceipt {
+    uint64_t strongOnlyCalls = 0;
+    uint64_t weakCompleteCalls = 0;
+    uint64_t strongOnlyOrdinal = 0;
+    uint64_t weakCompleteOrdinal = 0;
+    uint64_t strongOnlyIncludedWeak = 0;
+    uint64_t weakCompleteIncludedWeak = 0;
+    uint64_t strongOnlyRootsSeen = 0;
+    uint64_t weakCompleteRootsSeen = 0;
+    uint64_t weakRootsSeen = 0;
+    uint64_t weakEdgesSeen = 0;
+    uint64_t weakNonNullEdgesSeen = 0;
+    uint64_t resurrectionCalls = 0;
+    uint64_t resurrectionOrdinal = 0;
+    uint64_t weakProcessingCalls = 0;
+    uint64_t weakProcessingOrdinal = 0;
+    uint64_t weakCompleteSawProcessingOrdinal = 0;
+    uint64_t weakEnqueuedBefore = 0;
+    uint64_t weakEnqueuedAfter = 0;
+};
+
+void ResetSceneTestReceipt();
+SceneTestReceipt ReadSceneTestReceipt();
+void NoteResurrectionComplete();
+void NoteWeakProcessingComplete(size_t weakEnqueuedBefore, size_t weakEnqueuedAfter);
+#endif
 
 // Retrace census integrated with the completeness verifier. A dead-edge holder
 // is watched in one cycle; later traces and moves distinguish "painted without

@@ -827,6 +827,12 @@ void TracingCollector::DoTracing(WorkStack& workStack, WorkStack& foreignRootsSe
         FindUselessExternObjects();
     }
 
+    // ZVerify::after_mark: the strong closure is complete here and no
+    // resurrection/finalizer/reference consumer has run yet. Keep this before
+    // DoResurrection so an unmarked strong root cannot be legitimized by the
+    // later resurrected face.
+    MarkCompleteVerify::RunAtMarkEnd("major-strong-only", MarkCompleteVerify::Scene::StrongOnly);
+
     {
         // ZGC breaks termination on resurrection (zMarkTerminate.inline.hpp:125-139)
         // and follows the resurrected closure before accepting mark end. Our
@@ -1018,6 +1024,12 @@ void TracingCollector::DoResurrection(WorkStack& workStack)
     }
     markedObjectCount.fetch_add(resurrectdObjects, std::memory_order_relaxed);
     VLOG(REPORT, "resurrected objects %zu", resurrectdObjects);
+#if defined(MRT_GC_UNIT_TESTS)
+    // Publish from the product consumer's return boundary. A strong-only scene
+    // moved anywhere after DoResurrection() must therefore observe a later
+    // ordinal instead of slipping between the call and a caller-side receipt.
+    MarkCompleteVerify::NoteResurrectionComplete();
+#endif
 }
 
 void TracingCollector::Init() {}

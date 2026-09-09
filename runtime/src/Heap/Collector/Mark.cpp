@@ -800,11 +800,11 @@ void WCollector::TraceHeap()
         ProcessFinalizers();
     }
 
-    // ZVerify::after_mark (zVerify.cpp:496-506) runs here, between mark completing and
-    // anything acting on the mark face.  PostTrace -> HandleTraceRegions is the first
-    // consumer, so this is the last instant at which "mark says X is dead" can still be
-    // contradicted by a live holder rather than by a crash three phases later.
-    MarkCompleteVerify::RunAtMarkEnd("major-mark-end");
+    // ZVerify::after_weak_processing: DoTracing has completed resurrection and
+    // ProcessFinalizers has classified/cleaned all discovered references. This
+    // second scene therefore includes registered-finalizer roots and weak fields.
+    // PostTrace -> HandleTraceRegions is the first mark-face consumer after it.
+    MarkCompleteVerify::RunAtMarkEnd("major-weak-complete", MarkCompleteVerify::Scene::WeakComplete);
 }
 namespace {
 // gcbadroot: tag which root family is currently being walked so PushYoungObject
@@ -2325,6 +2325,13 @@ void WCollector::MarkNewObject(BaseObject* obj)
 void WCollector::ProcessFinalizers()
 {
     FinalizerProcessor& fp = collectorResources.GetFinalizerProcessor();
+#if defined(MRT_GC_UNIT_TESTS)
+    const size_t weakEnqueuedBefore = fp.GetReferenceProcessor().Enqueued(ReferenceType::WEAK);
+#endif
     fp.ProcessReferences([this](BaseObject* obj) { return IsMarkedObject<Generation::Old>(obj); });
+#if defined(MRT_GC_UNIT_TESTS)
+    MarkCompleteVerify::NoteWeakProcessingComplete(
+        weakEnqueuedBefore, fp.GetReferenceProcessor().Enqueued(ReferenceType::WEAK));
+#endif
 }
 } // namespace MapleRuntime
