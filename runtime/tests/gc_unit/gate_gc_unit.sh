@@ -132,6 +132,25 @@ if [[ "$LANGUAGE_TEST_MODE" != "only" && ! -f "$SRC/test_defect_regressions.cpp"
   exit 2
 fi
 
+# The recursive contract fixture intentionally supplies only synthetic gate
+# capabilities.  The real gate checks the product tree before runtime probing or
+# the PASS cache, so neither can hide a missing verification face.
+if [[ "${GC_UNIT_GATE_CONTRACT_SELFTEST:-0}" != "1" ]]; then
+  if ! PYTHONDONTWRITEBYTECODE=1 python3 "$SRC/check_verify_phase_matrix.py" \
+      "$ROOT/runtime/src/Heap/Verify"; then
+    STATUS_REASON=VERIFY_PHASE_MATRIX_RED
+    echo "GC_UNIT_GATE_FAIL: verification face matrix is incomplete" >&2
+    exit 2
+  fi
+  echo "GATE_VERIFY_PHASE_MATRIX_OK entry=gate_unit"
+  if ! PYTHONDONTWRITEBYTECODE=1 python3 "$SRC/test_verify_phase_matrix_checker.py" "$ROOT"; then
+    STATUS_REASON=VERIFY_PHASE_MATRIX_CHECKER_RED
+    echo "GC_UNIT_GATE_FAIL: verification face matrix checker fault arms failed" >&2
+    exit 2
+  fi
+  echo "GATE_VERIFY_PHASE_FAULT_ARMS_OK entry=gate_unit"
+fi
+
 if [[ -z "${GCV2_RUNTIME_LIB_DIR:-}" ]]; then
   for cand in \
     "$ROOT/runtime/output/temp/lib/x86_64_Release" \
