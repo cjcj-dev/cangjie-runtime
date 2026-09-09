@@ -114,6 +114,12 @@ endif()
 
 enable_testing()
 add_test(NAME cj_gc_unit COMMAND cj_gc_unit)
+find_package(Python3 REQUIRED COMPONENTS Interpreter)
+add_test(
+    NAME cj_gc_post_resolve_cycle_lock_source
+    COMMAND ${Python3_EXECUTABLE}
+            ${CMAKE_CURRENT_SOURCE_DIR}/check_post_resolve_cycle_lock.py
+            --source ${CMAKE_SOURCE_DIR}/src/Heap/WCollector/WCollector.cpp)
 if (MRT_M0_CORRELATION_EXPERIMENT)
     set_tests_properties(cj_gc_unit PROPERTIES ENVIRONMENT "MRT_GCV2_DIAG=m0corr")
 endif()
