@@ -69,7 +69,6 @@ void* InstallLiveWeakEdge(void*)
     HeapSlot<>& field = HeapSlotAt<>(reinterpret_cast<uintptr_t>(holder) + TYPEINFO_PTR_SIZE);
     field.StoreColoured(GcUnit::StoreGoodPointer(referent));
     (void)Heap::GetHeap().RegisterExportRoot(holder);
-    (void)Heap::GetHeap().RegisterExportRoot(referent);
     (void)Heap::GetHeap().RegisterExportRoot(finalizer);
     return nullptr;
 }
@@ -111,8 +110,29 @@ GC_OTHER_VM_TEST(MarkCompleteScenes, MajorGcRunsStrongThenWeakComplete)
                  static_cast<unsigned long long>(receipt.weakCompleteOrdinal), ordered ? 1u : 0u);
     GC_EXPECT_TRUE(ordered);
 
+    const bool processedBeforeWeakComplete = receipt.weakProcessingCalls == 1 &&
+        receipt.strongOnlyOrdinal < receipt.weakProcessingOrdinal &&
+        receipt.weakProcessingOrdinal < receipt.weakCompleteOrdinal &&
+        receipt.weakCompleteSawProcessingOrdinal == receipt.weakProcessingOrdinal;
+    const bool weakProcessingChangedState = receipt.weakEnqueuedAfter > receipt.weakEnqueuedBefore &&
+        receipt.weakNonNullEdgesSeen == 0;
+    const bool weakCompleteAfterProcessing = processedBeforeWeakComplete && weakProcessingChangedState;
+    std::fprintf(stderr,
+                 "TARGET_WEAK_PROCESSING_ASSERT_EXECUTED processingCalls=%llu processingOrdinal=%llu "
+                 "weakSawProcessingOrdinal=%llu weakEnqueuedBefore=%llu weakEnqueuedAfter=%llu "
+                 "weakNonNullAtComplete=%llu ordered=%u changed=%u complete=%u\n",
+                 static_cast<unsigned long long>(receipt.weakProcessingCalls),
+                 static_cast<unsigned long long>(receipt.weakProcessingOrdinal),
+                 static_cast<unsigned long long>(receipt.weakCompleteSawProcessingOrdinal),
+                 static_cast<unsigned long long>(receipt.weakEnqueuedBefore),
+                 static_cast<unsigned long long>(receipt.weakEnqueuedAfter),
+                 static_cast<unsigned long long>(receipt.weakNonNullEdgesSeen),
+                 processedBeforeWeakComplete ? 1u : 0u, weakProcessingChangedState ? 1u : 0u,
+                 weakCompleteAfterProcessing ? 1u : 0u);
+    GC_EXPECT_TRUE(weakCompleteAfterProcessing);
+
     const bool policy = receipt.strongOnlyIncludedWeak == 0 && receipt.weakCompleteIncludedWeak == 1 &&
-        receipt.strongOnlyRootsSeen >= 3 && receipt.weakCompleteRootsSeen >= 3 && receipt.weakRootsSeen >= 1 &&
+        receipt.strongOnlyRootsSeen >= 2 && receipt.weakCompleteRootsSeen >= 2 && receipt.weakRootsSeen >= 1 &&
         receipt.weakEdgesSeen >= 1;
     std::fprintf(stderr,
                  "TARGET_SCENE_POLICY_ASSERT_EXECUTED strongIncludesWeak=%llu weakIncludesWeak=%llu policy=%u "

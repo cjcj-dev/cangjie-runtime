@@ -2325,6 +2325,13 @@ void WCollector::MarkNewObject(BaseObject* obj)
 void WCollector::ProcessFinalizers()
 {
     FinalizerProcessor& fp = collectorResources.GetFinalizerProcessor();
+#if defined(MRT_GC_UNIT_TESTS)
+    const size_t weakEnqueuedBefore = fp.GetReferenceProcessor().Enqueued(ReferenceType::WEAK);
+#endif
     fp.ProcessReferences([this](BaseObject* obj) { return IsMarkedObject<Generation::Old>(obj); });
+#if defined(MRT_GC_UNIT_TESTS)
+    MarkCompleteVerify::NoteWeakProcessingComplete(
+        weakEnqueuedBefore, fp.GetReferenceProcessor().Enqueued(ReferenceType::WEAK));
+#endif
 }
 } // namespace MapleRuntime
