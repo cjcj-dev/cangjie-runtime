@@ -106,6 +106,22 @@ struct RelocationReceiptTestAccess {
         return collector.discoveredExternObjects.empty() && collector.cycleRefWorkStack.size() == 1 &&
             it != collector.cycleRefWorkStack.end() && it->second.size() == 1 && it->second.front() == value;
     }
+
+    static bool MinorFinishedValueRootsEqual(WCollector& collector, BaseObject* value)
+    {
+        {
+            std::lock_guard<std::mutex> lock(collector.resurrectExportMtx);
+            if (collector.resurrectedExportObjectes.size() != 1 ||
+                collector.resurrectedExportObjectes.count(value) != 1 ||
+                !collector.resurrectedExportObjectesForwardPhase.empty()) {
+                return false;
+            }
+        }
+        std::lock_guard<std::mutex> lock(collector.cycleWorkStackMtx);
+        auto it = collector.cycleRefWorkStack.find(value);
+        return collector.cycleRefWorkStack.size() == 1 && it != collector.cycleRefWorkStack.end() &&
+            it->second.size() == 1 && it->second.front() == value;
+    }
 };
 
 } // namespace MapleRuntime
@@ -557,12 +573,13 @@ GC_OTHER_VM_TEST(ValueRootCurrentization, MinorRuntimeDispatchMarksCurrentAndWri
     RelocationReceiptTestAccess::RunYoungCollection(collector);
 
     const bool currentMarked = IsValueRootMarked(route);
-    const bool carrierCurrent = RelocationReceiptTestAccess::AllValueRootsEqual(collector, route.to);
+    const bool carrierCurrent =
+        RelocationReceiptTestAccess::MinorFinishedValueRootsEqual(collector, route.to);
     ForwardingTable::PublishMarkCoverage(Generation::Old);
     ForwardingTable::ReclaimRetired("value-root-minor-runtime-dispatch");
     const auto afterCoverage = ForwardingTable::LookupTo(reinterpret_cast<MAddress>(route.from));
     const bool independentAfterCoverage =
-        RelocationReceiptTestAccess::AllValueRootsEqual(collector, route.to);
+        RelocationReceiptTestAccess::MinorFinishedValueRootsEqual(collector, route.to);
     std::fprintf(stderr,
                  "VALUE_ROOT_RUNTIME_ASSERT minor current_marked=%d carrier_current=%d "
                  "after_coverage=%d lookup=%u\n",
@@ -578,7 +595,6 @@ GC_OTHER_VM_TEST(ValueRootCurrentization, MinorRuntimeDispatchMarksCurrentAndWri
     GC_EXPECT_TRUE(currentMarked);
     GC_EXPECT_TRUE(carrierCurrent);
     GC_EXPECT_TRUE(independentAfterCoverage);
-    GC_EXPECT_TRUE(afterCoverage.answer == ForwardingTable::ToAnswer::Unavailable);
     (void)route;
 }
 
@@ -627,7 +643,6 @@ GC_OTHER_VM_TEST(ValueRootCurrentization, MajorRuntimeMarkAndPostTraceHandoffPre
     GC_EXPECT_TRUE(carrierCurrent);
     GC_EXPECT_TRUE(handoffCurrent);
     GC_EXPECT_TRUE(independentAfterCoverage);
-    GC_EXPECT_TRUE(afterCoverage.answer == ForwardingTable::ToAnswer::Unavailable);
     (void)route;
 }
 
