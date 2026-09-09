@@ -106,6 +106,68 @@ GC_OTHER_VM_TEST(VerifyMarkingStacks, RejectsMajorTaskDebtAtTaskExit)
 #endif
 }
 
+GC_OTHER_VM_TEST(VerifyMarkingStacks, RejectsPublishedYoungStripeDebtAndAcceptsDrainedControl)
+{
+#if defined(__linux__)
+    GC_EXPECT_EQ(setenv("MRT_GCV2_VERIFY_MARKING", "1", 1), 0);
+    MarkStripeSet stripes(2);
+    MarkThreadLocalStacks local(2);
+    local.Push(stripes, 1, MarkStackEntry::MarkAndFollow(reinterpret_cast<BaseObject*>(0x1000)), true);
+    GC_EXPECT_TRUE(local.Flush(stripes, true));
+    GC_EXPECT_EQ(stripes.Population(), 1u);
+
+    int stderrPipe[2];
+    GC_EXPECT_EQ(pipe(stderrPipe), 0);
+    const pid_t child = fork();
+    GC_EXPECT_TRUE(child >= 0);
+    if (child == 0) {
+        close(stderrPipe[0]);
+        (void)dup2(stderrPipe[1], STDERR_FILENO);
+        close(stderrPipe[1]);
+        (void)signal(SIGABRT, SIG_DFL);
+        VerifyEmpty(MarkingGeneration::YOUNG, MarkingBoundary::JOIN, MarkingContainer::STRIPE,
+                    stripes.Population(), NO_MARKING_INDEX, NO_MARKING_INDEX, stripes.FirstNonEmptyStripe());
+        _exit(0);
+    }
+    close(stderrPipe[1]);
+    std::string output;
+    char buffer[1024];
+    for (;;) {
+        const ssize_t bytes = read(stderrPipe[0], buffer, sizeof(buffer));
+        if (bytes > 0) {
+            output.append(buffer, static_cast<size_t>(bytes));
+            continue;
+        }
+        if (bytes == 0) {
+            break;
+        }
+        GC_EXPECT_TRUE(errno == EINTR);
+    }
+    close(stderrPipe[0]);
+    int status = 0;
+    GC_EXPECT_EQ(waitpid(child, &status, 0), child);
+    GC_EXPECT_TRUE(WIFSIGNALED(status));
+    GC_EXPECT_EQ(WTERMSIG(status), SIGABRT);
+    GC_EXPECT_TRUE(output.find("generation=young boundary=join container=stripe") != std::string::npos);
+    GC_EXPECT_TRUE(output.find("stripe=1 pending=1") != std::string::npos);
+
+    MarkingSMR smr(1);
+    MarkStripeStack* published = stripes.At(1).StealStack(smr, 0);
+    GC_EXPECT_TRUE(published != nullptr);
+    MarkStripeStack::Destroy(published);
+    smr.Reclaim(0);
+    GC_EXPECT_EQ(stripes.Population(), 0u);
+    VerifyEmpty(MarkingGeneration::YOUNG, MarkingBoundary::JOIN, MarkingContainer::STRIPE,
+                stripes.Population(), NO_MARKING_INDEX, NO_MARKING_INDEX, stripes.FirstNonEmptyStripe());
+    std::fprintf(stderr,
+                 "DETAIL marking_stack_stripe_control abort_signal=%d "
+                 "diagnostic=young/join/stripe cut_pending=1 restored_pending=0\n",
+                 SIGABRT);
+#else
+    GC_EXPECT_TRUE(true);
+#endif
+}
+
 GC_OTHER_VM_TEST(VerifyMarkingStacks, ObjectsFaceOwnsMarkCompleteAdmission)
 {
     GC_EXPECT_EQ(setenv("MRT_GCV2_VERIFY_OBJECTS", "1", 1), 0);
