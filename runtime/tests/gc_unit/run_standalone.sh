@@ -249,6 +249,7 @@ $CXX -std=gnu++17 -O0 -g -Wall -Wextra -pthread -fno-rtti \
     "$SRC/test_mem_map.cpp" \
     "$SRC/test_colour_census.cpp" \
     "$SRC/test_payload_clamp.cpp" \
+    "$SRC/test_cycle_ref_work_lock.cpp" \
   -L"$RUNTIME_LIB_DIR" -Wl,-rpath,"$RUNTIME_LIB_DIR" -Wl,--exclude-libs,ALL \
   -lcangjie-runtime -lboundscheck \
   -o "$OUT/cj_gc_unit"

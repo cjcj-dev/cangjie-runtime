@@ -173,6 +173,7 @@ class WCollector : public CopyCollector {
     friend struct RelocationReceiptTestAccess;
     friend struct RemsetRearmTestAccess;
     friend struct LoadHealDeliveryTestAccess;
+    friend struct CycleRefWorkTestAccess;
 #endif
 
 public:
@@ -220,12 +221,7 @@ public:
     BaseObject* ForwardObject(BaseObject* fromVersion) override;
     BaseObject* ResolveStoreValue(BaseObject* ref, const ForwardingProvenance& provenance) const override;
     void PostResolveCycleTask();
-    void PrepareCycleRef()
-    {
-        std::lock_guard<std::mutex> lg(cycleWorkStackMtx);
-        cycleRefWorkStack.insert(discoveredExternObjects.begin(), discoveredExternObjects.end());
-        discoveredExternObjects.clear();
-    }
+    void PrepareCycleRef();
     void MergeResurrectExportObjects()
     {
         std::lock_guard<std::mutex> lg(resurrectExportMtx);
@@ -1344,6 +1340,8 @@ protected:
     void EnumAndTagRawRoot(ObjectRef& ref, RootSet& rootSet) const override;
 
 private:
+    bool HasCycleRefWork();
+
     using MinorObjectSet = std::unordered_set<BaseObject*>;
     using MinorRegionSet = std::unordered_set<RegionInfo*>;
     using MinorSlotSet = std::unordered_set<MAddress>;
