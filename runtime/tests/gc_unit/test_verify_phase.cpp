@@ -5,6 +5,7 @@
 #include "Heap/Verify/VerifyPhase.h"
 #include "gc_unittest.hpp"
 
+#include <cstdio>
 #include <cstdlib>
 
 using namespace MapleRuntime;
@@ -40,11 +41,26 @@ void ExpectAllFaces(bool enabled)
 }
 } // namespace
 
-GC_OTHER_VM_TEST(VerifyPhase, FiveFaceDefaultOffArm)
+GC_OTHER_VM_TEST(VerifyPhase, FiveFaceBuildDefaultMatrix)
 {
 #if defined(__linux__)
     ClearFaceEnvironment();
-    ExpectAllFaces(false);
+#if defined(MRT_DEBUG) && (MRT_DEBUG == 1)
+    GC_EXPECT_FALSE(VerifyFaceEnabled(VerifyFace::Objects));
+    GC_EXPECT_TRUE(VerifyFaceEnabled(VerifyFace::Marking));
+    GC_EXPECT_TRUE(VerifyFaceEnabled(VerifyFace::Remembered));
+    GC_EXPECT_FALSE(VerifyFaceEnabled(VerifyFace::Oops));
+    std::fprintf(stderr, "VERIFY_PHASE_DEFAULT_MATRIX_PRIOR_ASSERTIONS_EXECUTED count=4\n");
+    GC_EXPECT_TRUE(VerifyFaceEnabled(VerifyFace::Roots));
+    std::fprintf(stderr, "VERIFY_PHASE_DEFAULT_MATRIX_ASSERTIONS_EXECUTED mode=debug\n");
+#else
+    GC_EXPECT_FALSE(VerifyFaceEnabled(VerifyFace::Roots));
+    GC_EXPECT_FALSE(VerifyFaceEnabled(VerifyFace::Objects));
+    GC_EXPECT_FALSE(VerifyFaceEnabled(VerifyFace::Marking));
+    GC_EXPECT_FALSE(VerifyFaceEnabled(VerifyFace::Remembered));
+    GC_EXPECT_FALSE(VerifyFaceEnabled(VerifyFace::Oops));
+    std::fprintf(stderr, "VERIFY_PHASE_DEFAULT_MATRIX_ASSERTIONS_EXECUTED mode=release\n");
+#endif
 #else
     GC_EXPECT_TRUE(true);
 #endif
@@ -78,7 +94,7 @@ GC_OTHER_VM_TEST(VerifyPhase, FiveFaceTokenArm)
 GC_OTHER_VM_TEST(VerifyPhase, QueryingOneFaceDoesNotFreezeAnother)
 {
     ClearFaceEnvironment();
-    GC_EXPECT_FALSE(VerifyFaceEnabled(VerifyFace::Roots));
+    GC_EXPECT_FALSE(VerifyFaceEnabled(VerifyFace::Objects));
     setenv("MRT_GCV2_VERIFY_OOPS", "1", 1);
     GC_EXPECT_TRUE(VerifyFaceEnabled(VerifyFace::Oops));
 }
@@ -86,7 +102,7 @@ GC_OTHER_VM_TEST(VerifyPhase, QueryingOneFaceDoesNotFreezeAnother)
 GC_OTHER_VM_TEST(VerifyPhase, LateSetenvDoesNotRetuneInitializedFace)
 {
     ClearFaceEnvironment();
-    GC_EXPECT_FALSE(VerifyFaceEnabled(VerifyFace::Roots));
-    setenv("MRT_GCV2_VERIFY_ROOTS", "1", 1);
-    GC_EXPECT_FALSE(VerifyFaceEnabled(VerifyFace::Roots));
+    GC_EXPECT_FALSE(VerifyFaceEnabled(VerifyFace::Objects));
+    setenv("MRT_GCV2_VERIFY_OBJECTS", "1", 1);
+    GC_EXPECT_FALSE(VerifyFaceEnabled(VerifyFace::Objects));
 }
