@@ -30,9 +30,19 @@
 #include "Heap/WCollector/WCollector.h"
 #undef protected
 #undef private
+#include "Heap/Collector/CollectorProxy.h"
 
 using namespace MapleRuntime;
 using namespace MapleRuntime::GcUnit;
+
+namespace MapleRuntime {
+struct RelocationReceiptTestAccess {
+    static void BindCollector(CollectorResources& resources, TracingCollector* collector)
+    {
+        resources.collectorProxy.currentCollector = collector;
+    }
+};
+} // namespace MapleRuntime
 
 namespace {
 
@@ -198,6 +208,7 @@ GC_TEST(CycleRefSaferegion, HandlerSafepointKeepsCycleRootsConsumable)
     CycleRefTestRuntime runtime(manager);
     GcHeapFixture fixture;
     WCollector collector(Heap::GetHeap().GetAllocator(), Heap::GetHeap().GetCollectorResources());
+    RelocationReceiptTestAccess::BindCollector(Heap::GetHeap().GetCollectorResources(), &collector);
     Mutator resolverMutator;
     resolverMutator.SetInSaferegion(Mutator::SAFE_REGION_TRUE);
 
@@ -272,6 +283,7 @@ GC_TEST(CycleRefSaferegion, HandlerSafepointKeepsCycleRootsConsumable)
     collector.cycleRefWorkStack.clear();
     handlerSafepointContext = nullptr;
     Heap::GetHeap().RemoveExportObject(exportHandle);
+    RelocationReceiptTestAccess::BindCollector(Heap::GetHeap().GetCollectorResources(), nullptr);
 
     // Keep the target ordering assertion first: the deliberate lock-across-
     // handler cut must fail here, not at an earlier setup assertion.
