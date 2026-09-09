@@ -18,14 +18,15 @@ bool ValueIsOne(const char* value)
     return value != nullptr && std::strcmp(value, "1") == 0;
 }
 
-// Match ZGC's trueInDebug defaults: debug builds enable roots, marking, and
-// remembered-set verification. Product builds keep every optional face off,
-// while objects and per-oop verification remain opt-in in every build
-// (z_globals.hpp:78-119).
+// Match the ZGC trueInDebug defaults whose verifier semantics are present:
+// debug builds enable roots and remembered-set verification. Marking stays
+// opt-in until the marking-stack verifier is provided; today's Marking face
+// verifies object closure instead. Product builds keep every optional face off,
+// while objects and per-oop verification remain opt-in (z_globals.hpp:78-119).
 bool BuildDefault(VerifyFace face)
 {
 #if defined(MRT_DEBUG) && (MRT_DEBUG == 1)
-    return face == VerifyFace::Roots || face == VerifyFace::Marking || face == VerifyFace::Remembered;
+    return face == VerifyFace::Roots || face == VerifyFace::Remembered;
 #else
     (void)face;
     return false;
