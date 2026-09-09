@@ -163,7 +163,7 @@ public:
 
 private:
     CollectorResources& resources;
-    CycleContext& cycle;
+    CycleToken cycle;
 };
 
 zpointer LoadBadPointer(BaseObject* object)
