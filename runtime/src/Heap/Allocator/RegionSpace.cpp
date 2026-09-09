@@ -255,6 +255,7 @@ void AllocBuffer::Init()
     static_assert(offsetof(AllocBuffer, tlRegion) == 0,
                   "need to modify the offset of this value in llvm-project at the same time");
     tlRegion = RegionInfo::NullRegion();
+    relocationRegion = RegionInfo::NullRegion();
     ThreadLocal::InitializeCleaner();
     Heap::GetHeap().RegisterAllocBuffer(*this);
 }
@@ -555,17 +556,22 @@ void RegionSpace::FeedHungryBuffers()
 
 void AllocBuffer::FlushRegion()
 {
-    if (LIKELY(tlRegion != RegionInfo::NullRegion()) && tlRegion != nullptr) {
-        RegionSpace& theAllocator = reinterpret_cast<RegionSpace&>(Heap::GetHeap().GetAllocator());
-        RegionManager& manager = theAllocator.GetRegionManager();
-        manager.RemoveThreadLocalRegion(tlRegion);
-        manager.EnlistFullThreadLocalRegion(tlRegion);
-        tlRegion = RegionInfo::NullRegion();
+    RegionInfo* ordinary = tlRegion;
+    RegionInfo* relocation = relocationRegion;
+    tlRegion = RegionInfo::NullRegion();
+    relocationRegion = RegionInfo::NullRegion();
+    RegionSpace& theAllocator = reinterpret_cast<RegionSpace&>(Heap::GetHeap().GetAllocator());
+    RegionManager& manager = theAllocator.GetRegionManager();
+    if (LIKELY(ordinary != RegionInfo::NullRegion()) && ordinary != nullptr) {
+        manager.RemoveThreadLocalRegion(ordinary);
+        manager.EnlistFullThreadLocalRegion(ordinary);
+    }
+    if (LIKELY(relocation != RegionInfo::NullRegion()) && relocation != nullptr && relocation != ordinary) {
+        manager.RemoveThreadLocalRegion(relocation);
+        manager.EnlistFullThreadLocalRegion(relocation);
     }
     RegionInfo* prepared = preparedRegion.load();
     if (LIKELY(prepared != RegionInfo::NullRegion()) && prepared != nullptr) {
-        RegionSpace& theAllocator = reinterpret_cast<RegionSpace&>(Heap::GetHeap().GetAllocator());
-        RegionManager& manager = theAllocator.GetRegionManager();
         manager.RemoveThreadLocalRegion(prepared);
         if (prepared->IsEmpty()) {
             manager.ReclaimRegion(prepared);

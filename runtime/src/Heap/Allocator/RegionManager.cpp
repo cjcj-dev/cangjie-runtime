@@ -3175,6 +3175,29 @@ void RegionManager::RequestForRegion(size_t size)
     prevRegionAllocTime = TimeUtil::NanoSeconds();
 }
 
+size_t RegionManager::GetAllocatedSize() const
+{
+    size_t threadLocalSize = 0;
+    AllocBufferVisitor visitor = [&threadLocalSize](AllocBuffer& regionBuffer) {
+        RegionInfo* ordinary = regionBuffer.GetRegion();
+        RegionInfo* relocation = regionBuffer.GetRelocationRegion();
+        if (LIKELY(ordinary != RegionInfo::NullRegion()) && ordinary != nullptr) {
+            threadLocalSize += ordinary->GetRegionAllocatedSize();
+        }
+        if (LIKELY(relocation != RegionInfo::NullRegion()) && relocation != nullptr && relocation != ordinary) {
+            threadLocalSize += relocation->GetRegionAllocatedSize();
+        }
+    };
+    Heap::GetHeap().GetAllocator().VisitAllocBuffers(visitor);
+    // The live-object lists exclude tlRegionList because its active cursors are
+    // counted through their owning buffers above.
+    return fromRegionList.GetAllocatedSize() + unmovableFromRegionList.GetAllocatedSize() +
+        recentFullRegionList.GetAllocatedSize() + oldLargeRegionList.GetAllocatedSize() +
+        recentLargeRegionList.GetAllocatedSize() + oldPinnedRegionList.GetAllocatedSize() +
+        recentPinnedRegionList.GetAllocatedSize() + rawPointerPinnedRegionList.GetAllocatedSize() +
+        largeTraceRegions.GetAllocatedSize() + fullTraceRegions.GetAllocatedSize() + threadLocalSize;
+}
+
 static void FillRouteReserve(uintptr_t start, size_t size)
 {
     if (size < 8) {
@@ -3227,6 +3250,16 @@ static void FillPublishedRouteGaps(RegionInfo* fromRegion)
     }
 }
 
+static bool NormalRouteTargetAcceptsGeneration(RegionInfo* fromRegion, RegionInfo* target)
+{
+    // ZGC zRelocate.cpp:1309-1312 fixes old -> old in the relocation policy;
+    // zRelocate.cpp:614 selects a cached target using that policy. A caller's
+    // ordinary young allocation buffer cannot choose the generation of an old
+    // source's route. Preserve existing young-source behavior here; its age
+    // and tenuring policy are outside this normal old-route constraint.
+    return fromRegion->IsYoungRegion() || !target->IsYoungRegion();
+}
+
 bool RegionManager::RouteOrCompactRegionImpl(RegionInfo* region)
 {
     CHECK(region->IsRoutingState());
@@ -3264,22 +3297,33 @@ bool RegionManager::RouteOrCompactRegionImpl(RegionInfo* region)
     }
     // permwho: fromBytes now sizes the reservation to cover the prefix-sum face.
     AllocBuffer* buffer = AllocBuffer::GetOrCreateAllocBuffer();
-    RegionInfo* toRegion1 = buffer->GetRegion();
+    RegionInfo* toRegion1 = buffer->GetRelocationRegion();
     // resolveto / offpast: CompactRegion prepends the still-ghost region as TL and the old
     // path SetRegion'd it. The next Route then packed a *different* region's survivors into
     // that Compacted tail. Resolve rewrote roots to those to-addrs; Fix Admit'd them against
     // the host's from-offset bits (live0Surv=0) → leave-alone → reclaim → GetSize MAPERR.
-    if (toRegion1 != RegionInfo::NullRegion() &&
+    if (toRegion1 != nullptr && toRegion1 != RegionInfo::NullRegion() &&
         (toRegion1->IsCompacted() || toRegion1->IsGhostFromRegion() || toRegion1 == region)) {
-        buffer->ClearRegion();
+        buffer->ClearRelocationRegion();
+        toRegion1 = RegionInfo::NullRegion();
+    }
+    // Apply the source's target-generation constraint before reserving either
+    // part of the route. Retire an incompatible TLS as on ordinary refill;
+    // merely clearing its cursor would leave it outside candidate lists.
+    if (toRegion1 != nullptr && toRegion1 != RegionInfo::NullRegion() &&
+        !NormalRouteTargetAcceptsGeneration(region, toRegion1)) {
+        CHECK(toRegion1->IsThreadLocalRegion());
+        RemoveThreadLocalRegion(toRegion1);
+        EnlistFullThreadLocalRegion(toRegion1);
+        buffer->ClearRelocationRegion();
         toRegion1 = RegionInfo::NullRegion();
     }
     CHECK(region != toRegion1);
     bool result;
     // routefix: already hold ROUTING — allocate without ScopedEnterSaferegion.
     // Fail → CompactRegion (same as product null path); geometry still freezes at NoteSeal.
-    if (toRegion1 == RegionInfo::NullRegion()) {
-        toRegion1 = AllocateThreadLocalRegion(false, false, /*allowSaferegion=*/false);
+    if (toRegion1 == nullptr || toRegion1 == RegionInfo::NullRegion()) {
+        toRegion1 = AllocateThreadLocalRegion(false, /*youngRegion=*/false, /*allowSaferegion=*/false);
         if (toRegion1 == nullptr) {
             // routedest: the immune arm. This plan names the from-region as its own
             // destination, and the from-region is already a ghost — the ghost bit is what
@@ -3294,7 +3338,7 @@ bool RegionManager::RouteOrCompactRegionImpl(RegionInfo* region)
             CompactRegion(region);
             toRegion1 = region;
             result = false;
-            buffer->ClearRegion();
+            buffer->ClearRelocationRegion();
             RehomeCompactedInPlaceRegion(region);
             DLOG(FORWARD, "route region %p@[%#zx+%zu, %#zx) => compact-in-place %p@[%#zx~%#zx, %#zx)",
                 region, region->GetRegionStart(), fromBytes, region->GetRegionEnd(), toRegion1,
@@ -3305,7 +3349,7 @@ bool RegionManager::RouteOrCompactRegionImpl(RegionInfo* region)
             toRegion1->Alloc(fromBytes);
             FillRouteReserve(reserved, fromBytes);
             result = true;
-            buffer->SetRegion(toRegion1);
+            buffer->SetRelocationRegion(toRegion1);
         }
         size_t toRegion1Start = toRegion1->GetRegionStart();
         // routedest: hold the destination before the plan naming it becomes readable.
@@ -3355,9 +3399,10 @@ bool RegionManager::RouteOrCompactRegionImpl(RegionInfo* region)
     {
         RemoveThreadLocalRegion(toRegion1);
         EnlistFullThreadLocalRegion(toRegion1);
+        buffer->ClearRelocationRegion();
     }
 
-    RegionInfo* toRegion2 = AllocateThreadLocalRegion(false, false, /*allowSaferegion=*/false);
+    RegionInfo* toRegion2 = AllocateThreadLocalRegion(false, /*youngRegion=*/false, /*allowSaferegion=*/false);
     CHECK(region != toRegion2);
     if (toRegion2 != nullptr) {
         toRegion1->Alloc(usedBytes1);
@@ -3366,7 +3411,7 @@ bool RegionManager::RouteOrCompactRegionImpl(RegionInfo* region)
         CHECK(toRegion2->Alloc(usedBytes2) != 0);
         FillRouteReserve(r2, usedBytes2);
         result = true;
-        buffer->SetRegion(toRegion2);
+        buffer->SetRelocationRegion(toRegion2);
     } else {
         // Publish the split plan before Compact so leftover objects land at GetRoute dests.
         toRegion1->SetRouteDestHold(1);
@@ -3374,7 +3419,7 @@ bool RegionManager::RouteOrCompactRegionImpl(RegionInfo* region)
         CompactRegion(region, toRegion1);
         toRegion2 = region; // region is partially compacted into itself.
         result = false;
-        buffer->ClearRegion();
+        buffer->ClearRelocationRegion();
         RehomeCompactedInPlaceRegion(region);
     }
     uint32_t toRegion2Idx = toRegion2->GetUnitIdx();
