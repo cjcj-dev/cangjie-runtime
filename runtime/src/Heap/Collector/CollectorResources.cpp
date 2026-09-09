@@ -298,7 +298,7 @@ void CollectorResources::SetGcStarted(bool val)
         context.stats.reason = gcStats.reason;
         const uint64_t sequence = GcLog::BeginCycle(CycleSlot(context.generation));
         context.sequence.store(sequence, std::memory_order_release);
-        completedControlCycles[CycleSlot(context.generation)].store(0, std::memory_order_release);
+        completedOldControlCycle.store(0, std::memory_order_release);
         executionContext.store(&context, std::memory_order_release);
         controlCycleToken = { context.generation, sequence };
         const uint32_t slot = CycleSnapshot::ActiveBit(context.generation) |
@@ -323,7 +323,9 @@ void CollectorResources::SetGcStarted(bool val)
         return;
     }
     GcLog::CompleteCycle(token.sequence, CycleSlot(token.generation));
-    completedControlCycles[CycleSlot(token.generation)].store(token.sequence, std::memory_order_release);
+    std::atomic<uint64_t>& completed = token.generation == CycleGeneration::Young ?
+        completedYoungControlCycle : completedOldControlCycle;
+    completed.store(token.sequence, std::memory_order_release);
     cycleState.fetch_and(~CycleSnapshot::SlotMask(token.generation), std::memory_order_acq_rel);
     context.sequence.store(0, std::memory_order_release);
 }
