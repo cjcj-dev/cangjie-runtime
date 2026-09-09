@@ -4,6 +4,8 @@
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "$0")/../../.." && pwd)"
+PYTHONDONTWRITEBYTECODE=1 python3 "$ROOT/runtime/tests/gc_unit/test_mutualwait_ast_once.py"
+echo "MUTUALWAIT_AST_ONCE_CONTRACT_OK"
 fixture="$(mktemp -d /tmp/gc-unit-gate-contract.XXXXXX)"
 trap 'rm -rf "$fixture"' EXIT
 # The parent gate supplies its own compiler, runtime, status, mode, and skip
