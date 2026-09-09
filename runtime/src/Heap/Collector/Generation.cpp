@@ -859,6 +859,7 @@ void WCollector::DoYoungGarbageCollection()
         // walk put back — the residual is what FYS=0 really loses. Observe only, default off.
 
         StoreBarrierBuffer::FlushAll(rememberedSet);
+        VerifyRememberedBeforeColorFlip();
         // S5 flip only (YOUNG_CONCURRENT.md). ScanPreviousForMinor runs after
         // world-release with mark_follow (zRemembered.cpp:561-576).
         rememberedSet.FlipForMinor();
@@ -1213,6 +1214,11 @@ void WCollector::DoYoungGarbageCollection()
     VLOG(REPORT, "[GCV2][setbitmap] use=%d reachable_n=%zu set_n=%zu fullYoung=%d youngConc=%d",
          static_cast<int>(useBitmapLedger), reachableVec.size(), reachableObjects.size(),
          static_cast<int>(fullYoungScan), 1);
+    // Delayed after-scan edge: every slot from the destructive previous-face
+    // scan has now passed through rescan and the complete concurrent follow.
+    // Publications that lost the scan race must instead be present on the new
+    // current face before their forwarding generation can retire.
+    Heap::GetHeap().GetRememberedSet().CompleteScanForMinor(rememberedSlots);
     // No independent full-root closure is available after deleting the empty
     // explainer. nullptr means "not measured"; an empty set must mean a closure
     // actually ran and found no holders.

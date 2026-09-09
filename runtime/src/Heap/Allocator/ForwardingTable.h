@@ -9,6 +9,7 @@
 
 #include <cstddef>
 #include <cstdint>
+#include <unordered_set>
 
 #include "Common/TypeDef.h"
 #include "Heap/Collector/ZForwarding.h"
@@ -204,6 +205,15 @@ public:
     static Publication RetainOpenPublicationAfterCopy(RegionInfo* region, MAddress from);
     static ZForwarding::Receipt InstallMapping(const Publication& publication, MAddress from, MAddress to);
     static MAddress InsertMapping(const Publication& publication, MAddress from, MAddress to);
+    static void PublishRemsetReceipt(const Publication& publication, MAddress fromSlot, MAddress toSlot,
+                                     uint8_t sourceFace, uint8_t destinationFace, uint64_t youngSeq,
+                                     bool rejectedByYoung, bool consumerAlreadyComplete);
+    static bool HasRemsetReceipt(const Publication& publication, MAddress fromSlot, MAddress toSlot,
+                                 uint8_t sourceFace);
+    static void AcceptRemsetPublications(uint64_t youngSeq);
+    static void CompleteRemsetPublications(uint64_t youngSeq,
+                                           const std::unordered_set<MAddress>& scannedSlots,
+                                           const class RememberedSet& rememberedSet);
     // Out of line so the unit runner exercises the product SO's publication
     // decision instead of compiling a private test copy.
     static bool ReceiptAllowsForwarded(MAddress mapped);
