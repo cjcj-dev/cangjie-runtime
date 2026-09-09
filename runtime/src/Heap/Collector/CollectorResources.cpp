@@ -319,6 +319,20 @@ bool CollectorResources::PublishCyclePhase(const CycleToken& token, GCPhase phas
     return true;
 }
 
+bool CollectorResources::PublishInactiveCyclePhase(CycleGeneration generation, GCPhase phase)
+{
+    std::unique_lock<std::mutex> lifecycleLock(cycleLifecycleLock);
+    if (GetCycleSnapshot().Active(generation)) {
+        return false;
+    }
+    const size_t shift = CycleSlot(generation) * 8;
+    const uint32_t phaseMask = 0x7fu << shift;
+    uint32_t previous = cycleState.load(std::memory_order_acquire);
+    while (!cycleState.compare_exchange_weak(previous, (previous & ~phaseMask) |
+        (static_cast<uint32_t>(phase) << shift), std::memory_order_acq_rel, std::memory_order_acquire)) {}
+    return true;
+}
+
 bool CollectorResources::EndCycle(const CycleToken& token)
 {
     std::unique_lock<std::mutex> lifecycleLock(cycleLifecycleLock);

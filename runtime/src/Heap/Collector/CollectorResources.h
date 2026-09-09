@@ -82,6 +82,7 @@ public:
     CycleToken BeginCycle(uint64_t taskIndex, GCReason reason);
     bool EndCycle(const CycleToken& token);
     bool PublishCyclePhase(const CycleToken& token, GCPhase phase);
+    bool PublishInactiveCyclePhase(CycleGeneration generation, GCPhase phase);
     GCStats& GetExecutionStats()
     {
         return GetCycleSnapshot().AnyActive() ? GetExecutionContext().stats : gcStats;
