@@ -79,10 +79,13 @@ void WCollector::PostTrace()
     WeakRefBuffer::Instance().ClearWeakRefBuffer();
     // clear satb buffer when gc finish tracing.
     SatbBuffer::Instance().ClearBuffer();
+    // Value-only cycle roots still depend on the preceding relocation receipts.
+    // Complete their owner handoff while that authority is queryable; publishing
+    // old-mark coverage is the point after which ReclaimRetired may remove it.
+    PrepareCycleRef();
     ForwardingTable::PublishMarkCoverage(Generation::Old);
     ForwardingTable::ReclaimRetired("old-mark-coverage");
     // reclaim large objects immediately after tracing is done.
-    PrepareCycleRef();
     CollectLargeGarbage();
     CollectPinnedGarbage();
     RefineFromSpace();
