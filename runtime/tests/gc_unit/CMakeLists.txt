@@ -70,6 +70,7 @@ set(GC_UNIT_SOURCES
     test_reference_processor.cpp
     test_mark_stack_entry.cpp
     test_mark_stripe.cpp
+    test_mark_complete_scenes.cpp
     test_partial_array.cpp
     test_segmented_array_init.cpp
     test_verify_roots.cpp
