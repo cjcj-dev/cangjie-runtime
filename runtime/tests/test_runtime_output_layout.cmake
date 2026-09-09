@@ -14,6 +14,13 @@ set(MRT_GC_UNIT_TESTS OFF)
 set(MRT_TESTABLE_INTERNALS OFF)
 include("${TEST_RUNTIME_SOURCE_DIR}/build/cmake/RuntimeOutputLayout.cmake")
 
+# Exercise the rejection predicate in a child script; the integration arm
+# separately proves that Ninja Multi-Config sets the property passed here.
+if(TEST_RUNTIME_OUTPUT_LAYOUT_MULTI_CONFIG_CHILD)
+    cj_runtime_require_single_config_generator(TRUE)
+    message(FATAL_ERROR "multi-config output layout was accepted")
+endif()
+
 # Run the typed cache-axis arms in child processes so INTERNAL is supplied by
 # an actual -D command-line input.  Setting it here with CACHE INTERNAL would
 # instead model project-generated CMake bookkeeping, which is intentionally
@@ -23,6 +30,23 @@ if(TEST_RUNTIME_OUTPUT_LAYOUT_CHILD)
     message(STATUS
         "RUNTIME_OUTPUT_LAYOUT_CHILD id=${CANGJIE_RUNTIME_CONFIG_ID} root=${CMAKE_OUTPUT_DIRECTORY}")
     return()
+endif()
+
+execute_process(
+    COMMAND ${CMAKE_COMMAND}
+        "-DTEST_RUNTIME_SOURCE_DIR=${TEST_RUNTIME_SOURCE_DIR}"
+        -DTEST_RUNTIME_OUTPUT_LAYOUT_MULTI_CONFIG_CHILD=ON
+        -P "${CMAKE_CURRENT_LIST_FILE}"
+    RESULT_VARIABLE _multi_config_rc
+    OUTPUT_VARIABLE _multi_config_out
+    ERROR_VARIABLE _multi_config_err)
+if(_multi_config_rc EQUAL 0)
+    message(FATAL_ERROR "multi-config output layout child unexpectedly succeeded")
+endif()
+if(NOT _multi_config_err MATCHES "supports only single-config generators" OR
+        NOT _multi_config_err MATCHES "multi-config generators are not supported")
+    message(FATAL_ERROR
+        "multi-config output layout rejection text missing: ${_multi_config_err}")
 endif()
 
 cj_runtime_configure_output_layout()
