@@ -884,6 +884,8 @@ void WCollector::VisitMinorValueRoots(const std::function<void(BaseObject*)>& vi
 {
     {
         std::lock_guard<std::mutex> lock(resurrectExportMtx);
+        CurrentizeValueRootSet(resurrectedExportObjectes);
+        CurrentizeValueRootSet(resurrectedExportObjectesForwardPhase);
         gMinorRootOrigin = "value_export";
         for (BaseObject* object : resurrectedExportObjectes) {
             visitor(object);
@@ -894,6 +896,7 @@ void WCollector::VisitMinorValueRoots(const std::function<void(BaseObject*)>& vi
         }
     }
     std::lock_guard<std::mutex> lock(cycleWorkStackMtx);
+    CurrentizeValueRootMap(cycleRefWorkStack);
     gMinorRootOrigin = "value_cycle";
     for (const auto& entry : cycleRefWorkStack) {
         visitor(entry.first);

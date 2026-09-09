@@ -1024,6 +1024,49 @@ void TracingCollector::Init() {}
 
 void TracingCollector::Fini() { Collector::Fini(); }
 
+BaseObject* TracingCollector::ResolveCurrentValueRoot(BaseObject* value, const void* owner,
+                                                      ForwardingStage stage) const
+{
+    if (value == nullptr || !Heap::IsHeapAddress(value)) {
+        return value;
+    }
+    const ForwardingProvenance provenance{
+        ForwardingHolderKind::Static, owner, nullptr, stage, ForwardingWriterKind::CollectorHeal,
+        ForwardingSourceKind::CallerValue, nullptr, nullptr, ForwardingFieldKind::RootSlot
+    };
+    BaseObject* current = ResolveStoreValue(value, provenance);
+    CHECK_DETAIL(current != nullptr && Heap::IsHeapAddress(current),
+                 "value root resolve requires a heap to-address from=%p current=%p", value, current);
+    CHECK_DETAIL(Collector::JudgeHandOutTarget(current) == HandVerdict::Usable,
+                 "value root resolve requires a usable target from=%p current=%p", value, current);
+    return current;
+}
+
+void TracingCollector::CurrentizeValueRootSet(std::unordered_set<BaseObject*>& roots) const
+{
+    std::unordered_set<BaseObject*> current;
+    current.reserve(roots.size());
+    for (BaseObject* value : roots) {
+        current.insert(ResolveCurrentValueRoot(value, &roots));
+    }
+    roots.swap(current);
+}
+
+void TracingCollector::CurrentizeValueRootMap(
+    std::unordered_map<BaseObject*, std::list<BaseObject*>>& roots) const
+{
+    std::unordered_map<BaseObject*, std::list<BaseObject*>> current;
+    current.reserve(roots.size());
+    for (const auto& entry : roots) {
+        BaseObject* key = ResolveCurrentValueRoot(entry.first, &roots);
+        std::list<BaseObject*>& values = current[key];
+        for (BaseObject* value : entry.second) {
+            values.push_back(ResolveCurrentValueRoot(value, &roots));
+        }
+    }
+    roots.swap(current);
+}
+
 // Registered finalizers are discovered by DoResurrection and fixed by
 // VisitRawPointers. Only queued/running finalizables are strong mark roots.
 void TracingCollector::EnumFinalizerProcessorRoots(RootSet& rootSet) const
@@ -1046,11 +1089,17 @@ void TracingCollector::EnumAllSurrectedExportRoots(RootSet &rootSet)
 {
     {
         std::lock_guard<std::mutex> lg(resurrectExportMtx);
+        CurrentizeValueRootSet(resurrectedExportObjectes);
+        CurrentizeValueRootSet(resurrectedExportObjectesForwardPhase);
         for (auto* obj : resurrectedExportObjectes) {
+            rootSet.push_back(obj);
+        }
+        for (auto* obj : resurrectedExportObjectesForwardPhase) {
             rootSet.push_back(obj);
         }
     }
     std::lock_guard<std::mutex> lg(cycleWorkStackMtx);
+    CurrentizeValueRootMap(cycleRefWorkStack);
     auto it = cycleRefWorkStack.begin();
     while (it != cycleRefWorkStack.end()) {
         BaseObject* exportObj = it->first;

@@ -189,6 +189,71 @@ struct RelocationReceiptTestAccess {
     }
 
     static void RemapYoungRoots(WCollector& collector) { collector.RemapYoungRoots(); }
+
+    static void SeedValueRoots(WCollector& collector, BaseObject* value)
+    {
+        {
+            std::lock_guard<std::mutex> lock(collector.resurrectExportMtx);
+            collector.resurrectedExportObjectes.clear();
+            collector.resurrectedExportObjectesForwardPhase.clear();
+            collector.resurrectedExportObjectes.insert(value);
+            collector.resurrectedExportObjectesForwardPhase.insert(value);
+        }
+        std::lock_guard<std::mutex> lock(collector.cycleWorkStackMtx);
+        collector.cycleRefWorkStack.clear();
+        collector.cycleRefWorkStack[value].push_back(value);
+    }
+
+    static bool AllValueRootCarriersEqual(WCollector& collector, BaseObject* value)
+    {
+        bool resurrected = false;
+        {
+            std::lock_guard<std::mutex> lock(collector.resurrectExportMtx);
+            resurrected = collector.resurrectedExportObjectes.size() == 1 &&
+                collector.resurrectedExportObjectes.count(value) == 1 &&
+                collector.resurrectedExportObjectesForwardPhase.size() == 1 &&
+                collector.resurrectedExportObjectesForwardPhase.count(value) == 1;
+        }
+        std::lock_guard<std::mutex> lock(collector.cycleWorkStackMtx);
+        auto it = collector.cycleRefWorkStack.find(value);
+        return resurrected && collector.cycleRefWorkStack.size() == 1 &&
+            it != collector.cycleRefWorkStack.end() && it->second.size() == 1 &&
+            it->second.front() == value;
+    }
+
+    static bool BothResurrectionSetsEqual(WCollector& collector, BaseObject* value)
+    {
+        std::lock_guard<std::mutex> lock(collector.resurrectExportMtx);
+        return collector.resurrectedExportObjectes.size() == 1 &&
+            collector.resurrectedExportObjectes.count(value) == 1 &&
+            collector.resurrectedExportObjectesForwardPhase.size() == 1 &&
+            collector.resurrectedExportObjectesForwardPhase.count(value) == 1;
+    }
+
+    static std::vector<BaseObject*> VisitMinorValueRoots(WCollector& collector)
+    {
+        std::vector<BaseObject*> visited;
+        collector.VisitMinorValueRoots([&visited](BaseObject* value) { visited.push_back(value); });
+        return visited;
+    }
+
+    static std::vector<BaseObject*> EnumMajorValueRoots(WCollector& collector)
+    {
+        TracingCollector::RootSet rootSet;
+        collector.EnumAllSurrectedExportRoots(rootSet);
+        std::vector<BaseObject*> visited;
+        while (!rootSet.empty()) {
+            visited.push_back(rootSet.back().object());
+            rootSet.pop_back();
+        }
+        return visited;
+    }
+
+    static void RunLateValueRootRekey(WCollector& collector)
+    {
+        collector.PreforwardDiscoveredExternObjects();
+        collector.PreforwardAllResurrectExportFromObjects();
+    }
 };
 
 // The four delivery fixtures enter the same private product methods that their
@@ -622,7 +687,157 @@ void EmptyBothRememberedFaces(RememberedSet& remembered)
     remembered.DrainForMinor(discarded);
 }
 
+LateBackfillState PrepareValueRootForwarding(GcHeapFixture& fx, WCollector& collector)
+{
+    LateBackfillState state = PrepareLateBackfill(fx, collector);
+    ForwardingTable::Publication publication = ForwardingTable::EnsurePublicationBeforeCopy(
+        state.region, reinterpret_cast<MAddress>(state.from));
+    GC_EXPECT_TRUE(static_cast<bool>(publication));
+    GC_EXPECT_EQ(ForwardingTable::InsertMapping(
+                     publication, reinterpret_cast<MAddress>(state.from),
+                     reinterpret_cast<MAddress>(state.to)),
+                 reinterpret_cast<MAddress>(state.to));
+    return state;
+}
+
+bool AllVisitedEqual(const std::vector<BaseObject*>& visited, BaseObject* expected)
+{
+    if (visited.size() != 4) {
+        return false;
+    }
+    for (BaseObject* value : visited) {
+        if (value != expected) {
+            return false;
+        }
+    }
+    return true;
+}
+
+void CompleteValueRootCoverage()
+{
+    ForwardingTable::PublishMarkCoverage(Generation::Young);
+    ForwardingTable::PublishMarkCoverage(Generation::Old);
+    ForwardingTable::ReclaimRetired("value-root-mark-coverage");
+}
+
 } // namespace
+
+GC_OTHER_VM_TEST(ValueRootCurrentization, MinorConsumerRewritesEveryCarrierBeforeCoverage)
+{
+    GcHeapFixture& fx = ProductFixture();
+    WCollector collector(Heap::GetHeap().GetAllocator(), Heap::GetHeap().GetCollectorResources());
+    LateBackfillState state = PrepareValueRootForwarding(fx, collector);
+    RelocationReceiptTestAccess::SeedValueRoots(collector, state.from);
+
+    const std::vector<BaseObject*> first =
+        RelocationReceiptTestAccess::VisitMinorValueRoots(collector);
+    const bool consumerCurrent = AllVisitedEqual(first, state.to);
+    const bool carrierCurrent =
+        RelocationReceiptTestAccess::AllValueRootCarriersEqual(collector, state.to);
+
+    CleanupLateBackfill(fx, state);
+    CompleteValueRootCoverage();
+    const ForwardingTable::LookupResult afterCoverage =
+        ForwardingTable::LookupTo(reinterpret_cast<MAddress>(state.from));
+    const std::vector<BaseObject*> afterReclaim =
+        RelocationReceiptTestAccess::VisitMinorValueRoots(collector);
+    const bool independentAfterReclaim = AllVisitedEqual(afterReclaim, state.to);
+    std::fprintf(stderr,
+                 "VALUE_ROOT_TARGET_ASSERT minor consumer_current=%d carrier_current=%d "
+                 "after_reclaim=%d lookup=%u\n",
+                 static_cast<int>(consumerCurrent), static_cast<int>(carrierCurrent),
+                 static_cast<int>(independentAfterReclaim), static_cast<unsigned>(afterCoverage.answer));
+    RelocationReceiptTestAccess::BindCollector(Heap::GetHeap().GetCollectorResources(), nullptr);
+
+    GC_EXPECT_TRUE(consumerCurrent);
+    GC_EXPECT_TRUE(carrierCurrent);
+    GC_EXPECT_TRUE(independentAfterReclaim);
+    GC_EXPECT_TRUE(afterCoverage.answer == ForwardingTable::ToAnswer::Unavailable);
+}
+
+GC_OTHER_VM_TEST(ValueRootCurrentization, MajorConsumerRewritesEveryCarrierBeforeCoverage)
+{
+    GcHeapFixture& fx = ProductFixture();
+    WCollector collector(Heap::GetHeap().GetAllocator(), Heap::GetHeap().GetCollectorResources());
+    LateBackfillState state = PrepareValueRootForwarding(fx, collector);
+    RelocationReceiptTestAccess::SeedValueRoots(collector, state.from);
+
+    const std::vector<BaseObject*> first =
+        RelocationReceiptTestAccess::EnumMajorValueRoots(collector);
+    const bool consumerCurrent = AllVisitedEqual(first, state.to);
+    const bool carrierCurrent =
+        RelocationReceiptTestAccess::AllValueRootCarriersEqual(collector, state.to);
+
+    CleanupLateBackfill(fx, state);
+    CompleteValueRootCoverage();
+    const ForwardingTable::LookupResult afterCoverage =
+        ForwardingTable::LookupTo(reinterpret_cast<MAddress>(state.from));
+    const std::vector<BaseObject*> afterReclaim =
+        RelocationReceiptTestAccess::EnumMajorValueRoots(collector);
+    const bool independentAfterReclaim = AllVisitedEqual(afterReclaim, state.to);
+    std::fprintf(stderr,
+                 "VALUE_ROOT_TARGET_ASSERT major consumer_current=%d carrier_current=%d "
+                 "after_reclaim=%d lookup=%u\n",
+                 static_cast<int>(consumerCurrent), static_cast<int>(carrierCurrent),
+                 static_cast<int>(independentAfterReclaim), static_cast<unsigned>(afterCoverage.answer));
+    RelocationReceiptTestAccess::BindCollector(Heap::GetHeap().GetCollectorResources(), nullptr);
+
+    GC_EXPECT_TRUE(consumerCurrent);
+    GC_EXPECT_TRUE(carrierCurrent);
+    GC_EXPECT_TRUE(independentAfterReclaim);
+    GC_EXPECT_TRUE(afterCoverage.answer == ForwardingTable::ToAnswer::Unavailable);
+}
+
+GC_OTHER_VM_TEST(ValueRootCurrentization, InsertionAndLateRekeyShareCurrentAuthority)
+{
+    GcHeapFixture& fx = ProductFixture();
+    WCollector collector(Heap::GetHeap().GetAllocator(), Heap::GetHeap().GetCollectorResources());
+    LateBackfillState state = PrepareValueRootForwarding(fx, collector);
+
+    collector.SetGCPhase(GCPhase::GC_PHASE_IDLE);
+    collector.ResurrectExportObject(state.from);
+    collector.SetGCPhase(GCPhase::GC_PHASE_PREFORWARD);
+    collector.ResurrectExportObject(state.from);
+    const bool insertCurrent =
+        RelocationReceiptTestAccess::BothResurrectionSetsEqual(collector, state.to);
+
+    RelocationReceiptTestAccess::SeedValueRoots(collector, state.from);
+    RelocationReceiptTestAccess::RunLateValueRootRekey(collector);
+    const bool lateCurrent =
+        RelocationReceiptTestAccess::AllValueRootCarriersEqual(collector, state.to);
+    std::fprintf(stderr,
+                 "VALUE_ROOT_TARGET_ASSERT insertion_current=%d late_rekey_current=%d\n",
+                 static_cast<int>(insertCurrent), static_cast<int>(lateCurrent));
+
+    CleanupLateBackfill(fx, state);
+    RelocationReceiptTestAccess::BindCollector(Heap::GetHeap().GetCollectorResources(), nullptr);
+    GC_EXPECT_TRUE(insertCurrent);
+    GC_EXPECT_TRUE(lateCurrent);
+}
+
+GC_OTHER_VM_TEST(ValueRootCurrentization, NullAndNonHeapControlsRemainStable)
+{
+    GcHeapFixture& fx = ProductFixture();
+    WCollector collector(Heap::GetHeap().GetAllocator(), Heap::GetHeap().GetCollectorResources());
+    RelocationReceiptTestAccess::BindCollector(Heap::GetHeap().GetCollectorResources(), &collector);
+
+    RelocationReceiptTestAccess::SeedValueRoots(collector, nullptr);
+    const std::vector<BaseObject*> nullValues =
+        RelocationReceiptTestAccess::VisitMinorValueRoots(collector);
+    BaseObject* nonHeap = reinterpret_cast<BaseObject*>(static_cast<uintptr_t>(1));
+    RelocationReceiptTestAccess::SeedValueRoots(collector, nonHeap);
+    const std::vector<BaseObject*> nonHeapValues =
+        RelocationReceiptTestAccess::EnumMajorValueRoots(collector);
+    const bool nullStable = AllVisitedEqual(nullValues, nullptr);
+    const bool nonHeapStable = AllVisitedEqual(nonHeapValues, nonHeap);
+    std::fprintf(stderr,
+                 "VALUE_ROOT_CONTROL_ASSERT null_stable=%d nonheap_stable=%d\n",
+                 static_cast<int>(nullStable), static_cast<int>(nonHeapStable));
+    RelocationReceiptTestAccess::BindCollector(Heap::GetHeap().GetCollectorResources(), nullptr);
+
+    GC_EXPECT_TRUE(nullStable);
+    GC_EXPECT_TRUE(nonHeapStable);
+}
 
 GC_TEST(ForwardingPublicationProduct, BarrierResolvesForwardedFromThroughCollector)
 {
