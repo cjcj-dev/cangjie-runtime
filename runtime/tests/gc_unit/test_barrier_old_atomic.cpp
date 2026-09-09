@@ -153,17 +153,27 @@ private:
 class MarkWindowScope final {
 public:
     MarkWindowScope()
-        : resources(Heap::GetHeap().GetCollectorResources()),
-          cycle(resources.BeginCycle(GCTask::ASYNC_TASK_INDEX, GC_REASON_USER))
+        : resources(Heap::GetHeap().GetCollectorResources()), started(resources.IsGcStarted()),
+          reason(resources.GetGCStats().reason)
     {
         RelocationReceiptTestAccess::EnsureCollectorProxyBound(resources);
-        resources.PublishCyclePhase(cycle, GCPhase::GC_PHASE_TRACE);
+        phase = Heap::GetHeap().GetGCPhase();
+        resources.SetGcStarted(true);
+        resources.GetGCStats().reason = GC_REASON_USER;
+        Heap::GetHeap().SetGCPhase(GCPhase::GC_PHASE_TRACE);
     }
-    ~MarkWindowScope() { resources.EndCycle(cycle); }
+    ~MarkWindowScope()
+    {
+        Heap::GetHeap().SetGCPhase(phase);
+        resources.GetGCStats().reason = reason;
+        resources.SetGcStarted(started);
+    }
 
 private:
     CollectorResources& resources;
-    CycleToken cycle;
+    bool started;
+    GCReason reason;
+    GCPhase phase = GCPhase::GC_PHASE_IDLE;
 };
 
 zpointer LoadBadPointer(BaseObject* object)
