@@ -45,20 +45,27 @@ GC_OTHER_VM_TEST(VerifyPhase, FiveFaceBuildDefaultMatrix)
 {
 #if defined(__linux__)
     ClearFaceEnvironment();
+    const bool roots = VerifyFaceEnabled(VerifyFace::Roots);
+    const bool objects = VerifyFaceEnabled(VerifyFace::Objects);
+    const bool marking = VerifyFaceEnabled(VerifyFace::Marking);
+    const bool remembered = VerifyFaceEnabled(VerifyFace::Remembered);
+    const bool oops = VerifyFaceEnabled(VerifyFace::Oops);
+    std::fprintf(stderr, "VERIFY_PHASE_DEFAULT_MATRIX roots=%d objects=%d marking=%d remembered=%d oops=%d\n",
+                 roots, objects, marking, remembered, oops);
 #if defined(MRT_DEBUG) && (MRT_DEBUG == 1)
-    GC_EXPECT_FALSE(VerifyFaceEnabled(VerifyFace::Objects));
-    GC_EXPECT_TRUE(VerifyFaceEnabled(VerifyFace::Marking));
-    GC_EXPECT_TRUE(VerifyFaceEnabled(VerifyFace::Remembered));
-    GC_EXPECT_FALSE(VerifyFaceEnabled(VerifyFace::Oops));
+    GC_EXPECT_FALSE(objects);
+    GC_EXPECT_TRUE(marking);
+    GC_EXPECT_TRUE(remembered);
+    GC_EXPECT_FALSE(oops);
     std::fprintf(stderr, "VERIFY_PHASE_DEFAULT_MATRIX_PRIOR_ASSERTIONS_EXECUTED count=4\n");
-    GC_EXPECT_TRUE(VerifyFaceEnabled(VerifyFace::Roots));
+    GC_EXPECT_TRUE(roots);
     std::fprintf(stderr, "VERIFY_PHASE_DEFAULT_MATRIX_ASSERTIONS_EXECUTED mode=debug\n");
 #else
-    GC_EXPECT_FALSE(VerifyFaceEnabled(VerifyFace::Roots));
-    GC_EXPECT_FALSE(VerifyFaceEnabled(VerifyFace::Objects));
-    GC_EXPECT_FALSE(VerifyFaceEnabled(VerifyFace::Marking));
-    GC_EXPECT_FALSE(VerifyFaceEnabled(VerifyFace::Remembered));
-    GC_EXPECT_FALSE(VerifyFaceEnabled(VerifyFace::Oops));
+    GC_EXPECT_FALSE(roots);
+    GC_EXPECT_FALSE(objects);
+    GC_EXPECT_FALSE(marking);
+    GC_EXPECT_FALSE(remembered);
+    GC_EXPECT_FALSE(oops);
     std::fprintf(stderr, "VERIFY_PHASE_DEFAULT_MATRIX_ASSERTIONS_EXECUTED mode=release\n");
 #endif
 #else
