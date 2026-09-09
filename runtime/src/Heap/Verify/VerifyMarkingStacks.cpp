@@ -17,24 +17,9 @@ namespace VerifyMarkingStacks {
 namespace {
 
 struct ReceiptState {
-    std::atomic<uint64_t> majorStart{ 0 };
-    std::atomic<uint64_t> majorTaskExit{ 0 };
-    std::atomic<uint64_t> majorTermination{ 0 };
-    std::atomic<uint64_t> majorJoin{ 0 };
-    std::atomic<uint64_t> majorEnd{ 0 };
-    std::atomic<uint64_t> youngStart{ 0 };
-    std::atomic<uint64_t> youngSeedPublish{ 0 };
-    std::atomic<uint64_t> youngTaskExit{ 0 };
-    std::atomic<uint64_t> youngTermination{ 0 };
-    std::atomic<uint64_t> youngWorkerExit{ 0 };
-    std::atomic<uint64_t> youngJoin{ 0 };
-    std::atomic<uint64_t> youngEnd{ 0 };
-    std::atomic<size_t> majorOwnerProducerMax{ 0 };
-    std::atomic<size_t> majorTaskProducerMax{ 0 };
-    std::atomic<size_t> youngOwnerProducerMax{ 0 };
-    std::atomic<size_t> youngTaskProducerMax{ 0 };
-    std::atomic<size_t> youngLocalProducerMax{ 0 };
-    std::atomic<size_t> youngStripeProducerMax{ 0 };
+    std::atomic<uint64_t>
+        boundaryReceipts[MARKING_GENERATION_COUNT][MARKING_BOUNDARY_COUNT][MARKING_CONTAINER_COUNT]{};
+    std::atomic<size_t> producerMax[MARKING_GENERATION_COUNT][MARKING_CONTAINER_COUNT]{};
 };
 
 ReceiptState g_receipts;
@@ -79,33 +64,11 @@ void RaiseMax(std::atomic<size_t>& target, size_t value)
     }
 }
 
-void NoteBoundary(MarkingGeneration generation, MarkingBoundary boundary)
+void NoteBoundary(MarkingGeneration generation, MarkingBoundary boundary, MarkingContainer container)
 {
-    std::atomic<uint64_t>* counter = nullptr;
-    if (generation == MarkingGeneration::MAJOR) {
-        switch (boundary) {
-            case MarkingBoundary::START: counter = &g_receipts.majorStart; break;
-            case MarkingBoundary::TASK_EXIT: counter = &g_receipts.majorTaskExit; break;
-            case MarkingBoundary::TERMINATION: counter = &g_receipts.majorTermination; break;
-            case MarkingBoundary::JOIN: counter = &g_receipts.majorJoin; break;
-            case MarkingBoundary::END: counter = &g_receipts.majorEnd; break;
-            default: break;
-        }
-    } else {
-        switch (boundary) {
-            case MarkingBoundary::START: counter = &g_receipts.youngStart; break;
-            case MarkingBoundary::SEED_PUBLISH: counter = &g_receipts.youngSeedPublish; break;
-            case MarkingBoundary::TASK_EXIT: counter = &g_receipts.youngTaskExit; break;
-            case MarkingBoundary::TERMINATION: counter = &g_receipts.youngTermination; break;
-            case MarkingBoundary::WORKER_EXIT: counter = &g_receipts.youngWorkerExit; break;
-            case MarkingBoundary::JOIN: counter = &g_receipts.youngJoin; break;
-            case MarkingBoundary::END: counter = &g_receipts.youngEnd; break;
-            default: break;
-        }
-    }
-    if (counter != nullptr) {
-        counter->fetch_add(1, std::memory_order_relaxed);
-    }
+    g_receipts.boundaryReceipts[static_cast<size_t>(generation)][static_cast<size_t>(boundary)]
+                                        [static_cast<size_t>(container)]
+        .fetch_add(1, std::memory_order_relaxed);
 }
 
 long long PrintableIndex(size_t value)
@@ -125,23 +88,7 @@ void NoteProducer(MarkingGeneration generation, MarkingContainer container, size
     if (!Enabled()) {
         return;
     }
-    if (generation == MarkingGeneration::MAJOR) {
-        if (container == MarkingContainer::OWNER || container == MarkingContainer::FOREIGN) {
-            RaiseMax(g_receipts.majorOwnerProducerMax, pending);
-        } else if (container == MarkingContainer::TASK) {
-            RaiseMax(g_receipts.majorTaskProducerMax, pending);
-        }
-        return;
-    }
-    if (container == MarkingContainer::OWNER) {
-        RaiseMax(g_receipts.youngOwnerProducerMax, pending);
-    } else if (container == MarkingContainer::TASK) {
-        RaiseMax(g_receipts.youngTaskProducerMax, pending);
-    } else if (container == MarkingContainer::LOCAL) {
-        RaiseMax(g_receipts.youngLocalProducerMax, pending);
-    } else if (container == MarkingContainer::STRIPE) {
-        RaiseMax(g_receipts.youngStripeProducerMax, pending);
-    }
+    RaiseMax(g_receipts.producerMax[static_cast<size_t>(generation)][static_cast<size_t>(container)], pending);
 }
 
 void VerifyEmpty(MarkingGeneration generation, MarkingBoundary boundary, MarkingContainer container,
@@ -150,7 +97,7 @@ void VerifyEmpty(MarkingGeneration generation, MarkingBoundary boundary, Marking
     if (!VerifyPhaseEnter(VerifyFace::Marking, BoundaryName(boundary))) {
         return;
     }
-    NoteBoundary(generation, boundary);
+    NoteBoundary(generation, boundary, container);
     CHECK_DETAIL(pending == 0,
                  "[GCV2][marking-stack] generation=%s boundary=%s container=%s owner=%lld worker=%lld "
                  "stripe=%lld pending=%zu",
@@ -165,24 +112,20 @@ void VerifyEmpty(MarkingGeneration generation, MarkingBoundary boundary, Marking
 
 Snapshot ReadSnapshot()
 {
-    return { g_receipts.majorStart.load(std::memory_order_relaxed),
-             g_receipts.majorTaskExit.load(std::memory_order_relaxed),
-             g_receipts.majorTermination.load(std::memory_order_relaxed),
-             g_receipts.majorJoin.load(std::memory_order_relaxed),
-             g_receipts.majorEnd.load(std::memory_order_relaxed),
-             g_receipts.youngStart.load(std::memory_order_relaxed),
-             g_receipts.youngSeedPublish.load(std::memory_order_relaxed),
-             g_receipts.youngTaskExit.load(std::memory_order_relaxed),
-             g_receipts.youngTermination.load(std::memory_order_relaxed),
-             g_receipts.youngWorkerExit.load(std::memory_order_relaxed),
-             g_receipts.youngJoin.load(std::memory_order_relaxed),
-             g_receipts.youngEnd.load(std::memory_order_relaxed),
-             g_receipts.majorOwnerProducerMax.load(std::memory_order_relaxed),
-             g_receipts.majorTaskProducerMax.load(std::memory_order_relaxed),
-             g_receipts.youngOwnerProducerMax.load(std::memory_order_relaxed),
-             g_receipts.youngTaskProducerMax.load(std::memory_order_relaxed),
-             g_receipts.youngLocalProducerMax.load(std::memory_order_relaxed),
-             g_receipts.youngStripeProducerMax.load(std::memory_order_relaxed) };
+    Snapshot snapshot;
+    for (size_t generation = 0; generation < MARKING_GENERATION_COUNT; ++generation) {
+        for (size_t boundary = 0; boundary < MARKING_BOUNDARY_COUNT; ++boundary) {
+            for (size_t container = 0; container < MARKING_CONTAINER_COUNT; ++container) {
+                snapshot.boundaryReceipts[generation][boundary][container] =
+                    g_receipts.boundaryReceipts[generation][boundary][container].load(std::memory_order_relaxed);
+            }
+        }
+        for (size_t container = 0; container < MARKING_CONTAINER_COUNT; ++container) {
+            snapshot.producerMax[generation][container] =
+                g_receipts.producerMax[generation][container].load(std::memory_order_relaxed);
+        }
+    }
+    return snapshot;
 }
 
 } // namespace VerifyMarkingStacks
