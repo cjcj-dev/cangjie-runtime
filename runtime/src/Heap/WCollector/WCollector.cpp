@@ -220,24 +220,56 @@ private:
 
 CrossRefHandler WCollector::GetCrossRefHandler(BaseObject *foreignProxy)
 {
+#if defined(MRT_GC_UNIT_TESTS)
+    if (cycleRefHandlerForTest != nullptr) {
+        return cycleRefHandlerForTest;
+    }
+#endif
     return static_cast<CJForeignProxy*>(foreignProxy)->GetCJInteropContext()->GetCJFunc()->GetHandler();
 }
 
 void WCollector::ResolveCycleRef()
 {
 #if defined (__OHOS__) || defined(MRT_GC_UNIT_TESTS)
-    // Leave saferegion before acquiring the cycle-root owner.  LeaveSaferegion
-    // may park for an in-flight GC, whose root/preforward consumers need the
-    // same mutex.  Declaration order also makes every return release the cycle
-    // mutex before ScopedObjectAccess restores the saferegion state.
+    // Leave saferegion before acquiring either owner. The resolver owner is not
+    // used by GC; it preserves the former single-resolver property while the
+    // root-carrier owner is released around every managed callback.
     ScopedObjectAccess soa;
+    std::unique_lock<std::mutex> resolverLock(cycleResolverMtx, std::try_to_lock);
+    if (!resolverLock.owns_lock()) {
+        CJ_MRT_RolveCycleRef();
+        return;
+    }
     size_t i = 0;
     std::unique_lock<std::mutex> cycleLock(cycleWorkStackMtx, std::try_to_lock);
     if (!cycleLock.owns_lock()) {
         CJ_MRT_RolveCycleRef();
         return;
     }
-    for (auto it = cycleRefWorkStack.begin(); it != cycleRefWorkStack.end(); i++) {
+    std::unordered_set<U32> resolvedIds;
+    for (;;) {
+        auto it = cycleRefWorkStack.begin();
+        while (it != cycleRefWorkStack.end()) {
+            BaseObject* candidate = it->first;
+            U32 candidateId = static_cast<ExportObject*>(candidate)->GetId();
+            if (resolvedIds.find(candidateId) != resolvedIds.end()) {
+                ++it;
+                continue;
+            }
+            auto& heap = Heap::GetHeap();
+            if (!heap.CheckExportObjState(candidateId, candidate) ||
+                resurrectedExportObjectes.find(candidate) != resurrectedExportObjectes.end() ||
+                resurrectedExportObjectesForwardPhase.find(candidate) !=
+                    resurrectedExportObjectesForwardPhase.end()) {
+                it = cycleRefWorkStack.erase(it);
+                continue;
+            }
+            break;
+        }
+        if (it == cycleRefWorkStack.end()) {
+            break;
+        }
+
         auto phase = GetGCPhase();
         static constexpr size_t taskNum = 100;
         if (phase == GC_PHASE_PREFORWARD || i >= taskNum) {
@@ -245,26 +277,41 @@ void WCollector::ResolveCycleRef()
             CJ_MRT_RolveCycleRef();
             return;
         }
-        BaseObject* exportObj = it->first;
-        auto& heap = Heap::GetHeap();
-        auto id = static_cast<ExportObject*>(exportObj)->GetId();
-        if (!heap.CheckExportObjState(id, exportObj)) {
-            it = cycleRefWorkStack.erase(it);
-            continue;
-        }
-        if (resurrectedExportObjectes.find(exportObj) != resurrectedExportObjectes.end() ||
-            resurrectedExportObjectesForwardPhase.find(exportObj) != resurrectedExportObjectesForwardPhase.end()) {
-            it = cycleRefWorkStack.erase(it);
-            continue;
-        }
-        auto externObjs = it->second;
+
+        U32 id = static_cast<ExportObject*>(it->first)->GetId();
+        size_t externIndex = 0;
         void* returnUnit = nullptr;
-        for (auto externObj : externObjs) {
+        for (;;) {
+            // A GC preforward pass may replace the map key and list elements
+            // while the callback is parked. Re-find by stable export id and
+            // fetch the current addresses before each managed invocation.
+            it = std::find_if(cycleRefWorkStack.begin(), cycleRefWorkStack.end(),
+                [id](const auto& entry) {
+                    return static_cast<ExportObject*>(entry.first)->GetId() == id;
+                });
+            if (it == cycleRefWorkStack.end() || externIndex >= it->second.size()) {
+                break;
+            }
+            BaseObject* exportObj = it->first;
+            auto externIt = it->second.begin();
+            std::advance(externIt, static_cast<ptrdiff_t>(externIndex));
+            BaseObject* externObj = *externIt;
             auto resolveHook = GetCrossRefHandler(externObj);
+
+            // ResolveCycleRefStub enters managed code. A late safepoint can
+            // park there, so the GC-owned root carrier must be available while
+            // the callback runs. cycleResolverMtx alone prevents duplicate
+            // resolver delivery and is never acquired by a GC consumer.
+            cycleLock.unlock();
             ResolveCycleRefStub(resolveHook, exportObj, externObj, &returnUnit);
+            cycleLock.lock();
+            ++externIndex;
         }
+
+        auto& heap = Heap::GetHeap();
         heap.SetExportObjActiveState(id, false);
-        it++;
+        resolvedIds.insert(id);
+        ++i;
     }
     cycleLock.unlock();
     resurrectedExportObjectes.clear();

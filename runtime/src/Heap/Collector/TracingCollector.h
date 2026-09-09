@@ -481,6 +481,10 @@ protected:
     std::atomic<size_t> markedObjectCount = { 0 };
     std::mutex externMtx;
     std::unordered_map<BaseObject*, std::list<BaseObject*>> discoveredExternObjects;
+    // Resolver callbacks may enter managed code and therefore must not own the
+    // root-carrier mutex.  Keep resolver serialization separate from the mutex
+    // used by GC root and preforward consumers.
+    std::mutex cycleResolverMtx;
     std::mutex cycleWorkStackMtx;
     std::unordered_map<BaseObject*, std::list<BaseObject*>> cycleRefWorkStack;
     std::mutex resurrectExportMtx;
