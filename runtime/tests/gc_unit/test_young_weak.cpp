@@ -5,6 +5,8 @@
 #include <cstdint>
 #include <cstdio>
 #include <cstring>
+#include <memory>
+#include <vector>
 
 #include "Common/Runtime.h"
 #include "CjScheduler.h"
@@ -13,6 +15,7 @@
 #include "gc_unittest.hpp"
 
 #include "Concurrency/Concurrency.h"
+#include "Base/Log.h"
 #include "Heap/Allocator/ForwardingTable.h"
 #include "Heap/Allocator/RegionSpace.h"
 #include "Heap/Barrier/Barrier.h"
@@ -22,6 +25,7 @@
 #include "Heap/GcThreadPool.h"
 #include "Heap/Heap.h"
 #include "Heap/WCollector/WCollector.h"
+#include "Heap/Verify/VerifyMarkingStacks.h"
 #include "ObjectModel/RefField.inline.h"
 #include "TypeInfoManager.h"
 
@@ -40,9 +44,11 @@ struct RelocationReceiptTestAccess {
         resources.collectorProxy.currentCollector = collector;
     }
 
-    static void BindThreadPool(CollectorResources& resources, GCThreadPool* threadPool)
+    static void BindThreadPool(CollectorResources& resources, GCThreadPool* threadPool, int32_t threadCount = 1)
     {
         resources.gcThreadPool = threadPool;
+        resources.gcThreadCount = threadCount;
+        resources.concurrentGcThreadCount = threadCount;
     }
 
     static void RunYoungCollection(WCollector& collector)
@@ -122,6 +128,12 @@ struct RelocationReceiptTestAccess {
         auto it = collector.cycleRefWorkStack.find(value);
         return collector.cycleRefWorkStack.size() == 1 && it != collector.cycleRefWorkStack.end() &&
             it->second.size() == 1 && it->second.front() == value;
+    }
+
+    static void RunMajorCollection(WCollector& collector)
+    {
+        collector.SetGCReason(GC_REASON_USER);
+        collector.DoGarbageCollection();
     }
 };
 
@@ -304,6 +316,7 @@ void RunYoungWeakVariant(const char* variant, size_t helpers,
                          uint64_t expectedSerial, uint64_t expectedLegacyParallel, uint64_t expectedStriped)
 {
     GC_EXPECT_EQ(CJ_ScheduleManagerInit(), 0);
+    GC_EXPECT_EQ(setenv("MRT_GCV2_VERIFY_MARKING", "1", 1), 0);
     GC_EXPECT_EQ(setenv("MRT_GC_UNIT_YOUNG_WEAK_VARIANT", variant, 1), 0);
     MutatorManager mutatorManager;
     WeakClosureTestRuntime runtime(mutatorManager);
@@ -333,8 +346,10 @@ void RunYoungWeakVariant(const char* variant, size_t helpers,
     resources.SetGcStarted(true);
     resources.GetGCStats().reason = GC_REASON_YOUNG;
     ResetYoungWeakClosureTestReceipt();
+    const VerifyMarkingStacks::Snapshot markingBefore = VerifyMarkingStacks::ReadSnapshot();
 
     RelocationReceiptTestAccess::RunYoungCollection(collector);
+    const VerifyMarkingStacks::Snapshot markingAfter = VerifyMarkingStacks::ReadSnapshot();
     const YoungWeakClosureTestReceipt receipt = ReadYoungWeakClosureTestReceipt();
     const bool strongMarked = graph.IsMarked(graph.strongRoot);
     const bool weakMarked = graph.IsMarked(graph.weak);
@@ -346,6 +361,19 @@ void RunYoungWeakVariant(const char* variant, size_t helpers,
                  variant, static_cast<size_t>(receipt.serial), static_cast<size_t>(receipt.legacyParallel),
                  static_cast<size_t>(receipt.striped), static_cast<int>(strongMarked),
                  static_cast<int>(weakMarked), static_cast<int>(referentMarked), static_cast<int>(childMarked));
+    std::fprintf(stderr,
+                 "DETAIL marking_stack_young variant=%s owner_producer=%zu task_producer=%zu local_producer=%zu "
+                 "stripe_producer=%zu task_exit=%llu seed=%llu termination=%llu worker_exit=%llu "
+                 "join=%llu end=%llu\n",
+                 variant, markingAfter.youngOwnerProducerMax, markingAfter.youngTaskProducerMax,
+                 markingAfter.youngLocalProducerMax,
+                 markingAfter.youngStripeProducerMax,
+                 static_cast<unsigned long long>(markingAfter.youngTaskExit - markingBefore.youngTaskExit),
+                 static_cast<unsigned long long>(markingAfter.youngSeedPublish - markingBefore.youngSeedPublish),
+                 static_cast<unsigned long long>(markingAfter.youngTermination - markingBefore.youngTermination),
+                 static_cast<unsigned long long>(markingAfter.youngWorkerExit - markingBefore.youngWorkerExit),
+                 static_cast<unsigned long long>(markingAfter.youngJoin - markingBefore.youngJoin),
+                 static_cast<unsigned long long>(markingAfter.youngEnd - markingBefore.youngEnd));
 
     Heap::GetHeap().RemoveExportObject(rootHandle);
     resources.SetGcStarted(startedBefore);
@@ -361,6 +389,21 @@ void RunYoungWeakVariant(const char* variant, size_t helpers,
     GC_EXPECT_TRUE(weakMarked);
     GC_EXPECT_FALSE(referentMarked);
     GC_EXPECT_FALSE(childMarked);
+    GC_EXPECT_TRUE(markingAfter.youngOwnerProducerMax > 0);
+    GC_EXPECT_TRUE(markingAfter.youngStart > markingBefore.youngStart);
+    GC_EXPECT_TRUE(markingAfter.youngEnd > markingBefore.youngEnd);
+    if (std::strcmp(variant, "legacy-parallel") == 0) {
+        GC_EXPECT_TRUE(markingAfter.youngTaskProducerMax > 0);
+        GC_EXPECT_TRUE(markingAfter.youngTaskExit > markingBefore.youngTaskExit);
+    }
+    if (std::strcmp(variant, "striped") == 0) {
+        GC_EXPECT_TRUE(markingAfter.youngLocalProducerMax > 0);
+        GC_EXPECT_TRUE(markingAfter.youngStripeProducerMax > 0);
+        GC_EXPECT_TRUE(markingAfter.youngSeedPublish > markingBefore.youngSeedPublish);
+        GC_EXPECT_TRUE(markingAfter.youngTermination > markingBefore.youngTermination);
+        GC_EXPECT_TRUE(markingAfter.youngWorkerExit > markingBefore.youngWorkerExit);
+        GC_EXPECT_TRUE(markingAfter.youngJoin > markingBefore.youngJoin);
+    }
     (void)live;
 }
 
@@ -441,9 +484,12 @@ enum class MajorRootFamily {
     EXPORT,
 };
 
-void RunMajorWeakGraph(MajorRootFamily family)
+void RunMajorWeakGraph(MajorRootFamily family, bool runtimeEntry = false, size_t helpers = 0)
 {
     GC_EXPECT_EQ(CJ_ScheduleManagerInit(), 0);
+    if (runtimeEntry) {
+        GC_EXPECT_EQ(setenv("MRT_GCV2_VERIFY_MARKING", "1", 1), 0);
+    }
     MutatorManager mutatorManager;
     WeakClosureTestRuntime runtime(mutatorManager);
     GcHeapFixture fx;
@@ -454,18 +500,33 @@ void RunMajorWeakGraph(MajorRootFamily family)
     WCollector collector(Heap::GetHeap().GetAllocator(), resources);
     RelocationReceiptTestAccess::BindCollector(resources, &collector);
     collector.SetGCPhase(GCPhase::GC_PHASE_IDLE);
-    GCThreadPool threadPool("gc-unit-major-weak", 0, GCPoolThread::GC_THREAD_PRIORITY);
-    RelocationReceiptTestAccess::BindThreadPool(resources, &threadPool);
+    GCThreadPool threadPool("gc-unit-major-weak", static_cast<int32_t>(helpers), GCPoolThread::GC_THREAD_PRIORITY);
+    RelocationReceiptTestAccess::BindThreadPool(resources, &threadPool, static_cast<int32_t>(helpers + 1));
     RegionSpace& space = reinterpret_cast<RegionSpace&>(Heap::GetHeap().GetAllocator());
     space.GetRegionManager().EnlistFullThreadLocalRegion(fx.region0);
     space.GetRegionManager().AddRawPointerObject(graph.child);
+    if (runtimeEntry) {
+        Heap::GetHeap().GetRememberedSet().Initialize(fx.heapStart, 2 * RegionInfo::UNIT_SIZE);
+        space.GetRegionManager().AddRawPointerObject(graph.strongRoot);
+        space.GetRegionManager().AddRawPointerObject(graph.weak);
+        space.GetRegionManager().AddRawPointerObject(graph.referent);
+    }
 
-    RootSlot commonRoot;
-    RootSlot* commonRoots[] = { &commonRoot };
+    // MarkStack::size() counts 64-entry buffers. Seventeen buffers cross the
+    // product's MAX_MARKING_WORK_SIZE=16 parallel admission threshold.
+    constexpr size_t kParallelRootCount = 17 * 64;
+    std::unique_ptr<RootSlot[]> commonRootStorage = std::make_unique<RootSlot[]>(kParallelRootCount);
+    std::vector<RootSlot*> commonRoots(kParallelRootCount);
+    for (size_t i = 0; i < commonRoots.size(); ++i) {
+        commonRoots[i] = &commonRootStorage[i];
+    }
+    const U32 commonRootCount = runtimeEntry && helpers != 0 ? static_cast<U32>(commonRoots.size()) : 1;
     U64 exportHandle = 0;
     if (family == MajorRootFamily::COMMON) {
-        StorePlain(commonRoot, from_object(graph.strongRoot));
-        Heap::GetHeap().RegisterStaticRoots(reinterpret_cast<Uptr>(commonRoots), 1);
+        for (U32 i = 0; i < commonRootCount; ++i) {
+            StorePlain(*commonRoots[i], from_object(graph.strongRoot));
+        }
+        Heap::GetHeap().RegisterStaticRoots(reinterpret_cast<Uptr>(commonRoots.data()), commonRootCount);
     } else {
         // Keep the export DFS cut independent from TracingImpl's root-family
         // admission cut.  This sentinel has no edge into the weak graph; the
@@ -473,13 +534,24 @@ void RunMajorWeakGraph(MajorRootFamily family)
         BaseObject* commonSentinel = fx.PlaceObject(fx.region0->GetRegionStart() + 320);
         WeakGraph::Field(commonSentinel).StoreColoured(zpointer::null);
         fx.region0->SetRegionAllocPtr(reinterpret_cast<MAddress>(commonSentinel) + 64);
-        StorePlain(commonRoot, from_object(commonSentinel));
-        Heap::GetHeap().RegisterStaticRoots(reinterpret_cast<Uptr>(commonRoots), 1);
+        StorePlain(*commonRoots[0], from_object(commonSentinel));
+        Heap::GetHeap().RegisterStaticRoots(reinterpret_cast<Uptr>(commonRoots.data()), 1);
         exportHandle = Heap::GetHeap().RegisterExportRoot(graph.strongRoot);
     }
 
     ResetWeakDiscoveryTestReceipt();
-    RelocationReceiptTestAccess::RunMajorMark(collector);
+    const VerifyMarkingStacks::Snapshot markingBefore = VerifyMarkingStacks::ReadSnapshot();
+    if (runtimeEntry) {
+        RelocationReceiptTestAccess::RunMajorCollection(collector);
+    } else {
+        RelocationReceiptTestAccess::RunMajorMark(collector);
+    }
+    const VerifyMarkingStacks::Snapshot markingAfter = VerifyMarkingStacks::ReadSnapshot();
+    const uint64_t majorStartDelta = markingAfter.majorStart - markingBefore.majorStart;
+    const uint64_t majorTaskExitDelta = markingAfter.majorTaskExit - markingBefore.majorTaskExit;
+    const uint64_t majorTerminationDelta = markingAfter.majorTermination - markingBefore.majorTermination;
+    const uint64_t majorJoinDelta = markingAfter.majorJoin - markingBefore.majorJoin;
+    const uint64_t majorEndDelta = markingAfter.majorEnd - markingBefore.majorEnd;
     const WeakDiscoveryTestReceipt receipt = ReadWeakDiscoveryTestReceipt();
     const bool referentCleared = is_null(WeakGraph::Field(graph.weak).GetFieldValue());
     const bool strongMarked = graph.IsMarked(graph.strongRoot);
@@ -492,8 +564,22 @@ void RunMajorWeakGraph(MajorRootFamily family)
                  family == MajorRootFamily::COMMON ? "common" : "export", receipt.discovered,
                  static_cast<int>(strongMarked), static_cast<int>(weakMarked), static_cast<int>(referentMarked),
                  static_cast<int>(childMarked), static_cast<int>(referentCleared));
+    if (runtimeEntry) {
+        std::fprintf(stderr,
+                     "DETAIL marking_stack_major mode=%s owner_producer=%zu task_producer=%zu task_exit=%llu "
+                     "termination=%llu join=%llu end=%llu\n",
+                     helpers == 0 ? "serial" : "parallel",
+                     markingAfter.majorOwnerProducerMax, markingAfter.majorTaskProducerMax,
+                     static_cast<unsigned long long>(majorTaskExitDelta),
+                     static_cast<unsigned long long>(majorTerminationDelta),
+                     static_cast<unsigned long long>(majorJoinDelta),
+                     static_cast<unsigned long long>(majorEndDelta));
+        CHECK_DETAIL(majorEndDelta != 0,
+                     "major marking scene receipt missing after DoGarbageCollection entry");
+    }
 
-    Heap::GetHeap().UnregisterStaticRoots(reinterpret_cast<Uptr>(commonRoots), 1);
+    Heap::GetHeap().UnregisterStaticRoots(reinterpret_cast<Uptr>(commonRoots.data()),
+                                          family == MajorRootFamily::COMMON ? commonRootCount : 1);
     if (family == MajorRootFamily::EXPORT) {
         Heap::GetHeap().RemoveExportObject(exportHandle);
     }
@@ -501,6 +587,20 @@ void RunMajorWeakGraph(MajorRootFamily family)
     threadPool.Exit();
     RelocationReceiptTestAccess::BindCollector(resources, nullptr);
 
+    if (runtimeEntry) {
+        GC_EXPECT_TRUE(majorStartDelta > 0);
+        GC_EXPECT_TRUE(majorTaskExitDelta > 0);
+        GC_EXPECT_TRUE(majorTerminationDelta > 0);
+        GC_EXPECT_TRUE(majorJoinDelta > 0);
+        GC_EXPECT_TRUE(markingAfter.majorOwnerProducerMax > 0);
+        GC_EXPECT_TRUE(markingAfter.majorTaskProducerMax > 0);
+        if (helpers == 0) {
+            GC_EXPECT_EQ(majorTaskExitDelta, 1u);
+        } else {
+            GC_EXPECT_TRUE(majorTaskExitDelta > 1);
+        }
+        return;
+    }
     GC_EXPECT_EQ(receipt.discovered, 1u);
     GC_EXPECT_TRUE(strongMarked);
     GC_EXPECT_TRUE(weakMarked);
@@ -539,6 +639,16 @@ GC_OTHER_VM_TEST(YoungWeakClosure, CommonMajorRootUsesWeakDiscoveryPolicy)
 GC_OTHER_VM_TEST(YoungWeakClosure, ExportMajorRootUsesWeakDiscoveryPolicy)
 {
     RunMajorWeakGraph(MajorRootFamily::EXPORT);
+}
+
+GC_OTHER_VM_TEST(VerifyMarkingStacksProduct, MajorSerialEntersFromDoGarbageCollection)
+{
+    RunMajorWeakGraph(MajorRootFamily::COMMON, true, 0);
+}
+
+GC_OTHER_VM_TEST(VerifyMarkingStacksProduct, MajorParallelEntersFromDoGarbageCollection)
+{
+    RunMajorWeakGraph(MajorRootFamily::COMMON, true, 1);
 }
 
 GC_OTHER_VM_TEST(YoungWeakClosure, ExportOnlyMajorRootOwnsItsClosure)
