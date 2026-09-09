@@ -20,7 +20,7 @@ struct FaceCase {
 
 const FaceCase kFaces[] = {{VerifyFace::Roots, "MRT_GCV2_VERIFY_ROOTS", "MRT_GCV2_VERIFY_ROOTS"},
                            {VerifyFace::Objects, "MRT_GCV2_VERIFY_HEAP", "MRT_GCV2_VERIFY_OBJECTS"},
-                           {VerifyFace::Marking, "MRT_GCV2_MARKCOMPLETE", "MRT_GCV2_VERIFY_MARKING"},
+                           {VerifyFace::Marking, "MRT_GCV2_VERIFY_MARKING", "MRT_GCV2_VERIFY_MARKING"},
                            {VerifyFace::Remembered, "MRT_GCV2_VERIFY_REMSET", "MRT_GCV2_VERIFY_REMEMBERED"},
                            {VerifyFace::Oops, "MRT_GCV2_VERIFY_REGIONS", "MRT_GCV2_VERIFY_OOPS"}};
 
@@ -30,6 +30,7 @@ void ClearFaceEnvironment()
         unsetenv(item.legacy);
         unsetenv(item.alias);
     }
+    unsetenv("MRT_GCV2_MARKCOMPLETE");
     unsetenv("MRT_GCV2_DIAG");
 }
 
@@ -97,6 +98,14 @@ GC_OTHER_VM_TEST(VerifyPhase, FiveFaceTokenArm)
     ClearFaceEnvironment();
     setenv("MRT_GCV2_DIAG", "roots,objects,marking,remembered,oops", 1);
     ExpectAllFaces(true);
+}
+
+GC_OTHER_VM_TEST(VerifyPhase, MarkCompleteLegacyAliasBelongsOnlyToObjects)
+{
+    ClearFaceEnvironment();
+    setenv("MRT_GCV2_MARKCOMPLETE", "1", 1);
+    GC_EXPECT_TRUE(VerifyFaceEnabled(VerifyFace::Objects));
+    GC_EXPECT_FALSE(VerifyFaceEnabled(VerifyFace::Marking));
 }
 
 GC_OTHER_VM_TEST(VerifyPhase, QueryingOneFaceDoesNotFreezeAnother)
