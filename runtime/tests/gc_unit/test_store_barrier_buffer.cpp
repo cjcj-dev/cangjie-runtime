@@ -33,6 +33,7 @@
 #include "Heap/Collector/CollectorResources.h"
 #include "Heap/Barrier/Barrier.h"
 #include "Heap/WCollector/TraceBarrier.h"
+#include "Heap/Verify/VerifyRememberedSet.h"
 #include "Heap/Allocator/AllocBuffer.h"
 #include "Mutator/Mutator.h"
 #include "Mutator/SatbBuffer.h"
@@ -805,6 +806,57 @@ GC_TEST(StoreBuf, PhaseFlipLeavesOnePreviousAndOneCurrentSlot)
     const std::unordered_set<MAddress> current = rs.Snapshot();
     GC_EXPECT_EQ(current.size(), 1u);
     GC_EXPECT_TRUE(current.count(currentSlot) == 1);
+}
+
+// The verifier and FlushAll enumerate the same product AllocBuffer registry.
+// A pending real buffer must trip the exact pre-flip assertion; after FlushAll
+// the same verifier invocation is the positive completion arm.
+GC_OTHER_VM_TEST(StoreBuf, BeforeColorFlipRejectsRegisteredPendingBuffer)
+{
+#if defined(__linux__)
+    (void)setenv("MRT_GCV2_VERIFY_REMEMBERED", "1", 1);
+    GcHeapFixture fx;
+    RememberedSet rs;
+    rs.Initialize(fx.heapStart, GcHeapFixture::kUnits * RegionInfo::UNIT_SIZE);
+    AllocBuffer alloc;
+    Heap::GetHeap().RegisterAllocBuffer(alloc);
+    StoreBarrierBuffer& buffer = alloc.GetStoreBarrierBuffer();
+    const MAddress slot = SlotAt(fx, 8);
+    buffer.Add(slot, fx.obj0, zpointer::null, rs);
+    const size_t pendingBefore = StoreBarrierBuffer::PendingAll();
+
+    std::fflush(nullptr);
+    const pid_t child = fork();
+    GC_EXPECT_TRUE(child >= 0);
+    if (child == 0) {
+        (void)signal(SIGABRT, SIG_DFL);
+        VerifyRememberedBeforeColorFlip();
+        _exit(0);
+    }
+    int status = 0;
+    GC_EXPECT_EQ(waitpid(child, &status, 0), child);
+    GC_EXPECT_TRUE(WIFSIGNALED(status));
+    GC_EXPECT_EQ(WTERMSIG(status), SIGABRT);
+
+    StoreBarrierBuffer::FlushAll(rs);
+    const size_t pendingAfter = StoreBarrierBuffer::PendingAll();
+    VerifyRememberedBeforeColorFlip();
+    Heap::GetHeap().RemoveAllocBuffer(alloc);
+    // Product AllocBuffer::~AllocBuffer flushes its region.  A stack-created
+    // test buffer was never initialized with the product NullRegion sentinel.
+    alloc.SetRegion(nullptr);
+    std::fprintf(stderr,
+                 "DETAIL remset_network arm=before-color-flip pending_before=%zu "
+                 "pending_after=%zu assertion_signal=%d slot_recorded=%u\n",
+                 pendingBefore, pendingAfter, WTERMSIG(status),
+                 static_cast<unsigned>(rs.Contains(slot)));
+    std::fflush(stderr);
+    GC_EXPECT_EQ(pendingBefore, 1u);
+    GC_EXPECT_EQ(pendingAfter, 0u);
+    GC_EXPECT_TRUE(rs.Contains(slot));
+#else
+    GC_EXPECT_TRUE(false);
+#endif
 }
 
 GC_TEST(StoreBuf, FullAutoFlushKeepsEveryEntry)

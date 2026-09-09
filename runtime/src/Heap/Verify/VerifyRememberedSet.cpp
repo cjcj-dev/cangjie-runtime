@@ -23,6 +23,37 @@
 #include "Heap/Verify/VerifyPhase.h"
 
 namespace MapleRuntime {
+#if defined(MRT_GC_UNIT_TESTS)
+namespace {
+std::atomic<size_t> g_beforeColorFlipForTest{ 0 };
+std::atomic<size_t> g_afterScanCompleteForTest{ 0 };
+std::atomic<size_t> g_beforeForwardingSlotsForTest{ 0 };
+std::atomic<size_t> g_afterForwardingSlotsForTest{ 0 };
+} // namespace
+
+void ResetRememberedNetworkTestReceipt()
+{
+    g_beforeColorFlipForTest.store(0, std::memory_order_relaxed);
+    g_afterScanCompleteForTest.store(0, std::memory_order_relaxed);
+    g_beforeForwardingSlotsForTest.store(0, std::memory_order_relaxed);
+    g_afterForwardingSlotsForTest.store(0, std::memory_order_relaxed);
+}
+
+RememberedNetworkTestReceipt ReadRememberedNetworkTestReceipt()
+{
+    return RememberedNetworkTestReceipt {
+        g_beforeColorFlipForTest.load(std::memory_order_relaxed),
+        g_afterScanCompleteForTest.load(std::memory_order_relaxed),
+        g_beforeForwardingSlotsForTest.load(std::memory_order_relaxed),
+        g_afterForwardingSlotsForTest.load(std::memory_order_relaxed),
+    };
+}
+
+void NoteRememberedAfterScanCompleteForTest()
+{
+    g_afterScanCompleteForTest.fetch_add(1, std::memory_order_relaxed);
+}
+#endif
 
 void VerifyRememberedBeforeColorFlip()
 {
@@ -32,6 +63,9 @@ void VerifyRememberedBeforeColorFlip()
     const size_t pending = StoreBarrierBuffer::PendingAll();
     VLOG(REPORT, "[GCV2][verify][remembered-network] point=before-color-flip pending=%zu", pending);
     CHECK_DETAIL(pending == 0, "before-color-flip pending>0 pending=%zu", pending);
+#if defined(MRT_GC_UNIT_TESTS)
+    g_beforeColorFlipForTest.fetch_add(1, std::memory_order_relaxed);
+#endif
 }
 
 void VerifyRememberedBeforeForwarding(const std::vector<RememberedSet::InPlaceSlot>& slots,
@@ -53,6 +87,9 @@ void VerifyRememberedBeforeForwarding(const std::vector<RememberedSet::InPlaceSl
              "offset=%zu face=%u young-seq=%llu",
              static_cast<size_t>(fromBase), static_cast<size_t>(slot.field), offset,
              static_cast<unsigned>(slot.face), static_cast<unsigned long long>(slot.youngSeq));
+#if defined(MRT_GC_UNIT_TESTS)
+        g_beforeForwardingSlotsForTest.fetch_add(1, std::memory_order_relaxed);
+#endif
     }
 }
 
@@ -76,6 +113,9 @@ void VerifyRememberedAfterForwarding(const std::vector<RememberedSet::InPlaceSlo
              "offset=%zu face=%u young-seq=%llu",
              static_cast<size_t>(fromBase), static_cast<size_t>(toBase), offset,
              static_cast<unsigned>(slot.face), static_cast<unsigned long long>(slot.youngSeq));
+#if defined(MRT_GC_UNIT_TESTS)
+        g_afterForwardingSlotsForTest.fetch_add(1, std::memory_order_relaxed);
+#endif
     }
 }
 namespace {
