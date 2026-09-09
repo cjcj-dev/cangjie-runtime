@@ -303,7 +303,19 @@ void WCollector::ResolveCycleRef()
             // the callback runs. cycleResolverMtx alone prevents duplicate
             // resolver delivery and is never acquired by a GC consumer.
             cycleLock.unlock();
+#if defined(MRT_GC_UNIT_TESTS)
+            // The minimal gc_unit process has no scheduler-owned CJThread for
+            // the assembly N2C adapter. The injected handler still runs from
+            // this product call site and enters the real HandleSafepoint path;
+            // production always takes the adapter below.
+            if (cycleRefHandlerForTest != nullptr) {
+                resolveHook(exportObj, externObj);
+            } else {
+                ResolveCycleRefStub(resolveHook, exportObj, externObj, &returnUnit);
+            }
+#else
             ResolveCycleRefStub(resolveHook, exportObj, externObj, &returnUnit);
+#endif
             cycleLock.lock();
             ++externIndex;
         }
