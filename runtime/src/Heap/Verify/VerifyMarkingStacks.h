@@ -22,26 +22,25 @@ enum class MarkingBoundary : uint8_t { START, SEED_PUBLISH, TASK_EXIT, TERMINATI
 enum class MarkingContainer : uint8_t { OWNER, FOREIGN, TASK, POOL, LOCAL, STRIPE };
 
 constexpr size_t NO_MARKING_INDEX = std::numeric_limits<size_t>::max();
+constexpr size_t MARKING_GENERATION_COUNT = 2;
+constexpr size_t MARKING_BOUNDARY_COUNT = 7;
+constexpr size_t MARKING_CONTAINER_COUNT = 6;
 
 struct Snapshot {
-    uint64_t majorStart = 0;
-    uint64_t majorTaskExit = 0;
-    uint64_t majorTermination = 0;
-    uint64_t majorJoin = 0;
-    uint64_t majorEnd = 0;
-    uint64_t youngStart = 0;
-    uint64_t youngSeedPublish = 0;
-    uint64_t youngTaskExit = 0;
-    uint64_t youngTermination = 0;
-    uint64_t youngWorkerExit = 0;
-    uint64_t youngJoin = 0;
-    uint64_t youngEnd = 0;
-    size_t majorOwnerProducerMax = 0;
-    size_t majorTaskProducerMax = 0;
-    size_t youngOwnerProducerMax = 0;
-    size_t youngTaskProducerMax = 0;
-    size_t youngLocalProducerMax = 0;
-    size_t youngStripeProducerMax = 0;
+    uint64_t boundaryReceipts[MARKING_GENERATION_COUNT][MARKING_BOUNDARY_COUNT][MARKING_CONTAINER_COUNT]{};
+    size_t producerMax[MARKING_GENERATION_COUNT][MARKING_CONTAINER_COUNT]{};
+
+    uint64_t BoundaryCount(MarkingGeneration generation, MarkingBoundary boundary,
+                           MarkingContainer container) const
+    {
+        return boundaryReceipts[static_cast<size_t>(generation)][static_cast<size_t>(boundary)]
+                               [static_cast<size_t>(container)];
+    }
+
+    size_t ProducerMax(MarkingGeneration generation, MarkingContainer container) const
+    {
+        return producerMax[static_cast<size_t>(generation)][static_cast<size_t>(container)];
+    }
 };
 
 bool Enabled();
