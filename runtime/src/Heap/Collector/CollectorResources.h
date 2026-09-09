@@ -77,9 +77,11 @@ public:
     // Serial topology adapter, shared with helpers (not thread-local). I14 must
     // propagate an explicit context before more than one execution is admitted.
     CycleContext& GetExecutionContext() const { return *executionContext.load(std::memory_order_acquire); }
-    CycleContext& BeginCycle(uint64_t taskIndex, GCReason reason);
-    void EndCycle(CycleContext& context);
-    void PublishCyclePhase(CycleContext& context, GCPhase phase);
+    CycleToken GetExecutionToken() const;
+    CycleContext& GetCycleContext(const CycleToken& token);
+    CycleToken BeginCycle(uint64_t taskIndex, GCReason reason);
+    bool EndCycle(const CycleToken& token);
+    bool PublishCyclePhase(const CycleToken& token, GCPhase phase);
     GCStats& GetExecutionStats()
     {
         return GetCycleSnapshot().AnyActive() ? GetExecutionContext().stats : gcStats;
@@ -196,6 +198,10 @@ private:
     CycleContext oldCycle { CycleGeneration::Old };
     std::atomic<CycleContext*> executionContext { &oldCycle };
     std::atomic<uint32_t> cycleState { 0 };
+    // I16 is disabled, so lifecycle mutation remains serialized.  In addition
+    // to the driver lock, this protects direct lifecycle users and makes token
+    // validation atomic with phase publication or completion.
+    std::mutex cycleLifecycleLock;
     std::atomic<bool> controlActivity { false };
 
     // a switch to disable gc for hotupdate.

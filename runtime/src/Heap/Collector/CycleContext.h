@@ -33,9 +33,17 @@ enum GCPhase : uint8_t {
 enum class CycleGeneration : uint8_t { Young, Old };
 constexpr size_t CycleSlot(CycleGeneration generation) { return static_cast<size_t>(generation); }
 
+// A slot address is stable across collections and therefore is not a cycle
+// identity.  Callers that can publish or complete a cycle retain this value
+// token so a delayed operation cannot act on a later use of the same slot.
+struct CycleToken {
+    CycleGeneration generation;
+    uint64_t sequence;
+};
+
 // zGeneration.hpp:65-87: the generation owns its phase, mark work and statistics.
 // Stable storage belongs to CollectorResources. Consumers carrying work must
-// carry both this owner and sequence; the next use of a slot is a new cycle.
+// carry a CycleToken; the next use of a slot is a new cycle.
 struct CycleContext {
     explicit CycleContext(CycleGeneration owner) : generation(owner) {}
     const CycleGeneration generation;

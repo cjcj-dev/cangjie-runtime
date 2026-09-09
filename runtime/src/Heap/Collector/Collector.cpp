@@ -46,7 +46,9 @@ GCPhase Collector::GetGCPhase(CycleGeneration generation) const
 
 void Collector::SetGCPhase(GCPhase phase)
 {
-    Heap::GetHeap().GetCollectorResources().PublishCyclePhase(GetCycleContext(), phase);
+    auto& resources = Heap::GetHeap().GetCollectorResources();
+    CHECK_DETAIL(resources.PublishCyclePhase(resources.GetExecutionToken(), phase),
+                 "collector phase publication lost its cycle owner");
 }
 
 namespace {
