@@ -269,12 +269,26 @@ void WCollector::ResolveCycleRef()
 void WCollector::PostResolveCycleTask()
 {
 #if defined (__OHOS__)
-    if (cycleRefWorkStack.empty()) {
+    if (!HasCycleRefWork()) {
         return;
     }
     CJ_MRT_RolveCycleRef();
 #endif
 }
+
+bool WCollector::HasCycleRefWork()
+{
+    std::lock_guard<std::mutex> lock(cycleWorkStackMtx);
+    return !cycleRefWorkStack.empty();
+}
+
+void WCollector::PrepareCycleRef()
+{
+    std::lock_guard<std::mutex> lock(cycleWorkStackMtx);
+    cycleRefWorkStack.insert(discoveredExternObjects.begin(), discoveredExternObjects.end());
+    discoveredExternObjects.clear();
+}
+
 void WCollector::DoGarbageCollection()
 {
     // ZGC: not-selected pages are ordinary candidates next cycle
