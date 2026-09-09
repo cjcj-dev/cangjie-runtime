@@ -54,7 +54,8 @@ GC_OTHER_VM_TEST(VerifyPhase, FiveFaceBuildDefaultMatrix)
                  roots, objects, marking, remembered, oops);
 #if defined(MRT_DEBUG) && (MRT_DEBUG == 1)
     GC_EXPECT_FALSE(objects);
-    GC_EXPECT_TRUE(marking);
+    // Marking remains opt-in until #65 supplies a marking-stack verifier.
+    GC_EXPECT_FALSE(marking);
     GC_EXPECT_TRUE(remembered);
     GC_EXPECT_FALSE(oops);
     std::fprintf(stderr, "VERIFY_PHASE_DEFAULT_MATRIX_PRIOR_ASSERTIONS_EXECUTED count=4\n");
