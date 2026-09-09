@@ -227,5 +227,11 @@ void VerifyRememberedSetInvariant(const char* point, const std::unordered_set<MA
          reinterpret_cast<void*>(stats.danglingSamples[0]), reinterpret_cast<void*>(stats.danglingSamples[1]),
          reinterpret_cast<void*>(stats.danglingSamples[2]), reinterpret_cast<void*>(stats.danglingSamples[3]));
 
+    // MISSING is the correctness receipt.  STALE and DANGLING remain useful
+    // diagnostics but are not the invariant-R failure defined by this verifier.
+    const size_t totalFailures = correctnessMissing;
+    CHECK_DETAIL(totalFailures == 0,
+                 "[GCV2][verify][remset] scene failed point=%s total=%zu",
+                 point == nullptr ? "?" : point, totalFailures);
 }
 } // namespace MapleRuntime

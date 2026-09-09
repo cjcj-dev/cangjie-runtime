@@ -17,6 +17,7 @@
 #include "Heap/Collector/GcTrigger.h"
 #include "Heap/Verify/GarbRegionDiag.h"
 #include "Heap/Verify/MarkCompleteVerify.h"
+#include "Heap/Verify/VerifyRoots.h"
 #include "Common/Runtime.h"
 #include "Mutator/MutatorManager.h"
 #include "Mutator/SatbBuffer.h"
@@ -81,7 +82,12 @@ void CopyCollector::RunGarbageCollection(uint64_t gcIndex, GCReason reason)
     gcStats.tenuringThreshold = 0;
     gcStats.gcStartTime = TimeUtil::NanoSeconds();
 
+    // One GC cycle is the roots verification scene: it covers both the minor
+    // and major root visitors, including concurrent stack enumeration.  Close
+    // after the collector has joined all root work (zVerify.cpp:363-384).
+    VerifyRoots::BeginScene("gc-cycle");
     DoGarbageCollection();
+    VerifyRoots::EndScene("gc-cycle");
 
     if (reason == GC_REASON_OOM) {
         Heap::GetHeap().GetAllocator().ReclaimGarbageMemory(true);

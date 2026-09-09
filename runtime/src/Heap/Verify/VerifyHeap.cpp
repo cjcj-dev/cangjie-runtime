@@ -486,5 +486,11 @@ void VerifyHeapObjects(const char* point, const std::unordered_set<BaseObject*>*
          static_cast<unsigned long long>(stats.costNs), maxFailures, stats.samples[0],
          stats.samples[1], stats.samples[2], stats.samples[3]);
 
+    // Keep the detailed inventory above, but close the scene on its defect
+    // receipt as ZVerify::after_mark does (zVerify.cpp:496-506).
+    const size_t totalFailures = stats.failures;
+    CHECK_DETAIL(totalFailures == 0,
+                 "[GCV2][verify][heap] scene failed point=%s total=%zu",
+                 point == nullptr ? "?" : point, totalFailures);
 }
 } // namespace MapleRuntime
