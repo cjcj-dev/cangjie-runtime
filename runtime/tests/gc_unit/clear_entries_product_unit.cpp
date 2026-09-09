@@ -29,6 +29,7 @@
 #include "Heap/Collector/CollectorProxy.h"
 #include "Heap/Collector/PromotedRegionDomain.h"
 #include "Heap/Verify/FromPageDetachCheck.h"
+#include "Heap/Verify/VerifyRememberedSet.h"
 #include "Heap/WCollector/WCollector.h"
 #include "Heap/WCollector/TraceBarrier.h"
 #include "Mutator/Mutator.h"
@@ -4317,6 +4318,67 @@ GC_TEST(LoadHealDeliveryProduct, InPlaceRemsetMovesBitAndFeedsConsumer)
     targetRegion->metadata.liveInfo = nullptr;
     fx.FreePlanted(targetLive);
     targetRegion->SetYoungRegionFlag(0);
+}
+
+// ForwardRegion consumer arm with an already-published mapping, matching the
+// ordinary "another copier won" branch in WCollector::ForwardObject.  The test
+// does not call TransferObjectSlots itself: the baseline call in ForwardRegion
+// is the only operation able to publish the remembered receipt and to-slot.
+GC_OTHER_VM_TEST(RemsetNetwork, ForwardRegionConsumesPublishedMappingAndTransfersSlot)
+{
+    (void)setenv("MRT_GCV2_VERIFY_REMEMBERED", "1", 1);
+    GcHeapFixture& fx = ProductFixture();
+    RegionInfo* source = ResetDeliveryUnit(fx, 0);
+    RegionInfo* destination = ResetDeliveryUnit(fx, 1);
+    BaseObject* from = fx.PlaceObject(source->GetRegionStart());
+    const size_t objectSize = from->GetSize();
+    source->SetRegionAllocPtr(reinterpret_cast<MAddress>(from) + objectSize);
+    const MAddress toBase = destination->GetRegionStart();
+    GC_EXPECT_TRUE(destination->Alloc(objectSize) != 0);
+    BaseObject* to = reinterpret_cast<BaseObject*>(toBase);
+
+    WCollector collector(Heap::GetHeap().GetAllocator(), Heap::GetHeap().GetCollectorResources());
+    RelocationReceiptTestAccess::BindCollector(Heap::GetHeap().GetCollectorResources(), &collector);
+    LoadHealDeliveryTestAccess::PublishColours(collector);
+    collector.SetGCPhase(GCPhase::GC_PHASE_FORWARD);
+    LiveInfo* live = PrepareForwardable(fx, source, reinterpret_cast<MAddress>(from));
+    std::memcpy(to, from, objectSize);
+    to->SetStateCode(ObjectState::NORMAL);
+    ForwardingTable::Publication publication =
+        ForwardingTable::EnsurePublicationBeforeCopy(source, reinterpret_cast<MAddress>(from));
+    GC_EXPECT_TRUE(static_cast<bool>(publication));
+    GC_EXPECT_EQ(ForwardingTable::InsertMapping(publication,
+                                                reinterpret_cast<MAddress>(from), toBase), toBase);
+    publication = ForwardingTable::Publication();
+    from->SetStateCode(ObjectState::FORWARDED);
+    source->SetRouteInfo(toBase, objectSize);
+    source->SetRouteState(RegionInfo::RouteState::FORWARDED);
+
+    RememberedSet& remembered = DeliveryRememberedSet(fx);
+    EmptyBothRememberedFaces(remembered);
+    const MAddress fromSlot = reinterpret_cast<MAddress>(from) + TYPEINFO_PTR_SIZE;
+    const MAddress toSlot = toBase + TYPEINFO_PTR_SIZE;
+    StoreBarrierBuffer producer;
+    producer.Add(fromSlot, zpointer::null, remembered);
+    producer.Flush(remembered);
+    RegionManager manager;
+    manager.ForwardRegion<Generation::Old>(source);
+    const bool toPresent = remembered.Contains(toSlot);
+    std::fprintf(stderr,
+                 "DETAIL remset_network arm=forward-region-published from=%#zx to=%#zx "
+                 "offset=%zu mapping=%#zx to_present=%u\n",
+                 static_cast<size_t>(reinterpret_cast<MAddress>(from)), static_cast<size_t>(toBase),
+                 static_cast<size_t>(TYPEINFO_PTR_SIZE),
+                 static_cast<size_t>(ForwardingTable::FindTo(reinterpret_cast<MAddress>(from))),
+                 static_cast<unsigned>(toPresent));
+    std::fflush(stderr);
+
+    RelocationReceiptTestAccess::BindCollector(Heap::GetHeap().GetCollectorResources(), nullptr);
+    RelocationReceiptTestAccess::ReleaseListOwnership(source);
+    RelocationReceiptTestAccess::ReleaseListOwnership(destination);
+    source->metadata.liveInfo = nullptr;
+    fx.FreePlanted(live);
+    GC_EXPECT_TRUE(toPresent);
 }
 
 // The conservative pinned producer is accepted only for a value inside the
