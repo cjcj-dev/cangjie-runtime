@@ -65,17 +65,27 @@ void CopyCollector::CopyObject(const BaseObject& fromObj, BaseObject& toObj, siz
 void CopyCollector::RunGarbageCollection(uint64_t gcIndex, GCReason reason)
 {
     ScopedEntryTrace trace("CJRT_GC_START");
-    const uint64_t cycleSeq = GcLog::BeginCycle();
     // prevent other threads stop-the-world during GC.
     // this may be removed in the future.
     ScopedSTWLock stwLock;
     // ScopedStopTheWorld stw;
 
-    gcReason = reason;
-    PreGarbageCollection(reason != GC_REASON_YOUNG, gcIndex);
+    CycleContext& context = collectorResources.BeginCycle(gcIndex, reason);
+    RunGarbageCollection(context);
+    collectorResources.EndCycle(context);
+    collectorResources.NotifyGCPhaseFinished(gcIndex);
+}
+
+void CopyCollector::RunGarbageCollection(CycleContext& context)
+{
+    const uint64_t gcIndex = context.taskIndex;
+    const GCReason reason = context.reason;
+    const uint64_t cycleSeq = context.sequence.load(std::memory_order_acquire);
+    GCStats& policy = collectorResources.GetGCStats();
+    PreGarbageCollection(!context.IsYoung(), gcIndex);
     ScheduleTraceEvent(TRACE_EV_GC_START, -1, nullptr, 0);
-    VLOG(REPORT, "[GC] Start %s %s gcIndex= %lu", GetCollectorName(), g_gcRequests[gcReason].name, gcIndex);
-    GCStats& gcStats = GetGCStats();
+    VLOG(REPORT, "[GC] Start %s %s gcIndex= %lu", GetCollectorName(), g_gcRequests[GetGCReason()].name, gcIndex);
+    GCStats& gcStats = context.stats;
     gcStats.collectedBytes = 0;
     gcStats.youngCandidateBytes = 0;
     gcStats.youngPromotedBytes = 0;
@@ -98,7 +108,6 @@ void CopyCollector::RunGarbageCollection(uint64_t gcIndex, GCReason reason)
     // Emitted here rather than from GCStats::Dump, because UpdateGCStats below (and so Dump) is
     // skipped for young collections: a minor would produce no cycle record and its phases would
     // be attributed to the next major.
-    GcLog::CompleteCycle(cycleSeq);
     GcLog::Cycle(cycleSeq, reason == GC_REASON_YOUNG ? "minor" : "major",
                  g_gcRequests[reason].name, gcStats.gcStartTime, gcStats.gcEndTime - gcStats.gcStartTime,
                  gcStats.liveBytesBeforeGC, gcStats.liveBytesAfterGC, gcStats.collectedBytes,
@@ -126,9 +135,9 @@ void CopyCollector::RunGarbageCollection(uint64_t gcIndex, GCReason reason)
         const char* minorDefersHeuEnv = std::getenv("MRT_GCV2_MINOR_DEFERS_HEU");
         const bool minorDefersHeu =
             minorDefersHeuEnv == nullptr || std::strcmp(minorDefersHeuEnv, "0") != 0;
-        gcStats.RecordYoungStats(gcStats.youngCandidateBytes, gcStats.youngPromotedBytes, gcStats.collectedBytes,
+        policy.RecordYoungStats(gcStats.youngCandidateBytes, gcStats.youngPromotedBytes, gcStats.collectedBytes,
                                  gcTimeNs, maxCapacity);
-        GCStats::YoungHeuThrottleDecision decision = gcStats.RecordYoungGCFinish(
+        GCStats::YoungHeuThrottleDecision decision = policy.RecordYoungGCFinish(
             finishTime, allocatedAfter, gcStats.youngPromotedBytes, gcStats.youngCandidateBytes, maxCapacity,
             gcTimeNs, heuMinInterval, minorDefersHeu);
         VLOG(REPORT,
@@ -138,20 +147,20 @@ void CopyCollector::RunGarbageCollection(uint64_t gcIndex, GCReason reason)
              gcStats.youngPromotedBytes, gcStats.youngCandidateBytes, static_cast<unsigned long long>(gcTimeNs),
              static_cast<unsigned long long>(heuMinInterval), maxCapacity / 4);
     } else {
-        gcStats.RecordMajorGCFinish(finishTime, gcTimeNs, Heap::GetHeap().GetAllocatedSize(),
+        policy.RecordMajorGCFinish(finishTime, gcTimeNs, Heap::GetHeap().GetAllocatedSize(),
                                     gcStats.collectedBytes,
                                     static_cast<uint32_t>(g_gcCount.load(std::memory_order_relaxed)));
-        gcStats.lastGcDurationNs.store(gcTimeNs, std::memory_order_relaxed);
-        const uint32_t warmupDone = gcStats.warmupCyclesDone.load(std::memory_order_relaxed);
+        policy.lastGcDurationNs.store(gcTimeNs, std::memory_order_relaxed);
+        const uint32_t warmupDone = policy.warmupCyclesDone.load(std::memory_order_relaxed);
         if (warmupDone < kGcTriggerWarmupCycles) {
-            gcStats.warmupCyclesDone.store(warmupDone + 1, std::memory_order_relaxed);
+            policy.warmupCyclesDone.store(warmupDone + 1, std::memory_order_relaxed);
         }
-        if (gcStats.warmupCyclesDone.load(std::memory_order_relaxed) >= kGcTriggerWarmupCycles) {
-            gcStats.isWarm.store(true, std::memory_order_relaxed);
+        if (policy.warmupCyclesDone.load(std::memory_order_relaxed) >= kGcTriggerWarmupCycles) {
+            policy.isWarm.store(true, std::memory_order_relaxed);
         }
-        gcStats.isTimeTrustable.store(true, std::memory_order_relaxed);
+        policy.isTimeTrustable.store(true, std::memory_order_relaxed);
     }
-    collectorResources.NotifyGCPhaseFinished(gcIndex);
+
 }
 
 void CopyCollector::ForwardFromSpace()
@@ -168,7 +177,7 @@ void CopyCollector::ForwardFromSpace()
     const char* poolKind = "shared";
     int32_t previousActiveHelpers = 0;
     bool restoreActiveHelpers = false;
-    if (gcReason == GC_REASON_YOUNG) {
+    if (IsYoungCycle()) {
         const char* forceSerialEnv = std::getenv("MRT_GCV2_EVACPAR_FORCE_SERIAL");
         const bool forceSerial =
             forceSerialEnv != nullptr && std::strcmp(forceSerialEnv, "1") == 0;
@@ -222,7 +231,7 @@ void CopyCollector::ForwardFromSpace()
              static_cast<unsigned>(copyPool != nullptr), workers, stats.fromSpaceSize, bytesPerWorker, maxWorkers,
              poolKind, static_cast<unsigned>(forceSerial), static_cast<unsigned>(workGate));
     }
-    if (gcReason == GC_REASON_YOUNG) {
+    if (IsYoungCycle()) {
         space.ForwardFromSpace<Generation::Young>(copyPool);
     } else {
         space.ForwardFromSpace<Generation::Old>(copyPool);

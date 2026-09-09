@@ -53,25 +53,32 @@ public:
         return enabled;
     }
 
-    // There is exactly one process-wide active collection.  A Timer snapshots CurrentSeq() in its
-    // constructor; scopes created outside a collection therefore retain seq=0 even if they end
-    // during a later collection.  Pairing is a default product invariant, not a test-only check.
-    static uint64_t BeginCycle()
+    // zGeneration.hpp:78-87: each generation owns its active log cycle.
+    // The no-argument adapter is for the retained single-executor topology.
+    static uint64_t BeginCycle(size_t generation = 1)
     {
-        uint64_t seq = CycleCounter().fetch_add(1, std::memory_order_relaxed) + 1;
-        if (seq == 0 || ActiveSeq().exchange(seq, std::memory_order_acq_rel) != 0) {
+        const uint64_t seq = CycleCounter().fetch_add(1, std::memory_order_relaxed) + 1;
+        uint64_t expected = 0;
+        if (generation >= 2 || seq == 0 || !ActiveSeq(generation).compare_exchange_strong(
+                expected, seq, std::memory_order_acq_rel, std::memory_order_acquire)) {
             std::abort();
         }
         return seq;
     }
 
-    static uint64_t CurrentSeq() { return ActiveSeq().load(std::memory_order_acquire); }
+    static uint64_t CurrentSeq()
+    {
+        const uint64_t young = ActiveSeq(0).load(std::memory_order_acquire);
+        const uint64_t old = ActiveSeq(1).load(std::memory_order_acquire);
+        // Ambiguous observers cannot assign an event to the most recent cycle.
+        return young != 0 && old != 0 ? 0 : (young != 0 ? young : old);
+    }
 
-    static void CompleteCycle(uint64_t seq)
+    static void CompleteCycle(uint64_t seq, size_t generation = 1)
     {
         uint64_t expected = seq;
-        if (seq == 0 || !ActiveSeq().compare_exchange_strong(
-                            expected, 0, std::memory_order_acq_rel, std::memory_order_acquire)) {
+        if (generation >= 2 || seq == 0 || !ActiveSeq(generation).compare_exchange_strong(
+                expected, 0, std::memory_order_acq_rel, std::memory_order_acquire)) {
             std::abort();
         }
     }
@@ -279,10 +286,10 @@ private:
         return counter;
     }
 
-    static std::atomic<uint64_t>& ActiveSeq()
+    static std::atomic<uint64_t>& ActiveSeq(size_t generation)
     {
-        static std::atomic<uint64_t> seq{ 0 };
-        return seq;
+        static std::atomic<uint64_t> sequences[2] {};
+        return sequences[generation];
     }
 
     static char* FatalSlot()

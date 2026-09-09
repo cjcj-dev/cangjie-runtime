@@ -358,7 +358,7 @@ void WCollector::DoGarbageCollection()
     // (zRelocationSetSelector.cpp:114-196). Expire last cycle's Exempt-kept
     // before Assemble / PrepareYoung so they re-enter the selector.
     reinterpret_cast<RegionSpace&>(theAllocator).GetRegionManager().ExpireKeptFromPreviousCycle();
-    if (gcReason == GC_REASON_YOUNG) {
+    if (IsYoungCycle()) {
         DoYoungGarbageCollection();
         Collector::ReportMarkGoodHeapGateCounts();
         return;

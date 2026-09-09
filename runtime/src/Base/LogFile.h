@@ -276,7 +276,8 @@ void EmitTimerRecords(uint64_t seq, const char* name, uint64_t startNs, uint64_t
 
 class Timer {
 public:
-    explicit Timer(const CString& pName, LogType type = REPORT) : name(pName), logType(type)
+    explicit Timer(const CString& pName, LogType type = REPORT, uint64_t ownerSequence = GcLog::CurrentSeq())
+        : name(pName), logType(type)
     {
         // Time when either the human VLOG channel or structured GC log needs the duration.
         // ENABLE_LOG alone used to gate phase records; under DEFAULT_MRT_REPORT=0 that
@@ -286,12 +287,9 @@ public:
         if (ENABLE_LOG(type) || gcLogActive || zstatActive) {
             startTimeNs = TimeUtil::NanoSeconds();
             active = true;
-            // FINALIZE timers run on a lifecycle thread that does not participate in the active
-            // collection.  Its LogType is the structural ownership marker: even when that thread
-            // overlaps a process-wide cycle, its work remains unowned (seq=0).  All GC phase
-            // timers use the default REPORT type and retain the active cycle, including nonpillar
-            // phases such as young.flush_alloc.
-            cycleSeq = logType == FINALIZE ? 0 : GcLog::CurrentSeq();
+            // FINALIZE has its own lifecycle. GC callers supply their owning
+            // context's sequence; the default is a serial observer adapter.
+            cycleSeq = logType == FINALIZE ? 0 : ownerSequence;
             // ZStatPhase kind (pause vs concurrent, zStat.hpp:257/270) is sampled at scope
             // entry: a phase that straddles the world-release is booked where its work began.
             if (zstatActive) {
@@ -338,7 +336,7 @@ public:
         // Keep ZStat as an adjacent independent downstream: cutting GCLOG emission must not cut
         // the positive-control account.
         if (zstatActive) {
-            ZStat::NotePhase(name.Str(), zstatPauseAtStart, diffTimeNs);
+            ZStat::NotePhase(name.Str(), zstatPauseAtStart, diffTimeNs, cycleSeq);
         }
     }
 
