@@ -103,6 +103,7 @@ struct Stats {
     size_t rootDead = 0;
     size_t weakRootsSeen = 0;
     size_t weakEdgesSeen = 0;
+    size_t weakNonNullEdgesSeen = 0;
 
     // Walk-coverage census.  RegionInfo::VisitAllObjects (RegionManager.cpp:648-663)
     // *breaks* at the first object whose header fails the gate -- "remaining stream
@@ -787,6 +788,12 @@ std::atomic<uint64_t> g_strongOnlyRootsSeen{ 0 };
 std::atomic<uint64_t> g_weakCompleteRootsSeen{ 0 };
 std::atomic<uint64_t> g_weakRootsSeen{ 0 };
 std::atomic<uint64_t> g_weakEdgesSeen{ 0 };
+std::atomic<uint64_t> g_weakNonNullEdgesSeen{ 0 };
+std::atomic<uint64_t> g_weakProcessingCalls{ 0 };
+std::atomic<uint64_t> g_weakProcessingOrdinal{ 0 };
+std::atomic<uint64_t> g_weakCompleteSawProcessingOrdinal{ 0 };
+std::atomic<uint64_t> g_weakEnqueuedBefore{ 0 };
+std::atomic<uint64_t> g_weakEnqueuedAfter{ 0 };
 } // namespace
 
 void ResetSceneTestReceipt()
@@ -802,6 +809,12 @@ void ResetSceneTestReceipt()
     g_weakCompleteRootsSeen.store(0, std::memory_order_relaxed);
     g_weakRootsSeen.store(0, std::memory_order_relaxed);
     g_weakEdgesSeen.store(0, std::memory_order_relaxed);
+    g_weakNonNullEdgesSeen.store(0, std::memory_order_relaxed);
+    g_weakProcessingCalls.store(0, std::memory_order_relaxed);
+    g_weakProcessingOrdinal.store(0, std::memory_order_relaxed);
+    g_weakCompleteSawProcessingOrdinal.store(0, std::memory_order_relaxed);
+    g_weakEnqueuedBefore.store(0, std::memory_order_relaxed);
+    g_weakEnqueuedAfter.store(0, std::memory_order_relaxed);
 }
 
 SceneTestReceipt ReadSceneTestReceipt()
@@ -815,7 +828,22 @@ SceneTestReceipt ReadSceneTestReceipt()
              g_strongOnlyRootsSeen.load(std::memory_order_relaxed),
              g_weakCompleteRootsSeen.load(std::memory_order_relaxed),
              g_weakRootsSeen.load(std::memory_order_relaxed),
-             g_weakEdgesSeen.load(std::memory_order_relaxed) };
+             g_weakEdgesSeen.load(std::memory_order_relaxed),
+             g_weakNonNullEdgesSeen.load(std::memory_order_relaxed),
+             g_weakProcessingCalls.load(std::memory_order_relaxed),
+             g_weakProcessingOrdinal.load(std::memory_order_relaxed),
+             g_weakCompleteSawProcessingOrdinal.load(std::memory_order_relaxed),
+             g_weakEnqueuedBefore.load(std::memory_order_relaxed),
+             g_weakEnqueuedAfter.load(std::memory_order_relaxed) };
+}
+
+void NoteWeakProcessingComplete(size_t weakEnqueuedBefore, size_t weakEnqueuedAfter)
+{
+    const uint64_t ordinal = g_sceneSequence.fetch_add(1, std::memory_order_relaxed) + 1;
+    g_weakProcessingCalls.fetch_add(1, std::memory_order_relaxed);
+    g_weakProcessingOrdinal.store(ordinal, std::memory_order_relaxed);
+    g_weakEnqueuedBefore.store(weakEnqueuedBefore, std::memory_order_relaxed);
+    g_weakEnqueuedAfter.store(weakEnqueuedAfter, std::memory_order_relaxed);
 }
 
 void PublishSceneTestReceipt(Scene scene, const Stats& stats, bool includeWeak)
@@ -834,6 +862,9 @@ void PublishSceneTestReceipt(Scene scene, const Stats& stats, bool includeWeak)
     g_weakCompleteRootsSeen.store(stats.rootsSeen, std::memory_order_relaxed);
     g_weakRootsSeen.store(stats.weakRootsSeen, std::memory_order_relaxed);
     g_weakEdgesSeen.store(stats.weakEdgesSeen, std::memory_order_relaxed);
+    g_weakNonNullEdgesSeen.store(stats.weakNonNullEdgesSeen, std::memory_order_relaxed);
+    g_weakCompleteSawProcessingOrdinal.store(g_weakProcessingOrdinal.load(std::memory_order_relaxed),
+                                             std::memory_order_relaxed);
 }
 #endif
 
@@ -883,6 +914,9 @@ void RunAtMarkEnd(const char* point, Scene scene)
                 obj->ForEachRefField([&stats, maxSamples, point, obj, weakHolder](RefField<>& field) {
                     if (weakHolder) {
                         ++stats.weakEdgesSeen;
+                        if (!is_null(field.GetFieldValue(std::memory_order_acquire))) {
+                            ++stats.weakNonNullEdgesSeen;
+                        }
                     }
                     CheckEdge(stats, maxSamples, point, obj, field);
                 });

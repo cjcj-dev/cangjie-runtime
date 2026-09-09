@@ -74,10 +74,17 @@ struct SceneTestReceipt {
     uint64_t weakCompleteRootsSeen = 0;
     uint64_t weakRootsSeen = 0;
     uint64_t weakEdgesSeen = 0;
+    uint64_t weakNonNullEdgesSeen = 0;
+    uint64_t weakProcessingCalls = 0;
+    uint64_t weakProcessingOrdinal = 0;
+    uint64_t weakCompleteSawProcessingOrdinal = 0;
+    uint64_t weakEnqueuedBefore = 0;
+    uint64_t weakEnqueuedAfter = 0;
 };
 
 void ResetSceneTestReceipt();
 SceneTestReceipt ReadSceneTestReceipt();
+void NoteWeakProcessingComplete(size_t weakEnqueuedBefore, size_t weakEnqueuedAfter);
 #endif
 
 // Retrace census integrated with the completeness verifier. A dead-edge holder
