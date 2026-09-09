@@ -9,6 +9,15 @@ SRC="$ROOT/runtime/tests/gc_unit"
 OUT="${GC_UNIT_OUT:-$ROOT/runtime/tests/gc_unit/build_standalone}"
 CXX="${CXX:-clang++}"
 
+# This source-tree gate is part of the standalone entry, not an opt-in probe.
+# Stable symbol identities make harmless line shifts invisible, while the fault
+# arms prove that removing any declared admission fails exactly its own face.
+PYTHONDONTWRITEBYTECODE=1 python3 "$SRC/check_verify_phase_matrix.py" \
+  "$ROOT/runtime/src/Heap/Verify"
+echo "GATE_VERIFY_PHASE_MATRIX_OK entry=standalone"
+PYTHONDONTWRITEBYTECODE=1 python3 "$SRC/test_verify_phase_matrix_checker.py" "$ROOT"
+echo "GATE_VERIFY_PHASE_FAULT_ARMS_OK entry=standalone"
+
 # Mutual-wait receipts have an independent, fixed target set.  Do not derive
 # it from the ProductFindToVersion calls that happen to remain in the source:
 # deleting a test/call must shrink neither the manifest nor this guard.

@@ -1,51 +1,99 @@
 #!/usr/bin/env python3
-"""Structural five-face gate with a precise per-call-site manifest.
+"""Structural gate for the five verification faces, keyed by stable symbols."""
 
-The manifest is intentionally keyed by the product source ``file:line`` of
-every VerifyPhaseEnter call.  A face is not considered covered merely because
-one marker remains in its translation unit: removing either Oops entry must
-change the extracted set and fail closed.
-"""
 from pathlib import Path
+import re
 import sys
 
-# Frozen product call-site manifest.  Keep this set in lock-step with the
-# product source; the checker below extracts a fresh set rather than trusting
-# marker strings supplied by tests.
-EXPECTED_CALLS = {
-    "roots": {"VerifyRoots.cpp:104"},
-    "objects": {"VerifyHeap.cpp:385"},
-    "marking": {"MarkCompleteVerify.cpp:763"},
-    "remembered": {"VerifyRememberedSet.cpp:173"},
-    "oops": {"VerifyRegions.cpp:222", "VerifyRegions.cpp:426"},
-}
+
+# A target is identified by its owning function, not by its current source line.
+# Keeping the file in the identity also rejects an accidental same-named helper in
+# another translation unit.
+EXPECTED_TARGETS = (
+    ("roots", "VerifyRoots.cpp", "void VerifyRoots::VerifyRootPayload("),
+    ("objects", "VerifyHeap.cpp", "void VerifyHeapObjects("),
+    ("marking", "MarkCompleteVerify.cpp", "void RunAtMarkEnd("),
+    ("remembered", "VerifyRememberedSet.cpp", "void VerifyRememberedSetInvariant("),
+    ("oops", "VerifyRegions.cpp", "void VerifyRegions::VerifyAfterPrepareYoung("),
+    ("oops", "VerifyRegions.cpp", "void VerifyRegions::VerifyAfterYoungMark("),
+)
+FACES = ("roots", "objects", "marking", "remembered", "oops")
+CALL_PATTERN = re.compile(
+    r"VerifyPhaseEnter\(\s*VerifyFace::(Roots|Objects|Marking|Remembered|Oops)\s*,"
+)
+
+
+def function_body(text: str, anchor: str):
+    """Return an anchored function body and its source span, or None."""
+    if text.count(anchor) != 1:
+        return None
+    start = text.find(anchor)
+    opening = text.find("{", start + len(anchor))
+    if opening < 0:
+        return None
+    depth = 0
+    for position in range(opening, len(text)):
+        if text[position] == "{":
+            depth += 1
+        elif text[position] == "}":
+            depth -= 1
+            if depth == 0:
+                return text[opening : position + 1], (opening, position + 1)
+    return None
 
 
 def check(root: Path):
-    actual = {face: set() for face in EXPECTED_CALLS}
-    for source in sorted(root.glob("*.cpp")):
-        for line_no, line in enumerate(source.read_text(encoding="utf-8").splitlines(), 1):
-            marker = "VerifyPhaseEnter(VerifyFace::"
-            if marker not in line:
-                continue
-            face = line.split(marker, 1)[1].split(",", 1)[0].strip()
-            face = face.lower()
-            if face in actual:
-                actual[face].add(f"{source.name}:{line_no}")
-    result = {face: actual[face] == EXPECTED_CALLS[face] for face in EXPECTED_CALLS}
-    return result, actual
+    sources = {
+        source.name: source.read_text(encoding="utf-8")
+        for source in sorted(root.glob("*.cpp"))
+    }
+    result = {face: True for face in FACES}
+    targets = []
+    owned_ranges = {source_name: [] for source_name in sources}
+
+    for face, source_name, anchor in EXPECTED_TARGETS:
+        parsed = function_body(sources.get(source_name, ""), anchor)
+        matches = [] if parsed is None else CALL_PATTERN.findall(parsed[0])
+        ok = matches == [face.capitalize()]
+        result[face] = result[face] and ok
+        targets.append((face, source_name, anchor, ok, matches))
+        if parsed is not None:
+            owned_ranges[source_name].append((parsed[1], face))
+
+    unexpected = []
+    for source_name, source_text in sources.items():
+        for match in CALL_PATTERN.finditer(source_text):
+            face = match.group(1).lower()
+            owners = [
+                owner_face
+                for (start, end), owner_face in owned_ranges[source_name]
+                if start <= match.start() < end
+            ]
+            if owners != [face]:
+                unexpected.append(f"{source_name}:{face}")
+                result[face] = False
+
+    return result, targets, unexpected
 
 
 def main() -> int:
     if len(sys.argv) != 2:
         print("usage: check_verify_phase_matrix.py <runtime/src/Heap/Verify>")
         return 2
-    result, actual = check(Path(sys.argv[1]))
-    bad = [face for face, ok in result.items() if not ok]
-    print("VERIFY_PHASE_MATRIX " + " ".join(f"{face}={'GREEN' if ok else 'RED'}" for face, ok in result.items()))
-    for face in EXPECTED_CALLS:
-        print(f"VERIFY_PHASE_CALLS {face}=actual:{sorted(actual[face])} expected:{sorted(EXPECTED_CALLS[face])}")
-    return 1 if bad else 0
+    result, targets, unexpected = check(Path(sys.argv[1]))
+    print(
+        "VERIFY_PHASE_MATRIX "
+        + " ".join(
+            f"{face}={'GREEN' if result[face] else 'RED'}" for face in FACES
+        )
+    )
+    for face, source, anchor, ok, matches in targets:
+        print(
+            f"VERIFY_PHASE_TARGET face={face} source={source} symbol={anchor} "
+            f"calls={matches} status={'GREEN' if ok else 'RED'}"
+        )
+    print(f"VERIFY_PHASE_UNEXPECTED calls={unexpected}")
+    return 0 if all(result.values()) else 1
 
 
 if __name__ == "__main__":
