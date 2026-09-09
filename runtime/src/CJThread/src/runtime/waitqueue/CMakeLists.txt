@@ -14,4 +14,4 @@ target_include_directories(waitqueue PUBLIC include/inner)
 
 target_link_libraries(waitqueue PUBLIC timer external)
 
-file(COPY include/waitqueue.h DESTINATION ${PROJECT_SOURCE_DIR}/../../output/temp/include/)
+file(COPY include/waitqueue.h DESTINATION ${RUNTIME_OUTPUT_ROOT}/include/)

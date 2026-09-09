@@ -9,7 +9,8 @@ trap 'rm -rf "$fixture"' EXIT
 # The parent gate supplies its own compiler, runtime, status, mode, and skip
 # controls.  Each fixture arm below owns all of those inputs; inheriting even
 # one can turn a negative arm into a false PASS.
-unset CANGJIE_HOME CJC GCV2_RUNTIME_LIB_DIR MRT_TESTABLE_INTERNALS \
+unset CANGJIE_HOME CJC GCV2_RUNTIME_LIB_DIR GCV2_RUNTIME_CONFIG \
+  GCV2_RUNTIME_OUTPUT_ROOT MRT_TESTABLE_INTERNALS \
   GC_UNIT_GATE_LANGUAGE_TESTS GC_UNIT_GATE_SKIP GC_UNIT_GATE_STATUS \
   GC_UNIT_OUT GC_UNIT_TALLY_FILE
 mkdir -p "$fixture/runtime/tests/gc_unit" "$fixture/runtime/src" "$fixture/lib" "$fixture/bin" \
