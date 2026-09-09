@@ -755,12 +755,12 @@ void ReportHolderTraces(const char* point)
 
 bool Enabled()
 {
-    return VerifyFaceEnabled(VerifyFace::Marking);
+    return VerifyFaceEnabled(VerifyFace::Objects);
 }
 
 void RunAtMarkEnd(const char* point)
 {
-    if (!VerifyPhaseEnter(VerifyFace::Marking, point)) {
+    if (!VerifyPhaseEnter(VerifyFace::Objects, point)) {
         return;
     }
     static std::atomic<size_t> invokeCount{ 0 };
