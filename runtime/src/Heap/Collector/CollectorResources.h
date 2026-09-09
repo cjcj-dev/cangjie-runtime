@@ -88,8 +88,9 @@ public:
         return GetCycleSnapshot().AnyActive() ? GetExecutionContext().stats : gcStats;
     }
 
-    // Legacy control/test activity; product collection activity belongs to CycleContext.
-    void SetGcStarted(bool val) { controlActivity.store(val, std::memory_order_release); }
+    // Legacy control/test activity receives a real, tokened context so migrated
+    // barrier/SATB consumers observe the same owner as product collections.
+    void SetGcStarted(bool val);
 
     bool IsGCActive() const { return Heap::GetHeap().IsGCEnabled() && isGCActive.load(std::memory_order_relaxed); }
 
@@ -204,6 +205,7 @@ private:
     // validation atomic with phase publication or completion.
     std::mutex cycleLifecycleLock;
     std::atomic<bool> controlActivity { false };
+    CycleToken controlCycleToken { CycleGeneration::Old, 0 };
 
     // a switch to disable gc for hotupdate.
     std::atomic<bool> isGCActive = { true };

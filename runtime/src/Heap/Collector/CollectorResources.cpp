@@ -277,6 +277,52 @@ CycleContext& CollectorResources::GetCycleContext(const CycleToken& token)
     return context;
 }
 
+void CollectorResources::SetGcStarted(bool val)
+{
+    std::unique_lock<std::mutex> lifecycleLock(cycleLifecycleLock);
+    if (val) {
+        if (controlActivity.exchange(true, std::memory_order_acq_rel)) {
+            return;
+        }
+        // A product cycle already has its own token and must never be replaced
+        // by the retained control adapter.
+        if (GetCycleSnapshot().AnyActive()) {
+            return;
+        }
+        CycleContext& context = GetExecutionContext();
+        context.reason = gcStats.reason;
+        context.taskIndex = GCTask::ASYNC_TASK_INDEX;
+        context.request = nullptr;
+        context.stats.reason = gcStats.reason;
+        const uint64_t sequence = GcLog::BeginCycle(CycleSlot(context.generation));
+        context.sequence.store(sequence, std::memory_order_release);
+        controlCycleToken = { context.generation, sequence };
+        const uint32_t slot = CycleSnapshot::ActiveBit(context.generation) |
+            (static_cast<uint32_t>(GC_PHASE_IDLE) << (CycleSlot(context.generation) * 8));
+        const uint32_t previous = cycleState.load(std::memory_order_acquire);
+        cycleState.store((previous & ~CycleSnapshot::SlotMask(context.generation)) | slot,
+                         std::memory_order_release);
+        return;
+    }
+
+    if (!controlActivity.exchange(false, std::memory_order_acq_rel)) {
+        return;
+    }
+    const CycleToken token = controlCycleToken;
+    controlCycleToken.sequence = 0;
+    if (token.sequence == 0) {
+        return;
+    }
+    CycleContext& context = GetCycleContext(token.generation);
+    if (!GetCycleSnapshot().Active(token.generation) ||
+        context.sequence.load(std::memory_order_acquire) != token.sequence) {
+        return;
+    }
+    GcLog::CompleteCycle(token.sequence, CycleSlot(token.generation));
+    cycleState.fetch_and(~CycleSnapshot::SlotMask(token.generation), std::memory_order_acq_rel);
+    context.sequence.store(0, std::memory_order_release);
+}
+
 CycleToken CollectorResources::BeginCycle(uint64_t taskIndex, GCReason reason)
 {
     std::unique_lock<std::mutex> lifecycleLock(cycleLifecycleLock);
@@ -310,6 +356,11 @@ bool CollectorResources::PublishCyclePhase(const CycleToken& token, GCPhase phas
     if (token.sequence == 0 || !GetCycleSnapshot().Active(token.generation) ||
         context.sequence.load(std::memory_order_acquire) != token.sequence) {
         return false;
+    }
+    if (controlActivity.load(std::memory_order_acquire) &&
+        controlCycleToken.generation == token.generation && controlCycleToken.sequence == token.sequence) {
+        context.reason = gcStats.reason;
+        context.stats.reason = gcStats.reason;
     }
     const size_t shift = CycleSlot(token.generation) * 8;
     const uint32_t phaseMask = 0x7fu << shift;
@@ -422,10 +473,10 @@ bool CollectorResources::ProcessDriverRequest(GCDriverPort& port, const GCDriver
 
 void CollectorResources::CancelDriverRequestLifecycle(CycleGeneration generation)
 {
+    SetGcStarted(false);
     std::unique_lock<std::mutex> lock(gcFinishedCondMutex);
     executionRequest = nullptr;
     activeRequests.fetch_and(static_cast<uint8_t>(~(1u << CycleSlot(generation))), std::memory_order_acq_rel);
-    controlActivity.store(false, std::memory_order_release);
     gcFinishedCondVar.notify_all();
 }
 
@@ -515,8 +566,8 @@ void CollectorResources::NotifyGCFinished(uint64_t gcIndex)
 #if defined(MRT_GC_UNIT_TESTS)
     testCompletionCount.fetch_add(1, std::memory_order_relaxed);
 #endif
+    SetGcStarted(false);
     std::unique_lock<std::mutex> lock(gcFinishedCondMutex);
-    controlActivity.store(false, std::memory_order_release);
     if (gcIndex != GCTask::ASYNC_TASK_INDEX) { // sync gc, need set taskIndex
         finishedGcIndex.store(gcIndex, std::memory_order_release);
     }
