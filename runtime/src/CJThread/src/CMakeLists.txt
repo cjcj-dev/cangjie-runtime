@@ -44,7 +44,7 @@ add_subdirectory(syscall)
 add_subdirectory(aio)
 add_subdirectory(trace)
 
-set(LIBRARY_OUTPUT_PATH ${PROJECT_SOURCE_DIR}/../../output/temp/lib)
+set(LIBRARY_OUTPUT_PATH ${RUNTIME_OUTPUT_ROOT}/lib)
 
 
 add_library(cangjie-thread ${LIBTYPE}
