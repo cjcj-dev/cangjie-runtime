@@ -2,6 +2,7 @@
 """Fault arms for the stable-symbol VerifyPhase matrix checker."""
 
 from pathlib import Path
+import re
 import shutil
 import subprocess
 import sys
@@ -9,43 +10,48 @@ import tempfile
 
 
 TARGETS = (
-    ("roots", "VerifyRoots.cpp", "void VerifyRoots::VerifyRootPayload("),
-    ("objects", "VerifyHeap.cpp", "void VerifyHeapObjects("),
-    ("marking", "MarkCompleteVerify.cpp", "void RunAtMarkEnd("),
-    ("remembered", "VerifyRememberedSet.cpp", "void VerifyRememberedSetInvariant("),
-    ("oops_prepare", "VerifyRegions.cpp", "void VerifyRegions::VerifyAfterPrepareYoung("),
-    ("oops_mark", "VerifyRegions.cpp", "void VerifyRegions::VerifyAfterYoungMark("),
+    ("roots", "VerifyRoots.cpp", 0),
+    ("objects", "VerifyHeap.cpp", 0),
+    ("marking", "MarkCompleteVerify.cpp", 0),
+    ("remembered", "VerifyRememberedSet.cpp", 0),
+    ("oops_prepare", "VerifyRegions.cpp", 0),
+    ("oops_mark", "VerifyRegions.cpp", 1),
 )
 
-OBJECTS_DECLARATION = "void VerifyHeapObjects("
 OBJECTS_CALL = "VerifyPhaseEnter(VerifyFace::Objects, point)"
+CPP_GAP = r"(?:\s|\\\r?\n)*"
 
 
-def function_span(text: str, anchor: str):
-    if text.count(anchor) != 1:
-        raise RuntimeError(f"expected one function anchor {anchor!r}")
-    start = text.find(anchor)
-    opening = text.find("{", start + len(anchor))
-    depth = 0
-    for position in range(opening, len(text)):
-        if text[position] == "{":
-            depth += 1
-        elif text[position] == "}":
-            depth -= 1
-            if depth == 0:
-                return start, position + 1
-    raise RuntimeError(f"unterminated function {anchor!r}")
+def objects_call_pattern():
+    return re.compile(
+        rf"\bVerifyPhaseEnter{CPP_GAP}\({CPP_GAP}VerifyFace{CPP_GAP}"
+        rf"::{CPP_GAP}Objects{CPP_GAP},{CPP_GAP}point{CPP_GAP}\)"
+    )
 
 
-def replace_call(path: Path, anchor: str, face: str) -> None:
+def replace_objects_call(text: str, replacement: str) -> str:
+    text, count = objects_call_pattern().subn(lambda _: replacement, text, count=1)
+    if count != 1:
+        raise RuntimeError("expected exactly one Objects admission")
+    return text
+
+
+def replace_call(path: Path, face: str, occurrence: int) -> None:
     text = path.read_text(encoding="utf-8")
-    start, end = function_span(text, anchor)
-    body = text[start:end]
-    call = f"VerifyPhaseEnter(VerifyFace::{face.capitalize()},"
-    if body.count(call) != 1:
-        raise RuntimeError(f"expected one {call!r} in {anchor!r}")
-    body = body.replace(call, f"VerifyPhaseEnterCut(VerifyFace::{face.capitalize()},", 1)
-    path.write_text(text[:start] + body + text[end:], encoding="utf-8")
+    pattern = re.compile(
+        rf"\bVerifyPhaseEnter{CPP_GAP}\({CPP_GAP}VerifyFace{CPP_GAP}"
+        rf"::{CPP_GAP}{face.capitalize()}{CPP_GAP},"
+    )
+    matches = list(pattern.finditer(text))
+    if occurrence >= len(matches):
+        raise RuntimeError(
+            f"missing {face} admission occurrence {occurrence}; found {len(matches)}"
+        )
+    start = matches[occurrence].start()
+    path.write_text(
+        text[:start] + "VerifyPhaseEnterCut" + text[start + len("VerifyPhaseEnter") :],
+        encoding="utf-8",
+    )
 
 
 def run_checker(checker: Path, verify_root: Path):
@@ -127,10 +133,11 @@ def main() -> int:
         verify_root = copy_verify(repo, temporary)
         source = verify_root / "VerifyHeap.cpp"
         text = source.read_text(encoding="utf-8")
-        source.write_text(
-            text.replace(OBJECTS_DECLARATION, "void\n  VerifyHeapObjects (", 1),
-            encoding="utf-8",
-        )
+        declaration = re.compile(r"\bvoid\s+VerifyHeapObjects\s*\(")
+        changed, count = declaration.subn("void\n  VerifyHeapObjects (", text, count=1)
+        if count != 1:
+            raise RuntimeError("expected exactly one Objects function definition")
+        source.write_text(changed, encoding="utf-8")
         rc, faces, output = run_checker(checker, verify_root)
         ok = rc == 0 and set(faces.values()) == {"GREEN"}
         print_arm("signature_whitespace", rc, faces, output, ok)
@@ -150,9 +157,7 @@ def main() -> int:
             verify_root = copy_verify(repo, temporary)
             source = verify_root / "VerifyHeap.cpp"
             text = source.read_text(encoding="utf-8")
-            if text.count(OBJECTS_CALL) != 1:
-                raise RuntimeError("expected exactly one Objects admission")
-            source.write_text(text.replace(OBJECTS_CALL, replacement, 1), encoding="utf-8")
+            source.write_text(replace_objects_call(text, replacement), encoding="utf-8")
             rc, faces, output = run_checker(checker, verify_root)
             red = {name for name, state in faces.items() if state == "RED"}
             ok = rc == 1 and red == {"objects"}
@@ -166,10 +171,8 @@ def main() -> int:
         source = verify_root / "VerifyHeap.cpp"
         text = source.read_text(encoding="utf-8")
         source.write_text(
-            text.replace(
-                OBJECTS_CALL,
-                "VerifyPhaseEnter\\\n(VerifyFace::Objects, point)",
-                1,
+            replace_objects_call(
+                text, "VerifyPhaseEnter\\\n(VerifyFace::Objects, point)"
             ),
             encoding="utf-8",
         )
@@ -178,11 +181,11 @@ def main() -> int:
         print_arm("spliced_call", rc, faces, output, ok)
         failures += not ok
 
-    for arm, source_name, anchor in TARGETS:
+    for arm, source_name, occurrence in TARGETS:
         face = arm.split("_", 1)[0]
         with tempfile.TemporaryDirectory(prefix=f"verify_phase_{arm}_") as temporary:
             verify_root = copy_verify(repo, temporary)
-            replace_call(verify_root / source_name, anchor, face)
+            replace_call(verify_root / source_name, face, occurrence)
             rc, faces, output = run_checker(checker, verify_root)
             red = {name for name, state in faces.items() if state == "RED"}
             ok = rc == 1 and red == {face}
