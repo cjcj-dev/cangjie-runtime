@@ -10,7 +10,12 @@ SCRIPT="$SRC/run_standalone.sh"
 FINALIZER_SCRIPT="$SRC/run_finalizer_trigger.sh"
 PHASE_ENTRY_SCRIPT="$SRC/run_phase_entry_trigger.sh"
 SEGMENTED_MANAGED_SCRIPT="$SRC/run_segmented_array_managed.sh"
-STATUS_FILE="${GC_UNIT_GATE_STATUS:-${GCV2_RUNTIME_LIB_DIR:+$GCV2_RUNTIME_LIB_DIR/gc_unit_gate.status}}"
+STATUS_FILE="${GC_UNIT_GATE_STATUS:-}"
+if [[ -z "$STATUS_FILE" && -n "${GCV2_RUNTIME_CONFIG:-}" ]]; then
+  STATUS_FILE="$ROOT/runtime/output/temp/$GCV2_RUNTIME_CONFIG/gc_unit_gate.status"
+elif [[ -z "$STATUS_FILE" && -n "${GCV2_RUNTIME_LIB_DIR:-}" ]]; then
+  STATUS_FILE="$GCV2_RUNTIME_LIB_DIR/gc_unit_gate.status"
+fi
 STATUS_FILE="${STATUS_FILE:-$ROOT/runtime/output/gc_unit_gate.status}"
 LANGUAGE_TEST_MODE="${GC_UNIT_GATE_LANGUAGE_TESTS:-all}"
 
@@ -140,20 +145,26 @@ if [[ "$LANGUAGE_TEST_MODE" != "only" && ! -f "$SRC/test_defect_regressions.cpp"
   exit 2
 fi
 
-if [[ -z "${GCV2_RUNTIME_LIB_DIR:-}" ]]; then
-  if [[ -z "${GCV2_RUNTIME_CONFIG:-}" ]]; then
-    STATUS_REASON=MISSING_RUNTIME_CONFIG
-    echo "GC_UNIT_GATE_FAIL: set GCV2_RUNTIME_CONFIG or GCV2_RUNTIME_LIB_DIR" >&2
-    exit 2
-  fi
-  GCV2_RUNTIME_LIB_DIR=$(bash "$ROOT/runtime/build/resolve_runtime_output.sh" \
+if [[ -n "${GCV2_RUNTIME_CONFIG:-}" ]]; then
+  resolved_config_lib=$(bash "$ROOT/runtime/build/resolve_runtime_output.sh" \
     "$ROOT/runtime" "$GCV2_RUNTIME_CONFIG") || {
       STATUS_REASON=RUNTIME_CONFIG_MISMATCH
       exit 2
   }
-  export GCV2_RUNTIME_LIB_DIR
+  if [[ -n "${GCV2_RUNTIME_LIB_DIR:-}" &&
+        "$(realpath "$GCV2_RUNTIME_LIB_DIR")" != "$resolved_config_lib" ]]; then
+    STATUS_REASON=RUNTIME_CONFIG_MISMATCH
+    echo "GC_UNIT_GATE_FAIL: explicit library directory does not match GCV2_RUNTIME_CONFIG" >&2
+    exit 2
+  fi
+  GCV2_RUNTIME_LIB_DIR="$resolved_config_lib"
   GCV2_RUNTIME_OUTPUT_ROOT="$ROOT/runtime/output/temp/$GCV2_RUNTIME_CONFIG"
+  export GCV2_RUNTIME_LIB_DIR
   export GCV2_RUNTIME_OUTPUT_ROOT
+elif [[ -z "${GCV2_RUNTIME_LIB_DIR:-}" ]]; then
+  STATUS_REASON=MISSING_RUNTIME_CONFIG
+  echo "GC_UNIT_GATE_FAIL: set GCV2_RUNTIME_CONFIG or GCV2_RUNTIME_LIB_DIR" >&2
+  exit 2
 fi
 if [[ -z "${GCV2_RUNTIME_LIB_DIR:-}" || ! -f "$GCV2_RUNTIME_LIB_DIR/libcangjie-runtime.so" ]]; then
   STATUS_REASON=MISSING_RUNTIME

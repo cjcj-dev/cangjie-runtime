@@ -16,6 +16,12 @@ PRODUCT_DIR="$CUT_DIR/product"
 RESTORED_PRODUCT_DIR="$CUT_DIR/restored_product"
 TEST_ELF="$EVIDENCE/T2/cj_gc_unit"
 LINK_SCRIPT="$ROOT/CMakebuild/src/CMakeFiles/cangjie-runtime.dir/link.txt"
+CONFIG_ID=$(sed -n 's/^CANGJIE_RUNTIME_CONFIG_ID:INTERNAL=//p' "$ROOT/CMakebuild/CMakeCache.txt")
+if [[ -z "$CONFIG_ID" ]]; then
+  echo "CANGJIE_RUNTIME_CONFIG_ID missing from CMake cache" >&2
+  exit 2
+fi
+RUNTIME_LIB_DIR=$(bash "$ROOT/build/resolve_runtime_output.sh" "$ROOT" "$CONFIG_ID") || exit $?
 TESTS=(
   YoungWeakClosure.SerialDiscoversWithoutStrongReferentClosure
   YoungWeakClosure.LegacyParallelDiscoversWithoutStrongReferentClosure
@@ -69,8 +75,8 @@ if [[ $cut_link_rc -ne 0 ]]; then
   exit 5
 fi
 
-cp -a "$ROOT/output/temp/lib/x86_64_Release/libcangjie-runtime.so" "$PRODUCT_DIR/"
-cp -a "$ROOT/output/temp/lib/x86_64_Release/libboundscheck.so" "$PRODUCT_DIR/"
+cp -a "$RUNTIME_LIB_DIR/libcangjie-runtime.so" "$PRODUCT_DIR/"
+cp -a "$RUNTIME_LIB_DIR/libboundscheck.so" "$PRODUCT_DIR/"
 sha256sum "$PRODUCT_DIR/libcangjie-runtime.so" "$PRODUCT_DIR/libboundscheck.so" >"$CUT_DIR/product.sha256"
 sha256sum "$TEST_ELF" >"$CUT_DIR/test_elf.sha256"
 
@@ -84,8 +90,8 @@ done
 
 restore_product
 trap - EXIT
-cp -a "$ROOT/output/temp/lib/x86_64_Release/libcangjie-runtime.so" "$RESTORED_PRODUCT_DIR/"
-cp -a "$ROOT/output/temp/lib/x86_64_Release/libboundscheck.so" "$RESTORED_PRODUCT_DIR/"
+cp -a "$RUNTIME_LIB_DIR/libcangjie-runtime.so" "$RESTORED_PRODUCT_DIR/"
+cp -a "$RUNTIME_LIB_DIR/libboundscheck.so" "$RESTORED_PRODUCT_DIR/"
 sha256sum "$RESTORED_PRODUCT_DIR/libcangjie-runtime.so" \
   "$RESTORED_PRODUCT_DIR/libboundscheck.so" >"$CUT_DIR/restored_product.sha256"
 : >"$CUT_DIR/restored.grid.log"
