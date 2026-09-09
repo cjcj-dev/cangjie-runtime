@@ -99,37 +99,34 @@ GC_OTHER_VM_TEST(MarkCompleteScenes, MajorGcRunsStrongThenWeakComplete)
     const MarkCompleteVerify::SceneTestReceipt receipt = MarkCompleteVerify::ReadSceneTestReceipt();
     GC_EXPECT_EQ(FiniCJRuntime(), E_OK);
 
-    const bool ordered = receipt.strongOnlyCalls == 1 && receipt.weakCompleteCalls == 1 &&
-        receipt.strongOnlyOrdinal != 0 && receipt.strongOnlyOrdinal < receipt.weakCompleteOrdinal;
-    std::fprintf(stderr,
-                 "TARGET_SCENE_ORDER_ASSERT_EXECUTED strongCalls=%llu weakCalls=%llu strongOrdinal=%llu "
-                 "weakOrdinal=%llu ordered=%u\n",
-                 static_cast<unsigned long long>(receipt.strongOnlyCalls),
-                 static_cast<unsigned long long>(receipt.weakCompleteCalls),
-                 static_cast<unsigned long long>(receipt.strongOnlyOrdinal),
-                 static_cast<unsigned long long>(receipt.weakCompleteOrdinal), ordered ? 1u : 0u);
-    GC_EXPECT_TRUE(ordered);
-
-    const bool processedBeforeWeakComplete = receipt.weakProcessingCalls == 1 &&
-        receipt.strongOnlyOrdinal < receipt.weakProcessingOrdinal &&
+    const bool phaseOrder = receipt.strongOnlyCalls == 1 && receipt.resurrectionCalls == 1 &&
+        receipt.weakProcessingCalls == 1 && receipt.weakCompleteCalls == 1 &&
+        receipt.strongOnlyOrdinal != 0 && receipt.strongOnlyOrdinal < receipt.resurrectionOrdinal &&
+        receipt.resurrectionOrdinal < receipt.weakProcessingOrdinal &&
         receipt.weakProcessingOrdinal < receipt.weakCompleteOrdinal &&
         receipt.weakCompleteSawProcessingOrdinal == receipt.weakProcessingOrdinal;
     const bool weakProcessingChangedState = receipt.weakEnqueuedAfter > receipt.weakEnqueuedBefore &&
         receipt.weakNonNullEdgesSeen == 0;
-    const bool weakCompleteAfterProcessing = processedBeforeWeakComplete && weakProcessingChangedState;
+    const bool complete = phaseOrder && weakProcessingChangedState;
     std::fprintf(stderr,
-                 "TARGET_WEAK_PROCESSING_ASSERT_EXECUTED processingCalls=%llu processingOrdinal=%llu "
+                 "TARGET_PHASE_ORDER_ASSERT_EXECUTED strongCalls=%llu strongOrdinal=%llu "
+                 "resurrectionCalls=%llu resurrectionOrdinal=%llu processingCalls=%llu processingOrdinal=%llu "
                  "weakSawProcessingOrdinal=%llu weakEnqueuedBefore=%llu weakEnqueuedAfter=%llu "
-                 "weakNonNullAtComplete=%llu ordered=%u changed=%u complete=%u\n",
+                 "weakCalls=%llu weakOrdinal=%llu weakNonNullAtComplete=%llu ordered=%u changed=%u complete=%u\n",
+                 static_cast<unsigned long long>(receipt.strongOnlyCalls),
+                 static_cast<unsigned long long>(receipt.strongOnlyOrdinal),
+                 static_cast<unsigned long long>(receipt.resurrectionCalls),
+                 static_cast<unsigned long long>(receipt.resurrectionOrdinal),
                  static_cast<unsigned long long>(receipt.weakProcessingCalls),
                  static_cast<unsigned long long>(receipt.weakProcessingOrdinal),
                  static_cast<unsigned long long>(receipt.weakCompleteSawProcessingOrdinal),
                  static_cast<unsigned long long>(receipt.weakEnqueuedBefore),
                  static_cast<unsigned long long>(receipt.weakEnqueuedAfter),
+                 static_cast<unsigned long long>(receipt.weakCompleteCalls),
+                 static_cast<unsigned long long>(receipt.weakCompleteOrdinal),
                  static_cast<unsigned long long>(receipt.weakNonNullEdgesSeen),
-                 processedBeforeWeakComplete ? 1u : 0u, weakProcessingChangedState ? 1u : 0u,
-                 weakCompleteAfterProcessing ? 1u : 0u);
-    GC_EXPECT_TRUE(weakCompleteAfterProcessing);
+                 phaseOrder ? 1u : 0u, weakProcessingChangedState ? 1u : 0u, complete ? 1u : 0u);
+    GC_EXPECT_TRUE(complete);
 
     const bool policy = receipt.strongOnlyIncludedWeak == 0 && receipt.weakCompleteIncludedWeak == 1 &&
         receipt.strongOnlyRootsSeen >= 2 && receipt.weakCompleteRootsSeen >= 2 && receipt.weakRootsSeen >= 1 &&

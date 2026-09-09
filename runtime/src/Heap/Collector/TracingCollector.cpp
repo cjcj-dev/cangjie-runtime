@@ -1024,6 +1024,12 @@ void TracingCollector::DoResurrection(WorkStack& workStack)
     }
     markedObjectCount.fetch_add(resurrectdObjects, std::memory_order_relaxed);
     VLOG(REPORT, "resurrected objects %zu", resurrectdObjects);
+#if defined(MRT_GC_UNIT_TESTS)
+    // Publish from the product consumer's return boundary. A strong-only scene
+    // moved anywhere after DoResurrection() must therefore observe a later
+    // ordinal instead of slipping between the call and a caller-side receipt.
+    MarkCompleteVerify::NoteResurrectionComplete();
+#endif
 }
 
 void TracingCollector::Init() {}

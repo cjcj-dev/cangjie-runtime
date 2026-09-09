@@ -789,6 +789,8 @@ std::atomic<uint64_t> g_weakCompleteRootsSeen{ 0 };
 std::atomic<uint64_t> g_weakRootsSeen{ 0 };
 std::atomic<uint64_t> g_weakEdgesSeen{ 0 };
 std::atomic<uint64_t> g_weakNonNullEdgesSeen{ 0 };
+std::atomic<uint64_t> g_resurrectionCalls{ 0 };
+std::atomic<uint64_t> g_resurrectionOrdinal{ 0 };
 std::atomic<uint64_t> g_weakProcessingCalls{ 0 };
 std::atomic<uint64_t> g_weakProcessingOrdinal{ 0 };
 std::atomic<uint64_t> g_weakCompleteSawProcessingOrdinal{ 0 };
@@ -810,6 +812,8 @@ void ResetSceneTestReceipt()
     g_weakRootsSeen.store(0, std::memory_order_relaxed);
     g_weakEdgesSeen.store(0, std::memory_order_relaxed);
     g_weakNonNullEdgesSeen.store(0, std::memory_order_relaxed);
+    g_resurrectionCalls.store(0, std::memory_order_relaxed);
+    g_resurrectionOrdinal.store(0, std::memory_order_relaxed);
     g_weakProcessingCalls.store(0, std::memory_order_relaxed);
     g_weakProcessingOrdinal.store(0, std::memory_order_relaxed);
     g_weakCompleteSawProcessingOrdinal.store(0, std::memory_order_relaxed);
@@ -830,11 +834,20 @@ SceneTestReceipt ReadSceneTestReceipt()
              g_weakRootsSeen.load(std::memory_order_relaxed),
              g_weakEdgesSeen.load(std::memory_order_relaxed),
              g_weakNonNullEdgesSeen.load(std::memory_order_relaxed),
+             g_resurrectionCalls.load(std::memory_order_relaxed),
+             g_resurrectionOrdinal.load(std::memory_order_relaxed),
              g_weakProcessingCalls.load(std::memory_order_relaxed),
              g_weakProcessingOrdinal.load(std::memory_order_relaxed),
              g_weakCompleteSawProcessingOrdinal.load(std::memory_order_relaxed),
              g_weakEnqueuedBefore.load(std::memory_order_relaxed),
              g_weakEnqueuedAfter.load(std::memory_order_relaxed) };
+}
+
+void NoteResurrectionComplete()
+{
+    const uint64_t ordinal = g_sceneSequence.fetch_add(1, std::memory_order_relaxed) + 1;
+    g_resurrectionCalls.fetch_add(1, std::memory_order_relaxed);
+    g_resurrectionOrdinal.store(ordinal, std::memory_order_relaxed);
 }
 
 void NoteWeakProcessingComplete(size_t weakEnqueuedBefore, size_t weakEnqueuedAfter)

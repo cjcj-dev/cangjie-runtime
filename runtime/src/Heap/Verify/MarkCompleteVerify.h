@@ -75,6 +75,8 @@ struct SceneTestReceipt {
     uint64_t weakRootsSeen = 0;
     uint64_t weakEdgesSeen = 0;
     uint64_t weakNonNullEdgesSeen = 0;
+    uint64_t resurrectionCalls = 0;
+    uint64_t resurrectionOrdinal = 0;
     uint64_t weakProcessingCalls = 0;
     uint64_t weakProcessingOrdinal = 0;
     uint64_t weakCompleteSawProcessingOrdinal = 0;
@@ -84,6 +86,7 @@ struct SceneTestReceipt {
 
 void ResetSceneTestReceipt();
 SceneTestReceipt ReadSceneTestReceipt();
+void NoteResurrectionComplete();
 void NoteWeakProcessingComplete(size_t weakEnqueuedBefore, size_t weakEnqueuedAfter);
 #endif
 
