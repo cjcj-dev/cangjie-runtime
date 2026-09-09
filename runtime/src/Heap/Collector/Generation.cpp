@@ -47,6 +47,7 @@
 #include "Heap/Verify/VerifyRememberedSet.h"
 #include "Heap/Verify/TraceClear.h"
 #include "Heap/Verify/VerifyRoots.h"
+#include "Heap/Verify/VerifyMarkingStacks.h"
 #include "Heap/Verify/Zap.h"
 #include "Heap/Verify/DiagGate.h"
 #include "Heap/Verify/NwDropAudit.h"
@@ -911,6 +912,13 @@ void WCollector::DoYoungGarbageCollection()
         return true;
     }();
     WorkStack workStack = NewWorkStack();
+    VerifyMarkingStacks::VerifyEmpty(VerifyMarkingStacks::MarkingGeneration::YOUNG,
+                                     VerifyMarkingStacks::MarkingBoundary::START,
+                                     VerifyMarkingStacks::MarkingContainer::OWNER, workStack.size(), 0);
+    VerifyMarkingStacks::VerifyEmpty(VerifyMarkingStacks::MarkingGeneration::YOUNG,
+                                     VerifyMarkingStacks::MarkingBoundary::START,
+                                     VerifyMarkingStacks::MarkingContainer::POOL,
+                                     GetThreadPool()->GetWorkCount(), 0);
     MinorObjectSet reachableObjects; // legacy set path + FYS non-young holders under bitmap
     std::vector<BaseObject*> reachableVec;
     reachableVec.reserve(1 << 17); // ~128k; real_load ~155k reachable
@@ -1148,6 +1156,14 @@ void WCollector::DoYoungGarbageCollection()
         NoteMarkTerminatePauseDuration(TimeUtil::NanoSeconds() - markEndPauseStartNs);
 #endif
         if (workersTerminated && markEndSucceeded) {
+            VerifyMarkingStacks::VerifyEmpty(VerifyMarkingStacks::MarkingGeneration::YOUNG,
+                                             VerifyMarkingStacks::MarkingBoundary::END,
+                                             VerifyMarkingStacks::MarkingContainer::OWNER,
+                                             workStack.size(), 0);
+            VerifyMarkingStacks::VerifyEmpty(VerifyMarkingStacks::MarkingGeneration::YOUNG,
+                                             VerifyMarkingStacks::MarkingBoundary::END,
+                                             VerifyMarkingStacks::MarkingContainer::POOL,
+                                             GetThreadPool()->GetWorkCount(), 0);
 #if defined(MRT_TESTABLE_INTERNALS)
             NoteExportRootPublicationAtT2TestReceipt();
 #endif
