@@ -28,6 +28,27 @@
 #include "TypeInfoManager.h"
 
 namespace MapleRuntime {
+CycleContext& Collector::GetCycleContext() const
+{
+    return Heap::GetHeap().GetCollectorResources().GetExecutionContext();
+}
+
+GCPhase Collector::GetGCPhase() const
+{
+    const auto& resources = Heap::GetHeap().GetCollectorResources();
+    return resources.GetCycleSnapshot().Phase(GetCycleContext().generation);
+}
+
+GCPhase Collector::GetGCPhase(CycleGeneration generation) const
+{
+    return Heap::GetHeap().GetCollectorResources().GetCycleSnapshot().Phase(generation);
+}
+
+void Collector::SetGCPhase(GCPhase phase)
+{
+    Heap::GetHeap().GetCollectorResources().PublishCyclePhase(GetCycleContext(), phase);
+}
+
 namespace {
 const char* const COLLECTOR_NAME[] = { "No Collector", "Proxy Collector", "Regional-Copying Collector",
                                        "Smooth Collector" };
