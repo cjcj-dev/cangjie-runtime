@@ -119,7 +119,19 @@ add_test(
     NAME cj_gc_post_resolve_cycle_lock_source
     COMMAND ${Python3_EXECUTABLE}
             ${CMAKE_CURRENT_SOURCE_DIR}/check_post_resolve_cycle_lock.py
-            --source ${CMAKE_SOURCE_DIR}/src/Heap/WCollector/WCollector.cpp)
+            --source ${CMAKE_SOURCE_DIR}/src/Heap/WCollector/WCollector.cpp
+            --owner-declaration ${CMAKE_SOURCE_DIR}/src/Heap/Collector/TracingCollector.h
+            --wcollector-declaration ${CMAKE_SOURCE_DIR}/src/Heap/WCollector/WCollector.h
+            --copy-collector-declaration ${CMAKE_SOURCE_DIR}/src/Heap/Collector/CopyCollector.h)
+add_test(
+    NAME cj_gc_post_resolve_cycle_lock_gate_arms
+    COMMAND ${Python3_EXECUTABLE}
+            ${CMAKE_CURRENT_SOURCE_DIR}/test_check_post_resolve_cycle_lock.py
+            --gate ${CMAKE_CURRENT_SOURCE_DIR}/check_post_resolve_cycle_lock.py
+            --source ${CMAKE_SOURCE_DIR}/src/Heap/WCollector/WCollector.cpp
+            --owner-declaration ${CMAKE_SOURCE_DIR}/src/Heap/Collector/TracingCollector.h
+            --wcollector-declaration ${CMAKE_SOURCE_DIR}/src/Heap/WCollector/WCollector.h
+            --copy-collector-declaration ${CMAKE_SOURCE_DIR}/src/Heap/Collector/CopyCollector.h)
 if (MRT_M0_CORRELATION_EXPERIMENT)
     set_tests_properties(cj_gc_unit PROPERTIES ENVIRONMENT "MRT_GCV2_DIAG=m0corr")
 endif()
