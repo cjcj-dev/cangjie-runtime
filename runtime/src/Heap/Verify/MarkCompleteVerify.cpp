@@ -19,6 +19,7 @@
 #include "Heap/Allocator/RegionInfo.h"
 #include "Heap/Allocator/RegionSpace.h"
 #include "Heap/Collector/Collector.h"
+#include "Heap/Collector/FinalizerProcessor.h"
 #include "Heap/Heap.h"
 #include "Heap/Verify/InteriorEdgeClass.h"
 #include "Heap/Verify/VerifyPhase.h"
@@ -100,6 +101,8 @@ struct Stats {
     // Root arm (ZVerify::roots_strong, zVerify.cpp:496-499).
     size_t rootsSeen = 0;
     size_t rootDead = 0;
+    size_t weakRootsSeen = 0;
+    size_t weakEdgesSeen = 0;
 
     // Walk-coverage census.  RegionInfo::VisitAllObjects (RegionManager.cpp:648-663)
     // *breaks* at the first object whose header fails the gate -- "remaining stream
@@ -430,6 +433,19 @@ void CheckStrongRoots(Stats& stats, const char* point)
     Heap::GetHeap().VisitAllExportRoots(exportVisitor);
 }
 
+// Registered finalizers are the runtime's weak-root family: VisitGCRoots
+// deliberately excludes them until DoResurrection selects them
+// (FinalizerProcessor.h:41-52). At weak-complete they must either have moved to
+// the strong finalizable queue or still name a live object.
+void CheckWeakRoots(Stats& stats, const char* point)
+{
+    RootVisitor finalizerVisitor = [&stats, point](ObjectRef& root) {
+        ++stats.weakRootsSeen;
+        CheckRoot(stats, point, "finalizer-weak", &root, root.LoadPlain());
+    };
+    (void)Heap::GetHeap().GetFinalizerProcessor().VisitFinalizers(finalizerVisitor);
+}
+
 // Independent second enumeration, over the managed region lists rather than the
 // address range, repeating the same size-walk the product walk uses.  Its job is
 // only to say how much of each region that walk could actually reach.
@@ -758,7 +774,70 @@ bool Enabled()
     return VerifyFaceEnabled(VerifyFace::Marking);
 }
 
-void RunAtMarkEnd(const char* point)
+#if defined(MRT_GC_UNIT_TESTS)
+namespace {
+std::atomic<uint64_t> g_sceneSequence{ 0 };
+std::atomic<uint64_t> g_strongOnlyCalls{ 0 };
+std::atomic<uint64_t> g_weakCompleteCalls{ 0 };
+std::atomic<uint64_t> g_strongOnlyOrdinal{ 0 };
+std::atomic<uint64_t> g_weakCompleteOrdinal{ 0 };
+std::atomic<uint64_t> g_strongOnlyIncludedWeak{ 0 };
+std::atomic<uint64_t> g_weakCompleteIncludedWeak{ 0 };
+std::atomic<uint64_t> g_strongOnlyRootsSeen{ 0 };
+std::atomic<uint64_t> g_weakCompleteRootsSeen{ 0 };
+std::atomic<uint64_t> g_weakRootsSeen{ 0 };
+std::atomic<uint64_t> g_weakEdgesSeen{ 0 };
+} // namespace
+
+void ResetSceneTestReceipt()
+{
+    g_sceneSequence.store(0, std::memory_order_relaxed);
+    g_strongOnlyCalls.store(0, std::memory_order_relaxed);
+    g_weakCompleteCalls.store(0, std::memory_order_relaxed);
+    g_strongOnlyOrdinal.store(0, std::memory_order_relaxed);
+    g_weakCompleteOrdinal.store(0, std::memory_order_relaxed);
+    g_strongOnlyIncludedWeak.store(0, std::memory_order_relaxed);
+    g_weakCompleteIncludedWeak.store(0, std::memory_order_relaxed);
+    g_strongOnlyRootsSeen.store(0, std::memory_order_relaxed);
+    g_weakCompleteRootsSeen.store(0, std::memory_order_relaxed);
+    g_weakRootsSeen.store(0, std::memory_order_relaxed);
+    g_weakEdgesSeen.store(0, std::memory_order_relaxed);
+}
+
+SceneTestReceipt ReadSceneTestReceipt()
+{
+    return { g_strongOnlyCalls.load(std::memory_order_relaxed),
+             g_weakCompleteCalls.load(std::memory_order_relaxed),
+             g_strongOnlyOrdinal.load(std::memory_order_relaxed),
+             g_weakCompleteOrdinal.load(std::memory_order_relaxed),
+             g_strongOnlyIncludedWeak.load(std::memory_order_relaxed),
+             g_weakCompleteIncludedWeak.load(std::memory_order_relaxed),
+             g_strongOnlyRootsSeen.load(std::memory_order_relaxed),
+             g_weakCompleteRootsSeen.load(std::memory_order_relaxed),
+             g_weakRootsSeen.load(std::memory_order_relaxed),
+             g_weakEdgesSeen.load(std::memory_order_relaxed) };
+}
+
+void PublishSceneTestReceipt(Scene scene, const Stats& stats, bool includeWeak)
+{
+    const uint64_t ordinal = g_sceneSequence.fetch_add(1, std::memory_order_relaxed) + 1;
+    if (scene == Scene::StrongOnly) {
+        g_strongOnlyCalls.fetch_add(1, std::memory_order_relaxed);
+        g_strongOnlyOrdinal.store(ordinal, std::memory_order_relaxed);
+        g_strongOnlyIncludedWeak.store(includeWeak ? 1 : 0, std::memory_order_relaxed);
+        g_strongOnlyRootsSeen.store(stats.rootsSeen, std::memory_order_relaxed);
+        return;
+    }
+    g_weakCompleteCalls.fetch_add(1, std::memory_order_relaxed);
+    g_weakCompleteOrdinal.store(ordinal, std::memory_order_relaxed);
+    g_weakCompleteIncludedWeak.store(includeWeak ? 1 : 0, std::memory_order_relaxed);
+    g_weakCompleteRootsSeen.store(stats.rootsSeen, std::memory_order_relaxed);
+    g_weakRootsSeen.store(stats.weakRootsSeen, std::memory_order_relaxed);
+    g_weakEdgesSeen.store(stats.weakEdgesSeen, std::memory_order_relaxed);
+}
+#endif
+
+void RunAtMarkEnd(const char* point, Scene scene)
 {
     if (!VerifyPhaseEnter(VerifyFace::Marking, point)) {
         return;
@@ -769,6 +848,7 @@ void RunAtMarkEnd(const char* point)
     const uint64_t startNs = TimeUtil::NanoSeconds();
     Stats stats;
     const size_t maxSamples = MaxSamples();
+    const bool includeWeak = scene == Scene::WeakComplete;
 
     {
         // ZVerify::objects asserts it runs at a safepoint (zVerify.cpp:473).  The
@@ -777,7 +857,7 @@ void RunAtMarkEnd(const char* point)
         // instant" -- the failure mode the earlier `!is_marked` runs could not rule out.
         ScopedStopTheWorld stw("markcomplete verify", false);
         Heap::GetHeap().ForEachObj(
-            [&stats, maxSamples, point](BaseObject* obj) {
+            [&stats, maxSamples, point, includeWeak](BaseObject* obj) {
                 if (obj == nullptr) {
                     return;
                 }
@@ -796,15 +876,22 @@ void RunAtMarkEnd(const char* point)
                     return;
                 }
                 ++stats.liveHolders;
-                if (!obj->HasRefField() || obj->IsWeakRef()) {
+                if (!obj->HasRefField() || (!includeWeak && obj->IsWeakRef())) {
                     return;
                 }
-                obj->ForEachRefField([&stats, maxSamples, point, obj](RefField<>& field) {
+                const bool weakHolder = obj->IsWeakRef();
+                obj->ForEachRefField([&stats, maxSamples, point, obj, weakHolder](RefField<>& field) {
+                    if (weakHolder) {
+                        ++stats.weakEdgesSeen;
+                    }
                     CheckEdge(stats, maxSamples, point, obj, field);
                 });
             },
             false);
         CheckStrongRoots(stats, point);
+        if (includeWeak) {
+            CheckWeakRoots(stats, point);
+        }
         CensusWalkCoverage(stats);
     }
 
@@ -813,22 +900,28 @@ void RunAtMarkEnd(const char* point)
     // Positive-control columns sit next to the defect columns on purpose: a zero in
     // deadTarget is only readable when objectsScanned/liveHolders/edgesSeen are non-zero.
     LOG(RTLOG_ERROR,
-        "[GCV2][markcomplete] point=%s invoke=%zu objects=%zu liveHolders=%zu edges=%zu "
+        "[GCV2][markcomplete] point=%s scene=%s invoke=%zu objects=%zu liveHolders=%zu edges=%zu "
         "okMarked=%zu okYoung=%zu okAllocGap=%zu okInteriorBase=%zu okNonHeap=%zu okForwarded=%zu "
         "deadTarget=%zu deadKnownEmpty=%zu deadWouldFree=%zu deadWouldKeep=%zu deadNotConsidered=%zu "
         "deadFrom=%zu deadGarbage=%zu deadFree=%zu "
         "deadLarge=%zu deadOther=%zu deadNoRegion=%zu deadInterior=%zu "
-        "roots=%zu deadRoots=%zu regionsWalked=%zu regionsTruncated=%zu bytesUnwalked=%zu costNs=%llu "
+        "roots=%zu weakRoots=%zu weakEdges=%zu deadRoots=%zu regionsWalked=%zu regionsTruncated=%zu "
+        "bytesUnwalked=%zu costNs=%llu "
         "deadIntSlotNotRef=%zu deadIntRecoverFail=%zu deadIntBaseUnmarked=%zu deadIntValueCorrupt=%zu",
-        point == nullptr ? "?" : point, invoke, stats.objectsScanned, stats.liveHolders, stats.edgesSeen,
+        point == nullptr ? "?" : point, includeWeak ? "weak-complete" : "strong-only", invoke,
+        stats.objectsScanned, stats.liveHolders, stats.edgesSeen,
         stats.targetMarked, stats.targetYoung, stats.targetAllocGap, stats.targetInteriorBaseMarked,
         stats.targetNonHeap, stats.targetForwarded, stats.deadTarget, stats.deadTargetKnownEmpty,
         stats.deadTargetWouldFree, stats.deadTargetWouldKeep, stats.deadTargetNotConsidered, stats.deadInFrom,
         stats.deadInGarbage,
         stats.deadInFree, stats.deadInLarge, stats.deadInOther, stats.deadNoRegion, stats.deadInterior,
-        stats.rootsSeen, stats.rootDead, stats.regionsWalked, stats.regionsTruncated, stats.bytesUnwalked,
+        stats.rootsSeen, stats.weakRootsSeen, stats.weakEdgesSeen, stats.rootDead, stats.regionsWalked,
+        stats.regionsTruncated, stats.bytesUnwalked,
         static_cast<unsigned long long>(stats.costNs), stats.deadIntSlotNotRef, stats.deadIntRecoverFail,
         stats.deadIntBaseUnmarked, stats.deadIntValueCorrupt);
+#if defined(MRT_GC_UNIT_TESTS)
+    PublishSceneTestReceipt(scene, stats, includeWeak);
+#endif
     SurvNodeDiag::ReportAtMarkEnd(point);
 }
 
