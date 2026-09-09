@@ -51,6 +51,7 @@
 #include "Heap/Verify/VerifyRememberedSet.h"
 #include "Heap/Verify/TraceClear.h"
 #include "Heap/Verify/VerifyRoots.h"
+#include "Heap/Verify/VerifyMarkingStacks.h"
 #include "Heap/Verify/Zap.h"
 #include "Heap/Verify/DiagGate.h"
 #include "Heap/Verify/NwDropAudit.h"
@@ -683,6 +684,16 @@ void WCollector::TraceHeap()
 {
     WorkStack workStack = NewWorkStack();
     WorkStack foreignStack = NewWorkStack();
+    VerifyMarkingStacks::VerifyEmpty(VerifyMarkingStacks::MarkingGeneration::MAJOR,
+                                     VerifyMarkingStacks::MarkingBoundary::START,
+                                     VerifyMarkingStacks::MarkingContainer::OWNER, workStack.size(), 0);
+    VerifyMarkingStacks::VerifyEmpty(VerifyMarkingStacks::MarkingGeneration::MAJOR,
+                                     VerifyMarkingStacks::MarkingBoundary::START,
+                                     VerifyMarkingStacks::MarkingContainer::FOREIGN, foreignStack.size(), 0);
+    VerifyMarkingStacks::VerifyEmpty(VerifyMarkingStacks::MarkingGeneration::MAJOR,
+                                     VerifyMarkingStacks::MarkingBoundary::START,
+                                     VerifyMarkingStacks::MarkingContainer::POOL,
+                                     GetThreadPool()->GetWorkCount(), 0);
     // Collect young→old targets before Assemble (survivors still current-space).
     // Paint after Assemble+PrepareTrace so ClearLiveInfo cannot wipe the bits
     // (zMark.inline.hpp:58-65 mark_before_push).
@@ -796,6 +807,17 @@ void WCollector::TraceHeap()
                 workStack.size(), youngToOld.size());
         }
         DoTracing(workStack, foreignStack);
+
+        VerifyMarkingStacks::VerifyEmpty(VerifyMarkingStacks::MarkingGeneration::MAJOR,
+                                         VerifyMarkingStacks::MarkingBoundary::END,
+                                         VerifyMarkingStacks::MarkingContainer::OWNER, workStack.size(), 0);
+        VerifyMarkingStacks::VerifyEmpty(VerifyMarkingStacks::MarkingGeneration::MAJOR,
+                                         VerifyMarkingStacks::MarkingBoundary::END,
+                                         VerifyMarkingStacks::MarkingContainer::FOREIGN, foreignStack.size(), 0);
+        VerifyMarkingStacks::VerifyEmpty(VerifyMarkingStacks::MarkingGeneration::MAJOR,
+                                         VerifyMarkingStacks::MarkingBoundary::END,
+                                         VerifyMarkingStacks::MarkingContainer::POOL,
+                                         GetThreadPool()->GetWorkCount(), 0);
 
         ProcessFinalizers();
     }
@@ -1199,7 +1221,10 @@ class YoungMarkingWork : public HeapWork {
 public:
     YoungMarkingWork(YoungMarkingShared& shared, TracingCollector::WorkStack&& stack, size_t workerSlot)
         : shared(shared), workStack(std::move(stack)), workerSlot(workerSlot)
-    {}
+    {
+        VerifyMarkingStacks::NoteProducer(VerifyMarkingStacks::MarkingGeneration::YOUNG,
+                                          VerifyMarkingStacks::MarkingContainer::TASK, workStack.size());
+    }
 
     void TryForkTask()
     {
@@ -1237,8 +1262,17 @@ public:
         shared.pool->AddWork(new YoungMarkingWork(shared, TracingCollector::WorkStack(hSplit), childSlot));
     }
 
-    void Execute(size_t) override
+    ~YoungMarkingWork() override
     {
+        VerifyMarkingStacks::VerifyEmpty(VerifyMarkingStacks::MarkingGeneration::YOUNG,
+                                         VerifyMarkingStacks::MarkingBoundary::TASK_EXIT,
+                                         VerifyMarkingStacks::MarkingContainer::TASK, workStack.size(), 0,
+                                         workerId);
+    }
+
+    void Execute(size_t executingWorkerId) override
+    {
+        workerId = executingWorkerId;
         auto& localObjects = shared.objects[workerSlot];
         auto& localSlots = shared.slots[workerSlot];
         auto& localWeaks = shared.weaks[workerSlot];
@@ -1410,6 +1444,7 @@ private:
     YoungMarkingShared& shared;
     TracingCollector::WorkStack workStack;
     size_t workerSlot;
+    size_t workerId = 0;
 };
 
 struct alignas(64) YoungMarkStripeSeen {
@@ -1447,6 +1482,12 @@ public:
         CHECK_DETAIL(working != 0, "young mark worker left termination twice");
         --working;
         if (working == 0 && stripes.IsEmpty()) {
+            VerifyMarkingStacks::VerifyEmpty(VerifyMarkingStacks::MarkingGeneration::YOUNG,
+                                             VerifyMarkingStacks::MarkingBoundary::TERMINATION,
+                                             VerifyMarkingStacks::MarkingContainer::STRIPE,
+                                             stripes.Population(), VerifyMarkingStacks::NO_MARKING_INDEX,
+                                             VerifyMarkingStacks::NO_MARKING_INDEX,
+                                             stripes.FirstNonEmptyStripe());
             terminated = true;
             condition.notify_all();
             return true;
@@ -1516,6 +1557,14 @@ public:
         : shared(shared), workerSlot(workerSlot),
           context(shared.workerCount, workerSlot, *shared.stripes)
     {}
+
+    ~YoungStripedMarkingWork() override
+    {
+        VerifyMarkingStacks::VerifyEmpty(VerifyMarkingStacks::MarkingGeneration::YOUNG,
+                                         VerifyMarkingStacks::MarkingBoundary::WORKER_EXIT,
+                                         VerifyMarkingStacks::MarkingContainer::LOCAL,
+                                         context.Stacks().Population(), 0, workerSlot);
+    }
 
     void Execute(size_t) override
     {
@@ -2068,6 +2117,15 @@ void WCollector::TraceYoungClosureStriped(WorkStack& workStack, bool fullYoungSc
 
     size_t rootCount = 0;
     MarkThreadLocalStacks seed(stripeCount);
+    VerifyMarkingStacks::VerifyEmpty(VerifyMarkingStacks::MarkingGeneration::YOUNG,
+                                     VerifyMarkingStacks::MarkingBoundary::START,
+                                     VerifyMarkingStacks::MarkingContainer::LOCAL, seed.Population(), 0);
+    VerifyMarkingStacks::VerifyEmpty(VerifyMarkingStacks::MarkingGeneration::YOUNG,
+                                     VerifyMarkingStacks::MarkingBoundary::START,
+                                     VerifyMarkingStacks::MarkingContainer::STRIPE,
+                                     shared.stripes->Population(), VerifyMarkingStacks::NO_MARKING_INDEX,
+                                     VerifyMarkingStacks::NO_MARKING_INDEX,
+                                     shared.stripes->FirstNonEmptyStripe());
     while (!workStack.empty()) {
         const MarkStackEntry entry = workStack.back();
         workStack.pop_back();
@@ -2075,7 +2133,15 @@ void WCollector::TraceYoungClosureStriped(WorkStack& workStack, bool fullYoungSc
         ++rootCount;
     }
     CHECK_DETAIL(rootCount != 0, "striped mark requires a non-empty root stack");
+    VerifyMarkingStacks::NoteProducer(VerifyMarkingStacks::MarkingGeneration::YOUNG,
+                                      VerifyMarkingStacks::MarkingContainer::LOCAL, seed.Population());
     (void)seed.Flush(*shared.stripes, true);
+    VerifyMarkingStacks::NoteProducer(VerifyMarkingStacks::MarkingGeneration::YOUNG,
+                                      VerifyMarkingStacks::MarkingContainer::STRIPE,
+                                      shared.stripes->Population());
+    VerifyMarkingStacks::VerifyEmpty(VerifyMarkingStacks::MarkingGeneration::YOUNG,
+                                     VerifyMarkingStacks::MarkingBoundary::SEED_PUBLISH,
+                                     VerifyMarkingStacks::MarkingContainer::LOCAL, seed.Population(), 0);
 
     const int32_t prevActive = threadPool->GetMaxActiveThreadNum();
     const int32_t wantActive = workers - 1;
@@ -2089,6 +2155,16 @@ void WCollector::TraceYoungClosureStriped(WorkStack& workStack, bool fullYoungSc
     YoungStripedMarkingWork mainTask(shared, 0);
     mainTask.Execute(0);
     threadPool->WaitFinish();
+    VerifyMarkingStacks::VerifyEmpty(VerifyMarkingStacks::MarkingGeneration::YOUNG,
+                                     VerifyMarkingStacks::MarkingBoundary::JOIN,
+                                     VerifyMarkingStacks::MarkingContainer::STRIPE,
+                                     shared.stripes->Population(), VerifyMarkingStacks::NO_MARKING_INDEX,
+                                     VerifyMarkingStacks::NO_MARKING_INDEX,
+                                     shared.stripes->FirstNonEmptyStripe());
+    VerifyMarkingStacks::VerifyEmpty(VerifyMarkingStacks::MarkingGeneration::YOUNG,
+                                     VerifyMarkingStacks::MarkingBoundary::JOIN,
+                                     VerifyMarkingStacks::MarkingContainer::POOL,
+                                     threadPool->GetWorkCount(), 0);
     CHECK_DETAIL(shared.terminate.Saturated(),
                  "young striped closure returned without coordinated worker termination");
     if (wantActive != prevActive) {
@@ -2151,6 +2227,8 @@ void WCollector::TraceYoungClosure(WorkStack& workStack, bool fullYoungScan, Min
     if (workStack.empty()) {
         return;
     }
+    VerifyMarkingStacks::NoteProducer(VerifyMarkingStacks::MarkingGeneration::YOUNG,
+                                      VerifyMarkingStacks::MarkingContainer::OWNER, workStack.size());
     GCThreadPool* threadPool = GetThreadPool();
 #if defined(MRT_TESTABLE_INTERNALS)
     // The unit product SO reaches each shipping closure through the real minor

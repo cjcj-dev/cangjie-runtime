@@ -18,6 +18,7 @@
 #include "Heap/Verify/StatHealDiag.h"
 #include "Heap/Verify/SurvNodeDiag.h"
 #include "Heap/Verify/VerifyRoots.h"
+#include "Heap/Verify/VerifyMarkingStacks.h"
 #include "ObjectModel/RefField.inline.h"
 
 namespace MapleRuntime {
@@ -292,14 +293,27 @@ class ConcurrentMarkingWork : public HeapWork {
 public:
     ConcurrentMarkingWork(TracingCollector& tc, GCThreadPool* pool, TracingCollector::WorkStack&& stack)
         : collector(tc), threadPool(pool), workStack(std::move(stack))
-    {}
+    {
+        VerifyMarkingStacks::NoteProducer(VerifyMarkingStacks::MarkingGeneration::MAJOR,
+                                          VerifyMarkingStacks::MarkingContainer::TASK, workStack.size());
+    }
 
     // create concurrent mark task without thread pool.
     ConcurrentMarkingWork(TracingCollector& tc, TracingCollector::WorkStack&& stack)
         : collector(tc), threadPool(nullptr), workStack(std::move(stack))
-    {}
+    {
+        VerifyMarkingStacks::NoteProducer(VerifyMarkingStacks::MarkingGeneration::MAJOR,
+                                          VerifyMarkingStacks::MarkingContainer::TASK, workStack.size());
+    }
 
-    ~ConcurrentMarkingWork() override { threadPool = nullptr; }
+    ~ConcurrentMarkingWork() override
+    {
+        VerifyMarkingStacks::VerifyEmpty(VerifyMarkingStacks::MarkingGeneration::MAJOR,
+                                         VerifyMarkingStacks::MarkingBoundary::TASK_EXIT,
+                                         VerifyMarkingStacks::MarkingContainer::TASK, workStack.size(), 0,
+                                         workerId);
+        threadPool = nullptr;
+    }
 
     // when parallel is enabled, fork new task if work stack overflow.
     void TryForkTask()
@@ -326,8 +340,9 @@ public:
     }
 
     // run concurrent marking task.
-    void Execute(size_t) override
+    void Execute(size_t executingWorkerId) override
     {
+        workerId = executingWorkerId;
         // One task-wide origin scope lets the existing 0->1 hook identify a
         // major claim without adding work to the common !wasMarked branch.
         size_t nNewlyMarked = 0;
@@ -398,14 +413,27 @@ private:
     TracingCollector& collector;
     GCThreadPool* threadPool;
     TracingCollector::WorkStack workStack;
+    size_t workerId = 0;
 };
 
 class ExportRootsTracingWork : public HeapWork {
 public:
     ExportRootsTracingWork(TracingCollector& tc, TracingCollector::WorkStack&& stack)
-        : collector(tc),  workStack(std::move(stack)) {}
-    void Execute(size_t) override
+        : collector(tc), workStack(std::move(stack))
     {
+        VerifyMarkingStacks::NoteProducer(VerifyMarkingStacks::MarkingGeneration::MAJOR,
+                                          VerifyMarkingStacks::MarkingContainer::TASK, workStack.size());
+    }
+    ~ExportRootsTracingWork() override
+    {
+        VerifyMarkingStacks::VerifyEmpty(VerifyMarkingStacks::MarkingGeneration::MAJOR,
+                                         VerifyMarkingStacks::MarkingBoundary::TASK_EXIT,
+                                         VerifyMarkingStacks::MarkingContainer::TASK, workStack.size(), 0,
+                                         workerId);
+    }
+    void Execute(size_t executingWorkerId) override
+    {
+        workerId = executingWorkerId;
         size_t nNewlyMarked = 0;
         // loop until work stack empty.
         for (;;) {
@@ -428,6 +456,7 @@ public:
 private:
     TracingCollector& collector;
     TracingCollector::WorkStack workStack;
+    size_t workerId = 0;
 };
 void TracingCollector::VisitStackRoots(const RootVisitor& visitor, RegSlotsMap& regSlotsMap, const FrameInfo& frame,
                                        Mutator& mutator)
@@ -718,6 +747,10 @@ void TracingCollector::AddExportObjectsTracingWork(RootSet &exportRoots)
 
 void TracingCollector::TracingImpl(WorkStack& workStack, WorkStack& foreignRootsSet, bool parallel)
 {
+    VerifyMarkingStacks::NoteProducer(VerifyMarkingStacks::MarkingGeneration::MAJOR,
+                                      VerifyMarkingStacks::MarkingContainer::OWNER, workStack.size());
+    VerifyMarkingStacks::NoteProducer(VerifyMarkingStacks::MarkingGeneration::MAJOR,
+                                      VerifyMarkingStacks::MarkingContainer::FOREIGN, foreignRootsSet.size());
     if (workStack.empty() && foreignRootsSet.empty()) {
         return;
     }
@@ -733,14 +766,26 @@ void TracingCollector::TracingImpl(WorkStack& workStack, WorkStack& foreignRoots
             markTask.Execute(0);
         }
         threadPool->WaitFinish();
+        VerifyMarkingStacks::VerifyEmpty(VerifyMarkingStacks::MarkingGeneration::MAJOR,
+                                         VerifyMarkingStacks::MarkingBoundary::JOIN,
+                                         VerifyMarkingStacks::MarkingContainer::POOL,
+                                         threadPool->GetWorkCount(), 0);
     } else if (!workStack.empty()) {
         // serial marking with a single mark task.
         ConcurrentMarkingWork markTask(*this, std::move(workStack));
         markTask.Execute(0);
         threadPool->DrainWorkQueue(); // drain stack roots task
+        VerifyMarkingStacks::VerifyEmpty(VerifyMarkingStacks::MarkingGeneration::MAJOR,
+                                         VerifyMarkingStacks::MarkingBoundary::JOIN,
+                                         VerifyMarkingStacks::MarkingContainer::POOL,
+                                         threadPool->GetWorkCount(), 0);
     }
     AddExportObjectsTracingWork(foreignRootsSet);
     threadPool->WaitFinish();
+    VerifyMarkingStacks::VerifyEmpty(VerifyMarkingStacks::MarkingGeneration::MAJOR,
+                                     VerifyMarkingStacks::MarkingBoundary::JOIN,
+                                     VerifyMarkingStacks::MarkingContainer::POOL,
+                                     threadPool->GetWorkCount(), 0);
 }
 
 bool TracingCollector::AddConcurrentTracingWork(RootSet& rs)
@@ -941,6 +986,14 @@ bool TracingCollector::MarkSatbBuffer(WorkStack& workStack)
         CHECK_DETAIL(workStack.empty(), "strict mark termination with owner work");
         CHECK_DETAIL(GetThreadPool()->GetWorkCount() == 0,
                      "strict mark termination with published worker work");
+        VerifyMarkingStacks::VerifyEmpty(VerifyMarkingStacks::MarkingGeneration::MAJOR,
+                                         VerifyMarkingStacks::MarkingBoundary::TERMINATION,
+                                         VerifyMarkingStacks::MarkingContainer::OWNER,
+                                         workStack.size(), 0);
+        VerifyMarkingStacks::VerifyEmpty(VerifyMarkingStacks::MarkingGeneration::MAJOR,
+                                         VerifyMarkingStacks::MarkingBoundary::TERMINATION,
+                                         VerifyMarkingStacks::MarkingContainer::POOL,
+                                         GetThreadPool()->GetWorkCount(), 0);
         bool terminated = false;
         {
             ScopedStopTheWorld stw("mark terminate", true, GCPhase::GC_PHASE_CLEAR_SATB_BUFFER);
