@@ -224,7 +224,7 @@ void RunYoungWeakVariant(const char* variant, size_t helpers,
                  "DETAIL marking_stack_young variant=%s owner_producer=%zu task_producer=%zu local_producer=%zu "
                  "stripe_producer=%zu start_owner=%llu start_pool=%llu task_exit_task=%llu "
                  "seed_local=%llu termination_stripe=%llu worker_exit_local=%llu join_stripe=%llu "
-                 "end_owner=%llu end_pool=%llu\n",
+                 "join_pool=%llu end_owner=%llu end_pool=%llu\n",
                  variant, ownerProducer, taskProducer, localProducer, stripeProducer,
                  static_cast<unsigned long long>(delta(MarkingBoundary::START, MarkingContainer::OWNER)),
                  static_cast<unsigned long long>(delta(MarkingBoundary::START, MarkingContainer::POOL)),
@@ -233,6 +233,7 @@ void RunYoungWeakVariant(const char* variant, size_t helpers,
                  static_cast<unsigned long long>(delta(MarkingBoundary::TERMINATION, MarkingContainer::STRIPE)),
                  static_cast<unsigned long long>(delta(MarkingBoundary::WORKER_EXIT, MarkingContainer::LOCAL)),
                  static_cast<unsigned long long>(delta(MarkingBoundary::JOIN, MarkingContainer::STRIPE)),
+                 static_cast<unsigned long long>(delta(MarkingBoundary::JOIN, MarkingContainer::POOL)),
                  static_cast<unsigned long long>(delta(MarkingBoundary::END, MarkingContainer::OWNER)),
                  static_cast<unsigned long long>(delta(MarkingBoundary::END, MarkingContainer::POOL)));
 
@@ -268,6 +269,7 @@ void RunYoungWeakVariant(const char* variant, size_t helpers,
         GC_EXPECT_TRUE(delta(MarkingBoundary::TERMINATION, MarkingContainer::STRIPE) > 0);
         GC_EXPECT_TRUE(delta(MarkingBoundary::WORKER_EXIT, MarkingContainer::LOCAL) > 0);
         GC_EXPECT_TRUE(delta(MarkingBoundary::JOIN, MarkingContainer::STRIPE) > 0);
+        GC_EXPECT_TRUE(delta(MarkingBoundary::JOIN, MarkingContainer::POOL) > 0);
     }
     (void)live;
 }
