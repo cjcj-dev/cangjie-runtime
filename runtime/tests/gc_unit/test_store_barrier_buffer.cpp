@@ -143,6 +143,21 @@ private:
     Barrier* installed;
 };
 
+class MarkWindowScope final {
+public:
+    MarkWindowScope(CollectorResources& resources, GCReason reason)
+        : resources(resources), cycle(resources.BeginCycle(GCTask::ASYNC_TASK_INDEX, reason))
+    {
+        resources.PublishCyclePhase(cycle, GCPhase::GC_PHASE_TRACE);
+    }
+
+    ~MarkWindowScope() { resources.EndCycle(cycle); }
+
+private:
+    CollectorResources& resources;
+    CycleContext& cycle;
+};
+
 } // namespace
 
 GC_TEST(StoreBuf, EntryCarriesPairedPrevAndInstallColour)
@@ -185,12 +200,7 @@ GC_TEST(StoreBuf, ProductWriteCarriesOldValueOnlyInPrevArm)
     Heap& heap = Heap::GetHeap();
     CollectorResources& resources = heap.GetCollectorResources();
     RelocationReceiptTestAccess::EnsureCollectorProxyBound(resources);
-    const bool startedBefore = resources.IsGcStarted();
-    const GCReason reasonBefore = resources.GetGCStats().reason;
-    const GCPhase phaseBefore = heap.GetGCPhase();
-    resources.SetGcStarted(true);
-    resources.GetGCStats().reason = GC_REASON_USER;
-    heap.SetGCPhase(GCPhase::GC_PHASE_TRACE);
+    MarkWindowScope markWindow(resources, GC_REASON_USER);
 
     Mutator mutator;
     mutator.SetMutatorPhase(GCPhase::GC_PHASE_TRACE);
@@ -198,9 +208,6 @@ GC_TEST(StoreBuf, ProductWriteCarriesOldValueOnlyInPrevArm)
     ThreadLocal::SetMutator(&mutator);
     barrier.WriteReference(fx.obj0, field, fx.obj1);
     ThreadLocal::SetMutator(mutatorBefore);
-    heap.SetGCPhase(phaseBefore);
-    resources.GetGCStats().reason = reasonBefore;
-    resources.SetGcStarted(startedBefore);
 
     StoreBarrierBuffer& buf = alloc.GetStoreBarrierBuffer();
     const size_t pending = buf.Pending();
@@ -250,12 +257,7 @@ GC_TEST(StoreBuf, ProductPhaseFlushHandsPairedPrevToSatb)
     Heap& heap = Heap::GetHeap();
     CollectorResources& resources = heap.GetCollectorResources();
     RelocationReceiptTestAccess::EnsureCollectorProxyBound(resources);
-    const bool startedBefore = resources.IsGcStarted();
-    const GCReason reasonBefore = resources.GetGCStats().reason;
-    const GCPhase phaseBefore = heap.GetGCPhase();
-    resources.SetGcStarted(true);
-    resources.GetGCStats().reason = GC_REASON_USER;
-    heap.SetGCPhase(GCPhase::GC_PHASE_TRACE);
+    MarkWindowScope markWindow(resources, GC_REASON_USER);
 
     std::vector<BaseObject*> retired;
     SatbBuffer::Instance().GetRetiredObjects(retired);
@@ -273,9 +275,6 @@ GC_TEST(StoreBuf, ProductPhaseFlushHandsPairedPrevToSatb)
     mutator.TransitionToGCPhaseExclusive(GCPhase::GC_PHASE_CLEAR_SATB_BUFFER);
     GC_EXPECT_TRUE(alloc.GetStoreBarrierBuffer().IsEmpty());
     ThreadLocal::SetMutator(mutatorBefore);
-    heap.SetGCPhase(phaseBefore);
-    resources.GetGCStats().reason = reasonBefore;
-    resources.SetGcStarted(startedBefore);
 
     SatbBuffer::Instance().GetRetiredObjects(retired);
     size_t oldCount = 0;
@@ -367,12 +366,7 @@ GC_TEST(StoreBuf, CompilerFastOverwriteHandsObservedOldToSatb)
     Heap& heap = Heap::GetHeap();
     CollectorResources& resources = heap.GetCollectorResources();
     RelocationReceiptTestAccess::EnsureCollectorProxyBound(resources);
-    const bool startedBefore = resources.IsGcStarted();
-    const GCReason reasonBefore = resources.GetGCStats().reason;
-    const GCPhase phaseBefore = heap.GetGCPhase();
-    resources.SetGcStarted(true);
-    resources.GetGCStats().reason = GC_REASON_USER;
-    heap.SetGCPhase(GCPhase::GC_PHASE_TRACE);
+    MarkWindowScope markWindow(resources, GC_REASON_USER);
 
     std::vector<BaseObject*> retired;
     SatbBuffer::Instance().GetRetiredObjects(retired);
@@ -393,9 +387,6 @@ GC_TEST(StoreBuf, CompilerFastOverwriteHandsObservedOldToSatb)
     mutator.TransitionToGCPhaseExclusive(GCPhase::GC_PHASE_CLEAR_SATB_BUFFER);
 
     ThreadLocal::SetMutator(mutatorBefore);
-    heap.SetGCPhase(phaseBefore);
-    resources.GetGCStats().reason = reasonBefore;
-    resources.SetGcStarted(startedBefore);
 
     SatbBuffer::Instance().GetRetiredObjects(retired);
     size_t oldReceipts = 0;
@@ -439,12 +430,7 @@ GC_TEST(StoreBuf, GcAssistedPhaseFlushDefersStoreBuffer)
     Heap& heap = Heap::GetHeap();
     CollectorResources& resources = heap.GetCollectorResources();
     RelocationReceiptTestAccess::EnsureCollectorProxyBound(resources);
-    const bool startedBefore = resources.IsGcStarted();
-    const GCReason reasonBefore = resources.GetGCStats().reason;
-    const GCPhase phaseBefore = heap.GetGCPhase();
-    resources.SetGcStarted(true);
-    resources.GetGCStats().reason = GC_REASON_USER;
-    heap.SetGCPhase(GCPhase::GC_PHASE_TRACE);
+    MarkWindowScope markWindow(resources, GC_REASON_USER);
 
     Mutator mutator;
     mutator.SetMutatorPhase(GCPhase::GC_PHASE_TRACE);
@@ -466,14 +452,14 @@ GC_TEST(StoreBuf, GcAssistedPhaseFlushDefersStoreBuffer)
     GC_EXPECT_TRUE(alloc.GetStoreBarrierBuffer().IsEmpty());
 
     ThreadLocal::SetMutator(mutatorBefore);
-    heap.SetGCPhase(phaseBefore);
-    resources.GetGCStats().reason = reasonBefore;
-    resources.SetGcStarted(startedBefore);
 }
 
 GC_TEST(StoreBuf, NonNullPrevPublishesSatbBeforeRememberingSlot)
 {
     GcHeapFixture fx;
+    CollectorResources& resources = Heap::GetHeap().GetCollectorResources();
+    MarkWindowScope markWindow(resources, GC_REASON_USER);
+    RelocationReceiptTestAccess::EnsureCollectorProxyBound(resources);
     RememberedSet rs;
     rs.Initialize(fx.heapStart, 2 * RegionInfo::UNIT_SIZE);
     StoreBufferCollector collector;
@@ -484,8 +470,7 @@ GC_TEST(StoreBuf, NonNullPrevPublishesSatbBeforeRememberingSlot)
 
     const MAddress slot = SlotAt(fx, 8);
     const zpointer prev = RefField<>(fx.obj0, ::g_cjStoreGoodMask).GetFieldValue();
-    const StoreBarrierInstallState installed { static_cast<uint8_t>(GCPhase::GC_PHASE_TRACE), false,
-                                               static_cast<uintptr_t>(::g_cjStoreGoodMask) };
+    const StoreBarrierInstallState installed = StoreBarrierBuffer::CaptureInstallState();
 #if defined(MRT_GC_UNIT_TESTS)
     std::vector<StoreBarrierFlushEvent> events;
     FlushObserverScope observe(events);
@@ -564,6 +549,9 @@ GC_TEST(StoreBuf, NullAndNonCurrentPreviousAreNormalSkips)
 GC_TEST(StoreBuf, ResolvedInvalidPreviousIsClassifiedAndCleared)
 {
     GcHeapFixture fx;
+    CollectorResources& resources = Heap::GetHeap().GetCollectorResources();
+    MarkWindowScope markWindow(resources, GC_REASON_USER);
+    RelocationReceiptTestAccess::EnsureCollectorProxyBound(resources);
     RememberedSet rs;
     rs.Initialize(fx.heapStart, 2 * RegionInfo::UNIT_SIZE);
     StoreBufferCollector collector;
@@ -581,8 +569,7 @@ GC_TEST(StoreBuf, ResolvedInvalidPreviousIsClassifiedAndCleared)
     std::vector<StoreBarrierFlushEvent> events;
     FlushObserverScope observe(events);
 #endif
-    buf.Add(slot, previous,
-            StoreBarrierInstallState { static_cast<uint8_t>(GCPhase::GC_PHASE_TRACE), false, colour }, rs);
+    buf.Add(slot, previous, StoreBarrierBuffer::CaptureInstallState(), rs);
     buf.Flush(rs, collector);
     SatbBuffer::Instance().GetRetiredObjects(retired);
 
@@ -607,6 +594,10 @@ GC_TEST(StoreBuf, ResolvedInvalidPreviousIsClassifiedAndCleared)
 GC_TEST(StoreBuf, SatbNodeUnavailableFailsClosedBeforeClear)
 {
     GcHeapFixture fx;
+    Heap& heap = Heap::GetHeap();
+    CollectorResources& resources = heap.GetCollectorResources();
+    RelocationReceiptTestAccess::EnsureCollectorProxyBound(resources);
+    MarkWindowScope markWindow(resources, GC_REASON_USER);
     RememberedSet rs;
     rs.Initialize(fx.heapStart, 2 * RegionInfo::UNIT_SIZE);
     AllocBuffer alloc;
@@ -619,20 +610,9 @@ GC_TEST(StoreBuf, SatbNodeUnavailableFailsClosedBeforeClear)
     const uintptr_t colour = static_cast<uintptr_t>(::g_cjStoreGoodMask);
     const zpointer previous = RefField<>(fx.obj0, colour).GetFieldValue();
     const MAddress slot = SlotAt(fx, 8);
-    buf.Add(slot, previous,
-            StoreBarrierInstallState { static_cast<uint8_t>(GCPhase::GC_PHASE_TRACE), false, colour }, rs);
+    buf.Add(slot, previous, StoreBarrierBuffer::CaptureInstallState(), rs);
     const StoreBarrierEntry entry = buf.buffer[buf.current];
     const size_t currentBefore = buf.Current();
-
-    Heap& heap = Heap::GetHeap();
-    CollectorResources& resources = heap.GetCollectorResources();
-    RelocationReceiptTestAccess::EnsureCollectorProxyBound(resources);
-    const bool startedBefore = resources.IsGcStarted();
-    const GCReason reasonBefore = resources.GetGCStats().reason;
-    const GCPhase phaseBefore = heap.GetGCPhase();
-    resources.SetGcStarted(true);
-    resources.GetGCStats().reason = GC_REASON_USER;
-    heap.SetGCPhase(GCPhase::GC_PHASE_TRACE);
 
     Mutator mutator;
     mutator.SetMutatorPhase(GCPhase::GC_PHASE_TRACE);
@@ -663,9 +643,6 @@ GC_TEST(StoreBuf, SatbNodeUnavailableFailsClosedBeforeClear)
 
     int status = 0;
     GC_EXPECT_EQ(waitpid(child, &status, 0), child);
-    heap.SetGCPhase(phaseBefore);
-    resources.GetGCStats().reason = reasonBefore;
-    resources.SetGcStarted(startedBefore);
     const int processRc = WIFSIGNALED(status) ? 128 + WTERMSIG(status) :
         (WIFEXITED(status) ? WEXITSTATUS(status) : 255);
     std::fprintf(stderr,
@@ -681,6 +658,9 @@ GC_TEST(StoreBuf, SatbNodeUnavailableFailsClosedBeforeClear)
 GC_TEST(StoreBuf, YoungHolderRetiresPrevWithoutRememberingSlot)
 {
     GcHeapFixture fx;
+    CollectorResources& resources = Heap::GetHeap().GetCollectorResources();
+    MarkWindowScope markWindow(resources, GC_REASON_USER);
+    RelocationReceiptTestAccess::EnsureCollectorProxyBound(resources);
     fx.region1->SetYoungRegionFlag(1);
     RememberedSet rs;
     rs.Initialize(fx.heapStart, 2 * RegionInfo::UNIT_SIZE);
@@ -693,8 +673,7 @@ GC_TEST(StoreBuf, YoungHolderRetiresPrevWithoutRememberingSlot)
     const MAddress slot = reinterpret_cast<MAddress>(fx.obj1) + TYPEINFO_PTR_SIZE;
     const uintptr_t colour = static_cast<uintptr_t>(::g_cjStoreGoodMask);
     const zpointer prev = RefField<>(fx.obj0, colour).GetFieldValue();
-    buf.Add(slot, prev,
-            StoreBarrierInstallState { static_cast<uint8_t>(GCPhase::GC_PHASE_TRACE), false, colour }, rs);
+    buf.Add(slot, prev, StoreBarrierBuffer::CaptureInstallState(), rs);
     buf.Flush(rs, collector);
     SatbBuffer::Instance().GetRetiredObjects(retired);
 
@@ -706,6 +685,9 @@ GC_TEST(StoreBuf, YoungHolderRetiresPrevWithoutRememberingSlot)
 GC_TEST(StoreBuf, PhaseFlipRetainsOnlyCurrentEpochPrev)
 {
     GcHeapFixture fx;
+    CollectorResources& resources = Heap::GetHeap().GetCollectorResources();
+    MarkWindowScope markWindow(resources, GC_REASON_USER);
+    RelocationReceiptTestAccess::EnsureCollectorProxyBound(resources);
     RememberedSet rs;
     rs.Initialize(fx.heapStart, 2 * RegionInfo::UNIT_SIZE);
     StoreBufferCollector collector;
@@ -717,11 +699,10 @@ GC_TEST(StoreBuf, PhaseFlipRetainsOnlyCurrentEpochPrev)
     const uintptr_t current = static_cast<uintptr_t>(::g_cjStoreGoodMask);
     const zpointer previous = RefField<>(fx.obj0, current).GetFieldValue();
     const zpointer currentPrev = RefField<>(fx.obj1, current).GetFieldValue();
-    buf.Add(SlotAt(fx, 8), previous,
-            StoreBarrierInstallState { static_cast<uint8_t>(GCPhase::GC_PHASE_TRACE), false,
-                                       current ^ MARKED_OLD_MASK }, rs);
-    buf.Add(SlotAt(fx, 9), currentPrev,
-            StoreBarrierInstallState { static_cast<uint8_t>(GCPhase::GC_PHASE_TRACE), false, current }, rs);
+    StoreBarrierInstallState previousEpoch = StoreBarrierBuffer::CaptureInstallState();
+    previousEpoch.storeGood = current ^ MARKED_OLD_MASK;
+    buf.Add(SlotAt(fx, 8), previous, previousEpoch, rs);
+    buf.Add(SlotAt(fx, 9), currentPrev, StoreBarrierBuffer::CaptureInstallState(), rs);
 
     buf.Flush(rs, collector);
     SatbBuffer::Instance().GetRetiredObjects(retired);
@@ -733,6 +714,9 @@ GC_TEST(StoreBuf, PhaseFlipRetainsOnlyCurrentEpochPrev)
 GC_TEST(StoreBuf, PendingEntryFromOldEpochIsRejectedAfterOldMarkFlip)
 {
     GcHeapFixture fx;
+    CollectorResources& resources = Heap::GetHeap().GetCollectorResources();
+    MarkWindowScope markWindow(resources, GC_REASON_USER);
+    RelocationReceiptTestAccess::EnsureCollectorProxyBound(resources);
     RememberedSet rs;
     rs.Initialize(fx.heapStart, 2 * RegionInfo::UNIT_SIZE);
     StoreBufferCollector collector;
@@ -743,8 +727,7 @@ GC_TEST(StoreBuf, PendingEntryFromOldEpochIsRejectedAfterOldMarkFlip)
 
     const uintptr_t before = static_cast<uintptr_t>(::g_cjStoreGoodMask);
     const zpointer prev = RefField<>(fx.obj0, before).GetFieldValue();
-    buf.Add(SlotAt(fx, 12), prev,
-            StoreBarrierInstallState { static_cast<uint8_t>(GCPhase::GC_PHASE_TRACE), false, before }, rs);
+    buf.Add(SlotAt(fx, 12), prev, StoreBarrierBuffer::CaptureInstallState(), rs);
     // Publish the next old-mark epoch before this thread drains.  The pending
     // entry belongs to the install-time epoch and must not enter the new SATB.
     ::g_cjStoreGoodMask = before ^ MARKED_OLD_MASK;
@@ -759,6 +742,9 @@ GC_TEST(StoreBuf, PendingEntryFromOldEpochIsRejectedAfterOldMarkFlip)
 GC_TEST(StoreBuf, PendingOldMarkEntrySurvivesYoungMarkFlip)
 {
     GcHeapFixture fx;
+    CollectorResources& resources = Heap::GetHeap().GetCollectorResources();
+    MarkWindowScope markWindow(resources, GC_REASON_USER);
+    RelocationReceiptTestAccess::EnsureCollectorProxyBound(resources);
     RememberedSet rs;
     rs.Initialize(fx.heapStart, 2 * RegionInfo::UNIT_SIZE);
     StoreBufferCollector collector;
@@ -769,8 +755,7 @@ GC_TEST(StoreBuf, PendingOldMarkEntrySurvivesYoungMarkFlip)
 
     const uintptr_t before = static_cast<uintptr_t>(::g_cjStoreGoodMask);
     const zpointer prev = RefField<>(fx.obj0, before).GetFieldValue();
-    buf.Add(SlotAt(fx, 13), prev,
-            StoreBarrierInstallState { static_cast<uint8_t>(GCPhase::GC_PHASE_TRACE), false, before }, rs);
+    buf.Add(SlotAt(fx, 13), prev, StoreBarrierBuffer::CaptureInstallState(), rs);
     // A young-mark publication does not change the old-mark epoch that owns
     // this entry, so its SATB half must still be retired after the flip.
     ::g_cjStoreGoodMask = before ^ MARKED_YOUNG_MASK;
