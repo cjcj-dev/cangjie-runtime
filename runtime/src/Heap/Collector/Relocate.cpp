@@ -2776,6 +2776,9 @@ BaseObject* WCollector::ForwardObjectImpl(BaseObject* obj, RegionInfo* ghostFrom
     // or ROUTING wait that only GC can finish. ZGC relocate_object_inner
     // (zRelocate.cpp:354-372) does alloc+copy+insert with no safepoint; 乙1 is
     // the same rule for the object lock that routefix already applied to ROUTING.
+    // A normal geometric route already owns its target-generation decision in
+    // RouteOrCompactRegionImpl. Both mutator and worker copies consume that
+    // destination; ordinary allocation is only the separate miss path below.
     BaseObject* planned = fwdTable.PlanRoute(obj, CopierRouteMint::Make()).dest;
 #if defined(MRT_GC_UNIT_TESTS)
     if (g_routeLookupTestContext != nullptr) {

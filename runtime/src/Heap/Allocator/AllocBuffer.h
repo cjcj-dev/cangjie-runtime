@@ -31,10 +31,12 @@ public:
 
     MAddress Allocate(size_t size, AllocType allocType);
     RegionInfo* GetRegion() { return tlRegion; }
+    RegionInfo* GetRelocationRegion() { return relocationRegion; }
     RegionList& GetTlRawPointerRegions() { return tlRawPointerRegions; }
     RegionList& GetTlLargeRawPointerRegions() { return tlLargeRawPointerRegions; }
     RegionInfo* GetPreparedRegion() { return preparedRegion.load(std::memory_order_relaxed); }
     void SetRegion(RegionInfo* newRegion) { tlRegion = newRegion; }
+    void SetRelocationRegion(RegionInfo* newRegion) { relocationRegion = newRegion; }
     inline void ClearRegion()
     {
         if (tlRegion == RegionInfo::NullRegion()) {
@@ -43,6 +45,10 @@ public:
         DLOG(REGION, "alloc buffer clear tlRegion %p@[0x%zx, 0x%zx)", tlRegion, tlRegion->GetRegionStart(),
              tlRegion->GetRegionEnd());
         tlRegion = RegionInfo::NullRegion();
+    }
+    inline void ClearRelocationRegion()
+    {
+        relocationRegion = RegionInfo::NullRegion();
     }
 
     bool SetPreparedRegion(RegionInfo* newPreparedRegion)
@@ -261,6 +267,11 @@ private:
     // tlRegion in AllocBuffer is a shortcut for fast allocation.
     // we should handle failure in RegionManager
     RegionInfo* tlRegion = RegionInfo::NullRegion();
+
+    // Relocation reserves destination space independently of ordinary object
+    // allocation. In particular, an old relocation target must never become
+    // the mutator's next ordinary allocation region.
+    RegionInfo* relocationRegion = RegionInfo::NullRegion();
 
     // Guards the two mutator-owned publication lists below. The concurrent
     // young-mark consumer (Mark.cpp:2271-2272) runs with mutators live, so the

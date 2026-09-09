@@ -692,25 +692,7 @@ public:
         return oldLargeRegionList.GetAllocatedSize() + recentLargeRegionList.GetAllocatedSize();
     }
 
-    size_t GetAllocatedSize() const
-    {
-        size_t threadLocalSize = 0;
-        AllocBufferVisitor visitor = [&threadLocalSize](AllocBuffer& regionBuffer) {
-            RegionInfo* region = regionBuffer.GetRegion();
-            if (UNLIKELY(region == RegionInfo::NullRegion())) {
-                return;
-            }
-            threadLocalSize += region->GetRegionAllocatedSize();
-        };
-        Heap::GetHeap().GetAllocator().VisitAllocBuffers(visitor);
-        // exclude garbageRegionList for live object set.
-        return fromRegionList.GetAllocatedSize() + unmovableFromRegionList.GetAllocatedSize() +
-            recentFullRegionList.GetAllocatedSize() + oldLargeRegionList.GetAllocatedSize() +
-            recentLargeRegionList.GetAllocatedSize() + oldPinnedRegionList.GetAllocatedSize() +
-            recentPinnedRegionList.GetAllocatedSize() + rawPointerPinnedRegionList.GetAllocatedSize() +
-            largeTraceRegions.GetAllocatedSize() + fullTraceRegions.GetAllocatedSize() +
-            threadLocalSize;
-    }
+    size_t GetAllocatedSize() const;
 
     inline size_t GetFromSpaceSize() const { return fromRegionList.GetAllocatedSize(); }
 
