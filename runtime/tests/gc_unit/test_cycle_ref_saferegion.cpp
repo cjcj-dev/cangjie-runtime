@@ -264,11 +264,11 @@ GC_TEST(CycleRefSaferegion, HandlerSafepointKeepsCycleRootsConsumable)
     resolver.join();
     consumer.join();
 
-    BaseObject* observedExtern = roots.empty() ? nullptr : roots.back().object();
+    BaseObject* observedExtern = roots.empty() ? nullptr : roots.back();
     if (!roots.empty()) {
         roots.pop_back();
     }
-    BaseObject* observedExport = roots.empty() ? nullptr : roots.back().object();
+    BaseObject* observedExport = roots.empty() ? nullptr : roots.back();
     if (!roots.empty()) {
         roots.pop_back();
     }
