@@ -28,6 +28,51 @@ cj_runtime_configure_output_layout()
 set(gcunit_id "${CANGJIE_RUNTIME_CONFIG_ID}")
 set(gcunit_root "${CMAKE_OUTPUT_DIRECTORY}")
 
+# Regression for cangjie-runtime#42: DISABLE_VERSION_CHECK is a supported
+# CMake cache axis which changes product code.  OFF -> ON -> OFF must select
+# two directories and return to the original identity, independent of any
+# hand-maintained option list.
+set(MRT_GC_UNIT_TESTS OFF)
+set(MRT_TESTABLE_INTERNALS OFF)
+set(DISABLE_VERSION_CHECK OFF CACHE BOOL "" FORCE)
+cj_runtime_configure_output_layout()
+set(disable_version_check_off_id "${CANGJIE_RUNTIME_CONFIG_ID}")
+set(disable_version_check_off_root "${CMAKE_OUTPUT_DIRECTORY}")
+
+set(DISABLE_VERSION_CHECK ON CACHE BOOL "" FORCE)
+cj_runtime_configure_output_layout()
+set(disable_version_check_on_id "${CANGJIE_RUNTIME_CONFIG_ID}")
+set(disable_version_check_on_root "${CMAKE_OUTPUT_DIRECTORY}")
+
+set(DISABLE_VERSION_CHECK OFF CACHE BOOL "" FORCE)
+cj_runtime_configure_output_layout()
+set(disable_version_check_restored_id "${CANGJIE_RUNTIME_CONFIG_ID}")
+set(disable_version_check_restored_root "${CMAKE_OUTPUT_DIRECTORY}")
+
+if(disable_version_check_off_id STREQUAL disable_version_check_on_id)
+    message(FATAL_ERROR "DISABLE_VERSION_CHECK OFF and ON share an identity")
+endif()
+if(NOT disable_version_check_off_id STREQUAL disable_version_check_restored_id OR
+        NOT disable_version_check_off_root STREQUAL disable_version_check_restored_root)
+    message(FATAL_ERROR "restoring DISABLE_VERSION_CHECK did not restore the output identity")
+endif()
+if(disable_version_check_off_root STREQUAL disable_version_check_on_root)
+    message(FATAL_ERROR "DISABLE_VERSION_CHECK OFF and ON share an output directory")
+endif()
+
+foreach(pair
+        "${disable_version_check_off_root};OFF"
+        "${disable_version_check_on_root};ON")
+    list(GET pair 0 output_root)
+    list(GET pair 1 expected_value)
+    file(READ "${output_root}/runtime-build-config.txt" manifest)
+    if(NOT manifest MATCHES "DISABLE_VERSION_CHECK=${expected_value}[
+]")
+        message(FATAL_ERROR
+            "DISABLE_VERSION_CHECK ${expected_value} output has the wrong manifest")
+    endif()
+endforeach()
+
 if(default_id STREQUAL testable_id OR default_id STREQUAL gcunit_id OR testable_id STREQUAL gcunit_id)
     message(FATAL_ERROR "runtime configurations share an identity")
 endif()
@@ -49,4 +94,5 @@ foreach(pair
     endif()
 endforeach()
 
-message(STATUS "RUNTIME_OUTPUT_LAYOUT_OK default=${default_id} testable=${testable_id} gcunit=${gcunit_id}")
+message(STATUS
+    "RUNTIME_OUTPUT_LAYOUT_OK default=${default_id} testable=${testable_id} gcunit=${gcunit_id} disable_version_check_off=${disable_version_check_off_id} disable_version_check_on=${disable_version_check_on_id} restored=${disable_version_check_restored_id}")
