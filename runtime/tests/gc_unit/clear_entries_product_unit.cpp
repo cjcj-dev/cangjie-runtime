@@ -199,6 +199,8 @@ struct LoadHealDeliveryTestAccess {
     struct RemsetConsumeResult {
         size_t work;
         size_t consumed;
+        std::unordered_set<MAddress> processedSlots;
+        std::unordered_set<MAddress> consumedSlots;
     };
 
     static void PublishColours(WCollector& collector) { collector.set_good_masks(); }
@@ -231,18 +233,20 @@ struct LoadHealDeliveryTestAccess {
         WCollector::MinorSlotSet weakSlots;
         WCollector::MinorObjectSet currentMinorRoots;
         WCollector::MinorSlotSet consumed;
+        WCollector::MinorSlotSet processed;
         RemsetScanStats stats;
         stats.recorded = previous.size();
         if (currentMinorRoot != nullptr) {
             currentMinorRoots.insert(currentMinorRoot);
         }
         collector.RescanRememberedSet(workStack, previous, reachableSlots, weakSlots,
-                                      currentMinorRoots, false, &consumed, &stats);
+                                      currentMinorRoots, false, &consumed, &stats, nullptr, nullptr,
+                                      &processed);
         const size_t work = workStack.size();
         while (!workStack.empty()) {
             workStack.pop_back();
         }
-        return RemsetConsumeResult { work, consumed.size() };
+        return RemsetConsumeResult { work, consumed.size(), std::move(processed), std::move(consumed) };
     }
 };
 
@@ -4480,6 +4484,7 @@ GC_OTHER_VM_TEST(RemsetNetwork, ForwardRegionConsumesPublishedMappingAndTransfer
     GcHeapFixture& fx = ProductFixture();
     RegionInfo* source = ResetDeliveryUnit(fx, 0);
     RegionInfo* destination = ResetDeliveryUnit(fx, 1);
+    DeliveryYoungTarget target = PrepareDeliveryYoungTarget(fx, 2);
     BaseObject* from = fx.PlaceObject(source->GetRegionStart());
     const size_t objectSize = from->GetSize();
     source->SetRegionAllocPtr(reinterpret_cast<MAddress>(from) + objectSize);
@@ -4492,6 +4497,18 @@ GC_OTHER_VM_TEST(RemsetNetwork, ForwardRegionConsumesPublishedMappingAndTransfer
     LoadHealDeliveryTestAccess::PublishColours(collector);
     collector.SetGCPhase(GCPhase::GC_PHASE_FORWARD);
     LiveInfo* live = PrepareForwardable(fx, source, reinterpret_cast<MAddress>(from));
+    RememberedSet& remembered = DeliveryRememberedSet(fx);
+    EmptyBothRememberedFaces(remembered);
+    const MAddress fromSlot = reinterpret_cast<MAddress>(from) + TYPEINFO_PTR_SIZE;
+    const MAddress toSlot = toBase + TYPEINFO_PTR_SIZE;
+    auto* fromField = &HeapSlotAt<>(fromSlot);
+    Barrier barrier(collector, remembered);
+    {
+        DeliveryNoAllocBufferScope directRemember;
+        fromField->StoreColoured(zpointer::null);
+        barrier.WriteReference(from, *fromField, target.object);
+    }
+    GC_EXPECT_TRUE(remembered.Contains(fromSlot));
     std::memcpy(to, from, objectSize);
     to->SetStateCode(ObjectState::NORMAL);
     ForwardingTable::Publication publication =
@@ -4504,23 +4521,32 @@ GC_OTHER_VM_TEST(RemsetNetwork, ForwardRegionConsumesPublishedMappingAndTransfer
     source->SetRouteInfo(toBase, objectSize);
     source->SetRouteState(RegionInfo::RouteState::FORWARDED);
 
-    RememberedSet& remembered = DeliveryRememberedSet(fx);
-    EmptyBothRememberedFaces(remembered);
-    const MAddress fromSlot = reinterpret_cast<MAddress>(from) + TYPEINFO_PTR_SIZE;
-    const MAddress toSlot = toBase + TYPEINFO_PTR_SIZE;
-    StoreBarrierBuffer producer;
-    producer.Add(fromSlot, zpointer::null, remembered);
-    producer.Flush(remembered);
+    // Publication-first overlap: flip exposes the source face, ForwardRegion
+    // publishes while it is still WAITING, then the real destructive scan and
+    // WCollector consumer produce the two completion ledgers.
+    remembered.FlipForMinor();
     RegionManager manager;
     manager.ForwardRegion<Generation::Old>(source);
-    const bool toPresent = remembered.Contains(toSlot);
+    ZForwarding* table = ForwardingTable::GetEntries(reinterpret_cast<MAddress>(from));
+    GC_EXPECT_TRUE(table != nullptr);
+    const auto published = table->remset_receipt_counts();
+    std::unordered_set<MAddress> scanned;
+    const size_t scannedCount = remembered.ScanPreviousForMinor(scanned);
+    const bool toPresent = scanned.count(toSlot) != 0;
+    const auto accepted = table->remset_receipt_counts();
+    const auto consumer = LoadHealDeliveryTestAccess::ConsumeRemembered(collector, scanned, to);
+    remembered.CompleteScanForMinor(consumer.processedSlots, consumer.consumedSlots);
+    const auto consumed = table->remset_receipt_counts();
     std::fprintf(stderr,
                  "DETAIL remset_network arm=forward-region-published from=%#zx to=%#zx "
-                 "offset=%zu mapping=%#zx to_present=%u\n",
+                 "offset=%zu mapping=%#zx to_present=%u published=%zu accepted=%zu "
+                 "scanned=%zu processed_to=%zu consumer_to=%zu consumed=%zu\n",
                  static_cast<size_t>(reinterpret_cast<MAddress>(from)), static_cast<size_t>(toBase),
                  static_cast<size_t>(TYPEINFO_PTR_SIZE),
                  static_cast<size_t>(ForwardingTable::FindTo(reinterpret_cast<MAddress>(from))),
-                 static_cast<unsigned>(toPresent));
+                 static_cast<unsigned>(toPresent), published.published, accepted.accepted,
+                 scannedCount, consumer.processedSlots.count(toSlot),
+                 consumer.consumedSlots.count(toSlot), consumed.consumed);
     std::fflush(stderr);
 
     RelocationReceiptTestAccess::BindCollector(Heap::GetHeap().GetCollectorResources(), nullptr);
@@ -4528,7 +4554,13 @@ GC_OTHER_VM_TEST(RemsetNetwork, ForwardRegionConsumesPublishedMappingAndTransfer
     RelocationReceiptTestAccess::ReleaseListOwnership(destination);
     source->metadata.liveInfo = nullptr;
     fx.FreePlanted(live);
+    CleanupDeliveryYoungTarget(fx, target);
     GC_EXPECT_TRUE(toPresent);
+    GC_EXPECT_EQ(published.published, 1u);
+    GC_EXPECT_EQ(accepted.accepted, 1u);
+    GC_EXPECT_EQ(consumer.processedSlots.count(toSlot), 1u);
+    GC_EXPECT_EQ(consumer.consumedSlots.count(toSlot), 1u);
+    GC_EXPECT_EQ(consumed.consumed, 1u);
 }
 
 // The conservative pinned producer is accepted only for a value inside the
