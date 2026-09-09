@@ -43,11 +43,12 @@ bool VerifyFaceEnabled(VerifyFace face)
         }
         case VerifyFace::Objects: {
             static const bool enabled = ValueIsOne(std::getenv("MRT_GCV2_VERIFY_HEAP")) ||
-                ValueIsOne(std::getenv("MRT_GCV2_VERIFY_OBJECTS")) || DiagGate::TokenOn("objects");
+                ValueIsOne(std::getenv("MRT_GCV2_VERIFY_OBJECTS")) ||
+                ValueIsOne(std::getenv("MRT_GCV2_MARKCOMPLETE")) || DiagGate::TokenOn("objects");
             return enabled;
         }
         case VerifyFace::Marking: {
-            static const bool enabled = ValueIsOne(std::getenv("MRT_GCV2_MARKCOMPLETE")) ||
+            static const bool enabled =
                 ValueIsOne(std::getenv("MRT_GCV2_VERIFY_MARKING")) || DiagGate::TokenOn("marking");
             return enabled;
         }
