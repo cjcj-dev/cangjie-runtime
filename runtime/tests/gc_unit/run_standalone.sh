@@ -516,6 +516,9 @@ LOADHEAL_PRODUCT_CONSUMERS=(
   'MapleRuntime::RememberedSet::MoveInPlaceSlots('
   'MapleRuntime::RegionManager::RecordPinnedCrossGenEdges('
   'MapleRuntime::WCollector::RemapYoungRoots('
+  'MapleRuntime::CopyCollector::RunGarbageCollection('
+  'MapleRuntime::ResetRemapYoungRootsTestReceipt('
+  'MapleRuntime::ReadRemapYoungRootsTestReceipt()'
   'MapleRuntime::RegionManager::FinishIncompleteFromRegions('
   'MapleRuntime::ForwardingTable::ReclaimRetired('
 )
@@ -526,7 +529,8 @@ EXPECTED_LOADHEAL_TESTS=(
   LoadHealDeliveryProduct.PromotedSnapshotDischargesOnlyLiveHolder
   LoadHealDeliveryProduct.InPlaceRemsetMovesBitAndFeedsConsumer
   LoadHealDeliveryProduct.CrossGenRangeGateRecordsLegalAndRejectsBeyondTop
-  LoadHealDeliveryProduct.RemapYoungRootsResolvesRecoloursAndHealsSlot
+  LoadHealDeliveryProduct.CurrentRemsetRemapsLiveRemoteArrayField
+  LoadHealDeliveryProduct.MajorDispatchRemapsLiveRemoteArrayField
 )
 loadheal_rows=0
 while IFS=$'\t' read -r test_name anchor carrier consumer cut_site; do
@@ -536,7 +540,11 @@ while IFS=$'\t' read -r test_name anchor carrier consumer cut_site; do
   [[ "$carrier" == "product_so" ]]
   suite="${test_name%%.*}"
   name="${test_name#*.}"
-  /usr/bin/grep -F -q "GC_TEST($suite, $name)" "$SRC/clear_entries_product_unit.cpp"
+  if ! /usr/bin/grep -F -q "GC_TEST($suite, $name)" "$SRC/clear_entries_product_unit.cpp" &&
+     ! /usr/bin/grep -F -q "GC_OTHER_VM_TEST($suite, $name)" "$SRC/clear_entries_product_unit.cpp"; then
+    echo "GC_UNIT_LOADHEAL_TEST_REGISTRATION_MISSING test=$test_name" >&2
+    exit 10
+  fi
   /usr/bin/grep -F -q "$consumer" "$SRC/clear_entries_product_unit.cpp"
   /usr/bin/grep -R -F -q "${anchor##*::}" "$ROOT/runtime/src/Heap"
   /usr/bin/grep -R -F -q "$cut_site" "$ROOT/runtime/src/Heap"
