@@ -281,7 +281,7 @@ void CollectorResources::SetGcStarted(bool val)
 {
     std::unique_lock<std::mutex> lifecycleLock(cycleLifecycleLock);
     if (val) {
-        if (controlActivity.exchange(true, std::memory_order_acq_rel)) {
+        if (controlActivity.load(std::memory_order_acquire)) {
             return;
         }
         // A product cycle already has its own token and must never be replaced
@@ -289,6 +289,7 @@ void CollectorResources::SetGcStarted(bool val)
         if (GetCycleSnapshot().AnyActive()) {
             return;
         }
+        controlActivity.store(true, std::memory_order_release);
         // The retained API predates per-generation callers. Its historical
         // non-young reason/phase state belongs to the old slot.
         CycleContext& context = GetCycleContext(CycleGeneration::Old);
