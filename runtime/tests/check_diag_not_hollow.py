@@ -20,6 +20,19 @@ PRODUCT = ROOT / "src"
 # contract, so scan the whole product tree rather than a remembered file list.
 RETIRED_PHASE_HOOKS = ("ValidateMinorReferences",)
 
+# Scan by language/artifact kind instead of enumerating the suffixes currently
+# remembered by a caller.  In particular, product headers are not limited to
+# .h (ZAbort.hpp is compiled through DriverPort.h).  Keep conventional C/C++
+# spellings here so a new header/source spelling cannot silently escape the
+# retired-hook contract; export ledgers need substring matching for mangled names.
+CXX_SOURCE_SUFFIXES = frozenset({".c", ".cc", ".cpp", ".cxx", ".m", ".mm"})
+CXX_HEADER_SUFFIXES = frozenset({".h", ".hh", ".hpp", ".hxx", ".inc", ".inl"})
+ASSEMBLY_SUFFIXES = frozenset({".s", ".S"})
+EXPORT_LEDGER_SUFFIXES = frozenset({".def", ".map"})
+PRODUCT_ARTIFACT_SUFFIXES = (
+    CXX_SOURCE_SUFFIXES | CXX_HEADER_SUFFIXES | ASSEMBLY_SUFFIXES | EXPORT_LEDGER_SUFFIXES
+)
+
 # Definitions only: a leading return type at column 0. The complete signature is
 # captured through its opening brace so empty lambdas inside a live function cannot
 # be mistaken for additional empty top-level definitions.
@@ -32,14 +45,18 @@ EMPTY_CONTENT = re.compile(r"\s*(?:return\s+(?:false|true|0|nullptr)\s*;\s*)?\Z"
 GATE = re.compile(r"MRT_[A-Z0-9_]+")
 
 
-def mask_non_code(text: str, *, semicolon_comments: bool = False) -> str:
+def mask_non_code(
+    text: str, *, semicolon_comments: bool = False, hash_comments: bool = False
+) -> str:
     """Preserve layout while masking comments and string/character literals."""
     comment = r"//[^\n]*|/\*.*?\*/"
     if semicolon_comments:
         comment += r"|;[^\n]*"
+    if hash_comments:
+        comment += r"|#[^\n]*"
     pattern = rf'{comment}|"(?:\\.|[^"\\])*"|\'(?:\\.|[^\'\\])*\''
     masked = list(text)
-    for match in re.finditer(pattern, text, re.S):
+    for match in re.finditer(pattern, text, re.M | re.S):
         for i in range(match.start(), match.end()):
             if masked[i] != "\n":
                 masked[i] = " "
@@ -48,11 +65,15 @@ def mask_non_code(text: str, *, semicolon_comments: bool = False) -> str:
 
 def retired_hook_lines(src: pathlib.Path, text: str):
     """Yield material retired-hook references, excluding comments and literals."""
-    masked = mask_non_code(text, semicolon_comments=src.suffix == ".def")
+    masked = mask_non_code(
+        text,
+        semicolon_comments=src.suffix == ".def",
+        hash_comments=src.suffix == ".map",
+    )
     for hook in RETIRED_PHASE_HOOKS:
         # C++ sources require an identifier token. Export ledgers carry the
         # hook inside a mangled name, so a non-comment substring is material.
-        if src.suffix == ".def":
+        if src.suffix in EXPORT_LEDGER_SUFFIXES:
             matcher = re.compile(re.escape(hook))
         else:
             matcher = re.compile(rf"\b{re.escape(hook)}\b")
@@ -61,22 +82,56 @@ def retired_hook_lines(src: pathlib.Path, text: str):
                 yield line_no, hook
 
 
-def retired_scanner_controls() -> bool:
+def is_product_artifact(src: pathlib.Path) -> bool:
+    """Return whether a product file can carry code or an exported symbol."""
+    return src.suffix in PRODUCT_ARTIFACT_SUFFIXES
+
+
+def product_artifacts(root: pathlib.Path):
+    """Yield every C/C++/assembly input and export ledger under the product root."""
+    return sorted(
+        path for path in root.rglob("*") if path.is_file() and is_product_artifact(path)
+    )
+
+
+def retired_scanner_controls():
     """Exercise both sides of the retired-hook classifier on every gate run."""
     controls = (
         (pathlib.Path("comment.cpp"), "// ValidateMinorReferences is retired\n", []),
         (pathlib.Path("block.cpp"), "/* ValidateMinorReferences is retired */\n", []),
         (pathlib.Path("literal.cpp"), 'const char* note = "ValidateMinorReferences";\n', []),
         (pathlib.Path("call.cpp"), "ValidateMinorReferences(point, refs);\n", [(1, "ValidateMinorReferences")]),
+        (pathlib.Path("declaration.h"), "void ValidateMinorReferences();\n", [(1, "ValidateMinorReferences")]),
+        (pathlib.Path("declaration.hpp"), "void ValidateMinorReferences();\n", [(1, "ValidateMinorReferences")]),
+        (pathlib.Path("comment.hpp"), "// void ValidateMinorReferences();\n", []),
+        (pathlib.Path("literal.hpp"), 'constexpr auto note = "ValidateMinorReferences";\n', []),
+        (pathlib.Path("call.S"), "call ValidateMinorReferences\n", [(1, "ValidateMinorReferences")]),
         (pathlib.Path("exports.def"), "; ValidateMinorReferences is retired\n", []),
         (pathlib.Path("exports.def"), "_ZN23ValidateMinorReferencesEv\n", [(1, "ValidateMinorReferences")]),
+        (pathlib.Path("exports.map"), "# ValidateMinorReferences is retired\n", []),
+        (pathlib.Path("exports.map"), "_ZN23ValidateMinorReferencesEv;\n", [(1, "ValidateMinorReferences")]),
     )
     for src, text, expected in controls:
         actual = list(retired_hook_lines(src, text))
         if actual != expected:
             print(f"DIAG_HOLLOW_GUARD FAIL: retired-hook scanner control {src}: {actual} != {expected}")
-            return False
-    return True
+            return None
+
+    artifact_controls = (
+        (pathlib.Path("source.cpp"), True),
+        (pathlib.Path("source.S"), True),
+        (pathlib.Path("header.h"), True),
+        (pathlib.Path("header.hpp"), True),
+        (pathlib.Path("exports.def"), True),
+        (pathlib.Path("exports.map"), True),
+        (pathlib.Path("CMakeLists.txt"), False),
+    )
+    for src, expected in artifact_controls:
+        actual = is_product_artifact(src)
+        if actual != expected:
+            print(f"DIAG_HOLLOW_GUARD FAIL: product-artifact control {src}: {actual} != {expected}")
+            return None
+    return len(controls) + len(artifact_controls)
 
 
 def function_bodies(text: str):
@@ -97,7 +152,8 @@ def function_bodies(text: str):
 
 
 def main() -> int:
-    if not retired_scanner_controls():
+    scanner_control_count = retired_scanner_controls()
+    if scanner_control_count is None:
         return 1
 
     if not VERIFY.is_dir():
@@ -132,7 +188,7 @@ def main() -> int:
         return 1
 
     retired_hits = []
-    for src in sorted(path for path in PRODUCT.rglob("*") if path.suffix in {".cpp", ".h", ".def"}):
+    for src in product_artifacts(PRODUCT):
         text = src.read_text(errors="replace")
         for line_no, hook in retired_hook_lines(src, text):
             retired_hits.append((src.relative_to(ROOT), line_no, hook))
@@ -145,7 +201,7 @@ def main() -> int:
 
     print(
         f"DIAG_HOLLOW_GUARD PASS gated_subsystems={checked} "
-        "retired_phase_hook_hits=0 scanner_controls=6"
+        f"retired_phase_hook_hits=0 scanner_controls={scanner_control_count}"
     )
     return 0
 
