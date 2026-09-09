@@ -13,6 +13,8 @@
 #include <sstream>
 #include <thread>
 
+#include "gc_heap_fixture.hpp"
+
 #include "Base/SysCall.h"
 #include "Common/Runtime.h"
 #include "Heap/Heap.h"
@@ -60,6 +62,30 @@ bool WaitUntil(const std::function<bool()>& predicate)
         std::this_thread::yield();
     }
     return true;
+}
+
+struct HandlerSafepointContext {
+    std::atomic<bool> entered{ false };
+    std::atomic<bool> returned{ false };
+    BaseObject* exportArg = nullptr;
+    BaseObject* externArg = nullptr;
+};
+
+HandlerSafepointContext* handlerSafepointContext = nullptr;
+
+void SafepointingCycleRefHandler(BaseObject* exportObj, BaseObject* externObj)
+{
+    HandlerSafepointContext* context = handlerSafepointContext;
+    context->exportArg = exportObj;
+    context->externArg = externObj;
+    Mutator* mutator = Mutator::GetMutator();
+    mutator->SetSuspensionFlag(Mutator::SUSPENSION_FOR_SYNC);
+    context->entered.store(true, std::memory_order_release);
+
+    // This is the product late-safepoint entry used by the signal path. It
+    // enters the saferegion and blocks in DoLeaveSaferegion until STW ends.
+    HandleSafepoint(ThreadLocal::GetThreadLocalData());
+    context->returned.store(true, std::memory_order_release);
 }
 
 GC_TEST(CycleRefSaferegion, ResolverParksBeforeCycleRootLock)
@@ -163,6 +189,100 @@ GC_TEST(CycleRefSaferegion, CycleRootConsumerPublishesWorkStackRoots)
     GC_EXPECT_TRUE(ownerPresentAfterExtern);
     GC_EXPECT_EQ(reinterpret_cast<uintptr_t>(observedExtern), reinterpret_cast<uintptr_t>(externRoot));
     GC_EXPECT_EQ(reinterpret_cast<uintptr_t>(observedExport), reinterpret_cast<uintptr_t>(exportRoot));
+    GC_EXPECT_TRUE(roots.empty());
+}
+
+GC_TEST(CycleRefSaferegion, HandlerSafepointKeepsCycleRootsConsumable)
+{
+    MutatorManager manager;
+    CycleRefTestRuntime runtime(manager);
+    GcHeapFixture fixture;
+    WCollector collector(Heap::GetHeap().GetAllocator(), Heap::GetHeap().GetCollectorResources());
+    Mutator resolverMutator;
+    resolverMutator.SetInSaferegion(Mutator::SAFE_REGION_TRUE);
+
+    auto* exportRoot = reinterpret_cast<ExportObject*>(fixture.obj0);
+    BaseObject* externRoot = fixture.obj1;
+    const U64 exportHandle = Heap::GetHeap().RegisterExportRoot(exportRoot);
+    const U32 exportId = ExportRootTable::ExportHandleIndex(exportHandle);
+    *reinterpret_cast<U32*>(reinterpret_cast<uintptr_t>(exportRoot) + TYPEINFO_PTR_SIZE) = exportId;
+    collector.cycleRefWorkStack[exportRoot].push_back(externRoot);
+
+    HandlerSafepointContext context;
+    handlerSafepointContext = &context;
+    collector.SetCycleRefHandlerForTest(&SafepointingCycleRefHandler);
+    manager.SetSuspensionMutatorCount(1);
+
+    std::atomic<bool> resolverReturned{ false };
+    std::thread resolver([&] {
+        ThreadLocal::SetMutator(&resolverMutator);
+        collector.ResolveCycleRef();
+        resolverReturned.store(true, std::memory_order_release);
+        ThreadLocal::SetMutator(nullptr);
+    });
+
+    const bool handlerParked = WaitUntil([&] {
+        return context.entered.load(std::memory_order_acquire) &&
+            !resolverMutator.HasSuspensionRequest(Mutator::SUSPENSION_FOR_SYNC) &&
+            resolverMutator.InSaferegion();
+    });
+
+    std::mutex completionMutex;
+    std::condition_variable completionCondition;
+    bool consumerReturned = false;
+    TracingCollector::RootSet roots;
+    std::thread consumer([&] {
+        collector.EnumAllSurrectedExportRoots(roots);
+        {
+            std::lock_guard<std::mutex> lock(completionMutex);
+            consumerReturned = true;
+        }
+        completionCondition.notify_one();
+    });
+
+    bool consumerReturnedBeforeWake = false;
+    {
+        std::unique_lock<std::mutex> lock(completionMutex);
+        consumerReturnedBeforeWake = completionCondition.wait_for(
+            lock, kHandshakeLimit, [&] { return consumerReturned; });
+    }
+
+    manager.SetSuspensionMutatorCount(0);
+    (void)Futex(manager.GetSyncFutexWord(), FUTEX_WAKE, INT_MAX);
+    resolver.join();
+    consumer.join();
+
+    BaseObject* observedExtern = roots.empty() ? nullptr : roots.back().object();
+    if (!roots.empty()) {
+        roots.pop_back();
+    }
+    BaseObject* observedExport = roots.empty() ? nullptr : roots.back().object();
+    if (!roots.empty()) {
+        roots.pop_back();
+    }
+
+    std::fprintf(stderr,
+                 "CYCLE_REF_HANDLER_SAFEPOINT_TARGET_ASSERT reached parked=%d consumer_before_wake=%d "
+                 "handler_returned=%d resolver_returned=%d roots_drained=%d\n",
+                 handlerParked, consumerReturnedBeforeWake,
+                 context.returned.load(std::memory_order_acquire),
+                 resolverReturned.load(std::memory_order_acquire), roots.empty());
+
+    collector.SetCycleRefHandlerForTest(nullptr);
+    collector.cycleRefWorkStack.clear();
+    handlerSafepointContext = nullptr;
+    Heap::GetHeap().RemoveExportObject(exportHandle);
+
+    // Keep the target ordering assertion first: the deliberate lock-across-
+    // handler cut must fail here, not at an earlier setup assertion.
+    GC_EXPECT_TRUE(consumerReturnedBeforeWake);
+    GC_EXPECT_TRUE(handlerParked);
+    GC_EXPECT_TRUE(context.returned.load(std::memory_order_acquire));
+    GC_EXPECT_TRUE(resolverReturned.load(std::memory_order_acquire));
+    GC_EXPECT_EQ(reinterpret_cast<uintptr_t>(context.exportArg), reinterpret_cast<uintptr_t>(exportRoot));
+    GC_EXPECT_EQ(reinterpret_cast<uintptr_t>(context.externArg), reinterpret_cast<uintptr_t>(externRoot));
+    GC_EXPECT_EQ(reinterpret_cast<uintptr_t>(observedExport), reinterpret_cast<uintptr_t>(exportRoot));
+    GC_EXPECT_EQ(reinterpret_cast<uintptr_t>(observedExtern), reinterpret_cast<uintptr_t>(externRoot));
     GC_EXPECT_TRUE(roots.empty());
 }
 
