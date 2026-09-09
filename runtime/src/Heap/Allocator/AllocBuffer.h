@@ -48,7 +48,11 @@ public:
     }
     inline void ClearRelocationRegion()
     {
-        relocationRegion = RegionInfo::NullRegion();
+        // Unlike the ordinary cache, no external ABI assigns a fixed offset or
+        // sentinel representation to the relocation owner. nullptr is the
+        // unambiguous empty value even when this inline accessor and the owner
+        // consumer are instantiated in different DSOs.
+        relocationRegion = nullptr;
     }
 
     bool SetPreparedRegion(RegionInfo* newPreparedRegion)
