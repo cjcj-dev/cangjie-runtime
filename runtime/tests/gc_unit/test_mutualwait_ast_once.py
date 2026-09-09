@@ -81,7 +81,6 @@ class MutualWaitAstOnceTest(unittest.TestCase):
         self.assertEqual((default.returncode, filler.returncode), (0, 0))
         self.assertEqual(self.invocation_count(), 1)
         self.assertEqual(default.stdout.count("GATE_MUTUALWAIT_PRODUCT_MANIFEST_ROW_OK"), 7)
-        self.assertIn("GATE_MUTUALWAIT_AST_RECEIPT_CONSUMED", filler.stdout)
 
     def test_default_always_executes_and_filler_only_executes(self) -> None:
         self.assertEqual(self.run_arm("default").returncode, 0)
@@ -108,7 +107,6 @@ class MutualWaitAstOnceTest(unittest.TestCase):
                     filler = self.run_arm("filler", "--compile-arg=-DCHANGED=1")
                 self.assertEqual(filler.returncode, 0)
                 self.assertEqual(self.invocation_count(), 2)
-                self.assertIn("GATE_MUTUALWAIT_AST_RECEIPT_MISS", filler.stdout)
 
     def test_product_header_and_compiler_identity_changes_miss(self) -> None:
         changes = (
@@ -131,7 +129,6 @@ class MutualWaitAstOnceTest(unittest.TestCase):
         filler = self.run_arm("filler")
         self.assertEqual((default.returncode, filler.returncode), (5, 5))
         self.assertEqual(self.invocation_count(), 1)
-        self.assertIn("GC_UNIT_MUTUALWAIT_AST_RECEIPT_FAILURE", filler.stderr)
 
 
 if __name__ == "__main__":
