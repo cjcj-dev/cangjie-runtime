@@ -27,9 +27,10 @@ src_root="$repo/runtime/src"
 compile_with_so()
 {
     local libdir=$1
+    local output_root="${GCV2_RUNTIME_OUTPUT_ROOT:-$(realpath -m "$libdir/../..")}"
     taskset -c "$cpuset" clang++ -std=gnu++14 -O2 -pthread -fno-rtti -fno-exceptions \
         -I"$src_root" -I"$src_root/Heap" -I"$repo/runtime/include" \
-        -I"$repo/runtime/output/temp/include" \
+        -I"$output_root/include" \
         -I"$repo/runtime/third_party/third_party_bounds_checking_function/include" \
         "$repo/runtime/tests/stack_watermark_harness.cpp" \
         -L"$libdir" -Wl,-rpath,"$libdir" -lcangjie-runtime -lboundscheck \
@@ -38,10 +39,6 @@ compile_with_so()
 
 if [[ -n "$runtime_lib_dir" && -f "$runtime_lib_dir/libcangjie-runtime.so" ]]; then
     compile_with_so "$runtime_lib_dir"
-elif [[ -f "$repo/runtime/output/temp/lib/x86_64_Release/libcangjie-runtime.so" ]]; then
-    compile_with_so "$repo/runtime/output/temp/lib/x86_64_Release"
-elif [[ -f "$repo/runtime/output/temp/lib/x86_64_Relwithdebinfo/libcangjie-runtime.so" ]]; then
-    compile_with_so "$repo/runtime/output/temp/lib/x86_64_Relwithdebinfo"
 else
     echo "STACKMARK_PROBE no runtime SO; set GCV2_RUNTIME_LIB_DIR" >&2
     cat "$probe_tmp/compile.err" 2>/dev/null || true

@@ -65,9 +65,11 @@ unset CANGJIE_HOME CJC GCV2_RUNTIME_LIB_DIR GCV2_RUNTIME_CONFIG \
   GCV2_RUNTIME_OUTPUT_ROOT MRT_TESTABLE_INTERNALS \
   GC_UNIT_GATE_LANGUAGE_TESTS GC_UNIT_GATE_SKIP GC_UNIT_GATE_STATUS \
   GC_UNIT_OUT GC_UNIT_TALLY_FILE
-mkdir -p "$fixture/runtime/tests/gc_unit" "$fixture/runtime/src" "$fixture/lib" "$fixture/bin" \
+mkdir -p "$fixture/runtime/tests/gc_unit" "$fixture/runtime/src" "$fixture/runtime/build" \
+  "$fixture/lib" "$fixture/bin" \
   "$fixture/sdk/bin"
 cp "$ROOT/runtime/tests/gc_unit/gate_gc_unit.sh" "$fixture/runtime/tests/gc_unit/"
+cp "$ROOT/runtime/build/resolve_runtime_output.sh" "$fixture/runtime/build/"
 printf '#!/usr/bin/env bash\n# test_x.cpp\necho CPP_SUITE >>"${GC_UNIT_GATE_TRACE:?}"\nmkdir -p "$(dirname "${GC_UNIT_TALLY_FILE:?}")"\necho "[========] 1 tests: 1 passed, 0 failed" >"$GC_UNIT_TALLY_FILE"\nexit 0\n' >"$fixture/runtime/tests/gc_unit/run_standalone.sh"
 printf '#!/usr/bin/env bash\necho FINALIZER_TRIGGER >>"${GC_UNIT_GATE_TRACE:?}"\nexit 0\n' >"$fixture/runtime/tests/gc_unit/run_finalizer_trigger.sh"
 printf '#!/usr/bin/env bash\necho PHASE_ENTRY_TRIGGER >>"${GC_UNIT_GATE_TRACE:?}"\nexit 0\n' >"$fixture/runtime/tests/gc_unit/run_phase_entry_trigger.sh"
@@ -83,6 +85,43 @@ touch "$fixture/runtime/tests/gc_unit/known_failures.txt"
 printf 'placeholder\n' >"$fixture/lib/libcangjie-runtime.so"
 printf '#!/usr/bin/env bash\nexit 0\n' >"$fixture/bin/nm"
 chmod +x "$fixture/bin/nm"
+
+# Configuration selection is a gate input, not a directory scan.  Prove the
+# requested manifest is accepted and an explicit path from another
+# configuration is rejected before either product can reach the suite.
+config_id=linux-x86_64-release-default-111111111111
+config_lib="$fixture/runtime/output/temp/$config_id/lib/x86_64_Release"
+mkdir -p "$config_lib" "$fixture/other-lib"
+printf 'runtime-configured\n' >"$config_lib/libcangjie-runtime.so"
+printf 'bounds-configured\n' >"$config_lib/libboundscheck.so"
+printf 'runtime-other\n' >"$fixture/other-lib/libcangjie-runtime.so"
+printf '%s\n' \
+  'SCHEMA_VERSION=1' \
+  "CONFIG_ID=$config_id" \
+  'CONFIG_SIGNATURE_SHA256=1111111111111111111111111111111111111111111111111111111111111111' \
+  "LIB_DIR=$config_lib" >"$fixture/runtime/output/temp/$config_id/runtime-build-config.txt"
+
+PATH="$fixture/bin:$PATH" GC_UNIT_GATE_TRACE="$fixture/config.trace" \
+  GC_UNIT_OUT="$fixture/config-out" GC_UNIT_GATE_CONTRACT_SELFTEST=1 \
+  GC_UNIT_GATE_LANGUAGE_TESTS=defer GCV2_RUNTIME_CONFIG="$config_id" \
+  GC_UNIT_GATE_STATUS="$fixture/config.status" \
+  bash "$fixture/runtime/tests/gc_unit/gate_gc_unit.sh" >"$fixture/config.log" 2>&1
+/usr/bin/grep -qx "RUNTIME_CONFIG_ID=$config_id" "$fixture/config.status"
+/usr/bin/grep -Eq '^RUNTIME_SHA256=[0-9a-f]{64}$' "$fixture/config.status"
+/usr/bin/grep -Eq '^BOUNDSCHECK_SHA256=[0-9a-f]{64}$' "$fixture/config.status"
+/usr/bin/grep -q "GC_UNIT_RUNTIME_IDENTITY config=$config_id" "$fixture/config.log"
+
+set +e
+PATH="$fixture/bin:$PATH" GC_UNIT_GATE_CONTRACT_SELFTEST=1 \
+  GC_UNIT_GATE_LANGUAGE_TESTS=defer GCV2_RUNTIME_CONFIG="$config_id" \
+  GCV2_RUNTIME_LIB_DIR="$fixture/other-lib" GC_UNIT_GATE_STATUS="$fixture/config-mismatch.status" \
+  bash "$fixture/runtime/tests/gc_unit/gate_gc_unit.sh" >"$fixture/config-mismatch.log" 2>&1
+config_mismatch_rc=$?
+set -e
+[[ $config_mismatch_rc -eq 2 ]]
+/usr/bin/grep -qx 'REASON=RUNTIME_CONFIG_MISMATCH' "$fixture/config-mismatch.status"
+/usr/bin/grep -q 'explicit library directory does not match' "$fixture/config-mismatch.log"
+printf 'CONFIG selection: rc=0 mismatch_rc=%s id=%s\n' "$config_mismatch_rc" "$config_id"
 
 set +e
 PATH="$fixture/bin:$PATH" CJC=/nonexistent MRT_TESTABLE_INTERNALS=1 \
