@@ -9,6 +9,7 @@
 #define MRT_SATB_BUFFER_H
 
 #include "Base/Panic.h"
+#include "Heap/Collector/CycleContext.h"
 #include "Common/PagePool.h"
 #include "Common/MarkWorkStack.h"
 #include "Heap/Allocator/RegionInfo.h"
@@ -20,7 +21,12 @@ class SatbBuffer {
 public:
     static constexpr size_t INITIAL_PAGES = 64;    // 64 pages of initial satb buffer
     static constexpr size_t CACHE_LINE_ALIGN = 64; // for most hardware platfrom, the cache line is 64-byte aigned.
+    explicit SatbBuffer(CycleGeneration owner = CycleGeneration::Old) : generation(owner) {}
+    static SatbBuffer& Instance(CycleGeneration generation) noexcept;
+    // Serial executor/diagnostic adapter. Producers use the named owner overload.
     static SatbBuffer& Instance() noexcept;
+    static CycleGeneration ExecutionGeneration() noexcept;
+    static CycleSnapshot ActiveCycles() noexcept;
     class Node {
         friend class SatbBuffer;
 
@@ -375,6 +381,7 @@ private:
         return head;
     }
 
+    const CycleGeneration generation;
     LockedList<Page> arena;        // arena of allocatable area, first area is 64 * 4k = 256k, the rest is 4k
     LockedList<Node> freeNodes;    // free nodes, mutator will acquire nodes from this list to record old value writes
     LockedList<Node> retiredNodes; // has been filled by mutator, ready for scan

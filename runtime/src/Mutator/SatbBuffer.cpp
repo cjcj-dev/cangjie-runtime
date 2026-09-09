@@ -17,27 +17,34 @@
 #include <atomic>
 
 namespace MapleRuntime {
-static ImmortalWrapper<SatbBuffer> g_instance;
+static ImmortalWrapper<SatbBuffer> g_oldSatb { CycleGeneration::Old };
+static ImmortalWrapper<SatbBuffer> g_youngSatb { CycleGeneration::Young };
 
-SatbBuffer& SatbBuffer::Instance() noexcept { return *g_instance; }
+SatbBuffer& SatbBuffer::Instance(CycleGeneration generation) noexcept
+{
+    return generation == CycleGeneration::Young ? *g_youngSatb : *g_oldSatb;
+}
+
+CycleGeneration SatbBuffer::ExecutionGeneration() noexcept
+{
+    return Heap::GetHeap().GetCollectorResources().GetExecutionContext().generation;
+}
+
+CycleSnapshot SatbBuffer::ActiveCycles() noexcept
+{
+    return Heap::GetHeap().GetCollectorResources().GetCycleSnapshot();
+}
+
+SatbBuffer& SatbBuffer::Instance() noexcept { return Instance(ExecutionGeneration()); }
 
 bool SatbBuffer::ShouldEnqueue(const BaseObject* obj)
 {
     if (UNLIKELY(obj == nullptr)) {
         return false;
     }
-    // Young concurrent mark paints the Young face (ClearLiveInfo<Young> at
-    // PrepareYoungGarbageCandidates). SATB used the Old face unconditionally, so a
-    // stale major mark on a still-young object skipped enqueue — the current-face
-    // target then showed up as Stw2CurrentAudit uncovered (REPORT-youngconcstw2).
-    // ZGC heap_store_slow_path marks the *new* address (zBarrier.cpp:253-261 /
-    // zBarrier.inline.hpp:735-739 mark_and_remember). Using the Young face during
-    // GC_REASON_YOUNG is the SATB equivalent of that keep-alive.
-    // gc_unit fixtures never Heap::Init — CollectorProxy::currentCollector is null.
-    // IsGcStarted lives on CollectorResources (always constructed). During a live
-    // young TRACE window it is true; otherwise keep the Old-face legacy.
-    CollectorResources& resources = Heap::GetHeap().GetCollectorResources();
-    if (resources.IsGcStarted() && resources.GetGCStats().reason == GC_REASON_YOUNG) {
+    // zGeneration.hpp:70: filtering consumes the mark owner's face, never
+    // the reason of whichever generation most recently updated global stats.
+    if (generation == CycleGeneration::Young) {
         RegionInfo* region = RegionInfo::TryGetRegionInfoAt(reinterpret_cast<MAddress>(obj));
         if (region != nullptr && region->IsYoungRegion()) {
             return RegionSpace::ShouldEnqueue<Generation::Young>(obj);

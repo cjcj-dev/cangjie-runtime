@@ -71,14 +71,16 @@
 namespace MapleRuntime {
 void WCollector::PostTrace()
 {
-    MRT_PHASE_TIMER("PostTrace");
+    MRT_PHASE_TIMER("PostTrace", REPORT, GetCycleContext().sequence.load(std::memory_order_acquire));
     TransitionToGCPhase(GC_PHASE_POST_TRACE, true);
     RegionSpace& space = reinterpret_cast<RegionSpace&>(theAllocator);
     space.GetRegionManager().HandleTraceRegions();
+    // zGeneration.cpp:1330-1335: non-strong reference cleanup belongs to old.
+    CHECK_DETAIL(!IsYoungCycle(), "old weak-reference cleanup needs the old cycle owner");
     // clear weakRef List, set the referent as null
     WeakRefBuffer::Instance().ClearWeakRefBuffer();
     // clear satb buffer when gc finish tracing.
-    SatbBuffer::Instance().ClearBuffer();
+    SatbBuffer::Instance(GetCycleContext().generation).ClearBuffer();
     ForwardingTable::PublishMarkCoverage(Generation::Old);
     ForwardingTable::ReclaimRetired("old-mark-coverage");
     // reclaim large objects immediately after tracing is done.
@@ -100,7 +102,7 @@ void WCollector::CollectSmallSpace()
     GCStats& stats = GetGCStats();
     RegionSpace& space = reinterpret_cast<RegionSpace&>(theAllocator);
     {
-        MRT_PHASE_TIMER("CollectFromSpaceGarbage");
+        MRT_PHASE_TIMER("CollectFromSpaceGarbage", REPORT, GetCycleContext().sequence.load(std::memory_order_acquire));
         stats.collectedBytes += stats.smallGarbageSize;
         space.CollectFromSpaceGarbage();
     }
