@@ -1,9 +1,10 @@
 #!/usr/bin/env python3
-"""Reject a gated diagnostic whose implementation has only no-op function bodies.
+"""Reject hollow diagnostics and retired phase hooks that reappear in product code.
 
 A documented gate plus an empty implementation produces false-negative measurements.
 Delete that subsystem and its call sites, or keep at least one live sink with a positive
-control. No header marker or historical comment waives this check.
+control. A retired phase hook must stay absent from declarations, definitions, calls,
+and export ledgers. No header marker or historical comment waives either check.
 """
 
 import pathlib
@@ -12,6 +13,12 @@ import sys
 
 ROOT = pathlib.Path(__file__).resolve().parents[1]
 VERIFY = ROOT / "src/Heap/Verify"
+PRODUCT = ROOT / "src"
+
+# These names used to look like verification checkpoints while performing no
+# verification. Reintroducing even a declaration or export recreates that false
+# contract, so scan the whole product tree rather than a remembered file list.
+RETIRED_PHASE_HOOKS = ("ValidateMinorReferences",)
 
 # Definitions only: a leading return type at column 0. The complete signature is
 # captured through its opening brace so empty lambdas inside a live function cannot
@@ -77,7 +84,21 @@ def main() -> int:
         print("  Restore a live sink, or delete the subsystem and all product call sites.")
         return 1
 
-    print(f"DIAG_HOLLOW_GUARD PASS gated_subsystems={checked}")
+    retired_hits = []
+    for src in sorted(path for path in PRODUCT.rglob("*") if path.suffix in {".cpp", ".h", ".def"}):
+        text = src.read_text(errors="replace")
+        for hook in RETIRED_PHASE_HOOKS:
+            for line_no, line in enumerate(text.splitlines(), 1):
+                if hook in line:
+                    retired_hits.append((src.relative_to(ROOT), line_no, hook))
+
+    if retired_hits:
+        print("DIAG_HOLLOW_GUARD FAIL: retired empty phase hook reappeared in product code")
+        for src, line_no, hook in retired_hits:
+            print(f"  {src}:{line_no}: {hook}")
+        return 1
+
+    print(f"DIAG_HOLLOW_GUARD PASS gated_subsystems={checked} retired_phase_hook_hits=0")
     return 0
 
 

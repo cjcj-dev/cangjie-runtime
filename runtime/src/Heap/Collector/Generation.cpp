@@ -353,12 +353,6 @@ void VerifyStackRootPostcondition(uint64_t stackScanEpoch, const char* source)
 }
 } // namespace WCollectorInternal
 
-void WCollector::ValidateMinorReferences(const char* point, const std::vector<BaseObject*>* reachableVec)
-{
-    (void)point;
-    (void)reachableVec;
-}
-
 void WCollector::VerifyRegionSets(const char* point)
 {
     RegionSpace& space = reinterpret_cast<RegionSpace&>(theAllocator);
@@ -565,7 +559,7 @@ void WCollector::ProbeUnmarkedLive(const MinorObjectSet& allocationRoots, const 
 void WCollector::ValidateYoungMarking(const std::vector<BaseObject*>& reachableVec,
                                       const MinorObjectSet& allocationRoots)
 {
-    // Gate mirrors ValidateMinorReferences. Default OFF — product path must not abort.
+    // Default OFF — product path must not abort.
     // Flip kVerifyYoungMarking / kVerifyMarkSource in VerifyOption.h and rebuild.
     // IndependentVsBitmap does NOT require MinorClosure membership, so fullYoungScan
     // is not tautological (gcvheap / HotSpot inventory #22).
@@ -778,10 +772,6 @@ void WCollector::DoYoungGarbageCollection()
         // minortime: ① FlushAllocationRegions
         MRT_PHASE_TIMER("young.flush_alloc");
         FlushAllocationRegions();
-    }
-
-    if (minorTotalRuns != 0) {
-        ValidateMinorReferences("round2-start", nullptr);
     }
 
     RegionSpace& space = reinterpret_cast<RegionSpace&>(theAllocator);
@@ -1325,7 +1315,6 @@ void WCollector::DoYoungGarbageCollection()
         VerifyHeapObjects("post-evacuate");
         std::unordered_set<MAddress> remsetSnap = Heap::GetHeap().GetRememberedSet().Snapshot();
         VerifyRememberedSetInvariant("post-evacuate", remsetSnap);
-        ValidateMinorReferences("post-evacuate", nullptr);
         VLOG(REPORT,
              "[GCV2][verify][post-evac] point=post-evacuate run=%zu "
              "kVerifyPostEvac=1 remsetSnap=%zu",
