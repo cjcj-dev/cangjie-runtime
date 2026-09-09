@@ -29,17 +29,22 @@
 #include "Heap/Collector/CollectorProxy.h"
 #include "Heap/Collector/PromotedRegionDomain.h"
 #include "Heap/Verify/FromPageDetachCheck.h"
+#include "Heap/GcThreadPool.h"
 #include "Heap/WCollector/WCollector.h"
+#include "Heap/WCollector/RemapYoungRoots.h"
 #include "Heap/WCollector/TraceBarrier.h"
 #include "Mutator/Mutator.h"
 #include "Mutator/ThreadLocal.h"
 #include "Mutator/MutatorManager.h"
 #include "ObjectModel/RefField.inline.h"
+#include "ObjectModel/MArray.inline.h"
 #include "TypeInfoManager.h"
 #include "gc_unittest.hpp"
 
 using namespace MapleRuntime;
 using namespace MapleRuntime::GcUnit;
+
+extern "C" int CJ_ScheduleManagerInit();
 
 namespace MapleRuntime {
 
@@ -61,6 +66,11 @@ struct RelocationReceiptTestAccess {
     static void BindCollector(CollectorResources& resources, TracingCollector* collector)
     {
         resources.collectorProxy.currentCollector = collector;
+    }
+
+    static void BindThreadPool(CollectorResources& resources, GCThreadPool* threadPool)
+    {
+        resources.gcThreadPool = threadPool;
     }
 
     static void Exempt(RegionManager& manager, RegionInfo* region)
@@ -428,6 +438,34 @@ private:
     MutatorManager manager;
     Concurrency concurrency;
 };
+
+struct DeliveryReferenceArrayTypes {
+    DeliveryReferenceArrayTypes()
+    {
+        std::memset(componentStorage, 0, sizeof(componentStorage));
+        component = reinterpret_cast<TypeInfo*>(componentStorage);
+        component->SetType(TypeKind::TYPE_KIND_CLASS);
+        component->SetInstanceSize(sizeof(void*));
+
+        std::memset(arrayStorage, 0, sizeof(arrayStorage));
+        array = reinterpret_cast<TypeInfo*>(arrayStorage);
+        array->SetType(TypeKind::TYPE_KIND_RAWARRAY);
+        array->SetComponentTypeInfo(component);
+        TypeInfoManager::GetTypeInfoManager().NoteTypeInfoImage(
+            reinterpret_cast<uintptr_t>(this), sizeof(*this));
+    }
+
+    alignas(TypeInfo) unsigned char componentStorage[sizeof(TypeInfo)];
+    alignas(TypeInfo) unsigned char arrayStorage[sizeof(TypeInfo)];
+    TypeInfo* component = nullptr;
+    TypeInfo* array = nullptr;
+};
+
+DeliveryReferenceArrayTypes& GetDeliveryReferenceArrayTypes()
+{
+    static DeliveryReferenceArrayTypes types;
+    return types;
+}
 
 void PinOwnerGeneration(RegionInfo* region, Generation gen)
 {
@@ -4365,23 +4403,38 @@ GC_TEST(LoadHealDeliveryProduct, CrossGenRangeGateRecordsLegalAndRejectsBeyondTo
     targetRegion->SetYoungRegionFlag(0);
 }
 
-// Product route: ResolveStoreValue -> ColourResolvedRefField -> HealSlot.  The
-// producer assertion is the final address; the consumer assertion is the
-// current store-good colour installed in the actual heap slot.
-GC_TEST(LoadHealDeliveryProduct, RemapYoungRootsResolvesRecoloursAndHealsSlot)
+// Direct semantic matrix for the current remembered face. The reference array
+// is live, but its far field lies beyond TryRecoverInteriorBase's 64-byte
+// recovery window. ZGC still applies the load barrier because the current old
+// page, rather than an object-level recovery guess, is the admission unit.
+GC_TEST(LoadHealDeliveryProduct, CurrentRemsetRemapsLiveRemoteArrayField)
 {
     LoadHealDeliveryRuntime::Ensure();
     GcHeapFixture& fx = ProductFixture();
     RegionInfo* holderRegion = ResetDeliveryUnit(fx, 0);
     RegionInfo* youngRegion = ResetDeliveryUnit(fx, 1);
+    RegionInfo* youngCarrier = ResetDeliveryUnit(fx, 3);
     youngRegion->SetYoungRegionFlag(1);
     youngRegion->SetYoungAge(1);
-    BaseObject* holder = fx.PlaceObject(holderRegion->GetRegionStart());
+
+    DeliveryReferenceArrayTypes& types = GetDeliveryReferenceArrayTypes();
+    auto* holder = reinterpret_cast<MArray*>(holderRegion->GetRegionStart());
+    holder->SetClassInfo(types.array);
+    holder->SetLength(16);
+    auto* youngHolder = reinterpret_cast<MArray*>(youngCarrier->GetRegionStart());
+    youngHolder->SetClassInfo(types.array);
+    youngHolder->SetLength(16);
     BaseObject* youngTarget = fx.PlaceObject(youngRegion->GetRegionStart());
-    holderRegion->SetRegionAllocPtr(reinterpret_cast<MAddress>(holder) + holder->GetSize());
+    holderRegion->SetRegionAllocPtr(reinterpret_cast<MAddress>(holder) + holder->GetMArraySize());
+    youngCarrier->SetRegionAllocPtr(reinterpret_cast<MAddress>(youngHolder) + youngHolder->GetMArraySize());
     youngRegion->SetRegionAllocPtr(reinterpret_cast<MAddress>(youngTarget) + youngTarget->GetSize());
-    auto* field = &HeapSlotAt<>(reinterpret_cast<MAddress>(holder) + TYPEINFO_PTR_SIZE);
-    const MAddress slot = reinterpret_cast<MAddress>(field);
+    auto* nearField = &HeapSlotAt<>(reinterpret_cast<MAddress>(holder) + MArray::GetContentOffset());
+    auto* farField = &HeapSlotAt<>(reinterpret_cast<MAddress>(holder) + MArray::GetContentOffset() + 10 * sizeof(void*));
+    auto* youngField = &HeapSlotAt<>(reinterpret_cast<MAddress>(youngHolder) + MArray::GetContentOffset());
+    const MAddress nearSlot = reinterpret_cast<MAddress>(nearField);
+    const MAddress farSlot = reinterpret_cast<MAddress>(farField);
+    const MAddress youngSlot = reinterpret_cast<MAddress>(youngField);
+    const size_t farOffset = farSlot - reinterpret_cast<MAddress>(holder);
 
     RememberedSet& remembered = DeliveryRememberedSet(fx);
     EmptyBothRememberedFaces(remembered);
@@ -4390,45 +4443,144 @@ GC_TEST(LoadHealDeliveryProduct, RemapYoungRootsResolvesRecoloursAndHealsSlot)
     Barrier barrier(collector, remembered);
     {
         DeliveryNoAllocBufferScope directRemember;
-        field->StoreColoured(zpointer::null);
-        barrier.WriteReference(holder, *field, youngTarget);
+        nearField->StoreColoured(zpointer::null);
+        farField->StoreColoured(zpointer::null);
+        youngField->StoreColoured(zpointer::null);
+        barrier.WriteReference(holder, *nearField, youngTarget);
+        barrier.WriteReference(holder, *farField, youngTarget);
+        barrier.WriteReference(youngHolder, *youngField, youngTarget);
     }
-    GC_EXPECT_TRUE(remembered.Contains(slot));
+    GC_EXPECT_TRUE(remembered.Contains(nearSlot));
+    GC_EXPECT_TRUE(remembered.Contains(farSlot));
+    GC_EXPECT_TRUE(remembered.Contains(youngSlot));
+
+    LiveInfo* holderLive = fx.PlantLiveInfo(holderRegion);
+    RegionBitmap* holderMarks = fx.PlantMarkBitmap<Generation::Old>(holderLive, holderRegion->GetRegionSize());
+    (void)holderMarks->MarkBits(0, holder->GetMArraySize(), holderRegion->GetRegionSize());
+    holderRegion->AddLiveByteCount(holder->GetMArraySize());
+    holderRegion->SetRegionType(RegionInfo::RegionType::FROM_REGION);
+    youngCarrier->SetYoungRegionFlag(1);
 
     LateBackfillState forwarding = PrepareLateBackfill(fx, collector);
-    // Publish a legal current word first.  The relocate-start epoch changes make that same
-    // heap word double-bad without ever publishing a forbidden colour.
-    field->StoreColoured(GcUnit::StoreGoodPointer(forwarding.from));
-    GC_EXPECT_TRUE(collector.is_store_good(*field));
+    nearField->StoreColoured(GcUnit::StoreGoodPointer(forwarding.from));
+    farField->StoreColoured(GcUnit::StoreGoodPointer(forwarding.from));
+    youngField->StoreColoured(GcUnit::StoreGoodPointer(forwarding.from));
     LoadHealDeliveryTestAccess::FlipYoungRelocateStart(collector);
     LoadHealDeliveryTestAccess::FlipOldRelocateStart(collector);
     const uintptr_t doubleBad = LoadHealDeliveryTestAccess::DoubleBadColour(collector);
     GC_EXPECT_TRUE(doubleBad != 0 && (doubleBad & (doubleBad - 1)) == 0);
-    GC_EXPECT_EQ(raw(field->GetFieldValue()) & REMAP_COLOUR_MASK, doubleBad);
-    const uintptr_t before = raw(field->GetFieldValue());
+    GC_EXPECT_EQ(raw(farField->GetFieldValue()) & REMAP_COLOUR_MASK, doubleBad);
+    const uintptr_t youngBefore = raw(youngField->GetFieldValue());
     LoadHealDeliveryTestAccess::RemapYoungRoots(collector);
-    const uintptr_t after = raw(field->GetFieldValue());
-    const BaseObject* healedTarget = to_object(field->GetTargetObject());
-    const bool addressResolved = healedTarget == forwarding.to;
-    const bool colourInstalled = collector.is_store_good(*field);
+
+    const bool nearResolved = to_object(nearField->GetTargetObject()) == forwarding.to;
+    const bool farResolved = to_object(farField->GetTargetObject()) == forwarding.to;
+    const bool nearStoreGood = collector.is_store_good(*nearField);
+    const bool farStoreGood = collector.is_store_good(*farField);
+    const bool youngUnchanged = raw(youngField->GetFieldValue()) == youngBefore;
+    const bool matrixResult = farOffset > 64 && nearResolved && farResolved && nearStoreGood &&
+        farStoreGood && youngUnchanged;
     std::fprintf(stderr,
-                 "DETAIL loadheal_remap before=0x%zx after=0x%zx from=%p expected_to=%p "
-                 "actual_to=%p address_resolved=%u store_good=%u\n",
-                 static_cast<size_t>(before), static_cast<size_t>(after), forwarding.from,
-                 forwarding.to, healedTarget, static_cast<unsigned>(addressResolved),
-                 static_cast<unsigned>(colourInstalled));
+                 "DETAIL current_remset_matrix far_offset=%zu holder_live=%u near_resolved=%u "
+                 "far_resolved=%u near_store_good=%u far_store_good=%u young_unchanged=%u result=%u\n",
+                 farOffset, static_cast<unsigned>(holderRegion->IsMarkedObject(
+                     holderRegion->GetMarkView<Generation::Old>(), holder)),
+                 static_cast<unsigned>(nearResolved), static_cast<unsigned>(farResolved),
+                 static_cast<unsigned>(nearStoreGood), static_cast<unsigned>(farStoreGood),
+                 static_cast<unsigned>(youngUnchanged), static_cast<unsigned>(matrixResult));
     std::fflush(stderr);
 
-    GC_EXPECT_TRUE(addressResolved);
-    GC_EXPECT_TRUE(colourInstalled);
-    GC_EXPECT_NE(before, after);
-    field->StoreColoured(zpointer::null);
+    GC_EXPECT_TRUE(matrixResult);
+    nearField->StoreColoured(zpointer::null);
+    farField->StoreColoured(zpointer::null);
+    youngField->StoreColoured(zpointer::null);
     EmptyBothRememberedFaces(remembered);
     LoadHealDeliveryTestAccess::FlipOldRelocateStart(collector);
     LoadHealDeliveryTestAccess::FlipYoungRelocateStart(collector);
     CleanupLateBackfill(fx, forwarding);
     RelocationReceiptTestAccess::BindCollector(Heap::GetHeap().GetCollectorResources(), nullptr);
+    holderRegion->metadata.liveInfo = nullptr;
+    fx.FreePlanted(holderLive);
+    youngCarrier->SetYoungRegionFlag(0);
     youngRegion->SetYoungRegionFlag(0);
+}
+
+// True runtime entry: this test never calls RemapYoungRoots or Preforward. It
+// enters at DoGarbageCollection, then reads the one-shot receipt sampled by the
+// product remap loop before relocate-start flips the colour masks.
+GC_OTHER_VM_TEST(LoadHealDeliveryProduct, MajorDispatchRemapsLiveRemoteArrayField)
+{
+    GC_EXPECT_EQ(CJ_ScheduleManagerInit(), 0);
+    LoadHealDeliveryRuntime::Ensure();
+    GcHeapFixture& fx = ProductFixture();
+    RegionInfo* holderRegion = ResetDeliveryUnit(fx, 0);
+    RegionInfo* youngRegion = ResetDeliveryUnit(fx, 1);
+    youngRegion->SetYoungRegionFlag(1);
+    youngRegion->SetYoungAge(1);
+
+    DeliveryReferenceArrayTypes& types = GetDeliveryReferenceArrayTypes();
+    auto* holder = reinterpret_cast<MArray*>(holderRegion->GetRegionStart());
+    holder->SetClassInfo(types.array);
+    holder->SetLength(16);
+    BaseObject* youngTarget = fx.PlaceObject(youngRegion->GetRegionStart());
+    holderRegion->SetRegionAllocPtr(reinterpret_cast<MAddress>(holder) + holder->GetMArraySize());
+    youngRegion->SetRegionAllocPtr(reinterpret_cast<MAddress>(youngTarget) + youngTarget->GetSize());
+    auto* farField = &HeapSlotAt<>(reinterpret_cast<MAddress>(holder) + MArray::GetContentOffset() + 10 * sizeof(void*));
+    const MAddress farSlot = reinterpret_cast<MAddress>(farField);
+    const size_t farOffset = farSlot - reinterpret_cast<MAddress>(holder);
+
+    RememberedSet& remembered = DeliveryRememberedSet(fx);
+    EmptyBothRememberedFaces(remembered);
+    CollectorResources& resources = Heap::GetHeap().GetCollectorResources();
+    WCollector collector(Heap::GetHeap().GetAllocator(), resources);
+    RelocationReceiptTestAccess::BindCollector(resources, &collector);
+    LoadHealDeliveryTestAccess::PublishColours(collector);
+    Barrier barrier(collector, remembered);
+    {
+        DeliveryNoAllocBufferScope directRemember;
+        farField->StoreColoured(zpointer::null);
+        barrier.WriteReference(holder, *farField, youngTarget);
+    }
+    GC_EXPECT_TRUE(remembered.Contains(farSlot));
+
+    LiveInfo* holderLive = fx.PlantLiveInfo(holderRegion);
+    RegionBitmap* holderMarks = fx.PlantMarkBitmap<Generation::Old>(holderLive, holderRegion->GetRegionSize());
+    (void)holderMarks->MarkBits(0, holder->GetMArraySize(), holderRegion->GetRegionSize());
+    holderRegion->AddLiveByteCount(holder->GetMArraySize());
+    holderRegion->SetRegionType(RegionInfo::RegionType::FROM_REGION);
+    LateBackfillState forwarding = PrepareLateBackfill(fx, collector);
+    farField->StoreColoured(GcUnit::StoreGoodPointer(forwarding.from));
+    // Model the prior young relocate-start that makes a current old-remset
+    // field load-bad. Major mark-start changes mark colours only; the true
+    // Preforward entry must consume this remap-stale word.
+    LoadHealDeliveryTestAccess::FlipYoungRelocateStart(collector);
+
+    GCThreadPool threadPool("gc-unit-major-remap", 0, GCPoolThread::GC_THREAD_PRIORITY);
+    RelocationReceiptTestAccess::BindThreadPool(resources, &threadPool);
+    ResetRemapYoungRootsTestReceipt(farSlot);
+
+    collector.RunGarbageCollection(1, GC_REASON_USER);
+
+    const RemapYoungRootsTestReceipt receipt = ReadRemapYoungRootsTestReceipt();
+    const bool targetResult = receipt.visits == 1 && receipt.heals == 1 &&
+        receipt.resolvedAddress == reinterpret_cast<uintptr_t>(forwarding.to) &&
+        receipt.storeGoodAfter && receipt.before != receipt.after && farOffset > 64;
+    std::fprintf(stderr,
+                 "TARGET_CURRENT_REMSET_ASSERT_EXECUTED visits=%llu heals=%llu far_offset=%zu "
+                 "before=0x%zx after=0x%zx resolved=0x%zx expected=0x%zx store_good=%u result=%u\n",
+                 static_cast<unsigned long long>(receipt.visits),
+                 static_cast<unsigned long long>(receipt.heals), farOffset,
+                 static_cast<size_t>(receipt.before), static_cast<size_t>(receipt.after),
+                 static_cast<size_t>(receipt.resolvedAddress), reinterpret_cast<size_t>(forwarding.to),
+                 static_cast<unsigned>(receipt.storeGoodAfter), static_cast<unsigned>(targetResult));
+    std::fflush(stderr);
+
+    // Keep the existence diagnostics non-fatal: the single target invariant
+    // below is reached in green, entry-cut, and holder-gate arms alike.
+    GC_EXPECT_TRUE(targetResult);
+
+    RelocationReceiptTestAccess::BindThreadPool(resources, nullptr);
+    threadPool.Exit();
 }
 
 GC_TEST(ForwardingPublicationProduct, GhostHeldRetainsResolvableCarrier)
