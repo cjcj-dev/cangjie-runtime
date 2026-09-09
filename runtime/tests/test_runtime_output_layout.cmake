@@ -14,6 +14,17 @@ set(MRT_GC_UNIT_TESTS OFF)
 set(MRT_TESTABLE_INTERNALS OFF)
 include("${TEST_RUNTIME_SOURCE_DIR}/build/cmake/RuntimeOutputLayout.cmake")
 
+# Run the typed cache-axis arms in child processes so INTERNAL is supplied by
+# an actual -D command-line input.  Setting it here with CACHE INTERNAL would
+# instead model project-generated CMake bookkeeping, which is intentionally
+# excluded from product identity.
+if(TEST_RUNTIME_OUTPUT_LAYOUT_CHILD)
+    cj_runtime_configure_output_layout()
+    message(STATUS
+        "RUNTIME_OUTPUT_LAYOUT_CHILD id=${CANGJIE_RUNTIME_CONFIG_ID} root=${CMAKE_OUTPUT_DIRECTORY}")
+    return()
+endif()
+
 cj_runtime_configure_output_layout()
 set(default_id "${CANGJIE_RUNTIME_CONFIG_ID}")
 set(default_root "${CMAKE_OUTPUT_DIRECTORY}")
@@ -30,47 +41,69 @@ set(gcunit_root "${CMAKE_OUTPUT_DIRECTORY}")
 
 # Regression for cangjie-runtime#42: DISABLE_VERSION_CHECK is a supported
 # CMake cache axis which changes product code.  OFF -> ON -> OFF must select
-# two directories and return to the original identity, independent of any
-# hand-maintained option list.
-set(MRT_GC_UNIT_TESTS OFF)
-set(MRT_TESTABLE_INTERNALS OFF)
-set(DISABLE_VERSION_CHECK OFF CACHE BOOL "" FORCE)
-cj_runtime_configure_output_layout()
-set(disable_version_check_off_id "${CANGJIE_RUNTIME_CONFIG_ID}")
-set(disable_version_check_off_root "${CMAKE_OUTPUT_DIRECTORY}")
+# two directories and return to the original identity, independent of both a
+# hand-maintained option list and the cache type selected by the caller.
+foreach(_cache_type INTERNAL STATIC)
+    string(TOLOWER "${_cache_type}" _cache_type_lower)
+    set(_typed_arm_index 0)
+    foreach(_value OFF ON OFF)
+        math(EXPR _typed_arm_index "${_typed_arm_index}+1")
+        execute_process(
+            COMMAND ${CMAKE_COMMAND}
+                "-DTEST_RUNTIME_SOURCE_DIR=${TEST_RUNTIME_SOURCE_DIR}"
+                -DTEST_RUNTIME_OUTPUT_LAYOUT_CHILD:INTERNAL=ON
+                "-DDISABLE_VERSION_CHECK:${_cache_type}=${_value}"
+                -P "${CMAKE_CURRENT_LIST_FILE}"
+            RESULT_VARIABLE _typed_arm_rc
+            OUTPUT_VARIABLE _typed_arm_out
+            ERROR_VARIABLE _typed_arm_err)
+        if(NOT _typed_arm_rc EQUAL 0)
+            message(FATAL_ERROR
+                "${_cache_type} cache arm ${_typed_arm_index} failed: ${_typed_arm_err}")
+        endif()
+        if(NOT _typed_arm_out MATCHES
+                "RUNTIME_OUTPUT_LAYOUT_CHILD id=([^ ]+) root=([^ \n]+)")
+            message(FATAL_ERROR
+                "${_cache_type} cache arm ${_typed_arm_index} produced no identity: ${_typed_arm_out}")
+        endif()
+        if(_typed_arm_index EQUAL 1)
+            set(${_cache_type_lower}_off_id "${CMAKE_MATCH_1}")
+            set(${_cache_type_lower}_off_root "${CMAKE_MATCH_2}")
+        elseif(_typed_arm_index EQUAL 2)
+            set(${_cache_type_lower}_on_id "${CMAKE_MATCH_1}")
+            set(${_cache_type_lower}_on_root "${CMAKE_MATCH_2}")
+        else()
+            set(${_cache_type_lower}_restored_id "${CMAKE_MATCH_1}")
+            set(${_cache_type_lower}_restored_root "${CMAKE_MATCH_2}")
+        endif()
+    endforeach()
 
-set(DISABLE_VERSION_CHECK ON CACHE BOOL "" FORCE)
-cj_runtime_configure_output_layout()
-set(disable_version_check_on_id "${CANGJIE_RUNTIME_CONFIG_ID}")
-set(disable_version_check_on_root "${CMAKE_OUTPUT_DIRECTORY}")
-
-set(DISABLE_VERSION_CHECK OFF CACHE BOOL "" FORCE)
-cj_runtime_configure_output_layout()
-set(disable_version_check_restored_id "${CANGJIE_RUNTIME_CONFIG_ID}")
-set(disable_version_check_restored_root "${CMAKE_OUTPUT_DIRECTORY}")
-
-if(disable_version_check_off_id STREQUAL disable_version_check_on_id)
-    message(FATAL_ERROR "DISABLE_VERSION_CHECK OFF and ON share an identity")
-endif()
-if(NOT disable_version_check_off_id STREQUAL disable_version_check_restored_id OR
-        NOT disable_version_check_off_root STREQUAL disable_version_check_restored_root)
-    message(FATAL_ERROR "restoring DISABLE_VERSION_CHECK did not restore the output identity")
-endif()
-if(disable_version_check_off_root STREQUAL disable_version_check_on_root)
-    message(FATAL_ERROR "DISABLE_VERSION_CHECK OFF and ON share an output directory")
-endif()
-
-foreach(pair
-        "${disable_version_check_off_root};OFF"
-        "${disable_version_check_on_root};ON")
-    list(GET pair 0 output_root)
-    list(GET pair 1 expected_value)
-    file(READ "${output_root}/runtime-build-config.txt" manifest)
-    if(NOT manifest MATCHES "DISABLE_VERSION_CHECK=${expected_value}[
-]")
+    if(${_cache_type_lower}_off_id STREQUAL ${_cache_type_lower}_on_id)
         message(FATAL_ERROR
-            "DISABLE_VERSION_CHECK ${expected_value} output has the wrong manifest")
+            "${_cache_type} DISABLE_VERSION_CHECK OFF and ON share an identity")
     endif()
+    if(NOT ${_cache_type_lower}_off_id STREQUAL ${_cache_type_lower}_restored_id OR
+            NOT ${_cache_type_lower}_off_root STREQUAL ${_cache_type_lower}_restored_root)
+        message(FATAL_ERROR
+            "restoring ${_cache_type} DISABLE_VERSION_CHECK did not restore output identity")
+    endif()
+    if(${_cache_type_lower}_off_root STREQUAL ${_cache_type_lower}_on_root)
+        message(FATAL_ERROR
+            "${_cache_type} DISABLE_VERSION_CHECK OFF and ON share an output directory")
+    endif()
+
+    foreach(pair
+            "${${_cache_type_lower}_off_root};OFF"
+            "${${_cache_type_lower}_on_root};ON")
+        list(GET pair 0 output_root)
+        list(GET pair 1 expected_value)
+        file(READ "${output_root}/runtime-build-config.txt" manifest)
+        if(NOT manifest MATCHES "DISABLE_VERSION_CHECK=${expected_value}[
+]")
+            message(FATAL_ERROR
+                "${_cache_type} DISABLE_VERSION_CHECK ${expected_value} output has the wrong manifest")
+        endif()
+    endforeach()
 endforeach()
 
 if(default_id STREQUAL testable_id OR default_id STREQUAL gcunit_id OR testable_id STREQUAL gcunit_id)
@@ -95,4 +128,4 @@ foreach(pair
 endforeach()
 
 message(STATUS
-    "RUNTIME_OUTPUT_LAYOUT_OK default=${default_id} testable=${testable_id} gcunit=${gcunit_id} disable_version_check_off=${disable_version_check_off_id} disable_version_check_on=${disable_version_check_on_id} restored=${disable_version_check_restored_id}")
+    "RUNTIME_OUTPUT_LAYOUT_OK default=${default_id} testable=${testable_id} gcunit=${gcunit_id} internal=${internal_off_id}->${internal_on_id}->${internal_restored_id} static=${static_off_id}->${static_on_id}->${static_restored_id}")
