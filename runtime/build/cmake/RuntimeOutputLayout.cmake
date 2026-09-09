@@ -7,7 +7,30 @@
 # use visible, while the digest distinguishes less common compiler/feature
 # combinations without relying on a shared "latest" directory.
 function(cj_runtime_configure_output_layout)
-    set(_signature "")
+    # Every user-provided CMake cache input is part of the build identity.  A
+    # hand-maintained option list is unsafe here: a newly introduced -D axis
+    # can change the produced libraries while silently retaining an old output
+    # directory.  Keep only this module's derived cache entries out of the
+    # digest so repeated configuration is stable.
+    set(_signature "SCHEMA_VERSION=2\n")
+    get_cmake_property(_cache_variables CACHE_VARIABLES)
+    list(SORT _cache_variables)
+    foreach(_variable IN LISTS _cache_variables)
+        if(_variable MATCHES "^CANGJIE_RUNTIME_CONFIG_" OR
+                _variable STREQUAL "OUTPUT_TEMP_PATH")
+            continue()
+        endif()
+        get_property(_cache_type CACHE "${_variable}" PROPERTY TYPE)
+        if(_cache_type STREQUAL "INTERNAL" OR _cache_type STREQUAL "STATIC")
+            continue()
+        endif()
+        get_property(_cache_value CACHE "${_variable}" PROPERTY VALUE)
+        string(APPEND _signature
+            "CACHE:${_variable}:${_cache_type}=${_cache_value}\n")
+    endforeach()
+
+    # A few effective settings are ordinary variables after config.cmake has
+    # normalized them.  Include those values as well as the cache inputs above.
     set(_identity_variables
         CMAKE_SYSTEM_NAME
         CMAKE_SYSTEM_PROCESSOR
@@ -78,7 +101,7 @@ function(cj_runtime_configure_output_layout)
 
     file(MAKE_DIRECTORY "${_output_root}")
     file(WRITE "${_output_root}/runtime-build-config.txt"
-        "SCHEMA_VERSION=1\n"
+        "SCHEMA_VERSION=2\n"
         "CONFIG_ID=${_config_id}\n"
         "CONFIG_SIGNATURE_SHA256=${_signature_sha256}\n"
         "LIB_DIR=${_library_dir}\n"
@@ -87,7 +110,8 @@ function(cj_runtime_configure_output_layout)
         "SYSTEM_PROCESSOR=${CMAKE_SYSTEM_PROCESSOR}\n"
         "MRT_GC_UNIT_TESTS=${MRT_GC_UNIT_TESTS}\n"
         "MRT_TESTABLE_INTERNALS=${MRT_TESTABLE_INTERNALS}\n"
-        "GLOBAL_EXPORT_FLAG=${GLOBAL_EXPORT_FLAG}\n")
+        "GLOBAL_EXPORT_FLAG=${GLOBAL_EXPORT_FLAG}\n"
+        "DISABLE_VERSION_CHECK=${DISABLE_VERSION_CHECK}\n")
 
     set(CANGJIE_RUNTIME_CONFIG_ID "${_config_id}" CACHE INTERNAL
         "Derived identity for the runtime output configuration" FORCE)

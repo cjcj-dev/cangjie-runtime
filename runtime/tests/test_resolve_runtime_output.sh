@@ -39,6 +39,10 @@ bash "$resolver" "$fixture" linux-x86_64-release-gcunit-222222222222 \
     >"$fixture/mismatch.log" 2>&1
 mismatch_rc=$?
 set -e
-[[ $mismatch_rc -eq 3 ]]
+if [[ $mismatch_rc -ne 3 ]]; then
+    printf 'RUNTIME_OUTPUT_RESOLVER_NEGATIVE_FAIL expected_rc=3 actual_rc=%s\n' \
+        "$mismatch_rc" >&2
+    exit 1
+fi
 /usr/bin/grep -q "manifest says 'wrong'" "$fixture/mismatch.log"
 printf 'RUNTIME_OUTPUT_RESOLVER_NEGATIVE_OK rc=%s\n' "$mismatch_rc"
