@@ -1465,13 +1465,13 @@ GC_TEST(YoungConc, PublishYoungAllocBlackRetiresFollowReceipt)
 {
     GcHeapFixture fx;
     Mutator mutator;
-    mutator.satbNode = new SatbBuffer::Node();
+    mutator.satbNodes[CycleSlot(CycleGeneration::Young)] = new SatbBuffer::Node();
     mutator.PublishYoungAllocBlack(fx.obj0);
-    mutator.FlushSatbBuffer();
+    mutator.FlushOwnedSatbNodes();
 
     BaseObject* object = nullptr;
     bool follow = false;
-    SatbBuffer::Instance().GetRetiredEntries([&](BaseObject* entry, bool shouldFollow) {
+    SatbBuffer::Instance(CycleGeneration::Young).GetRetiredEntries([&](BaseObject* entry, bool shouldFollow) {
         object = entry;
         follow = shouldFollow;
     });
@@ -1537,13 +1537,13 @@ GC_TEST(YoungConc, LegacyTerminationMissesUnfullSatbNode)
     Mutator mutator;
     auto* node = new SatbBuffer::Node();
     GC_EXPECT_TRUE(node->Push(fx.obj0, nullptr));
-    mutator.satbNode = node;
-    GC_EXPECT_TRUE(mutator.PeekSatbNode() == node);
+    mutator.satbNodes[CycleSlot(CycleGeneration::Young)] = node;
+    GC_EXPECT_TRUE(mutator.PeekSatbNode(CycleGeneration::Young) == node);
     GC_EXPECT_FALSE(node->IsEmpty());
     GC_EXPECT_FALSE(node->IsFull());
 
     std::vector<BaseObject*> markWork;
-    SatbBuffer::Instance().GetRetiredObjects(markWork);
+    SatbBuffer::Instance(CycleGeneration::Young).GetRetiredObjects(markWork);
     const bool legacyWouldTerminate = markWork.empty();
     const size_t offset = fx.region0->GetAddressOffset(reinterpret_cast<MAddress>(fx.obj0));
     const auto view = fx.region0->GetMarkView<Generation::Young>();
@@ -1554,9 +1554,9 @@ GC_TEST(YoungConc, LegacyTerminationMissesUnfullSatbNode)
     // Strict mark-end cut (ZGC zMark.cpp:954-971, :998-1006): mutators are
     // frozen before their partial nodes are handed over, then the same retired
     // queue is sampled. The discovered grey forces mark-end continue.
-    mutator.FlushSatbBuffer();
-    GC_EXPECT_TRUE(mutator.PeekSatbNode() == nullptr);
-    SatbBuffer::Instance().GetRetiredObjects(markWork);
+    mutator.FlushOwnedSatbNodes();
+    GC_EXPECT_TRUE(mutator.PeekSatbNode(CycleGeneration::Young) == nullptr);
+    SatbBuffer::Instance(CycleGeneration::Young).GetRetiredObjects(markWork);
     const bool strictWouldTerminate = markWork.empty();
 
     GC_EXPECT_FALSE(strictWouldTerminate);
