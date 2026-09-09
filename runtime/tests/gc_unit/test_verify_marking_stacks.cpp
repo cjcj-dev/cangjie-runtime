@@ -54,12 +54,36 @@ GC_OTHER_VM_TEST(VerifyMarkingStacks, MarkingFaceRecordsPositiveProducerAndZeroB
     NoteProducer(MarkingGeneration::MAJOR, MarkingContainer::TASK, 7);
     VerifyEmpty(MarkingGeneration::MAJOR, MarkingBoundary::TASK_EXIT, MarkingContainer::TASK, 0, 0, 3);
     const Snapshot after = ReadSnapshot();
+    const size_t taskProducer = after.ProducerMax(MarkingGeneration::MAJOR, MarkingContainer::TASK);
+    const uint64_t taskExitDelta =
+        after.BoundaryCount(MarkingGeneration::MAJOR, MarkingBoundary::TASK_EXIT, MarkingContainer::TASK) -
+        before.BoundaryCount(MarkingGeneration::MAJOR, MarkingBoundary::TASK_EXIT, MarkingContainer::TASK);
 
     std::fprintf(stderr, "DETAIL marking_stack_unit producer=%zu task_exit=%llu\n",
-                 after.majorTaskProducerMax,
-                 static_cast<unsigned long long>(after.majorTaskExit - before.majorTaskExit));
-    GC_EXPECT_EQ(after.majorTaskProducerMax, 7u);
-    GC_EXPECT_EQ(after.majorTaskExit - before.majorTaskExit, 1u);
+                 taskProducer, static_cast<unsigned long long>(taskExitDelta));
+    GC_EXPECT_EQ(taskProducer, 7u);
+    GC_EXPECT_EQ(taskExitDelta, 1u);
+}
+
+GC_OTHER_VM_TEST(VerifyMarkingStacks, ReceiptsPreserveContainerCoordinate)
+{
+    GC_EXPECT_EQ(setenv("MRT_GCV2_VERIFY_MARKING", "1", 1), 0);
+    const Snapshot before = ReadSnapshot();
+    VerifyEmpty(MarkingGeneration::MAJOR, MarkingBoundary::END, MarkingContainer::OWNER, 0, 0);
+    VerifyEmpty(MarkingGeneration::MAJOR, MarkingBoundary::END, MarkingContainer::FOREIGN, 0, 0);
+    const Snapshot after = ReadSnapshot();
+
+    const auto delta = [&before, &after](MarkingContainer container) {
+        return after.BoundaryCount(MarkingGeneration::MAJOR, MarkingBoundary::END, container) -
+               before.BoundaryCount(MarkingGeneration::MAJOR, MarkingBoundary::END, container);
+    };
+    std::fprintf(stderr, "DETAIL marking_stack_coordinates owner=%llu foreign=%llu pool=%llu\n",
+                 static_cast<unsigned long long>(delta(MarkingContainer::OWNER)),
+                 static_cast<unsigned long long>(delta(MarkingContainer::FOREIGN)),
+                 static_cast<unsigned long long>(delta(MarkingContainer::POOL)));
+    GC_EXPECT_EQ(delta(MarkingContainer::OWNER), 1u);
+    GC_EXPECT_EQ(delta(MarkingContainer::FOREIGN), 1u);
+    GC_EXPECT_EQ(delta(MarkingContainer::POOL), 0u);
 }
 
 GC_OTHER_VM_TEST(VerifyMarkingStacks, RejectsMajorTaskDebtAtTaskExit)
