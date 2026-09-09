@@ -4638,8 +4638,15 @@ GC_TEST(LoadHealDeliveryProduct, CurrentRemsetRemapsLiveRemoteArrayField)
     holderRegion->SetRegionAllocPtr(reinterpret_cast<MAddress>(holder) + holder->GetMArraySize());
     youngCarrier->SetRegionAllocPtr(reinterpret_cast<MAddress>(youngHolder) + youngHolder->GetMArraySize());
     youngRegion->SetRegionAllocPtr(reinterpret_cast<MAddress>(youngTarget) + youngTarget->GetSize());
+    // Snapshot after the holder allocation so it is not covered by the
+    // allocate-black mark-start gap. Only its object-head live bit applies.
+    holderRegion->ClearLiveInfo(holderRegion->GetMarkView<Generation::Old>());
     auto* nearField = &HeapSlotAt<>(reinterpret_cast<MAddress>(holder) + MArray::GetContentOffset());
-    auto* farField = &HeapSlotAt<>(reinterpret_cast<MAddress>(holder) + MArray::GetContentOffset() + 10 * sizeof(void*));
+    for (size_t i = 0; i < 16; ++i) {
+        HeapSlotAt<>(reinterpret_cast<MAddress>(holder) + MArray::GetContentOffset() + i * sizeof(void*))
+            .StoreColoured(zpointer::null);
+    }
+    auto* farField = &HeapSlotAt<>(reinterpret_cast<MAddress>(holder) + MArray::GetContentOffset() + 15 * sizeof(void*));
     auto* youngField = &HeapSlotAt<>(reinterpret_cast<MAddress>(youngHolder) + MArray::GetContentOffset());
     const MAddress nearSlot = reinterpret_cast<MAddress>(nearField);
     const MAddress farSlot = reinterpret_cast<MAddress>(farField);
@@ -4688,13 +4695,15 @@ GC_TEST(LoadHealDeliveryProduct, CurrentRemsetRemapsLiveRemoteArrayField)
     const bool nearStoreGood = collector.is_store_good(*nearField);
     const bool farStoreGood = collector.is_store_good(*farField);
     const bool youngUnchanged = raw(youngField->GetFieldValue()) == youngBefore;
-    const bool matrixResult = farOffset > 64 && nearResolved && farResolved && nearStoreGood &&
-        farStoreGood && youngUnchanged;
+    const bool holderNonAllocating = !holderRegion->HasMarkStartAllocGap();
+    const bool matrixResult = farOffset > 64 && holderNonAllocating && nearResolved && farResolved &&
+        nearStoreGood && farStoreGood && youngUnchanged;
     std::fprintf(stderr,
-                 "DETAIL current_remset_matrix far_offset=%zu holder_live=%u near_resolved=%u "
+                 "DETAIL current_remset_matrix far_offset=%zu holder_live=%u holder_nonalloc=%u near_resolved=%u "
                  "far_resolved=%u near_store_good=%u far_store_good=%u young_unchanged=%u result=%u\n",
                  farOffset, static_cast<unsigned>(holderRegion->IsMarkedObject(
                      holderRegion->GetMarkView<Generation::Old>(), holder)),
+                 static_cast<unsigned>(holderNonAllocating),
                  static_cast<unsigned>(nearResolved), static_cast<unsigned>(farResolved),
                  static_cast<unsigned>(nearStoreGood), static_cast<unsigned>(farStoreGood),
                  static_cast<unsigned>(youngUnchanged), static_cast<unsigned>(matrixResult));
@@ -4735,7 +4744,12 @@ GC_OTHER_VM_TEST(LoadHealDeliveryProduct, MajorDispatchRemapsLiveRemoteArrayFiel
     BaseObject* youngTarget = fx.PlaceObject(youngRegion->GetRegionStart());
     holderRegion->SetRegionAllocPtr(reinterpret_cast<MAddress>(holder) + holder->GetMArraySize());
     youngRegion->SetRegionAllocPtr(reinterpret_cast<MAddress>(youngTarget) + youngTarget->GetSize());
-    auto* farField = &HeapSlotAt<>(reinterpret_cast<MAddress>(holder) + MArray::GetContentOffset() + 10 * sizeof(void*));
+    holderRegion->ClearLiveInfo(holderRegion->GetMarkView<Generation::Old>());
+    for (size_t i = 0; i < 16; ++i) {
+        HeapSlotAt<>(reinterpret_cast<MAddress>(holder) + MArray::GetContentOffset() + i * sizeof(void*))
+            .StoreColoured(zpointer::null);
+    }
+    auto* farField = &HeapSlotAt<>(reinterpret_cast<MAddress>(holder) + MArray::GetContentOffset() + 15 * sizeof(void*));
     const MAddress farSlot = reinterpret_cast<MAddress>(farField);
     const size_t farOffset = farSlot - reinterpret_cast<MAddress>(holder);
 
@@ -4772,14 +4786,16 @@ GC_OTHER_VM_TEST(LoadHealDeliveryProduct, MajorDispatchRemapsLiveRemoteArrayFiel
     collector.RunGarbageCollection(1, GC_REASON_USER);
 
     const RemapYoungRootsTestReceipt receipt = ReadRemapYoungRootsTestReceipt();
+    const bool holderNonAllocating = !holderRegion->HasMarkStartAllocGap();
     const bool targetResult = receipt.visits == 1 && receipt.heals == 1 &&
         receipt.resolvedAddress == reinterpret_cast<uintptr_t>(forwarding.to) &&
-        receipt.storeGoodAfter && receipt.before != receipt.after && farOffset > 64;
+        receipt.storeGoodAfter && receipt.before != receipt.after && farOffset > 64 && holderNonAllocating;
     std::fprintf(stderr,
-                 "TARGET_CURRENT_REMSET_ASSERT_EXECUTED visits=%llu heals=%llu far_offset=%zu "
+                 "TARGET_CURRENT_REMSET_ASSERT_EXECUTED visits=%llu heals=%llu far_offset=%zu holder_nonalloc=%u "
                  "before=0x%zx after=0x%zx resolved=0x%zx expected=0x%zx store_good=%u result=%u\n",
                  static_cast<unsigned long long>(receipt.visits),
                  static_cast<unsigned long long>(receipt.heals), farOffset,
+                 static_cast<unsigned>(holderNonAllocating),
                  static_cast<size_t>(receipt.before), static_cast<size_t>(receipt.after),
                  static_cast<size_t>(receipt.resolvedAddress), reinterpret_cast<size_t>(forwarding.to),
                  static_cast<unsigned>(receipt.storeGoodAfter), static_cast<unsigned>(targetResult));
