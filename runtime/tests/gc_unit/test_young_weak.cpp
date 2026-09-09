@@ -456,6 +456,8 @@ void RunMajorWeakGraph(MajorRootFamily family, bool runtimeEntry = false, size_t
                      static_cast<unsigned long long>(delta(MarkingBoundary::END, MarkingContainer::OWNER)),
                      static_cast<unsigned long long>(delta(MarkingBoundary::END, MarkingContainer::FOREIGN)),
                      static_cast<unsigned long long>(delta(MarkingBoundary::END, MarkingContainer::POOL)));
+        CHECK_DETAIL(family != MajorRootFamily::EXPORT || foreignProducer != 0,
+                     "major foreign producer receipt missing after DoGarbageCollection entry");
         CHECK_DETAIL(delta(MarkingBoundary::END, MarkingContainer::OWNER) != 0 &&
                          delta(MarkingBoundary::END, MarkingContainer::POOL) != 0 &&
                          (family != MajorRootFamily::EXPORT ||
