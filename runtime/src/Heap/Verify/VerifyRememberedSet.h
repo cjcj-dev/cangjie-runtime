@@ -48,6 +48,17 @@ void VerifyRememberedBeforeForwarding(const std::vector<RememberedSet::InPlaceSl
 void VerifyRememberedAfterForwarding(const std::vector<RememberedSet::InPlaceSlot>& slots,
                                      MAddress fromBase, MAddress toBase, size_t size,
                                      const ForwardingTable::Publication& publication);
+#if defined(MRT_GC_UNIT_TESTS)
+struct RememberedNetworkTestReceipt {
+    size_t beforeColorFlip{ 0 };
+    size_t afterScanComplete{ 0 };
+    size_t beforeForwardingSlots{ 0 };
+    size_t afterForwardingSlots{ 0 };
+};
+void ResetRememberedNetworkTestReceipt();
+RememberedNetworkTestReceipt ReadRememberedNetworkTestReceipt();
+void NoteRememberedAfterScanCompleteForTest();
+#endif
 } // namespace MapleRuntime
 
 #endif // MRT_VERIFY_REMEMBERED_SET_H
