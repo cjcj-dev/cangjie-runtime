@@ -330,11 +330,6 @@ void WCollector::ResolveCycleRef()
             // instead of delivering this one again.
             ++externIndex;
             cycleRefProgress[id] = externIndex;
-            if (GetGCPhase() == GC_PHASE_PREFORWARD) {
-                cycleLock.unlock();
-                CJ_MRT_RolveCycleRef();
-                return;
-            }
         }
 
         auto& heap = Heap::GetHeap();
