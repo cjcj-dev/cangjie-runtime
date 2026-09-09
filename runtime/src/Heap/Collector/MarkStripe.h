@@ -125,6 +125,8 @@ public:
 
     size_t Count() const { return stripes.size(); }
     bool IsEmpty() const;
+    size_t Population() const;
+    size_t FirstNonEmptyStripe() const;
     size_t StripeForAddress(uintptr_t address) const;
     size_t StripeForWorker(size_t workerCount, size_t workerId) const;
     size_t Next(size_t stripeId) const { return (stripeId + 1) & mask; }
@@ -144,6 +146,7 @@ public:
     MarkThreadLocalStacks& operator=(const MarkThreadLocalStacks&) = delete;
 
     bool IsEmpty() const;
+    size_t Population() const;
     void Push(MarkStripeSet& stripes, size_t stripeId, const MarkStackEntry& entry, bool publish);
     bool Pop(MarkingSMR& smr, size_t workerId, MarkStripeSet& stripes, size_t stripeId,
              MarkStackEntry& entry);
