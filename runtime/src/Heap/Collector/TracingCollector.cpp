@@ -761,6 +761,14 @@ bool TracingCollector::AddConcurrentTracingWork(RootSet& rs)
 
 void TracingCollector::FindUselessExternObjects()
 {
+    // DFSTraceExportObject publishes value-only roots after export tracing has
+    // joined. Resolve and rekey that carrier before its first mark-bit read.
+    // The producer lock remains the owner boundary; no field obligation is
+    // introduced for these root referents.
+    {
+        std::lock_guard<std::mutex> lock(externMtx);
+        CurrentizeValueRootMap(discoveredExternObjects);
+    }
     auto it = discoveredExternObjects.begin();
     while (it != discoveredExternObjects.end()) {
         auto& ls = it->second;
