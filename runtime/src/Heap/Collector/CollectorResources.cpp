@@ -289,13 +289,17 @@ void CollectorResources::SetGcStarted(bool val)
         if (GetCycleSnapshot().AnyActive()) {
             return;
         }
-        CycleContext& context = GetExecutionContext();
+        // The retained API predates per-generation callers. Its historical
+        // non-young reason/phase state belongs to the old slot.
+        CycleContext& context = GetCycleContext(CycleGeneration::Old);
         context.reason = gcStats.reason;
         context.taskIndex = GCTask::ASYNC_TASK_INDEX;
         context.request = nullptr;
         context.stats.reason = gcStats.reason;
         const uint64_t sequence = GcLog::BeginCycle(CycleSlot(context.generation));
         context.sequence.store(sequence, std::memory_order_release);
+        completedControlCycles[CycleSlot(context.generation)].store(0, std::memory_order_release);
+        executionContext.store(&context, std::memory_order_release);
         controlCycleToken = { context.generation, sequence };
         const uint32_t slot = CycleSnapshot::ActiveBit(context.generation) |
             (static_cast<uint32_t>(GC_PHASE_IDLE) << (CycleSlot(context.generation) * 8));
@@ -319,6 +323,7 @@ void CollectorResources::SetGcStarted(bool val)
         return;
     }
     GcLog::CompleteCycle(token.sequence, CycleSlot(token.generation));
+    completedControlCycles[CycleSlot(token.generation)].store(token.sequence, std::memory_order_release);
     cycleState.fetch_and(~CycleSnapshot::SlotMask(token.generation), std::memory_order_acq_rel);
     context.sequence.store(0, std::memory_order_release);
 }

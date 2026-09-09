@@ -83,6 +83,11 @@ public:
     bool EndCycle(const CycleToken& token);
     bool PublishCyclePhase(const CycleToken& token, GCPhase phase);
     bool PublishInactiveCyclePhase(CycleGeneration generation, GCPhase phase);
+    bool IsCompletedControlCycle(CycleGeneration generation, uint64_t sequence) const
+    {
+        return sequence != 0 &&
+            completedControlCycles[CycleSlot(generation)].load(std::memory_order_acquire) == sequence;
+    }
     GCStats& GetExecutionStats()
     {
         return GetCycleSnapshot().AnyActive() ? GetExecutionContext().stats : gcStats;
@@ -206,6 +211,7 @@ private:
     std::mutex cycleLifecycleLock;
     std::atomic<bool> controlActivity { false };
     CycleToken controlCycleToken { CycleGeneration::Old, 0 };
+    std::atomic<uint64_t> completedControlCycles[2] { 0, 0 };
 
     // a switch to disable gc for hotupdate.
     std::atomic<bool> isGCActive = { true };
