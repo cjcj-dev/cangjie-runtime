@@ -223,12 +223,19 @@ public:
     void PrepareCycleRef()
     {
         std::lock_guard<std::mutex> lg(cycleWorkStackMtx);
-        cycleRefWorkStack.insert(discoveredExternObjects.begin(), discoveredExternObjects.end());
+        CurrentizeValueRootMap(cycleRefWorkStack);
+        CurrentizeValueRootMap(discoveredExternObjects);
+        for (auto& entry : discoveredExternObjects) {
+            std::list<BaseObject*>& destination = cycleRefWorkStack[entry.first];
+            destination.splice(destination.end(), entry.second);
+        }
         discoveredExternObjects.clear();
     }
     void MergeResurrectExportObjects()
     {
         std::lock_guard<std::mutex> lg(resurrectExportMtx);
+        CurrentizeValueRootSet(resurrectedExportObjectes);
+        CurrentizeValueRootSet(resurrectedExportObjectesForwardPhase);
         resurrectedExportObjectes.insert(resurrectedExportObjectesForwardPhase.begin(),
             resurrectedExportObjectesForwardPhase.end());
         resurrectedExportObjectesForwardPhase.clear();
