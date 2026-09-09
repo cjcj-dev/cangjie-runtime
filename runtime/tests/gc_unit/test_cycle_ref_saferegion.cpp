@@ -12,6 +12,7 @@
 #include <mutex>
 #include <sstream>
 #include <thread>
+#include <vector>
 
 #include "gc_heap_fixture.hpp"
 
@@ -241,9 +242,9 @@ GC_TEST(CycleRefSaferegion, HandlerSafepointKeepsCycleRootsConsumable)
     std::mutex completionMutex;
     std::condition_variable completionCondition;
     bool consumerReturned = false;
-    TracingCollector::RootSet roots;
+    std::vector<BaseObject*> roots;
     std::thread consumer([&] {
-        collector.EnumAllSurrectedExportRoots(roots);
+        collector.VisitMinorValueRoots([&](BaseObject* object) { roots.push_back(object); });
         {
             std::lock_guard<std::mutex> lock(completionMutex);
             consumerReturned = true;
