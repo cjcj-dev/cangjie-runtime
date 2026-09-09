@@ -3370,10 +3370,10 @@ bool RegionManager::RouteOrCompactRegionImpl(RegionInfo* region)
         toRegion1->Alloc(fromBytes);
         FillRouteReserve(toRegion1Addr, fromBytes);
         // routedest: the widest-exposure arm. toRegion1Addr is a bump pointer taken from the
-        // middle of the calling thread's own live alloc-buffer region, which keeps serving
-        // that thread's allocations afterwards, and which is young — so before this hold the
-        // minor collection set took it while honouring nothing (PrepareYoungGarbageCandidates
-        // deliberately ignores notRelocatableThisCycle).
+        // middle of the thread's relocation-only cache. It must stay held while the route is
+        // readable; ordinary allocation never consumes this owner. Its generation follows the
+        // source routing policy above, independently of tlRegion, while the hold excludes the
+        // destination from collection-set reclamation.
         toRegion1->SetRouteDestHold(1);
         region->SetRouteInfo(toRegion1Addr, fromBytes);
         DLOG(FORWARD, "route region %p@[%#zx+%zu, %#zx) => %p@[%#zx, %#zx~%#zx, %#zx)",
