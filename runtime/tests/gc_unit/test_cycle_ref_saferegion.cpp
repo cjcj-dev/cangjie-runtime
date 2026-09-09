@@ -24,7 +24,9 @@
 // Access only changes C++ visibility in this test translation unit.  Both
 // methods remain out-of-line symbols supplied by libcangjie-runtime.so.
 #define private public
+#define protected public
 #include "Heap/WCollector/WCollector.h"
+#undef protected
 #undef private
 
 using namespace MapleRuntime;
@@ -128,6 +130,40 @@ GC_TEST(CycleRefSaferegion, ResolverParksBeforeCycleRootLock)
     GC_EXPECT_TRUE(resolverReturned.load(std::memory_order_acquire));
     GC_EXPECT_EQ(roots.size(), 0u);
     GC_EXPECT_TRUE(resolverMutator.InSaferegion());
+}
+
+GC_TEST(CycleRefSaferegion, CycleRootConsumerPublishesWorkStackRoots)
+{
+    MutatorManager manager;
+    CycleRefTestRuntime runtime(manager);
+    WCollector collector(Heap::GetHeap().GetAllocator(), Heap::GetHeap().GetCollectorResources());
+
+    auto* exportRoot = reinterpret_cast<BaseObject*>(0x1000);
+    auto* externRoot = reinterpret_cast<BaseObject*>(0x2000);
+    collector.cycleRefWorkStack[exportRoot].push_back(externRoot);
+
+    TracingCollector::RootSet roots;
+    collector.EnumAllSurrectedExportRoots(roots);
+    BaseObject* observedExtern = roots.empty() ? nullptr : roots.back().object();
+    roots.pop_back();
+    const bool ownerPresentAfterExtern = !roots.empty();
+    BaseObject* observedExport = ownerPresentAfterExtern ? roots.back().object() : nullptr;
+    if (ownerPresentAfterExtern) {
+        roots.pop_back();
+    }
+    collector.cycleRefWorkStack.clear();
+
+    std::fprintf(stderr,
+                 "CYCLE_REF_CONSUMER_TARGET_ASSERT reached owner_after_extern=%d drained=%d\n",
+                 ownerPresentAfterExtern, roots.empty());
+
+    // The product consumer emits the externally referenced object after its
+    // export owner.  These values are outputs of the real consumer, not values
+    // manually fed to an assertion helper.
+    GC_EXPECT_TRUE(ownerPresentAfterExtern);
+    GC_EXPECT_EQ(reinterpret_cast<uintptr_t>(observedExtern), reinterpret_cast<uintptr_t>(externRoot));
+    GC_EXPECT_EQ(reinterpret_cast<uintptr_t>(observedExport), reinterpret_cast<uintptr_t>(exportRoot));
+    GC_EXPECT_TRUE(roots.empty());
 }
 
 } // namespace
