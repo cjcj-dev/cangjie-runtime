@@ -14,6 +14,7 @@ CXX="${CXX:-clang++}"
 # deleting a test/call must shrink neither the manifest nor this guard.
 MUTUALWAIT_MANIFEST="$SRC/product_call_manifest_mutualwait.tsv"
 MUTUALWAIT_ANALYZER="$SRC/check_mutualwait_manifest.py"
+MUTUALWAIT_RUNNER="$SRC/run_mutualwait_manifest.py"
 MUTUALWAIT_SOURCE="$SRC/clear_entries_product_unit.cpp"
 EXPECTED_MUTUALWAIT_TESTS=(
   ForwardingPublicationProduct.KeptActiveReceiptRemainsRequiredAfterTableRetires
@@ -26,7 +27,7 @@ EXPECTED_MUTUALWAIT_TESTS=(
 )
 
 validate_mutualwait_manifest() {
-  local test_name compile_arg
+  local test_name compile_arg arm
   local analyzer_args=(
     --source "$MUTUALWAIT_SOURCE"
     --manifest "$MUTUALWAIT_MANIFEST"
@@ -42,7 +43,15 @@ validate_mutualwait_manifest() {
       "${PUBLICATION_TESTABLE_FLAGS[@]}" "${INC_FLAGS[@]}"; do
     analyzer_args+=("--compile-arg=$compile_arg")
   done
-  python3 "$MUTUALWAIT_ANALYZER" "${analyzer_args[@]}" || return 11
+  arm=default
+  if [[ "${CJRT_HEAP_FILLER:-}" == "0" ]]; then
+    arm=filler
+  fi
+  python3 "$MUTUALWAIT_RUNNER" \
+    --arm "$arm" \
+    --receipt "$OUT/.mutualwait_ast_receipt.json" \
+    --analyzer "$MUTUALWAIT_ANALYZER" \
+    -- "${analyzer_args[@]}" || return 11
 }
 
 mkdir -p "$OUT"
@@ -146,8 +155,8 @@ if [[ -d "$ROOT/runtime/output/temp/include" ]]; then
   INC_FLAGS+=(-I"$ROOT/runtime/output/temp/include")
 fi
 
+validate_mutualwait_manifest
 if [[ "${GC_UNIT_MUTUALWAIT_MANIFEST_ONLY:-0}" == "1" ]]; then
-  validate_mutualwait_manifest
   exit $?
 fi
 
@@ -506,8 +515,6 @@ for test_name in "${EXPECTED_LOADHEAL_TESTS[@]}"; do
   /usr/bin/grep -q "^${test_name}"$'\t' "$LOADHEAL_MANIFEST"
 done
 echo "GATE_LOADHEAL_PRODUCT_MANIFEST_OK rows=$loadheal_rows source=clear_entries_product_unit.cpp"
-
-validate_mutualwait_manifest
 
 # Pointer-colour census tests consume independently replaceable functions from
 # the product SO.  Full nm excludes even local/weak test copies; nm -u proves
