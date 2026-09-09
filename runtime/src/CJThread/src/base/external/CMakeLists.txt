@@ -11,4 +11,4 @@ add_library(external OBJECT ${SRC_LIST})
 
 target_include_directories(external PUBLIC include)
 
-file(COPY include/external.h DESTINATION ${PROJECT_SOURCE_DIR}/../../output/temp/include/)
+file(COPY include/external.h DESTINATION ${RUNTIME_OUTPUT_ROOT}/include/)
