@@ -155,7 +155,7 @@ public:
 
 private:
     CollectorResources& resources;
-    CycleContext& cycle;
+    CycleToken cycle;
 };
 
 } // namespace

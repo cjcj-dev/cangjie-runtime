@@ -225,6 +225,54 @@ bool RunCycleContextProductEntry()
     return collector.SawOwnedYoungCycle() && !after.AnyActive() && GcLog::CurrentSeq() == 0;
 }
 
+bool RunStaleCycleTokenCannotMutateReplacement()
+{
+    if (CJ_ScheduleManagerInit() != 0) {
+        return false;
+    }
+    MutatorManager mutatorManager;
+    YoungForwardTestRuntime runtime(mutatorManager);
+    GcHeapFixture fx;
+    CollectorResources& resources = Heap::GetHeap().GetCollectorResources();
+
+    const CycleToken first = resources.BeginCycle(101, GC_REASON_YOUNG);
+    if (!resources.EndCycle(first)) {
+        return false;
+    }
+    const CycleToken replacement = resources.BeginCycle(102, GC_REASON_YOUNG);
+    const bool stalePublished = resources.PublishCyclePhase(first, GCPhase::GC_PHASE_TRACE);
+    const CycleSnapshot afterStalePublish = resources.GetCycleSnapshot();
+    const bool replacementEnded = resources.EndCycle(replacement);
+
+    return first.sequence != replacement.sequence && !stalePublished && replacementEnded &&
+        afterStalePublish.Active(CycleGeneration::Young) &&
+        afterStalePublish.Phase(CycleGeneration::Young) == GCPhase::GC_PHASE_IDLE;
+}
+
+bool RunStaleCycleTokenCannotEndReplacement()
+{
+    if (CJ_ScheduleManagerInit() != 0) {
+        return false;
+    }
+    MutatorManager mutatorManager;
+    YoungForwardTestRuntime runtime(mutatorManager);
+    GcHeapFixture fx;
+    CollectorResources& resources = Heap::GetHeap().GetCollectorResources();
+
+    const CycleToken first = resources.BeginCycle(201, GC_REASON_YOUNG);
+    if (!resources.EndCycle(first)) {
+        return false;
+    }
+    const CycleToken replacement = resources.BeginCycle(202, GC_REASON_YOUNG);
+    const bool staleEnded = resources.EndCycle(first);
+    const CycleSnapshot afterStaleEnd = resources.GetCycleSnapshot();
+    const bool replacementEnded = resources.EndCycle(replacement);
+
+    return first.sequence != replacement.sequence && !staleEnded && replacementEnded &&
+        afterStaleEnd.Active(CycleGeneration::Young) &&
+        afterStaleEnd.Phase(CycleGeneration::Young) == GCPhase::GC_PHASE_IDLE;
+}
+
 bool RunYoungRuntimeProductEntry()
 {
     // gc_unit does not start the language scheduler.  The product phase
@@ -446,6 +494,16 @@ GC_TEST(GCThreadPool, ProductYoungRuntimeEntryClosesRelocationRequestGeneration)
 GC_TEST(GCThreadPool, ProductCollectionPublishesAndClearsOwnedYoungCycle)
 {
     ExpectIsolatedScenarioPasses<RunCycleContextProductEntry>();
+}
+
+GC_TEST(GCThreadPool, StaleCycleTokenCannotPublishIntoReplacementCycle)
+{
+    ExpectIsolatedScenarioPasses<RunStaleCycleTokenCannotMutateReplacement>();
+}
+
+GC_TEST(GCThreadPool, StaleCycleTokenCannotEndReplacementCycle)
+{
+    ExpectIsolatedScenarioPasses<RunStaleCycleTokenCannotEndReplacement>();
 }
 #endif
 

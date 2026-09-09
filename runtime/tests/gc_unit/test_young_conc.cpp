@@ -201,7 +201,7 @@ public:
 
 private:
     CollectorResources& resources;
-    CycleContext& cycle;
+    CycleToken cycle;
 };
 
 // Bitmap/ledger mechanism model. Product-path attribution is covered by the
@@ -1286,7 +1286,7 @@ GC_OTHER_VM_TEST(YoungConc, BulkWritePublishesSatbWithoutYoungRegions)
 
     CollectorResources& resources = Heap::GetHeap().GetCollectorResources();
     RelocationReceiptTestAccess::InitCollectorProxy(resources);
-    CycleContext& testCycle = resources.BeginCycle(GCTask::ASYNC_TASK_INDEX, GC_REASON_USER);
+    const CycleToken testCycle = resources.BeginCycle(GCTask::ASYNC_TASK_INDEX, GC_REASON_USER);
     resources.PublishCyclePhase(testCycle, GCPhase::GC_PHASE_TRACE);
 
     Mutator mutator;
