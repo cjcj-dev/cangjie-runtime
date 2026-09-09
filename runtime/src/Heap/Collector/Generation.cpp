@@ -1219,6 +1219,9 @@ void WCollector::DoYoungGarbageCollection()
     // Publications that lost the scan race must instead be present on the new
     // current face before their forwarding generation can retire.
     Heap::GetHeap().GetRememberedSet().CompleteScanForMinor(rememberedSlots);
+#if defined(MRT_GC_UNIT_TESTS)
+    NoteRememberedAfterScanCompleteForTest();
+#endif
     // No independent full-root closure is available after deleting the empty
     // explainer. nullptr means "not measured"; an empty set must mean a closure
     // actually ran and found no holders.
