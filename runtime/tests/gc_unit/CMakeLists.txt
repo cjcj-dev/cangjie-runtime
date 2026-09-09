@@ -145,6 +145,34 @@ elseif (DEFINED GCV2_RUNTIME_LIB_DIR)
 endif()
 add_test(NAME cj_gc_allocation_stall_unit COMMAND cj_gc_allocation_stall_unit)
 
+# Isolated product-path arm for the cycle-root/saferegion lock order.  The test
+# calls both WCollector::ResolveCycleRef and its real root consumer from the
+# MRT_GC_UNIT_TESTS product SO; it does not compile either implementation into
+# the test executable.
+add_executable(cj_gc_cycle_saferegion_unit
+    gc_unit_main.cpp
+    test_cycle_ref_saferegion.cpp
+)
+target_include_directories(cj_gc_cycle_saferegion_unit PRIVATE
+    ${CMAKE_CURRENT_SOURCE_DIR}
+    ${CMAKE_SOURCE_DIR}/src
+    ${CMAKE_SOURCE_DIR}/src/Heap
+    ${CMAKE_SOURCE_DIR}/include
+)
+target_compile_features(cj_gc_cycle_saferegion_unit PRIVATE cxx_std_17)
+target_compile_options(cj_gc_cycle_saferegion_unit PRIVATE -fno-rtti -fexceptions -std=gnu++17)
+target_compile_definitions(cj_gc_cycle_saferegion_unit PRIVATE MRT_GC_UNIT_TESTS=1)
+if (TARGET cangjie-runtime)
+    target_link_libraries(cj_gc_cycle_saferegion_unit PRIVATE cangjie-runtime)
+elseif (DEFINED GCV2_RUNTIME_LIB_DIR)
+    target_link_directories(cj_gc_cycle_saferegion_unit PRIVATE ${GCV2_RUNTIME_LIB_DIR})
+    target_link_libraries(cj_gc_cycle_saferegion_unit PRIVATE cangjie-runtime boundscheck)
+    set_target_properties(cj_gc_cycle_saferegion_unit PROPERTIES
+        BUILD_RPATH "${GCV2_RUNTIME_LIB_DIR}"
+        INSTALL_RPATH "${GCV2_RUNTIME_LIB_DIR}")
+endif()
+add_test(NAME cj_gc_cycle_saferegion_unit COMMAND cj_gc_cycle_saferegion_unit)
+
 # Product-link proof for ForwardingTable::ClearEntries.  Keep this in a fresh
 # process because ForwardingTable::Initialize is deliberately one-shot and the
 # main suite already owns that process-global table.
