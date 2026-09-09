@@ -47,8 +47,16 @@ GCPhase Collector::GetGCPhase(CycleGeneration generation) const
 void Collector::SetGCPhase(GCPhase phase)
 {
     auto& resources = Heap::GetHeap().GetCollectorResources();
-    CHECK_DETAIL(resources.PublishCyclePhase(resources.GetExecutionToken(), phase),
-                 "collector phase publication lost its cycle owner");
+    if (resources.GetCycleSnapshot().AnyActive()) {
+        CHECK_DETAIL(resources.PublishCyclePhase(resources.GetExecutionToken(), phase),
+                     "collector phase publication lost its cycle owner");
+    } else {
+        // Retain the inactive control phase used by diagnostics and unit
+        // fixtures. It cannot publish into an active replacement cycle.
+        const CycleGeneration generation = resources.GetExecutionContext().generation;
+        CHECK_DETAIL(resources.PublishInactiveCyclePhase(generation, phase),
+                     "inactive phase publication raced with cycle start");
+    }
 }
 
 namespace {
