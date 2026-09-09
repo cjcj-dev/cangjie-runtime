@@ -8,6 +8,43 @@ PYTHONDONTWRITEBYTECODE=1 python3 "$ROOT/runtime/tests/gc_unit/test_mutualwait_a
 echo "MUTUALWAIT_AST_ONCE_CONTRACT_OK"
 fixture="$(mktemp -d /tmp/gc-unit-gate-contract.XXXXXX)"
 trap 'rm -rf "$fixture"' EXIT
+
+# Exercise the real run_standalone.sh call site, not only the receipt helper.
+# Manifest-only mode stops immediately after that call site, keeping this
+# contract independent from the large C++ link while still detecting a deleted
+# or bypassed invocation in the production runner.
+mw_fixture="$fixture/mutualwait"
+mkdir -p "$mw_fixture/runtime/tests/gc_unit" "$mw_fixture/runtime/src/Heap" \
+  "$mw_fixture/runtime/include" "$mw_fixture/lib" "$mw_fixture/bin"
+cp "$ROOT/runtime/tests/gc_unit/run_standalone.sh" \
+  "$ROOT/runtime/tests/gc_unit/run_mutualwait_manifest.py" \
+  "$mw_fixture/runtime/tests/gc_unit/"
+printf 'int mutualwait_source;\n' >"$mw_fixture/runtime/tests/gc_unit/clear_entries_product_unit.cpp"
+printf 'manifest\n' >"$mw_fixture/runtime/tests/gc_unit/product_call_manifest_mutualwait.tsv"
+printf 'int product_anchor;\n' >"$mw_fixture/runtime/src/Heap/anchor.cpp"
+printf '#!/usr/bin/env bash\nexit 0\n' >"$mw_fixture/bin/nm"
+printf '#!/usr/bin/env bash\necho mutualwait-fixture-compiler-v1\n' >"$mw_fixture/bin/cxx"
+printf '#!/usr/bin/env python3\nimport os\nfrom pathlib import Path\np=Path(os.environ["MUTUALWAIT_FIXTURE_COUNT"])\nwith p.open("a") as f: f.write("run\\n")\nfor i in range(7): print(f"GATE_MUTUALWAIT_PRODUCT_MANIFEST_ROW_OK row={i}")\n' \
+  >"$mw_fixture/runtime/tests/gc_unit/check_mutualwait_manifest.py"
+chmod +x "$mw_fixture/bin/nm" "$mw_fixture/bin/cxx" \
+  "$mw_fixture/runtime/tests/gc_unit/check_mutualwait_manifest.py"
+touch "$mw_fixture/lib/libcangjie-runtime.so"
+mw_count="$mw_fixture/analyzer.count"
+mw_out="$mw_fixture/out"
+PATH="$mw_fixture/bin:$PATH" CXX="$mw_fixture/bin/cxx" \
+  MUTUALWAIT_FIXTURE_COUNT="$mw_count" GCV2_RUNTIME_LIB_DIR="$mw_fixture/lib" \
+  GC_UNIT_OUT="$mw_out" GC_UNIT_MUTUALWAIT_MANIFEST_ONLY=1 \
+  bash "$mw_fixture/runtime/tests/gc_unit/run_standalone.sh" >"$mw_fixture/default.log" 2>&1
+PATH="$mw_fixture/bin:$PATH" CXX="$mw_fixture/bin/cxx" CJRT_HEAP_FILLER=0 \
+  MUTUALWAIT_FIXTURE_COUNT="$mw_count" GCV2_RUNTIME_LIB_DIR="$mw_fixture/lib" \
+  GC_UNIT_OUT="$mw_out" GC_UNIT_MUTUALWAIT_MANIFEST_ONLY=1 \
+  bash "$mw_fixture/runtime/tests/gc_unit/run_standalone.sh" >"$mw_fixture/filler.log" 2>&1
+[[ "$(wc -l <"$mw_count")" -eq 1 ]]
+[[ "$(/usr/bin/grep -c GATE_MUTUALWAIT_PRODUCT_MANIFEST_ROW_OK "$mw_fixture/default.log")" -eq 7 ]]
+/usr/bin/grep -q GATE_MUTUALWAIT_AST_EXECUTE "$mw_fixture/default.log"
+/usr/bin/grep -q GATE_MUTUALWAIT_AST_RECEIPT_CONSUMED "$mw_fixture/filler.log"
+echo "MUTUALWAIT_RUN_STANDALONE_PAIR_OK analyzer_invocations=1 rows=7"
+
 # The parent gate supplies its own compiler, runtime, status, mode, and skip
 # controls.  Each fixture arm below owns all of those inputs; inheriting even
 # one can turn a negative arm into a false PASS.
