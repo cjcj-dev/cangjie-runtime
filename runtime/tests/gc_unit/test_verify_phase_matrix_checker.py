@@ -151,6 +151,10 @@ def main() -> int:
         ("string_token", f'false && "{OBJECTS_CALL}"'),
         ("if_zero_token", f"\n#if 0\n{OBJECTS_CALL}\n#endif\nfalse"),
         ("if_zero_unsigned_token", f"\n#if 0U\n{OBJECTS_CALL}\n#endif\nfalse"),
+        (
+            "if_zero_expression_token",
+            f"\n#if (1 - 1)\n{OBJECTS_CALL}\n#endif\nfalse",
+        ),
     )
     for arm, replacement in replacements:
         with tempfile.TemporaryDirectory(prefix=f"verify_phase_{arm}_") as temporary:
@@ -181,6 +185,24 @@ def main() -> int:
         print_arm("spliced_call", rc, faces, output, ok)
         failures += not ok
 
+    # Calls spelled through a local object-like macro are the same preprocessed
+    # product call and must not be rejected as a textual identity change.
+    with tempfile.TemporaryDirectory(prefix="verify_phase_macro_call_") as temporary:
+        verify_root = copy_verify(repo, temporary)
+        source = verify_root / "VerifyHeap.cpp"
+        text = source.read_text(encoding="utf-8")
+        changed = replace_objects_call(
+            text, "VERIFY_PHASE_ENTER(VerifyFace::Objects, point)"
+        )
+        source.write_text(
+            "#define VERIFY_PHASE_ENTER VerifyPhaseEnter\n" + changed,
+            encoding="utf-8",
+        )
+        rc, faces, output = run_checker(checker, verify_root)
+        ok = rc == 0 and set(faces.values()) == {"GREEN"}
+        print_arm("macro_call", rc, faces, output, ok)
+        failures += not ok
+
     for arm, source_name, occurrence in TARGETS:
         face = arm.split("_", 1)[0]
         with tempfile.TemporaryDirectory(prefix=f"verify_phase_{arm}_") as temporary:
@@ -209,7 +231,7 @@ def main() -> int:
         print_arm("unexpected", rc, faces, output, ok)
         failures += not ok
 
-    print(f"VERIFY_PHASE_FAULT_ARMS total=16 failures={failures}")
+    print(f"VERIFY_PHASE_FAULT_ARMS total=18 failures={failures}")
     return 1 if failures else 0
 
 
