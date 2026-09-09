@@ -6,6 +6,8 @@
 
 #include "Heap/Collector/MarkStripe.h"
 
+#include <limits>
+
 #include <algorithm>
 #include <new>
 
@@ -229,6 +231,25 @@ bool MarkStripeSet::IsEmpty() const
     return true;
 }
 
+size_t MarkStripeSet::Population() const
+{
+    size_t population = 0;
+    for (const auto& stripe : stripes) {
+        population += stripe->Population();
+    }
+    return population;
+}
+
+size_t MarkStripeSet::FirstNonEmptyStripe() const
+{
+    for (size_t i = 0; i < stripes.size(); ++i) {
+        if (!stripes[i]->IsEmpty()) {
+            return i;
+        }
+    }
+    return std::numeric_limits<size_t>::max();
+}
+
 size_t MarkStripeSet::StripeForAddress(uintptr_t address) const
 {
     return (address >> MARK_STRIPE_SHIFT) & mask;
@@ -266,6 +287,20 @@ bool MarkThreadLocalStacks::IsEmpty() const
         }
     }
     return true;
+}
+
+size_t MarkThreadLocalStacks::Population() const
+{
+    size_t population = 0;
+    for (MarkStripeStack* stack : stacks) {
+        if (stack != nullptr) {
+            // ZGC treats an installed (even empty) local chunk as non-empty;
+            // normally Pop destroys it immediately, so one here is a leaked
+            // ownership receipt rather than an object count.
+            population += stack->IsEmpty() ? 1 : stack->Size();
+        }
+    }
+    return population;
 }
 
 void MarkThreadLocalStacks::Push(MarkStripeSet& stripes, size_t stripeId, const MarkStackEntry& entry,
