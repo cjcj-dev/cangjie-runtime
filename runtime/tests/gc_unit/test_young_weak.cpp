@@ -82,6 +82,21 @@ private:
     Concurrency concurrency;
 };
 
+class YoungCycleScope final {
+public:
+    explicit YoungCycleScope(CollectorResources& resources)
+        : resources(resources), cycle(resources.BeginCycle(GCTask::ASYNC_TASK_INDEX, GC_REASON_YOUNG))
+    {
+        resources.PublishCyclePhase(cycle, GCPhase::GC_PHASE_CLEAR_SATB_BUFFER);
+    }
+
+    ~YoungCycleScope() { resources.EndCycle(cycle); }
+
+private:
+    CollectorResources& resources;
+    CycleContext& cycle;
+};
+
 struct WeakGraph {
     explicit WeakGraph(GcHeapFixture& fixture, RegionInfo* region, RegionInfo* targetRegion = nullptr)
         : fx(fixture), owner(region), targetOwner(targetRegion == nullptr ? region : targetRegion)
@@ -155,6 +170,7 @@ void RunYoungWeakVariant(const char* variant, size_t helpers,
     WeakGraph graph(fx, fx.region1);
 
     CollectorResources& resources = Heap::GetHeap().GetCollectorResources();
+    YoungCycleScope cycle(resources);
     WCollector collector(Heap::GetHeap().GetAllocator(), resources);
     RelocationReceiptTestAccess::BindCollector(resources, &collector);
     collector.SetGCPhase(GCPhase::GC_PHASE_CLEAR_SATB_BUFFER);
@@ -167,10 +183,6 @@ void RunYoungWeakVariant(const char* variant, size_t helpers,
     Heap::GetHeap().GetRememberedSet().Initialize(fx.heapStart, 2 * RegionInfo::UNIT_SIZE);
     const U64 rootHandle = Heap::GetHeap().RegisterExportRoot(graph.strongRoot);
 
-    const bool startedBefore = resources.IsGcStarted();
-    const GCReason reasonBefore = resources.GetGCStats().reason;
-    resources.SetGcStarted(true);
-    resources.GetGCStats().reason = GC_REASON_YOUNG;
     ResetYoungWeakClosureTestReceipt();
 
     RelocationReceiptTestAccess::RunYoungCollection(collector);
@@ -187,8 +199,6 @@ void RunYoungWeakVariant(const char* variant, size_t helpers,
                  static_cast<int>(weakMarked), static_cast<int>(referentMarked), static_cast<int>(childMarked));
 
     Heap::GetHeap().RemoveExportObject(rootHandle);
-    resources.SetGcStarted(startedBefore);
-    resources.GetGCStats().reason = reasonBefore;
     RelocationReceiptTestAccess::BindThreadPool(resources, nullptr);
     threadPool.Exit();
     RelocationReceiptTestAccess::BindCollector(resources, nullptr);
@@ -251,10 +261,7 @@ void RunYoungWeakRemsetFlow()
     space.GetRegionManager().AddRawPointerObject(graph.child);
     const U64 rootHandle = Heap::GetHeap().RegisterExportRoot(graph.strongRoot);
 
-    const bool startedBefore = resources.IsGcStarted();
-    const GCReason reasonBefore = resources.GetGCStats().reason;
-    resources.SetGcStarted(true);
-    resources.GetGCStats().reason = GC_REASON_YOUNG;
+    YoungCycleScope cycle(resources);
     RelocationReceiptTestAccess::RunYoungCollection(collector);
     const bool referentMarked = graph.IsMarked(graph.referent);
     std::fprintf(stderr,
@@ -263,8 +270,6 @@ void RunYoungWeakRemsetFlow()
                  static_cast<int>(referentMarked));
 
     Heap::GetHeap().RemoveExportObject(rootHandle);
-    resources.SetGcStarted(startedBefore);
-    resources.GetGCStats().reason = reasonBefore;
     RelocationReceiptTestAccess::BindThreadPool(resources, nullptr);
     threadPool.Exit();
     RelocationReceiptTestAccess::BindCollector(resources, nullptr);
