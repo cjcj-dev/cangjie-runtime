@@ -2,7 +2,10 @@
 """Structural gate for the five verification faces, keyed by C++ symbols."""
 
 from pathlib import Path
+import os
 import re
+import shlex
+import subprocess
 import sys
 
 
@@ -83,47 +86,59 @@ def mask_comments_and_literals(text: str) -> str:
     return "".join(chars)
 
 
-def mask_if_zero(text: str) -> str:
-    """Blank code in literal #if 0 branches; unknown macro branches stay visible."""
-    chars = list(text)
-    active = True
-    stack = []
-    offset = 0
-    for line in text.splitlines(keepends=True):
-        directive = re.match(r"\s*#\s*(if|elif|else|endif)\b(.*)", line)
-        line_active = active
-        if directive:
-            kind, expression = directive.groups()
-            if kind == "if":
-                constant = re.fullmatch(r"\s*\(?\s*([01])\s*\)?\s*", expression)
-                known = constant is not None
-                condition = constant is None or constant.group(1) == "1"
-                stack.append((active, known, condition))
-                active = active and condition
-            elif kind == "else" and stack:
-                parent, known, condition = stack[-1]
-                active = parent and (not condition if known else True)
-            elif kind == "elif" and stack:
-                parent, known, condition = stack[-1]
-                if known and condition:
-                    active = False
-                else:
-                    constant = re.fullmatch(r"\s*\(?\s*([01])\s*\)?\s*", expression)
-                    active = parent and (constant is None or constant.group(1) == "1")
-            elif kind == "endif" and stack:
-                parent, _, _ = stack.pop()
-                active = parent
-            line_active = False
-        if not line_active:
-            for position in range(offset, offset + len(line)):
-                if chars[position] != "\n":
-                    chars[position] = " "
-        offset += len(line)
-    return "".join(chars)
+def without_include_directives(text: str) -> str:
+    """Blank include directives without expanding unrelated header contents.
+
+    The compiler still performs translation-phase line splicing, conditional
+    evaluation, and macro expansion on the translation unit itself.  Includes
+    are omitted because this gate owns call sites in these source files, not
+    declarations or generated tokens in their transitive headers.
+    """
+    lines = text.splitlines(keepends=True)
+    result = []
+    index = 0
+    while index < len(lines):
+        group = [lines[index]]
+        index += 1
+        while group[-1].endswith("\\\n") or group[-1].endswith("\\\r\n"):
+            if index >= len(lines):
+                break
+            group.append(lines[index])
+            index += 1
+        logical = "".join(group).replace("\\\r\n", "").replace("\\\n", "")
+        if re.match(r"\s*#\s*include\b", logical):
+            result.extend(
+                "".join("\n" if char == "\n" else " " for char in line)
+                for line in group
+            )
+        else:
+            result.extend(group)
+    return "".join(result)
+
+
+def preprocess_source(text: str) -> str:
+    """Use the real C++ preprocessor for translation-phase semantics."""
+    compiler = shlex.split(os.environ.get("CXX", "clang++"))
+    if not compiler:
+        raise RuntimeError("CXX selects no compiler")
+    process = subprocess.run(
+        compiler + ["-E", "-P", "-x", "c++", "-"],
+        input=without_include_directives(text),
+        text=True,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        check=False,
+    )
+    if process.returncode != 0:
+        diagnostic = process.stderr.strip().replace("\n", " | ")
+        raise RuntimeError(
+            f"C++ preprocessing failed rc={process.returncode}: {diagnostic}"
+        )
+    return process.stdout
 
 
 def cpp_tokens(text: str):
-    visible = mask_if_zero(mask_comments_and_literals(text))
+    visible = mask_comments_and_literals(preprocess_source(text))
     return [(match.group(0), match.start()) for match in TOKEN_PATTERN.finditer(visible)]
 
 
@@ -217,7 +232,11 @@ def main() -> int:
     if len(sys.argv) != 2:
         print("usage: check_verify_phase_matrix.py <runtime/src/Heap/Verify>")
         return 2
-    result, targets, unexpected = check(Path(sys.argv[1]))
+    try:
+        result, targets, unexpected = check(Path(sys.argv[1]))
+    except (OSError, RuntimeError) as error:
+        print(f"VERIFY_PHASE_PREPROCESS_FAIL {error}", file=sys.stderr)
+        return 2
     print(
         "VERIFY_PHASE_MATRIX "
         + " ".join(

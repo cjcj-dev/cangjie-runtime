@@ -143,6 +143,7 @@ def main() -> int:
         ("comment_token", f"false /* {OBJECTS_CALL} */"),
         ("string_token", f'false && "{OBJECTS_CALL}"'),
         ("if_zero_token", f"\n#if 0\n{OBJECTS_CALL}\n#endif\nfalse"),
+        ("if_zero_unsigned_token", f"\n#if 0U\n{OBJECTS_CALL}\n#endif\nfalse"),
     )
     for arm, replacement in replacements:
         with tempfile.TemporaryDirectory(prefix=f"verify_phase_{arm}_") as temporary:
@@ -157,6 +158,25 @@ def main() -> int:
             ok = rc == 1 and red == {"objects"}
             print_arm(arm, rc, faces, output, ok)
             failures += not ok
+
+    # Backslash-newline is removed before preprocessing tokens are formed, so
+    # this is the same product call and must retain the stable identity.
+    with tempfile.TemporaryDirectory(prefix="verify_phase_spliced_call_") as temporary:
+        verify_root = copy_verify(repo, temporary)
+        source = verify_root / "VerifyHeap.cpp"
+        text = source.read_text(encoding="utf-8")
+        source.write_text(
+            text.replace(
+                OBJECTS_CALL,
+                "VerifyPhaseEnter\\\n(VerifyFace::Objects, point)",
+                1,
+            ),
+            encoding="utf-8",
+        )
+        rc, faces, output = run_checker(checker, verify_root)
+        ok = rc == 0 and set(faces.values()) == {"GREEN"}
+        print_arm("spliced_call", rc, faces, output, ok)
+        failures += not ok
 
     for arm, source_name, anchor in TARGETS:
         face = arm.split("_", 1)[0]
@@ -186,7 +206,7 @@ def main() -> int:
         print_arm("unexpected", rc, faces, output, ok)
         failures += not ok
 
-    print(f"VERIFY_PHASE_FAULT_ARMS total=14 failures={failures}")
+    print(f"VERIFY_PHASE_FAULT_ARMS total=16 failures={failures}")
     return 1 if failures else 0
 
 
