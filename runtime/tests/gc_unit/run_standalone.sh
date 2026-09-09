@@ -246,6 +246,7 @@ $CXX -std=gnu++17 -O0 -g -Wall -Wextra -pthread -fno-rtti \
     "$SRC/test_segmented_array_init.cpp" \
     "$SRC/test_verify_roots.cpp" \
     "$SRC/test_verify_phase.cpp" \
+    "$SRC/test_verify_marking_stacks.cpp" \
     "$SRC/test_mem_map.cpp" \
     "$SRC/test_colour_census.cpp" \
     "$SRC/test_payload_clamp.cpp" \
