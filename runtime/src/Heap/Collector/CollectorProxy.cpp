@@ -37,7 +37,6 @@ void CollectorProxy::RunGarbageCollection(uint64_t gcIndex, GCReason reason)
             currentCollector = &wCollector;
             break;
     }
-    currentCollector->SetGcStarted(true);
     currentCollector->RunGarbageCollection(gcIndex, reason);
 }
 } // namespace MapleRuntime

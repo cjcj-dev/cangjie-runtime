@@ -792,7 +792,7 @@ void TracingCollector::FindUselessExternObjects()
 void TracingCollector::DoTracing(WorkStack& workStack, WorkStack& foreignRootsSet)
 {
     ScopedEntryTrace trace("CJRT_GC_TRACE");
-    MRT_PHASE_TIMER("DoTracing");
+    MRT_PHASE_TIMER("DoTracing", REPORT, GetCycleContext().sequence.load(std::memory_order_acquire));
     VLOG(REPORT, "roots size: %zu", workStack.size());
 
     GCThreadPool* threadPool = GetThreadPool();
@@ -813,17 +813,17 @@ void TracingCollector::DoTracing(WorkStack& workStack, WorkStack& foreignRootsSe
     VLOG(REPORT, "Concurrent mark with %u threads, workStack: %zu", (maxWorkers + 1), workStack.size());
 
     {
-        MRT_PHASE_TIMER("Concurrent marking");
+        MRT_PHASE_TIMER("Concurrent marking", REPORT, GetCycleContext().sequence.load(std::memory_order_acquire));
         TracingImpl(workStack, foreignRootsSet, maxWorkers > 0);
     }
 
     {
-        MRT_PHASE_TIMER("Concurrent re-marking");
+        MRT_PHASE_TIMER("Concurrent re-marking", REPORT, GetCycleContext().sequence.load(std::memory_order_acquire));
         ConcurrentReMark(workStack, maxWorkers > 0);
     }
 
     {
-        MRT_PHASE_TIMER("identify useless extern ref");
+        MRT_PHASE_TIMER("identify useless extern ref", REPORT, GetCycleContext().sequence.load(std::memory_order_acquire));
         FindUselessExternObjects();
     }
 
@@ -833,7 +833,7 @@ void TracingCollector::DoTracing(WorkStack& workStack, WorkStack& foreignRootsSe
         // finalizer discovery is controller-owned (no shared stripe): it follows
         // that closure to empty here, after strict SATB termination and before
         // the collector can leave the marking phase.
-        MRT_PHASE_TIMER("concurrent resurrection");
+        MRT_PHASE_TIMER("concurrent resurrection", REPORT, GetCycleContext().sequence.load(std::memory_order_acquire));
         DoResurrection(workStack);
     }
 
@@ -852,7 +852,7 @@ void TracingCollector::DoTracing(WorkStack& workStack, WorkStack& foreignRootsSe
 
 bool TracingCollector::MarkSatbBuffer(WorkStack& workStack)
 {
-    MRT_PHASE_TIMER("MarkSatbBuffer");
+    MRT_PHASE_TIMER("MarkSatbBuffer", REPORT, GetCycleContext().sequence.load(std::memory_order_acquire));
     if (!workStack.empty()) {
         workStack.clear();
     }
@@ -866,7 +866,7 @@ bool TracingCollector::MarkSatbBuffer(WorkStack& workStack)
     size_t satbSeen = 0;
     auto visitSatbObj = [this, &workStack, &satbSeen]() {
         WorkStack remarkStack;
-        SatbBuffer::Instance().GetRetiredObjects(remarkStack);
+        SatbBuffer::Instance(GetCycleContext().generation).GetRetiredObjects(remarkStack);
 
         while (!remarkStack.empty()) {
             BaseObject* obj = remarkStack.back().object();
@@ -1140,12 +1140,12 @@ void TracingCollector::PreGarbageCollection(bool isConcurrent, uint64_t gcIndex)
 {
     ResetSkippedStackMapCounts();
     VLOG(REPORT, "Begin GC log. GCReason: %s, Current allocated %s, Current threshold %s, current tag %u",
-         g_gcRequests[gcReason].name, Pretty(Heap::GetHeap().GetAllocatedSize()).Str(),
+         g_gcRequests[GetGCReason()].name, Pretty(Heap::GetHeap().GetAllocatedSize()).Str(),
          Pretty(Heap::GetHeap().GetCollector().GetGCStats().GetThreshold()).Str(),
          static_cast<unsigned>(GetCurrentTagID()));
 
     // SatbBuffer should be initialized before concurrent enumeration.
-    SatbBuffer::Instance().Init();
+    SatbBuffer::Instance(GetCycleContext().generation).Init();
     // prepare thread pool.
     GCThreadPool* threadPool = GetThreadPool();
     const int32_t threadCount = GetGCThreadCount(isConcurrent);
@@ -1157,7 +1157,7 @@ void TracingCollector::PreGarbageCollection(bool isConcurrent, uint64_t gcIndex)
     VLOG(REPORT, "GC active thread count: concurrent=%d total=%d helpers=%d pool-active=%d", isConcurrent,
          threadCount, threadCount - 1, threadPool->GetMaxActiveThreadNum());
 
-    GetGCStats().reason = gcReason;
+    GetGCStats().reason = GetGCReason();
     GetGCStats().async = (gcIndex == GCTask::ASYNC_TASK_INDEX);
     GetGCStats().isConcurrentMark = isConcurrent;
 #if defined(MRT_DEBUG) && (MRT_DEBUG == 1)
@@ -1183,7 +1183,7 @@ void TracingCollector::PostGarbageCollection(uint64_t gcIndex)
     // release pages in PagePool
     TransitionToGCPhase(GCPhase::GC_PHASE_RECLAIM_SATB_NODE, true);
     NwDropAudit::Report("reclaim_satb");
-    SatbBuffer::Instance().ReclaimALLPages();
+    SatbBuffer::Instance(GetCycleContext().generation).ReclaimALLPages();
     PagePool::Instance().Trim();
     (void)gcIndex;
 

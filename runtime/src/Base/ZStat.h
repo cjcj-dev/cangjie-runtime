@@ -64,7 +64,7 @@ public:
     // Called from ~Timer only when Enabled().  ns is the scope duration; worldStoppedAtStart was
     // sampled in the Timer ctor so a phase that straddles the world-release is classified by where
     // its work began.
-    static void NotePhase(const char* name, bool worldStoppedAtStart, uint64_t ns);
+    static void NotePhase(const char* name, bool worldStoppedAtStart, uint64_t ns, uint64_t seq = 0);
 
     // Cycle rollup, called next to GcLog::Cycle with the same seq.  Emits one
     //   [ZSTAT] v=1 rec=zphase seq= name= pause_ns= conc_ns= n=
@@ -75,11 +75,11 @@ public:
 
     // Introspection for consumers and the unit suite.  These read the live table regardless of
     // the env gate so a test can drive NotePhase directly.
-    static PhaseTotals Phase(const char* name);
-    static std::vector<std::string> RegisteredPhases();
-    static uint64_t CyclePauseNs();
-    static uint64_t CycleConcNs();
-    static uint64_t CycleMaxPauseNs();
+    static PhaseTotals Phase(const char* name, uint64_t seq = 0);
+    static std::vector<std::string> RegisteredPhases(uint64_t seq = 0);
+    static uint64_t CyclePauseNs(uint64_t seq = 0);
+    static uint64_t CycleConcNs(uint64_t seq = 0);
+    static uint64_t CycleMaxPauseNs(uint64_t seq = 0);
 
     // Test hooks: the env gate is cached, so a test process flips the override instead.
     static void SetEnabledForTest(bool enabled);
@@ -98,7 +98,8 @@ private:
     static void FoldToToken(const char* text, char* out, size_t cap);
 
     static std::mutex& TableLock();
-    static Table& CycleTable();
+    static std::unordered_map<uint64_t, Table>& CycleTables();
+    static Table& CycleTable(uint64_t seq = 0);
 
     static std::atomic<int> g_stwDepth;
     static std::atomic<int> g_enabledOverride; // -1 = read env, 0/1 = forced by SetEnabledForTest
@@ -112,7 +113,7 @@ public:
     static void EnterStwScope() {}
     static void ExitStwScope() {}
     static constexpr bool WorldStoppedNow() { return false; }
-    static void NotePhase(const char*, bool, uint64_t) {}
+    static void NotePhase(const char*, bool, uint64_t, uint64_t = 0) {}
     static void NoteCycleEnd(uint64_t) {}
 };
 
