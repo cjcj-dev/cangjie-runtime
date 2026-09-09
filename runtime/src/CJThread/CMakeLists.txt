@@ -16,6 +16,10 @@ endif()
 
 project(cjthread C CXX)
 
+if(NOT RUNTIME_OUTPUT_ROOT)
+    set(RUNTIME_OUTPUT_ROOT "${CMAKE_CURRENT_SOURCE_DIR}/../../output/temp")
+endif()
+
 if (${CMAKE_BUILD_TYPE} STREQUAL "Debug")
     add_definitions(-DCJTHREAD_DEBUG=1)
     add_definitions(-DMRT_DEBUG=1)

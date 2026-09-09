@@ -49,11 +49,6 @@ elif [ "$1" = "-p" ];then
 
     # DO NOT remove install prefix directory ($7)
 
-    if [ ! -d "${PROJECT_PATH}/output" ]; then
-      mkdir -p ${PROJECT_PATH}/output/temp/lib
-      mkdir -p ${PROJECT_PATH}/output/temp/include
-    fi
-
     cd "${BUILD_PATH}"
     echo "CJTHREAD BUILDING: target:$2, build type: $3, libtype: $4, building stage: $5, other definitions: $6, path: ${CJTHREAD_PATH}"
     if [ -n "$9" ]; then
