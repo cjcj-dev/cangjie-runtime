@@ -14,6 +14,8 @@
 #include <mutex>
 #include <new>
 #include <unordered_map>
+#include <unordered_set>
+#include <vector>
 
 #include "Heap/Allocator/ForwardingEntry.h"
 #include "Heap/Allocator/ZAttachedArray.h"
@@ -24,6 +26,7 @@ namespace MapleRuntime {
 
 class RegionInfo;
 class LiveInfo;
+class RememberedSet;
 
 // zForwarding.hpp:44-110 — one off-heap object per relocated page.
 // _entries is a ZAttachedArray sitting after this object (zAttachedArray.inline.hpp:44-54).
@@ -47,6 +50,31 @@ public:
         MAddress address;
         bool installed;
         Status status;
+    };
+
+    enum class RemsetReceiptStatus : uint8_t {
+        NONE = 0,
+        PUBLISHED = 1,
+        REJECTED_BY_YOUNG = 2,
+        ACCEPTED = 3,
+        CONSUMED = 4,
+    };
+
+    struct RemsetPublicationReceipt {
+        MAddress fromSlot{ 0 };
+        MAddress toSlot{ 0 };
+        uint8_t sourceFace{ 0 };
+        uint8_t destinationFace{ 0 };
+        uint64_t youngSeq{ 0 };
+        RemsetReceiptStatus status{ RemsetReceiptStatus::NONE };
+    };
+
+    struct RemsetReceiptCounts {
+        size_t none{ 0 };
+        size_t published{ 0 };
+        size_t rejectedByYoung{ 0 };
+        size_t accepted{ 0 };
+        size_t consumed{ 0 };
     };
 
     static constexpr uint8_t kToLifeCapacity = 3;
@@ -161,6 +189,16 @@ public:
     MAddress resolve_life(MAddress to) const;
     MAddress resolve_live(MAddress to) const;
     bool receipt_live(MAddress to) const;
+    void publish_remset_receipt(MAddress fromSlot, MAddress toSlot, uint8_t sourceFace,
+                                uint8_t destinationFace, uint64_t youngSeq,
+                                bool rejectedByYoung, bool consumerAlreadyComplete);
+    void accept_remset_receipts(uint64_t youngSeq);
+    void complete_remset_receipts(uint64_t youngSeq,
+                                  const std::unordered_set<MAddress>& scannedSlots,
+                                  const RememberedSet& rememberedSet);
+    bool has_remset_receipt(MAddress fromSlot, MAddress toSlot, uint8_t sourceFace) const;
+    void verify_remset_receipts_closed(const char* point) const;
+    RemsetReceiptCounts remset_receipt_counts() const;
     void note_kept_expire() { _kept_seen_expire = true; }
     bool kept_seen_expire() const { return _kept_seen_expire; }
     void note_retired_required() { _retired_required.store(true, std::memory_order_release); }
@@ -431,6 +469,8 @@ private:
           _overflowLock(),
           _overflow(),
           _receiptInstallLock(),
+          _remsetReceiptLock(),
+          _remsetReceipts(),
           _to_life_n(0),
           _kept_seen_expire(false),
           _retired_required(false),
@@ -461,6 +501,8 @@ private:
     mutable std::mutex _overflowLock;
     std::unordered_map<MAddress, MAddress> _overflow;
     mutable std::mutex _receiptInstallLock;
+    mutable std::mutex _remsetReceiptLock;
+    std::vector<RemsetPublicationReceipt> _remsetReceipts;
     struct ToLife {
         MAddress start;
         uint8_t legacySeq;

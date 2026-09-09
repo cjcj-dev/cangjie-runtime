@@ -241,4 +241,16 @@ void StoreBarrierBuffer::FlushAll(RememberedSet& rs)
     });
 }
 
+size_t StoreBarrierBuffer::PendingAll()
+{
+    if (!kBufferStoreBarriers) {
+        return 0;
+    }
+    size_t pending = 0;
+    Heap::GetHeap().GetAllocator().VisitAllocBuffers([&pending](AllocBuffer& alloc) {
+        pending += alloc.GetStoreBarrierBuffer().Pending();
+    });
+    return pending;
+}
+
 } // namespace MapleRuntime

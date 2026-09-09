@@ -13,6 +13,7 @@
 #include "Base/Log.h"
 #include "Base/LogFile.h"
 #include "Base/TimeUtils.h"
+#include "Heap/Barrier/StoreBarrierBuffer.h"
 #include "Common/BaseObject.h"
 #include "Heap/Allocator/RegionInfo.h"
 #include "Heap/Allocator/RegionSpace.h"
@@ -22,6 +23,61 @@
 #include "Heap/Verify/VerifyPhase.h"
 
 namespace MapleRuntime {
+
+void VerifyRememberedBeforeColorFlip()
+{
+    if (!VerifyPhaseEnter(VerifyFace::Remembered, "before-color-flip")) {
+        return;
+    }
+    const size_t pending = StoreBarrierBuffer::PendingAll();
+    VLOG(REPORT, "[GCV2][verify][remembered-network] point=before-color-flip pending=%zu", pending);
+    CHECK_DETAIL(pending == 0, "before-color-flip pending>0 pending=%zu", pending);
+}
+
+void VerifyRememberedBeforeForwarding(const std::vector<RememberedSet::InPlaceSlot>& slots,
+                                      MAddress fromBase, size_t size,
+                                      const RememberedSet& rememberedSet)
+{
+    if (!VerifyPhaseEnter(VerifyFace::Remembered, "before-forwarding")) {
+        return;
+    }
+    for (const RememberedSet::InPlaceSlot& slot : slots) {
+        const size_t offset = static_cast<size_t>(slot.field - fromBase);
+        CHECK_DETAIL(slot.field >= fromBase && offset < size &&
+                         rememberedSet.ContainsOnFaceForVerify(slot.field, slot.face),
+                     "before-forwarding missing-from-slot from=%#zx slot=%#zx offset=%zu face=%u young-seq=%llu",
+                     static_cast<size_t>(fromBase), static_cast<size_t>(slot.field), offset,
+                     static_cast<unsigned>(slot.face), static_cast<unsigned long long>(slot.youngSeq));
+        VLOG(REPORT,
+             "[GCV2][verify][remembered-network] point=before-forwarding from=%#zx slot=%#zx "
+             "offset=%zu face=%u young-seq=%llu",
+             static_cast<size_t>(fromBase), static_cast<size_t>(slot.field), offset,
+             static_cast<unsigned>(slot.face), static_cast<unsigned long long>(slot.youngSeq));
+    }
+}
+
+void VerifyRememberedAfterForwarding(const std::vector<RememberedSet::InPlaceSlot>& slots,
+                                     MAddress fromBase, MAddress toBase, size_t size,
+                                     const ForwardingTable::Publication& publication)
+{
+    if (!VerifyPhaseEnter(VerifyFace::Remembered, "after-forwarding")) {
+        return;
+    }
+    for (const RememberedSet::InPlaceSlot& slot : slots) {
+        const size_t offset = static_cast<size_t>(slot.field - fromBase);
+        const MAddress toSlot = toBase + offset;
+        CHECK_DETAIL(slot.field >= fromBase && offset < size &&
+                         ForwardingTable::HasRemsetReceipt(publication, slot.field, toSlot, slot.face),
+                     "after-forwarding missing-to-slot from=%#zx to=%#zx offset=%zu face=%u young-seq=%llu",
+                     static_cast<size_t>(fromBase), static_cast<size_t>(toBase), offset,
+                     static_cast<unsigned>(slot.face), static_cast<unsigned long long>(slot.youngSeq));
+        VLOG(REPORT,
+             "[GCV2][verify][remembered-network] point=after-forwarding from=%#zx to=%#zx "
+             "offset=%zu face=%u young-seq=%llu",
+             static_cast<size_t>(fromBase), static_cast<size_t>(toBase), offset,
+             static_cast<unsigned>(slot.face), static_cast<unsigned long long>(slot.youngSeq));
+    }
+}
 namespace {
 constexpr size_t kSampleLimit = 8;
 

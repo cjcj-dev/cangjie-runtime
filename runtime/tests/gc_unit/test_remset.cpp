@@ -1074,6 +1074,7 @@ GC_TEST(Remset, FlipIsConstantTimeAndPreservesFaceEpochs)
         RecordFlipSlots(rs, post);
         std::unordered_set<MAddress> previous;
         const size_t previousCount = rs.ScanPreviousForMinor(previous);
+        rs.CompleteScanForMinor(previous);
         const auto current = rs.Snapshot();
         std::fprintf(stderr,
                      "DETAIL remset_flip capacity=%zu pre=%zu post=%zu first_bitmap_word_accesses=%zu "
@@ -1094,6 +1095,7 @@ GC_TEST(Remset, FlipIsConstantTimeAndPreservesFaceEpochs)
         rs.FlipForMinor();
         std::unordered_set<MAddress> secondPrevious;
         const size_t secondPreviousCount = rs.ScanPreviousForMinor(secondPrevious);
+        rs.CompleteScanForMinor(secondPrevious);
         const auto secondCurrent = rs.Snapshot();
         std::fprintf(stderr,
                      "DETAIL remset_flip_reuse capacity=%zu pre=%zu post=%zu second_bitmap_word_accesses=%zu "
