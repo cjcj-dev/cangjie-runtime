@@ -6,7 +6,17 @@
 # configuration.  The readable profile makes accidental cross-configuration
 # use visible, while the digest distinguishes less common compiler/feature
 # combinations without relying on a shared "latest" directory.
+function(cj_runtime_require_single_config_generator is_multi_config)
+    if(is_multi_config)
+        message(FATAL_ERROR
+            "Cangjie runtime output layout supports only single-config generators; multi-config generators are not supported")
+    endif()
+endfunction()
+
 function(cj_runtime_configure_output_layout)
+    get_property(_is_multi_config GLOBAL PROPERTY GENERATOR_IS_MULTI_CONFIG)
+    cj_runtime_require_single_config_generator("${_is_multi_config}")
+
     # Every user-provided CMake cache input is part of the build identity.  A
     # hand-maintained option list is unsafe here: a newly introduced -D axis
     # can change the produced libraries while silently retaining an old output
