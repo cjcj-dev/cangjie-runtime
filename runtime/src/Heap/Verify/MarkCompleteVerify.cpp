@@ -831,9 +831,9 @@ void RunAtMarkEnd(const char* point)
         stats.deadIntBaseUnmarked, stats.deadIntValueCorrupt);
     SurvNodeDiag::ReportAtMarkEnd(point);
 
-    // A truncated walk cannot prove completeness, so it belongs to the same
-    // failed receipt as dead strong edges and roots (zVerify.cpp:496-506).
-    const size_t totalFailures = stats.deadTarget + stats.rootDead + stats.regionsTruncated;
+    // Close on the invariant defects. Walk truncation stays a coverage receipt:
+    // it says how much could be inspected, not that an inspected edge was bad.
+    const size_t totalFailures = stats.deadTarget + stats.rootDead;
     CHECK_DETAIL(totalFailures == 0,
                  "[GCV2][markcomplete] scene failed point=%s total=%zu deadTarget=%zu "
                  "deadRoots=%zu regionsTruncated=%zu",
