@@ -157,7 +157,7 @@ fi
 
 validate_mutualwait_manifest
 if [[ "${GC_UNIT_MUTUALWAIT_MANIFEST_ONLY:-0}" == "1" ]]; then
-  exit $?
+  exit 0
 fi
 
 # A weak referent is a discovery input, not a strong tracing root. Keep this
