@@ -10,10 +10,9 @@
 
 #include "Heap/Allocator/ForwardingTable.h"
 #include "Heap/Allocator/RegionManager.h"
+#include "Heap/Collector/CollectorProxy.h"
 #include "Heap/Collector/CollectorResources.h"
-#define private public
 #include "Heap/WCollector/WCollector.h"
-#undef private
 #include "gc_unittest.hpp"
 
 using namespace MapleRuntime;
@@ -21,7 +20,7 @@ using namespace MapleRuntime::GcUnit;
 
 namespace MapleRuntime {
 
-struct IdentityKeptAccess {
+struct RelocationReceiptTestAccess {
     static void BindCollector(CollectorResources& resources, TracingCollector* collector)
     {
         resources.collectorProxy.currentCollector = collector;
@@ -38,6 +37,8 @@ struct IdentityKeptAccess {
         collector.SetGCReason(GC_REASON_YOUNG);
         collector.DoGarbageCollection();
     }
+
+    static uint64_t MinorRuns(const WCollector& collector) { return collector.minorTotalRuns; }
 };
 
 } // namespace MapleRuntime
@@ -74,8 +75,6 @@ GC_TEST(IdentityKeptRemap, ArmedIdentityHitReturnsFromWhenRouteNotCompacted)
     GC_EXPECT_TRUE(region->IsForwardingDone());
     GC_EXPECT_FALSE(region->IsCompacted());
 
-    // Parallel-fix visits relocation-set (ghost FROM) members, not parked
-    // unmovable pages. Restore cset membership after the kept producer.
     region->SetRegionType(RegionInfo::RegionType::FROM_REGION);
     region->SetInGhostRegion(1);
 
@@ -88,8 +87,8 @@ GC_TEST(IdentityKeptRemap, ArmedIdentityHitReturnsFromWhenRouteNotCompacted)
 
     CollectorResources& resources = Heap::GetHeap().GetCollectorResources();
     WCollector collector(Heap::GetHeap().GetAllocator(), resources);
-    IdentityKeptAccess::BindCollector(resources, &collector);
-    BaseObject* resolved = IdentityKeptAccess::ResolveStoreValue(collector, from);
+    RelocationReceiptTestAccess::BindCollector(resources, &collector);
+    BaseObject* resolved = RelocationReceiptTestAccess::ResolveStoreValue(collector, from);
     GC_EXPECT_TRUE(resolved == from);
     std::fprintf(stderr,
                  "IDENTITY_KEPT_REMAP_OK from=%p resolved=%p route=%u fwdDone=%u lookup_to=%p\n",
@@ -98,7 +97,7 @@ GC_TEST(IdentityKeptRemap, ArmedIdentityHitReturnsFromWhenRouteNotCompacted)
                  static_cast<unsigned>(region->IsForwardingDone()),
                  reinterpret_cast<void*>(lookup.to));
 
-    IdentityKeptAccess::BindCollector(resources, nullptr);
+    RelocationReceiptTestAccess::BindCollector(resources, nullptr);
     if (region->IsGhostFromRegion()) {
         region->DispelGhostFromRegion();
     }
@@ -111,11 +110,11 @@ GC_TEST(IdentityKeptRemap, YoungPhaseEntryDispatchesDoYoung)
     GcHeapFixture fx;
     CollectorResources& resources = Heap::GetHeap().GetCollectorResources();
     WCollector collector(Heap::GetHeap().GetAllocator(), resources);
-    IdentityKeptAccess::BindCollector(resources, &collector);
-    const uint64_t runsBefore = collector.minorTotalRuns;
-    IdentityKeptAccess::RunYoungDispatch(collector);
-    GC_EXPECT_EQ(collector.minorTotalRuns, runsBefore + 1);
+    RelocationReceiptTestAccess::BindCollector(resources, &collector);
+    const uint64_t runsBefore = RelocationReceiptTestAccess::MinorRuns(collector);
+    RelocationReceiptTestAccess::RunYoungDispatch(collector);
+    GC_EXPECT_EQ(RelocationReceiptTestAccess::MinorRuns(collector), runsBefore + 1);
     std::fprintf(stderr, "IDENTITY_KEPT_PHASE_ENTRY_OK minorTotalRuns=%llu\n",
-                 static_cast<unsigned long long>(collector.minorTotalRuns));
-    IdentityKeptAccess::BindCollector(resources, nullptr);
+                 static_cast<unsigned long long>(RelocationReceiptTestAccess::MinorRuns(collector)));
+    RelocationReceiptTestAccess::BindCollector(resources, nullptr);
 }
