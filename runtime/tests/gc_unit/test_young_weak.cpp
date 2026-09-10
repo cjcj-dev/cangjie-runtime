@@ -595,6 +595,7 @@ GC_OTHER_VM_TEST(ValueRootCurrentization, MinorRuntimeDispatchMarksCurrentAndWri
     ValueRootRoute route = PrepareValueRootRoute(fx, true);
 
     CollectorResources& resources = Heap::GetHeap().GetCollectorResources();
+    YoungCycleScope cycle(resources);
     WCollector collector(Heap::GetHeap().GetAllocator(), resources);
     RelocationReceiptTestAccess::BindCollector(resources, &collector);
     collector.SetGCPhase(GCPhase::GC_PHASE_CLEAR_SATB_BUFFER);
@@ -607,10 +608,6 @@ GC_OTHER_VM_TEST(ValueRootCurrentization, MinorRuntimeDispatchMarksCurrentAndWri
         fx.heapStart, GcHeapFixture::kUnits * RegionInfo::UNIT_SIZE);
     RelocationReceiptTestAccess::SeedValueRoots(collector, route.from);
 
-    const bool startedBefore = resources.IsGcStarted();
-    const GCReason reasonBefore = resources.GetGCStats().reason;
-    resources.SetGcStarted(true);
-    resources.GetGCStats().reason = GC_REASON_YOUNG;
     RelocationReceiptTestAccess::RunYoungCollection(collector);
 
     const bool currentMarked = IsValueRootMarked(route);
@@ -628,8 +625,6 @@ GC_OTHER_VM_TEST(ValueRootCurrentization, MinorRuntimeDispatchMarksCurrentAndWri
                  static_cast<int>(independentAfterCoverage),
                  static_cast<unsigned>(afterCoverage.answer));
 
-    resources.SetGcStarted(startedBefore);
-    resources.GetGCStats().reason = reasonBefore;
     RelocationReceiptTestAccess::BindThreadPool(resources, nullptr);
     threadPool.Exit();
     RelocationReceiptTestAccess::BindCollector(resources, nullptr);
