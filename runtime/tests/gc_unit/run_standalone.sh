@@ -129,6 +129,37 @@ if nm -D --defined-only "$RUNTIME_LIB_DIR/libcangjie-runtime.so" 2>/dev/null |
 fi
 echo "PUBLICATION_TESTABLE=$((${#PUBLICATION_TESTABLE_FLAGS[@]} != 0))"
 
+# These three deterministic publication tests require both ends of their
+# scheduling fixture.  Derive that product shape from the linked SO, not from
+# the test translation unit's unconditional MRT_TESTABLE_INTERNALS definition.
+PUBLICATION_HOOK_TESTS=(
+  ForwardingPublicationProduct.MutatorRuntimeEntryReachesCopyAdmission
+  ForwardingPublicationProduct.CopyAdmissionSealWaitsRealCopierAndRejectsLateEntry
+  ForwardingPublicationProduct.AdmittedCopierExitsWhilePeerEntering
+)
+PUBLICATION_HOOK_FLAGS=()
+PUBLICATION_HOOK_EXPORTS="$OUT/forwarding-publication-hook-exports.txt"
+nm -D --defined-only "$RUNTIME_LIB_DIR/libcangjie-runtime.so" | c++filt >"$PUBLICATION_HOOK_EXPORTS"
+admission_hook=0
+receipt_hook=0
+if /usr/bin/grep -F -q 'MRT_SetCopyAdmissionTestHook' "$PUBLICATION_HOOK_EXPORTS"; then
+  admission_hook=1
+fi
+if /usr/bin/grep -F -q 'MapleRuntime::ForwardingTable::SetReceiptLifeRegisterHook(' \
+    "$PUBLICATION_HOOK_EXPORTS"; then
+  receipt_hook=1
+fi
+if [[ "$admission_hook" -eq 1 && "$receipt_hook" -eq 1 ]]; then
+  PUBLICATION_HOOK_PRODUCT_SHAPE=testable
+  PUBLICATION_HOOK_FLAGS=(-DMRT_FORWARDING_PUBLICATION_HOOKS_AVAILABLE=1)
+elif [[ "$admission_hook" -eq 0 && "$receipt_hook" -eq 0 ]]; then
+  PUBLICATION_HOOK_PRODUCT_SHAPE=default
+else
+  echo "GC_UNIT_PUBLICATION_HOOK_PRODUCT_SHAPE_INCOMPLETE admission=$admission_hook receipt=$receipt_hook" >&2
+  exit 16
+fi
+echo "PUBLICATION_HOOK_PRODUCT_SHAPE=$PUBLICATION_HOOK_PRODUCT_SHAPE admission=$admission_hook receipt=$receipt_hook"
+
 BOUNDS_INC="$ROOT/runtime/third_party/third_party_bounds_checking_function/include"
 TESTABLE_FLAGS=()
 if [[ "${MRT_TESTABLE_INTERNALS:-0}" == "1" ]]; then
@@ -581,6 +612,7 @@ $CXX -std=gnu++17 -O0 -g -Wall -Wextra -pthread -fno-rtti \
   "${TEST_DEFINES[@]}" \
   -DMRT_TESTABLE_INTERNALS=1 \
   "${PUBLICATION_TESTABLE_FLAGS[@]}" \
+  "${PUBLICATION_HOOK_FLAGS[@]}" \
   "${INC_FLAGS[@]}" \
   "$SRC/gc_unit_main.cpp" \
   "$SRC/clear_entries_product_unit.cpp" \
@@ -621,6 +653,31 @@ done
 echo "GATE_MUTUALWAIT_PRODUCT_IMPORTS_OK elf=$OUT/cj_gc_forwarding_publication_unit"
 echo "GATE_LOADHEAL_PRODUCT_IMPORTS_OK elf=$OUT/cj_gc_forwarding_publication_unit"
 
+# Registration is part of the product-shape contract: the default product must
+# not register hook-dependent tests, while a complete testable product must
+# register exactly this explicit target set.  Symbol inspection happens before
+# execution so a missing registration cannot borrow an aggregate green tally.
+for test_name in "${PUBLICATION_HOOK_TESTS[@]}"; do
+  test_symbol="${test_name#*.}"
+  registered=0
+  if /usr/bin/grep -F -q "$test_symbol" "$LOADHEAL_FULL"; then
+    registered=1
+  fi
+  if [[ "$PUBLICATION_HOOK_PRODUCT_SHAPE" == testable && "$registered" -ne 1 ]]; then
+    echo "GC_UNIT_PUBLICATION_HOOK_TEST_NOT_REGISTERED test=$test_name" >&2
+    exit 17
+  fi
+  if [[ "$PUBLICATION_HOOK_PRODUCT_SHAPE" == default && "$registered" -ne 0 ]]; then
+    echo "GC_UNIT_PUBLICATION_HOOK_TEST_REGISTERED_FOR_DEFAULT test=$test_name" >&2
+    exit 18
+  fi
+  if [[ "$PUBLICATION_HOOK_PRODUCT_SHAPE" == default ]]; then
+    echo "NOT_RUN(default product shape) test=$test_name"
+  else
+    echo "GC_UNIT_PUBLICATION_HOOK_TEST_REGISTERED test=$test_name"
+  fi
+done
+
 echo "LINKED_RUNTIME=$RUNTIME_LIB_DIR"
 echo "MRT_TESTABLE_INTERNALS=${MRT_TESTABLE_INTERNALS:-0}"
 # Binding proof: undefined product symbols must resolve from libcangjie-runtime.
@@ -635,16 +692,35 @@ START=$(date +%s%N)
 FINAL_TALLY="${GC_UNIT_TALLY_FILE:-}"
 MAIN_TALLY="$OUT/main_tally.txt"
 PUBLICATION_TALLY="$OUT/forwarding_publication_tally.txt"
-rm -f "$MAIN_TALLY" "$PUBLICATION_TALLY"
+PUBLICATION_RUN_LOG="$OUT/forwarding_publication_run.log"
+rm -f "$MAIN_TALLY" "$PUBLICATION_TALLY" "$PUBLICATION_RUN_LOG"
 set +e
 env "${M0_CORRELATION_ENV[@]}" GC_UNIT_TALLY_FILE="$MAIN_TALLY" \
   LD_LIBRARY_PATH="$RUNTIME_LIB_DIR${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}" "$OUT/cj_gc_unit"
 MAIN_RC=$?
 GC_UNIT_TALLY_FILE="$PUBLICATION_TALLY" \
   LD_LIBRARY_PATH="$RUNTIME_LIB_DIR${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}" \
-  "$OUT/cj_gc_forwarding_publication_unit"
-PUBLICATION_RC=$?
+  "$OUT/cj_gc_forwarding_publication_unit" 2>&1 | tee "$PUBLICATION_RUN_LOG"
+PUBLICATION_RC=${PIPESTATUS[0]}
 set -e
+
+for test_name in "${PUBLICATION_HOOK_TESTS[@]}"; do
+  if [[ "$PUBLICATION_HOOK_PRODUCT_SHAPE" == testable ]]; then
+    if ! /usr/bin/grep -F -q "[  RUN   ] $test_name" "$PUBLICATION_RUN_LOG" ||
+        ! /usr/bin/grep -F -q "[  PASS  ] $test_name" "$PUBLICATION_RUN_LOG"; then
+      echo "GC_UNIT_PUBLICATION_HOOK_TEST_DID_NOT_PASS test=$test_name" >&2
+      PUBLICATION_RC=1
+    fi
+  elif /usr/bin/grep -F -q "[  RUN   ] $test_name" "$PUBLICATION_RUN_LOG"; then
+    echo "GC_UNIT_PUBLICATION_HOOK_TEST_RAN_FOR_DEFAULT test=$test_name" >&2
+    PUBLICATION_RC=1
+  fi
+done
+if [[ "$PUBLICATION_HOOK_PRODUCT_SHAPE" == testable ]] &&
+    ! /usr/bin/grep -F -q 'I03_TARGET_REACHED state=1 count=1' "$PUBLICATION_RUN_LOG"; then
+  echo "GC_UNIT_I03_TARGET_NOT_REACHED" >&2
+  PUBLICATION_RC=1
+fi
 END=$(date +%s%N)
 ELAPSED_MS=$(( (END - START) / 1000000 ))
 

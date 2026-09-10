@@ -645,13 +645,11 @@ GC_TEST(ForwardingPublicationProduct, BarrierResolvesForwardedFromThroughCollect
 // ResolveBarrier's completed-route case above returns at WCollector.h:448-454;
 // call the exported product entry here so that this arm cannot borrow that fast
 // return or a test-ELF inline definition.
+#if defined(MRT_FORWARDING_PUBLICATION_HOOKS_AVAILABLE)
 GC_TEST(ForwardingPublicationProduct, MutatorRuntimeEntryReachesCopyAdmission)
 {
     ProductSetCopyAdmissionTestHook setCopyAdmissionHook = ProductSetCopyAdmissionTestHookFn();
-    if (setCopyAdmissionHook == nullptr) {
-        std::fprintf(stderr, "MUTATOR_ENTRY_TEST_NOT_RUN reason=HOOK_ABSENT\n");
-        return;
-    }
+    GC_EXPECT_TRUE(setCopyAdmissionHook != nullptr);
 
     GcHeapFixture& fx = ProductFixture();
     RelocationReceiptTestAccess::ReleaseListOwnership(RegionInfo::GetRegionInfo(4));
@@ -723,6 +721,7 @@ GC_TEST(ForwardingPublicationProduct, MutatorRuntimeEntryReachesCopyAdmission)
     GC_EXPECT_EQ(copyCount, 0);
     GC_EXPECT_TRUE(workersDone);
 }
+#endif
 
 GC_TEST(ForwardingPublicationProduct, LateWaitBackfillCannotReopenSealedGeneration)
 {
@@ -3807,13 +3806,11 @@ GC_TEST(ForwardingPublicationProduct, ExclusiveCopyPublishesProductReceipt)
 // count is committed. DrainScope must wait through that interval, then through
 // the real CopyObject/receipt/Unlock path. Once sealed, a second real entry is
 // refused and rolls its object header back without changing the count.
+#if defined(MRT_FORWARDING_PUBLICATION_HOOKS_AVAILABLE)
 GC_TEST(ForwardingPublicationProduct, CopyAdmissionSealWaitsRealCopierAndRejectsLateEntry)
 {
     ProductSetCopyAdmissionTestHook setCopyAdmissionHook = ProductSetCopyAdmissionTestHookFn();
-    if (setCopyAdmissionHook == nullptr) {
-        std::fprintf(stderr, "COPY_ADMISSION_TEST_NOT_RUN reason=HOOK_ABSENT\n");
-        return;
-    }
+    GC_EXPECT_TRUE(setCopyAdmissionHook != nullptr);
 
     GcHeapFixture& fx = ProductFixture();
     RegionInfo* region = RegionInfo::InitRegion(2, 1, RegionInfo::UnitRole::SMALL_SIZED_UNITS);
@@ -3982,6 +3979,7 @@ GC_TEST(ForwardingPublicationProduct, CopyAdmissionSealWaitsRealCopierAndRejects
     GC_EXPECT_TRUE(wipeDone.load(std::memory_order_acquire));
     GC_EXPECT_TRUE(workersDone);
 }
+#endif
 
 // I03, zForwarding.cpp:110,134: an admitted copier must release its one
 // responsibility even while a peer owns the begin/commit admission interval.
@@ -3989,17 +3987,13 @@ GC_TEST(ForwardingPublicationProduct, CopyAdmissionSealWaitsRealCopierAndRejects
 // the first after CommitCopyAdmission; the admission hook then holds the peer in
 // ENTERING; releasing the first forces its real RAII EndCopyInflight through the
 // target state without manufacturing the shared word in the test.
+#if defined(MRT_FORWARDING_PUBLICATION_HOOKS_AVAILABLE)
 GC_TEST(ForwardingPublicationProduct, AdmittedCopierExitsWhilePeerEntering)
 {
     ProductSetCopyAdmissionTestHook setCopyAdmissionHook = ProductSetCopyAdmissionTestHookFn();
     ProductSetReceiptLifeRegisterHook setReceiptHook = ProductSetReceiptLifeRegisterHookFn();
-    if (setCopyAdmissionHook == nullptr || setReceiptHook == nullptr) {
-        std::fprintf(stderr,
-                     "I03_TEST_NOT_REACHED reason=HOOK_ABSENT admission=%u receipt=%u\n",
-                     setCopyAdmissionHook != nullptr, setReceiptHook != nullptr);
-        GC_EXPECT_TRUE(false);
-        return;
-    }
+    GC_EXPECT_TRUE(setCopyAdmissionHook != nullptr);
+    GC_EXPECT_TRUE(setReceiptHook != nullptr);
 
     GcHeapFixture& fx = ProductFixture();
     RegionInfo* region = RegionInfo::InitRegion(2, 1, RegionInfo::UnitRole::SMALL_SIZED_UNITS);
@@ -4121,6 +4115,7 @@ GC_TEST(ForwardingPublicationProduct, AdmittedCopierExitsWhilePeerEntering)
     GC_EXPECT_EQ(finalCount, 0);
     GC_EXPECT_TRUE(workersDone);
 }
+#endif
 
 // ZGC zRelocate.cpp:1256-1279: the promoted page keeps the relocation-set
 // livemap selected at registration, and discharge walks only that live set.

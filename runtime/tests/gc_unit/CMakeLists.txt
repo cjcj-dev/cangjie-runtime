@@ -161,6 +161,13 @@ target_include_directories(cj_gc_clear_entries_unit PRIVATE
 target_compile_features(cj_gc_clear_entries_unit PRIVATE cxx_std_14)
 target_compile_options(cj_gc_clear_entries_unit PRIVATE -fno-rtti -fexceptions -std=gnu++14)
 target_compile_definitions(cj_gc_clear_entries_unit PRIVATE MRT_TESTABLE_INTERNALS=1)
+if (MRT_TESTABLE_INTERNALS)
+    # This macro describes the linked product shape.  MRT_TESTABLE_INTERNALS on
+    # the test target itself only exposes fixture access and cannot imply that
+    # the product SO exports both publication scheduling hooks.
+    target_compile_definitions(cj_gc_clear_entries_unit PRIVATE
+        MRT_FORWARDING_PUBLICATION_HOOKS_AVAILABLE=1)
+endif()
 if (TARGET cangjie-runtime)
     target_link_libraries(cj_gc_clear_entries_unit PRIVATE cangjie-runtime)
 elseif (DEFINED GCV2_RUNTIME_LIB_DIR)
