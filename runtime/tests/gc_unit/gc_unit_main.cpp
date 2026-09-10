@@ -13,14 +13,18 @@
 int main(int argc, char** argv)
 {
     constexpr const char* filterPrefix = "--gtest_filter=";
+    constexpr const char* listTests = "--gtest_list_tests";
     if (argc > 2) {
-        std::fprintf(stderr, "usage: %s [--gtest_filter=Suite.Test]\n", argv[0]);
+        std::fprintf(stderr, "usage: %s [--gtest_list_tests|--gtest_filter=Suite.Test]\n", argv[0]);
         return 2;
     }
     for (int i = 1; i < argc; ++i) {
+        if (std::strcmp(argv[i], listTests) == 0) {
+            return MapleRuntime::GcUnit::ListTests();
+        }
         if (std::strncmp(argv[i], filterPrefix, std::strlen(filterPrefix)) != 0 ||
             argv[i][std::strlen(filterPrefix)] == '\0') {
-            std::fprintf(stderr, "usage: %s [--gtest_filter=Suite.Test]\n", argv[0]);
+            std::fprintf(stderr, "usage: %s [--gtest_list_tests|--gtest_filter=Suite.Test]\n", argv[0]);
             return 2;
         }
         (void)setenv("GC_UNIT_FILTER", argv[i] + std::strlen(filterPrefix), 1);
