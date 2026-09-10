@@ -2932,6 +2932,158 @@ GC_TEST(ForwardingPublicationProduct, LookupCausePublishedWithoutReceipt)
 #endif
 }
 
+// These observations are emitted by the SO after the public store barrier has
+// resolved its value. The fixture never calls WaitRouted or formats its output.
+static std::string ObservationLine(const std::string& output, const char* marker)
+{
+    const size_t begin = output.find(marker);
+    return begin == std::string::npos ? std::string{} : output.substr(begin, output.find('\n', begin) - begin);
+}
+
+static std::string ObservationField(const std::string& line, const char* field)
+{
+    const std::string key = std::string(" ") + field + "=";
+    const size_t keyAt = line.find(key);
+    if (keyAt == std::string::npos) {
+        return "<missing>";
+    }
+    const size_t begin = keyAt + key.size();
+    return line.substr(begin, line.find(' ', begin) - begin);
+}
+
+static unsigned CheckObservationField(const std::string& actual, const std::string& expected,
+                                      const char* field, const char* site)
+{
+    const std::string got = ObservationField(actual, field);
+    const std::string want = ObservationField(expected, field);
+    const bool equal = want != "<missing>" && got == want;
+    // Keep checking after a failed field so a cut cannot hide behind an earlier
+    // presence assertion. Each product result reaches its own visible predicate.
+    std::fprintf(stderr, "OBS_ASSERT site=%s field=%s actual=%s expected=%s result=%s\n",
+                 site, field, got.c_str(), want.c_str(), equal ? "PASS" : "FAIL");
+    return equal ? 0 : 1;
+}
+
+#if defined(MRT_FINDTO_RETAIN_TEST)
+struct WaitObservationPublication {
+    RegionInfo* region;
+    BaseObject* from;
+    unsigned lookups{ 0 };
+    static void Publish(void* context)
+    {
+        auto& state = *static_cast<WaitObservationPublication*>(context);
+        // First: ResolveStoreValue's FindToVersion miss. Second: the actual
+        // WaitRouted lookup, after the earlier fast receipt checks have missed.
+        if (++state.lookups == 2) {
+            const MAddress from = reinterpret_cast<MAddress>(state.from);
+            auto publication = ForwardingTable::RetainOpenPublicationAfterCopy(state.region, from);
+            const MAddress to = ForwardingTable::InsertMapping(publication, from, from);
+            std::fprintf(stderr, "OBS_PUBLICATION lookups=%u from=%#zx to=%#zx\n", state.lookups, from, to);
+        }
+    }
+};
+#endif
+
+static void CheckWaitObservation(bool identity)
+{
+    GcHeapFixture& fx = ProductFixture();
+    unsigned failures = 0;
+    for (unsigned sample = 0; sample != 2; ++sample) {
+        AbortCapture captured = CaptureAbort([&]() {
+            RegionInfo* region = RegionInfo::GetRegionInfo(4 + sample);
+            RelocationReceiptTestAccess::ReleaseListOwnership(region);
+            region = RegionInfo::InitRegion(4 + sample, 1, RegionInfo::UnitRole::SMALL_SIZED_UNITS);
+            region->SetRegionType(RegionInfo::RegionType::THREAD_LOCAL_REGION);
+            for (unsigned bump = 0; bump <= sample; ++bump) {
+                region->BumpSnapshotEpoch();
+            }
+            BaseObject* from = fx.PlaceObject(region->GetRegionStart());
+            region->SetRegionAllocPtr(reinterpret_cast<MAddress>(from) + from->GetSize());
+            WCollector collector(Heap::GetHeap().GetAllocator(), Heap::GetHeap().GetCollectorResources());
+            collector.SetGCPhase(identity ? GCPhase::GC_PHASE_IDLE : GCPhase::GC_PHASE_FORWARD);
+            collector.flip_old_relocate_start();
+            RelocationReceiptTestAccess::BindCollector(Heap::GetHeap().GetCollectorResources(), &collector);
+            (void)PrepareForwardable(fx, region, reinterpret_cast<MAddress>(from));
+            region->SetRouteState(identity ? RegionInfo::RouteState::ROUTED : RegionInfo::RouteState::COMPACTED);
+            if (!identity || sample != 0) {
+                region->MarkForwardingDone();
+            }
+            g_gcCount.store(701 + sample, std::memory_order_relaxed);
+            const ForwardingTable::LookupResult before = ForwardingTable::LookupTo(reinterpret_cast<MAddress>(from));
+            const uint64_t routeSnapshot = region->metadata.routeStateSnapshot.load(std::memory_order_acquire);
+            std::fprintf(stderr,
+                "OBS_EXPECT tid=%d obj=%p region=%p gcCycle=%zu returned=%p resolved=%p "
+                "route=%u route.snapshot=%#llx fwdDone=%u lookup.answer=%u lookup.to=%#zx "
+                "tableId=%#zx epoch=%llu lifeId=%llu publicationGeneration=%llu lookup.snapshot.valid=%u\n",
+                static_cast<int>(getpid()), static_cast<void*>(from), static_cast<void*>(region),
+                g_gcCount.load(std::memory_order_relaxed), identity ? static_cast<void*>(from) : nullptr,
+                identity ? static_cast<void*>(from) : nullptr,
+                static_cast<unsigned>(RegionInfo::RouteStateFromSnapshot(routeSnapshot)),
+                static_cast<unsigned long long>(routeSnapshot), static_cast<unsigned>(region->IsForwardingDone()),
+                static_cast<unsigned>(identity ? ForwardingTable::ToAnswer::ArmedHit : before.answer),
+                identity ? reinterpret_cast<size_t>(from) : static_cast<size_t>(before.to),
+                static_cast<size_t>(before.tableId), static_cast<unsigned long long>(before.fromPageEpoch),
+                static_cast<unsigned long long>(before.fromPageLifeId),
+                static_cast<unsigned long long>(before.publicationGeneration),
+                static_cast<unsigned>(before.forwardingSnapshotValid));
+#if defined(MRT_FINDTO_RETAIN_TEST)
+            WaitObservationPublication publication{ region, from };
+            if (identity) {
+                ProductSetLookupRetainHookFn()(&WaitObservationPublication::Publish, &publication);
+            }
+#endif
+            BaseObject* holder = fx.obj0;
+            auto& field = HeapSlotAt<>(reinterpret_cast<MAddress>(holder) + TYPEINFO_PTR_SIZE);
+            Barrier barrier(collector, Heap::GetHeap().GetRememberedSet());
+            std::fprintf(stderr, "OBS_ENTRY Barrier::WriteReference\n");
+            barrier.WriteReference(holder, field, from);
+            std::fprintf(stderr, "OBS_UNEXPECTED_RETURN\n");
+        });
+        std::fprintf(stderr, "OBS_CHILD identity=%u sample=%u status=%d\n%s\n",
+                     static_cast<unsigned>(identity), sample, captured.status, captured.output.c_str());
+        const std::string expected = ObservationLine(captured.output, "OBS_EXPECT");
+        const std::string waited = ObservationLine(captured.output, "[WaitRouted.return]");
+        const bool terminated = WIFSIGNALED(captured.status) && WTERMSIG(captured.status) == SIGABRT;
+        std::fprintf(stderr, "OBS_ASSERT site=behavior field=termination result=%s\n", terminated ? "PASS" : "FAIL");
+        failures += terminated ? 0 : 1;
+        const char* fields[] = { "tid", "obj", "region", "gcCycle", "returned", "route", "route.snapshot",
+            "fwdDone", "lookup.answer", "lookup.to", "tableId", "epoch", "lifeId", "publicationGeneration",
+            "lookup.snapshot.valid" };
+        for (const char* field : fields) {
+            failures += CheckObservationField(waited, expected, field, "wait");
+        }
+        if (identity) {
+            const std::string outer = ObservationLine(captured.output,
+                "ZRelocate::forward_object requires a forwarding entry");
+            const char* outerFields[] = { "tid", "obj", "region", "gcCycle", "resolved", "route.snapshot", "fwdDone" };
+            for (const char* field : outerFields) {
+                failures += CheckObservationField(outer, expected, field, "check");
+            }
+            for (const char* field : { "tid", "obj", "gcCycle" }) {
+                failures += CheckObservationField(outer, waited, field, "pair");
+            }
+        } else {
+            const bool fatalSite = captured.output.find("WCollector::WaitRoutedTipReady.published-without-receipt")
+                != std::string::npos;
+            std::fprintf(stderr, "OBS_ASSERT site=behavior field=fatal-site result=%s\n", fatalSite ? "PASS" : "FAIL");
+            failures += fatalSite ? 0 : 1;
+        }
+    }
+    GC_EXPECT_EQ(failures, 0u);
+}
+
+GC_TEST(ForwardingPublicationProduct, WaitObservationPublishedMiss)
+{
+    CheckWaitObservation(false);
+}
+
+#if defined(MRT_FINDTO_RETAIN_TEST)
+GC_TEST(ForwardingPublicationProduct, WaitObservationIdentity)
+{
+    CheckWaitObservation(true);
+}
+#endif
+
 GC_TEST(ForwardingPublicationProduct, CompactedWithoutFwdDoneWaitsInProductSO)
 {
 #if defined(__linux__)
