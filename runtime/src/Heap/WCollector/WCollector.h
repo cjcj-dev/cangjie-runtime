@@ -9,6 +9,7 @@
 #define MRT_WCOLLECTOR_H
 #include "Common/ColourMask.h"
 #include "Base/TimeUtils.h"
+#include "Base/SysCall.h"
 #include "Heap/Verify/HealCoverage.h"
 #include "Heap/Verify/DiagGate.h"
 #include "Heap/WCollector/RemapYoungRoots.h"
@@ -536,8 +537,15 @@ public:
             return obj;
         }
         CHECK_DETAIL(false,
-                     "ZRelocate::forward_object requires a forwarding entry for relocation-set object %p",
-                     obj);
+                     "ZRelocate::forward_object requires a forwarding entry for relocation-set object %p "
+                     "tid=%d obj=%p region=%p gcCycle=%zu resolved=%p "
+                     "route.snapshot=%#llx fwdDone=%u lookup.record=WaitRouted.return",
+                     obj, static_cast<int>(MapleRuntime::GetTid()), static_cast<void*>(obj),
+                     static_cast<void*>(forwarding), g_gcCount.load(std::memory_order_relaxed),
+                     static_cast<void*>(resolved),
+                     static_cast<unsigned long long>(
+                         forwarding->metadata.routeStateSnapshot.load(std::memory_order_acquire)),
+                     static_cast<unsigned>(forwarding->IsForwardingDone()));
         return nullptr;
     }
 
