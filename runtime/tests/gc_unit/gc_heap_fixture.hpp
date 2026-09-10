@@ -98,9 +98,6 @@ struct GcHeapFixture {
         obj1 = PlaceObject(heapStart + RegionInfo::UNIT_SIZE + 64);
         region0->SetRegionAllocPtr(reinterpret_cast<MAddress>(obj0) + 64);
         region1->SetRegionAllocPtr(reinterpret_cast<MAddress>(obj1) + 64);
-        for (size_t index = 2; index < kUnits; ++index) {
-            RegionInfo::InitFreeRegion(index, 1);
-        }
     }
 
     void BindTakeRegionCapacity()
