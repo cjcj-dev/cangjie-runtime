@@ -161,7 +161,14 @@ def publish(args):
         env = dict(os.environ, GCV2_RUNTIME_CONFIG=config_id,
                    GCV2_RUNTIME_LIB_DIR=str(lib), GCV2_RUNTIME_OUTPUT_ROOT=str(root),
                    MRT_TESTABLE_INTERNALS=args.testable, MRT_GC_UNIT_OHOS_HOST=args.ohos)
-        return subprocess.run(['bash', str(args.gate)], cwd=args.source, env=env).returncode
+        rc = subprocess.run(['bash', str(args.gate)], cwd=args.source, env=env).returncode
+        # The existing outer build gate discovers the linker SO before the
+        # publication on some filesystems. Mirror only the receipt beside that
+        # byte-identical staging SO; all execution above used the publication.
+        status = lib / 'gc_unit_gate.status'
+        if status.is_file():
+            shutil.copy2(status, args.runtime.parent / 'gc_unit_gate.status')
+        return rc
     return 0
 
 
