@@ -59,6 +59,13 @@ struct RelocationReceiptTestAccess {
         manager.freeRegionManager.AddGarbageUnits(index, count);
     }
 
+    static void DisableInactiveUnits(RegionManager& manager, size_t unitCount)
+    {
+        manager.regionHeapStart = RegionInfo::GetUnitAddress(0);
+        manager.regionHeapEnd = RegionInfo::GetUnitAddress(unitCount);
+        manager.inactiveZone.store(manager.regionHeapEnd, std::memory_order_relaxed);
+    }
+
     static void ReleaseListOwnership(RegionInfo* region)
     {
         RegionList* owner = region == nullptr ? nullptr : region->GetRegionListOwner();
@@ -3411,11 +3418,14 @@ GC_TEST(NormalRouteGeneration, AllocatedSizeDeduplicatesSharedCacheOwner)
 // cache entry is rejected when an old source would otherwise route into young.
 GC_TEST(NormalRouteGeneration, OldRouteRejectsYoungRelocationTarget)
 {
+    LoadHealDeliveryRuntime::Ensure();
     GcHeapFixture& fx = ProductFixture();
     RegionInfo* source = ResetDeliveryUnit(fx, 5);
     RegionInfo* incompatible = ResetDeliveryUnit(fx, 3);
+    RegionInfo* freeTarget = ResetDeliveryUnit(fx, 2);
     PinOwnerGeneration(source, Generation::Old);
     PinOwnerGeneration(incompatible, Generation::Young);
+    PinOwnerGeneration(freeTarget, Generation::Old);
 
     BaseObject* from = fx.PlaceObject(source->GetRegionStart());
     source->SetRegionAllocPtr(reinterpret_cast<MAddress>(from) + from->GetSize());
@@ -3424,8 +3434,14 @@ GC_TEST(NormalRouteGeneration, OldRouteRejectsYoungRelocationTarget)
     RegionManager manager;
     manager.SetMaxUnitCountForRegion(RegionInfo::UNIT_SIZE / KB);
     manager.freeRegionManager.Initialize(GcHeapFixture::kUnits);
+    RelocationReceiptTestAccess::DisableInactiveUnits(manager, GcHeapFixture::kUnits);
     RelocationReceiptTestAccess::ParkFrom(manager, source);
     RelocationReceiptTestAccess::ParkThreadLocal(manager, incompatible);
+    // Rejecting the incompatible cache must refill from a real old free unit.
+    // Keep inactive allocation disabled for this standalone manager so removing
+    // the seed fails at the target assertion instead of consulting fixture-absent
+    // reservation state.
+    RelocationReceiptTestAccess::SeedDirtyUnits(manager, freeTarget->GetUnitIdx(), 1);
     AllocBuffer* buffer = AllocBuffer::GetOrCreateAllocBuffer();
     buffer->SetRegion(nullptr);
     buffer->SetRelocationRegion(incompatible);
@@ -3435,6 +3451,7 @@ GC_TEST(NormalRouteGeneration, OldRouteRejectsYoungRelocationTarget)
     RegionInfo* plannedTarget = RegionInfo::TryGetRegionInfoAt(plan.toRegion1StartAddress);
     const bool rejectedYoungTarget = plannedTarget != incompatible;
     const bool routeStayedOld = plannedTarget != nullptr && !plannedTarget->IsYoungRegion();
+    const bool refilledFromOldFreeTarget = plannedTarget == freeTarget;
 
     buffer->SetRelocationRegion(nullptr);
     buffer->SetRegion(nullptr);
@@ -3443,12 +3460,12 @@ GC_TEST(NormalRouteGeneration, OldRouteRejectsYoungRelocationTarget)
     }
     RelocationReceiptTestAccess::ReleaseListOwnership(source);
     RelocationReceiptTestAccess::ReleaseListOwnership(incompatible);
+    RelocationReceiptTestAccess::ReleaseListOwnership(plannedTarget);
     DestroyAfterGhostCleared(source, "normal-route-generation-selection");
     source->metadata.liveInfo = nullptr;
     fx.FreePlanted(live);
 
-    GC_EXPECT_TRUE(rejectedYoungTarget);
-    GC_EXPECT_TRUE(routeStayedOld);
+    GC_EXPECT_TRUE(rejectedYoungTarget && routeStayedOld && refilledFromOldFreeTarget);
 }
 
 // Young-source behavior is deliberately outside the old-source restriction:
