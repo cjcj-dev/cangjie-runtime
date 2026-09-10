@@ -31,4 +31,23 @@ GC_UNIT_JOBS=1 GC_UNIT_TEST_TIMEOUT=10 GC_UNIT_TALLY_FILE="$TMP/green.tally" \
   bash "$RUNNER" "$TMP/main" "$TMP/publication" "$TMP/green" "$TMP" >"$TMP/green.log" 2>&1
 /usr/bin/grep -qxF '[========] 4 tests: 4 passed, 0 failed' "$TMP/green.tally"
 /usr/bin/grep -qF 'GC_UNIT_PARALLEL jobs=1 tests=4 wall=' "$TMP/green.log"
+
+# A selected process that exits zero without its independent completion tally
+# is not a pass. This is the failure mode produced by an inherited list-mode
+# environment before the runner cleared and validated it.
+GC_UNIT_JOBS=2 GC_UNIT_TEST_TIMEOUT=10 GC_UNIT_FAKE_NO_TALLY=PublicationSuite.PassThree \
+  GC_UNIT_TALLY_FILE="$TMP/missing.tally" \
+  bash "$RUNNER" "$TMP/main" "$TMP/publication" "$TMP/missing" "$TMP" \
+  >"$TMP/missing.log" 2>&1 && exit 1
+/usr/bin/grep -qxF '[========] 4 tests: 3 passed, 1 failed' "$TMP/missing.tally"
+/usr/bin/grep -qxF '[  FAILED  ] PublicationSuite.PassThree' "$TMP/missing.log"
+
+# Ambient list mode may affect discovery, but must be cleared before executing
+# each filtered item. All four items therefore still produce completion files.
+GC_UNIT_LIST_TESTS=1 GC_UNIT_JOBS=2 GC_UNIT_TEST_TIMEOUT=10 \
+  GC_UNIT_TALLY_FILE="$TMP/ambient.tally" \
+  bash "$RUNNER" "$TMP/main" "$TMP/publication" "$TMP/ambient" "$TMP" \
+  >"$TMP/ambient.log" 2>&1
+/usr/bin/grep -qxF '[========] 4 tests: 4 passed, 0 failed' "$TMP/ambient.tally"
+[[ $(find "$TMP/ambient/test-tallies" -type f | wc -l) -eq 4 ]]
 echo "PARALLEL_RUNNER_TEST_OK"
