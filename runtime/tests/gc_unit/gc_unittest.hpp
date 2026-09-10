@@ -201,15 +201,17 @@ inline void RunInOtherVm(const std::string& fullName)
 inline int RunAll()
 {
     if (std::getenv("GC_UNIT_LIST_TESTS") != nullptr) {
+        auto& registry = Registry();
         const char* currentSuite = nullptr;
-        for (const auto& test : Registry()) {
+        for (size_t i = 0; i < registry.size(); ++i) {
+            const auto& test = registry[i];
             if (currentSuite == nullptr || std::strcmp(currentSuite, test.suite) != 0) {
                 currentSuite = test.suite;
                 std::printf("%s.\n", currentSuite);
             }
             std::printf("  %s\n", test.name);
         }
-        return Registry().empty() ? 1 : 0;
+        return registry.size() == 0 ? 1 : 0;
     }
     int failed = 0;
     int passed = 0;
