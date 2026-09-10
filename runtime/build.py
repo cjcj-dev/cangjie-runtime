@@ -73,17 +73,15 @@ def do_build(args):
     else:
         install_prefix = os.path.join(prefix_path, f"{target_platform}_{mode}")
 
-    # Remove output/temp directory before building
-    temp_dir = os.path.join(script_path, "output/temp")
+    # The configured output directory is configuration-specific.  Keep earlier
+    # configurations intact; only the CMake work directory is single-use here.
     cmakebuild_dir = os.path.join(script_path, "CMakebuild")
     try:
-        if os.path.exists(temp_dir):
-            shutil.rmtree(temp_dir)
         if os.path.exists(cmakebuild_dir):
             shutil.rmtree(cmakebuild_dir)
-        print(f"Removed {temp_dir} & {cmakebuild_dir} directory successfully.")
+        print(f"Removed {cmakebuild_dir} directory successfully.")
     except Exception as e:
-        print(f"Error removing {temp_dir} & {cmakebuild_dir} directory: {e}")
+        print(f"Error removing {cmakebuild_dir} directory: {e}")
         sys.exit(1)
 
     if target_args in ('native'):

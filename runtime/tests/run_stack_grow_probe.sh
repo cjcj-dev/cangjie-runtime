@@ -24,15 +24,15 @@ src_root="$repo/runtime/src"
 compile_with_so()
 {
     local libdir=$1
+    local output_root="${GCV2_RUNTIME_OUTPUT_ROOT:-$(realpath -m "$libdir/../..")}"
     local bc_inc=""
     if [[ -d "$repo/runtime/third_party/third_party_bounds_checking_function/include" ]]; then
         bc_inc="-I$repo/runtime/third_party/third_party_bounds_checking_function/include"
     fi
-    # Prefer system / known boundscheck locations used by prior stack probes.
+    # The configuration root must carry its matching boundscheck product.
     local bc_lib=""
     for cand in \
         "$libdir" \
-        "$repo/runtime/output/temp/lib/x86_64_Release" \
         "$repo/runtime/third_party/third_party_bounds_checking_function/lib" \
         /usr/lib /usr/local/lib; do
         if [[ -f "$cand/libboundscheck.so" || -f "$cand/libboundscheck.a" ]]; then
@@ -42,7 +42,7 @@ compile_with_so()
     done
     taskset -c "$cpuset" clang++ -std=gnu++14 -O2 -pthread -fno-rtti -fno-exceptions \
         -I"$src_root" -I"$src_root/Heap" -I"$repo/runtime/include" \
-        -I"$repo/runtime/output/temp/include" \
+        -I"$output_root/include" \
         $bc_inc \
         "$repo/runtime/tests/stack_grow_harness.cpp" \
         -L"$libdir" -Wl,-rpath,"$libdir" -lcangjie-runtime $bc_lib \
@@ -51,10 +51,6 @@ compile_with_so()
 
 if [[ -n "$runtime_lib_dir" && -f "$runtime_lib_dir/libcangjie-runtime.so" ]]; then
     compile_with_so "$runtime_lib_dir"
-elif [[ -f "$repo/runtime/output/temp/lib/x86_64_Release/libcangjie-runtime.so" ]]; then
-    compile_with_so "$repo/runtime/output/temp/lib/x86_64_Release"
-elif [[ -f "$repo/runtime/output/temp/lib/x86_64_Relwithdebinfo/libcangjie-runtime.so" ]]; then
-    compile_with_so "$repo/runtime/output/temp/lib/x86_64_Relwithdebinfo"
 else
     echo "STACKGROW_PROBE no runtime SO; set GCV2_RUNTIME_LIB_DIR" >&2
     cat "$probe_tmp/compile.err" 2>/dev/null || true
