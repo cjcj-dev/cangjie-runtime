@@ -66,6 +66,7 @@ set(GC_UNIT_SOURCES
     test_m0_correlation.cpp
     test_fwdreturn.cpp
     test_ghost_region_lookup.cpp
+    test_identity_kept_remap.cpp
     test_fnlz_roots.cpp
     test_reference_processor.cpp
     test_mark_stack_entry.cpp
