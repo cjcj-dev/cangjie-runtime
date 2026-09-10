@@ -11,6 +11,7 @@
 
 #include "Heap/Allocator/ForwardingTable.h"
 #include "Heap/Allocator/RegionManager.h"
+#include "Heap/Collector/CollectorProxy.h"
 #include "Heap/Collector/CollectorResources.h"
 #include "Heap/WCollector/WCollector.h"
 
