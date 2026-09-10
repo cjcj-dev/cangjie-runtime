@@ -2347,6 +2347,11 @@ RegionInfo* RegionManager::TakeRegion(size_t num, RegionInfo::UnitRole type, boo
 template<Generation G>
 void RegionManager::ForwardFromRegions(GCThreadPool* threadPool)
 {
+#if defined(MRT_GC_UNIT_TESTS)
+    if (G == Generation::Old) {
+        RunRememberedOldForwardHookForTest(this);
+    }
+#endif
     if (threadPool != nullptr) {
         int32_t threadNum = threadPool->GetMaxActiveThreadNum() + 1;
         // We won't change fromRegionList during gc, so we can use it without lock.

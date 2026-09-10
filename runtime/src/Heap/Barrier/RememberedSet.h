@@ -87,10 +87,11 @@ public:
     // mutators alive. Callers must FlipForMinor first. DrainForMinor = Flip + Scan.
     size_t ScanPreviousForMinor(std::unordered_set<MAddress>& records);
     // Delayed consumer edge.  The caller invokes this only after the slots
-    // in consumedSlots have passed through the product remset rescan/follow
-    // path. It closes per-forwarding publication receipts for this young
-    // sequence and rejects a skipped or rejected consumer.
-    void CompleteScanForMinor(const std::unordered_set<MAddress>& consumedSlots);
+    // in processedSlots have reached the product remset consumer; consumedSlots
+    // identifies entries admitted to mark/follow. Together they close the
+    // forwarding receipts for this young sequence.
+    void CompleteScanForMinor(const std::unordered_set<MAddress>& processedSlots,
+                              const std::unordered_set<MAddress>& consumedSlots);
 
 #if defined(MRT_GC_UNIT_TESTS)
     struct FlipTouchCounts {

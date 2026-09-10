@@ -227,6 +227,7 @@ size_t RememberedSet::MoveInPlaceSlots(const std::vector<InPlaceSlot>& taken, MA
         const bool sourceIsPrevious = sourceFace == previousBuffer;
         const bool rejectedByYoung = sourceIsPrevious && previousScanState != PreviousScanState::WAITING;
         const bool consumerAlreadyComplete = sourceIsPrevious && previousScanState == PreviousScanState::COMPLETE;
+        const uint64_t receiptYoungSeq = sourceIsPrevious ? youngSequence : youngSequence + 1;
         const uint8_t buffer = rejectedByYoung ? activeBuffer.load(std::memory_order_relaxed) : sourceFace;
         const size_t bit = AddressToBit(toSlot);
         const size_t word = bit / kBitsPerWord;
@@ -246,8 +247,8 @@ size_t RememberedSet::MoveInPlaceSlots(const std::vector<InPlaceSlot>& taken, MA
 #endif
         ++moved;
         if (observer != nullptr) {
-            observer(context, it->field, toSlot, sourceFace, buffer, youngSequence,
-                     rejectedByYoung, consumerAlreadyComplete || !sourceIsPrevious);
+            observer(context, it->field, toSlot, sourceFace, buffer, receiptYoungSeq,
+                     rejectedByYoung, consumerAlreadyComplete);
         }
     }
     return moved;
@@ -347,6 +348,7 @@ size_t RememberedSet::TransferObjectSlots(const std::vector<InPlaceSlot>& captur
         const bool sourceIsPrevious = sourceFace == previousBuffer;
         const bool rejectedByYoung = sourceIsPrevious && previousScanState != PreviousScanState::WAITING;
         const bool consumerAlreadyComplete = sourceIsPrevious && previousScanState == PreviousScanState::COMPLETE;
+        const uint64_t receiptYoungSeq = sourceIsPrevious ? youngSequence : youngSequence + 1;
         const uint8_t destinationFace = rejectedByYoung ? activeBuffer.load(std::memory_order_relaxed) : sourceFace;
         const size_t toBit = AddressToBit(toSlot);
         const size_t toWord = toBit / kBitsPerWord;
@@ -366,8 +368,8 @@ size_t RememberedSet::TransferObjectSlots(const std::vector<InPlaceSlot>& captur
 #endif
         ++transferred;
         if (observer != nullptr) {
-            observer(context, fromSlot, toSlot, sourceFace, destinationFace, youngSequence,
-                     rejectedByYoung, consumerAlreadyComplete || !sourceIsPrevious);
+            observer(context, fromSlot, toSlot, sourceFace, destinationFace, receiptYoungSeq,
+                     rejectedByYoung, consumerAlreadyComplete);
         }
     }
     return transferred;
@@ -466,7 +468,8 @@ size_t RememberedSet::ScanPreviousForMinor(std::unordered_set<MAddress>& records
     return records.size();
 }
 
-void RememberedSet::CompleteScanForMinor(const std::unordered_set<MAddress>& consumedSlots)
+void RememberedSet::CompleteScanForMinor(const std::unordered_set<MAddress>& processedSlots,
+                                         const std::unordered_set<MAddress>& consumedSlots)
 {
     CheckInitialized();
     std::lock_guard<std::mutex> publicationGuard(publicationLock);
@@ -474,7 +477,7 @@ void RememberedSet::CompleteScanForMinor(const std::unordered_set<MAddress>& con
                  "after-scan receipt-not-consumed young-seq=%llu state=%u scanned=%zu",
                  static_cast<unsigned long long>(youngSequence), static_cast<unsigned>(previousScanState),
                  consumedSlots.size());
-    ForwardingTable::CompleteRemsetPublications(youngSequence, consumedSlots, *this);
+    ForwardingTable::CompleteRemsetPublications(youngSequence, processedSlots, consumedSlots, *this);
     previousScanState = PreviousScanState::COMPLETE;
 }
 
@@ -501,7 +504,7 @@ size_t RememberedSet::DrainForMinor(std::unordered_set<MAddress>& records)
     FlipForMinor();
     const size_t count = ScanPreviousForMinor(records);
     const std::unordered_set<MAddress> consumed;
-    CompleteScanForMinor(consumed);
+    CompleteScanForMinor(records, consumed);
     return count;
 }
 

@@ -58,6 +58,9 @@ struct RememberedNetworkTestReceipt {
 void ResetRememberedNetworkTestReceipt();
 RememberedNetworkTestReceipt ReadRememberedNetworkTestReceipt();
 void NoteRememberedAfterScanCompleteForTest();
+using RememberedOldForwardHook = void (*)(void* manager, void* context);
+void ArmRememberedOldForwardHookForTest(RememberedOldForwardHook hook, void* context);
+void RunRememberedOldForwardHookForTest(void* manager);
 #endif
 } // namespace MapleRuntime
 

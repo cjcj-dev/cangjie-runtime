@@ -29,6 +29,8 @@ std::atomic<size_t> g_beforeColorFlipForTest{ 0 };
 std::atomic<size_t> g_afterScanCompleteForTest{ 0 };
 std::atomic<size_t> g_beforeForwardingSlotsForTest{ 0 };
 std::atomic<size_t> g_afterForwardingSlotsForTest{ 0 };
+std::atomic<RememberedOldForwardHook> g_oldForwardHookForTest{ nullptr };
+std::atomic<void*> g_oldForwardHookContextForTest{ nullptr };
 } // namespace
 
 void ResetRememberedNetworkTestReceipt()
@@ -52,6 +54,21 @@ RememberedNetworkTestReceipt ReadRememberedNetworkTestReceipt()
 void NoteRememberedAfterScanCompleteForTest()
 {
     g_afterScanCompleteForTest.fetch_add(1, std::memory_order_relaxed);
+}
+
+void ArmRememberedOldForwardHookForTest(RememberedOldForwardHook hook, void* context)
+{
+    g_oldForwardHookContextForTest.store(context, std::memory_order_release);
+    g_oldForwardHookForTest.store(hook, std::memory_order_release);
+}
+
+void RunRememberedOldForwardHookForTest(void* manager)
+{
+    RememberedOldForwardHook hook = g_oldForwardHookForTest.exchange(nullptr, std::memory_order_acq_rel);
+    void* context = g_oldForwardHookContextForTest.exchange(nullptr, std::memory_order_acq_rel);
+    if (hook != nullptr) {
+        hook(manager, context);
+    }
 }
 #endif
 

@@ -1077,8 +1077,10 @@ void WCollector::DoYoungGarbageCollection()
     remsetStats.recorded = rememberedSlots.size();
     remsetStats.live = liveRememberedCount;
     MinorSlotSet consumedSlots;
+    MinorSlotSet processedRemsetSlots;
     if (remsetHashOptRequested && !remsetConsumedLedgerElideActive) {
         consumedSlots.reserve(rememberedSlots.size());
+        processedRemsetSlots.reserve(rememberedSlots.size());
     }
     MinorInteriorBaseMap remsetInteriorBases;
     {
@@ -1087,7 +1089,7 @@ void WCollector::DoYoungGarbageCollection()
         RescanRememberedSet(workStack, rememberedSlots, reachableSlots, weakSlots, currentMinorRoots,
                             fullYoungScan,
                             remsetConsumedLedgerElideActive ? nullptr : &consumedSlots, &remsetStats,
-                            &remsetInteriorBases, stw.get());
+                            &remsetInteriorBases, stw.get(), &processedRemsetSlots);
     }
     if (remsetHashOptRequested) {
         VLOG(REPORT,
@@ -1219,7 +1221,7 @@ void WCollector::DoYoungGarbageCollection()
     // that a slot was offered; it must not stand in for consumer completion.
     // Publications that lost the scan race must additionally remain on the
     // new current face before their forwarding generation can retire.
-    Heap::GetHeap().GetRememberedSet().CompleteScanForMinor(consumedSlots);
+    Heap::GetHeap().GetRememberedSet().CompleteScanForMinor(processedRemsetSlots, consumedSlots);
 #if defined(MRT_GC_UNIT_TESTS)
     NoteRememberedAfterScanCompleteForTest();
 #endif

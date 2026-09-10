@@ -127,6 +127,31 @@ std::atomic<uint64_t> g_markCoverageEpoch[2] = { { 0 }, { 0 } };
 std::mutex g_remsetTablesLock;
 std::unordered_set<ZForwarding*> g_remsetTables;
 
+#if defined(MRT_TESTABLE_INTERNALS)
+std::atomic<MAddress> g_observedRemsetFromSlot{ 0 };
+std::mutex g_observedRemsetReceiptLock;
+ForwardingTable::RemsetReceiptTestView g_observedRemsetReceipt;
+
+void NoteRemsetReceiptForTest(ZForwarding* table,
+                              const ZForwarding::RemsetPublicationReceipt& receipt)
+{
+    if (receipt.fromSlot == 0 ||
+        receipt.fromSlot != g_observedRemsetFromSlot.load(std::memory_order_acquire)) {
+        return;
+    }
+    std::lock_guard<std::mutex> lock(g_observedRemsetReceiptLock);
+    g_observedRemsetReceipt.tableId = reinterpret_cast<uintptr_t>(table);
+    g_observedRemsetReceipt.tableGeneration =
+        table == nullptr ? 0 : table->publication_generation();
+    g_observedRemsetReceipt.fromSlot = receipt.fromSlot;
+    g_observedRemsetReceipt.toSlot = receipt.toSlot;
+    g_observedRemsetReceipt.sourceFace = receipt.sourceFace;
+    g_observedRemsetReceipt.destinationFace = receipt.destinationFace;
+    g_observedRemsetReceipt.youngSeq = receipt.youngSeq;
+    g_observedRemsetReceipt.status = receipt.status;
+}
+#endif
+
 void RegisterRemsetTable(ZForwarding* table)
 {
     std::lock_guard<std::mutex> lock(g_remsetTablesLock);
@@ -425,7 +450,7 @@ void DrainPublicationOwners(ZForwarding* forwarding)
         return;
     }
     if (VerifyFaceEnabled(VerifyFace::Remembered)) {
-        forwarding->verify_remset_receipts_closed("forwarding-retire");
+        forwarding->verify_remset_receipts_retirable("forwarding-retire");
     }
     if (!forwarding->claim()) {
         forwarding->detach_page();
@@ -591,6 +616,9 @@ bool ForwardingTable::RetiredDestroyEligible(ZForwarding* tab)
     if (!CoverageEpochSatisfied(tab)) {
         return false;
     }
+    if (VerifyFaceEnabled(VerifyFace::Remembered) && !tab->remset_receipts_closed()) {
+        return false;
+    }
     const int32_t refs = tab->ref_count().load(std::memory_order_acquire);
     return (refs == 0 || refs == 1) && !GhostCarrierHeld(tab);
 }
@@ -640,7 +668,9 @@ void ForwardingTable::ReclaimRetired(const char* why)
                 deferred.push_back(tab);
                 continue;
             }
-            if (forceCoverageComplete || RetiredDestroyEligible(tab)) {
+            const bool receiptsClosed = !VerifyFaceEnabled(VerifyFace::Remembered) ||
+                tab->remset_receipts_closed();
+            if ((forceCoverageComplete && receiptsClosed) || RetiredDestroyEligible(tab)) {
                 victims.push_back(tab);
             } else {
                 deferred.push_back(tab);
@@ -837,6 +867,9 @@ void ZForwarding::publish_remset_receipt(MAddress fromSlot, MAddress toSlot,
         receipt.status = RemsetReceiptStatus::CONSUMED;
     }
     _remsetReceipts.push_back(receipt);
+#if defined(MRT_TESTABLE_INTERNALS)
+    NoteRemsetReceiptForTest(this, receipt);
+#endif
 }
 
 void ZForwarding::accept_remset_receipts(uint64_t youngSeq)
@@ -845,11 +878,15 @@ void ZForwarding::accept_remset_receipts(uint64_t youngSeq)
     for (RemsetPublicationReceipt& receipt : _remsetReceipts) {
         if (receipt.youngSeq == youngSeq && receipt.status == RemsetReceiptStatus::PUBLISHED) {
             receipt.status = RemsetReceiptStatus::ACCEPTED;
+#if defined(MRT_TESTABLE_INTERNALS)
+            NoteRemsetReceiptForTest(this, receipt);
+#endif
         }
     }
 }
 
 void ZForwarding::complete_remset_receipts(uint64_t youngSeq,
+                                           const std::unordered_set<MAddress>& processedSlots,
                                            const std::unordered_set<MAddress>& consumedSlots,
                                            const RememberedSet& rememberedSet)
 {
@@ -867,11 +904,14 @@ void ZForwarding::complete_remset_receipts(uint64_t youngSeq,
                          static_cast<unsigned>(receipt.sourceFace),
                          static_cast<unsigned long long>(receipt.youngSeq));
             receipt.status = RemsetReceiptStatus::CONSUMED;
+#if defined(MRT_TESTABLE_INTERNALS)
+            NoteRemsetReceiptForTest(this, receipt);
+#endif
             continue;
         }
         if (receipt.status == RemsetReceiptStatus::REJECTED_BY_YOUNG) {
-            CHECK_DETAIL(consumedSlots.count(receipt.fromSlot) != 0,
-                         "after-scan rejected receipt source-slot-not-consumed table=%p generation=%llu "
+            CHECK_DETAIL(processedSlots.count(receipt.fromSlot) != 0,
+                         "after-scan rejected receipt source-slot-not-processed table=%p generation=%llu "
                          "from-slot=%#zx to-slot=%#zx source-face=%u destination-face=%u young-seq=%llu",
                          this, static_cast<unsigned long long>(_publication_generation),
                          static_cast<size_t>(receipt.fromSlot), static_cast<size_t>(receipt.toSlot),
@@ -887,6 +927,9 @@ void ZForwarding::complete_remset_receipts(uint64_t youngSeq,
                          static_cast<unsigned>(receipt.destinationFace),
                          static_cast<unsigned long long>(receipt.youngSeq));
             receipt.status = RemsetReceiptStatus::CONSUMED;
+#if defined(MRT_TESTABLE_INTERNALS)
+            NoteRemsetReceiptForTest(this, receipt);
+#endif
             continue;
         }
         CHECK_DETAIL(false,
@@ -910,6 +953,32 @@ bool ZForwarding::has_remset_receipt(MAddress fromSlot, MAddress toSlot, uint8_t
         }
     }
     return false;
+}
+
+bool ZForwarding::remset_receipts_closed() const
+{
+    std::lock_guard<std::mutex> lock(_remsetReceiptLock);
+    return std::all_of(_remsetReceipts.begin(), _remsetReceipts.end(),
+                       [](const RemsetPublicationReceipt& receipt) {
+                           return receipt.status == RemsetReceiptStatus::CONSUMED;
+                       });
+}
+
+void ZForwarding::verify_remset_receipts_retirable(const char* point) const
+{
+    std::lock_guard<std::mutex> lock(_remsetReceiptLock);
+    for (const RemsetPublicationReceipt& receipt : _remsetReceipts) {
+        CHECK_DETAIL(receipt.status == RemsetReceiptStatus::PUBLISHED ||
+                         receipt.status == RemsetReceiptStatus::CONSUMED,
+                     "after-scan receipt-not-consumed point=%s table=%p generation=%llu "
+                     "from-slot=%#zx to-slot=%#zx face=%u young-seq=%llu state=%u",
+                     point == nullptr ? "?" : point, this,
+                     static_cast<unsigned long long>(_publication_generation),
+                     static_cast<size_t>(receipt.fromSlot), static_cast<size_t>(receipt.toSlot),
+                     static_cast<unsigned>(receipt.sourceFace),
+                     static_cast<unsigned long long>(receipt.youngSeq),
+                     static_cast<unsigned>(receipt.status));
+    }
 }
 
 void ZForwarding::verify_remset_receipts_closed(const char* point) const
@@ -1043,7 +1112,8 @@ void ForwardingTable::AcceptRemsetPublications(uint64_t youngSeq)
 }
 
 void ForwardingTable::CompleteRemsetPublications(
-    uint64_t youngSeq, const std::unordered_set<MAddress>& consumedSlots,
+    uint64_t youngSeq, const std::unordered_set<MAddress>& processedSlots,
+    const std::unordered_set<MAddress>& consumedSlots,
     const RememberedSet& rememberedSet)
 {
     if (!VerifyFaceEnabled(VerifyFace::Remembered)) {
@@ -1051,7 +1121,7 @@ void ForwardingTable::CompleteRemsetPublications(
     }
     std::lock_guard<std::mutex> lock(g_remsetTablesLock);
     for (ZForwarding* table : g_remsetTables) {
-        table->complete_remset_receipts(youngSeq, consumedSlots, rememberedSet);
+        table->complete_remset_receipts(youngSeq, processedSlots, consumedSlots, rememberedSet);
     }
 }
 
@@ -1583,6 +1653,19 @@ uint64_t ForwardingTable::UnavailableCount() { return g_unavailable.load(std::me
 uint64_t ForwardingTable::UnarmedCount() { return g_unarmed.load(std::memory_order_relaxed); }
 
 #if defined(MRT_TESTABLE_INTERNALS)
+void ForwardingTable::ArmRemsetReceiptForTest(MAddress fromSlot)
+{
+    std::lock_guard<std::mutex> lock(g_observedRemsetReceiptLock);
+    g_observedRemsetReceipt = RemsetReceiptTestView{};
+    g_observedRemsetFromSlot.store(fromSlot, std::memory_order_release);
+}
+
+ForwardingTable::RemsetReceiptTestView ForwardingTable::ReadRemsetReceiptForTest()
+{
+    std::lock_guard<std::mutex> lock(g_observedRemsetReceiptLock);
+    return g_observedRemsetReceipt;
+}
+
 void ForwardingTable::SetLookupRetainHook(LookupRetainHook hook, void* context)
 {
     g_lookupRetainHookContext.store(context, std::memory_order_release);

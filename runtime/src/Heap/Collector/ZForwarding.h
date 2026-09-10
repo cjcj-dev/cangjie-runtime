@@ -194,9 +194,12 @@ public:
                                 bool rejectedByYoung, bool consumerAlreadyComplete);
     void accept_remset_receipts(uint64_t youngSeq);
     void complete_remset_receipts(uint64_t youngSeq,
+                                  const std::unordered_set<MAddress>& processedSlots,
                                   const std::unordered_set<MAddress>& consumedSlots,
                                   const RememberedSet& rememberedSet);
     bool has_remset_receipt(MAddress fromSlot, MAddress toSlot, uint8_t sourceFace) const;
+    bool remset_receipts_closed() const;
+    void verify_remset_receipts_retirable(const char* point) const;
     void verify_remset_receipts_closed(const char* point) const;
     RemsetReceiptCounts remset_receipt_counts() const;
     void note_kept_expire() { _kept_seen_expire = true; }

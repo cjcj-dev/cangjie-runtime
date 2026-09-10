@@ -212,6 +212,7 @@ public:
                                  uint8_t sourceFace);
     static void AcceptRemsetPublications(uint64_t youngSeq);
     static void CompleteRemsetPublications(uint64_t youngSeq,
+                                           const std::unordered_set<MAddress>& processedSlots,
                                            const std::unordered_set<MAddress>& consumedSlots,
                                            const class RememberedSet& rememberedSet);
     // Out of line so the unit runner exercises the product SO's publication
@@ -238,6 +239,21 @@ public:
     static uint64_t UnarmedCount();
 
 #if defined(MRT_TESTABLE_INTERNALS)
+    struct RemsetReceiptTestView {
+        uintptr_t tableId{ 0 };
+        uint64_t tableGeneration{ 0 };
+        MAddress fromSlot{ 0 };
+        MAddress toSlot{ 0 };
+        uint8_t sourceFace{ 0 };
+        uint8_t destinationFace{ 0 };
+        uint64_t youngSeq{ 0 };
+        ZForwarding::RemsetReceiptStatus status{ ZForwarding::RemsetReceiptStatus::NONE };
+    };
+    // Read-only observation of one product receipt selected by its old field
+    // slot. The product implementation remains the sole writer.
+    static void ArmRemsetReceiptForTest(MAddress fromSlot);
+    static RemsetReceiptTestView ReadRemsetReceiptForTest();
+
     using LookupRetainHook = void (*)(void*);
     static void SetLookupRetainHook(LookupRetainHook hook, void* context);
     // Fault injection for the NeverInstalled state-machine assertion. Product
