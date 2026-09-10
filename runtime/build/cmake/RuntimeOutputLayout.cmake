@@ -108,6 +108,10 @@ function(cj_runtime_configure_output_layout)
         foreach(_property COMPILE_DEFINITIONS COMPILE_OPTIONS INCLUDE_DIRECTORIES
                 LINK_OPTIONS LINK_DIRECTORIES)
             get_directory_property(_value "${_property}")
+            # CMake de-duplicates these inherited target properties. A toolchain
+            # can be loaded twice on first configure and once on subsequent
+            # runs; repeated identical entries must not change their identity.
+            list(REMOVE_DUPLICATES _value)
             string(SHA256 _value_sha256 "${_value}")
             string(APPEND _signature "DIRECTORY:${_property}=${_value_sha256}\n")
         endforeach()
