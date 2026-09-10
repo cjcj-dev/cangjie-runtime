@@ -696,61 +696,43 @@ if command -v nm >/dev/null 2>&1; then
   nm -D "$RUNTIME_LIB_DIR/libcangjie-runtime.so" 2>/dev/null | grep -E 'RangeRegistry|RelocationRequestQueue|ReceiptAllowsForwarded|VerifyRoots|PlausibleManagedObjectGate|TryRecoverInteriorBase|RouteInfo8GetRoute|RecordCrossGenEdge|MarkGoodHeapGate' | head -40 || true
 fi
 
-START=$(date +%s%N)
-FINAL_TALLY="${GC_UNIT_TALLY_FILE:-}"
-MAIN_TALLY="$OUT/main_tally.txt"
-PUBLICATION_TALLY="$OUT/forwarding_publication_tally.txt"
-PUBLICATION_RUN_LOG="$OUT/forwarding_publication_run.log"
-rm -f "$MAIN_TALLY" "$PUBLICATION_TALLY" "$PUBLICATION_RUN_LOG"
+printf -v GC_UNIT_MAIN_ENV '%s\n' "${M0_CORRELATION_ENV[@]}"
+GC_UNIT_MAIN_ENV=${GC_UNIT_MAIN_ENV%$'\n'}
+export GC_UNIT_MAIN_ENV
 set +e
-env "${M0_CORRELATION_ENV[@]}" GC_UNIT_TALLY_FILE="$MAIN_TALLY" \
-  LD_LIBRARY_PATH="$RUNTIME_LIB_DIR${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}" "$OUT/cj_gc_unit"
-MAIN_RC=$?
-GC_UNIT_TALLY_FILE="$PUBLICATION_TALLY" \
-  LD_LIBRARY_PATH="$RUNTIME_LIB_DIR${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}" \
-  "$OUT/cj_gc_forwarding_publication_unit" 2>&1 | tee "$PUBLICATION_RUN_LOG"
-PUBLICATION_RC=${PIPESTATUS[0]}
+bash "$SRC/run_parallel_tests.sh" \
+  "$OUT/cj_gc_unit" "$OUT/cj_gc_forwarding_publication_unit" "$OUT" "$RUNTIME_LIB_DIR"
+runner_rc=$?
 set -e
 
+# Keep #63's product-shape checks after replacing its whole-ELF publication run
+# with per-case processes. Each publication case has an independent log, so the
+# same required RUN/PASS and I03 result tokens remain observable.
+publication_logs=("$OUT"/test-logs/*-publication.log)
+publication_contract_rc=0
 for test_name in "${PUBLICATION_HOOK_TESTS[@]}"; do
   if [[ "$PUBLICATION_HOOK_PRODUCT_SHAPE" == testable ]]; then
-    if ! /usr/bin/grep -F -q "[  RUN   ] $test_name" "$PUBLICATION_RUN_LOG" ||
-        ! /usr/bin/grep -F -q "[  PASS  ] $test_name" "$PUBLICATION_RUN_LOG"; then
+    if ! /usr/bin/grep -F -q "[  RUN   ] $test_name" "${publication_logs[@]}" ||
+        ! /usr/bin/grep -F -q "[  PASS  ] $test_name" "${publication_logs[@]}"; then
       echo "GC_UNIT_PUBLICATION_HOOK_TEST_DID_NOT_PASS test=$test_name" >&2
-      PUBLICATION_RC=1
+      publication_contract_rc=1
     fi
-  elif /usr/bin/grep -F -q "[  RUN   ] $test_name" "$PUBLICATION_RUN_LOG"; then
+  elif /usr/bin/grep -F -q "[  RUN   ] $test_name" "${publication_logs[@]}"; then
     echo "GC_UNIT_PUBLICATION_HOOK_TEST_RAN_FOR_DEFAULT test=$test_name" >&2
-    PUBLICATION_RC=1
+    publication_contract_rc=1
   fi
 done
 if [[ "$PUBLICATION_HOOK_PRODUCT_SHAPE" == testable ]] &&
-    ! /usr/bin/grep -F -q 'I03_TARGET_REACHED state=1 count=1' "$PUBLICATION_RUN_LOG"; then
+    ! /usr/bin/grep -F -q 'I03_TARGET_REACHED state=1 count=1' "${publication_logs[@]}"; then
   echo "GC_UNIT_I03_TARGET_NOT_REACHED" >&2
-  PUBLICATION_RC=1
+  publication_contract_rc=1
 fi
-END=$(date +%s%N)
-ELAPSED_MS=$(( (END - START) / 1000000 ))
-
-# The gate consumes one independent tally.  Merge only two complete runner
-# tallies; an abort or disconnect leaves the final tally absent and fails
-# closed instead of turning an incomplete run into "one red".
-if [[ -n "$FINAL_TALLY" && -f "$MAIN_TALLY" && -f "$PUBLICATION_TALLY" ]]; then
-  read -r main_tests main_pass main_fail < <(
-    sed -nE 's/^\[========\] ([0-9]+) tests: ([0-9]+) passed, ([0-9]+) failed$/\1 \2 \3/p' "$MAIN_TALLY")
-  read -r publication_tests publication_pass publication_fail < <(
-    sed -nE 's/^\[========\] ([0-9]+) tests: ([0-9]+) passed, ([0-9]+) failed$/\1 \2 \3/p' "$PUBLICATION_TALLY")
-  if [[ -n "${main_tests:-}" && -n "${publication_tests:-}" ]]; then
-    printf '[========] %d tests: %d passed, %d failed\n' \
-      "$((main_tests + publication_tests))" \
-      "$((main_pass + publication_pass))" \
-      "$((main_fail + publication_fail))" >"$FINAL_TALLY"
+if [[ $publication_contract_rc -ne 0 ]]; then
+  # The aggregate tally is completion evidence. Do not leave one consumable
+  # after a post-run product-shape contract fails.
+  if [[ -n "${GC_UNIT_TALLY_FILE:-}" ]]; then
+    rm -f "$GC_UNIT_TALLY_FILE"
   fi
+  exit 1
 fi
-
-RC=0
-if [[ $MAIN_RC -ne 0 || $PUBLICATION_RC -ne 0 ]]; then
-  RC=1
-fi
-echo "GC_UNIT_RUN_DONE rc=$RC main_rc=$MAIN_RC publication_rc=$PUBLICATION_RC wall_ms=$ELAPSED_MS"
-exit "$RC"
+exit "$runner_rc"
