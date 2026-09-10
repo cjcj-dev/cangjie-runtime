@@ -79,6 +79,18 @@ endif()
 include(${CMAKE_CURRENT_SOURCE_DIR}/config.cmake)
 include(${CMAKE_CURRENT_SOURCE_DIR}/SetupAr.cmake)
 
+if (MRT_GC_UNIT_OHOS_HOST)
+    # Exercise the OHOS preprocessor control flow in the real product objects
+    # while retaining the native Linux ABI/toolchain. The shim directory is
+    # test-owned and is invisible when the option is OFF.
+    add_compile_definitions(__OHOS__=1 MRT_GC_UNIT_OHOS_HOST=1)
+    include_directories(BEFORE
+        ${CMAKE_CURRENT_SOURCE_DIR}/tests/gc_unit/ohos_host/include)
+    add_compile_options(
+        "$<$<COMPILE_LANGUAGE:CXX>:-include>"
+        "$<$<COMPILE_LANGUAGE:CXX>:string>")
+endif()
+
 if (MRT_GC_UNIT_TESTS)
     # Test-only visibility for observers such as M0ExitDiagnostics::GetCounts.
     # Correctness/diagnostic product paths must remain outside this definition.
@@ -392,6 +404,13 @@ include_directories(${BOUNDSCHECK_INCLUDE})
 add_subdirectory(${CMAKE_CURRENT_SOURCE_DIR}/src)
 add_subdirectory(third_party/third_party_bounds_checking_function)
 target_sources(cangjie-runtime PRIVATE $<TARGET_OBJECTS:runtime-provenance>)
+if (MRT_GC_UNIT_OHOS_HOST)
+    # OHOS normally gets these definitions from platform-only components.
+    # Keep the native-host substitutes in the test tree and in this product SO
+    # only; the default product source list and link surface remain unchanged.
+    target_sources(cangjie-runtime PRIVATE
+        ${CMAKE_CURRENT_SOURCE_DIR}/tests/gc_unit/ohos_host/ohos_host_stubs.cpp)
+endif()
 if (MACOS_FLAG MATCHES 1)
     install(TARGETS boundscheck DESTINATION runtime/lib/${TARGET_ARCH}${SANITIZER_SUBPATH})
 endif()

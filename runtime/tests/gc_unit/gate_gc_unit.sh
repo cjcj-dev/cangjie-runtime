@@ -25,8 +25,12 @@ PHASE_ENTRY_SOURCE=NOT_RUN
 SEGMENTED_MANAGED_STATE=NOT_RUN
 SEGMENTED_MANAGED_SOURCE=NOT_RUN
 SEGMENTED_MANAGED_CAN_RUN=0
+OHOS_HOST_STATE=NOT_RUN
+OHOS_HOST_SOURCE=NOT_RUN
+OHOS_HOST_FILTERS=0
 STATUS_REASON=UNEXPECTED_EXIT
 TESTABLE_INTERNALS="${MRT_TESTABLE_INTERNALS:-0}"
+OHOS_HOST="${MRT_GC_UNIT_OHOS_HOST:-0}"
 
 write_status() {
   local status_dir tmp
@@ -47,6 +51,9 @@ write_status() {
     echo "SEGMENTED_ARRAY_MANAGED=$SEGMENTED_MANAGED_STATE"
     echo "SEGMENTED_ARRAY_MANAGED_SOURCE=$SEGMENTED_MANAGED_SOURCE"
     echo "SEGMENTED_ARRAY_MANAGED_CAN_RUN=$SEGMENTED_MANAGED_CAN_RUN"
+    echo "OHOS_HOST=$OHOS_HOST_STATE"
+    echo "OHOS_HOST_SOURCE=$OHOS_HOST_SOURCE"
+    echo "OHOS_HOST_FILTERS=$OHOS_HOST_FILTERS"
     echo "REASON=$STATUS_REASON"
   } >"$tmp"
   mv -f "$tmp" "$STATUS_FILE"
@@ -75,7 +82,7 @@ esac
 # this gate; its recursion guard is intentionally scoped to that synthetic child
 # only.
 if [[ "${GC_UNIT_GATE_CONTRACT_SELFTEST:-0}" != "1" ]]; then
-  if ! bash "$SRC/test_gate_testable_contract.sh"; then
+  if ! MRT_GC_UNIT_OHOS_HOST=0 bash "$SRC/test_gate_testable_contract.sh"; then
     echo "GC_UNIT_GATE_FAIL: testable gate contract failed" >&2
     exit 2
   fi
@@ -101,6 +108,15 @@ case "$TESTABLE_INTERNALS" in
   *)
     STATUS_REASON=INVALID_TESTABLE_INTERNALS
     echo "GC_UNIT_GATE_FAIL: MRT_TESTABLE_INTERNALS must be 0 or 1 (got '$TESTABLE_INTERNALS')" >&2
+    exit 2
+    ;;
+esac
+
+case "$OHOS_HOST" in
+  0|1) ;;
+  *)
+    STATUS_REASON=INVALID_OHOS_HOST
+    echo "GC_UNIT_GATE_FAIL: MRT_GC_UNIT_OHOS_HOST must be 0 or 1 (got '$OHOS_HOST')" >&2
     exit 2
     ;;
 esac
@@ -146,6 +162,47 @@ if [[ -z "${GCV2_RUNTIME_LIB_DIR:-}" || ! -f "$GCV2_RUNTIME_LIB_DIR/libcangjie-r
   STATUS_REASON=MISSING_RUNTIME
   echo "GC_UNIT_GATE_FAIL: no libcangjie-runtime.so (set GCV2_RUNTIME_LIB_DIR)" >&2
   exit 2
+fi
+
+# The OHOS-host arm is a separate product shape and a focused three-process
+# suite. It must neither borrow the default suite's stamp nor depend on a Cangjie
+# SDK. run_standalone verifies the product receipt, product/test symbol
+# ownership, dispatch disassembly, and one exact completion token per filter.
+if [[ "$OHOS_HOST" == "1" ]]; then
+  export GC_UNIT_OUT="${GC_UNIT_OUT:-$SRC/build_ohos_host}"
+  mkdir -p "$GC_UNIT_OUT"
+  OHOS_RECEIPT="${GC_UNIT_OHOS_HOST_RECEIPT:-$GC_UNIT_OUT/ohos_host.receipt}"
+  rm -f "$OHOS_RECEIPT"
+  OHOS_HOST_STATE=FAIL
+  OHOS_HOST_SOURCE=FRESH
+  STATUS_REASON=OHOS_HOST_FAILURE
+  GC_UNIT_TIMEOUT="${GC_UNIT_TIMEOUT:-600}"
+  set +e
+  timeout "$GC_UNIT_TIMEOUT" bash "$SCRIPT" >"$GC_UNIT_OUT/ohos_host_gate.log" 2>&1
+  ohos_rc=$?
+  set -e
+  if [[ $ohos_rc -eq 124 ]]; then
+    STATUS_REASON=OHOS_HOST_TIMEOUT
+    echo "GC_UNIT_GATE_FAIL: OHOS-host suite timed out after ${GC_UNIT_TIMEOUT}s" >&2
+    exit 6
+  fi
+  if [[ $ohos_rc -ne 0 || ! -f "$OHOS_RECEIPT" ]] ||
+      ! /usr/bin/grep -qx 'RESULT=PASS' "$OHOS_RECEIPT" ||
+      ! /usr/bin/grep -qx 'FILTER_MAJOR=PASS' "$OHOS_RECEIPT" ||
+      ! /usr/bin/grep -qx 'FILTER_POST=PASS' "$OHOS_RECEIPT" ||
+      ! /usr/bin/grep -qx 'FILTER_EMPTY=PASS' "$OHOS_RECEIPT"; then
+    echo "GC_UNIT_GATE_FAIL: OHOS-host receipt incomplete (rc=$ohos_rc receipt=$OHOS_RECEIPT)" >&2
+    tail -20 "$GC_UNIT_OUT/ohos_host_gate.log" >&2 || true
+    exit 1
+  fi
+  OHOS_HOST_STATE=PASS
+  OHOS_HOST_FILTERS=3
+  CPP_SUITE_STATE=PASS
+  CPP_SUITE_SOURCE=FRESH
+  GATE_STATE=PASS
+  STATUS_REASON=PASS
+  echo "GC_UNIT_GATE_OHOS_HOST_OK filters=3 receipt=$OHOS_RECEIPT status=$STATUS_FILE"
+  exit 0
 fi
 
 # Resolve cjc before the stamp fast path.  Otherwise a stamp from an earlier

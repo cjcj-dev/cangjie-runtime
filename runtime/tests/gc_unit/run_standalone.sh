@@ -72,6 +72,167 @@ if [[ -z "$RUNTIME_LIB_DIR" || ! -f "$RUNTIME_LIB_DIR/libcangjie-runtime.so" ]];
   exit 2
 fi
 
+run_ohos_host_arm() {
+  local so="$RUNTIME_LIB_DIR/libcangjie-runtime.so"
+  local bounds="$RUNTIME_LIB_DIR/libboundscheck.so"
+  local host_src="$SRC/ohos_host"
+  local host_inc="$host_src/include"
+  local elf="$OUT/cj_gc_ohos_host_unit"
+  local runroot="$OUT/ohos_host_runroot"
+  local receipt="${GC_UNIT_OHOS_HOST_RECEIPT:-$OUT/ohos_host.receipt}"
+  local product_nm="$OUT/ohos_host_product.full-defined.txt"
+  local test_nm="$OUT/ohos_host_test.full-defined.txt"
+  local test_undef="$OUT/ohos_host_test.undefined.txt"
+  local post_disassembly="$OUT/ohos_host_postresolve.disassembly.txt"
+  local libc_real
+  local test_name key rc state
+  local overall_rc=0
+
+  rm -f "$receipt"
+  if [[ ! -f "$bounds" || ! -f "$host_src/ohos_cycle_unit.cpp" ]]; then
+    echo "GC_UNIT_OHOS_HOST_MISSING_INPUT runtime=$so bounds=$bounds source=$host_src/ohos_cycle_unit.cpp" >&2
+    return 20
+  fi
+
+  nm --defined-only "$so" | c++filt >"$product_nm"
+  for symbol in \
+      'MRT_GC_UNIT_OHOS_HOST_RECEIPT' \
+      'CJ_MRT_RolveCycleRef' \
+      'MapleRuntime::WCollector::DoGarbageCollection()' \
+      'MapleRuntime::WCollector::PostResolveCycleTask()'; do
+    if ! /usr/bin/grep -F -q "$symbol" "$product_nm"; then
+      echo "GC_UNIT_OHOS_HOST_PRODUCT_SYMBOL_MISSING symbol=$symbol" >&2
+      return 21
+    fi
+  done
+
+  mkdir -p "$OUT" "$runroot"
+  libc_real="$($CXX -print-file-name=libc.so.6)"
+  if [[ "$libc_real" == "libc.so.6" || ! -f "$libc_real" ]]; then
+    echo "GC_UNIT_OHOS_HOST_LIBC_NOT_FOUND compiler=$CXX result=$libc_real" >&2
+    return 22
+  fi
+  libc_real="$(readlink -f "$libc_real")"
+  ln -sfn "$libc_real" "$runroot/libc.so"
+
+  "$CXX" -std=gnu++17 -O0 -g -Wall -Wextra -pthread -fno-rtti -fexceptions \
+    -fvisibility-inlines-hidden -D__OHOS__=1 -DMRT_GC_UNIT_TESTS=1 \
+    -DMRT_TESTABLE_INTERNALS=1 -include string \
+    -I"$host_inc" -I"$SRC" -I"$ROOT/runtime/src" -I"$ROOT/runtime/src/Heap" \
+    -I"$ROOT/runtime/src/CJThread/src/runtime/schedule/include" \
+    -I"$ROOT/runtime/include" \
+    -I"$ROOT/runtime/third_party/third_party_bounds_checking_function/include" \
+    -I"$ROOT/runtime/output/temp/include" \
+    "$SRC/gc_unit_main.cpp" "$host_src/ohos_cycle_unit.cpp" \
+    -L"$RUNTIME_LIB_DIR" -Wl,-rpath,"$RUNTIME_LIB_DIR" -Wl,--exclude-libs,ALL \
+    -lcangjie-runtime -lboundscheck -o "$elf"
+
+  # Full nm is deliberate: a local/weak copy in the test is still a second
+  # implementation and must fail this product-identity guard.
+  nm --defined-only "$elf" | c++filt >"$test_nm"
+  nm -u "$elf" | c++filt >"$test_undef"
+  if ! /usr/bin/grep -Eq '[[:space:]]main$' "$test_nm"; then
+    echo "GC_UNIT_OHOS_HOST_NM_POSITIVE_CONTROL_FAIL symbol=main" >&2
+    return 23
+  fi
+  for symbol in \
+      'CJ_MRT_RolveCycleRef' \
+      'MapleRuntime::WCollector::DoGarbageCollection()' \
+      'MapleRuntime::WCollector::PostResolveCycleTask()'; do
+    if /usr/bin/grep -F -q "$symbol" "$test_nm"; then
+      echo "GC_UNIT_OHOS_HOST_LOCAL_PRODUCT_DEFINITION symbol=$symbol" >&2
+      return 24
+    fi
+  done
+  for symbol in \
+      'MapleRuntime::WCollector::DoGarbageCollection()' \
+      'MapleRuntime::WCollector::PostResolveCycleTask()'; do
+    if ! /usr/bin/grep -F -q "$symbol" "$test_undef"; then
+      echo "GC_UNIT_OHOS_HOST_PRODUCT_IMPORT_MISSING symbol=$symbol" >&2
+      return 25
+    fi
+  done
+
+  objdump -drC "$so" | sed -n \
+    '/<MapleRuntime::WCollector::PostResolveCycleTask()>/,/^$/p' >"$post_disassembly"
+  if ! /usr/bin/grep -F -q 'CJ_MRT_RolveCycleRef' "$post_disassembly"; then
+    echo "GC_UNIT_OHOS_HOST_POST_DISPATCH_MISSING" >&2
+    return 26
+  fi
+
+  sha256sum "$elf" "$so" "$bounds" >"$OUT/ohos_host_artifacts.sha256"
+  {
+    echo "BUILD_CAPTURED_AT=$(date --iso-8601=seconds)"
+    echo "SOURCE_COMMIT=$(git -C "$ROOT" rev-parse HEAD)"
+    echo "SOURCE_STATUS_BEGIN"
+    git -C "$ROOT" status --porcelain
+    echo "SOURCE_STATUS_END"
+  } >"$OUT/ohos_host_lineage.txt"
+
+  declare -a tests=(
+    OHOSCycle.MajorEntryPostsResolveTask
+    OHOSCycle.PostResolvePostsProductTask
+    OHOSCycle.EmptyWorkDoesNotPost
+  )
+  declare -a keys=(MAJOR POST EMPTY)
+  declare -a states=(NOT_RUN NOT_RUN NOT_RUN)
+  declare -a rcs=(125 125 125)
+
+  for i in "${!tests[@]}"; do
+    test_name="${tests[$i]}"
+    key="${keys[$i]}"
+    set +e
+    env LD_DEBUG=libs \
+      LD_LIBRARY_PATH="$runroot:$RUNTIME_LIB_DIR${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}" \
+      "$elf" "--gtest_filter=$test_name" >"$OUT/ohos_host_${key,,}.log" 2>&1
+    rc=$?
+    set -e
+    state=FAIL
+    if [[ $rc -eq 0 ]] &&
+        /usr/bin/grep -F -q "[  RUN   ] $test_name" "$OUT/ohos_host_${key,,}.log" &&
+        /usr/bin/grep -F -q "[  PASS  ] $test_name" "$OUT/ohos_host_${key,,}.log" &&
+        /usr/bin/grep -F -q "OHOS_HOST_ASSERT_REACHED test=$test_name" "$OUT/ohos_host_${key,,}.log"; then
+      state=PASS
+    else
+      overall_rc=1
+    fi
+    states[$i]="$state"
+    rcs[$i]="$rc"
+    echo "$rc" >"$OUT/ohos_host_${key,,}.rc"
+    echo "GC_UNIT_OHOS_HOST_FILTER test=$test_name state=$state rc=$rc log=$OUT/ohos_host_${key,,}.log"
+  done
+
+  {
+    echo "SCHEMA_VERSION=1"
+    echo "CONFIGURATION=MRT_GC_UNIT_OHOS_HOST"
+    echo "PRODUCT_RECEIPT=MRT_GC_UNIT_OHOS_HOST_RECEIPT"
+    for i in "${!tests[@]}"; do
+      echo "FILTER_${keys[$i]}=${states[$i]}"
+      echo "FILTER_${keys[$i]}_RC=${rcs[$i]}"
+    done
+    echo "RESULT=$([[ $overall_rc -eq 0 ]] && echo PASS || echo FAIL)"
+    sha256sum "$elf" "$so" "$bounds"
+  } >"$receipt"
+
+  if [[ $overall_rc -ne 0 ]]; then
+    echo "GC_UNIT_OHOS_HOST_FAIL receipt=$receipt" >&2
+    return "$overall_rc"
+  fi
+  echo "GC_UNIT_OHOS_HOST_OK filters=3 receipt=$receipt elf=$elf"
+}
+
+case "${MRT_GC_UNIT_OHOS_HOST:-0}" in
+  0) ;;
+  1)
+    run_ohos_host_arm
+    exit $?
+    ;;
+  *)
+    echo "error: MRT_GC_UNIT_OHOS_HOST must be 0 or 1" >&2
+    exit 2
+    ;;
+esac
+
 TEST_DEFINES=(-DMRT_ZSTAT_COMPILED=1)
 RANGE_REGISTRY_FLAGS=()
 RANGE_REGISTRY_SOURCES=()

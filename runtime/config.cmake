@@ -466,6 +466,11 @@ option(MRT_ZSTAT "Build ZStatPhase pause/concurrent instrumentation" OFF)
 # GC unit tests (HotSpot-gtest-shaped, pure invariant TUs). Default OFF so product
 # builds are byte-identical when the option is left alone.
 option(MRT_GC_UNIT_TESTS "Build GC unit tests (cj_gc_unit)" OFF)
+# Test-only Linux host configuration that compiles the product with the OHOS
+# preprocessor shape. It is not an OHOS ABI/device build: the dedicated
+# gc_unit runner supplies only the host shims needed to execute that control
+# flow on x86_64 Linux.
+option(MRT_GC_UNIT_OHOS_HOST "Build the x86_64 Linux OHOS-host GC unit arm" OFF)
 # Test-only product shape: expose selected internal entry points so gc_unit can
 # bind the implementation from libcangjie-runtime.  The default product keeps
 # those templates inline and does not grant test access.
@@ -473,6 +478,16 @@ option(MRT_TESTABLE_INTERNALS "Build test-only exported GC internals" OFF)
 # M0 correlation is an experiment-only identity ledger.  The default product
 # does not compile its ABI or registry paths.
 option(MRT_M0_CORRELATION_EXPERIMENT "Build the M0 correlation experiment ledger" OFF)
+if (MRT_GC_UNIT_OHOS_HOST)
+    if (NOT CMAKE_HOST_SYSTEM_NAME STREQUAL "Linux" OR
+        NOT CMAKE_HOST_SYSTEM_PROCESSOR MATCHES "^(x86_64|amd64|AMD64)$" OR
+        CMAKE_CROSSCOMPILING)
+        message(FATAL_ERROR
+            "MRT_GC_UNIT_OHOS_HOST requires a native x86_64 Linux build; "
+            "it is not the OpenHarmony SDK cross-build arm")
+    endif()
+    set(MRT_GC_UNIT_TESTS ON CACHE BOOL "Build GC unit tests (cj_gc_unit)" FORCE)
+endif()
 if (MRT_GC_UNIT_TESTS)
     # An in-tree gc_unit target must see the same class shape as the product SO
     # it links.  Turning on the test suite is itself an explicit test build.
