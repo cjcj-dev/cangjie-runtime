@@ -127,6 +127,9 @@ public:
         ToAnswer retiredAnswer;
         bool publicationClosed;
         bool currentMembership;
+        // ArmedHit: identity of the table supplying `to`. Otherwise: the active
+        // candidate, or the first covering retired table when no active exists.
+        // All carrier fields below belong to that same table.
         uintptr_t tableId;
         MAddress carrierStart{ 0 };
         uint64_t publicationGeneration{ 0 };
