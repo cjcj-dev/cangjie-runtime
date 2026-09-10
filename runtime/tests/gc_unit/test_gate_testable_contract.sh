@@ -52,11 +52,16 @@ printf '%s\n' \
 PATH="$fixture/bin:$PATH" GC_UNIT_GATE_TRACE="$fixture/config.trace" \
   GC_UNIT_OUT="$fixture/config-out" GC_UNIT_GATE_CONTRACT_SELFTEST=1 \
   GC_UNIT_GATE_LANGUAGE_TESTS=defer GCV2_RUNTIME_CONFIG="$config_id" \
-  GC_UNIT_GATE_STATUS="$fixture/config.status" \
+  GCV2_RUNTIME_LIB_DIR="$config_lib" \
   bash "$fixture/runtime/tests/gc_unit/gate_gc_unit.sh" >"$fixture/config.log" 2>&1
-/usr/bin/grep -qx "RUNTIME_CONFIG_ID=$config_id" "$fixture/config.status"
-/usr/bin/grep -Eq '^RUNTIME_SHA256=[0-9a-f]{64}$' "$fixture/config.status"
-/usr/bin/grep -Eq '^BOUNDSCHECK_SHA256=[0-9a-f]{64}$' "$fixture/config.status"
+config_status="$config_lib/gc_unit_gate.status"
+if [[ ! -f "$config_status" ]]; then
+  echo "CONFIG_STATUS_LOCATION_FAIL: expected status beside selected runtime: $config_status" >&2
+  exit 1
+fi
+/usr/bin/grep -qx "RUNTIME_CONFIG_ID=$config_id" "$config_status"
+/usr/bin/grep -Eq '^RUNTIME_SHA256=[0-9a-f]{64}$' "$config_status"
+/usr/bin/grep -Eq '^BOUNDSCHECK_SHA256=[0-9a-f]{64}$' "$config_status"
 /usr/bin/grep -q "GC_UNIT_RUNTIME_IDENTITY config=$config_id" "$fixture/config.log"
 
 set +e

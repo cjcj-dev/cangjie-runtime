@@ -11,10 +11,10 @@ FINALIZER_SCRIPT="$SRC/run_finalizer_trigger.sh"
 PHASE_ENTRY_SCRIPT="$SRC/run_phase_entry_trigger.sh"
 SEGMENTED_MANAGED_SCRIPT="$SRC/run_segmented_array_managed.sh"
 STATUS_FILE="${GC_UNIT_GATE_STATUS:-}"
-if [[ -z "$STATUS_FILE" && -n "${GCV2_RUNTIME_CONFIG:-}" ]]; then
-  STATUS_FILE="$ROOT/runtime/output/temp/$GCV2_RUNTIME_CONFIG/gc_unit_gate.status"
-elif [[ -z "$STATUS_FILE" && -n "${GCV2_RUNTIME_LIB_DIR:-}" ]]; then
+if [[ -z "$STATUS_FILE" && -n "${GCV2_RUNTIME_LIB_DIR:-}" ]]; then
   STATUS_FILE="$GCV2_RUNTIME_LIB_DIR/gc_unit_gate.status"
+elif [[ -z "$STATUS_FILE" && -n "${GCV2_RUNTIME_CONFIG:-}" ]]; then
+  STATUS_FILE="$ROOT/runtime/output/temp/$GCV2_RUNTIME_CONFIG/gc_unit_gate.status"
 fi
 STATUS_FILE="${STATUS_FILE:-$ROOT/runtime/output/gc_unit_gate.status}"
 LANGUAGE_TEST_MODE="${GC_UNIT_GATE_LANGUAGE_TESTS:-all}"
