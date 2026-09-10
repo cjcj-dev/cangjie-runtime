@@ -198,6 +198,19 @@ inline void RunInOtherVm(const std::string& fullName)
 #endif
 }
 
+inline int ListTests()
+{
+    const char* currentSuite = nullptr;
+    for (const auto& test : Registry()) {
+        if (currentSuite == nullptr || std::strcmp(currentSuite, test.suite) != 0) {
+            currentSuite = test.suite;
+            std::printf("%s.\n", currentSuite);
+        }
+        std::printf("  %s\n", test.name);
+    }
+    return Registry().empty() ? 1 : 0;
+}
+
 inline int RunAll()
 {
     int failed = 0;
