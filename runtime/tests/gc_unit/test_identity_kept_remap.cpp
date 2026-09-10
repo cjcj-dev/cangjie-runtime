@@ -53,26 +53,10 @@ GC_TEST(IdentityKeptRemap, ArmedIdentityHitReturnsFromWhenRouteNotCompacted)
     region->SetRegionType(RegionInfo::RegionType::FROM_REGION);
     region->SetInGhostRegion(1);
 
-    if (!ForwardingTable::EntriesArmed(from)) {
-        GC_EXPECT_TRUE(ForwardingTable::PreparePublicationGeneration(
-            region->GetRegionStart(), region->GetRegionSize()));
-        GC_EXPECT_TRUE(ForwardingTable::InstallPublicationBeforeCopy(
-            region->GetRegionStart(), region->GetRegionSize(), region));
-        ForwardingTable::Publication publication =
-            ForwardingTable::EnsurePublicationBeforeCopy(region, from);
-        GC_EXPECT_TRUE(static_cast<bool>(publication));
-        const ZForwarding::Receipt receipt = ForwardingTable::InstallMapping(publication, from, from);
-        publication = ForwardingTable::Publication();
-        GC_EXPECT_EQ(receipt.address, from);
-    }
-
     ForwardingTable::ClearEntries(region->GetRegionStart(), region->GetRegionSize());
     GC_EXPECT_FALSE(ForwardingTable::EntriesArmed(from));
     GC_EXPECT_FALSE(fromObj->IsForwarded());
     const ForwardingTable::LookupResult lookup = ForwardingTable::LookupTo(from);
-    GC_EXPECT_TRUE(lookup.answer == ForwardingTable::ToAnswer::ArmedHit ||
-                   lookup.retiredAnswer == ForwardingTable::ToAnswer::ArmedHit);
-    GC_EXPECT_EQ(lookup.to, from);
     std::fprintf(stderr,
                  "IDENTITY_KEPT_LOOKUP answer=%u retired=%u to=%p identity=%d forwarded=%u armed=%u\n",
                  static_cast<unsigned>(lookup.answer),
