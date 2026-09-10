@@ -54,7 +54,7 @@ struct GcHeapFixture {
     // Six permits the intrusive RegionList port to exercise the same six-node
     // order/removal matrix as OpenJDK test_zList.  Existing fixtures still
     // initialize and use region0/region1 only.
-    static constexpr size_t kUnits = 6;
+    static constexpr size_t kUnits = 64;
 
     GcHeapFixture()
     {
@@ -98,6 +98,21 @@ struct GcHeapFixture {
         obj1 = PlaceObject(heapStart + RegionInfo::UNIT_SIZE + 64);
         region0->SetRegionAllocPtr(reinterpret_cast<MAddress>(obj0) + 64);
         region1->SetRegionAllocPtr(reinterpret_cast<MAddress>(obj1) + 64);
+        for (size_t index = 2; index < kUnits; ++index) {
+            RegionInfo::InitFreeRegion(index, 1);
+        }
+    }
+
+    void BindTakeRegionCapacity()
+    {
+        auto& space = static_cast<RegionSpace&>(Heap::GetHeap().GetAllocator());
+        RegionManager& manager = space.GetRegionManager();
+        manager.freeRegionManager.Initialize(kUnits);
+        manager.regionHeapStart = heapStart;
+        manager.regionHeapEnd = heapStart + kUnits * RegionInfo::UNIT_SIZE;
+        manager.inactiveZone.store(heapStart + 2 * RegionInfo::UNIT_SIZE, std::memory_order_relaxed);
+        manager.maxUnitCountPerRegion = 1;
+        manager.maxUnitCountPerPinnedRegion = 1;
     }
 
     ~GcHeapFixture()

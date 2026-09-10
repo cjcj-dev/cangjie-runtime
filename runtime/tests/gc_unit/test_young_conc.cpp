@@ -1574,6 +1574,103 @@ GC_TEST(YoungConc, LegacyTerminationMissesUnfullSatbNode)
     fx.FreePlanted(live);
 }
 
+extern "C" void MRT_SetYoungForwardWindowTestHook(void (*hook)());
+
+namespace {
+struct FlipWindowRemapState {
+    WCollector* collector = nullptr;
+    BaseObject* child = nullptr;
+    std::atomic<int> hookFired{ 0 };
+    std::atomic<int> ghostAtCall{ 0 };
+    std::atomic<BaseObject*> remapped{ nullptr };
+};
+
+FlipWindowRemapState g_flipWindow;
+
+void FlipWindowMutatorRemap()
+{
+    g_flipWindow.hookFired.store(1, std::memory_order_release);
+    if (g_flipWindow.collector == nullptr || g_flipWindow.child == nullptr) {
+        return;
+    }
+    const MAddress fromAddr = reinterpret_cast<MAddress>(g_flipWindow.child);
+    RegionInfo* ghost = RegionInfo::GetGhostFromRegionAt(fromAddr);
+    g_flipWindow.ghostAtCall.store(ghost != nullptr ? 1 : 0, std::memory_order_release);
+    BaseObject* got =
+        g_flipWindow.collector->relocate_or_remap_object(g_flipWindow.child, ZGenerationId::young);
+    g_flipWindow.remapped.store(got, std::memory_order_release);
+}
+} // namespace
+
+GC_OTHER_VM_TEST(YoungConc, FlipWindowMutatorRemapWaitsForCopy)
+{
+    GC_EXPECT_EQ(CJ_ScheduleManagerInit(), 0);
+    GC_EXPECT_EQ(setenv("MRT_GCV2_MARKPAR_FORCE_SERIAL", "1", 1), 0);
+    GC_EXPECT_EQ(setenv("MRT_GCV2_EVACPAR_FORCE_SERIAL", "1", 1), 0);
+    MutatorManager mutatorManager;
+    YoungConcTestRuntime runtime(mutatorManager);
+    GcHeapFixture fx;
+    fx.BindTakeRegionCapacity();
+    fx.region0->SetYoungRegionFlag(1);
+    fx.region0->SetYoungAge(1);
+    fx.region1->SetYoungRegionFlag(1);
+    fx.region1->SetYoungAge(1);
+    LiveInfo* live0 = fx.PlantLiveInfo(fx.region0);
+    LiveInfo* live1 = fx.PlantLiveInfo(fx.region1);
+    (void)fx.PlantMarkBitmap<Generation::Young>(live0, fx.region0->GetRegionSize());
+    (void)fx.PlantMarkBitmap<Generation::Young>(live1, fx.region1->GetRegionSize());
+    BaseObject* holder = fx.obj0;
+    BaseObject* child = fx.obj1;
+    fx.region0->SetRegionAllocPtr(reinterpret_cast<MAddress>(holder) + 64);
+    fx.region1->SetRegionAllocPtr(reinterpret_cast<MAddress>(child) + 64);
+    auto* field = &HeapSlotAt<>(reinterpret_cast<MAddress>(holder) + TYPEINFO_PTR_SIZE);
+    field->StoreColoured(GcUnit::StoreGoodPointer(child));
+    (void)fx.region0->MarkObject(fx.region0->GetMarkView<Generation::Young>(), holder, 8);
+    (void)fx.region1->MarkObject(fx.region1->GetMarkView<Generation::Young>(), child, 8);
+
+    CollectorResources& resources = Heap::GetHeap().GetCollectorResources();
+    WCollector collector(Heap::GetHeap().GetAllocator(), resources);
+    RelocationReceiptTestAccess::BindCollector(resources, &collector);
+    collector.SetGCPhase(GCPhase::GC_PHASE_CLEAR_SATB_BUFFER);
+    GCThreadPool threadPool("gc-unit-flip-window-remap", 0, GCPoolThread::GC_THREAD_PRIORITY);
+    RelocationReceiptTestAccess::BindThreadPool(resources, &threadPool);
+    RegionSpace& space = reinterpret_cast<RegionSpace&>(Heap::GetHeap().GetAllocator());
+    space.GetRegionManager().EnlistFullThreadLocalRegion(fx.region0);
+    space.GetRegionManager().EnlistFullThreadLocalRegion(fx.region1);
+    Heap::GetHeap().GetRememberedSet().Initialize(fx.heapStart, GcHeapFixture::kUnits * RegionInfo::UNIT_SIZE);
+    Heap::GetHeap().GetRememberedSet().Record(reinterpret_cast<MAddress>(field), true);
+    const bool startedBefore = resources.IsGcStarted();
+    const GCReason reasonBefore = resources.GetGCStats().reason;
+    resources.SetGcStarted(true);
+    resources.GetGCStats().reason = GC_REASON_YOUNG;
+
+    g_flipWindow.collector = &collector;
+    g_flipWindow.child = child;
+    g_flipWindow.hookFired.store(0);
+    g_flipWindow.ghostAtCall.store(0);
+    g_flipWindow.remapped.store(nullptr);
+    MRT_SetYoungForwardWindowTestHook(&FlipWindowMutatorRemap);
+
+    RelocationReceiptTestAccess::RunCollectionDispatch(collector);
+
+    MRT_SetYoungForwardWindowTestHook(nullptr);
+    BaseObject* got = g_flipWindow.remapped.load();
+    std::fprintf(stderr,
+                 "DETAIL flip_window hook=%d ghostAtCall=%d remapped=%p from=%p\n",
+                 g_flipWindow.hookFired.load(), g_flipWindow.ghostAtCall.load(),
+                 static_cast<void*>(got), static_cast<void*>(child));
+    GC_EXPECT_TRUE(g_flipWindow.hookFired.load() >= 1);
+    GC_EXPECT_TRUE(got != nullptr);
+
+    resources.SetGcStarted(startedBefore);
+    resources.GetGCStats().reason = reasonBefore;
+    RelocationReceiptTestAccess::BindThreadPool(resources, nullptr);
+    threadPool.Exit();
+    RelocationReceiptTestAccess::BindCollector(resources, nullptr);
+    (void)live0;
+    (void)live1;
+}
+
 #endif // MRT_TESTABLE_INTERNALS
 
 // After a completed handoff, new inserts belong to the live set, not the
