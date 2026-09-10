@@ -228,7 +228,10 @@ if [[ "$OHOS_HOST" == "1" ]]; then
     echo "GC_UNIT_GATE_FAIL: OHOS-host suite timed out after ${GC_UNIT_TIMEOUT}s" >&2
     exit 6
   fi
-  if ! /usr/bin/grep -Fqx \
+  # An explicitly reused ELF performs no compilation; its product ownership
+  # and receipt are checked by the runner below. Only a fresh compile emits
+  # the header-selection record.
+  if [[ -z "${GC_UNIT_OHOS_HOST_TEST_ELF:-}" ]] && ! /usr/bin/grep -Fqx \
       "GC_UNIT_OHOS_HOST_HEADER_ROOT=$GCV2_RUNTIME_OUTPUT_ROOT/include" \
       "$GC_UNIT_OUT/ohos_host_gate.log"; then
     STATUS_REASON=OHOS_HOST_HEADER_ROOT_MISMATCH

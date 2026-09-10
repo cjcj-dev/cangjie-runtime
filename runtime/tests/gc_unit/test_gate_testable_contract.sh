@@ -115,6 +115,16 @@ set -e
   "$fixture/ohos-mismatch.log"
 printf 'OHOS header identity: rc=0 mismatch_rc=%s root=%s/include\n' \
   "$ohos_mismatch_rc" "$ohos_output_root"
+# Reusing an explicitly supplied ELF does not compile headers. The runner's
+# receipt remains mandatory, but a fresh-compilation record is not required.
+PATH="$fixture/bin:$PATH" GC_UNIT_GATE_CONTRACT_SELFTEST=1 MRT_GC_UNIT_OHOS_HOST=1 \
+  GCV2_RUNTIME_OUTPUT_ROOT="$ohos_output_root" GCV2_RUNTIME_LIB_DIR="$fixture/lib" \
+  GC_UNIT_OHOS_HOST_TEST_ELF="$fixture/reused-elf" \
+  GC_UNIT_OHOS_HEADER_ROOT_TOKEN=not-a-fresh-compile \
+  GC_UNIT_OUT="$fixture/ohos-reused-out" GC_UNIT_GATE_STATUS="$fixture/ohos-reused.status" \
+  bash "$fixture/runtime/tests/gc_unit/gate_gc_unit.sh" >"$fixture/ohos-reused.log" 2>&1
+/usr/bin/grep -qx 'GATE=PASS' "$fixture/ohos-reused.status"
+echo 'OHOS explicit ELF reuse: rc=0 receipt=PASS'
 mv "$fixture/default-runner.sh" "$fixture/runtime/tests/gc_unit/run_standalone.sh"
 
 # Configuration selection is a gate input, not a directory scan.  Prove the
