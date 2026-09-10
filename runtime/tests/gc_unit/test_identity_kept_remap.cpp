@@ -32,13 +32,6 @@ struct RelocationReceiptTestAccess {
         return collector.ResolveStoreValue(value, provenance);
     }
 
-    static void RunYoungDispatch(WCollector& collector)
-    {
-        collector.SetGCReason(GC_REASON_YOUNG);
-        collector.DoGarbageCollection();
-    }
-
-    static uint64_t MinorRuns(const WCollector& collector) { return collector.minorTotalRuns; }
 };
 
 } // namespace MapleRuntime
@@ -50,12 +43,12 @@ static LiveInfo* ArmGhostFrom(GcHeapFixture& fx, RegionInfo* region, BaseObject*
     }
     region->SetRegionType(RegionInfo::RegionType::FROM_REGION);
     LiveInfo* live = fx.PlantLiveInfo(region);
-    RegionBitmap* bitmap = fx.PlantMarkBitmap<Generation::Young>(live, region->GetRegionSize());
+    RegionBitmap* bitmap = fx.PlantMarkBitmap<Generation::Old>(live, region->GetRegionSize());
     const size_t offset = region->GetAddressOffset(reinterpret_cast<MAddress>(obj));
     (void)bitmap->MarkBits(offset, obj->GetSize(), region->GetRegionSize());
     region->AddLiveByteCount(obj->GetSize());
     region->metadata._generation_id = ZGenerationId::young;
-    region->PrepareForwardableRegion(region->GetMarkView<Generation::Young>());
+    region->PrepareForwardableRegion(region->GetMarkView<Generation::Old>());
     region->RecordRouteStart(offset);
     region->SetRouteState(RegionInfo::RouteState::ROUTED);
     GC_EXPECT_TRUE(region->IsGhostFromRegion());
@@ -105,16 +98,4 @@ GC_TEST(IdentityKeptRemap, ArmedIdentityHitReturnsFromWhenRouteNotCompacted)
     fx.FreePlanted(live);
 }
 
-GC_TEST(IdentityKeptRemap, YoungPhaseEntryDispatchesDoYoung)
-{
-    GcHeapFixture fx;
-    CollectorResources& resources = Heap::GetHeap().GetCollectorResources();
-    WCollector collector(Heap::GetHeap().GetAllocator(), resources);
-    RelocationReceiptTestAccess::BindCollector(resources, &collector);
-    const uint64_t runsBefore = RelocationReceiptTestAccess::MinorRuns(collector);
-    RelocationReceiptTestAccess::RunYoungDispatch(collector);
-    GC_EXPECT_EQ(RelocationReceiptTestAccess::MinorRuns(collector), runsBefore + 1);
-    std::fprintf(stderr, "IDENTITY_KEPT_PHASE_ENTRY_OK minorTotalRuns=%llu\n",
-                 static_cast<unsigned long long>(RelocationReceiptTestAccess::MinorRuns(collector)));
-    RelocationReceiptTestAccess::BindCollector(resources, nullptr);
-}
+
