@@ -61,8 +61,9 @@ struct RelocationReceiptTestAccess {
 
     static void DisableInactiveUnits(RegionManager& manager, size_t unitCount)
     {
-        manager.regionHeapStart = RegionInfo::GetUnitAddress(0);
-        manager.regionHeapEnd = RegionInfo::GetUnitAddress(unitCount);
+        const uintptr_t start = RegionInfo::UnitInfo::heapStartAddress;
+        manager.regionHeapStart = start;
+        manager.regionHeapEnd = start + unitCount * RegionInfo::UNIT_SIZE;
         manager.inactiveZone.store(manager.regionHeapEnd, std::memory_order_relaxed);
     }
 
@@ -3433,22 +3434,23 @@ GC_TEST(NormalRouteGeneration, OldRouteRejectsYoungRelocationTarget)
 
     RegionManager manager;
     manager.SetMaxUnitCountForRegion(RegionInfo::UNIT_SIZE / KB);
-    manager.freeRegionManager.Initialize(GcHeapFixture::kUnits);
-    RelocationReceiptTestAccess::DisableInactiveUnits(manager, GcHeapFixture::kUnits);
+    const size_t unitCount = RegionInfo::UnitInfo::totalUnitCount;
+    manager.freeRegionManager.Initialize(unitCount);
+    RelocationReceiptTestAccess::DisableInactiveUnits(manager, unitCount);
     RelocationReceiptTestAccess::ParkFrom(manager, source);
     RelocationReceiptTestAccess::ParkThreadLocal(manager, incompatible);
-    // Rejecting the incompatible cache must refill from a real old free unit.
-    // Keep inactive allocation disabled for this standalone manager so removing
-    // the seed fails at the target assertion instead of consulting fixture-absent
-    // reservation state.
-    RelocationReceiptTestAccess::SeedDirtyUnits(manager, freeTarget->GetUnitIdx(), 1);
+    const size_t freeIndex = freeTarget->GetUnitIdx();
+    RelocationReceiptTestAccess::ReleaseListOwnership(freeTarget);
+    RegionInfo::InitFreeRegion(freeIndex, 1);
+    RelocationReceiptTestAccess::SeedDirtyUnits(manager, freeIndex, 1);
     AllocBuffer* buffer = AllocBuffer::GetOrCreateAllocBuffer();
     buffer->SetRegion(nullptr);
     buffer->SetRelocationRegion(incompatible);
 
     (void)manager.RouteRegion(source);
     const RouteInfo plan = source->GetRouteInfoForProbe();
-    RegionInfo* plannedTarget = RegionInfo::TryGetRegionInfoAt(plan.toRegion1StartAddress);
+    RegionInfo* plannedTarget = plan.toRegion1StartAddress == 0 ? nullptr :
+        RegionInfo::TryGetRegionInfoAt(plan.toRegion1StartAddress);
     const bool rejectedYoungTarget = plannedTarget != incompatible;
     const bool routeStayedOld = plannedTarget != nullptr && !plannedTarget->IsYoungRegion();
     const bool refilledFromOldFreeTarget = plannedTarget == freeTarget;
@@ -3466,6 +3468,22 @@ GC_TEST(NormalRouteGeneration, OldRouteRejectsYoungRelocationTarget)
     fx.FreePlanted(live);
 
     GC_EXPECT_TRUE(rejectedYoungTarget && routeStayedOld && refilledFromOldFreeTarget);
+}
+
+GC_TEST(NormalRouteGeneration, InactiveTakeSkipsUninitializedZone)
+{
+    LoadHealDeliveryRuntime::Ensure();
+    RegionManager manager;
+    manager.SetMaxUnitCountForRegion(RegionInfo::UNIT_SIZE / KB);
+    const uintptr_t start = RegionInfo::UnitInfo::heapStartAddress;
+    const size_t units = RegionInfo::UnitInfo::totalUnitCount;
+    manager.regionHeapStart = start;
+    manager.regionHeapEnd = start + units * RegionInfo::UNIT_SIZE;
+    RegionInfo* taken = manager.TakeRegion(1, RegionInfo::UnitRole::SMALL_SIZED_UNITS, false, false, false);
+    std::fprintf(stderr, "I06_INACTIVE_SKIP taken=%p inactive=%zu\n", taken, manager.GetInactiveUnitCount());
+    std::fflush(stderr);
+    GC_EXPECT_TRUE(taken == nullptr);
+    GC_EXPECT_TRUE(manager.GetInactiveUnitCount() == 0);
 }
 
 // Young-source behavior is deliberately outside the old-source restriction:

@@ -2272,7 +2272,7 @@ RegionInfo* RegionManager::TakeRegion(size_t num, RegionInfo::UnitRole type, boo
         // subtracting here would move inactiveZone back over that live allocation.
         uintptr_t addr = inactiveZone.load(std::memory_order_relaxed);
         bool reserved = false;
-        while (addr <= regionHeapEnd - size) {
+        while (addr >= regionHeapStart && size <= regionHeapEnd && addr <= regionHeapEnd - size) {
             if (inactiveZone.compare_exchange_weak(addr, addr + size, std::memory_order_acq_rel,
                                                    std::memory_order_relaxed)) {
                 reserved = true;

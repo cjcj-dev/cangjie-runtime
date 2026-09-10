@@ -683,7 +683,14 @@ public:
         return freeRegionManager.UncommitIdleUnits(maxBytes, idleBeforeNs, honorCancel);
     }
 
-    size_t GetInactiveUnitCount() const { return (regionHeapEnd - inactiveZone) / RegionInfo::UNIT_SIZE; }
+    size_t GetInactiveUnitCount() const
+    {
+        const uintptr_t zone = inactiveZone.load(std::memory_order_relaxed);
+        if (regionHeapEnd <= regionHeapStart || zone < regionHeapStart || regionHeapEnd <= zone) {
+            return 0;
+        }
+        return (regionHeapEnd - zone) / RegionInfo::UNIT_SIZE;
+    }
 
     size_t GetActiveUnitCount() const { return (inactiveZone - regionHeapStart) / RegionInfo::UNIT_SIZE; }
 
