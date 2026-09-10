@@ -1730,9 +1730,6 @@ void WCollector::EvacuateYoungRegions(const std::vector<BaseObject*>& reachableV
         }
         VLOG(REPORT, "[GCV2][relocate][conc] concurrent_relocate done; STW re-entered");
         postEvacPoint("post-forward-pre-reclaim", true);
-        if (kVerifyPostEvac) {
-            ValidateMinorReferences("post-forward-pre-reclaim", &reachableVec);
-        }
         {
             MRT_PHASE_TIMER("young.ref_fix_bulk");
             g_minorRefCasFail.store(0, std::memory_order_relaxed);
@@ -1778,7 +1775,6 @@ void WCollector::EvacuateYoungRegions(const std::vector<BaseObject*>& reachableV
                     "[GCV2][fixinput] reject=%zu recover=%zu unrecoverable=%zu",
                     rej, rec, unr);
             }
-            ValidateMinorReferences("before-return", &reachableVec);
             manager.ExpireKeptFromPreviousCycle();
             if (HealCoverage::kHealCoverageCensus) {
                 HealCoverage::CensusAfterPublication(
@@ -1882,7 +1878,6 @@ void WCollector::EvacuateYoungRegions(const std::vector<BaseObject*>& reachableV
         MRT_PHASE_TIMER("young.evac_prepare_next");
         fwdTable.PrepareForwardTable<Generation::Young>();
         }
-        ValidateMinorReferences("after-dispel", nullptr);
         // zRelocate.cpp:1041-1047 cycle-end completeness: no ROUTED-unfinished page.
         manager.FinishIncompleteFromRegions();
         manager.ReassembleFromSpace();

@@ -1445,7 +1445,6 @@ private:
     // Report-only: find young objs full-reachable but unmarked; attribute via remset MISSING.
     // Gated by MRT_GCMARKGAP_PROBE=1 (default off).
     void ProbeUnmarkedLive(const MinorObjectSet& allocationRoots, const MinorSlotSet& rememberedSlots);
-    void ValidateMinorReferences(const char* point, const std::vector<BaseObject*>* reachableVec);
     // Region-set structural verifier (Verify/VerifyRegions); gated by MRT_GCV2_VERIFY_REGIONS.
     void VerifyRegionSets(const char* point);
     void DoYoungGarbageCollection();
