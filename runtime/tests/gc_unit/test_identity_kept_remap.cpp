@@ -17,6 +17,12 @@
 using namespace MapleRuntime;
 using namespace MapleRuntime::GcUnit;
 
+namespace MapleRuntime {
+struct RelocationReceiptTestAccess {
+    static void RunCollectionDispatch(WCollector& collector);
+};
+} // namespace MapleRuntime
+
 static LiveInfo* ArmGhostForKept(GcHeapFixture& fx, RegionInfo* region, BaseObject* obj)
 {
     if (region->GetRegionLifeId() == 0) {
@@ -87,7 +93,6 @@ GC_TEST(IdentityKeptRemap, YoungPhaseEntryDispatch)
     GcHeapFixture fx;
     CollectorResources& resources = Heap::GetHeap().GetCollectorResources();
     WCollector collector(Heap::GetHeap().GetAllocator(), resources);
-    collector.SetGCReason(GC_REASON_YOUNG);
-    collector.DoGarbageCollection();
+    RelocationReceiptTestAccess::RunCollectionDispatch(collector);
     std::fprintf(stderr, "IDENTITY_KEPT_PHASE_ENTRY_OK\n");
 }
