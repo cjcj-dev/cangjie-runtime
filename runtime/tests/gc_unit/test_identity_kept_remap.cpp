@@ -42,6 +42,10 @@ GC_TEST(IdentityKeptRemap, ArmedIdentityHitReturnsFromWhenRouteNotCompacted)
     publication = ForwardingTable::Publication();
     GC_EXPECT_EQ(receipt.address, from);
     fx.region0->MarkForwardingDone();
+    // Retire the active carrier so FindTo/EntriesArmed miss and the wait-path
+    // consumer (not the early armed return) must accept the identity hit.
+    ForwardingTable::ClearEntries(fx.region0->GetRegionStart(), fx.region0->GetRegionSize());
+    GC_EXPECT_FALSE(ForwardingTable::EntriesArmed(from));
 
     const ForwardingTable::LookupResult lookup = ForwardingTable::LookupTo(from);
     GC_EXPECT_TRUE(lookup.answer == ForwardingTable::ToAnswer::ArmedHit);
