@@ -39,7 +39,7 @@ function(cj_runtime_export_directory directory)
         # TARGET_GENEX_EVAL also resolves indirect custom TARGET_PROPERTY reads.
         file(GENERATE
             OUTPUT "${CMAKE_BINARY_DIR}/runtime-generated-inputs/${_target}-$<COMPILE_LANGUAGE>.txt"
-            CONTENT "definitions=$<TARGET_GENEX_EVAL:${_target},$<TARGET_PROPERTY:${_target},COMPILE_DEFINITIONS>>\noptions=$<TARGET_GENEX_EVAL:${_target},$<TARGET_PROPERTY:${_target},COMPILE_OPTIONS>>\nincludes=$<TARGET_GENEX_EVAL:${_target},$<TARGET_PROPERTY:${_target},INCLUDE_DIRECTORIES>>\nlink_options=$<TARGET_GENEX_EVAL:${_target},$<TARGET_PROPERTY:${_target},LINK_OPTIONS>>\nlink_libraries=$<TARGET_GENEX_EVAL:${_target},$<TARGET_PROPERTY:${_target},LINK_LIBRARIES>>\n"
+            CONTENT "definitions=$<REMOVE_DUPLICATES:$<TARGET_GENEX_EVAL:${_target},$<TARGET_PROPERTY:${_target},COMPILE_DEFINITIONS>>>\noptions=$<REMOVE_DUPLICATES:$<TARGET_GENEX_EVAL:${_target},$<TARGET_PROPERTY:${_target},COMPILE_OPTIONS>>>\nincludes=$<REMOVE_DUPLICATES:$<TARGET_GENEX_EVAL:${_target},$<TARGET_PROPERTY:${_target},INCLUDE_DIRECTORIES>>>\nlink_options=$<REMOVE_DUPLICATES:$<TARGET_GENEX_EVAL:${_target},$<TARGET_PROPERTY:${_target},LINK_OPTIONS>>>\nlink_libraries=$<TARGET_GENEX_EVAL:${_target},$<TARGET_PROPERTY:${_target},LINK_LIBRARIES>>\n"
             TARGET "${_target}")
     endforeach()
     foreach(_child IN LISTS _children)
