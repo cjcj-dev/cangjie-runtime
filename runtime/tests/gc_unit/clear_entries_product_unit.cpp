@@ -2980,29 +2980,30 @@ struct WaitObservationPublication {
     static void Publish(void* context)
     {
         auto& state = *static_cast<WaitObservationPublication*>(context);
-        // First: ResolveStoreValue's FindToVersion miss. Second: the actual
-        // WaitRouted lookup, after the earlier fast receipt checks have missed.
+        // ResolveStoreValue's FindToVersion, then AdmitForRoute/GetRoute in
+        // each of the two ComputeRoute calls, precede WaitRouted's first lookup.
+        // The return.kind predicate below independently checks this schedule.
         ++state.lookups;
         const auto scenario = state.scenario;
-        if (scenario == WaitObservationCase::RetainRefusedIdentity && state.lookups == 2) {
+        if (scenario == WaitObservationCase::RetainRefusedIdentity && state.lookups == 6) {
             state.region->ReleaseForwarding();
         }
-        if (scenario == WaitObservationCase::TerminalIdentity && state.lookups == 3) {
+        if (scenario == WaitObservationCase::TerminalIdentity && state.lookups == 7) {
             state.region->MarkForwardingDone();
         }
         if (scenario == WaitObservationCase::ClosedReturn) {
-            if (state.lookups == 3) {
+            if (state.lookups == 7) {
                 ProductForcePublicationClosedForTestFn()(reinterpret_cast<MAddress>(state.from));
             }
             return;
         }
-        unsigned publishAt = 2;
+        unsigned publishAt = 6;
         if (scenario == WaitObservationCase::IneligibleIdentity ||
             scenario == WaitObservationCase::RetainRefusedIdentity ||
             scenario == WaitObservationCase::RequestIdentity) {
-            publishAt = 3;
+            publishAt = 7;
         } else if (scenario == WaitObservationCase::TerminalIdentity) {
-            publishAt = 4;
+            publishAt = 8;
         }
         if (state.lookups == publishAt) {
             const MAddress from = reinterpret_cast<MAddress>(state.from);
@@ -3054,6 +3055,7 @@ static void CheckWaitObservation(WaitObservationCase scenario)
             collector.flip_old_relocate_start();
             RelocationReceiptTestAccess::BindCollector(Heap::GetHeap().GetCollectorResources(), &collector);
             (void)PrepareForwardable(fx, region, reinterpret_cast<MAddress>(from));
+            region->SetRouteInfo(reinterpret_cast<MAddress>(fx.obj1), static_cast<uint32_t>(from->GetSize()));
             region->SetRouteState(miss ? RegionInfo::RouteState::COMPACTED : RegionInfo::RouteState::ROUTED);
             if (miss || (scenario == WaitObservationCase::InitialIdentity && sample != 0)) {
                 region->MarkForwardingDone();
