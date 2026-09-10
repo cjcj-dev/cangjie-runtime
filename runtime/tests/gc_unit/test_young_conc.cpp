@@ -970,12 +970,14 @@ GC_OTHER_VM_TEST(YoungConc, PhaseEntryKeptIdentityRemap)
     RelocationReceiptTestAccess::BindThreadPool(resources, &threadPool);
     RegionSpace& space = reinterpret_cast<RegionSpace&>(Heap::GetHeap().GetAllocator());
     space.GetRegionManager().EnlistFullThreadLocalRegion(fx.region1);
+    space.GetRegionManager().AddRawPointerObject(holder);
     Heap::GetHeap().GetRememberedSet().Initialize(fx.heapStart, 2 * RegionInfo::UNIT_SIZE);
     const bool startedBefore = resources.IsGcStarted();
     const GCReason reasonBefore = resources.GetGCStats().reason;
     resources.SetGcStarted(true);
     resources.GetGCStats().reason = GC_REASON_YOUNG;
     ResetMarkTerminateTestReceipt();
+    ArmLeftoverBeforePauseTestReceipt(holder, child);
 
     RelocationReceiptTestAccess::RunCollectionDispatch(collector);
     const auto receipt = ReadMarkTerminateTestReceipt();
