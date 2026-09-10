@@ -336,7 +336,7 @@ def do_build(args):
         sys.exit(1)
 
 def build_target(cmake_command, args=None):
-    build_jobs = os.environ.get("CANGJIE_BUILD_JOBS", "8")
+    build_jobs = os.environ.get("CANGJIE_BUILD_JOBS", str(min(64, os.cpu_count() or 1)))
     if args and args.gcc_toolchain and args.target == "native":
         cmake_command.append("-DBUILD_GCC_TOOLCHAIN={}".format(args.gcc_toolchain))
     try:
