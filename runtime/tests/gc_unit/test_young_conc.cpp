@@ -1644,7 +1644,6 @@ GC_OTHER_VM_TEST(YoungConc, MutatorRemapWaitsForCopyAfterForwardFlip)
     space.GetRegionManager().EnlistFullThreadLocalRegion(fx.region1);
     space.GetRegionManager().AddRawPointerObject(holder);
     Heap::GetHeap().GetRememberedSet().Initialize(fx.heapStart, 2 * RegionInfo::UNIT_SIZE);
-    Heap::GetHeap().GetRememberedSet().Remember(reinterpret_cast<MAddress>(holderField));
     const bool startedBefore = resources.IsGcStarted();
     const GCReason reasonBefore = resources.GetGCStats().reason;
     resources.SetGcStarted(true);
