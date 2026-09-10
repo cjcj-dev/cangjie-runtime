@@ -53,6 +53,9 @@
 #include "Sync/Sync.h"
 
 namespace MapleRuntime {
+#if defined(MRT_TESTABLE_INTERNALS)
+void RunRemapWindowTestHook(unsigned point, RegionInfo* region, BaseObject* object);
+#endif
 
 namespace RecentFullAccounting {
 namespace {
@@ -3622,6 +3625,9 @@ void RegionManager::FinishStayYoungInPlace(RegionInfo* region, bool advanceAge)
     WaitCopiedObjectsUnlocked(region);
     (void)PublishKeptInPlaceReceipts(region);
     VerifyForwardingReceiptsClosed(region, "FinishStayYoungInPlace");
+#if defined(MRT_TESTABLE_INTERNALS)
+    RunRemapWindowTestHook(3, region, nullptr);
+#endif
     region->MarkForwardingDone();
     region->DispelGhostFromRegion();
 }

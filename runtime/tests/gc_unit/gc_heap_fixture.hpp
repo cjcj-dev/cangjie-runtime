@@ -56,16 +56,23 @@ struct GcHeapFixture {
     // initialize and use region0/region1 only.
     static constexpr size_t kUnits = 6;
 
-    GcHeapFixture()
+    explicit GcHeapFixture(bool withMemoryOwner = false)
     {
         const size_t metadataSize = RegionManager::GetMetadataSize(kUnits);
         mappedSize = metadataSize + kUnits * RegionInfo::UNIT_SIZE;
-        mapping = mmap(nullptr, mappedSize, PROT_READ | PROT_WRITE, MAP_PRIVATE | MAP_ANONYMOUS, -1, 0);
+        if (withMemoryOwner) {
+            const MemMap::Option options = { "gc-unit-copy", nullptr,
+                MemMap::DEFAULT_MEM_FLAGS, MemMap::DEFAULT_MEM_PROT, false };
+            memoryOwner = MemMap::MapMemory(mappedSize, mappedSize, options);
+            mapping = memoryOwner == nullptr ? MAP_FAILED : memoryOwner->GetBaseAddr();
+        } else {
+            mapping = mmap(nullptr, mappedSize, PROT_READ | PROT_WRITE, MAP_PRIVATE | MAP_ANONYMOUS, -1, 0);
+        }
         if (mapping == MAP_FAILED) {
             std::abort();
         }
         heapStart = reinterpret_cast<MAddress>(mapping) + metadataSize;
-        RegionInfo::Initialize(kUnits, heapStart);
+        RegionInfo::Initialize(kUnits, heapStart, memoryOwner);
         region0 = RegionInfo::InitRegion(0, 1, RegionInfo::UnitRole::SMALL_SIZED_UNITS);
         region1 = RegionInfo::InitRegion(1, 1, RegionInfo::UnitRole::SMALL_SIZED_UNITS);
         ForwardingTable::Initialize(heapStart, kUnits * RegionInfo::UNIT_SIZE, RegionInfo::UNIT_SIZE);
@@ -129,7 +136,11 @@ struct GcHeapFixture {
             region1->SetYoungRegionFlag(0);
         }
         if (mapping != nullptr && mapping != MAP_FAILED) {
-            munmap(mapping, mappedSize);
+            if (memoryOwner != nullptr) {
+                MemMap::DestroyMemMap(memoryOwner);
+            } else {
+                munmap(mapping, mappedSize);
+            }
         }
     }
 
@@ -224,6 +235,7 @@ struct GcHeapFixture {
         delete live;
     }
 
+    MemMap* memoryOwner = nullptr;
     void* mapping = nullptr;
     size_t mappedSize = 0;
     MAddress heapStart = 0;

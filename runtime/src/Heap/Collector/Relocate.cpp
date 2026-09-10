@@ -145,6 +145,21 @@ static void RunCopyAdmissionTestHook(RegionInfo* region, BaseObject* object)
     }
 }
 #endif
+#if defined(MRT_TESTABLE_INTERNALS)
+using RemapWindowTestHook = void (*)(unsigned, RegionInfo*, BaseObject*);
+static std::atomic<RemapWindowTestHook> g_remapWindowTestHook{ nullptr };
+extern "C" MRT_EXPORT void MRT_SetRemapWindowTestHook(RemapWindowTestHook hook)
+{
+    g_remapWindowTestHook.store(hook, std::memory_order_release);
+}
+void RunRemapWindowTestHook(unsigned point, RegionInfo* region, BaseObject* object)
+{
+    auto hook = g_remapWindowTestHook.load(std::memory_order_acquire);
+    if (hook != nullptr) {
+        hook(point, region, object);
+    }
+}
+#endif
 namespace WCollectorInternal {
 } // namespace WCollectorInternal
 // Frame-colour census after relocate-start flip. Compile-time off; no MRT_GCV2_ env.
@@ -1786,7 +1801,13 @@ void WCollector::EvacuateYoungRegions(const std::vector<BaseObject*>& reachableV
             MRT_PHASE_TIMER("young.concurrent_relocate");
             VLOG(REPORT, "[GCV2][relocate][conc] concurrent_relocate start nObj=%zu flip=1",
                  reachableVec.size());
+#if defined(MRT_TESTABLE_INTERNALS)
+            RunRemapWindowTestHook(1, nullptr, nullptr);
+#endif
             ForwardFromSpace();
+#if defined(MRT_TESTABLE_INTERNALS)
+            RunRemapWindowTestHook(4, nullptr, nullptr);
+#endif
             *stw = std::make_unique<ScopedStopTheWorld>("young post-relocate", true,
                                                         GCPhase::GC_PHASE_FORWARD);
             manager.FinishIncompleteFromRegions();
@@ -2071,6 +2092,9 @@ static CompactedMissClass ClassifyCompactedMiss(RegionInfo* region, BaseObject* 
 BaseObject* WCollector::WaitRoutedTipReady(BaseObject* from, BaseObject* to, RegionInfo* forwarding,
                                            const ForwardingProvenance& provenance) const
 {
+#if defined(MRT_TESTABLE_INTERNALS)
+    RunRemapWindowTestHook(2, forwarding, from);
+#endif
     RegionSpace& space = reinterpret_cast<RegionSpace&>(theAllocator);
     ForwardingTable::LookupResult lastLookup{ 0, ForwardingTable::ToAnswer::Unarmed,
                                               ForwardingTable::ToUnavailableCause::None, false, false,
