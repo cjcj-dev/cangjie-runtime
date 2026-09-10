@@ -146,6 +146,8 @@ static void RunCopyAdmissionTestHook(RegionInfo* region, BaseObject* object)
 }
 #endif
 #if defined(MRT_TESTABLE_INTERNALS)
+// Scheduling only: install a barrier after flip, at wait entry, and before
+// post-copy cleanup. The callback never supplies a forwarding answer.
 using RemapWindowTestHook = void (*)(unsigned, RegionInfo*, BaseObject*);
 static std::atomic<RemapWindowTestHook> g_remapWindowTestHook{ nullptr };
 extern "C" MRT_EXPORT void MRT_SetRemapWindowTestHook(RemapWindowTestHook hook)

@@ -24,6 +24,7 @@ struct RemapWindow {
     std::thread::id gcThread;
     std::thread::id mutatorThread;
     uintptr_t oldColour = 0;
+    pid_t gcTid = 0;
     std::unique_ptr<RegionInfo::DrainScope> drain;
 
     void Wait(std::unique_lock<std::mutex>& lock, const bool& flag, const char* stage)
@@ -64,6 +65,9 @@ void RemapWindowHook(unsigned point, RegionInfo* region, BaseObject* object)
         GC_EXPECT_TRUE(std::this_thread::get_id() == state.mutatorThread);
         GC_EXPECT_TRUE(std::this_thread::get_id() != state.gcThread);
         GC_EXPECT_TRUE(ThreadLocal::GetMutator() != nullptr);
+        std::fprintf(stderr, "REMAP_WINDOW wait_entry=1 mutator_tid=%d gc_tid=%d tls_mutator=%p\n",
+                     static_cast<int>(MapleRuntime::GetTid()), static_cast<int>(state.gcTid),
+                     static_cast<void*>(ThreadLocal::GetMutator()));
         GC_EXPECT_TRUE(region == state.kept);
         GC_EXPECT_FALSE(region->IsForwardingDone());
         state.entered = true;
@@ -75,10 +79,12 @@ void RemapWindowHook(unsigned point, RegionInfo* region, BaseObject* object)
         GC_EXPECT_TRUE(lookup.activeAnswer == ForwardingTable::ToAnswer::ArmedHit);
         GC_EXPECT_EQ(lookup.to, reinterpret_cast<MAddress>(state.from));
         GC_EXPECT_TRUE(region->IsGhostFromRegion());
+        GC_EXPECT_TRUE(region->IsYoungRegion());
+        GC_EXPECT_EQ(region->GetYoungAge(), 1u);
         GC_EXPECT_FALSE(region->IsForwardingDone());
         GC_EXPECT_FALSE(region->IsCompacted());
         std::fprintf(stderr,
-                     "REMAP_WINDOW kept_identity=1 active_armed_hit=1 done=0 compacted=0 "
+                     "REMAP_WINDOW producer=FinishStayYoungInPlace kept_identity=1 active_armed_hit=1 done=0 compacted=0 "
                      "wait_entered=%d from=%p\n", state.entered, state.from);
         std::fflush(stderr);
         state.published = true;
@@ -103,7 +109,8 @@ void RunRemapWindow(bool copyOnly)
     // The strict arm is deliberately red on #175's frozen guard. Ordinary
     // suites run the copy prerequisite; the contract arm is explicitly invoked
     // with CJ_GC_UNIT_REMAP_WINDOW=1 and a single-test filter.
-    if (!copyOnly && std::getenv("CJ_GC_UNIT_REMAP_WINDOW") == nullptr) {
+    const char* strict = std::getenv("CJ_GC_UNIT_REMAP_WINDOW");
+    if (!copyOnly && (strict == nullptr || std::strcmp(strict, "1") != 0)) {
         std::fprintf(stderr, "REMAP_WINDOW strict_arm=NOT_RUN enable=CJ_GC_UNIT_REMAP_WINDOW\n");
         return;
     }
@@ -180,6 +187,7 @@ void RunRemapWindow(bool copyOnly)
     state.copyFrom = copyObject;
     state.collector = &collector;
     state.gcThread = std::this_thread::get_id();
+    state.gcTid = MapleRuntime::GetTid();
     state.oldColour = static_cast<uintptr_t>(collector.ZPointerRemappedYoungMask);
     remapWindow = &state;
     setHook(RemapWindowHook);
@@ -204,7 +212,15 @@ void RunRemapWindow(bool copyOnly)
             ThreadLocal::SetMutator(nullptr);
         });
     }
-    RelocationReceiptTestAccess::RunCollectionDispatch(collector);
+    try {
+        RelocationReceiptTestAccess::RunCollectionDispatch(collector);
+    } catch (const std::exception& error) {
+        // Preserve the exact failing invariant before an outstanding waiter
+        // prevents normal C++ teardown in this isolated process.
+        std::fprintf(stderr, "REMAP_WINDOW target_assertion=%s\n", error.what());
+        std::fflush(stderr);
+        std::abort();
+    }
     if (waiter.joinable()) waiter.join();
     setHook(nullptr);
     GC_EXPECT_TRUE(state.copied && state.published);
