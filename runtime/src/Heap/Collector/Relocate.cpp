@@ -2076,9 +2076,41 @@ BaseObject* WCollector::WaitRoutedTipReady(BaseObject* from, BaseObject* to, Reg
                                               ForwardingTable::ToUnavailableCause::None, false, false,
                                               ForwardingTable::ToAnswer::Unarmed,
                                               ForwardingTable::ToAnswer::Unarmed, false, false, 0 };
+    bool routeDecisionValid = false;
+    RegionInfo::RouteState routeDecision = RegionInfo::RouteState::NORMAL;
+    // Observe the result already used by this invocation (zRelocate.cpp:412-415).
+    // Never re-query LookupTo or call the validating route getter for logging.
+    // A queue receipt and lastLookup.to have distinct sources; print both.
+    auto observeReturn = [&](const char* kind, BaseObject* returned) -> BaseObject* {
+        if (returned == nullptr || returned == from) {
+            const uint64_t routeSnapshot =
+                forwarding->GetRouteStateSnapshotForDiagnostics();
+            LOG(RTLOG_ERROR,
+                "[WaitRouted.return] tid=%d obj=%p region=%p gcCycle=%zu return.kind=%s returned=%p "
+                "route=%u route.decision.valid=%u route.snapshot=%#llx fwdDone=%u "
+                "lookup.answer=%u lookup.to=%#zx tableId=%#zx epoch=%llu lifeId=%llu "
+                "publicationGeneration=%llu lookup.snapshot.valid=%u active.answer=%u retired.answer=%u",
+                static_cast<int>(MapleRuntime::GetTid()), static_cast<void*>(from),
+                static_cast<void*>(forwarding), g_gcCount.load(std::memory_order_relaxed), kind,
+                static_cast<void*>(returned),
+                static_cast<unsigned>(routeDecisionValid ? routeDecision
+                    : RegionInfo::RouteStateFromSnapshot(routeSnapshot)),
+                static_cast<unsigned>(routeDecisionValid), static_cast<unsigned long long>(routeSnapshot),
+                static_cast<unsigned>(forwarding->IsForwardingDone()),
+                static_cast<unsigned>(lastLookup.answer), static_cast<size_t>(lastLookup.to),
+                static_cast<size_t>(lastLookup.tableId),
+                static_cast<unsigned long long>(lastLookup.fromPageEpoch),
+                static_cast<unsigned long long>(lastLookup.fromPageLifeId),
+                static_cast<unsigned long long>(lastLookup.publicationGeneration),
+                static_cast<unsigned>(lastLookup.forwardingSnapshotValid),
+                static_cast<unsigned>(lastLookup.activeAnswer), static_cast<unsigned>(lastLookup.retiredAnswer));
+        }
+        return returned;
+    };
     // Bound mid-copy waits only while route is still in flight. Permanent publish-without-tip
     // is an invariant break (CHECK below), not a longer spin.
     auto permanentHole = [&](const char* reason, int /*spins*/, BaseObject* /*geometricTo*/) -> BaseObject* {
+        (void)observeReturn(reason, nullptr);
         // This is the fail-closed witness for a completed relocation without a
         // forwarding receipt; it is not an alternate answer.
         if (MutatorRelocate::StatsOn()) {
@@ -2130,7 +2162,7 @@ BaseObject* WCollector::WaitRoutedTipReady(BaseObject* from, BaseObject* to, Reg
         if (MutatorRelocate::StatsOn()) {
             MutatorRelocate::NoteWaitReceipt();
         }
-        return again;
+        return observeReturn("initial-lookup", again);
     }
     if (publicationClosed) {
         const uint8_t cause = static_cast<uint8_t>(lastLookup.unavailableCause);
@@ -2144,6 +2176,8 @@ BaseObject* WCollector::WaitRoutedTipReady(BaseObject* from, BaseObject* to, Reg
     }
     const bool tableHit = again != nullptr;
     const RegionInfo::RouteState rs = forwarding->GetRouteState();
+    routeDecision = rs;
+    routeDecisionValid = true;
     // COMPACTED without MarkForwardingDone is still the in-place copy window
     // (CompactRegion inserts receipts, then RouteRegion labels COMPACTED).
     // Align with the wait loop below, which already keys on IsForwardingDone
@@ -2165,7 +2199,7 @@ BaseObject* WCollector::WaitRoutedTipReady(BaseObject* from, BaseObject* to, Reg
     const MutatorRelocate::UnpublishedAnswer ans =
         MutatorRelocate::AnswerUnpublished(tableHit, regionPublished, retainRefused);
     if (ans == MutatorRelocate::UnpublishedAnswer::UseTo && again != nullptr) {
-        return again;
+        return observeReturn("unpublished-use-to", again);
     }
     if (ans == MutatorRelocate::UnpublishedAnswer::InvariantFailure) {
         // inplaceto: the second consumer of the same ambiguity.  A page compacted in place
@@ -2210,10 +2244,10 @@ BaseObject* WCollector::WaitRoutedTipReady(BaseObject* from, BaseObject* to, Reg
             if (MutatorRelocate::StatsOn()) {
                 MutatorRelocate::NoteWaitReceipt();
             }
-            return retired;
+            return observeReturn("ineligible-lookup", retired);
         }
         if (publicationClosed) {
-            return nullptr;
+            return observeReturn("ineligible-closed", nullptr);
         }
         if (MutatorRelocate::StatsOn()) {
             MutatorRelocate::NoteWaitGiveUp();
@@ -2242,7 +2276,7 @@ BaseObject* WCollector::WaitRoutedTipReady(BaseObject* from, BaseObject* to, Reg
             }
             BaseObject* published = lookupTo();
             if (published != nullptr && Heap::IsHeapAddress(published) && published->IsValidObject()) {
-                return published;
+                return observeReturn("retain-refused-lookup", published);
             }
             return permanentHole("retain-refused-without-receipt", 0, published);
         }
@@ -2277,7 +2311,7 @@ BaseObject* WCollector::WaitRoutedTipReady(BaseObject* from, BaseObject* to, Reg
                     MutatorRelocate::NoteRegionWaitGot();
                     MutatorRelocate::NoteWaitReceipt();
                 }
-                return completed;
+                return observeReturn("request-receipt", completed);
             }
         }
 
@@ -2290,7 +2324,7 @@ BaseObject* WCollector::WaitRoutedTipReady(BaseObject* from, BaseObject* to, Reg
                 MutatorRelocate::NoteRegionWaitGot();
                 MutatorRelocate::NoteWaitReceipt();
             }
-            return ready;
+            return observeReturn("terminal-lookup", ready);
         }
         if (MutatorRelocate::StatsOn()) {
             MutatorRelocate::NoteRegionWaitPublishedMiss();
