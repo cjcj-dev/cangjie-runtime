@@ -74,7 +74,12 @@ public:
     static AddrRegion ClassifyAddress(uintptr_t addr);
     static bool IsZapPattern(uintptr_t value);
 
-    // Rich diagnostic for one root payload. Never aborts; never skips the real CHECK.
+    // Open/close one product GC root-verification scene. Payload checks keep
+    // logging all defects; EndScene closes the aggregate receipt.
+    static void BeginScene(const char* phase);
+    static void EndScene(const char* phase);
+
+    // Rich diagnostic for one root payload. Never skips the real product check.
     static void VerifyRootPayload(const RootVerifyContext& ctx, void* slotOrRegAddr, BaseObject* obj);
 
     // Immediately before CheckAndPush IsVaildType CHECK_DETAIL (Mutator.cpp).

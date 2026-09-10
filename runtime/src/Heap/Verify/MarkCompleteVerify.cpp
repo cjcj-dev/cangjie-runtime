@@ -830,6 +830,15 @@ void RunAtMarkEnd(const char* point)
         static_cast<unsigned long long>(stats.costNs), stats.deadIntSlotNotRef, stats.deadIntRecoverFail,
         stats.deadIntBaseUnmarked, stats.deadIntValueCorrupt);
     SurvNodeDiag::ReportAtMarkEnd(point);
+
+    // Close on the invariant defects. Walk truncation stays a coverage receipt:
+    // it says how much could be inspected, not that an inspected edge was bad.
+    const size_t totalFailures = stats.deadTarget + stats.rootDead;
+    CHECK_DETAIL(totalFailures == 0,
+                 "[GCV2][markcomplete] scene failed point=%s total=%zu deadTarget=%zu "
+                 "deadRoots=%zu regionsTruncated=%zu",
+                 point == nullptr ? "?" : point, totalFailures, stats.deadTarget, stats.rootDead,
+                 stats.regionsTruncated);
 }
 
 } // namespace MarkCompleteVerify

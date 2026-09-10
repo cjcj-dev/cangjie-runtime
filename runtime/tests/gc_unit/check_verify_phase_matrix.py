@@ -13,11 +13,11 @@ import sys
 # product source; the checker below extracts a fresh set rather than trusting
 # marker strings supplied by tests.
 EXPECTED_CALLS = {
-    "roots": {"VerifyRoots.cpp:104"},
-    "objects": {"VerifyHeap.cpp:385"},
+    "roots": {"VerifyRoots.cpp:131"},
+    "objects": {"VerifyHeap.cpp:386"},
     "marking": {"MarkCompleteVerify.cpp:763"},
     "remembered": {"VerifyRememberedSet.cpp:173"},
-    "oops": {"VerifyRegions.cpp:222", "VerifyRegions.cpp:426"},
+    "oops": {"VerifyRegions.cpp:225", "VerifyRegions.cpp:427"},
 }
 
 

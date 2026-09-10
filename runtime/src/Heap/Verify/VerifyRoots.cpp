@@ -24,6 +24,8 @@ namespace MapleRuntime {
 namespace {
 std::atomic<size_t> g_badRootCount{ 0 };  // defect channel
 std::atomic<size_t> g_infoRootCount{ 0 }; // INFO channel (misaligned etc.)
+std::atomic<size_t> g_sceneFailures{ 0 };
+std::atomic<bool> g_sceneOpen{ false };
 
 // Defect vs INFO split (gcvheap2): typeinfo-misaligned is a true phenomenon but not
 // defect D; keep reporting it, never filter it out — only demote off BAD_ROOT.
@@ -33,6 +35,31 @@ enum class RootVerifyChannel : uint8_t { Ok = 0, Defect, Info };
 bool VerifyRoots::Enabled()
 {
     return VerifyFaceEnabled(VerifyFace::Roots);
+}
+
+void VerifyRoots::BeginScene(const char* phase)
+{
+    if (!Enabled()) {
+        return;
+    }
+    const bool alreadyOpen = g_sceneOpen.exchange(true, std::memory_order_acq_rel);
+    CHECK_DETAIL(!alreadyOpen, "[GCV2][verify][roots] nested scene phase=%s",
+                 phase == nullptr ? "?" : phase);
+    g_sceneFailures.store(0, std::memory_order_release);
+}
+
+void VerifyRoots::EndScene(const char* phase)
+{
+    if (!Enabled()) {
+        return;
+    }
+    const bool wasOpen = g_sceneOpen.exchange(false, std::memory_order_acq_rel);
+    CHECK_DETAIL(wasOpen, "[GCV2][verify][roots] scene close without begin phase=%s",
+                 phase == nullptr ? "?" : phase);
+    const size_t totalFailures = g_sceneFailures.exchange(0, std::memory_order_acq_rel);
+    CHECK_DETAIL(totalFailures == 0,
+                 "[GCV2][verify][roots] scene failed phase=%s total=%zu",
+                 phase == nullptr ? "?" : phase, totalFailures);
 }
 
 const char* VerifyRoots::KindName(RootKind kind)
@@ -190,6 +217,7 @@ void VerifyRoots::VerifyRootPayload(const RootVerifyContext& ctx, void* slotOrRe
         g_infoRootCount.fetch_add(1, std::memory_order_relaxed);
     } else {
         g_badRootCount.fetch_add(1, std::memory_order_relaxed);
+        g_sceneFailures.fetch_add(1, std::memory_order_relaxed);
     }
     const char* fname = (ctx.funcName != nullptr && ctx.funcName[0] != '\0') ? ctx.funcName : "?";
     // VLOG(REPORT) is compiled closed in Release, which would turn this into
@@ -264,6 +292,8 @@ void VerifyRoots::ResetStats()
 {
     g_badRootCount.store(0, std::memory_order_relaxed);
     g_infoRootCount.store(0, std::memory_order_relaxed);
+    g_sceneFailures.store(0, std::memory_order_relaxed);
+    g_sceneOpen.store(false, std::memory_order_relaxed);
 }
 
 } // namespace MapleRuntime

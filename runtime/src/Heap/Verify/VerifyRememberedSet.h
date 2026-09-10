@@ -26,8 +26,8 @@ class BaseObject;
 // Counts direct field edges only (no reachability cascade).
 //
 // Gate: unified VerifyFace::Remembered (legacy MRT_GCV2_VERIFY_REMSET=1 is an alias).
-// Report-only, every invocation,
-// with the historical detailed-failure cap fixed at its default of 20.
+// Reports the bounded inventory and then fails closed on correctness-relevant
+// missing entries; the historical detail cap stays fixed at its default of 20.
 //
 // remsetSnapshot: non-owning view of remset slots at the verification point
 // (typically the post-AcquireRecordsForMinor local set; live remset is empty then).

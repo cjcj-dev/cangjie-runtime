@@ -210,10 +210,13 @@ bool VerifyRegions::IsEnabled()
 
 void VerifyRegions::ReportAndMaybeAbort(bool failed, const char* detail)
 {
-    if (!failed) {
-        return;
+    if (failed) {
+        VLOG(REPORT, "[GCV2][verify][regions] FAIL %s", detail);
     }
-    VLOG(REPORT, "[GCV2][verify][regions] FAIL %s", detail);
+    const size_t totalFailures = failed ? 1u : 0u;
+    CHECK_DETAIL(totalFailures == 0,
+                 "[GCV2][verify][regions] scene failed detail=%s total=%zu",
+                 detail == nullptr ? "?" : detail, totalFailures);
 }
 
 void VerifyRegions::VerifyAfterPrepareYoung(RegionManager& manager, const CandidateSet& candidates,
@@ -413,11 +416,9 @@ void VerifyRegions::VerifyAfterPrepareYoung(RegionManager& manager, const Candid
              missingRegionsByList[i], listStats[i].linkBroken, listStats[i].typeMismatch);
     }
 
-    bool failed = missingFromCandidates != 0 || unexpectedNonYoungCandidates != 0 ||
+    const bool failed = missingFromCandidates != 0 || unexpectedNonYoungCandidates != 0 ||
         unexpectedRouteHeldCandidates != 0 || multiList != 0 || linkBrokenTotal != 0;
-    if (failed) {
-        ReportAndMaybeAbort(true, "region-set invariants violated after prepare-young");
-    }
+    ReportAndMaybeAbort(failed, "region-set invariants violated after prepare-young");
 }
 
 void VerifyRegions::VerifyAfterYoungMark(RegionManager& manager, const CandidateSet& candidates, size_t youngRunIndex,
@@ -543,11 +544,9 @@ void VerifyRegions::VerifyAfterYoungMark(RegionManager& manager, const Candidate
     // 4138-class: non-zero marked objects in young regions outside candidates is the defect signal.
     // TL active young may be young but should have zero marks if not in candidates and not traced —
     // under FULL_YOUNG_SCAN, marks only land on regions that MarkObject visits (young regions).
-    // Report only; fatal only if FATAL env set.
-    bool failed = offCandidateMarkedObjects != 0 || invalidObjects != 0;
-    if (failed) {
-        ReportAndMaybeAbort(true,
-                            "young marked objects exist outside minorCandidateRegions (4138-class)");
-    }
+    // Detailed inventory is emitted above; the scene receipt below is the verdict.
+    const bool failed = offCandidateMarkedObjects != 0 || invalidObjects != 0;
+    ReportAndMaybeAbort(failed,
+                        "young marked objects exist outside minorCandidateRegions (4138-class)");
 }
 } // namespace MapleRuntime

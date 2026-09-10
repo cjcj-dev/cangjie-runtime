@@ -44,7 +44,8 @@
 // Gate: unified VerifyFace::Marking (legacy MRT_GCV2_MARKCOMPLETE=1 and token
 // "marking" remain aliases). Default off,
 // and the product path early-returns before any counter or STW.
-// The verifier is report-only; there is no independent fatal or interior-edge gate.
+// The verifier reports its inventory and then fails closed on inspected mark
+// defects; there is no independent interior-edge gate.
 
 namespace MapleRuntime {
 class BaseObject;
@@ -54,7 +55,7 @@ namespace MarkCompleteVerify {
 bool Enabled();
 
 // Runs under its own ScopedStopTheWorld, so it must be called from the GC thread
-// outside any existing STW scope. Report-only.
+// outside any existing STW scope. It closes the mark-verification scene before returning.
 void RunAtMarkEnd(const char* point);
 
 // Retrace census integrated with the completeness verifier. A dead-edge holder
