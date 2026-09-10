@@ -54,6 +54,7 @@ set(GC_UNIT_SOURCES
     test_receipt_life_registry.cpp
     test_lifeclock.cpp
     test_exempt_unlock.cpp
+    test_identity_kept_remap.cpp
     test_heal_coverage.cpp
     test_diag_gate.cpp
     test_interior_edge_class.cpp
