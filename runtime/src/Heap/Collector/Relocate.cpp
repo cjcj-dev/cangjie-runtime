@@ -131,10 +131,17 @@ static thread_local WCollector::RouteLookupTestResult* g_routeLookupTestContext 
 #if defined(MRT_TESTABLE_INTERNALS)
 using CopyAdmissionTestHook = void (*)(RegionInfo*, BaseObject*);
 static std::atomic<CopyAdmissionTestHook> g_copyAdmissionTestHook{ nullptr };
+using YoungForwardWindowTestHook = void (*)();
+static std::atomic<YoungForwardWindowTestHook> g_youngForwardWindowTestHook{ nullptr };
 
 extern "C" MRT_EXPORT void MRT_SetCopyAdmissionTestHook(CopyAdmissionTestHook hook)
 {
     g_copyAdmissionTestHook.store(hook, std::memory_order_release);
+}
+
+extern "C" MRT_EXPORT void MRT_SetYoungForwardWindowTestHook(YoungForwardWindowTestHook hook)
+{
+    g_youngForwardWindowTestHook.store(hook, std::memory_order_release);
 }
 
 static void RunCopyAdmissionTestHook(RegionInfo* region, BaseObject* object)
@@ -142,6 +149,14 @@ static void RunCopyAdmissionTestHook(RegionInfo* region, BaseObject* object)
     CopyAdmissionTestHook hook = g_copyAdmissionTestHook.load(std::memory_order_acquire);
     if (hook != nullptr) {
         hook(region, object);
+    }
+}
+
+static void RunYoungForwardWindowTestHook()
+{
+    YoungForwardWindowTestHook hook = g_youngForwardWindowTestHook.load(std::memory_order_acquire);
+    if (hook != nullptr) {
+        hook();
     }
 }
 #endif
@@ -1786,6 +1801,9 @@ void WCollector::EvacuateYoungRegions(const std::vector<BaseObject*>& reachableV
             MRT_PHASE_TIMER("young.concurrent_relocate");
             VLOG(REPORT, "[GCV2][relocate][conc] concurrent_relocate start nObj=%zu flip=1",
                  reachableVec.size());
+#if defined(MRT_TESTABLE_INTERNALS)
+            RunYoungForwardWindowTestHook();
+#endif
             ForwardFromSpace();
             *stw = std::make_unique<ScopedStopTheWorld>("young post-relocate", true,
                                                         GCPhase::GC_PHASE_FORWARD);
@@ -2125,8 +2143,17 @@ BaseObject* WCollector::WaitRoutedTipReady(BaseObject* from, BaseObject* to, Reg
         }
         return nullptr;
     };
+    auto isCopyReceipt = [&](BaseObject* tip) -> bool {
+        if (tip == nullptr || !Heap::IsHeapAddress(tip) || !tip->IsValidObject()) {
+            return false;
+        }
+        if (tip != from) {
+            return true;
+        }
+        return forwarding != nullptr && forwarding->IsForwardingDone();
+    };
     BaseObject* again = lookupTo();
-    if (again != nullptr && Heap::IsHeapAddress(again) && again->IsValidObject()) {
+    if (isCopyReceipt(again)) {
         if (MutatorRelocate::StatsOn()) {
             MutatorRelocate::NoteWaitReceipt();
         }
@@ -2142,7 +2169,7 @@ BaseObject* WCollector::WaitRoutedTipReady(BaseObject* from, BaseObject* to, Reg
         }
         return permanentHole(reason, 0, again);
     }
-    const bool tableHit = again != nullptr;
+    const bool tableHit = isCopyReceipt(again);
     const RegionInfo::RouteState rs = forwarding->GetRouteState();
     // COMPACTED without MarkForwardingDone is still the in-place copy window
     // (CompactRegion inserts receipts, then RouteRegion labels COMPACTED).
@@ -2206,7 +2233,7 @@ BaseObject* WCollector::WaitRoutedTipReady(BaseObject* from, BaseObject* to, Reg
         forwarding != nullptr && !forwarding->IsFreeRegion() && !forwarding->IsGarbageRegion();
     if (ans == MutatorRelocate::UnpublishedAnswer::Wait && !waitEligible) {
         BaseObject* retired = lookupTo();
-        if (retired != nullptr && Heap::IsHeapAddress(retired) && retired->IsValidObject()) {
+        if (isCopyReceipt(retired)) {
             if (MutatorRelocate::StatsOn()) {
                 MutatorRelocate::NoteWaitReceipt();
             }
@@ -2241,7 +2268,7 @@ BaseObject* WCollector::WaitRoutedTipReady(BaseObject* from, BaseObject* to, Reg
                 MutatorRelocate::NoteWaitGiveUp();
             }
             BaseObject* published = lookupTo();
-            if (published != nullptr && Heap::IsHeapAddress(published) && published->IsValidObject()) {
+            if (isCopyReceipt(published)) {
                 return published;
             }
             return permanentHole("retain-refused-without-receipt", 0, published);
@@ -2260,7 +2287,7 @@ BaseObject* WCollector::WaitRoutedTipReady(BaseObject* from, BaseObject* to, Reg
         // first lookup and Add(). Publishing an already-existing receipt is the
         // only alternate completion path.
         BaseObject* raced = lookupTo();
-        if (raced != nullptr && Heap::IsHeapAddress(raced) && raced->IsValidObject()) {
+        if (isCopyReceipt(raced)) {
             (void)requests.Publish(reinterpret_cast<MAddress>(from), reinterpret_cast<MAddress>(raced));
         }
 
@@ -2272,7 +2299,7 @@ BaseObject* WCollector::WaitRoutedTipReady(BaseObject* from, BaseObject* to, Reg
         }
         if (completedReceipt != 0) {
             BaseObject* completed = reinterpret_cast<BaseObject*>(completedReceipt);
-            if (Heap::IsHeapAddress(completed) && completed->IsValidObject()) {
+            if (isCopyReceipt(completed)) {
                 if (MutatorRelocate::StatsOn()) {
                     MutatorRelocate::NoteRegionWaitGot();
                     MutatorRelocate::NoteWaitReceipt();
@@ -2285,7 +2312,7 @@ BaseObject* WCollector::WaitRoutedTipReady(BaseObject* from, BaseObject* to, Reg
         // receipt. Ask the table once after that terminal; a miss violates the
         // relocation invariant.
         BaseObject* ready = lookupTo();
-        if (ready != nullptr && Heap::IsHeapAddress(ready) && ready->IsValidObject()) {
+        if (isCopyReceipt(ready)) {
             if (MutatorRelocate::StatsOn()) {
                 MutatorRelocate::NoteRegionWaitGot();
                 MutatorRelocate::NoteWaitReceipt();
