@@ -84,6 +84,7 @@ GC_TEST(IdentityKeptRemap, ArmedIdentityHitReturnsFromWhenRouteNotCompacted)
 
     CollectorResources& resources = Heap::GetHeap().GetCollectorResources();
     WCollector collector(Heap::GetHeap().GetAllocator(), resources);
+    collector.SetGCPhase(GCPhase::GC_PHASE_IDLE);
     BaseObject* resolved = collector.relocate_or_remap_object(fromObj, ZGenerationId::young);
     GC_EXPECT_TRUE(resolved == fromObj);
     std::fprintf(stderr,
