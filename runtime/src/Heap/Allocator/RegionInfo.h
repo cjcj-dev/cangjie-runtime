@@ -2072,6 +2072,11 @@ public:
 
     static void CommitUnits(size_t idx, size_t cnt)
     {
+#if defined(MRT_GC_UNIT_TESTS)
+        if (UnitInfo::memoryOwner == nullptr) {
+            return;
+        }
+#endif
         void* unitAddress = reinterpret_cast<void*>(RegionInfo::GetUnitAddress(idx));
         size_t size = cnt * RegionInfo::UNIT_SIZE;
         const size_t committed = UnitInfo::memoryOwner == nullptr ? 0 :
