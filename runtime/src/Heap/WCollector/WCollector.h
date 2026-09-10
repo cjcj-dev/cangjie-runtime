@@ -185,6 +185,8 @@ public:
     ~WCollector() override = default;
 
 #if defined(MRT_GC_UNIT_TESTS)
+    void SetCycleRefHandlerForTest(CrossRefHandler handler) { cycleRefHandlerForTest = handler; }
+
     // Controlled test wrapper for the copier route consumer. It keeps the
     // consumer's preconditions visible (heap address, relocation phase and
     // read retain) while using the same CopierRouteToken mint as production.
@@ -1478,6 +1480,9 @@ private:
     void PreforwardDiscoveredExternObjects();
     void PreforwardAllResurrectExportFromObjects();
     CrossRefHandler GetCrossRefHandler(BaseObject* foreignProxy);
+#if defined(MRT_GC_UNIT_TESTS)
+    CrossRefHandler cycleRefHandlerForTest = nullptr;
+#endif
 
     ForwardTable fwdTable;
     // gc index 0 or 1 is used to distinguish previous gc and current gc.
