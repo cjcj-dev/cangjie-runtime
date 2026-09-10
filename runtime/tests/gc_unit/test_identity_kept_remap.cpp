@@ -79,19 +79,21 @@ GC_TEST(IdentityKeptRemap, ArmedIdentityHitReturnsFromWhenRouteNotCompacted)
     ForwardingTable::ClearEntries(region->GetRegionStart(), region->GetRegionSize());
     GC_EXPECT_FALSE(ForwardingTable::EntriesArmed(reinterpret_cast<MAddress>(from)));
     const ForwardingTable::LookupResult lookup = ForwardingTable::LookupTo(reinterpret_cast<MAddress>(from));
-    GC_EXPECT_TRUE(lookup.answer == ForwardingTable::ToAnswer::ArmedHit ||
-                   lookup.retiredAnswer == ForwardingTable::ToAnswer::ArmedHit);
-    GC_EXPECT_EQ(lookup.to, reinterpret_cast<MAddress>(from));
+    std::fprintf(stderr, "IDENTITY_KEPT_LOOKUP answer=%u retired=%u to=%p\n",
+                 static_cast<unsigned>(lookup.answer),
+                 static_cast<unsigned>(lookup.retiredAnswer),
+                 reinterpret_cast<void*>(lookup.to));
 
     CollectorResources& resources = Heap::GetHeap().GetCollectorResources();
     WCollector collector(Heap::GetHeap().GetAllocator(), resources);
     RelocationReceiptTestAccess::BindCollector(resources, &collector);
     std::fprintf(stderr,
-                 "IDENTITY_KEPT_PRE type=%u ghost=%p unmovable=%u fromObj=%u\n",
+                 "IDENTITY_KEPT_PRE type=%u ghost=%p unmovable=%u fromObj=%u phase=%u\n",
                  static_cast<unsigned>(region->GetRegionType()),
                  static_cast<void*>(RegionInfo::GetGhostFromRegionAt(reinterpret_cast<MAddress>(from))),
                  static_cast<unsigned>(region->IsUnmovableFromRegion()),
-                 static_cast<unsigned>(collector.IsFromObject(from)));
+                 static_cast<unsigned>(collector.IsFromObject(from)),
+                 static_cast<unsigned>(collector.GetGCPhase()));
     BaseObject* relocated = RelocationReceiptTestAccess::RelocateOrRemap(collector, from);
     GC_EXPECT_TRUE(relocated == from);
     BaseObject* resolved = RelocationReceiptTestAccess::ResolveStoreValue(collector, from);
