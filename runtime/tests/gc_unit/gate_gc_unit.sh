@@ -82,7 +82,11 @@ esac
 # this gate; its recursion guard is intentionally scoped to that synthetic child
 # only.
 if [[ "${GC_UNIT_GATE_CONTRACT_SELFTEST:-0}" != "1" ]]; then
-  if ! MRT_GC_UNIT_OHOS_HOST=0 bash "$SRC/test_gate_testable_contract.sh"; then
+  # The fixture owns both product-shape inputs. The real post-build command
+  # exports them, so merely assigning OHOS_HOST=0 still leaked TESTABLE=1 into
+  # the fixture's first standalone pair and made that control arm fail early.
+  if ! env -u MRT_TESTABLE_INTERNALS -u MRT_GC_UNIT_OHOS_HOST \
+      bash "$SRC/test_gate_testable_contract.sh"; then
     echo "GC_UNIT_GATE_FAIL: testable gate contract failed" >&2
     exit 2
   fi

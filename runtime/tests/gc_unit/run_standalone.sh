@@ -77,7 +77,7 @@ run_ohos_host_arm() {
   local bounds="$RUNTIME_LIB_DIR/libboundscheck.so"
   local host_src="$SRC/ohos_host"
   local host_inc="$host_src/include"
-  local elf="$OUT/cj_gc_ohos_host_unit"
+  local elf="${GC_UNIT_OHOS_HOST_TEST_ELF:-$OUT/cj_gc_ohos_host_unit}"
   local runroot="$OUT/ohos_host_runroot"
   local receipt="${GC_UNIT_OHOS_HOST_RECEIPT:-$OUT/ohos_host.receipt}"
   local product_nm="$OUT/ohos_host_product.full-defined.txt"
@@ -115,17 +115,24 @@ run_ohos_host_arm() {
   libc_real="$(readlink -f "$libc_real")"
   ln -sfn "$libc_real" "$runroot/libc.so"
 
-  "$CXX" -std=gnu++17 -O0 -g -Wall -Wextra -pthread -fno-rtti -fexceptions \
-    -fvisibility-inlines-hidden -D__OHOS__=1 -DMRT_GC_UNIT_TESTS=1 \
-    -DMRT_TESTABLE_INTERNALS=1 -include string \
-    -I"$host_inc" -I"$SRC" -I"$ROOT/runtime/src" -I"$ROOT/runtime/src/Heap" \
-    -I"$ROOT/runtime/src/CJThread/src/runtime/schedule/include" \
-    -I"$ROOT/runtime/include" \
-    -I"$ROOT/runtime/third_party/third_party_bounds_checking_function/include" \
-    -I"$ROOT/runtime/output/temp/include" \
-    "$SRC/gc_unit_main.cpp" "$host_src/ohos_cycle_unit.cpp" \
-    -L"$RUNTIME_LIB_DIR" -Wl,-rpath,"$RUNTIME_LIB_DIR" -Wl,--exclude-libs,ALL \
-    -lcangjie-runtime -lboundscheck -o "$elf"
+  if [[ -z "${GC_UNIT_OHOS_HOST_TEST_ELF:-}" ]]; then
+    "$CXX" -std=gnu++17 -O0 -g -Wall -Wextra -pthread -fno-rtti -fexceptions \
+      -fvisibility-inlines-hidden -D__OHOS__=1 -DMRT_GC_UNIT_TESTS=1 \
+      -DMRT_TESTABLE_INTERNALS=1 -include string \
+      -I"$host_inc" -I"$SRC" -I"$ROOT/runtime/src" -I"$ROOT/runtime/src/Heap" \
+      -I"$ROOT/runtime/src/CJThread/src/runtime/schedule/include" \
+      -I"$ROOT/runtime/include" \
+      -I"$ROOT/runtime/third_party/third_party_bounds_checking_function/include" \
+      -I"$ROOT/runtime/output/temp/include" \
+      "$SRC/gc_unit_main.cpp" "$host_src/ohos_cycle_unit.cpp" \
+      -L"$RUNTIME_LIB_DIR" -Wl,-rpath,"$RUNTIME_LIB_DIR" -Wl,--exclude-libs,ALL \
+      -lcangjie-runtime -lboundscheck -o "$elf"
+  elif [[ ! -x "$elf" ]]; then
+    echo "GC_UNIT_OHOS_HOST_REUSED_ELF_MISSING elf=$elf" >&2
+    return 27
+  else
+    echo "GC_UNIT_OHOS_HOST_REUSING_ELF elf=$elf"
+  fi
 
   # Full nm is deliberate: a local/weak copy in the test is still a second
   # implementation and must fail this product-identity guard.
