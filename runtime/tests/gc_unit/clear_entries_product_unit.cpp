@@ -89,6 +89,12 @@ struct RelocationReceiptTestAccess {
         return collector.ResolveStoreValue(value, provenance);
     }
 
+    static void CheckStoreGoodTarget(WCollector& collector, BaseObject* value)
+    {
+        collector.CheckStoreGoodTarget("ForwardingLookupWitness", value,
+            ForwardingProvenance{ ForwardingHolderKind::HeapRef, value, &value });
+    }
+
     static BaseObject* ForwardUpdateRawRef(WCollector& collector, ObjectRef& root)
     {
         return collector.ForwardUpdateRawRef(root);
@@ -2009,8 +2015,31 @@ LookupWitnessIdentity ReadLookupWitnessIdentity(ZForwarding* table)
              view->epoch, view->lifeId };
 }
 
+void ExpectDiagnosticLookupIdentity(const std::string& output, const LookupWitnessIdentity& expected)
+{
+    char table[64] {};
+    (void)std::snprintf(table, sizeof(table), "table_id=%#zx ", static_cast<size_t>(expected.tableId));
+    const std::string generation = "publication_generation=" + std::to_string(expected.generation) + " ";
+    const std::string epoch = "from_page_epoch=" + std::to_string(expected.epoch) + " ";
+    const std::string life = "lifeId=" + std::to_string(expected.lifeId) + " ";
+    const bool tableIdentityMatches = output.find(table) != std::string::npos;
+    const bool publicationGenerationMatches = output.find(generation) != std::string::npos;
+    const bool fromPageEpochMatches = output.find(epoch) != std::string::npos;
+    const bool fromPageLifeIdMatches = output.find(life) != std::string::npos;
+    // Print every comparison before a throwing assertion: a field-specific
+    // product cut must change only its corresponding result in this record.
+    std::fprintf(stderr, "LOOKUP_WITNESS_TARGET diagnostic table=%d generation=%d epoch=%d life=%d\n",
+                 tableIdentityMatches, publicationGenerationMatches, fromPageEpochMatches, fromPageLifeIdMatches);
+    GC_EXPECT_TRUE(tableIdentityMatches);
+    GC_EXPECT_TRUE(publicationGenerationMatches);
+    GC_EXPECT_TRUE(fromPageEpochMatches);
+    GC_EXPECT_TRUE(fromPageLifeIdMatches);
+}
+
+enum class LookupWitnessConsumer { Lookup, LoadDiagnostic, StoreDiagnostic };
+
 void CheckLookupWitness(bool retirePublisher, bool addCandidate, bool retireCandidate,
-                        bool publishReceipt, bool diagnostic)
+                        bool publishReceipt, LookupWitnessConsumer consumer = LookupWitnessConsumer::Lookup)
 {
     GcHeapFixture& fx = ProductFixture();
     WCollector collector(Heap::GetHeap().GetAllocator(), Heap::GetHeap().GetCollectorResources());
@@ -2049,26 +2078,25 @@ void CheckLookupWitness(bool retirePublisher, bool addCandidate, bool retireCand
         }
     }
 
-    if (diagnostic) {
+    if (consumer != LookupWitnessConsumer::Lookup) {
         // Enter the existing last-chance load diagnostic. It performs its own
         // LookupTo and consumes that result; the expected tuple is only used
         // by the parent to check the product's emitted record.
         const AbortCapture aborted = CaptureAbort([&]() {
+            if (consumer == LookupWitnessConsumer::StoreDiagnostic) {
+                RelocationReceiptTestAccess::CheckStoreGoodTarget(collector, state.from);
+                return;
+            }
             Collector::FailClosedLoad("ForwardingLookupWitness", state.from, from,
                 ForwardingProvenance{ ForwardingHolderKind::HeapRef, state.from, &state.from });
         });
         std::fprintf(stderr, "LOOKUP_WITNESS_DIAGNOSTIC status=%d\n%s", aborted.status, aborted.output.c_str());
         GC_EXPECT_TRUE(WIFSIGNALED(aborted.status));
         GC_EXPECT_EQ(WTERMSIG(aborted.status), SIGABRT);
-        GC_EXPECT_TRUE(aborted.output.find("[LOADFC][fail-closed] site=ForwardingLookupWitness") !=
-                       std::string::npos);
-        char tuple[256] {};
-        (void)std::snprintf(tuple, sizeof(tuple),
-            "table_id=%#zx publication_generation=%llu from_page_epoch=%llu lifeId=%llu",
-            static_cast<size_t>(expected.tableId), static_cast<unsigned long long>(expected.generation),
-            static_cast<unsigned long long>(expected.epoch), static_cast<unsigned long long>(expected.lifeId));
-        std::fprintf(stderr, "LOOKUP_WITNESS_TARGET diagnostic expected=%s\n", tuple);
-        GC_EXPECT_TRUE(aborted.output.find(tuple) != std::string::npos);
+        const char* entry = consumer == LookupWitnessConsumer::LoadDiagnostic
+            ? "[LOADFC][fail-closed] site=ForwardingLookupWitness" : "consumer=ForwardingLookupWitness";
+        GC_EXPECT_TRUE(aborted.output.find(entry) != std::string::npos);
+        ExpectDiagnosticLookupIdentity(aborted.output, expected);
     } else {
         const ForwardingTable::LookupResult lookup = ForwardingTable::LookupTo(from);
         std::fprintf(stderr,
@@ -2092,37 +2120,42 @@ void CheckLookupWitness(bool retirePublisher, bool addCandidate, bool retireCand
 
 GC_OTHER_VM_TEST(ForwardingLookupWitness, ActiveHitIdentifiesPublisher)
 {
-    CheckLookupWitness(false, false, false, true, false);
+    CheckLookupWitness(false, false, false, true);
 }
 
 GC_OTHER_VM_TEST(ForwardingLookupWitness, RetiredHitReplacesActiveMissIdentity)
 {
-    CheckLookupWitness(true, true, false, true, false);
+    CheckLookupWitness(true, true, false, true);
 }
 
 GC_OTHER_VM_TEST(ForwardingLookupWitness, LaterRetiredHitReplacesFirstCoverIdentity)
 {
-    CheckLookupWitness(true, true, true, true, false);
+    CheckLookupWitness(true, true, true, true);
 }
 
 GC_OTHER_VM_TEST(ForwardingLookupWitness, ActiveMissKeepsCandidateIdentity)
 {
-    CheckLookupWitness(true, true, false, false, false);
+    CheckLookupWitness(true, true, false, false);
 }
 
 GC_OTHER_VM_TEST(ForwardingLookupWitness, RetiredMissKeepsFirstCoverIdentity)
 {
-    CheckLookupWitness(true, true, true, false, false);
+    CheckLookupWitness(true, true, true, false);
 }
 
 GC_OTHER_VM_TEST(ForwardingLookupWitness, LoadDiagnosticConsumesRetiredHitAfterActiveMiss)
 {
-    CheckLookupWitness(true, true, false, true, true);
+    CheckLookupWitness(true, true, false, true, LookupWitnessConsumer::LoadDiagnostic);
 }
 
 GC_OTHER_VM_TEST(ForwardingLookupWitness, LoadDiagnosticConsumesLaterRetiredHit)
 {
-    CheckLookupWitness(true, true, true, true, true);
+    CheckLookupWitness(true, true, true, true, LookupWitnessConsumer::LoadDiagnostic);
+}
+
+GC_OTHER_VM_TEST(ForwardingLookupWitness, StoreDiagnosticConsumesLaterRetiredHit)
+{
+    CheckLookupWitness(true, true, true, true, LookupWitnessConsumer::StoreDiagnostic);
 }
 
 RefField<>* gIncomingDestination = nullptr;
@@ -2637,6 +2670,8 @@ GC_TEST(ForwardingPublicationProduct, ArmedMissAfterPublicationCloseFailsClosed)
     GcHeapFixture& fx = ProductFixture();
     WCollector collector(Heap::GetHeap().GetAllocator(), Heap::GetHeap().GetCollectorResources());
     LateBackfillState state = PrepareLateBackfill(fx, collector);
+    const LookupWitnessIdentity expected = ReadLookupWitnessIdentity(
+        ForwardingTable::GetEntries(reinterpret_cast<MAddress>(state.from)));
     ForwardingTable::ClearEntries(state.region->GetRegionStart(), state.region->GetRegionSize());
 
     GC_EXPECT_TRUE(ForwardingTable::RetiredCovers(
@@ -2650,7 +2685,15 @@ GC_TEST(ForwardingPublicationProduct, ArmedMissAfterPublicationCloseFailsClosed)
     GC_EXPECT_TRUE(result.unavailable_region_snapshot_valid());
     GC_EXPECT_EQ(result.unavailable_from(), reinterpret_cast<uintptr_t>(state.from));
     GC_EXPECT_NE(result.unavailable_from_region(), static_cast<uintptr_t>(0));
-    GC_EXPECT_NE(result.unavailable_table_id(), static_cast<uintptr_t>(0));
+    std::fprintf(stderr, "LOOKUP_WITNESS_FINDTO table=%#zx generation=%llu epoch=%llu life=%llu\n",
+                 static_cast<size_t>(result.unavailable_table_id()),
+                 static_cast<unsigned long long>(result.unavailable_publication_generation()),
+                 static_cast<unsigned long long>(result.unavailable_from_page_epoch()),
+                 static_cast<unsigned long long>(result.unavailable_from_page_life_id()));
+    GC_EXPECT_EQ(result.unavailable_table_id(), expected.tableId);
+    GC_EXPECT_EQ(result.unavailable_publication_generation(), expected.generation);
+    GC_EXPECT_EQ(result.unavailable_from_page_epoch(), expected.epoch);
+    GC_EXPECT_EQ(result.unavailable_from_page_life_id(), expected.lifeId);
 
     RootSlot slot;
     StorePlain(slot, from_object(state.from));
@@ -3011,6 +3054,8 @@ GC_TEST(ForwardingPublicationProduct, LookupCausePublishedWithoutReceipt)
     collector.SetGCPhase(GCPhase::GC_PHASE_FORWARD);
     RelocationReceiptTestAccess::BindCollector(Heap::GetHeap().GetCollectorResources(), &collector);
     LiveInfo* live = PrepareForwardable(fx, region, reinterpret_cast<MAddress>(from));
+    const LookupWitnessIdentity expected = ReadLookupWitnessIdentity(
+        ForwardingTable::GetEntries(reinterpret_cast<MAddress>(from)));
     region->SetRouteState(RegionInfo::RouteState::COMPACTED);
     region->MarkForwardingDone();
     const ForwardingTable::LookupResult lookup = ForwardingTable::LookupTo(reinterpret_cast<MAddress>(from));
@@ -3021,12 +3066,14 @@ GC_TEST(ForwardingPublicationProduct, LookupCausePublishedWithoutReceipt)
     auto& field = HeapSlotAt<>(reinterpret_cast<MAddress>(holder) + TYPEINFO_PTR_SIZE);
     Barrier barrier(collector, Heap::GetHeap().GetRememberedSet());
     AbortCapture aborted = CaptureAbort([&]() { barrier.WriteReference(holder, field, from); });
+    std::fprintf(stderr, "LOOKUP_WITNESS_WAIT status=%d\n%s", aborted.status, aborted.output.c_str());
     if (!WIFSIGNALED(aborted.status)) {
         std::fprintf(stderr, "WAIT_PROVENANCE status=%d output=\n%s\n", aborted.status,
                      aborted.output.c_str());
     }
     GC_EXPECT_TRUE(WIFSIGNALED(aborted.status));
     GC_EXPECT_EQ(WTERMSIG(aborted.status), SIGABRT);
+    ExpectDiagnosticLookupIdentity(aborted.output, expected);
     const char* required[] = {
         "WCollector::WaitRoutedTipReady.published-without-receipt",
         "holder_kind=heap_ref",
