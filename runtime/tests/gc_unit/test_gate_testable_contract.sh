@@ -97,12 +97,12 @@ printf '#!/usr/bin/env bash\nheader_root=${GC_UNIT_OHOS_HEADER_ROOT_TOKEN:-${GCV
 chmod +x "$fixture/runtime/tests/gc_unit/run_standalone.sh"
 ohos_output_root="$fixture/selected-output"
 mkdir -p "$ohos_output_root/include"
-PATH="$fixture/bin:$PATH" MRT_GC_UNIT_OHOS_HOST=1 \
+PATH="$fixture/bin:$PATH" GC_UNIT_GATE_CONTRACT_SELFTEST=1 MRT_GC_UNIT_OHOS_HOST=1 \
   GCV2_RUNTIME_OUTPUT_ROOT="$ohos_output_root" GCV2_RUNTIME_LIB_DIR="$fixture/lib" \
   GC_UNIT_OUT="$fixture/ohos-good-out" GC_UNIT_GATE_STATUS="$fixture/ohos-good.status" \
   bash "$fixture/runtime/tests/gc_unit/gate_gc_unit.sh" >"$fixture/ohos-good.log" 2>&1
 set +e
-PATH="$fixture/bin:$PATH" MRT_GC_UNIT_OHOS_HOST=1 \
+PATH="$fixture/bin:$PATH" GC_UNIT_GATE_CONTRACT_SELFTEST=1 MRT_GC_UNIT_OHOS_HOST=1 \
   GCV2_RUNTIME_OUTPUT_ROOT="$ohos_output_root" GCV2_RUNTIME_LIB_DIR="$fixture/lib" \
   GC_UNIT_OHOS_HEADER_ROOT_TOKEN="$fixture/stale-output/include" \
   GC_UNIT_OUT="$fixture/ohos-mismatch-out" GC_UNIT_GATE_STATUS="$fixture/ohos-mismatch.status" \
