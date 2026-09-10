@@ -160,9 +160,11 @@ fi
 tests=0
 passed=0
 failed=0
+incomplete=0
 main_rc=0
 publication_rc=0
 failed_tests=()
+incomplete_tests=()
 suites_file="$OUT/test-suites.txt"
 : >"$suites_file"
 while IFS=$'\t' read -r kind test index; do
@@ -180,23 +182,32 @@ while IFS=$'\t' read -r kind test index; do
       rc=125
     fi
   fi
-  # A zero process status is not sufficient completion evidence: list mode,
-  # an early return, or a broken fixture can all exit zero without executing
-  # the selected test. Require the independently written one-test tally before
-  # counting the item as passed.
-  if [[ "$rc" -eq 0 ]] &&
-      ! { [[ -f "$tally_file" ]] &&
-          [[ $(wc -l <"$tally_file") -eq 1 ]] &&
-          /usr/bin/grep -qxF '[========] 1 tests: 1 passed, 0 failed' "$tally_file"; }; then
-    rc=125
+  # A process status alone is not completion evidence: list mode, an early
+  # return, timeout, or signal can all omit the selected test's end state.
+  # Accept only a matching log token plus the independently written one-test
+  # tally. Everything else is an explicit incomplete failure.
+  completed_pass=0
+  completed_fail=0
+  if [[ -f "$tally_file" ]] && [[ $(wc -l <"$tally_file") -eq 1 ]]; then
+    if [[ "$rc" -eq 0 ]] &&
+        /usr/bin/grep -F -q "[  PASS  ] $test" "$log" &&
+        /usr/bin/grep -qxF '[========] 1 tests: 1 passed, 0 failed' "$tally_file"; then
+      completed_pass=1
+    elif [[ "$rc" -ne 0 ]] &&
+        /usr/bin/grep -F -q "[  FAIL  ] $test" "$log" &&
+        /usr/bin/grep -qxF '[========] 1 tests: 0 passed, 1 failed' "$tally_file"; then
+      completed_fail=1
+    fi
   fi
-  if [[ "$rc" -eq 0 ]]; then
+  if [[ "$completed_pass" -eq 1 ]]; then
     passed=$((passed + 1))
   else
     failed=$((failed + 1))
     failed_tests+=("$test")
-    if ! /usr/bin/grep -F -q "[  FAIL  ] $test" "$log"; then
-      printf '[  FAIL  ] %s\n  isolated process rc=%d\n' "$test" "$rc"
+    if [[ "$completed_fail" -ne 1 ]]; then
+      incomplete=$((incomplete + 1))
+      incomplete_tests+=("$test")
+      printf '[  FAIL  ] %s\n  isolated process incomplete rc=%d\n' "$test" "$rc"
     fi
     if [[ "$kind" == main ]]; then
       main_rc=1
@@ -217,6 +228,12 @@ if [[ $failed -ne 0 ]]; then
     printf '[  FAILED  ] %s\n' "$test"
   done
 fi
+if [[ $incomplete -ne 0 ]]; then
+  printf '[  INCOMPLETE ] %d tests, listed below:\n' "$incomplete"
+  for test in "${incomplete_tests[@]}"; do
+    printf '[  INCOMPLETE ] %s\n' "$test"
+  done
+fi
 printf '[========] %d tests: %d passed, %d failed\n' "$tests" "$passed" "$failed" | tee "$OUT/parallel_tally.txt"
 if [[ -n "$FINAL_TALLY" ]]; then
   if [[ "$FINAL_TALLY" != "$OUT/parallel_tally.txt" ]]; then
@@ -225,6 +242,7 @@ if [[ -n "$FINAL_TALLY" ]]; then
 fi
 printf 'GC_UNIT_PARALLEL jobs=%d tests=%d wall=%d.%03d\n' \
   "$JOBS" "$tests" "$((elapsed_ms / 1000))" "$((elapsed_ms % 1000))"
+printf 'GC_UNIT_INCOMPLETE tests=%d\n' "$incomplete"
 rc=0
 if [[ $failed -ne 0 ]]; then
   rc=1
