@@ -937,6 +937,72 @@ GC_OTHER_VM_TEST(YoungConc, LeftoverAllocBlackAndY2yAfterWorkerForcesContinue)
     (void)live;
 }
 
+// Kept-identity remap through DoGarbageCollection → EvacuateYoungRegions →
+// relocate_or_remap_object. region0 is unpinned with high live bytes so
+// ExemptFromRegions → PublishKeptInPlaceReceipts; region1 is the pinned holder
+// whose field names the kept child. Phase-entry produces the intermediate
+// state; the test does not plant route/publication itself.
+GC_OTHER_VM_TEST(YoungConc, PhaseEntryKeptIdentityRemap)
+{
+    GC_EXPECT_EQ(CJ_ScheduleManagerInit(), 0);
+    GC_EXPECT_EQ(setenv("MRT_GCV2_MARKPAR_FORCE_SERIAL", "1", 1), 0);
+    MutatorManager mutatorManager;
+    YoungConcTestRuntime runtime(mutatorManager);
+    GcHeapFixture fx;
+    fx.region0->SetYoungRegionFlag(1);
+    fx.region0->SetYoungAge(1);
+    fx.region1->SetYoungRegionFlag(1);
+    fx.region1->SetYoungAge(1);
+    LiveInfo* live0 = fx.PlantLiveInfo(fx.region0);
+    LiveInfo* live1 = fx.PlantLiveInfo(fx.region1);
+    (void)fx.PlantMarkBitmap<Generation::Young>(live0, fx.region0->GetRegionSize());
+    (void)fx.PlantMarkBitmap<Generation::Young>(live1, fx.region1->GetRegionSize());
+    BaseObject* child = fx.obj0;
+    BaseObject* holder = fx.obj1;
+    fx.region0->SetRegionAllocPtr(reinterpret_cast<MAddress>(child) + 64);
+    fx.region1->SetRegionAllocPtr(reinterpret_cast<MAddress>(holder) + 64);
+    fx.region0->AddLiveByteCount(fx.region0->GetRegionSize());
+    auto* holderField = &HeapSlotAt<>(reinterpret_cast<MAddress>(holder) + TYPEINFO_PTR_SIZE);
+    holderField->StoreColoured(GcUnit::StoreGoodPointer(child));
+    (void)fx.region0->MarkObject(fx.region0->GetMarkView<Generation::Young>(), child, 8);
+    (void)fx.region1->MarkObject(fx.region1->GetMarkView<Generation::Young>(), holder, 8);
+
+    CollectorResources& resources = Heap::GetHeap().GetCollectorResources();
+    WCollector collector(Heap::GetHeap().GetAllocator(), resources);
+    RelocationReceiptTestAccess::BindCollector(resources, &collector);
+    collector.SetGCPhase(GCPhase::GC_PHASE_CLEAR_SATB_BUFFER);
+    GCThreadPool threadPool("gc-unit-kept-identity", 0, GCPoolThread::GC_THREAD_PRIORITY);
+    RelocationReceiptTestAccess::BindThreadPool(resources, &threadPool);
+    RegionSpace& space = reinterpret_cast<RegionSpace&>(Heap::GetHeap().GetAllocator());
+    space.GetRegionManager().EnlistFullThreadLocalRegion(fx.region0);
+    space.GetRegionManager().EnlistFullThreadLocalRegion(fx.region1);
+    space.GetRegionManager().AddRawPointerObject(holder);
+    Heap::GetHeap().GetRememberedSet().Initialize(fx.heapStart, 2 * RegionInfo::UNIT_SIZE);
+    const bool startedBefore = resources.IsGcStarted();
+    const GCReason reasonBefore = resources.GetGCStats().reason;
+    resources.SetGcStarted(true);
+    resources.GetGCStats().reason = GC_REASON_YOUNG;
+    ResetMarkTerminateTestReceipt();
+
+    RelocationReceiptTestAccess::RunCollectionDispatch(collector);
+    const auto receipt = ReadMarkTerminateTestReceipt();
+    std::fprintf(stderr,
+                 "DETAIL kept_identity pauses=%zu continues=%zu child=%p holder=%p\n",
+                 receipt.pauses, receipt.continues, static_cast<void*>(child),
+                 static_cast<void*>(holder));
+    GC_EXPECT_TRUE(receipt.pauses >= 1u);
+    GC_EXPECT_TRUE(Heap::IsHeapAddress(child));
+    GC_EXPECT_TRUE(Heap::IsHeapAddress(holder));
+
+    resources.SetGcStarted(startedBefore);
+    resources.GetGCStats().reason = reasonBefore;
+    RelocationReceiptTestAccess::BindThreadPool(resources, nullptr);
+    threadPool.Exit();
+    RelocationReceiptTestAccess::BindCollector(resources, nullptr);
+    (void)live0;
+    (void)live1;
+}
+
 GC_OTHER_VM_TEST(YoungConc, PauseMarkEndNeverRunsClosure)
 {
     GC_EXPECT_EQ(CJ_ScheduleManagerInit(), 0);
