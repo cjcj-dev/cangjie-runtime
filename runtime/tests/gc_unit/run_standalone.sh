@@ -74,6 +74,7 @@ run_ohos_host_arm() {
   local test_nm="$OUT/ohos_host_test.full-defined.txt"
   local test_undef="$OUT/ohos_host_test.undefined.txt"
   local post_disassembly="$OUT/ohos_host_postresolve.disassembly.txt"
+  local runtime_output_root="${GCV2_RUNTIME_OUTPUT_ROOT:-$(realpath -m "$RUNTIME_LIB_DIR/../..")}"
   local libc_real
   local test_name key rc state
   local overall_rc=0
@@ -113,7 +114,7 @@ run_ohos_host_arm() {
       -I"$ROOT/runtime/src/CJThread/src/runtime/schedule/include" \
       -I"$ROOT/runtime/include" \
       -I"$ROOT/runtime/third_party/third_party_bounds_checking_function/include" \
-      -I"$ROOT/runtime/output/temp/include" \
+      -I"$runtime_output_root/include" \
       "$SRC/gc_unit_main.cpp" "$host_src/ohos_cycle_unit.cpp" \
       -L"$RUNTIME_LIB_DIR" -Wl,-rpath,"$RUNTIME_LIB_DIR" -Wl,--exclude-libs,ALL \
       -lcangjie-runtime -lboundscheck -o "$elf"
