@@ -110,6 +110,7 @@ void VerifyEmpty(MarkingGeneration generation, MarkingBoundary boundary, Marking
          PrintableIndex(owner), PrintableIndex(worker), PrintableIndex(stripe), pending);
 }
 
+#if defined(MRT_TESTABLE_INTERNALS)
 Snapshot ReadSnapshot()
 {
     Snapshot snapshot;
@@ -127,6 +128,7 @@ Snapshot ReadSnapshot()
     }
     return snapshot;
 }
+#endif
 
 } // namespace VerifyMarkingStacks
 } // namespace MapleRuntime
