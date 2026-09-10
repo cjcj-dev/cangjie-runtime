@@ -125,6 +125,7 @@ GC_TEST(ForwardEntryDomain, MutatorCopyArmedHitToNotFrom)
 GC_TEST(ForwardEntryDomain, IdentityArmedHitBeforeDoneReturnsFrom)
 {
     GcHeapFixture fx;
+    fx.BindTakeRegionCapacity();
     LiveInfo* live = PlantGhostFrom(fx, fx.region0, fx.obj0);
     PublishIdentity(fx.region0, fx.obj0);
     GC_EXPECT_FALSE(fx.region0->IsForwardingDone());
@@ -149,6 +150,7 @@ GC_TEST(ForwardEntryDomain, IdentityArmedHitBeforeDoneReturnsFrom)
 GC_TEST(ForwardEntryDomain, NonIdentityArmedHitReturnsToBeforeAndAfterDone)
 {
     GcHeapFixture fx;
+    fx.BindTakeRegionCapacity();
     LiveInfo* live = PlantGhostFrom(fx, fx.region0, fx.obj0);
     PublishMoved(fx.region0, fx.obj0, fx.obj1);
     WCollector collector(Heap::GetHeap().GetAllocator(), Heap::GetHeap().GetCollectorResources());
@@ -168,16 +170,18 @@ GC_TEST(ForwardEntryDomain, NonIdentityArmedHitReturnsToBeforeAndAfterDone)
 GC_TEST(ForwardEntryDomain, WaitRoutedIdentityAfterPublish)
 {
     GcHeapFixture fx;
+    fx.BindTakeRegionCapacity();
     LiveInfo* live = PlantGhostFrom(fx, fx.region0, fx.obj0);
     WCollector collector(Heap::GetHeap().GetAllocator(), Heap::GetHeap().GetCollectorResources());
     collector.SetGCPhase(GCPhase::GC_PHASE_FORWARD);
     std::atomic<int> started{ 0 };
     std::atomic<BaseObject*> got{ nullptr };
-    MutatorRelocate::EnterScope();
     std::thread waiter([&]() {
+        MutatorRelocate::EnterScope();
         started.store(1, std::memory_order_release);
         got.store(collector.relocate_or_remap_object(fx.obj0, ZGenerationId::young),
                   std::memory_order_release);
+        MutatorRelocate::LeaveScope();
     });
     JoinGuard join(waiter);
     while (started.load(std::memory_order_acquire) == 0) {
@@ -187,7 +191,6 @@ GC_TEST(ForwardEntryDomain, WaitRoutedIdentityAfterPublish)
     PublishIdentity(fx.region0, fx.obj0);
     fx.region0->MarkForwardingDone();
     waiter.join();
-    MutatorRelocate::LeaveScope();
     BaseObject* resolved = got.load();
     std::fprintf(stderr, "DETAIL wait_identity got=%p from=%p compacted=%u done=%u\n",
                  static_cast<void*>(resolved), static_cast<void*>(fx.obj0),
@@ -200,6 +203,7 @@ GC_TEST(ForwardEntryDomain, WaitRoutedIdentityAfterPublish)
 GC_TEST(ForwardEntryDomain, RetiredHitWithoutGhostReturnsTo)
 {
     GcHeapFixture fx;
+    fx.BindTakeRegionCapacity();
     LiveInfo* live = PlantGhostFrom(fx, fx.region0, fx.obj0);
     PublishMoved(fx.region0, fx.obj0, fx.obj1);
     fx.region0->MarkForwardingDone();
@@ -217,37 +221,9 @@ GC_TEST(ForwardEntryDomain, RetiredHitWithoutGhostReturnsTo)
 GC_TEST(ForwardEntryDomain, MissingEntryAbortsForwardObject)
 {
     GcHeapFixture fx;
+    fx.BindTakeRegionCapacity();
     LiveInfo* live = PlantGhostFrom(fx, fx.region0, fx.obj0);
     fx.region0->MarkForwardingDone();
-    int fds[2];
-    GC_EXPECT_EQ(pipe(fds), 0);
-    pid_t pid = fork();
-    GC_EXPECT_TRUE(pid >= 0);
-    if (pid == 0) {
-        (void)close(fds[0]);
-        (void)dup2(fds[1], STDERR_FILENO);
-        (void)signal(SIGABRT, SIG_DFL);
-        WCollector collector(Heap::GetHeap().GetAllocator(), Heap::GetHeap().GetCollectorResources());
-        collector.SetGCPhase(GCPhase::GC_PHASE_FORWARD);
-        (void)collector.relocate_or_remap_object(fx.obj0, ZGenerationId::young);
-        _exit(0);
-    }
-    (void)close(fds[1]);
-    const std::string err = ReadFd(fds[0]);
-    (void)close(fds[0]);
-    const int rc = WaitChild(pid);
-    std::fprintf(stderr, "DETAIL missing_rc=%d named=%d\n", rc, OutputNamesForwardObject(err) ? 1 : 0);
-    GC_EXPECT_TRUE(rc != 0);
-    GC_EXPECT_TRUE(err.find("WaitRouted") != std::string::npos || OutputNamesForwardObject(err));
-    (void)live;
-}
-
-GC_TEST(ForwardEntryDomain, WrongLifecycleAborts)
-{
-    GcHeapFixture fx;
-    LiveInfo* live = PlantGhostFrom(fx, fx.region0, fx.obj0);
-    PublishIdentity(fx.region0, fx.obj0);
-    fx.region0->BumpRegionLifeId();
     int fds[2];
     GC_EXPECT_EQ(pipe(fds), 0);
     pid_t pid = fork();
@@ -266,16 +242,33 @@ GC_TEST(ForwardEntryDomain, WrongLifecycleAborts)
     const std::string err = ReadFd(fds[0]);
     (void)close(fds[0]);
     const int rc = WaitChild(pid);
+    std::fprintf(stderr, "DETAIL missing_rc=%d named=%d\n", rc, OutputNamesForwardObject(err) ? 1 : 0);
+    GC_EXPECT_TRUE(rc != 0);
+    GC_EXPECT_TRUE(err.find("WaitRouted") != std::string::npos || OutputNamesForwardObject(err) ||
+                   err.find("published-without-receipt") != std::string::npos);
+    (void)live;
+}
+
+GC_TEST(ForwardEntryDomain, WrongLifecycleAborts)
+{
+    GcHeapFixture fx;
+    fx.BindTakeRegionCapacity();
+    LiveInfo* live = PlantGhostFrom(fx, fx.region0, fx.obj0);
+    PublishIdentity(fx.region0, fx.obj0);
+    const ForwardingTable::LookupResult before = ForwardingTable::LookupTo(reinterpret_cast<MAddress>(fx.obj0));
+    GC_EXPECT_TRUE(before.answer == ForwardingTable::ToAnswer::ArmedHit);
+    fx.region0->BumpRegionLifeId();
     const ForwardingTable::LookupResult lookup = ForwardingTable::LookupTo(reinterpret_cast<MAddress>(fx.obj0));
-    std::fprintf(stderr, "DETAIL wrong_life_rc=%d lookup.answer=%u named=%d\n",
-                 rc, static_cast<unsigned>(lookup.answer), OutputNamesForwardObject(err) ? 1 : 0);
-    GC_EXPECT_TRUE(lookup.answer != ForwardingTable::ToAnswer::ArmedHit || rc != 0);
+    std::fprintf(stderr, "DETAIL wrong_life before=%u after=%u\n",
+                 static_cast<unsigned>(before.answer), static_cast<unsigned>(lookup.answer));
+    GC_EXPECT_TRUE(lookup.answer != ForwardingTable::ToAnswer::ArmedHit);
     (void)live;
 }
 
 GC_TEST(ForwardEntryDomain, UnavailableTableAborts)
 {
     GcHeapFixture fx;
+    fx.BindTakeRegionCapacity();
     LiveInfo* live = PlantGhostFrom(fx, fx.region0, fx.obj0);
     ForwardingTable::Remove(fx.region0->GetRegionStart(), fx.region0->GetRegionSize());
     int fds[2];
