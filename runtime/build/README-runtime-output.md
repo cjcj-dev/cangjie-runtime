@@ -36,7 +36,9 @@ a temporary sibling directory, verifies the copies, then atomically renames the
 directory. An existing ID is accepted only if all owned files are byte-identical;
 it is never overwritten with different contents. The manifest, signature input
 JSON and product hash inventory travel with the publication. Gate status files
-are observations and may be updated by later gate executions.
+are observations and may be updated by later gate executions. The receipt is
+also mirrored beside the linker SO for the existing outer build gate; the
+product gate itself always executes against the published directory.
 
 CJThread configures early because runtime needs its generated headers. Both its
 nested build directory and intermediate outputs are private to the parent build
