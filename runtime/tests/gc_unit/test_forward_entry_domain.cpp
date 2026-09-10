@@ -9,9 +9,9 @@
 #define private public
 #include "Heap/Allocator/RegionInfo.h"
 #include "Heap/Allocator/RegionSpace.h"
-#include "Heap/WCollector/WCollector.h"
 #undef private
 
+#include "Heap/WCollector/WCollector.h"
 #include "Heap/Allocator/ForwardingTable.h"
 
 using namespace MapleRuntime;
