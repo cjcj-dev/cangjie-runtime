@@ -174,24 +174,20 @@ GC_TEST(ForwardEntryDomain, WaitRoutedIdentityAfterPublish)
     LiveInfo* live = PlantGhostFrom(fx, fx.region0, fx.obj0);
     WCollector collector(Heap::GetHeap().GetAllocator(), Heap::GetHeap().GetCollectorResources());
     collector.SetGCPhase(GCPhase::GC_PHASE_FORWARD);
-    std::atomic<int> started{ 0 };
-    std::atomic<BaseObject*> got{ nullptr };
-    std::thread waiter([&]() {
-        MutatorRelocate::EnterScope();
-        started.store(1, std::memory_order_release);
-        got.store(collector.relocate_or_remap_object(fx.obj0, ZGenerationId::young),
-                  std::memory_order_release);
-        MutatorRelocate::LeaveScope();
-    });
-    JoinGuard join(waiter);
-    while (started.load(std::memory_order_acquire) == 0) {
-        std::this_thread::yield();
-    }
-    std::this_thread::sleep_for(std::chrono::milliseconds(20));
-    PublishIdentity(fx.region0, fx.obj0);
-    fx.region0->MarkForwardingDone();
-    waiter.join();
-    BaseObject* resolved = got.load();
+    struct Ctx {
+        RegionInfo* region;
+        BaseObject* object;
+    } ctx{ fx.region0, fx.obj0 };
+    ForwardingTable::SetLookupRetainHook(
+        [](void* raw) {
+            auto* c = static_cast<Ctx*>(raw);
+            PublishIdentity(c->region, c->object);
+        },
+        &ctx);
+    MutatorRelocate::EnterScope();
+    BaseObject* resolved = collector.relocate_or_remap_object(fx.obj0, ZGenerationId::young);
+    MutatorRelocate::LeaveScope();
+    ForwardingTable::SetLookupRetainHook(nullptr, nullptr);
     std::fprintf(stderr, "DETAIL wait_identity got=%p from=%p compacted=%u done=%u\n",
                  static_cast<void*>(resolved), static_cast<void*>(fx.obj0),
                  static_cast<unsigned>(fx.region0->IsCompacted()),
