@@ -41,8 +41,7 @@
 // They are counted in their own columns so a zero in the defect column cannot be
 // confused with "the walk never reached anything".
 //
-// Gate: unified VerifyFace::Marking (legacy MRT_GCV2_MARKCOMPLETE=1 and token
-// "marking" remain aliases). Default off,
+// Gate: unified VerifyFace::Objects. Default off,
 // and the product path early-returns before any counter or STW.
 // The verifier reports its inventory and then fails closed on inspected mark
 // defects; there is no independent interior-edge gate.

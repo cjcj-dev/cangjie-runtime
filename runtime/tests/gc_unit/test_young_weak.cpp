@@ -5,6 +5,8 @@
 #include <cstdint>
 #include <cstdio>
 #include <cstring>
+#include <memory>
+#include <vector>
 
 #include "Common/Runtime.h"
 #include "CjScheduler.h"
@@ -13,6 +15,7 @@
 #include "gc_unittest.hpp"
 
 #include "Concurrency/Concurrency.h"
+#include "Base/Log.h"
 #include "Heap/Allocator/ForwardingTable.h"
 #include "Heap/Allocator/RegionSpace.h"
 #include "Heap/Barrier/Barrier.h"
@@ -22,6 +25,7 @@
 #include "Heap/GcThreadPool.h"
 #include "Heap/Heap.h"
 #include "Heap/WCollector/WCollector.h"
+#include "Heap/Verify/VerifyMarkingStacks.h"
 #include "ObjectModel/RefField.inline.h"
 #include "TypeInfoManager.h"
 
@@ -40,9 +44,11 @@ struct RelocationReceiptTestAccess {
         resources.collectorProxy.currentCollector = collector;
     }
 
-    static void BindThreadPool(CollectorResources& resources, GCThreadPool* threadPool)
+    static void BindThreadPool(CollectorResources& resources, GCThreadPool* threadPool, int32_t threadCount = 1)
     {
         resources.gcThreadPool = threadPool;
+        resources.gcThreadCount = threadCount;
+        resources.concurrentGcThreadCount = threadCount;
     }
 
     static void RunYoungCollection(WCollector& collector)
@@ -122,6 +128,12 @@ struct RelocationReceiptTestAccess {
         auto it = collector.cycleRefWorkStack.find(value);
         return collector.cycleRefWorkStack.size() == 1 && it != collector.cycleRefWorkStack.end() &&
             it->second.size() == 1 && it->second.front() == value;
+    }
+
+    static void RunMajorCollection(WCollector& collector)
+    {
+        collector.SetGCReason(GC_REASON_USER);
+        collector.DoGarbageCollection();
     }
 };
 
@@ -300,10 +312,21 @@ struct ExportForeignGraph {
     TypeInfo* foreignType = nullptr;
 };
 
+uint64_t MarkingBoundaryDelta(const VerifyMarkingStacks::Snapshot& before,
+                              const VerifyMarkingStacks::Snapshot& after,
+                              VerifyMarkingStacks::MarkingGeneration generation,
+                              VerifyMarkingStacks::MarkingBoundary boundary,
+                              VerifyMarkingStacks::MarkingContainer container)
+{
+    return after.BoundaryCount(generation, boundary, container) -
+           before.BoundaryCount(generation, boundary, container);
+}
+
 void RunYoungWeakVariant(const char* variant, size_t helpers,
                          uint64_t expectedSerial, uint64_t expectedLegacyParallel, uint64_t expectedStriped)
 {
     GC_EXPECT_EQ(CJ_ScheduleManagerInit(), 0);
+    GC_EXPECT_EQ(setenv("MRT_GCV2_VERIFY_MARKING", "1", 1), 0);
     GC_EXPECT_EQ(setenv("MRT_GC_UNIT_YOUNG_WEAK_VARIANT", variant, 1), 0);
     MutatorManager mutatorManager;
     WeakClosureTestRuntime runtime(mutatorManager);
@@ -333,19 +356,47 @@ void RunYoungWeakVariant(const char* variant, size_t helpers,
     resources.SetGcStarted(true);
     resources.GetGCStats().reason = GC_REASON_YOUNG;
     ResetYoungWeakClosureTestReceipt();
+    const VerifyMarkingStacks::Snapshot markingBefore = VerifyMarkingStacks::ReadSnapshot();
 
     RelocationReceiptTestAccess::RunYoungCollection(collector);
+    const VerifyMarkingStacks::Snapshot markingAfter = VerifyMarkingStacks::ReadSnapshot();
     const YoungWeakClosureTestReceipt receipt = ReadYoungWeakClosureTestReceipt();
     const bool strongMarked = graph.IsMarked(graph.strongRoot);
     const bool weakMarked = graph.IsMarked(graph.weak);
     const bool referentMarked = graph.IsMarked(graph.referent);
     const bool childMarked = graph.IsMarked(graph.child);
+    using VerifyMarkingStacks::MarkingBoundary;
+    using VerifyMarkingStacks::MarkingContainer;
+    using VerifyMarkingStacks::MarkingGeneration;
+    const auto delta = [&markingBefore, &markingAfter](MarkingBoundary boundary, MarkingContainer container) {
+        return MarkingBoundaryDelta(markingBefore, markingAfter, MarkingGeneration::YOUNG, boundary, container);
+    };
+    const size_t ownerProducer = markingAfter.ProducerMax(MarkingGeneration::YOUNG, MarkingContainer::OWNER);
+    const size_t taskProducer = markingAfter.ProducerMax(MarkingGeneration::YOUNG, MarkingContainer::TASK);
+    const size_t localProducer = markingAfter.ProducerMax(MarkingGeneration::YOUNG, MarkingContainer::LOCAL);
+    const size_t stripeProducer = markingAfter.ProducerMax(MarkingGeneration::YOUNG, MarkingContainer::STRIPE);
     std::fprintf(stderr,
                  "DETAIL young_weak variant=%s serial=%zu legacy_parallel=%zu striped=%zu "
                  "strong_mark=%d weak_mark=%d referent_mark=%d child_mark=%d\n",
                  variant, static_cast<size_t>(receipt.serial), static_cast<size_t>(receipt.legacyParallel),
                  static_cast<size_t>(receipt.striped), static_cast<int>(strongMarked),
                  static_cast<int>(weakMarked), static_cast<int>(referentMarked), static_cast<int>(childMarked));
+    std::fprintf(stderr,
+                 "DETAIL marking_stack_young variant=%s owner_producer=%zu task_producer=%zu local_producer=%zu "
+                 "stripe_producer=%zu start_owner=%llu start_pool=%llu task_exit_task=%llu "
+                 "seed_local=%llu termination_stripe=%llu worker_exit_local=%llu join_stripe=%llu "
+                 "join_pool=%llu end_owner=%llu end_pool=%llu\n",
+                 variant, ownerProducer, taskProducer, localProducer, stripeProducer,
+                 static_cast<unsigned long long>(delta(MarkingBoundary::START, MarkingContainer::OWNER)),
+                 static_cast<unsigned long long>(delta(MarkingBoundary::START, MarkingContainer::POOL)),
+                 static_cast<unsigned long long>(delta(MarkingBoundary::TASK_EXIT, MarkingContainer::TASK)),
+                 static_cast<unsigned long long>(delta(MarkingBoundary::SEED_PUBLISH, MarkingContainer::LOCAL)),
+                 static_cast<unsigned long long>(delta(MarkingBoundary::TERMINATION, MarkingContainer::STRIPE)),
+                 static_cast<unsigned long long>(delta(MarkingBoundary::WORKER_EXIT, MarkingContainer::LOCAL)),
+                 static_cast<unsigned long long>(delta(MarkingBoundary::JOIN, MarkingContainer::STRIPE)),
+                 static_cast<unsigned long long>(delta(MarkingBoundary::JOIN, MarkingContainer::POOL)),
+                 static_cast<unsigned long long>(delta(MarkingBoundary::END, MarkingContainer::OWNER)),
+                 static_cast<unsigned long long>(delta(MarkingBoundary::END, MarkingContainer::POOL)));
 
     Heap::GetHeap().RemoveExportObject(rootHandle);
     resources.SetGcStarted(startedBefore);
@@ -361,6 +412,26 @@ void RunYoungWeakVariant(const char* variant, size_t helpers,
     GC_EXPECT_TRUE(weakMarked);
     GC_EXPECT_FALSE(referentMarked);
     GC_EXPECT_FALSE(childMarked);
+    GC_EXPECT_TRUE(ownerProducer > 0);
+    GC_EXPECT_TRUE(delta(MarkingBoundary::START, MarkingContainer::OWNER) > 0);
+    GC_EXPECT_TRUE(delta(MarkingBoundary::START, MarkingContainer::POOL) > 0);
+    GC_EXPECT_TRUE(delta(MarkingBoundary::END, MarkingContainer::OWNER) > 0);
+    GC_EXPECT_TRUE(delta(MarkingBoundary::END, MarkingContainer::POOL) > 0);
+    if (std::strcmp(variant, "legacy-parallel") == 0) {
+        GC_EXPECT_TRUE(taskProducer > 0);
+        GC_EXPECT_TRUE(delta(MarkingBoundary::TASK_EXIT, MarkingContainer::TASK) > 0);
+    }
+    if (std::strcmp(variant, "striped") == 0) {
+        GC_EXPECT_TRUE(localProducer > 0);
+        GC_EXPECT_TRUE(stripeProducer > 0);
+        GC_EXPECT_TRUE(delta(MarkingBoundary::START, MarkingContainer::LOCAL) > 0);
+        GC_EXPECT_TRUE(delta(MarkingBoundary::START, MarkingContainer::STRIPE) > 0);
+        GC_EXPECT_TRUE(delta(MarkingBoundary::SEED_PUBLISH, MarkingContainer::LOCAL) > 0);
+        GC_EXPECT_TRUE(delta(MarkingBoundary::TERMINATION, MarkingContainer::STRIPE) > 0);
+        GC_EXPECT_TRUE(delta(MarkingBoundary::WORKER_EXIT, MarkingContainer::LOCAL) > 0);
+        GC_EXPECT_TRUE(delta(MarkingBoundary::JOIN, MarkingContainer::STRIPE) > 0);
+        GC_EXPECT_TRUE(delta(MarkingBoundary::JOIN, MarkingContainer::POOL) > 0);
+    }
     (void)live;
 }
 
@@ -441,9 +512,12 @@ enum class MajorRootFamily {
     EXPORT,
 };
 
-void RunMajorWeakGraph(MajorRootFamily family)
+void RunMajorWeakGraph(MajorRootFamily family, bool runtimeEntry = false, size_t helpers = 0)
 {
     GC_EXPECT_EQ(CJ_ScheduleManagerInit(), 0);
+    if (runtimeEntry) {
+        GC_EXPECT_EQ(setenv("MRT_GCV2_VERIFY_MARKING", "1", 1), 0);
+    }
     MutatorManager mutatorManager;
     WeakClosureTestRuntime runtime(mutatorManager);
     GcHeapFixture fx;
@@ -454,32 +528,67 @@ void RunMajorWeakGraph(MajorRootFamily family)
     WCollector collector(Heap::GetHeap().GetAllocator(), resources);
     RelocationReceiptTestAccess::BindCollector(resources, &collector);
     collector.SetGCPhase(GCPhase::GC_PHASE_IDLE);
-    GCThreadPool threadPool("gc-unit-major-weak", 0, GCPoolThread::GC_THREAD_PRIORITY);
-    RelocationReceiptTestAccess::BindThreadPool(resources, &threadPool);
+    GCThreadPool threadPool("gc-unit-major-weak", static_cast<int32_t>(helpers), GCPoolThread::GC_THREAD_PRIORITY);
+    RelocationReceiptTestAccess::BindThreadPool(resources, &threadPool, static_cast<int32_t>(helpers + 1));
     RegionSpace& space = reinterpret_cast<RegionSpace&>(Heap::GetHeap().GetAllocator());
     space.GetRegionManager().EnlistFullThreadLocalRegion(fx.region0);
     space.GetRegionManager().AddRawPointerObject(graph.child);
+    if (runtimeEntry) {
+        Heap::GetHeap().GetRememberedSet().Initialize(fx.heapStart, 2 * RegionInfo::UNIT_SIZE);
+        space.GetRegionManager().AddRawPointerObject(graph.strongRoot);
+        space.GetRegionManager().AddRawPointerObject(graph.weak);
+        space.GetRegionManager().AddRawPointerObject(graph.referent);
+    }
 
-    RootSlot commonRoot;
-    RootSlot* commonRoots[] = { &commonRoot };
+    // MarkStack::size() counts 64-entry buffers. Seventeen buffers cross the
+    // product's MAX_MARKING_WORK_SIZE=16 parallel admission threshold.
+    constexpr size_t kParallelRootCount = 17 * 64;
+    std::unique_ptr<RootSlot[]> commonRootStorage = std::make_unique<RootSlot[]>(kParallelRootCount);
+    std::vector<RootSlot*> commonRoots(kParallelRootCount);
+    for (size_t i = 0; i < commonRoots.size(); ++i) {
+        commonRoots[i] = &commonRootStorage[i];
+    }
+    const U32 commonRootCount = runtimeEntry && helpers != 0 ? static_cast<U32>(commonRoots.size()) : 1;
+    U32 registeredCommonRootCount = 0;
     U64 exportHandle = 0;
     if (family == MajorRootFamily::COMMON) {
-        StorePlain(commonRoot, from_object(graph.strongRoot));
-        Heap::GetHeap().RegisterStaticRoots(reinterpret_cast<Uptr>(commonRoots), 1);
+        for (U32 i = 0; i < commonRootCount; ++i) {
+            StorePlain(*commonRoots[i], from_object(graph.strongRoot));
+        }
+        Heap::GetHeap().RegisterStaticRoots(reinterpret_cast<Uptr>(commonRoots.data()), commonRootCount);
+        registeredCommonRootCount = commonRootCount;
     } else {
-        // Keep the export DFS cut independent from TracingImpl's root-family
-        // admission cut.  This sentinel has no edge into the weak graph; the
-        // graph itself remains reachable only through the export root.
-        BaseObject* commonSentinel = fx.PlaceObject(fx.region0->GetRegionStart() + 320);
-        WeakGraph::Field(commonSentinel).StoreColoured(zpointer::null);
-        fx.region0->SetRegionAllocPtr(reinterpret_cast<MAddress>(commonSentinel) + 64);
-        StorePlain(commonRoot, from_object(commonSentinel));
-        Heap::GetHeap().RegisterStaticRoots(reinterpret_cast<Uptr>(commonRoots), 1);
+        if (!runtimeEntry) {
+            // Keep the export DFS cut independent from TracingImpl's root-family
+            // admission cut. This sentinel has no edge into the weak graph; the
+            // graph itself remains reachable only through the export root.
+            BaseObject* commonSentinel = fx.PlaceObject(fx.region0->GetRegionStart() + 320);
+            WeakGraph::Field(commonSentinel).StoreColoured(zpointer::null);
+            fx.region0->SetRegionAllocPtr(reinterpret_cast<MAddress>(commonSentinel) + 64);
+            StorePlain(*commonRoots[0], from_object(commonSentinel));
+            Heap::GetHeap().RegisterStaticRoots(reinterpret_cast<Uptr>(commonRoots.data()), 1);
+            registeredCommonRootCount = 1;
+        }
         exportHandle = Heap::GetHeap().RegisterExportRoot(graph.strongRoot);
     }
 
     ResetWeakDiscoveryTestReceipt();
-    RelocationReceiptTestAccess::RunMajorMark(collector);
+    const VerifyMarkingStacks::Snapshot markingBefore = VerifyMarkingStacks::ReadSnapshot();
+    if (runtimeEntry) {
+        RelocationReceiptTestAccess::RunMajorCollection(collector);
+    } else {
+        RelocationReceiptTestAccess::RunMajorMark(collector);
+    }
+    const VerifyMarkingStacks::Snapshot markingAfter = VerifyMarkingStacks::ReadSnapshot();
+    using VerifyMarkingStacks::MarkingBoundary;
+    using VerifyMarkingStacks::MarkingContainer;
+    using VerifyMarkingStacks::MarkingGeneration;
+    const auto delta = [&markingBefore, &markingAfter](MarkingBoundary boundary, MarkingContainer container) {
+        return MarkingBoundaryDelta(markingBefore, markingAfter, MarkingGeneration::MAJOR, boundary, container);
+    };
+    const size_t ownerProducer = markingAfter.ProducerMax(MarkingGeneration::MAJOR, MarkingContainer::OWNER);
+    const size_t foreignProducer = markingAfter.ProducerMax(MarkingGeneration::MAJOR, MarkingContainer::FOREIGN);
+    const size_t taskProducer = markingAfter.ProducerMax(MarkingGeneration::MAJOR, MarkingContainer::TASK);
     const WeakDiscoveryTestReceipt receipt = ReadWeakDiscoveryTestReceipt();
     const bool referentCleared = is_null(WeakGraph::Field(graph.weak).GetFieldValue());
     const bool strongMarked = graph.IsMarked(graph.strongRoot);
@@ -492,8 +601,37 @@ void RunMajorWeakGraph(MajorRootFamily family)
                  family == MajorRootFamily::COMMON ? "common" : "export", receipt.discovered,
                  static_cast<int>(strongMarked), static_cast<int>(weakMarked), static_cast<int>(referentMarked),
                  static_cast<int>(childMarked), static_cast<int>(referentCleared));
+    if (runtimeEntry) {
+        std::fprintf(stderr,
+                     "DETAIL marking_stack_major mode=%s family=%s owner_producer=%zu foreign_producer=%zu "
+                     "task_producer=%zu start_owner=%llu start_foreign=%llu start_pool=%llu "
+                     "task_exit_task=%llu termination_owner=%llu termination_pool=%llu join_pool=%llu "
+                     "end_owner=%llu end_foreign=%llu end_pool=%llu\n",
+                     helpers == 0 ? "serial" : "parallel", family == MajorRootFamily::COMMON ? "common" : "export",
+                     ownerProducer, foreignProducer, taskProducer,
+                     static_cast<unsigned long long>(delta(MarkingBoundary::START, MarkingContainer::OWNER)),
+                     static_cast<unsigned long long>(delta(MarkingBoundary::START, MarkingContainer::FOREIGN)),
+                     static_cast<unsigned long long>(delta(MarkingBoundary::START, MarkingContainer::POOL)),
+                     static_cast<unsigned long long>(delta(MarkingBoundary::TASK_EXIT, MarkingContainer::TASK)),
+                     static_cast<unsigned long long>(delta(MarkingBoundary::TERMINATION, MarkingContainer::OWNER)),
+                     static_cast<unsigned long long>(delta(MarkingBoundary::TERMINATION, MarkingContainer::POOL)),
+                     static_cast<unsigned long long>(delta(MarkingBoundary::JOIN, MarkingContainer::POOL)),
+                     static_cast<unsigned long long>(delta(MarkingBoundary::END, MarkingContainer::OWNER)),
+                     static_cast<unsigned long long>(delta(MarkingBoundary::END, MarkingContainer::FOREIGN)),
+                     static_cast<unsigned long long>(delta(MarkingBoundary::END, MarkingContainer::POOL)));
+        CHECK_DETAIL(family != MajorRootFamily::EXPORT || foreignProducer != 0,
+                     "major foreign producer receipt missing after DoGarbageCollection entry");
+        CHECK_DETAIL(delta(MarkingBoundary::END, MarkingContainer::OWNER) != 0 &&
+                         delta(MarkingBoundary::END, MarkingContainer::POOL) != 0 &&
+                         (family != MajorRootFamily::EXPORT ||
+                          delta(MarkingBoundary::END, MarkingContainer::FOREIGN) != 0),
+                     "major marking scene receipt missing after DoGarbageCollection entry family=%s",
+                     family == MajorRootFamily::COMMON ? "common" : "export");
+    }
 
-    Heap::GetHeap().UnregisterStaticRoots(reinterpret_cast<Uptr>(commonRoots), 1);
+    if (registeredCommonRootCount != 0) {
+        Heap::GetHeap().UnregisterStaticRoots(reinterpret_cast<Uptr>(commonRoots.data()), registeredCommonRootCount);
+    }
     if (family == MajorRootFamily::EXPORT) {
         Heap::GetHeap().RemoveExportObject(exportHandle);
     }
@@ -501,6 +639,30 @@ void RunMajorWeakGraph(MajorRootFamily family)
     threadPool.Exit();
     RelocationReceiptTestAccess::BindCollector(resources, nullptr);
 
+    if (runtimeEntry) {
+        GC_EXPECT_TRUE(delta(MarkingBoundary::START, MarkingContainer::OWNER) > 0);
+        GC_EXPECT_TRUE(delta(MarkingBoundary::START, MarkingContainer::POOL) > 0);
+        GC_EXPECT_TRUE(delta(MarkingBoundary::TASK_EXIT, MarkingContainer::TASK) > 0);
+        GC_EXPECT_TRUE(delta(MarkingBoundary::TERMINATION, MarkingContainer::OWNER) > 0);
+        GC_EXPECT_TRUE(delta(MarkingBoundary::TERMINATION, MarkingContainer::POOL) > 0);
+        GC_EXPECT_TRUE(delta(MarkingBoundary::JOIN, MarkingContainer::POOL) > 0);
+        GC_EXPECT_TRUE(delta(MarkingBoundary::END, MarkingContainer::OWNER) > 0);
+        GC_EXPECT_TRUE(delta(MarkingBoundary::END, MarkingContainer::POOL) > 0);
+        GC_EXPECT_TRUE(taskProducer > 0);
+        if (family == MajorRootFamily::COMMON) {
+            GC_EXPECT_TRUE(ownerProducer > 0);
+        } else {
+            GC_EXPECT_TRUE(foreignProducer > 0);
+            GC_EXPECT_TRUE(delta(MarkingBoundary::START, MarkingContainer::FOREIGN) > 0);
+            GC_EXPECT_TRUE(delta(MarkingBoundary::END, MarkingContainer::FOREIGN) > 0);
+        }
+        if (helpers == 0) {
+            GC_EXPECT_TRUE(delta(MarkingBoundary::TASK_EXIT, MarkingContainer::TASK) >= 1u);
+        } else {
+            GC_EXPECT_TRUE(delta(MarkingBoundary::TASK_EXIT, MarkingContainer::TASK) > 1);
+        }
+        return;
+    }
     GC_EXPECT_EQ(receipt.discovered, 1u);
     GC_EXPECT_TRUE(strongMarked);
     GC_EXPECT_TRUE(weakMarked);
@@ -539,6 +701,21 @@ GC_OTHER_VM_TEST(YoungWeakClosure, CommonMajorRootUsesWeakDiscoveryPolicy)
 GC_OTHER_VM_TEST(YoungWeakClosure, ExportMajorRootUsesWeakDiscoveryPolicy)
 {
     RunMajorWeakGraph(MajorRootFamily::EXPORT);
+}
+
+GC_OTHER_VM_TEST(VerifyMarkingStacksProduct, MajorSerialEntersFromDoGarbageCollection)
+{
+    RunMajorWeakGraph(MajorRootFamily::COMMON, true, 0);
+}
+
+GC_OTHER_VM_TEST(VerifyMarkingStacksProduct, MajorParallelEntersFromDoGarbageCollection)
+{
+    RunMajorWeakGraph(MajorRootFamily::COMMON, true, 1);
+}
+
+GC_OTHER_VM_TEST(VerifyMarkingStacksProduct, MajorForeignEntersFromDoGarbageCollection)
+{
+    RunMajorWeakGraph(MajorRootFamily::EXPORT, true, 0);
 }
 
 GC_OTHER_VM_TEST(YoungWeakClosure, ExportOnlyMajorRootOwnsItsClosure)

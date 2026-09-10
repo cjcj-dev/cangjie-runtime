@@ -75,6 +75,7 @@ set(GC_UNIT_SOURCES
     test_verify_roots.cpp
     test_verify_fail_close.cpp
     test_verify_phase.cpp
+    test_verify_marking_stacks.cpp
     test_mem_map.cpp
     test_colour_census.cpp
     test_payload_clamp.cpp
