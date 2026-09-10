@@ -108,6 +108,10 @@ struct RelocationReceiptTestAccess {
         collector.SetGCReason(GC_REASON_YOUNG);
         collector.DoGarbageCollection();
     }
+    static BaseObject* ProductRelocate(WCollector& collector, BaseObject* from)
+    {
+        return collector.relocate_or_remap_object(from, ZGenerationId::young);
+    }
 #if defined(MRT_TESTABLE_INTERNALS)
     static void InitCollectorProxy(CollectorResources& resources)
     {
@@ -1572,6 +1576,128 @@ GC_TEST(YoungConc, LegacyTerminationMissesUnfullSatbNode)
 
     fx.region0->metadata.liveInfo = nullptr;
     fx.FreePlanted(live);
+}
+
+extern "C" void MRT_SetPreForwardFromSpaceTestHook(void (*hook)());
+
+namespace {
+std::atomic<int> g_fwdWindowHits{ 0 };
+std::atomic<int> g_fwdWindowOpen{ 0 };
+std::atomic<int> g_fwdGhostAtWindow{ 0 };
+std::atomic<int> g_fwdPhaseForward{ 0 };
+std::atomic<int> g_fwdRemapStarted{ 0 };
+std::atomic<int> g_fwdRemapFinished{ 0 };
+std::atomic<BaseObject*> g_fwdRemapResult{ nullptr };
+WCollector* g_fwdCollector = nullptr;
+BaseObject* g_fwdFrom = nullptr;
+
+void PreForwardFromSpaceWindowHook()
+{
+    g_fwdWindowHits.fetch_add(1, std::memory_order_relaxed);
+    RegionInfo* ghost = g_fwdFrom == nullptr
+        ? nullptr
+        : RegionInfo::GetGhostFromRegionAt(reinterpret_cast<MAddress>(g_fwdFrom));
+    g_fwdGhostAtWindow.store(ghost != nullptr ? 1 : 0, std::memory_order_relaxed);
+    g_fwdPhaseForward.store(Heap::GetHeap().GetGCPhase() == GCPhase::GC_PHASE_FORWARD ? 1 : 0,
+                            std::memory_order_relaxed);
+    g_fwdWindowOpen.store(1, std::memory_order_release);
+    for (int i = 0; i < 10000000; ++i) {
+        if (g_fwdRemapStarted.load(std::memory_order_acquire) != 0) {
+            break;
+        }
+        std::this_thread::yield();
+    }
+}
+} // namespace
+
+GC_OTHER_VM_TEST(YoungConc, MutatorRemapWaitsForCopyAfterForwardFlip)
+{
+    GC_EXPECT_EQ(CJ_ScheduleManagerInit(), 0);
+    GC_EXPECT_EQ(setenv("MRT_GCV2_MARKPAR_FORCE_SERIAL", "1", 1), 0);
+    MutatorManager mutatorManager;
+    YoungConcTestRuntime runtime(mutatorManager);
+    GcHeapFixture fx;
+    fx.region0->SetYoungRegionFlag(0);
+    fx.region1->SetYoungRegionFlag(1);
+    fx.region1->SetYoungAge(1);
+    LiveInfo* live0 = fx.PlantLiveInfo(fx.region0);
+    LiveInfo* live1 = fx.PlantLiveInfo(fx.region1);
+    (void)fx.PlantMarkBitmap<Generation::Young>(live0, fx.region0->GetRegionSize());
+    (void)fx.PlantMarkBitmap<Generation::Young>(live1, fx.region1->GetRegionSize());
+    BaseObject* holder = fx.obj0;
+    BaseObject* child = fx.obj1;
+    fx.region0->SetRegionAllocPtr(reinterpret_cast<MAddress>(holder) + 64);
+    fx.region1->SetRegionAllocPtr(reinterpret_cast<MAddress>(child) + 64);
+    auto* holderField = &HeapSlotAt<>(reinterpret_cast<MAddress>(holder) + TYPEINFO_PTR_SIZE);
+    holderField->StoreColoured(GcUnit::StoreGoodPointer(child));
+    (void)fx.region0->MarkObject(fx.region0->GetMarkView<Generation::Young>(), holder, 8);
+    (void)fx.region1->MarkObject(fx.region1->GetMarkView<Generation::Young>(), child, 8);
+
+    CollectorResources& resources = Heap::GetHeap().GetCollectorResources();
+    WCollector collector(Heap::GetHeap().GetAllocator(), resources);
+    RelocationReceiptTestAccess::BindCollector(resources, &collector);
+    collector.SetGCPhase(GCPhase::GC_PHASE_CLEAR_SATB_BUFFER);
+    GCThreadPool threadPool("gc-unit-fwd-window", 0, GCPoolThread::GC_THREAD_PRIORITY);
+    RelocationReceiptTestAccess::BindThreadPool(resources, &threadPool);
+    RegionSpace& space = reinterpret_cast<RegionSpace&>(Heap::GetHeap().GetAllocator());
+    space.GetRegionManager().EnlistFullThreadLocalRegion(fx.region0);
+    space.GetRegionManager().EnlistFullThreadLocalRegion(fx.region1);
+    space.GetRegionManager().AddRawPointerObject(holder);
+    Heap::GetHeap().GetRememberedSet().Initialize(fx.heapStart, 2 * RegionInfo::UNIT_SIZE);
+    Heap::GetHeap().GetRememberedSet().Remember(reinterpret_cast<MAddress>(holderField));
+    const bool startedBefore = resources.IsGcStarted();
+    const GCReason reasonBefore = resources.GetGCStats().reason;
+    resources.SetGcStarted(true);
+    resources.GetGCStats().reason = GC_REASON_YOUNG;
+    ArmLeftoverBeforePauseTestReceipt(holder, holder);
+
+    g_fwdWindowHits.store(0);
+    g_fwdWindowOpen.store(0);
+    g_fwdGhostAtWindow.store(0);
+    g_fwdPhaseForward.store(0);
+    g_fwdRemapStarted.store(0);
+    g_fwdRemapFinished.store(0);
+    g_fwdRemapResult.store(nullptr);
+    g_fwdCollector = &collector;
+    g_fwdFrom = child;
+    MRT_SetPreForwardFromSpaceTestHook(PreForwardFromSpaceWindowHook);
+
+    std::thread mutator([]() {
+        while (g_fwdWindowOpen.load(std::memory_order_acquire) == 0) {
+            std::this_thread::yield();
+        }
+        g_fwdRemapStarted.store(1, std::memory_order_release);
+        BaseObject* resolved = RelocationReceiptTestAccess::ProductRelocate(*g_fwdCollector, g_fwdFrom);
+        g_fwdRemapResult.store(resolved, std::memory_order_release);
+        g_fwdRemapFinished.store(1, std::memory_order_release);
+    });
+
+    RelocationReceiptTestAccess::RunCollectionDispatch(collector);
+    mutator.join();
+    MRT_SetPreForwardFromSpaceTestHook(nullptr);
+
+    std::fprintf(stderr,
+                 "DETAIL fwd_window hits=%d ghost=%d phaseFwd=%d started=%d finished=%d "
+                 "from=%p resolved=%p\n",
+                 g_fwdWindowHits.load(), g_fwdGhostAtWindow.load(), g_fwdPhaseForward.load(),
+                 g_fwdRemapStarted.load(), g_fwdRemapFinished.load(),
+                 static_cast<void*>(g_fwdFrom), static_cast<void*>(g_fwdRemapResult.load()));
+    GC_EXPECT_TRUE(g_fwdWindowHits.load() >= 1);
+    GC_EXPECT_TRUE(g_fwdPhaseForward.load() == 1);
+    GC_EXPECT_TRUE(g_fwdGhostAtWindow.load() == 1);
+    GC_EXPECT_TRUE(g_fwdRemapStarted.load() == 1);
+    GC_EXPECT_TRUE(g_fwdRemapFinished.load() == 1);
+    BaseObject* resolved = g_fwdRemapResult.load();
+    GC_EXPECT_TRUE(resolved != nullptr);
+    GC_EXPECT_TRUE(resolved != g_fwdFrom);
+
+    resources.SetGcStarted(startedBefore);
+    resources.GetGCStats().reason = reasonBefore;
+    RelocationReceiptTestAccess::BindThreadPool(resources, nullptr);
+    threadPool.Exit();
+    RelocationReceiptTestAccess::BindCollector(resources, nullptr);
+    (void)live0;
+    (void)live1;
 }
 
 #endif // MRT_TESTABLE_INTERNALS
