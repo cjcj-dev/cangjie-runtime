@@ -41,6 +41,23 @@ GC_UNIT_JOBS=2 GC_UNIT_TEST_TIMEOUT=10 GC_UNIT_FAKE_NO_TALLY=PublicationSuite.Pa
   >"$TMP/missing.log" 2>&1 && exit 1
 /usr/bin/grep -qxF '[========] 4 tests: 3 passed, 1 failed' "$TMP/missing.tally"
 /usr/bin/grep -qxF '[  FAILED  ] PublicationSuite.PassThree' "$TMP/missing.log"
+/usr/bin/grep -qxF 'GC_UNIT_INCOMPLETE tests=1' "$TMP/missing.log"
+/usr/bin/grep -qxF '  isolated process incomplete rc=0' \
+  "$TMP/missing/test-logs/000003-publication.log"
+
+# A process terminated after its RUN token has no valid end token or tally.
+# It must be reported as exactly one incomplete item and keep the total red.
+GC_UNIT_JOBS=2 GC_UNIT_TEST_TIMEOUT=10 GC_UNIT_FAKE_KILL=MainSuite.PassOne \
+  GC_UNIT_TALLY_FILE="$TMP/killed.tally" \
+  bash "$RUNNER" "$TMP/main" "$TMP/publication" "$TMP/killed" "$TMP" \
+  >"$TMP/killed.log" 2>&1 && exit 1
+/usr/bin/grep -qxF '[========] 4 tests: 3 passed, 1 failed' "$TMP/killed.tally"
+/usr/bin/grep -qxF '[  INCOMPLETE ] MainSuite.PassOne' "$TMP/killed.log"
+/usr/bin/grep -qxF 'GC_UNIT_INCOMPLETE tests=1' "$TMP/killed.log"
+/usr/bin/grep -qE '^  isolated process incomplete rc=(137|143)$' \
+  "$TMP/killed/test-logs/000000-main.log"
+[[ $(find "$TMP/killed/test-logs" -type f | wc -l) -eq 4 ]]
+[[ $(find "$TMP/killed/test-rc" -type f | wc -l) -eq 4 ]]
 
 # Ambient list mode may affect discovery, but must be cleared before executing
 # each filtered item. All four items therefore still produce completion files.
@@ -49,5 +66,6 @@ GC_UNIT_LIST_TESTS=1 GC_UNIT_JOBS=2 GC_UNIT_TEST_TIMEOUT=10 \
   bash "$RUNNER" "$TMP/main" "$TMP/publication" "$TMP/ambient" "$TMP" \
   >"$TMP/ambient.log" 2>&1
 /usr/bin/grep -qxF '[========] 4 tests: 4 passed, 0 failed' "$TMP/ambient.tally"
+/usr/bin/grep -qxF 'GC_UNIT_INCOMPLETE tests=0' "$TMP/ambient.log"
 [[ $(find "$TMP/ambient/test-tallies" -type f | wc -l) -eq 4 ]]
 echo "PARALLEL_RUNNER_TEST_OK"
