@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 set -euo pipefail
-if [[ "${1:-}" == "--gtest_list_tests" ]]; then
+if [[ "${1:-}" == "--gtest_list_tests" || -n "${GC_UNIT_LIST_TESTS:-}" ]]; then
   printf '@SUITE@.\n  @FIRST@\n  @SECOND@\n'
   exit 0
 fi
@@ -12,4 +12,7 @@ if [[ "${GC_UNIT_FAKE_FAIL:-}" == "$test_name" ]]; then
   exit 1
 fi
 printf '[  PASS  ] %s\n' "$test_name"
+if [[ "${GC_UNIT_FAKE_NO_TALLY:-}" == "$test_name" ]]; then
+  exit 0
+fi
 printf '[========] 1 tests: 1 passed, 0 failed\n' >"${GC_UNIT_TALLY_FILE:?}"

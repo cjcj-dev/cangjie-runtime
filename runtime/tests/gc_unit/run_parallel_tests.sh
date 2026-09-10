@@ -130,6 +130,9 @@ run_one_test() {
   if [[ "$kind" == main && -n "${GC_UNIT_MAIN_ENV:-}" ]]; then
     mapfile -t extra_env <<<"$GC_UNIT_MAIN_ENV"
   fi
+  # List mode is an implementation detail of discovery. Never let an ambient
+  # value turn an isolated test invocation back into another listing pass.
+  unset GC_UNIT_LIST_TESTS
   set +e
   timeout "$TEST_TIMEOUT" env "${extra_env[@]}" \
     GC_UNIT_TALLY_FILE="$tally_file" \
@@ -167,11 +170,25 @@ while IFS=$'\t' read -r kind test index; do
   printf '%s\n' "${test%%.*}" >>"$suites_file"
   log="$LOG_DIR/${index}-${kind}.log"
   rc_file="$RC_DIR/${index}-${kind}.rc"
+  tally_file="$TALLY_DIR/${index}-${kind}.txt"
   cat "$log"
   if [[ ! -f "$rc_file" ]]; then
     rc=125
   else
-    read -r rc <"$rc_file"
+    rc=$(sed -n '1p' "$rc_file")
+    if [[ ! "$rc" =~ ^[0-9]+$ ]] || [[ $(wc -l <"$rc_file") -ne 1 ]]; then
+      rc=125
+    fi
+  fi
+  # A zero process status is not sufficient completion evidence: list mode,
+  # an early return, or a broken fixture can all exit zero without executing
+  # the selected test. Require the independently written one-test tally before
+  # counting the item as passed.
+  if [[ "$rc" -eq 0 ]] &&
+      ! { [[ -f "$tally_file" ]] &&
+          [[ $(wc -l <"$tally_file") -eq 1 ]] &&
+          /usr/bin/grep -qxF '[========] 1 tests: 1 passed, 0 failed' "$tally_file"; }; then
+    rc=125
   fi
   if [[ "$rc" -eq 0 ]]; then
     passed=$((passed + 1))
