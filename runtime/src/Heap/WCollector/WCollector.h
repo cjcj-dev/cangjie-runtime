@@ -544,7 +544,7 @@ public:
                      static_cast<void*>(forwarding), g_gcCount.load(std::memory_order_relaxed),
                      static_cast<void*>(resolved),
                      static_cast<unsigned long long>(
-                         forwarding->metadata.routeStateSnapshot.load(std::memory_order_acquire)),
+                         forwarding->GetRouteStateSnapshotForDiagnostics()),
                      static_cast<unsigned>(forwarding->IsForwardingDone()));
         return nullptr;
     }

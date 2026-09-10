@@ -2084,7 +2084,7 @@ BaseObject* WCollector::WaitRoutedTipReady(BaseObject* from, BaseObject* to, Reg
     auto observeReturn = [&](const char* kind, BaseObject* returned) -> BaseObject* {
         if (returned == nullptr || returned == from) {
             const uint64_t routeSnapshot =
-                forwarding->metadata.routeStateSnapshot.load(std::memory_order_acquire);
+                forwarding->GetRouteStateSnapshotForDiagnostics();
             LOG(RTLOG_ERROR,
                 "[WaitRouted.return] tid=%d obj=%p region=%p gcCycle=%zu return.kind=%s returned=%p "
                 "route=%u route.decision.valid=%u route.snapshot=%#llx fwdDone=%u "
