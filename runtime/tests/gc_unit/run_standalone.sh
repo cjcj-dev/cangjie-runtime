@@ -278,6 +278,7 @@ $CXX -std=gnu++17 -O0 -g -Wall -Wextra -pthread -fno-rtti \
     "${M0_CORRELATION_TEST_ARGS[@]}" \
     "$SRC/test_fwdreturn.cpp" \
     "$SRC/test_ghost_region_lookup.cpp" \
+    "$SRC/test_identity_kept_remap.cpp" \
     "$SRC/test_fnlz_roots.cpp" \
     "$SRC/test_reference_processor.cpp" \
     "$SRC/test_mark_stack_entry.cpp" \
