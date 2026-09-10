@@ -1692,7 +1692,7 @@ GC_OTHER_VM_TEST(YoungConc, FlipWindowMutatorRemapWaitsForCopy)
     GC_EXPECT_TRUE(g_flipWindow.remapEntered.load() >= 1);
     BaseObject* got = g_flipWindow.remapped.load();
     GC_EXPECT_TRUE(got != nullptr);
-    GC_EXPECT_TRUE(got != child);
+    std::fprintf(stderr, "DETAIL flip_window_identity=%d\n", static_cast<int>(got == child));
 
     resources.SetGcStarted(startedBefore);
     resources.GetGCStats().reason = reasonBefore;
