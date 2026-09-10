@@ -2968,6 +2968,7 @@ static unsigned CheckObservationField(const std::string& actual, const std::stri
 struct WaitObservationPublication {
     RegionInfo* region;
     BaseObject* from;
+    BaseObject* destination;
     unsigned lookups{ 0 };
     static void Publish(void* context)
     {
@@ -2977,14 +2978,15 @@ struct WaitObservationPublication {
         if (++state.lookups == 2) {
             const MAddress from = reinterpret_cast<MAddress>(state.from);
             auto publication = ForwardingTable::RetainOpenPublicationAfterCopy(state.region, from);
-            const MAddress to = ForwardingTable::InsertMapping(publication, from, from);
+            const MAddress to = ForwardingTable::InsertMapping(
+                publication, from, reinterpret_cast<MAddress>(state.destination));
             std::fprintf(stderr, "OBS_PUBLICATION lookups=%u from=%#zx to=%#zx\n", state.lookups, from, to);
         }
     }
 };
 #endif
 
-static void CheckWaitObservation(bool identity)
+static void CheckWaitObservation(bool identity, bool moved = false)
 {
     GcHeapFixture& fx = ProductFixture();
     unsigned failures = 0;
@@ -3000,11 +3002,11 @@ static void CheckWaitObservation(bool identity)
             BaseObject* from = fx.PlaceObject(region->GetRegionStart());
             region->SetRegionAllocPtr(reinterpret_cast<MAddress>(from) + from->GetSize());
             WCollector collector(Heap::GetHeap().GetAllocator(), Heap::GetHeap().GetCollectorResources());
-            collector.SetGCPhase(identity ? GCPhase::GC_PHASE_IDLE : GCPhase::GC_PHASE_FORWARD);
+            collector.SetGCPhase(identity || moved ? GCPhase::GC_PHASE_IDLE : GCPhase::GC_PHASE_FORWARD);
             collector.flip_old_relocate_start();
             RelocationReceiptTestAccess::BindCollector(Heap::GetHeap().GetCollectorResources(), &collector);
             (void)PrepareForwardable(fx, region, reinterpret_cast<MAddress>(from));
-            region->SetRouteState(identity ? RegionInfo::RouteState::ROUTED : RegionInfo::RouteState::COMPACTED);
+            region->SetRouteState(identity || moved ? RegionInfo::RouteState::ROUTED : RegionInfo::RouteState::COMPACTED);
             if (!identity || sample != 0) {
                 region->MarkForwardingDone();
             }
@@ -3027,8 +3029,8 @@ static void CheckWaitObservation(bool identity)
                 static_cast<unsigned long long>(before.publicationGeneration),
                 static_cast<unsigned>(before.forwardingSnapshotValid));
 #if defined(MRT_FINDTO_RETAIN_TEST)
-            WaitObservationPublication publication{ region, from };
-            if (identity) {
+            WaitObservationPublication publication{ region, from, moved ? fx.obj1 : from };
+            if (identity || moved) {
                 ProductSetLookupRetainHookFn()(&WaitObservationPublication::Publish, &publication);
             }
 #endif
@@ -3037,12 +3039,28 @@ static void CheckWaitObservation(bool identity)
             Barrier barrier(collector, Heap::GetHeap().GetRememberedSet());
             std::fprintf(stderr, "OBS_ENTRY Barrier::WriteReference\n");
             barrier.WriteReference(holder, field, from);
+#if defined(MRT_FINDTO_RETAIN_TEST)
+            if (moved) {
+                BaseObject* stored = to_object(field.GetTargetObject());
+                std::fprintf(stderr, "OBS_MOVED stored=%p expected=%p lookups=%u\n",
+                             static_cast<void*>(stored), static_cast<void*>(fx.obj1), publication.lookups);
+                _exit(stored == fx.obj1 && publication.lookups == 2 ? 0 : 91);
+            }
+#endif
             std::fprintf(stderr, "OBS_UNEXPECTED_RETURN\n");
         });
         std::fprintf(stderr, "OBS_CHILD identity=%u sample=%u status=%d\n%s\n",
                      static_cast<unsigned>(identity), sample, captured.status, captured.output.c_str());
         const std::string expected = ObservationLine(captured.output, "OBS_EXPECT");
         const std::string waited = ObservationLine(captured.output, "[WaitRouted.return]");
+        if (moved) {
+            const bool completed = WIFEXITED(captured.status) && WEXITSTATUS(captured.status) == 0 &&
+                captured.output.find("OBS_MOVED") != std::string::npos && waited.empty();
+            std::fprintf(stderr, "OBS_ASSERT site=behavior field=moved-receipt-without-log result=%s\n",
+                         completed ? "PASS" : "FAIL");
+            failures += completed ? 0 : 1;
+            continue;
+        }
         const bool terminated = WIFSIGNALED(captured.status) && WTERMSIG(captured.status) == SIGABRT;
         std::fprintf(stderr, "OBS_ASSERT site=behavior field=termination result=%s\n", terminated ? "PASS" : "FAIL");
         failures += terminated ? 0 : 1;
@@ -3081,6 +3099,11 @@ GC_TEST(ForwardingPublicationProduct, WaitObservationPublishedMiss)
 GC_TEST(ForwardingPublicationProduct, WaitObservationIdentity)
 {
     CheckWaitObservation(true);
+}
+
+GC_TEST(ForwardingPublicationProduct, WaitObservationMovedReceiptIsQuiet)
+{
+    CheckWaitObservation(false, true);
 }
 #endif
 
