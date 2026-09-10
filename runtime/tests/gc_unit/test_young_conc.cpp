@@ -1617,7 +1617,8 @@ GC_OTHER_VM_TEST(YoungConc, MutatorRemapWaitsForCopyAfterForwardFlip)
     MutatorManager mutatorManager;
     YoungConcTestRuntime runtime(mutatorManager);
     GcHeapFixture fx;
-    fx.region0->SetYoungRegionFlag(0);
+    fx.region0->SetYoungRegionFlag(1);
+    fx.region0->SetYoungAge(1);
     fx.region1->SetYoungRegionFlag(1);
     fx.region1->SetYoungAge(1);
     LiveInfo* live0 = fx.PlantLiveInfo(fx.region0);
