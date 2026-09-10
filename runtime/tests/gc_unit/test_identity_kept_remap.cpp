@@ -41,8 +41,9 @@ GC_TEST(IdentityKeptRemap, ArmedIdentityHitReturnsFromWhenRouteNotCompacted)
 {
     GcHeapFixture fx;
     RegionInfo* region = fx.region0;
-    BaseObject* from = fx.obj0;
-    LiveInfo* live = ArmGhostForKept(fx, region, from);
+    BaseObject* fromObj = fx.obj0;
+    const MAddress from = reinterpret_cast<MAddress>(fromObj);
+    LiveInfo* live = ArmGhostForKept(fx, region, fromObj);
 
     RegionManager manager;
     manager.ExemptFromRegion(region);
@@ -52,25 +53,42 @@ GC_TEST(IdentityKeptRemap, ArmedIdentityHitReturnsFromWhenRouteNotCompacted)
     region->SetRegionType(RegionInfo::RegionType::FROM_REGION);
     region->SetInGhostRegion(1);
 
+    if (!ForwardingTable::EntriesArmed(from)) {
+        GC_EXPECT_TRUE(ForwardingTable::PreparePublicationGeneration(
+            region->GetRegionStart(), region->GetRegionSize()));
+        GC_EXPECT_TRUE(ForwardingTable::InstallPublicationBeforeCopy(
+            region->GetRegionStart(), region->GetRegionSize(), region));
+        ForwardingTable::Publication publication =
+            ForwardingTable::EnsurePublicationBeforeCopy(region, from);
+        GC_EXPECT_TRUE(static_cast<bool>(publication));
+        const ZForwarding::Receipt receipt = ForwardingTable::InstallMapping(publication, from, from);
+        publication = ForwardingTable::Publication();
+        GC_EXPECT_EQ(receipt.address, from);
+    }
+
     ForwardingTable::ClearEntries(region->GetRegionStart(), region->GetRegionSize());
-    GC_EXPECT_FALSE(ForwardingTable::EntriesArmed(reinterpret_cast<MAddress>(from)));
-    const ForwardingTable::LookupResult lookup = ForwardingTable::LookupTo(reinterpret_cast<MAddress>(from));
+    GC_EXPECT_FALSE(ForwardingTable::EntriesArmed(from));
+    GC_EXPECT_FALSE(fromObj->IsForwarded());
+    const ForwardingTable::LookupResult lookup = ForwardingTable::LookupTo(from);
     GC_EXPECT_TRUE(lookup.answer == ForwardingTable::ToAnswer::ArmedHit ||
                    lookup.retiredAnswer == ForwardingTable::ToAnswer::ArmedHit);
-    GC_EXPECT_EQ(lookup.to, reinterpret_cast<MAddress>(from));
-    std::fprintf(stderr, "IDENTITY_KEPT_LOOKUP answer=%u retired=%u to=%p identity=%d\n",
+    GC_EXPECT_EQ(lookup.to, from);
+    std::fprintf(stderr,
+                 "IDENTITY_KEPT_LOOKUP answer=%u retired=%u to=%p identity=%d forwarded=%u armed=%u\n",
                  static_cast<unsigned>(lookup.answer),
                  static_cast<unsigned>(lookup.retiredAnswer),
                  reinterpret_cast<void*>(lookup.to),
-                 lookup.to == reinterpret_cast<MAddress>(from) ? 1 : 0);
+                 lookup.to == from ? 1 : 0,
+                 static_cast<unsigned>(fromObj->IsForwarded()),
+                 static_cast<unsigned>(ForwardingTable::EntriesArmed(from)));
 
     CollectorResources& resources = Heap::GetHeap().GetCollectorResources();
     WCollector collector(Heap::GetHeap().GetAllocator(), resources);
-    BaseObject* resolved = collector.relocate_or_remap_object(from, ZGenerationId::young);
-    GC_EXPECT_TRUE(resolved == from);
+    BaseObject* resolved = collector.relocate_or_remap_object(fromObj, ZGenerationId::young);
+    GC_EXPECT_TRUE(resolved == fromObj);
     std::fprintf(stderr,
                  "IDENTITY_KEPT_REMAP_OK from=%p resolved=%p route=%u fwdDone=%u lookup_to=%p\n",
-                 static_cast<void*>(from), static_cast<void*>(resolved),
+                 static_cast<void*>(fromObj), static_cast<void*>(resolved),
                  static_cast<unsigned>(region->GetRouteState()),
                  static_cast<unsigned>(region->IsForwardingDone()),
                  reinterpret_cast<void*>(lookup.to));
