@@ -203,6 +203,13 @@ public:
 
     RouteState GetRouteState() const;
 
+    // Observation only: unlike GetRouteState, this neither validates the
+    // carrier life nor invokes a test hook. Never use it to decide a route.
+    uint64_t GetRouteStateSnapshotForDiagnostics() const
+    {
+        return metadata.routeStateSnapshot.load(std::memory_order_acquire);
+    }
+
     void SetRouteState(RouteState state)
     {
         const RegionLifeId life = GetRegionLifeId();
