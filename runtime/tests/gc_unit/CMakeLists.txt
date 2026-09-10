@@ -32,6 +32,7 @@ set(GC_UNIT_SOURCES
     test_remap_young_roots.cpp
     test_forwarding_entries.cpp
     test_forwarding_no_geometry.cpp
+    test_forward_entry_domain.cpp
     test_z_forwarding_table.cpp
     test_young_conc.cpp
     test_alloc_buffer_handoff.cpp

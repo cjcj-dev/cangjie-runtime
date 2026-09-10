@@ -131,10 +131,17 @@ static thread_local WCollector::RouteLookupTestResult* g_routeLookupTestContext 
 #if defined(MRT_TESTABLE_INTERNALS)
 using CopyAdmissionTestHook = void (*)(RegionInfo*, BaseObject*);
 static std::atomic<CopyAdmissionTestHook> g_copyAdmissionTestHook{ nullptr };
+using YoungForwardWindowTestHook = void (*)();
+static std::atomic<YoungForwardWindowTestHook> g_youngForwardWindowTestHook{ nullptr };
 
 extern "C" MRT_EXPORT void MRT_SetCopyAdmissionTestHook(CopyAdmissionTestHook hook)
 {
     g_copyAdmissionTestHook.store(hook, std::memory_order_release);
+}
+
+extern "C" MRT_EXPORT void MRT_SetYoungForwardWindowTestHook(YoungForwardWindowTestHook hook)
+{
+    g_youngForwardWindowTestHook.store(hook, std::memory_order_release);
 }
 
 static void RunCopyAdmissionTestHook(RegionInfo* region, BaseObject* object)
@@ -142,6 +149,14 @@ static void RunCopyAdmissionTestHook(RegionInfo* region, BaseObject* object)
     CopyAdmissionTestHook hook = g_copyAdmissionTestHook.load(std::memory_order_acquire);
     if (hook != nullptr) {
         hook(region, object);
+    }
+}
+
+static void RunYoungForwardWindowTestHook()
+{
+    YoungForwardWindowTestHook hook = g_youngForwardWindowTestHook.load(std::memory_order_acquire);
+    if (hook != nullptr) {
+        hook();
     }
 }
 #endif
@@ -1786,6 +1801,9 @@ void WCollector::EvacuateYoungRegions(const std::vector<BaseObject*>& reachableV
             MRT_PHASE_TIMER("young.concurrent_relocate");
             VLOG(REPORT, "[GCV2][relocate][conc] concurrent_relocate start nObj=%zu flip=1",
                  reachableVec.size());
+#if defined(MRT_TESTABLE_INTERNALS)
+            RunYoungForwardWindowTestHook();
+#endif
             ForwardFromSpace();
             *stw = std::make_unique<ScopedStopTheWorld>("young post-relocate", true,
                                                         GCPhase::GC_PHASE_FORWARD);
