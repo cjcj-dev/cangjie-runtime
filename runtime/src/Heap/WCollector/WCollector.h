@@ -523,21 +523,21 @@ public:
             MutatorRelocate::NoteWaitEnter();
         }
         BaseObject* resolved = WaitRoutedTipReady(obj, to, forwarding, provenance);
-        if (resolved != nullptr && resolved != obj) {
+        // zRelocate.cpp:412-415 forward_object requires find()!=null; identity (to==from) is a
+        // legal ArmedHit on a kept page (PublishKeptInPlaceReceipts). IsCompacted is not the
+        // sole identity pass.
+        if (resolved != nullptr) {
             return resolved;
         }
-        // inplaceto: on a page compacted in place, WaitRoutedTipReady answers `obj` only when the
-        // page geometry classifies this address as already relocated (ClassifyCompactedMiss
-        // kAlreadyTo), or when the table holds an identity receipt for it.  Both say "obj is the
-        // current version", which is what ZRelocate::forward_object returns when find() maps an
-        // object onto itself (zRelocate.cpp:411-415 asserts an answer exists, not that it moved).
-        // The `resolved != obj` guard above still refuses a from-address on every other page.
-        if (resolved == obj && forwarding != nullptr && forwarding->IsCompacted()) {
-            return obj;
-        }
+        const ForwardingTable::LookupResult missLookup = ForwardingTable::LookupTo(fromAddr);
         CHECK_DETAIL(false,
-                     "ZRelocate::forward_object requires a forwarding entry for relocation-set object %p",
-                     obj);
+                     "ZRelocate::forward_object requires a forwarding entry for relocation-set object %p "
+                     "region=%p route=%u fwdDone=%u lookup_to=%p lookup_answer=%u",
+                     obj, forwarding,
+                     forwarding == nullptr ? 0u : static_cast<unsigned>(forwarding->GetRouteState()),
+                     forwarding == nullptr ? 0u : static_cast<unsigned>(forwarding->IsForwardingDone()),
+                     reinterpret_cast<void*>(missLookup.to),
+                     static_cast<unsigned>(missLookup.answer));
         return nullptr;
     }
 
