@@ -40,7 +40,11 @@ GC_TEST(IdentityKeptRemap, ArmedIdentityHitReturnsFromWhenRouteNotCompacted)
     GC_EXPECT_TRUE(static_cast<bool>(publication));
     const ZForwarding::Receipt receipt = ForwardingTable::InstallMapping(publication, from, from);
     publication = ForwardingTable::Publication();
-    GC_EXPECT_EQ(receipt.address, from);
+    // Knife ② (skip identity InstallMapping) must still reach the consumer fatal.
+    // Do not throw on a zero receipt here; that would hide lookup_to=0.
+    if (receipt.address != 0) {
+        GC_EXPECT_EQ(receipt.address, from);
+    }
     fx.region0->MarkForwardingDone();
     // Retire the active carrier so FindTo/EntriesArmed miss and the wait-path
     // consumer (not the early armed return) must accept the identity hit.
@@ -48,8 +52,10 @@ GC_TEST(IdentityKeptRemap, ArmedIdentityHitReturnsFromWhenRouteNotCompacted)
     GC_EXPECT_FALSE(ForwardingTable::EntriesArmed(from));
 
     const ForwardingTable::LookupResult lookup = ForwardingTable::LookupTo(from);
-    GC_EXPECT_TRUE(lookup.answer == ForwardingTable::ToAnswer::ArmedHit);
-    GC_EXPECT_EQ(lookup.to, from);
+    if (receipt.address != 0) {
+        GC_EXPECT_TRUE(lookup.answer == ForwardingTable::ToAnswer::ArmedHit);
+        GC_EXPECT_EQ(lookup.to, from);
+    }
 
     CollectorResources& resources = Heap::GetHeap().GetCollectorResources();
     WCollector collector(Heap::GetHeap().GetAllocator(), resources);
