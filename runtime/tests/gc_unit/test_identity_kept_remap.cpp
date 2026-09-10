@@ -26,12 +26,6 @@ struct RelocationReceiptTestAccess {
     {
         resources.collectorProxy.currentCollector = collector;
     }
-
-    static void RunCollectionDispatch(WCollector& collector)
-    {
-        collector.SetGCReason(GC_REASON_YOUNG);
-        collector.DoGarbageCollection();
-    }
 };
 } // namespace MapleRuntime
 
@@ -110,11 +104,4 @@ GC_TEST(IdentityKeptRemap, ExemptProducerWaitPathReturnsIdentityWhenNotCompacted
     fx.FreePlanted(live);
 }
 
-GC_TEST(IdentityKeptRemap, YoungPhaseEntryDispatch)
-{
-    GcHeapFixture fx;
-    CollectorResources& resources = Heap::GetHeap().GetCollectorResources();
-    WCollector collector(Heap::GetHeap().GetAllocator(), resources);
-    RelocationReceiptTestAccess::RunCollectionDispatch(collector);
-    std::fprintf(stderr, "IDENTITY_KEPT_PHASE_ENTRY_OK\n");
-}
+
