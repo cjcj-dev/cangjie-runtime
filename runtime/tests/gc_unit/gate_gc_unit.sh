@@ -80,6 +80,11 @@ if [[ "${GC_UNIT_GATE_CONTRACT_SELFTEST:-0}" != "1" ]]; then
     exit 2
   fi
   echo "GATE_TESTABLE_CONTRACT_OK"
+  if ! bash "$SRC/test_parallel_runner.sh"; then
+    echo "GC_UNIT_GATE_FAIL: parallel runner contract failed" >&2
+    exit 2
+  fi
+  echo "GATE_PARALLEL_RUNNER_CONTRACT_OK"
 fi
 
 
