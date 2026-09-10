@@ -45,6 +45,7 @@ GC_TEST(VerifyMarkingStacks, PopulationCountsEntriesAndPublishedChunks)
     GC_EXPECT_EQ(stripes.FirstNonEmptyStripe(), NO_MARKING_INDEX);
 }
 
+#if defined(MRT_TESTABLE_INTERNALS)
 GC_OTHER_VM_TEST(VerifyMarkingStacks, MarkingFaceRecordsPositiveProducerAndZeroBoundary)
 {
     GC_EXPECT_EQ(setenv("MRT_GCV2_VERIFY_MARKING", "1", 1), 0);
@@ -85,6 +86,8 @@ GC_OTHER_VM_TEST(VerifyMarkingStacks, ReceiptsPreserveContainerCoordinate)
     GC_EXPECT_EQ(delta(MarkingContainer::FOREIGN), 1u);
     GC_EXPECT_EQ(delta(MarkingContainer::POOL), 0u);
 }
+
+#endif // MRT_TESTABLE_INTERNALS
 
 GC_OTHER_VM_TEST(VerifyMarkingStacks, RejectsMajorTaskDebtAtTaskExit)
 {
