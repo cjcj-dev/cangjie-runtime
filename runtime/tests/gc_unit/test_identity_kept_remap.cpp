@@ -19,6 +19,11 @@ using namespace MapleRuntime::GcUnit;
 
 namespace MapleRuntime {
 struct RelocationReceiptTestAccess {
+    static void BindCollector(CollectorResources& resources, TracingCollector* collector)
+    {
+        resources.collectorProxy.currentCollector = collector;
+    }
+
     static void RunCollectionDispatch(WCollector& collector)
     {
         collector.SetGCReason(GC_REASON_YOUNG);
@@ -27,68 +32,63 @@ struct RelocationReceiptTestAccess {
 };
 } // namespace MapleRuntime
 
-namespace {
-LiveInfo* PrepareKeptGhost(GcHeapFixture& fx, RegionInfo* region, BaseObject* obj)
+GC_TEST(IdentityKeptRemap, ExemptProducerWaitPathReturnsIdentityWhenNotCompacted)
 {
+    GcHeapFixture fx;
+    RegionInfo* region = fx.region0;
+    BaseObject* obj = fx.obj0;
     if (region->GetRegionLifeId() == 0) {
         region->BumpRegionLifeId();
     }
     region->SetRegionType(RegionInfo::RegionType::FROM_REGION);
     LiveInfo* live = fx.PlantLiveInfo(region);
     RegionBitmap* bitmap = fx.PlantMarkBitmap<Generation::Old>(live, region->GetRegionSize());
-    (void)bitmap->MarkBits(region->GetAddressOffset(reinterpret_cast<MAddress>(obj)), obj->GetSize(),
-                           region->GetRegionSize());
+    const MAddress from = reinterpret_cast<MAddress>(obj);
+    const size_t offset = region->GetAddressOffset(from);
+    (void)bitmap->MarkBits(offset, obj->GetSize(), region->GetRegionSize());
     region->AddLiveByteCount(obj->GetSize());
     region->PrepareForwardableRegion(region->GetMarkView<Generation::Old>());
-    region->SetInGhostRegion(1);
+    region->RecordRouteStart(offset);
     region->metadata._generation_id = ZGenerationId::young;
-    region->SetRouteState(RegionInfo::RouteState::ROUTED);
-    return live;
-}
-} // namespace
-
-GC_TEST(IdentityKeptRemap, ExemptProducerWaitPathReturnsIdentityWhenNotCompacted)
-{
-    GcHeapFixture fx;
-    LiveInfo* live = PrepareKeptGhost(fx, fx.region0, fx.obj0);
-    GC_EXPECT_FALSE(fx.region0->IsCompacted());
-
-    RegionManager manager;
-    manager.ExemptFromRegion(fx.region0);
-    GC_EXPECT_TRUE(fx.region0->IsForwardingDone());
-    GC_EXPECT_FALSE(fx.region0->IsCompacted());
-
-    const MAddress from = reinterpret_cast<MAddress>(fx.obj0);
-    const ForwardingTable::LookupResult produced = ForwardingTable::LookupTo(from);
-    GC_EXPECT_TRUE(produced.to == from);
-    GC_EXPECT_TRUE(produced.answer == ForwardingTable::ToAnswer::ArmedHit);
-    std::fprintf(stderr, "IDENTITY_KEPT_PRODUCER to=%p answer=%u\n",
-                 reinterpret_cast<void*>(produced.to), static_cast<unsigned>(produced.answer));
-
-    // Retire the active carrier so the wait-path consumer (not the early armed
-    // return) must accept the identity ArmedHit.
-    ForwardingTable::ClearEntries(fx.region0->GetRegionStart(), fx.region0->GetRegionSize());
-    GC_EXPECT_FALSE(ForwardingTable::EntriesArmed(from));
-    const ForwardingTable::LookupResult lookup = ForwardingTable::LookupTo(from);
-    GC_EXPECT_TRUE(lookup.to == from);
-    std::fprintf(stderr, "IDENTITY_KEPT_LOOKUP answer=%u to=%p retired=%u\n",
-                 static_cast<unsigned>(lookup.answer), reinterpret_cast<void*>(lookup.to),
-                 static_cast<unsigned>(lookup.retiredAnswer));
+    GC_EXPECT_TRUE(region->IsGhostFromRegion());
+    GC_EXPECT_FALSE(region->IsCompacted());
 
     CollectorResources& resources = Heap::GetHeap().GetCollectorResources();
     WCollector collector(Heap::GetHeap().GetAllocator(), resources);
+    RelocationReceiptTestAccess::BindCollector(resources, &collector);
+
+    RegionManager manager;
+    manager.ExemptFromRegion(region);
+    GC_EXPECT_TRUE(region->IsForwardingDone());
+    GC_EXPECT_FALSE(region->IsCompacted());
+
+    const ForwardingTable::LookupResult produced = ForwardingTable::LookupTo(from);
+    std::fprintf(stderr, "IDENTITY_KEPT_PRODUCER to=%p answer=%u\n",
+                 reinterpret_cast<void*>(produced.to), static_cast<unsigned>(produced.answer));
+    GC_EXPECT_TRUE(produced.to == from);
+    GC_EXPECT_TRUE(produced.answer == ForwardingTable::ToAnswer::ArmedHit);
+
+    ForwardingTable::ClearEntries(region->GetRegionStart(), region->GetRegionSize());
+    GC_EXPECT_FALSE(ForwardingTable::EntriesArmed(from));
+    const ForwardingTable::LookupResult lookup = ForwardingTable::LookupTo(from);
+    std::fprintf(stderr, "IDENTITY_KEPT_LOOKUP answer=%u to=%p retired=%u\n",
+                 static_cast<unsigned>(lookup.answer), reinterpret_cast<void*>(lookup.to),
+                 static_cast<unsigned>(lookup.retiredAnswer));
+    GC_EXPECT_TRUE(lookup.to == from);
+
     collector.SetGCPhase(GCPhase::GC_PHASE_FORWARD);
     Heap::GetHeap().SetGCPhase(GCPhase::GC_PHASE_FORWARD);
-    BaseObject* resolved = collector.relocate_or_remap_object(fx.obj0, ZGenerationId::young);
-    GC_EXPECT_TRUE(resolved == fx.obj0);
+    BaseObject* resolved = collector.relocate_or_remap_object(obj, ZGenerationId::young);
+    GC_EXPECT_TRUE(resolved == obj);
     std::fprintf(stderr, "IDENTITY_KEPT_REMAP_OK from=%p resolved=%p route=%u fwdDone=%u compacted=%u\n",
-                 static_cast<void*>(fx.obj0), static_cast<void*>(resolved),
-                 static_cast<unsigned>(fx.region0->GetRouteState()),
-                 static_cast<unsigned>(fx.region0->IsForwardingDone()),
-                 static_cast<unsigned>(fx.region0->IsCompacted()));
+                 static_cast<void*>(obj), static_cast<void*>(resolved),
+                 static_cast<unsigned>(region->GetRouteState()),
+                 static_cast<unsigned>(region->IsForwardingDone()),
+                 static_cast<unsigned>(region->IsCompacted()));
     collector.SetGCPhase(GCPhase::GC_PHASE_IDLE);
     Heap::GetHeap().SetGCPhase(GCPhase::GC_PHASE_IDLE);
-    fx.region0->metadata.liveInfo = nullptr;
+    RelocationReceiptTestAccess::BindCollector(resources, nullptr);
+    region->metadata.liveInfo = nullptr;
     fx.FreePlanted(live);
 }
 
