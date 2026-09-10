@@ -194,7 +194,7 @@ public:
                                 bool rejectedByYoung, bool consumerAlreadyComplete);
     void accept_remset_receipts(uint64_t youngSeq);
     void complete_remset_receipts(uint64_t youngSeq,
-                                  const std::unordered_set<MAddress>& scannedSlots,
+                                  const std::unordered_set<MAddress>& consumedSlots,
                                   const RememberedSet& rememberedSet);
     bool has_remset_receipt(MAddress fromSlot, MAddress toSlot, uint8_t sourceFace) const;
     void verify_remset_receipts_closed(const char* point) const;

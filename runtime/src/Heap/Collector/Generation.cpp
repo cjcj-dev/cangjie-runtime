@@ -1214,11 +1214,12 @@ void WCollector::DoYoungGarbageCollection()
     VLOG(REPORT, "[GCV2][setbitmap] use=%d reachable_n=%zu set_n=%zu fullYoung=%d youngConc=%d",
          static_cast<int>(useBitmapLedger), reachableVec.size(), reachableObjects.size(),
          static_cast<int>(fullYoungScan), 1);
-    // Delayed after-scan edge: every slot from the destructive previous-face
-    // scan has now passed through rescan and the complete concurrent follow.
-    // Publications that lost the scan race must instead be present on the new
-    // current face before their forwarding generation can retire.
-    Heap::GetHeap().GetRememberedSet().CompleteScanForMinor(rememberedSlots);
+    // Delayed after-scan edge: only slots admitted by the real rescan consumer
+    // may close a forwarding receipt. The destructive-drain input proves only
+    // that a slot was offered; it must not stand in for consumer completion.
+    // Publications that lost the scan race must additionally remain on the
+    // new current face before their forwarding generation can retire.
+    Heap::GetHeap().GetRememberedSet().CompleteScanForMinor(consumedSlots);
 #if defined(MRT_GC_UNIT_TESTS)
     NoteRememberedAfterScanCompleteForTest();
 #endif
