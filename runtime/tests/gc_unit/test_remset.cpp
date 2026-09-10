@@ -64,6 +64,7 @@ struct RemsetRearmTestAccess {
         size_t work = 0;
         size_t consumedLedger = 0;
         RemsetScanStats stats;
+        std::unordered_set<MAddress> processedSlots;
         std::unordered_set<MAddress> consumedSlots;
     };
 
@@ -92,18 +93,20 @@ struct RemsetRearmTestAccess {
         WCollector::MinorSlotSet weakSlots;
         WCollector::MinorObjectSet currentMinorRoots;
         WCollector::MinorSlotSet consumed;
+        WCollector::MinorSlotSet processed;
         RemsetScanStats stats;
         stats.recorded = previous.size();
         if (currentMinorRoot != nullptr) {
             currentMinorRoots.insert(currentMinorRoot);
         }
         collector.RescanRememberedSet(workStack, previous, reachableSlots, weakSlots, currentMinorRoots,
-                                      /*fullYoungScan=*/false, &consumed, &stats);
+                                      /*fullYoungScan=*/false, &consumed, &stats, nullptr, nullptr,
+                                      &processed);
         const size_t work = workStack.size();
         while (!workStack.empty()) {
             workStack.pop_back();
         }
-        return ConsumeResult { work, consumed.size(), stats, std::move(consumed) };
+        return ConsumeResult { work, consumed.size(), stats, std::move(processed), std::move(consumed) };
     }
 };
 
@@ -1121,7 +1124,7 @@ GC_TEST(Remset, FlipIsConstantTimeAndPreservesFaceEpochs)
         RecordFlipSlots(rs, post);
         std::unordered_set<MAddress> previous;
         const size_t previousCount = rs.ScanPreviousForMinor(previous);
-        rs.CompleteScanForMinor(previous);
+        rs.CompleteScanForMinor(previous, {});
         const auto current = rs.Snapshot();
         std::fprintf(stderr,
                      "DETAIL remset_flip capacity=%zu pre=%zu post=%zu first_bitmap_word_accesses=%zu "
@@ -1142,7 +1145,7 @@ GC_TEST(Remset, FlipIsConstantTimeAndPreservesFaceEpochs)
         rs.FlipForMinor();
         std::unordered_set<MAddress> secondPrevious;
         const size_t secondPreviousCount = rs.ScanPreviousForMinor(secondPrevious);
-        rs.CompleteScanForMinor(secondPrevious);
+        rs.CompleteScanForMinor(secondPrevious, {});
         const auto secondCurrent = rs.Snapshot();
         std::fprintf(stderr,
                      "DETAIL remset_flip_reuse capacity=%zu pre=%zu post=%zu second_bitmap_word_accesses=%zu "
@@ -1166,7 +1169,7 @@ GC_OTHER_VM_TEST(RemsetNetwork, PublicationFirstIsAcceptedThenConsumed)
 #if defined(__linux__)
     (void)setenv("MRT_GCV2_VERIFY_REMEMBERED", "1", 1);
     GcHeapFixture fx;
-    RememberedSet rs;
+    RememberedSet& rs = Heap::GetHeap().GetRememberedSet();
     rs.Initialize(fx.heapStart, GcHeapFixture::kUnits * RegionInfo::UNIT_SIZE);
     const MAddress fromBase = reinterpret_cast<MAddress>(fx.obj0);
     const MAddress toBase = reinterpret_cast<MAddress>(fx.obj1);
@@ -1225,20 +1228,21 @@ GC_OTHER_VM_TEST(RemsetNetwork, PublicationFirstIsAcceptedThenConsumed)
     const auto accepted = table->remset_receipt_counts();
     const auto consumer = RemsetRearmTestAccess::ConsumePrevious(
         collector, scanned, reinterpret_cast<BaseObject*>(toBase));
-    rs.CompleteScanForMinor(consumer.consumedSlots);
+    rs.CompleteScanForMinor(consumer.processedSlots, consumer.consumedSlots);
     const auto consumed = table->remset_receipt_counts();
     std::fprintf(stderr,
                  "DETAIL remset_network arm=publication-first mapping=%u from_present=%zu moved=%zu "
-                 "published=%zu accepted=%zu scanned_to=%zu consumer_to=%zu "
+                 "published=%zu accepted=%zu scanned_to=%zu processed_to=%zu consumer_to=%zu "
                  "consumed=%zu retire_guard_signal=%d\n",
                  static_cast<unsigned>(mapping.installed), captured.size(), moved,
                  published.published, accepted.accepted, scanned.count(toSlot),
-                 consumer.consumedSlots.count(toSlot), consumed.consumed,
+                 consumer.processedSlots.count(toSlot), consumer.consumedSlots.count(toSlot), consumed.consumed,
                  WTERMSIG(status));
     std::fflush(stderr);
     GC_EXPECT_EQ(moved, 1u);
     GC_EXPECT_EQ(published.published, 1u);
     GC_EXPECT_EQ(accepted.accepted, 1u);
+    GC_EXPECT_EQ(consumer.processedSlots.count(toSlot), 1u);
     GC_EXPECT_EQ(consumer.consumedSlots.count(toSlot), 1u);
     GC_EXPECT_EQ(consumed.consumed, 1u);
     CleanupRemsetConsumerTarget(fx, target);
@@ -1297,18 +1301,20 @@ GC_OTHER_VM_TEST(RemsetNetwork, ScanFirstIsRejectedThenReRemembered)
     const auto rejected = table->remset_receipt_counts();
     const bool reRemembered = rs.Contains(toSlot);
     const auto consumer = RemsetRearmTestAccess::ConsumePrevious(collector, scanned, fx.obj0);
-    rs.CompleteScanForMinor(consumer.consumedSlots);
+    rs.CompleteScanForMinor(consumer.processedSlots, consumer.consumedSlots);
     const auto consumed = table->remset_receipt_counts();
     std::fprintf(stderr,
                  "DETAIL remset_network arm=scan-first mapping=%u from_scanned=%zu moved=%zu "
-                 "rejected=%zu re_remembered=%u consumer_from=%zu consumed=%zu\n",
+                 "rejected=%zu re_remembered=%u processed_from=%zu consumer_from=%zu consumed=%zu\n",
                  static_cast<unsigned>(mapping.installed), scanned.count(fromSlot), moved,
                  rejected.rejectedByYoung, static_cast<unsigned>(reRemembered),
-                 consumer.consumedSlots.count(fromSlot), consumed.consumed);
+                 consumer.processedSlots.count(fromSlot), consumer.consumedSlots.count(fromSlot),
+                 consumed.consumed);
     std::fflush(stderr);
     GC_EXPECT_EQ(moved, 1u);
     GC_EXPECT_EQ(rejected.rejectedByYoung, 1u);
     GC_EXPECT_TRUE(reRemembered);
+    GC_EXPECT_EQ(consumer.processedSlots.count(fromSlot), 1u);
     GC_EXPECT_EQ(consumer.consumedSlots.count(fromSlot), 1u);
     GC_EXPECT_EQ(consumed.consumed, 1u);
     CleanupRemsetConsumerTarget(fx, target);
@@ -1317,7 +1323,7 @@ GC_OTHER_VM_TEST(RemsetNetwork, ScanFirstIsRejectedThenReRemembered)
 // Current-face in-place arm: Take clears both physical faces before the copy,
 // and Move must republish the exact offset plus a receipt without waiting for a
 // previous-face consumer that does not own this slot.
-GC_OTHER_VM_TEST(RemsetNetwork, InPlaceCurrentFacePublishesConsumedReceipt)
+GC_OTHER_VM_TEST(RemsetNetwork, InPlaceCurrentFacePublishesNextYoungReceipt)
 {
     (void)setenv("MRT_GCV2_VERIFY_REMEMBERED", "1", 1);
     GcHeapFixture fx;
@@ -1348,15 +1354,15 @@ GC_OTHER_VM_TEST(RemsetNetwork, InPlaceCurrentFacePublishesConsumedReceipt)
     VerifyRememberedAfterForwarding(taken, fromBase, toBase, objectSize, publication);
     ZForwarding* table = ForwardingTable::GetEntries(fromBase);
     GC_EXPECT_TRUE(table != nullptr);
-    const auto consumed = table->remset_receipt_counts();
+    const auto published = table->remset_receipt_counts();
     std::fprintf(stderr,
                  "DETAIL remset_network arm=in-place-current mapping=%u taken=%zu moved=%zu "
-                 "to_present=%u consumed=%zu\n",
+                 "to_present=%u published=%zu\n",
                  static_cast<unsigned>(mapping.installed), taken.size(), moved,
-                 static_cast<unsigned>(rs.Contains(toSlot)), consumed.consumed);
+                 static_cast<unsigned>(rs.Contains(toSlot)), published.published);
     std::fflush(stderr);
     GC_EXPECT_EQ(moved, 1u);
     GC_EXPECT_TRUE(rs.Contains(toSlot));
-    GC_EXPECT_EQ(consumed.consumed, 1u);
+    GC_EXPECT_EQ(published.published, 1u);
 }
 #endif

@@ -1494,7 +1494,7 @@ GC_TEST(YoungConc, FlipForMinorSeparatesConcurrentProducerFace)
 
     std::unordered_set<MAddress> previous;
     rememberedSet.ScanPreviousForMinor(previous);
-    rememberedSet.CompleteScanForMinor(previous);
+    rememberedSet.CompleteScanForMinor(previous, {});
     GC_EXPECT_EQ(previous.size(), 1u);
     GC_EXPECT_TRUE(previous.count(before) == 1);
     GC_EXPECT_TRUE(rememberedSet.Snapshot().count(during) == 1);
