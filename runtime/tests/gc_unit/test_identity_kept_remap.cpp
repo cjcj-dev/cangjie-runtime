@@ -29,6 +29,10 @@ GC_TEST(IdentityKeptRemap, ArmedIdentityHitReturnsFromWhenRouteNotCompacted)
     GC_EXPECT_FALSE(fx.region0->IsCompacted());
 
     const MAddress from = reinterpret_cast<MAddress>(fx.obj0);
+    ForwardingTable::ClearEntries(fx.region0->GetRegionStart(), fx.region0->GetRegionSize());
+    ForwardingTable::ReclaimRetired("gc-unit-explicit-coverage");
+    GC_EXPECT_TRUE(ForwardingTable::PreparePublicationGeneration(
+        fx.region0->GetRegionStart(), fx.region0->GetRegionSize()));
     GC_EXPECT_TRUE(ForwardingTable::InstallPublicationBeforeCopy(
         fx.region0->GetRegionStart(), fx.region0->GetRegionSize(), fx.region0));
     ForwardingTable::Publication publication =
