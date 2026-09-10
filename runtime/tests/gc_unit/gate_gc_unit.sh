@@ -228,6 +228,14 @@ if [[ "$OHOS_HOST" == "1" ]]; then
     echo "GC_UNIT_GATE_FAIL: OHOS-host suite timed out after ${GC_UNIT_TIMEOUT}s" >&2
     exit 6
   fi
+  if ! /usr/bin/grep -Fqx \
+      "GC_UNIT_OHOS_HOST_HEADER_ROOT=$GCV2_RUNTIME_OUTPUT_ROOT/include" \
+      "$GC_UNIT_OUT/ohos_host_gate.log"; then
+    STATUS_REASON=OHOS_HOST_HEADER_ROOT_MISMATCH
+    echo "GC_UNIT_GATE_FAIL: OHOS-host compiler did not use the selected configuration header root" >&2
+    tail -20 "$GC_UNIT_OUT/ohos_host_gate.log" >&2 || true
+    exit 1
+  fi
   if [[ $ohos_rc -ne 0 || ! -f "$OHOS_RECEIPT" ]] ||
       ! /usr/bin/grep -qx 'RESULT=PASS' "$OHOS_RECEIPT" ||
       ! /usr/bin/grep -qx 'FILTER_MAJOR=PASS' "$OHOS_RECEIPT" ||

@@ -83,8 +83,39 @@ printf 'placeholder\n' >"$fixture/runtime/tests/gc_unit/phase_entry_major.cj"
 printf 'test_x.cpp\n' >"$fixture/runtime/tests/gc_unit/CMakeLists.txt"
 touch "$fixture/runtime/tests/gc_unit/known_failures.txt"
 printf 'placeholder\n' >"$fixture/lib/libcangjie-runtime.so"
+printf 'placeholder\n' >"$fixture/lib/libboundscheck.so"
 printf '#!/usr/bin/env bash\nexit 0\n' >"$fixture/bin/nm"
 chmod +x "$fixture/bin/nm"
+
+# The OHOS-host compiler must consume generated headers from the same output
+# identity as the selected runtime SO.  Keep the runner otherwise successful
+# in the negative arm so the exact path assertion, rather than an earlier
+# compilation or receipt failure, is what turns red.
+cp "$fixture/runtime/tests/gc_unit/run_standalone.sh" "$fixture/default-runner.sh"
+printf '#!/usr/bin/env bash\nheader_root=${GC_UNIT_OHOS_HEADER_ROOT_TOKEN:-${GCV2_RUNTIME_OUTPUT_ROOT:?}/include}\necho "GC_UNIT_OHOS_HOST_HEADER_ROOT=$header_root"\nprintf "RESULT=PASS\\nFILTER_MAJOR=PASS\\nFILTER_POST=PASS\\nFILTER_EMPTY=PASS\\n" >"${GC_UNIT_OHOS_HOST_RECEIPT:?}"\nexit 0\n' \
+  >"$fixture/runtime/tests/gc_unit/run_standalone.sh"
+chmod +x "$fixture/runtime/tests/gc_unit/run_standalone.sh"
+ohos_output_root="$fixture/selected-output"
+mkdir -p "$ohos_output_root/include"
+PATH="$fixture/bin:$PATH" MRT_GC_UNIT_OHOS_HOST=1 \
+  GCV2_RUNTIME_OUTPUT_ROOT="$ohos_output_root" GCV2_RUNTIME_LIB_DIR="$fixture/lib" \
+  GC_UNIT_OUT="$fixture/ohos-good-out" GC_UNIT_GATE_STATUS="$fixture/ohos-good.status" \
+  bash "$fixture/runtime/tests/gc_unit/gate_gc_unit.sh" >"$fixture/ohos-good.log" 2>&1
+set +e
+PATH="$fixture/bin:$PATH" MRT_GC_UNIT_OHOS_HOST=1 \
+  GCV2_RUNTIME_OUTPUT_ROOT="$ohos_output_root" GCV2_RUNTIME_LIB_DIR="$fixture/lib" \
+  GC_UNIT_OHOS_HEADER_ROOT_TOKEN="$fixture/stale-output/include" \
+  GC_UNIT_OUT="$fixture/ohos-mismatch-out" GC_UNIT_GATE_STATUS="$fixture/ohos-mismatch.status" \
+  bash "$fixture/runtime/tests/gc_unit/gate_gc_unit.sh" >"$fixture/ohos-mismatch.log" 2>&1
+ohos_mismatch_rc=$?
+set -e
+[[ $ohos_mismatch_rc -eq 1 ]]
+/usr/bin/grep -qx 'REASON=OHOS_HOST_HEADER_ROOT_MISMATCH' "$fixture/ohos-mismatch.status"
+/usr/bin/grep -q 'compiler did not use the selected configuration header root' \
+  "$fixture/ohos-mismatch.log"
+printf 'OHOS header identity: rc=0 mismatch_rc=%s root=%s/include\n' \
+  "$ohos_mismatch_rc" "$ohos_output_root"
+mv "$fixture/default-runner.sh" "$fixture/runtime/tests/gc_unit/run_standalone.sh"
 
 # Configuration selection is a gate input, not a directory scan.  Prove the
 # requested manifest is accepted and an explicit path from another
