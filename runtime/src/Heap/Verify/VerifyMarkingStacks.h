@@ -26,6 +26,7 @@ constexpr size_t MARKING_GENERATION_COUNT = 2;
 constexpr size_t MARKING_BOUNDARY_COUNT = 7;
 constexpr size_t MARKING_CONTAINER_COUNT = 6;
 
+#if defined(MRT_TESTABLE_INTERNALS)
 struct Snapshot {
     uint64_t boundaryReceipts[MARKING_GENERATION_COUNT][MARKING_BOUNDARY_COUNT][MARKING_CONTAINER_COUNT]{};
     size_t producerMax[MARKING_GENERATION_COUNT][MARKING_CONTAINER_COUNT]{};
@@ -42,6 +43,7 @@ struct Snapshot {
         return producerMax[static_cast<size_t>(generation)][static_cast<size_t>(container)];
     }
 };
+#endif
 
 bool Enabled();
 
@@ -55,7 +57,9 @@ void VerifyEmpty(MarkingGeneration generation, MarkingBoundary boundary, Marking
                  size_t pending, size_t owner = NO_MARKING_INDEX, size_t worker = NO_MARKING_INDEX,
                  size_t stripe = NO_MARKING_INDEX);
 
+#if defined(MRT_TESTABLE_INTERNALS)
 Snapshot ReadSnapshot();
+#endif
 
 } // namespace VerifyMarkingStacks
 } // namespace MapleRuntime
