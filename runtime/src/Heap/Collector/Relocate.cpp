@@ -605,68 +605,14 @@ void WCollector::PreforwardDiscoveredExternObjects()
 {
     std::lock_guard<std::mutex> lg(cycleWorkStackMtx);
     CHECK(discoveredExternObjects.empty());
-    auto it = cycleRefWorkStack.begin();
-    std::unordered_map<BaseObject*, std::list<BaseObject*>> tmp;
-    while (it != cycleRefWorkStack.end()) {
-        BaseObject* exportObj = it->first;
-        BaseObject* latest = exportObj;
-        if (IsGhostFromObject(exportObj) && !IsUnmovableFromObject(exportObj)) {
-            latest = ForwardObject(exportObj);
-            if (latest == nullptr) {
-                Collector::FailClosedLoad(
-                    "WCollector::PreforwardDiscoveredExternObjects.unresolved", exportObj, 0,
-                    ForwardingProvenance{ ForwardingHolderKind::HeapRef, this, &exportObj });
-            }
-        }
-        for (auto &externObj : it->second) {
-            if (IsGhostFromObject(externObj) && !IsUnmovableFromObject(externObj)) {
-                BaseObject* toObj = ForwardObject(externObj);
-                if (toObj == nullptr) {
-                    Collector::FailClosedLoad(
-                        "WCollector::PreforwardDiscoveredExternObjects.unresolved", externObj, 0,
-                        ForwardingProvenance{ ForwardingHolderKind::HeapRef, this, &externObj });
-                }
-                externObj = toObj;
-            }
-        }
-        if (latest != exportObj) {
-            tmp[latest] = it->second;
-            it = cycleRefWorkStack.erase(it);
-        } else {
-            it++;
-        }
-    }
-    if (!tmp.empty()) {
-        cycleRefWorkStack.insert(tmp.begin(), tmp.end());
-    }
+    CurrentizeValueRootMap(cycleRefWorkStack);
 }
 
 void WCollector::PreforwardAllResurrectExportFromObjects()
 {
-    std::unordered_set<BaseObject*> tmp;
     std::lock_guard<std::mutex> lg(resurrectExportMtx);
-    auto it = resurrectedExportObjectes.begin();
-    while (it != resurrectedExportObjectes.end()) {
-        BaseObject* exportObj = *it;
-        BaseObject* latest = exportObj;
-        if (IsGhostFromObject(exportObj) && !IsUnmovableFromObject(exportObj)) {
-            latest = ForwardObject(exportObj);
-            if (latest == nullptr) {
-                Collector::FailClosedLoad(
-                    "WCollector::PreforwardAllResurrectExportFromObjects.unresolved", exportObj, 0,
-                    ForwardingProvenance{ ForwardingHolderKind::HeapRef, this, &exportObj });
-            }
-        }
-        if (latest != exportObj) {
-            tmp.insert(latest);
-            it = resurrectedExportObjectes.erase(it);
-        } else {
-            it++;
-        }
-    }
-    if (!tmp.empty()) {
-        resurrectedExportObjectes.insert(tmp.begin(), tmp.end());
-    }
+    CurrentizeValueRootSet(resurrectedExportObjectes);
+    CurrentizeValueRootSet(resurrectedExportObjectesForwardPhase);
 }
 void WCollector::Preforward()
 {

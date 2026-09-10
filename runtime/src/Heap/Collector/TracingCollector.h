@@ -266,6 +266,9 @@ class TracingCollector : public Collector {
     friend MarkingWork;
     friend ConcurrentMarkingWork;
     friend ExportRootsTracingWork;
+#if defined(MRT_TESTABLE_INTERNALS)
+    friend struct RelocationReceiptTestAccess;
+#endif
 public:
     enum class RefSlotKind : U8 {
         STRONG,
@@ -340,9 +343,12 @@ public:
         auto phase = GetGCPhase();
         std::lock_guard<std::mutex> lg(resurrectExportMtx);
         if (phase != GCPhase::GC_PHASE_PREFORWARD && phase != GCPhase::GC_PHASE_FORWARD) {
-            resurrectedExportObjectes.insert(obj);
+            resurrectedExportObjectes.insert(ResolveCurrentValueRoot(
+                obj, &resurrectedExportObjectes, ForwardingStage::IncomingNew));
         } else {
-            resurrectedExportObjectesForwardPhase.insert(obj);
+            resurrectedExportObjectesForwardPhase.insert(
+                ResolveCurrentValueRoot(
+                    obj, &resurrectedExportObjectesForwardPhase, ForwardingStage::IncomingNew));
         }
     }
 
@@ -486,6 +492,14 @@ protected:
     std::mutex resurrectExportMtx;
     std::unordered_set<BaseObject*> resurrectedExportObjectes;
     std::unordered_set<BaseObject*> resurrectedExportObjectesForwardPhase;
+
+    // Value-only root containers have no addressable RootSlot to heal. Keep
+    // their RootObligation on the existing ResolveStoreValue authority and
+    // rebuild key-bearing containers while their owner lock is held.
+    BaseObject* ResolveCurrentValueRoot(BaseObject* value, const void* owner,
+                                        ForwardingStage stage = ForwardingStage::OverwritePrevious) const;
+    void CurrentizeValueRootSet(std::unordered_set<BaseObject*>& roots) const;
+    void CurrentizeValueRootMap(std::unordered_map<BaseObject*, std::list<BaseObject*>>& roots) const;
 
     void ResetBitmap(bool heapMarked)
     {
