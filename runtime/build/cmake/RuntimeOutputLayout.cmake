@@ -32,6 +32,22 @@ function(cj_runtime_configure_output_layout)
     # function temporaries. Normal variables may shadow CACHE entries, including
     # arbitrary options introduced by toolchains or project includes.
     get_cmake_property(_effective_variables VARIABLES)
+    if(CMAKE_TOOLCHAIN_FILE)
+        get_filename_component(_toolchain "${CMAKE_TOOLCHAIN_FILE}" ABSOLUTE
+            BASE_DIR "${CMAKE_BINARY_DIR}")
+        if(NOT EXISTS "${_toolchain}")
+            get_filename_component(_toolchain "${CMAKE_TOOLCHAIN_FILE}" ABSOLUTE
+                BASE_DIR "${CMAKE_SOURCE_DIR}")
+        endif()
+        # CMakeDetermineSystem writes these carriers only on first configure;
+        # CMakeSystem.cmake subsequently reloads the same resolved include.
+        # Canonicalize their presence rather than dropping toolchain identity.
+        set(CMAKE_TOOLCHAIN_FILE "${_toolchain}")
+        set(_INCLUDED_TOOLCHAIN_FILE "${_toolchain}")
+        set(INCLUDE_CMAKE_TOOLCHAIN_FILE_IF_REQUIRED "include(\"${_toolchain}\")")
+        list(APPEND _effective_variables
+            _INCLUDED_TOOLCHAIN_FILE INCLUDE_CMAKE_TOOLCHAIN_FILE_IF_REQUIRED)
+    endif()
     get_property(_is_multi_config GLOBAL PROPERTY GENERATOR_IS_MULTI_CONFIG)
     cj_runtime_require_single_config_generator("${_is_multi_config}")
 
@@ -124,13 +140,11 @@ function(cj_runtime_configure_output_layout)
             string(APPEND _signature "COMPILER:${_language}=${_compiler_sha256}\n")
         endif()
     endforeach()
+    if(EXISTS "${CMAKE_PLATFORM_INFO_DIR}/CMakeSystem.cmake")
+        file(SHA256 "${CMAKE_PLATFORM_INFO_DIR}/CMakeSystem.cmake" _system_sha256)
+        string(APPEND _signature "SYSTEM=${_system_sha256}\n")
+    endif()
     if(CMAKE_TOOLCHAIN_FILE)
-        get_filename_component(_toolchain "${CMAKE_TOOLCHAIN_FILE}" ABSOLUTE
-            BASE_DIR "${CMAKE_BINARY_DIR}")
-        if(NOT EXISTS "${_toolchain}")
-            get_filename_component(_toolchain "${CMAKE_TOOLCHAIN_FILE}" ABSOLUTE
-                BASE_DIR "${CMAKE_SOURCE_DIR}")
-        endif()
         file(SHA256 "${_toolchain}" _toolchain_sha256)
         string(APPEND _signature "TOOLCHAIN:${_toolchain}=${_toolchain_sha256}\n")
     endif()
