@@ -32,6 +32,11 @@ struct RelocationReceiptTestAccess {
         return collector.ResolveStoreValue(value, provenance);
     }
 
+    static BaseObject* RelocateOrRemap(WCollector& collector, BaseObject* value)
+    {
+        return collector.relocate_or_remap_object(value, ZGenerationId::young);
+    }
+
 };
 
 } // namespace MapleRuntime
@@ -81,6 +86,14 @@ GC_TEST(IdentityKeptRemap, ArmedIdentityHitReturnsFromWhenRouteNotCompacted)
     CollectorResources& resources = Heap::GetHeap().GetCollectorResources();
     WCollector collector(Heap::GetHeap().GetAllocator(), resources);
     RelocationReceiptTestAccess::BindCollector(resources, &collector);
+    std::fprintf(stderr,
+                 "IDENTITY_KEPT_PRE type=%u ghost=%p unmovable=%u fromObj=%u\n",
+                 static_cast<unsigned>(region->GetRegionType()),
+                 static_cast<void*>(RegionInfo::GetGhostFromRegionAt(reinterpret_cast<MAddress>(from))),
+                 static_cast<unsigned>(region->IsUnmovableFromRegion()),
+                 static_cast<unsigned>(collector.IsFromObject(from)));
+    BaseObject* relocated = RelocationReceiptTestAccess::RelocateOrRemap(collector, from);
+    GC_EXPECT_TRUE(relocated == from);
     BaseObject* resolved = RelocationReceiptTestAccess::ResolveStoreValue(collector, from);
     GC_EXPECT_TRUE(resolved == from);
     std::fprintf(stderr,
