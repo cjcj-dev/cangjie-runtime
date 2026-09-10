@@ -321,7 +321,7 @@ GC_TEST(Remset, StickyBitmapDisabledByDefault)
 {
     ScopedEnv gate("MRT_GCV2_REMSET_EVER", nullptr);
     GcHeapFixture fx;
-    RememberedSet& rs = Heap::GetHeap().GetRememberedSet();
+    RememberedSet rs;
     rs.Initialize(fx.heapStart, 2 * RegionInfo::UNIT_SIZE);
     GC_EXPECT_FALSE(rs.EverRecordedEnabled());
 }
