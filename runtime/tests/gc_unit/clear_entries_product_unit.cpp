@@ -3070,7 +3070,8 @@ static void CheckWaitObservation(WaitObservationCase scenario)
             std::fprintf(stderr,
                 "OBS_EXPECT tid=%d obj=%p region=%p gcCycle=%zu returned=%p resolved=%p "
                 "route=%u route.snapshot=%#llx fwdDone=%u lookup.answer=%u lookup.to=%#zx "
-                "tableId=%#zx epoch=%llu lifeId=%llu publicationGeneration=%llu lookup.snapshot.valid=%u return.kind=%s\n",
+                "tableId=%#zx epoch=%llu lifeId=%llu publicationGeneration=%llu lookup.snapshot.valid=%u return.kind=%s "
+                "active.answer=%u retired.answer=%u route.decision.valid=%u lookup.record=WaitRouted.return\n",
                 static_cast<int>(getpid()), static_cast<void*>(from), static_cast<void*>(region),
                 g_gcCount.load(std::memory_order_relaxed), identity ? static_cast<void*>(from) : nullptr,
                 identity ? static_cast<void*>(from) : nullptr,
@@ -3083,7 +3084,10 @@ static void CheckWaitObservation(WaitObservationCase scenario)
                 static_cast<size_t>(before.tableId), static_cast<unsigned long long>(before.fromPageEpoch),
                 static_cast<unsigned long long>(before.fromPageLifeId),
                 static_cast<unsigned long long>(before.publicationGeneration),
-                static_cast<unsigned>(before.forwardingSnapshotValid), kind);
+                static_cast<unsigned>(before.forwardingSnapshotValid), kind,
+                static_cast<unsigned>(identity ? ForwardingTable::ToAnswer::ArmedHit : before.activeAnswer),
+                static_cast<unsigned>(before.retiredAnswer),
+                static_cast<unsigned>(scenario != WaitObservationCase::InitialIdentity && !moved));
 #if defined(MRT_FINDTO_RETAIN_TEST)
             WaitObservationPublication publication{ region, from, moved ? fx.obj1 : from, scenario };
             if (!miss) {
@@ -3122,20 +3126,24 @@ static void CheckWaitObservation(WaitObservationCase scenario)
         failures += terminated ? 0 : 1;
         const char* fields[] = { "tid", "obj", "region", "gcCycle", "returned", "route", "route.snapshot",
             "fwdDone", "lookup.answer", "lookup.to", "tableId", "epoch", "lifeId", "publicationGeneration",
-            "lookup.snapshot.valid", "return.kind" };
+            "lookup.snapshot.valid", "return.kind", "active.answer", "retired.answer", "route.decision.valid" };
         for (const char* field : fields) {
             failures += CheckObservationField(waited, expected, field, "wait");
         }
         if (identity || closed) {
             const std::string outer = ObservationLine(captured.output,
                 "ZRelocate::forward_object requires a forwarding entry");
-            const char* outerFields[] = { "tid", "obj", "region", "gcCycle", "resolved", "route.snapshot", "fwdDone" };
+            const char* outerFields[] = { "tid", "obj", "region", "gcCycle", "resolved", "route.snapshot",
+                "fwdDone", "lookup.record" };
             for (const char* field : outerFields) {
                 failures += CheckObservationField(outer, expected, field, "check");
             }
             for (const char* field : { "tid", "obj", "gcCycle" }) {
                 failures += CheckObservationField(outer, waited, field, "pair");
             }
+            const bool fatalSite = !outer.empty();
+            std::fprintf(stderr, "OBS_ASSERT site=behavior field=fatal-site result=%s\n", fatalSite ? "PASS" : "FAIL");
+            failures += fatalSite ? 0 : 1;
         } else {
             const bool fatalSite = captured.output.find("WCollector::WaitRoutedTipReady.published-without-receipt")
                 != std::string::npos;
