@@ -949,23 +949,18 @@ GC_OTHER_VM_TEST(YoungConc, PhaseEntryKeptIdentityRemap)
     MutatorManager mutatorManager;
     YoungConcTestRuntime runtime(mutatorManager);
     GcHeapFixture fx;
-    fx.region0->SetYoungRegionFlag(1);
-    fx.region0->SetYoungAge(1);
     fx.region1->SetYoungRegionFlag(1);
     fx.region1->SetYoungAge(1);
-    LiveInfo* live0 = fx.PlantLiveInfo(fx.region0);
     LiveInfo* live1 = fx.PlantLiveInfo(fx.region1);
-    (void)fx.PlantMarkBitmap<Generation::Young>(live0, fx.region0->GetRegionSize());
     (void)fx.PlantMarkBitmap<Generation::Young>(live1, fx.region1->GetRegionSize());
-    BaseObject* child = fx.obj0;
     BaseObject* holder = fx.obj1;
-    fx.region0->SetRegionAllocPtr(reinterpret_cast<MAddress>(child) + 64);
-    fx.region1->SetRegionAllocPtr(reinterpret_cast<MAddress>(holder) + 64);
-    fx.region0->AddLiveByteCount(fx.region0->GetRegionSize());
+    BaseObject* child = fx.PlaceObject(reinterpret_cast<MAddress>(holder) + 64);
+    fx.region1->SetRegionAllocPtr(reinterpret_cast<MAddress>(child) + 64);
+    fx.region1->AddLiveByteCount(fx.region1->GetRegionSize());
     auto* holderField = &HeapSlotAt<>(reinterpret_cast<MAddress>(holder) + TYPEINFO_PTR_SIZE);
     holderField->StoreColoured(GcUnit::StoreGoodPointer(child));
-    (void)fx.region0->MarkObject(fx.region0->GetMarkView<Generation::Young>(), child, 8);
     (void)fx.region1->MarkObject(fx.region1->GetMarkView<Generation::Young>(), holder, 8);
+    (void)fx.region1->MarkObject(fx.region1->GetMarkView<Generation::Young>(), child, 8);
 
     CollectorResources& resources = Heap::GetHeap().GetCollectorResources();
     WCollector collector(Heap::GetHeap().GetAllocator(), resources);
@@ -974,9 +969,7 @@ GC_OTHER_VM_TEST(YoungConc, PhaseEntryKeptIdentityRemap)
     GCThreadPool threadPool("gc-unit-kept-identity", 0, GCPoolThread::GC_THREAD_PRIORITY);
     RelocationReceiptTestAccess::BindThreadPool(resources, &threadPool);
     RegionSpace& space = reinterpret_cast<RegionSpace&>(Heap::GetHeap().GetAllocator());
-    space.GetRegionManager().EnlistFullThreadLocalRegion(fx.region0);
     space.GetRegionManager().EnlistFullThreadLocalRegion(fx.region1);
-    space.GetRegionManager().AddRawPointerObject(holder);
     Heap::GetHeap().GetRememberedSet().Initialize(fx.heapStart, 2 * RegionInfo::UNIT_SIZE);
     const bool startedBefore = resources.IsGcStarted();
     const GCReason reasonBefore = resources.GetGCStats().reason;
@@ -999,7 +992,6 @@ GC_OTHER_VM_TEST(YoungConc, PhaseEntryKeptIdentityRemap)
     RelocationReceiptTestAccess::BindThreadPool(resources, nullptr);
     threadPool.Exit();
     RelocationReceiptTestAccess::BindCollector(resources, nullptr);
-    (void)live0;
     (void)live1;
 }
 
