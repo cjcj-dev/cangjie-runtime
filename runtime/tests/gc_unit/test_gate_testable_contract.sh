@@ -92,7 +92,7 @@ chmod +x "$fixture/bin/nm"
 # in the negative arm so the exact path assertion, rather than an earlier
 # compilation or receipt failure, is what turns red.
 cp "$fixture/runtime/tests/gc_unit/run_standalone.sh" "$fixture/default-runner.sh"
-printf '#!/usr/bin/env bash\nheader_root=${GC_UNIT_OHOS_HEADER_ROOT_TOKEN:-${GCV2_RUNTIME_OUTPUT_ROOT:?}/include}\necho "GC_UNIT_OHOS_HOST_HEADER_ROOT=$header_root"\nprintf "RESULT=PASS\\nFILTER_MAJOR=PASS\\nFILTER_POST=PASS\\nFILTER_EMPTY=PASS\\n" >"${GC_UNIT_OHOS_HOST_RECEIPT:?}"\nexit 0\n' \
+printf '#!/usr/bin/env bash\nheader_root=${GC_UNIT_OHOS_HEADER_ROOT_TOKEN:-${GCV2_RUNTIME_OUTPUT_ROOT:?}/include}\nreceipt=${GC_UNIT_OHOS_HOST_RECEIPT:-${GC_UNIT_OUT:?}/ohos_host.receipt}\necho "GC_UNIT_OHOS_HOST_HEADER_ROOT=$header_root"\nprintf "RESULT=PASS\\nFILTER_MAJOR=PASS\\nFILTER_POST=PASS\\nFILTER_EMPTY=PASS\\n" >"$receipt"\nexit 0\n' \
   >"$fixture/runtime/tests/gc_unit/run_standalone.sh"
 chmod +x "$fixture/runtime/tests/gc_unit/run_standalone.sh"
 ohos_output_root="$fixture/selected-output"
