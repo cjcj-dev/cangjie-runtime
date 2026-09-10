@@ -16,14 +16,17 @@ make_fake() {
   chmod +x "$path"
 }
 
-make_fake "$TMP/main" MainSuite PassOne FailWhenRequested
+make_fake "$TMP/main" MarkStripe ConcurrentGlobalStealIsLiveAndLossless FailWhenRequested
 make_fake "$TMP/publication" PublicationSuite PassTwo PassThree
 
-GC_UNIT_JOBS=2 GC_UNIT_TEST_TIMEOUT=10 GC_UNIT_FAKE_FAIL=MainSuite.FailWhenRequested \
+GC_UNIT_JOBS=2 GC_UNIT_TEST_TIMEOUT=10 GC_UNIT_FAKE_FAIL=MarkStripe.FailWhenRequested \
   GC_UNIT_TALLY_FILE="$TMP/red.tally" \
   bash "$RUNNER" "$TMP/main" "$TMP/publication" "$TMP/red" "$TMP" >"$TMP/red.log" 2>&1 && exit 1
 /usr/bin/grep -qxF '[========] 4 tests: 3 passed, 1 failed' "$TMP/red.tally"
-/usr/bin/grep -qxF '[  FAILED  ] MainSuite.FailWhenRequested' "$TMP/red.log"
+/usr/bin/grep -qxF '[  FAILED  ] MarkStripe.FailWhenRequested' "$TMP/red.log"
+/usr/bin/grep -qxF 'GC_UNIT_SERIAL tests=1' "$TMP/red.log"
+/usr/bin/grep -qxF $'main\tMarkStripe.ConcurrentGlobalStealIsLiveAndLossless\t000000' \
+  "$TMP/red/test-manifest.serial.tsv"
 [[ $(find "$TMP/red/test-logs" -type f | wc -l) -eq 4 ]]
 [[ $(find "$TMP/red/test-rc" -type f | wc -l) -eq 4 ]]
 
@@ -47,12 +50,13 @@ GC_UNIT_JOBS=2 GC_UNIT_TEST_TIMEOUT=10 GC_UNIT_FAKE_NO_TALLY=PublicationSuite.Pa
 
 # A process terminated after its RUN token has no valid end token or tally.
 # It must be reported as exactly one incomplete item and keep the total red.
-GC_UNIT_JOBS=2 GC_UNIT_TEST_TIMEOUT=10 GC_UNIT_FAKE_KILL=MainSuite.PassOne \
+GC_UNIT_JOBS=2 GC_UNIT_TEST_TIMEOUT=10 \
+  GC_UNIT_FAKE_KILL=MarkStripe.ConcurrentGlobalStealIsLiveAndLossless \
   GC_UNIT_TALLY_FILE="$TMP/killed.tally" \
   bash "$RUNNER" "$TMP/main" "$TMP/publication" "$TMP/killed" "$TMP" \
   >"$TMP/killed.log" 2>&1 && exit 1
 /usr/bin/grep -qxF '[========] 4 tests: 3 passed, 1 failed' "$TMP/killed.tally"
-/usr/bin/grep -qxF '[  INCOMPLETE ] MainSuite.PassOne' "$TMP/killed.log"
+/usr/bin/grep -qxF '[  INCOMPLETE ] MarkStripe.ConcurrentGlobalStealIsLiveAndLossless' "$TMP/killed.log"
 /usr/bin/grep -qxF 'GC_UNIT_INCOMPLETE tests=1' "$TMP/killed.log"
 /usr/bin/grep -qE '^  isolated process incomplete rc=(137|143)$' \
   "$TMP/killed/test-logs/000000-main.log"
