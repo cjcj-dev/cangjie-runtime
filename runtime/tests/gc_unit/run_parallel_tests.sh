@@ -207,7 +207,10 @@ while IFS=$'\t' read -r kind test index; do
     if [[ "$completed_fail" -ne 1 ]]; then
       incomplete=$((incomplete + 1))
       incomplete_tests+=("$test")
-      printf '[  FAIL  ] %s\n  isolated process incomplete rc=%d\n' "$test" "$rc"
+      # Persist the synthesized end state in the per-case log as well as the
+      # aggregate stream, so every manifest row remains independently auditable.
+      printf '[  FAIL  ] %s\n  isolated process incomplete rc=%d\n' "$test" "$rc" |
+        tee -a "$log"
     fi
     if [[ "$kind" == main ]]; then
       main_rc=1
