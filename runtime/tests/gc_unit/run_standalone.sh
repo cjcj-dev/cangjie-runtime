@@ -536,10 +536,10 @@ for index in "${!PUBLICATION_SOURCES[@]}"; do
   printf 'publication\0%s\0%s\0' "$object" "${PUBLICATION_SOURCES[$index]}" >>"$COMPILE_MANIFEST"
 done
 
-printf -v MAIN_COMPILE_FLAGS_SERIALIZED '%s\034' "${MAIN_COMPILE_FLAGS[@]}"
-MAIN_COMPILE_FLAGS_SERIALIZED=${MAIN_COMPILE_FLAGS_SERIALIZED%$'\034'}
-printf -v PUBLICATION_COMPILE_FLAGS_SERIALIZED '%s\034' "${PUBLICATION_COMPILE_FLAGS[@]}"
-PUBLICATION_COMPILE_FLAGS_SERIALIZED=${PUBLICATION_COMPILE_FLAGS_SERIALIZED%$'\034'}
+printf -v MAIN_COMPILE_FLAGS_SERIALIZED '%s\n' "${MAIN_COMPILE_FLAGS[@]}"
+MAIN_COMPILE_FLAGS_SERIALIZED=${MAIN_COMPILE_FLAGS_SERIALIZED%$'\n'}
+printf -v PUBLICATION_COMPILE_FLAGS_SERIALIZED '%s\n' "${PUBLICATION_COMPILE_FLAGS[@]}"
+PUBLICATION_COMPILE_FLAGS_SERIALIZED=${PUBLICATION_COMPILE_FLAGS_SERIALIZED%$'\n'}
 export CXX MAIN_COMPILE_FLAGS_SERIALIZED PUBLICATION_COMPILE_FLAGS_SERIALIZED
 compile_one() {
   local target=$1 object=$2 source=$3 serialized
@@ -549,7 +549,7 @@ compile_one() {
     publication) serialized=$PUBLICATION_COMPILE_FLAGS_SERIALIZED ;;
     *) return 2 ;;
   esac
-  IFS=$'\034' read -r -a flags <<<"$serialized"
+  mapfile -t flags <<<"$serialized"
   read -r -a compiler <<<"$CXX"
   "${compiler[@]}" "${flags[@]}" -c "$source" -o "$object"
 }
