@@ -6,6 +6,25 @@
 #include <cstdint>
 
 namespace MapleRuntime {
+
+#if defined(MRT_TESTABLE_INTERNALS)
+// One-shot receipt for the actual DoGarbageCollection -> Preforward path. The
+// target slot is armed by a test, but the observed word is produced and sampled
+// inside the product remap loop before relocate-start changes the good masks.
+struct RemapYoungRootsTestReceipt {
+    uintptr_t targetSlot = 0;
+    uintptr_t before = 0;
+    uintptr_t after = 0;
+    uintptr_t resolvedAddress = 0;
+    uint64_t visits = 0;
+    uint64_t heals = 0;
+    bool storeGoodAfter = false;
+};
+
+void ResetRemapYoungRootsTestReceipt(uintptr_t targetSlot);
+RemapYoungRootsTestReceipt ReadRemapYoungRootsTestReceipt();
+#endif
+
 namespace RemapYoungRootsLogic {
 
 // OpenJDK ZGenerationOld::remap_young_roots (zGeneration.cpp:1503-1523).
@@ -57,11 +76,6 @@ constexpr bool NeedsForwardingLookup(Kind kind)
 {
     return kind == Kind::YoungOnlyGood || kind == Kind::OldOnlyGood || kind == Kind::DoubleBad;
 }
-
-// ZRemapYoungRootsTask reaches remembered fields by iterating live old pages;
-// a bitmap record whose holder is not live is not a root and must not invoke a
-// load barrier on the dead holder payload (zGeneration.cpp:1483-1523).
-constexpr bool ShouldRemapRememberedSlot(bool holderIsLive) { return holderIsLive; }
 
 constexpr uintptr_t CurrentRemapBit(uintptr_t youngMask, uintptr_t oldMask)
 {

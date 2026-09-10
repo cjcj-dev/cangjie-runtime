@@ -74,6 +74,57 @@ namespace MapleRuntime {
 struct CopierRouteMint {
     static CopierRouteToken Make() { return CopierRouteToken(); }
 };
+#if defined(MRT_TESTABLE_INTERNALS)
+namespace {
+std::atomic<uintptr_t> g_remapYoungRootsTargetSlot{ 0 };
+std::atomic<uintptr_t> g_remapYoungRootsBefore{ 0 };
+std::atomic<uintptr_t> g_remapYoungRootsAfter{ 0 };
+std::atomic<uintptr_t> g_remapYoungRootsResolvedAddress{ 0 };
+std::atomic<uint64_t> g_remapYoungRootsVisits{ 0 };
+std::atomic<uint64_t> g_remapYoungRootsHeals{ 0 };
+std::atomic<bool> g_remapYoungRootsStoreGoodAfter{ false };
+} // namespace
+
+void ResetRemapYoungRootsTestReceipt(uintptr_t targetSlot)
+{
+    g_remapYoungRootsTargetSlot.store(targetSlot, std::memory_order_relaxed);
+    g_remapYoungRootsBefore.store(0, std::memory_order_relaxed);
+    g_remapYoungRootsAfter.store(0, std::memory_order_relaxed);
+    g_remapYoungRootsResolvedAddress.store(0, std::memory_order_relaxed);
+    g_remapYoungRootsVisits.store(0, std::memory_order_relaxed);
+    g_remapYoungRootsHeals.store(0, std::memory_order_relaxed);
+    g_remapYoungRootsStoreGoodAfter.store(false, std::memory_order_relaxed);
+}
+
+RemapYoungRootsTestReceipt ReadRemapYoungRootsTestReceipt()
+{
+    return { g_remapYoungRootsTargetSlot.load(std::memory_order_relaxed),
+             g_remapYoungRootsBefore.load(std::memory_order_relaxed),
+             g_remapYoungRootsAfter.load(std::memory_order_relaxed),
+             g_remapYoungRootsResolvedAddress.load(std::memory_order_relaxed),
+             g_remapYoungRootsVisits.load(std::memory_order_relaxed),
+             g_remapYoungRootsHeals.load(std::memory_order_relaxed),
+             g_remapYoungRootsStoreGoodAfter.load(std::memory_order_relaxed) };
+}
+
+static void NoteRemapYoungRootsTestReceipt(RefField<>& field, uintptr_t before, bool healed,
+                                           bool storeGoodAfter)
+{
+    const uintptr_t slot = reinterpret_cast<uintptr_t>(&field);
+    if (slot != g_remapYoungRootsTargetSlot.load(std::memory_order_relaxed)) {
+        return;
+    }
+    g_remapYoungRootsBefore.store(before, std::memory_order_relaxed);
+    g_remapYoungRootsAfter.store(raw(field.GetFieldValue()), std::memory_order_relaxed);
+    g_remapYoungRootsResolvedAddress.store(
+        reinterpret_cast<uintptr_t>(to_object(field.GetTargetObject())), std::memory_order_relaxed);
+    g_remapYoungRootsVisits.fetch_add(1, std::memory_order_relaxed);
+    if (healed) {
+        g_remapYoungRootsHeals.fetch_add(1, std::memory_order_relaxed);
+    }
+    g_remapYoungRootsStoreGoodAfter.store(storeGoodAfter, std::memory_order_relaxed);
+}
+#endif
 #if defined(MRT_GC_UNIT_TESTS)
 static thread_local WCollector::RouteLookupTestResult* g_routeLookupTestContext = nullptr;
 #endif
@@ -499,12 +550,17 @@ void WCollector::RemapYoungRoots()
         // colour it -- ColourResolvedRefField keeps all three checks and drops only the repeat
         // lookup, the same shape already used by the mark closure (Mark.cpp:361).
         RefField<> newField = ColourResolvedRefField(latest, provenance);
+        bool healed = false;
         if (oldField.GetFieldValue() != newField.GetFieldValue()) {
-            if (HealSlot(field, oldField.GetFieldValue(), newField.GetFieldValue(),
-                         HealSite::WCollectorRemapYoungRoots)) {
+            healed = HealSlot(field, oldField.GetFieldValue(), newField.GetFieldValue(),
+                              HealSite::WCollectorRemapYoungRoots);
+            if (healed) {
                 ++remapped;
             }
         }
+#if defined(MRT_TESTABLE_INTERNALS)
+        NoteRemapYoungRootsTestReceipt(field, rawVal, healed, is_store_good(field));
+#endif
     };
 
     std::unordered_set<MAddress> remset = Heap::GetHeap().GetRememberedSet().Snapshot();
@@ -512,8 +568,15 @@ void WCollector::RemapYoungRoots()
         if (slot == 0) {
             continue;
         }
-        if (!RemapYoungRootsLogic::ShouldRemapRememberedSlot(
-                WCollectorInternal::SlotHeldByLiveObject(reinterpret_cast<void*>(slot)))) {
+        // ZRemsetTableIterator admits the current old page, then remap_current applies the
+        // load barrier to every bit in that page's current remembered face; it does not ask
+        // whether the containing object is live (zRemembered.cpp:395-458). Our remembered
+        // bitmap is heap-wide instead of page-local, so reproduce only that page admission.
+        // ClearRegion removes both faces before reuse; reject slots whose old carrier has
+        // already left the page table before dereferencing the recorded address.
+        RegionInfo* holderPage = RegionInfo::TryGetRegionInfoAt(slot);
+        if (holderPage == nullptr || !holderPage->IsValidRegion() || holderPage->IsFreeRegion() ||
+            holderPage->IsGarbageRegion() || holderPage->IsYoungRegion()) {
             continue;
         }
         // slotwitness: the fail-closed records reached from here print tag/edge/host/slot and the
