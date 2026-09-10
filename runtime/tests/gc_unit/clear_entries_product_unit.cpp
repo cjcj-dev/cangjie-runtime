@@ -3437,14 +3437,24 @@ GC_TEST(NormalRouteGeneration, OldRouteRejectsYoungRelocationTarget)
     const size_t unitCount = RegionInfo::UnitInfo::totalUnitCount;
     manager.freeRegionManager.Initialize(unitCount);
     RelocationReceiptTestAccess::DisableInactiveUnits(manager, unitCount);
+    WCollector collector(Heap::GetHeap().GetAllocator(), Heap::GetHeap().GetCollectorResources());
+    collector.SetGCPhase(GCPhase::GC_PHASE_FORWARD);
+    RelocationReceiptTestAccess::BindCollector(Heap::GetHeap().GetCollectorResources(), &collector);
     RelocationReceiptTestAccess::ParkFrom(manager, source);
     RelocationReceiptTestAccess::ParkThreadLocal(manager, incompatible);
     RelocationReceiptTestAccess::SeedDirtyUnits(manager, freeTarget->GetUnitIdx(), 1);
     AllocBuffer* buffer = AllocBuffer::GetOrCreateAllocBuffer();
     buffer->SetRegion(nullptr);
     buffer->SetRelocationRegion(incompatible);
+    std::fprintf(stderr, "I06_REJECT_ENTER source=%p inc=%p free=%p young=%u tl=%u\n",
+        source, incompatible, freeTarget,
+        static_cast<unsigned>(incompatible->IsYoungRegion()),
+        static_cast<unsigned>(incompatible->IsThreadLocalRegion()));
+    std::fflush(stderr);
 
     (void)manager.RouteRegion(source);
+    std::fprintf(stderr, "I06_REJECT_ROUTED\n");
+    std::fflush(stderr);
     const RouteInfo plan = source->GetRouteInfoForProbe();
     RegionInfo* plannedTarget = plan.toRegion1StartAddress == 0 ? nullptr :
         RegionInfo::TryGetRegionInfoAt(plan.toRegion1StartAddress);
@@ -3461,6 +3471,7 @@ GC_TEST(NormalRouteGeneration, OldRouteRejectsYoungRelocationTarget)
     RelocationReceiptTestAccess::ReleaseListOwnership(incompatible);
     RelocationReceiptTestAccess::ReleaseListOwnership(plannedTarget);
     DestroyAfterGhostCleared(source, "normal-route-generation-selection");
+    RelocationReceiptTestAccess::BindCollector(Heap::GetHeap().GetCollectorResources(), nullptr);
     source->metadata.liveInfo = nullptr;
     fx.FreePlanted(live);
 
