@@ -17,13 +17,16 @@ function(cj_runtime_configure_output_layout)
     get_property(_is_multi_config GLOBAL PROPERTY GENERATOR_IS_MULTI_CONFIG)
     cj_runtime_require_single_config_generator("${_is_multi_config}")
 
-    # Every user-provided CMake cache input is part of the build identity.  A
-    # hand-maintained option list is unsafe here: a newly introduced -D axis
-    # can change the produced libraries while silently retaining an old output
-    # directory.  INTERNAL and STATIC are legal -D types too; retain those
-    # command-line inputs while excluding CMake's generated bookkeeping, whose
-    # presence and binary-directory values change across equivalent configures.
-    set(_signature "SCHEMA_VERSION=2\n")
+    # Cache type and HELPSTRING do not identify origin: -C files, presets and
+    # toolchains can supply INTERNAL/STATIC product options with arbitrary help.
+    # Include every cache value except named outputs of CMake/runtime itself.
+    # Do not exclude CMAKE_* as a namespace: compiler flags are product inputs.
+    set(_generated_cache_variables
+        CMAKE_CACHEFILE_DIR CMAKE_CACHE_MAJOR_VERSION CMAKE_CACHE_MINOR_VERSION
+        CMAKE_CACHE_PATCH_VERSION CMAKE_NUMBER_OF_MAKEFILES
+        SLOT_PROBE_CONTROL_OK SLOT_PROBE_WITNESS_OK MARK_GENERATION_CONTROL_OK
+        C4_TABLE_CONTROL_OK one_ok)
+    set(_signature "SCHEMA_VERSION=3\n")
     get_cmake_property(_cache_variables CACHE_VARIABLES)
     list(SORT _cache_variables)
     foreach(_variable IN LISTS _cache_variables)
@@ -32,12 +35,10 @@ function(cj_runtime_configure_output_layout)
             continue()
         endif()
         get_property(_cache_type CACHE "${_variable}" PROPERTY TYPE)
-        if(_cache_type STREQUAL "INTERNAL" OR _cache_type STREQUAL "STATIC")
-            get_property(_cache_help CACHE "${_variable}" PROPERTY HELPSTRING)
-            if(NOT _cache_help STREQUAL
-                    "No help, variable specified on the command line.")
-                continue()
-            endif()
+        if((_cache_type STREQUAL "INTERNAL" OR _cache_type STREQUAL "STATIC") AND
+                (_variable IN_LIST _generated_cache_variables OR
+                 _variable MATCHES "-(ADVANCED|STRINGS)$"))
+            continue()
         endif()
         get_property(_cache_value CACHE "${_variable}" PROPERTY VALUE)
         string(APPEND _signature
@@ -116,7 +117,7 @@ function(cj_runtime_configure_output_layout)
 
     file(MAKE_DIRECTORY "${_output_root}")
     file(WRITE "${_output_root}/runtime-build-config.txt"
-        "SCHEMA_VERSION=2\n"
+        "SCHEMA_VERSION=3\n"
         "CONFIG_ID=${_config_id}\n"
         "CONFIG_SIGNATURE_SHA256=${_signature_sha256}\n"
         "LIB_DIR=${_library_dir}\n"

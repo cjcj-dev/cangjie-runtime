@@ -21,10 +21,7 @@ if(TEST_RUNTIME_OUTPUT_LAYOUT_MULTI_CONFIG_CHILD)
     message(FATAL_ERROR "multi-config output layout was accepted")
 endif()
 
-# Run the typed cache-axis arms in child processes so INTERNAL is supplied by
-# an actual -D command-line input.  Setting it here with CACHE INTERNAL would
-# instead model project-generated CMake bookkeeping, which is intentionally
-# excluded from product identity.
+# Child processes exercise actual command-line and initial-cache inputs.
 if(TEST_RUNTIME_OUTPUT_LAYOUT_CHILD)
     cj_runtime_configure_output_layout()
     message(STATUS
@@ -127,6 +124,38 @@ foreach(_cache_type INTERNAL STATIC)
             message(FATAL_ERROR
                 "${_cache_type} DISABLE_VERSION_CHECK ${expected_value} output has the wrong manifest")
         endif()
+    endforeach()
+endforeach()
+
+# -C uses arbitrary documentation, including empty text. The product axis must
+# remain part of identity regardless of its declared type or help string.
+foreach(_cache_type INTERNAL STATIC BOOL STRING)
+    foreach(_help "Product version policy" "")
+        string(RANDOM LENGTH 16 ALPHABET 0123456789abcdef _nonce)
+        set(_initial "${TEST_RUNTIME_SOURCE_DIR}/output/initial-layout-test-${_nonce}.cmake")
+        set(_ids "")
+        foreach(_value OFF ON OFF)
+            file(WRITE "${_initial}"
+                "set(DISABLE_VERSION_CHECK ${_value} CACHE ${_cache_type} \"${_help}\" FORCE)\n")
+            execute_process(COMMAND ${CMAKE_COMMAND}
+                "-DTEST_RUNTIME_SOURCE_DIR=${TEST_RUNTIME_SOURCE_DIR}"
+                -DTEST_RUNTIME_OUTPUT_LAYOUT_CHILD:INTERNAL=ON
+                -C "${_initial}" -P "${CMAKE_CURRENT_LIST_FILE}"
+                RESULT_VARIABLE _rc OUTPUT_VARIABLE _out ERROR_VARIABLE _err)
+            if(NOT _rc EQUAL 0 OR NOT _out MATCHES
+                    "RUNTIME_OUTPUT_LAYOUT_CHILD id=([^ ]+) root=([^ \n]+)")
+                message(FATAL_ERROR "initial cache child did not produce identity: ${_rc} ${_out} ${_err}")
+            endif()
+            list(APPEND _ids "${CMAKE_MATCH_1}")
+        endforeach()
+        list(GET _ids 0 _off)
+        list(GET _ids 1 _on)
+        list(GET _ids 2 _restored)
+        message(STATUS "INITIAL_CACHE_ASSERT type=${_cache_type} ids=${_ids}")
+        if(_off STREQUAL _on OR NOT _off STREQUAL _restored)
+            message(FATAL_ERROR "initial cache ${_cache_type} output isolation/restoration failed")
+        endif()
+        file(REMOVE "${_initial}")
     endforeach()
 endforeach()
 
