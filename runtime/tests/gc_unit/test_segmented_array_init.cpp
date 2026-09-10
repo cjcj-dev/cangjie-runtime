@@ -23,6 +23,8 @@
 #include "Heap/Collector/GcRequest.h"
 #include "Heap/Heap.h"
 #include "Heap/Allocator/RegionSpace.h"
+#include "Heap/Allocator/AllocBuffer.h"
+#include "Heap/Verify/VerifyRememberedSet.h"
 #include "Mutator/Mutator.h"
 #include "ObjectModel/MArray.inline.h"
 #include "TypeInfoManager.h"
@@ -542,6 +544,48 @@ void* RunLargePrimitiveCase(void* rawNative)
     return reinterpret_cast<void*>(status);
 }
 
+// Real entry arm for the remembered network.  It plants one pending entry in
+// the calling mutator's registered product AllocBuffer, then enters RequestGC
+// and WCollector::DoGarbageCollection.  Generation owns the FlushAll, flip,
+// destructive scan and delayed completion; the test only reads their product
+// receipt after the request returns.
+void* RunRememberedNetworkEntryCase(void*)
+{
+    ResetRememberedNetworkTestReceipt();
+    Mutator* mutator = Mutator::GetMutator();
+    AllocBuffer* alloc = AllocBuffer::GetAllocBuffer();
+    if (mutator == nullptr || alloc == nullptr) {
+        return reinterpret_cast<void*>(1);
+    }
+    ScopedObjectAccess access;
+    MArray* holder = MCC_NewObjArray(GetReferenceArrayTypeInfos().array, 16);
+    if (holder == nullptr) {
+        return reinterpret_cast<void*>(2);
+    }
+    const MAddress slot = reinterpret_cast<MAddress>(holder->ConvertToCArray());
+    alloc->GetStoreBarrierBuffer().Add(slot, holder, zpointer::null,
+                                       Heap::GetHeap().GetRememberedSet());
+    const size_t pendingBefore = alloc->GetStoreBarrierBuffer().Pending();
+    const U64 root = Heap::GetHeap().RegisterExportRoot(holder);
+    mutator->SetManagedContext(false);
+    Heap::GetHeap().GetCollector().RequestGC(GC_REASON_YOUNG, false);
+    mutator->SetManagedContext(true);
+    Heap::GetHeap().RemoveExportObject(root);
+    const size_t pendingAfter = alloc->GetStoreBarrierBuffer().Pending();
+    const RememberedNetworkTestReceipt receipt = ReadRememberedNetworkTestReceipt();
+    std::fprintf(stderr,
+                 "DETAIL remset_network arm=runtime-entry pending_before=%zu pending_after=%zu "
+                 "before_flip=%zu after_scan=%zu\n",
+                 pendingBefore, pendingAfter, receipt.beforeColorFlip, receipt.afterScanComplete);
+    std::fflush(stderr);
+    size_t status = 0;
+    status += pendingBefore == 1 ? 0 : 1;
+    status += pendingAfter == 0 ? 0 : 1;
+    status += receipt.beforeColorFlip == 1 ? 0 : 1;
+    status += receipt.afterScanComplete == 1 ? 0 : 1;
+    return reinterpret_cast<void*>(status);
+}
+
 int RunRuntimeCase(CJTaskFunc task, uintptr_t argument, U32 processorCount = 1)
 {
 #if defined(__linux__)
@@ -649,6 +693,12 @@ GC_OTHER_VM_TEST(SegmentedArrayInit, EpochFlipRestartsAndRewritesPublishedBlockP
 GC_OTHER_VM_TEST(SegmentedArrayInit, YoungGcRepairsIncompleteArrayRoot)
 {
     GC_EXPECT_EQ(RunRuntimeCase(RunSegmentedCase, static_cast<uintptr_t>(YieldGc::YOUNG)), 0);
+}
+
+GC_OTHER_VM_TEST(RemsetNetwork, RuntimeRequestTraversesFlushFlipScanAndComplete)
+{
+    (void)setenv("MRT_GCV2_VERIFY_REMEMBERED", "1", 1);
+    GC_EXPECT_EQ(RunRuntimeCase(RunRememberedNetworkEntryCase, 0), 0);
 }
 
 GC_OTHER_VM_TEST(SegmentedArrayInit, YoungGcRepairsIncompleteArrayRootParallel)

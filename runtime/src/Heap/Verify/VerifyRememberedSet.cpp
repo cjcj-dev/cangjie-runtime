@@ -13,6 +13,7 @@
 #include "Base/Log.h"
 #include "Base/LogFile.h"
 #include "Base/TimeUtils.h"
+#include "Heap/Barrier/StoreBarrierBuffer.h"
 #include "Common/BaseObject.h"
 #include "Heap/Allocator/RegionInfo.h"
 #include "Heap/Allocator/RegionSpace.h"
@@ -22,6 +23,118 @@
 #include "Heap/Verify/VerifyPhase.h"
 
 namespace MapleRuntime {
+#if defined(MRT_GC_UNIT_TESTS)
+namespace {
+std::atomic<size_t> g_beforeColorFlipForTest{ 0 };
+std::atomic<size_t> g_afterScanCompleteForTest{ 0 };
+std::atomic<size_t> g_beforeForwardingSlotsForTest{ 0 };
+std::atomic<size_t> g_afterForwardingSlotsForTest{ 0 };
+std::atomic<RememberedOldForwardHook> g_oldForwardHookForTest{ nullptr };
+std::atomic<void*> g_oldForwardHookContextForTest{ nullptr };
+} // namespace
+
+void ResetRememberedNetworkTestReceipt()
+{
+    g_beforeColorFlipForTest.store(0, std::memory_order_relaxed);
+    g_afterScanCompleteForTest.store(0, std::memory_order_relaxed);
+    g_beforeForwardingSlotsForTest.store(0, std::memory_order_relaxed);
+    g_afterForwardingSlotsForTest.store(0, std::memory_order_relaxed);
+}
+
+RememberedNetworkTestReceipt ReadRememberedNetworkTestReceipt()
+{
+    return RememberedNetworkTestReceipt {
+        g_beforeColorFlipForTest.load(std::memory_order_relaxed),
+        g_afterScanCompleteForTest.load(std::memory_order_relaxed),
+        g_beforeForwardingSlotsForTest.load(std::memory_order_relaxed),
+        g_afterForwardingSlotsForTest.load(std::memory_order_relaxed),
+    };
+}
+
+void NoteRememberedAfterScanCompleteForTest()
+{
+    g_afterScanCompleteForTest.fetch_add(1, std::memory_order_relaxed);
+}
+
+void ArmRememberedOldForwardHookForTest(RememberedOldForwardHook hook, void* context)
+{
+    g_oldForwardHookContextForTest.store(context, std::memory_order_release);
+    g_oldForwardHookForTest.store(hook, std::memory_order_release);
+}
+
+void RunRememberedOldForwardHookForTest(void* manager)
+{
+    RememberedOldForwardHook hook = g_oldForwardHookForTest.exchange(nullptr, std::memory_order_acq_rel);
+    void* context = g_oldForwardHookContextForTest.exchange(nullptr, std::memory_order_acq_rel);
+    if (hook != nullptr) {
+        hook(manager, context);
+    }
+}
+#endif
+
+void VerifyRememberedBeforeColorFlip()
+{
+    if (!VerifyPhaseEnter(VerifyFace::Remembered, "before-color-flip")) {
+        return;
+    }
+    const size_t pending = StoreBarrierBuffer::PendingAll();
+    VLOG(REPORT, "[GCV2][verify][remembered-network] point=before-color-flip pending=%zu", pending);
+    CHECK_DETAIL(pending == 0, "before-color-flip pending>0 pending=%zu", pending);
+#if defined(MRT_GC_UNIT_TESTS)
+    g_beforeColorFlipForTest.fetch_add(1, std::memory_order_relaxed);
+#endif
+}
+
+void VerifyRememberedBeforeForwarding(const std::vector<RememberedSet::InPlaceSlot>& slots,
+                                      MAddress fromBase, size_t size,
+                                      const RememberedSet& rememberedSet)
+{
+    if (!VerifyPhaseEnter(VerifyFace::Remembered, "before-forwarding")) {
+        return;
+    }
+    for (const RememberedSet::InPlaceSlot& slot : slots) {
+        const size_t offset = static_cast<size_t>(slot.field - fromBase);
+        CHECK_DETAIL(slot.field >= fromBase && offset < size &&
+                         rememberedSet.ContainsOnFaceForVerify(slot.field, slot.face),
+                     "before-forwarding missing-from-slot from=%#zx slot=%#zx offset=%zu face=%u young-seq=%llu",
+                     static_cast<size_t>(fromBase), static_cast<size_t>(slot.field), offset,
+                     static_cast<unsigned>(slot.face), static_cast<unsigned long long>(slot.youngSeq));
+        VLOG(REPORT,
+             "[GCV2][verify][remembered-network] point=before-forwarding from=%#zx slot=%#zx "
+             "offset=%zu face=%u young-seq=%llu",
+             static_cast<size_t>(fromBase), static_cast<size_t>(slot.field), offset,
+             static_cast<unsigned>(slot.face), static_cast<unsigned long long>(slot.youngSeq));
+#if defined(MRT_GC_UNIT_TESTS)
+        g_beforeForwardingSlotsForTest.fetch_add(1, std::memory_order_relaxed);
+#endif
+    }
+}
+
+void VerifyRememberedAfterForwarding(const std::vector<RememberedSet::InPlaceSlot>& slots,
+                                     MAddress fromBase, MAddress toBase, size_t size,
+                                     const ForwardingTable::Publication& publication)
+{
+    if (!VerifyPhaseEnter(VerifyFace::Remembered, "after-forwarding")) {
+        return;
+    }
+    for (const RememberedSet::InPlaceSlot& slot : slots) {
+        const size_t offset = static_cast<size_t>(slot.field - fromBase);
+        const MAddress toSlot = toBase + offset;
+        CHECK_DETAIL(slot.field >= fromBase && offset < size &&
+                         ForwardingTable::HasRemsetReceipt(publication, slot.field, toSlot, slot.face),
+                     "after-forwarding missing-to-slot from=%#zx to=%#zx offset=%zu face=%u young-seq=%llu",
+                     static_cast<size_t>(fromBase), static_cast<size_t>(toBase), offset,
+                     static_cast<unsigned>(slot.face), static_cast<unsigned long long>(slot.youngSeq));
+        VLOG(REPORT,
+             "[GCV2][verify][remembered-network] point=after-forwarding from=%#zx to=%#zx "
+             "offset=%zu face=%u young-seq=%llu",
+             static_cast<size_t>(fromBase), static_cast<size_t>(toBase), offset,
+             static_cast<unsigned>(slot.face), static_cast<unsigned long long>(slot.youngSeq));
+#if defined(MRT_GC_UNIT_TESTS)
+        g_afterForwardingSlotsForTest.fetch_add(1, std::memory_order_relaxed);
+#endif
+    }
+}
 namespace {
 constexpr size_t kSampleLimit = 8;
 

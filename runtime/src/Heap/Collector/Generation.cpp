@@ -859,6 +859,7 @@ void WCollector::DoYoungGarbageCollection()
         // walk put back — the residual is what FYS=0 really loses. Observe only, default off.
 
         StoreBarrierBuffer::FlushAll(rememberedSet);
+        VerifyRememberedBeforeColorFlip();
         // S5 flip only (YOUNG_CONCURRENT.md). ScanPreviousForMinor runs after
         // world-release with mark_follow (zRemembered.cpp:561-576).
         rememberedSet.FlipForMinor();
@@ -1076,8 +1077,10 @@ void WCollector::DoYoungGarbageCollection()
     remsetStats.recorded = rememberedSlots.size();
     remsetStats.live = liveRememberedCount;
     MinorSlotSet consumedSlots;
+    MinorSlotSet processedRemsetSlots;
     if (remsetHashOptRequested && !remsetConsumedLedgerElideActive) {
         consumedSlots.reserve(rememberedSlots.size());
+        processedRemsetSlots.reserve(rememberedSlots.size());
     }
     MinorInteriorBaseMap remsetInteriorBases;
     {
@@ -1086,7 +1089,7 @@ void WCollector::DoYoungGarbageCollection()
         RescanRememberedSet(workStack, rememberedSlots, reachableSlots, weakSlots, currentMinorRoots,
                             fullYoungScan,
                             remsetConsumedLedgerElideActive ? nullptr : &consumedSlots, &remsetStats,
-                            &remsetInteriorBases, stw.get());
+                            &remsetInteriorBases, stw.get(), &processedRemsetSlots);
     }
     if (remsetHashOptRequested) {
         VLOG(REPORT,
@@ -1213,6 +1216,15 @@ void WCollector::DoYoungGarbageCollection()
     VLOG(REPORT, "[GCV2][setbitmap] use=%d reachable_n=%zu set_n=%zu fullYoung=%d youngConc=%d",
          static_cast<int>(useBitmapLedger), reachableVec.size(), reachableObjects.size(),
          static_cast<int>(fullYoungScan), 1);
+    // Delayed after-scan edge: only slots admitted by the real rescan consumer
+    // may close a forwarding receipt. The destructive-drain input proves only
+    // that a slot was offered; it must not stand in for consumer completion.
+    // Publications that lost the scan race must additionally remain on the
+    // new current face before their forwarding generation can retire.
+    Heap::GetHeap().GetRememberedSet().CompleteScanForMinor(processedRemsetSlots, consumedSlots);
+#if defined(MRT_GC_UNIT_TESTS)
+    NoteRememberedAfterScanCompleteForTest();
+#endif
     // No independent full-root closure is available after deleting the empty
     // explainer. nullptr means "not measured"; an empty set must mean a closure
     // actually ran and found no holders.

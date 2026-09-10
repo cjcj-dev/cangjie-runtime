@@ -23,7 +23,9 @@
 #include "Heap.h"
 #include "Heap/Allocator/RegionInfo.h"
 #include "Heap/Allocator/ZGranuleMap.h"
+#include "Heap/Barrier/RememberedSet.h"
 #include "Heap/Verify/M0Correlation.h"
+#include "Heap/Verify/VerifyPhase.h"
 #include "Heap/WCollector/WCollector.h"
 
 namespace MapleRuntime {
@@ -118,6 +120,49 @@ std::atomic<uint64_t> g_armedMiss{ 0 };
 std::atomic<uint64_t> g_unavailable{ 0 };
 std::atomic<uint64_t> g_unarmed{ 0 };
 std::atomic<uint64_t> g_markCoverageEpoch[2] = { { 0 }, { 0 } };
+// Lifecycle registry, not an address lookup: each entry is owned by the same
+// forwarding object and removed immediately before that object is destroyed.
+// It lets the young consumer close publications from every old forwarding
+// generation without introducing a second from-address map.
+std::mutex g_remsetTablesLock;
+std::unordered_set<ZForwarding*> g_remsetTables;
+
+#if defined(MRT_TESTABLE_INTERNALS)
+std::atomic<MAddress> g_observedRemsetFromSlot{ 0 };
+std::mutex g_observedRemsetReceiptLock;
+ForwardingTable::RemsetReceiptTestView g_observedRemsetReceipt;
+
+void NoteRemsetReceiptForTest(ZForwarding* table,
+                              const ZForwarding::RemsetPublicationReceipt& receipt)
+{
+    if (receipt.fromSlot == 0 ||
+        receipt.fromSlot != g_observedRemsetFromSlot.load(std::memory_order_acquire)) {
+        return;
+    }
+    std::lock_guard<std::mutex> lock(g_observedRemsetReceiptLock);
+    g_observedRemsetReceipt.tableId = reinterpret_cast<uintptr_t>(table);
+    g_observedRemsetReceipt.tableGeneration =
+        table == nullptr ? 0 : table->publication_generation();
+    g_observedRemsetReceipt.fromSlot = receipt.fromSlot;
+    g_observedRemsetReceipt.toSlot = receipt.toSlot;
+    g_observedRemsetReceipt.sourceFace = receipt.sourceFace;
+    g_observedRemsetReceipt.destinationFace = receipt.destinationFace;
+    g_observedRemsetReceipt.youngSeq = receipt.youngSeq;
+    g_observedRemsetReceipt.status = receipt.status;
+}
+#endif
+
+void RegisterRemsetTable(ZForwarding* table)
+{
+    std::lock_guard<std::mutex> lock(g_remsetTablesLock);
+    g_remsetTables.insert(table);
+}
+
+void UnregisterRemsetTable(ZForwarding* table)
+{
+    std::lock_guard<std::mutex> lock(g_remsetTablesLock);
+    g_remsetTables.erase(table);
+}
 
 void StampTableCoverage(ZForwarding* tab, RegionInfo* region)
 {
@@ -338,6 +383,7 @@ bool ForwardingTable::InsertProvisional(MAddress regionStart, size_t regionSize,
             return false;
         }
         created->set_publication_generation(generation);
+        RegisterRemsetTable(created);
         StampTableCoverage(created, region);
         RegionLifeClock::Publish(RegionLifeClock::Carrier::ARMED_ENTRY, created->page_life_id());
         MapPut(g_entries, regionStart, regionSize, created);
@@ -403,6 +449,9 @@ void DrainPublicationOwners(ZForwarding* forwarding)
     if (forwarding == nullptr) {
         return;
     }
+    if (VerifyFaceEnabled(VerifyFace::Remembered)) {
+        forwarding->verify_remset_receipts_retirable("forwarding-retire");
+    }
     if (!forwarding->claim()) {
         forwarding->detach_page();
         return;
@@ -462,6 +511,7 @@ ZForwarding* ForwardingTable::EnsureEntriesLocked(RegionInfo* region)
         return nullptr;
     }
     created->set_publication_generation(generation);
+    RegisterRemsetTable(created);
     StampTableCoverage(created, region);
     RegionLifeClock::Publish(RegionLifeClock::Carrier::ARMED_ENTRY, created->page_life_id());
     // Keep the previous table mapped until every copier carrying it has
@@ -517,6 +567,7 @@ static void UnlinkThenDestroy(ZForwarding* tab)
     if (MapGet(g_entries, tab->start()) == tab) {
         MapPut(g_entries, tab->start(), tab->size(), nullptr);
     }
+    UnregisterRemsetTable(tab);
     tab->Destroy();
 }
 
@@ -563,6 +614,9 @@ bool ForwardingTable::RetiredDestroyEligible(ZForwarding* tab)
         return false;
     }
     if (!CoverageEpochSatisfied(tab)) {
+        return false;
+    }
+    if (VerifyFaceEnabled(VerifyFace::Remembered) && !tab->remset_receipts_closed()) {
         return false;
     }
     const int32_t refs = tab->ref_count().load(std::memory_order_acquire);
@@ -614,7 +668,9 @@ void ForwardingTable::ReclaimRetired(const char* why)
                 deferred.push_back(tab);
                 continue;
             }
-            if (forceCoverageComplete || RetiredDestroyEligible(tab)) {
+            const bool receiptsClosed = !VerifyFaceEnabled(VerifyFace::Remembered) ||
+                tab->remset_receipts_closed();
+            if ((forceCoverageComplete && receiptsClosed) || RetiredDestroyEligible(tab)) {
                 victims.push_back(tab);
             } else {
                 deferred.push_back(tab);
@@ -783,6 +839,180 @@ bool ZForwarding::page_life_current(RegionLifeClock::Carrier carrier) const
     return RegionLifeClock::Validate(carrier, _page_life_id, _page->GetRegionLifeId());
 }
 
+void ZForwarding::publish_remset_receipt(MAddress fromSlot, MAddress toSlot,
+                                         uint8_t sourceFace, uint8_t destinationFace,
+                                         uint64_t youngSeq, bool rejectedByYoung,
+                                         bool consumerAlreadyComplete)
+{
+    std::lock_guard<std::mutex> lock(_remsetReceiptLock);
+    for (const RemsetPublicationReceipt& receipt : _remsetReceipts) {
+        if (receipt.fromSlot == fromSlot && receipt.toSlot == toSlot &&
+            receipt.sourceFace == sourceFace) {
+            return;
+        }
+    }
+    RemsetPublicationReceipt receipt;
+    receipt.fromSlot = fromSlot;
+    receipt.toSlot = toSlot;
+    receipt.sourceFace = sourceFace;
+    receipt.destinationFace = destinationFace;
+    receipt.youngSeq = youngSeq;
+    receipt.status = RemsetReceiptStatus::PUBLISHED;
+    if (rejectedByYoung) {
+        receipt.status = RemsetReceiptStatus::REJECTED_BY_YOUNG;
+    } else if (consumerAlreadyComplete) {
+        receipt.status = RemsetReceiptStatus::ACCEPTED;
+    }
+    if (consumerAlreadyComplete) {
+        receipt.status = RemsetReceiptStatus::CONSUMED;
+    }
+    _remsetReceipts.push_back(receipt);
+#if defined(MRT_TESTABLE_INTERNALS)
+    NoteRemsetReceiptForTest(this, receipt);
+#endif
+}
+
+void ZForwarding::accept_remset_receipts(uint64_t youngSeq)
+{
+    std::lock_guard<std::mutex> lock(_remsetReceiptLock);
+    for (RemsetPublicationReceipt& receipt : _remsetReceipts) {
+        if (receipt.youngSeq == youngSeq && receipt.status == RemsetReceiptStatus::PUBLISHED) {
+            receipt.status = RemsetReceiptStatus::ACCEPTED;
+#if defined(MRT_TESTABLE_INTERNALS)
+            NoteRemsetReceiptForTest(this, receipt);
+#endif
+        }
+    }
+}
+
+void ZForwarding::complete_remset_receipts(uint64_t youngSeq,
+                                           const std::unordered_set<MAddress>& processedSlots,
+                                           const std::unordered_set<MAddress>& consumedSlots,
+                                           const RememberedSet& rememberedSet)
+{
+    std::lock_guard<std::mutex> lock(_remsetReceiptLock);
+    for (RemsetPublicationReceipt& receipt : _remsetReceipts) {
+        if (receipt.youngSeq != youngSeq || receipt.status == RemsetReceiptStatus::CONSUMED) {
+            continue;
+        }
+        if (receipt.status == RemsetReceiptStatus::ACCEPTED) {
+            CHECK_DETAIL(consumedSlots.count(receipt.toSlot) != 0,
+                         "after-scan accepted receipt missing consumed to-slot table=%p generation=%llu "
+                         "from-slot=%#zx to-slot=%#zx face=%u young-seq=%llu",
+                         this, static_cast<unsigned long long>(_publication_generation),
+                         static_cast<size_t>(receipt.fromSlot), static_cast<size_t>(receipt.toSlot),
+                         static_cast<unsigned>(receipt.sourceFace),
+                         static_cast<unsigned long long>(receipt.youngSeq));
+            receipt.status = RemsetReceiptStatus::CONSUMED;
+#if defined(MRT_TESTABLE_INTERNALS)
+            NoteRemsetReceiptForTest(this, receipt);
+#endif
+            continue;
+        }
+        if (receipt.status == RemsetReceiptStatus::REJECTED_BY_YOUNG) {
+            CHECK_DETAIL(processedSlots.count(receipt.fromSlot) != 0,
+                         "after-scan rejected receipt source-slot-not-processed table=%p generation=%llu "
+                         "from-slot=%#zx to-slot=%#zx source-face=%u destination-face=%u young-seq=%llu",
+                         this, static_cast<unsigned long long>(_publication_generation),
+                         static_cast<size_t>(receipt.fromSlot), static_cast<size_t>(receipt.toSlot),
+                         static_cast<unsigned>(receipt.sourceFace),
+                         static_cast<unsigned>(receipt.destinationFace),
+                         static_cast<unsigned long long>(receipt.youngSeq));
+            CHECK_DETAIL(rememberedSet.ContainsInFace(receipt.toSlot, receipt.destinationFace),
+                         "after-scan rejected receipt missing re-remembered to-slot table=%p generation=%llu "
+                         "from-slot=%#zx to-slot=%#zx source-face=%u destination-face=%u young-seq=%llu",
+                         this, static_cast<unsigned long long>(_publication_generation),
+                         static_cast<size_t>(receipt.fromSlot), static_cast<size_t>(receipt.toSlot),
+                         static_cast<unsigned>(receipt.sourceFace),
+                         static_cast<unsigned>(receipt.destinationFace),
+                         static_cast<unsigned long long>(receipt.youngSeq));
+            receipt.status = RemsetReceiptStatus::CONSUMED;
+#if defined(MRT_TESTABLE_INTERNALS)
+            NoteRemsetReceiptForTest(this, receipt);
+#endif
+            continue;
+        }
+        CHECK_DETAIL(false,
+                     "after-scan receipt-not-consumed table=%p generation=%llu from-slot=%#zx "
+                     "to-slot=%#zx face=%u young-seq=%llu state=%u",
+                     this, static_cast<unsigned long long>(_publication_generation),
+                     static_cast<size_t>(receipt.fromSlot), static_cast<size_t>(receipt.toSlot),
+                     static_cast<unsigned>(receipt.sourceFace),
+                     static_cast<unsigned long long>(receipt.youngSeq),
+                     static_cast<unsigned>(receipt.status));
+    }
+}
+
+bool ZForwarding::has_remset_receipt(MAddress fromSlot, MAddress toSlot, uint8_t sourceFace) const
+{
+    std::lock_guard<std::mutex> lock(_remsetReceiptLock);
+    for (const RemsetPublicationReceipt& receipt : _remsetReceipts) {
+        if (receipt.fromSlot == fromSlot && receipt.toSlot == toSlot &&
+            receipt.sourceFace == sourceFace && receipt.status != RemsetReceiptStatus::NONE) {
+            return true;
+        }
+    }
+    return false;
+}
+
+bool ZForwarding::remset_receipts_closed() const
+{
+    std::lock_guard<std::mutex> lock(_remsetReceiptLock);
+    return std::all_of(_remsetReceipts.begin(), _remsetReceipts.end(),
+                       [](const RemsetPublicationReceipt& receipt) {
+                           return receipt.status == RemsetReceiptStatus::CONSUMED;
+                       });
+}
+
+void ZForwarding::verify_remset_receipts_retirable(const char* point) const
+{
+    std::lock_guard<std::mutex> lock(_remsetReceiptLock);
+    for (const RemsetPublicationReceipt& receipt : _remsetReceipts) {
+        CHECK_DETAIL(receipt.status == RemsetReceiptStatus::PUBLISHED ||
+                         receipt.status == RemsetReceiptStatus::CONSUMED,
+                     "after-scan receipt-not-consumed point=%s table=%p generation=%llu "
+                     "from-slot=%#zx to-slot=%#zx face=%u young-seq=%llu state=%u",
+                     point == nullptr ? "?" : point, this,
+                     static_cast<unsigned long long>(_publication_generation),
+                     static_cast<size_t>(receipt.fromSlot), static_cast<size_t>(receipt.toSlot),
+                     static_cast<unsigned>(receipt.sourceFace),
+                     static_cast<unsigned long long>(receipt.youngSeq),
+                     static_cast<unsigned>(receipt.status));
+    }
+}
+
+void ZForwarding::verify_remset_receipts_closed(const char* point) const
+{
+    std::lock_guard<std::mutex> lock(_remsetReceiptLock);
+    for (const RemsetPublicationReceipt& receipt : _remsetReceipts) {
+        CHECK_DETAIL(receipt.status == RemsetReceiptStatus::CONSUMED,
+                     "after-scan receipt-not-consumed point=%s table=%p generation=%llu "
+                     "from-slot=%#zx to-slot=%#zx face=%u young-seq=%llu state=%u",
+                     point == nullptr ? "?" : point, this,
+                     static_cast<unsigned long long>(_publication_generation),
+                     static_cast<size_t>(receipt.fromSlot), static_cast<size_t>(receipt.toSlot),
+                     static_cast<unsigned>(receipt.sourceFace),
+                     static_cast<unsigned long long>(receipt.youngSeq),
+                     static_cast<unsigned>(receipt.status));
+    }
+}
+
+ZForwarding::RemsetReceiptCounts ZForwarding::remset_receipt_counts() const
+{
+    std::lock_guard<std::mutex> lock(_remsetReceiptLock);
+    RemsetReceiptCounts counts;
+    for (const RemsetPublicationReceipt& receipt : _remsetReceipts) {
+        switch (receipt.status) {
+            case RemsetReceiptStatus::NONE: ++counts.none; break;
+            case RemsetReceiptStatus::PUBLISHED: ++counts.published; break;
+            case RemsetReceiptStatus::REJECTED_BY_YOUNG: ++counts.rejectedByYoung; break;
+            case RemsetReceiptStatus::ACCEPTED: ++counts.accepted; break;
+            case RemsetReceiptStatus::CONSUMED: ++counts.consumed; break;
+        }
+    }
+    return counts;
+}
+
 ForwardingTable::Publication ForwardingTable::EnsurePublicationBeforeCopy(
     RegionInfo* region, MAddress from)
 {
@@ -844,6 +1074,55 @@ ZForwarding::Receipt ForwardingTable::InstallMapping(
     }
     M0Correlation::PropagateForwarding(from, receipt.address, receipt.address, receipt.installed);
     return receipt;
+}
+
+void ForwardingTable::PublishRemsetReceipt(const Publication& publication, MAddress fromSlot,
+                                           MAddress toSlot, uint8_t sourceFace,
+                                           uint8_t destinationFace, uint64_t youngSeq,
+                                           bool rejectedByYoung, bool consumerAlreadyComplete)
+{
+    if (!VerifyFaceEnabled(VerifyFace::Remembered)) {
+        return;
+    }
+    ZForwarding* const tab = publication.forwarding;
+    CHECK_DETAIL(tab != nullptr,
+                 "after-forwarding remset publication owner missing from-slot=%#zx to-slot=%#zx face=%u",
+                 static_cast<size_t>(fromSlot), static_cast<size_t>(toSlot),
+                 static_cast<unsigned>(sourceFace));
+    tab->publish_remset_receipt(fromSlot, toSlot, sourceFace, destinationFace, youngSeq,
+                                rejectedByYoung, consumerAlreadyComplete);
+}
+
+bool ForwardingTable::HasRemsetReceipt(const Publication& publication, MAddress fromSlot,
+                                       MAddress toSlot, uint8_t sourceFace)
+{
+    return publication.forwarding != nullptr &&
+        publication.forwarding->has_remset_receipt(fromSlot, toSlot, sourceFace);
+}
+
+void ForwardingTable::AcceptRemsetPublications(uint64_t youngSeq)
+{
+    if (!VerifyFaceEnabled(VerifyFace::Remembered)) {
+        return;
+    }
+    std::lock_guard<std::mutex> lock(g_remsetTablesLock);
+    for (ZForwarding* table : g_remsetTables) {
+        table->accept_remset_receipts(youngSeq);
+    }
+}
+
+void ForwardingTable::CompleteRemsetPublications(
+    uint64_t youngSeq, const std::unordered_set<MAddress>& processedSlots,
+    const std::unordered_set<MAddress>& consumedSlots,
+    const RememberedSet& rememberedSet)
+{
+    if (!VerifyFaceEnabled(VerifyFace::Remembered)) {
+        return;
+    }
+    std::lock_guard<std::mutex> lock(g_remsetTablesLock);
+    for (ZForwarding* table : g_remsetTables) {
+        table->complete_remset_receipts(youngSeq, processedSlots, consumedSlots, rememberedSet);
+    }
 }
 
 MAddress ForwardingTable::InsertMapping(const Publication& publication, MAddress from, MAddress to)
@@ -1374,6 +1653,19 @@ uint64_t ForwardingTable::UnavailableCount() { return g_unavailable.load(std::me
 uint64_t ForwardingTable::UnarmedCount() { return g_unarmed.load(std::memory_order_relaxed); }
 
 #if defined(MRT_TESTABLE_INTERNALS)
+void ForwardingTable::ArmRemsetReceiptForTest(MAddress fromSlot)
+{
+    std::lock_guard<std::mutex> lock(g_observedRemsetReceiptLock);
+    g_observedRemsetReceipt = RemsetReceiptTestView{};
+    g_observedRemsetFromSlot.store(fromSlot, std::memory_order_release);
+}
+
+ForwardingTable::RemsetReceiptTestView ForwardingTable::ReadRemsetReceiptForTest()
+{
+    std::lock_guard<std::mutex> lock(g_observedRemsetReceiptLock);
+    return g_observedRemsetReceipt;
+}
+
 void ForwardingTable::SetLookupRetainHook(LookupRetainHook hook, void* context)
 {
     g_lookupRetainHookContext.store(context, std::memory_order_release);

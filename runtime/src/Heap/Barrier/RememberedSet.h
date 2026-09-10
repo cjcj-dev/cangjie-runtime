@@ -11,6 +11,7 @@
 #include <cstddef>
 #include <cstdint>
 #include <memory>
+#include <mutex>
 #include <unordered_set>
 #include <vector>
 #if defined(MRT_REMSET_BITMAP_CROSSCHECK)
@@ -26,6 +27,8 @@ class Barrier;
 class WCollector;
 class RegionManager;
 class StoreBarrierBuffer;
+class ForwardingTable;
+class ZForwarding;
 
 // Exact old-region field bitmap. The two heap-wide backing arrays are partitioned
 // by address: every region owns two disjoint slices, one bit per aligned reference
@@ -50,6 +53,7 @@ public:
     struct InPlaceSlot {
         MAddress field;
         uint8_t face;
+        uint64_t youngSeq{ 0 };
     };
 
     // ZGC ZRelocateWork::start_in_place_relocation_prepare_remset (zRelocate.cpp:838-861) plus
@@ -82,6 +86,12 @@ public:
     // zRemembered.cpp:561-576 scan_and_follow: consume the previous face with
     // mutators alive. Callers must FlipForMinor first. DrainForMinor = Flip + Scan.
     size_t ScanPreviousForMinor(std::unordered_set<MAddress>& records);
+    // Delayed consumer edge.  The caller invokes this only after the slots
+    // in processedSlots have reached the product remset consumer; consumedSlots
+    // identifies entries admitted to mark/follow. Together they close the
+    // forwarding receipts for this young sequence.
+    void CompleteScanForMinor(const std::unordered_set<MAddress>& processedSlots,
+                              const std::unordered_set<MAddress>& consumedSlots);
 
 #if defined(MRT_GC_UNIT_TESTS)
     struct FlipTouchCounts {
@@ -100,6 +110,7 @@ public:
     // Non-destructive view of the active (next-cycle) records for verification.
     std::unordered_set<MAddress> Snapshot() const;
     bool Contains(MAddress fieldAddress) const;
+    bool ContainsOnFaceForVerify(MAddress fieldAddress, uint8_t face) const;
     size_t Size() const;
 
     // d1producer: sticky "was this heap field ever handed to Record()" bitmap, never cleared by
@@ -132,6 +143,8 @@ private:
     friend class WCollector;
     friend class RegionManager;
     friend class StoreBarrierBuffer;
+    friend class ForwardingTable;
+    friend class ZForwarding;
 #if defined(MRT_REMSET_BITMAP_CROSSCHECK)
     friend class RememberedSetTest;
 #endif
@@ -144,11 +157,27 @@ private:
     // The conservative pinned/old walk and the promotion replay also call Record(), and counting
     // those in the sticky bitmap would answer a different question than "did the producer record it".
     void Record(MAddress fieldAddress, bool fromMutatorBarrier = false);
+    using TransferObserver = void (*)(void* context, MAddress fromSlot, MAddress toSlot,
+                                      uint8_t sourceFace, uint8_t destinationFace,
+                                      uint64_t youngSeq, bool rejectedByYoung,
+                                      bool consumerAlreadyComplete);
+    // Non-destructive before-copy inventory.  Both physical faces are sampled
+    // under the same lock used by flip/scan/transfer, so every returned offset
+    // has a well-defined source face and young sequence.
+    size_t CaptureObjectSlots(MAddress fromBase, size_t size, std::vector<InPlaceSlot>& out);
     // ZGC update_remset_old_to_old (zRelocate.cpp:652-731): move remset bits covering
     // [fromBase, fromBase+size) to the same field offsets under toBase. Does not clear
     // the from range — CollectRegion → ClearRegion scrubs the whole from region.
     // Returns the number of bits recorded at to-addresses (0 if fromBase==toBase).
     size_t TransferObjectSlots(MAddress fromBase, MAddress toBase, size_t size);
+    size_t TransferObjectSlots(const std::vector<InPlaceSlot>& captured, MAddress fromBase,
+                               MAddress toBase, size_t size, TransferObserver observer, void* context);
+    size_t MoveInPlaceSlots(const std::vector<InPlaceSlot>& taken, MAddress fromBase, MAddress toBase,
+                            size_t size, TransferObserver observer, void* context);
+    void InstallTransferContext(const std::vector<InPlaceSlot>* captured,
+                                TransferObserver observer, void* context);
+    void ClearTransferContext();
+    bool ContainsInFace(MAddress fieldAddress, uint8_t face) const;
     size_t ClearRegion(MAddress start, MAddress end, size_t* outWords = nullptr);
     uint8_t BeginFullClear();
     size_t FinishFullClear(uint8_t scanBuffer);
@@ -170,6 +199,15 @@ private:
     std::unique_ptr<std::atomic<uint64_t>[]> everRecorded;
     std::atomic<size_t> recordCounts[kBufferCount];
     std::atomic<uint8_t> activeBuffer{ 0 };
+    enum class PreviousScanState : uint8_t { COMPLETE, WAITING, DRAINED };
+    mutable std::mutex publicationLock;
+    uint64_t youngSequence = 0;
+    uint8_t previousBuffer = 1;
+    PreviousScanState previousScanState = PreviousScanState::COMPLETE;
+    static thread_local const RememberedSet* transferOwner;
+    static thread_local const std::vector<InPlaceSlot>* transferCaptured;
+    static thread_local TransferObserver transferObserver;
+    static thread_local void* transferObserverContext;
     bool initialized = false;
 
 #if defined(MRT_REMSET_BITMAP_CROSSCHECK)

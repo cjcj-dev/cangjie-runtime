@@ -27,8 +27,10 @@
 #include "Heap/Barrier/RememberedSet.h"
 #include "Heap/Barrier/StoreBarrierBuffer.h"
 #include "Heap/Collector/CollectorProxy.h"
+#include "Heap/GcThreadPool.h"
 #include "Heap/Collector/PromotedRegionDomain.h"
 #include "Heap/Verify/FromPageDetachCheck.h"
+#include "Heap/Verify/VerifyRememberedSet.h"
 #include "Heap/WCollector/WCollector.h"
 #include "Heap/WCollector/TraceBarrier.h"
 #include "Mutator/Mutator.h"
@@ -42,6 +44,8 @@ using namespace MapleRuntime;
 using namespace MapleRuntime::GcUnit;
 
 namespace MapleRuntime {
+
+extern "C" int CJ_ScheduleManagerInit();
 
 struct RelocationReceiptTestAccess {
     static void ParkFrom(RegionManager& manager, RegionInfo* region)
@@ -61,6 +65,17 @@ struct RelocationReceiptTestAccess {
     static void BindCollector(CollectorResources& resources, TracingCollector* collector)
     {
         resources.collectorProxy.currentCollector = collector;
+    }
+
+    static void BindThreadPool(CollectorResources& resources, GCThreadPool* threadPool)
+    {
+        resources.gcThreadPool = threadPool;
+    }
+
+    static void RunCollectionDispatch(WCollector& collector, GCReason reason)
+    {
+        collector.SetGCReason(reason);
+        collector.DoGarbageCollection();
     }
 
     static void Exempt(RegionManager& manager, RegionInfo* region)
@@ -198,6 +213,8 @@ struct LoadHealDeliveryTestAccess {
     struct RemsetConsumeResult {
         size_t work;
         size_t consumed;
+        std::unordered_set<MAddress> processedSlots;
+        std::unordered_set<MAddress> consumedSlots;
     };
 
     static void PublishColours(WCollector& collector) { collector.set_good_masks(); }
@@ -230,18 +247,20 @@ struct LoadHealDeliveryTestAccess {
         WCollector::MinorSlotSet weakSlots;
         WCollector::MinorObjectSet currentMinorRoots;
         WCollector::MinorSlotSet consumed;
+        WCollector::MinorSlotSet processed;
         RemsetScanStats stats;
         stats.recorded = previous.size();
         if (currentMinorRoot != nullptr) {
             currentMinorRoots.insert(currentMinorRoot);
         }
         collector.RescanRememberedSet(workStack, previous, reachableSlots, weakSlots,
-                                      currentMinorRoots, false, &consumed, &stats);
+                                      currentMinorRoots, false, &consumed, &stats, nullptr, nullptr,
+                                      &processed);
         const size_t work = workStack.size();
         while (!workStack.empty()) {
             workStack.pop_back();
         }
-        return RemsetConsumeResult { work, consumed.size() };
+        return RemsetConsumeResult { work, consumed.size(), std::move(processed), std::move(consumed) };
     }
 };
 
@@ -591,6 +610,34 @@ RegionInfo* ResetDeliveryUnit(GcHeapFixture& fx, size_t index)
     return region;
 }
 
+struct DeliveryYoungTarget {
+    RegionInfo* region;
+    BaseObject* object;
+    LiveInfo* live;
+};
+
+DeliveryYoungTarget PrepareDeliveryYoungTarget(GcHeapFixture& fx, size_t index)
+{
+    RegionInfo* region = ResetDeliveryUnit(fx, index);
+    region->SetYoungRegionFlag(1);
+    region->SetYoungAge(1);
+    BaseObject* object = fx.PlaceObject(region->GetRegionStart());
+    region->SetRegionAllocPtr(reinterpret_cast<MAddress>(object) + object->GetSize());
+    LiveInfo* live = fx.PlantLiveInfo(region);
+    (void)fx.PlantMarkBitmap<Generation::Young>(live, region->GetRegionSize());
+    fx.typeInfo->SetUUID(1);
+    TypeInfoManager::GetTypeInfoManager().AddTypeInfo(fx.typeInfo);
+    GC_EXPECT_TRUE(TypeInfoManager::GetTypeInfoManager().ContainsTypeInfo(fx.typeInfo));
+    return DeliveryYoungTarget { region, object, live };
+}
+
+void CleanupDeliveryYoungTarget(GcHeapFixture& fx, DeliveryYoungTarget& target)
+{
+    target.region->metadata.liveInfo = nullptr;
+    fx.FreePlanted(target.live);
+    target.region->SetYoungRegionFlag(0);
+}
+
 RememberedSet& DeliveryRememberedSet(GcHeapFixture& fx)
 {
     RememberedSet& remembered = Heap::GetHeap().GetRememberedSet();
@@ -620,6 +667,72 @@ void EmptyBothRememberedFaces(RememberedSet& remembered)
     remembered.DrainForMinor(discarded);
     discarded.clear();
     remembered.DrainForMinor(discarded);
+}
+
+struct MajorToYoungReceiptScene {
+    GcHeapFixture* fixture = nullptr;
+    WCollector* collector = nullptr;
+    RegionInfo* source = nullptr;
+    RegionInfo* destination = nullptr;
+    DeliveryYoungTarget target { nullptr, nullptr, nullptr };
+    LiveInfo* sourceLive = nullptr;
+    MAddress from = 0;
+    MAddress to = 0;
+    MAddress fromSlot = 0;
+    MAddress toSlot = 0;
+};
+
+// Deterministic scene injection at the real old ForwardFromRegions phase.  The
+// hook prepares only input state; the ordinary ForwardRegion product loop is
+// still the sole receipt producer and the following young collection is the
+// sole receipt consumer.
+void PrepareMajorToYoungReceiptScene(void* managerValue, void* contextValue)
+{
+    auto& manager = *static_cast<RegionManager*>(managerValue);
+    auto& scene = *static_cast<MajorToYoungReceiptScene*>(contextValue);
+    GcHeapFixture& fx = *scene.fixture;
+
+    scene.source = ResetDeliveryUnit(fx, 0);
+    scene.destination = ResetDeliveryUnit(fx, 1);
+    scene.target = PrepareDeliveryYoungTarget(fx, 3);
+    scene.from = scene.source->GetRegionStart();
+    BaseObject* fromObject = fx.PlaceObject(scene.from);
+    const size_t objectSize = fromObject->GetSize();
+    scene.source->SetRegionAllocPtr(scene.from + objectSize);
+    scene.to = scene.destination->GetRegionStart();
+    GC_EXPECT_EQ(scene.destination->Alloc(objectSize), scene.to);
+    BaseObject* toObject = reinterpret_cast<BaseObject*>(scene.to);
+
+    RememberedSet& remembered = DeliveryRememberedSet(fx);
+    EmptyBothRememberedFaces(remembered);
+    LoadHealDeliveryTestAccess::PublishColours(*scene.collector);
+    scene.fromSlot = scene.from + TYPEINFO_PTR_SIZE;
+    scene.toSlot = scene.to + TYPEINFO_PTR_SIZE;
+    auto* field = &HeapSlotAt<>(scene.fromSlot);
+    Barrier barrier(*scene.collector, remembered);
+    {
+        DeliveryNoAllocBufferScope directRemember;
+        field->StoreColoured(zpointer::null);
+        barrier.WriteReference(fromObject, *field, scene.target.object);
+    }
+
+    scene.sourceLive = PrepareForwardable(fx, scene.source, scene.from);
+    std::memcpy(toObject, fromObject, objectSize);
+    toObject->SetStateCode(ObjectState::NORMAL);
+    ForwardingTable::Publication publication =
+        ForwardingTable::EnsurePublicationBeforeCopy(scene.source, scene.from);
+    GC_EXPECT_TRUE(static_cast<bool>(publication));
+    GC_EXPECT_EQ(ForwardingTable::InsertMapping(publication, scene.from, scene.to), scene.to);
+    publication = ForwardingTable::Publication();
+    fromObject->SetStateCode(ObjectState::FORWARDED);
+    scene.source->SetRouteInfo(scene.to, objectSize);
+    scene.source->SetRouteState(RegionInfo::RouteState::FORWARDED);
+    ForwardingTable::ArmRemsetReceiptForTest(scene.fromSlot);
+    RelocationReceiptTestAccess::ParkFrom(manager, scene.source);
+    // Keep one genuine young candidate in the product manager.  Without it,
+    // DoYoungGarbageCollection takes its candidates==0 fast return before the
+    // remembered face is flipped or scanned.
+    manager.EnlistFullThreadLocalRegion(scene.target.region);
 }
 
 } // namespace
@@ -4317,6 +4430,283 @@ GC_TEST(LoadHealDeliveryProduct, InPlaceRemsetMovesBitAndFeedsConsumer)
     targetRegion->metadata.liveInfo = nullptr;
     fx.FreePlanted(targetLive);
     targetRegion->SetYoungRegionFlag(0);
+}
+
+// Whole-page CompactRegion is the product owner of the in-place transfer.
+// Keep one dead prefix object so the live object's field moves to a different
+// offset; calling MoveInPlaceSlots directly would not prove this connection.
+GC_OTHER_VM_TEST(RemsetNetwork, CompactWholeMovesRememberedSlotThroughProductEntry)
+{
+    (void)setenv("MRT_GCV2_VERIFY_REMEMBERED", "1", 1);
+    GcHeapFixture& fx = ProductFixture();
+    RegionInfo* region = ResetDeliveryUnit(fx, 0);
+    DeliveryYoungTarget target = PrepareDeliveryYoungTarget(fx, 3);
+    BaseObject* dead = fx.PlaceObject(region->GetRegionStart());
+    const size_t objectSize = dead->GetSize();
+    BaseObject* liveObject = fx.PlaceObject(region->GetRegionStart() + objectSize);
+    const MAddress from = reinterpret_cast<MAddress>(liveObject);
+    const MAddress fromSlot = from + TYPEINFO_PTR_SIZE;
+    const MAddress expectedTo = region->GetRegionStart();
+    const MAddress expectedToSlot = expectedTo + TYPEINFO_PTR_SIZE;
+    region->SetRegionAllocPtr(from + objectSize);
+
+    RememberedSet& remembered = DeliveryRememberedSet(fx);
+    EmptyBothRememberedFaces(remembered);
+    WCollector collector(Heap::GetHeap().GetAllocator(), Heap::GetHeap().GetCollectorResources());
+    RelocationReceiptTestAccess::BindCollector(Heap::GetHeap().GetCollectorResources(), &collector);
+    LoadHealDeliveryTestAccess::PublishColours(collector);
+    Barrier barrier(collector, remembered);
+    auto* field = &HeapSlotAt<>(fromSlot);
+    {
+        DeliveryNoAllocBufferScope directRemember;
+        field->StoreColoured(zpointer::null);
+        barrier.WriteReference(liveObject, *field, target.object);
+    }
+    const bool fromPresent = remembered.Contains(fromSlot);
+    LiveInfo* live = PrepareForwardable(fx, region, from);
+    RegionManager manager;
+    RelocationReceiptTestAccess::ParkFrom(manager, region);
+    manager.CompactRegion(region);
+
+    const MAddress mapped = ForwardingTable::FindTo(from);
+    const bool toPresent = remembered.Contains(expectedToSlot);
+    ZForwarding* table = ForwardingTable::GetEntries(from);
+    const auto receipt = table == nullptr ? ZForwarding::RemsetReceiptCounts{} :
+                                           table->remset_receipt_counts();
+    std::fprintf(stderr,
+                 "DETAIL remset_network arm=compact-whole from=%#zx to=%#zx from_slot=%#zx "
+                 "to_slot=%#zx from_present=%u to_present=%u published=%zu\n",
+                 static_cast<size_t>(from), static_cast<size_t>(mapped),
+                 static_cast<size_t>(fromSlot), static_cast<size_t>(expectedToSlot),
+                 static_cast<unsigned>(fromPresent), static_cast<unsigned>(toPresent), receipt.published);
+    std::fflush(stderr);
+
+    RelocationReceiptTestAccess::BindCollector(Heap::GetHeap().GetCollectorResources(), nullptr);
+    RelocationReceiptTestAccess::ReleaseListOwnership(region);
+    region->metadata.liveInfo = nullptr;
+    fx.FreePlanted(live);
+    CleanupDeliveryYoungTarget(fx, target);
+    GC_EXPECT_TRUE(fromPresent);
+    GC_EXPECT_EQ(mapped, expectedTo);
+    GC_EXPECT_TRUE(toPresent);
+    GC_EXPECT_EQ(receipt.published, 1u);
+}
+
+// Partial CompactRegion moves the same in-place snapshot into the supplied
+// destination region. This is a distinct product branch from whole-page
+// compaction and must not borrow the whole-page arm's result.
+GC_OTHER_VM_TEST(RemsetNetwork, CompactPartialMovesRememberedSlotThroughProductEntry)
+{
+    (void)setenv("MRT_GCV2_VERIFY_REMEMBERED", "1", 1);
+    GcHeapFixture& fx = ProductFixture();
+    RegionInfo* region = ResetDeliveryUnit(fx, 1);
+    RegionInfo* destination = ResetDeliveryUnit(fx, 2);
+    DeliveryYoungTarget target = PrepareDeliveryYoungTarget(fx, 3);
+    BaseObject* dead = fx.PlaceObject(region->GetRegionStart());
+    const size_t objectSize = dead->GetSize();
+    BaseObject* liveObject = fx.PlaceObject(region->GetRegionStart() + objectSize);
+    const MAddress from = reinterpret_cast<MAddress>(liveObject);
+    const MAddress fromSlot = from + TYPEINFO_PTR_SIZE;
+    const MAddress expectedTo = destination->GetRegionStart();
+    const MAddress expectedToSlot = expectedTo + TYPEINFO_PTR_SIZE;
+    region->SetRegionAllocPtr(from + objectSize);
+
+    RememberedSet& remembered = DeliveryRememberedSet(fx);
+    EmptyBothRememberedFaces(remembered);
+    WCollector collector(Heap::GetHeap().GetAllocator(), Heap::GetHeap().GetCollectorResources());
+    RelocationReceiptTestAccess::BindCollector(Heap::GetHeap().GetCollectorResources(), &collector);
+    LoadHealDeliveryTestAccess::PublishColours(collector);
+    Barrier barrier(collector, remembered);
+    auto* field = &HeapSlotAt<>(fromSlot);
+    {
+        DeliveryNoAllocBufferScope directRemember;
+        field->StoreColoured(zpointer::null);
+        barrier.WriteReference(liveObject, *field, target.object);
+    }
+    const bool fromPresent = remembered.Contains(fromSlot);
+    LiveInfo* live = PrepareForwardable(fx, region, from);
+    RegionManager manager;
+    RelocationReceiptTestAccess::ParkFrom(manager, region);
+    manager.CompactRegion(region, destination);
+
+    const MAddress mapped = ForwardingTable::FindTo(from);
+    const bool toPresent = remembered.Contains(expectedToSlot);
+    ZForwarding* table = ForwardingTable::GetEntries(from);
+    const auto receipt = table == nullptr ? ZForwarding::RemsetReceiptCounts{} :
+                                           table->remset_receipt_counts();
+    std::fprintf(stderr,
+                 "DETAIL remset_network arm=compact-partial from=%#zx to=%#zx from_slot=%#zx "
+                 "to_slot=%#zx from_present=%u to_present=%u published=%zu\n",
+                 static_cast<size_t>(from), static_cast<size_t>(mapped),
+                 static_cast<size_t>(fromSlot), static_cast<size_t>(expectedToSlot),
+                 static_cast<unsigned>(fromPresent), static_cast<unsigned>(toPresent), receipt.published);
+    std::fflush(stderr);
+
+    RelocationReceiptTestAccess::BindCollector(Heap::GetHeap().GetCollectorResources(), nullptr);
+    RelocationReceiptTestAccess::ReleaseListOwnership(region);
+    RelocationReceiptTestAccess::ReleaseListOwnership(destination);
+    region->metadata.liveInfo = nullptr;
+    fx.FreePlanted(live);
+    CleanupDeliveryYoungTarget(fx, target);
+    GC_EXPECT_TRUE(fromPresent);
+    GC_EXPECT_EQ(mapped, expectedTo);
+    GC_EXPECT_TRUE(toPresent);
+    GC_EXPECT_EQ(receipt.published, 1u);
+}
+
+// ForwardRegion consumer arm with an already-published mapping, matching the
+// ordinary "another copier won" branch in WCollector::ForwardObject.  The test
+// does not call TransferObjectSlots itself: the baseline call in ForwardRegion
+// is the only operation able to publish the remembered receipt and to-slot.
+GC_OTHER_VM_TEST(RemsetNetwork, ForwardRegionConsumesPublishedMappingAndTransfersSlot)
+{
+    (void)setenv("MRT_GCV2_VERIFY_REMEMBERED", "1", 1);
+    GcHeapFixture& fx = ProductFixture();
+    RegionInfo* source = ResetDeliveryUnit(fx, 0);
+    RegionInfo* destination = ResetDeliveryUnit(fx, 1);
+    DeliveryYoungTarget target = PrepareDeliveryYoungTarget(fx, 2);
+    BaseObject* from = fx.PlaceObject(source->GetRegionStart());
+    const size_t objectSize = from->GetSize();
+    source->SetRegionAllocPtr(reinterpret_cast<MAddress>(from) + objectSize);
+    const MAddress toBase = destination->GetRegionStart();
+    GC_EXPECT_TRUE(destination->Alloc(objectSize) != 0);
+    BaseObject* to = reinterpret_cast<BaseObject*>(toBase);
+
+    WCollector collector(Heap::GetHeap().GetAllocator(), Heap::GetHeap().GetCollectorResources());
+    RelocationReceiptTestAccess::BindCollector(Heap::GetHeap().GetCollectorResources(), &collector);
+    LoadHealDeliveryTestAccess::PublishColours(collector);
+    collector.SetGCPhase(GCPhase::GC_PHASE_FORWARD);
+    LiveInfo* live = PrepareForwardable(fx, source, reinterpret_cast<MAddress>(from));
+    RememberedSet& remembered = DeliveryRememberedSet(fx);
+    EmptyBothRememberedFaces(remembered);
+    const MAddress fromSlot = reinterpret_cast<MAddress>(from) + TYPEINFO_PTR_SIZE;
+    const MAddress toSlot = toBase + TYPEINFO_PTR_SIZE;
+    auto* fromField = &HeapSlotAt<>(fromSlot);
+    Barrier barrier(collector, remembered);
+    {
+        DeliveryNoAllocBufferScope directRemember;
+        fromField->StoreColoured(zpointer::null);
+        barrier.WriteReference(from, *fromField, target.object);
+    }
+    GC_EXPECT_TRUE(remembered.Contains(fromSlot));
+    std::memcpy(to, from, objectSize);
+    to->SetStateCode(ObjectState::NORMAL);
+    ForwardingTable::Publication publication =
+        ForwardingTable::EnsurePublicationBeforeCopy(source, reinterpret_cast<MAddress>(from));
+    GC_EXPECT_TRUE(static_cast<bool>(publication));
+    GC_EXPECT_EQ(ForwardingTable::InsertMapping(publication,
+                                                reinterpret_cast<MAddress>(from), toBase), toBase);
+    publication = ForwardingTable::Publication();
+    from->SetStateCode(ObjectState::FORWARDED);
+    source->SetRouteInfo(toBase, objectSize);
+    source->SetRouteState(RegionInfo::RouteState::FORWARDED);
+
+    // Publication-first ordering: expose the source face, let the product
+    // ForwardRegion transfer publish, then run the real destructive scan and
+    // WCollector rescan before closing the receipt.
+    remembered.FlipForMinor();
+    RegionManager manager;
+    manager.ForwardRegion<Generation::Old>(source);
+    ZForwarding* table = ForwardingTable::GetEntries(reinterpret_cast<MAddress>(from));
+    GC_EXPECT_TRUE(table != nullptr);
+    const auto published = table->remset_receipt_counts();
+    std::unordered_set<MAddress> scanned;
+    const size_t scannedCount = remembered.ScanPreviousForMinor(scanned);
+    const bool toPresent = scanned.count(toSlot) != 0;
+    const auto accepted = table->remset_receipt_counts();
+    const auto consumer = LoadHealDeliveryTestAccess::ConsumeRemembered(collector, scanned, to);
+    remembered.CompleteScanForMinor(consumer.processedSlots, consumer.consumedSlots);
+    const auto consumed = table->remset_receipt_counts();
+    std::fprintf(stderr,
+                 "DETAIL remset_network arm=forward-region-published from=%#zx to=%#zx "
+                 "offset=%zu mapping=%#zx to_present=%u published=%zu accepted=%zu "
+                 "scanned=%zu processed_to=%zu consumer_to=%zu consumed=%zu\n",
+                 static_cast<size_t>(reinterpret_cast<MAddress>(from)), static_cast<size_t>(toBase),
+                 static_cast<size_t>(TYPEINFO_PTR_SIZE),
+                 static_cast<size_t>(ForwardingTable::FindTo(reinterpret_cast<MAddress>(from))),
+                 static_cast<unsigned>(toPresent), published.published, accepted.accepted,
+                 scannedCount, consumer.processedSlots.count(toSlot),
+                 consumer.consumedSlots.count(toSlot), consumed.consumed);
+    std::fflush(stderr);
+
+    RelocationReceiptTestAccess::BindCollector(Heap::GetHeap().GetCollectorResources(), nullptr);
+    RelocationReceiptTestAccess::ReleaseListOwnership(source);
+    RelocationReceiptTestAccess::ReleaseListOwnership(destination);
+    source->metadata.liveInfo = nullptr;
+    fx.FreePlanted(live);
+    CleanupDeliveryYoungTarget(fx, target);
+    GC_EXPECT_TRUE(toPresent);
+    GC_EXPECT_EQ(published.published, 1u);
+    GC_EXPECT_EQ(accepted.accepted, 1u);
+    GC_EXPECT_EQ(consumer.processedSlots.count(toSlot), 1u);
+    GC_EXPECT_EQ(consumer.consumedSlots.count(toSlot), 1u);
+    GC_EXPECT_EQ(consumed.consumed, 1u);
+}
+
+// The old and young phases are entered through WCollector::DoGarbageCollection.
+// The deterministic hook runs at the actual old ForwardFromRegions boundary;
+// it does not call TransferObjectSlots, ScanPreviousForMinor, or receipt close.
+GC_OTHER_VM_TEST(RemsetNetwork, RuntimeMajorReceiptConsumedByYoungEntry)
+{
+    GC_EXPECT_EQ(setenv("MRT_GCV2_VERIFY_REMEMBERED", "1", 1), 0);
+    GC_EXPECT_EQ(CJ_ScheduleManagerInit(), 0);
+    GC_EXPECT_EQ(setenv("MRT_GCV2_MARKPAR_FORCE_SERIAL", "1", 1), 0);
+    GC_EXPECT_EQ(setenv("MRT_GCV2_EVACPAR_FORCE_SERIAL", "1", 1), 0);
+    LoadHealDeliveryRuntime::Ensure();
+    GcHeapFixture& fx = ProductFixture();
+    CollectorResources& resources = Heap::GetHeap().GetCollectorResources();
+    WCollector collector(Heap::GetHeap().GetAllocator(), resources);
+    RelocationReceiptTestAccess::BindCollector(resources, &collector);
+    GCThreadPool threadPool("gc-unit-remset-entry", 0, GCPoolThread::GC_THREAD_PRIORITY);
+    RelocationReceiptTestAccess::BindThreadPool(resources, &threadPool);
+    const bool startedBefore = resources.IsGcStarted();
+    const GCReason reasonBefore = resources.GetGCStats().reason;
+    resources.SetGcStarted(true);
+
+    MajorToYoungReceiptScene scene;
+    scene.fixture = &fx;
+    scene.collector = &collector;
+    ArmRememberedOldForwardHookForTest(PrepareMajorToYoungReceiptScene, &scene);
+    RelocationReceiptTestAccess::RunCollectionDispatch(collector, GC_REASON_FORCE);
+    const ForwardingTable::RemsetReceiptTestView afterMajor =
+        ForwardingTable::ReadRemsetReceiptForTest();
+    RelocationReceiptTestAccess::RunCollectionDispatch(collector, GC_REASON_YOUNG);
+    const ForwardingTable::RemsetReceiptTestView afterYoung =
+        ForwardingTable::ReadRemsetReceiptForTest();
+
+    std::fprintf(stderr,
+                 "DETAIL remset_network arm=major-to-young table=%#zx generation=%llu "
+                 "from=%#zx to=%#zx from_slot=%#zx to_slot=%#zx offset=%zu "
+                 "source_face=%u destination_face=%u young_seq=%llu status_after_major=%u "
+                 "status_after_young=%u target_assert=receipt-status-consumed\n",
+                 static_cast<size_t>(afterYoung.tableId),
+                 static_cast<unsigned long long>(afterYoung.tableGeneration),
+                 static_cast<size_t>(scene.from), static_cast<size_t>(scene.to),
+                 static_cast<size_t>(afterYoung.fromSlot), static_cast<size_t>(afterYoung.toSlot),
+                 afterYoung.toSlot >= scene.to ? static_cast<size_t>(afterYoung.toSlot - scene.to) : 0,
+                 static_cast<unsigned>(afterYoung.sourceFace),
+                 static_cast<unsigned>(afterYoung.destinationFace),
+                 static_cast<unsigned long long>(afterYoung.youngSeq),
+                 static_cast<unsigned>(afterMajor.status),
+                 static_cast<unsigned>(afterYoung.status));
+    std::fflush(stderr);
+
+    // Keep the target invariant first: the entry cut must fail here, not at a
+    // setup/existence assertion which would hide the unconsumed receipt.
+    GC_EXPECT_TRUE(afterYoung.status == ZForwarding::RemsetReceiptStatus::CONSUMED);
+    GC_EXPECT_TRUE(afterMajor.status == ZForwarding::RemsetReceiptStatus::PUBLISHED);
+    GC_EXPECT_NE(afterYoung.tableId, 0u);
+    GC_EXPECT_EQ(afterYoung.fromSlot, scene.fromSlot);
+    GC_EXPECT_EQ(afterYoung.toSlot, scene.toSlot);
+
+    resources.SetGcStarted(startedBefore);
+    resources.GetGCStats().reason = reasonBefore;
+    RelocationReceiptTestAccess::BindThreadPool(resources, nullptr);
+    threadPool.Exit();
+    RelocationReceiptTestAccess::BindCollector(resources, nullptr);
+    // The isolated process owns RegionManager's forwarding and young-cycle
+    // state until exit; releasing fixture metadata here would race that owner.
+    (void)scene.sourceLive;
 }
 
 // The conservative pinned producer is accepted only for a value inside the

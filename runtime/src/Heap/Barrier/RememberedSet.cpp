@@ -18,9 +18,14 @@
 
 #include "Base/Log.h"
 #include "Base/LogFile.h"
+#include "Heap/Allocator/ForwardingTable.h"
 #include "Heap/Verify/ProbeReadRouteDiag.h"
 
 namespace MapleRuntime {
+thread_local const RememberedSet* RememberedSet::transferOwner = nullptr;
+thread_local const std::vector<RememberedSet::InPlaceSlot>* RememberedSet::transferCaptured = nullptr;
+thread_local RememberedSet::TransferObserver RememberedSet::transferObserver = nullptr;
+thread_local void* RememberedSet::transferObserverContext = nullptr;
 #if defined(MRT_GC_UNIT_TESTS)
 namespace {
 thread_local bool flipTouchAccountingActive = false;
@@ -140,6 +145,7 @@ void RememberedSet::Record(MAddress fieldAddress, bool fromMutatorBarrier)
 
 size_t RememberedSet::TakeInPlaceSlots(MAddress start, MAddress end, std::vector<InPlaceSlot>& out)
 {
+    std::lock_guard<std::mutex> publicationGuard(publicationLock);
     CheckInitialized();
     if (start >= end) {
         return 0;
@@ -172,7 +178,8 @@ size_t RememberedSet::TakeInPlaceSlots(MAddress start, MAddress end, std::vector
             while (word != 0) {
                 const unsigned bitInWord = static_cast<unsigned>(__builtin_ctzll(word));
                 const size_t bit = wordIdx * kBitsPerWord + bitInWord;
-                out.push_back(InPlaceSlot{ heapStart + bit * kFieldBytes, static_cast<uint8_t>(buffer) });
+                out.push_back(InPlaceSlot{ heapStart + bit * kFieldBytes, static_cast<uint8_t>(buffer),
+                                           youngSequence });
                 ++taken;
                 word &= word - 1;
             }
@@ -194,10 +201,19 @@ size_t RememberedSet::TakeInPlaceSlots(MAddress start, MAddress end, std::vector
 size_t RememberedSet::MoveInPlaceSlots(const std::vector<InPlaceSlot>& taken, MAddress fromBase,
                                        MAddress toBase, size_t size)
 {
+    TransferObserver observer = transferOwner == this ? transferObserver : nullptr;
+    void* context = transferOwner == this ? transferObserverContext : nullptr;
+    return MoveInPlaceSlots(taken, fromBase, toBase, size, observer, context);
+}
+
+size_t RememberedSet::MoveInPlaceSlots(const std::vector<InPlaceSlot>& taken, MAddress fromBase,
+                                       MAddress toBase, size_t size, TransferObserver observer, void* context)
+{
     if (taken.empty() || size < kFieldBytes) {
         return 0;
     }
     CheckInitialized();
+    std::lock_guard<std::mutex> publicationGuard(publicationLock);
     const MAddress fromEnd = fromBase + size;
     auto it = std::lower_bound(taken.begin(), taken.end(), fromBase,
                                [](const InPlaceSlot& slot, MAddress addr) { return slot.field < addr; });
@@ -207,7 +223,12 @@ size_t RememberedSet::MoveInPlaceSlots(const std::vector<InPlaceSlot>& taken, MA
         if (toSlot < heapStart || toSlot >= heapStart + heapSize) {
             continue;
         }
-        const size_t buffer = it->face < kBufferCount ? it->face : 0;
+        const uint8_t sourceFace = it->face < kBufferCount ? it->face : 0;
+        const bool sourceIsPrevious = sourceFace == previousBuffer;
+        const bool rejectedByYoung = sourceIsPrevious && previousScanState != PreviousScanState::WAITING;
+        const bool consumerAlreadyComplete = sourceIsPrevious && previousScanState == PreviousScanState::COMPLETE;
+        const uint64_t receiptYoungSeq = sourceIsPrevious ? youngSequence : youngSequence + 1;
+        const uint8_t buffer = rejectedByYoung ? activeBuffer.load(std::memory_order_relaxed) : sourceFace;
         const size_t bit = AddressToBit(toSlot);
         const size_t word = bit / kBitsPerWord;
         const uint64_t mask = static_cast<uint64_t>(1) << (bit % kBitsPerWord);
@@ -225,11 +246,81 @@ size_t RememberedSet::MoveInPlaceSlots(const std::vector<InPlaceSlot>& taken, MA
         }
 #endif
         ++moved;
+        if (observer != nullptr) {
+            observer(context, it->field, toSlot, sourceFace, buffer, receiptYoungSeq,
+                     rejectedByYoung, consumerAlreadyComplete);
+        }
     }
     return moved;
 }
 
+size_t RememberedSet::CaptureObjectSlots(MAddress fromBase, size_t size, std::vector<InPlaceSlot>& out)
+{
+    CheckInitialized();
+    if (size < kFieldBytes || fromBase < heapStart || fromBase + size > heapStart + heapSize) {
+        return 0;
+    }
+    std::lock_guard<std::mutex> publicationGuard(publicationLock);
+    const size_t firstBit = (fromBase - heapStart + kFieldBytes - 1) / kFieldBytes;
+    size_t endBit = (fromBase + size - heapStart) / kFieldBytes;
+    endBit = std::min(endBit, bitCount);
+    const size_t initial = out.size();
+    for (uint8_t face = 0; face < kBufferCount; ++face) {
+        for (size_t bit = firstBit; bit < endBit; ++bit) {
+            const size_t word = bit / kBitsPerWord;
+            const uint64_t mask = static_cast<uint64_t>(1) << (bit % kBitsPerWord);
+            if ((bitmaps[face][word].load(std::memory_order_relaxed) & mask) != 0) {
+                out.push_back(InPlaceSlot{ heapStart + bit * kFieldBytes, face, youngSequence });
+            }
+        }
+    }
+    std::stable_sort(out.begin() + static_cast<ptrdiff_t>(initial), out.end(),
+                     [](const InPlaceSlot& a, const InPlaceSlot& b) {
+                         return a.field == b.field ? a.face < b.face : a.field < b.field;
+                     });
+    return out.size() - initial;
+}
+
 size_t RememberedSet::TransferObjectSlots(MAddress fromBase, MAddress toBase, size_t size)
+{
+    std::vector<InPlaceSlot> captured;
+    const std::vector<InPlaceSlot>* source = nullptr;
+    TransferObserver observer = nullptr;
+    void* context = nullptr;
+    if (transferOwner == this && transferCaptured != nullptr) {
+        source = transferCaptured;
+        observer = transferObserver;
+        context = transferObserverContext;
+    } else {
+        (void)CaptureObjectSlots(fromBase, size, captured);
+        source = &captured;
+    }
+    return TransferObjectSlots(*source, fromBase, toBase, size, observer, context);
+}
+
+void RememberedSet::InstallTransferContext(const std::vector<InPlaceSlot>* captured,
+                                           TransferObserver observer, void* context)
+{
+    CHECK_DETAIL(transferOwner == nullptr,
+                 "remembered transfer context already installed owner=%p next=%p", transferOwner, this);
+    transferOwner = this;
+    transferCaptured = captured;
+    transferObserver = observer;
+    transferObserverContext = context;
+}
+
+void RememberedSet::ClearTransferContext()
+{
+    CHECK_DETAIL(transferOwner == this, "remembered transfer context owner mismatch owner=%p clear=%p",
+                 transferOwner, this);
+    transferOwner = nullptr;
+    transferCaptured = nullptr;
+    transferObserver = nullptr;
+    transferObserverContext = nullptr;
+}
+
+size_t RememberedSet::TransferObjectSlots(const std::vector<InPlaceSlot>& captured, MAddress fromBase,
+                                          MAddress toBase, size_t size, TransferObserver observer, void* context)
 {
     CheckInitialized();
     // ForwardRegion old→old never in-places (RouteObject allocates a distinct to-space).
@@ -245,31 +336,41 @@ size_t RememberedSet::TransferObjectSlots(MAddress fromBase, MAddress toBase, si
     if (toBase < heapStart || toEnd > heapStart + heapSize) {
         return 0;
     }
-    // Field-aligned addresses in [fromBase, fromEnd).
-    size_t firstBit = (fromBase - heapStart + kFieldBytes - 1) / kFieldBytes;
-    size_t endBit = (fromEnd - heapStart) / kFieldBytes;
-    if (firstBit >= endBit || firstBit >= bitCount) {
-        return 0;
-    }
-    if (endBit > bitCount) {
-        endBit = bitCount;
-    }
-    size_t buffer = activeBuffer.load(std::memory_order_acquire);
-    const ptrdiff_t delta = static_cast<ptrdiff_t>(toBase) - static_cast<ptrdiff_t>(fromBase);
+    std::lock_guard<std::mutex> publicationGuard(publicationLock);
     size_t transferred = 0;
-    for (size_t bit = firstBit; bit < endBit; ++bit) {
-        size_t word = bit / kBitsPerWord;
-        uint64_t mask = static_cast<uint64_t>(1) << (bit % kBitsPerWord);
-        uint64_t w = bitmaps[buffer][word].load(std::memory_order_relaxed);
-        if ((w & mask) == 0) {
+    for (const InPlaceSlot& slot : captured) {
+        if (slot.field < fromBase || slot.field >= fromEnd) {
             continue;
         }
-        MAddress fromSlot = heapStart + bit * kFieldBytes;
-        MAddress toSlot = static_cast<MAddress>(static_cast<ptrdiff_t>(fromSlot) + delta);
+        const MAddress fromSlot = slot.field;
+        const MAddress toSlot = toBase + (fromSlot - fromBase);
+        const uint8_t sourceFace = slot.face < kBufferCount ? slot.face : 0;
+        const bool sourceIsPrevious = sourceFace == previousBuffer;
+        const bool rejectedByYoung = sourceIsPrevious && previousScanState != PreviousScanState::WAITING;
+        const bool consumerAlreadyComplete = sourceIsPrevious && previousScanState == PreviousScanState::COMPLETE;
+        const uint64_t receiptYoungSeq = sourceIsPrevious ? youngSequence : youngSequence + 1;
+        const uint8_t destinationFace = rejectedByYoung ? activeBuffer.load(std::memory_order_relaxed) : sourceFace;
+        const size_t toBit = AddressToBit(toSlot);
+        const size_t toWord = toBit / kBitsPerWord;
+        const uint64_t toMask = static_cast<uint64_t>(1) << (toBit % kBitsPerWord);
+        const uint64_t old = bitmaps[destinationFace][toWord].fetch_or(toMask, std::memory_order_relaxed);
+        MarkWordDirty(destinationFace, toWord);
+        if ((old & toMask) == 0) {
+            recordCounts[destinationFace].fetch_add(1, std::memory_order_relaxed);
+        }
         ProbeReadRouteDiag::NoteRemsetEvent(
-            fromSlot, ProbeReadRouteDiag::REMSET_TRANSFER_OUT, static_cast<uint8_t>(buffer), toSlot);
-        Record(toSlot, false);
+            fromSlot, ProbeReadRouteDiag::REMSET_TRANSFER_OUT, sourceFace, toSlot);
+#if defined(MRT_REMSET_BITMAP_CROSSCHECK)
+        {
+            std::lock_guard<std::mutex> guard(oracleLock);
+            oracleRecords[destinationFace].insert(toSlot);
+        }
+#endif
         ++transferred;
+        if (observer != nullptr) {
+            observer(context, fromSlot, toSlot, sourceFace, destinationFace, receiptYoungSeq,
+                     rejectedByYoung, consumerAlreadyComplete);
+        }
     }
     return transferred;
 }
@@ -277,6 +378,10 @@ size_t RememberedSet::TransferObjectSlots(MAddress fromBase, MAddress toBase, si
 void RememberedSet::FlipForMinor()
 {
     CheckInitialized();
+    std::lock_guard<std::mutex> publicationGuard(publicationLock);
+    CHECK_DETAIL(previousScanState == PreviousScanState::COMPLETE,
+                 "before-color-flip prior after-scan incomplete young-seq=%llu state=%u",
+                 static_cast<unsigned long long>(youngSequence), static_cast<unsigned>(previousScanState));
     size_t scanBuffer = activeBuffer.load(std::memory_order_relaxed);
     size_t nextBuffer = scanBuffer ^ 1U;
 #if defined(MRT_GC_UNIT_TESTS)
@@ -286,6 +391,9 @@ void RememberedSet::FlipForMinor()
     // operation only publishes the other face. ScanPreviousForMinor is the
     // owner of consuming and clearing the face selected before this flip.
     activeBuffer.store(static_cast<uint8_t>(nextBuffer), std::memory_order_release);
+    previousBuffer = static_cast<uint8_t>(scanBuffer);
+    ++youngSequence;
+    previousScanState = PreviousScanState::WAITING;
     ProbeReadRouteDiag::NoteRemsetFlip();
 #if defined(MRT_GC_UNIT_TESTS)
     flipTouchAccountingActive = false;
@@ -295,8 +403,14 @@ void RememberedSet::FlipForMinor()
 size_t RememberedSet::ScanPreviousForMinor(std::unordered_set<MAddress>& records)
 {
     CheckInitialized();
+    std::lock_guard<std::mutex> publicationGuard(publicationLock);
     CHECK_DETAIL(records.empty(), "minor remembered-set destination must be empty");
     size_t scanBuffer = activeBuffer.load(std::memory_order_acquire) ^ 1U;
+    CHECK_DETAIL(previousScanState == PreviousScanState::WAITING && scanBuffer == previousBuffer,
+                 "after-scan previous face not waiting young-seq=%llu face=%zu expected-face=%u state=%u",
+                 static_cast<unsigned long long>(youngSequence), scanBuffer,
+                 static_cast<unsigned>(previousBuffer), static_cast<unsigned>(previousScanState));
+    ForwardingTable::AcceptRemsetPublications(youngSequence);
 
     static const bool reserveDestination = []() {
         const char* value = std::getenv("MRT_GCV2_REMSET_HASH_OPT");
@@ -350,13 +464,48 @@ size_t RememberedSet::ScanPreviousForMinor(std::unordered_set<MAddress>& records
     oracleRecords[scanBuffer].clear();
     ++bitmapCrossCheckCount;
 #endif
+    previousScanState = PreviousScanState::DRAINED;
     return records.size();
+}
+
+void RememberedSet::CompleteScanForMinor(const std::unordered_set<MAddress>& processedSlots,
+                                         const std::unordered_set<MAddress>& consumedSlots)
+{
+    CheckInitialized();
+    std::lock_guard<std::mutex> publicationGuard(publicationLock);
+    CHECK_DETAIL(previousScanState == PreviousScanState::DRAINED,
+                 "after-scan receipt-not-consumed young-seq=%llu state=%u scanned=%zu",
+                 static_cast<unsigned long long>(youngSequence), static_cast<unsigned>(previousScanState),
+                 consumedSlots.size());
+    ForwardingTable::CompleteRemsetPublications(youngSequence, processedSlots, consumedSlots, *this);
+    previousScanState = PreviousScanState::COMPLETE;
+}
+
+bool RememberedSet::ContainsInFace(MAddress fieldAddress, uint8_t face) const
+{
+    if (!initialized || face >= kBufferCount || fieldAddress < heapStart ||
+        fieldAddress >= heapStart + heapSize || fieldAddress % kFieldBytes != 0) {
+        return false;
+    }
+    const size_t bit = (fieldAddress - heapStart) / kFieldBytes;
+    const size_t word = bit / kBitsPerWord;
+    const uint64_t mask = static_cast<uint64_t>(1) << (bit % kBitsPerWord);
+    return (bitmaps[face][word].load(std::memory_order_relaxed) & mask) != 0;
+}
+
+bool RememberedSet::ContainsOnFaceForVerify(MAddress fieldAddress, uint8_t face) const
+{
+    std::lock_guard<std::mutex> publicationGuard(publicationLock);
+    return ContainsInFace(fieldAddress, face);
 }
 
 size_t RememberedSet::DrainForMinor(std::unordered_set<MAddress>& records)
 {
     FlipForMinor();
-    return ScanPreviousForMinor(records);
+    const size_t count = ScanPreviousForMinor(records);
+    const std::unordered_set<MAddress> consumed;
+    CompleteScanForMinor(records, consumed);
+    return count;
 }
 
 std::unordered_set<MAddress> RememberedSet::Snapshot() const

@@ -41,6 +41,7 @@
 #include "Heap/WCollector/IdleBarrier.h"
 #include "Heap/WCollector/RememberedHolderPolicy.h"
 #include "Heap/Verify/NwDropAudit.h"
+#include "Heap/Verify/VerifyRememberedSet.h"
 #include "ObjectModel/RefField.inline.h"
 #include "gc_heap_fixture.hpp"
 #include "Heap/WCollector/WCollector.h"
@@ -63,6 +64,8 @@ struct RemsetRearmTestAccess {
         size_t work = 0;
         size_t consumedLedger = 0;
         RemsetScanStats stats;
+        std::unordered_set<MAddress> processedSlots;
+        std::unordered_set<MAddress> consumedSlots;
     };
 
     static RefField<> Tag(WCollector& collector, BaseObject* object)
@@ -90,24 +93,71 @@ struct RemsetRearmTestAccess {
         WCollector::MinorSlotSet weakSlots;
         WCollector::MinorObjectSet currentMinorRoots;
         WCollector::MinorSlotSet consumed;
+        WCollector::MinorSlotSet processed;
         RemsetScanStats stats;
         stats.recorded = previous.size();
         if (currentMinorRoot != nullptr) {
             currentMinorRoots.insert(currentMinorRoot);
         }
         collector.RescanRememberedSet(workStack, previous, reachableSlots, weakSlots, currentMinorRoots,
-                                      /*fullYoungScan=*/false, &consumed, &stats);
+                                      /*fullYoungScan=*/false, &consumed, &stats, nullptr, nullptr,
+                                      &processed);
         const size_t work = workStack.size();
         while (!workStack.empty()) {
             workStack.pop_back();
         }
-        return ConsumeResult { work, consumed.size(), stats };
+        return ConsumeResult { work, consumed.size(), stats, std::move(processed), std::move(consumed) };
     }
 };
 
 } // namespace MapleRuntime
 
 namespace {
+
+struct RemsetPublicationObserverContext {
+    const ForwardingTable::Publication* publication;
+};
+
+struct RemsetConsumerTarget {
+    RegionInfo* region;
+    BaseObject* object;
+    LiveInfo* live;
+};
+
+RemsetConsumerTarget PrepareRemsetConsumerTarget(GcHeapFixture& fx)
+{
+    RegionInfo* region = RegionInfo::InitRegion(2, 1, RegionInfo::UnitRole::SMALL_SIZED_UNITS);
+    GC_EXPECT_TRUE(region != nullptr);
+    region->SetRegionType(RegionInfo::RegionType::THREAD_LOCAL_REGION);
+    region->SetYoungRegionFlag(1);
+    region->SetYoungAge(1);
+    BaseObject* object = fx.PlaceObject(region->GetRegionStart() + 64);
+    region->SetRegionAllocPtr(reinterpret_cast<MAddress>(object) + 64);
+    LiveInfo* live = fx.PlantLiveInfo(region);
+    (void)fx.PlantMarkBitmap<Generation::Young>(live, region->GetRegionSize());
+    fx.typeInfo->SetUUID(1);
+    TypeInfoManager::GetTypeInfoManager().AddTypeInfo(fx.typeInfo);
+    GC_EXPECT_TRUE(TypeInfoManager::GetTypeInfoManager().ContainsTypeInfo(fx.typeInfo));
+    return RemsetConsumerTarget { region, object, live };
+}
+
+void CleanupRemsetConsumerTarget(GcHeapFixture& fx, RemsetConsumerTarget& target)
+{
+    target.region->metadata.liveInfo = nullptr;
+    fx.FreePlanted(target.live);
+    target.region->SetYoungRegionFlag(0);
+}
+
+void PublishRemsetReceiptForTest(void* rawContext, MAddress fromSlot, MAddress toSlot,
+                                 uint8_t sourceFace, uint8_t destinationFace,
+                                 uint64_t youngSeq, bool rejectedByYoung,
+                                 bool consumerAlreadyComplete)
+{
+    auto* context = static_cast<RemsetPublicationObserverContext*>(rawContext);
+    ForwardingTable::PublishRemsetReceipt(*context->publication, fromSlot, toSlot,
+                                          sourceFace, destinationFace, youngSeq,
+                                          rejectedByYoung, consumerAlreadyComplete);
+}
 
 // Product-path guard for the three relocate interior writebacks. The slot
 // starts load-good but not store-good, so deleting the product call leaves a
@@ -1074,6 +1124,7 @@ GC_TEST(Remset, FlipIsConstantTimeAndPreservesFaceEpochs)
         RecordFlipSlots(rs, post);
         std::unordered_set<MAddress> previous;
         const size_t previousCount = rs.ScanPreviousForMinor(previous);
+        rs.CompleteScanForMinor(previous, {});
         const auto current = rs.Snapshot();
         std::fprintf(stderr,
                      "DETAIL remset_flip capacity=%zu pre=%zu post=%zu first_bitmap_word_accesses=%zu "
@@ -1094,6 +1145,7 @@ GC_TEST(Remset, FlipIsConstantTimeAndPreservesFaceEpochs)
         rs.FlipForMinor();
         std::unordered_set<MAddress> secondPrevious;
         const size_t secondPreviousCount = rs.ScanPreviousForMinor(secondPrevious);
+        rs.CompleteScanForMinor(secondPrevious, {});
         const auto secondCurrent = rs.Snapshot();
         std::fprintf(stderr,
                      "DETAIL remset_flip_reuse capacity=%zu pre=%zu post=%zu second_bitmap_word_accesses=%zu "
@@ -1106,5 +1158,211 @@ GC_TEST(Remset, FlipIsConstantTimeAndPreservesFaceEpochs)
         GC_EXPECT_TRUE(secondPrevious == post);
         GC_EXPECT_TRUE(secondCurrent.empty());
     }
+}
+
+// Publication-first arm: the old forwarding publishes a to-slot on the face
+// selected for this minor before the destructive consumer claims it.  The
+// child proves the forwarding-retire guard observes the still-published
+// product receipt; the parent then runs the real scan/complete transition.
+GC_OTHER_VM_TEST(RemsetNetwork, PublicationFirstIsAcceptedThenConsumed)
+{
+#if defined(__linux__)
+    (void)setenv("MRT_GCV2_VERIFY_REMEMBERED", "1", 1);
+    GcHeapFixture fx;
+    RememberedSet& rs = Heap::GetHeap().GetRememberedSet();
+    rs.Initialize(fx.heapStart, GcHeapFixture::kUnits * RegionInfo::UNIT_SIZE);
+    const MAddress fromBase = reinterpret_cast<MAddress>(fx.obj0);
+    const MAddress toBase = reinterpret_cast<MAddress>(fx.obj1);
+    const MAddress fromSlot = fromBase + TYPEINFO_PTR_SIZE;
+    const MAddress toSlot = toBase + TYPEINFO_PTR_SIZE;
+    const size_t objectSize = fx.obj0->GetSize();
+
+    ForwardingTable::Publication publication =
+        ForwardingTable::EnsurePublicationBeforeCopy(fx.region0, fromBase);
+    GC_EXPECT_TRUE(static_cast<bool>(publication));
+    const ZForwarding::Receipt mapping =
+        ForwardingTable::InstallMapping(publication, fromBase, toBase);
+    GC_EXPECT_TRUE(mapping.installed);
+    GC_EXPECT_EQ(mapping.address, toBase);
+
+    RemsetConsumerTarget target = PrepareRemsetConsumerTarget(fx);
+    WCollector collector(Heap::GetHeap().GetAllocator(), Heap::GetHeap().GetCollectorResources());
+    RemsetRearmTestAccess::BeginMinor(collector);
+    auto* fromField = &HeapSlotAt<>(fromSlot);
+    fromField->StoreColoured(RemsetRearmTestAccess::Tag(collector, target.object).GetFieldValue());
+    std::memcpy(reinterpret_cast<void*>(toBase), reinterpret_cast<const void*>(fromBase), objectSize);
+    reinterpret_cast<BaseObject*>(toBase)->SetStateCode(ObjectState::NORMAL);
+
+    rs.Record(fromSlot);
+    rs.FlipForMinor();
+    std::vector<RememberedSet::InPlaceSlot> captured;
+    GC_EXPECT_EQ(rs.CaptureObjectSlots(fromBase, objectSize, captured), 1u);
+    VerifyRememberedBeforeForwarding(captured, fromBase, objectSize, rs);
+    RemsetPublicationObserverContext context { &publication };
+    rs.InstallTransferContext(&captured, PublishRemsetReceiptForTest, &context);
+    const size_t moved = rs.TransferObjectSlots(fromBase, toBase, objectSize);
+    rs.ClearTransferContext();
+    VerifyRememberedAfterForwarding(captured, fromBase, toBase, objectSize, publication);
+
+    ZForwarding* table = ForwardingTable::GetEntries(fromBase);
+    GC_EXPECT_TRUE(table != nullptr);
+    const auto published = table->remset_receipt_counts();
+    std::fflush(nullptr);
+    const pid_t child = fork();
+    GC_EXPECT_TRUE(child >= 0);
+    if (child == 0) {
+        (void)signal(SIGABRT, SIG_DFL);
+        table->verify_remset_receipts_closed("test-before-after-scan");
+        _exit(0);
+    }
+    int status = 0;
+    GC_EXPECT_EQ(waitpid(child, &status, 0), child);
+    GC_EXPECT_TRUE(WIFSIGNALED(status));
+    GC_EXPECT_EQ(WTERMSIG(status), SIGABRT);
+
+    std::unordered_set<MAddress> scanned;
+    // Non-in-place transfer intentionally leaves the from bit until the from
+    // region is reclaimed, so this face contains both from and to here.
+    GC_EXPECT_EQ(rs.ScanPreviousForMinor(scanned), 2u);
+    GC_EXPECT_EQ(scanned.count(toSlot), 1u);
+    const auto accepted = table->remset_receipt_counts();
+    const auto consumer = RemsetRearmTestAccess::ConsumePrevious(
+        collector, scanned, reinterpret_cast<BaseObject*>(toBase));
+    rs.CompleteScanForMinor(consumer.processedSlots, consumer.consumedSlots);
+    const auto consumed = table->remset_receipt_counts();
+    std::fprintf(stderr,
+                 "DETAIL remset_network arm=publication-first mapping=%u from_present=%zu moved=%zu "
+                 "published=%zu accepted=%zu scanned_to=%zu processed_to=%zu consumer_to=%zu "
+                 "consumed=%zu retire_guard_signal=%d\n",
+                 static_cast<unsigned>(mapping.installed), captured.size(), moved,
+                 published.published, accepted.accepted, scanned.count(toSlot),
+                 consumer.processedSlots.count(toSlot), consumer.consumedSlots.count(toSlot), consumed.consumed,
+                 WTERMSIG(status));
+    std::fflush(stderr);
+    GC_EXPECT_EQ(moved, 1u);
+    GC_EXPECT_EQ(published.published, 1u);
+    GC_EXPECT_EQ(accepted.accepted, 1u);
+    GC_EXPECT_EQ(consumer.processedSlots.count(toSlot), 1u);
+    GC_EXPECT_EQ(consumer.consumedSlots.count(toSlot), 1u);
+    GC_EXPECT_EQ(consumed.consumed, 1u);
+    CleanupRemsetConsumerTarget(fx, target);
+#else
+    GC_EXPECT_TRUE(false);
+#endif
+}
+
+// Scan-first arm: the destructive consumer has already drained the source
+// face when the old forwarding publishes.  Transfer must reject that stale
+// face and re-remember the to-slot on current before completion can close it.
+GC_OTHER_VM_TEST(RemsetNetwork, ScanFirstIsRejectedThenReRemembered)
+{
+    (void)setenv("MRT_GCV2_VERIFY_REMEMBERED", "1", 1);
+    GcHeapFixture fx;
+    RememberedSet& rs = Heap::GetHeap().GetRememberedSet();
+    rs.Initialize(fx.heapStart, GcHeapFixture::kUnits * RegionInfo::UNIT_SIZE);
+    const MAddress fromBase = reinterpret_cast<MAddress>(fx.obj0);
+    const MAddress toBase = reinterpret_cast<MAddress>(fx.obj1);
+    const MAddress fromSlot = fromBase + TYPEINFO_PTR_SIZE;
+    const MAddress toSlot = toBase + TYPEINFO_PTR_SIZE;
+    const size_t objectSize = fx.obj0->GetSize();
+
+    ForwardingTable::Publication publication =
+        ForwardingTable::EnsurePublicationBeforeCopy(fx.region0, fromBase);
+    GC_EXPECT_TRUE(static_cast<bool>(publication));
+    const ZForwarding::Receipt mapping =
+        ForwardingTable::InstallMapping(publication, fromBase, toBase);
+    GC_EXPECT_TRUE(mapping.installed);
+
+    RemsetConsumerTarget target = PrepareRemsetConsumerTarget(fx);
+    WCollector collector(Heap::GetHeap().GetAllocator(), Heap::GetHeap().GetCollectorResources());
+    RemsetRearmTestAccess::BeginMinor(collector);
+    auto* fromField = &HeapSlotAt<>(fromSlot);
+    fromField->StoreColoured(RemsetRearmTestAccess::Tag(collector, target.object).GetFieldValue());
+
+    rs.Record(fromSlot);
+    rs.FlipForMinor();
+    std::vector<RememberedSet::InPlaceSlot> captured;
+    GC_EXPECT_EQ(rs.CaptureObjectSlots(fromBase, objectSize, captured), 1u);
+    VerifyRememberedBeforeForwarding(captured, fromBase, objectSize, rs);
+    std::unordered_set<MAddress> scanned;
+    GC_EXPECT_EQ(rs.ScanPreviousForMinor(scanned), 1u);
+    GC_EXPECT_EQ(scanned.count(fromSlot), 1u);
+
+    std::memcpy(reinterpret_cast<void*>(toBase), reinterpret_cast<const void*>(fromBase), objectSize);
+    reinterpret_cast<BaseObject*>(toBase)->SetStateCode(ObjectState::NORMAL);
+
+    RemsetPublicationObserverContext context { &publication };
+    rs.InstallTransferContext(&captured, PublishRemsetReceiptForTest, &context);
+    const size_t moved = rs.TransferObjectSlots(fromBase, toBase, objectSize);
+    rs.ClearTransferContext();
+    VerifyRememberedAfterForwarding(captured, fromBase, toBase, objectSize, publication);
+    ZForwarding* table = ForwardingTable::GetEntries(fromBase);
+    GC_EXPECT_TRUE(table != nullptr);
+    const auto rejected = table->remset_receipt_counts();
+    const bool reRemembered = rs.Contains(toSlot);
+    const auto consumer = RemsetRearmTestAccess::ConsumePrevious(collector, scanned, fx.obj0);
+    rs.CompleteScanForMinor(consumer.processedSlots, consumer.consumedSlots);
+    const auto consumed = table->remset_receipt_counts();
+    std::fprintf(stderr,
+                 "DETAIL remset_network arm=scan-first mapping=%u from_scanned=%zu moved=%zu "
+                 "rejected=%zu re_remembered=%u processed_from=%zu consumer_from=%zu consumed=%zu\n",
+                 static_cast<unsigned>(mapping.installed), scanned.count(fromSlot), moved,
+                 rejected.rejectedByYoung, static_cast<unsigned>(reRemembered),
+                 consumer.processedSlots.count(fromSlot), consumer.consumedSlots.count(fromSlot),
+                 consumed.consumed);
+    std::fflush(stderr);
+    GC_EXPECT_EQ(moved, 1u);
+    GC_EXPECT_EQ(rejected.rejectedByYoung, 1u);
+    GC_EXPECT_TRUE(reRemembered);
+    GC_EXPECT_EQ(consumer.processedSlots.count(fromSlot), 1u);
+    GC_EXPECT_EQ(consumer.consumedSlots.count(fromSlot), 1u);
+    GC_EXPECT_EQ(consumed.consumed, 1u);
+    CleanupRemsetConsumerTarget(fx, target);
+}
+
+// Current-face in-place arm: Take clears both physical faces before the copy,
+// and Move must republish the exact offset plus a receipt without waiting for a
+// previous-face consumer that does not own this slot.
+GC_OTHER_VM_TEST(RemsetNetwork, InPlaceCurrentFacePublishesNextYoungReceipt)
+{
+    (void)setenv("MRT_GCV2_VERIFY_REMEMBERED", "1", 1);
+    GcHeapFixture fx;
+    RememberedSet rs;
+    rs.Initialize(fx.heapStart, GcHeapFixture::kUnits * RegionInfo::UNIT_SIZE);
+    const MAddress fromBase = reinterpret_cast<MAddress>(fx.obj0);
+    const MAddress toBase = fromBase + fx.obj0->GetSize();
+    const MAddress fromSlot = fromBase + TYPEINFO_PTR_SIZE;
+    const MAddress toSlot = toBase + TYPEINFO_PTR_SIZE;
+    const size_t objectSize = fx.obj0->GetSize();
+    ForwardingTable::Publication publication =
+        ForwardingTable::EnsurePublicationBeforeCopy(fx.region0, fromBase);
+    GC_EXPECT_TRUE(static_cast<bool>(publication));
+    const ZForwarding::Receipt mapping =
+        ForwardingTable::InstallMapping(publication, fromBase, toBase);
+    GC_EXPECT_TRUE(mapping.installed);
+
+    rs.Record(fromSlot);
+    std::vector<RememberedSet::InPlaceSlot> before;
+    GC_EXPECT_EQ(rs.CaptureObjectSlots(fromBase, objectSize, before), 1u);
+    VerifyRememberedBeforeForwarding(before, fromBase, objectSize, rs);
+    std::vector<RememberedSet::InPlaceSlot> taken;
+    GC_EXPECT_EQ(rs.TakeInPlaceSlots(fromBase, fromBase + objectSize, taken), 1u);
+    RemsetPublicationObserverContext context { &publication };
+    rs.InstallTransferContext(&taken, PublishRemsetReceiptForTest, &context);
+    const size_t moved = rs.MoveInPlaceSlots(taken, fromBase, toBase, objectSize);
+    rs.ClearTransferContext();
+    VerifyRememberedAfterForwarding(taken, fromBase, toBase, objectSize, publication);
+    ZForwarding* table = ForwardingTable::GetEntries(fromBase);
+    GC_EXPECT_TRUE(table != nullptr);
+    const auto published = table->remset_receipt_counts();
+    std::fprintf(stderr,
+                 "DETAIL remset_network arm=in-place-current mapping=%u taken=%zu moved=%zu "
+                 "to_present=%u published=%zu\n",
+                 static_cast<unsigned>(mapping.installed), taken.size(), moved,
+                 static_cast<unsigned>(rs.Contains(toSlot)), published.published);
+    std::fflush(stderr);
+    GC_EXPECT_EQ(moved, 1u);
+    GC_EXPECT_TRUE(rs.Contains(toSlot));
+    GC_EXPECT_EQ(published.published, 1u);
 }
 #endif
