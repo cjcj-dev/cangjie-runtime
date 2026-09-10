@@ -4,7 +4,7 @@
 #
 # See https://cangjie-lang.cn/pages/LICENSE for license information.
 
-cmake_minimum_required(VERSION 3.16.3)
+cmake_minimum_required(VERSION 3.19)
 if (OHOS_FLAG MATCHES 1 OR OHOS_FLAG MATCHES 2 OR OHOS_FLAG MATCHES 3)
     # Target OHOS is Linux-like system.
     set(CMAKE_SYSTEM_NAME Linux)
@@ -55,8 +55,19 @@ if (WINDOWS_FLAG MATCHES 1)
     endif()
 endif ()
 
+# Set the runtime's default prefix before CMake derives its system search
+# paths. Choosing it later in config.cmake makes the first and second configure
+# see different CMAKE_SYSTEM_PREFIX_PATH values for the same requested input.
+if(NOT DEFINED CMAKE_INSTALL_PREFIX)
+    set(CMAKE_INSTALL_PREFIX "${CMAKE_CURRENT_SOURCE_DIR}/output/cj"
+        CACHE PATH "My default install prefix")
+endif()
+
 # project name: CangjieRuntime
 project(CangjieRuntime C CXX ASM)
+include(${CMAKE_CURRENT_SOURCE_DIR}/build/cmake/RuntimeOutputLayout.cmake)
+get_property(_runtime_multi_config GLOBAL PROPERTY GENERATOR_IS_MULTI_CONFIG)
+cj_runtime_require_single_config_generator("${_runtime_multi_config}")
 
 # Use a compiler cache when one is on PATH. Rebuilds of this tree are dominated by recompiling
 # translation units that did not change, which is exactly what the cache removes. Set
@@ -152,7 +163,7 @@ elseif (GWPASAN_SUPPORT_FLAG MATCHES 1)
     add_compile_definitions(CANGJIE_GWPASAN_SUPPORT)
 endif ()
 
-set(OTHER_DEFINITIONS " ")
+set(OTHER_DEFINITIONS " -DRUNTIME_OUTPUT_ROOT=${CMAKE_OUTPUT_DIRECTORY}")
 if (RUNTIME_FORWARD_PTRAUTH_CFI MATCHES 1)
     set(OTHER_DEFINITIONS "${OTHER_DEFINITIONS} -DRUNTIME_FORWARD_PTRAUTH_CFI=1")
     add_compile_definitions(ENABLE_FORWARD_PTRAUTH_CFI)
@@ -162,7 +173,7 @@ if (RUNTIME_BACKWARD_PTRAUTH_CFI MATCHES 1)
     add_compile_definitions(ENABLE_BACKWARD_PTRAUTH_CFI)
 endif ()
 if (ANDROID_FLAG IN_LIST ANDROID_FLAG_LIST)
-    set(OTHER_DEFINITIONS "-DCMAKE_C_COMPILER_FORCED=ON -DCMAKE_CXX_COMPILER_FORCED=ON")
+    set(OTHER_DEFINITIONS "${OTHER_DEFINITIONS} -DCMAKE_C_COMPILER_FORCED=ON -DCMAKE_CXX_COMPILER_FORCED=ON")
 endif ()
 if (IOS_FLAG MATCHES 1 OR IOS_SIMULATOR_FLAG MATCHES 1 OR IOS_SIMULATOR_FLAG MATCHES 2)
     set(OTHER_DEFINITIONS "${OTHER_DEFINITIONS} -DCMAKE_SYSTEM_NAME=${CMAKE_SYSTEM_NAME} -DCMAKE_OSX_SYSROOT=${CMAKE_OSX_SYSROOT} -DCMAKE_OSX_ARCHITECTURES=${CMAKE_OSX_ARCHITECTURES}")
@@ -174,6 +185,8 @@ if (BUILD_DEMANGLE)
 endif() # BUILD_DEMANGLE
 
 if (BUILD_CJTHREAD) # BUILD_CJTHREAD
+set(_cjthread_previous_build_path "$ENV{CJTHREAD_BUILD_PATH}")
+set(ENV{CJTHREAD_BUILD_PATH} "${CMAKE_BINARY_DIR}/cjthread-build")
 # build cjthread
 if (WINDOWS_FLAG MATCHES 1)
     if (CMAKE_HOST_SYSTEM_NAME MATCHES "Windows")
@@ -257,6 +270,7 @@ else ()
     endif ()
 endif () # WINDOWS_FLAG
 
+set(ENV{CJTHREAD_BUILD_PATH} "${_cjthread_previous_build_path}")
 message("build cjthread done!!!")
 endif() # BUILD_CJTHREAD
 
@@ -1222,3 +1236,6 @@ if (MRT_GC_UNIT_TESTS)
     target_compile_definitions(WCollector PRIVATE MRT_GC_UNIT_TESTS=1)
     add_subdirectory(tests/gc_unit)
 endif()
+
+# All directory, source and target inputs now exist, including unit hooks.
+cj_runtime_finalize_output_layout()

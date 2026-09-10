@@ -13,6 +13,7 @@ set PROJECT_PATH="%~dp0\..\"
 set CJTHREAD_PATH="%~dp0\..\src\CJThread"
 set TESTCODE_PATH="%~dp0\..\test_tools\tests\cjthread_test"
 set BUILD_PATH=%PROJECT_PATH%\build\cjthread_build
+if defined CJTHREAD_BUILD_PATH set BUILD_PATH=%CJTHREAD_BUILD_PATH%
 
 @REM 检查路径是否包含空格
 if %PROJECT_PATH% neq %PROJECT_PATH: =% (

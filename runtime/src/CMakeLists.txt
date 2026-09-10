@@ -248,33 +248,14 @@ endif()
         VERBATIM)
     add_dependencies(runtime check_diag_not_hollow)
     add_dependencies(cangjie-runtime check_diag_not_hollow)
-    # The GC unit suite is the only deterministic detector this runtime has: it names a defect in
-    # tens of seconds where the workload route needs a crash, a rate over N>=10 and a forensic read.
-    # It shipped behind MRT_GC_UNIT_TESTS:BOOL=OFF with a fail-closed gate script that nothing ever
-    # called, so it ran zero times.  POST_BUILD rather than add_dependencies because it links the
-    # freshly built .so.  If no matching cjc exists, the C++ suite remains a hard gate while the
-    # language-level finalizer test records a machine-readable NOT_RUN beside the .so and lets this
-    # build finish; composition gates must require GATE=PASS.  The script uses a stamp when neither
-    # the .so nor the suite moved,
-    # and known_failures.txt keeps today's two standing failures from blocking while still blocking
-    # anything new -- and blocking a listed test that starts passing, so the list cannot rot.
-    # Linux only: the gate script and run_standalone.sh hard-code libcangjie-runtime.so, so on macOS
-    # native builds the freshly-built product is libcangjie-runtime.dylib and the gate fails closed,
-    # taking the entire Apple CI matrix with it.  CMAKE_CROSSCOMPILING already skips iOS
-    # device/simulator, but a native macOS build is not a cross compile -- exclude the Apple flags
-    # here so the gate stays on Linux, which is the only place this runtime has a deterministic GC
-    # defect detector.
-    if (NOT CMAKE_CROSSCOMPILING AND NOT WINDOWS_FLAG MATCHES 1 AND NOT MACOS_FLAG MATCHES 1
-        AND NOT IOS_FLAG MATCHES 1 AND NOT IOS_SIMULATOR_FLAG MATCHES 1 AND NOT IOS_SIMULATOR_FLAG MATCHES 2)
-        add_custom_command(TARGET cangjie-runtime POST_BUILD
-            COMMAND ${CMAKE_COMMAND} -E env
-                "GCV2_RUNTIME_LIB_DIR=$<TARGET_FILE_DIR:cangjie-runtime>"
-                "MRT_TESTABLE_INTERNALS=$<BOOL:${MRT_TESTABLE_INTERNALS}>"
-                "MRT_GC_UNIT_OHOS_HOST=$<BOOL:${MRT_GC_UNIT_OHOS_HOST}>"
-                bash "${CMAKE_CURRENT_SOURCE_DIR}/../tests/gc_unit/gate_gc_unit.sh"
-            COMMENT "Running the deterministic GC unit suite against the runtime just built"
-            VERBATIM)
-    endif()
+    # RuntimeOutputLayout.cmake wires publication and the GC gate after every
+    # target has its final compilation shape. The gate consumes the published
+    # pair, never the mutable linker staging directory.
+    add_custom_command(TARGET cangjie-runtime POST_BUILD
+        COMMAND python3 "${CMAKE_SOURCE_DIR}/build/publish_runtime_output.py"
+            "@$<TARGET_PROPERTY:cangjie-runtime,CJ_RUNTIME_PUBLISH_ARGS>"
+        COMMENT "Publishing the configured runtime pair and checking the published products"
+        VERBATIM)
     if (WINDOWS_FLAG MATCHES 1)
         add_custom_command(TARGET cangjie-runtime POST_BUILD
             COMMAND python3 "${CMAKE_CURRENT_SOURCE_DIR}/../build/generate_windows_exports.py" check

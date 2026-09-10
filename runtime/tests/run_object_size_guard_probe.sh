@@ -13,7 +13,12 @@ cpuset=${GCV2_CPUSET:-}
 # fail-closed: a hard-coded default used to taskset onto cores another lane had
 # claimed (0-63 / 96-127 / 112-127 are all inside the reservable range).
 [[ -n "$cpuset" ]] || { echo "set GCV2_CPUSET to cores you have claimed" >&2; exit 2; }
-runtime_lib_dir=${GCV2_RUNTIME_LIB_DIR:-$repo/runtime/output/temp/lib/x86_64_Relwithdebinfo}
+runtime_lib_dir=${GCV2_RUNTIME_LIB_DIR:-}
+[[ -n "$runtime_lib_dir" && -f "$runtime_lib_dir/libcangjie-runtime.so" ]] || {
+    echo "set GCV2_RUNTIME_LIB_DIR to one configuration's runtime library directory" >&2
+    exit 2
+}
+runtime_output_root="${GCV2_RUNTIME_OUTPUT_ROOT:-$(realpath -m "$runtime_lib_dir/../..")}"
 probe_tmp=$(mktemp -d /tmp/gcv2-sizeguard-probe.XXXXXX)
 
 cleanup()
@@ -26,7 +31,7 @@ trap cleanup EXIT
 
 taskset -c "$cpuset" clang++ -std=gnu++14 -O2 -pthread -fno-rtti -fno-exceptions \
     -I"$repo/runtime/src" -I"$repo/runtime/src/Heap" -I"$repo/runtime/include" \
-    -I"$repo/runtime/output/temp/include" \
+    -I"$runtime_output_root/include" \
     -I"$repo/runtime/third_party/third_party_bounds_checking_function/include" \
     "$repo/runtime/tests/object_size_guard_harness.cpp" \
     -L"$runtime_lib_dir" -Wl,-rpath,"$runtime_lib_dir" -lcangjie-runtime -lboundscheck \
