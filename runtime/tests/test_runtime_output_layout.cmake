@@ -23,6 +23,9 @@ endif()
 
 # Child processes exercise actual command-line and initial-cache inputs.
 if(TEST_RUNTIME_OUTPUT_LAYOUT_CHILD)
+    if(TEST_RUNTIME_ORDINARY_INPUT)
+        include("${TEST_RUNTIME_ORDINARY_INPUT}")
+    endif()
     cj_runtime_configure_output_layout()
     message(STATUS
         "RUNTIME_OUTPUT_LAYOUT_CHILD id=${CANGJIE_RUNTIME_CONFIG_ID} root=${CMAKE_OUTPUT_DIRECTORY}")
@@ -158,6 +161,35 @@ foreach(_cache_type INTERNAL STATIC BOOL STRING)
         file(REMOVE "${_initial}")
     endforeach()
 endforeach()
+
+# Ordinary toolchain-style variables have no cache entry. Select a fresh name
+# so this regression cannot be satisfied by adding that name to a whitelist.
+string(RANDOM LENGTH 16 ALPHABET abcdef _ordinary_suffix)
+set(_ordinary_name "PRODUCT_INPUT_${_ordinary_suffix}")
+set(_ordinary_file "${TEST_RUNTIME_SOURCE_DIR}/output/ordinary-layout-test-${_ordinary_suffix}.cmake")
+set(_ordinary_ids "")
+foreach(_value 0 1 0)
+    file(WRITE "${_ordinary_file}" "set(${_ordinary_name} ${_value})\n")
+    execute_process(COMMAND ${CMAKE_COMMAND}
+        "-DTEST_RUNTIME_SOURCE_DIR=${TEST_RUNTIME_SOURCE_DIR}"
+        -DTEST_RUNTIME_OUTPUT_LAYOUT_CHILD:INTERNAL=ON
+        "-DTEST_RUNTIME_ORDINARY_INPUT=${_ordinary_file}"
+        -P "${CMAKE_CURRENT_LIST_FILE}"
+        RESULT_VARIABLE _rc OUTPUT_VARIABLE _out ERROR_VARIABLE _err)
+    if(NOT _rc EQUAL 0 OR NOT _out MATCHES
+            "RUNTIME_OUTPUT_LAYOUT_CHILD id=([^ ]+) root=([^ \n]+)")
+        message(FATAL_ERROR "ordinary input child failed: ${_rc} ${_out} ${_err}")
+    endif()
+    list(APPEND _ordinary_ids "${CMAKE_MATCH_1}")
+endforeach()
+list(GET _ordinary_ids 0 _off)
+list(GET _ordinary_ids 1 _on)
+list(GET _ordinary_ids 2 _restored)
+message(STATUS "ORDINARY_INPUT_ASSERT name=${_ordinary_name} ids=${_ordinary_ids}")
+if(_off STREQUAL _on OR NOT _off STREQUAL _restored)
+    message(FATAL_ERROR "ordinary input output isolation/restoration failed")
+endif()
+file(REMOVE "${_ordinary_file}")
 
 if(default_id STREQUAL testable_id OR default_id STREQUAL gcunit_id OR testable_id STREQUAL gcunit_id)
     message(FATAL_ERROR "runtime configurations share an identity")

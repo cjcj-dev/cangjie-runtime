@@ -55,8 +55,35 @@ if (WINDOWS_FLAG MATCHES 1)
     endif()
 endif ()
 
+# Set the runtime's default prefix before CMake derives its system search
+# paths. Choosing it later in config.cmake makes the first and second configure
+# see different CMAKE_SYSTEM_PREFIX_PATH values for the same requested input.
+if(NOT DEFINED CMAKE_INSTALL_PREFIX)
+    set(CMAKE_INSTALL_PREFIX "${CMAKE_CURRENT_SOURCE_DIR}/output/cj"
+        CACHE PATH "My default install prefix")
+endif()
+
+# Post-project includes normally see initialized compilers. Defer these two
+# hooks across the language split, preserving their original execution point.
+set(_runtime_project_include "${CMAKE_PROJECT_INCLUDE}")
+set(_runtime_named_project_include "${CMAKE_PROJECT_CangjieRuntime_INCLUDE}")
+set(CMAKE_PROJECT_INCLUDE "")
+set(CMAKE_PROJECT_CangjieRuntime_INCLUDE "")
+
 # project name: CangjieRuntime
-project(CangjieRuntime C CXX ASM)
+project(CangjieRuntime NONE)
+include(${CMAKE_CURRENT_SOURCE_DIR}/build/cmake/RuntimeOutputLayout.cmake)
+cj_runtime_capture_input_scope(INPUT)
+enable_language(C CXX ASM)
+cj_runtime_capture_input_scope(DETECTED)
+set(CMAKE_PROJECT_INCLUDE "${_runtime_project_include}")
+set(CMAKE_PROJECT_CangjieRuntime_INCLUDE "${_runtime_named_project_include}")
+if(CMAKE_PROJECT_INCLUDE)
+    include("${CMAKE_PROJECT_INCLUDE}")
+endif()
+if(CMAKE_PROJECT_CangjieRuntime_INCLUDE)
+    include("${CMAKE_PROJECT_CangjieRuntime_INCLUDE}")
+endif()
 
 # Use a compiler cache when one is on PATH. Rebuilds of this tree are dominated by recompiling
 # translation units that did not change, which is exactly what the cache removes. Set
