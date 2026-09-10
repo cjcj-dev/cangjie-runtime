@@ -2036,7 +2036,7 @@ void ExpectDiagnosticLookupIdentity(const std::string& output, const LookupWitne
     GC_EXPECT_TRUE(fromPageLifeIdMatches);
 }
 
-enum class LookupWitnessConsumer { Lookup, LoadDiagnostic, StoreDiagnostic };
+enum class LookupWitnessConsumer { Lookup, LoadDiagnostic, StoreDiagnostic, StoreResolutionDiagnostic };
 
 void CheckLookupWitness(bool retirePublisher, bool addCandidate, bool retireCandidate,
                         bool publishReceipt, LookupWitnessConsumer consumer = LookupWitnessConsumer::Lookup)
@@ -2083,6 +2083,19 @@ void CheckLookupWitness(bool retirePublisher, bool addCandidate, bool retireCand
         // LookupTo and consumes that result; the expected tuple is only used
         // by the parent to check the product's emitted record.
         const AbortCapture aborted = CaptureAbort([&]() {
+            if (consumer == LookupWitnessConsumer::StoreResolutionDiagnostic) {
+                // The destination no longer has an object header, but this
+                // retired receipt still names its current page life. Enter the
+                // mutator store barrier and inspect ResolveStoreValue's own
+                // diagnostic lookup, before its final FailClosedLoad record.
+                *reinterpret_cast<uintptr_t*>(state.to) = 0;
+                state.region->DispelGhostFromRegion();
+                BaseObject* holder = fx.obj0;
+                auto& field = HeapSlotAt<>(reinterpret_cast<MAddress>(holder) + TYPEINFO_PTR_SIZE);
+                Barrier barrier(collector, Heap::GetHeap().GetRememberedSet());
+                barrier.WriteReference(holder, field, state.from);
+                return;
+            }
             if (consumer == LookupWitnessConsumer::StoreDiagnostic) {
                 RelocationReceiptTestAccess::CheckStoreGoodTarget(collector, state.from);
                 return;
@@ -2093,10 +2106,20 @@ void CheckLookupWitness(bool retirePublisher, bool addCandidate, bool retireCand
         std::fprintf(stderr, "LOOKUP_WITNESS_DIAGNOSTIC status=%d\n%s", aborted.status, aborted.output.c_str());
         GC_EXPECT_TRUE(WIFSIGNALED(aborted.status));
         GC_EXPECT_EQ(WTERMSIG(aborted.status), SIGABRT);
-        const char* entry = consumer == LookupWitnessConsumer::LoadDiagnostic
-            ? "[LOADFC][fail-closed] site=ForwardingLookupWitness" : "consumer=ForwardingLookupWitness";
-        GC_EXPECT_TRUE(aborted.output.find(entry) != std::string::npos);
-        ExpectDiagnosticLookupIdentity(aborted.output, expected);
+        const char* entry = consumer == LookupWitnessConsumer::StoreResolutionDiagnostic
+            ? "[FWDTABLE][resolve-miss] site=no-forwarding"
+            : (consumer == LookupWitnessConsumer::LoadDiagnostic
+                ? "[LOADFC][fail-closed] site=ForwardingLookupWitness" : "consumer=ForwardingLookupWitness");
+        const size_t begin = aborted.output.find(entry);
+        GC_EXPECT_TRUE(begin != std::string::npos);
+        const size_t end = aborted.output.find('\n', begin);
+        const std::string record = aborted.output.substr(begin, end - begin);
+        const std::string hit = std::to_string(static_cast<unsigned>(ForwardingTable::ToAnswer::ArmedHit));
+        GC_EXPECT_TRUE(record.find("lookup_state=" + hit + " ") != std::string::npos);
+        if (consumer != LookupWitnessConsumer::StoreDiagnostic) {
+            GC_EXPECT_TRUE(record.find("retired_lookup=" + hit + " ") != std::string::npos);
+        }
+        ExpectDiagnosticLookupIdentity(record, expected);
     } else {
         const ForwardingTable::LookupResult lookup = ForwardingTable::LookupTo(from);
         std::fprintf(stderr,
@@ -2156,6 +2179,11 @@ GC_OTHER_VM_TEST(ForwardingLookupWitness, LoadDiagnosticConsumesLaterRetiredHit)
 GC_OTHER_VM_TEST(ForwardingLookupWitness, StoreDiagnosticConsumesLaterRetiredHit)
 {
     CheckLookupWitness(true, true, true, true, LookupWitnessConsumer::StoreDiagnostic);
+}
+
+GC_OTHER_VM_TEST(ForwardingLookupWitness, StoreBarrierDiagnosticConsumesLaterRetiredHit)
+{
+    CheckLookupWitness(true, true, true, true, LookupWitnessConsumer::StoreResolutionDiagnostic);
 }
 
 RefField<>* gIncomingDestination = nullptr;
