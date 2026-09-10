@@ -1106,6 +1106,17 @@ static MAddress FindRetiredToImpl(MAddress from, ForwardingTable::ToAnswer* answ
             CaptureLookupCarrier(tab, witness);
             const MAddress to = tab->resolve_life(tab->find(from));
             if (to != 0) {
+                // A hit identifies the table that supplied the resolved entry,
+                // not the active candidate or the first covering retired table.
+                // Capture while g_retiredLock still protects this table. Keep
+                // the first-candidate diagnostic policy only for lookup misses.
+                if (tableId != nullptr) {
+                    *tableId = reinterpret_cast<uintptr_t>(tab);
+                }
+                if (witness != nullptr) {
+                    *witness = LookupCarrierWitness{};
+                    CaptureLookupCarrier(tab, witness);
+                }
                 if (require) {
                     tab->note_retired_required();
                 }
