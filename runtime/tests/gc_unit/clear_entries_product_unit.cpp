@@ -3439,10 +3439,7 @@ GC_TEST(NormalRouteGeneration, OldRouteRejectsYoungRelocationTarget)
     RelocationReceiptTestAccess::DisableInactiveUnits(manager, unitCount);
     RelocationReceiptTestAccess::ParkFrom(manager, source);
     RelocationReceiptTestAccess::ParkThreadLocal(manager, incompatible);
-    const size_t freeIndex = freeTarget->GetUnitIdx();
-    RelocationReceiptTestAccess::ReleaseListOwnership(freeTarget);
-    RegionInfo::InitFreeRegion(freeIndex, 1);
-    RelocationReceiptTestAccess::SeedDirtyUnits(manager, freeIndex, 1);
+    RelocationReceiptTestAccess::SeedDirtyUnits(manager, freeTarget->GetUnitIdx(), 1);
     AllocBuffer* buffer = AllocBuffer::GetOrCreateAllocBuffer();
     buffer->SetRegion(nullptr);
     buffer->SetRelocationRegion(incompatible);
