@@ -20,7 +20,8 @@ int main(int argc, char** argv)
     }
     for (int i = 1; i < argc; ++i) {
         if (std::strcmp(argv[i], listTests) == 0) {
-            return MapleRuntime::GcUnit::ListTests();
+            (void)setenv("GC_UNIT_LIST_TESTS", "1", 1);
+            continue;
         }
         if (std::strncmp(argv[i], filterPrefix, std::strlen(filterPrefix)) != 0 ||
             argv[i][std::strlen(filterPrefix)] == '\0') {

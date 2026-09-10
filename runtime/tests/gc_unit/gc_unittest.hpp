@@ -198,21 +198,19 @@ inline void RunInOtherVm(const std::string& fullName)
 #endif
 }
 
-inline int ListTests()
-{
-    const char* currentSuite = nullptr;
-    for (const auto& test : Registry()) {
-        if (currentSuite == nullptr || std::strcmp(currentSuite, test.suite) != 0) {
-            currentSuite = test.suite;
-            std::printf("%s.\n", currentSuite);
-        }
-        std::printf("  %s\n", test.name);
-    }
-    return Registry().empty() ? 1 : 0;
-}
-
 inline int RunAll()
 {
+    if (std::getenv("GC_UNIT_LIST_TESTS") != nullptr) {
+        const char* currentSuite = nullptr;
+        for (const auto& test : Registry()) {
+            if (currentSuite == nullptr || std::strcmp(currentSuite, test.suite) != 0) {
+                currentSuite = test.suite;
+                std::printf("%s.\n", currentSuite);
+            }
+            std::printf("  %s\n", test.name);
+        }
+        return Registry().empty() ? 1 : 0;
+    }
     int failed = 0;
     int passed = 0;
     // Exact-name filtering gives a caller one selected test and output. A typo
