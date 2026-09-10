@@ -631,42 +631,8 @@ if command -v nm >/dev/null 2>&1; then
   nm -D "$RUNTIME_LIB_DIR/libcangjie-runtime.so" 2>/dev/null | grep -E 'RangeRegistry|RelocationRequestQueue|ReceiptAllowsForwarded|VerifyRoots|PlausibleManagedObjectGate|TryRecoverInteriorBase|RouteInfo8GetRoute|RecordCrossGenEdge|MarkGoodHeapGate' | head -40 || true
 fi
 
-START=$(date +%s%N)
-FINAL_TALLY="${GC_UNIT_TALLY_FILE:-}"
-MAIN_TALLY="$OUT/main_tally.txt"
-PUBLICATION_TALLY="$OUT/forwarding_publication_tally.txt"
-rm -f "$MAIN_TALLY" "$PUBLICATION_TALLY"
-set +e
-env "${M0_CORRELATION_ENV[@]}" GC_UNIT_TALLY_FILE="$MAIN_TALLY" \
-  LD_LIBRARY_PATH="$RUNTIME_LIB_DIR${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}" "$OUT/cj_gc_unit"
-MAIN_RC=$?
-GC_UNIT_TALLY_FILE="$PUBLICATION_TALLY" \
-  LD_LIBRARY_PATH="$RUNTIME_LIB_DIR${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}" \
-  "$OUT/cj_gc_forwarding_publication_unit"
-PUBLICATION_RC=$?
-set -e
-END=$(date +%s%N)
-ELAPSED_MS=$(( (END - START) / 1000000 ))
-
-# The gate consumes one independent tally.  Merge only two complete runner
-# tallies; an abort or disconnect leaves the final tally absent and fails
-# closed instead of turning an incomplete run into "one red".
-if [[ -n "$FINAL_TALLY" && -f "$MAIN_TALLY" && -f "$PUBLICATION_TALLY" ]]; then
-  read -r main_tests main_pass main_fail < <(
-    sed -nE 's/^\[========\] ([0-9]+) tests: ([0-9]+) passed, ([0-9]+) failed$/\1 \2 \3/p' "$MAIN_TALLY")
-  read -r publication_tests publication_pass publication_fail < <(
-    sed -nE 's/^\[========\] ([0-9]+) tests: ([0-9]+) passed, ([0-9]+) failed$/\1 \2 \3/p' "$PUBLICATION_TALLY")
-  if [[ -n "${main_tests:-}" && -n "${publication_tests:-}" ]]; then
-    printf '[========] %d tests: %d passed, %d failed\n' \
-      "$((main_tests + publication_tests))" \
-      "$((main_pass + publication_pass))" \
-      "$((main_fail + publication_fail))" >"$FINAL_TALLY"
-  fi
-fi
-
-RC=0
-if [[ $MAIN_RC -ne 0 || $PUBLICATION_RC -ne 0 ]]; then
-  RC=1
-fi
-echo "GC_UNIT_RUN_DONE rc=$RC main_rc=$MAIN_RC publication_rc=$PUBLICATION_RC wall_ms=$ELAPSED_MS"
-exit "$RC"
+printf -v GC_UNIT_MAIN_ENV '%s\n' "${M0_CORRELATION_ENV[@]}"
+GC_UNIT_MAIN_ENV=${GC_UNIT_MAIN_ENV%$'\n'}
+export GC_UNIT_MAIN_ENV
+exec bash "$SRC/run_parallel_tests.sh" \
+  "$OUT/cj_gc_unit" "$OUT/cj_gc_forwarding_publication_unit" "$OUT" "$RUNTIME_LIB_DIR"
