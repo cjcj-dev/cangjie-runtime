@@ -53,7 +53,6 @@ LiveInfo* PlantGhostFrom(GcHeapFixture& fx, RegionInfo* region, BaseObject* obje
     region->SetYoungRegionFlag(1);
     region->SetYoungAge(1);
     region->SetRegionType(RegionInfo::RegionType::FROM_REGION);
-    region->SetInGhostRegion(1);
     LiveInfo* live = fx.PlantLiveInfo(region);
     (void)fx.PlantMarkBitmap<Generation::Young>(live, region->GetRegionSize());
     const size_t offset = region->GetAddressOffset(reinterpret_cast<MAddress>(object));
