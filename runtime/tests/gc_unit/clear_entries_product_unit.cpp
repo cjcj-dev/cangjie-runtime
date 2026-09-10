@@ -4727,6 +4727,7 @@ GC_TEST(LoadHealDeliveryProduct, CurrentRemsetRemapsLiveRemoteArrayField)
 // True runtime entry: this test never calls RemapYoungRoots or Preforward. It
 // enters at DoGarbageCollection, then reads the one-shot receipt sampled by the
 // product remap loop before relocate-start flips the colour masks.
+#if defined(MRT_REMAP_YOUNG_ROOTS_RECEIPT_AVAILABLE)
 GC_OTHER_VM_TEST(LoadHealDeliveryProduct, MajorDispatchRemapsLiveRemoteArrayField)
 {
     GC_EXPECT_EQ(CJ_ScheduleManagerInit(), 0);
@@ -4808,6 +4809,7 @@ GC_OTHER_VM_TEST(LoadHealDeliveryProduct, MajorDispatchRemapsLiveRemoteArrayFiel
     RelocationReceiptTestAccess::BindThreadPool(resources, nullptr);
     threadPool.Exit();
 }
+#endif
 
 GC_TEST(ForwardingPublicationProduct, GhostHeldRetainsResolvableCarrier)
 {

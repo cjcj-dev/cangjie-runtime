@@ -169,6 +169,32 @@ else
 fi
 echo "PUBLICATION_HOOK_PRODUCT_SHAPE=$PUBLICATION_HOOK_PRODUCT_SHAPE admission=$admission_hook receipt=$receipt_hook"
 
+# The publication TU always has fixture access, but the linked product SO only
+# owns the actual-entry receipt in a testable product build. Derive that shape
+# from both receipt endpoints; a partial export is an invalid product shape.
+REMAP_RECEIPT_TEST=LoadHealDeliveryProduct.MajorDispatchRemapsLiveRemoteArrayField
+REMAP_RECEIPT_FLAGS=()
+REMAP_RECEIPT_EXPORTS="$OUT/remap-young-roots-receipt-exports.txt"
+nm -D --defined-only "$RUNTIME_LIB_DIR/libcangjie-runtime.so" | c++filt >"$REMAP_RECEIPT_EXPORTS"
+remap_receipt_reset=0
+remap_receipt_read=0
+if /usr/bin/grep -F -q 'MapleRuntime::ResetRemapYoungRootsTestReceipt(' "$REMAP_RECEIPT_EXPORTS"; then
+  remap_receipt_reset=1
+fi
+if /usr/bin/grep -F -q 'MapleRuntime::ReadRemapYoungRootsTestReceipt(' "$REMAP_RECEIPT_EXPORTS"; then
+  remap_receipt_read=1
+fi
+if [[ "$remap_receipt_reset" -eq 1 && "$remap_receipt_read" -eq 1 ]]; then
+  REMAP_RECEIPT_PRODUCT_SHAPE=testable
+  REMAP_RECEIPT_FLAGS=(-DMRT_REMAP_YOUNG_ROOTS_RECEIPT_AVAILABLE=1)
+elif [[ "$remap_receipt_reset" -eq 0 && "$remap_receipt_read" -eq 0 ]]; then
+  REMAP_RECEIPT_PRODUCT_SHAPE=default
+else
+  echo "GC_UNIT_REMAP_RECEIPT_PRODUCT_SHAPE_INCOMPLETE reset=$remap_receipt_reset read=$remap_receipt_read" >&2
+  exit 19
+fi
+echo "REMAP_RECEIPT_PRODUCT_SHAPE=$REMAP_RECEIPT_PRODUCT_SHAPE reset=$remap_receipt_reset read=$remap_receipt_read"
+
 BOUNDS_INC="$ROOT/runtime/third_party/third_party_bounds_checking_function/include"
 TESTABLE_FLAGS=()
 if [[ "${MRT_TESTABLE_INTERNALS:-0}" == "1" ]]; then
@@ -516,12 +542,16 @@ LOADHEAL_PRODUCT_CONSUMERS=(
   'MapleRuntime::RememberedSet::MoveInPlaceSlots('
   'MapleRuntime::RegionManager::RecordPinnedCrossGenEdges('
   'MapleRuntime::WCollector::RemapYoungRoots('
-  'MapleRuntime::CopyCollector::RunGarbageCollection('
-  'MapleRuntime::ResetRemapYoungRootsTestReceipt('
-  'MapleRuntime::ReadRemapYoungRootsTestReceipt()'
   'MapleRuntime::RegionManager::FinishIncompleteFromRegions('
   'MapleRuntime::ForwardingTable::ReclaimRetired('
 )
+if [[ "$REMAP_RECEIPT_PRODUCT_SHAPE" == testable ]]; then
+  LOADHEAL_PRODUCT_CONSUMERS+=(
+    'MapleRuntime::CopyCollector::RunGarbageCollection('
+    'MapleRuntime::ResetRemapYoungRootsTestReceipt('
+    'MapleRuntime::ReadRemapYoungRootsTestReceipt()'
+  )
+fi
 LOADHEAL_MANIFEST="$SRC/product_call_manifest_loadheal.tsv"
 EXPECTED_LOADHEAL_TESTS=(
   LoadHealDeliveryProduct.DualCarrierProducerCapturesOldTopAndLivemap
@@ -629,6 +659,7 @@ $CXX -std=gnu++17 -O0 -g -Wall -Wextra -pthread -fno-rtti \
   -DMRT_TESTABLE_INTERNALS=1 \
   "${PUBLICATION_TESTABLE_FLAGS[@]}" \
   "${PUBLICATION_HOOK_FLAGS[@]}" \
+  "${REMAP_RECEIPT_FLAGS[@]}" \
   "${INC_FLAGS[@]}" \
   "$SRC/gc_unit_main.cpp" \
   "$SRC/clear_entries_product_unit.cpp" \
@@ -694,6 +725,25 @@ for test_name in "${PUBLICATION_HOOK_TESTS[@]}"; do
   fi
 done
 
+remap_receipt_symbol="${REMAP_RECEIPT_TEST#*.}"
+remap_receipt_registered=0
+if /usr/bin/grep -F -q "$remap_receipt_symbol" "$LOADHEAL_FULL"; then
+  remap_receipt_registered=1
+fi
+if [[ "$REMAP_RECEIPT_PRODUCT_SHAPE" == testable && "$remap_receipt_registered" -ne 1 ]]; then
+  echo "GC_UNIT_REMAP_RECEIPT_TEST_NOT_REGISTERED test=$REMAP_RECEIPT_TEST" >&2
+  exit 20
+fi
+if [[ "$REMAP_RECEIPT_PRODUCT_SHAPE" == default && "$remap_receipt_registered" -ne 0 ]]; then
+  echo "GC_UNIT_REMAP_RECEIPT_TEST_REGISTERED_FOR_DEFAULT test=$REMAP_RECEIPT_TEST" >&2
+  exit 21
+fi
+if [[ "$REMAP_RECEIPT_PRODUCT_SHAPE" == default ]]; then
+  echo "NOT_RUN(default product shape) test=$REMAP_RECEIPT_TEST"
+else
+  echo "GC_UNIT_REMAP_RECEIPT_TEST_REGISTERED test=$REMAP_RECEIPT_TEST"
+fi
+
 echo "LINKED_RUNTIME=$RUNTIME_LIB_DIR"
 echo "MRT_TESTABLE_INTERNALS=${MRT_TESTABLE_INTERNALS:-0}"
 # Binding proof: undefined product symbols must resolve from libcangjie-runtime.
@@ -735,6 +785,18 @@ done
 if [[ "$PUBLICATION_HOOK_PRODUCT_SHAPE" == testable ]] &&
     ! /usr/bin/grep -F -q 'I03_TARGET_REACHED state=1 count=1' "$PUBLICATION_RUN_LOG"; then
   echo "GC_UNIT_I03_TARGET_NOT_REACHED" >&2
+  PUBLICATION_RC=1
+fi
+
+if [[ "$REMAP_RECEIPT_PRODUCT_SHAPE" == testable ]]; then
+  if ! /usr/bin/grep -F -q "[  RUN   ] $REMAP_RECEIPT_TEST" "$PUBLICATION_RUN_LOG" ||
+      ! /usr/bin/grep -F -q "[  PASS  ] $REMAP_RECEIPT_TEST" "$PUBLICATION_RUN_LOG" ||
+      ! /usr/bin/grep -F -q 'TARGET_CURRENT_REMSET_ASSERT_EXECUTED' "$PUBLICATION_RUN_LOG"; then
+    echo "GC_UNIT_REMAP_RECEIPT_TEST_DID_NOT_PASS test=$REMAP_RECEIPT_TEST" >&2
+    PUBLICATION_RC=1
+  fi
+elif /usr/bin/grep -F -q "[  RUN   ] $REMAP_RECEIPT_TEST" "$PUBLICATION_RUN_LOG"; then
+  echo "GC_UNIT_REMAP_RECEIPT_TEST_RAN_FOR_DEFAULT test=$REMAP_RECEIPT_TEST" >&2
   PUBLICATION_RC=1
 fi
 END=$(date +%s%N)
