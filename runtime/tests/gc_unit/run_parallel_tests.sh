@@ -16,6 +16,15 @@ JOBS="${GC_UNIT_JOBS:-$(nproc)}"
 TEST_TIMEOUT="${GC_UNIT_TEST_TIMEOUT:-600}"
 FINAL_TALLY="${GC_UNIT_TALLY_FILE:-}"
 
+# This test requires at least one of its eight internal workers to steal before
+# another drains the shared stripe. Under a saturated process pool the host
+# scheduler can let one worker drain it first, making the test's own
+# `stealSuccess != 0` precondition false. Keep the item as a one-process test,
+# but start it only after the parallel pool has drained.
+SERIAL_TESTS=(
+  MarkStripe.ConcurrentGlobalStealIsLiveAndLossless
+)
+
 if [[ ! "$JOBS" =~ ^[1-9][0-9]*$ ]]; then
   echo "error: GC_UNIT_JOBS must be a positive integer, got: $JOBS" >&2
   exit 2
@@ -115,6 +124,28 @@ done
 exec 3<&-
 exec 4<&-
 
+is_serial_test() {
+  local candidate=$1 serial_test
+  for serial_test in "${SERIAL_TESTS[@]}"; do
+    if [[ "$candidate" == "$serial_test" ]]; then
+      return 0
+    fi
+  done
+  return 1
+}
+
+PARALLEL_MANIFEST="$OUT/test-manifest.parallel.tsv"
+SERIAL_MANIFEST="$OUT/test-manifest.serial.tsv"
+: >"$PARALLEL_MANIFEST"
+: >"$SERIAL_MANIFEST"
+while IFS=$'\t' read -r kind test index; do
+  if [[ "$JOBS" -ne 1 ]] && is_serial_test "$test"; then
+    printf '%s\t%s\t%s\n' "$kind" "$test" "$index" >>"$SERIAL_MANIFEST"
+  else
+    printf '%s\t%s\t%s\n' "$kind" "$test" "$index" >>"$PARALLEL_MANIFEST"
+  fi
+done <"$MANIFEST"
+
 run_one_test() {
   local record=$1 kind test index elf log rc_file tally_file rc
   IFS=$'\t' read -r kind test index <<<"$record"
@@ -149,11 +180,13 @@ export GC_UNIT_MAIN_ENV="${GC_UNIT_MAIN_ENV:-}"
 
 START=$(date +%s%N)
 set +e
-xargs -d '\n' -n 1 -P "$JOBS" bash -c 'run_one_test "$1"' _ <"$MANIFEST"
-xargs_rc=$?
+xargs -r -d '\n' -n 1 -P "$JOBS" bash -c 'run_one_test "$1"' _ <"$PARALLEL_MANIFEST"
+parallel_xargs_rc=$?
+xargs -r -d '\n' -n 1 -P 1 bash -c 'run_one_test "$1"' _ <"$SERIAL_MANIFEST"
+serial_xargs_rc=$?
 set -e
-if [[ $xargs_rc -ne 0 ]]; then
-  echo "GC_UNIT_XARGS_FAIL rc=$xargs_rc" >&2
+if [[ $parallel_xargs_rc -ne 0 || $serial_xargs_rc -ne 0 ]]; then
+  echo "GC_UNIT_XARGS_FAIL parallel_rc=$parallel_xargs_rc serial_rc=$serial_xargs_rc" >&2
   exit 2
 fi
 
@@ -245,6 +278,7 @@ if [[ -n "$FINAL_TALLY" ]]; then
 fi
 printf 'GC_UNIT_PARALLEL jobs=%d tests=%d wall=%d.%03d\n' \
   "$JOBS" "$tests" "$((elapsed_ms / 1000))" "$((elapsed_ms % 1000))"
+printf 'GC_UNIT_SERIAL tests=%d\n' "$(wc -l <"$SERIAL_MANIFEST")"
 printf 'GC_UNIT_INCOMPLETE tests=%d\n' "$incomplete"
 rc=0
 if [[ $failed -ne 0 ]]; then
