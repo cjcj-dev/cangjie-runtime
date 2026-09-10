@@ -137,6 +137,7 @@ def do_build(args):
             "-DCMAKE_BUILD_TYPE={}".format(mode),
             "-DCOPYGC_FLAG=1",
             "-DDOPRA_FLAG=1",
+            "-DMRT_GC_UNIT_OHOS_HOST={}".format("ON" if args.gc_unit_ohos_host else "OFF"),
             "-DOHOS_FLAG=0",
             "-DANDROID_FLAG=0",
             "-DIOS_FLAG=0",
@@ -451,6 +452,12 @@ if __name__ == "__main__":
     )
     b.add_argument(
         "--gcc-toolchain", dest="gcc_toolchain", help="Specify GCC toolchain for Clang to use"
+    )
+    b.add_argument(
+        "--gc-unit-ohos-host",
+        action="store_true",
+        dest="gc_unit_ohos_host",
+        help="Native x86_64 Linux product with __OHOS__ preprocessor shape for gc_unit (not OHOS ABI)."
     )
 
     i = sub.add_parser("install", help="install the project")
