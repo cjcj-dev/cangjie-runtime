@@ -1600,6 +1600,8 @@ void FlipWindowCopyAdmission(RegionInfo*, BaseObject*)
 void FlipWindowMutatorRemap()
 {
     g_flipWindow.hookFired.store(1, std::memory_order_release);
+    std::fprintf(stderr, "DETAIL flip_window_hook_enter child=%p\n",
+                 static_cast<void*>(g_flipWindow.child));
     if (g_flipWindow.collector == nullptr || g_flipWindow.child == nullptr) {
         return;
     }
