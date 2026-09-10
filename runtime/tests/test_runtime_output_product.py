@@ -64,8 +64,13 @@ def main():
             policy.write_text(f'set({unknown} "$ENV{{RUNTIME_LAYOUT_POLICY}}")\n'
                               f'add_compile_definitions({unknown}=${{{unknown}}})\n')
         elif args.mode == 'indirect':
-            policy.write_text('cmake_language(DEFER CALL set_property TARGET cangjie-runtime PROPERTY CUSTOM_POLICY \"$ENV{RUNTIME_LAYOUT_POLICY}\")\n'
-                              'add_compile_definitions(INDIRECT_POLICY=$<TARGET_PROPERTY:cangjie-runtime,CUSTOM_POLICY>)\n')
+            # A compiler-probe project has no runtime target. The policy belongs
+            # to the real product graph, and is applied after its targets exist.
+            policy.write_text('get_property(_layout_probe GLOBAL PROPERTY IN_TRY_COMPILE)\n'
+                              'if(NOT _layout_probe)\n'
+                              '  cmake_language(DEFER CALL set_property TARGET cangjie-runtime PROPERTY CUSTOM_POLICY "$ENV{RUNTIME_LAYOUT_POLICY}")\n'
+                              '  add_compile_definitions(INDIRECT_POLICY=$<TARGET_PROPERTY:cangjie-runtime,CUSTOM_POLICY>)\n'
+                              'endif()\n')
         else:
             policy.write_text(f'set(DISABLE_VERSION_CHECK {value} CACHE INTERNAL "" FORCE)\n')
         command = ['cmake', '-S', str(source), '-B', str(build), '-G', 'Unix Makefiles',
