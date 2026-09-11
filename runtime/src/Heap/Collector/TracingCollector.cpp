@@ -4,6 +4,7 @@
 //
 // See https://cangjie-lang.cn/pages/LICENSE for license information.
 
+#include "Heap/Collector/MarkStripe.h"
 #include "TracingCollector.h"
 
 #include "Base/CString.h"
@@ -347,6 +348,7 @@ public:
         // major claim without adding work to the common !wasMarked branch.
         size_t nNewlyMarked = 0;
         // loop until work stack empty.
+        MarkLiveCache liveCache(1);
         for (;;) {
             if (workStack.empty()) {
                 break;
@@ -375,13 +377,7 @@ public:
                 }
                 obj = host;
             }
-            bool wasMarked = false;
-            if (entry.mark()) {
-                // MarkObject owns live-byte accounting in this collector, so
-                // incLive attests the operation instead of causing a second
-                // increment after a successful claim.
-                wasMarked = collector.MarkObject(obj);
-            }
+            const bool wasMarked = collector.MarkEntryObject(obj, entry, &liveCache);
             if ((!entry.mark() || !wasMarked) && entry.follow()) {
                 if (entry.mark()) {
                     nNewlyMarked++;
@@ -395,7 +391,11 @@ public:
                 if (UNLIKELY(obj->IsWeakRef())) {
                     collector.DiscoverWeakReference(obj, workStack);
                 } else {
-                    collector.TraceObjectRefFields(obj, workStack);
+                    if (entry.finalizable()) {
+                        collector.TraceObjectRefFields(obj, workStack, true);
+                    } else {
+                        collector.TraceObjectRefFields(obj, workStack);
+                    }
                 }
             } else if (entry.mark() && wasMarked) {
                 SurvNodeDiag::NoteFollowHolder(obj, SurvNodeDiag::FOLLOW_SKIP_MARKED);
@@ -1039,7 +1039,7 @@ void TracingCollector::DoResurrection(WorkStack& workStack)
         if (!IsMarkedObject<Generation::Old>(finalizerObj)) {
             DLOG(TRACE, "resurrectable obj @%p:%p", &ref, finalizerObj);
             CHECK(DiscoverReference(finalizerObj, ReferenceType::FINAL) == ReferenceStatus::DISCOVERED);
-            workStack.push_back(finalizerObj);
+            workStack.push_back(MarkStackEntry::MarkAndFollow(finalizerObj, true));
         }
         if (raw(ref.LoadPlain()) != reinterpret_cast<MAddress>(finalizerObj)) {
             HealRoot(ref, from_object(finalizerObj), HealSite::TracingCollectorResurrectFinalizer);
@@ -1049,6 +1049,7 @@ void TracingCollector::DoResurrection(WorkStack& workStack)
     (void)collectorResources.GetFinalizerProcessor().VisitFinalizers(func);
 
     size_t resurrectdObjects = 0;
+    MarkLiveCache liveCache(1);
     while (!workStack.empty()) {
         const MarkStackEntry entry = workStack.back();
         workStack.pop_back();
@@ -1061,24 +1062,46 @@ void TracingCollector::DoResurrection(WorkStack& workStack)
         }
         BaseObject* obj = entry.object();
 
-        // skip if the object already marked.
-        RegionInfo* regionInfo = RegionInfo::GetRegionInfoAt(reinterpret_cast<MAddress>(obj));
-        size_t offset = regionInfo->GetAddressOffset(reinterpret_cast<MAddress>(obj));
-        MarkView<Generation::Old> view = regionInfo->GetMarkView<Generation::Old>();
-        if (regionInfo->IsSurvivedObject(view, offset)) {
+        if (MarkEntryObject(obj, entry, &liveCache)) {
             continue;
         }
-
-        ++resurrectdObjects;
-        ResurrectObject(obj, offset, regionInfo);
-
-        // try to copy object child refs into work stack.
-        if (obj->HasRefField()) {
-            TraceObjectRefFields(obj, workStack);
+        if (entry.mark()) {
+            ++resurrectdObjects;
+        }
+        if (entry.follow() && obj->HasRefField()) {
+            TraceObjectRefFields(obj, workStack, entry.finalizable());
         }
     }
+    liveCache.Flush();
     markedObjectCount.fetch_add(resurrectdObjects, std::memory_order_relaxed);
     VLOG(REPORT, "resurrected objects %zu", resurrectdObjects);
+}
+
+bool TracingCollector::MarkEntryObject(BaseObject* obj, const MarkStackEntry& entry,
+                                       MarkLiveCache* cache) const
+{
+    if (!Collector::PlausibleManagedObjectGate("MarkEntryObject", obj)) {
+        return true;
+    }
+    RegionInfo* region = RegionInfo::GetRegionInfoAt(reinterpret_cast<MAddress>(obj));
+    bool firstLive = entry.incLive();
+    bool already = false;
+    if (entry.mark()) {
+        if (entry.finalizable()) {
+            already = region->ResurrectObjectWithLiveClaim(
+                obj, region->GetAddressOffset(reinterpret_cast<MAddress>(obj)), false, firstLive);
+        } else {
+            already = region->MarkObjectByOwnerWithLiveClaim(obj, obj->GetSize(), false, firstLive);
+        }
+    }
+    if (!already && firstLive) {
+        if (cache != nullptr) {
+            cache->IncLive(region, obj->GetSize());
+        } else {
+            region->AddLiveCounts(1, obj->GetSize());
+        }
+    }
+    return already;
 }
 
 void TracingCollector::Init() {}

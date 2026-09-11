@@ -23,6 +23,7 @@
 #define MRT_TEST_CONCURRENT_MARK (false)
 
 namespace MapleRuntime {
+class MarkLiveCache;
 // number of nanoseconds in a microsecond.
 constexpr uint64_t NS_PER_US = 1000;
 constexpr uint64_t NS_PER_S = 1000000000;
@@ -400,8 +401,13 @@ public:
         return marked;
     }
 
+    // Consume one object entry. Partial arrays must be decoded before this
+    // entry point; mark=false carries an already-owned accounting obligation.
+    virtual bool MarkEntryObject(BaseObject* obj, const MarkStackEntry& entry,
+                                 MarkLiveCache* cache) const;
+
     virtual void EnumRefFieldRoot(RefField<>& ref, RootSet& rootSet) const {};
-    virtual void TraceObjectRefFields(BaseObject* obj, WorkStack& workStack)
+    virtual void TraceObjectRefFields(BaseObject* obj, WorkStack& workStack, bool finalizable = false)
     {
         Collector::AbortUnimplemented("TracingCollector::TraceObjectRefFields");
     }

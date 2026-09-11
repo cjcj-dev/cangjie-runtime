@@ -9,6 +9,7 @@
 
 #include <cstddef>
 #include <cstdint>
+#include <functional>
 
 #include "Common/TypeDef.h"
 #include "Heap/Collector/MarkStackEntry.h"
@@ -31,7 +32,7 @@ class BaseObject;
 // ZGC splits the array and pushes the remainder back onto the mark stack,
 // which makes the tail stealable by the other mark workers.
 //
-// Default OFF; MRT_GCV2_PARTIAL_ARRAY=1 opts in.
+// Default ON; MRT_GCV2_PARTIAL_ARRAY=0 keeps the complete inline control path.
 namespace MarkPartialArray {
 
 // zGlobals.hpp:82-84. MIN_LENGTH is in elements; our ref slots are 8 bytes,
@@ -45,6 +46,19 @@ constexpr size_t MAX_LENGTH = static_cast<size_t>(MarkStackEntry::MAX_PARTIAL_AR
 constexpr size_t MAX_OFFSET = static_cast<size_t>(MarkStackEntry::MAX_PARTIAL_ARRAY_OFFSET);
 
 bool Enabled();
+
+using FieldVisitor = std::function<void(MAddress)>;
+using EntryPublisher = std::function<void(const MarkStackEntry&)>;
+
+// One producer/consumer implementation for both generations. Struct arrays
+// retain their GCTib walk; reference arrays publish typed continuations.
+void FollowObjectReferences(BaseObject* object, bool finalizable,
+                            const FieldVisitor& visit, const EntryPublisher& publish);
+void FollowPartialReferences(const MarkStackEntry& entry,
+                             const FieldVisitor& visit, const EntryPublisher& publish);
+void FollowElements(MAddress start, size_t length, bool finalizable,
+                    const FieldVisitor& visit, const EntryPublisher& publish);
+
 
 // Hot path: runs on every work-stack pop.
 inline bool IsPartialArrayEntry(const MarkStackEntry& entry)

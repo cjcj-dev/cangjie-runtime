@@ -76,6 +76,16 @@
 
 namespace MapleRuntime {
 #if defined(MRT_TESTABLE_INTERNALS)
+// Existing live-map tests bind these product adapters by symbol. Moving the
+// runtime consumer to the first-live result must not erase their testable
+// instantiations or make the test ELF instantiate its own copy.
+template bool RegionInfo::MarkObject<Generation::Young>(
+    MarkView<Generation::Young>, const BaseObject*, size_t, bool);
+template bool RegionInfo::MarkObject<Generation::Old>(
+    MarkView<Generation::Old>, const BaseObject*, size_t, bool);
+#endif
+
+#if defined(MRT_TESTABLE_INTERNALS)
 namespace {
 std::atomic<uint64_t> g_youngWeakSerialDiscoveries{ 0 };
 std::atomic<uint64_t> g_youngWeakLegacyParallelDiscoveries{ 0 };
@@ -147,6 +157,14 @@ bool WCollector::MarkObjectImpl(BaseObject* obj, bool youngClaim, MarkLiveCache*
              region, region->GetRegionType(), region->GetRegionStart(), region->GetLiveByteCount());
     }
     return marked;
+}
+
+bool WCollector::MarkEntryObject(BaseObject* obj, const MarkStackEntry& entry, MarkLiveCache* cache) const
+{
+    if (entry.mark() && !entry.finalizable()) {
+        return MarkObjectImpl(obj, false, cache);
+    }
+    return TracingCollector::MarkEntryObject(obj, entry, cache);
 }
 
 bool WCollector::ResurrectObject(BaseObject* obj, size_t offset, RegionInfo* region)
@@ -277,7 +295,7 @@ void WCollector::EnumAndTagRawRoot(ObjectRef& ref, RootSet& rootSet) const
 }
 
 // note each ref-field will not be traced twice, so each old pointer the tracer meets must come from previous gc.
-void WCollector::TraceRefField(BaseObject* obj, RefField<>& field, WorkStack& workStack) const
+void WCollector::TraceRefField(BaseObject* obj, RefField<>& field, WorkStack& workStack, bool finalizable) const
 {
     RefField<> oldField(field);
     // markstale: the mark-good fast path returns without healing, which is only safe if mark-good
@@ -346,7 +364,7 @@ void WCollector::TraceRefField(BaseObject* obj, RefField<>& field, WorkStack& wo
         if (!IsMarkedObject<Generation::Old>(targetObj)) {
 
             SurvNodeDiag::NoteTraceVisit(&field, targetObj, SurvNodeDiag::TRACE_PUSH);
-            workStack.push_back(targetObj);
+            workStack.push_back(MarkStackEntry::MarkAndFollow(targetObj, finalizable));
         } else {
             SurvNodeDiag::NoteTraceVisit(&field, targetObj, SurvNodeDiag::TRACE_SKIP_MARKED);
         }
@@ -426,7 +444,7 @@ void WCollector::TraceRefField(BaseObject* obj, RefField<>& field, WorkStack& wo
     if (!IsMarkedObject<Generation::Old>(latest)) {
 
         SurvNodeDiag::NoteTraceVisit(&field, latest, SurvNodeDiag::TRACE_PUSH);
-        workStack.push_back(latest);
+        workStack.push_back(MarkStackEntry::MarkAndFollow(latest, finalizable));
     } else {
         SurvNodeDiag::NoteTraceVisit(&field, latest, SurvNodeDiag::TRACE_SKIP_MARKED);
     }
@@ -437,29 +455,29 @@ void WCollector::TraceRefField(BaseObject* obj, RefField<>& field, WorkStack& wo
 // BaseObject* slot of our work stack, so TryForkTask can hand it to another
 // worker. If the descriptor does not fit one word we trace the chunk here
 // rather than drop it -- correctness never depends on the encoding succeeding.
-void WCollector::PushPartialArray(RefField<>* addr, size_t length, WorkStack& workStack) const
+void WCollector::PushPartialArray(RefField<>* addr, size_t length, WorkStack& workStack, bool finalizable) const
 {
     if (UNLIKELY(!MarkPartialArray::Encodable(addr, length))) {
         MarkPartialArray::NoteNotEncodable();
-        FollowArrayElementsSmall(nullptr, addr, length, workStack);
+        FollowArrayElementsSmall(nullptr, addr, length, workStack, finalizable);
         return;
     }
     MarkPartialArray::NoteChunkPushed();
-    workStack.push_back(MarkPartialArray::Encode(addr, length));
+    workStack.push_back(MarkPartialArray::Encode(addr, length, finalizable));
 }
 
 // zMark.cpp:208-214 (follow_array_elements_small).
 void WCollector::FollowArrayElementsSmall(BaseObject* holder, RefField<>* addr, size_t length,
-                                          WorkStack& workStack) const
+                                          WorkStack& workStack, bool finalizable) const
 {
     for (size_t i = 0; i < length; ++i) {
-        TraceRefField(holder, addr[i], workStack);
+        TraceRefField(holder, addr[i], workStack, finalizable);
     }
 }
 
 // zMark.cpp:216-255 (follow_array_elements_large), transcribed.
 void WCollector::FollowArrayElementsLarge(BaseObject* holder, RefField<>* addr, size_t length,
-                                          WorkStack& workStack) const
+                                          WorkStack& workStack, bool finalizable) const
 {
     RefField<>* const start = addr;
     RefField<>* const end = start + length;
@@ -476,7 +494,7 @@ void WCollector::FollowArrayElementsLarge(BaseObject* holder, RefField<>* addr, 
 
     // Push unaligned trailing part
     if (end > middleEnd) {
-        PushPartialArray(middleEnd, static_cast<size_t>(end - middleEnd), workStack);
+        PushPartialArray(middleEnd, static_cast<size_t>(end - middleEnd), workStack, finalizable);
     }
 
     // Push aligned middle part(s)
@@ -486,37 +504,24 @@ void WCollector::FollowArrayElementsLarge(BaseObject* holder, RefField<>* addr, 
         const size_t partialLength = AlignUp(static_cast<size_t>(partialAddr - middleStart) / parts,
                                              MarkPartialArray::MIN_LENGTH);
         partialAddr -= partialLength;
-        PushPartialArray(partialAddr, partialLength, workStack);
+        PushPartialArray(partialAddr, partialLength, workStack, finalizable);
     }
 
     // Follow leading part
     CHECK_DETAIL(start < middleStart, "Miscalculated middle start");
-    FollowArrayElementsSmall(holder, start, static_cast<size_t>(middleStart - start), workStack);
+    FollowArrayElementsSmall(holder, start, static_cast<size_t>(middleStart - start), workStack, finalizable);
 }
 
 // zMark.cpp:257-263 (follow_array_elements). The encodability probe has no ZGC
 // counterpart: ZGC bounds its heap so the entry always fits, whereas ours is
 // only checked here. Failing it means "trace inline", i.e. today's behaviour.
 void WCollector::FollowArrayElements(BaseObject* holder, RefField<>* addr, size_t length,
-                                     WorkStack& workStack) const
+                                     WorkStack& workStack, bool finalizable) const
 {
-    if (length <= MarkPartialArray::MIN_LENGTH) {
-        FollowArrayElementsSmall(holder, addr, length, workStack);
-        return;
-    }
-    // Every chunk this split can produce starts inside [addr, addr+length) and
-    // is no longer than `length`, so probing the last element bounds them all.
-    if (UNLIKELY(length > MarkPartialArray::MAX_LENGTH ||
-                 !MarkPartialArray::Encodable(
-                     reinterpret_cast<const void*>(
-                         AlignDown(reinterpret_cast<MAddress>(addr + length),
-                                   static_cast<MAddress>(MarkPartialArray::MIN_SIZE))),
-                     1))) {
-        MarkPartialArray::NoteNotEncodable();
-        FollowArrayElementsSmall(holder, addr, length, workStack);
-        return;
-    }
-    FollowArrayElementsLarge(holder, addr, length, workStack);
+    MarkPartialArray::FollowElements(reinterpret_cast<MAddress>(addr), length, finalizable,
+        [this, holder, &workStack, finalizable](MAddress slot) {
+            TraceRefField(holder, HeapSlotAt<>(slot), workStack, finalizable);
+        }, [&workStack](const MarkStackEntry& entry) { workStack.push_back(entry); });
 }
 
 // zMark.cpp:265-270 (follow_partial_array).
@@ -526,15 +531,17 @@ void WCollector::FollowPartialArray(const MarkStackEntry& entry, WorkStack& work
     size_t length = 0;
     MarkPartialArray::Decode(entry, chunkStart, length);
     MarkPartialArray::NoteChunkFollowed();
-    FollowArrayElements(nullptr, &HeapSlotAt<>(chunkStart), length, workStack);
+    FollowArrayElements(nullptr, &HeapSlotAt<>(chunkStart), length, workStack, entry.finalizable());
 }
 
-void WCollector::TraceObjectRefFields(BaseObject* obj, WorkStack& workStack)
+void WCollector::TraceObjectRefFields(BaseObject* obj, WorkStack& workStack, bool finalizable)
 {
     if (UNLIKELY(MarkCompleteVerify::Enabled())) {
         MarkCompleteVerify::NoteHolderTrace(obj);
     }
-    auto visitor = [this, obj, &workStack](RefField<>& field) { TraceRefField(obj, field, workStack); };
+    auto visitor = [this, obj, &workStack, finalizable](RefField<>& field) {
+        TraceRefField(obj, field, workStack, finalizable);
+    };
     TypeInfo* typeInfo = obj->GetTypeInfo();
     if (!typeInfo->HasRefField()) {
         return;
@@ -559,7 +566,7 @@ void WCollector::TraceObjectRefFields(BaseObject* obj, WorkStack& workStack)
             // a flat run of reference slots, the only shape it chunks. The struct
             // -component branch above has no ZGC counterpart and is left alone.
             if (UNLIKELY(MarkPartialArray::Enabled())) {
-                FollowArrayElements(obj, arrayContent, arrayLength, workStack);
+                FollowArrayElements(obj, arrayContent, arrayLength, workStack, finalizable);
                 return;
             }
             for (MIndex i = 0; i < arrayLength; ++i) {
@@ -970,6 +977,12 @@ void WCollector::VisitMinorRoots(const std::function<void(BaseObject*)>& visitor
 
 void WCollector::PushYoungObject(BaseObject* object, WorkStack& workStack, const char* origin) const
 {
+    PushYoungObject(object, workStack, origin, false);
+}
+
+void WCollector::PushYoungObject(BaseObject* object, WorkStack& workStack, const char* origin,
+                                  bool finalizable) const
+{
     if (!Heap::IsHeapAddress(object)) {
         return;
     }
@@ -978,7 +991,7 @@ void WCollector::PushYoungObject(BaseObject* object, WorkStack& workStack, const
     if (!Collector::PlausibleManagedObjectGate("PushYoungObject", object)) {
         BaseObject* host = Collector::TryRecoverInteriorBase(object);
         if (host != nullptr && host != object) {
-            PushYoungObject(host, workStack, origin);
+            PushYoungObject(host, workStack, origin, finalizable);
         }
         return;
     }
@@ -1067,7 +1080,14 @@ void WCollector::PushYoungObject(BaseObject* object, WorkStack& workStack, const
         !region->IsMarkedObject(region->GetMarkView<Generation::Young>(), object)) {
 
 
-        workStack.push_back(object);
+        bool firstLive = false;
+        const bool already = finalizable
+            ? region->ResurrectObjectWithLiveClaim(object,
+                region->GetAddressOffset(reinterpret_cast<MAddress>(object)), false, firstLive)
+            : region->MarkObjectByOwnerWithLiveClaim(object, object->GetSize(), false, firstLive);
+        if (!already) {
+            workStack.push_back(MarkStackEntry::Claimed(object, firstLive, true, finalizable));
+        }
     }
 }
 
@@ -1287,21 +1307,38 @@ public:
         const bool useBitmapLedger = shared.useBitmapLedger;
         const bool recordSlots = shared.recordSlots;
 
-        auto pushTarget = [collector, this](RefField<>& field) {
+        bool finalizable = false;
+        auto pushTarget = [collector, this, &finalizable](RefField<>& field) {
             BaseObject* target = collector->ResolveMinorReference(field);
             // h3seed3: same free|garbage scrub as TraceYoungClosureSerial.
             if (ScrubMinorFreeTarget(field, target, false)) {
                 return;
             }
-            collector->PushYoungObject(target, workStack, "closure_edge");
+            collector->PushYoungObject(target, workStack, "closure_edge", finalizable);
         };
 
+        auto visitSlot = [this, &localSlots, &pushTarget, recordSlots](MAddress slot) {
+            if (recordSlots &&
+                (shared.reachableSlotDomain == nullptr || shared.reachableSlotDomain->count(slot) != 0)) {
+                localSlots.push_back(slot);
+            }
+            pushTarget(HeapSlotAt<>(slot));
+        };
+        auto publish = [this](const MarkStackEntry& entry) { workStack.push_back(entry); };
         for (;;) {
             if (workStack.empty()) {
                 break;
             }
             const MarkStackEntry entry = workStack.back();
             workStack.pop_back();
+            finalizable = entry.finalizable();
+            if (entry.partialArray()) {
+                MarkPartialArray::FollowPartialReferences(entry, visitSlot, publish);
+                if (shared.pool != nullptr) {
+                    TryForkTask();
+                }
+                continue;
+            }
             BaseObject* object = entry.object();
             if (!Heap::IsHeapAddress(object)) {
                 continue;
@@ -1318,7 +1355,7 @@ public:
 
             if (useBitmapLedger) {
                 if (isYoung) {
-                    bool wasMarked = entry.mark() && collector->MarkYoungObject(object);
+                    bool wasMarked = collector->MarkEntryObject(object, entry, nullptr);
                     if (wasMarked) {
                         if (!entry.follow()) {
                             continue;
@@ -1364,7 +1401,7 @@ public:
                 }
             } else {
                 if (isYoung) {
-                    bool wasMarked = entry.mark() && collector->MarkYoungObject(object);
+                    bool wasMarked = collector->MarkEntryObject(object, entry, nullptr);
                     if (wasMarked) {
                         if (!entry.follow()) {
                             continue;
@@ -1429,14 +1466,7 @@ public:
                 }
                 continue;
             }
-            object->ForEachRefField([this, &localSlots, &pushTarget, recordSlots](RefField<>& field) {
-                MAddress slot = reinterpret_cast<MAddress>(&field);
-                if (recordSlots &&
-                    (shared.reachableSlotDomain == nullptr || shared.reachableSlotDomain->count(slot) != 0)) {
-                    localSlots.push_back(slot);
-                }
-                pushTarget(field);
-            });
+            MarkPartialArray::FollowObjectReferences(object, finalizable, visitSlot, publish);
             if (shared.pool != nullptr) {
                 TryForkTask();
             }
@@ -1626,11 +1656,23 @@ private:
         return shared.terminate.TryTerminate(*shared.stripes);
     }
 
-    void PushObject(BaseObject* object)
+    void PushObject(BaseObject* object, bool finalizable = false)
     {
-        const size_t stripeIndex = shared.StripeFor(object);
+        PublishEntry(MarkStackEntry::MarkAndFollow(object, finalizable));
+    }
+
+    void PublishEntry(const MarkStackEntry& entry)
+    {
+        MAddress address = 0;
+        if (entry.partialArray()) {
+            size_t length = 0;
+            MarkPartialArray::Decode(entry, address, length);
+        } else {
+            address = reinterpret_cast<MAddress>(entry.object());
+        }
+        const size_t stripeIndex = shared.StripeFor(reinterpret_cast<BaseObject*>(address));
         const bool publish = stripeIndex != context.StripeId();
-        context.Stacks().Push(*shared.stripes, stripeIndex, MarkStackEntry::MarkAndFollow(object), publish);
+        context.Stacks().Push(*shared.stripes, stripeIndex, entry, publish);
         if (publish) {
             shared.terminate.WakeUp();
         }
@@ -1666,7 +1708,7 @@ private:
         PushObject(target);
     }
 
-    void PushFilteredYoung(BaseObject* object, const char* origin)
+    void PushFilteredYoung(BaseObject* object, const char* origin, bool finalizable = false)
     {
         if (!Heap::IsHeapAddress(object)) {
             return;
@@ -1674,7 +1716,7 @@ private:
         if (!Collector::PlausibleManagedObjectGate("PushYoungObject", object)) {
             BaseObject* host = Collector::TryRecoverInteriorBase(object);
             if (host != nullptr && host != object) {
-                PushFilteredYoung(host, origin);
+                PushFilteredYoung(host, origin, finalizable);
             }
             return;
         }
@@ -1690,11 +1732,28 @@ private:
         }
 
 
-        PushObject(object);
+        PushObject(object, finalizable);
     }
 
     void ProcessObject(const MarkStackEntry& entry, size_t& nMarked)
     {
+        YoungStripedWorkerOutput& output = *shared.outputs[workerSlot];
+        auto visitSlot = [this, &output, &entry](MAddress slot) {
+            if (shared.recordSlots &&
+                (shared.reachableSlotDomain == nullptr || shared.reachableSlotDomain->count(slot) != 0)) {
+                output.slots.push_back(slot);
+            }
+            auto& field = HeapSlotAt<>(slot);
+            BaseObject* target = shared.collector->ResolveMinorReference(field);
+            if (!ScrubMinorFreeTarget(field, target, false)) {
+                PushFilteredYoung(target, "closure_edge", entry.finalizable());
+            }
+        };
+        auto publish = [this](const MarkStackEntry& work) { PublishEntry(work); };
+        if (entry.partialArray()) {
+            MarkPartialArray::FollowPartialReferences(entry, visitSlot, publish);
+            return;
+        }
         BaseObject* object = entry.object();
         if (!Heap::IsHeapAddress(object)) {
             return;
@@ -1710,9 +1769,7 @@ private:
             return;
         }
 
-        YoungStripedWorkerOutput& output = *shared.outputs[workerSlot];
         auto& localObjects = output.objects;
-        auto& localSlots = output.slots;
         auto& localWeaks = output.weaks;
         WCollector* collector = shared.collector;
         RegionInfo* region = RegionInfo::GetRegionInfoAt(reinterpret_cast<MAddress>(object));
@@ -1720,7 +1777,7 @@ private:
 
         if (shared.useBitmapLedger) {
             if (isYoung) {
-                bool wasMarked = entry.mark() && collector->MarkYoungObject(object, &context.Cache());
+                bool wasMarked = collector->MarkEntryObject(object, entry, &context.Cache());
                 if (wasMarked) {
                     if (!entry.follow()) {
                         return;
@@ -1743,7 +1800,7 @@ private:
             }
         } else {
             if (isYoung) {
-                bool wasMarked = entry.mark() && collector->MarkYoungObject(object, &context.Cache());
+                bool wasMarked = collector->MarkEntryObject(object, entry, &context.Cache());
                 if (wasMarked) {
                     if (!entry.follow()) {
                         return;
@@ -1775,14 +1832,6 @@ private:
         if (!entry.follow()) {
             return;
         }
-        auto pushTarget = [this, collector](RefField<>& field) {
-            BaseObject* target = collector->ResolveMinorReference(field);
-            // h3seed3: same free|garbage scrub as TraceYoungClosureSerial.
-            if (ScrubMinorFreeTarget(field, target, false)) {
-                return;
-            }
-            PushFilteredYoung(target, "closure_edge");
-        };
         if (UNLIKELY(object->IsWeakRef())) {
             HeapSlot<>& referentField = HeapSlotAt<>(reinterpret_cast<MAddress>(object) + TYPEINFO_PTR_SIZE);
             localWeaks.push_back(reinterpret_cast<MAddress>(&referentField));
@@ -1791,14 +1840,7 @@ private:
 #endif
             return;
         }
-        object->ForEachRefField([this, &localSlots, &pushTarget](RefField<>& field) {
-            MAddress slot = reinterpret_cast<MAddress>(&field);
-            if (shared.recordSlots &&
-                (shared.reachableSlotDomain == nullptr || shared.reachableSlotDomain->count(slot) != 0)) {
-                localSlots.push_back(slot);
-            }
-            pushTarget(field);
-        });
+        MarkPartialArray::FollowObjectReferences(object, entry.finalizable(), visitSlot, publish);
     }
 
     YoungStripedShared& shared;
@@ -1819,17 +1861,31 @@ void WCollector::TraceYoungClosureSerial(WorkStack& workStack, bool fullYoungSca
         }
         (void)LedgerInsert(reachableSlots, slot);
     };
-    auto pushTarget = [this, &workStack](RefField<>& field) {
+    bool finalizable = false;
+    auto pushTarget = [this, &workStack, &finalizable](RefField<>& field) {
         BaseObject* target = ResolveMinorReference(field);
         if (ScrubMinorFreeTarget(field, target, false)) {
             return;
         }
 
-        PushYoungObject(target, workStack, "closure_edge");
+        PushYoungObject(target, workStack, "closure_edge", finalizable);
     };
+    auto visitSlot = [&recordReachableSlot, &pushTarget, recordSlots](MAddress slot) {
+        auto& field = HeapSlotAt<>(slot);
+        if (recordSlots) {
+            recordReachableSlot(field);
+        }
+        pushTarget(field);
+    };
+    auto publish = [&workStack](const MarkStackEntry& entry) { workStack.push_back(entry); };
     while (!workStack.empty()) {
         const MarkStackEntry entry = workStack.back();
         workStack.pop_back();
+        finalizable = entry.finalizable();
+        if (entry.partialArray()) {
+            MarkPartialArray::FollowPartialReferences(entry, visitSlot, publish);
+            continue;
+        }
         BaseObject* object = entry.object();
         if (!Heap::IsHeapAddress(object)) {
             continue;
@@ -1847,7 +1903,7 @@ void WCollector::TraceYoungClosureSerial(WorkStack& workStack, bool fullYoungSca
 
         if (useBitmapLedger) {
             if (isYoung) {
-                bool wasMarked = entry.mark() && MarkYoungObject(object);
+                bool wasMarked = MarkEntryObject(object, entry, nullptr);
                 if (wasMarked) {
                     if (!entry.follow()) {
                         continue;
@@ -1912,9 +1968,7 @@ void WCollector::TraceYoungClosureSerial(WorkStack& workStack, bool fullYoungSca
             if (!isYoung) {
                 continue;
             }
-            if (entry.mark()) {
-                (void)MarkYoungObject(object);
-            }
+            (void)MarkEntryObject(object, entry, nullptr);
             reachableVec.push_back(object);
         }
 
@@ -1929,12 +1983,7 @@ void WCollector::TraceYoungClosureSerial(WorkStack& workStack, bool fullYoungSca
 #endif
             continue;
         }
-        object->ForEachRefField([&recordReachableSlot, &pushTarget, recordSlots](RefField<>& field) {
-            if (recordSlots) {
-                recordReachableSlot(field);
-            }
-            pushTarget(field);
-        });
+        MarkPartialArray::FollowObjectReferences(object, finalizable, visitSlot, publish);
     }
 }
 
@@ -2133,7 +2182,14 @@ void WCollector::TraceYoungClosureStriped(WorkStack& workStack, bool fullYoungSc
     while (!workStack.empty()) {
         const MarkStackEntry entry = workStack.back();
         workStack.pop_back();
-        seed.Push(*shared.stripes, shared.StripeFor(entry.object()), entry, true);
+        MAddress address = 0;
+        if (entry.partialArray()) {
+            size_t length = 0;
+            MarkPartialArray::Decode(entry, address, length);
+        } else {
+            address = reinterpret_cast<MAddress>(entry.object());
+        }
+        seed.Push(*shared.stripes, shared.StripeFor(reinterpret_cast<BaseObject*>(address)), entry, true);
         ++rootCount;
     }
     CHECK_DETAIL(rootCount != 0, "striped mark requires a non-empty root stack");

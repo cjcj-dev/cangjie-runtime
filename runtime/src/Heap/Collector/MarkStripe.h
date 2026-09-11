@@ -198,7 +198,11 @@ public:
     MarkContext(size_t workerCount, size_t workerId, MarkStripeSet& stripes);
 
     size_t StripeId() const { return stripeId; }
-    void SetStripeId(size_t value) { stripeId = value; }
+    void SetStripeId(size_t value)
+    {
+        cache.Flush();
+        stripeId = value;
+    }
     MarkThreadLocalStacks& Stacks() { return stacks; }
     MarkLiveCache& Cache() { return cache; }
 
