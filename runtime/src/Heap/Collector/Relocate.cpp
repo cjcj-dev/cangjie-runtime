@@ -1776,6 +1776,11 @@ void WCollector::EvacuateYoungRegions(const std::vector<BaseObject*>& reachableV
             if (doYoungFlip && kFlipAfterFromSpace) {
                 doFlip();
             }
+#if defined(MRT_TESTABLE_INTERNALS)
+            // Prepared and flipped, still POST_TRACE: a test driver can enter
+            // the ordinary phase-refused mutator path without sealing copying.
+            RunRemapWindowTestHook(7, nullptr, nullptr);
+#endif
             TransitionToGCPhase(GCPhase::GC_PHASE_PREFORWARD, true);
             postEvacPoint("pre-fix-forwarded", false);
         }
