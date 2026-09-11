@@ -93,6 +93,8 @@ void CollectorResources::Init()
     StartGCThreads();
     finalizerProcessor.Start();
     gcStats.Init();
+    youngCycle.stats.Init();
+    oldCycle.stats.Init();
     MutatorAllocRate::initialize();
     if (Uncommitter::Enabled()) {
         LOG(RTLOG_INFO, "Uncommit: Enabled delay=%zus tick=%ums",
@@ -260,13 +262,173 @@ void CollectorResources::RunDriverLoop(GCDriverKind kind)
     NotifyGCFinished(GCTask::TASK_INDEX_FOR_EXIT);
 }
 
+CycleToken CollectorResources::GetExecutionToken() const
+{
+    CycleContext& context = GetExecutionContext();
+    return { context.generation, context.sequence.load(std::memory_order_acquire) };
+}
+
+CycleContext& CollectorResources::GetCycleContext(const CycleToken& token)
+{
+    CycleContext& context = GetCycleContext(token.generation);
+    CHECK_DETAIL(token.sequence != 0 && GetCycleSnapshot().Active(token.generation) &&
+        context.sequence.load(std::memory_order_acquire) == token.sequence,
+        "cycle token does not own the active generation slot");
+    return context;
+}
+
+void CollectorResources::SetGcStarted(bool val)
+{
+    std::unique_lock<std::mutex> lifecycleLock(cycleLifecycleLock);
+    if (val) {
+        if (controlActivity.load(std::memory_order_acquire)) {
+            return;
+        }
+        // A product cycle already has its own token and must never be replaced
+        // by the retained control adapter.
+        if (GetCycleSnapshot().AnyActive()) {
+            return;
+        }
+        controlActivity.store(true, std::memory_order_release);
+        // The retained API predates per-generation callers. Its historical
+        // non-young reason/phase state belongs to the old slot.
+        CycleContext& context = GetCycleContext(CycleGeneration::Old);
+        context.reason = gcStats.reason;
+        context.taskIndex = GCTask::ASYNC_TASK_INDEX;
+        context.request = nullptr;
+        context.stats.reason = gcStats.reason;
+        const uint64_t sequence = GcLog::BeginCycle(CycleSlot(context.generation));
+        context.sequence.store(sequence, std::memory_order_release);
+        completedOldControlCycle.store(0, std::memory_order_release);
+        executionContext.store(&context, std::memory_order_release);
+        controlCycleToken = { context.generation, sequence };
+        const uint32_t slot = CycleSnapshot::ActiveBit(context.generation) |
+            (static_cast<uint32_t>(GC_PHASE_IDLE) << (CycleSlot(context.generation) * 8));
+        const uint32_t previous = cycleState.load(std::memory_order_acquire);
+        cycleState.store((previous & ~CycleSnapshot::SlotMask(context.generation)) | slot,
+                         std::memory_order_release);
+        return;
+    }
+
+    if (!controlActivity.exchange(false, std::memory_order_acq_rel)) {
+        return;
+    }
+    const CycleToken token = controlCycleToken;
+    controlCycleToken.sequence = 0;
+    if (token.sequence == 0) {
+        return;
+    }
+    CycleContext& context = GetCycleContext(token.generation);
+    if (!GetCycleSnapshot().Active(token.generation) ||
+        context.sequence.load(std::memory_order_acquire) != token.sequence) {
+        return;
+    }
+    GcLog::CompleteCycle(token.sequence, CycleSlot(token.generation));
+    std::atomic<uint64_t>& completed = token.generation == CycleGeneration::Young ?
+        completedYoungControlCycle : completedOldControlCycle;
+    completed.store(token.sequence, std::memory_order_release);
+    cycleState.fetch_and(~CycleSnapshot::SlotMask(token.generation), std::memory_order_acq_rel);
+    context.sequence.store(0, std::memory_order_release);
+}
+
+CycleToken CollectorResources::BeginCycle(uint64_t taskIndex, GCReason reason)
+{
+    std::unique_lock<std::mutex> lifecycleLock(cycleLifecycleLock);
+    // I10 migrates ownership with the driver/STW locks retained. Shared page,
+    // task and root domains must be migrated before I16 removes this guard.
+    CHECK_DETAIL(!GetCycleSnapshot().AnyActive(), "parallel cycle execution requires I11-I15 domains");
+    CycleContext& context = GetCycleContext(reason == GC_REASON_YOUNG ? CycleGeneration::Young : CycleGeneration::Old);
+    context.reason = reason;
+    context.taskIndex = taskIndex;
+    context.request = executionRequest;
+    context.stats.reason = reason;
+    context.stats.heapThreshold.store(gcStats.GetThreshold(), std::memory_order_relaxed);
+    context.stats.garbageRatio = gcStats.garbageRatio;
+    context.stats.collectionRate = gcStats.collectionRate;
+    std::atomic<uint64_t>& completedControl = context.generation == CycleGeneration::Young ?
+        completedYoungControlCycle : completedOldControlCycle;
+    completedControl.store(0, std::memory_order_release);
+    const uint64_t sequence = GcLog::BeginCycle(CycleSlot(context.generation));
+    context.sequence.store(sequence, std::memory_order_release);
+    executionContext.store(&context, std::memory_order_release);
+    const uint32_t slot = CycleSnapshot::ActiveBit(context.generation) |
+        (static_cast<uint32_t>(GC_PHASE_IDLE) << (CycleSlot(context.generation) * 8));
+    uint32_t previous = cycleState.load(std::memory_order_acquire);
+    while (!cycleState.compare_exchange_weak(previous,
+        (previous & ~CycleSnapshot::SlotMask(context.generation)) | slot,
+        std::memory_order_acq_rel, std::memory_order_acquire)) {}
+    return { context.generation, sequence };
+}
+
+bool CollectorResources::PublishCyclePhase(const CycleToken& token, GCPhase phase)
+{
+    std::unique_lock<std::mutex> lifecycleLock(cycleLifecycleLock);
+    CycleContext& context = GetCycleContext(token.generation);
+    if (token.sequence == 0 || !GetCycleSnapshot().Active(token.generation) ||
+        context.sequence.load(std::memory_order_acquire) != token.sequence) {
+        return false;
+    }
+    if (controlActivity.load(std::memory_order_acquire) &&
+        controlCycleToken.generation == token.generation && controlCycleToken.sequence == token.sequence) {
+        context.reason = gcStats.reason;
+        context.stats.reason = gcStats.reason;
+    }
+    const size_t shift = CycleSlot(token.generation) * 8;
+    const uint32_t phaseMask = 0x7fu << shift;
+    uint32_t previous = cycleState.load(std::memory_order_acquire);
+    while (!cycleState.compare_exchange_weak(previous, (previous & ~phaseMask) |
+        (static_cast<uint32_t>(phase) << shift), std::memory_order_acq_rel, std::memory_order_acquire)) {}
+    return true;
+}
+
+bool CollectorResources::PublishInactiveCyclePhase(CycleGeneration generation, GCPhase phase)
+{
+    std::unique_lock<std::mutex> lifecycleLock(cycleLifecycleLock);
+    if (GetCycleSnapshot().Active(generation)) {
+        return false;
+    }
+    const size_t shift = CycleSlot(generation) * 8;
+    const uint32_t phaseMask = 0x7fu << shift;
+    uint32_t previous = cycleState.load(std::memory_order_acquire);
+    while (!cycleState.compare_exchange_weak(previous, (previous & ~phaseMask) |
+        (static_cast<uint32_t>(phase) << shift), std::memory_order_acq_rel, std::memory_order_acquire)) {}
+    return true;
+}
+
+bool CollectorResources::EndCycle(const CycleToken& token)
+{
+    std::unique_lock<std::mutex> lifecycleLock(cycleLifecycleLock);
+    CycleContext& context = GetCycleContext(token.generation);
+    if (token.sequence == 0 || !GetCycleSnapshot().Active(token.generation) ||
+        context.sequence.load(std::memory_order_acquire) != token.sequence) {
+        return false;
+    }
+    context.request = nullptr;
+    GcLog::CompleteCycle(token.sequence, CycleSlot(token.generation));
+    // The global policy observes a completed cycle at this explicit merge point.
+    // CollectionSample/model changes remain with I28; no request receipt is issued here.
+    gcStats.reason = context.reason;
+    gcStats.gcStartTime = context.stats.gcStartTime;
+    gcStats.gcEndTime = context.stats.gcEndTime;
+    gcStats.liveBytesBeforeGC = context.stats.liveBytesBeforeGC;
+    gcStats.liveBytesAfterGC = context.stats.liveBytesAfterGC;
+    gcStats.collectedBytes = context.stats.collectedBytes;
+    gcStats.collectionRate = context.stats.collectionRate;
+    gcStats.garbageRatio = context.stats.garbageRatio;
+    gcStats.heapThreshold.store(context.stats.GetThreshold(), std::memory_order_release);
+    std::unique_lock<std::mutex> lock(gcFinishedCondMutex);
+    cycleState.fetch_and(~CycleSnapshot::SlotMask(token.generation), std::memory_order_acq_rel);
+    context.sequence.store(0, std::memory_order_release);
+    gcFinishedCondVar.notify_all();
+    return true;
+}
+
 bool CollectorResources::ExecuteDriverRequest(const GCDriverRequest& request)
 {
     CHECK(request.reason < GC_REASON_MAX);
-    // OpenJDK has two driver threads and two ports, but both run_thread loops
-    // hold the same ZDriverLocker around the whole collection
-    // (zDriver.cpp:201-224,463-487). Forwarding retirement and the collector's
-    // phase/reason fields rely on that single lifecycle owner.
+    // Retain the serial baseline while I10-I15 migrate shared obligations.
+    // ZGC releases this lock inside the old body, not at port dispatch
+    // (zGeneration.cpp:992-1007); I16 owns enabling that window here.
     std::lock_guard<std::mutex> lock(driverLock);
 #if defined(MRT_GC_UNIT_TESTS)
     Collector* collector = testCollector != nullptr ? testCollector : static_cast<Collector*>(&collectorProxy);
@@ -277,8 +439,11 @@ bool CollectorResources::ExecuteDriverRequest(const GCDriverRequest& request)
     if (port.Abort().Poll()) {
         return false;
     }
-    MRT_ASSERT(!driverRequestActive, "nested driver request lifecycle");
-    driverRequestActive = true;
+    const CycleGeneration generation = request.reason == GC_REASON_YOUNG ? CycleGeneration::Young : CycleGeneration::Old;
+    const uint8_t requestBit = 1u << CycleSlot(generation);
+    executionRequest = &request;
+    const uint8_t previousRequests = activeRequests.fetch_or(requestBit, std::memory_order_acq_rel);
+    MRT_ASSERT((previousRequests & requestBit) == 0, "nested generation request lifecycle");
 
     // A major request owns its young prelude while holding the driver lock,
     // exactly like ZDriverMajor::collect_young followed by collect_old
@@ -292,8 +457,7 @@ bool CollectorResources::ExecuteDriverRequest(const GCDriverRequest& request)
         }
 #endif
         if (majorDriverPort.Abort().Poll()) {
-            driverRequestActive = false;
-            CancelDriverRequestLifecycle();
+            CancelDriverRequestLifecycle(generation);
             return false;
         }
     }
@@ -302,7 +466,8 @@ bool CollectorResources::ExecuteDriverRequest(const GCDriverRequest& request)
          static_cast<unsigned long long>(request.sequence), request.reason);
     collector->RunGarbageCollection(request.asynchronous ? GCTask::ASYNC_TASK_INDEX : request.sequence,
                                     request.reason);
-    driverRequestActive = false;
+    executionRequest = nullptr;
+    activeRequests.fetch_and(static_cast<uint8_t>(~requestBit), std::memory_order_acq_rel);
     NotifyGCFinished(request.asynchronous ? GCTask::ASYNC_TASK_INDEX : request.sequence);
     return true;
 }
@@ -317,17 +482,19 @@ bool CollectorResources::ProcessDriverRequest(GCDriverPort& port, const GCDriver
     return true;
 }
 
-void CollectorResources::CancelDriverRequestLifecycle()
+void CollectorResources::CancelDriverRequestLifecycle(CycleGeneration generation)
 {
+    SetGcStarted(false);
     std::unique_lock<std::mutex> lock(gcFinishedCondMutex);
-    isGcStarted.store(false, std::memory_order_release);
+    executionRequest = nullptr;
+    activeRequests.fetch_and(static_cast<uint8_t>(~(1u << CycleSlot(generation))), std::memory_order_acq_rel);
     gcFinishedCondVar.notify_all();
 }
 
 // For the ignored gc request, check whether need to wait for current gc finish
 void CollectorResources::PostIgnoredGcRequest(bool shouldWait)
 {
-    if (shouldWait && isGcStarted.load(std::memory_order_seq_cst)) {
+    if (shouldWait && IsGcStarted()) {
         ScopedEnterSaferegion safeRegion(false);
         WaitForGCFinish();
     }
@@ -410,8 +577,8 @@ void CollectorResources::NotifyGCFinished(uint64_t gcIndex)
 #if defined(MRT_GC_UNIT_TESTS)
     testCompletionCount.fetch_add(1, std::memory_order_relaxed);
 #endif
+    SetGcStarted(false);
     std::unique_lock<std::mutex> lock(gcFinishedCondMutex);
-    isGcStarted.store(false, std::memory_order_release);
     if (gcIndex != GCTask::ASYNC_TASK_INDEX) { // sync gc, need set taskIndex
         finishedGcIndex.store(gcIndex, std::memory_order_release);
     }
@@ -421,7 +588,7 @@ void CollectorResources::NotifyGCFinished(uint64_t gcIndex)
 
 void CollectorResources::NotifyGCPhaseFinished(uint64_t gcIndex)
 {
-    if (!driverRequestActive) {
+    if (activeRequests.load(std::memory_order_acquire) == 0) {
         NotifyGCFinished(gcIndex);
     }
 }
@@ -430,9 +597,9 @@ void CollectorResources::WaitForGCFinish()
 {
     uint64_t startTime = TimeUtil::MicroSeconds();
     std::unique_lock<std::mutex> lock(gcFinishedCondMutex);
-    uint64_t curWaitGcIndex = finishedGcIndex.load();
-    std::function<bool()> pred = [this, curWaitGcIndex] {
-        return (!IsGcStarted() || (curWaitGcIndex != finishedGcIndex) ||
+    // This API waits for the activity set. DriverPort::Wait owns request receipts.
+    std::function<bool()> pred = [this] {
+        return (!IsGcStarted() ||
                 (finishedGcIndex == GCTask::TASK_INDEX_FOR_EXIT));
     };
 #ifdef __OHOS__

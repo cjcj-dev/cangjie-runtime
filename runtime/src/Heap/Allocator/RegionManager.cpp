@@ -2585,7 +2585,7 @@ void RegionManager::FinishIncompleteFromRegions()
     std::sort(snap.begin(), snap.end());
     snap.erase(std::unique(snap.begin(), snap.end()), snap.end());
 
-    const bool young = Heap::GetHeap().GetCollector().GetGCStats().reason == GC_REASON_YOUNG;
+    const bool young = Heap::GetHeap().GetCollector().IsYoungCycle();
     static std::atomic<size_t> g_zombieFinished{ 0 };
     static std::atomic<size_t> g_zombieKept{ 0 };
     size_t finished = 0;
@@ -3758,8 +3758,8 @@ void RegionManager::ForwardRegion(RegionInfo* region)
             MarkView<Generation::Young> promotionView = region->GetMarkView<Generation::Young>();
             region->PreserveRetainedLiveInfo();
             {
-                GCReason r = Heap::GetHeap().GetCollector().GetGCStats().reason;
-                const bool deferred = PromotedRegionDomain::DeferPromotedFieldScan(r == GC_REASON_YOUNG);
+                GCReason r = Heap::GetHeap().GetCollector().GetGCReason();
+                const bool deferred = PromotedRegionDomain::DeferPromotedFieldScan(Heap::GetHeap().GetCollector().IsYoungCycle());
                 if (deferred) {
                     PromotedRegionDomain::Register(region, PromotedRegionDomain::RegisterPath::Abandon);
                 }
@@ -3826,8 +3826,8 @@ void RegionManager::ForwardRegion(RegionInfo* region)
             // field walk until after relocation (zRelocate.cpp:1289-1306).
             region->PreserveRetainedLiveInfo();
             {
-                GCReason r = Heap::GetHeap().GetCollector().GetGCStats().reason;
-                const bool deferred = PromotedRegionDomain::DeferPromotedFieldScan(r == GC_REASON_YOUNG);
+                GCReason r = Heap::GetHeap().GetCollector().GetGCReason();
+                const bool deferred = PromotedRegionDomain::DeferPromotedFieldScan(Heap::GetHeap().GetCollector().IsYoungCycle());
                 if (deferred) {
                     PromotedRegionDomain::Register(region, PromotedRegionDomain::RegisterPath::InPlace);
                 }
@@ -4003,8 +4003,8 @@ void RegionManager::ForwardRegion(RegionInfo* region)
             // post-relocation discharge (zRelocate.cpp:1289-1306).
             region->PreserveRetainedLiveInfo();
             {
-                GCReason r = Heap::GetHeap().GetCollector().GetGCStats().reason;
-                const bool deferred = PromotedRegionDomain::DeferPromotedFieldScan(r == GC_REASON_YOUNG);
+                GCReason r = Heap::GetHeap().GetCollector().GetGCReason();
+                const bool deferred = PromotedRegionDomain::DeferPromotedFieldScan(Heap::GetHeap().GetCollector().IsYoungCycle());
                 if (deferred) {
                     PromotedRegionDomain::Register(region, PromotedRegionDomain::RegisterPath::Abandon);
                 }

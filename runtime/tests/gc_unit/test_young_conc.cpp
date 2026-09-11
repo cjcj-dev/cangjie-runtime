@@ -188,6 +188,22 @@ private:
     Concurrency concurrency;
 };
 
+class YoungCycleScope final {
+public:
+    explicit YoungCycleScope(CollectorResources& resources,
+                             GCPhase phase = GCPhase::GC_PHASE_CLEAR_SATB_BUFFER)
+        : resources(resources), cycle(resources.BeginCycle(GCTask::ASYNC_TASK_INDEX, GC_REASON_YOUNG))
+    {
+        resources.PublishCyclePhase(cycle, phase);
+    }
+
+    ~YoungCycleScope() { resources.EndCycle(cycle); }
+
+private:
+    CollectorResources& resources;
+    CycleToken cycle;
+};
+
 // Bitmap/ledger mechanism model. Product-path attribution is covered by the
 // runtime-dispatch tests below, not by this helper.
 void ModelAllocBlackPaint(RegionInfo* reg, BaseObject* obj, size_t totalSize, AllocBuffer* ledger)
@@ -443,18 +459,13 @@ GC_TEST(YoungConc, LateEdgeFollowReceiptSurvivesSatbHandoff)
     Mutator mutator;
     ThreadLocal::SetMutator(&mutator);
     CollectorResources& resources = Heap::GetHeap().GetCollectorResources();
-    const bool startedBefore = resources.IsGcStarted();
-    const GCReason reasonBefore = resources.GetGCStats().reason;
-    resources.SetGcStarted(true);
-    resources.GetGCStats().reason = GC_REASON_YOUNG;
+    YoungCycleScope cycle(resources, GCPhase::GC_PHASE_TRACE);
 
     // Product barrier path: this is a late TRACE-window store, not a direct
     // call to the publication helper.
     barrier.Record(fx.obj0, reinterpret_cast<MAddress>(field), fx.obj1);
     mutator.FlushSatbBuffer();
 
-    resources.SetGcStarted(startedBefore);
-    resources.GetGCStats().reason = reasonBefore;
     ThreadLocal::SetMutator(nullptr);
 
     bool sawFollow = false;
@@ -505,10 +516,7 @@ GC_OTHER_VM_TEST(YoungConc, LateEdgeFollowReceiptReachesYoungMarkConsumer)
     TestTraceBarrier barrier(collector, rememberedSet);
     Mutator mutator;
     ThreadLocal::SetMutator(&mutator);
-    const bool startedBefore = resources.IsGcStarted();
-    const GCReason reasonBefore = resources.GetGCStats().reason;
-    resources.SetGcStarted(true);
-    resources.GetGCStats().reason = GC_REASON_YOUNG;
+    YoungCycleScope cycle(resources, GCPhase::GC_PHASE_TRACE);
 
     auto* holderField = &HeapSlotAt<>(reinterpret_cast<MAddress>(fx.obj0) + TYPEINFO_PTR_SIZE);
     barrier.Record(fx.obj0, reinterpret_cast<MAddress>(holderField), fx.obj1);
@@ -520,8 +528,6 @@ GC_OTHER_VM_TEST(YoungConc, LateEdgeFollowReceiptReachesYoungMarkConsumer)
     std::fprintf(stderr, "DETAIL late_edge_consumer stage=after_consume child_reached=%d\n",
                  static_cast<int>(childReached));
 
-    resources.SetGcStarted(startedBefore);
-    resources.GetGCStats().reason = reasonBefore;
     GC_EXPECT_TRUE(childReached);
 
     RelocationReceiptTestAccess::BindThreadPool(resources, nullptr);
@@ -577,10 +583,7 @@ GC_OTHER_VM_TEST(YoungConc, LateEdgeFollowReceiptReachesYoungRuntimeDispatch)
     TestTraceBarrier barrier(collector, producerRememberedSet);
     Mutator mutator;
     ThreadLocal::SetMutator(&mutator);
-    const bool startedBefore = resources.IsGcStarted();
-    const GCReason reasonBefore = resources.GetGCStats().reason;
-    resources.SetGcStarted(true);
-    resources.GetGCStats().reason = GC_REASON_YOUNG;
+    YoungCycleScope cycle(resources, GCPhase::GC_PHASE_TRACE);
 
     auto* holderField = &HeapSlotAt<>(reinterpret_cast<MAddress>(fx.obj0) + TYPEINFO_PTR_SIZE);
     barrier.Record(fx.obj0, reinterpret_cast<MAddress>(holderField), fx.obj1);
@@ -597,8 +600,6 @@ GC_OTHER_VM_TEST(YoungConc, LateEdgeFollowReceiptReachesYoungRuntimeDispatch)
                  "DETAIL late_edge_consumer stage=after_young_runtime_entry child_marked=%d stayed_young=%d\n",
                  static_cast<int>(childMarked), static_cast<int>(stayedYoung));
 
-    resources.SetGcStarted(startedBefore);
-    resources.GetGCStats().reason = reasonBefore;
     GC_EXPECT_TRUE(childMarked);
 
     RelocationReceiptTestAccess::BindThreadPool(resources, nullptr);
@@ -651,8 +652,6 @@ GC_OTHER_VM_TEST(YoungConc, Y2yAfterReleaseBatchForcesContinueAndReachesClosure)
     TestTraceBarrier barrier(collector, producerRememberedSet);
     Mutator mutator;
     ThreadLocal::SetMutator(&mutator);
-    const bool startedBefore = resources.IsGcStarted();
-    const GCReason reasonBefore = resources.GetGCStats().reason;
 #if defined(MRT_GC_UNIT_TESTS)
     ResetY2yHandoffTestReceipt();
     // Produce the holderless y2y slot through the product barrier before mark
@@ -662,8 +661,7 @@ GC_OTHER_VM_TEST(YoungConc, Y2yAfterReleaseBatchForcesContinueAndReachesClosure)
     barrier.PostWriteReference(nullptr, *slotParentField, slotChild, zpointer::null);
     GC_EXPECT_EQ(producerBuffer->Y2yDirtySlotCount(), 1u);
 #endif
-    resources.SetGcStarted(true);
-    resources.GetGCStats().reason = GC_REASON_YOUNG;
+    YoungCycleScope cycle(resources);
 #if defined(MRT_GC_UNIT_TESTS)
     // The old holder exercises the pre-release merge. The young holder is
     // injected only after stw.reset(), so the first mark-end must fail and the
@@ -690,8 +688,6 @@ GC_OTHER_VM_TEST(YoungConc, Y2yAfterReleaseBatchForcesContinueAndReachesClosure)
     GC_EXPECT_TRUE(receipt.afterStw2 >= 2);
     GC_EXPECT_TRUE(receipt.phase2 >= 3);
 #endif
-    resources.SetGcStarted(startedBefore);
-    resources.GetGCStats().reason = reasonBefore;
     const bool stayedYoung = fx.region1->IsYoungRegion();
     const bool childMarked = stayedYoung
         ? fx.region1->IsMarkedObject(fx.region1->GetMarkView<Generation::Young>(), child)
@@ -739,10 +735,7 @@ GC_OTHER_VM_TEST(YoungConc, SatbAfterWorkerTerminationUsesBoundedMarkEndContinue
     space.GetRegionManager().AddRawPointerObject(second);
     Heap::GetHeap().GetRememberedSet().Initialize(fx.heapStart, 2 * RegionInfo::UNIT_SIZE);
     Mutator producer;
-    const bool startedBefore = resources.IsGcStarted();
-    const GCReason reasonBefore = resources.GetGCStats().reason;
-    resources.SetGcStarted(true);
-    resources.GetGCStats().reason = GC_REASON_YOUNG;
+    YoungCycleScope cycle(resources);
     ResetMarkTerminateTestReceipt();
     ArmSatbBeforeMarkEndTestReceipt(&producer, first);
 
@@ -760,8 +753,6 @@ GC_OTHER_VM_TEST(YoungConc, SatbAfterWorkerTerminationUsesBoundedMarkEndContinue
     GC_EXPECT_TRUE(fx.region1->IsMarkedObject(view, first));
     (void)second;
 
-    resources.SetGcStarted(startedBefore);
-    resources.GetGCStats().reason = reasonBefore;
     RelocationReceiptTestAccess::BindThreadPool(resources, nullptr);
     threadPool.Exit();
     RelocationReceiptTestAccess::BindCollector(resources, nullptr);
@@ -797,10 +788,7 @@ GC_OTHER_VM_TEST(YoungConc, YoungAllocBlackVisibleBeforePauseMarkEnd)
     space.GetRegionManager().EnlistFullThreadLocalRegion(fx.region1);
     space.GetRegionManager().AddRawPointerObject(fx.obj1);
     Heap::GetHeap().GetRememberedSet().Initialize(fx.heapStart, 2 * RegionInfo::UNIT_SIZE);
-    const bool startedBefore = resources.IsGcStarted();
-    const GCReason reasonBefore = resources.GetGCStats().reason;
-    resources.SetGcStarted(true);
-    resources.GetGCStats().reason = GC_REASON_YOUNG;
+    YoungCycleScope cycle(resources);
     ResetMarkTerminateTestReceipt();
     ArmAllocBlackDuringConcurrentTestReceipt(fx.obj1);
 
@@ -814,8 +802,6 @@ GC_OTHER_VM_TEST(YoungConc, YoungAllocBlackVisibleBeforePauseMarkEnd)
     const auto view = fx.region1->GetMarkView<Generation::Young>();
     GC_EXPECT_TRUE(fx.region1->IsMarkedObject(view, child));
 
-    resources.SetGcStarted(startedBefore);
-    resources.GetGCStats().reason = reasonBefore;
     RelocationReceiptTestAccess::BindThreadPool(resources, nullptr);
     threadPool.Exit();
     RelocationReceiptTestAccess::BindCollector(resources, nullptr);
@@ -849,10 +835,7 @@ GC_OTHER_VM_TEST(YoungConc, Y2yDirtyVisibleBeforePauseMarkEnd)
     space.GetRegionManager().EnlistFullThreadLocalRegion(fx.region1);
     space.GetRegionManager().AddRawPointerObject(fx.obj1);
     Heap::GetHeap().GetRememberedSet().Initialize(fx.heapStart, 2 * RegionInfo::UNIT_SIZE);
-    const bool startedBefore = resources.IsGcStarted();
-    const GCReason reasonBefore = resources.GetGCStats().reason;
-    resources.SetGcStarted(true);
-    resources.GetGCStats().reason = GC_REASON_YOUNG;
+    YoungCycleScope cycle(resources);
     ResetMarkTerminateTestReceipt();
     ArmY2yDuringConcurrentTestReceipt(fx.obj1);
 
@@ -867,8 +850,6 @@ GC_OTHER_VM_TEST(YoungConc, Y2yDirtyVisibleBeforePauseMarkEnd)
     GC_EXPECT_TRUE(fx.region1->IsMarkedObject(view, fx.obj1));
     GC_EXPECT_TRUE(fx.region1->IsMarkedObject(view, child));
 
-    resources.SetGcStarted(startedBefore);
-    resources.GetGCStats().reason = reasonBefore;
     RelocationReceiptTestAccess::BindThreadPool(resources, nullptr);
     threadPool.Exit();
     RelocationReceiptTestAccess::BindCollector(resources, nullptr);
@@ -909,10 +890,7 @@ GC_OTHER_VM_TEST(YoungConc, LeftoverAllocBlackAndY2yAfterWorkerForcesContinue)
     space.GetRegionManager().AddRawPointerObject(fx.obj1);
     space.GetRegionManager().AddRawPointerObject(y2yHolder);
     Heap::GetHeap().GetRememberedSet().Initialize(fx.heapStart, 2 * RegionInfo::UNIT_SIZE);
-    const bool startedBefore = resources.IsGcStarted();
-    const GCReason reasonBefore = resources.GetGCStats().reason;
-    resources.SetGcStarted(true);
-    resources.GetGCStats().reason = GC_REASON_YOUNG;
+    YoungCycleScope cycle(resources);
     ResetMarkTerminateTestReceipt();
     ArmLeftoverBeforePauseTestReceipt(fx.obj1, y2yHolder);
 
@@ -929,8 +907,6 @@ GC_OTHER_VM_TEST(YoungConc, LeftoverAllocBlackAndY2yAfterWorkerForcesContinue)
     GC_EXPECT_TRUE(fx.region1->IsMarkedObject(view, y2yHolder));
     GC_EXPECT_TRUE(fx.region1->IsMarkedObject(view, y2yChild));
 
-    resources.SetGcStarted(startedBefore);
-    resources.GetGCStats().reason = reasonBefore;
     RelocationReceiptTestAccess::BindThreadPool(resources, nullptr);
     threadPool.Exit();
     RelocationReceiptTestAccess::BindCollector(resources, nullptr);
@@ -960,10 +936,7 @@ GC_OTHER_VM_TEST(YoungConc, PauseMarkEndNeverRunsClosure)
     space.GetRegionManager().EnlistFullThreadLocalRegion(fx.region1);
     space.GetRegionManager().AddRawPointerObject(fx.obj1);
     Heap::GetHeap().GetRememberedSet().Initialize(fx.heapStart, 2 * RegionInfo::UNIT_SIZE);
-    const bool startedBefore = resources.IsGcStarted();
-    const GCReason reasonBefore = resources.GetGCStats().reason;
-    resources.SetGcStarted(true);
-    resources.GetGCStats().reason = GC_REASON_YOUNG;
+    YoungCycleScope cycle(resources);
     ResetMarkTerminateTestReceipt();
 
     RelocationReceiptTestAccess::RunCollectionDispatch(collector);
@@ -973,8 +946,6 @@ GC_OTHER_VM_TEST(YoungConc, PauseMarkEndNeverRunsClosure)
     GC_EXPECT_TRUE(receipt.pauses >= 1u);
     GC_EXPECT_EQ(receipt.closureDuringPause, 0u);
 
-    resources.SetGcStarted(startedBefore);
-    resources.GetGCStats().reason = reasonBefore;
     RelocationReceiptTestAccess::BindThreadPool(resources, nullptr);
     threadPool.Exit();
     RelocationReceiptTestAccess::BindCollector(resources, nullptr);
@@ -1019,8 +990,6 @@ GC_OTHER_VM_TEST(YoungConc, ExportRootRegisteredAfterT1ReachesT2Closure)
     space.GetRegionManager().AddRawPointerObject(holder);
     Heap::GetHeap().GetRememberedSet().Initialize(fx.heapStart, 2 * RegionInfo::UNIT_SIZE);
 
-    const bool startedBefore = resources.IsGcStarted();
-    const GCReason reasonBefore = resources.GetGCStats().reason;
     Heap::GetHeap().InstallBarrier(GCPhase::GC_PHASE_IDLE);
     Heap::GetHeap().SetGCPhase(GCPhase::GC_PHASE_IDLE);
     const U64 seedHandle = Heap::GetHeap().RegisterExportRoot(fx.obj0);
@@ -1028,8 +997,7 @@ GC_OTHER_VM_TEST(YoungConc, ExportRootRegisteredAfterT1ReachesT2Closure)
 
     Mutator producer;
     producer.SetMutatorPhase(GCPhase::GC_PHASE_TRACE);
-    resources.SetGcStarted(true);
-    resources.GetGCStats().reason = GC_REASON_YOUNG;
+    YoungCycleScope cycle(resources);
     ResetMarkTerminateTestReceipt();
     ResetExportRootPublicationTestReceipt();
     ArmExportRootAfterT1TestReceipt(&producer, holder, child);
@@ -1059,8 +1027,6 @@ GC_OTHER_VM_TEST(YoungConc, ExportRootRegisteredAfterT1ReachesT2Closure)
     GC_EXPECT_TRUE(exportReceipt.childMarked);
 
     Heap::GetHeap().RemoveExportObject(exportReceipt.handle);
-    resources.SetGcStarted(startedBefore);
-    resources.GetGCStats().reason = reasonBefore;
     RelocationReceiptTestAccess::BindThreadPool(resources, nullptr);
     threadPool.Exit();
     RelocationReceiptTestAccess::BindCollector(resources, nullptr);
@@ -1320,12 +1286,8 @@ GC_OTHER_VM_TEST(YoungConc, BulkWritePublishesSatbWithoutYoungRegions)
 
     CollectorResources& resources = Heap::GetHeap().GetCollectorResources();
     RelocationReceiptTestAccess::InitCollectorProxy(resources);
-    const bool startedBefore = resources.IsGcStarted();
-    const GCReason reasonBefore = resources.GetGCStats().reason;
-    const GCPhase heapPhaseBefore = Heap::GetHeap().GetGCPhase();
-    resources.SetGcStarted(true);
-    resources.GetGCStats().reason = GC_REASON_USER;
-    Heap::GetHeap().SetGCPhase(GCPhase::GC_PHASE_TRACE);
+    const CycleToken testCycle = resources.BeginCycle(GCTask::ASYNC_TASK_INDEX, GC_REASON_USER);
+    resources.PublishCyclePhase(testCycle, GCPhase::GC_PHASE_TRACE);
 
     Mutator mutator;
     mutator.SetMutatorPhase(GCPhase::GC_PHASE_TRACE);
@@ -1342,9 +1304,7 @@ GC_OTHER_VM_TEST(YoungConc, BulkWritePublishesSatbWithoutYoungRegions)
     SatbBuffer::Instance().GetRetiredObjects(retired);
 
     ThreadLocal::SetMutator(nullptr);
-    Heap::GetHeap().SetGCPhase(heapPhaseBefore);
-    resources.SetGcStarted(startedBefore);
-    resources.GetGCStats().reason = reasonBefore;
+    resources.EndCycle(testCycle);
 
     GC_EXPECT_EQ(retired.size(), 1u);
     GC_EXPECT_EQ(reinterpret_cast<uintptr_t>(retired[0]), reinterpret_cast<uintptr_t>(fx.obj1));
@@ -1368,19 +1328,13 @@ GC_TEST(YoungConc, TraceStoreMarksNewYoungTarget)
     TestTraceBarrier barrier(collector, rs);
 
     CollectorResources& resources = Heap::GetHeap().GetCollectorResources();
-    const bool startedBefore = resources.IsGcStarted();
-    const GCReason reasonBefore = resources.GetGCStats().reason;
-    resources.SetGcStarted(true);
-    resources.GetGCStats().reason = GC_REASON_YOUNG;
+    YoungCycleScope cycle(resources, GCPhase::GC_PHASE_TRACE);
 
     field->StoreColoured(GcUnit::StoreGoodPointer(fx.obj1));
     // RecordCrossGenEdge is the remember half; TRACE phase adds the mark half.
     // Do not WriteReference: DispatchPhase would static_cast to product TraceBarrier
     // and SATB-push with a null mutator (gc_unit has no Mutator).
     barrier.Record(fx.obj0, reinterpret_cast<MAddress>(field), fx.obj1);
-
-    resources.SetGcStarted(startedBefore);
-    resources.GetGCStats().reason = reasonBefore;
 
     MarkView<Generation::Young> view = fx.region1->GetMarkView<Generation::Young>();
     GC_EXPECT_TRUE(fx.region1->IsMarkedObject(view, fx.obj1));
@@ -1465,13 +1419,13 @@ GC_TEST(YoungConc, PublishYoungAllocBlackRetiresFollowReceipt)
 {
     GcHeapFixture fx;
     Mutator mutator;
-    mutator.satbNode = new SatbBuffer::Node();
+    mutator.satbNodes[CycleSlot(CycleGeneration::Young)] = new SatbBuffer::Node();
     mutator.PublishYoungAllocBlack(fx.obj0);
-    mutator.FlushSatbBuffer();
+    mutator.FlushOwnedSatbNodes();
 
     BaseObject* object = nullptr;
     bool follow = false;
-    SatbBuffer::Instance().GetRetiredEntries([&](BaseObject* entry, bool shouldFollow) {
+    SatbBuffer::Instance(CycleGeneration::Young).GetRetiredEntries([&](BaseObject* entry, bool shouldFollow) {
         object = entry;
         follow = shouldFollow;
     });
@@ -1537,13 +1491,13 @@ GC_TEST(YoungConc, LegacyTerminationMissesUnfullSatbNode)
     Mutator mutator;
     auto* node = new SatbBuffer::Node();
     GC_EXPECT_TRUE(node->Push(fx.obj0, nullptr));
-    mutator.satbNode = node;
-    GC_EXPECT_TRUE(mutator.PeekSatbNode() == node);
+    mutator.satbNodes[CycleSlot(CycleGeneration::Young)] = node;
+    GC_EXPECT_TRUE(mutator.PeekSatbNode(CycleGeneration::Young) == node);
     GC_EXPECT_FALSE(node->IsEmpty());
     GC_EXPECT_FALSE(node->IsFull());
 
     std::vector<BaseObject*> markWork;
-    SatbBuffer::Instance().GetRetiredObjects(markWork);
+    SatbBuffer::Instance(CycleGeneration::Young).GetRetiredObjects(markWork);
     const bool legacyWouldTerminate = markWork.empty();
     const size_t offset = fx.region0->GetAddressOffset(reinterpret_cast<MAddress>(fx.obj0));
     const auto view = fx.region0->GetMarkView<Generation::Young>();
@@ -1554,9 +1508,9 @@ GC_TEST(YoungConc, LegacyTerminationMissesUnfullSatbNode)
     // Strict mark-end cut (ZGC zMark.cpp:954-971, :998-1006): mutators are
     // frozen before their partial nodes are handed over, then the same retired
     // queue is sampled. The discovered grey forces mark-end continue.
-    mutator.FlushSatbBuffer();
-    GC_EXPECT_TRUE(mutator.PeekSatbNode() == nullptr);
-    SatbBuffer::Instance().GetRetiredObjects(markWork);
+    mutator.FlushOwnedSatbNodes();
+    GC_EXPECT_TRUE(mutator.PeekSatbNode(CycleGeneration::Young) == nullptr);
+    SatbBuffer::Instance(CycleGeneration::Young).GetRetiredObjects(markWork);
     const bool strictWouldTerminate = markWork.empty();
 
     GC_EXPECT_FALSE(strictWouldTerminate);

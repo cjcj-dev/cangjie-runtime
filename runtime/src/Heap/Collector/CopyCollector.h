@@ -26,6 +26,7 @@ public:
     void PostGarbageCollection(uint64_t gcIndex) override;
 
 protected:
+    void RunGarbageCollection(const CycleToken& token);
     virtual BaseObject* ForwardObjectExclusive(BaseObject* obj) = 0;
     virtual void ForwardFromSpace();
     virtual void RefineFromSpace();

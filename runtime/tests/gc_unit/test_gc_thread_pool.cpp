@@ -11,6 +11,7 @@
 #include <unistd.h>
 
 #include "gc_heap_fixture.hpp"
+#include "Base/GcLog.h"
 #include "Heap/GcThreadPool.h"
 #include "Heap/Allocator/ForwardingTable.h"
 #include "Heap/Allocator/RegionManager.h"
@@ -160,6 +161,170 @@ public:
     RuntimeParam GetRuntimeParam() const override { return RuntimeParam {}; }
     void SetGCThreshold(uint64_t) override {}
 };
+
+class CycleContextProductCollector final : public WCollector {
+public:
+    CycleContextProductCollector(Allocator& allocator, CollectorResources& resources)
+        : WCollector(allocator, resources), resources(resources) {}
+
+    bool SawOwnedYoungCycle() const
+    {
+        return sawPre && sawBody && sawPost && sequence != 0 && reason == GC_REASON_YOUNG &&
+            phase == GCPhase::GC_PHASE_TRACE && startTimeSet && activeYoung && !activeOld;
+    }
+
+protected:
+    void PreGarbageCollection(bool, uint64_t) override
+    {
+        sawPre = GetCycleContext().IsYoung() && GetGCReason() == GC_REASON_YOUNG;
+        SetGCPhase(GCPhase::GC_PHASE_TRACE);
+    }
+
+    void DoGarbageCollection() override
+    {
+        const CycleSnapshot snapshot = resources.GetCycleSnapshot();
+        sequence = GetCycleContext().sequence.load(std::memory_order_acquire);
+        reason = GetGCReason();
+        phase = snapshot.Phase(CycleGeneration::Young);
+        startTimeSet = GetCycleContext().stats.gcStartTime != 0;
+        activeYoung = snapshot.Active(CycleGeneration::Young);
+        activeOld = snapshot.Active(CycleGeneration::Old);
+        sawBody = true;
+    }
+
+    void PostGarbageCollection(uint64_t) override
+    {
+        sawPost = resources.GetCycleSnapshot().Active(CycleGeneration::Young);
+    }
+
+private:
+    CollectorResources& resources;
+    uint64_t sequence{ 0 };
+    GCReason reason{ GC_REASON_USER };
+    GCPhase phase{ GCPhase::GC_PHASE_UNDEF };
+    bool activeYoung{ false };
+    bool activeOld{ false };
+    bool startTimeSet{ false };
+    bool sawPre{ false };
+    bool sawBody{ false };
+    bool sawPost{ false };
+};
+
+bool RunCycleContextProductEntry()
+{
+    if (CJ_ScheduleManagerInit() != 0) {
+        return false;
+    }
+    MutatorManager mutatorManager;
+    YoungForwardTestRuntime runtime(mutatorManager);
+    GcHeapFixture fx;
+    CollectorResources& resources = Heap::GetHeap().GetCollectorResources();
+    CycleContextProductCollector collector(Heap::GetHeap().GetAllocator(), resources);
+    collector.RunGarbageCollection(17, GC_REASON_YOUNG);
+    const CycleSnapshot after = resources.GetCycleSnapshot();
+    return collector.SawOwnedYoungCycle() && !after.AnyActive() && GcLog::CurrentSeq() == 0;
+}
+
+bool RunStaleCycleTokenCannotMutateReplacement()
+{
+    if (CJ_ScheduleManagerInit() != 0) {
+        return false;
+    }
+    MutatorManager mutatorManager;
+    YoungForwardTestRuntime runtime(mutatorManager);
+    GcHeapFixture fx;
+    CollectorResources& resources = Heap::GetHeap().GetCollectorResources();
+
+    const CycleToken first = resources.BeginCycle(101, GC_REASON_YOUNG);
+    if (!resources.EndCycle(first)) {
+        return false;
+    }
+    const CycleToken replacement = resources.BeginCycle(102, GC_REASON_YOUNG);
+    const bool stalePublished = resources.PublishCyclePhase(first, GCPhase::GC_PHASE_TRACE);
+    const CycleSnapshot afterStalePublish = resources.GetCycleSnapshot();
+    const bool replacementEnded = resources.EndCycle(replacement);
+
+    return first.sequence != replacement.sequence && !stalePublished && replacementEnded &&
+        afterStalePublish.Active(CycleGeneration::Young) &&
+        afterStalePublish.Phase(CycleGeneration::Young) == GCPhase::GC_PHASE_IDLE;
+}
+
+bool RunStaleCycleTokenCannotEndReplacement()
+{
+    if (CJ_ScheduleManagerInit() != 0) {
+        return false;
+    }
+    MutatorManager mutatorManager;
+    YoungForwardTestRuntime runtime(mutatorManager);
+    GcHeapFixture fx;
+    CollectorResources& resources = Heap::GetHeap().GetCollectorResources();
+
+    const CycleToken first = resources.BeginCycle(201, GC_REASON_YOUNG);
+    if (!resources.EndCycle(first)) {
+        return false;
+    }
+    const CycleToken replacement = resources.BeginCycle(202, GC_REASON_YOUNG);
+    const bool staleEnded = resources.EndCycle(first);
+    const CycleSnapshot afterStaleEnd = resources.GetCycleSnapshot();
+    const bool replacementEnded = resources.EndCycle(replacement);
+
+    return first.sequence != replacement.sequence && !staleEnded && replacementEnded &&
+        afterStaleEnd.Active(CycleGeneration::Young) &&
+        afterStaleEnd.Phase(CycleGeneration::Young) == GCPhase::GC_PHASE_IDLE;
+}
+
+bool RunLegacyControlActivityOwnsMarkWindow()
+{
+    if (CJ_ScheduleManagerInit() != 0) {
+        return false;
+    }
+    MutatorManager mutatorManager;
+    YoungForwardTestRuntime runtime(mutatorManager);
+    GcHeapFixture fx;
+    CollectorResources& resources = Heap::GetHeap().GetCollectorResources();
+    CycleContextProductCollector collector(Heap::GetHeap().GetAllocator(), resources);
+    const GCReason reasonBefore = resources.GetGCStats().reason;
+
+    resources.SetGcStarted(true);
+    resources.GetGCStats().reason = GC_REASON_USER;
+    collector.SetGCPhase(GCPhase::GC_PHASE_TRACE);
+    const CycleToken token = resources.GetExecutionToken();
+    const CycleSnapshot during = resources.GetCycleSnapshot();
+    const bool owned = token.sequence != 0 && during.Active(CycleGeneration::Old) &&
+        !during.Active(CycleGeneration::Young) && during.Phase(CycleGeneration::Old) == GCPhase::GC_PHASE_TRACE &&
+        resources.GetCycleContext(token).reason == GC_REASON_USER;
+
+    collector.SetGCPhase(GCPhase::GC_PHASE_IDLE);
+    resources.GetGCStats().reason = reasonBefore;
+    resources.SetGcStarted(false);
+    const CycleSnapshot after = resources.GetCycleSnapshot();
+    const bool completedOwnerVisible = resources.IsCompletedControlCycle(CycleGeneration::Old, token.sequence);
+    const CycleToken replacement = resources.BeginCycle(301, GC_REASON_USER);
+    const bool staleOwnerCleared = !resources.IsCompletedControlCycle(CycleGeneration::Old, token.sequence);
+    const bool replacementEnded = resources.EndCycle(replacement);
+    return owned && !after.AnyActive() && completedOwnerVisible && staleOwnerCleared && replacementEnded &&
+        GcLog::CurrentSeq() == 0;
+}
+
+bool RunControlActivityCannotReplaceProductCycle()
+{
+    if (CJ_ScheduleManagerInit() != 0) {
+        return false;
+    }
+    MutatorManager mutatorManager;
+    YoungForwardTestRuntime runtime(mutatorManager);
+    GcHeapFixture fx;
+    CollectorResources& resources = Heap::GetHeap().GetCollectorResources();
+
+    const CycleToken product = resources.BeginCycle(302, GC_REASON_USER);
+    resources.SetGcStarted(true);
+    const CycleToken afterControlStart = resources.GetExecutionToken();
+    const CycleSnapshot during = resources.GetCycleSnapshot();
+    const bool productStillOwns = afterControlStart.generation == product.generation &&
+        afterControlStart.sequence == product.sequence && during.Active(product.generation);
+    const bool productEnded = resources.EndCycle(product);
+    return productStillOwns && productEnded && !resources.IsGcStarted() && GcLog::CurrentSeq() == 0;
+}
 
 bool RunYoungRuntimeProductEntry()
 {
@@ -377,6 +542,31 @@ GC_TEST(GCThreadPool, ProductSerialEntryRegistersWorkerAndClosesGeneration)
 GC_TEST(GCThreadPool, ProductYoungRuntimeEntryClosesRelocationRequestGeneration)
 {
     ExpectIsolatedScenarioPasses<RunYoungRuntimeProductEntry>();
+}
+
+GC_TEST(GCThreadPool, ProductCollectionPublishesAndClearsOwnedYoungCycle)
+{
+    ExpectIsolatedScenarioPasses<RunCycleContextProductEntry>();
+}
+
+GC_TEST(GCThreadPool, StaleCycleTokenCannotPublishIntoReplacementCycle)
+{
+    ExpectIsolatedScenarioPasses<RunStaleCycleTokenCannotMutateReplacement>();
+}
+
+GC_TEST(GCThreadPool, StaleCycleTokenCannotEndReplacementCycle)
+{
+    ExpectIsolatedScenarioPasses<RunStaleCycleTokenCannotEndReplacement>();
+}
+
+GC_TEST(GCThreadPool, LegacyControlActivityPublishesAndClearsOwnedCycle)
+{
+    ExpectIsolatedScenarioPasses<RunLegacyControlActivityOwnsMarkWindow>();
+}
+
+GC_TEST(GCThreadPool, ControlActivityCannotReplaceProductCycle)
+{
+    ExpectIsolatedScenarioPasses<RunControlActivityCannotReplaceProductCycle>();
 }
 #endif
 

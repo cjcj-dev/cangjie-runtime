@@ -72,15 +72,20 @@ void StoreBarrierBuffer::SetSatbNodeUnavailableForTest(bool unavailable)
 
 StoreBarrierInstallState StoreBarrierBuffer::CaptureInstallState()
 {
-    Heap& heap = Heap::GetHeap();
-    const bool started = heap.IsGcStarted();
-    const GCPhase phase = started ? heap.GetGCPhase() : GCPhase::GC_PHASE_IDLE;
-    bool youngMark = false;
-    if (started) {
-        youngMark = heap.GetCollectorResources().GetGCStats().reason == GC_REASON_YOUNG;
+    CollectorResources& resources = Heap::GetHeap().GetCollectorResources();
+    const CycleSnapshot snapshot = resources.GetCycleSnapshot();
+    StoreBarrierInstallState installed;
+    installed.phase = static_cast<uint8_t>(snapshot.Phase(resources.GetExecutionContext().generation));
+    installed.youngMark = snapshot.Marking(CycleGeneration::Young);
+    installed.storeGood = static_cast<uintptr_t>(::g_cjStoreGoodMask);
+    for (CycleGeneration generation : { CycleGeneration::Young, CycleGeneration::Old }) {
+        if (snapshot.Marking(generation)) {
+            installed.markingOwners |= 1u << CycleSlot(generation);
+            installed.cycles[CycleSlot(generation)] =
+                resources.GetCycleContext(generation).sequence.load(std::memory_order_acquire);
+        }
     }
-    return StoreBarrierInstallState { static_cast<uint8_t>(phase), youngMark,
-                                      static_cast<uintptr_t>(::g_cjStoreGoodMask) };
+    return installed;
 }
 
 void StoreBarrierBuffer::Add(MAddress fieldAddress, BaseObject* fieldBase, RememberedSet& rs)
@@ -125,22 +130,47 @@ void StoreBarrierBuffer::Add(MAddress fieldAddress, BaseObject* fieldBase, zpoin
     buffer[current].installed = installed;
 }
 
-bool StoreBarrierBuffer::InstalledDuringCurrentMark(const StoreBarrierEntry& entry)
+uint8_t StoreBarrierBuffer::InstalledDuringCurrentMark(const StoreBarrierEntry& entry)
 {
-    const GCPhase phase = static_cast<GCPhase>(entry.installed.phase);
-    if (phase != GCPhase::GC_PHASE_ENUM && phase != GCPhase::GC_PHASE_TRACE &&
-        phase != GCPhase::GC_PHASE_CLEAR_SATB_BUFFER) {
-        return false;
+    CollectorResources& resources = Heap::GetHeap().GetCollectorResources();
+    const CycleSnapshot snapshot = resources.GetCycleSnapshot();
+    uint8_t owners = 0;
+    for (CycleGeneration generation : { CycleGeneration::Young, CycleGeneration::Old }) {
+        const size_t slot = CycleSlot(generation);
+        const uintptr_t epochMask = generation == CycleGeneration::Young ? MARKED_YOUNG_MASK : MARKED_OLD_MASK;
+        const uint64_t installedCycle = entry.installed.cycles[slot];
+        const bool activeOwner = snapshot.Active(generation) && installedCycle != 0 &&
+            installedCycle == resources.GetCycleContext(generation).sequence.load(std::memory_order_acquire);
+        const bool completedControlOwner = resources.IsCompletedControlCycle(generation, installedCycle);
+        if ((entry.installed.markingOwners & (1u << slot)) != 0 &&
+            (activeOwner || completedControlOwner) &&
+            (entry.installed.storeGood & epochMask) == (static_cast<uintptr_t>(::g_cjStoreGoodMask) & epochMask)) {
+            owners |= 1u << slot;
+        }
     }
-    const uintptr_t epochMask = entry.installed.youngMark ? MARKED_YOUNG_MASK : MARKED_OLD_MASK;
-    return (entry.installed.storeGood & epochMask) ==
-        (static_cast<uintptr_t>(::g_cjStoreGoodMask) & epochMask);
+#if defined(MRT_GC_UNIT_TESTS)
+    // Frozen pre-I10 fixtures construct the old three-field aggregate directly.
+    // Product CaptureInstallState never emits this ownerless marking shape.
+    if (entry.installed.markingOwners == 0) {
+        const GCPhase phase = static_cast<GCPhase>(entry.installed.phase);
+        if (phase == GC_PHASE_ENUM || phase == GC_PHASE_TRACE || phase == GC_PHASE_CLEAR_SATB_BUFFER) {
+            const CycleGeneration generation = entry.installed.youngMark ? CycleGeneration::Young : CycleGeneration::Old;
+            const uintptr_t epochMask = generation == CycleGeneration::Young ? MARKED_YOUNG_MASK : MARKED_OLD_MASK;
+            if ((entry.installed.storeGood & epochMask) ==
+                (static_cast<uintptr_t>(::g_cjStoreGoodMask) & epochMask)) {
+                owners |= 1u << CycleSlot(generation);
+            }
+        }
+    }
+#endif
+    return owners;
 }
 
 StoreBarrierBuffer::PreviousRetirement StoreBarrierBuffer::RetirePrevious(const StoreBarrierEntry& entry,
                                                                           Collector& collector)
 {
-    if (is_null(entry.prev) || !InstalledDuringCurrentMark(entry)) {
+    const uint8_t owners = InstalledDuringCurrentMark(entry);
+    if (is_null(entry.prev) || owners == 0) {
         return PreviousRetirement::NOT_REQUIRED;
     }
     RefField<> previous(entry.prev);
@@ -151,18 +181,23 @@ StoreBarrierBuffer::PreviousRetirement StoreBarrierBuffer::RetirePrevious(const 
     if (resolved == nullptr || !Heap::IsHeapAddress(resolved)) {
         return PreviousRetirement::INVALID_PREVIOUS;
     }
-    SatbBuffer::Node* node = nullptr;
-    SatbBuffer& satb = SatbBuffer::Instance();
+    for (CycleGeneration generation : { CycleGeneration::Young, CycleGeneration::Old }) {
+        if ((owners & (1u << CycleSlot(generation))) == 0) {
+            continue;
+        }
+        SatbBuffer::Node* node = nullptr;
+        SatbBuffer& satb = SatbBuffer::Instance(generation);
 #if defined(MRT_GC_UNIT_TESTS)
-    satb.EnsureGoodNode(node, !g_satbNodeUnavailable);
+        satb.EnsureGoodNode(node, !g_satbNodeUnavailable);
 #else
-    satb.EnsureGoodNode(node);
+        satb.EnsureGoodNode(node);
 #endif
-    if (node == nullptr) {
-        return PreviousRetirement::RESOURCE_UNAVAILABLE;
+        if (node == nullptr) {
+            return PreviousRetirement::RESOURCE_UNAVAILABLE;
+        }
+        (void)node->Push(resolved, Collector::TryRecoverInteriorBase(resolved));
+        satb.FlushQueue(node);
     }
-    (void)node->Push(resolved, Collector::TryRecoverInteriorBase(resolved));
-    satb.FlushQueue(node);
     return PreviousRetirement::RETIRED;
 }
 

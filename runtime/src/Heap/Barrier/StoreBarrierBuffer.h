@@ -21,8 +21,10 @@ constexpr size_t kStoreBarrierBufferLength = 32;
 
 struct StoreBarrierInstallState {
     uint8_t phase = 0;
-    bool youngMark = false;
+    bool youngMark = false; // Serial diagnostic label; ownership is below.
     uintptr_t storeGood = 0;
+    uint8_t markingOwners = 0;
+    uint64_t cycles[2] { 0, 0 };
 };
 
 // ZGC ZStoreBarrierEntry is (p, prev), with a parallel _base_pointers array.
@@ -84,7 +86,7 @@ private:
     };
 
     static StoreBarrierInstallState CaptureInstallState();
-    static bool InstalledDuringCurrentMark(const StoreBarrierEntry& entry);
+    static uint8_t InstalledDuringCurrentMark(const StoreBarrierEntry& entry);
     static PreviousRetirement RetirePrevious(const StoreBarrierEntry& entry, Collector& collector);
     static void MarkAndRemember(const StoreBarrierEntry& entry, RememberedSet& rs);
     void Add(MAddress fieldAddress, zpointer prev, StoreBarrierInstallState installed, RememberedSet& rs);

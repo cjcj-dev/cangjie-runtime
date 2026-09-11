@@ -222,7 +222,7 @@ void Mutator::ResetMutator()
     }
     SetManagedContext(false);
     StorePlain(rawObject, zaddress::null);
-    SatbBuffer::Instance().FlushQueue(satbNode);
+    FlushOwnedSatbNodes();
     if (!localFinalizers.empty()) {
         Heap::GetHeap().GetFinalizerProcessor().RegisterFinalizers(localFinalizers);
     }
@@ -1351,8 +1351,10 @@ inline void Mutator::HandleGCPhase(GCPhase newPhase, bool bySelf)
 {
     if (newPhase == GCPhase::GC_PHASE_FINISH || newPhase == GCPhase::GC_PHASE_FORWARD) {
         std::lock_guard<std::mutex> lg(mutatorLock);
-        if (satbNode != nullptr) {
-            satbNode->Clear();
+        // Only the transitioning generation may close its private SATB work.
+        SatbBuffer::Node* node = satbNodes[CycleSlot(SatbBuffer::ExecutionGeneration())];
+        if (node != nullptr) {
+            node->Clear();
         }
     } else if (newPhase == GCPhase::GC_PHASE_ENUM) {
         GcPhaseEnum(newPhase);

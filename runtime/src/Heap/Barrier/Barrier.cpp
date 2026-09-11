@@ -404,18 +404,15 @@ void MarkAndRememberNewValue(BarrierPhase barrierPhase, BaseObject* ref)
     if (!resources.IsGcStarted()) {
         return;
     }
-    // FOLLOW publishes TRACE on the heap then handshakes mutators
-    // (WCollector.cpp:8042). Until the handshake, Heap::GetBarrier() is still
-    // Idle/Enum (phase != TRACE) while concurrent old→young stores already land
-    // on the remset current face. Same heap-phase fallback as SATB G3b
-    // (Mutator.h:588-597). gc_unit never Init — IsGcStarted is false, so this
-    // does not call GetGCPhase (CollectorProxy::currentCollector is null).
-    if (barrierPhase != BarrierPhase::TRACE) {
-        GCPhase heapPhase = Heap::GetHeap().GetGCPhase();
-        if (heapPhase != GCPhase::GC_PHASE_TRACE && heapPhase != GCPhase::GC_PHASE_CLEAR_SATB_BUFFER) {
-            return;
-        }
+    const CycleSnapshot snapshot = resources.GetCycleSnapshot();
+    const auto tracing = [&snapshot](CycleGeneration generation) {
+        const GCPhase phase = snapshot.Phase(generation);
+        return snapshot.Active(generation) && (phase == GC_PHASE_TRACE || phase == GC_PHASE_CLEAR_SATB_BUFFER);
+    };
+    if (!tracing(CycleGeneration::Young) && !tracing(CycleGeneration::Old)) {
+        return;
     }
+    (void)barrierPhase; // Published generation obligations own the decision.
     if (!Collector::PlausibleManagedObjectGate("mark_and_remember", ref)) {
         return;
     }
@@ -423,7 +420,7 @@ void MarkAndRememberNewValue(BarrierPhase barrierPhase, BaseObject* ref)
     if (region == nullptr) {
         return;
     }
-    if (resources.GetGCStats().reason == GC_REASON_YOUNG) {
+    if (tracing(CycleGeneration::Young) && !tracing(CycleGeneration::Old)) {
         if (!region->IsYoungRegion()) {
             return;
         }
@@ -474,12 +471,9 @@ void RetirePreviousWithoutAllocBuffer(BarrierPhase barrierPhase, zpointer prev, 
     if (!resources.IsGcStarted()) {
         return;
     }
-    if (barrierPhase != BarrierPhase::ENUM && barrierPhase != BarrierPhase::TRACE) {
-        const GCPhase heapPhase = Heap::GetHeap().GetGCPhase();
-        if (heapPhase != GCPhase::GC_PHASE_ENUM && heapPhase != GCPhase::GC_PHASE_TRACE &&
-            heapPhase != GCPhase::GC_PHASE_CLEAR_SATB_BUFFER) {
-            return;
-        }
+    const CycleSnapshot snapshot = resources.GetCycleSnapshot();
+    if (!snapshot.AnyMarking()) {
+        return;
     }
 
     RefField<> previous(prev);
@@ -489,16 +483,21 @@ void RetirePreviousWithoutAllocBuffer(BarrierPhase barrierPhase, zpointer prev, 
         return;
     }
 
-    SatbBuffer& satb = SatbBuffer::Instance();
-    SatbBuffer::Node* node = nullptr;
-    satb.EnsureGoodNode(node);
-    CHECK_DETAIL(node != nullptr,
-                 "direct SATB publication unavailable prev=%#zx barrier_phase=%u",
-                 static_cast<size_t>(raw(prev)), static_cast<unsigned>(barrierPhase));
-    CHECK_DETAIL(node->Push(resolved, Collector::TryRecoverInteriorBase(resolved)),
-                 "fresh direct SATB node unexpectedly full prev=%#zx resolved=%p",
-                 static_cast<size_t>(raw(prev)), resolved);
-    satb.FlushQueue(node);
+    for (CycleGeneration generation : { CycleGeneration::Young, CycleGeneration::Old }) {
+        if (!snapshot.Marking(generation)) {
+            continue;
+        }
+        SatbBuffer& satb = SatbBuffer::Instance(generation);
+        SatbBuffer::Node* node = nullptr;
+        satb.EnsureGoodNode(node);
+        CHECK_DETAIL(node != nullptr,
+                     "direct SATB publication unavailable prev=%#zx barrier_phase=%u",
+                     static_cast<size_t>(raw(prev)), static_cast<unsigned>(barrierPhase));
+        CHECK_DETAIL(node->Push(resolved, Collector::TryRecoverInteriorBase(resolved)),
+                     "fresh direct SATB node unexpectedly full prev=%#zx resolved=%p",
+                     static_cast<size_t>(raw(prev)), resolved);
+        satb.FlushQueue(node);
+    }
 }
 } // namespace
 

@@ -102,7 +102,7 @@ public:
     {
         tid = 0;
         stackBoundAddr = nullptr;
-        SatbBuffer::Instance().FlushQueue(satbNode);
+        FlushOwnedSatbNodes();
 
 #ifdef INTERPRETER_ENABLED
         DestroyInterpreterPart();
@@ -479,19 +479,14 @@ public:
         if (target == nullptr) {
             return;
         }
-        if (LIKELY(satbNode != nullptr && satbNode->Push(target, nullptr, true))) {
+        SatbBuffer::Node*& node = satbNodes[CycleSlot(CycleGeneration::Young)];
+        if (LIKELY(node != nullptr && node->Push(target, nullptr, true))) {
             return;
         }
-        SatbBuffer::Instance().EnsureGoodNode(satbNode);
-        // EnsureGoodNode may leave the node null when this mutator has no
-        // SATB arena available (for example during runtime-thread setup or
-        // after the collector has handed the last node back).  Publishing a
-        // young edge is best-effort in that context; never dereference the
-        // absent node here.
-        if (satbNode == nullptr) {
-            return;
+        SatbBuffer::Instance(CycleGeneration::Young).EnsureGoodNode(node);
+        if (node != nullptr) {
+            (void)node->Push(target, nullptr, true);
         }
-        (void)satbNode->Push(target, nullptr, true);
     }
 
     inline uintptr_t GetStackTopAddr() { return stackTopAddr; }
@@ -625,7 +620,15 @@ public:
 
     // Observe-only: in-flight SATB node (not yet FlushQueue'd). STW2 CLEAR_SATB
     // flushes before Census; peek still covers a node that HandleGCPhase missed.
-    SatbBuffer::Node* PeekSatbNode() const { return satbNode; }
+    SatbBuffer::Node* PeekSatbNode() const { return satbNodes[CycleSlot(SatbBuffer::ExecutionGeneration())]; }
+    SatbBuffer::Node* PeekSatbNode(CycleGeneration generation) const { return satbNodes[CycleSlot(generation)]; }
+
+    void FlushOwnedSatbNodes()
+    {
+        for (CycleGeneration generation : { CycleGeneration::Young, CycleGeneration::Old }) {
+            SatbBuffer::Instance(generation).FlushQueue(satbNodes[CycleSlot(generation)]);
+        }
+    }
 
     // Hand this mutator's in-flight SATB node over unconditionally.
     // ZMark::flush(Thread*) (zMark.cpp:998-1006) is what the mark-termination
@@ -644,7 +647,8 @@ public:
         if (flushStoreBarrier && markFlushAllocBuffer != nullptr && rememberedSet->IsInitialized()) {
             markFlushAllocBuffer->GetStoreBarrierBuffer().Flush(*rememberedSet);
         }
-        SatbBuffer::Instance().FlushQueue(satbNode);
+        const CycleGeneration generation = SatbBuffer::ExecutionGeneration();
+        SatbBuffer::Instance(generation).FlushQueue(satbNodes[CycleSlot(generation)]);
     }
 
 protected:
@@ -663,37 +667,21 @@ protected:
 private:
     void RememberObjectImpl(const BaseObject* target, const BaseObject* knownBase)
     {
-        GCPhase phase = GetMutatorPhase();
-        // Marking is still consuming satb records in GC_PHASE_CLEAR_SATB_BUFFER: MarkSatbBuffer keeps
-        // tracing after the first CLEAR_SATB handshake and re-flushes every mutator's node once per
-        // remark iteration, so records written in this phase are both needed and consumed. Dropping
-        // them here loses deletion-barrier records inside the live remark window and lets a hidden
-        // object survive unmarked with previous-cycle tags in its fields, which PostTrace's
-        // PrepareForwardTable then makes unresolvable (tripping PostTraceBarrier's
-        // CHECK(IsCurrentPointer)). Records written after the remark fixpoint still land here and in
-        // the buffers, but they can only reference already-marked objects, objects in non-collected
-        // trace regions, or non-heap/null values. ClearBuffer/the FORWARD-transition clear can discard
-        // those records safely, so accepting them is cheap and correct.
-        GCPhase heapPhase = Heap::GetHeap().GetGCPhase();
-        // FOLLOW / major TRACE publishes the heap phase before mutators handshake.
-        // The heap-phase fallback used to accept only ENUM, so a concurrent store
-        // dropped SATB: seen as Stw2CurrentAudit uncovered (old→young, FOLLOW) and
-        // as SD256 CSet-empty residual pages stuck nullFace (major, ke=0). ZGC
-        // heap_store_slow_path marks the new address regardless
-        // (zBarrier.cpp:253-261). Accept every marking phase.
-        const bool mutatorMarking = phase == GCPhase::GC_PHASE_ENUM || phase == GCPhase::GC_PHASE_TRACE ||
-            phase == GCPhase::GC_PHASE_CLEAR_SATB_BUFFER;
-        const bool heapMarking = heapPhase == GCPhase::GC_PHASE_ENUM || heapPhase == GCPhase::GC_PHASE_TRACE ||
-            heapPhase == GCPhase::GC_PHASE_CLEAR_SATB_BUFFER;
-        if (UNLIKELY(!mutatorMarking && !heapMarking)) {
-            return;
+        const CycleSnapshot snapshot = SatbBuffer::ActiveCycles();
+        for (CycleGeneration generation : { CycleGeneration::Young, CycleGeneration::Old }) {
+            if (!snapshot.Marking(generation)) {
+                continue;
+            }
+            SatbBuffer::Node*& node = satbNodes[CycleSlot(generation)];
+            if (LIKELY(node != nullptr && node->Push(target, knownBase))) {
+                continue;
+            }
+            SatbBuffer::Instance(generation).EnsureGoodNode(node);
+            CHECK_DETAIL(node != nullptr, "SATB owner cannot accept previous-value work");
+            (void)node->Push(target, knownBase);
         }
-        if (LIKELY(satbNode != nullptr && satbNode->Push(target, knownBase))) {
-            return;
-        }
-        SatbBuffer::Instance().EnsureGoodNode(satbNode);
-        (void)satbNode->Push(target, knownBase);
     }
+
     ManagedList<RootSlot>& GetLocalFinalizers() { return localFinalizers; }
     // Indicate the current mutator phase and use which barrier in concurrent gc
     // ATTENTION: THE LAYOUT FOR GCPHASE MUST NOT BE CHANGED!
@@ -730,7 +718,7 @@ private:
 
     ManagedList<RootSlot> localFinalizers;
 
-    SatbBuffer::Node* satbNode = nullptr;
+    SatbBuffer::Node* satbNodes[2] { nullptr, nullptr };
 #if defined(GCINFO_DEBUG) && GCINFO_DEBUG
     GCInfos gcInfos;
 #endif

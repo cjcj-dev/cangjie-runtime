@@ -24,10 +24,15 @@ std::mutex& ZStat::TableLock()
     return lock;
 }
 
-ZStat::Table& ZStat::CycleTable()
+std::unordered_map<uint64_t, ZStat::Table>& ZStat::CycleTables()
 {
-    static Table table;
-    return table;
+    static std::unordered_map<uint64_t, Table> tables;
+    return tables;
+}
+
+ZStat::Table& ZStat::CycleTable(uint64_t seq)
+{
+    return CycleTables()[seq];
 }
 
 bool ZStat::Enabled()
@@ -62,13 +67,13 @@ bool ZStat::WorldStoppedNow()
     return g_stwDepth.load(std::memory_order_acquire) > 0;
 }
 
-void ZStat::NotePhase(const char* name, bool worldStoppedAtStart, uint64_t ns)
+void ZStat::NotePhase(const char* name, bool worldStoppedAtStart, uint64_t ns, uint64_t seq)
 {
     if (name == nullptr) {
         return;
     }
     std::lock_guard<std::mutex> guard(TableLock());
-    Table& table = CycleTable();
+    Table& table = CycleTable(seq);
     PhaseTotals& totals = table.phases[name];
     if (worldStoppedAtStart) {
         totals.pauseNs += ns;
@@ -95,11 +100,8 @@ void ZStat::NoteCycleEnd(uint64_t seq)
     Table snapshot;
     {
         std::lock_guard<std::mutex> guard(TableLock());
-        snapshot.phases = CycleTable().phases;
-        snapshot.pauseNs = CycleTable().pauseNs;
-        snapshot.concNs = CycleTable().concNs;
-        snapshot.maxPauseNs = CycleTable().maxPauseNs;
-        CycleTable() = Table();
+        snapshot = CycleTable(seq);
+        CycleTables().erase(seq);
     }
     // Deterministic emission order: phase names sorted, so two runs of the same workload diff
     // line-by-line without a sort step.
@@ -124,44 +126,44 @@ void ZStat::NoteCycleEnd(uint64_t seq)
              static_cast<unsigned long long>(snapshot.maxPauseNs), snapshot.phases.size());
 }
 
-ZStat::PhaseTotals ZStat::Phase(const char* name)
+ZStat::PhaseTotals ZStat::Phase(const char* name, uint64_t seq)
 {
     std::lock_guard<std::mutex> guard(TableLock());
-    auto it = CycleTable().phases.find(name);
-    if (it == CycleTable().phases.end()) {
+    auto it = CycleTable(seq).phases.find(name);
+    if (it == CycleTable(seq).phases.end()) {
         return PhaseTotals{};
     }
     return it->second;
 }
 
-std::vector<std::string> ZStat::RegisteredPhases()
+std::vector<std::string> ZStat::RegisteredPhases(uint64_t seq)
 {
     std::lock_guard<std::mutex> guard(TableLock());
     std::vector<std::string> names;
-    names.reserve(CycleTable().phases.size());
-    for (const auto& kv : CycleTable().phases) {
+    names.reserve(CycleTable(seq).phases.size());
+    for (const auto& kv : CycleTable(seq).phases) {
         names.push_back(kv.first);
     }
     std::sort(names.begin(), names.end());
     return names;
 }
 
-uint64_t ZStat::CyclePauseNs()
+uint64_t ZStat::CyclePauseNs(uint64_t seq)
 {
     std::lock_guard<std::mutex> guard(TableLock());
-    return CycleTable().pauseNs;
+    return CycleTable(seq).pauseNs;
 }
 
-uint64_t ZStat::CycleConcNs()
+uint64_t ZStat::CycleConcNs(uint64_t seq)
 {
     std::lock_guard<std::mutex> guard(TableLock());
-    return CycleTable().concNs;
+    return CycleTable(seq).concNs;
 }
 
-uint64_t ZStat::CycleMaxPauseNs()
+uint64_t ZStat::CycleMaxPauseNs(uint64_t seq)
 {
     std::lock_guard<std::mutex> guard(TableLock());
-    return CycleTable().maxPauseNs;
+    return CycleTable(seq).maxPauseNs;
 }
 
 void ZStat::SetEnabledForTest(bool enabled)
@@ -172,7 +174,7 @@ void ZStat::SetEnabledForTest(bool enabled)
 void ZStat::ResetForTest()
 {
     std::lock_guard<std::mutex> guard(TableLock());
-    CycleTable() = Table();
+    CycleTables().clear();
 }
 
 void ZStat::FoldToToken(const char* text, char* out, size_t cap)

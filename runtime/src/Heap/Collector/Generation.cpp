@@ -771,7 +771,7 @@ void WCollector::DoYoungGarbageCollection()
     }
     {
         // minortime: ① FlushAllocationRegions
-        MRT_PHASE_TIMER("young.flush_alloc");
+        MRT_PHASE_TIMER("young.flush_alloc", REPORT, GetCycleContext().sequence.load(std::memory_order_acquire));
         FlushAllocationRegions();
     }
 
@@ -781,7 +781,7 @@ void WCollector::DoYoungGarbageCollection()
     YoungCollectionStats stats;
     {
         // minortime: ② PrepareYoungGarbageCandidates
-        MRT_PHASE_TIMER("young.prepare_candidates");
+        MRT_PHASE_TIMER("young.prepare_candidates", REPORT, GetCycleContext().sequence.load(std::memory_order_acquire));
         stats = manager.PrepareYoungGarbageCandidates(
             [this](RegionInfo* region) { minorCandidateRegions.insert(region); });
     }
@@ -839,7 +839,7 @@ void WCollector::DoYoungGarbageCollection()
     MinorSlotSet rememberedSlots;
     {
         // minortime: ④ remset / cross-gen edge consume (drain + pinned stamp; rescan below)
-        MRT_PHASE_TIMER("young.remset_drain");
+        MRT_PHASE_TIMER("young.remset_drain", REPORT, GetCycleContext().sequence.load(std::memory_order_acquire));
         RememberedSet& rememberedSet = Heap::GetHeap().GetRememberedSet();
         size_t pinnedRemsetRecords = manager.RecordPinnedCrossGenEdges();
         if (pinnedRemsetRecords != 0) {
@@ -958,11 +958,11 @@ void WCollector::DoYoungGarbageCollection()
     // the world-release publication below.
     auto produceYoungRoots = [&]() {
         // minortime: ③ root enum (alloc buffers + VisitMinorRoots)
-        MRT_PHASE_TIMER("young.root_enum");
+        MRT_PHASE_TIMER("young.root_enum", REPORT, GetCycleContext().sequence.load(std::memory_order_acquire));
         WorkStack enumRoots = NewWorkStack();
         theAllocator.VisitAllocBuffers([&enumRoots](AllocBuffer& buffer) { buffer.MergeRoots(enumRoots); });
         if (stackScanEpoch != 0) {
-            SatbBuffer::Instance().GetRetiredObjects(enumRoots);
+            SatbBuffer::Instance(GetCycleContext().generation).GetRetiredObjects(enumRoots);
         }
         while (!enumRoots.empty()) {
             const MarkStackEntry entry = enumRoots.back();
@@ -1041,7 +1041,7 @@ void WCollector::DoYoungGarbageCollection()
     {
         // minortime: ⑤ mark closure pass-1 (from roots)
         // The release above makes this ZGC mark_roots()+mark_follow work concurrent.
-        MRT_PHASE_TIMER("young.mark_closure");
+        MRT_PHASE_TIMER("young.mark_closure", REPORT, GetCycleContext().sequence.load(std::memory_order_acquire));
         ++concWindow.closureCalls;
         TraceYoungClosure(workStack, fullYoungScan, reachableObjects, reachableVec, reachableSlots, weakSlots,
                           useBitmapLedger, reachableSlotDomain);
@@ -1080,7 +1080,7 @@ void WCollector::DoYoungGarbageCollection()
     MinorInteriorBaseMap remsetInteriorBases;
     {
         // minortime: ④ remset rescan + ⑤ mark closure pass-2 (from remset edges)
-        MRT_PHASE_TIMER("young.remset_rescan");
+        MRT_PHASE_TIMER("young.remset_rescan", REPORT, GetCycleContext().sequence.load(std::memory_order_acquire));
         RescanRememberedSet(workStack, rememberedSlots, reachableSlots, weakSlots, currentMinorRoots,
                             fullYoungScan,
                             remsetConsumedLedgerElideActive ? nullptr : &consumedSlots, &remsetStats,
@@ -1097,7 +1097,7 @@ void WCollector::DoYoungGarbageCollection()
     // fysaudit: D2 retained-drop + D4 live-not-consumed (product path already FYS=0 under audit).
 
     {
-        MRT_PHASE_TIMER("young.mark_from_remset");
+        MRT_PHASE_TIMER("young.mark_from_remset", REPORT, GetCycleContext().sequence.load(std::memory_order_acquire));
         ++concWindow.closureCalls;
         concWindow.remsetSlots = remsetStats.consumed;
         TraceYoungClosure(workStack, fullYoungScan, reachableObjects, reachableVec, reachableSlots, weakSlots,
@@ -1270,7 +1270,7 @@ void WCollector::DoYoungGarbageCollection()
 
     {
         // minortime: ⑧ pre-evac finish (phase + weak/satb clear)
-        MRT_PHASE_TIMER("young.pre_evac_clear");
+        MRT_PHASE_TIMER("young.pre_evac_clear", REPORT, GetCycleContext().sequence.load(std::memory_order_acquire));
         TransitionToGCPhase(GCPhase::GC_PHASE_POST_TRACE, true);
         // tracecache: PrepareTrace above switched the TRACE-phase region caches on
         // (RegionManager.h:726-727), and this is the young mark's post-trace point -- the
@@ -1287,7 +1287,7 @@ void WCollector::DoYoungGarbageCollection()
         // filled during marking is an ordinary candidate next cycle; it is never removed
         // from the structure the selector iterates.
         space.GetRegionManager().HandleTraceRegions();
-        SatbBuffer::Instance().ClearBuffer();
+        SatbBuffer::Instance(GetCycleContext().generation).ClearBuffer();
         ForwardingTable::PublishMarkCoverage(Generation::Young);
         ForwardingTable::ReclaimRetired("young-mark-coverage");
     }
@@ -1345,7 +1345,7 @@ void WCollector::DoYoungGarbageCollection()
 
     {
         // minortime: ⑧ post-evac finish
-        MRT_PHASE_TIMER("young.post_evac_finish");
+        MRT_PHASE_TIMER("young.post_evac_finish", REPORT, GetCycleContext().sequence.load(std::memory_order_acquire));
         TransitionToGCPhase(GCPhase::GC_PHASE_IDLE, true);
         MergeResurrectExportObjects();
     }

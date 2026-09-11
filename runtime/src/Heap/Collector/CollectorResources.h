@@ -17,6 +17,7 @@
 #include "Inspector/CjHeapData.h"
 #include "TaskQueue.h"
 #include "DriverPort.h"
+#include "CycleContext.h"
 
 namespace MapleRuntime {
 class Collector;
@@ -63,9 +64,39 @@ public:
 
     void SetHeapMarked(bool value) { isHeapMarked = value; }
 
-    bool IsGcStarted() const { return isGcStarted.load(std::memory_order_acquire); }
+    bool IsGcStarted() const
+    {
+        return GetCycleSnapshot().AnyActive() || activeRequests.load(std::memory_order_acquire) != 0 ||
+               controlActivity.load(std::memory_order_acquire);
+    }
+    CycleSnapshot GetCycleSnapshot() const { return CycleSnapshot(cycleState.load(std::memory_order_acquire)); }
+    CycleContext& GetCycleContext(CycleGeneration generation)
+    {
+        return generation == CycleGeneration::Young ? youngCycle : oldCycle;
+    }
+    // Serial topology adapter, shared with helpers (not thread-local). I14 must
+    // propagate an explicit context before more than one execution is admitted.
+    CycleContext& GetExecutionContext() const { return *executionContext.load(std::memory_order_acquire); }
+    CycleToken GetExecutionToken() const;
+    CycleContext& GetCycleContext(const CycleToken& token);
+    CycleToken BeginCycle(uint64_t taskIndex, GCReason reason);
+    bool EndCycle(const CycleToken& token);
+    bool PublishCyclePhase(const CycleToken& token, GCPhase phase);
+    bool PublishInactiveCyclePhase(CycleGeneration generation, GCPhase phase);
+    bool IsCompletedControlCycle(CycleGeneration generation, uint64_t sequence) const
+    {
+        const std::atomic<uint64_t>& completed = generation == CycleGeneration::Young ?
+            completedYoungControlCycle : completedOldControlCycle;
+        return sequence != 0 && completed.load(std::memory_order_acquire) == sequence;
+    }
+    GCStats& GetExecutionStats()
+    {
+        return GetCycleSnapshot().AnyActive() ? GetExecutionContext().stats : gcStats;
+    }
 
-    void SetGcStarted(bool val) { isGcStarted.store(val, std::memory_order_release); }
+    // Legacy control/test activity receives a real, tokened context so migrated
+    // barrier/SATB consumers observe the same owner as product collections.
+    void SetGcStarted(bool val);
 
     bool IsGCActive() const { return Heap::GetHeap().IsGCEnabled() && isGCActive.load(std::memory_order_relaxed); }
 
@@ -105,7 +136,7 @@ private:
     void PostIgnoredGcRequest(bool shouldWait);
     bool ExecuteDriverRequest(const GCDriverRequest& request);
     bool ProcessDriverRequest(GCDriverPort& port, const GCDriverRequest& request);
-    void CancelDriverRequestLifecycle();
+    void CancelDriverRequestLifecycle(CycleGeneration generation);
 #if defined(MRT_TESTABLE_INTERNALS)
     MRT_EXPORT static bool ShouldWaitForIgnoredGcRequest(GCReason reason, bool async);
     MRT_EXPORT static bool HasSyncTaskCompleted(uint64_t finishedIndex, uint64_t awaitedIndex);
@@ -143,12 +174,11 @@ private:
     TaskQueue<GCExecutor>* taskQueue = nullptr;
     GCDriverPort minorDriverPort { GCDriverKind::MINOR };
     GCDriverPort majorDriverPort { GCDriverKind::MAJOR };
-    // zDriver.cpp:59-72,201-224,463-487: the generation ports are
-    // independent, but one driver owns the complete collection lifecycle at a
-    // time. This also keeps the collector's phase, reason and forwarding
-    // retirement epochs single-writer.
+    // Keep the serial prerequisite until the page/task/rendezvous domains
+    // permit the old unlock window (zGeneration.cpp:992-1007,1054-1064).
     std::mutex driverLock;
-    bool driverRequestActive = false;
+    std::atomic<uint8_t> activeRequests { 0 };
+    const GCDriverRequest* executionRequest = nullptr; // Protected by driverLock.
 #if defined(MRT_GC_UNIT_TESTS)
     // Deterministic unit builds can replace only the task executor.  The
     // default product retains CollectorProxy as its sole owner and ABI shape.
@@ -172,9 +202,18 @@ private:
     // notified when GC finished, requires gcFinishedCondMutex
     std::condition_variable gcFinishedCondVar;
 
-    // Indicate whether GC is already started.
-    // NOTE: When GC finishes, it clears isGcStarted, must be over-written only by gc thread.
-    std::atomic<bool> isGcStarted = { false };
+    CycleContext youngCycle { CycleGeneration::Young };
+    CycleContext oldCycle { CycleGeneration::Old };
+    std::atomic<CycleContext*> executionContext { &oldCycle };
+    std::atomic<uint32_t> cycleState { 0 };
+    // I16 is disabled, so lifecycle mutation remains serialized.  In addition
+    // to the driver lock, this protects direct lifecycle users and makes token
+    // validation atomic with phase publication or completion.
+    std::mutex cycleLifecycleLock;
+    std::atomic<bool> controlActivity { false };
+    CycleToken controlCycleToken { CycleGeneration::Old, 0 };
+    std::atomic<uint64_t> completedYoungControlCycle { 0 };
+    std::atomic<uint64_t> completedOldControlCycle { 0 };
 
     // a switch to disable gc for hotupdate.
     std::atomic<bool> isGCActive = { true };

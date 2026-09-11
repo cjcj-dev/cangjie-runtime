@@ -28,6 +28,37 @@
 #include "TypeInfoManager.h"
 
 namespace MapleRuntime {
+CycleContext& Collector::GetCycleContext() const
+{
+    return Heap::GetHeap().GetCollectorResources().GetExecutionContext();
+}
+
+GCPhase Collector::GetGCPhase() const
+{
+    const auto& resources = Heap::GetHeap().GetCollectorResources();
+    return resources.GetCycleSnapshot().Phase(GetCycleContext().generation);
+}
+
+GCPhase Collector::GetGCPhase(CycleGeneration generation) const
+{
+    return Heap::GetHeap().GetCollectorResources().GetCycleSnapshot().Phase(generation);
+}
+
+void Collector::SetGCPhase(GCPhase phase)
+{
+    auto& resources = Heap::GetHeap().GetCollectorResources();
+    if (resources.GetCycleSnapshot().AnyActive()) {
+        CHECK_DETAIL(resources.PublishCyclePhase(resources.GetExecutionToken(), phase),
+                     "collector phase publication lost its cycle owner");
+    } else {
+        // Retain the inactive control phase used by diagnostics and unit
+        // fixtures. It cannot publish into an active replacement cycle.
+        const CycleGeneration generation = resources.GetExecutionContext().generation;
+        CHECK_DETAIL(resources.PublishInactiveCyclePhase(generation, phase),
+                     "inactive phase publication raced with cycle start");
+    }
+}
+
 namespace {
 const char* const COLLECTOR_NAME[] = { "No Collector", "Proxy Collector", "Regional-Copying Collector",
                                        "Smooth Collector" };
