@@ -96,6 +96,7 @@ if [[ "${1:-}" == --gtest_list_tests ]]; then
   printf 'Discovery.\n  First\n'
   case "${DISCOVERY_MODE:-single}" in
     stdout) printf '  12:34:56 runtime: diagnostic line\n' ;;
+    stdout_plain) printf '12:34:56 runtime: diagnostic line\n' ;;
     stderr) printf 'StderrSuite.\n  StderrCase\n' >&2 ;;
   esac
   if [[ "${DISCOVERY_MODE:-single}" != single ]]; then
@@ -155,6 +156,9 @@ check_discovery() {
   if [[ "$mode" == stdout ]]; then
     discovery_assert diagnostic-preserved /usr/bin/grep -qxF \
       '  12:34:56 runtime: diagnostic line' "$out/test-lists/$kind.raw.invalid"
+  elif [[ "$mode" == stdout_plain ]]; then
+    discovery_assert diagnostic-preserved /usr/bin/grep -qxF \
+      '12:34:56 runtime: diagnostic line' "$out/test-lists/$kind.raw.invalid"
   elif [[ "$mode" == stderr ]]; then
     discovery_assert stderr-preserved /usr/bin/grep -qxF \
       'StderrSuite.' "$out/test-lists/$kind.raw.stderr"
@@ -168,6 +172,7 @@ for kind in main publication; do
     check_discovery single "$kind" "$jobs" 0 0 $'Discovery.First\n'
     check_discovery clean "$kind" "$jobs" 0 0 $'Discovery.First\nDiscovery.Second\n'
     check_discovery stdout "$kind" "$jobs" 0 1 $'Discovery.First\nDiscovery.Second\n'
+    check_discovery stdout_plain "$kind" "$jobs" 0 1 $'Discovery.First\nDiscovery.Second\n'
     check_discovery stderr "$kind" "$jobs" 0 0 $'Discovery.First\nDiscovery.Second\n'
     check_discovery empty "$kind" "$jobs" 2 0 ''
     check_discovery grammar "$kind" "$jobs" 0 8 $'Param/Suite_1.Case/0\nParam/Suite_1.Next_2\n'

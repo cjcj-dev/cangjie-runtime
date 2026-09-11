@@ -90,8 +90,8 @@ parse_list() {
     {
       print $0 >> rejected
       invalid++
-      # An invalid suite header must not attach its cases to the last suite.
-      if ($0 !~ /^[[:space:]]/) suite = ""
+      # Diagnostics may occur between a suite header and its cases. Discard
+      # them without changing the last valid suite.
     }
     END { print invalid + 0 > count }
   ' "$1"
