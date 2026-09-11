@@ -2067,7 +2067,29 @@ void CheckLookupWitness(bool retirePublisher, bool addCandidate, bool retireCand
             expected = candidate;
         }
         if (retireCandidate) {
-            ForwardingTable::ClearEntries(state.region->GetRegionStart(), state.region->GetRegionSize());
+        state.from->SetStateCode(ObjectState::NORMAL);
+        state.region->SetRouteState(RegionInfo::RouteState::ROUTED);
+        collector.SetGCPhase(GCPhase::GC_PHASE_FORWARD);
+        auto& manager = static_cast<RegionSpace&>(Heap::GetHeap().GetAllocator()).GetRegionManager();
+        RelocationReceiptTestAccess::ParkFrom(manager, state.region);
+        GCThreadPool pool("derived-base-page", 0, GCPoolThread::GC_THREAD_PRIORITY);
+        RelocationReceiptTestAccess::BindThreadPool(Heap::GetHeap().GetCollectorResources(), &pool);
+        manager.ForwardFromRegions<Generation::Old>(&pool);
+        pool.Exit();
+        RelocationReceiptTestAccess::BindThreadPool(Heap::GetHeap().GetCollectorResources(), nullptr);
+        auto owner = ForwardingTable::RetainPageOwner(state.region);
+        const MAddress from = reinterpret_cast<MAddress>(state.from);
+        const MAddress produced = owner ? owner->find(from) : 0;
+        const bool completed = owner && owner->is_done() && owner->ref_count().load() == 0;
+        std::fprintf(stderr, "DERIVED_PAGE_TASK produced=%zx expected=%zx done_released=%d\n",
+                     produced, reinterpret_cast<MAddress>(state.to), completed);
+        GC_EXPECT_TRUE(completed);
+        GC_EXPECT_EQ(produced, reinterpret_cast<MAddress>(state.to));
+        RelocationReceiptTestAccess::ReleaseListOwnership(state.region);
+        state.region->SetRegionType(RegionInfo::RegionType::FROM_REGION);
+        ForwardingCursor cursor = 0;
+        GC_EXPECT_TRUE(owner->find(owner->index(from), &cursor).populated());
+        owner->entries()[cursor].store(0, std::memory_order_release);
         }
     }
 
@@ -2884,6 +2906,9 @@ void RunDerivedBaseProducer(bool interior, bool tagged, bool moving = false,
         if (usesState) { CleanupLateBackfill(fx, state); }
         collector.SetGCPhase(GCPhase::GC_PHASE_IDLE);
         RelocationReceiptTestAccess::BindCollector(Heap::GetHeap().GetCollectorResources(), nullptr);
+        std::fprintf(stderr, "DERIVED_BASE_TARGET target_assertion executed=1 matched=%d\n",
+                     aborted.output.find("site=Mutator::MakePreForwardDerivedVisitor.base-not-remapped") !=
+                         std::string::npos);
         GC_EXPECT_TRUE(aborted.output.find("site=Mutator::MakePreForwardDerivedVisitor.base-not-remapped") !=
                        std::string::npos);
         GC_EXPECT_TRUE(WIFSIGNALED(aborted.status));
