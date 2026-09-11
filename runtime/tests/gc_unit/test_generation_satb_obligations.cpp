@@ -37,8 +37,8 @@ GC_TEST(GenerationSatb, YoungCleanupPreservesOldEntries)
     old.Fini();
     std::printf("OBSERVED young=%p old=%p expected_young=%p expected_old=%p\n",
                 youngObject, oldObject, heap.obj1, heap.obj0);
-    GC_EXPECT_EQ(youngObject, heap.obj1);
-    GC_EXPECT_EQ(oldObject, heap.obj0);
+    GC_EXPECT_TRUE(youngObject == heap.obj1);
+    GC_EXPECT_TRUE(oldObject == heap.obj0);
 }
 
 GC_TEST(GenerationSatb, FlushReturnsNodeToItsOwner)
@@ -61,8 +61,8 @@ GC_TEST(GenerationSatb, FlushReturnsNodeToItsOwner)
     old.Fini();
     young.Fini();
     std::printf("OBSERVED owner_old=%p other_young=%p expected=%p\n", oldObject, youngObject, heap.obj0);
-    GC_EXPECT_EQ(oldObject, heap.obj0);
-    GC_EXPECT_EQ(youngObject, nullptr);
+    GC_EXPECT_TRUE(oldObject == heap.obj0);
+    GC_EXPECT_TRUE(youngObject == nullptr);
 }
 int main(int argc, char** argv)
 {
