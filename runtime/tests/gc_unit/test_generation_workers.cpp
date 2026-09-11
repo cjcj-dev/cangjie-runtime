@@ -283,6 +283,28 @@ namespace {
     std::_Exit(2);
 }
 
+void JoinSchedule()
+{
+    // In the isolated child, all subsequently created threads inherit one CPU
+    // and one FIFO priority. Yield then lets an already runnable product caller
+    // finish or block before we inspect it; a wakeup pending on another CPU
+    // cannot be mistaken for a settled wait. This needs CAP_SYS_NICE, and is a
+    // harness error when unavailable, never a skipped/passing product test.
+    cpu_set_t allowed, single;
+    CPU_ZERO(&allowed);
+    CPU_ZERO(&single);
+    if (sched_getaffinity(0, sizeof(allowed), &allowed) != 0) JoinHarnessError("get-affinity");
+    int cpu = 0;
+    while (cpu < CPU_SETSIZE && !CPU_ISSET(cpu, &allowed)) ++cpu;
+    if (cpu == CPU_SETSIZE) JoinHarnessError("empty-affinity");
+    CPU_SET(cpu, &single);
+    sched_param parameter{};
+    parameter.sched_priority = 1;
+    if (sched_setaffinity(0, sizeof(single), &single) != 0 ||
+        sched_setscheduler(0, SCHED_FIFO, &parameter) != 0) JoinHarnessError("fifo-schedule");
+    std::fprintf(stderr, "JOIN_SCHEDULE cpu=%d policy=FIFO priority=1\n", cpu);
+}
+
 void JoinRequire(bool value, const char* invariant)
 {
     std::fprintf(stderr, "JOIN_ASSERT %s value=%d\n", invariant, value);
@@ -295,9 +317,10 @@ template<class Predicate>
 void JoinAwait(const char* stage, Predicate predicate)
 {
     const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(10);
-    while (!predicate()) {
-        if (std::chrono::steady_clock::now() >= deadline) JoinHarnessError(stage);
+    for (;;) {
         std::this_thread::yield();
+        if (predicate()) return;
+        if (std::chrono::steady_clock::now() >= deadline) JoinHarnessError(stage);
     }
 }
 
@@ -361,6 +384,7 @@ struct ExitGate {
 
 GC_OTHER_VM_TEST(GenerationWorkers, BorrowedCompletionOrder)
 {
+    JoinSchedule();
     GCWorkers workers(Generation::OLD, 3);
     Latch entered, releaseOthers, releaseLast;
     std::atomic<unsigned> completed{0}, destroyed{0};
@@ -417,6 +441,7 @@ GC_OTHER_VM_TEST(GenerationWorkers, BorrowedCompletionOrder)
 
 GC_OTHER_VM_TEST(GenerationWorkers, StopCompletionOrder)
 {
+    JoinSchedule();
     ExitGate exit;
     GCWorkers workers(Generation::YOUNG, 2);
     Latch entered, release;
@@ -460,6 +485,7 @@ GC_OTHER_VM_TEST(GenerationWorkers, StopCompletionOrder)
 
 GC_OTHER_VM_TEST(GenerationWorkers, StopRestartCompletionOrder)
 {
+    JoinSchedule();
     ExitGate exit;
     GCWorkers workers(Generation::OLD, 2);
     workers.SetActiveWorkers(1);
@@ -510,7 +536,9 @@ GC_OTHER_VM_TEST(GenerationWorkers, StopRestartCompletionOrder)
 
 GC_OTHER_VM_TEST(GenerationWorkers, OrdinaryRunStopControl)
 {
-    GCWorkers workers(Generation::YOUNG, 1);
+    // Keep the set's storage until this isolated process exits, including in a
+    // control arm whose deliberately omitted join leaves a worker still exiting.
+    auto& workers = *new GCWorkers(Generation::YOUNG, 1);
     std::atomic<unsigned> result{0};
     Task task([&](uint32_t) { ++result; });
     workers.Run(task);
