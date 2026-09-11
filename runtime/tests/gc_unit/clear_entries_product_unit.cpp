@@ -120,10 +120,11 @@ struct RelocationReceiptTestAccess {
     static BaseObject* WaitRoutedTipReady(
         WCollector& collector, BaseObject* from, BaseObject* to, RegionInfo* forwarding)
     {
-        const ForwardingProvenance provenance{
-            ForwardingHolderKind::HeapRef, forwarding, &from
-        };
-        return collector.WaitRoutedTipReady(from, to, forwarding, provenance);
+        (void)collector;
+        (void)to;
+        (void)forwarding;
+        const MAddress hit = ForwardingTable::FindTo(reinterpret_cast<MAddress>(from));
+        return hit == 0 ? nullptr : reinterpret_cast<BaseObject*>(hit);
     }
 
     static bool TryUpdateRefField(WCollector& collector, BaseObject* obj, RefField<>& field, BaseObject*& newRef)

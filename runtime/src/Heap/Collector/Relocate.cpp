@@ -2129,6 +2129,7 @@ static CompactedMissClass ClassifyCompactedMiss(RegionInfo* region, BaseObject* 
                           : CompactedMissClass::kAlreadyToInterior;
 }
 
+#if 0
 BaseObject* WCollector::WaitRoutedTipReady(BaseObject* from, BaseObject* to, RegionInfo* forwarding,
                                            const ForwardingProvenance& provenance) const
 {
@@ -2370,6 +2371,7 @@ BaseObject* WCollector::WaitRoutedTipReady(BaseObject* from, BaseObject* to, Reg
     }
     return permanentHole("forwarding-table-miss", 0, again);
 }
+#endif
 
 // portmutreloc: ZRelocate::relocate_object's retain/copy/release leg (zRelocate.cpp:391-406).
 //
@@ -2870,45 +2872,13 @@ BaseObject* WCollector::ForwardObjectImpl(BaseObject* obj, RegionInfo* ghostFrom
     RunRemapWindowTestHook(8, ghostFromRegion, obj);
 #endif
     CHECK(GetGCPhase() == GCPhase::GC_PHASE_PREFORWARD || GetGCPhase() == GCPhase::GC_PHASE_FORWARD);
-    // Plan the dest *before* TryLockObject. Holding LOCKED across RouteRegion /
-    // TakeRegion is the object-lock face of REPORT-routespin: a waiter in
-    // IsLockedWord yield can never help, and the copier can park in a safepoint
-    // or ROUTING wait that only GC can finish. ZGC relocate_object_inner
-    // (zRelocate.cpp:354-372) does alloc+copy+insert with no safepoint; 乙1 is
-    // the same rule for the object lock that routefix already applied to ROUTING.
-    RegionSpace& space = reinterpret_cast<RegionSpace&>(theAllocator);
-    BaseObject* planned = space.GetRegionManager().PlanRoute(
-        obj, ghostFromRegion, lease, CopierRouteMint::Make()).dest;
 #if defined(MRT_GC_UNIT_TESTS)
     if (g_routeLookupTestContext != nullptr) {
-        g_routeLookupTestContext->plan = RoutePlan{ planned };
+        g_routeLookupTestContext->plan = RoutePlan{ nullptr };
         g_routeLookupTestContext->hookReached = true;
-        return planned;
+        return nullptr;
     }
 #endif
-    if (planned == nullptr) {
-        LOG(RTLOG_ERROR, "[GCV2][first-visitor] PlanRoute returned null obj=%p page=%p phase=%d route=%u",
-            obj, ghostFromRegion, static_cast<int>(GetGCPhase()),
-            ghostFromRegion == nullptr ? 0U : static_cast<unsigned>(ghostFromRegion->GetRouteState()));
-        // zRelocate.cpp:354-372 allocates the destination lazily in the
-        // first visitor.  A ROUTED page with no geometric ticket therefore
-        // still relocates through the regular relocation allocator; the
-        // forwarding receipt below is the sole publication of the result.
-        // Once copier admission is sealed, however, the retain-side route
-        // lookup is expected to refuse. Do not allocate a destination that
-        // cannot be consumed; take the object lock below and let the shared
-        // admission CAS linearize the refusal and rollback.
-        const bool copySealed = ghostFromRegion != nullptr &&
-            ghostFromRegion->CopyAdmission() == ZForwardingLife::CopyAdmissionState::SEALED;
-        if (!copySealed && ghostFromRegion != nullptr &&
-            ghostFromRegion->GetRouteState() == RegionInfo::RouteState::ROUTED) {
-            const size_t size = RegionSpace::GetAllocSize(*obj);
-            planned = reinterpret_cast<BaseObject*>(
-                AllocBuffer::GetOrCreateAllocBuffer()->Allocate(size, AllocType::MOVEABLE_OBJECT));
-            LOG(RTLOG_ERROR, "[GCV2][first-visitor] lazy relocation allocation obj=%p size=%zu to=%p",
-                obj, size, planned);
-        }
-    }
     do {
         StateWord oldWord = obj->GetStateWord();
 
@@ -2970,20 +2940,11 @@ BaseObject* WCollector::ForwardObjectImpl(BaseObject* obj, RegionInfo* ghostFrom
                     page = RegionInfo::TryGetRegionInfoAt(reinterpret_cast<MAddress>(obj));
                 }
             }
-            if (page != nullptr) {
-                if (!page->BeginCopyAdmission()) {
-                    // The old forwarding life is sealed. This object never
-                    // entered its copier set, so restore the header and consume
-                    // only a receipt that the retiring owner already published.
-                    obj->UnlockObject(ObjectState::NORMAL);
-                    return FindToVersion(obj).found();
-                }
-#if defined(MRT_TESTABLE_INTERNALS)
-                RunCopyAdmissionTestHook(page, obj);
-#endif
-                page->CommitCopyAdmission();
+            if (page != nullptr && !page->NoteCopyInflight()) {
+                obj->UnlockObject(ObjectState::NORMAL);
+                return FindToVersion(obj).found();
             }
-            return RelocateObjectInner(obj, planned, page);
+            return RelocateObjectInner(obj, nullptr, page);
         }
     } while (true);
     LOG(RTLOG_FATAL, "forwardObject exit in wrong path");
@@ -3002,7 +2963,7 @@ BaseObject* WCollector::ForwardObjectExclusive(BaseObject* obj)
         obj->UnlockObject(ObjectState::NORMAL);
         return FindToVersion(obj).found();
     }
-    return RelocateObjectInner(obj, fwdTable.PlanRoute(obj, CopierRouteMint::Make()).dest, page);
+    return RelocateObjectInner(obj, nullptr, page);
 }
 
 BaseObject* WCollector::RelocateObjectInner(BaseObject* obj, BaseObject* planned, RegionInfo* copyPage)
