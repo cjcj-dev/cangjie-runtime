@@ -44,7 +44,6 @@
 #include "Heap/Verify/TraceClear.h"
 #include "Heap/Verify/FillerZeroDiag.h"
 #include "Heap/Verify/TagReuseProbe.h"
-#include "Heap/Verify/MarkWhyProbe.h"
 #include "Heap/Verify/SurvNodeDiag.h"
 #include "Heap/Allocator/RouteDestHold.h"
 #include "Heap/Verify/FromPageDetachCheck.h"
@@ -1257,7 +1256,6 @@ public:
                     ForwardDataManager::GetForwardDataManager().AllocateRegionBitmap(GetRegionSize());
                 face.epoch.store(view.GetEpoch(), std::memory_order_release);
                 __atomic_store_n(&face.bitmap, allocated, std::memory_order_release);
-                MarkWhyProbe::NoteMarkBitmapAlloc(this, allocated);
                 DLOG(REGION, "region %p@%#zx markbitmap generation=%s bitmap=%p", this, GetRegionStart(),
                      G == Generation::Young ? "young" : "old", allocated);
                 return allocated;
@@ -1539,8 +1537,6 @@ public:
             NotePageOwnerFirstPaint<G>();
         }
         (void)TagReuseProbe::NoteMarkBitsSticky(this, offset, true, "MarkObject_sized0", G);
-        (void)MarkWhyProbe::NoteAfterMarkBits(this, obj, offset, objSize, regionSize, writeBm, already,
-                                              "MarkObject_sized0", G);
         CHECK(IsMarkedObject(view, offset));
         return already;
     }
@@ -1584,8 +1580,6 @@ public:
             NotePageOwnerFirstPaint<G>();
         }
         (void)TagReuseProbe::NoteMarkBitsSticky(this, offset, true, "MarkObject_sized", G);
-        (void)MarkWhyProbe::NoteAfterMarkBits(this, obj, offset, objSize, regionSize, writeBm, already,
-                                              "MarkObject_sized", G);
         CHECK(IsMarkedObject(view, offset));
         return already;
     }
