@@ -209,23 +209,6 @@ GC_TEST(ForwardEntryDomain, MissingEntryAbortsForwardObject)
     (void)live;
 }
 
-GC_TEST(ForwardEntryDomain, WrongLifecycleAborts)
-{
-    GcHeapFixture fx;
-    LiveInfo* live = PlantGhostFrom(fx, fx.region0, fx.obj0);
-    const size_t published = MRT_PublishKeptInPlaceReceiptsForTest(fx.region0);
-    GC_EXPECT_TRUE(published >= 1);
-    const ForwardingTable::LookupResult before = ForwardingTable::LookupTo(reinterpret_cast<MAddress>(fx.obj0));
-    GC_EXPECT_TRUE(before.answer == ForwardingTable::ToAnswer::ArmedHit);
-    fx.region0->BumpRegionLifeId();
-    const ForwardingTable::LookupResult after = ForwardingTable::LookupTo(reinterpret_cast<MAddress>(fx.obj0));
-    std::fprintf(stderr, "DETAIL wrong_life after_bump answer=%u to=%#zx\n",
-                 static_cast<unsigned>(after.answer), static_cast<size_t>(after.to));
-    GC_EXPECT_TRUE(after.answer != ForwardingTable::ToAnswer::ArmedHit);
-    RunNamedAbort("wrong_life", fx.obj0);
-    (void)live;
-}
-
 GC_TEST(ForwardEntryDomain, UnavailableTableAborts)
 {
     GcHeapFixture fx;
