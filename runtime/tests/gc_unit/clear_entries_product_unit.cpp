@@ -937,6 +937,7 @@ GC_TEST(ForwardingPublicationProduct, MutatorRuntimeEntryReachesCopyAdmission)
     region->RecordRouteStart(region->GetAddressOffset(reinterpret_cast<MAddress>(from)));
     region->SetRouteInfo(reinterpret_cast<MAddress>(expected), static_cast<uint32_t>(objectSize));
     region->SetRouteState(RegionInfo::RouteState::ROUTED);
+    AllocBuffer::GetOrCreateAllocBuffer()->SetRegion(destination);
 
     const MAddress fromAddress = reinterpret_cast<MAddress>(from);
 

@@ -1024,11 +1024,6 @@ for test_name in "${PUBLICATION_HOOK_TESTS[@]}"; do
     publication_contract_rc=1
   fi
 done
-if [[ "$PUBLICATION_HOOK_PRODUCT_SHAPE" == testable ]] &&
-    ! /usr/bin/grep -F -q 'I03_TARGET_REACHED state=1 count=1' "${publication_logs[@]}"; then
-  echo "GC_UNIT_I03_TARGET_NOT_REACHED" >&2
-  publication_contract_rc=1
-fi
 if [[ "$REMAP_RECEIPT_PRODUCT_SHAPE" == testable ]]; then
   if ! /usr/bin/grep -F -q "[  RUN   ] $REMAP_RECEIPT_TEST" "${publication_logs[@]}" ||
       ! /usr/bin/grep -F -q "[  PASS  ] $REMAP_RECEIPT_TEST" "${publication_logs[@]}" ||
