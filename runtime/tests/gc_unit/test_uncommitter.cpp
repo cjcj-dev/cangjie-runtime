@@ -304,8 +304,11 @@ GC_TEST(Uncommitter, LiveForwardingRefCountKeepsReleasedAllocatable)
     FreeRegionManager frm(rm);
     frm.Initialize(n);
     frm.AddReleaseUnits(0, 1);
-    ZForwardingLife::ResetForForwarding(region->metadata.fwdRefCount, region->metadata.fwdClaimed,
-                                        region->metadata.fwdDone);
+    ZForwarding* owner = ZForwarding::alloc(1, region->GetRegionStart(), region->GetRegionStart(),
+                                          region->GetRegionSize(), region, region->GetRegionLifeId());
+    GC_EXPECT_TRUE(owner != nullptr);
+    owner->retain_owner();
+    region->metadata.fwdOwner.store(owner, std::memory_order_release);
     GC_EXPECT_TRUE(region->RetainForwarding());
     GC_EXPECT_TRUE(region->ForwardingRefCount() != 0);
     GC_EXPECT_FALSE(FreeRegionManager::ExtentReadyForReleasedCache(region));
@@ -316,5 +319,9 @@ GC_TEST(Uncommitter, LiveForwardingRefCountKeepsReleasedAllocatable)
                  region->ForwardingRefCount(),
                  FreeRegionManager::ExtentReadyForReleasedCache(region) ? 1 : 0);
     std::fflush(stderr);
+    region->ReleaseForwarding();
+    owner->release_page();
+    ForwardingTable::ClearPageOwner(region);
+    owner->Destroy();
     MemMap::DestroyMemMap(map);
 }

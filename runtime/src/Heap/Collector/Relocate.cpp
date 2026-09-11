@@ -2399,7 +2399,8 @@ BaseObject* WCollector::TryMutatorRelocate(BaseObject* obj, RegionInfo* forwardi
     }
     // retain_page. A try-lock, so a losing mutator falls back instead of blocking -- ZGC's
     // retain_page also gives up (returns false) when the page is claimed or released.
-    if (!forwarding->TryLockReadFromRegion()) {
+    RegionInfo::RetainScope lease(forwarding);
+    if (!lease.ok()) {
         MutatorRelocate::NoteFallback(MutatorRelocate::Fallback::RETAIN_FAILED);
         return nullptr;
     }
@@ -2409,7 +2410,7 @@ BaseObject* WCollector::TryMutatorRelocate(BaseObject* obj, RegionInfo* forwardi
     // the existing FindToVersion / wait legs consume the published table.
     phase = GetGCPhase();
     if (phase != GCPhase::GC_PHASE_PREFORWARD && phase != GCPhase::GC_PHASE_FORWARD) {
-        forwarding->UnlockReadFromRegion();
+        lease.Release();
         MutatorRelocate::NoteFallback(MutatorRelocate::Fallback::PHASE);
         return nullptr;
     }
@@ -2424,9 +2425,9 @@ BaseObject* WCollector::TryMutatorRelocate(BaseObject* obj, RegionInfo* forwardi
     // those is evidence that the ported leg does anything.
     const bool wasForwarded = obj->IsForwarded();
     MutatorRelocate::EnterScope();
-    BaseObject* toVersion = const_cast<WCollector*>(this)->ForwardObjectImpl(obj, forwarding);
+    BaseObject* toVersion = const_cast<WCollector*>(this)->ForwardObjectImpl(obj, forwarding, lease);
     MutatorRelocate::LeaveScope();
-    forwarding->UnlockReadFromRegion(); // release_page
+    lease.Release(); // release_page
     if (wasForwarded) {
         MutatorRelocate::NoteAlreadyForwarded();
     }
@@ -2733,7 +2734,8 @@ BaseObject* WCollector::TryForwardObject(BaseObject* obj)
 #endif
         // secondclass ①: GetRoute is geometric plan; retain before copying or
         // consuming from-side state (else null-tip → HasRefField SEGV si_addr=0x8).
-        if (region->TryLockReadFromRegion()) {
+        RegionInfo::RetainScope lease(region);
+        if (lease.ok()) {
 #if defined(MRT_GC_UNIT_TESTS)
             if (g_routeLookupTestContext != nullptr) {
                 g_routeLookupTestContext->retained = true;
@@ -2750,7 +2752,7 @@ BaseObject* WCollector::TryForwardObject(BaseObject* obj)
                     g_routeLookupTestContext->retainedPhaseAllowed = false;
                 }
 #endif
-                region->UnlockReadFromRegion();
+                lease.Release();
                 const ForwardingProvenance provenance{ ForwardingHolderKind::StackSlot, this, &obj };
                 return FindToVersion(obj).GetOrFailClosed(
                     "WCollector::TryForwardObject.phase", provenance);
@@ -2760,8 +2762,8 @@ BaseObject* WCollector::TryForwardObject(BaseObject* obj)
                 g_routeLookupTestContext->retainedPhaseAllowed = true;
             }
 #endif
-            BaseObject* toVersion = ForwardObjectImpl(obj, region);
-            region->UnlockReadFromRegion();
+            BaseObject* toVersion = ForwardObjectImpl(obj, region, lease);
+            lease.Release();
             return toVersion;
         }
         // ZGC's relocate_object (zRelocate.cpp:362-393) calls forward_object
@@ -2836,8 +2838,10 @@ WCollector::RouteLookupTestResult WCollector::PlanRouteLookupForTest(BaseObject*
 }
 #endif
 
-BaseObject* WCollector::ForwardObjectImpl(BaseObject* obj, RegionInfo* ghostFromRegion)
+BaseObject* WCollector::ForwardObjectImpl(BaseObject* obj, RegionInfo* ghostFromRegion,
+                                          const RegionInfo::RetainScope& lease)
 {
+    CHECK(lease.covers(ghostFromRegion));
     CHECK(GetGCPhase() == GCPhase::GC_PHASE_PREFORWARD || GetGCPhase() == GCPhase::GC_PHASE_FORWARD);
     // Plan the dest *before* TryLockObject. Holding LOCKED across RouteRegion /
     // TakeRegion is the object-lock face of REPORT-routespin: a waiter in
@@ -2845,7 +2849,9 @@ BaseObject* WCollector::ForwardObjectImpl(BaseObject* obj, RegionInfo* ghostFrom
     // or ROUTING wait that only GC can finish. ZGC relocate_object_inner
     // (zRelocate.cpp:354-372) does alloc+copy+insert with no safepoint; 乙1 is
     // the same rule for the object lock that routefix already applied to ROUTING.
-    BaseObject* planned = fwdTable.PlanRoute(obj, CopierRouteMint::Make()).dest;
+    RegionSpace& space = reinterpret_cast<RegionSpace&>(theAllocator);
+    BaseObject* planned = space.GetRegionManager().PlanRoute(
+        obj, ghostFromRegion, lease, CopierRouteMint::Make()).dest;
 #if defined(MRT_GC_UNIT_TESTS)
     if (g_routeLookupTestContext != nullptr) {
         g_routeLookupTestContext->plan = RoutePlan{ planned };

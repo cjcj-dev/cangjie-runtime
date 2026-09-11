@@ -25,6 +25,39 @@ struct LiveInfo;
 // ClearEntries. ZGC has one map because reset_relocation_set is the only unlink.
 class ForwardingTable {
 public:
+    // Holds one forwarding identity across membership unlink and region reuse.
+    // Payload access additionally requires retain_page; lookup does not.
+    class Owner {
+    public:
+        Owner() = default;
+        ~Owner() { if (forwarding != nullptr) forwarding->release_owner(); }
+        Owner(const Owner& other) : forwarding(other.forwarding)
+        {
+            if (forwarding != nullptr) forwarding->retain_owner();
+        }
+        Owner(Owner&& other) noexcept : forwarding(other.forwarding) { other.forwarding = nullptr; }
+        Owner& operator=(Owner other) noexcept
+        {
+            ZForwarding* old = forwarding;
+            forwarding = other.forwarding;
+            other.forwarding = old;
+            return *this;
+        }
+        explicit operator bool() const { return forwarding != nullptr; }
+        ZForwarding* get() const { return forwarding; }
+        ZForwarding* operator->() const { return forwarding; }
+    private:
+        explicit Owner(ZForwarding* value) : forwarding(value)
+        {
+            if (forwarding != nullptr) forwarding->retain_owner();
+        }
+        ZForwarding* forwarding{ nullptr };
+        friend class ForwardingTable;
+    };
+
+    static Owner RetainPageOwner(const RegionInfo* region);
+    static void ClearPageOwner(RegionInfo* region);
+
     // A retained, fully-installed forwarding carried across object copy and
     // receipt publication. ClearEntries seals the table and waits for every
     // Publication to drain before unlinking it (zRelocate.cpp:354-379,
