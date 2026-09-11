@@ -24,6 +24,25 @@ struct RemapWindow {
     BaseObject* expected = nullptr;
     bool checkArena = false;
     bool checkCopy = false;
+    const char* lifetimeTarget = nullptr;
+    bool partialReader = false;
+    RegionInfo* partialDestination = nullptr;
+    BaseObject* partialFirst = nullptr;
+    bool partialSeeded = false;
+    bool partialWriteObserved = false;
+    bool partialSourceUnchanged = false;
+    bool partialSplit = false;
+    std::vector<unsigned char> sourceBytes;
+    bool lifetimeReaderHeld = false;
+    bool lifetimeCopyEntered = false;
+    bool lifetimeReaderSafe = false;
+    bool lifetimeClaimed = false;
+    bool lifetimeReleasedFind = false;
+    bool lifetimeDoneLast = false;
+    bool lifetimeResult = false;
+    bool lifetimeCancelled = false;
+    BaseObject* lifetimeReturned = nullptr;
+    ForwardingTable::Owner lifetimeOwner;
     MAddress expectedField = 0;
     MAddress copiedField = 0;
     bool arenaInstalled = false;
@@ -37,7 +56,6 @@ struct RemapWindow {
     std::thread::id mutatorThread;
     uintptr_t oldColour = 0;
     pid_t gcTid = 0;
-    std::unique_ptr<RegionInfo::DrainScope> drain;
 
     void Wait(std::unique_lock<std::mutex>& lock, const bool& flag, const char* stage)
     {
@@ -54,13 +72,9 @@ void ForwardDomainHook(unsigned point, RegionInfo* region, BaseObject* object)
 {
     auto& state = *remapWindow;
     std::unique_lock<std::mutex> lock(state.mutex);
-    if (point == (state.domain == ForwardDomain::Copy ? 7u : 1u)) {
+    if (point == 7) {
         GC_EXPECT_FALSE(state.kept->IsForwardingDone());
-        if (state.domain != ForwardDomain::Copy) {
-            state.drain.reset(new RegionInfo::DrainScope(state.kept, MutatorRelocate::Retire::DISPEL_GHOST));
-        } else {
-            GC_EXPECT_TRUE(state.collector->GetGCPhase() == GCPhase::GC_PHASE_POST_TRACE);
-        }
+        GC_EXPECT_TRUE(state.collector->GetGCPhase() == GCPhase::GC_PHASE_POST_TRACE);
         state.window = true;
         state.cv.notify_all();
         state.Wait(lock, state.entered, "domain-wait-entry");
@@ -137,17 +151,118 @@ void ForwardDomainHook(unsigned point, RegionInfo* region, BaseObject* object)
     }
     state.published = true;
     state.cv.notify_all();
+    // Removing an entry before done leaves a possible page publisher. Let
+    // the real task complete so the consumer can prove the missing-entry
+    // invariant at completion, rather than waiting on a fixture-held worker.
+    if (state.domain == ForwardDomain::Missing && !state.afterDone) return;
     state.Wait(lock, state.returned, "domain-result");
+}
+
+void PageLifetimeHook(unsigned point, RegionInfo* region, BaseObject* object)
+{
+    auto& state = *remapWindow;
+    std::unique_lock<std::mutex> lock(state.mutex);
+    if (point == 1) {
+        if (state.partialReader) {
+            // This serial fixture's real page task runs on the dispatch thread.
+            // Supply allocator input before task submission, never a route plan.
+            AllocBuffer::GetOrCreateAllocBuffer()->SetRegion(state.partialDestination);
+        }
+        state.lifetimeOwner = ForwardingTable::RetainPageOwner(state.kept);
+        state.window = true;
+        state.cv.notify_all();
+        state.Wait(lock, state.lifetimeReaderHeld, "page-reader-retained");
+    } else if (point == 8 && object == state.from && std::this_thread::get_id() == state.mutatorThread) {
+        if (state.partialReader) {
+            const auto* bytes = reinterpret_cast<const unsigned char*>(state.from);
+            state.sourceBytes.assign(bytes, bytes + RegionSpace::GetAllocSize(*state.from));
+        }
+        state.lifetimeReaderHeld = true;
+        state.entered = true;
+        state.cv.notify_all();
+        const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(10);
+        for (;;) {
+            const int32_t refs = state.lifetimeOwner->ref_count().load(std::memory_order_acquire);
+            if (state.partialReader ? (refs < 0 || state.partialWriteObserved)
+                                    : (refs < 0 || state.lifetimeCopyEntered)) {
+                if (state.partialReader) {
+                    if (!state.partialWriteObserved) {
+                        // A negative ref count synchronizes with the worker's
+                        // drain: it cannot write until this actual lease exits.
+                        state.partialSourceUnchanged = std::memcmp(state.from,
+                            state.sourceBytes.data(), state.sourceBytes.size()) == 0;
+                    }
+                    state.lifetimeReaderSafe = state.partialSourceUnchanged;
+                } else {
+                    state.lifetimeReaderSafe = refs < -1 && !state.lifetimeCopyEntered;
+                }
+                break;
+            }
+            if (std::chrono::steady_clock::now() >= deadline) {
+                std::fprintf(stderr, "P2 prerequisite timeout: page claimant did not enter\n");
+                std::abort();
+            }
+            lock.unlock();
+            std::this_thread::yield();
+            lock.lock();
+        }
+        state.cv.notify_all();
+    } else if (point == 9 && region == state.kept) {
+        if (state.partialReader) {
+            state.partialSeeded = AllocBuffer::GetOrCreateAllocBuffer()->GetRegion() == state.partialDestination;
+        }
+        state.lifetimeCopyEntered = true;
+        state.lifetimeClaimed = state.lifetimeOwner->claimed().load(std::memory_order_acquire);
+        state.cv.notify_all();
+    } else if (point == 11 && region == state.kept) {
+        if (state.partialReader) {
+            const MAddress first = state.lifetimeOwner->find(reinterpret_cast<MAddress>(state.partialFirst));
+            const MAddress second = state.lifetimeOwner->find(reinterpret_cast<MAddress>(state.from));
+            state.partialSplit = (first >= state.partialDestination->GetRegionStart() && first < state.partialDestination->GetRegionEnd()) &&
+                second == state.kept->GetRegionStart();
+            if (!state.partialSourceUnchanged) {
+                state.partialSourceUnchanged = std::memcmp(state.from,
+                    state.sourceBytes.data(), state.sourceBytes.size()) == 0;
+            }
+            state.partialWriteObserved = true;
+            state.cv.notify_all();
+        }
+        state.lifetimeDoneLast = !state.lifetimeOwner->is_done();
+    } else if (point == 12 && region == state.kept) {
+        state.lifetimeDoneLast = state.lifetimeDoneLast &&
+            (!state.lifetimeOwner->is_done() ||
+             state.lifetimeOwner->ref_count().load(std::memory_order_acquire) == 0);
+    } else if (point == 10 && region == state.kept) {
+        const MAddress to = state.lifetimeOwner->find(reinterpret_cast<MAddress>(state.from));
+        state.expected = reinterpret_cast<BaseObject*>(to);
+        state.lifetimeReleasedFind = state.lifetimeOwner->ref_count().load(std::memory_order_acquire) == 0 &&
+            to != 0 && to != reinterpret_cast<MAddress>(state.from) &&
+            raw(HeapSlotAt<>(to + TYPEINFO_PTR_SIZE).GetTargetObject()) == state.expectedField;
+        state.published = true;
+        state.copied = true;
+        state.cv.notify_all();
+    }
 }
 
 void RemapWindowHook(unsigned point, RegionInfo* region, BaseObject* object)
 {
+    if (remapWindow->lifetimeTarget != nullptr) {
+        PageLifetimeHook(point, region, object);
+        return;
+    }
     if (remapWindow->domain != ForwardDomain::None) {
         ForwardDomainHook(point, region, object);
         return;
     }
     auto& state = *remapWindow;
     std::unique_lock<std::mutex> lock(state.mutex);
+    if (point == 7 && !state.copyOnly) {
+        GC_EXPECT_TRUE(state.collector->GetGCPhase() == GCPhase::GC_PHASE_POST_TRACE);
+        state.window = true;
+        state.cv.notify_all();
+        state.Wait(lock, state.entered, "WaitRouted-entry");
+        return;
+    }
     if (point == 1) {
         GC_EXPECT_TRUE(std::this_thread::get_id() == state.gcThread);
         GC_EXPECT_TRUE(state.kept->IsGhostFromRegion());
@@ -172,14 +287,6 @@ void RemapWindowHook(unsigned point, RegionInfo* region, BaseObject* object)
         }
         const auto lookup = ForwardingTable::LookupTo(reinterpret_cast<MAddress>(state.from));
         GC_EXPECT_TRUE(lookup.answer != ForwardingTable::ToAnswer::ArmedHit);
-        if (!state.copyOnly) {
-            // Hold the existing product retire token while the mutator attempts
-            // retain. No table entry or done bit is fabricated by this fixture.
-            state.drain.reset(new RegionInfo::DrainScope(state.kept, MutatorRelocate::Retire::DISPEL_GHOST));
-            state.window = true;
-            state.cv.notify_all();
-            state.Wait(lock, state.entered, "WaitRouted-entry");
-        }
         std::fprintf(stderr, "REMAP_WINDOW prepared=1 flipped=1 before_forward=1 wait_entered=%d\n",
                      state.entered);
     } else if (point == 2 && object == state.from) {
@@ -212,7 +319,6 @@ void RemapWindowHook(unsigned point, RegionInfo* region, BaseObject* object)
         state.cv.notify_all();
         if (!state.copyOnly) {
             state.Wait(lock, state.returned, "post-WaitRouted-guard");
-            state.drain.reset();
         }
     } else if (point == 4) {
         const auto lookup = ForwardingTable::LookupTo(reinterpret_cast<MAddress>(state.copyFrom));
@@ -229,19 +335,20 @@ void RemapWindowHook(unsigned point, RegionInfo* region, BaseObject* object)
 }
 
 void RunRemapWindow(bool copyOnly, ForwardDomain domain = ForwardDomain::None, bool afterDone = false,
-                    bool checkArena = false, bool checkCopy = false)
+                    bool checkArena = false, bool checkCopy = false, const char* lifetimeTarget = nullptr,
+                    bool parallel = false, bool partialReader = false)
 {
     // The strict arm is deliberately red on #175's frozen guard. Ordinary
     // suites run the copy prerequisite; the contract arm is explicitly invoked
     // with CJ_GC_UNIT_REMAP_WINDOW=1 and a single-test filter.
     const char* strict = std::getenv("CJ_GC_UNIT_REMAP_WINDOW");
-    if (domain == ForwardDomain::None && !copyOnly && (strict == nullptr || std::strcmp(strict, "1") != 0)) {
+    if (lifetimeTarget == nullptr && domain == ForwardDomain::None && !copyOnly && (strict == nullptr || std::strcmp(strict, "1") != 0)) {
         std::fprintf(stderr, "REMAP_WINDOW strict_arm=NOT_RUN enable=CJ_GC_UNIT_REMAP_WINDOW\n");
         return;
     }
     GC_EXPECT_EQ(CJ_ScheduleManagerInit(), 0);
     GC_EXPECT_EQ(setenv("MRT_GCV2_MARKPAR_FORCE_SERIAL", "1", 1), 0);
-    GC_EXPECT_EQ(setenv("MRT_GCV2_EVACPAR_FORCE_SERIAL", "1", 1), 0);
+    GC_EXPECT_EQ(setenv("MRT_GCV2_EVACPAR_FORCE_SERIAL", parallel ? "0" : "1", 1), 0);
     MutatorManager mutatorManager;
     YoungConcTestRuntime runtime(mutatorManager);
     auto& fx = *new GcHeapFixture(true);
@@ -249,7 +356,8 @@ void RunRemapWindow(bool copyOnly, ForwardDomain domain = ForwardDomain::None, b
     auto& manager = space.GetRegionManager();
     manager.regionHeapStart = fx.heapStart;
     manager.regionHeapEnd = fx.heapStart + GcHeapFixture::kUnits * RegionInfo::UNIT_SIZE;
-    manager.inactiveZone.store(fx.heapStart + 3 * RegionInfo::UNIT_SIZE);
+    manager.inactiveZone.store(lifetimeTarget != nullptr ? manager.regionHeapEnd :
+                               fx.heapStart + 3 * RegionInfo::UNIT_SIZE);
     manager.maxUnitCountPerRegion = 1;
     manager.freeRegionManager.Initialize(GcHeapFixture::kUnits);
 
@@ -264,9 +372,30 @@ void RunRemapWindow(bool copyOnly, ForwardDomain domain = ForwardDomain::None, b
             .StoreColoured(GcUnit::StoreGoodPointer(fx.obj0));
     }
     const size_t size = RegionSpace::GetAllocSize(*fx.obj1);
+    if (lifetimeTarget != nullptr) {
+        // A dead prefix makes in-place relocation move the rooted object.
+        // No released/dirty/inactive target page is supplied by this fixture.
+        copyObject = fx.PlaceObject(copyPage->GetRegionStart() + size);
+        HeapSlotAt<>(reinterpret_cast<MAddress>(copyObject) + TYPEINFO_PTR_SIZE)
+            .StoreColoured(GcUnit::StoreGoodPointer(fx.obj0));
+    }
+    BaseObject* partialFirst = nullptr;
+    RegionInfo* partialDestination = nullptr;
+    if (partialReader) {
+        partialFirst = copyObject;
+        copyObject = fx.PlaceObject(copyPage->GetRegionStart() + 2 * size);
+        HeapSlotAt<>(reinterpret_cast<MAddress>(copyObject) + TYPEINFO_PTR_SIZE)
+            .StoreColoured(GcUnit::StoreGoodPointer(fx.obj0));
+        partialDestination = RegionInfo::InitRegion(3, 1, RegionInfo::UnitRole::SMALL_SIZED_UNITS);
+        partialDestination->SetRegionType(RegionInfo::RegionType::THREAD_LOCAL_REGION);
+        const MAddress limit = partialDestination->GetRegionEnd() - size;
+        HeapFiller::ZeroAndFill(partialDestination->GetRegionStart(), limit - partialDestination->GetRegionStart());
+        partialDestination->SetRegionAllocPtr(limit);
+        manager.tlRegionList.PrependRegion(partialDestination, RegionInfo::RegionType::THREAD_LOCAL_REGION);
+    }
     fx.region0->SetRegionAllocPtr(fx.region0->GetRegionStart() + size);
     fx.region1->SetRegionAllocPtr(fx.region1->GetRegionStart() + size);
-    copyPage->SetRegionAllocPtr(copyPage->GetRegionStart() + size);
+    copyPage->SetRegionAllocPtr(reinterpret_cast<MAddress>(copyObject) + size);
     fx.region0->SetYoungRegionFlag(0);
     fx.region1->SetYoungRegionFlag(1);
     fx.region1->SetYoungAge(0);
@@ -281,7 +410,7 @@ void RunRemapWindow(bool copyOnly, ForwardDomain domain = ForwardDomain::None, b
     WCollector collector(Heap::GetHeap().GetAllocator(), resources);
     RelocationReceiptTestAccess::BindCollector(resources, &collector);
     collector.SetGCPhase(GCPhase::GC_PHASE_CLEAR_SATB_BUFFER);
-    GCThreadPool pool("gc-unit-remap-window", 0, GCPoolThread::GC_THREAD_PRIORITY);
+    GCThreadPool pool("gc-unit-remap-window", parallel ? 1 : 0, GCPoolThread::GC_THREAD_PRIORITY);
     RelocationReceiptTestAccess::BindThreadPool(resources, &pool);
     Heap::GetHeap().GetRememberedSet().Initialize(fx.heapStart, GcHeapFixture::kUnits * RegionInfo::UNIT_SIZE);
     RememberedSet producerRememberedSet;
@@ -294,6 +423,7 @@ void RunRemapWindow(bool copyOnly, ForwardDomain domain = ForwardDomain::None, b
     auto* field = &HeapSlotAt<>(reinterpret_cast<MAddress>(fx.obj0) + TYPEINFO_PTR_SIZE);
     barrier.Record(fx.obj0, reinterpret_cast<MAddress>(field), fx.obj1);
     barrier.Record(fx.obj0, reinterpret_cast<MAddress>(field), copyObject);
+    if (partialReader) barrier.Record(fx.obj0, reinterpret_cast<MAddress>(field), partialFirst);
     producer.FlushSatbBuffer();
     ThreadLocal::SetMutator(nullptr);
 
@@ -311,10 +441,18 @@ void RunRemapWindow(bool copyOnly, ForwardDomain domain = ForwardDomain::None, b
 
     RemapWindow state;
     state.domain = domain;
+    state.lifetimeTarget = lifetimeTarget;
+    state.partialReader = partialReader;
+    state.partialFirst = partialFirst;
+    state.partialDestination = partialDestination;
+    if (partialReader) {
+        const auto* bytes = reinterpret_cast<const unsigned char*>(copyObject);
+        state.sourceBytes.assign(bytes, bytes + size);
+    }
     state.afterDone = afterDone;
     state.copyOnly = copyOnly;
-    state.kept = domain == ForwardDomain::Copy ? copyPage : fx.region1;
-    state.from = domain == ForwardDomain::Copy ? copyObject : fx.obj1;
+    state.kept = domain == ForwardDomain::Copy || lifetimeTarget != nullptr ? copyPage : fx.region1;
+    state.from = domain == ForwardDomain::Copy || lifetimeTarget != nullptr ? copyObject : fx.obj1;
     state.checkArena = checkArena;
     state.checkCopy = checkCopy;
     state.expectedField = reinterpret_cast<MAddress>(fx.obj0);
@@ -333,10 +471,18 @@ void RunRemapWindow(bool copyOnly, ForwardDomain domain = ForwardDomain::None, b
             std::unique_lock<std::mutex> lock(state.mutex);
             state.mutatorThread = std::this_thread::get_id();
             state.Wait(lock, state.window, "flip-window");
+            if (state.lifetimeCancelled) return;
             lock.unlock();
             BaseObject* result = remap(&collector, state.from, ZGenerationId::young,
                 ForwardingProvenance{ForwardingHolderKind::StackSlot, &mutator, &state.from});
             lock.lock();
+            if (lifetimeTarget != nullptr) {
+                state.lifetimeReturned = result;
+                state.returned = true;
+                state.cv.notify_all();
+                ThreadLocal::SetMutator(nullptr);
+                return;
+            }
             GC_EXPECT_TRUE(state.entered && state.published);
             if (domain != ForwardDomain::None) {
                 // Exit this isolated scenario at the observed consumer. Fault
@@ -370,8 +516,33 @@ void RunRemapWindow(bool copyOnly, ForwardDomain domain = ForwardDomain::None, b
         std::fflush(stderr);
         std::abort();
     }
+    if (lifetimeTarget != nullptr) {
+        std::lock_guard<std::mutex> lock(state.mutex);
+        if (!state.window) {
+            state.lifetimeCancelled = true;
+            state.window = true;
+            state.cv.notify_all();
+        }
+    }
     if (waiter.joinable()) waiter.join();
     setHook(nullptr);
+    bool lifetimeMatched = true;
+    if (lifetimeTarget != nullptr) {
+        state.lifetimeResult = state.published && state.lifetimeReturned == state.expected;
+        const bool matched = std::strcmp(lifetimeTarget, "claim") == 0 ? state.lifetimeClaimed :
+            std::strcmp(lifetimeTarget, "reader") == 0 ? state.lifetimeReaderSafe :
+            std::strcmp(lifetimeTarget, "find") == 0 ? state.lifetimeReleasedFind && state.lifetimeResult :
+            state.lifetimeDoneLast && state.lifetimeOwner && state.lifetimeOwner->is_done();
+        std::fprintf(stderr, "P2_PAGE target_assertion executed=1 target=%s matched=%d claimed=%d reader_safe=%d "
+                     "released_find=%d done_last=%d result=%d\n", lifetimeTarget, matched,
+                     state.lifetimeClaimed, state.lifetimeReaderSafe, state.lifetimeReleasedFind,
+                     state.lifetimeDoneLast, state.lifetimeResult);
+        if (partialReader) {
+            std::fprintf(stderr, "P2_PARTIAL target_assertion executed=1 source_unchanged=%d split=%d seeded=%d\n",
+                         state.partialSourceUnchanged, state.partialSplit, state.partialSeeded);
+        }
+        lifetimeMatched = matched && (!partialReader || (state.partialSeeded && state.partialSplit));
+    }
     if (checkCopy) {
         const bool initialized = state.copied && state.copiedField == state.expectedField;
         std::fprintf(stderr, "P1_PRODUCT_COPY target_assertion executed=1 matched=%d expected=%#zx actual=%#zx\n",
@@ -383,14 +554,18 @@ void RunRemapWindow(bool copyOnly, ForwardDomain domain = ForwardDomain::None, b
                      state.arenaInstalled, state.arenaBudget, state.arenaUsed, state.copied, state.published);
         GC_EXPECT_TRUE(state.arenaInstalled);
     }
-    GC_EXPECT_TRUE(state.copied && state.published);
-    if (!copyOnly) GC_EXPECT_TRUE(state.returned && state.entered);
+    if (lifetimeTarget == nullptr) {
+        GC_EXPECT_TRUE(state.copied && state.published);
+        if (!copyOnly) GC_EXPECT_TRUE(state.returned && state.entered);
+    }
     // OTHER_VM owns the mapped heap and product metadata until exit.
     // No teardown may re-interpret a page whose forwarding life was retired.
+    pool.WaitFinish();
     RelocationReceiptTestAccess::BindThreadPool(resources, nullptr);
     pool.Exit();
     RelocationReceiptTestAccess::BindCollector(resources, nullptr);
     std::fflush(stderr);
+    if (lifetimeTarget != nullptr) GC_EXPECT_TRUE(lifetimeMatched);
 }
 } // namespace
 
@@ -448,9 +623,12 @@ void RunForwardDomain(ForwardDomain domain)
         // cannot masquerade as execution of the consumer assertion.
         const bool entered = output.find("DOMAIN wait_entry=1") != std::string::npos;
         const bool produced = output.find("DOMAIN producer_receipt=1") != std::string::npos;
+        const std::string queuedMissing =
+            "WCollector::WaitRoutedTipReady.request-complete-without-receipt consumer=WCollector::WaitRoutedTipReady ";
         const std::string target = std::string(domain == ForwardDomain::Missing
-            ? (done ? "WCollector::WaitRoutedTipReady.published-without-receipt"
-                    : "WCollector::WaitRoutedTipReady.retain-refused-without-receipt")
+            ? (output.find(queuedMissing) != std::string::npos
+                ? "WCollector::WaitRoutedTipReady.request-complete-without-receipt"
+                : "WCollector::WaitRoutedTipReady.published-without-receipt")
             : domain == ForwardDomain::Unavailable
                 ? "WCollector::WaitRoutedTipReady.publication-closed-never-installed"
                 : "WCollector::WaitRoutedTipReady.publication-closed") +
@@ -487,4 +665,31 @@ GC_OTHER_VM_TEST(YoungConc, ForwardingArenaProductInstall)
 GC_OTHER_VM_TEST(YoungConc, ForwardingPublishedTargetInitialized)
 {
     RunRemapWindow(true, ForwardDomain::None, false, false, true);
+}
+
+GC_OTHER_VM_TEST(YoungConc, ForwardingPageClaimedByProductTask)
+{
+    RunRemapWindow(false, ForwardDomain::None, false, false, false, "claim");
+}
+GC_OTHER_VM_TEST(YoungConc, ForwardingReaderExitsBeforeInPlaceReuse)
+{
+    RunRemapWindow(false, ForwardDomain::None, false, false, false, "reader");
+}
+GC_OTHER_VM_TEST(YoungConc, ReleasedForwardingFindReturnsProductCopy)
+{
+    RunRemapWindow(false, ForwardDomain::None, false, false, false, "find");
+}
+GC_OTHER_VM_TEST(YoungConc, ForwardingDoneFollowsPageWork)
+{
+    RunRemapWindow(false, ForwardDomain::None, false, false, false, "done");
+}
+
+GC_OTHER_VM_TEST(YoungConc, ForwardingReaderExitsBeforeInPlaceReuseParallel)
+{
+    RunRemapWindow(false, ForwardDomain::None, false, false, false, "reader", true);
+}
+
+GC_OTHER_VM_TEST(YoungConc, ForwardingPartialReaderExitsBeforeInPlaceReuse)
+{
+    RunRemapWindow(false, ForwardDomain::None, false, false, false, "reader", false, true);
 }

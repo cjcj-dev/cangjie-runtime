@@ -349,13 +349,7 @@ bool ForwardingTable::InsertProvisional(MAddress regionStart, size_t regionSize,
         // Replacing any carrier under an open generation would create two table
         // identities for one cycle. Seal, drain, and require a new prepare.
         SealPublicationLocked(regionStart, regionSize);
-        if (!forwarding->claim()) {
-            forwarding->detach_page();
-        } else {
-            forwarding->in_place_relocation_claim_page();
-            forwarding->mark_done();
-            forwarding->release_page();
-        }
+        forwarding->drain_table_readers();
         MapPut(g_entries, regionStart, regionSize, nullptr);
         if (MapGet(g_membership, regionStart) == forwarding) {
             MapPut(g_membership, regionStart, regionSize, nullptr);
@@ -437,17 +431,7 @@ void DrainPublicationOwners(ZForwarding* forwarding)
     if (forwarding == nullptr) {
         return;
     }
-    if (!forwarding->claim()) {
-        forwarding->detach_page();
-        return;
-    }
-    forwarding->in_place_relocation_claim_page();
-    forwarding->mark_done();
-    forwarding->release_page();
-    CHECK_DETAIL(forwarding->ref_count().load(std::memory_order_acquire) == 0,
-                 "forwarding responsibility not drained tab=%p start=%#zx ref=%d", forwarding,
-                 static_cast<size_t>(forwarding->start()),
-                 forwarding->ref_count().load(std::memory_order_relaxed));
+    forwarding->drain_table_readers();
 }
 } // namespace
 
@@ -537,7 +521,7 @@ void ForwardingTable::ClearEntries(MAddress regionStart, size_t regionSize)
     }
 }
 
-static void UnlinkThenDestroy(ZForwarding* tab)
+static void UnlinkRetired(ZForwarding* tab)
 {
     if (tab == nullptr) {
         return;
@@ -552,7 +536,6 @@ static void UnlinkThenDestroy(ZForwarding* tab)
     if (MapGet(g_entries, tab->start()) == tab) {
         MapPut(g_entries, tab->start(), tab->size(), nullptr);
     }
-    tab->Destroy();
 }
 
 static bool ReclaimWhyForceCoverageComplete(const char* why)
@@ -600,8 +583,7 @@ bool ForwardingTable::RetiredDestroyEligible(ZForwarding* tab)
     if (!CoverageEpochSatisfied(tab)) {
         return false;
     }
-    const int32_t refs = tab->ref_count().load(std::memory_order_acquire);
-    return (refs == 0 || refs == 1) && !GhostCarrierHeld(tab);
+    return tab->table_readers() == 0 && tab->external_owners() == 0 && !GhostCarrierHeld(tab);
 }
 
 void ForwardingTable::Retire(ZForwarding* tab)
@@ -610,7 +592,6 @@ void ForwardingTable::Retire(ZForwarding* tab)
         return;
     }
     std::lock_guard<std::mutex> lock(g_retiredLock);
-    ZForwardingLife::ResetForForwarding(tab->ref_count(), tab->claimed(), tab->done());
     g_retired.push_back(tab);
     RegionLifeClock::Publish(RegionLifeClock::Carrier::RETIRED_ENTRY, tab->page_life_id());
     g_retiredTotal.fetch_add(1, std::memory_order_relaxed);
@@ -649,7 +630,16 @@ void ForwardingTable::ReclaimRetired(const char* why)
                 deferred.push_back(tab);
                 continue;
             }
-            if (forceCoverageComplete || RetiredDestroyEligible(tab)) {
+            if ((forceCoverageComplete || CoverageEpochSatisfied(tab)) && tab->page() != nullptr &&
+                tab->page()->metadata.fwdOwner.load(std::memory_order_acquire) == tab) {
+                (void)UnbindPageOwnerLocked(tab->page(), false);
+            }
+            if (tab->table_readers() == 0 && tab->external_owners() == 0 &&
+                (forceCoverageComplete || RetiredDestroyEligible(tab))) {
+                // Prevent a new table user before dropping the install lock.
+                // Destruction may run outside the lock only after both maps
+                // and the retired lists have relinquished this identity.
+                UnlinkRetired(tab);
                 victims.push_back(tab);
             } else {
                 deferred.push_back(tab);
@@ -659,7 +649,7 @@ void ForwardingTable::ReclaimRetired(const char* why)
         stillHeld = g_retired.size();
     }
     for (ZForwarding* tab : victims) {
-        UnlinkThenDestroy(tab);
+        tab->Destroy();
     }
     if (!candidates.empty()) {
         const uint64_t done = victims.empty()
@@ -701,7 +691,7 @@ ForwardingTable::Publication ForwardingTable::RetainCovering(MAddress from)
 {
     std::lock_guard<std::mutex> lock(g_installLock);
     ZForwarding* tab = GetCovering(from);
-    if (tab == nullptr || !tab->retain_page()) {
+    if (tab == nullptr || !tab->retain_table()) {
         return Publication();
     }
     return Publication(tab);
@@ -787,14 +777,53 @@ bool ForwardingTable::PublishFromPageView(RegionInfo* region, LiveInfo* liveInfo
     if (region == nullptr || lifeId == 0 || region->GetRegionLifeId() != lifeId) {
         return false;
     }
+    std::lock_guard<std::mutex> lock(g_installLock);
     ZForwarding* carrier = GetEntries(region->GetRegionStart());
     if (carrier == nullptr || carrier->page() != region) {
         return false;
     }
     carrier->publish_from_page_view(liveInfo, epoch, topAtStart, markStartAllocPtr,
                                     liveByteCount, owner, largeMarked, lifeId);
+    ZForwarding* previous = region->metadata.fwdOwner.load(std::memory_order_acquire);
+    if (previous != carrier) {
+        CHECK_DETAIL(UnbindPageOwnerLocked(region, false),
+                     "replacing retained forwarding owner region=%p", region);
+        carrier->retain_owner();
+        region->metadata.fwdOwner.store(carrier, std::memory_order_release);
+    }
     RegionLifeClock::Publish(RegionLifeClock::Carrier::MARK_SNAPSHOT, lifeId);
     return true;
+}
+
+ForwardingTable::Owner ForwardingTable::RetainPageOwner(const RegionInfo* region)
+{
+    std::lock_guard<std::mutex> lock(g_installLock);
+    return Owner(region == nullptr ? nullptr : region->metadata.fwdOwner.load(std::memory_order_acquire));
+}
+
+bool ForwardingTable::UnbindPageOwnerLocked(RegionInfo* region, bool allowExclusive)
+{
+    ZForwarding* owner = region->metadata.fwdOwner.load(std::memory_order_acquire);
+    if (owner == nullptr) return true;
+    int32_t refs = owner->ref_count().load(std::memory_order_acquire);
+    // A prepared but never submitted page has only its construction token.
+    // No queue/scope may carry it and no payload reader may remain. Finish
+    // that token rather than resetting a live forwarding to an idle state.
+    if (refs == 1 && owner->external_owners() == 1 && owner->claim()) {
+        owner->release_page();
+        owner->mark_done();
+        refs = 0;
+    }
+    if (refs != 0 && !(allowExclusive && refs == -1)) return false;
+    region->metadata.fwdOwner.store(nullptr, std::memory_order_release);
+    owner->release_owner();
+    return true;
+}
+
+void ForwardingTable::ClearPageOwner(RegionInfo* region)
+{
+    std::lock_guard<std::mutex> lock(g_installLock);
+    CHECK_DETAIL(UnbindPageOwnerLocked(region, true), "clearing retained forwarding owner region=%p", region);
 }
 
 const ZForwarding::FromPageView* ForwardingTable::GetFromPageView(RegionInfo* region)
@@ -829,7 +858,7 @@ ForwardingTable::Publication ForwardingTable::EnsurePublicationBeforeCopy(
     const uint64_t state = PublicationStateAt(region->GetRegionStart());
     if (tab == nullptr || tab->is_provisional() || tab->start() != region->GetRegionStart() ||
         tab->size() < region->GetRegionSize() || !tab->covers(from) || !PublicationOpen(state) ||
-        tab->publication_generation() != PublicationGeneration(state) || !tab->retain_page()) {
+        tab->publication_generation() != PublicationGeneration(state) || !tab->retain_table()) {
         return Publication();
     }
     return Publication(tab);
@@ -849,7 +878,7 @@ ForwardingTable::Publication ForwardingTable::RetainOpenPublicationAfterCopy(
     ZForwarding* tab = MapGet(g_entries, from);
     if (tab == nullptr || tab->is_provisional() || tab->start() != region->GetRegionStart() ||
         tab->size() < region->GetRegionSize() || !tab->covers(from) ||
-        tab->publication_generation() != PublicationGeneration(state) || !tab->retain_page()) {
+        tab->publication_generation() != PublicationGeneration(state) || !tab->retain_table()) {
         return Publication();
     }
     return Publication(tab);
@@ -889,7 +918,7 @@ MAddress ForwardingTable::InsertMapping(const Publication& publication, MAddress
 void ForwardingTable::Publication::Release()
 {
     if (forwarding != nullptr) {
-        forwarding->release_page();
+        forwarding->release_table();
         forwarding = nullptr;
     }
 }
@@ -1193,6 +1222,7 @@ MAddress ForwardingTable::RequireRetiredTo(MAddress from)
 
 MAddress ForwardingTable::FindTo(MAddress from)
 {
+    std::lock_guard<std::mutex> lock(g_installLock);
     ZForwarding* tab = GetEntries(from);
     if (tab != nullptr) {
         if (!tab->covers(from)) {
@@ -1234,7 +1264,7 @@ ForwardingTable::LookupResult ForwardingTable::LookupTo(MAddress from)
             tableId = reinterpret_cast<uintptr_t>(candidate);
             CaptureLookupCarrier(candidate, &carrierWitness);
             if (!candidate->page_life_current(RegionLifeClock::Carrier::ARMED_ENTRY) ||
-                !candidate->retain_page()) {
+                !candidate->retain_table()) {
                 activeRejected = true;
             } else {
                 retained = candidate;
@@ -1251,7 +1281,7 @@ ForwardingTable::LookupResult ForwardingTable::LookupTo(MAddress from)
         }
 #endif
         const MAddress to = retained->resolve_life(retained->find(from));
-        retained->release_page();
+        retained->release_table();
         if (to != 0) {
             g_armedHit.fetch_add(1, std::memory_order_relaxed);
             return { to, ToAnswer::ArmedHit, ToUnavailableCause::None, activeCandidate,

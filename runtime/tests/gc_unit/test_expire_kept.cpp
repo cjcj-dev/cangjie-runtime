@@ -58,11 +58,13 @@ GC_TEST(IkeKeep, ExpireClearsKeptButLeavesForwarded)
 
     RegionInfo* kept = fx.region0;
     kept->SetRouteState(RegionInfo::RouteState::ROUTED);
+    fx.InstallPageOwner(kept);
     kept->MarkForwardingDone();
     IkeKeepTestAccess::ParkUnmovable(manager, kept);
 
     RegionInfo* forwarded = fx.region1;
     forwarded->SetRouteState(RegionInfo::RouteState::FORWARDED);
+    fx.InstallPageOwner(forwarded);
     forwarded->MarkForwardingDone();
     IkeKeepTestAccess::ParkFrom(manager, forwarded);
 

@@ -15,6 +15,7 @@
 #include <limits>
 #include <memory>
 #include <new>
+#include <thread>
 #include <unordered_map>
 
 #include "Heap/Allocator/ForwardingEntry.h"
@@ -422,14 +423,68 @@ public:
         return insert_receipt(from, to).address;
     }
 
-    // zForwarding.cpp:51-53 / :86-194. Dual-inited; product still uses RegionInfo copies.
+    // Table users are protected separately from source-page users. A released
+    // page must not prevent remap from finding its immutable entries
+    // (zForwarding.cpp:171-185; zRelocationSet.cpp:191-197).
+    // Acquisition is serialized with unlink by ForwardingTable's install lock.
+    bool retain_table()
+    {
+        _table_readers.fetch_add(1, std::memory_order_acquire);
+        return true;
+    }
+    void release_table() { _table_readers.fetch_sub(1, std::memory_order_release); }
+    void drain_table_readers()
+    {
+        _table_draining.store(true, std::memory_order_release);
+        while (_table_readers.load(std::memory_order_acquire) != 0) {
+            std::this_thread::yield();
+        }
+    }
+    size_t table_readers() const { return _table_readers.load(std::memory_order_acquire); }
+    bool table_draining() const { return _table_draining.load(std::memory_order_acquire); }
+
+    // The region facade and queued page work may outlive map membership. They
+    // hold the carrier, not a payload retain or an open publication token.
+    void retain_owner() { _external_owners.fetch_add(1, std::memory_order_relaxed); }
+    void release_owner() { _external_owners.fetch_sub(1, std::memory_order_release); }
+    size_t external_owners() const { return _external_owners.load(std::memory_order_acquire); }
+
+    // zForwarding.cpp:51-53 / :86-194. Source-page ownership only.
     bool claim() { return ZForwardingLife::claim(_claimed); }
     bool retain_page() { return ZForwardingLife::retain_page(_ref_count, _done); }
-    void release_page() { ZForwardingLife::release_page(_ref_count); }
-    void detach_page() { ZForwardingLife::detach_page(_ref_count); }
+    void release_page()
+    {
+        int32_t count = _ref_count.load(std::memory_order_relaxed);
+        for (;;) {
+            CHECK(count != 0);
+            const int32_t next = count > 0 ? count - 1 : count + 1;
+            if (_ref_count.compare_exchange_weak(count, next, std::memory_order_acq_rel,
+                                                std::memory_order_relaxed)) {
+                if (next == 0 || next == -1) {
+                    std::lock_guard<std::mutex> lock(_ref_lock);
+                    _ref_changed.notify_all();
+                }
+                return;
+            }
+        }
+    }
+    void detach_page()
+    {
+        std::unique_lock<std::mutex> lock(_ref_lock);
+        _ref_changed.wait(lock, [this] { return _ref_count.load(std::memory_order_acquire) == 0; });
+    }
     void mark_done() { ZForwardingLife::mark_done(_done); }
     bool is_done() const { return ZForwardingLife::is_done(_done); }
-    void in_place_relocation_claim_page() { ZForwardingLife::in_place_relocation_claim_page(_ref_count); }
+    void in_place_relocation_claim_page()
+    {
+        int32_t count = _ref_count.load(std::memory_order_relaxed);
+        do {
+            CHECK(count > 0);
+        } while (!_ref_count.compare_exchange_weak(count, -count, std::memory_order_acq_rel,
+                                                   std::memory_order_relaxed));
+        std::unique_lock<std::mutex> lock(_ref_lock);
+        _ref_changed.wait(lock, [this] { return _ref_count.load(std::memory_order_acquire) == -1; });
+    }
 
     std::atomic<int32_t>& ref_count() { return _ref_count; }
     std::atomic<bool>& claimed() { return _claimed; }
@@ -483,8 +538,12 @@ private:
     uint64_t _required_mark_epoch;
     std::atomic<bool> _claimed;
     mutable std::mutex _ref_lock;
+    std::condition_variable _ref_changed;
     std::atomic<int32_t> _ref_count;
     std::atomic<bool> _done;
+    std::atomic<size_t> _table_readers{ 0 };
+    std::atomic<bool> _table_draining{ false };
+    std::atomic<size_t> _external_owners{ 0 };
     mutable std::mutex _overflowLock;
     std::unordered_map<MAddress, MAddress> _overflow;
     mutable std::mutex _receiptInstallLock;

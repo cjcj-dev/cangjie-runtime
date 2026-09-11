@@ -714,7 +714,7 @@ public:
         }
         const MAddress receipt = ForwardingTable::InsertMapping(
             publication, fromAddr, reinterpret_cast<MAddress>(to));
-        (void)space.GetRegionManager().GetRelocationRequestQueue().Publish(fromAddr, receipt);
+
         return reinterpret_cast<BaseObject*>(receipt);
     }
 
@@ -925,7 +925,7 @@ public:
                 }
                 const MAddress receipt = ForwardingTable::InsertMapping(
                     publication, fromAddr, reinterpret_cast<MAddress>(geometric));
-                (void)space.GetRegionManager().GetRelocationRequestQueue().Publish(fromAddr, receipt);
+
                 geometric = reinterpret_cast<BaseObject*>(receipt);
             }
             return FindToVersionResult::Found(geometric);
@@ -953,7 +953,8 @@ public:
 protected:
     void CheckStoreGoodTarget(const char* consumer, BaseObject* target,
                               const ForwardingProvenance& provenance) const;
-    BaseObject* ForwardObjectImpl(BaseObject* obj, RegionInfo* ghostFromRegion);
+    BaseObject* ForwardObjectImpl(BaseObject* obj, RegionInfo* ghostFromRegion,
+                                  const RegionInfo::RetainScope& lease);
     BaseObject* ForwardObjectExclusive(BaseObject* obj) override;
     // dest is PlanRoute's answer, computed *before* TryLockObject so the LOCKED
     // critical section cannot RouteRegion / TakeRegion (zRelocate.cpp:354-372
@@ -1476,6 +1477,8 @@ private:
     // two remap-bit errors.
     void RemapYoungRoots();
     void Preforward();
+    void StartRelocationTasks();
+    BaseObject* WaitForPageForwarding(BaseObject* obj, ForwardingTable::Owner owner) const;
     void PreforwardAllExportFromRoots();
     void PreforwardStaticRoots();
     void PreforwardFinalizerProcessorRoots();

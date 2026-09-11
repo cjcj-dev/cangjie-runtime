@@ -15,6 +15,7 @@
 #include "Base/Log.h"
 
 namespace MapleRuntime {
+class ZForwarding;
 
 // ZForwarding's four-piece lifetime (zForwarding.hpp:66-69, zForwarding.cpp:34-194).
 //
@@ -35,6 +36,21 @@ namespace MapleRuntime {
 class ZForwardingLife {
 public:
     ZForwardingLife() = delete;
+
+    // P2 adapter for the legacy page helpers: they borrow the task's single
+    // construction token and leave mark_done to the task's final operation.
+    class PageWorkScope {
+    public:
+        explicit PageWorkScope(ZForwarding* forwarding, bool complete = false);
+        ~PageWorkScope();
+        PageWorkScope(const PageWorkScope&) = delete;
+        PageWorkScope& operator=(const PageWorkScope&) = delete;
+    private:
+        ZForwarding* previous;
+        ZForwarding* forwarding;
+        bool complete;
+    };
+    static ZForwarding* CurrentPageWork();
 
     // Copier admission and the in-flight count share one atomic word so a
     // drain cannot observe "open + zero", return, and then lose a copier that
