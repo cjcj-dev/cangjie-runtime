@@ -1,0 +1,37 @@
+{
+  "status": "NOT_QUALIFIED_NOT_DEPLOYED",
+  "runtime_commit": "dea244c0918ae4b874d4490e12dc97268b78371a",
+  "compiler_version": "Cangjie Compiler: 1.3.0-alpha.20260831010012 (cjnative)\nTarget: x86_64-unknown-linux-gnu",
+  "compiler_sha256": "67ca113770f578c105ae1c2d2ea3aec977bb44025c5a9dc1553c1dd382f3706e",
+  "metadata": {
+    "bounds_sha256": "b55ad16809e4333d38e4103ac5df1bff8b5a7c9b7d2a063c4c18c96c32c887b1",
+    "core_domain": "16-31",
+    "elf_sha256": "92aaff092e4e452780c9071b879bbe4b086df57a1e8cd2204dad5381b0695420",
+    "gate_sha256": "184f3403edb29b2cd83bcf46f63a6029d15feaeefdf2b4edcf9a2f4296ca595f",
+    "required_heaps": [
+      "256MB"
+    ],
+    "ruler_version": "nwdet-qualification-v2",
+    "runtime_sha256": "2a9c0376cf4c117d2cf505fcc72eedc0dbfbd9256dc95d9999624019188c9c2a",
+    "runtime_stamp": "CJRT-COMMIT:dea244c0918ae4b874d4490e12dc97268b78371a",
+    "sample_count": 3,
+    "source_sha": "dea244c0918ae4b874d4490e12dc97268b78371a",
+    "timeout": "300"
+  },
+  "completion": {
+    "normal_exits": 0,
+    "records_complete": 0,
+    "requested_samples": 3,
+    "required_counts_complete": 0,
+    "started_samples": 1
+  },
+  "process_rc": -6,
+  "gate_rc": 1,
+  "arm_b": "NOT_RUN_AFTER_ARM_A_FAILURE",
+  "qualification_file_before_sha256": "065c75e63f732320757f2cb09626adfec96638cd07a00bffc41e01ce87ec2ba9",
+  "qualification_file_proposed_sha256": "88c0c9af9b6b38939ec74f077cfad846fff3030a5dfb9075f77ef2c89191eccd",
+  "evidence_archive_sha256": "d854d04052e9ca74c17ff87cd8019432f3c66b1778a4fded72115a08f751fee1",
+  "evidence": "kkk2:/root/sym_cangjie_runtime_233_implement_r5638903524/evidence.tgz",
+  "static_stdlib_provenance": "Official nightly 1.3.0-alpha.20260831010012 archive; source/build closure not independently reconstructed. No claim of all-coloured stdlib.",
+  "follow_up_issue": "cangjie-runtime#190"
+}
