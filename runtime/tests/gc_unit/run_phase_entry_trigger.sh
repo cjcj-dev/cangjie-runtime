@@ -40,6 +40,7 @@ PYTHONDONTWRITEBYTECODE=1 python3 -m unittest \
   "$ROOT/runtime/tests/perf_vs_official/test_analyze_youngstw.py" \
   "$ROOT/runtime/tests/perf_vs_official/test_gclog_schema.py" \
   "$ROOT/runtime/tests/perf_vs_official/test_phase_leaf_ledger.py" \
+  "$ROOT/runtime/tests/perf_vs_official/test_phase_entry_guard.py" \
   >"$OUT/schema_ledger.unit.log" 2>&1
 analyzer_unit_rc=$?
 set -e
@@ -91,81 +92,8 @@ guard_log() {
   local log="$2"
   local guard_log="$OUT/$mode.guard.log"
   set +e
-  PYTHONDONTWRITEBYTECODE=1 python3 - "$ROOT" "$mode" "$log" >"$guard_log" 2>&1 <<'PY'
-import sys
-from pathlib import Path
-
-root, mode, log_path = Path(sys.argv[1]), sys.argv[2], Path(sys.argv[3])
-sys.path.insert(0, str(root / "runtime/tests/perf_vs_official"))
-from gclog_schema import phase_leaf_ledger, parse_gclog
-
-text = log_path.read_text(encoding="utf-8", errors="replace")
-records = parse_gclog(text)
-ledger = phase_leaf_ledger(text)
-errors = []
-if not records.cycles:
-    errors.append("cycle=0")
-if not records.stw:
-    errors.append("stw=0")
-if not records.phases:
-    errors.append("phase=0")
-if not records.phase_leaves:
-    errors.append("phase_leaf=0")
-if records.phases and not any(0 < record.ns < 1000 for record in records.phases):
-    errors.append("sub_microsecond_phase=0")
-
-if mode in ("minor", "major"):
-    marker = "PHASE_ENTRY_MINOR_OK checksum=" if mode == "minor" else "PHASE_ENTRY_MAJOR_OK checksum="
-    if marker not in text:
-        errors.append("completion=0")
-    if not any(record.kind == mode for record in records.cycles):
-        errors.append(f"{mode}_cycle=0")
-    if mode == "major":
-        # The source stays below the automatic-minor waterline and makes one
-        # explicit heavy request. ZGC's major shape is one owned young prelude
-        # followed immediately by old collection.
-        cycle_kinds = [record.kind for record in records.cycles]
-        if cycle_kinds != ["minor", "major"]:
-            errors.append("major_explicit_shape=" + ",".join(cycle_kinds))
-    if records.phase_leaves and not any(">" in record.path for record in records.phase_leaves):
-        errors.append("nested_leaf_path=0")
-else:
-    if "TIMER_LEDGER_CONTRACT_OK" not in text:
-        errors.append("completion=0")
-    leaves = {record.name: record for record in records.phase_leaves}
-    if "contract.root" in leaves or "contract.middle" in leaves:
-        errors.append("parent_emitted_as_leaf")
-    deep = leaves.get("contract.deep")
-    if deep is None or deep.path != "contract.deep>contract.middle>contract.root":
-        errors.append("deep_leaf_path")
-    captured = leaves.get("cycle.captured")
-    if captured is None or captured.seq == 0 or captured.seq not in {cycle.seq for cycle in records.cycles}:
-        errors.append("cycle_captured_at_construction")
-    finalizer = leaves.get("Finalizer")
-    if finalizer is None or finalizer.seq != 0:
-        errors.append("unowned_finalizer_seq")
-    if "Finalizer" not in ledger["unowned_nonpillar_names"]:
-        errors.append("unowned_nonpillar_exclusion")
-    external = leaves.get("contract.external")
-    if external is None or external.seq != 0:
-        errors.append("active_cycle_external_seq")
-    internal = leaves.get("young.flush_alloc")
-    if internal is None or internal.seq == 0 or internal.seq not in {cycle.seq for cycle in records.cycles}:
-        errors.append("active_cycle_internal_seq")
-    if "contract.external" not in ledger["unowned_nonpillar_names"]:
-        errors.append("active_cycle_external_unowned")
-    owned_row = next((row for row in ledger["cycles"] if internal is not None and
-                      row["seq"] == internal.seq), None)
-    if owned_row is None or owned_row["structural_leaf_ns"] != internal.ns:
-        errors.append("active_cycle_internal_bound")
-
-print(
-    f"SCHEMA_LEDGER_GUARD mode={mode} cycles={len(records.cycles)} stw={len(records.stw)} "
-    f"phase={len(records.phases)} phase_leaf={len(records.phase_leaves)} "
-    f"ledger_cycles={len(ledger['cycles'])} errors={','.join(errors) if errors else 'none'}"
-)
-raise SystemExit(1 if errors else 0)
-PY
+  PYTHONDONTWRITEBYTECODE=1 python3 "$ROOT/runtime/tests/perf_vs_official/phase_entry_guard.py" \
+    "$mode" "$log" >"$guard_log" 2>&1
   local rc=$?
   set -e
   echo "$rc" >"$OUT/$mode.guard.rc"
