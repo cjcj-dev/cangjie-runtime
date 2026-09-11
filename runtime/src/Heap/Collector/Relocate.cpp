@@ -130,23 +130,6 @@ static void NoteRemapYoungRootsTestReceipt(RefField<>& field, uintptr_t before, 
 static thread_local WCollector::RouteLookupTestResult* g_routeLookupTestContext = nullptr;
 #endif
 #if defined(MRT_TESTABLE_INTERNALS)
-using CopyAdmissionTestHook = void (*)(RegionInfo*, BaseObject*);
-static std::atomic<CopyAdmissionTestHook> g_copyAdmissionTestHook{ nullptr };
-
-extern "C" MRT_EXPORT void MRT_SetCopyAdmissionTestHook(CopyAdmissionTestHook hook)
-{
-    g_copyAdmissionTestHook.store(hook, std::memory_order_release);
-}
-
-static void RunCopyAdmissionTestHook(RegionInfo* region, BaseObject* object)
-{
-    CopyAdmissionTestHook hook = g_copyAdmissionTestHook.load(std::memory_order_acquire);
-    if (hook != nullptr) {
-        hook(region, object);
-    }
-}
-#endif
-#if defined(MRT_TESTABLE_INTERNALS)
 // Scheduling only: install a barrier after flip, at wait entry, and before
 // post-copy cleanup. The callback never supplies a forwarding answer.
 using RemapWindowTestHook = void (*)(unsigned, RegionInfo*, BaseObject*);
@@ -2129,249 +2112,6 @@ static CompactedMissClass ClassifyCompactedMiss(RegionInfo* region, BaseObject* 
                           : CompactedMissClass::kAlreadyToInterior;
 }
 
-#if 0
-BaseObject* WCollector::WaitRoutedTipReady(BaseObject* from, BaseObject* to, RegionInfo* forwarding,
-                                           const ForwardingProvenance& provenance) const
-{
-#if defined(MRT_TESTABLE_INTERNALS)
-    RunRemapWindowTestHook(2, forwarding, from);
-#endif
-    RegionSpace& space = reinterpret_cast<RegionSpace&>(theAllocator);
-    ForwardingTable::LookupResult lastLookup{ 0, ForwardingTable::ToAnswer::Unarmed,
-                                              ForwardingTable::ToUnavailableCause::None, false, false,
-                                              ForwardingTable::ToAnswer::Unarmed,
-                                              ForwardingTable::ToAnswer::Unarmed, false, false, 0 };
-    bool routeDecisionValid = false;
-    RegionInfo::RouteState routeDecision = RegionInfo::RouteState::NORMAL;
-    // Observe the result already used by this invocation (zRelocate.cpp:412-415).
-    // Never re-query LookupTo or call the validating route getter for logging.
-    // A queue receipt and lastLookup.to have distinct sources; print both.
-    auto observeReturn = [&](const char* kind, BaseObject* returned) -> BaseObject* {
-        if (returned == nullptr || returned == from) {
-            const uint64_t routeSnapshot =
-                forwarding->GetRouteStateSnapshotForDiagnostics();
-            LOG(RTLOG_ERROR,
-                "[WaitRouted.return] tid=%d obj=%p region=%p gcCycle=%zu return.kind=%s returned=%p "
-                "route=%u route.decision.valid=%u route.snapshot=%#llx fwdDone=%u "
-                "lookup.answer=%u lookup.to=%#zx tableId=%#zx epoch=%llu lifeId=%llu "
-                "publicationGeneration=%llu lookup.snapshot.valid=%u active.answer=%u retired.answer=%u",
-                static_cast<int>(MapleRuntime::GetTid()), static_cast<void*>(from),
-                static_cast<void*>(forwarding), g_gcCount.load(std::memory_order_relaxed), kind,
-                static_cast<void*>(returned),
-                static_cast<unsigned>(routeDecisionValid ? routeDecision
-                    : RegionInfo::RouteStateFromSnapshot(routeSnapshot)),
-                static_cast<unsigned>(routeDecisionValid), static_cast<unsigned long long>(routeSnapshot),
-                static_cast<unsigned>(forwarding->IsForwardingDone()),
-                static_cast<unsigned>(lastLookup.answer), static_cast<size_t>(lastLookup.to),
-                static_cast<size_t>(lastLookup.tableId),
-                static_cast<unsigned long long>(lastLookup.fromPageEpoch),
-                static_cast<unsigned long long>(lastLookup.fromPageLifeId),
-                static_cast<unsigned long long>(lastLookup.publicationGeneration),
-                static_cast<unsigned>(lastLookup.forwardingSnapshotValid),
-                static_cast<unsigned>(lastLookup.activeAnswer), static_cast<unsigned>(lastLookup.retiredAnswer));
-        }
-        return returned;
-    };
-    // Bound mid-copy waits only while route is still in flight. Permanent publish-without-tip
-    // is an invariant break (CHECK below), not a longer spin.
-    auto permanentHole = [&](const char* reason, int /*spins*/, BaseObject* /*geometricTo*/) -> BaseObject* {
-        (void)observeReturn(reason, nullptr);
-        // This is the fail-closed witness for a completed relocation without a
-        // forwarding receipt; it is not an alternate answer.
-        if (MutatorRelocate::StatsOn()) {
-            MutatorRelocate::NoteWaitFatal();
-        }
-        CHECK_DETAIL(false,
-                     "WCollector::WaitRoutedTipReady.%s consumer=WCollector::WaitRoutedTipReady "
-                     "holder_kind=%s holder=%p slot=%p stage=%s writer_kind=%s "
-                     "incoming_source_kind=%s source_slot=%p working_copy_slot=%p "
-                     "field_type=%s field_offset=%zu "
-                     "waiter=%p from=%p from_region=%p table_id=%#zx expected_publisher=%p "
-                     "publication_generation=%llu from_page_epoch=%llu lifeId=%llu "
-                     "lookup_state=%u lookup_cause=%u retired_lookup=%u gc_phase=%u "
-                     "route=%u fwdDone=%u refs=%d copy=%d",
-                     reason, ForwardingProvenance::KindName(provenance.kind), provenance.holder,
-                     provenance.slot, ForwardingProvenance::StageName(provenance.stage),
-                     ForwardingProvenance::WriterName(provenance.writerKind),
-                     ForwardingProvenance::SourceName(provenance.incomingSourceKind),
-                     provenance.sourceSlot, provenance.workingCopySlot,
-                     ForwardingProvenance::FieldName(provenance.fieldKind), provenance.fieldOffset,
-                     static_cast<const void*>(this), static_cast<void*>(from),
-                     static_cast<void*>(forwarding), static_cast<size_t>(lastLookup.tableId),
-                     static_cast<void*>(forwarding),
-                     static_cast<unsigned long long>(lastLookup.publicationGeneration),
-                     static_cast<unsigned long long>(lastLookup.fromPageEpoch),
-                     static_cast<unsigned long long>(lastLookup.fromPageLifeId),
-                     static_cast<unsigned>(lastLookup.answer),
-                     static_cast<unsigned>(lastLookup.unavailableCause),
-                     static_cast<unsigned>(lastLookup.retiredAnswer), static_cast<unsigned>(GetGCPhase()),
-                     static_cast<unsigned>(forwarding->GetRouteState()),
-                     static_cast<unsigned>(forwarding->IsForwardingDone()), forwarding->ForwardingRefCount(),
-                     forwarding->CopyInflight());
-        return nullptr;
-    };
-
-    bool publicationClosed = false;
-    auto lookupTo = [&]() -> BaseObject* {
-        const MAddress fromAddr = reinterpret_cast<MAddress>(from);
-        lastLookup = ForwardingTable::LookupTo(fromAddr);
-        publicationClosed = lastLookup.publicationClosed ||
-            lastLookup.answer == ForwardingTable::ToAnswer::Unavailable;
-        if (lastLookup.to != 0 && lastLookup.answer == ForwardingTable::ToAnswer::ArmedHit) {
-            return reinterpret_cast<BaseObject*>(lastLookup.to);
-        }
-        return nullptr;
-    };
-    BaseObject* again = lookupTo();
-    if (again != nullptr && Heap::IsHeapAddress(again) && again->IsValidObject()) {
-        if (MutatorRelocate::StatsOn()) {
-            MutatorRelocate::NoteWaitReceipt();
-        }
-        return observeReturn("initial-lookup", again);
-    }
-    if (publicationClosed) {
-        const uint8_t cause = static_cast<uint8_t>(lastLookup.unavailableCause);
-        const char* reason = "publication-closed";
-        if ((cause & static_cast<uint8_t>(ForwardingTable::ToUnavailableCause::TableDestroyed)) != 0) {
-            reason = "publication-closed-table-destroyed";
-        } else if ((cause & static_cast<uint8_t>(ForwardingTable::ToUnavailableCause::NeverInstalled)) != 0) {
-            reason = "publication-closed-never-installed";
-        }
-        return permanentHole(reason, 0, again);
-    }
-    const bool tableHit = again != nullptr;
-    const RegionInfo::RouteState rs = forwarding->GetRouteState();
-    routeDecision = rs;
-    routeDecisionValid = true;
-    // COMPACTED without MarkForwardingDone is still the in-place copy window
-    // (CompactRegion inserts receipts, then RouteRegion labels COMPACTED).
-    // Align with the wait loop below, which already keys on IsForwardingDone
-    // (zRelocate.cpp:382-415 find-miss ⇒ wait until forwarding completes).
-    const bool regionPublished = MutatorRelocate::PageReceiptPublished(
-        static_cast<unsigned>(rs), forwarding->IsForwardingDone());
-
-    // LEAD 12:2x: retain refused = worker holds the page (retain_page n<0 / n==0).
-    // An unpublished page waits for its copier; a published miss is an
-    // invariant failure (zRelocate.cpp:382-416).
-    bool retainRefused = false;
-    if (!regionPublished && !forwarding->IsForwardingDone()) {
-        if (forwarding->TryLockReadFromRegion()) {
-            forwarding->UnlockReadFromRegion();
-        } else {
-            retainRefused = true;
-        }
-    }
-    const MutatorRelocate::UnpublishedAnswer ans =
-        MutatorRelocate::AnswerUnpublished(tableHit, regionPublished, retainRefused);
-    if (ans == MutatorRelocate::UnpublishedAnswer::UseTo && again != nullptr) {
-        return observeReturn("unpublished-use-to", again);
-    }
-    if (ans == MutatorRelocate::UnpublishedAnswer::InvariantFailure) {
-        // inplaceto: the second consumer of the same ambiguity.  A page compacted in place
-        // publishes receipts only for the from-object starts its livemap carried, so a lookup
-        // miss on an offset the livemap never covered, below the page's post-compaction top, is
-        // reporting an address that has already been relocated -- not a receipt that was owed.
-        // Measured, NW256/256MB 3/3 verbatim: YoungStripedMarkingWork::ProcessObject traced a
-        // reference to regionStart+4856 on a COMPACTED page with ghostSurv=0 curSurv=0 and
-        // allocOff=43720, and the page's current layout holds a 48-byte object at 4840 that
-        // contains it (delta=16).  ZGC reaches this call only with a from-address because its
-        // to-pointers are colour-good (zRelocate.cpp:382-389); ours are plain.
-        // fieldstart: this consumer is reached from YoungStripedMarkingWork::ProcessObject, i.e.
-        // from a *heap ref field*, and a heap ref field names an object start by construction --
-        // BaseObject.cpp:104-116 hands reference-array elements to the visitor as object
-        // references, and ZGC's oop fields carry no derived pointers at all (oopMap.cpp:404-424).
-        // Measured NW256/256MB 3/3: the refused word is element 129 of a live RawArray<Node> that
-        // the page table confirms is the current copy (from 696 -> to 680), holding an address 16
-        // bytes inside a 48-byte Node -- and 223 of that array's 512 elements name no object start
-        // at all.  Admitting the interior here reports "already relocated" about a word that names
-        // nothing, so only the object-start class may pass.
-        (void)ClassifyCompactedMiss(forwarding, from);
-        return permanentHole("published-without-receipt", 0, again);
-    }
-    // Wait for the region-level publish (FORWARDED / COMPACTED / kept), not
-    // an object-level empty spin (47595a33). ExemptFromRegion publishes kept
-    // immediately so this wait is bounded every cycle.
-    //
-    // oracle r5: store-side waits after FORWARD (reclaim/idle) on ROUTED
-    // unpublished pages are structurally never-true (527/527 timeout).
-    // Only wait while a publisher still exists this cycle.
-    const GCPhase waitPhase = GetGCPhase();
-    // POST_TRACE already RouteRegion's (PrepareForwardTable); copy is still
-    // ahead. IDLE/FINISH/RECLAIM have
-    // no publisher — those are the structurally-false waits (oracle r5).
-    const bool waitEligible = (waitPhase == GCPhase::GC_PHASE_POST_TRACE ||
-                               waitPhase == GCPhase::GC_PHASE_PREFORWARD ||
-                               waitPhase == GCPhase::GC_PHASE_FORWARD) &&
-        forwarding != nullptr && !forwarding->IsFreeRegion() && !forwarding->IsGarbageRegion();
-    if (ans == MutatorRelocate::UnpublishedAnswer::Wait && !waitEligible) {
-        BaseObject* retired = lookupTo();
-        if (retired != nullptr && Heap::IsHeapAddress(retired) && retired->IsValidObject()) {
-            if (MutatorRelocate::StatsOn()) {
-                MutatorRelocate::NoteWaitReceipt();
-            }
-            return observeReturn("ineligible-lookup", retired);
-        }
-        if (publicationClosed) {
-            return observeReturn("ineligible-closed", nullptr);
-        }
-        if (MutatorRelocate::StatsOn()) {
-            MutatorRelocate::NoteWaitGiveUp();
-        }
-        return permanentHole("published-without-receipt", 0, retired);
-    }
-    if (ans == MutatorRelocate::UnpublishedAnswer::Wait) {
-        if (MutatorRelocate::StatsOn()) {
-            MutatorRelocate::NoteRegionWaitEnter();
-        }
-        // zRelocate.cpp:382-406 enters add_and_wait only after retain_page
-        // succeeded. If retain observes concurrent completion, only the
-        // forwarding receipt is a legal late answer.
-        if (!forwarding->TryLockReadFromRegion()) {
-            if (MutatorRelocate::StatsOn()) {
-                MutatorRelocate::NoteWaitGiveUp();
-            }
-            BaseObject* published = lookupTo();
-            if (published != nullptr && Heap::IsHeapAddress(published) && published->IsValidObject()) {
-                return observeReturn("retain-refused-lookup", published);
-            }
-            return permanentHole("retain-refused-without-receipt", 0, published);
-        }
-        forwarding->UnlockReadFromRegion();
-
-        // A mutator-discovered object must be in the worker's relocation domain
-        // before the request is visible. Either its exact to receipt or the
-        // region-level publication/no-publisher terminal resolves this wait.
-        EnsureRouteDomainMembership(const_cast<WCollector*>(this), from);
-        RelocationRequestQueue& requests = space.GetRegionManager().GetRelocationRequestQueue();
-        RelocationRequestQueue::EnqueueResult queued =
-            requests.Add(forwarding, reinterpret_cast<MAddress>(from));
-
-        bool waitTimedOut = false;
-        (void)requests.WaitUntil(
-            queued.request, MutatorRelocate::kFwdDoneWaitSpins, &waitTimedOut);
-        if (waitTimedOut) {
-            return permanentHole("fwdDone-timeout", 0, lookupTo());
-        }
-        // Page completion or a proven no-publisher failure has no object
-        // receipt. Ask the table once after that terminal; a miss violates the
-        // relocation invariant.
-        BaseObject* ready = lookupTo();
-        if (ready != nullptr && Heap::IsHeapAddress(ready) && ready->IsValidObject()) {
-            if (MutatorRelocate::StatsOn()) {
-                MutatorRelocate::NoteRegionWaitGot();
-                MutatorRelocate::NoteWaitReceipt();
-            }
-            return observeReturn("terminal-lookup", ready);
-        }
-        if (MutatorRelocate::StatsOn()) {
-            MutatorRelocate::NoteRegionWaitPublishedMiss();
-            MutatorRelocate::NoteWaitGiveUp();
-        }
-        return permanentHole("request-complete-without-receipt", 0, ready);
-    }
-    return permanentHole("forwarding-table-miss", 0, again);
-}
-#endif
 
 // portmutreloc: ZRelocate::relocate_object's retain/copy/release leg (zRelocate.cpp:391-406).
 //
@@ -2940,10 +2680,6 @@ BaseObject* WCollector::ForwardObjectImpl(BaseObject* obj, RegionInfo* ghostFrom
                     page = RegionInfo::TryGetRegionInfoAt(reinterpret_cast<MAddress>(obj));
                 }
             }
-            if (page != nullptr && !page->NoteCopyInflight()) {
-                obj->UnlockObject(ObjectState::NORMAL);
-                return FindToVersion(obj).found();
-            }
             return RelocateObjectInner(obj, nullptr, page);
         }
     } while (true);
@@ -2953,15 +2689,9 @@ BaseObject* WCollector::ForwardObjectImpl(BaseObject* obj, RegionInfo* ghostFrom
 
 BaseObject* WCollector::ForwardObjectExclusive(BaseObject* obj)
 {
-    // Vtable entry: caller already TryLock'd. Count on the from-page here so
-    // the token is live before copy (same as ForwardObjectImpl's TryLock arm).
     RegionInfo* page = RegionInfo::GetGhostFromRegionAt(reinterpret_cast<MAddress>(obj));
     if (page == nullptr) {
         page = RegionInfo::TryGetRegionInfoAt(reinterpret_cast<MAddress>(obj));
-    }
-    if (page != nullptr && !page->NoteCopyInflight()) {
-        obj->UnlockObject(ObjectState::NORMAL);
-        return FindToVersion(obj).found();
     }
     return RelocateObjectInner(obj, nullptr, page);
 }
@@ -2986,6 +2716,12 @@ BaseObject* WCollector::RelocateObjectInner(BaseObject* obj, BaseObject* planned
             }
             return nullptr;
         }
+    }
+    if (copyPage != nullptr && !copyPage->NoteCopyInflight()) {
+        if (obj->GetStateWord().IsLockedWord()) {
+            obj->UnlockObject(ObjectState::NORMAL);
+        }
+        return FindToVersion(obj).found();
     }
     return ForwardObjectExclusive(obj, toObj, copyPage);
 }

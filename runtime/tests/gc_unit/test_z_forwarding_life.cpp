@@ -190,50 +190,17 @@ GC_TEST(ZForwardingLife, CopyInflightDrainWakes)
                    ZForwardingLife::CopyAdmissionState::SEALED);
 }
 
-GC_TEST(ZForwardingLife, CopyAdmissionEnteringBlocksSealAndLateAdmissionRefuses)
+GC_TEST(ZForwardingLife, LateNoteAfterSealRefuses)
 {
     std::atomic<int32_t> copy{ ZForwardingLife::CopyAdmissionOpenWord() };
-    GC_EXPECT_TRUE(ZForwardingLife::begin_copy(copy));
-    GC_EXPECT_TRUE(ZForwardingLife::copy_admission_state(copy) ==
-                   ZForwardingLife::CopyAdmissionState::ENTERING);
-
-    std::atomic<bool> drainStarted{ false };
-    std::atomic<bool> drainDone{ false };
-    std::thread drain([&]() {
-        drainStarted.store(true, std::memory_order_release);
-        ZForwardingLife::wait_copied(copy);
-        drainDone.store(true, std::memory_order_release);
-    });
-    JoinGuard drainGuard(drain);
-    while (!drainStarted.load(std::memory_order_acquire)) {
-        std::this_thread::yield();
-    }
-    std::this_thread::sleep_for(std::chrono::milliseconds(5));
-    const bool returnedInEnteringGap = drainDone.load(std::memory_order_acquire);
-
-    ZForwardingLife::commit_copy(copy);
-    while (ZForwardingLife::copy_admission_state(copy) !=
-           ZForwardingLife::CopyAdmissionState::SEALED) {
-        std::this_thread::yield();
-    }
-    const bool returnedWithCopyInflight = drainDone.load(std::memory_order_acquire);
-    GC_EXPECT_EQ(ZForwardingLife::copy_count(copy), 1);
+    GC_EXPECT_TRUE(ZForwardingLife::note_copy(copy));
     ZForwardingLife::end_copy(copy);
-    drain.join();
-
-    const int32_t beforeLateAdmission = ZForwardingLife::copy_count(copy);
-    const bool lateAdmission = ZForwardingLife::note_copy(copy);
-    const int32_t afterLateAdmission = ZForwardingLife::copy_count(copy);
-
-    GC_EXPECT_FALSE(returnedInEnteringGap);
-    GC_EXPECT_FALSE(returnedWithCopyInflight);
-    GC_EXPECT_TRUE(drainDone.load(std::memory_order_acquire));
-    GC_EXPECT_FALSE(lateAdmission);
-    GC_EXPECT_EQ(beforeLateAdmission, 0);
-    GC_EXPECT_EQ(afterLateAdmission, beforeLateAdmission);
-
-    // Positive control: a new forwarding life explicitly reopens the same
-    // word, and serial admission then changes the count.
+    ZForwardingLife::wait_copied(copy);
+    GC_EXPECT_TRUE(ZForwardingLife::copy_admission_state(copy) ==
+                   ZForwardingLife::CopyAdmissionState::SEALED);
+    const int32_t beforeLate = ZForwardingLife::copy_count(copy);
+    GC_EXPECT_FALSE(ZForwardingLife::note_copy(copy));
+    GC_EXPECT_EQ(ZForwardingLife::copy_count(copy), beforeLate);
     ZForwardingLife::reset_copy_open(copy);
     GC_EXPECT_TRUE(ZForwardingLife::note_copy(copy));
     GC_EXPECT_EQ(ZForwardingLife::copy_count(copy), 1);
