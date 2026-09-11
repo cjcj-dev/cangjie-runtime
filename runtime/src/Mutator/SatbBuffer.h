@@ -368,14 +368,14 @@ private:
         return page;
     }
 
-    Node* ConstructFreeNodeList(const Page* page, size_t bytes) const
+    Node* ConstructFreeNodeList(const Page* page, size_t bytes)
     {
         MAddress start = reinterpret_cast<MAddress>(page) + RoundUp(sizeof(Page), CACHE_LINE_ALIGN);
         MAddress end = reinterpret_cast<MAddress>(page) + bytes;
         Node* cur = nullptr;
         Node* head = nullptr;
         while (start <= (end - NODE_SIZE)) {
-            Node* node = new (reinterpret_cast<void*>(start)) Node(const_cast<SatbBuffer*>(this));
+            Node* node = new (reinterpret_cast<void*>(start)) Node(this);
             if (cur == nullptr) {
                 cur = node;
                 head = node;
