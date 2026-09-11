@@ -130,6 +130,14 @@ static void NoteRemapYoungRootsTestReceipt(RefField<>& field, uintptr_t before, 
 static thread_local WCollector::RouteLookupTestResult* g_routeLookupTestContext = nullptr;
 #endif
 #if defined(MRT_TESTABLE_INTERNALS)
+using CopyAdmissionTestHook = void (*)(RegionInfo*, BaseObject*);
+static std::atomic<CopyAdmissionTestHook> g_copyAdmissionTestHook{ nullptr };
+extern "C" MRT_EXPORT void MRT_SetCopyAdmissionTestHook(CopyAdmissionTestHook hook)
+{
+    g_copyAdmissionTestHook.store(hook, std::memory_order_release);
+}
+#endif
+#if defined(MRT_TESTABLE_INTERNALS)
 // Scheduling only: install a barrier after flip, at wait entry, and before
 // post-copy cleanup. The callback never supplies a forwarding answer.
 using RemapWindowTestHook = void (*)(unsigned, RegionInfo*, BaseObject*);
