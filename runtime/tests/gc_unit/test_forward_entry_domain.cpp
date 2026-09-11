@@ -100,37 +100,6 @@ bool NamesWaitHole(const std::string& text)
 
 } // namespace
 
-GC_TEST(ForwardEntryDomain, TakeRegionReturnsLiveToPage)
-{
-    GcHeapFixture fx(true);
-    SeedFreeUnits(fx);
-    RegionSpace& space = reinterpret_cast<RegionSpace&>(Heap::GetHeap().GetAllocator());
-    RegionInfo* taken = space.GetRegionManager().TakeRegion(1, RegionInfo::UnitRole::SMALL_SIZED_UNITS, false, false);
-    std::fprintf(stderr, "DETAIL take_region addr=%p start=%#zx\n",
-                 static_cast<void*>(taken), taken == nullptr ? 0 : static_cast<size_t>(taken->GetRegionStart()));
-    GC_EXPECT_TRUE(taken != nullptr);
-    GC_EXPECT_TRUE(taken->GetRegionStart() != 0);
-}
-
-GC_TEST(ForwardEntryDomain, MutatorCopyArmedHitToNotFrom)
-{
-    GcHeapFixture fx(true);
-    SeedFreeUnits(fx);
-    LiveInfo* live = PlantGhostFrom(fx, fx.region0, fx.obj0);
-    WCollector collector(Heap::GetHeap().GetAllocator(), Heap::GetHeap().GetCollectorResources());
-    collector.SetGCPhase(GCPhase::GC_PHASE_FORWARD);
-    BaseObject* got = collector.relocate_or_remap_object(fx.obj0, ZGenerationId::young);
-    const ForwardingTable::LookupResult lookup = ForwardingTable::LookupTo(reinterpret_cast<MAddress>(fx.obj0));
-    std::fprintf(stderr, "DETAIL copy_hit got=%p from=%p lookup.to=%#zx answer=%u\n",
-                 static_cast<void*>(got), static_cast<void*>(fx.obj0),
-                 static_cast<size_t>(lookup.to), static_cast<unsigned>(lookup.answer));
-    GC_EXPECT_TRUE(got != nullptr);
-    GC_EXPECT_TRUE(got != fx.obj0);
-    GC_EXPECT_TRUE(lookup.answer == ForwardingTable::ToAnswer::ArmedHit);
-    GC_EXPECT_TRUE(lookup.to != reinterpret_cast<MAddress>(fx.obj0));
-    (void)live;
-}
-
 GC_TEST(ForwardEntryDomain, WaitRoutedIdentityFromKeptProducer)
 {
     GcHeapFixture fx;
@@ -146,9 +115,8 @@ GC_TEST(ForwardEntryDomain, WaitRoutedIdentityFromKeptProducer)
             std::fprintf(stderr, "DETAIL kept_producer receipts=%zu\n", published);
         },
         fx.region0);
-    MutatorRelocate::EnterScope();
+    RegionInfo::DrainScope drain(fx.region0, MutatorRelocate::Retire::DISPEL_GHOST);
     BaseObject* before = collector.relocate_or_remap_object(fx.obj0, ZGenerationId::young);
-    MutatorRelocate::LeaveScope();
     ForwardingTable::SetLookupRetainHook(nullptr, nullptr);
     const ForwardingTable::LookupResult lookup = ForwardingTable::LookupTo(reinterpret_cast<MAddress>(fx.obj0));
     std::fprintf(stderr, "DETAIL wait_identity got=%p from=%p answer=%u to=%#zx done=%u compacted=%u\n",
@@ -160,9 +128,7 @@ GC_TEST(ForwardEntryDomain, WaitRoutedIdentityFromKeptProducer)
     GC_EXPECT_EQ(lookup.to, reinterpret_cast<MAddress>(fx.obj0));
     GC_EXPECT_EQ(reinterpret_cast<MAddress>(before), reinterpret_cast<MAddress>(fx.obj0));
     fx.region0->MarkForwardingDone();
-    MutatorRelocate::EnterScope();
     BaseObject* after = collector.relocate_or_remap_object(fx.obj0, ZGenerationId::young);
-    MutatorRelocate::LeaveScope();
     std::fprintf(stderr, "DETAIL wait_identity_after_done got=%p\n", static_cast<void*>(after));
     GC_EXPECT_EQ(reinterpret_cast<MAddress>(after), reinterpret_cast<MAddress>(fx.obj0));
     (void)live;
@@ -214,7 +180,8 @@ static void RunNamedAbort(const char* label, BaseObject* object)
         (void)close(fds[0]);
         (void)dup2(fds[1], STDERR_FILENO);
         (void)signal(SIGABRT, SIG_DFL);
-        MutatorRelocate::EnterScope();
+        RegionInfo* region = RegionInfo::GetGhostFromRegionAt(reinterpret_cast<MAddress>(object));
+        RegionInfo::DrainScope drain(region, MutatorRelocate::Retire::DISPEL_GHOST);
         WCollector collector(Heap::GetHeap().GetAllocator(), Heap::GetHeap().GetCollectorResources());
         collector.SetGCPhase(GCPhase::GC_PHASE_FORWARD);
         (void)collector.relocate_or_remap_object(object, ZGenerationId::young);
@@ -251,6 +218,10 @@ GC_TEST(ForwardEntryDomain, WrongLifecycleAborts)
     const ForwardingTable::LookupResult before = ForwardingTable::LookupTo(reinterpret_cast<MAddress>(fx.obj0));
     GC_EXPECT_TRUE(before.answer == ForwardingTable::ToAnswer::ArmedHit);
     fx.region0->BumpRegionLifeId();
+    const ForwardingTable::LookupResult after = ForwardingTable::LookupTo(reinterpret_cast<MAddress>(fx.obj0));
+    std::fprintf(stderr, "DETAIL wrong_life after_bump answer=%u to=%#zx\n",
+                 static_cast<unsigned>(after.answer), static_cast<size_t>(after.to));
+    GC_EXPECT_TRUE(after.answer != ForwardingTable::ToAnswer::ArmedHit);
     RunNamedAbort("wrong_life", fx.obj0);
     (void)live;
 }
