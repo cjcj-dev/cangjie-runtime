@@ -698,7 +698,6 @@ static RuntimeParam InitRuntimeParam()
                 // Default backup GC interval is 240s.
                 .backupGCInterval = InitTimeParameter("cjBackupGCInterval", 0, 240 * SECOND_TO_NANO_SECOND),
                 // Default GC thread factor is 2.
-                .gcThreads = 2,
             },
         .logParam = {
             .logLevel = LogFile::GetLogLevel(),
