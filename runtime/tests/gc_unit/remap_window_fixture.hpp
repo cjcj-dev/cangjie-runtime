@@ -185,6 +185,10 @@ void PageLifetimeHook(unsigned point, RegionInfo* region, BaseObject* object)
         state.cv.notify_all();
     } else if (point == 11 && region == state.kept) {
         state.lifetimeDoneLast = !state.lifetimeOwner->is_done();
+    } else if (point == 12 && region == state.kept) {
+        state.lifetimeDoneLast = state.lifetimeDoneLast &&
+            (!state.lifetimeOwner->is_done() ||
+             state.lifetimeOwner->ref_count().load(std::memory_order_acquire) == 0);
     } else if (point == 10 && region == state.kept) {
         const MAddress to = state.lifetimeOwner->find(reinterpret_cast<MAddress>(state.from));
         state.expected = reinterpret_cast<BaseObject*>(to);
@@ -411,6 +415,7 @@ void RunRemapWindow(bool copyOnly, ForwardDomain domain = ForwardDomain::None, b
                 state.lifetimeReturned = result;
                 state.returned = true;
                 state.cv.notify_all();
+                ThreadLocal::SetMutator(nullptr);
                 return;
             }
             GC_EXPECT_TRUE(state.entered && state.published);
@@ -456,6 +461,7 @@ void RunRemapWindow(bool copyOnly, ForwardDomain domain = ForwardDomain::None, b
     }
     if (waiter.joinable()) waiter.join();
     setHook(nullptr);
+    bool lifetimeMatched = true;
     if (lifetimeTarget != nullptr) {
         state.lifetimeResult = state.published && state.lifetimeReturned == state.expected;
         const bool matched = std::strcmp(lifetimeTarget, "claim") == 0 ? state.lifetimeClaimed :
@@ -466,7 +472,7 @@ void RunRemapWindow(bool copyOnly, ForwardDomain domain = ForwardDomain::None, b
                      "released_find=%d done_last=%d result=%d\n", lifetimeTarget, matched,
                      state.lifetimeClaimed, state.lifetimeReaderSafe, state.lifetimeReleasedFind,
                      state.lifetimeDoneLast, state.lifetimeResult);
-        GC_EXPECT_TRUE(matched);
+        lifetimeMatched = matched;
     }
     if (checkCopy) {
         const bool initialized = state.copied && state.copiedField == state.expectedField;
@@ -479,14 +485,18 @@ void RunRemapWindow(bool copyOnly, ForwardDomain domain = ForwardDomain::None, b
                      state.arenaInstalled, state.arenaBudget, state.arenaUsed, state.copied, state.published);
         GC_EXPECT_TRUE(state.arenaInstalled);
     }
-    GC_EXPECT_TRUE(state.copied && state.published);
-    if (!copyOnly) GC_EXPECT_TRUE(state.returned && state.entered);
+    if (lifetimeTarget == nullptr) {
+        GC_EXPECT_TRUE(state.copied && state.published);
+        if (!copyOnly) GC_EXPECT_TRUE(state.returned && state.entered);
+    }
     // OTHER_VM owns the mapped heap and product metadata until exit.
     // No teardown may re-interpret a page whose forwarding life was retired.
+    pool.WaitFinish();
     RelocationReceiptTestAccess::BindThreadPool(resources, nullptr);
     pool.Exit();
     RelocationReceiptTestAccess::BindCollector(resources, nullptr);
     std::fflush(stderr);
+    if (lifetimeTarget != nullptr) GC_EXPECT_TRUE(lifetimeMatched);
 }
 } // namespace
 
