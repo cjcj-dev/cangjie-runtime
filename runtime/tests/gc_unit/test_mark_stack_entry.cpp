@@ -81,3 +81,82 @@ GC_TEST(MarkStackEntry, StackSplitPreservesPolicy)
         stack.pop_back();
     }
 }
+
+namespace {
+void ExpectClearCompletes(size_t entries, size_t buffers)
+{
+#if defined(__linux__)
+    // Isolate clear() so a failure is reported at the completion invariant
+    // below and does not prevent the empty-stack control from running.
+    std::fflush(nullptr);
+    const pid_t child = fork();
+    GC_EXPECT_TRUE(child >= 0);
+    if (child == 0) {
+        MarkStack<MarkStackEntry> stack;
+        for (size_t i = 0; i < entries; ++i) {
+            stack.push_back(MarkStackEntry::PartialArray(i, 1));
+        }
+        if (stack.size() != buffers) {
+            std::fprintf(stderr, "MARK_STACK_CLEAR_SETUP_FAILED entries=%zu buffers=%zu\n", entries, stack.size());
+            _exit(2);
+        }
+        std::fprintf(stderr, "MARK_STACK_CLEAR_ENTER entries=%zu buffers=%zu\n", entries, stack.size());
+        stack.clear();
+        const bool cleared = stack.empty() && stack.size() == 0 &&
+            stack.head() == nullptr && stack.tail() == nullptr;
+        if (!cleared) {
+            _exit(3);
+        }
+        // Repeated clearing and reuse must preserve the same empty state.
+        stack.clear();
+        if (entries == 0) {
+            std::fprintf(stderr, "MARK_STACK_CLEAR_RESULT empty=1\n");
+            _exit(0);
+        }
+        stack.push_back(MarkStackEntry::PartialArray(7, 1));
+        if (stack.size() != 1 || stack.back().partialArrayOffset() != 7) {
+            _exit(4);
+        }
+        stack.clear();
+        const bool reusable = stack.empty() && stack.size() == 0 &&
+            stack.head() == nullptr && stack.tail() == nullptr;
+        std::fprintf(stderr, "MARK_STACK_CLEAR_RESULT empty=%d\n", reusable);
+        _exit(reusable ? 0 : 5);
+    }
+    int childStatus = 0;
+    pid_t waited;
+    do {
+        waited = waitpid(child, &childStatus, 0);
+    } while (waited < 0 && errno == EINTR);
+    GC_EXPECT_EQ(waited, child);
+    std::fprintf(stderr, "MARK_STACK_CLEAR_STATUS entries=%zu status=%d\n", entries, childStatus);
+    const bool clearCompletedAndEmpty = WIFEXITED(childStatus) && WEXITSTATUS(childStatus) == 0;
+    GC_EXPECT_TRUE(clearCompletedAndEmpty);
+#else
+    MarkStack<MarkStackEntry> stack;
+    for (size_t i = 0; i < entries; ++i) {
+        stack.push_back(MarkStackEntry::PartialArray(i, 1));
+    }
+    GC_EXPECT_EQ(stack.size(), buffers);
+    stack.clear();
+    GC_EXPECT_TRUE(stack.empty());
+    GC_EXPECT_EQ(stack.size(), 0U);
+    GC_EXPECT_TRUE(stack.head() == nullptr && stack.tail() == nullptr);
+#endif
+}
+} // namespace
+
+GC_TEST(MarkStackClear, Empty)
+{
+    ExpectClearCompletes(0, 0);
+}
+
+GC_TEST(MarkStackClear, SingleBuffer)
+{
+    ExpectClearCompletes(1, 1);
+}
+
+GC_TEST(MarkStackClear, MultipleBuffers)
+{
+    ExpectClearCompletes(129, 3);
+}

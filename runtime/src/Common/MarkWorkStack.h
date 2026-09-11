@@ -86,7 +86,8 @@ public:
 
     void clear()
     {
-        while (!empty()) {
+        // The tail is reset after traversal, so it cannot decide when to stop.
+        while (this->h != nullptr) {
             MarkStackBuf<T>* tmp = this->h;
             this->h = this->h->next;
             if (this->h != nullptr) {
