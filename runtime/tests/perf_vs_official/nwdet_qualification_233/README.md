@@ -1,15 +1,28 @@
-# NW qualification attempt for #233
+# NW qualification recheck for #233
 
-The rebuilt input failed qualification on frozen runtime `dea244c0918ae4b874d4490e12dc97268b78371a`. This proposal keeps `qualified=false` and replaces the historical incompatibility explanation with the observed first fatal check. It does not restore the merge gate or approve this ELF.
+Qualification remains **false** after the post-P2 recheck on frozen runtime `1882559969fbc91135cb9a2759129dec9c2c2838`. All five real workload processes started, returned `-6` (SIGABRT), and were rejected by the gate (`rc=1`). Each first fatal check was `ColourCensus.cpp:26`, with `plain_holder_type=std.core:OutOfMemoryError`. This records the first stop, not its root cause.
 
-`qualification.patch` targets the ops repository's `state/nwdet_qualification.json`; it is a review artifact, not an automatically applied runtime setting. The original file digest and proposed digest are in `manifest.json`. Shared canonical, SDK and qualification files were not deployed by this lane. The original `since` and `workloads` fields are preserved.
+## Reproduction and identities
 
-The controller selected official nightly `1.3.0-alpha.20260831010012` cjc and the frozen runtime pair after the prior r3 SDK paths were found missing. The private SDK copied the official target stdlib; compiling the workload does not establish a coloured closure for that archive. `-O2 --static-std --save-temps <dir> -V --link-option -Map=<map> --link-option -t` produced the ELF; its exact command, link map and input hashes are in the evidence archive. The compiler host used the official runtime, while target linking used the freshly built frozen runtime pair.
+The recipe uses official nightly `1.3.0-alpha.20260831010012` cjc, a private SDK copy, and the frozen runtime/bounds pair built by the unchanged `gate_build.py` with `MRT_GC_UNIT_TESTS=OFF`. The compiler host uses the official runtime; target linking uses the new pair. The workload is compiled with `-O2 --static-std --save-temps -V` and a saved linker map. The official static stdlib archive is retained; this does not establish an all-coloured stdlib closure.
 
-The unchanged `gate_nwdet.py` was run with `N=3`, `CORES=16-31`, `TMO=300`, the new content-addressed ELF, a private execution permit and the private `build/deferred-sodepot`. The first 256MB sample returned SIGABRT (`-6` as reported by subprocess); the gate returned 1. `ColourCensus.cpp:26` rejected heap slots and identified `std.core:OutOfMemoryError`. A's remaining samples and all of B were stopped per the predeclared failure rule. This is one failed sample, not a measured failure rate or a root-cause proof. The controller assigned the follow-up to cangjie-runtime#190; no runtime repair is included.
+The current gate and saved prior gate have identical SHA256 (`184f3403edb29b2cd83bcf46f63a6029d15feaeefdf2b4edcf9a2f4296ca595f`). Because the gate exits on the first invalid sample, `requalify.py` invokes the unchanged gate five times with `N=1`, distinct output directories and the same retained ELF and SOs. Total requested and started samples are both five. Each invocation uses `CORES=32-47`, `TMO=300`, required heap `256MB`, and all six verify settings from the gate. Observational heaps are not reached after failure.
 
-`gate-controls.json` records independent fixture execution through the unchanged gate: correct → wave8 checksum error → restored returned 0 → 1 → 0. Missing/duplicate records, missing completion, abnormal exit and missing heap count were also rejected. These fixtures prove the gate only, not NW product qualification. No gate source or runtime source was changed, so no new product disconnection claim is made.
+`manifest.json` binds every sample to its ELF, both SOs, runtime stamp and original stderr line. It retains the previous manifest as `prior_attempt`. The evidence archive includes `build.sh`, `compile.sh`, `requalify.py`, link map, input hashes, original result files, logs, process rc, both SOs and the ELF. Local and remote before/after uptime are preserved in the report evidence directory.
 
-The raw archive contains the runtime/bounds pair, build log, original workload stderr, gate result, compiler link map, identities, recipes and both-host measurement context (local context is adjacent to the archive). Review must inspect those originals; this directory is an index and proposed qualification update.
+## P2-before comparison
 
-Reference obligation: ZGC `test/hotspot/jtreg/gc/z/TestSmallHeap.java:43-66` requires successful process completion. NW did not satisfy the corresponding existing gate requirement. Product check: `runtime/src/Heap/Verify/ColourCensus.cpp:24-34`, reached through `VerifyHeap.cpp:389` and `ColourCensus.cpp:99`.
+| Coordinate | Started samples | Process rc / gate rc | First check | First holder type |
+|---|---:|---|---|---|
+| `dea244c0918ae4b874d4490e12dc97268b78371a` (historical pre-P2) | 1 (then stopped; originally requested 3) | -6 / 1 | `ColourCensus.cpp:26` | `std.core:OutOfMemoryError` |
+| `1882559969fbc91135cb9a2759129dec9c2c2838` (post-P2) | 5 | -6 / 1 for each | `ColourCensus.cpp:26` for each | `std.core:OutOfMemoryError` for each |
+
+This is a first-stop comparison. The runtime and relinked ELF changed; the historical core reservation was `16-31`, while this run reserved `32-47`. The historical arm was not rerun. These observations do not isolate P2 causality or support a performance comparison. Existing product follow-up is #190.
+
+## Gate controls and deployment boundary
+
+The existing fixture suite was rerun: correct → wave8-only checksum deviation → restored returns `0 → 1 → 0`. In the middle arm, normal exit, complete records and required counts all pass before the wave8 assertion rejects admission. Missing/duplicate records, missing completion, abnormal exit and missing heap count are independently rejected. `gate-controls.json` is byte-for-byte unchanged because its structured results match the earlier run; this run's originals are in the evidence archive. These controls prove the gate only, not real NW qualification or a runtime repair.
+
+`qualification.patch` is a review proposal for the ops repository's `state/nwdet_qualification.json`. No shared canonical asset, SDK or qualification setting is deployed. The proposal retains `qualified=false`, `since` and `workloads`; it updates only the reason. The merge gate's third segment has not been restored.
+
+ZGC obligation: `test/hotspot/jtreg/gc/z/TestSmallHeap.java:43-66` requires successful process completion. NW still fails that requirement. Product check: `runtime/src/Heap/Verify/ColourCensus.cpp:24-34`, called through `VerifyHeap.cpp:389` and `ColourCensus.cpp:99`.
