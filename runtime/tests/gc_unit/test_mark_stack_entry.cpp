@@ -143,18 +143,13 @@ void ExpectClearCompletes(size_t entries, size_t buffers)
 #endif
 }
 
-using ProductClearFn = int (*)(size_t);
-
-ProductClearFn LoadProductClear()
+void* ProductRuntimeHandle()
 {
     void* handle = dlopen("libcangjie-runtime.so", RTLD_NOW | RTLD_NOLOAD);
     if (handle == nullptr) {
         handle = dlopen("libcangjie-runtime.so", RTLD_NOW);
     }
-    GC_EXPECT_TRUE(handle != nullptr);
-    auto fn = reinterpret_cast<ProductClearFn>(dlsym(handle, "MRT_ProductMarkStackClear"));
-    GC_EXPECT_TRUE(fn != nullptr);
-    return fn;
+    return handle;
 }
 } // namespace
 
@@ -208,24 +203,24 @@ GC_TEST(MarkStackClear, DestructorAfterMultipleBuffers)
 #endif
 }
 
-GC_TEST(MarkStackClear, ProductSoCall)
+GC_TEST(MarkStackClear, ProductSoVisitCounter)
 {
-    auto fn = LoadProductClear();
-#if defined(__linux__)
-    std::fflush(nullptr);
-    const pid_t child = fork();
-    GC_EXPECT_TRUE(child >= 0);
-    if (child == 0) {
-        std::fprintf(stderr, "MARK_STACK_SO_ENTER entries=129\n");
-        const int rc = fn(129);
-        std::fprintf(stderr, "MARK_STACK_SO_RESULT rc=%d\n", rc);
-        _exit(rc == 0 ? 0 : 3);
+    using ResetFn = void (*)();
+    using ReadFn = size_t (*)();
+    void* handle = ProductRuntimeHandle();
+    auto reset = reinterpret_cast<ResetFn>(
+        dlsym(handle, "_ZN12MapleRuntime25ResetMarkStackClearVisitsEv"));
+    auto read = reinterpret_cast<ReadFn>(
+        dlsym(handle, "_ZN12MapleRuntime24ReadMarkStackClearVisitsEv"));
+    if (reset == nullptr || read == nullptr) {
+        std::fprintf(stderr, "MARK_STACK_SO_COUNTER NOT_RUN missing_symbol\n");
+        return;
     }
-    const int childStatus = WaitChild(child);
-    std::fprintf(stderr, "MARK_STACK_SO_STATUS status=%d\n", childStatus);
-    const bool clearCompletedAndEmpty = WIFEXITED(childStatus) && WEXITSTATUS(childStatus) == 0;
-    GC_EXPECT_TRUE(clearCompletedAndEmpty);
-#else
-    GC_EXPECT_EQ(fn(129), 0);
-#endif
+    reset();
+    const size_t before = read();
+    MarkStack<MarkStackEntry> stack;
+    stack.clear();
+    const size_t after = read();
+    std::fprintf(stderr, "MARK_STACK_SO_COUNTER before=%zu after=%zu\n", before, after);
+    GC_EXPECT_TRUE(after > before);
 }

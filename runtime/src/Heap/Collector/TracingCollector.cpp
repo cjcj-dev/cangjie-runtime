@@ -1495,18 +1495,11 @@ void TracingCollector::UpdateGCStats()
          liveBytes - recentBytes, recentBytes, oldThreshold, gcStats.GetThreshold());
     TRACE_COUNT("CJRT_post_GC_HeapSize", Heap::GetHeap().GetAllocatedSize());
 }
-} // namespace MapleRuntime
 
 #if defined(MRT_TESTABLE_INTERNALS)
-extern "C" MRT_EXPORT int MRT_ProductMarkStackClear(size_t entries)
-{
-    MapleRuntime::TracingCollector::WorkStack stack;
-    for (size_t i = 0; i < entries; ++i) {
-        stack.push_back(MapleRuntime::MarkStackEntry::PartialArray(i, 1));
-    }
-    stack.clear();
-    const bool cleared = stack.empty() && stack.size() == 0 &&
-        stack.head() == nullptr && stack.tail() == nullptr;
-    return cleared ? 0 : 3;
-}
+std::atomic<size_t> g_markStackClearVisits{ 0 };
+void NoteMarkStackClear() { g_markStackClearVisits.fetch_add(1, std::memory_order_relaxed); }
+size_t ReadMarkStackClearVisits() { return g_markStackClearVisits.load(std::memory_order_relaxed); }
+void ResetMarkStackClearVisits() { g_markStackClearVisits.store(0, std::memory_order_relaxed); }
 #endif
+} // namespace MapleRuntime
