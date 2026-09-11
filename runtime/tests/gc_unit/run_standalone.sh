@@ -57,19 +57,14 @@ validate_mutualwait_manifest() {
 mkdir -p "$OUT"
 
 RUNTIME_LIB_DIR="${GCV2_RUNTIME_LIB_DIR:-}"
-if [[ -z "$RUNTIME_LIB_DIR" ]]; then
-  for cand in \
-    "$ROOT/runtime/output/temp/lib/x86_64_Release" \
-    "$ROOT/runtime/output/temp/lib/x86_64_Relwithdebinfo"; do
-    if [[ -f "$cand/libcangjie-runtime.so" ]]; then
-      RUNTIME_LIB_DIR="$cand"
-      break
-    fi
-  done
-fi
 if [[ -z "$RUNTIME_LIB_DIR" || ! -f "$RUNTIME_LIB_DIR/libcangjie-runtime.so" ]]; then
   echo "error: set GCV2_RUNTIME_LIB_DIR to a dir containing libcangjie-runtime.so" >&2
   exit 2
+fi
+
+if [[ -z "${GCV2_RUNTIME_OUTPUT_ROOT:-}" ]]; then
+  GCV2_RUNTIME_OUTPUT_ROOT=$(python3 "$ROOT/runtime/build/resolve_runtime_headers.py" \
+    "$ROOT/runtime" "$RUNTIME_LIB_DIR")
 fi
 
 run_ohos_host_arm() {
@@ -84,6 +79,8 @@ run_ohos_host_arm() {
   local test_nm="$OUT/ohos_host_test.full-defined.txt"
   local test_undef="$OUT/ohos_host_test.undefined.txt"
   local post_disassembly="$OUT/ohos_host_postresolve.disassembly.txt"
+  local runtime_output_root="${GCV2_RUNTIME_OUTPUT_ROOT:-$(realpath -m "$RUNTIME_LIB_DIR/../..")}"
+  local runtime_include_flags=(-I"$runtime_output_root/include")
   local libc_real
   local test_name key rc state
   local overall_rc=0
@@ -116,6 +113,7 @@ run_ohos_host_arm() {
   ln -sfn "$libc_real" "$runroot/libc.so"
 
   if [[ -z "${GC_UNIT_OHOS_HOST_TEST_ELF:-}" ]]; then
+    echo "GC_UNIT_OHOS_HOST_HEADER_ROOT=${runtime_include_flags[0]#-I}"
     "$CXX" -std=gnu++17 -O0 -g -Wall -Wextra -pthread -fno-rtti -fexceptions \
       -fvisibility-inlines-hidden -D__OHOS__=1 -DMRT_GC_UNIT_TESTS=1 \
       -DMRT_TESTABLE_INTERNALS=1 -include string \
@@ -123,7 +121,7 @@ run_ohos_host_arm() {
       -I"$ROOT/runtime/src/CJThread/src/runtime/schedule/include" \
       -I"$ROOT/runtime/include" \
       -I"$ROOT/runtime/third_party/third_party_bounds_checking_function/include" \
-      -I"$ROOT/runtime/output/temp/include" \
+      "${runtime_include_flags[@]}" \
       "$SRC/gc_unit_main.cpp" "$host_src/ohos_cycle_unit.cpp" \
       -L"$RUNTIME_LIB_DIR" -Wl,-rpath,"$RUNTIME_LIB_DIR" -Wl,--exclude-libs,ALL \
       -lcangjie-runtime -lboundscheck -o "$elf"
@@ -380,8 +378,9 @@ INC_FLAGS=(
   -I"$ROOT/runtime/include"
   -I"$BOUNDS_INC"
 )
-if [[ -d "$ROOT/runtime/output/temp/include" ]]; then
-  INC_FLAGS+=(-I"$ROOT/runtime/output/temp/include")
+RUNTIME_OUTPUT_ROOT="${GCV2_RUNTIME_OUTPUT_ROOT:-$(realpath -m "$RUNTIME_LIB_DIR/../..")}"
+if [[ -d "$RUNTIME_OUTPUT_ROOT/include" ]]; then
+  INC_FLAGS+=(-I"$RUNTIME_OUTPUT_ROOT/include")
 fi
 
 validate_mutualwait_manifest

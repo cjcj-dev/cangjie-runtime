@@ -10,7 +10,12 @@ SCRIPT="$SRC/run_standalone.sh"
 FINALIZER_SCRIPT="$SRC/run_finalizer_trigger.sh"
 PHASE_ENTRY_SCRIPT="$SRC/run_phase_entry_trigger.sh"
 SEGMENTED_MANAGED_SCRIPT="$SRC/run_segmented_array_managed.sh"
-STATUS_FILE="${GC_UNIT_GATE_STATUS:-${GCV2_RUNTIME_LIB_DIR:+$GCV2_RUNTIME_LIB_DIR/gc_unit_gate.status}}"
+STATUS_FILE="${GC_UNIT_GATE_STATUS:-}"
+if [[ -z "$STATUS_FILE" && -n "${GCV2_RUNTIME_LIB_DIR:-}" ]]; then
+  STATUS_FILE="$GCV2_RUNTIME_LIB_DIR/gc_unit_gate.status"
+elif [[ -z "$STATUS_FILE" && -n "${GCV2_RUNTIME_CONFIG:-}" ]]; then
+  STATUS_FILE="$ROOT/runtime/output/temp/$GCV2_RUNTIME_CONFIG/gc_unit_gate.status"
+fi
 STATUS_FILE="${STATUS_FILE:-$ROOT/runtime/output/gc_unit_gate.status}"
 LANGUAGE_TEST_MODE="${GC_UNIT_GATE_LANGUAGE_TESTS:-all}"
 
@@ -31,6 +36,10 @@ OHOS_HOST_FILTERS=0
 STATUS_REASON=UNEXPECTED_EXIT
 TESTABLE_INTERNALS="${MRT_TESTABLE_INTERNALS:-0}"
 OHOS_HOST="${MRT_GC_UNIT_OHOS_HOST:-0}"
+RUNTIME_CONFIG_ID="${GCV2_RUNTIME_CONFIG:-explicit-lib-dir}"
+RUNTIME_CONFIG_SIGNATURE=unrecorded
+RUNTIME_SHA256=unrecorded
+BOUNDSCHECK_SHA256=unrecorded
 
 write_status() {
   local status_dir tmp
@@ -54,6 +63,10 @@ write_status() {
     echo "OHOS_HOST=$OHOS_HOST_STATE"
     echo "OHOS_HOST_SOURCE=$OHOS_HOST_SOURCE"
     echo "OHOS_HOST_FILTERS=$OHOS_HOST_FILTERS"
+    echo "RUNTIME_CONFIG_ID=$RUNTIME_CONFIG_ID"
+    echo "RUNTIME_CONFIG_SIGNATURE=$RUNTIME_CONFIG_SIGNATURE"
+    echo "RUNTIME_SHA256=$RUNTIME_SHA256"
+    echo "BOUNDSCHECK_SHA256=$BOUNDSCHECK_SHA256"
     echo "REASON=$STATUS_REASON"
   } >"$tmp"
   mv -f "$tmp" "$STATUS_FILE"
@@ -152,21 +165,47 @@ if [[ "$LANGUAGE_TEST_MODE" != "only" && ! -f "$SRC/test_defect_regressions.cpp"
   exit 2
 fi
 
-if [[ -z "${GCV2_RUNTIME_LIB_DIR:-}" ]]; then
-  for cand in \
-    "$ROOT/runtime/output/temp/lib/x86_64_Release" \
-    "$ROOT/runtime/output/temp/lib/x86_64_Relwithdebinfo"; do
-    if [[ -f "$cand/libcangjie-runtime.so" ]]; then
-      export GCV2_RUNTIME_LIB_DIR="$cand"
-      break
-    fi
-  done
+if [[ -n "${GCV2_RUNTIME_CONFIG:-}" ]]; then
+  resolved_config_lib=$(bash "$ROOT/runtime/build/resolve_runtime_output.sh" \
+    "$ROOT/runtime" "$GCV2_RUNTIME_CONFIG") || {
+      STATUS_REASON=RUNTIME_CONFIG_MISMATCH
+      exit 2
+  }
+  if [[ -n "${GCV2_RUNTIME_LIB_DIR:-}" &&
+        "$(realpath "$GCV2_RUNTIME_LIB_DIR")" != "$resolved_config_lib" ]]; then
+    STATUS_REASON=RUNTIME_CONFIG_MISMATCH
+    echo "GC_UNIT_GATE_FAIL: explicit library directory does not match GCV2_RUNTIME_CONFIG" >&2
+    exit 2
+  fi
+  GCV2_RUNTIME_LIB_DIR="$resolved_config_lib"
+  GCV2_RUNTIME_OUTPUT_ROOT="$ROOT/runtime/output/temp/$GCV2_RUNTIME_CONFIG"
+  export GCV2_RUNTIME_LIB_DIR
+  export GCV2_RUNTIME_OUTPUT_ROOT
+elif [[ -z "${GCV2_RUNTIME_LIB_DIR:-}" ]]; then
+  STATUS_REASON=MISSING_RUNTIME_CONFIG
+  echo "GC_UNIT_GATE_FAIL: set GCV2_RUNTIME_CONFIG or GCV2_RUNTIME_LIB_DIR" >&2
+  exit 2
 fi
 if [[ -z "${GCV2_RUNTIME_LIB_DIR:-}" || ! -f "$GCV2_RUNTIME_LIB_DIR/libcangjie-runtime.so" ]]; then
   STATUS_REASON=MISSING_RUNTIME
   echo "GC_UNIT_GATE_FAIL: no libcangjie-runtime.so (set GCV2_RUNTIME_LIB_DIR)" >&2
   exit 2
 fi
+if [[ -n "${GCV2_RUNTIME_CONFIG:-}" ]]; then
+  RUNTIME_CONFIG_ID="$GCV2_RUNTIME_CONFIG"
+  config_manifest="$ROOT/runtime/output/temp/$RUNTIME_CONFIG_ID/runtime-build-config.txt"
+  RUNTIME_CONFIG_SIGNATURE=$(/usr/bin/sed -n 's/^CONFIG_SIGNATURE_SHA256=//p' "$config_manifest")
+fi
+if [[ -z "${GCV2_RUNTIME_OUTPUT_ROOT:-}" ]]; then
+  GCV2_RUNTIME_OUTPUT_ROOT=$(python3 "$ROOT/runtime/build/resolve_runtime_headers.py" \
+    "$ROOT/runtime" "$GCV2_RUNTIME_LIB_DIR")
+  export GCV2_RUNTIME_OUTPUT_ROOT
+fi
+RUNTIME_SHA256=$(sha256sum "$GCV2_RUNTIME_LIB_DIR/libcangjie-runtime.so" | awk '{print $1}')
+if [[ -f "$GCV2_RUNTIME_LIB_DIR/libboundscheck.so" ]]; then
+  BOUNDSCHECK_SHA256=$(sha256sum "$GCV2_RUNTIME_LIB_DIR/libboundscheck.so" | awk '{print $1}')
+fi
+echo "GC_UNIT_RUNTIME_IDENTITY config=$RUNTIME_CONFIG_ID signature=$RUNTIME_CONFIG_SIGNATURE runtime_sha256=$RUNTIME_SHA256 boundscheck_sha256=$BOUNDSCHECK_SHA256 lib_dir=$GCV2_RUNTIME_LIB_DIR"
 
 # The OHOS-host arm is a separate product shape and a focused three-process
 # suite. It must neither borrow the default suite's stamp nor depend on a Cangjie
@@ -189,6 +228,17 @@ if [[ "$OHOS_HOST" == "1" ]]; then
     STATUS_REASON=OHOS_HOST_TIMEOUT
     echo "GC_UNIT_GATE_FAIL: OHOS-host suite timed out after ${GC_UNIT_TIMEOUT}s" >&2
     exit 6
+  fi
+  # An explicitly reused ELF performs no compilation; its product ownership
+  # and receipt are checked by the runner below. Only a fresh compile emits
+  # the header-selection record.
+  if [[ -z "${GC_UNIT_OHOS_HOST_TEST_ELF:-}" ]] && ! /usr/bin/grep -Fqx \
+      "GC_UNIT_OHOS_HOST_HEADER_ROOT=$GCV2_RUNTIME_OUTPUT_ROOT/include" \
+      "$GC_UNIT_OUT/ohos_host_gate.log"; then
+    STATUS_REASON=OHOS_HOST_HEADER_ROOT_MISMATCH
+    echo "GC_UNIT_GATE_FAIL: OHOS-host compiler did not use the selected configuration header root" >&2
+    tail -20 "$GC_UNIT_OUT/ohos_host_gate.log" >&2 || true
+    exit 1
   fi
   if [[ $ohos_rc -ne 0 || ! -f "$OHOS_RECEIPT" ]] ||
       ! /usr/bin/grep -qx 'RESULT=PASS' "$OHOS_RECEIPT" ||

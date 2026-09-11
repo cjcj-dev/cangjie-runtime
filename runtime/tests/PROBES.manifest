@@ -22,6 +22,8 @@
 #
 # <file>                                  <status>   <what it needs / why it is here>
 
+test_runtime_copied_headers.py            manual     real copied-SO header identity regression; requires a published runtime pair and isolated work directory
+
 slot_type_split_compile_probe.cpp         configure  three-arm negative compile gate for HeapSlot/RootSlot/DerivedSlot
 mark_generation_compile_probe.cpp         configure  control plus young-as-old and old-as-young negative compile gates for MarkView
 colour_state_machine_probe.cpp            configure  compile-time colour state machine table: 32-epoch formula equivalence against a literal copy, DROP_BIT collision counts (None/Ghost must be 0, each family > 0), and three inject arms
@@ -43,6 +45,9 @@ run_typeinfo_reuse_probe.sh               manual     built runtime SO; dlopen/dl
 run_elf_unload_quiescence.sh              manual     testable product runtime SO + Cangjie SDK; real dylib unload reader/directory/type/static-root groups and public PackageInfo snapshot traversal
 run_zgc_self_heal_loop_probe.sh           manual     built runtime SO; scripts a lost CAS to drive the ported ZBarrier::self_heal loop through its :103-107 retry and :98-101 fast-path-exit arms, which the workload leaves cold
 test_runtime_provenance.py                manual     host git+cmake; git/dirty and repository-free source-content identities, declaration isolation, and unchanged-output mtime
+test_runtime_output_layout.cmake          manual     real-product build-time publication regression entry; requires TEST_RUNTIME_OUTPUT_WORK
+test_runtime_output_product.py            manual     real runtime configure/build/resolver, repeat publication and toolchain/initial-cache/arbitrary/indirect/override input isolation
+test_resolve_runtime_output.sh             manual     shell fixture; configuration manifest selection, product hashes, and mismatched-identity negative arm
 run_string_dedup_product.sh               manual     rebuilt std.core module + product SO + runtime SO; full/range, detach, unequal, and 32-way concurrent request arms
 
 stack_watermark_harness.cpp               manual     harness for run_stack_watermark_probe.sh

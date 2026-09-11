@@ -32,6 +32,8 @@ touch "$mw_fixture/lib/libcangjie-runtime.so"
 mw_count="$mw_fixture/analyzer.count"
 mw_arm_trace="$mw_fixture/arm.trace"
 mw_out="$mw_fixture/out"
+# This synthetic AST fixture owns its headers; it has no published product pair.
+export GCV2_RUNTIME_OUTPUT_ROOT="$mw_fixture/runtime"
 PATH="$mw_fixture/bin:$PATH" CXX="$mw_fixture/bin/cxx" CJRT_HEAP_FILLER=default \
   MUTUALWAIT_FIXTURE_COUNT="$mw_count" GCV2_RUNTIME_LIB_DIR="$mw_fixture/lib" \
   MUTUALWAIT_FIXTURE_ARM_TRACE="$mw_arm_trace" \
@@ -61,12 +63,18 @@ echo "MUTUALWAIT_RUN_STANDALONE_PAIR_OK"
 # The parent gate supplies its own compiler, runtime, status, mode, and skip
 # controls.  Each fixture arm below owns all of those inputs; inheriting even
 # one can turn a negative arm into a false PASS.
-unset CANGJIE_HOME CJC GCV2_RUNTIME_LIB_DIR MRT_TESTABLE_INTERNALS \
+unset CANGJIE_HOME CJC GCV2_RUNTIME_LIB_DIR GCV2_RUNTIME_CONFIG \
+  GCV2_RUNTIME_OUTPUT_ROOT MRT_TESTABLE_INTERNALS \
   GC_UNIT_GATE_LANGUAGE_TESTS GC_UNIT_GATE_SKIP GC_UNIT_GATE_STATUS \
   GC_UNIT_OUT GC_UNIT_TALLY_FILE
-mkdir -p "$fixture/runtime/tests/gc_unit" "$fixture/runtime/src" "$fixture/lib" "$fixture/bin" \
+# Synthetic gate arms likewise supply their own header root. The copied-pair
+# integration regression exercises automatic publication lookup with real SOs.
+export GCV2_RUNTIME_OUTPUT_ROOT="$fixture/selected-output"
+mkdir -p "$fixture/runtime/tests/gc_unit" "$fixture/runtime/src" "$fixture/runtime/build" \
+  "$fixture/lib" "$fixture/bin" \
   "$fixture/sdk/bin"
 cp "$ROOT/runtime/tests/gc_unit/gate_gc_unit.sh" "$fixture/runtime/tests/gc_unit/"
+cp "$ROOT/runtime/build/resolve_runtime_output.sh" "$fixture/runtime/build/"
 printf '#!/usr/bin/env bash\n# test_x.cpp\necho CPP_SUITE >>"${GC_UNIT_GATE_TRACE:?}"\nmkdir -p "$(dirname "${GC_UNIT_TALLY_FILE:?}")"\necho "[========] 1 tests: 1 passed, 0 failed" >"$GC_UNIT_TALLY_FILE"\nexit 0\n' >"$fixture/runtime/tests/gc_unit/run_standalone.sh"
 printf '#!/usr/bin/env bash\necho FINALIZER_TRIGGER >>"${GC_UNIT_GATE_TRACE:?}"\nexit 0\n' >"$fixture/runtime/tests/gc_unit/run_finalizer_trigger.sh"
 printf '#!/usr/bin/env bash\necho PHASE_ENTRY_TRIGGER >>"${GC_UNIT_GATE_TRACE:?}"\nexit 0\n' >"$fixture/runtime/tests/gc_unit/run_phase_entry_trigger.sh"
@@ -80,8 +88,93 @@ printf 'placeholder\n' >"$fixture/runtime/tests/gc_unit/phase_entry_major.cj"
 printf 'test_x.cpp\n' >"$fixture/runtime/tests/gc_unit/CMakeLists.txt"
 touch "$fixture/runtime/tests/gc_unit/known_failures.txt"
 printf 'placeholder\n' >"$fixture/lib/libcangjie-runtime.so"
+printf 'placeholder\n' >"$fixture/lib/libboundscheck.so"
 printf '#!/usr/bin/env bash\nexit 0\n' >"$fixture/bin/nm"
 chmod +x "$fixture/bin/nm"
+
+# The OHOS-host compiler must consume generated headers from the same output
+# identity as the selected runtime SO.  Keep the runner otherwise successful
+# in the negative arm so the exact path assertion, rather than an earlier
+# compilation or receipt failure, is what turns red.
+cp "$fixture/runtime/tests/gc_unit/run_standalone.sh" "$fixture/default-runner.sh"
+printf '#!/usr/bin/env bash\nheader_root=${GC_UNIT_OHOS_HEADER_ROOT_TOKEN:-${GCV2_RUNTIME_OUTPUT_ROOT:?}/include}\nreceipt=${GC_UNIT_OHOS_HOST_RECEIPT:-${GC_UNIT_OUT:?}/ohos_host.receipt}\necho "GC_UNIT_OHOS_HOST_HEADER_ROOT=$header_root"\nprintf "RESULT=PASS\\nFILTER_MAJOR=PASS\\nFILTER_POST=PASS\\nFILTER_EMPTY=PASS\\n" >"$receipt"\nexit 0\n' \
+  >"$fixture/runtime/tests/gc_unit/run_standalone.sh"
+chmod +x "$fixture/runtime/tests/gc_unit/run_standalone.sh"
+ohos_output_root="$fixture/selected-output"
+mkdir -p "$ohos_output_root/include"
+PATH="$fixture/bin:$PATH" GC_UNIT_GATE_CONTRACT_SELFTEST=1 MRT_GC_UNIT_OHOS_HOST=1 \
+  GCV2_RUNTIME_OUTPUT_ROOT="$ohos_output_root" GCV2_RUNTIME_LIB_DIR="$fixture/lib" \
+  GC_UNIT_OUT="$fixture/ohos-good-out" GC_UNIT_GATE_STATUS="$fixture/ohos-good.status" \
+  bash "$fixture/runtime/tests/gc_unit/gate_gc_unit.sh" >"$fixture/ohos-good.log" 2>&1
+set +e
+PATH="$fixture/bin:$PATH" GC_UNIT_GATE_CONTRACT_SELFTEST=1 MRT_GC_UNIT_OHOS_HOST=1 \
+  GCV2_RUNTIME_OUTPUT_ROOT="$ohos_output_root" GCV2_RUNTIME_LIB_DIR="$fixture/lib" \
+  GC_UNIT_OHOS_HEADER_ROOT_TOKEN="$fixture/stale-output/include" \
+  GC_UNIT_OUT="$fixture/ohos-mismatch-out" GC_UNIT_GATE_STATUS="$fixture/ohos-mismatch.status" \
+  bash "$fixture/runtime/tests/gc_unit/gate_gc_unit.sh" >"$fixture/ohos-mismatch.log" 2>&1
+ohos_mismatch_rc=$?
+set -e
+[[ $ohos_mismatch_rc -eq 1 ]]
+/usr/bin/grep -qx 'REASON=OHOS_HOST_HEADER_ROOT_MISMATCH' "$fixture/ohos-mismatch.status"
+/usr/bin/grep -q 'compiler did not use the selected configuration header root' \
+  "$fixture/ohos-mismatch.log"
+printf 'OHOS header identity: rc=0 mismatch_rc=%s root=%s/include\n' \
+  "$ohos_mismatch_rc" "$ohos_output_root"
+# Reusing an explicitly supplied ELF does not compile headers. The runner's
+# receipt remains mandatory, but a fresh-compilation record is not required.
+PATH="$fixture/bin:$PATH" GC_UNIT_GATE_CONTRACT_SELFTEST=1 MRT_GC_UNIT_OHOS_HOST=1 \
+  GCV2_RUNTIME_OUTPUT_ROOT="$ohos_output_root" GCV2_RUNTIME_LIB_DIR="$fixture/lib" \
+  GC_UNIT_OHOS_HOST_TEST_ELF="$fixture/reused-elf" \
+  GC_UNIT_OHOS_HEADER_ROOT_TOKEN=not-a-fresh-compile \
+  GC_UNIT_OUT="$fixture/ohos-reused-out" GC_UNIT_GATE_STATUS="$fixture/ohos-reused.status" \
+  bash "$fixture/runtime/tests/gc_unit/gate_gc_unit.sh" >"$fixture/ohos-reused.log" 2>&1
+/usr/bin/grep -qx 'GATE=PASS' "$fixture/ohos-reused.status"
+echo 'OHOS explicit ELF reuse: rc=0 receipt=PASS'
+mv "$fixture/default-runner.sh" "$fixture/runtime/tests/gc_unit/run_standalone.sh"
+
+# Configuration selection is a gate input, not a directory scan.  Prove the
+# requested manifest is accepted and an explicit path from another
+# configuration is rejected before either product can reach the suite.
+config_id=linux-x86_64-release-default-111111111111
+config_lib="$fixture/runtime/output/temp/$config_id/lib/x86_64_Release"
+mkdir -p "$config_lib" "$fixture/other-lib"
+printf 'runtime-configured\n' >"$config_lib/libcangjie-runtime.so"
+printf 'bounds-configured\n' >"$config_lib/libboundscheck.so"
+printf 'runtime-other\n' >"$fixture/other-lib/libcangjie-runtime.so"
+printf '%s\n' \
+  'SCHEMA_VERSION=1' \
+  "CONFIG_ID=$config_id" \
+  'CONFIG_SIGNATURE_SHA256=1111111111111111111111111111111111111111111111111111111111111111' \
+  "RUNTIME_SHA256=$(sha256sum "$config_lib/libcangjie-runtime.so" | awk '{print $1}')" \
+  "BOUNDSCHECK_SHA256=$(sha256sum "$config_lib/libboundscheck.so" | awk '{print $1}')" \
+  "LIB_DIR=$config_lib" >"$fixture/runtime/output/temp/$config_id/runtime-build-config.txt"
+
+PATH="$fixture/bin:$PATH" GC_UNIT_GATE_TRACE="$fixture/config.trace" \
+  GC_UNIT_OUT="$fixture/config-out" GC_UNIT_GATE_CONTRACT_SELFTEST=1 \
+  GC_UNIT_GATE_LANGUAGE_TESTS=defer GCV2_RUNTIME_CONFIG="$config_id" \
+  GCV2_RUNTIME_LIB_DIR="$config_lib" \
+  bash "$fixture/runtime/tests/gc_unit/gate_gc_unit.sh" >"$fixture/config.log" 2>&1
+config_status="$config_lib/gc_unit_gate.status"
+if [[ ! -f "$config_status" ]]; then
+  echo "CONFIG_STATUS_LOCATION_FAIL: expected status beside selected runtime: $config_status" >&2
+  exit 1
+fi
+/usr/bin/grep -qx "RUNTIME_CONFIG_ID=$config_id" "$config_status"
+/usr/bin/grep -Eq '^RUNTIME_SHA256=[0-9a-f]{64}$' "$config_status"
+/usr/bin/grep -Eq '^BOUNDSCHECK_SHA256=[0-9a-f]{64}$' "$config_status"
+/usr/bin/grep -q "GC_UNIT_RUNTIME_IDENTITY config=$config_id" "$fixture/config.log"
+
+set +e
+PATH="$fixture/bin:$PATH" GC_UNIT_GATE_CONTRACT_SELFTEST=1 \
+  GC_UNIT_GATE_LANGUAGE_TESTS=defer GCV2_RUNTIME_CONFIG="$config_id" \
+  GCV2_RUNTIME_LIB_DIR="$fixture/other-lib" GC_UNIT_GATE_STATUS="$fixture/config-mismatch.status" \
+  bash "$fixture/runtime/tests/gc_unit/gate_gc_unit.sh" >"$fixture/config-mismatch.log" 2>&1
+config_mismatch_rc=$?
+set -e
+[[ $config_mismatch_rc -eq 2 ]]
+/usr/bin/grep -qx 'REASON=RUNTIME_CONFIG_MISMATCH' "$fixture/config-mismatch.status"
+/usr/bin/grep -q 'explicit library directory does not match' "$fixture/config-mismatch.log"
+printf 'CONFIG selection: rc=0 mismatch_rc=%s id=%s\n' "$config_mismatch_rc" "$config_id"
 
 set +e
 PATH="$fixture/bin:$PATH" CJC=/nonexistent MRT_TESTABLE_INTERNALS=1 \
