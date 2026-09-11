@@ -97,7 +97,7 @@ public:
     static MutatorManager& Instance() noexcept;
 
     void Init();
-    void Fini() { SatbBuffer::Instance().Fini(); }
+    void Fini() { SatbBuffer::FiniGenerations(); }
 
     // Get the mutator list instance
     size_t GetMutatorCount()

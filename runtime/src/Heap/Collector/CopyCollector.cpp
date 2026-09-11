@@ -71,10 +71,10 @@ void CopyCollector::RunGarbageCollection(uint64_t gcIndex, GCReason reason)
     ScopedSTWLock stwLock;
     // ScopedStopTheWorld stw;
 
-    gcReason = reason;
+    SelectCycle(reason);
     PreGarbageCollection(reason != GC_REASON_YOUNG, gcIndex);
     ScheduleTraceEvent(TRACE_EV_GC_START, -1, nullptr, 0);
-    VLOG(REPORT, "[GC] Start %s %s gcIndex= %lu", GetCollectorName(), g_gcRequests[gcReason].name, gcIndex);
+    VLOG(REPORT, "[GC] Start %s %s gcIndex= %lu", GetCollectorName(), g_gcRequests[GetCycleReason()].name, gcIndex);
     GCStats& gcStats = GetGCStats();
     gcStats.collectedBytes = 0;
     gcStats.youngCandidateBytes = 0;
@@ -151,6 +151,7 @@ void CopyCollector::RunGarbageCollection(uint64_t gcIndex, GCReason reason)
         }
         gcStats.isTimeTrustable.store(true, std::memory_order_relaxed);
     }
+    ActiveCycle().End();
     collectorResources.NotifyGCPhaseFinished(gcIndex);
 }
 
@@ -168,7 +169,7 @@ void CopyCollector::ForwardFromSpace()
     const char* poolKind = "shared";
     int32_t previousActiveHelpers = 0;
     bool restoreActiveHelpers = false;
-    if (gcReason == GC_REASON_YOUNG) {
+    if (GetCycleReason() == GC_REASON_YOUNG) {
         const char* forceSerialEnv = std::getenv("MRT_GCV2_EVACPAR_FORCE_SERIAL");
         const bool forceSerial =
             forceSerialEnv != nullptr && std::strcmp(forceSerialEnv, "1") == 0;
@@ -222,7 +223,7 @@ void CopyCollector::ForwardFromSpace()
              static_cast<unsigned>(copyPool != nullptr), workers, stats.fromSpaceSize, bytesPerWorker, maxWorkers,
              poolKind, static_cast<unsigned>(forceSerial), static_cast<unsigned>(workGate));
     }
-    if (gcReason == GC_REASON_YOUNG) {
+    if (GetCycleReason() == GC_REASON_YOUNG) {
         space.ForwardFromSpace<Generation::Young>(copyPool);
     } else {
         space.ForwardFromSpace<Generation::Old>(copyPool);

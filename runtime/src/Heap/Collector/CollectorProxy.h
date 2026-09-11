@@ -35,6 +35,12 @@ public:
         return currentCollector != nullptr ? currentCollector->GetGCPhase() : GCPhase::GC_PHASE_UNDEF;
     }
 
+    GCCycleSnapshot GetCycleSnapshot(GCCycleGeneration generation) const override
+    {
+        return currentCollector != nullptr ? currentCollector->GetCycleSnapshot(generation)
+                                           : Collector::GetCycleSnapshot(generation);
+    }
+
     void SetGCPhase(const GCPhase phase) override { currentCollector->SetGCPhase(phase); }
 
     // dispatch garbage collection to the right collector

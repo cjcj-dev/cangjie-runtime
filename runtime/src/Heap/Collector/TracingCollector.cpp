@@ -1248,13 +1248,16 @@ void TracingCollector::DumpRoots(LogType logType)
 
 void TracingCollector::PreGarbageCollection(bool isConcurrent, uint64_t gcIndex)
 {
+    ActiveCycle().Begin(gcIndex);
     ResetSkippedStackMapCounts();
     VLOG(REPORT, "Begin GC log. GCReason: %s, Current allocated %s, Current threshold %s, current tag %u",
-         g_gcRequests[gcReason].name, Pretty(Heap::GetHeap().GetAllocatedSize()).Str(),
+         g_gcRequests[GetCycleReason()].name, Pretty(Heap::GetHeap().GetAllocatedSize()).Str(),
          Pretty(Heap::GetHeap().GetCollector().GetGCStats().GetThreshold()).Str(),
          static_cast<unsigned>(GetCurrentTagID()));
 
     // SatbBuffer should be initialized before concurrent enumeration.
+    SatbBuffer::SelectGeneration(GetCycleReason() == GC_REASON_YOUNG
+        ? GCCycleGeneration::YOUNG : GCCycleGeneration::OLD);
     SatbBuffer::Instance().Init();
     // prepare thread pool.
     GCThreadPool* threadPool = GetThreadPool();
@@ -1267,7 +1270,7 @@ void TracingCollector::PreGarbageCollection(bool isConcurrent, uint64_t gcIndex)
     VLOG(REPORT, "GC active thread count: concurrent=%d total=%d helpers=%d pool-active=%d", isConcurrent,
          threadCount, threadCount - 1, threadPool->GetMaxActiveThreadNum());
 
-    GetGCStats().reason = gcReason;
+    GetGCStats().reason = GetCycleReason();
     GetGCStats().async = (gcIndex == GCTask::ASYNC_TASK_INDEX);
     GetGCStats().isConcurrentMark = isConcurrent;
 #if defined(MRT_DEBUG) && (MRT_DEBUG == 1)

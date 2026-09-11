@@ -14,6 +14,7 @@
 #include <cstdint>
 #include <cstdlib>
 #include <functional>
+#include <mutex>
 #include <set>
 #include <vector>
 
@@ -37,6 +38,38 @@ enum GCPhase : uint8_t {
     GC_PHASE_POST_TRACE = 12,
     GC_PHASE_PREFORWARD = 13,
     GC_PHASE_FORWARD = 14,
+};
+
+// Per-generation execution state. The snapshot lock publishes cycle identity
+// and phase together; the phase atomic serves existing barrier readers.
+// ZGC: zGeneration.hpp:65-78 (generation-owned phase and sequence).
+enum class GCCycleGeneration : uint8_t { YOUNG, OLD };
+struct GCCycleSnapshot {
+    GCCycleGeneration generation;
+    uint64_t sequence;
+    uint64_t requestIndex;
+    GCReason reason;
+    GCPhase phase;
+    bool active;
+};
+class GenerationCycle {
+public:
+    explicit GenerationCycle(GCCycleGeneration generation) : generation(generation) {}
+    GCCycleSnapshot Snapshot() const;
+    GCPhase Phase() const { return phase.load(std::memory_order_acquire); }
+    GCReason Reason() const { return reason.load(std::memory_order_acquire); }
+    void SelectReason(GCReason value);
+    void Begin(uint64_t index);
+    void PublishPhase(GCPhase value);
+    void End();
+private:
+    const GCCycleGeneration generation;
+    mutable std::mutex mutex;
+    uint64_t sequence = 0;
+    uint64_t requestIndex = 0;
+    std::atomic<GCReason> reason { GC_REASON_USER };
+    std::atomic<GCPhase> phase { GC_PHASE_IDLE };
+    bool active = false;
 };
 
 enum CollectorType {
@@ -473,9 +506,15 @@ public:
     //         In order to prevent deadlocks, async trigger only add one async gc task and will not block.
     void RequestGC(GCReason reason, bool async);
 
-    virtual GCPhase GetGCPhase() const { return gcPhase.load(std::memory_order_acquire); }
+    virtual GCPhase GetGCPhase() const { return ActiveCycle().Phase(); }
 
-    virtual void SetGCPhase(const GCPhase phase) { gcPhase.store(phase, std::memory_order_release); }
+    virtual void SetGCPhase(const GCPhase phase) { ActiveCycle().PublishPhase(phase); }
+
+    virtual GCCycleSnapshot GetCycleSnapshot(GCCycleGeneration generation) const
+    {
+        return (generation == GCCycleGeneration::YOUNG ? youngCycle : oldCycle).Snapshot();
+    }
+    GCReason GetCycleReason() const { return ActiveCycle().Reason(); }
 
     // determine how we treat new object during gc.
     virtual void MarkNewObject(BaseObject*) {}
@@ -738,7 +777,18 @@ protected:
     virtual void RequestGCInternal(GCReason, bool) { AbortUnimplemented("Collector::RequestGCInternal"); }
 
     CollectorType collectorType = CollectorType::NO_COLLECTOR;
-    std::atomic<GCPhase> gcPhase = { GCPhase::GC_PHASE_IDLE };
+    // Serial bridge only: both drivers still hold driverLock for the full
+    // lifecycle. Workers observe the explicitly selected owner, never TLS.
+    GenerationCycle& ActiveCycle() const { return *activeCycle.load(std::memory_order_acquire); }
+    void SelectCycle(GCReason reason)
+    {
+        GenerationCycle* cycle = reason == GC_REASON_YOUNG ? &youngCycle : &oldCycle;
+        cycle->SelectReason(reason);
+        activeCycle.store(cycle, std::memory_order_release);
+    }
+    GenerationCycle youngCycle { GCCycleGeneration::YOUNG };
+    GenerationCycle oldCycle { GCCycleGeneration::OLD };
+    std::atomic<GenerationCycle*> activeCycle { &oldCycle };
 };
 } // namespace MapleRuntime
 
