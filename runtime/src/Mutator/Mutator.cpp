@@ -27,6 +27,7 @@
 #include "ObjectModel/MArray.h"
 #endif
 #include "MutatorManager.h"
+#include "PreForwardBaseMap.h"
 #include "StackManager.h"
 #include "UnwindStack/StackFrameCursor.h"
 #include "ExceptionManager.h"
@@ -985,13 +986,23 @@ void VisitTaggedOopSlot(ObjectRef& root)
     BaseObject* obj = PlainRootObject(root.LoadPlain());
     if (Heap::IsHeapAddress(obj)) {
         if (phase == GCPhase::GC_PHASE_PREFORWARD) {
+            auto* remappedBases = PreForwardBaseMapScope::Current();
+            if (remappedBases == nullptr) {
+                Collector::FailClosedLoad("VisitTaggedOopSlot.preforward-base-map-missing", obj,
+                    reinterpret_cast<uintptr_t>(&root),
+                    ForwardingProvenance{ ForwardingHolderKind::StackSlot, nullptr, &root });
+            }
             Collector& collector = Heap::GetHeap().GetCollector();
             if (collector.IsGhostFromObject(obj) && !collector.IsUnmovableFromObject(obj)) {
                 BaseObject* toObj = collector.ForwardObject(obj);
-                if (toObj != nullptr && obj != toObj) {
+                if (toObj == nullptr) {
+                    return;
+                }
+                if (obj != toObj) {
                     HealRoot(root, from_object(toObj), HealSite::MutatorPreForwardRoot);
                 }
             }
+            (*remappedBases)[obj] = PlainRootObject(root.LoadPlain());
         } else {
             PushHeapRootIfPlausible(obj, "OopSlot");
         }
@@ -1287,6 +1298,11 @@ inline void Mutator::GCPhasePreForward(GCPhase newPhase)
                         HealSite::MutatorPreForwardInterior);
                 }
             }
+            // Only publish a proven host solution. An unrecovered interior is
+            // not identity: derived must fail closed at base-not-remapped.
+            if (host != nullptr) {
+                remappedBases[oldObj] = PlainRootObject(root.LoadPlain());
+            }
             return;
         }
         if (Heap::IsHeapAddress(oldObj) && collector.IsGhostFromObject(oldObj) &&
@@ -1338,7 +1354,10 @@ inline void Mutator::GCPhasePreForward(GCPhase newPhase)
             const auto found = remappedBases.find(oldBase);
             return found == remappedBases.end() ? nullptr : found->second;
         });
-    VisitHeapReferences(visitor, derivedPtrVisitor);
+    {
+        PreForwardBaseMapScope scope(remappedBases);
+        VisitHeapReferences(visitor, derivedPtrVisitor);
+    }
     ForwardLocalFinalizers(collector);
 }
 
