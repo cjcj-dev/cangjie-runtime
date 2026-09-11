@@ -36,6 +36,7 @@
 #include "Mutator/Mutator.h"
 #include "Mutator/ThreadLocal.h"
 #include "Mutator/MutatorManager.h"
+#include "Mutator/PreForwardBaseMap.h"
 #include "Loader/ElfUnloadQuiescence.h"
 #include "ObjectModel/RefField.inline.h"
 #include "ObjectModel/MArray.inline.h"
@@ -2760,6 +2761,53 @@ GC_TEST(ForwardingPublicationProduct, ArmedMissAfterPublicationCloseFailsClosed)
     RelocationReceiptTestAccess::BindCollector(Heap::GetHeap().GetCollectorResources(), nullptr);
 }
 
+GC_OTHER_VM_TEST(ForwardingPublicationProduct, PreForwardTaggedMissingScopeFailsClosed)
+{
+    GcHeapFixture& fx = ProductFixture();
+    WCollector collector(Heap::GetHeap().GetAllocator(), Heap::GetHeap().GetCollectorResources());
+    RelocationReceiptTestAccess::BindCollector(Heap::GetHeap().GetCollectorResources(), &collector);
+    collector.SetGCPhase(GCPhase::GC_PHASE_PREFORWARD);
+    RootSlot root;
+    StorePlain(root, from_object(fx.obj0));
+    AbortCapture result = CaptureAbort([&]() { VisitTaggedOopSlot(root); });
+    std::fprintf(stderr, "MISSING_BASE_MAP_RESULT status=%d\n%s", result.status, result.output.c_str());
+    collector.SetGCPhase(GCPhase::GC_PHASE_IDLE);
+    RelocationReceiptTestAccess::BindCollector(Heap::GetHeap().GetCollectorResources(), nullptr);
+    GC_EXPECT_TRUE(result.output.find("site=VisitTaggedOopSlot.preforward-base-map-missing") != std::string::npos);
+    GC_EXPECT_TRUE(WIFSIGNALED(result.status));
+    GC_EXPECT_EQ(WTERMSIG(result.status), SIGABRT);
+}
+
+GC_TEST(ForwardingPublicationProduct, PreForwardBaseMapScopeRestoresNestedScan)
+{
+    PreForwardBaseMapScope::Map outer;
+    PreForwardBaseMapScope::Map inner;
+    auto* previous = PreForwardBaseMapScope::Current();
+    bool restoredOuter = false;
+    bool isolatedThread = false;
+    {
+        PreForwardBaseMapScope outerScope(outer);
+        GC_EXPECT_TRUE(PreForwardBaseMapScope::Current() == &outer);
+        {
+            PreForwardBaseMapScope innerScope(inner);
+            GC_EXPECT_TRUE(PreForwardBaseMapScope::Current() == &inner);
+        }
+        restoredOuter = PreForwardBaseMapScope::Current() == &outer;
+        std::thread worker([&]() {
+            isolatedThread = PreForwardBaseMapScope::Current() == nullptr;
+            PreForwardBaseMapScope workerScope(inner);
+            isolatedThread = isolatedThread && PreForwardBaseMapScope::Current() == &inner;
+        });
+        worker.join();
+        GC_EXPECT_TRUE(PreForwardBaseMapScope::Current() == &outer);
+    }
+    std::fprintf(stderr, "BASE_MAP_SCOPE_RESULT nested=%d isolated=%d restored=%d\n",
+                 restoredOuter, isolatedThread, PreForwardBaseMapScope::Current() == previous);
+    GC_EXPECT_TRUE(restoredOuter);
+    GC_EXPECT_TRUE(isolatedThread);
+    GC_EXPECT_TRUE(PreForwardBaseMapScope::Current() == previous);
+}
+
 // A managed frame is input data to the real mutator phase entry. Keep the
 // descriptor in the loaded test image so the product metadata lifetime check
 // can establish its identity; no stack scanner or resolver is replaced here.
@@ -2774,7 +2822,7 @@ struct DerivedBaseMapImage {
 };
 DerivedBaseMapImage derivedBaseMapImage;
 
-void RunDerivedBaseProducer(bool interior, bool tagged)
+void RunDerivedBaseProducer(bool interior, bool tagged, bool moving = false)
 {
     auto& image = derivedBaseMapImage;
     std::memset(&image, 0, sizeof(image));
@@ -2806,8 +2854,11 @@ void RunDerivedBaseProducer(bool interior, bool tagged)
     GcHeapFixture& fx = ProductFixture();
     WCollector collector(Heap::GetHeap().GetAllocator(), Heap::GetHeap().GetCollectorResources());
     RelocationReceiptTestAccess::BindCollector(Heap::GetHeap().GetCollectorResources(), &collector);
+    LateBackfillState state {};
+    if (moving) { state = PrepareValueRootForwarding(fx, collector); }
     collector.SetGCPhase(GCPhase::GC_PHASE_PREFORWARD);
-    const uintptr_t base = reinterpret_cast<uintptr_t>(fx.obj0) + (interior ? 8 : 0);
+    const uintptr_t base = reinterpret_cast<uintptr_t>(moving ? state.from : fx.obj0) + (interior ? 8 : 0);
+    const uintptr_t expected = reinterpret_cast<uintptr_t>(moving ? state.to : fx.obj0) + (interior ? 8 : 0);
     uintptr_t frame[8] = {};
     frame[0] = base;
     frame[1] = base + 8;
@@ -2817,28 +2868,43 @@ void RunDerivedBaseProducer(bool interior, bool tagged)
     context.frameInfo.mFrame.SetIP(image.pc);
     context.frameInfo.mFrame.SetFA(reinterpret_cast<FrameAddress*>(&frame[3]));
     context.anchorFA = nullptr;
-    std::fprintf(stderr, "DERIVED_BASE_INPUT interior=%d tagged=%d base=%zx derived=%zx\n",
-                 interior, tagged, frame[0], frame[1]);
+    std::fprintf(stderr, "DERIVED_BASE_INPUT interior=%d tagged=%d moving=%d base=%zx derived=%zx\n",
+                 interior, tagged, moving, frame[0], frame[1]);
     mutator.TransitionToGCPhaseExclusive(GCPhase::GC_PHASE_PREFORWARD, false);
-    std::fprintf(stderr, "DERIVED_BASE_RESULT base=%zx derived=%zx expected=%zx\n", frame[0], frame[1], base + 8);
-    GC_EXPECT_EQ(frame[0], base);
-    GC_EXPECT_EQ(frame[1], base + 8);
+    std::fprintf(stderr, "DERIVED_BASE_RESULT base=%zx derived=%zx expected=%zx\n", frame[0], frame[1], expected + 8);
+    const bool baseCorrect = frame[0] == expected;
+    const bool derivedCorrect = frame[1] == expected + 8;
+    if (moving) { CleanupLateBackfill(fx, state); }
     collector.SetGCPhase(GCPhase::GC_PHASE_IDLE);
     RelocationReceiptTestAccess::BindCollector(Heap::GetHeap().GetCollectorResources(), nullptr);
+    GC_EXPECT_TRUE(derivedCorrect);
+    GC_EXPECT_TRUE(baseCorrect);
 }
 }
 
-GC_TEST(ForwardingPublicationProduct, PreForwardDerivedInteriorBaseProducer)
+GC_OTHER_VM_TEST(ForwardingPublicationProduct, PreForwardDerivedInteriorBaseProducer)
 {
     RunDerivedBaseProducer(true, false);
 }
-GC_TEST(ForwardingPublicationProduct, PreForwardDerivedTaggedBaseProducer)
+GC_OTHER_VM_TEST(ForwardingPublicationProduct, PreForwardDerivedTaggedBaseProducer)
 {
     RunDerivedBaseProducer(false, true);
 }
-GC_TEST(ForwardingPublicationProduct, PreForwardDerivedOrdinaryBaseProducer)
+GC_OTHER_VM_TEST(ForwardingPublicationProduct, PreForwardDerivedOrdinaryBaseProducer)
 {
     RunDerivedBaseProducer(false, false);
+}
+GC_OTHER_VM_TEST(ForwardingPublicationProduct, PreForwardDerivedInteriorMovingBaseProducer)
+{
+    RunDerivedBaseProducer(true, false, true);
+}
+GC_OTHER_VM_TEST(ForwardingPublicationProduct, PreForwardDerivedTaggedMovingBaseProducer)
+{
+    RunDerivedBaseProducer(false, true, true);
+}
+GC_OTHER_VM_TEST(ForwardingPublicationProduct, PreForwardDerivedOrdinaryMovingBaseProducer)
+{
+    RunDerivedBaseProducer(false, false, true);
 }
 #endif
 
