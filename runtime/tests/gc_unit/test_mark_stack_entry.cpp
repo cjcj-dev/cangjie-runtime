@@ -4,10 +4,18 @@
 //
 // See https://cangjie-lang.cn/pages/LICENSE for license information.
 
+#include <cerrno>
+#include <cstdio>
+#include <dlfcn.h>
 #include <type_traits>
+#if defined(__linux__)
+#include <sys/wait.h>
+#include <unistd.h>
+#endif
 
 #include "Common/MarkWorkStack.h"
 #include "Heap/Collector/MarkStackEntry.h"
+#include "Heap/Collector/TracingCollector.h"
 #include "gc_unittest.hpp"
 
 using namespace MapleRuntime;
@@ -80,4 +88,144 @@ GC_TEST(MarkStackEntry, StackSplitPreservesPolicy)
     while (!stack.empty()) {
         stack.pop_back();
     }
+}
+
+namespace {
+#if defined(__linux__)
+int WaitChild(pid_t child)
+{
+    int childStatus = 0;
+    pid_t waited;
+    do {
+        waited = waitpid(child, &childStatus, 0);
+    } while (waited < 0 && errno == EINTR);
+    GC_EXPECT_EQ(waited, child);
+    return childStatus;
+}
+#endif
+
+void ExpectClearCompletes(size_t entries, size_t buffers)
+{
+#if defined(__linux__)
+    std::fflush(nullptr);
+    const pid_t child = fork();
+    GC_EXPECT_TRUE(child >= 0);
+    if (child == 0) {
+        MarkStack<MarkStackEntry> stack;
+        for (size_t i = 0; i < entries; ++i) {
+            stack.push_back(MarkStackEntry::PartialArray(i, 1));
+        }
+        if (stack.size() != buffers) {
+            std::fprintf(stderr, "MARK_STACK_CLEAR_SETUP_FAILED entries=%zu buffers=%zu\n", entries, stack.size());
+            _exit(2);
+        }
+        std::fprintf(stderr, "MARK_STACK_CLEAR_ENTER entries=%zu buffers=%zu\n", entries, stack.size());
+        stack.clear();
+        const bool cleared = stack.empty() && stack.size() == 0 &&
+            stack.head() == nullptr && stack.tail() == nullptr;
+        std::fprintf(stderr, "MARK_STACK_CLEAR_RESULT empty=%d\n", cleared);
+        _exit(cleared ? 0 : 3);
+    }
+    const int childStatus = WaitChild(child);
+    std::fprintf(stderr, "MARK_STACK_CLEAR_STATUS entries=%zu status=%d\n", entries, childStatus);
+    const bool clearCompletedAndEmpty = WIFEXITED(childStatus) && WEXITSTATUS(childStatus) == 0;
+    GC_EXPECT_TRUE(clearCompletedAndEmpty);
+#else
+    MarkStack<MarkStackEntry> stack;
+    for (size_t i = 0; i < entries; ++i) {
+        stack.push_back(MarkStackEntry::PartialArray(i, 1));
+    }
+    GC_EXPECT_EQ(stack.size(), buffers);
+    stack.clear();
+    GC_EXPECT_TRUE(stack.empty());
+    GC_EXPECT_EQ(stack.size(), 0U);
+    GC_EXPECT_TRUE(stack.head() == nullptr && stack.tail() == nullptr);
+#endif
+}
+
+using ProductClearFn = int (*)(size_t);
+
+ProductClearFn LoadProductClear()
+{
+    void* handle = dlopen("libcangjie-runtime.so", RTLD_NOW | RTLD_NOLOAD);
+    if (handle == nullptr) {
+        handle = dlopen("libcangjie-runtime.so", RTLD_NOW);
+    }
+    GC_EXPECT_TRUE(handle != nullptr);
+    auto fn = reinterpret_cast<ProductClearFn>(dlsym(handle, "MRT_ProductMarkStackClear"));
+    GC_EXPECT_TRUE(fn != nullptr);
+    return fn;
+}
+} // namespace
+
+GC_TEST(MarkStackClear, Empty)
+{
+    ExpectClearCompletes(0, 0);
+}
+
+GC_TEST(MarkStackClear, SingleBuffer)
+{
+    ExpectClearCompletes(1, 1);
+}
+
+GC_TEST(MarkStackClear, MultipleBuffers)
+{
+    ExpectClearCompletes(129, 3);
+}
+
+GC_TEST(MarkStackClear, DestructorAfterMultipleBuffers)
+{
+#if defined(__linux__)
+    std::fflush(nullptr);
+    const pid_t child = fork();
+    GC_EXPECT_TRUE(child >= 0);
+    if (child == 0) {
+        {
+            MarkStack<MarkStackEntry> stack;
+            for (size_t i = 0; i < 129; ++i) {
+                stack.push_back(MarkStackEntry::PartialArray(i, 1));
+            }
+            if (stack.size() != 3) {
+                _exit(2);
+            }
+            std::fprintf(stderr, "MARK_STACK_DTOR_ENTER buffers=3\n");
+        }
+        std::fprintf(stderr, "MARK_STACK_DTOR_RESULT empty=1\n");
+        _exit(0);
+    }
+    const int childStatus = WaitChild(child);
+    std::fprintf(stderr, "MARK_STACK_DTOR_STATUS status=%d\n", childStatus);
+    const bool destructorCompleted = WIFEXITED(childStatus) && WEXITSTATUS(childStatus) == 0;
+    GC_EXPECT_TRUE(destructorCompleted);
+#else
+    {
+        MarkStack<MarkStackEntry> stack;
+        for (size_t i = 0; i < 129; ++i) {
+            stack.push_back(MarkStackEntry::PartialArray(i, 1));
+        }
+        GC_EXPECT_EQ(stack.size(), 3U);
+    }
+#endif
+}
+
+GC_TEST(MarkStackClear, ProductSoCall)
+{
+    auto fn = LoadProductClear();
+#if defined(__linux__)
+    std::fflush(nullptr);
+    const pid_t child = fork();
+    GC_EXPECT_TRUE(child >= 0);
+    if (child == 0) {
+        std::fprintf(stderr, "MARK_STACK_SO_ENTER entries=129\n");
+        const int rc = fn(129);
+        std::fprintf(stderr, "MARK_STACK_SO_RESULT rc=%d\n", rc);
+        _exit(rc == 0 ? 0 : 3);
+    }
+    const int childStatus = WaitChild(child);
+    std::fprintf(stderr, "MARK_STACK_SO_STATUS status=%d\n", childStatus);
+    const bool clearCompletedAndEmpty = WIFEXITED(childStatus) && WEXITSTATUS(childStatus) == 0;
+    GC_EXPECT_TRUE(clearCompletedAndEmpty);
+#else
+    GC_EXPECT_EQ(fn(129), 0);
+#endif
 }

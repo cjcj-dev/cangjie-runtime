@@ -567,4 +567,8 @@ private:
     void VisitFinalizerRoots(const RootVisitor& visitor) const;
 };
 } // namespace MapleRuntime
+
+#if defined(MRT_TESTABLE_INTERNALS)
+extern "C" int MRT_ProductMarkStackClear(size_t entries);
+#endif
 #endif // MRT_COLLECTOR_TRACING_H

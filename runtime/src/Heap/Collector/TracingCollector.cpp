@@ -1496,3 +1496,17 @@ void TracingCollector::UpdateGCStats()
     TRACE_COUNT("CJRT_post_GC_HeapSize", Heap::GetHeap().GetAllocatedSize());
 }
 } // namespace MapleRuntime
+
+#if defined(MRT_TESTABLE_INTERNALS)
+extern "C" MRT_EXPORT int MRT_ProductMarkStackClear(size_t entries)
+{
+    MapleRuntime::TracingCollector::WorkStack stack;
+    for (size_t i = 0; i < entries; ++i) {
+        stack.push_back(MapleRuntime::MarkStackEntry::PartialArray(i, 1));
+    }
+    stack.clear();
+    const bool cleared = stack.empty() && stack.size() == 0 &&
+        stack.head() == nullptr && stack.tail() == nullptr;
+    return cleared ? 0 : 3;
+}
+#endif
