@@ -236,6 +236,7 @@ GC_TEST(LiveMap, RetainedCaptureSkipsYoungFaceAfterForwardingDone)
     size_t holderOffset = region->GetAddressOffset(reinterpret_cast<MAddress>(fx.obj0));
     (void)youngBitmap->MarkBits(holderOffset, 8, region->GetRegionSize());
 
+    fx.InstallPageOwner(region);
     region->MarkForwardingDone();
     ProductPreserveRetainedFn()(region);
     GC_EXPECT_FALSE(region->RetainedMarkWordsSay(holderOffset));

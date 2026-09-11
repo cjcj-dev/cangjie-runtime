@@ -694,6 +694,35 @@ void WCollector::PreforwardAllResurrectExportFromObjects()
     CurrentizeValueRootSet(resurrectedExportObjectes);
     CurrentizeValueRootSet(resurrectedExportObjectesForwardPhase);
 }
+void WCollector::StartRelocationTasks()
+{
+    RegionSpace& space = reinterpret_cast<RegionSpace&>(theAllocator);
+    RegionManager& manager = space.GetRegionManager();
+    GCThreadPool* workers = GetThreadPool();
+    size_t tasks = workers == nullptr ? 1 : static_cast<size_t>(workers->GetMaxActiveThreadNum() + 1);
+    if (gcReason == GC_REASON_YOUNG) {
+        const char* serial = std::getenv("MRT_GCV2_EVACPAR_FORCE_SERIAL");
+        const bool forceSerial = serial != nullptr && std::strcmp(serial, "1") == 0;
+        GCThreadPool* evacuation = collectorResources.GetEvacuationThreadPool();
+        if (!forceSerial && evacuation != nullptr) workers = evacuation;
+        const size_t maxWorkers = workers == nullptr ? 1 : static_cast<size_t>(workers->GetMaxThreadNum() + 1);
+        tasks = forceSerial ? 1 : maxWorkers;
+        const char* gate = std::getenv("MRT_GCV2_EVACPAR_WORK_GATE");
+        if (!forceSerial && gate != nullptr && std::strcmp(gate, "1") == 0) {
+            tasks = std::min(maxWorkers, std::max<size_t>(space.FromSpaceSize() / MB, 1));
+        }
+        if constexpr (kGcTriggerDynamicWorkersEnabled) {
+            const size_t selected = g_gcTriggerYoungWorkers.load(std::memory_order_relaxed);
+            if (!forceSerial && selected >= 1) tasks = std::min(tasks, selected);
+        }
+    }
+#if defined(MRT_TESTABLE_INTERNALS)
+    if (gcReason == GC_REASON_YOUNG) RunRemapWindowTestHook(1, nullptr, nullptr);
+#endif
+    if (gcReason == GC_REASON_YOUNG) manager.StartForwardFromRegions<Generation::Young>(workers, tasks);
+    else manager.StartForwardFromRegions<Generation::Old>(workers, tasks);
+}
+
 void WCollector::Preforward()
 {
     ScopedEntryTrace trace("CJRT_GC_PREFORWARD");
@@ -722,6 +751,7 @@ void WCollector::Preforward()
         CensusFrameColoursAfterFlip("full",
             (ZPointerRemappedYoungMask ^ REMAP_COLOUR_MASK) &
                 (ZPointerRemappedOldMask ^ REMAP_COLOUR_MASK));
+        StartRelocationTasks();
     }
 
     GCThreadPool* threadPool = GetThreadPool();
@@ -1765,7 +1795,6 @@ void WCollector::EvacuateYoungRegions(const std::vector<BaseObject*>& reachableV
 
         {
             MRT_PHASE_TIMER("young.ref_fix_prepare");
-            TransitionToGCPhase(GCPhase::GC_PHASE_PREFORWARD, true);
 
             // iorfix: PrepareForwardTable FIRST so liveInfo0 snapshots the closed mark
             // domain while every from region is still FORWARDABLE, THEN pass1 Fix/Forward.
@@ -1781,6 +1810,12 @@ void WCollector::EvacuateYoungRegions(const std::vector<BaseObject*>& reachableV
             // the ordinary phase-refused mutator path without sealing copying.
             RunRemapWindowTestHook(7, nullptr, nullptr);
 #endif
+            // Publish the relocate phase and submit page work while the
+            // existing young pause still excludes mutator execution. Root
+            // transition may now wait for a real page task on allocation failure.
+            Heap::GetHeap().InstallBarrier(GCPhase::GC_PHASE_PREFORWARD);
+            Heap::GetHeap().SetGCPhase(GCPhase::GC_PHASE_PREFORWARD);
+            StartRelocationTasks();
             TransitionToGCPhase(GCPhase::GC_PHASE_PREFORWARD, true);
             postEvacPoint("pre-fix-forwarded", false);
         }
@@ -1808,9 +1843,6 @@ void WCollector::EvacuateYoungRegions(const std::vector<BaseObject*>& reachableV
             MRT_PHASE_TIMER("young.concurrent_relocate");
             VLOG(REPORT, "[GCV2][relocate][conc] concurrent_relocate start nObj=%zu flip=1",
                  reachableVec.size());
-#if defined(MRT_TESTABLE_INTERNALS)
-            RunRemapWindowTestHook(1, nullptr, nullptr);
-#endif
             ForwardFromSpace();
 #if defined(MRT_TESTABLE_INTERNALS)
             RunRemapWindowTestHook(4, nullptr, nullptr);
@@ -2289,15 +2321,6 @@ BaseObject* WCollector::WaitRoutedTipReady(BaseObject* from, BaseObject* to, Reg
         if (MutatorRelocate::StatsOn()) {
             MutatorRelocate::NoteRegionWaitEnter();
         }
-        auto regionIsPublished = [forwarding]() -> bool {
-            const RegionInfo::RouteState now = forwarding->GetRouteState();
-            // Route publication only reserves the destination; a FORWARDED
-            // region may still have objects in flight.  ZGC's request wait
-            // remains parked until the forwarding operation itself closes
-            // (zRelocate.cpp:382-416), at which point a receipt is mandatory.
-            (void)now;
-            return forwarding->IsForwardingDone();
-        };
         // zRelocate.cpp:382-406 enters add_and_wait only after retain_page
         // succeeded. If retain observes concurrent completion, only the
         // forwarding receipt is a legal late answer.
@@ -2321,31 +2344,12 @@ BaseObject* WCollector::WaitRoutedTipReady(BaseObject* from, BaseObject* to, Reg
         RelocationRequestQueue::EnqueueResult queued =
             requests.Add(forwarding, reinterpret_cast<MAddress>(from));
 
-        // Close publish-before-enqueue: installation may have won between the
-        // first lookup and Add(). Publishing an already-existing receipt is the
-        // only alternate completion path.
-        BaseObject* raced = lookupTo();
-        if (raced != nullptr && Heap::IsHeapAddress(raced) && raced->IsValidObject()) {
-            (void)requests.Publish(reinterpret_cast<MAddress>(from), reinterpret_cast<MAddress>(raced));
-        }
-
         bool waitTimedOut = false;
-        const MAddress completedReceipt = requests.WaitUntil(
-            queued.request, regionIsPublished, MutatorRelocate::kFwdDoneWaitSpins, &waitTimedOut);
+        (void)requests.WaitUntil(
+            queued.request, MutatorRelocate::kFwdDoneWaitSpins, &waitTimedOut);
         if (waitTimedOut) {
             return permanentHole("fwdDone-timeout", 0, lookupTo());
         }
-        if (completedReceipt != 0) {
-            BaseObject* completed = reinterpret_cast<BaseObject*>(completedReceipt);
-            if (Heap::IsHeapAddress(completed) && completed->IsValidObject()) {
-                if (MutatorRelocate::StatsOn()) {
-                    MutatorRelocate::NoteRegionWaitGot();
-                    MutatorRelocate::NoteWaitReceipt();
-                }
-                return observeReturn("request-receipt", completed);
-            }
-        }
-
         // Page completion or a proven no-publisher failure has no object
         // receipt. Ask the table once after that terminal; a miss violates the
         // relocation invariant.
@@ -2387,6 +2391,20 @@ BaseObject* WCollector::WaitRoutedTipReady(BaseObject* from, BaseObject* to, Reg
 // nullptr means the current thread did not acquire the page. The caller may
 // consume a receipt installed by the owning copier, but may not use the from
 // address as an alternate result.
+BaseObject* WCollector::WaitForPageForwarding(BaseObject* obj, ForwardingTable::Owner owner) const
+{
+    if (!owner || ZForwardingLife::CurrentPageWork() == owner.get()) return nullptr;
+    const MAddress from = reinterpret_cast<MAddress>(obj);
+    if (const MAddress found = owner->resolve_life(owner->find(from))) {
+        return reinterpret_cast<BaseObject*>(found);
+    }
+    auto& queue = static_cast<RegionSpace&>(theAllocator).GetRegionManager().GetRelocationRequestQueue();
+    const auto request = queue.Add(owner);
+    CHECK_DETAIL(request.accepted, "relocation request has no page task from=%#zx", from);
+    (void)queue.Wait(request.request);
+    return reinterpret_cast<BaseObject*>(owner->resolve_life(owner->find(from)));
+}
+
 BaseObject* WCollector::TryMutatorRelocate(BaseObject* obj, RegionInfo* forwarding) const
 {
     MutatorRelocate::NoteAttempt();
@@ -2402,7 +2420,7 @@ BaseObject* WCollector::TryMutatorRelocate(BaseObject* obj, RegionInfo* forwardi
     RegionInfo::RetainScope lease(forwarding);
     if (!lease.ok()) {
         MutatorRelocate::NoteFallback(MutatorRelocate::Fallback::RETAIN_FAILED);
-        return nullptr;
+        return WaitForPageForwarding(obj, lease.HoldForwarding());
     }
     // zRelocate.cpp:393-395: retain_page then assert is_phase_relocate.
     // SetGCPhase publishes before handshake, so a mutator that retained across
@@ -2433,7 +2451,7 @@ BaseObject* WCollector::TryMutatorRelocate(BaseObject* obj, RegionInfo* forwardi
     }
     if (toVersion == nullptr) {
         MutatorRelocate::NoteFallback(MutatorRelocate::Fallback::COPY_FAILED);
-        return nullptr;
+        return WaitForPageForwarding(obj, lease.HoldForwarding());
     }
     if (toVersion == obj) {
         // ForwardObjectImpl resolved to the from address: not a relocation. Let the old legs
@@ -2764,7 +2782,12 @@ BaseObject* WCollector::TryForwardObject(BaseObject* obj)
 #endif
             BaseObject* toVersion = ForwardObjectImpl(obj, region, lease);
             lease.Release();
-            return toVersion;
+#if defined(MRT_GC_UNIT_TESTS)
+            // The existing plan-only bridge intercepts ForwardObjectImpl before
+            // copying; its miss is an admission observation, not allocation failure.
+            if (g_routeLookupTestContext != nullptr) return toVersion;
+#endif
+            return toVersion != nullptr ? toVersion : WaitForPageForwarding(obj, lease.HoldForwarding());
         }
         // ZGC's relocate_object (zRelocate.cpp:362-393) calls forward_object
         // after retain_page refuses; it never retries the retain with sched_yield.
@@ -2772,7 +2795,7 @@ BaseObject* WCollector::TryForwardObject(BaseObject* obj)
         // so a table miss is allowed here. Returning null makes ForwardRegion's
         // receipt audit keep the page instead of spinning outside a safepoint.
         const ForwardingProvenance provenance{ ForwardingHolderKind::StackSlot, this, &obj };
-        return FindToVersion(obj).GetOrFailClosed("WCollector::TryForwardObject.retain", provenance);
+        return WaitForPageForwarding(obj, lease.HoldForwarding());
     }
     // ZRelocate::relocate_object ends *every* path that did not itself produce a to-address with
     // ZRelocate::forward_object -- one last read of the forwarding table (zRelocate.cpp:382-410,
@@ -2815,7 +2838,7 @@ BaseObject* WCollector::TryForwardObject(BaseObject* obj)
     // (RegionManager.h:796-805), i.e. the ghost bit was cleared under us and this page is no
     // longer in the route domain at all.  ZGC's counterpart is ZForwardingTable::get == NULL
     // (zForwardingTable.inline.hpp:36-46): the page was never selected.
-    return nullptr;
+    return WaitForPageForwarding(obj, ForwardingTable::RetainPageOwner(region));
 }
 
 #if defined(MRT_GC_UNIT_TESTS)
@@ -2842,6 +2865,9 @@ BaseObject* WCollector::ForwardObjectImpl(BaseObject* obj, RegionInfo* ghostFrom
                                           const RegionInfo::RetainScope& lease)
 {
     CHECK(lease.covers(ghostFromRegion));
+#if defined(MRT_TESTABLE_INTERNALS)
+    RunRemapWindowTestHook(8, ghostFromRegion, obj);
+#endif
     CHECK(GetGCPhase() == GCPhase::GC_PHASE_PREFORWARD || GetGCPhase() == GCPhase::GC_PHASE_FORWARD);
     // Plan the dest *before* TryLockObject. Holding LOCKED across RouteRegion /
     // TakeRegion is the object-lock face of REPORT-routespin: a waiter in
@@ -3047,9 +3073,6 @@ BaseObject* WCollector::ForwardObjectExclusive(BaseObject* obj, BaseObject* toOb
         obj->UnlockObject(ObjectState::NORMAL);
         return nullptr;
     }
-    RegionSpace& regionSpace = reinterpret_cast<RegionSpace&>(theAllocator);
-    (void)regionSpace.GetRegionManager().GetRelocationRequestQueue().Publish(
-        reinterpret_cast<MAddress>(obj), mapped);
     // portmutreloc: the copy just happened on this thread. InScope() is set only by
     // TryMutatorRelocate, so this counts objects a mutator relocated itself and nothing else --
     // the one number that distinguishes "the ported leg ran" from "the leg exists". GC workers

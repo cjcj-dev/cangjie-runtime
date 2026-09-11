@@ -290,6 +290,7 @@ public:
 private:
     static size_t ObjectCountUpperBound(RegionInfo* region, size_t regionSize);
     static ZForwarding* EnsureEntriesLocked(RegionInfo* region);
+    static bool UnbindPageOwnerLocked(RegionInfo* region, bool allowExclusive);
 };
 } // namespace MapleRuntime
 

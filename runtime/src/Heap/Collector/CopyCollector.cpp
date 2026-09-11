@@ -164,71 +164,10 @@ void CopyCollector::ForwardFromSpace()
     stats.liveBytesBeforeGC = space.AllocatedBytes();
     stats.fromSpaceSize = space.FromSpaceSize();
     GarbRegionDiag::CensusBeforeForward("pre-forward");
-    GCThreadPool* copyPool = GetThreadPool();
-    const char* poolKind = "shared";
-    int32_t previousActiveHelpers = 0;
-    bool restoreActiveHelpers = false;
     if (gcReason == GC_REASON_YOUNG) {
-        const char* forceSerialEnv = std::getenv("MRT_GCV2_EVACPAR_FORCE_SERIAL");
-        const bool forceSerial =
-            forceSerialEnv != nullptr && std::strcmp(forceSerialEnv, "1") == 0;
-        const char* workGateEnv = std::getenv("MRT_GCV2_EVACPAR_WORK_GATE");
-        const bool workGate = workGateEnv != nullptr && std::strcmp(workGateEnv, "1") == 0;
-        GCThreadPool* evacuationPool = collectorResources.GetEvacuationThreadPool();
-        if (forceSerial) {
-            copyPool = nullptr;
-            poolKind = "serial";
-        } else if (evacuationPool != nullptr) {
-            copyPool = evacuationPool;
-            poolKind = "dedicated";
-        }
-
-        const int32_t maxWorkers = copyPool == nullptr ? 1 : copyPool->GetMaxThreadNum() + 1;
-        int32_t workers = maxWorkers;
-        constexpr size_t bytesPerWorker = 1 * MB;
-        if (!forceSerial && workGate) {
-            const size_t workersForBytes = std::max<size_t>(stats.fromSpaceSize / bytesPerWorker, 1);
-            workers = static_cast<int32_t>(std::min<size_t>(workersForBytes, static_cast<size_t>(maxWorkers)));
-            if (workers == 1) {
-                copyPool = nullptr;
-                poolKind = "serial";
-            } else {
-                previousActiveHelpers = copyPool->GetMaxActiveThreadNum();
-                const int32_t activeHelpers = workers - 1;
-                if (activeHelpers != previousActiveHelpers) {
-                    copyPool->SetMaxActiveThreadNum(activeHelpers);
-                    restoreActiveHelpers = true;
-                }
-            }
-        }
-        if constexpr (kGcTriggerDynamicWorkersEnabled) {
-            if (!forceSerial && copyPool != nullptr) {
-                // zDirector.cpp:783-793 — apply the cycle's selected worker count.
-                const uint32_t selected = g_gcTriggerYoungWorkers.load(std::memory_order_relaxed);
-                if (selected >= 1 && selected < static_cast<uint32_t>(maxWorkers)) {
-                    workers = static_cast<int32_t>(selected);
-                    previousActiveHelpers = copyPool->GetMaxActiveThreadNum();
-                    const int32_t activeHelpers = std::max(workers - 1, 0);
-                    if (activeHelpers != previousActiveHelpers) {
-                        copyPool->SetMaxActiveThreadNum(activeHelpers);
-                        restoreActiveHelpers = true;
-                    }
-                }
-            }
-        }
-        VLOG(REPORT,
-             "[GCV2][evacpar][copy] parallel=%u workers=%d bytes=%zu bytesPerWorker=%zu maxWorkers=%d "
-             "pool=%s forceSerial=%u workGate=%u",
-             static_cast<unsigned>(copyPool != nullptr), workers, stats.fromSpaceSize, bytesPerWorker, maxWorkers,
-             poolKind, static_cast<unsigned>(forceSerial), static_cast<unsigned>(workGate));
-    }
-    if (gcReason == GC_REASON_YOUNG) {
-        space.ForwardFromSpace<Generation::Young>(copyPool);
+        space.ForwardFromSpace<Generation::Young>(GetThreadPool());
     } else {
-        space.ForwardFromSpace<Generation::Old>(copyPool);
-    }
-    if (restoreActiveHelpers) {
-        copyPool->SetMaxActiveThreadNum(previousActiveHelpers);
+        space.ForwardFromSpace<Generation::Old>(GetThreadPool());
     }
 }
 

@@ -17,36 +17,32 @@
 #include <unordered_map>
 
 #include "Common/TypeDef.h"
+#include "Heap/Allocator/ForwardingTable.h"
 
 namespace MapleRuntime {
 
 // ZRelocateQueue::add_and_wait/prune_and_claim (zRelocate.cpp:134-191).
-// One Request is shared by all waiters for the same from address. The queue owns
-// the QUEUED -> CLAIMED transition; the region owner owns the terminal SUCCESS
-// or FAILED transition. Workers synchronize here before leaving so Add cannot
-// strand a request between the last empty poll and worker termination.
+// One handle per forwarding, shared by every object on the page. Claim and
+// completion live in ZForwarding; the queue stores neither an object address
+// nor an independent answer. Worker rendezvous is atomic with enqueue.
 class RelocationRequestQueue {
 public:
-    enum class State : uint8_t { QUEUED, CLAIMED, COMPLETED, FAILED };
+    enum class State : uint8_t { QUEUED, CLAIMED, COMPLETED };
 
     class Request {
     public:
-        ~Request() = default;
-        MAddress from() const { return fromAddress; }
-        void* owner() const { return ownerAddress; }
-        State state() const { return requestState.load(std::memory_order_acquire); }
-        MAddress receipt() const { return publishedReceipt.load(std::memory_order_acquire); }
-
+        MAddress from() const { return forwarding ? forwarding->start() : 0; }
+        void* owner() const { return forwarding ? forwarding->page() : nullptr; }
+        ZForwarding* page_forwarding() const { return forwarding.get(); }
+        State state() const
+        {
+            if (forwarding->is_done()) return State::COMPLETED;
+            return forwarding->claimed().load(std::memory_order_acquire) ? State::CLAIMED : State::QUEUED;
+        }
     private:
         friend class RelocationRequestQueue;
-        Request(void* owner, MAddress from) : ownerAddress(owner), fromAddress(from) {}
-
-        void* const ownerAddress;
-        const MAddress fromAddress;
-        std::atomic<State> requestState{ State::QUEUED };
-        std::atomic<MAddress> publishedReceipt{ 0 };
-        std::mutex completionMutex;
-        std::condition_variable completion;
+        explicit Request(ForwardingTable::Owner value) : forwarding(std::move(value)) {}
+        ForwardingTable::Owner forwarding;
     };
 
     using Handle = std::shared_ptr<Request>;
@@ -72,25 +68,14 @@ public:
     // generation would leave a waiter with no completion owner.
     void BeginWorkers(size_t workers);
     EnqueueResult Add(void* owner, MAddress from);
+    EnqueueResult Add(ForwardingTable::Owner forwarding);
     MAddress Wait(const Handle& request);
 
-    // Return a published object receipt when COMPLETED wins the wait. A zero
-    // result means page completion or a proven no-publisher FAILED terminal;
-    // the caller must then resolve from the forwarding table after the wait.
-    // maxSpins bounds the 1ms wait_for loop (0 = unlimited). timedOut is set
-    // when the bound is hit without pageDone / COMPLETED / FAILED.
-    MAddress WaitUntil(const Handle& request, const std::function<bool()>& pageDone,
-                       size_t maxSpins = 0, bool* timedOut = nullptr);
+    // Wait for the canonical forwarding completion. Always returns zero;
+    // callers resolve their own object through the forwarding table afterward.
+    MAddress WaitUntil(const Handle& request, size_t maxSpins = 0, bool* timedOut = nullptr);
 
-    // Only the first publication for this from-address completes the Request.
-    // The notification is per Request, not a queue-wide wakeup.
-    bool Publish(MAddress from, MAddress receipt);
-    bool Fail(MAddress from);
-
-    // Complete every request owned by a region after ForwardRegion returns.
-    // A zero resolver result is a failed completion: the region was retained
-    // this cycle, so waiters may keep the still-live from address.
-    size_t CompleteOwner(void* owner, const std::function<MAddress(MAddress)>& resolveReceipt);
+    size_t Complete(ZForwarding* forwarding);
 
     Handle PruneAndClaim();
 
@@ -110,19 +95,19 @@ public:
     // last synchronized worker closes the generation atomically with Add.
     Selection SynchronizePoll();
 
+    bool IsActive() const;
     size_t PendingCount() const;
     size_t SynchronizedWorkerCount() const;
     uint64_t CompletionCount() const { return completionCount.load(std::memory_order_relaxed); }
 
 private:
-    bool Complete(MAddress from, MAddress receipt, State terminalState);
-    static void CompleteHandle(const Handle& request, MAddress receipt, State terminalState);
     Handle PruneAndClaimLocked();
+    void PruneDoneLocked();
 
     mutable std::mutex queueMutex;
     std::condition_variable queueAttention;
     std::deque<Handle> queue;
-    std::unordered_map<MAddress, Handle> byFrom;
+    std::unordered_map<ZForwarding*, Handle> byPage;
     bool accepting{ false };
     size_t workerCount{ 0 };
     size_t synchronizedWorkers{ 0 };
