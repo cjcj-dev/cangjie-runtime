@@ -1750,15 +1750,6 @@ void WCollector::TraceYoungClosureParallel(WorkStack& workStack, bool fullYoungS
     const int32_t helperNum = threadPool->GetMaxThreadNum();
     int32_t poolCap = helperNum + 1;
     int32_t workers = poolCap;
-    {
-        const char* value = std::getenv("MRT_GCV2_MARKPAR_WORKERS");
-        if (value != nullptr && value[0] != '\0') {
-            int32_t requested = static_cast<int32_t>(std::strtol(value, nullptr, 10));
-            if (requested >= 1 && requested < workers) {
-                workers = requested;
-            }
-        }
-    }
     if (workers < 1) {
         workers = 1;
     }
@@ -1861,15 +1852,6 @@ void WCollector::TraceYoungClosureStriped(WorkStack& workStack, bool fullYoungSc
     const size_t dispelAtEntry = RegionInfo::GetDispelGhostCount();
 
     int32_t workers = threadPool->GetMaxThreadNum() + 1;
-    {
-        const char* value = std::getenv("MRT_GCV2_MARKPAR_WORKERS");
-        if (value != nullptr && value[0] != '\0') {
-            int32_t requested = static_cast<int32_t>(std::strtol(value, nullptr, 10));
-            if (requested >= 1 && requested < workers) {
-                workers = requested;
-            }
-        }
-    }
     if constexpr (kGcTriggerDynamicWorkersEnabled) {
         // zDirector.cpp:783-793 — initial_workers selected each cycle.
         const uint32_t selected = g_gcTriggerYoungWorkers.load(std::memory_order_relaxed);
@@ -2045,39 +2027,17 @@ void WCollector::TraceYoungClosure(WorkStack& workStack, bool fullYoungScan,
         CHECK_DETAIL(false, "unknown MRT_GC_UNIT_YOUNG_WEAK_VARIANT=%s", variant);
     }
 #endif
-    static const bool forceSerial = []() {
-        const char* value = std::getenv("MRT_GCV2_MARKPAR_FORCE_SERIAL");
-        return value != nullptr && std::strcmp(value, "1") == 0;
-    }();
-    const bool workersSet = std::getenv("MRT_GCV2_MARKPAR_WORKERS") != nullptr;
-    if (kMarkStriped && threadPool != nullptr && !forceSerial) {
+    // zMark.cpp has no force-serial path: young trace uses address stripes.
+    if (threadPool != nullptr) {
         TraceYoungClosureStriped(workStack, fullYoungScan, reachableVec, reachableSlots, weakSlots,
                                  threadPool, reachableSlotDomain);
         return;
     }
-    const bool useParallel = threadPool != nullptr && workersSet && !forceSerial;
-    if (!useParallel) {
-        const char* reason = "workers_unset";
-        if (threadPool == nullptr) {
-            reason = "pool_unavailable";
-        } else if (forceSerial) {
-            reason = "force_serial";
-        } else if (!kMarkStriped) {
-            reason = "striped_off";
-        }
-        VLOG(REPORT, "[GCV2][markpar][parallel] fallback=serial %s kMarkStriped=%d armed=%zu turned=%zu", reason,
-             static_cast<int>(kMarkStriped), g_markStripeArmed.load(std::memory_order_relaxed),
-             g_markStripeTurned.load(std::memory_order_relaxed));
-        TraceYoungClosureSerial(workStack, fullYoungScan, reachableVec, reachableSlots, weakSlots,
-                                reachableSlotDomain);
-        VLOG(REPORT,
-             "[GCV2][markpar][parallel] workers_active=1 workers_scheduled=1 objects_marked=[%zu] "
-             "reachable_n=%zu parallel=0",
-             reachableVec.size(), reachableVec.size());
-        return;
-    }
-    TraceYoungClosureParallel(workStack, fullYoungScan, reachableVec, reachableSlots, weakSlots,
-                              threadPool, reachableSlotDomain);
+    VLOG(REPORT, "[GCV2][mark][young] fallback=serial pool_unavailable armed=%zu turned=%zu",
+         g_markStripeArmed.load(std::memory_order_relaxed),
+         g_markStripeTurned.load(std::memory_order_relaxed));
+    TraceYoungClosureSerial(workStack, fullYoungScan, reachableVec, reachableSlots, weakSlots,
+                            reachableSlotDomain);
 }
 
 // youngconc: SATB termination for concurrent young mark — same loop shape as

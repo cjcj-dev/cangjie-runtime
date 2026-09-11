@@ -17,7 +17,7 @@ enum class Generation : uint8_t;
 // Read-only probe: before ReleaseMemory(previous tag), scan regions whose liveInfo /
 // liveInfo0 / retainedLiveInfo still point into the range about to be madvise'd.
 // Gate (default off): MRT_GCV2_TAG_REUSE=1
-// Optional MarkBits sticky check: MRT_GCV2_MARK_BITS_STICKY=1
+// MarkBits sticky check stays compiled-off (no ZGC env gate).
 class TagReuseProbe {
 public:
     static bool TagReuseEnabled();

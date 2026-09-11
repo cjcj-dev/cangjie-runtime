@@ -92,7 +92,7 @@ bool TagReuseProbe::TagReuseEnabled()
 
 bool TagReuseProbe::MarkBitsStickyEnabled()
 {
-    static const bool on = false /* pinned:MRT_GCV2_MARK_BITS_STICKY */;
+    static const bool on = false;
     return on;
 }
 
@@ -229,7 +229,7 @@ bool TagReuseProbe::NoteMarkBitsSticky(RegionInfo* region, size_t offset, bool /
     }
     static std::atomic<bool> armedLogged{false};
     if (!armedLogged.exchange(true, std::memory_order_relaxed)) {
-        STICKY_LOG("ARMED env=MRT_GCV2_MARK_BITS_STICKY=1 site=%s", site);
+        STICKY_LOG("ARMED site=%s", site);
     }
     gMarkStickyN.fetch_add(1, std::memory_order_relaxed);
     bool nowMarked = generation == Generation::Young

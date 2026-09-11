@@ -1722,7 +1722,7 @@ public:
     }
 
     // markepoch: count reads of a LiveInfo whose markEpoch != region snapshotEpoch.
-    // Default product still returns false (same as "no bit"); MRT_GCV2_MARK_EPOCH_ASSERT=1 aborts.
+    // Default product still returns false (same as "no bit").
     // Design: ops/design/MARK_EPOCH_DISCIPLINE.md §5 (ZGC zLiveMap.inline.hpp:41-43).
     // Hot path: epoch match is load+cmp only (no atomic). Stale path always counts.
     static std::atomic<size_t> markEpochStaleReadCount;
@@ -3287,16 +3287,7 @@ public:
 
     MAddress GetMarkStartAllocPtr() const { return metadata.markStartAllocPtr; }
 
-    // Product on. MRT_GCV2_MARKWATER_OFF=1 restores the pre-watermark trickle
-    // (perturbation for REPORT-oracleblack3 §4).
-    static bool MarkStartAllocWaterEnabled()
-    {
-        static const bool on = []() {
-            const char* v = std::getenv("MRT_GCV2_MARKWATER_OFF");
-            return v == nullptr || !(v[0] == '1' && v[1] == '\0');
-        }();
-        return on;
-    }
+    static bool MarkStartAllocWaterEnabled() { return true; }
 
     // offset ≥ mark-start allocPtr (exclusive end at ClearLiveInfo). Objects
     // bumped after that point are ZGC allocate-black / is_allocating.

@@ -30,7 +30,6 @@ void ClearFaceEnvironment()
         unsetenv(item.legacy);
         unsetenv(item.alias);
     }
-    unsetenv("MRT_GCV2_MARKCOMPLETE");
     unsetenv("MRT_GCV2_DIAG");
 }
 
@@ -98,14 +97,6 @@ GC_OTHER_VM_TEST(VerifyPhase, FiveFaceTokenArm)
     ClearFaceEnvironment();
     setenv("MRT_GCV2_DIAG", "roots,objects,marking,remembered,oops", 1);
     ExpectAllFaces(true);
-}
-
-GC_OTHER_VM_TEST(VerifyPhase, MarkCompleteLegacyAliasBelongsOnlyToObjects)
-{
-    ClearFaceEnvironment();
-    setenv("MRT_GCV2_MARKCOMPLETE", "1", 1);
-    GC_EXPECT_TRUE(VerifyFaceEnabled(VerifyFace::Objects));
-    GC_EXPECT_FALSE(VerifyFaceEnabled(VerifyFace::Marking));
 }
 
 GC_OTHER_VM_TEST(VerifyPhase, QueryingOneFaceDoesNotFreezeAnother)
