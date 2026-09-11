@@ -1,0 +1,7 @@
+{
+  "schema": "nwdet-qualification/v1",
+  "qualified": false,
+  "reason": "2026-09-12 qualification attempt: first sample rejected by full-colour census (std.core:OutOfMemoryError); process_rc=-6 (SIGABRT), gate_rc=1; ELF sha256=92aaff092e4e452780c9071b879bbe4b086df57a1e8cd2204dad5381b0695420; runtime SO sha256=2a9c0376cf4c117d2cf505fcc72eedc0dbfbd9256dc95d9999624019188c9c2a; cjc nightly=1.3.0-alpha.20260831010012; runtime commit=dea244c0918ae4b874d4490e12dc97268b78371a; requested N=3 per arm, A started=1 then stopped, B NOT_RUN; evidence=kkk2:/root/sym_cangjie_runtime_233_implement_r5638903524/arm-a/nwdet/e_256MB_r1.txt; qualification remains unapproved, cangjie-runtime#190 owns follow-up per controller ruling.",
+  "since": "2026-09-10T02:00:00+08:00",
+  "workloads": []
+}
