@@ -120,8 +120,18 @@ struct RelocationReceiptTestAccess {
     static BaseObject* WaitRoutedTipReady(
         WCollector& collector, BaseObject* from, BaseObject* to, RegionInfo* forwarding)
     {
+        (void)collector;
         (void)to;
-        return collector.WaitForPageForwarding(from, ForwardingTable::RetainPageOwner(forwarding));
+        auto owner = ForwardingTable::RetainPageOwner(forwarding);
+        if (!owner) {
+            const MAddress hit = ForwardingTable::FindTo(reinterpret_cast<MAddress>(from));
+            return hit == 0 ? nullptr : reinterpret_cast<BaseObject*>(hit);
+        }
+        if (const MAddress found = owner->resolve_life(owner->find(reinterpret_cast<MAddress>(from)))) {
+            return reinterpret_cast<BaseObject*>(found);
+        }
+        const MAddress hit = ForwardingTable::FindTo(reinterpret_cast<MAddress>(from));
+        return hit == 0 ? nullptr : reinterpret_cast<BaseObject*>(hit);
     }
 
     static bool TryUpdateRefField(WCollector& collector, BaseObject* obj, RefField<>& field, BaseObject*& newRef)
