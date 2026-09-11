@@ -36,6 +36,7 @@
 #include "Mutator/Mutator.h"
 #include "Mutator/ThreadLocal.h"
 #include "Mutator/MutatorManager.h"
+#include "Loader/ElfUnloadQuiescence.h"
 #include "ObjectModel/RefField.inline.h"
 #include "ObjectModel/MArray.inline.h"
 #include "TypeInfoManager.h"
@@ -2758,6 +2759,88 @@ GC_TEST(ForwardingPublicationProduct, ArmedMissAfterPublicationCloseFailsClosed)
     CleanupLateBackfill(fx, state);
     RelocationReceiptTestAccess::BindCollector(Heap::GetHeap().GetCollectorResources(), nullptr);
 }
+
+// A managed frame is input data to the real mutator phase entry. Keep the
+// descriptor in the loaded test image so the product metadata lifetime check
+// can establish its identity; no stack scanner or resolver is replaced here.
+#if defined(__x86_64__) && defined(__linux__)
+namespace {
+struct DerivedBaseMapImage {
+    int32_t descriptorOffset;
+    uint32_t pc[4];
+    int32_t stackMapOffset;
+    uint32_t descriptorRest[6];
+    uint8_t bits[256];
+};
+DerivedBaseMapImage derivedBaseMapImage;
+
+void RunDerivedBaseProducer(bool interior, bool tagged)
+{
+    auto& image = derivedBaseMapImage;
+    std::memset(&image, 0, sizeof(image));
+    image.descriptorOffset = reinterpret_cast<char*>(&image.stackMapOffset) -
+        reinterpret_cast<char*>(&image.descriptorOffset);
+    image.stackMapOffset = reinterpret_cast<char*>(image.bits) - reinterpret_cast<char*>(&image.stackMapOffset);
+    ElfUnloadQuiescence::LinkImage(reinterpret_cast<uintptr_t>(image.pc));
+    size_t bit = 0;
+    auto put = [&](uint32_t value, unsigned width) {
+        for (unsigned i = 0; i < width; ++i, ++bit) {
+            image.bits[bit / 8] |= ((value >> i) & 1u) << (bit % 8);
+        }
+    };
+    auto var = [&](uint32_t value) {
+        if (value <= 11) { put(value, 4); }
+        else { put(12, 4); put(value, 8); }
+    };
+    var(0); var(2); var(0); // stack size, uncompressed + tagged format, no saved registers
+    var(1); var(0); var(2); var(0); var(1); // one PC, reg/slot/line/derived index widths
+    if (CangjieRuntime::stackGrowConfig == StackGrowConfig::STACK_GROW_ON) { var(0); var(0); }
+    var(0); var(1); var(0); // tagged reg/slot widths, padding
+    put(0, 32); put(tagged ? 0 : 1, 2); put(1, 1); put(tagged ? 1 : 0, 1);
+    var(0); var(0); // empty register table
+    var(2); var(8); var(1); // two slot rows: base at fp-24, derived at fp-16
+    put(232, 8); put(1, 1); put(240, 8); put(1, 1);
+    var(0); var(0); // empty line table
+    var(1); put(2, 2); // derived row selects second slot row
+
+    GcHeapFixture& fx = ProductFixture();
+    WCollector collector(Heap::GetHeap().GetAllocator(), Heap::GetHeap().GetCollectorResources());
+    RelocationReceiptTestAccess::BindCollector(Heap::GetHeap().GetCollectorResources(), &collector);
+    collector.SetGCPhase(GCPhase::GC_PHASE_PREFORWARD);
+    const uintptr_t base = reinterpret_cast<uintptr_t>(fx.obj0) + (interior ? 8 : 0);
+    uintptr_t frame[8] = {};
+    frame[0] = base;
+    frame[1] = base + 8;
+    frame[2] = reinterpret_cast<uintptr_t>(image.pc) + 9;
+    Mutator mutator;
+    auto& context = mutator.GetUnwindContext();
+    context.frameInfo.mFrame.SetIP(image.pc);
+    context.frameInfo.mFrame.SetFA(reinterpret_cast<FrameAddress*>(&frame[3]));
+    context.anchorFA = nullptr;
+    std::fprintf(stderr, "DERIVED_BASE_INPUT interior=%d tagged=%d base=%zx derived=%zx\n",
+                 interior, tagged, frame[0], frame[1]);
+    mutator.TransitionToGCPhaseExclusive(GCPhase::GC_PHASE_PREFORWARD, false);
+    std::fprintf(stderr, "DERIVED_BASE_RESULT base=%zx derived=%zx expected=%zx\n", frame[0], frame[1], base + 8);
+    GC_EXPECT_EQ(frame[0], base);
+    GC_EXPECT_EQ(frame[1], base + 8);
+    collector.SetGCPhase(GCPhase::GC_PHASE_IDLE);
+    RelocationReceiptTestAccess::BindCollector(Heap::GetHeap().GetCollectorResources(), nullptr);
+}
+}
+
+GC_TEST(ForwardingPublicationProduct, PreForwardDerivedInteriorBaseProducer)
+{
+    RunDerivedBaseProducer(true, false);
+}
+GC_TEST(ForwardingPublicationProduct, PreForwardDerivedTaggedBaseProducer)
+{
+    RunDerivedBaseProducer(false, true);
+}
+GC_TEST(ForwardingPublicationProduct, PreForwardDerivedOrdinaryBaseProducer)
+{
+    RunDerivedBaseProducer(false, false);
+}
+#endif
 
 GC_TEST(ForwardingPublicationProduct, PreForwardDerivedRebasesFromRemappedBaseWithoutLookup)
 {
