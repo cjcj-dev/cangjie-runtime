@@ -12,10 +12,13 @@
 #include <cstdint>
 #include <functional>
 #include <mutex>
+#include <limits>
+#include <memory>
 #include <new>
 #include <unordered_map>
 
 #include "Heap/Allocator/ForwardingEntry.h"
+#include "Heap/Allocator/ForwardingAllocator.h"
 #include "Heap/Allocator/ZAttachedArray.h"
 #include "Heap/Collector/ZForwardingLife.h"
 #include "Heap/Collector/RegionLifeClock.h"
@@ -66,42 +69,65 @@ public:
         RegionLifeId lifeId = 0;
     };
 
-    static uint32_t nentries(uint32_t liveObjects)
+    static size_t nentries(size_t objectCountUpperBound)
     {
-        // zForwarding.inline.hpp:43-50
-        uint32_t n = liveObjects < 1 ? 2 : liveObjects * 2;
-        if (n > 1 && (n & (n - 1)) == 0) {
-            return n;
+        // zForwarding.inline.hpp:44-50: power-of-two capacity, at most half full.
+        // size_t arithmetic also covers counts above the old uint32_t doubling limit.
+        const size_t maxPowerOfTwo = size_t(1) << (std::numeric_limits<size_t>::digits - 1);
+        if (objectCountUpperBound > maxPowerOfTwo / 2) {
+            return 0;
         }
-        uint32_t p = 1;
-        while (p < n) {
-            p <<= 1;
+        const size_t required = objectCountUpperBound == 0 ? 2 : objectCountUpperBound * 2;
+        size_t capacity = 2;
+        while (capacity < required) {
+            capacity <<= 1;
         }
-        return p;
+        return capacity;
     }
 
-    static ZForwarding* alloc(uint32_t liveObjects, MAddress start, MAddress heapBase, size_t regionSize,
-                              RegionInfo* page, RegionLifeId pageLifeId = 0, bool provisional = false)
+    static ZForwarding* alloc(size_t liveObjects, MAddress start, MAddress heapBase, size_t regionSize,
+                              RegionInfo* page, RegionLifeId pageLifeId = 0, bool provisional = false,
+                              const std::shared_ptr<ForwardingAllocator>& arena = {})
     {
-        const uint32_t n = nentries(liveObjects);
-        void* const addr = AttachedArray::alloc(n);
+        const size_t n = nentries(liveObjects);
+        if (n == 0) {
+            return nullptr;
+        }
+        size_t size;
+        if (!AttachedArray::allocation_size(n, &size)) {
+            return nullptr;
+        }
+        void* const addr = arena ? arena->allocate(size) : AttachedArray::alloc(n);
         if (addr == nullptr) {
             return nullptr;
         }
-        return ::new (addr) ZForwarding(page, start, heapBase, regionSize, n, pageLifeId, provisional);
+        if (arena) {
+            AttachedArray::initialize(addr, n);
+        }
+        auto* forwarding = ::new (addr) ZForwarding(page, start, heapBase, regionSize, n, pageLifeId, provisional);
+        forwarding->_arena = arena;
+        return forwarding;
     }
 
     // Kept name so existing tests / ClearEntries continue to compile.
-    static ZForwarding* Create(uint32_t liveObjects, MAddress start, MAddress heapBase, size_t regionSize = 0)
+    static ZForwarding* Create(size_t liveObjects, MAddress start, MAddress heapBase, size_t regionSize = 0)
     {
         return alloc(liveObjects, start, heapBase, regionSize, nullptr);
     }
 
     void Destroy()
     {
+        // Hold the arena across destruction of its last embedded carrier.
+        auto arena = _arena;
         this->~ZForwarding();
-        AttachedArray::free(this);
+        if (!arena) {
+            AttachedArray::free(this);
+        }
     }
+
+#if defined(MRT_TESTABLE_INTERNALS)
+    const ForwardingAllocator* arena_for_test() const { return _arena.get(); }
+#endif
 
     MAddress start() const { return _start; }
     size_t size() const { return _size; }
@@ -120,7 +146,7 @@ public:
         _required_mark_epoch = requiredMarkEpoch;
     }
     bool page_life_current(RegionLifeClock::Carrier carrier) const;
-    uint32_t length() const { return static_cast<uint32_t>(_entries.length()); }
+    size_t length() const { return _entries.length(); }
     bool is_provisional() const { return _provisional; }
 
     void publish_from_page_view(LiveInfo* liveInfo, uint64_t epoch, MAddress topAtStart,
@@ -442,6 +468,7 @@ private:
         _to_lives[2] = ToLife{};
     }
 
+    std::shared_ptr<ForwardingAllocator> _arena;
     const MAddress _start;
     const size_t _size;
     const MAddress _heapBase;

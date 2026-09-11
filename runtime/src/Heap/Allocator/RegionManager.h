@@ -931,6 +931,8 @@ public:
         // left from-copies). zGeneration.cpp:211-213, zPage.inline.hpp:180-185.
         (void)ExemptMarkStartAllocatingFromCSet();
 
+        CHECK_DETAIL(ForwardingTable::BeginForwardingArena(fromRegionList),
+                     "forwarding arena budget allocation failed");
         fromRegionList.VisitAllRegions([](RegionInfo* region) {
             DLOG(REGION, "visit from region %p@[%#zx+%zu, %#zx)", region, region->GetRegionStart(),
                  region->GetLiveByteCount(), region->GetRegionEnd());
@@ -945,6 +947,7 @@ public:
                          region, static_cast<unsigned>(G));
         });
 
+        ForwardingTable::EndForwardingArena();
         fromRegionList.CopyListTo(ghostFromRegionList);
     }
 

@@ -206,3 +206,45 @@ GC_TEST(ReceiptLifeRegistry, CapacityRefusesReceiptExplicitly)
     GC_EXPECT_TRUE(refused.status == ZForwarding::Receipt::Status::LIFE_REGISTRY_FULL);
     GC_EXPECT_EQ(refusedLookup, static_cast<MAddress>(0));
 }
+
+GC_OTHER_VM_TEST(ReceiptLifeRegistry, ExistingKeyReturnsFirstWinner)
+{
+    ProductReceiptFixture fx;
+    const MAddress from = reinterpret_cast<MAddress>(fx.heap.obj0);
+    const MAddress first = reinterpret_cast<MAddress>(fx.Object(1));
+    const MAddress second = reinterpret_cast<MAddress>(fx.Object(2));
+    auto publication = fx.Publication(from);
+    const auto a = ForwardingTable::InstallMapping(publication, from, first);
+    const auto b = ForwardingTable::InstallMapping(publication, from, second);
+    const bool sameWinner = a.address == first && b.address == a.address && !b.installed;
+    std::fprintf(stderr, "P1_EXISTING_WINNER target_assertion executed=1 matched=%d first=%#zx returned=%#zx\n",
+                 sameWinner, a.address, b.address);
+    GC_EXPECT_TRUE(sameWinner);
+    GC_EXPECT_EQ(ForwardingTable::FindTo(from), first);
+}
+
+#if defined(MRT_TESTABLE_INTERNALS)
+GC_OTHER_VM_TEST(ReceiptLifeRegistry, ConcurrentSameKeyReturnsLockedWinner)
+{
+    ProductReceiptFixture fx;
+    const MAddress from = reinterpret_cast<MAddress>(fx.heap.obj0);
+    const MAddress toA = reinterpret_cast<MAddress>(fx.Object(1));
+    const MAddress toB = reinterpret_cast<MAddress>(fx.Object(2));
+    auto publication = fx.Publication(from);
+    ZForwarding::Receipt a{0, false, ZForwarding::Receipt::Status::DESTINATION_UNTRACKED};
+    ZForwarding::Receipt b = a;
+    RegistrationRendezvous rendezvous;
+    ForwardingTable::SetReceiptLifeRegisterHook(&MeetAtRegistration, &rendezvous);
+    std::thread first([&] { a = ForwardingTable::InstallMapping(publication, from, toA); });
+    std::thread second([&] { b = ForwardingTable::InstallMapping(publication, from, toB); });
+    first.join();
+    second.join();
+    ForwardingTable::SetReceiptLifeRegisterHook(nullptr, nullptr);
+    const bool sameWinner = a.address == b.address && a.installed != b.installed &&
+        (a.address == toA || a.address == toB);
+    std::fprintf(stderr, "P1_LOCKED_WINNER target_assertion executed=1 matched=%d arrived=%u a=%#zx b=%#zx\n",
+                 sameWinner, rendezvous.arrived.load(), a.address, b.address);
+    GC_EXPECT_TRUE(sameWinner);
+    GC_EXPECT_EQ(ForwardingTable::FindTo(from), a.address);
+}
+#endif

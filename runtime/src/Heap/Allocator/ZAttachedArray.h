@@ -11,6 +11,7 @@
 #include <cstdint>
 #include <cstdlib>
 #include <new>
+#include <limits>
 
 namespace MapleRuntime {
 
@@ -21,21 +22,39 @@ class ZAttachedArray {
 public:
     static size_t object_size()
     {
-        const size_t alignment = sizeof(ArrayT);
+        const size_t alignment = alignof(ArrayT);
         return (sizeof(ObjectT) + alignment - 1) & ~(alignment - 1);
     }
 
     static size_t array_size(size_t length) { return sizeof(ArrayT) * length; }
 
+    // Check before multiplication/addition, including the caller's arena budget.
+    static bool allocation_size(size_t length, size_t* size)
+    {
+        if (length > (std::numeric_limits<size_t>::max() - object_size()) / sizeof(ArrayT)) {
+            return false;
+        }
+        *size = object_size() + array_size(length);
+        return true;
+    }
+
+    static void initialize(void* addr, size_t length)
+    {
+        void* const arrayAddr = reinterpret_cast<char*>(addr) + object_size();
+        ::new (arrayAddr) ArrayT[length]();
+    }
+
     static void* alloc(size_t length)
     {
-        const size_t size = object_size() + array_size(length);
+        size_t size;
+        if (!allocation_size(length, &size)) {
+            return nullptr;
+        }
         void* const addr = std::malloc(size);
         if (addr == nullptr) {
             return nullptr;
         }
-        void* const arrayAddr = reinterpret_cast<char*>(addr) + object_size();
-        ::new (arrayAddr) ArrayT[length]();
+        initialize(addr, length);
         return addr;
     }
 
