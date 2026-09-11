@@ -696,110 +696,46 @@ void WCollector::InvalidateOldTaggedRefs(bool requireSurvivedMark)
         }
     };
 
-    GCThreadPool* threadPool = GetThreadPool();
-    // Positive control for silent serial degradation (spec §六 T3 ②).
-    // Force serial via MRT_GCV2_STWPAR_FORCE_SERIAL=1 for bidirectional proof.
-    static const bool forceSerialEnv = []() {
-        const char* value = std::getenv("MRT_GCV2_STWPAR_FORCE_SERIAL");
-        return value != nullptr && std::strcmp(value, "1") == 0;
-    }();
-    const bool forceSerial = forceSerialEnv;
-    const bool useParallel = threadPool != nullptr && !forceSerial;
-
+    GCWorkers& workers = GetWorkers();
+    const uint32_t previousWorkers = workers.ActiveWorkers();
+    workers.SetActiveWorkers(static_cast<uint32_t>(GetGCThreadCount(false)));
+    const uint32_t heapWorkers = workers.ActiveWorkers();
     RootAccount rootTotals{};
     HeapAccount heapTotals{};
     std::vector<size_t> chunksPerWorker;
-    size_t workersScheduled = 0;
-
-    if (!useParallel) {
-        // Keep the "fallback=serial pool_unavailable" literal for the case it actually names:
-        // REMSET_OPTION1_SPEC_0805 §positive-control greps that exact string.
-        VLOG(REPORT, "[F3][parallel] fallback=serial %s",
-             threadPool == nullptr ? "pool_unavailable" : "force_serial");
-        // Six root families serial (same order as before).
-        {
-            RootAccount acc;
-            RootVisitor fixRoot = makeRootVisitor(&acc);
-            MutatorManager::Instance().VisitAllMutators(
-                [&fixRoot](Mutator& mutator) { mutator.VisitMutatorRoots(fixRoot); });
-            Heap::GetHeap().VisitStaticRoots(fixRoot);
-            Runtime::Current().GetConcurrencyModel().VisitGCRoots(&fixRoot);
-            collectorResources.GetFinalizerProcessor().VisitGCRoots(fixRoot);
-            collectorResources.GetFinalizerProcessor().VisitFinalizers(fixRoot);
-            Heap::GetHeap().VisitAllExportRoots(fixRoot);
-            rootTotals.rootSlots += acc.rootSlots;
-            rootTotals.oldTaggedRootSlots += acc.oldTaggedRootSlots;
-            rootTotals.fixedRootSlots += acc.fixedRootSlots;
-        }
-        {
-            HeapAccount acc;
-            // Single-threaded full range — equivalent to ForEachObjUnsafe.
-            walkRange(heapStart, inactiveZone, inactiveZone, acc);
-            // Count as one logical chunk for the diagnostic line.
-            if (heapStart < inactiveZone) {
-                acc.chunksTaken = 1;
-            }
-            heapTotals = acc;
-            chunksPerWorker.push_back(acc.chunksTaken);
-            workersScheduled = 1;
-        }
-    } else {
-        // Root-side: 6 family-level tasks (static family must not be split — mutex+dedup set).
-        // Heap-side: N cursor tasks. Same pool, same batch as Preforward.
-        // Cap via MRT_GCV2_STWPAR_WORKERS for scale curve (1/2/4/8/16); never expand pool.
-        const int32_t helperNum = threadPool->GetMaxThreadNum();
-        // Caller's GC thread also drains via WaitFinish → effective capacity = helpers + 1.
-        const int32_t poolCap = helperNum + 1;
-        int32_t heapWorkers = poolCap;
-        {
-            const char* wEnv = std::getenv("MRT_GCV2_STWPAR_WORKERS");
-            if (wEnv != nullptr && wEnv[0] != '\0') {
-                int32_t want = static_cast<int32_t>(std::strtol(wEnv, nullptr, 10));
-                if (want >= 1 && want < heapWorkers) {
-                    heapWorkers = want;
+    size_t workersScheduled = heapWorkers;
+    {
+        std::vector<RootAccount> rootAcc(6);
+        std::vector<HeapAccount> heapAcc(heapWorkers);
+        std::atomic<uintptr_t> cursor { heapStart };
+        std::atomic<unsigned> nextRoot { 0 };
+        // One generation-owned ZTask: each family has exactly one claimant,
+        // and each worker drains disjoint heap ranges into its own account.
+        class FixRootsTask final : public GCWorkerTask {
+        public:
+            explicit FixRootsTask(std::function<void(uint32_t)> body) : body(std::move(body)) {}
+            void Work(uint32_t id) override { body(id); }
+        private:
+            std::function<void(uint32_t)> body;
+        } task([&](uint32_t id) {
+            for (unsigned family = nextRoot.fetch_add(1); family < 6; family = nextRoot.fetch_add(1)) {
+                RootVisitor fixRoot = makeRootVisitor(&rootAcc[family]);
+                switch (family) {
+                    case 0:
+                        MutatorManager::Instance().VisitAllMutators(
+                            [&fixRoot](Mutator& mutator) { mutator.VisitMutatorRoots(fixRoot); });
+                        break;
+                    case 1: Heap::GetHeap().VisitStaticRoots(fixRoot); break;
+                    case 2: Runtime::Current().GetConcurrencyModel().VisitGCRoots(&fixRoot); break;
+                    case 3: collectorResources.GetFinalizerProcessor().VisitGCRoots(fixRoot); break;
+                    case 4: collectorResources.GetFinalizerProcessor().VisitFinalizers(fixRoot); break;
+                    case 5: Heap::GetHeap().VisitAllExportRoots(fixRoot); break;
                 }
             }
-        }
-        std::vector<RootAccount> rootAcc(6);
-        std::vector<HeapAccount> heapAcc(static_cast<size_t>(heapWorkers));
-        std::atomic<uintptr_t> cursor{ heapStart };
-
-        // Roots first into queue, then heap workers. Start after all AddWork so helpers
-        // see the full batch (same shape as Preforward: AddWork×N then Start then WaitFinish).
-        threadPool->AddWork(new (std::nothrow) LambdaWork([this, &rootAcc, &makeRootVisitor](size_t) {
-            RootVisitor fixRoot = makeRootVisitor(&rootAcc[0]);
-            MutatorManager::Instance().VisitAllMutators(
-                [&fixRoot](Mutator& mutator) { mutator.VisitMutatorRoots(fixRoot); });
-        }));
-        threadPool->AddWork(new (std::nothrow) LambdaWork([this, &rootAcc, &makeRootVisitor](size_t) {
-            RootVisitor fixRoot = makeRootVisitor(&rootAcc[1]);
-            Heap::GetHeap().VisitStaticRoots(fixRoot);
-        }));
-        threadPool->AddWork(new (std::nothrow) LambdaWork([this, &rootAcc, &makeRootVisitor](size_t) {
-            RootVisitor fixRoot = makeRootVisitor(&rootAcc[2]);
-            Runtime::Current().GetConcurrencyModel().VisitGCRoots(&fixRoot);
-        }));
-        threadPool->AddWork(new (std::nothrow) LambdaWork([this, &rootAcc, &makeRootVisitor](size_t) {
-            RootVisitor fixRoot = makeRootVisitor(&rootAcc[3]);
-            collectorResources.GetFinalizerProcessor().VisitGCRoots(fixRoot);
-        }));
-        threadPool->AddWork(new (std::nothrow) LambdaWork([this, &rootAcc, &makeRootVisitor](size_t) {
-            RootVisitor fixRoot = makeRootVisitor(&rootAcc[4]);
-            collectorResources.GetFinalizerProcessor().VisitFinalizers(fixRoot);
-        }));
-        threadPool->AddWork(new (std::nothrow) LambdaWork([this, &rootAcc, &makeRootVisitor](size_t) {
-            RootVisitor fixRoot = makeRootVisitor(&rootAcc[5]);
-            Heap::GetHeap().VisitAllExportRoots(fixRoot);
-        }));
-
-        for (int32_t i = 0; i < heapWorkers; ++i) {
-            HeapAccount* acc = &heapAcc[static_cast<size_t>(i)];
-            threadPool->AddWork(new (std::nothrow) LambdaWork(
-                [heapWorkerBody, &cursor, acc](size_t) { heapWorkerBody(cursor, *acc); }));
-        }
-
-        threadPool->Start();
-        threadPool->WaitFinish();
+            heapWorkerBody(cursor, heapAcc[id]);
+        });
+        workers.Run(task);
+        workers.SetActiveWorkers(previousWorkers);
 
         for (const auto& a : rootAcc) {
             rootTotals.rootSlots += a.rootSlots;
@@ -842,7 +778,7 @@ void WCollector::InvalidateOldTaggedRefs(bool requireSurvivedMark)
         }
         VLOG(REPORT, "[F3][parallel] phase=%s workers_active=%zu workers_scheduled=%zu chunks=[%s] parallel=%d",
              requireSurvivedMark ? "preflip" : "postflip", active, workersScheduled, chunksStr.c_str(),
-             useParallel ? 1 : 0);
+             heapWorkers > 1 ? 1 : 0);
     }
 
     if (heapTotals.rebuilt != 0) {

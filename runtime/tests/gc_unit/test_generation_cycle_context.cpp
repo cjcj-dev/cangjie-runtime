@@ -5,6 +5,9 @@
 #include <cstdio>
 #include <cstdlib>
 #include <dlfcn.h>
+#include <sched.h>
+#include <algorithm>
+#include "Heap/Allocator/RegionSpace.h"
 #include "Cangjie.h"
 #include "Heap/Heap.h"
 #include "Heap/Collector/CollectorProxy.h"
@@ -28,9 +31,33 @@ bool Same(const GCCycleSnapshot& a, const GCCycleSnapshot& b)
 void* Exercise(void*)
 {
     Collector& collector = Heap::GetHeap().GetCollector();
+    auto& resources = Heap::GetHeap().GetCollectorResources();
+    cpu_set_t cpus;
+    CPU_ZERO(&cpus);
+    const int affinityRc = sched_getaffinity(0, sizeof(cpus), &cpus);
+    Expect(affinityRc == 0, "worker_cpu_input");
+    const size_t cpuCount = CPU_COUNT(&cpus);
+    const size_t heapBytes = Heap::GetHeap().GetMaxCapacity();
+    const size_t regionBytes = static_cast<RegionSpace&>(Heap::GetHeap().GetAllocator())
+        .GetRegionManager().GetThreadLocalRegionSize();
+    const size_t heapLimit = heapBytes / regionBytes / 50;
+    const size_t concurrent = std::max<size_t>(1, std::min((cpuCount + 3) / 4, heapLimit));
+    const size_t parallel = std::max<size_t>(1, std::min((cpuCount * 3 + 4) / 5, heapLimit));
+    Expect(resources.GetGCThreadCount(true) == static_cast<int>(concurrent), "worker_concurrent_budget");
+    Expect(resources.GetGCThreadCount(false) == static_cast<int>(parallel), "worker_parallel_budget");
+    auto youngWorkers0 = resources.GetWorkers(GCCycleGeneration::YOUNG).GetSnapshot();
+    auto oldWorkers0 = resources.GetWorkers(GCCycleGeneration::OLD).GetSnapshot();
+    Expect(youngWorkers0.capacity == parallel && oldWorkers0.capacity == parallel, "worker_generation_capacity");
+    std::printf("WORKER_INPUT cpu=%zu heap=%zu region=%zu concurrent=%zu parallel=%zu\n",
+                cpuCount, heapBytes, regionBytes, concurrent, parallel);
     auto y0 = collector.GetCycleSnapshot(GCCycleGeneration::YOUNG);
     auto o0 = collector.GetCycleSnapshot(GCCycleGeneration::OLD);
     collector.RequestGC(GC_REASON_USER, false);
+    auto youngWorkers1 = resources.GetWorkers(GCCycleGeneration::YOUNG).GetSnapshot();
+    auto oldWorkers1 = resources.GetWorkers(GCCycleGeneration::OLD).GetSnapshot();
+    Expect(youngWorkers1.activeWorkers == parallel && oldWorkers1.activeWorkers == concurrent,
+           "worker_major_phase_budget");
+    Expect(!youngWorkers1.cycleActive && !oldWorkers1.cycleActive, "worker_major_completion");
     auto y1 = collector.GetCycleSnapshot(GCCycleGeneration::YOUNG);
     auto o1 = collector.GetCycleSnapshot(GCCycleGeneration::OLD);
     Expect(y1.sequence == y0.sequence + 1, "major_prelude_young_sequence");
@@ -38,6 +65,11 @@ void* Exercise(void*)
     Expect(o1.reason == GC_REASON_USER && !o1.active, "major_reason_completion");
     Expect(SatbBuffer::Instance().GetGeneration() == GCCycleGeneration::OLD, "major_satb_owner");
     collector.RequestGC(GC_REASON_YOUNG, false);
+    auto youngWorkers2 = resources.GetWorkers(GCCycleGeneration::YOUNG).GetSnapshot();
+    auto oldWorkers2 = resources.GetWorkers(GCCycleGeneration::OLD).GetSnapshot();
+    Expect(youngWorkers2.activeWorkers == parallel && !youngWorkers2.cycleActive, "worker_minor_phase_budget");
+    Expect(oldWorkers2.batch == oldWorkers1.batch && oldWorkers2.activeWorkers == oldWorkers1.activeWorkers &&
+           oldWorkers2.cycleActive == oldWorkers1.cycleActive, "worker_minor_preserves_old");
     auto y2 = collector.GetCycleSnapshot(GCCycleGeneration::YOUNG);
     auto o2 = collector.GetCycleSnapshot(GCCycleGeneration::OLD);
     Expect(y2.sequence == y1.sequence + 1, "minor_sequence");
