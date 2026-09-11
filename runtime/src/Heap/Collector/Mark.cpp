@@ -133,8 +133,9 @@ bool WCollector::MarkObjectImpl(BaseObject* obj, bool youngClaim, MarkLiveCache*
     // names the running closure, not the target object's face.
     // When liveCache is set, mark bits stay atomic and live bytes are coalesced
     // per worker (ZGC zMarkCache.hpp).
-    bool marked = region->MarkObjectByOwner(obj, objectSize, liveCache == nullptr);
-    if (!marked && liveCache != nullptr) {
+    bool firstLive = false;
+    bool marked = region->MarkObjectByOwnerWithLiveClaim(obj, objectSize, liveCache == nullptr, firstLive);
+    if (firstLive && liveCache != nullptr) {
         liveCache->IncLive(region, objectSize);
     }
     if (!marked) {

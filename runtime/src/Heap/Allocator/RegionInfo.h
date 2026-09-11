@@ -1527,10 +1527,23 @@ public:
     template<Generation G>
     bool MarkObject(MarkView<G> view, const BaseObject* obj, size_t objSize, bool accountLive = true)
     {
+        bool firstLive = false;
+        return MarkObjectWithLiveClaim(view, obj, objSize, accountLive, firstLive);
+    }
+
+    // ZGC zMark.cpp:405-418: the mark transition and first-live ownership
+    // are separate results. A finalizable-to-strong upgrade only owns the
+    // former; deferred accounting must carry the latter out of the pair RMW.
+    template<Generation G>
+    bool MarkObjectWithLiveClaim(MarkView<G> view, const BaseObject* obj, size_t objSize,
+                                 bool accountLive, bool& firstLive)
+    {
+        firstLive = false;
         CHECK(view.GetRegion() == this);
         VerifyMarkFaceOwner<G>(obj, "RegionInfo::MarkObject.sized");
         if (IsLargeRegion()) {
             if (TryPublishLargeFace(view, accountLive ? objSize : 0)) {
+                firstLive = true;
                 PublishCurrentMarkFace();
                 NotePageOwnerFirstPaint<G>();
                 return false;
@@ -1547,6 +1560,7 @@ public:
 
         bool incLive = false;
         bool already = writeBm->MarkBits(offset, objSize, regionSize, incLive);
+        firstLive = incLive;
         if (incLive) {
             if (accountLive) {
                 AddLiveByteCount(objSize);
@@ -1575,6 +1589,15 @@ public:
             return MarkObject(GetMarkView<Generation::Young>(), obj, objSize, accountLive);
         }
         return MarkObject(GetMarkView<Generation::Old>(), obj, objSize, accountLive);
+    }
+
+    bool MarkObjectByOwnerWithLiveClaim(const BaseObject* obj, size_t objSize,
+                                        bool accountLive, bool& firstLive)
+    {
+        if (IsYoungRegion()) {
+            return MarkObjectWithLiveClaim(GetMarkView<Generation::Young>(), obj, objSize, accountLive, firstLive);
+        }
+        return MarkObjectWithLiveClaim(GetMarkView<Generation::Old>(), obj, objSize, accountLive, firstLive);
     }
 
     bool ResurrectObject(const BaseObject* obj, size_t offset)
