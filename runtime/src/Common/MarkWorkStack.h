@@ -12,9 +12,7 @@
 #include "Base/TimeUtils.h"
 
 namespace MapleRuntime {
-#if defined(MRT_TESTABLE_INTERNALS)
-void NoteMarkStackClear();
-#endif
+void NoteMarkStackClear() __attribute__((weak));
 template<class T>
 class MarkStackBuf {
 constexpr static size_t MAX = 64;
@@ -89,9 +87,9 @@ public:
 
     void clear()
     {
-#if defined(MRT_TESTABLE_INTERNALS)
-        NoteMarkStackClear();
-#endif
+        if (NoteMarkStackClear != nullptr) {
+            NoteMarkStackClear();
+        }
         while (this->h != nullptr) {
             MarkStackBuf<T>* tmp = this->h;
             this->h = this->h->next;

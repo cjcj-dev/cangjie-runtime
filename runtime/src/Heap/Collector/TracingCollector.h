@@ -566,10 +566,8 @@ private:
     void VisitStaticRoots(const RootSlotVisitor& visitor) const;
     void VisitFinalizerRoots(const RootVisitor& visitor) const;
 };
-#if defined(MRT_TESTABLE_INTERNALS)
 void NoteMarkStackClear();
 size_t ReadMarkStackClearVisits();
 void ResetMarkStackClearVisits();
-#endif
 } // namespace MapleRuntime
 #endif // MRT_COLLECTOR_TRACING_H

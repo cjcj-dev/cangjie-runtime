@@ -1496,10 +1496,8 @@ void TracingCollector::UpdateGCStats()
     TRACE_COUNT("CJRT_post_GC_HeapSize", Heap::GetHeap().GetAllocatedSize());
 }
 
-#if defined(MRT_TESTABLE_INTERNALS)
 std::atomic<size_t> g_markStackClearVisits{ 0 };
 void NoteMarkStackClear() { g_markStackClearVisits.fetch_add(1, std::memory_order_relaxed); }
 size_t ReadMarkStackClearVisits() { return g_markStackClearVisits.load(std::memory_order_relaxed); }
 void ResetMarkStackClearVisits() { g_markStackClearVisits.store(0, std::memory_order_relaxed); }
-#endif
 } // namespace MapleRuntime
