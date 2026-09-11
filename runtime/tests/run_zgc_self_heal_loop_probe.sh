@@ -12,12 +12,13 @@ set -euo pipefail
 
 script_dir=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)
 runtime_dir=$(cd "${script_dir}/.." && pwd)
-rtlib=${RTLIB:-${runtime_dir}/output/temp/lib/x86_64_Release}
+rtlib=${RTLIB:-${GCV2_RUNTIME_LIB_DIR:-}}
 
-if [[ ! -f "${rtlib}/libcangjie-runtime.so" ]]; then
+if [[ -z "${rtlib}" || ! -f "${rtlib}/libcangjie-runtime.so" ]]; then
     echo "ZGC_SELF_HEAL_LOOP_UNIT SKIP no libcangjie-runtime.so under ${rtlib}" >&2
     exit 2
 fi
+runtime_output_root="${GCV2_RUNTIME_OUTPUT_ROOT:-$(realpath -m "${rtlib}/../..")}"
 
 build_dir=$(mktemp -d "${TMPDIR:-/tmp}/zgc-self-heal-loop.XXXXXX")
 trap 'rm -rf "${build_dir}"' EXIT
@@ -27,7 +28,7 @@ compiler=${CXX:-c++}
 # union over the slot word and the test aliases that word directly.
 "${compiler}" -std=gnu++14 -fno-strict-aliasing -fno-exceptions -fno-rtti -Wall -Wextra \
     -DMRT_USE_CJTHREAD_RENAME -DMRT_USE_COPYGC -DDISABLE_VERSION_CHECK \
-    -I"${runtime_dir}/src" -I"${runtime_dir}/include" -I"${runtime_dir}/output/temp/include" \
+    -I"${runtime_dir}/src" -I"${runtime_dir}/include" -I"${runtime_output_root}/include" \
     -I"${runtime_dir}/third_party/third_party_bounds_checking_function/include" \
     "${script_dir}/zgc_self_heal_loop_unit.cpp" \
     -L"${rtlib}" -lcangjie-runtime -Wl,-rpath,"${rtlib}" \
