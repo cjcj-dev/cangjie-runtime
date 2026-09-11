@@ -22,6 +22,7 @@ TESTS = [
     'ZForwardingEntries.ConcurrentSameKeyReturnsInitializedWinner',
     'ZForwardingEntries.CollisionPreservesIdentityAndOtherKey',
     'ColourAddress.UncolorRoundTripAllRemapOneHot',
+    'ZForwardingEntries.WidthBoundaryRoundTripAndFallback',
 ]
 SECONDARY = 'FindToPublicState.NotManagedIsObservable'
 PREFIX = 'runtime/src/'
@@ -50,6 +51,9 @@ CUTS = {
         '        return capacity;\n    }', '        return static_cast<uint32_t>(capacity);\n    }'),
     'header_winner': (PREFIX+'Heap/Collector/ZForwarding.h',
         '                    return entry.to_offset();', '                    return toOffset;'),
+    'header_width': (PREFIX+'Heap/Allocator/ForwardingEntry.h',
+        '(static_cast<uint64_t>(toOffset) & kToOffsetMask)',
+        '(static_cast<uint64_t>(toOffset) & (kToOffsetMask >> 1))'),
     'header_retention': (PREFIX+'Heap/Collector/ZForwarding.h',
         '        auto arena = _arena;',
         '        static auto retainedArena = _arena;\n        auto arena = _arena;'),
@@ -58,7 +62,7 @@ EXPECTED = {
     'normal': [], 'restored': [],
     'entry': TESTS[:2], 'arena_begin': TESTS[:1], 'arena_storage': TESTS[:1],
     'copy': TESTS[1:2], 'existing_winner': TESTS[2:3], 'locked_winner': TESTS[3:4],
-    'header_capacity': TESTS[4:5], 'header_winner': TESTS[7:8], 'header_retention': TESTS[5:6],
+    'header_capacity': TESTS[4:5], 'header_winner': TESTS[7:8], 'header_retention': TESTS[5:6], 'header_width': TESTS[10:11],
 }
 
 
