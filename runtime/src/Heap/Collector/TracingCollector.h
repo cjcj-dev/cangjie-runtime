@@ -308,8 +308,9 @@ public:
     using WorkStackBuf = MarkStackBuf<MarkStackEntry>;
 #if defined(MRT_TESTABLE_INTERNALS)
     // Observers see the product result after dispatch; neither supplies work.
-    std::function<void(GCWorkers::Generation, RootSet&)> testRootsResult;
-    std::function<void()> testCyclePrepared;
+    // Static storage keeps the instance layout identical in both build shapes.
+    static std::function<void(GCWorkers::Generation, RootSet&)> testRootsResult;
+    static std::function<void()> testCyclePrepared;
 #endif
 
     void Init() override;
