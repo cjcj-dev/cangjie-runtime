@@ -15,6 +15,7 @@
 #include <limits>
 #include <memory>
 #include <new>
+#include <thread>
 #include <unordered_map>
 
 #include "Heap/Allocator/ForwardingEntry.h"
@@ -422,7 +423,27 @@ public:
         return insert_receipt(from, to).address;
     }
 
-    // zForwarding.cpp:51-53 / :86-194. Dual-inited; product still uses RegionInfo copies.
+    // Table users are protected separately from source-page users. A released
+    // page must not prevent remap from finding its immutable entries
+    // (zForwarding.cpp:171-185; zRelocationSet.cpp:191-197).
+    // Acquisition is serialized with unlink by ForwardingTable's install lock.
+    bool retain_table()
+    {
+        _table_readers.fetch_add(1, std::memory_order_acquire);
+        return true;
+    }
+    void release_table() { _table_readers.fetch_sub(1, std::memory_order_release); }
+    void drain_table_readers()
+    {
+        _table_draining.store(true, std::memory_order_release);
+        while (_table_readers.load(std::memory_order_acquire) != 0) {
+            std::this_thread::yield();
+        }
+    }
+    size_t table_readers() const { return _table_readers.load(std::memory_order_acquire); }
+    bool table_draining() const { return _table_draining.load(std::memory_order_acquire); }
+
+    // zForwarding.cpp:51-53 / :86-194. Source-page ownership only.
     bool claim() { return ZForwardingLife::claim(_claimed); }
     bool retain_page() { return ZForwardingLife::retain_page(_ref_count, _done); }
     void release_page() { ZForwardingLife::release_page(_ref_count); }
@@ -485,6 +506,8 @@ private:
     mutable std::mutex _ref_lock;
     std::atomic<int32_t> _ref_count;
     std::atomic<bool> _done;
+    std::atomic<size_t> _table_readers{ 0 };
+    std::atomic<bool> _table_draining{ false };
     mutable std::mutex _overflowLock;
     std::unordered_map<MAddress, MAddress> _overflow;
     mutable std::mutex _receiptInstallLock;
