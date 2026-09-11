@@ -3456,8 +3456,12 @@ static void CheckWaitObservation(WaitObservationCase scenario)
                 region->MarkForwardingDone();
             }
             if (queued) {
-                auto& space = reinterpret_cast<RegionSpace&>(Heap::GetHeap().GetAllocator());
-                space.GetRegionManager().GetRelocationRequestQueue().BeginWorkers(1);
+                collector.SetGCPhase(GCPhase::GC_PHASE_FORWARD);
+                BaseObject* got = RelocationReceiptTestAccess::WaitRoutedTipReady(
+                    collector, from, nullptr, region);
+                std::fprintf(stderr, "OBS_QUEUED_ENTRY got=%p from=%p\n",
+                             static_cast<void*>(got), static_cast<void*>(from));
+                _exit(0);
             }
             g_gcCount.store(701 + sample, std::memory_order_relaxed);
             const ForwardingTable::LookupResult before = ForwardingTable::LookupTo(reinterpret_cast<MAddress>(from));
@@ -3512,6 +3516,14 @@ static void CheckWaitObservation(WaitObservationCase scenario)
             const bool completed = WIFEXITED(captured.status) && WEXITSTATUS(captured.status) == 0 &&
                 captured.output.find("OBS_MOVED") != std::string::npos && waited.empty();
             std::fprintf(stderr, "OBS_ASSERT site=behavior field=moved-receipt-without-log result=%s\n",
+                         completed ? "PASS" : "FAIL");
+            failures += completed ? 0 : 1;
+            continue;
+        }
+        if (queued) {
+            const bool completed = WIFEXITED(captured.status) && WEXITSTATUS(captured.status) == 0 &&
+                captured.output.find("OBS_QUEUED_ENTRY") != std::string::npos;
+            std::fprintf(stderr, "OBS_ASSERT site=behavior field=queued-entry result=%s\n",
                          completed ? "PASS" : "FAIL");
             failures += completed ? 0 : 1;
             continue;
