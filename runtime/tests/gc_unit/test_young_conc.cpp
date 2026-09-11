@@ -94,12 +94,11 @@ struct RelocationReceiptTestAccess {
     static bool ConsumeYoungSatbAndReach(WCollector& collector, BaseObject* expected)
     {
         TracingCollector::WorkStack workStack;
-        WCollector::MinorObjectSet reachableObjects;
         std::vector<BaseObject*> reachableVec;
         WCollector::MinorSlotSet reachableSlots;
         WCollector::MinorSlotSet weakSlots;
-        const bool drained = collector.MarkYoungSatbBuffer(workStack, false, reachableObjects, reachableVec,
-                                                           reachableSlots, weakSlots, true);
+        const bool drained = collector.MarkYoungSatbBuffer(workStack, false, reachableVec,
+                                                           reachableSlots, weakSlots);
         return drained && std::find(reachableVec.begin(), reachableVec.end(), expected) != reachableVec.end();
     }
 

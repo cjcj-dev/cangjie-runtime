@@ -114,6 +114,7 @@ public:
 
 #if defined(MRT_TESTABLE_INTERNALS)
     friend struct RelocationReceiptTestAccess;
+    friend struct MarkPort203TestAccess;
 #endif
 
 private:
