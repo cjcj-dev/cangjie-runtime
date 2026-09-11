@@ -1275,6 +1275,11 @@ void TracingCollector::PreGarbageCollection(bool isConcurrent, uint64_t gcIndex)
     GetGCStats().reason = GetCycleReason();
     GetGCStats().async = (gcIndex == GCTask::ASYNC_TASK_INDEX);
     GetGCStats().isConcurrentMark = isConcurrent;
+#if defined(MRT_TESTABLE_INTERNALS)
+    if (testCyclePrepared) {
+        testCyclePrepared();
+    }
+#endif
 #if defined(MRT_DEBUG) && (MRT_DEBUG == 1)
     DumpBeforeGC();
 #endif
@@ -1405,6 +1410,11 @@ void TracingCollector::EnumAllCommonRoots(GCWorkers& workers, RootSet& rootSet)
     for (auto& result : roots) {
         rootSet.insert(result);
     }
+#if defined(MRT_TESTABLE_INTERNALS)
+    if (testRootsResult) {
+        testRootsResult(workers.GetSnapshot().generation, rootSet);
+    }
+#endif
     VLOG(REPORT, "Total roots: %zu(exclude stack roots)", rootSet.size());
 }
 

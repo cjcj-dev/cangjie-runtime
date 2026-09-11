@@ -9,9 +9,13 @@ LIB="${GCV2_RUNTIME_LIB_DIR:?set GCV2_RUNTIME_LIB_DIR to the product pair}"
 mkdir -p "$OUT"
 SDK="${CANGJIE_HOME:?set CANGJIE_HOME to matching compiler}"
 HEADERS=$(python3 "$ROOT/runtime/build/resolve_runtime_headers.py" "$ROOT/runtime" "$LIB")
+TEST_FLAGS=()
+if [[ "${GC_CYCLE_TESTABLE:-0}" == 1 ]]; then
+  TEST_FLAGS+=(-DMRT_TESTABLE_INTERNALS=1)
+fi
 if [[ "${GC_CYCLE_REUSE_ELFS:-0}" != 1 ]]; then
 "${CXX:-clang++}" -shared -fPIC -std=gnu++17 -O0 -g -Wall -Wextra -pthread -fno-rtti \
-  -fvisibility-inlines-hidden \
+  -fvisibility-inlines-hidden "${TEST_FLAGS[@]}" \
   -I"$SRC" -I"$ROOT/runtime/src" -I"$ROOT/runtime/src/Heap" \
   -I"$ROOT/runtime/src/CJThread/src/runtime/schedule/include" \
   -I"$ROOT/runtime/include" -I"$HEADERS/include" \
@@ -20,7 +24,7 @@ if [[ "${GC_CYCLE_REUSE_ELFS:-0}" != 1 ]]; then
   -L"$LIB" -Wl,-rpath,"$LIB" -Wl,--exclude-libs,ALL \
   -lcangjie-runtime -lboundscheck -ldl -o "$OUT/libcycle_observer.so"
 "${CXX:-clang++}" -std=gnu++17 -O0 -g -Wall -Wextra -pthread -fno-rtti \
-  -fvisibility-inlines-hidden \
+  -fvisibility-inlines-hidden "${TEST_FLAGS[@]}" \
   -I"$SRC" -I"$ROOT/runtime/src" -I"$ROOT/runtime/src/Heap" \
   -I"$ROOT/runtime/src/CJThread/src/runtime/schedule/include" \
   -I"$ROOT/runtime/include" -I"$HEADERS/include" \
@@ -38,7 +42,7 @@ main(): Int64 {
 CJ
 SDK="${CANGJIE_HOME:?set CANGJIE_HOME to matching compiler}"
 LD_LIBRARY_PATH="$LIB:$SDK/runtime/lib/linux_x86_64_cjnative:$SDK/tools/lib:$SDK/third_party/llvm/lib" \
-  "$SDK/bin/cjc" "$OUT/cycle.cj" -O0 --static-std -L "$OUT" -lcycle_observer -o "$OUT/generation_cycle_context"
+  "$SDK/bin/cjc" "$OUT/cycle.cj" -O0 --static-std -L "$LIB" -L "$OUT" -lcycle_observer -o "$OUT/generation_cycle_context"
 fi
 sha256sum "$OUT/generation_satb_obligations" "$OUT/generation_cycle_context" "$OUT/libcycle_observer.so" "$LIB/libcangjie-runtime.so" "$LIB/libboundscheck.so"
 set +e

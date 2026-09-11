@@ -306,6 +306,11 @@ public:
     using RootSet = MarkStack<MarkStackEntry>;
     using WorkStack = MarkStack<MarkStackEntry>;
     using WorkStackBuf = MarkStackBuf<MarkStackEntry>;
+#if defined(MRT_TESTABLE_INTERNALS)
+    // Observers see the product result after dispatch; neither supplies work.
+    std::function<void(GCWorkers::Generation, RootSet&)> testRootsResult;
+    std::function<void()> testCyclePrepared;
+#endif
 
     void Init() override;
     void Fini() override;
