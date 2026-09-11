@@ -5,6 +5,7 @@
 // See https://cangjie-lang.cn/pages/LICENSE for license information.
 
 #include <atomic>
+#include <chrono>
 #include <cstdint>
 #include <new>
 #include <thread>
@@ -148,20 +149,43 @@ GC_TEST(MarkStripe, ConcurrentGlobalStealIsLiveAndLossless)
     }
     std::atomic<size_t> remaining{ entries };
     std::atomic<size_t> stealSuccess{ 0 };
-    std::atomic<size_t> stealFailure{ 0 };
+    std::atomic<size_t> ready{ 0 };
+    std::atomic<bool> invalidEntry{ false };
+    const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(30);
     std::vector<std::thread> threads;
     threads.reserve(workers);
 
     for (size_t workerId = 0; workerId < workers; ++workerId) {
         threads.emplace_back([&, workerId]() {
             MarkContext context(workers, workerId, stripes);
+            // Reserve one shared chunk per non-owner before anyone drains.
+            // A start barrier alone is insufficient: the owner could still
+            // consume everything before another worker gets scheduled.
+            if (workerId != 0) {
+                MarkStripeStack* stack = stripes.At(0).StealStack(smr, workerId);
+                if (stack != nullptr) {
+                    context.Stacks().Install(context.StripeId(), stack);
+                    stealSuccess.fetch_add(1, std::memory_order_relaxed);
+                }
+            }
+            ready.fetch_add(1, std::memory_order_release);
+            while (ready.load(std::memory_order_acquire) != workers) {
+                std::this_thread::yield();
+            }
             MarkStackEntry entry;
-            while (remaining.load(std::memory_order_acquire) != 0) {
+            while (remaining.load(std::memory_order_acquire) != 0 &&
+                   !invalidEntry.load(std::memory_order_relaxed) &&
+                   std::chrono::steady_clock::now() < deadline) {
                 if (context.Stacks().Pop(smr, workerId, stripes, context.StripeId(), entry)) {
                     const uintptr_t value = reinterpret_cast<uintptr_t>(entry.object());
                     const size_t index = (value - ENTRY_BASE) / ENTRY_STEP;
-                    GC_EXPECT_TRUE(index < entries);
-                    seen[index].fetch_add(1, std::memory_order_relaxed);
+                    // Report failures after joining; an assertion exception in
+                    // a worker would bypass the losslessness diagnostic.
+                    if (value < ENTRY_BASE || (value - ENTRY_BASE) % ENTRY_STEP != 0 ||
+                        index >= entries || seen[index].fetch_add(1, std::memory_order_relaxed) != 0) {
+                        invalidEntry.store(true, std::memory_order_relaxed);
+                        break;
+                    }
                     remaining.fetch_sub(1, std::memory_order_release);
                     continue;
                 }
@@ -181,7 +205,6 @@ GC_TEST(MarkStripe, ConcurrentGlobalStealIsLiveAndLossless)
                     }
                 }
                 if (!stole) {
-                    stealFailure.fetch_add(1, std::memory_order_relaxed);
                     std::this_thread::yield();
                 }
             }
@@ -190,10 +213,31 @@ GC_TEST(MarkStripe, ConcurrentGlobalStealIsLiveAndLossless)
     for (std::thread& thread : threads) {
         thread.join();
     }
+    std::printf("MARK_STRIPE_DRAIN remaining=%zu invalid=%d steals=%zu ready=%zu\n",
+                remaining.load(), invalidEntry.load(), stealSuccess.load(), ready.load());
+    GC_EXPECT_FALSE(invalidEntry.load());
+    GC_EXPECT_EQ(remaining.load(), static_cast<size_t>(0));
     for (size_t i = 0; i < entries; ++i) {
         GC_EXPECT_EQ(seen[i].load(std::memory_order_relaxed), 1u);
     }
-    GC_EXPECT_TRUE(stealSuccess.load(std::memory_order_relaxed) != 0);
-    GC_EXPECT_TRUE(stealFailure.load(std::memory_order_relaxed) != 0);
+    GC_EXPECT_TRUE(stealSuccess.load(std::memory_order_relaxed) >= workers - 1);
     GC_EXPECT_TRUE(stripes.IsEmpty());
+}
+
+// Empty-victim failure is an explicit input, not a scheduling requirement on
+// the concurrent drain. ZGC zMark.cpp:511-528 also permits either steal result.
+GC_TEST(MarkStripe, GlobalStealReportsEmptyAfterDrain)
+{
+    MarkStripe stripe;
+    MarkingSMR smr(1);
+    MarkStripeStack* const empty = stripe.StealStack(smr, 0);
+    GC_EXPECT_TRUE(empty == nullptr);
+    // Positive control: the same consumer must return the published payload.
+    stripe.PublishStack(StackWithOne(ENTRY_BASE), true);
+    MarkStripeStack* const stack = stripe.StealStack(smr, 0);
+    GC_EXPECT_TRUE(stack != nullptr);
+    const uintptr_t value = reinterpret_cast<uintptr_t>(stack->Pop().object());
+    MarkStripeStack::Destroy(stack);
+    GC_EXPECT_EQ(value, ENTRY_BASE);
+    GC_EXPECT_TRUE(stripe.StealStack(smr, 0) == nullptr);
 }
