@@ -953,7 +953,8 @@ public:
 protected:
     void CheckStoreGoodTarget(const char* consumer, BaseObject* target,
                               const ForwardingProvenance& provenance) const;
-    BaseObject* ForwardObjectImpl(BaseObject* obj, RegionInfo* ghostFromRegion);
+    BaseObject* ForwardObjectImpl(BaseObject* obj, RegionInfo* ghostFromRegion,
+                                  const RegionInfo::RetainScope& lease);
     BaseObject* ForwardObjectExclusive(BaseObject* obj) override;
     // dest is PlanRoute's answer, computed *before* TryLockObject so the LOCKED
     // critical section cannot RouteRegion / TakeRegion (zRelocate.cpp:354-372

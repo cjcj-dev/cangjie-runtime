@@ -263,8 +263,11 @@ GC_TEST(ZForwardingLife, DetachCheckMeasuresAndHonorsGate)
     const FromPageDetach::Counters before = FromPageDetach::GetCounters(site);
 
     fx.region0->SetRouteDestHold(1);
-    ZForwardingLife::ResetForForwarding(fx.region0->metadata.fwdRefCount, fx.region0->metadata.fwdClaimed,
-                                        fx.region0->metadata.fwdDone);
+    ZForwarding* owner = ZForwarding::alloc(1, fx.region0->GetRegionStart(), fx.region0->GetRegionStart(),
+                                          fx.region0->GetRegionSize(), fx.region0, fx.region0->GetRegionLifeId());
+    GC_EXPECT_TRUE(owner != nullptr);
+    owner->retain_owner();
+    fx.region0->metadata.fwdOwner.store(owner, std::memory_order_release);
     ZForwardingLife::reset_copy_open(fx.region0->metadata.copyInflight);
     GC_EXPECT_TRUE(fx.region0->NoteCopyInflight());
 
@@ -295,14 +298,13 @@ GC_TEST(ZForwardingLife, DetachCheckMeasuresAndHonorsGate)
     GC_EXPECT_TRUE(fx.region0->IsRouteDestHeld());
 
     fx.region0->EndCopyInflight();
-    ZForwardingLife::ResetIdle(fx.region0->metadata.fwdRefCount, fx.region0->metadata.fwdClaimed,
-                               fx.region0->metadata.fwdDone);
+    if (owner->ref_count().load(std::memory_order_acquire) != 0) owner->release_page();
     fx.region0->SetRouteDestHold(0);
 
     // A completed drain retains the claimed latch until the next region life.
     // ref=0/done=1 is already detached and must not self-quarantine.
-    fx.region0->metadata.fwdClaimed.store(true, std::memory_order_release);
-    fx.region0->metadata.fwdDone.store(true, std::memory_order_release);
+    owner->claim();
+    owner->mark_done();
     const FromPageDetach::Counters completedBefore = FromPageDetach::GetCounters(site);
     GC_EXPECT_TRUE(FromPageDetach::FromPageDetachCheck(fx.region0, site));
     const FromPageDetach::Counters completedAfter = FromPageDetach::GetCounters(site);
@@ -310,7 +312,7 @@ GC_TEST(ZForwardingLife, DetachCheckMeasuresAndHonorsGate)
     GC_EXPECT_EQ(completedAfter.withEvidence, completedBefore.withEvidence);
     GC_EXPECT_EQ(completedAfter.forwardingClaimed, completedBefore.forwardingClaimed + 1);
     GC_EXPECT_EQ(completedAfter.forwardingReleased, completedBefore.forwardingReleased + 1);
-    ZForwardingLife::ResetIdle(fx.region0->metadata.fwdRefCount, fx.region0->metadata.fwdClaimed,
-                               fx.region0->metadata.fwdDone);
+    ForwardingTable::ClearPageOwner(fx.region0);
+    owner->Destroy();
 
 }

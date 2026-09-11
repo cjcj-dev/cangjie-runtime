@@ -279,7 +279,7 @@ GC_TEST(ZForwardingLife, DrainScopeWaitsCopiedWhenRefCountZero)
     ZForwardingLife::reset_copy_open(fx.region0->metadata.copyInflight);
     GC_EXPECT_TRUE(fx.region0->NoteCopyInflight());
     GC_EXPECT_EQ(fx.region0->CopyInflight(), 1);
-    GC_EXPECT_EQ(fx.region0->metadata.fwdRefCount.load(std::memory_order_acquire), 0);
+    GC_EXPECT_EQ(fx.region0->ForwardingRefCount(), 0);
 
     std::atomic<int> phase{ 0 };
     std::thread copier([&]() {

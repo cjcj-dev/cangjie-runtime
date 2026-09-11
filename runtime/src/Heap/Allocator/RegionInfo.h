@@ -110,6 +110,8 @@ private:
 */
 // region info is stored in the metadata of its primary unit (i.e. the first unit).
 class RegionInfo {
+    // The table serializes publication/unbinding of this facade's owner.
+    friend class ForwardingTable;
 public:
     using CompactRouteTable = std::unordered_map<size_t, MAddress>;
     using RouteStartTable = std::unordered_map<size_t, uint8_t>;
@@ -2472,7 +2474,6 @@ public:
         // zForwarding.inline.hpp:67-70 — construction token = 1. Late retain
         // after detach (count 0) is refused; carrier and token are published
         // by this single product operation.
-        ZForwardingLife::ResetForForwarding(metadata.fwdRefCount, metadata.fwdClaimed, metadata.fwdDone);
         ClearForwardingFaceReset();
         ClearCurrentMarkFace();
         ZForwardingLife::reset_copy_open(metadata.copyInflight);
@@ -2808,10 +2809,16 @@ public:
     // <0 waits for done then refuses, >0 CAS +1.
     bool RetainForwarding()
     {
-        return ZForwardingLife::retain_page(metadata.fwdRefCount, metadata.fwdDone);
+        auto owner = ForwardingTable::RetainPageOwner(this);
+        return owner && owner->retain_page();
     }
 
-    void ReleaseForwarding() { ZForwardingLife::release_page(metadata.fwdRefCount); }
+    void ReleaseForwarding()
+    {
+        auto owner = ForwardingTable::RetainPageOwner(this);
+        CHECK(owner);
+        owner->release_page();
+    }
 
     // ZForwarding::retain_page: the three-state count is the gate, not the list
     // type. After ForwardRegion, CollectRegion moves the region to garbage
@@ -2824,19 +2831,21 @@ public:
     // released or claimed — the late reader must not touch from-side state.
     class RetainScope {
     public:
-        explicit RetainScope(RegionInfo* region) : region(nullptr)
+        explicit RetainScope(RegionInfo* region)
+            : owner(ForwardingTable::RetainPageOwner(region)), region(region), retained(owner && owner->retain_page())
         {
-            if (region != nullptr && region->RetainForwarding()) {
-                this->region = region;
+        }
+        ~RetainScope() { Release(); }
+        void Release()
+        {
+            if (retained) {
+                owner->release_page();
+                retained = false;
             }
         }
-        ~RetainScope()
-        {
-            if (region != nullptr) {
-                region->ReleaseForwarding();
-            }
-        }
-        bool ok() const { return region != nullptr; }
+        bool ok() const { return retained; }
+        bool covers(RegionInfo* page) const { return retained && region == page; }
+        ZForwarding* forwarding() const { return owner.get(); }
 
         RetainScope(const RetainScope&) = delete;
         RetainScope& operator=(const RetainScope&) = delete;
@@ -2844,17 +2853,28 @@ public:
         RetainScope& operator=(RetainScope&&) = delete;
 
     private:
+        ForwardingTable::Owner owner;
         RegionInfo* region;
+        bool retained;
     };
 
-    bool ClaimForwarding() { return ZForwardingLife::claim(metadata.fwdClaimed); }
+    bool ClaimForwarding()
+    {
+        auto owner = ForwardingTable::RetainPageOwner(this);
+        return owner && owner->claim();
+    }
 
     void MarkForwardingDone()
     {
-        ZForwardingLife::mark_done(metadata.fwdDone);
+        auto owner = ForwardingTable::RetainPageOwner(this);
+        if (owner) owner->mark_done();
     }
 
-    bool IsForwardingDone() const { return ZForwardingLife::is_done(metadata.fwdDone); }
+    bool IsForwardingDone() const
+    {
+        auto owner = ForwardingTable::RetainPageOwner(this);
+        return owner && owner->is_done();
+    }
 
     bool IsForwardingFaceCurrent() const
     {
@@ -2963,9 +2983,9 @@ public:
             // The non-ghost expiry arm is still a forwarding-life boundary.
             // Seal before resetting the carrier words so an admitted copier
             // cannot be relabelled as belonging to the next life.
-            WaitCopiedInflight();
+            DrainScope drain(this, MutatorRelocate::Retire::DISPEL_GHOST);
         }
-        ZForwardingLife::ResetIdle(metadata.fwdRefCount, metadata.fwdClaimed, metadata.fwdDone);
+        ForwardingTable::ClearPageOwner(this);
         ClearForwardingFaceReset();
         ClearCurrentMarkFace();
         ZForwardingLife::reset_copy_sealed(metadata.copyInflight);
@@ -2988,9 +3008,17 @@ public:
         return ZForwardingLife::copy_admission_state(metadata.copyInflight);
     }
 
-    int32_t ForwardingRefCount() const { return metadata.fwdRefCount.load(std::memory_order_acquire); }
+    int32_t ForwardingRefCount() const
+    {
+        auto owner = ForwardingTable::RetainPageOwner(this);
+        return owner ? owner->ref_count().load(std::memory_order_acquire) : 0;
+    }
 
-    bool ForwardingClaimed() const { return metadata.fwdClaimed.load(std::memory_order_acquire); }
+    bool ForwardingClaimed() const
+    {
+        auto owner = ForwardingTable::RetainPageOwner(this);
+        return owner && owner->claimed().load(std::memory_order_acquire);
+    }
 
     void LockWriteRegion() { metadata.rwLock.LockWrite(); }
 
@@ -3010,13 +3038,9 @@ public:
 
         ~DrainScope()
         {
-            if (region == nullptr) {
-                return;
-            }
-            region->MarkForwardingDone();
-            if (region->metadata.fwdRefCount.load(std::memory_order_acquire) != 0) {
-                ZForwardingLife::release_page(region->metadata.fwdRefCount);
-            }
+            if (!retiring) return;
+            owner->release_page();
+            owner->mark_done();
         }
 
         DrainScope(const DrainScope&) = delete;
@@ -3025,7 +3049,8 @@ public:
         DrainScope& operator=(DrainScope&&) = delete;
 
     private:
-        RegionInfo* region;
+        ForwardingTable::Owner owner;
+        bool retiring{ false };
     };
 
     // These interfaces are used to make sure the writing operations of value in C++ Bit Field will be atomic.
@@ -3820,13 +3845,15 @@ private:
         // Monotonic within a retained-snapshot cycle: only successful
         // Preserve arms it; old-mark start or region-life bump disarms it.
         uint8_t retainedEverPreserved = 0;
+        // Use the alignment gap before the epoch for this existing counter;
+        // the forwarding owner pointer replaces the former page-state words.
+        uint32_t retainedPreserveCnt = 0;
         uint64_t retainedLiveInfoEpoch = 0;
         MAddress retainedLiveInfoCoveredUpTo = 0;
         RegionLifeId retainedLifeId = 0;
         // holderlive (F2): per-region-life history of the three fields above. Reset by
         // InitRegionInfo so "preserve count 0" means "never preserved in this life", not
         // "never preserved since boot".
-        uint32_t retainedPreserveCnt = 0;
         uint32_t retainedClearCnt = 0;
         uint8_t retainedLastOp = RETAINED_OP_NONE;
         // routedest: 1 while some from-region's published RouteInfo still names this region
@@ -3854,12 +3881,9 @@ private:
         // thread while reclaim threads read it. Same reason notRelocatableThisCycle and
         // markFaceSealed are plain bytes.
         uint8_t routeDestHold = 0;
-        // ZForwarding.hpp:66-69. Fits the 6-byte hole after routeDestHold:
-        // hold(1)+claimed(1)+done(1)+pad(1)+ref(4) = 8, then retainedMarkWords
-        // stays 8-aligned.
-        std::atomic<bool> fwdClaimed{ false };
-        std::atomic<bool> fwdDone{ false };
-        std::atomic<int32_t> fwdRefCount{ 0 };
+        // Borrow the immutable forwarding identity. Its owner reference is
+        // released at the page lifecycle boundary, never reset in place.
+        std::atomic<ZForwarding*> fwdOwner{ nullptr };
         // holderlive (F2): owned copy of the retained mark bits (mark | resurrect). Null unless
         // MRT_GCV2_RETAINED_OWN_COPY=1. Freed by ClearLiveInfo / InitRegionInfo.
         uint64_t* retainedMarkWords = nullptr;
@@ -4184,7 +4208,7 @@ private:
         }
         // See DispelGhostFromRegion: retire the route before detaching its compact table.
         SetRouteState(NORMAL);
-        ZForwardingLife::ResetIdle(metadata.fwdRefCount, metadata.fwdClaimed, metadata.fwdDone);
+        ForwardingTable::ClearPageOwner(this);
         WaitCopiedBeforePayloadWipe(this, "InitRegionInfo");
         ZForwardingLife::reset_copy_sealed(metadata.copyInflight);
         ForwardingTable::ClearEntries(GetRegionStart(), nUnit * RegionInfo::UNIT_SIZE);
