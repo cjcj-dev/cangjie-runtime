@@ -765,9 +765,9 @@ static size_t RunMajorStripeMark(TracingCollector& collector, TracingCollector::
         workStack.pop_back();
         seed.Push(*shared.stripes, shared.StripeFor(entry), entry, true);
     }
+    (void)seed.Flush(*shared.stripes, true);
     VerifyMarkingStacks::NoteProducer(VerifyMarkingStacks::MarkingGeneration::MAJOR,
                                       VerifyMarkingStacks::MarkingContainer::TASK, shared.stripes->Population());
-    (void)seed.Flush(*shared.stripes, true);
 
     if (workers > 1) {
         threadPool->Start();
