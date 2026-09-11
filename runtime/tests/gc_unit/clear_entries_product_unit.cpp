@@ -203,7 +203,8 @@ struct RelocationReceiptTestAccess {
 
     static BaseObject* ForwardImpl(WCollector& collector, BaseObject* from, RegionInfo* copyPage)
     {
-        return collector.ForwardObjectImpl(from, copyPage);
+        RegionInfo::RetainScope lease(copyPage);
+        return lease.ok() ? collector.ForwardObjectImpl(from, copyPage, lease) : nullptr;
     }
 
     static void RemapYoungRoots(WCollector& collector) { collector.RemapYoungRoots(); }

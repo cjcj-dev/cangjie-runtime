@@ -443,6 +443,12 @@ public:
     size_t table_readers() const { return _table_readers.load(std::memory_order_acquire); }
     bool table_draining() const { return _table_draining.load(std::memory_order_acquire); }
 
+    // The region facade and queued page work may outlive map membership. They
+    // hold the carrier, not a payload retain or an open publication token.
+    void retain_owner() { _external_owners.fetch_add(1, std::memory_order_relaxed); }
+    void release_owner() { _external_owners.fetch_sub(1, std::memory_order_release); }
+    size_t external_owners() const { return _external_owners.load(std::memory_order_acquire); }
+
     // zForwarding.cpp:51-53 / :86-194. Source-page ownership only.
     bool claim() { return ZForwardingLife::claim(_claimed); }
     bool retain_page() { return ZForwardingLife::retain_page(_ref_count, _done); }
@@ -508,6 +514,7 @@ private:
     std::atomic<bool> _done;
     std::atomic<size_t> _table_readers{ 0 };
     std::atomic<bool> _table_draining{ false };
+    std::atomic<size_t> _external_owners{ 0 };
     mutable std::mutex _overflowLock;
     std::unordered_map<MAddress, MAddress> _overflow;
     mutable std::mutex _receiptInstallLock;

@@ -790,6 +790,13 @@ public:
         return RoutePlan{ ComputeRoute(fromObj, fromRegionInfo) };
     }
 
+    RoutePlan PlanRoute(BaseObject* fromObj, RegionInfo* fromRegionInfo,
+                        const RegionInfo::RetainScope& lease, CopierRouteToken)
+    {
+        CHECK(lease.covers(fromRegionInfo));
+        return RoutePlan{ ComputeRouteBorrowed(fromObj, fromRegionInfo) };
+    }
+
     RoutePlan PlanRoute(BaseObject* fromObj, CopierRouteToken)
     {
         return PlanRouteLookup(fromObj);
@@ -1056,6 +1063,11 @@ private:
             return nullptr;
         }
 
+        return ComputeRouteBorrowed(fromObj, fromRegionInfo);
+    }
+
+    BaseObject* ComputeRouteBorrowed(BaseObject* fromObj, RegionInfo* fromRegionInfo)
+    {
         if (RouteRegion(fromRegionInfo) || fromRegionInfo->IsCompacted()) {
             OptionalRouteTicket ticket = fromRegionInfo->AdmitForRoute(fromObj);
             if (!ticket) {
