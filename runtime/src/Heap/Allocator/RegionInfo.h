@@ -1985,7 +1985,8 @@ public:
         // lifeclock: independent 64-bit region identity plus the five region-local
         // Moving the old top/livemap view to ZForwarding removes it from every
         // reusable UnitInfo; pin the resulting heap-wide metadata cost.
-        static_assert(sizeof(UnitInfo) == 240, "per-unit metadata size changed; it is per-page, so price it");
+        // M2 liveObjectCount+largeLiveClaim on 18825599 (already 240) costs 8 more bytes.
+        static_assert(sizeof(UnitInfo) == 248, "per-unit metadata size changed; it is per-page, so price it");
     }
 
     static RegionInfo* GetRegionInfo(uint32_t idx)
