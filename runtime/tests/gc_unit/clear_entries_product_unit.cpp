@@ -4378,7 +4378,7 @@ GC_TEST(ForwardingPublicationProduct, ClearWaitsForHeldPublicationAndKeepsReceip
     while (!clearStarted.load(std::memory_order_acquire)) {
         std::this_thread::yield();
     }
-    while (heldTable != nullptr && !heldTable->claimed().load(std::memory_order_acquire)) {
+    while (heldTable != nullptr && !heldTable->table_draining()) {
         std::this_thread::yield();
     }
     const bool clearWaitedForPublication = !clearDone.load(std::memory_order_acquire);
@@ -4418,10 +4418,9 @@ GC_TEST(ForwardingPublicationProduct, ClearWaitsForHeldPublicationAndKeepsReceip
     fx.FreePlanted(live);
 }
 
-// zForwarding.cpp:134-169: claim inverts a positive refcount before waiting for
-// outstanding Publication owners.  Observe that state transition rather than a
-// timing window: correct clear reaches a negative count while the owner is held;
-// a non-draining clear returns with a non-negative count.
+// zRelocationSet.cpp:191-197: clearing the table waits for outstanding table
+// users independently of the source-page count. Observe drain admission and
+// the held publication token before allowing the publisher to complete.
 GC_TEST(ForwardingPublicationProduct, ClearDrainEntersClaimedWaitBeforeReturning)
 {
     GcHeapFixture& fx = ProductFixture();
@@ -4445,12 +4444,12 @@ GC_TEST(ForwardingPublicationProduct, ClearDrainEntersClaimedWaitBeforeReturning
         ForwardingTable::ClearEntries(region->GetRegionStart(), region->GetRegionSize());
         clearDone.store(true, std::memory_order_release);
     });
-    while (heldTable != nullptr && heldTable->ref_count().load(std::memory_order_acquire) >= 0 &&
+    while (heldTable != nullptr && !heldTable->table_draining() &&
            !clearDone.load(std::memory_order_acquire)) {
         std::this_thread::yield();
     }
     const bool enteredClaimedDrain =
-        heldTable != nullptr && heldTable->ref_count().load(std::memory_order_acquire) < 0;
+        heldTable != nullptr && heldTable->table_draining() && heldTable->table_readers() != 0;
 
     const ZForwarding::Receipt receipt = ForwardingTable::InstallMapping(publication, from, to);
     GC_EXPECT_TRUE(receipt.installed);
