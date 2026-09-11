@@ -99,7 +99,7 @@ private:
 // from-copy). A keep-from answer breaks that: it names an object a later FORWARD may still
 // copy, whose from-region CollectFromSpaceGarbage then legally clears (TraceClear
 // kind=coll_live). Painting such a value load-good hides the slot from every healer -- the
-// fast path passes it, InvalidateOldTaggedRefs tests only old-tag colours -- so the stale
+// fast path passes it -- so the stale
 // from survives whole cycles and is eventually read out of zeroed storage: the cjpm crash
 // (staleguard zeroHeader unresolved). Hand the value to this one read, but leave the slot's
 // stale colour in place so the next read re-enters the barrier and resolves fresher state.
