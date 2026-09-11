@@ -172,6 +172,25 @@ def main():
                 results.append(result)
                 if not target_seen or rc not in (0, 1): errors.append(f'{arm}/{sample}/{test}: rc={rc} target={target_seen}')
             if red != expected_red[arm]: errors.append(f'{arm}/{sample}: red={sorted(red)} expected={sorted(expected_red[arm])}')
+    # The multi-worker reader scenario is its own equal-sized three-arm group.
+    parallel = 'YoungConc.ForwardingReaderExitsBeforeInPlaceReuseParallel'
+    for arm in ('normal', 'reader', 'restored'):
+        if arm not in arms: continue
+        ret = out/arm/'retained'
+        arm_env = dict(env, LD_LIBRARY_PATH=str(ret), CJ_GC_UNIT_REMAP_WINDOW='1')
+        for sample in range(args.samples):
+            for test in (parallel, CONTROLS[0]):
+                log = out/arm/'runs'/f'parallel-{sample}-{test}.log'
+                cmd = affinity+['timeout', '35', str(ret/'cj_gc_unit'), '--gtest_filter='+test]
+                rc = run(cmd, repo, arm_env, log)
+                target_seen = test != parallel or 'P2_PAGE target_assertion executed=1' in log.read_text(errors='replace')
+                expected_rc = 1 if arm == 'reader' and test == parallel else 0
+                results.append(dict(group='parallel-reader', arm=arm, sample=sample, test=test, rc=rc,
+                    target_seen=target_seen, command=cmd, log=str(log),
+                    elf_sha256=sha(ret/'cj_gc_unit'), runtime_sha256=sha(ret/'libcangjie-runtime.so'),
+                    boundscheck_sha256=sha(ret/'libboundscheck.so')))
+                if rc != expected_rc or not target_seen:
+                    errors.append(f'parallel/{arm}/{sample}/{test}: rc={rc} expected={expected_rc} target={target_seen}')
     if 'restored' in arms and sha(out/'restored/retained/libcangjie-runtime.so') != sha(normal/'libcangjie-runtime.so'):
         errors.append('normal/restored runtime differs')
     for arm in CUTS.keys() & set(arms):

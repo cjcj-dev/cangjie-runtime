@@ -288,7 +288,8 @@ void RemapWindowHook(unsigned point, RegionInfo* region, BaseObject* object)
 }
 
 void RunRemapWindow(bool copyOnly, ForwardDomain domain = ForwardDomain::None, bool afterDone = false,
-                    bool checkArena = false, bool checkCopy = false, const char* lifetimeTarget = nullptr)
+                    bool checkArena = false, bool checkCopy = false, const char* lifetimeTarget = nullptr,
+                    bool parallel = false)
 {
     // The strict arm is deliberately red on #175's frozen guard. Ordinary
     // suites run the copy prerequisite; the contract arm is explicitly invoked
@@ -300,7 +301,7 @@ void RunRemapWindow(bool copyOnly, ForwardDomain domain = ForwardDomain::None, b
     }
     GC_EXPECT_EQ(CJ_ScheduleManagerInit(), 0);
     GC_EXPECT_EQ(setenv("MRT_GCV2_MARKPAR_FORCE_SERIAL", "1", 1), 0);
-    GC_EXPECT_EQ(setenv("MRT_GCV2_EVACPAR_FORCE_SERIAL", "1", 1), 0);
+    GC_EXPECT_EQ(setenv("MRT_GCV2_EVACPAR_FORCE_SERIAL", parallel ? "0" : "1", 1), 0);
     MutatorManager mutatorManager;
     YoungConcTestRuntime runtime(mutatorManager);
     auto& fx = *new GcHeapFixture(true);
@@ -348,7 +349,7 @@ void RunRemapWindow(bool copyOnly, ForwardDomain domain = ForwardDomain::None, b
     WCollector collector(Heap::GetHeap().GetAllocator(), resources);
     RelocationReceiptTestAccess::BindCollector(resources, &collector);
     collector.SetGCPhase(GCPhase::GC_PHASE_CLEAR_SATB_BUFFER);
-    GCThreadPool pool("gc-unit-remap-window", 0, GCPoolThread::GC_THREAD_PRIORITY);
+    GCThreadPool pool("gc-unit-remap-window", parallel ? 1 : 0, GCPoolThread::GC_THREAD_PRIORITY);
     RelocationReceiptTestAccess::BindThreadPool(resources, &pool);
     Heap::GetHeap().GetRememberedSet().Initialize(fx.heapStart, GcHeapFixture::kUnits * RegionInfo::UNIT_SIZE);
     RememberedSet producerRememberedSet;
@@ -602,4 +603,9 @@ GC_OTHER_VM_TEST(YoungConc, ReleasedForwardingFindReturnsProductCopy)
 GC_OTHER_VM_TEST(YoungConc, ForwardingDoneFollowsPageWork)
 {
     RunRemapWindow(false, ForwardDomain::None, false, false, false, "done");
+}
+
+GC_OTHER_VM_TEST(YoungConc, ForwardingReaderExitsBeforeInPlaceReuseParallel)
+{
+    RunRemapWindow(false, ForwardDomain::None, false, false, false, "reader", true);
 }
