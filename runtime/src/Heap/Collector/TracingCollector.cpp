@@ -23,6 +23,11 @@
 
 namespace MapleRuntime {
 
+#if defined(MRT_TESTABLE_INTERNALS)
+std::function<void(GCWorkers::Generation, TracingCollector::RootSet&)> TracingCollector::testRootsResult;
+std::function<void()> TracingCollector::testCyclePrepared;
+#endif
+
 // ZMark::_ncontinue (zMark.cpp:975-981). Always on so a zero is readable as
 // "the pre-pause test was right every time" rather than "nobody is counting".
 std::atomic<size_t> g_markTerminateContinue{ 0 };
