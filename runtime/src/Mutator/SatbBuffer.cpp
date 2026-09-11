@@ -17,9 +17,30 @@
 #include <atomic>
 
 namespace MapleRuntime {
-static ImmortalWrapper<SatbBuffer> g_instance;
+static ImmortalWrapper<SatbBuffer> g_oldInstance;
+static ImmortalWrapper<SatbBuffer> g_youngInstance(GCCycleGeneration::YOUNG);
+static std::atomic<GCCycleGeneration> g_serialGeneration { GCCycleGeneration::OLD };
 
-SatbBuffer& SatbBuffer::Instance() noexcept { return *g_instance; }
+SatbBuffer& SatbBuffer::Instance() noexcept
+{
+    return Instance(g_serialGeneration.load(std::memory_order_acquire));
+}
+
+SatbBuffer& SatbBuffer::Instance(GCCycleGeneration generation) noexcept
+{
+    return generation == GCCycleGeneration::YOUNG ? *g_youngInstance : *g_oldInstance;
+}
+
+void SatbBuffer::SelectGeneration(GCCycleGeneration generation) noexcept
+{
+    g_serialGeneration.store(generation, std::memory_order_release);
+}
+
+void SatbBuffer::FiniGenerations()
+{
+    g_youngInstance->Fini();
+    g_oldInstance->Fini();
+}
 
 bool SatbBuffer::ShouldEnqueue(const BaseObject* obj)
 {
@@ -33,11 +54,9 @@ bool SatbBuffer::ShouldEnqueue(const BaseObject* obj)
     // ZGC heap_store_slow_path marks the *new* address (zBarrier.cpp:253-261 /
     // zBarrier.inline.hpp:735-739 mark_and_remember). Using the Young face during
     // GC_REASON_YOUNG is the SATB equivalent of that keep-alive.
-    // gc_unit fixtures never Heap::Init — CollectorProxy::currentCollector is null.
-    // IsGcStarted lives on CollectorResources (always constructed). During a live
-    // young TRACE window it is true; otherwise keep the Old-face legacy.
-    CollectorResources& resources = Heap::GetHeap().GetCollectorResources();
-    if (resources.IsGcStarted() && resources.GetGCStats().reason == GC_REASON_YOUNG) {
+    // The queue owner selects the mark face. Statistics and the serial
+    // selector must not reinterpret a node already owned by the other queue.
+    if (generation == GCCycleGeneration::YOUNG) {
         RegionInfo* region = RegionInfo::TryGetRegionInfoAt(reinterpret_cast<MAddress>(obj));
         if (region != nullptr && region->IsYoungRegion()) {
             return RegionSpace::ShouldEnqueue<Generation::Young>(obj);
@@ -126,6 +145,10 @@ void SatbBuffer::Filter(Node* node)
 void SatbBuffer::FlushQueue(Node*& node)
 {
     if (node == nullptr) {
+        return;
+    }
+    if (node->owner != nullptr && node->owner != this) {
+        node->owner->FlushQueue(node);
         return;
     }
     Filter(node);

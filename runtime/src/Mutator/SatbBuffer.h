@@ -9,6 +9,7 @@
 #define MRT_SATB_BUFFER_H
 
 #include "Base/Panic.h"
+#include "Heap/Collector/Collector.h"
 #include "Common/PagePool.h"
 #include "Common/MarkWorkStack.h"
 #include "Heap/Allocator/RegionInfo.h"
@@ -21,11 +22,18 @@ public:
     static constexpr size_t INITIAL_PAGES = 64;    // 64 pages of initial satb buffer
     static constexpr size_t CACHE_LINE_ALIGN = 64; // for most hardware platfrom, the cache line is 64-byte aigned.
     static SatbBuffer& Instance() noexcept;
+    static SatbBuffer& Instance(GCCycleGeneration generation) noexcept;
+    // Serial bridge. Dual-generation obligations are wired by the successor
+    // batch after the shared mark consumers have migrated.
+    static void SelectGeneration(GCCycleGeneration generation) noexcept;
+    static void FiniGenerations();
+    explicit SatbBuffer(GCCycleGeneration generation = GCCycleGeneration::OLD) : generation(generation) {}
+    GCCycleGeneration GetGeneration() const { return generation; }
     class Node {
         friend class SatbBuffer;
 
     public:
-        Node() : index(CONTAINER_CAPACITY), next(nullptr) {}
+        explicit Node(SatbBuffer* owner = nullptr) : index(CONTAINER_CAPACITY), next(nullptr), owner(owner) {}
         ~Node() = default;
         bool IsEmpty() const { return index == CONTAINER_CAPACITY; }
         bool IsFull() const { return index == 0; }
@@ -99,6 +107,7 @@ public:
 #endif
         size_t index;
         Node* next;
+        SatbBuffer* owner;
         Entry entryContainer[CONTAINER_CAPACITY] = {};
     };
 
@@ -208,6 +217,9 @@ public:
 
     void EnsureGoodNode(Node*& node, bool nodeAvailable = true)
     {
+        if (node != nullptr && node->owner != nullptr && node->owner != this) {
+            node->owner->FlushQueue(node);
+        }
         // Store-buffer flushes must be able to prove the allocation-failure arm
         // without exhausting the process address space.  Production callers use
         // the default; the product test hook passes false and exercises the same
@@ -347,6 +359,7 @@ public:
     }
 
 private:
+    const GCCycleGeneration generation;
     Page* GetPages(size_t bytes)
     {
         Page* page = new (PagePool::Instance().GetPage(bytes)) Page(nullptr, bytes);
@@ -355,14 +368,14 @@ private:
         return page;
     }
 
-    Node* ConstructFreeNodeList(const Page* page, size_t bytes) const
+    Node* ConstructFreeNodeList(const Page* page, size_t bytes)
     {
         MAddress start = reinterpret_cast<MAddress>(page) + RoundUp(sizeof(Page), CACHE_LINE_ALIGN);
         MAddress end = reinterpret_cast<MAddress>(page) + bytes;
         Node* cur = nullptr;
         Node* head = nullptr;
         while (start <= (end - NODE_SIZE)) {
-            Node* node = new (reinterpret_cast<void*>(start)) Node();
+            Node* node = new (reinterpret_cast<void*>(start)) Node(this);
             if (cur == nullptr) {
                 cur = node;
                 head = node;

@@ -18,6 +18,7 @@
 #include <cstring>
 #include <condition_variable>
 #include <mutex>
+#include <memory>
 #include <thread>
 #include <unordered_set>
 #include <vector>
@@ -447,6 +448,11 @@ GC_TEST(YoungConc, LateEdgeFollowReceiptSurvivesSatbHandoff)
     const GCReason reasonBefore = resources.GetGCStats().reason;
     resources.SetGcStarted(true);
     resources.GetGCStats().reason = GC_REASON_YOUNG;
+    const auto generationBefore = SatbBuffer::Instance().GetGeneration();
+    const std::shared_ptr<void> restoreGeneration(nullptr, [generationBefore](void*) {
+        SatbBuffer::SelectGeneration(generationBefore);
+    });
+    SatbBuffer::SelectGeneration(GCCycleGeneration::YOUNG);
 
     // Product barrier path: this is a late TRACE-window store, not a direct
     // call to the publication helper.
@@ -509,6 +515,11 @@ GC_OTHER_VM_TEST(YoungConc, LateEdgeFollowReceiptReachesYoungMarkConsumer)
     const GCReason reasonBefore = resources.GetGCStats().reason;
     resources.SetGcStarted(true);
     resources.GetGCStats().reason = GC_REASON_YOUNG;
+    const auto generationBefore = SatbBuffer::Instance().GetGeneration();
+    const std::shared_ptr<void> restoreGeneration(nullptr, [generationBefore](void*) {
+        SatbBuffer::SelectGeneration(generationBefore);
+    });
+    SatbBuffer::SelectGeneration(GCCycleGeneration::YOUNG);
 
     auto* holderField = &HeapSlotAt<>(reinterpret_cast<MAddress>(fx.obj0) + TYPEINFO_PTR_SIZE);
     barrier.Record(fx.obj0, reinterpret_cast<MAddress>(holderField), fx.obj1);
@@ -581,6 +592,11 @@ GC_OTHER_VM_TEST(YoungConc, LateEdgeFollowReceiptReachesYoungRuntimeDispatch)
     const GCReason reasonBefore = resources.GetGCStats().reason;
     resources.SetGcStarted(true);
     resources.GetGCStats().reason = GC_REASON_YOUNG;
+    const auto generationBefore = SatbBuffer::Instance().GetGeneration();
+    const std::shared_ptr<void> restoreGeneration(nullptr, [generationBefore](void*) {
+        SatbBuffer::SelectGeneration(generationBefore);
+    });
+    SatbBuffer::SelectGeneration(GCCycleGeneration::YOUNG);
 
     auto* holderField = &HeapSlotAt<>(reinterpret_cast<MAddress>(fx.obj0) + TYPEINFO_PTR_SIZE);
     barrier.Record(fx.obj0, reinterpret_cast<MAddress>(holderField), fx.obj1);
@@ -664,6 +680,11 @@ GC_OTHER_VM_TEST(YoungConc, Y2yAfterReleaseBatchForcesContinueAndReachesClosure)
 #endif
     resources.SetGcStarted(true);
     resources.GetGCStats().reason = GC_REASON_YOUNG;
+    const auto generationBefore = SatbBuffer::Instance().GetGeneration();
+    const std::shared_ptr<void> restoreGeneration(nullptr, [generationBefore](void*) {
+        SatbBuffer::SelectGeneration(generationBefore);
+    });
+    SatbBuffer::SelectGeneration(GCCycleGeneration::YOUNG);
 #if defined(MRT_GC_UNIT_TESTS)
     // The old holder exercises the pre-release merge. The young holder is
     // injected after workers terminate, while mutators are released. Two
@@ -743,6 +764,11 @@ GC_OTHER_VM_TEST(YoungConc, SatbAfterWorkerTerminationUsesBoundedMarkEndContinue
     const GCReason reasonBefore = resources.GetGCStats().reason;
     resources.SetGcStarted(true);
     resources.GetGCStats().reason = GC_REASON_YOUNG;
+    const auto generationBefore = SatbBuffer::Instance().GetGeneration();
+    const std::shared_ptr<void> restoreGeneration(nullptr, [generationBefore](void*) {
+        SatbBuffer::SelectGeneration(generationBefore);
+    });
+    SatbBuffer::SelectGeneration(GCCycleGeneration::YOUNG);
     ResetMarkTerminateTestReceipt();
     ArmSatbBeforeMarkEndTestReceipt(&producer, first);
 
@@ -801,6 +827,11 @@ GC_OTHER_VM_TEST(YoungConc, YoungAllocBlackVisibleBeforePauseMarkEnd)
     const GCReason reasonBefore = resources.GetGCStats().reason;
     resources.SetGcStarted(true);
     resources.GetGCStats().reason = GC_REASON_YOUNG;
+    const auto generationBefore = SatbBuffer::Instance().GetGeneration();
+    const std::shared_ptr<void> restoreGeneration(nullptr, [generationBefore](void*) {
+        SatbBuffer::SelectGeneration(generationBefore);
+    });
+    SatbBuffer::SelectGeneration(GCCycleGeneration::YOUNG);
     ResetMarkTerminateTestReceipt();
     ArmAllocBlackDuringConcurrentTestReceipt(fx.obj1);
 
@@ -853,6 +884,11 @@ GC_OTHER_VM_TEST(YoungConc, Y2yDirtyVisibleBeforePauseMarkEnd)
     const GCReason reasonBefore = resources.GetGCStats().reason;
     resources.SetGcStarted(true);
     resources.GetGCStats().reason = GC_REASON_YOUNG;
+    const auto generationBefore = SatbBuffer::Instance().GetGeneration();
+    const std::shared_ptr<void> restoreGeneration(nullptr, [generationBefore](void*) {
+        SatbBuffer::SelectGeneration(generationBefore);
+    });
+    SatbBuffer::SelectGeneration(GCCycleGeneration::YOUNG);
     ResetMarkTerminateTestReceipt();
     ArmY2yDuringConcurrentTestReceipt(fx.obj1);
 
@@ -913,6 +949,11 @@ GC_OTHER_VM_TEST(YoungConc, LeftoverAllocBlackAndY2yAfterWorkerForcesContinue)
     const GCReason reasonBefore = resources.GetGCStats().reason;
     resources.SetGcStarted(true);
     resources.GetGCStats().reason = GC_REASON_YOUNG;
+    const auto generationBefore = SatbBuffer::Instance().GetGeneration();
+    const std::shared_ptr<void> restoreGeneration(nullptr, [generationBefore](void*) {
+        SatbBuffer::SelectGeneration(generationBefore);
+    });
+    SatbBuffer::SelectGeneration(GCCycleGeneration::YOUNG);
     ResetMarkTerminateTestReceipt();
     ArmLeftoverBeforePauseTestReceipt(fx.obj1, y2yHolder);
 
@@ -964,6 +1005,11 @@ GC_OTHER_VM_TEST(YoungConc, PauseMarkEndNeverRunsClosure)
     const GCReason reasonBefore = resources.GetGCStats().reason;
     resources.SetGcStarted(true);
     resources.GetGCStats().reason = GC_REASON_YOUNG;
+    const auto generationBefore = SatbBuffer::Instance().GetGeneration();
+    const std::shared_ptr<void> restoreGeneration(nullptr, [generationBefore](void*) {
+        SatbBuffer::SelectGeneration(generationBefore);
+    });
+    SatbBuffer::SelectGeneration(GCCycleGeneration::YOUNG);
     ResetMarkTerminateTestReceipt();
 
     RelocationReceiptTestAccess::RunCollectionDispatch(collector);
@@ -1030,6 +1076,11 @@ GC_OTHER_VM_TEST(YoungConc, ExportRootRegisteredAfterT1ReachesT2Closure)
     producer.SetMutatorPhase(GCPhase::GC_PHASE_TRACE);
     resources.SetGcStarted(true);
     resources.GetGCStats().reason = GC_REASON_YOUNG;
+    const auto generationBefore = SatbBuffer::Instance().GetGeneration();
+    const std::shared_ptr<void> restoreGeneration(nullptr, [generationBefore](void*) {
+        SatbBuffer::SelectGeneration(generationBefore);
+    });
+    SatbBuffer::SelectGeneration(GCCycleGeneration::YOUNG);
     ResetMarkTerminateTestReceipt();
     ResetExportRootPublicationTestReceipt();
     ArmExportRootAfterT1TestReceipt(&producer, holder, child);
@@ -1373,6 +1424,11 @@ GC_TEST(YoungConc, TraceStoreMarksNewYoungTarget)
     const GCReason reasonBefore = resources.GetGCStats().reason;
     resources.SetGcStarted(true);
     resources.GetGCStats().reason = GC_REASON_YOUNG;
+    const auto generationBefore = SatbBuffer::Instance().GetGeneration();
+    const std::shared_ptr<void> restoreGeneration(nullptr, [generationBefore](void*) {
+        SatbBuffer::SelectGeneration(generationBefore);
+    });
+    SatbBuffer::SelectGeneration(GCCycleGeneration::YOUNG);
 
     field->StoreColoured(GcUnit::StoreGoodPointer(fx.obj1));
     // RecordCrossGenEdge is the remember half; TRACE phase adds the mark half.

@@ -28,6 +28,42 @@
 #include "TypeInfoManager.h"
 
 namespace MapleRuntime {
+GCCycleSnapshot GenerationCycle::Snapshot() const
+{
+    std::lock_guard<std::mutex> lock(mutex);
+    return { generation, sequence, requestIndex, reason.load(std::memory_order_relaxed),
+             phase.load(std::memory_order_relaxed), active };
+}
+
+void GenerationCycle::SelectReason(GCReason value)
+{
+    std::lock_guard<std::mutex> lock(mutex);
+    CHECK(!active);
+    reason.store(value, std::memory_order_release);
+}
+
+void GenerationCycle::Begin(uint64_t index)
+{
+    std::lock_guard<std::mutex> lock(mutex);
+    CHECK(!active);
+    CHECK(sequence != UINT64_MAX);
+    ++sequence;
+    requestIndex = index;
+    active = true;
+}
+
+void GenerationCycle::PublishPhase(GCPhase value)
+{
+    std::lock_guard<std::mutex> lock(mutex);
+    phase.store(value, std::memory_order_release);
+}
+
+void GenerationCycle::End()
+{
+    std::lock_guard<std::mutex> lock(mutex);
+    active = false;
+}
+
 namespace {
 const char* const COLLECTOR_NAME[] = { "No Collector", "Proxy Collector", "Regional-Copying Collector",
                                        "Smooth Collector" };
