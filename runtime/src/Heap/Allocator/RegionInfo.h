@@ -3931,17 +3931,17 @@ private:
         // Large pages use the same live/strong ownership pair as bitmap
         // objects, independently of when a worker flushes its live cache.
         uint8_t largeLiveClaim = 0;
-        // Per-current-page live objects, alongside liveByteCount.
+        // Per-current-page live objects, alongside liveByteCount. This uses
+        // the padding before retainedLiveInfoEpoch (the size guard below
+        // still checks the complete UnitInfo layout).
         uint32_t liveObjectCount = 0;
-        // Use remaining alignment before the epoch for this existing counter;
-        // the forwarding owner pointer replaces the former page-state words.
-        uint32_t retainedPreserveCnt = 0;
         uint64_t retainedLiveInfoEpoch = 0;
         MAddress retainedLiveInfoCoveredUpTo = 0;
         RegionLifeId retainedLifeId = 0;
         // holderlive (F2): per-region-life history of the three fields above. Reset by
         // InitRegionInfo so "preserve count 0" means "never preserved in this life", not
         // "never preserved since boot".
+        uint32_t retainedPreserveCnt = 0;
         uint32_t retainedClearCnt = 0;
         uint8_t retainedLastOp = RETAINED_OP_NONE;
         // routedest: 1 while some from-region's published RouteInfo still names this region
