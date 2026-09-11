@@ -2823,7 +2823,8 @@ struct DerivedBaseMapImage {
 DerivedBaseMapImage derivedBaseMapImage;
 
 void RunDerivedBaseProducer(bool interior, bool tagged, bool moving = false,
-                            size_t interiorOffset = 8, bool expectFailClosed = false)
+                            size_t interiorOffset = 8, bool expectFailClosed = false,
+                            bool unresolvedGhost = false)
 {
     auto& image = derivedBaseMapImage;
     std::memset(&image, 0, sizeof(image));
@@ -2861,10 +2862,16 @@ void RunDerivedBaseProducer(bool interior, bool tagged, bool moving = false,
     WCollector collector(Heap::GetHeap().GetAllocator(), Heap::GetHeap().GetCollectorResources());
     RelocationReceiptTestAccess::BindCollector(Heap::GetHeap().GetCollectorResources(), &collector);
     LateBackfillState state {};
-    if (moving) { state = PrepareValueRootForwarding(fx, collector); }
+    if (unresolvedGhost) {
+        state = PrepareLateBackfill(fx, collector);
+        ForwardingTable::ClearEntries(state.region->GetRegionStart(), state.region->GetRegionSize());
+    } else if (moving) {
+        state = PrepareValueRootForwarding(fx, collector);
+    }
     collector.SetGCPhase(GCPhase::GC_PHASE_PREFORWARD);
+    const bool usesState = moving || unresolvedGhost;
     const size_t usedOffset = interior ? interiorOffset : 0;
-    const uintptr_t base = reinterpret_cast<uintptr_t>(moving ? state.from : fx.obj0) + usedOffset;
+    const uintptr_t base = reinterpret_cast<uintptr_t>(usesState ? state.from : fx.obj0) + usedOffset;
     const uintptr_t expected = reinterpret_cast<uintptr_t>(moving ? state.to : fx.obj0) + usedOffset;
     uintptr_t frame[8] = {};
     frame[0] = base;
@@ -2883,7 +2890,7 @@ void RunDerivedBaseProducer(bool interior, bool tagged, bool moving = false,
         });
         std::fprintf(stderr, "DERIVED_BASE_FAILCLOSED status=%d\n%s", aborted.status, aborted.output.c_str());
         fx.typeInfo->SetInstanceSize(savedSize);
-        if (moving) { CleanupLateBackfill(fx, state); }
+        if (usesState) { CleanupLateBackfill(fx, state); }
         collector.SetGCPhase(GCPhase::GC_PHASE_IDLE);
         RelocationReceiptTestAccess::BindCollector(Heap::GetHeap().GetCollectorResources(), nullptr);
         GC_EXPECT_TRUE(aborted.output.find("site=Mutator::MakePreForwardDerivedVisitor.base-not-remapped") !=
@@ -2897,7 +2904,7 @@ void RunDerivedBaseProducer(bool interior, bool tagged, bool moving = false,
     const bool baseCorrect = frame[0] == expected;
     const bool derivedCorrect = frame[1] == expected + 8;
     fx.typeInfo->SetInstanceSize(savedSize);
-    if (moving) { CleanupLateBackfill(fx, state); }
+    if (usesState) { CleanupLateBackfill(fx, state); }
     collector.SetGCPhase(GCPhase::GC_PHASE_IDLE);
     RelocationReceiptTestAccess::BindCollector(Heap::GetHeap().GetCollectorResources(), nullptr);
     GC_EXPECT_TRUE(derivedCorrect);
@@ -2932,6 +2939,10 @@ GC_OTHER_VM_TEST(ForwardingPublicationProduct, PreForwardDerivedOrdinaryMovingBa
 GC_OTHER_VM_TEST(ForwardingPublicationProduct, PreForwardDerivedInteriorUnrecoveredHostFailsClosed)
 {
     RunDerivedBaseProducer(true, false, false, 80, true);
+}
+GC_OTHER_VM_TEST(ForwardingPublicationProduct, PreForwardDerivedTaggedUnresolvedGhostFailsClosed)
+{
+    RunDerivedBaseProducer(false, true, false, 8, true, true);
 }
 #endif
 
