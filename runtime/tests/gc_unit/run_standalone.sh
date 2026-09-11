@@ -279,11 +279,13 @@ echo "STALL_PRODUCT_OBSERVE=$STALL_PRODUCT_OBSERVE"
 
 # The M0 counter accessor is deliberately absent from the default product. Compile its five
 # observer tests only when the linked SO was built with MRT_GC_UNIT_TESTS=ON.
-M0_TEST_ARGS=()
+M0_TEST_FLAGS=()
+M0_TEST_SOURCES=()
 M0_TEST_ACCESS=off
 if nm -D --defined-only "$RUNTIME_LIB_DIR/libcangjie-runtime.so" 2>/dev/null | c++filt |
     /usr/bin/grep 'M0ExitDiagnostics::GetCounts' >/dev/null; then
-  M0_TEST_ARGS=(-DMRT_GC_UNIT_TEST_ACCESS=1 "$SRC/test_m0_exit.cpp")
+  M0_TEST_FLAGS=(-DMRT_GC_UNIT_TEST_ACCESS=1)
+  M0_TEST_SOURCES=("$SRC/test_m0_exit.cpp")
   M0_TEST_ACCESS=on
 fi
 echo "M0_TEST_ACCESS=$M0_TEST_ACCESS"
@@ -410,88 +412,174 @@ echo "GATE_WEAK_DISCOVERY_NO_STRONG_TRACE_OK source=$WEAK_DISCOVERY_SOURCE"
 # Keep this hand-driven entry point structurally identical to the CMake
 # cj_gc_unit target: product inline/template helpers stay hidden and static
 # archives cannot re-export weak copies of the product symbols exercised via
-# dlsym in test_live_map.cpp.
-$CXX -std=gnu++17 -O0 -g -Wall -Wextra -pthread -fno-rtti \
-  -fvisibility-inlines-hidden \
-  "${RANGE_REGISTRY_FLAGS[@]}" \
-  "${TEST_DEFINES[@]}" \
-  "${TESTABLE_FLAGS[@]}" \
-  "${INC_FLAGS[@]}" \
-  "$SRC/gc_unit_main.cpp" \
-  "$SRC/gc_unit_stubs.cpp" \
-  "$ROOT/runtime/src/Base/ZStat.cpp" \
-  "$SRC/test_colour_address.cpp" \
-  "$SRC/test_z_bit_field.cpp" \
-  "$SRC/test_z_list.cpp" \
-  "$SRC/test_zstat.cpp" \
-  "$SRC/test_trustp1_phase1.cpp" \
-  "$SRC/test_route_info.cpp" \
-  "$SRC/test_live_map.cpp" \
-  "$SRC/test_object_gate.cpp" \
-  "$SRC/test_remset.cpp" \
-  "$SRC/test_defect_regressions.cpp" \
-  "$SRC/test_region_bitmap.cpp" \
-  "$SRC/test_region_age.cpp" \
-  "$SRC/test_unwind_regressions.cpp" \
-  "$SRC/test_gctibzero.cpp" \
-  "$SRC/test_pinroot.cpp" \
-  "$SRC/test_followedge.cpp" \
-  "$SRC/test_z_forwarding_life.cpp" \
-  "$SRC/test_colour_is_checks.cpp" \
-  "$SRC/test_remap_young_roots.cpp" \
-  "$SRC/test_forwarding_entries.cpp" \
-  "$SRC/test_forwarding_no_geometry.cpp" \
-  "$SRC/test_z_forwarding_table.cpp" \
-  "$SRC/test_allocation_stall_queue.cpp" \
-    "$SRC/test_young_conc.cpp" \
-  "$SRC/test_alloc_buffer_handoff.cpp" \
-    "$SRC/test_young_weak.cpp" \
-    "$SRC/test_relocation_set_selector.cpp" \
-    "$SRC/test_store_barrier_buffer.cpp" \
-    "$SRC/test_barrier_old_atomic.cpp" \
-    "$SRC/test_page_age.cpp" \
-    "${RANGE_REGISTRY_SOURCES[@]}" \
-    "$SRC/test_stay_young.cpp" \
-    "$SRC/test_gc_trigger.cpp" \
-    "$SRC/test_gc_request_sync.cpp" \
-    "$SRC/test_mutator_relocate.cpp" \
-    "$SRC/test_uncommitter.cpp" \
-    "$SRC/test_relocation_request_queue.cpp" \
-    "$SRC/test_gc_thread_pool.cpp" \
-    "$SRC/test_expire_kept.cpp" \
-    "$SRC/test_receipt_life.cpp" \
-    "$SRC/test_receipt_life_registry.cpp" \
-    "$SRC/test_lifeclock.cpp" \
-    "$SRC/test_exempt_unlock.cpp" \
-    "$SRC/test_heal_coverage.cpp" \
-    "$SRC/test_diag_gate.cpp" \
-    "$SRC/test_interior_edge_class.cpp" \
-    "$SRC/test_isfromreg.cpp" \
-     "$SRC/test_current_object_ref.cpp" \
-     "$SRC/test_fillerobj.cpp" \
-    "$SRC/test_i2_readref.cpp" \
-    "${M0_TEST_ARGS[@]}" \
-    "$SRC/test_loadfc.cpp" \
-    "${M0_CORRELATION_TEST_ARGS[@]}" \
-    "$SRC/test_fwdreturn.cpp" \
-    "$SRC/test_ghost_region_lookup.cpp" \
-    "$SRC/test_fnlz_roots.cpp" \
-    "$SRC/test_reference_processor.cpp" \
-    "$SRC/test_mark_stack_entry.cpp" \
-    "$SRC/test_mark_stripe.cpp" \
-    "$SRC/test_partial_array.cpp" \
-    "$SRC/test_segmented_array_init.cpp" \
-    "$SRC/test_verify_roots.cpp" \
-    "$SRC/test_verify_fail_close.cpp" \
-    "$SRC/test_verify_phase.cpp" \
-    "$SRC/test_verify_marking_stacks.cpp" \
-    "$SRC/test_mem_map.cpp" \
-    "$SRC/test_colour_census.cpp" \
-    "$SRC/test_payload_clamp.cpp" \
-    "$SRC/test_cycle_ref_saferegion.cpp" \
-  -L"$RUNTIME_LIB_DIR" -Wl,-rpath,"$RUNTIME_LIB_DIR" -Wl,--exclude-libs,ALL \
-  -lcangjie-runtime -lboundscheck \
-  -o "$OUT/cj_gc_unit"
+# dlsym in test_live_map.cpp. Compile each translation unit independently so
+# kkk2 can use its cores; link in the original source order.
+MAIN_COMPILE_FLAGS=(
+  -std=gnu++17 -O0 -g -Wall -Wextra -pthread -fno-rtti
+  -fvisibility-inlines-hidden
+  "${RANGE_REGISTRY_FLAGS[@]}"
+  "${TEST_DEFINES[@]}"
+  "${TESTABLE_FLAGS[@]}"
+  "${M0_TEST_FLAGS[@]}"
+  "${INC_FLAGS[@]}"
+)
+MAIN_SOURCES=(
+  "$SRC/gc_unit_main.cpp"
+  "$SRC/gc_unit_stubs.cpp"
+  "$ROOT/runtime/src/Base/ZStat.cpp"
+  "$SRC/test_colour_address.cpp"
+  "$SRC/test_z_bit_field.cpp"
+  "$SRC/test_z_list.cpp"
+  "$SRC/test_zstat.cpp"
+  "$SRC/test_trustp1_phase1.cpp"
+  "$SRC/test_route_info.cpp"
+  "$SRC/test_live_map.cpp"
+  "$SRC/test_object_gate.cpp"
+  "$SRC/test_remset.cpp"
+  "$SRC/test_defect_regressions.cpp"
+  "$SRC/test_region_bitmap.cpp"
+  "$SRC/test_region_age.cpp"
+  "$SRC/test_unwind_regressions.cpp"
+  "$SRC/test_gctibzero.cpp"
+  "$SRC/test_pinroot.cpp"
+  "$SRC/test_followedge.cpp"
+  "$SRC/test_z_forwarding_life.cpp"
+  "$SRC/test_colour_is_checks.cpp"
+  "$SRC/test_remap_young_roots.cpp"
+  "$SRC/test_forwarding_entries.cpp"
+  "$SRC/test_forwarding_no_geometry.cpp"
+  "$SRC/test_z_forwarding_table.cpp"
+  "$SRC/test_allocation_stall_queue.cpp"
+  "$SRC/test_young_conc.cpp"
+  "$SRC/test_alloc_buffer_handoff.cpp"
+  "$SRC/test_young_weak.cpp"
+  "$SRC/test_relocation_set_selector.cpp"
+  "$SRC/test_store_barrier_buffer.cpp"
+  "$SRC/test_barrier_old_atomic.cpp"
+  "$SRC/test_page_age.cpp"
+  "${RANGE_REGISTRY_SOURCES[@]}"
+  "$SRC/test_stay_young.cpp"
+  "$SRC/test_gc_trigger.cpp"
+  "$SRC/test_gc_request_sync.cpp"
+  "$SRC/test_mutator_relocate.cpp"
+  "$SRC/test_uncommitter.cpp"
+  "$SRC/test_relocation_request_queue.cpp"
+  "$SRC/test_gc_thread_pool.cpp"
+  "$SRC/test_expire_kept.cpp"
+  "$SRC/test_receipt_life.cpp"
+  "$SRC/test_receipt_life_registry.cpp"
+  "$SRC/test_lifeclock.cpp"
+  "$SRC/test_exempt_unlock.cpp"
+  "$SRC/test_heal_coverage.cpp"
+  "$SRC/test_diag_gate.cpp"
+  "$SRC/test_interior_edge_class.cpp"
+  "$SRC/test_isfromreg.cpp"
+  "$SRC/test_current_object_ref.cpp"
+  "$SRC/test_fillerobj.cpp"
+  "$SRC/test_i2_readref.cpp"
+  "${M0_TEST_SOURCES[@]}"
+  "$SRC/test_loadfc.cpp"
+  "${M0_CORRELATION_TEST_ARGS[@]}"
+  "$SRC/test_fwdreturn.cpp"
+  "$SRC/test_ghost_region_lookup.cpp"
+  "$SRC/test_fnlz_roots.cpp"
+  "$SRC/test_reference_processor.cpp"
+  "$SRC/test_mark_stack_entry.cpp"
+  "$SRC/test_mark_stripe.cpp"
+  "$SRC/test_partial_array.cpp"
+  "$SRC/test_segmented_array_init.cpp"
+  "$SRC/test_verify_roots.cpp"
+  "$SRC/test_verify_fail_close.cpp"
+  "$SRC/test_verify_phase.cpp"
+  "$SRC/test_verify_marking_stacks.cpp"
+  "$SRC/test_mem_map.cpp"
+  "$SRC/test_colour_census.cpp"
+  "$SRC/test_payload_clamp.cpp"
+  "$SRC/test_cycle_ref_saferegion.cpp"
+)
+
+PUBLICATION_COMPILE_FLAGS=(
+  -std=gnu++17 -O0 -g -Wall -Wextra -pthread -fno-rtti
+  -fvisibility-inlines-hidden
+  "${TEST_DEFINES[@]}"
+  -DMRT_TESTABLE_INTERNALS=1
+  "${PUBLICATION_TESTABLE_FLAGS[@]}"
+  "${PUBLICATION_HOOK_FLAGS[@]}"
+  "${REMAP_RECEIPT_FLAGS[@]}"
+  "${INC_FLAGS[@]}"
+)
+PUBLICATION_SOURCES=(
+  "$SRC/gc_unit_main.cpp"
+  "$SRC/clear_entries_product_unit.cpp"
+)
+
+BUILD_JOBS="${GC_UNIT_BUILD_JOBS:-$(nproc)}"
+if [[ ! "$BUILD_JOBS" =~ ^[1-9][0-9]*$ ]]; then
+  echo "error: GC_UNIT_BUILD_JOBS must be a positive integer, got: $BUILD_JOBS" >&2
+  exit 2
+fi
+MAIN_OBJECT_DIR="$OUT/objects/main"
+PUBLICATION_OBJECT_DIR="$OUT/objects/publication"
+mkdir -p "$MAIN_OBJECT_DIR" "$PUBLICATION_OBJECT_DIR"
+MAIN_OBJECTS=()
+PUBLICATION_OBJECTS=()
+COMPILE_MANIFEST="$OUT/compile-manifest.bin"
+: >"$COMPILE_MANIFEST"
+for index in "${!MAIN_SOURCES[@]}"; do
+  object="$MAIN_OBJECT_DIR/$(printf '%04d' "$index")-$(basename "${MAIN_SOURCES[$index]}").o"
+  MAIN_OBJECTS+=("$object")
+  printf 'main\0%s\0%s\0' "$object" "${MAIN_SOURCES[$index]}" >>"$COMPILE_MANIFEST"
+done
+for index in "${!PUBLICATION_SOURCES[@]}"; do
+  object="$PUBLICATION_OBJECT_DIR/$(printf '%04d' "$index")-$(basename "${PUBLICATION_SOURCES[$index]}").o"
+  PUBLICATION_OBJECTS+=("$object")
+  printf 'publication\0%s\0%s\0' "$object" "${PUBLICATION_SOURCES[$index]}" >>"$COMPILE_MANIFEST"
+done
+
+printf -v MAIN_COMPILE_FLAGS_SERIALIZED '%s\n' "${MAIN_COMPILE_FLAGS[@]}"
+MAIN_COMPILE_FLAGS_SERIALIZED=${MAIN_COMPILE_FLAGS_SERIALIZED%$'\n'}
+printf -v PUBLICATION_COMPILE_FLAGS_SERIALIZED '%s\n' "${PUBLICATION_COMPILE_FLAGS[@]}"
+PUBLICATION_COMPILE_FLAGS_SERIALIZED=${PUBLICATION_COMPILE_FLAGS_SERIALIZED%$'\n'}
+export CXX MAIN_COMPILE_FLAGS_SERIALIZED PUBLICATION_COMPILE_FLAGS_SERIALIZED
+compile_one() {
+  local target=$1 object=$2 source=$3 serialized
+  local -a flags compiler
+  case "$target" in
+    main) serialized=$MAIN_COMPILE_FLAGS_SERIALIZED ;;
+    publication) serialized=$PUBLICATION_COMPILE_FLAGS_SERIALIZED ;;
+    *) return 2 ;;
+  esac
+  mapfile -t flags <<<"$serialized"
+  read -r -a compiler <<<"$CXX"
+  "${compiler[@]}" "${flags[@]}" -c "$source" -o "$object"
+}
+export -f compile_one
+xargs -0 -n 3 -P "$BUILD_JOBS" bash -c 'compile_one "$1" "$2" "$3"' _ <"$COMPILE_MANIFEST"
+
+read -r -a CXX_COMMAND <<<"$CXX"
+set +e
+(
+  "${CXX_COMMAND[@]}" "${MAIN_COMPILE_FLAGS[@]}" "${MAIN_OBJECTS[@]}" \
+    -L"$RUNTIME_LIB_DIR" -Wl,-rpath,"$RUNTIME_LIB_DIR" -Wl,--exclude-libs,ALL \
+    -lcangjie-runtime -lboundscheck -o "$OUT/cj_gc_unit"
+) &
+main_link_pid=$!
+(
+  "${CXX_COMMAND[@]}" "${PUBLICATION_COMPILE_FLAGS[@]}" "${PUBLICATION_OBJECTS[@]}" \
+    -L"$RUNTIME_LIB_DIR" -Wl,-rpath,"$RUNTIME_LIB_DIR" -Wl,--exclude-libs,ALL \
+    -lcangjie-runtime -lboundscheck -o "$OUT/cj_gc_forwarding_publication_unit"
+) &
+publication_link_pid=$!
+wait "$main_link_pid"
+main_link_rc=$?
+wait "$publication_link_pid"
+publication_link_rc=$?
+set -e
+if [[ $main_link_rc -ne 0 || $publication_link_rc -ne 0 ]]; then
+  echo "GC_UNIT_LINK_FAIL main_rc=$main_link_rc publication_rc=$publication_link_rc" >&2
+  exit 2
+fi
+echo "GC_UNIT_COMPILE_PARALLEL jobs=$BUILD_JOBS tus=$((${#MAIN_SOURCES[@]} + ${#PUBLICATION_SOURCES[@]}))"
 
 # The standalone script is the frozen gate's real build entry point.  Keep the
 # same structural invariant as the CMake target at that point, before any test
@@ -823,23 +911,6 @@ for producer_name in "${EXPECTED_PTRCOLOUR_PRODUCERS[@]}"; do
 done
 echo "GATE_PTRCOLOUR_PRODUCER_MANIFEST_OK rows=$ptrcolour_producer_rows families=4"
 
-# Fresh-process product-link arm for the one-shot ForwardingTable.  It binds
-# CompactRegion/ClearEntries from the same runtime SO as the full suite; no
-# forwarding component is rebuilt into this executable.
-$CXX -std=gnu++17 -O0 -g -Wall -Wextra -pthread -fno-rtti \
-  -fvisibility-inlines-hidden \
-  "${TEST_DEFINES[@]}" \
-  -DMRT_TESTABLE_INTERNALS=1 \
-  "${PUBLICATION_TESTABLE_FLAGS[@]}" \
-  "${PUBLICATION_HOOK_FLAGS[@]}" \
-  "${REMAP_RECEIPT_FLAGS[@]}" \
-  "${INC_FLAGS[@]}" \
-  "$SRC/gc_unit_main.cpp" \
-  "$SRC/clear_entries_product_unit.cpp" \
-  -L"$RUNTIME_LIB_DIR" -Wl,-rpath,"$RUNTIME_LIB_DIR" -Wl,--exclude-libs,ALL \
-  -lcangjie-runtime -lboundscheck \
-  -o "$OUT/cj_gc_forwarding_publication_unit"
-
 LOADHEAL_FULL="$OUT/cj_gc_forwarding_publication_unit.full-defined.txt"
 LOADHEAL_UNDEFINED="$OUT/cj_gc_forwarding_publication_unit.undefined.txt"
 nm --defined-only "$OUT/cj_gc_forwarding_publication_unit" | c++filt >"$LOADHEAL_FULL"
@@ -927,73 +998,54 @@ if command -v nm >/dev/null 2>&1; then
   nm -D "$RUNTIME_LIB_DIR/libcangjie-runtime.so" 2>/dev/null | grep -E 'RangeRegistry|RelocationRequestQueue|ReceiptAllowsForwarded|VerifyRoots|PlausibleManagedObjectGate|TryRecoverInteriorBase|RouteInfo8GetRoute|RecordCrossGenEdge|MarkGoodHeapGate' | head -40 || true
 fi
 
-START=$(date +%s%N)
-FINAL_TALLY="${GC_UNIT_TALLY_FILE:-}"
-MAIN_TALLY="$OUT/main_tally.txt"
-PUBLICATION_TALLY="$OUT/forwarding_publication_tally.txt"
-PUBLICATION_RUN_LOG="$OUT/forwarding_publication_run.log"
-rm -f "$MAIN_TALLY" "$PUBLICATION_TALLY" "$PUBLICATION_RUN_LOG"
+printf -v GC_UNIT_MAIN_ENV '%s\n' "${M0_CORRELATION_ENV[@]}"
+GC_UNIT_MAIN_ENV=${GC_UNIT_MAIN_ENV%$'\n'}
+export GC_UNIT_MAIN_ENV
 set +e
-env "${M0_CORRELATION_ENV[@]}" GC_UNIT_TALLY_FILE="$MAIN_TALLY" \
-  LD_LIBRARY_PATH="$RUNTIME_LIB_DIR${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}" "$OUT/cj_gc_unit"
-MAIN_RC=$?
-GC_UNIT_TALLY_FILE="$PUBLICATION_TALLY" \
-  LD_LIBRARY_PATH="$RUNTIME_LIB_DIR${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}" \
-  "$OUT/cj_gc_forwarding_publication_unit" 2>&1 | tee "$PUBLICATION_RUN_LOG"
-PUBLICATION_RC=${PIPESTATUS[0]}
+bash "$SRC/run_parallel_tests.sh" \
+  "$OUT/cj_gc_unit" "$OUT/cj_gc_forwarding_publication_unit" "$OUT" "$RUNTIME_LIB_DIR"
+runner_rc=$?
 set -e
 
+# Keep #63's product-shape checks after replacing its whole-ELF publication run
+# with per-case processes. Each publication case has an independent log, so the
+# same required RUN/PASS and I03 result tokens remain observable.
+publication_logs=("$OUT"/test-logs/*-publication.log)
+publication_contract_rc=0
 for test_name in "${PUBLICATION_HOOK_TESTS[@]}"; do
   if [[ "$PUBLICATION_HOOK_PRODUCT_SHAPE" == testable ]]; then
-    if ! /usr/bin/grep -F -q "[  RUN   ] $test_name" "$PUBLICATION_RUN_LOG" ||
-        ! /usr/bin/grep -F -q "[  PASS  ] $test_name" "$PUBLICATION_RUN_LOG"; then
+    if ! /usr/bin/grep -F -q "[  RUN   ] $test_name" "${publication_logs[@]}" ||
+        ! /usr/bin/grep -F -q "[  PASS  ] $test_name" "${publication_logs[@]}"; then
       echo "GC_UNIT_PUBLICATION_HOOK_TEST_DID_NOT_PASS test=$test_name" >&2
-      PUBLICATION_RC=1
+      publication_contract_rc=1
     fi
-  elif /usr/bin/grep -F -q "[  RUN   ] $test_name" "$PUBLICATION_RUN_LOG"; then
+  elif /usr/bin/grep -F -q "[  RUN   ] $test_name" "${publication_logs[@]}"; then
     echo "GC_UNIT_PUBLICATION_HOOK_TEST_RAN_FOR_DEFAULT test=$test_name" >&2
-    PUBLICATION_RC=1
+    publication_contract_rc=1
   fi
 done
 if [[ "$PUBLICATION_HOOK_PRODUCT_SHAPE" == testable ]] &&
-    ! /usr/bin/grep -F -q 'I03_TARGET_REACHED state=1 count=1' "$PUBLICATION_RUN_LOG"; then
+    ! /usr/bin/grep -F -q 'I03_TARGET_REACHED state=1 count=1' "${publication_logs[@]}"; then
   echo "GC_UNIT_I03_TARGET_NOT_REACHED" >&2
-  PUBLICATION_RC=1
+  publication_contract_rc=1
 fi
-
 if [[ "$REMAP_RECEIPT_PRODUCT_SHAPE" == testable ]]; then
-  if ! /usr/bin/grep -F -q "[  RUN   ] $REMAP_RECEIPT_TEST" "$PUBLICATION_RUN_LOG" ||
-      ! /usr/bin/grep -F -q "[  PASS  ] $REMAP_RECEIPT_TEST" "$PUBLICATION_RUN_LOG" ||
-      ! /usr/bin/grep -F -q 'TARGET_CURRENT_REMSET_ASSERT_EXECUTED' "$PUBLICATION_RUN_LOG"; then
+  if ! /usr/bin/grep -F -q "[  RUN   ] $REMAP_RECEIPT_TEST" "${publication_logs[@]}" ||
+      ! /usr/bin/grep -F -q "[  PASS  ] $REMAP_RECEIPT_TEST" "${publication_logs[@]}" ||
+      ! /usr/bin/grep -F -q 'TARGET_CURRENT_REMSET_ASSERT_EXECUTED' "${publication_logs[@]}"; then
     echo "GC_UNIT_REMAP_RECEIPT_TEST_DID_NOT_PASS test=$REMAP_RECEIPT_TEST" >&2
-    PUBLICATION_RC=1
+    publication_contract_rc=1
   fi
-elif /usr/bin/grep -F -q "[  RUN   ] $REMAP_RECEIPT_TEST" "$PUBLICATION_RUN_LOG"; then
+elif /usr/bin/grep -F -q "[  RUN   ] $REMAP_RECEIPT_TEST" "${publication_logs[@]}"; then
   echo "GC_UNIT_REMAP_RECEIPT_TEST_RAN_FOR_DEFAULT test=$REMAP_RECEIPT_TEST" >&2
-  PUBLICATION_RC=1
+  publication_contract_rc=1
 fi
-END=$(date +%s%N)
-ELAPSED_MS=$(( (END - START) / 1000000 ))
-
-# The gate consumes one independent tally.  Merge only two complete runner
-# tallies; an abort or disconnect leaves the final tally absent and fails
-# closed instead of turning an incomplete run into "one red".
-if [[ -n "$FINAL_TALLY" && -f "$MAIN_TALLY" && -f "$PUBLICATION_TALLY" ]]; then
-  read -r main_tests main_pass main_fail < <(
-    sed -nE 's/^\[========\] ([0-9]+) tests: ([0-9]+) passed, ([0-9]+) failed$/\1 \2 \3/p' "$MAIN_TALLY")
-  read -r publication_tests publication_pass publication_fail < <(
-    sed -nE 's/^\[========\] ([0-9]+) tests: ([0-9]+) passed, ([0-9]+) failed$/\1 \2 \3/p' "$PUBLICATION_TALLY")
-  if [[ -n "${main_tests:-}" && -n "${publication_tests:-}" ]]; then
-    printf '[========] %d tests: %d passed, %d failed\n' \
-      "$((main_tests + publication_tests))" \
-      "$((main_pass + publication_pass))" \
-      "$((main_fail + publication_fail))" >"$FINAL_TALLY"
+if [[ $publication_contract_rc -ne 0 ]]; then
+  # The aggregate tally is completion evidence. Do not leave one consumable
+  # after a post-run product-shape contract fails.
+  if [[ -n "${GC_UNIT_TALLY_FILE:-}" ]]; then
+    rm -f "$GC_UNIT_TALLY_FILE"
   fi
+  exit 1
 fi
-
-RC=0
-if [[ $MAIN_RC -ne 0 || $PUBLICATION_RC -ne 0 ]]; then
-  RC=1
-fi
-echo "GC_UNIT_RUN_DONE rc=$RC main_rc=$MAIN_RC publication_rc=$PUBLICATION_RC wall_ms=$ELAPSED_MS"
-exit "$RC"
+exit "$runner_rc"
