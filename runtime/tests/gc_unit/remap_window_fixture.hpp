@@ -8,6 +8,8 @@
 #include <dlfcn.h>
 
 namespace {
+enum class ForwardDomain { None, Identity, Copy, Retired, Missing, WrongLife, Unavailable };
+
 struct RemapWindow {
     std::mutex mutex;
     std::condition_variable cv;
@@ -17,6 +19,9 @@ struct RemapWindow {
     bool returned = false;
     bool copied = false;
     bool copyOnly = false;
+    ForwardDomain domain = ForwardDomain::None;
+    bool afterDone = false;
+    BaseObject* expected = nullptr;
     RegionInfo* kept = nullptr;
     BaseObject* from = nullptr;
     BaseObject* copyFrom = nullptr;
@@ -38,8 +43,99 @@ struct RemapWindow {
 };
 RemapWindow* remapWindow = nullptr;
 
+void ForwardDomainHook(unsigned point, RegionInfo* region, BaseObject* object)
+{
+    auto& state = *remapWindow;
+    std::unique_lock<std::mutex> lock(state.mutex);
+    if (point == 1) {
+        GC_EXPECT_FALSE(state.kept->IsForwardingDone());
+        state.drain.reset(new RegionInfo::DrainScope(state.kept, MutatorRelocate::Retire::DISPEL_GHOST));
+        state.window = true;
+        state.cv.notify_all();
+        state.Wait(lock, state.entered, "domain-wait-entry");
+        // The copying worker needs its page token; the mutator has already
+        // passed retain and is parked inside the real WaitRoutedTipReady.
+        if (state.domain == ForwardDomain::Copy) state.drain.reset();
+        return;
+    }
+    if (point == 2 && object == state.from) {
+        GC_EXPECT_TRUE(std::this_thread::get_id() == state.mutatorThread);
+        GC_EXPECT_TRUE(ThreadLocal::GetMutator() != nullptr);
+        GC_EXPECT_TRUE(region == state.kept);
+        GC_EXPECT_FALSE(region->IsForwardingDone());
+        std::fprintf(stderr, "DOMAIN wait_entry=1 from=%p tls=%p\n", object,
+                     static_cast<void*>(ThreadLocal::GetMutator()));
+        state.entered = true;
+        state.cv.notify_all();
+        state.Wait(lock, state.published, "domain-publication");
+        return;
+    }
+    const bool copied = state.domain == ForwardDomain::Copy;
+    const bool selected = copied ? (state.afterDone ? point == 4 : point == 6 && object == state.from)
+        : region == state.kept && point == (state.afterDone ? 5u : 3u);
+    if (!selected) return;
+
+    const MAddress from = reinterpret_cast<MAddress>(state.from);
+    const auto produced = ForwardingTable::LookupTo(from);
+    GC_EXPECT_TRUE(produced.answer == ForwardingTable::ToAnswer::ArmedHit);
+    GC_EXPECT_TRUE(produced.activeAnswer == ForwardingTable::ToAnswer::ArmedHit);
+    GC_EXPECT_EQ(produced.to == from, !copied);
+    GC_EXPECT_EQ(state.kept->IsForwardingDone(), state.afterDone);
+    if (copied) GC_EXPECT_TRUE(state.from->IsForwarded());
+    state.expected = reinterpret_cast<BaseObject*>(produced.to);
+    std::fprintf(stderr, "DOMAIN producer_receipt=1 copy=%d done=%d from=%p to=%p\n",
+                 copied, state.afterDone, state.from, state.expected);
+
+    if (state.domain == ForwardDomain::Retired) {
+        ForwardingTable::ClearEntries(state.kept->GetRegionStart(), state.kept->GetRegionSize());
+    } else if (state.domain == ForwardDomain::Missing || state.domain == ForwardDomain::Unavailable) {
+        // Remove exactly the receipt that the real producer just installed.
+        // This is an invalid-input fixture, never an alternate publisher.
+        auto* table = ForwardingTable::GetEntries(from);
+        GC_EXPECT_TRUE(table != nullptr);
+        ForwardingCursor cursor = 0;
+        GC_EXPECT_TRUE(table->find(table->index(from), &cursor).populated());
+        table->entries()[cursor].store(0, std::memory_order_release);
+        if (state.domain == ForwardDomain::Unavailable) {
+            ForwardingTable::ForcePublicationClosedForTest(from);
+        }
+    } else if (state.domain == ForwardDomain::WrongLife) {
+        const auto route = state.kept->GetRouteState();
+        state.kept->BumpRegionLifeId();
+        // Keep the diagnostic route carrier current; the table and receipt
+        // retain their original, now mismatching lifecycle stamps.
+        state.kept->SetRouteState(route);
+    }
+    const auto consumed = ForwardingTable::LookupTo(from);
+    std::fprintf(stderr, "DOMAIN input answer=%u active=%u retired=%u cause=%u to=%#zx done=%d\n",
+                 static_cast<unsigned>(consumed.answer), static_cast<unsigned>(consumed.activeAnswer),
+                 static_cast<unsigned>(consumed.retiredAnswer), static_cast<unsigned>(consumed.unavailableCause),
+                 consumed.to, state.kept->IsForwardingDone());
+    if (state.domain == ForwardDomain::Retired) {
+        GC_EXPECT_TRUE(consumed.retiredAnswer == ForwardingTable::ToAnswer::ArmedHit);
+        GC_EXPECT_EQ(consumed.to, produced.to);
+    } else if (state.domain == ForwardDomain::Missing) {
+        GC_EXPECT_TRUE(consumed.answer == ForwardingTable::ToAnswer::ArmedMiss);
+        GC_EXPECT_EQ(consumed.to, 0u);
+    } else if (state.domain == ForwardDomain::WrongLife && !RegionLifeClock::EnforceEnabled()) {
+        GC_EXPECT_TRUE(consumed.answer == ForwardingTable::ToAnswer::ArmedHit);
+        GC_EXPECT_EQ(consumed.to, produced.to);
+        std::fprintf(stderr, "DOMAIN lifecycle_audit_control=ArmedHit\n");
+    } else if (state.domain == ForwardDomain::WrongLife || state.domain == ForwardDomain::Unavailable) {
+        GC_EXPECT_TRUE(consumed.answer == ForwardingTable::ToAnswer::Unavailable);
+        GC_EXPECT_EQ(consumed.to, 0u);
+    }
+    state.published = true;
+    state.cv.notify_all();
+    state.Wait(lock, state.returned, "domain-result");
+}
+
 void RemapWindowHook(unsigned point, RegionInfo* region, BaseObject* object)
 {
+    if (remapWindow->domain != ForwardDomain::None) {
+        ForwardDomainHook(point, region, object);
+        return;
+    }
     auto& state = *remapWindow;
     std::unique_lock<std::mutex> lock(state.mutex);
     if (point == 1) {
@@ -104,13 +200,13 @@ void RemapWindowHook(unsigned point, RegionInfo* region, BaseObject* object)
     }
 }
 
-void RunRemapWindow(bool copyOnly)
+void RunRemapWindow(bool copyOnly, ForwardDomain domain = ForwardDomain::None, bool afterDone = false)
 {
     // The strict arm is deliberately red on #175's frozen guard. Ordinary
     // suites run the copy prerequisite; the contract arm is explicitly invoked
     // with CJ_GC_UNIT_REMAP_WINDOW=1 and a single-test filter.
     const char* strict = std::getenv("CJ_GC_UNIT_REMAP_WINDOW");
-    if (!copyOnly && (strict == nullptr || std::strcmp(strict, "1") != 0)) {
+    if (domain == ForwardDomain::None && !copyOnly && (strict == nullptr || std::strcmp(strict, "1") != 0)) {
         std::fprintf(stderr, "REMAP_WINDOW strict_arm=NOT_RUN enable=CJ_GC_UNIT_REMAP_WINDOW\n");
         return;
     }
@@ -181,9 +277,11 @@ void RunRemapWindow(bool copyOnly)
     std::fprintf(stderr, "REMAP_WINDOW product=%s symbol=%s\n", identity.dli_fname, identity.dli_sname);
 
     RemapWindow state;
+    state.domain = domain;
+    state.afterDone = afterDone;
     state.copyOnly = copyOnly;
-    state.kept = fx.region1;
-    state.from = fx.obj1;
+    state.kept = domain == ForwardDomain::Copy ? copyPage : fx.region1;
+    state.from = domain == ForwardDomain::Copy ? copyObject : fx.obj1;
     state.copyFrom = copyObject;
     state.collector = &collector;
     state.gcThread = std::this_thread::get_id();
@@ -204,6 +302,21 @@ void RunRemapWindow(bool copyOnly)
                 ForwardingProvenance{ForwardingHolderKind::StackSlot, &mutator, &state.from});
             lock.lock();
             GC_EXPECT_TRUE(state.entered && state.published);
+            if (domain != ForwardDomain::None) {
+                // Exit this isolated scenario at the observed consumer. Fault
+                // fixtures must not resume GC with intentionally invalid input.
+                std::fprintf(stderr, "DOMAIN consumer_return=%p expected=%p done=%d\n", result,
+                             state.expected, state.kept->IsForwardingDone());
+                if (domain == ForwardDomain::Identity || domain == ForwardDomain::Copy ||
+                    domain == ForwardDomain::Retired ||
+                    (domain == ForwardDomain::WrongLife && !RegionLifeClock::EnforceEnabled())) {
+                    GC_EXPECT_TRUE(result == state.expected);
+                    GC_EXPECT_EQ(state.kept->IsForwardingDone(), afterDone);
+                    std::fprintf(stderr, "DOMAIN result_assertion=PASS\n");
+                }
+                std::fflush(nullptr);
+                _exit(0);
+            }
             GC_EXPECT_TRUE(result == state.from);
             GC_EXPECT_FALSE(state.kept->IsForwardingDone());
             std::fprintf(stderr, "REMAP_WINDOW target_guard_returned_identity=1 done=0\n");
@@ -242,3 +355,70 @@ GC_OTHER_VM_TEST(YoungConc, KeptIdentityAtWaitRoutedGuard)
 {
     RunRemapWindow(false);
 }
+
+namespace {
+void RunForwardDomain(ForwardDomain domain)
+{
+    const char* enabled = std::getenv("CJ_GC_UNIT_FORWARD_DOMAIN");
+    if (enabled == nullptr || std::strcmp(enabled, "1") != 0) {
+        std::fprintf(stderr, "DOMAIN NOT_RUN enable=CJ_GC_UNIT_FORWARD_DOMAIN\n");
+        return;
+    }
+    const bool negative = domain == ForwardDomain::Missing ||
+                          (domain == ForwardDomain::WrongLife && RegionLifeClock::EnforceEnabled()) ||
+                          domain == ForwardDomain::Unavailable;
+    for (bool done : {false, true}) {
+        int pipefd[2];
+        GC_EXPECT_EQ(pipe(pipefd), 0);
+        std::fflush(nullptr);
+        const pid_t child = fork();
+        GC_EXPECT_TRUE(child >= 0);
+        if (child == 0) {
+            close(pipefd[0]);
+            if (dup2(pipefd[1], STDERR_FILENO) < 0) _exit(126);
+            close(pipefd[1]);
+            (void)signal(SIGABRT, SIG_DFL);
+            RunRemapWindow(false, domain, done);
+            _exit(3); // A successful scenario exits from its real consumer.
+        }
+        close(pipefd[1]);
+        std::string output;
+        char buffer[4096];
+        ssize_t count;
+        while ((count = read(pipefd[0], buffer, sizeof(buffer))) > 0) {
+            output.append(buffer, static_cast<size_t>(count));
+        }
+        close(pipefd[0]);
+        int status = 0;
+        GC_EXPECT_EQ(waitpid(child, &status, 0), child);
+        std::fprintf(stderr, "DOMAIN scenario=%u done=%d status=%d\n%s",
+                     static_cast<unsigned>(domain), done, status, output.c_str());
+        // Keep prerequisites separate from the named target assertion. Print
+        // all decisions even when a prerequisite failed, so an earlier failure
+        // cannot masquerade as execution of the consumer assertion.
+        const bool entered = output.find("DOMAIN wait_entry=1") != std::string::npos;
+        const bool produced = output.find("DOMAIN producer_receipt=1") != std::string::npos;
+        const char* target = domain == ForwardDomain::Missing
+            ? (done ? "WCollector::WaitRoutedTipReady.published-without-receipt"
+                    : "WCollector::WaitRoutedTipReady.retain-refused-without-receipt")
+            : "WCollector::WaitRoutedTipReady.publication-closed";
+        const bool targetMatched = negative ? output.find(target) != std::string::npos
+            : output.find("DOMAIN result_assertion=PASS") != std::string::npos;
+        const bool statusMatched = negative ? WIFSIGNALED(status) && WTERMSIG(status) == SIGABRT
+            : WIFEXITED(status) && WEXITSTATUS(status) == 0;
+        std::fprintf(stderr, "DOMAIN target_assertion executed=1 matched=%d status_matched=%d "
+                     "entered=%d produced=%d target=%s\n", targetMatched, statusMatched, entered, produced,
+                     negative ? target : "consumer-result");
+        GC_EXPECT_TRUE(targetMatched);
+        GC_EXPECT_TRUE(statusMatched);
+        GC_EXPECT_TRUE(entered && produced);
+    }
+}
+} // namespace
+
+GC_OTHER_VM_TEST(ForwardReturnDomain, Identity) { RunForwardDomain(ForwardDomain::Identity); }
+GC_OTHER_VM_TEST(ForwardReturnDomain, NonIdentityCopy) { RunForwardDomain(ForwardDomain::Copy); }
+GC_OTHER_VM_TEST(ForwardReturnDomain, RetiredHit) { RunForwardDomain(ForwardDomain::Retired); }
+GC_OTHER_VM_TEST(ForwardReturnDomain, MissingEntry) { RunForwardDomain(ForwardDomain::Missing); }
+GC_OTHER_VM_TEST(ForwardReturnDomain, WrongLifecycle) { RunForwardDomain(ForwardDomain::WrongLife); }
+GC_OTHER_VM_TEST(ForwardReturnDomain, Unavailable) { RunForwardDomain(ForwardDomain::Unavailable); }

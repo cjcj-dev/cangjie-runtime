@@ -3059,6 +3059,9 @@ BaseObject* WCollector::ForwardObjectExclusive(BaseObject* obj, BaseObject* toOb
         }
     }
     obj->UnlockObject(ObjectState::FORWARDED);
+#if defined(MRT_TESTABLE_INTERNALS)
+    RunRemapWindowTestHook(6, copyPage, obj);
+#endif
     return reinterpret_cast<BaseObject*>(mapped);
 }
 } // namespace MapleRuntime
