@@ -75,15 +75,13 @@
 #include "Heap/WCollector/WCollectorInternal.h"
 
 namespace MapleRuntime {
-#if defined(MRT_TESTABLE_INTERNALS)
-// Existing live-map tests bind these product adapters by symbol. Moving the
-// runtime consumer to the first-live result must not erase their testable
-// instantiations or make the test ELF instantiate its own copy.
+// Preserve the two existing product template instantiations while internal
+// consumers move to the richer first-live result. Their inline definitions
+// and visibility are unchanged; this does not export a test-only API.
 template bool RegionInfo::MarkObject<Generation::Young>(
     MarkView<Generation::Young>, const BaseObject*, size_t, bool);
 template bool RegionInfo::MarkObject<Generation::Old>(
     MarkView<Generation::Old>, const BaseObject*, size_t, bool);
-#endif
 
 #if defined(MRT_TESTABLE_INTERNALS)
 namespace {
@@ -2280,6 +2278,13 @@ void WCollector::TraceYoungClosure(WorkStack& workStack, bool fullYoungScan, Min
                                    const MinorSlotSet* reachableSlotDomain)
 {
 #if defined(MRT_TESTABLE_INTERNALS)
+    // Observe the completed closure result before the following GC phases
+    // can promote/reset its page. This has no product-build call or state.
+    struct ClosureObservation {
+        const std::vector<BaseObject*>& objects;
+        ~ClosureObservation() { ObserveMarkClosureForTest(&objects); }
+    } observation{reachableVec};
+
     if (MutatorManager::Instance().WorldStopped()) {
         NoteTraceYoungClosureDuringPause();
     }

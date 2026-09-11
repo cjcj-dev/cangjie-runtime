@@ -3,6 +3,7 @@
 // with Runtime Library Exception.
 
 #include <dlfcn.h>
+#include <memory>
 #include "gc_heap_fixture.hpp"
 #include "gc_unittest.hpp"
 #include "Heap/Collector/MarkStripe.h"
@@ -146,16 +147,16 @@ extern "C" int CJ_ScheduleManagerInit();
 
 namespace MapleRuntime {
 struct MarkPort203TestAccess {
-    static void Bind(CollectorResources& resources, TracingCollector* collector, GCThreadPool* pool)
+    static void Bind(CollectorResources& resources, TracingCollector* collector, GCThreadPool* pool, int32_t count = 1)
     {
         resources.collectorProxy.currentCollector = collector;
         resources.gcThreadPool = pool;
-        resources.gcThreadCount = 1;
-        resources.concurrentGcThreadCount = 1;
+        resources.gcThreadCount = count;
+        resources.concurrentGcThreadCount = count;
     }
-    static void CollectYoung(WCollector& collector)
+    static void Collect(WCollector& collector, bool major)
     {
-        collector.SetGCReason(GC_REASON_YOUNG);
+        collector.SetGCReason(major ? GC_REASON_USER : GC_REASON_YOUNG);
         collector.DoGarbageCollection();
     }
 };
@@ -179,10 +180,92 @@ private:
     Concurrency concurrency;
 };
 
-void RunArrayCollection(const char* variant, size_t helpers)
+struct ArrayClosureResult {
+    RegionInfo* region = nullptr;
+    BaseObject* array = nullptr;
+    const std::vector<BaseObject*>* children = nullptr;
+    size_t markedChildren = 0;
+    bool arrayMarked = false;
+    bool finalizable = false;
+    bool arrayStrong = false;
+    uint32_t objects = 0;
+    uint64_t bytes = 0;
+    size_t publishedObjects = 0;
+    bool allocateBlack = false;
+    bool allocationAttempted = false;
+    RegionInfo* allocationRegion = nullptr;
+    TypeInfo* allocationType = nullptr;
+    AllocBuffer* allocationBuffer = nullptr;
+    AllocBuffer* previousBuffer = nullptr;
+    RegionInfo* previousRegion = nullptr;
+    BaseObject* allocated = nullptr;
+    uint32_t allocatedObjects = 0;
+    uint64_t allocatedBytes = 0;
+};
+ArrayClosureResult* arrayClosureResult = nullptr;
+void ObserveArrayClosure(const std::vector<BaseObject*>* reachable)
+{
+    auto& result = *arrayClosureResult;
+    if (result.allocateBlack && !result.allocationAttempted) {
+        result.allocationAttempted = true;
+        // Inject a real mutator allocation after the initial GC closure.
+        // Allocate itself claims live and publishes its private Follow work;
+        // the test only initializes the returned object's header and field.
+        result.previousBuffer = AllocBuffer::GetAllocBuffer();
+        result.allocationBuffer = AllocBuffer::GetOrCreateAllocBuffer();
+        result.previousRegion = result.allocationBuffer->GetRegion();
+        result.allocationRegion->SetYoungRegionFlag(1);
+        result.allocationRegion->SetRegionType(RegionInfo::RegionType::THREAD_LOCAL_REGION);
+        result.allocationBuffer->SetRegion(result.allocationRegion);
+        const MAddress address = result.allocationBuffer->Allocate(2 * sizeof(MAddress), AllocType::MOVEABLE_OBJECT);
+        if (address != 0) {
+            result.allocated = reinterpret_cast<BaseObject*>(address);
+            *reinterpret_cast<uintptr_t*>(address) = reinterpret_cast<uintptr_t>(result.allocationType);
+            HeapSlotAt<>(address + TYPEINFO_PTR_SIZE).StoreColoured(StoreGoodPointer((*result.children)[0]));
+        }
+        // The mapped fixture page is not in the allocator's intrusive TL
+        // list. Restore the buffer shortcut before the GC's ordinary flush;
+        // the real private Follow queue remains registered for consumption.
+        result.allocationBuffer->SetRegion(result.previousRegion);
+    }
+    if (result.allocated != nullptr) {
+        result.allocatedObjects = result.allocationRegion->GetLiveObjectCount();
+        result.allocatedBytes = result.allocationRegion->GetLiveByteCount();
+    }
+    auto isMarked = [&](BaseObject* object) {
+        return result.region->IsYoungRegion()
+            ? result.region->IsMarkedObject(result.region->GetMarkView<Generation::Young>(), object)
+            : result.region->IsMarkedObject(result.region->GetMarkView<Generation::Old>(), object);
+    };
+    size_t marked = 0;
+    for (auto* child : *result.children) {
+        marked += isMarked(child) ? 1 : 0;
+    }
+    result.markedChildren = marked;
+    result.arrayStrong = isMarked(result.array);
+    result.arrayMarked = result.arrayStrong ||
+        (result.finalizable && result.region->IsResurrectedObject(result.array));
+    if (result.finalizable) {
+        result.markedChildren = 0;
+        for (auto* child : *result.children) {
+            result.markedChildren += (isMarked(child) || result.region->IsResurrectedObject(child)) ? 1 : 0;
+        }
+    }
+    result.objects = result.region->GetLiveObjectCount();
+    result.bytes = result.region->GetLiveByteCount();
+    result.publishedObjects = reachable == nullptr ? 0 : reachable->size();
+}
+
+void RunArrayCollection(const char* variant, size_t helpers, bool allocateBlack = false, bool markOnly = false,
+                        size_t length = 3 * MarkPartialArray::MIN_LENGTH + 17, bool structArray = false)
 {
     GC_EXPECT_EQ(CJ_ScheduleManagerInit(), 0);
-    GC_EXPECT_EQ(setenv("MRT_GC_UNIT_YOUNG_WEAK_VARIANT", variant, 1), 0);
+    const bool major = std::strncmp(variant, "major", 5) == 0;
+    const bool commonRoot = std::strcmp(variant, "major-common") == 0;
+    const bool finalizable = std::strcmp(variant, "major-finalizable") == 0;
+    if (!major) {
+        GC_EXPECT_EQ(setenv("MRT_GC_UNIT_YOUNG_WEAK_VARIANT", variant, 1), 0);
+    }
     GC_EXPECT_EQ(unsetenv("MRT_GCV2_PARTIAL_ARRAY"), 0);
     MutatorManager manager;
     MarkPortRuntime runtime(manager);
@@ -190,28 +273,44 @@ void RunArrayCollection(const char* variant, size_t helpers)
     // An actual multi-unit page keeps all array slots in the mapped heap;
     // each subordinate unit resolves back to the same owning region.
     fx.region1 = RegionInfo::InitRegion(1, 4, RegionInfo::UnitRole::SMALL_SIZED_UNITS);
-    fx.region1->SetYoungRegionFlag(1);
+    fx.region1->SetYoungRegionFlag(major ? 0 : 1);
     fx.region1->SetYoungAge(1);
     LiveInfo* live = fx.PlantLiveInfo(fx.region1);
-    (void)fx.PlantMarkBitmap<Generation::Young>(live, fx.region1->GetRegionSize());
+    if (major) {
+        (void)fx.PlantMarkBitmap<Generation::Old>(live, fx.region1->GetRegionSize());
+    } else {
+        (void)fx.PlantMarkBitmap<Generation::Young>(live, fx.region1->GetRegionSize());
+    }
 
     alignas(TypeInfo) unsigned char arrayTypeStorage[sizeof(TypeInfo)]{};
     auto* arrayType = reinterpret_cast<TypeInfo*>(arrayTypeStorage);
     arrayType->SetType(TypeKind::TYPE_KIND_RAWARRAY);
     arrayType->SetFlagHasRefField();
-    arrayType->SetComponentTypeInfo(fx.typeInfo);
+    alignas(TypeInfo) unsigned char structTypeStorage[sizeof(TypeInfo)]{};
+    auto* structType = reinterpret_cast<TypeInfo*>(structTypeStorage);
+    if (structArray) {
+        structType->SetType(TypeKind::TYPE_KIND_STRUCT);
+        structType->SetFlagHasRefField();
+        structType->SetInstanceSize(2 * sizeof(MAddress));
+        GCTib tib{};
+        tib.tag = SIGN_BIT | 3;
+        structType->SetGCTib(tib);
+        TypeInfoManager::GetTypeInfoManager().NoteTypeInfoImage(
+            reinterpret_cast<uintptr_t>(structTypeStorage), sizeof(structTypeStorage));
+    }
+    arrayType->SetComponentTypeInfo(structArray ? structType : fx.typeInfo);
     TypeInfoManager::GetTypeInfoManager().NoteTypeInfoImage(
         reinterpret_cast<uintptr_t>(arrayTypeStorage), sizeof(arrayTypeStorage));
-    constexpr size_t length = 3 * MarkPartialArray::MIN_LENGTH + 17;
     auto* array = reinterpret_cast<MArray*>(fx.region1->GetRegionStart() + 64);
     *reinterpret_cast<uintptr_t*>(array) = reinterpret_cast<uintptr_t>(arrayType);
     array->SetLength(length);
     const size_t arrayBytes = array->GetSize();
     auto* slots = reinterpret_cast<HeapSlot<>*>(array->ConvertToCArray());
-    for (size_t i = 0; i < length; ++i) {
+    const size_t referenceSlots = length * (structArray ? 2 : 1);
+    for (size_t i = 0; i < referenceSlots; ++i) {
         slots[i].StoreColoured(zpointer::null);
     }
-    constexpr size_t childrenCount = 40;
+    constexpr size_t childrenCount = 160;
     std::vector<BaseObject*> children;
     MAddress next = AlignUp(reinterpret_cast<MAddress>(array) + arrayBytes, size_t{64});
     for (size_t i = 0; i < childrenCount; ++i) {
@@ -226,49 +325,134 @@ void RunArrayCollection(const char* variant, size_t helpers)
     for (size_t i = 0; i < 4; ++i) {
         slots[i].StoreColoured(zpointer::null);
     }
-    slots[MarkPartialArray::MIN_LENGTH - 1].StoreColoured(StoreGoodPointer(children[0]));
-    slots[MarkPartialArray::MIN_LENGTH].StoreColoured(StoreGoodPointer(children[1]));
-    slots[2 * MarkPartialArray::MIN_LENGTH].StoreColoured(StoreGoodPointer(children[2]));
-    slots[length - 1].StoreColoured(StoreGoodPointer(children[3]));
+    const size_t tail0 = referenceSlots > 2 * MarkPartialArray::MIN_LENGTH ? MarkPartialArray::MIN_LENGTH - 1 : referenceSlots - 4;
+    const size_t tail1 = referenceSlots > 2 * MarkPartialArray::MIN_LENGTH ? MarkPartialArray::MIN_LENGTH : referenceSlots - 3;
+    const size_t tail2 = referenceSlots > 2 * MarkPartialArray::MIN_LENGTH ? 2 * MarkPartialArray::MIN_LENGTH : referenceSlots - 2;
+    if (!allocateBlack) {
+        slots[tail0].StoreColoured(StoreGoodPointer(children[0]));
+    }
+    slots[tail1].StoreColoured(StoreGoodPointer(children[1]));
+    slots[tail2].StoreColoured(StoreGoodPointer(children[2]));
+    slots[referenceSlots - 1].StoreColoured(StoreGoodPointer(children[3]));
+    BaseObject* finalizerRoot = nullptr;
+    if (finalizable) {
+        finalizerRoot = fx.PlaceObject(next);
+        HeapSlotAt<>(next + TYPEINFO_PTR_SIZE).StoreColoured(StoreGoodPointer(array));
+        next += finalizerRoot->GetSize();
+    }
     fx.region1->SetRegionAllocPtr(next);
     GC_EXPECT_TRUE(next <= fx.region1->GetRegionEnd());
 
     CollectorResources& resources = Heap::GetHeap().GetCollectorResources();
     WCollector collector(Heap::GetHeap().GetAllocator(), resources);
     GCThreadPool pool("gc-unit-m2-array", static_cast<int32_t>(helpers), GCPoolThread::GC_THREAD_PRIORITY);
-    MarkPort203TestAccess::Bind(resources, &collector, &pool);
-    collector.SetGCPhase(GCPhase::GC_PHASE_CLEAR_SATB_BUFFER);
+    MarkPort203TestAccess::Bind(resources, &collector, &pool, static_cast<int32_t>(helpers + 1));
+    collector.SetGCPhase(major ? GCPhase::GC_PHASE_IDLE : GCPhase::GC_PHASE_CLEAR_SATB_BUFFER);
     auto& space = reinterpret_cast<RegionSpace&>(Heap::GetHeap().GetAllocator());
     space.GetRegionManager().EnlistFullThreadLocalRegion(fx.region1);
     space.GetRegionManager().AddRawPointerObject(children.back());
     Heap::GetHeap().GetRememberedSet().Initialize(fx.heapStart, GcHeapFixture::kUnits * RegionInfo::UNIT_SIZE);
-    const U64 handle = Heap::GetHeap().RegisterExportRoot(array);
+    const size_t rootCount = commonRoot && helpers != 0 ? 17 * 64 : 1;
+    std::unique_ptr<RootSlot[]> rootSlots(new RootSlot[rootCount]);
+    std::vector<RootSlot*> roots(rootCount);
+    U64 handle = 0;
+    AllocBuffer* invisibleBuffer = nullptr;
+    bool ownsInvisibleBuffer = false;
+    if (finalizable) {
+        resources.GetFinalizerProcessor().RegisterFinalizer(finalizerRoot);
+    } else if (markOnly) {
+        ownsInvisibleBuffer = AllocBuffer::GetAllocBuffer() == nullptr;
+        invisibleBuffer = AllocBuffer::GetOrCreateAllocBuffer();
+        array->SetInvisibleObject(true);
+        invisibleBuffer->PushInvisibleRoot(array);
+    } else if (commonRoot) {
+        for (size_t i = 0; i < rootCount; ++i) {
+            StorePlain(rootSlots[i], from_object(array));
+            roots[i] = &rootSlots[i];
+        }
+        Heap::GetHeap().RegisterStaticRoots(reinterpret_cast<Uptr>(roots.data()), static_cast<U32>(rootCount));
+    } else {
+        handle = Heap::GetHeap().RegisterExportRoot(array);
+    }
+    if (major) {
+        space.GetRegionManager().AddRawPointerObject(array);
+        for (auto* child : children) {
+            space.GetRegionManager().AddRawPointerObject(child);
+        }
+    }
     const bool wasStarted = resources.IsGcStarted();
     const GCReason oldReason = resources.GetGCStats().reason;
     resources.SetGcStarted(true);
-    resources.GetGCStats().reason = GC_REASON_YOUNG;
-    MarkPort203TestAccess::CollectYoung(collector);
+    resources.GetGCStats().reason = major ? GC_REASON_USER : GC_REASON_YOUNG;
+    ArrayClosureResult result;
+    result.region = fx.region1;
+    result.array = array;
+    result.children = &children;
+    result.finalizable = finalizable;
+    result.allocateBlack = allocateBlack;
+    result.allocationRegion = fx.region0;
+    result.allocationType = fx.typeInfo;
+    arrayClosureResult = &result;
+    SetMarkClosureObserverForTest(ObserveArrayClosure);
+    MarkPort203TestAccess::Collect(collector, major);
+    SetMarkClosureObserverForTest(nullptr);
+    arrayClosureResult = nullptr;
 
-    size_t markedChildren = 0;
-    const auto view = fx.region1->GetMarkView<Generation::Young>();
-    for (auto* child : children) {
-        markedChildren += fx.region1->IsMarkedObject(view, child) ? 1 : 0;
+    const size_t markedChildren = result.markedChildren;
+    const bool arrayMarked = result.arrayMarked;
+    const auto objects = result.objects;
+    const auto bytes = result.bytes;
+    const size_t expectedChildren = markOnly ? 0 : childrenCount;
+    const size_t expectedObjects = expectedChildren + 1 + (finalizable ? 1 : 0);
+    const size_t expectedBytes = arrayBytes + expectedChildren * children[0]->GetSize() +
+        (finalizable ? finalizerRoot->GetSize() : 0);
+    if (finalizable) {
+        resources.GetFinalizerProcessor().VisitRawPointers([](ObjectRef& root) {
+            StorePlain(root, zaddress::null);
+        });
+    } else if (markOnly) {
+        if (ownsInvisibleBuffer) {
+            invisibleBuffer->SetRegion(nullptr);
+            invisibleBuffer->Fini();
+            ThreadLocal::SetAllocBuffer(nullptr);
+            delete invisibleBuffer;
+        }
+    } else if (commonRoot) {
+        Heap::GetHeap().UnregisterStaticRoots(reinterpret_cast<Uptr>(roots.data()), static_cast<U32>(rootCount));
+    } else {
+        Heap::GetHeap().RemoveExportObject(handle);
     }
-    const bool arrayMarked = fx.region1->IsMarkedObject(view, array);
-    const auto objects = fx.region1->GetLiveObjectCount();
-    const auto bytes = fx.region1->GetLiveByteCount();
-    const size_t expectedBytes = arrayBytes + childrenCount * children[0]->GetSize();
-    Heap::GetHeap().RemoveExportObject(handle);
     resources.SetGcStarted(wasStarted);
     resources.GetGCStats().reason = oldReason;
     MarkPort203TestAccess::Bind(resources, nullptr, nullptr);
     pool.Exit();
+    if (result.allocationBuffer != nullptr) {
+        result.allocationBuffer->SetRegion(result.previousRegion);
+        if (result.previousBuffer == nullptr) {
+            result.allocationBuffer->SetRegion(nullptr);
+            result.allocationBuffer->Fini();
+            ThreadLocal::SetAllocBuffer(nullptr);
+            delete result.allocationBuffer;
+        }
+    }
+    std::fprintf(stderr, "M2_ALLOC_RESULT attempted=%d objects=%u bytes=%zu\n",
+                 result.allocationAttempted, result.allocatedObjects, static_cast<size_t>(result.allocatedBytes));
     std::fprintf(stderr, "M2_ARRAY_RESULT variant=%s array=%d children=%zu objects=%u bytes=%zu expected_bytes=%zu\n",
                  variant, arrayMarked, markedChildren, objects, static_cast<size_t>(bytes), expectedBytes);
-    GC_EXPECT_EQ(markedChildren, childrenCount);
-    GC_EXPECT_EQ(objects, childrenCount + 1);
+    GC_EXPECT_EQ(markedChildren, expectedChildren);
+    GC_EXPECT_EQ(objects, expectedObjects);
     GC_EXPECT_EQ(bytes, static_cast<uint64_t>(expectedBytes));
     GC_EXPECT_TRUE(arrayMarked);
+    if (finalizable) {
+        GC_EXPECT_FALSE(result.arrayStrong);
+    }
+    if (!major) {
+        GC_EXPECT_EQ(result.publishedObjects, expectedChildren + 1 + (allocateBlack ? 1 : 0));
+    }
+    if (allocateBlack) {
+        GC_EXPECT_EQ(result.allocatedObjects, 1u);
+        GC_EXPECT_EQ(result.allocatedBytes, static_cast<uint64_t>(2 * sizeof(MAddress)));
+    }
 }
 }
 
@@ -283,5 +467,63 @@ GC_OTHER_VM_TEST(MarkPort203Entries, LegacyParallelCollectionConsumesArrayTails)
 GC_OTHER_VM_TEST(MarkPort203Entries, StripedCollectionConsumesArrayTails)
 {
     RunArrayCollection("striped", 1);
+}
+#endif
+
+#if defined(MRT_TESTABLE_INTERNALS)
+GC_OTHER_VM_TEST(MarkPort203Entries, MajorSerialCollectionConsumesArrayTails)
+{
+    RunArrayCollection("major-common", 0);
+}
+GC_OTHER_VM_TEST(MarkPort203Entries, MajorParallelCollectionConsumesArrayTails)
+{
+    RunArrayCollection("major-common", 1);
+}
+GC_OTHER_VM_TEST(MarkPort203Entries, MajorExportCollectionConsumesArrayTails)
+{
+    RunArrayCollection("major-export", 1);
+}
+#endif
+
+#if defined(MRT_TESTABLE_INTERNALS)
+GC_OTHER_VM_TEST(MarkPort203Entries, AllocateBlackFollowKeepsSingleLiveCount)
+{
+    RunArrayCollection("striped", 1, true);
+}
+#endif
+
+#if defined(MRT_TESTABLE_INTERNALS)
+GC_OTHER_VM_TEST(MarkPort203Entries, SerialInvisibleRootIsLiveWithoutFollowingFields)
+{
+    RunArrayCollection("serial", 0, false, true);
+}
+GC_OTHER_VM_TEST(MarkPort203Entries, StripedInvisibleRootIsLiveWithoutFollowingFields)
+{
+    RunArrayCollection("striped", 1, false, true);
+}
+#endif
+
+#if defined(MRT_TESTABLE_INTERNALS)
+GC_OTHER_VM_TEST(MarkPort203Entries, FinalizableArrayClosureAccountsWithoutStrongUpgrade)
+{
+    RunArrayCollection("major-finalizable", 1);
+}
+#endif
+
+#if defined(MRT_TESTABLE_INTERNALS)
+GC_OTHER_VM_TEST(MarkPort203Entries, SerialCollectionHandlesExactArrayThreshold)
+{
+    RunArrayCollection("serial", 0, false, false, MarkPartialArray::MIN_LENGTH);
+}
+GC_OTHER_VM_TEST(MarkPort203Entries, SerialCollectionHandlesOnePastArrayThreshold)
+{
+    RunArrayCollection("serial", 0, false, false, MarkPartialArray::MIN_LENGTH + 1);
+}
+#endif
+
+#if defined(MRT_TESTABLE_INTERNALS)
+GC_OTHER_VM_TEST(MarkPort203Entries, StructArrayCollectionVisitsBothFields)
+{
+    RunArrayCollection("striped", 1, false, false, MarkPartialArray::MIN_LENGTH + 1, true);
 }
 #endif

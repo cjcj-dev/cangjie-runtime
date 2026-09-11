@@ -435,6 +435,7 @@ public:
     {
         workerId = executingWorkerId;
         size_t nNewlyMarked = 0;
+        MarkLiveCache liveCache(1);
         // loop until work stack empty.
         for (;;) {
             if (workStack.empty()) {
@@ -443,10 +444,14 @@ public:
             // get next object from work stack.
             const MarkStackEntry entry = workStack.back();
             workStack.pop_back();
+            if (entry.partialArray()) {
+                collector.FollowPartialArray(entry, workStack);
+                continue;
+            }
             BaseObject* obj = entry.object();
-            bool wasMarked = collector.MarkObject(obj);
-            if (!wasMarked) {
-                collector.DFSTraceExportObject(obj);
+            const bool wasMarked = collector.MarkEntryObject(obj, entry, &liveCache);
+            if (!wasMarked && entry.follow()) {
+                collector.DFSTraceExportObject(obj, entry.finalizable());
             }
             // try to fork new task if needed.
         } // end of mark loop.
@@ -900,6 +905,11 @@ void TracingCollector::DoTracing(WorkStack& workStack, WorkStack& foreignRootsSe
 #if defined(__linux__) || defined(hongmeng)
     GCPoolThread::SetThreadPriority(MapleRuntime::GetTid(), GCPoolThread::GC_THREAD_STW_PRIORITY);
 #endif
+#if defined(MRT_TESTABLE_INTERNALS)
+    // All major tasks and finalizer work have flushed before page selection.
+    // Major has no reachableVec carrier; observers read the actual page state.
+    ObserveMarkClosureForTest(nullptr);
+#endif
     VLOG(REPORT, "mark %zu objects", markedObjectCount.load(std::memory_order_relaxed));
 }
 
@@ -1325,20 +1335,15 @@ void TracingCollector::PostGarbageCollection(uint64_t gcIndex)
 #endif
 }
 
-void TracingCollector::DFSTraceExportObject(BaseObject *exportObj)
+void TracingCollector::DFSTraceExportObject(BaseObject *exportObj, bool finalizable)
 {
     WorkStack workStack;
-    workStack.push_back(exportObj);
+    workStack.push_back(MarkStackEntry::FollowOnly(exportObj, finalizable));
     std::list<BaseObject*> externObjs;
-    while (!workStack.empty()) {
-        BaseObject* obj = workStack.back().object();
-        workStack.pop_back();
-        if (UNLIKELY(obj->IsWeakRef())) {
-            DiscoverWeakReference(obj, workStack);
-            continue;
-        }
-        obj->ForEachRefField([&workStack, obj, this, &externObjs](RefField<>& field) {
-            (void)obj;
+    MarkLiveCache liveCache(1);
+    BaseObject* obj = nullptr;
+    auto visit = [&workStack, &obj, this, &externObjs, &liveCache, &finalizable](MAddress slot) {
+            RefField<>& field = HeapSlotAt<>(slot);
             RefField<> oldField(field);
             // mark-good fast path (zcolor2 @ 84a64e88): already passed this mark epoch.
             if (is_mark_good(oldField)) {
@@ -1350,10 +1355,10 @@ void TracingCollector::DFSTraceExportObject(BaseObject *exportObj)
                     return;
                 }
                 if (targetObj->GetTypeInfo()->IsForeignType()) {
-                    workStack.push_back(targetObj);
+                    workStack.push_back(MarkStackEntry::FollowOnly(targetObj, finalizable));
                     externObjs.push_back(targetObj);
-                } else if (!MarkObject(targetObj)) {
-                    workStack.push_back(targetObj);
+                } else if (!MarkEntryObject(targetObj, MarkStackEntry::MarkAndFollow(targetObj, finalizable), &liveCache)) {
+                    workStack.push_back(MarkStackEntry::FollowOnly(targetObj, finalizable));
                 }
                 return;
             }
@@ -1383,15 +1388,35 @@ void TracingCollector::DFSTraceExportObject(BaseObject *exportObj)
                 return;
             }
             if (latest->GetTypeInfo()->IsForeignType()) {
-                workStack.push_back(latest);
+                workStack.push_back(MarkStackEntry::FollowOnly(latest, finalizable));
                 externObjs.push_back(latest);
             } else {
-                if (!MarkObject(latest)) {
-                    workStack.push_back(latest);
+                if (!MarkEntryObject(latest, MarkStackEntry::MarkAndFollow(latest, finalizable), &liveCache)) {
+                    workStack.push_back(MarkStackEntry::FollowOnly(latest, finalizable));
                 }
             }
-        });
+    };
+    auto publish = [&workStack](const MarkStackEntry& entry) { workStack.push_back(entry); };
+    while (!workStack.empty()) {
+        const MarkStackEntry entry = workStack.back();
+        workStack.pop_back();
+        finalizable = entry.finalizable();
+        if (entry.partialArray()) {
+            obj = nullptr;
+            MarkPartialArray::FollowPartialReferences(entry, visit, publish);
+            continue;
+        }
+        obj = entry.object();
+        if (!entry.follow()) {
+            continue;
+        }
+        if (UNLIKELY(obj->IsWeakRef())) {
+            DiscoverWeakReference(obj, workStack);
+            continue;
+        }
+        MarkPartialArray::FollowObjectReferences(obj, finalizable, visit, publish);
     }
+    liveCache.Flush();
     std::lock_guard<std::mutex> lg(externMtx);
     discoveredExternObjects[exportObj] = externObjs;
 }

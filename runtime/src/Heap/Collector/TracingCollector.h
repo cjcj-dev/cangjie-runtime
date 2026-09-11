@@ -381,7 +381,7 @@ public:
         return RegionSpace::IsMarkedObject<G>(obj) ||
             (G == Generation::Old && RegionSpace::IsResurrectedObject(obj));
     }
-    void DFSTraceExportObject(BaseObject* exportObj);
+    void DFSTraceExportObject(BaseObject* exportObj, bool finalizable = false);
     virtual bool MarkObject(BaseObject* obj) const
     {
         // getsize7: base path uses unsized RegionInfo::MarkObject → GetSize without gate.
