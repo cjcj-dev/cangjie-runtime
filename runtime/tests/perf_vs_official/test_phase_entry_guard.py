@@ -63,7 +63,7 @@ class PhaseEntryGuardTest(unittest.TestCase):
         self.check_guard(log("major"), mode="major", missing=(1,))
 
     def test_another_cycle_cannot_supply_entry(self):
-        self.check_guard(log() + [entry(2)], missing=(1,))
+        self.check_guard(log() + [cycle(2, "major"), entry(2)], missing=(1,))
 
     def test_unowned_entry_cannot_supply_entry(self):
         self.check_guard(log() + [entry(0)], missing=(1,))
