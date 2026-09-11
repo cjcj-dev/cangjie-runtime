@@ -738,8 +738,8 @@ static size_t MajorStripeCount(size_t workers)
     return count;
 }
 
-static void RunMajorStripeMark(TracingCollector& collector, TracingCollector::WorkStack& workStack,
-                               GCThreadPool* threadPool, bool parallel)
+static size_t RunMajorStripeMark(TracingCollector& collector, TracingCollector::WorkStack& workStack,
+                                 GCThreadPool* threadPool, bool parallel)
 {
     size_t workers = 1;
     if (parallel && threadPool != nullptr) {
@@ -776,10 +776,9 @@ static void RunMajorStripeMark(TracingCollector& collector, TracingCollector::Wo
     } else if (threadPool != nullptr) {
         threadPool->DrainWorkQueue();
     }
-    (void)collector.markedObjectCount.fetch_add(shared.newlyMarked.load(std::memory_order_relaxed),
-                                                std::memory_order_relaxed);
     CHECK_DETAIL(shared.terminate.Saturated(),
                  "major striped closure returned without coordinated worker termination");
+    return shared.newlyMarked.load(std::memory_order_relaxed);
 }
 
 void TracingCollector::TracingImpl(WorkStack& workStack, WorkStack& foreignRootsSet, bool parallel)
@@ -795,7 +794,8 @@ void TracingCollector::TracingImpl(WorkStack& workStack, WorkStack& foreignRoots
     GCThreadPool* threadPool = GetThreadPool();
     MRT_ASSERT(threadPool != nullptr, "thread pool is null");
     if (!workStack.empty()) {
-        RunMajorStripeMark(*this, workStack, threadPool, parallel);
+        markedObjectCount.fetch_add(RunMajorStripeMark(*this, workStack, threadPool, parallel),
+                                    std::memory_order_relaxed);
         VerifyMarkingStacks::VerifyEmpty(VerifyMarkingStacks::MarkingGeneration::MAJOR,
                                          VerifyMarkingStacks::MarkingBoundary::JOIN,
                                          VerifyMarkingStacks::MarkingContainer::POOL,
