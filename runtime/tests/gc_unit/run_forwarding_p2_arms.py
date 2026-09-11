@@ -16,6 +16,7 @@ PRIMARY = [
     'YoungConc.ForwardingReaderExitsBeforeInPlaceReuse',
     'YoungConc.ReleasedForwardingFindReturnsProductCopy',
     'YoungConc.ForwardingDoneFollowsPageWork',
+    'YoungConc.ForwardingPartialReaderExitsBeforeInPlaceReuse',
 ]
 CONTROLS = ['ColourAddress.UncolorRoundTripAllRemapOneHot',
             'RelocationPageQueue.TwoObjectsShareOnePageClaim',
@@ -36,8 +37,11 @@ CUTS = {
              '    ForwardRegion<G>(region);\n#if defined(MRT_TESTABLE_INTERNALS)',
              '    ForwardRegion<G>(region);\n    owner->mark_done();\n#if defined(MRT_TESTABLE_INTERNALS)', 1),
 }
+CUTS['reader_partial'] = ('runtime/src/Heap/Allocator/RegionManager.cpp',
+    'void RegionManager::CompactRegion(RegionInfo* region, RegionInfo* toRegion1)\n{\n    auto owner = ForwardingTable::RetainPageOwner(region);\n    ZForwardingLife::PageWorkScope work(owner.get(),\n        owner && ZForwardingLife::CurrentPageWork() != owner.get());\n    if (owner && owner->ref_count().load(std::memory_order_acquire) > 0) {\n        owner->in_place_relocation_claim_page();',
+    'void RegionManager::CompactRegion(RegionInfo* region, RegionInfo* toRegion1)\n{\n    auto owner = ForwardingTable::RetainPageOwner(region);\n    ZForwardingLife::PageWorkScope work(owner.get(),\n        owner && ZForwardingLife::CurrentPageWork() != owner.get());\n    if (owner && owner->ref_count().load(std::memory_order_acquire) > 0) {\n        (void)owner;', 1)
 EXPECTED = {'normal': [], 'restored': [], 'entry': PRIMARY,
-            'claim': PRIMARY[:1], 'reader': PRIMARY[1:2], 'find': PRIMARY[2:3], 'done': PRIMARY[3:4]}
+            'claim': PRIMARY[:1], 'reader': PRIMARY[1:2], 'find': PRIMARY[2:3], 'done': PRIMARY[3:4], 'reader_partial': PRIMARY[4:5]}
 
 
 def sha(path):
@@ -56,7 +60,7 @@ def main():
     ap.add_argument('--cores', default='32-63')
     ap.add_argument('--samples', type=int, default=3)
     ap.add_argument('--build-jobs', type=int, default=3)
-    ap.add_argument('--arms', default='normal,entry,claim,reader,find,done,restored,default')
+    ap.add_argument('--arms', default='normal,entry,claim,reader,reader_partial,find,done,restored,default')
     args = ap.parse_args()
     repo, out = args.repo.resolve(), args.output.resolve()
     out.mkdir(parents=True, exist_ok=False)

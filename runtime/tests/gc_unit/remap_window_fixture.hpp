@@ -162,14 +162,12 @@ void PageLifetimeHook(unsigned point, RegionInfo* region, BaseObject* object)
 {
     auto& state = *remapWindow;
     std::unique_lock<std::mutex> lock(state.mutex);
-    if (point == 8 && region == state.kept && state.partialReader &&
-        std::this_thread::get_id() != state.mutatorThread && !state.partialSeeded) {
-        // Supply only allocator input to the real worker. The product computes
-        // the split plan, fails its second allocation, and performs both copies.
-        AllocBuffer::GetOrCreateAllocBuffer()->SetRegion(state.partialDestination);
-        state.partialSeeded = true;
-    }
     if (point == 1) {
+        if (state.partialReader) {
+            // This serial fixture's real page task runs on the dispatch thread.
+            // Supply allocator input before task submission, never a route plan.
+            AllocBuffer::GetOrCreateAllocBuffer()->SetRegion(state.partialDestination);
+        }
         state.lifetimeOwner = ForwardingTable::RetainPageOwner(state.kept);
         state.window = true;
         state.cv.notify_all();
@@ -210,6 +208,9 @@ void PageLifetimeHook(unsigned point, RegionInfo* region, BaseObject* object)
         }
         state.cv.notify_all();
     } else if (point == 9 && region == state.kept) {
+        if (state.partialReader) {
+            state.partialSeeded = AllocBuffer::GetOrCreateAllocBuffer()->GetRegion() == state.partialDestination;
+        }
         state.lifetimeCopyEntered = true;
         state.lifetimeClaimed = state.lifetimeOwner->claimed().load(std::memory_order_acquire);
         state.cv.notify_all();
