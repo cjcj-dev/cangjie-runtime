@@ -32,9 +32,9 @@ CUTS = {
     'find': ('runtime/src/Heap/Collector/Relocate.cpp',
              '    return reinterpret_cast<BaseObject*>(owner->resolve_life(owner->find(from)));',
              '    return obj;', 1),
-    'done': ('runtime/src/Heap/Allocator/RegionInfo.h',
-             '        if (owner && ZForwardingLife::CurrentPageWork() != owner.get()) owner->mark_done();',
-             '        if (owner) owner->mark_done();', 1),
+    'done': ('runtime/src/Heap/Allocator/RegionManager.cpp',
+             '    ForwardRegion<G>(region);\n#if defined(MRT_TESTABLE_INTERNALS)',
+             '    ForwardRegion<G>(region);\n    owner->mark_done();\n#if defined(MRT_TESTABLE_INTERNALS)', 1),
 }
 EXPECTED = {'normal': [], 'restored': [], 'entry': PRIMARY,
             'claim': PRIMARY[:1], 'reader': PRIMARY[1:2], 'find': PRIMARY[2:3], 'done': PRIMARY[3:4]}

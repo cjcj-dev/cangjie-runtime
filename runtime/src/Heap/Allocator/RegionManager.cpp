@@ -2363,6 +2363,9 @@ void RegionManager::ForwardClaimedPage(RegionInfo* region, ForwardingTable::Owne
     if (!owner || (!claimed && !owner->claim())) return;
     ZForwardingLife::PageWorkScope work(owner.get());
     ForwardRegion<G>(region);
+#if defined(MRT_TESTABLE_INTERNALS)
+    RunRemapWindowTestHook(12, region, nullptr);
+#endif
     // All page metadata and legacy helper work is finished. A nested drain
     // may already have consumed the construction token; otherwise drop it now.
     if (owner->ref_count().load(std::memory_order_acquire) != 0) owner->release_page();
