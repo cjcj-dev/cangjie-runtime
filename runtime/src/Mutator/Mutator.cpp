@@ -1295,9 +1295,11 @@ inline void Mutator::GCPhasePreForward(GCPhase newPhase)
                         HealSite::MutatorPreForwardInterior);
                 }
             }
-            // Publish the ordinary-root result before its derived row consumes
-            // the captured base (oopMap.cpp:412-421), including the identity arm.
-            remappedBases[oldObj] = PlainRootObject(root.LoadPlain());
+            // Only publish a proven host solution. An unrecovered interior is
+            // not identity: derived must fail closed at base-not-remapped.
+            if (host != nullptr) {
+                remappedBases[oldObj] = PlainRootObject(root.LoadPlain());
+            }
             return;
         }
         if (Heap::IsHeapAddress(oldObj) && collector.IsGhostFromObject(oldObj) &&

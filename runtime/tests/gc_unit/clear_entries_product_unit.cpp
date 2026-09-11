@@ -2822,7 +2822,8 @@ struct DerivedBaseMapImage {
 };
 DerivedBaseMapImage derivedBaseMapImage;
 
-void RunDerivedBaseProducer(bool interior, bool tagged, bool moving = false)
+void RunDerivedBaseProducer(bool interior, bool tagged, bool moving = false,
+                            size_t interiorOffset = 8, bool expectFailClosed = false)
 {
     auto& image = derivedBaseMapImage;
     std::memset(&image, 0, sizeof(image));
@@ -2852,13 +2853,19 @@ void RunDerivedBaseProducer(bool interior, bool tagged, bool moving = false)
     var(1); put(2, 2); // derived row selects second slot row
 
     GcHeapFixture& fx = ProductFixture();
+    const U32 savedSize = fx.typeInfo->GetInstanceSize();
+    if (interior && interiorOffset > 8) {
+        fx.typeInfo->SetInstanceSize(128);
+        std::memset(reinterpret_cast<char*>(fx.obj0) + sizeof(void*), 0, 128);
+    }
     WCollector collector(Heap::GetHeap().GetAllocator(), Heap::GetHeap().GetCollectorResources());
     RelocationReceiptTestAccess::BindCollector(Heap::GetHeap().GetCollectorResources(), &collector);
     LateBackfillState state {};
     if (moving) { state = PrepareValueRootForwarding(fx, collector); }
     collector.SetGCPhase(GCPhase::GC_PHASE_PREFORWARD);
-    const uintptr_t base = reinterpret_cast<uintptr_t>(moving ? state.from : fx.obj0) + (interior ? 8 : 0);
-    const uintptr_t expected = reinterpret_cast<uintptr_t>(moving ? state.to : fx.obj0) + (interior ? 8 : 0);
+    const size_t usedOffset = interior ? interiorOffset : 0;
+    const uintptr_t base = reinterpret_cast<uintptr_t>(moving ? state.from : fx.obj0) + usedOffset;
+    const uintptr_t expected = reinterpret_cast<uintptr_t>(moving ? state.to : fx.obj0) + usedOffset;
     uintptr_t frame[8] = {};
     frame[0] = base;
     frame[1] = base + 8;
@@ -2868,12 +2875,28 @@ void RunDerivedBaseProducer(bool interior, bool tagged, bool moving = false)
     context.frameInfo.mFrame.SetIP(image.pc);
     context.frameInfo.mFrame.SetFA(reinterpret_cast<FrameAddress*>(&frame[3]));
     context.anchorFA = nullptr;
-    std::fprintf(stderr, "DERIVED_BASE_INPUT interior=%d tagged=%d moving=%d base=%zx derived=%zx\n",
-                 interior, tagged, moving, frame[0], frame[1]);
+    std::fprintf(stderr, "DERIVED_BASE_INPUT interior=%d tagged=%d moving=%d offset=%zu base=%zx derived=%zx\n",
+                 interior, tagged, moving, usedOffset, frame[0], frame[1]);
+    if (expectFailClosed) {
+        AbortCapture aborted = CaptureAbort([&]() {
+            mutator.TransitionToGCPhaseExclusive(GCPhase::GC_PHASE_PREFORWARD, false);
+        });
+        std::fprintf(stderr, "DERIVED_BASE_FAILCLOSED status=%d\n%s", aborted.status, aborted.output.c_str());
+        fx.typeInfo->SetInstanceSize(savedSize);
+        if (moving) { CleanupLateBackfill(fx, state); }
+        collector.SetGCPhase(GCPhase::GC_PHASE_IDLE);
+        RelocationReceiptTestAccess::BindCollector(Heap::GetHeap().GetCollectorResources(), nullptr);
+        GC_EXPECT_TRUE(aborted.output.find("site=Mutator::MakePreForwardDerivedVisitor.base-not-remapped") !=
+                       std::string::npos);
+        GC_EXPECT_TRUE(WIFSIGNALED(aborted.status));
+        GC_EXPECT_EQ(WTERMSIG(aborted.status), SIGABRT);
+        return;
+    }
     mutator.TransitionToGCPhaseExclusive(GCPhase::GC_PHASE_PREFORWARD, false);
     std::fprintf(stderr, "DERIVED_BASE_RESULT base=%zx derived=%zx expected=%zx\n", frame[0], frame[1], expected + 8);
     const bool baseCorrect = frame[0] == expected;
     const bool derivedCorrect = frame[1] == expected + 8;
+    fx.typeInfo->SetInstanceSize(savedSize);
     if (moving) { CleanupLateBackfill(fx, state); }
     collector.SetGCPhase(GCPhase::GC_PHASE_IDLE);
     RelocationReceiptTestAccess::BindCollector(Heap::GetHeap().GetCollectorResources(), nullptr);
@@ -2905,6 +2928,10 @@ GC_OTHER_VM_TEST(ForwardingPublicationProduct, PreForwardDerivedTaggedMovingBase
 GC_OTHER_VM_TEST(ForwardingPublicationProduct, PreForwardDerivedOrdinaryMovingBaseProducer)
 {
     RunDerivedBaseProducer(false, false, true);
+}
+GC_OTHER_VM_TEST(ForwardingPublicationProduct, PreForwardDerivedInteriorUnrecoveredHostFailsClosed)
+{
+    RunDerivedBaseProducer(true, false, false, 80, true);
 }
 #endif
 
