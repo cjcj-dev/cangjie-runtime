@@ -61,8 +61,11 @@ def main():
     out.mkdir(parents=True, exist_ok=False)
     src = args.source.resolve()
     originals = {name: (src / name).read_text() for name in (HEADER, PRODUCER, ENTRY, COPY)}
-    accepted = replace_one(originals[HEADER],
-        "if (resolved != nullptr && resolved != obj)", "if (resolved != nullptr)")
+    # Candidate HEAD already accepts identity. Reject restores the frozen
+    # Compacted-only identity guard so the same fixture turns red.
+    rejected = replace_one(originals[HEADER],
+        "if (resolved != nullptr)", "if (resolved != nullptr && resolved != obj)")
+    accepted = originals[HEADER]
     elf = out / "cj_gc_unit"
     shutil.copy2(args.elf, elf)
     manifest = {"elf_sha256": sha(elf), "source_commit": subprocess.check_output(
@@ -75,8 +78,8 @@ def main():
             if arm not in ARMS:
                 raise RuntimeError(f"unknown arm {arm}")
             current = dict(originals)
-            if arm not in ("reject", "reject_restored"):
-                current[HEADER] = accepted
+            if arm in ("reject", "reject_restored"):
+                current[HEADER] = rejected
             cut = ""
             if arm == "cut_wait":
                 current[HEADER] = replace_one(accepted,
@@ -99,8 +102,8 @@ def main():
             arm_dir = out / arm
             arm_dir.mkdir()
             (arm_dir / "cut.diff").write_text(cut)
-            (arm_dir / "guard-control.diff").write_text(patch(originals[HEADER], accepted, HEADER)
-                                                        if arm not in ("reject", "reject_restored") else "")
+            (arm_dir / "guard-control.diff").write_text(patch(originals[HEADER], rejected, HEADER)
+                                                        if arm in ("reject", "reject_restored") else "")
             for name, text in current.items():
                 if (src / name).read_text() != text:
                     (src / name).write_text(text)
