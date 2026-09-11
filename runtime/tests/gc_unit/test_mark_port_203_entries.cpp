@@ -40,6 +40,7 @@ void CheckCachedClaim(bool finalizable, bool repeat)
     const bool secondAlready = repeat ? CachedMark()(&collector, fx.obj0, false, &cache) : true;
     cache.Flush();
     const uint64_t bytes = fx.region0->GetLiveByteCount();
+    const uint32_t objects = fx.region0->GetLiveObjectCount();
     // Capture product results before releasing the fixture's bitmap, and do
     // not place a transition assertion ahead of the accounting invariant.
     const bool strong = fx.region0->IsMarkedObject(fx.region0->GetMarkView<Generation::Old>(), fx.obj0);
@@ -48,6 +49,7 @@ void CheckCachedClaim(bool finalizable, bool repeat)
     std::fprintf(stderr, "M2_LIVE_RESULT finalizable=%d repeat=%d bytes=%zu expected=%zu strong=%d\n",
                  finalizable, repeat, static_cast<size_t>(bytes), size, strong);
     GC_EXPECT_EQ(bytes, static_cast<uint64_t>(size));
+    GC_EXPECT_EQ(objects, 1u);
     GC_EXPECT_TRUE(strong);
     GC_EXPECT_FALSE(already);
     GC_EXPECT_TRUE(secondAlready);

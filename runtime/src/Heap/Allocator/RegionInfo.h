@@ -1495,6 +1495,7 @@ public:
         VerifyMarkFaceOwner<G>(obj, "RegionInfo::MarkObject.unsized");
         if (IsLargeRegion()) {
             if (TryPublishLargeFace(view, obj->GetSize())) {
+                AddLiveObjects(1);
                 PublishCurrentMarkFace();
                 NotePageOwnerFirstPaint<G>();
                 return false;
@@ -1513,7 +1514,7 @@ public:
         bool incLive = false;
         bool already = writeBm->MarkBits(offset, objSize, regionSize, incLive);
         if (incLive) {
-            AddLiveByteCount(objSize);
+            AddLiveCounts(1, objSize);
             PublishCurrentMarkFace();
             NotePageOwnerFirstPaint<G>();
         }
@@ -1544,6 +1545,9 @@ public:
         if (IsLargeRegion()) {
             if (TryPublishLargeFace(view, accountLive ? objSize : 0)) {
                 firstLive = true;
+                if (accountLive) {
+                    AddLiveObjects(1);
+                }
                 PublishCurrentMarkFace();
                 NotePageOwnerFirstPaint<G>();
                 return false;
@@ -1563,7 +1567,7 @@ public:
         firstLive = incLive;
         if (incLive) {
             if (accountLive) {
-                AddLiveByteCount(objSize);
+                AddLiveCounts(1, objSize);
             }
             PublishCurrentMarkFace();
             NotePageOwnerFirstPaint<G>();
@@ -1609,7 +1613,7 @@ public:
             }
             if (metadata.isResurrected != 1) {
                 SetResurrectedRegionFlag(1);
-                AddLiveByteCount(obj->GetSize());
+                AddLiveCounts(1, obj->GetSize());
                 return false;
             }
             return true;
@@ -1624,7 +1628,7 @@ public:
         bool incLive = false;
         bool already = bitmap->MarkFinalizableBits(offset, objSize, regionSize, incLive);
         if (incLive) {
-            AddLiveByteCount(objSize);
+            AddLiveCounts(1, objSize);
             PublishCurrentMarkFace();
         }
         CHECK(bitmap->IsLive(offset));
@@ -2719,6 +2723,7 @@ public:
             metadata.liveInfo = nullptr;
             // Tracking phase ended: live counter is no longer a mark-period truth.
             __atomic_store_n(&metadata.liveByteCount, 0, std::memory_order_release);
+            __atomic_store_n(&metadata.liveObjectCount, 0, __ATOMIC_RELEASE);
         }
         // Active from-page metadata is retired only by the forwarding drain.
         // Mark-arena unbinding must not invalidate an older page incarnation.
@@ -2787,6 +2792,7 @@ public:
         }
         // Start of a mark cycle for this region: live=0 is authoritative until proven otherwise.
         __atomic_store_n(&metadata.liveByteCount, LIVE_AUTHORITY_BIT, std::memory_order_release);
+        __atomic_store_n(&metadata.liveObjectCount, 0, __ATOMIC_RELEASE);
         SetMarkFaceSealed(false);
     }
 
@@ -2808,6 +2814,7 @@ public:
             __atomic_store_n(&metadata.liveInfo, static_cast<LiveInfo*>(nullptr), std::memory_order_release);
             // Tracking phase for this LiveInfo ended with its backing store about to vanish.
             __atomic_store_n(&metadata.liveByteCount, 0, std::memory_order_release);
+            __atomic_store_n(&metadata.liveObjectCount, 0, __ATOMIC_RELEASE);
         }
         if (inRange(GetLiveInfo0ForProbe())) {
             // The livemap is inseparable from its forwarding incarnation.
@@ -3178,6 +3185,7 @@ public:
         SetEnqueuedRegionFlag(0);
         SetResurrectedRegionFlag(0);
         __atomic_store_n(&metadata.liveByteCount, LIVE_AUTHORITY_BIT, std::memory_order_release);
+        __atomic_store_n(&metadata.liveObjectCount, 0, __ATOMIC_RELEASE);
         metadata.markStartAllocPtr = 0;
         BumpSnapshotEpoch();
         SetYoungRegionFlag(0);
@@ -3429,6 +3437,25 @@ public:
         return __atomic_load_n(&metadata.liveByteCount, std::memory_order_acquire) & LIVE_BYTES_MASK;
     }
 
+    uint32_t GetLiveObjectCount() const
+    {
+        return __atomic_load_n(&metadata.liveObjectCount, __ATOMIC_ACQUIRE);
+    }
+
+    void AddLiveObjects(uint32_t objects)
+    {
+        // A small page is bounded by its allocation capacity; a large page
+        // contains one object. Cache flushes therefore fit the page counter.
+        const uint32_t before = __atomic_fetch_add(&metadata.liveObjectCount, objects, __ATOMIC_ACQ_REL);
+        CHECK(objects <= std::numeric_limits<uint32_t>::max() - before);
+    }
+
+    void AddLiveCounts(uint32_t objects, uint64_t bytes)
+    {
+        AddLiveByteCount(bytes);
+        AddLiveObjects(objects);
+    }
+
     bool IsLiveCountAuthoritative() const
     {
         return (__atomic_load_n(&metadata.liveByteCount, std::memory_order_acquire) & LIVE_AUTHORITY_BIT) != 0;
@@ -3595,6 +3622,7 @@ public:
     {
         // densify rebuild: clear byte counter only (mark face rewritten in place next).
         __atomic_store_n(&metadata.liveByteCount, LIVE_AUTHORITY_BIT, std::memory_order_release);
+        __atomic_store_n(&metadata.liveObjectCount, 0, __ATOMIC_RELEASE);
     }
 
     // ZGC zForwarding.cpp:71-74 reset_livemap after from-page iteration — one publish:
@@ -3613,6 +3641,7 @@ public:
         SetForwardingFaceReset();
         ClearCurrentMarkFace();
         __atomic_store_n(&metadata.liveByteCount, LIVE_AUTHORITY_BIT, std::memory_order_release);
+        __atomic_store_n(&metadata.liveObjectCount, 0, __ATOMIC_RELEASE);
         if (IsLargeRegion()) {
             SetMarkedRegionFlag(view, 0);
         }
@@ -3843,6 +3872,10 @@ private:
         // Monotonic within a retained-snapshot cycle: only successful
         // Preserve arms it; old-mark start or region-life bump disarms it.
         uint8_t retainedEverPreserved = 0;
+        // Per-current-page live objects, alongside liveByteCount. This uses
+        // the padding before retainedLiveInfoEpoch (the size guard below
+        // still checks the complete UnitInfo layout).
+        uint32_t liveObjectCount = 0;
         uint64_t retainedLiveInfoEpoch = 0;
         MAddress retainedLiveInfoCoveredUpTo = 0;
         RegionLifeId retainedLifeId = 0;
@@ -4225,6 +4258,7 @@ private:
         metadata.regionListOwner.store(nullptr, std::memory_order_relaxed);
         metadata.censusBoundaryOffset = 0;
         __atomic_store_n(&metadata.liveByteCount, 0, std::memory_order_release);
+        __atomic_store_n(&metadata.liveObjectCount, 0, __ATOMIC_RELEASE);
         metadata.liveInfo = nullptr;
         ClearCurrentMarkFace();
         FreeCompactRouteTable();

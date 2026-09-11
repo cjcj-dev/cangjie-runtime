@@ -168,7 +168,7 @@ private:
 };
 
 // ZGC ZMarkCache analogue. Mark-bit claims remain atomic; only the page/region
-// live-byte additions are coalesced per worker.
+// live-object and aligned-byte additions are coalesced per worker.
 class MarkLiveCache {
 public:
     explicit MarkLiveCache(size_t stripeCount);
@@ -183,6 +183,7 @@ private:
     struct Entry {
         RegionInfo* region = nullptr;
         size_t bytes = 0;
+        uint32_t objects = 0;
     };
 
     void Evict(Entry& entry);

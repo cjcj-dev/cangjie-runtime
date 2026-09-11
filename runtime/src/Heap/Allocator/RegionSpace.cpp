@@ -372,7 +372,7 @@ MAddress AllocBuffer::Allocate(size_t totalSize, AllocType allocType)
                             reinterpret_cast<BaseObject*>(addr), "RegionSpace::AllocBlack.live");
                         bool already = reg->GetOrAllocMarkBitmap(view)->MarkBits(offset, totalSize, regionSize);
                         if (!already) {
-                            reg->AddLiveByteCount(totalSize);
+                            reg->AddLiveCounts(1, totalSize);
                             reg->PublishCurrentMarkFace();
                         }
                         LiveInfo* ghost = reg->GetLiveInfo0ForProbe();
