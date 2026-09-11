@@ -1208,14 +1208,15 @@ GC_TEST(YoungConc, TraceRefFieldRemapsLoadGoodFromBeforeStoreGood)
 
     const MAddress from = reinterpret_cast<MAddress>(fx.obj0);
     const MAddress to = reinterpret_cast<MAddress>(fx.obj1);
-    if (!ForwardingTable::EntriesArmed(from)) {
-        if (!ForwardingTable::InstallPublicationBeforeCopy(
-                fx.region0->GetRegionStart(), fx.region0->GetRegionSize(), fx.region0)) {
-            GC_EXPECT_TRUE(ForwardingTable::PreparePublicationGeneration(
-                fx.region0->GetRegionStart(), fx.region0->GetRegionSize()));
-            GC_EXPECT_TRUE(ForwardingTable::InstallPublicationBeforeCopy(
-                fx.region0->GetRegionStart(), fx.region0->GetRegionSize(), fx.region0));
-        }
+    // FROM membership can carry a provisional table. EntriesArmed alone does
+    // not establish copying authority. Complete installation before retaining
+    // the publication (zRelocationSet.cpp:112-126, zForwarding.cpp:86-108).
+    if (!ForwardingTable::InstallPublicationBeforeCopy(
+            fx.region0->GetRegionStart(), fx.region0->GetRegionSize(), fx.region0)) {
+        GC_EXPECT_TRUE(ForwardingTable::PreparePublicationGeneration(
+            fx.region0->GetRegionStart(), fx.region0->GetRegionSize()));
+        GC_EXPECT_TRUE(ForwardingTable::InstallPublicationBeforeCopy(
+            fx.region0->GetRegionStart(), fx.region0->GetRegionSize(), fx.region0));
     }
     ForwardingTable::Publication publication =
         ForwardingTable::EnsurePublicationBeforeCopy(fx.region0, from);
