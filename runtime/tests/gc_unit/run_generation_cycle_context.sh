@@ -1,5 +1,6 @@
 #!/usr/bin/env bash
-# Product-linked worker core tests. No product source is compiled into the ELF.
+# Managed cycle entry and explicit SATB ownership API tests.
+# No product .cpp is compiled into either test artifact.
 set -euo pipefail
 ROOT="$(cd "$(dirname "$0")/../../.." && pwd)"
 SRC="$ROOT/runtime/tests/gc_unit"
@@ -40,7 +41,12 @@ LD_LIBRARY_PATH="$LIB:$SDK/runtime/lib/linux_x86_64_cjnative:$SDK/tools/lib:$SDK
   "$SDK/bin/cjc" "$OUT/cycle.cj" -O0 --static-std -L "$OUT" -lcycle_observer -o "$OUT/generation_cycle_context"
 fi
 sha256sum "$OUT/generation_satb_obligations" "$OUT/generation_cycle_context" "$OUT/libcycle_observer.so" "$LIB/libcangjie-runtime.so" "$LIB/libboundscheck.so"
+set +e
 LD_LIBRARY_PATH="$OUT:$LIB:$SDK/runtime/lib/linux_x86_64_cjnative${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}" \
   cjGCInterval=3600s timeout 60s "$OUT/generation_cycle_context"
+cycle_rc=$?
 LD_LIBRARY_PATH="$LIB:$SDK/runtime/lib/linux_x86_64_cjnative${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}" \
   timeout 60s "$OUT/generation_satb_obligations"
+satb_rc=$?
+printf "CYCLE_RC=%s SATB_RC=%s\n" "$cycle_rc" "$satb_rc"
+[[ "$cycle_rc" == 0 && "$satb_rc" == 0 ]]
