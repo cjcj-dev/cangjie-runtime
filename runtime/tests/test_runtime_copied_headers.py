@@ -28,8 +28,8 @@ def main():
     work.mkdir(parents=True, exist_ok=True)
     fields = dict(line.split('=', 1) for line in
                   (publication / 'runtime-build-config.txt').read_text().splitlines() if '=' in line)
-    library = work / 'deferred-sodepot'
-    library.mkdir(exist_ok=True)
+    library = work / 'relocated/deferred-sodepot'
+    library.mkdir(parents=True, exist_ok=True)
     identities = {}
     for name in ('libcangjie-runtime.so', 'libboundscheck.so'):
         original = Path(fields['LIB_DIR']) / name
