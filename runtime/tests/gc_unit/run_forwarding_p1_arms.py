@@ -124,13 +124,17 @@ def main():
                '-DCMAKE_C_COMPILER=clang', '-DCMAKE_CXX_COMPILER=clang++', '-DDISABLE_VERSION_CHECK=1',
                '-DCJ_SDK_VERSION=0.0.2', '-DMRT_GC_UNIT_TESTS=ON', '-DMRT_TESTABLE_INTERNALS=ON',
                '-DCMAKE_C_COMPILER_LAUNCHER=', '-DCMAKE_CXX_COMPILER_LAUNCHER=',
-               '-DCMAKE_C_FLAGS='+flags, '-DCMAKE_CXX_FLAGS='+flags]
+               '-DCMAKE_C_FLAGS='+flags, '-DCMAKE_CXX_FLAGS='+flags, '-DCMAKE_ASM_FLAGS='+flags]
         rec['configure_command'] = cmd
         affinity = ['taskset', '-c', rec['cores']]
         rec['configure_rc'] = call(affinity+cmd, src/'runtime', env, d/'configure.log')
         if rec['configure_rc']:
             raise RuntimeError(f'{arm}: configure failed')
         target = ['--target', 'cangjie-runtime'] if arm in CUTS and not arm.startswith('header_') else []
+        tracked = subprocess.check_output(['git', '-C', str(src), 'ls-files'], text=True).splitlines()
+        rec['last_source_mtime'] = max((src/f).stat().st_mtime for f in tracked
+                                       if f.endswith(('.h', '.cpp', '.S')) and (src/f).is_file())
+        rec['build_started'] = time.time()
         rec['build_rc'] = call(affinity+['cmake', '--build', str(build_dir), '-j64']+target,
                                src/'runtime', env, d/'build.log')
         rec['build_finished'] = time.time()
