@@ -86,7 +86,7 @@ public:
 
     void clear()
     {
-        while (!empty()) {
+        while (this->h != nullptr) {
             MarkStackBuf<T>* tmp = this->h;
             this->h = this->h->next;
             if (this->h != nullptr) {
