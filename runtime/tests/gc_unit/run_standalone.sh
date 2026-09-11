@@ -486,6 +486,7 @@ MAIN_SOURCES=(
   "$SRC/test_reference_processor.cpp"
   "$SRC/test_mark_stack_entry.cpp"
   "$SRC/test_mark_stripe.cpp"
+  "$SRC/test_mark_port_203_storage.cpp"
   "$SRC/test_partial_array.cpp"
   "$SRC/test_segmented_array_init.cpp"
   "$SRC/test_verify_roots.cpp"
