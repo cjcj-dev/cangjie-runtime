@@ -2992,10 +2992,6 @@ public:
         ZForwardingLife::reset_copy_sealed(metadata.copyInflight);
     }
 
-    bool BeginCopyAdmission() { return ZForwardingLife::begin_copy(metadata.copyInflight); }
-
-    void CommitCopyAdmission() { ZForwardingLife::commit_copy(metadata.copyInflight); }
-
     bool NoteCopyInflight() { return ZForwardingLife::note_copy(metadata.copyInflight); }
 
     void EndCopyInflight() { ZForwardingLife::end_copy(metadata.copyInflight); }
