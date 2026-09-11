@@ -49,7 +49,7 @@ list_tests() {
   fi
   env "${extra_env[@]}" \
     LD_LIBRARY_PATH="$RUNTIME_LIB_DIR${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}" \
-    "$elf" --gtest_list_tests >"$output" 2>&1
+    "$elf" --gtest_list_tests >"$output" 2>"$output.stderr"
 }
 
 list_tests main "$MAIN_ELF" "$LIST_DIR/main.raw" &
@@ -65,29 +65,44 @@ set -e
 if [[ $main_list_rc -ne 0 || $publication_list_rc -ne 0 ]]; then
   echo "GC_UNIT_LIST_TESTS_FAIL main_rc=$main_list_rc publication_rc=$publication_list_rc" >&2
   sed 's/^/[main] /' "$LIST_DIR/main.raw" >&2
+  sed 's/^/[main stderr] /' "$LIST_DIR/main.raw.stderr" >&2
   sed 's/^/[publication] /' "$LIST_DIR/publication.raw" >&2
+  sed 's/^/[publication stderr] /' "$LIST_DIR/publication.raw.stderr" >&2
   exit 2
 fi
 
 parse_list() {
-  awk '
-    /^[^[:space:]#].*\.$/ {
+  # Only name tokens may enter a filter. In particular, an indented runtime
+  # diagnostic is not a case. Slash components cover parameterized names.
+  awk -v rejected="$1.invalid" -v count="$1.invalid-count" '
+    /^[[:space:]]*$/ { next }
+    /^[A-Za-z_][A-Za-z0-9_]*(\/[A-Za-z0-9_]+)*\.$/ {
       suite = $0
-      sub(/[[:space:]]*#.*/, "", suite)
       sub(/\.$/, "", suite)
       next
     }
-    /^[[:space:]]+/ && suite != "" {
+    /^[[:space:]]+[A-Za-z0-9_]+(\/[A-Za-z0-9_]+)*$/ && suite != "" {
       name = $0
       sub(/^[[:space:]]+/, "", name)
-      sub(/[[:space:]]*#.*/, "", name)
-      if (name != "") print suite "." name
+      print suite "." name
+      next
     }
+    {
+      print $0 >> rejected
+      invalid++
+      # An invalid suite header must not attach its cases to the last suite.
+      if ($0 !~ /^[[:space:]]/) suite = ""
+    }
+    END { print invalid + 0 > count }
   ' "$1"
 }
 
 parse_list "$LIST_DIR/main.raw" >"$LIST_DIR/main.txt"
 parse_list "$LIST_DIR/publication.raw" >"$LIST_DIR/publication.txt"
+main_invalid=$(cat "$LIST_DIR/main.raw.invalid-count")
+publication_invalid=$(cat "$LIST_DIR/publication.raw.invalid-count")
+printf 'GC_UNIT_LIST_INVALID lines=%d main=%d publication=%d\n' \
+  "$((main_invalid + publication_invalid))" "$main_invalid" "$publication_invalid"
 if [[ ! -s "$LIST_DIR/main.txt" || ! -s "$LIST_DIR/publication.txt" ]]; then
   echo "GC_UNIT_LIST_TESTS_EMPTY main=$(wc -l <"$LIST_DIR/main.txt") publication=$(wc -l <"$LIST_DIR/publication.txt")" >&2
   exit 2
