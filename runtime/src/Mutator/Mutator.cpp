@@ -995,7 +995,10 @@ void VisitTaggedOopSlot(ObjectRef& root)
             Collector& collector = Heap::GetHeap().GetCollector();
             if (collector.IsGhostFromObject(obj) && !collector.IsUnmovableFromObject(obj)) {
                 BaseObject* toObj = collector.ForwardObject(obj);
-                if (toObj != nullptr && obj != toObj) {
+                if (toObj == nullptr) {
+                    return;
+                }
+                if (obj != toObj) {
                     HealRoot(root, from_object(toObj), HealSite::MutatorPreForwardRoot);
                 }
             }
