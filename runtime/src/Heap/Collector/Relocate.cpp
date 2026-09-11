@@ -700,7 +700,7 @@ void WCollector::StartRelocationTasks()
     RegionManager& manager = space.GetRegionManager();
     GCThreadPool* workers = GetThreadPool();
     size_t tasks = workers == nullptr ? 1 : static_cast<size_t>(workers->GetMaxActiveThreadNum() + 1);
-    if (gcReason == GC_REASON_YOUNG) {
+    if (GetCycleReason() == GC_REASON_YOUNG) {
         const char* serial = std::getenv("MRT_GCV2_EVACPAR_FORCE_SERIAL");
         const bool forceSerial = serial != nullptr && std::strcmp(serial, "1") == 0;
         GCThreadPool* evacuation = collectorResources.GetEvacuationThreadPool();
@@ -717,9 +717,9 @@ void WCollector::StartRelocationTasks()
         }
     }
 #if defined(MRT_TESTABLE_INTERNALS)
-    if (gcReason == GC_REASON_YOUNG) RunRemapWindowTestHook(1, nullptr, nullptr);
+    if (GetCycleReason() == GC_REASON_YOUNG) RunRemapWindowTestHook(1, nullptr, nullptr);
 #endif
-    if (gcReason == GC_REASON_YOUNG) manager.StartForwardFromRegions<Generation::Young>(workers, tasks);
+    if (GetCycleReason() == GC_REASON_YOUNG) manager.StartForwardFromRegions<Generation::Young>(workers, tasks);
     else manager.StartForwardFromRegions<Generation::Old>(workers, tasks);
 }
 
