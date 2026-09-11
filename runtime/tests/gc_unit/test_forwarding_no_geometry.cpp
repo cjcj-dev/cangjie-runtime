@@ -226,12 +226,11 @@ GC_TEST(ForwardingNoGeometry, RelocateInnerFindHitSkipsCopy)
     WCollector collector(Heap::GetHeap().GetAllocator(), Heap::GetHeap().GetCollectorResources());
     BaseObject* first = MutatorPublishTestAccess::RelocateInner(collector, copyFrom, copyTo, fx.region0);
     GC_EXPECT_TRUE(first == copyTo);
-    GC_EXPECT_EQ(ForwardingTable::FindTo(copyFromAddr), copyToAddr);
-    GC_EXPECT_TRUE(copyFrom->IsForwarded());
     BaseObject* second = MutatorPublishTestAccess::RelocateInner(collector, copyFrom, otherTo, fx.region0);
     GC_EXPECT_TRUE(second == copyTo);
-    GC_EXPECT_EQ(ForwardingTable::FindTo(copyFromAddr), copyToAddr);
     GC_EXPECT_TRUE(second != otherTo);
+    GC_EXPECT_EQ(ForwardingTable::FindTo(copyFromAddr), copyToAddr);
+    GC_EXPECT_TRUE(copyFrom->IsForwarded());
     ForwardingTable::Remove(fx.region0->GetRegionStart(), fx.region0->GetRegionSize());
     ForwardingTable::ClearEntries(fx.region0->GetRegionStart(), fx.region0->GetRegionSize());
     ForwardingTable::ReclaimRetired("gc-unit-relocate-inner");
