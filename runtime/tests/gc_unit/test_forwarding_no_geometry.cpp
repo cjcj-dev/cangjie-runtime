@@ -275,7 +275,6 @@ GC_TEST(ForwardingNoGeometry, ForwardImplFindHitSkipsCopy)
     ZForwardingLife::reset_copy_open(fx.region0->metadata.copyInflight);
     BaseObject* first = MutatorPublishTestAccess::RelocateInner(collector, copyFrom, copyTo, fx.region0);
     GC_EXPECT_TRUE(first == copyTo);
-    copyFrom->SetStateCode(ObjectState::NORMAL);
     BaseObject* second = MutatorPublishTestAccess::ForwardImpl(collector, copyFrom, fx.region0);
     GC_EXPECT_TRUE(second == copyTo);
     GC_EXPECT_TRUE(second != otherTo);

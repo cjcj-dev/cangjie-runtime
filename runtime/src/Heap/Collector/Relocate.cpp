@@ -2701,6 +2701,9 @@ BaseObject* WCollector::ForwardObjectExclusive(BaseObject* obj)
     if (page == nullptr) {
         page = RegionInfo::TryGetRegionInfoAt(reinterpret_cast<MAddress>(obj));
     }
+    if (page == nullptr) {
+        return nullptr;
+    }
     return RelocateObjectInner(obj, nullptr, page);
 }
 
