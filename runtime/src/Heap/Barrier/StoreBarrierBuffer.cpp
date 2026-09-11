@@ -77,7 +77,9 @@ StoreBarrierInstallState StoreBarrierBuffer::CaptureInstallState()
     const GCPhase phase = started ? heap.GetGCPhase() : GCPhase::GC_PHASE_IDLE;
     bool youngMark = false;
     if (started) {
-        youngMark = heap.GetCollectorResources().GetGCStats().reason == GC_REASON_YOUNG;
+        // zStoreBarrierBuffer.cpp:161-184: retain the generation tag at
+        // production, before a later cycle can change shared accounting.
+        youngMark = heap.GetCollector().GetCycleReason() == GC_REASON_YOUNG;
     }
     return StoreBarrierInstallState { static_cast<uint8_t>(phase), youngMark,
                                       static_cast<uintptr_t>(::g_cjStoreGoodMask) };

@@ -7,6 +7,8 @@
 #include <dlfcn.h>
 #include <sched.h>
 #include <algorithm>
+#include <set>
+#include "Heap/Barrier/StoreBarrierBuffer.h"
 #include "Heap/Allocator/RegionSpace.h"
 #include "Cangjie.h"
 #include "Heap/Heap.h"
@@ -50,6 +52,55 @@ void* Exercise(void*)
     Expect(youngWorkers0.capacity == parallel && oldWorkers0.capacity == parallel, "worker_generation_capacity");
     std::printf("WORKER_INPUT cpu=%zu heap=%zu region=%zu concurrent=%zu parallel=%zu\n",
                 cpuCount, heapBytes, regionBytes, concurrent, parallel);
+#if defined(MRT_TESTABLE_INTERNALS)
+    auto& tracing = static_cast<TracingCollector&>(collector);
+    unsigned youngLabels = 0;
+    unsigned oldLabels = 0;
+    unsigned rootResults = 0;
+    tracing.testCyclePrepared = [&]() {
+        // The real driver has selected and prepared its cycle. Add captures
+        // its own state; the test does not provide a phase or generation.
+        StoreBarrierBuffer buffer;
+        RootSlot slot;
+        buffer.Add(reinterpret_cast<MAddress>(&slot), zpointer::null, Heap::GetHeap().GetRememberedSet());
+        const auto stored = buffer.LastInstalledStateForTest();
+        const bool young = collector.GetCycleSnapshot(GCCycleGeneration::YOUNG).active;
+        if (young) {
+            ++youngLabels;
+            Expect(stored.youngMark, "store_buffer_young_label");
+        } else {
+            ++oldLabels;
+            Expect(!stored.youngMark, "store_buffer_old_label");
+        }
+        Expect(stored.phase == collector.GetGCPhase(), "store_buffer_phase_label");
+        buffer.Discard();
+    };
+    tracing.testRootsResult = [&](GCWorkers::Generation generation, TracingCollector::RootSet& result) {
+        std::set<BaseObject*> observed;
+        for (auto* node = result.head(); node != nullptr; node = node->next) {
+            auto copy = *node;
+            while (!copy.empty()) {
+                observed.insert(copy.back().object());
+                copy.pop_back();
+            }
+        }
+        size_t expected = 0;
+        bool included = true;
+        Heap::GetHeap().VisitStaticRoots([&](RootSlot& slot) {
+            auto* object = to_object(safe(slot.LoadPlain()));
+            if (object != nullptr && Heap::IsHeapAddress(object)) {
+                ++expected;
+                included = included && observed.count(object) != 0;
+            }
+        });
+        ++rootResults;
+        std::printf("ROOT_RESULT expected_static=%zu observed_objects=%zu generation=%u\n",
+                    expected, observed.size(), static_cast<unsigned>(generation));
+        Expect(expected > 0, "worker_root_witness_exists");
+        Expect(included, "worker_root_result_contains_statics");
+        Expect(generation == GCWorkers::Generation::OLD, "worker_root_result_owner");
+    };
+#endif
     auto y0 = collector.GetCycleSnapshot(GCCycleGeneration::YOUNG);
     auto o0 = collector.GetCycleSnapshot(GCCycleGeneration::OLD);
     collector.RequestGC(GC_REASON_USER, false);
@@ -80,6 +131,12 @@ void* Exercise(void*)
     std::printf("PRODUCT_STATE young_seq=%llu old_seq=%llu young_phase=%u old_phase=%u\n",
         (unsigned long long)y2.sequence, (unsigned long long)o2.sequence,
         (unsigned)y2.phase, (unsigned)o2.phase);
+#if defined(MRT_TESTABLE_INTERNALS)
+    Expect(youngLabels == 2 && oldLabels == 1, "store_buffer_real_cycle_inputs");
+    Expect(rootResults > 0, "worker_root_result_observed");
+    tracing.testCyclePrepared = nullptr;
+    tracing.testRootsResult = nullptr;
+#endif
     return reinterpret_cast<void*>(static_cast<uintptr_t>(failures));
 }
 }
