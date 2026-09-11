@@ -249,7 +249,12 @@ GC_TEST(GCThreadPool, RelocationRequestHasOneCompletionOwnerBeforeWaitFinishRetu
                     auto* forwarding = selected.request->page_forwarding();
                     forwarding->release_page();
                     forwarding->mark_done();
-                    completionOwners.fetch_add(queue.Complete(forwarding), std::memory_order_relaxed);
+                    completionOwners.fetch_add(1, std::memory_order_relaxed);
+                    // A peer may prune the completed page before its claimant
+                    // notifies the queue. Force that ordering: Complete's return
+                    // counts remaining queue records, not completion owners.
+                    (void)queue.PruneAndClaim();
+                    (void)queue.Complete(forwarding);
                 }
             }
         }));
@@ -257,10 +262,11 @@ GC_TEST(GCThreadPool, RelocationRequestHasOneCompletionOwnerBeforeWaitFinishRetu
     pool.Start();
     pool.WaitFinish();
     (void)queue.Wait(added.request);
+    pool.Exit();
     GC_EXPECT_EQ(added.request->page_forwarding()->find(from), to);
     GC_EXPECT_EQ(completionOwners.load(), 1U);
+    GC_EXPECT_EQ(queue.CompletionCount(), 1U);
     GC_EXPECT_FALSE(queue.IsActive());
-    pool.Exit();
 }
 
 #if defined(MRT_TESTABLE_INTERNALS)
