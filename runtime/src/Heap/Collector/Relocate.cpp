@@ -703,7 +703,7 @@ void WCollector::StartRelocationTasks()
     if (GetCycleReason() == GC_REASON_YOUNG) {
         const char* serial = std::getenv("MRT_GCV2_EVACPAR_FORCE_SERIAL");
         const bool forceSerial = serial != nullptr && std::strcmp(serial, "1") == 0;
-        GCThreadPool* evacuation = collectorResources.GetEvacuationThreadPool();
+        GCThreadPool* evacuation = collectorResources.GetThreadPool();
         if (!forceSerial && evacuation != nullptr) workers = evacuation;
         const size_t maxWorkers = workers == nullptr ? 1 : static_cast<size_t>(workers->GetMaxThreadNum() + 1);
         tasks = forceSerial ? 1 : maxWorkers;
