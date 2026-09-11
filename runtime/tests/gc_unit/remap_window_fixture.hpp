@@ -25,6 +25,14 @@ struct RemapWindow {
     bool checkArena = false;
     bool checkCopy = false;
     const char* lifetimeTarget = nullptr;
+    bool partialReader = false;
+    RegionInfo* partialDestination = nullptr;
+    BaseObject* partialFirst = nullptr;
+    bool partialSeeded = false;
+    bool partialWriteObserved = false;
+    bool partialSourceUnchanged = false;
+    bool partialSplit = false;
+    std::vector<unsigned char> sourceBytes;
     bool lifetimeReaderHeld = false;
     bool lifetimeCopyEntered = false;
     bool lifetimeReaderSafe = false;
@@ -154,20 +162,42 @@ void PageLifetimeHook(unsigned point, RegionInfo* region, BaseObject* object)
 {
     auto& state = *remapWindow;
     std::unique_lock<std::mutex> lock(state.mutex);
+    if (point == 8 && region == state.kept && state.partialReader &&
+        std::this_thread::get_id() != state.mutatorThread && !state.partialSeeded) {
+        // Supply only allocator input to the real worker. The product computes
+        // the split plan, fails its second allocation, and performs both copies.
+        AllocBuffer::GetOrCreateAllocBuffer()->SetRegion(state.partialDestination);
+        state.partialSeeded = true;
+    }
     if (point == 1) {
         state.lifetimeOwner = ForwardingTable::RetainPageOwner(state.kept);
         state.window = true;
         state.cv.notify_all();
         state.Wait(lock, state.lifetimeReaderHeld, "page-reader-retained");
     } else if (point == 8 && object == state.from && std::this_thread::get_id() == state.mutatorThread) {
+        if (state.partialReader) {
+            const auto* bytes = reinterpret_cast<const unsigned char*>(state.from);
+            state.sourceBytes.assign(bytes, bytes + RegionSpace::GetAllocSize(*state.from));
+        }
         state.lifetimeReaderHeld = true;
         state.entered = true;
         state.cv.notify_all();
         const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(10);
         for (;;) {
             const int32_t refs = state.lifetimeOwner->ref_count().load(std::memory_order_acquire);
-            if (refs < 0 || state.lifetimeCopyEntered) {
-                state.lifetimeReaderSafe = refs < -1 && !state.lifetimeCopyEntered;
+            if (state.partialReader ? (refs < 0 || state.partialWriteObserved)
+                                    : (refs < 0 || state.lifetimeCopyEntered)) {
+                if (state.partialReader) {
+                    if (!state.partialWriteObserved) {
+                        // A negative ref count synchronizes with the worker's
+                        // drain: it cannot write until this actual lease exits.
+                        state.partialSourceUnchanged = std::memcmp(state.from,
+                            state.sourceBytes.data(), state.sourceBytes.size()) == 0;
+                    }
+                    state.lifetimeReaderSafe = state.partialSourceUnchanged;
+                } else {
+                    state.lifetimeReaderSafe = refs < -1 && !state.lifetimeCopyEntered;
+                }
                 break;
             }
             if (std::chrono::steady_clock::now() >= deadline) {
@@ -184,6 +214,18 @@ void PageLifetimeHook(unsigned point, RegionInfo* region, BaseObject* object)
         state.lifetimeClaimed = state.lifetimeOwner->claimed().load(std::memory_order_acquire);
         state.cv.notify_all();
     } else if (point == 11 && region == state.kept) {
+        if (state.partialReader) {
+            const MAddress first = state.lifetimeOwner->find(reinterpret_cast<MAddress>(state.partialFirst));
+            const MAddress second = state.lifetimeOwner->find(reinterpret_cast<MAddress>(state.from));
+            state.partialSplit = (first >= state.partialDestination->GetRegionStart() && first < state.partialDestination->GetRegionEnd()) &&
+                second == state.kept->GetRegionStart();
+            if (!state.partialSourceUnchanged) {
+                state.partialSourceUnchanged = std::memcmp(state.from,
+                    state.sourceBytes.data(), state.sourceBytes.size()) == 0;
+            }
+            state.partialWriteObserved = true;
+            state.cv.notify_all();
+        }
         state.lifetimeDoneLast = !state.lifetimeOwner->is_done();
     } else if (point == 12 && region == state.kept) {
         state.lifetimeDoneLast = state.lifetimeDoneLast &&
@@ -293,7 +335,7 @@ void RemapWindowHook(unsigned point, RegionInfo* region, BaseObject* object)
 
 void RunRemapWindow(bool copyOnly, ForwardDomain domain = ForwardDomain::None, bool afterDone = false,
                     bool checkArena = false, bool checkCopy = false, const char* lifetimeTarget = nullptr,
-                    bool parallel = false)
+                    bool parallel = false, bool partialReader = false)
 {
     // The strict arm is deliberately red on #175's frozen guard. Ordinary
     // suites run the copy prerequisite; the contract arm is explicitly invoked
@@ -336,6 +378,20 @@ void RunRemapWindow(bool copyOnly, ForwardDomain domain = ForwardDomain::None, b
         HeapSlotAt<>(reinterpret_cast<MAddress>(copyObject) + TYPEINFO_PTR_SIZE)
             .StoreColoured(GcUnit::StoreGoodPointer(fx.obj0));
     }
+    BaseObject* partialFirst = nullptr;
+    RegionInfo* partialDestination = nullptr;
+    if (partialReader) {
+        partialFirst = copyObject;
+        copyObject = fx.PlaceObject(copyPage->GetRegionStart() + 2 * size);
+        HeapSlotAt<>(reinterpret_cast<MAddress>(copyObject) + TYPEINFO_PTR_SIZE)
+            .StoreColoured(GcUnit::StoreGoodPointer(fx.obj0));
+        partialDestination = RegionInfo::InitRegion(3, 1, RegionInfo::UnitRole::SMALL_SIZED_UNITS);
+        partialDestination->SetRegionType(RegionInfo::RegionType::THREAD_LOCAL_REGION);
+        const MAddress limit = partialDestination->GetRegionEnd() - size;
+        HeapFiller::ZeroAndFill(partialDestination->GetRegionStart(), limit - partialDestination->GetRegionStart());
+        partialDestination->SetRegionAllocPtr(limit);
+        manager.tlRegionList.PrependRegion(partialDestination, RegionInfo::RegionType::THREAD_LOCAL_REGION);
+    }
     fx.region0->SetRegionAllocPtr(fx.region0->GetRegionStart() + size);
     fx.region1->SetRegionAllocPtr(fx.region1->GetRegionStart() + size);
     copyPage->SetRegionAllocPtr(reinterpret_cast<MAddress>(copyObject) + size);
@@ -366,6 +422,7 @@ void RunRemapWindow(bool copyOnly, ForwardDomain domain = ForwardDomain::None, b
     auto* field = &HeapSlotAt<>(reinterpret_cast<MAddress>(fx.obj0) + TYPEINFO_PTR_SIZE);
     barrier.Record(fx.obj0, reinterpret_cast<MAddress>(field), fx.obj1);
     barrier.Record(fx.obj0, reinterpret_cast<MAddress>(field), copyObject);
+    if (partialReader) barrier.Record(fx.obj0, reinterpret_cast<MAddress>(field), partialFirst);
     producer.FlushSatbBuffer();
     ThreadLocal::SetMutator(nullptr);
 
@@ -384,6 +441,13 @@ void RunRemapWindow(bool copyOnly, ForwardDomain domain = ForwardDomain::None, b
     RemapWindow state;
     state.domain = domain;
     state.lifetimeTarget = lifetimeTarget;
+    state.partialReader = partialReader;
+    state.partialFirst = partialFirst;
+    state.partialDestination = partialDestination;
+    if (partialReader) {
+        const auto* bytes = reinterpret_cast<const unsigned char*>(copyObject);
+        state.sourceBytes.assign(bytes, bytes + size);
+    }
     state.afterDone = afterDone;
     state.copyOnly = copyOnly;
     state.kept = domain == ForwardDomain::Copy || lifetimeTarget != nullptr ? copyPage : fx.region1;
@@ -472,7 +536,11 @@ void RunRemapWindow(bool copyOnly, ForwardDomain domain = ForwardDomain::None, b
                      "released_find=%d done_last=%d result=%d\n", lifetimeTarget, matched,
                      state.lifetimeClaimed, state.lifetimeReaderSafe, state.lifetimeReleasedFind,
                      state.lifetimeDoneLast, state.lifetimeResult);
-        lifetimeMatched = matched;
+        if (partialReader) {
+            std::fprintf(stderr, "P2_PARTIAL target_assertion executed=1 source_unchanged=%d split=%d seeded=%d\n",
+                         state.partialSourceUnchanged, state.partialSplit, state.partialSeeded);
+        }
+        lifetimeMatched = matched && (!partialReader || (state.partialSeeded && state.partialSplit));
     }
     if (checkCopy) {
         const bool initialized = state.copied && state.copiedField == state.expectedField;
@@ -618,4 +686,9 @@ GC_OTHER_VM_TEST(YoungConc, ForwardingDoneFollowsPageWork)
 GC_OTHER_VM_TEST(YoungConc, ForwardingReaderExitsBeforeInPlaceReuseParallel)
 {
     RunRemapWindow(false, ForwardDomain::None, false, false, false, "reader", true);
+}
+
+GC_OTHER_VM_TEST(YoungConc, ForwardingPartialReaderExitsBeforeInPlaceReuse)
+{
+    RunRemapWindow(false, ForwardDomain::None, false, false, false, "reader", false, true);
 }
