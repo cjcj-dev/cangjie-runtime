@@ -956,6 +956,9 @@ protected:
     BaseObject* ForwardObjectImpl(BaseObject* obj, RegionInfo* ghostFromRegion,
                                   const RegionInfo::RetainScope& lease);
     BaseObject* ForwardObjectExclusive(BaseObject* obj) override;
+    // zRelocate.cpp:354-379 relocate_object_inner: find hit → return; else
+    // alloc (or reuse a prepared dest) → copy → insert; CAS loser uses winner.
+    BaseObject* RelocateObjectInner(BaseObject* obj, BaseObject* planned, RegionInfo* copyPage);
     // dest is PlanRoute's answer, computed *before* TryLockObject so the LOCKED
     // critical section cannot RouteRegion / TakeRegion (zRelocate.cpp:354-372
     // relocate_object_inner: alloc+copy+insert, no safepoint; REPORT-routespin §5 乙1).
