@@ -1618,3 +1618,7 @@ GC_TEST(YoungConc, Y2yPendingCountVisibleForTerminate)
     buffer->PushY2yDirtyHolder(fx.obj1);
     GC_EXPECT_EQ(buffer->Y2yDirtyHolderCount(), 1u);
 }
+
+#if defined(MRT_TESTABLE_INTERNALS)
+#include "remap_window_fixture.hpp"
+#endif
