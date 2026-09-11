@@ -10,6 +10,7 @@
 
 #include <algorithm>
 #include <new>
+#include <type_traits>
 
 #include "Base/Log.h"
 #include "Heap/Allocator/RegionInfo.h"
@@ -19,6 +20,9 @@ namespace {
 constexpr size_t FIRST_STACK_CAPACITY = 128;
 constexpr size_t REGULAR_STACK_CAPACITY = 512;
 constexpr size_t MARK_STRIPE_SHIFT = 20;
+#if defined(MRT_TESTABLE_INTERNALS)
+std::atomic<MarkStripeStack::StorageObserver> storageObserver{nullptr};
+#endif
 
 bool IsPowerOfTwo(size_t value)
 {
@@ -38,30 +42,60 @@ size_t Log2Exact(size_t value)
 
 MarkStripeStack* MarkStripeStack::Create(bool firstStack)
 {
-    return new (std::nothrow) MarkStripeStack(firstStack ? FIRST_STACK_CAPACITY : REGULAR_STACK_CAPACITY);
+    // ZGC zMarkStack.cpp:33-47: one allocation owns the header and entries.
+    // Only these bounded capacities reach ZAttachedArray's size arithmetic.
+    static_assert(std::is_trivially_destructible<MarkStackEntry>::value,
+                  "attached entries must not require per-element destruction");
+    const size_t capacity = firstStack ? FIRST_STACK_CAPACITY : REGULAR_STACK_CAPACITY;
+    void* const memory = AttachedArray::alloc(capacity);
+    if (memory == nullptr) {
+        return nullptr;
+    }
+    auto* const stack = ::new (memory) MarkStripeStack(capacity);
+#if defined(MRT_TESTABLE_INTERNALS)
+    if (const auto observer = storageObserver.load(std::memory_order_acquire)) {
+        observer(stack, stack->entries(stack), capacity, true);
+    }
+#endif
+    return stack;
 }
 
 void MarkStripeStack::Destroy(MarkStripeStack* stack)
 {
-    delete stack;
+    // Local slots can be null, unlike the non-null-only ZGC destroy caller.
+    if (stack == nullptr) {
+        return;
+    }
+#if defined(MRT_TESTABLE_INTERNALS)
+    if (const auto observer = storageObserver.load(std::memory_order_acquire)) {
+        observer(stack, stack->entries(stack), stack->Capacity(), false);
+    }
+#endif
+    stack->~MarkStripeStack();
+    AttachedArray::free(stack);
 }
 
 MarkStripeStack::MarkStripeStack(size_t capacity)
-    : capacity(capacity), entries(new (std::nothrow) MarkStackEntry[capacity])
+    : entries(capacity)
+{}
+
+#if defined(MRT_TESTABLE_INTERNALS)
+void MarkStripeStack::SetStorageObserver(StorageObserver observer)
 {
-    CHECK_DETAIL(entries != nullptr, "failed to allocate mark stripe stack entries=%zu", capacity);
+    storageObserver.store(observer, std::memory_order_release);
 }
+#endif
 
 void MarkStripeStack::Push(const MarkStackEntry& entry)
 {
     CHECK_DETAIL(!IsFull(), "cannot push to a full mark stripe stack");
-    entries[top++] = entry;
+    entries(this)[top++] = entry;
 }
 
 MarkStackEntry MarkStripeStack::Pop()
 {
     CHECK_DETAIL(!IsEmpty(), "cannot pop from an empty mark stripe stack");
-    return entries[--top];
+    return entries(this)[--top];
 }
 
 MarkingSMR::MarkingSMR(size_t workerCount)

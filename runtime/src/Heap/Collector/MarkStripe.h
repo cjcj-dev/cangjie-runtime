@@ -14,6 +14,7 @@
 #include <vector>
 
 #include "Heap/Collector/MarkStackEntry.h"
+#include "Heap/Allocator/ZAttachedArray.h"
 
 namespace MapleRuntime {
 
@@ -26,21 +27,29 @@ public:
     static MarkStripeStack* Create(bool firstStack);
     static void Destroy(MarkStripeStack* stack);
 
-    explicit MarkStripeStack(size_t capacity);
     MarkStripeStack(const MarkStripeStack&) = delete;
     MarkStripeStack& operator=(const MarkStripeStack&) = delete;
 
     bool IsEmpty() const { return top == 0; }
-    bool IsFull() const { return top == capacity; }
+    bool IsFull() const { return top == entries.length(); }
     size_t Size() const { return top; }
-    size_t Capacity() const { return capacity; }
+    size_t Capacity() const { return entries.length(); }
     void Push(const MarkStackEntry& entry);
     MarkStackEntry Pop();
 
+#if defined(MRT_TESTABLE_INTERNALS)
+    // Install/remove only while mark workers are quiescent. The observer must
+    // not throw or call stack operations. Records identify the actual allocation.
+    using StorageObserver = void (*)(const MarkStripeStack*, const MarkStackEntry*, size_t, bool);
+    MRT_EXPORT static void SetStorageObserver(StorageObserver observer);
+#endif
+
 private:
+    using AttachedArray = ZAttachedArray<MarkStripeStack, MarkStackEntry>;
+    explicit MarkStripeStack(size_t capacity);
+    ~MarkStripeStack() = default;
     size_t top = 0;
-    size_t capacity;
-    std::unique_ptr<MarkStackEntry[]> entries;
+    AttachedArray entries;
 };
 
 class MarkStripeStackListNode {
