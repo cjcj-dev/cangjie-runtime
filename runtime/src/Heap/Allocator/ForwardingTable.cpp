@@ -630,6 +630,10 @@ void ForwardingTable::ReclaimRetired(const char* why)
                 deferred.push_back(tab);
                 continue;
             }
+            if ((forceCoverageComplete || CoverageEpochSatisfied(tab)) && tab->page() != nullptr &&
+                tab->page()->metadata.fwdOwner.load(std::memory_order_acquire) == tab) {
+                (void)UnbindPageOwnerLocked(tab->page(), false);
+            }
             if (tab->table_readers() == 0 && tab->external_owners() == 0 &&
                 (forceCoverageComplete || RetiredDestroyEligible(tab))) {
                 // Prevent a new table user before dropping the install lock.
@@ -782,11 +786,10 @@ bool ForwardingTable::PublishFromPageView(RegionInfo* region, LiveInfo* liveInfo
                                     liveByteCount, owner, largeMarked, lifeId);
     ZForwarding* previous = region->metadata.fwdOwner.load(std::memory_order_acquire);
     if (previous != carrier) {
-        CHECK_DETAIL(previous == nullptr || previous->ref_count().load(std::memory_order_acquire) == 0,
+        CHECK_DETAIL(UnbindPageOwnerLocked(region, false),
                      "replacing retained forwarding owner region=%p", region);
         carrier->retain_owner();
         region->metadata.fwdOwner.store(carrier, std::memory_order_release);
-        if (previous != nullptr) previous->release_owner();
     }
     RegionLifeClock::Publish(RegionLifeClock::Carrier::MARK_SNAPSHOT, lifeId);
     return true;
@@ -798,16 +801,29 @@ ForwardingTable::Owner ForwardingTable::RetainPageOwner(const RegionInfo* region
     return Owner(region == nullptr ? nullptr : region->metadata.fwdOwner.load(std::memory_order_acquire));
 }
 
+bool ForwardingTable::UnbindPageOwnerLocked(RegionInfo* region, bool allowExclusive)
+{
+    ZForwarding* owner = region->metadata.fwdOwner.load(std::memory_order_acquire);
+    if (owner == nullptr) return true;
+    int32_t refs = owner->ref_count().load(std::memory_order_acquire);
+    // A prepared but never submitted page has only its construction token.
+    // No queue/scope may carry it and no payload reader may remain. Finish
+    // that token rather than resetting a live forwarding to an idle state.
+    if (refs == 1 && owner->external_owners() == 1 && owner->claim()) {
+        owner->release_page();
+        owner->mark_done();
+        refs = 0;
+    }
+    if (refs != 0 && !(allowExclusive && refs == -1)) return false;
+    region->metadata.fwdOwner.store(nullptr, std::memory_order_release);
+    owner->release_owner();
+    return true;
+}
+
 void ForwardingTable::ClearPageOwner(RegionInfo* region)
 {
     std::lock_guard<std::mutex> lock(g_installLock);
-    ZForwarding* owner = region->metadata.fwdOwner.exchange(nullptr, std::memory_order_acq_rel);
-    if (owner != nullptr) {
-        CHECK_DETAIL(owner->ref_count().load(std::memory_order_acquire) == 0 ||
-                     owner->ref_count().load(std::memory_order_acquire) == -1,
-                     "clearing retained forwarding owner region=%p", region);
-        owner->release_owner();
-    }
+    CHECK_DETAIL(UnbindPageOwnerLocked(region, true), "clearing retained forwarding owner region=%p", region);
 }
 
 const ZForwarding::FromPageView* ForwardingTable::GetFromPageView(RegionInfo* region)
@@ -1206,6 +1222,7 @@ MAddress ForwardingTable::RequireRetiredTo(MAddress from)
 
 MAddress ForwardingTable::FindTo(MAddress from)
 {
+    std::lock_guard<std::mutex> lock(g_installLock);
     ZForwarding* tab = GetEntries(from);
     if (tab != nullptr) {
         if (!tab->covers(from)) {

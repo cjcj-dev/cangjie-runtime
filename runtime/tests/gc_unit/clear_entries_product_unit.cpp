@@ -942,12 +942,7 @@ GC_TEST(ForwardingPublicationProduct, MutatorRuntimeEntryReachesCopyAdmission)
     region->SetRouteInfo(reinterpret_cast<MAddress>(expected), static_cast<uint32_t>(objectSize));
     region->SetRouteState(RegionInfo::RouteState::ROUTED);
 
-    RegionSpace& productSpace = reinterpret_cast<RegionSpace&>(Heap::GetHeap().GetAllocator());
-    RelocationRequestQueue& queue = productSpace.GetRegionManager().GetRelocationRequestQueue();
-    queue.BeginWorkers(1);
     const MAddress fromAddress = reinterpret_cast<MAddress>(from);
-    const auto request = queue.Add(region, fromAddress);
-    GC_EXPECT_TRUE(request.accepted);
 
     CopyAdmissionWitness::Reset();
     setCopyAdmissionHook(&CopyAdmissionWitness::Hook);
@@ -955,15 +950,11 @@ GC_TEST(ForwardingPublicationProduct, MutatorRuntimeEntryReachesCopyAdmission)
         collector, from, region->generation_id());
     setCopyAdmissionHook(nullptr);
 
-    const bool published = request.request->state() == RelocationRequestQueue::State::COMPLETED;
-    if (!published) {
-        (void)queue.Fail(fromAddress);
-    }
+    const bool published = ForwardingTable::FindTo(fromAddress) != 0;
     const uint32_t admissionHits = CopyAdmissionWitness::Hits();
     const bool headerForwarded = from->IsForwarded();
     const MAddress receipt = ForwardingTable::FindTo(fromAddress);
     const int32_t copyCount = region->CopyInflight();
-    const bool workersDone = queue.SynchronizePoll().workersDone;
 
     collector.SetGCPhase(GCPhase::GC_PHASE_IDLE);
     RelocationReceiptTestAccess::BindCollector(Heap::GetHeap().GetCollectorResources(), nullptr);
@@ -981,7 +972,6 @@ GC_TEST(ForwardingPublicationProduct, MutatorRuntimeEntryReachesCopyAdmission)
     GC_EXPECT_TRUE(headerForwarded);
     GC_EXPECT_EQ(receipt, reinterpret_cast<MAddress>(expected));
     GC_EXPECT_EQ(copyCount, 0);
-    GC_EXPECT_TRUE(workersDone);
 }
 #endif
 
@@ -3642,7 +3632,6 @@ GC_TEST(ForwardingPublicationProduct, CompactedWithoutFwdDoneWaitsInProductSO)
         (void)waitpid(child, &status, 0);
     }
     GC_EXPECT_FALSE(aborted);
-    (void)queue.Fail(reinterpret_cast<MAddress>(from));
     (void)queue.SynchronizePoll();
 
     if (region->IsGhostFromRegion()) {
@@ -3873,7 +3862,8 @@ GC_TEST(ForwardingPublicationProduct, PartialCompactFirstDestinationKeepsReceipt
 
     manager.CompactRegion(state.region, state.destination);
 
-    const MAddress receipt = queue.Wait(request.request);
+    (void)queue.Wait(request.request);
+    const MAddress receipt = request.request->page_forwarding()->find(from);
     GC_EXPECT_EQ(receipt, expected);
     GC_EXPECT_TRUE(receipt != from);
     GC_EXPECT_EQ(ForwardingTable::FindTo(from), expected);
@@ -3902,7 +3892,8 @@ GC_TEST(ForwardingPublicationProduct, PartialCompactSelfFallbackKeepsReceipt)
     manager.CompactRegion(state.region, state.destination);
     state.region->SetRouteState(RegionInfo::RouteState::COMPACTED);
 
-    const MAddress receipt = queue.Wait(request.request);
+    (void)queue.Wait(request.request);
+    const MAddress receipt = request.request->page_forwarding()->find(from);
     GC_EXPECT_EQ(receipt, expected);
     GC_EXPECT_TRUE(receipt != from);
     GC_EXPECT_EQ(ForwardingTable::FindTo(from), expected);
@@ -3965,10 +3956,10 @@ GC_TEST(ForwardingPublicationProduct, PageWaitThenLookupReadsOriginalCompactRece
         resolved = RelocationReceiptTestAccess::WaitRoutedTipReady(
             collector, liveObject, nullptr, region);
     });
-    RelocationRequestQueue::Handle claimed = queue.PruneAndClaim();
-    BaseObject* workerResult = RelocationReceiptTestAccess::TryForward(collector, liveObject);
-    (void)manager.CompleteRelocationRequests(region);
-    const bool workerClosed = queue.SynchronizePoll().workersDone;
+    manager.ForwardFromRegions<Generation::Old>();
+    const auto claimed = seeded.request;
+    BaseObject* workerResult = reinterpret_cast<BaseObject*>(ForwardingTable::FindTo(from));
+    const bool workerClosed = queue.PendingCount() == 0;
     waiter.join();
 
     GC_EXPECT_TRUE(resolved != nullptr);
@@ -3992,7 +3983,7 @@ GC_TEST(ForwardingPublicationProduct, PageWaitThenLookupReadsOriginalCompactRece
     fx.FreePlanted(live);
 }
 
-GC_TEST(ForwardingPublicationProduct, CompletedReceiptResolvesWithoutForwardingTableLookup)
+GC_TEST(ForwardingPublicationProduct, CompletedPageResolvesThroughForwardingTable)
 {
     GcHeapFixture& fx = ProductFixture();
     RelocationReceiptTestAccess::ReleaseListOwnership(RegionInfo::GetRegionInfo(4));
@@ -4005,6 +3996,12 @@ GC_TEST(ForwardingPublicationProduct, CompletedReceiptResolvesWithoutForwardingT
     routeDestination->SetRegionType(RegionInfo::RegionType::THREAD_LOCAL_REGION);
     BaseObject* fromObject = fx.PlaceObject(region->GetRegionStart() + 64);
     const MAddress from = reinterpret_cast<MAddress>(fromObject);
+    // The page task walks complete page layout; keep the unmarked prefix
+    // walkable rather than relying on the old one-object-only test driver.
+    for (MAddress at = region->GetRegionStart(); at < from;) {
+        BaseObject* dead = fx.PlaceObject(at);
+        at += RegionSpace::GetAllocSize(*dead);
+    }
     region->SetRegionAllocPtr(from + fromObject->GetSize());
     routeDestination->SetRegionAllocPtr(routeDestination->GetRegionStart());
 
@@ -4030,10 +4027,10 @@ GC_TEST(ForwardingPublicationProduct, CompletedReceiptResolvesWithoutForwardingT
         resolved = RelocationReceiptTestAccess::WaitRoutedTipReady(
             collector, fromObject, nullptr, region);
     });
-    RelocationRequestQueue::Handle claimed = queue.PruneAndClaim();
-    BaseObject* workerResult = RelocationReceiptTestAccess::TryForward(collector, fromObject);
-    (void)manager.CompleteRelocationRequests(region);
-    const bool workerClosed = queue.SynchronizePoll().workersDone;
+    manager.ForwardFromRegions<Generation::Old>();
+    const auto claimed = seeded.request;
+    BaseObject* workerResult = reinterpret_cast<BaseObject*>(ForwardingTable::FindTo(from));
+    const bool workerClosed = queue.PendingCount() == 0;
     waiter.join();
 
     const bool resolvedExpected = resolved != nullptr;
@@ -4097,7 +4094,8 @@ GC_TEST(ForwardingPublicationProduct, CompactRequestReturnsReceiptBeforeFromClea
     manager.CompactRegion(region);
     GC_EXPECT_TRUE(region->IsForwardingDone());
 
-    const MAddress resolved = queue.Wait(request.request);
+    (void)queue.Wait(request.request);
+    const MAddress resolved = request.request->page_forwarding()->find(from);
     GC_EXPECT_EQ(resolved, start);
     GC_EXPECT_TRUE(resolved != from);
     GC_EXPECT_EQ(ForwardingTable::FindTo(from), resolved);
@@ -4686,11 +4684,6 @@ GC_TEST(ForwardingPublicationProduct, ExclusiveCopyPublishesProductReceipt)
     WCollector collector(Heap::GetHeap().GetAllocator(), Heap::GetHeap().GetCollectorResources());
     RelocationReceiptTestAccess::BindCollector(Heap::GetHeap().GetCollectorResources(), &collector);
     LiveInfo* live = PrepareForwardable(fx, region, from);
-    RegionSpace& productSpace = reinterpret_cast<RegionSpace&>(Heap::GetHeap().GetAllocator());
-    RelocationRequestQueue& queue = productSpace.GetRegionManager().GetRelocationRequestQueue();
-    queue.BeginWorkers(1);
-    const auto request = queue.Add(region, from);
-    GC_EXPECT_TRUE(request.accepted);
 
     StateWord oldWord = fromObject->GetStateWord();
     GC_EXPECT_TRUE(fromObject->TryLockObject(oldWord));
@@ -4698,18 +4691,13 @@ GC_TEST(ForwardingPublicationProduct, ExclusiveCopyPublishesProductReceipt)
     BaseObject* relocated =
         RelocationReceiptTestAccess::ForwardExclusive(collector, fromObject, toObject, region);
 
-    const bool productPublished = request.request->state() == RelocationRequestQueue::State::COMPLETED;
+    const bool productPublished = ForwardingTable::FindTo(from) != 0;
     GC_EXPECT_TRUE(productPublished);
-    if (!productPublished) {
-        (void)queue.Fail(from);
-    }
     GC_EXPECT_TRUE(relocated == toObject);
-    GC_EXPECT_EQ(request.request->receipt(), to);
-    GC_EXPECT_EQ(queue.Wait(request.request), to);
+    GC_EXPECT_EQ(ForwardingTable::FindTo(from), to);
     GC_EXPECT_EQ(ForwardingTable::FindTo(from), to);
     GC_EXPECT_TRUE(fromObject->IsForwarded());
     GC_EXPECT_EQ(region->CopyInflight(), 0);
-    GC_EXPECT_TRUE(queue.SynchronizePoll().workersDone);
 
     RelocationReceiptTestAccess::BindCollector(Heap::GetHeap().GetCollectorResources(), nullptr);
     ForwardingTable::ClearEntries(region->GetRegionStart(), region->GetRegionSize());
@@ -4769,12 +4757,7 @@ GC_TEST(ForwardingPublicationProduct, CopyAdmissionSealWaitsRealCopierAndRejects
     region->SetRouteInfo(reinterpret_cast<MAddress>(serialTo), static_cast<uint32_t>(3 * objectSize));
     region->SetRouteState(RegionInfo::RouteState::ROUTED);
 
-    RegionSpace& productSpace = reinterpret_cast<RegionSpace&>(Heap::GetHeap().GetAllocator());
-    RelocationRequestQueue& queue = productSpace.GetRegionManager().GetRelocationRequestQueue();
-    queue.BeginWorkers(1);
     const MAddress serialAddress = reinterpret_cast<MAddress>(serial);
-    const auto serialRequest = queue.Add(region, serialAddress);
-    GC_EXPECT_TRUE(serialRequest.accepted);
 
     CopyAdmissionBarrier::Reset();
     setCopyAdmissionHook(&CopyAdmissionBarrier::Hook);
@@ -4787,17 +4770,12 @@ GC_TEST(ForwardingPublicationProduct, CopyAdmissionSealWaitsRealCopierAndRejects
     CopyAdmissionBarrier::Release();
     serialCopier.join();
     const bool serialPublished =
-        serialRequest.request->state() == RelocationRequestQueue::State::COMPLETED;
-    if (!serialPublished) {
-        (void)queue.Fail(serialAddress);
-    }
+        ForwardingTable::FindTo(serialAddress) != 0;
     const auto serialStateAfterCopy = region->CopyAdmission();
     const int32_t serialCountAfterCopy = region->CopyInflight();
     const bool serialHeaderForwarded = serial->IsForwarded();
 
     const MAddress firstAddress = reinterpret_cast<MAddress>(first);
-    const auto request = queue.Add(region, firstAddress);
-    GC_EXPECT_TRUE(request.accepted);
 
     CopyAdmissionBarrier::Reset();
     BaseObject* firstResult = nullptr;
@@ -4837,11 +4815,8 @@ GC_TEST(ForwardingPublicationProduct, CopyAdmissionSealWaitsRealCopierAndRejects
 
     CopyAdmissionBarrier::Release();
     copier.join();
-    const bool firstPublished =
-        request.request->state() == RelocationRequestQueue::State::COMPLETED;
-    if (!firstPublished) {
-        (void)queue.Fail(firstAddress);
-    }
+    const MAddress firstReceipt = ForwardingTable::FindTo(firstAddress);
+    const bool firstPublished = firstReceipt != 0;
     while (!drainAcquired.load(std::memory_order_acquire)) {
         std::this_thread::yield();
     }
@@ -4864,7 +4839,6 @@ GC_TEST(ForwardingPublicationProduct, CopyAdmissionSealWaitsRealCopierAndRejects
     drainer.join();
     setCopyAdmissionHook(nullptr);
 
-    const bool workersDone = queue.SynchronizePoll().workersDone;
     collector.SetGCPhase(GCPhase::GC_PHASE_IDLE);
     RelocationReceiptTestAccess::BindCollector(Heap::GetHeap().GetCollectorResources(), nullptr);
     ForwardingTable::ClearEntries(region->GetRegionStart(), region->GetRegionSize());
@@ -4888,7 +4862,7 @@ GC_TEST(ForwardingPublicationProduct, CopyAdmissionSealWaitsRealCopierAndRejects
     GC_EXPECT_TRUE(drainDone.load(std::memory_order_acquire));
     GC_EXPECT_TRUE(firstPublished);
     GC_EXPECT_TRUE(firstResult == firstTo);
-    GC_EXPECT_EQ(request.request->receipt(), reinterpret_cast<MAddress>(firstTo));
+    GC_EXPECT_EQ(firstReceipt, reinterpret_cast<MAddress>(firstTo));
     GC_EXPECT_TRUE(firstHeaderForwarded);
     GC_EXPECT_EQ(countAfterDrain, 0);
     GC_EXPECT_TRUE(stateAfterDrain == ZForwardingLife::CopyAdmissionState::SEALED);
@@ -4897,7 +4871,6 @@ GC_TEST(ForwardingPublicationProduct, CopyAdmissionSealWaitsRealCopierAndRejects
     GC_EXPECT_EQ(countBeforeLate, countAfterLate);
     GC_EXPECT_EQ(countAfterLate, 0);
     GC_EXPECT_TRUE(wipeDone.load(std::memory_order_acquire));
-    GC_EXPECT_TRUE(workersDone);
 }
 #endif
 
@@ -4947,15 +4920,8 @@ GC_TEST(ForwardingPublicationProduct, AdmittedCopierExitsWhilePeerEntering)
     region->SetRouteInfo(reinterpret_cast<MAddress>(admittedTo), static_cast<uint32_t>(2 * objectSize));
     region->SetRouteState(RegionInfo::RouteState::ROUTED);
 
-    RegionSpace& productSpace = reinterpret_cast<RegionSpace&>(Heap::GetHeap().GetAllocator());
-    RelocationRequestQueue& queue = productSpace.GetRegionManager().GetRelocationRequestQueue();
-    queue.BeginWorkers(1);
     const MAddress admittedAddress = reinterpret_cast<MAddress>(admitted);
     const MAddress enteringAddress = reinterpret_cast<MAddress>(entering);
-    const auto admittedRequest = queue.Add(region, admittedAddress);
-    const auto enteringRequest = queue.Add(region, enteringAddress);
-    GC_EXPECT_TRUE(admittedRequest.accepted);
-    GC_EXPECT_TRUE(enteringRequest.accepted);
 
     CopyCompletionBarrier completionBarrier;
     CopyAdmissionBarrier::Reset(entering);
@@ -4997,18 +4963,11 @@ GC_TEST(ForwardingPublicationProduct, AdmittedCopierExitsWhilePeerEntering)
     setCopyAdmissionHook(nullptr);
 
     const bool admittedPublished =
-        admittedRequest.request->state() == RelocationRequestQueue::State::COMPLETED;
+        ForwardingTable::FindTo(admittedAddress) != 0;
     const bool enteringPublished =
-        enteringRequest.request->state() == RelocationRequestQueue::State::COMPLETED;
-    if (!admittedPublished) {
-        (void)queue.Fail(admittedAddress);
-    }
-    if (!enteringPublished) {
-        (void)queue.Fail(enteringAddress);
-    }
+        ForwardingTable::FindTo(enteringAddress) != 0;
     const auto finalState = region->CopyAdmission();
     const int32_t finalCount = region->CopyInflight();
-    const bool workersDone = queue.SynchronizePoll().workersDone;
 
     collector.SetGCPhase(GCPhase::GC_PHASE_IDLE);
     RelocationReceiptTestAccess::BindCollector(Heap::GetHeap().GetCollectorResources(), nullptr);
@@ -5033,7 +4992,6 @@ GC_TEST(ForwardingPublicationProduct, AdmittedCopierExitsWhilePeerEntering)
     GC_EXPECT_TRUE(enteringPublished);
     GC_EXPECT_TRUE(finalState == ZForwardingLife::CopyAdmissionState::OPEN);
     GC_EXPECT_EQ(finalCount, 0);
-    GC_EXPECT_TRUE(workersDone);
 }
 #endif
 

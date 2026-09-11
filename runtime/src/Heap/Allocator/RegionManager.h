@@ -232,7 +232,11 @@ public:
     MRT_EXPORT size_t SatisfiedStalledAllocations() const;
     MRT_EXPORT size_t FailedStalledAllocations() const;
 #endif
-    size_t CompleteRelocationRequests(RegionInfo* region);
+    template<Generation G>
+    void ForwardClaimedPage(RegionInfo* region, ForwardingTable::Owner owner, bool claimed = false);
+    template<Generation G>
+    void StartForwardFromRegions(GCThreadPool* threadPool, size_t tasks = 0);
+    bool RelocationStarted() const { return relocationStarted; }
     // Before clearing the young flag on a promoted region, record every live
     // old→young out-edge that mutators skipped while the source was still young.
     static size_t RecordPromotedCrossGenEdges(RegionInfo* region);
@@ -834,7 +838,7 @@ public:
         return PublishedRoute{ to };
     }
 
-    bool RouteRegion(RegionInfo* fromRegionInfo)
+    bool RouteRegion(RegionInfo* fromRegionInfo, bool mayWait = true)
     {
         // fysfixb / 352ed4e8: non-ghost is a defined negative answer, not invariant break.
         // Producers that clear ghost: DispelGhostFromRegion (PrepareFromRegionList),
@@ -861,6 +865,7 @@ public:
                 return false;
             }
             if (oldState == RegionInfo::RouteState::ROUTING) {
+                if (!mayWait) return false;
                 sched_yield();
                 continue;
             }
@@ -874,7 +879,9 @@ public:
                     fromRegionInfo->SetRouteState(RegionInfo::RouteState::ROUTED);
                     return true;
                 } else {
-                    fromRegionInfo->SetRouteState(RegionInfo::RouteState::COMPACTED);
+                    if (fromRegionInfo->GetRouteState() != RegionInfo::RouteState::FORWARDABLE) {
+                        fromRegionInfo->SetRouteState(RegionInfo::RouteState::COMPACTED);
+                    }
                     return false;
                 }
             }
@@ -1068,7 +1075,7 @@ private:
 
     BaseObject* ComputeRouteBorrowed(BaseObject* fromObj, RegionInfo* fromRegionInfo)
     {
-        if (RouteRegion(fromRegionInfo) || fromRegionInfo->IsCompacted()) {
+        if (RouteRegion(fromRegionInfo, false) || fromRegionInfo->IsCompacted()) {
             OptionalRouteTicket ticket = fromRegionInfo->AdmitForRoute(fromObj);
             if (!ticket) {
                 return nullptr;
@@ -1219,6 +1226,8 @@ private:
     // region type must be FROM_REGION.
     RegionList fromRegionList;
     RelocationRequestQueue relocationRequestQueue;
+    GCThreadPool* relocationPool{ nullptr }; // #204 current-generation worker-set adapter
+    bool relocationStarted{ false };
     AllocationStallQueue allocationStallQueue;
 #if defined(MRT_ALLOCATION_STALL_OBSERVE)
     AllocationStallTestHook allocationStallBeforeWaveTestHook;
@@ -1302,8 +1311,7 @@ inline void ExecuteForwardTask(RegionManager& regionManager, RegionList& fromReg
         }
         if (!selected.is_request()) {
             RegionInfo* region = static_cast<RegionInfo*>(selected.ordinary);
-            regionManager.ForwardRegion<G>(region);
-            regionManager.CompleteRelocationRequests(region);
+            regionManager.ForwardClaimedPage<G>(region, ForwardingTable::RetainPageOwner(region));
             continue;
         }
 
@@ -1318,27 +1326,12 @@ inline void ExecuteForwardTask(RegionManager& regionManager, RegionList& fromReg
                 regionManager.GetRelocationRequestQueue().PendingCount());
         }
 #endif
-        // The list transition is the single relocation owner. If an ordinary
-        // worker won first, it will publish the requested receipt and wake us.
-        if (fromRegionList.TryDeleteRegion(region, RegionInfo::RegionType::FROM_REGION,
-                                           RegionInfo::RegionType::LONE_FROM_REGION)) {
-            regionManager.ForwardRegion<G>(region);
-            regionManager.CompleteRelocationRequests(region);
-        } else {
-            // Claim removes only the deque entry. Keep the handle in byFrom:
-            // an ordinary owner may already be forwarding this region, and the
-            // last-worker generation close remains the no-publisher terminal.
-#if defined(MRT_GCV2_REGION_WAIT_DIAG)
-            static std::atomic<size_t> g_claimLoser{ 0 };
-            const size_t loserN = g_claimLoser.fetch_add(1, std::memory_order_relaxed) + 1;
-            if (loserN <= 8 || (loserN & (loserN - 1)) == 0) {
-                LOG(RTLOG_ERROR,
-                    "[GCV2][region-wait-claim-loser] n=%zu from=%p deferred=1 pending=%zu",
-                    loserN, reinterpret_cast<void*>(selected.request->from()),
-                    regionManager.GetRelocationRequestQueue().PendingCount());
-            }
-#endif
-        }
+        // If an ordinary iterator already removed the page, its worker will
+        // lose the forwarding claim. This claimant still owns the page task.
+        (void)fromRegionList.TryDeleteRegion(region, RegionInfo::RegionType::FROM_REGION,
+                                             RegionInfo::RegionType::LONE_FROM_REGION);
+        regionManager.ForwardClaimedPage<G>(region,
+            ForwardingTable::RetainPageOwner(region), true);
     }
 }
 

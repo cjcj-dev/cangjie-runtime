@@ -452,11 +452,39 @@ public:
     // zForwarding.cpp:51-53 / :86-194. Source-page ownership only.
     bool claim() { return ZForwardingLife::claim(_claimed); }
     bool retain_page() { return ZForwardingLife::retain_page(_ref_count, _done); }
-    void release_page() { ZForwardingLife::release_page(_ref_count); }
-    void detach_page() { ZForwardingLife::detach_page(_ref_count); }
+    void release_page()
+    {
+        int32_t count = _ref_count.load(std::memory_order_relaxed);
+        for (;;) {
+            CHECK(count != 0);
+            const int32_t next = count > 0 ? count - 1 : count + 1;
+            if (_ref_count.compare_exchange_weak(count, next, std::memory_order_acq_rel,
+                                                std::memory_order_relaxed)) {
+                if (next == 0 || next == -1) {
+                    std::lock_guard<std::mutex> lock(_ref_lock);
+                    _ref_changed.notify_all();
+                }
+                return;
+            }
+        }
+    }
+    void detach_page()
+    {
+        std::unique_lock<std::mutex> lock(_ref_lock);
+        _ref_changed.wait(lock, [this] { return _ref_count.load(std::memory_order_acquire) == 0; });
+    }
     void mark_done() { ZForwardingLife::mark_done(_done); }
     bool is_done() const { return ZForwardingLife::is_done(_done); }
-    void in_place_relocation_claim_page() { ZForwardingLife::in_place_relocation_claim_page(_ref_count); }
+    void in_place_relocation_claim_page()
+    {
+        int32_t count = _ref_count.load(std::memory_order_relaxed);
+        do {
+            CHECK(count > 0);
+        } while (!_ref_count.compare_exchange_weak(count, -count, std::memory_order_acq_rel,
+                                                   std::memory_order_relaxed));
+        std::unique_lock<std::mutex> lock(_ref_lock);
+        _ref_changed.wait(lock, [this] { return _ref_count.load(std::memory_order_acquire) == -1; });
+    }
 
     std::atomic<int32_t>& ref_count() { return _ref_count; }
     std::atomic<bool>& claimed() { return _claimed; }
@@ -510,6 +538,7 @@ private:
     uint64_t _required_mark_epoch;
     std::atomic<bool> _claimed;
     mutable std::mutex _ref_lock;
+    std::condition_variable _ref_changed;
     std::atomic<int32_t> _ref_count;
     std::atomic<bool> _done;
     std::atomic<size_t> _table_readers{ 0 };

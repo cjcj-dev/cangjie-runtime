@@ -2846,6 +2846,7 @@ public:
         bool ok() const { return retained; }
         bool covers(RegionInfo* page) const { return retained && region == page; }
         ZForwarding* forwarding() const { return owner.get(); }
+        ForwardingTable::Owner HoldForwarding() const { return owner; }
 
         RetainScope(const RetainScope&) = delete;
         RetainScope& operator=(const RetainScope&) = delete;
@@ -2867,7 +2868,7 @@ public:
     void MarkForwardingDone()
     {
         auto owner = ForwardingTable::RetainPageOwner(this);
-        if (owner) owner->mark_done();
+        if (owner && ZForwardingLife::CurrentPageWork() != owner.get()) owner->mark_done();
     }
 
     bool IsForwardingDone() const
@@ -3040,7 +3041,7 @@ public:
         {
             if (!retiring) return;
             owner->release_page();
-            owner->mark_done();
+            if (ZForwardingLife::CurrentPageWork() != owner.get()) owner->mark_done();
         }
 
         DrainScope(const DrainScope&) = delete;
