@@ -3631,6 +3631,9 @@ void RegionManager::FinishStayYoungInPlace(RegionInfo* region, bool advanceAge)
     RunRemapWindowTestHook(3, region, nullptr);
 #endif
     region->MarkForwardingDone();
+#if defined(MRT_TESTABLE_INTERNALS)
+    RunRemapWindowTestHook(5, region, nullptr);
+#endif
     region->DispelGhostFromRegion();
 }
 
