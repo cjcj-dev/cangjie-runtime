@@ -80,6 +80,7 @@ set(GC_UNIT_SOURCES
     test_colour_census.cpp
     test_payload_clamp.cpp
     test_cycle_ref_saferegion.cpp
+    test_forward_entry_domain.cpp
 )
 
 add_executable(cj_gc_unit ${GC_UNIT_SOURCES})

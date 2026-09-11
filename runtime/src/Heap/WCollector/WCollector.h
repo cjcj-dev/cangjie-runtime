@@ -524,17 +524,12 @@ public:
             MutatorRelocate::NoteWaitEnter();
         }
         BaseObject* resolved = WaitRoutedTipReady(obj, to, forwarding, provenance);
-        if (resolved != nullptr && resolved != obj) {
+        // zRelocate.cpp:412-415: find()!=null is enough. Identity (to==from) is a
+        // legal ArmedHit / request receipt. WaitRoutedTipReady returns non-null
+        // only for ArmedHit or a published request receipt; miss/unready/wrong
+        // life go to permanentHole and never invent a from-address here.
+        if (resolved != nullptr) {
             return resolved;
-        }
-        // inplaceto: on a page compacted in place, WaitRoutedTipReady answers `obj` only when the
-        // page geometry classifies this address as already relocated (ClassifyCompactedMiss
-        // kAlreadyTo), or when the table holds an identity receipt for it.  Both say "obj is the
-        // current version", which is what ZRelocate::forward_object returns when find() maps an
-        // object onto itself (zRelocate.cpp:411-415 asserts an answer exists, not that it moved).
-        // The `resolved != obj` guard above still refuses a from-address on every other page.
-        if (resolved == obj && forwarding != nullptr && forwarding->IsCompacted()) {
-            return obj;
         }
         CHECK_DETAIL(false,
                      "ZRelocate::forward_object requires a forwarding entry for relocation-set object %p "
