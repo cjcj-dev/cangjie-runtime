@@ -326,6 +326,9 @@ public:
     {
         VerifyMarkingStacks::VerifyEmpty(VerifyMarkingStacks::MarkingGeneration::MAJOR,
                                          VerifyMarkingStacks::MarkingBoundary::TASK_EXIT,
+                                         VerifyMarkingStacks::MarkingContainer::TASK, 0, 0, workerSlot);
+        VerifyMarkingStacks::VerifyEmpty(VerifyMarkingStacks::MarkingGeneration::MAJOR,
+                                         VerifyMarkingStacks::MarkingBoundary::TASK_EXIT,
                                          VerifyMarkingStacks::MarkingContainer::LOCAL,
                                          context.Stacks().Population(), 0, workerSlot);
     }
@@ -751,7 +754,7 @@ static size_t RunMajorStripeMark(TracingCollector& collector, TracingCollector::
     MajorMarkShared shared;
     shared.collector = &collector;
     shared.workerCount = workers;
-    shared.terminate.Reset(workers);
+    shared.terminate.Reset(workers, VerifyMarkingStacks::MarkingGeneration::MAJOR);
     shared.stripes = std::make_unique<MarkStripeSet>(stripeCount);
     shared.stripes->SetTerminate(&shared.terminate);
     shared.smr = std::make_unique<MarkingSMR>(workers);

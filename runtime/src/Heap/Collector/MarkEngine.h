@@ -14,6 +14,7 @@
 #include <mutex>
 
 #include "Heap/Collector/MarkStripe.h"
+#include "Heap/Verify/VerifyMarkingStacks.h"
 
 namespace MapleRuntime {
 
@@ -23,13 +24,15 @@ class MarkStripeSet;
 // after every stripe is empty. Saturated means terminated and working==0.
 class MarkTerminate {
 public:
-    void Reset(size_t workers);
+    void Reset(size_t workers,
+               VerifyMarkingStacks::MarkingGeneration generation = VerifyMarkingStacks::MarkingGeneration::YOUNG);
     bool TryTerminate(const MarkStripeSet& stripes);
     void Wake();
     bool Saturated() const;
     size_t WorkerCount() const;
 
 private:
+    VerifyMarkingStacks::MarkingGeneration generation = VerifyMarkingStacks::MarkingGeneration::YOUNG;
     size_t workerCount = 0;
     size_t working = 0;
     size_t awakening = 0;
