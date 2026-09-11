@@ -168,7 +168,13 @@ private:
 };
 
 // ZGC ZMarkCache analogue. Mark-bit claims remain atomic; only the page/region
-// live-byte additions are coalesced per worker.
+// live-object and aligned-byte additions are coalesced per worker.
+#if defined(MRT_TESTABLE_INTERNALS)
+using MarkClosureObserver = void (*)(const std::vector<BaseObject*>*);
+MRT_EXPORT void SetMarkClosureObserverForTest(MarkClosureObserver observer);
+void ObserveMarkClosureForTest(const std::vector<BaseObject*>* objects);
+#endif
+
 class MarkLiveCache {
 public:
     explicit MarkLiveCache(size_t stripeCount);
@@ -183,6 +189,7 @@ private:
     struct Entry {
         RegionInfo* region = nullptr;
         size_t bytes = 0;
+        uint32_t objects = 0;
     };
 
     void Evict(Entry& entry);
@@ -197,7 +204,11 @@ public:
     MarkContext(size_t workerCount, size_t workerId, MarkStripeSet& stripes);
 
     size_t StripeId() const { return stripeId; }
-    void SetStripeId(size_t value) { stripeId = value; }
+    void SetStripeId(size_t value)
+    {
+        cache.Flush();
+        stripeId = value;
+    }
     MarkThreadLocalStacks& Stacks() { return stacks; }
     MarkLiveCache& Cache() { return cache; }
 

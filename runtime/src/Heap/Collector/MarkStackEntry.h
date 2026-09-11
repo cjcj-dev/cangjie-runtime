@@ -77,6 +77,14 @@ public:
         return MarkStackEntry(object, false, false, true, finalizable);
     }
 
+    // The GC producer already won the mark transition. Its first-live
+    // result is a deferred accounting obligation, independent of follow.
+    static MarkStackEntry Claimed(BaseObject* object, bool firstLive, bool follow = true,
+                                  bool finalizable = false)
+    {
+        return MarkStackEntry(object, false, firstLive, follow, finalizable);
+    }
+
     static MarkStackEntry MarkAndFollow(BaseObject* object, bool finalizable = false)
     {
         return MarkStackEntry(object, true, true, true, finalizable);
