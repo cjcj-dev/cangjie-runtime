@@ -2321,32 +2321,63 @@ RegionInfo* RegionManager::TakeRegion(size_t num, RegionInfo::UnitRole type, boo
 }
 
 template<Generation G>
-void RegionManager::ForwardFromRegions(GCThreadPool* threadPool)
+void RegionManager::StartForwardFromRegions(GCThreadPool* threadPool, size_t tasks)
 {
-    if (threadPool != nullptr) {
-        int32_t threadNum = threadPool->GetMaxActiveThreadNum() + 1;
-        // We won't change fromRegionList during gc, so we can use it without lock.
-        size_t regionCount = fromRegionList.GetRegionCount();
-        (void)regionCount;
-
-        // we start threadPool before adding work so that we can concurrently add tasks;
-        relocationRequestQueue.BeginWorkers(static_cast<size_t>(threadNum));
-        threadPool->Start();
-        for (int32_t i = 0; i < threadNum; ++i) {
-            threadPool->AddWork(new (std::nothrow) ForwardTask<G>(*this, fromRegionList));
-        }
-        threadPool->WaitFinish();
-    } else {
-        relocationRequestQueue.BeginWorkers(1);
+    CHECK(!relocationStarted);
+    relocationStarted = true;
+    relocationPool = threadPool;
+    const size_t count = tasks != 0 ? tasks :
+        (threadPool == nullptr ? 1 : static_cast<size_t>(threadPool->GetMaxActiveThreadNum() + 1));
+    relocationRequestQueue.BeginWorkers(count);
+    if (threadPool == nullptr) {
         ForwardFromRegions<G>();
+        return;
+    }
+    // Count submitted page tasks, never a separate implicit driver token.
+    // Submission precedes root tasks on the shared worker set (#204 adapter).
+    for (size_t i = 0; i < count; ++i) {
+        auto* task = new (std::nothrow) ForwardTask<G>(*this, fromRegionList);
+        CHECK(task != nullptr);
+        threadPool->AddWork(task);
+    }
+    threadPool->Start();
+    if (threadPool->GetMaxActiveThreadNum() == 0) {
+        // No background worker can serve a synchronous root request. Finish
+        // the submitted page task here before entering root processing.
+        threadPool->WaitFinish();
     }
 }
 
-size_t RegionManager::CompleteRelocationRequests(RegionInfo* region)
+template<Generation G>
+void RegionManager::ForwardFromRegions(GCThreadPool* threadPool)
 {
-    return relocationRequestQueue.CompleteOwner(
-        region, [](MAddress from) { return ForwardingTable::FindTo(from); });
+    if (!relocationStarted) StartForwardFromRegions<G>(threadPool);
+    if (relocationPool != nullptr) relocationPool->WaitFinish();
+    relocationPool = nullptr;
+    relocationStarted = false;
 }
+
+template<Generation G>
+void RegionManager::ForwardClaimedPage(RegionInfo* region, ForwardingTable::Owner owner, bool claimed)
+{
+    if (!owner || (!claimed && !owner->claim())) return;
+    ZForwardingLife::PageWorkScope work(owner.get());
+    ForwardRegion<G>(region);
+    // All page metadata and legacy helper work is finished. A nested drain
+    // may already have consumed the construction token; otherwise drop it now.
+    if (owner->ref_count().load(std::memory_order_acquire) != 0) owner->release_page();
+    owner->detach_page();
+#if defined(MRT_TESTABLE_INTERNALS)
+    RunRemapWindowTestHook(10, region, nullptr);
+#endif
+    owner->mark_done();
+#if defined(MRT_TESTABLE_INTERNALS)
+    RunRemapWindowTestHook(5, region, nullptr);
+#endif
+    // From here on only forwarding/queue state may be touched.
+    (void)relocationRequestQueue.Complete(owner.get());
+}
+
 
 namespace {
 // Wait until in-flight copiers drop to 0 (zForwarding.cpp:171-181 detach_page).
@@ -2716,60 +2747,7 @@ void RegionManager::CollectFromSpaceGarbage()
 template<Generation G>
 void RegionManager::ForwardFromRegions()
 {
-    // Use the same ownership transition as ForwardTask.  Walking the linked
-    // list in place leaves a forwarded region attached as FROM_REGION, so the
-    // next young cycle can revisit stale list state.  A zero-helper execution
-    // is serial, but it must still detach and mark each unit LONE_FROM_REGION.
-    while (true) {
-        RelocationRequestQueue::Selection selected =
-            relocationRequestQueue.SelectBeforeOrdinary([this]() -> void* {
-                return fromRegionList.TakeHeadRegion(RegionInfo::RegionType::LONE_FROM_REGION);
-            });
-        if (!selected) {
-            selected = relocationRequestQueue.SynchronizePoll();
-            if (selected.workersDone) {
-                break;
-            }
-            if (!selected) {
-                continue;
-            }
-        }
-        RegionInfo* region = selected.is_request() ? static_cast<RegionInfo*>(selected.request->owner())
-                                                   : static_cast<RegionInfo*>(selected.ordinary);
-#if defined(MRT_GCV2_REGION_WAIT_DIAG)
-        if (selected.is_request()) {
-            static std::atomic<size_t> g_regionWaitClaim{ 0 };
-            const size_t n = g_regionWaitClaim.fetch_add(1, std::memory_order_relaxed) + 1;
-            if (n <= 8 || (n & (n - 1)) == 0) {
-                LOG(RTLOG_ERROR,
-                    "[GCV2][region-wait-claim] n=%zu from=%p claim=1 pending=%zu",
-                    n, reinterpret_cast<void*>(selected.request->from()), relocationRequestQueue.PendingCount());
-            }
-        }
-#endif
-        if (selected.is_request() &&
-            !fromRegionList.TryDeleteRegion(region, RegionInfo::RegionType::FROM_REGION,
-                                            RegionInfo::RegionType::LONE_FROM_REGION)) {
-            // Claim only removes the handle from the worker deque; byFrom still
-            // owns it. An ordinary worker may already own this region, so do not
-            // publish FAILED here. That worker publishes receipt/pageDone, or
-            // generation close proves that no publisher remains and fails it.
-#if defined(MRT_GCV2_REGION_WAIT_DIAG)
-            static std::atomic<size_t> g_claimLoser{ 0 };
-            const size_t n = g_claimLoser.fetch_add(1, std::memory_order_relaxed) + 1;
-            if (n <= 8 || (n & (n - 1)) == 0) {
-                LOG(RTLOG_ERROR,
-                    "[GCV2][region-wait-claim-loser] n=%zu from=%p deferred=1 pending=%zu",
-                    n, reinterpret_cast<void*>(selected.request->from()),
-                    relocationRequestQueue.PendingCount());
-            }
-#endif
-            continue;
-        }
-        MRT_ASSERT(region->IsValidRegion(), "the head region of fromRegionList is invalid");
-        ForwardRegion<G>(region);
-        CompleteRelocationRequests(region);
-    }
+    detail::ExecuteForwardTask<G>(*this, fromRegionList);
 
     VLOG(REPORT, "forward %zu from-region units", fromRegionList.GetUnitCount());
 
@@ -3284,6 +3262,11 @@ bool RegionManager::RouteOrCompactRegionImpl(RegionInfo* region)
     if (toRegion1 == RegionInfo::NullRegion()) {
         toRegion1 = AllocateThreadLocalRegion(false, false, /*allowSaferegion=*/false);
         if (toRegion1 == nullptr) {
+            auto owner = ForwardingTable::RetainPageOwner(region);
+            if (owner && ZForwardingLife::CurrentPageWork() != owner.get()) {
+                region->SetRouteState(RegionInfo::RouteState::FORWARDABLE);
+                return false;
+            }
             // routedest: the immune arm. This plan names the from-region as its own
             // destination, and the from-region is already a ghost — the ghost bit is what
             // bounds route readability, and DispelGhostFromRegion drops it and the route
@@ -3371,6 +3354,12 @@ bool RegionManager::RouteOrCompactRegionImpl(RegionInfo* region)
         result = true;
         buffer->SetRegion(toRegion2);
     } else {
+        auto owner = ForwardingTable::RetainPageOwner(region);
+        if (owner && ZForwardingLife::CurrentPageWork() != owner.get()) {
+            buffer->ClearRegion();
+            region->SetRouteState(RegionInfo::RouteState::FORWARDABLE);
+            return false;
+        }
         // Publish the split plan before Compact so leftover objects land at GetRoute dests.
         toRegion1->SetRouteDestHold(1);
         region->SetRouteInfo(toRegion1Addr, usedBytes1, region->GetUnitIdx());
@@ -3399,6 +3388,16 @@ bool RegionManager::RouteOrCompactRegionImpl(RegionInfo* region)
 
 void RegionManager::CompactRegion(RegionInfo* region)
 {
+    auto owner = ForwardingTable::RetainPageOwner(region);
+    ZForwardingLife::PageWorkScope work(owner.get(),
+        owner && ZForwardingLife::CurrentPageWork() != owner.get());
+    if (owner && owner->ref_count().load(std::memory_order_acquire) > 0) {
+        owner->in_place_relocation_claim_page();
+    }
+#if defined(MRT_TESTABLE_INTERNALS)
+    RunRemapWindowTestHook(9, region, nullptr);
+#endif
+
     MAddress regionStart = region->GetRegionStart();
     DLOG(REGION, "compact region %p@[%#zx+%zu, %#zx) type %u", region, regionStart,
         region->GetLiveByteCount(), region->GetRegionEnd(), region->GetRegionType());
@@ -3429,7 +3428,7 @@ void RegionManager::CompactRegion(RegionInfo* region)
         toObj->SetStateCode(ObjectState::NORMAL);
         std::atomic_thread_fence(std::memory_order_release);
         const MAddress receipt = ForwardingTable::InsertMapping(publication, currentPtr, toAddress);
-        (void)relocationRequestQueue.Publish(currentPtr, receipt);
+
         region->RecordCompactRoute(offset, toAddress);
         // ZGC zRelocate.cpp:652-731 update_remset_old_to_old: the bits covering the from copy
         // name field offsets inside this object, so they follow it to its new address.
@@ -3453,6 +3452,9 @@ void RegionManager::CompactRegion(RegionInfo* region)
     VerifyForwardingReceiptsClosed(region, "CompactRegion.whole");
     WaitCopiedObjectsUnlocked(region);
     region->MarkForwardingDone();
+#if defined(MRT_TESTABLE_INTERNALS)
+    RunRemapWindowTestHook(11, region, nullptr);
+#endif
 
     // zForwarding.cpp:171-181 / zRelocate.cpp:1001-1047: the forwarding table
     // outlives page reuse. Do not put this page on the mutator TLAB list while
@@ -3536,6 +3538,16 @@ void RegionManager::RehomeCompactedInPlaceRegion(RegionInfo* region)
 
 void RegionManager::CompactRegion(RegionInfo* region, RegionInfo* toRegion1)
 {
+    auto owner = ForwardingTable::RetainPageOwner(region);
+    ZForwardingLife::PageWorkScope work(owner.get(),
+        owner && ZForwardingLife::CurrentPageWork() != owner.get());
+    if (owner && owner->ref_count().load(std::memory_order_acquire) > 0) {
+        owner->in_place_relocation_claim_page();
+    }
+#if defined(MRT_TESTABLE_INTERNALS)
+    RunRemapWindowTestHook(9, region, nullptr);
+#endif
+
     MAddress regionStart = region->GetRegionStart();
     DLOG(REGION, "compact region %p@[%#zx+%zu, %#zx) type %u to region %p@%#zx:%#zx",
         region, regionStart, region->GetLiveByteCount(), region->GetRegionEnd(), region->GetRegionType(),
@@ -3567,7 +3579,7 @@ void RegionManager::CompactRegion(RegionInfo* region, RegionInfo* toRegion1)
         toObj->SetStateCode(ObjectState::NORMAL);
         std::atomic_thread_fence(std::memory_order_release);
         const MAddress receipt = ForwardingTable::InsertMapping(publication, currentPtr, toAddress);
-        (void)relocationRequestQueue.Publish(currentPtr, receipt);
+
         region->RecordCompactRoute(offset, toAddress);
         // zRelocate.cpp:652-731, as in the whole-page arm above.  toAddress may be in toRegion1,
         // which is what ZGC means by "even with in-place relocation, the to_page could be another
@@ -3593,6 +3605,9 @@ void RegionManager::CompactRegion(RegionInfo* region, RegionInfo* toRegion1)
     VerifyForwardingReceiptsClosed(region, "CompactRegion.partial");
     WaitCopiedObjectsUnlocked(region);
     region->MarkForwardingDone();
+#if defined(MRT_TESTABLE_INTERNALS)
+    RunRemapWindowTestHook(11, region, nullptr);
+#endif
 
     RehomeCompactedInPlaceRegion(region);
 }
@@ -3631,10 +3646,9 @@ void RegionManager::FinishStayYoungInPlace(RegionInfo* region, bool advanceAge)
     RunRemapWindowTestHook(3, region, nullptr);
 #endif
     region->MarkForwardingDone();
-#if defined(MRT_TESTABLE_INTERNALS)
-    RunRemapWindowTestHook(5, region, nullptr);
-#endif
-    region->DispelGhostFromRegion();
+    // The selected-set carrier remains queryable after payload release.
+    // The next selection/reset retires its ghost/source view; completing this
+    // page task does not revoke forwarding-table membership.
 }
 
 void RegionManager::EnlistStayYoungSurvivor(RegionInfo* region, bool advanceAge)
@@ -4118,6 +4132,10 @@ template void RegionManager::ForwardFromRegions<Generation::Old>();
 template class ForwardTask<Generation::Young>;
 template class ForwardTask<Generation::Old>;
 #endif
+template void RegionManager::StartForwardFromRegions<Generation::Young>(GCThreadPool*, size_t);
+template void RegionManager::StartForwardFromRegions<Generation::Old>(GCThreadPool*, size_t);
+template void RegionManager::ForwardClaimedPage<Generation::Young>(RegionInfo*, ForwardingTable::Owner, bool);
+template void RegionManager::ForwardClaimedPage<Generation::Old>(RegionInfo*, ForwardingTable::Owner, bool);
 template void RegionManager::ForwardRegion<Generation::Young>(RegionInfo*);
 template void RegionManager::ForwardRegion<Generation::Old>(RegionInfo*);
 #if defined(MRT_GC_UNIT_TESTS)

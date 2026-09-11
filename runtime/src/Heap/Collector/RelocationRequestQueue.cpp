@@ -7,8 +7,7 @@
 #include "Heap/Collector/RelocationRequestQueue.h"
 
 #include <chrono>
-#include <vector>
-
+#include "Heap/Allocator/RegionInfo.h"
 #include "Mutator/Mutator.inline.h"
 
 namespace MapleRuntime {
@@ -16,7 +15,8 @@ namespace MapleRuntime {
 void RelocationRequestQueue::BeginWorkers(size_t workers)
 {
     std::lock_guard<std::mutex> lock(queueMutex);
-    CHECK_DETAIL(!accepting && workers != 0 && workerCount == 0 && synchronizedWorkers == 0 && byFrom.empty(),
+    PruneDoneLocked();
+    CHECK_DETAIL(!accepting && workers != 0 && workerCount == 0 && synchronizedWorkers == 0 && byPage.empty(),
                  "invalid relocation worker generation workers=%zu active=%zu synchronized=%zu accepting=%u",
                  workers, workerCount, synchronizedWorkers, static_cast<unsigned>(accepting));
     queue.clear();
@@ -24,181 +24,91 @@ void RelocationRequestQueue::BeginWorkers(size_t workers)
     accepting = true;
 }
 
-RelocationRequestQueue::EnqueueResult RelocationRequestQueue::Add(void* owner, MAddress from)
+RelocationRequestQueue::EnqueueResult RelocationRequestQueue::Add(void* region, MAddress from)
+{
+    auto owner = ForwardingTable::RetainPageOwner(static_cast<RegionInfo*>(region));
+    CHECK_DETAIL(!owner || owner->covers(from), "relocation request outside forwarding from=%#zx", from);
+    return Add(std::move(owner));
+}
+
+RelocationRequestQueue::EnqueueResult RelocationRequestQueue::Add(ForwardingTable::Owner forwarding)
 {
     std::lock_guard<std::mutex> lock(queueMutex);
-    auto found = byFrom.find(from);
-    if (found != byFrom.end()) {
-        return EnqueueResult{ found->second, false, true };
+    if (!forwarding) return { nullptr, false, false };
+    auto found = byPage.find(forwarding.get());
+    if (found != byPage.end()) return { found->second, false, true };
+    if (forwarding->is_done()) return { Handle(new Request(std::move(forwarding))), false, true };
+    // An already claimed forwarding has its own completion owner even after
+    // the queue's last worker left. An unclaimed page requires an active task.
+    if (!accepting && !forwarding->claimed().load(std::memory_order_acquire)) {
+        return { nullptr, false, false };
     }
-    if (!accepting) {
-        Handle failed(new Request(owner, from));
-        CompleteHandle(failed, 0, State::FAILED);
-        return EnqueueResult{ failed, false, false };
-    }
-
-    Handle request(new Request(owner, from));
-    byFrom.emplace(from, request);
+    Handle request(new Request(std::move(forwarding)));
+    byPage.emplace(request->page_forwarding(), request);
     queue.push_back(request);
-    // A worker which observed both queues empty is synchronized on this
-    // condition. Notify on the empty->non-empty edge, as in ZRelocateQueue.
-    if (queue.size() == 1) {
-        queueAttention.notify_all();
-    }
-    return EnqueueResult{ request, true, true };
+    queueAttention.notify_all();
+    return { request, true, true };
 }
 
 MAddress RelocationRequestQueue::Wait(const Handle& request)
 {
-    if (request == nullptr) {
-        return 0;
-    }
+    return WaitUntil(request);
+}
 
-    // A relocation requester is normally a bound mutator. Consult the runtime
-    // TLS directly: falling back through ConcurrencyModel here would call into
-    // the scheduler even for an unattached native waiter.
+MAddress RelocationRequestQueue::WaitUntil(const Handle& request, size_t maxSpins, bool* timedOut)
+{
+    if (timedOut != nullptr) *timedOut = false;
+    if (request == nullptr) return 0;
     Mutator* mutator = ThreadLocal::GetMutator();
-    const ThreadType threadType = ThreadLocal::GetThreadType();
-    const bool stateChanged = mutator != nullptr && threadType != ThreadType::FP_THREAD &&
-                              threadType != ThreadType::GC_THREAD && mutator->EnterSaferegion(true);
-    std::unique_lock<std::mutex> lock(request->completionMutex);
-    request->completion.wait(lock, [&request]() {
-        const State state = request->requestState.load(std::memory_order_acquire);
-        return state == State::COMPLETED || state == State::FAILED;
-    });
-    const MAddress receipt = request->publishedReceipt.load(std::memory_order_acquire);
-    lock.unlock();
-    if (stateChanged) {
-        (void)mutator->LeaveSaferegion();
-    }
-    return receipt;
-}
-
-MAddress RelocationRequestQueue::WaitUntil(const Handle& request, const std::function<bool()>& pageDone,
-                                           size_t maxSpins, bool* timedOut)
-{
-    if (timedOut != nullptr) {
-        *timedOut = false;
-    }
-    if (request == nullptr || pageDone()) {
-        return 0;
-    }
-
-    // Keep the mutator in a saferegion exactly as Wait() does, but use the page
-    // predicate from ZRelocateQueue::add_and_wait (zRelocate.cpp:134-150).
-    // Object completion notifications accelerate the next predicate check;
-    // the timed check is the independent exit when this object has no receipt.
-    Mutator* mutator = ThreadLocal::GetMutator();
-    const ThreadType threadType = ThreadLocal::GetThreadType();
-    const bool stateChanged = mutator != nullptr && threadType != ThreadType::FP_THREAD &&
-                              threadType != ThreadType::GC_THREAD && mutator->EnterSaferegion(true);
-    MAddress receipt = 0;
-    size_t spins = 0;
-    std::unique_lock<std::mutex> lock(request->completionMutex);
-    while (!pageDone()) {
-        const State state = request->requestState.load(std::memory_order_acquire);
-        // COMPLETED publishes the exact to address before the release-store;
-        // consume it directly instead of relying on a second table lookup.
-        // FAILED is only published once no object/page publisher remains.
-        if (state == State::COMPLETED) {
-            receipt = request->publishedReceipt.load(std::memory_order_relaxed);
-            break;
-        }
-        if (state == State::FAILED) {
-            break;
-        }
-        if (maxSpins != 0 && spins >= maxSpins) {
-            if (timedOut != nullptr) {
-                *timedOut = true;
+    const ThreadType type = ThreadLocal::GetThreadType();
+    const bool changed = mutator != nullptr && type != ThreadType::FP_THREAD && type != ThreadType::GC_THREAD &&
+                         mutator->EnterSaferegion(true);
+    {
+        std::unique_lock<std::mutex> lock(queueMutex);
+        size_t spins = 0;
+        while (!request->page_forwarding()->is_done()) {
+            if (maxSpins != 0 && spins >= maxSpins) {
+                if (timedOut != nullptr) *timedOut = true;
+                break;
             }
-            break;
-        }
-        (void)request->completion.wait_for(lock, std::chrono::milliseconds(1));
-        ++spins;
-    }
-    lock.unlock();
-    if (stateChanged) {
-        (void)mutator->LeaveSaferegion();
-    }
-    return receipt;
-}
-
-bool RelocationRequestQueue::Publish(MAddress from, MAddress receipt)
-{
-    if (receipt == 0) {
-        return false;
-    }
-    return Complete(from, receipt, State::COMPLETED);
-}
-
-bool RelocationRequestQueue::Fail(MAddress from)
-{
-    return Complete(from, 0, State::FAILED);
-}
-
-bool RelocationRequestQueue::Complete(MAddress from, MAddress receipt, State terminalState)
-{
-    Handle request;
-    {
-        std::lock_guard<std::mutex> lock(queueMutex);
-        auto found = byFrom.find(from);
-        if (found == byFrom.end()) {
-            return false;
-        }
-        request = found->second;
-        byFrom.erase(found);
-    }
-
-    CompleteHandle(request, receipt, terminalState);
-    completionCount.fetch_add(1, std::memory_order_relaxed);
-    return true;
-}
-
-void RelocationRequestQueue::CompleteHandle(const Handle& request, MAddress receipt, State terminalState)
-{
-    {
-        std::lock_guard<std::mutex> lock(request->completionMutex);
-        request->publishedReceipt.store(receipt, std::memory_order_relaxed);
-        request->requestState.store(terminalState, std::memory_order_release);
-    }
-    request->completion.notify_all();
-}
-
-size_t RelocationRequestQueue::CompleteOwner(
-    void* owner, const std::function<MAddress(MAddress)>& resolveReceipt)
-{
-    std::vector<Handle> owned;
-    {
-        std::lock_guard<std::mutex> lock(queueMutex);
-        for (auto it = byFrom.begin(); it != byFrom.end();) {
-            if (it->second->owner() == owner) {
-                owned.push_back(it->second);
-                it = byFrom.erase(it);
-            } else {
-                ++it;
-            }
+            // mark_done may be published by an already-running page claimant.
+            // The predicate is the forwarding's immutable completion, never a
+            // RegionInfo incarnation or per-object publication.
+            queueAttention.wait_for(lock, std::chrono::milliseconds(1));
+            ++spins;
         }
     }
-    for (const Handle& request : owned) {
-        const MAddress receipt = resolveReceipt(request->from());
-        CompleteHandle(request, receipt, receipt == 0 ? State::FAILED : State::COMPLETED);
+    if (changed) (void)mutator->LeaveSaferegion();
+    return 0;
+}
+
+size_t RelocationRequestQueue::Complete(ZForwarding* forwarding)
+{
+    std::lock_guard<std::mutex> lock(queueMutex);
+    const size_t completed = forwarding != nullptr && forwarding->is_done() && byPage.count(forwarding) != 0 ? 1 : 0;
+    PruneDoneLocked();
+    queueAttention.notify_all();
+    return completed;
+}
+
+void RelocationRequestQueue::PruneDoneLocked()
+{
+    for (auto it = queue.begin(); it != queue.end();) {
+        if ((*it)->page_forwarding()->is_done()) {
+            byPage.erase((*it)->page_forwarding());
+            it = queue.erase(it);
+            completionCount.fetch_add(1, std::memory_order_relaxed);
+        } else {
+            ++it;
+        }
     }
-    if (!owned.empty()) {
-        completionCount.fetch_add(owned.size(), std::memory_order_relaxed);
-    }
-    return owned.size();
 }
 
 RelocationRequestQueue::Handle RelocationRequestQueue::PruneAndClaimLocked()
 {
-    while (!queue.empty()) {
-        Handle request = queue.front();
-        queue.pop_front();
-        State expected = State::QUEUED;
-        if (request->requestState.compare_exchange_strong(expected, State::CLAIMED, std::memory_order_acq_rel,
-                                                          std::memory_order_acquire)) {
-            return request;
-        }
+    PruneDoneLocked();
+    for (const auto& request : queue) {
+        if (request->page_forwarding()->claim()) return request;
     }
     return nullptr;
 }
@@ -213,46 +123,41 @@ RelocationRequestQueue::Selection RelocationRequestQueue::SynchronizePoll()
 {
     std::unique_lock<std::mutex> lock(queueMutex);
     Handle request = PruneAndClaimLocked();
-    if (request != nullptr) {
-        return Selection{ request, nullptr, false };
-    }
-
+    if (request) return { request, nullptr, false };
     CHECK_DETAIL(workerCount != 0 && synchronizedWorkers < workerCount,
                  "invalid relocation worker synchronization workers=%zu synchronized=%zu",
                  workerCount, synchronizedWorkers);
     ++synchronizedWorkers;
     if (synchronizedWorkers == workerCount) {
-        // All registered workers have observed both request and ordinary work
-        // empty. Closing under queueMutex makes the decision atomic with Add.
+        // All real page tasks have returned before joining this rendezvous.
+        // A claimed external owner can finish independently; do not relabel it.
         accepting = false;
-        for (auto& entry : byFrom) {
-            CompleteHandle(entry.second, 0, State::FAILED);
-        }
-        if (!byFrom.empty()) {
-            completionCount.fetch_add(byFrom.size(), std::memory_order_relaxed);
-        }
-        byFrom.clear();
-        queue.clear();
         workerCount = 0;
         synchronizedWorkers = 0;
         queueAttention.notify_all();
-        return Selection{ nullptr, nullptr, true };
+        return { nullptr, nullptr, true };
     }
+    for (;;) {
+        queueAttention.wait(lock);
+        if (!accepting) return { nullptr, nullptr, true };
+        request = PruneAndClaimLocked();
+        if (request) {
+            --synchronizedWorkers;
+            return { request, nullptr, false };
+        }
+    }
+}
 
-    queueAttention.wait(lock, [this]() { return !accepting || !queue.empty(); });
-    if (!accepting) {
-        return Selection{ nullptr, nullptr, true };
-    }
-    CHECK_DETAIL(synchronizedWorkers != 0, "relocation worker synchronization underflow");
-    --synchronizedWorkers;
-    request = PruneAndClaimLocked();
-    return Selection{ request, nullptr, false };
+bool RelocationRequestQueue::IsActive() const
+{
+    std::lock_guard<std::mutex> lock(queueMutex);
+    return accepting;
 }
 
 size_t RelocationRequestQueue::PendingCount() const
 {
     std::lock_guard<std::mutex> lock(queueMutex);
-    return byFrom.size();
+    return byPage.size();
 }
 
 size_t RelocationRequestQueue::SynchronizedWorkerCount() const

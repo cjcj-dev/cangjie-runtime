@@ -162,17 +162,12 @@ GC_TEST(ForwardingNoGeometry, ArmedLookupAndSuccessfulExclusiveCopyPublishProduc
     // RelocationRequestQueue::Publish -> UnlockObject(FORWARDED). This is the
     // call site at Relocate.cpp in WCollector::ForwardObjectExclusive, not a
     // queue helper with a hand-fed receipt.
-    RegionSpace& productSpace = reinterpret_cast<RegionSpace&>(Heap::GetHeap().GetAllocator());
-    RelocationRequestQueue& requests = productSpace.GetRegionManager().GetRelocationRequestQueue();
-    requests.BeginWorkers(1);
     BaseObject* copyFrom = fx.PlaceObject(fx.region0->GetRegionStart() + 128);
     BaseObject* copyTo = fx.PlaceObject(fx.region1->GetRegionStart() + 128);
     fx.region0->SetRegionAllocPtr(reinterpret_cast<MAddress>(copyFrom) + 64);
     fx.region1->SetRegionAllocPtr(reinterpret_cast<MAddress>(copyTo) + 64);
     const MAddress copyFromAddr = reinterpret_cast<MAddress>(copyFrom);
     const MAddress copyToAddr = reinterpret_cast<MAddress>(copyTo);
-    const auto requested = requests.Add(fx.region0, copyFromAddr);
-    GC_EXPECT_TRUE(requested.accepted);
 
     StateWord oldWord = copyFrom->GetStateWord();
     GC_EXPECT_TRUE(copyFrom->TryLockObject(oldWord));
@@ -183,19 +178,12 @@ GC_TEST(ForwardingNoGeometry, ArmedLookupAndSuccessfulExclusiveCopyPublishProduc
         collector, copyFrom, copyTo, fx.region0);
 
     const bool productPublished =
-        requested.request->state() == RelocationRequestQueue::State::COMPLETED;
+        ForwardingTable::FindTo(copyFromAddr) == copyToAddr;
     GC_EXPECT_TRUE(productPublished);
-    if (!productPublished) {
-        // A disconnected product call must report this test, not stall the
-        // runner while the request remains queued.
-        (void)requests.Fail(copyFromAddr);
-    }
     GC_EXPECT_TRUE(relocated == copyTo);
-    GC_EXPECT_EQ(requested.request->receipt(), copyToAddr);
-    GC_EXPECT_EQ(requests.Wait(requested.request), copyToAddr);
+    GC_EXPECT_EQ(ForwardingTable::FindTo(copyFromAddr), copyToAddr);
     GC_EXPECT_TRUE(copyFrom->IsForwarded());
     GC_EXPECT_EQ(fx.region0->CopyInflight(), 0);
-    GC_EXPECT_TRUE(requests.SynchronizePoll().workersDone);
 #endif
 
     ForwardingTable::Remove(fx.region0->GetRegionStart(), fx.region0->GetRegionSize());

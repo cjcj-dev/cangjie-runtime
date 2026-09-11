@@ -68,10 +68,15 @@ void EnterIsolatedChild()
 
 void PrepareOwnerRegion(GcHeapFixture& fx)
 {
-    // Product PrepareForwardableRegion snapshots the ghost extent before a
-    // worker can claim the region.  gc_unit parks directly on a from-list, so
-    // plant the same consumed state without invoking unrelated selection code.
-    fx.region0->SetInGhostRegion(1);
+    RegionInfo* region = fx.region0;
+    region->SetRegionType(RegionInfo::RegionType::FROM_REGION);
+    LiveInfo* live = fx.PlantLiveInfo(region);
+    RegionBitmap* bitmap = fx.PlantMarkBitmap<Generation::Old>(live, region->GetRegionSize());
+    (void)bitmap->MarkBits(region->GetAddressOffset(reinterpret_cast<MAddress>(fx.obj0)),
+                           fx.obj0->GetSize(), region->GetRegionSize());
+    region->AddLiveByteCount(fx.obj0->GetSize());
+    region->PrepareForwardableRegion(region->GetMarkView<Generation::Old>());
+    region->SetRouteState(RegionInfo::RouteState::COMPACTED);
 }
 
 bool InstallOwnerReceipt(GcHeapFixture& fx, MAddress& from, MAddress& to)
@@ -88,6 +93,7 @@ bool InstallOwnerReceipt(GcHeapFixture& fx, MAddress& from, MAddress& to)
     to = reinterpret_cast<MAddress>(fx.obj1);
     (void)bitmap->MarkBits(region->GetAddressOffset(from), fx.obj0->GetSize(), region->GetRegionSize());
     region->AddLiveByteCount(fx.obj0->GetSize());
+    region->PrepareForwardableRegion(region->GetMarkView<Generation::Old>());
     ForwardingEntries* entries = ForwardingTable::GetEntries(region->GetRegionStart());
     if (entries == nullptr || entries->insert(from, to) != to) {
         return false;
@@ -111,10 +117,7 @@ bool RunParallelProductEntryClosesGeneration()
     RelocationReceiptTestAccess::ParkFrom(manager, fx.region0);
     GCThreadPool pool("gc-unit-product-parallel", 2, GCPoolThread::GC_THREAD_PRIORITY);
     manager.ForwardFromRegions<Generation::Old>(&pool);
-    int lateOwner = 0;
-    const auto late = queue.Add(&lateOwner, 0x73200040);
-    const bool closed = !late.accepted && late.request->state() == RelocationRequestQueue::State::FAILED &&
-        queue.PendingCount() == 0;
+    const bool closed = !queue.IsActive() && queue.PendingCount() == 0;
     pool.Exit();
     return closed;
 }
@@ -128,10 +131,7 @@ bool RunSerialProductEntryClosesGeneration()
     RelocationRequestQueue& queue = manager.GetRelocationRequestQueue();
     RelocationReceiptTestAccess::ParkFrom(manager, fx.region0);
     manager.ForwardFromRegions<Generation::Old>(nullptr);
-    int lateOwner = 0;
-    const auto late = queue.Add(&lateOwner, 0x73200048);
-    return !late.accepted && late.request->state() == RelocationRequestQueue::State::FAILED &&
-        queue.PendingCount() == 0;
+    return !queue.IsActive() && queue.PendingCount() == 0;
 }
 
 #if defined(MRT_TESTABLE_INTERNALS)
@@ -182,10 +182,7 @@ bool RunYoungRuntimeProductEntry()
 #endif
     collector.ForwardYoungFromRuntimeEntry();
 
-    int lateOwner = 0;
-    const auto late = queue.Add(&lateOwner, 0x73300040);
-    return !late.accepted && late.request->state() == RelocationRequestQueue::State::FAILED &&
-        queue.PendingCount() == 0;
+    return !queue.IsActive() && queue.PendingCount() == 0;
 }
 #endif
 
@@ -211,7 +208,7 @@ bool RunActualTaskClaimedOwnerSuccess()
     ForwardTask<Generation::Old> task(manager, fromSpace);
     task.Execute(0);
     return added.request->state() == RelocationRequestQueue::State::COMPLETED &&
-        queue.Wait(added.request) == to && queue.CompletionCount() == 1 && queue.PendingCount() == 0;
+        added.request->page_forwarding()->find(from) == to && queue.CompletionCount() == 1 && queue.PendingCount() == 0;
 }
 #endif
 
@@ -231,135 +228,93 @@ void ExpectIsolatedScenarioPasses()
 
 GC_TEST(GCThreadPool, RelocationRequestHasOneCompletionOwnerBeforeWaitFinishReturns)
 {
-    constexpr size_t kWorkers = 3;
-    constexpr MAddress kFrom = 0x6000;
-    constexpr MAddress kTo = 0x7000;
-    int owner = 0;
+    GcHeapFixture fx;
+    MAddress from = 0, to = 0;
+    GC_EXPECT_TRUE(InstallOwnerReceipt(fx, from, to));
     RelocationRequestQueue queue;
+    constexpr size_t kWorkers = 3;
     queue.BeginWorkers(kWorkers);
-    const auto added = queue.Add(&owner, kFrom);
+    const auto added = queue.Add(fx.region0, from);
+    GC_EXPECT_TRUE(added.accepted);
+    GC_EXPECT_TRUE(queue.IsActive());
     std::atomic<size_t> completionOwners{ 0 };
-
-    GCThreadPool pool("gc-unit-relocate", static_cast<int32_t>(kWorkers - 1),
-                      GCPoolThread::GC_THREAD_PRIORITY);
+    GCThreadPool pool("gc-unit-relocate", 2, GCPoolThread::GC_THREAD_PRIORITY);
     for (size_t i = 0; i < kWorkers; ++i) {
         pool.AddWork(new LambdaWork([&](size_t) {
             for (;;) {
                 auto selected = queue.SelectBeforeOrdinary([]() -> void* { return nullptr; });
-                if (!selected) {
-                    selected = queue.SynchronizePoll();
-                    if (selected.workersDone) {
-                        return;
-                    }
-                }
+                if (!selected) selected = queue.SynchronizePoll();
+                if (selected.workersDone) return;
                 if (selected.is_request()) {
-                    const size_t n = queue.CompleteOwner(&owner, [](MAddress from) {
-                        return from == kFrom ? kTo : static_cast<MAddress>(0);
-                    });
-                    completionOwners.fetch_add(n, std::memory_order_relaxed);
+                    auto* forwarding = selected.request->page_forwarding();
+                    forwarding->release_page();
+                    forwarding->mark_done();
+                    completionOwners.fetch_add(queue.Complete(forwarding), std::memory_order_relaxed);
                 }
             }
         }));
     }
     pool.Start();
     pool.WaitFinish();
-    GC_EXPECT_EQ(queue.Wait(added.request), kTo);
-    GC_EXPECT_EQ(completionOwners.load(std::memory_order_relaxed), static_cast<size_t>(1));
-    GC_EXPECT_EQ(queue.CompletionCount(), static_cast<uint64_t>(1));
+    (void)queue.Wait(added.request);
+    GC_EXPECT_EQ(added.request->page_forwarding()->find(from), to);
+    GC_EXPECT_EQ(completionOwners.load(), 1U);
+    GC_EXPECT_FALSE(queue.IsActive());
     pool.Exit();
 }
 
 #if defined(MRT_TESTABLE_INTERNALS)
-GC_TEST(GCThreadPool, ActualForwardTaskClosesClaimedRequestExactlyOnceWhenOwnerExits)
+GC_TEST(GCThreadPool, ActualForwardTaskPreservesExternalClaimant)
 {
     GcHeapFixture fx;
+    MAddress from = 0, to = 0;
+    GC_EXPECT_TRUE(InstallOwnerReceipt(fx, from, to));
+    auto owner = ForwardingTable::RetainPageOwner(fx.region0);
+    GC_EXPECT_TRUE(owner->claim());
     RegionManager manager;
-    RegionList emptyFromSpace("gc-unit-empty-from");
-    RelocationRequestQueue& queue = manager.GetRelocationRequestQueue();
+    RegionList empty("gc-unit-claimed-page");
+    auto& queue = manager.GetRelocationRequestQueue();
     queue.BeginWorkers(1);
-    const MAddress from = reinterpret_cast<MAddress>(fx.obj0);
-    const auto added = queue.Add(fx.region0, from);
-    GC_EXPECT_TRUE(added.accepted);
-
-    // Execute the same product HeapWork that ForwardFromRegions submits. The
-    // owner is deliberately absent from the from list, modeling an installer
-    // which lost ownership and exited before publishing a receipt.
-    ForwardTask<Generation::Old> task(manager, emptyFromSpace);
+    const auto request = queue.Add(owner);
+    ForwardTask<Generation::Old> task(manager, empty);
     task.Execute(0);
-
-    GC_EXPECT_TRUE(added.request->state() == RelocationRequestQueue::State::FAILED);
-    GC_EXPECT_EQ(queue.Wait(added.request), static_cast<MAddress>(0));
-    GC_EXPECT_EQ(queue.CompletionCount(), static_cast<uint64_t>(1));
-    GC_EXPECT_EQ(queue.PendingCount(), static_cast<size_t>(0));
+    GC_EXPECT_FALSE(owner->is_done());
+    GC_EXPECT_TRUE(request.request->state() == RelocationRequestQueue::State::CLAIMED);
+    owner->release_page();
+    owner->mark_done();
+    GC_EXPECT_EQ(queue.Complete(owner.get()), 1U);
+    GC_EXPECT_TRUE(request.request->state() == RelocationRequestQueue::State::COMPLETED);
 }
 
-GC_TEST(GCThreadPool, ClaimLoserWaitsForOrdinaryOwnerReceiptInsteadOfKeepingFrom)
+GC_TEST(GCThreadPool, ClaimLoserWaitsForPageCompletionAndFindsEntry)
 {
     GcHeapFixture fx;
+    MAddress from = 0, to = 0;
+    GC_EXPECT_TRUE(InstallOwnerReceipt(fx, from, to));
+    auto owner = ForwardingTable::RetainPageOwner(fx.region0);
+    GC_EXPECT_TRUE(owner->claim());
     RegionManager manager;
-    RegionList emptyFromSpace("gc-unit-ordinary-owner-won");
-    RelocationRequestQueue& queue = manager.GetRelocationRequestQueue();
+    RegionList empty("gc-unit-external-owner");
+    auto& queue = manager.GetRelocationRequestQueue();
     queue.BeginWorkers(2);
-    const MAddress from = reinterpret_cast<MAddress>(fx.obj0);
-    const MAddress to = reinterpret_cast<MAddress>(fx.obj1);
-    const auto added = queue.Add(fx.region0, from);
-    GC_EXPECT_TRUE(added.accepted);
-
-    std::atomic<bool> pageDone{ false };
-    std::atomic<bool> waiterReturned{ false };
-    std::atomic<MAddress> answer{ from };
-    std::thread waiter([&]() {
-        answer.store(queue.WaitUntil(
-            added.request, [&]() { return pageDone.load(std::memory_order_acquire); }),
-            std::memory_order_release);
-        waiterReturned.store(true, std::memory_order_release);
+    const auto request = queue.Add(owner);
+    std::atomic<MAddress> answer{ 0 };
+    std::thread waiter([&] {
+        (void)queue.Wait(request.request);
+        answer.store(owner->find(from), std::memory_order_release);
     });
-    JoinGuard waiterGuard(waiter);
-
-    // This is the real product task and real TryDeleteRegion loser branch. The
-    // owner is absent because an ordinary worker has already removed it. With
-    // two registered workers the task then parks at generation synchronization,
-    // giving the test a deterministic point before the ordinary owner publishes.
-    ForwardTask<Generation::Old> task(manager, emptyFromSpace);
-    std::thread requestWorker([&]() { task.Execute(0); });
-    JoinGuard requestWorkerGuard(requestWorker);
-    while (queue.SynchronizedWorkerCount() == 0) {
-        std::this_thread::yield();
-    }
-
-    const bool claimedBeforePublication =
-        added.request->state() == RelocationRequestQueue::State::CLAIMED;
-    const bool returnedBeforePublication = waiterReturned.load(std::memory_order_acquire);
-    const MAddress answerBeforePublication = answer.load(std::memory_order_acquire);
-
-    // Ordinary-owner publication is the second signal. pageDone remains false,
-    // so the only legal early return is the exact to receipt, never keep-from.
-    const bool published = queue.Publish(from, to);
-    for (size_t i = 0; i < 100 && !waiterReturned.load(std::memory_order_acquire); ++i) {
-        std::this_thread::sleep_for(std::chrono::milliseconds(1));
-    }
-    const bool returnedByReceipt = waiterReturned.load(std::memory_order_acquire);
-    const bool pageDoneBeforeClose = pageDone.load(std::memory_order_acquire);
-    const MAddress publishedAnswer = answer.load(std::memory_order_acquire);
-
-    // Always close both signals before asserting. GC_EXPECT throws, so an
-    // assertion before this cleanup would make a deliberate loser cut wait on
-    // requestWorker's generation rendezvous instead of reporting one red item.
-    pageDone.store(true, std::memory_order_release);
-    const bool generationClosed = queue.SynchronizePoll().workersDone;
-    requestWorker.join();
-    waiter.join();
-
-    GC_EXPECT_TRUE(claimedBeforePublication);
-    GC_EXPECT_FALSE(returnedBeforePublication);
-    GC_EXPECT_EQ(answerBeforePublication, from);
-    GC_EXPECT_TRUE(published);
-    GC_EXPECT_TRUE(returnedByReceipt);
-    GC_EXPECT_FALSE(pageDoneBeforeClose);
-    GC_EXPECT_EQ(publishedAnswer, to);
-    GC_EXPECT_TRUE(generationClosed);
-    GC_EXPECT_EQ(queue.CompletionCount(), static_cast<uint64_t>(1));
-    GC_EXPECT_EQ(queue.PendingCount(), static_cast<size_t>(0));
+    ForwardTask<Generation::Old> task(manager, empty);
+    std::thread worker([&] { task.Execute(0); });
+    while (queue.SynchronizedWorkerCount() != 1) std::this_thread::yield();
+    const bool pending = !owner->is_done() && answer.load(std::memory_order_acquire) == 0;
+    owner->release_page();
+    owner->mark_done();
+    (void)queue.Complete(owner.get());
+    const bool closed = queue.SynchronizePoll().workersDone;
+    worker.join(); waiter.join();
+    GC_EXPECT_TRUE(pending);
+    GC_EXPECT_TRUE(closed);
+    GC_EXPECT_EQ(answer.load(), to);
 }
 #endif
 

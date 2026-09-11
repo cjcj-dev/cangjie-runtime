@@ -173,6 +173,21 @@ struct GcHeapFixture {
         ready = true;
     }
 
+    // Legacy focused tests used to set RegionInfo's done word directly.
+    // Supply an independent carrier through the product installation API now;
+    // this is fixture setup, not evidence of a complete GC entry path.
+    void InstallPageOwner(RegionInfo* region)
+    {
+        if (region->metadata.fwdOwner.load(std::memory_order_acquire) != nullptr) return;
+        ForwardingTable::ClearEntries(region->GetRegionStart(), region->GetRegionSize());
+        CHECK(ForwardingTable::PreparePublicationGeneration(region->GetRegionStart(), region->GetRegionSize()));
+        CHECK(ForwardingTable::InstallPublicationBeforeCopy(region->GetRegionStart(), region->GetRegionSize(), region));
+        CHECK(ForwardingTable::PublishFromPageView(region, region->GetLiveInfo(), region->GetSnapshotEpoch(),
+            region->GetRegionAllocPtr(), region->metadata.markStartAllocPtr, region->GetLiveByteCount(),
+            static_cast<uint8_t>(region->IsYoungRegion() ? Generation::Young : Generation::Old),
+            0, region->GetRegionLifeId()));
+    }
+
     static RegionBitmap* AllocPlantedBitmap(size_t regionSize)
     {
         size_t bytes = RegionBitmap::GetRegionBitmapSize(regionSize);

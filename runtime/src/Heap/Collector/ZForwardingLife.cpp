@@ -14,6 +14,27 @@
 
 namespace MapleRuntime {
 
+namespace {
+thread_local ZForwarding* currentPageWork = nullptr;
+}
+
+ZForwardingLife::PageWorkScope::PageWorkScope(ZForwarding* forwarding, bool complete)
+    : previous(currentPageWork), forwarding(forwarding), complete(complete)
+{
+    if (complete) CHECK(forwarding != nullptr && forwarding->claim());
+    currentPageWork = forwarding;
+}
+ZForwardingLife::PageWorkScope::~PageWorkScope()
+{
+    if (complete) {
+        if (forwarding->ref_count().load(std::memory_order_acquire) != 0) forwarding->release_page();
+        forwarding->detach_page();
+        forwarding->mark_done();
+    }
+    currentPageWork = previous;
+}
+ZForwarding* ZForwardingLife::CurrentPageWork() { return currentPageWork; }
+
 std::atomic<uint64_t> ZForwardingLife::g_retainRefusedReleased{ 0 };
 std::atomic<uint64_t> ZForwardingLife::g_retainRefusedClaimed{ 0 };
 std::atomic<uint64_t> ZForwardingLife::g_detachWaited{ 0 };
@@ -89,11 +110,14 @@ RegionInfo::DrainScope::DrainScope(RegionInfo* region, MutatorRelocate::Retire s
         return;
     }
     const int32_t before = owner->ref_count().load(std::memory_order_acquire);
-    if (before == 0 || !owner->claim()) {
+    const bool borrowed = ZForwardingLife::CurrentPageWork() == owner.get();
+    if (before == 0 || (!borrowed && !owner->claim())) {
         owner->detach_page();
     } else {
-        owner->in_place_relocation_claim_page();
-        retiring = true;
+        if (before > 0) {
+            owner->in_place_relocation_claim_page();
+            retiring = true;
+        }
     }
     MutatorRelocate::NoteDrain(site, TimeUtil::NanoSeconds() - start, before != 0 && before != 1);
 }

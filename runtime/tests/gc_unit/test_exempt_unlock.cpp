@@ -66,6 +66,7 @@ GC_TEST(ExemptLife, ExemptWaitsForLockedThenPublishesDone)
     while (phase.load(std::memory_order_acquire) < 1) {
         std::this_thread::yield();
     }
+    fx.InstallPageOwner(fx.region0);
     manager.ExemptFromRegion(fx.region0);
     copier.join();
 
@@ -231,6 +232,7 @@ GC_TEST(ExemptLife, FindHitDoesNotEnterCopyInflight)
     fx.region0->SetRegionAllocPtr(reinterpret_cast<MAddress>(obj) + 64);
     obj->SetStateCode(ObjectState::FORWARDED);
     GC_EXPECT_EQ(fx.region0->CopyInflight(), 0);
+    fx.InstallPageOwner(fx.region0);
     manager.ExemptFromRegion(fx.region0);
     GC_EXPECT_TRUE(fx.region0->IsForwardingDone());
     GC_EXPECT_EQ(fx.region0->CopyInflight(), 0);
@@ -243,6 +245,7 @@ GC_TEST(ExemptLife, ExemptAlreadyForwardedStillPublishesDone)
     BaseObject* obj = fx.PlaceObject(fx.region0->GetRegionStart());
     fx.region0->SetRegionAllocPtr(reinterpret_cast<MAddress>(obj) + 64);
     obj->SetStateCode(ObjectState::FORWARDED);
+    fx.InstallPageOwner(fx.region0);
     manager.ExemptFromRegion(fx.region0);
     GC_EXPECT_TRUE(obj->IsForwarded());
     GC_EXPECT_TRUE(fx.region0->IsForwardingDone());

@@ -392,28 +392,18 @@ GC_TEST(M0Correlation, OrdinaryRelocationPropagatesProductToken)
     WCollector collector(Heap::GetHeap().GetAllocator(), Heap::GetHeap().GetCollectorResources());
     RelocationReceiptTestAccess::BindCollector(Heap::GetHeap().GetCollectorResources(), &collector);
     LiveInfo* live = PrepareForwardable(fx, fx.region0, from);
-    RegionSpace& productSpace = reinterpret_cast<RegionSpace&>(Heap::GetHeap().GetAllocator());
-    RelocationRequestQueue& requests = productSpace.GetRegionManager().GetRelocationRequestQueue();
-    requests.BeginWorkers(1);
-    const auto requested = requests.Add(fx.region0, from);
-    GC_EXPECT_TRUE(requested.accepted);
     StateWord oldWord = fx.obj0->GetStateWord();
     GC_EXPECT_TRUE(fx.obj0->TryLockObject(oldWord));
     GC_EXPECT_TRUE(fx.region0->NoteCopyInflight());
 
     BaseObject* relocated = RelocationReceiptTestAccess::ForwardExclusive(
         collector, fx.obj0, fx.obj1, fx.region0);
-    const bool published = requested.request->state() == RelocationRequestQueue::State::COMPLETED;
-    if (!published) {
-        (void)requests.Fail(from);
-    }
+    const bool published = ForwardingTable::FindTo(from) == to;
     GC_EXPECT_TRUE(published);
     GC_EXPECT_TRUE(relocated == fx.obj1);
-    GC_EXPECT_EQ(requests.Wait(requested.request), to);
     GC_EXPECT_EQ(M0Correlation::LookupStampForTest(fromStamp), token);
     GC_EXPECT_EQ(M0Correlation::LookupStampForTest(M0Correlation::CaptureStamp(to)), token);
     GC_EXPECT_EQ(M0Correlation::SnapshotForTest().forwards, 1u);
-    GC_EXPECT_TRUE(requests.SynchronizePoll().workersDone);
 
     RelocationReceiptTestAccess::BindCollector(Heap::GetHeap().GetCollectorResources(), nullptr);
     CleanupForwardable(fx, fx.region0, live);
