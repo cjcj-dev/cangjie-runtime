@@ -666,8 +666,8 @@ GC_OTHER_VM_TEST(YoungConc, Y2yAfterReleaseBatchForcesContinueAndReachesClosure)
     resources.GetGCStats().reason = GC_REASON_YOUNG;
 #if defined(MRT_GC_UNIT_TESTS)
     // The old holder exercises the pre-release merge. The young holder is
-    // injected only after stw.reset(), so the first mark-end must fail and the
-    // existing continue edge must follow it before a second mark-end succeeds.
+    // injected after workers terminate, while mutators are released. Two
+    // publications force two failed mark-ends before the third reaches closure.
     AllocBuffer::GetOrCreateAllocBuffer()->PushY2yDirtyHolder(fx.obj0);
     ArmY2yAfterReleaseTestReceipt(fx.obj1, 2);
 #endif

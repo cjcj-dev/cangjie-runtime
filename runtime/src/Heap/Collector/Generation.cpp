@@ -1028,9 +1028,6 @@ void WCollector::DoYoungGarbageCollection()
         NoteY2yBeforeReleaseTestReceipt(pendingY2yDirtyWorkCount());
 #endif
         stw.reset();
-#if defined(MRT_TESTABLE_INTERNALS)
-        PublishY2yAfterReleaseTestReceipt();
-#endif
         concWindowStartNs = TimeUtil::NanoSeconds();
         produceYoungRoots();
         VLOG(REPORT,
@@ -1123,6 +1120,11 @@ void WCollector::DoYoungGarbageCollection()
         // failure; it must not consume closure in an in-pause loop.
         PublishSatbBeforeMarkEndTestReceipt();
         PublishLeftoverBeforePauseTestReceipt();
+        // Publish after concurrent consumers have terminated. Publishing just
+        // after mark-start release lets MarkYoungSatbBuffer consume this work
+        // before the pause, so it cannot exercise mark-end failure/continue.
+        // ZGC zGeneration.cpp:897-904: only incomplete mark-end continues.
+        PublishY2yAfterReleaseTestReceipt();
 #endif
 
         // ZGenerationYoung::pause_mark_end() does one flush. Work found here is
@@ -1173,9 +1175,6 @@ void WCollector::DoYoungGarbageCollection()
         ++concWindow.reenters;
         stw.reset();
         TransitionToGCPhase(GCPhase::GC_PHASE_TRACE, true);
-#if defined(MRT_TESTABLE_INTERNALS)
-        PublishY2yAfterReleaseTestReceipt();
-#endif
     }
     ReportMarkTerminateContinue();
     {
