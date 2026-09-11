@@ -454,3 +454,22 @@ GC_TEST(ZForwardingEntries, CollisionPreservesIdentityAndOtherKey)
     GC_EXPECT_EQ(table->find(other), MAddress(0x3000));
     table->Destroy();
 }
+
+GC_TEST(ZForwardingEntries, WidthBoundaryRoundTripAndFallback)
+{
+    ForwardingEntry entry(ForwardingEntry::kMaxFromIndex, ForwardingEntry::kMaxToOffset);
+    const bool roundTrip = entry.populated() && entry.from_index() == ForwardingEntry::kMaxFromIndex &&
+        entry.to_offset() == ForwardingEntry::kMaxToOffset;
+    std::fprintf(stderr, "P1_WIDTH target_assertion executed=1 matched=%d from=%zu to=%zu\n",
+                 roundTrip, entry.from_index(), entry.to_offset());
+    GC_EXPECT_TRUE(roundTrip);
+    auto* table = ZForwarding::Create(2, 0x1000, 0);
+    GC_EXPECT_TRUE(table != nullptr);
+    const MAddress lastAligned = ForwardingEntry::kMaxToOffset & ~MAddress(7);
+    const MAddress beyond = ForwardingEntry::kMaxToOffset + 1;
+    GC_EXPECT_EQ(table->insert(MAddress(0x1000), lastAligned), lastAligned);
+    GC_EXPECT_EQ(table->insert(MAddress(0x1008), beyond), beyond);
+    GC_EXPECT_EQ(table->find(MAddress(0x1000)), lastAligned);
+    GC_EXPECT_EQ(table->find(MAddress(0x1008)), beyond);
+    table->Destroy();
+}
