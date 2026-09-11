@@ -22,6 +22,13 @@ struct RemapWindow {
     ForwardDomain domain = ForwardDomain::None;
     bool afterDone = false;
     BaseObject* expected = nullptr;
+    bool checkArena = false;
+    bool checkCopy = false;
+    MAddress expectedField = 0;
+    MAddress copiedField = 0;
+    bool arenaInstalled = false;
+    size_t arenaBudget = 0;
+    size_t arenaUsed = 0;
     RegionInfo* kept = nullptr;
     BaseObject* from = nullptr;
     BaseObject* copyFrom = nullptr;
@@ -148,6 +155,21 @@ void RemapWindowHook(unsigned point, RegionInfo* region, BaseObject* object)
         GC_EXPECT_FALSE(state.kept->IsForwardingDone());
         GC_EXPECT_FALSE(state.kept->IsCompacted());
         GC_EXPECT_TRUE(static_cast<uintptr_t>(state.collector->ZPointerRemappedYoungMask) != state.oldColour);
+        if (state.checkArena) {
+            auto* keptTable = ForwardingTable::GetEntries(reinterpret_cast<MAddress>(state.from));
+            auto* copyTable = ForwardingTable::GetEntries(reinterpret_cast<MAddress>(state.copyFrom));
+            const auto* arena = keptTable == nullptr ? nullptr : keptTable->arena_for_test();
+            state.arenaInstalled = arena != nullptr && copyTable != nullptr &&
+                copyTable->arena_for_test() == arena &&
+                arena->contains_for_test(keptTable, ZForwarding::AttachedArray::object_size() +
+                    ZForwarding::AttachedArray::array_size(keptTable->length())) &&
+                arena->contains_for_test(copyTable, ZForwarding::AttachedArray::object_size() +
+                    ZForwarding::AttachedArray::array_size(copyTable->length()));
+            state.arenaBudget = arena == nullptr ? 0 : arena->capacity();
+            state.arenaUsed = arena == nullptr ? 0 : arena->used();
+            state.arenaInstalled = state.arenaInstalled && state.arenaUsed > 0 &&
+                state.arenaUsed <= state.arenaBudget;
+        }
         const auto lookup = ForwardingTable::LookupTo(reinterpret_cast<MAddress>(state.from));
         GC_EXPECT_TRUE(lookup.answer != ForwardingTable::ToAnswer::ArmedHit);
         if (!state.copyOnly) {
@@ -199,11 +221,15 @@ void RemapWindowHook(unsigned point, RegionInfo* region, BaseObject* object)
         GC_EXPECT_TRUE(lookup.to != 0 && lookup.to != reinterpret_cast<MAddress>(state.copyFrom));
         GC_EXPECT_TRUE(state.copyFrom->IsForwarded());
         std::fprintf(stderr, "REMAP_WINDOW real_copy=1 from=%p to=%#zx\n", state.copyFrom, lookup.to);
+        if (state.checkCopy) {
+            state.copiedField = raw(HeapSlotAt<>(lookup.to + TYPEINFO_PTR_SIZE).GetTargetObject());
+        }
         state.copied = true;
     }
 }
 
-void RunRemapWindow(bool copyOnly, ForwardDomain domain = ForwardDomain::None, bool afterDone = false)
+void RunRemapWindow(bool copyOnly, ForwardDomain domain = ForwardDomain::None, bool afterDone = false,
+                    bool checkArena = false, bool checkCopy = false)
 {
     // The strict arm is deliberately red on #175's frozen guard. Ordinary
     // suites run the copy prerequisite; the contract arm is explicitly invoked
@@ -233,6 +259,10 @@ void RunRemapWindow(bool copyOnly, ForwardDomain domain = ForwardDomain::None, b
     auto* copyPage = RegionInfo::InitRegion(2, 1, RegionInfo::UnitRole::SMALL_SIZED_UNITS);
     copyPage->SetRegionType(RegionInfo::RegionType::THREAD_LOCAL_REGION);
     auto* copyObject = fx.PlaceObject(copyPage->GetRegionStart());
+    if (checkCopy) {
+        HeapSlotAt<>(reinterpret_cast<MAddress>(copyObject) + TYPEINFO_PTR_SIZE)
+            .StoreColoured(GcUnit::StoreGoodPointer(fx.obj0));
+    }
     const size_t size = RegionSpace::GetAllocSize(*fx.obj1);
     fx.region0->SetRegionAllocPtr(fx.region0->GetRegionStart() + size);
     fx.region1->SetRegionAllocPtr(fx.region1->GetRegionStart() + size);
@@ -285,6 +315,9 @@ void RunRemapWindow(bool copyOnly, ForwardDomain domain = ForwardDomain::None, b
     state.copyOnly = copyOnly;
     state.kept = domain == ForwardDomain::Copy ? copyPage : fx.region1;
     state.from = domain == ForwardDomain::Copy ? copyObject : fx.obj1;
+    state.checkArena = checkArena;
+    state.checkCopy = checkCopy;
+    state.expectedField = reinterpret_cast<MAddress>(fx.obj0);
     state.copyFrom = copyObject;
     state.collector = &collector;
     state.gcThread = std::this_thread::get_id();
@@ -339,6 +372,17 @@ void RunRemapWindow(bool copyOnly, ForwardDomain domain = ForwardDomain::None, b
     }
     if (waiter.joinable()) waiter.join();
     setHook(nullptr);
+    if (checkCopy) {
+        const bool initialized = state.copied && state.copiedField == state.expectedField;
+        std::fprintf(stderr, "P1_PRODUCT_COPY target_assertion executed=1 matched=%d expected=%#zx actual=%#zx\n",
+                     initialized, state.expectedField, state.copiedField);
+        GC_EXPECT_TRUE(initialized);
+    }
+    if (checkArena) {
+        std::fprintf(stderr, "P1_PRODUCT_ARENA target_assertion executed=1 matched=%d budget=%zu used=%zu copied=%d identity=%d\n",
+                     state.arenaInstalled, state.arenaBudget, state.arenaUsed, state.copied, state.published);
+        GC_EXPECT_TRUE(state.arenaInstalled);
+    }
     GC_EXPECT_TRUE(state.copied && state.published);
     if (!copyOnly) GC_EXPECT_TRUE(state.returned && state.entered);
     // OTHER_VM owns the mapped heap and product metadata until exit.
@@ -434,3 +478,13 @@ GC_OTHER_VM_TEST(ForwardReturnDomain, RetiredHit) { RunForwardDomain(ForwardDoma
 GC_OTHER_VM_TEST(ForwardReturnDomain, MissingEntry) { RunForwardDomain(ForwardDomain::Missing); }
 GC_OTHER_VM_TEST(ForwardReturnDomain, WrongLifecycle) { RunForwardDomain(ForwardDomain::WrongLife); }
 GC_OTHER_VM_TEST(ForwardReturnDomain, Unavailable) { RunForwardDomain(ForwardDomain::Unavailable); }
+
+GC_OTHER_VM_TEST(YoungConc, ForwardingArenaProductInstall)
+{
+    RunRemapWindow(true, ForwardDomain::None, false, true);
+}
+
+GC_OTHER_VM_TEST(YoungConc, ForwardingPublishedTargetInitialized)
+{
+    RunRemapWindow(true, ForwardDomain::None, false, false, true);
+}

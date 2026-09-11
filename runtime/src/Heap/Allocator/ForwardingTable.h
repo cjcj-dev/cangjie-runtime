@@ -16,6 +16,7 @@
 namespace MapleRuntime {
 enum class Generation : uint8_t;
 class RegionInfo;
+class RegionList;
 class BaseObject;
 struct LiveInfo;
 
@@ -140,6 +141,11 @@ public:
 
     static bool Initialize(MAddress heapStart, size_t heapSize, size_t unitSize);
 
+    // Budget the closed installation pass before publishing its first table.
+    // End drops only the installer's ownership; retired tables keep their arena.
+    static bool BeginForwardingArena(RegionList& regions);
+    static void EndForwardingArena();
+
     // Explicit cycle boundary. This is the only operation allowed to reopen a
     // region span after ClearEntries sealed its previous generation.
     static bool PreparePublicationGeneration(MAddress regionStart, size_t regionSize);
@@ -249,7 +255,7 @@ public:
     static bool Ready();
 
 private:
-    static uint32_t EstimateLiveObjects(RegionInfo* region, size_t regionSize);
+    static size_t ObjectCountUpperBound(RegionInfo* region, size_t regionSize);
     static ZForwarding* EnsureEntriesLocked(RegionInfo* region);
 };
 } // namespace MapleRuntime
