@@ -45,6 +45,20 @@ nested build directory and intermediate outputs are private to the parent build
 tree. Packaging continues to install from CMake targets. Consumers must select
 an explicit published configuration; there is no mutable “latest” alias.
 
+The GC gate and standalone runner also accept a directory containing only a
+copied runtime/boundscheck pair, as supplied by the composition gate. With no
+explicit `GCV2_RUNTIME_OUTPUT_ROOT`, they locate published headers by **both** SO
+hashes and verify the complete header inventory before compiling. Multiple
+matching publications are accepted only when their header bytes agree. External
+builds without a local publication must supply `GCV2_RUNTIME_OUTPUT_ROOT`.
+The library selection itself remains the caller's explicitly supplied pair.
+
+`tests/test_runtime_copied_headers.py --runtime runtime --publication <root>
+--work <isolated-work>` runs the real standalone AST entry with a copied pair,
+records the actual compiler arguments, and compares consumed header hashes to
+the publication inventory. A compatible stale-header control permits AST
+compilation to finish so the identity assertion can detect a wrong consumer.
+
 Run the regression on the build host (its work directory must be outside source):
 
 ```sh

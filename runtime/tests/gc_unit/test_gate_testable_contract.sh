@@ -32,6 +32,8 @@ touch "$mw_fixture/lib/libcangjie-runtime.so"
 mw_count="$mw_fixture/analyzer.count"
 mw_arm_trace="$mw_fixture/arm.trace"
 mw_out="$mw_fixture/out"
+# This synthetic AST fixture owns its headers; it has no published product pair.
+export GCV2_RUNTIME_OUTPUT_ROOT="$mw_fixture/runtime"
 PATH="$mw_fixture/bin:$PATH" CXX="$mw_fixture/bin/cxx" CJRT_HEAP_FILLER=default \
   MUTUALWAIT_FIXTURE_COUNT="$mw_count" GCV2_RUNTIME_LIB_DIR="$mw_fixture/lib" \
   MUTUALWAIT_FIXTURE_ARM_TRACE="$mw_arm_trace" \
@@ -65,6 +67,9 @@ unset CANGJIE_HOME CJC GCV2_RUNTIME_LIB_DIR GCV2_RUNTIME_CONFIG \
   GCV2_RUNTIME_OUTPUT_ROOT MRT_TESTABLE_INTERNALS \
   GC_UNIT_GATE_LANGUAGE_TESTS GC_UNIT_GATE_SKIP GC_UNIT_GATE_STATUS \
   GC_UNIT_OUT GC_UNIT_TALLY_FILE
+# Synthetic gate arms likewise supply their own header root. The copied-pair
+# integration regression exercises automatic publication lookup with real SOs.
+export GCV2_RUNTIME_OUTPUT_ROOT="$fixture/selected-output"
 mkdir -p "$fixture/runtime/tests/gc_unit" "$fixture/runtime/src" "$fixture/runtime/build" \
   "$fixture/lib" "$fixture/bin" \
   "$fixture/sdk/bin"

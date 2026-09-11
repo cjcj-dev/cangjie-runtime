@@ -197,7 +197,8 @@ if [[ -n "${GCV2_RUNTIME_CONFIG:-}" ]]; then
   RUNTIME_CONFIG_SIGNATURE=$(/usr/bin/sed -n 's/^CONFIG_SIGNATURE_SHA256=//p' "$config_manifest")
 fi
 if [[ -z "${GCV2_RUNTIME_OUTPUT_ROOT:-}" ]]; then
-  GCV2_RUNTIME_OUTPUT_ROOT=$(realpath -m "$GCV2_RUNTIME_LIB_DIR/../..")
+  GCV2_RUNTIME_OUTPUT_ROOT=$(python3 "$ROOT/runtime/build/resolve_runtime_headers.py" \
+    "$ROOT/runtime" "$GCV2_RUNTIME_LIB_DIR")
   export GCV2_RUNTIME_OUTPUT_ROOT
 fi
 RUNTIME_SHA256=$(sha256sum "$GCV2_RUNTIME_LIB_DIR/libcangjie-runtime.so" | awk '{print $1}')

@@ -62,6 +62,11 @@ if [[ -z "$RUNTIME_LIB_DIR" || ! -f "$RUNTIME_LIB_DIR/libcangjie-runtime.so" ]];
   exit 2
 fi
 
+if [[ -z "${GCV2_RUNTIME_OUTPUT_ROOT:-}" ]]; then
+  GCV2_RUNTIME_OUTPUT_ROOT=$(python3 "$ROOT/runtime/build/resolve_runtime_headers.py" \
+    "$ROOT/runtime" "$RUNTIME_LIB_DIR")
+fi
+
 run_ohos_host_arm() {
   local so="$RUNTIME_LIB_DIR/libcangjie-runtime.so"
   local bounds="$RUNTIME_LIB_DIR/libboundscheck.so"
