@@ -1400,7 +1400,7 @@ private:
     void PushYoungObject(BaseObject* object, WorkStack& workStack, const char* origin, bool finalizable) const;
     // setbitmap O1③: claim young via MarkObject (region mark bitmap) + collect vector;
     // FYS=0 skips reachableSlots inserts (slots never looked up). Object claims use the bitmap.
-    // R3 markpar: STW-parallel claim+steal (sibling of ConcurrentMarkingWork); env MARKPAR_*.
+    // Young claim+follow: address-striped (zMark.cpp), no serial env switch.
     void TraceYoungClosure(WorkStack& workStack, bool fullYoungScan,
                            std::vector<BaseObject*>& reachableVec, MinorSlotSet& reachableSlots,
                            MinorSlotSet& weakSlots,

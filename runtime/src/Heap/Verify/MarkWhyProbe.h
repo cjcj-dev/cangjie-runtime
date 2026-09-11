@@ -19,9 +19,7 @@ enum class Generation : uint8_t;
 
 // Read-only probe: after MarkBits, before CHECK(IsMarkedObject), dump identity of
 // write/read bitmap, offsets, region metadata, GC phase, thread role.
-// Gate (default off): MRT_GCV2_MARK_WHY=1
-// Optional concurrent alloc counter: MRT_GCV2_MARK_WHY_ALLOC=1
-// Sample every N successful marks for positive control: MRT_GCV2_MARK_WHY_SAMPLE=<N> (default 65536)
+// Probe remains compiled-off; ZGC has no equivalent env-gated why-mark log.
 class MarkWhyProbe {
 public:
     static bool Enabled();
