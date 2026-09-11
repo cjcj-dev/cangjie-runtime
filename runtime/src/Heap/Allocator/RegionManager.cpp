@@ -2515,6 +2515,13 @@ bool VerifyForwardingReceiptsClosed(RegionInfo* region, const char* site)
 }
 } // namespace
 
+#if defined(MRT_TESTABLE_INTERNALS)
+extern "C" MRT_EXPORT size_t MRT_PublishKeptInPlaceReceiptsForTest(RegionInfo* region)
+{
+    return PublishKeptInPlaceReceipts(region);
+}
+#endif
+
 void RegionManager::ParkUnmovableFromRegion(RegionInfo* region)
 {
     // youngconcfollow: callers already unlink the FROM node — TryDelete FROM here

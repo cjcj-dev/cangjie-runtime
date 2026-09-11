@@ -18,9 +18,7 @@
 using namespace MapleRuntime;
 using namespace MapleRuntime::GcUnit;
 
-namespace MapleRuntime {
-size_t PublishKeptInPlaceReceipts(RegionInfo* region);
-}
+extern "C" size_t MRT_PublishKeptInPlaceReceiptsForTest(RegionInfo* region);
 
 namespace {
 
@@ -144,7 +142,7 @@ GC_TEST(ForwardEntryDomain, WaitRoutedIdentityFromKeptProducer)
     ForwardingTable::SetLookupRetainHook(
         [](void* raw) {
             auto* region = static_cast<RegionInfo*>(raw);
-            const size_t published = PublishKeptInPlaceReceipts(region);
+            const size_t published = MRT_PublishKeptInPlaceReceiptsForTest(region);
             std::fprintf(stderr, "DETAIL kept_producer receipts=%zu\n", published);
         },
         fx.region0);
@@ -252,7 +250,7 @@ GC_TEST(ForwardEntryDomain, WrongLifecycleAborts)
     GcHeapFixture fx(true);
     SeedFreeUnits(fx);
     LiveInfo* live = PlantGhostFrom(fx, fx.region0, fx.obj0);
-    const size_t published = PublishKeptInPlaceReceipts(fx.region0);
+    const size_t published = MRT_PublishKeptInPlaceReceiptsForTest(fx.region0);
     GC_EXPECT_TRUE(published >= 1);
     const ForwardingTable::LookupResult before = ForwardingTable::LookupTo(reinterpret_cast<MAddress>(fx.obj0));
     GC_EXPECT_TRUE(before.answer == ForwardingTable::ToAnswer::ArmedHit);
