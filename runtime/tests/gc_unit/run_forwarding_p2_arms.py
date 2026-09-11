@@ -40,8 +40,19 @@ CUTS = {
 CUTS['reader_partial'] = ('runtime/src/Heap/Allocator/RegionManager.cpp',
     'void RegionManager::CompactRegion(RegionInfo* region, RegionInfo* toRegion1)\n{\n    auto owner = ForwardingTable::RetainPageOwner(region);\n    ZForwardingLife::PageWorkScope work(owner.get(),\n        owner && ZForwardingLife::CurrentPageWork() != owner.get());\n    if (owner && owner->ref_count().load(std::memory_order_acquire) > 0) {\n        owner->in_place_relocation_claim_page();',
     'void RegionManager::CompactRegion(RegionInfo* region, RegionInfo* toRegion1)\n{\n    auto owner = ForwardingTable::RetainPageOwner(region);\n    ZForwardingLife::PageWorkScope work(owner.get(),\n        owner && ZForwardingLife::CurrentPageWork() != owner.get());\n    if (owner && owner->ref_count().load(std::memory_order_acquire) > 0) {\n        (void)owner;', 1)
+CUTS['derived'] = (
+    'runtime/src/Mutator/Mutator.cpp',
+    '            Collector::FailClosedLoad(\n'
+    '                "Mutator::MakePreForwardDerivedVisitor.base-not-remapped", oldBase,\n'
+    '                reinterpret_cast<uintptr_t>(&derivedPtr),\n'
+    '                ForwardingProvenance{ ForwardingHolderKind::Derived,\n'
+    '                                      reinterpret_cast<const void*>(raw(basePtr)), &derivedPtr });',
+    '            return;',
+    1)
+DERIVED = 'ForwardingPublicationProduct.PreForwardDerivedTaggedUnresolvedGhostFailsClosed'
 EXPECTED = {'normal': [], 'restored': [], 'entry': PRIMARY,
-            'claim': PRIMARY[:1], 'reader': PRIMARY[1:2], 'find': PRIMARY[2:3], 'done': PRIMARY[3:4], 'reader_partial': PRIMARY[4:5]}
+            'claim': PRIMARY[:1], 'reader': PRIMARY[1:2], 'find': PRIMARY[2:3], 'done': PRIMARY[3:4],
+            'reader_partial': PRIMARY[4:5], 'derived': []}
 
 
 def sha(path):
@@ -60,7 +71,7 @@ def main():
     ap.add_argument('--cores', default='32-63')
     ap.add_argument('--samples', type=int, default=3)
     ap.add_argument('--build-jobs', type=int, default=3)
-    ap.add_argument('--arms', default='normal,entry,claim,reader,reader_partial,find,done,restored,default')
+    ap.add_argument('--arms', default='normal,entry,claim,reader,reader_partial,find,done,derived,restored,default')
     args = ap.parse_args()
     repo, out = args.repo.resolve(), args.output.resolve()
     out.mkdir(parents=True, exist_ok=False)
@@ -195,6 +206,31 @@ def main():
                     boundscheck_sha256=sha(ret/'libboundscheck.so')))
                 if rc != expected_rc or not target_seen:
                     errors.append(f'parallel/{arm}/{sample}/{test}: rc={rc} expected={expected_rc} target={target_seen}')
+    derived_arms = [a for a in ('normal', 'derived', 'restored') if a in arms]
+    if len(derived_arms) == 3:
+        for arm in derived_arms:
+            ret = out/arm/'retained'
+            arm_env = dict(env, LD_LIBRARY_PATH=str(ret), CJ_GC_UNIT_REMAP_WINDOW='1')
+            for sample in range(args.samples):
+                log = out/arm/'runs'/f'derived-{sample}-{DERIVED}.log'
+                elf = ret/'cj_gc_clear_entries_unit'
+                cmd = affinity+['timeout', '35', str(elf), '--gtest_filter='+DERIVED]
+                rc = run(cmd, repo, arm_env, log)
+                text = log.read_text(errors='replace')
+                target_seen = 'DERIVED_BASE_TARGET target_assertion executed=1' in text
+                matched = 'matched=1' in text
+                expected_rc = 1 if arm == 'derived' else 0
+                expected_matched = 0 if arm == 'derived' else 1
+                results.append(dict(group='derived', arm=arm, sample=sample, test=DERIVED, rc=rc,
+                    target_seen=target_seen, matched=int(matched), command=cmd, log=str(log),
+                    elf_sha256=sha(elf), runtime_sha256=sha(ret/'libcangjie-runtime.so'),
+                    boundscheck_sha256=sha(ret/'libboundscheck.so')))
+                if rc != expected_rc or not target_seen or int(matched) != expected_matched:
+                    errors.append(f'derived/{arm}/{sample}: rc={rc} expected={expected_rc} target={target_seen} matched={int(matched)}')
+        if sha(out/'derived/retained/libcangjie-runtime.so') == sha(normal/'libcangjie-runtime.so'):
+            errors.append('derived: cut runtime did not change')
+        if sha(out/'restored/retained/libcangjie-runtime.so') != sha(normal/'libcangjie-runtime.so'):
+            errors.append('derived: restored runtime differs from normal')
     if 'restored' in arms and sha(out/'restored/retained/libcangjie-runtime.so') != sha(normal/'libcangjie-runtime.so'):
         errors.append('normal/restored runtime differs')
     for arm in CUTS.keys() & set(arms):
