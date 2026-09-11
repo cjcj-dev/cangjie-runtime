@@ -26,6 +26,11 @@ struct MutatorPublishTestAccess {
     {
         return collector.ForwardObjectExclusive(from, to, copyPage);
     }
+    static BaseObject* RelocateInner(
+        WCollector& collector, BaseObject* from, BaseObject* to, RegionInfo* copyPage)
+    {
+        return collector.RelocateObjectInner(from, to, copyPage);
+    }
 };
 #endif
 
@@ -193,3 +198,42 @@ GC_TEST(ForwardingNoGeometry, ArmedLookupAndSuccessfulExclusiveCopyPublishProduc
     fx.region0->metadata.liveInfo = nullptr;
     fx.FreePlanted(live);
 }
+
+#if defined(MRT_TESTABLE_INTERNALS)
+GC_TEST(ForwardingNoGeometry, RelocateInnerFindHitSkipsCopy)
+{
+    GcHeapFixture fx;
+    ForwardingTable::Initialize(fx.heapStart, 2 * RegionInfo::UNIT_SIZE, RegionInfo::UNIT_SIZE);
+    fx.region0->SetRegionType(RegionInfo::RegionType::FROM_REGION);
+    fx.region0->SetRouteState(RegionInfo::RouteState::ROUTING);
+    BaseObject* copyFrom = fx.PlaceObject(fx.region0->GetRegionStart() + 128);
+    BaseObject* copyTo = fx.PlaceObject(fx.region1->GetRegionStart() + 128);
+    BaseObject* otherTo = fx.PlaceObject(fx.region1->GetRegionStart() + 256);
+    fx.region0->SetRegionAllocPtr(reinterpret_cast<MAddress>(copyFrom) + 64);
+    fx.region1->SetRegionAllocPtr(reinterpret_cast<MAddress>(otherTo) + 64);
+    const MAddress copyFromAddr = reinterpret_cast<MAddress>(copyFrom);
+    const MAddress copyToAddr = reinterpret_cast<MAddress>(copyTo);
+    ForwardingTable::ClearEntries(fx.region0->GetRegionStart(), fx.region0->GetRegionSize());
+    ForwardingTable::ReclaimRetired("gc-unit-relocate-inner");
+    GC_EXPECT_TRUE(ForwardingTable::PreparePublicationGeneration(
+        fx.region0->GetRegionStart(), fx.region0->GetRegionSize()));
+    GC_EXPECT_TRUE(ForwardingTable::InstallPublicationBeforeCopy(
+        fx.region0->GetRegionStart(), fx.region0->GetRegionSize(), fx.region0));
+    StateWord oldWord = copyFrom->GetStateWord();
+    GC_EXPECT_TRUE(copyFrom->TryLockObject(oldWord));
+    ZForwardingLife::reset_copy_open(fx.region0->metadata.copyInflight);
+    GC_EXPECT_TRUE(fx.region0->NoteCopyInflight());
+    WCollector collector(Heap::GetHeap().GetAllocator(), Heap::GetHeap().GetCollectorResources());
+    BaseObject* first = MutatorPublishTestAccess::RelocateInner(collector, copyFrom, copyTo, fx.region0);
+    GC_EXPECT_TRUE(first == copyTo);
+    GC_EXPECT_EQ(ForwardingTable::FindTo(copyFromAddr), copyToAddr);
+    GC_EXPECT_TRUE(copyFrom->IsForwarded());
+    BaseObject* second = MutatorPublishTestAccess::RelocateInner(collector, copyFrom, otherTo, fx.region0);
+    GC_EXPECT_TRUE(second == copyTo);
+    GC_EXPECT_EQ(ForwardingTable::FindTo(copyFromAddr), copyToAddr);
+    GC_EXPECT_TRUE(second != otherTo);
+    ForwardingTable::Remove(fx.region0->GetRegionStart(), fx.region0->GetRegionSize());
+    ForwardingTable::ClearEntries(fx.region0->GetRegionStart(), fx.region0->GetRegionSize());
+    ForwardingTable::ReclaimRetired("gc-unit-relocate-inner");
+}
+#endif

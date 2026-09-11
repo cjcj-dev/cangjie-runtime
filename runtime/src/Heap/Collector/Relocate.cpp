@@ -68,6 +68,7 @@
 #if defined(MRT_GCV2_UNTAG_BREADCRUMB)
 #include "securec.h"
 #endif
+#include "Heap/Allocator/AllocBuffer.h"
 #include "Heap/WCollector/WCollectorInternal.h"
 
 namespace MapleRuntime {
@@ -2982,7 +2983,7 @@ BaseObject* WCollector::ForwardObjectImpl(BaseObject* obj, RegionInfo* ghostFrom
 #endif
                 page->CommitCopyAdmission();
             }
-            return ForwardObjectExclusive(obj, planned, page);
+            return RelocateObjectInner(obj, planned, page);
         }
     } while (true);
     LOG(RTLOG_FATAL, "forwardObject exit in wrong path");
@@ -3001,7 +3002,31 @@ BaseObject* WCollector::ForwardObjectExclusive(BaseObject* obj)
         obj->UnlockObject(ObjectState::NORMAL);
         return FindToVersion(obj).found();
     }
-    return ForwardObjectExclusive(obj, fwdTable.PlanRoute(obj, CopierRouteMint::Make()).dest, page);
+    return RelocateObjectInner(obj, fwdTable.PlanRoute(obj, CopierRouteMint::Make()).dest, page);
+}
+
+BaseObject* WCollector::RelocateObjectInner(BaseObject* obj, BaseObject* planned, RegionInfo* copyPage)
+{
+    const MAddress fromAddr = reinterpret_cast<MAddress>(obj);
+    if (const MAddress hit = ForwardingTable::FindTo(fromAddr)) {
+        if (obj->GetStateWord().IsLockedWord()) {
+            obj->UnlockObject(ObjectState::FORWARDED);
+        }
+        return reinterpret_cast<BaseObject*>(hit);
+    }
+    BaseObject* toObj = planned;
+    if (toObj == nullptr) {
+        const size_t size = RegionSpace::GetAllocSize(*obj);
+        toObj = reinterpret_cast<BaseObject*>(
+            AllocBuffer::GetOrCreateAllocBuffer()->Allocate(size, AllocType::MOVEABLE_OBJECT));
+        if (toObj == nullptr) {
+            if (obj->GetStateWord().IsLockedWord()) {
+                obj->UnlockObject(ObjectState::NORMAL);
+            }
+            return nullptr;
+        }
+    }
+    return ForwardObjectExclusive(obj, toObj, copyPage);
 }
 
 BaseObject* WCollector::ForwardObjectExclusive(BaseObject* obj, BaseObject* toObj, RegionInfo* copyPage)
