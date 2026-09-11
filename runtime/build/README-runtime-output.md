@@ -58,6 +58,7 @@ The library selection itself remains the caller's explicitly supplied pair.
 records the actual compiler arguments, and compares consumed header hashes to
 the publication inventory. A compatible stale-header control permits AST
 compilation to finish so the identity assertion can detect a wrong consumer.
+Add `--entry gate` to exercise the GC gate's selection and complete C++ suite.
 
 Run the regression on the build host (its work directory must be outside source):
 

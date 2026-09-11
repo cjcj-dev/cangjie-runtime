@@ -22,6 +22,8 @@
 #
 # <file>                                  <status>   <what it needs / why it is here>
 
+test_runtime_copied_headers.py            manual     real copied-SO header identity regression; requires a published runtime pair and isolated work directory
+
 slot_type_split_compile_probe.cpp         configure  three-arm negative compile gate for HeapSlot/RootSlot/DerivedSlot
 mark_generation_compile_probe.cpp         configure  control plus young-as-old and old-as-young negative compile gates for MarkView
 colour_state_machine_probe.cpp            configure  compile-time colour state machine table: 32-epoch formula equivalence against a literal copy, DROP_BIT collision counts (None/Ghost must be 0, each family > 0), and three inject arms

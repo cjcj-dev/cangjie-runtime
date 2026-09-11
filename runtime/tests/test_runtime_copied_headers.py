@@ -22,6 +22,7 @@ def main():
     parser.add_argument('--runtime', required=True, type=Path)
     parser.add_argument('--publication', required=True, type=Path)
     parser.add_argument('--work', required=True, type=Path)
+    parser.add_argument('--entry', choices=('standalone', 'gate'), default='standalone')
     args = parser.parse_args()
     runtime, publication, work = args.runtime.resolve(), args.publication.resolve(), args.work.resolve()
     work.mkdir(parents=True, exist_ok=True)
@@ -55,11 +56,18 @@ def main():
                  'MRT_GC_UNIT_OHOS_HOST', 'MRT_TESTABLE_INTERNALS'):
         env.pop(name, None)
     env.update(GCV2_RUNTIME_LIB_DIR=str(library), CXX=str(wrapper),
-               GC_UNIT_OUT=str(work / 'out'), GC_UNIT_MUTUALWAIT_MANIFEST_ONLY='1')
+               GC_UNIT_OUT=str(work / 'out'))
+    if args.entry == 'standalone':
+        env['GC_UNIT_MUTUALWAIT_MANIFEST_ONLY'] = '1'
+        script = 'run_standalone.sh'
+    else:
+        env.pop('GC_UNIT_MUTUALWAIT_MANIFEST_ONLY', None)
+        env.update(GC_UNIT_GATE_LANGUAGE_TESTS='defer', GC_UNIT_GATE_STATUS=str(work / 'gate.status'))
+        script = 'gate_gc_unit.sh'
     with (work / 'standalone.log').open('w') as output:
-        result = subprocess.run(['bash', str(runtime / 'tests/gc_unit/run_standalone.sh')],
+        result = subprocess.run(['bash', str(runtime / 'tests/gc_unit' / script)],
                                 env=env, stdout=output, stderr=subprocess.STDOUT)
-    record = dict(pair=identities, standalone_rc=result.returncode)
+    record = dict(pair=identities, entry=args.entry, standalone_rc=result.returncode)
     (work / 'result.json').write_text(json.dumps(record, indent=2))
     assert result.returncode == 0, 'AST prerequisite failed; this is not an identity assertion failure'
     print('COPIED_HEADERS_AST_CONTROL_PASS', flush=True)
