@@ -406,6 +406,23 @@ bool MarkThreadLocalStacks::Flush(MarkStripeSet& stripes, bool publish)
     return flushed;
 }
 
+#if defined(MRT_TESTABLE_INTERNALS)
+namespace {
+std::atomic<MarkClosureObserver> g_markClosureObserver{nullptr};
+}
+void SetMarkClosureObserverForTest(MarkClosureObserver observer)
+{
+    g_markClosureObserver.store(observer, std::memory_order_release);
+}
+void ObserveMarkClosureForTest(const std::vector<BaseObject*>* objects)
+{
+    auto observer = g_markClosureObserver.load(std::memory_order_acquire);
+    if (observer != nullptr) {
+        observer(objects);
+    }
+}
+#endif
+
 MarkLiveCache::MarkLiveCache(size_t stripeCount) : shift(MARK_STRIPE_SHIFT + Log2Exact(stripeCount)) {}
 
 MarkLiveCache::~MarkLiveCache()
@@ -423,14 +440,16 @@ void MarkLiveCache::IncLive(RegionInfo* region, size_t bytes)
         entry.region = region;
     }
     entry.bytes += bytes;
+    ++entry.objects;
 }
 
 void MarkLiveCache::Evict(Entry& entry)
 {
     if (entry.region != nullptr) {
-        entry.region->AddLiveByteCount(entry.bytes);
+        entry.region->AddLiveCounts(entry.objects, entry.bytes);
         entry.region = nullptr;
         entry.bytes = 0;
+        entry.objects = 0;
     }
 }
 

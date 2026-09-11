@@ -903,14 +903,6 @@ void WCollector::DoYoungGarbageCollection()
         const char* value = std::getenv("MRT_GCV2_REMSET_HASH_OPT");
         return value == nullptr || std::strcmp(value, "1") == 0;
     }();
-    // setbitmap O1③: default ON (bitmap claim + vector). MRT_GCV2_SETBITMAP=0 → legacy set path.
-    static const bool useBitmapLedger = []() {
-        const char* v = std::getenv("MRT_GCV2_SETBITMAP");
-        if (v != nullptr && std::strcmp(v, "0") == 0) {
-            return false;
-        }
-        return true;
-    }();
     WorkStack workStack = NewWorkStack();
     VerifyMarkingStacks::VerifyEmpty(VerifyMarkingStacks::MarkingGeneration::YOUNG,
                                      VerifyMarkingStacks::MarkingBoundary::START,
@@ -919,7 +911,6 @@ void WCollector::DoYoungGarbageCollection()
                                      VerifyMarkingStacks::MarkingBoundary::START,
                                      VerifyMarkingStacks::MarkingContainer::POOL,
                                      GetThreadPool()->GetWorkCount(), 0);
-    MinorObjectSet reachableObjects; // legacy set path + FYS non-young holders under bitmap
     std::vector<BaseObject*> reachableVec;
     reachableVec.reserve(1 << 17); // ~128k; real_load ~155k reachable
     MinorObjectSet allocationRoots;
@@ -1040,8 +1031,8 @@ void WCollector::DoYoungGarbageCollection()
         // The release above makes this ZGC mark_roots()+mark_follow work concurrent.
         MRT_PHASE_TIMER("young.mark_closure");
         ++concWindow.closureCalls;
-        TraceYoungClosure(workStack, fullYoungScan, reachableObjects, reachableVec, reachableSlots, weakSlots,
-                          useBitmapLedger, reachableSlotDomain);
+        TraceYoungClosure(workStack, fullYoungScan, reachableVec, reachableSlots, weakSlots,
+                          reachableSlotDomain);
     }
     const bool remsetConsumedLedgerElideActive = false;
 
@@ -1097,8 +1088,8 @@ void WCollector::DoYoungGarbageCollection()
         MRT_PHASE_TIMER("young.mark_from_remset");
         ++concWindow.closureCalls;
         concWindow.remsetSlots = remsetStats.consumed;
-        TraceYoungClosure(workStack, fullYoungScan, reachableObjects, reachableVec, reachableSlots, weakSlots,
-                          useBitmapLedger, reachableSlotDomain);
+        TraceYoungClosure(workStack, fullYoungScan, reachableVec, reachableSlots, weakSlots,
+                          reachableSlotDomain);
     }
 #if defined(MRT_TESTABLE_INTERNALS)
     // Deterministic T1->T2 export-root window: root enumeration has returned,
@@ -1110,8 +1101,8 @@ void WCollector::DoYoungGarbageCollection()
         // Its worker completion is coordinated by YoungMarkTerminate (the
         // ZMarkTerminate worker-count/wakeup state machine), not pool polling.
         const bool workersTerminated =
-            MarkYoungSatbBuffer(workStack, fullYoungScan, reachableObjects, reachableVec, reachableSlots,
-                                weakSlots, useBitmapLedger, &concWindow);
+            MarkYoungSatbBuffer(workStack, fullYoungScan, reachableVec, reachableSlots,
+                                weakSlots, &concWindow);
         CHECK_DETAIL(workersTerminated, "young concurrent mark workers did not terminate");
 #if defined(MRT_TESTABLE_INTERNALS)
         FlushExportRootAfterT1TestReceipt();
@@ -1215,9 +1206,6 @@ void WCollector::DoYoungGarbageCollection()
          static_cast<unsigned long long>(concWindow.windowNs), concWindow.MarkedInWindow(),
          concWindow.satbObjects, concWindow.satbIters, concWindow.closureCalls, concWindow.remsetSlots,
          concWindow.reenters, concWindow.markedAtEntry, reachableVec.size());
-    VLOG(REPORT, "[GCV2][setbitmap] use=%d reachable_n=%zu set_n=%zu fullYoung=%d youngConc=%d",
-         static_cast<int>(useBitmapLedger), reachableVec.size(), reachableObjects.size(),
-         static_cast<int>(fullYoungScan), 1);
     // No independent full-root closure is available after deleting the empty
     // explainer. nullptr means "not measured"; an empty set must mean a closure
     // actually ran and found no holders.

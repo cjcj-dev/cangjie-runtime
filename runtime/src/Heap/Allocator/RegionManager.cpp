@@ -1480,7 +1480,7 @@ void RegionManager::ExpireKeptFromPreviousCycle()
 void RegionManager::CountLiveObject(const BaseObject* obj)
 {
     RegionInfo* region = RegionInfo::GetRegionInfoAt(reinterpret_cast<MAddress>(obj));
-    region->AddLiveByteCount(obj->GetSize());
+    region->AddLiveCounts(1, obj->GetSize());
 }
 
 void RegionManager::AssembleSmallGarbageCandidates()

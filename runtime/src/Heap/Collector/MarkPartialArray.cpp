@@ -13,6 +13,8 @@
 #include "Base/Log.h"
 #include "Common/BaseObject.h"
 #include "Heap/Heap.h"
+#include "ObjectModel/MArray.inline.h"
+#include "ObjectModel/RefField.inline.h"
 
 namespace MapleRuntime {
 namespace MarkPartialArray {
@@ -33,7 +35,10 @@ std::atomic<uint64_t> g_notEncodable{ 0 };
 
 bool Enabled()
 {
-    static const bool on = EnvIsOne("MRT_GCV2_PARTIAL_ARRAY");
+    static const bool on = []() {
+        const char* value = std::getenv("MRT_GCV2_PARTIAL_ARRAY");
+        return value == nullptr || value[0] != '0' || value[1] != '\0';
+    }();
     return on;
 }
 
@@ -68,6 +73,76 @@ void Decode(const MarkStackEntry& entry, MAddress& chunkStart, size_t& length)
     const size_t offset = entry.partialArrayOffset();
     length = entry.partialArrayLength();
     chunkStart = Heap::GetHeapStartAddress() + (offset << MIN_SIZE_SHIFT);
+}
+
+// ZGC zMark.cpp:216-270. Always visit the leading range locally; only
+// publish ranges whose complete descriptor can be represented. The inline
+// fallback visits every field of a legal but unencodable array.
+void FollowElements(MAddress start, size_t length, bool finalizable,
+                    const FieldVisitor& visit, const EntryPublisher& publish)
+{
+    const MAddress end = start + length * sizeof(MAddress);
+    const MAddress middleStart = AlignUp(start + sizeof(MAddress), MIN_SIZE);
+    if (!Enabled() || length <= MIN_LENGTH || length > MAX_LENGTH ||
+        !Encodable(reinterpret_cast<const void*>(AlignDown(end, MIN_SIZE)), 1)) {
+        if (Enabled() && length > MIN_LENGTH) {
+            NoteNotEncodable();
+        }
+        for (size_t i = 0; i < length; ++i) {
+            visit(start + i * sizeof(MAddress));
+        }
+        return;
+    }
+    const size_t middleLength = AlignDown((end - middleStart) / sizeof(MAddress), MIN_LENGTH);
+    const MAddress middleEnd = middleStart + middleLength * sizeof(MAddress);
+    auto push = [&](MAddress address, size_t count) {
+        if (!Encodable(reinterpret_cast<const void*>(address), count)) {
+            NoteNotEncodable();
+            for (size_t i = 0; i < count; ++i) {
+                visit(address + i * sizeof(MAddress));
+            }
+            return;
+        }
+        NoteChunkPushed();
+        publish(Encode(reinterpret_cast<const void*>(address), count, finalizable));
+    };
+    NoteArraySplit();
+    if (end > middleEnd) {
+        push(middleEnd, (end - middleEnd) / sizeof(MAddress));
+    }
+    MAddress part = middleEnd;
+    while (part > middleStart) {
+        const size_t count = AlignUp((part - middleStart) / sizeof(MAddress) / 2, MIN_LENGTH);
+        part -= count * sizeof(MAddress);
+        push(part, count);
+    }
+    for (MAddress field = start; field < middleStart; field += sizeof(MAddress)) {
+        visit(field);
+    }
+}
+
+void FollowObjectReferences(BaseObject* object, bool finalizable,
+                            const FieldVisitor& visit, const EntryPublisher& publish)
+{
+    if (object->GetTypeInfo()->IsRawArray()) {
+        MArray* array = reinterpret_cast<MArray*>(object);
+        TypeInfo* component = array->GetComponentTypeInfo();
+        if (component->IsObjectType() || component->IsArrayType() || component->IsInterface()) {
+            FollowElements(reinterpret_cast<MAddress>(array->ConvertToCArray()), array->GetLength(), finalizable, visit, publish);
+            return;
+        }
+    }
+    object->ForEachRefField([&](RefField<>& field) { visit(reinterpret_cast<MAddress>(&field)); });
+}
+
+void FollowPartialReferences(const MarkStackEntry& entry,
+                             const FieldVisitor& visit, const EntryPublisher& publish)
+{
+    MAddress start = 0;
+    size_t length = 0;
+    Decode(entry, start, length);
+    NoteChunkFollowed();
+    FollowElements(start, length, entry.finalizable(), visit, publish);
 }
 
 void NoteArraySplit() { (void)g_arraysSplit.fetch_add(1, std::memory_order_relaxed); }
