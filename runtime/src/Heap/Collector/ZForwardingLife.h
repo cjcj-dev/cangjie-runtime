@@ -52,14 +52,10 @@ public:
     };
     static ZForwarding* CurrentPageWork();
 
-    // Copier admission and the in-flight count share one atomic word so a
-    // drain cannot observe "open + zero", return, and then lose a copier that
-    // already owns the object lock. The ENTERING state covers the short
-    // TryLockObject-success -> count-publication interval. The low 30 bits are
-    // the number of admitted copiers.
+    // In-flight copier count shares one word with SEALED. OPEN+count is live
+    // copiers (zForwarding.cpp:110,134). SEALED closes new admissions.
     enum class CopyAdmissionState : uint8_t {
         OPEN = 0,
-        ENTERING = 1,
         SEALED = 2,
     };
 
@@ -198,59 +194,21 @@ public:
         NotifyAll();
     }
 
-    // First half of copier admission. Called immediately after TryLockObject.
-    // ENTERING is visible before any test hook or other work in that interval,
-    // so wait_copied must either precede this CAS or wait for its resolution.
-    static bool begin_copy(std::atomic<int32_t>& copyWord)
-    {
-        for (;;) {
-            int32_t word = copyWord.load(std::memory_order_acquire);
-            switch (copy_admission_state(word)) {
-                case CopyAdmissionState::SEALED:
-                    return false;
-                case CopyAdmissionState::ENTERING:
-                    WaitUntilCopyAdmissionSettled(copyWord);
-                    continue;
-                case CopyAdmissionState::OPEN: {
-                    const int32_t entering = PackCopyWord(CopyAdmissionState::ENTERING, copy_count(word));
-                    if (copyWord.compare_exchange_weak(
-                            word, entering, std::memory_order_acq_rel, std::memory_order_acquire)) {
-                        return true;
-                    }
-                    continue;
-                }
-            }
-        }
-    }
-
-    // Second half of copier admission. Existing copiers may finish while this
-    // thread owns ENTERING, so publish OPEN + (latest count + 1) with a CAS.
-    static void commit_copy(std::atomic<int32_t>& copyWord)
-    {
-        for (;;) {
-            int32_t word = copyWord.load(std::memory_order_acquire);
-            CHECK(copy_admission_state(word) == CopyAdmissionState::ENTERING);
-            const int32_t count = copy_count(word);
-            CHECK(count < static_cast<int32_t>(kCopyCountMask));
-            const int32_t admitted = PackCopyWord(CopyAdmissionState::OPEN, count + 1);
-            if (copyWord.compare_exchange_weak(
-                    word, admitted, std::memory_order_release, std::memory_order_acquire)) {
-                NotifyAll();
-                return;
-            }
-        }
-    }
-
-    // Convenience for already-locked product entries and focused unit tests.
-    // A false answer leaves the count unchanged and requires the caller to
-    // roll the object lock back instead of copying.
     static bool note_copy(std::atomic<int32_t>& copyWord)
     {
-        if (!begin_copy(copyWord)) {
-            return false;
+        for (;;) {
+            int32_t word = copyWord.load(std::memory_order_acquire);
+            if (copy_admission_state(word) == CopyAdmissionState::SEALED) {
+                return false;
+            }
+            const int32_t count = copy_count(word);
+            CHECK(count < static_cast<int32_t>(kCopyCountMask));
+            const int32_t next = PackCopyWord(CopyAdmissionState::OPEN, count + 1);
+            if (copyWord.compare_exchange_weak(
+                    word, next, std::memory_order_acq_rel, std::memory_order_acquire)) {
+                return true;
+            }
         }
-        commit_copy(copyWord);
-        return true;
     }
 
     static void end_copy(std::atomic<int32_t>& copyWord)
@@ -260,9 +218,6 @@ public:
             const CopyAdmissionState state = copy_admission_state(word);
             const int32_t count = copy_count(word);
             CHECK(count > 0);
-            // A peer may own the begin/commit interval while this admitted
-            // copier exits. Preserve that admission state and return only this
-            // copier's responsibility (zForwarding.cpp:110,134).
             const int32_t ended = PackCopyWord(state, count - 1);
             if (!copyWord.compare_exchange_weak(
                     word, ended, std::memory_order_acq_rel, std::memory_order_acquire)) {
@@ -344,7 +299,6 @@ private:
     }
 
     static void WaitUntilRef(std::atomic<int32_t>& refCount, int32_t expect);
-    static void WaitUntilCopyAdmissionSettled(std::atomic<int32_t>& copyWord);
 
     // zForwarding.cpp:96-100: wait until is_done, then refuse. Also exit on
     // ref==0 (ResetIdle / detach) — ZGC destroys the forwarding instead.
