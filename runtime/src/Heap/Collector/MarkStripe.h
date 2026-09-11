@@ -112,11 +112,13 @@ private:
     std::atomic<ptrdiff_t> length{ 0 };
 };
 
+class MarkTerminate;
+
 class MarkStripe {
 public:
     bool IsEmpty() const { return published.IsEmpty() && overflowed.IsEmpty(); }
     size_t Population() const { return published.Length() + overflowed.Length(); }
-    void PublishStack(MarkStripeStack* stack, bool publish);
+    void PublishStack(MarkStripeStack* stack, bool publish, MarkTerminate* terminate = nullptr);
     MarkStripeStack* StealStack(MarkingSMR& smr, size_t workerId);
 
 private:
@@ -133,17 +135,24 @@ public:
     MarkStripeSet& operator=(const MarkStripeSet&) = delete;
 
     size_t Count() const { return stripes.size(); }
+    size_t NStripes() const { return nstripes; }
+    void SetNStripes(size_t value);
+    void SetTerminate(MarkTerminate* value) { terminate = value; }
+    MarkTerminate* Terminate() const { return terminate; }
     bool IsEmpty() const;
     size_t Population() const;
     size_t FirstNonEmptyStripe() const;
     size_t StripeForAddress(uintptr_t address) const;
     size_t StripeForWorker(size_t workerCount, size_t workerId) const;
     size_t Next(size_t stripeId) const { return (stripeId + 1) & mask; }
+    size_t Next(size_t stripeId, size_t offset) const { return (stripeId + offset) & mask; }
     MarkStripe& At(size_t stripeId) { return *stripes[stripeId]; }
     const MarkStripe& At(size_t stripeId) const { return *stripes[stripeId]; }
 
 private:
     size_t mask;
+    size_t nstripes;
+    MarkTerminate* terminate = nullptr;
     std::vector<std::unique_ptr<MarkStripe>> stripes;
 };
 
