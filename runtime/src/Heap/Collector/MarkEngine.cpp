@@ -7,13 +7,15 @@
 #include "Heap/Collector/MarkEngine.h"
 
 #include "Base/Log.h"
+#include "Heap/Verify/VerifyMarkingStacks.h"
 
 namespace MapleRuntime {
 
-void MarkTerminate::Reset(size_t workers)
+void MarkTerminate::Reset(size_t workers, VerifyMarkingStacks::MarkingGeneration gen)
 {
     CHECK_DETAIL(workers != 0, "mark termination needs a worker");
     std::lock_guard<std::mutex> lock(mutex);
+    generation = gen;
     workerCount = workers;
     working = workers;
     awakening = 0;
@@ -26,6 +28,10 @@ bool MarkTerminate::TryTerminate(const MarkStripeSet& stripes)
     CHECK_DETAIL(working != 0, "mark worker left termination twice");
     --working;
     if (working == 0 && stripes.IsEmpty()) {
+        VerifyMarkingStacks::VerifyEmpty(generation, VerifyMarkingStacks::MarkingBoundary::TERMINATION,
+                                         VerifyMarkingStacks::MarkingContainer::STRIPE, stripes.Population(),
+                                         VerifyMarkingStacks::NO_MARKING_INDEX,
+                                         VerifyMarkingStacks::NO_MARKING_INDEX, stripes.FirstNonEmptyStripe());
         terminated = true;
         condition.notify_all();
         return true;
