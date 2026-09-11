@@ -9,6 +9,7 @@
 #define private public
 #include "Heap/Allocator/RegionInfo.h"
 #include "Heap/Allocator/RegionSpace.h"
+#include "Heap/Allocator/FreeRegionManager.h"
 #undef private
 
 #include "Heap/Allocator/ForwardingTable.h"
@@ -56,7 +57,7 @@ void SeedFreeUnits(GcHeapFixture& fx)
     manager.freeRegionManager.Initialize(GcHeapFixture::kUnits);
     for (size_t index = 2; index < GcHeapFixture::kUnits; ++index) {
         (void)RegionInfo::InitRegion(index, 1, RegionInfo::UnitRole::FREE_UNITS);
-        manager.freeRegionManager.AddGarbageUnits(index, 1);
+        GC_EXPECT_TRUE(manager.freeRegionManager.dirtyUnitTree.MergeInsert(index, 1, false));
     }
 }
 
@@ -132,8 +133,7 @@ GC_TEST(ForwardEntryDomain, MutatorCopyArmedHitToNotFrom)
 
 GC_TEST(ForwardEntryDomain, WaitRoutedIdentityFromKeptProducer)
 {
-    GcHeapFixture fx(true);
-    SeedFreeUnits(fx);
+    GcHeapFixture fx;
     LiveInfo* live = PlantGhostFrom(fx, fx.region0, fx.obj0);
     GC_EXPECT_FALSE(fx.region0->IsForwardingDone());
     GC_EXPECT_FALSE(fx.region0->IsCompacted());
@@ -170,8 +170,7 @@ GC_TEST(ForwardEntryDomain, WaitRoutedIdentityFromKeptProducer)
 
 GC_TEST(ForwardEntryDomain, NonIdentityArmedHitReturnsToBeforeAndAfterDone)
 {
-    GcHeapFixture fx(true);
-    SeedFreeUnits(fx);
+    GcHeapFixture fx;
     LiveInfo* live = PlantGhostFrom(fx, fx.region0, fx.obj0);
     PublishMoved(fx.region0, fx.obj0, fx.obj1);
     WCollector collector(Heap::GetHeap().GetAllocator(), Heap::GetHeap().GetCollectorResources());
@@ -190,8 +189,7 @@ GC_TEST(ForwardEntryDomain, NonIdentityArmedHitReturnsToBeforeAndAfterDone)
 
 GC_TEST(ForwardEntryDomain, RetiredHitWithoutGhostReturnsTo)
 {
-    GcHeapFixture fx(true);
-    SeedFreeUnits(fx);
+    GcHeapFixture fx;
     LiveInfo* live = PlantGhostFrom(fx, fx.region0, fx.obj0);
     PublishMoved(fx.region0, fx.obj0, fx.obj1);
     fx.region0->MarkForwardingDone();
@@ -237,8 +235,7 @@ static void RunNamedAbort(const char* label, BaseObject* object)
 
 GC_TEST(ForwardEntryDomain, MissingEntryAbortsForwardObject)
 {
-    GcHeapFixture fx(true);
-    SeedFreeUnits(fx);
+    GcHeapFixture fx;
     LiveInfo* live = PlantGhostFrom(fx, fx.region0, fx.obj0);
     fx.region0->MarkForwardingDone();
     RunNamedAbort("missing", fx.obj0);
@@ -247,8 +244,7 @@ GC_TEST(ForwardEntryDomain, MissingEntryAbortsForwardObject)
 
 GC_TEST(ForwardEntryDomain, WrongLifecycleAborts)
 {
-    GcHeapFixture fx(true);
-    SeedFreeUnits(fx);
+    GcHeapFixture fx;
     LiveInfo* live = PlantGhostFrom(fx, fx.region0, fx.obj0);
     const size_t published = MRT_PublishKeptInPlaceReceiptsForTest(fx.region0);
     GC_EXPECT_TRUE(published >= 1);
@@ -261,8 +257,7 @@ GC_TEST(ForwardEntryDomain, WrongLifecycleAborts)
 
 GC_TEST(ForwardEntryDomain, UnavailableTableAborts)
 {
-    GcHeapFixture fx(true);
-    SeedFreeUnits(fx);
+    GcHeapFixture fx;
     LiveInfo* live = PlantGhostFrom(fx, fx.region0, fx.obj0);
     ForwardingTable::Remove(fx.region0->GetRegionStart(), fx.region0->GetRegionSize());
     RunNamedAbort("unavailable", fx.obj0);
