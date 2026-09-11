@@ -5,6 +5,7 @@
 // See https://cangjie-lang.cn/pages/LICENSE for license information.
 
 #include "Heap/Collector/MarkStripe.h"
+#include "Heap/Collector/MarkEngine.h"
 
 #include <limits>
 
@@ -230,12 +231,15 @@ MarkStripeStack* MarkStripeStackList::Pop(MarkingSMR& smr, size_t workerId)
     }
 }
 
-void MarkStripe::PublishStack(MarkStripeStack* stack, bool publish)
+void MarkStripe::PublishStack(MarkStripeStack* stack, bool publish, MarkTerminate* terminate)
 {
     if (publish) {
         published.Push(stack);
     } else {
         overflowed.Push(stack);
+    }
+    if (terminate != nullptr) {
+        terminate->Wake();
     }
 }
 
@@ -245,7 +249,7 @@ MarkStripeStack* MarkStripe::StealStack(MarkingSMR& smr, size_t workerId)
     return overflow != nullptr ? overflow : published.Pop(smr, workerId);
 }
 
-MarkStripeSet::MarkStripeSet(size_t stripeCount) : mask(stripeCount - 1)
+MarkStripeSet::MarkStripeSet(size_t stripeCount) : mask(stripeCount - 1), nstripes(stripeCount)
 {
     CHECK_DETAIL(IsPowerOfTwo(stripeCount), "mark stripe count must be a power of two: %zu", stripeCount);
     stripes.reserve(stripeCount);
@@ -253,6 +257,14 @@ MarkStripeSet::MarkStripeSet(size_t stripeCount) : mask(stripeCount - 1)
         stripes.emplace_back(new (std::nothrow) MarkStripe());
         CHECK_DETAIL(stripes.back() != nullptr, "failed to allocate mark stripe index=%zu", i);
     }
+}
+
+void MarkStripeSet::SetNStripes(size_t value)
+{
+    CHECK_DETAIL(IsPowerOfTwo(value) && value <= stripes.size(),
+                 "nstripes=%zu must be power of two within capacity=%zu", value, stripes.size());
+    nstripes = value;
+    mask = value - 1;
 }
 
 bool MarkStripeSet::IsEmpty() const
@@ -348,7 +360,7 @@ void MarkThreadLocalStacks::Push(MarkStripeSet& stripes, size_t stripeId, const 
             previous->Push(entry);
             return;
         }
-        stripes.At(stripeId).PublishStack(previous, publish);
+        stripes.At(stripeId).PublishStack(previous, publish, stripes.Terminate());
         slot = nullptr;
     }
 
@@ -399,7 +411,7 @@ bool MarkThreadLocalStacks::Flush(MarkStripeSet& stripes, bool publish)
         if (stack == nullptr) {
             continue;
         }
-        stripes.At(i).PublishStack(stack, publish);
+        stripes.At(i).PublishStack(stack, publish, stripes.Terminate());
         stack = nullptr;
         flushed = true;
     }
