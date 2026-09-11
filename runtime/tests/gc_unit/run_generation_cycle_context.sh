@@ -37,7 +37,8 @@ foreign {
     func cycleExercise(): Int32
 }
 main(): Int64 {
-    return Int64(unsafe { cycleExercise() })
+    let result = spawn { => unsafe { cycleExercise() } }
+    return Int64(result.get())
 }
 CJ
 SDK="${CANGJIE_HOME:?set CANGJIE_HOME to matching compiler}"

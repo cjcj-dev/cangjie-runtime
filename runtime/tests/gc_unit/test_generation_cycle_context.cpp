@@ -8,12 +8,75 @@
 #include <sched.h>
 #include <algorithm>
 #include <set>
+#include <array>
+#include <cstring>
 #include "Heap/Barrier/StoreBarrierBuffer.h"
 #include "Heap/Allocator/RegionSpace.h"
 #include "Cangjie.h"
+#include "Common/Runtime.h"
+#include "Concurrency/Concurrency.h"
 #include "Heap/Heap.h"
 #include "Heap/Collector/CollectorProxy.h"
 #include "Mutator/SatbBuffer.h"
+#include "ObjectModel/MObject.h"
+#include "TypeInfoManager.h"
+
+#if defined(MRT_TESTABLE_INTERNALS)
+namespace MapleRuntime {
+// Seed inputs of the real processor/collector; never call or reconstruct the
+// enum task in the test. The real major request owns execution and merging.
+// This fixture checks root scanning, not finalizer scheduling or invocation.
+struct GenerationCycleRootTestAccess {
+    static void Install(TracingCollector& collector, const std::array<BaseObject*, 6>& objects)
+    {
+        auto& processor = Heap::GetHeap().GetFinalizerProcessor();
+        {
+            std::lock_guard<std::mutex> lock(processor.listLock);
+            RootSlot queued, working;
+            StorePlain(queued, from_object(objects[0]));
+            StorePlain(working, from_object(objects[1]));
+            processor.finalizables.push_back(queued);
+            processor.workingFinalizables.push_back(working);
+            // Deliberately do not schedule finalization: only the scanner's
+            // queued/working input branches are under test.
+        }
+        {
+            std::lock_guard<std::mutex> lock(collector.resurrectExportMtx);
+            collector.resurrectedExportObjectes.insert(objects[2]);
+            collector.resurrectedExportObjectesForwardPhase.insert(objects[3]);
+        }
+        {
+            std::lock_guard<std::mutex> lock(collector.cycleWorkStackMtx);
+            collector.cycleRefWorkStack[objects[4]].push_back(objects[5]);
+        }
+    }
+    static void Remove(TracingCollector& collector, const std::array<BaseObject*, 6>& objects)
+    {
+        auto& processor = Heap::GetHeap().GetFinalizerProcessor();
+        {
+            std::lock_guard<std::mutex> lock(processor.listLock);
+            auto remove = [&](ManagedList<RootSlot>& roots, BaseObject* object) {
+                for (auto it = roots.begin(); it != roots.end();) {
+                    if (to_object(safe(it->LoadPlain())) == object) it = roots.erase(it);
+                    else ++it;
+                }
+            };
+            remove(processor.finalizables, objects[0]);
+            remove(processor.workingFinalizables, objects[1]);
+        }
+        {
+            std::lock_guard<std::mutex> lock(collector.resurrectExportMtx);
+            collector.resurrectedExportObjectes.erase(objects[2]);
+            collector.resurrectedExportObjectesForwardPhase.erase(objects[3]);
+        }
+        {
+            std::lock_guard<std::mutex> lock(collector.cycleWorkStackMtx);
+            collector.cycleRefWorkStack.erase(objects[4]);
+        }
+    }
+};
+}
+#endif
 
 using namespace MapleRuntime;
 namespace {
@@ -50,6 +113,7 @@ void* Exercise(void*)
     auto youngWorkers0 = resources.GetWorkers(GCCycleGeneration::YOUNG).GetSnapshot();
     auto oldWorkers0 = resources.GetWorkers(GCCycleGeneration::OLD).GetSnapshot();
     Expect(youngWorkers0.capacity == parallel && oldWorkers0.capacity == parallel, "worker_generation_capacity");
+    Expect(!youngWorkers0.cycleActive && !oldWorkers0.cycleActive, "worker_startup_inactive");
     std::printf("WORKER_INPUT cpu=%zu heap=%zu region=%zu concurrent=%zu parallel=%zu\n",
                 cpuCount, heapBytes, regionBytes, concurrent, parallel);
 #if defined(MRT_TESTABLE_INTERNALS)
@@ -57,6 +121,20 @@ void* Exercise(void*)
     unsigned youngLabels = 0;
     unsigned oldLabels = 0;
     unsigned rootResults = 0;
+    // Allocate actual product objects, with an independent export-table root
+    // keeping each alive even when a common-root consumer is deliberately cut.
+    alignas(TypeInfo) static unsigned char typeStorage[sizeof(TypeInfo)] {};
+    auto* type = reinterpret_cast<TypeInfo*>(typeStorage);
+    type->SetType(TypeKind::TYPE_KIND_CLASS);
+    type->SetInstanceSize(sizeof(uint64_t));
+    TypeInfoManager::GetTypeInfoManager().NoteTypeInfoImage(
+        reinterpret_cast<uintptr_t>(typeStorage), sizeof(typeStorage));
+    std::array<U64, 6> handles {};
+    std::array<BaseObject*, 6> witnesses {};
+    for (auto& handle : handles) {
+        auto* object = MObject::NewObject(type, 16, AllocType::MOVEABLE_OBJECT);
+        handle = Heap::GetHeap().RegisterExportRoot(object);
+    }
     tracing.testCyclePrepared = [&]() {
         // The real driver has selected and prepared its cycle. Add captures
         // its own state; the test does not provide a phase or generation.
@@ -65,11 +143,21 @@ void* Exercise(void*)
         buffer.Add(reinterpret_cast<MAddress>(&slot), zpointer::null, Heap::GetHeap().GetRememberedSet());
         const auto stored = buffer.LastInstalledStateForTest();
         const bool young = collector.GetCycleSnapshot(GCCycleGeneration::YOUNG).active;
+        const auto current = resources.GetWorkers(young ? GCCycleGeneration::YOUNG : GCCycleGeneration::OLD)
+            .GetSnapshot();
+        const auto other = resources.GetWorkers(young ? GCCycleGeneration::OLD : GCCycleGeneration::YOUNG)
+            .GetSnapshot();
+        std::printf("WORKER_PREPARED generation=%s active=%u other_active=%u workers=%u\n",
+                    young ? "young" : "old", current.cycleActive, other.cycleActive, current.activeWorkers);
+        Expect(current.cycleActive, young ? "worker_young_active_during_cycle" : "worker_old_active_during_cycle");
+        Expect(!other.cycleActive, "worker_other_inactive_during_cycle");
         if (young) {
             ++youngLabels;
             Expect(stored.youngMark, "store_buffer_young_label");
         } else {
             ++oldLabels;
+            for (size_t i = 0; i < handles.size(); ++i) witnesses[i] = Heap::GetHeap().GetExportObject(handles[i]);
+            GenerationCycleRootTestAccess::Install(tracing, witnesses);
             Expect(!stored.youngMark, "store_buffer_old_label");
         }
         Expect(stored.phase == collector.GetGCPhase(), "store_buffer_phase_label");
@@ -93,6 +181,29 @@ void* Exercise(void*)
                 included = included && observed.count(object) != 0;
             }
         });
+        std::set<BaseObject*> concurrencyRoots;
+        RootVisitor concurrentVisitor = [&](ObjectRef& slot) {
+            auto* object = to_object(safe(slot.LoadPlain()));
+            if (object != nullptr && Heap::IsHeapAddress(object)) concurrencyRoots.insert(object);
+        };
+        Runtime::Current().GetConcurrencyModel().VisitGCRoots(&concurrentVisitor);
+        const bool concurrencyIncluded = std::all_of(concurrencyRoots.begin(), concurrencyRoots.end(),
+            [&](BaseObject* object) { return observed.count(object) != 0; });
+        std::printf("ROOT_CONCURRENCY expected=%zu included=%u\n", concurrencyRoots.size(), concurrencyIncluded);
+        Expect(!concurrencyRoots.empty(), "worker_concurrency_witness_exists");
+        Expect(concurrencyIncluded, "worker_root_result_contains_concurrency");
+        const char* names[] = { "worker_root_result_contains_queued_finalizer",
+            "worker_root_result_contains_working_finalizer", "worker_root_result_contains_resurrected",
+            "worker_root_result_contains_forward_resurrected", "worker_root_result_contains_cycle_owner",
+            "worker_root_result_contains_cycle_external" };
+        std::set<BaseObject*> unique(witnesses.begin(), witnesses.end());
+        Expect(unique.size() == witnesses.size() && unique.count(nullptr) == 0, "worker_family_witnesses_distinct");
+        for (size_t i = 0; i < witnesses.size(); ++i) {
+            std::printf("ROOT_FAMILY name=%s object=%p included=%u\n", names[i], witnesses[i],
+                        observed.count(witnesses[i]) != 0);
+            Expect(observed.count(witnesses[i]) != 0, names[i]);
+        }
+        GenerationCycleRootTestAccess::Remove(tracing, witnesses);
         ++rootResults;
         std::printf("ROOT_RESULT expected_static=%zu observed_objects=%zu generation=%u\n",
                     expected, observed.size(), static_cast<unsigned>(generation));
@@ -136,6 +247,7 @@ void* Exercise(void*)
     Expect(rootResults > 0, "worker_root_result_observed");
     tracing.testCyclePrepared = nullptr;
     tracing.testRootsResult = nullptr;
+    for (auto handle : handles) Heap::GetHeap().RemoveExportObject(handle);
 #endif
     return reinterpret_cast<void*>(static_cast<uintptr_t>(failures));
 }

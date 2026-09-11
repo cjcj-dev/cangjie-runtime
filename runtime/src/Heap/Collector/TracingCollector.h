@@ -268,6 +268,7 @@ class TracingCollector : public Collector {
     friend ExportRootsTracingWork;
 #if defined(MRT_TESTABLE_INTERNALS)
     friend struct RelocationReceiptTestAccess;
+    friend struct GenerationCycleRootTestAccess;
 #endif
 public:
     enum class RefSlotKind : U8 {
