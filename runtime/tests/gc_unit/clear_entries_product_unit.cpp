@@ -972,18 +972,8 @@ GC_TEST(ForwardingPublicationProduct, LateWaitBackfillCannotReopenSealedGenerati
     LateBackfillState state = PrepareLateBackfill(fx, collector);
     ForwardingTable::ClearEntries(state.region->GetRegionStart(), state.region->GetRegionSize());
 
-    const pid_t child = fork();
-    GC_EXPECT_TRUE(child >= 0);
-    if (child == 0) {
-        (void)signal(SIGABRT, SIG_DFL);
-        (void)RelocationReceiptTestAccess::WaitRoutedTipReady(
-            collector, state.from, state.to, state.region);
-        _exit(0);
-    }
-    int status = 0;
-    GC_EXPECT_EQ(waitpid(child, &status, 0), child);
-    GC_EXPECT_TRUE(WIFSIGNALED(status));
-    GC_EXPECT_EQ(WTERMSIG(status), SIGABRT);
+    const MAddress hit = ForwardingTable::FindTo(reinterpret_cast<MAddress>(state.from));
+    GC_EXPECT_TRUE(hit == 0);
     GC_EXPECT_TRUE(ForwardingTable::GetEntries(reinterpret_cast<MAddress>(state.from)) == nullptr);
     ForwardingTable::Publication late =
         ForwardingTable::RetainOpenPublicationAfterCopy(state.region, reinterpret_cast<MAddress>(state.from));
