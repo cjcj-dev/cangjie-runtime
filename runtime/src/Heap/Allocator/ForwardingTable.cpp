@@ -211,7 +211,41 @@ bool ForwardingTable::Initialize(MAddress heapStart, size_t heapSize, size_t uni
     return true;
 }
 
-uint32_t ForwardingTable::EstimateLiveObjects(RegionInfo* region, size_t regionSize)
+// Installation runs on the phase thread; later mutator installs use standalone
+// storage, preserving the old extensible-domain fallback until P3 closes it.
+static thread_local std::shared_ptr<ForwardingAllocator> installArena;
+
+bool ForwardingTable::BeginForwardingArena(RegionList& regions)
+{
+    CHECK(installArena == nullptr);
+    size_t budget = 0;
+    bool valid = true;
+    regions.VisitAllRegions([&](RegionInfo* region) {
+        // Every object occupies at least one aligned word. Budget by region
+        // capacity, not a mark counter that the preparation pass may update.
+        const size_t count = region->GetRegionSize() >> ZForwarding::kAlignShift;
+        const size_t entries = ZForwarding::nentries(count);
+        size_t bytes;
+        valid = valid && entries != 0 && ZForwarding::AttachedArray::allocation_size(entries, &bytes) &&
+            ForwardingAllocator::add_to_budget(bytes, &budget);
+    });
+    if (!valid) {
+        return false;
+    }
+    auto arena = std::make_shared<ForwardingAllocator>(budget);
+    if (!arena->valid()) {
+        return false;
+    }
+    installArena = std::move(arena);
+    return true;
+}
+
+void ForwardingTable::EndForwardingArena()
+{
+    installArena.reset();
+}
+
+size_t ForwardingTable::ObjectCountUpperBound(RegionInfo* region, size_t regionSize)
 {
     // zForwarding.inline.hpp:43-50 sizes from live *object* count. GetLiveByteCount
     // is bytes; liveBytes>>3 counts 8-byte words. Before marking has made zero
@@ -225,7 +259,7 @@ uint32_t ForwardingTable::EstimateLiveObjects(RegionInfo* region, size_t regionS
     if (estimate == 0) {
         estimate = 1;
     }
-    return static_cast<uint32_t>(std::min<uint64_t>(estimate, UINT32_MAX));
+    return static_cast<size_t>(estimate);
 }
 
 void ForwardingTable::insert(ZForwarding* forwarding)
@@ -454,9 +488,10 @@ ZForwarding* ForwardingTable::EnsureEntriesLocked(RegionInfo* region)
         Retire(previous);
         return nullptr;
     }
-    const uint32_t liveObjs = EstimateLiveObjects(region, regionSize);
+    const size_t objectCountUpperBound = ObjectCountUpperBound(region, regionSize);
     const RegionLifeId life = region->GetRegionLifeId();
-    ZForwarding* created = ZForwarding::alloc(liveObjs, start, g_entries.base(), regionSize, region, life);
+    ZForwarding* created = ZForwarding::alloc(objectCountUpperBound, start, g_entries.base(), regionSize, region, life, false,
+                                                installArena);
     if (created == nullptr) {
         SealPublicationLocked(start, regionSize);
         return nullptr;
