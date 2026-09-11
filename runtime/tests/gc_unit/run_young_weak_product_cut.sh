@@ -16,12 +16,34 @@ PRODUCT_DIR="$CUT_DIR/product"
 RESTORED_PRODUCT_DIR="$CUT_DIR/restored_product"
 TEST_ELF="$EVIDENCE/T2/cj_gc_unit"
 LINK_SCRIPT="$ROOT/CMakebuild/src/CMakeFiles/cangjie-runtime.dir/link.txt"
-CONFIG_ID=$(sed -n 's/^CANGJIE_RUNTIME_CONFIG_ID:INTERNAL=//p' "$ROOT/CMakebuild/CMakeCache.txt")
-if [[ -z "$CONFIG_ID" ]]; then
-  echo "CANGJIE_RUNTIME_CONFIG_ID missing from CMake cache" >&2
-  exit 2
-fi
-RUNTIME_LIB_DIR=$(bash "$ROOT/build/resolve_runtime_output.sh" "$ROOT" "$CONFIG_ID") || exit $?
+# Manual linking deliberately bypasses POST_BUILD publication. Read the actual
+# target paths exported by CMake, then retain each arm before another link.
+PUBLISH_ARGS="$ROOT/CMakebuild/runtime-publish-args.txt"
+retain_product() {
+  python3 - "$PUBLISH_ARGS" "$1" <<'PYTHON'
+import hashlib
+import json
+from pathlib import Path
+import shutil
+import sys
+
+args_file, destination = map(Path, sys.argv[1:])
+args = args_file.read_text().splitlines()
+records = []
+for option in ("--runtime", "--boundscheck"):
+    source = Path(args[args.index(option) + 1]).resolve(strict=True)
+    target = destination / source.name
+    digest = hashlib.sha256(source.read_bytes()).hexdigest()
+    shutil.copy2(source, target)
+    if hashlib.sha256(target.read_bytes()).hexdigest() != digest:
+        raise RuntimeError(f"linked product changed during retention: {source}")
+    records.append(dict(source=str(source), retained=str(target), sha256=digest,
+                        linked_mtime_ns=source.stat().st_mtime_ns))
+(destination / "linked-product.json").write_text(json.dumps(records, indent=2) + "\n")
+for record in records:
+    print("LINKED_PRODUCT " + json.dumps(record, sort_keys=True))
+PYTHON
+}
 TESTS=(
   YoungWeakClosure.SerialDiscoversWithoutStrongReferentClosure
   YoungWeakClosure.LegacyParallelDiscoversWithoutStrongReferentClosure
@@ -48,6 +70,9 @@ restore_product() {
   link_rc=$?
   printf 'PATCH_RC=%d BUILD_RC=%d LINK_RC=%d\n' "$patch_rc" "$build_rc" "$link_rc" \
     >"$CUT_DIR/restore.rc"
+  if [[ $patch_rc -ne 0 || $build_rc -ne 0 || $link_rc -ne 0 ]]; then
+    return 1
+  fi
   applied=0
 }
 trap restore_product EXIT
@@ -75,8 +100,7 @@ if [[ $cut_link_rc -ne 0 ]]; then
   exit 5
 fi
 
-cp -a "$RUNTIME_LIB_DIR/libcangjie-runtime.so" "$PRODUCT_DIR/"
-cp -a "$RUNTIME_LIB_DIR/libboundscheck.so" "$PRODUCT_DIR/"
+retain_product "$PRODUCT_DIR" >"$CUT_DIR/product.identity.log" || exit 6
 sha256sum "$PRODUCT_DIR/libcangjie-runtime.so" "$PRODUCT_DIR/libboundscheck.so" >"$CUT_DIR/product.sha256"
 sha256sum "$TEST_ELF" >"$CUT_DIR/test_elf.sha256"
 
@@ -88,10 +112,9 @@ for test_name in "${TESTS[@]}"; do
   echo "GRID_RC $test_name $one_rc" >>"$CUT_DIR/grid.log"
 done
 
-restore_product
+restore_product || exit 7
 trap - EXIT
-cp -a "$RUNTIME_LIB_DIR/libcangjie-runtime.so" "$RESTORED_PRODUCT_DIR/"
-cp -a "$RUNTIME_LIB_DIR/libboundscheck.so" "$RESTORED_PRODUCT_DIR/"
+retain_product "$RESTORED_PRODUCT_DIR" >"$CUT_DIR/restored_product.identity.log" || exit 8
 sha256sum "$RESTORED_PRODUCT_DIR/libcangjie-runtime.so" \
   "$RESTORED_PRODUCT_DIR/libboundscheck.so" >"$CUT_DIR/restored_product.sha256"
 : >"$CUT_DIR/restored.grid.log"

@@ -58,3 +58,20 @@ compiled product results, repeat publication, earlier-directory preservation,
 resolver selection/hashes, and restored bytes. `indirect` changes only an
 ordinary custom target property read via a generator expression; no new identity
 option name is registered for it.
+
+The manual `run_young_weak_product_cut.sh` fault-injection runner bypasses the
+POST_BUILD step when it executes `link.txt`. It therefore retains the just-linked
+runtime and boundscheck paths from `BUILD/runtime-publish-args.txt`, rather than
+resolving a prior publication. Each cut/restoration snapshot records source path,
+link timestamp and SHA-256 in `linked-product.json`; tests load that snapshot.
+In an isolated Unix Makefiles checkout with `runtime/CMakebuild` configured and
+`cj_gc_unit` built with both test options enabled, verify the serial cut using:
+
+```sh
+python3 runtime/tests/gc_unit/test_young_weak_cut_identity.py \
+  --runtime runtime --elf /absolute/path/to/cj_gc_unit \
+  --evidence /absolute/new/evidence-directory
+```
+
+This checks the same ELF against baseline/cut/restored pairs, requires exactly
+the serial target to change result, and checks restored bytes and source identity.
