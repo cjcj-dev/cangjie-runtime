@@ -172,6 +172,7 @@ class WCollector : public CopyCollector {
     friend struct MutatorPublishTestAccess;
     friend struct PartialArrayTestAccess;
     friend struct RelocationReceiptTestAccess;
+    friend struct MarkPort203TestAccess;
     friend struct RemsetRearmTestAccess;
     friend struct LoadHealDeliveryTestAccess;
 #endif
@@ -213,11 +214,12 @@ public:
 
     bool ShouldIgnoreRequest(GCRequest& request) override;
     bool MarkObject(BaseObject* obj) const override;
+    bool MarkEntryObject(BaseObject* obj, const MarkStackEntry& entry, MarkLiveCache* cache) const override;
     bool ResurrectObject(BaseObject* obj, size_t offset, RegionInfo* regionInfo) override;
 
     void EnumRefFieldRoot(RefField<>& ref, RootSet& rootSet) const override;
-    void TraceRefField(BaseObject* obj, RefField<>& ref, WorkStack& workStack) const;
-    void TraceObjectRefFields(BaseObject* obj, WorkStack& workStack) override;
+    void TraceRefField(BaseObject* obj, RefField<>& ref, WorkStack& workStack, bool finalizable = false) const;
+    void TraceObjectRefFields(BaseObject* obj, WorkStack& workStack, bool finalizable = false) override;
     void FollowPartialArray(const MarkStackEntry& entry, WorkStack& workStack) override;
     BaseObject* GetAndTryTagObj(RefSlotKind kind, BaseObject* obj, RefField<>& field) override;
     BaseObject* ForwardObject(BaseObject* fromVersion) override;
@@ -1371,13 +1373,13 @@ private:
     // `holder` is the owning array, carried only for diagnostics; it is nullptr
     // when the elements arrive as a chunk popped off the work stack, because
     // ZGC's partial-array entry does not carry the holder either.
-    void PushPartialArray(RefField<>* addr, size_t length, WorkStack& workStack) const;
+    void PushPartialArray(RefField<>* addr, size_t length, WorkStack& workStack, bool finalizable = false) const;
     void FollowArrayElementsSmall(BaseObject* holder, RefField<>* addr, size_t length,
-                                  WorkStack& workStack) const;
+                                  WorkStack& workStack, bool finalizable) const;
     void FollowArrayElementsLarge(BaseObject* holder, RefField<>* addr, size_t length,
-                                  WorkStack& workStack) const;
+                                  WorkStack& workStack, bool finalizable) const;
     void FollowArrayElements(BaseObject* holder, RefField<>* addr, size_t length,
-                             WorkStack& workStack) const;
+                             WorkStack& workStack, bool finalizable) const;
 
     bool CasInstallResolvedTarget(RefField<>& field, MAddress expected, zaddress target,
                                   HealSite site, HealNull allowNull = HealNull::Disallow) const;
@@ -1395,29 +1397,30 @@ private:
                          uint64_t stackScanEpoch = 0);
     // origin tags root source for invalid-minor-root diagnosis (gcbadroot).
     void PushYoungObject(BaseObject* object, WorkStack& workStack, const char* origin = "unknown") const;
+    void PushYoungObject(BaseObject* object, WorkStack& workStack, const char* origin, bool finalizable) const;
     // setbitmap O1③: claim young via MarkObject (region mark bitmap) + collect vector;
-    // FYS=0 skips reachableSlots inserts (slots never looked up). MRT_GCV2_SETBITMAP=0 → legacy set.
+    // FYS=0 skips reachableSlots inserts (slots never looked up). Object claims use the bitmap.
     // R3 markpar: STW-parallel claim+steal (sibling of ConcurrentMarkingWork); env MARKPAR_*.
-    void TraceYoungClosure(WorkStack& workStack, bool fullYoungScan, MinorObjectSet& reachableObjects,
+    void TraceYoungClosure(WorkStack& workStack, bool fullYoungScan,
                            std::vector<BaseObject*>& reachableVec, MinorSlotSet& reachableSlots,
-                           MinorSlotSet& weakSlots, bool useBitmapLedger,
+                           MinorSlotSet& weakSlots,
                            const MinorSlotSet* reachableSlotDomain = nullptr);
-    void TraceYoungClosureSerial(WorkStack& workStack, bool fullYoungScan, MinorObjectSet& reachableObjects,
+    void TraceYoungClosureSerial(WorkStack& workStack, bool fullYoungScan,
                                  std::vector<BaseObject*>& reachableVec, MinorSlotSet& reachableSlots,
-                                 MinorSlotSet& weakSlots, bool useBitmapLedger,
+                                 MinorSlotSet& weakSlots,
                                  const MinorSlotSet* reachableSlotDomain = nullptr);
-    void TraceYoungClosureParallel(WorkStack& workStack, bool fullYoungScan, MinorObjectSet& reachableObjects,
+    void TraceYoungClosureParallel(WorkStack& workStack, bool fullYoungScan,
                                    std::vector<BaseObject*>& reachableVec, MinorSlotSet& reachableSlots,
-                                   MinorSlotSet& weakSlots, bool useBitmapLedger, GCThreadPool* threadPool,
+                                   MinorSlotSet& weakSlots, GCThreadPool* threadPool,
                                    const MinorSlotSet* reachableSlotDomain = nullptr);
-    void TraceYoungClosureStriped(WorkStack& workStack, bool fullYoungScan, MinorObjectSet& reachableObjects,
+    void TraceYoungClosureStriped(WorkStack& workStack, bool fullYoungScan,
                                   std::vector<BaseObject*>& reachableVec, MinorSlotSet& reachableSlots,
-                                  MinorSlotSet& weakSlots, bool useBitmapLedger, GCThreadPool* threadPool,
+                                  MinorSlotSet& weakSlots, GCThreadPool* threadPool,
                                   const MinorSlotSet* reachableSlotDomain = nullptr);
     // youngconc: drain SATB into TraceYoungClosure (major MarkSatbBuffer sibling; young-only filter).
-    bool MarkYoungSatbBuffer(WorkStack& workStack, bool fullYoungScan, MinorObjectSet& reachableObjects,
+    bool MarkYoungSatbBuffer(WorkStack& workStack, bool fullYoungScan,
                              std::vector<BaseObject*>& reachableVec, MinorSlotSet& reachableSlots,
-                             MinorSlotSet& weakSlots, bool useBitmapLedger,
+                             MinorSlotSet& weakSlots,
                              YoungConcWindowStats* windowStats = nullptr);
     // ZMark::try_end sibling: called with mutators stopped; performs exactly one
     // local-buffer flush and reports whether concurrent-mark-continue is needed.

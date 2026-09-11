@@ -1485,6 +1485,29 @@ public:
     // livesame / ZGC zMark.inline.hpp + zBitMap.inline.hpp:inc_live — count only on 0→1.
     // MarkBits returns true if already marked; false on first paint. AddLive only then.
     template<Generation G>
+    bool MarkLargeObject(MarkView<G> view, size_t size, bool accountLive, bool& firstLive)
+    {
+        // zBitMap.inline.hpp:60-83: live and strong ownership are decided by
+        // one RMW. A finalizable-to-strong upgrade owns only strong work.
+        const uint8_t old = __atomic_fetch_or(&metadata.largeLiveClaim, uint8_t{3}, __ATOMIC_ACQ_REL);
+        firstLive = (old & 1) == 0;
+        if ((old & 2) != 0) {
+            firstLive = false;
+            return true;
+        }
+        if (!TryPublishLargeFace(view, accountLive && firstLive ? size : 0)) {
+            firstLive = false;
+            return true;
+        }
+        if (accountLive && firstLive) {
+            AddLiveObjects(1);
+        }
+        PublishCurrentMarkFace();
+        NotePageOwnerFirstPaint<G>();
+        return false;
+    }
+
+    template<Generation G>
     bool MarkObject(MarkView<G> view, const BaseObject* obj)
     {
         CHECK(view.GetRegion() == this);
@@ -1496,12 +1519,8 @@ public:
         }
         VerifyMarkFaceOwner<G>(obj, "RegionInfo::MarkObject.unsized");
         if (IsLargeRegion()) {
-            if (TryPublishLargeFace(view, obj->GetSize())) {
-                PublishCurrentMarkFace();
-                NotePageOwnerFirstPaint<G>();
-                return false;
-            }
-            return true;
+            bool firstLive = false;
+            return MarkLargeObject(view, obj->GetSize(), true, firstLive);
         }
         U32 objSize = obj->GetSize();
         MAddress objAddr = reinterpret_cast<MAddress>(obj);
@@ -1515,7 +1534,7 @@ public:
         bool incLive = false;
         bool already = writeBm->MarkBits(offset, objSize, regionSize, incLive);
         if (incLive) {
-            AddLiveByteCount(objSize);
+            AddLiveCounts(1, objSize);
             PublishCurrentMarkFace();
             NotePageOwnerFirstPaint<G>();
         }
@@ -1529,15 +1548,22 @@ public:
     template<Generation G>
     bool MarkObject(MarkView<G> view, const BaseObject* obj, size_t objSize, bool accountLive = true)
     {
+        bool firstLive = false;
+        return MarkObjectWithLiveClaim(view, obj, objSize, accountLive, firstLive);
+    }
+
+    // ZGC zMark.cpp:405-418: the mark transition and first-live ownership
+    // are separate results. A finalizable-to-strong upgrade only owns the
+    // former; deferred accounting must carry the latter out of the pair RMW.
+    template<Generation G>
+    bool MarkObjectWithLiveClaim(MarkView<G> view, const BaseObject* obj, size_t objSize,
+                                 bool accountLive, bool& firstLive)
+    {
+        firstLive = false;
         CHECK(view.GetRegion() == this);
         VerifyMarkFaceOwner<G>(obj, "RegionInfo::MarkObject.sized");
         if (IsLargeRegion()) {
-            if (TryPublishLargeFace(view, accountLive ? objSize : 0)) {
-                PublishCurrentMarkFace();
-                NotePageOwnerFirstPaint<G>();
-                return false;
-            }
-            return true;
+            return MarkLargeObject(view, objSize, accountLive, firstLive);
         }
         MAddress objAddr = reinterpret_cast<MAddress>(obj);
         MAddress regionStart = GetRegionStart();
@@ -1549,9 +1575,10 @@ public:
 
         bool incLive = false;
         bool already = writeBm->MarkBits(offset, objSize, regionSize, incLive);
+        firstLive = incLive;
         if (incLive) {
             if (accountLive) {
-                AddLiveByteCount(objSize);
+                AddLiveCounts(1, objSize);
             }
             PublishCurrentMarkFace();
             NotePageOwnerFirstPaint<G>();
@@ -1579,19 +1606,40 @@ public:
         return MarkObject(GetMarkView<Generation::Old>(), obj, objSize, accountLive);
     }
 
+    bool MarkObjectByOwnerWithLiveClaim(const BaseObject* obj, size_t objSize,
+                                        bool accountLive, bool& firstLive)
+    {
+        if (IsYoungRegion()) {
+            return MarkObjectWithLiveClaim(GetMarkView<Generation::Young>(), obj, objSize, accountLive, firstLive);
+        }
+        return MarkObjectWithLiveClaim(GetMarkView<Generation::Old>(), obj, objSize, accountLive, firstLive);
+    }
+
     bool ResurrectObject(const BaseObject* obj, size_t offset)
     {
+        bool firstLive = false;
+        return ResurrectObjectWithLiveClaim(obj, offset, true, firstLive);
+    }
+
+    bool ResurrectObjectWithLiveClaim(const BaseObject* obj, size_t offset,
+                                     bool accountLive, bool& firstLive)
+    {
+        firstLive = false;
         if (IsLargeRegion()) {
             MarkView<Generation::Old> view = GetMarkView<Generation::Old>();
             if (GetMarkedRegionFlag(view) != 0) {
                 return true;
             }
-            if (metadata.isResurrected != 1) {
-                SetResurrectedRegionFlag(1);
-                AddLiveByteCount(obj->GetSize());
-                return false;
+            const uint8_t old = __atomic_fetch_or(&metadata.largeLiveClaim, uint8_t{1}, __ATOMIC_ACQ_REL);
+            firstLive = (old & 1) == 0;
+            if (!firstLive) {
+                return true;
             }
-            return true;
+            SetResurrectedRegionFlag(1);
+            if (accountLive) {
+                AddLiveCounts(1, obj->GetSize());
+            }
+            return false;
         }
         U32 objSize = obj->GetSize();
         MAddress regionStart = GetRegionStart();
@@ -1602,8 +1650,11 @@ public:
         RegionBitmap* bitmap = GetOrAllocMarkBitmap(view);
         bool incLive = false;
         bool already = bitmap->MarkFinalizableBits(offset, objSize, regionSize, incLive);
+        firstLive = incLive;
         if (incLive) {
-            AddLiveByteCount(objSize);
+            if (accountLive) {
+                AddLiveCounts(1, objSize);
+            }
             PublishCurrentMarkFace();
         }
         CHECK(bitmap->IsLive(offset));
@@ -2697,6 +2748,8 @@ public:
             metadata.liveInfo = nullptr;
             // Tracking phase ended: live counter is no longer a mark-period truth.
             __atomic_store_n(&metadata.liveByteCount, 0, std::memory_order_release);
+            __atomic_store_n(&metadata.liveObjectCount, 0, __ATOMIC_RELEASE);
+            __atomic_store_n(&metadata.largeLiveClaim, 0, __ATOMIC_RELEASE);
         }
         // Active from-page metadata is retired only by the forwarding drain.
         // Mark-arena unbinding must not invalidate an older page incarnation.
@@ -2765,6 +2818,8 @@ public:
         }
         // Start of a mark cycle for this region: live=0 is authoritative until proven otherwise.
         __atomic_store_n(&metadata.liveByteCount, LIVE_AUTHORITY_BIT, std::memory_order_release);
+        __atomic_store_n(&metadata.liveObjectCount, 0, __ATOMIC_RELEASE);
+        __atomic_store_n(&metadata.largeLiveClaim, 0, __ATOMIC_RELEASE);
         SetMarkFaceSealed(false);
     }
 
@@ -2786,6 +2841,8 @@ public:
             __atomic_store_n(&metadata.liveInfo, static_cast<LiveInfo*>(nullptr), std::memory_order_release);
             // Tracking phase for this LiveInfo ended with its backing store about to vanish.
             __atomic_store_n(&metadata.liveByteCount, 0, std::memory_order_release);
+            __atomic_store_n(&metadata.liveObjectCount, 0, __ATOMIC_RELEASE);
+            __atomic_store_n(&metadata.largeLiveClaim, 0, __ATOMIC_RELEASE);
         }
         if (inRange(GetLiveInfo0ForProbe())) {
             // The livemap is inseparable from its forwarding incarnation.
@@ -3181,6 +3238,8 @@ public:
         SetEnqueuedRegionFlag(0);
         SetResurrectedRegionFlag(0);
         __atomic_store_n(&metadata.liveByteCount, LIVE_AUTHORITY_BIT, std::memory_order_release);
+        __atomic_store_n(&metadata.liveObjectCount, 0, __ATOMIC_RELEASE);
+        __atomic_store_n(&metadata.largeLiveClaim, 0, __ATOMIC_RELEASE);
         metadata.markStartAllocPtr = 0;
         BumpSnapshotEpoch();
         SetYoungRegionFlag(0);
@@ -3432,6 +3491,25 @@ public:
         return __atomic_load_n(&metadata.liveByteCount, std::memory_order_acquire) & LIVE_BYTES_MASK;
     }
 
+    uint32_t GetLiveObjectCount() const
+    {
+        return __atomic_load_n(&metadata.liveObjectCount, __ATOMIC_ACQUIRE);
+    }
+
+    void AddLiveObjects(uint32_t objects)
+    {
+        // A small page is bounded by its allocation capacity; a large page
+        // contains one object. Cache flushes therefore fit the page counter.
+        const uint32_t before = __atomic_fetch_add(&metadata.liveObjectCount, objects, __ATOMIC_ACQ_REL);
+        CHECK(objects <= std::numeric_limits<uint32_t>::max() - before);
+    }
+
+    void AddLiveCounts(uint32_t objects, uint64_t bytes)
+    {
+        AddLiveByteCount(bytes);
+        AddLiveObjects(objects);
+    }
+
     bool IsLiveCountAuthoritative() const
     {
         return (__atomic_load_n(&metadata.liveByteCount, std::memory_order_acquire) & LIVE_AUTHORITY_BIT) != 0;
@@ -3598,6 +3676,8 @@ public:
     {
         // densify rebuild: clear byte counter only (mark face rewritten in place next).
         __atomic_store_n(&metadata.liveByteCount, LIVE_AUTHORITY_BIT, std::memory_order_release);
+        __atomic_store_n(&metadata.liveObjectCount, 0, __ATOMIC_RELEASE);
+        __atomic_store_n(&metadata.largeLiveClaim, 0, __ATOMIC_RELEASE);
     }
 
     // ZGC zForwarding.cpp:71-74 reset_livemap after from-page iteration — one publish:
@@ -3616,6 +3696,8 @@ public:
         SetForwardingFaceReset();
         ClearCurrentMarkFace();
         __atomic_store_n(&metadata.liveByteCount, LIVE_AUTHORITY_BIT, std::memory_order_release);
+        __atomic_store_n(&metadata.liveObjectCount, 0, __ATOMIC_RELEASE);
+        __atomic_store_n(&metadata.largeLiveClaim, 0, __ATOMIC_RELEASE);
         if (IsLargeRegion()) {
             SetMarkedRegionFlag(view, 0);
         }
@@ -3846,7 +3928,12 @@ private:
         // Monotonic within a retained-snapshot cycle: only successful
         // Preserve arms it; old-mark start or region-life bump disarms it.
         uint8_t retainedEverPreserved = 0;
-        // Use the alignment gap before the epoch for this existing counter;
+        // Large pages use the same live/strong ownership pair as bitmap
+        // objects, independently of when a worker flushes its live cache.
+        uint8_t largeLiveClaim = 0;
+        // Per-current-page live objects, alongside liveByteCount.
+        uint32_t liveObjectCount = 0;
+        // Use remaining alignment before the epoch for this existing counter;
         // the forwarding owner pointer replaces the former page-state words.
         uint32_t retainedPreserveCnt = 0;
         uint64_t retainedLiveInfoEpoch = 0;
@@ -4227,6 +4314,8 @@ private:
         metadata.regionListOwner.store(nullptr, std::memory_order_relaxed);
         metadata.censusBoundaryOffset = 0;
         __atomic_store_n(&metadata.liveByteCount, 0, std::memory_order_release);
+        __atomic_store_n(&metadata.liveObjectCount, 0, __ATOMIC_RELEASE);
+        __atomic_store_n(&metadata.largeLiveClaim, 0, __ATOMIC_RELEASE);
         metadata.liveInfo = nullptr;
         ClearCurrentMarkFace();
         FreeCompactRouteTable();
