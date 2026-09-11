@@ -77,6 +77,9 @@ def main():
     shutil.copy2(a.elf, elf)
     record = {'source_head': subprocess.check_output(['git', '-C', str(src), 'rev-parse', 'HEAD'], text=True).strip(),
               'cores': a.cores, 'samples': a.samples, 'elf_sha256': sha(elf), 'arms': {},
+              'build_environment': {key: os.environ.get(key) for key in
+                                    ('CCACHE_BASEDIR', 'CCACHE_NOHASHDIR', 'CCACHE_SLOPPINESS',
+                                     'CCACHE_DISABLE', 'CCACHE_CONFIGPATH', 'SOURCE_DATE_EPOCH')},
               'source_before': {name: sha(src / name) for name in original}}
     manifest = out / 'manifest.json'
     def save(): manifest.write_text(json.dumps(record, indent=2) + '\n')
@@ -90,6 +93,13 @@ def main():
             (dest / 'guard-control.diff').write_text(patch(original[HEADER], accepted[HEADER], HEADER))
             for name, value in texts.items():
                 if (src / name).read_text() != value: (src / name).write_text(value)
+            if arm == 'baseline':
+                # The supplied build may have used another compiler-cache
+                # environment. Refresh every mutation-bearing source before
+                # recording the baseline, using the same recipe as the cuts.
+                # This changes no source bytes and never rebuilds the fixed ELF.
+                for name in original:
+                    (src / name).touch()
             env = os.environ.copy()
             env['GC_UNIT_GATE_SKIP'] = '1'
             item = {'runs': [], 'build_started': time.time(),
