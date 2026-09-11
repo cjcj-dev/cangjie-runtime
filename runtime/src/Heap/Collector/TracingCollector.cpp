@@ -379,8 +379,9 @@ private:
                 return;
             }
             SurvNodeDiag::NoteFollowHolder(obj, SurvNodeDiag::FOLLOW_SCAN);
+            TracingCollector::WorkStack& workStack = staging;
             if (UNLIKELY(obj->IsWeakRef())) {
-                collector.DiscoverWeakReference(obj, staging);
+                collector.DiscoverWeakReference(obj, workStack);
             } else {
                 collector.TraceObjectRefFields(obj, staging, entry.finalizable());
             }
