@@ -75,9 +75,17 @@ def main():
     original = {name: (src / name).read_text() for name in (HEADER, PRODUCER, ENTRY, TABLE, WAIT)}
     elf = out / 'cj_gc_unit'
     shutil.copy2(a.elf, elf)
+    # Exact restoration is an artifact contract. Compiler-cache path rewriting
+    # can otherwise mix debug information from a caller's supplied build with
+    # newly compiled mutation objects. Start from a full product build and use
+    # the same uncached compiler environment for every arm. The ELF is already
+    # retained outside the build tree before --clean-first can remove it.
+    build_env = dict(os.environ, GC_UNIT_GATE_SKIP='1', CCACHE_DISABLE='1')
+    for key in ('CCACHE_BASEDIR', 'CCACHE_NOHASHDIR', 'CCACHE_SLOPPINESS'):
+        build_env.pop(key, None)
     record = {'source_head': subprocess.check_output(['git', '-C', str(src), 'rev-parse', 'HEAD'], text=True).strip(),
               'cores': a.cores, 'samples': a.samples, 'elf_sha256': sha(elf), 'arms': {},
-              'build_environment': {key: os.environ.get(key) for key in
+              'build_environment': {key: build_env.get(key) for key in
                                     ('CCACHE_BASEDIR', 'CCACHE_NOHASHDIR', 'CCACHE_SLOPPINESS',
                                      'CCACHE_DISABLE', 'CCACHE_CONFIGPATH', 'SOURCE_DATE_EPOCH')},
               'source_before': {name: sha(src / name) for name in original}}
@@ -93,21 +101,17 @@ def main():
             (dest / 'guard-control.diff').write_text(patch(original[HEADER], accepted[HEADER], HEADER))
             for name, value in texts.items():
                 if (src / name).read_text() != value: (src / name).write_text(value)
-            if arm == 'baseline':
-                # The supplied build may have used another compiler-cache
-                # environment. Refresh every mutation-bearing source before
-                # recording the baseline, using the same recipe as the cuts.
-                # This changes no source bytes and never rebuilds the fixed ELF.
-                for name in original:
-                    (src / name).touch()
-            env = os.environ.copy()
-            env['GC_UNIT_GATE_SKIP'] = '1'
+            env = build_env.copy()
             item = {'runs': [], 'build_started': time.time(),
                     'source_mtime': {name: (src / name).stat().st_mtime for name in original}}
             record['arms'][arm] = item
             with (dest / 'build.log').open('w') as log:
-                built = subprocess.run(['taskset', '-c', a.cores, 'cmake', '--build', str(a.build),
-                                        '--target', 'cangjie-runtime', '-j16'], env=env,
+                command = ['taskset', '-c', a.cores, 'cmake', '--build', str(a.build),
+                           '--target', 'cangjie-runtime', '-j16']
+                if arm == 'baseline':
+                    command.append('--clean-first')
+                item['build_command'] = command
+                built = subprocess.run(command, env=env,
                                        stdout=log, stderr=subprocess.STDOUT)
             item.update(build_rc=built.returncode, build_finished=time.time())
             save()

@@ -4,10 +4,10 @@ Run `run_forward_domain_arms.py` on the build host with an existing testable
 runtime build and its `cj_gc_unit`. It selects each test by its exact name,
 retains both shared libraries and one fixed test executable, and records rc,
 startup, both done states, named target assertions, hashes and build times.
-Before the baseline build, the runner refreshes the timestamps of every source
-that an arm can mutate, so a supplied build made with another compiler-cache
-environment cannot leave stale objects in the baseline. Source bytes and the
-fixed test ELF are preserved; relevant build environment variables are recorded.
+The baseline uses a full `--clean-first` product build. Every arm disables the
+compiler cache and its path-rewriting environment, so a supplied build cannot
+mix cached debug information with newly compiled mutation objects. Source bytes
+and the fixed test ELF are preserved; build commands and environment are recorded.
 `CJ_GC_UNIT_FORWARD_DOMAIN=1` enables the six `ForwardReturnDomain` tests.
 Ordinary unit invocations print `DOMAIN NOT_RUN`; that is not contract coverage.
 The frozen main is `5ee81066e5493eea3a198fe9dba701dc7dd42023`, including
