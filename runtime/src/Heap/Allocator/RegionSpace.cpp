@@ -88,22 +88,12 @@ MAddress RegionSpace::Allocate(size_t size, AllocType allocType)
         if (IsGcThread()) {
             return 0;
         }
-        // A mutator creates exactly one request for this blocking allocation.
-        // The allocator queue owns GC triggering and directed satisfaction;
-        // there is no reschedule/attempt counter loop on this path.
-        const size_t claimedUnits = regionManager.StallAllocation(allocSize);
-        if (claimedUnits == 0) {
-            regionManager.DumpRegionStats("region statistics when gc ends");
-            VLOG(REPORT, "Cannot allocate memory of %zu(B), throw an OutOfMemory exception", size);
-            LOG(RTLOG_ERROR, "Cannot allocate memory of %zu(B), throw an OutOfMemory exception", size);
-            ExceptionManager::OutOfMemory();
-            return 0;
-        }
-        internalAddr = TryAllocateOnce(allocSize, allocType);
-        regionManager.FinishStalledAllocation(claimedUnits);
-    }
-    if (internalAddr == 0) {
-        VLOG(REPORT, "Allocation request was satisfied but allocation still failed: size=%zu", size);
+        // Page allocation owns the request through stall and consumption.
+        // Reaching this point means that request failed, not a retry promise.
+        regionManager.DumpRegionStats("region statistics when gc ends");
+        VLOG(REPORT, "Cannot allocate memory of %zu(B), throw an OutOfMemory exception", size);
+        LOG(RTLOG_ERROR, "Cannot allocate memory of %zu(B), throw an OutOfMemory exception", size);
+        ExceptionManager::OutOfMemory();
         return 0;
     }
 #if defined(CANGJIE_TSAN_SUPPORT)

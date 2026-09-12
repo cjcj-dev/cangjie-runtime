@@ -18,17 +18,32 @@
 
 namespace MapleRuntime {
 
+// ZVirtualMemory represented in heap granules; ownership travels with the
+// page allocation until materialization or hand-back. A02c supplies cache
+// partition selection; the current allocator has one logical partition.
+struct PageMemory {
+    size_t index{ 0 };
+    size_t units{ 0 };
+    uint32_t partition{ 0 };
+    bool committed{ false };
+};
+
 // One object represents one blocked allocation.  It is deliberately owned by
 // the allocator caller; the queue only retains the pointer until a terminal
 // answer is published.
 class AllocationStallRequest {
 public:
-    explicit AllocationStallRequest(size_t size) : size(size) {}
+    AllocationStallRequest(size_t size, uint8_t role, bool physical, bool clear)
+        : size(size), role(role), physical(physical), clear(clear) {}
     AllocationStallRequest(const AllocationStallRequest&) = delete;
     AllocationStallRequest& operator=(const AllocationStallRequest&) = delete;
 
     size_t GetSize() const { return size; }
-    size_t GetClaimedUnits() const { return claimedUnits; }
+    uint8_t GetRole() const { return role; }
+    bool ExpectsPhysicalMemory() const { return physical; }
+    bool ClearsPayload() const { return clear; }
+    PageMemory& Memory() { return memory; }
+    const PageMemory& Memory() const { return memory; }
 
     bool Wait(const std::function<void()>& beforeWait = {})
     {
@@ -58,7 +73,10 @@ private:
 
     const size_t size;
     uint64_t sequence{ 0 };
-    size_t claimedUnits{ 0 };
+    const uint8_t role;
+    const bool physical;
+    const bool clear;
+    PageMemory memory;
     std::mutex mutex;
     std::condition_variable condition;
     bool completed{ false };
@@ -69,9 +87,11 @@ private:
 // empty to non-empty, giving the first waiter ownership of the GC request.
 class AllocationStallQueue {
 public:
-    bool Enqueue(AllocationStallRequest& request)
+    explicit AllocationStallQueue(std::mutex& owner) : mutex(owner) {}
+
+    // The allocator holds the same owner across claim failure and enqueue.
+    bool EnqueueLocked(AllocationStallRequest& request)
     {
-        std::lock_guard<std::mutex> lock(mutex);
         const bool requestGc = !gcInProgress;
         gcInProgress = true;
         request.sequence = ++lastSequence;
@@ -79,12 +99,7 @@ public:
 #if defined(MRT_ALLOCATION_STALL_OBSERVE)
         ++enqueued;
 #endif
-#if defined(MRT_ALLOCATION_STALL_CUT_ENQUEUE)
-        (void)requestGc;
-        return false;
-#else
         return requestGc;
-#endif
     }
 
     uint64_t CaptureWaveBoundary() const
@@ -93,30 +108,22 @@ public:
         return lastSequence;
     }
 
-    size_t SatisfyAvailable(const std::function<size_t(size_t, size_t)>& claim)
+    size_t SatisfyAvailable(const std::function<bool(AllocationStallRequest&)>& claim)
     {
-#if defined(MRT_ALLOCATION_STALL_CUT_SATISFY)
-        (void)claim;
-        return 0;
-#else
-        size_t satisfied = 0;
         std::lock_guard<std::mutex> lock(mutex);
+        return SatisfyAvailableLocked(claim);
+    }
+
+    size_t SatisfyAvailableLocked(const std::function<bool(AllocationStallRequest&)>& claim)
+    {
+        size_t satisfied = 0;
         while (!requests.empty()) {
             AllocationStallRequest* request = requests.front();
-            const size_t units = claim(request->GetSize(), claimedUnits);
-            if (units == 0) {
+            if (!claim(*request)) {
                 break;
             }
-#if defined(MRT_ALLOCATION_STALL_CUT_DEQUEUE)
-            request->claimedUnits = units;
-            claimedUnits += units;
-            request->Satisfy(true);
-#else
             requests.pop_front();
-            request->claimedUnits = units;
-            claimedUnits += units;
             request->Satisfy(true);
-#endif
             ++satisfied;
 #if defined(MRT_ALLOCATION_STALL_OBSERVE)
             ++dequeued;
@@ -124,7 +131,6 @@ public:
 #endif
         }
         return satisfied;
-#endif
     }
 
     bool CompleteWave(uint64_t boundary)
@@ -144,14 +150,6 @@ public:
             return false;
         }
         return true;
-    }
-
-    void ReleaseClaim(size_t units)
-    {
-        std::lock_guard<std::mutex> lock(mutex);
-        if (units <= claimedUnits) {
-            claimedUnits -= units;
-        }
     }
 
 #if defined(MRT_ALLOCATION_STALL_OBSERVE)
@@ -183,10 +181,9 @@ public:
 #endif
 
 private:
-    mutable std::mutex mutex;
+    std::mutex& mutex;
     std::deque<AllocationStallRequest*> requests;
     uint64_t lastSequence{ 0 };
-    size_t claimedUnits{ 0 };
     bool gcInProgress{ false };
 #if defined(MRT_ALLOCATION_STALL_OBSERVE)
     size_t enqueued{ 0 };
