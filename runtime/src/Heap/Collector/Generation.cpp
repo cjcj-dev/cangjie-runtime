@@ -1031,12 +1031,10 @@ void WCollector::DoYoungGarbageCollection()
         // roots, mutators alive. Flip already happened under STW1.
         concWindow.remsetSlots =
             Heap::GetHeap().GetRememberedSet().ScanPreviousForMinor(rememberedSlots);
+        ScanRelocatedRememberedFields(rememberedSlots);
     }
 
     MinorSlotSet liveRememberedSlots;
-    if (remsetHashOptRequested && !remsetConsumedLedgerElideActive) {
-        liveRememberedSlots.reserve(rememberedSlots.size());
-    }
     size_t liveRememberedCount = 0;
     for (MAddress slot : rememberedSlots) {
         if (LedgerCount(weakSlots, slot) == 0 &&
@@ -1052,9 +1050,6 @@ void WCollector::DoYoungGarbageCollection()
     remsetStats.recorded = rememberedSlots.size();
     remsetStats.live = liveRememberedCount;
     MinorSlotSet consumedSlots;
-    if (remsetHashOptRequested && !remsetConsumedLedgerElideActive) {
-        consumedSlots.reserve(rememberedSlots.size());
-    }
     MinorInteriorBaseMap remsetInteriorBases;
     {
         // minortime: ④ remset rescan + ⑤ mark closure pass-2 (from remset edges)
@@ -1064,14 +1059,7 @@ void WCollector::DoYoungGarbageCollection()
                             remsetConsumedLedgerElideActive ? nullptr : &consumedSlots, &remsetStats,
                             &remsetInteriorBases, stw.get());
     }
-    if (remsetHashOptRequested) {
-        VLOG(REPORT,
-             "[GCV2][remsetdrain][hash-opt] requested=1 active=%u recorded=%zu live=%zu consumed=%zu "
-             "consumedLedger=%zu interiors=%zu fys=%u youngConc=%u",
-              static_cast<unsigned>(remsetConsumedLedgerElideActive), rememberedSlots.size(), remsetStats.live,
-              remsetStats.consumed, consumedSlots.size(), remsetInteriorBases.size(),
-              static_cast<unsigned>(fullYoungScan), 1U);
-    }
+
     // fysaudit: D2 retained-drop + D4 live-not-consumed (product path already FYS=0 under audit).
 
     {
