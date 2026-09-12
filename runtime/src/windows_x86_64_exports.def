@@ -1554,7 +1554,7 @@ EXPORTS
     _ZN12MapleRuntime14MutatorManager14StartLightSyncEbNS_7GCPhaseE @1575
     _ZN12MapleRuntime14MutatorManager15GetMutatorCountEv @1576
     _ZN12MapleRuntime14MutatorManager16VisitAllMutatorsENSt3__18functionIFvRNS_7MutatorEEEE @1577
-    _ZN12MapleRuntime14MutatorManager17RunEpochHandshakeEPKc @1578
+    _ZN12MapleRuntime14MutatorManager17RunEpochHandshakeEPKcb @1578
     _ZN12MapleRuntime14MutatorManager17VisitMuatorHelperEPvS1_ @1579
     _ZN12MapleRuntime14MutatorManager20CreateRuntimeMutatorENS_10ThreadTypeE @1580
     _ZN12MapleRuntime14MutatorManager20TransitMutatorToExitEv @1581
@@ -2063,7 +2063,7 @@ EXPORTS
     _ZN12MapleRuntime7MObject9NewObjectEPNS_8TypeInfoEjNS_9AllocTypeE @2116
     _ZN12MapleRuntime7Mutator10GetMutatorEv @2117
     _ZN12MapleRuntime7Mutator10NewMutatorEv @2118
-    _ZN12MapleRuntime7Mutator11GcPhaseEnumENS_7GCPhaseEybPy @2119
+    _ZN12MapleRuntime7Mutator11GcPhaseEnumENS_7GCPhaseEbybPy @2119
     _ZN12MapleRuntime7Mutator11IsStackAddrEy @2120
     _ZN12MapleRuntime7Mutator12ResetMutatorEv @2121
     _ZN12MapleRuntime7Mutator13HandleGCPhaseENS_7GCPhaseE @2122
@@ -2083,7 +2083,7 @@ EXPORTS
     _ZN12MapleRuntime7Mutator20InitProtectStackAddrEv @2136
     _ZN12MapleRuntime7Mutator20ReleaseForeignThreadEv @2137
     _ZN12MapleRuntime7Mutator21MarkBornCleanForEpochEy @2138
-    _ZN12MapleRuntime7Mutator21RequestEpochHandshakeEy @2139
+    _ZN12MapleRuntime7Mutator21RequestEpochHandshakeEyb @2139
     _ZN12MapleRuntime7Mutator23HandleSuspensionRequestEv @2140
     _ZN12MapleRuntime7Mutator25AcknowledgeEpochHandshakeEyb @2141
     _ZN12MapleRuntime7Mutator26VisitHeapReferencesOnStackERKNSt3__18functionIFvRNS_8RootSlotEEEERKNS2_IFvNS_15zaddress_unsafeERNS_11DerivedSlotEEEE @2143

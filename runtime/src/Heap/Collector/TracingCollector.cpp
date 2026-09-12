@@ -578,15 +578,15 @@ void TracingCollector::DiscoverWeakReference(BaseObject* reference, WorkStack& w
 
 void TracingCollector::VisitHeapReferencesOnStack(const RootVisitor& rootVisitor,
                                                   const DerivedPtrVisitor& derivedPtrVisitor, RegSlotsMap& regSlotsMap,
-                                                  const FrameInfo& frame, Mutator& mutator)
+                                                  const FrameInfo& frame, Mutator& mutator, bool young)
 {
-    VisitHeapReferencesOnStack(rootVisitor, rootVisitor, derivedPtrVisitor, regSlotsMap, frame, mutator);
+    VisitHeapReferencesOnStack(rootVisitor, rootVisitor, derivedPtrVisitor, regSlotsMap, frame, mutator, young);
 }
 
 void TracingCollector::VisitHeapReferencesOnStack(const RootVisitor& regRootVisitor,
                                                   const RootVisitor& slotRootVisitor,
                                                   const DerivedPtrVisitor& derivedPtrVisitor, RegSlotsMap& regSlotsMap,
-                                                  const FrameInfo& frame, Mutator& mutator)
+                                                  const FrameInfo& frame, Mutator& mutator, bool young)
 {
     uintptr_t startIP = reinterpret_cast<uintptr_t>(frame.GetStartProc());
     uintptr_t frameIP = reinterpret_cast<uintptr_t>(frame.mFrame.GetIP());
@@ -621,14 +621,14 @@ void TracingCollector::VisitHeapReferencesOnStack(const RootVisitor& regRootVisi
 #endif
     DLOG(ENUM, "visit heap-ref 0x%zx-@0x%zx, fp 0x%zx", startIP, frameIP, frameAddress);
     if (heapMap.IsValid()) {
-        if (!heapMap.VisitRegRoots(regRootVisitor, regDebugFunc, regSlotsMap)) {
+        if (!heapMap.VisitRegRoots(regRootVisitor, regDebugFunc, regSlotsMap, young)) {
 #if defined(GCINFO_DEBUG) && GCINFO_DEBUG
             mutator.PushFrameInfoForFix(infoNode);
 #endif
             LOG(RTLOG_FATAL, "wrong reg info, start ip: %p frame pc: %p", reinterpret_cast<void*>(startIP),
                 reinterpret_cast<void*>(frameIP));
         }
-        heapMap.VisitSlotRoots(slotRootVisitor, slotDebugFunc);
+        heapMap.VisitSlotRoots(slotRootVisitor, slotDebugFunc, young);
         // VisitDerivedPtr must be invoked after VisitRegRoots and VisitSlotRoots;
         heapMap.VisitDerivedPtr(derivedPtrVisitor, derivedPtrDebugFunc, regSlotsMap);
     } else {
