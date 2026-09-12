@@ -2380,7 +2380,7 @@ BaseObject* WCollector::TryForwardObject(BaseObject* obj)
     // `RouteRegion(r) || r->IsCompacted()` (RegionManager.h:1012); this consumer read only the
     // first half, so a root naming a live object on a compacted-in-place page was refused with the
     // answer sitting in the table.  Observed: NW256/256MB 3/3 abort at
-    // Mutator::GCPhasePreForward.root-unresolved with route=COMPACTED marked=1 inRange=1.
+    // Mutator::GCPhasePreForward.forward_object with route=COMPACTED marked=1 inRange=1.
     if (region->IsCompacted()) {
         // A miss here is not "unset": RouteRegion answered false because this call is what
         // compacted the page in place.  Which of the three compacted-miss cases it is comes from

@@ -362,7 +362,7 @@ size_t DischargeAll(const std::function<BaseObject*(RefField<>&)>& resolve,
         // that the relocation never receipted. That is the receiptless forward this
         // walk was producing -- a holder in the linear size-walk still pointed at an
         // object below the pre-compaction top that no livemap bit covers, so
-        // WaitRoutedTipReady had no answer and closed.
+        // forward_object had no answer and closed.
         //
         // The previous `useLiveOnly` arm dropped to VisitAllObjects exactly when the
         // liveness face looked unavailable. A missing liveness face on a region that

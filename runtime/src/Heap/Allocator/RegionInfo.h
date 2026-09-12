@@ -3026,7 +3026,7 @@ public:
     // ZGC has no terminal kept: a page not selected this cycle is an ordinary
     // candidate next cycle (zRelocationSetSelector.cpp:114-196 rebuilds from
     // the page table; zGeneration.cpp:205-213). Drop the in-cycle publish so
-    // WaitRoutedTipReady cannot treat last cycle's Exempt as this cycle's done.
+    // forward_object cannot treat last cycle's Exempt as this cycle's done.
     void ExpireKeptPublish()
     {
         if (IsGhostFromRegion()) {

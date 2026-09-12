@@ -54,7 +54,7 @@ enum class UnpublishedAnswer : uint32_t {
     InvariantFailure = 2,
 };
 
-// Receipt publication for WaitRoutedTipReady. COMPACTED (RouteState=4) is the
+// Receipt publication for forward_object. COMPACTED (RouteState=4) is the
 // in-place copier terminal *label*; it is not MarkForwardingDone. ZGC waits
 // until forwarding is done, then requires a receipt (zRelocate.cpp:382-415).
 inline bool PageReceiptPublished(unsigned route, bool fwdDone)
@@ -168,7 +168,7 @@ void NoteSelfCopy(size_t bytes, Role role);
 void NoteAnyCopy(Role role);
 
 // --- the leg we are trying to displace, counted in BOTH arms (gate: StatsOn) ------------
-void NoteWaitEnter();   // entered WaitRoutedTipReady
+void NoteWaitEnter();   // entered forward_object
 void NoteWaitGiveUp();  // completed without a receipt and entered fail-closed handling
 void NoteWaitReceipt(); // left it with a to-version
 void NoteWaitFatal();   // reached the permanentHole CHECK_DETAIL

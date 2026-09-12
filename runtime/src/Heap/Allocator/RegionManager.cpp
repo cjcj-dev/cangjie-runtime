@@ -2415,7 +2415,7 @@ void RegionManager::ParkUnmovableFromRegion(RegionInfo* region)
 void RegionManager::ExemptFromRegion(RegionInfo* region)
 {
     // oraclecut §4 / cjpmnull5: Exempt is a terminal region state this cycle.
-    // Publish immediately as kept (IsForwardingDone) so WaitRoutedTipReady's
+    // Publish immediately as kept (IsForwardingDone) so forward_object's
     // region-level wait can exit. Without this the wait never terminates
     // (cjpmnull3 wide-definition OOM). Hole pages are not collected this
     // cycle (cjpmnull2 Exempt).
