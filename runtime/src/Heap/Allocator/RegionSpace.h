@@ -50,9 +50,12 @@ public:
             allocBufferManager = nullptr;
         }
 #if defined(CANGJIE_SANITIZER_SUPPORT) || defined(CANGJIE_GWPASAN_SUPPORT)
-        Sanitizer::OnHeapDeallocated(map->GetBaseAddr(), map->GetMappedSize());
+        for (const auto& range : map->GetReservationRegistry().Ranges()) {
+            Sanitizer::OnHeapDeallocated(reinterpret_cast<void*>(range.start), range.size);
+        }
 #endif
         MemMap::DestroyMemMap(map);
+        MemMap::DestroyMemMap(metadataMap);
     }
 
     void Init(const HeapParam&) override;
@@ -65,8 +68,8 @@ public:
 
     MAddress GetSpaceEndAddress() const override { return reservedEnd; }
 
-    size_t GetCurrentCapacity() const override { return regionManager.GetInactiveZone() - reservedStart; }
-    size_t GetMaxCapacity() const override { return reservedEnd - reservedStart; }
+    size_t GetCurrentCapacity() const override { return regionManager.GetActiveUnitCount() * RegionInfo::UNIT_SIZE; }
+    size_t GetMaxCapacity() const override { return regionManager.GetHeapCapacity(); }
 
     inline size_t GetRecentAllocatedSize() const { return regionManager.GetRecentAllocatedSize(); }
 
@@ -260,6 +263,7 @@ private:
     MAddress reservedEnd = 0;
     RegionManager regionManager;
     MemMap* map{ nullptr };
+    MemMap* metadataMap{ nullptr };
 };
 } // namespace MapleRuntime
 #endif // MRT_REGION_SPACE_H

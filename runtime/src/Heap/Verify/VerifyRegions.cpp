@@ -458,17 +458,15 @@ void VerifyRegions::VerifyAfterYoungMark(RegionManager& manager, const Candidate
     std::unordered_map<std::string, size_t> markedByList;
     std::unordered_map<std::string, size_t> regionsByList;
 
-    for (uintptr_t regionAddr = manager.GetRegionHeapStart(); regionAddr < manager.GetInactiveZone();) {
-        RegionInfo* region = RegionInfo::GetRegionInfoAt(regionAddr);
-        regionAddr = region->GetRegionEnd();
+    manager.VisitPageOwners([&](RegionInfo* region) {
         if (!region->IsValidRegion() || region->IsFreeRegion() || region->IsGarbageRegion()) {
-            continue;
+            return;
         }
         if (!region->IsYoungRegion()) {
-            continue;
+            return;
         }
         if (candidates.count(region) != 0) {
-            continue;
+            return;
         }
         ++offCandidateYoungRegions;
         const char* listName = "not_on_managed_list";
@@ -504,7 +502,7 @@ void VerifyRegions::VerifyAfterYoungMark(RegionManager& manager, const Candidate
         offCandidateMarkedObjects += markedInRegion;
         offCandidateLiveBytes += markedBytes;
         markedByList[listName] += markedInRegion;
-    }
+    });
 
     uint64_t t1 = TimeUtil::NanoSeconds();
     VLOG(REPORT,

@@ -1853,14 +1853,48 @@ public:
         GARBAGE_REGION,
     };
 
+    // The reverse metadata array remains an ABI adapter. Its anchor need not
+    // be adjacent to payload reservations. Cache indices are dense within each
+    // segment, with an unused index between segments to prevent coalescing.
+    struct UnitSegment {
+        MemoryRange range;
+        size_t firstIndex;
+    };
+
+    inline static std::vector<UnitSegment> unitSegments;
+    inline static ZGranuleMap<RegionInfo*> pageOwners;
+
+    static size_t IndexedUnitCount(const std::vector<MemoryRange>& ranges)
+    {
+        size_t count = 0;
+        for (const auto& range : ranges) {
+            CHECK(range.start % UNIT_SIZE == 0 && range.size % UNIT_SIZE == 0);
+            count += range.size / UNIT_SIZE + 1;
+        }
+        CHECK(count != 0 && count - 1 < std::numeric_limits<uint32_t>::max());
+        return count - 1;
+    }
+
     static void Initialize(size_t nUnit, uintptr_t heapAddress, MemMap* memoryOwner = nullptr)
     {
-        UnitInfo::totalUnitCount = nUnit;
-        UnitInfo::heapStartAddress = heapAddress;
+        InitializeSegments(heapAddress, { MemoryRange{ heapAddress, nUnit * UNIT_SIZE } }, memoryOwner);
+    }
+
+    static void InitializeSegments(uintptr_t metadataEnd, const std::vector<MemoryRange>& ranges,
+                                   MemMap* memoryOwner)
+    {
+        UnitInfo::totalUnitCount = IndexedUnitCount(ranges);
+        UnitInfo::heapStartAddress = metadataEnd;
         UnitInfo::memoryOwner = memoryOwner;
-        // gatehot: UNIT_SIZE is page size (power of two). ctz → shift for GetUnitIdxAt.
-        CHECK(UNIT_SIZE != 0 && (UNIT_SIZE & (UNIT_SIZE - 1)) == 0);
-        UnitInfo::unitSizeShift = static_cast<size_t>(__builtin_ctzll(static_cast<unsigned long long>(UNIT_SIZE)));
+        unitSegments.clear();
+        size_t index = 0;
+        for (const auto& range : ranges) {
+            CHECK(IsRepresentableLow48Range(range.start, range.size));
+            unitSegments.push_back(UnitSegment{ range, index });
+            index += range.size / UNIT_SIZE + 1;
+        }
+        pageOwners.Reset();
+        CHECK(pageOwners.Initialize(ranges.front().start, ranges.back().End() - ranges.front().start, UNIT_SIZE));
         // routedest: per-unit metadata is per-page metadata, so any growth here is a
         // percentage of the whole heap. Nobody had measured it; report it once so the cost
         // of routeDestHold (one byte, expected to land in existing padding) is a number
@@ -1882,6 +1916,33 @@ public:
         static_assert(sizeof(UnitInfo) == 248, "per-unit metadata size changed; it is per-page, so price it");
     }
 
+    static size_t FindUnitIndex(uintptr_t address)
+    {
+        auto next = std::upper_bound(unitSegments.begin(), unitSegments.end(), address,
+            [](uintptr_t addr, const UnitSegment& segment) { return addr < segment.range.start; });
+        if (next == unitSegments.begin()) {
+            return UnitInfo::INVALID_IDX;
+        }
+        const auto& segment = *std::prev(next);
+        return address < segment.range.End()
+            ? segment.firstIndex + (address - segment.range.start) / UNIT_SIZE : UnitInfo::INVALID_IDX;
+    }
+
+    static bool ContainsUnitRange(uintptr_t start, size_t size)
+    {
+        for (const auto& segment : unitSegments) {
+            if (start >= segment.range.start && start < segment.range.End() && size <= segment.range.End() - start) {
+                return true;
+            }
+        }
+        return false;
+    }
+
+    static void VisitPageOwners(const std::function<void(RegionInfo*)>& visitor)
+    {
+        pageOwners.visit_unique(visitor);
+    }
+
     static RegionInfo* GetRegionInfo(uint32_t idx)
     {
         UnitInfo* unit = RegionInfo::UnitInfo::GetUnitInfo(idx);
@@ -1894,11 +1955,8 @@ public:
     // Safely query a heap address whose unit may no longer have a live owning region.
     ALWAYS_INLINE static RegionInfo* TryGetRegionInfoAt(uintptr_t allocAddr)
     {
-        UnitInfo* unit = RegionInfo::UnitInfo::GetUnitInfoAt(allocAddr);
-        if (LoadUnitRole(unit) == UnitRole::SUBORDINATE_UNIT) {
-            return unit->GetMetadata().ownerRegion;
-        }
-        return reinterpret_cast<RegionInfo*>(unit);
+        zoffset offset;
+        return pageOwners.offset_for_address(allocAddr, &offset) ? pageOwners.get(offset) : nullptr;
     }
 
     // The caller must know that allocAddr resolves to an extant region owner.
@@ -1916,7 +1974,11 @@ public:
 
     static RegionInfo* GetGhostFromRegionAt(uintptr_t allocAddr)
     {
-        UnitInfo* unit = RegionInfo::UnitInfo::GetUnitInfoAt(allocAddr);
+        const size_t idx = FindUnitIndex(allocAddr);
+        if (idx == UnitInfo::INVALID_IDX) {
+            return nullptr;
+        }
+        UnitInfo* unit = UnitInfo::GetUnitInfo(idx);
         if (unit->GetMetadata().regionStateBitField.GetAtomicValue(
                 RegionStateBitPos::IN_GHOST_FROM_REGION_FLAG, 1) == 0) {
             return nullptr;
@@ -2062,8 +2124,7 @@ public:
     {
         const MAddress start = GetRegionStart();
         const MAddress end = metadata.regionEnd;
-        const MAddress heapEnd = UnitInfo::heapStartAddress + UnitInfo::totalUnitCount * UNIT_SIZE;
-        return end > start && end <= heapEnd ? end - start : UNIT_SIZE;
+        return end > start && ContainsUnitRange(start, end - start) ? end - start : UNIT_SIZE;
     }
 
     size_t GetUnitCount() const { return GetRegionSize() / UNIT_SIZE; }
@@ -3034,14 +3095,7 @@ public:
 
     size_t GetUnitIdx() const { return RegionInfo::UnitInfo::GetUnitIdx(reinterpret_cast<const UnitInfo*>(this)); }
 
-    MAddress GetRegionStart() const
-    {
-        uintptr_t ptr = reinterpret_cast<uintptr_t>(this);
-        CHECK(ptr < UnitInfo::heapStartAddress);
-        size_t idx = (UnitInfo::heapStartAddress - ptr) / sizeof(UnitInfo) - 1;
-        CHECK(idx < UnitInfo::totalUnitCount);
-        return idx * UNIT_SIZE + UnitInfo::heapStartAddress;
-    }
+    MAddress GetRegionStart() const { return GetUnitAddress(GetUnitIdx()); }
 
     MAddress GetRegionEnd() const { return metadata.regionEnd; }
 
@@ -3784,41 +3838,13 @@ private:
         static uintptr_t heapStartAddress; // the address of the first region space to allocate objects
         static size_t totalUnitCount;
         static MemMap* memoryOwner;
-        // gatehot: log2(UNIT_SIZE); UNIT_SIZE is always a power-of-two page size.
-        // Hot GetUnitIdxAt uses a shift instead of a runtime / on a non-constant divisor.
-        static size_t unitSizeShift;
-
         constexpr static uint32_t INVALID_IDX = std::numeric_limits<uint32_t>::max();
 
-        // gatehot: OOB path used to live in the same function as the hot index math.
-        // That forced a full frame (dladdr + FormatLog + stack canary) on every call and
-        // blocked inlining into TryGetRegionInfoAt / PlausibleManagedObjectGate.
-        // Cold-only: same greppable FATAL text as before (unitzero trail).
-        ATTR_NO_INLINE ATTR_COLD static size_t GetUnitIdxAtOOB(uintptr_t allocAddr);
-
-        // Hot path: range check + shift. Must stay tiny enough to inline at every call site.
         ALWAYS_INLINE static size_t GetUnitIdxAt(uintptr_t allocAddr)
         {
-            uintptr_t start = heapStartAddress;
-            size_t units = totalUnitCount;
-            size_t shift = unitSizeShift;
-            // UNIT_SIZE == (1 << shift); keep arithmetic identical to
-            //   start <= addr < start + units * UNIT_SIZE
-            // without loading the UNIT_SIZE global or emitting a DIV.
-            if (LIKELY(start <= allocAddr &&
-                       ((allocAddr - start) >> shift) < units)) {
-                size_t idx = (allocAddr - start) >> shift;
-#if defined(MRT_DEBUG) && (MRT_DEBUG == 1)
-                // Debug builds always cross-check shift vs div (GATEEQUIV math).
-                size_t divIdx = (allocAddr - start) / UNIT_SIZE;
-                if (UNLIKELY(idx != divIdx)) {
-                    LOG(RTLOG_FATAL, "GetUnitIdxAt GATEEQUIV mismatch addr=%#zx shift=%zu div=%zu",
-                        allocAddr, idx, divIdx);
-                }
-#endif
-                return idx;
-            }
-            return GetUnitIdxAtOOB(allocAddr);
+            const size_t idx = FindUnitIndex(allocAddr);
+            CHECK_DETAIL(idx != INVALID_IDX, "address is outside heap reservations: %#zx", allocAddr);
+            return idx;
         }
 
         ALWAYS_INLINE static UnitInfo* GetUnitInfoAt(uintptr_t allocAddr)
@@ -3830,7 +3856,13 @@ private:
         static MAddress GetUnitAddress(size_t idx)
         {
             CHECK(idx < totalUnitCount);
-            return heapStartAddress + idx * UNIT_SIZE;
+            for (const auto& segment : unitSegments) {
+                if (idx >= segment.firstIndex && idx - segment.firstIndex < segment.range.size / UNIT_SIZE) {
+                    return segment.range.start + (idx - segment.firstIndex) * UNIT_SIZE;
+                }
+            }
+            LOG(RTLOG_FATAL, "unit index denotes a reservation boundary: %zu", idx);
+            return 0;
         }
 
         static UnitInfo* GetUnitInfo(size_t idx)
@@ -4062,6 +4094,10 @@ private:
         SetMarkFaceSealed(false);
         __atomic_store_n(&metadata.rawPointerObjectCount, 0, __ATOMIC_SEQ_CST);
         SetUnitRole(uClass);
+        zoffset offset;
+        CHECK(ContainsUnitRange(GetRegionStart(), nUnit * UNIT_SIZE));
+        CHECK(pageOwners.offset_for_address(GetRegionStart(), &offset));
+        pageOwners.put(offset, nUnit * UNIT_SIZE, this);
     }
 
     void InitRegion(size_t nUnit, UnitRole uClass)

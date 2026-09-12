@@ -8,11 +8,13 @@
 #define MRT_Z_GRANULE_MAP_H
 
 #include <atomic>
+#include <cassert>
 #include <cstddef>
 #include <cstdint>
 #include <cstdlib>
 
 #include "Common/TypeDef.h"
+#include "Common/ColourEncoding.h"
 
 namespace MapleRuntime {
 
@@ -25,10 +27,16 @@ public:
 
     bool Initialize(MAddress base, size_t heapSize, size_t granule)
     {
-        if (_map != nullptr || granule == 0 || heapSize == 0) {
-            return _map != nullptr;
+        if (_map != nullptr) {
+            return _base == base && _heapSize == heapSize && _granule == granule;
         }
-        const size_t n = heapSize / granule + ((heapSize % granule) != 0 ? 1 : 0);
+        // zPageTable.cpp:37-42 sizes the map by the highest available offset,
+        // including reservation holes, rather than by reserved capacity.
+        if (granule == 0 || heapSize == 0 || base % granule != 0 || heapSize % granule != 0 ||
+            !IsRepresentableLow48Range(base, heapSize)) {
+            return false;
+        }
+        const size_t n = heapSize / granule;
         auto* map = static_cast<std::atomic<T>*>(std::calloc(n, sizeof(std::atomic<T>)));
         if (map == nullptr) {
             return false;
@@ -47,8 +55,7 @@ public:
         _map = nullptr;
     }
 
-#if defined(MRT_GC_UNIT_TESTS)
-    void ResetForTest()
+    void Reset()
     {
         std::free(_map);
         _map = nullptr;
@@ -57,6 +64,8 @@ public:
         _heapSize = 0;
         _granule = 0;
     }
+#if defined(MRT_GC_UNIT_TESTS)
+    void ResetForTest() { Reset(); }
 #endif
 
     bool Ready() const { return _map != nullptr; }
@@ -66,7 +75,7 @@ public:
     // map may turn into an array access.
     bool offset_for_address(MAddress addr, zoffset* result) const
     {
-        if (addr < _base) {
+        if (!Ready() || addr < _base) {
             return false;
         }
         const MAddress offset = addr - _base;
@@ -92,8 +101,10 @@ public:
     void put(zoffset offset, size_t size, T value)
     {
         const size_t start = index_for_offset(offset);
-        const size_t count = size / _granule + ((size % _granule) != 0 ? 1 : 0);
-        for (size_t i = 0; i < count && start + i < _size; ++i) {
+        assert(size % _granule == 0);
+        const size_t count = size / _granule;
+        assert(start <= _size && count <= _size - start);
+        for (size_t i = 0; i < count; ++i) {
             _map[start + i].store(value, std::memory_order_release);
         }
     }

@@ -25,6 +25,7 @@
 #include "RoutePublish.h"
 #include "Common/RunType.h"
 #include "FreeRegionManager.h"
+#include "RangeRegistry.h"
 #include "Heap/GcThreadPool.h"
 #include "Heap/Collector/RelocationRequestQueue.h"
 #include "RegionList.h"
@@ -190,6 +191,16 @@ public:
 #endif
     void Initialize(size_t regionNum, uintptr_t regionInfoStart, MemMap& memoryOwner,
                     const HeapParam& heapParam, double garbageThreshold);
+    void InitializeSegments(uintptr_t metadataStart, const std::vector<MemoryRange>& reservations,
+                            MemMap& memoryOwner, const HeapParam& heapParam, double garbageThreshold);
+
+    void VisitPageOwners(const std::function<void(RegionInfo*)>& visitor) const
+    {
+        RegionInfo::VisitPageOwners(visitor);
+    }
+
+    size_t GetHeapCapacity() const { return heapUnitCount * RegionInfo::UNIT_SIZE; }
+
 
     RegionManager()
         : freeRegionManager(*this), tlRegionList("thread local regions"), recentFullRegionList("recent full regions"),
@@ -687,9 +698,9 @@ public:
         return freeRegionManager.UncommitIdleUnits(maxBytes, idleBeforeNs, honorCancel);
     }
 
-    size_t GetInactiveUnitCount() const { return (regionHeapEnd - inactiveZone) / RegionInfo::UNIT_SIZE; }
+    size_t GetInactiveUnitCount() const { return heapUnitCount - activeUnitCount.load(std::memory_order_acquire); }
 
-    size_t GetActiveUnitCount() const { return (inactiveZone - regionHeapStart) / RegionInfo::UNIT_SIZE; }
+    size_t GetActiveUnitCount() const { return activeUnitCount.load(std::memory_order_acquire); }
 
     inline size_t GetLargeObjectSize() const
     {
@@ -1210,7 +1221,10 @@ private:
     std::atomic<uint64_t> prevRegionAllocTime = { 0 };
 
     // heap space not allocated yet for even once. this value should not be decreased.
-    std::atomic<uintptr_t> inactiveZone = { 0 };
+    std::atomic<uintptr_t> inactiveZone = { 0 }; // highest handed-out address, diagnostic envelope only
+    RangeRegistry inactiveRanges;
+    size_t heapUnitCount = 0;
+    std::atomic<size_t> activeUnitCount{ 0 };
     size_t maxUnitCountPerRegion = MAX_UNIT_COUNT_PER_REGION;   // max units count for threadLocal buffer.
     size_t maxUnitCountPerPinnedRegion = maxUnitCountPerRegion; // max units count for pinned region.
     size_t largeObjectThreshold;

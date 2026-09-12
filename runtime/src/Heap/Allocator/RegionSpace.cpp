@@ -174,9 +174,7 @@ void RegionSpace::Init(const HeapParam& vmHeapParam)
     size_t heapSize = 0;
     CHECK_DETAIL(CheckedMulSize(vmHeapParam.heapSize, size_t{1024}, heapSize),
                  "heap size overflows bytes before reservation: heapSizeKB=%zu", vmHeapParam.heapSize);
-    size_t totalSize = RegionManager::GetHeapMemorySize(heapSize);
     size_t unitNum = RegionManager::GetHeapUnitCount(heapSize);
-    size_t metadataSize = RegionManager::GetMetadataSize(unitNum);
     // Seal both process inputs before the first mmap. The values remain fixed
     // for the complete reservation and physical-page lifetime.
     const AddressSpaceBudget addressBudget = AddressSpaceBudget::SealProcessBudget();
@@ -188,35 +186,37 @@ void RegionSpace::Init(const HeapParam& vmHeapParam)
     DLOG(SANITIZER, "mmap flags set to 0x%x", opt.flags);
 #endif
     // this must succeed otherwise it won't return
-    map = MemMap::MapMemory(totalSize, metadataSize, opt, addressBudget, numaTopology);
-    const uintptr_t reservationStart = reinterpret_cast<uintptr_t>(map->GetBaseAddr());
-    uintptr_t reservationEnd = 0;
-    if (IsRepresentableLow48Range(reservationStart, totalSize)) {
-        reservationEnd = reservationStart + totalSize;
-    }
-    CHECK_DETAIL(reservationEnd != 0,
-                 "heap reservation exceeds the 48-bit HeapSlot address carrier: start=%#zx end=%#zx size=%zu",
-                 static_cast<size_t>(reservationStart), static_cast<size_t>(reservationEnd), totalSize);
-    // RegionManager indexes units as heapStart + index * UNIT_SIZE. Until that
-    // caller is segment-aware, never reinterpret holes between reservations as
-    // allocatable units.
-    CHECK_DETAIL(map->GetReservationRegistry().Contains(reinterpret_cast<uintptr_t>(map->GetBaseAddr()), totalSize),
-                 "RegionSpace requires a contiguous heap reservation");
+    map = MemMap::MapMemory(unitNum * RegionInfo::UNIT_SIZE, 0, opt, addressBudget, numaTopology);
+    const auto& reservations = map->GetReservationRegistry().Ranges();
+    for (const auto& range : reservations) {
+        CHECK_DETAIL(IsRepresentableLow48Range(range.start, range.size),
+                     "heap reservation exceeds the 48-bit HeapSlot address carrier: start=%#zx size=%zu",
+                     static_cast<size_t>(range.start), range.size);
 #if defined(CANGJIE_SANITIZER_SUPPORT) || defined(CANGJIE_GWPASAN_SUPPORT)
-    Sanitizer::OnHeapAllocated(map->GetBaseAddr(), map->GetMappedSize());
+        Sanitizer::OnHeapAllocated(reinterpret_cast<void*>(range.start), range.size);
 #endif
-
+    }
+    // Metadata remains a contiguous reverse-indexed ABI array, independent of
+    // the payload reservations (zPage metadata lives outside virtual memory).
+    const size_t metadataSize = RegionManager::GetMetadataSize(RegionInfo::IndexedUnitCount(reservations));
+    metadataMap = MemMap::MapMemory(metadataSize, metadataSize);
+    CHECK(metadataMap->GetReservationRegistry().Contains(
+        reinterpret_cast<uintptr_t>(metadataMap->GetBaseAddr()), metadataSize));
     Logger::GetLogger().SetMinimumLogLevel(CangjieRuntime::GetLogParam().logLevel);
-    MAddress metadata = reinterpret_cast<MAddress>(map->GetBaseAddr());
-    regionManager.Initialize(unitNum, metadata, *map, vmHeapParam,
-                             CangjieRuntime::GetGCParam().garbageThreshold);
+    MAddress metadata = reinterpret_cast<MAddress>(metadataMap->GetBaseAddr());
+    regionManager.InitializeSegments(metadata, reservations, *map, vmHeapParam,
+                                     CangjieRuntime::GetGCParam().garbageThreshold);
     reservedStart = regionManager.GetRegionHeapStart();
     reservedEnd = reinterpret_cast<MAddress>(map->GetMappedEndAddr());
 #if defined(MRT_DUMP_ADDRESS)
     VLOG(REPORT, "region metadata@%zx, heap @[0x%zx+%zu, 0x%zx)", metadata, reservedStart, reservedEnd - reservedStart,
          reservedEnd);
 #endif
-    Heap::OnHeapCreated(reservedStart);
+    std::vector<HeapSlotAddressRange> heapReservations;
+    for (const auto& range : reservations) {
+        heapReservations.push_back({ range.start, range.End() });
+    }
+    Heap::OnHeapCreated(reservedStart, heapReservations);
     Heap::OnHeapExtended(reservedEnd);
 }
 
