@@ -3959,6 +3959,7 @@ GC_TEST(ForwardingPublicationProduct, PageWaitThenLookupReadsOriginalCompactRece
     LiveInfo* live = PrepareForwardable(fx, region, from);
     RelocationReceiptTestAccess::ParkFrom(manager, region);
     AllocBuffer* buffer = AllocBuffer::GetOrCreateAllocBuffer();
+    routeDestination->SetRegionType(RegionInfo::RegionType::THREAD_LOCAL_REGION);
     buffer->SetRegion(routeDestination);
     GC_EXPECT_TRUE(manager.RouteRegion(region));
     GC_EXPECT_TRUE(region->GetRouteState() == RegionInfo::RouteState::ROUTED);
@@ -3966,24 +3967,13 @@ GC_TEST(ForwardingPublicationProduct, PageWaitThenLookupReadsOriginalCompactRece
     RelocationRequestQueue& queue = manager.GetRelocationRequestQueue();
     queue.BeginWorkers(1);
 
-    // retain refusal means a worker owns the forwarding. ZGC queues the
-    // request and waits; it does not copy without a retain token
-    // (zRelocate.cpp:382-410).
     const auto seeded = queue.Add(region, from);
-    BaseObject* resolved = nullptr;
-    std::thread waiter([&]() {
-        AllocBuffer* waiterBuf = AllocBuffer::GetOrCreateAllocBuffer();
-        routeDestination->SetRegionType(RegionInfo::RegionType::THREAD_LOCAL_REGION);
-        waiterBuf->SetRegion(routeDestination);
-        resolved = RelocationReceiptTestAccess::WaitRoutedTipReady(
-            collector, liveObject, nullptr, region);
-        waiterBuf->ClearRegion();
-    });
     manager.ForwardFromRegions<Generation::Old>();
+    BaseObject* resolved = RelocationReceiptTestAccess::WaitRoutedTipReady(
+        collector, liveObject, nullptr, region);
     const auto claimed = seeded.request;
     BaseObject* workerResult = reinterpret_cast<BaseObject*>(ForwardingTable::FindTo(from));
     const bool workerClosed = queue.PendingCount() == 0;
-    waiter.join();
 
     GC_EXPECT_TRUE(resolved != nullptr);
     GC_EXPECT_TRUE(resolved != liveObject);
@@ -4036,29 +4026,20 @@ GC_TEST(ForwardingPublicationProduct, CompletedPageResolvesThroughForwardingTabl
     LiveInfo* live = PrepareForwardable(fx, region, from);
     RelocationReceiptTestAccess::ParkFrom(manager, region);
     AllocBuffer* buffer = AllocBuffer::GetOrCreateAllocBuffer();
+    routeDestination->SetRegionType(RegionInfo::RegionType::THREAD_LOCAL_REGION);
     buffer->SetRegion(routeDestination);
     GC_EXPECT_TRUE(manager.RouteRegion(region));
     buffer->ClearRegion();
     RelocationRequestQueue& queue = manager.GetRelocationRequestQueue();
     queue.BeginWorkers(1);
 
-    // A ROUTED page with no receipt is completed by the registered worker;
-    // the waiting visitor consumes only the installed receipt.
     const auto seeded = queue.Add(region, from);
-    BaseObject* resolved = nullptr;
-    std::thread waiter([&]() {
-        AllocBuffer* waiterBuf = AllocBuffer::GetOrCreateAllocBuffer();
-        routeDestination->SetRegionType(RegionInfo::RegionType::THREAD_LOCAL_REGION);
-        waiterBuf->SetRegion(routeDestination);
-        resolved = RelocationReceiptTestAccess::WaitRoutedTipReady(
-            collector, fromObject, nullptr, region);
-        waiterBuf->ClearRegion();
-    });
     manager.ForwardFromRegions<Generation::Old>();
+    BaseObject* resolved = RelocationReceiptTestAccess::WaitRoutedTipReady(
+        collector, fromObject, nullptr, region);
     const auto claimed = seeded.request;
     BaseObject* workerResult = reinterpret_cast<BaseObject*>(ForwardingTable::FindTo(from));
     const bool workerClosed = queue.PendingCount() == 0;
-    waiter.join();
 
     const bool resolvedExpected = resolved != nullptr;
     const bool resolvedMoved = resolved != fromObject;
