@@ -1343,6 +1343,10 @@ bool ProcessorCanSpin(void);
  */
 unsigned int ScheduleGetProcessorNum(void);
 
+typedef void (*ScheduleProcessorVisitFunc)(void *tls, int processorState, void *arg);
+void ScheduleVisitProcessors(ScheduleProcessorVisitFunc func, void *arg);
+void ScheduleBindMarkFlushTls(void *tls);
+
 /**
  * @brief Pointer to the start position of a parameter.
  */

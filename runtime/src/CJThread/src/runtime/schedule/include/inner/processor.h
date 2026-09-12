@@ -94,6 +94,7 @@ struct Processor {
     void *pArray[PROCESSOR_PARRAY_NUM];          /* processor reserved position. Index 0 is
                                                   *used to store the timer heap structure */
     struct TraceBuf *traceBuf;                   /* processor local trace buffer */
+    void *markFlushTls;                          /* ThreadLocalData of bound OS thread */
 };
 
 /**

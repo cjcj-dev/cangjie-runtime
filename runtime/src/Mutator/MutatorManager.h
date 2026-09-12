@@ -10,7 +10,9 @@
 
 #include <bitset>
 #include <list>
+#include <memory>
 #include <mutex>
+#include <unordered_map>
 #include <unordered_set>
 
 #include "Base/AtomicSpinLock.h"
@@ -163,6 +165,19 @@ public:
     // Visit all mutators, hold mutatorListLock firstly
     void VisitAllMutators(MutatorVisitor func);
     void VisitAllMutatorsExceptFinalizer(MutatorVisitor func);
+    bool HandshakeFlushMarkProducers(class MarkDomain* domain);
+    bool AcknowledgeMarkFlushForCurrentThread();
+    bool AcknowledgeMarkFlushForTls(ThreadLocalData* tls);
+    class MarkDomain* MarkFlushDomain() const
+    {
+        return markFlushDomain.load(std::memory_order_acquire);
+    }
+    bool MarkFlushHandshakeActive() const
+    {
+        return markFlushHandshakeActive.load(std::memory_order_acquire) != 0;
+    }
+    void RegisterMarkFlushThread(ThreadLocalData* tls);
+    void UnregisterMarkFlushThread(ThreadLocalData* tls);
 
     // Some functions about stw
     void StopTheWorld(bool syncGCPhase, GCPhase phase);
@@ -393,6 +408,18 @@ private:
     // keep them in the same participant inventory explicitly.
     std::mutex runtimeMutatorRegistryMutex;
     std::unordered_set<Mutator*> runtimeMutators;
+    std::atomic<int> markFlushHandshakeActive = { 0 };
+    std::atomic<class MarkDomain*> markFlushDomain = { nullptr };
+    struct MarkFlushThread {
+        ThreadLocalData* tls = nullptr;
+        int processorState = 0;
+        std::mutex mutex;
+        std::atomic<int> pending = { 0 };
+        std::atomic<int> refs = { 0 };
+        std::atomic<int> dying = { 0 };
+    };
+    std::mutex markFlushThreadMutex;
+    std::unordered_map<ThreadLocalData*, std::unique_ptr<MarkFlushThread>> markFlushThreads;
 
 #if defined(_WIN64) || defined (__APPLE__)
     std::condition_variable mutatorSuspensionCV;

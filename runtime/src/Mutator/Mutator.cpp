@@ -221,6 +221,9 @@ void Mutator::HandleSuspensionRequest()
 {
     for (;;) {
         SetInSaferegion(SAFE_REGION_TRUE);
+        if (MutatorManager::Instance().MarkFlushHandshakeActive()) {
+            (void)MutatorManager::Instance().AcknowledgeMarkFlushForCurrentThread();
+        }
         if (HasSuspensionRequest(SUSPENSION_FOR_GC_PHASE)) {
             TransitionGCPhase(true);
         } else if (HasSuspensionRequest(SUSPENSION_FOR_CPU_PROFILE)) {
@@ -1400,7 +1403,6 @@ void Mutator::ReleaseForeignThread()
 {
     AllocBuffer* buffer = foreignThreadInfo.allocBuffer;
     foreignThreadInfo.allocBuffer = nullptr;
-    markFlushAllocBuffer = nullptr;
     storeBarrierRememberedSet = nullptr;
     if (buffer != nullptr) {
         buffer->Fini();

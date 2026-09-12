@@ -1974,6 +1974,33 @@ unsigned int ScheduleGetProcessorNum(void)
     return processorNum;
 }
 
+void ScheduleVisitProcessors(ScheduleProcessorVisitFunc func, void *arg)
+{
+    if (func == nullptr) {
+        return;
+    }
+    pthread_mutex_lock(&g_scheduleManager.allScheduleListLock);
+    struct Dulink *scheduleNode;
+    DULINK_FOR_EACH_ITEM(scheduleNode, &g_scheduleManager.allScheduleList) {
+        struct Schedule *schedule = DULINK_ENTRY(scheduleNode, struct Schedule, allScheduleDulink);
+        unsigned int n = schedule->schdProcessor.processorNum;
+        struct Processor *group = schedule->schdProcessor.processorGroup;
+        for (unsigned int i = 0; i < n; ++i) {
+            struct Processor *processor = &group[i];
+            func(processor->markFlushTls, static_cast<int>(processor->state.load()), arg);
+        }
+    }
+    pthread_mutex_unlock(&g_scheduleManager.allScheduleListLock);
+}
+
+void ScheduleBindMarkFlushTls(void *tls)
+{
+    struct Processor *processor = ProcessorGetWithCheck();
+    if (processor != nullptr) {
+        processor->markFlushTls = tls;
+    }
+}
+
 /* cjthread trace is open for linux or win. */
 #if defined (MRT_LINUX) || defined (MRT_WINDOWS)
 int ScheduleTraceDlclose(DlHandle dlHandle)
