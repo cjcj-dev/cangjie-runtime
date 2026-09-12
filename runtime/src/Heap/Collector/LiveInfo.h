@@ -103,6 +103,11 @@ struct RegionBitmap {
         return wordCnt.load(std::memory_order_relaxed) == regionSize / kRegionBytesPerWord;
     }
 
+    size_t CoveredRegionSize() const
+    {
+        return wordCnt.load(std::memory_order_relaxed) * kRegionBytesPerWord;
+    }
+
     // Reset the bitmap state without exposing markWords/wordCnt to tests.
     // Keeping this operation on the carrier makes the concurrent invariant
     // independent of the number of words or any future pair packing.

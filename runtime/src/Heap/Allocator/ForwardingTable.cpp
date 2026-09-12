@@ -420,6 +420,9 @@ void ForwardingTable::RetireMembershipAtDispel(MAddress regionStart, size_t regi
         if (page != nullptr && page->IsGhostFromRegion()) {
             page->ClearGhostFromRegionBits();
         }
+        if (page != nullptr) {
+            LiveInfoArena::GetLiveInfoArena().RecycleOwnerBitmaps(page->GetLiveInfo());
+        }
     }
 }
 

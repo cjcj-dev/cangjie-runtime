@@ -875,6 +875,9 @@ bool WCollector::CasInstallResolvedTarget(RefField<>& field, MAddress expected, 
         return true;
     }
     g_minorRefCasFail.fetch_add(1, std::memory_order_relaxed);
+    if (is_load_good(field)) {
+        return true;
+    }
     return true;
 }
 
@@ -2510,12 +2513,14 @@ void WCollector::UpdateRemsetForFields(BaseObject* from, BaseObject* to)
         return;
     }
     to->ForEachRefField([this, &rememberedSet](RefField<>& field) {
-        BaseObject* target = to_object(field.GetTargetObject());
+        const MAddress observedRaw = raw(field.GetFieldValue());
+        RefField<> observed(to_zpointer(observedRaw));
+        BaseObject* target = to_object(observed.GetTargetObject());
         if (target == nullptr || !Heap::IsHeapAddress(target)) {
             return;
         }
         const MAddress fieldAddr = reinterpret_cast<MAddress>(&field);
-        if (Heap::GetHeap().GetCollector().is_load_good(field)) {
+        if (Heap::GetHeap().GetCollector().is_load_good(observed)) {
             RegionInfo* targetRegion = RegionInfo::TryGetRegionInfoAt(reinterpret_cast<MAddress>(target));
             if (targetRegion != nullptr && targetRegion->IsYoungRegion()) {
                 rememberedSet.Record(fieldAddr);
@@ -2528,7 +2533,7 @@ void WCollector::UpdateRemsetForFields(BaseObject* from, BaseObject* to)
             if (winnerRegion != nullptr && winnerRegion->IsYoungRegion()) {
                 rememberedSet.Record(fieldAddr);
             } else {
-                (void)CasInstallResolvedTarget(field, raw(field.GetFieldValue()),
+                (void)CasInstallResolvedTarget(field, observedRaw,
                                                from_object(reinterpret_cast<BaseObject*>(hit)),
                                                HealSite::WCollectorFixRootForwarded, HealNull::Disallow);
             }
