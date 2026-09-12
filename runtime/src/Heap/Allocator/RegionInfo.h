@@ -203,8 +203,6 @@ public:
         return metadata.regionLifeId.load(std::memory_order_acquire);
     }
 
-    bool IsRouteStateLifeCurrent() const { return true; }
-
     template<Generation G>
     uint64_t GetMarkSnapshotEpoch() const
     {
@@ -2976,21 +2974,6 @@ public:
     // candidate next cycle (zRelocationSetSelector.cpp:114-196 rebuilds from
     // the page table; zGeneration.cpp:205-213). Drop the in-cycle publish so
     // Next cycle must not treat last cycle's in-place done as this cycle's done.
-    void ExpireKeptPublish()
-    {
-        if (IsGhostFromRegion()) {
-            DispelGhostFromRegion();
-        } else {
-            // The non-ghost expiry arm is still a forwarding-life boundary.
-            // Seal before resetting the carrier words so an admitted copier
-            // cannot be relabelled as belonging to the next life.
-            InPlaceClaimScope drain(this, MutatorRelocate::Retire::DISPEL_GHOST);
-        }
-        ForwardingTable::ClearPageOwner(this);
-        ClearForwardingFaceReset();
-        ClearCurrentMarkFace();
-    }
-
     ZForwarding* PeekForwardingOwner() const
     {
         return metadata.fwdOwner.load(std::memory_order_acquire);

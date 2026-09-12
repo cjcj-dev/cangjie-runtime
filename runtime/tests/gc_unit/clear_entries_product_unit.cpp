@@ -3701,7 +3701,6 @@ GC_TEST(ForwardingPublicationProduct, CompactedWithoutFwdDoneWaitsInProductSO)
     collector.SetGCPhase(GCPhase::GC_PHASE_FORWARD);
     RelocationReceiptTestAccess::BindCollector(Heap::GetHeap().GetCollectorResources(), &collector);
     LiveInfo* live = PrepareForwardable(fx, region, reinterpret_cast<MAddress>(from));
-    region->MarkForwardingDone();
     GC_EXPECT_FALSE(region->IsForwardingDone());
     RegionSpace& productSpace = reinterpret_cast<RegionSpace&>(Heap::GetHeap().GetAllocator());
     RelocationRequestQueue& queue = productSpace.GetRegionManager().GetRelocationRequestQueue();
