@@ -1008,6 +1008,13 @@ public:
     }
 
 private:
+    // zPageAllocator.cpp:2248-2266: consumed by safe retirement after the
+    // page table no longer publishes the old descriptor.
+    void ReclaimRetiredRegion(RegionInfo* region);
+    void ReclaimRetiredRegionToMarkQuarantine(RegionInfo* region);
+    void ReleaseRetiredRegion(RegionInfo* region);
+    void ReturnRetiredPageMemory(const PageMemory& memory);
+
     BaseObject* ComputeRoute(BaseObject* fromObj, RegionInfo* fromRegionInfo)
     {
         RegionInfo::RetainScope retain(fromRegionInfo);

@@ -12,6 +12,7 @@
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
+#include <functional>
 #include <limits>
 #include <sched.h>
 #include <list>
@@ -1861,6 +1862,62 @@ public:
     static std::vector<UnitSegment> unitSegments;
     static ZGranuleMap<RegionInfo*> pageOwners;
 
+    // zSafeDelete.inline.hpp:46-59 / zArray.inline.hpp:210-246. The ABI
+    // stores descriptors in a fixed array, so defer descriptor reinitialization
+    // and cache hand-back instead of deleting a separately allocated ZPage.
+    static std::mutex pageRetirementMutex;
+    static size_t pageIterationCount;
+    static std::vector<std::function<void()>> deferredPageRetirements;
+
+    class PageIterationScope {
+    public:
+        PageIterationScope()
+        {
+            std::lock_guard<std::mutex> lock(pageRetirementMutex);
+            ++pageIterationCount;
+        }
+
+        ~PageIterationScope()
+        {
+            std::vector<std::function<void()>> retired;
+            {
+                std::lock_guard<std::mutex> lock(pageRetirementMutex);
+                CHECK(pageIterationCount != 0);
+                if (--pageIterationCount == 0) {
+                    retired.swap(deferredPageRetirements);
+                }
+            }
+            // Run existing allocator paths outside the activation lock, as
+            // ZActivatedArray::deactivate_and_apply does.
+            for (auto& retire : retired) {
+                retire();
+            }
+        }
+
+        PageIterationScope(const PageIterationScope&) = delete;
+        PageIterationScope& operator=(const PageIterationScope&) = delete;
+    };
+
+    static void RetirePage(RegionInfo* region, std::function<void()> retire)
+    {
+        {
+            std::lock_guard<std::mutex> lock(pageRetirementMutex);
+            const uintptr_t start = region->GetRegionStart();
+            const size_t size = region->GetRegionSize();
+            zoffset offset;
+            CHECK(pageOwners.offset_for_address(start, &offset));
+            CHECK(pageOwners.get(offset) == region);
+            // zHeap.cpp:275-280 / zPageTable.cpp:59-65: remove the complete
+            // old page while its descriptor still describes every granule.
+            pageOwners.put(offset, size, nullptr);
+            if (pageIterationCount != 0) {
+                deferredPageRetirements.push_back(std::move(retire));
+                return;
+            }
+        }
+        retire();
+    }
+
     static size_t IndexedUnitCount(const std::vector<MemoryRange>& ranges)
     {
         CHECK(UNIT_SIZE != 0 && (UNIT_SIZE & (UNIT_SIZE - 1)) == 0);
@@ -1942,6 +1999,9 @@ public:
 
     static void VisitPageOwners(const std::function<void(RegionInfo*)>& visitor)
     {
+        // zPageTable.cpp:101-113: protect the whole callback lifetime,
+        // including nested iteration and exceptional callback exits.
+        PageIterationScope iteration;
         pageOwners.visit_unique(visitor);
     }
 
@@ -4009,12 +4069,12 @@ private:
         }
     }
 
-    // Retire the previous metadata role before rewriting a page's state, then
-    // publish the initialized owner over every covered granule. Metadata-only
-    // readers retain the role protocol; address readers use the page table.
+    // Reinitialization consumes an already retired descriptor. The allocator
+    // must remove the old page and finish safe retirement before reaching here.
     void InitRegionInfo(size_t nUnit, UnitRole uClass)
     {
         CHECK(ContainsUnitRange(GetRegionStart(), nUnit * UNIT_SIZE));
+        CHECK(TryGetRegionInfoAt(GetRegionStart()) == nullptr);
         CHECK_DETAIL(GetRegionListOwner() == nullptr, "reinitializing a region still owned by a list");
         CHECK_DETAIL(FromPageDetach::FromPageDetachCheck(this, FromPageDetach::Site::INIT_REGION_INFO),
                      "CJRT_FROM_REUSE_GATE bypass reached InitRegionInfo region=%p units=%zu", this, nUnit);
@@ -4085,11 +4145,6 @@ private:
         SetMarkFaceSealed(false);
         __atomic_store_n(&metadata.rawPointerObjectCount, 0, __ATOMIC_SEQ_CST);
         SetUnitRole(uClass);
-        zoffset offset;
-        CHECK(pageOwners.offset_for_address(GetRegionStart(), &offset));
-        // zPageTable.cpp:52-77: allocated pages publish their owner; handing
-        // memory back to the cache removes that owner over the same extent.
-        pageOwners.put(offset, nUnit * UNIT_SIZE, uClass == UnitRole::FREE_UNITS ? nullptr : this);
     }
 
     void InitRegion(size_t nUnit, UnitRole uClass)
@@ -4106,6 +4161,12 @@ private:
             array[i].InitSubordinateUnit(this);
         }
         AssertGhostClearedAfterReuse(nUnit);
+        // zHeap.cpp:250-254 / zPageTable.cpp:44-54: publish only after the
+        // entire descriptor (including its subordinate ABI units) is ready.
+        zoffset offset;
+        CHECK(pageOwners.offset_for_address(GetRegionStart(), &offset));
+        CHECK(uClass != UnitRole::FREE_UNITS);
+        pageOwners.put(offset, nUnit * UNIT_SIZE, this);
     }
 
     static constexpr uint32_t NULLPTR_IDX = UnitInfo::INVALID_IDX;

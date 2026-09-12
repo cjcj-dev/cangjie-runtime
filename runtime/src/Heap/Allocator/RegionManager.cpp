@@ -106,6 +106,9 @@ uintptr_t RegionInfo::UnitInfo::heapStartAddress = 0;
 MemMap* RegionInfo::UnitInfo::memoryOwner = nullptr;
 std::vector<RegionInfo::UnitSegment> RegionInfo::unitSegments;
 ZGranuleMap<RegionInfo*> RegionInfo::pageOwners;
+std::mutex RegionInfo::pageRetirementMutex;
+size_t RegionInfo::pageIterationCount = 0;
+std::vector<std::function<void()>> RegionInfo::deferredPageRetirements;
 
 std::atomic<size_t> RegionInfo::youngRegionCount { 0 };
 std::atomic<size_t> RegionInfo::dispelGhostCount { 0 };
@@ -1029,6 +1032,11 @@ void RegionManager::ReclaimRegion(RegionInfo* region)
         freeRegionManager.AddDetachQuarantineRegion(region);
         return;
     }
+    RegionInfo::RetirePage(region, [this, region] { ReclaimRetiredRegion(region); });
+}
+
+void RegionManager::ReclaimRetiredRegion(RegionInfo* region)
+{
     // routedest: census, not a guard. The graft asked for CHECK(!IsRouteDestHeld()) here to
     // convert "I traced the paths" into a machine check, but none of the designs proved the
     // caller enumeration and five of the six ReclaimRegion callers have already detached the
@@ -1094,6 +1102,22 @@ bool RegionManager::StallAllocation(AllocationStallRequest& request, bool reques
 }
 
 void RegionManager::ReturnPageMemory(const PageMemory& memory)
+{
+    RegionInfo* region = RegionInfo::TryGetRegionInfoAt(RegionInfo::GetUnitAddress(memory.index));
+    if (region != nullptr) {
+        CHECK(region->GetUnitIdx() == memory.index && region->GetUnitCount() == memory.units);
+        RegionInfo::RetirePage(region, [this, region, memory] {
+            region->InitFreeUnits();
+            ReturnRetiredPageMemory(memory);
+        });
+        return;
+    }
+    // An allocation cancelled before materialization has no page descriptor.
+    // Reclaim/Release also arrive here after completing descriptor retirement.
+    ReturnRetiredPageMemory(memory);
+}
+
+void RegionManager::ReturnRetiredPageMemory(const PageMemory& memory)
 {
     // zPageAllocator.cpp:1999 / 2150: hand back memory, decrease used and
     // satisfy the FIFO in one allocator-owner critical section. Enter the
@@ -1173,6 +1197,11 @@ void RegionManager::ReclaimRegionToMarkQuarantine(RegionInfo* region)
         freeRegionManager.AddDetachQuarantineRegion(region);
         return;
     }
+    RegionInfo::RetirePage(region, [this, region] { ReclaimRetiredRegionToMarkQuarantine(region); });
+}
+
+void RegionManager::ReclaimRetiredRegionToMarkQuarantine(RegionInfo* region)
+{
     // routedest: census only, see ReclaimRegion.
     size_t num = region->GetUnitCount();
     size_t unitIndex = region->GetUnitIdx();
@@ -1200,12 +1229,18 @@ size_t RegionManager::ReleaseRegion(RegionInfo* region)
         freeRegionManager.AddDetachQuarantineRegion(region, true);
         return heldBytes;
     }
+    const size_t size = region->GetRegionSize();
+    RegionInfo::RetirePage(region, [this, region] { ReleaseRetiredRegion(region); });
+    return size;
+}
+
+void RegionManager::ReleaseRetiredRegion(RegionInfo* region)
+{
     // routedest: census only, see ReclaimRegion.
 
     // holdercapture: large regions above the release threshold never reach CollectRegion,
     // so the snapshot has to be taken on this path too or the face is lost unrecorded.
 
-    size_t res = region->GetRegionSize();
     size_t num = region->GetUnitCount();
     size_t unitIndex = region->GetUnitIdx();
     // Large regions above the release threshold bypass CollectRegion. Invalidate
@@ -1226,7 +1261,6 @@ size_t RegionManager::ReleaseRegion(RegionInfo* region)
         RegionInfo::ReleaseUnits(unitIndex, num);
     }
     ReturnPageMemory(PageMemory{ unitIndex, num, 0, false });
-    return res;
 }
 
 void RegionManager::ReassembleFromSpace()
