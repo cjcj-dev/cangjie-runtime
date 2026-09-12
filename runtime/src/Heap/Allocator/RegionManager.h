@@ -776,7 +776,7 @@ public:
     // routedest: walk the same lists and drop routeDestHold for one route generation.
     void ClearRouteDestHoldFlags();
 
-    bool RouteOrCompactRegionImpl(RegionInfo* region);
+    bool RelocateClaimedPage(RegionInfo* region);
 
     static bool RouteIsPublished(BaseObject* fromObj, RegionInfo* fromRegionInfo)
     {
@@ -835,7 +835,7 @@ public:
             return !owner->in_place();
         }
         if (owner && ZForwardingLife::CurrentPageWork() == owner.get()) {
-            if (RouteOrCompactRegionImpl(fromRegionInfo)) {
+            if (RelocateClaimedPage(fromRegionInfo)) {
                 return true;
             }
             owner->set_in_place();
@@ -850,7 +850,7 @@ public:
                 return !owner->in_place();
             }
             if (owner && ZForwardingLife::CurrentPageWork() == owner.get()) {
-                if (RouteOrCompactRegionImpl(fromRegionInfo)) {
+                if (RelocateClaimedPage(fromRegionInfo)) {
                     return true;
                 }
                 owner->set_in_place();

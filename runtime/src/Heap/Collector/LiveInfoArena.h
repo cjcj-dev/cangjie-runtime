@@ -120,8 +120,6 @@ class LiveInfoArena {
             }
         }
 
-        void UnbindPreviousLiveInfo();
-
         uintptr_t GetStartAddress() const { return startAddress; }
         size_t GetSize() const { return size; }
         uintptr_t GetZoneStart(Zone::ZoneType type) const { return allocZone[type].zoneStartAddress; }
@@ -156,12 +154,10 @@ public:
 
     void InitializeForwardData();
 
-    void ClearPreviousForwardData();
-
     RegionBitmap* AllocateRegionBitmap(size_t regionSize)
     {
-        uintptr_t addr = liveInfoData[currentTagID].Allocate(ForwardDataSpace::Zone::ZoneType::BIT_MAP,
-                                                             RegionBitmap::GetRegionBitmapSize(regionSize));
+        uintptr_t addr = liveInfoData.Allocate(ForwardDataSpace::Zone::ZoneType::BIT_MAP,
+                                               RegionBitmap::GetRegionBitmapSize(regionSize));
         RegionBitmap* bitmap = reinterpret_cast<RegionBitmap*>(addr);
         CHECK(bitmap != nullptr);
         new (bitmap) RegionBitmap(regionSize);
@@ -171,19 +167,8 @@ public:
     LiveInfo* AllocateLiveInfo()
     {
         return reinterpret_cast<LiveInfo*>(
-            liveInfoData[currentTagID].Allocate(ForwardDataSpace::Zone::ZoneType::LIVE_INFO, sizeof(LiveInfo)));
+            liveInfoData.Allocate(ForwardDataSpace::Zone::ZoneType::LIVE_INFO, sizeof(LiveInfo)));
     }
-
-    uint16_t GetPreviousTagID() const
-    {
-        return static_cast<uint16_t>((currentTagID + TAG_ID_COUNT - 1) % TAG_ID_COUNT);
-    }
-
-    void SetTagID(uint16_t id) { currentTagID = id; }
-
-public:
-    // Recycle the slot that just left the one-generation window (same timing as N=2).
-    void UnbindPreviousLiveInfo() { liveInfoData[GetPreviousTagID()].UnbindPreviousLiveInfo(); }
 
 private:
     size_t GetLiveInfoDataSize(size_t heapSize)
@@ -199,11 +184,10 @@ private:
         return unitCnt * sizeof(LiveInfo) +
             unitCnt * (sizeof(RegionBitmap) + (REGION_UNIT_SIZE / bitMarksSize)) * bitmapNum;
     }
-    ForwardDataSpace liveInfoData[TAG_ID_COUNT];
+    ForwardDataSpace liveInfoData;
     size_t regionUnitCount = 0;
     uintptr_t forwardDataStart = 0;
     size_t forwardDataSize = 0;
-    uint16_t currentTagID = 0; // propagate from collector.
 };
 } // namespace MapleRuntime
 #endif // MRT_LIVE_INFO_ARENA_H

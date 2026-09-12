@@ -151,8 +151,6 @@ public:
     {
         DLOG(FORWARD, "reset fwd table");
         theSpace.PrepareFromSpace<G>();
-
-        LiveInfoArena::GetLiveInfoArena().ClearPreviousForwardData();
     }
 
     RegionSpace& theSpace;
@@ -503,13 +501,8 @@ public:
                 return published;
             }
         }
-        // ② retain + copy (zRelocate.cpp:393-400). nullptr = retain refused or copy missed.
-        // The ZGC slow path has one relocate_object invocation per visitor.
-        // TryMutatorRelocate already owns the retain token when it calls back
-        // into ForwardObjectImpl; re-entering it here would recursively retain
-        // the same page until the token is refused and lose the first-visitor
-        // publication opportunity (zBarrier.inline.hpp:294-343).
-        BaseObject* self = ZForwardingLife::InMutatorRelocate() ? nullptr : TryMutatorRelocate(obj, forwarding);
+        // ② retain + copy (zRelocate.cpp:393-400). inner does allocate→copy→insert.
+        BaseObject* self = TryMutatorRelocate(obj, forwarding);
         if (self != nullptr) {
             return self;
         }
