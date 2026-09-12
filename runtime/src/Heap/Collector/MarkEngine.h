@@ -10,6 +10,7 @@
 #include <atomic>
 #include <condition_variable>
 #include <cstddef>
+#include <cstdint>
 #include <functional>
 #include <memory>
 #include <mutex>
@@ -46,16 +47,19 @@ private:
     std::condition_variable condition;
 };
 
+class MarkDomain;
+
 class MarkEngine {
 public:
     enum class Result { Completed, Partial, Aborted };
 
     using Process = std::function<void(const MarkStackEntry&)>;
 
-    static Result FollowWork(MarkContext& context, MarkingSMR& smr, MarkStripeSet& stripes,
-                             MarkTerminate& terminate, size_t workerId, bool partial,
-                             const Process& process, std::atomic<size_t>* stealSuccess = nullptr,
-                             std::atomic<size_t>* stealFailure = nullptr, std::atomic<bool>* abort = nullptr);
+     static Result FollowWork(MarkContext& context, MarkingSMR& smr, MarkStripeSet& stripes,
+                              MarkTerminate& terminate, size_t workerId, bool partial,
+                              const Process& process, std::atomic<size_t>* stealSuccess = nullptr,
+                              std::atomic<size_t>* stealFailure = nullptr, std::atomic<bool>* abort = nullptr,
+                              MarkDomain* domain = nullptr);
 };
 
 // Per-generation mark ownership (zMark.cpp:80, zGeneration.hpp:70, zThreadLocalData.hpp:43).
@@ -65,6 +69,9 @@ public:
     void PrepareWork(size_t nworkers);
     void ResizeWorkers(size_t nworkers);
     void FinishWork();
+    void BindResizeHint(std::atomic<uint32_t>* hint) { resizeHint = hint; }
+    bool PollStop();
+    size_t HintedWorkers() const;
     MarkStripeSet& Stripes() { return stripes; }
     MarkTerminate& Terminate() { return terminate; }
     MarkingSMR& Smr() { return *smr; }
@@ -84,6 +91,7 @@ private:
     std::unique_ptr<MarkingSMR> smr;
     std::vector<std::unique_ptr<MarkThreadLocalStacks>> stacks;
     std::atomic<bool> abort{ false };
+    std::atomic<uint32_t>* resizeHint = nullptr;
 };
 
 } // namespace MapleRuntime

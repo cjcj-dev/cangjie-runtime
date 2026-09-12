@@ -249,3 +249,18 @@ GC_TEST(MarkPort203Engine, CrowdedRestoresNStripes)
     GC_EXPECT_TRUE(stripes.TrySetNStripes(1, 2));
     GC_EXPECT_EQ(stripes.NStripes(), 2u);
 }
+
+GC_TEST(MarkPort203Engine, ResizeHintAbortsFollowWork)
+{
+    std::atomic<uint32_t> hint{ 1 };
+    MarkDomain domain(4, VerifyMarkingStacks::MarkingGeneration::YOUNG);
+    domain.BindResizeHint(&hint);
+    domain.PrepareWork(1);
+    GC_EXPECT_TRUE(!domain.PollStop());
+    hint.store(2, std::memory_order_relaxed);
+    GC_EXPECT_TRUE(domain.PollStop());
+    GC_EXPECT_EQ(domain.HintedWorkers(), 2u);
+    domain.ResizeWorkers(domain.HintedWorkers());
+    GC_EXPECT_EQ(domain.NWorkers(), 2u);
+    GC_EXPECT_TRUE(!domain.PollStop());
+}

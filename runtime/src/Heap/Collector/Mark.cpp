@@ -1258,7 +1258,8 @@ public:
                                          shared.outputs[workerSlot]->touched = true;
                                          ProcessObject(entry, nMarked);
                                      },
-                                     &shared.stealSuccess, &shared.stealFailure, &shared.domain->Abort());
+                                     &shared.stealSuccess, &shared.stealFailure, &shared.domain->Abort(),
+                                     shared.domain);
         shared.outputs[workerSlot]->objectsMarked += nMarked;
     }
 
@@ -1441,6 +1442,7 @@ void WCollector::TraceYoungClosureStriped(WorkStack& workStack, bool fullYoungSc
     if (youngMarkDomain == nullptr) {
         youngMarkDomain = std::make_unique<MarkDomain>(kMarkStripeMax, VerifyMarkingStacks::MarkingGeneration::YOUNG);
     }
+    youngMarkDomain->BindResizeHint(&g_gcTriggerYoungWorkers);
     youngMarkDomain->PrepareWork(static_cast<size_t>(workers));
     const size_t stripeCount = youngMarkDomain->Stripes().Count();
     YoungStripedShared shared;
@@ -1516,7 +1518,9 @@ void WCollector::TraceYoungClosureStriped(WorkStack& workStack, bool fullYoungSc
         if (partial || youngMarkDomain->Terminate().Terminated()) {
             break;
         }
-        const size_t nextWorkers = shared.workerCount;
+        const size_t nextWorkers = youngMarkDomain->HintedWorkers();
+        shared.workerCount = nextWorkers;
+        workers = static_cast<int32_t>(nextWorkers);
         youngMarkDomain->ResizeWorkers(nextWorkers);
         if (threadPool != nullptr && workers > 1) {
             for (int32_t worker = 1; worker < workers; ++worker) {

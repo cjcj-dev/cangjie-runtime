@@ -562,7 +562,7 @@ protected:
     void FindUselessExternObjects();
 
 private:
-    size_t RunMajorStripeMark(WorkStack& workStack, GCThreadPool* threadPool, bool parallel);
+    size_t RunMajorStripeMark(WorkStack& workStack, GCThreadPool* threadPool, bool parallel, bool partial = false);
     void ConcurrentReMark(WorkStack& remarkStack, bool parallel);
     void EnumMutatorRoot(ObjectPtr& obj, RootSet& rootSet) const;
     void EnumConcurrencyModelRoots(RootSet& rootSet) const;

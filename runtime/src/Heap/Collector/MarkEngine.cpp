@@ -133,7 +133,7 @@ static bool StealGlobalRound(MarkContext& context, MarkingSMR& smr, MarkStripeSe
 }
 
 static bool RebalanceWork(MarkContext& context, MarkStripeSet& stripes, MarkTerminate& terminate, size_t workerId,
-                          std::atomic<bool>* abort)
+                          std::atomic<bool>* abort, MarkDomain* domain)
 {
     const size_t assumed = context.NStripes();
     const size_t nstripes = stripes.NStripes();
@@ -154,11 +154,14 @@ static bool RebalanceWork(MarkContext& context, MarkStripeSet& stripes, MarkTerm
         (void)context.Stacks().Flush(stripes, false);
         terminate.Wake();
     }
+    if (domain != nullptr && domain->PollStop()) {
+        return true;
+    }
     return abort != nullptr && abort->load(std::memory_order_relaxed);
 }
 
 static bool Drain(MarkContext& context, MarkingSMR& smr, MarkStripeSet& stripes, MarkTerminate& terminate,
-                  size_t workerId, const MarkEngine::Process& process, std::atomic<bool>* abort)
+                  size_t workerId, const MarkEngine::Process& process, std::atomic<bool>* abort, MarkDomain* domain)
 {
     MarkStackEntry entry;
     size_t processed = 0;
@@ -166,7 +169,7 @@ static bool Drain(MarkContext& context, MarkingSMR& smr, MarkStripeSet& stripes,
     context.SetNStripes(stripes.NStripes());
     while (context.Stacks().Pop(smr, workerId, stripes, context.StripeId(), entry)) {
         process(entry);
-        if ((processed++ & 31) == 0 && RebalanceWork(context, stripes, terminate, workerId, abort)) {
+        if ((processed++ & 31) == 0 && RebalanceWork(context, stripes, terminate, workerId, abort, domain)) {
             return false;
         }
     }
@@ -176,10 +179,11 @@ static bool Drain(MarkContext& context, MarkingSMR& smr, MarkStripeSet& stripes,
 MarkEngine::Result MarkEngine::FollowWork(MarkContext& context, MarkingSMR& smr, MarkStripeSet& stripes,
                                           MarkTerminate& terminate, size_t workerId, bool partial,
                                           const Process& process, std::atomic<size_t>* stealSuccess,
-                                          std::atomic<size_t>* stealFailure, std::atomic<bool>* abort)
+                                          std::atomic<size_t>* stealFailure, std::atomic<bool>* abort,
+                                          MarkDomain* domain)
 {
     for (;;) {
-        if (!Drain(context, smr, stripes, terminate, workerId, process, abort)) {
+        if (!Drain(context, smr, stripes, terminate, workerId, process, abort, domain)) {
             terminate.Leave();
             return Result::Aborted;
         }
@@ -235,5 +239,30 @@ void MarkDomain::ResizeWorkers(size_t workers)
 }
 
 void MarkDomain::FinishWork() {}
+
+bool MarkDomain::PollStop()
+{
+    if (abort.load(std::memory_order_relaxed)) {
+        return true;
+    }
+    if (resizeHint == nullptr) {
+        return false;
+    }
+    const uint32_t hinted = resizeHint->load(std::memory_order_relaxed);
+    if (hinted >= 1 && hinted != nworkers) {
+        abort.store(true, std::memory_order_relaxed);
+        return true;
+    }
+    return false;
+}
+
+size_t MarkDomain::HintedWorkers() const
+{
+    if (resizeHint == nullptr) {
+        return nworkers;
+    }
+    const uint32_t hinted = resizeHint->load(std::memory_order_relaxed);
+    return hinted >= 1 ? hinted : nworkers;
+}
 
 } // namespace MapleRuntime

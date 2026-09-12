@@ -16,6 +16,7 @@
 #include "Concurrency/Concurrency.h"
 #include "Heap/Allocator/AllocBuffer.h"
 #include "Heap/Barrier/StoreBarrierBuffer.h"
+#include "Heap/Collector/GcTriggerFlags.h"
 #include "Heap/Collector/MarkPartialArray.h"
 #include "Heap/Verify/NwDropAudit.h"
 #include "Heap/Verify/MarkCompleteVerify.h"
@@ -346,7 +347,7 @@ public:
                                      [this, &nNewlyMarked, &staging](const MarkStackEntry& entry) {
                                          ProcessEntry(entry, nNewlyMarked, staging);
                                      },
-                                     nullptr, nullptr, &shared.domain->Abort());
+                                     nullptr, nullptr, &shared.domain->Abort(), shared.domain);
         shared.newlyMarked.fetch_add(nNewlyMarked, std::memory_order_relaxed);
     }
 
@@ -739,7 +740,8 @@ void TracingCollector::AddExportObjectsTracingWork(RootSet &exportRoots)
     threadPool->AddWork(new (std::nothrow) ExportRootsTracingWork(*this, std::move(exportRoots)));
 }
 
-size_t TracingCollector::RunMajorStripeMark(WorkStack& workStack, GCThreadPool* threadPool, bool parallel)
+size_t TracingCollector::RunMajorStripeMark(WorkStack& workStack, GCThreadPool* threadPool, bool parallel,
+                                            bool partial)
 {
     size_t workers = 1;
     if (parallel && threadPool != nullptr) {
@@ -749,10 +751,12 @@ size_t TracingCollector::RunMajorStripeMark(WorkStack& workStack, GCThreadPool* 
     if (majorMarkDomain == nullptr) {
         majorMarkDomain = std::make_unique<MarkDomain>(64, VerifyMarkingStacks::MarkingGeneration::MAJOR);
     }
+    majorMarkDomain->BindResizeHint(&g_gcTriggerOldWorkers);
     majorMarkDomain->PrepareWork(workers);
     MajorMarkShared shared;
     shared.collector = this;
     shared.workerCount = workers;
+    shared.partial = partial;
     shared.domain = majorMarkDomain.get();
 
     MarkThreadLocalStacks seed(shared.Stripes().Count());
@@ -780,14 +784,18 @@ size_t TracingCollector::RunMajorStripeMark(WorkStack& workStack, GCThreadPool* 
         } else if (threadPool != nullptr) {
             threadPool->DrainWorkQueue();
         }
-        if (majorMarkDomain->Terminate().Terminated()) {
+        if (partial || majorMarkDomain->Terminate().Terminated()) {
             break;
         }
+        workers = majorMarkDomain->HintedWorkers();
+        shared.workerCount = workers;
         majorMarkDomain->ResizeWorkers(workers);
     }
     majorMarkDomain->FinishWork();
-    CHECK_DETAIL(shared.Terminate().Terminated(),
-                 "major striped closure returned without coordinated worker termination");
+    if (!partial) {
+        CHECK_DETAIL(shared.Terminate().Terminated(),
+                     "major striped closure returned without coordinated worker termination");
+    }
     return shared.newlyMarked.load(std::memory_order_relaxed);
 }
 
@@ -973,8 +981,10 @@ bool TracingCollector::MarkSatbBuffer(WorkStack& workStack)
         }
         if (LIKELY(!workStack.empty())) {
             GCThreadPool* threadPool = GetThreadPool();
-            WorkStack tmp;
-            TracingImpl(workStack, tmp, (workStack.size() > MAX_MARKING_WORK_SIZE) || (threadPool->GetWorkCount() > 0));
+            const bool parallel =
+                (workStack.size() > MAX_MARKING_WORK_SIZE) || (threadPool->GetWorkCount() > 0);
+            markedObjectCount.fetch_add(RunMajorStripeMark(workStack, threadPool, parallel, true),
+                                        std::memory_order_relaxed);
         }
         visitSatbObj();
         if (!workStack.empty()) {
