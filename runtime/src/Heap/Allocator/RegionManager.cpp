@@ -23,6 +23,7 @@
 #include "Base/LogFile.h"
 #include "Base/TimeUtils.h"
 #include "Collector/Collector.h"
+#include "Collector/ZForwarding.h"
 #include "Collector/CollectorResources.h"
 #include "Collector/CopyCollector.h"
 #include "Collector/GcTrigger.h"
@@ -271,149 +272,7 @@ void RegionInfo::EnsureOneseqAtexit()
 std::mutex RegionInfo::youngRegionFlagMutex;
 std::atomic<size_t> g_promotedCrossGenEdgeCount { 0 };
 
-// promotegap: offset histogram for promote re-registration (MRT_GCV2_PROMOTEGAP_PROBE=1).
 namespace {
-constexpr size_t kPromoteGapOffBuckets = 64;
-std::atomic<uint64_t> g_pgInplaceSeen { 0 };
-std::atomic<uint64_t> g_pgInplaceRec { 0 };
-std::atomic<uint64_t> g_pgInplaceNode { 0 };
-std::atomic<uint64_t> g_pgInplaceNode10Seen { 0 };
-std::atomic<uint64_t> g_pgInplaceNode10Rec { 0 };
-std::atomic<uint64_t> g_pgInplaceNode10SkipOldT { 0 };
-std::atomic<uint64_t> g_pgInplaceNode10SkipNull { 0 };
-std::atomic<uint64_t> g_pgFwdSeen { 0 };
-std::atomic<uint64_t> g_pgFwdRec { 0 };
-std::atomic<uint64_t> g_pgFwdNode { 0 };
-std::atomic<uint64_t> g_pgFwdNode10Seen { 0 };
-std::atomic<uint64_t> g_pgFwdNode10Rec { 0 };
-std::atomic<uint64_t> g_pgFwdNode10SkipOldT { 0 };
-std::atomic<uint64_t> g_pgFwdNode10SkipNull { 0 };
-std::atomic<uint64_t> g_pgOffInplace[kPromoteGapOffBuckets] {};
-std::atomic<uint64_t> g_pgOffFwd[kPromoteGapOffBuckets] {};
-std::atomic<uint64_t> g_pgDumpSeq { 0 };
-
-bool PromoteGapProbeOn()
-{
-    static const bool on = []() {
-        return DiagGate::LegacyOrToken("MRT_GCV2_PROMOTEGAP_PROBE", "promote") ||
-            DiagGate::LegacyOrToken("MRT_GCV2_PROMOTEGAP_PROBE", "promotegap");
-    }();
-    return on;
-}
-
-bool IsDefaultNode(BaseObject* object)
-{
-    if (object == nullptr) {
-        return false;
-    }
-    TypeInfo* ti = object->GetTypeInfo();
-    if (ti == nullptr) {
-        return false;
-    }
-    const char* name = ti->GetName();
-    return name != nullptr && std::strcmp(name, "default:Node") == 0;
-}
-
-void NotePromoteGapField(BaseObject* object, RefField<>& field, bool recorded, bool fwdPath)
-{
-    if (!PromoteGapProbeOn() || object == nullptr) {
-        return;
-    }
-    MAddress base = reinterpret_cast<MAddress>(object);
-    MAddress slot = reinterpret_cast<MAddress>(&field);
-    if (slot < base) {
-        return;
-    }
-    size_t off = static_cast<size_t>(slot - base);
-    if (fwdPath) {
-        g_pgFwdSeen.fetch_add(1, std::memory_order_relaxed);
-        if (recorded) {
-            g_pgFwdRec.fetch_add(1, std::memory_order_relaxed);
-        }
-        if (off < kPromoteGapOffBuckets) {
-            g_pgOffFwd[off].fetch_add(1, std::memory_order_relaxed);
-        }
-    } else {
-        g_pgInplaceSeen.fetch_add(1, std::memory_order_relaxed);
-        if (recorded) {
-            g_pgInplaceRec.fetch_add(1, std::memory_order_relaxed);
-        }
-        if (off < kPromoteGapOffBuckets) {
-            g_pgOffInplace[off].fetch_add(1, std::memory_order_relaxed);
-        }
-    }
-    if (!IsDefaultNode(object)) {
-        return;
-    }
-    if (fwdPath) {
-        g_pgFwdNode.fetch_add(1, std::memory_order_relaxed);
-    } else {
-        g_pgInplaceNode.fetch_add(1, std::memory_order_relaxed);
-    }
-    if (off != 0x10) {
-        return;
-    }
-    BaseObject* target = to_object(field.GetTargetObject());
-    if (fwdPath) {
-        g_pgFwdNode10Seen.fetch_add(1, std::memory_order_relaxed);
-        if (recorded) {
-            g_pgFwdNode10Rec.fetch_add(1, std::memory_order_relaxed);
-        } else if (target == nullptr || !Heap::IsHeapAddress(target)) {
-            g_pgFwdNode10SkipNull.fetch_add(1, std::memory_order_relaxed);
-        } else {
-            g_pgFwdNode10SkipOldT.fetch_add(1, std::memory_order_relaxed);
-        }
-    } else {
-        g_pgInplaceNode10Seen.fetch_add(1, std::memory_order_relaxed);
-        if (recorded) {
-            g_pgInplaceNode10Rec.fetch_add(1, std::memory_order_relaxed);
-        } else if (target == nullptr || !Heap::IsHeapAddress(target)) {
-            g_pgInplaceNode10SkipNull.fetch_add(1, std::memory_order_relaxed);
-        } else {
-            g_pgInplaceNode10SkipOldT.fetch_add(1, std::memory_order_relaxed);
-        }
-    }
-}
-
-void DumpPromoteGapProbe(const char* tag)
-{
-    if (!PromoteGapProbeOn()) {
-        return;
-    }
-    uint64_t seq = g_pgDumpSeq.fetch_add(1, std::memory_order_relaxed) + 1;
-    VLOG(REPORT,
-         "[PROMOTEGAP][%s] seq=%llu inplace seen=%llu rec=%llu node=%llu "
-         "node10seen=%llu node10rec=%llu node10skipOldT=%llu node10skipNull=%llu | "
-         "fwd seen=%llu rec=%llu node=%llu node10seen=%llu node10rec=%llu "
-         "node10skipOldT=%llu node10skipNull=%llu",
-         tag, static_cast<unsigned long long>(seq),
-         static_cast<unsigned long long>(g_pgInplaceSeen.load(std::memory_order_relaxed)),
-         static_cast<unsigned long long>(g_pgInplaceRec.load(std::memory_order_relaxed)),
-         static_cast<unsigned long long>(g_pgInplaceNode.load(std::memory_order_relaxed)),
-         static_cast<unsigned long long>(g_pgInplaceNode10Seen.load(std::memory_order_relaxed)),
-         static_cast<unsigned long long>(g_pgInplaceNode10Rec.load(std::memory_order_relaxed)),
-         static_cast<unsigned long long>(g_pgInplaceNode10SkipOldT.load(std::memory_order_relaxed)),
-         static_cast<unsigned long long>(g_pgInplaceNode10SkipNull.load(std::memory_order_relaxed)),
-         static_cast<unsigned long long>(g_pgFwdSeen.load(std::memory_order_relaxed)),
-         static_cast<unsigned long long>(g_pgFwdRec.load(std::memory_order_relaxed)),
-         static_cast<unsigned long long>(g_pgFwdNode.load(std::memory_order_relaxed)),
-         static_cast<unsigned long long>(g_pgFwdNode10Seen.load(std::memory_order_relaxed)),
-         static_cast<unsigned long long>(g_pgFwdNode10Rec.load(std::memory_order_relaxed)),
-         static_cast<unsigned long long>(g_pgFwdNode10SkipOldT.load(std::memory_order_relaxed)),
-         static_cast<unsigned long long>(g_pgFwdNode10SkipNull.load(std::memory_order_relaxed)));
-    for (size_t off = 0; off < kPromoteGapOffBuckets; ++off) {
-        uint64_t a = g_pgOffInplace[off].load(std::memory_order_relaxed);
-        uint64_t b = g_pgOffFwd[off].load(std::memory_order_relaxed);
-        if (a == 0 && b == 0) {
-            continue;
-        }
-        VLOG(REPORT,
-             "[PROMOTEGAP][OFF] seq=%llu offset=0x%zx inplace=%llu fwd=%llu",
-             static_cast<unsigned long long>(seq), off,
-             static_cast<unsigned long long>(a), static_cast<unsigned long long>(b));
-    }
-}
-
 BaseObject* ScanFieldHealedTarget(Collector& collector, RefField<>& field)
 {
     const ForwardingProvenance provenance{ ForwardingHolderKind::Remset, nullptr, &field };
@@ -449,22 +308,13 @@ size_t RegionManager::RecordPromotedCrossGenEdges(RegionInfo* region)
             BaseObject* target = ScanFieldHealedTarget(Heap::GetHeap().GetCollector(), field);
             MAddress slot = reinterpret_cast<MAddress>(&field);
             if (target == nullptr || !Heap::IsHeapAddress(target)) {
-                NotePromoteGapField(object, field, false, false);
-
                 return;
             }
             RegionInfo* targetRegion = RegionInfo::GetRegionInfoAt(reinterpret_cast<MAddress>(target));
             if (targetRegion != nullptr && targetRegion->IsYoungRegion()) {
                 rememberedSet.Record(slot);
                 ++recorded;
-                // promodomain dual-run: old product edge set for bidirectional reconcile.
                 PromotedRegionDomain::NoteOldProductRecord(slot);
-
-                NotePromoteGapField(object, field, true, false);
-
-            } else {
-                NotePromoteGapField(object, field, false, false);
-
             }
         });
     };
@@ -478,9 +328,7 @@ size_t RegionManager::RecordPromotedCrossGenEdges(RegionInfo* region)
 
 size_t RegionManager::ConsumePromotedCrossGenEdgeCount()
 {
-    size_t n = g_promotedCrossGenEdgeCount.exchange(0, std::memory_order_relaxed);
-    DumpPromoteGapProbe("consume");
-    return n;
+    return g_promotedCrossGenEdgeCount.exchange(0, std::memory_order_relaxed);
 }
 
 size_t RegionManager::RecordPinnedCrossGenEdges()
@@ -3891,20 +3739,12 @@ void RegionManager::ForwardRegion(RegionInfo* region)
                     BaseObject* target = ScanFieldHealedTarget(collector, field);
                     MAddress slot = reinterpret_cast<MAddress>(&field);
                     if (target == nullptr || !Heap::IsHeapAddress(target)) {
-                        NotePromoteGapField(toObj, field, false, true);
-
                         return;
                     }
                     RegionInfo* targetRegion = RegionInfo::GetRegionInfoAt(reinterpret_cast<MAddress>(target));
                     if (targetRegion != nullptr && targetRegion->IsYoungRegion()) {
                         rememberedSet.Record(slot);
                         ++promotedRecords;
-
-                        NotePromoteGapField(toObj, field, true, true);
-
-                    } else {
-                        NotePromoteGapField(toObj, field, false, true);
-
                     }
                 });
                 }
@@ -3915,7 +3755,9 @@ void RegionManager::ForwardRegion(RegionInfo* region)
                 size_t sz = RegionSpace::GetAllocSize(*obj);
                 MAddress fromBase = reinterpret_cast<MAddress>(obj);
                 MAddress toBase = reinterpret_cast<MAddress>(toObj);
-                size_t moved = rememberedSet.TransferObjectSlots(fromBase, toBase, sz);
+                ZForwarding* forwarding = ForwardingTable::GetCovering(fromBase);
+                const bool youngMarking = Heap::GetHeap().GetGCPhase() == GCPhase::GC_PHASE_TRACE;
+                size_t moved = rememberedSet.TransferObjectSlots(fromBase, toBase, sz, forwarding, youngMarking);
                 recordedOnToForOld += moved;
 
                 }
@@ -3923,6 +3765,11 @@ void RegionManager::ForwardRegion(RegionInfo* region)
             // tipnull arm R: receipt = object FORWARDED (Copy wrote tip), not soft-keep from.
             return obj->IsForwarded();
         });
+    if (!youngRegion) {
+        if (ZForwarding* forwarding = ForwardingTable::GetCovering(region->GetRegionStart())) {
+            forwarding->relocated_remembered_fields_after_relocate();
+        }
+    }
 
     // tipnull v5 full coverage: FORWARDED only if every liveInfo0 *live bit* is covered by
     // a size-walk start that is object-FORWARDED (Copy wrote tip). Prior allSurvivorsForwarded

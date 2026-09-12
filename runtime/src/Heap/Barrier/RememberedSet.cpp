@@ -18,6 +18,7 @@
 
 #include "Base/Log.h"
 #include "Base/LogFile.h"
+#include "Heap/Collector/ZForwarding.h"
 #include "Heap/Verify/ProbeReadRouteDiag.h"
 
 namespace MapleRuntime {
@@ -203,11 +204,10 @@ size_t RememberedSet::MoveInPlaceSlots(const std::vector<InPlaceSlot>& taken, MA
     return moved;
 }
 
-size_t RememberedSet::TransferObjectSlots(MAddress fromBase, MAddress toBase, size_t size)
+size_t RememberedSet::TransferObjectSlots(MAddress fromBase, MAddress toBase, size_t size,
+                                          ZForwarding* forwarding, bool youngMarking)
 {
     CheckInitialized();
-    // ForwardRegion old→old never in-places (RouteObject allocates a distinct to-space).
-    // CompactRegion is a separate path and does not call this.
     if (size < kFieldBytes || fromBase == toBase) {
         return 0;
     }
@@ -219,7 +219,6 @@ size_t RememberedSet::TransferObjectSlots(MAddress fromBase, MAddress toBase, si
     if (toBase < heapStart || toEnd > heapStart + heapSize) {
         return 0;
     }
-    // Field-aligned addresses in [fromBase, fromEnd).
     size_t firstBit = (fromBase - heapStart + kFieldBytes - 1) / kFieldBytes;
     size_t endBit = (fromEnd - heapStart) / kFieldBytes;
     if (firstBit >= endBit || firstBit >= bitCount) {
@@ -228,23 +227,31 @@ size_t RememberedSet::TransferObjectSlots(MAddress fromBase, MAddress toBase, si
     if (endBit > bitCount) {
         endBit = bitCount;
     }
-    size_t buffer = activeBuffer.load(std::memory_order_acquire);
+    const size_t current = activeBuffer.load(std::memory_order_acquire);
+    const size_t previous = current ^ 1U;
     const ptrdiff_t delta = static_cast<ptrdiff_t>(toBase) - static_cast<ptrdiff_t>(fromBase);
     size_t transferred = 0;
-    for (size_t bit = firstBit; bit < endBit; ++bit) {
-        size_t word = bit / kBitsPerWord;
-        uint64_t mask = static_cast<uint64_t>(1) << (bit % kBitsPerWord);
-        uint64_t w = bitmaps[buffer][word].load(std::memory_order_relaxed);
-        if ((w & mask) == 0) {
-            continue;
+    auto transferFace = [&](size_t buffer) {
+        for (size_t bit = firstBit; bit < endBit; ++bit) {
+            size_t word = bit / kBitsPerWord;
+            uint64_t mask = static_cast<uint64_t>(1) << (bit % kBitsPerWord);
+            uint64_t w = bitmaps[buffer][word].load(std::memory_order_relaxed);
+            if ((w & mask) == 0) {
+                continue;
+            }
+            MAddress fromSlot = heapStart + bit * kFieldBytes;
+            MAddress toSlot = static_cast<MAddress>(static_cast<ptrdiff_t>(fromSlot) + delta);
+            ProbeReadRouteDiag::NoteRemsetEvent(
+                fromSlot, ProbeReadRouteDiag::REMSET_TRANSFER_OUT, static_cast<uint8_t>(buffer), toSlot);
+            if (youngMarking && forwarding != nullptr) {
+                forwarding->relocated_remembered_fields_register(toSlot);
+            } else {
+                Record(toSlot, false);
+            }
+            ++transferred;
         }
-        MAddress fromSlot = heapStart + bit * kFieldBytes;
-        MAddress toSlot = static_cast<MAddress>(static_cast<ptrdiff_t>(fromSlot) + delta);
-        ProbeReadRouteDiag::NoteRemsetEvent(
-            fromSlot, ProbeReadRouteDiag::REMSET_TRANSFER_OUT, static_cast<uint8_t>(buffer), toSlot);
-        Record(toSlot, false);
-        ++transferred;
-    }
+    };
+    transferFace(youngMarking ? previous : current);
     return transferred;
 }
 
@@ -260,6 +267,7 @@ void RememberedSet::FlipForMinor()
     // operation only publishes the other face. ScanPreviousForMinor is the
     // owner of consuming and clearing the face selected before this flip.
     activeBuffer.store(static_cast<uint8_t>(nextBuffer), std::memory_order_release);
+    ZForwarding::bump_young_seqnum();
     ProbeReadRouteDiag::NoteRemsetFlip();
 #if defined(MRT_GC_UNIT_TESTS)
     flipTouchAccountingActive = false;
