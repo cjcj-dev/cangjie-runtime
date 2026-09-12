@@ -22,12 +22,30 @@ void MarkTerminate::Reset(size_t workers, VerifyMarkingStacks::MarkingGeneration
     terminated = false;
 }
 
-bool MarkTerminate::TryTerminate(const MarkStripeSet& stripes)
+void MarkTerminate::Leave()
+{
+    std::lock_guard<std::mutex> lock(mutex);
+    CHECK_DETAIL(working != 0, "mark worker left twice");
+    --working;
+    if (working == 0) {
+        condition.notify_all();
+    }
+}
+
+void MarkTerminate::MaybeReduceStripes(MarkStripeSet& stripes, size_t usedNStripes)
+{
+    const size_t nstripes = stripes.NStripes();
+    if (usedNStripes == nstripes && nstripes > 1) {
+        stripes.SetNStripes(nstripes >> 1);
+    }
+}
+
+bool MarkTerminate::TryTerminate(MarkStripeSet& stripes, size_t usedNStripes)
 {
     std::unique_lock<std::mutex> lock(mutex);
     CHECK_DETAIL(working != 0, "mark worker left termination twice");
     --working;
-    if (working == 0 && stripes.IsEmpty()) {
+    if (working == 0) {
         VerifyMarkingStacks::VerifyEmpty(generation, VerifyMarkingStacks::MarkingBoundary::TERMINATION,
                                          VerifyMarkingStacks::MarkingContainer::STRIPE, stripes.Population(),
                                          VerifyMarkingStacks::NO_MARKING_INDEX,
@@ -36,15 +54,14 @@ bool MarkTerminate::TryTerminate(const MarkStripeSet& stripes)
         condition.notify_all();
         return true;
     }
-    if (!stripes.IsEmpty()) {
-        ++working;
-        return false;
-    }
+    MaybeReduceStripes(stripes, usedNStripes);
     condition.wait(lock, [this]() { return terminated || awakening != 0; });
-    if (terminated) {
+    if (awakening != 0) {
+        --awakening;
+    }
+    if (working == 0) {
         return true;
     }
-    --awakening;
     ++working;
     return false;
 }
@@ -52,7 +69,10 @@ bool MarkTerminate::TryTerminate(const MarkStripeSet& stripes)
 void MarkTerminate::Wake()
 {
     std::lock_guard<std::mutex> lock(mutex);
-    if (terminated || working == 0 || working + awakening == workerCount) {
+    if (working == 0) {
+        return;
+    }
+    if (working + awakening == workerCount) {
         return;
     }
     ++awakening;
@@ -60,6 +80,12 @@ void MarkTerminate::Wake()
 }
 
 bool MarkTerminate::Saturated() const
+{
+    std::lock_guard<std::mutex> lock(mutex);
+    return working + awakening == workerCount;
+}
+
+bool MarkTerminate::Terminated() const
 {
     std::lock_guard<std::mutex> lock(mutex);
     return terminated && working == 0;
@@ -75,9 +101,7 @@ static bool StealLocalRound(MarkContext& context, MarkStripeSet& stripes)
 {
     MarkThreadLocalStacks& stacks = context.Stacks();
     const size_t home = context.StripeId();
-    const size_t n = stripes.Count();
-    for (size_t i = 1; i < n; ++i) {
-        const size_t victim = stripes.Next(home, i);
+    for (size_t victim = stripes.Next(home); victim != home; victim = stripes.Next(victim)) {
         MarkStripeStack* stack = stacks.StealLocal(victim);
         if (stack != nullptr) {
             stacks.Install(home, stack);
@@ -92,9 +116,7 @@ static bool StealGlobalRound(MarkContext& context, MarkingSMR& smr, MarkStripeSe
 {
     MarkThreadLocalStacks& stacks = context.Stacks();
     const size_t home = context.StripeId();
-    const size_t n = stripes.Count();
-    for (size_t i = 0; i < n; ++i) {
-        const size_t victim = stripes.Next(home, i);
+    for (size_t victim = stripes.Next(home); victim != home; victim = stripes.Next(victim)) {
         MarkStripeStack* stack = stripes.At(victim).StealStack(smr, workerId);
         if (stack != nullptr) {
             if (stealSuccess != nullptr) {
@@ -110,21 +132,54 @@ static bool StealGlobalRound(MarkContext& context, MarkingSMR& smr, MarkStripeSe
     return false;
 }
 
+static bool RebalanceWork(MarkContext& context, MarkStripeSet& stripes, MarkTerminate& terminate, size_t workerId,
+                          std::atomic<bool>* abort)
+{
+    const size_t assumed = context.NStripes();
+    const size_t nstripes = stripes.NStripes();
+    if (assumed != nstripes) {
+        context.SetNStripes(nstripes);
+    }
+    const size_t stripe = stripes.StripeForWorker(terminate.WorkerCount(), workerId);
+    if (context.StripeId() != stripe) {
+        context.SetStripeId(stripe);
+        (void)context.Stacks().Flush(stripes, false);
+        terminate.Wake();
+    } else if (!terminate.Saturated()) {
+        (void)context.Stacks().Flush(stripes, false);
+        terminate.Wake();
+    }
+    return abort != nullptr && abort->load(std::memory_order_relaxed);
+}
+
+static bool Drain(MarkContext& context, MarkingSMR& smr, MarkStripeSet& stripes, MarkTerminate& terminate,
+                  size_t workerId, const MarkEngine::Process& process, std::atomic<bool>* abort)
+{
+    MarkStackEntry entry;
+    size_t processed = 0;
+    context.SetStripeId(stripes.StripeForWorker(terminate.WorkerCount(), workerId));
+    context.SetNStripes(stripes.NStripes());
+    while (context.Stacks().Pop(smr, workerId, stripes, context.StripeId(), entry)) {
+        process(entry);
+        if ((processed++ & 31) == 0 && RebalanceWork(context, stripes, terminate, workerId, abort)) {
+            return false;
+        }
+    }
+    return true;
+}
+
 MarkEngine::Result MarkEngine::FollowWork(MarkContext& context, MarkingSMR& smr, MarkStripeSet& stripes,
                                           MarkTerminate& terminate, size_t workerId, bool partial,
                                           const Process& process, std::atomic<size_t>* stealSuccess,
-                                          std::atomic<size_t>* stealFailure)
+                                          std::atomic<size_t>* stealFailure, std::atomic<bool>* abort)
 {
     for (;;) {
-        MarkStackEntry entry;
-        if (context.Stacks().Pop(smr, workerId, stripes, context.StripeId(), entry)) {
-            process(entry);
-            continue;
+        if (!Drain(context, smr, stripes, terminate, workerId, process, abort)) {
+            terminate.Leave();
+            return Result::Aborted;
         }
-        if (StealLocalRound(context, stripes)) {
-            continue;
-        }
-        if (StealGlobalRound(context, smr, stripes, workerId, stealSuccess, stealFailure)) {
+        if (StealLocalRound(context, stripes) ||
+            StealGlobalRound(context, smr, stripes, workerId, stealSuccess, stealFailure)) {
             continue;
         }
         if (context.Stacks().Flush(stripes, false)) {
@@ -134,7 +189,7 @@ MarkEngine::Result MarkEngine::FollowWork(MarkContext& context, MarkingSMR& smr,
         if (partial) {
             return Result::Partial;
         }
-        if (terminate.TryTerminate(stripes)) {
+        if (terminate.TryTerminate(stripes, context.NStripes())) {
             context.Cache().Flush();
             smr.Reclaim(workerId);
             return Result::Completed;

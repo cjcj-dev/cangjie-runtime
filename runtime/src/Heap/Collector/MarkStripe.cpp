@@ -249,7 +249,8 @@ MarkStripeStack* MarkStripe::StealStack(MarkingSMR& smr, size_t workerId)
     return overflow != nullptr ? overflow : published.Pop(smr, workerId);
 }
 
-MarkStripeSet::MarkStripeSet(size_t stripeCount) : mask(stripeCount - 1), nstripes(stripeCount)
+MarkStripeSet::MarkStripeSet(size_t stripeCount)
+    : capacityMask(stripeCount - 1), mask(stripeCount - 1), nstripes(stripeCount)
 {
     CHECK_DETAIL(IsPowerOfTwo(stripeCount), "mark stripe count must be a power of two: %zu", stripeCount);
     stripes.reserve(stripeCount);
@@ -305,15 +306,15 @@ size_t MarkStripeSet::StripeForWorker(size_t nworkers, size_t workerId) const
 {
     CHECK_DETAIL(nworkers != 0 && workerId < nworkers, "invalid mark worker id=%zu count=%zu", workerId,
                  nworkers);
-    const size_t nstripes = Count();
-    const size_t spilloverLimit = (nworkers / nstripes) * nstripes;
+    const size_t active = NStripes();
+    const size_t spilloverLimit = (nworkers / active) * active;
     if (workerId < spilloverLimit) {
         return workerId & mask;
     }
     const size_t spilloverWorkers = nworkers - spilloverLimit;
     const size_t spilloverId = workerId - spilloverLimit;
     return static_cast<size_t>(static_cast<double>(spilloverId) *
-                               (static_cast<double>(nstripes) / static_cast<double>(spilloverWorkers)));
+                               (static_cast<double>(active) / static_cast<double>(spilloverWorkers)));
 }
 
 MarkThreadLocalStacks::MarkThreadLocalStacks(size_t stripeCount) : stacks(stripeCount, nullptr) {}
@@ -472,8 +473,9 @@ void MarkLiveCache::Flush()
     }
 }
 
-MarkContext::MarkContext(size_t workerCount, size_t workerId, MarkStripeSet& stripes)
-    : stripeId(stripes.StripeForWorker(workerCount, workerId)), stacks(stripes.Count()), cache(stripes.Count())
+MarkContext::MarkContext(size_t workerCount, size_t workerId, MarkStripeSet& stripes, MarkThreadLocalStacks& stacks)
+    : stripeId(stripes.StripeForWorker(workerCount, workerId)), nstripes(stripes.NStripes()), stacks(&stacks),
+      cache(stripes.Count())
 {}
 
 } // namespace MapleRuntime

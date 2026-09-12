@@ -46,9 +46,11 @@ GC_TEST(MarkPort203Engine, SingleAndTwoWorkersDrainSamePublishedSet)
         }
         (void)seed.Flush(stripes, true);
         std::vector<std::vector<size_t>> seen(workers);
+        std::vector<std::unique_ptr<MarkThreadLocalStacks>> stacks;
         std::vector<std::unique_ptr<MarkContext>> contexts;
         for (size_t w = 0; w < workers; ++w) {
-            contexts.emplace_back(std::make_unique<MarkContext>(workers, w, stripes));
+            stacks.emplace_back(std::make_unique<MarkThreadLocalStacks>(4));
+            contexts.emplace_back(std::make_unique<MarkContext>(workers, w, stripes, *stacks[w]));
         }
         std::vector<std::thread> threads;
         for (size_t w = 1; w < workers; ++w) {
@@ -60,7 +62,7 @@ GC_TEST(MarkPort203Engine, SingleAndTwoWorkersDrainSamePublishedSet)
         for (auto& t : threads) {
             t.join();
         }
-        GC_EXPECT_TRUE(terminate.Saturated());
+        GC_EXPECT_TRUE(terminate.Terminated());
         size_t total = 0;
         for (size_t w = 0; w < workers; ++w) {
             total += seen[w].size();
@@ -77,7 +79,8 @@ GC_TEST(MarkPort203Engine, StealLocalBeforeGlobal)
     terminate.Reset(1);
     stripes.SetTerminate(&terminate);
     MarkingSMR smr(1);
-    MarkContext context(1, 0, stripes);
+    MarkThreadLocalStacks stacks(2);
+    MarkContext context(1, 0, stripes, stacks);
     context.SetStripeId(0);
     MarkStripeStack* localVictim = MarkStripeStack::Create(true);
     localVictim->Push(Entry(11));
@@ -119,6 +122,14 @@ GC_TEST(MarkPort203Engine, ShrinkingNStripesStillSeesHighSlotWork)
     stripes.SetNStripes(2);
     GC_EXPECT_TRUE(!stripes.IsEmpty());
     GC_EXPECT_EQ(stripes.FirstNonEmptyStripe(), 3u);
+    size_t home = 0;
+    size_t seenHigh = 0;
+    for (size_t victim = stripes.Next(home); victim != home; victim = stripes.Next(victim)) {
+        if (victim == 3) {
+            ++seenHigh;
+        }
+    }
+    GC_EXPECT_EQ(seenHigh, 1u);
     MarkingSMR smr(1);
     MarkStripeStack* taken = stripes.At(3).StealStack(smr, 0);
     GC_EXPECT_TRUE(taken != nullptr);
@@ -133,14 +144,16 @@ GC_TEST(MarkPort203Engine, PartialReturnsBeforeTerminate)
     terminate.Reset(1);
     stripes.SetTerminate(&terminate);
     MarkingSMR smr(1);
-    MarkContext context(1, 0, stripes);
+    MarkThreadLocalStacks stacks(1);
+    MarkContext context(1, 0, stripes, stacks);
     std::vector<size_t> seen;
     auto result = MarkEngine::FollowWork(context, smr, stripes, terminate, 0, true,
                                          [&seen](const MarkStackEntry& entry) {
                                              seen.push_back(entry.partialArrayOffset());
                                          });
     GC_EXPECT_TRUE(result == MarkEngine::Result::Partial);
-    GC_EXPECT_TRUE(!terminate.Saturated());
+    GC_EXPECT_TRUE(!terminate.Terminated());
+    GC_EXPECT_TRUE(terminate.Saturated());
     GC_EXPECT_EQ(seen.size(), 0u);
 }
 
@@ -151,8 +164,10 @@ GC_TEST(MarkPort203Engine, PublishWakesWaitingWorker)
     terminate.Reset(2);
     stripes.SetTerminate(&terminate);
     MarkingSMR smr(2);
-    MarkContext waiter(2, 0, stripes);
-    MarkContext producer(2, 1, stripes);
+    MarkThreadLocalStacks waiterStacks(2);
+    MarkThreadLocalStacks producerStacks(2);
+    MarkContext waiter(2, 0, stripes, waiterStacks);
+    MarkContext producer(2, 1, stripes, producerStacks);
     std::atomic<bool> waiterEntered{ false };
     std::vector<size_t> seen;
     std::thread waitThread([&]() {
@@ -169,6 +184,6 @@ GC_TEST(MarkPort203Engine, PublishWakesWaitingWorker)
     std::vector<size_t> producerSeen;
     DrainFollow(producer, smr, stripes, terminate, 1, producerSeen, false);
     waitThread.join();
-    GC_EXPECT_TRUE(terminate.Saturated());
+    GC_EXPECT_TRUE(terminate.Terminated());
     GC_EXPECT_EQ(seen.size() + producerSeen.size(), 1u);
 }

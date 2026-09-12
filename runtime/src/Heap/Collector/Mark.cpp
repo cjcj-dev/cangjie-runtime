@@ -1151,29 +1151,6 @@ BaseObject* AdmitYoungObject(BaseObject* object, const char* origin, const void*
 
 } // namespace
 
-namespace WCollectorInternal {
-void PushAdmittedYoung(BaseObject* object, TracingCollector::WorkStack& workStack, const char* origin,
-                       const void* slot, BaseObject* holder)
-{
-    BaseObject* admitted = AdmitYoungObject(object, origin, slot, holder);
-    if (admitted != nullptr) {
-
-        workStack.push_back(admitted);
-    }
-}
-
-void PushAdmittedYoung(const MarkStackEntry& entry, TracingCollector::WorkStack& workStack, const char* origin,
-                       const void* slot, BaseObject* holder)
-{
-    BaseObject* admitted = AdmitYoungObject(entry.object(), origin, slot, holder);
-    if (admitted != nullptr) {
-
-        workStack.push_back(MarkStackEntry(admitted, entry.mark(), entry.incLive(), entry.follow(),
-                                           entry.finalizable()));
-    }
-}
-} // namespace WCollectorInternal
-
 namespace {
 size_t MarkStripeCount(size_t workers)
 {
@@ -1224,207 +1201,6 @@ bool ScrubMinorFreeTarget(RefField<>& field, BaseObject* target, bool /*fromFix*
 
 } // namespace WCollectorInternal
 
-struct YoungMarkingShared {
-    WCollector* collector = nullptr;
-    GCThreadPool* pool = nullptr;
-    // Owned by DoYoungGarbageCollection and immutable for this STW closure;
-    // all workers may therefore query it while filling only their local slot vector.
-    const std::unordered_set<MAddress>* reachableSlotDomain = nullptr;
-    bool fullYoungScan = false;
-    bool recordSlots = false;
-    std::vector<std::vector<BaseObject*>> objects;
-    std::vector<std::vector<MAddress>> slots;
-    std::vector<std::vector<MAddress>> weaks;
-    std::vector<size_t> objectsMarked;
-    std::atomic<size_t> nextWorkerId{ 0 };
-};
-
-class YoungMarkingWork : public HeapWork {
-public:
-    YoungMarkingWork(YoungMarkingShared& shared, TracingCollector::WorkStack&& stack, size_t workerSlot)
-        : shared(shared), workStack(std::move(stack)), workerSlot(workerSlot)
-    {
-        VerifyMarkingStacks::NoteProducer(VerifyMarkingStacks::MarkingGeneration::YOUNG,
-                                          VerifyMarkingStacks::MarkingContainer::TASK, workStack.size());
-    }
-
-    void TryForkTask()
-    {
-        if (shared.pool == nullptr) {
-            return;
-        }
-        size_t childSlot = shared.nextWorkerId.load(std::memory_order_relaxed);
-        if (childSlot >= shared.objects.size()) {
-            return;
-        }
-        size_t size = workStack.size();
-        if (size <= kMarkparMinWorkSize) {
-            return;
-        }
-        bool doFork = false;
-        size_t newSize = 0;
-        if (size > kMarkparMaxWorkSize) {
-            newSize = size >> 1;
-            doFork = true;
-        } else if (shared.pool->GetWaitingThreadNumber() > 0) {
-            constexpr uint8_t shiftForEight = 3;
-            newSize = size >> shiftForEight;
-            doFork = true;
-        }
-        if (!doFork || newSize == 0) {
-            return;
-        }
-        while (childSlot < shared.objects.size() &&
-               !shared.nextWorkerId.compare_exchange_weak(childSlot, childSlot + 1, std::memory_order_relaxed)) {
-        }
-        if (childSlot >= shared.objects.size()) {
-            return;
-        }
-        TracingCollector::WorkStackBuf* hSplit = workStack.split(newSize);
-        shared.pool->AddWork(new YoungMarkingWork(shared, TracingCollector::WorkStack(hSplit), childSlot));
-    }
-
-    ~YoungMarkingWork() override
-    {
-        VerifyMarkingStacks::VerifyEmpty(VerifyMarkingStacks::MarkingGeneration::YOUNG,
-                                         VerifyMarkingStacks::MarkingBoundary::TASK_EXIT,
-                                         VerifyMarkingStacks::MarkingContainer::TASK, workStack.size(), 0,
-                                         workerId);
-    }
-
-    void Execute(size_t executingWorkerId) override
-    {
-        workerId = executingWorkerId;
-        auto& localObjects = shared.objects[workerSlot];
-        auto& localSlots = shared.slots[workerSlot];
-        auto& localWeaks = shared.weaks[workerSlot];
-        size_t nMarked = 0;
-        WCollector* collector = shared.collector;
-        const bool recordSlots = shared.recordSlots;
-
-        bool finalizable = false;
-        auto pushTarget = [collector, this, &finalizable](RefField<>& field) {
-            BaseObject* target = collector->ResolveMinorReference(field);
-            // h3seed3: same free|garbage scrub as TraceYoungClosureSerial.
-            if (ScrubMinorFreeTarget(field, target, false)) {
-                return;
-            }
-            collector->PushYoungObject(target, workStack, "closure_edge", finalizable);
-        };
-
-        auto visitSlot = [this, &localSlots, &pushTarget, recordSlots](MAddress slot) {
-            if (recordSlots &&
-                (shared.reachableSlotDomain == nullptr || shared.reachableSlotDomain->count(slot) != 0)) {
-                localSlots.push_back(slot);
-            }
-            pushTarget(HeapSlotAt<>(slot));
-        };
-        auto publish = [this](const MarkStackEntry& entry) { workStack.push_back(entry); };
-        for (;;) {
-            if (workStack.empty()) {
-                break;
-            }
-            const MarkStackEntry entry = workStack.back();
-            workStack.pop_back();
-            finalizable = entry.finalizable();
-            if (entry.partialArray()) {
-                MarkPartialArray::FollowPartialReferences(entry, visitSlot, publish);
-                if (shared.pool != nullptr) {
-                    TryForkTask();
-                }
-                continue;
-            }
-            BaseObject* object = entry.object();
-            if (!Heap::IsHeapAddress(object)) {
-                continue;
-            }
-            if (!Collector::PlausibleManagedObjectGate("TraceYoungClosure", object)) {
-                BaseObject* host = Collector::TryRecoverInteriorBase(object);
-                if (host != nullptr && host != object) {
-                    PushAdmittedYoung(host, workStack, "TraceYoungClosure.recover");
-                }
-                continue;
-            }
-            RegionInfo* region = RegionInfo::GetRegionInfoAt(reinterpret_cast<MAddress>(object));
-            const bool isYoung = region->IsYoungRegion();
-
-            if (isYoung) {
-                bool wasMarked = collector->MarkEntryObject(object, entry, nullptr);
-                if (wasMarked) {
-                    if (!entry.follow()) {
-                        continue;
-                    }
-                    // ghostroute: residual unmarked young only (no FYS re-push of marked).
-
-                    if (object->HasRefField() && !object->IsWeakRef()) {
-                        object->ForEachRefField([collector, this, object](RefField<>& field) {
-                            BaseObject* target = collector->ResolveMinorReference(field);
-                            if (target == nullptr || !Heap::IsHeapAddress(target)) {
-                                return;
-                            }
-                            if (!Collector::PlausibleManagedObjectGate("ghostroute.wasMarked.child",
-                                                                      target)) {
-                                BaseObject* host = Collector::TryRecoverInteriorBase(target);
-                                if (host == nullptr || host == target) {
-                                    return;
-                                }
-                                target = host;
-                            }
-                            RegionInfo* tr =
-                                RegionInfo::TryGetRegionInfoAt(reinterpret_cast<MAddress>(target));
-                            if (tr == nullptr || !tr->IsYoungRegion() ||
-                                tr->IsMarkedObject(tr->GetMarkView<Generation::Young>(), target)) {
-                                return;
-                            }
-
-                            PushAdmittedYoung(target, workStack, "ghostroute.parallel.bitmap", &field, object);
-                        });
-                    }
-                    if (shared.pool != nullptr) {
-                        TryForkTask();
-                    }
-                    continue;
-                }
-                if (entry.mark()) {
-                    ++nMarked;
-                }
-                CHECK_DETAIL(object->IsValidObject(), "minor closure reached invalid object %p", object);
-                localObjects.push_back(object);
-            } else {
-                continue;
-            }
-            if (!object->HasRefField() || !entry.follow()) {
-                if (shared.pool != nullptr) {
-                    TryForkTask();
-                }
-                continue;
-            }
-            if (UNLIKELY(object->IsWeakRef())) {
-                HeapSlot<>& referentField = HeapSlotAt<>(reinterpret_cast<MAddress>(object) + TYPEINFO_PTR_SIZE);
-                localWeaks.push_back(reinterpret_cast<MAddress>(&referentField));
-#if defined(MRT_TESTABLE_INTERNALS)
-                NoteYoungWeakClosureDiscovery(YoungWeakClosureVariant::LEGACY_PARALLEL);
-#endif
-                if (shared.pool != nullptr) {
-                    TryForkTask();
-                }
-                continue;
-            }
-            MarkPartialArray::FollowObjectReferences(object, finalizable, visitSlot, publish);
-            if (shared.pool != nullptr) {
-                TryForkTask();
-            }
-        }
-        shared.objectsMarked[workerSlot] += nMarked;
-    }
-
-private:
-    YoungMarkingShared& shared;
-    TracingCollector::WorkStack workStack;
-    size_t workerSlot;
-    size_t workerId = 0;
-};
-
 struct alignas(64) YoungStripedWorkerOutput {
     std::vector<BaseObject*> objects;
     std::vector<MAddress> slots;
@@ -1443,6 +1219,7 @@ struct YoungStripedShared {
     size_t workerCount = 0;
     std::unique_ptr<MarkStripeSet> stripes;
     std::unique_ptr<MarkingSMR> smr;
+    std::vector<std::unique_ptr<MarkThreadLocalStacks>> stacks;
     std::vector<std::unique_ptr<YoungStripedWorkerOutput>> outputs;
     YoungMarkTerminate terminate;
     std::atomic<size_t> stealSuccess{ 0 };
@@ -1458,7 +1235,7 @@ class YoungStripedMarkingWork : public HeapWork {
 public:
     YoungStripedMarkingWork(YoungStripedShared& shared, size_t workerSlot)
         : shared(shared), workerSlot(workerSlot),
-          context(shared.workerCount, workerSlot, *shared.stripes)
+          context(shared.workerCount, workerSlot, *shared.stripes, *shared.stacks[workerSlot])
     {}
 
     ~YoungStripedMarkingWork() override
@@ -1635,214 +1412,6 @@ private:
     MarkContext context;
 };
 
-void WCollector::TraceYoungClosureSerial(WorkStack& workStack, bool fullYoungScan,
-                                         std::vector<BaseObject*>& reachableVec, MinorSlotSet& reachableSlots,
-                                         MinorSlotSet& weakSlots,
-                                         const MinorSlotSet* reachableSlotDomain)
-{
-    const bool recordSlots = fullYoungScan;
-    auto recordReachableSlot = [&reachableSlots, reachableSlotDomain](RefField<>& field) {
-        MAddress slot = reinterpret_cast<MAddress>(&field);
-        if (reachableSlotDomain != nullptr && reachableSlotDomain->count(slot) == 0) {
-            return;
-        }
-        (void)LedgerInsert(reachableSlots, slot);
-    };
-    bool finalizable = false;
-    auto pushTarget = [this, &workStack, &finalizable](RefField<>& field) {
-        BaseObject* target = ResolveMinorReference(field);
-        if (ScrubMinorFreeTarget(field, target, false)) {
-            return;
-        }
-
-        PushYoungObject(target, workStack, "closure_edge", finalizable);
-    };
-    auto visitSlot = [&recordReachableSlot, &pushTarget, recordSlots](MAddress slot) {
-        auto& field = HeapSlotAt<>(slot);
-        if (recordSlots) {
-            recordReachableSlot(field);
-        }
-        pushTarget(field);
-    };
-    auto publish = [&workStack](const MarkStackEntry& entry) { workStack.push_back(entry); };
-    while (!workStack.empty()) {
-        const MarkStackEntry entry = workStack.back();
-        workStack.pop_back();
-        finalizable = entry.finalizable();
-        if (entry.partialArray()) {
-            MarkPartialArray::FollowPartialReferences(entry, visitSlot, publish);
-            continue;
-        }
-        BaseObject* object = entry.object();
-        if (!Heap::IsHeapAddress(object)) {
-            continue;
-        }
-        if (!Collector::PlausibleManagedObjectGate("TraceYoungClosure", object)) {
-            BaseObject* host = Collector::TryRecoverInteriorBase(object);
-            if (host != nullptr && host != object) {
-                PushAdmittedYoung(host, workStack, "TraceYoungClosure.recover");
-            }
-            continue;
-        }
-        CHECK_DETAIL(object->IsValidObject(), "minor closure reached invalid object %p", object);
-        RegionInfo* region = RegionInfo::GetRegionInfoAt(reinterpret_cast<MAddress>(object));
-        const bool isYoung = region->IsYoungRegion();
-
-        if (isYoung) {
-            bool wasMarked = MarkEntryObject(object, entry, nullptr);
-            if (wasMarked) {
-                if (!entry.follow()) {
-                    continue;
-                }
-
-                if (!object->HasRefField() || object->IsWeakRef()) {
-                    continue;
-                }
-                object->ForEachRefField([this, &workStack, object](RefField<>& field) {
-                    BaseObject* target = ResolveMinorReference(field);
-                    if (target == nullptr || !Heap::IsHeapAddress(target)) {
-                        return;
-                    }
-                    if (!Collector::PlausibleManagedObjectGate("ghostroute.wasMarked.child", target)) {
-                        BaseObject* host = Collector::TryRecoverInteriorBase(target);
-                        if (host == nullptr || host == target) {
-                            return;
-                        }
-                        target = host;
-                    }
-                    RegionInfo* tr = RegionInfo::TryGetRegionInfoAt(reinterpret_cast<MAddress>(target));
-                    if (tr == nullptr || !tr->IsYoungRegion() ||
-                        tr->IsMarkedObject(tr->GetMarkView<Generation::Young>(), target)) {
-                        return;
-                    }
-
-                    PushAdmittedYoung(target, workStack, "ghostroute.serial.bitmap", &field, object);
-                });
-                continue;
-            }
-            reachableVec.push_back(object);
-        } else {
-            continue;
-        }
-        if (!object->HasRefField() || !entry.follow()) {
-            continue;
-        }
-        if (UNLIKELY(object->IsWeakRef())) {
-            HeapSlot<>& referentField = HeapSlotAt<>(reinterpret_cast<MAddress>(object) + TYPEINFO_PTR_SIZE);
-            (void)LedgerInsert(weakSlots, reinterpret_cast<MAddress>(&referentField));
-#if defined(MRT_TESTABLE_INTERNALS)
-            NoteYoungWeakClosureDiscovery(YoungWeakClosureVariant::SERIAL);
-#endif
-            continue;
-        }
-        MarkPartialArray::FollowObjectReferences(object, finalizable, visitSlot, publish);
-    }
-}
-
-void WCollector::TraceYoungClosureParallel(WorkStack& workStack, bool fullYoungScan,
-                                           std::vector<BaseObject*>& reachableVec, MinorSlotSet& reachableSlots,
-                                           MinorSlotSet& weakSlots, GCThreadPool* threadPool,
-                                           const MinorSlotSet* reachableSlotDomain)
-{
-    // T-D ③: dispel frozen across parallel mark window (same as R2 reffix).
-    const size_t dispelAtEntry = RegionInfo::GetDispelGhostCount();
-
-    const int32_t helperNum = threadPool->GetMaxThreadNum();
-    int32_t poolCap = helperNum + 1;
-    int32_t workers = poolCap;
-    if (workers < 1) {
-        workers = 1;
-    }
-    // workers=1 apparatus: main only, no pool Start (markpar 0cd9df7c).
-    if (workers == 1) {
-        TraceYoungClosureSerial(workStack, fullYoungScan, reachableVec, reachableSlots, weakSlots,
-                                reachableSlotDomain);
-        VLOG(REPORT,
-             "[GCV2][markpar][parallel] workers_active=1 workers_scheduled=1 objects_marked=[%zu] "
-             "reachable_n=%zu parallel=0",
-             reachableVec.size(), reachableVec.size());
-        return;
-    }
-
-    const size_t slotBudget = static_cast<size_t>(workers) * 8 + 16;
-    YoungMarkingShared shared;
-    shared.collector = this;
-    shared.pool = threadPool;
-    shared.reachableSlotDomain = reachableSlotDomain;
-    shared.fullYoungScan = fullYoungScan;
-    shared.recordSlots = fullYoungScan;
-    shared.objects.resize(slotBudget);
-    shared.slots.resize(slotBudget);
-    shared.weaks.resize(slotBudget);
-    shared.objectsMarked.assign(slotBudget, 0);
-    shared.nextWorkerId.store(1, std::memory_order_relaxed);
-
-    const int32_t prevActive = threadPool->GetMaxActiveThreadNum();
-    const int32_t wantActive = workers - 1;
-    if (wantActive != prevActive) {
-        threadPool->SetMaxActiveThreadNum(wantActive);
-    }
-
-    // Seed: peel root buffers to helpers first, then Start + main + WaitFinish.
-    size_t slot = 1;
-    while (workStack.size() > 1 && slot < static_cast<size_t>(workers)) {
-        TracingCollector::WorkStackBuf* hSplit = workStack.split(1);
-        if (hSplit == nullptr) {
-            break;
-        }
-        threadPool->AddWork(new YoungMarkingWork(shared, TracingCollector::WorkStack(hSplit), slot));
-        shared.nextWorkerId.store(slot + 1, std::memory_order_relaxed);
-        ++slot;
-    }
-    threadPool->Start();
-    YoungMarkingWork mainTask(shared, std::move(workStack), 0);
-    mainTask.Execute(0);
-    threadPool->WaitFinish();
-
-    if (wantActive != prevActive) {
-        threadPool->SetMaxActiveThreadNum(prevActive);
-    }
-
-    const size_t dispelAtExit = RegionInfo::GetDispelGhostCount();
-    CHECK_DETAIL(dispelAtExit == dispelAtEntry,
-                 "T-D ghost dispel during parallel mark_closure window entry=%zu exit=%zu", dispelAtEntry,
-                 dispelAtExit);
-
-    // Merge per-worker ledgers → global reachableVec / sets (downstream ⑦ consumes them).
-    size_t active = 0;
-    std::string markedStr;
-    for (size_t i = 0; i < shared.objects.size(); ++i) {
-        if (shared.objects[i].empty() && shared.slots[i].empty() && shared.weaks[i].empty() &&
-            shared.objectsMarked[i] == 0) {
-            continue;
-        }
-        if (shared.objectsMarked[i] != 0) {
-            ++active;
-        }
-        if (!markedStr.empty()) {
-            markedStr += ',';
-        }
-        markedStr += std::to_string(shared.objectsMarked[i]);
-        for (BaseObject* obj : shared.objects[i]) {
-            reachableVec.push_back(obj);
-        }
-        for (MAddress s : shared.slots[i]) {
-            reachableSlots.insert(s);
-        }
-        for (MAddress s : shared.weaks[i]) {
-            weakSlots.insert(s);
-        }
-    }
-    if (markedStr.empty()) {
-        markedStr = "0";
-    }
-
-    VLOG(REPORT,
-         "[GCV2][markpar][parallel] workers_active=%zu workers_scheduled=%d objects_marked=[%s] "
-         "reachable_n=%zu parallel=1",
-         active, workers, markedStr.c_str(), reachableVec.size());
-}
-
 void WCollector::TraceYoungClosureStriped(WorkStack& workStack, bool fullYoungScan,
                                           std::vector<BaseObject*>& reachableVec, MinorSlotSet& reachableSlots,
                                           MinorSlotSet& weakSlots, GCThreadPool* threadPool,
@@ -1851,7 +1420,10 @@ void WCollector::TraceYoungClosureStriped(WorkStack& workStack, bool fullYoungSc
     g_markStripeArmed.fetch_add(1, std::memory_order_relaxed);
     const size_t dispelAtEntry = RegionInfo::GetDispelGhostCount();
 
-    int32_t workers = threadPool->GetMaxThreadNum() + 1;
+    int32_t workers = 1;
+    if (threadPool != nullptr) {
+        workers = threadPool->GetMaxThreadNum() + 1;
+    }
     if constexpr (kGcTriggerDynamicWorkersEnabled) {
         // zDirector.cpp:783-793 — initial_workers selected each cycle.
         const uint32_t selected = g_gcTriggerYoungWorkers.load(std::memory_order_relaxed);
@@ -1875,6 +1447,7 @@ void WCollector::TraceYoungClosureStriped(WorkStack& workStack, bool fullYoungSc
     shared.smr = std::make_unique<MarkingSMR>(shared.workerCount);
     shared.outputs.reserve(shared.workerCount);
     for (size_t i = 0; i < shared.workerCount; ++i) {
+        shared.stacks.emplace_back(std::make_unique<MarkThreadLocalStacks>(stripeCount));
         shared.outputs.emplace_back(std::make_unique<YoungStripedWorkerOutput>());
     }
 
@@ -1913,20 +1486,24 @@ void WCollector::TraceYoungClosureStriped(WorkStack& workStack, bool fullYoungSc
                                      VerifyMarkingStacks::MarkingBoundary::SEED_PUBLISH,
                                      VerifyMarkingStacks::MarkingContainer::LOCAL, seed.Population(), 0);
 
-    const int32_t prevActive = threadPool->GetMaxActiveThreadNum();
-    const int32_t wantActive = std::max(workers - 1, 0);
-    if (workers > 1 && wantActive != prevActive) {
-        threadPool->SetMaxActiveThreadNum(wantActive);
-    }
-    if (workers > 1) {
-        for (int32_t worker = 1; worker < workers; ++worker) {
-            threadPool->AddWork(new YoungStripedMarkingWork(shared, static_cast<size_t>(worker)));
+    int32_t prevActive = 0;
+    int32_t wantActive = 0;
+    if (threadPool != nullptr) {
+        prevActive = threadPool->GetMaxActiveThreadNum();
+        wantActive = std::max(workers - 1, 0);
+        if (workers > 1 && wantActive != prevActive) {
+            threadPool->SetMaxActiveThreadNum(wantActive);
         }
-        threadPool->Start();
+        if (workers > 1) {
+            for (int32_t worker = 1; worker < workers; ++worker) {
+                threadPool->AddWork(new YoungStripedMarkingWork(shared, static_cast<size_t>(worker)));
+            }
+            threadPool->Start();
+        }
     }
     YoungStripedMarkingWork mainTask(shared, 0);
     mainTask.Execute(0);
-    if (workers > 1) {
+    if (threadPool != nullptr && workers > 1) {
         threadPool->WaitFinish();
     }
     VerifyMarkingStacks::VerifyEmpty(VerifyMarkingStacks::MarkingGeneration::YOUNG,
@@ -1937,11 +1514,11 @@ void WCollector::TraceYoungClosureStriped(WorkStack& workStack, bool fullYoungSc
                                      shared.stripes->FirstNonEmptyStripe());
     VerifyMarkingStacks::VerifyEmpty(VerifyMarkingStacks::MarkingGeneration::YOUNG,
                                      VerifyMarkingStacks::MarkingBoundary::JOIN,
-                                     VerifyMarkingStacks::MarkingContainer::POOL,
-                                     threadPool->GetWorkCount(), 0);
-    CHECK_DETAIL(shared.terminate.Saturated(),
+                                      VerifyMarkingStacks::MarkingContainer::POOL,
+                                      threadPool != nullptr ? threadPool->GetWorkCount() : 0, 0);
+    CHECK_DETAIL(shared.terminate.Terminated(),
                  "young striped closure returned without coordinated worker termination");
-    if (wantActive != prevActive) {
+    if (threadPool != nullptr && wantActive != prevActive) {
         threadPool->SetMaxActiveThreadNum(prevActive);
     }
 
@@ -2003,41 +1580,8 @@ void WCollector::TraceYoungClosure(WorkStack& workStack, bool fullYoungScan,
     VerifyMarkingStacks::NoteProducer(VerifyMarkingStacks::MarkingGeneration::YOUNG,
                                       VerifyMarkingStacks::MarkingContainer::OWNER, workStack.size());
     GCThreadPool* threadPool = GetThreadPool();
-#if defined(MRT_TESTABLE_INTERNALS)
-    // The unit product SO reaches each shipping closure through the real minor
-    // dispatcher.  Default builds have no selector and retain the production
-    // striped decision below.
-    if (const char* variant = std::getenv("MRT_GC_UNIT_YOUNG_WEAK_VARIANT")) {
-        if (std::strcmp(variant, "serial") == 0) {
-            TraceYoungClosureSerial(workStack, fullYoungScan, reachableVec, reachableSlots,
-                                    weakSlots, reachableSlotDomain);
-            return;
-        }
-        CHECK_DETAIL(threadPool != nullptr, "young weak variant %s requires a GC thread pool", variant);
-        if (std::strcmp(variant, "legacy-parallel") == 0) {
-            TraceYoungClosureParallel(workStack, fullYoungScan, reachableVec, reachableSlots,
-                                      weakSlots, threadPool, reachableSlotDomain);
-            return;
-        }
-        if (std::strcmp(variant, "striped") == 0) {
-            TraceYoungClosureStriped(workStack, fullYoungScan, reachableVec, reachableSlots,
-                                     weakSlots, threadPool, reachableSlotDomain);
-            return;
-        }
-        CHECK_DETAIL(false, "unknown MRT_GC_UNIT_YOUNG_WEAK_VARIANT=%s", variant);
-    }
-#endif
-    // zMark.cpp has no force-serial path: young trace uses address stripes.
-    if (threadPool != nullptr) {
-        TraceYoungClosureStriped(workStack, fullYoungScan, reachableVec, reachableSlots, weakSlots,
-                                 threadPool, reachableSlotDomain);
-        return;
-    }
-    VLOG(REPORT, "[GCV2][mark][young] fallback=serial pool_unavailable armed=%zu turned=%zu",
-         g_markStripeArmed.load(std::memory_order_relaxed),
-         g_markStripeTurned.load(std::memory_order_relaxed));
-    TraceYoungClosureSerial(workStack, fullYoungScan, reachableVec, reachableSlots, weakSlots,
-                            reachableSlotDomain);
+    TraceYoungClosureStriped(workStack, fullYoungScan, reachableVec, reachableSlots, weakSlots,
+                             threadPool, reachableSlotDomain);
 }
 
 // youngconc: SATB termination for concurrent young mark — same loop shape as

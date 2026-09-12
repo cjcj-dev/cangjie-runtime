@@ -299,6 +299,7 @@ struct MajorMarkShared {
     size_t workerCount = 0;
     std::unique_ptr<MarkStripeSet> stripes;
     std::unique_ptr<MarkingSMR> smr;
+    std::vector<std::unique_ptr<MarkThreadLocalStacks>> stacks;
     MarkTerminate terminate;
     std::atomic<size_t> newlyMarked{ 0 };
 
@@ -319,7 +320,7 @@ class ConcurrentMarkingWork : public HeapWork {
 public:
     ConcurrentMarkingWork(MajorMarkShared& shared, size_t workerSlot)
         : shared(shared), workerSlot(workerSlot),
-          context(shared.workerCount, workerSlot, *shared.stripes)
+          context(shared.workerCount, workerSlot, *shared.stripes, *shared.stacks[workerSlot])
     {}
 
     ~ConcurrentMarkingWork() override
@@ -758,6 +759,9 @@ static size_t RunMajorStripeMark(TracingCollector& collector, TracingCollector::
     shared.stripes = std::make_unique<MarkStripeSet>(stripeCount);
     shared.stripes->SetTerminate(&shared.terminate);
     shared.smr = std::make_unique<MarkingSMR>(workers);
+    for (size_t i = 0; i < workers; ++i) {
+        shared.stacks.emplace_back(std::make_unique<MarkThreadLocalStacks>(stripeCount));
+    }
 
     MarkThreadLocalStacks seed(stripeCount);
     while (!workStack.empty()) {
@@ -782,7 +786,7 @@ static size_t RunMajorStripeMark(TracingCollector& collector, TracingCollector::
     } else if (threadPool != nullptr) {
         threadPool->DrainWorkQueue();
     }
-    CHECK_DETAIL(shared.terminate.Saturated(),
+    CHECK_DETAIL(shared.terminate.Terminated(),
                  "major striped closure returned without coordinated worker termination");
     return shared.newlyMarked.load(std::memory_order_relaxed);
 }
@@ -819,12 +823,6 @@ void TracingCollector::TracingImpl(WorkStack& workStack, WorkStack& foreignRoots
                                      VerifyMarkingStacks::MarkingBoundary::JOIN,
                                      VerifyMarkingStacks::MarkingContainer::POOL,
                                      threadPool->GetWorkCount(), 0);
-}
-
-bool TracingCollector::AddConcurrentTracingWork(RootSet& rs)
-{
-    (void)rs;
-    return false;
 }
 
 void TracingCollector::FindUselessExternObjects()

@@ -1405,14 +1405,6 @@ private:
                            std::vector<BaseObject*>& reachableVec, MinorSlotSet& reachableSlots,
                            MinorSlotSet& weakSlots,
                            const MinorSlotSet* reachableSlotDomain = nullptr);
-    void TraceYoungClosureSerial(WorkStack& workStack, bool fullYoungScan,
-                                 std::vector<BaseObject*>& reachableVec, MinorSlotSet& reachableSlots,
-                                 MinorSlotSet& weakSlots,
-                                 const MinorSlotSet* reachableSlotDomain = nullptr);
-    void TraceYoungClosureParallel(WorkStack& workStack, bool fullYoungScan,
-                                   std::vector<BaseObject*>& reachableVec, MinorSlotSet& reachableSlots,
-                                   MinorSlotSet& weakSlots, GCThreadPool* threadPool,
-                                   const MinorSlotSet* reachableSlotDomain = nullptr);
     void TraceYoungClosureStriped(WorkStack& workStack, bool fullYoungScan,
                                   std::vector<BaseObject*>& reachableVec, MinorSlotSet& reachableSlots,
                                   MinorSlotSet& weakSlots, GCThreadPool* threadPool,
@@ -1425,7 +1417,6 @@ private:
     // ZMark::try_end sibling: called with mutators stopped; performs exactly one
     // local-buffer flush and reports whether concurrent-mark-continue is needed.
     bool TryEndYoungMark(WorkStack& workStack, YoungConcWindowStats* windowStats = nullptr);
-    friend class YoungMarkingWork;
     friend class YoungStripedMarkingWork;
     void RescanRememberedSet(WorkStack& workStack, const MinorSlotSet& rememberedSlots,
                              const MinorSlotSet& reachableSlots, const MinorSlotSet& weakSlots,

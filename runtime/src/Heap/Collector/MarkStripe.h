@@ -144,12 +144,13 @@ public:
     size_t FirstNonEmptyStripe() const;
     size_t StripeForAddress(uintptr_t address) const;
     size_t StripeForWorker(size_t workerCount, size_t workerId) const;
-    size_t Next(size_t stripeId) const { return (stripeId + 1) & mask; }
-    size_t Next(size_t stripeId, size_t offset) const { return (stripeId + offset) & mask; }
+    size_t Next(size_t stripeId) const { return (stripeId + 1) & capacityMask; }
+    size_t Next(size_t stripeId, size_t offset) const { return (stripeId + offset) & capacityMask; }
     MarkStripe& At(size_t stripeId) { return *stripes[stripeId]; }
     const MarkStripe& At(size_t stripeId) const { return *stripes[stripeId]; }
 
 private:
+    size_t capacityMask;
     size_t mask;
     size_t nstripes;
     MarkTerminate* terminate = nullptr;
@@ -210,20 +211,23 @@ private:
 // Per-worker follow-work context: natural stripe + private stacks + live cache.
 class MarkContext {
 public:
-    MarkContext(size_t workerCount, size_t workerId, MarkStripeSet& stripes);
+    MarkContext(size_t workerCount, size_t workerId, MarkStripeSet& stripes, MarkThreadLocalStacks& stacks);
 
     size_t StripeId() const { return stripeId; }
+    size_t NStripes() const { return nstripes; }
+    void SetNStripes(size_t value) { nstripes = value; }
     void SetStripeId(size_t value)
     {
         cache.Flush();
         stripeId = value;
     }
-    MarkThreadLocalStacks& Stacks() { return stacks; }
+    MarkThreadLocalStacks& Stacks() { return *stacks; }
     MarkLiveCache& Cache() { return cache; }
 
 private:
     size_t stripeId;
-    MarkThreadLocalStacks stacks;
+    size_t nstripes;
+    MarkThreadLocalStacks* stacks;
     MarkLiveCache cache;
 };
 

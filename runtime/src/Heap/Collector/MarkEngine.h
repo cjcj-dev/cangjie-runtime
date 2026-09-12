@@ -20,18 +20,21 @@ namespace MapleRuntime {
 
 class MarkStripeSet;
 
-// ZGC zMarkTerminate.inline.hpp:43-125. Last working worker may complete only
-// after every stripe is empty. Saturated means terminated and working==0.
+// ZGC zMarkTerminate.inline.hpp:43-125.
 class MarkTerminate {
 public:
     void Reset(size_t workers,
                VerifyMarkingStacks::MarkingGeneration generation = VerifyMarkingStacks::MarkingGeneration::YOUNG);
-    bool TryTerminate(const MarkStripeSet& stripes);
+    void Leave();
+    bool TryTerminate(MarkStripeSet& stripes, size_t usedNStripes);
     void Wake();
     bool Saturated() const;
+    bool Terminated() const;
     size_t WorkerCount() const;
 
 private:
+    void MaybeReduceStripes(MarkStripeSet& stripes, size_t usedNStripes);
+
     VerifyMarkingStacks::MarkingGeneration generation = VerifyMarkingStacks::MarkingGeneration::YOUNG;
     size_t workerCount = 0;
     size_t working = 0;
@@ -43,16 +46,14 @@ private:
 
 class MarkEngine {
 public:
-    enum class Result { Completed, Partial };
+    enum class Result { Completed, Partial, Aborted };
 
     using Process = std::function<void(const MarkStackEntry&)>;
 
-    // zMark.cpp:439 drain, :471 rebalance omitted (no nstripes change mid-loop
-    // here), :491/:511 steal local then global, :597 flush, :635 terminate.
     static Result FollowWork(MarkContext& context, MarkingSMR& smr, MarkStripeSet& stripes,
                              MarkTerminate& terminate, size_t workerId, bool partial,
                              const Process& process, std::atomic<size_t>* stealSuccess = nullptr,
-                             std::atomic<size_t>* stealFailure = nullptr);
+                             std::atomic<size_t>* stealFailure = nullptr, std::atomic<bool>* abort = nullptr);
 };
 
 } // namespace MapleRuntime

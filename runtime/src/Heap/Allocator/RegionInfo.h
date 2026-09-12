@@ -43,7 +43,6 @@
 #include "Heap/Verify/DiagGate.h"
 #include "Heap/Verify/TraceClear.h"
 #include "Heap/Verify/FillerZeroDiag.h"
-#include "Heap/Verify/TagReuseProbe.h"
 #include "Heap/Verify/SurvNodeDiag.h"
 #include "Heap/Allocator/RouteDestHold.h"
 #include "Heap/Verify/FromPageDetachCheck.h"
@@ -1536,7 +1535,6 @@ public:
             PublishCurrentMarkFace();
             NotePageOwnerFirstPaint<G>();
         }
-        (void)TagReuseProbe::NoteMarkBitsSticky(this, offset, true, "MarkObject_sized0", G);
         CHECK(IsMarkedObject(view, offset));
         return already;
     }
@@ -1579,7 +1577,6 @@ public:
             PublishCurrentMarkFace();
             NotePageOwnerFirstPaint<G>();
         }
-        (void)TagReuseProbe::NoteMarkBitsSticky(this, offset, true, "MarkObject_sized", G);
         CHECK(IsMarkedObject(view, offset));
         return already;
     }
@@ -1742,16 +1739,11 @@ public:
     static std::atomic<size_t> ikeEpochKeep;
     static std::atomic<bool> ikeAtexitInstalled;
 
-    static bool MarkEpochAssertEnabled()
-    {
-        return false;
-    }
-
     static void ReportMarkEpochCounts(const char* point)
     {
         const size_t stale = markEpochStaleReadCount.load(std::memory_order_relaxed);
-        std::fprintf(stderr, "[GCV2][mark-epoch] point=%s stale_read=%zu env_assert=%d\n",
-                     point != nullptr ? point : "?", stale, MarkEpochAssertEnabled() ? 1 : 0);
+        std::fprintf(stderr, "[GCV2][mark-epoch] point=%s stale_read=%zu\n",
+                     point != nullptr ? point : "?", stale);
         std::fflush(stderr);
     }
 
@@ -2776,11 +2768,7 @@ public:
         // ZGC mark-start allocation watermark (zPage is_allocating). Capture
         // before the epoch bump so VisitLive / IsKnownEmpty / IsMarkedObject
         // see objects bumped after this point as implicitly live.
-        if (MarkStartAllocWaterEnabled()) {
-            metadata.markStartAllocPtr = GetRegionAllocPtr();
-        } else {
-            metadata.markStartAllocPtr = 0;
-        }
+        metadata.markStartAllocPtr = GetRegionAllocPtr();
         // Clear a large face while the supplied view still names the current
         // epoch; only then publish the epoch bump that makes old views stale.
         if (IsLargeRegion()) {
@@ -3281,17 +3269,12 @@ public:
 
     MAddress GetMarkStartAllocPtr() const { return metadata.markStartAllocPtr; }
 
-    static bool MarkStartAllocWaterEnabled() { return true; }
-
     // offset ≥ mark-start allocPtr (exclusive end at ClearLiveInfo). Objects
     // bumped after that point are ZGC allocate-black / is_allocating.
     // water == start means the region was empty at mark-start, so every
     // object now in it was born after that snapshot.
     bool AllocatedAfterMarkStart(size_t offset) const
     {
-        if (!MarkStartAllocWaterEnabled()) {
-            return false;
-        }
         uintptr_t water = metadata.markStartAllocPtr;
         if (water == 0) {
             return false;
@@ -3305,9 +3288,6 @@ public:
 
     bool HasMarkStartAllocGap() const
     {
-        if (!MarkStartAllocWaterEnabled()) {
-            return false;
-        }
         uintptr_t water = metadata.markStartAllocPtr;
         if (water == 0) {
             return false;

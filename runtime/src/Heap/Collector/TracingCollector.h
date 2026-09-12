@@ -550,7 +550,6 @@ protected:
     // concurrent marking.
     void TracingImpl(WorkStack& workStack, WorkStack& foreignRootsSet, bool parallel);
 
-    bool AddConcurrentTracingWork(RootSet& rs);
     void AddExportObjectsTracingWork(RootSet& exportRoots);
     virtual void EnumAndTagRawRoot(ObjectRef& root, RootSet& rootSet) const
     {
