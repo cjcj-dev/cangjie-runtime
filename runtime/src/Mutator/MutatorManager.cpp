@@ -127,9 +127,8 @@ void MutatorManager::BindMutator(Mutator& mutator) const
         (void)AllocBuffer::GetOrCreateAllocBuffer();
     }
     MutatorManager::Instance().RegisterMarkFlushThread(tlData);
-    mutator.BindPollTls(tlData);
-    UpdatePollValues(tlData);
     tlData->SetMutator(&mutator);
+    UpdatePollValues(tlData);
 }
 
 void MutatorManager::UnbindMutator(Mutator& mutator) const
@@ -137,7 +136,7 @@ void MutatorManager::UnbindMutator(Mutator& mutator) const
     ThreadLocalData* tlData = ThreadLocal::GetThreadLocalData();
     MRT_ASSERT(tlData->mutator == &mutator, "mutator in ThreadLocalData doesn't match in cjthread");
     tlData->SetMutator(nullptr);
-    mutator.BindPollTls(nullptr);
+    UpdatePollValues(tlData);
 }
 
 Mutator* MutatorManager::CreateMutator()
@@ -435,7 +434,6 @@ size_t MutatorManager::RuntimeMutatorRegistrySizeForTest()
 EpochHandshakeStats MutatorManager::RunEpochHandshake(const char* source, bool young)
 {
     EpochHandshakeStats stats;
-    epochHandshakeYoung.store(young ? 1 : 0, std::memory_order_release);
     if (!EpochHandshakeEnabled()) {
         return stats;
     }
@@ -504,7 +502,7 @@ EpochHandshakeStats MutatorManager::RunEpochHandshake(const char* source, bool y
         if (mutator->FinishedEpochHandshake(stats.epoch)) {
             continue;
         }
-        mutator->RequestEpochHandshake(stats.epoch);
+        mutator->RequestEpochHandshake(stats.epoch, young);
     }
 
     uint64_t waitStart = TimeUtil::MilliSeconds();
@@ -780,6 +778,50 @@ void ClearTlsPollRequest(ThreadLocalData* tls, uint64_t bit)
         return;
     }
     tls->pollRequests.fetch_and(~bit, std::memory_order_acq_rel);
+}
+
+void AddPollOnThreadHolding(Mutator* mutator, uint64_t bit)
+{
+    if (mutator == nullptr || bit == 0) {
+        return;
+    }
+    MutatorManager::Instance().ForEachMarkFlushTls([mutator, bit](ThreadLocalData* tls) {
+        if (tls->mutator == mutator) {
+            AddTlsPollRequest(tls, bit);
+        }
+    });
+}
+
+void ClearPollOnThreadHolding(Mutator* mutator, uint64_t bit)
+{
+    if (mutator == nullptr || bit == 0) {
+        return;
+    }
+    MutatorManager::Instance().ForEachMarkFlushTls([mutator, bit](ThreadLocalData* tls) {
+        if (tls->mutator == mutator) {
+            ClearTlsPollRequest(tls, bit);
+            if (tls == ThreadLocal::GetThreadLocalData()) {
+                UpdatePollValues(tls);
+            }
+        }
+    });
+}
+
+void ArmPollOnThreadHolding(Mutator* mutator)
+{
+    if (mutator == nullptr) {
+        return;
+    }
+    MutatorManager::Instance().ForEachMarkFlushTls([mutator](ThreadLocalData* tls) {
+        if (tls->mutator == mutator) {
+            ArmThreadPoll(tls);
+        }
+    });
+}
+
+void ArmPollOnAllOsThreads()
+{
+    MutatorManager::Instance().ForEachMarkFlushTls([](ThreadLocalData* tls) { ArmThreadPoll(tls); });
 }
 
 void MutatorManager::RegisterMarkFlushThread(ThreadLocalData* tls)
@@ -1115,6 +1157,7 @@ void MutatorManager::StartLightSync(bool syncGCPhase, GCPhase phase)
         mutator.SetSafepointActive(true);
         this->undoneLightSyncMutators.push_back(&mutator);
     });
+    ArmPollOnAllOsThreads();
 }
 
 void MutatorManager::StopLightSync() noexcept
@@ -1217,7 +1260,7 @@ void MutatorManager::EnsurePhaseTransition(GCPhase phase, std::list<Mutator*> &u
     }
 }
 
-void MutatorManager::TransitionAllMutatorsToGCPhase(GCPhase phase)
+void MutatorManager::TransitionAllMutatorsToGCPhase(GCPhase phase, bool young)
 {
     // Try to occupy mutatorListLock prevent some mutators from exiting
     bool worldStopped = WorldStopped();
@@ -1235,11 +1278,13 @@ void MutatorManager::TransitionAllMutatorsToGCPhase(GCPhase phase)
 
     std::list<Mutator*> undoneMutators;
     // Broadcast mutator phase transition signal to all mutators
-    VisitAllMutators([&undoneMutators](Mutator& mutator) {
+    VisitAllMutators([&undoneMutators, young](Mutator& mutator) {
+        mutator.SetEnumYoung(young);
         mutator.SetSuspensionFlag(Mutator::SuspensionType::SUSPENSION_FOR_GC_PHASE);
         mutator.SetSafepointActive(true);
         undoneMutators.push_back(&mutator);
     });
+    ArmPollOnAllOsThreads();
     EnsurePhaseTransition(phase, undoneMutators);
     if (!worldStopped) {
         MutatorManagementWUnlock();

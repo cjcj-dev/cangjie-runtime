@@ -175,19 +175,19 @@ void StackManager::VisitStackRoots(const UnwindContext& topFrame, const RootVisi
 }
 
 void StackManager::VisitHeapReferencesOnStack(const UnwindContext& topFrame, const RootVisitor& rootVisitor,
-    const DerivedPtrVisitor& derivedPtrVisitor, Mutator& mutator)
+    const DerivedPtrVisitor& derivedPtrVisitor, Mutator& mutator, bool young)
 {
-    VisitHeapReferencesOnStack(topFrame, rootVisitor, rootVisitor, derivedPtrVisitor, mutator);
+    VisitHeapReferencesOnStack(topFrame, rootVisitor, rootVisitor, derivedPtrVisitor, mutator, young);
 }
 
 void StackManager::VisitHeapReferencesOnStack(const UnwindContext& topFrame, const RootVisitor& regRootVisitor,
-    const RootVisitor& slotRootVisitor, const DerivedPtrVisitor& derivedPtrVisitor, Mutator& mutator)
+    const RootVisitor& slotRootVisitor, const DerivedPtrVisitor& derivedPtrVisitor, Mutator& mutator, bool young)
 {
     ElfUnloadQuiescence::ReadScope metadataReader(ElfUnloadQuiescence::ReaderKind::GC_STACK_ENTRY);
     GCStackInfo gcStackInfo(&topFrame);
     gcStackInfo.FillInStackTrace();
     ElfUnloadQuiescence::AssertReaderActive();
-    gcStackInfo.VisitHeapReferencesOnStack(regRootVisitor, slotRootVisitor, derivedPtrVisitor, mutator);
+    gcStackInfo.VisitHeapReferencesOnStack(regRootVisitor, slotRootVisitor, derivedPtrVisitor, mutator, young);
 }
 
 void StackManager::VisitStackPtrMap(const UnwindContext& topFrame, const StackPtrVisitor& traceAndFixPtrVisitor,

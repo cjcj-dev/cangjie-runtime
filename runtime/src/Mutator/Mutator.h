@@ -297,7 +297,12 @@ public:
         suspensionFlag.fetch_or(flag, std::memory_order_seq_cst);
         const uint64_t bit = PollBitFor(flag);
         if (bit != 0) {
-            AddTlsPollRequest(boundTls, bit);
+            ThreadLocalData* tls = ThreadLocal::GetThreadLocalData();
+            if (tls != nullptr && tls->mutator == this) {
+                AddTlsPollRequest(tls, bit);
+            } else {
+                AddPollOnThreadHolding(this, bit);
+            }
         }
     }
 
@@ -306,10 +311,13 @@ public:
         suspensionFlag.fetch_and(~flag, std::memory_order_seq_cst);
         const uint64_t bit = PollBitFor(flag);
         if (bit != 0) {
-            ClearTlsPollRequest(boundTls, bit);
-        }
-        if (boundTls != nullptr && boundTls == ThreadLocal::GetThreadLocalData()) {
-            UpdatePollValues(boundTls);
+            ThreadLocalData* tls = ThreadLocal::GetThreadLocalData();
+            if (tls != nullptr && tls->mutator == this) {
+                ClearTlsPollRequest(tls, bit);
+                UpdatePollValues(tls);
+            } else {
+                ClearPollOnThreadHolding(this, bit);
+            }
         }
     }
 
@@ -338,7 +346,7 @@ public:
         return (suspensionFlag.load(std::memory_order_acquire) != 0) || HasPreemptRequest();
     }
 
-    void RequestEpochHandshake(uint64_t epoch);
+    void RequestEpochHandshake(uint64_t epoch, bool young);
     bool AcknowledgeEpochHandshake(uint64_t epoch, bool bySelf);
     // dynjoin (乙): brand-new mutator is born-clean for the currently active epoch.
     // Empty stack + current GC phase ⇒ no contribution to this epoch's root set.
@@ -364,35 +372,30 @@ public:
         epochHandshakeLifecycle.store(state, std::memory_order_release);
     }
 
-    void SetSafepointStatePtr(uint64_t* slot)
-    {
-        safepointStatePtr = slot;
-        boundTls = nullptr;
-    }
-
-    void BindPollTls(ThreadLocalData* tls)
-    {
-        boundTls = tls;
-        safepointStatePtr = tls == nullptr ? nullptr : &tls->safepointState;
-    }
-
     void SetSafepointActive(bool value)
     {
-        ThreadLocalData* tls = boundTls;
-        if (tls == nullptr) {
-            uint64_t* statePtr = safepointStatePtr;
-            if (statePtr != nullptr && value) {
-                *statePtr = 1;
+        ThreadLocalData* tls = ThreadLocal::GetThreadLocalData();
+        if (tls != nullptr && tls->mutator == this) {
+            if (value) {
+                ArmThreadPoll(tls);
+            } else {
+                UpdatePollValues(tls);
             }
             return;
         }
         if (value) {
-            ArmThreadPoll(tls);
-            return;
+            ArmPollOnThreadHolding(this);
         }
-        if (tls == ThreadLocal::GetThreadLocalData()) {
-            UpdatePollValues(tls);
-        }
+    }
+
+    void SetEnumYoung(bool young)
+    {
+        enumYoung.store(young ? 1 : 0, std::memory_order_release);
+    }
+
+    bool EnumYoung() const
+    {
+        return enumYoung.load(std::memory_order_acquire) != 0;
     }
 
     // Spin wait phase transition finished when GC is tranverting this mutator's phase
@@ -422,7 +425,7 @@ public:
                      size_t* scannedFrames = nullptr);
     bool DrainStackWatermark(const RootVisitor& visitor, const RootVisitor& invisibleRootVisitor,
                              uint64_t epoch, StackWatermark::Owner owner,
-                             const DerivedPtrVisitor* derivedPtrVisitor, size_t& scannedFrames);
+                             const DerivedPtrVisitor* derivedPtrVisitor, size_t& scannedFrames, bool young);
     inline void GCPhasePreForward(GCPhase newPhase);
     inline void HandleGCPhase(GCPhase newPhase);
     inline void HandleGCPhase(GCPhase newPhase, bool bySelf);
@@ -471,10 +474,11 @@ public:
     void VisitInvisibleRoot(const RootVisitor& visitor) { VisitRawObjects(visitor); }
 #endif
 
-    void VisitHeapReferences(const RootVisitor& rootVisitor, const DerivedPtrVisitor& derivedPtrVisitor);
+    void VisitHeapReferences(const RootVisitor& rootVisitor, const DerivedPtrVisitor& derivedPtrVisitor,
+                             bool young = false);
     void VisitHeapReferences(const RootVisitor& regRootVisitor, const RootVisitor& slotRootVisitor,
                              const DerivedPtrVisitor& derivedPtrVisitor, const RootVisitor& exceptionRootVisitor,
-                             const RootVisitor& rawObjectVisitor);
+                             const RootVisitor& rawObjectVisitor, bool young = false);
 
     void DumpMutator() const
     {
@@ -492,7 +496,11 @@ public:
 
     const void* GetSafepointPage() const
     {
-        return safepointStatePtr;
+        ThreadLocalData* tls = ThreadLocal::GetThreadLocalData();
+        if (tls != nullptr && tls->mutator == this) {
+            return &tls->safepointState;
+        }
+        return nullptr;
     }
 
     UnwindContext& GetUnwindContext() { return uwContext; }
@@ -584,14 +592,28 @@ public:
         }
         RegisterCurrentMarkFlushThread();
         SetEpochHandshakeLifecycle(EPOCH_HANDSHAKE_RUNNING);
-        BindPollTls(tlData);
+        const uint32_t flags = GetSuspensionFlag();
+        if ((flags & SUSPENSION_FOR_SYNC) != 0) {
+            AddTlsPollRequest(tlData, POLL_REQ_SYNC);
+        }
+        if ((flags & SUSPENSION_FOR_GC_PHASE) != 0) {
+            AddTlsPollRequest(tlData, POLL_REQ_GC_PHASE);
+        }
+        if ((flags & SUSPENSION_FOR_CPU_PROFILE) != 0) {
+            AddTlsPollRequest(tlData, POLL_REQ_CPU_PROFILE);
+        }
+        if ((flags & SUSPENSION_FOR_EPOCH_HANDSHAKE) != 0) {
+            AddTlsPollRequest(tlData, POLL_REQ_EPOCH);
+        }
+        if ((flags & SUSPENSION_FOR_EXIT) != 0) {
+            AddTlsPollRequest(tlData, POLL_REQ_EXIT);
+        }
         UpdatePollValues(tlData);
         DoLeaveSaferegion();
     }
 
     void PreparedToPark(void* pc, void* fa)
     {
-        BindPollTls(nullptr);
         stackWatermark.OnPark();
         if (UNLIKELY((uwContext.GetUnwindContextStatus() == UnwindContextStatus::RISKY) || InSaferegion())) {
             SetInSaferegion(SaferegionState::SAFE_REGION_TRUE);
@@ -679,10 +701,11 @@ public:
 protected:
     // for managed stack
     void VisitStackRoots(const RootVisitor& func, const RootVisitor& invisibleRootVisitor);
-    void VisitHeapReferencesOnStack(const RootVisitor& rootVisitor, const DerivedPtrVisitor& derivedPtrVisitor);
+    void VisitHeapReferencesOnStack(const RootVisitor& rootVisitor, const DerivedPtrVisitor& derivedPtrVisitor,
+                                    bool young = false);
     void VisitHeapReferencesOnStack(const RootVisitor& regRootVisitor, const RootVisitor& slotRootVisitor,
                                     const DerivedPtrVisitor& derivedPtrVisitor,
-                                    const RootVisitor& rawObjectVisitor);
+                                    const RootVisitor& rawObjectVisitor, bool young = false);
     // for exception ref
     void VisitExceptionRoots(const RootVisitor& func);
     void VisitRawObjects(const RootVisitor& func);
@@ -712,8 +735,7 @@ private:
     void* unuse = nullptr; // reusable placeholder
 #endif // __WIN64
 
-    uint64_t* safepointStatePtr = nullptr; // state: active or not
-    ThreadLocalData* boundTls = nullptr;
+    std::atomic<int> enumYoung = { 0 };
 #ifdef _WIN64
     uint32_t stackGrowFrameSize = 0;
 #endif

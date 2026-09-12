@@ -677,7 +677,7 @@ void WCollector::TraceHeap()
 
             TransitionToGCPhase(GCPhase::GC_PHASE_TRACE, true);
         } else {
-            TransitionToGCPhase(GCPhase::GC_PHASE_ENUM, true);
+            TransitionToGCPhase(GCPhase::GC_PHASE_ENUM, true, false);
             DoEnumeration(workStack, foreignStack);
         }
     }

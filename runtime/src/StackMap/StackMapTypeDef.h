@@ -42,7 +42,7 @@ constexpr U32 STACKMAP_COMPRESSED_BIT = 1;
 constexpr U32 STACKMAP_OOP_SLOT_BIT = 2;
 inline bool StackMapIsCompressed(U32 format) { return (format & STACKMAP_COMPRESSED_BIT) != 0; }
 inline bool StackMapHasOopSlot(U32 format) { return (format & STACKMAP_OOP_SLOT_BIT) != 0; }
-void VisitTaggedOopSlot(ObjectRef& root);
+void VisitTaggedOopSlot(ObjectRef& root, bool young);
 // derivedptr visitor parameters: basePtr, the reference of derivedptr
 using DerivedPtrVisitor = std::function<void(BasePtrType, DerivedSlot&)>;
 using DerivedPtrDebugVisitor = std::function<void(BasePtrType, DerivedPtrType)>;

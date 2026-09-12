@@ -263,7 +263,7 @@ void Mutator::HandleSuspensionRequest()
     }
 }
 
-void Mutator::RequestEpochHandshake(uint64_t epoch)
+void Mutator::RequestEpochHandshake(uint64_t epoch, bool young)
 {
     CHECK_DETAIL(epoch != 0, "epoch handshake request must not use epoch zero");
     EpochHandshakeState state = epochHandshakeState.load(std::memory_order_acquire);
@@ -278,6 +278,7 @@ void Mutator::RequestEpochHandshake(uint64_t epoch)
                  static_cast<unsigned long long>(epochHandshakeRequest.load(std::memory_order_relaxed)),
                  static_cast<unsigned long long>(epochHandshakeCompletion.load(std::memory_order_relaxed)),
                  static_cast<unsigned>(epochHandshakeState.load(std::memory_order_relaxed)));
+    SetEnumYoung(young);
     epochHandshakeRequest.store(epoch, std::memory_order_relaxed);
     epochHandshakeState.store(EPOCH_HANDSHAKE_REQUESTED, std::memory_order_release);
     SetSuspensionFlag(SUSPENSION_FOR_EPOCH_HANDSHAKE);
@@ -326,8 +327,7 @@ bool Mutator::AcknowledgeEpochHandshake(uint64_t epoch, bool bySelf)
         CHECK_DETAIL(Heap::GetHeap().GetGCPhase() == GCPhase::GC_PHASE_ENUM,
                      "concurrent stack scan ack before ENUM barrier publication");
         size_t frames = 0;
-        bool scanned = GcPhaseEnum(GCPhase::GC_PHASE_ENUM, MutatorManager::Instance().EpochHandshakeYoung(),
-                                  epoch, bySelf, &frames);
+        bool scanned = GcPhaseEnum(GCPhase::GC_PHASE_ENUM, EnumYoung(), epoch, bySelf, &frames);
         MutatorManager::Instance().RecordEpochHandshakeStackScan(scanned, frames);
         if (scanned) {
             SetMutatorPhase(GCPhase::GC_PHASE_ENUM);
@@ -487,14 +487,15 @@ void Mutator::RemoveNativeFrameRoot(ObjectRef* root)
     }
 }
 
-void Mutator::VisitHeapReferencesOnStack(const RootVisitor& rootVisitor, const DerivedPtrVisitor& derivedPtrVisitor)
+void Mutator::VisitHeapReferencesOnStack(const RootVisitor& rootVisitor, const DerivedPtrVisitor& derivedPtrVisitor,
+                                         bool young)
 {
-    VisitHeapReferencesOnStack(rootVisitor, rootVisitor, derivedPtrVisitor, rootVisitor);
+    VisitHeapReferencesOnStack(rootVisitor, rootVisitor, derivedPtrVisitor, rootVisitor, young);
 }
 
 void Mutator::VisitHeapReferencesOnStack(const RootVisitor& regRootVisitor, const RootVisitor& slotRootVisitor,
                                          const DerivedPtrVisitor& derivedPtrVisitor,
-                                         const RootVisitor& rawObjectVisitor)
+                                         const RootVisitor& rawObjectVisitor, bool young)
 {
     MutatorLock();
     // No managed frame means there is no stack map to visit. Side roots are
@@ -509,24 +510,26 @@ void Mutator::VisitHeapReferencesOnStack(const RootVisitor& regRootVisitor, cons
     CreateCurrentGCInfo();
 #endif
     StackManager::VisitHeapReferencesOnStack(
-        uwContext, regRootVisitor, slotRootVisitor, derivedPtrVisitor, *this);
+        uwContext, regRootVisitor, slotRootVisitor, derivedPtrVisitor, *this, young);
     VisitRawObjects(rawObjectVisitor);
     DecObserver();
     MutatorUnlock();
 }
 
-void Mutator::VisitHeapReferences(const RootVisitor& rootVisitor, const DerivedPtrVisitor& derivedPtrVisitor)
+void Mutator::VisitHeapReferences(const RootVisitor& rootVisitor, const DerivedPtrVisitor& derivedPtrVisitor,
+                                  bool young)
 {
-    VisitHeapReferencesOnStack(rootVisitor, derivedPtrVisitor);
+    VisitHeapReferencesOnStack(rootVisitor, derivedPtrVisitor, young);
     VisitExceptionRoots(rootVisitor);
     VisitNativeFrameRoots(rootVisitor);
 }
 
 void Mutator::VisitHeapReferences(const RootVisitor& regRootVisitor, const RootVisitor& slotRootVisitor,
                                   const DerivedPtrVisitor& derivedPtrVisitor,
-                                  const RootVisitor& exceptionRootVisitor, const RootVisitor& rawObjectVisitor)
+                                  const RootVisitor& exceptionRootVisitor, const RootVisitor& rawObjectVisitor,
+                                  bool young)
 {
-    VisitHeapReferencesOnStack(regRootVisitor, slotRootVisitor, derivedPtrVisitor, rawObjectVisitor);
+    VisitHeapReferencesOnStack(regRootVisitor, slotRootVisitor, derivedPtrVisitor, rawObjectVisitor, young);
     VisitExceptionRoots(exceptionRootVisitor);
 }
 
@@ -952,7 +955,7 @@ static void PreForwardHeaderlessRecord(BaseObject* record, Collector& collector,
     }
 }
 
-void VisitTaggedOopSlot(ObjectRef& root)
+void VisitTaggedOopSlot(ObjectRef& root, bool young)
 {
     GCPhase phase = Heap::GetHeap().GetGCPhase();
     BaseObject* obj = PlainRootObject(root.LoadPlain());
@@ -976,7 +979,7 @@ void VisitTaggedOopSlot(ObjectRef& root)
             }
             (*remappedBases)[obj] = PlainRootObject(root.LoadPlain());
         } else {
-            PushHeapRootIfPlausible(obj, "OopSlot", MutatorManager::Instance().EpochHandshakeYoung());
+            PushHeapRootIfPlausible(obj, "OopSlot", young);
         }
         return;
     }
@@ -988,13 +991,13 @@ void VisitTaggedOopSlot(ObjectRef& root)
         std::set<void*> once;
         PreForwardHeaderlessRecord(obj, collector, once);
     } else {
-        PushHeaderlessRecordField(obj, "OopSlot.headerless", MutatorManager::Instance().EpochHandshakeYoung());
+        PushHeaderlessRecordField(obj, "OopSlot.headerless", young);
     }
 }
 
 bool Mutator::DrainStackWatermark(const RootVisitor& visitor, const RootVisitor& invisibleRootVisitor,
                                   uint64_t epoch, StackWatermark::Owner owner,
-                                  const DerivedPtrVisitor* derivedPtrVisitor, size_t& scannedFrames)
+                                  const DerivedPtrVisitor* derivedPtrVisitor, size_t& scannedFrames, bool young)
 {
     scannedFrames = 0;
     MutatorLock();
@@ -1040,7 +1043,7 @@ bool Mutator::DrainStackWatermark(const RootVisitor& visitor, const RootVisitor&
     StackFrameCursor cursor(uwContext);
     bool began = stackWatermark.TryBegin(epoch, owner, cursor.FrameCount());
     if (began) {
-        while (cursor.ProcessOne(visitor, *this, derivedPtrVisitor)) {
+        while (cursor.ProcessOne(visitor, *this, derivedPtrVisitor, young)) {
             stackWatermark.AdvanceTo(cursor.Cursor(), owner);
         }
         VisitRawObjects(visitedInvisibleRootVisitor);
@@ -1149,7 +1152,7 @@ bool Mutator::GcPhaseEnum(GCPhase newPhase, bool young, uint64_t stackScanEpoch,
         }
     };
     if (stackScanEpoch == 0) {
-        VisitHeapReferences(visitor, visitor, derivedVisitor, visitor, invisibleRootVisitor);
+        VisitHeapReferences(visitor, visitor, derivedVisitor, visitor, invisibleRootVisitor, young);
         return true;
     }
     // The concurrent stack-scan leg now carries the same derived visitor as the
@@ -1165,7 +1168,7 @@ bool Mutator::GcPhaseEnum(GCPhase newPhase, bool young, uint64_t stackScanEpoch,
     size_t frames = 0;
     StackWatermark::Owner owner = bySelf ? StackWatermark::WM_OWNER_SELF : StackWatermark::WM_OWNER_GC;
     bool scanned = DrainStackWatermark(
-        visitor, invisibleRootVisitor, stackScanEpoch, owner, &derivedVisitor, frames);
+        visitor, invisibleRootVisitor, stackScanEpoch, owner, &derivedVisitor, frames, young);
     if (scannedFrames != nullptr) {
         *scannedFrames = frames;
     }
@@ -1341,7 +1344,7 @@ inline void Mutator::HandleGCPhase(GCPhase newPhase)
 inline void Mutator::HandleGCPhase(GCPhase newPhase, bool bySelf)
 {
     if (newPhase == GCPhase::GC_PHASE_ENUM) {
-        GcPhaseEnum(newPhase, MutatorManager::Instance().EpochHandshakeYoung());
+        GcPhaseEnum(newPhase, EnumYoung());
     } else if (newPhase == GCPhase::GC_PHASE_PREFORWARD) {
         GCPhasePreForward(newPhase);
     } else if (newPhase == GCPhase::GC_PHASE_CLEAR_SATB_BUFFER || newPhase == GCPhase::GC_PHASE_RECLAIM_SATB_NODE) {
