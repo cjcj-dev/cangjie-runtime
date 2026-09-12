@@ -282,5 +282,6 @@ GC_OTHER_VM_TEST(LoadFc, FinalizerHandOutFailsClosedOnZeroHeader)
 
     ExpectControlledAbort([&]() {
         processor.ProcessReferences([](BaseObject*) { return false; });
+        processor.EnqueueReferences();
     });
 }
