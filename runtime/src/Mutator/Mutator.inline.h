@@ -13,8 +13,8 @@
 namespace MapleRuntime {
 inline void Mutator::DoEnterSaferegion()
 {
-    // set current mutator in saferegion.
     SetInSaferegion(SAFE_REGION_TRUE);
+    MarkFlushOnEnterSaferegion();
 }
 
 inline bool Mutator::EnterSaferegion(bool updateUnwindContext) noexcept
@@ -87,36 +87,7 @@ __attribute__((always_inline)) inline bool Mutator::TransitionGCPhase(bool bySel
     } while (true);
 }
 
-// Ensure that mutator is changed only once by mutator itself or Profile
-__attribute__((always_inline)) inline bool Mutator::TransitionToCpuProfile(bool bySelf)
-{
-    do {
-        CpuProfileState state = cpuProfileState.load();
-        // If this mutator profile has finished, just return
-        if (state == FINISH_CPUPROFILE) {
-            return true;
-        }
-        // If this mutator is executing profile by other thread, mutator should wait but profile just return
-        if (state == IN_CPUPROFILING) {
-            if (bySelf) {
-                WaitForCpuProfiling();
-                return true;
-            } else {
-                return false;
-            }
-        }
-        if (!bySelf && state == NO_CPUPROFILE) {
-            return true;
-        }
-        // Current thread set atomic variable to ensure atomicity of phase transition
-        CHECK(state == NEED_CPUPROFILE);
-        if (cpuProfileState.compare_exchange_weak(state, IN_CPUPROFILING)) {
-            TransitionToCpuProfileExclusive();
-            cpuProfileState.store(FINISH_CPUPROFILE, std::memory_order_release);
-            return true;
-        }
-    } while (true);
-}
+
 } // namespace MapleRuntime
 
 #endif // MRT_MUTATOR_INLINE_H

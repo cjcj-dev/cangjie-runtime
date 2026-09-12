@@ -26,14 +26,15 @@ void GCStackInfo::VisitStackRoots(const RootVisitor& func, Mutator& mutator) con
 }
 
 void GCStackInfo::VisitHeapReferencesOnStack(const RootVisitor& rootVisitor, const DerivedPtrVisitor& derivedPtrVisitor,
-                                             Mutator& mutator) const
+                                             Mutator& mutator, bool young) const
 {
-    VisitHeapReferencesOnStack(rootVisitor, rootVisitor, derivedPtrVisitor, mutator);
+    VisitHeapReferencesOnStack(rootVisitor, rootVisitor, derivedPtrVisitor, mutator, young);
 }
 
 void GCStackInfo::VisitHeapReferencesOnStack(const RootVisitor& regRootVisitor,
                                              const RootVisitor& slotRootVisitor,
-                                             const DerivedPtrVisitor& derivedPtrVisitor, Mutator& mutator) const
+                                             const DerivedPtrVisitor& derivedPtrVisitor, Mutator& mutator,
+                                             bool young) const
 {
     RegSlotsMap regSlotsMap;
     for (const auto& frame : stack) {
@@ -41,7 +42,7 @@ void GCStackInfo::VisitHeapReferencesOnStack(const RootVisitor& regRootVisitor,
         switch (frame.GetFrameType()) {
             case FrameType::MANAGED: {
                 TracingCollector::VisitHeapReferencesOnStack(
-                    regRootVisitor, slotRootVisitor, derivedPtrVisitor, regSlotsMap, frame, mutator);
+                    regRootVisitor, slotRootVisitor, derivedPtrVisitor, regSlotsMap, frame, mutator, young);
                 break;
             }
             case FrameType::C2R_STUB:
@@ -143,14 +144,15 @@ void GCStackInfo::VisitStackRoots(const RootVisitor& func, Mutator& mutator) con
 }
 
 void GCStackInfo::VisitHeapReferencesOnStack(const RootVisitor& rootVisitor, const DerivedPtrVisitor& derivedPtrVisitor,
-                                             Mutator& mutator) const
+                                             Mutator& mutator, bool young) const
 {
-    VisitHeapReferencesOnStack(rootVisitor, rootVisitor, derivedPtrVisitor, mutator);
+    VisitHeapReferencesOnStack(rootVisitor, rootVisitor, derivedPtrVisitor, mutator, young);
 }
 
 void GCStackInfo::VisitHeapReferencesOnStack(const RootVisitor& regRootVisitor,
                                              const RootVisitor& slotRootVisitor,
-                                             const DerivedPtrVisitor& derivedPtrVisitor, Mutator& mutator) const
+                                             const DerivedPtrVisitor& derivedPtrVisitor, Mutator& mutator,
+                                             bool young) const
 {
     RegSlotsMap regSlotsMap;
     for (const auto& frame : stack) {
@@ -158,7 +160,7 @@ void GCStackInfo::VisitHeapReferencesOnStack(const RootVisitor& regRootVisitor,
         switch (frame.GetFrameType()) {
             case FrameType::MANAGED: {
                 TracingCollector::VisitHeapReferencesOnStack(
-                    regRootVisitor, slotRootVisitor, derivedPtrVisitor, regSlotsMap, frame, mutator);
+                    regRootVisitor, slotRootVisitor, derivedPtrVisitor, regSlotsMap, frame, mutator, young);
                 break;
             }
             case FrameType::C2R_STUB:

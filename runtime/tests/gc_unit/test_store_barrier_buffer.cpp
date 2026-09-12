@@ -268,7 +268,7 @@ GC_TEST(StoreBuf, ProductPhaseFlushHandsPairedPrevToMark)
     retired.clear();
     Mutator mutator;
     mutator.SetMutatorPhase(GCPhase::GC_PHASE_TRACE);
-    mutator.SetMarkFlushAllocBuffer(&alloc);
+    ThreadLocal::SetAllocBuffer(&alloc);
 #if defined(MRT_TESTABLE_INTERNALS)
     mutator.SetStoreBarrierRememberedSetForTest(&rs);
 #endif
@@ -388,7 +388,7 @@ GC_TEST(StoreBuf, CompilerFastOverwriteHandsObservedOldToMark)
     retired.clear();
     Mutator mutator;
     mutator.SetMutatorPhase(GCPhase::GC_PHASE_TRACE);
-    mutator.SetMarkFlushAllocBuffer(&alloc);
+    ThreadLocal::SetAllocBuffer(&alloc);
 #if defined(MRT_TESTABLE_INTERNALS)
     mutator.SetStoreBarrierRememberedSetForTest(&rs);
 #endif
@@ -458,7 +458,7 @@ GC_TEST(StoreBuf, GcAssistedPhaseFlushDefersStoreBuffer)
 
     Mutator mutator;
     mutator.SetMutatorPhase(GCPhase::GC_PHASE_TRACE);
-    mutator.SetMarkFlushAllocBuffer(&alloc);
+    ThreadLocal::SetAllocBuffer(&alloc);
 #if defined(MRT_TESTABLE_INTERNALS)
     mutator.SetStoreBarrierRememberedSetForTest(&rs);
 #endif

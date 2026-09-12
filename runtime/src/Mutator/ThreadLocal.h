@@ -8,6 +8,7 @@
 #ifndef MRT_THREAD_LOCAL_H
 #define MRT_THREAD_LOCAL_H
 
+#include <atomic>
 #include <cstdint>
 #include "Base/RwLock.h"
 #include "Interpreter/Options.h"
@@ -45,6 +46,12 @@ struct ThreadLocalData {
 public:
     void SetMutator(Mutator* newMutator);
 };
+
+void MarkFlushOnEnterSaferegion();
+void MarkFlushBeginLeaveSaferegion();
+void MarkFlushEndLeaveSaferegion();
+bool MarkFlushPendingForCurrentThread();
+void RegisterCurrentMarkFlushThread();
 
 struct CleanThreadLocalData {
     CleanThreadLocalData() noexcept;
@@ -131,4 +138,6 @@ private:
     static RwLock tlEnableLock;
 };
 } // namespace MapleRuntime
+
+#include "Handshake.h"
 #endif // MRT_THREAD_LOCAL_H

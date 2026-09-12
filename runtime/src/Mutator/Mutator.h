@@ -191,17 +191,20 @@ public:
     __attribute__((always_inline)) inline void DoLeaveSaferegion()
     {
         for (;;) {
+            MarkFlushBeginLeaveSaferegion();
             MutatorLock();
             if (epochHandshakeState.load(std::memory_order_acquire) == EPOCH_HANDSHAKE_CLAIMED) {
                 MutatorUnlock();
+                MarkFlushOnEnterSaferegion();
                 (void)sched_yield();
                 continue;
             }
             SetInSaferegion(SAFE_REGION_FALSE);
+            MarkFlushEndLeaveSaferegion();
             MutatorUnlock();
             break;
         }
-        if (UNLIKELY(HasAnySuspensionRequest())) {
+        if (UNLIKELY(HasAnySuspensionRequest() || MarkFlushPendingForCurrentThread())) {
             HandleSuspensionRequest();
         }
     }
@@ -257,7 +260,13 @@ public:
 
     __attribute__((always_inline)) inline bool FinishedCpuProfile() const
     {
-        return cpuProfileState.load(std::memory_order_acquire) == FINISH_CPUPROFILE;
+        return cpuProfileState.load(std::memory_order_acquire) == FINISH_CPUPROFILE &&
+               !CpuProfileRequestQueued(this);
+    }
+
+    __attribute__((always_inline)) inline CpuProfileState GetCpuProfileState() const
+    {
+        return cpuProfileState.load(std::memory_order_acquire);
     }
 
     __attribute__((always_inline)) inline void SetCpuProfileState(CpuProfileState state)
@@ -305,7 +314,7 @@ public:
         return (suspensionFlag.load(std::memory_order_acquire) != 0) || HasPreemptRequest();
     }
 
-    void RequestEpochHandshake(uint64_t epoch);
+    void RequestEpochHandshake(uint64_t epoch, bool young);
     bool AcknowledgeEpochHandshake(uint64_t epoch, bool bySelf);
     // dynjoin (乙): brand-new mutator is born-clean for the currently active epoch.
     // Empty stack + current GC phase ⇒ no contribution to this epoch's root set.
@@ -331,15 +340,24 @@ public:
         epochHandshakeLifecycle.store(state, std::memory_order_release);
     }
 
-    void SetSafepointStatePtr(uint64_t* slot) { safepointStatePtr = slot; }
-
     void SetSafepointActive(bool value)
     {
-        uint64_t* statePtr = safepointStatePtr;
-        if (statePtr == nullptr) {
-            return;
+        if (value) {
+            ArmAllThreadPolls();
+        } else {
+            ThreadLocalData* tls = ThreadLocal::GetThreadLocalData();
+            UpdatePollValues(tls);
         }
-        *statePtr = static_cast<uint64_t>(value);
+    }
+
+    void SetEnumYoung(bool young)
+    {
+        enumYoung.store(young ? 1 : 0, std::memory_order_release);
+    }
+
+    bool EnumYoung() const
+    {
+        return enumYoung.load(std::memory_order_acquire) != 0;
     }
 
     // Spin wait phase transition finished when GC is tranverting this mutator's phase
@@ -357,19 +375,13 @@ public:
         }
     }
 
-    __attribute__((always_inline)) inline void WaitForCpuProfiling() const
-    {
-        while (cpuProfileState.load(std::memory_order_acquire) != FINISH_CPUPROFILE) {
-            // Give up CPU to avoid overloading
-            (void)sched_yield();
-        }
-    }
+    void WaitForCpuProfiling() const;
 
-    bool GcPhaseEnum(GCPhase newPhase, uint64_t stackScanEpoch = 0, bool bySelf = false,
+    bool GcPhaseEnum(GCPhase newPhase, bool young, uint64_t stackScanEpoch = 0, bool bySelf = false,
                      size_t* scannedFrames = nullptr);
     bool DrainStackWatermark(const RootVisitor& visitor, const RootVisitor& invisibleRootVisitor,
                              uint64_t epoch, StackWatermark::Owner owner,
-                             const DerivedPtrVisitor* derivedPtrVisitor, size_t& scannedFrames);
+                             const DerivedPtrVisitor* derivedPtrVisitor, size_t& scannedFrames, bool young);
     inline void GCPhasePreForward(GCPhase newPhase);
     inline void HandleGCPhase(GCPhase newPhase);
     inline void HandleGCPhase(GCPhase newPhase, bool bySelf);
@@ -388,7 +400,7 @@ public:
     // Ensure that mutator phase is changed only once by mutator itself or GC
     __attribute__((always_inline)) inline bool TransitionGCPhase(bool bySelf);
 
-    __attribute__((always_inline)) inline bool TransitionToCpuProfile(bool bySelf);
+    bool TransitionToCpuProfile(bool bySelf);
 
     __attribute__((always_inline)) inline void SetMutatorPhase(const GCPhase newPhase)
     {
@@ -418,10 +430,11 @@ public:
     void VisitInvisibleRoot(const RootVisitor& visitor) { VisitRawObjects(visitor); }
 #endif
 
-    void VisitHeapReferences(const RootVisitor& rootVisitor, const DerivedPtrVisitor& derivedPtrVisitor);
+    void VisitHeapReferences(const RootVisitor& rootVisitor, const DerivedPtrVisitor& derivedPtrVisitor,
+                             bool young = false);
     void VisitHeapReferences(const RootVisitor& regRootVisitor, const RootVisitor& slotRootVisitor,
                              const DerivedPtrVisitor& derivedPtrVisitor, const RootVisitor& exceptionRootVisitor,
-                             const RootVisitor& rawObjectVisitor);
+                             const RootVisitor& rawObjectVisitor, bool young = false);
 
     void DumpMutator() const
     {
@@ -439,7 +452,11 @@ public:
 
     const void* GetSafepointPage() const
     {
-        return safepointStatePtr;
+        ThreadLocalData* tls = ThreadLocal::GetThreadLocalData();
+        if (tls != nullptr && tls->mutator == this) {
+            return &tls->safepointState;
+        }
+        return nullptr;
     }
 
     UnwindContext& GetUnwindContext() { return uwContext; }
@@ -529,18 +546,18 @@ public:
         if (UNLIKELY(tlData->buffer == nullptr)) {
             (void)AllocBuffer::GetOrCreateAllocBuffer();
         }
+        RegisterCurrentMarkFlushThread();
         SetEpochHandshakeLifecycle(EPOCH_HANDSHAKE_RUNNING);
-        SetSafepointStatePtr(&tlData->safepointState);
-        SetSafepointActive(HasAnySuspensionRequest());
+        UpdatePollValues(tlData);
         DoLeaveSaferegion();
     }
 
     void PreparedToPark(void* pc, void* fa)
     {
-        SetSafepointStatePtr(nullptr);
         stackWatermark.OnPark();
         if (UNLIKELY((uwContext.GetUnwindContextStatus() == UnwindContextStatus::RISKY) || InSaferegion())) {
             SetInSaferegion(SaferegionState::SAFE_REGION_TRUE);
+            MarkFlushOnEnterSaferegion();
             SetEpochHandshakeLifecycle(EPOCH_HANDSHAKE_PARKED);
             return;
         }
@@ -561,6 +578,7 @@ public:
         }
 #endif // platform
         SetInSaferegion(SaferegionState::SAFE_REGION_TRUE);
+        MarkFlushOnEnterSaferegion();
         SetEpochHandshakeLifecycle(EPOCH_HANDSHAKE_PARKED);
     }
 
@@ -572,11 +590,9 @@ public:
         foreignThreadInfo.isForeignThread = true;
         foreignThreadInfo.isExit = false;
         foreignThreadInfo.allocBuffer = ThreadLocal::GetAllocBuffer();
-        markFlushAllocBuffer = foreignThreadInfo.allocBuffer;
         foreignThreadInfo.schedule = ThreadLocal::GetThreadLocalData()->schedule;
+        RegisterCurrentMarkFlushThread();
     }
-
-    void SetMarkFlushAllocBuffer(AllocBuffer* buffer) { markFlushAllocBuffer = buffer; }
 #if defined(MRT_TESTABLE_INTERNALS)
     void SetStoreBarrierRememberedSetForTest(RememberedSet* rememberedSet)
     {
@@ -611,18 +627,25 @@ public:
         if (rememberedSet == nullptr) {
             rememberedSet = &Heap::GetHeap().GetRememberedSet();
         }
-        if (flushStoreBarrier && markFlushAllocBuffer != nullptr && rememberedSet->IsInitialized()) {
-            markFlushAllocBuffer->GetStoreBarrierBuffer().Flush(*rememberedSet);
+        AllocBuffer* buffer = nullptr;
+        if (flushStoreBarrier && Mutator::GetMutator() == this) {
+            buffer = ThreadLocal::GetAllocBuffer();
+        } else if (flushStoreBarrier && IsForeignThread()) {
+            buffer = foreignThreadInfo.allocBuffer;
+        }
+        if (buffer != nullptr && rememberedSet->IsInitialized()) {
+            buffer->GetStoreBarrierBuffer().Flush(*rememberedSet);
         }
     }
 
 protected:
     // for managed stack
     void VisitStackRoots(const RootVisitor& func, const RootVisitor& invisibleRootVisitor);
-    void VisitHeapReferencesOnStack(const RootVisitor& rootVisitor, const DerivedPtrVisitor& derivedPtrVisitor);
+    void VisitHeapReferencesOnStack(const RootVisitor& rootVisitor, const DerivedPtrVisitor& derivedPtrVisitor,
+                                    bool young = false);
     void VisitHeapReferencesOnStack(const RootVisitor& regRootVisitor, const RootVisitor& slotRootVisitor,
                                     const DerivedPtrVisitor& derivedPtrVisitor,
-                                    const RootVisitor& rawObjectVisitor);
+                                    const RootVisitor& rawObjectVisitor, bool young = false);
     // for exception ref
     void VisitExceptionRoots(const RootVisitor& func);
     void VisitRawObjects(const RootVisitor& func);
@@ -652,7 +675,7 @@ private:
     void* unuse = nullptr; // reusable placeholder
 #endif // __WIN64
 
-    uint64_t* safepointStatePtr = nullptr; // state: active or not
+    std::atomic<int> enumYoung = { 0 };
 #ifdef _WIN64
     uint32_t stackGrowFrameSize = 0;
 #endif
@@ -687,7 +710,6 @@ private:
         ScheduleHandle schedule = { nullptr };
     } foreignThreadInfo;
 
-    AllocBuffer* markFlushAllocBuffer = nullptr;
     RememberedSet* storeBarrierRememberedSet = nullptr;
 
     // Step-0 no-op epoch handshake state. Keep these fields at the end of Mutator's

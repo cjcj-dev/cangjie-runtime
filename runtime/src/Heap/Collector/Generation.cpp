@@ -878,7 +878,7 @@ void WCollector::DoYoungGarbageCollection()
         stw.reset();
 
 
-        EpochHandshakeStats handshake = MutatorManager::Instance().RunEpochHandshake("pre-minor-stack");
+        EpochHandshakeStats handshake = MutatorManager::Instance().RunEpochHandshake("pre-minor-stack", true);
         stackScanEpoch = handshake.epoch;
         CHECK_DETAIL(stackScanEpoch != 0 && handshake.stackScanned + handshake.stackFallback == handshake.requested,
                      "minor concurrent stack scan accounting failed: epoch=%llu requested=%zu scanned=%zu "
@@ -897,10 +897,10 @@ void WCollector::DoYoungGarbageCollection()
         // the exact legacy phase-enum fallback before roots are merged.
         MutatorManager::Instance().VisitAllMutators([stackScanEpoch](Mutator& mutator) {
             if (!mutator.GetStackWatermark().IsDone(stackScanEpoch)) {
-                (void)mutator.GcPhaseEnum(GCPhase::GC_PHASE_ENUM, stackScanEpoch, false);
+                (void)mutator.GcPhaseEnum(GCPhase::GC_PHASE_ENUM, true, stackScanEpoch, false);
             }
             if (!mutator.GetStackWatermark().IsDone(stackScanEpoch)) {
-                (void)mutator.GcPhaseEnum(GCPhase::GC_PHASE_ENUM);
+                (void)mutator.GcPhaseEnum(GCPhase::GC_PHASE_ENUM, true);
             }
         });
         VerifyStackRootPostcondition(stackScanEpoch, "minor");
@@ -953,7 +953,9 @@ void WCollector::DoYoungGarbageCollection()
         // minortime: ③ root enum (alloc buffers + VisitMinorRoots)
         MRT_PHASE_TIMER("young.root_enum");
         WorkStack enumRoots = NewWorkStack();
-        theAllocator.VisitAllocBuffers([&enumRoots](AllocBuffer& buffer) { buffer.MergeRoots(enumRoots); });
+        theAllocator.VisitAllocBuffers([&enumRoots](AllocBuffer& buffer) {
+            buffer.MergeRootsGeneration(enumRoots, true);
+        });
         while (!enumRoots.empty()) {
             const MarkStackEntry entry = enumRoots.back();
             BaseObject* object = entry.object();
@@ -1128,7 +1130,7 @@ void WCollector::DoYoungGarbageCollection()
             NoteMarkTerminatePauseProducers(buffer.YoungAllocBlackCount(),
                                             buffer.Y2yDirtyHolderCount() + buffer.Y2yDirtySlotCount());
 #endif
-            buffer.MergeRoots(workStack);
+            buffer.MergeRootsGeneration(workStack, true);
             buffer.MergeYoungAllocBlackFollow(workStack);
         });
         mergeY2yDirtyWork(workStack);

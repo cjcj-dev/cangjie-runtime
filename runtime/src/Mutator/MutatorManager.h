@@ -10,8 +10,11 @@
 
 #include <bitset>
 #include <list>
+#include <memory>
 #include <mutex>
+#include <unordered_map>
 #include <unordered_set>
+#include <vector>
 
 #include "Base/AtomicSpinLock.h"
 #include "Base/GcLog.h"
@@ -163,6 +166,20 @@ public:
     // Visit all mutators, hold mutatorListLock firstly
     void VisitAllMutators(MutatorVisitor func);
     void VisitAllMutatorsExceptFinalizer(MutatorVisitor func);
+    bool HandshakeFlushMarkProducers(class MarkDomain* domain);
+    bool AcknowledgeMarkFlushForCurrentThread();
+    bool AcknowledgeMarkFlushForTls(ThreadLocalData* tls);
+    class MarkDomain* MarkFlushDomain() const
+    {
+        return markFlushDomain.load(std::memory_order_acquire);
+    }
+    bool MarkFlushHandshakeActive() const
+    {
+        return markFlushHandshakeActive.load(std::memory_order_acquire) != 0;
+    }
+    void RegisterMarkFlushThread(ThreadLocalData* tls);
+    void UnregisterMarkFlushThread(ThreadLocalData* tls);
+    bool TlsHasMarkFlushPending(ThreadLocalData* tls);
 
     // Some functions about stw
     void StopTheWorld(bool syncGCPhase, GCPhase phase);
@@ -171,18 +188,11 @@ public:
     void StopLightSync() noexcept;
     void WaitUntilAllMutatorStopped();
     void DumpMutators(uint32_t timeoutTimes);
-    void DemandSuspensionForSync()
-    {
-        VisitAllMutators([](Mutator& mutator) {
-            mutator.SetSuspensionFlag(Mutator::SuspensionType::SUSPENSION_FOR_SYNC);
-            mutator.SetSafepointActive(true);
-        });
-    }
+    void DemandSuspensionForSync();
 
     void CancelSuspensionAfterSync()
     {
         VisitAllMutators([](Mutator& mutator) {
-            mutator.SetSafepointActive(false);
             mutator.ClearSuspensionFlag(Mutator::SuspensionType::SUSPENSION_FOR_SYNC);
         });
     }
@@ -194,7 +204,7 @@ public:
 
     void RemoveMutatorSuspensionTrigger(Mutator& mutator) const
     {
-        mutator.SetSafepointActive(false);
+        mutator.ClearSuspensionFlag(Mutator::SuspensionType::SUSPENSION_FOR_SYNC);
     }
 
     void BindMutator(Mutator& mutator) const;
@@ -220,11 +230,11 @@ public:
     void SyncMutexUnlock() noexcept { syncMutex.unlock(); }
 
     void EnsurePhaseTransition(GCPhase phase, std::list<Mutator*> &undoneMutators);
-    void TransitionAllMutatorsToGCPhase(GCPhase phase);
+    void TransitionAllMutatorsToGCPhase(GCPhase phase, bool young = false);
 
     static bool EpochHandshakeEnabled();
     static bool ConcurrentStackScanEnabled();
-    EpochHandshakeStats RunEpochHandshake(const char* source);
+    EpochHandshakeStats RunEpochHandshake(const char* source, bool young);
     void RecordEpochHandshakeAck(Mutator& mutator, uint64_t epoch, bool bySelf);
     void RecordEpochHandshakeStackScan(bool scanned, size_t frames);
     void RecordEpochHandshakeCreateAttempt();
@@ -247,7 +257,6 @@ public:
     }
 #endif
 
-    void EnsureCpuProfileFinish(std::list<Mutator*> &undoneMutators);
     void TransitionAllMutatorsToCpuProfile();
 
 #if defined(GCINFO_DEBUG) && GCINFO_DEBUG
@@ -337,7 +346,38 @@ public:
 
     CJThreadHandle GetMainThreadHandle() { return mainThreadHandle; }
 
-private:
+    struct MarkFlushThread {
+        ThreadLocalData* tls = nullptr;
+        std::mutex mutex;
+        std::atomic<int> inSafe = { 1 };
+        std::atomic<int> pending = { 0 };
+        std::atomic<int> refs = { 0 };
+        std::atomic<int> dying = { 0 };
+        std::atomic<int> bufferLive = { 1 };
+        HandshakeState* handshake = nullptr;
+        std::unique_ptr<HandshakeState> ownedHandshake;
+    };
+
+    HandshakeState* HandshakeStateForTls(ThreadLocalData* tls);
+    bool TlsObservedSafe(ThreadLocalData* tls);
+    void EnqueueHandshakeOnAll(HandshakeClosure* cl, std::list<HandshakeOperation*>& ops,
+                                std::vector<MarkFlushThread*>& handle);
+    void EnqueueHandshakeOn(ThreadLocalData* target, HandshakeClosure* cl, std::list<HandshakeOperation*>& ops,
+                            std::vector<MarkFlushThread*>& handle);
+    void ReleaseHandshakeHandle(std::vector<MarkFlushThread*>& handle);
+
+    template<typename Fn>
+    void ForEachMarkFlushTls(Fn&& fn)
+    {
+        std::lock_guard<std::mutex> lock(markFlushThreadMutex);
+        for (auto& kv : markFlushThreads) {
+            if (kv.first != nullptr) {
+                fn(kv.first);
+            }
+        }
+    }
+
+    private:
     using ExpiredMutatorList = std::list<Mutator*, StdContainerAllocator<Mutator*, MUTATOR_LIST>>;
     ExpiredMutatorList expiringMutators;
     std::mutex expiringMutatorListLock;
@@ -393,6 +433,10 @@ private:
     // keep them in the same participant inventory explicitly.
     std::mutex runtimeMutatorRegistryMutex;
     std::unordered_set<Mutator*> runtimeMutators;
+    std::atomic<int> markFlushHandshakeActive = { 0 };
+    std::atomic<class MarkDomain*> markFlushDomain = { nullptr };
+    std::mutex markFlushThreadMutex;
+    std::unordered_map<ThreadLocalData*, std::unique_ptr<MarkFlushThread>> markFlushThreads;
 
 #if defined(_WIN64) || defined (__APPLE__)
     std::condition_variable mutatorSuspensionCV;

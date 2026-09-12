@@ -2804,7 +2804,7 @@ GC_OTHER_VM_TEST(ForwardingPublicationProduct, PreForwardTaggedMissingScopeFails
     collector.SetGCPhase(GCPhase::GC_PHASE_PREFORWARD);
     RootSlot root;
     StorePlain(root, from_object(fx.obj0));
-    AbortCapture result = CaptureAbort([&]() { VisitTaggedOopSlot(root); });
+    AbortCapture result = CaptureAbort([&]() { VisitTaggedOopSlot(root, false); });
     std::fprintf(stderr, "MISSING_BASE_MAP_RESULT status=%d\n%s", result.status, result.output.c_str());
     collector.SetGCPhase(GCPhase::GC_PHASE_IDLE);
     RelocationReceiptTestAccess::BindCollector(Heap::GetHeap().GetCollectorResources(), nullptr);
