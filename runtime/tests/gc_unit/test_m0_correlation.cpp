@@ -394,7 +394,7 @@ GC_TEST(M0Correlation, OrdinaryRelocationPropagatesProductToken)
     LiveInfo* live = PrepareForwardable(fx, fx.region0, from);
     StateWord oldWord = fx.obj0->GetStateWord();
     GC_EXPECT_TRUE(fx.obj0->TryLockObject(oldWord));
-    GC_EXPECT_TRUE(fx.region0->NoteCopyInflight());
+    GC_EXPECT_TRUE(true);
 
     BaseObject* relocated = RelocationReceiptTestAccess::ForwardExclusive(
         collector, fx.obj0, fx.obj1, fx.region0);

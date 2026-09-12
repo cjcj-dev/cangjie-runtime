@@ -395,7 +395,7 @@ void ForwardingTable::RetireMembershipAtDispel(MAddress regionStart, size_t regi
     std::lock_guard<std::mutex> lock(g_installLock);
     // Seal before unlinking, the same order ClearEntries uses: a would-be publisher that loses
     // this lock then observes the tombstone instead of an open generation. DispelGhostFromRegion
-    // runs after DrainScope has refused late retainers and waited out existing readers, so no
+    // runs after in-place claim has refused late retainers and waited out existing readers, so no
     // Publication owner can still need this generation open (zForwarding.cpp:171-181).
     SealPublicationLocked(regionStart, regionSize);
     // One unlink edge, the way ZGC has one: ZRelocationSet::reset destroys every ZForwarding the

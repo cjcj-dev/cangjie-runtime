@@ -145,11 +145,6 @@ class ForwardTable {
 public:
     explicit ForwardTable(RegionSpace& space) : theSpace(space) {}
 
-    RoutePlan PlanRoute(BaseObject* old, CopierRouteToken token)
-    {
-        return theSpace.GetRegionManager().PlanRoute(old, token);
-    }
-
     // if region is compacted, return false.
     bool RouteRegion(RegionInfo* region) { return theSpace.GetRegionManager().RouteRegion(region); }
 
@@ -205,7 +200,7 @@ public:
         bool retainedPhaseAllowed = false;
         bool hookReached = false;
     };
-    MRT_EXPORT RouteLookupTestResult PlanRouteLookupForTest(BaseObject* fromObj);
+    MRT_EXPORT RouteLookupTestResult RouteLookupForTest(BaseObject* fromObj);
 #endif
 
     void Init() override { ForwardDataManager::GetForwardDataManager().InitializeForwardData(); }
@@ -515,30 +510,28 @@ public:
         if (self != nullptr) {
             return self;
         }
-        to = space.GetRegionManager().FindPublishedRoute(obj, forwarding).dest;
-        if (to != nullptr && Heap::IsHeapAddress(to) && to->IsValidObject()) {
-            return to;
+        if (const MAddress hit = ForwardingTable::FindTo(fromAddr)) {
+            return reinterpret_cast<BaseObject*>(hit);
         }
-        // ③ table still empty. Wait for the region-level publication while a
-        // copier exists. A completed publication without a receipt is an
-        // invariant failure, never a from-address answer (zRelocate.cpp:382-416).
+        // ③ find-miss: wait for the page task then find again
+        // (zRelocate.cpp:401-415 relocate_object / forward_object).
         if (MutatorRelocate::StatsOn()) {
             MutatorRelocate::NoteWaitEnter();
         }
-        BaseObject* resolved = WaitRoutedTipReady(obj, to, forwarding, provenance);
-        // ZRelocate::forward_object (zRelocate.cpp:412-415) returns find() whenever the table
-        // has an answer. Identity (to==from) is a legal receipt for a kept or in-place survivor.
-        // WaitRoutedTipReady only returns non-null from ArmedHit or a published request receipt.
+        BaseObject* resolved =
+            WaitForPageForwarding(obj, ForwardingTable::RetainPageOwner(forwarding));
         if (resolved != nullptr) {
             return resolved;
         }
+        if (const MAddress hit = ForwardingTable::FindTo(fromAddr)) {
+            return reinterpret_cast<BaseObject*>(hit);
+        }
         CHECK_DETAIL(false,
                      "ZRelocate::forward_object requires a forwarding entry for relocation-set object %p "
-                     "tid=%d obj=%p region=%p gcCycle=%zu resolved=%p "
-                     "route.snapshot=%#llx fwdDone=%u lookup.record=WaitRouted.return",
+                     "tid=%d obj=%p region=%p gcCycle=%zu "
+                     "route.snapshot=%#llx fwdDone=%u",
                      obj, static_cast<int>(MapleRuntime::GetTid()), static_cast<void*>(obj),
                      static_cast<void*>(forwarding), g_gcCount.load(std::memory_order_relaxed),
-                     static_cast<void*>(resolved),
                      static_cast<unsigned long long>(
                          forwarding->GetRouteStateSnapshotForDiagnostics()),
                      static_cast<unsigned>(forwarding->IsForwardingDone()));
@@ -721,8 +714,7 @@ public:
     }
 
     // Refuses a non-heap address the way FindToVersion does below, and for the same reason:
-    // PlanRoute -> PlanRouteLookup -> GetGhostFromRegionAt -> GetUnitIdxAt has no heap range
-    // check and aborts the process on an address outside the heap.
+    // GetGhostFromRegionAt -> GetUnitIdxAt has no heap range
     //
     // Old-tagged fields are exactly where non-heap payloads appear -- a TypeInfo*, a binary
     // constant, immortal metadata: after Flip their colour is IsOldPointer while the payload is
@@ -740,15 +732,6 @@ public:
     // 0x6282f2... is the compiler's own image, the same range as start_ip in that run's stack-map
     // lines.  Gating only the first site moved the abort to the second, which is what showed the
     // population was the old-tag paths rather than one call site.
-    RoutePlan PlanRouteUnderStw(BaseObject* fromObj, const ScopedStopTheWorld& stw) const
-    {
-        if (fromObj == nullptr || !Heap::IsHeapAddress(fromObj)) {
-            return RoutePlan{ nullptr };
-        }
-        RegionSpace& space = reinterpret_cast<RegionSpace&>(theAllocator);
-        return space.GetRegionManager().PlanRoute(fromObj, stw.route_plan_token());
-    }
-
     FindToVersionResult FindToVersion(BaseObject* obj) const override
     {
         // Mirror IsGhostFromObject: GetGhostFromRegionAt → GetUnitIdxAt has no heap range
@@ -957,17 +940,10 @@ protected:
     BaseObject* ForwardObjectImpl(BaseObject* obj, RegionInfo* ghostFromRegion,
                                   const RegionInfo::RetainScope& lease);
     BaseObject* ForwardObjectExclusive(BaseObject* obj) override;
-    // dest is PlanRoute's answer, computed *before* TryLockObject so the LOCKED
-    // critical section cannot RouteRegion / TakeRegion (zRelocate.cpp:354-372
-    // relocate_object_inner: alloc+copy+insert, no safepoint; REPORT-routespin §5 乙1).
-    // copyPage is the from-page NoteCopyInflight already ran on (TryLock success);
-    // Exclusive only EndCopyInflight after every UnlockObject.
+    // zRelocate.cpp:354-379 relocate_object_inner: find hit → return; else
+    // alloc (or reuse a prepared dest) → copy → insert; CAS loser uses winner.
+    BaseObject* RelocateObjectInner(BaseObject* obj, BaseObject* planned, RegionInfo* copyPage);
     BaseObject* ForwardObjectExclusive(BaseObject* obj, BaseObject* toObj, RegionInfo* copyPage);
-
-    // Wait until a forwarding receipt is published; completed miss is an
-    // invariant failure (zRelocate.cpp:382-416).
-    BaseObject* WaitRoutedTipReady(BaseObject* from, BaseObject* to, RegionInfo* forwarding,
-                                   const ForwardingProvenance& provenance) const;
 
     // portmutreloc: ZRelocate::relocate_object's middle leg (zRelocate.cpp:391-406) --
     // retain the from-region, relocate the object on this thread, release. Returns the
@@ -1234,11 +1210,11 @@ protected:
 
     bool IsStaleStoreValue(BaseObject* target) const
     {
-        // FindToVersion / PlanRouteUnderStw / IsFromObject / IsGhostFromObject all
+        // FindToVersion / IsFromObject / IsGhostFromObject all
         // refuse a non-heap address.  kAskObjectState used to read
         // target->IsForwarded() (StateWord objectState at +6) with no heap gate.
         // GetAndTryTagRefField is handed TypeInfo* / binary constants / immortal
-        // metadata after Flip (PlanRouteUnderStw:611-613).  cjpm N=5 r1 on
+        // metadata after Flip.  cjpm N=5 r1 on
         // 1f8730a54: target=0x646e65706564 ASCII "depend", si_addr=target+6,
         // insn=movzx 0x6(%r12),%eax @ IsStaleStoreValue, forward/fix.
         if (target == nullptr || !Heap::IsHeapAddress(target)) {

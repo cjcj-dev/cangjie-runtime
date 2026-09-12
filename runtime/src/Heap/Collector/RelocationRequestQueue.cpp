@@ -6,11 +6,22 @@
 
 #include "Heap/Collector/RelocationRequestQueue.h"
 
+#include <atomic>
 #include <chrono>
 #include "Heap/Allocator/RegionInfo.h"
 #include "Mutator/Mutator.inline.h"
 
 namespace MapleRuntime {
+
+#if defined(MRT_TESTABLE_INTERNALS)
+namespace {
+std::atomic<RelocationRequestQueue::WaitEnterHook> g_waitEnterHook{ nullptr };
+}
+void RelocationRequestQueue::SetWaitEnterHook(WaitEnterHook hook)
+{
+    g_waitEnterHook.store(hook, std::memory_order_release);
+}
+#endif
 
 void RelocationRequestQueue::BeginWorkers(size_t workers)
 {
@@ -64,18 +75,24 @@ MAddress RelocationRequestQueue::WaitUntil(const Handle& request, size_t maxSpin
     const bool changed = mutator != nullptr && type != ThreadType::FP_THREAD && type != ThreadType::GC_THREAD &&
                          mutator->EnterSaferegion(true);
     {
+        // zRelocate.cpp:136-150: enqueue and the not-done predicate share one
+        // queue lock; wait only after is_done is false under that lock.
         std::unique_lock<std::mutex> lock(queueMutex);
-        size_t spins = 0;
-        while (!request->page_forwarding()->is_done()) {
-            if (maxSpins != 0 && spins >= maxSpins) {
-                if (timedOut != nullptr) *timedOut = true;
-                break;
+        if (!request->page_forwarding()->is_done()) {
+#if defined(MRT_TESTABLE_INTERNALS)
+            if (WaitEnterHook hook = g_waitEnterHook.load(std::memory_order_acquire)) {
+                hook(request->page_forwarding());
             }
-            // mark_done may be published by an already-running page claimant.
-            // The predicate is the forwarding's immutable completion, never a
-            // RegionInfo incarnation or per-object publication.
-            queueAttention.wait_for(lock, std::chrono::milliseconds(1));
-            ++spins;
+#endif
+            size_t spins = 0;
+            while (!request->page_forwarding()->is_done()) {
+                if (maxSpins != 0 && spins >= maxSpins) {
+                    if (timedOut != nullptr) *timedOut = true;
+                    break;
+                }
+                queueAttention.wait_for(lock, std::chrono::milliseconds(1));
+                ++spins;
+            }
         }
     }
     if (changed) (void)mutator->LeaveSaferegion();
