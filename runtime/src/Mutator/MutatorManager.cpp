@@ -90,12 +90,14 @@ extern "C" void HandleSafepoint(ThreadLocalData* tlData)
     (void)MutatorManager::Instance().AcknowledgeMarkFlushForTls(tlData);
     Mutator* mutator = tlData->mutator;
     if (mutator == nullptr) {
+        UpdatePollValues(tlData);
         return;
     }
     // Current mutator enter saferegion
     mutator->DoEnterSaferegion();
     // Current mutator block before leaving saferegion
     mutator->DoLeaveSaferegion();
+    UpdatePollValues(tlData);
     DLOG(SIGNAL, "HandleSafepoint, thread restarted.");
 }
 
@@ -108,12 +110,12 @@ extern "C" void HandleSafepointForArm(ThreadLocalData* tlData)
     (void)MutatorManager::Instance().AcknowledgeMarkFlushForTls(tlData);
     Mutator* mutator = tlData->mutator;
     if (mutator == nullptr) {
+        UpdatePollValues(tlData);
         return;
     }
-    // Current mutator enter saferegion
     mutator->DoEnterSaferegion();
-    // Current mutator block before leaving saferegion
     mutator->DoLeaveSaferegion();
+    UpdatePollValues(tlData);
     DLOG(SIGNAL, "HandleSafepoint, thread restarted.");
 }
 #endif
@@ -125,8 +127,8 @@ void MutatorManager::BindMutator(Mutator& mutator) const
         (void)AllocBuffer::GetOrCreateAllocBuffer();
     }
     MutatorManager::Instance().RegisterMarkFlushThread(tlData);
-    mutator.SetSafepointStatePtr(&tlData->safepointState);
-    mutator.SetSafepointActive(false);
+    mutator.BindPollTls(tlData);
+    UpdatePollValues(tlData);
     tlData->SetMutator(&mutator);
 }
 
@@ -135,7 +137,7 @@ void MutatorManager::UnbindMutator(Mutator& mutator) const
     ThreadLocalData* tlData = ThreadLocal::GetThreadLocalData();
     MRT_ASSERT(tlData->mutator == &mutator, "mutator in ThreadLocalData doesn't match in cjthread");
     tlData->SetMutator(nullptr);
-    mutator.SetSafepointStatePtr(nullptr);
+    mutator.BindPollTls(nullptr);
 }
 
 Mutator* MutatorManager::CreateMutator()
@@ -430,9 +432,10 @@ size_t MutatorManager::RuntimeMutatorRegistrySizeForTest()
 }
 #endif
 
-EpochHandshakeStats MutatorManager::RunEpochHandshake(const char* source)
+EpochHandshakeStats MutatorManager::RunEpochHandshake(const char* source, bool young)
 {
     EpochHandshakeStats stats;
+    epochHandshakeYoung.store(young ? 1 : 0, std::memory_order_release);
     if (!EpochHandshakeEnabled()) {
         return stats;
     }
@@ -594,7 +597,7 @@ EpochHandshakeStats MutatorManager::RunEpochHandshake(const char* source)
 
 extern "C" MRT_EXPORT uint64_t MRT_RunEpochHandshake()
 {
-    return MutatorManager::Instance().RunEpochHandshake("explicit").epoch;
+    return MutatorManager::Instance().RunEpochHandshake("explicit", true).epoch;
 }
 
 void MutatorManager::AcquireMutatorManagementWLock()
@@ -721,28 +724,63 @@ bool MarkFlushObservedSafe(MutatorManager::MarkFlushThread* target, bool self)
 
 void ArmMarkFlushPoll(ThreadLocalData* tls)
 {
+    ArmThreadPoll(tls);
+}
+} // namespace
+
+void ArmThreadPoll(ThreadLocalData* tls)
+{
     if (tls != nullptr) {
         tls->safepointState = 1;
     }
 }
 
-void UpdateMarkFlushPollSelf(MutatorManager::MarkFlushThread* target)
+bool HasPendingSafepoint(ThreadLocalData* tls)
 {
-    ThreadLocalData* self = ThreadLocal::GetThreadLocalData();
-    if (target == nullptr || target->tls == nullptr || target->tls != self) {
+    if (tls == nullptr) {
+        return false;
+    }
+    if (MutatorManager::Instance().SyncTriggered() || MutatorManager::Instance().WorldStopped()) {
+        return true;
+    }
+    if (tls->pollRequests.load(std::memory_order_acquire) != 0) {
+        return true;
+    }
+    return MutatorManager::Instance().TlsHasMarkFlushPending(tls);
+}
+
+void UpdatePollValues(ThreadLocalData* tls)
+{
+    if (tls == nullptr || tls != ThreadLocal::GetThreadLocalData()) {
         return;
     }
     for (;;) {
-        const bool armed = target->pending.load(std::memory_order_acquire) != 0;
-        target->tls->safepointState = armed ? 1 : 0;
+        const bool armed = HasPendingSafepoint(tls);
+        tls->safepointState = armed ? 1 : 0;
         std::atomic_thread_fence(std::memory_order_seq_cst);
-        if (!armed && target->pending.load(std::memory_order_acquire) != 0) {
+        if (!armed && HasPendingSafepoint(tls)) {
             continue;
         }
         break;
     }
 }
-} // namespace
+
+void AddTlsPollRequest(ThreadLocalData* tls, uint64_t bit)
+{
+    if (tls == nullptr || bit == 0) {
+        return;
+    }
+    tls->pollRequests.fetch_or(bit, std::memory_order_acq_rel);
+    ArmThreadPoll(tls);
+}
+
+void ClearTlsPollRequest(ThreadLocalData* tls, uint64_t bit)
+{
+    if (tls == nullptr || bit == 0) {
+        return;
+    }
+    tls->pollRequests.fetch_and(~bit, std::memory_order_acq_rel);
+}
 
 void MutatorManager::RegisterMarkFlushThread(ThreadLocalData* tls)
 {
@@ -853,7 +891,7 @@ bool MutatorManager::AcknowledgeMarkFlushForTls(ThreadLocalData* tls)
         }
         target->pending.store(0, std::memory_order_release);
     }
-    UpdateMarkFlushPollSelf(target);
+    UpdatePollValues(target->tls);
     target->refs.fetch_sub(1, std::memory_order_acq_rel);
     return published;
 }
@@ -920,7 +958,7 @@ bool MutatorManager::HandshakeFlushMarkProducers(MarkDomain* domain)
             }
             target->pending.store(0, std::memory_order_release);
             if (self) {
-                UpdateMarkFlushPollSelf(target);
+                UpdatePollValues(target->tls);
             }
             claim.unlock();
             target->refs.fetch_sub(1, std::memory_order_acq_rel);
