@@ -797,12 +797,12 @@ void TracingCollector::ProcessExportRoots(WorkStack& foreignRootsSet)
         if (exportObj == nullptr) {
             continue;
         }
+        if (IsMarkedObject<Generation::Old>(exportObj)) {
+            continue;
+        }
         {
             std::lock_guard<std::mutex> lock(externMtx);
             (void)discoveredExternObjects[exportObj];
-        }
-        if (IsMarkedObject<Generation::Old>(exportObj)) {
-            continue;
         }
         WorkStack exportSeed;
         exportSeed.push_back(entry);
