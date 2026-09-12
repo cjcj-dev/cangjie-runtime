@@ -25,8 +25,6 @@
 #endif
 #include "Interpreter/Options.h"
 #include "Interpreter/RTInterface.h"
-#include "Common/MarkWorkStack.h"
-#include "Heap/Collector/MarkStackEntry.h"
 #include "ObjectModel/RefField.h"
 #include "UnwindStack/StackWatermark.h"
 
@@ -562,7 +560,6 @@ public:
 
     void PreparedToPark(void* pc, void* fa)
     {
-        FlushHolderThreadMarkProducers();
         SetSafepointStatePtr(nullptr);
         stackWatermark.OnPark();
         if (UNLIKELY((uwContext.GetUnwindContextStatus() == UnwindContextStatus::RISKY) || InSaferegion())) {
@@ -598,11 +595,8 @@ public:
         foreignThreadInfo.isForeignThread = true;
         foreignThreadInfo.isExit = false;
         foreignThreadInfo.allocBuffer = ThreadLocal::GetAllocBuffer();
-        markFlushAllocBuffer = foreignThreadInfo.allocBuffer;
         foreignThreadInfo.schedule = ThreadLocal::GetThreadLocalData()->schedule;
     }
-
-    void SetMarkFlushAllocBuffer(AllocBuffer* buffer) { markFlushAllocBuffer = buffer; }
 #if defined(MRT_TESTABLE_INTERNALS)
     void SetStoreBarrierRememberedSetForTest(RememberedSet* rememberedSet)
     {
@@ -642,7 +636,6 @@ public:
     enum class MarkFlushClaim : uint8_t { NotPending, NotSafe, Empty, Published };
     MarkFlushClaim TryClaimMarkFlush(bool self, class MarkDomain* domain);
     bool AcknowledgeMarkFlushHandshake(class MarkDomain* domain);
-    void FlushHolderThreadMarkProducers();
 
 protected:
     // for managed stack
@@ -749,9 +742,7 @@ private:
         ScheduleHandle schedule = { nullptr };
     } foreignThreadInfo;
 
-    AllocBuffer* markFlushAllocBuffer = nullptr;
     RememberedSet* storeBarrierRememberedSet = nullptr;
-    MarkStack<MarkStackEntry> parkedMarkWork;
 
     // Step-0 no-op epoch handshake state. Keep these fields at the end of Mutator's
     // existing product layout: compiler-generated code has hard-coded offsets in the

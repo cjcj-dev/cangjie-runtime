@@ -1443,7 +1443,6 @@ void Mutator::ReleaseForeignThread()
 {
     AllocBuffer* buffer = foreignThreadInfo.allocBuffer;
     foreignThreadInfo.allocBuffer = nullptr;
-    markFlushAllocBuffer = nullptr;
     storeBarrierRememberedSet = nullptr;
     if (buffer != nullptr) {
         buffer->Fini();
@@ -1476,30 +1475,6 @@ bool Mutator::FlushSatbBuffer(bool flushStoreBarrier, MarkDomain* domain)
     return published;
 }
 
-void Mutator::FlushHolderThreadMarkProducers()
-{
-    if (Mutator::GetMutator() != this) {
-        return;
-    }
-    std::lock_guard<std::mutex> lg(mutatorLock);
-    AllocBuffer* buffer = ThreadLocal::GetAllocBuffer();
-    RememberedSet* rememberedSet = storeBarrierRememberedSet;
-    if (rememberedSet == nullptr) {
-        rememberedSet = &Heap::GetHeap().GetRememberedSet();
-    }
-    auto& collector = static_cast<WCollector&>(Heap::GetHeap().GetCollector());
-    if (buffer != nullptr) {
-        if (rememberedSet->IsInitialized()) {
-            buffer->GetStoreBarrierBuffer().Flush(*rememberedSet);
-        }
-        collector.DrainAllocBufferMarkProducers(buffer, parkedMarkWork);
-    }
-    MarkDomain* domain = MutatorManager::Instance().MarkFlushDomain();
-    if (domain != nullptr) {
-        (void)collector.PublishHandshakeMarkWork(parkedMarkWork, domain);
-    }
-}
-
 Mutator::MarkFlushClaim Mutator::TryClaimMarkFlush(bool self, MarkDomain* domain)
 {
     std::lock_guard<std::mutex> lg(mutatorLock);
@@ -1517,24 +1492,23 @@ Mutator::MarkFlushClaim Mutator::TryClaimMarkFlush(bool self, MarkDomain* domain
     SatbBuffer::Instance().FlushQueue(satbNode);
     const bool holderThread = self && Mutator::GetMutator() == this;
     const bool exclusiveForeign = !self && IsForeignThread() && InSaferegion();
-    const bool parkedOwner = !self && GetEpochHandshakeLifecycle() == EPOCH_HANDSHAKE_PARKED;
+    const bool parkedOwner = GetEpochHandshakeLifecycle() == EPOCH_HANDSHAKE_PARKED;
     AllocBuffer* buffer = nullptr;
     if (holderThread) {
         buffer = ThreadLocal::GetAllocBuffer();
     } else if (exclusiveForeign) {
         buffer = foreignThreadInfo.allocBuffer;
+    } else if (!self && !parkedOwner) {
+        return MarkFlushClaim::NotSafe;
     }
     auto& collector = static_cast<WCollector&>(Heap::GetHeap().GetCollector());
     if (buffer != nullptr) {
         if (rememberedSet->IsInitialized()) {
             buffer->GetStoreBarrierBuffer().Flush(*rememberedSet);
         }
-        collector.DrainAllocBufferMarkProducers(buffer, parkedMarkWork);
-    } else if (!self && !exclusiveForeign && !parkedOwner) {
-        return MarkFlushClaim::NotSafe;
-    }
-    if (collector.PublishHandshakeMarkWork(parkedMarkWork, domain)) {
-        published = true;
+        if (collector.FlushAllocBufferMarkProducers(buffer, domain)) {
+            published = true;
+        }
     }
     ClearSuspensionFlag(SUSPENSION_FOR_MARK_FLUSH);
     SetSafepointActive(HasAnySuspensionRequest());

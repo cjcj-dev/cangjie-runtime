@@ -262,7 +262,6 @@ GC_TEST(StoreBuf, ProductPhaseFlushHandsPairedPrevToSatb)
     retired.clear();
     Mutator mutator;
     mutator.SetMutatorPhase(GCPhase::GC_PHASE_TRACE);
-    mutator.SetMarkFlushAllocBuffer(&alloc);
 #if defined(MRT_TESTABLE_INTERNALS)
     mutator.SetStoreBarrierRememberedSetForTest(&rs);
 #endif
@@ -379,7 +378,6 @@ GC_TEST(StoreBuf, CompilerFastOverwriteHandsObservedOldToSatb)
     retired.clear();
     Mutator mutator;
     mutator.SetMutatorPhase(GCPhase::GC_PHASE_TRACE);
-    mutator.SetMarkFlushAllocBuffer(&alloc);
 #if defined(MRT_TESTABLE_INTERNALS)
     mutator.SetStoreBarrierRememberedSetForTest(&rs);
 #endif
@@ -448,7 +446,6 @@ GC_TEST(StoreBuf, GcAssistedPhaseFlushDefersStoreBuffer)
 
     Mutator mutator;
     mutator.SetMutatorPhase(GCPhase::GC_PHASE_TRACE);
-    mutator.SetMarkFlushAllocBuffer(&alloc);
 #if defined(MRT_TESTABLE_INTERNALS)
     mutator.SetStoreBarrierRememberedSetForTest(&rs);
 #endif
@@ -636,7 +633,6 @@ GC_TEST(StoreBuf, SatbNodeUnavailableFailsClosedBeforeClear)
 
     Mutator mutator;
     mutator.SetMutatorPhase(GCPhase::GC_PHASE_TRACE);
-    mutator.SetMarkFlushAllocBuffer(&alloc);
     mutator.SetStoreBarrierRememberedSetForTest(&rs);
 
     std::fflush(nullptr);
