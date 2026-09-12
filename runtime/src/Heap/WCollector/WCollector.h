@@ -139,6 +139,17 @@ struct YoungWeakClosureTestReceipt {
 void ResetYoungWeakClosureTestReceipt();
 void NoteYoungWeakClosureDiscovery(YoungWeakClosureVariant variant);
 YoungWeakClosureTestReceipt ReadYoungWeakClosureTestReceipt();
+
+struct RemsetPendingTestReceipt {
+    uint64_t forcedUnavailable;
+    uint64_t pendingAtDeadline;
+};
+
+void ResetRemsetPendingTestReceipt();
+void ArmRemsetUnavailableOnceForTest(MAddress slot);
+bool ConsumeRemsetUnavailableOnceForTest(MAddress slot);
+void NoteRemsetPendingDeadlineTestReceipt(size_t pending);
+RemsetPendingTestReceipt ReadRemsetPendingTestReceipt();
 #endif
 
 class ForwardTable {
@@ -1432,7 +1443,8 @@ private:
                              const MinorObjectSet& currentMinorRoots, bool fullYoungScan,
                              MinorSlotSet* consumedOut = nullptr, RemsetScanStats* statsOut = nullptr,
                              MinorInteriorBaseMap* interiorBasesOut = nullptr,
-                             const ScopedStopTheWorld* stw = nullptr);
+                             const ScopedStopTheWorld* stw = nullptr,
+                             MinorSlotSet* unavailableOut = nullptr);
     bool FixMinorEvacuatedSlot(RefField<>& field, BaseObject* knownBase = nullptr,
                                const ScopedStopTheWorld* stw = nullptr,
                                bool holderIsCurrentMinorRoot = false) const;

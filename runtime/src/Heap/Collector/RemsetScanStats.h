@@ -15,6 +15,7 @@ struct RemsetScanStats {
     size_t recorded = 0;
     size_t live = 0;
     size_t consumed = 0;
+    size_t deferredUnavailable = 0;
     size_t skippedNotHeap = 0;
     size_t skippedWeak = 0;
     size_t skippedFysFilter = 0;

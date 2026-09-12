@@ -49,6 +49,7 @@
 #include "Mutator/ThreadLocal.h"
 #include "Mutator/MutatorManager.h"
 #include "ObjectModel/RefField.inline.h"
+#include "TypeInfoManager.h"
 
 using namespace MapleRuntime;
 using namespace MapleRuntime::GcUnit;
@@ -623,6 +624,78 @@ GC_OTHER_VM_TEST(YoungConc, LateEdgeFollowReceiptReachesYoungRuntimeDispatch)
     RelocationReceiptTestAccess::BindCollector(resources, nullptr);
     // The isolated process owns the candidate region and its collection
     // metadata until exit; do not free that state behind RegionManager.
+    (void)live;
+}
+
+// Runtime-entry proof for the Unavailable pending hand-off. Record() produces
+// the previous-face slot, DoGarbageCollection drives the real young path, and
+// the one-shot test answer makes only the concurrent rescan unavailable. The
+// mark-end stop must see that exact pending slot and mark its current target.
+GC_OTHER_VM_TEST(YoungConc, UnavailableRemsetReachesMarkEndRuntimeDispatch)
+{
+    GC_EXPECT_EQ(CJ_ScheduleManagerInit(), 0);
+    GC_EXPECT_EQ(setenv("MRT_GCV2_MARKPAR_FORCE_SERIAL", "1", 1), 0);
+    MutatorManager mutatorManager;
+    YoungConcTestRuntime runtime(mutatorManager);
+
+    GcHeapFixture fx;
+    fx.region0->SetYoungRegionFlag(0);
+    fx.region1->SetYoungRegionFlag(1);
+    fx.region1->SetYoungAge(1);
+    fx.typeInfo->SetUUID(1);
+    TypeInfoManager::GetTypeInfoManager().AddTypeInfo(fx.typeInfo);
+    GC_EXPECT_TRUE(TypeInfoManager::GetTypeInfoManager().ContainsTypeInfo(fx.typeInfo));
+    LiveInfo* live = fx.PlantLiveInfo(fx.region1);
+    (void)fx.PlantMarkBitmap<Generation::Young>(live, fx.region1->GetRegionSize());
+    auto* field = &HeapSlotAt<>(reinterpret_cast<MAddress>(fx.obj0) + TYPEINFO_PTR_SIZE);
+    field->StoreColoured(GcUnit::StoreGoodPointer(fx.obj1));
+    const MAddress slot = reinterpret_cast<MAddress>(field);
+
+    CollectorResources& resources = Heap::GetHeap().GetCollectorResources();
+    WCollector collector(Heap::GetHeap().GetAllocator(), resources);
+    RelocationReceiptTestAccess::BindCollector(resources, &collector);
+    collector.SetGCPhase(GCPhase::GC_PHASE_CLEAR_SATB_BUFFER);
+    GCThreadPool threadPool("gc-unit-remset-pending", 0, GCPoolThread::GC_THREAD_PRIORITY);
+    RelocationReceiptTestAccess::BindThreadPool(resources, &threadPool);
+
+    RegionSpace& space = reinterpret_cast<RegionSpace&>(Heap::GetHeap().GetAllocator());
+    space.GetRegionManager().EnlistFullThreadLocalRegion(fx.region1);
+    space.GetRegionManager().AddRawPointerObject(fx.obj1);
+    RememberedSet& remembered = Heap::GetHeap().GetRememberedSet();
+    remembered.Initialize(fx.heapStart, 2 * RegionInfo::UNIT_SIZE);
+    remembered.Record(slot);
+
+    const bool startedBefore = resources.IsGcStarted();
+    const GCReason reasonBefore = resources.GetGCStats().reason;
+    resources.SetGcStarted(true);
+    resources.GetGCStats().reason = GC_REASON_YOUNG;
+    ResetRemsetPendingTestReceipt();
+    ArmRemsetUnavailableOnceForTest(slot);
+
+    RelocationReceiptTestAccess::RunCollectionDispatch(collector);
+    const RemsetPendingTestReceipt receipt = ReadRemsetPendingTestReceipt();
+    const bool stayedYoung = fx.region1->IsYoungRegion();
+    const bool targetMarked = stayedYoung
+        ? fx.region1->IsMarkedObject(fx.region1->GetMarkView<Generation::Young>(), fx.obj1)
+        : fx.region1->IsMarkedObject(fx.region1->GetMarkView<Generation::Old>(), fx.obj1);
+    std::fprintf(stderr,
+                 "DETAIL remset_pending_runtime forced=%zu deadline=%zu target_marked=%u stayed_young=%u\n",
+                 static_cast<size_t>(receipt.forcedUnavailable),
+                 static_cast<size_t>(receipt.pendingAtDeadline),
+                 static_cast<unsigned>(targetMarked), static_cast<unsigned>(stayedYoung));
+    std::fflush(stderr);
+
+    resources.SetGcStarted(startedBefore);
+    resources.GetGCStats().reason = reasonBefore;
+    // Keep the semantic deadline assertion first: a product cut must fail on
+    // the unmarked current target, not be masked by the diagnostic receipts.
+    GC_EXPECT_TRUE(targetMarked);
+    GC_EXPECT_EQ(receipt.forcedUnavailable, 1u);
+    GC_EXPECT_EQ(receipt.pendingAtDeadline, 1u);
+
+    RelocationReceiptTestAccess::BindThreadPool(resources, nullptr);
+    threadPool.Exit();
+    RelocationReceiptTestAccess::BindCollector(resources, nullptr);
     (void)live;
 }
 

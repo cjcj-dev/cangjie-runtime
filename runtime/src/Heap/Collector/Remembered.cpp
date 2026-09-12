@@ -87,6 +87,44 @@ struct RemsetFilterReceiptState {
     std::atomic<MAddress> lastBadTargetSlot { 0 };
 };
 RemsetFilterReceiptState g_remsetFilterReceipt;
+std::atomic<MAddress> g_remsetUnavailableOnceSlot { 0 };
+std::atomic<uint64_t> g_remsetForcedUnavailable { 0 };
+std::atomic<uint64_t> g_remsetPendingAtDeadline { 0 };
+}
+
+void ResetRemsetPendingTestReceipt()
+{
+    g_remsetUnavailableOnceSlot.store(0, std::memory_order_relaxed);
+    g_remsetForcedUnavailable.store(0, std::memory_order_relaxed);
+    g_remsetPendingAtDeadline.store(0, std::memory_order_relaxed);
+}
+
+void ArmRemsetUnavailableOnceForTest(MAddress slot)
+{
+    CHECK(slot != 0);
+    g_remsetUnavailableOnceSlot.store(slot, std::memory_order_release);
+}
+
+bool ConsumeRemsetUnavailableOnceForTest(MAddress slot)
+{
+    MAddress expected = slot;
+    if (slot == 0 || !g_remsetUnavailableOnceSlot.compare_exchange_strong(
+                         expected, 0, std::memory_order_acq_rel, std::memory_order_acquire)) {
+        return false;
+    }
+    g_remsetForcedUnavailable.fetch_add(1, std::memory_order_relaxed);
+    return true;
+}
+
+void NoteRemsetPendingDeadlineTestReceipt(size_t pending)
+{
+    g_remsetPendingAtDeadline.store(pending, std::memory_order_release);
+}
+
+RemsetPendingTestReceipt ReadRemsetPendingTestReceipt()
+{
+    return { g_remsetForcedUnavailable.load(std::memory_order_acquire),
+             g_remsetPendingAtDeadline.load(std::memory_order_acquire) };
 }
 
 void ResetRemsetFilterTestReceipt()
@@ -880,7 +918,8 @@ void WCollector::RescanRememberedSet(WorkStack& workStack, const MinorSlotSet& r
                                      const MinorSlotSet& reachableSlots, const MinorSlotSet& weakSlots,
                                      const MinorObjectSet& currentMinorRoots, bool fullYoungScan,
                                      MinorSlotSet* consumedOut, RemsetScanStats* statsOut,
-                                     MinorInteriorBaseMap* interiorBasesOut, const ScopedStopTheWorld* stw)
+                                     MinorInteriorBaseMap* interiorBasesOut, const ScopedStopTheWorld* stw,
+                                     MinorSlotSet* unavailableOut)
 {
     auto noteRemsetOutcome = [](MAddress slot, uint8_t outcome, MAddress target) {
         if (!ProbeReadRouteDiag::RootTrackingEnabled() || slot == 0) {
@@ -901,7 +940,10 @@ void WCollector::RescanRememberedSet(WorkStack& workStack, const MinorSlotSet& r
             return;
         }
     };
-    auto plannedTo = [this, stw](BaseObject* from) -> BaseObject* {
+    auto plannedTo = [this, stw](BaseObject* from, bool* unavailable) -> BaseObject* {
+        if (unavailable != nullptr) {
+            *unavailable = false;
+        }
         if (stw != nullptr) {
             return PlanRouteUnderStw(from, *stw).dest;
         }
@@ -912,6 +954,9 @@ void WCollector::RescanRememberedSet(WorkStack& workStack, const MinorSlotSet& r
             // null/old value into the slot.  Product barriers retain the
             // fail-closed abort; this scrub's single strategy is deferral.
             g_findtoPostLifecycleSoft.fetch_add(1, std::memory_order_relaxed);
+            if (unavailable != nullptr) {
+                *unavailable = true;
+            }
             return nullptr;
         }
         const ForwardingProvenance provenance{ ForwardingHolderKind::Remset, this, &from };
@@ -1162,6 +1207,23 @@ void WCollector::RescanRememberedSet(WorkStack& workStack, const MinorSlotSet& r
             continue;
         }
 
+#if defined(MRT_TESTABLE_INTERNALS)
+        // Deterministic product-path injection for the runtime-entry test. It
+        // changes only the first forwarding answer for this exact slot; the
+        // mark-end rescan must still reload and consume the real field word.
+        if (unavailableOut != nullptr && ConsumeRemsetUnavailableOnceForTest(slot)) {
+            const bool inserted = unavailableOut->insert(slot).second;
+            CHECK_DETAIL(unavailableOut->size() <= rememberedSlots.size(),
+                         "remset unavailable pending exceeded drained face: pending=%zu drained=%zu",
+                         unavailableOut->size(), rememberedSlots.size());
+            if (inserted && statsOut != nullptr) {
+                ++statsOut->deferredUnavailable;
+            }
+            noteRemsetOutcome(slot, 11, 0);
+            continue;
+        }
+#endif
+
         bool keepByRetainedSnapshot = true;
         BaseObject* retainedHolder = nullptr;
         auto originIt = rememberedOrigins.find(slot);
@@ -1304,7 +1366,19 @@ void WCollector::RescanRememberedSet(WorkStack& workStack, const MinorSlotSet& r
         // Pre-check (before resolve): one-gen-stale old-tag whose from has no to-version
         // and is not a live object — drop without FindLatestVersion (F5 fail-closed stays).
         if (IsOldPointer(peek)) {
-            BaseObject* to = plannedTo(rawTarget);
+            bool unavailable = false;
+            BaseObject* to = plannedTo(rawTarget, &unavailable);
+            if (unavailable && unavailableOut != nullptr) {
+                const bool inserted = unavailableOut->insert(slot).second;
+                CHECK_DETAIL(unavailableOut->size() <= rememberedSlots.size(),
+                             "remset unavailable pending exceeded drained face: pending=%zu drained=%zu",
+                             unavailableOut->size(), rememberedSlots.size());
+                if (inserted && statsOut != nullptr) {
+                    ++statsOut->deferredUnavailable;
+                }
+                noteRemsetOutcome(slot, 11, reinterpret_cast<MAddress>(rawTarget));
+                continue;
+            }
             bool fromLive = false;
             if (to == nullptr && Heap::IsHeapAddress(rawTarget)) {
                 RegionInfo* fromRegion = RegionInfo::TryGetRegionInfoAt(reinterpret_cast<MAddress>(rawTarget));
@@ -1351,9 +1425,25 @@ void WCollector::RescanRememberedSet(WorkStack& workStack, const MinorSlotSet& r
             ++rootedStalePreserved;
         }
         if (target == nullptr || !Heap::IsHeapAddress(target)) {
+            bool unavailable = false;
+            if (rawTarget != nullptr && Heap::IsHeapAddress(rawTarget)) {
+                (void)plannedTo(rawTarget, &unavailable);
+            }
+            if (unavailable && unavailableOut != nullptr) {
+                const bool inserted = unavailableOut->insert(slot).second;
+                CHECK_DETAIL(unavailableOut->size() <= rememberedSlots.size(),
+                             "remset unavailable pending exceeded drained face: pending=%zu drained=%zu",
+                             unavailableOut->size(), rememberedSlots.size());
+                if (inserted && statsOut != nullptr) {
+                    ++statsOut->deferredUnavailable;
+                }
+                noteRemsetOutcome(slot, 11, reinterpret_cast<MAddress>(rawTarget));
+                continue;
+            }
             noteRemsetOutcome(slot, 7, reinterpret_cast<MAddress>(target));
             ++scrubbedStale;
-            if (rawTarget != nullptr && Heap::IsHeapAddress(rawTarget) && plannedTo(rawTarget) == nullptr) {
+            if (rawTarget != nullptr && Heap::IsHeapAddress(rawTarget) &&
+                plannedTo(rawTarget, nullptr) == nullptr) {
                 NwDropAudit::Note(NwDropAudit::kFindToMiss);
             } else {
                 NwDropAudit::Note(NwDropAudit::kResolveNull);

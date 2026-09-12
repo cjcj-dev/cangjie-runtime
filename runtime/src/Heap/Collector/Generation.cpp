@@ -1066,13 +1066,19 @@ void WCollector::DoYoungGarbageCollection()
         consumedSlots.reserve(rememberedSlots.size());
     }
     MinorInteriorBaseMap remsetInteriorBases;
+    // A concurrent forwarding lookup can be temporarily unavailable after the
+    // previous remembered face has been drained. Keep exact slot identities in
+    // a set bounded by that drained face, then consume current field words at
+    // the mark-end stop before coverage is published.
+    MinorSlotSet unavailableRememberedSlots;
+    unavailableRememberedSlots.reserve(rememberedSlots.size());
     {
         // minortime: ④ remset rescan + ⑤ mark closure pass-2 (from remset edges)
         MRT_PHASE_TIMER("young.remset_rescan");
         RescanRememberedSet(workStack, rememberedSlots, reachableSlots, weakSlots, currentMinorRoots,
                             fullYoungScan,
                             remsetConsumedLedgerElideActive ? nullptr : &consumedSlots, &remsetStats,
-                            &remsetInteriorBases, stw.get());
+                            &remsetInteriorBases, stw.get(), &unavailableRememberedSlots);
     }
     if (remsetHashOptRequested) {
         VLOG(REPORT,
@@ -1144,6 +1150,20 @@ void WCollector::DoYoungGarbageCollection()
 #if defined(MRT_TESTABLE_INTERNALS)
         NoteY2yAfterStw2TestReceipt(y2yBatchAtMarkEnd);
 #endif
+        if (!unavailableRememberedSlots.empty()) {
+            const size_t pendingAtDeadline = unavailableRememberedSlots.size();
+#if defined(MRT_TESTABLE_INTERNALS)
+            NoteRemsetPendingDeadlineTestReceipt(pendingAtDeadline);
+#endif
+            RescanRememberedSet(workStack, unavailableRememberedSlots, reachableSlots, weakSlots,
+                                currentMinorRoots, fullYoungScan,
+                                remsetConsumedLedgerElideActive ? nullptr : &consumedSlots, &remsetStats,
+                                &remsetInteriorBases, stw.get());
+            unavailableRememberedSlots.clear();
+            VLOG(REPORT,
+                 "[GCV2][remset-pending] deadline=%zu consumed_total=%zu work=%zu",
+                 pendingAtDeadline, remsetStats.consumed, workStack.size());
+        }
         const bool markEndSucceeded = TryEndYoungMark(workStack, &concWindow);
 #if defined(MRT_TESTABLE_INTERNALS)
         NoteMarkTerminatePauseDuration(TimeUtil::NanoSeconds() - markEndPauseStartNs);
