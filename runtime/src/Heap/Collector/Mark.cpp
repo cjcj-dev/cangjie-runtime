@@ -1634,7 +1634,7 @@ bool WCollector::MarkYoungSatbBuffer(WorkStack& workStack, bool fullYoungScan,
             TraceYoungClosure(workStack, fullYoungScan, reachableVec, reachableSlots, weakSlots);
         }
         CHECK_DETAIL(workStack.empty(), "young concurrent follow returned with owner work");
-        const bool more = FlushMarkProducers(youngMarkDomain);
+        const bool more = FlushMarkProducers(youngMarkDomain.get());
         visitSatbObj();
         const bool resurrected =
             youngMarkDomain != nullptr && youngMarkDomain->Terminate().Resurrected();
