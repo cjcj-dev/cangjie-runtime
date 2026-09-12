@@ -1835,7 +1835,10 @@ public:
             return true;
         }
         if (IsLargeRegion()) {
-            return GetMarkedRegionFlag(view) == 1;
+            if (GetMarkedRegionFlag(view) == 1) {
+                return true;
+            }
+            return (__atomic_load_n(&metadata.largeLiveClaim, __ATOMIC_ACQUIRE) & 1) != 0;
         }
         LiveInfo* liveInfo = GetLiveInfoForView(view);
         if (liveInfo == nullptr) {
@@ -1891,8 +1894,10 @@ public:
             return true;
         }
         if (IsLargeRegion()) {
-            return GetMarkedRegionFlag(view) == 1 ||
-                (G == Generation::Old && metadata.isResurrected == 1);
+            if (GetMarkedRegionFlag(view) == 1) {
+                return true;
+            }
+            return (__atomic_load_n(&metadata.largeLiveClaim, __ATOMIC_ACQUIRE) & 1) != 0;
         }
 
         LiveInfo* liveInfo = GetLiveInfoForView(view);
