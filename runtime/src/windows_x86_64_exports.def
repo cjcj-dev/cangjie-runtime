@@ -3413,3 +3413,4 @@ EXPORTS
     wcstoull @3483
     wcstoumax @3484
     CJ_MCC_PostWriteRefField @3487
+    CJ_CJThreadIsStackGuardAddress @3488

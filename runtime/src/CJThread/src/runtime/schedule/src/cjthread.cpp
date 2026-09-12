@@ -1942,6 +1942,19 @@ void *CJThreadStackGuardGet(void)
     return cjthread->stack.stackGuard;
 }
 
+bool CJThreadIsStackGuardAddress(const void *addr)
+{
+    const struct CJThread *cjthread = CJThreadGetOrNullSafe();
+    if (cjthread == nullptr || cjthread->stack.protectAddr == nullptr || cjthread->stack.stackTopAddr == nullptr) {
+        return false;
+    }
+    // Like HotSpot StackOverflow::in_stack_red_zone: [guard bottom, guard end).
+    // Use the actual allocation bounds; unprotected and foreign stacks have no zone.
+    uintptr_t faultAddr = reinterpret_cast<uintptr_t>(addr);
+    return faultAddr >= reinterpret_cast<uintptr_t>(cjthread->stack.protectAddr) &&
+           faultAddr < reinterpret_cast<uintptr_t>(cjthread->stack.stackTopAddr);
+}
+
 void *CJThreadStackAddrGet(void)
 {
     struct CJThread *cjthread = CJThreadGet();

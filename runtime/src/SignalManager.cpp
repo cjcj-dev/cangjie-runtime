@@ -285,13 +285,9 @@ void SignalManager::BlockSignals()
 
 static void CheckStackOverflow(const siginfo_t& info)
 {
-    if (Runtime::CurrentRef() != nullptr && !Runtime::Current().GetConcurrencyModel().GetStackGuardCheckFlag()) {
-        return;
-    }
-    uintptr_t stackAddr = reinterpret_cast<uintptr_t>(CJThreadStackAddrGet());
-    uintptr_t topAddr = stackAddr - MapleRuntime::MRT_PAGE_SIZE;
-    uintptr_t sigAddr = reinterpret_cast<uintptr_t>(info.si_addr);
-    if (stackAddr != 0 && sigAddr >= topAddr && sigAddr < stackAddr) {
+    // HotSpot checks the current thread's red zone, not global VM initialization.
+    // A signal can arrive while Runtime exists but its concurrency model does not.
+    if (CJThreadIsStackGuardAddress(info.si_addr)) {
         LogErrorAsSafe("unhandled SIGSEGV from unmanaged stack overflow!");
     }
 }
