@@ -192,7 +192,7 @@ public:
         VisitAllMutators([](Mutator& mutator) {
             mutator.SetSuspensionFlag(Mutator::SuspensionType::SUSPENSION_FOR_SYNC);
         });
-        ArmPollOnAllOsThreads();
+        AddPollRequestOnAllOsThreads(POLL_REQ_SYNC);
     }
 
     void CancelSuspensionAfterSync()

@@ -58,9 +58,7 @@ void ArmThreadPoll(ThreadLocalData* tls);
 void UpdatePollValues(ThreadLocalData* tls);
 void AddTlsPollRequest(ThreadLocalData* tls, uint64_t bit);
 void ClearTlsPollRequest(ThreadLocalData* tls, uint64_t bit);
-void AddPollOnThreadHolding(Mutator* mutator, uint64_t bit);
-void ClearPollOnThreadHolding(Mutator* mutator, uint64_t bit);
-void ArmPollOnThreadHolding(Mutator* mutator);
+void AddPollRequestOnAllOsThreads(uint64_t bit);
 void ArmPollOnAllOsThreads();
 bool HasPendingSafepoint(ThreadLocalData* tls);
 

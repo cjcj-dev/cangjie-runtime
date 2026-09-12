@@ -300,8 +300,6 @@ public:
             ThreadLocalData* tls = ThreadLocal::GetThreadLocalData();
             if (tls != nullptr && tls->mutator == this) {
                 AddTlsPollRequest(tls, bit);
-            } else {
-                AddPollOnThreadHolding(this, bit);
             }
         }
     }
@@ -315,8 +313,6 @@ public:
             if (tls != nullptr && tls->mutator == this) {
                 ClearTlsPollRequest(tls, bit);
                 UpdatePollValues(tls);
-            } else {
-                ClearPollOnThreadHolding(this, bit);
             }
         }
     }
@@ -375,16 +371,13 @@ public:
     void SetSafepointActive(bool value)
     {
         ThreadLocalData* tls = ThreadLocal::GetThreadLocalData();
-        if (tls != nullptr && tls->mutator == this) {
-            if (value) {
-                ArmThreadPoll(tls);
-            } else {
-                UpdatePollValues(tls);
-            }
+        if (tls == nullptr || tls->mutator != this) {
             return;
         }
         if (value) {
-            ArmPollOnThreadHolding(this);
+            ArmThreadPoll(tls);
+        } else {
+            UpdatePollValues(tls);
         }
     }
 
@@ -592,22 +585,6 @@ public:
         }
         RegisterCurrentMarkFlushThread();
         SetEpochHandshakeLifecycle(EPOCH_HANDSHAKE_RUNNING);
-        const uint32_t flags = GetSuspensionFlag();
-        if ((flags & SUSPENSION_FOR_SYNC) != 0) {
-            AddTlsPollRequest(tlData, POLL_REQ_SYNC);
-        }
-        if ((flags & SUSPENSION_FOR_GC_PHASE) != 0) {
-            AddTlsPollRequest(tlData, POLL_REQ_GC_PHASE);
-        }
-        if ((flags & SUSPENSION_FOR_CPU_PROFILE) != 0) {
-            AddTlsPollRequest(tlData, POLL_REQ_CPU_PROFILE);
-        }
-        if ((flags & SUSPENSION_FOR_EPOCH_HANDSHAKE) != 0) {
-            AddTlsPollRequest(tlData, POLL_REQ_EPOCH);
-        }
-        if ((flags & SUSPENSION_FOR_EXIT) != 0) {
-            AddTlsPollRequest(tlData, POLL_REQ_EXIT);
-        }
         UpdatePollValues(tlData);
         DoLeaveSaferegion();
     }
