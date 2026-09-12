@@ -515,30 +515,28 @@ public:
         if (self != nullptr) {
             return self;
         }
-        to = space.GetRegionManager().FindPublishedRoute(obj, forwarding).dest;
-        if (to != nullptr && Heap::IsHeapAddress(to) && to->IsValidObject()) {
-            return to;
+        if (const MAddress hit = ForwardingTable::FindTo(fromAddr)) {
+            return reinterpret_cast<BaseObject*>(hit);
         }
-        // ③ table still empty. Wait for the region-level publication while a
-        // copier exists. A completed publication without a receipt is an
-        // invariant failure, never a from-address answer (zRelocate.cpp:382-416).
+        // ③ find-miss: wait for the page task then find again
+        // (zRelocate.cpp:401-415 relocate_object / forward_object).
         if (MutatorRelocate::StatsOn()) {
             MutatorRelocate::NoteWaitEnter();
         }
-        BaseObject* resolved = WaitRoutedTipReady(obj, to, forwarding, provenance);
-        // ZRelocate::forward_object (zRelocate.cpp:412-415) returns find() whenever the table
-        // has an answer. Identity (to==from) is a legal receipt for a kept or in-place survivor.
-        // WaitRoutedTipReady only returns non-null from ArmedHit or a published request receipt.
+        BaseObject* resolved =
+            WaitForPageForwarding(obj, ForwardingTable::RetainPageOwner(forwarding));
         if (resolved != nullptr) {
             return resolved;
         }
+        if (const MAddress hit = ForwardingTable::FindTo(fromAddr)) {
+            return reinterpret_cast<BaseObject*>(hit);
+        }
         CHECK_DETAIL(false,
                      "ZRelocate::forward_object requires a forwarding entry for relocation-set object %p "
-                     "tid=%d obj=%p region=%p gcCycle=%zu resolved=%p "
-                     "route.snapshot=%#llx fwdDone=%u lookup.record=WaitRouted.return",
+                     "tid=%d obj=%p region=%p gcCycle=%zu "
+                     "route.snapshot=%#llx fwdDone=%u",
                      obj, static_cast<int>(MapleRuntime::GetTid()), static_cast<void*>(obj),
                      static_cast<void*>(forwarding), g_gcCount.load(std::memory_order_relaxed),
-                     static_cast<void*>(resolved),
                      static_cast<unsigned long long>(
                          forwarding->GetRouteStateSnapshotForDiagnostics()),
                      static_cast<unsigned>(forwarding->IsForwardingDone()));
@@ -958,17 +956,10 @@ protected:
     BaseObject* ForwardObjectImpl(BaseObject* obj, RegionInfo* ghostFromRegion,
                                   const RegionInfo::RetainScope& lease);
     BaseObject* ForwardObjectExclusive(BaseObject* obj) override;
-    // dest is PlanRoute's answer, computed *before* TryLockObject so the LOCKED
-    // critical section cannot RouteRegion / TakeRegion (zRelocate.cpp:354-372
-    // relocate_object_inner: alloc+copy+insert, no safepoint; REPORT-routespin §5 乙1).
-    // copyPage is the from-page NoteCopyInflight already ran on (TryLock success);
-    // Exclusive only EndCopyInflight after every UnlockObject.
+    // zRelocate.cpp:354-379 relocate_object_inner: find hit → return; else
+    // alloc (or reuse a prepared dest) → copy → insert; CAS loser uses winner.
+    BaseObject* RelocateObjectInner(BaseObject* obj, BaseObject* planned, RegionInfo* copyPage);
     BaseObject* ForwardObjectExclusive(BaseObject* obj, BaseObject* toObj, RegionInfo* copyPage);
-
-    // Wait until a forwarding receipt is published; completed miss is an
-    // invariant failure (zRelocate.cpp:382-416).
-    BaseObject* WaitRoutedTipReady(BaseObject* from, BaseObject* to, RegionInfo* forwarding,
-                                   const ForwardingProvenance& provenance) const;
 
     // portmutreloc: ZRelocate::relocate_object's middle leg (zRelocate.cpp:391-406) --
     // retain the from-region, relocate the object on this thread, release. Returns the
