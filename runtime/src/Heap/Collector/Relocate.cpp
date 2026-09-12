@@ -38,7 +38,6 @@
 #include "Heap/Collector/MarkPartialArray.h"
 #include "Heap/Collector/TenuringThreshold.h"
 #include "Heap/GcThreadPool.h"
-#include "Heap/HeapWork.h"
 #if defined(MRT_GCV2_UNTAG_BREADCRUMB)
 #include "Heap/WCollector/UntagRefFieldBreadcrumb.h"
 #endif

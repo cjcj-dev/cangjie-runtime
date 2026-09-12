@@ -1271,20 +1271,20 @@ inline void ExecuteForwardTask(RegionManager& regionManager, RegionList& fromReg
 
 } // namespace detail
 
-// The actual relocation HeapWork submitted by ForwardFromRegions.  Test builds
-// export Execute so the unit runner binds the product SO; default builds retain
+// The relocation worker task submitted by DrainForwardFromRegions. Test builds
+// export Work so the unit runner binds the product SO; default builds retain
 // the implicit inline virtual with no MRT_EXPORT and no dynamic export.
 template<Generation G>
-class ForwardTask : public HeapWork {
+class ForwardTask : public GCWorkerTask {
 public:
     ForwardTask(RegionManager& manager, RegionList& fromSpace)
         : regionManager(manager), fromRegionList(fromSpace) {}
 
     ~ForwardTask() override = default;
 #if defined(MRT_TESTABLE_INTERNALS)
-    MRT_EXPORT void Execute(size_t) override;
+    MRT_EXPORT void Work(uint32_t) override;
 #else
-    __attribute__((visibility("hidden"))) void Execute(size_t) override
+    __attribute__((visibility("hidden"))) void Work(uint32_t) override
     {
         detail::ExecuteForwardTask<G>(regionManager, fromRegionList);
     }

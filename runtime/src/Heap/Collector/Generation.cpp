@@ -31,7 +31,6 @@
 #include "Heap/Collector/MarkPartialArray.h"
 #include "Heap/Collector/TenuringThreshold.h"
 #include "Heap/GcThreadPool.h"
-#include "Heap/HeapWork.h"
 #include "Heap/Verify/VerifyHeap.h"
 #include "Heap/Verify/MarkCompleteVerify.h"
 #include "Heap/Verify/VerifyOption.h"

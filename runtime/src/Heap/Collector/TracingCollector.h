@@ -542,7 +542,6 @@ protected:
 
     inline void SetGCReason(const GCReason reason) { SelectCycle(reason); }
 
-    GCThreadPool* GetThreadPool() const { return collectorResources.GetThreadPool(); }
     // enum all common roots.
     void EnumAllCommonRoots(GCWorkers& workers, RootSet& rootSet);
     GCWorkers& GetWorkers() const

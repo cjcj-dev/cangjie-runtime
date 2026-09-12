@@ -409,8 +409,8 @@ void RunRemapWindow(bool copyOnly, ForwardDomain domain = ForwardDomain::None, b
     WCollector collector(Heap::GetHeap().GetAllocator(), resources);
     RelocationReceiptTestAccess::BindCollector(resources, &collector);
     collector.SetGCPhase(GCPhase::GC_PHASE_CLEAR_SATB_BUFFER);
-    GCThreadPool pool("gc-unit-remap-window", parallel ? 1 : 0, GCPoolThread::GC_THREAD_PRIORITY);
-    RelocationReceiptTestAccess::BindThreadPool(resources, &pool);
+    RuntimeWorkers pool(parallel ? 2u : 1u);
+    RelocationReceiptTestAccess::BindRuntimeWorkers(resources, &pool);
     GCWorkers youngWorkers(GCWorkers::Generation::YOUNG, parallel ? 2u : 1u);
     GCWorkers oldWorkers(GCWorkers::Generation::OLD, 1u);
     youngWorkers.SetActive();
@@ -563,10 +563,8 @@ void RunRemapWindow(bool copyOnly, ForwardDomain domain = ForwardDomain::None, b
     }
     // OTHER_VM owns the mapped heap and product metadata until exit.
     // No teardown may re-interpret a page whose forwarding life was retired.
-    pool.WaitFinish();
     RelocationReceiptTestAccess::BindWorkers(resources, nullptr, nullptr);
-    RelocationReceiptTestAccess::BindThreadPool(resources, nullptr);
-    pool.Exit();
+    RelocationReceiptTestAccess::BindRuntimeWorkers(resources, nullptr);
     RelocationReceiptTestAccess::BindCollector(resources, nullptr);
     std::fflush(stderr);
     if (lifetimeTarget != nullptr) GC_EXPECT_TRUE(lifetimeMatched);

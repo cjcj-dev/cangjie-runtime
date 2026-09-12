@@ -44,9 +44,9 @@ struct RelocationReceiptTestAccess {
         resources.collectorProxy.currentCollector = collector;
     }
 
-    static void BindThreadPool(CollectorResources& resources, GCThreadPool* threadPool, int32_t threadCount = 1)
+    static void BindRuntimeWorkers(CollectorResources& resources, RuntimeWorkers* threadPool, int32_t threadCount = 1)
     {
-        resources.gcThreadPool = threadPool;
+        resources.runtimeWorkers = threadPool;
         resources.gcThreadCount = threadCount;
         resources.concurrentGcThreadCount = threadCount;
     }
@@ -341,9 +341,8 @@ void RunYoungWeakVariant(const char* variant, size_t helpers,
     WCollector collector(Heap::GetHeap().GetAllocator(), resources);
     RelocationReceiptTestAccess::BindCollector(resources, &collector);
     collector.SetGCPhase(GCPhase::GC_PHASE_CLEAR_SATB_BUFFER);
-    GCThreadPool threadPool("gc-unit-young-weak", static_cast<int32_t>(helpers),
-                            GCPoolThread::GC_THREAD_PRIORITY);
-    RelocationReceiptTestAccess::BindThreadPool(resources, &threadPool);
+    RuntimeWorkers threadPool(helpers + 1u);
+    RelocationReceiptTestAccess::BindRuntimeWorkers(resources, &threadPool);
     RegionSpace& space = reinterpret_cast<RegionSpace&>(Heap::GetHeap().GetAllocator());
     space.GetRegionManager().EnlistFullThreadLocalRegion(fx.region1);
     space.GetRegionManager().AddRawPointerObject(graph.child);
@@ -400,8 +399,7 @@ void RunYoungWeakVariant(const char* variant, size_t helpers,
     Heap::GetHeap().RemoveExportObject(rootHandle);
     resources.SetGcStarted(startedBefore);
     resources.GetGCStats().reason = reasonBefore;
-    RelocationReceiptTestAccess::BindThreadPool(resources, nullptr);
-    threadPool.Exit();
+    RelocationReceiptTestAccess::BindRuntimeWorkers(resources, nullptr);
     RelocationReceiptTestAccess::BindCollector(resources, nullptr);
 
     GC_EXPECT_EQ(receipt.serial, expectedSerial);
@@ -473,8 +471,8 @@ void RunYoungWeakRemsetFlow()
     LiveInfo* targetLive = fx.PlantLiveInfo(fx.region1);
     (void)fx.PlantMarkBitmap<Generation::Young>(holderLive, fx.region0->GetRegionSize());
     (void)fx.PlantMarkBitmap<Generation::Young>(targetLive, fx.region1->GetRegionSize());
-    GCThreadPool threadPool("gc-unit-young-weak-remset", 0, GCPoolThread::GC_THREAD_PRIORITY);
-    RelocationReceiptTestAccess::BindThreadPool(resources, &threadPool);
+    RuntimeWorkers threadPool(1u);
+    RelocationReceiptTestAccess::BindRuntimeWorkers(resources, &threadPool);
     RegionSpace& space = reinterpret_cast<RegionSpace&>(Heap::GetHeap().GetAllocator());
     space.GetRegionManager().EnlistFullThreadLocalRegion(fx.region0);
     space.GetRegionManager().EnlistFullThreadLocalRegion(fx.region1);
@@ -496,8 +494,7 @@ void RunYoungWeakRemsetFlow()
     Heap::GetHeap().RemoveExportObject(rootHandle);
     resources.SetGcStarted(startedBefore);
     resources.GetGCStats().reason = reasonBefore;
-    RelocationReceiptTestAccess::BindThreadPool(resources, nullptr);
-    threadPool.Exit();
+    RelocationReceiptTestAccess::BindRuntimeWorkers(resources, nullptr);
     RelocationReceiptTestAccess::BindCollector(resources, nullptr);
 
     GC_EXPECT_TRUE(recordedBeforeMinor);
@@ -527,8 +524,8 @@ void RunMajorWeakGraph(MajorRootFamily family, bool runtimeEntry = false, size_t
     WCollector collector(Heap::GetHeap().GetAllocator(), resources);
     RelocationReceiptTestAccess::BindCollector(resources, &collector);
     collector.SetGCPhase(GCPhase::GC_PHASE_IDLE);
-    GCThreadPool threadPool("gc-unit-major-weak", static_cast<int32_t>(helpers), GCPoolThread::GC_THREAD_PRIORITY);
-    RelocationReceiptTestAccess::BindThreadPool(resources, &threadPool, static_cast<int32_t>(helpers + 1));
+    RuntimeWorkers threadPool(helpers + 1u);
+    RelocationReceiptTestAccess::BindRuntimeWorkers(resources, &threadPool, static_cast<int32_t>(helpers + 1));
     RegionSpace& space = reinterpret_cast<RegionSpace&>(Heap::GetHeap().GetAllocator());
     space.GetRegionManager().EnlistFullThreadLocalRegion(fx.region0);
     space.GetRegionManager().AddRawPointerObject(graph.child);
@@ -634,8 +631,7 @@ void RunMajorWeakGraph(MajorRootFamily family, bool runtimeEntry = false, size_t
     if (family == MajorRootFamily::EXPORT) {
         Heap::GetHeap().RemoveExportObject(exportHandle);
     }
-    RelocationReceiptTestAccess::BindThreadPool(resources, nullptr);
-    threadPool.Exit();
+    RelocationReceiptTestAccess::BindRuntimeWorkers(resources, nullptr);
     RelocationReceiptTestAccess::BindCollector(resources, nullptr);
 
     if (runtimeEntry) {
@@ -734,8 +730,8 @@ GC_OTHER_VM_TEST(YoungWeakClosure, ExportOnlyMajorRootOwnsItsClosure)
     WCollector collector(Heap::GetHeap().GetAllocator(), resources);
     RelocationReceiptTestAccess::BindCollector(resources, &collector);
     collector.SetGCPhase(GCPhase::GC_PHASE_IDLE);
-    GCThreadPool threadPool("gc-unit-export-only", 0, GCPoolThread::GC_THREAD_PRIORITY);
-    RelocationReceiptTestAccess::BindThreadPool(resources, &threadPool);
+    RuntimeWorkers threadPool(1u);
+    RelocationReceiptTestAccess::BindRuntimeWorkers(resources, &threadPool);
     RegionSpace& space = reinterpret_cast<RegionSpace&>(Heap::GetHeap().GetAllocator());
     space.GetRegionManager().EnlistFullThreadLocalRegion(fx.region0);
     space.GetRegionManager().AddRawPointerObject(graph.weak);
@@ -749,8 +745,7 @@ GC_OTHER_VM_TEST(YoungWeakClosure, ExportOnlyMajorRootOwnsItsClosure)
                  static_cast<int>(rootMarked), static_cast<int>(childMarked));
 
     Heap::GetHeap().RemoveExportObject(handle);
-    RelocationReceiptTestAccess::BindThreadPool(resources, nullptr);
-    threadPool.Exit();
+    RelocationReceiptTestAccess::BindRuntimeWorkers(resources, nullptr);
     RelocationReceiptTestAccess::BindCollector(resources, nullptr);
     GC_EXPECT_TRUE(rootMarked);
     GC_EXPECT_TRUE(childMarked);
@@ -769,8 +764,8 @@ GC_OTHER_VM_TEST(ValueRootCurrentization, MinorRuntimeDispatchMarksCurrentAndWri
     WCollector collector(Heap::GetHeap().GetAllocator(), resources);
     RelocationReceiptTestAccess::BindCollector(resources, &collector);
     collector.SetGCPhase(GCPhase::GC_PHASE_CLEAR_SATB_BUFFER);
-    GCThreadPool threadPool("gc-unit-value-root-minor", 0, GCPoolThread::GC_THREAD_PRIORITY);
-    RelocationReceiptTestAccess::BindThreadPool(resources, &threadPool);
+    RuntimeWorkers threadPool(1u);
+    RelocationReceiptTestAccess::BindRuntimeWorkers(resources, &threadPool);
     RegionSpace& space = reinterpret_cast<RegionSpace&>(Heap::GetHeap().GetAllocator());
     space.GetRegionManager().EnlistFullThreadLocalRegion(route.destination);
     space.GetRegionManager().AddRawPointerObject(route.to);
@@ -801,8 +796,7 @@ GC_OTHER_VM_TEST(ValueRootCurrentization, MinorRuntimeDispatchMarksCurrentAndWri
 
     resources.SetGcStarted(startedBefore);
     resources.GetGCStats().reason = reasonBefore;
-    RelocationReceiptTestAccess::BindThreadPool(resources, nullptr);
-    threadPool.Exit();
+    RelocationReceiptTestAccess::BindRuntimeWorkers(resources, nullptr);
     RelocationReceiptTestAccess::BindCollector(resources, nullptr);
     GC_EXPECT_TRUE(currentMarked);
     GC_EXPECT_TRUE(carrierCurrent);
@@ -823,8 +817,8 @@ GC_OTHER_VM_TEST(ValueRootCurrentization, MajorProducerConsumerCurrentizesBefore
     WCollector collector(Heap::GetHeap().GetAllocator(), resources);
     RelocationReceiptTestAccess::BindCollector(resources, &collector);
     collector.SetGCPhase(GCPhase::GC_PHASE_IDLE);
-    GCThreadPool threadPool("gc-unit-value-root-major", 0, GCPoolThread::GC_THREAD_PRIORITY);
-    RelocationReceiptTestAccess::BindThreadPool(resources, &threadPool);
+    RuntimeWorkers threadPool(1u);
+    RelocationReceiptTestAccess::BindRuntimeWorkers(resources, &threadPool);
     RegionSpace& space = reinterpret_cast<RegionSpace&>(Heap::GetHeap().GetAllocator());
     space.GetRegionManager().EnlistFullThreadLocalRegion(graph.owner);
     space.GetRegionManager().AddRawPointerObject(graph.foreign);
@@ -845,8 +839,7 @@ GC_OTHER_VM_TEST(ValueRootCurrentization, MajorProducerConsumerCurrentizesBefore
                  static_cast<int>(consumerMarked), static_cast<int>(handoffCurrent));
 
     Heap::GetHeap().RemoveExportObject(exportHandle);
-    RelocationReceiptTestAccess::BindThreadPool(resources, nullptr);
-    threadPool.Exit();
+    RelocationReceiptTestAccess::BindRuntimeWorkers(resources, nullptr);
     RelocationReceiptTestAccess::BindCollector(resources, nullptr);
     GC_EXPECT_TRUE(producerCarrier);
     GC_EXPECT_TRUE(rootMarked);

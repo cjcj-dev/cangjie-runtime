@@ -1002,9 +1002,6 @@ EXPORTS
     _ZN12MapleRuntime10GCExecutor7ExecuteEPv @995
     _ZN12MapleRuntime10GCExecutorD0Ev @996
     _ZN12MapleRuntime10IsGcThreadEv @997
-    _ZN12MapleRuntime10LambdaWork7ExecuteEy @998
-    _ZN12MapleRuntime10LambdaWorkD0Ev @999
-    _ZN12MapleRuntime10LambdaWorkD2Ev @1000
     _ZN12MapleRuntime10LogManager4FiniEv @1001
     _ZN12MapleRuntime10LogManager4InitEv @1002
     _ZN12MapleRuntime10LogManagerC1Ev @1003
@@ -1284,23 +1281,6 @@ EXPORTS
     _ZN12MapleRuntime12FixedCStringD1Ev @1296
     _ZN12MapleRuntime12FixedCStringD2Ev @1297
     _ZN12MapleRuntime12FixedCStringaSERKS0_ @1298
-    _ZN12MapleRuntime12GCPoolThread10WorkerFuncEPv @1299
-    _ZN12MapleRuntime12GCPoolThreadC1EPNS_12GCThreadPoolEPKcyy @1300
-    _ZN12MapleRuntime12GCPoolThreadC2EPNS_12GCThreadPoolEPKcyy @1301
-    _ZN12MapleRuntime12GCPoolThreadD1Ev @1302
-    _ZN12MapleRuntime12GCPoolThreadD2Ev @1303
-    _ZN12MapleRuntime12GCThreadPool10WaitFinishEv @1304
-    _ZN12MapleRuntime12GCThreadPool12ClearAllWorkEv @1305
-    _ZN12MapleRuntime12GCThreadPool14DrainWorkQueueEv @1306
-    _ZN12MapleRuntime12GCThreadPool21SetMaxActiveThreadNumEi @1307
-    _ZN12MapleRuntime12GCThreadPool4ExitEv @1308
-    _ZN12MapleRuntime12GCThreadPool4StopEv @1309
-    _ZN12MapleRuntime12GCThreadPool5StartEv @1310
-    _ZN12MapleRuntime12GCThreadPool7AddWorkEPNS_8HeapWorkE @1311
-    _ZN12MapleRuntime12GCThreadPoolC1EPKcii @1312
-    _ZN12MapleRuntime12GCThreadPoolC2EPKcii @1313
-    _ZN12MapleRuntime12GCThreadPoolD1Ev @1314
-    _ZN12MapleRuntime12GCThreadPoolD2Ev @1315
     _ZN12MapleRuntime12GetCallerRspERNS_16WinModuleManagerERKNS_12MachineFrameE @1316
     _ZN12MapleRuntime12InitLogLevelEv @1321
     _ZN12MapleRuntime12LineNumTableD0Ev @1322
@@ -1405,7 +1385,6 @@ EXPORTS
     _ZN12MapleRuntime13RegionManager16RequestForRegionEy @1421
     _ZN12MapleRuntime13RegionManager17ExemptFromRegionsEv @1422
     _ZN12MapleRuntime13RegionManager17PromoteAllRegionsEv @1423
-    _ZN12MapleRuntime13RegionManager18ForwardFromRegionsEPNS_12GCThreadPoolE @1424
     _ZN12MapleRuntime13RegionManager18ForwardFromRegionsEv @1425
     _ZN12MapleRuntime13RegionManager19AddRawPointerObjectEPNS_10BaseObjectE @1426
     _ZN12MapleRuntime13RegionManager19CollectLargeGarbageEv @1427
@@ -1726,7 +1705,6 @@ EXPORTS
     _ZN12MapleRuntime16TracingCollector17MergeMutatorRootsERNS_9MarkStackIPNS_10BaseObjectEEE @1762
     _ZN12MapleRuntime16TracingCollector17ProcessFinalizersEv @1763
     _ZN12MapleRuntime16TracingCollector17RequestGCInternalENS_8GCReasonEb @1764
-    _ZN12MapleRuntime16TracingCollector18EnumAllCommonRootsEPNS_12GCThreadPoolERNS_9MarkStackIPNS_10BaseObjectEEE @1765
     _ZN12MapleRuntime16TracingCollector18EnumAllExportRootsERNS_9MarkStackIPNS_10BaseObjectEEE @1766
     _ZN12MapleRuntime16TracingCollector19ShouldIgnoreRequestERNS_9GCRequestE @1767
     _ZN12MapleRuntime16TracingCollector20DFSTraceExportObjectEPNS_10BaseObjectE @1768
@@ -2140,7 +2118,6 @@ EXPORTS
     _ZN12MapleRuntime8HeapImplD2Ev @2198
     _ZN12MapleRuntime8HeapSlotILb0EE15CompareExchangeENS_8zpointerES2_NSt3__112memory_orderES4_ @2199
     _ZN12MapleRuntime8HeapSlotILb1EE15CompareExchangeENS_8zpointerES2_NSt3__112memory_orderES4_ @2200
-    _ZN12MapleRuntime8HeapWorkD2Ev @2201
     _ZN12MapleRuntime8LRUCacheIjNSt3__16vectorINS_7CStringENS1_9allocatorIS3_EEEEE3GetEj @2202
     _ZN12MapleRuntime8LRUCacheIjNSt3__16vectorINS_7CStringENS1_9allocatorIS3_EEEEE3PutEjRKS6_ @2203
     _ZN12MapleRuntime8LRUCacheIjNSt3__16vectorINS_7CStringENS1_9allocatorIS3_EEEEED2Ev @2204
@@ -2885,7 +2862,6 @@ EXPORTS
     _ZNSt3__110__pop_heapB6v15004INS_17_ClassicAlgPolicyENS_6__lessINS_4pairIyyEES4_EEPS4_EEvT1_S7_RT0_NS_15iterator_traitsIS7_E15difference_typeE @2970
     _ZNSt3__111__introsortINS_17_ClassicAlgPolicyERNS_6__lessINS_4pairIyyEES4_EEPS4_EEvT1_S8_T0_NS_15iterator_traitsIS8_E15difference_typeE @2971
     _ZNSt3__111__sift_downINS_17_ClassicAlgPolicyERNS_6__lessINS_4pairIyyEES4_EEPS4_EEvT1_OT0_NS_15iterator_traitsIS8_E15difference_typeES8_ @2972
-    _ZNSt3__112__deque_baseIPN12MapleRuntime8HeapWorkENS_9allocatorIS3_EEED2Ev @2973
     _ZNSt3__112__deque_baseIPN12MapleRuntime8RootSlotENS1_21StdContainerAllocatorIS3_LNS1_13AllocationTagE5EEEED2Ev @2974
     _ZNSt3__112__hash_tableINS_12basic_stringIcNS_11char_traitsIcEENS_9allocatorIcEEEENS_4hashIS6_EENS_8equal_toIS6_EENS4_IS6_EEE11__do_rehashILb1EEEvy @2975
     _ZNSt3__112__hash_tableINS_12basic_stringIcNS_11char_traitsIcEENS_9allocatorIcEEEENS_4hashIS6_EENS_8equal_toIS6_EENS4_IS6_EEE25__emplace_unique_key_argsIS6_JRKS6_EEENS_4pairINS_15__hash_iteratorIPNS_11__hash_nodeIS6_PvEEEEbEERKT_DpOT0_ @2976
@@ -2982,9 +2958,6 @@ EXPORTS
     _ZNSt3__114__split_bufferIPPN12MapleRuntime10BaseObjectENS_9allocatorIS4_EEE10push_frontEOS4_ @3067
     _ZNSt3__114__split_bufferIPPN12MapleRuntime10BaseObjectENS_9allocatorIS4_EEE9push_backEOS4_ @3068
     _ZNSt3__114__split_bufferIPPN12MapleRuntime10BaseObjectERNS_9allocatorIS4_EEE10push_frontERKS4_ @3069
-    _ZNSt3__114__split_bufferIPPN12MapleRuntime8HeapWorkENS_9allocatorIS4_EEE10push_frontEOS4_ @3070
-    _ZNSt3__114__split_bufferIPPN12MapleRuntime8HeapWorkENS_9allocatorIS4_EEE9push_backEOS4_ @3071
-    _ZNSt3__114__split_bufferIPPN12MapleRuntime8HeapWorkERNS_9allocatorIS4_EEE10push_frontERKS4_ @3072
     _ZNSt3__114__split_bufferIPPN12MapleRuntime8RootSlotENS1_21StdContainerAllocatorIS4_LNS1_13AllocationTagE5EEEE10push_frontEOS4_ @3073
     _ZNSt3__114__split_bufferIPPN12MapleRuntime8RootSlotENS1_21StdContainerAllocatorIS4_LNS1_13AllocationTagE5EEEE9push_backB6v15004ERKS4_ @3074
     _ZNSt3__114__split_bufferIPPN12MapleRuntime8RootSlotENS1_21StdContainerAllocatorIS4_LNS1_13AllocationTagE5EEEE9push_backEOS4_ @3075
@@ -3011,7 +2984,6 @@ EXPORTS
     _ZNSt3__15arrayIN12MapleRuntime7CStringELy16EEC2Ev @3096
     _ZNSt3__15arrayIN12MapleRuntime7CStringELy16EED2Ev @3097
     _ZNSt3__15dequeIPN12MapleRuntime10BaseObjectENS_9allocatorIS3_EEE19__add_back_capacityEv @3098
-    _ZNSt3__15dequeIPN12MapleRuntime8HeapWorkENS_9allocatorIS3_EEE19__add_back_capacityEv @3099
     _ZNSt3__15dequeIPN12MapleRuntime8RootSlotENS1_21StdContainerAllocatorIS3_LNS1_13AllocationTagE5EEEE19__add_back_capacityEv @3100
     _ZNSt3__16__treeIN12MapleRuntime14CpuProfileNodeENS_4lessIS2_EENS_9allocatorIS2_EEE12__find_equalIS2_EERPNS_16__tree_node_baseIPvEERPNS_15__tree_end_nodeISC_EERKT_ @3101
     _ZNSt3__16__treeIN12MapleRuntime14CpuProfileNodeENS_4lessIS2_EENS_9allocatorIS2_EEE16__construct_nodeIJRKS2_EEENS_10unique_ptrINS_11__tree_nodeIS2_PvEENS_22__tree_node_destructorINS5_ISE_EEEEEEDpOT_ @3102
@@ -3060,7 +3032,6 @@ EXPORTS
     _ZTSN12MapleRuntime12MachineFrameE @3145 DATA
     _ZTSN12MapleRuntime13UnwindContextE @3146 DATA
     _ZTVN12MapleRuntime10GCExecutorE @3147 DATA
-    _ZTVN12MapleRuntime10LambdaWorkE @3148 DATA
     _ZTVN12MapleRuntime10WCollectorE @3149 DATA
     _ZTVN12MapleRuntime11ConcurrencyE @3150 DATA
     _ZTVN12MapleRuntime11EHFrameInfoE @3151 DATA

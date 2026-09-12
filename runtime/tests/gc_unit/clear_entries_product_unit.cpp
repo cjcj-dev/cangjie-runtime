@@ -71,9 +71,9 @@ struct RelocationReceiptTestAccess {
         resources.collectorProxy.currentCollector = collector;
     }
 
-    static void BindThreadPool(CollectorResources& resources, GCThreadPool* threadPool)
+    static void BindRuntimeWorkers(CollectorResources& resources, RuntimeWorkers* threadPool)
     {
-        resources.gcThreadPool = threadPool;
+        resources.runtimeWorkers = threadPool;
     }
 
     static void Exempt(RegionManager& manager, RegionInfo* region)
@@ -5022,7 +5022,11 @@ GC_TEST(LoadHealDeliveryProduct, CrossGenRangeGateRecordsLegalAndRejectsBeyondTo
     EmptyBothRememberedFaces(remembered);
     RegionManager manager;
     manager.EnlistFullThreadLocalRegion(holderRegion);
+    RuntimeWorkers runtimeWorkers(2);
+    CollectorResources& resources = Heap::GetHeap().GetCollectorResources();
+    RelocationReceiptTestAccess::BindRuntimeWorkers(resources, &runtimeWorkers);
     const size_t recorded = manager.RecordPinnedCrossGenEdges();
+    RelocationReceiptTestAccess::BindRuntimeWorkers(resources, nullptr);
     const std::unordered_set<MAddress> snapshot = remembered.Snapshot();
     const size_t legalRecorded = snapshot.count(reinterpret_cast<MAddress>(legalField));
     const size_t invalidRecorded = snapshot.count(reinterpret_cast<MAddress>(invalidField));
@@ -5209,8 +5213,8 @@ GC_OTHER_VM_TEST(LoadHealDeliveryProduct, MajorDispatchRemapsLiveRemoteArrayFiel
     // Preforward entry must consume this remap-stale word.
     LoadHealDeliveryTestAccess::FlipYoungRelocateStart(collector);
 
-    GCThreadPool threadPool("gc-unit-major-remap", 0, GCPoolThread::GC_THREAD_PRIORITY);
-    RelocationReceiptTestAccess::BindThreadPool(resources, &threadPool);
+    RuntimeWorkers threadPool(1u);
+    RelocationReceiptTestAccess::BindRuntimeWorkers(resources, &threadPool);
     ResetRemapYoungRootsTestReceipt(farSlot);
 
     collector.RunGarbageCollection(1, GC_REASON_USER);
@@ -5235,8 +5239,7 @@ GC_OTHER_VM_TEST(LoadHealDeliveryProduct, MajorDispatchRemapsLiveRemoteArrayFiel
     // below is reached in green, entry-cut, and holder-gate arms alike.
     GC_EXPECT_TRUE(targetResult);
 
-    RelocationReceiptTestAccess::BindThreadPool(resources, nullptr);
-    threadPool.Exit();
+    RelocationReceiptTestAccess::BindRuntimeWorkers(resources, nullptr);
 }
 #endif
 
