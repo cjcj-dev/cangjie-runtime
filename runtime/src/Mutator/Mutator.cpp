@@ -1482,7 +1482,7 @@ Mutator::MarkFlushClaim Mutator::TryClaimMarkFlush(bool self, MarkDomain* domain
     if (!HasSuspensionRequest(SUSPENSION_FOR_MARK_FLUSH)) {
         return MarkFlushClaim::NotPending;
     }
-    if (!self && !InSaferegion()) {
+    if (!self) {
         return MarkFlushClaim::NotSafe;
     }
     RememberedSet* rememberedSet = storeBarrierRememberedSet;
@@ -1491,16 +1491,14 @@ Mutator::MarkFlushClaim Mutator::TryClaimMarkFlush(bool self, MarkDomain* domain
     }
     bool published = satbNode != nullptr && !satbNode->IsEmpty();
     SatbBuffer::Instance().FlushQueue(satbNode);
-    if (self) {
-        AllocBuffer* buffer = ThreadLocal::GetAllocBuffer();
-        if (buffer != nullptr) {
-            if (rememberedSet->IsInitialized()) {
-                buffer->GetStoreBarrierBuffer().Flush(*rememberedSet);
-            }
-            auto& collector = static_cast<WCollector&>(Heap::GetHeap().GetCollector());
-            if (collector.FlushAllocBufferMarkProducers(buffer, domain)) {
-                published = true;
-            }
+    AllocBuffer* buffer = ThreadLocal::GetAllocBuffer();
+    if (buffer != nullptr) {
+        if (rememberedSet->IsInitialized()) {
+            buffer->GetStoreBarrierBuffer().Flush(*rememberedSet);
+        }
+        auto& collector = static_cast<WCollector&>(Heap::GetHeap().GetCollector());
+        if (collector.FlushAllocBufferMarkProducers(buffer, domain)) {
+            published = true;
         }
     }
     ClearSuspensionFlag(SUSPENSION_FOR_MARK_FLUSH);
