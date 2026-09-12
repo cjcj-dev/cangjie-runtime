@@ -75,59 +75,17 @@ struct RegionBitmap {
 
     struct BitMaskInfo {
         size_t headWordIdx;
-        uint64_t headMaskBits;
-        // Single bit for the object start (offset/8). "Already marked" must mean this bit,
-        // not any bit in the multi-byte head mask — otherwise a neighbor mark makes MarkBits
-        // return already without setting the start bit, and CHECK(IsMarkedObject) ABRTs.
         uint64_t liveStartBitMask;
         uint64_t strongStartBitMask;
-        size_t tailWordCnt; // count of mask words excludes the start mask
-        uint64_t lastMaskBits;
     };
 
-    static void GetBitMaskInfo(size_t start, size_t byteCnt, BitMaskInfo& maskInfo)
+    static void GetBitMaskInfo(size_t start, BitMaskInfo& maskInfo)
     {
         const size_t pairBitStart = 2 * (start / kMarkedBytesPerBit);
-        size_t headWordIdx = pairBitStart / kBitsPerWord;
         size_t headMaskBitStart = pairBitStart % kBitsPerWord;
-        maskInfo.headWordIdx = headWordIdx;
+        maskInfo.headWordIdx = pairBitStart / kBitsPerWord;
         maskInfo.liveStartBitMask = static_cast<uint64_t>(1) << headMaskBitStart;
         maskInfo.strongStartBitMask = static_cast<uint64_t>(1) << (headMaskBitStart + 1);
-
-        size_t headBitCnt = kBitsPerWord - headMaskBitStart;
-        size_t maskBitCnt = 2 * (byteCnt / kMarkedBytesPerBit);
-        if (maskBitCnt >= headBitCnt) {
-            size_t tailBitCnt = maskBitCnt - headBitCnt;
-            size_t tailWordCnt = (tailBitCnt + kBitsPerWord - 1) / kBitsPerWord;
-            size_t lastBitCnt = tailBitCnt % kBitsPerWord;
-            uint64_t lastMaskBits = (static_cast<uint64_t>(1) << lastBitCnt) - 1;
-            maskInfo.headMaskBits = ~((static_cast<uint64_t>(1) << headMaskBitStart) - 1);
-            maskInfo.tailWordCnt = tailWordCnt;
-            maskInfo.lastMaskBits = lastMaskBits;
-        } else {
-            size_t headMaskBitEnd = headMaskBitStart + maskBitCnt;
-            uint64_t headMaskBits = (static_cast<uint64_t>(1) << headMaskBitEnd) - 1;
-            maskInfo.headMaskBits = (headMaskBits >> headMaskBitStart) << headMaskBitStart;
-            maskInfo.tailWordCnt = 0;
-            maskInfo.lastMaskBits = 0;
-        }
-    }
-
-    static constexpr uint64_t kLiveBitMask = 0x5555555555555555ULL;
-
-    void SetTailMask(const BitMaskInfo& maskInfo, uint64_t planeMask)
-    {
-        if (maskInfo.tailWordCnt == 0) {
-            return;
-        }
-        const size_t lastWordIdx = maskInfo.headWordIdx + maskInfo.tailWordCnt;
-        const size_t fullEnd = maskInfo.lastMaskBits == 0 ? lastWordIdx + 1 : lastWordIdx;
-        for (size_t idx = maskInfo.headWordIdx + 1; idx < fullEnd; ++idx) {
-            markWords[idx].fetch_or(planeMask);
-        }
-        if (maskInfo.lastMaskBits != 0) {
-            markWords[lastWordIdx].fetch_or(maskInfo.lastMaskBits & planeMask);
-        }
     }
 
     void AddLiveBytes(size_t byteCnt)
@@ -155,7 +113,7 @@ struct RegionBitmap {
     {
         (void)regionSize;
         BitMaskInfo maskInfo;
-        GetBitMaskInfo(start, byteCnt, maskInfo);
+        GetBitMaskInfo(start, maskInfo);
         // ZGC zBitMap.inline.hpp:60-83 / zLiveMap: only the object-start pair.
         // find_base_bit finds last set bit then aligns to the pair (zLiveMap.inline.hpp:219-221).
         const uint64_t startPair = maskInfo.liveStartBitMask | maskInfo.strongStartBitMask;
@@ -178,7 +136,7 @@ struct RegionBitmap {
     {
         (void)regionSize;
         BitMaskInfo maskInfo;
-        GetBitMaskInfo(start, byteCnt, maskInfo);
+        GetBitMaskInfo(start, maskInfo);
         const uint64_t old = markWords[maskInfo.headWordIdx].fetch_or(maskInfo.liveStartBitMask);
         const bool already = (old & maskInfo.liveStartBitMask) != 0;
         incLive = !already;
