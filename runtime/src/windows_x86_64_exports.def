@@ -1849,12 +1849,12 @@ EXPORTS
     _ZN12MapleRuntime18FinalizerProcessorC1Ev @1892
     _ZN12MapleRuntime18FinalizerProcessorC2Ev @1893
     _ZN12MapleRuntime18FinalizerProcessorD2Ev @1894
-    _ZN12MapleRuntime18ForwardDataManager16AllocateLiveInfoEv @1895
-    _ZN12MapleRuntime18ForwardDataManager16ForwardDataSpace22UnbindPreviousLiveInfoEv @1896
-    _ZN12MapleRuntime18ForwardDataManager20AllocateRegionBitmapEy @1897
-    _ZN12MapleRuntime18ForwardDataManager21GetForwardDataManagerEv @1898
-    _ZN12MapleRuntime18ForwardDataManager21InitializeForwardDataEv @1899
-    _ZN12MapleRuntime18ForwardDataManager24ClearPreviousForwardDataEv @1900
+    _ZN12MapleRuntime13LiveInfoArena16AllocateLiveInfoEv @1895
+    _ZN12MapleRuntime13LiveInfoArena16ForwardDataSpace22UnbindPreviousLiveInfoEv @1896
+    _ZN12MapleRuntime13LiveInfoArena20AllocateRegionBitmapEy @1897
+    _ZN12MapleRuntime13LiveInfoArena15GetLiveInfoArenaEv @1898
+    _ZN12MapleRuntime13LiveInfoArena21InitializeForwardDataEv @1899
+    _ZN12MapleRuntime13LiveInfoArena24ClearPreviousForwardDataEv @1900
     _ZN12MapleRuntime18GetCallerFrameInfoERNS_16WinModuleManagerERKNS_12MachineFrameERNS_19UnwindContextStatusE @1901
     _ZN12MapleRuntime18RemoveRegionLockedEPNS_10RegionListEPNS_10RegionInfoE @1903
     _ZN12MapleRuntime18StackGrowStackInfo15RecordStackPtrsERKNSt3__18functionIFvRNS_8RootSlotEEEES8_RKNS2_IFvNS_15zaddress_unsafeERNS_11DerivedSlotEEEERNS_7MutatorE @1904
@@ -2238,7 +2238,7 @@ EXPORTS
     _ZN12MapleRuntime9PageCache22ReleaseSpanToPageCacheEPNS_4SpanE @2292
     _ZN12MapleRuntime9PageCache7NewSpanEy @2293
     _ZN12MapleRuntime9PageCache8instanceE @2294 DATA
-    _ZN12MapleRuntime9RouteInfo8GetRouteEy @2295
+
     _ZN12MapleRuntime9SlotTableD0Ev @2296
     _ZN12MapleRuntime9StackInfo16NEED_FILTED_FLAGE @2297 DATA
     _ZN12MapleRuntime9StackInfo22AnalyseAndSetFrameTypeERNS_13UnwindContextE @2298

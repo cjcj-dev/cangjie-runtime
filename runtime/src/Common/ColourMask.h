@@ -16,7 +16,7 @@
 
 #include <cstdint>
 
-// Arena generation count for ForwardDataManager's LiveInfo ring. Not a pointer field.
+// Arena generation count for LiveInfoArena's LiveInfo ring. Not a pointer field.
 // Default 2; rebuild with -DMRT_TAG_ID_COUNT=N to widen the ring.
 #ifndef MRT_TAG_ID_COUNT
 #define MRT_TAG_ID_COUNT 2

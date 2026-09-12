@@ -1088,7 +1088,7 @@ void RegionManager::ReclaimRegion(RegionInfo* region)
     // must not re-scan O(N) under remset mutex.
 
     {
-        RegionInfo::InPlaceClaimScope drain(region, MutatorRelocate::Retire::RECLAIM_DIRTY);
+        RegionInfo::InPlaceClaimScope drain(region, ZForwardingLife::Retire::RECLAIM_DIRTY);
     }
     // gcvroot Z2: poison reclaimed payload so use-after-free roots are identifiable (MRT_GCV2_ZAP_RECLAIM=1).
     HeapZap::ZapReclaimedRegion(region->GetRegionStart(), region->GetRegionEnd());
@@ -1190,7 +1190,7 @@ void RegionManager::ReclaimRegionToMarkQuarantine(RegionInfo* region)
     DLOG(REGION, "mark-quarantine region %p @[%#zx+%zu, %#zx) type %u", region, region->GetRegionStart(),
          region->GetRegionAllocatedSize(), region->GetRegionEnd(), region->GetRegionType());
     {
-        RegionInfo::InPlaceClaimScope drain(region, MutatorRelocate::Retire::RECLAIM_MARK_QUARANTINE);
+        RegionInfo::InPlaceClaimScope drain(region, ZForwardingLife::Retire::RECLAIM_MARK_QUARANTINE);
     }
     HeapZap::ZapReclaimedRegion(region->GetRegionStart(), region->GetRegionEnd());
     region->InitFreeUnits();
@@ -1222,7 +1222,7 @@ size_t RegionManager::ReleaseRegion(RegionInfo* region)
         region->GetRegionAllocatedSize(), region->GetRegionEnd(), region->GetRegionType());
 
     {
-        RegionInfo::InPlaceClaimScope drain(region, MutatorRelocate::Retire::RELEASE_REGION);
+        RegionInfo::InPlaceClaimScope drain(region, ZForwardingLife::Retire::RELEASE_REGION);
     }
     region->InitFreeUnits();
     {
@@ -2002,7 +2002,7 @@ RegionInfo* RegionManager::TakeRegion(size_t num, RegionInfo::UnitRole type, boo
                 // Scoped tight: it ends before InitRegion, which re-initialises the metadata
                 // the lock lives in. ClearUnits is still conditional because segmented
                 // reference arrays deliberately clear the payload at yield boundaries.
-                RegionInfo::InPlaceClaimScope drain(head, MutatorRelocate::Retire::TAKE_GARBAGE);
+                RegionInfo::InPlaceClaimScope drain(head, ZForwardingLife::Retire::TAKE_GARBAGE);
                 if (clearPayload) {
                     RegionInfo::ClearUnits(idx, num, FillerZeroDiag::Site::TAKE_GARBAGE);
                 }
@@ -2814,232 +2814,11 @@ void RegionManager::RequestForRegion(size_t size)
     prevRegionAllocTime = TimeUtil::NanoSeconds();
 }
 
-static void FillRouteReserve(uintptr_t start, size_t size)
-{
-    if (size < 8) {
-        return;
-    }
-    FillerZeroDiag::Note(FillerZeroDiag::Site::ROUTE_RESERVE, start, size);
-    HeapFiller::ZeroAndFill(start, size);
-}
-
-static void FillZeroGaps(uintptr_t start, uintptr_t end)
-{
-    uintptr_t pos = start;
-    while (pos + 8 <= end) {
-        BaseObject* obj = from_region_addr(pos);
-        if (Collector::PlausibleManagedObjectGate("FillZeroGaps", obj)) {
-            size_t sz = RegionSpace::GetAllocSize(*obj);
-            if (sz < 8 || pos + sz > end) {
-                break;
-            }
-            pos += sz;
-            continue;
-        }
-        uintptr_t gap = pos;
-        while (pos + 8 <= end && *reinterpret_cast<uint64_t*>(pos) == 0) {
-            pos += 8;
-        }
-        size_t n = pos - gap;
-        if (n >= 8) {
-            FillRouteReserve(gap, n);
-        } else {
-            pos += 8;
-        }
-    }
-}
-
-static void FillPublishedRouteGaps(RegionInfo* fromRegion)
-{
-    RouteInfo ri = fromRegion->GetRouteInfoForProbe();
-    if (ri.toRegion1StartAddress != 0 && ri.toRegion1UsedBytes >= 8) {
-        FillZeroGaps(ri.toRegion1StartAddress,
-                     ri.toRegion1StartAddress + ri.toRegion1UsedBytes);
-    }
-    if (ri.toRegion2Idx != RouteInfo::INVALID_VALUE) {
-        MAddress to2 = RegionInfo::GetUnitAddress(ri.toRegion2Idx);
-        RegionInfo* to2r = RegionInfo::TryGetRegionInfoAt(to2);
-        uintptr_t to2end = to2r != nullptr ? to2r->GetRegionAllocPtr() : to2;
-        if (to2end > to2) {
-            FillZeroGaps(to2, to2end);
-        }
-    }
-}
-
 bool RegionManager::RouteOrCompactRegionImpl(RegionInfo* region)
 {
-    CHECK(region->IsRoutingState());
     CHECK_DETAIL(region->GetRawPointerObjectCount() <= 0, "pinned region shouldn't be moved");
-
-    // Ordinary product flow freezes starts in PrepareForwardableRegion. Keep
-    // direct callers fail-closed while still deriving only from an exact
-    // allocation walk, never from coverage bits.
-    if (region->LoadRouteStartTable() == nullptr) {
-        region->ResetRouteStartTable();
-        (void)region->VisitLiveObjectsUntilFalse([region](BaseObject* object) {
-            region->RecordRouteStart(region->GetAddressOffset(reinterpret_cast<MAddress>(object)));
-            return true;
-        });
-    }
-
-    // densifycut (G6): densify apply+walk+census removed. Product path already never applied
-    // (MRT_GCV2_DENSIFY default off). Exit net retained: allLiveBitsHaveReceipt + abandon +
-    // AdmitForRoute + VisitLiveObjectsUntilFalse. densifyOutcome always "not densified" (1).
-    size_t fromBytes = region->GetLiveByteCount();
-    // GetRoute (LiveInfo.cpp:15-23) places each survivor by liveInfo0 prefix-sum.
-    // A 1-region plan writes to2=INVALID and to1used=fromBytes. If the bitmap
-    // face is larger than the counter (ghost-only MarkBits never AddLiveByteCount:
-    // EnsureRouteDomainMembership.ghost, youngstatic.pregrant.ghost,
-    // statresid.force_domain.ghost), preLive >= to1used walks into else and
-    // CHECK(toRegion2Idx != INVALID) fires (rareyc C). Size the reservation
-    // by the face GetRoute actually reads. Do not relax that CHECK.
-    LiveInfo* planFace = region->GetLiveInfo0ForProbe();
-    if (planFace == nullptr) {
-        planFace = region->GetLiveInfo();
-    }
-    size_t bitmapLive = region->GetRouteBitmapLiveBytes(planFace);
-    if (bitmapLive > fromBytes) {
-        fromBytes = bitmapLive;
-    }
-    // permwho: fromBytes now sizes the reservation to cover the prefix-sum face.
-    AllocBuffer* buffer = AllocBuffer::GetOrCreateAllocBuffer();
-    RegionInfo* toRegion1 = buffer->GetRegion();
-    // resolveto / offpast: CompactRegion prepends the still-ghost region as TL and the old
-    // path SetRegion'd it. The next Route then packed a *different* region's survivors into
-    // that Compacted tail. Resolve rewrote roots to those to-addrs; Fix Admit'd them against
-    // the host's from-offset bits (live0Surv=0) → leave-alone → reclaim → GetSize MAPERR.
-    if (toRegion1 != RegionInfo::NullRegion() &&
-        (toRegion1->IsCompacted() || toRegion1->IsGhostFromRegion() || toRegion1 == region)) {
-        buffer->ClearRegion();
-        toRegion1 = RegionInfo::NullRegion();
-    }
-    CHECK(region != toRegion1);
-    bool result;
-    // routefix: already hold ROUTING — allocate without ScopedEnterSaferegion.
-    // Fail → CompactRegion (same as product null path); geometry still freezes at NoteSeal.
-    if (toRegion1 == RegionInfo::NullRegion()) {
-        toRegion1 = AllocateThreadLocalRegion(false, false, /*allowSaferegion=*/false);
-        if (toRegion1 == nullptr) {
-            auto owner = ForwardingTable::RetainPageOwner(region);
-            if (owner && ZForwardingLife::CurrentPageWork() != owner.get()) {
-                return false;
-            }
-            // routedest: the immune arm. This plan names the from-region as its own
-            // destination, and the from-region is already a ghost — the ghost bit is what
-            // bounds route readability, and DispelGhostFromRegion drops it and the route
-            // together. No hold is needed, and stamping one here would pin a region that is
-            // about to be reclaimed as garbage. The asymmetry with the other four sites is
-            // deliberate; it is written here rather than only in the design note because it
-            // is surprising at the call site.
-            CHECK(region->IsGhostFromRegion());
-            // Publish the in-place plan before Compact so GetRoute dests exist while copying.
-            region->SetRouteInfo(region->GetRegionStart(), fromBytes);
-            CompactRegion(region);
-            toRegion1 = region;
-            result = false;
-            buffer->ClearRegion();
-            RehomeCompactedInPlaceRegion(region);
-            DLOG(FORWARD, "route region %p@[%#zx+%zu, %#zx) => compact-in-place %p@[%#zx~%#zx, %#zx)",
-                region, region->GetRegionStart(), fromBytes, region->GetRegionEnd(), toRegion1,
-                toRegion1->GetRegionStart(), toRegion1->GetRegionStart() + fromBytes, toRegion1->GetRegionEnd());
-            return result;
-        } else {
-            uintptr_t reserved = toRegion1->GetRegionAllocPtr();
-            toRegion1->Alloc(fromBytes);
-            FillRouteReserve(reserved, fromBytes);
-            result = true;
-            buffer->SetRegion(toRegion1);
-        }
-        size_t toRegion1Start = toRegion1->GetRegionStart();
-        // routedest: hold the destination before the plan naming it becomes readable.
-        // Ordering matters against reclaim threads, not against route readers: readers are
-        // already excluded by the ROUTING spin (RegionManager.h:664-667), but the finalizer
-        // reclaim path is not stopped by anything here.
-        toRegion1->SetRouteDestHold(1);
-        region->SetRouteInfo(toRegion1Start, fromBytes);
-        DLOG(FORWARD, "route region %p@[%#zx+%zu, %#zx) => %p@[%#zx~%#zx, %#zx)",
-            region, region->GetRegionStart(), fromBytes, region->GetRegionEnd(), toRegion1,
-            toRegion1Start, toRegion1Start + fromBytes, toRegion1->GetRegionEnd());
-        return result;
-    }
-
-    size_t toRegion1Capacity = toRegion1->GetAvailableSize();
-    MAddress toRegion1Addr = toRegion1->GetRegionAllocPtr();
-    if (fromBytes <= toRegion1Capacity) {
-        toRegion1->Alloc(fromBytes);
-        FillRouteReserve(toRegion1Addr, fromBytes);
-        // routedest: the widest-exposure arm. toRegion1Addr is a bump pointer taken from the
-        // middle of the calling thread's own live alloc-buffer region, which keeps serving
-        // that thread's allocations afterwards, and which is young — so before this hold the
-        // minor collection set took it while honouring nothing (PrepareYoungGarbageCandidates
-        // deliberately ignores notRelocatableThisCycle).
-        toRegion1->SetRouteDestHold(1);
-        region->SetRouteInfo(toRegion1Addr, fromBytes);
-        DLOG(FORWARD, "route region %p@[%#zx+%zu, %#zx) => %p@[%#zx, %#zx~%#zx, %#zx)",
-            region, region->GetRegionStart(), fromBytes, region->GetRegionEnd(), toRegion1,
-            toRegion1->GetRegionStart(), toRegion1Addr, toRegion1Addr + fromBytes, toRegion1->GetRegionEnd());
-        return true;
-    }
-    size_t toRegion1Waste = toRegion1Capacity;
-    BaseObject* leftObject = nullptr;
-    (void)region->VisitLiveObjectsUntilFalse([&toRegion1Waste, &leftObject](BaseObject* obj) {
-        size_t objSz = RegionSpace::GetAllocSize(*obj);
-        if (toRegion1Waste >= objSz) {
-            toRegion1Waste -= objSz;
-            return true;
-        } else {
-            leftObject = obj;
-            return false;
-        }
-    });
-    MAddress usedBytes1 = toRegion1Capacity - toRegion1Waste;
-    MAddress usedBytes2 = fromBytes - usedBytes1;
-    CHECK(toRegion1->IsThreadLocalRegion());
-    {
-        RemoveThreadLocalRegion(toRegion1);
-        EnlistFullThreadLocalRegion(toRegion1);
-    }
-
-    RegionInfo* toRegion2 = AllocateThreadLocalRegion(false, false, /*allowSaferegion=*/false);
-    CHECK(region != toRegion2);
-    if (toRegion2 != nullptr) {
-        toRegion1->Alloc(usedBytes1);
-        FillRouteReserve(toRegion1Addr, usedBytes1);
-        uintptr_t r2 = toRegion2->GetRegionAllocPtr();
-        CHECK(toRegion2->Alloc(usedBytes2) != 0);
-        FillRouteReserve(r2, usedBytes2);
-        result = true;
-        buffer->SetRegion(toRegion2);
-    } else {
-        auto owner = ForwardingTable::RetainPageOwner(region);
-        if (owner && ZForwardingLife::CurrentPageWork() != owner.get()) {
-            buffer->ClearRegion();
-            return false;
-        }
-        // Publish the split plan before Compact so leftover objects land at GetRoute dests.
-        toRegion1->SetRouteDestHold(1);
-        region->SetRouteInfo(toRegion1Addr, usedBytes1, region->GetUnitIdx());
-        CompactRegion(region, toRegion1);
-        toRegion2 = region; // region is partially compacted into itself.
-        result = false;
-        buffer->ClearRegion();
-        RehomeCompactedInPlaceRegion(region);
-    }
-    uint32_t toRegion2Idx = toRegion2->GetUnitIdx();
-    // routedest: on the toRegion2 == nullptr path above, SetRouteInfo has already run once
-    // for this same holder and toRegion1 is stamped twice. The stamp is a byte store, so the
-    // repeat is a no-op — this is exactly the shape that would be a double-increment bug if
-    // the hold were ever turned into a reference count.
-    toRegion1->SetRouteDestHold(1);
-    if (toRegion2 != region) {
-        toRegion2->SetRouteDestHold(1);
-    }
-    region->SetRouteInfo(toRegion1Addr, usedBytes1, toRegion2Idx);
-    DLOG(FORWARD, "route region %p@[%#zx+%zu, %#zx) => %p@[%#zx, %#zx~%#zx, %#zx) & %p@[%#zx~%#zx, %#zx)", region,
-        region->GetRegionStart(), fromBytes, region->GetRegionEnd(), toRegion1, toRegion1->GetRegionStart(),
-        toRegion1Addr, toRegion1Addr + usedBytes1, toRegion1->GetRegionEnd(), toRegion2,
-        toRegion2->GetRegionStart(), toRegion2->GetRegionStart() + usedBytes2, toRegion2->GetRegionEnd());
-    return result;
+    CompactRegion(region);
+    return false;
 }
 
 void RegionManager::CompactRegion(RegionInfo* region)
@@ -3692,7 +3471,6 @@ void RegionManager::ForwardRegion(RegionInfo* region)
     {
         // zRelocate.cpp:1137-1152: the page worker finishes objects then
         // mark_done last (ForwardClaimedPage). Do not wait for own done here.
-        FillPublishedRouteGaps(region);
         // zRelocate.cpp:1152 — last act after every object on the page is relocated.
         VerifyForwardingReceiptsClosed(region, "ForwardRegion");
         region->MarkForwardingDone();

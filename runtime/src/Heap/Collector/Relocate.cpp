@@ -69,6 +69,7 @@
 #include "securec.h"
 #endif
 #include "Heap/Allocator/AllocBuffer.h"
+#include "Heap/Collector/ZForwardingLife.h"
 #include "Heap/WCollector/WCollectorInternal.h"
 
 namespace MapleRuntime {
@@ -617,7 +618,6 @@ void WCollector::Preforward()
         RegionInfo::AdvanceCompactRouteTableGracePeriod();
         // fwdgrace: this sync does not go through TransitionToGCPhase, so the arena grace
         // period has to be advanced alongside the route-table one or the two drift apart.
-        ForwardDataManager::AdvanceGracePeriod();
         // OpenJDK zGeneration.cpp:1054-1063: Phase 8 remaps young roots under the driver
         // lock *before* pause_relocate_start flips the old remap bits (zGeneration.cpp:1503-1508).
         RemapYoungRoots();
@@ -1998,9 +1998,8 @@ BaseObject* WCollector::TryMutatorRelocate(BaseObject* obj, RegionInfo* forwardi
     // at this call site instead would conflate "this mutator copied the object" with "this
     // mutator retained and then found a worker had already copied it" -- and only the first of
     // those is evidence that the ported leg does anything.
-    MutatorRelocate::EnterScope();
+    ZForwardingLife::MutatorRelocateScope relocateScope;
     BaseObject* toVersion = const_cast<WCollector*>(this)->ForwardObjectImpl(obj, forwarding, lease);
-    MutatorRelocate::LeaveScope();
     lease.Release(); // release_page
     if (toVersion == nullptr) {
         return WaitForPageForwarding(obj, lease.HoldForwarding());
@@ -2230,6 +2229,12 @@ BaseObject* WCollector::ForwardObject(BaseObject* obj)
         if (const MAddress hit = ForwardingTable::FindTo(reinterpret_cast<MAddress>(obj))) {
             return reinterpret_cast<BaseObject*>(hit);
         }
+        // zRelocate.cpp:412-415: after wait, the table holds the winner. The page
+        // worker copying this object (CurrentPageWork) must not wait on itself.
+        if (ZForwardingLife::CurrentPageWork() != nullptr) {
+            return nullptr;
+        }
+        CHECK_DETAIL(false, "should be forwarded from=%p", obj);
         return nullptr;
     }
     return obj;
