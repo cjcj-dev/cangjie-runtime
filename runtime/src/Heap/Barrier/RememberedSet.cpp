@@ -58,30 +58,7 @@ void RememberedSet::Initialize(MAddress start, size_t size)
             dirtyMaps[buffer][word].store(0, std::memory_order_relaxed);
         }
     }
-    const char* ever = std::getenv("MRT_GCV2_REMSET_EVER");
-    if (ever != nullptr && std::strcmp(ever, "1") == 0) {
-        everRecorded.reset(new (std::nothrow) std::atomic<uint64_t>[wordCount]);
-        CHECK_DETAIL(everRecorded != nullptr, "failed to allocate sticky remembered-set bitmap");
-        for (size_t word = 0; word < wordCount; ++word) {
-            everRecorded[word].store(0, std::memory_order_relaxed);
-        }
-    }
     initialized = true;
-}
-
-bool RememberedSet::WasEverRecorded(MAddress fieldAddress) const
-{
-    if (everRecorded == nullptr) {
-        return false;
-    }
-    if (fieldAddress < heapStart || fieldAddress >= heapStart + heapSize ||
-        fieldAddress % kFieldBytes != 0) {
-        return false;
-    }
-    size_t bit = (fieldAddress - heapStart) / kFieldBytes;
-    size_t word = bit / kBitsPerWord;
-    uint64_t mask = static_cast<uint64_t>(1) << (bit % kBitsPerWord);
-    return (everRecorded[word].load(std::memory_order_relaxed) & mask) != 0;
 }
 
 void RememberedSet::CheckInitialized() const
@@ -121,9 +98,6 @@ void RememberedSet::Record(MAddress fieldAddress, bool fromMutatorBarrier)
     uint64_t mask = static_cast<uint64_t>(1) << (bit % kBitsPerWord);
     size_t buffer = activeBuffer.load(std::memory_order_acquire);
     uint64_t old = bitmaps[buffer][word].fetch_or(mask, std::memory_order_relaxed);
-    if (fromMutatorBarrier && everRecorded != nullptr) {
-        everRecorded[word].fetch_or(mask, std::memory_order_relaxed);
-    }
     MarkWordDirty(buffer, word);
     if ((old & mask) == 0) {
         recordCounts[buffer].fetch_add(1, std::memory_order_relaxed);
@@ -297,15 +271,8 @@ size_t RememberedSet::ScanPreviousForMinor(std::unordered_set<MAddress>& records
     CheckInitialized();
     CHECK_DETAIL(records.empty(), "minor remembered-set destination must be empty");
     size_t scanBuffer = activeBuffer.load(std::memory_order_acquire) ^ 1U;
-
-    static const bool reserveDestination = []() {
-        const char* value = std::getenv("MRT_GCV2_REMSET_HASH_OPT");
-        return value == nullptr || std::strcmp(value, "1") == 0;
-    }();
     const size_t expectedRecords = recordCounts[scanBuffer].load(std::memory_order_relaxed);
-    if (reserveDestination) {
-        records.reserve(expectedRecords);
-    }
+    records.reserve(expectedRecords);
 
     for (size_t dirtyIdx = 0; dirtyIdx < dirtyWordCount; ++dirtyIdx) {
         uint64_t dirty = dirtyMaps[scanBuffer][dirtyIdx].exchange(0, std::memory_order_relaxed);
