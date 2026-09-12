@@ -630,7 +630,7 @@ void WCollector::TraceHeap()
 
     if (concurrentStackScan) {
 
-        EpochHandshakeStats handshake = MutatorManager::Instance().RunEpochHandshake("pre-major-stack");
+        EpochHandshakeStats handshake = MutatorManager::Instance().RunEpochHandshake("pre-major-stack", false);
         stackScanEpoch = handshake.epoch;
         CHECK_DETAIL(stackScanEpoch != 0 && handshake.stackScanned + handshake.stackFallback == handshake.requested,
                      "major concurrent stack scan accounting failed: epoch=%llu requested=%zu scanned=%zu "
@@ -652,10 +652,10 @@ void WCollector::TraceHeap()
                 TransitionToGCPhase(GCPhase::GC_PHASE_CLEAR_SATB_BUFFER, true);
                 MutatorManager::Instance().VisitAllMutators([stackScanEpoch](Mutator& mutator) {
                     if (!mutator.GetStackWatermark().IsDone(stackScanEpoch)) {
-                        (void)mutator.GcPhaseEnum(GCPhase::GC_PHASE_ENUM, stackScanEpoch, false);
+                        (void)mutator.GcPhaseEnum(GCPhase::GC_PHASE_ENUM, false, stackScanEpoch, false);
                     }
                     if (!mutator.GetStackWatermark().IsDone(stackScanEpoch)) {
-                        (void)mutator.GcPhaseEnum(GCPhase::GC_PHASE_ENUM);
+                        (void)mutator.GcPhaseEnum(GCPhase::GC_PHASE_ENUM, false);
                     }
 #if defined(MRT_GC_UNIT_TESTS)
                     NoteLargeArrayInitRootPhase(LargeArrayRootPhase::MAJOR_MARK, &mutator,
