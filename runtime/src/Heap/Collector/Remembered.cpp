@@ -630,12 +630,6 @@ void WCollector::RescanRememberedSet(WorkStack& workStack, const MinorSlotSet& r
                         } else {
                             size_t holderOffset = holderRegion->GetAddressOffset(holderAddress);
                             // holderlive (F2): prefer the region's own copy of the mark bits.
-                            // GetRetainedLiveInfo() is a borrowed pointer into the per-tag
-                            // LiveInfo arena and is nulled by UnbindPreviousLiveInfo
-                            // (DoGarbageCollection, WCollector.cpp:6122 at 7924d28f) at the end of every
-                            // major, which is why this
-                            // arm was unreachable — the state word read NEVER_EXAMINED before
-                            // control ever got here.
                             if (holderRegion->HasRetainedMarkWords()) {
                                 keepByRetainedSnapshot = holderRegion->RetainedMarkWordsSay(holderOffset);
                             } else {

@@ -1421,7 +1421,7 @@ EXPORTS
     _ZN12MapleRuntime13RegionManager23AllocPinnedFromFreeListEy @1437
     _ZN12MapleRuntime13RegionManager23RemoveThreadLocalRegionEPNS_10RegionInfoE @1438
     _ZN12MapleRuntime13RegionManager23SetLargeObjectThresholdEv @1439
-    _ZN12MapleRuntime13RegionManager24RouteOrCompactRegionImplEPNS_10RegionInfoE @1440
+    _ZN12MapleRuntime13RegionManager19RelocateClaimedPageEPNS_10RegionInfoE @1440
     _ZN12MapleRuntime13RegionManager24SetMaxUnitCountForRegionEv @1441
     _ZN12MapleRuntime13RegionManager25AllocateThreadLocalRegionEbb @1442
     _ZN12MapleRuntime13RegionManager25MAX_UNIT_COUNT_PER_REGIONE @1443 DATA
@@ -1850,11 +1850,11 @@ EXPORTS
     _ZN12MapleRuntime18FinalizerProcessorC2Ev @1893
     _ZN12MapleRuntime18FinalizerProcessorD2Ev @1894
     _ZN12MapleRuntime13LiveInfoArena16AllocateLiveInfoEv @1895
-    _ZN12MapleRuntime13LiveInfoArena16ForwardDataSpace22UnbindPreviousLiveInfoEv @1896
+
     _ZN12MapleRuntime13LiveInfoArena20AllocateRegionBitmapEy @1897
     _ZN12MapleRuntime13LiveInfoArena15GetLiveInfoArenaEv @1898
     _ZN12MapleRuntime13LiveInfoArena21InitializeForwardDataEv @1899
-    _ZN12MapleRuntime13LiveInfoArena24ClearPreviousForwardDataEv @1900
+
     _ZN12MapleRuntime18GetCallerFrameInfoERNS_16WinModuleManagerERKNS_12MachineFrameERNS_19UnwindContextStatusE @1901
     _ZN12MapleRuntime18RemoveRegionLockedEPNS_10RegionListEPNS_10RegionInfoE @1903
     _ZN12MapleRuntime18StackGrowStackInfo15RecordStackPtrsERKNSt3__18functionIFvRNS_8RootSlotEEEES8_RKNS2_IFvNS_15zaddress_unsafeERNS_11DerivedSlotEEEERNS_7MutatorE @1904
