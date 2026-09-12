@@ -699,7 +699,9 @@ void TracingCollector::MergeMutatorRoots(WorkStack& workStack)
     MutatorManager& mutatorManager = MutatorManager::Instance();
     // hold mutator list lock to freeze mutator liveness, otherwise may access dead mutator fatally
     mutatorManager.MutatorManagementWLock();
-    theAllocator.VisitAllocBuffers([&workStack](AllocBuffer& buffer) { buffer.MergeRoots(workStack); });
+    theAllocator.VisitAllocBuffers([&workStack](AllocBuffer& buffer) {
+        buffer.MergeRootsGeneration(workStack, false);
+    });
     mutatorManager.MutatorManagementWUnlock();
 }
 
@@ -920,7 +922,7 @@ void TracingCollector::ProcessOldNonStrongReferences(WorkStack& workStack)
     // zGeneration.cpp:1344-1373: finish in-flight weak loads before unblocking.
     // A serial driver and synchronous GCWorkers::Run have already joined GC
     // work here; mutators (including the finalizer thread) need a rendezvous.
-    MutatorManager::Instance().RunEpochHandshake("old non-strong references");
+    MutatorManager::Instance().RunEpochHandshake("old non-strong references", false);
     collectorResources.UnblockResurrection();
     collectorResources.GetFinalizerProcessor().EnqueueReferences();
 }
