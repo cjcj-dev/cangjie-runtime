@@ -204,6 +204,7 @@ void RegionSpace::Init(const HeapParam& vmHeapParam)
         reinterpret_cast<uintptr_t>(metadataMap->GetBaseAddr()), metadataSize));
     Logger::GetLogger().SetMinimumLogLevel(CangjieRuntime::GetLogParam().logLevel);
     MAddress metadata = reinterpret_cast<MAddress>(metadataMap->GetBaseAddr());
+    CHECK(IsRepresentableLow48Range(metadata, metadataSize));
     regionManager.InitializeSegments(metadata, reservations, *map, vmHeapParam,
                                      CangjieRuntime::GetGCParam().garbageThreshold);
     reservedStart = regionManager.GetRegionHeapStart();
