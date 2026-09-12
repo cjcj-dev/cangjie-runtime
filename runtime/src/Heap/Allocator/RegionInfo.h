@@ -2199,6 +2199,38 @@ public:
     void VisitAllObjects(const std::function<void(BaseObject*)>&& func);
     bool VisitLiveObjectsUntilFalse(const std::function<bool(BaseObject*)>&& func);
 
+    // zRememberedSet.cpp:112-152 / zLiveMap.inline.hpp:181-221 find_base: nearest
+    // live object start at or before a field, from the livemap, without reading
+    // object headers or sizes. Our livemap is coverage rather than start bits, so
+    // a live-run start is the adapter; callers may union forwarding from-keys.
+    void CollectLiveObjectStarts(std::vector<MAddress>& out)
+    {
+        out.clear();
+        if (IsFreeRegion() || IsGarbageRegion() || IsOwnerKnownEmpty()) {
+            return;
+        }
+        const MAddress start = GetRegionStart();
+        if (IsLargeRegion()) {
+            if (IsOwnerSurvivedObject(0)) {
+                out.push_back(start);
+            }
+            return;
+        }
+        if (!IsSmallRegion()) {
+            return;
+        }
+        const uintptr_t allocPtr = GetRegionAllocPtr();
+        const size_t regionBytes = allocPtr > start ? (allocPtr - start) : 0;
+        bool prevLive = false;
+        for (size_t off = 0; off < regionBytes; off += kMarkedBytesPerBit) {
+            const bool live = IsOwnerSurvivedObject(off);
+            if (live && !prevLive) {
+                out.push_back(start + off);
+            }
+            prevLive = live;
+        }
+    }
+
     // After-copy Exempt parks FORWARDED residuals (zRelocate.cpp:1041-1047).
     // CSet empty-select still needs those headers; strip only at the next install,
     // after the table is retired (zRelocationSet.cpp:91-96). A leftover FORWARDED

@@ -363,26 +363,21 @@ void WCollector::ScanRelocatedRememberedFields(MinorSlotSet& rememberedSlots)
             std::vector<Containing> containing;
             std::vector<MAddress> liveStarts;
             RegionInfo* page = forwarding->page();
-            if (page != nullptr && !page->IsFreeRegion() && !page->IsGarbageRegion()) {
-                page->VisitLiveObjectsUntilFalse([&](BaseObject* holder) {
-                    if (holder != nullptr) {
-                        liveStarts.push_back(reinterpret_cast<MAddress>(holder));
-                    }
-                    return true;
-                });
+            if (page != nullptr) {
+                page->CollectLiveObjectStarts(liveStarts);
             }
+            forwarding->for_each_from([&](MAddress from) {
+                liveStarts.push_back(from);
+            });
+            std::sort(liveStarts.begin(), liveStarts.end());
+            liveStarts.erase(std::unique(liveStarts.begin(), liveStarts.end()), liveStarts.end());
             remset.VisitPreviousInRange(forwarding->start(), forwarding->size(), [&](MAddress field) {
-                MAddress base = 0;
-                for (MAddress start : liveStarts) {
-                    if (start <= field) {
-                        base = start;
-                    } else {
-                        break;
-                    }
+                auto it = std::upper_bound(liveStarts.begin(), liveStarts.end(), field);
+                if (it == liveStarts.begin()) {
+                    return;
                 }
-                if (base != 0) {
-                    containing.push_back(Containing{ base, field });
-                }
+                --it;
+                containing.push_back(Containing{ *it, field });
             });
             forwarding->release_page();
             MAddress cachedFrom = 0;

@@ -286,13 +286,7 @@ size_t RememberedSet::ScanPreviousForMinor(std::unordered_set<MAddress>& records
     const size_t expectedRecords = recordCounts[scanBuffer].load(std::memory_order_relaxed);
     records.reserve(expectedRecords);
 
-    const GCPhase phase = Heap::GetHeap().GetGCPhase();
-    const bool oldRelocating =
-        phase == GCPhase::GC_PHASE_PREFORWARD || phase == GCPhase::GC_PHASE_FORWARD;
-    auto shouldScanSlot = [oldRelocating](MAddress slot) -> bool {
-        if (!oldRelocating) {
-            return true;
-        }
+    auto shouldScanPage = [](MAddress slot) -> bool {
         ZForwarding* forwarding = ForwardingTable::GetCovering(slot);
         if (forwarding == nullptr) {
             return true;
@@ -312,30 +306,27 @@ size_t RememberedSet::ScanPreviousForMinor(std::unordered_set<MAddress>& records
             unsigned wordInDirty = static_cast<unsigned>(__builtin_ctzll(workDirty));
             size_t wordIdx = dirtyIdx * kBitsPerWord + wordInDirty;
             if (wordIdx < wordCount) {
+                MAddress wordStart = heapStart + wordIdx * kBitsPerWord * kFieldBytes;
+                if (!shouldScanPage(wordStart)) {
+                    remainingDirty |= static_cast<uint64_t>(1) << wordInDirty;
+                    workDirty &= workDirty - 1;
+                    continue;
+                }
                 uint64_t word = bitmaps[scanBuffer][wordIdx].load(std::memory_order_relaxed);
-                uint64_t keep = 0;
                 uint64_t scanWord = word;
                 while (scanWord != 0) {
                     unsigned bitInWord = static_cast<unsigned>(__builtin_ctzll(scanWord));
                     size_t bit = wordIdx * kBitsPerWord + bitInWord;
-                    uint64_t mask = static_cast<uint64_t>(1) << bitInWord;
                     if (bit < bitCount) {
                         MAddress slot = heapStart + bit * kFieldBytes;
-                        if (shouldScanSlot(slot)) {
-                            ProbeReadRouteDiag::NoteRemsetEvent(
-                                slot, ProbeReadRouteDiag::REMSET_CONSUME, static_cast<uint8_t>(scanBuffer));
-                            records.insert(slot);
-                            ++consumed;
-                        } else {
-                            keep |= mask;
-                        }
+                        ProbeReadRouteDiag::NoteRemsetEvent(
+                            slot, ProbeReadRouteDiag::REMSET_CONSUME, static_cast<uint8_t>(scanBuffer));
+                        records.insert(slot);
+                        ++consumed;
                     }
                     scanWord &= scanWord - 1;
                 }
-                bitmaps[scanBuffer][wordIdx].store(keep, std::memory_order_relaxed);
-                if (keep != 0) {
-                    remainingDirty |= static_cast<uint64_t>(1) << wordInDirty;
-                }
+                bitmaps[scanBuffer][wordIdx].store(0, std::memory_order_relaxed);
             }
             workDirty &= workDirty - 1;
         }
