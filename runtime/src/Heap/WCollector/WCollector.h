@@ -936,6 +936,7 @@ protected:
     // zRelocate.cpp:354-379 relocate_object_inner: find hit → return; else
     // alloc (or reuse a prepared dest) → copy → insert; CAS loser uses winner.
     BaseObject* RelocateObjectInner(BaseObject* obj, BaseObject* planned, RegionInfo* copyPage);
+    void UpdateRemsetForFields(BaseObject* from, BaseObject* to);
     BaseObject* ForwardObjectExclusive(BaseObject* obj, BaseObject* toObj, RegionInfo* copyPage);
 
     // portmutreloc: ZRelocate::relocate_object's middle leg (zRelocate.cpp:391-406) --

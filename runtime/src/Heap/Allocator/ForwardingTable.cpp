@@ -135,8 +135,6 @@ void StampTableCoverage(ZForwarding* tab, RegionInfo* region)
 #if defined(MRT_TESTABLE_INTERNALS)
 std::atomic<ForwardingTable::LookupRetainHook> g_lookupRetainHook{ nullptr };
 std::atomic<void*> g_lookupRetainHookContext{ nullptr };
-std::atomic<ForwardingTable::ReceiptLifeRegisterHook> g_receiptLifeRegisterHook{ nullptr };
-std::atomic<void*> g_receiptLifeRegisterHookContext{ nullptr };
 #endif
 
 bool PublicationClosedAt(MAddress addr)
@@ -1350,12 +1348,6 @@ void ForwardingTable::ForcePublicationClosedForTest(MAddress address)
                  "NeverInstalled test fault needs an active covering carrier address=%p",
                  reinterpret_cast<void*>(address));
     SealPublicationLocked(active->start(), active->size());
-}
-
-void ForwardingTable::SetReceiptLifeRegisterHook(ReceiptLifeRegisterHook hook, void* context)
-{
-    g_receiptLifeRegisterHookContext.store(context, std::memory_order_release);
-    g_receiptLifeRegisterHook.store(hook, std::memory_order_release);
 }
 #endif
 

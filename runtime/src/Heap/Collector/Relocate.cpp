@@ -69,6 +69,7 @@
 #include "securec.h"
 #endif
 #include "Heap/Allocator/AllocBuffer.h"
+#include "Heap/Barrier/RememberedSet.h"
 #include "Heap/Collector/ZForwardingLife.h"
 #include "Heap/WCollector/WCollectorInternal.h"
 
@@ -2483,11 +2484,52 @@ BaseObject* WCollector::ForwardObjectExclusive(BaseObject* obj)
     return RelocateObjectInner(obj, nullptr, page);
 }
 
+void WCollector::UpdateRemsetForFields(BaseObject* from, BaseObject* to)
+{
+    if (from == nullptr || to == nullptr || from == to) {
+        return;
+    }
+    RegionInfo* toRegion = RegionInfo::TryGetRegionInfoAt(reinterpret_cast<MAddress>(to));
+    if (toRegion == nullptr || toRegion->IsYoungRegion()) {
+        return;
+    }
+    RememberedSet& rememberedSet = Heap::GetHeap().GetRememberedSet();
+    RegionInfo* fromRegion = RegionInfo::GetGhostFromRegionAt(reinterpret_cast<MAddress>(from));
+    if (fromRegion == nullptr) {
+        fromRegion = RegionInfo::TryGetRegionInfoAt(reinterpret_cast<MAddress>(from));
+    }
+    if (fromRegion != nullptr && !fromRegion->IsYoungRegion()) {
+        const size_t sz = RegionSpace::GetAllocSize(*from);
+        ZForwarding* forwarding = ForwardingTable::GetCovering(reinterpret_cast<MAddress>(from));
+        const bool youngMarking = Heap::GetHeap().GetGCPhase() == GCPhase::GC_PHASE_TRACE;
+        rememberedSet.TransferObjectSlots(reinterpret_cast<MAddress>(from), reinterpret_cast<MAddress>(to), sz,
+                                          forwarding, youngMarking);
+        return;
+    }
+    if (!to->HasRefField()) {
+        return;
+    }
+    Collector& collector = Heap::GetHeap().GetCollector();
+    to->ForEachRefField([&rememberedSet, &collector](RefField<>& field) {
+        const ForwardingProvenance provenance{ ForwardingHolderKind::Remset, nullptr, &field };
+        BaseObject* target = collector.make_load_good(field, provenance);
+        if (target == nullptr || !Heap::IsHeapAddress(target)) {
+            return;
+        }
+        RegionInfo* targetRegion = RegionInfo::TryGetRegionInfoAt(reinterpret_cast<MAddress>(target));
+        if (targetRegion != nullptr && targetRegion->IsYoungRegion()) {
+            rememberedSet.Record(reinterpret_cast<MAddress>(&field));
+        }
+    });
+}
+
 BaseObject* WCollector::RelocateObjectInner(BaseObject* obj, BaseObject* planned, RegionInfo* copyPage)
 {
     const MAddress fromAddr = reinterpret_cast<MAddress>(obj);
     if (const MAddress hit = ForwardingTable::FindTo(fromAddr)) {
-        return reinterpret_cast<BaseObject*>(hit);
+        BaseObject* to = reinterpret_cast<BaseObject*>(hit);
+        UpdateRemsetForFields(obj, to);
+        return to;
     }
     if (!Collector::PlausibleManagedObjectGate("WCollector::RelocateObjectInner", obj)) {
         return nullptr;
@@ -2546,6 +2588,9 @@ BaseObject* WCollector::RelocateObjectInner(BaseObject* obj, BaseObject* planned
         if (RegionInfo* dest = RegionInfo::TryGetRegionInfoAt(reinterpret_cast<MAddress>(toObj))) {
             (void)dest->UndoAllocObjectAtomic(reinterpret_cast<uintptr_t>(toObj), size);
         }
+    }
+    if (result != nullptr) {
+        UpdateRemsetForFields(obj, result);
     }
     return result;
 }
