@@ -157,7 +157,8 @@ GC_TEST(MarkStripe, ConcurrentGlobalStealIsLiveAndLossless)
 
     for (size_t workerId = 0; workerId < workers; ++workerId) {
         threads.emplace_back([&, workerId]() {
-            MarkContext context(workers, workerId, stripes);
+            MarkThreadLocalStacks stacks(stripes.Count());
+            MarkContext context(workers, workerId, stripes, stacks);
             // Reserve one shared chunk per non-owner before anyone drains.
             // A start barrier alone is insufficient: the owner could still
             // consume everything before another worker gets scheduled.
