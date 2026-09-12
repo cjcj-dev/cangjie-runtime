@@ -289,7 +289,7 @@ ZForwarding* ForwardingTable::get(MAddress addr)
         return nullptr;
     }
     ZForwarding* forwarding = MapGet(g_membership, addr);
-    if (forwarding != nullptr && !forwarding->page_life_current(RegionLifeClock::Carrier::ARMED_ENTRY)) {
+    if (forwarding != nullptr && !forwarding->page_life_current()) {
         return nullptr;
     }
     return forwarding;
@@ -344,7 +344,7 @@ bool ForwardingTable::InsertProvisional(MAddress regionStart, size_t regionSize,
     const uint64_t generation = PublicationGeneration(publicationState);
     const bool usable = forwarding != nullptr && forwarding->start() == regionStart &&
         forwarding->size() >= regionSize && forwarding->page() == region &&
-        forwarding->page_life_current(RegionLifeClock::Carrier::ARMED_ENTRY) &&
+        forwarding->page_life_current() &&
         forwarding->publication_generation() == generation;
     if (forwarding != nullptr && !usable) {
         // Replacing any carrier under an open generation would create two table
@@ -368,7 +368,6 @@ bool ForwardingTable::InsertProvisional(MAddress regionStart, size_t regionSize,
         }
         created->set_publication_generation(generation);
         StampTableCoverage(created, region);
-        RegionLifeClock::Publish(RegionLifeClock::Carrier::ARMED_ENTRY, created->page_life_id());
         MapPut(g_entries, regionStart, regionSize, created);
         forwarding = created;
     }
@@ -455,7 +454,7 @@ ZForwarding* ForwardingTable::EnsureEntriesLocked(RegionInfo* region)
     ZForwarding* previous = g_entries.get(startOffset);
     if (previous != nullptr && !previous->is_provisional() && previous->start() == start &&
         previous->size() >= regionSize && previous->page() == region &&
-        previous->page_life_current(RegionLifeClock::Carrier::ARMED_ENTRY) &&
+        previous->page_life_current() &&
         previous->publication_generation() == generation) {
         return previous;
     }
@@ -483,7 +482,6 @@ ZForwarding* ForwardingTable::EnsureEntriesLocked(RegionInfo* region)
     }
     created->set_publication_generation(generation);
     StampTableCoverage(created, region);
-    RegionLifeClock::Publish(RegionLifeClock::Carrier::ARMED_ENTRY, created->page_life_id());
     // Keep the previous table mapped until every copier carrying it has
     // inserted its receipt. g_installLock prevents a new acquisition while the
     // old generation drains.
@@ -594,7 +592,6 @@ void ForwardingTable::Retire(ZForwarding* tab)
     }
     std::lock_guard<std::mutex> lock(g_retiredLock);
     g_retired.push_back(tab);
-    RegionLifeClock::Publish(RegionLifeClock::Carrier::RETIRED_ENTRY, tab->page_life_id());
     g_retiredTotal.fetch_add(1, std::memory_order_relaxed);
 }
 
@@ -615,9 +612,6 @@ void ForwardingTable::ReclaimRetired(const char* why)
             candidates.push_back(tab);
         }
         for (ZForwarding* tab : candidates) {
-            RegionLifeClock::NoteZeroAcrossBoundary(RegionLifeClock::Carrier::RETIRED_ENTRY,
-                                                    tab != nullptr,
-                                                    tab == nullptr ? 0 : tab->page_life_id());
         }
         const bool forceCoverageComplete = ReclaimWhyForceCoverageComplete(why);
         g_retired.clear();
@@ -738,7 +732,7 @@ ZForwarding* ForwardingTable::GetEntries(MAddress addr)
         return nullptr;
     }
     ZForwarding* forwarding = MapGet(g_entries, addr);
-    if (forwarding != nullptr && !forwarding->page_life_current(RegionLifeClock::Carrier::ARMED_ENTRY)) {
+    if (forwarding != nullptr && !forwarding->page_life_current()) {
         return nullptr;
     }
     return forwarding;
@@ -815,7 +809,6 @@ bool ForwardingTable::PublishFromPageView(RegionInfo* region, LiveInfo* liveInfo
         carrier->retain_owner();
         region->metadata.fwdOwner.store(carrier, std::memory_order_release);
     }
-    RegionLifeClock::Publish(RegionLifeClock::Carrier::MARK_SNAPSHOT, lifeId);
     return true;
 }
 
@@ -862,13 +855,12 @@ const ZForwarding::FromPageView* ForwardingTable::GetFromPageView(RegionInfo* re
     return carrier->from_page_view(region->GetRegionLifeId());
 }
 
-bool ZForwarding::page_life_current(RegionLifeClock::Carrier carrier) const
+bool ZForwarding::page_life_current() const
 {
     if (_page == nullptr) {
-        RegionLifeClock::NoteUntracked(carrier);
-        return true;
+        return false;
     }
-    return RegionLifeClock::Validate(carrier, _page_life_id, _page->GetRegionLifeId());
+    return _page_life_id == _page->GetRegionLifeId();
 }
 
 ForwardingTable::Publication ForwardingTable::EnsurePublicationBeforeCopy(
@@ -1008,13 +1000,11 @@ ZForwarding::Receipt::Status ZForwarding::register_to_life_locked(MAddress to, u
         }
     }
     if (count >= kToLifeCapacity) {
-        RegionLifeClock::NoteCapWouldOverflow(RegionLifeClock::Carrier::RECEIPT);
         return Receipt::Status::LIFE_REGISTRY_FULL;
     }
     _to_lives[count].start = start;
     _to_lives[count].legacySeq = seq;
     _to_lives[count].lifeId = life;
-    RegionLifeClock::Publish(RegionLifeClock::Carrier::RECEIPT, life);
     _to_life_n.store(static_cast<uint8_t>(count + 1), std::memory_order_release);
     return Receipt::Status::INSTALLED;
 }
@@ -1093,8 +1083,7 @@ MAddress ZForwarding::resolve_life(MAddress to) const
         for (uint8_t i = 0; i < toLifeCount; ++i) {
             if (_to_lives[i].start == start) {
                 tracked = true;
-                const bool lifeCurrent = RegionLifeClock::Validate(
-                    RegionLifeClock::Carrier::RECEIPT, _to_lives[i].lifeId, life);
+                const bool lifeCurrent = (_to_lives[i].lifeId == life);
                 if (_to_lives[i].lifeId != life) {
                     StaleToLifeCount().fetch_add(1, std::memory_order_relaxed);
                 }
@@ -1104,15 +1093,6 @@ MAddress ZForwarding::resolve_life(MAddress to) const
             }
         }
         if (!tracked) {
-            RegionLifeClock::NoteUntracked(RegionLifeClock::Carrier::RECEIPT);
-            if (RegionLifeClock::EnforceEnabled()) {
-                return 0;
-            }
-        }
-    } else {
-        RegionLifeClock::NoteUntracked(RegionLifeClock::Carrier::RECEIPT);
-        if (!RegionLifeClock::Validate(RegionLifeClock::Carrier::RECEIPT, 0,
-                                       toRegion->GetRegionLifeId())) {
             return 0;
         }
     }
@@ -1287,7 +1267,7 @@ ForwardingTable::LookupResult ForwardingTable::LookupTo(MAddress from)
         if (candidate != nullptr) {
             tableId = reinterpret_cast<uintptr_t>(candidate);
             CaptureLookupCarrier(candidate, &carrierWitness);
-            if (!candidate->page_life_current(RegionLifeClock::Carrier::ARMED_ENTRY) ||
+            if (!candidate->page_life_current() ||
                 !candidate->retain_table()) {
                 activeRejected = true;
             } else {

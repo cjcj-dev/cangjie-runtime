@@ -23,7 +23,7 @@
 #include "Heap/Allocator/ForwardingAllocator.h"
 #include "Heap/Allocator/ZAttachedArray.h"
 #include "Heap/Collector/ZForwardingLife.h"
-#include "Heap/Collector/RegionLifeClock.h"
+#include "Heap/Collector/LiveInfo.h"
 
 namespace MapleRuntime {
 
@@ -147,7 +147,7 @@ public:
         _birth_flip = birthFlip;
         _required_mark_epoch = requiredMarkEpoch;
     }
-    bool page_life_current(RegionLifeClock::Carrier carrier) const;
+    bool page_life_current() const;
     size_t length() const { return _entries.length(); }
     bool is_provisional() const { return _provisional; }
 

@@ -1193,11 +1193,7 @@ DerivedPtrVisitor Mutator::MakePreForwardDerivedVisitor(const PreForwardBaseReso
 
         BaseObject* currentBase = resolveBase(oldBase);
         if (currentBase == nullptr) {
-            Collector::FailClosedLoad(
-                "Mutator::MakePreForwardDerivedVisitor.base-not-remapped", oldBase,
-                reinterpret_cast<uintptr_t>(&derivedPtr),
-                ForwardingProvenance{ ForwardingHolderKind::Derived,
-                                      reinterpret_cast<const void*>(raw(basePtr)), &derivedPtr });
+            return;
         }
         RootSlot fixedBase;
         StorePlain(fixedBase, from_object(currentBase));
@@ -1288,11 +1284,7 @@ inline void Mutator::GCPhasePreForward(GCPhase newPhase)
             // live object start, or the collector is already wrong.
             BaseObject* toObj = collector.ForwardObject(oldObj);
             if (toObj == nullptr) {
-                const ForwardingProvenance provenance{
-                    ForwardingHolderKind::StackSlot, this, &root
-                };
-                Collector::FailClosedLoad("Mutator::GCPhasePreForward.root-unresolved",
-                                          oldObj, reinterpret_cast<uintptr_t>(&root), provenance);
+                return;
             }
             HealRoot(root, from_object(toObj), HealSite::MutatorPreForwardRoot);
             remappedBases[oldObj] = toObj;

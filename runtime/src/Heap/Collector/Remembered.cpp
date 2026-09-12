@@ -7,7 +7,6 @@
 
 #include "Heap/WCollector/WCollector.h"
 #include "Heap/WCollector/RememberedHolderPolicy.h"
-#include "Heap/Verify/ProbeReadRouteDiag.h"
 
 #include <array>
 #include <atomic>
@@ -407,25 +406,7 @@ void WCollector::RescanRememberedSet(WorkStack& workStack, const MinorSlotSet& r
                                       MinorInteriorBaseMap* interiorBasesOut, const ScopedStopTheWorld* stw)
 {
     (void)stw;
-    auto noteRemsetOutcome = [](MAddress slot, uint8_t outcome, MAddress target) {
-        if (!ProbeReadRouteDiag::RootTrackingEnabled() || slot == 0) {
-            return;
-        }
-        const size_t start = ProbeReadRouteDiag::EdgeStoreLedger::Hash(slot);
-        for (size_t n = 0; n < 8; ++n) {
-            auto& record = ProbeReadRouteDiag::EdgeStoreLedger::Records()[
-                (start + n) & ProbeReadRouteDiag::EdgeStoreLedger::kMask];
-            if (record.slot.load(std::memory_order_acquire) != slot) {
-                continue;
-            }
-            record.remsetEpoch.store(
-                ProbeReadRouteDiag::RemsetEpoch().load(std::memory_order_relaxed), std::memory_order_relaxed);
-            record.remsetTarget.store(target, std::memory_order_relaxed);
-            record.remsetFace.store(0xff, std::memory_order_relaxed);
-            record.remsetEvent.store(static_cast<uint8_t>(64 + outcome), std::memory_order_release);
-            return;
-        }
-    };
+    auto noteRemsetOutcome = [](MAddress, uint8_t, MAddress) {};
     auto plannedTo = [this](BaseObject* from) -> BaseObject* {
         FindToVersionResult resolved = FindToVersion(from);
         if (resolved.is_unavailable()) {

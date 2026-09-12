@@ -55,7 +55,6 @@ GC_TEST(ForwardingNoGeometry, ArmedMissIsNullNotGeometry)
     ForwardingTable::Initialize(fx.heapStart, 2 * RegionInfo::UNIT_SIZE, RegionInfo::UNIT_SIZE);
     fx.region0->SetRegionType(RegionInfo::RegionType::FROM_REGION);
     fx.region0->SetRouteState(RegionInfo::ROUTED);
-    fx.region0->SetRouteInfo(0x20000000u, 4096);
 
     LiveInfo* live = fx.PlantLiveInfo(fx.region0);
     const size_t regionSize = fx.region0->GetRegionSize();
@@ -119,7 +118,6 @@ GC_TEST(ForwardingNoGeometry, ArmedLookupAndSuccessfulExclusiveCopyPublishProduc
     ForwardingTable::Initialize(fx.heapStart, 2 * RegionInfo::UNIT_SIZE, RegionInfo::UNIT_SIZE);
     fx.region0->SetRegionType(RegionInfo::RegionType::FROM_REGION);
     fx.region0->SetRouteState(RegionInfo::ROUTED);
-    fx.region0->SetRouteInfo(0x20000000u, 4096);
 
     LiveInfo* live = fx.PlantLiveInfo(fx.region0);
     size_t regionSize = fx.region0->GetRegionSize();

@@ -7,7 +7,6 @@
 
 #include "Heap/WCollector/WCollector.h"
 #include "Heap/WCollector/RememberedHolderPolicy.h"
-#include "Heap/Verify/ProbeReadRouteDiag.h"
 
 #include <array>
 #include <atomic>
@@ -274,9 +273,6 @@ void WCollector::EnumAndTagRawRoot(ObjectRef& ref, RootSet& rootSet) const
         return;
     }
     CHECK_DETAIL(root->IsValidObject(), "Enum and tag runtime root %p(%p) encounters invalid object", root, &ref);
-    ProbeReadRouteDiag::NoteRoot(reinterpret_cast<MAddress>(root), reinterpret_cast<MAddress>(&ref),
-                                 static_cast<uint32_t>(g_gcCount.load(std::memory_order_relaxed)),
-                                 ProbeReadRouteDiag::RootKind::MajorRaw);
     HealRootWriteback(ref, root, HealSite::WCollectorEnumRawRoot);
     rootSet.push_back(root);
 }
@@ -818,9 +814,6 @@ void WCollector::VisitMinorRoots(const std::function<void(BaseObject*)>& visitor
     RootVisitor rawRootVisitor = [this, &visitor](ObjectRef& root) {
         BaseObject* obj = ResolveMinorReference(root);
         if (obj != nullptr && Heap::IsHeapAddress(obj)) {
-            ProbeReadRouteDiag::NoteRoot(reinterpret_cast<MAddress>(obj), reinterpret_cast<MAddress>(&root),
-                                         static_cast<uint32_t>(g_gcCount.load(std::memory_order_relaxed)),
-                                         ProbeReadRouteDiag::RootKind::MinorRaw);
         }
 
         if (obj != nullptr && Heap::IsHeapAddress(obj) &&

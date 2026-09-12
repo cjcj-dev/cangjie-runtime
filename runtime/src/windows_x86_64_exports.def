@@ -2238,7 +2238,6 @@ EXPORTS
     _ZN12MapleRuntime9PageCache22ReleaseSpanToPageCacheEPNS_4SpanE @2292
     _ZN12MapleRuntime9PageCache7NewSpanEy @2293
     _ZN12MapleRuntime9PageCache8instanceE @2294 DATA
-    _ZN12MapleRuntime9RouteInfo8GetRouteEy @2295
     _ZN12MapleRuntime9SlotTableD0Ev @2296
     _ZN12MapleRuntime9StackInfo16NEED_FILTED_FLAGE @2297 DATA
     _ZN12MapleRuntime9StackInfo22AnalyseAndSetFrameTypeERNS_13UnwindContextE @2298

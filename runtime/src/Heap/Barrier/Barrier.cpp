@@ -17,7 +17,6 @@
 #include "Heap/Collector/CollectorResources.h"
 #include "Heap/Heap.h"
 #include "Heap/Verify/SurvNodeDiag.h"
-#include "Heap/Verify/ProbeReadRouteDiag.h"
 #include "Heap/Verify/ZgcSelfHealDiag.h"
 #include "Heap/WCollector/EnumBarrier.h"
 #include "Heap/WCollector/ForwardBarrier.h"
@@ -649,7 +648,7 @@ void Barrier::WriteReference(BaseObject* obj, RefField<false>& field, BaseObject
     // Journal only the 4,800 slots that survival_dense later probes. This
     // binds a missing edge to its actual last store without adding atomic
     // traffic to the other ~15.4M array writes.
-    if (UNLIKELY(ProbeReadRouteDiag::RootTrackingEnabled()) && obj != nullptr) {
+    if (UNLIKELY(false) && obj != nullptr) {
         const MAddress holder = reinterpret_cast<MAddress>(obj);
         const MAddress slot = reinterpret_cast<MAddress>(&field);
         const MAddress payload = holder + 2 * sizeof(MAddress);
@@ -661,13 +660,6 @@ void Barrier::WriteReference(BaseObject* obj, RefField<false>& field, BaseObject
                 ? (static_cast<uint64_t>(shifted / 3) * 310403ULL) % 400000ULL
                 : 400000ULL;
             if (round < 4800ULL) {
-                ProbeReadRouteDiag::NoteEdgeStore(
-                    reinterpret_cast<MAddress>(&field),
-                    reinterpret_cast<MAddress>(to_object(prev.GetTargetObject())),
-                    reinterpret_cast<MAddress>(ref), static_cast<uint8_t>(phase), !prevStoreGood);
-                ProbeReadRouteDiag::NoteRemsetEvent(
-                    reinterpret_cast<MAddress>(&field), ProbeReadRouteDiag::REMSET_STORE, 0xff,
-                    reinterpret_cast<MAddress>(ref));
             }
         }
     }

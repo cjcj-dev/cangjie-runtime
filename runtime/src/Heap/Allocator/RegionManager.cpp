@@ -155,7 +155,6 @@ RegionInfo::RouteState RegionInfo::GetRouteState() const
     const RouteState state = RouteStateFromSnapshot(snapshot);
     const RegionLifeId stamp = RouteLifeFromSnapshot(snapshot);
     const RegionLifeId current = GetRegionLifeId();
-    (void)RegionLifeClock::Validate(RegionLifeClock::Carrier::ROUTE_STATE, stamp, current);
     if (stamp != current) {
         return RouteState::NORMAL;
     }
@@ -3046,19 +3045,7 @@ static void FillZeroGaps(uintptr_t start, uintptr_t end)
 
 static void FillPublishedRouteGaps(RegionInfo* fromRegion)
 {
-    RouteInfo ri = fromRegion->GetRouteInfoForProbe();
-    if (ri.toRegion1StartAddress != 0 && ri.toRegion1UsedBytes >= 8) {
-        FillZeroGaps(ri.toRegion1StartAddress,
-                     ri.toRegion1StartAddress + ri.toRegion1UsedBytes);
-    }
-    if (ri.toRegion2Idx != RouteInfo::INVALID_VALUE) {
-        MAddress to2 = RegionInfo::GetUnitAddress(ri.toRegion2Idx);
-        RegionInfo* to2r = RegionInfo::TryGetRegionInfoAt(to2);
-        uintptr_t to2end = to2r != nullptr ? to2r->GetRegionAllocPtr() : to2;
-        if (to2end > to2) {
-            FillZeroGaps(to2, to2end);
-        }
-    }
+    (void)fromRegion;
 }
 
 bool RegionManager::RouteOrCompactRegionImpl(RegionInfo* region)
@@ -3129,7 +3116,6 @@ bool RegionManager::RouteOrCompactRegionImpl(RegionInfo* region)
             // is surprising at the call site.
             CHECK(region->IsGhostFromRegion());
             // Publish the in-place plan before Compact so GetRoute dests exist while copying.
-            region->SetRouteInfo(region->GetRegionStart(), fromBytes);
             CompactRegion(region);
             toRegion1 = region;
             result = false;
@@ -3152,7 +3138,6 @@ bool RegionManager::RouteOrCompactRegionImpl(RegionInfo* region)
         // already excluded by the ROUTING spin (RegionManager.h:664-667), but the finalizer
         // reclaim path is not stopped by anything here.
         toRegion1->SetRouteDestHold(1);
-        region->SetRouteInfo(toRegion1Start, fromBytes);
         DLOG(FORWARD, "route region %p@[%#zx+%zu, %#zx) => %p@[%#zx~%#zx, %#zx)",
             region, region->GetRegionStart(), fromBytes, region->GetRegionEnd(), toRegion1,
             toRegion1Start, toRegion1Start + fromBytes, toRegion1->GetRegionEnd());
@@ -3170,7 +3155,6 @@ bool RegionManager::RouteOrCompactRegionImpl(RegionInfo* region)
         // minor collection set took it while honouring nothing (PrepareYoungGarbageCandidates
         // deliberately ignores notRelocatableThisCycle).
         toRegion1->SetRouteDestHold(1);
-        region->SetRouteInfo(toRegion1Addr, fromBytes);
         DLOG(FORWARD, "route region %p@[%#zx+%zu, %#zx) => %p@[%#zx, %#zx~%#zx, %#zx)",
             region, region->GetRegionStart(), fromBytes, region->GetRegionEnd(), toRegion1,
             toRegion1->GetRegionStart(), toRegion1Addr, toRegion1Addr + fromBytes, toRegion1->GetRegionEnd());
@@ -3215,7 +3199,6 @@ bool RegionManager::RouteOrCompactRegionImpl(RegionInfo* region)
         }
         // Publish the split plan before Compact so leftover objects land at GetRoute dests.
         toRegion1->SetRouteDestHold(1);
-        region->SetRouteInfo(toRegion1Addr, usedBytes1, region->GetUnitIdx());
         CompactRegion(region, toRegion1);
         toRegion2 = region; // region is partially compacted into itself.
         result = false;
@@ -3231,7 +3214,6 @@ bool RegionManager::RouteOrCompactRegionImpl(RegionInfo* region)
     if (toRegion2 != region) {
         toRegion2->SetRouteDestHold(1);
     }
-    region->SetRouteInfo(toRegion1Addr, usedBytes1, toRegion2Idx);
     DLOG(FORWARD, "route region %p@[%#zx+%zu, %#zx) => %p@[%#zx, %#zx~%#zx, %#zx) & %p@[%#zx~%#zx, %#zx)", region,
         region->GetRegionStart(), fromBytes, region->GetRegionEnd(), toRegion1, toRegion1->GetRegionStart(),
         toRegion1Addr, toRegion1Addr + usedBytes1, toRegion1->GetRegionEnd(), toRegion2,

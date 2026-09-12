@@ -11,12 +11,13 @@
 #include "Base/MemUtils.h"
 #include "Base/SysCall.h"
 #include "Heap/Heap.h"
-#include "Heap/Collector/RegionLifeClock.h"
+#include <cstdint>
 #if defined(__linux__) || defined(hongmeng) || defined(__APPLE__)
 #include <sys/mman.h>
 #endif
 
 namespace MapleRuntime {
+using RegionLifeId = uint64_t;
 constexpr size_t kBitsPerByte = 8;
 constexpr size_t kMarkedBytesPerBit = 8;
 constexpr size_t kBitsPerWord = sizeof(uint64_t) * kBitsPerByte;
@@ -237,34 +238,5 @@ private:
     friend class RegionInfo;
 };
 
-struct RouteInfo {
-    static constexpr uint32_t INVALID_VALUE = std::numeric_limits<uint32_t>::max();
-    uintptr_t toRegion1StartAddress = 0;
-    uint32_t toRegion1UsedBytes = 0;
-    uint32_t toRegion2Idx = 0;
-    RegionLifeId lifeId = 0;
-
-    uintptr_t GetRoute(uint64_t preLiveBytes);
-
-    void SetRouteInfo(uintptr_t to1, uint32_t to1used = 0, uint32_t to2 = INVALID_VALUE,
-                      RegionLifeId life = 0)
-    {
-        toRegion1StartAddress = to1;
-        toRegion1UsedBytes = to1used;
-        toRegion2Idx = to2;
-        lifeId = life;
-    }
-    void Clear()
-    {
-        toRegion1StartAddress = 0;
-        toRegion1UsedBytes = 0;
-        toRegion2Idx = INVALID_VALUE;
-        lifeId = 0;
-    }
-    bool HasRoute() const { return toRegion1StartAddress != 0; }
-    RegionLifeId GetLifeId() const { return lifeId; }
-    uint32_t GetToRegion1UsedBytes() const { return toRegion1UsedBytes; }
-    uint32_t GetToRegion2Idx() const { return toRegion2Idx; }
-};
 } // namespace MapleRuntime
 #endif // MRT_LIVE_INFO_H

@@ -141,7 +141,7 @@ void ForwardDomainHook(unsigned point, RegionInfo* region, BaseObject* object)
     } else if (state.domain == ForwardDomain::Missing) {
         GC_EXPECT_TRUE(consumed.answer == ForwardingTable::ToAnswer::ArmedMiss);
         GC_EXPECT_EQ(consumed.to, 0u);
-    } else if (state.domain == ForwardDomain::WrongLife && !RegionLifeClock::EnforceEnabled()) {
+    } else if (state.domain == ForwardDomain::WrongLife && !false) {
         GC_EXPECT_TRUE(consumed.answer == ForwardingTable::ToAnswer::ArmedHit);
         GC_EXPECT_EQ(consumed.to, produced.to);
         std::fprintf(stderr, "DOMAIN lifecycle_audit_control=ArmedHit\n");
@@ -494,7 +494,7 @@ void RunRemapWindow(bool copyOnly, ForwardDomain domain = ForwardDomain::None, b
                              state.expected, state.kept->IsForwardingDone());
                 if (domain == ForwardDomain::Identity || domain == ForwardDomain::Copy ||
                     domain == ForwardDomain::Retired ||
-                    (domain == ForwardDomain::WrongLife && !RegionLifeClock::EnforceEnabled())) {
+                    (domain == ForwardDomain::WrongLife && !false)) {
                     GC_EXPECT_TRUE(result == state.expected);
                     GC_EXPECT_EQ(state.kept->IsForwardingDone(), afterDone);
                     std::fprintf(stderr, "DOMAIN result_assertion=PASS\n");
@@ -591,7 +591,7 @@ void RunForwardDomain(ForwardDomain domain)
         return;
     }
     const bool negative = domain == ForwardDomain::Missing ||
-                          (domain == ForwardDomain::WrongLife && RegionLifeClock::EnforceEnabled()) ||
+                          (domain == ForwardDomain::WrongLife && false) ||
                           domain == ForwardDomain::Unavailable;
     bool allTargetsMatched = true;
     bool allStatusesMatched = true;

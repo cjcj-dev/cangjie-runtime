@@ -118,7 +118,7 @@ struct RelocationReceiptTestAccess {
         return collector.TryForwardObject(object);
     }
 
-    static BaseObject* WaitRoutedTipReady(
+    static BaseObject* ForwardImplProduct(
         WCollector& collector, BaseObject* from, BaseObject* to, RegionInfo* forwarding)
     {
         (void)to;
@@ -624,7 +624,6 @@ LateBackfillState PrepareLateBackfill(GcHeapFixture& fx, WCollector& collector)
     RelocationReceiptTestAccess::BindCollector(Heap::GetHeap().GetCollectorResources(), &collector);
     LiveInfo* live = PrepareForwardable(fx, region, reinterpret_cast<MAddress>(from));
 
-    region->SetRouteInfo(destination->GetRegionStart(), static_cast<uint32_t>(from->GetSize()));
     region->SetRouteState(RegionInfo::RouteState::FORWARDED);
     from->SetStateCode(ObjectState::FORWARDED);
     ZForwarding* table = ForwardingTable::GetEntries(reinterpret_cast<MAddress>(from));
@@ -963,7 +962,6 @@ GC_TEST(ForwardingPublicationProduct, MutatorRuntimeEntryReachesCopyAdmission)
     RelocationReceiptTestAccess::BindCollector(Heap::GetHeap().GetCollectorResources(), &collector);
     region->PrepareForwardableRegion(region->GetMarkView<Generation::Old>());
     region->RecordRouteStart(region->GetAddressOffset(reinterpret_cast<MAddress>(from)));
-    region->SetRouteInfo(reinterpret_cast<MAddress>(expected), static_cast<uint32_t>(objectSize));
     region->SetRouteState(RegionInfo::RouteState::ROUTED);
     AllocBuffer::GetOrCreateAllocBuffer()->SetRegion(destination);
 
@@ -3366,7 +3364,7 @@ GC_TEST(ForwardingPublicationProduct, LookupCausePublishedWithoutReceipt)
     GC_EXPECT_EQ(WTERMSIG(aborted.status), SIGABRT);
     ExpectDiagnosticLookupIdentity(aborted.output, expected);
     const char* required[] = {
-        "WCollector::WaitRoutedTipReady.published-without-receipt",
+        "WCollector::ForwardImplProduct.published-without-receipt",
         "holder_kind=heap_ref",
         "holder=",
         "slot=",
@@ -3529,14 +3527,13 @@ static void CheckWaitObservation(WaitObservationCase scenario)
             collector.flip_old_relocate_start();
             RelocationReceiptTestAccess::BindCollector(Heap::GetHeap().GetCollectorResources(), &collector);
             (void)PrepareForwardable(fx, region, reinterpret_cast<MAddress>(from));
-            region->SetRouteInfo(reinterpret_cast<MAddress>(fx.obj1), static_cast<uint32_t>(from->GetSize()));
             region->SetRouteState(miss ? RegionInfo::RouteState::COMPACTED : RegionInfo::RouteState::ROUTED);
             if (miss || (scenario == WaitObservationCase::InitialIdentity && sample != 0)) {
                 region->MarkForwardingDone();
             }
             if (queued) {
                 collector.SetGCPhase(GCPhase::GC_PHASE_FORWARD);
-                BaseObject* got = RelocationReceiptTestAccess::WaitRoutedTipReady(
+                BaseObject* got = RelocationReceiptTestAccess::ForwardImplProduct(
                     collector, from, nullptr, region);
                 std::fprintf(stderr, "OBS_QUEUED_ENTRY got=%p from=%p\n",
                              static_cast<void*>(got), static_cast<void*>(from));
@@ -3631,7 +3628,7 @@ static void CheckWaitObservation(WaitObservationCase scenario)
             std::fprintf(stderr, "OBS_ASSERT site=behavior field=fatal-site result=%s\n", fatalSite ? "PASS" : "FAIL");
             failures += fatalSite ? 0 : 1;
         } else {
-            const bool fatalSite = captured.output.find("WCollector::WaitRoutedTipReady.published-without-receipt")
+            const bool fatalSite = captured.output.find("WCollector::ForwardImplProduct.published-without-receipt")
                 != std::string::npos;
             std::fprintf(stderr, "OBS_ASSERT site=behavior field=fatal-site result=%s\n", fatalSite ? "PASS" : "FAIL");
             failures += fatalSite ? 0 : 1;
@@ -3711,7 +3708,7 @@ GC_TEST(ForwardingPublicationProduct, CompactedWithoutFwdDoneWaitsInProductSO)
     GC_EXPECT_TRUE(child >= 0);
     if (child == 0) {
         (void)signal(SIGABRT, SIG_DFL);
-        (void)RelocationReceiptTestAccess::WaitRoutedTipReady(collector, from, nullptr, region);
+        (void)RelocationReceiptTestAccess::ForwardImplProduct(collector, from, nullptr, region);
         _exit(0);
     }
     int status = 0;
@@ -4052,7 +4049,7 @@ GC_TEST(ForwardingPublicationProduct, PageWaitThenLookupReadsOriginalCompactRece
     RelocationRequestQueue::SetWaitEnterHook(&PageWaitEnterBarrier::Hook);
     BaseObject* resolved = nullptr;
     std::thread waiter([&]() {
-        resolved = RelocationReceiptTestAccess::WaitRoutedTipReady(
+        resolved = RelocationReceiptTestAccess::ForwardImplProduct(
             collector, liveObject, nullptr, region);
     });
     PageWaitEnterBarrier::WaitEntered();
@@ -4129,7 +4126,7 @@ GC_TEST(ForwardingPublicationProduct, CompletedPageResolvesThroughForwardingTabl
     RelocationRequestQueue::SetWaitEnterHook(&PageWaitEnterBarrier::Hook);
     BaseObject* resolved = nullptr;
     std::thread waiter([&]() {
-        resolved = RelocationReceiptTestAccess::WaitRoutedTipReady(
+        resolved = RelocationReceiptTestAccess::ForwardImplProduct(
             collector, fromObject, nullptr, region);
     });
     PageWaitEnterBarrier::WaitEntered();
@@ -4294,7 +4291,7 @@ GC_TEST(ForwardingPublicationProduct, InsertThenReclaimStillServesWaitAndTryUpda
     GC_EXPECT_EQ(ForwardingTable::LookupTo(reinterpret_cast<MAddress>(from)).to,
                  reinterpret_cast<MAddress>(to));
 
-    BaseObject* waited = RelocationReceiptTestAccess::WaitRoutedTipReady(
+    BaseObject* waited = RelocationReceiptTestAccess::ForwardImplProduct(
         collector, from, nullptr, region);
     GC_EXPECT_TRUE(waited == to);
 
