@@ -159,7 +159,7 @@ struct SegmentedArrayContext {
 
         MArray* rootBefore = static_cast<MArray*>(Mutator::GetMutator()->LoadInvisibleRoot());
         if (rootBefore == nullptr || rootBefore != ctx.publishedArray ||
-            rootBefore->GetTypeInfo() != GetReferenceArrayTypeInfos().array ||
+            rootBefore->GetTypeInfo() != ctx.expectedType ||
             rootBefore->GetLength() != ctx.length || !rootBefore->IsInvisibleObject()) {
             ++ctx.failures;
             return;
@@ -198,7 +198,7 @@ struct SegmentedArrayContext {
         if (segmentIndex == 0 && !ctx.checkedDirtyBoundary && ctx.dirtyAddress != 0) {
             ctx.checkedDirtyBoundary = true;
             const uint8_t* content = rootBefore->ConvertToCArray();
-            const size_t segment = MArray::LARGE_REF_ARRAY_INIT_SEGMENT_SIZE;
+            const size_t segment = MArray::LARGE_ARRAY_INIT_SEGMENT_SIZE;
             if (reinterpret_cast<uintptr_t>(rootBefore) != ctx.dirtyAddress ||
                 !ByteRangeEquals(content, segment, 0) ||
                 !ByteRangeEquals(content + segment, segment, ctx.dirtyByte)) {
@@ -206,8 +206,9 @@ struct SegmentedArrayContext {
             }
         }
 
-        if (!ctx.requestedGc && ctx.gc != YieldGc::NONE && segmentIndex == 0) {
+        if (ctx.gcRequests < ctx.gcLimit && ctx.gc != YieldGc::NONE) {
             ctx.requestedGc = true;
+            ++ctx.gcRequests;
             ctx.gcCountBefore = g_gcCount.load(std::memory_order_acquire);
             Mutator* mutator = Mutator::GetMutator();
             ctx.requestingMutator = mutator;
@@ -237,7 +238,7 @@ struct SegmentedArrayContext {
             ctx.gcCountAfter = g_gcCount.load(std::memory_order_acquire);
             MArray* rootAfter = static_cast<MArray*>(Mutator::GetMutator()->LoadInvisibleRoot());
             if (ctx.gcCountAfter <= ctx.gcCountBefore || rootAfter == nullptr ||
-                rootAfter->GetTypeInfo() != GetReferenceArrayTypeInfos().array ||
+                rootAfter->GetTypeInfo() != ctx.expectedType ||
                 rootAfter->GetLength() != ctx.length) {
                 ++ctx.failures;
             }
@@ -276,6 +277,9 @@ struct SegmentedArrayContext {
         }
     }
 
+    TypeInfo* expectedType = GetReferenceArrayTypeInfos().array;
+    size_t gcLimit = 1;
+    size_t gcRequests = 0;
     MIndex length;
     YieldGc gc;
     uintptr_t dirtyAddress = 0;
@@ -338,7 +342,7 @@ uint32_t RequiredPhaseRootVisits(YieldGc gc, bool watermarkDone)
 }
 
 constexpr MIndex kLargeRefLength = static_cast<MIndex>(
-    (MArray::LARGE_REF_ARRAY_INIT_SEGMENT_SIZE * 2) / sizeof(void*) + 1);
+    (MArray::LARGE_ARRAY_INIT_SEGMENT_SIZE * 2) / sizeof(void*) + 1);
 
 bool PrepareExactLargeExtent(AllocationSource source, SegmentedArrayContext& ctx)
 {
@@ -521,24 +525,56 @@ void* RunSmallReferenceCase(void* rawNative)
     return reinterpret_cast<void*>(status);
 }
 
-void* RunLargePrimitiveCase(void* rawNative)
+// ZObjArrayAllocator::initialize: primitive segments cooperate without restarting.
+void* RunLargePrimitiveCase(void* rawMode)
 {
-    constexpr MIndex length = static_cast<MIndex>(MArray::LARGE_REF_ARRAY_INIT_SEGMENT_SIZE * 2 + 1);
-    SegmentedArrayContext ctx(length);
+    constexpr MIndex length = static_cast<MIndex>(MArray::LARGE_ARRAY_INIT_SEGMENT_SIZE * 2 + 1);
+    const uintptr_t mode = reinterpret_cast<uintptr_t>(rawMode);
+    SegmentedArrayContext ctx(length, (mode & 2U) ? YieldGc::FULL : YieldGc::NONE);
+    ctx.expectedType = GetByteArrayTypeInfos().array;
+    ctx.gcLimit = 2;
     Mutator* mutator = Mutator::GetMutator();
-    const bool nativeContext = reinterpret_cast<uintptr_t>(rawNative) != 0;
+    const bool nativeContext = (mode & 1U) != 0;
     if (nativeContext) {
         mutator->SetManagedContext(false);
     }
-    MArray* array = MCC_NewArray8(GetByteArrayTypeInfos().array, length);
+    MArray* array = MCC_NewArray8(ctx.expectedType, length);
     if (nativeContext) {
         mutator->SetManagedContext(true);
     }
-    size_t status = 0;
+    size_t status = ctx.failures;
     status += array == nullptr ? 1 : 0;
-    status += ctx.publishCount == 0 ? 0 : 1;
-    status += ctx.yieldCount == 0 ? 0 : 1;
-    status += ctx.withdrawCount == 0 ? 0 : 1;
+    status += ctx.publishCount == 1 ? 0 : 1;
+    status += ctx.yieldCount == 3 ? 0 : 1;
+    status += ctx.firstSegmentYieldCount == 1 ? 0 : 1;
+    status += ctx.withdrawCount == 1 ? 0 : 1;
+    status += ctx.withdrawnArray == array ? 0 : 1;
+    status += array != nullptr && !array->IsInvisibleObject() ? 0 : 1;
+    status += array != nullptr && SegmentedArrayContext::ByteRangeEquals(
+        array->ConvertToCArray(), length, 0) ? 0 : 1;
+    status += mutator->LoadInvisibleRoot() == nullptr ? 0 : 1;
+    if (mode & 2U) {
+        status += ctx.gcRequests == 2 ? 0 : 1;
+    }
+    return reinterpret_cast<void*>(status);
+}
+
+// Two real GC requests at successive yield points: only the first may restart.
+void* RunTwoGcReferenceCase(void*)
+{
+    SegmentedArrayContext ctx(kLargeRefLength, YieldGc::FULL);
+    ctx.gcLimit = 2;
+    MArray* array = MCC_NewObjArray(ctx.expectedType, kLargeRefLength);
+    size_t status = ctx.failures;
+    status += ctx.gcRequests == 2 ? 0 : 1;
+    status += ctx.firstSegmentYieldCount == 2 ? 0 : 1;
+    status += ctx.yieldCount == 4 ? 0 : 1;
+    status += ctx.publishCount == 1 && ctx.withdrawCount == 1 ? 0 : 1;
+    status += array != nullptr && array == ctx.withdrawnArray &&
+        !array->IsInvisibleObject() && AllSlotsAreRawNull(array) ? 0 : 1;
+    status += Mutator::GetMutator()->LoadInvisibleRoot() == nullptr ? 0 : 1;
+    std::fprintf(stderr, "[SEGMENTED_TWO_GC] requests=%zu first=%zu yields=%zu status=%zu\n",
+                 ctx.gcRequests, ctx.firstSegmentYieldCount, ctx.yieldCount, status);
     return reinterpret_cast<void*>(status);
 }
 
@@ -673,14 +709,24 @@ GC_OTHER_VM_TEST(SegmentedArrayInit, NativeSmallReferenceArrayKeepsFastPath)
     GC_EXPECT_EQ(RunRuntimeCase(RunSmallReferenceCase, 1), 0);
 }
 
-GC_OTHER_VM_TEST(SegmentedArrayInit, LargePrimitiveArrayKeepsFastPath)
+GC_OTHER_VM_TEST(SegmentedArrayInit, LargePrimitiveArrayUsesSegmentedClearing)
 {
     GC_EXPECT_EQ(RunRuntimeCase(RunLargePrimitiveCase, 0), 0);
 }
 
-GC_OTHER_VM_TEST(SegmentedArrayInit, NativeLargePrimitiveArrayKeepsFastPath)
+GC_OTHER_VM_TEST(SegmentedArrayInit, NativeLargePrimitiveArrayUsesSegmentedClearing)
 {
     GC_EXPECT_EQ(RunRuntimeCase(RunLargePrimitiveCase, 1), 0);
+}
+
+GC_OTHER_VM_TEST(SegmentedArrayInit, TwoGcReferenceInitializationRestartsOnlyOnce)
+{
+    GC_EXPECT_EQ(RunRuntimeCase(RunTwoGcReferenceCase, 0), 0);
+}
+
+GC_OTHER_VM_TEST(SegmentedArrayInit, TwoGcPrimitiveInitializationDoesNotRestart)
+{
+    GC_EXPECT_EQ(RunRuntimeCase(RunLargePrimitiveCase, 2), 0);
 }
 
 #endif // MRT_GC_UNIT_TESTS
