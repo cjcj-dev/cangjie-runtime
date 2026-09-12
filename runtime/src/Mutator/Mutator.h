@@ -191,13 +191,14 @@ public:
     __attribute__((always_inline)) inline void DoLeaveSaferegion()
     {
         for (;;) {
+            MarkFlushBeginLeaveSaferegion();
             MutatorLock();
             if (epochHandshakeState.load(std::memory_order_acquire) == EPOCH_HANDSHAKE_CLAIMED) {
                 MutatorUnlock();
+                MarkFlushOnEnterSaferegion();
                 (void)sched_yield();
                 continue;
             }
-            MarkFlushBeginLeaveSaferegion();
             SetInSaferegion(SAFE_REGION_FALSE);
             MarkFlushEndLeaveSaferegion();
             MutatorUnlock();
