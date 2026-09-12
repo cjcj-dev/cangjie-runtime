@@ -997,9 +997,7 @@ public:
         walk("largeTraceRegions", largeTraceRegions);
     }
 
-    // Production: before ReleaseMemory(previous tag), null liveInfo/liveInfo0/retained that
-    // still point into the dying range. Same region set as the probe walk (incl. garbage).
-    // Phase: STW inside PrepareForwardTable → ClearPreviousForwardData (minor ×2, major ×1).
+    // Null liveInfo fields whose pointers fall inside [rangeStart, rangeStart+rangeSize).
     void NullLiveInfoFieldsInRange(uintptr_t rangeStart, size_t rangeSize)
     {
         auto nullOne = [rangeStart, rangeSize](RegionInfo* region) {

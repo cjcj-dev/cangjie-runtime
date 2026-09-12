@@ -749,10 +749,7 @@ public:
 
     // holderlive (F2): the retained snapshot has to answer "was this holder live at the last
     // mark" during every minor until the next major re-marks the region. It cannot do that as a
-    // borrowed LiveInfo*: LiveInfo lives in a per-tag arena that is recycled one GC cycle later
-    // (LiveInfoArena::ClearPreviousForwardData → ReleaseMemory), and UnbindPreviousLiveInfo
-    // (DoGarbageCollection, WCollector.cpp:6122 at 7924d28f) drops every borrowed pointer
-    // into it at the end of each major.
+    // borrowed LiveInfo* whose lifetime is shorter than the retained snapshot.
     // Measured: 100% of remset holders read NEVER_EXAMINED, and for 2113/2115 of them the last
     // thing that touched the snapshot was that unbind ([RETLIVE][why-never] lastOp=clrChecked).
     // So keep our own copy of the bits — regionSize/512 bytes, allocated only for regions that
