@@ -267,26 +267,6 @@ public:
         cpuProfileState.store(state, std::memory_order_relaxed);
     }
 
-    static uint64_t PollBitFor(SuspensionType flag)
-    {
-        if (flag == SUSPENSION_FOR_SYNC) {
-            return POLL_REQ_SYNC;
-        }
-        if (flag == SUSPENSION_FOR_GC_PHASE) {
-            return POLL_REQ_GC_PHASE;
-        }
-        if (flag == SUSPENSION_FOR_CPU_PROFILE) {
-            return POLL_REQ_CPU_PROFILE;
-        }
-        if (flag == SUSPENSION_FOR_EPOCH_HANDSHAKE) {
-            return POLL_REQ_EPOCH;
-        }
-        if (flag == SUSPENSION_FOR_EXIT) {
-            return POLL_REQ_EXIT;
-        }
-        return 0;
-    }
-
     __attribute__((always_inline)) inline void SetSuspensionFlag(SuspensionType flag)
     {
         if (flag == SUSPENSION_FOR_GC_PHASE) {
@@ -295,23 +275,11 @@ public:
             cpuProfileState.store(NEED_CPUPROFILE, std::memory_order_relaxed);
         }
         suspensionFlag.fetch_or(flag, std::memory_order_seq_cst);
-        const uint64_t bit = PollBitFor(flag);
-        if (bit != 0) {
-            EnqueueHandshakeOpForMutator(this, bit);
-        }
     }
 
     __attribute__((always_inline)) inline void ClearSuspensionFlag(SuspensionType flag)
     {
         suspensionFlag.fetch_and(~flag, std::memory_order_seq_cst);
-        const uint64_t bit = PollBitFor(flag);
-        if (bit != 0) {
-            DequeueHandshakeOpForMutator(this, bit);
-            ThreadLocalData* tls = ThreadLocal::GetThreadLocalData();
-            if (tls != nullptr && tls->mutator == this) {
-                UpdatePollValues(tls);
-            }
-        }
     }
 
     __attribute__((always_inline)) inline uint32_t GetSuspensionFlag() const
@@ -368,7 +336,7 @@ public:
     void SetSafepointActive(bool value)
     {
         ThreadLocalData* tls = ThreadLocal::GetThreadLocalData();
-        if (tls == nullptr || tls->mutator != this) {
+        if (tls == nullptr) {
             return;
         }
         if (value) {

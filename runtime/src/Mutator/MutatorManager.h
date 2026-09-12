@@ -359,7 +359,12 @@ public:
         std::atomic<int> refs = { 0 };
         std::atomic<int> dying = { 0 };
         std::atomic<int> bufferLive = { 1 };
+        HandshakeState* handshake = nullptr;
     };
+
+    HandshakeState* HandshakeStateForTls(ThreadLocalData* tls);
+    bool TlsObservedSafe(ThreadLocalData* tls);
+    void EnqueueHandshakeOnAll(HandshakeClosure* cl, std::list<HandshakeOperation*>& ops);
 
     template<typename Fn>
     void ForEachMarkFlushTls(Fn&& fn)
