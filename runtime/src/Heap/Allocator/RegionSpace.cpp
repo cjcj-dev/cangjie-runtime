@@ -251,7 +251,11 @@ void AllocBuffer::Init()
 
 void AllocBuffer::Fini()
 {
-    storeBarrierBuffer.Flush(Heap::GetHeap().GetRememberedSet());
+    // Finish allocation publications before releasing the current context.
+    // Mark stacks and SBB remain owned by the OS thread until its detach.
+    if (ThreadLocal::GetAllocBuffer() == this) {
+        ThreadLocal::FlushCurrentThreadMarkStacks();
+    }
     Heap::GetHeap().RemoveAllocBuffer(*this);
 }
 

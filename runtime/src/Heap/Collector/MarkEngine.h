@@ -76,11 +76,12 @@ public:
     MarkStripeSet& Stripes() { return stripes; }
     MarkTerminate& Terminate() { return terminate; }
     MarkingSMR& Smr() { return *smr; }
-    MarkThreadLocalStacks& Stacks(size_t workerId) { return *stacks[workerId]; }
+    MarkThreadLocalStacks& Stacks();
     size_t NWorkers() const { return nworkers; }
     size_t TargetNStripes() const { return targetNStripes; }
     bool FlushStacks();
     bool TryTerminateFlush();
+    bool TryProactiveFlush(size_t workerId);
     bool TryEnd();
     VerifyMarkingStacks::MarkingGeneration Generation() const { return generation; }
 
@@ -93,7 +94,7 @@ private:
     MarkStripeSet stripes;
     MarkTerminate terminate;
     std::unique_ptr<MarkingSMR> smr;
-    std::vector<std::unique_ptr<MarkThreadLocalStacks>> stacks;
+    size_t proactiveFlushes = 0;
     GCWorkers* gcWorkers = nullptr;
     ZAbort* abortToken = nullptr;
 };

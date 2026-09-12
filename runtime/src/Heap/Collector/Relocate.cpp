@@ -1690,7 +1690,7 @@ void WCollector::EvacuateYoungRegions(const std::vector<BaseObject*>& reachableV
                 // ZGC immediately scans buffered entries that crossed the young
                 // flip (zStoreBarrierBuffer.cpp:162-187). Publish all mutator
                 // buffers before the active-face Snapshot used for this ref fix.
-                StoreBarrierBuffer::FlushAll(Heap::GetHeap().GetRememberedSet());
+                (void)MutatorManager::Instance().HandshakeFlushMarkProducers(nullptr);
                 std::unordered_set<MAddress> concRemset =
                     Heap::GetHeap().GetRememberedSet().Snapshot();
                 remsetVec.reserve(remsetVec.size() + concRemset.size());

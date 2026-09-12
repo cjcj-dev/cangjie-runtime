@@ -37,6 +37,8 @@
 
 #include "Heap/Allocator/AllocBuffer.h"
 #include "Heap/Collector/MarkStackEntry.h"
+#include "Heap/Collector/MarkEngine.h"
+#include "Mutator/ThreadLocal.h"
 
 using namespace MapleRuntime;
 using namespace MapleRuntime::GcUnit;
@@ -52,16 +54,6 @@ struct LatePublication {
     BaseObject* late{ nullptr };
     bool fired{ false };
 };
-
-void PublishRootDuringMerge(void* context)
-{
-    auto& pub = *static_cast<LatePublication*>(context);
-    if (pub.fired) {
-        return;
-    }
-    pub.fired = true;
-    pub.buffer->PushRoot(pub.late, true);
-}
 
 void PublishAllocBlackDuringMerge(void* context)
 {
@@ -105,31 +97,27 @@ constexpr size_t kBurst = 200000;
 
 } // namespace
 
-// Row 1: AllocBuffer::stackRoots.  Producer Mutator.cpp:940 (PushRoot ->
-// AllocBuffer.h:55).  Consumer Mark.cpp:2242 (MergeRoots -> AllocBuffer.h:63).
-// A root dropped here is a live object the young closure never reaches.
+// ZMark::flush: a non-full TLS stack is published, and later publication
+// remains private until the next flush. Both entries reach the shared stripes.
 GC_TEST(AllocBufferHandoff, StackRootPublishedDuringMergeIsDelivered)
 {
     GcHeapFixture fx;
-    AllocBuffer* bufferOwner = new AllocBuffer();
-    AllocBuffer& buffer = *bufferOwner;
-    LatePublication pub{ &buffer, fx.obj1, false };
-
-    buffer.PushRoot(fx.obj0, true);
-    buffer.SetStackRootsHandoffHookForTest(PublishRootDuringMerge, &pub);
-
-    std::vector<MarkStackEntry> firstBatch;
-    buffer.MergeRootsGeneration(firstBatch, true);
-    buffer.SetStackRootsHandoffHookForTest(nullptr, nullptr);
-    GC_EXPECT_TRUE(pub.fired);
-
-    std::vector<MarkStackEntry> secondBatch;
-    buffer.MergeRootsGeneration(secondBatch, true);
-
-    GC_EXPECT_EQ(CountEntry(firstBatch, fx.obj0), 1u);
-    // obj1 was published while the consumer owned the buffer.  Either batch is
-    // a legal place for it; being in neither means the clear() dropped it.
-    GC_EXPECT_EQ(CountEntry(firstBatch, fx.obj1) + CountEntry(secondBatch, fx.obj1), 1u);
+    MarkDomain domain(64, VerifyMarkingStacks::MarkingGeneration::YOUNG);
+    domain.PrepareWork(1);
+    auto& producer = domain.Stacks();
+    producer.Push(domain.Stripes(), 0, MarkStackEntry::MarkAndFollow(fx.obj0), true);
+    GC_EXPECT_TRUE(domain.Stripes().IsEmpty());
+    GC_EXPECT_TRUE(domain.FlushStacks());
+    producer.Push(domain.Stripes(), 0, MarkStackEntry::MarkAndFollow(fx.obj1), true);
+    GC_EXPECT_TRUE(domain.FlushStacks());
+    std::vector<MarkStackEntry> delivered;
+    MarkThreadLocalStacks consumer(64);
+    MarkStackEntry entry;
+    while (consumer.Pop(domain.Smr(), 0, domain.Stripes(), 0, entry)) {
+        delivered.push_back(entry);
+    }
+    GC_EXPECT_EQ(CountEntry(delivered, fx.obj0), 1u);
+    GC_EXPECT_EQ(CountEntry(delivered, fx.obj1), 1u);
 }
 
 // Row 2: AllocBuffer::youngAllocBlack.  Producer Barrier.cpp:436 and
@@ -200,40 +188,44 @@ GC_OTHER_VM_TEST(AllocBufferHandoff, AllocBlackPublishDuringRetireKeepsHeapIntac
     GC_EXPECT_EQ(CountEntry(batch, fx.obj1) + CountEntry(drain, fx.obj1), kBurst);
 }
 
-// Same shape on stackRoots, whose node carries a MarkStackEntry rather than a
-// bare pointer, so it lands in a different glibc size class.
+// The owner remains the OS thread even when two threads exchange allocator
+// bindings (the allocation context associated with a processor).
 GC_OTHER_VM_TEST(AllocBufferHandoff, StackRootPublishDuringRetireKeepsHeapIntact)
 {
     GcHeapFixture fx;
-    AllocBuffer* bufferOwner = new AllocBuffer();
-    AllocBuffer& buffer = *bufferOwner;
-    BurstGate gate;
-
-    for (size_t i = 0; i < kBurst; ++i) {
-        buffer.PushRoot(fx.obj0, true);
+    MarkDomain domain(64, VerifyMarkingStacks::MarkingGeneration::YOUNG);
+    domain.PrepareWork(1);
+    AllocBuffer first;
+    AllocBuffer second;
+    std::atomic<unsigned> ready{0};
+    ThreadGCData* owners[2]{};
+    auto publish = [&](size_t id) {
+        ThreadLocal::SetThreadType(ThreadType::GC_THREAD);
+        ThreadLocal::SetAllocBuffer(id == 0 ? &first : &second);
+        owners[id] = &ThreadLocal::GetGCData();
+        auto& stacks = domain.Stacks();
+        stacks.Push(domain.Stripes(), id, MarkStackEntry::MarkAndFollow(id == 0 ? fx.obj0 : fx.obj1), true);
+        ready.fetch_add(1);
+        while (ready.load() != 2) { std::this_thread::yield(); }
+        ThreadLocal::SetAllocBuffer(id == 0 ? &second : &first);
+        GC_EXPECT_TRUE(owners[id] == &ThreadLocal::GetGCData());
+        GC_EXPECT_TRUE(domain.FlushStacks());
+        ThreadLocal::SetAllocBuffer(nullptr);
+    };
+    std::thread one(publish, 0);
+    std::thread two(publish, 1);
+    one.join();
+    two.join();
+    GC_EXPECT_TRUE(owners[0] != owners[1]);
+    std::vector<MarkStackEntry> delivered;
+    MarkThreadLocalStacks consumer(64);
+    MarkStackEntry entry;
+    for (size_t stripe = 0; stripe < 2; ++stripe) {
+        while (consumer.Pop(domain.Smr(), 0, domain.Stripes(), stripe, entry)) {
+            delivered.push_back(entry);
+        }
     }
-    buffer.SetStackRootsHandoffHookForTest(ReleaseBurstAtRetire, &gate);
-
-    std::thread producer([&buffer, &gate, &fx]() {
-        {
-            std::unique_lock<std::mutex> lock(gate.lock);
-            gate.changed.wait(lock, [&gate]() { return gate.consumerAtRetire; });
-        }
-        for (size_t i = 0; i < kBurst; ++i) {
-            buffer.PushRoot(fx.obj1, true);
-        }
-    });
-    JoinGuard join(producer);
-
-    std::vector<MarkStackEntry> batch;
-    buffer.MergeRootsGeneration(batch, true);
-    producer.join();
-    buffer.SetStackRootsHandoffHookForTest(nullptr, nullptr);
-
-    std::vector<MarkStackEntry> drain;
-    buffer.MergeRootsGeneration(drain, true);
-
-    GC_EXPECT_EQ(CountEntry(batch, fx.obj0) + CountEntry(drain, fx.obj0), kBurst);
-    GC_EXPECT_EQ(CountEntry(batch, fx.obj1) + CountEntry(drain, fx.obj1), kBurst);
+    GC_EXPECT_EQ(CountEntry(delivered, fx.obj0), 1u);
+    GC_EXPECT_EQ(CountEntry(delivered, fx.obj1), 1u);
 }
 #endif // MRT_GC_UNIT_TESTS

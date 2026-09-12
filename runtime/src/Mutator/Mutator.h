@@ -627,14 +627,12 @@ public:
         if (rememberedSet == nullptr) {
             rememberedSet = &Heap::GetHeap().GetRememberedSet();
         }
-        AllocBuffer* buffer = nullptr;
+        // Other OS threads are flushed by the handshake owner inventory.
         if (flushStoreBarrier && Mutator::GetMutator() == this) {
-            buffer = ThreadLocal::GetAllocBuffer();
-        } else if (flushStoreBarrier && IsForeignThread()) {
-            buffer = foreignThreadInfo.allocBuffer;
-        }
-        if (buffer != nullptr && rememberedSet->IsInitialized()) {
-            buffer->GetStoreBarrierBuffer().Flush(*rememberedSet);
+            ThreadLocalData* tls = ThreadLocal::GetThreadLocalData();
+            if (tls->gcData != nullptr && rememberedSet->IsInitialized()) {
+                tls->gcData->storeBarrierBuffer.Flush(*rememberedSet);
+            }
         }
     }
 

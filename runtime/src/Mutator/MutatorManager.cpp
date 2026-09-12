@@ -683,8 +683,6 @@ void MutatorManager::VisitAllMutatorsExceptFinalizer(MutatorVisitor func)
     ScheduleAllCJThreadVisitMutator(VisitMuatorHelper, &func);
 }
 
-thread_local MutatorManager::MarkFlushThread* tlMarkFlushSelf = nullptr;
-
 namespace {
 
 bool FlushTlsMarkProducers(ThreadLocalData* tls, MarkDomain* domain)
@@ -693,14 +691,14 @@ bool FlushTlsMarkProducers(ThreadLocalData* tls, MarkDomain* domain)
         return false;
     }
     bool published = false;
-    AllocBuffer* buffer = tls->buffer;
     RememberedSet* rememberedSet = &Heap::GetHeap().GetRememberedSet();
-    if (buffer != nullptr && rememberedSet->IsInitialized()) {
-        buffer->GetStoreBarrierBuffer().Flush(*rememberedSet);
+    if (tls->gcData != nullptr && rememberedSet->IsInitialized()) {
+        tls->gcData->storeBarrierBuffer.Flush(*rememberedSet);
     }
-    if (buffer != nullptr) {
+    {
         auto& collector = static_cast<WCollector&>(Heap::GetHeap().GetCollector());
-        if (collector.FlushAllocBufferMarkProducers(buffer, domain)) {
+        if (domain == nullptr ? collector.FlushThreadMarkProducers(tls) :
+                                 collector.FlushThreadMarkProducers(tls, domain)) {
             published = true;
         }
     }
@@ -713,14 +711,13 @@ bool FlushTlsMarkProducersDetach(ThreadLocalData* tls)
         return false;
     }
     bool published = false;
-    AllocBuffer* buffer = tls->buffer;
     RememberedSet* rememberedSet = &Heap::GetHeap().GetRememberedSet();
-    if (buffer != nullptr && rememberedSet->IsInitialized()) {
-        buffer->GetStoreBarrierBuffer().Flush(*rememberedSet);
+    if (tls->gcData != nullptr && rememberedSet->IsInitialized()) {
+        tls->gcData->storeBarrierBuffer.Flush(*rememberedSet);
     }
-    if (buffer != nullptr) {
+    {
         auto& collector = static_cast<WCollector&>(Heap::GetHeap().GetCollector());
-        if (collector.FlushAllocBufferMarkProducers(buffer)) {
+        if (collector.FlushThreadMarkProducers(tls)) {
             published = true;
         }
     }
@@ -823,7 +820,8 @@ bool MutatorManager::TlsObservedSafe(ThreadLocalData* tls)
 
 void MutatorManager::RegisterMarkFlushThread(ThreadLocalData* tls)
 {
-    if (tls == nullptr) {
+    // GC workers rendezvous at task boundaries, not through mutator handshakes.
+    if (tls == nullptr || tls->threadType == ThreadType::GC_THREAD) {
         return;
     }
     std::lock_guard<std::mutex> lock(markFlushThreadMutex);
@@ -842,9 +840,6 @@ void MutatorManager::RegisterMarkFlushThread(ThreadLocalData* tls)
     Handshake::BindCurrent(slot->handshake);
     slot->dying.store(0, std::memory_order_release);
     slot->bufferLive.store(1, std::memory_order_release);
-    if (tls == ThreadLocal::GetThreadLocalData()) {
-        tlMarkFlushSelf = slot.get();
-    }
 }
 
 void MutatorManager::UnregisterMarkFlushThread(ThreadLocalData* tls)
@@ -857,9 +852,6 @@ void MutatorManager::UnregisterMarkFlushThread(ThreadLocalData* tls)
         std::lock_guard<std::mutex> lock(markFlushThreadMutex);
         auto it = markFlushThreads.find(tls);
         if (it == markFlushThreads.end()) {
-            if (tls == ThreadLocal::GetThreadLocalData()) {
-                tlMarkFlushSelf = nullptr;
-            }
             return;
         }
         target = it->second.get();
@@ -872,9 +864,7 @@ void MutatorManager::UnregisterMarkFlushThread(ThreadLocalData* tls)
     } else {
         (void)FlushTlsMarkProducersDetach(tls);
     }
-    target->pending.store(0, std::memory_order_release);
     target->bufferLive.store(0, std::memory_order_release);
-    target->inSafe.store(1, std::memory_order_release);
     target->refs.fetch_sub(1, std::memory_order_acq_rel);
     for (;;) {
         {
@@ -891,70 +881,26 @@ void MutatorManager::UnregisterMarkFlushThread(ThreadLocalData* tls)
         std::this_thread::yield();
     }
     if (tls == ThreadLocal::GetThreadLocalData()) {
-        tlMarkFlushSelf = nullptr;
         Handshake::BindCurrent(nullptr);
     }
 }
 
 bool MutatorManager::TlsHasMarkFlushPending(ThreadLocalData* tls)
 {
-    if (tls == nullptr) {
-        return false;
-    }
-    if (tlMarkFlushSelf != nullptr && tlMarkFlushSelf->tls == tls) {
-        return tlMarkFlushSelf->pending.load(std::memory_order_acquire) != 0;
-    }
-    std::lock_guard<std::mutex> lock(markFlushThreadMutex);
-    auto it = markFlushThreads.find(tls);
-    if (it == markFlushThreads.end()) {
-        return false;
-    }
-    return it->second->pending.load(std::memory_order_acquire) != 0;
-}
-
-bool MutatorManager::AcknowledgeMarkFlushForTls(ThreadLocalData* tls)
-{
-    if (tls == nullptr) {
-        return false;
-    }
-    MarkFlushThread* target = nullptr;
-    {
-        std::lock_guard<std::mutex> lock(markFlushThreadMutex);
-        auto it = markFlushThreads.find(tls);
-        if (it != markFlushThreads.end()) {
-            target = it->second.get();
-            target->refs.fetch_add(1, std::memory_order_acq_rel);
-        }
-    }
-    if (target == nullptr) {
-        if (markFlushHandshakeActive.load(std::memory_order_acquire) == 0) {
-            return false;
-        }
-        return FlushTlsMarkProducers(tls, markFlushDomain.load(std::memory_order_acquire));
-    }
-    std::lock_guard<std::mutex> claim(target->mutex);
-    bool published = false;
-    if (markFlushHandshakeActive.load(std::memory_order_acquire) != 0 &&
-        target->pending.load(std::memory_order_acquire) != 0) {
-        if (target->bufferLive.load(std::memory_order_acquire) != 0) {
-            published = FlushTlsMarkProducers(tls, markFlushDomain.load(std::memory_order_acquire));
-        }
-        target->pending.store(0, std::memory_order_release);
-    }
-    UpdatePollValues(target->tls);
-    target->refs.fetch_sub(1, std::memory_order_acq_rel);
-    return published;
+    HandshakeState* state = Handshake::ForTls(tls);
+    return state != nullptr && state->has_operation();
 }
 
 bool MutatorManager::AcknowledgeMarkFlushForCurrentThread()
 {
-    return AcknowledgeMarkFlushForTls(ThreadLocal::GetThreadLocalData());
+    const bool pending = Handshake::Current().has_operation();
+    Handshake::Current().process_by_self();
+    return pending;
 }
 
 bool MutatorManager::HandshakeFlushMarkProducers(MarkDomain* domain)
 {
     bool flushed = false;
-    markFlushDomain.store(domain, std::memory_order_release);
     if (WorldStopped()) {
         {
             std::lock_guard<std::mutex> lock(markFlushThreadMutex);
@@ -967,11 +913,10 @@ bool MutatorManager::HandshakeFlushMarkProducers(MarkDomain* domain)
                 }
             }
         }
-        markFlushDomain.store(nullptr, std::memory_order_release);
+        flushed = FlushTlsMarkProducers(ThreadLocal::GetThreadLocalData(), domain) || flushed;
         return flushed;
     }
 
-    markFlushHandshakeActive.store(1, std::memory_order_release);
     class MarkFlushHandshakeClosure : public HandshakeClosure {
     public:
         explicit MarkFlushHandshakeClosure(MarkDomain* d)
@@ -982,18 +927,19 @@ bool MutatorManager::HandshakeFlushMarkProducers(MarkDomain* domain)
                 flushed_ = true;
             }
         }
-        bool flushed() const { return flushed_; }
+        bool flushed() const { return flushed_.load(std::memory_order_relaxed); }
     private:
         MarkDomain* domain_;
-        bool flushed_;
+        std::atomic<bool> flushed_;
     } cl(domain);
     Heap::GetHeap().GetFinalizerProcessor().Notify();
     Handshake::execute(&cl);
+    // ZMark::flush also rendezvous with the VM/GC executor, which may have
+    // produced marking work while executing another thread's SBB closure.
+    flushed = FlushTlsMarkProducers(ThreadLocal::GetThreadLocalData(), domain) || flushed;
     if (cl.flushed()) {
         flushed = true;
     }
-    markFlushHandshakeActive.store(0, std::memory_order_release);
-    markFlushDomain.store(nullptr, std::memory_order_release);
     {
         std::lock_guard<std::mutex> lock(markFlushThreadMutex);
         for (auto it = markFlushThreads.begin(); it != markFlushThreads.end();) {
@@ -1381,7 +1327,7 @@ void MarkFlushEndLeaveSaferegion()
 
 bool MarkFlushPendingForCurrentThread()
 {
-    return tlMarkFlushSelf != nullptr && tlMarkFlushSelf->pending.load(std::memory_order_acquire) != 0;
+    return Handshake::Current().has_operation();
 }
 
 void RegisterCurrentMarkFlushThread()

@@ -47,7 +47,7 @@ struct MarkPublicationFixture {
     {
         MarkStackEntry entry;
         for (size_t stripe = 0; stripe < domain.Stripes().Count(); ++stripe) {
-            while (domain.Stacks(0).Pop(domain.Smr(), 0, domain.Stripes(), stripe, entry)) {
+            while (domain.Stacks().Pop(domain.Smr(), 0, domain.Stripes(), stripe, entry)) {
                 visitor(entry.object(), entry.follow());
             }
         }
@@ -75,8 +75,10 @@ struct MarkPublicationFixture {
     {
         Drain([&](BaseObject* object, bool) { stack.push_back(object); });
     }
-    size_t YoungPending() const { return collector.youngMarkDomain->Stripes().Population(); }
-    size_t OldPending() const { return collector.majorMarkDomain->Stripes().Population(); }
+    size_t YoungPending() const { return collector.youngMarkDomain->Stripes().Population() +
+        collector.youngMarkDomain->Stacks().Population(); }
+    size_t OldPending() const { return collector.majorMarkDomain->Stripes().Population() +
+        collector.majorMarkDomain->Stacks().Population(); }
 };
 template<class Stack> void DrainPublishedMarkObjects(Stack& stack)
 {

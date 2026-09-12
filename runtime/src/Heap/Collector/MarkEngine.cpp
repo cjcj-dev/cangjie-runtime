@@ -8,6 +8,7 @@
 
 #include "Base/Log.h"
 #include "Heap/GcThreadPool.h"
+#include "Mutator/MutatorManager.h"
 #include "Heap/Verify/VerifyMarkingStacks.h"
 
 namespace MapleRuntime {
@@ -195,6 +196,9 @@ MarkEngine::Result MarkEngine::FollowWork(MarkContext& context, MarkingSMR& smr,
         if (partial) {
             return Result::Partial;
         }
+        if (domain != nullptr && domain->TryProactiveFlush(workerId)) {
+            continue;
+        }
         if (terminate.TryTerminate(stripes, context.NStripes())) {
             context.Cache().Flush();
             smr.Reclaim(workerId);
@@ -214,9 +218,6 @@ void MarkDomain::EnsureWorkers(size_t workers)
     if (smr == nullptr || smr->WorkerCount() < workers) {
         smr = std::make_unique<MarkingSMR>(workers);
     }
-    while (stacks.size() < workers) {
-        stacks.emplace_back(std::make_unique<MarkThreadLocalStacks>(stripes.Count()));
-    }
 }
 
 void MarkDomain::PrepareWork(size_t workers)
@@ -227,11 +228,18 @@ void MarkDomain::PrepareWork(size_t workers)
     stripes.SetNStripes(targetNStripes);
     EnsureWorkers(workers);
     terminate.Reset(workers, generation);
+    proactiveFlushes = 0;
 }
 
 void MarkDomain::ResizeWorkers(size_t workers)
 {
-    PrepareWork(workers);
+    // ZMark::resize_workers keeps this task's proactive flush budget.
+    CHECK_DETAIL(workers != 0, "mark domain needs a worker");
+    nworkers = workers;
+    targetNStripes = stripes.CalculateNStripes(workers);
+    stripes.SetNStripes(targetNStripes);
+    EnsureWorkers(workers);
+    terminate.Reset(workers, generation);
 }
 
 void MarkDomain::FinishWork() {}
@@ -247,21 +255,31 @@ bool MarkDomain::PollStop()
     return false;
 }
 
+MarkThreadLocalStacks& MarkDomain::Stacks()
+{
+    return ThreadLocal::GetMarkStacks(*this);
+}
+
 bool MarkDomain::FlushStacks()
 {
-    bool flushed = false;
-    for (auto& stack : stacks) {
-        if (stack != nullptr && stack->Flush(stripes, true)) {
-            flushed = true;
-        }
+    return ThreadLocal::FlushMarkStacks(ThreadLocal::GetThreadLocalData(), *this);
+}
+
+bool MarkDomain::TryProactiveFlush(size_t workerId)
+{
+    // zMark.cpp:608-623, zGlobals.hpp:87. Only worker zero changes this count.
+    constexpr size_t proactiveFlushMax = 10;
+    if (workerId != 0 || proactiveFlushes == proactiveFlushMax) {
+        return false;
     }
-    return flushed;
+    ++proactiveFlushes;
+    return MutatorManager::Instance().HandshakeFlushMarkProducers(this) || !stripes.IsEmpty();
 }
 
 bool MarkDomain::TryTerminateFlush()
 {
-    const bool flushed = FlushStacks();
-    return flushed || !stripes.IsEmpty();
+    // Called by the coordinator after every worker has flushed at its task exit.
+    return MutatorManager::Instance().HandshakeFlushMarkProducers(this) || !stripes.IsEmpty();
 }
 
 bool MarkDomain::TryEnd()

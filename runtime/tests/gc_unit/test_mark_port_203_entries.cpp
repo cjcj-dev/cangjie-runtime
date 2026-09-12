@@ -364,19 +364,20 @@ void RunArrayCollection(const char* variant, size_t helpers, bool allocateBlack 
     } else if (markOnly || duplicateRootOrder != 0) {
         ownsInvisibleBuffer = AllocBuffer::GetAllocBuffer() == nullptr;
         invisibleBuffer = AllocBuffer::GetOrCreateAllocBuffer();
+        collector.StartYoungMarkWork();
         if (duplicateRootOrder != 0) {
             // Two snapshots of one root use the actual private producers.
-            // MergeRoots and the GC decide the consumer order, not this test.
+            // The TLS stack and GC decide the consumer order.
             if (duplicateRootOrder < 0) {
-                invisibleBuffer->PushRoot(array, true);
+                collector.PublishThreadRoot(array, true, true);
             }
-            invisibleBuffer->PushInvisibleRoot(array, true);
+            collector.PublishThreadRoot(array, true, false);
             if (duplicateRootOrder > 0) {
-                invisibleBuffer->PushRoot(array, true);
+                collector.PublishThreadRoot(array, true, true);
             }
         } else {
             array->SetInvisibleObject(true);
-            invisibleBuffer->PushInvisibleRoot(array, true);
+            collector.PublishThreadRoot(array, true, false);
         }
     } else if (commonRoot) {
         for (size_t i = 0; i < rootCount; ++i) {

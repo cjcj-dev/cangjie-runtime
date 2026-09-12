@@ -233,8 +233,9 @@ GC_TEST(MarkPort203Engine, DomainPrepareResizeKeepsCapacity)
     domain.ResizeWorkers(4);
     GC_EXPECT_EQ(domain.NWorkers(), 4u);
     GC_EXPECT_EQ(domain.Stripes().Count(), 8u);
-    (void)domain.Stacks(0);
-    (void)domain.Stacks(3);
+    MarkThreadLocalStacks* owner = &domain.Stacks();
+    domain.ResizeWorkers(2);
+    GC_EXPECT_TRUE(owner == &domain.Stacks());
 }
 
 GC_TEST(MarkPort203Engine, CrowdedRestoresNStripes)

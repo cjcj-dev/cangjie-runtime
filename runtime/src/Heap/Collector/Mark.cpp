@@ -1091,7 +1091,7 @@ struct YoungStripedShared {
     MarkStripeSet& Stripes() { return domain->Stripes(); }
     MarkingSMR& Smr() { return domain->Smr(); }
     MarkTerminate& Terminate() { return domain->Terminate(); }
-    MarkThreadLocalStacks& Stacks(size_t workerId) { return domain->Stacks(workerId); }
+    MarkThreadLocalStacks& Stacks() { return domain->Stacks(); }
 
     size_t StripeFor(BaseObject* object) const
     {
@@ -1114,7 +1114,7 @@ public:
 
     void Work(uint32_t workerId) override
     {
-        MarkContext local(shared.workerCount, workerId, shared.Stripes(), shared.Stacks(workerId));
+        MarkContext local(shared.workerCount, workerId, shared.Stripes(), shared.Stacks());
         size_t nMarked = 0;
         (void)MarkEngine::FollowWork(local, shared.Smr(), shared.Stripes(), shared.Terminate(), workerId,
                                      shared.partial,
@@ -1326,10 +1326,9 @@ void WCollector::MarkYoungObjectIfActive(BaseObject* object, bool followOnly) co
     }
     CHECK_DETAIL(youngMarkDomain != nullptr, "young mark domain must start before publication");
     MarkStripeSet& stripes = youngMarkDomain->Stripes();
-    MarkThreadLocalStacks publication(stripes.Count());
+    MarkThreadLocalStacks& publication = ThreadLocal::GetMarkStacks(*youngMarkDomain);
     publication.Push(stripes, stripes.StripeForAddress(reinterpret_cast<uintptr_t>(object)),
                      followOnly ? MarkStackEntry::FollowOnly(object) : MarkStackEntry::MarkAndFollow(object), true);
-    (void)publication.Flush(stripes, true);
 }
 
 void WCollector::TraceYoungClosureStriped(WorkStack& workStack, bool fullYoungScan,
@@ -1362,7 +1361,8 @@ void WCollector::TraceYoungClosureStriped(WorkStack& workStack, bool fullYoungSc
         shared.outputs.emplace_back(std::make_unique<YoungStripedWorkerOutput>());
     }
 
-    MarkThreadLocalStacks seed(youngMarkDomain->Stripes().Count());
+    MarkThreadLocalStacks& seed = youngMarkDomain->Stacks();
+    (void)seed.Flush(shared.Stripes(), true);
     VerifyMarkingStacks::VerifyEmpty(VerifyMarkingStacks::MarkingGeneration::YOUNG,
                                      VerifyMarkingStacks::MarkingBoundary::START,
                                      VerifyMarkingStacks::MarkingContainer::LOCAL, seed.Population(), 0);
@@ -1477,12 +1477,17 @@ bool WCollector::FollowYoungMark(WorkStack& workStack, bool fullYoungScan,
     PublishConcurrentYoungProducersTestReceipt();
 #endif
     (void)MutatorManager::Instance().HandshakeFlushMarkProducers(youngMarkDomain.get());
-    if (!workStack.empty() || !youngMarkDomain->Stripes().IsEmpty()) {
-        if (windowStats != nullptr) {
-            ++windowStats->closureCalls;
+    do {
+        if (!workStack.empty() || !youngMarkDomain->Stripes().IsEmpty()) {
+            if (windowStats != nullptr) {
+                ++windowStats->closureCalls;
+            }
+            TraceYoungClosure(workStack, fullYoungScan, reachableVec, reachableSlots, weakSlots);
         }
-        TraceYoungClosure(workStack, fullYoungScan, reachableVec, reachableSlots, weakSlots);
-    }
+        if (collectorResources.GetYoungDriverPort().Abort().Poll()) {
+            break;
+        }
+    } while (youngMarkDomain->TryTerminateFlush());
     CHECK_DETAIL(workStack.empty(), "young concurrent follow returned with owner work");
     return true;
 }
@@ -1492,7 +1497,6 @@ bool WCollector::TryEndYoungMark(WorkStack& workStack, YoungConcWindowStats* win
     CHECK_DETAIL(MutatorManager::Instance().WorldStopped(), "young mark-end flush requires stopped mutators");
     NoteMarkTerminatePause();
     const size_t before = youngMarkDomain->Stripes().Population();
-    StoreBarrierBuffer::FlushAll(Heap::GetHeap().GetRememberedSet());
     (void)MutatorManager::Instance().HandshakeFlushMarkProducers(youngMarkDomain.get());
     const size_t after = youngMarkDomain->Stripes().Population();
     NoteMarkTerminateFlushed(after >= before ? after - before : 0);
@@ -1518,7 +1522,7 @@ bool WCollector::PublishHandshakeMarkWork(WorkStack& work, MarkDomain* domain)
     if (domain == nullptr || work.empty()) {
         return false;
     }
-    MarkThreadLocalStacks seed(domain->Stripes().Count());
+    MarkThreadLocalStacks& seed = domain->Stacks();
     bool published = false;
     while (!work.empty()) {
         const MarkStackEntry entry = work.back();
@@ -1548,7 +1552,6 @@ void WCollector::DrainAllocBufferMarkProducers(AllocBuffer* buffer, WorkStack& w
     if (buffer == nullptr) {
         return;
     }
-    buffer->MergeRootsGeneration(work, young);
     if (!young) {
         return;
     }
@@ -1563,33 +1566,31 @@ void WCollector::DrainAllocBufferMarkProducers(AllocBuffer* buffer, WorkStack& w
     });
 }
 
-bool WCollector::FlushAllocBufferMarkProducers(AllocBuffer* buffer)
+void WCollector::PublishThreadRoot(BaseObject* object, bool young, bool follow)
 {
-    if (buffer == nullptr) {
-        return false;
-    }
-    bool published = false;
-    if (youngMarkDomain != nullptr) {
-        WorkStack youngWork;
-        DrainAllocBufferMarkProducers(buffer, youngWork, true);
-        published = PublishHandshakeMarkWork(youngWork, youngMarkDomain.get()) || published;
-    }
-    if (majorMarkDomain != nullptr) {
-        WorkStack oldWork;
-        DrainAllocBufferMarkProducers(buffer, oldWork, false);
-        published = PublishHandshakeMarkWork(oldWork, majorMarkDomain.get()) || published;
-    }
-    return published;
+    MarkDomain* domain = young ? youngMarkDomain.get() : majorMarkDomain.get();
+    CHECK_DETAIL(domain != nullptr, "root publication requires an active mark domain");
+    MarkStripeSet& stripes = domain->Stripes();
+    ThreadLocal::GetMarkStacks(*domain).Push(stripes,
+        stripes.StripeForAddress(reinterpret_cast<uintptr_t>(object)),
+        follow ? MarkStackEntry::MarkAndFollow(object) : MarkStackEntry::MarkOnly(object), true);
 }
 
-bool WCollector::FlushAllocBufferMarkProducers(AllocBuffer* buffer, MarkDomain* domain)
+bool WCollector::FlushThreadMarkProducers(ThreadLocalData* tls)
 {
-    if (buffer == nullptr || domain == nullptr) {
+    bool published = FlushThreadMarkProducers(tls, youngMarkDomain.get());
+    return FlushThreadMarkProducers(tls, majorMarkDomain.get()) || published;
+}
+
+bool WCollector::FlushThreadMarkProducers(ThreadLocalData* tls, MarkDomain* domain)
+{
+    if (tls == nullptr || domain == nullptr) {
         return false;
     }
     WorkStack work;
     const bool young = domain->Generation() == VerifyMarkingStacks::MarkingGeneration::YOUNG;
-    DrainAllocBufferMarkProducers(buffer, work, young);
-    return PublishHandshakeMarkWork(work, domain);
+    DrainAllocBufferMarkProducers(tls->buffer, work, young);
+    const bool published = PublishHandshakeMarkWork(work, domain);
+    return ThreadLocal::FlushMarkStacks(tls, *domain) || published;
 }
 } // namespace MapleRuntime

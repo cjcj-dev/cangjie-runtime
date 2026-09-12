@@ -13,7 +13,6 @@
 #include <unordered_set>
 
 #include "Common/MarkWorkStack.h"
-#include "Heap/Barrier/StoreBarrierBuffer.h"
 #include "Heap/Collector/MarkStackEntry.h"
 #include "RegionList.h"
 
@@ -51,37 +50,6 @@ public:
         return preparedRegion.compare_exchange_strong(expect, newPreparedRegion, std::memory_order_release);
     }
     void CommitRawPointerRegions();
-
-    // Record roots while the mutator enumerates its stack concurrently with GC.
-    void PushRoot(BaseObject* root, bool young)
-    {
-        std::lock_guard<std::mutex> lock(handoffLock);
-        (young ? stackRootsYoung : stackRootsOld).emplace_back(MarkStackEntry::MarkAndFollow(root));
-    }
-
-    // An incomplete large reference array is live but its dirty suffix must not
-    // be traversed. This is ZUncoloredRoot::mark_invisible_object's DontFollow.
-    void PushInvisibleRoot(BaseObject* root, bool young)
-    {
-        std::lock_guard<std::mutex> lock(handoffLock);
-        (young ? stackRootsYoung : stackRootsOld).emplace_back(MarkStackEntry::MarkOnly(root));
-    }
-
-    template<class WorkStack>
-    inline void MergeRootsGeneration(WorkStack& workStack, bool young)
-    {
-        std::list<MarkStackEntry> pending;
-        {
-            std::lock_guard<std::mutex> lock(handoffLock);
-            pending.swap(young ? stackRootsYoung : stackRootsOld);
-        }
-#if defined(MRT_GC_UNIT_TESTS)
-        FireHandoffHook(stackRootsHandoffHook, stackRootsHandoffHookContext);
-#endif
-        for (const MarkStackEntry& entry : pending) {
-            workStack.push_back(entry);
-        }
-    }
 
     // youngconc: TRACE-window allocate-black greys (mutator-only push; GC merges at STW2).
     // Paint alone makes MarkObject claim skip TraceYoungClosure → never reachableVec/fields.
@@ -226,11 +194,6 @@ public:
     // container.  A publication that lands in this interval is dropped by the
     // following clear() and never reaches any batch.
     using HandoffHook = void (*)(void*);
-    void SetStackRootsHandoffHookForTest(HandoffHook hook, void* context)
-    {
-        stackRootsHandoffHook = hook;
-        stackRootsHandoffHookContext = context;
-    }
     void SetYoungAllocBlackHandoffHookForTest(HandoffHook hook, void* context)
     {
         youngAllocBlackHandoffHook = hook;
@@ -240,7 +203,6 @@ public:
 
     void FlushRegion();
 
-    StoreBarrierBuffer& GetStoreBarrierBuffer() { return storeBarrierBuffer; }
 
 private:
 #if defined(MRT_GC_UNIT_TESTS)
@@ -261,9 +223,7 @@ private:
     // we should handle failure in RegionManager
     RegionInfo* tlRegion = RegionInfo::NullRegion();
 
-    // Guards the two mutator-owned publication lists below. The concurrent
-    // young-mark consumer (Mark.cpp:2271-2272) runs with mutators live, so the
-    // batch must be taken atomically rather than iterated then cleared.
+    // Allocation work is handed to marking as an atomic batch.
     mutable std::mutex handoffLock;
 
     std::atomic<RegionInfo*> preparedRegion = { nullptr };
@@ -271,9 +231,6 @@ private:
     // allocation context is responsible to notify collector when these objects are safe to be collected.
     RegionList tlRawPointerRegions;
     RegionList tlLargeRawPointerRegions;
-    // Record stack roots in concurrent enum phase, waiting for GC to merge these roots
-    std::list<MarkStackEntry> stackRootsYoung;
-    std::list<MarkStackEntry> stackRootsOld;
     // youngconc allocate-black greys (see PushYoungAllocBlack)
     std::list<BaseObject*> youngAllocBlack;
     // h3seed2: mutator-local young→young dirty holders (see PushY2yDirtyHolder)
@@ -285,11 +242,8 @@ private:
     Y2yDirtyHolderMergeHook y2yDirtyHolderMergeHook{ nullptr };
     void* y2yDirtyHolderMergeHookContext{ nullptr };
 #endif
-    StoreBarrierBuffer storeBarrierBuffer;
 #if defined(MRT_GC_UNIT_TESTS)
     // Last, so tlRegion keeps offset 0 (RegionSpace.cpp:255 static_assert).
-    HandoffHook stackRootsHandoffHook{ nullptr };
-    void* stackRootsHandoffHookContext{ nullptr };
     HandoffHook youngAllocBlackHandoffHook{ nullptr };
     void* youngAllocBlackHandoffHookContext{ nullptr };
 #endif
