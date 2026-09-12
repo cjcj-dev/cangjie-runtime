@@ -293,11 +293,12 @@ public:
     static size_t CurrentThreadRootMapMissCount();
 
     static void VisitHeapReferencesOnStack(const RootVisitor& rootVisitor, const DerivedPtrVisitor& derivedPtrVisitor,
-                                           RegSlotsMap& regSlotsMap, const FrameInfo& frame, Mutator& mutator);
+                                           RegSlotsMap& regSlotsMap, const FrameInfo& frame, Mutator& mutator,
+                                           bool young = false);
 
     static void VisitHeapReferencesOnStack(const RootVisitor& regRootVisitor, const RootVisitor& slotRootVisitor,
                                            const DerivedPtrVisitor& derivedPtrVisitor, RegSlotsMap& regSlotsMap,
-                                           const FrameInfo& frame, Mutator& mutator);
+                                           const FrameInfo& frame, Mutator& mutator, bool young = false);
 
     static void RecordStubCalleeSaved(RegSlotsMap& regSlotsMap, Uptr fp);
 #ifdef __arm__
@@ -464,9 +465,9 @@ public:
 
     void RunGarbageCollection(uint64_t, GCReason) override = 0;
 
-    void TransitionToGCPhase(const GCPhase phase, const bool)
+    void TransitionToGCPhase(const GCPhase phase, const bool, bool young = false)
     {
-        MutatorManager::Instance().TransitionAllMutatorsToGCPhase(phase);
+        MutatorManager::Instance().TransitionAllMutatorsToGCPhase(phase, young);
         RegionInfo::AdvanceCompactRouteTableGracePeriod();
         // fwdgrace: same premise and same edge -- a completed transition is the mutator grace
         // period, so it is also what retires the liveInfo/bitmap arena. Default off.

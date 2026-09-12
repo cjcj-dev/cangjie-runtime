@@ -51,7 +51,7 @@ StackFrameCursor::StackFrameCursor(const UnwindContext& topFrame)
 }
 
 void StackFrameCursor::ProcessFrame(const FrameInfo& frame, RegSlotsMap& regSlotsMap, const RootVisitor& visitor,
-                                    Mutator& mutator, const DerivedPtrVisitor* derivedPtrVisitor)
+                                    Mutator& mutator, const DerivedPtrVisitor* derivedPtrVisitor, bool young)
 {
 #ifdef __arm__
     switch (frame.GetFrameType()) {
@@ -60,7 +60,8 @@ void StackFrameCursor::ProcessFrame(const FrameInfo& frame, RegSlotsMap& regSlot
                 // Same per-frame walk the non-epoch Enum leg uses, and the only one
                 // that honours the fixed VisitRegRoots -> VisitSlotRoots ->
                 // VisitDerivedPtr order (StackMap.h:67, :116-117).
-                TracingCollector::VisitHeapReferencesOnStack(visitor, *derivedPtrVisitor, regSlotsMap, frame, mutator);
+                TracingCollector::VisitHeapReferencesOnStack(visitor, *derivedPtrVisitor, regSlotsMap, frame, mutator,
+                                                             young);
             } else {
                 TracingCollector::VisitStackRoots(visitor, regSlotsMap, frame, mutator);
             }
@@ -92,7 +93,8 @@ void StackFrameCursor::ProcessFrame(const FrameInfo& frame, RegSlotsMap& regSlot
                 // Same per-frame walk the non-epoch Enum leg uses, and the only one
                 // that honours the fixed VisitRegRoots -> VisitSlotRoots ->
                 // VisitDerivedPtr order (StackMap.h:67, :116-117).
-                TracingCollector::VisitHeapReferencesOnStack(visitor, *derivedPtrVisitor, regSlotsMap, frame, mutator);
+                TracingCollector::VisitHeapReferencesOnStack(visitor, *derivedPtrVisitor, regSlotsMap, frame, mutator,
+                                                             young);
             } else {
                 TracingCollector::VisitStackRoots(visitor, regSlotsMap, frame, mutator);
             }
@@ -118,21 +120,21 @@ void StackFrameCursor::ProcessFrame(const FrameInfo& frame, RegSlotsMap& regSlot
 }
 
 bool StackFrameCursor::ProcessOne(const RootVisitor& visitor, Mutator& mutator,
-                                  const DerivedPtrVisitor* derivedPtrVisitor)
+                                  const DerivedPtrVisitor* derivedPtrVisitor, bool young)
 {
     if (Done()) {
         return false;
     }
 
-    ProcessFrame(frames[index], regSlotsMap, visitor, mutator, derivedPtrVisitor);
+    ProcessFrame(frames[index], regSlotsMap, visitor, mutator, derivedPtrVisitor, young);
     ++index;
     return true;
 }
 
 void StackFrameCursor::ProcessAll(const RootVisitor& visitor, Mutator& mutator,
-                                  const DerivedPtrVisitor* derivedPtrVisitor)
+                                  const DerivedPtrVisitor* derivedPtrVisitor, bool young)
 {
-    while (ProcessOne(visitor, mutator, derivedPtrVisitor)) {
+    while (ProcessOne(visitor, mutator, derivedPtrVisitor, young)) {
     }
 }
 

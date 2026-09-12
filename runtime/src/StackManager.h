@@ -72,10 +72,12 @@ public:
     // visit GC roots of current managed thread for tracing GC.
     static void VisitStackRoots(const UnwindContext& topFrame, const RootVisitor& func, Mutator& mutator);
     static void VisitHeapReferencesOnStack(const UnwindContext& topFrame, const RootVisitor& rootVisitor,
-                                           const DerivedPtrVisitor& derivedPtrVisitor, Mutator& mutator);
+                                           const DerivedPtrVisitor& derivedPtrVisitor, Mutator& mutator,
+                                           bool young = false);
     static void VisitHeapReferencesOnStack(const UnwindContext& topFrame, const RootVisitor& regRootVisitor,
                                            const RootVisitor& slotRootVisitor,
-                                           const DerivedPtrVisitor& derivedPtrVisitor, Mutator& mutator);
+                                           const DerivedPtrVisitor& derivedPtrVisitor, Mutator& mutator,
+                                           bool young = false);
 
     static void VisitStackPtrMap(const UnwindContext& topFrame, const StackPtrVisitor& traceAndFixPtrVisitor,
                                  const StackPtrVisitor& fixPtrVisitor, const DerivedPtrVisitor& derivedPtrVisitor,
