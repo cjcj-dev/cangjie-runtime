@@ -262,6 +262,8 @@ void Mutator::HandleSuspensionRequest()
         } else if (HasSuspensionRequest(SUSPENSION_FOR_EPOCH_HANDSHAKE)) {
             uint64_t epoch = epochHandshakeRequest.load(std::memory_order_acquire);
             (void)AcknowledgeEpochHandshake(epoch, true);
+        } else if (HasSuspensionRequest(SUSPENSION_FOR_MARK_FLUSH)) {
+            (void)AcknowledgeMarkFlushHandshake();
         } else if (HasSuspensionRequest(SUSPENSION_FOR_SYNC)) {
             SuspendForSync();
             if (HasSuspensionRequest(SUSPENSION_FOR_GC_PHASE)) {

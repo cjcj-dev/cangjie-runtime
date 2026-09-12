@@ -177,8 +177,12 @@ bool WCollector::ResurrectObject(BaseObject* obj, size_t offset, RegionInfo* reg
     if (!resurrected) {
         DLOG(TRACE, "resurrect region %p@%#zx obj %p<%p>(%zu), live bytes %zu", region, region->GetRegionStart(),
              obj, obj->GetTypeInfo(), obj->GetSize(), region->GetLiveByteCount());
-    } else if (youngMarkDomain != nullptr) {
-        youngMarkDomain->Terminate().SetResurrected(true);
+        if (youngMarkDomain != nullptr) {
+            youngMarkDomain->Terminate().SetResurrected(true);
+        }
+        if (majorMarkDomain != nullptr) {
+            majorMarkDomain->Terminate().SetResurrected(true);
+        }
     }
     return resurrected;
 }
@@ -1621,30 +1625,26 @@ bool WCollector::MarkYoungSatbBuffer(WorkStack& workStack, bool fullYoungScan,
 #if defined(MRT_TESTABLE_INTERNALS)
     PublishConcurrentYoungProducersTestReceipt();
 #endif
-    theAllocator.VisitAllocBuffers([this, &workStack](AllocBuffer& buffer) {
-        buffer.MergeRoots(workStack);
-        buffer.MergeYoungAllocBlackFollow(workStack);
-        buffer.MergeY2yDirtyHolders(workStack);
-        buffer.MergeY2yDirtySlots([this, &workStack](MAddress slot) {
-            RefField<>& field = HeapSlotAt<>(slot);
-            BaseObject* target = ResolveMinorReference(field);
-            PushYoungObject(target, workStack, "y2y_slot");
-        });
-    });
-    visitSatbObj();
-    if (youngMarkDomain != nullptr) {
-        (void)youngMarkDomain->TryTerminateFlush();
-    }
-    if (windowStats != nullptr) {
-        ++windowStats->satbIters;
-    }
-    if (!workStack.empty()) {
+    for (;;) {
+        visitSatbObj();
         if (windowStats != nullptr) {
-            ++windowStats->closureCalls;
+            ++windowStats->satbIters;
         }
-        TraceYoungClosure(workStack, fullYoungScan, reachableVec, reachableSlots, weakSlots);
+        if (!workStack.empty()) {
+            if (windowStats != nullptr) {
+                ++windowStats->closureCalls;
+            }
+            TraceYoungClosure(workStack, fullYoungScan, reachableVec, reachableSlots, weakSlots);
+        }
+        CHECK_DETAIL(workStack.empty(), "young concurrent follow returned with owner work");
+        const bool more = FlushMarkProducers(youngMarkDomain);
+        visitSatbObj();
+        const bool resurrected =
+            youngMarkDomain != nullptr && youngMarkDomain->Terminate().Resurrected();
+        if (!more && workStack.empty() && !resurrected) {
+            break;
+        }
     }
-    CHECK_DETAIL(workStack.empty(), "young concurrent follow returned with owner work");
     return true;
 }
 
@@ -1653,7 +1653,7 @@ bool WCollector::TryEndYoungMark(WorkStack& workStack, YoungConcWindowStats* win
     CHECK_DETAIL(MutatorManager::Instance().WorldStopped(), "young mark-end flush requires stopped mutators");
     NoteMarkTerminatePause();
     size_t flushed = 0;
-    MutatorManager::Instance().VisitAllMutators([](Mutator& mutator) { mutator.FlushSatbBuffer(); });
+    (void)MutatorManager::Instance().HandshakeFlushMarkProducers();
     SatbBuffer::Instance().GetRetiredEntries([this, &workStack, windowStats, &flushed](BaseObject* object,
                                                                                      bool follow) {
         ++flushed;

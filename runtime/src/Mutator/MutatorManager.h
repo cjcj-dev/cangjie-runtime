@@ -163,6 +163,7 @@ public:
     // Visit all mutators, hold mutatorListLock firstly
     void VisitAllMutators(MutatorVisitor func);
     void VisitAllMutatorsExceptFinalizer(MutatorVisitor func);
+    bool HandshakeFlushMarkProducers();
 
     // Some functions about stw
     void StopTheWorld(bool syncGCPhase, GCPhase phase);

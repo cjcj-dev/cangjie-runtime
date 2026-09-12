@@ -945,16 +945,13 @@ bool TracingCollector::MarkSatbBuffer(WorkStack& workStack)
         if (!workStack.empty()) {
             continue;
         }
-        DoResurrection(workStack);
-        if (!workStack.empty()) {
-            continue;
-        }
-        StoreBarrierBuffer::FlushAll(Heap::GetHeap().GetRememberedSet());
-        MutatorManager::Instance().VisitAllMutators([](Mutator& mutator) { mutator.FlushSatbBuffer(); });
+        bool more = FlushMarkProducers(majorMarkDomain);
         visitSatbObj();
-        bool more = !workStack.empty();
+        DoResurrection(workStack);
+        more = more || !workStack.empty();
         if (majorMarkDomain != nullptr) {
-            more = more || majorMarkDomain->TryTerminateFlush();
+            more = more || !majorMarkDomain->Stripes().IsEmpty() ||
+                majorMarkDomain->Terminate().Resurrected();
         }
         if (more) {
             continue;
@@ -976,7 +973,7 @@ bool TracingCollector::MarkSatbBuffer(WorkStack& workStack)
             NoteMarkTerminatePause();
             const size_t seenBefore = satbSeen;
             StoreBarrierBuffer::FlushAll(Heap::GetHeap().GetRememberedSet());
-            MutatorManager::Instance().VisitAllMutators([](Mutator& mutator) { mutator.FlushSatbBuffer(false); });
+            (void)MutatorManager::Instance().HandshakeFlushMarkProducers();
             visitSatbObj();
             NoteMarkTerminateFlushed(satbSeen - seenBefore);
             terminated = workStack.empty();
@@ -998,13 +995,26 @@ void TracingCollector::ConcurrentReMark(WorkStack& remarkStack, bool parallel)
     CHECK_DETAIL(MarkSatbBuffer(remarkStack), "not cleared\n");
 }
 
+bool TracingCollector::FlushMarkProducers(MarkDomain* domain)
+{
+    if (domain != nullptr) {
+        domain->Terminate().SetResurrected(false);
+    }
+    bool flushed = MutatorManager::Instance().HandshakeFlushMarkProducers();
+    if (domain != nullptr) {
+        flushed = domain->FlushStacks() || flushed || !domain->Stripes().IsEmpty();
+    }
+    return flushed;
+}
+
 void TracingCollector::DoResurrection(WorkStack& workStack)
 {
     size_t published = 0;
     RootVisitor func = [&workStack, this, &published](ObjectRef& ref) {
         HeapSlot<> tmpField(to_zpointer(raw(ref.LoadPlain())));
         BaseObject* finalizerObj = to_object(tmpField.GetTargetObject());
-        if (!IsMarkedObject<Generation::Old>(finalizerObj)) {
+        if (!IsMarkedObject<Generation::Old>(finalizerObj) &&
+            !IsLiveObject<Generation::Old>(finalizerObj)) {
             DLOG(TRACE, "resurrectable obj @%p:%p", &ref, finalizerObj);
             CHECK(DiscoverReference(finalizerObj, ReferenceType::FINAL) == ReferenceStatus::DISCOVERED);
             workStack.push_back(MarkStackEntry::MarkAndFollow(finalizerObj, true));
