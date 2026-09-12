@@ -5,7 +5,7 @@
 // See https://cangjie-lang.cn/pages/LICENSE for license information.
 
 // After-copy Exempt must not publish done while a copier still holds LOCKED.
-// insert-before-unlock (MutatorRelocate.h:124, WCollector.cpp:10055-10075).
+// insert-before-unlock.
 // ZGC: zRelocate.cpp:1041-1047; zRelocationSet.cpp:91-96.
 
 #include <atomic>

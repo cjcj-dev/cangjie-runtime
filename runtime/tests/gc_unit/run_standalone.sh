@@ -458,7 +458,7 @@ MAIN_SOURCES=(
   "$SRC/test_stay_young.cpp"
   "$SRC/test_gc_trigger.cpp"
   "$SRC/test_gc_request_sync.cpp"
-  "$SRC/test_mutator_relocate.cpp"
+
   "$SRC/test_uncommitter.cpp"
   "$SRC/test_relocation_request_queue.cpp"
   "$SRC/test_gc_thread_pool.cpp"

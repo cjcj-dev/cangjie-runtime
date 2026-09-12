@@ -52,6 +52,23 @@ public:
     };
     static ZForwarding* CurrentPageWork();
 
+    enum class Retire : uint32_t {
+        DISPEL_GHOST = 0,
+        TAKE_GARBAGE = 1,
+        RECLAIM_DIRTY = 2,
+        RECLAIM_MARK_QUARANTINE = 3,
+        RELEASE_REGION = 4,
+    };
+
+    static bool InMutatorRelocate();
+    class MutatorRelocateScope {
+    public:
+        MutatorRelocateScope();
+        ~MutatorRelocateScope();
+        MutatorRelocateScope(const MutatorRelocateScope&) = delete;
+        MutatorRelocateScope& operator=(const MutatorRelocateScope&) = delete;
+    };
+
     // zForwarding.inline.hpp:67-70 -- constructed with claimed=false, ref=1, done=false.
     // The construction 1 is the relocating worker's token; it is dropped at retire.
     static void ResetForForwarding(std::atomic<int32_t>& refCount, std::atomic<bool>& claimed,
@@ -65,7 +82,7 @@ public:
     // Region reuse / never-a-forwarding. 0 is terminal: retain_page refuses.
     // Store 0 then notify: a waiter in WaitUntilDone (n<0 claimed) must observe
     // the idle transition. ZGC never reuses a ZForwarding waiters still sit on;
-    // we ResetIdle in place (ExpireKeptPublish / InitRegionInfo), so the
+    // we ResetIdle in place (InitRegionInfo), so the
     // predicate is n==0 as well as is_done (zForwarding.cpp:96-100 add_and_wait
     // only watches is_done because the object is not reset under them).
     static void ResetIdle(std::atomic<int32_t>& refCount, std::atomic<bool>& claimed, std::atomic<bool>& done)

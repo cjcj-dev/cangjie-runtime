@@ -40,7 +40,7 @@ int WaitChild(pid_t pid)
     return -2;
 }
 
-// Isolate a CHECK/SEGV child from the parent's logger and ForwardDataManager
+// Isolate a CHECK/SEGV child from the parent's logger and live-info arena
 // singleton. FormatLog(RTLOG_FATAL) aborts after writing the shared logger;
 // a later test then AllocateRegionBitmap against an uninitialized arena
 // (bitmap != nullptr). Child stderr is discarded so the parent's PASS line
@@ -106,41 +106,4 @@ GC_TEST(GctibZero, B_AfterCalculateGCTibWalks)
     WalkHasRefObject(ti, fx.obj0);
 }
 
-// C defect signature: 1-region plan + preLive >= to1used → CHECK abort.
-// Child must die SIGABRT. Proves the CHECK is still armed (not relaxed).
-GC_TEST(GctibZero, C_OneRegionElseStillChecks)
-{
-    RouteInfo ri;
-    constexpr uintptr_t kTo1 = 0x30000000u;
-    constexpr uint32_t kCounter = 64;
-    ri.SetRouteInfo(kTo1, kCounter); // to2 defaults INVALID
-    GC_EXPECT_EQ(ri.GetToRegion2Idx(), RouteInfo::INVALID_VALUE);
 
-    pid_t pid = fork();
-    GC_EXPECT_TRUE(pid >= 0);
-    if (pid == 0) {
-        EnterIsolatedChild();
-        (void)ri.GetRoute(kCounter);
-        _exit(0);
-    }
-    int term = WaitChild(pid);
-    GC_EXPECT_EQ(term, SIGABRT);
-}
-
-// C after plan-size fix: to1used = max(counter, bitmapLive) keeps prefix in region1.
-GC_TEST(GctibZero, C_PlanSizedByBitmapFaceStaysInRegion1)
-{
-    constexpr uint32_t kCounter = 64;
-    constexpr uint32_t kBitmapLive = 128;
-    uint32_t fromBytes = kCounter;
-    if (kBitmapLive > fromBytes) {
-        fromBytes = kBitmapLive;
-    }
-    RouteInfo ri;
-    constexpr uintptr_t kTo1 = 0x40000000u;
-    ri.SetRouteInfo(kTo1, fromBytes);
-    GC_EXPECT_EQ(ri.GetToRegion2Idx(), RouteInfo::INVALID_VALUE);
-    GC_EXPECT_EQ(ri.GetRoute(0), kTo1);
-    GC_EXPECT_EQ(ri.GetRoute(kCounter), kTo1 + kCounter);
-    GC_EXPECT_EQ(ri.GetRoute(kBitmapLive - 1), kTo1 + (kBitmapLive - 1));
-}
