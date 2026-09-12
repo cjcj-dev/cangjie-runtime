@@ -8,6 +8,7 @@
 #ifndef MRT_THREAD_LOCAL_H
 #define MRT_THREAD_LOCAL_H
 
+#include <atomic>
 #include <cstdint>
 #include "Base/RwLock.h"
 #include "Interpreter/Options.h"
@@ -41,10 +42,23 @@ struct ThreadLocalData {
     ThreadType threadType;
     bool isCJProcessor;
     void* threadCache;
+    std::atomic<uint64_t> pollRequests { 0 };
 
 public:
     void SetMutator(Mutator* newMutator);
 };
+
+constexpr uint64_t POLL_REQ_SYNC = 1;
+constexpr uint64_t POLL_REQ_GC_PHASE = 2;
+constexpr uint64_t POLL_REQ_CPU_PROFILE = 4;
+constexpr uint64_t POLL_REQ_EPOCH = 8;
+constexpr uint64_t POLL_REQ_EXIT = 16;
+
+void ArmThreadPoll(ThreadLocalData* tls);
+void UpdatePollValues(ThreadLocalData* tls);
+void AddTlsPollRequest(ThreadLocalData* tls, uint64_t bit);
+void ClearTlsPollRequest(ThreadLocalData* tls, uint64_t bit);
+bool HasPendingSafepoint(ThreadLocalData* tls);
 
 void MarkFlushOnEnterSaferegion();
 void MarkFlushBeginLeaveSaferegion();
