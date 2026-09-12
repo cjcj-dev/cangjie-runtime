@@ -30,6 +30,7 @@ Barrier** Heap::currentBarrierPtr = nullptr;
 Barrier* Heap::stwBarrierPtr = nullptr;
 MAddress Heap::heapStartAddr = 0;
 MAddress Heap::heapCurrentEnd = 0;
+std::vector<HeapSlotAddressRange> Heap::heapReservations;
 
 void Heap::CheckHeapStartAlignment(MAddress startAddr)
 {
@@ -182,7 +183,8 @@ bool HeapImpl::ForEachObj(const std::function<void(BaseObject*)>& visitor, bool 
 void HeapImpl::Init(const HeapParam& param)
 {
     theSpace->Init(param);
-    rememberedSet.Initialize(theSpace->GetSpaceStartAddress(), theSpace->GetMaxCapacity());
+    rememberedSet.Initialize(theSpace->GetSpaceStartAddress(),
+                             theSpace->GetSpaceEndAddress() - theSpace->GetSpaceStartAddress());
     Heap::GetHeap().EnableGC(InitEnabledGCParam());
     collectorProxy.Init();
     collectorResources.Init();

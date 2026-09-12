@@ -12,6 +12,7 @@
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
+#include <functional>
 #include <limits>
 #include <sched.h>
 #include <list>
@@ -49,6 +50,7 @@
 #include "Heap/Verify/FromPageDetachCheck.h"
 #include "Heap/Allocator/ForwardingTable.h"
 #include "Heap/Allocator/MemMap.h"
+#include "Heap/Allocator/ZGranuleMap.h"
 
 #include "Heap/Verify/M0Correlation.h"
 #include "Base/TimeUtils.h"
@@ -100,13 +102,9 @@ private:
 // sizeof(RegionInfo) must be equal to sizeof(UnitInfo). We rely on this fact to calculate region-related address.
 
 
-/*
-    the layout of unitInfo(UI) and unit(U):
-    ...|UI(n+2)|UI(n+1)|UI(n)|.........|.........|U(n)|U(n+1)|U(n+2)|...
-                       ↑               ↑         ↑
-                  RegionInfo  heapStartAddress  Region
-    the offset of unit index and unitInfo index is 1
-*/
+// Metadata ABI: UI(i) is stored below the exported heapStartAddress anchor at
+// anchor - (i + 1) * sizeof(UnitInfo). The anchor is the metadata array end;
+// payload addresses come from unitSegments, independently of this array.
 // region info is stored in the metadata of its primary unit (i.e. the first unit).
 class RegionInfo {
     // The table serializes publication/unbinding of this facade's owner.
@@ -1853,14 +1851,109 @@ public:
         GARBAGE_REGION,
     };
 
+    // The reverse metadata array remains an ABI adapter. Its anchor need not
+    // be adjacent to payload reservations. Cache indices are dense within each
+    // segment, with an unused index between segments to prevent coalescing.
+    struct UnitSegment {
+        MemoryRange range;
+        size_t firstIndex;
+    };
+
+    static std::vector<UnitSegment> unitSegments;
+    static ZGranuleMap<RegionInfo*> pageOwners;
+
+    // zSafeDelete.inline.hpp:46-59 / zArray.inline.hpp:210-246. The ABI
+    // stores descriptors in a fixed array, so defer descriptor reinitialization
+    // and cache hand-back instead of deleting a separately allocated ZPage.
+    static std::mutex pageRetirementMutex;
+    static size_t pageIterationCount;
+    static std::vector<std::function<void()>> deferredPageRetirements;
+
+    class PageIterationScope {
+    public:
+        PageIterationScope()
+        {
+            std::lock_guard<std::mutex> lock(pageRetirementMutex);
+            ++pageIterationCount;
+        }
+
+        ~PageIterationScope()
+        {
+            std::vector<std::function<void()>> retired;
+            {
+                std::lock_guard<std::mutex> lock(pageRetirementMutex);
+                CHECK(pageIterationCount != 0);
+                if (--pageIterationCount == 0) {
+                    retired.swap(deferredPageRetirements);
+                }
+            }
+            // Run existing allocator paths outside the activation lock, as
+            // ZActivatedArray::deactivate_and_apply does.
+            for (auto& retire : retired) {
+                retire();
+            }
+        }
+
+        PageIterationScope(const PageIterationScope&) = delete;
+        PageIterationScope& operator=(const PageIterationScope&) = delete;
+    };
+
+    static void RetirePage(RegionInfo* region, std::function<void()> retire)
+    {
+        {
+            std::lock_guard<std::mutex> lock(pageRetirementMutex);
+            const uintptr_t start = region->GetRegionStart();
+            const size_t size = region->GetRegionSize();
+            zoffset offset;
+            CHECK(pageOwners.offset_for_address(start, &offset));
+            CHECK(pageOwners.get(offset) == region);
+            // zHeap.cpp:275-280 / zPageTable.cpp:59-65: remove the complete
+            // old page while its descriptor still describes every granule.
+            pageOwners.put(offset, size, nullptr);
+            if (pageIterationCount != 0) {
+                deferredPageRetirements.push_back(std::move(retire));
+                return;
+            }
+        }
+        retire();
+    }
+
+    static size_t IndexedUnitCount(const std::vector<MemoryRange>& ranges)
+    {
+        CHECK(UNIT_SIZE != 0 && (UNIT_SIZE & (UNIT_SIZE - 1)) == 0);
+        size_t count = 0;
+        uintptr_t previousEnd = 0;
+        for (const auto& range : ranges) {
+            CHECK(!range.IsNull() && IsRepresentableLow48Range(range.start, range.size));
+            CHECK(range.start >= previousEnd);
+            CHECK(range.start % UNIT_SIZE == 0 && range.size % UNIT_SIZE == 0);
+            CHECK(CheckedAddSize(count, range.size / UNIT_SIZE + 1, count));
+            previousEnd = range.End();
+        }
+        CHECK(count != 0 && count - 1 < std::numeric_limits<uint32_t>::max());
+        return count - 1;
+    }
+
     static void Initialize(size_t nUnit, uintptr_t heapAddress, MemMap* memoryOwner = nullptr)
     {
-        UnitInfo::totalUnitCount = nUnit;
-        UnitInfo::heapStartAddress = heapAddress;
+        InitializeSegments(heapAddress, { MemoryRange{ heapAddress, nUnit * UNIT_SIZE } }, memoryOwner);
+    }
+
+    static void InitializeSegments(uintptr_t metadataEnd, const std::vector<MemoryRange>& ranges,
+                                   MemMap* memoryOwner)
+    {
+        UnitInfo::totalUnitCount = IndexedUnitCount(ranges);
+        UnitInfo::heapStartAddress = metadataEnd;
         UnitInfo::memoryOwner = memoryOwner;
-        // gatehot: UNIT_SIZE is page size (power of two). ctz → shift for GetUnitIdxAt.
-        CHECK(UNIT_SIZE != 0 && (UNIT_SIZE & (UNIT_SIZE - 1)) == 0);
-        UnitInfo::unitSizeShift = static_cast<size_t>(__builtin_ctzll(static_cast<unsigned long long>(UNIT_SIZE)));
+        unitSegments.clear();
+        size_t index = 0;
+        for (const auto& range : ranges) {
+            CHECK(IsRepresentableLow48Range(range.start, range.size));
+            unitSegments.push_back(UnitSegment{ range, index });
+            index += range.size / UNIT_SIZE + 1;
+        }
+        pageOwners.Reset();
+        CHECK(pageOwners.Initialize(ranges.front().start, ranges.back().End() - ranges.front().start, UNIT_SIZE));
         // routedest: per-unit metadata is per-page metadata, so any growth here is a
         // percentage of the whole heap. Nobody had measured it; report it once so the cost
         // of routeDestHold (one byte, expected to land in existing padding) is a number
@@ -1882,23 +1975,46 @@ public:
         static_assert(sizeof(UnitInfo) == 248, "per-unit metadata size changed; it is per-page, so price it");
     }
 
+    static size_t FindUnitIndex(uintptr_t address)
+    {
+        auto next = std::upper_bound(unitSegments.begin(), unitSegments.end(), address,
+            [](uintptr_t addr, const UnitSegment& segment) { return addr < segment.range.start; });
+        if (next == unitSegments.begin()) {
+            return UnitInfo::INVALID_IDX;
+        }
+        const auto& segment = *std::prev(next);
+        return address < segment.range.End()
+            ? segment.firstIndex + (address - segment.range.start) / UNIT_SIZE : UnitInfo::INVALID_IDX;
+    }
+
+    static bool ContainsUnitRange(uintptr_t start, size_t size)
+    {
+        for (const auto& segment : unitSegments) {
+            if (start >= segment.range.start && start < segment.range.End() && size <= segment.range.End() - start) {
+                return true;
+            }
+        }
+        return false;
+    }
+
+    static void VisitPageOwners(const std::function<void(RegionInfo*)>& visitor)
+    {
+        // zPageTable.cpp:101-113: protect the whole callback lifetime,
+        // including nested iteration and exceptional callback exits.
+        PageIterationScope iteration;
+        pageOwners.visit_unique(visitor);
+    }
+
     static RegionInfo* GetRegionInfo(uint32_t idx)
     {
-        UnitInfo* unit = RegionInfo::UnitInfo::GetUnitInfo(idx);
-        if (LoadUnitRole(unit) == UnitRole::SUBORDINATE_UNIT) {
-            return unit->GetMetadata().ownerRegion;
-        }
-        return reinterpret_cast<RegionInfo*>(unit);
+        return TryGetRegionInfoAt(GetUnitAddress(idx));
     }
 
     // Safely query a heap address whose unit may no longer have a live owning region.
     ALWAYS_INLINE static RegionInfo* TryGetRegionInfoAt(uintptr_t allocAddr)
     {
-        UnitInfo* unit = RegionInfo::UnitInfo::GetUnitInfoAt(allocAddr);
-        if (LoadUnitRole(unit) == UnitRole::SUBORDINATE_UNIT) {
-            return unit->GetMetadata().ownerRegion;
-        }
-        return reinterpret_cast<RegionInfo*>(unit);
+        zoffset offset;
+        return pageOwners.offset_for_address(allocAddr, &offset) ? pageOwners.get(offset) : nullptr;
     }
 
     // The caller must know that allocAddr resolves to an extant region owner.
@@ -1916,7 +2032,11 @@ public:
 
     static RegionInfo* GetGhostFromRegionAt(uintptr_t allocAddr)
     {
-        UnitInfo* unit = RegionInfo::UnitInfo::GetUnitInfoAt(allocAddr);
+        const size_t idx = FindUnitIndex(allocAddr);
+        if (idx == UnitInfo::INVALID_IDX) {
+            return nullptr;
+        }
+        UnitInfo* unit = UnitInfo::GetUnitInfo(idx);
         if (unit->GetMetadata().regionStateBitField.GetAtomicValue(
                 RegionStateBitPos::IN_GHOST_FROM_REGION_FLAG, 1) == 0) {
             return nullptr;
@@ -1977,13 +2097,14 @@ public:
     {
         uintptr_t unitAddress = RegionInfo::GetUnitAddress(idx);
         size_t size = cnt * RegionInfo::UNIT_SIZE;
+        CHECK(ContainsUnitRange(unitAddress, size));
         RegionInfo* wipeRegion = RegionInfo::TryGetRegionInfoAt(unitAddress);
         WaitCopiedBeforePayloadWipe(wipeRegion, "ClearUnits");
         CHECK_DETAIL(FromPageDetach::FromPageDetachCheck(wipeRegion,
                                                         FromPageDetach::Site::CLEAR_UNITS),
                      "CJRT_FROM_REUSE_GATE bypass reached ClearUnits idx=%zu units=%zu", idx, cnt);
         DLOG(REGION, "clear dirty units[%zu+%zu, %zu) @[%#zx+%zu, %#zx)", idx, cnt, idx + cnt, unitAddress, size,
-             RegionInfo::GetUnitAddress(idx + cnt));
+             unitAddress + size);
         // gcfwdfix: ring of zeroed ranges for WAS_LIVE_BEFORE_CLEAR (MRT_GCV2_TRACE_CLEAR=1).
         TraceClear::NoteRange(static_cast<MAddress>(unitAddress), size, "clear_units", nullptr, 0);
 
@@ -2023,13 +2144,14 @@ public:
 #endif
         void* unitAddress = reinterpret_cast<void*>(RegionInfo::GetUnitAddress(idx));
         size_t size = cnt * RegionInfo::UNIT_SIZE;
+        CHECK(ContainsUnitRange(reinterpret_cast<uintptr_t>(unitAddress), size));
         RegionInfo* wipeRegion = RegionInfo::TryGetRegionInfoAt(reinterpret_cast<uintptr_t>(unitAddress));
         WaitCopiedBeforePayloadWipe(wipeRegion, "ReleaseUnits");
         CHECK_DETAIL(FromPageDetach::FromPageDetachCheck(wipeRegion,
                          FromPageDetach::Site::RELEASE_UNITS),
                      "CJRT_FROM_REUSE_GATE bypass reached ReleaseUnits idx=%zu units=%zu", idx, cnt);
         DLOG(REGION, "release physical memory for units [%zu+%zu, %zu) @[%p+%zu, 0x%zx)", idx, cnt, idx + cnt,
-             unitAddress, size, RegionInfo::GetUnitAddress(idx + cnt));
+             unitAddress, size, reinterpret_cast<uintptr_t>(unitAddress) + size);
         const size_t released = UnitInfo::memoryOwner == nullptr ? 0 :
                                 UnitInfo::memoryOwner->ReleaseMemory(unitAddress, size);
 #ifdef CANGJIE_ASAN_SUPPORT
@@ -2062,8 +2184,7 @@ public:
     {
         const MAddress start = GetRegionStart();
         const MAddress end = metadata.regionEnd;
-        const MAddress heapEnd = UnitInfo::heapStartAddress + UnitInfo::totalUnitCount * UNIT_SIZE;
-        return end > start && end <= heapEnd ? end - start : UNIT_SIZE;
+        return end > start && ContainsUnitRange(start, end - start) ? end - start : UNIT_SIZE;
     }
 
     size_t GetUnitCount() const { return GetRegionSize() / UNIT_SIZE; }
@@ -3034,14 +3155,7 @@ public:
 
     size_t GetUnitIdx() const { return RegionInfo::UnitInfo::GetUnitIdx(reinterpret_cast<const UnitInfo*>(this)); }
 
-    MAddress GetRegionStart() const
-    {
-        uintptr_t ptr = reinterpret_cast<uintptr_t>(this);
-        CHECK(ptr < UnitInfo::heapStartAddress);
-        size_t idx = (UnitInfo::heapStartAddress - ptr) / sizeof(UnitInfo) - 1;
-        CHECK(idx < UnitInfo::totalUnitCount);
-        return idx * UNIT_SIZE + UnitInfo::heapStartAddress;
-    }
+    MAddress GetRegionStart() const { return GetUnitAddress(GetUnitIdx()); }
 
     MAddress GetRegionEnd() const { return metadata.regionEnd; }
 
@@ -3691,8 +3805,8 @@ private:
         //
         // Durability, and the reason this works at all: UnitInfo lives BELOW heapStartAddress
         // (UnitInfo::GetUnitInfo returns heapStartAddress - (idx + 1) * sizeof(UnitInfo)),
-        // while ClearUnits MemorySets and ReleaseUnits madvises only payload at
-        // heapStartAddress + idx * UNIT_SIZE. A flag in UnitMetadata therefore survives both
+        // while ClearUnits and ReleaseUnits touch only the payload returned by
+        // GetUnitAddress(idx). A flag in UnitMetadata therefore survives both
         // zeroing writers. Do not "fix" this on the assumption that ClearUnits wipes it.
         //
         // Placement: deliberately here, in the padding after retainedLastOp and before the
@@ -3781,44 +3895,16 @@ private:
     class UnitInfo {
     public:
         // propgated from RegionManager
-        static uintptr_t heapStartAddress; // the address of the first region space to allocate objects
+        static uintptr_t heapStartAddress; // exported ABI anchor: end of the reverse metadata array
         static size_t totalUnitCount;
         static MemMap* memoryOwner;
-        // gatehot: log2(UNIT_SIZE); UNIT_SIZE is always a power-of-two page size.
-        // Hot GetUnitIdxAt uses a shift instead of a runtime / on a non-constant divisor.
-        static size_t unitSizeShift;
-
         constexpr static uint32_t INVALID_IDX = std::numeric_limits<uint32_t>::max();
 
-        // gatehot: OOB path used to live in the same function as the hot index math.
-        // That forced a full frame (dladdr + FormatLog + stack canary) on every call and
-        // blocked inlining into TryGetRegionInfoAt / PlausibleManagedObjectGate.
-        // Cold-only: same greppable FATAL text as before (unitzero trail).
-        ATTR_NO_INLINE ATTR_COLD static size_t GetUnitIdxAtOOB(uintptr_t allocAddr);
-
-        // Hot path: range check + shift. Must stay tiny enough to inline at every call site.
         ALWAYS_INLINE static size_t GetUnitIdxAt(uintptr_t allocAddr)
         {
-            uintptr_t start = heapStartAddress;
-            size_t units = totalUnitCount;
-            size_t shift = unitSizeShift;
-            // UNIT_SIZE == (1 << shift); keep arithmetic identical to
-            //   start <= addr < start + units * UNIT_SIZE
-            // without loading the UNIT_SIZE global or emitting a DIV.
-            if (LIKELY(start <= allocAddr &&
-                       ((allocAddr - start) >> shift) < units)) {
-                size_t idx = (allocAddr - start) >> shift;
-#if defined(MRT_DEBUG) && (MRT_DEBUG == 1)
-                // Debug builds always cross-check shift vs div (GATEEQUIV math).
-                size_t divIdx = (allocAddr - start) / UNIT_SIZE;
-                if (UNLIKELY(idx != divIdx)) {
-                    LOG(RTLOG_FATAL, "GetUnitIdxAt GATEEQUIV mismatch addr=%#zx shift=%zu div=%zu",
-                        allocAddr, idx, divIdx);
-                }
-#endif
-                return idx;
-            }
-            return GetUnitIdxAtOOB(allocAddr);
+            const size_t idx = FindUnitIndex(allocAddr);
+            CHECK_DETAIL(idx != INVALID_IDX, "address is outside heap reservations: %#zx", allocAddr);
+            return idx;
         }
 
         ALWAYS_INLINE static UnitInfo* GetUnitInfoAt(uintptr_t allocAddr)
@@ -3830,7 +3916,13 @@ private:
         static MAddress GetUnitAddress(size_t idx)
         {
             CHECK(idx < totalUnitCount);
-            return heapStartAddress + idx * UNIT_SIZE;
+            for (const auto& segment : unitSegments) {
+                if (idx >= segment.firstIndex && idx - segment.firstIndex < segment.range.size / UNIT_SIZE) {
+                    return segment.range.start + (idx - segment.firstIndex) * UNIT_SIZE;
+                }
+            }
+            LOG(RTLOG_FATAL, "unit index denotes a reservation boundary: %zu", idx);
+            return 0;
         }
 
         static UnitInfo* GetUnitInfo(size_t idx)
@@ -3843,7 +3935,10 @@ private:
         {
             uintptr_t ptr = reinterpret_cast<uintptr_t>(unit);
             if (ptr < heapStartAddress) {
-                return (heapStartAddress - ptr) / sizeof(UnitInfo) - 1;
+                const size_t distance = heapStartAddress - ptr;
+                if (distance % sizeof(UnitInfo) == 0 && distance / sizeof(UnitInfo) <= totalUnitCount) {
+                    return distance / sizeof(UnitInfo) - 1;
+                }
             }
 
             LOG(RTLOG_FATAL, "UnitInfo::GetUnitIdx() Should not execute here, abort.");
@@ -3940,13 +4035,9 @@ private:
         UnitMetadata metadata;
     };
 
-    // unitRole selects the ownerRegion/liveInfo payload, and its writers publish it with an acq_rel
-    // compare-exchange (UnitInfo::InitSubordinateUnit, InitRegionInfo below). Read it with
-    // acquire so that the selected payload read which follows in GetRegionInfo/GetRegionInfoAt/
-    // GetGhostFromRegionAt cannot be hoisted above the discriminator: a plain pair of loads may
-    // be reordered, or folded into an unconditional load plus a select, either of which would
-    // defeat the writer's ordering. On x86_64 an acquire load is the same instruction as a
-    // relaxed one, so this constrains the compiler and costs nothing at run time.
+    // The metadata role remains an ABI/ghost-lifetime discriminator. Current
+    // page ownership is published and read through pageOwners, independently
+    // of subordinate metadata placement.
     static UnitRole LoadUnitRole(UnitInfo* unit)
     {
         return static_cast<UnitRole>(unit->GetMetadata().unitRoleBitField.GetAtomicValue(0, BIT_LENGTH));
@@ -3978,20 +4069,12 @@ private:
         }
     }
 
-    // unitRole selects between the ownerRegion/liveInfo payloads and allocPtr/regionEnd:
-    // a reader that observes SUBORDINATE_UNIT dereferences metadata.ownerRegion (:530-546),
-    // and a reader that observes SMALL_SIZED_UNITS or LARGE_SIZED_UNITS treats this unit as a
-    // region head and reads metadata.regionEnd (IsValidRegion :1018-1022). This function both
-    // leaves the first state and enters the second, and the readers are not stopped by
-    // ScopedStopTheWorld -- the collector's own promotion walk (RegionManager.cpp:549-551) runs
-    // while the finalizer thread reclaims regions through here. So the role is moved to the
-    // neutral FREE_UNITS first, the payload is rewritten, and only then is the real role
-    // published. FREE_UNITS is safe to expose at any moment: it makes readers treat the unit as
-    // itself, and it is neither a valid region nor a subordinate one.
-    // SetUnitRole is an acq_rel compare-exchange (BitField::SetAtomicValue :46-58), so neither
-    // bracket can be reordered with the payload stores between them.
+    // Reinitialization consumes an already retired descriptor. The allocator
+    // must remove the old page and finish safe retirement before reaching here.
     void InitRegionInfo(size_t nUnit, UnitRole uClass)
     {
+        CHECK(ContainsUnitRange(GetRegionStart(), nUnit * UNIT_SIZE));
+        CHECK(TryGetRegionInfoAt(GetRegionStart()) == nullptr);
         CHECK_DETAIL(GetRegionListOwner() == nullptr, "reinitializing a region still owned by a list");
         CHECK_DETAIL(FromPageDetach::FromPageDetachCheck(this, FromPageDetach::Site::INIT_REGION_INFO),
                      "CJRT_FROM_REUSE_GATE bypass reached InitRegionInfo region=%p units=%zu", this, nUnit);
@@ -4078,6 +4161,12 @@ private:
             array[i].InitSubordinateUnit(this);
         }
         AssertGhostClearedAfterReuse(nUnit);
+        // zHeap.cpp:250-254 / zPageTable.cpp:44-54: publish only after the
+        // entire descriptor (including its subordinate ABI units) is ready.
+        zoffset offset;
+        CHECK(pageOwners.offset_for_address(GetRegionStart(), &offset));
+        CHECK(uClass != UnitRole::FREE_UNITS);
+        pageOwners.put(offset, nUnit * UNIT_SIZE, this);
     }
 
     static constexpr uint32_t NULLPTR_IDX = UnitInfo::INVALID_IDX;

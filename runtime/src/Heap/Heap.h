@@ -10,6 +10,8 @@
 
 #include <cstdlib>
 #include <functional>
+#include <vector>
+#include "Common/ColourEncoding.h"
 
 #include "Barrier/Barrier.h"
 #include "Base/ImmortalWrapper.h"
@@ -76,9 +78,17 @@ public:
     virtual MAddress GetStartAddress() const = 0;
     virtual MAddress GetSpaceEndAddress() const = 0;
 
-    // IsHeapAddress is a range-based check, used to quickly identify heap address,
-    // assuming non-heap address never falls into this address range.
-    static bool IsHeapAddress(MAddress addr) { return (addr >= heapStartAddr) && (addr < heapCurrentEnd); }
+    // Only reserved payload ranges are heap addresses. The outer address
+    // envelope sizes offset tables, but its holes are never managed memory.
+    static bool IsHeapAddress(MAddress addr)
+    {
+        for (const auto& range : heapReservations) {
+            if (addr >= range.start && addr < range.end) {
+                return true;
+            }
+        }
+        return false;
+    }
 
     static bool IsHeapAddress(const void* addr) { return IsHeapAddress(reinterpret_cast<MAddress>(addr)); }
 
@@ -137,9 +147,28 @@ public:
         CheckHeapStartAlignment(startAddr);
         heapStartAddr = startAddr;
         heapCurrentEnd = 0;
+        heapReservations.clear();
     }
 
-    static void OnHeapExtended(MAddress newEnd) { heapCurrentEnd = newEnd; }
+    static void OnHeapCreated(MAddress startAddr, const std::vector<HeapSlotAddressRange>& reservations)
+    {
+        OnHeapCreated(startAddr);
+        for (const auto& range : reservations) {
+            CHECK(range.end > range.start && IsRepresentableLow48Range(range.start, range.end - range.start));
+        }
+        heapReservations = reservations;
+    }
+
+    static void OnHeapExtended(MAddress newEnd)
+    {
+        CHECK(newEnd > heapStartAddr && IsRepresentableLow48Range(heapStartAddr, newEnd - heapStartAddr));
+        if (heapReservations.empty()) {
+            heapReservations.push_back({ heapStartAddr, newEnd });
+        } else {
+            heapReservations.back().end = newEnd;
+        }
+        heapCurrentEnd = newEnd;
+    }
 
     virtual ~Heap() {}
     static Barrier** currentBarrierPtr; // record ptr for fast access
@@ -148,6 +177,7 @@ public:
 
 private:
     static MAddress heapStartAddr;
+    static std::vector<HeapSlotAddressRange> heapReservations;
 };
 } // namespace MapleRuntime
 #endif // MRT_HEAP_MANAGER_H

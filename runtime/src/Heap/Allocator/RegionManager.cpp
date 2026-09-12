@@ -103,48 +103,13 @@ void Report(size_t listRegions, size_t listBytes)
 
 uintptr_t RegionInfo::UnitInfo::totalUnitCount = 0;
 uintptr_t RegionInfo::UnitInfo::heapStartAddress = 0;
-size_t RegionInfo::UnitInfo::unitSizeShift = 0;
 MemMap* RegionInfo::UnitInfo::memoryOwner = nullptr;
+std::vector<RegionInfo::UnitSegment> RegionInfo::unitSegments;
+ZGranuleMap<RegionInfo*> RegionInfo::pageOwners;
+std::mutex RegionInfo::pageRetirementMutex;
+size_t RegionInfo::pageIterationCount = 0;
+std::vector<std::function<void()>> RegionInfo::deferredPageRetirements;
 
-// gatehot: cold OOB for GetUnitIdxAt — kept out of the hot function so the common
-// path can inline (was ~128 insns with dladdr/FATAL in the same body).
-// Semantics unchanged: greppable FATAL + return 0 (unitzero trail).
-size_t RegionInfo::UnitInfo::GetUnitIdxAtOOB(uintptr_t allocAddr)
-{
-    void* ra0 = __builtin_return_address(0);
-    void* ra1 = nullptr;
-    void* ra2 = nullptr;
-#if defined(__GNUC__) || defined(__clang__)
-#pragma GCC diagnostic push
-#pragma GCC diagnostic ignored "-Wframe-address"
-    ra1 = __builtin_return_address(1);
-    ra2 = __builtin_return_address(2);
-#pragma GCC diagnostic pop
-#endif
-    const char* s0 = "?";
-    const char* s1 = "?";
-    const char* s2 = "?";
-#if !defined(_WIN64)
-    Dl_info di0{};
-    Dl_info di1{};
-    Dl_info di2{};
-    if (ra0 != nullptr && dladdr(ra0, &di0) != 0 && di0.dli_sname != nullptr) {
-        s0 = di0.dli_sname;
-    }
-    if (ra1 != nullptr && dladdr(ra1, &di1) != 0 && di1.dli_sname != nullptr) {
-        s1 = di1.dli_sname;
-    }
-    if (ra2 != nullptr && dladdr(ra2, &di2) != 0 && di2.dli_sname != nullptr) {
-        s2 = di2.dli_sname;
-    }
-#endif
-    LOG(RTLOG_FATAL,
-        "GetUnitIdxAt OOB addr=%#zx heap=[%#zx, %#zx) "
-        "ra0=%p(%s) ra1=%p(%s) ra2=%p(%s)",
-        allocAddr, heapStartAddress, heapStartAddress + totalUnitCount * UNIT_SIZE,
-        ra0, s0, ra1, s1, ra2, s2);
-    return 0;
-}
 std::atomic<size_t> RegionInfo::youngRegionCount { 0 };
 std::atomic<size_t> RegionInfo::dispelGhostCount { 0 };
 #if defined(MRT_GC_UNIT_TESTS)
@@ -997,19 +962,40 @@ void RegionManager::SetCacheRatio(double minSize, double maxSize, double default
 void RegionManager::Initialize(size_t nUnit, uintptr_t regionInfoAddr, MemMap& memoryOwner,
                                const HeapParam& heapParam, double garbageThreshold)
 {
-    size_t metadataSize = GetMetadataSize(nUnit);
+    const size_t metadataSize = GetMetadataSize(nUnit);
+    InitializeSegments(regionInfoAddr, { MemoryRange{ regionInfoAddr + metadataSize, nUnit * RegionInfo::UNIT_SIZE } },
+                       memoryOwner, heapParam, garbageThreshold);
+}
+
+void RegionManager::InitializeSegments(uintptr_t regionInfoAddr, const std::vector<MemoryRange>& inputRanges,
+                                      MemMap& memoryOwner, const HeapParam& heapParam, double garbageThreshold)
+{
+    // OS reservations remain distinct for unreserve (notably on Windows),
+    // while adjacent virtual ranges coalesce before receiving cache indices.
+    std::vector<MemoryRange> reservations;
+    for (const auto& range : inputRanges) {
+        if (!reservations.empty() && reservations.back().End() == range.start) {
+            reservations.back().size += range.size;
+        } else {
+            reservations.push_back(range);
+        }
+    }
+    const size_t nUnit = RegionInfo::IndexedUnitCount(reservations);
+    const size_t metadataSize = GetMetadataSize(nUnit);
     this->regionInfoStart = regionInfoAddr;
-    this->regionHeapStart = regionInfoAddr + metadataSize;
-    this->regionHeapEnd = regionHeapStart + nUnit * RegionInfo::UNIT_SIZE;
-    // PORT_ZFORWARDING step 1: the address-keyed table covers the same span the units do, so an
-    // index is (addr - base) / UNIT_SIZE with no probing -- ZGranuleMap's shape.
-    CHECK_DETAIL(ForwardingTable::Initialize(
-                     regionHeapStart, nUnit * RegionInfo::UNIT_SIZE, RegionInfo::UNIT_SIZE),
-                 "forwarding table initialization failed heap=[%#zx,%#zx) unit=%zu",
-                 static_cast<size_t>(regionHeapStart),
-                 static_cast<size_t>(regionHeapStart + nUnit * RegionInfo::UNIT_SIZE),
-                 RegionInfo::UNIT_SIZE);
+    this->regionHeapStart = reservations.front().start;
+    this->regionHeapEnd = reservations.back().End();
+    heapUnitCount = 0;
+    for (const auto& range : reservations) {
+        CHECK(memoryOwner.GetReservationRegistry().Contains(range.start, range.size));
+        CHECK(inactiveRanges.RegisterRange(Range(range.start, range.size)));
+        heapUnitCount += range.size / RegionInfo::UNIT_SIZE;
+    }
+    // zPageTable.cpp:37-52: address tables cover the highest available end,
+    // while only the reservation registry supplies allocatable ranges.
+    CHECK(ForwardingTable::Initialize(regionHeapStart, regionHeapEnd - regionHeapStart, RegionInfo::UNIT_SIZE));
     this->inactiveZone = regionHeapStart;
+    activeUnitCount.store(0, std::memory_order_relaxed);
     SetMaxUnitCountForRegion(heapParam.regionSize);
     SetMaxUnitCountForPinnedRegion(heapParam.regionSize);
     SetLargeObjectThreshold(heapParam.regionSize);
@@ -1018,7 +1004,7 @@ void RegionManager::Initialize(size_t nUnit, uintptr_t regionInfoAddr, MemMap& m
     SetCacheRatio(0.0, 1.0, 1.0);
 #endif
     // propagate region heap layout
-    RegionInfo::Initialize(nUnit, regionHeapStart, &memoryOwner);
+    RegionInfo::InitializeSegments(regionInfoAddr + metadataSize, reservations, &memoryOwner);
     freeRegionManager.Initialize(nUnit);
     this->exemptedRegionThreshold = heapParam.exemptionThreshold;
     DLOG(REPORT, "region info @0x%zx+%zu, heap [0x%zx, 0x%zx), unit count %zu", regionInfoAddr, metadataSize,
@@ -1046,6 +1032,11 @@ void RegionManager::ReclaimRegion(RegionInfo* region)
         freeRegionManager.AddDetachQuarantineRegion(region);
         return;
     }
+    RegionInfo::RetirePage(region, [this, region] { ReclaimRetiredRegion(region); });
+}
+
+void RegionManager::ReclaimRetiredRegion(RegionInfo* region)
+{
     // routedest: census, not a guard. The graft asked for CHECK(!IsRouteDestHeld()) here to
     // convert "I traced the paths" into a machine check, but none of the designs proved the
     // caller enumeration and five of the six ReclaimRegion callers have already detached the
@@ -1112,6 +1103,22 @@ bool RegionManager::StallAllocation(AllocationStallRequest& request, bool reques
 
 void RegionManager::ReturnPageMemory(const PageMemory& memory)
 {
+    RegionInfo* region = RegionInfo::TryGetRegionInfoAt(RegionInfo::GetUnitAddress(memory.index));
+    if (region != nullptr) {
+        CHECK(region->GetUnitIdx() == memory.index && region->GetUnitCount() == memory.units);
+        RegionInfo::RetirePage(region, [this, region, memory] {
+            region->InitFreeUnits();
+            ReturnRetiredPageMemory(memory);
+        });
+        return;
+    }
+    // An allocation cancelled before materialization has no page descriptor.
+    // Reclaim/Release also arrive here after completing descriptor retirement.
+    ReturnRetiredPageMemory(memory);
+}
+
+void RegionManager::ReturnRetiredPageMemory(const PageMemory& memory)
+{
     // zPageAllocator.cpp:1999 / 2150: hand back memory, decrease used and
     // satisfy the FIFO in one allocator-owner critical section. Enter the
     // saferegion before the owner, including nested cache hand-back calls.
@@ -1166,12 +1173,16 @@ bool RegionManager::ClaimAllocationLocked(AllocationStallRequest& request)
     // selection and harvested multi-partition vmems (advisor 0913 03:4x).
     constexpr uint32_t partition = 0;
     if (!freeRegionManager.ClaimPageMemory(num, partition, memory)) {
-        const uintptr_t addr = inactiveZone.load(std::memory_order_relaxed);
-        if (size > regionHeapEnd - addr) {
+        const Range range = inactiveRanges.ClaimLow(size);
+        if (range.IsNull()) {
             return false;
         }
-        inactiveZone.store(addr + size, std::memory_order_release);
-        memory = PageMemory{ (addr - regionHeapStart) / RegionInfo::UNIT_SIZE, num, partition, false };
+        const size_t index = RegionInfo::FindUnitIndex(range.Start());
+        CHECK(index != std::numeric_limits<uint32_t>::max());
+        inactiveZone.store(std::max(inactiveZone.load(std::memory_order_relaxed), range.End()),
+                           std::memory_order_release);
+        activeUnitCount.fetch_add(num, std::memory_order_release);
+        memory = PageMemory{ index, num, partition, false };
     }
     if (!memory.committed) {
         Uncommitter::CancelCycle();
@@ -1186,6 +1197,11 @@ void RegionManager::ReclaimRegionToMarkQuarantine(RegionInfo* region)
         freeRegionManager.AddDetachQuarantineRegion(region);
         return;
     }
+    RegionInfo::RetirePage(region, [this, region] { ReclaimRetiredRegionToMarkQuarantine(region); });
+}
+
+void RegionManager::ReclaimRetiredRegionToMarkQuarantine(RegionInfo* region)
+{
     // routedest: census only, see ReclaimRegion.
     size_t num = region->GetUnitCount();
     size_t unitIndex = region->GetUnitIdx();
@@ -1213,12 +1229,18 @@ size_t RegionManager::ReleaseRegion(RegionInfo* region)
         freeRegionManager.AddDetachQuarantineRegion(region, true);
         return heldBytes;
     }
+    const size_t size = region->GetRegionSize();
+    RegionInfo::RetirePage(region, [this, region] { ReleaseRetiredRegion(region); });
+    return size;
+}
+
+void RegionManager::ReleaseRetiredRegion(RegionInfo* region)
+{
     // routedest: census only, see ReclaimRegion.
 
     // holdercapture: large regions above the release threshold never reach CollectRegion,
     // so the snapshot has to be taken on this path too or the face is lost unrecorded.
 
-    size_t res = region->GetRegionSize();
     size_t num = region->GetUnitCount();
     size_t unitIndex = region->GetUnitIdx();
     // Large regions above the release threshold bypass CollectRegion. Invalidate
@@ -1239,7 +1261,6 @@ size_t RegionManager::ReleaseRegion(RegionInfo* region)
         RegionInfo::ReleaseUnits(unitIndex, num);
     }
     ReturnPageMemory(PageMemory{ unitIndex, num, 0, false });
-    return res;
 }
 
 void RegionManager::ReassembleFromSpace()
@@ -1788,31 +1809,16 @@ size_t RegionManager::ExemptFromRegions()
 void RegionManager::ForEachObjUnsafe(const std::function<void(BaseObject*)>& visitor,
                                      bool skipKnownEmptyRegions) const
 {
-    for (uintptr_t regionAddr = regionHeapStart; regionAddr < inactiveZone;) {
-        RegionInfo* region = RegionInfo::GetRegionInfoAt(regionAddr);
-        // Finalizer reclaims concurrently (not a mutator ⇒ STW does not stop it). A unit
-        // mid-InitRegionInfo can expose a transient extent (0/garbage) before the final
-        // role is published. Following a bogus end lands GetUnitIdxAt(0) → named fatal+abort
-        // (S1: SIGABRT under InvalidateOldTaggedRefs). Step one unit instead —
-        // such units are never visitable.
-        // Anchor: a1f81854 (fix/gcfix), landed here as e2293c2b; the guard below is
-        // character-identical to it. Its other hunk targeted PromoteAllRegions, which
-        // no longer exists on this line.
-        uintptr_t nextAddr = region->GetRegionEnd();
-        if (nextAddr <= regionAddr || nextAddr > inactiveZone) {
-            regionAddr += RegionInfo::UNIT_SIZE;
-            continue;
-        }
-        regionAddr = nextAddr;
+    VisitPageOwners([&](RegionInfo* region) {
         if (!region->IsValidRegion() || region->IsFreeRegion() || region->IsGarbageRegion()) {
-            continue;
+            return;
         }
         MarkView<Generation::Old> oldView = region->GetMarkView<Generation::Old>();
         if (skipKnownEmptyRegions && region->IsKnownEmpty(oldView)) {
-            continue;
+            return;
         }
         region->VisitAllObjects([&visitor](BaseObject* object) { visitor(object); });
-    }
+    });
 }
 
 void RegionManager::ForEachObjSafe(const std::function<void(BaseObject*)>& visitor) const
@@ -1824,20 +1830,16 @@ void RegionManager::ForEachObjSafe(const std::function<void(BaseObject*)>& visit
 
 void RegionManager::StampCensusBoundaries()
 {
-    for (uintptr_t regionAddr = regionHeapStart; regionAddr < inactiveZone;) {
-        RegionInfo* region = RegionInfo::GetRegionInfoAt(regionAddr);
-        regionAddr = region->GetRegionEnd();
+    VisitPageOwners([&](RegionInfo* region) {
         if (region->IsValidRegion() && !region->IsGarbageRegion()) {
             region->StampCensusBoundary();
         }
-    }
+    });
 }
 
 void RegionManager::PromoteAllRegions()
 {
-    for (uintptr_t regionAddr = regionHeapStart; regionAddr < inactiveZone;) {
-        RegionInfo* region = RegionInfo::GetRegionInfoAt(regionAddr);
-        regionAddr = region->GetRegionEnd();
+    VisitPageOwners([&](RegionInfo* region) {
         if (region->IsValidRegion() && !region->IsGarbageRegion()) {
             size_t liveBytes = region->GetLiveByteCount();
             if (liveBytes > 0) {
@@ -1854,7 +1856,7 @@ void RegionManager::PromoteAllRegions()
                 region->SetYoungAge(0);
             }
         }
-    }
+    });
 }
 
 RegionInfo* RegionManager::TakeRegion(size_t num, RegionInfo::UnitRole type, bool expectPhysicalMem,
@@ -2480,21 +2482,19 @@ void RegionManager::DumpRegionInfo() const
     if (!ENABLE_LOG(ALLOC)) {
         return;
     }
-    for (uintptr_t regionAddr = regionHeapStart; regionAddr < inactiveZone;) {
-        RegionInfo* region = RegionInfo::GetRegionInfoAt(regionAddr);
-        regionAddr = region->GetRegionEnd();
+    VisitPageOwners([&](RegionInfo* region) {
         if (!region->IsFreeRegion()) {
             region->DumpRegionInfo(ALLOC);
         }
-    }
+    });
 }
 #endif
 
 void RegionManager::DumpRegionStats(const char* msg) const
 {
-    size_t totalSize = regionHeapEnd - regionHeapStart;
+    size_t totalSize = GetHeapCapacity();
     size_t totalUnits = totalSize / RegionInfo::UNIT_SIZE;
-    size_t activeSize = inactiveZone - regionHeapStart;
+    size_t activeSize = GetActiveUnitCount() * RegionInfo::UNIT_SIZE;
     size_t activeUnits = activeSize / RegionInfo::UNIT_SIZE;
 
     size_t tlRegions = tlRegionList.GetRegionCount();
@@ -2568,9 +2568,9 @@ void RegionManager::DumpRegionStats(const char* msg) const
     size_t recentLargeSize = recentlargeUnits * RegionInfo::UNIT_SIZE;
     size_t allocRecentLargeSize = recentLargeRegionList.GetAllocatedSize();
 
-    size_t allHeapSize = regionHeapEnd - regionHeapStart;
+    size_t allHeapSize = GetHeapCapacity();
     size_t allUnits = allHeapSize / RegionInfo::UNIT_SIZE;
-    size_t inactiveUnits = (regionHeapEnd - inactiveZone) / RegionInfo::UNIT_SIZE;
+    size_t inactiveUnits = GetInactiveUnitCount();
 
     size_t usedUnitCount = GetUsedUnitCount();
     size_t usedObjSize = GetAllocatedSize();

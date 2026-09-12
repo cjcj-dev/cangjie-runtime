@@ -7,6 +7,7 @@
 #include <algorithm>
 #include <cstdint>
 #include <limits>
+#include <thread>
 #include <vector>
 #if !defined(_WIN64)
 #include <sys/wait.h>
@@ -383,6 +384,307 @@ struct ProductWiringBackend final : MemMapBackend {
     }
     bool Unreserve(void* addr, size_t size) override { return munmap(addr, size) == 0; }
 };
+
+// Port of ZVirtualMemoryManagerTest::test_reserve_discontiguous_and_coalesce
+// and test_remove_from_low: the backend deterministically exposes two real
+// mappings separated by one inaccessible granule. RegionManager owns the
+// allocation and materialization; the test reads its returned RegionInfo.
+struct SegmentedProductBackend final : MemMapBackend {
+    uintptr_t arena{ 0 };
+    size_t reserved{ 0 };
+    size_t unreserved{ 0 };
+    std::vector<MemoryRange> commits;
+    std::vector<MemoryRange> releases;
+
+    SegmentedProductBackend()
+    {
+        void* mapping = mmap(nullptr, 5 * RegionInfo::UNIT_SIZE, PROT_NONE,
+                             MAP_PRIVATE | MAP_ANONYMOUS, -1, 0);
+        if (mapping != MAP_FAILED) {
+            arena = reinterpret_cast<uintptr_t>(mapping);
+        }
+    }
+
+    ~SegmentedProductBackend() override
+    {
+        if (arena != 0) {
+            (void)munmap(reinterpret_cast<void*>(arena), 5 * RegionInfo::UNIT_SIZE);
+        }
+    }
+
+    void* Reserve(void*, size_t size, unsigned int, const char*, bool) override
+    {
+        if (arena == 0 || size != 2 * RegionInfo::UNIT_SIZE || reserved == 2) {
+            return nullptr;
+        }
+        return reinterpret_cast<void*>(arena + reserved++ * 3 * RegionInfo::UNIT_SIZE);
+    }
+    bool Commit(void* addr, size_t size, int prot, uint32_t, bool) override
+    {
+        commits.push_back({ reinterpret_cast<uintptr_t>(addr), size });
+        return mprotect(addr, size, prot) == 0;
+    }
+    bool Protect(void* addr, size_t size, int prot) override { return mprotect(addr, size, prot) == 0; }
+    bool Release(void* addr, size_t size, uint32_t) override
+    {
+        releases.push_back({ reinterpret_cast<uintptr_t>(addr), size });
+        return madvise(addr, size, MADV_DONTNEED) == 0;
+    }
+    bool Unreserve(void*, size_t) override
+    {
+        ++unreserved;
+        return true; // the fake backend retains its arena until destruction
+    }
+};
+
+int ExerciseSegmentedProductAllocation()
+{
+    SegmentedProductBackend backend;
+    const size_t unit = RegionInfo::UNIT_SIZE;
+    MemMap* map = MemMap::TryMapMemory(4 * unit, 0, MemMap::DEFAULT_OPTIONS,
+                                       LargeBudget(), OneNode(), backend, 2 * unit);
+    if (map == nullptr) {
+        return 10;
+    }
+    const auto& ranges = map->GetReservationRegistry().Ranges();
+    const size_t metadataSize = RegionManager::GetMetadataSize(RegionInfo::IndexedUnitCount(ranges));
+    MemMap* metadata = MemMap::MapMemory(metadataSize, metadataSize);
+    int result = 0;
+    {
+        RegionManager manager;
+        HeapParam heapParam{};
+        heapParam.regionSize = 64;
+        heapParam.exemptionThreshold = 0.8;
+        manager.InitializeSegments(reinterpret_cast<uintptr_t>(metadata->GetBaseAddr()), ranges,
+                                   *map, heapParam, 0.5);
+        const uintptr_t hole = backend.arena + 2 * unit;
+        Heap::OnHeapCreated(backend.arena, { { ranges[0].start, ranges[0].End() },
+                                           { ranges[1].start, ranges[1].End() } });
+        Heap::OnHeapExtended(ranges[1].End());
+        if (Heap::IsHeapAddress(hole) || RegionInfo::TryGetRegionInfoAt(hole) != nullptr ||
+            !Heap::IsHeapAddress(ranges[1].start)) {
+            return 11;
+        }
+        const auto role = RegionInfo::UnitRole::SMALL_SIZED_UNITS;
+        if (manager.TakeRegion(3, role, false, false, false) != nullptr || !backend.commits.empty()) {
+            return 12;
+        }
+        RegionInfo* first = manager.TakeRegion(2, role, false, false, false);
+        RegionInfo* second = manager.TakeRegion(2, role, false, false, false);
+        if (first == nullptr || second == nullptr || first->GetRegionStart() != ranges[0].start ||
+            second->GetRegionStart() != ranges[1].start ||
+            RegionInfo::TryGetRegionInfoAt(second->GetRegionEnd() - 1) != second ||
+            RegionInfo::TryGetRegionInfoAt(hole) != nullptr) {
+            return 13;
+        }
+        if (manager.GetActiveUnitCount() != 4 || manager.GetInactiveUnitCount() != 0 ||
+            manager.GetHeapCapacity() != 4 * unit || backend.commits.size() != 2) {
+            return 14;
+        }
+        size_t pages = 0;
+        manager.VisitPageOwners([&](RegionInfo*) { ++pages; });
+        if (pages != 2 || map->ReleaseMemory(reinterpret_cast<void*>(hole), unit) != 0 ||
+            map->ReleaseMemory(reinterpret_cast<void*>(second->GetRegionStart()), 2 * unit) != 2 * unit ||
+            backend.releases.size() != 1 || backend.releases.front().start != ranges[1].start) {
+            return 15;
+        }
+        // Hand-back goes through the allocator's existing cache. A request
+        // larger than either segment must still fail after both are cached.
+        manager.ReturnPageMemory({ first->GetUnitIdx(), 2, 0, true });
+        manager.ReturnPageMemory({ second->GetUnitIdx(), 2, 0, true });
+        if (RegionInfo::TryGetRegionInfoAt(ranges[0].start) != nullptr ||
+            RegionInfo::TryGetRegionInfoAt(ranges[1].start) != nullptr) {
+            return 19;
+        }
+        if (manager.TakeRegion(3, role, false, false, false) != nullptr) {
+            return 16;
+        }
+        RegionInfo* reused = manager.TakeRegion(2, role, false, false, false);
+        if (reused == nullptr || !map->GetReservationRegistry().Contains(reused->GetRegionStart(), 2 * unit)) {
+            return 17;
+        }
+    }
+    MemMap::DestroyMemMap(metadata);
+    MemMap::DestroyMemMap(map);
+    if (backend.unreserved != 2) {
+        result = 18;
+    }
+    return result;
+}
+
+GC_TEST(MemMapContract, SegmentedRegionManagerAllocationLookupAndReturn)
+{
+    const pid_t child = fork();
+    GC_EXPECT_TRUE(child >= 0);
+    if (child == 0) {
+        _exit(ExerciseSegmentedProductAllocation());
+    }
+    int status = 0;
+    GC_EXPECT_EQ(waitpid(child, &status, 0), child);
+    GC_EXPECT_TRUE(WIFEXITED(status));
+    GC_EXPECT_EQ(WEXITSTATUS(status), 0);
+}
+
+enum class RetirementPath { RETURN, RECLAIM, RELEASE, MARK_QUARANTINE };
+
+// Lifecycle extension of ZVirtualMemoryManagerTest::test_remove_from_low:
+// zPageTable.cpp:101-113 and zArray.inline.hpp:210-246 require the last
+// iterator to consume deferred destruction. There is no standalone upstream
+// ZSafeDelete gtest; these cases exercise that protocol via RegionManager.
+int ExerciseSegmentedPageRetirement(RetirementPath path, bool concurrent)
+{
+    SegmentedProductBackend backend;
+    const size_t unit = RegionInfo::UNIT_SIZE;
+    MemMap* map = MemMap::TryMapMemory(4 * unit, 0, MemMap::DEFAULT_OPTIONS,
+                                     LargeBudget(), OneNode(), backend, 2 * unit);
+    if (map == nullptr) {
+        return 20;
+    }
+    const auto& ranges = map->GetReservationRegistry().Ranges();
+    const size_t metadataSize = RegionManager::GetMetadataSize(RegionInfo::IndexedUnitCount(ranges));
+    MemMap* metadata = MemMap::MapMemory(metadataSize, metadataSize);
+    int result = 0;
+    {
+        RegionManager manager;
+        HeapParam heapParam{};
+        heapParam.regionSize = 64;
+        heapParam.exemptionThreshold = 0.8;
+        manager.InitializeSegments(reinterpret_cast<uintptr_t>(metadata->GetBaseAddr()), ranges,
+                                   *map, heapParam, 0.5);
+        const auto role = RegionInfo::UnitRole::SMALL_SIZED_UNITS;
+        RegionInfo* first = manager.TakeRegion(2, role, false, false, false);
+        RegionInfo* second = manager.TakeRegion(2, role, false, false, false);
+        if (first == nullptr || second == nullptr) {
+            return 21;
+        }
+        const uintptr_t start = first->GetRegionStart();
+        const uintptr_t end = first->GetRegionEnd();
+        const auto life = first->GetRegionLifeId();
+        const auto index = first->GetUnitIdx();
+        const auto type = first->GetRegionType();
+        size_t retired = 0;
+        auto retire = [&] {
+            switch (path) {
+                case RetirementPath::RETURN:
+                    manager.ReturnPageMemory({ index, 2, 0, true });
+                    break;
+                case RetirementPath::RECLAIM:
+                    manager.ReclaimRegion(first);
+                    break;
+                case RetirementPath::RELEASE:
+                    if (manager.ReleaseRegion(first) != 2 * unit) {
+                        result = 22;
+                    }
+                    break;
+                case RetirementPath::MARK_QUARANTINE:
+                    manager.ReclaimRegionToMarkQuarantine(first);
+                    break;
+            }
+            ++retired;
+        };
+        auto inspectRetiredPage = [&] {
+            // Every granule is withdrawn, including the last byte of a
+            // multi-unit page. The descriptor still describes its old life.
+            for (uintptr_t address = start; address < end; address += unit) {
+                if (RegionInfo::TryGetRegionInfoAt(address) != nullptr ||
+                    RegionInfo::TryGetRegionInfoAt(address + unit - 1) != nullptr) {
+                    result = 23;
+                }
+            }
+            if (first->GetRegionEnd() != end || first->GetRegionLifeId() != life ||
+                first->GetRegionType() != type || first->IsFreeRegion()) {
+                result = 24;
+            }
+            if (manager.GetDirtyUnitCount() != 0 || manager.GetReleasedUnitCount() != 0 ||
+                !backend.releases.empty()) {
+                result = 25;
+            }
+            // Both reservations are owned; a retired page is not available
+            // for cache allocation while either iterator can still read it.
+            if (manager.TakeRegion(1, role, false, false, false) != nullptr) {
+                result = 26;
+            }
+            if (RegionInfo::TryGetRegionInfoAt(second->GetRegionStart()) != second ||
+                RegionInfo::TryGetRegionInfoAt(ranges[0].End()) != nullptr) {
+                result = 27;
+            }
+        };
+        manager.VisitPageOwners([&](RegionInfo* outer) {
+            if (outer != first) {
+                return;
+            }
+            manager.VisitPageOwners([&](RegionInfo* inner) {
+                if (inner != first) {
+                    return;
+                }
+                if (concurrent) {
+                    std::thread reclaimer(retire);
+                    reclaimer.join();
+                } else {
+                    retire();
+                }
+                inspectRetiredPage();
+            });
+            // Ending the nested iterator must not drain the queue while
+            // this outer callback still holds the original descriptor.
+            inspectRetiredPage();
+        });
+        if (retired != 1 || !first->IsFreeRegion() || first->GetRegionLifeId() == life) {
+            result = 28;
+        }
+        if (path == RetirementPath::MARK_QUARANTINE) {
+            manager.ReleaseMarkQuarantine();
+        }
+        if (path == RetirementPath::RELEASE) {
+            if (manager.GetReleasedUnitCount() != 2 || backend.releases.size() != 1) {
+                result = 29;
+            }
+        } else if (manager.GetDirtyUnitCount() != 2 || !backend.releases.empty()) {
+            result = 30;
+        }
+        RegionInfo* reused = manager.TakeRegion(2, role, false, false, false);
+        if (reused == nullptr || reused->GetRegionStart() != start ||
+            RegionInfo::TryGetRegionInfoAt(end - 1) != reused) {
+            result = 31;
+        }
+    }
+    MemMap::DestroyMemMap(metadata);
+    MemMap::DestroyMemMap(map);
+    return result;
+}
+
+void CheckPageRetirement(RetirementPath path, bool concurrent)
+{
+    const pid_t child = fork();
+    GC_EXPECT_TRUE(child >= 0);
+    if (child == 0) {
+        _exit(ExerciseSegmentedPageRetirement(path, concurrent));
+    }
+    int status = 0;
+    GC_EXPECT_EQ(waitpid(child, &status, 0), child);
+    GC_EXPECT_TRUE(WIFEXITED(status));
+    GC_EXPECT_EQ(WEXITSTATUS(status), 0);
+}
+
+GC_TEST(MemMapContract, PageTableReturnWaitsForOutermostIterator)
+{
+    CheckPageRetirement(RetirementPath::RETURN, false);
+}
+
+GC_TEST(MemMapContract, PageTableConcurrentReclaimPreservesDescriptor)
+{
+    CheckPageRetirement(RetirementPath::RECLAIM, true);
+}
+
+GC_TEST(MemMapContract, PageTableReleaseWaitsForIterator)
+{
+    CheckPageRetirement(RetirementPath::RELEASE, true);
+}
+
+GC_TEST(MemMapContract, PageTableMarkQuarantineWaitsForIterator)
+{
+    CheckPageRetirement(RetirementPath::MARK_QUARANTINE, false);
+}
 
 int ExerciseProductOwnerWiring()
 {
