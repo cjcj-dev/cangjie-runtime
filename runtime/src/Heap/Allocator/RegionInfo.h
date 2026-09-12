@@ -2386,21 +2386,9 @@ public:
         // FreeCompactRouteTable publishes NORMAL before detaching a compact table. An
         // already-admitted reader that loses the detach race must soft-miss rather than
         // reinterpret a compact destination as prefix-sum geometry.
-        RouteState routeState = GetRouteState();
-        if (routeState != RouteState::ROUTED && routeState != RouteState::FORWARDED) {
-            return nullptr;
-        }
-        uint64_t preLiveBytes = GetPreLiveBytesInGhostRegion(fromAddress);
-        if (!IsRouteInfoLifeCurrent()) {
-            LOG(RTLOG_FATAL,
-                "[LIFECLOCK][MUTATOR_STALE_ROUTE_INFO] region=%p current=%llu stamp=%llu",
-                this, static_cast<unsigned long long>(GetRegionLifeId()),
-                static_cast<unsigned long long>(metadata.routeInfo.GetLifeId()));
-        }
-        MAddress toAddr = metadata.routeInfo.GetRoute(preLiveBytes);
-        // routedom: observe mark-domain at geometric GetRoute call site (default off).
-
-        return from_region_addr(toAddr);
+        // zRelocate.cpp:361/:627 allocate by object size then insert; dest is the
+        // table/compact record, not live-bit prefix-sum (zLiveMap.inline.hpp:117-119).
+        return nullptr;
     }
 
     void FreeCompactRouteTable()
