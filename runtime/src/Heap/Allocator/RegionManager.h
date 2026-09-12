@@ -1061,8 +1061,7 @@ private:
              region = region->GetNextRegion()) {
             if (region->IsGhostFromRegion()) {
                 bytes += region->GetGhostRegionSize();
-            } else if (candidate == nullptr && region->GetRawPointerObjectCount() == 0 &&
-                       !RouteDestHold::HoldsBack(region, RouteDestHold::Site::TAKE_GARBAGE)) {
+            } else if (candidate == nullptr && region->GetRawPointerObjectCount() == 0) {
                 // routedest: defence in depth. A held region should never have reached
                 // garbageRegionList — the two Assemble gates and the two young gates refuse
                 // it first — so a non-zero count at this site means one of those was
@@ -1099,8 +1098,7 @@ private:
                 CHECK(!region->IsGhostFromRegion());
                 // routedest: refuse a held region here too, so it is neither quarantined nor
                 // reclaimed. Same defence-in-depth role as TakeReclaimableGarbageRegion.
-                if (region->GetRawPointerObjectCount() > 0 ||
-                    RouteDestHold::HoldsBack(region, RouteDestHold::Site::TAKE_AFTER_DISPEL)) {
+                if (region->GetRawPointerObjectCount() > 0) {
                     return false;
                 }
                 RemoveRegionLocked(&garbageRegionList, region);

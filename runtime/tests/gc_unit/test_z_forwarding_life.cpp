@@ -11,7 +11,7 @@
 #include <chrono>
 #include <thread>
 
-#include "Heap/Allocator/RouteDestHold.h"
+
 #include "Heap/Collector/ZForwardingLife.h"
 #include "Heap/Verify/FromPageDetachCheck.h"
 #include "gc_heap_fixture.hpp"
@@ -112,40 +112,6 @@ GC_TEST(ZForwardingLife, ClaimInvertsAndLateRetainRefusesImmediately)
     ZForwardingLife::release_page(life.ref); // -1 → 0
     GC_EXPECT_EQ(life.ref.load(), 0);
     GC_EXPECT_FALSE(ZForwardingLife::retain_page(life.ref, life.done));
-}
-
-GC_TEST(ZForwardingLife, RouteDestHoldDecisionDistribution)
-{
-    GcHeapFixture fx;
-    constexpr RouteDestHold::Site sites[] = {
-        RouteDestHold::Site::ASSEMBLE_RECENT_FULL,
-        RouteDestHold::Site::ASSEMBLE_UNMOVABLE,
-        RouteDestHold::Site::YOUNG_UNMOVABLE,
-        RouteDestHold::Site::YOUNG_RECENT_FULL,
-        RouteDestHold::Site::TAKE_GARBAGE,
-        RouteDestHold::Site::TAKE_AFTER_DISPEL,
-    };
-    size_t accepted = 0;
-    size_t heldBack = 0;
-    auto account = [&](const RegionInfo* region) {
-        for (RouteDestHold::Site site : sites) {
-            if (RouteDestHold::HoldsBack(region, site)) {
-                ++heldBack;
-            } else {
-                ++accepted;
-            }
-        }
-    };
-
-    account(nullptr);
-    fx.region0->SetRouteDestHold(0);
-    account(fx.region0);
-    fx.region0->SetRouteDestHold(1);
-    account(fx.region0);
-    fx.region0->SetRouteDestHold(0);
-
-    GC_EXPECT_EQ(accepted, 12u);
-    GC_EXPECT_EQ(heldBack, 6u);
 }
 
 GC_TEST(ZForwardingLife, ClaimedRetainRefusesImmediatelyAndResetIdle)

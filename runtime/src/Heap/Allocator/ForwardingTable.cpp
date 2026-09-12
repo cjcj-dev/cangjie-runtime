@@ -135,8 +135,6 @@ void StampTableCoverage(ZForwarding* tab, RegionInfo* region)
 #if defined(MRT_TESTABLE_INTERNALS)
 std::atomic<ForwardingTable::LookupRetainHook> g_lookupRetainHook{ nullptr };
 std::atomic<void*> g_lookupRetainHookContext{ nullptr };
-std::atomic<ForwardingTable::ReceiptLifeRegisterHook> g_receiptLifeRegisterHook{ nullptr };
-std::atomic<void*> g_receiptLifeRegisterHookContext{ nullptr };
 #endif
 
 bool PublicationClosedAt(MAddress addr)
@@ -907,15 +905,7 @@ ZForwarding::Receipt ForwardingTable::InstallMapping(
     CHECK_DETAIL(tab != nullptr && !tab->is_provisional() && tab->covers(from),
                  "forwarding publication responsibility missing from=%#zx to=%#zx tab=%p",
                  static_cast<size_t>(from), static_cast<size_t>(to), tab);
-    const ZForwarding::Receipt receipt = tab->install_receipt_with_life(from, to, []() {
-#if defined(MRT_TESTABLE_INTERNALS)
-        ForwardingTable::ReceiptLifeRegisterHook hook =
-            g_receiptLifeRegisterHook.load(std::memory_order_acquire);
-        if (hook != nullptr) {
-            hook(g_receiptLifeRegisterHookContext.load(std::memory_order_acquire));
-        }
-#endif
-    });
+    const ZForwarding::Receipt receipt = tab->install_receipt_with_life(from, to);
     if (receipt.address != 0) {
         // Compact/kept/in-place/promote/unmovable/ForwardRegion all publish here.
         // ReclaimRetired must not unlink a table that still has queryable receipts
@@ -1470,11 +1460,6 @@ void ForwardingTable::ForcePublicationClosedForTest(MAddress address)
     SealPublicationLocked(active->start(), active->size());
 }
 
-void ForwardingTable::SetReceiptLifeRegisterHook(ReceiptLifeRegisterHook hook, void* context)
-{
-    g_receiptLifeRegisterHookContext.store(context, std::memory_order_release);
-    g_receiptLifeRegisterHook.store(hook, std::memory_order_release);
-}
 #endif
 
 void ForwardingTable::NoteCompare(MAddress addr, bool legacy)

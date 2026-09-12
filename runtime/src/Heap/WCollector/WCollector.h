@@ -28,9 +28,9 @@
 #include "Collector/CopyCollector.h"
 #include "Heap/Collector/MarkEngine.h"
 #include "Heap/Collector/RemsetScanStats.h"
-#include "Heap/Verify/MutatorRelocate.h"
 #include "Mutator/MutatorManager.h"
 namespace MapleRuntime {
+inline thread_local int g_relocateObjectScope = 0;
 class MarkLiveCache;
 class ScopedStopTheWorld;
 
@@ -509,7 +509,7 @@ public:
         // into ForwardObjectImpl; re-entering it here would recursively retain
         // the same page until the token is refused and lose the first-visitor
         // publication opportunity (zBarrier.inline.hpp:294-343).
-        BaseObject* self = MutatorRelocate::InScope() ? nullptr : TryMutatorRelocate(obj, forwarding);
+        BaseObject* self = g_relocateObjectScope != 0 ? nullptr : TryMutatorRelocate(obj, forwarding);
         if (self != nullptr) {
             return self;
         }
@@ -518,9 +518,6 @@ public:
         }
         // ③ find-miss: wait for the page task then find again
         // (zRelocate.cpp:401-415 relocate_object / forward_object).
-        if (MutatorRelocate::StatsOn()) {
-            MutatorRelocate::NoteWaitEnter();
-        }
         BaseObject* resolved =
             WaitForPageForwarding(obj, ForwardingTable::RetainPageOwner(forwarding));
         if (resolved != nullptr) {

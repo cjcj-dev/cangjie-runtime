@@ -45,11 +45,9 @@
 #include "Heap/Verify/FillerZeroDiag.h"
 #include "Heap/Verify/TagReuseProbe.h"
 #include "Heap/Verify/SurvNodeDiag.h"
-#include "Heap/Allocator/RouteDestHold.h"
 #include "Heap/Verify/FromPageDetachCheck.h"
 #include "Heap/Allocator/ForwardingTable.h"
 #include "Heap/Allocator/MemMap.h"
-#include "Heap/Verify/MutatorRelocate.h"
 #include "Heap/Verify/M0Correlation.h"
 #include "Base/TimeUtils.h"
 #include "securec.h"
@@ -2683,7 +2681,7 @@ public:
         // portmutreloc: hold the forwarding drain across the whole body. It is held
         // for the whole body so that FreeCompactRouteTable below -- ZGC's free_page -- cannot
         // run while a retained reader is inside the route lookup or a mutator copy.
-        InPlaceClaimScope drain(this, MutatorRelocate::Retire::DISPEL_GHOST);
+        InPlaceClaimScope drain(this);
         // PORT_ZFORWARDING step 1: the retirement edge.  ZGC's equivalent is refcount-driven
         // (ZForwarding::detach_page waits for _ref_count == 0); recording the removal here first
         // lets step 3 change *when* it happens without changing *where*.
@@ -3038,7 +3036,7 @@ public:
             // The non-ghost expiry arm is still a forwarding-life boundary.
             // Seal before resetting the carrier words so an admitted copier
             // cannot be relabelled as belonging to the next life.
-            InPlaceClaimScope drain(this, MutatorRelocate::Retire::DISPEL_GHOST);
+            InPlaceClaimScope drain(this);
         }
         ForwardingTable::ClearPageOwner(this);
         ClearForwardingFaceReset();
@@ -3074,7 +3072,7 @@ public:
     // zForwarding.cpp:110-181 in_place_relocation_claim_page + detach_page.
     class InPlaceClaimScope {
     public:
-        MRT_EXPORT InPlaceClaimScope(RegionInfo* region, MutatorRelocate::Retire site);
+        MRT_EXPORT InPlaceClaimScope(RegionInfo* region);
 
         ~InPlaceClaimScope()
         {

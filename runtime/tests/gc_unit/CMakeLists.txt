@@ -44,7 +44,7 @@ set(GC_UNIT_SOURCES
     test_gc_trigger.cpp
     test_gc_request_sync.cpp
     test_allocation_stall_queue.cpp
-    test_mutator_relocate.cpp
+
     test_uncommitter.cpp
     test_relocation_request_queue.cpp
     test_gc_thread_pool.cpp

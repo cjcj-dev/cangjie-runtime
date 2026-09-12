@@ -937,7 +937,6 @@ size_t FreeRegionManager::ReleaseDetachQuarantineAfterMajor()
         // ordinary ClearRouteDestHoldFlags list walk cannot see them. This
         // post-PrepareForwardTable major closure retired the only route
         // generation that could have stamped the withheld address.
-        region->SetRouteDestHold(0);
         if (!FromPageDetach::FromPageDetachCheck(region, FromPageDetach::Site::MAJOR_RECHECK,
                                                  FromPageDetach::Action::MAJOR_CLOSE)) {
             ++entry.rechecks;
@@ -1123,7 +1122,7 @@ void RegionManager::ReclaimRegion(RegionInfo* region)
     // must not re-scan O(N) under remset mutex.
 
     {
-        RegionInfo::InPlaceClaimScope drain(region, MutatorRelocate::Retire::RECLAIM_DIRTY);
+        RegionInfo::InPlaceClaimScope drain(region);
     }
     // gcvroot Z2: poison reclaimed payload so use-after-free roots are identifiable (MRT_GCV2_ZAP_RECLAIM=1).
     HeapZap::ZapReclaimedRegion(region->GetRegionStart(), region->GetRegionEnd());
@@ -1225,7 +1224,7 @@ void RegionManager::ReclaimRegionToMarkQuarantine(RegionInfo* region)
     DLOG(REGION, "mark-quarantine region %p @[%#zx+%zu, %#zx) type %u", region, region->GetRegionStart(),
          region->GetRegionAllocatedSize(), region->GetRegionEnd(), region->GetRegionType());
     {
-        RegionInfo::InPlaceClaimScope drain(region, MutatorRelocate::Retire::RECLAIM_MARK_QUARANTINE);
+        RegionInfo::InPlaceClaimScope drain(region);
     }
     HeapZap::ZapReclaimedRegion(region->GetRegionStart(), region->GetRegionEnd());
     region->InitFreeUnits();
@@ -1257,7 +1256,7 @@ size_t RegionManager::ReleaseRegion(RegionInfo* region)
         region->GetRegionAllocatedSize(), region->GetRegionEnd(), region->GetRegionType());
 
     {
-        RegionInfo::InPlaceClaimScope drain(region, MutatorRelocate::Retire::RELEASE_REGION);
+        RegionInfo::InPlaceClaimScope drain(region);
     }
     region->InitFreeUnits();
     {
@@ -1343,8 +1342,7 @@ void RegionManager::AssembleSmallGarbageCandidates()
             // set. Unlike notRelocatableThisCycle this is not about liveness — the region may
             // well be dead — it is about address ownership: reclaiming it hands its units back
             // for ClearUnits while the route keeps answering the old geometry.
-            if (!region->IsNotRelocatableThisCycle() &&
-                !RouteDestHold::HoldsBack(region, RouteDestHold::Site::ASSEMBLE_RECENT_FULL)) {
+            if (!region->IsNotRelocatableThisCycle()) {
                 const size_t units = region->GetUnitCount();
                 recentFullRegionList.DeleteRegion(region);
                 RecentFullAccounting::Dequeue(1, units);
@@ -1357,8 +1355,7 @@ void RegionManager::AssembleSmallGarbageCandidates()
         RegionInfo* region = unmovableFromRegionList.GetHeadRegion();
         while (region != nullptr) {
             RegionInfo* next = region->GetNextRegion();
-            if (!region->IsNotRelocatableThisCycle() &&
-                !RouteDestHold::HoldsBack(region, RouteDestHold::Site::ASSEMBLE_UNMOVABLE)) {
+            if (!region->IsNotRelocatableThisCycle()) {
                 unmovableFromRegionList.DeleteRegion(region);
                 fromRegionList.PrependRegion(region, RegionInfo::RegionType::FROM_REGION);
             }
@@ -1410,27 +1407,7 @@ void RegionManager::ClearNotRelocatableThisCycleFlags()
 // Walks the same eleven lists as ClearNotRelocatableThisCycleFlags, and reports the gauge
 // before clearing: holds that leak never get dropped and show up as monotonic growth in
 // held_regions, which is the only way to tell that failure apart from the opposite one.
-void RegionManager::ClearRouteDestHoldFlags()
-{
-    auto clearList = [](RegionList& list) {
-        list.VisitAllRegions([](RegionInfo* region) {
-            if (region->IsRouteDestHeld()) {
-                region->SetRouteDestHold(0);
-            }
-        });
-    };
-    clearList(tlRegionList);
-    clearList(recentFullRegionList);
-    clearList(unmovableFromRegionList);
-    clearList(fromRegionList);
-    clearList(recentPinnedRegionList);
-    clearList(oldPinnedRegionList);
-    clearList(rawPointerPinnedRegionList);
-    clearList(recentLargeRegionList);
-    clearList(oldLargeRegionList);
-    clearList(fullTraceRegions);
-    clearList(largeTraceRegions);
-}
+void RegionManager::ClearRouteDestHoldFlags() {}
 
 void RegionManager::AssemblePinnedGarbageCandidates(bool collectAll)
 {
@@ -1483,7 +1460,7 @@ YoungCollectionStats RegionManager::PrepareYoungGarbageCandidates(const std::fun
         // recorded at RegionManager.cpp:1957 is exactly such a region — so before this gate a
         // minor collected a live route's destination while honouring nothing.
         const uint64_t holdStart = TimeUtil::NanoSeconds();
-        const bool held = RouteDestHold::HoldsBack(region, RouteDestHold::Site::YOUNG_UNMOVABLE);
+        const bool held = false;
         stats.holdCheckNs += TimeUtil::NanoSeconds() - holdStart;
         if (held) {
             ++stats.unmovableHeld;
@@ -1524,7 +1501,7 @@ YoungCollectionStats RegionManager::PrepareYoungGarbageCandidates(const std::fun
         ++stats.recentFullYoung;
         // routedest: same exclusion as the unmovable young loop above.
         const uint64_t holdStart = TimeUtil::NanoSeconds();
-        const bool held = RouteDestHold::HoldsBack(region, RouteDestHold::Site::YOUNG_RECENT_FULL);
+        const bool held = false;
         stats.holdCheckNs += TimeUtil::NanoSeconds() - holdStart;
         if (held) {
             ++stats.recentFullHeld;
@@ -2088,7 +2065,7 @@ RegionInfo* RegionManager::TakeRegion(size_t num, RegionInfo::UnitRole type, boo
                 // Scoped tight: it ends before InitRegion, which re-initialises the metadata
                 // the lock lives in. ClearUnits is still conditional because segmented
                 // reference arrays deliberately clear the payload at yield boundaries.
-                RegionInfo::InPlaceClaimScope drain(head, MutatorRelocate::Retire::TAKE_GARBAGE);
+                RegionInfo::InPlaceClaimScope drain(head);
                 if (clearPayload) {
                     RegionInfo::ClearUnits(idx, num, FillerZeroDiag::Site::TAKE_GARBAGE);
                 }
@@ -3137,7 +3114,6 @@ bool RegionManager::RouteOrCompactRegionImpl(RegionInfo* region)
         // Ordering matters against reclaim threads, not against route readers: readers are
         // already excluded by the ROUTING spin (RegionManager.h:664-667), but the finalizer
         // reclaim path is not stopped by anything here.
-        toRegion1->SetRouteDestHold(1);
         DLOG(FORWARD, "route region %p@[%#zx+%zu, %#zx) => %p@[%#zx~%#zx, %#zx)",
             region, region->GetRegionStart(), fromBytes, region->GetRegionEnd(), toRegion1,
             toRegion1Start, toRegion1Start + fromBytes, toRegion1->GetRegionEnd());
@@ -3154,7 +3130,6 @@ bool RegionManager::RouteOrCompactRegionImpl(RegionInfo* region)
         // that thread's allocations afterwards, and which is young — so before this hold the
         // minor collection set took it while honouring nothing (PrepareYoungGarbageCandidates
         // deliberately ignores notRelocatableThisCycle).
-        toRegion1->SetRouteDestHold(1);
         DLOG(FORWARD, "route region %p@[%#zx+%zu, %#zx) => %p@[%#zx, %#zx~%#zx, %#zx)",
             region, region->GetRegionStart(), fromBytes, region->GetRegionEnd(), toRegion1,
             toRegion1->GetRegionStart(), toRegion1Addr, toRegion1Addr + fromBytes, toRegion1->GetRegionEnd());
@@ -3198,7 +3173,6 @@ bool RegionManager::RouteOrCompactRegionImpl(RegionInfo* region)
             return false;
         }
         // Publish the split plan before Compact so leftover objects land at GetRoute dests.
-        toRegion1->SetRouteDestHold(1);
         CompactRegion(region, toRegion1);
         toRegion2 = region; // region is partially compacted into itself.
         result = false;
@@ -3210,9 +3184,7 @@ bool RegionManager::RouteOrCompactRegionImpl(RegionInfo* region)
     // for this same holder and toRegion1 is stamped twice. The stamp is a byte store, so the
     // repeat is a no-op — this is exactly the shape that would be a double-increment bug if
     // the hold were ever turned into a reference count.
-    toRegion1->SetRouteDestHold(1);
     if (toRegion2 != region) {
-        toRegion2->SetRouteDestHold(1);
     }
     DLOG(FORWARD, "route region %p@[%#zx+%zu, %#zx) => %p@[%#zx, %#zx~%#zx, %#zx) & %p@[%#zx~%#zx, %#zx)", region,
         region->GetRegionStart(), fromBytes, region->GetRegionEnd(), toRegion1, toRegion1->GetRegionStart(),

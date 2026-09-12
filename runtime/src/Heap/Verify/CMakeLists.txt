@@ -22,7 +22,6 @@ set(SRC_LIST
     "StackExposureOracle.cpp"
     "DiagGate.cpp"
     "VerifyPhase.cpp"
-    "MutatorRelocate.cpp"
     "GarbRegionDiag.cpp"
     "HealPairDiag.cpp"
     "ZgcSelfHealDiag.cpp"
