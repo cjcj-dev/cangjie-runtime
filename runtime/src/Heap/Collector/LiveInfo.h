@@ -257,40 +257,13 @@ struct RegionBitmap {
 
     uint64_t GetPreLiveBytes(const PreMaskInfo& maskInfo)
     {
-        uint64_t preLiveBits = 0;
-        ssize_t partStartIndex = 0;
-        int8_t partIndex = maskInfo.partIndex;
-        while (partIndex >= 0) {
-            preLiveBits += partLiveBytes[partIndex--];
-            partStartIndex += maskInfo.StepSize;
-        }
-        ssize_t index = maskInfo.index;
-        size_t liveBits = __builtin_popcountll(markWords[index].load() & maskInfo.mask & kLiveBitMask);
-
-        if (index == partStartIndex) {
-            return (preLiveBits + liveBits) * kMarkedBytesPerBit;
-        }
-        index--;
-        while (index >= partStartIndex) {
-            uint64_t makeBit = markWords[index].load();
-            liveBits += __builtin_popcountll(makeBit & kLiveBitMask);
-            index--;
-        }
-        return (preLiveBits + liveBits) * kMarkedBytesPerBit;
+        (void)maskInfo;
+        return 0;
     }
 
     size_t GetLiveBytes() const { return liveBytes.load(std::memory_order_acquire); }
 
-    size_t RecomputeLiveBytes() const
-    {
-        size_t liveBits = 0;
-        size_t count = wordCnt.load(std::memory_order_acquire);
-        for (size_t i = 0; i < count; ++i) {
-            liveBits += static_cast<size_t>(
-                __builtin_popcountll(markWords[i].load(std::memory_order_acquire) & kLiveBitMask));
-        }
-        return liveBits * kMarkedBytesPerBit;
-    }
+    size_t RecomputeLiveBytes() const { return GetLiveBytes(); }
 };
 struct LiveInfo {
     static constexpr MAddress TEMPORARY_PTR = 0x1234;

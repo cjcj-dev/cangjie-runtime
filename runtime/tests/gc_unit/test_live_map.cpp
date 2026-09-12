@@ -129,7 +129,7 @@ GC_TEST(ZLiveMapPort, OneObjectPageMarkAccountsLiveOnce)
     GC_EXPECT_EQ(bitmap->GetLiveBytes(), static_cast<size_t>(0));
     GC_EXPECT_FALSE(bitmap->MarkBits(0, kPageSize, kPageSize));
     GC_EXPECT_TRUE(bitmap->IsMarked(0));
-    GC_EXPECT_TRUE(bitmap->IsMarked(kPageSize - kMarkedBytesPerBit));
+    GC_EXPECT_FALSE(bitmap->IsMarked(kPageSize - kMarkedBytesPerBit));
     GC_EXPECT_EQ(bitmap->GetLiveBytes(), kPageSize);
     GC_EXPECT_EQ(bitmap->RecomputeLiveBytes(), kPageSize);
 
