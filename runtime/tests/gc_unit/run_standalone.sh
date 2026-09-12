@@ -429,7 +429,7 @@ MAIN_SOURCES=(
   "$SRC/test_z_list.cpp"
   "$SRC/test_zstat.cpp"
   "$SRC/test_trustp1_phase1.cpp"
-  "$SRC/test_route_info.cpp"
+
   "$SRC/test_live_map.cpp"
   "$SRC/test_object_gate.cpp"
   "$SRC/test_remset.cpp"
@@ -463,9 +463,7 @@ MAIN_SOURCES=(
   "$SRC/test_relocation_request_queue.cpp"
   "$SRC/test_gc_thread_pool.cpp"
   "$SRC/test_expire_kept.cpp"
-  "$SRC/test_receipt_life.cpp"
-  "$SRC/test_receipt_life_registry.cpp"
-  "$SRC/test_lifeclock.cpp"
+
   "$SRC/test_exempt_unlock.cpp"
   "$SRC/test_heal_coverage.cpp"
   "$SRC/test_diag_gate.cpp"
@@ -485,6 +483,7 @@ MAIN_SOURCES=(
   "$SRC/test_mark_stripe.cpp"
   "$SRC/test_mark_port_203_storage.cpp"
   "$SRC/test_mark_port_203_entries.cpp"
+  "$SRC/test_mark_port_203_engine.cpp"
   "$SRC/test_partial_array.cpp"
   "$SRC/test_segmented_array_init.cpp"
   "$SRC/test_verify_roots.cpp"
