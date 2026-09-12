@@ -8,6 +8,7 @@
 
 #include <algorithm>
 #include <atomic>
+#include <functional>
 #include <cstddef>
 #include <cstdint>
 #include <cstdio>
@@ -767,6 +768,29 @@ ZForwarding* ForwardingTable::GetCovering(MAddress addr)
         return tab;
     }
     return scan(g_retiredPrev);
+}
+
+void ForwardingTable::VisitAll(const std::function<void(ZForwarding*)>& visitor)
+{
+    if (!Ready() || visitor == nullptr) {
+        return;
+    }
+    std::unordered_set<ZForwarding*> seen;
+    auto emit = [&](ZForwarding* tab) {
+        if (tab == nullptr || !seen.insert(tab).second) {
+            return;
+        }
+        visitor(tab);
+    };
+    g_entries.visit_unique(emit);
+    g_membership.visit_unique(emit);
+    std::lock_guard<std::mutex> lock(g_retiredLock);
+    for (ZForwarding* tab : g_retired) {
+        emit(tab);
+    }
+    for (ZForwarding* tab : g_retiredPrev) {
+        emit(tab);
+    }
 }
 
 bool ForwardingTable::PublishFromPageView(RegionInfo* region, LiveInfo* liveInfo, uint64_t epoch,
