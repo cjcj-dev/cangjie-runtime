@@ -562,6 +562,7 @@ protected:
     void DoEnumeration(WorkStack& workStack, WorkStack& foreignRootsSet);
     void DoTracing(WorkStack& workStack, WorkStack& foreignRootsSet);
     bool FinishOldMark(WorkStack& workStack);
+    void ProcessOldNonStrongReferences(WorkStack& workStack);
 
     // concurrent marking.
     void TracingImpl(WorkStack& workStack, WorkStack& foreignRootsSet);

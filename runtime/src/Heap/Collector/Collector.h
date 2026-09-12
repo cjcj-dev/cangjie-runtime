@@ -38,6 +38,9 @@ enum GCPhase : uint8_t {
     GC_PHASE_POST_TRACE = 12,
     GC_PHASE_PREFORWARD = 13,
     GC_PHASE_FORWARD = 14,
+    // Generation-local mark end, before non-strong reference processing.
+    // ZGenerationOld::mark_end (zGeneration.cpp:1271).
+    GC_PHASE_MARK_COMPLETE = 15,
 };
 
 // Per-generation execution state. The snapshot lock publishes cycle identity

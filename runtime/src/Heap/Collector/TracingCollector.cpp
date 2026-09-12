@@ -888,20 +888,9 @@ void TracingCollector::DoTracing(WorkStack& workStack, WorkStack& foreignRootsSe
         ConcurrentReMark(workStack);
     }
 
-    {
-        MRT_PHASE_TIMER("identify useless extern ref");
-        FindUselessExternObjects();
-    }
-
-    {
-        // ZGC breaks termination on resurrection (zMarkTerminate.inline.hpp:125-139)
-        // and follows the resurrected closure before accepting mark end. Our
-        // finalizer discovery is controller-owned (no shared stripe): it follows
-        // that closure to empty here, after strict SATB termination and before
-        // the collector can leave the marking phase.
-        MRT_PHASE_TIMER("concurrent resurrection");
-        DoResurrection(workStack);
-    }
+    // ZGenerationOld::collect processes non-strong references only after the
+    // successful mark-end pause has closed ordinary mark publication.
+    ProcessOldNonStrongReferences(workStack);
 
 #if defined(MRT_TESTABLE_INTERNALS)
     // All major tasks and finalizer work have flushed before page selection.
@@ -909,6 +898,22 @@ void TracingCollector::DoTracing(WorkStack& workStack, WorkStack& foreignRootsSe
     ObserveMarkClosureForTest(nullptr);
 #endif
     VLOG(REPORT, "mark %zu objects", markedObjectCount.load(std::memory_order_relaxed));
+}
+
+void TracingCollector::ProcessOldNonStrongReferences(WorkStack& workStack)
+{
+    CHECK_DETAIL(oldCycle.Phase() == GC_PHASE_MARK_COMPLETE,
+                 "non-strong references require completed old marking");
+    {
+        MRT_PHASE_TIMER("identify useless extern ref");
+        FindUselessExternObjects();
+    }
+    {
+        // This explicit finalizable closure may mark after ordinary mark work
+        // is closed, like ZGenerationOld::process_non_strong_references.
+        MRT_PHASE_TIMER("concurrent resurrection");
+        DoResurrection(workStack);
+    }
 }
 
 bool TracingCollector::FinishOldMark(WorkStack& workStack)
@@ -936,6 +941,13 @@ bool TracingCollector::FinishOldMark(WorkStack& workStack)
             const size_t after = stripes.Population();
             NoteMarkTerminateFlushed(after >= before ? after - before : 0);
             terminated = workStack.empty() && stripes.IsEmpty();
+            if (terminated) {
+                // Publish while mutators are still stopped. Ordinary mark_if_active
+                // producers must close before non-strong references are processed.
+                // Keep the existing barrier installed until POST_TRACE; marking
+                // admission is owned by this generation, not the barrier variant.
+                oldCycle.PublishPhase(GC_PHASE_MARK_COMPLETE);
+            }
         }
         if (terminated) {
             ReportMarkTerminateContinue();
