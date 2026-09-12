@@ -915,15 +915,7 @@ ZForwarding::Receipt ForwardingTable::InstallMapping(
     CHECK_DETAIL(tab != nullptr && !tab->is_provisional() && tab->covers(from),
                  "forwarding publication responsibility missing from=%#zx to=%#zx tab=%p",
                  static_cast<size_t>(from), static_cast<size_t>(to), tab);
-    const ZForwarding::Receipt receipt = tab->install_receipt_with_life(from, to, []() {
-#if defined(MRT_TESTABLE_INTERNALS)
-        ForwardingTable::ReceiptLifeRegisterHook hook =
-            g_receiptLifeRegisterHook.load(std::memory_order_acquire);
-        if (hook != nullptr) {
-            hook(g_receiptLifeRegisterHookContext.load(std::memory_order_acquire));
-        }
-#endif
-    });
+    const ZForwarding::Receipt receipt = tab->insert_receipt(from, to);
     if (receipt.address != 0) {
         // Compact/kept/in-place/promote/unmovable/ForwardRegion all publish here.
         // ReclaimRetired must not unlink a table that still has queryable receipts
@@ -1020,31 +1012,8 @@ ZForwarding::Receipt::Status ZForwarding::register_to_life_locked(MAddress to, u
 }
 
 ZForwarding::Receipt ZForwarding::install_receipt_with_life(
-    MAddress from, MAddress to, const std::function<void()>& beforeRegister)
+    MAddress from, MAddress to, const std::function<void()>&)
 {
-    const MAddress existingBeforeLock = find(from);
-    if (existingBeforeLock != 0) {
-        return Receipt{ existingBeforeLock, false, Receipt::Status::EXISTING };
-    }
-
-    // The snapshot is intentionally taken before the deterministic test hook.
-    // Correct code reloads it under _receiptInstallLock; the negative control
-    // restores the old plain-count use and makes both rendezvoused installers
-    // select the same slot.
-    const uint8_t optimisticCount = _to_life_n.load(std::memory_order_relaxed);
-    if (beforeRegister) {
-        beforeRegister();
-    }
-
-    std::lock_guard<std::mutex> lock(_receiptInstallLock);
-    const MAddress existing = find(from);
-    if (existing != 0) {
-        return Receipt{ existing, false, Receipt::Status::EXISTING };
-    }
-    const Receipt::Status lifeStatus = register_to_life_locked(to, optimisticCount);
-    if (lifeStatus != Receipt::Status::INSTALLED && lifeStatus != Receipt::Status::EXISTING) {
-        return Receipt{ 0, false, lifeStatus };
-    }
     return insert_receipt(from, to);
 }
 
@@ -1192,7 +1161,7 @@ static MAddress FindRetiredToImpl(MAddress from, ForwardingTable::ToAnswer* answ
                 *tableId = reinterpret_cast<uintptr_t>(tab);
             }
             CaptureLookupCarrier(tab, witness);
-            const MAddress to = tab->resolve_life(tab->find(from));
+        const MAddress to = tab->find(from);
             if (to != 0) {
                 // A hit identifies the table that supplied the resolved entry,
                 // not the active candidate or the first covering retired table.
@@ -1258,7 +1227,7 @@ MAddress ForwardingTable::FindTo(MAddress from)
                     static_cast<unsigned long long>(n));
             }
         }
-        const MAddress to = tab->resolve_life(tab->find(from));
+        const MAddress to = tab->find(from);
         if (to != 0) {
             return to;
         }
@@ -1287,8 +1256,7 @@ ForwardingTable::LookupResult ForwardingTable::LookupTo(MAddress from)
         if (candidate != nullptr) {
             tableId = reinterpret_cast<uintptr_t>(candidate);
             CaptureLookupCarrier(candidate, &carrierWitness);
-            if (!candidate->page_life_current(RegionLifeClock::Carrier::ARMED_ENTRY) ||
-                !candidate->retain_table()) {
+            if (!candidate->retain_table()) {
                 activeRejected = true;
             } else {
                 retained = candidate;
@@ -1304,7 +1272,7 @@ ForwardingTable::LookupResult ForwardingTable::LookupTo(MAddress from)
             hook(g_lookupRetainHookContext.load(std::memory_order_acquire));
         }
 #endif
-        const MAddress to = retained->resolve_life(retained->find(from));
+        const MAddress to = retained->find(from);
         retained->release_table();
         if (to != 0) {
             g_armedHit.fetch_add(1, std::memory_order_relaxed);
@@ -1405,7 +1373,7 @@ ForwardingTable::NeverInstalledSnapshot ForwardingTable::CaptureNeverInstalledSn
         }
 
         if (tab->covers(target)) {
-            const MAddress to = tab->resolve_life(tab->find(target));
+            const MAddress to = tab->find(target);
             ++snapshot.carrierTotal;
             if (snapshot.carrierCount < kNeverInstalledCarrierLimit) {
                 CarrierIdentity& out = snapshot.carriers[snapshot.carrierCount++];

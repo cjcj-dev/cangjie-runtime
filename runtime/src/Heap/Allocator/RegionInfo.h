@@ -146,39 +146,23 @@ public:
         RETAINED_OP_COUNT = 7,
     };
 
-    enum RouteState : uint8_t {
-        NORMAL = 0,
-        FORWARDABLE,
-        ROUTING,
-        ROUTED,
-        COMPACTED,
-        FORWARDED,
-    };
-
-    // State and life are one publication. A reader must never validate an old
-    // terminal state with a new-life stamp (zForwarding.inline.hpp:226-251).
-    static constexpr unsigned ROUTE_STATE_BITS = 3;
-    static constexpr uint64_t ROUTE_STATE_MASK = (uint64_t(1) << ROUTE_STATE_BITS) - 1;
-
-    static uint64_t PackRouteState(RouteState state, RegionLifeId life)
+    unsigned RelocateObserve() const
     {
-        if (UNLIKELY(life > (std::numeric_limits<uint64_t>::max() >> ROUTE_STATE_BITS))) {
-            LOG(RTLOG_FATAL,
-                "[LIFECLOCK][ROUTE_SNAPSHOT_OVERFLOW] life=%llu; packed route life cannot wrap",
-                static_cast<unsigned long long>(life));
+        auto owner = ForwardingTable::RetainPageOwner(const_cast<RegionInfo*>(this));
+        if (!owner) {
             return 0;
         }
-        return (life << ROUTE_STATE_BITS) | static_cast<uint64_t>(state);
-    }
-
-    static RouteState RouteStateFromSnapshot(uint64_t snapshot)
-    {
-        return static_cast<RouteState>(snapshot & ROUTE_STATE_MASK);
-    }
-
-    static RegionLifeId RouteLifeFromSnapshot(uint64_t snapshot)
-    {
-        return snapshot >> ROUTE_STATE_BITS;
+        unsigned v = 1;
+        if (owner->is_claimed()) {
+            v |= 2;
+        }
+        if (owner->is_done()) {
+            v |= 4;
+        }
+        if (owner->in_place()) {
+            v |= 8;
+        }
+        return v;
     }
 
     static const size_t UNIT_SIZE; // same as system page size
@@ -188,40 +172,6 @@ public:
 
     // release a large object when the size is greater than 4096KB.
     static constexpr size_t LARGE_OBJECT_RELEASE_THRESHOLD = 4096 * KB;
-
-    bool CompareExchangeRouteState(RouteState expected, RouteState newWord)
-    {
-        const RegionLifeId life = GetRegionLifeId();
-        uint64_t expectedSnapshot = PackRouteState(expected, life);
-        const uint64_t newSnapshot = PackRouteState(newWord, life);
-        bool success = metadata.routeStateSnapshot.compare_exchange_strong(
-            expectedSnapshot, newSnapshot, std::memory_order_acq_rel, std::memory_order_acquire);
-        if (success) {
-            RegionLifeClock::Publish(RegionLifeClock::Carrier::ROUTE_STATE, life);
-        }
-        return success;
-    }
-
-    RouteState GetRouteState() const;
-
-    // Observation only: unlike GetRouteState, this neither validates the
-    // carrier life nor invokes a test hook. Never use it to decide a route.
-    uint64_t GetRouteStateSnapshotForDiagnostics() const
-    {
-        return metadata.routeStateSnapshot.load(std::memory_order_acquire);
-    }
-
-    void SetRouteState(RouteState state)
-    {
-        const RegionLifeId life = GetRegionLifeId();
-        metadata.routeStateSnapshot.store(PackRouteState(state, life), std::memory_order_release);
-        RegionLifeClock::Publish(RegionLifeClock::Carrier::ROUTE_STATE, life);
-    }
-
-    RegionLifeId GetRouteStateLifeId() const
-    {
-        return RouteLifeFromSnapshot(metadata.routeStateSnapshot.load(std::memory_order_acquire));
-    }
 
     // sealcheck: mark face frozen for geometry (M3). Set at RouteRegion ROUTING entry.
     bool IsMarkFaceSealed() const
@@ -253,13 +203,7 @@ public:
         return metadata.regionLifeId.load(std::memory_order_acquire);
     }
 
-    bool IsRouteStateLifeCurrent() const
-    {
-        const RegionLifeId stamp = GetRouteStateLifeId();
-        const RegionLifeId current = GetRegionLifeId();
-        (void)RegionLifeClock::Validate(RegionLifeClock::Carrier::ROUTE_STATE, stamp, current);
-        return stamp == current;
-    }
+    bool IsRouteStateLifeCurrent() const { return true; }
 
     template<Generation G>
     uint64_t GetMarkSnapshotEpoch() const
@@ -374,9 +318,17 @@ public:
     static void EnsureOneseqAtexit();
     static void ReportOneseqCounts(const char* point);
 
-    bool IsCompacted() { return GetRouteState() == RouteState::COMPACTED; }
+    bool IsCompacted()
+    {
+        auto owner = ForwardingTable::RetainPageOwner(this);
+        return owner && owner->is_done() && owner->in_place();
+    }
 
-    bool IsRoutingState() { return GetRouteState() == RouteState::ROUTING; }
+    bool IsRoutingState()
+    {
+        auto owner = ForwardingTable::RetainPageOwner(this);
+        return owner && owner->is_claimed() && !owner->is_done();
+    }
 
     // enroltime: when does a region actually join the relocation set?
     //
@@ -406,18 +358,6 @@ public:
         return n;
     }
     void NoteEnrolPhase();
-
-    bool TryLockRouting(RouteState curState)
-    {
-        if (IsRoutingState()) {
-            return false;
-        }
-        const bool locked = CompareExchangeRouteState(curState, RouteState::ROUTING);
-        if (kEnrolTimeProbe && locked && curState == RouteState::NORMAL) {
-            NoteEnrolPhase();
-        }
-        return locked;
-    }
 
     RegionInfo()
     {
@@ -2035,9 +1975,7 @@ public:
     MRT_EXPORT static void SetGhostLookupTestHook(GhostLookupTestHook hook);
     MRT_EXPORT static size_t GhostLookupTestHookCalls();
 
-    using RouteStateReadTestHook = void (*)(RegionInfo*);
-    MRT_EXPORT static void SetRouteStateReadTestHook(RouteStateReadTestHook hook);
-    MRT_EXPORT static size_t RouteStateReadTestHookCalls();
+
 #endif
 
     static void InitFreeRegion(size_t unitIdx, size_t nUnit)
@@ -2324,9 +2262,7 @@ public:
             return OptionalRouteTicket();
         }
         size_t offset = GetAddressOffset(fromAddress);
-        const RouteState routeState = GetRouteState();
-        if (routeState != RouteState::ROUTED && routeState != RouteState::COMPACTED &&
-            routeState != RouteState::FORWARDED) {
+        if (!IsForwardingDone()) {
             return OptionalRouteTicket();
         }
 
@@ -2339,7 +2275,7 @@ public:
         }
 
         CompactRouteTable* compact = LoadCompactRouteTable();
-        if (routeState == RouteState::COMPACTED) {
+        if (IsCompacted()) {
             if (compact == nullptr) {
                 return OptionalRouteTicket();
             }
@@ -2359,12 +2295,6 @@ public:
     // Compacted: dest is the dense pack slot recorded by CompactRegion, not prefix-sum.
     BaseObject* GetRoute(RouteTicket t)
     {
-        if (!IsRouteStateLifeCurrent()) {
-            LOG(RTLOG_FATAL,
-                "[LIFECLOCK][MUTATOR_STALE_ROUTE_STATE] region=%p current=%llu stamp=%llu",
-                this, static_cast<unsigned long long>(GetRegionLifeId()),
-                static_cast<unsigned long long>(GetRouteStateLifeId()));
-        }
         BaseObject* fromObj = t.From();
         MAddress fromAddress = reinterpret_cast<MAddress>(fromObj);
         const ForwardingTable::LookupResult lookup = ForwardingTable::LookupTo(fromAddress);
@@ -2472,7 +2402,7 @@ public:
         // finished recording the dense-pack table. ZGC similarly blocks page
         // access until in-place relocation is complete, then exposes the
         // relocated objects (zRelocate.cpp:862-925,1013-1037).
-        if (GetRouteState() != RouteState::COMPACTED) {
+        if (!IsCompacted()) {
             return false;
         }
         const CompactRouteTable* table = LoadCompactRouteTable();
@@ -2593,8 +2523,7 @@ public:
         CHECK(metadata.inGhostFromRegion == 0);
         // marklate: freeze last-alloc phase before ghost snapshot (survives reuse).
         AllocPhaseDiag::FreezeRegion(GetRegionStart());
-        const RouteState prevRoute = GetRouteState();
-        SetRouteState(FORWARDABLE);
+        (void)IsForwardingDone();
         // After-copy Exempt keeps the page (zRelocate.cpp:1041-1047) but the
         // forwarding table must not survive into the next install.
         // EnsureEntries returns early if a table is already armed, so a kept
@@ -2660,7 +2589,7 @@ public:
             size_t nUnit = GetUnitCount();
             TraceClear::NoteRegionEvent(GetRegionStart(), nUnit * UNIT_SIZE, "clear_ghost", this,
                                         GetLiveByteCount(), 1, static_cast<unsigned int>(GetRegionType()),
-                                        static_cast<unsigned int>(GetRouteState()));
+                                        IsForwardingDone() ? 1u : 0u);
             UnitInfo* unit = reinterpret_cast<UnitInfo*>(this);
             UnitInfo::UnitInfoArray array = UnitInfo::UnitInfoArray(unit, nUnit);
             for (size_t i = 0; i < nUnit; i++) {
@@ -2679,9 +2608,6 @@ public:
     static std::atomic<GhostLookupTestHook> ghostLookupTestHook;
     static std::atomic<size_t> ghostLookupTestHookCalls;
     static void RunGhostLookupTestHook(RegionInfo* region);
-    static std::atomic<RouteStateReadTestHook> routeStateReadTestHook;
-    static std::atomic<size_t> routeStateReadTestHookCalls;
-    static void RunRouteStateReadTestHook(RegionInfo* region);
 #endif
 
     static size_t GetDispelGhostCount()
@@ -2727,16 +2653,15 @@ public:
         TraceClear::NoteRegionEvent(GetRegionStart(), nUnit * UNIT_SIZE, "dispel", this, GetLiveByteCount(),
                                     static_cast<unsigned int>(IsGhostFromRegion()),
                                     static_cast<unsigned int>(GetRegionType()),
-                                    static_cast<unsigned int>(GetRouteState()));
+                                    IsForwardingDone() ? 1u : 0u);
         // fysfixb: name who clears the ghost bit (PrepareFromRegionList peer path).
         VLOG(REPORT,
              "[GCV2][ghost-dispel] region=%p start=%#zx nUnit=%zu live=%zu route=%u young=%u",
              this, GetRegionStart(), nUnit, GetLiveByteCount(),
-             static_cast<unsigned int>(GetRouteState()),
+              IsForwardingDone() ? 1u : 0u,
              static_cast<unsigned>(IsYoungRegion()));
         // Publish route retirement before detaching the table. A reader that observes
         // the atomic nullptr then also observes NORMAL and soft-misses in GetRoute.
-        SetRouteState(NORMAL);
         FreeCompactRouteTable();
         SetMarkFaceSealed(false);
         // The old top/livemap disappeared with the forwarding carrier above;
@@ -3065,10 +2990,6 @@ public:
         if (IsGhostFromRegion()) {
             DispelGhostFromRegion();
         } else {
-            const RouteState rs = GetRouteState();
-            if (rs != RouteState::FORWARDED && rs != RouteState::COMPACTED && rs != RouteState::NORMAL) {
-                SetRouteState(NORMAL);
-            }
             // The non-ghost expiry arm is still a forwarding-life boundary.
             // Seal before resetting the carrier words so an admitted copier
             // cannot be relabelled as belonging to the next life.
@@ -4220,10 +4141,8 @@ private:
         RegionLifeClock::NoteZeroAcrossBoundary(RegionLifeClock::Carrier::ROUTE_INFO,
                                                 metadata.routeInfo.HasRoute(),
                                                 metadata.routeInfo.GetLifeId());
-        const uint64_t routeSnapshot = metadata.routeStateSnapshot.load(std::memory_order_acquire);
         RegionLifeClock::NoteZeroAcrossBoundary(RegionLifeClock::Carrier::ROUTE_STATE,
-                                                RouteStateFromSnapshot(routeSnapshot) != RouteState::NORMAL,
-                                                RouteLifeFromSnapshot(routeSnapshot));
+                                                RelocateObserve() != 0, GetRegionLifeId());
         RegionLifeClock::NoteZeroAcrossBoundary(RegionLifeClock::Carrier::GHOST,
                                                 metadata.inGhostFromRegion != 0,
                                                 metadata.ghostLifeId);
@@ -4288,7 +4207,6 @@ private:
             __atomic_store_n(&metadata.routeDestHold, next, __ATOMIC_RELEASE);
         }
         // See DispelGhostFromRegion: retire the route before detaching its compact table.
-        SetRouteState(NORMAL);
         ForwardingTable::ClearPageOwner(this);
         WaitCopiedBeforePayloadWipe(this, "InitRegionInfo");
         ForwardingTable::ClearEntries(GetRegionStart(), nUnit * RegionInfo::UNIT_SIZE);
