@@ -1371,9 +1371,8 @@ public:
         CHECK(view.GetEpoch() == GetMarkSnapshotEpoch<G>());
         if (IsLargeRegion()) {
             if (flag != 0) {
-                // Setup/STW callers do not always have an object size.  The
-                // sized MarkObject path uses TryPublishLargeFace directly so
-                // its first paint and byte accounting are one atomic RMW.
+                // Setup/STW callers do not always have an object size. Live
+                // bytes go through AddLiveCounts on the sized mark path only.
                 (void)TryPublishLargeFace(view, 0);
                 PublishCurrentMarkFace();
             } else {
@@ -1496,10 +1495,10 @@ public:
         const bool already = writeBm->MarkBits(offset, size, regionSize, incLive);
         firstLive = incLive;
         if (incLive) {
-            (void)TryPublishLargeFace(view, accountLive ? size : 0);
             if (accountLive) {
                 AddLiveCounts(1, size);
             }
+            (void)TryPublishLargeFace(view, 0);
             PublishCurrentMarkFace();
             NotePageOwnerFirstPaint<G>();
         }
