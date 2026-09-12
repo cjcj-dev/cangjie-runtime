@@ -1476,6 +1476,26 @@ bool Mutator::FlushSatbBuffer(bool flushStoreBarrier, MarkDomain* domain)
     return published;
 }
 
+void Mutator::FlushHolderThreadMarkProducers()
+{
+    if (Mutator::GetMutator() != this) {
+        return;
+    }
+    AllocBuffer* buffer = ThreadLocal::GetAllocBuffer();
+    if (buffer == nullptr) {
+        return;
+    }
+    RememberedSet* rememberedSet = storeBarrierRememberedSet;
+    if (rememberedSet == nullptr) {
+        rememberedSet = &Heap::GetHeap().GetRememberedSet();
+    }
+    if (rememberedSet->IsInitialized()) {
+        buffer->GetStoreBarrierBuffer().Flush(*rememberedSet);
+    }
+    auto& collector = static_cast<WCollector&>(Heap::GetHeap().GetCollector());
+    (void)collector.FlushAllocBufferMarkProducers(buffer, nullptr);
+}
+
 Mutator::MarkFlushClaim Mutator::TryClaimMarkFlush(bool self, MarkDomain* domain)
 {
     std::lock_guard<std::mutex> lg(mutatorLock);
@@ -1491,9 +1511,13 @@ Mutator::MarkFlushClaim Mutator::TryClaimMarkFlush(bool self, MarkDomain* domain
     }
     bool published = satbNode != nullptr && !satbNode->IsEmpty();
     SatbBuffer::Instance().FlushQueue(satbNode);
-    AllocBuffer* buffer = self ? ThreadLocal::GetAllocBuffer() : markFlushAllocBuffer;
-    if (buffer == nullptr) {
-        buffer = markFlushAllocBuffer;
+    const bool holderThread = self && Mutator::GetMutator() == this;
+    const bool exclusiveForeign = !self && IsForeignThread() && InSaferegion();
+    AllocBuffer* buffer = nullptr;
+    if (holderThread) {
+        buffer = ThreadLocal::GetAllocBuffer();
+    } else if (exclusiveForeign) {
+        buffer = foreignThreadInfo.allocBuffer;
     }
     if (buffer != nullptr) {
         if (rememberedSet->IsInitialized()) {
