@@ -84,21 +84,11 @@ backup_and_break "$REGION_H" \
 run_expect_fail "U4_bind"
 restore "$REGION_H"
 
-# --- Red 2: GetRoute domain gate returns forged to-addr instead of nullptr ---
-# Pre-fix behaviour: out-of-domain invents a route (ior root cause).
+# --- Red 2: GetRoute miss forges a dest instead of nullptr ---
 backup_and_break "$REGION_H" \
-  '            return nullptr;
-        }
-        uint64_t preLiveBytes = GetPreLiveBytesInGhostRegion(fromAddress);
-        MAddress toAddr = metadata.routeInfo.GetRoute(preLiveBytes);
-        return from_region_addr(toAddr);
+  '        return nullptr;
     }' \
-  '            // red_proof: domain miss forges to-addr (pre GetRoute domain gate)
-            return from_region_addr(0x20000000u);
-        }
-        uint64_t preLiveBytes = GetPreLiveBytesInGhostRegion(fromAddress);
-        MAddress toAddr = metadata.routeInfo.GetRoute(preLiveBytes);
-        return from_region_addr(toAddr);
+  '        return from_region_addr(0x20000000u);
     }' \
   "U3_domain"
 

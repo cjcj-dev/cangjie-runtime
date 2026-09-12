@@ -81,12 +81,11 @@ GC_TEST(ForwardingNoGeometry, ArmedMissIsNullNotGeometry)
     GC_EXPECT_TRUE(ForwardingTable::GetEntries(from)->is_provisional());
 
     BaseObject* geometric = fx.region0->GetRouteForProbe(fx.obj0);
-    GC_EXPECT_TRUE(geometric != nullptr);
+    GC_EXPECT_TRUE(geometric == nullptr);
     ForwardingTable::LookupResult lookup = ForwardingTable::LookupTo(from);
     const MAddress looked = lookup.to;
     GC_EXPECT_TRUE(lookup.answer == ForwardingTable::ToAnswer::ArmedMiss);
     GC_EXPECT_EQ(looked, static_cast<MAddress>(0));
-    GC_EXPECT_TRUE(looked != reinterpret_cast<MAddress>(geometric));
 
     const MAddress stored = fx.heapStart + RegionInfo::UNIT_SIZE + 128;
     ForwardingTable::ClearEntries(fx.region0->GetRegionStart(), fx.region0->GetRegionSize());
@@ -146,15 +145,12 @@ GC_TEST(ForwardingNoGeometry, ArmedLookupAndSuccessfulExclusiveCopyPublishProduc
     GC_EXPECT_TRUE(ForwardingTable::GetEntries(from)->is_provisional());
 
     BaseObject* geometric = fx.region0->GetRouteForProbe(fx.obj0);
-    GC_EXPECT_TRUE(geometric != nullptr);
-    GC_EXPECT_TRUE(reinterpret_cast<MAddress>(geometric) == 0x20000000u ||
-                   reinterpret_cast<MAddress>(geometric) != 0);
+    GC_EXPECT_TRUE(geometric == nullptr);
 
     ForwardingTable::LookupResult lookup = ForwardingTable::LookupTo(from);
     const MAddress looked = lookup.to;
     GC_EXPECT_TRUE(lookup.answer == ForwardingTable::ToAnswer::ArmedMiss);
     GC_EXPECT_EQ(looked, static_cast<MAddress>(0));
-    GC_EXPECT_TRUE(looked != reinterpret_cast<MAddress>(geometric));
 
     const MAddress stored = fx.heapStart + RegionInfo::UNIT_SIZE + 128;
     ForwardingTable::ClearEntries(fx.region0->GetRegionStart(), fx.region0->GetRegionSize());
