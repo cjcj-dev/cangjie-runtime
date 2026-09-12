@@ -896,13 +896,6 @@ void WCollector::DoYoungGarbageCollection()
     }
 
     constexpr bool fullYoungScan = false;
-    // remsetdrain: hash-work reduction defaults on; `=0` is the immediate rollback.
-    // The drain side uses the bitmap's exact distinct count to reserve its destination.
-    // The FYS-only consumed-ledger elision is fixed by the sole concurrent path.
-    static const bool remsetHashOptRequested = []() {
-        const char* value = std::getenv("MRT_GCV2_REMSET_HASH_OPT");
-        return value == nullptr || std::strcmp(value, "1") == 0;
-    }();
     WorkStack workStack = NewWorkStack();
     VerifyMarkingStacks::VerifyEmpty(VerifyMarkingStacks::MarkingGeneration::YOUNG,
                                      VerifyMarkingStacks::MarkingBoundary::START,
@@ -917,10 +910,7 @@ void WCollector::DoYoungGarbageCollection()
     MinorObjectSet currentMinorRoots;
     MinorSlotSet reachableSlots;
     MinorSlotSet weakSlots;
-    if (remsetHashOptRequested && fullYoungScan) {
-        // Runtime lower bound only: if holder closure covers the remset, this
-        // avoids growth rehashes; if it does not, unordered_set still grows
-        // normally.  Capacity does not admit or discard a slot.
+    if (fullYoungScan) {
         reachableSlots.reserve(rememberedSlots.size());
     }
     auto mergeY2yDirtyWork = [&](WorkStack& destination) {
@@ -1039,14 +1029,16 @@ void WCollector::DoYoungGarbageCollection()
     if (rememberedSlots.empty()) {
         // scan_and_follow (zRemembered.cpp:561-576): previous face as grey
         // roots, mutators alive. Flip already happened under STW1.
+        ScanRelocatedRememberedFields(rememberedSlots);
+        MinorSlotSet pageSlots;
         concWindow.remsetSlots =
-            Heap::GetHeap().GetRememberedSet().ScanPreviousForMinor(rememberedSlots);
+            Heap::GetHeap().GetRememberedSet().ScanPreviousForMinor(pageSlots);
+        for (MAddress slot : pageSlots) {
+            rememberedSlots.insert(slot);
+        }
     }
 
     MinorSlotSet liveRememberedSlots;
-    if (remsetHashOptRequested && !remsetConsumedLedgerElideActive) {
-        liveRememberedSlots.reserve(rememberedSlots.size());
-    }
     size_t liveRememberedCount = 0;
     for (MAddress slot : rememberedSlots) {
         if (LedgerCount(weakSlots, slot) == 0 &&
@@ -1062,9 +1054,6 @@ void WCollector::DoYoungGarbageCollection()
     remsetStats.recorded = rememberedSlots.size();
     remsetStats.live = liveRememberedCount;
     MinorSlotSet consumedSlots;
-    if (remsetHashOptRequested && !remsetConsumedLedgerElideActive) {
-        consumedSlots.reserve(rememberedSlots.size());
-    }
     MinorInteriorBaseMap remsetInteriorBases;
     {
         // minortime: ④ remset rescan + ⑤ mark closure pass-2 (from remset edges)
@@ -1074,14 +1063,7 @@ void WCollector::DoYoungGarbageCollection()
                             remsetConsumedLedgerElideActive ? nullptr : &consumedSlots, &remsetStats,
                             &remsetInteriorBases, stw.get());
     }
-    if (remsetHashOptRequested) {
-        VLOG(REPORT,
-             "[GCV2][remsetdrain][hash-opt] requested=1 active=%u recorded=%zu live=%zu consumed=%zu "
-             "consumedLedger=%zu interiors=%zu fys=%u youngConc=%u",
-              static_cast<unsigned>(remsetConsumedLedgerElideActive), rememberedSlots.size(), remsetStats.live,
-              remsetStats.consumed, consumedSlots.size(), remsetInteriorBases.size(),
-              static_cast<unsigned>(fullYoungScan), 1U);
-    }
+
     // fysaudit: D2 retained-drop + D4 live-not-consumed (product path already FYS=0 under audit).
 
     {

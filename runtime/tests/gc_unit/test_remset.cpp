@@ -266,45 +266,6 @@ GC_TEST(Remset, CurrentMinorRootOverridesRetainedDeadSnapshotAndNullHeal)
     GC_EXPECT_FALSE(KeepRememberedHolder(false, false));
 }
 
-// Validation-only sticky storage is absent unless explicitly armed.
-GC_TEST(Remset, StickyBitmapDisabledByDefault)
-{
-    ScopedEnv gate("MRT_GCV2_REMSET_EVER", nullptr);
-    GcHeapFixture fx;
-    RememberedSet rs;
-    rs.Initialize(fx.heapStart, 2 * RegionInfo::UNIT_SIZE);
-    GC_EXPECT_FALSE(rs.EverRecordedEnabled());
-}
-
-// When armed, the sticky bit proves a mutator barrier recorded the slot and survives a drain.
-GC_TEST(Remset, StickyBitmapTracksMutatorBarrierAcrossDrain)
-{
-    ScopedEnv gate("MRT_GCV2_REMSET_EVER", "1");
-    GcHeapFixture fx;
-    fx.region0->SetYoungRegionFlag(0);
-    fx.region1->SetYoungRegionFlag(1);
-    fx.region1->SetYoungAge(1);
-
-    auto* field = &HeapSlotAt<>(reinterpret_cast<MAddress>(fx.obj0) + TYPEINFO_PTR_SIZE);
-    const MAddress slot = reinterpret_cast<MAddress>(field);
-    TestCollector collector;
-    RememberedSet rs;
-    rs.Initialize(fx.heapStart, 2 * RegionInfo::UNIT_SIZE);
-    TestBarrier barrier(collector, rs);
-
-    GC_EXPECT_TRUE(rs.EverRecordedEnabled());
-    GC_EXPECT_FALSE(rs.WasEverRecorded(slot));
-    field->StoreColoured(zpointer::null);
-    barrier.WriteReference(fx.obj0, *field, fx.obj1);
-    GC_EXPECT_TRUE(rs.Contains(slot));
-    GC_EXPECT_TRUE(rs.WasEverRecorded(slot));
-
-    std::unordered_set<MAddress> records;
-    rs.DrainForMinor(records);
-    GC_EXPECT_FALSE(rs.Contains(slot));
-    GC_EXPECT_TRUE(rs.WasEverRecorded(slot));
-}
-
 // U7: product Barrier NVI WriteReference records old→young edge.
 GC_TEST(Remset, OldToYoungRecordedByBarrier)
 {
@@ -789,35 +750,6 @@ GC_TEST(Remset, OldToOldRecordedBecauseBarrierConditionsOnSlot)
     barrier.WriteReference(fx.obj0, *field, fx.obj1);
     GC_EXPECT_TRUE(ExpectRecorded(rs, reinterpret_cast<MAddress>(field)));
     youngWitness->SetYoungRegionFlag(0);
-}
-
-// The sticky provenance bitmap is diagnostic backing, not product state.  Its
-// positive control must cover all three claims the probe makes: the env really
-// allocates it, a mutator-barrier record flips the bit, and a destructive minor
-// drain does not clear it.
-GC_TEST(Remset, EverRecordedStickyBitmapPositiveControl)
-{
-    GcHeapFixture fx;
-    const MAddress slot = reinterpret_cast<MAddress>(fx.obj0) + TYPEINFO_PTR_SIZE;
-
-    (void)unsetenv("MRT_GCV2_REMSET_EVER");
-    RememberedSet off;
-    off.Initialize(fx.heapStart, 2 * RegionInfo::UNIT_SIZE);
-    GC_EXPECT_FALSE(off.EverRecordedEnabled());
-    GC_EXPECT_FALSE(off.WasEverRecorded(slot));
-
-    GC_EXPECT_EQ(setenv("MRT_GCV2_REMSET_EVER", "1", 1), 0);
-    RememberedSet on;
-    on.Initialize(fx.heapStart, 2 * RegionInfo::UNIT_SIZE);
-    GC_EXPECT_TRUE(on.EverRecordedEnabled());
-    GC_EXPECT_FALSE(on.WasEverRecorded(slot));
-
-    on.Record(slot, true);
-    GC_EXPECT_TRUE(on.WasEverRecorded(slot));
-    std::unordered_set<MAddress> drained;
-    on.DrainForMinor(drained);
-    GC_EXPECT_TRUE(on.WasEverRecorded(slot));
-    (void)unsetenv("MRT_GCV2_REMSET_EVER");
 }
 
 // ---------------------------------------------------------------------------------------------

@@ -10,6 +10,7 @@
 #include <atomic>
 #include <cstddef>
 #include <cstdint>
+#include <functional>
 #include <memory>
 #include <unordered_set>
 #include <vector>
@@ -26,6 +27,7 @@ class Barrier;
 class WCollector;
 class RegionManager;
 class StoreBarrierBuffer;
+class ZForwarding;
 
 // Exact old-region field bitmap. The two heap-wide backing arrays are partitioned
 // by address: every region owns two disjoint slices, one bit per aligned reference
@@ -82,6 +84,7 @@ public:
     // zRemembered.cpp:561-576 scan_and_follow: consume the previous face with
     // mutators alive. Callers must FlipForMinor first. DrainForMinor = Flip + Scan.
     size_t ScanPreviousForMinor(std::unordered_set<MAddress>& records);
+    void VisitPreviousInRange(MAddress start, size_t size, const std::function<void(MAddress)>& visitor) const;
 
 #if defined(MRT_GC_UNIT_TESTS)
     struct FlipTouchCounts {
@@ -101,17 +104,6 @@ public:
     std::unordered_set<MAddress> Snapshot() const;
     bool Contains(MAddress fieldAddress) const;
     size_t Size() const;
-
-    // d1producer: sticky "was this heap field ever handed to Record()" bitmap, never cleared by
-    // DrainForMinor. Snapshot() alone cannot separate "the producer never recorded this slot"
-    // from "the producer recorded it in an earlier cycle and the destructive drain removed it" --
-    // the first is a write-side miss, the second is a retention/consume-side one.
-    // Allocated only when MRT_GCV2_REMSET_EVER=1, so the product pays neither memory nor stores.
-    // Caveat for readers: slot addresses are reused when a region is recycled, so a true bit may
-    // belong to an earlier object at the same address. true is therefore an upper bound on
-    // "recorded before" and false is exact: a false bit proves the slot was never recorded.
-    bool EverRecordedEnabled() const { return everRecorded != nullptr; }
-    bool WasEverRecorded(MAddress fieldAddress) const;
 
     // Bytes reserved by both exact bitmap backings.
     size_t MemoryOverhead() const
@@ -140,15 +132,13 @@ private:
     static constexpr size_t kFieldBytes = sizeof(RefField<>);
     static constexpr size_t kBufferCount = 2;
 
-    // fromMutatorBarrier: true only on the write-barrier path (Barrier::RecordCrossGenEdge).
-    // The conservative pinned/old walk and the promotion replay also call Record(), and counting
-    // those in the sticky bitmap would answer a different question than "did the producer record it".
     void Record(MAddress fieldAddress, bool fromMutatorBarrier = false);
     // ZGC update_remset_old_to_old (zRelocate.cpp:652-731): move remset bits covering
     // [fromBase, fromBase+size) to the same field offsets under toBase. Does not clear
     // the from range — CollectRegion → ClearRegion scrubs the whole from region.
     // Returns the number of bits recorded at to-addresses (0 if fromBase==toBase).
-    size_t TransferObjectSlots(MAddress fromBase, MAddress toBase, size_t size);
+    size_t TransferObjectSlots(MAddress fromBase, MAddress toBase, size_t size,
+                               ZForwarding* forwarding = nullptr, bool youngMarking = false);
     size_t ClearRegion(MAddress start, MAddress end, size_t* outWords = nullptr);
     uint8_t BeginFullClear();
     size_t FinishFullClear(uint8_t scanBuffer);
@@ -166,8 +156,6 @@ private:
     size_t dirtyWordCount = 0;
     std::unique_ptr<std::atomic<uint64_t>[]> bitmaps[kBufferCount];
     std::unique_ptr<std::atomic<uint64_t>[]> dirtyMaps[kBufferCount];
-    // d1producer: single, never-cleared backing for WasEverRecorded. null unless gated on.
-    std::unique_ptr<std::atomic<uint64_t>[]> everRecorded;
     std::atomic<size_t> recordCounts[kBufferCount];
     std::atomic<uint8_t> activeBuffer{ 0 };
     bool initialized = false;

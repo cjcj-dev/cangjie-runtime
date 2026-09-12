@@ -1393,6 +1393,7 @@ private:
     // local-buffer flush and reports whether concurrent-mark-continue is needed.
     bool TryEndYoungMark(WorkStack& workStack, YoungConcWindowStats* windowStats = nullptr);
     friend class YoungStripedMarkingWork;
+    void ScanRelocatedRememberedFields(MinorSlotSet& rememberedSlots);
     void RescanRememberedSet(WorkStack& workStack, const MinorSlotSet& rememberedSlots,
                              const MinorSlotSet& reachableSlots, const MinorSlotSet& weakSlots,
                              const MinorObjectSet& currentMinorRoots, bool fullYoungScan,

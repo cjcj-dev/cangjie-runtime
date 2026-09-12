@@ -17,6 +17,7 @@
 #include <new>
 #include <thread>
 #include <unordered_map>
+#include <vector>
 
 #include "Heap/Allocator/ForwardingEntry.h"
 #include "Heap/Allocator/ForwardingAllocator.h"
@@ -449,6 +450,90 @@ public:
     void release_owner() { _external_owners.fetch_sub(1, std::memory_order_release); }
     size_t external_owners() const { return _external_owners.load(std::memory_order_acquire); }
 
+    enum class ZPublishState : int8_t {
+        none,
+        published,
+        reject,
+        accept,
+    };
+
+    static uint32_t young_seqnum()
+    {
+        return YoungSeqnum().load(std::memory_order_acquire);
+    }
+    static void bump_young_seqnum()
+    {
+        YoungSeqnum().fetch_add(1, std::memory_order_acq_rel);
+    }
+
+    void relocated_remembered_fields_register(MAddress field)
+    {
+        const ZPublishState state = _relocated_remembered_fields_state.load(std::memory_order_relaxed);
+        if (state == ZPublishState::reject) {
+            return;
+        }
+        std::lock_guard<std::mutex> lock(_relocated_fields_lock);
+        _relocated_remembered_fields_array.push_back(field);
+    }
+
+    bool relocated_remembered_fields_is_concurrently_scanned() const
+    {
+        return _relocated_remembered_fields_state.load(std::memory_order_relaxed) == ZPublishState::reject;
+    }
+
+    void relocated_remembered_fields_after_relocate()
+    {
+        _relocated_remembered_fields_publish_young_seqnum = young_seqnum();
+        if (!relocated_remembered_fields_is_concurrently_scanned()) {
+            relocated_remembered_fields_publish();
+        }
+    }
+
+    void relocated_remembered_fields_publish()
+    {
+        ZPublishState expected = ZPublishState::none;
+        if (!_relocated_remembered_fields_state.compare_exchange_strong(
+                expected, ZPublishState::published, std::memory_order_acq_rel, std::memory_order_relaxed)) {
+            std::lock_guard<std::mutex> lock(_relocated_fields_lock);
+            _relocated_remembered_fields_array.clear();
+        }
+    }
+
+    void relocated_remembered_fields_notify_concurrent_scan_of()
+    {
+        ZPublishState expected = ZPublishState::none;
+        if (_relocated_remembered_fields_state.compare_exchange_strong(
+                expected, ZPublishState::reject, std::memory_order_acq_rel, std::memory_order_relaxed)) {
+            return;
+        }
+        if (expected == ZPublishState::published) {
+            ZPublishState published = ZPublishState::published;
+            if (_relocated_remembered_fields_state.compare_exchange_strong(
+                    published, ZPublishState::reject, std::memory_order_acq_rel, std::memory_order_relaxed)) {
+                std::lock_guard<std::mutex> lock(_relocated_fields_lock);
+                _relocated_remembered_fields_array.clear();
+            }
+        }
+    }
+
+    template<typename Function>
+    void relocated_remembered_fields_apply_to_published(Function function)
+    {
+        const ZPublishState state = _relocated_remembered_fields_state.load(std::memory_order_acquire);
+        if (state == ZPublishState::published) {
+            std::lock_guard<std::mutex> lock(_relocated_fields_lock);
+            for (MAddress field : _relocated_remembered_fields_array) {
+                function(field);
+            }
+            _relocated_remembered_fields_array.clear();
+        }
+        if (_relocated_remembered_fields_publish_young_seqnum == young_seqnum()) {
+            _relocated_remembered_fields_state.store(ZPublishState::reject, std::memory_order_relaxed);
+        } else {
+            _relocated_remembered_fields_state.store(ZPublishState::accept, std::memory_order_relaxed);
+        }
+    }
+
     // zForwarding.cpp:51-53 / :86-194. Source-page ownership only.
     bool claim() { return ZForwardingLife::claim(_claimed); }
     bool retain_page() { return ZForwardingLife::retain_page(_ref_count, _done); }
@@ -516,7 +601,9 @@ private:
           _kept_seen_expire(false),
           _retired_required(false),
           _provisional(provisional),
-          _from_page()
+          _from_page(),
+          _relocated_remembered_fields_state(ZPublishState::none),
+          _relocated_remembered_fields_publish_young_seqnum(0)
     {
         _to_lives[0] = ToLife{};
         _to_lives[1] = ToLife{};
@@ -559,6 +646,16 @@ private:
     std::atomic<bool> _retired_required;
     const bool _provisional;
     FromPageView _from_page;
+    std::atomic<ZPublishState> _relocated_remembered_fields_state;
+    std::vector<MAddress> _relocated_remembered_fields_array;
+    uint32_t _relocated_remembered_fields_publish_young_seqnum;
+    mutable std::mutex _relocated_fields_lock;
+
+    static std::atomic<uint32_t>& YoungSeqnum()
+    {
+        static std::atomic<uint32_t> seq{ 1 };
+        return seq;
+    }
 };
 
 // Existing tests and ClearEntries still spell this name.

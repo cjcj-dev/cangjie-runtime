@@ -2199,6 +2199,89 @@ public:
     void VisitAllObjects(const std::function<void(BaseObject*)>&& func);
     bool VisitLiveObjectsUntilFalse(const std::function<bool(BaseObject*)>&& func);
 
+    // zRememberedSet.cpp:144-152 / zLiveMap.inline.hpp:181-221 find_base:
+    // nearest object-start bit at or before a field. Strong bits are object
+    // starts (MarkBits); interiors keep live coverage only.
+    RegionBitmap* GetLiveStartBitmap()
+    {
+        const ZForwarding::FromPageView* from = GetFromPageView();
+        if (from != nullptr) {
+            return GetRouteMarkBitmap(from->liveInfo);
+        }
+        return GetOwnerMarkBitmap();
+    }
+
+    MAddress FindLiveObjectStart(MAddress field)
+    {
+        const MAddress start = GetRegionStart();
+        if (field < start) {
+            return 0;
+        }
+        if (IsLargeRegion()) {
+            RegionBitmap* bitmap = GetLiveStartBitmap();
+            if (bitmap != nullptr && bitmap->IsMarked(0)) {
+                return start;
+            }
+            if (fromPageLargeMarked()) {
+                return start;
+            }
+            return 0;
+        }
+        if (!IsSmallRegion()) {
+            return 0;
+        }
+        RegionBitmap* bitmap = GetLiveStartBitmap();
+        if (bitmap == nullptr) {
+            return 0;
+        }
+        size_t off = field - start;
+        off -= off % kMarkedBytesPerBit;
+        for (;;) {
+            if (bitmap->IsMarked(off)) {
+                return start + off;
+            }
+            if (off < kMarkedBytesPerBit) {
+                return 0;
+            }
+            off -= kMarkedBytesPerBit;
+        }
+    }
+
+    bool fromPageLargeMarked()
+    {
+        const ZForwarding::FromPageView* from = GetFromPageView();
+        return from != nullptr && from->largeMarked != 0;
+    }
+
+    void CollectLiveObjectStarts(std::vector<MAddress>& out)
+    {
+        out.clear();
+        if (IsFreeRegion() || IsGarbageRegion() || IsOwnerKnownEmpty()) {
+            return;
+        }
+        const MAddress start = GetRegionStart();
+        if (IsLargeRegion()) {
+            if (FindLiveObjectStart(start) == start) {
+                out.push_back(start);
+            }
+            return;
+        }
+        if (!IsSmallRegion()) {
+            return;
+        }
+        RegionBitmap* bitmap = GetLiveStartBitmap();
+        if (bitmap == nullptr) {
+            return;
+        }
+        const uintptr_t allocPtr = GetRegionAllocPtr();
+        const size_t regionBytes = allocPtr > start ? (allocPtr - start) : 0;
+        for (size_t off = 0; off < regionBytes; off += kMarkedBytesPerBit) {
+            if (bitmap->IsMarked(off)) {
+                out.push_back(start + off);
+            }
+        }
+    }
+
     // After-copy Exempt parks FORWARDED residuals (zRelocate.cpp:1041-1047).
     // CSet empty-select still needs those headers; strip only at the next install,
     // after the table is retired (zRelocationSet.cpp:91-96). A leftover FORWARDED

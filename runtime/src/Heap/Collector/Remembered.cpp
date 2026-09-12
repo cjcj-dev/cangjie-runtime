@@ -56,6 +56,10 @@
 #include "Heap/Verify/Stw2CurrentAudit.h"
 #include "Heap/Verify/SurvNodeDiag.h"
 #include "Heap/Collector/PromotedRegionDomain.h"
+#include "Heap/Allocator/ForwardingTable.h"
+#include "Heap/Allocator/RegionSpace.h"
+#include "Heap/Barrier/RememberedSet.h"
+#include "Heap/Collector/ZForwarding.h"
 #include "Heap/Verify/CsetEmptyWho.h"
 #include "Common/ColourPredicates.h"
 #include "Heap/WCollector/RemapYoungRoots.h"
@@ -343,6 +347,59 @@ void NoteResolveRootNull(void* rootSlot, BaseObject* from, BaseObject* to, Regio
 #if defined(__GNUC__)
 #pragma GCC visibility pop
 #endif
+void WCollector::ScanRelocatedRememberedFields(MinorSlotSet& rememberedSlots)
+{
+    struct Containing {
+        MAddress addr;
+        MAddress field;
+    };
+    RememberedSet& remset = Heap::GetHeap().GetRememberedSet();
+    ForwardingTable::VisitAll([&](ZForwarding* forwarding) {
+        if (forwarding == nullptr) {
+            return;
+        }
+        if (forwarding->retain_page()) {
+            forwarding->relocated_remembered_fields_notify_concurrent_scan_of();
+            std::vector<Containing> containing;
+            RegionInfo* page = forwarding->page();
+            remset.VisitPreviousInRange(forwarding->start(), forwarding->size(), [&](MAddress field) {
+                if (page == nullptr) {
+                    return;
+                }
+                const MAddress addr = page->FindLiveObjectStart(field);
+                if (addr == 0 || addr > field) {
+                    return;
+                }
+                containing.push_back(Containing{ addr, field });
+            });
+            forwarding->release_page();
+            MAddress cachedFrom = 0;
+            MAddress cachedTo = 0;
+            size_t cachedSize = 0;
+            for (const Containing& entry : containing) {
+                if (entry.addr != cachedFrom) {
+                    cachedFrom = entry.addr;
+                    BaseObject* from = reinterpret_cast<BaseObject*>(entry.addr);
+                    BaseObject* to = relocate_or_remap_object(from, ZGenerationId::old);
+                    if (to == nullptr) {
+                        to = from;
+                    }
+                    cachedTo = reinterpret_cast<MAddress>(to);
+                    cachedSize = RegionSpace::GetAllocSize(*to);
+                }
+                const uintptr_t fieldOffset = entry.field - entry.addr;
+                if (fieldOffset < cachedSize) {
+                    rememberedSlots.insert(cachedTo + fieldOffset);
+                }
+            }
+        } else {
+            forwarding->relocated_remembered_fields_apply_to_published([&](MAddress field) {
+                rememberedSlots.insert(field);
+            });
+        }
+    });
+}
+
 void WCollector::RescanRememberedSet(WorkStack& workStack, const MinorSlotSet& rememberedSlots,
                                      const MinorSlotSet& reachableSlots, const MinorSlotSet& weakSlots,
                                      const MinorObjectSet& currentMinorRoots, bool fullYoungScan,
@@ -391,7 +448,6 @@ void WCollector::RescanRememberedSet(WorkStack& workStack, const MinorSlotSet& r
     //   4) post-resolve null / bad_target drops
     // Does not relax IsValidObject / FindLatestVersion CHECK_DETAIL.
     static std::atomic<size_t> g_remsetScrubLogged{ 0 };
-    static std::atomic<size_t> g_remsetLifeClearLogged{ 0 };
     size_t scrubbedStale = 0;
     size_t scrubbedDeadHolder = 0;
     size_t scrubbedNoTargetOrigin = 0;
@@ -404,70 +460,7 @@ void WCollector::RescanRememberedSet(WorkStack& workStack, const MinorSlotSet& r
     size_t retainedDeadDropped = 0;
     size_t rootedRetainedKept = 0;
     size_t rootedStalePreserved = 0;
-    constexpr bool retainedProbe = false;
-    // remsetlife: uncapped classification of the bad_target arm. The existing sample log
-    // caps at 16 per process, so the 386-edge population was only ever seen through 84
-    // samples. Counters answer "where does the target sit" for every dropped edge.
-    // Default off; observation only, no control-flow change.
-    constexpr bool remsetLifeProbe = false;
-    size_t btNoRegion = 0;
-    size_t btBeyondAlloc = 0;
-    size_t btInAlloc = 0;
-    size_t btWord0Zero = 0;
-    size_t btNeverExamined = 0;
-    size_t btOriginFound = 0;
-    size_t btHolderInvalid = 0;
-    size_t btTargetYoung = 0;
-    size_t btRawTagged = 0;
-    size_t btLoadBad = 0;
-    size_t btOldPtr = 0;
-    size_t btCurrentPtr = 0;
-    size_t btClearHit = 0;
-    size_t btRegionType[16] = { 0 };
-    // On, unconditionally, because OpenJDK does it unconditionally: ZRemembered::scan_field
-    // (zRemembered.cpp:578-589) re-arms every scanned slot whose healed target is still young, and
-    // ZBarrier::remember (zBarrier.inline.hpp:729-733) conditions only on the slot being old.  The
-    // pair is the whole design: record cheaply at the barrier without loading the target, prune at
-    // scan time.  Drop either half and a long-lived old holder written once loses its record after
-    // the first minor drains it.
-    //
-    // This was previously off behind an A/B switch whose stated reason was that a proposed
-    // acceptance criterion -- "remembered= collapses across minors" -- did not reproduce.  That is a
-    // side-effect criterion, not a correctness one: ZGC's argument never claims the count collapses,
-    // and the count is free to grow when the old->young edge population genuinely grows.  Turning it
-    // on is also the conservative direction; it can only add entries, and a superfluous remset entry
-    // costs a scan while a missing one loses an object.
-    constexpr bool remsetReRemember = true;
     size_t reRemembered = 0;
-    size_t originFound = 0;
-    size_t originBoundsValid = 0;
-    size_t retainedNever = 0;
-    size_t retainedValid = 0;
-    size_t retainedEmpty = 0;
-    size_t retainedStale = 0;
-    size_t retainedKeep = 0;
-    size_t retainedDrop = 0;
-    size_t safeEmptyDrop = 0;
-    size_t directDeadDrop = 0;
-    size_t filterCorrect = 0;
-    size_t filterIncorrect = 0;
-    size_t filterOverKeep = 0;   // filter kept, closure says dead — floating garbage (safe)
-    size_t filterOverDrop = 0;   // filter dropped, closure reached it — a live edge (unsafe)
-    // holderlive (F2): never=100% has three candidate producers and the state word cannot
-    // tell them apart. RegionInfo keeps a per-region-life history (RegionInfo.h:107-124);
-    // read it here so the answer is a count, not a reading of the code.
-    size_t neverNoPreserve = 0;      // Preserve* never ran on this region in its current life
-    size_t neverPreserveSaidNever = 0; // Preserve* ran, had no live info, wrote NEVER itself
-    size_t neverCleared = 0;         // Preserve* stored a snapshot, a clear path wiped it
-    size_t neverLastOp[RegionInfo::RETAINED_OP_COUNT] = { 0 };
-    size_t neverLiveInfoNow = 0;     // holder region has a live (current-cycle) LiveInfo now
-    size_t neverHolderYoung = 0;
-    size_t neverRegionType[16] = { 0 };
-    // holderlive (F2) ③: bad_target population crossed with holder liveness (FYS oracle).
-    size_t deadHolderTargetOk = 0;
-    size_t deadHolderTargetBad = 0;
-    size_t liveHolderTargetOk = 0;
-    size_t liveHolderTargetBad = 0;
     // The precise bitmap intentionally stores only field-slot identity. Recover an
     // object origin only for regions whose retained snapshot is consumable (or when
     // the default-off probe requests visibility), and keep that adapter local to this
@@ -484,8 +477,8 @@ void WCollector::RescanRememberedSet(WorkStack& workStack, const MinorSlotSet& r
             continue;
         }
         RegionInfo::RetainedLiveInfoState retainedState = region->GetRetainedLiveInfoState();
-        if (retainedProbe || (retainedState != RegionInfo::RetainedLiveInfoState::NEVER_EXAMINED &&
-                             region->IsRetainedSnapshotValid())) {
+        if (retainedState != RegionInfo::RetainedLiveInfoState::NEVER_EXAMINED &&
+            region->IsRetainedSnapshotValid()) {
             originRegions.insert(region);
         }
     }
@@ -636,60 +629,20 @@ void WCollector::RescanRememberedSet(WorkStack& workStack, const MinorSlotSet& r
             retainedHolder = holder;
             RegionInfo* originRegion = RegionInfo::TryGetRegionInfoAt(reinterpret_cast<MAddress>(holder));
             if (originRegion == holderRegion) {
-                if (retainedProbe) {
-                    ++originFound;
-                    MAddress holderAddress = reinterpret_cast<MAddress>(holder);
-                    size_t holderSize = RegionSpace::GetAllocSize(*holder);
-                    if (slot >= holderAddress && slot < holderAddress + holderSize) {
-                        ++originBoundsValid;
-                    }
-                }
                 RegionInfo::RetainedLiveInfoState retainedState = holderRegion->GetRetainedLiveInfoState();
                 if (retainedState == RegionInfo::RetainedLiveInfoState::NEVER_EXAMINED) {
-                    if (retainedProbe) {
-                        ++retainedNever;
-                        uint32_t preserveCnt = holderRegion->GetRetainedPreserveCount();
-                        uint32_t clearCnt = holderRegion->GetRetainedClearCount();
-                        if (preserveCnt == 0) {
-                            ++neverNoPreserve;
-                        } else if (clearCnt != 0) {
-                            ++neverCleared;
-                        } else {
-                            ++neverPreserveSaidNever;
-                        }
-                        neverLastOp[holderRegion->GetRetainedLastOp() % RegionInfo::RETAINED_OP_COUNT]++;
-                        if (holderRegion->GetLiveInfo() != nullptr) {
-                            ++neverLiveInfoNow;
-                        }
-                        if (holderRegion->IsYoungRegion()) {
-                            ++neverHolderYoung;
-                        }
-                        neverRegionType[static_cast<unsigned>(holderRegion->GetRegionType()) & 0xFU]++;
-                    }
                 } else if (!holderRegion->IsRetainedSnapshotValid()) {
-                    if (retainedProbe) {
-                        ++retainedStale;
-                    }
                 } else {
                     MAddress coveredUpTo = holderRegion->GetRetainedLiveInfoCoveredUpTo();
                     CHECK(coveredUpTo >= holderRegion->GetRegionStart() &&
                           coveredUpTo <= holderRegion->GetRegionAllocPtr());
                     MAddress holderAddress = reinterpret_cast<MAddress>(holder);
                     if (retainedState == RegionInfo::RetainedLiveInfoState::SNAPSHOT_EMPTY) {
-                        if (retainedProbe) {
-                            ++retainedEmpty;
-                        }
                     } else {
-                        if (retainedProbe) {
-                            ++retainedValid;
-                        }
                     }
                     if (holderAddress < coveredUpTo) {
                         if (retainedState == RegionInfo::RetainedLiveInfoState::SNAPSHOT_EMPTY) {
                             keepByRetainedSnapshot = false;
-                            if (retainedProbe) {
-                                ++safeEmptyDrop;
-                            }
                         } else if (holderRegion->IsLargeRegion()) {
                             LiveInfo* retainedLiveInfo = holderRegion->GetRetainedLiveInfo();
                             MarkView<Generation::Old> retainedView =
@@ -697,9 +650,6 @@ void WCollector::RescanRememberedSet(WorkStack& workStack, const MinorSlotSet& r
                             keepByRetainedSnapshot = retainedLiveInfo != nullptr
                                 ? holderRegion->IsSurvivedObject(retainedView, retainedLiveInfo, 0)
                                 : holderRegion->IsSurvivedObject(retainedView, 0);
-                            if (retainedProbe && !keepByRetainedSnapshot) {
-                                ++directDeadDrop;
-                            }
                         } else {
                             size_t holderOffset = holderRegion->GetAddressOffset(holderAddress);
                             // holderlive (F2): prefer the region's own copy of the mark bits.
@@ -719,19 +669,9 @@ void WCollector::RescanRememberedSet(WorkStack& workStack, const MinorSlotSet& r
                                 keepByRetainedSnapshot = holderRegion->IsSurvivedObject(
                                     retainedView, retainedLiveInfo, holderOffset);
                             }
-                            if (retainedProbe && !keepByRetainedSnapshot) {
-                                ++directDeadDrop;
-                            }
                         }
                     }
                 }
-            }
-        }
-        if (retainedProbe) {
-            if (keepByRetainedSnapshot) {
-                ++retainedKeep;
-            } else {
-                ++retainedDrop;
             }
         }
         // A young collection has no authority over old-generation liveness, so it may not
@@ -852,76 +792,6 @@ void WCollector::RescanRememberedSet(WorkStack& workStack, const MinorSlotSet& r
             noteRemsetOutcome(slot, 9, reinterpret_cast<MAddress>(target));
             ++scrubbedBadTarget;
             NwDropAudit::Note(NwDropAudit::kBadTarget);
-            if (remsetLifeProbe) {
-                MAddress tAddr = reinterpret_cast<MAddress>(target);
-                RegionInfo* tRegion = RegionInfo::TryGetRegionInfoAt(tAddr);
-                if (tRegion == nullptr) {
-                    ++btNoRegion;
-                } else {
-                    btRegionType[static_cast<unsigned>(tRegion->GetRegionType()) & 0xFU]++;
-                    if (tRegion->IsYoungRegion()) {
-                        ++btTargetYoung;
-                    }
-                    bool noDecisionFace = false;
-                    if (tRegion->IsYoungRegion()) {
-                        noDecisionFace = tRegion->GetMarkBitmap(
-                            tRegion->GetMarkView<Generation::Young>()) == nullptr;
-                    } else {
-                        noDecisionFace = tRegion->GetMarkBitmap(
-                            tRegion->GetMarkView<Generation::Old>()) == nullptr;
-                    }
-                    if (noDecisionFace &&
-                        tRegion->GetRegionAllocPtr() > tRegion->GetRegionStart()) {
-                        ++btNeverExamined;
-                    }
-                    // Is the address inside the region's allocated prefix at all? A target at or
-                    // past allocPtr was never handed out by this region's current life.
-                    if (tAddr >= tRegion->GetRegionAllocPtr()) {
-                        ++btBeyondAlloc;
-                    } else {
-                        ++btInAlloc;
-                    }
-                }
-                uint64_t word0 = 0;
-                std::memcpy(&word0, target, sizeof(word0));
-                if (word0 == 0) {
-                    ++btWord0Zero;
-                }
-                if ((rawSlot & TAGGED_BITS_MASK) != 0) {
-                    ++btRawTagged;
-                }
-                // Which read-path predicate saw this value? peek is the pre-resolve snapshot.
-                if (IsLoadBad(peek)) {
-                    ++btLoadBad;
-                }
-                if (IsOldPointer(peek)) {
-                    ++btOldPtr;
-                }
-                if (IsCurrentPointer(peek)) {
-                    ++btCurrentPtr;
-                }
-                auto btOrigin = rememberedOrigins.find(slot);
-                if (btOrigin != rememberedOrigins.end() && btOrigin->second != nullptr) {
-                    ++btOriginFound;
-                    if (!btOrigin->second->IsValidObject()) {
-                        ++btHolderInvalid;
-                    }
-                }
-                // Was the target's memory zeroed under us by a region recycle
-                // (TakeRegion → ClearUnits, RegionManager.cpp:1262) or a compact tail?
-                // Reuses the existing gcfwdfix ring; needs MRT_GCV2_TRACE_CLEAR=1.
-                if (TraceClear::Enabled()) {
-                    char clearDetail[256];
-                    if (TraceClear::Lookup(tAddr, clearDetail, sizeof(clearDetail))) {
-                        ++btClearHit;
-                        size_t c = g_remsetLifeClearLogged.fetch_add(1, std::memory_order_relaxed);
-                        if (c < 8) {
-                            VLOG(REPORT, "[GCV2][remsetlife][cleared] slot=%#zx target=%p detail=%s",
-                                 static_cast<size_t>(slot), target, clearDetail);
-                        }
-                    }
-                }
-            }
             size_t n = g_remsetScrubLogged.fetch_add(1, std::memory_order_relaxed);
             if (n < 16) {
                 RegionInfo* targetRegion = RegionInfo::TryGetRegionInfoAt(reinterpret_cast<MAddress>(target));
@@ -966,14 +836,12 @@ void WCollector::RescanRememberedSet(WorkStack& workStack, const MinorSlotSet& r
         // one minor. Record() targets the active (next-cycle) buffer and is idempotent.
         // If the target is promoted out of young by this collection, the next Rescan
         // simply will not re-arm it, so the entry self-drains.
-        if (remsetReRemember) {
-            RegionInfo* keepRegion = RegionInfo::TryGetRegionInfoAt(reinterpret_cast<MAddress>(target));
-            if (keepRegion != nullptr && keepRegion->IsYoungRegion()) {
-                Heap::GetHeap().GetRememberedSet().Record(slot);
-                ++reRemembered;
-            } else {
-                noteRemsetOutcome(slot, 10, reinterpret_cast<MAddress>(target));
-            }
+        RegionInfo* keepRegion = RegionInfo::TryGetRegionInfoAt(reinterpret_cast<MAddress>(target));
+        if (keepRegion != nullptr && keepRegion->IsYoungRegion()) {
+            Heap::GetHeap().GetRememberedSet().Record(slot);
+            ++reRemembered;
+        } else {
+            noteRemsetOutcome(slot, 10, reinterpret_cast<MAddress>(target));
         }
     }
     if (scrubbedStale != 0 || scrubbedDeadHolder != 0 || scrubbedNoTargetOrigin != 0 ||
@@ -1001,57 +869,5 @@ void WCollector::RescanRememberedSet(WorkStack& workStack, const MinorSlotSet& r
     VLOG(REPORT, "[GCV2][findto-postlifecycle] soft=%zu",
          g_findtoPostLifecycleSoft.load(std::memory_order_relaxed));
     NwDropAudit::Report("rescan");
-    if (remsetLifeProbe && scrubbedBadTarget != 0) {
-        VLOG(REPORT,
-             "[GCV2][remsetlife] badTarget=%zu noRegion=%zu beyondAlloc=%zu inAlloc=%zu word0Zero=%zu "
-             "neverExamined=%zu targetYoung=%zu rawTagged=%zu loadBad=%zu oldPtr=%zu currentPtr=%zu "
-             "originFound=%zu holderInvalid=%zu clearHit=%zu "
-             "rtype=[%zu,%zu,%zu,%zu,%zu,%zu,%zu,%zu,%zu,%zu,%zu,%zu,%zu,%zu,%zu,%zu] "
-             "originsBuilt=%zu remembered=%zu env=MRT_GCV2_REMSETLIFE=1",
-             scrubbedBadTarget, btNoRegion, btBeyondAlloc, btInAlloc, btWord0Zero, btNeverExamined, btTargetYoung,
-             btRawTagged, btLoadBad, btOldPtr, btCurrentPtr, btOriginFound, btHolderInvalid, btClearHit,
-             btRegionType[0], btRegionType[1], btRegionType[2],
-             btRegionType[3], btRegionType[4], btRegionType[5], btRegionType[6], btRegionType[7], btRegionType[8],
-             btRegionType[9], btRegionType[10], btRegionType[11], btRegionType[12], btRegionType[13],
-             btRegionType[14], btRegionType[15], rememberedOrigins.size(), rememberedSlots.size());
-    }
-    if (retainedProbe) {
-        VLOG(REPORT,
-             "[RETLIVE][summary] slots=%zu originFound=%zu originBoundsValid=%zu never=%zu valid=%zu empty=%zu "
-             "stale=%zu keep=%zu drop=%zu safeEmpty=%zu directDead=%zu oracleCorrect=%zu oracleIncorrect=%zu "
-             "fullYoungScan=%u",
-             rememberedSlots.size(), originFound, originBoundsValid, retainedNever, retainedValid, retainedEmpty,
-             retainedStale, retainedKeep, retainedDrop, safeEmptyDrop, directDeadDrop, filterCorrect,
-             filterIncorrect, static_cast<unsigned>(fullYoungScan));
-        VLOG(REPORT,
-             "[RETLIVE][why-never] never=%zu noPreserve=%zu preserveSaidNever=%zu cleared=%zu "
-             "liveInfoNow=%zu holderYoung=%zu lastOp=[none=%zu,pVALID=%zu,pEMPTY=%zu,pNEVER=%zu,"
-             "clrChecked=%zu,clrAll=%zu,clrRange=%zu]",
-             retainedNever, neverNoPreserve, neverPreserveSaidNever, neverCleared, neverLiveInfoNow,
-             neverHolderYoung, neverLastOp[RegionInfo::RETAINED_OP_NONE],
-             neverLastOp[RegionInfo::RETAINED_OP_PRESERVE_VALID],
-             neverLastOp[RegionInfo::RETAINED_OP_PRESERVE_EMPTY],
-             neverLastOp[RegionInfo::RETAINED_OP_PRESERVE_NEVER],
-             neverLastOp[RegionInfo::RETAINED_OP_CLEAR_CHECKED],
-             neverLastOp[RegionInfo::RETAINED_OP_CLEAR_ALL],
-             neverLastOp[RegionInfo::RETAINED_OP_CLEAR_RANGE]);
-        VLOG(REPORT,
-             "[RETLIVE][why-never-rtype] originRegions=%zu rtype=[%zu,%zu,%zu,%zu,%zu,%zu,%zu,%zu,"
-             "%zu,%zu,%zu,%zu,%zu,%zu,%zu,%zu]",
-             originRegions.size(), neverRegionType[0], neverRegionType[1], neverRegionType[2],
-             neverRegionType[3], neverRegionType[4], neverRegionType[5], neverRegionType[6],
-             neverRegionType[7], neverRegionType[8], neverRegionType[9], neverRegionType[10],
-             neverRegionType[11], neverRegionType[12], neverRegionType[13], neverRegionType[14],
-             neverRegionType[15]);
-        VLOG(REPORT,
-             "[RETLIVE][deadalive] deadHolderTargetOk=%zu deadHolderTargetBad=%zu "
-             "liveHolderTargetOk=%zu liveHolderTargetBad=%zu (FYS oracle; liveHolderTargetBad>0 "
-             "= a live holder whose remset target does not resolve)",
-             deadHolderTargetOk, deadHolderTargetBad, liveHolderTargetOk, liveHolderTargetBad);
-        VLOG(REPORT,
-             "[RETLIVE][verdict] overKeep=%zu overDrop=%zu correct=%zu (overDrop>0 = the filter "
-             "would have dropped an edge the young closure reached)",
-             filterOverKeep, filterOverDrop, filterCorrect);
-    }
 }
 } // namespace MapleRuntime
