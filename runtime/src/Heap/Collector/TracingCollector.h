@@ -261,11 +261,9 @@ private:
 
 class MarkingWork;
 class ConcurrentMarkingWork;
-class ExportRootsTracingWork;
 class TracingCollector : public Collector {
     friend MarkingWork;
     friend ConcurrentMarkingWork;
-    friend ExportRootsTracingWork;
 #if defined(MRT_TESTABLE_INTERNALS)
     friend struct RelocationReceiptTestAccess;
     friend struct GenerationCycleRootTestAccess;
@@ -393,7 +391,6 @@ public:
         return RegionSpace::IsMarkedObject<G>(obj) ||
             (G == Generation::Old && RegionSpace::IsResurrectedObject(obj));
     }
-    void DFSTraceExportObject(BaseObject* exportObj, bool finalizable = false);
     void StartOldMarkWork();
     void MarkOldObjectIfActive(BaseObject* object, bool gcThread = false) const override;
     virtual bool MarkObject(BaseObject* obj) const
@@ -559,14 +556,14 @@ protected:
     void MergeMutatorRoots(WorkStack& workStack);
     void DoEnumeration(WorkStack& workStack, WorkStack& foreignRootsSet);
     void DoTracing(WorkStack& workStack, WorkStack& foreignRootsSet);
-    bool FinishOldMark(WorkStack& workStack);
+    bool FinishOldMark(WorkStack& workStack, WorkStack& foreignRootsSet);
     bool FlushMarkProducers(MarkDomain* domain);
     void ProcessOldNonStrongReferences(WorkStack& workStack);
+    void ProcessExportRoots(WorkStack& foreignRootsSet);
 
     // concurrent marking.
     void TracingImpl(WorkStack& workStack, WorkStack& foreignRootsSet);
 
-    void AddExportObjectsTracingWork(RootSet& exportRoots);
     virtual void EnumAndTagRawRoot(ObjectRef& root, RootSet& rootSet) const
     {
         Collector::AbortUnimplemented("TracingCollector::EnumAndTagRawRoot");
@@ -575,8 +572,8 @@ protected:
     void FindUselessExternObjects();
 
 private:
-    size_t RunMajorStripeMark(WorkStack& workStack, bool partial = false);
-    void ConcurrentReMark(WorkStack& remarkStack);
+    size_t RunMajorStripeMark(WorkStack& workStack, bool partial = false, BaseObject* exportOwner = nullptr);
+    void ConcurrentReMark(WorkStack& remarkStack, WorkStack& foreignRootsSet);
     void EnumMutatorRoot(ObjectPtr& obj, RootSet& rootSet) const;
     void EnumConcurrencyModelRoots(RootSet& rootSet) const;
     void EnumStaticRoots(RootSet& rootSet) const;
