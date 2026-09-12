@@ -282,7 +282,6 @@ void Mutator::RequestEpochHandshake(uint64_t epoch, bool young)
     epochHandshakeRequest.store(epoch, std::memory_order_relaxed);
     epochHandshakeState.store(EPOCH_HANDSHAKE_REQUESTED, std::memory_order_release);
     SetSuspensionFlag(SUSPENSION_FOR_EPOCH_HANDSHAKE);
-    SetSafepointActive(true);
 }
 
 void Mutator::MarkBornCleanForEpoch(uint64_t epoch)
