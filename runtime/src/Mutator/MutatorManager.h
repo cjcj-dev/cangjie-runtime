@@ -365,8 +365,6 @@ public:
                                 std::vector<MarkFlushThread*>& handle);
     void EnqueueHandshakeOn(ThreadLocalData* target, HandshakeClosure* cl, std::list<HandshakeOperation*>& ops,
                             std::vector<MarkFlushThread*>& handle);
-    void EnqueueHandshakeOnMutator(Mutator* mutator, HandshakeClosure* cl, std::list<HandshakeOperation*>& ops,
-                                   std::vector<MarkFlushThread*>& handle);
     void ReleaseHandshakeHandle(std::vector<MarkFlushThread*>& handle);
 
     template<typename Fn>

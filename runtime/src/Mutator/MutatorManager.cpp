@@ -786,42 +786,6 @@ void MutatorManager::EnqueueHandshakeOn(ThreadLocalData* target, HandshakeClosur
     ops.push_back(op);
 }
 
-void MutatorManager::EnqueueHandshakeOnMutator(Mutator* mutator, HandshakeClosure* cl,
-                                               std::list<HandshakeOperation*>& ops,
-                                               std::vector<MarkFlushThread*>& handle)
-{
-    if (mutator == nullptr || cl == nullptr) {
-        return;
-    }
-    std::lock_guard<std::mutex> lock(markFlushThreadMutex);
-    ThreadLocalData* target = nullptr;
-    MarkFlushThread* rec = nullptr;
-    for (auto& kv : markFlushThreads) {
-        if (kv.first == nullptr || kv.second->dying.load(std::memory_order_acquire) != 0) {
-            continue;
-        }
-        if (kv.first->mutator == mutator) {
-            target = kv.first;
-            rec = kv.second.get();
-            break;
-        }
-    }
-    if (target == nullptr || rec == nullptr) {
-        return;
-    }
-    HandshakeState* state = rec->handshake;
-    if (state == nullptr) {
-        rec->ownedHandshake = std::make_unique<HandshakeState>(target);
-        rec->handshake = rec->ownedHandshake.get();
-        state = rec->handshake;
-    }
-    rec->refs.fetch_add(1, std::memory_order_acq_rel);
-    handle.push_back(rec);
-    auto* op = new HandshakeOperation(cl, target);
-    state->add_operation(op);
-    ops.push_back(op);
-}
-
 void MutatorManager::ReleaseHandshakeHandle(std::vector<MarkFlushThread*>& handle)
 {
     for (MarkFlushThread* target : handle) {
@@ -1368,9 +1332,7 @@ void MutatorManager::TransitionAllMutatorsToCpuProfile()
             (void)mutator->TransitionToCpuProfile(tls == ThreadLocal::GetThreadLocalData());
         }
     } cpuCl;
-    if (!undoneMutators.empty()) {
-        Handshake::execute(&cpuCl, undoneMutators.front());
-    }
+    Handshake::execute(&cpuCl);
     EnsureCpuProfileFinish(undoneMutators);
     if (!worldStopped) {
         MutatorManagementWUnlock();

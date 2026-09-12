@@ -237,18 +237,6 @@ void Handshake::execute(HandshakeClosure* cl, ThreadLocalData* target)
     MutatorManager::Instance().ReleaseHandshakeHandle(handle);
 }
 
-void Handshake::execute(HandshakeClosure* cl, Mutator* mutator)
-{
-    if (cl == nullptr || mutator == nullptr) {
-        return;
-    }
-    std::list<HandshakeOperation*> ops;
-    std::vector<MutatorManager::MarkFlushThread*> handle;
-    MutatorManager::Instance().EnqueueHandshakeOnMutator(mutator, cl, ops, handle);
-    WaitHandshakeOps(ops);
-    MutatorManager::Instance().ReleaseHandshakeHandle(handle);
-}
-
 void ArmThreadPoll(ThreadLocalData* tls)
 {
     if (tls != nullptr) {
