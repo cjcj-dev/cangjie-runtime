@@ -208,6 +208,10 @@ public:
 
     void MarkNewObject(BaseObject* obj) override;
     void StartYoungMarkWork();
+    void DrainAllocBufferMarkProducers(AllocBuffer* buffer, WorkStack& work);
+    bool PublishHandshakeMarkWork(WorkStack& work, MarkDomain* domain);
+    bool FlushAllocBufferMarkProducers(AllocBuffer* buffer, MarkDomain* domain);
+    bool FlushAllocBufferMarkProducers(AllocBuffer* buffer);
     void MarkYoungObjectIfActive(BaseObject* object, bool followOnly = false) const override;
 
     bool ShouldIgnoreRequest(GCRequest& request) override;

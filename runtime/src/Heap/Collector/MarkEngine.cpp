@@ -247,4 +247,31 @@ bool MarkDomain::PollStop()
     return false;
 }
 
+bool MarkDomain::FlushStacks()
+{
+    bool flushed = false;
+    for (auto& stack : stacks) {
+        if (stack != nullptr && stack->Flush(stripes, true)) {
+            flushed = true;
+        }
+    }
+    return flushed;
+}
+
+bool MarkDomain::TryTerminateFlush()
+{
+    terminate.SetResurrected(false);
+    const bool flushed = FlushStacks();
+    return flushed || !stripes.IsEmpty() || terminate.Resurrected();
+}
+
+bool MarkDomain::TryEnd()
+{
+    if (terminate.Resurrected()) {
+        return false;
+    }
+    (void)FlushStacks();
+    return stripes.IsEmpty();
+}
+
 } // namespace MapleRuntime
