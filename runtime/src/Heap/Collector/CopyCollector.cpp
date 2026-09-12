@@ -20,7 +20,6 @@
 #include "Heap/Verify/VerifyRoots.h"
 #include "Common/Runtime.h"
 #include "Mutator/MutatorManager.h"
-#include "Mutator/SatbBuffer.h"
 #include "ObjectModel/RefField.inline.h"
 #include "schedule.h"
 #if defined(CANGJIE_TSAN_SUPPORT)

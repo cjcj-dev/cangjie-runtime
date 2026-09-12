@@ -9,9 +9,6 @@
 
 #include <array>
 #include <atomic>
-#if defined(MRT_GCV2_UNTAG_BREADCRUMB)
-#include <csignal>
-#endif
 #include <cstdint>
 #include <cstdio>
 #include <cstdlib>
@@ -28,9 +25,6 @@
 #include <vector>
 #include <unistd.h>
 
-#if defined(MRT_GCV2_UNTAG_BREADCRUMB)
-#include "Base/SysCall.h"
-#endif
 #include "Concurrency/Concurrency.h"
 #include "Heap/Barrier/StoreBarrierBuffer.h"
 #include "Heap/Collector/GcTriggerFlags.h"
@@ -38,9 +32,6 @@
 #include "Heap/Collector/TenuringThreshold.h"
 #include "Heap/GcThreadPool.h"
 #include "Heap/HeapWork.h"
-#if defined(MRT_GCV2_UNTAG_BREADCRUMB)
-#include "Heap/WCollector/UntagRefFieldBreadcrumb.h"
-#endif
 #include "Heap/Verify/VerifyHeap.h"
 #include "Heap/Verify/MarkCompleteVerify.h"
 #include "Heap/Verify/VerifyOption.h"
@@ -63,9 +54,6 @@
 #include "ObjectModel/RefField.inline.h"
 #include "TypeInfoManager.h"
 #include "Verify/VerifyRegions.h"
-#if defined(MRT_GCV2_UNTAG_BREADCRUMB)
-#include "securec.h"
-#endif
 #include "Heap/WCollector/WCollectorInternal.h"
 
 namespace MapleRuntime {
@@ -82,10 +70,10 @@ struct Y2yHandoffReceiptState {
 Y2yHandoffReceiptState g_y2yHandoffReceipt;
 std::atomic<BaseObject*> g_y2yAfterReleaseHolder { nullptr };
 std::atomic<uint64_t> g_y2yAfterReleasePublications { 0 };
-std::atomic<Mutator*> g_satbBeforeMarkEndProducer { nullptr };
-std::atomic<BaseObject*> g_satbBeforeMarkEndFirst { nullptr };
-std::atomic<BaseObject*> g_satbBeforeMarkEndSecond { nullptr };
-std::atomic<uint64_t> g_satbBeforeMarkEndPublications { 0 };
+std::atomic<Mutator*> g_markBeforeMarkEndProducer { nullptr };
+std::atomic<BaseObject*> g_markBeforeMarkEndFirst { nullptr };
+std::atomic<BaseObject*> g_markBeforeMarkEndSecond { nullptr };
+std::atomic<uint64_t> g_markBeforeMarkEndPublications { 0 };
 std::atomic<BaseObject*> g_allocBlackDuringConcurrent { nullptr };
 std::atomic<BaseObject*> g_y2yDuringConcurrent { nullptr };
 std::atomic<BaseObject*> g_leftoverAllocBlackBeforePause { nullptr };
@@ -165,31 +153,31 @@ void PublishY2yAfterReleaseTestReceipt()
     }
 }
 
-void ArmSatbBeforeMarkEndTestReceipt(Mutator* producer, BaseObject* first, BaseObject* second)
+void ArmMarkBeforeMarkEndTestReceipt(Mutator* producer, BaseObject* first, BaseObject* second)
 {
-    g_satbBeforeMarkEndProducer.store(producer, std::memory_order_release);
-    g_satbBeforeMarkEndFirst.store(first, std::memory_order_release);
-    g_satbBeforeMarkEndSecond.store(second, std::memory_order_release);
-    g_satbBeforeMarkEndPublications.store(second == nullptr ? 1 : 2, std::memory_order_release);
+    g_markBeforeMarkEndProducer.store(producer, std::memory_order_release);
+    g_markBeforeMarkEndFirst.store(first, std::memory_order_release);
+    g_markBeforeMarkEndSecond.store(second, std::memory_order_release);
+    g_markBeforeMarkEndPublications.store(second == nullptr ? 1 : 2, std::memory_order_release);
 }
 
-void PublishSatbBeforeMarkEndTestReceipt()
+void PublishMarkBeforeMarkEndTestReceipt()
 {
-    uint64_t remaining = g_satbBeforeMarkEndPublications.load(std::memory_order_acquire);
+    uint64_t remaining = g_markBeforeMarkEndPublications.load(std::memory_order_acquire);
     while (remaining != 0 &&
-           !g_satbBeforeMarkEndPublications.compare_exchange_weak(remaining, remaining - 1,
+           !g_markBeforeMarkEndPublications.compare_exchange_weak(remaining, remaining - 1,
                                                                   std::memory_order_acq_rel,
                                                                   std::memory_order_acquire)) {}
     if (remaining == 0) {
         return;
     }
-    Mutator* producer = g_satbBeforeMarkEndProducer.load(std::memory_order_acquire);
-    BaseObject* first = g_satbBeforeMarkEndFirst.load(std::memory_order_acquire);
-    BaseObject* second = g_satbBeforeMarkEndSecond.load(std::memory_order_acquire);
+    Mutator* producer = g_markBeforeMarkEndProducer.load(std::memory_order_acquire);
+    BaseObject* first = g_markBeforeMarkEndFirst.load(std::memory_order_acquire);
+    BaseObject* second = g_markBeforeMarkEndSecond.load(std::memory_order_acquire);
     BaseObject* object = remaining == 2 ? first : (second != nullptr ? second : first);
-    CHECK_DETAIL(producer != nullptr && object != nullptr, "armed SATB mark-end receipt without producer/object");
-    producer->RememberObjectInSatbBuffer(object);
-    producer->FlushSatbBuffer();
+    CHECK_DETAIL(producer != nullptr && object != nullptr, "armed mark-end receipt without producer/object");
+    Heap::GetHeap().GetCollector().MarkObjectIfActive(object);
+    producer->FlushStoreBarrierBuffer();
 }
 
 void ArmAllocBlackDuringConcurrentTestReceipt(BaseObject* object)
@@ -280,7 +268,7 @@ void FlushExportRootAfterT1TestReceipt()
     }
     Mutator* producer = g_exportRootAfterT1Producer.load(std::memory_order_acquire);
     CHECK_DETAIL(producer != nullptr, "registered export-root T1 receipt has no producer");
-    producer->FlushSatbBuffer();
+    producer->FlushStoreBarrierBuffer();
 }
 
 void NoteExportRootPublicationAtT2TestReceipt()
@@ -756,8 +744,11 @@ void WCollector::DoYoungGarbageCollection()
     std::unique_ptr<ScopedStopTheWorld> stw =
         std::make_unique<ScopedStopTheWorld>("young prepare", false);
     // Full-colour gate: reject any plain HeapSlot before young mark mutates colours.
-    // This STW entry is the young-only mark start; old marking does not participate in a minor.
+    // VM_ZMarkStartYoungAndOld / VM_ZMarkStartYoung (zGeneration.cpp:583-659).
+    // A major starts old exactly once in this young pause. An independent
+    // minor leaves the old cycle identity and mark color untouched.
     flip_young_mark_start();
+    StartYoungMarkWork();
 
     // minortime: STW rendezvous cost is already logged by ScopedStopTheWorld dtor
     // ("young collection stw time N us"). Body timers below exclude that wait.
@@ -775,6 +766,18 @@ void WCollector::DoYoungGarbageCollection()
         FlushAllocationRegions();
     }
 
+    if (const GCDriverRequest* request = collectorResources.YoungPreludeRequest()) {
+        oldCycle.SelectReason(request->reason);
+        oldCycle.Begin(request->asynchronous ? GCTask::ASYNC_TASK_INDEX : request->sequence);
+        StartOldMarkWork();
+        flip_old_mark_start();
+        // Reset the old mark face before young roots can publish old work.
+        // ZGenerationOld::mark_start -> ZMark::start (zGeneration.cpp:1212-1237).
+        reinterpret_cast<RegionSpace&>(theAllocator).AssembleGarbageCandidates();
+        oldCycle.PublishPhase(GCPhase::GC_PHASE_ENUM);
+    }
+
+
     RegionSpace& space = reinterpret_cast<RegionSpace&>(theAllocator);
     RegionManager& manager = space.GetRegionManager();
     minorCandidateRegions.clear();
@@ -785,6 +788,15 @@ void WCollector::DoYoungGarbageCollection()
         stats = manager.PrepareYoungGarbageCandidates(
             [this](RegionInfo* region) { minorCandidateRegions.insert(region); });
     }
+    // Publish the reset young mark face before phase-change store-buffer
+    // scanning can enqueue targets (zGeneration.cpp:855-881).
+    youngCycle.PublishPhase(GC_PHASE_ENUM);
+#if defined(MRT_TESTABLE_INTERNALS)
+    if (testYoungMarkStarted) {
+        testYoungMarkStarted();
+    }
+#endif
+
     VLOG(REPORT,
          "[GCV2][candfix] prepare_candidates candidate_regions=%zu candidate_bytes=%zu "
          "from_visited=%zu from_units=%zu unmovable_visited=%zu unmovable_units=%zu "
@@ -875,7 +887,7 @@ void WCollector::DoYoungGarbageCollection()
                      handshake.stackFallback);
 
         // CLEAR is the closing edge for ENUM writes: it flushes every mutator's
-        // SATB node before the root pass consumes retired objects below.
+        // store buffer before the root pass follows published mark work.
         stw = std::make_unique<ScopedStopTheWorld>("young collection", false);
         TransitionToGCPhase(GCPhase::GC_PHASE_CLEAR_SATB_BUFFER, true);
 
@@ -910,7 +922,7 @@ void WCollector::DoYoungGarbageCollection()
     VerifyMarkingStacks::VerifyEmpty(VerifyMarkingStacks::MarkingGeneration::YOUNG,
                                      VerifyMarkingStacks::MarkingBoundary::START,
                                      VerifyMarkingStacks::MarkingContainer::POOL,
-                                     GetThreadPool()->GetWorkCount(), 0);
+                                     GetWorkers().GetSnapshot().remainingWorkers, 0);
     std::vector<BaseObject*> reachableVec;
     reachableVec.reserve(1 << 17); // ~128k; real_load ~155k reachable
     MinorObjectSet allocationRoots;
@@ -952,9 +964,6 @@ void WCollector::DoYoungGarbageCollection()
         MRT_PHASE_TIMER("young.root_enum");
         WorkStack enumRoots = NewWorkStack();
         theAllocator.VisitAllocBuffers([&enumRoots](AllocBuffer& buffer) { buffer.MergeRoots(enumRoots); });
-        if (stackScanEpoch != 0) {
-            SatbBuffer::Instance().GetRetiredObjects(enumRoots);
-        }
         while (!enumRoots.empty()) {
             const MarkStackEntry entry = enumRoots.back();
             BaseObject* object = entry.object();
@@ -991,7 +1000,7 @@ void WCollector::DoYoungGarbageCollection()
 #endif
     };
     // ZGC zGeneration.cpp:665-692: roots and follow are the single concurrent
-    // young-mark path.  Mark-end convergence is owned by MarkYoungSatbBuffer's
+    // young-mark path.  Mark-end convergence is owned by FollowYoungMark's
     // termination protocol, not by a pause-local discovery loop.
     YoungConcWindowStats concWindow;
     uint64_t concWindowStartNs = 0;
@@ -1093,7 +1102,7 @@ void WCollector::DoYoungGarbageCollection()
     }
 #if defined(MRT_TESTABLE_INTERNALS)
     // Deterministic T1->T2 export-root window: root enumeration has returned,
-    // and the first shared-domain SATB consumer has not started yet.
+    // and the concurrent mark-follow consumer has not started yet.
     PublishExportRootAfterT1TestReceipt();
 #endif
     for (;;) {
@@ -1101,7 +1110,7 @@ void WCollector::DoYoungGarbageCollection()
         // Its worker completion is coordinated by YoungMarkTerminate (the
         // ZMarkTerminate worker-count/wakeup state machine), not pool polling.
         const bool workersTerminated =
-            MarkYoungSatbBuffer(workStack, fullYoungScan, reachableVec, reachableSlots,
+            FollowYoungMark(workStack, fullYoungScan, reachableVec, reachableSlots,
                                 weakSlots, &concWindow);
         CHECK_DETAIL(workersTerminated, "young concurrent mark workers did not terminate");
 #if defined(MRT_TESTABLE_INTERNALS)
@@ -1109,10 +1118,10 @@ void WCollector::DoYoungGarbageCollection()
         // Adversarial mutator publication point: workers have terminated, but
         // the pause has not started. The pause must flush once and return
         // failure; it must not consume closure in an in-pause loop.
-        PublishSatbBeforeMarkEndTestReceipt();
+        PublishMarkBeforeMarkEndTestReceipt();
         PublishLeftoverBeforePauseTestReceipt();
         // Publish after concurrent consumers have terminated. Publishing just
-        // after mark-start release lets MarkYoungSatbBuffer consume this work
+        // after mark-start release lets FollowYoungMark consume this work
         // before the pause, so it cannot exercise mark-end failure/continue.
         // ZGC zGeneration.cpp:897-904: only incomplete mark-end continues.
         PublishY2yAfterReleaseTestReceipt();
@@ -1130,7 +1139,7 @@ void WCollector::DoYoungGarbageCollection()
         const size_t y2yBatchAtMarkEnd = pendingY2yDirtyWorkCount();
 #endif
         theAllocator.VisitAllocBuffers([&workStack](AllocBuffer& buffer) {
-            // Frozen leftovers only. Concurrent MarkYoungSatbBuffer already
+            // Frozen leftovers only. Concurrent FollowYoungMark already
             // merged live alloc-buffer roots / allocate-black / y2y into the
             // termination domain. Pause must not become the first consumer.
 #if defined(MRT_TESTABLE_INTERNALS)
@@ -1156,7 +1165,7 @@ void WCollector::DoYoungGarbageCollection()
             VerifyMarkingStacks::VerifyEmpty(VerifyMarkingStacks::MarkingGeneration::YOUNG,
                                              VerifyMarkingStacks::MarkingBoundary::END,
                                              VerifyMarkingStacks::MarkingContainer::POOL,
-                                             GetThreadPool()->GetWorkCount(), 0);
+                                             GetWorkers().GetSnapshot().remainingWorkers, 0);
 #if defined(MRT_TESTABLE_INTERNALS)
             NoteExportRootPublicationAtT2TestReceipt();
 #endif
@@ -1196,15 +1205,15 @@ void WCollector::DoYoungGarbageCollection()
     }
     // portyoungconc positive control. Emitted on EVERY minor, including the closed arm, so
     // "no line" and "a line of zeros" are distinguishable. window_ns is the only field that
-    // a merely-existing window can raise; marked_in_window / satb_objects / closure_calls
+    // a merely-existing window can raise; marked_in_window / closure_calls
     // are GC work, and it is the work fields that decide whether the window is real.
     VLOG(REPORT,
          "[GCV2][youngconc][concwork] run=%zu conc=%d follow=%d window_ns=%llu marked_in_window=%zu "
-         "satb_objects=%zu satb_iters=%zu closure_calls=%zu remset_slots=%zu reenters=%zu "
+         "closure_calls=%zu remset_slots=%zu reenters=%zu "
          "marked_at_entry=%zu reachable_total=%zu",
          minorTotalRuns + 1, 1, 1,
          static_cast<unsigned long long>(concWindow.windowNs), concWindow.MarkedInWindow(),
-         concWindow.satbObjects, concWindow.satbIters, concWindow.closureCalls, concWindow.remsetSlots,
+         concWindow.closureCalls, concWindow.remsetSlots,
          concWindow.reenters, concWindow.markedAtEntry, reachableVec.size());
     // No independent full-root closure is available after deleting the empty
     // explainer. nullptr means "not measured"; an empty set must mean a closure
@@ -1274,7 +1283,6 @@ void WCollector::DoYoungGarbageCollection()
         // filled during marking is an ordinary candidate next cycle; it is never removed
         // from the structure the selector iterates.
         space.GetRegionManager().HandleTraceRegions();
-        SatbBuffer::Instance().ClearBuffer();
         ForwardingTable::PublishMarkCoverage(Generation::Young);
         ForwardingTable::ReclaimRetired("young-mark-coverage");
     }

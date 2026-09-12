@@ -3,66 +3,40 @@
 // with Runtime Library Exception.
 // See https://cangjie-lang.cn/pages/LICENSE for license information.
 // Tests the explicit ownership API. Concurrent mark/store wiring belongs to
-// the successor batch; these are not end-to-end dual-mark closure tests.
-#include <cstdio>
-#include <cstring>
-#include <dlfcn.h>
 #include "gc_heap_fixture.hpp"
 #include "gc_unittest.hpp"
-#include "Mutator/SatbBuffer.h"
+#include "mark_publication_fixture.hpp"
 using namespace MapleRuntime;
 using namespace MapleRuntime::GcUnit;
 
-GC_TEST(GenerationSatb, YoungCleanupPreservesOldEntries)
+GC_TEST(GenerationMark, YoungMarkWorkDoesNotConsumeOldStripes)
 {
-    GcHeapFixture heap;
-    auto& old = SatbBuffer::Instance(GCCycleGeneration::OLD);
-    auto& young = SatbBuffer::Instance(GCCycleGeneration::YOUNG);
-    old.Init();
-    young.Init();
-    SatbBuffer::Node* node = nullptr;
-    old.EnsureGoodNode(node);
-    GC_EXPECT_TRUE(node != nullptr);
-    node->Push(heap.obj0, nullptr, true);
-    old.FlushQueue(node);
-    young.EnsureGoodNode(node);
-    node->Push(heap.obj1, nullptr, true);
-    young.FlushQueue(node);
-    BaseObject* youngObject = nullptr;
-    young.GetRetiredEntries([&](BaseObject* object, bool) { youngObject = object; });
-    young.ClearBuffer();
-    young.ReclaimALLPages();
-    BaseObject* oldObject = nullptr;
-    old.GetRetiredEntries([&](BaseObject* object, bool) { oldObject = object; });
-    old.Fini();
-    std::printf("OBSERVED young=%p old=%p expected_young=%p expected_old=%p\n",
-                youngObject, oldObject, heap.obj1, heap.obj0);
-    GC_EXPECT_TRUE(youngObject == heap.obj1);
-    GC_EXPECT_TRUE(oldObject == heap.obj0);
+    GcHeapFixture fx;
+    MarkPublicationFixture mark;
+    fx.region0->SetYoungRegionFlag(0);
+    fx.region1->SetYoungRegionFlag(1);
+    mark.collector.MarkObjectIfActive(fx.obj0);
+    mark.collector.MarkObjectIfActive(fx.obj1);
+    GC_EXPECT_EQ(mark.OldPending(), 1u);
+    GC_EXPECT_EQ(mark.YoungPending(), 1u);
+    std::vector<BaseObject*> objects;
+    mark.DrainObjects(objects);
+    GC_EXPECT_EQ(objects.size(), 2u);
 }
 
-GC_TEST(GenerationSatb, FlushReturnsNodeToItsOwner)
+GC_TEST(GenerationMark, AllocatedBlackPublishesFollowWithoutSatbNode)
 {
-    GcHeapFixture heap;
-    auto& old = SatbBuffer::Instance(GCCycleGeneration::OLD);
-    auto& young = SatbBuffer::Instance(GCCycleGeneration::YOUNG);
-    old.Init();
-    young.Init();
-    SatbBuffer::Node* node = nullptr;
-    old.EnsureGoodNode(node);
-    GC_EXPECT_TRUE(node != nullptr);
-    node->Push(heap.obj0, nullptr, true);
-    // A serial selector change must not relabel already allocated storage.
-    young.FlushQueue(node);
-    BaseObject* oldObject = nullptr;
-    BaseObject* youngObject = nullptr;
-    old.GetRetiredEntries([&](BaseObject* object, bool) { oldObject = object; });
-    young.GetRetiredEntries([&](BaseObject* object, bool) { youngObject = object; });
-    old.Fini();
-    young.Fini();
-    std::printf("OBSERVED owner_old=%p other_young=%p expected=%p\n", oldObject, youngObject, heap.obj0);
-    GC_EXPECT_TRUE(oldObject == heap.obj0);
-    GC_EXPECT_TRUE(youngObject == nullptr);
+    GcHeapFixture fx;
+    MarkPublicationFixture mark;
+    fx.region0->SetYoungRegionFlag(1);
+    Mutator mutator;
+    mutator.PublishYoungAllocBlack(fx.obj0);
+    GC_EXPECT_EQ(mark.YoungPending(), 1u);
+    BaseObject* observed = nullptr;
+    bool follow = false;
+    mark.Drain([&](BaseObject* object, bool value) { observed = object; follow = value; });
+    GC_EXPECT_TRUE(observed == fx.obj0);
+    GC_EXPECT_TRUE(follow);
 }
 int main(int argc, char** argv)
 {

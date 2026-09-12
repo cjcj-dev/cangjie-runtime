@@ -23,7 +23,7 @@ class Allocator;
 // face. Concurrent stores land on current and are consumed next cycle after flip
 // (zRemembered.cpp:561-576 scans previous only). Correctness of not draining this
 // cycle is: a young target of a concurrent old→young store is already live by
-// allocate-black / mark-start watermark / SATB (see REPORT-youngconcstw2.md §0).
+// allocate-black / mark-start watermark (see REPORT-youngconcstw2.md §0).
 //
 // This auditor classifies STW2 DrainForMinor's current-face slots WITHOUT feeding
 // the mark closure. uncovered==0 is the gate to retire the drain-into-workStack
@@ -33,9 +33,8 @@ class Allocator;
 //   water      — RegionInfo::AllocatedAfterMarkStart (zPage is_allocating)
 //   allocblack — TRACE-window PushYoungAllocBlack ledger (RegionSpace.cpp:347)
 //   marked     — Young IsMarkedObject (bitmap / watermark)
-//   satb       — SATB retired + in-flight mutator node
 //   skip       — null / non-heap / not-young / not a managed object
-//   uncovered  — young target none of the four cover
+//   uncovered  — young target none of the three covers
 //
 // Positive control: ArmInject() forces uncovered+=1 so a zero cannot mean dead probe.
 namespace Stw2CurrentAudit {
@@ -45,7 +44,6 @@ enum class Stw2Cover : uint8_t {
     Water = 1,
     AllocBlack = 2,
     Marked = 3,
-    Satb = 4,
     Uncovered = 5,
 };
 
@@ -58,12 +56,11 @@ bool Enabled();
 // Force the next Census to count one synthetic uncovered (gc_unit / perturbation).
 void ArmInject();
 
-// Classify one young-or-not target. First match: water, alloc-black, marked, satb.
-Stw2Cover ClassifyTarget(BaseObject* target, const std::unordered_set<BaseObject*>& allocBlack,
-                         const std::unordered_set<BaseObject*>& satb);
+// Classify one young-or-not target. First match: water, alloc-black, marked.
+Stw2Cover ClassifyTarget(BaseObject* target, const std::unordered_set<BaseObject*>& allocBlack);
 
 // Observe-only. Call after DrainForMinor of the concurrent current face, before
-// MergeYoungAllocBlack / GetRetiredObjects consume those ledgers.
+// MergeYoungAllocBlack consume those ledgers.
 // allocator may be null (gc_unit / inject-only); alloc-black peek is then empty.
 void Census(const std::unordered_set<MAddress>& currentSlots, Allocator* allocator);
 
@@ -73,7 +70,6 @@ size_t Uncovered();
 size_t Water();
 size_t AllocBlack();
 size_t Marked();
-size_t Satb();
 size_t Skip();
 size_t Slots();
 size_t Minors();

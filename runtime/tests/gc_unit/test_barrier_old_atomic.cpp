@@ -31,7 +31,7 @@
 #include "Heap/Heap.h"
 #include "Heap/WCollector/TraceBarrier.h"
 #include "Mutator/Mutator.h"
-#include "Mutator/SatbBuffer.h"
+#include "mark_publication_fixture.hpp"
 #include "Mutator/ThreadLocal.h"
 #include "ObjectModel/RefField.inline.h"
 
@@ -59,6 +59,12 @@ namespace {
 
 class BarrierCollector final : public Collector {
 public:
+    void MarkOldObjectIfActive(BaseObject* object, bool gcThread = false) const override
+    { MarkPublicationFixture::Current().collector.MarkOldObjectIfActive(object, gcThread); }
+    void MarkYoungObjectIfActive(BaseObject* object, bool followOnly = false) const override
+    { MarkPublicationFixture::Current().collector.MarkYoungObjectIfActive(object, followOnly); }
+    GCCycleSnapshot GetCycleSnapshot(GCCycleGeneration generation) const override
+    { return MarkPublicationFixture::Current().collector.GetCycleSnapshot(generation); }
     void Init() override {}
     void RunGarbageCollection(uint64_t, GCReason) override {}
     bool ShouldIgnoreRequest(GCRequest&) override { return false; }
@@ -192,7 +198,7 @@ struct ReceiptCounts {
 ReceiptCounts DrainReceipts(BaseObject* oldValue, BaseObject* newValue)
 {
     std::vector<BaseObject*> retired;
-    SatbBuffer::Instance().GetRetiredObjects(retired);
+    DrainPublishedMarkObjects(retired);
     ReceiptCounts counts;
     for (BaseObject* object : retired) {
         counts.oldValue += object == oldValue ? 1u : 0u;
@@ -242,7 +248,7 @@ GC_TEST(BarrierOldAtomic, NoAllocBufferOverwriteRetiresOldValue)
     AllocBufferScope noBuffer(nullptr);
 
     fixture.barrier.WriteReference(fixture.holder, *fixture.field, fixture.newValue);
-    mutator.FlushSatbBuffer(false);
+    mutator.FlushStoreBarrierBuffer(false);
     const ReceiptCounts receipts = DrainReceipts(fixture.oldValue, fixture.newValue);
     const bool slotRemembered = fixture.remembered.Contains(reinterpret_cast<MAddress>(fixture.field));
     std::fprintf(stderr,
@@ -269,7 +275,7 @@ GC_TEST(BarrierOldAtomic, AllocBufferOverwriteRetiresOldValueControl)
     fixture.barrier.WriteReference(fixture.holder, *fixture.field, fixture.newValue);
     const size_t pending = alloc.GetStoreBarrierBuffer().Pending();
     alloc.GetStoreBarrierBuffer().Flush(fixture.remembered, fixture.collector);
-    mutator.FlushSatbBuffer(false);
+    mutator.FlushStoreBarrierBuffer(false);
     const ReceiptCounts receipts = DrainReceipts(fixture.oldValue, fixture.newValue);
     const bool slotRemembered = fixture.remembered.Contains(reinterpret_cast<MAddress>(fixture.field));
     std::fprintf(stderr,

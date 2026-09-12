@@ -22,7 +22,6 @@
 #include "gc_heap_fixture.hpp"
 #include "gc_unittest.hpp"
 #include "Heap/WCollector/WCollector.h"
-#include "Mutator/SatbBuffer.h"
 
 using namespace MapleRuntime;
 using namespace MapleRuntime::GcUnit;
@@ -817,15 +816,15 @@ GC_TEST(ZLiveMapPort, FinalizableAndStrongShareOnePair)
 // of the pair is the consumer-side receipt: exactly one 0->1 owns live-byte
 // accounting, matching ZLiveMap::set/par_set_bit_pair.
 
-GC_TEST(ZLiveMapPort, DuplicateSatbPublicationConvergesAtStrongMark)
+GC_TEST(ZLiveMapPort, DuplicatePublicationConvergesAtStrongMark)
 {
     GcHeapFixture fx;
     LiveInfo* live = fx.PlantLiveInfo(fx.region0);
     RegionBitmap* bitmap = fx.PlantMarkBitmap(live, fx.region0->GetRegionSize());
     const size_t offset = fx.region0->GetAddressOffset(reinterpret_cast<MAddress>(fx.obj0));
 
-    GC_EXPECT_TRUE(SatbBuffer::Instance().ShouldEnqueue(fx.obj0));
-    GC_EXPECT_TRUE(SatbBuffer::Instance().ShouldEnqueue(fx.obj0));
+    GC_EXPECT_TRUE(RegionSpace::ShouldEnqueue<Generation::Old>(fx.obj0));
+    GC_EXPECT_TRUE(RegionSpace::ShouldEnqueue<Generation::Old>(fx.obj0));
 
     bool firstIncLive = false;
     bool secondIncLive = false;
@@ -841,7 +840,7 @@ GC_TEST(ZLiveMapPort, DuplicateSatbPublicationConvergesAtStrongMark)
     GC_EXPECT_TRUE(receiptOnce && incLiveOnce && bytesOnce);
     GC_EXPECT_TRUE(bitmap->IsMarked(offset));
     GC_EXPECT_EQ(liveBytes, static_cast<size_t>(8));
-    GC_EXPECT_FALSE(SatbBuffer::Instance().ShouldEnqueue(fx.obj0));
+    GC_EXPECT_FALSE(RegionSpace::ShouldEnqueue<Generation::Old>(fx.obj0));
 
     fx.region0->metadata.liveInfo = nullptr;
     fx.FreePlanted(live);

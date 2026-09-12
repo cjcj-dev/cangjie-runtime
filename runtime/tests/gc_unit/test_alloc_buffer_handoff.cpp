@@ -6,7 +6,7 @@
 
 // Mutator-local publication buffers vs the concurrent young-mark consumer.
 //
-// WCollector::MarkYoungSatbBuffer runs with mutators live under TraceBarrier
+// WCollector::FollowYoungMark runs with mutators live under TraceBarrier
 // (Mark.cpp:2192-2196 comment; the pause is only entered later at
 // Generation.cpp:1136).  Inside it, Mark.cpp:2241-2249 walks every AllocBuffer
 // and drains four mutator-owned containers.  Only the AllocBufferManager set
