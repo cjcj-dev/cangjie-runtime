@@ -952,20 +952,18 @@ void WCollector::DoYoungGarbageCollection()
         // minortime: ③ root enum (alloc buffers + VisitMinorRoots)
         MRT_PHASE_TIMER("young.root_enum");
         (void)MutatorManager::Instance().HandshakeFlushMarkProducers(youngMarkDomain.get());
-        VisitMinorRoots([this, &workStack, &currentMinorRoots, &allocationRoots](BaseObject* object) {
+        VisitMinorRoots([this, &workStack, &currentMinorRoots](BaseObject* object) {
             if (Heap::IsHeapAddress(object)) {
-                allocationRoots.insert(object);
                 RegionInfo* region = RegionInfo::TryGetRegionInfoAt(reinterpret_cast<MAddress>(object));
                 if (region != nullptr && !region->IsYoungRegion()) {
                     currentMinorRoots.insert(object);
                 }
             }
             PushYoungObject(object, workStack, "minor_root");
-        }, [&workStack, &currentMinorRoots, &allocationRoots](BaseObject* object) {
+        }, [&workStack, &currentMinorRoots](BaseObject* object) {
             if (!Heap::IsHeapAddress(object)) {
                 return;
             }
-            allocationRoots.insert(object);
             RegionInfo* region = RegionInfo::TryGetRegionInfoAt(reinterpret_cast<MAddress>(object));
             if (region != nullptr && !region->IsYoungRegion()) {
                 currentMinorRoots.insert(object);
