@@ -18,6 +18,7 @@
 #include "Heap/Collector/TracingCollector.h"
 #include "Heap/Heap.h"
 #include "Heap/WCollector/WCollector.h"
+#include "Handshake.h"
 #include "Mutator.inline.h"
 #include "UnwindStack/StackExposureHook.h"
 #include "schedule.h"
@@ -1292,6 +1293,11 @@ void MutatorManager::TransitionAllMutatorsToCpuProfile()
     VisitAllMutatorsExceptFinalizer([](Mutator& mutator) {
         if (mutator.GetCjthreadPtr() == MutatorManager::Instance().GetMainThreadHandle()) {
             mutator.SetSuspensionFlag(Mutator::SuspensionType::SUSPENSION_FOR_CPU_PROFILE);
+            MutatorManager::Instance().ForEachMarkFlushTls([&mutator](ThreadLocalData* tls) {
+                if (tls != nullptr && tls->mutator == &mutator) {
+                    ArmThreadPoll(tls);
+                }
+            });
         }
     });
     if (!worldStopped) {
