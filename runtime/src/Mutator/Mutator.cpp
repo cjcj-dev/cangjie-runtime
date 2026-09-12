@@ -1196,7 +1196,7 @@ DerivedPtrVisitor Mutator::MakePreForwardDerivedVisitor(const PreForwardBaseReso
             currentBase = Heap::GetHeap().GetCollector().ForwardObject(oldBase);
         }
         if (currentBase == nullptr) {
-            currentBase = oldBase;
+            return;
         }
         RootSlot fixedBase;
         StorePlain(fixedBase, from_object(currentBase));
@@ -1221,7 +1221,7 @@ inline void Mutator::GCPhasePreForward(GCPhase newPhase)
             if (!rootFieldSet.insert((void*)(&refFieldAddr)).second) { return; }
             BaseObject* toObj = collector.ForwardObject(oldObj);
             if (toObj == nullptr) {
-                toObj = oldObj;
+                return;
             }
             HealRoot(rootField, from_object(toObj), HealSite::MutatorPreForwardStackField);
         } else if (IsStackAddr(reinterpret_cast<uintptr_t>(oldObj))) {
@@ -1248,7 +1248,7 @@ inline void Mutator::GCPhasePreForward(GCPhase newPhase)
                 if (rootFieldSet.insert((void*)(&root)).second) {
                     BaseObject* toHost = collector.ForwardObject(host);
                     if (toHost == nullptr) {
-                        toHost = host;
+                        return;
                     }
                     HealRoot(root, to_zaddress(reinterpret_cast<MAddress>(toHost) +
                         (reinterpret_cast<MAddress>(oldObj) - reinterpret_cast<MAddress>(host))),
@@ -1279,7 +1279,7 @@ inline void Mutator::GCPhasePreForward(GCPhase newPhase)
             // live object start, or the collector is already wrong.
             BaseObject* toObj = collector.ForwardObject(oldObj);
             if (toObj == nullptr) {
-                toObj = oldObj;
+                return;
             }
             HealRoot(root, from_object(toObj), HealSite::MutatorPreForwardRoot);
             remappedBases[oldObj] = toObj;

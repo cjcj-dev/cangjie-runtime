@@ -963,12 +963,6 @@ uint64_t ForwardingTable::StaleToLifeCount()
     return ZForwarding::StaleToLifeCount().load(std::memory_order_relaxed);
 }
 
-ZForwarding::Receipt ZForwarding::install_receipt_with_life(
-    MAddress from, MAddress to, const std::function<void()>&)
-{
-    return insert_receipt(from, to);
-}
-
 bool ZForwarding::DestUsable(MAddress to)
 {
     if (to == 0 || !Heap::IsHeapAddress(to)) {
@@ -989,14 +983,8 @@ bool ZForwarding::DestUsable(MAddress to)
     return st != ObjectState::FORWARDED && st != ObjectState::FORWARDING;
 }
 
-MAddress ZForwarding::resolve_life(MAddress to) const
-{
-    return to;
-}
-
 MAddress ZForwarding::resolve_live(MAddress to) const
 {
-    to = resolve_life(to);
     if (to == 0) {
         return 0;
     }

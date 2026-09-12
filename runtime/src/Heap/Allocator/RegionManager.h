@@ -266,7 +266,6 @@ public:
     // ZGC zRelocationSetSelector.cpp:114-196 / zGeneration.cpp:205-213: a page
     // not in this cycle's relocation set is an ordinary candidate next cycle.
     // Kept (IsForwardingDone via Exempt) is in-cycle only.
-    void ExpireKeptFromPreviousCycle();
     // zRelocate.cpp:1041-1047: relocate() returns only after every page in the
     // relocation set is done. Finish every ROUTED page or publish it kept.
     void FinishIncompleteFromRegions();
@@ -844,13 +843,11 @@ public:
                 continue;
             }
             if (RouteOrCompactRegionImpl(fromRegionInfo)) {
-                fromRegionInfo->MarkForwardingDone();
                 return true;
             }
             auto after = ForwardingTable::RetainPageOwner(fromRegionInfo);
             if (after) {
                 after->set_in_place();
-                fromRegionInfo->MarkForwardingDone();
             }
             return false;
         } while (true);

@@ -1703,7 +1703,6 @@ void WCollector::EvacuateYoungRegions(const std::vector<BaseObject*>& reachableV
                     "[GCV2][fixinput] reject=%zu recover=%zu unrecoverable=%zu",
                     rej, rec, unr);
             }
-            manager.ExpireKeptFromPreviousCycle();
             if (HealCoverage::kHealCoverageCensus) {
                 HealCoverage::CensusAfterPublication(
                     currentRemapColour, FlipSeq().load(std::memory_order_relaxed),
@@ -1840,9 +1839,8 @@ void WCollector::EvacuateYoungRegions(const std::vector<BaseObject*>& reachableV
 // The three cases are mutually exclusive and jointly exhaustive for a compacted page whose
 // forwarding lookup missed:
 //
-//   survived(off)              the from-livemap covers this offset, so PublishKeptInPlaceReceipts
-//                              (RegionManager.cpp:2151-2199) owed a receipt for it and there is
-//                              none -> the invariant is broken, refuse.
+//   survived(off)              the from-livemap covers this offset, so compact insert
+//                              owed a receipt for it and there is none -> refuse.
 //   off < allocPtr             the in-place compaction wrote the to-layout over this offset; no
 //                              from object is covered here and none ever was, so the address is
 //                              a to-address (or an interior of one) and is already current.
@@ -1971,19 +1969,16 @@ BaseObject* WCollector::WaitForPageForwarding(BaseObject* obj, ForwardingTable::
 
 BaseObject* WCollector::TryMutatorRelocate(BaseObject* obj, RegionInfo* forwarding) const
 {
-    MutatorRelocate::NoteAttempt();
     // ForwardObjectImpl opens with CHECK(phase == PREFORWARD || FORWARD). relocate_or_remap
     // is reachable from barriers in other phases, so screen here rather than trip that CHECK.
     GCPhase phase = GetGCPhase();
     if (phase != GCPhase::GC_PHASE_PREFORWARD && phase != GCPhase::GC_PHASE_FORWARD) {
-        MutatorRelocate::NoteFallback(MutatorRelocate::Fallback::PHASE);
         return nullptr;
     }
     // retain_page. A try-lock, so a losing mutator falls back instead of blocking -- ZGC's
     // retain_page also gives up (returns false) when the page is claimed or released.
     RegionInfo::RetainScope lease(forwarding);
     if (!lease.ok()) {
-        MutatorRelocate::NoteFallback(MutatorRelocate::Fallback::RETAIN_FAILED);
         return WaitForPageForwarding(obj, lease.HoldForwarding());
     }
     // zRelocate.cpp:393-395: retain_page then assert is_phase_relocate.
@@ -1993,10 +1988,8 @@ BaseObject* WCollector::TryMutatorRelocate(BaseObject* obj, RegionInfo* forwardi
     phase = GetGCPhase();
     if (phase != GCPhase::GC_PHASE_PREFORWARD && phase != GCPhase::GC_PHASE_FORWARD) {
         lease.Release();
-        MutatorRelocate::NoteFallback(MutatorRelocate::Fallback::PHASE);
         return nullptr;
     }
-    MutatorRelocate::NoteRetainOk();
     // A mutator can publish a previously white from-object after young mark
     // terminated. Admit it before copying; a next-minor remset entry is too late.
     // This is the late-store leg corresponding to zBarrier.inline.hpp:695-716.
@@ -2005,22 +1998,14 @@ BaseObject* WCollector::TryMutatorRelocate(BaseObject* obj, RegionInfo* forwardi
     // at this call site instead would conflate "this mutator copied the object" with "this
     // mutator retained and then found a worker had already copied it" -- and only the first of
     // those is evidence that the ported leg does anything.
-    const bool wasForwarded = obj->IsForwarded();
     MutatorRelocate::EnterScope();
     BaseObject* toVersion = const_cast<WCollector*>(this)->ForwardObjectImpl(obj, forwarding, lease);
     MutatorRelocate::LeaveScope();
     lease.Release(); // release_page
-    if (wasForwarded) {
-        MutatorRelocate::NoteAlreadyForwarded();
-    }
     if (toVersion == nullptr) {
-        MutatorRelocate::NoteFallback(MutatorRelocate::Fallback::COPY_FAILED);
         return WaitForPageForwarding(obj, lease.HoldForwarding());
     }
     if (toVersion == obj) {
-        // ForwardObjectImpl resolved to the from address: not a relocation. Let the old legs
-        // decide what to hand back rather than short-circuiting them with an unmoved pointer.
-        MutatorRelocate::NoteFallback(MutatorRelocate::Fallback::COPY_FAILED);
         return nullptr;
     }
     return toVersion;
@@ -2245,6 +2230,7 @@ BaseObject* WCollector::ForwardObject(BaseObject* obj)
         if (const MAddress hit = ForwardingTable::FindTo(reinterpret_cast<MAddress>(obj))) {
             return reinterpret_cast<BaseObject*>(hit);
         }
+        return nullptr;
     }
     return obj;
 }
@@ -2288,9 +2274,8 @@ BaseObject* WCollector::TryForwardObject(BaseObject* obj)
     }
 #endif
     if (region->IsCompacted()) {
-        // Compacted page: PublishKeptInPlaceReceipts installs identity forwarding for every
-        // live object start recorded in the livemap (RegionManager.cpp:2151-2199).  A table
-        // miss here is classified by the page's own geometry (see ClassifyCompactedMiss).
+        // Compacted page: CompactRegion inserts for every live object start.
+        // A table miss here is classified by the page's own geometry (see ClassifyCompactedMiss).
         switch (ClassifyCompactedMiss(region, obj)) {
             case CompactedMissClass::kAlreadyToStart:
             case CompactedMissClass::kAlreadyToInterior:
@@ -2377,8 +2362,7 @@ BaseObject* WCollector::TryForwardObject(BaseObject* obj)
     // RegionManager::RouteRegion returning false is exactly that case.  It answers false in two
     // structurally different ways (RegionManager.h:806-825): the page is already COMPACTED, or
     // RouteOrCompactRegionImpl just compacted it in place and set COMPACTED.  Neither means "no
-    // to-version"; both mean "the to-version is an identity receipt published from the livemap by
-    // the in-place compaction" (RegionManager.cpp:2151-2199 PublishKeptInPlaceReceipts).  The
+    // to-version"; both mean "the to-version is an insert from in-place compact".  The
     // IsCompacted() test above cannot cover it -- it runs *before* this call, and this call is
     // what makes the page compacted.
     //
@@ -2530,18 +2514,6 @@ BaseObject* WCollector::RelocateObjectInner(BaseObject* obj, BaseObject* planned
                 publication, reinterpret_cast<MAddress>(obj), reinterpret_cast<MAddress>(toObj));
             const MAddress mapped = receipt.address;
             if (ForwardingTable::ReceiptAllowsForwarded(mapped)) {
-                if (MutatorRelocate::StatsOn()) {
-                    MutatorRelocate::Role role = MutatorRelocate::Role::MUTATOR;
-                    if (IsGcThread()) {
-                        role = MutatorRelocate::Role::GC;
-                    } else if (IsRuntimeThread()) {
-                        role = MutatorRelocate::Role::OTHER_RT;
-                    }
-                    MutatorRelocate::NoteAnyCopy(role);
-                    if (MutatorRelocate::InScope()) {
-                        MutatorRelocate::NoteSelfCopy(size, role);
-                    }
-                }
                 obj->SetStateCode(ObjectState::FORWARDED);
 #if defined(MRT_TESTABLE_INTERNALS)
                 RunRemapWindowTestHook(6, copyPage, obj);

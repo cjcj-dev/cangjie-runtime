@@ -354,10 +354,6 @@ void WCollector::PostResolveCycleTask()
 }
 void WCollector::DoGarbageCollection()
 {
-    // ZGC: not-selected pages are ordinary candidates next cycle
-    // (zRelocationSetSelector.cpp:114-196). Expire last cycle's Exempt-kept
-    // before Assemble / PrepareYoung so they re-enter the selector.
-    reinterpret_cast<RegionSpace&>(theAllocator).GetRegionManager().ExpireKeptFromPreviousCycle();
     if (GetCycleReason() == GC_REASON_YOUNG) {
         DoYoungGarbageCollection();
         Collector::ReportMarkGoodHeapGateCounts();
@@ -380,10 +376,6 @@ void WCollector::DoGarbageCollection()
     PostResolveCycleTask();
     FlipTagID();
     ForwardDataManager::GetForwardDataManager().SetTagID(currentTagID);
-    // ZGC has no post-flip whole-heap heal pass.  Old roots and remembered
-    // fields are remapped before the old flip (zGeneration.cpp:1490-1523),
-    // while ordinary fields are healed by their load barrier.
-    reinterpret_cast<RegionSpace&>(theAllocator).GetRegionManager().ExpireKeptFromPreviousCycle();
     if (HealCoverage::kHealCoverageCensus) {
         HealCoverage::CensusAfterPublication(
             currentRemapColour, FlipSeq().load(std::memory_order_relaxed), "major-postflip");
