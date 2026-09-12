@@ -749,46 +749,12 @@ public:
                     return "armed_hit";
                 case ForwardingTable::ToAnswer::ArmedMiss:
                     return "armed_miss";
-                case ForwardingTable::ToAnswer::Unavailable:
-                    return "unavailable";
                 case ForwardingTable::ToAnswer::Unarmed:
                     return "unarmed";
             }
             return "unknown";
         };
-        const auto causeName = [](ForwardingTable::ToUnavailableCause cause) -> const char* {
-            switch (static_cast<uint8_t>(cause)) {
-                case 1:
-                    return "active_retain_rejected";
-                case 2:
-                    return "retired_unavailable";
-                case 3:
-                    return "active_retain_rejected+retired_unavailable";
-                case 4:
-                    return "publication_closed";
-                case 5:
-                    return "active_retain_rejected+publication_closed";
-                case 6:
-                    return "retired_unavailable+publication_closed";
-                case 7:
-                    return "active_retain_rejected+retired_unavailable+publication_closed";
-                case 8:
-                    return "table_destroyed";
-                case 12:
-                    return "publication_closed+table_destroyed";
-                case 16:
-                    return "never_installed";
-                case 20:
-                    return "publication_closed+never_installed";
-                case 0:
-                    return "none";
-            }
-            return "unknown";
-        };
-        ForwardingTable::LookupResult lookup{ 0, ForwardingTable::ToAnswer::Unarmed,
-                                              ForwardingTable::ToUnavailableCause::None, false, false,
-                                              ForwardingTable::ToAnswer::Unarmed,
-                                              ForwardingTable::ToAnswer::Unarmed, false, false, 0 };
+        ForwardingTable::LookupResult lookup{};
         bool lookupQueried = false;
         const auto populateDiagnosticSnapshot = [&](FindToVersionResult::UnavailableWitness& witness) {
             RegionInfo* region = RegionInfo::TryGetRegionInfoAt(fromAddr);
@@ -801,7 +767,6 @@ public:
             }
             witness.inCurrentRelocationSet = lookupQueried && lookup.currentMembership;
             witness.tableId = lookupQueried ? lookup.tableId : 0;
-            witness.publicationGeneration = lookupQueried ? lookup.publicationGeneration : 0;
             witness.fromPageEpoch = lookupQueried ? lookup.fromPageEpoch : 0;
             witness.fromPageLifeId = lookupQueried ? lookup.fromPageLifeId : 0;
             witness.forwardingSnapshotValid = lookupQueried && lookup.forwardingSnapshotValid;
@@ -822,11 +787,8 @@ public:
             witness.lookupSnapshotValid = lookupQueried;
             if (lookupQueried) {
                 witness.lookupAnswer = answerName(lookup.answer);
-                witness.lookupCause = causeName(lookup.unavailableCause);
                 witness.lookupActiveCandidate = lookup.activeCandidate;
                 witness.lookupActiveAnswer = answerName(lookup.activeAnswer);
-                witness.lookupRetiredAnswer = answerName(lookup.retiredAnswer);
-                witness.lookupPublicationClosed = lookup.publicationClosed;
             }
             return FindToVersionResult::Unavailable(route, witness);
         };
@@ -841,35 +803,6 @@ public:
                 if (lookup.answer == ForwardingTable::ToAnswer::ArmedHit) {
                     return ToHeaderCovered(stored) ? FindToVersionResult::Found(stored)
                                                   : FindToVersionResult::NotForwarded();
-                }
-                if (lookup.answer == ForwardingTable::ToAnswer::Unavailable) {
-                    const uint8_t causeBits = static_cast<uint8_t>(lookup.unavailableCause);
-                    // zGeneration.inline.hpp:131-135: forwarding table gone → addr.
-                    if ((causeBits & static_cast<uint8_t>(
-                            ForwardingTable::ToUnavailableCause::TableDestroyed)) != 0 &&
-                        Collector::JudgeHandOutTarget(obj) == HandVerdict::Usable &&
-                        !obj->IsForwarded()) {
-                        return FindToVersionResult::NotForwarded();
-                    }
-                    FindToVersionResult::UnavailableWitness witness;
-                    witness.lookupAnswer = answerName(lookup.answer);
-                    witness.lookupSnapshotValid = true;
-                    witness.lookupCause = causeName(lookup.unavailableCause);
-                    witness.lookupActiveCandidate = lookup.activeCandidate;
-                    witness.lookupActiveAnswer = answerName(lookup.activeAnswer);
-                    witness.lookupRetiredAnswer = answerName(lookup.retiredAnswer);
-                    witness.lookupPublicationClosed = lookup.publicationClosed;
-                    populateDiagnosticSnapshot(witness);
-                    if ((causeBits & static_cast<uint8_t>(
-                            ForwardingTable::ToUnavailableCause::NeverInstalled)) != 0 &&
-                        DiagGate::TokenOn("neverinstalled")) {
-                        witness.neverInstalledEvent = Collector::EmitNeverInstalledDiagnostic(
-                            obj, reinterpret_cast<uintptr_t>(obj), lookup.carrierStart,
-                            lookup.fromPageEpoch, lookup.fromPageLifeId,
-                            lookup.forwardingSnapshotValid);
-                    }
-                    return FindToVersionResult::Unavailable(
-                        FindToVersionResult::UnavailableRoute::LookupUnavailable, witness);
                 }
                 if (lookup.answer == ForwardingTable::ToAnswer::ArmedMiss && !obj->IsForwarded()) {
                     return FindToVersionResult::NotForwarded();

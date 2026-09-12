@@ -65,7 +65,7 @@ void InvalidateStampBinding(MAddress address, BindingInvalidation reason);
 
 uint64_t NextCausalSeq();
 void RecordM0(uint64_t causalSeq, uint64_t m0Seq, const char* exitName, const char* classification,
-              BaseObject* target, MAddress activeTo, MAddress retiredTo, uint8_t phase);
+              BaseObject* target, MAddress activeTo, uint8_t phase);
 
 #if defined(MRT_GC_UNIT_TEST_ACCESS)
 struct TestSnapshot {
@@ -112,7 +112,7 @@ inline void PropagateForwarding(MAddress, MAddress, MAddress, bool) {}
 inline void InvalidateRegionBindings(MAddress, uint64_t) {}
 inline void InvalidateStampBinding(MAddress, BindingInvalidation) {}
 inline uint64_t NextCausalSeq() { return 0; }
-inline void RecordM0(uint64_t, uint64_t, const char*, const char*, BaseObject*, MAddress, MAddress, uint8_t) {}
+inline void RecordM0(uint64_t, uint64_t, const char*, const char*, BaseObject*, MAddress, uint8_t) {}
 
 #endif
 

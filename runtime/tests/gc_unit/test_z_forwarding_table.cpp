@@ -19,6 +19,7 @@
 #include "Heap/Allocator/ZGranuleMap.h"
 #include "Heap/Collector/ZForwarding.h"
 #include "gc_unittest.hpp"
+#include "gc_heap_fixture.hpp"
 
 #include <type_traits>
 
@@ -138,12 +139,11 @@ GC_TEST(ZForwarding, AttachedArraySitsAfterObject)
 // The provisional table is not a different lifetime object: it enters the same
 // three-state ref-count protocol before it is published in the granule map.
 // This couples the two pieces changed together by the provisional-table port.
-GC_TEST(ZForwarding, ProvisionalUsesRefCountProtocol)
+GC_TEST(ZForwarding, PageUsesRefCountProtocol)
 {
     constexpr MAddress kStart = 0x58000000;
-    ZForwarding* fwd = ZForwarding::alloc(1, kStart, kStart, 0x1000, nullptr, 7, true);
+    ZForwarding* fwd = ZForwarding::alloc(1, kStart, kStart, 0x1000, nullptr, 7);
     GC_EXPECT_TRUE(fwd != nullptr);
-    GC_EXPECT_TRUE(fwd->is_provisional());
     GC_EXPECT_EQ(fwd->page_life_id(), static_cast<RegionLifeId>(7));
     GC_EXPECT_EQ(fwd->ref_count().load(std::memory_order_acquire), 1);
 
@@ -197,4 +197,28 @@ GC_TEST(ZForwardingTable, PageReleaseKeepsEntriesUntilMapRemoval)
 
     entries.put(start, kSize, nullptr);
     fwd->Destroy();
+}
+
+// ZGeneration::reset_relocation_set / ZRelocationSet::reset. Source-page
+// release leaves forwarding available; the generation reset removes it.
+GC_TEST(ZForwardingTable, GenerationResetOwnsForwardingLifetime)
+{
+    GcHeapFixture fixture;
+    fixture.InstallPageOwner(fixture.region0);
+    ZForwarding* forwarding = ForwardingTable::GetEntries(fixture.heapStart);
+    GC_EXPECT_TRUE(forwarding != nullptr);
+    const MAddress from = reinterpret_cast<MAddress>(fixture.obj0);
+    const MAddress to = reinterpret_cast<MAddress>(fixture.obj1);
+    GC_EXPECT_EQ(forwarding->insert(from, to), to);
+    forwarding->release_page();
+    forwarding->detach_page();
+    forwarding->mark_done();
+    ForwardingTable::ClearPageOwner(fixture.region0);
+    GC_EXPECT_EQ(ForwardingTable::FindTo(from), to);
+    const Generation owner = fixture.region0->GetOwnerGeneration();
+    const Generation other = owner == Generation::Young ? Generation::Old : Generation::Young;
+    ForwardingTable::ResetRelocationSet(other);
+    GC_EXPECT_EQ(ForwardingTable::FindTo(from), to);
+    ForwardingTable::ResetRelocationSet(owner);
+    GC_EXPECT_TRUE(ForwardingTable::GetEntries(from) == nullptr);
 }

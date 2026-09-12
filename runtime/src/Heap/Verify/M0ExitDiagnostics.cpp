@@ -40,7 +40,6 @@ std::atomic<uint64_t> g_s1{ 0 };
 std::atomic<uint64_t> g_rootFix{ 0 };
 std::atomic<uint64_t> g_readBarrier{ 0 };
 std::atomic<uint64_t> g_activeWitness{ 0 };
-std::atomic<uint64_t> g_retiredWitness{ 0 };
 std::atomic<uint64_t> g_copyPublishedWitness{ 0 };
 std::atomic<uint64_t> g_sampled{ 0 };
 std::atomic<uint64_t> g_suppressed{ 0 };
@@ -53,7 +52,7 @@ void DumpSummary()
     const uint64_t suppressed = g_suppressed.load(std::memory_order_relaxed);
     std::fprintf(stderr,
                  "[M0][summary] sampled=%llu suppressed=%llu total=%llu s0=%llu s1=%llu "
-                 "rootFix=%llu readBarrier=%llu activeWitness=%llu retiredWitness=%llu "
+                 "rootFix=%llu readBarrier=%llu activeWitness=%llu "
                  "copyPublishedWitness=%llu\n",
                  static_cast<unsigned long long>(sampled), static_cast<unsigned long long>(suppressed),
                  static_cast<unsigned long long>(total),
@@ -62,7 +61,6 @@ void DumpSummary()
                  static_cast<unsigned long long>(g_rootFix.load(std::memory_order_relaxed)),
                  static_cast<unsigned long long>(g_readBarrier.load(std::memory_order_relaxed)),
                  static_cast<unsigned long long>(g_activeWitness.load(std::memory_order_relaxed)),
-                 static_cast<unsigned long long>(g_retiredWitness.load(std::memory_order_relaxed)),
                  static_cast<unsigned long long>(g_copyPublishedWitness.load(std::memory_order_relaxed)));
     std::fflush(stderr);
 }
@@ -145,25 +143,21 @@ void Note(Exit exit, BaseObject* target, const void* slot, BaseObject* holder, u
     const MAddress from = reinterpret_cast<MAddress>(target);
     ZForwarding* active = region == nullptr ? nullptr : ForwardingTable::GetEntries(from);
     const MAddress activeTo = (active != nullptr && active->covers(from)) ? active->find(from) : 0;
-    const MAddress retiredTo = region == nullptr ? 0 : ForwardingTable::FindRetiredTo(from);
 
     // FORWARDED is published only after CopyObject completed. Keep it as an independent witness:
     // asking only the lookup that just missed would make S1 unobservable by construction.
     const bool copyPublished = target != nullptr && region != nullptr && target->IsForwarded();
-    const bool hasTo = activeTo != 0 || retiredTo != 0 || copyPublished;
+    const bool hasTo = activeTo != 0 || copyPublished;
     (hasTo ? g_s1 : g_s0).fetch_add(1, std::memory_order_relaxed);
     if (activeTo != 0) {
         g_activeWitness.fetch_add(1, std::memory_order_relaxed);
-    }
-    if (retiredTo != 0) {
-        g_retiredWitness.fetch_add(1, std::memory_order_relaxed);
     }
     if (copyPublished) {
         g_copyPublishedWitness.fetch_add(1, std::memory_order_relaxed);
     }
 
     M0Correlation::RecordM0(causalSeq, n, ExitName(exit), hasTo ? "S1" : "S0", target,
-                             activeTo, retiredTo, phase);
+                             activeTo, phase);
 
     uint64_t sampleOrdinal = 0;
     if (!TakeDetailSample(sampleOrdinal)) {
@@ -194,7 +188,7 @@ void Note(Exit exit, BaseObject* target, const void* slot, BaseObject* holder, u
     LOG(RTLOG_ERROR,
         "[M0][classify] n=%llu sample=%llu class=%s hasTo=%u exit=%s target=%p slot=%p holder=%p phase=%u "
         "copyPublished=%u youngMark=%u oldMark=%u stackMap=%s stackReason=%s startIP=%p frameIP=%p "
-        "frameFA=%p active=%u activeTo=%p retiredTo=%p flipEpoch=%llu regionLife=%llu activeLife=%llu "
+        "frameFA=%p active=%u activeTo=%p flipEpoch=%llu regionLife=%llu activeLife=%llu "
         "activeCurrent=%u youngEpoch=%llu oldEpoch=%llu regionType=%u routeState=%u",
         static_cast<unsigned long long>(n), static_cast<unsigned long long>(sampleOrdinal),
         hasTo ? "S1" : "S0", hasTo ? 1u : 0u, ExitName(exit),
@@ -202,7 +196,7 @@ void Note(Exit exit, BaseObject* target, const void* slot, BaseObject* holder, u
         copyPublished ? 1u : 0u, youngMark, oldMark, stackMap, StackMapReasonName(g_stackMap.reason),
         reinterpret_cast<void*>(g_stackMap.startIP), reinterpret_cast<void*>(g_stackMap.frameIP),
         reinterpret_cast<void*>(g_stackMap.frameFA), active == nullptr ? 0u : 1u,
-        reinterpret_cast<void*>(activeTo), reinterpret_cast<void*>(retiredTo),
+        reinterpret_cast<void*>(activeTo),
         static_cast<unsigned long long>(ZgcInvariants::WCollectorFlipSeqForProbe()),
         static_cast<unsigned long long>(regionLife), static_cast<unsigned long long>(activeLife), activeCurrent,
         static_cast<unsigned long long>(youngEpoch), static_cast<unsigned long long>(oldEpoch), regionType,
@@ -216,7 +210,6 @@ Counts GetCounts()
                    g_s1.load(std::memory_order_relaxed), g_rootFix.load(std::memory_order_relaxed),
                    g_readBarrier.load(std::memory_order_relaxed),
                    g_activeWitness.load(std::memory_order_relaxed),
-                   g_retiredWitness.load(std::memory_order_relaxed),
                    g_copyPublishedWitness.load(std::memory_order_relaxed),
                    g_sampled.load(std::memory_order_relaxed), g_suppressed.load(std::memory_order_relaxed) };
 }

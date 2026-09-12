@@ -2337,9 +2337,6 @@ public:
         if (lookup.to != 0 && lookup.answer == ForwardingTable::ToAnswer::ArmedHit) {
             return OptionalRouteTicket(fromObj);
         }
-        if (lookup.answer == ForwardingTable::ToAnswer::Unavailable) {
-            return OptionalRouteTicket();
-        }
 
         CompactRouteTable* compact = LoadCompactRouteTable();
         if (IsCompacted()) {

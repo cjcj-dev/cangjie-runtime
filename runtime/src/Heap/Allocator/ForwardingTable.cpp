@@ -59,8 +59,7 @@ void MapPut(ZGranuleMap<ZForwarding*>& map, MAddress addr, size_t size, ZForward
 }
 
 std::atomic<bool> g_ready{ false };
-// Installation is rare and phase-scoped. Serialize provisional-to-full replacement so
-// readers never observe a freed membership carrier while the attached array is resized.
+// Serialize page facade publication with generation reset.
 std::mutex g_installLock;
 std::atomic<uint64_t> g_cmpTotal{ 0 };
 std::atomic<uint64_t> g_cmpAgree{ 0 };
@@ -77,13 +76,9 @@ std::atomic<uint64_t> g_destPending{ 0 };
 std::atomic<uint64_t> g_destDisagreeByType[kTypeBuckets] = {};
 std::atomic<uint64_t> g_armedHit{ 0 };
 std::atomic<uint64_t> g_armedMiss{ 0 };
-std::atomic<uint64_t> g_unavailable{ 0 };
 std::atomic<uint64_t> g_unarmed{ 0 };
 
-#if defined(MRT_TESTABLE_INTERNALS)
-std::atomic<ForwardingTable::LookupRetainHook> g_lookupRetainHook{ nullptr };
-std::atomic<void*> g_lookupRetainHookContext{ nullptr };
-#endif
+
 
 } // namespace
 
@@ -124,7 +119,7 @@ bool ForwardingTable::Initialize(MAddress heapStart, size_t heapSize, size_t uni
         std::atexit([]() {
             std::fprintf(stderr,
                          "[FWDTABLE][refuse] atexit full=%llu overflow=%llu fallbackFull=%llu "
-                         "fallbackOverflow=%llu armedHit=%llu armedMiss=%llu unavailable=%llu unarmed=%llu\n",
+                         "fallbackOverflow=%llu armedHit=%llu armedMiss=%llu unarmed=%llu\n",
                          static_cast<unsigned long long>(ZForwarding::FullRefusals().load(std::memory_order_relaxed)),
                          static_cast<unsigned long long>(
                              ZForwarding::OverflowRefusals().load(std::memory_order_relaxed)),
@@ -134,7 +129,6 @@ bool ForwardingTable::Initialize(MAddress heapStart, size_t heapSize, size_t uni
                              ZForwarding::OverflowFallbacks().load(std::memory_order_relaxed)),
                          static_cast<unsigned long long>(ForwardingTable::ArmedHitCount()),
                          static_cast<unsigned long long>(ForwardingTable::ArmedMissCount()),
-                         static_cast<unsigned long long>(ForwardingTable::UnavailableCount()),
                          static_cast<unsigned long long>(ForwardingTable::UnarmedCount()));
         });
     }
@@ -160,7 +154,7 @@ bool ForwardingTable::BeginForwardingArena(Generation gen, RegionList& regions)
     regions.VisitAllRegions([&](RegionInfo* region) {
         ZForwarding* forwarding = ZForwarding::alloc(
             ObjectCountUpperBound(region, region->GetRegionSize()), region->GetRegionStart(),
-            g_entries.base(), region->GetRegionSize(), region, region->GetRegionLifeId(), false, set.arena.get());
+            g_entries.base(), region->GetRegionSize(), region, region->GetRegionLifeId(), set.arena.get());
         CHECK(forwarding != nullptr);
         forwarding->set_table_generation(static_cast<uint8_t>(gen));
         set.forwardings.push_back(forwarding);
@@ -168,6 +162,13 @@ bool ForwardingTable::BeginForwardingArena(Generation gen, RegionList& regions)
     });
     return true;
 }
+
+#if defined(MRT_TESTABLE_INTERNALS)
+const ForwardingAllocator* ForwardingTable::ArenaForTest(Generation gen)
+{
+    return g_relocationSets[static_cast<size_t>(gen)].arena.get();
+}
+#endif
 
 size_t ForwardingTable::ObjectCountUpperBound(RegionInfo* region, size_t regionSize)
 {
@@ -235,16 +236,6 @@ void ForwardingTable::ResetRelocationSet(Generation gen)
     }
     set.forwardings.clear();
     set.arena.reset();
-}
-
-ForwardingTable::Publication ForwardingTable::RetainCovering(MAddress from)
-{
-    std::lock_guard<std::mutex> lock(g_installLock);
-    ZForwarding* tab = GetCovering(from);
-    if (tab == nullptr) {
-        return Publication();
-    }
-    return Publication(tab);
 }
 
 ZForwarding* ForwardingTable::GetEntries(MAddress addr) { return get(addr); }
@@ -348,7 +339,7 @@ ZForwarding::Receipt ForwardingTable::InstallMapping(
     const Publication& publication, MAddress from, MAddress to)
 {
     ZForwarding* tab = publication.forwarding;
-    CHECK_DETAIL(tab != nullptr && !tab->is_provisional() && tab->covers(from),
+    CHECK_DETAIL(tab != nullptr && tab->covers(from),
                  "forwarding publication responsibility missing from=%#zx to=%#zx tab=%p",
                  static_cast<size_t>(from), static_cast<size_t>(to), tab);
     const ZForwarding::Receipt receipt = tab->insert_receipt(from, to);
@@ -451,7 +442,6 @@ bool ZForwarding::receipt_live(MAddress to) const { return resolve_live(to) != 0
 
 struct LookupCarrierWitness {
     MAddress start{ 0 };
-    uint64_t publicationGeneration{ 0 };
     uint64_t fromPageEpoch{ 0 };
     RegionLifeId fromPageLifeId{ 0 };
     bool valid{ false };
@@ -463,7 +453,6 @@ static void CaptureLookupCarrier(ZForwarding* table, LookupCarrierWitness* witne
         return;
     }
     witness->start = table->start();
-    witness->publicationGeneration = table->publication_generation();
     const ZForwarding::FromPageView* fromPage = table->from_page_snapshot();
     if (fromPage != nullptr) {
         witness->fromPageEpoch = fromPage->epoch;
@@ -507,9 +496,9 @@ ForwardingTable::LookupResult ForwardingTable::LookupTo(MAddress from)
     if (answer == ToAnswer::ArmedHit) g_armedHit.fetch_add(1, std::memory_order_relaxed);
     else if (answer == ToAnswer::ArmedMiss) g_armedMiss.fetch_add(1, std::memory_order_relaxed);
     else g_unarmed.fetch_add(1, std::memory_order_relaxed);
-    return {to, answer, ToUnavailableCause::None, forwarding != nullptr, forwarding != nullptr,
-            answer, ToAnswer::Unarmed, false, forwarding != nullptr,
-            reinterpret_cast<uintptr_t>(forwarding), witness.start, witness.publicationGeneration,
+    return {to, answer, forwarding != nullptr,
+            answer, forwarding != nullptr,
+            reinterpret_cast<uintptr_t>(forwarding), witness.start,
             witness.fromPageEpoch, witness.fromPageLifeId, witness.valid};
 }
 
@@ -517,23 +506,13 @@ ForwardingTable::NeverInstalledSnapshot ForwardingTable::CaptureNeverInstalledSn
 {
     NeverInstalledSnapshot snapshot;
 
-    // Keep the established install -> retired lock order.  The snapshot copies
-    // scalar identity while every candidate remains protected from teardown.
+    // Capture identities before generation reset can destroy the set.
     std::lock_guard<std::mutex> installLock(g_installLock);
 
-    auto visit = [&](ZForwarding* tab, bool active) {
+    auto visit = [&](ZForwarding* tab) {
         if (tab == nullptr) {
             return;
         }
-        CarrierState state;
-        if (!active) {
-            state = CarrierState::Retired;
-        } else if (tab->is_provisional()) {
-            state = CarrierState::ActiveUnpublished;
-        } else {
-            state = CarrierState::ActiveOpen;
-        }
-
         if (tab->covers(target)) {
             const MAddress to = tab->find(target);
             ++snapshot.carrierTotal;
@@ -543,13 +522,11 @@ ForwardingTable::NeverInstalledSnapshot ForwardingTable::CaptureNeverInstalledSn
                 out.start = tab->start();
                 out.size = tab->size();
                 out.tableGeneration = tab->table_generation();
-                out.publicationGeneration = tab->publication_generation();
                 const ZForwarding::FromPageView* fromPage = tab->from_page_snapshot();
                 if (fromPage != nullptr) {
                     out.fromPageEpoch = fromPage->epoch;
                     out.fromPageLifeId = fromPage->lifeId;
                 }
-                out.state = state;
                 out.answer = to == 0 ? ToAnswer::ArmedMiss : ToAnswer::ArmedHit;
             } else {
                 snapshot.carrierOverflow = true;
@@ -566,7 +543,6 @@ ForwardingTable::NeverInstalledSnapshot ForwardingTable::CaptureNeverInstalledSn
             if (snapshot.reverseCount < kNeverInstalledReverseLimit) {
                 ReverseReceiptIdentity& out = snapshot.reverseReceipts[snapshot.reverseCount++];
                 out.tableId = reinterpret_cast<uintptr_t>(tab);
-                out.publicationGeneration = tab->publication_generation();
                 out.from = receiptFrom;
             } else {
                 snapshot.reverseOverflow = true;
@@ -578,32 +554,21 @@ ForwardingTable::NeverInstalledSnapshot ForwardingTable::CaptureNeverInstalledSn
         for (size_t i = 0; i < map.size(); ++i) {
             ZForwarding* tab = map.get(static_cast<zoffset>(i * map.granule()));
             if (tab != previous) {
-                visit(tab, true);
+                visit(tab);
                 previous = tab;
             }
         }
     };
-    // These are exactly LookupTo's queryable carrier domains. Membership is a
-    // second pointer to an active or retired carrier, not another carrier; do
-    // not enumerate it and then need a bounded dedup ledger which could hide a
-    // later covering table.
+    // The lookup domain is precisely the installed forwarding map.
     visitActiveMap(g_entries);
     return snapshot;
 }
 
 uint64_t ForwardingTable::ArmedHitCount() { return g_armedHit.load(std::memory_order_relaxed); }
 uint64_t ForwardingTable::ArmedMissCount() { return g_armedMiss.load(std::memory_order_relaxed); }
-uint64_t ForwardingTable::UnavailableCount() { return g_unavailable.load(std::memory_order_relaxed); }
 uint64_t ForwardingTable::UnarmedCount() { return g_unarmed.load(std::memory_order_relaxed); }
 
-#if defined(MRT_TESTABLE_INTERNALS)
-void ForwardingTable::SetLookupRetainHook(LookupRetainHook hook, void* context)
-{
-    g_lookupRetainHookContext.store(context, std::memory_order_release);
-    g_lookupRetainHook.store(hook, std::memory_order_release);
-}
 
-#endif
 
 void ForwardingTable::NoteCompare(MAddress addr, bool legacy)
 {

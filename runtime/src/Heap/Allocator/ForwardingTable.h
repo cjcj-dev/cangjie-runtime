@@ -22,8 +22,7 @@ class BaseObject;
 struct LiveInfo;
 
 // zForwardingTable.hpp:32-52 — granule map of ZForwarding*.
-// Two maps: membership (get/insert/remove) unlinks at Dispel; entries live until
-// ClearEntries. ZGC has one map because reset_relocation_set is the only unlink.
+// Map entries borrow the objects owned by the generation relocation sets.
 class ForwardingTable {
 public:
     // Borrowed forwarding identity. The generation's relocation set owns it
@@ -44,10 +43,8 @@ public:
     static Owner RetainPageOwner(const RegionInfo* region);
     static void ClearPageOwner(RegionInfo* region);
 
-    // A retained, fully-installed forwarding carried across object copy and
-    // receipt publication. ClearEntries seals the table and waits for every
-    // Publication to drain before unlinking it (zRelocate.cpp:354-379,
-    // zGeneration.cpp:253-265,276-284).
+    // Copy and receipt publication borrow the installed forwarding. The page
+    // retain is held by the relocation operation (zRelocate.cpp:354-420).
     class Publication {
     public:
         Publication() : forwarding(nullptr) {}
@@ -75,34 +72,12 @@ public:
     // Unarmed regions still use geometry (transition). zForwarding.inline.hpp:248-252.
     static constexpr bool kEntriesSoleWhenArmed = true;
     // PORT_ZFORWARDING step ②: IsFromObject / membership consume the table.
-    // Disagreements vs region-type are legacyOnly at FROM/UNMOVABLE_FROM after
-    // Dispel unlinked membership — old path reading a type that has moved.
-    // tableOnly is the other old-path miss (type not yet FROM while table is).
     static constexpr bool kZfwdTableConsume = true;
 
     // Transport detail used by WCollector's public FindToVersionResult.
-    // ArmedMiss means a retained/queryable carrier was searched. Unavailable
-    // means a carrier or closed publication exists but can no longer be
-    // queried. Unarmed remains the pre-publication route-geometry state.
-    enum class ToAnswer : uint8_t { ArmedHit, ArmedMiss, Unavailable, Unarmed };
-    enum class ToUnavailableCause : uint8_t {
-        None = 0,
-        ActiveRetainRejected = 1,
-        RetiredUnavailable = 2,
-        PublicationClosed = 4,
-        TableDestroyed = 8,
-        NeverInstalled = 16,
-    };
-
-    // Bounded, value-only snapshot for the NeverInstalled fail-closed
-    // diagnostic.  Capture is performed while install/retired ownership is
-    // held; no ZForwarding pointer escapes the capture call.
-    enum class CarrierState : uint8_t {
-        ActiveUnpublished,
-        ActiveOpen,
-        ActiveClosed,
-        Retired,
-    };
+    // ArmedMiss means an installed forwarding was searched. Unarmed means
+    // the address has no forwarding in the currently installed sets.
+    enum class ToAnswer : uint8_t { ArmedHit, ArmedMiss, Unarmed };
     static constexpr size_t kNeverInstalledCarrierLimit = 16;
     static constexpr size_t kNeverInstalledReverseLimit = 8;
     struct CarrierIdentity {
@@ -110,16 +85,12 @@ public:
         MAddress start{ 0 };
         size_t size{ 0 };
         uint8_t tableGeneration{ 0 };
-        uint64_t publicationGeneration{ 0 };
         uint64_t fromPageEpoch{ 0 };
         RegionLifeId fromPageLifeId{ 0 };
-        CarrierState state{ CarrierState::Retired };
         ToAnswer answer{ ToAnswer::Unarmed };
-        bool pendingDestroy{ false };
     };
     struct ReverseReceiptIdentity {
         uintptr_t tableId{ 0 };
-        uint64_t publicationGeneration{ 0 };
         MAddress from{ 0 };
     };
     struct NeverInstalledSnapshot {
@@ -136,23 +107,17 @@ public:
 
     // Decision record from one LookupTo invocation.  These are the exact local
     // values consumed by its final classification; no caller re-queries the
-    // active/retired/publication carriers to construct diagnostics.
+    // forwarding map to construct diagnostics.
     struct LookupResult {
-        MAddress to;
-        ToAnswer answer;
-        ToUnavailableCause unavailableCause;
-        bool activeCandidate;
-        bool activeRetained;
-        ToAnswer activeAnswer;
-        ToAnswer retiredAnswer;
-        bool publicationClosed;
-        bool currentMembership;
-        // ArmedHit: identity of the table supplying `to`. Otherwise: the active
-        // candidate, or the first covering retired table when no active exists.
+        MAddress to{0};
+        ToAnswer answer{ToAnswer::Unarmed};
+        bool activeCandidate{false};
+        ToAnswer activeAnswer{ToAnswer::Unarmed};
+        bool currentMembership{false};
+        // Identity of the table searched, including an armed miss.
         // All carrier fields below belong to that same table.
-        uintptr_t tableId;
+        uintptr_t tableId{0};
         MAddress carrierStart{ 0 };
-        uint64_t publicationGeneration{ 0 };
         uint64_t fromPageEpoch{ 0 };
         RegionLifeId fromPageLifeId{ 0 };
         bool forwardingSnapshotValid{ false };
@@ -161,13 +126,15 @@ public:
     static bool Initialize(MAddress heapStart, size_t heapSize, size_t unitSize);
 
     // Budget the closed installation pass before publishing its first table.
-    // End drops only the installer's ownership; retired tables keep their arena.
+    // The generation set owns every allocation through reset.
     static bool BeginForwardingArena(Generation gen, RegionList& regions);
 
     static bool InstallPublicationBeforeCopy(MAddress regionStart, size_t regionSize, RegionInfo* region);
     // zGeneration.cpp:276-284: unlink every member, then destroy the set.
     static void ResetRelocationSet(Generation gen);
-    static Publication RetainCovering(MAddress from);
+#if defined(MRT_TESTABLE_INTERNALS)
+    static const ForwardingAllocator* ArenaForTest(Generation gen);
+#endif
     // zForwardingTable.inline.hpp:43-62
     static ZForwarding* get(MAddress addr);
     static void insert(ZForwarding* forwarding);
@@ -175,9 +142,7 @@ public:
 
     static ZForwarding* Get(MAddress addr) { return get(addr); }
     static ZForwarding* GetEntries(MAddress addr);
-    // Active entries, then membership, then a retired generation that still
-    // covers `addr`. ClassifyCompactedMiss must see the same carrier LookupTo
-    // uses after ClearEntries (zForwardingTable.inline.hpp:36-46).
+    // All queries use the same map (zForwardingTable.inline.hpp:36-46).
     static ZForwarding* GetCovering(MAddress addr);
     static void VisitAll(const std::function<void(ZForwarding*)>& visitor);
     // Product connection points for the dual carrier. Publication copies the
@@ -189,11 +154,9 @@ public:
                                     uint8_t largeMarked, RegionLifeId lifeId);
     static const ZForwarding::FromPageView* GetFromPageView(RegionInfo* region);
 
-    // Copy producer: may allocate/install the explicitly prepared generation,
-    // then retains it across copy and receipt publication.
+    // Copy producer borrows the set installed before relocation starts.
     static Publication EnsurePublicationBeforeCopy(RegionInfo* region, MAddress from);
-    // After-copy consumer: retain the current generation only while it remains
-    // open. It never allocates, installs, replaces, or reopens a table.
+    // After-copy consumer borrows that same installed forwarding.
     static Publication RetainOpenPublicationAfterCopy(RegionInfo* region, MAddress from);
     static ZForwarding::Receipt InstallMapping(const Publication& publication, MAddress from, MAddress to);
     static MAddress InsertMapping(const Publication& publication, MAddress from, MAddress to);
@@ -210,15 +173,9 @@ public:
     static NeverInstalledSnapshot CaptureNeverInstalledSnapshot(MAddress target);
     static uint64_t ArmedHitCount();
     static uint64_t ArmedMissCount();
-    static uint64_t UnavailableCount();
     static uint64_t UnarmedCount();
 
-#if defined(MRT_TESTABLE_INTERNALS)
-    using LookupRetainHook = void (*)(void*);
-    static void SetLookupRetainHook(LookupRetainHook hook, void* context);
-    // Fault injection for the NeverInstalled state-machine assertion. Product
-    // ClearEntries never leaves a closed carrier in the active map.
-#endif
+
 
     static void NoteCompare(MAddress addr, bool legacy);
     static void NoteDestCompare(MAddress from, MAddress geometricTo);

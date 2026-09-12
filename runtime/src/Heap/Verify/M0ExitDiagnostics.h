@@ -32,7 +32,6 @@ struct Counts {
     uint64_t rootFix;
     uint64_t readBarrier;
     uint64_t activeWitness;
-    uint64_t retiredWitness;
     uint64_t copyPublishedWitness;
     uint64_t sampled;
     uint64_t suppressed;

@@ -116,23 +116,11 @@ const char* HandVerdictName(HandVerdict verdict)
     return "Unknown";
 }
 
-const char* CarrierStateName(ForwardingTable::CarrierState state)
-{
-    switch (state) {
-        case ForwardingTable::CarrierState::ActiveUnpublished: return "active_unpublished";
-        case ForwardingTable::CarrierState::ActiveOpen: return "active_open";
-        case ForwardingTable::CarrierState::ActiveClosed: return "active_closed";
-        case ForwardingTable::CarrierState::Retired: return "retired";
-    }
-    return "unknown";
-}
-
 const char* ToAnswerName(ForwardingTable::ToAnswer answer)
 {
     switch (answer) {
         case ForwardingTable::ToAnswer::ArmedHit: return "armed_hit";
         case ForwardingTable::ToAnswer::ArmedMiss: return "armed_miss";
-        case ForwardingTable::ToAnswer::Unavailable: return "unavailable";
         case ForwardingTable::ToAnswer::Unarmed: return "unarmed";
     }
     return "unknown";
@@ -508,16 +496,6 @@ uint64_t Collector::EmitNeverInstalledDiagnostic(BaseObject* target, uintptr_t r
                             witnessValid && region != nullptr && witnessLife != 0
                                 ? "n/a(reused)" : "n/a(no-incarnation)");
     }
-    bool stateMachineViolation = false;
-    for (size_t i = 0; i < snapshot.carrierCount; ++i) {
-        const ForwardingTable::CarrierState state = snapshot.carriers[i].state;
-        if (state == ForwardingTable::CarrierState::ActiveUnpublished ||
-            state == ForwardingTable::CarrierState::ActiveOpen ||
-            state == ForwardingTable::CarrierState::ActiveClosed) {
-            stateMachineViolation = true;
-        }
-    }
-
     char carriers[6144];
     BoundedDiagnosticBuffer carrierText(carriers, sizeof(carriers));
     carrierText.Append("[");
@@ -526,15 +504,14 @@ uint64_t Collector::EmitNeverInstalledDiagnostic(BaseObject* target, uintptr_t r
         const bool sameIncarnation = region != nullptr && carrier.start == regionStart &&
             carrier.fromPageLifeId != 0 && carrier.fromPageLifeId == currentLife;
         carrierText.Append(
-            "%s{table_id=%#zx,start=%#zx,size=%zu,table_generation=%u,publication_generation=%llu,"
-            "from_page_epoch=%llu,lifeId=%llu,state=%s,answer=%s,pending_destroy=%u,epoch_delta=",
+            "%s{table_id=%#zx,start=%#zx,size=%zu,table_generation=%u,"
+            "from_page_epoch=%llu,lifeId=%llu,answer=%s,epoch_delta=",
             i == 0 ? "" : ",", static_cast<size_t>(carrier.tableId),
             static_cast<size_t>(carrier.start), carrier.size,
             static_cast<unsigned>(carrier.tableGeneration),
-            static_cast<unsigned long long>(carrier.publicationGeneration),
             static_cast<unsigned long long>(carrier.fromPageEpoch),
             static_cast<unsigned long long>(carrier.fromPageLifeId),
-            CarrierStateName(carrier.state), ToAnswerName(carrier.answer), carrier.pendingDestroy ? 1u : 0u);
+            ToAnswerName(carrier.answer));
         if (sameIncarnation) {
             const int64_t delta = static_cast<int64_t>(currentEpoch) -
                 static_cast<int64_t>(carrier.fromPageEpoch);
@@ -552,9 +529,8 @@ uint64_t Collector::EmitNeverInstalledDiagnostic(BaseObject* target, uintptr_t r
     receiptText.Append("[");
     for (size_t i = 0; i < snapshot.reverseCount; ++i) {
         const ForwardingTable::ReverseReceiptIdentity& receipt = snapshot.reverseReceipts[i];
-        receiptText.Append("%s{table_id=%#zx,publication_generation=%llu,from=%#zx}",
+        receiptText.Append("%s{table_id=%#zx,from=%#zx}",
                            i == 0 ? "" : ",", static_cast<size_t>(receipt.tableId),
-                           static_cast<unsigned long long>(receipt.publicationGeneration),
                            static_cast<size_t>(receipt.from));
     }
     receiptText.Append("]");
@@ -568,7 +544,7 @@ uint64_t Collector::EmitNeverInstalledDiagnostic(BaseObject* target, uintptr_t r
         "%s covering_total=%zu covering_emitted=%zu "
         "carrier_overflow=%u carriers=%s reverse_total=%zu reverse_emitted=%zu reverse_overflow=%u "
         "reverse_receipts=%s scan_overflow=%u format_overflow=%u historical_writer=unknown "
-        "historical_slot_colour=unknown current_writer_role=consumer state_machine_violation=%u\n",
+        "historical_slot_colour=unknown current_writer_role=consumer\n",
         static_cast<unsigned long long>(event), static_cast<void*>(target),
         static_cast<size_t>(rawSlotBits), static_cast<unsigned long long>(rawHeader),
         HandVerdictName(verdict), static_cast<size_t>(regionStart), regionType, generation,
@@ -579,12 +555,8 @@ uint64_t Collector::EmitNeverInstalledDiagnostic(BaseObject* target, uintptr_t r
         snapshot.carrierTotal, snapshot.carrierCount, snapshot.carrierOverflow ? 1u : 0u, carriers,
         snapshot.reverseTotal, snapshot.reverseCount, snapshot.reverseOverflow ? 1u : 0u, receipts,
         snapshot.scanOverflow ? 1u : 0u,
-        (carrierText.Truncated() || receiptText.Truncated()) ? 1u : 0u,
-        stateMachineViolation ? 1u : 0u);
+        (carrierText.Truncated() || receiptText.Truncated()) ? 1u : 0u);
     (void)std::fflush(stderr);
-    CHECK_DETAIL(!stateMachineViolation,
-                 "[FINDTO][never-installed-state] event=%llu active carrier survived publication close",
-                 static_cast<unsigned long long>(event));
     return event;
 }
 
@@ -602,10 +574,7 @@ uint64_t Collector::EmitNeverInstalledDiagnostic(BaseObject* target, uintptr_t r
     const bool canLookup = from != 0 && Heap::IsHeapAddress(target) && verdict != HandVerdict::ZeroHeader;
     const ForwardingTable::LookupResult lookup = canLookup
         ? ForwardingTable::LookupTo(from)
-        : ForwardingTable::LookupResult{ 0, ForwardingTable::ToAnswer::Unarmed,
-                                         ForwardingTable::ToUnavailableCause::None, false, false,
-                                         ForwardingTable::ToAnswer::Unarmed,
-                                         ForwardingTable::ToAnswer::Unarmed, false, false, 0 };
+        : ForwardingTable::LookupResult{};
     // This is the last-chance diagnostic (zBarrier.inline.hpp:327-343). Pre-init callers, including
     // gc_unit other-vm children, have CollectorResources but no CollectorProxy target to query.
     const unsigned gcPhase = Heap::GetHeap().GetCollectorResources().IsGcStarted()
@@ -617,8 +586,8 @@ uint64_t Collector::EmitNeverInstalledDiagnostic(BaseObject* target, uintptr_t r
                  "incoming_source_kind=%s source_slot=%p working_copy_slot=%p "
                  "field_type=%s field_offset=%zu from=%p from_region=%p "
                  "region_type=%u generation=%u in_current_relocation_set=%u "
-                 "table_id=%#zx publication_generation=%llu from_page_epoch=%llu lifeId=%llu "
-                 "lookup_state=%u lookup_cause=%u retired_lookup=%u gc_phase=%u "
+                 "table_id=%#zx from_page_epoch=%llu lifeId=%llu "
+                 "lookup_state=%u gc_phase=%u "
                  "unresolved non-Usable from-address must not be handed out\n",
                  site != nullptr ? site : "?", static_cast<void*>(target),
                  static_cast<unsigned>(verdict), slotBits,
@@ -635,12 +604,9 @@ uint64_t Collector::EmitNeverInstalledDiagnostic(BaseObject* target, uintptr_t r
                  region != nullptr ? static_cast<unsigned>(region->generation_id()) : 0xffu,
                  lookup.currentMembership ? 1u : 0u,
                  static_cast<size_t>(lookup.tableId),
-                 static_cast<unsigned long long>(lookup.publicationGeneration),
                  static_cast<unsigned long long>(lookup.fromPageEpoch),
                  static_cast<unsigned long long>(lookup.fromPageLifeId),
                  static_cast<unsigned>(lookup.answer),
-                 static_cast<unsigned>(lookup.unavailableCause),
-                 static_cast<unsigned>(lookup.retiredAnswer),
                  gcPhase);
     (void)fflush(stderr);
     (void)fflush(stdout);
