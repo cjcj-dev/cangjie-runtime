@@ -56,10 +56,14 @@ constexpr uint64_t POLL_REQ_EXIT = 16;
 
 void ArmThreadPoll(ThreadLocalData* tls);
 void UpdatePollValues(ThreadLocalData* tls);
+void EnqueueHandshakeOp(ThreadLocalData* tls, uint64_t bit);
+void DequeueHandshakeOp(ThreadLocalData* tls, uint64_t bit);
+void EnqueueHandshakeOpForMutator(Mutator* mutator, uint64_t bit);
+void DequeueHandshakeOpForMutator(Mutator* mutator, uint64_t bit);
 void AddTlsPollRequest(ThreadLocalData* tls, uint64_t bit);
 void ClearTlsPollRequest(ThreadLocalData* tls, uint64_t bit);
-void AddPollRequestOnAllOsThreads(uint64_t bit);
-void ArmPollOnAllOsThreads();
+void SyncHandshakeOpsFromMutator(ThreadLocalData* tls, Mutator* mutator);
+void DropHandshakeOpsFromMutator(ThreadLocalData* tls, Mutator* mutator);
 bool HasPendingSafepoint(ThreadLocalData* tls);
 
 void MarkFlushOnEnterSaferegion();

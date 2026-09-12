@@ -122,6 +122,7 @@ void MutatorManager::BindMutator(Mutator& mutator) const
     }
     MutatorManager::Instance().RegisterMarkFlushThread(tlData);
     tlData->SetMutator(&mutator);
+    SyncHandshakeOpsFromMutator(tlData, &mutator);
     UpdatePollValues(tlData);
 }
 
@@ -129,6 +130,7 @@ void MutatorManager::UnbindMutator(Mutator& mutator) const
 {
     ThreadLocalData* tlData = ThreadLocal::GetThreadLocalData();
     MRT_ASSERT(tlData->mutator == &mutator, "mutator in ThreadLocalData doesn't match in cjthread");
+    DropHandshakeOpsFromMutator(tlData, &mutator);
     tlData->SetMutator(nullptr);
     UpdatePollValues(tlData);
 }
@@ -498,7 +500,6 @@ EpochHandshakeStats MutatorManager::RunEpochHandshake(const char* source, bool y
         }
         mutator->RequestEpochHandshake(stats.epoch, young);
     }
-    AddPollRequestOnAllOsThreads(POLL_REQ_EPOCH);
 
     uint64_t waitStart = TimeUtil::MilliSeconds();
     bool runningMutatorsHadSelfOpportunity = false;
@@ -733,9 +734,6 @@ bool HasPendingSafepoint(ThreadLocalData* tls)
     if (tls == nullptr) {
         return false;
     }
-    if (MutatorManager::Instance().SyncTriggered() || MutatorManager::Instance().WorldStopped()) {
-        return true;
-    }
     if (tls->pollRequests.load(std::memory_order_acquire) != 0) {
         return true;
     }
@@ -758,7 +756,7 @@ void UpdatePollValues(ThreadLocalData* tls)
     }
 }
 
-void AddTlsPollRequest(ThreadLocalData* tls, uint64_t bit)
+void EnqueueHandshakeOp(ThreadLocalData* tls, uint64_t bit)
 {
     if (tls == nullptr || bit == 0) {
         return;
@@ -767,7 +765,7 @@ void AddTlsPollRequest(ThreadLocalData* tls, uint64_t bit)
     ArmThreadPoll(tls);
 }
 
-void ClearTlsPollRequest(ThreadLocalData* tls, uint64_t bit)
+void DequeueHandshakeOp(ThreadLocalData* tls, uint64_t bit)
 {
     if (tls == nullptr || bit == 0) {
         return;
@@ -775,17 +773,75 @@ void ClearTlsPollRequest(ThreadLocalData* tls, uint64_t bit)
     tls->pollRequests.fetch_and(~bit, std::memory_order_acq_rel);
 }
 
-void AddPollRequestOnAllOsThreads(uint64_t bit)
+void AddTlsPollRequest(ThreadLocalData* tls, uint64_t bit)
 {
-    if (bit == 0) {
-        return;
-    }
-    MutatorManager::Instance().ForEachMarkFlushTls([bit](ThreadLocalData* tls) { AddTlsPollRequest(tls, bit); });
+    EnqueueHandshakeOp(tls, bit);
 }
 
-void ArmPollOnAllOsThreads()
+void ClearTlsPollRequest(ThreadLocalData* tls, uint64_t bit)
 {
-    MutatorManager::Instance().ForEachMarkFlushTls([](ThreadLocalData* tls) { ArmThreadPoll(tls); });
+    DequeueHandshakeOp(tls, bit);
+}
+
+namespace {
+uint64_t HandshakeOpsFromMutator(Mutator* mutator)
+{
+    if (mutator == nullptr) {
+        return 0;
+    }
+    uint64_t bits = 0;
+    const uint32_t flags = mutator->GetSuspensionFlag();
+    if ((flags & Mutator::SUSPENSION_FOR_SYNC) != 0) {
+        bits |= POLL_REQ_SYNC;
+    }
+    if ((flags & Mutator::SUSPENSION_FOR_GC_PHASE) != 0) {
+        bits |= POLL_REQ_GC_PHASE;
+    }
+    if ((flags & Mutator::SUSPENSION_FOR_CPU_PROFILE) != 0) {
+        bits |= POLL_REQ_CPU_PROFILE;
+    }
+    if ((flags & Mutator::SUSPENSION_FOR_EPOCH_HANDSHAKE) != 0) {
+        bits |= POLL_REQ_EPOCH;
+    }
+    if ((flags & Mutator::SUSPENSION_FOR_EXIT) != 0) {
+        bits |= POLL_REQ_EXIT;
+    }
+    return bits;
+}
+} // namespace
+
+void SyncHandshakeOpsFromMutator(ThreadLocalData* tls, Mutator* mutator)
+{
+    EnqueueHandshakeOp(tls, HandshakeOpsFromMutator(mutator));
+}
+
+void DropHandshakeOpsFromMutator(ThreadLocalData* tls, Mutator* mutator)
+{
+    DequeueHandshakeOp(tls, HandshakeOpsFromMutator(mutator));
+}
+
+void EnqueueHandshakeOpForMutator(Mutator* mutator, uint64_t bit)
+{
+    if (mutator == nullptr || bit == 0) {
+        return;
+    }
+    MutatorManager::Instance().ForEachMarkFlushTls([mutator, bit](ThreadLocalData* tls) {
+        if (tls != nullptr && tls->mutator == mutator) {
+            EnqueueHandshakeOp(tls, bit);
+        }
+    });
+}
+
+void DequeueHandshakeOpForMutator(Mutator* mutator, uint64_t bit)
+{
+    if (mutator == nullptr || bit == 0) {
+        return;
+    }
+    MutatorManager::Instance().ForEachMarkFlushTls([mutator, bit](ThreadLocalData* tls) {
+        if (tls != nullptr && tls->mutator == mutator) {
+            DequeueHandshakeOp(tls, bit);
+        }
+    });
 }
 
 void MutatorManager::RegisterMarkFlushThread(ThreadLocalData* tls)
@@ -1121,7 +1177,6 @@ void MutatorManager::StartLightSync(bool syncGCPhase, GCPhase phase)
         mutator.SetSafepointActive(true);
         this->undoneLightSyncMutators.push_back(&mutator);
     });
-    AddPollRequestOnAllOsThreads(POLL_REQ_GC_PHASE);
 }
 
 void MutatorManager::StopLightSync() noexcept
@@ -1248,7 +1303,6 @@ void MutatorManager::TransitionAllMutatorsToGCPhase(GCPhase phase, bool young)
         mutator.SetSafepointActive(true);
         undoneMutators.push_back(&mutator);
     });
-    AddPollRequestOnAllOsThreads(POLL_REQ_GC_PHASE);
     EnsurePhaseTransition(phase, undoneMutators);
     if (!worldStopped) {
         MutatorManagementWUnlock();
@@ -1295,7 +1349,6 @@ void MutatorManager::TransitionAllMutatorsToCpuProfile()
             undoneMutators.push_back(&mutator);
         }
     });
-    AddPollRequestOnAllOsThreads(POLL_REQ_CPU_PROFILE);
     EnsureCpuProfileFinish(undoneMutators);
     if (!worldStopped) {
         MutatorManagementWUnlock();

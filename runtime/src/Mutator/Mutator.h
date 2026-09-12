@@ -297,10 +297,7 @@ public:
         suspensionFlag.fetch_or(flag, std::memory_order_seq_cst);
         const uint64_t bit = PollBitFor(flag);
         if (bit != 0) {
-            ThreadLocalData* tls = ThreadLocal::GetThreadLocalData();
-            if (tls != nullptr && tls->mutator == this) {
-                AddTlsPollRequest(tls, bit);
-            }
+            EnqueueHandshakeOpForMutator(this, bit);
         }
     }
 
@@ -309,9 +306,9 @@ public:
         suspensionFlag.fetch_and(~flag, std::memory_order_seq_cst);
         const uint64_t bit = PollBitFor(flag);
         if (bit != 0) {
+            DequeueHandshakeOpForMutator(this, bit);
             ThreadLocalData* tls = ThreadLocal::GetThreadLocalData();
             if (tls != nullptr && tls->mutator == this) {
-                ClearTlsPollRequest(tls, bit);
                 UpdatePollValues(tls);
             }
         }
