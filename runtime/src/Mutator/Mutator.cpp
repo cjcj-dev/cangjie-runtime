@@ -1482,7 +1482,7 @@ Mutator::MarkFlushClaim Mutator::TryClaimMarkFlush(bool self, MarkDomain* domain
     if (!HasSuspensionRequest(SUSPENSION_FOR_MARK_FLUSH)) {
         return MarkFlushClaim::NotPending;
     }
-    if (!self) {
+    if (!self && !InSaferegion()) {
         return MarkFlushClaim::NotSafe;
     }
     RememberedSet* rememberedSet = storeBarrierRememberedSet;
@@ -1491,7 +1491,10 @@ Mutator::MarkFlushClaim Mutator::TryClaimMarkFlush(bool self, MarkDomain* domain
     }
     bool published = satbNode != nullptr && !satbNode->IsEmpty();
     SatbBuffer::Instance().FlushQueue(satbNode);
-    AllocBuffer* buffer = ThreadLocal::GetAllocBuffer();
+    AllocBuffer* buffer = self ? ThreadLocal::GetAllocBuffer() : markFlushAllocBuffer;
+    if (buffer == nullptr) {
+        buffer = markFlushAllocBuffer;
+    }
     if (buffer != nullptr) {
         if (rememberedSet->IsInitialized()) {
             buffer->GetStoreBarrierBuffer().Flush(*rememberedSet);
