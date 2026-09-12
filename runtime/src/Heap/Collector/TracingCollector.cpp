@@ -296,14 +296,10 @@ void ExportRootTable::VisitGCRoots(const RootVisitor& visitor)
 }
 struct MajorMarkShared {
     TracingCollector* collector = nullptr;
-    size_t workerCount = 0;
-    std::unique_ptr<MarkStripeSet> stripes;
-    std::unique_ptr<MarkingSMR> smr;
-    std::vector<std::unique_ptr<MarkThreadLocalStacks>> stacks;
-    MarkTerminate terminate;
+    MarkWork mark;
     std::atomic<size_t> newlyMarked{ 0 };
 
-    size_t StripeFor(const MarkStackEntry& entry) const
+    size_t StripeFor(const MarkStackEntry& entry)
     {
         MAddress address = 0;
         if (entry.partialArray()) {
@@ -312,7 +308,7 @@ struct MajorMarkShared {
         } else {
             address = reinterpret_cast<MAddress>(entry.object());
         }
-        return stripes->StripeForAddress(address);
+        return mark.Stripes().StripeForAddress(address);
     }
 };
 
@@ -320,7 +316,7 @@ class ConcurrentMarkingWork : public HeapWork {
 public:
     ConcurrentMarkingWork(MajorMarkShared& shared, size_t workerSlot)
         : shared(shared), workerSlot(workerSlot),
-          context(shared.workerCount, workerSlot, *shared.stripes, *shared.stacks[workerSlot])
+          context(shared.mark.NWorkers(), workerSlot, shared.mark.Stripes(), shared.mark.StacksFor(workerSlot))
     {}
 
     ~ConcurrentMarkingWork() override
@@ -338,10 +334,12 @@ public:
     {
         size_t nNewlyMarked = 0;
         TracingCollector::WorkStack staging;
-        (void)MarkEngine::FollowWork(context, *shared.smr, *shared.stripes, shared.terminate, workerSlot, false,
+        (void)MarkEngine::FollowWork(context, shared.mark.Smr(), shared.mark.Stripes(), shared.mark.Terminate(),
+                                     workerSlot, false,
                                      [this, &nNewlyMarked, &staging](const MarkStackEntry& entry) {
                                          ProcessEntry(entry, nNewlyMarked, staging);
-                                     });
+                                     },
+                                     nullptr, nullptr, &shared.mark.AbortFlag());
         shared.newlyMarked.fetch_add(nNewlyMarked, std::memory_order_relaxed);
     }
 
@@ -353,7 +351,7 @@ private:
             staging.pop_back();
             const size_t stripeIndex = shared.StripeFor(next);
             const bool publish = stripeIndex != context.StripeId();
-            context.Stacks().Push(*shared.stripes, stripeIndex, next, publish);
+            context.Stacks().Push(shared.mark.Stripes(), stripeIndex, next, publish);
         }
     }
 
@@ -734,15 +732,6 @@ void TracingCollector::AddExportObjectsTracingWork(RootSet &exportRoots)
     threadPool->AddWork(new (std::nothrow) ExportRootsTracingWork(*this, std::move(exportRoots)));
 }
 
-static size_t MajorStripeCount(size_t workers)
-{
-    size_t count = 1;
-    while (count < workers) {
-        count <<= 1;
-    }
-    return count;
-}
-
 static size_t RunMajorStripeMark(TracingCollector& collector, TracingCollector::WorkStack& workStack,
                                  GCThreadPool* threadPool, bool parallel)
 {
@@ -751,42 +740,45 @@ static size_t RunMajorStripeMark(TracingCollector& collector, TracingCollector::
         workers = static_cast<size_t>(threadPool->GetMaxActiveThreadNum()) + 1;
         workers = std::max(workers, static_cast<size_t>(1));
     }
-    const size_t stripeCount = MajorStripeCount(workers);
     MajorMarkShared shared;
     shared.collector = &collector;
-    shared.workerCount = workers;
-    shared.terminate.Reset(workers, VerifyMarkingStacks::MarkingGeneration::MAJOR);
-    shared.stripes = std::make_unique<MarkStripeSet>(stripeCount);
-    shared.stripes->SetTerminate(&shared.terminate);
-    shared.smr = std::make_unique<MarkingSMR>(workers);
-    for (size_t i = 0; i < workers; ++i) {
-        shared.stacks.emplace_back(std::make_unique<MarkThreadLocalStacks>(stripeCount));
-    }
+    shared.mark.Prepare(workers, VerifyMarkingStacks::MarkingGeneration::MAJOR);
 
-    MarkThreadLocalStacks seed(stripeCount);
+    MarkThreadLocalStacks seed(MarkWork::STRIPES_MAX);
     while (!workStack.empty()) {
         const MarkStackEntry entry = workStack.back();
         workStack.pop_back();
-        seed.Push(*shared.stripes, shared.StripeFor(entry), entry, true);
+        seed.Push(shared.mark.Stripes(), shared.StripeFor(entry), entry, true);
     }
-    (void)seed.Flush(*shared.stripes, true);
+    (void)seed.Flush(shared.mark.Stripes(), true);
     VerifyMarkingStacks::NoteProducer(VerifyMarkingStacks::MarkingGeneration::MAJOR,
-                                      VerifyMarkingStacks::MarkingContainer::TASK, shared.stripes->Population());
+                                      VerifyMarkingStacks::MarkingContainer::TASK,
+                                      shared.mark.Stripes().Population());
 
-    if (workers > 1) {
-        threadPool->Start();
-        for (size_t worker = 1; worker < workers; ++worker) {
-            threadPool->AddWork(new ConcurrentMarkingWork(shared, worker));
+    for (;;) {
+        if (workers > 1) {
+            threadPool->Start();
+            for (size_t worker = 1; worker < workers; ++worker) {
+                threadPool->AddWork(new ConcurrentMarkingWork(shared, worker));
+            }
         }
+        ConcurrentMarkingWork mainTask(shared, 0);
+        mainTask.Execute(0);
+        if (workers > 1) {
+            threadPool->WaitFinish();
+        } else if (threadPool != nullptr) {
+            threadPool->DrainWorkQueue();
+        }
+        if (shared.mark.Terminate().Terminated()) {
+            break;
+        }
+        CHECK_DETAIL(shared.mark.AbortFlag().load(std::memory_order_relaxed),
+                     "major follow_work returned without terminate or abort");
+        shared.mark.ResizeWorkers(shared.mark.NWorkers());
+        workers = shared.mark.NWorkers();
     }
-    ConcurrentMarkingWork mainTask(shared, 0);
-    mainTask.Execute(0);
-    if (workers > 1) {
-        threadPool->WaitFinish();
-    } else if (threadPool != nullptr) {
-        threadPool->DrainWorkQueue();
-    }
-    CHECK_DETAIL(shared.terminate.Terminated(),
+    shared.mark.Finish();
+    CHECK_DETAIL(shared.mark.Terminate().Terminated(),
                  "major striped closure returned without coordinated worker termination");
     return shared.newlyMarked.load(std::memory_order_relaxed);
 }

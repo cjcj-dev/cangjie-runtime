@@ -197,4 +197,54 @@ MarkEngine::Result MarkEngine::FollowWork(MarkContext& context, MarkingSMR& smr,
     }
 }
 
+size_t MarkWork::CalculateNStripes(size_t nworkers)
+{
+    size_t nstripes = 1;
+    while (nstripes < nworkers) {
+        nstripes <<= 1;
+    }
+    if (nstripes > STRIPES_MAX) {
+        nstripes = STRIPES_MAX;
+    }
+    return nstripes;
+}
+
+void MarkWork::EnsureWorkers(size_t count)
+{
+    if (stripes == nullptr) {
+        stripes = std::make_unique<MarkStripeSet>(STRIPES_MAX);
+    }
+    stripes->SetNStripes(CalculateNStripes(count));
+    stripes->SetTerminate(&terminate);
+    smr = std::make_unique<MarkingSMR>(count);
+    stacks.resize(count);
+    for (size_t i = 0; i < count; ++i) {
+        if (stacks[i] == nullptr) {
+            stacks[i] = std::make_unique<MarkThreadLocalStacks>(STRIPES_MAX);
+        }
+    }
+}
+
+void MarkWork::Prepare(size_t count, VerifyMarkingStacks::MarkingGeneration gen)
+{
+    generation = gen;
+    nworkers = count;
+    abort.store(false, std::memory_order_relaxed);
+    EnsureWorkers(count);
+    terminate.Reset(count, gen);
+}
+
+void MarkWork::ResizeWorkers(size_t count)
+{
+    nworkers = count;
+    abort.store(false, std::memory_order_relaxed);
+    EnsureWorkers(count);
+    terminate.Reset(count, generation);
+}
+
+void MarkWork::Finish()
+{
+    abort.store(false, std::memory_order_relaxed);
+}
+
 } // namespace MapleRuntime

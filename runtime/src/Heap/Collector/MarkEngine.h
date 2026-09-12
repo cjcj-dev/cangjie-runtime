@@ -11,7 +11,9 @@
 #include <condition_variable>
 #include <cstddef>
 #include <functional>
+#include <memory>
 #include <mutex>
+#include <vector>
 
 #include "Heap/Collector/MarkStripe.h"
 #include "Heap/Verify/VerifyMarkingStacks.h"
@@ -54,6 +56,37 @@ public:
                              MarkTerminate& terminate, size_t workerId, bool partial,
                              const Process& process, std::atomic<size_t>* stealSuccess = nullptr,
                              std::atomic<size_t>* stealFailure = nullptr, std::atomic<bool>* abort = nullptr);
+};
+
+// ZGC ZMark per generation: prepare_work / resize_workers / finish_work
+// (zMark.cpp:142-163, :925-930) plus restartable task (zMark.cpp:895-923).
+class MarkWork {
+public:
+    static constexpr size_t STRIPES_MAX = 16;
+
+    static size_t CalculateNStripes(size_t nworkers);
+
+    void Prepare(size_t nworkers, VerifyMarkingStacks::MarkingGeneration generation);
+    void ResizeWorkers(size_t nworkers);
+    void Finish();
+
+    size_t NWorkers() const { return nworkers; }
+    MarkStripeSet& Stripes() { return *stripes; }
+    MarkingSMR& Smr() { return *smr; }
+    MarkTerminate& Terminate() { return terminate; }
+    MarkThreadLocalStacks& StacksFor(size_t workerId) { return *stacks[workerId]; }
+    std::atomic<bool>& AbortFlag() { return abort; }
+
+private:
+    void EnsureWorkers(size_t nworkers);
+
+    VerifyMarkingStacks::MarkingGeneration generation = VerifyMarkingStacks::MarkingGeneration::YOUNG;
+    size_t nworkers = 0;
+    std::unique_ptr<MarkStripeSet> stripes;
+    std::unique_ptr<MarkingSMR> smr;
+    std::vector<std::unique_ptr<MarkThreadLocalStacks>> stacks;
+    MarkTerminate terminate;
+    std::atomic<bool> abort{ false };
 };
 
 } // namespace MapleRuntime
