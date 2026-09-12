@@ -12,6 +12,7 @@ using namespace MapleRuntime;
 using namespace MapleRuntime::GcUnit;
 
 extern "C" int CJ_ScheduleManagerInit();
+extern "C" ObjectPtr CJ_MCC_ReadWeakRef(ObjectPtr, RefField<false>*);
 
 namespace {
 class GenerationMarkRuntime final : public Runtime {
@@ -98,6 +99,60 @@ GC_TEST(GenerationMark, AllocatedBlackPublishesFollowWithoutSatbNode)
     GC_EXPECT_TRUE(observed == fx.obj0);
     GC_EXPECT_TRUE(follow);
 }
+// Migrated weak-get cases from gc.TestReferenceRefersToDuringConcMark and
+// ZBarrier::blocking_keep_alive_on_weak_slow_path. These are admission tests;
+// the fixture does not execute the old mark-end pause or the rendezvous.
+GC_TEST(GenerationMark, BlockedWeakReadSeparatesOldStrongAndFinalizable)
+{
+    GcHeapFixture fx;
+    MarkPublicationFixture mark;
+    CollectorResources& resources = Heap::GetHeap().GetCollectorResources();
+    struct RestoreBlock {
+        CollectorResources& resources;
+        ~RestoreBlock() { resources.UnblockResurrection(); }
+    } restore { resources };
+    RefField<> field(StoreGoodPointer(fx.obj0));
+    mark.CompleteOldMarkForAdmissionTest();
+    resources.BlockResurrection();
+    GC_EXPECT_TRUE(CJ_MCC_ReadWeakRef(fx.obj1, &field) == nullptr);
+    const size_t offset = fx.region0->GetAddressOffset(reinterpret_cast<MAddress>(fx.obj0));
+    fx.region0->ResurrectObject(fx.obj0, offset);
+    GC_EXPECT_TRUE(CJ_MCC_ReadWeakRef(fx.obj1, &field) == nullptr);
+    fx.region0->MarkObject(fx.region0->GetMarkView<Generation::Old>(), fx.obj0, fx.obj0->GetSize());
+    GC_EXPECT_TRUE(CJ_MCC_ReadWeakRef(fx.obj1, &field) == fx.obj0);
+}
+
+GC_TEST(GenerationMark, BlockedWeakReadKeepsYoungAlive)
+{
+    GcHeapFixture fx;
+    MarkPublicationFixture mark;
+    auto& resources = Heap::GetHeap().GetCollectorResources();
+    struct RestoreBlock {
+        CollectorResources& resources;
+        ~RestoreBlock() { resources.UnblockResurrection(); }
+    } restore { resources };
+    fx.region0->SetYoungRegionFlag(1);
+    resources.BlockResurrection();
+    RefField<> field(StoreGoodPointer(fx.obj0));
+    GC_EXPECT_TRUE(CJ_MCC_ReadWeakRef(fx.obj1, &field) == fx.obj0);
+    std::vector<BaseObject*> published;
+    mark.Drain([&](BaseObject* object, bool) { published.push_back(object); });
+    GC_EXPECT_EQ(published.size(), 1u);
+    GC_EXPECT_TRUE(published.front() == fx.obj0);
+}
+
+GC_TEST(GenerationMark, UnblockedWeakReadPublishesOldKeepAlive)
+{
+    GcHeapFixture fx;
+    MarkPublicationFixture mark;
+    RefField<> field(StoreGoodPointer(fx.obj0));
+    GC_EXPECT_TRUE(CJ_MCC_ReadWeakRef(fx.obj1, &field) == fx.obj0);
+    std::vector<BaseObject*> published;
+    mark.DrainOld([&](BaseObject* object, bool) { published.push_back(object); });
+    GC_EXPECT_EQ(published.size(), 1u);
+    GC_EXPECT_TRUE(published.front() == fx.obj0);
+}
+
 int main(int argc, char** argv)
 {
     if (argc == 2) setenv("GC_UNIT_FILTER", argv[1], 1);

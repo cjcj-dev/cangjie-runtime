@@ -207,11 +207,6 @@ BaseObject* ForwardBarrier::ReadReference(BaseObject* obj, RefField<false>& fiel
 
 BaseObject* ForwardBarrier::ReadStaticRef(RootSlot& field) const { return Barrier::ReadStaticRef(field); }
 
-BaseObject* ForwardBarrier::ReadWeakRef(BaseObject* obj, RefField<false>& field) const
-{
-    return ReadReference(obj, field);
-}
-
 void ForwardBarrier::ReadStruct(MAddress dst, BaseObject* obj, MAddress src, size_t size) const
 {
     CHECK(!Heap::IsHeapAddress(dst));

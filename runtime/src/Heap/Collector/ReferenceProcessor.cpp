@@ -69,7 +69,8 @@ ReferenceStatus ReferenceProcessor::DiscoverReference(BaseObject* reference, Ref
     return ReferenceStatus::DISCOVERED;
 }
 
-void ReferenceProcessor::ProcessReferences(const IsStronglyLive& isStronglyLive)
+void ReferenceProcessor::ProcessReferencesImpl(const IsStronglyLive& isStronglyLive,
+                                               const ObserveWeakFinal& observeWeakFinal)
 {
     Node* list = discoveredList.exchange(nullptr, std::memory_order_acq_rel);
     while (list != nullptr) {
@@ -84,6 +85,15 @@ void ReferenceProcessor::ProcessReferences(const IsStronglyLive& isStronglyLive)
                 HeapSlotAt<>(reinterpret_cast<uintptr_t>(node->reference) + TYPEINFO_PTR_SIZE);
             target = to_object(referentField.GetTargetObject(std::memory_order_acquire));
             pending = target != nullptr && !isStronglyLive(target);
+            if (pending) {
+                // zReferenceProcessor.cpp: weak processing makes the referent
+                // inactive before the resurrection rendezvous and enqueue.
+                const WeakCleanResult result = CleanWeakReferenceWithResult(node->reference);
+                pending = result.cleared;
+                if (observeWeakFinal) {
+                    observeWeakFinal(node->reference, result.terminalReferent);
+                }
+            }
         } else if (node->type == ReferenceType::FINAL) {
             pending = IsFinalizable(target);
         }
@@ -152,8 +162,7 @@ bool ReferenceProcessor::CleanWeakReference(BaseObject* reference)
     return CleanWeakReferenceWithResult(reference).cleared;
 }
 
-void ReferenceProcessor::EnqueueReferencesImpl(const EnqueueFinal& enqueueFinal,
-                                                const ObserveWeakFinal& observeWeakFinal)
+void ReferenceProcessor::EnqueueReferences(const EnqueueFinal& enqueueFinal)
 {
     Node* list = pendingList.exchange(nullptr, std::memory_order_acq_rel);
     while (list != nullptr) {
@@ -161,11 +170,8 @@ void ReferenceProcessor::EnqueueReferencesImpl(const EnqueueFinal& enqueueFinal,
         list = list->next;
         bool accepted = false;
         if (node->type == ReferenceType::WEAK) {
-            const WeakCleanResult result = CleanWeakReferenceWithResult(node->reference);
-            accepted = result.cleared;
-            if (observeWeakFinal) {
-                observeWeakFinal(node->reference, result.terminalReferent);
-            }
+            // The weak referent was already cleared during processing.
+            accepted = true;
         } else if (node->type == ReferenceType::FINAL) {
             accepted = enqueueFinal(node->reference);
         }
@@ -176,16 +182,16 @@ void ReferenceProcessor::EnqueueReferencesImpl(const EnqueueFinal& enqueueFinal,
     }
 }
 
-void ReferenceProcessor::EnqueueReferences(const EnqueueFinal& enqueueFinal)
+void ReferenceProcessor::ProcessReferences(const IsStronglyLive& isStronglyLive)
 {
-    EnqueueReferencesImpl(enqueueFinal, ObserveWeakFinal{});
+    ProcessReferencesImpl(isStronglyLive, ObserveWeakFinal{});
 }
 
 #if defined(MRT_TESTABLE_INTERNALS)
-void ReferenceProcessor::EnqueueReferences(const EnqueueFinal& enqueueFinal,
+void ReferenceProcessor::ProcessReferences(const IsStronglyLive& isStronglyLive,
                                            const ObserveWeakFinal& observeWeakFinal)
 {
-    EnqueueReferencesImpl(enqueueFinal, observeWeakFinal);
+    ProcessReferencesImpl(isStronglyLive, observeWeakFinal);
 }
 
 void ReferenceProcessor::SetBeforeWeakCleanCasForTest(std::function<void()> hook)

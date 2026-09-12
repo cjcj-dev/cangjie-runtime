@@ -87,6 +87,7 @@ public:
     uint32_t GetTid() const { return tid; }
     ReferenceProcessor& GetReferenceProcessor() { return referenceProcessor; }
     void ProcessReferences(const ReferenceProcessor::IsStronglyLive& isStronglyLive);
+    void EnqueueReferences();
 
 #if defined(MRT_TESTABLE_INTERNALS)
     using BeforeFinalizableIdleCheck = std::function<void()>;

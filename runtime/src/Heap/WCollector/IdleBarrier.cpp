@@ -65,11 +65,6 @@ BaseObject* IdleBarrier::ReadReference(BaseObject* obj, RefField<false>& field) 
 
 BaseObject* IdleBarrier::ReadStaticRef(RootSlot& field) const { return Barrier::ReadStaticRef(field); }
 
-BaseObject* IdleBarrier::ReadWeakRef(BaseObject* obj, RefField<false>& field) const
-{
-    return ReadReference(obj, field);
-}
-
 BaseObject* IdleBarrier::AtomicReadReference(BaseObject* obj, RefField<true>& field, MemoryOrder order) const
 {
     // TRUST_STATE_KILL_PLAN Phase 1: retire TryUntagRefField plain-CAS from the read path.

@@ -917,6 +917,12 @@ void TracingCollector::ProcessOldNonStrongReferences(WorkStack& workStack)
     // Process the discovered references after the finalizable closure, before
     // relocation-set processing (zGeneration.cpp:1330-1335).
     ProcessFinalizers();
+    // zGeneration.cpp:1344-1373: finish in-flight weak loads before unblocking.
+    // A serial driver and synchronous GCWorkers::Run have already joined GC
+    // work here; mutators (including the finalizer thread) need a rendezvous.
+    MutatorManager::Instance().RunEpochHandshake("old non-strong references");
+    collectorResources.UnblockResurrection();
+    collectorResources.GetFinalizerProcessor().EnqueueReferences();
 }
 
 bool TracingCollector::FinishOldMark(WorkStack& workStack)
@@ -950,6 +956,8 @@ bool TracingCollector::FinishOldMark(WorkStack& workStack)
                 // Keep the existing barrier installed until POST_TRACE; marking
                 // admission is owned by this generation, not the barrier variant.
                 oldCycle.PublishPhase(GC_PHASE_MARK_COMPLETE);
+                // zGeneration.cpp:1280: close weak resurrection in the same pause.
+                collectorResources.BlockResurrection();
             }
         }
         if (terminated) {

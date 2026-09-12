@@ -255,6 +255,10 @@ bool FinalizerProcessor::EnqueueFinalizableReference(BaseObject* candidate)
 void FinalizerProcessor::ProcessReferences(const ReferenceProcessor::IsStronglyLive& isStronglyLive)
 {
     referenceProcessor.ProcessReferences(isStronglyLive);
+}
+
+void FinalizerProcessor::EnqueueReferences()
+{
     bool enqueued = false;
     referenceProcessor.EnqueueReferences(
         [this, &enqueued](BaseObject* obj) {

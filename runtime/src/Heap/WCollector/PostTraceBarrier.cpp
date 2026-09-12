@@ -62,25 +62,6 @@ BaseObject* PostTraceBarrier::ReadReference(BaseObject* obj, RefField<false>& fi
 
 BaseObject* PostTraceBarrier::ReadStaticRef(RootSlot& field) const { return Barrier::ReadStaticRef(field); }
 
-BaseObject* PostTraceBarrier::ReadWeakRef(BaseObject* obj, RefField<false>& field) const
-{
-    // tagdel E09: heal colour first (same ordinary Read as peers), then PostTrace weak clear.
-    BaseObject* referent = ReadReference(obj, field);
-    if (referent == nullptr) {
-        return nullptr;
-    }
-    RegionInfo* regionInfo = RegionInfo::GetRegionInfoAt(reinterpret_cast<MAddress>(referent));
-    MarkView<Generation::Old> view = regionInfo->GetMarkView<Generation::Old>();
-    bool isMarked = regionInfo->IsMarkedObject(view, referent);
-    if (!isMarked) { // skip strongly live referents
-        if (ReferenceProcessor::CleanWeakReference(obj)) {
-            return nullptr;
-        }
-        return ReadReference(obj, field);
-    }
-    return referent;
-}
-
 void PostTraceBarrier::ReadStruct(MAddress dst, BaseObject* obj, MAddress src, size_t size) const
 {
     if (!Heap::IsHeapAddress(dst)) {

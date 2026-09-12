@@ -65,6 +65,13 @@ public:
     // ZYoungType::major_full_roots selects the combined mark-start pause.
     const GCDriverRequest* YoungPreludeRequest() const { return youngPreludeRequest; }
 
+    // ZResurrection (zResurrection.cpp:35-47): shared by both generations.
+    // Block only in the successful old mark-end pause; unblock after the
+    // non-strong reference rendezvous, before finalizer enqueue.
+    void BlockResurrection() { resurrectionBlocked.store(true, std::memory_order_release); }
+    void UnblockResurrection() { resurrectionBlocked.store(false, std::memory_order_release); }
+    bool IsResurrectionBlocked() const { return resurrectionBlocked.load(std::memory_order_acquire); }
+
     bool IsHeapMarked() const { return isHeapMarked; }
 
     void SetHeapMarked(bool value) { isHeapMarked = value; }
@@ -193,6 +200,7 @@ private:
 
     // only gc thread can access it, so we don't use atomic type
     bool isHeapMarked = false;
+    std::atomic<bool> resurrectionBlocked { false };
     // Represent the number of returned raw pointer
     std::atomic<int> criticalNum{ 0 };
     int gcWorking = 0;

@@ -56,16 +56,6 @@ BaseObject* EnumBarrier::ReadReference(BaseObject* obj, RefField<false>& field) 
 
 BaseObject* EnumBarrier::ReadStaticRef(RootSlot& field) const { return Barrier::ReadStaticRef(field); }
 
-BaseObject* EnumBarrier::ReadWeakRef(BaseObject* obj, RefField<false>& field) const
-{
-    BaseObject* target = ReadReference(obj, field);
-    DLOG(BARRIER, "read weakref obj %p ref@%p: 0x%zx", obj, &field, target);
-    if (target != nullptr) {
-        theCollector.MarkObjectIfActive(target);
-    }
-    return target;
-}
-
 void EnumBarrier::ReadStruct(MAddress dst, BaseObject* obj, MAddress src, size_t size) const
 {
     if (!Heap::IsHeapAddress(dst)) {

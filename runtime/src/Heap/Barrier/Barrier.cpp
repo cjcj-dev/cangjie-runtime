@@ -1120,32 +1120,23 @@ BaseObject* Barrier::ReadReference(BaseObject* obj, RefField<false>& field) cons
 
 BaseObject* Barrier::ReadWeakRef(BaseObject* obj, RefField<false>& field) const
 {
-    if (phase != BarrierPhase::STW) {
-        BaseObject* handed = DispatchPhase(phase, *this, [&](const auto& barrier) {
-            return barrier.ReadWeakRef(obj, field);
-        });
-        // loadfc: weak shares the ordinary hand-out postcondition (zBarrier.inline.hpp:456-466).
-        const ForwardingProvenance provenance{ ForwardingHolderKind::HeapRef, obj, &field };
-        BaseObject* finalized = FinalizeLoadForMutator(
-            handed, obj, &field, "Barrier::ReadWeakRef", provenance);
-        if (finalized != handed && finalized != nullptr && Heap::IsHeapAddress(finalized)) {
-            RefField<> goodField = theCollector.GetAndTryTagRefField(finalized);
-            return ZgcSelfHealLoadGood(field, field.GetFieldValue(), goodField.GetFieldValue(),
-                                       HealSite::IdleReadReference);
+    BaseObject* target = ReadReference(obj, field);
+    if (target == nullptr || !Heap::IsHeapAddress(target)) {
+        return target;
+    }
+    // ZBarrier::load_barrier_on_weak_oop_field_preloaded and
+    // blocking_keep_alive_on_weak_slow_path (zBarrier.inline.hpp:484;
+    // zBarrier.cpp:67): weak liveness is independent of the installed phase.
+    if (Heap::GetHeap().GetCollectorResources().IsResurrectionBlocked()) {
+        RegionInfo* region = RegionInfo::GetRegionInfoAt(reinterpret_cast<MAddress>(target));
+        if (!region->IsYoungRegion()) {
+            return region->IsMarkedObject(region->GetMarkView<Generation::Old>(), target) ? target : nullptr;
         }
-        return finalized;
-    }
-    BaseObject* toVersion = nullptr;
-    if (theCollector.TryUpdateRefField(obj, field, toVersion)) {
-        return FinalizeLoadForMutator(
-            toVersion, obj, &field, "Barrier::ReadWeakRef.stw",
-            ForwardingProvenance{ ForwardingHolderKind::HeapRef, obj, &field });
+        theCollector.MarkYoungObjectIfActive(target);
     } else {
-        BaseObject* target = to_object(field.GetTargetObject());
-        return FinalizeLoadForMutator(
-            target, obj, &field, "Barrier::ReadWeakRef.stw",
-            ForwardingProvenance{ ForwardingHolderKind::HeapRef, obj, &field });
+        theCollector.MarkObjectIfActive(target);
     }
+    return target;
 }
 
 BaseObject* Barrier::ReadStaticRef(RootSlot& field) const

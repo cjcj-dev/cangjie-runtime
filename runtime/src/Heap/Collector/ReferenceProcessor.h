@@ -53,7 +53,7 @@ public:
     void ProcessReferences(const IsStronglyLive& isStronglyLive);
     void EnqueueReferences(const EnqueueFinal& enqueueFinal);
 #if defined(MRT_TESTABLE_INTERNALS)
-    void EnqueueReferences(const EnqueueFinal& enqueueFinal, const ObserveWeakFinal& observeWeakFinal);
+    void ProcessReferences(const IsStronglyLive& isStronglyLive, const ObserveWeakFinal& observeWeakFinal);
     static void SetBeforeWeakCleanCasForTest(std::function<void()> hook);
 #endif
     static bool IsFinalizable(BaseObject* reference);
@@ -81,7 +81,7 @@ private:
     static void Push(std::atomic<Node*>& head, Node* node);
     static void DeleteList(Node* list);
     static WeakCleanResult CleanWeakReferenceWithResult(BaseObject* reference);
-    void EnqueueReferencesImpl(const EnqueueFinal& enqueueFinal, const ObserveWeakFinal& observeWeakFinal);
+    void ProcessReferencesImpl(const IsStronglyLive& isStronglyLive, const ObserveWeakFinal& observeWeakFinal);
 
     std::atomic<Node*> discoveredList{ nullptr };
     std::atomic<Node*> pendingList{ nullptr };
