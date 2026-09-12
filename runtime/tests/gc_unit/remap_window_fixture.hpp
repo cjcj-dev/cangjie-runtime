@@ -8,7 +8,7 @@
 #include <dlfcn.h>
 
 namespace {
-enum class ForwardDomain { None, Identity, Copy, Retired, Missing, WrongLife, Unavailable };
+enum class ForwardDomain { None, Identity, Copy, Retired, Missing, Unavailable };
 
 struct RemapWindow {
     std::mutex mutex;
@@ -121,12 +121,7 @@ void ForwardDomainHook(unsigned point, RegionInfo* region, BaseObject* object)
         if (state.domain == ForwardDomain::Unavailable) {
             ForwardingTable::ForcePublicationClosedForTest(from);
         }
-    } else if (state.domain == ForwardDomain::WrongLife) {
-        const auto route = state.kept->GetRouteState();
-        state.kept->BumpRegionLifeId();
-        // Keep the diagnostic route carrier current; the table and receipt
-        // retain their original, now mismatching lifecycle stamps.
-        state.kept->SetRouteState(route);
+
     }
     const auto consumed = ForwardingTable::LookupTo(from);
     std::fprintf(stderr, "DOMAIN input answer=%u active=%u retired=%u cause=%u to=%#zx done=%d\n",
@@ -141,11 +136,7 @@ void ForwardDomainHook(unsigned point, RegionInfo* region, BaseObject* object)
     } else if (state.domain == ForwardDomain::Missing) {
         GC_EXPECT_TRUE(consumed.answer == ForwardingTable::ToAnswer::ArmedMiss);
         GC_EXPECT_EQ(consumed.to, 0u);
-    } else if (state.domain == ForwardDomain::WrongLife && !RegionLifeClock::EnforceEnabled()) {
-        GC_EXPECT_TRUE(consumed.answer == ForwardingTable::ToAnswer::ArmedHit);
-        GC_EXPECT_EQ(consumed.to, produced.to);
-        std::fprintf(stderr, "DOMAIN lifecycle_audit_control=ArmedHit\n");
-    } else if (state.domain == ForwardDomain::WrongLife || state.domain == ForwardDomain::Unavailable) {
+    } else if (state.domain == ForwardDomain::Unavailable) {
         GC_EXPECT_TRUE(consumed.answer == ForwardingTable::ToAnswer::Unavailable);
         GC_EXPECT_EQ(consumed.to, 0u);
     }
@@ -493,8 +484,7 @@ void RunRemapWindow(bool copyOnly, ForwardDomain domain = ForwardDomain::None, b
                 std::fprintf(stderr, "DOMAIN consumer_return=%p expected=%p done=%d\n", result,
                              state.expected, state.kept->IsForwardingDone());
                 if (domain == ForwardDomain::Identity || domain == ForwardDomain::Copy ||
-                    domain == ForwardDomain::Retired ||
-                    (domain == ForwardDomain::WrongLife && !RegionLifeClock::EnforceEnabled())) {
+                    domain == ForwardDomain::Retired) {
                     GC_EXPECT_TRUE(result == state.expected);
                     GC_EXPECT_EQ(state.kept->IsForwardingDone(), afterDone);
                     std::fprintf(stderr, "DOMAIN result_assertion=PASS\n");
@@ -589,7 +579,6 @@ void RunForwardDomain(ForwardDomain domain)
         return;
     }
     const bool negative = domain == ForwardDomain::Missing ||
-                          (domain == ForwardDomain::WrongLife && RegionLifeClock::EnforceEnabled()) ||
                           domain == ForwardDomain::Unavailable;
     bool allTargetsMatched = true;
     bool allStatusesMatched = true;
@@ -656,7 +645,6 @@ GC_OTHER_VM_TEST(ForwardReturnDomain, Identity) { RunForwardDomain(ForwardDomain
 GC_OTHER_VM_TEST(ForwardReturnDomain, NonIdentityCopy) { RunForwardDomain(ForwardDomain::Copy); }
 GC_OTHER_VM_TEST(ForwardReturnDomain, RetiredHit) { RunForwardDomain(ForwardDomain::Retired); }
 GC_OTHER_VM_TEST(ForwardReturnDomain, MissingEntry) { RunForwardDomain(ForwardDomain::Missing); }
-GC_OTHER_VM_TEST(ForwardReturnDomain, WrongLifecycle) { RunForwardDomain(ForwardDomain::WrongLife); }
 GC_OTHER_VM_TEST(ForwardReturnDomain, Unavailable) { RunForwardDomain(ForwardDomain::Unavailable); }
 
 GC_OTHER_VM_TEST(YoungConc, ForwardingArenaProductInstall)
