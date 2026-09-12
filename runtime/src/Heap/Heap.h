@@ -177,7 +177,7 @@ public:
 
 private:
     static MAddress heapStartAddr;
-    inline static std::vector<HeapSlotAddressRange> heapReservations;
+    static std::vector<HeapSlotAddressRange> heapReservations;
 };
 } // namespace MapleRuntime
 #endif // MRT_HEAP_MANAGER_H
