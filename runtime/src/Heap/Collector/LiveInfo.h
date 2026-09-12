@@ -180,19 +180,12 @@ struct RegionBitmap {
     {
         BitMaskInfo maskInfo;
         GetBitMaskInfo(start, byteCnt, maskInfo);
-        // ZGC zBitMap.inline.hpp:60-83 / zLiveMap: only the object-start pair is
-        // a start bit. Strong bit stays on the start slot; interior coverage uses
-        // live bits only so find_base can walk start bits (zLiveMap.inline.hpp:181-221).
+        // ZGC zBitMap.inline.hpp:60-83 / zLiveMap: only the object-start pair.
+        // find_base_bit finds last set bit then aligns to the pair (zLiveMap.inline.hpp:219-221).
         const uint64_t startPair = maskInfo.liveStartBitMask | maskInfo.strongStartBitMask;
         const uint64_t old = markWords[maskInfo.headWordIdx].fetch_or(startPair);
         const bool already = (old & maskInfo.strongStartBitMask) != 0;
         incLive = !already && (old & maskInfo.liveStartBitMask) == 0;
-        const uint64_t interiorLive =
-            (maskInfo.headMaskBits & kLiveBitMask) & ~maskInfo.liveStartBitMask;
-        if (interiorLive != 0) {
-            markWords[maskInfo.headWordIdx].fetch_or(interiorLive);
-        }
-        SetTailMask(maskInfo, kLiveBitMask);
         if (incLive) {
             AddLiveBytesForMask(maskInfo, byteCnt, regionSize);
         }
@@ -209,10 +202,9 @@ struct RegionBitmap {
     {
         BitMaskInfo maskInfo;
         GetBitMaskInfo(start, byteCnt, maskInfo);
-        const uint64_t old = markWords[maskInfo.headWordIdx].fetch_or(maskInfo.headMaskBits & kLiveBitMask);
+        const uint64_t old = markWords[maskInfo.headWordIdx].fetch_or(maskInfo.liveStartBitMask);
         const bool already = (old & maskInfo.liveStartBitMask) != 0;
         incLive = !already;
-        SetTailMask(maskInfo, kLiveBitMask);
         if (incLive) {
             AddLiveBytesForMask(maskInfo, byteCnt, regionSize);
         }
@@ -236,6 +228,9 @@ struct RegionBitmap {
     }
 
     bool IsFinalizable(size_t start) const { return IsLive(start) && !IsMarked(start); }
+
+    // zLiveMap.inline.hpp:219-221: pair with either strong or finalizable bit is an object start.
+    bool IsObjectStart(size_t start) const { return IsLive(start) || IsMarked(start); }
 
     struct PreMaskInfo {
         int8_t partIndex;
