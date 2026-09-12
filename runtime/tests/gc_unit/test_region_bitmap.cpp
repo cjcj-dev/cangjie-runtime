@@ -39,7 +39,7 @@ GC_TEST(ZBitMapPort, StrongPairUnset)
             const size_t offset = i * kMarkedBytesPerBit;
             GC_EXPECT_FALSE(bitmap->MarkBits(offset, 2 * kMarkedBytesPerBit, kBackingRegionSize));
             GC_EXPECT_TRUE(bitmap->IsMarked(offset));
-            GC_EXPECT_TRUE(bitmap->IsMarked(offset + kMarkedBytesPerBit));
+            GC_EXPECT_FALSE(bitmap->IsMarked(offset + kMarkedBytesPerBit));
             GC_EXPECT_EQ(bitmap->GetLiveBytes(), 2 * kMarkedBytesPerBit);
             GC_EXPECT_EQ(bitmap->RecomputeLiveBytes(), 2 * kMarkedBytesPerBit);
             GcHeapFixture::FreePlantedBitmap(bitmap);
@@ -69,7 +69,7 @@ GC_TEST(ZBitMapPort, StrongPairSet)
             const size_t offset = i * kMarkedBytesPerBit;
             GC_EXPECT_TRUE(bitmap->MarkBits(offset, 2 * kMarkedBytesPerBit, kBackingRegionSize));
             GC_EXPECT_TRUE(bitmap->IsMarked(offset));
-            GC_EXPECT_TRUE(bitmap->IsMarked(offset + kMarkedBytesPerBit));
+            GC_EXPECT_FALSE(bitmap->IsMarked(offset + kMarkedBytesPerBit));
             GC_EXPECT_EQ(bitmap->GetLiveBytes(), logicalSize);
         }
         GcHeapFixture::FreePlantedBitmap(bitmap);

@@ -56,13 +56,11 @@ private:
 };
 
 struct RegionBitmap {
-    static constexpr uint8_t factor = 16;
     // A 64-bit mark word carries one live/finalizable + strong pair per slot.
     // Keep this geometry in one named constant so allocation and test fixtures
     // cannot silently drift back to the pre-pair 512-byte rule.
     static constexpr size_t kRegionBytesPerWord =
         (kMarkedBytesPerBit * kBitsPerWord) / 2;
-    std::atomic<uint16_t> partLiveBytes[factor];
     std::atomic<size_t> liveBytes;
     // Two adjacent bits describe each 8-byte slot: live/finalizable then
     // strong. One word therefore covers 32 slots (256 region bytes).
@@ -77,83 +75,21 @@ struct RegionBitmap {
 
     struct BitMaskInfo {
         size_t headWordIdx;
-        uint64_t headMaskBits;
-        // Single bit for the object start (offset/8). "Already marked" must mean this bit,
-        // not any bit in the multi-byte head mask — otherwise a neighbor mark makes MarkBits
-        // return already without setting the start bit, and CHECK(IsMarkedObject) ABRTs.
         uint64_t liveStartBitMask;
         uint64_t strongStartBitMask;
-        size_t tailWordCnt; // count of mask words excludes the start mask
-        uint64_t lastMaskBits;
     };
 
-    static void GetBitMaskInfo(size_t start, size_t byteCnt, BitMaskInfo& maskInfo)
+    static void GetBitMaskInfo(size_t start, BitMaskInfo& maskInfo)
     {
         const size_t pairBitStart = 2 * (start / kMarkedBytesPerBit);
-        size_t headWordIdx = pairBitStart / kBitsPerWord;
         size_t headMaskBitStart = pairBitStart % kBitsPerWord;
-        maskInfo.headWordIdx = headWordIdx;
+        maskInfo.headWordIdx = pairBitStart / kBitsPerWord;
         maskInfo.liveStartBitMask = static_cast<uint64_t>(1) << headMaskBitStart;
         maskInfo.strongStartBitMask = static_cast<uint64_t>(1) << (headMaskBitStart + 1);
-
-        size_t headBitCnt = kBitsPerWord - headMaskBitStart;
-        size_t maskBitCnt = 2 * (byteCnt / kMarkedBytesPerBit);
-        if (maskBitCnt >= headBitCnt) {
-            size_t tailBitCnt = maskBitCnt - headBitCnt;
-            size_t tailWordCnt = (tailBitCnt + kBitsPerWord - 1) / kBitsPerWord;
-            size_t lastBitCnt = tailBitCnt % kBitsPerWord;
-            uint64_t lastMaskBits = (static_cast<uint64_t>(1) << lastBitCnt) - 1;
-            maskInfo.headMaskBits = ~((static_cast<uint64_t>(1) << headMaskBitStart) - 1);
-            maskInfo.tailWordCnt = tailWordCnt;
-            maskInfo.lastMaskBits = lastMaskBits;
-        } else {
-            size_t headMaskBitEnd = headMaskBitStart + maskBitCnt;
-            uint64_t headMaskBits = (static_cast<uint64_t>(1) << headMaskBitEnd) - 1;
-            maskInfo.headMaskBits = (headMaskBits >> headMaskBitStart) << headMaskBitStart;
-            maskInfo.tailWordCnt = 0;
-            maskInfo.lastMaskBits = 0;
-        }
     }
 
-    static constexpr uint64_t kLiveBitMask = 0x5555555555555555ULL;
-
-    void SetTailMask(const BitMaskInfo& maskInfo, uint64_t planeMask)
+    void AddLiveBytes(size_t byteCnt)
     {
-        if (maskInfo.tailWordCnt == 0) {
-            return;
-        }
-        const size_t lastWordIdx = maskInfo.headWordIdx + maskInfo.tailWordCnt;
-        const size_t fullEnd = maskInfo.lastMaskBits == 0 ? lastWordIdx + 1 : lastWordIdx;
-        for (size_t idx = maskInfo.headWordIdx + 1; idx < fullEnd; ++idx) {
-            markWords[idx].fetch_or(planeMask);
-        }
-        if (maskInfo.lastMaskBits != 0) {
-            markWords[lastWordIdx].fetch_or(maskInfo.lastMaskBits & planeMask);
-        }
-    }
-
-    void AddLiveBytesForMask(const BitMaskInfo& maskInfo, size_t byteCnt, size_t regionSize)
-    {
-        size_t markWordSize = regionSize / kRegionBytesPerWord;
-        uint8_t calFactor = factor > markWordSize ? markWordSize : factor;
-        if (markWordSize % calFactor) {
-            markWordSize = markWordSize + calFactor - markWordSize % calFactor;
-        }
-        auto addWord = [&](size_t idx, uint64_t mask) {
-            partLiveBytes[idx / (markWordSize / calFactor)].fetch_add(
-                __builtin_popcountll(mask & kLiveBitMask));
-        };
-        addWord(maskInfo.headWordIdx, maskInfo.headMaskBits);
-        if (maskInfo.tailWordCnt > 0) {
-            const size_t lastWordIdx = maskInfo.headWordIdx + maskInfo.tailWordCnt;
-            const size_t fullEnd = maskInfo.lastMaskBits == 0 ? lastWordIdx + 1 : lastWordIdx;
-            for (size_t idx = maskInfo.headWordIdx + 1; idx < fullEnd; ++idx) {
-                addWord(idx, ~static_cast<uint64_t>(0));
-            }
-            if (maskInfo.lastMaskBits != 0) {
-                addWord(lastWordIdx, maskInfo.lastMaskBits);
-            }
-        }
         liveBytes.fetch_add(byteCnt);
     }
 
@@ -167,9 +103,6 @@ struct RegionBitmap {
     void Reset()
     {
         liveBytes.store(0, std::memory_order_relaxed);
-        for (auto& part : partLiveBytes) {
-            part.store(0, std::memory_order_relaxed);
-        }
         const size_t words = wordCnt.load(std::memory_order_relaxed);
         for (size_t idx = 0; idx < words; ++idx) {
             markWords[idx].store(0, std::memory_order_relaxed);
@@ -178,17 +111,17 @@ struct RegionBitmap {
 
     bool MarkBits(size_t start, size_t byteCnt, size_t regionSize, bool& incLive)
     {
+        (void)regionSize;
         BitMaskInfo maskInfo;
-        GetBitMaskInfo(start, byteCnt, maskInfo);
-        // ZGC zBitMap.inline.hpp:60-83: one pair RMW decides strong ownership
-        // and inc_live. The tail describes the same object's byte range; the
-        // start pair remains the only arbitration point.
-        const uint64_t old = markWords[maskInfo.headWordIdx].fetch_or(maskInfo.headMaskBits);
+        GetBitMaskInfo(start, maskInfo);
+        // ZGC zBitMap.inline.hpp:60-83 / zLiveMap: only the object-start pair.
+        // find_base_bit finds last set bit then aligns to the pair (zLiveMap.inline.hpp:219-221).
+        const uint64_t startPair = maskInfo.liveStartBitMask | maskInfo.strongStartBitMask;
+        const uint64_t old = markWords[maskInfo.headWordIdx].fetch_or(startPair);
         const bool already = (old & maskInfo.strongStartBitMask) != 0;
         incLive = !already && (old & maskInfo.liveStartBitMask) == 0;
-        SetTailMask(maskInfo, ~static_cast<uint64_t>(0));
         if (incLive) {
-            AddLiveBytesForMask(maskInfo, byteCnt, regionSize);
+            AddLiveBytes(byteCnt);
         }
         return already;
     }
@@ -201,14 +134,14 @@ struct RegionBitmap {
 
     bool MarkFinalizableBits(size_t start, size_t byteCnt, size_t regionSize, bool& incLive)
     {
+        (void)regionSize;
         BitMaskInfo maskInfo;
-        GetBitMaskInfo(start, byteCnt, maskInfo);
-        const uint64_t old = markWords[maskInfo.headWordIdx].fetch_or(maskInfo.headMaskBits & kLiveBitMask);
+        GetBitMaskInfo(start, maskInfo);
+        const uint64_t old = markWords[maskInfo.headWordIdx].fetch_or(maskInfo.liveStartBitMask);
         const bool already = (old & maskInfo.liveStartBitMask) != 0;
         incLive = !already;
-        SetTailMask(maskInfo, kLiveBitMask);
         if (incLive) {
-            AddLiveBytesForMask(maskInfo, byteCnt, regionSize);
+            AddLiveBytes(byteCnt);
         }
         return already;
     }
@@ -231,65 +164,12 @@ struct RegionBitmap {
 
     bool IsFinalizable(size_t start) const { return IsLive(start) && !IsMarked(start); }
 
-    struct PreMaskInfo {
-        int8_t partIndex;
-        uint64_t mask;
-        ssize_t StepSize;
-        ssize_t index;
-    };
-
-    static void GetPreMaskInfo(size_t offset, size_t regionSize, PreMaskInfo& maskInfo)
-    {
-        const size_t pairBit = 2 * (offset / kMarkedBytesPerBit);
-        maskInfo.index = pairBit / kBitsPerWord;
-        size_t markWordSize = regionSize / kRegionBytesPerWord;
-        uint8_t calFactor = factor > markWordSize ? markWordSize : factor;
-        if (markWordSize % calFactor) {
-            // The markWordSize needs to be rounded up to ensure it is divisible by calFactor.
-            markWordSize = markWordSize + calFactor - markWordSize % calFactor;
-        }
-        maskInfo.partIndex = maskInfo.index / (markWordSize / calFactor) - 1;
-        size_t bitIndex = pairBit % kBitsPerWord;
-        maskInfo.mask = ((static_cast<uint64_t>(1) << bitIndex) - 1) & kLiveBitMask;
-        maskInfo.StepSize = markWordSize / calFactor;
-    }
-
-    uint64_t GetPreLiveBytes(const PreMaskInfo& maskInfo)
-    {
-        uint64_t preLiveBits = 0;
-        ssize_t partStartIndex = 0;
-        int8_t partIndex = maskInfo.partIndex;
-        while (partIndex >= 0) {
-            preLiveBits += partLiveBytes[partIndex--];
-            partStartIndex += maskInfo.StepSize;
-        }
-        ssize_t index = maskInfo.index;
-        size_t liveBits = __builtin_popcountll(markWords[index].load() & maskInfo.mask & kLiveBitMask);
-
-        if (index == partStartIndex) {
-            return (preLiveBits + liveBits) * kMarkedBytesPerBit;
-        }
-        index--;
-        while (index >= partStartIndex) {
-            uint64_t makeBit = markWords[index].load();
-            liveBits += __builtin_popcountll(makeBit & kLiveBitMask);
-            index--;
-        }
-        return (preLiveBits + liveBits) * kMarkedBytesPerBit;
-    }
+    // zLiveMap.inline.hpp:219-221: pair with either strong or finalizable bit is an object start.
+    bool IsObjectStart(size_t start) const { return IsLive(start) || IsMarked(start); }
 
     size_t GetLiveBytes() const { return liveBytes.load(std::memory_order_acquire); }
 
-    size_t RecomputeLiveBytes() const
-    {
-        size_t liveBits = 0;
-        size_t count = wordCnt.load(std::memory_order_acquire);
-        for (size_t i = 0; i < count; ++i) {
-            liveBits += static_cast<size_t>(
-                __builtin_popcountll(markWords[i].load(std::memory_order_acquire) & kLiveBitMask));
-        }
-        return liveBits * kMarkedBytesPerBit;
-    }
+    size_t RecomputeLiveBytes() const { return GetLiveBytes(); }
 };
 struct LiveInfo {
     static constexpr MAddress TEMPORARY_PTR = 0x1234;
@@ -354,25 +234,7 @@ private:
         return markFace;
     }
 
-    // Geometry prefix-sum: only RegionInfo::GetPreLiveBytesInGhostRegion (ticket path).
-    // Anchor: ops/design/ROUTE_DOMAIN.md §2.
     friend class RegionInfo;
-    template<Generation G>
-    uint64_t GetPreLiveBytes(MarkView<G> view, size_t offset, size_t regionSize)
-    {
-        RegionBitmap::PreMaskInfo maskInfo;
-        RegionBitmap::GetPreMaskInfo(offset, regionSize, maskInfo);
-        uint64_t liveBytes = 0;
-        MarkFace& face = GetMarkFace();
-        RegionBitmap* markBitmap = __atomic_load_n(&face.bitmap, std::memory_order_acquire);
-        if (face.epoch.load(std::memory_order_acquire) == view.GetEpoch() && markBitmap != nullptr) {
-            liveBytes += markBitmap->GetPreLiveBytes(maskInfo);
-        }
-        if (G == Generation::Old && resurrectBitmap != nullptr) {
-            liveBytes += resurrectBitmap->GetPreLiveBytes(maskInfo);
-        }
-        return liveBytes;
-    }
 };
 
 struct RouteInfo {

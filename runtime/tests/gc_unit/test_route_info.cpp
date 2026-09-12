@@ -359,25 +359,23 @@ GC_TEST(RouteInfo, MissingDomainReturnsNullNotGarbage)
     GC_EXPECT_TRUE(region->GetRouteForProbe(sibling) == nullptr);
     region->RecordRouteStart(offset);
 
-    // Positive control, and it needs the route to actually exist.  Geometry plus a survivor bit is
-    // not a forwarding: RegionInfo::GetRoute(RouteTicket) (RegionInfo.h:1806-1809) refuses unless
-    // the region has reached ROUTED or FORWARDED, because FreeCompactRouteTable publishes NORMAL
-    // before detaching a compact table and a reader that loses that race must soft-miss rather than
-    // read compact destinations as prefix-sum geometry.
-    //
-    // OpenJDK draws the same line structurally rather than by state check: ZForwarding::find returns
-    // `entry.populated() ? ... : zaddress::null` (zForwarding.inline.hpp:248-252), and a forwarding
-    // exists at all only for pages placed in the relocation set.  A region still in NORMAL has no
-    // forwarding to consult, so null is the right answer in both designs.
-    //
-    // This test previously stopped at the geometry and expected a destination anyway, which made it
-    // the only red test in the suite while the product was correct.  Keeping the arm rather than
-    // deleting it: without it the three rejections above would also pass if the gate simply always
-    // returned null.
+    // Positive arm: dest comes from insert (zRelocate.cpp:361-372), not live-bit prefix.
+    const MAddress from = reinterpret_cast<MAddress>(obj);
+    const MAddress stored = fx.heapStart + RegionInfo::UNIT_SIZE + 128;
+    ForwardingTable::ClearEntries(region->GetRegionStart(), region->GetRegionSize());
+    ForwardingTable::ReclaimRetired("route-info-insert-dest");
+    GC_EXPECT_TRUE(ForwardingTable::PreparePublicationGeneration(
+        region->GetRegionStart(), region->GetRegionSize()));
+    GC_EXPECT_TRUE(ForwardingTable::InstallPublicationBeforeCopy(
+        region->GetRegionStart(), region->GetRegionSize(), region));
+    ForwardingTable::Publication publication =
+        ForwardingTable::EnsurePublicationBeforeCopy(region, from);
+    GC_EXPECT_TRUE(static_cast<bool>(publication));
+    GC_EXPECT_EQ(ForwardingTable::InsertMapping(publication, from, stored), stored);
+    publication = ForwardingTable::Publication();
     BaseObject* to = region->GetRouteForProbe(obj);
     GC_EXPECT_TRUE(to != nullptr);
-    uintptr_t pre = region->GetPreLiveBytesInGhostRegionForProbe(reinterpret_cast<MAddress>(obj));
-    GC_EXPECT_EQ(reinterpret_cast<uintptr_t>(to), 0x20000000u + pre);
+    GC_EXPECT_EQ(reinterpret_cast<MAddress>(to), stored);
 
     region->SetRouteState(RegionInfo::NORMAL);
     ForwardingTable::ClearEntries(region->GetRegionStart(), region->GetRegionSize());

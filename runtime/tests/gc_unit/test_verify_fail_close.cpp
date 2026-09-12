@@ -96,7 +96,7 @@ GC_OTHER_VM_TEST(VerifyFailClose, HeapBadTargetReachesSceneAssertion)
 GC_OTHER_VM_TEST(VerifyFailClose, MissingRemsetReachesSceneAssertion)
 {
     ExpectSceneAbort("[GCV2][verify][remset] scene failed", [] {
-        (void)setenv("MRT_GCV2_VERIFY_REMSET", "1", 1);
+        (void)setenv("MRT_GCV2_DIAG", "remembered", 1);
         GcHeapFixture fixture;
         (void)InstallFixtureWalk(fixture);
         fixture.region0->SetRegionType(RegionInfo::RegionType::RECENT_FULL_REGION);

@@ -419,12 +419,6 @@ public:
         return locked;
     }
 
-    // Probe-only: ghost preLiveBytes (product callers must hold a RouteTicket).
-    size_t GetPreLiveBytesInGhostRegionForProbe(MAddress address)
-    {
-        return GetPreLiveBytesInGhostRegion(address);
-    }
-
     RegionInfo()
     {
         metadata.allocPtr = reinterpret_cast<uintptr_t>(nullptr);
@@ -2199,6 +2193,88 @@ public:
     void VisitAllObjects(const std::function<void(BaseObject*)>&& func);
     bool VisitLiveObjectsUntilFalse(const std::function<bool(BaseObject*)>&& func);
 
+    // zRememberedSet.cpp:144-152 / zLiveMap.inline.hpp:181-221 find_base:
+    // nearest object-start pair (strong or finalizable) at or before a field.
+    RegionBitmap* GetLiveStartBitmap()
+    {
+        const ZForwarding::FromPageView* from = GetFromPageView();
+        if (from != nullptr) {
+            return GetRouteMarkBitmap(from->liveInfo);
+        }
+        return GetOwnerMarkBitmap();
+    }
+
+    MAddress FindLiveObjectStart(MAddress field)
+    {
+        const MAddress start = GetRegionStart();
+        if (field < start) {
+            return 0;
+        }
+        if (IsLargeRegion()) {
+            RegionBitmap* bitmap = GetLiveStartBitmap();
+            if (bitmap != nullptr && bitmap->IsObjectStart(0)) {
+                return start;
+            }
+            if (fromPageLargeMarked()) {
+                return start;
+            }
+            return 0;
+        }
+        if (!IsSmallRegion()) {
+            return 0;
+        }
+        RegionBitmap* bitmap = GetLiveStartBitmap();
+        if (bitmap == nullptr) {
+            return 0;
+        }
+        size_t off = field - start;
+        off -= off % kMarkedBytesPerBit;
+        for (;;) {
+            if (bitmap->IsObjectStart(off)) {
+                return start + off;
+            }
+            if (off < kMarkedBytesPerBit) {
+                return 0;
+            }
+            off -= kMarkedBytesPerBit;
+        }
+    }
+
+    bool fromPageLargeMarked()
+    {
+        const ZForwarding::FromPageView* from = GetFromPageView();
+        return from != nullptr && from->largeMarked != 0;
+    }
+
+    void CollectLiveObjectStarts(std::vector<MAddress>& out)
+    {
+        out.clear();
+        if (IsFreeRegion() || IsGarbageRegion() || IsOwnerKnownEmpty()) {
+            return;
+        }
+        const MAddress start = GetRegionStart();
+        if (IsLargeRegion()) {
+            if (FindLiveObjectStart(start) == start) {
+                out.push_back(start);
+            }
+            return;
+        }
+        if (!IsSmallRegion()) {
+            return;
+        }
+        RegionBitmap* bitmap = GetLiveStartBitmap();
+        if (bitmap == nullptr) {
+            return;
+        }
+        const uintptr_t allocPtr = GetRegionAllocPtr();
+        const size_t regionBytes = allocPtr > start ? (allocPtr - start) : 0;
+        for (size_t off = 0; off < regionBytes; off += kMarkedBytesPerBit) {
+            if (bitmap->IsObjectStart(off)) {
+                out.push_back(start + off);
+            }
+        }
+    }
+
     // After-copy Exempt parks FORWARDED residuals (zRelocate.cpp:1041-1047).
     // CSet empty-select still needs those headers; strip only at the next install,
     // after the table is retired (zRelocationSet.cpp:91-96). A leftover FORWARDED
@@ -2304,21 +2380,9 @@ public:
         // FreeCompactRouteTable publishes NORMAL before detaching a compact table. An
         // already-admitted reader that loses the detach race must soft-miss rather than
         // reinterpret a compact destination as prefix-sum geometry.
-        RouteState routeState = GetRouteState();
-        if (routeState != RouteState::ROUTED && routeState != RouteState::FORWARDED) {
-            return nullptr;
-        }
-        uint64_t preLiveBytes = GetPreLiveBytesInGhostRegion(fromAddress);
-        if (!IsRouteInfoLifeCurrent()) {
-            LOG(RTLOG_FATAL,
-                "[LIFECLOCK][MUTATOR_STALE_ROUTE_INFO] region=%p current=%llu stamp=%llu",
-                this, static_cast<unsigned long long>(GetRegionLifeId()),
-                static_cast<unsigned long long>(metadata.routeInfo.GetLifeId()));
-        }
-        MAddress toAddr = metadata.routeInfo.GetRoute(preLiveBytes);
-        // routedom: observe mark-domain at geometric GetRoute call site (default off).
-
-        return from_region_addr(toAddr);
+        // zRelocate.cpp:361/:627 allocate by object size then insert; dest is the
+        // table/compact record, not live-bit prefix-sum (zLiveMap.inline.hpp:117-119).
+        return nullptr;
     }
 
     void FreeCompactRouteTable()
@@ -3750,21 +3814,6 @@ private:
     {
         std::lock_guard<std::mutex> lock(CompactRouteTableRetireMutex());
         RetiredCompactRouteTables().push_back({ table, CompactRouteTableGraceGeneration() });
-    }
-
-    // Product geometry only — reachable from GetRoute(RouteTicket). External product
-    // callers cannot reach preLiveBytes without a ticket (ROUTE_DOMAIN.md §2).
-    size_t GetPreLiveBytesInGhostRegion(MAddress address)
-    {
-        const ZForwarding::FromPageView* from = GetFromPageView();
-        DCHECK(from != nullptr && from->liveInfo != nullptr);
-        size_t offset = GetAddressOffset(address);
-        if (GetRouteMarkGeneration() == Generation::Young) {
-            MarkView<Generation::Young> view = GetRouteMarkView<Generation::Young>();
-            return from->liveInfo->GetPreLiveBytes(view, offset, GetGhostRegionSize());
-        }
-        MarkView<Generation::Old> view = GetRouteMarkView<Generation::Old>();
-        return from->liveInfo->GetPreLiveBytes(view, offset, GetGhostRegionSize());
     }
 
     ALWAYS_INLINE void CheckObjectSize(
