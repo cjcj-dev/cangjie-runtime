@@ -164,8 +164,7 @@ GC_TEST(DefectRegress, PregrantBeforeRouteDomainFreeze)
     (void)bm->MarkBits(offA, 8, regionSize);
     // Freeze domain face through the product publisher (pointer share + life stamp).
     region->BindLiveInfo0FromLiveIfNull();
-    region->SetRouteInfo(0x20000000u, 4096);
-    region->SetRouteState(RegionInfo::RouteState::ROUTED);
+    region->MarkForwardingDone();
     region->RecordRouteStart(offA);
 
     GC_EXPECT_TRUE(region->GetRouteForProbe(objA) != nullptr);

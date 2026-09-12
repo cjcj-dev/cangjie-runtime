@@ -187,9 +187,9 @@ void Note(Exit exit, BaseObject* target, const void* slot, BaseObject* holder, u
     const uint64_t regionLife = region == nullptr ? 0 : region->GetRegionLifeId();
     const uint64_t activeLife = active == nullptr ? 0 : active->page_life_id();
     const unsigned activeCurrent = active == nullptr ? 0u
-        : (active->page_life_current(RegionLifeClock::Carrier::ARMED_ENTRY) ? 1u : 0u);
+        : (active->page_life_current() ? 1u : 0u);
     const unsigned regionType = region == nullptr ? 0xffu : static_cast<unsigned>(region->GetRegionType());
-    const unsigned routeState = region == nullptr ? 0xffu : static_cast<unsigned>(region->GetRouteState());
+    const unsigned routeState = region == nullptr ? 0xffu : static_cast<unsigned>(region->RelocateObserve());
 
     LOG(RTLOG_ERROR,
         "[M0][classify] n=%llu sample=%llu class=%s hasTo=%u exit=%s target=%p slot=%p holder=%p phase=%u "

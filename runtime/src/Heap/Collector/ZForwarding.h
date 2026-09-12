@@ -23,9 +23,10 @@
 #include "Heap/Allocator/ForwardingAllocator.h"
 #include "Heap/Allocator/ZAttachedArray.h"
 #include "Heap/Collector/ZForwardingLife.h"
-#include "Heap/Collector/RegionLifeClock.h"
 
 namespace MapleRuntime {
+
+using RegionLifeId = uint64_t;
 
 class RegionInfo;
 class LiveInfo;
@@ -44,17 +45,12 @@ public:
         enum class Status : uint8_t {
             INSTALLED,
             EXISTING,
-            DESTINATION_UNTRACKED,
-            LIFE_REGISTRY_FULL,
-            DESTINATION_LIFE_CONFLICT,
         };
 
         MAddress address;
         bool installed;
         Status status;
     };
-
-    static constexpr uint8_t kToLifeCapacity = 3;
 
     // zForwarding.cpp:55-84 — the old top and livemap belong to the
     // forwarding/from-page incarnation, not to the reusable page metadata.
@@ -147,7 +143,7 @@ public:
         _birth_flip = birthFlip;
         _required_mark_epoch = requiredMarkEpoch;
     }
-    bool page_life_current(RegionLifeClock::Carrier carrier) const;
+    bool page_life_current() const;
     size_t length() const { return _entries.length(); }
     bool is_provisional() const { return _provisional; }
 
@@ -182,15 +178,10 @@ public:
     // zPage.inline.hpp:176-185 seqnum bounds livemap/forwarding to one page life.
     // Record the to-region start+regionLifeSeq at insert; consume rejects when
     // InitRegionInfo has bumped that seq (RegionInfo.h:InitRegionInfo).
-    void note_to_life(MAddress to);
     static bool DestUsable(MAddress to);
-    // Validate only the destination region incarnation. Header/route consumers
-    // keep their existing object-shape checks after this life gate.
-    MAddress resolve_life(MAddress to) const;
     MAddress resolve_live(MAddress to) const;
     bool receipt_live(MAddress to) const;
-    void note_kept_expire() { _kept_seen_expire = true; }
-    bool kept_seen_expire() const { return _kept_seen_expire; }
+
     void note_retired_required() { _retired_required.store(true, std::memory_order_release); }
     bool retired_required() const { return _retired_required.load(std::memory_order_acquire); }
     static std::atomic<uint64_t>& StaleToLifeCount();
@@ -414,11 +405,6 @@ public:
                         inserted.second ? Receipt::Status::INSTALLED : Receipt::Status::EXISTING };
     }
 
-    // The destination life is committed before the receipt's release CAS.  A
-    // consumer that observes the receipt can therefore never outrun its life
-    // registry entry.  Product callers enter through ForwardingTable::InstallMapping.
-    Receipt install_receipt_with_life(MAddress from, MAddress to, const std::function<void()>& beforeRegister = {});
-
     MAddress insert(MAddress from, MAddress to)
     {
         return insert_receipt(from, to).address;
@@ -536,6 +522,9 @@ public:
 
     // zForwarding.cpp:51-53 / :86-194. Source-page ownership only.
     bool claim() { return ZForwardingLife::claim(_claimed); }
+    bool is_claimed() const { return _claimed.load(std::memory_order_acquire); }
+    bool in_place() const { return _in_place.load(std::memory_order_acquire); }
+    void set_in_place() { _in_place.store(true, std::memory_order_release); }
     bool retain_page() { return ZForwardingLife::retain_page(_ref_count, _done); }
     void release_page()
     {
@@ -591,24 +580,19 @@ private:
           _birth_flip(0),
           _required_mark_epoch(0),
           _claimed(false),
+          _in_place(false),
           _ref_lock(),
           _ref_count(1),
           _done(false),
           _overflowLock(),
           _overflow(),
           _receiptInstallLock(),
-          _to_life_n(0),
-          _kept_seen_expire(false),
           _retired_required(false),
           _provisional(provisional),
           _from_page(),
           _relocated_remembered_fields_state(ZPublishState::none),
           _relocated_remembered_fields_publish_young_seqnum(0)
-    {
-        _to_lives[0] = ToLife{};
-        _to_lives[1] = ToLife{};
-        _to_lives[2] = ToLife{};
-    }
+    {}
 
     std::shared_ptr<ForwardingAllocator> _arena;
     const MAddress _start;
@@ -624,6 +608,7 @@ private:
     uint64_t _birth_flip;
     uint64_t _required_mark_epoch;
     std::atomic<bool> _claimed;
+    std::atomic<bool> _in_place;
     mutable std::mutex _ref_lock;
     std::condition_variable _ref_changed;
     std::atomic<int32_t> _ref_count;
@@ -634,15 +619,6 @@ private:
     mutable std::mutex _overflowLock;
     std::unordered_map<MAddress, MAddress> _overflow;
     mutable std::mutex _receiptInstallLock;
-    struct ToLife {
-        MAddress start;
-        uint8_t legacySeq;
-        RegionLifeId lifeId;
-    };
-    Receipt::Status register_to_life_locked(MAddress to, uint8_t optimisticCount);
-    ToLife _to_lives[kToLifeCapacity];
-    std::atomic<uint8_t> _to_life_n;
-    bool _kept_seen_expire;
     std::atomic<bool> _retired_required;
     const bool _provisional;
     FromPageView _from_page;

@@ -24,9 +24,9 @@ public:
     MRT_EXPORT void RunGarbageCollection(uint64_t gcIndex, GCReason reason) override;
     void CopyObject(const BaseObject& fromObj, BaseObject& toObj, size_t size) const;
     void PostGarbageCollection(uint64_t gcIndex) override;
+    virtual BaseObject* ForwardObjectExclusive(BaseObject* obj) = 0;
 
 protected:
-    virtual BaseObject* ForwardObjectExclusive(BaseObject* obj) = 0;
     virtual void ForwardFromSpace();
     virtual void RefineFromSpace();
 

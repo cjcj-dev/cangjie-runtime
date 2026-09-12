@@ -16,7 +16,7 @@
 #include "CollectorResources.h"
 #include "Common/MarkWorkStack.h"
 #include "Heap/Allocator/RegionSpace.h"
-#include "Heap/Collector/ForwardDataManager.h"
+#include "Heap/Collector/LiveInfoArena.h"
 #include "Heap/Collector/MarkStackEntry.h"
 #include "Mutator/MutatorManager.h"
 
@@ -467,9 +467,6 @@ public:
     {
         MutatorManager::Instance().TransitionAllMutatorsToGCPhase(phase);
         RegionInfo::AdvanceCompactRouteTableGracePeriod();
-        // fwdgrace: same premise and same edge -- a completed transition is the mutator grace
-        // period, so it is also what retires the liveInfo/bitmap arena. Default off.
-        ForwardDataManager::AdvanceGracePeriod();
     }
 
     GCStats& GetGCStats() override { return collectorResources.GetGCStats(); }

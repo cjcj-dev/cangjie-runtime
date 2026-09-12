@@ -40,9 +40,7 @@ public:
         markQuarantineTree.Init(regionCnt);
     }
 
-    // allowSaferegion: when false, never ScopedEnterSaferegion (ROUTING critical section —
-    // holding routeState=ROUTING while waiting on phase transition deadlocks PreForward;
-    // see REPORT-routespin.md). Best-effort one pass; caller falls back to CompactRegion.
+    // allowSaferegion: when false, never ScopedEnterSaferegion. Best-effort one pass.
     RegionInfo* TakeRegion(size_t num, RegionInfo::UnitRole uclass, bool expectPhysicalMem,
                            bool allowSaferegion = true, bool clearPayload = true)
     {
@@ -80,7 +78,7 @@ public:
                     TraceClear::NoteRegionEvent(start, num * RegionInfo::UNIT_SIZE, "dirty_take", dirtyRegion, 0,
                                                 static_cast<unsigned int>(dirtyRegion->IsGhostFromRegion()),
                                                 static_cast<unsigned int>(dirtyRegion->GetRegionType()),
-                                                static_cast<unsigned int>(dirtyRegion->GetRouteState()));
+                                                static_cast<unsigned int>(dirtyRegion->RelocateObserve()));
                     DLOG(REGION, "c-tree %p alloc dirty units[%u+%u, %u) @[0x%zx, 0x%zx), %u dirty-units left",
                         &dirtyUnitTree, idx, num, idx + num, RegionInfo::GetUnitAddress(idx),
                         RegionInfo::GetUnitAddress(idx + num), dirtyUnitTree.GetTotalCount());

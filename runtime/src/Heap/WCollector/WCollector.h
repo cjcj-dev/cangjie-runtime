@@ -28,7 +28,7 @@
 #include "Collector/CopyCollector.h"
 #include "Heap/Collector/MarkEngine.h"
 #include "Heap/Collector/RemsetScanStats.h"
-#include "Heap/Verify/MutatorRelocate.h"
+
 #include "Mutator/MutatorManager.h"
 namespace MapleRuntime {
 class MarkLiveCache;
@@ -151,8 +151,6 @@ public:
     {
         DLOG(FORWARD, "reset fwd table");
         theSpace.PrepareFromSpace<G>();
-
-        ForwardDataManager::GetForwardDataManager().ClearPreviousForwardData();
     }
 
     RegionSpace& theSpace;
@@ -204,7 +202,7 @@ public:
     MRT_EXPORT RouteLookupTestResult RouteLookupForTest(BaseObject* fromObj);
 #endif
 
-    void Init() override { ForwardDataManager::GetForwardDataManager().InitializeForwardData(); }
+    void Init() override { LiveInfoArena::GetLiveInfoArena().InitializeForwardData(); }
 
     void MarkNewObject(BaseObject* obj) override;
     void StartYoungMarkWork();
@@ -221,6 +219,7 @@ public:
     void FollowPartialArray(const MarkStackEntry& entry, WorkStack& workStack) override;
     BaseObject* GetAndTryTagObj(RefSlotKind kind, BaseObject* obj, RefField<>& field) override;
     BaseObject* ForwardObject(BaseObject* fromVersion) override;
+    BaseObject* ForwardObjectExclusive(BaseObject* obj) override;
     BaseObject* ResolveStoreValue(BaseObject* ref, const ForwardingProvenance& provenance) const override;
     void PostResolveCycleTask();
     void PrepareCycleRef()
@@ -503,13 +502,8 @@ public:
                 return published;
             }
         }
-        // ② retain + copy (zRelocate.cpp:393-400). nullptr = retain refused or copy missed.
-        // The ZGC slow path has one relocate_object invocation per visitor.
-        // TryMutatorRelocate already owns the retain token when it calls back
-        // into ForwardObjectImpl; re-entering it here would recursively retain
-        // the same page until the token is refused and lose the first-visitor
-        // publication opportunity (zBarrier.inline.hpp:294-343).
-        BaseObject* self = MutatorRelocate::InScope() ? nullptr : TryMutatorRelocate(obj, forwarding);
+        // ② retain + copy (zRelocate.cpp:393-400). inner does allocate→copy→insert.
+        BaseObject* self = TryMutatorRelocate(obj, forwarding);
         if (self != nullptr) {
             return self;
         }
@@ -518,9 +512,6 @@ public:
         }
         // ③ find-miss: wait for the page task then find again
         // (zRelocate.cpp:401-415 relocate_object / forward_object).
-        if (MutatorRelocate::StatsOn()) {
-            MutatorRelocate::NoteWaitEnter();
-        }
         BaseObject* resolved =
             WaitForPageForwarding(obj, ForwardingTable::RetainPageOwner(forwarding));
         if (resolved != nullptr) {
@@ -536,7 +527,7 @@ public:
                      obj, static_cast<int>(MapleRuntime::GetTid()), static_cast<void*>(obj),
                      static_cast<void*>(forwarding), g_gcCount.load(std::memory_order_relaxed),
                      static_cast<unsigned long long>(
-                         forwarding->GetRouteStateSnapshotForDiagnostics()),
+                         forwarding->RelocateObserve()),
                      static_cast<unsigned>(forwarding->IsForwardingDone()));
         return nullptr;
     }
@@ -643,7 +634,7 @@ public:
             RegionInfo* region = RegionInfo::GetGhostFromRegionAt(reinterpret_cast<MAddress>(obj));
             return region != nullptr &&
                 (region->GetLiveInfo0ForProbe() != nullptr ||
-                 region->GetRouteState() != RegionInfo::RouteState::NORMAL ||
+                 ForwardingTable::GetEntries(region->GetRegionStart()) != nullptr ||
                  region->IsForwardingDone());
         }
         // filter const string object.
@@ -809,8 +800,6 @@ public:
             witness.fromPageLifeId = lookupQueried ? lookup.fromPageLifeId : 0;
             witness.forwardingSnapshotValid = lookupQueried && lookup.forwardingSnapshotValid;
             witness.gcPhase = static_cast<uint8_t>(GetGCPhase());
-            // Route-state remains a separate witness axis from region/table
-            // snapshots so LookupUnavailable vs NoGhostForwarded stay distinct.
         };
         const auto unavailable = [&](FindToVersionResult::UnavailableRoute route, bool forwardedValid,
                                      bool forwarded, bool fromRegionInfoNullValid,
@@ -942,10 +931,10 @@ protected:
                               const ForwardingProvenance& provenance) const;
     BaseObject* ForwardObjectImpl(BaseObject* obj, RegionInfo* ghostFromRegion,
                                   const RegionInfo::RetainScope& lease);
-    BaseObject* ForwardObjectExclusive(BaseObject* obj) override;
     // zRelocate.cpp:354-379 relocate_object_inner: find hit → return; else
     // alloc (or reuse a prepared dest) → copy → insert; CAS loser uses winner.
     BaseObject* RelocateObjectInner(BaseObject* obj, BaseObject* planned, RegionInfo* copyPage);
+    void UpdateRemsetForFields(BaseObject* from, BaseObject* to);
     BaseObject* ForwardObjectExclusive(BaseObject* obj, BaseObject* toObj, RegionInfo* copyPage);
 
     // portmutreloc: ZRelocate::relocate_object's middle leg (zRelocate.cpp:391-406) --
@@ -1175,8 +1164,7 @@ protected:
         if (region == nullptr) {
             return;
         }
-        const RegionInfo::RouteState rs = region->GetRouteState();
-        if (rs == RegionInfo::RouteState::NORMAL) {
+        if (ForwardingTable::GetEntries(region->GetRegionStart()) == nullptr) {
             return;
         }
         if (predicateSaidStale) {
@@ -1191,7 +1179,7 @@ protected:
         const uint64_t e = routeAskEscaped.fetch_add(1, std::memory_order_relaxed) + 1;
         LOG(RTLOG_ERROR, "[ROUTEASK][ESCAPED] e=%lu covered=%lu target=%p routeState=%d isFrom=%d isGhost=%d fwd=%d",
             e, routeAskCovered.load(std::memory_order_relaxed), static_cast<void*>(target),
-            static_cast<int>(rs), IsFromObject(target) ? 1 : 0, IsGhostFromObject(target) ? 1 : 0,
+            static_cast<int>(region->RelocateObserve()), IsFromObject(target) ? 1 : 0, IsGhostFromObject(target) ? 1 : 0,
             target->IsForwarded() ? 1 : 0);
     }
 

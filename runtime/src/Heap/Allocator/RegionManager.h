@@ -38,7 +38,6 @@ namespace MapleRuntime {
 class CopyCollector;
 class CompactCollector;
 class VerifyRegions;
-class TagReuseProbe;
 class WCollector;
 template<Generation G>
 class ForwardTask;
@@ -137,7 +136,6 @@ public:
 // and thus its Alloc should be rewrite with AllocObj(objSize)
 class RegionManager {
     friend class VerifyRegions;
-    friend class TagReuseProbe;
     friend struct PinRootTestAccess;
     friend struct IkeKeepTestAccess;
     friend struct IsFromRegTestAccess;
@@ -266,7 +264,6 @@ public:
     // ZGC zRelocationSetSelector.cpp:114-196 / zGeneration.cpp:205-213: a page
     // not in this cycle's relocation set is an ordinary candidate next cycle.
     // Kept (IsForwardingDone via Exempt) is in-cycle only.
-    void ExpireKeptFromPreviousCycle();
     // zRelocate.cpp:1041-1047: relocate() returns only after every page in the
     // relocation set is done. Finish every ROUTED page or publish it kept.
     void FinishIncompleteFromRegions();
@@ -536,7 +533,7 @@ public:
                          "live=%zu residual=%zu validObjs=%zu markedObjs=%zu route=%u BYPASS=1",
                          region, start, alloc, end, region->GetRegionType(),
                          static_cast<unsigned>(region->IsYoungRegion()), region->GetLiveByteCount(), residual,
-                         validObjs, markedObjs, static_cast<unsigned>(region->GetRouteState()));
+                         validObjs, markedObjs, static_cast<unsigned>(region->RelocateObserve()));
                 }
             }
         }
@@ -777,7 +774,7 @@ public:
     // routedest: walk the same lists and drop routeDestHold for one route generation.
     void ClearRouteDestHoldFlags();
 
-    bool RouteOrCompactRegionImpl(RegionInfo* region);
+    bool RelocateClaimedPage(RegionInfo* region);
 
     static bool RouteIsPublished(BaseObject* fromObj, RegionInfo* fromRegionInfo)
     {
@@ -787,8 +784,7 @@ public:
         if (fromRegionInfo == nullptr) {
             return false;
         }
-        RegionInfo::RouteState rs = fromRegionInfo->GetRouteState();
-        return rs == RegionInfo::RouteState::FORWARDED || rs == RegionInfo::RouteState::COMPACTED;
+        return fromRegionInfo->IsForwardingDone();
     }
 
     PublishedRoute FindPublishedRoute(BaseObject* fromObj, RegionInfo* fromRegionInfo)
@@ -826,41 +822,40 @@ public:
                  "[GCV2][ghost-softnull] region=%p start=%#zx live=%zu route=%u young=%u "
                  "auth=%u — RouteRegion soft-miss (ghost cleared or never installed)",
                  fromRegionInfo, fromRegionInfo->GetRegionStart(), fromRegionInfo->GetLiveByteCount(),
-                 static_cast<unsigned>(fromRegionInfo->GetRouteState()),
+                 static_cast<unsigned>(fromRegionInfo->RelocateObserve()),
                  static_cast<unsigned>(fromRegionInfo->IsYoungRegion()),
                  static_cast<unsigned>(fromRegionInfo->IsLiveCountAuthoritative()));
             return false;
         }
-        do {
-            RegionInfo::RouteState oldState = fromRegionInfo->GetRouteState();
-            if (oldState == RegionInfo::RouteState::ROUTED || oldState == RegionInfo::RouteState::FORWARDED) {
+        // zRelocate.cpp:1155-1158 claimant runs page work; consumers wait (zRelocate.cpp:403-409).
+        auto owner = ForwardingTable::RetainPageOwner(fromRegionInfo);
+        if (owner && owner->is_done()) {
+            return !owner->in_place();
+        }
+        if (owner && ZForwardingLife::CurrentPageWork() == owner.get()) {
+            if (RelocateClaimedPage(fromRegionInfo)) {
                 return true;
             }
-            if (oldState == RegionInfo::RouteState::COMPACTED) {
+            owner->set_in_place();
+            return false;
+        }
+        if (!mayWait) {
+            return false;
+        }
+        while (true) {
+            owner = ForwardingTable::RetainPageOwner(fromRegionInfo);
+            if (owner && owner->is_done()) {
+                return !owner->in_place();
+            }
+            if (owner && ZForwardingLife::CurrentPageWork() == owner.get()) {
+                if (RelocateClaimedPage(fromRegionInfo)) {
+                    return true;
+                }
+                owner->set_in_place();
                 return false;
             }
-            if (oldState == RegionInfo::RouteState::ROUTING) {
-                if (!mayWait) return false;
-                sched_yield();
-                continue;
-            }
-
-            CHECK(oldState == MapleRuntime::RegionInfo::FORWARDABLE);
-            if (fromRegionInfo->TryLockRouting(oldState)) {
-                // sealcheck E_seal (per-region): face freezes before geometry read.
-                // RouteOrCompactRegionImpl reads GetLiveByteCount / VisitLiveObjects next.
-
-                if (RouteOrCompactRegionImpl(fromRegionInfo)) {
-                    fromRegionInfo->SetRouteState(RegionInfo::RouteState::ROUTED);
-                    return true;
-                } else {
-                    if (fromRegionInfo->GetRouteState() != RegionInfo::RouteState::FORWARDABLE) {
-                        fromRegionInfo->SetRouteState(RegionInfo::RouteState::COMPACTED);
-                    }
-                    return false;
-                }
-            }
-        } while (true);
+            sched_yield();
+        }
     }
 
     template<Generation G>
@@ -998,34 +993,6 @@ public:
         walk("recentLargeRegionList", recentLargeRegionList);
         walk("fullTraceRegions", fullTraceRegions);
         walk("largeTraceRegions", largeTraceRegions);
-    }
-
-    // Production: before ReleaseMemory(previous tag), null liveInfo/liveInfo0/retained that
-    // still point into the dying range. Same region set as the probe walk (incl. garbage).
-    // Phase: STW inside PrepareForwardTable → ClearPreviousForwardData (minor ×2, major ×1).
-    void NullLiveInfoFieldsInRange(uintptr_t rangeStart, size_t rangeSize)
-    {
-        auto nullOne = [rangeStart, rangeSize](RegionInfo* region) {
-            if (region != nullptr) {
-                region->NullLiveInfoFieldsInRange(rangeStart, rangeSize);
-            }
-        };
-        auto walk = [&nullOne](RegionList& list) {
-            list.VisitAllRegions([&nullOne](RegionInfo* region) { nullOne(region); });
-        };
-        walk(tlRegionList);
-        walk(recentFullRegionList);
-        walk(fromRegionList);
-        ghostFromRegionList.VisitAllGhostRegions(nullOne);
-        walk(unmovableFromRegionList);
-        walk(garbageRegionList);
-        walk(recentPinnedRegionList);
-        walk(oldPinnedRegionList);
-        walk(rawPointerPinnedRegionList);
-        walk(oldLargeRegionList);
-        walk(recentLargeRegionList);
-        walk(fullTraceRegions);
-        walk(largeTraceRegions);
     }
 
 private:

@@ -448,7 +448,6 @@ struct CopyAdmissionWitness {
 std::atomic<uint32_t> CopyAdmissionWitness::hits { 0 };
 
 using ProductSetCopyAdmissionTestHook = void (*)(void (*)(RegionInfo*, BaseObject*));
-using ProductSetReceiptLifeRegisterHook = void (*)(void (*)(void*), void*);
 using ProductForcePublicationClosedForTest = void (*)(MAddress);
 
 ProductSetCopyAdmissionTestHook ProductSetCopyAdmissionTestHookFn()
@@ -459,16 +458,6 @@ ProductSetCopyAdmissionTestHook ProductSetCopyAdmissionTestHookFn()
     }
     return handle == nullptr ? nullptr : reinterpret_cast<ProductSetCopyAdmissionTestHook>(
         dlsym(handle, "MRT_SetCopyAdmissionTestHook"));
-}
-
-ProductSetReceiptLifeRegisterHook ProductSetReceiptLifeRegisterHookFn()
-{
-    void* handle = dlopen("libcangjie-runtime.so", RTLD_NOW | RTLD_NOLOAD);
-    if (handle == nullptr) {
-        handle = dlopen("libcangjie-runtime.so", RTLD_NOW);
-    }
-    return handle == nullptr ? nullptr : reinterpret_cast<ProductSetReceiptLifeRegisterHook>(
-        dlsym(handle, "_ZN12MapleRuntime15ForwardingTable26SetReceiptLifeRegisterHookEPFvPvES1_"));
 }
 
 ProductForcePublicationClosedForTest ProductForcePublicationClosedForTestFn()
@@ -624,8 +613,7 @@ LateBackfillState PrepareLateBackfill(GcHeapFixture& fx, WCollector& collector)
     RelocationReceiptTestAccess::BindCollector(Heap::GetHeap().GetCollectorResources(), &collector);
     LiveInfo* live = PrepareForwardable(fx, region, reinterpret_cast<MAddress>(from));
 
-    region->SetRouteInfo(destination->GetRegionStart(), static_cast<uint32_t>(from->GetSize()));
-    region->SetRouteState(RegionInfo::RouteState::FORWARDED);
+    region->MarkForwardingDone();
     from->SetStateCode(ObjectState::FORWARDED);
     ZForwarding* table = ForwardingTable::GetEntries(reinterpret_cast<MAddress>(from));
     GC_EXPECT_TRUE(table != nullptr);
@@ -963,8 +951,7 @@ GC_TEST(ForwardingPublicationProduct, MutatorRuntimeEntryReachesCopyAdmission)
     RelocationReceiptTestAccess::BindCollector(Heap::GetHeap().GetCollectorResources(), &collector);
     region->PrepareForwardableRegion(region->GetMarkView<Generation::Old>());
     region->RecordRouteStart(region->GetAddressOffset(reinterpret_cast<MAddress>(from)));
-    region->SetRouteInfo(reinterpret_cast<MAddress>(expected), static_cast<uint32_t>(objectSize));
-    region->SetRouteState(RegionInfo::RouteState::ROUTED);
+    region->MarkForwardingDone();
     AllocBuffer::GetOrCreateAllocBuffer()->SetRegion(destination);
 
     const MAddress fromAddress = reinterpret_cast<MAddress>(from);
@@ -1020,7 +1007,7 @@ GC_TEST(ForwardingNoGeometry, ForwardImplTryLockCopiesWithoutPrebuiltMapping)
     RelocationReceiptTestAccess::BindCollector(Heap::GetHeap().GetCollectorResources(), &collector);
     region->PrepareForwardableRegion(region->GetMarkView<Generation::Old>());
     region->RecordRouteStart(region->GetAddressOffset(reinterpret_cast<MAddress>(from)));
-    region->SetRouteState(RegionInfo::RouteState::ROUTED);
+    region->MarkForwardingDone();
     AllocBuffer::GetOrCreateAllocBuffer()->SetRegion(destination);
     /*deleted copy SM*/ (void)(region->metadata.copyInflight);
     const MAddress fromAddress = reinterpret_cast<MAddress>(from);
@@ -1209,8 +1196,6 @@ GC_OTHER_VM_TEST(FindToRouteDiagnostics, DistinguishesLookupUnavailableFromNoGho
     GC_EXPECT_TRUE(std::strcmp(lookup.unavailable_lookup_retired_answer(), "unarmed") == 0);
     GC_EXPECT_TRUE(lookup.unavailable_lookup_publication_closed());
     GC_EXPECT_TRUE(std::strcmp(lookup.unavailable_route_name(), "lookup_unavailable") == 0);
-    GC_EXPECT_FALSE(lookup.unavailable_route_state_valid());
-    GC_EXPECT_EQ(lookup.unavailable_route_state(), static_cast<uint8_t>(0));
 
     RegionInfo* noGhostRegion = fx.region1;
     BaseObject* noGhostFrom = fx.PlaceObject(noGhostRegion->GetRegionStart() + 64);
@@ -1237,8 +1222,6 @@ GC_OTHER_VM_TEST(FindToRouteDiagnostics, DistinguishesLookupUnavailableFromNoGho
     GC_EXPECT_TRUE(std::strcmp(noGhost.unavailable_lookup_retired_answer(), "unarmed") == 0);
     GC_EXPECT_FALSE(noGhost.unavailable_lookup_publication_closed());
     GC_EXPECT_TRUE(std::strcmp(noGhost.unavailable_route_name(), "no_ghost_forwarded") == 0);
-    GC_EXPECT_FALSE(noGhost.unavailable_route_state_valid());
-    GC_EXPECT_EQ(noGhost.unavailable_route_state(), static_cast<uint8_t>(0));
     GC_EXPECT_NE(lookup.unavailable_route(), noGhost.unavailable_route());
 
     noGhostFrom->SetStateCode(ObjectState::NORMAL);
@@ -1442,7 +1425,7 @@ GC_TEST(ForwardingPublicationProduct, KeptInPlacePublishesIdentityBeforeRetire)
     WCollector collector(Heap::GetHeap().GetAllocator(), Heap::GetHeap().GetCollectorResources());
     RelocationReceiptTestAccess::BindCollector(Heap::GetHeap().GetCollectorResources(), &collector);
     LiveInfo* live = PrepareForwardable(fx, region, reinterpret_cast<MAddress>(from));
-    region->SetRouteState(RegionInfo::RouteState::ROUTED);
+    region->MarkForwardingDone();
 
     RegionManager manager;
     RelocationReceiptTestAccess::Exempt(manager, region);
@@ -1489,7 +1472,7 @@ GC_TEST(ForwardingPublicationProduct, KeptActiveReceiptRemainsRequiredAfterTable
                  reinterpret_cast<MAddress>(to));
     publication = ForwardingTable::Publication();
     from->SetStateCode(ObjectState::FORWARDED);
-    region->SetRouteState(RegionInfo::RouteState::ROUTED);
+    region->MarkForwardingDone();
 
     RegionManager manager;
     RelocationReceiptTestAccess::Exempt(manager, region);
@@ -1532,7 +1515,7 @@ GC_TEST(ForwardingPublicationProduct, KeptInPlaceLivemapStartsSurviveOverwritten
     region->RecordRouteStart(region->GetAddressOffset(reinterpret_cast<MAddress>(second)));
     region->AddLiveByteCount(second->GetSize());
     *reinterpret_cast<uint64_t*>(first) = 0;
-    region->SetRouteState(RegionInfo::RouteState::ROUTED);
+    region->MarkForwardingDone();
 
     RegionManager manager;
     RelocationReceiptTestAccess::Exempt(manager, region);
@@ -1580,7 +1563,7 @@ GC_TEST(ForwardingPublicationProduct, PrepareForwardableClearsNormalRouteResidua
     GC_EXPECT_EQ(receipt.address, reinterpret_cast<MAddress>(to));
     publication = ForwardingTable::Publication();
     from->SetStateCode(ObjectState::FORWARDED);
-    region->SetRouteState(RegionInfo::RouteState::FORWARDED);
+    region->MarkForwardingDone();
 
     region->DispelGhostFromRegion();
     GC_EXPECT_TRUE(region->GetRouteState() == RegionInfo::RouteState::NORMAL);
@@ -1632,7 +1615,7 @@ GC_TEST(ForwardingPublicationProduct, ExemptPreservesRetiredReceiptAcrossActiveG
     GC_EXPECT_EQ(oldReceipt.address, reinterpret_cast<MAddress>(to));
     oldPublication = ForwardingTable::Publication();
     from->SetStateCode(ObjectState::FORWARDED);
-    region->SetRouteState(RegionInfo::RouteState::ROUTED);
+    region->MarkForwardingDone();
     GC_EXPECT_TRUE(from->IsForwarded());
     GC_EXPECT_EQ(ForwardingTable::FindTo(reinterpret_cast<MAddress>(from)),
                  reinterpret_cast<MAddress>(to));
@@ -1710,7 +1693,7 @@ GC_TEST(ForwardingPublicationProduct, ReclaimRetiredDefersResidualUntilActiveRec
                  reinterpret_cast<MAddress>(to));
     oldPublication = ForwardingTable::Publication();
     from->SetStateCode(ObjectState::FORWARDED);
-    region->SetRouteState(RegionInfo::RouteState::ROUTED);
+    region->MarkForwardingDone();
     region->ClearGhostRegionBit();
     region->SetRegionType(RegionInfo::RegionType::FROM_REGION);
     region->PrepareForwardableRegion(region->GetMarkView<Generation::Old>());
@@ -1785,7 +1768,7 @@ GC_TEST(ForwardingPublicationProduct, ReclaimRetiredPreservesNewActiveReceiptHea
                  reinterpret_cast<MAddress>(oldTo));
     oldPublication = ForwardingTable::Publication();
     from->SetStateCode(ObjectState::FORWARDED);
-    region->SetRouteState(RegionInfo::RouteState::ROUTED);
+    region->MarkForwardingDone();
     region->ClearGhostRegionBit();
     region->SetRegionType(RegionInfo::RegionType::FROM_REGION);
     region->PrepareForwardableRegion(region->GetMarkView<Generation::Old>());
@@ -2617,7 +2600,7 @@ GC_TEST(ForwardingPublicationProduct, IncomingRefStopsBeforeDestinationStore)
     collector.SetGCPhase(GCPhase::GC_PHASE_RECLAIM_SATB_NODE);
     RelocationReceiptTestAccess::BindCollector(Heap::GetHeap().GetCollectorResources(), &collector);
     LiveInfo* live = PrepareForwardable(fx, region, reinterpret_cast<MAddress>(incoming));
-    region->SetRouteState(RegionInfo::RouteState::COMPACTED);
+    region->MarkForwardingDone();
     region->MarkForwardingDone();
 
     BaseObject* holder = fx.obj0;
@@ -2917,7 +2900,7 @@ void RunDerivedBaseProducer(bool interior, bool tagged, bool moving = false,
     if (unresolvedGhost) {
         state = PrepareLateBackfill(fx, collector);
         state.from->SetStateCode(ObjectState::NORMAL);
-        state.region->SetRouteState(RegionInfo::RouteState::ROUTED);
+        state.region->MarkForwardingDone();
         collector.SetGCPhase(GCPhase::GC_PHASE_FORWARD);
         auto& manager = static_cast<RegionSpace&>(Heap::GetHeap().GetAllocator()).GetRegionManager();
         RelocationReceiptTestAccess::ParkFrom(manager, state.region);
@@ -3219,7 +3202,7 @@ GC_TEST(ForwardingPublicationProduct, ResolveStoreValueAlreadyToStartRejectsNonU
     RegionManager manager;
     RelocationReceiptTestAccess::ParkFrom(manager, state.region);
     manager.CompactRegion(state.region, state.destination);
-    state.region->SetRouteState(RegionInfo::RouteState::COMPACTED);
+    state.region->MarkForwardingDone();
 
     BaseObject* compactedStart = from_region_addr(state.region->GetRegionStart());
     compactedStart->SetStateCode(ObjectState::FORWARDED);
@@ -3243,7 +3226,7 @@ GC_TEST(ForwardingPublicationProduct, ResolveStoreValueAlreadyToStartWithUsableT
     RegionManager manager;
     RelocationReceiptTestAccess::ParkFrom(manager, state.region);
     manager.CompactRegion(state.region, state.destination);
-    state.region->SetRouteState(RegionInfo::RouteState::COMPACTED);
+    state.region->MarkForwardingDone();
 
     BaseObject* compactedStart = from_region_addr(state.region->GetRegionStart());
     compactedStart->SetStateCode(ObjectState::NORMAL);
@@ -3347,7 +3330,7 @@ GC_TEST(ForwardingPublicationProduct, LookupCausePublishedWithoutReceipt)
     LiveInfo* live = PrepareForwardable(fx, region, reinterpret_cast<MAddress>(from));
     const LookupWitnessIdentity expected = ReadLookupWitnessIdentity(
         ForwardingTable::GetEntries(reinterpret_cast<MAddress>(from)));
-    region->SetRouteState(RegionInfo::RouteState::COMPACTED);
+    region->MarkForwardingDone();
     region->MarkForwardingDone();
     const ForwardingTable::LookupResult lookup = ForwardingTable::LookupTo(reinterpret_cast<MAddress>(from));
     GC_EXPECT_TRUE(lookup.to == 0);
@@ -3529,7 +3512,6 @@ static void CheckWaitObservation(WaitObservationCase scenario)
             collector.flip_old_relocate_start();
             RelocationReceiptTestAccess::BindCollector(Heap::GetHeap().GetCollectorResources(), &collector);
             (void)PrepareForwardable(fx, region, reinterpret_cast<MAddress>(from));
-            region->SetRouteInfo(reinterpret_cast<MAddress>(fx.obj1), static_cast<uint32_t>(from->GetSize()));
             region->SetRouteState(miss ? RegionInfo::RouteState::COMPACTED : RegionInfo::RouteState::ROUTED);
             if (miss || (scenario == WaitObservationCase::InitialIdentity && sample != 0)) {
                 region->MarkForwardingDone();
@@ -3701,7 +3683,6 @@ GC_TEST(ForwardingPublicationProduct, CompactedWithoutFwdDoneWaitsInProductSO)
     collector.SetGCPhase(GCPhase::GC_PHASE_FORWARD);
     RelocationReceiptTestAccess::BindCollector(Heap::GetHeap().GetCollectorResources(), &collector);
     LiveInfo* live = PrepareForwardable(fx, region, reinterpret_cast<MAddress>(from));
-    region->SetRouteState(RegionInfo::RouteState::COMPACTED);
     GC_EXPECT_FALSE(region->IsForwardingDone());
     RegionSpace& productSpace = reinterpret_cast<RegionSpace&>(Heap::GetHeap().GetAllocator());
     RelocationRequestQueue& queue = productSpace.GetRegionManager().GetRelocationRequestQueue();
@@ -3760,7 +3741,7 @@ GC_TEST(ForwardingPublicationProduct, ForwardUpdateRawRefWritesBackMappedTo)
     GC_EXPECT_TRUE(static_cast<bool>(publication));
     (void)ForwardingTable::InstallMapping(publication, reinterpret_cast<MAddress>(from),
                                           reinterpret_cast<MAddress>(to));
-    region->SetRouteState(RegionInfo::RouteState::COMPACTED);
+    region->MarkForwardingDone();
     collector.SetGCPhase(GCPhase::GC_PHASE_IDLE);
     ObjectRef root;
     StorePlain(root, from_object(from));
@@ -3829,7 +3810,7 @@ GC_TEST(ForwardingPublicationProduct, IdentityForwardStillWritesBackRootWord)
     GC_EXPECT_TRUE(static_cast<bool>(publication));
     (void)ForwardingTable::InstallMapping(publication, reinterpret_cast<MAddress>(from),
                                           reinterpret_cast<MAddress>(from));
-    region->SetRouteState(RegionInfo::RouteState::COMPACTED);
+    region->MarkForwardingDone();
     collector.SetGCPhase(GCPhase::GC_PHASE_IDLE);
     const uintptr_t colored = reinterpret_cast<uintptr_t>(from) |
         (static_cast<uintptr_t>(::g_cjLoadBadMask) ^ REMAP_COLOUR_MASK);
@@ -3987,7 +3968,7 @@ GC_TEST(ForwardingPublicationProduct, PartialCompactSelfFallbackKeepsReceipt)
     GC_EXPECT_TRUE(request.accepted);
 
     manager.CompactRegion(state.region, state.destination);
-    state.region->SetRouteState(RegionInfo::RouteState::COMPACTED);
+    state.region->MarkForwardingDone();
 
     (void)queue.Wait(request.request);
     const MAddress receipt = request.request->page_forwarding()->find(from);
@@ -4285,7 +4266,7 @@ GC_TEST(ForwardingPublicationProduct, InsertThenReclaimStillServesWaitAndTryUpda
                  reinterpret_cast<MAddress>(to));
     publication = ForwardingTable::Publication();
     from->SetStateCode(ObjectState::FORWARDED);
-    region->SetRouteState(RegionInfo::RouteState::ROUTED);
+    region->MarkForwardingDone();
     region->MarkForwardingDone();
     collector.SetGCPhase(GCPhase::GC_PHASE_IDLE);
 

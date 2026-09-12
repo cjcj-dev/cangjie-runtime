@@ -54,8 +54,7 @@ GC_TEST(ForwardingNoGeometry, ArmedMissIsNullNotGeometry)
     GcHeapFixture fx;
     ForwardingTable::Initialize(fx.heapStart, 2 * RegionInfo::UNIT_SIZE, RegionInfo::UNIT_SIZE);
     fx.region0->SetRegionType(RegionInfo::RegionType::FROM_REGION);
-    fx.region0->SetRouteState(RegionInfo::ROUTED);
-    fx.region0->SetRouteInfo(0x20000000u, 4096);
+    fx.region0->MarkForwardingDone();
 
     LiveInfo* live = fx.PlantLiveInfo(fx.region0);
     const size_t regionSize = fx.region0->GetRegionSize();
@@ -106,7 +105,7 @@ GC_TEST(ForwardingNoGeometry, ArmedMissIsNullNotGeometry)
     ForwardingTable::Remove(fx.region0->GetRegionStart(), fx.region0->GetRegionSize());
     ForwardingTable::ClearEntries(fx.region0->GetRegionStart(), fx.region0->GetRegionSize());
     ForwardingTable::ReclaimRetired("gc-unit-explicit-coverage");
-    fx.region0->SetRouteState(RegionInfo::NORMAL);
+    (void)0;
     fx.region0->metadata.liveInfo = nullptr;
     fx.FreePlanted(live);
 }
@@ -118,8 +117,7 @@ GC_TEST(ForwardingNoGeometry, ArmedLookupAndSuccessfulExclusiveCopyPublishProduc
     GcHeapFixture fx;
     ForwardingTable::Initialize(fx.heapStart, 2 * RegionInfo::UNIT_SIZE, RegionInfo::UNIT_SIZE);
     fx.region0->SetRegionType(RegionInfo::RegionType::FROM_REGION);
-    fx.region0->SetRouteState(RegionInfo::ROUTED);
-    fx.region0->SetRouteInfo(0x20000000u, 4096);
+    fx.region0->MarkForwardingDone();
 
     LiveInfo* live = fx.PlantLiveInfo(fx.region0);
     size_t regionSize = fx.region0->GetRegionSize();
@@ -201,7 +199,7 @@ GC_TEST(ForwardingNoGeometry, ArmedLookupAndSuccessfulExclusiveCopyPublishProduc
     ForwardingTable::Remove(fx.region0->GetRegionStart(), fx.region0->GetRegionSize());
     ForwardingTable::ClearEntries(fx.region0->GetRegionStart(), fx.region0->GetRegionSize());
     ForwardingTable::ReclaimRetired("gc-unit-explicit-coverage");
-    fx.region0->SetRouteState(RegionInfo::NORMAL);
+    (void)0;
     fx.region0->metadata.liveInfo = nullptr;
     fx.FreePlanted(live);
 }
@@ -212,7 +210,7 @@ GC_TEST(ForwardingNoGeometry, RelocateInnerFindHitSkipsCopy)
     GcHeapFixture fx;
     ForwardingTable::Initialize(fx.heapStart, 2 * RegionInfo::UNIT_SIZE, RegionInfo::UNIT_SIZE);
     fx.region0->SetRegionType(RegionInfo::RegionType::FROM_REGION);
-    fx.region0->SetRouteState(RegionInfo::RouteState::ROUTING);
+    (void)fx.region0->ClaimForwarding();
     BaseObject* copyFrom = fx.PlaceObject(fx.region0->GetRegionStart() + 128);
     BaseObject* copyTo = fx.PlaceObject(fx.region1->GetRegionStart() + 128);
     BaseObject* otherTo = fx.PlaceObject(fx.region1->GetRegionStart() + 256);
@@ -249,7 +247,7 @@ GC_TEST(ForwardingNoGeometry, ForwardImplFindHitSkipsCopy)
     GcHeapFixture fx;
     ForwardingTable::Initialize(fx.heapStart, 2 * RegionInfo::UNIT_SIZE, RegionInfo::UNIT_SIZE);
     fx.region0->SetRegionType(RegionInfo::RegionType::FROM_REGION);
-    fx.region0->SetRouteState(RegionInfo::RouteState::ROUTING);
+    (void)fx.region0->ClaimForwarding();
     LiveInfo* live = fx.PlantLiveInfo(fx.region0);
     (void)fx.PlantMarkBitmap<Generation::Old>(live, fx.region0->GetRegionSize());
     fx.region0->PublishForwardingCarrier(fx.region0->GetMarkView<Generation::Old>());
@@ -290,7 +288,7 @@ GC_TEST(ForwardingNoGeometry, ExclusiveVtableFindHitSkipsCopy)
     GcHeapFixture fx;
     ForwardingTable::Initialize(fx.heapStart, 2 * RegionInfo::UNIT_SIZE, RegionInfo::UNIT_SIZE);
     fx.region0->SetRegionType(RegionInfo::RegionType::FROM_REGION);
-    fx.region0->SetRouteState(RegionInfo::RouteState::ROUTING);
+    (void)fx.region0->ClaimForwarding();
     BaseObject* copyFrom = fx.PlaceObject(fx.region0->GetRegionStart() + 128);
     BaseObject* copyTo = fx.PlaceObject(fx.region1->GetRegionStart() + 128);
     BaseObject* otherTo = fx.PlaceObject(fx.region1->GetRegionStart() + 256);
