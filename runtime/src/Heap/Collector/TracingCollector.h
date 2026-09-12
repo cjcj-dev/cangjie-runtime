@@ -556,9 +556,10 @@ protected:
     void MergeMutatorRoots(WorkStack& workStack);
     void DoEnumeration(WorkStack& workStack, WorkStack& foreignRootsSet);
     void DoTracing(WorkStack& workStack, WorkStack& foreignRootsSet);
-    bool FinishOldMark(WorkStack& workStack);
+    bool FinishOldMark(WorkStack& workStack, WorkStack& foreignRootsSet);
     bool FlushMarkProducers(MarkDomain* domain);
     void ProcessOldNonStrongReferences(WorkStack& workStack);
+    void ProcessExportRoots(WorkStack& foreignRootsSet);
 
     // concurrent marking.
     void TracingImpl(WorkStack& workStack, WorkStack& foreignRootsSet);
@@ -572,7 +573,7 @@ protected:
 
 private:
     size_t RunMajorStripeMark(WorkStack& workStack, bool partial = false, BaseObject* exportOwner = nullptr);
-    void ConcurrentReMark(WorkStack& remarkStack);
+    void ConcurrentReMark(WorkStack& remarkStack, WorkStack& foreignRootsSet);
     void EnumMutatorRoot(ObjectPtr& obj, RootSet& rootSet) const;
     void EnumConcurrencyModelRoots(RootSet& rootSet) const;
     void EnumStaticRoots(RootSet& rootSet) const;

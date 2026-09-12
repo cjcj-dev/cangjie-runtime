@@ -782,21 +782,32 @@ void TracingCollector::TracingImpl(WorkStack& workStack, WorkStack& foreignRoots
                                          VerifyMarkingStacks::NO_MARKING_INDEX,
                                          VerifyMarkingStacks::NO_MARKING_INDEX);
     }
+    VerifyMarkingStacks::VerifyEmpty(VerifyMarkingStacks::MarkingGeneration::MAJOR,
+                                     VerifyMarkingStacks::MarkingBoundary::JOIN,
+                                     VerifyMarkingStacks::MarkingContainer::POOL,
+                                     GetWorkers().GetSnapshot().remainingWorkers, 0);
+}
+
+void TracingCollector::ProcessExportRoots(WorkStack& foreignRootsSet)
+{
     while (!foreignRootsSet.empty()) {
         const MarkStackEntry entry = foreignRootsSet.back();
         foreignRootsSet.pop_back();
         BaseObject* exportObj = entry.object();
-        if (exportObj == nullptr || IsMarkedObject<Generation::Old>(exportObj)) {
+        if (exportObj == nullptr) {
+            continue;
+        }
+        {
+            std::lock_guard<std::mutex> lock(externMtx);
+            (void)discoveredExternObjects[exportObj];
+        }
+        if (IsMarkedObject<Generation::Old>(exportObj)) {
             continue;
         }
         WorkStack exportSeed;
         exportSeed.push_back(entry);
         markedObjectCount.fetch_add(RunMajorStripeMark(exportSeed, false, exportObj), std::memory_order_relaxed);
     }
-    VerifyMarkingStacks::VerifyEmpty(VerifyMarkingStacks::MarkingGeneration::MAJOR,
-                                     VerifyMarkingStacks::MarkingBoundary::JOIN,
-                                     VerifyMarkingStacks::MarkingContainer::POOL,
-                                     GetWorkers().GetSnapshot().remainingWorkers, 0);
 }
 
 void TracingCollector::FindUselessExternObjects()
@@ -817,7 +828,7 @@ void TracingCollector::DoTracing(WorkStack& workStack, WorkStack& foreignRootsSe
 
     {
         MRT_PHASE_TIMER("Concurrent re-marking");
-        ConcurrentReMark(workStack);
+        ConcurrentReMark(workStack, foreignRootsSet);
     }
 
     // ZGenerationOld::collect processes non-strong references only after the
@@ -857,7 +868,7 @@ void TracingCollector::ProcessOldNonStrongReferences(WorkStack& workStack)
     collectorResources.GetFinalizerProcessor().EnqueueReferences();
 }
 
-bool TracingCollector::FinishOldMark(WorkStack& workStack)
+bool TracingCollector::FinishOldMark(WorkStack& workStack, WorkStack& foreignRootsSet)
 {
     // ZMark::end/try_end and ZGenerationOld::concurrent_mark_continue
     // (zMark.cpp:940-989; zGeneration.cpp:1015-1030).
@@ -887,12 +898,8 @@ bool TracingCollector::FinishOldMark(WorkStack& workStack)
             NoteMarkTerminateFlushed(after >= before ? after - before : 0);
             terminated = workStack.empty() && stripes.IsEmpty();
             if (terminated) {
-                // Publish while mutators are still stopped. Ordinary mark_if_active
-                // producers must close before non-strong references are processed.
-                // Keep the existing barrier installed until POST_TRACE; marking
-                // admission is owned by this generation, not the barrier variant.
+                ProcessExportRoots(foreignRootsSet);
                 oldCycle.PublishPhase(GC_PHASE_MARK_COMPLETE);
-                // zGeneration.cpp:1280: close weak resurrection in the same pause.
                 collectorResources.BlockResurrection();
             }
         }
@@ -904,9 +911,9 @@ bool TracingCollector::FinishOldMark(WorkStack& workStack)
     }
 }
 
-void TracingCollector::ConcurrentReMark(WorkStack& remarkStack)
+void TracingCollector::ConcurrentReMark(WorkStack& remarkStack, WorkStack& foreignRootsSet)
 {
-    CHECK_DETAIL(FinishOldMark(remarkStack), "not cleared\n");
+    CHECK_DETAIL(FinishOldMark(remarkStack, foreignRootsSet), "not cleared\n");
 }
 
 bool TracingCollector::FlushMarkProducers(MarkDomain* domain)
@@ -936,33 +943,11 @@ void TracingCollector::DoResurrection(WorkStack& workStack)
     };
     (void)collectorResources.GetFinalizerProcessor().VisitFinalizers(func);
 
-    size_t resurrectdObjects = 0;
-    MarkLiveCache liveCache(1);
-    while (!workStack.empty()) {
-        const MarkStackEntry entry = workStack.back();
-        workStack.pop_back();
-
-        // TraceObjectRefFields below can push partial-array chunks onto this
-        // stack too, so this loop has to decode them as well.
-        if (UNLIKELY(MarkPartialArray::IsPartialArrayEntry(entry))) {
-            FollowPartialArray(entry, workStack);
-            continue;
-        }
-        BaseObject* obj = entry.object();
-
-        if (MarkEntryObject(obj, entry, &liveCache)) {
-            continue;
-        }
-        if (entry.mark()) {
-            ++resurrectdObjects;
-        }
-        if (entry.follow() && obj->HasRefField()) {
-            TraceObjectRefFields(obj, workStack, entry.finalizable());
-        }
+    if (!workStack.empty()) {
+        const size_t resurrectdObjects = RunMajorStripeMark(workStack);
+        markedObjectCount.fetch_add(resurrectdObjects, std::memory_order_relaxed);
+        VLOG(REPORT, "resurrected objects %zu", resurrectdObjects);
     }
-    liveCache.Flush();
-    markedObjectCount.fetch_add(resurrectdObjects, std::memory_order_relaxed);
-    VLOG(REPORT, "resurrected objects %zu", resurrectdObjects);
 }
 
 bool TracingCollector::MarkEntryObject(BaseObject* obj, const MarkStackEntry& entry,
