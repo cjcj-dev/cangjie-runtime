@@ -17,7 +17,6 @@
 #include "Concurrency/Concurrency.h"
 #include "Heap/Heap.h"
 #include "Heap/Collector/CollectorProxy.h"
-#include "Mutator/SatbBuffer.h"
 #include "ObjectModel/MObject.h"
 #include "TypeInfoManager.h"
 
@@ -121,6 +120,32 @@ void* Exercise(void*)
     unsigned youngLabels = 0;
     unsigned oldLabels = 0;
     unsigned rootResults = 0;
+    unsigned combinedMarkStarts = 0;
+    unsigned minorMarkStarts = 0;
+    GCCycleSnapshot preludeOld {};
+    uintptr_t preludeOldColor = 0;
+    // Port the VM_ZMarkStartYoungAndOld/VM_ZMarkStartYoung phase invariants
+    // (zGeneration.cpp:583-659) through the real driver request below.
+    tracing.testYoungMarkStarted = [&]() {
+        const auto young = collector.GetCycleSnapshot(GCCycleGeneration::YOUNG);
+        const auto old = collector.GetCycleSnapshot(GCCycleGeneration::OLD);
+        Expect(young.active, "young_mark_start_active");
+        if (resources.YoungPreludeRequest() != nullptr) {
+            ++combinedMarkStarts;
+            preludeOld = old;
+            preludeOldColor = ::g_cjMarkBadMask & MARKED_OLD_MASK;
+            Expect(old.active && old.phase == GC_PHASE_ENUM && old.reason == GC_REASON_USER,
+                   "prelude_starts_old_mark");
+            StoreBarrierBuffer buffer;
+            RootSlot slot;
+            buffer.Add(reinterpret_cast<MAddress>(&slot), zpointer::null, Heap::GetHeap().GetRememberedSet());
+            Expect((buffer.LastProcessedColorForTest() & MARKED_OLD_MASK) == (::g_cjStoreGoodMask & MARKED_OLD_MASK), "prelude_store_buffer_old_obligation");
+            buffer.Discard();
+        } else {
+            ++minorMarkStarts;
+            Expect(!old.active, "independent_minor_does_not_start_old");
+        }
+    };
     // Allocate actual product objects, with an independent export-table root
     // keeping each alive even when a common-root consumer is deliberately cut.
     alignas(TypeInfo) static unsigned char typeStorage[sizeof(TypeInfo)] {};
@@ -141,7 +166,7 @@ void* Exercise(void*)
         StoreBarrierBuffer buffer;
         RootSlot slot;
         buffer.Add(reinterpret_cast<MAddress>(&slot), zpointer::null, Heap::GetHeap().GetRememberedSet());
-        const auto stored = buffer.LastInstalledStateForTest();
+        const auto storedColor = buffer.LastProcessedColorForTest();
         const bool young = collector.GetCycleSnapshot(GCCycleGeneration::YOUNG).active;
         const auto current = resources.GetWorkers(young ? GCCycleGeneration::YOUNG : GCCycleGeneration::OLD)
             .GetSnapshot();
@@ -153,14 +178,18 @@ void* Exercise(void*)
         Expect(!other.cycleActive, "worker_other_inactive_during_cycle");
         if (young) {
             ++youngLabels;
-            Expect(stored.youngMark, "store_buffer_young_label");
+            Expect(storedColor == static_cast<uintptr_t>(::g_cjStoreGoodMask), "store_buffer_young_color");
         } else {
             ++oldLabels;
+            const auto old = collector.GetCycleSnapshot(GCCycleGeneration::OLD);
+            Expect(old.sequence == preludeOld.sequence && old.requestIndex == preludeOld.requestIndex,
+                   "old_body_keeps_prelude_identity");
+            Expect((::g_cjMarkBadMask & MARKED_OLD_MASK) == preludeOldColor,
+                   "old_body_keeps_prelude_color");
             for (size_t i = 0; i < handles.size(); ++i) witnesses[i] = Heap::GetHeap().GetExportObject(handles[i]);
             GenerationCycleRootTestAccess::Install(tracing, witnesses);
-            Expect(!stored.youngMark, "store_buffer_old_label");
+            Expect(storedColor == static_cast<uintptr_t>(::g_cjStoreGoodMask), "store_buffer_old_color");
         }
-        Expect(stored.phase == collector.GetGCPhase(), "store_buffer_phase_label");
         buffer.Discard();
     };
     tracing.testRootsResult = [&](GCWorkers::Generation generation, TracingCollector::RootSet& result) {
@@ -225,7 +254,6 @@ void* Exercise(void*)
     Expect(y1.sequence == y0.sequence + 1, "major_prelude_young_sequence");
     Expect(o1.sequence == o0.sequence + 1, "major_old_sequence");
     Expect(o1.reason == GC_REASON_USER && !o1.active, "major_reason_completion");
-    Expect(SatbBuffer::Instance().GetGeneration() == GCCycleGeneration::OLD, "major_satb_owner");
     collector.RequestGC(GC_REASON_YOUNG, false);
     auto youngWorkers2 = resources.GetWorkers(GCCycleGeneration::YOUNG).GetSnapshot();
     auto oldWorkers2 = resources.GetWorkers(GCCycleGeneration::OLD).GetSnapshot();
@@ -238,13 +266,14 @@ void* Exercise(void*)
     Expect(Same(o1, o2), "minor_preserves_old_state");
     Expect(y2.reason == GC_REASON_YOUNG && !y2.active, "minor_reason_completion");
     Expect(y2.phase == GC_PHASE_RECLAIM_SATB_NODE, "minor_phase_consumer");
-    Expect(SatbBuffer::Instance().GetGeneration() == GCCycleGeneration::YOUNG, "minor_satb_owner");
     std::printf("PRODUCT_STATE young_seq=%llu old_seq=%llu young_phase=%u old_phase=%u\n",
         (unsigned long long)y2.sequence, (unsigned long long)o2.sequence,
         (unsigned)y2.phase, (unsigned)o2.phase);
 #if defined(MRT_TESTABLE_INTERNALS)
     Expect(youngLabels == 2 && oldLabels == 1, "store_buffer_real_cycle_inputs");
     Expect(rootResults > 0, "worker_root_result_observed");
+    Expect(combinedMarkStarts == 1 && minorMarkStarts == 1, "real_mark_start_variants_observed");
+    tracing.testYoungMarkStarted = nullptr;
     tracing.testCyclePrepared = nullptr;
     tracing.testRootsResult = nullptr;
     for (auto handle : handles) Heap::GetHeap().RemoveExportObject(handle);

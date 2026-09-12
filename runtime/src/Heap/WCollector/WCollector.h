@@ -81,8 +81,8 @@ void NoteY2yAfterRootTestReceipt(uint64_t pending);
 void NoteY2yAfterStw2TestReceipt(uint64_t pending);
 void ArmY2yAfterReleaseTestReceipt(BaseObject* holder, uint64_t publications);
 void PublishY2yAfterReleaseTestReceipt();
-void ArmSatbBeforeMarkEndTestReceipt(Mutator* producer, BaseObject* first, BaseObject* second = nullptr);
-void PublishSatbBeforeMarkEndTestReceipt();
+void ArmMarkBeforeMarkEndTestReceipt(Mutator* producer, BaseObject* first, BaseObject* second = nullptr);
+void PublishMarkBeforeMarkEndTestReceipt();
 void ArmAllocBlackDuringConcurrentTestReceipt(BaseObject* object);
 void ArmY2yDuringConcurrentTestReceipt(BaseObject* holder);
 void PublishConcurrentYoungProducersTestReceipt();
@@ -110,12 +110,9 @@ ExportRootPublicationTestReceipt ReadExportRootPublicationTestReceipt();
 // (zGeneration.cpp:665-669) — everything a young collector does between
 // pause_mark_start and pause_mark_end runs with mutators alive.
 // Every field below counts GC work performed while the world is running. A
-// non-zero windowNs with markedInWindow()==0 and satbObjects==0 means the
-// window carries no marking work; do not read duration alone as concurrency.
+// Duration alone does not establish that the concurrent window performed marking work.
 struct YoungConcWindowStats {
     uint64_t windowNs = 0;    // world-released → STW2 requested
-    size_t satbObjects = 0;   // objects popped out of SATB inside the window
-    size_t satbIters = 0;     // SATB termination loop iterations inside the window
     size_t closureCalls = 0;  // TraceYoungClosure invocations inside the window
     size_t markedAtEntry = 0; // reachableVec.size() at world-release
     size_t markedAtExit = 0;  // reachableVec.size() at STW2 request
@@ -173,6 +170,9 @@ class WCollector : public CopyCollector {
     friend struct LoadHealDeliveryTestAccess;
 #endif
 
+#if defined(MRT_TESTABLE_INTERNALS)
+    friend struct MarkPublicationFixture;
+#endif
 public:
     explicit WCollector(Allocator& allocator, CollectorResources& resources)
         : CopyCollector(allocator, resources), fwdTable(reinterpret_cast<RegionSpace&>(allocator))
@@ -207,6 +207,8 @@ public:
     void Init() override { ForwardDataManager::GetForwardDataManager().InitializeForwardData(); }
 
     void MarkNewObject(BaseObject* obj) override;
+    void StartYoungMarkWork();
+    void MarkYoungObjectIfActive(BaseObject* object, bool followOnly = false) const override;
 
     bool ShouldIgnoreRequest(GCRequest& request) override;
     bool MarkObject(BaseObject* obj) const override;
@@ -1382,10 +1384,10 @@ private:
                            const MinorSlotSet* reachableSlotDomain = nullptr);
     void TraceYoungClosureStriped(WorkStack& workStack, bool fullYoungScan,
                                   std::vector<BaseObject*>& reachableVec, MinorSlotSet& reachableSlots,
-                                  MinorSlotSet& weakSlots, GCThreadPool* threadPool,
+                                  MinorSlotSet& weakSlots,
                                   const MinorSlotSet* reachableSlotDomain = nullptr);
-    // youngconc: drain SATB into TraceYoungClosure (major MarkSatbBuffer sibling; young-only filter).
-    bool MarkYoungSatbBuffer(WorkStack& workStack, bool fullYoungScan,
+    // Follow this generation's published mark work through TraceYoungClosure.
+    bool FollowYoungMark(WorkStack& workStack, bool fullYoungScan,
                              std::vector<BaseObject*>& reachableVec, MinorSlotSet& reachableSlots,
                              MinorSlotSet& weakSlots,
                              YoungConcWindowStats* windowStats = nullptr);
@@ -1424,7 +1426,6 @@ private:
     // After nested young, remaining young survivors hold young→old edges the
     // young closure skipped. ZGC overlapping mark paints old targets from those
     // stores (zBarrier.inline.hpp:742-749). Seed them into the old TRACE stack.
-    void SeedOldMarkFromYoungSurvivors(WorkStack& workStack, std::vector<BaseObject*>* collectOnly);
     void FlushAllocationRegions();
     template<bool forward>
     bool TryUpdateRefFieldImpl(BaseObject* obj, RefField<>& ref, BaseObject*& oldRef, BaseObject*& newRef,

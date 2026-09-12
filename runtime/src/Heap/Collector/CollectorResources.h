@@ -27,6 +27,9 @@ class CollectorResourcesTestPeer;
 // CollectorResources provides the resources that a functional collector need,
 // such as gc thread/threadPool, gc task queue...
 class CollectorResources {
+#if defined(MRT_TESTABLE_INTERNALS)
+    friend struct MarkPublicationFixture;
+#endif
 public:
     // the collector thread entry routine.
     MRT_EXPORT static void* GCMainThreadEntry(void* arg);
@@ -59,6 +62,16 @@ public:
         return *(generation == GCCycleGeneration::YOUNG ? youngWorkers : oldWorkers);
     }
 
+    // ZYoungType::major_full_roots selects the combined mark-start pause.
+    const GCDriverRequest* YoungPreludeRequest() const { return youngPreludeRequest; }
+
+    // ZResurrection (zResurrection.cpp:35-47): shared by both generations.
+    // Block only in the successful old mark-end pause; unblock after the
+    // non-strong reference rendezvous, before finalizer enqueue.
+    void BlockResurrection() { resurrectionBlocked.store(true, std::memory_order_release); }
+    void UnblockResurrection() { resurrectionBlocked.store(false, std::memory_order_release); }
+    bool IsResurrectionBlocked() const { return resurrectionBlocked.load(std::memory_order_acquire); }
+
     bool IsHeapMarked() const { return isHeapMarked; }
 
     void SetHeapMarked(bool value) { isHeapMarked = value; }
@@ -79,6 +92,10 @@ public:
     // consume or coalesce requests from the other generation.
     GCDriverPort& GetMinorDriverPort() { return minorDriverPort; }
     GCDriverPort& GetMajorDriverPort() { return majorDriverPort; }
+    GCDriverPort& GetYoungDriverPort()
+    {
+        return youngPreludeRequest != nullptr ? majorDriverPort : minorDriverPort;
+    }
     void RequestAbort(GCDriverKind kind)
     {
         (kind == GCDriverKind::MINOR ? minorDriverPort : majorDriverPort).Abort().Request();
@@ -150,6 +167,7 @@ private:
     // retirement epochs single-writer.
     std::mutex driverLock;
     bool driverRequestActive = false;
+    const GCDriverRequest* youngPreludeRequest = nullptr;
 #if defined(MRT_GC_UNIT_TESTS)
     // Deterministic unit builds can replace only the task executor.  The
     // default product retains CollectorProxy as its sole owner and ABI shape.
@@ -182,6 +200,7 @@ private:
 
     // only gc thread can access it, so we don't use atomic type
     bool isHeapMarked = false;
+    std::atomic<bool> resurrectionBlocked { false };
     // Represent the number of returned raw pointer
     std::atomic<int> criticalNum{ 0 };
     int gcWorking = 0;

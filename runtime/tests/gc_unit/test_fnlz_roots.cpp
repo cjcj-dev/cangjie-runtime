@@ -48,6 +48,8 @@ GC_TEST(FnlzRoots, RegistryMissDoesNotCountAsFinalEnqueue)
                    ReferenceStatus::DISCOVERED);
 
     fp.ProcessReferences([](BaseObject*) { return false; });
+    GC_EXPECT_EQ(processor.Enqueued(ReferenceType::FINAL), static_cast<size_t>(0));
+    fp.EnqueueReferences();
 
     GC_EXPECT_EQ(processor.Enqueued(ReferenceType::FINAL), static_cast<size_t>(0));
     size_t queuedRoots = 0;
@@ -67,6 +69,8 @@ GC_TEST(FnlzRoots, RegisteredFinalizerMovesAndCountsExactlyOnce)
                    ReferenceStatus::DISCOVERED);
 
     fp.ProcessReferences([](BaseObject*) { return false; });
+    GC_EXPECT_EQ(processor.Enqueued(ReferenceType::FINAL), static_cast<size_t>(0));
+    fp.EnqueueReferences();
 
     GC_EXPECT_EQ(processor.Enqueued(ReferenceType::FINAL), static_cast<size_t>(1));
     size_t queuedRoots = 0;

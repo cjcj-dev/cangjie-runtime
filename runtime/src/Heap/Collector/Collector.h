@@ -38,6 +38,9 @@ enum GCPhase : uint8_t {
     GC_PHASE_POST_TRACE = 12,
     GC_PHASE_PREFORWARD = 13,
     GC_PHASE_FORWARD = 14,
+    // Generation-local mark end, before non-strong reference processing.
+    // ZGenerationOld::mark_end (zGeneration.cpp:1271).
+    GC_PHASE_MARK_COMPLETE = 15,
 };
 
 // Per-generation execution state. The snapshot lock publishes cycle identity
@@ -518,6 +521,15 @@ public:
 
     // determine how we treat new object during gc.
     virtual void MarkNewObject(BaseObject*) {}
+    void MarkObjectIfActive(BaseObject* object) const;
+    virtual void MarkYoungObjectIfActive(BaseObject*, bool = false) const
+    {
+        AbortUnimplemented("Collector::MarkYoungObjectIfActive");
+    }
+    virtual void MarkOldObjectIfActive(BaseObject*, bool = false) const
+    {
+        AbortUnimplemented("Collector::MarkOldObjectIfActive");
+    }
 
     virtual void FixObject(BaseObject&) const {}
 
@@ -783,7 +795,11 @@ protected:
     void SelectCycle(GCReason reason)
     {
         GenerationCycle* cycle = reason == GC_REASON_YOUNG ? &youngCycle : &oldCycle;
-        cycle->SelectReason(reason);
+        if (!cycle->Snapshot().active) {
+            cycle->SelectReason(reason);
+        } else {
+            CHECK(cycle->Reason() == reason);
+        }
         activeCycle.store(cycle, std::memory_order_release);
     }
     GenerationCycle youngCycle { GCCycleGeneration::YOUNG };

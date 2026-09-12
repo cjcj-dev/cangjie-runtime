@@ -101,6 +101,8 @@ GC_TEST(ReferenceProcessor, DeadWeakReferentIsCleanedByCas)
     GC_EXPECT_TRUE(processor.DiscoverReference(fx.obj0, ReferenceType::WEAK) ==
                    ReferenceStatus::DISCOVERED);
     processor.ProcessReferences([](BaseObject*) { return false; });
+    // Weak clearing precedes the rendezvous/unblock/enqueue boundary.
+    GC_EXPECT_TRUE(is_null(referent.GetTargetObject()));
     processor.EnqueueReferences([](BaseObject*) { return true; });
 
     GC_EXPECT_TRUE(is_null(referent.GetTargetObject()));
@@ -108,7 +110,7 @@ GC_TEST(ReferenceProcessor, DeadWeakReferentIsCleanedByCas)
 }
 
 #if defined(MRT_TESTABLE_INTERNALS)
-GC_TEST(ReferenceProcessor, EnqueueConsumerReloadsWinningWeakCasValue)
+GC_TEST(ReferenceProcessor, ProcessConsumerReloadsWinningWeakCasValue)
 {
     GcHeapFixture fx;
     BaseObject* replacement = fx.PlaceObject(fx.heapStart + 128);
@@ -119,14 +121,14 @@ GC_TEST(ReferenceProcessor, EnqueueConsumerReloadsWinningWeakCasValue)
     ReferenceProcessor processor;
     GC_EXPECT_TRUE(processor.DiscoverReference(fx.obj0, ReferenceType::WEAK) ==
                    ReferenceStatus::DISCOVERED);
-    processor.ProcessReferences([](BaseObject*) { return false; });
     ReferenceProcessor::SetBeforeWeakCleanCasForTest([&] {
         referent.StoreColoured(GcUnit::StoreGoodPointer(replacement));
     });
     BaseObject* consumerTerminal = nullptr;
-    processor.EnqueueReferences([](BaseObject*) { return true; },
+    processor.ProcessReferences([](BaseObject*) { return false; },
         [&](BaseObject*, BaseObject* terminal) { consumerTerminal = terminal; });
     ReferenceProcessor::SetBeforeWeakCleanCasForTest({});
+    processor.EnqueueReferences([](BaseObject*) { return true; });
 
     GC_EXPECT_TRUE(consumerTerminal == replacement);
     GC_EXPECT_TRUE(to_object(referent.GetTargetObject()) == replacement);

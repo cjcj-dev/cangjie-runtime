@@ -16,7 +16,6 @@
 #include "Heap/Heap.h"
 #include "Mutator/Mutator.h"
 #include "Mutator/MutatorManager.h"
-#include "Mutator/SatbBuffer.h"
 #include "ObjectModel/RefField.h"
 
 namespace MapleRuntime {
@@ -26,7 +25,6 @@ static std::atomic<uint64_t> g_slots{ 0 };
 static std::atomic<uint64_t> g_water{ 0 };
 static std::atomic<uint64_t> g_allocBlack{ 0 };
 static std::atomic<uint64_t> g_marked{ 0 };
-static std::atomic<uint64_t> g_satb{ 0 };
 static std::atomic<uint64_t> g_skip{ 0 };
 static std::atomic<uint64_t> g_uncovered{ 0 };
 static std::atomic<uint64_t> g_minors{ 0 };
@@ -41,7 +39,6 @@ size_t Uncovered() { return g_uncovered.load(std::memory_order_relaxed); }
 size_t Water() { return g_water.load(std::memory_order_relaxed); }
 size_t AllocBlack() { return g_allocBlack.load(std::memory_order_relaxed); }
 size_t Marked() { return g_marked.load(std::memory_order_relaxed); }
-size_t Satb() { return g_satb.load(std::memory_order_relaxed); }
 size_t Skip() { return g_skip.load(std::memory_order_relaxed); }
 size_t Slots() { return g_slots.load(std::memory_order_relaxed); }
 size_t Minors() { return g_minors.load(std::memory_order_relaxed); }
@@ -53,14 +50,13 @@ void Report(const char* tag)
     }
     LOG(RTLOG_ERROR,
         "[GCV2][stw2current] tag=%s minors=%llu slots=%llu water=%llu allocblack=%llu marked=%llu "
-        "satb=%llu skip=%llu uncovered=%llu",
+        "skip=%llu uncovered=%llu",
         tag != nullptr ? tag : "?",
         static_cast<unsigned long long>(g_minors.load(std::memory_order_relaxed)),
         static_cast<unsigned long long>(g_slots.load(std::memory_order_relaxed)),
         static_cast<unsigned long long>(g_water.load(std::memory_order_relaxed)),
         static_cast<unsigned long long>(g_allocBlack.load(std::memory_order_relaxed)),
         static_cast<unsigned long long>(g_marked.load(std::memory_order_relaxed)),
-        static_cast<unsigned long long>(g_satb.load(std::memory_order_relaxed)),
         static_cast<unsigned long long>(g_skip.load(std::memory_order_relaxed)),
         static_cast<unsigned long long>(g_uncovered.load(std::memory_order_relaxed)));
 }
@@ -73,8 +69,7 @@ static void MaybeAtexit()
     }
 }
 
-Stw2Cover ClassifyTarget(BaseObject* target, const std::unordered_set<BaseObject*>& allocBlack,
-                         const std::unordered_set<BaseObject*>& satb)
+Stw2Cover ClassifyTarget(BaseObject* target, const std::unordered_set<BaseObject*>& allocBlack)
 {
     if (target == nullptr || !Heap::IsHeapAddress(target)) {
         return Stw2Cover::Skip;
@@ -102,9 +97,6 @@ Stw2Cover ClassifyTarget(BaseObject* target, const std::unordered_set<BaseObject
     if (region->IsMarkedObject(view, target)) {
         return Stw2Cover::Marked;
     }
-    if (satb.count(target) != 0) {
-        return Stw2Cover::Satb;
-    }
     return Stw2Cover::Uncovered;
 }
 
@@ -126,32 +118,9 @@ void Census(const std::unordered_set<MAddress>& currentSlots, Allocator* allocat
         });
     }
 
-    std::unordered_set<BaseObject*> satbSet;
-    SatbBuffer::Instance().PeekRetired([&satbSet](BaseObject* obj) {
-        if (obj != nullptr) {
-            satbSet.insert(obj);
-        }
-    });
-    // Product STW2 always passes theAllocator. gc_unit inject/classify uses nullptr
-    // so we do not VisitAllMutators against an uninitialised scheduler.
-    if (allocator != nullptr) {
-        MutatorManager::Instance().VisitAllMutators([&satbSet](Mutator& mutator) {
-            SatbBuffer::Node* node = mutator.PeekSatbNode();
-            if (node == nullptr) {
-                return;
-            }
-            node->PeekEntries([&satbSet](BaseObject* obj) {
-                if (obj != nullptr) {
-                    satbSet.insert(obj);
-                }
-            });
-        });
-    }
-
     uint64_t waterN = 0;
     uint64_t allocN = 0;
     uint64_t markedN = 0;
-    uint64_t satbN = 0;
     uint64_t skipN = 0;
     uint64_t uncoveredN = 0;
 
@@ -167,7 +136,7 @@ void Census(const std::unordered_set<MAddress>& currentSlots, Allocator* allocat
             continue;
         }
         BaseObject* target = to_object(rawAddr);
-        Stw2Cover cover = ClassifyTarget(target, allocBlack, satbSet);
+        Stw2Cover cover = ClassifyTarget(target, allocBlack);
         switch (cover) {
             case Stw2Cover::Water:
                 ++waterN;
@@ -177,9 +146,6 @@ void Census(const std::unordered_set<MAddress>& currentSlots, Allocator* allocat
                 break;
             case Stw2Cover::Marked:
                 ++markedN;
-                break;
-            case Stw2Cover::Satb:
-                ++satbN;
                 break;
             case Stw2Cover::Skip:
                 ++skipN;
@@ -204,7 +170,6 @@ void Census(const std::unordered_set<MAddress>& currentSlots, Allocator* allocat
     g_water.fetch_add(waterN, std::memory_order_relaxed);
     g_allocBlack.fetch_add(allocN, std::memory_order_relaxed);
     g_marked.fetch_add(markedN, std::memory_order_relaxed);
-    g_satb.fetch_add(satbN, std::memory_order_relaxed);
     g_skip.fetch_add(skipN, std::memory_order_relaxed);
     g_uncovered.fetch_add(uncoveredN, std::memory_order_relaxed);
 
@@ -212,10 +177,10 @@ void Census(const std::unordered_set<MAddress>& currentSlots, Allocator* allocat
     if (n == 1 || (n & (n - 1)) == 0 || uncoveredN != 0) {
         LOG(RTLOG_ERROR,
             "[GCV2][stw2current] census minor=%llu slots=%zu water=%llu allocblack=%llu marked=%llu "
-            "satb=%llu skip=%llu uncovered=%llu",
+            "skip=%llu uncovered=%llu",
             static_cast<unsigned long long>(n), currentSlots.size(),
             static_cast<unsigned long long>(waterN), static_cast<unsigned long long>(allocN),
-            static_cast<unsigned long long>(markedN), static_cast<unsigned long long>(satbN),
+            static_cast<unsigned long long>(markedN),
             static_cast<unsigned long long>(skipN), static_cast<unsigned long long>(uncoveredN));
     }
 }

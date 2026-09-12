@@ -74,11 +74,6 @@ BaseObject* PreforwardBarrier::ReadReference(BaseObject* obj, RefField<false>& f
 
 BaseObject* PreforwardBarrier::ReadStaticRef(RootSlot& field) const { return Barrier::ReadStaticRef(field); }
 
-BaseObject* PreforwardBarrier::ReadWeakRef(BaseObject* obj, RefField<false>& field) const
-{
-    return ReadReference(obj, field);
-}
-
 void PreforwardBarrier::ReadStruct(MAddress dst, BaseObject* obj, MAddress src, size_t size) const
 {
     if (!Heap::IsHeapAddress(dst)) {

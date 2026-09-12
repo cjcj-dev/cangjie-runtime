@@ -29,14 +29,12 @@ class MarkLiveCache;
 constexpr uint64_t NS_PER_US = 1000;
 constexpr uint64_t NS_PER_S = 1000000000;
 
-// Strict mark-end cut shared by major MarkSatbBuffer and young
-// MarkYoungSatbBuffer. ZMark::end -> try_end (zMark.cpp:954-971) decides
+// Strict mark-end cut shared by major FinishOldMark and young
+// FollowYoungMark. ZMark::end -> try_end (zMark.cpp:954-971) decides
 // termination with mutators stopped, after ZMark::flush (zMark.cpp:587-605,
 // :998-1006), and resumes concurrent follow when that cut exposes work
 // (zMark.cpp:973-990). This must stay compile-time and default-on: retired-only
 // sampling cannot see a mutator's non-full SATB node.
-constexpr bool kMarkTerminateInPause = true;
-inline bool MarkTerminateInPauseEnabled() { return kMarkTerminateInPause; }
 
 void NoteMarkTerminatePause();
 void NoteMarkTerminateFlushed(size_t n);
@@ -272,6 +270,9 @@ class TracingCollector : public Collector {
     friend struct RelocationReceiptTestAccess;
     friend struct GenerationCycleRootTestAccess;
 #endif
+#if defined(MRT_TESTABLE_INTERNALS)
+    friend struct MarkPublicationFixture;
+#endif
 public:
     enum class RefSlotKind : U8 {
         STRONG,
@@ -314,6 +315,7 @@ public:
     // Static storage keeps the instance layout identical in both build shapes.
     static std::function<void(GCWorkers::Generation, RootSet&)> testRootsResult;
     static std::function<void()> testCyclePrepared;
+    static std::function<void()> testYoungMarkStarted;
 #endif
 
     void Init() override;
@@ -390,6 +392,8 @@ public:
             (G == Generation::Old && RegionSpace::IsResurrectedObject(obj));
     }
     void DFSTraceExportObject(BaseObject* exportObj, bool finalizable = false);
+    void StartOldMarkWork();
+    void MarkOldObjectIfActive(BaseObject* object, bool gcThread = false) const override;
     virtual bool MarkObject(BaseObject* obj) const
     {
         // getsize7: base path uses unsized RegionInfo::MarkObject → GetSize without gate.
@@ -476,8 +480,6 @@ public:
         Collector::AbortUnimplemented("TracingCollector::GetCurrentTagID");
     }
 
-    static const size_t MAX_MARKING_WORK_SIZE;
-    static const size_t MIN_MARKING_WORK_SIZE;
 
 protected:
     void RequestGCInternal(GCReason reason, bool async) override { collectorResources.RequestGC(reason, async); }
@@ -559,10 +561,11 @@ protected:
     void MergeMutatorRoots(WorkStack& workStack);
     void DoEnumeration(WorkStack& workStack, WorkStack& foreignRootsSet);
     void DoTracing(WorkStack& workStack, WorkStack& foreignRootsSet);
-    bool MarkSatbBuffer(WorkStack& workStack);
+    bool FinishOldMark(WorkStack& workStack);
+    void ProcessOldNonStrongReferences(WorkStack& workStack);
 
     // concurrent marking.
-    void TracingImpl(WorkStack& workStack, WorkStack& foreignRootsSet, bool parallel);
+    void TracingImpl(WorkStack& workStack, WorkStack& foreignRootsSet);
 
     void AddExportObjectsTracingWork(RootSet& exportRoots);
     virtual void EnumAndTagRawRoot(ObjectRef& root, RootSet& rootSet) const
@@ -573,8 +576,8 @@ protected:
     void FindUselessExternObjects();
 
 private:
-    size_t RunMajorStripeMark(WorkStack& workStack, bool parallel, bool partial = false);
-    void ConcurrentReMark(WorkStack& remarkStack, bool parallel);
+    size_t RunMajorStripeMark(WorkStack& workStack, bool partial = false);
+    void ConcurrentReMark(WorkStack& remarkStack);
     void EnumMutatorRoot(ObjectPtr& obj, RootSet& rootSet) const;
     void EnumConcurrencyModelRoots(RootSet& rootSet) const;
     void EnumStaticRoots(RootSet& rootSet) const;
