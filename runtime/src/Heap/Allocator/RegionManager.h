@@ -927,7 +927,7 @@ public:
         // left from-copies). zGeneration.cpp:211-213, zPage.inline.hpp:180-185.
         (void)ExemptMarkStartAllocatingFromCSet();
 
-        CHECK_DETAIL(ForwardingTable::BeginForwardingArena(fromRegionList),
+        CHECK_DETAIL(ForwardingTable::BeginForwardingArena(G, fromRegionList),
                      "forwarding arena budget allocation failed");
         fromRegionList.VisitAllRegions([](RegionInfo* region) {
             DLOG(REGION, "visit from region %p@[%#zx+%zu, %#zx)", region, region->GetRegionStart(),
@@ -943,7 +943,6 @@ public:
                          region, static_cast<unsigned>(G));
         });
 
-        ForwardingTable::EndForwardingArena();
         fromRegionList.CopyListTo(ghostFromRegionList);
     }
 
@@ -964,9 +963,6 @@ public:
         // Cost metric same family as ghostorder: peak retained bytes under mark-epoch gate.
         VLOG(REPORT, "[GhostRetention] retained_regions=%zu retained_bytes=%zu", heldBefore,
              heldBefore * RegionInfo::UNIT_SIZE);
-        const size_t detachReleased = freeRegionManager.ReleaseDetachQuarantineAfterMajor();
-        VLOG(REPORT, "[GCV2][detach-quarantine] major_released_units=%zu major_released_bytes=%zu",
-             detachReleased, detachReleased * RegionInfo::UNIT_SIZE);
         SatisfyStalledAllocations();
     }
 
@@ -1060,10 +1056,6 @@ private:
         }
         if (candidate != nullptr) {
             RemoveRegionLocked(&garbageRegionList, candidate);
-            if (!FromPageDetach::FromPageDetachCheck(candidate, FromPageDetach::Site::TAKE_GARBAGE)) {
-                freeRegionManager.AddDetachQuarantineRegion(candidate);
-                candidate = nullptr;
-            }
         }
         if (gatedBytes != nullptr) {
             *gatedBytes = bytes;
@@ -1090,10 +1082,6 @@ private:
                     return false;
                 }
                 RemoveRegionLocked(&garbageRegionList, region);
-                if (!FromPageDetach::FromPageDetachCheck(region, FromPageDetach::Site::TAKE_AFTER_DISPEL)) {
-                    freeRegionManager.AddDetachQuarantineRegion(region);
-                    return false;
-                }
                 return true;
             }
         }

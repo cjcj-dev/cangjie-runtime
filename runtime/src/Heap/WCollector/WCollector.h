@@ -457,7 +457,7 @@ public:
         const MAddress fromAddr = reinterpret_cast<MAddress>(obj);
         RegionInfo* forwarding = RegionInfo::GetGhostFromRegionAt(fromAddr);
         if (forwarding == nullptr || forwarding->generation_id() != generation) {
-            const MAddress retired = ForwardingTable::FindRetiredTo(fromAddr);
+            const MAddress retired = ForwardingTable::FindTo(fromAddr);
             if (retired != 0) {
                 BaseObject* to = reinterpret_cast<BaseObject*>(retired);
                 if (ToHeaderCovered(to)) {

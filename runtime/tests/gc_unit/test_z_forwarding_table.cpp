@@ -171,13 +171,11 @@ GC_TEST(ZForwardingTable, kZfwdTableConsumeOn)
     GC_EXPECT_TRUE(ForwardingTable::kZfwdTableConsume);
 }
 
-GC_TEST(ZForwardingTable, MembershipUnlinkKeepsEntries)
+GC_TEST(ZForwardingTable, PageReleaseKeepsEntriesUntilMapRemoval)
 {
     constexpr MAddress kStart = 0x60000000;
     constexpr size_t kSize = 0x1000;
-    ZGranuleMap<ZForwarding*> membership;
     ZGranuleMap<ZForwarding*> entries;
-    GC_EXPECT_TRUE(membership.Initialize(kStart, 4 * kSize, kSize));
     GC_EXPECT_TRUE(entries.Initialize(kStart, 4 * kSize, kSize));
 
     ZForwarding* fwd = ZForwarding::Create(4, kStart, kStart, kSize);
@@ -186,13 +184,12 @@ GC_TEST(ZForwardingTable, MembershipUnlinkKeepsEntries)
     const MAddress to = 0x70000000;
     zoffset start;
     zoffset fromOffset;
-    GC_EXPECT_TRUE(membership.offset_for_address(kStart, &start));
+    GC_EXPECT_TRUE(entries.offset_for_address(kStart, &start));
     GC_EXPECT_TRUE(entries.offset_for_address(from, &fromOffset));
-    membership.put(start, kSize, fwd);
     entries.put(start, kSize, fwd);
 
-    membership.put(start, kSize, nullptr);
-    GC_EXPECT_TRUE(membership.get(start) == nullptr);
+    fwd->release_page();
+    fwd->detach_page();
     GC_EXPECT_TRUE(entries.get(start) == fwd);
 
     GC_EXPECT_EQ(fwd->insert(from, to), to);

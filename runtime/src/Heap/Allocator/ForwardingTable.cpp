@@ -31,18 +31,15 @@
 namespace MapleRuntime {
 namespace {
 
-// zForwardingTable.hpp:32-52 — one granule map of ZForwarding*.
-// Two maps because Dispel unlinks membership while ClearEntries (a phase later)
-// is when the attached array may be retired. ZGC has one map: reset_relocation_set
-// is the only unlink (zGeneration.cpp:276-285).
-ZGranuleMap<ZForwarding*> g_membership;
+// zGeneration.cpp:276-284 / zRelocationSet.cpp:172-200.
+// Each generation owns its installed forwarding objects and their common arena.
+// The map borrows them until that generation resets its relocation set.
 ZGranuleMap<ZForwarding*> g_entries;
-// Per-region-span generation word: bit 0 is open, upper bits are the
-// monotonically increasing generation. Clear leaves the closed tombstone in
-// place, so a missing g_entries pointer can never be mistaken for permission to
-// allocate a replacement.
-ZGranuleMap<uint64_t> g_publicationState;
-constexpr uint64_t kPublicationOpen = 1;
+struct RelocationSet {
+    std::unique_ptr<ForwardingAllocator> arena;
+    std::vector<ZForwarding*> forwardings;
+};
+RelocationSet g_relocationSets[2];
 
 // Product boundary: callers still own virtual addresses, while ZGranuleMap
 // consumes only heap offsets. These helpers force every consumer through the
@@ -61,47 +58,10 @@ void MapPut(ZGranuleMap<ZForwarding*>& map, MAddress addr, size_t size, ZForward
     }
 }
 
-ZForwarding* MapExchange(ZGranuleMap<ZForwarding*>& map, MAddress addr, ZForwarding* value)
-{
-    zoffset offset;
-    return map.offset_for_address(addr, &offset) ? map.exchange(offset, value) : nullptr;
-}
-
-uint64_t PublicationStateAt(MAddress addr)
-{
-    zoffset offset;
-    return g_publicationState.offset_for_address(addr, &offset) ? g_publicationState.get(offset) : 0;
-}
-
-void PutPublicationState(MAddress addr, size_t size, uint64_t state)
-{
-    zoffset offset;
-    if (g_publicationState.offset_for_address(addr, &offset)) {
-        g_publicationState.put(offset, size, state);
-    }
-}
-
-uint64_t PublicationGeneration(uint64_t state) { return state >> 1; }
-
-bool PublicationOpen(uint64_t state) { return (state & kPublicationOpen) != 0; }
-
-void SealPublicationLocked(MAddress start, size_t size)
-{
-    PutPublicationState(start, size, PublicationStateAt(start) & ~kPublicationOpen);
-}
-
 std::atomic<bool> g_ready{ false };
 // Installation is rare and phase-scoped. Serialize provisional-to-full replacement so
 // readers never observe a freed membership carrier while the attached array is resized.
 std::mutex g_installLock;
-std::mutex g_retiredLock;
-std::vector<ZForwarding*> g_retired;
-// Previous reset generation. ZGeneration::reset_relocation_set destroys the
-// set installed last cycle, after this cycle's mark (zGeneration.cpp:276-285).
-std::vector<ZForwarding*> g_retiredPrev;
-std::atomic<uint64_t> g_retiredTotal{ 0 };
-std::atomic<uint64_t> g_reclaimedTotal{ 0 };
-
 std::atomic<uint64_t> g_cmpTotal{ 0 };
 std::atomic<uint64_t> g_cmpAgree{ 0 };
 std::atomic<uint64_t> g_cmpTableOnly{ 0 };
@@ -120,54 +80,10 @@ std::atomic<uint64_t> g_armedMiss{ 0 };
 std::atomic<uint64_t> g_unavailable{ 0 };
 std::atomic<uint64_t> g_unarmed{ 0 };
 
-GCCycleGeneration CycleOf(Generation gen)
-{
-    return gen == Generation::Old ? GCCycleGeneration::OLD : GCCycleGeneration::YOUNG;
-}
-
-bool IsPostMarkPhase(GCPhase phase)
-{
-    return phase == GC_PHASE_MARK_COMPLETE || phase == GC_PHASE_POST_TRACE ||
-           phase == GC_PHASE_PREFORWARD || phase == GC_PHASE_FORWARD || phase == GC_PHASE_FINISH;
-}
-
-uint64_t RequiredMarkSeq(const GCCycleSnapshot& snap)
-{
-    return IsPostMarkPhase(snap.phase) ? snap.sequence + 1 : snap.sequence;
-}
-
-bool CycleMarkSatisfied(const GCCycleSnapshot& snap, uint64_t required)
-{
-    if (snap.sequence > required) {
-        return true;
-    }
-    return snap.sequence == required && IsPostMarkPhase(snap.phase);
-}
-
-void StampTableCoverage(ZForwarding* tab, RegionInfo* region)
-{
-    if (tab == nullptr) {
-        return;
-    }
-    const Generation gen = region == nullptr ? Generation::Young : region->GetOwnerGeneration();
-    const GCCycleSnapshot snap = Heap::GetHeap().GetCollector().GetCycleSnapshot(CycleOf(gen));
-    tab->note_table_epoch(static_cast<uint8_t>(gen),
-                         WCollector::FlipSeq().load(std::memory_order_relaxed), RequiredMarkSeq(snap));
-}
-
 #if defined(MRT_TESTABLE_INTERNALS)
 std::atomic<ForwardingTable::LookupRetainHook> g_lookupRetainHook{ nullptr };
 std::atomic<void*> g_lookupRetainHookContext{ nullptr };
 #endif
-
-bool PublicationClosedAt(MAddress addr)
-{
-    zoffset offset;
-    if (!g_publicationState.offset_for_address(addr, &offset)) {
-        return false;
-    }
-    return !PublicationOpen(g_publicationState.get(offset));
-}
 
 } // namespace
 
@@ -182,9 +98,7 @@ bool ForwardingTable::Initialize(MAddress heapStart, size_t heapSize, size_t uni
             // fixture destructor has already drained/reclaimed its carriers;
             // rebase only the test build so the next fixture exercises the
             // same product address checks rather than an obsolete map base.
-            g_membership.ResetForTest();
             g_entries.ResetForTest();
-            g_publicationState.ResetForTest();
             g_ready.store(false, std::memory_order_release);
         } else {
             return true;
@@ -196,20 +110,14 @@ bool ForwardingTable::Initialize(MAddress heapStart, size_t heapSize, size_t uni
     if (unitSize == 0 || heapSize == 0) {
         return false;
     }
-    if (!g_membership.Initialize(heapStart, heapSize, unitSize) ||
-        !g_entries.Initialize(heapStart, heapSize, unitSize) ||
-        !g_publicationState.Initialize(heapStart, heapSize, unitSize)) {
+    if (!g_entries.Initialize(heapStart, heapSize, unitSize)) {
         LOG(RTLOG_ERROR, "[FWDTABLE] granule map init failed size=%zu unit=%zu -- table stays off", heapSize,
             unitSize);
         return false;
     }
-    // Generation zero is the initial, pre-cycle provisional-membership epoch.
-    // The first ClearEntries seals it exactly like every later generation;
-    // only PreparePublicationGeneration may open the next one.
-    PutPublicationState(heapStart, heapSize, kPublicationOpen);
     g_ready.store(true, std::memory_order_release);
     LOG(RTLOG_ERROR, "[FWDTABLE] armed base=%#zx size=%zu unit=%zu entries=%zu", static_cast<size_t>(heapStart),
-        heapSize, unitSize, g_membership.size());
+        heapSize, unitSize, g_entries.size());
     static std::atomic<bool> dumped{ false };
     bool expected = false;
     if (dumped.compare_exchange_strong(expected, true, std::memory_order_relaxed)) {
@@ -233,38 +141,32 @@ bool ForwardingTable::Initialize(MAddress heapStart, size_t heapSize, size_t uni
     return true;
 }
 
-// Installation runs on the phase thread; later mutator installs use standalone
-// storage, preserving the old extensible-domain fallback until P3 closes it.
-static thread_local std::shared_ptr<ForwardingAllocator> installArena;
-
-bool ForwardingTable::BeginForwardingArena(RegionList& regions)
+bool ForwardingTable::BeginForwardingArena(Generation gen, RegionList& regions)
 {
-    CHECK(installArena == nullptr);
+    // zRelocationSet.cpp:79-134: allocate the entire selected set before copy.
+    RelocationSet& set = g_relocationSets[static_cast<size_t>(gen)];
+    CHECK(set.forwardings.empty());
     size_t budget = 0;
     bool valid = true;
     regions.VisitAllRegions([&](RegionInfo* region) {
-        // Every object occupies at least one aligned word. Budget by region
-        // capacity, not a mark counter that the preparation pass may update.
-        const size_t count = region->GetRegionSize() >> ZForwarding::kAlignShift;
-        const size_t entries = ZForwarding::nentries(count);
+        const size_t entries = ZForwarding::nentries(ObjectCountUpperBound(region, region->GetRegionSize()));
         size_t bytes;
         valid = valid && entries != 0 && ZForwarding::AttachedArray::allocation_size(entries, &bytes) &&
             ForwardingAllocator::add_to_budget(bytes, &budget);
     });
-    if (!valid) {
-        return false;
-    }
-    auto arena = std::make_shared<ForwardingAllocator>(budget);
-    if (!arena->valid()) {
-        return false;
-    }
-    installArena = std::move(arena);
+    if (!valid) return false;
+    set.arena = std::make_unique<ForwardingAllocator>(budget);
+    if (!set.arena->valid()) return false;
+    regions.VisitAllRegions([&](RegionInfo* region) {
+        ZForwarding* forwarding = ZForwarding::alloc(
+            ObjectCountUpperBound(region, region->GetRegionSize()), region->GetRegionStart(),
+            g_entries.base(), region->GetRegionSize(), region, region->GetRegionLifeId(), false, set.arena.get());
+        CHECK(forwarding != nullptr);
+        forwarding->set_table_generation(static_cast<uint8_t>(gen));
+        set.forwardings.push_back(forwarding);
+        insert(forwarding);
+    });
     return true;
-}
-
-void ForwardingTable::EndForwardingArena()
-{
-    installArena.reset();
 }
 
 size_t ForwardingTable::ObjectCountUpperBound(RegionInfo* region, size_t regionSize)
@@ -290,521 +192,68 @@ void ForwardingTable::insert(ZForwarding* forwarding)
     if (forwarding == nullptr || !Ready()) {
         return;
     }
-    MapPut(g_membership, forwarding->start(), forwarding->size(), forwarding);
     MapPut(g_entries, forwarding->start(), forwarding->size(), forwarding);
 }
 
 void ForwardingTable::remove(ZForwarding* forwarding)
 {
-    // zForwardingTable.inline.hpp:56-62 — membership only. Entries stay until
-    // ClearEntries (zRelocationSet.cpp:91-96 arena recycle is a phase later).
-    if (forwarding == nullptr || !Ready()) {
-        return;
+    if (forwarding != nullptr && Ready() && MapGet(g_entries, forwarding->start()) == forwarding) {
+        MapPut(g_entries, forwarding->start(), forwarding->size(), nullptr);
     }
-    MapPut(g_membership, forwarding->start(), forwarding->size(), nullptr);
 }
+
 
 ZForwarding* ForwardingTable::get(MAddress addr)
 {
-    if (!Ready()) {
-        return nullptr;
-    }
-    ZForwarding* forwarding = MapGet(g_membership, addr);
-    if (forwarding != nullptr && !forwarding->page_life_current()) {
-        return nullptr;
-    }
-    return forwarding;
+    return Ready() ? MapGet(g_entries, addr) : nullptr;
 }
 
-bool ForwardingTable::PreparePublicationGeneration(MAddress regionStart, size_t regionSize)
-{
-    if (!Ready() || regionSize == 0) {
-        return false;
-    }
-    std::lock_guard<std::mutex> lock(g_installLock);
-    const uint64_t state = PublicationStateAt(regionStart);
-    if (PublicationOpen(state)) {
-        return false;
-    }
-    const uint64_t previous = PublicationGeneration(state);
-    CHECK_DETAIL(previous < (UINT64_MAX >> 1),
-                 "forwarding publication generation exhausted start=%#zx", static_cast<size_t>(regionStart));
-    PutPublicationState(regionStart, regionSize, ((previous + 1) << 1) | kPublicationOpen);
-    return true;
-}
 
 bool ForwardingTable::InstallPublicationBeforeCopy(
     MAddress regionStart, size_t regionSize, RegionInfo* region)
 {
-    if (!Ready() || regionSize == 0) {
-        return false;
-    }
-    std::lock_guard<std::mutex> lock(g_installLock);
-    ZForwarding* forwarding = EnsureEntriesLocked(region);
-    if (forwarding == nullptr || forwarding->start() != regionStart || forwarding->size() < regionSize ||
-        forwarding->is_provisional()) {
-        return false;
-    }
-    MapPut(g_membership, regionStart, regionSize, forwarding);
-    return true;
-}
-
-bool ForwardingTable::InsertProvisional(MAddress regionStart, size_t regionSize, RegionInfo* region)
-{
-    if (!Ready() || region == nullptr || regionSize == 0) {
-        return false;
-    }
-    std::lock_guard<std::mutex> lock(g_installLock);
-    const uint64_t publicationState = PublicationStateAt(regionStart);
-    // Provisional membership is still an installation. Once ClearEntries seals
-    // this generation, it must wait for the next explicit prepare boundary.
-    if (!PublicationOpen(publicationState)) {
-        return false;
-    }
-    ZForwarding* forwarding = MapGet(g_entries, regionStart);
-    const uint64_t generation = PublicationGeneration(publicationState);
-    const bool usable = forwarding != nullptr && forwarding->start() == regionStart &&
-        forwarding->size() >= regionSize && forwarding->page() == region &&
-        forwarding->page_life_current() &&
-        forwarding->publication_generation() == generation;
-    if (forwarding != nullptr && !usable) {
-        // Replacing any carrier under an open generation would create two table
-        // identities for one cycle. Seal, drain, and require a new prepare.
-        SealPublicationLocked(regionStart, regionSize);
-        forwarding->drain_table_readers();
-        MapPut(g_entries, regionStart, regionSize, nullptr);
-        if (MapGet(g_membership, regionStart) == forwarding) {
-            MapPut(g_membership, regionStart, regionSize, nullptr);
-        }
-        Retire(forwarding);
-        return false;
-    }
-    if (forwarding == nullptr) {
-        // Two entries preserve the existing armed-miss semantics and membership publication,
-        // without zeroing a capacity-sized table before marking has established live bytes.
-        ZForwarding* created = ZForwarding::alloc(1, regionStart, g_entries.base(), regionSize, region,
-                                                 region->GetRegionLifeId(), true);
-        if (created == nullptr) {
-            return false;
-        }
-        created->set_publication_generation(generation);
-        StampTableCoverage(created, region);
-        MapPut(g_entries, regionStart, regionSize, created);
-        forwarding = created;
-    }
-    MapPut(g_membership, regionStart, regionSize, forwarding);
-    return true;
-}
-
-void ForwardingTable::Remove(MAddress regionStart, size_t regionSize)
-{
-    if (!Ready() || regionSize == 0) {
-        return;
-    }
-    MapPut(g_membership, regionStart, regionSize, nullptr);
-}
-
-namespace {
-void DrainPublicationOwners(ZForwarding* forwarding);
-} // namespace
-
-void ForwardingTable::RetireMembershipAtDispel(MAddress regionStart, size_t regionSize)
-{
-    if (!Ready() || regionSize == 0) {
-        return;
-    }
-    std::lock_guard<std::mutex> lock(g_installLock);
-    // Seal before unlinking, the same order ClearEntries uses: a would-be publisher that loses
-    // this lock then observes the tombstone instead of an open generation. DispelGhostFromRegion
-    // runs after in-place claim has refused late retainers and waited out existing readers, so no
-    // Publication owner can still need this generation open (zForwarding.cpp:171-181).
-    SealPublicationLocked(regionStart, regionSize);
-    // One unlink edge, the way ZGC has one: ZRelocationSet::reset destroys every ZForwarding the
-    // finished set owned (zRelocationSet.cpp:191-197), ZForwardingTable::get answers only for a
-    // page still in the live set (zForwardingTable.inline.hpp:36-46), and a ZForwarding detaches
-    // when the relocation that created it ends (zForwarding.cpp:171-181).  Keeping the entry map
-    // linked until a later free left the finished cycle's receipts queryable, and under in-place
-    // compaction a finished cycle's destinations are live addresses of the next cycle: querying
-    // them a second time returns the destination the *same* shift already produced, one shift
-    // further down the page.  Unlink both maps here so the finished set can answer nothing.
-    ZForwarding* tab = MapGet(g_entries, regionStart);
-    if (tab != nullptr && tab->start() == regionStart) {
-        DrainPublicationOwners(tab);
-    }
-    (void)MapExchange(g_entries, regionStart, nullptr);
-    MapPut(g_entries, regionStart, regionSize, nullptr);
-    MapPut(g_membership, regionStart, regionSize, nullptr);
-    if (tab != nullptr && tab->start() == regionStart) {
-        Retire(tab);
-    }
-    {
-        std::lock_guard<std::mutex> retiredLock(g_retiredLock);
-        RegionInfo* page = RegionInfo::TryGetRegionInfoAt(regionStart);
-        if (page != nullptr && page->IsGhostFromRegion()) {
-            page->ClearGhostFromRegionBits();
-        }
-        if (page != nullptr) {
-            LiveInfoArena::GetLiveInfoArena().RecycleOwnerBitmaps(page->GetLiveInfo());
-        }
-    }
-}
-
-namespace {
-void DrainPublicationOwners(ZForwarding* forwarding)
-{
-    if (forwarding == nullptr) {
-        return;
-    }
-    forwarding->drain_table_readers();
-}
-} // namespace
-
-ZForwarding* ForwardingTable::EnsureEntriesLocked(RegionInfo* region)
-{
-    if (!Ready() || region == nullptr) {
-        return nullptr;
-    }
-    const MAddress start = region->GetRegionStart();
-    const size_t regionSize = region->GetRegionSize();
-    zoffset startOffset;
-    if (!g_entries.offset_for_address(start, &startOffset)) {
-        return nullptr;
-    }
-    const uint64_t publicationState = PublicationStateAt(start);
-    if (!PublicationOpen(publicationState)) {
-        return nullptr;
-    }
-    const uint64_t generation = PublicationGeneration(publicationState);
-    ZForwarding* previous = g_entries.get(startOffset);
-    if (previous != nullptr && !previous->is_provisional() && previous->start() == start &&
-        previous->size() >= regionSize && previous->page() == region &&
-        previous->page_life_current() &&
-        previous->publication_generation() == generation) {
-        return previous;
-    }
-    // A malformed table from this same open generation is not replaceable: a
-    // copier could already carry its identity. Seal it and require the next
-    // explicit PreparePublicationGeneration instead of silently installing a
-    // second identity under late consumers.
-    if (previous != nullptr && previous->publication_generation() == generation) {
-        SealPublicationLocked(start, regionSize);
-        DrainPublicationOwners(previous);
-        g_entries.put(startOffset, regionSize, nullptr);
-        if (MapGet(g_membership, start) == previous) {
-            MapPut(g_membership, start, regionSize, nullptr);
-        }
-        Retire(previous);
-        return nullptr;
-    }
-    const size_t objectCountUpperBound = ObjectCountUpperBound(region, regionSize);
-    const RegionLifeId life = region->GetRegionLifeId();
-    ZForwarding* created = ZForwarding::alloc(objectCountUpperBound, start, g_entries.base(), regionSize, region, life, false,
-                                                installArena);
-    if (created == nullptr) {
-        SealPublicationLocked(start, regionSize);
-        return nullptr;
-    }
-    created->set_publication_generation(generation);
-    StampTableCoverage(created, region);
-    // Keep the previous table mapped until every copier carrying it has
-    // inserted its receipt. g_installLock prevents a new acquisition while the
-    // old generation drains.
-    DrainPublicationOwners(previous);
-    g_entries.put(startOffset, regionSize, created);
-    if (previous != nullptr && MapGet(g_membership, start) == previous) {
-        MapPut(g_membership, start, regionSize, created);
-    }
-    if (previous != nullptr) {
-        Retire(previous);
-    }
-    return created;
-}
-
-void ForwardingTable::ClearEntries(MAddress regionStart, size_t regionSize)
-{
-    if (!Ready() || regionSize == 0) {
-        return;
-    }
-    std::lock_guard<std::mutex> lock(g_installLock);
-    // The tombstone is published before claim/drain. A late before-copy or
-    // after-copy acquisition that loses this lock therefore fails closed even
-    // after g_entries has been unlinked.
-    SealPublicationLocked(regionStart, regionSize);
-    ZForwarding* tab = MapGet(g_entries, regionStart);
-    if (tab != nullptr && tab->start() == regionStart) {
-        // Seal while the table is still mapped. Existing Publication owners can
-        // finish insert/publish; new owners cannot pass g_installLock. Only then
-        // may reset unlink the forwarding (zGeneration.cpp:276-284).
-        DrainPublicationOwners(tab);
-    }
-    (void)MapExchange(g_entries, regionStart, nullptr);
-    MapPut(g_entries, regionStart, regionSize, nullptr);
-    if (tab != nullptr && tab->start() == regionStart) {
-        Retire(tab);
-    }
-}
-
-static void UnlinkRetired(ZForwarding* tab)
-{
-    if (tab == nullptr) {
-        return;
-    }
-    // Membership and entries may still name a retired object (ExpireKept
-    // ClearEntries parks it; get() must stay valid until the object is
-    // actually freed). Null both before Destroy so get() cannot UAF
-    // (zForwardingTable.inline.hpp:56-62 remove, then arena recycle).
-    if (MapGet(g_membership, tab->start()) == tab) {
-        MapPut(g_membership, tab->start(), tab->size(), nullptr);
-    }
-    if (MapGet(g_entries, tab->start()) == tab) {
-        MapPut(g_entries, tab->start(), tab->size(), nullptr);
-    }
-}
-
-static bool ReclaimWhyForceCoverageComplete(const char* why)
-{
-    if (why == nullptr) {
-        return false;
-    }
-    if (std::strcmp(why, "gc-unit-fixture-coverage-complete") == 0 ||
-        std::strcmp(why, "gc-unit-explicit-coverage") == 0 ||
-        std::strstr(why, "cleanup") != nullptr) {
-        return true;
-    }
-    return false;
-}
-
-static bool CoverageEpochSatisfied(ZForwarding* tab)
-{
-    if (tab == nullptr) {
-        return false;
-    }
-    const Generation gen = static_cast<Generation>(tab->table_generation());
-    const GCCycleSnapshot snap = Heap::GetHeap().GetCollector().GetCycleSnapshot(CycleOf(gen));
-    return CycleMarkSatisfied(snap, tab->required_mark_epoch());
-}
-
-static bool GhostCarrierHeld(ZForwarding* tab)
-{
-    if (tab == nullptr) {
-        return false;
-    }
-    RegionInfo* page = tab->page();
-    if (page == nullptr || page->GetRegionLifeId() != tab->page_life_id()) {
-        return false;
-    }
-    return page->IsGhostFromRegion();
-}
-
-bool ForwardingTable::RetiredDestroyEligible(ZForwarding* tab)
-{
-    if (tab == nullptr) {
-        return false;
-    }
-    if (!CoverageEpochSatisfied(tab)) {
-        return false;
-    }
-    return tab->table_readers() == 0 && tab->external_owners() == 0 && !GhostCarrierHeld(tab);
-}
-
-void ForwardingTable::Retire(ZForwarding* tab)
-{
-    if (tab == nullptr) {
-        return;
-    }
-    std::lock_guard<std::mutex> lock(g_retiredLock);
-    g_retired.push_back(tab);
-    g_retiredTotal.fetch_add(1, std::memory_order_relaxed);
-}
-
-void ForwardingTable::ReclaimRetiredImpl(const char* why, const Generation* only)
-{
-    std::vector<ZForwarding*> candidates;
-    std::vector<ZForwarding*> deferred;
-    std::vector<ZForwarding*> victims;
-    size_t stillHeld = 0;
-    {
-        // ClearEntries/EnsureEntries take install before Retire takes retired;
-        // keep that lock order. Retired lookups block here instead of observing
-        // a transient empty vector while a required carrier is classified.
-        std::lock_guard<std::mutex> installLock(g_installLock);
-        std::lock_guard<std::mutex> retiredLock(g_retiredLock);
-        candidates = g_retired;
-        for (ZForwarding* tab : g_retiredPrev) {
-            candidates.push_back(tab);
-        }
-        for (ZForwarding* tab : candidates) {
-        }
-        const bool forceCoverageComplete = ReclaimWhyForceCoverageComplete(why);
-        g_retired.clear();
-        g_retiredPrev.clear();
-        for (ZForwarding* tab : candidates) {
-            if (tab == nullptr) {
-                continue;
-            }
-            if (only != nullptr && static_cast<Generation>(tab->table_generation()) != *only) {
-                deferred.push_back(tab);
-                continue;
-            }
-            const bool ghostHeldNow = GhostCarrierHeld(tab);
-            if (ghostHeldNow) {
-                deferred.push_back(tab);
-                continue;
-            }
-            if ((forceCoverageComplete || CoverageEpochSatisfied(tab)) && tab->page() != nullptr &&
-                tab->page()->metadata.fwdOwner.load(std::memory_order_acquire) == tab) {
-                (void)ForwardingTable::UnbindPageOwnerLocked(tab->page(), false);
-            }
-            if (tab->table_readers() == 0 && tab->external_owners() == 0 &&
-                (forceCoverageComplete || ForwardingTable::RetiredDestroyEligible(tab))) {
-                // Prevent a new table user before dropping the install lock.
-                // Destruction may run outside the lock only after both maps
-                // and the retired lists have relinquished this identity.
-                UnlinkRetired(tab);
-                victims.push_back(tab);
-            } else {
-                deferred.push_back(tab);
-            }
-        }
-        g_retired = deferred;
-        stillHeld = g_retired.size();
-    }
-    for (ZForwarding* tab : victims) {
-        tab->Destroy();
-    }
-    if (!candidates.empty()) {
-        const uint64_t done = victims.empty()
-            ? g_reclaimedTotal.load(std::memory_order_relaxed)
-            : g_reclaimedTotal.fetch_add(victims.size(), std::memory_order_relaxed) + victims.size();
-        LOG(RTLOG_ERROR,
-            "[FWDTABLE][reclaim] why=%s freed=%zu deferred=%zu coverage_complete=%u "
-            "retired_total=%lu reclaimed_total=%lu",
-            why == nullptr ? "?" : why, victims.size(), stillHeld, stillHeld == 0 ? 1u : 0u,
-            g_retiredTotal.load(std::memory_order_relaxed), done);
-    }
-}
-
-void ForwardingTable::ReclaimRetired(const char* why)
-{
-    ReclaimRetiredImpl(why, nullptr);
+    ZForwarding* forwarding = get(regionStart);
+    return forwarding != nullptr && forwarding->start() == regionStart &&
+        forwarding->size() == regionSize && forwarding->page() == region && forwarding->page_life_current();
 }
 
 void ForwardingTable::ResetRelocationSet(Generation gen)
 {
-    const char* why =
-        gen == Generation::Old ? "old-reset-relocation-set" : "young-reset-relocation-set";
-    ReclaimRetiredImpl(why, &gen);
-}
-
-size_t ForwardingTable::RetiredQueueSize()
-{
-    std::lock_guard<std::mutex> lock(g_retiredLock);
-    return g_retired.size() + g_retiredPrev.size();
+    // The generation reaches this edge after its last mark/remap consumer.
+    // Page retains protect source bytes; they do not extend forwarding lifetime.
+    std::lock_guard<std::mutex> lock(g_installLock);
+    RelocationSet& set = g_relocationSets[static_cast<size_t>(gen)];
+    for (ZForwarding* forwarding : set.forwardings) {
+        remove(forwarding);
+    }
+    for (ZForwarding* forwarding : set.forwardings) {
+        RegionInfo* page = RegionInfo::TryGetRegionInfoAt(forwarding->start());
+        if (page != nullptr && page->metadata.fwdOwner.load(std::memory_order_acquire) == forwarding) {
+            page->metadata.fwdOwner.store(nullptr, std::memory_order_release);
+        }
+        forwarding->~ZForwarding();
+    }
+    set.forwardings.clear();
+    set.arena.reset();
 }
 
 ForwardingTable::Publication ForwardingTable::RetainCovering(MAddress from)
 {
     std::lock_guard<std::mutex> lock(g_installLock);
     ZForwarding* tab = GetCovering(from);
-    if (tab == nullptr || !tab->retain_table()) {
+    if (tab == nullptr) {
         return Publication();
     }
     return Publication(tab);
 }
 
-bool ForwardingTable::RetiredCovers(MAddress regionStart, size_t regionSize)
-{
-    if (regionSize == 0) {
-        return false;
-    }
-    const MAddress regionEnd = regionStart + regionSize;
-    std::lock_guard<std::mutex> lock(g_retiredLock);
-    auto covers = [regionStart, regionEnd](const std::vector<ZForwarding*>& tables) {
-        for (ZForwarding* tab : tables) {
-            if (tab == nullptr) {
-                continue;
-            }
-            const MAddress tabStart = tab->start();
-            const MAddress tabEnd = tabStart + tab->size();
-            if (tabStart < regionEnd && regionStart < tabEnd) {
-                return true;
-            }
-        }
-        return false;
-    };
-    return covers(g_retired) || covers(g_retiredPrev);
-}
+ZForwarding* ForwardingTable::GetEntries(MAddress addr) { return get(addr); }
 
-bool ForwardingTable::HasLiveCarrier(MAddress regionStart, size_t regionSize)
-{
-    if (!Ready() || regionSize == 0) {
-        return false;
-    }
-    if (GetEntries(regionStart) != nullptr) {
-        return true;
-    }
-    return RetiredCovers(regionStart, regionSize);
-}
-
-ZForwarding* ForwardingTable::GetEntries(MAddress addr)
-{
-    if (!Ready()) {
-        return nullptr;
-    }
-    ZForwarding* forwarding = MapGet(g_entries, addr);
-    if (forwarding != nullptr && !forwarding->page_life_current()) {
-        return nullptr;
-    }
-    return forwarding;
-}
-
-ZForwarding* ForwardingTable::GetCovering(MAddress addr)
-{
-    ZForwarding* armed = GetEntries(addr);
-    if (armed != nullptr) {
-        return armed;
-    }
-    ZForwarding* member = Get(addr);
-    if (member != nullptr) {
-        return member;
-    }
-    std::lock_guard<std::mutex> lock(g_retiredLock);
-    auto scan = [&](const std::vector<ZForwarding*>& gens) -> ZForwarding* {
-        for (auto it = gens.rbegin(); it != gens.rend(); ++it) {
-            ZForwarding* tab = *it;
-            if (tab != nullptr && tab->covers(addr)) {
-                return tab;
-            }
-        }
-        return nullptr;
-    };
-    if (ZForwarding* tab = scan(g_retired)) {
-        return tab;
-    }
-    return scan(g_retiredPrev);
-}
+ZForwarding* ForwardingTable::GetCovering(MAddress addr) { return get(addr); }
 
 void ForwardingTable::VisitAll(const std::function<void(ZForwarding*)>& visitor)
 {
-    if (!Ready() || visitor == nullptr) {
-        return;
-    }
-    std::unordered_set<ZForwarding*> seen;
-    auto emit = [&](ZForwarding* tab) {
-        if (tab == nullptr || !seen.insert(tab).second) {
-            return;
-        }
-        visitor(tab);
-    };
-    g_entries.visit_unique(emit);
-    g_membership.visit_unique(emit);
-    std::lock_guard<std::mutex> lock(g_retiredLock);
-    for (ZForwarding* tab : g_retired) {
-        emit(tab);
-    }
-    for (ZForwarding* tab : g_retiredPrev) {
-        emit(tab);
-    }
+    if (Ready() && visitor != nullptr) g_entries.visit_unique(visitor);
 }
 
 bool ForwardingTable::PublishFromPageView(RegionInfo* region, LiveInfo* liveInfo, uint64_t epoch,
@@ -826,7 +275,6 @@ bool ForwardingTable::PublishFromPageView(RegionInfo* region, LiveInfo* liveInfo
     if (previous != carrier) {
         CHECK_DETAIL(UnbindPageOwnerLocked(region, false),
                      "replacing retained forwarding owner region=%p", region);
-        carrier->retain_owner();
         region->metadata.fwdOwner.store(carrier, std::memory_order_release);
     }
     return true;
@@ -846,14 +294,13 @@ bool ForwardingTable::UnbindPageOwnerLocked(RegionInfo* region, bool allowExclus
     // A prepared but never submitted page has only its construction token.
     // No queue/scope may carry it and no payload reader may remain. Finish
     // that token rather than resetting a live forwarding to an idle state.
-    if (refs == 1 && owner->external_owners() == 1 && owner->claim()) {
+    if (refs == 1 && owner->claim()) {
         owner->release_page();
         owner->mark_done();
         refs = 0;
     }
     if (refs != 0 && !(allowExclusive && refs == -1)) return false;
     region->metadata.fwdOwner.store(nullptr, std::memory_order_release);
-    owner->release_owner();
     return true;
 }
 
@@ -886,38 +333,15 @@ bool ZForwarding::page_life_current() const
 ForwardingTable::Publication ForwardingTable::EnsurePublicationBeforeCopy(
     RegionInfo* region, MAddress from)
 {
-    if (!Ready() || region == nullptr) {
-        return Publication();
-    }
-    std::lock_guard<std::mutex> lock(g_installLock);
-    ZForwarding* tab = EnsureEntriesLocked(region);
-    const uint64_t state = PublicationStateAt(region->GetRegionStart());
-    if (tab == nullptr || tab->is_provisional() || tab->start() != region->GetRegionStart() ||
-        tab->size() < region->GetRegionSize() || !tab->covers(from) || !PublicationOpen(state) ||
-        tab->publication_generation() != PublicationGeneration(state) || !tab->retain_table()) {
-        return Publication();
-    }
-    return Publication(tab);
+    return RetainOpenPublicationAfterCopy(region, from);
 }
 
 ForwardingTable::Publication ForwardingTable::RetainOpenPublicationAfterCopy(
     RegionInfo* region, MAddress from)
 {
-    if (!Ready() || region == nullptr) {
-        return Publication();
-    }
-    std::lock_guard<std::mutex> lock(g_installLock);
-    const uint64_t state = PublicationStateAt(region->GetRegionStart());
-    if (!PublicationOpen(state)) {
-        return Publication();
-    }
-    ZForwarding* tab = MapGet(g_entries, from);
-    if (tab == nullptr || tab->is_provisional() || tab->start() != region->GetRegionStart() ||
-        tab->size() < region->GetRegionSize() || !tab->covers(from) ||
-        tab->publication_generation() != PublicationGeneration(state) || !tab->retain_table()) {
-        return Publication();
-    }
-    return Publication(tab);
+    ZForwarding* forwarding = get(from);
+    return forwarding != nullptr && forwarding->page() == region && forwarding->page_life_current()
+        ? Publication(forwarding) : Publication();
 }
 
 ZForwarding::Receipt ForwardingTable::InstallMapping(
@@ -928,12 +352,6 @@ ZForwarding::Receipt ForwardingTable::InstallMapping(
                  "forwarding publication responsibility missing from=%#zx to=%#zx tab=%p",
                  static_cast<size_t>(from), static_cast<size_t>(to), tab);
     const ZForwarding::Receipt receipt = tab->insert_receipt(from, to);
-    if (receipt.address != 0) {
-        // Compact/kept/in-place/promote/unmovable/ForwardRegion all publish here.
-        // ReclaimRetired must not unlink a table that still has queryable receipts
-        // (zRelocationSet.cpp:191-200; zForwarding.cpp:134-180).
-        tab->note_retired_required();
-    }
     M0Correlation::PropagateForwarding(from, receipt.address, receipt.address, receipt.installed);
     return receipt;
 }
@@ -946,7 +364,6 @@ MAddress ForwardingTable::InsertMapping(const Publication& publication, MAddress
 void ForwardingTable::Publication::Release()
 {
     if (forwarding != nullptr) {
-        forwarding->release_table();
         forwarding = nullptr;
     }
 }
@@ -1055,78 +472,6 @@ static void CaptureLookupCarrier(ZForwarding* table, LookupCarrierWitness* witne
     witness->valid = true;
 }
 
-static MAddress FindRetiredToImpl(MAddress from, ForwardingTable::ToAnswer* answer, bool require = false,
-                                  uintptr_t* tableId = nullptr, LookupCarrierWitness* witness = nullptr)
-{
-    std::lock_guard<std::mutex> lock(g_retiredLock);
-    bool searched = false;
-    auto scan = [&](const std::vector<ZForwarding*>& gens) -> MAddress {
-        for (auto it = gens.rbegin(); it != gens.rend(); ++it) {
-            ZForwarding* tab = *it;
-            // A retired forwarding is independent of its source page. The page
-            // may already have returned to the allocator, while this immutable
-            // span and its entries remain live until relocation-set reset
-            // (zRelocate.cpp:1041-1047; zRelocationSet.cpp:191-197).
-            if (tab == nullptr || !tab->covers(from)) {
-                continue;
-            }
-            searched = true;
-            if (tableId != nullptr && *tableId == 0) {
-                *tableId = reinterpret_cast<uintptr_t>(tab);
-            }
-            CaptureLookupCarrier(tab, witness);
-        const MAddress to = tab->find(from);
-            if (to != 0) {
-                // A hit identifies the table that supplied the resolved entry,
-                // not the active candidate or the first covering retired table.
-                // Capture while g_retiredLock still protects this table. Keep
-                // the first-candidate diagnostic policy only for lookup misses.
-                if (tableId != nullptr) {
-                    *tableId = reinterpret_cast<uintptr_t>(tab);
-                }
-                if (witness != nullptr) {
-                    *witness = LookupCarrierWitness{};
-                    CaptureLookupCarrier(tab, witness);
-                }
-                if (require) {
-                    tab->note_retired_required();
-                }
-                return to;
-            }
-        }
-        return 0;
-    };
-    const MAddress fresh = scan(g_retired);
-    if (fresh != 0) {
-        if (answer != nullptr) {
-            *answer = ForwardingTable::ToAnswer::ArmedHit;
-        }
-        return fresh;
-    }
-    const MAddress prev = scan(g_retiredPrev);
-    if (prev != 0) {
-        if (answer != nullptr) {
-            *answer = ForwardingTable::ToAnswer::ArmedHit;
-        }
-        return prev;
-    }
-    if (answer != nullptr) {
-        if (searched) {
-            *answer = ForwardingTable::ToAnswer::ArmedMiss;
-        } else {
-            *answer = ForwardingTable::ToAnswer::Unarmed;
-        }
-    }
-    return 0;
-}
-
-MAddress ForwardingTable::FindRetiredTo(MAddress from) { return FindRetiredToImpl(from, nullptr); }
-
-MAddress ForwardingTable::RequireRetiredTo(MAddress from)
-{
-    return FindRetiredToImpl(from, nullptr, true);
-}
-
 MAddress ForwardingTable::FindTo(MAddress from)
 {
     std::lock_guard<std::mutex> lock(g_installLock);
@@ -1153,113 +498,19 @@ bool ForwardingTable::EntriesArmed(MAddress from) { return GetEntries(from) != n
 
 ForwardingTable::LookupResult ForwardingTable::LookupTo(MAddress from)
 {
-    // zForwarding.cpp:86-108,134-181. Resolve the active slot and retain it
-    // under the same install lock that seals/unlinks it. The lookup may then
-    // run lock-free while ClearEntries drains this exact ownership token.
-    ZForwarding* retained = nullptr;
-    bool activeCandidate = false;
-    bool activeRejected = false;
-    bool currentMembership = false;
-    uintptr_t tableId = 0;
-    LookupCarrierWitness carrierWitness;
-    {
-        std::lock_guard<std::mutex> lock(g_installLock);
-        ZForwarding* candidate = Ready() ? MapGet(g_entries, from) : nullptr;
-        currentMembership = Ready() && MapGet(g_membership, from) != nullptr;
-        activeCandidate = candidate != nullptr;
-        if (candidate != nullptr) {
-            tableId = reinterpret_cast<uintptr_t>(candidate);
-            CaptureLookupCarrier(candidate, &carrierWitness);
-            if (!candidate->retain_table()) {
-                activeRejected = true;
-            } else {
-                retained = candidate;
-            }
-        }
-    }
-    bool activeSearched = false;
-    if (retained != nullptr) {
-        activeSearched = true;
-#if defined(MRT_TESTABLE_INTERNALS)
-        ForwardingTable::LookupRetainHook hook = g_lookupRetainHook.load(std::memory_order_acquire);
-        if (hook != nullptr) {
-            hook(g_lookupRetainHookContext.load(std::memory_order_acquire));
-        }
-#endif
-        const MAddress to = retained->find(from);
-        retained->release_table();
-        if (to != 0) {
-            g_armedHit.fetch_add(1, std::memory_order_relaxed);
-            return { to, ToAnswer::ArmedHit, ToUnavailableCause::None, activeCandidate,
-                     true, ToAnswer::ArmedHit, ToAnswer::Unarmed, false,
-                     currentMembership, tableId, carrierWitness.start, carrierWitness.publicationGeneration,
-                     carrierWitness.fromPageEpoch, carrierWitness.fromPageLifeId, carrierWitness.valid };
-        }
-    }
-    ToAnswer retiredAnswer = ToAnswer::Unarmed;
-    const MAddress retired = FindRetiredToImpl(from, &retiredAnswer, false, &tableId, &carrierWitness);
-    if (retired != 0) {
-        g_armedHit.fetch_add(1, std::memory_order_relaxed);
-        return { retired, ToAnswer::ArmedHit, ToUnavailableCause::None, activeCandidate,
-                 activeSearched, activeSearched ? ToAnswer::ArmedMiss : ToAnswer::Unarmed,
-                 ToAnswer::ArmedHit, false, currentMembership, tableId, carrierWitness.start,
-                 carrierWitness.publicationGeneration, carrierWitness.fromPageEpoch,
-                 carrierWitness.fromPageLifeId, carrierWitness.valid };
-    }
-    // A carrier found in the active slot but refused by retain is a lifecycle
-    // failure. It must not be downgraded to an ordinary armed miss merely
-    // because the retired scan also saw ArmedMiss (zForwarding.cpp:171-181).
-    const bool publicationClosed = PublicationClosedAt(from);
-    if (activeRejected || retiredAnswer == ToAnswer::Unavailable || publicationClosed) {
-        uint8_t causeBits = 0;
-        if (activeRejected) {
-            causeBits |= static_cast<uint8_t>(ToUnavailableCause::ActiveRetainRejected);
-        }
-        if (retiredAnswer == ToAnswer::Unavailable) {
-            causeBits |= static_cast<uint8_t>(ToUnavailableCause::RetiredUnavailable);
-        }
-        if (publicationClosed) {
-            causeBits |= static_cast<uint8_t>(ToUnavailableCause::PublicationClosed);
-            if (retiredAnswer == ToAnswer::Unarmed) {
-                causeBits |= static_cast<uint8_t>(ToUnavailableCause::TableDestroyed);
-            } else if (retiredAnswer == ToAnswer::ArmedMiss) {
-                causeBits |= static_cast<uint8_t>(ToUnavailableCause::NeverInstalled);
-            }
-        }
-        const LookupResult result{
-            0,
-            ToAnswer::Unavailable,
-            static_cast<ToUnavailableCause>(causeBits),
-            activeCandidate,
-            activeSearched,
-            activeRejected ? ToAnswer::Unavailable
-                           : (activeSearched ? ToAnswer::ArmedMiss : ToAnswer::Unarmed),
-            retiredAnswer,
-            publicationClosed,
-            currentMembership,
-            tableId,
-            carrierWitness.start,
-            carrierWitness.publicationGeneration,
-            carrierWitness.fromPageEpoch,
-            carrierWitness.fromPageLifeId,
-            carrierWitness.valid,
-        };
-        g_unavailable.fetch_add(1, std::memory_order_relaxed);
-        return result;
-    }
-    if (activeSearched || retiredAnswer == ToAnswer::ArmedMiss) {
-        g_armedMiss.fetch_add(1, std::memory_order_relaxed);
-        return { 0, ToAnswer::ArmedMiss, ToUnavailableCause::None, activeCandidate,
-                 activeSearched, activeSearched ? ToAnswer::ArmedMiss : ToAnswer::Unarmed,
-                 retiredAnswer, publicationClosed, currentMembership, tableId, carrierWitness.start,
-                 carrierWitness.publicationGeneration, carrierWitness.fromPageEpoch,
-                 carrierWitness.fromPageLifeId, carrierWitness.valid };
-    }
-    g_unarmed.fetch_add(1, std::memory_order_relaxed);
-    return { 0, ToAnswer::Unarmed, ToUnavailableCause::None, activeCandidate, false,
-             ToAnswer::Unarmed, retiredAnswer, publicationClosed, currentMembership, tableId, carrierWitness.start,
-             carrierWitness.publicationGeneration, carrierWitness.fromPageEpoch,
-             carrierWitness.fromPageLifeId, carrierWitness.valid };
+    ZForwarding* forwarding = get(from);
+    LookupCarrierWitness witness;
+    CaptureLookupCarrier(forwarding, &witness);
+    const MAddress to = forwarding == nullptr ? 0 : forwarding->find(from);
+    const ToAnswer answer = forwarding == nullptr ? ToAnswer::Unarmed
+        : (to == 0 ? ToAnswer::ArmedMiss : ToAnswer::ArmedHit);
+    if (answer == ToAnswer::ArmedHit) g_armedHit.fetch_add(1, std::memory_order_relaxed);
+    else if (answer == ToAnswer::ArmedMiss) g_armedMiss.fetch_add(1, std::memory_order_relaxed);
+    else g_unarmed.fetch_add(1, std::memory_order_relaxed);
+    return {to, answer, ToUnavailableCause::None, forwarding != nullptr, forwarding != nullptr,
+            answer, ToAnswer::Unarmed, false, forwarding != nullptr,
+            reinterpret_cast<uintptr_t>(forwarding), witness.start, witness.publicationGeneration,
+            witness.fromPageEpoch, witness.fromPageLifeId, witness.valid};
 }
 
 ForwardingTable::NeverInstalledSnapshot ForwardingTable::CaptureNeverInstalledSnapshot(MAddress target)
@@ -1269,7 +520,6 @@ ForwardingTable::NeverInstalledSnapshot ForwardingTable::CaptureNeverInstalledSn
     // Keep the established install -> retired lock order.  The snapshot copies
     // scalar identity while every candidate remains protected from teardown.
     std::lock_guard<std::mutex> installLock(g_installLock);
-    std::lock_guard<std::mutex> retiredLock(g_retiredLock);
 
     auto visit = [&](ZForwarding* tab, bool active) {
         if (tab == nullptr) {
@@ -1280,10 +530,8 @@ ForwardingTable::NeverInstalledSnapshot ForwardingTable::CaptureNeverInstalledSn
             state = CarrierState::Retired;
         } else if (tab->is_provisional()) {
             state = CarrierState::ActiveUnpublished;
-        } else if (PublicationOpen(PublicationStateAt(tab->start()))) {
-            state = CarrierState::ActiveOpen;
         } else {
-            state = CarrierState::ActiveClosed;
+            state = CarrierState::ActiveOpen;
         }
 
         if (tab->covers(target)) {
@@ -1303,7 +551,6 @@ ForwardingTable::NeverInstalledSnapshot ForwardingTable::CaptureNeverInstalledSn
                 }
                 out.state = state;
                 out.answer = to == 0 ? ToAnswer::ArmedMiss : ToAnswer::ArmedHit;
-                out.pendingDestroy = !active && RetiredDestroyEligible(tab);
             } else {
                 snapshot.carrierOverflow = true;
             }
@@ -1341,12 +588,6 @@ ForwardingTable::NeverInstalledSnapshot ForwardingTable::CaptureNeverInstalledSn
     // not enumerate it and then need a bounded dedup ledger which could hide a
     // later covering table.
     visitActiveMap(g_entries);
-    for (auto it = g_retired.rbegin(); it != g_retired.rend(); ++it) {
-        visit(*it, false);
-    }
-    for (auto it = g_retiredPrev.rbegin(); it != g_retiredPrev.rend(); ++it) {
-        visit(*it, false);
-    }
     return snapshot;
 }
 
@@ -1362,15 +603,6 @@ void ForwardingTable::SetLookupRetainHook(LookupRetainHook hook, void* context)
     g_lookupRetainHook.store(hook, std::memory_order_release);
 }
 
-void ForwardingTable::ForcePublicationClosedForTest(MAddress address)
-{
-    std::lock_guard<std::mutex> lock(g_installLock);
-    ZForwarding* active = Ready() ? MapGet(g_entries, address) : nullptr;
-    CHECK_DETAIL(active != nullptr && active->covers(address),
-                 "NeverInstalled test fault needs an active covering carrier address=%p",
-                 reinterpret_cast<void*>(address));
-    SealPublicationLocked(active->start(), active->size());
-}
 #endif
 
 void ForwardingTable::NoteCompare(MAddress addr, bool legacy)
