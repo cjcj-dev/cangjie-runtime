@@ -69,6 +69,25 @@ GC_OTHER_VM_TEST(GenerationMark, YoungMarkWorkDoesNotConsumeOldStripes)
     fx.FreePlanted(live);
 }
 
+// Admission-side state invariant from ZGeneration::mark_object_if_active.
+// The real successful-pause publication is covered by the product call chain;
+// this focused test does not claim to execute FinishOldMark.
+GC_TEST(GenerationMark, MarkCompleteStopsOldPublication)
+{
+    GcHeapFixture fx;
+    MarkPublicationFixture mark;
+    mark.collector.MarkObjectIfActive(fx.obj0);
+    GC_EXPECT_EQ(mark.OldPending(), 1u);
+    mark.collector.oldCycle.PublishPhase(GC_PHASE_MARK_COMPLETE);
+    mark.collector.MarkObjectIfActive(fx.obj1);
+    GC_EXPECT_EQ(mark.OldPending(), 1u);
+    std::vector<BaseObject*> oldObjects;
+    mark.DrainDomain(*mark.collector.majorMarkDomain,
+                    [&](BaseObject* object, bool) { oldObjects.push_back(object); });
+    GC_EXPECT_EQ(oldObjects.size(), 1u);
+    GC_EXPECT_TRUE(oldObjects.front() == fx.obj0);
+}
+
 GC_TEST(GenerationMark, AllocatedBlackPublishesFollowWithoutSatbNode)
 {
     GcHeapFixture fx;
