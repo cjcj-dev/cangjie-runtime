@@ -42,7 +42,10 @@ public:
     }
 
     // zPageAllocator.cpp:702: remove cached vmem while the page allocator
-    // owner is held. A02c owns the tree/partition selection implementation.
+    // owner is held. Cache readers and maintenance retain their cache locks,
+    // so acquire those locks before deciding whether capacity is available.
+    // Lock order is allocator owner -> cache; never enter a saferegion here.
+    // A02c owns the tree/partition selection implementation.
     bool ClaimPageMemory(size_t num, uint32_t partition, PageMemory& memory)
     {
         CHECK(partition == 0);
@@ -50,10 +53,12 @@ public:
         bool tryDirtyTree = true;
         bool tryReleasedTree = true;
 
-        // try as hard as we can to take free regions for allocation.
+        // Inspect each cache to completion; a rejected extent is quarantined
+        // before continuing the same scan (zMappedCache.cpp:621).
         while (tryDirtyTree || tryReleasedTree) {
             // first try to get a dirty region.
-            if (tryDirtyTree && dirtyUnitTreeMutex.try_lock()) {
+            if (tryDirtyTree) {
+                std::unique_lock<std::mutex> cacheLock(dirtyUnitTreeMutex);
                 bool dirtyOk = false;
                 {
                     // TakeUnits may refresh the residual free-tree node via
@@ -72,20 +77,19 @@ public:
                     RegionInfo* dirtyRegion = RegionInfo::TryGetRegionInfoAt(start);
                     if (!FromPageDetach::FromPageDetachCheck(dirtyRegion,
                                                              FromPageDetach::Site::TAKE_DIRTY_REUSE)) {
-                        dirtyUnitTreeMutex.unlock();
+                        cacheLock.unlock();
                         AddDetachQuarantineUnits(idx, num, false, false);
                         continue;
                     }
                     memory = PageMemory{ idx, num, partition, true };
-                    dirtyUnitTreeMutex.unlock();
                     return true;
                 }
                 tryDirtyTree = false; // once we fail to take units, stop trying.
-                dirtyUnitTreeMutex.unlock();
             }
 
             // then try to get a released region.
-            if (tryReleasedTree && releasedUnitTreeMutex.try_lock()) {
+            if (tryReleasedTree) {
+                std::unique_lock<std::mutex> cacheLock(releasedUnitTreeMutex);
                 bool releasedOk = false;
                 {
                     FromPageDetach::ReusePermitScope treePermit;
@@ -100,20 +104,17 @@ public:
                         RegionInfo::TryGetRegionInfoAt(RegionInfo::GetUnitAddress(idx));
                     if (!FromPageDetach::FromPageDetachCheck(releasedRegion,
                                                              FromPageDetach::Site::TAKE_RELEASED_REUSE)) {
-                        releasedUnitTreeMutex.unlock();
+                        cacheLock.unlock();
                         AddDetachQuarantineUnits(idx, num, true, false);
                         continue;
                     }
                     memory = PageMemory{ idx, num, partition, false };
-                    releasedUnitTreeMutex.unlock();
                     return true;
                 }
                 tryReleasedTree = false; // once we fail to take units, stop trying.
-                releasedUnitTreeMutex.unlock();
             }
-            // Materialization and saferegion transitions happen after the
-            // allocator owner is released.
-            return false;
+            // Both caches have now answered under their locks, and neither
+            // supplied an eligible contiguous extent.
         }
         return false;
     }
