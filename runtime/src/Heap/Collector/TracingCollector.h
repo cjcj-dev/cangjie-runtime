@@ -284,6 +284,7 @@ public:
     {}
 
     ~TracingCollector() override = default;
+    MarkDomain* MajorMarkDomain() const { return majorMarkDomain.get(); }
     virtual void PreGarbageCollection(bool isConcurrent, uint64_t gcIndex);
     virtual void PostGarbageCollection(uint64_t gcIndex);
 
