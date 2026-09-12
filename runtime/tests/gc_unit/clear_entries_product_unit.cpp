@@ -448,7 +448,6 @@ struct CopyAdmissionWitness {
 std::atomic<uint32_t> CopyAdmissionWitness::hits { 0 };
 
 using ProductSetCopyAdmissionTestHook = void (*)(void (*)(RegionInfo*, BaseObject*));
-using ProductSetReceiptLifeRegisterHook = void (*)(void (*)(void*), void*);
 using ProductForcePublicationClosedForTest = void (*)(MAddress);
 
 ProductSetCopyAdmissionTestHook ProductSetCopyAdmissionTestHookFn()
@@ -459,16 +458,6 @@ ProductSetCopyAdmissionTestHook ProductSetCopyAdmissionTestHookFn()
     }
     return handle == nullptr ? nullptr : reinterpret_cast<ProductSetCopyAdmissionTestHook>(
         dlsym(handle, "MRT_SetCopyAdmissionTestHook"));
-}
-
-ProductSetReceiptLifeRegisterHook ProductSetReceiptLifeRegisterHookFn()
-{
-    void* handle = dlopen("libcangjie-runtime.so", RTLD_NOW | RTLD_NOLOAD);
-    if (handle == nullptr) {
-        handle = dlopen("libcangjie-runtime.so", RTLD_NOW);
-    }
-    return handle == nullptr ? nullptr : reinterpret_cast<ProductSetReceiptLifeRegisterHook>(
-        dlsym(handle, "_ZN12MapleRuntime15ForwardingTable26SetReceiptLifeRegisterHookEPFvPvES1_"));
 }
 
 ProductForcePublicationClosedForTest ProductForcePublicationClosedForTestFn()

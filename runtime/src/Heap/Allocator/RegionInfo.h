@@ -140,9 +140,9 @@ public:
         RETAINED_OP_PRESERVE_VALID = 1,
         RETAINED_OP_PRESERVE_EMPTY = 2,
         RETAINED_OP_PRESERVE_NEVER = 3,
-        RETAINED_OP_CLEAR_CHECKED = 4,   // CheckAndClearLiveInfo (RegionInfo.h:1271)
+        RETAINED_OP_CLEAR_CHECKED = 4,
         RETAINED_OP_CLEAR_ALL = 5,       // ClearLiveInfo (RegionInfo.h:1297)
-        RETAINED_OP_CLEAR_RANGE = 6,     // NullLiveInfoFieldsInRange (RegionInfo.h:1327)
+        RETAINED_OP_CLEAR_RANGE = 6,
         RETAINED_OP_COUNT = 7,
     };
 
@@ -334,12 +334,9 @@ public:
     // "painted with the current colour, after the flip" is equivalent to "names an object that
     // will not move this cycle", and ZGC's whole colour-epoch argument rests on that equivalence.
     //
-    // Ours enrols lazily: RouteRegion drives each region's RouteState out of NORMAL as forwarding
-    // reaches it.  If that happens after the flip, the equivalence breaks -- a value painted
-    // store-good in between is load-good and later names a from-version, which is exactly the
-    // measured FORWARD population (afterFlip=1, slotGood=1, hasTo=1, 20/20) whose targets must have
-    // had RouteState == NORMAL when they were painted, since every non-NORMAL target is already
-    // caught by the staleness predicate (ROUTEASK: 105 triggers, 100% covered).
+    // Pages join the relocation set when forwarding is installed (zRelocationSet.cpp
+    // install). A store-good value painted after relocate-start must already name a
+    // to-version or wait for the page worker (zRelocate.cpp:382-415).
     //
     // GCPhase is the cheap witness: PREFORWARD/FORWARD mean the relocate-start flip has run.
     static constexpr bool kEnrolTimeProbe = true;
@@ -1160,7 +1157,13 @@ public:
                 continue;
             }
             if (LIKELY(bitmap != nullptr)) {
-                CHECK(face.epoch.load(std::memory_order_acquire) == view.GetEpoch());
+                if (face.epoch.load(std::memory_order_acquire) != view.GetEpoch()) {
+                    if (IsGhostFromRegion()) {
+                        return bitmap;
+                    }
+                    bitmap->Reset();
+                    face.epoch.store(view.GetEpoch(), std::memory_order_release);
+                }
                 return bitmap;
             }
             RegionBitmap* newValue = reinterpret_cast<RegionBitmap*>(LiveInfo::TEMPORARY_PTR);
@@ -2356,10 +2359,8 @@ public:
 
     bool IsCompactRouteDestination(MAddress address) const
     {
-        // RouteState::COMPACTED is published only after CompactRegion has
-        // finished recording the dense-pack table. ZGC similarly blocks page
-        // access until in-place relocation is complete, then exposes the
-        // relocated objects (zRelocate.cpp:862-925,1013-1037).
+        // In-place relocation publishes done after the last insert
+        // (zRelocate.cpp:1137-1152). Compacted destinations are visible then.
         if (!IsCompacted()) {
             return false;
         }
@@ -2633,42 +2634,6 @@ public:
         }
     }
 
-    // the interface can only be used to clear live info after gc.
-    // Same rule for liveInfo / liveInfo0 / retained: if the slot still holds this LiveInfo*, drop it.
-    // Garbage is skipped here (may be mid-reuse); NullLiveInfoFieldsInRange covers garbage before
-    // ReleaseMemory so dangling into a dying tag cannot survive.
-    void CheckAndClearLiveInfo(LiveInfo* liveInfo)
-    {
-        // Garbage region may be reused by other thread. For the sake of safety, we don't clean it here.
-        // We will clean it before the region is accessible.
-        if (IsGarbageRegion()) {
-            return;
-        }
-        // Check the value whether is expected, in order to avoid resetting a reused region.
-        if (metadata.liveInfo == liveInfo) {
-            SurvNodeDiag::NoteClear(this, SurvNodeDiag::CLEAR_CHECK_AND_CLEAR, false);
-            metadata.liveInfo = nullptr;
-            // Tracking phase ended: live counter is no longer a mark-period truth.
-            __atomic_store_n(&metadata.liveByteCount, 0, std::memory_order_release);
-            __atomic_store_n(&metadata.liveObjectCount, 0, __ATOMIC_RELEASE);
-            __atomic_store_n(&metadata.largeLiveClaim, 0, __ATOMIC_RELEASE);
-        }
-        // Active from-page metadata is retired only by the forwarding drain.
-        // Mark-arena unbinding must not invalidate an older page incarnation.
-        if (metadata.retainedLiveInfo == liveInfo) {
-            NoteRetainedClear(RETAINED_OP_CLEAR_CHECKED);
-            metadata.retainedLiveInfo = nullptr;
-            // holderlive (F2): this unbind exists because the borrowed LiveInfo* is about to
-            // dangle — it says nothing about whether the snapshot is still true. When we own
-            // the bits, drop the pointer and keep the verdict.
-            if (metadata.retainedMarkWords != nullptr) {
-                return;
-            }
-            metadata.retainedLiveInfoEpoch = 0;
-            metadata.retainedLiveInfoCoveredUpTo = 0;
-            metadata.retainedLifeId = 0;
-        }
-    }
     template<Generation G>
     void ClearLiveInfo(MarkView<G> view)
     {
@@ -2695,12 +2660,9 @@ public:
         // publication; MarkObject/allocate-black publish on
         // their first 0→1 liveness write.
         ClearCurrentMarkFace();
-        // A mark start publishes fresh current-page liveness. Any historical
-        // from-page liveness is owned by the forwarding carrier and is not
-        // detached here.
-        if (metadata.liveInfo != nullptr) {
-            metadata.liveInfo = nullptr;
-        }
+        // zLiveMap.cpp:47-89: keep the allocated livemap on the page and reset
+        // bits on the next GetOrAllocMarkBitmap epoch mismatch. Ghost from-pages
+        // still referenced by forwarding keep the current LiveInfo pointer.
         if (G == Generation::Old) {
             NoteRetainedClear(RETAINED_OP_CLEAR_ALL);
             // A new major mark supersedes the retained major snapshot.  Young
@@ -2719,45 +2681,6 @@ public:
         __atomic_store_n(&metadata.liveObjectCount, 0, __ATOMIC_RELEASE);
         __atomic_store_n(&metadata.largeLiveClaim, 0, __ATOMIC_RELEASE);
         SetMarkFaceSealed(false);
-    }
-
-    // Structural: drop any liveInfo/liveInfo0/retained that land in [rangeStart, rangeStart+rangeSize).
-    // Called under STW immediately before ForwardDataSpace::ReleaseMemory so pointer validity
-    // is a structure guarantee (not a "do not read after phase X" convention). Covers garbage.
-    void NullLiveInfoFieldsInRange(uintptr_t rangeStart, size_t rangeSize)
-    {
-        auto inRange = [rangeStart, rangeSize](LiveInfo* p) -> bool {
-            if (p == nullptr || rangeSize == 0) {
-                return false;
-            }
-            uintptr_t addr = reinterpret_cast<uintptr_t>(p);
-            return addr >= rangeStart && addr < (rangeStart + rangeSize);
-        };
-        LiveInfo* liveInfo = __atomic_load_n(&metadata.liveInfo, std::memory_order_acquire);
-        if (reinterpret_cast<MAddress>(liveInfo) != LiveInfo::TEMPORARY_PTR && inRange(liveInfo)) {
-            SurvNodeDiag::NoteClear(this, SurvNodeDiag::CLEAR_NULL_IN_RANGE, false);
-            __atomic_store_n(&metadata.liveInfo, static_cast<LiveInfo*>(nullptr), std::memory_order_release);
-            // Tracking phase for this LiveInfo ended with its backing store about to vanish.
-            __atomic_store_n(&metadata.liveByteCount, 0, std::memory_order_release);
-            __atomic_store_n(&metadata.liveObjectCount, 0, __ATOMIC_RELEASE);
-            __atomic_store_n(&metadata.largeLiveClaim, 0, __ATOMIC_RELEASE);
-        }
-        if (inRange(GetLiveInfo0ForProbe())) {
-            // The livemap is inseparable from its forwarding incarnation.
-            ForwardingTable::ClearEntries(GetRegionStart(), GetRegionSize());
-        }
-        if (inRange(metadata.retainedLiveInfo)) {
-            NoteRetainedClear(RETAINED_OP_CLEAR_RANGE);
-            metadata.retainedLiveInfo = nullptr;
-            // holderlive (F2): same rule as CheckAndClearLiveInfo — the range is about to be
-            // madvise'd, so the pointer must go; an owned copy is not in that range.
-            if (metadata.retainedMarkWords != nullptr) {
-                return;
-            }
-            metadata.retainedLiveInfoEpoch = 0;
-            metadata.retainedLiveInfoCoveredUpTo = 0;
-            metadata.retainedLifeId = 0;
-        }
     }
 
     // ZForwarding::retain_page (zForwarding.cpp:86-108). Three-state: 0 refuses,

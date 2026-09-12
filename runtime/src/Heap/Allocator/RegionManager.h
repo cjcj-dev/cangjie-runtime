@@ -997,32 +997,6 @@ public:
         walk("largeTraceRegions", largeTraceRegions);
     }
 
-    // Null liveInfo fields whose pointers fall inside [rangeStart, rangeStart+rangeSize).
-    void NullLiveInfoFieldsInRange(uintptr_t rangeStart, size_t rangeSize)
-    {
-        auto nullOne = [rangeStart, rangeSize](RegionInfo* region) {
-            if (region != nullptr) {
-                region->NullLiveInfoFieldsInRange(rangeStart, rangeSize);
-            }
-        };
-        auto walk = [&nullOne](RegionList& list) {
-            list.VisitAllRegions([&nullOne](RegionInfo* region) { nullOne(region); });
-        };
-        walk(tlRegionList);
-        walk(recentFullRegionList);
-        walk(fromRegionList);
-        ghostFromRegionList.VisitAllGhostRegions(nullOne);
-        walk(unmovableFromRegionList);
-        walk(garbageRegionList);
-        walk(recentPinnedRegionList);
-        walk(oldPinnedRegionList);
-        walk(rawPointerPinnedRegionList);
-        walk(oldLargeRegionList);
-        walk(recentLargeRegionList);
-        walk(fullTraceRegions);
-        walk(largeTraceRegions);
-    }
-
 private:
     BaseObject* ComputeRoute(BaseObject* fromObj, RegionInfo* fromRegionInfo)
     {
