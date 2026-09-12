@@ -28,7 +28,7 @@
 #include "Collector/CopyCollector.h"
 #include "Heap/Collector/MarkEngine.h"
 #include "Heap/Collector/RemsetScanStats.h"
-#include "Heap/Verify/MutatorRelocate.h"
+
 #include "Mutator/MutatorManager.h"
 namespace MapleRuntime {
 class MarkLiveCache;
@@ -152,7 +152,7 @@ public:
         DLOG(FORWARD, "reset fwd table");
         theSpace.PrepareFromSpace<G>();
 
-        ForwardDataManager::GetForwardDataManager().ClearPreviousForwardData();
+        LiveInfoArena::GetLiveInfoArena().ClearPreviousForwardData();
     }
 
     RegionSpace& theSpace;
@@ -204,7 +204,7 @@ public:
     MRT_EXPORT RouteLookupTestResult RouteLookupForTest(BaseObject* fromObj);
 #endif
 
-    void Init() override { ForwardDataManager::GetForwardDataManager().InitializeForwardData(); }
+    void Init() override { LiveInfoArena::GetLiveInfoArena().InitializeForwardData(); }
 
     void MarkNewObject(BaseObject* obj) override;
     void StartYoungMarkWork();
@@ -509,7 +509,7 @@ public:
         // into ForwardObjectImpl; re-entering it here would recursively retain
         // the same page until the token is refused and lose the first-visitor
         // publication opportunity (zBarrier.inline.hpp:294-343).
-        BaseObject* self = MutatorRelocate::InScope() ? nullptr : TryMutatorRelocate(obj, forwarding);
+        BaseObject* self = ZForwardingLife::InMutatorRelocate() ? nullptr : TryMutatorRelocate(obj, forwarding);
         if (self != nullptr) {
             return self;
         }

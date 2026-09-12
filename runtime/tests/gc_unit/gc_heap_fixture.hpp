@@ -24,7 +24,7 @@
 #include "Heap/Allocator/RegionInfo.h"
 #include "Heap/Allocator/RegionSpace.h"
 #undef private
-#include "Heap/Collector/ForwardDataManager.h"
+#include "Heap/Collector/LiveInfoArena.h"
 #include "Heap/Collector/LiveInfo.h"
 #include "Heap/Heap.h"
 #include "ObjectModel/Flags.h"
@@ -151,7 +151,7 @@ struct GcHeapFixture {
         return obj;
     }
 
-    // Product GetOrAlloc* faces go through ForwardDataManager (RegionInfo.h:832/873/912).
+    // Product GetOrAlloc* faces go through LiveInfoArena.
     // gc_unit never Heap::Init, so FDM's arena starts at 0 and AllocateRegionBitmap
     // CHECKs bitmap != nullptr. Union order hits this after ForwardingNoGeometry arms
     // the table: YoungConc.StaleOldMarkDoesNotSkipYoungEnqueue → ShouldEnqueue →
@@ -169,7 +169,7 @@ struct GcHeapFixture {
             space.reservedStart = heapStart;
             space.reservedEnd = heapStart + kFdmUnits * RegionInfo::UNIT_SIZE;
         }
-        ForwardDataManager::GetForwardDataManager().InitializeForwardData();
+        LiveInfoArena::GetLiveInfoArena().InitializeForwardData();
         ready = true;
     }
 

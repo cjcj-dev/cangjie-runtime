@@ -22,7 +22,7 @@ set(SRC_LIST
     "Uncommitter.cpp"
     "CopyCollector.cpp"
     "LiveInfo.cpp"
-    "ForwardDataManager.cpp"
+    "LiveInfoArena.cpp"
     "PromotedRegionDomain.cpp"
     "RelocationRequestQueue.cpp"
     "ZForwardingLife.cpp"
