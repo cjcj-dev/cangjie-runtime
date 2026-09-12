@@ -76,10 +76,9 @@ void WCollector::PostTrace()
     RegionSpace& space = reinterpret_cast<RegionSpace&>(theAllocator);
     space.GetRegionManager().HandleTraceRegions();
     // Value-only cycle roots still depend on the preceding relocation receipts.
-    // Complete their owner handoff while that authority is queryable; publishing
-    // old-mark coverage is the point after which ReclaimRetired may remove it.
+    // Complete their owner handoff while that authority is queryable.
+    // zGeneration.cpp:1261 mark_end does not reset forwarding.
     PrepareCycleRef();
-    ForwardingTable::ReclaimRetired("old-mark-coverage");
     // reclaim large objects immediately after tracing is done.
     CollectLargeGarbage();
     CollectPinnedGarbage();
