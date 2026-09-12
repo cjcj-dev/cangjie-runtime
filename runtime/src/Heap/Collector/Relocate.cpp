@@ -2666,8 +2666,12 @@ BaseObject* WCollector::RelocateObjectInner(BaseObject* obj, BaseObject* planned
     if (const MAddress hit = ForwardingTable::FindTo(fromAddr)) {
         return reinterpret_cast<BaseObject*>(hit);
     }
+    if (!Collector::PlausibleManagedObjectGate("WCollector::RelocateObjectInner", obj)) {
+        return nullptr;
+    }
     BaseObject* toObj = planned;
     const size_t size = RegionSpace::GetAllocSize(*obj);
+    bool allocatedHere = false;
     if (toObj == nullptr) {
         AllocBuffer* buf = AllocBuffer::GetOrCreateAllocBuffer();
         RegionInfo* tl = buf->GetRegion();
@@ -2681,23 +2685,43 @@ BaseObject* WCollector::RelocateObjectInner(BaseObject* obj, BaseObject* planned
         if (toObj == nullptr) {
             return nullptr;
         }
+        allocatedHere = true;
     }
-    return ForwardObjectExclusive(obj, toObj, copyPage);
-}
-
-BaseObject* WCollector::ForwardObjectExclusive(BaseObject* obj, BaseObject* toObj, RegionInfo* copyPage)
-{
-    if (!Collector::PlausibleManagedObjectGate("WCollector::ForwardObjectExclusive", obj)) {
-        return nullptr;
-    }
-    if (toObj == nullptr) {
-        LOG(RTLOG_ERROR, "[GCV2][first-visitor] destination null obj=%p page=%p", obj, copyPage);
-        return nullptr;
-    }
+    BaseObject* result = nullptr;
     ForwardingTable::Publication publication = ForwardingTable::EnsurePublicationBeforeCopy(
         copyPage, reinterpret_cast<MAddress>(obj));
-    if (!publication) {
-        const MAddress fromAddr = reinterpret_cast<MAddress>(obj);
+    if (publication) {
+        DLOG(FORWARD, "forward obj %p<%p>(%zu) to %p", obj, obj->GetTypeInfo(), size, toObj);
+        CopyObject(*obj, *toObj, size);
+        if (toObj != obj) {
+            toObj->SetStateCode(ObjectState::NORMAL);
+        }
+        std::atomic_thread_fence(std::memory_order_release);
+        if (toObj == obj || ToHeaderCovered(toObj)) {
+            const ZForwarding::Receipt receipt = ForwardingTable::InstallMapping(
+                publication, reinterpret_cast<MAddress>(obj), reinterpret_cast<MAddress>(toObj));
+            const MAddress mapped = receipt.address;
+            if (ForwardingTable::ReceiptAllowsForwarded(mapped)) {
+                if (MutatorRelocate::StatsOn()) {
+                    MutatorRelocate::Role role = MutatorRelocate::Role::MUTATOR;
+                    if (IsGcThread()) {
+                        role = MutatorRelocate::Role::GC;
+                    } else if (IsRuntimeThread()) {
+                        role = MutatorRelocate::Role::OTHER_RT;
+                    }
+                    MutatorRelocate::NoteAnyCopy(role);
+                    if (MutatorRelocate::InScope()) {
+                        MutatorRelocate::NoteSelfCopy(size, role);
+                    }
+                }
+                obj->SetStateCode(ObjectState::FORWARDED);
+#if defined(MRT_TESTABLE_INTERNALS)
+                RunRemapWindowTestHook(6, copyPage, obj);
+#endif
+                result = reinterpret_cast<BaseObject*>(mapped);
+            }
+        }
+    } else {
         const MAddress pageStart = copyPage == nullptr ? 0 : copyPage->GetRegionStart();
         const uint64_t entries = ForwardingTable::GetEntries(fromAddr) == nullptr ? 0 : 1;
         LOG(RTLOG_ERROR,
@@ -2706,60 +2730,17 @@ BaseObject* WCollector::ForwardObjectExclusive(BaseObject* obj, BaseObject* toOb
             copyPage == nullptr ? 0U : static_cast<unsigned>(copyPage->GetRouteState()),
             copyPage == nullptr ? 0U : static_cast<unsigned>(copyPage->IsForwardingDone()),
             copyPage == nullptr ? 0 : copyPage->ForwardingRefCount());
-        return nullptr;
     }
-    size_t size = RegionSpace::GetAllocSize(*obj);
-    DLOG(FORWARD, "forward obj %p<%p>(%zu) to %p", obj, obj->GetTypeInfo(), size, toObj);
-    CopyObject(*obj, *toObj, size);
-    // Publish a fully-initialized to-object. ZGC insert (zRelocate.cpp:368-372) is the
-    // publish of a completed copy; SetStateCode must precede InsertMapping so a
-    // find() hit never observes the from-copy's LOCKED header bits on to.
-    // In-place (GetRoute keep-from: to==from) the header is still LOCKED —
-    // painting NORMAL here makes UnlockObject CHECK fail (StateWord.h:198).
-    // That is the A_locked abort after exempt-kept (REPORT-lockdrain /
-    // REPORT-exemptlife §4).
-    if (toObj != obj) {
-        toObj->SetStateCode(ObjectState::NORMAL);
-    }
-    std::atomic_thread_fence(std::memory_order_release);
-    if (toObj != obj && !ToHeaderCovered(toObj)) {
-        return nullptr;
-    }
-    const ZForwarding::Receipt receipt = ForwardingTable::InstallMapping(
-        publication, reinterpret_cast<MAddress>(obj), reinterpret_cast<MAddress>(toObj));
-    const MAddress mapped = receipt.address;
-    if (!ForwardingTable::ReceiptAllowsForwarded(mapped)) {
-        return nullptr;
-    }
-    // zRelocate.cpp:372-376: undo this allocation when insert picked another winner.
-    if (mapped != reinterpret_cast<MAddress>(toObj) && toObj != obj) {
+    if (allocatedHere && toObj != obj && result != toObj) {
         if (RegionInfo* dest = RegionInfo::TryGetRegionInfoAt(reinterpret_cast<MAddress>(toObj))) {
             (void)dest->UndoAllocObjectAtomic(reinterpret_cast<uintptr_t>(toObj), size);
         }
     }
-    // portmutreloc: the copy just happened on this thread. InScope() is set only by
-    // TryMutatorRelocate, so this counts objects a mutator relocated itself and nothing else --
-    // the one number that distinguishes "the ported leg ran" from "the leg exists". GC workers
-    // reach the same CopyObject with the flag clear and are not counted.
-    if (MutatorRelocate::StatsOn()) {
-        // ThreadLocal.h:20 ThreadType {CJ_PROCESSOR, GC_THREAD, FP_THREAD, HOT_UPDATE_THREAD};
-        // IsRuntimeThread() is >= GC_THREAD, so !IsRuntimeThread() is exactly CJ_PROCESSOR --
-        // a mutator. Both predicates are thread-local reads (MutatorManager.cpp:70-84).
-        MutatorRelocate::Role role = MutatorRelocate::Role::MUTATOR;
-        if (IsGcThread()) {
-            role = MutatorRelocate::Role::GC;
-        } else if (IsRuntimeThread()) {
-            role = MutatorRelocate::Role::OTHER_RT;
-        }
-        MutatorRelocate::NoteAnyCopy(role);
-        if (MutatorRelocate::InScope()) {
-            MutatorRelocate::NoteSelfCopy(size, role);
-        }
-    }
-    obj->SetStateCode(ObjectState::FORWARDED);
-#if defined(MRT_TESTABLE_INTERNALS)
-    RunRemapWindowTestHook(6, copyPage, obj);
-#endif
-    return reinterpret_cast<BaseObject*>(mapped);
+    return result;
+}
+
+BaseObject* WCollector::ForwardObjectExclusive(BaseObject* obj, BaseObject* toObj, RegionInfo* copyPage)
+{
+    return RelocateObjectInner(obj, toObj, copyPage);
 }
 } // namespace MapleRuntime
