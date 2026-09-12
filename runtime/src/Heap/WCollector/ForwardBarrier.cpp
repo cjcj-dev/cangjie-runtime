@@ -95,7 +95,7 @@ void NoteZeroHeaderTarget(const char* site, const RefField<false>& field, BaseOb
         "bit1=ForwardObject)",
         site, target, static_cast<const void*>(&field), holder, seen, region,
         region == nullptr ? 0xffu : static_cast<unsigned>(region->GetRegionType()),
-        region == nullptr ? 0xffu : static_cast<unsigned>(region->GetRouteState()),
+        region == nullptr ? 0xffu : static_cast<unsigned>(region->RelocateObserve()),
         static_cast<unsigned>(RegionInfo::InGhostFromRegion(target)),
         preResolve,
         preRegion == nullptr ? 0xffu : static_cast<unsigned>(preRegion->GetRegionType()),
