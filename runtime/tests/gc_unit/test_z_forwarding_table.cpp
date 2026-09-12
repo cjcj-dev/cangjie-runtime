@@ -73,6 +73,44 @@ GC_TEST(ZGranuleMap, OffsetBoundaryRejectsBeforeIndex)
     GC_EXPECT_FALSE(map.offset_for_address(kStart + kHeapSize, &offset));
 }
 
+// ZGranuleMap::put/get (zGranuleMap.inline.hpp:62-84) and the highest-offset
+// map extent in zPageTable.cpp:37-47. Reserved capacity excludes the hole;
+// address indices include it, so publishing either segment cannot alias it.
+GC_TEST(ZGranuleMap, DiscontiguousPagesLeaveHoleUnmapped)
+{
+    constexpr MAddress base = 0x42000000;
+    constexpr size_t granule = 0x1000;
+    ZGranuleMap<int*> map;
+    int first = 1;
+    int second = 2;
+    GC_EXPECT_TRUE(map.Initialize(base, 5 * granule, granule));
+    map.put(static_cast<zoffset>(0), 2 * granule, &first);
+    map.put(static_cast<zoffset>(3 * granule), 2 * granule, &second);
+    for (size_t i = 0; i < 5; ++i) {
+        zoffset offset;
+        GC_EXPECT_TRUE(map.offset_for_address(base + i * granule + granule - 1, &offset));
+        GC_EXPECT_TRUE(map.get(offset) == (i < 2 ? &first : i == 2 ? nullptr : &second));
+    }
+    map.put(static_cast<zoffset>(0), 2 * granule, nullptr);
+    GC_EXPECT_TRUE(map.get(static_cast<zoffset>(0)) == nullptr);
+    GC_EXPECT_TRUE(map.get(static_cast<zoffset>(3 * granule)) == &second);
+}
+
+GC_TEST(ZGranuleMap, AddressExtentPreservesLow48Budget)
+{
+    constexpr size_t granule = 0x1000;
+    ZGranuleMap<int*> map;
+    zoffset offset = zoffset::invalid;
+    GC_EXPECT_FALSE(map.offset_for_address(0, &offset));
+    GC_EXPECT_FALSE(map.Initialize(kPointerAddressLimit - granule, 2 * granule, granule));
+    GC_EXPECT_FALSE(map.Initialize(kPointerAddressLimit, granule, granule));
+    GC_EXPECT_FALSE(map.Initialize(0x1000, granule + 1, granule));
+    GC_EXPECT_TRUE(map.Initialize(kPointerAddressLimit - granule, granule, granule));
+    GC_EXPECT_TRUE(map.offset_for_address(kPointerAddressLimit - 1, &offset));
+    GC_EXPECT_EQ(raw(offset), static_cast<Uptr>(granule - 1));
+    GC_EXPECT_FALSE(map.offset_for_address(kPointerAddressLimit, &offset));
+}
+
 GC_TEST(ZForwarding, AttachedArraySitsAfterObject)
 {
     constexpr MAddress kStart = 0x50000000;
