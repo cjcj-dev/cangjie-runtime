@@ -9,6 +9,7 @@
 
 #include <cstddef>
 #include <cstdint>
+#include <functional>
 
 #include "Common/TypeDef.h"
 #include "Heap/Collector/ZForwarding.h"
@@ -229,6 +230,7 @@ public:
     // covers `addr`. ClassifyCompactedMiss must see the same carrier LookupTo
     // uses after ClearEntries (zForwardingTable.inline.hpp:36-46).
     static ZForwarding* GetCovering(MAddress addr);
+    static void VisitAll(const std::function<void(ZForwarding*)>& visitor);
     // Product connection points for the dual carrier. Publication copies the
     // from-page view into the already-installed ZForwarding; every consumer
     // resolves the view back through the table rather than RegionInfo storage.
