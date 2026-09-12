@@ -18,7 +18,6 @@ set(SRC_LIST
     "MinorGCALot.cpp"
     "TraceClear.cpp"
     "TagReuseProbe.cpp"
-    "MarkWhyProbe.cpp"
     "StackFrameOracle.cpp"
     "StackWatermarkOracle.cpp"
     "StackExposureOracle.cpp"
