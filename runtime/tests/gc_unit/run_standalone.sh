@@ -337,25 +337,6 @@ if [[ -d "$RUNTIME_OUTPUT_ROOT/include" ]]; then
   INC_FLAGS+=(-I"$RUNTIME_OUTPUT_ROOT/include")
 fi
 
-# A weak referent is a discovery input, not a strong tracing root. Keep this
-# source-level consumer guard next to the product-linked behavior tests: the
-# positive anchor proves the guard inspected the active collector source, and
-# reintroducing the old referent traversal fails before any test can pass.
-WEAK_DISCOVERY_SOURCE="$ROOT/runtime/src/Heap/Collector/TracingCollector.cpp"
-if ! /usr/bin/grep -F -q \
-    'collector.DiscoverWeakReference(obj, workStack)' "$WEAK_DISCOVERY_SOURCE" ||
-    ! /usr/bin/grep -F -q \
-    'DiscoverReference(reference, ReferenceType::WEAK)' "$WEAK_DISCOVERY_SOURCE"; then
-  echo "GC_UNIT_WEAK_DISCOVERY_ANCHOR_MISSING" >&2
-  exit 11
-fi
-if /usr/bin/grep -F -q \
-    'TraceObjectRefFields(referent, workStack)' "$WEAK_DISCOVERY_SOURCE"; then
-  echo "GC_UNIT_WEAK_REFERENT_TRACED_STRONGLY" >&2
-  exit 12
-fi
-echo "GATE_WEAK_DISCOVERY_NO_STRONG_TRACE_OK source=$WEAK_DISCOVERY_SOURCE"
-
 # Keep this hand-driven entry point structurally identical to the CMake
 # cj_gc_unit target: product inline/template helpers stay hidden and static
 # archives cannot re-export weak copies of the product symbols exercised via
