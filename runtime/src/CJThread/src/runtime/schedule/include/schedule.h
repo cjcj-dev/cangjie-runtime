@@ -1134,6 +1134,10 @@ void *CJThreadStackGuardGet(void);
  * of stack addr is returned.
  */
 void *CJThreadStackAddrGet(void);
+
+/* Signal-context query of the current thread's allocated stack protection zone.
+ * Returns false when there is no current thread or no protected stack. */
+bool CJThreadIsStackGuardAddress(const void *addr);
  
 /**
  * @brief Obtain the stackBaseAddr of the current cjthread, that is, the initial rsp of the
