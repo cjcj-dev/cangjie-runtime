@@ -35,6 +35,25 @@ GCCycleSnapshot GenerationCycle::Snapshot() const
              phase.load(std::memory_order_relaxed), active };
 }
 
+void Collector::MarkObjectIfActive(BaseObject* object) const
+{
+    if (!Heap::IsHeapAddress(object)) {
+        return;
+    }
+    if (!PlausibleManagedObjectGate("mark_object_if_active", object)) {
+        object = TryRecoverInteriorBase(object);
+        if (object == nullptr) {
+            return;
+        }
+    }
+    RegionInfo* region = RegionInfo::GetRegionInfoAt(reinterpret_cast<MAddress>(object));
+    if (region->IsYoungRegion()) {
+        MarkYoungObjectIfActive(object);
+    } else {
+        MarkOldObjectIfActive(object);
+    }
+}
+
 void GenerationCycle::SelectReason(GCReason value)
 {
     std::lock_guard<std::mutex> lock(mutex);

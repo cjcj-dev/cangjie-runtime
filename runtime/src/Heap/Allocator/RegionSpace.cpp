@@ -383,10 +383,7 @@ MAddress AllocBuffer::Allocate(size_t totalSize, AllocType allocType)
                         }
                         // Paint claims the mark bit, so publish an explicit Follow
                         // receipt into the same termination domain as barrier work.
-                        // The local ledger is retained only until mark-end cleanup;
-                        // it is no longer a pause-local discovery authority.
                         BaseObject* allocated = reinterpret_cast<BaseObject*>(addr);
-                        PushYoungAllocBlack(allocated);
                         if (m != nullptr && m->IsManagedContext()) {
                             m->PublishYoungAllocBlack(allocated);
                         }

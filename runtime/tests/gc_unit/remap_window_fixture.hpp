@@ -427,7 +427,7 @@ void RunRemapWindow(bool copyOnly, ForwardDomain domain = ForwardDomain::None, b
     barrier.Record(fx.obj0, reinterpret_cast<MAddress>(field), fx.obj1);
     barrier.Record(fx.obj0, reinterpret_cast<MAddress>(field), copyObject);
     if (partialReader) barrier.Record(fx.obj0, reinterpret_cast<MAddress>(field), partialFirst);
-    producer.FlushSatbBuffer();
+    producer.FlushStoreBarrierBuffer();
     ThreadLocal::SetMutator(nullptr);
 
     void* so = dlopen("libcangjie-runtime.so", RTLD_NOW | RTLD_NOLOAD);

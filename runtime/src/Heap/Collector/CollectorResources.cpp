@@ -263,10 +263,8 @@ void CollectorResources::RunDriverLoop(GCDriverKind kind)
 bool CollectorResources::ExecuteDriverRequest(const GCDriverRequest& request)
 {
     CHECK(request.reason < GC_REASON_MAX);
-    // OpenJDK has two driver threads and two ports, but both run_thread loops
-    // hold the same ZDriverLocker around the whole collection
-    // (zDriver.cpp:201-224,463-487). Forwarding retirement and the collector's
-    // phase/reason fields rely on that single lifecycle owner.
+    // A keeps the whole request serialized. ZGC releases this lock around
+    // old concurrent phases (zGeneration.cpp:995-1016); that is package C.
     std::lock_guard<std::mutex> lock(driverLock);
 #if defined(MRT_GC_UNIT_TESTS)
     Collector* collector = testCollector != nullptr ? testCollector : static_cast<Collector*>(&collectorProxy);
@@ -285,7 +283,9 @@ bool CollectorResources::ExecuteDriverRequest(const GCDriverRequest& request)
     // (zDriver.cpp:416-452). Sending a synchronous request back through the
     // minor port would deadlock once both drivers share the ZGC lock.
     if (request.reason != GC_REASON_YOUNG) {
+        youngPreludeRequest = &request;
         collector->RunGarbageCollection(GCTask::ASYNC_TASK_INDEX, GC_REASON_YOUNG);
+        youngPreludeRequest = nullptr;
 #if defined(MRT_GC_UNIT_TESTS)
         if (testAfterYoungPrelude) {
             testAfterYoungPrelude();

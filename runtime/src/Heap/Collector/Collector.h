@@ -518,6 +518,15 @@ public:
 
     // determine how we treat new object during gc.
     virtual void MarkNewObject(BaseObject*) {}
+    void MarkObjectIfActive(BaseObject* object) const;
+    virtual void MarkYoungObjectIfActive(BaseObject*, bool = false) const
+    {
+        AbortUnimplemented("Collector::MarkYoungObjectIfActive");
+    }
+    virtual void MarkOldObjectIfActive(BaseObject*, bool = false) const
+    {
+        AbortUnimplemented("Collector::MarkOldObjectIfActive");
+    }
 
     virtual void FixObject(BaseObject&) const {}
 
@@ -783,7 +792,11 @@ protected:
     void SelectCycle(GCReason reason)
     {
         GenerationCycle* cycle = reason == GC_REASON_YOUNG ? &youngCycle : &oldCycle;
-        cycle->SelectReason(reason);
+        if (!cycle->Snapshot().active) {
+            cycle->SelectReason(reason);
+        } else {
+            CHECK(cycle->Reason() == reason);
+        }
         activeCycle.store(cycle, std::memory_order_release);
     }
     GenerationCycle youngCycle { GCCycleGeneration::YOUNG };
