@@ -27,12 +27,6 @@ namespace {
         std::fprintf(stderr, "[GCV2][tag-reuse] " fmt "\n", ##__VA_ARGS__);                                            \
         std::fflush(stderr);                                                                                           \
     } while (0)
-#define STICKY_LOG(fmt, ...)                                                                                           \
-    do {                                                                                                               \
-        std::fprintf(stderr, "[GCV2][mark-bits-sticky] " fmt "\n", ##__VA_ARGS__);                                      \
-        std::fflush(stderr);                                                                                           \
-    } while (0)
-
 bool EnvIsOne(const char* name)
 {
     const char* v = std::getenv(name);
@@ -55,9 +49,6 @@ std::atomic<uint64_t> gDanglingTotal{0};
 std::atomic<uint64_t> gPositiveBoundStill{0};
 std::atomic<uint64_t> gPositiveZoneSlots{0};
 std::atomic<uint64_t> gPositiveInRangeHits{0};
-std::atomic<uint64_t> gMarkStickyN{0};
-std::atomic<uint64_t> gMarkStickyFail{0};
-std::atomic<uint64_t> gMarkStickyOk{0};
 
 void NoteDangling(const char* kind, RegionInfo* region, const char* listName, uintptr_t ptr, uintptr_t rangeStart,
                   size_t rangeSize, bool young, unsigned type, bool inCandidateGuess)
@@ -87,12 +78,6 @@ void NoteDangling(const char* kind, RegionInfo* region, const char* listName, ui
 bool TagReuseProbe::TagReuseEnabled()
 {
     static const bool on = false /* pinned:MRT_GCV2_TAG_REUSE */;
-    return on;
-}
-
-bool TagReuseProbe::MarkBitsStickyEnabled()
-{
-    static const bool on = false /* pinned:MRT_GCV2_MARK_BITS_STICKY */;
     return on;
 }
 
@@ -206,57 +191,8 @@ void TagReuseProbe::ScanBeforeRelease(uintptr_t rangeStart, size_t rangeSize, ui
         TAGREUSE_LOG("SUMMARY scanN=%llu dangling=0 stillBound=%zu zoneSlots=%zu inRangeHits=%zu range=[%#zx,+%zu) "
                      "prevTag=%u",
                      static_cast<unsigned long long>(n), stillBound, zoneSlots, inRangeHits, rangeStart, rangeSize,
-                     static_cast<unsigned>(previousTagId));
+                      static_cast<unsigned>(previousTagId));
     }
-}
-
-bool TagReuseProbe::NoteMarkBitsSticky(RegionInfo* region, size_t offset, bool /*expectMarked*/, const char* site)
-{
-    // Windows ABI compatibility for an old diagnostic-only export. Product call
-    // sites use the generation-bearing overload below; the compatibility entry
-    // deliberately performs no mark read.
-    (void)region;
-    (void)offset;
-    (void)site;
-    return true;
-}
-
-bool TagReuseProbe::NoteMarkBitsSticky(RegionInfo* region, size_t offset, bool /*expectMarked*/, const char* site,
-                                       Generation generation)
-{
-    if (!MarkBitsStickyEnabled() || region == nullptr) {
-        return true;
-    }
-    static std::atomic<bool> armedLogged{false};
-    if (!armedLogged.exchange(true, std::memory_order_relaxed)) {
-        STICKY_LOG("ARMED env=MRT_GCV2_MARK_BITS_STICKY=1 site=%s", site);
-    }
-    gMarkStickyN.fetch_add(1, std::memory_order_relaxed);
-    bool nowMarked = generation == Generation::Young
-        ? region->IsMarkedObject(region->GetMarkView<Generation::Young>(), offset)
-        : region->IsMarkedObject(region->GetMarkView<Generation::Old>(), offset);
-    if (!nowMarked) {
-        gMarkStickyFail.fetch_add(1, std::memory_order_relaxed);
-        static std::atomic<uint64_t> dumpLeft{64};
-        uint64_t left = dumpLeft.load(std::memory_order_relaxed);
-        if (left > 0 && dumpLeft.compare_exchange_strong(left, left - 1, std::memory_order_relaxed)) {
-            RegionBitmap* bitmap = generation == Generation::Young
-                ? region->GetMarkBitmap(region->GetMarkView<Generation::Young>())
-                : region->GetMarkBitmap(region->GetMarkView<Generation::Old>());
-            STICKY_LOG("NOT_STICKY site=%s offset=%zu region=%p type=%u liveInfo=%p bitmap=%p", site, offset,
-                       static_cast<void*>(region), static_cast<unsigned>(region->GetRegionType()),
-                       static_cast<void*>(region->GetLiveInfo()), static_cast<void*>(bitmap));
-        }
-        return false;
-    }
-    gMarkStickyOk.fetch_add(1, std::memory_order_relaxed);
-    uint64_t n = gMarkStickyN.load(std::memory_order_relaxed);
-    if ((n & 0x3ffff) == 0) {
-        STICKY_LOG("SUMMARY n=%llu ok=%llu fail=%llu", static_cast<unsigned long long>(n),
-                   static_cast<unsigned long long>(gMarkStickyOk.load(std::memory_order_relaxed)),
-                   static_cast<unsigned long long>(gMarkStickyFail.load(std::memory_order_relaxed)));
-    }
-    return true;
 }
 
 } // namespace MapleRuntime
