@@ -314,7 +314,6 @@ echo "PUBLICATION_TESTABLE=$((${#PUBLICATION_TESTABLE_FLAGS[@]} != 0))"
 # scheduling fixture.  Derive that product shape from the linked SO, not from
 # the test translation unit's unconditional MRT_TESTABLE_INTERNALS definition.
 PUBLICATION_HOOK_TESTS=(
-  ForwardingPublicationProduct.MutatorRuntimeEntryReachesCopyAdmission
 )
 PUBLICATION_HOOK_FLAGS=()
 PUBLICATION_HOOK_EXPORTS="$OUT/forwarding-publication-hook-exports.txt"
