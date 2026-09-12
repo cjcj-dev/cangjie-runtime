@@ -140,7 +140,7 @@ static void NoteStateImpl(uintptr_t slotRaw, uintptr_t slotRawSecondRead, uintpt
     const uint64_t hdr = __atomic_load_n(reinterpret_cast<const uint64_t*>(target), __ATOMIC_RELAXED);
     const unsigned stateCode = static_cast<unsigned>((hdr >> 48) & 0x3u);
     RegionInfo* region = RegionInfo::TryGetRegionInfoAt(reinterpret_cast<MAddress>(target));
-    const unsigned routeState = region == nullptr ? 7u : static_cast<unsigned>(region->GetRouteState()) & 0x7u;
+    const unsigned routeState = region == nullptr ? 7u : static_cast<unsigned>(region->RelocateObserve()) & 0x7u;
     const unsigned ghost = (region != nullptr && region->IsGhostFromRegion()) ? 1u : 0u;
     const unsigned young = (region != nullptr && region->IsYoungRegion()) ? 1u : 0u;
     const unsigned slotC = ColourIndex((slotRaw >> REMAP_COLOUR_SHIFT) & 0xfu) & 0x7u;
@@ -230,7 +230,7 @@ void NoteFastPathAccept(uintptr_t slotRaw, BaseObject* target)
     }
     RegionInfo* region = RegionInfo::TryGetRegionInfoAt(reinterpret_cast<MAddress>(target));
     const unsigned ghost = (region != nullptr && region->IsGhostFromRegion()) ? 1u : 0u;
-    const unsigned routeState = region == nullptr ? 7u : static_cast<unsigned>(region->GetRouteState()) & 0x7u;
+    const unsigned routeState = region == nullptr ? 7u : static_cast<unsigned>(region->RelocateObserve()) & 0x7u;
     const uint64_t n = g_fastAcceptBad.fetch_add(1, std::memory_order_relaxed) + 1;
     if (n > 24 && (n & (n - 1)) != 0) {
         return;
@@ -281,7 +281,7 @@ void NoteStaleGuardFired(bool zeroHeader, bool resolved, BaseObject* target, Bas
             ? RegionInfo::TryGetRegionInfoAt(reinterpret_cast<MAddress>(target))
             : nullptr;
         const unsigned rtype = region == nullptr ? 99u : static_cast<unsigned>(region->GetRegionType());
-        const unsigned route = region == nullptr ? 9u : static_cast<unsigned>(region->GetRouteState());
+        const unsigned route = region == nullptr ? 9u : static_cast<unsigned>(region->RelocateObserve());
         const unsigned garbage = (region != nullptr && region->IsGarbageRegion()) ? 1u : 0u;
         const unsigned freeR = (region != nullptr && region->IsFreeRegion()) ? 1u : 0u;
         const unsigned ghostR = (region != nullptr && region->IsGhostFromRegion()) ? 1u : 0u;

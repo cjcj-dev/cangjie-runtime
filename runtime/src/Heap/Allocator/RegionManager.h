@@ -536,7 +536,7 @@ public:
                          "live=%zu residual=%zu validObjs=%zu markedObjs=%zu route=%u BYPASS=1",
                          region, start, alloc, end, region->GetRegionType(),
                          static_cast<unsigned>(region->IsYoungRegion()), region->GetLiveByteCount(), residual,
-                         validObjs, markedObjs, static_cast<unsigned>(region->GetRouteState()));
+                         validObjs, markedObjs, static_cast<unsigned>(region->RelocateObserve()));
                 }
             }
         }
@@ -787,8 +787,7 @@ public:
         if (fromRegionInfo == nullptr) {
             return false;
         }
-        RegionInfo::RouteState rs = fromRegionInfo->GetRouteState();
-        return rs == RegionInfo::RouteState::FORWARDED || rs == RegionInfo::RouteState::COMPACTED;
+        return fromRegionInfo->IsForwardingDone();
     }
 
     PublishedRoute FindPublishedRoute(BaseObject* fromObj, RegionInfo* fromRegionInfo)
@@ -826,40 +825,34 @@ public:
                  "[GCV2][ghost-softnull] region=%p start=%#zx live=%zu route=%u young=%u "
                  "auth=%u — RouteRegion soft-miss (ghost cleared or never installed)",
                  fromRegionInfo, fromRegionInfo->GetRegionStart(), fromRegionInfo->GetLiveByteCount(),
-                 static_cast<unsigned>(fromRegionInfo->GetRouteState()),
+                 static_cast<unsigned>(fromRegionInfo->RelocateObserve()),
                  static_cast<unsigned>(fromRegionInfo->IsYoungRegion()),
                  static_cast<unsigned>(fromRegionInfo->IsLiveCountAuthoritative()));
             return false;
         }
         do {
-            RegionInfo::RouteState oldState = fromRegionInfo->GetRouteState();
-            if (oldState == RegionInfo::RouteState::ROUTED || oldState == RegionInfo::RouteState::FORWARDED) {
-                return true;
+            auto owner = ForwardingTable::RetainPageOwner(fromRegionInfo);
+            if (owner && owner->is_done()) {
+                return !owner->in_place();
             }
-            if (oldState == RegionInfo::RouteState::COMPACTED) {
-                return false;
-            }
-            if (oldState == RegionInfo::RouteState::ROUTING) {
+            if (owner && owner->is_claimed() && !owner->is_done()) {
                 if (!mayWait) return false;
                 sched_yield();
                 continue;
             }
-
-            CHECK(oldState == MapleRuntime::RegionInfo::FORWARDABLE);
-            if (fromRegionInfo->TryLockRouting(oldState)) {
-                // sealcheck E_seal (per-region): face freezes before geometry read.
-                // RouteOrCompactRegionImpl reads GetLiveByteCount / VisitLiveObjects next.
-
-                if (RouteOrCompactRegionImpl(fromRegionInfo)) {
-                    fromRegionInfo->SetRouteState(RegionInfo::RouteState::ROUTED);
-                    return true;
-                } else {
-                    if (fromRegionInfo->GetRouteState() != RegionInfo::RouteState::FORWARDABLE) {
-                        fromRegionInfo->SetRouteState(RegionInfo::RouteState::COMPACTED);
-                    }
-                    return false;
-                }
+            if (!fromRegionInfo->ClaimForwarding()) {
+                continue;
             }
+            if (RouteOrCompactRegionImpl(fromRegionInfo)) {
+                fromRegionInfo->MarkForwardingDone();
+                return true;
+            }
+            auto after = ForwardingTable::RetainPageOwner(fromRegionInfo);
+            if (after) {
+                after->set_in_place();
+                fromRegionInfo->MarkForwardingDone();
+            }
+            return false;
         } while (true);
     }
 

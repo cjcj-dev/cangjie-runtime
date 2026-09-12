@@ -384,9 +384,7 @@ void VerifyRegions::VerifyAfterPrepareYoung(RegionManager& manager, const Candid
         if (region == nullptr) {
             return;
         }
-        auto rs = region->GetRouteState();
-        if (region->IsGarbageRegion() &&
-            (rs == RegionInfo::RouteState::ROUTING || rs == RegionInfo::RouteState::ROUTED)) {
+        if (region->IsGarbageRegion() && region->IsRoutingState()) {
             ++routeStateAnomalies;
         }
     };
