@@ -896,13 +896,6 @@ void WCollector::DoYoungGarbageCollection()
     }
 
     constexpr bool fullYoungScan = false;
-    // remsetdrain: hash-work reduction defaults on; `=0` is the immediate rollback.
-    // The drain side uses the bitmap's exact distinct count to reserve its destination.
-    // The FYS-only consumed-ledger elision is fixed by the sole concurrent path.
-    static const bool remsetHashOptRequested = []() {
-        const char* value = std::getenv("MRT_GCV2_REMSET_HASH_OPT");
-        return value == nullptr || std::strcmp(value, "1") == 0;
-    }();
     WorkStack workStack = NewWorkStack();
     VerifyMarkingStacks::VerifyEmpty(VerifyMarkingStacks::MarkingGeneration::YOUNG,
                                      VerifyMarkingStacks::MarkingBoundary::START,
@@ -917,10 +910,7 @@ void WCollector::DoYoungGarbageCollection()
     MinorObjectSet currentMinorRoots;
     MinorSlotSet reachableSlots;
     MinorSlotSet weakSlots;
-    if (remsetHashOptRequested && fullYoungScan) {
-        // Runtime lower bound only: if holder closure covers the remset, this
-        // avoids growth rehashes; if it does not, unordered_set still grows
-        // normally.  Capacity does not admit or discard a slot.
+    if (fullYoungScan) {
         reachableSlots.reserve(rememberedSlots.size());
     }
     auto mergeY2yDirtyWork = [&](WorkStack& destination) {
