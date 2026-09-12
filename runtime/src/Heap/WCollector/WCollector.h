@@ -208,8 +208,9 @@ public:
     void StartYoungMarkWork();
     void DrainAllocBufferMarkProducers(AllocBuffer* buffer, WorkStack& work, bool young);
     bool PublishHandshakeMarkWork(WorkStack& work, MarkDomain* domain);
-    bool FlushAllocBufferMarkProducers(AllocBuffer* buffer, MarkDomain* domain);
-    bool FlushAllocBufferMarkProducers(AllocBuffer* buffer);
+    void PublishThreadRoot(BaseObject* object, bool young, bool follow);
+    bool FlushThreadMarkProducers(ThreadLocalData* tls, MarkDomain* domain);
+    bool FlushThreadMarkProducers(ThreadLocalData* tls);
     MarkDomain* YoungMarkDomain() const { return youngMarkDomain.get(); }
     void MarkYoungObjectIfActive(BaseObject* object, bool followOnly = false) const override;
 

@@ -13,10 +13,19 @@
 #include "Base/RwLock.h"
 #include "Interpreter/Options.h"
 #include "Interpreter/RTInterface.h"
+#include "Heap/Barrier/StoreBarrierBuffer.h"
+#include "Heap/Collector/MarkStripe.h"
 
 namespace MapleRuntime {
 class AllocBuffer;
 class Mutator;
+class MarkDomain;
+
+// ZThreadLocalData: one store buffer and two generation stacks per OS thread.
+struct ThreadGCData {
+    StoreBarrierBuffer storeBarrierBuffer;
+    std::unique_ptr<MarkThreadLocalStacks> markStacks[2];
+};
 
 enum class ThreadType { CJ_PROCESSOR = 0, GC_THREAD, FP_THREAD, HOT_UPDATE_THREAD };
 
@@ -42,6 +51,7 @@ struct ThreadLocalData {
     ThreadType threadType;
     bool isCJProcessor;
     void* threadCache;
+    ThreadGCData* gcData;
 
 public:
     void SetMutator(Mutator* newMutator);
@@ -62,6 +72,10 @@ class ThreadLocal { // merge this to ThreadLocalData.
 public:
     static ThreadLocalData* GetThreadLocalData();
     static void InitializeCleaner();
+    static ThreadGCData& GetGCData();
+    static void FlushCurrentThreadMarkStacks();
+    static MarkThreadLocalStacks& GetMarkStacks(MarkDomain& domain);
+    static bool FlushMarkStacks(ThreadLocalData* tls, MarkDomain& domain);
 
     static void SetMutator(Mutator* newMutator) { GetThreadLocalData()->SetMutator(newMutator); }
 

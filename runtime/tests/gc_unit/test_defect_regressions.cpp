@@ -400,7 +400,7 @@ GC_TEST(DefectRegress, CompilerWriteNonHeapHolderHeapSlotUsesImmediatePath)
     MCC_WriteRefField(fx.heap.obj1, nonHeapHolder,
                       reinterpret_cast<RefField<false>*>(field));
 
-    GC_EXPECT_EQ(alloc.GetStoreBarrierBuffer().Pending(), 0u);
+    GC_EXPECT_EQ(ThreadLocal::GetGCData().storeBarrierBuffer.Pending(), 0u);
     GC_EXPECT_EQ(fx.rememberedSet.Contains(slot), true);
 }
 

@@ -20,6 +20,8 @@
 #define MRT_TESTABLE_INTERNALS 1
 #endif
 
+#include <thread>
+
 #include "gc_heap_fixture.hpp"
 #include "gc_unittest.hpp"
 
@@ -207,7 +209,7 @@ GC_TEST(StoreBuf, ProductWriteCarriesOldValueOnlyInPrevArm)
     resources.GetGCStats().reason = reasonBefore;
     resources.SetGcStarted(startedBefore);
 
-    StoreBarrierBuffer& buf = alloc.GetStoreBarrierBuffer();
+    StoreBarrierBuffer& buf = ThreadLocal::GetGCData().storeBarrierBuffer;
     const size_t pending = buf.Pending();
     std::vector<BaseObject*> retired;
     // The independently required new-value closure is still in the mutator's
@@ -275,9 +277,9 @@ GC_TEST(StoreBuf, ProductPhaseFlushHandsPairedPrevToMark)
     Mutator* const mutatorBefore = ThreadLocal::GetMutator();
     ThreadLocal::SetMutator(&mutator);
     barrier.WriteReference(fx.obj0, field, fx.obj1);
-    GC_EXPECT_EQ(alloc.GetStoreBarrierBuffer().Pending(), 1u);
+    GC_EXPECT_EQ(ThreadLocal::GetGCData().storeBarrierBuffer.Pending(), 1u);
     mutator.TransitionToGCPhaseExclusive(GCPhase::GC_PHASE_CLEAR_SATB_BUFFER);
-    GC_EXPECT_TRUE(alloc.GetStoreBarrierBuffer().IsEmpty());
+    GC_EXPECT_TRUE(ThreadLocal::GetGCData().storeBarrierBuffer.IsEmpty());
     ThreadLocal::SetMutator(mutatorBefore);
     heap.SetGCPhase(phaseBefore);
     resources.GetGCStats().reason = reasonBefore;
@@ -313,7 +315,7 @@ GC_TEST(StoreBuf, ProductNullHolderBypassesPendingRelocationEntry)
 
     barrier.WriteReference(nullptr, field, fx.obj1);
 
-    GC_EXPECT_EQ(alloc.GetStoreBarrierBuffer().Pending(), 0u);
+    GC_EXPECT_EQ(ThreadLocal::GetGCData().storeBarrierBuffer.Pending(), 0u);
     GC_EXPECT_TRUE(rs.Contains(reinterpret_cast<MAddress>(&field)));
 }
 
@@ -339,7 +341,7 @@ GC_TEST(StoreBuf, ProductNonHeapHolderBypassesPendingRelocationEntry)
 
     barrier.WriteReference(nonHeapHolder, field, fx.obj1);
 
-    GC_EXPECT_EQ(alloc.GetStoreBarrierBuffer().Pending(), 0u);
+    GC_EXPECT_EQ(ThreadLocal::GetGCData().storeBarrierBuffer.Pending(), 0u);
     GC_EXPECT_TRUE(rs.Contains(reinterpret_cast<MAddress>(&field)));
 }
 
@@ -398,7 +400,7 @@ GC_TEST(StoreBuf, CompilerFastOverwriteHandsObservedOldToMark)
     // This is the compiler hit-arm ordering: capture, overwrite, then ABI exit.
     field.StoreColoured(newWord);
     CJ_MCC_PostWriteRefField(newReferent, holder, &field, observedPrev);
-    const size_t pending = alloc.GetStoreBarrierBuffer().Pending();
+    const size_t pending = ThreadLocal::GetGCData().storeBarrierBuffer.Pending();
     mutator.TransitionToGCPhaseExclusive(GCPhase::GC_PHASE_CLEAR_SATB_BUFFER);
 
     ThreadLocal::SetMutator(mutatorBefore);
@@ -423,7 +425,7 @@ GC_TEST(StoreBuf, CompilerFastOverwriteHandsObservedOldToMark)
 
     GC_EXPECT_TRUE(compilerHit);
     GC_EXPECT_EQ(pending, 1u);
-    GC_EXPECT_TRUE(alloc.GetStoreBarrierBuffer().IsEmpty());
+    GC_EXPECT_TRUE(ThreadLocal::GetGCData().storeBarrierBuffer.IsEmpty());
     GC_EXPECT_EQ(oldReceipts, 1u);
     GC_EXPECT_TRUE(newReceipts >= 1u);
     GC_EXPECT_EQ(raw(field.GetTargetObject()), reinterpret_cast<MAddress>(newReferent));
@@ -465,15 +467,15 @@ GC_TEST(StoreBuf, GcAssistedPhaseFlushDefersStoreBuffer)
     Mutator* const mutatorBefore = ThreadLocal::GetMutator();
     ThreadLocal::SetMutator(&mutator);
     barrier.WriteReference(fx.obj0, field, fx.obj1);
-    GC_EXPECT_EQ(alloc.GetStoreBarrierBuffer().Pending(), 1u);
+    GC_EXPECT_EQ(ThreadLocal::GetGCData().storeBarrierBuffer.Pending(), 1u);
 
     // A GC worker assisting a saferegion transition must not consume the
     // paired store entry: ZGC on_new_phase runs in the Java-thread flush.
     mutator.TransitionToGCPhaseExclusive(GCPhase::GC_PHASE_CLEAR_SATB_BUFFER, false);
-    GC_EXPECT_EQ(alloc.GetStoreBarrierBuffer().Pending(), 1u);
+    GC_EXPECT_EQ(ThreadLocal::GetGCData().storeBarrierBuffer.Pending(), 1u);
     // The mutator-side transition (or the next explicit safepoint) consumes it.
     mutator.TransitionToGCPhaseExclusive(GCPhase::GC_PHASE_CLEAR_SATB_BUFFER, true);
-    GC_EXPECT_TRUE(alloc.GetStoreBarrierBuffer().IsEmpty());
+    GC_EXPECT_TRUE(ThreadLocal::GetGCData().storeBarrierBuffer.IsEmpty());
 
     ThreadLocal::SetMutator(mutatorBefore);
     heap.SetGCPhase(phaseBefore);
@@ -872,4 +874,34 @@ GC_TEST(StoreBuf, ReRememberDoesNotFightBuffer)
     rs.DrainForMinor(drained);
     GC_EXPECT_TRUE(drained.count(slot) == 1);
     GC_EXPECT_EQ(drained.size(), 1u);
+}
+
+// ZThreadLocalData + ZMark::flush: detach publishes both generation stacks,
+// including non-full chunks, even when this OS thread owns no allocator.
+GC_OTHER_VM_TEST(StoreBarrierBuffer, DetachPublishesBothGenerationsWithoutAllocator)
+{
+    GcHeapFixture heap;
+    MarkPublicationFixture marking;
+    std::thread owner([&] {
+        ThreadLocal::SetAllocBuffer(nullptr);
+        RegisterCurrentMarkFlushThread();
+        marking.collector.PublishThreadRoot(heap.obj0, true, true);
+        marking.collector.PublishThreadRoot(heap.obj1, false, false);
+        MutatorManager::Instance().UnregisterMarkFlushThread(ThreadLocal::GetThreadLocalData());
+    });
+    owner.join();
+    size_t young = 0;
+    size_t old = 0;
+    marking.DrainDomain(*marking.collector.YoungMarkDomain(), [&](BaseObject* object, bool follow) {
+        GC_EXPECT_TRUE(object == heap.obj0);
+        GC_EXPECT_TRUE(follow);
+        ++young;
+    });
+    marking.DrainOld([&](BaseObject* object, bool follow) {
+        GC_EXPECT_TRUE(object == heap.obj1);
+        GC_EXPECT_TRUE(!follow);
+        ++old;
+    });
+    GC_EXPECT_EQ(young, 1u);
+    GC_EXPECT_EQ(old, 1u);
 }

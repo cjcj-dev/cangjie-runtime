@@ -62,7 +62,6 @@ public:
     // Test-only: drop pending without Record. Used to prove Flush-before-Drain.
     void Discard();
 
-    static void FlushAll(RememberedSet& rs);
 #if defined(MRT_TESTABLE_INTERNALS)
     uintptr_t LastProcessedColorForTest() const { return lastProcessedColor; }
 #endif

@@ -273,8 +273,8 @@ GC_TEST(BarrierOldAtomic, AllocBufferOverwriteRetiresOldValueControl)
     AllocBufferScope withBuffer(&alloc);
 
     fixture.barrier.WriteReference(fixture.holder, *fixture.field, fixture.newValue);
-    const size_t pending = alloc.GetStoreBarrierBuffer().Pending();
-    alloc.GetStoreBarrierBuffer().Flush(fixture.remembered, fixture.collector);
+    const size_t pending = ThreadLocal::GetGCData().storeBarrierBuffer.Pending();
+    ThreadLocal::GetGCData().storeBarrierBuffer.Flush(fixture.remembered, fixture.collector);
     mutator.FlushStoreBarrierBuffer(false);
     const ReceiptCounts receipts = DrainReceipts(fixture.oldValue, fixture.newValue);
     const bool slotRemembered = fixture.remembered.Contains(reinterpret_cast<MAddress>(fixture.field));
