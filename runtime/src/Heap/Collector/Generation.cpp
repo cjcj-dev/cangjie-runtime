@@ -1029,9 +1029,18 @@ void WCollector::DoYoungGarbageCollection()
     if (rememberedSlots.empty()) {
         // scan_and_follow (zRemembered.cpp:561-576): previous face as grey
         // roots, mutators alive. Flip already happened under STW1.
-        concWindow.remsetSlots =
-            Heap::GetHeap().GetRememberedSet().ScanPreviousForMinor(rememberedSlots);
         ScanRelocatedRememberedFields(rememberedSlots);
+        MinorSlotSet pageSlots;
+        concWindow.remsetSlots =
+            Heap::GetHeap().GetRememberedSet().ScanPreviousForMinor(pageSlots);
+        for (MAddress slot : pageSlots) {
+            ZForwarding* forwarding = ForwardingTable::GetCovering(slot);
+            if (forwarding != nullptr &&
+                forwarding->relocated_remembered_fields_is_concurrently_scanned()) {
+                continue;
+            }
+            rememberedSlots.insert(slot);
+        }
     }
 
     MinorSlotSet liveRememberedSlots;

@@ -8,6 +8,7 @@
 #include "Heap/Barrier/RememberedSet.h"
 
 #include <cstdlib>
+#include <functional>
 #include <cstring>
 #include <new>
 #include <vector>
@@ -326,6 +327,42 @@ size_t RememberedSet::ScanPreviousForMinor(std::unordered_set<MAddress>& records
     ++bitmapCrossCheckCount;
 #endif
     return records.size();
+}
+
+void RememberedSet::VisitPreviousInRange(MAddress start, size_t size,
+                                         const std::function<void(MAddress)>& visitor) const
+{
+    if (!initialized || visitor == nullptr || size < kFieldBytes) {
+        return;
+    }
+    MAddress end = start + size;
+    if (start < heapStart) {
+        start = heapStart;
+    }
+    if (end > heapStart + heapSize) {
+        end = heapStart + heapSize;
+    }
+    if (start >= end) {
+        return;
+    }
+    size_t firstBit = (start - heapStart + kFieldBytes - 1) / kFieldBytes;
+    size_t endBit = (end - heapStart) / kFieldBytes;
+    if (firstBit >= endBit || firstBit >= bitCount) {
+        return;
+    }
+    if (endBit > bitCount) {
+        endBit = bitCount;
+    }
+    const size_t previous = activeBuffer.load(std::memory_order_acquire) ^ 1U;
+    for (size_t bit = firstBit; bit < endBit; ++bit) {
+        size_t word = bit / kBitsPerWord;
+        uint64_t mask = static_cast<uint64_t>(1) << (bit % kBitsPerWord);
+        uint64_t w = bitmaps[previous][word].load(std::memory_order_relaxed);
+        if ((w & mask) == 0) {
+            continue;
+        }
+        visitor(heapStart + bit * kFieldBytes);
+    }
 }
 
 size_t RememberedSet::DrainForMinor(std::unordered_set<MAddress>& records)

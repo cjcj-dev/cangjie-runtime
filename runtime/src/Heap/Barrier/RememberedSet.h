@@ -10,6 +10,7 @@
 #include <atomic>
 #include <cstddef>
 #include <cstdint>
+#include <functional>
 #include <memory>
 #include <unordered_set>
 #include <vector>
@@ -83,6 +84,7 @@ public:
     // zRemembered.cpp:561-576 scan_and_follow: consume the previous face with
     // mutators alive. Callers must FlipForMinor first. DrainForMinor = Flip + Scan.
     size_t ScanPreviousForMinor(std::unordered_set<MAddress>& records);
+    void VisitPreviousInRange(MAddress start, size_t size, const std::function<void(MAddress)>& visitor) const;
 
 #if defined(MRT_GC_UNIT_TESTS)
     struct FlipTouchCounts {
