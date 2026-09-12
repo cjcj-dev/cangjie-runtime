@@ -491,6 +491,10 @@ int ExerciseSegmentedProductAllocation()
         // larger than either segment must still fail after both are cached.
         manager.ReturnPageMemory({ first->GetUnitIdx(), 2, 0, true });
         manager.ReturnPageMemory({ second->GetUnitIdx(), 2, 0, true });
+        if (RegionInfo::TryGetRegionInfoAt(ranges[0].start) != nullptr ||
+            RegionInfo::TryGetRegionInfoAt(ranges[1].start) != nullptr) {
+            return 19;
+        }
         if (manager.TakeRegion(3, role, false, false, false) != nullptr) {
             return 16;
         }
