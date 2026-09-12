@@ -475,7 +475,6 @@ public:
         Collector::AbortUnimplemented("TracingCollector::GetCurrentTagID");
     }
 
-    static const size_t MIN_MARKING_WORK_SIZE;
 
 protected:
     void RequestGCInternal(GCReason reason, bool async) override { collectorResources.RequestGC(reason, async); }

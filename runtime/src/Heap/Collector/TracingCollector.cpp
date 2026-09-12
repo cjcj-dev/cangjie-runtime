@@ -224,7 +224,6 @@ size_t TracingCollector::CurrentThreadRootMapMissCount()
     return g_currentThreadRootMapMissCount;
 }
 
-const size_t TracingCollector::MIN_MARKING_WORK_SIZE = 8;  // forbid forking task if smaller
 
 // Fill gc roots entry to buckets
 void StaticRootTable::RegisterRoots(StaticRootArray* addr, U32 size)

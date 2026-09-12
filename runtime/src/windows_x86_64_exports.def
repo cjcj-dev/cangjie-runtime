@@ -1751,8 +1751,6 @@ EXPORTS
     _ZN12MapleRuntime16TracingCollector20DFSTraceExportObjectEPNS_10BaseObjectE @1768
     _ZN12MapleRuntime16TracingCollector20PreGarbageCollectionEb @1769
     _ZN12MapleRuntime16TracingCollector20TraceObjectRefFieldsEPNS_10BaseObjectERNS_9MarkStackIS2_EE @1770
-    _ZN12MapleRuntime16TracingCollector21MAX_MARKING_WORK_SIZEE @1771 DATA
-    _ZN12MapleRuntime16TracingCollector21MIN_MARKING_WORK_SIZEE @1772 DATA
     _ZN12MapleRuntime16TracingCollector21PostGarbageCollectionEy @1773
     _ZN12MapleRuntime16TracingCollector21RecordStubAllRegisterERNS_11RegSlotsMapEy @1774
     _ZN12MapleRuntime16TracingCollector21RecordStubCalleeSavedERNS_11RegSlotsMapEy @1775
