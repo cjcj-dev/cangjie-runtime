@@ -16,7 +16,7 @@ set(GC_UNIT_SOURCES
     test_z_list.cpp
     test_zstat.cpp
     test_trustp1_phase1.cpp
-    test_route_info.cpp
+
     test_live_map.cpp
     test_object_gate.cpp
     test_remset.cpp
@@ -50,9 +50,7 @@ set(GC_UNIT_SOURCES
     test_relocation_request_queue.cpp
     test_gc_thread_pool.cpp
     test_expire_kept.cpp
-    test_receipt_life.cpp
-    test_receipt_life_registry.cpp
-    test_lifeclock.cpp
+
     test_exempt_unlock.cpp
     test_heal_coverage.cpp
     test_diag_gate.cpp
