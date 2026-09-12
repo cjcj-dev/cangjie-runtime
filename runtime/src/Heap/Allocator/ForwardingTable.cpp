@@ -1039,52 +1039,6 @@ bool ZForwarding::DestUsable(MAddress to)
 
 MAddress ZForwarding::resolve_life(MAddress to) const
 {
-    if (to == 0) {
-        return 0;
-    }
-    // Raw insert() is retained for pre-existing exempt/retired carriers whose
-    // synthetic or non-heap destination has no RegionLifeId to validate.  The
-    // product publication path cannot create such a receipt: InstallMapping
-    // rejects DESTINATION_UNTRACKED before its release CAS.
-    if (!Heap::IsHeapAddress(to)) {
-        return to;
-    }
-    RegionInfo* toRegion = RegionInfo::TryGetRegionInfoAt(to);
-    if (toRegion == nullptr || toRegion->IsFreeRegion() || toRegion->IsGarbageRegion()) {
-        return 0;
-    }
-    const uint8_t toLifeCount = _to_life_n.load(std::memory_order_acquire);
-    if (toLifeCount != 0) {
-        const MAddress start = toRegion->GetRegionStart();
-        const uint8_t seq = toRegion->GetRegionLifeSeq();
-        const RegionLifeId life = toRegion->GetRegionLifeId();
-        bool tracked = false;
-        for (uint8_t i = 0; i < toLifeCount; ++i) {
-            if (_to_lives[i].start == start) {
-                tracked = true;
-                const bool lifeCurrent = RegionLifeClock::Validate(
-                    RegionLifeClock::Carrier::RECEIPT, _to_lives[i].lifeId, life);
-                if (_to_lives[i].lifeId != life) {
-                    StaleToLifeCount().fetch_add(1, std::memory_order_relaxed);
-                }
-                if (!lifeCurrent || _to_lives[i].legacySeq != seq) {
-                    return 0;
-                }
-            }
-        }
-        if (!tracked) {
-            RegionLifeClock::NoteUntracked(RegionLifeClock::Carrier::RECEIPT);
-            if (RegionLifeClock::EnforceEnabled()) {
-                return 0;
-            }
-        }
-    } else {
-        RegionLifeClock::NoteUntracked(RegionLifeClock::Carrier::RECEIPT);
-        if (!RegionLifeClock::Validate(RegionLifeClock::Carrier::RECEIPT, 0,
-                                       toRegion->GetRegionLifeId())) {
-            return 0;
-        }
-    }
     return to;
 }
 
