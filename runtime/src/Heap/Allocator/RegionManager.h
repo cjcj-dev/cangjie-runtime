@@ -38,7 +38,6 @@ namespace MapleRuntime {
 class CopyCollector;
 class CompactCollector;
 class VerifyRegions;
-class TagReuseProbe;
 class WCollector;
 template<Generation G>
 class ForwardTask;
@@ -137,7 +136,6 @@ public:
 // and thus its Alloc should be rewrite with AllocObj(objSize)
 class RegionManager {
     friend class VerifyRegions;
-    friend class TagReuseProbe;
     friend struct PinRootTestAccess;
     friend struct IkeKeepTestAccess;
     friend struct IsFromRegTestAccess;
