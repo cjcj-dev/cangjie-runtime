@@ -40,9 +40,7 @@ public:
         markQuarantineTree.Init(regionCnt);
     }
 
-    // allowSaferegion: when false, never ScopedEnterSaferegion (ROUTING critical section —
-    // holding routeState=ROUTING while waiting on phase transition deadlocks PreForward;
-    // see REPORT-routespin.md). Best-effort one pass; caller falls back to CompactRegion.
+    // allowSaferegion: when false, never ScopedEnterSaferegion. Best-effort one pass.
     RegionInfo* TakeRegion(size_t num, RegionInfo::UnitRole uclass, bool expectPhysicalMem,
                            bool allowSaferegion = true, bool clearPayload = true)
     {

@@ -378,30 +378,17 @@ void VerifyRegions::VerifyAfterPrepareYoung(RegionManager& manager, const Candid
         }
     }
 
-    // R6 light: RouteState vs region type sanity on from-space lists.
-    size_t routeStateAnomalies = 0;
-    auto checkRoute = [&routeStateAnomalies](RegionInfo* region) {
-        if (region == nullptr) {
-            return;
-        }
-        if (region->IsGarbageRegion() && region->IsRoutingState()) {
-            ++routeStateAnomalies;
-        }
-    };
-    manager.fromRegionList.VisitAllRegions(checkRoute);
-    manager.unmovableFromRegionList.VisitAllRegions(checkRoute);
-
     uint64_t t1 = TimeUtil::NanoSeconds();
     VLOG(REPORT,
          "[GCV2][verify][regions] point=%s run=%zu phase=after-prepare-young "
          "env=MRT_GCV2_VERIFY_REGIONS=1 candidates=%zu mustCoverYoung=%zu mustCoverYoungAll=%zu "
          "routeHeldExcluded=%zu missing=%zu unexpectedCand=%zu unexpectedRouteHeldCand=%zu "
          "activeYoungExempt=%zu otherYoung=%zu youngOnLists=%zu youngCounter=%zu youngCounterMismatch=%zu "
-         "multiList=%zu linkBroken=%zu typeMismatch=%zu freeOnList=%zu routeAnom=%zu costNs=%llu",
-         point, youngRunIndex, candidates.size(), mustCoverYoung, mustCoverYoungAll, routeHeldExcluded,
-         missingFromCandidates, unexpectedNonYoungCandidates, unexpectedRouteHeldCandidates, activeYoungExempt,
-         otherYoung, youngOnLists, youngCounter, youngCounterMismatch, multiList, linkBrokenTotal,
-         typeMismatchTotal, freeOnListTotal, routeStateAnomalies, static_cast<unsigned long long>(t1 - t0));
+          "multiList=%zu linkBroken=%zu typeMismatch=%zu freeOnList=%zu costNs=%llu",
+          point, youngRunIndex, candidates.size(), mustCoverYoung, mustCoverYoungAll, routeHeldExcluded,
+          missingFromCandidates, unexpectedNonYoungCandidates, unexpectedRouteHeldCandidates, activeYoungExempt,
+          otherYoung, youngOnLists, youngCounter, youngCounterMismatch, multiList, linkBrokenTotal,
+          typeMismatchTotal, freeOnListTotal, static_cast<unsigned long long>(t1 - t0));
 
     for (size_t i = 0; i < kListNameCount; ++i) {
         if (listStats[i].youngCount == 0 && missingRegionsByList[i] == 0 && routeHeldExcludedByList[i] == 0) {

@@ -44,7 +44,6 @@
 #include "Heap/Verify/DiagGate.h"
 #include "Heap/Verify/TraceClear.h"
 #include "Heap/Verify/FillerZeroDiag.h"
-#include "Heap/Verify/TagReuseProbe.h"
 #include "Heap/Verify/SurvNodeDiag.h"
 #include "Heap/Allocator/RouteDestHold.h"
 #include "Heap/Verify/FromPageDetachCheck.h"
@@ -1161,6 +1160,17 @@ public:
                 if (IsGhostFromRegion()) {
                     return bitmap;
                 }
+                if (!bitmap->CoversRegionSize(GetRegionSize())) {
+                    RegionBitmap* replacement =
+                        LiveInfoArena::GetLiveInfoArena().AllocateRegionBitmap(GetRegionSize());
+                    RegionBitmap* expected = bitmap;
+                    if (__atomic_compare_exchange_n(&face.bitmap, &expected, replacement, false,
+                                                    std::memory_order_seq_cst, std::memory_order_relaxed)) {
+                        bitmap = replacement;
+                    } else {
+                        bitmap = expected;
+                    }
+                }
                 constexpr uint64_t kInitializing = std::numeric_limits<uint64_t>::max();
                 for (;;) {
                     uint64_t seq = face.epoch.load(std::memory_order_acquire);
@@ -1216,6 +1226,17 @@ public:
                 continue;
             }
             if (LIKELY(bitmap != nullptr)) {
+                if (!IsGhostFromRegion() && !bitmap->CoversRegionSize(GetRegionSize())) {
+                    RegionBitmap* replacement =
+                        LiveInfoArena::GetLiveInfoArena().AllocateRegionBitmap(GetRegionSize());
+                    RegionBitmap* expected = bitmap;
+                    if (__atomic_compare_exchange_n(&liveInfo->resurrectBitmap, &expected, replacement, false,
+                                                    std::memory_order_seq_cst, std::memory_order_relaxed)) {
+                        bitmap = replacement;
+                    } else {
+                        bitmap = expected;
+                    }
+                }
                 return bitmap;
             }
             RegionBitmap* newValue = reinterpret_cast<RegionBitmap*>(LiveInfo::TEMPORARY_PTR);
@@ -1255,6 +1276,17 @@ public:
                 continue;
             }
             if (LIKELY(bitmap != nullptr)) {
+                if (!IsGhostFromRegion() && !bitmap->CoversRegionSize(GetRegionSize())) {
+                    RegionBitmap* replacement =
+                        LiveInfoArena::GetLiveInfoArena().AllocateRegionBitmap(GetRegionSize());
+                    RegionBitmap* expected = bitmap;
+                    if (__atomic_compare_exchange_n(&liveInfo->enqueueBitmap, &expected, replacement, false,
+                                                    std::memory_order_seq_cst, std::memory_order_relaxed)) {
+                        bitmap = replacement;
+                    } else {
+                        bitmap = expected;
+                    }
+                }
                 return bitmap;
             }
             RegionBitmap* newValue = reinterpret_cast<RegionBitmap*>(LiveInfo::TEMPORARY_PTR);
@@ -1465,7 +1497,6 @@ public:
             PublishCurrentMarkFace();
             NotePageOwnerFirstPaint<G>();
         }
-        (void)TagReuseProbe::NoteMarkBitsSticky(this, offset, true, "MarkObject_sized0", G);
         CHECK(IsMarkedObject(view, offset));
         return already;
     }
@@ -1508,7 +1539,6 @@ public:
             PublishCurrentMarkFace();
             NotePageOwnerFirstPaint<G>();
         }
-        (void)TagReuseProbe::NoteMarkBitsSticky(this, offset, true, "MarkObject_sized", G);
         CHECK(IsMarkedObject(view, offset));
         return already;
     }
@@ -4082,17 +4112,8 @@ private:
         SetRegionType(RegionType::FREE_REGION);
         SetTraceRegionFlag(0);
         SetNotRelocatableThisCycle(0);
-        // routedest part D: InitRegionInfo resets liveInfo, liveInfo0, the compact route
-        // table and every retained* field, but historically left routeState and routeInfo
-        // alone, so a re-taken region inherited its predecessor's plan and its predecessor's
-        // COMPACTED state. RouteObject reads `RouteRegion(r) || r->IsCompacted()`
-        // (RegionManager.h:605, :626), and the IsCompacted arm bypasses the ghost gate — so
-        // an inherited COMPACTED state left a null liveInfo0 as the only thing standing
-        // between a reused region and answering a route out of the previous life's geometry.
-        // The whole design rests on "the ghost bit bounds route readability"; this is the
-        // one hole in that obligation.
         // Ghost lives in unit metadata, not payload: ClearUnits cannot clear it.
-        // TakeRegion reuses garbage without DispelGhostFromRegion (RegionInfo.h:667-698).
+        // TakeRegion reuses garbage without DispelGhostFromRegion.
         SetInGhostRegion(0);
         SetOldMarkedRegionFlag(0);
         SetEnqueuedRegionFlag(0);

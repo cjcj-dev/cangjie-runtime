@@ -2509,7 +2509,7 @@ void WCollector::UpdateRemsetForFields(BaseObject* from, BaseObject* to)
     if (!to->HasRefField()) {
         return;
     }
-    to->ForEachRefField([&rememberedSet](RefField<>& field) {
+    to->ForEachRefField([this, &rememberedSet](RefField<>& field) {
         BaseObject* target = to_object(field.GetTargetObject());
         if (target == nullptr || !Heap::IsHeapAddress(target)) {
             return;
@@ -2527,6 +2527,10 @@ void WCollector::UpdateRemsetForFields(BaseObject* from, BaseObject* to)
             RegionInfo* winnerRegion = RegionInfo::TryGetRegionInfoAt(hit);
             if (winnerRegion != nullptr && winnerRegion->IsYoungRegion()) {
                 rememberedSet.Record(fieldAddr);
+            } else {
+                (void)CasInstallResolvedTarget(field, raw(field.GetFieldValue()),
+                                               from_object(reinterpret_cast<BaseObject*>(hit)),
+                                               HealSite::WCollectorFixRootForwarded, HealNull::Disallow);
             }
             return;
         }
