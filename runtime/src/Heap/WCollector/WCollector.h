@@ -209,6 +209,7 @@ public:
 
     void MarkNewObject(BaseObject* obj) override;
     bool FlushAllocBufferMarkProducers(AllocBuffer* buffer, MarkDomain* domain);
+    bool FlushAllocBufferMarkProducers(AllocBuffer* buffer);
     bool PublishHandshakeMarkWork(WorkStack& work, MarkDomain* domain);
 
     bool ShouldIgnoreRequest(GCRequest& request) override;

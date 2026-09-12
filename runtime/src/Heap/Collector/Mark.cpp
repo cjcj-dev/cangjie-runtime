@@ -1717,6 +1717,18 @@ bool WCollector::PublishHandshakeMarkWork(WorkStack& work, MarkDomain* domain)
     return published;
 }
 
+bool WCollector::FlushAllocBufferMarkProducers(AllocBuffer* buffer)
+{
+    MarkDomain* domain = MutatorManager::Instance().MarkFlushDomain();
+    if (domain == nullptr) {
+        domain = youngMarkDomain.get();
+    }
+    if (domain == nullptr) {
+        domain = majorMarkDomain.get();
+    }
+    return FlushAllocBufferMarkProducers(buffer, domain);
+}
+
 bool WCollector::FlushAllocBufferMarkProducers(AllocBuffer* buffer, MarkDomain* domain)
 {
     if (buffer == nullptr || domain == nullptr) {

@@ -1493,7 +1493,7 @@ void Mutator::FlushHolderThreadMarkProducers()
         buffer->GetStoreBarrierBuffer().Flush(*rememberedSet);
     }
     auto& collector = static_cast<WCollector&>(Heap::GetHeap().GetCollector());
-    (void)collector.FlushAllocBufferMarkProducers(buffer, nullptr);
+    (void)collector.FlushAllocBufferMarkProducers(buffer);
 }
 
 Mutator::MarkFlushClaim Mutator::TryClaimMarkFlush(bool self, MarkDomain* domain)
@@ -1513,6 +1513,7 @@ Mutator::MarkFlushClaim Mutator::TryClaimMarkFlush(bool self, MarkDomain* domain
     SatbBuffer::Instance().FlushQueue(satbNode);
     const bool holderThread = self && Mutator::GetMutator() == this;
     const bool exclusiveForeign = !self && IsForeignThread() && InSaferegion();
+    const bool parkedOwner = !self && GetEpochHandshakeLifecycle() == EPOCH_HANDSHAKE_PARKED;
     AllocBuffer* buffer = nullptr;
     if (holderThread) {
         buffer = ThreadLocal::GetAllocBuffer();
@@ -1527,6 +1528,8 @@ Mutator::MarkFlushClaim Mutator::TryClaimMarkFlush(bool self, MarkDomain* domain
         if (collector.FlushAllocBufferMarkProducers(buffer, domain)) {
             published = true;
         }
+    } else if (!self && !exclusiveForeign && !parkedOwner) {
+        return MarkFlushClaim::NotSafe;
     }
     ClearSuspensionFlag(SUSPENSION_FOR_MARK_FLUSH);
     SetSafepointActive(HasAnySuspensionRequest());
