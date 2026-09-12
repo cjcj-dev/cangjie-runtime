@@ -11,9 +11,6 @@
 
 #include <array>
 #include <atomic>
-#if defined(MRT_GCV2_UNTAG_BREADCRUMB)
-#include <csignal>
-#endif
 #include <cstdint>
 #include <cstdio>
 #include <cstdlib>
@@ -31,9 +28,6 @@
 #include <vector>
 #include <unistd.h>
 
-#if defined(MRT_GCV2_UNTAG_BREADCRUMB)
-#include "Base/SysCall.h"
-#endif
 #include "Concurrency/Concurrency.h"
 #include "Heap/Barrier/StoreBarrierBuffer.h"
 #include "Heap/Collector/GcTriggerFlags.h"
@@ -43,9 +37,6 @@
 #include "Heap/Collector/TenuringThreshold.h"
 #include "Heap/GcThreadPool.h"
 #include "Heap/HeapWork.h"
-#if defined(MRT_GCV2_UNTAG_BREADCRUMB)
-#include "Heap/WCollector/UntagRefFieldBreadcrumb.h"
-#endif
 #include "Heap/Verify/VerifyHeap.h"
 #include "Heap/Verify/MarkCompleteVerify.h"
 #include "Heap/Verify/VerifyOption.h"
@@ -70,9 +61,6 @@
 #include "ObjectModel/RefField.inline.h"
 #include "TypeInfoManager.h"
 #include "Verify/VerifyRegions.h"
-#if defined(MRT_GCV2_UNTAG_BREADCRUMB)
-#include "securec.h"
-#endif
 #include "Heap/WCollector/WCollectorInternal.h"
 
 namespace MapleRuntime {
@@ -700,7 +688,7 @@ void WCollector::TraceHeap()
     VerifyMarkingStacks::VerifyEmpty(VerifyMarkingStacks::MarkingGeneration::MAJOR,
                                      VerifyMarkingStacks::MarkingBoundary::START,
                                      VerifyMarkingStacks::MarkingContainer::POOL,
-                                     GetThreadPool()->GetWorkCount(), 0);
+                                     GetWorkers().GetSnapshot().remainingWorkers, 0);
     // Collect young→old targets before Assemble (survivors still current-space).
     // Paint after Assemble+PrepareTrace so ClearLiveInfo cannot wipe the bits
     // (zMark.inline.hpp:58-65 mark_before_push).
@@ -824,7 +812,7 @@ void WCollector::TraceHeap()
         VerifyMarkingStacks::VerifyEmpty(VerifyMarkingStacks::MarkingGeneration::MAJOR,
                                          VerifyMarkingStacks::MarkingBoundary::END,
                                          VerifyMarkingStacks::MarkingContainer::POOL,
-                                         GetThreadPool()->GetWorkCount(), 0);
+                                         GetWorkers().GetSnapshot().remainingWorkers, 0);
 
         ProcessFinalizers();
     }
@@ -1420,7 +1408,7 @@ private:
 
 void WCollector::TraceYoungClosureStriped(WorkStack& workStack, bool fullYoungScan,
                                           std::vector<BaseObject*>& reachableVec, MinorSlotSet& reachableSlots,
-                                          MinorSlotSet& weakSlots, GCThreadPool* threadPool,
+                                          MinorSlotSet& weakSlots,
                                           const MinorSlotSet* reachableSlotDomain)
 {
     g_markStripeArmed.fetch_add(1, std::memory_order_relaxed);
@@ -1560,7 +1548,7 @@ void WCollector::TraceYoungClosure(WorkStack& workStack, bool fullYoungScan,
     VerifyMarkingStacks::NoteProducer(VerifyMarkingStacks::MarkingGeneration::YOUNG,
                                       VerifyMarkingStacks::MarkingContainer::OWNER, workStack.size());
     TraceYoungClosureStriped(workStack, fullYoungScan, reachableVec, reachableSlots, weakSlots,
-                             GetThreadPool(), reachableSlotDomain);
+                             reachableSlotDomain);
 }
 
 // youngconc: SATB termination for concurrent young mark — same loop shape as

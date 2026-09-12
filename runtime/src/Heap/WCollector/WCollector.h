@@ -1382,7 +1382,7 @@ private:
                            const MinorSlotSet* reachableSlotDomain = nullptr);
     void TraceYoungClosureStriped(WorkStack& workStack, bool fullYoungScan,
                                   std::vector<BaseObject*>& reachableVec, MinorSlotSet& reachableSlots,
-                                  MinorSlotSet& weakSlots, GCThreadPool* threadPool,
+                                  MinorSlotSet& weakSlots,
                                   const MinorSlotSet* reachableSlotDomain = nullptr);
     // youngconc: drain SATB into TraceYoungClosure (major MarkSatbBuffer sibling; young-only filter).
     bool MarkYoungSatbBuffer(WorkStack& workStack, bool fullYoungScan,

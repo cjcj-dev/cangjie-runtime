@@ -35,8 +35,6 @@ constexpr uint64_t NS_PER_S = 1000000000;
 // :998-1006), and resumes concurrent follow when that cut exposes work
 // (zMark.cpp:973-990). This must stay compile-time and default-on: retired-only
 // sampling cannot see a mutator's non-full SATB node.
-constexpr bool kMarkTerminateInPause = true;
-inline bool MarkTerminateInPauseEnabled() { return kMarkTerminateInPause; }
 
 void NoteMarkTerminatePause();
 void NoteMarkTerminateFlushed(size_t n);
@@ -476,7 +474,6 @@ public:
         Collector::AbortUnimplemented("TracingCollector::GetCurrentTagID");
     }
 
-    static const size_t MAX_MARKING_WORK_SIZE;
     static const size_t MIN_MARKING_WORK_SIZE;
 
 protected:
@@ -562,7 +559,7 @@ protected:
     bool MarkSatbBuffer(WorkStack& workStack);
 
     // concurrent marking.
-    void TracingImpl(WorkStack& workStack, WorkStack& foreignRootsSet, bool parallel);
+    void TracingImpl(WorkStack& workStack, WorkStack& foreignRootsSet);
 
     void AddExportObjectsTracingWork(RootSet& exportRoots);
     virtual void EnumAndTagRawRoot(ObjectRef& root, RootSet& rootSet) const
@@ -573,8 +570,8 @@ protected:
     void FindUselessExternObjects();
 
 private:
-    size_t RunMajorStripeMark(WorkStack& workStack, bool parallel, bool partial = false);
-    void ConcurrentReMark(WorkStack& remarkStack, bool parallel);
+    size_t RunMajorStripeMark(WorkStack& workStack, bool partial = false);
+    void ConcurrentReMark(WorkStack& remarkStack);
     void EnumMutatorRoot(ObjectPtr& obj, RootSet& rootSet) const;
     void EnumConcurrencyModelRoots(RootSet& rootSet) const;
     void EnumStaticRoots(RootSet& rootSet) const;
