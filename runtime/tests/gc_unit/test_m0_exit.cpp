@@ -279,7 +279,7 @@ struct RootEntryFixture {
                               RegionInfo::UNIT_SIZE);
         heap.region0->SetRegionType(RegionInfo::RegionType::FROM_REGION);
         heap.region0->SetInGhostRegion(1);
-        heap.region0->SetRouteState(RegionInfo::ROUTED);
+        heap.region0->MarkForwardingDone();
         if (!forwarding.InstallPublicationBeforeCopy(
                 heap.region0->GetRegionStart(), heap.region0->GetRegionSize(), heap.region0)) {
             GC_EXPECT_TRUE(forwarding.PreparePublicationGeneration(
