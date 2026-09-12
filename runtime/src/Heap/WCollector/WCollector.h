@@ -219,6 +219,7 @@ public:
     void FollowPartialArray(const MarkStackEntry& entry, WorkStack& workStack) override;
     BaseObject* GetAndTryTagObj(RefSlotKind kind, BaseObject* obj, RefField<>& field) override;
     BaseObject* ForwardObject(BaseObject* fromVersion) override;
+    BaseObject* ForwardObjectExclusive(BaseObject* obj) override;
     BaseObject* ResolveStoreValue(BaseObject* ref, const ForwardingProvenance& provenance) const override;
     void PostResolveCycleTask();
     void PrepareCycleRef()
@@ -932,7 +933,6 @@ protected:
                               const ForwardingProvenance& provenance) const;
     BaseObject* ForwardObjectImpl(BaseObject* obj, RegionInfo* ghostFromRegion,
                                   const RegionInfo::RetainScope& lease);
-    BaseObject* ForwardObjectExclusive(BaseObject* obj) override;
     // zRelocate.cpp:354-379 relocate_object_inner: find hit → return; else
     // alloc (or reuse a prepared dest) → copy → insert; CAS loser uses winner.
     BaseObject* RelocateObjectInner(BaseObject* obj, BaseObject* planned, RegionInfo* copyPage);
