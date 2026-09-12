@@ -16,7 +16,7 @@ class Collector;
 // Machine-checked global invariants, as opposed to ported functions.
 //
 // Why this file exists.  Every mechanism ZGC uses is already in this tree and is faithful to it:
-// ZgcSelfHeal is a line-by-line port of ZBarrier::self_heal, DrainScope carries ZForwardingLife's
+// ZgcSelfHeal is a line-by-line port of ZBarrier::self_heal, in-place claim carries ZForwardingLife's
 // own names for detach_page/claim_page, is_young_load_good / is_old_load_good / remap_generation
 // all exist including the double-remap side-table path, ColourTypes.h mirrors zAddress.hpp's three
 // enum classes, and the flip masks start from the same values ZGC starts from.  Twelve separate

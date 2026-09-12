@@ -7,6 +7,9 @@
 #include "Heap/Collector/ZForwardingLife.h"
 
 #include "Heap/Allocator/RegionInfo.h"
+#include "Heap/Verify/MutatorRelocate.h"
+#include "Heap/Collector/ZForwarding.h"
+#include "Base/TimeUtils.h"
 
 #include <cstdio>
 #include <cstdlib>
@@ -71,40 +74,11 @@ void ZForwardingLife::WaitUntilRef(std::atomic<int32_t>& refCount, int32_t expec
     }
 }
 
-void ZForwardingLife::WaitUntilCopyAdmissionSettled(std::atomic<int32_t>& copyWord)
-{
-    while (copy_admission_state(copyWord) == CopyAdmissionState::ENTERING) {
-        sched_yield();
-    }
-}
-
-void ZForwardingLife::wait_copied(std::atomic<int32_t>& copyWord)
-{
-    for (;;) {
-        int32_t word = copyWord.load(std::memory_order_acquire);
-        const CopyAdmissionState state = copy_admission_state(word);
-        if (state == CopyAdmissionState::ENTERING) {
-            WaitUntilCopyAdmissionSettled(copyWord);
-            continue;
-        }
-        if (state == CopyAdmissionState::OPEN) {
-            const int32_t sealed = PackCopyWord(CopyAdmissionState::SEALED, copy_count(word));
-            if (!copyWord.compare_exchange_weak(
-                    word, sealed, std::memory_order_acq_rel, std::memory_order_acquire)) {
-                continue;
-            }
-        }
-        WaitUntilRef(copyWord, CopyAdmissionSealedWord());
-        return;
-    }
-}
-
-RegionInfo::DrainScope::DrainScope(RegionInfo* region, MutatorRelocate::Retire site)
+RegionInfo::InPlaceClaimScope::InPlaceClaimScope(RegionInfo* region, MutatorRelocate::Retire site)
     : owner(ForwardingTable::RetainPageOwner(region))
 {
     if (region == nullptr) return;
     const uint64_t start = TimeUtil::NanoSeconds();
-    ZForwardingLife::wait_copied(region->metadata.copyInflight);
     if (!owner) {
         MutatorRelocate::NoteDrain(site, TimeUtil::NanoSeconds() - start, false);
         return;
@@ -113,13 +87,23 @@ RegionInfo::DrainScope::DrainScope(RegionInfo* region, MutatorRelocate::Retire s
     const bool borrowed = ZForwardingLife::CurrentPageWork() == owner.get();
     if (before == 0 || (!borrowed && !owner->claim())) {
         owner->detach_page();
-    } else {
-        if (before > 0) {
-            owner->in_place_relocation_claim_page();
-            retiring = true;
-        }
+    } else if (before > 0) {
+        owner->in_place_relocation_claim_page();
+        retiring = true;
     }
     MutatorRelocate::NoteDrain(site, TimeUtil::NanoSeconds() - start, before != 0 && before != 1);
+}
+
+void ZForwardingLife::WaitPageDone(ZForwarding* forwarding)
+{
+    if (forwarding == nullptr) {
+        return;
+    }
+    // zForwarding.cpp:110-130: the page worker never waits for its own done.
+    if (CurrentPageWork() == forwarding) {
+        return;
+    }
+    WaitUntilDone(forwarding->ref_count(), forwarding->done());
 }
 
 void ZForwardingLife::WaitUntilDone(std::atomic<int32_t>& refCount, const std::atomic<bool>& done)

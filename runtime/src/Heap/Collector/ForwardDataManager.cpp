@@ -41,7 +41,7 @@ void ForwardDataManager::ClearPreviousForwardData()
     regionSpace.GetRegionManager().NullLiveInfoFieldsInRange(rangeStart, rangeSize);
     TagReuseProbe::ScanBeforeRelease(rangeStart, rangeSize, prev, liveStart, livePos, bmStart, bmPos);
     // ZForwardingLife has already drained every from-region that could still hold a
-    // liveInfo0 local into this range (DrainScope on dispel / take-garbage). A late
+    // liveInfo0 local into this range (in-place claim on dispel / take-garbage). A late
     // RouteObject is refused at retain_page (count == 0) and never loads the pointer.
 
     space.ReleaseMemory();

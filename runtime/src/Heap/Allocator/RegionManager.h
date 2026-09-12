@@ -789,33 +789,6 @@ public:
         return rs == RegionInfo::RouteState::FORWARDED || rs == RegionInfo::RouteState::COMPACTED;
     }
 
-    RoutePlan PlanRoute(BaseObject* fromObj, RegionInfo* fromRegionInfo, CopierRouteToken)
-    {
-        return RoutePlan{ ComputeRoute(fromObj, fromRegionInfo) };
-    }
-
-    RoutePlan PlanRoute(BaseObject* fromObj, RegionInfo* fromRegionInfo,
-                        const RegionInfo::RetainScope& lease, CopierRouteToken)
-    {
-        CHECK(lease.covers(fromRegionInfo));
-        return RoutePlan{ ComputeRouteBorrowed(fromObj, fromRegionInfo) };
-    }
-
-    RoutePlan PlanRoute(BaseObject* fromObj, CopierRouteToken)
-    {
-        return PlanRouteLookup(fromObj);
-    }
-
-    RoutePlan PlanRoute(BaseObject* fromObj, RegionInfo* fromRegionInfo, StwRouteToken)
-    {
-        return RoutePlan{ ComputeRoute(fromObj, fromRegionInfo) };
-    }
-
-    RoutePlan PlanRoute(BaseObject* fromObj, StwRouteToken)
-    {
-        return PlanRouteLookup(fromObj);
-    }
-
     PublishedRoute FindPublishedRoute(BaseObject* fromObj, RegionInfo* fromRegionInfo)
     {
         BaseObject* to = ComputeRoute(fromObj, fromRegionInfo);
@@ -1054,15 +1027,6 @@ public:
     }
 
 private:
-    RoutePlan PlanRouteLookup(BaseObject* fromObj)
-    {
-        RegionInfo* fromRegionInfo = RegionInfo::GetGhostFromRegionAt(reinterpret_cast<MAddress>(fromObj));
-        if (fromRegionInfo == nullptr) {
-            return RoutePlan{ nullptr };
-        }
-        return RoutePlan{ ComputeRoute(fromObj, fromRegionInfo) };
-    }
-
     BaseObject* ComputeRoute(BaseObject* fromObj, RegionInfo* fromRegionInfo)
     {
         RegionInfo::RetainScope retain(fromRegionInfo);

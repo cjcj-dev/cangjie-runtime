@@ -314,9 +314,6 @@ echo "PUBLICATION_TESTABLE=$((${#PUBLICATION_TESTABLE_FLAGS[@]} != 0))"
 # scheduling fixture.  Derive that product shape from the linked SO, not from
 # the test translation unit's unconditional MRT_TESTABLE_INTERNALS definition.
 PUBLICATION_HOOK_TESTS=(
-  ForwardingPublicationProduct.MutatorRuntimeEntryReachesCopyAdmission
-  ForwardingPublicationProduct.CopyAdmissionSealWaitsRealCopierAndRejectsLateEntry
-  ForwardingPublicationProduct.AdmittedCopierExitsWhilePeerEntering
 )
 PUBLICATION_HOOK_FLAGS=()
 PUBLICATION_HOOK_EXPORTS="$OUT/forwarding-publication-hook-exports.txt"
@@ -1026,11 +1023,6 @@ for test_name in "${PUBLICATION_HOOK_TESTS[@]}"; do
     publication_contract_rc=1
   fi
 done
-if [[ "$PUBLICATION_HOOK_PRODUCT_SHAPE" == testable ]] &&
-    ! /usr/bin/grep -F -q 'I03_TARGET_REACHED state=1 count=1' "${publication_logs[@]}"; then
-  echo "GC_UNIT_I03_TARGET_NOT_REACHED" >&2
-  publication_contract_rc=1
-fi
 if [[ "$REMAP_RECEIPT_PRODUCT_SHAPE" == testable ]]; then
   if ! /usr/bin/grep -F -q "[  RUN   ] $REMAP_RECEIPT_TEST" "${publication_logs[@]}" ||
       ! /usr/bin/grep -F -q "[  PASS  ] $REMAP_RECEIPT_TEST" "${publication_logs[@]}" ||

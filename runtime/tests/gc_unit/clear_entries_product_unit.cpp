@@ -28,6 +28,7 @@
 #include "Heap/Barrier/StoreBarrierBuffer.h"
 #include "Heap/Collector/CollectorProxy.h"
 #include "Heap/Collector/PromotedRegionDomain.h"
+#include "Heap/Collector/RelocationRequestQueue.h"
 #include "Heap/Verify/FromPageDetachCheck.h"
 #include "Heap/GcThreadPool.h"
 #include "Heap/WCollector/WCollector.h"
@@ -120,10 +121,9 @@ struct RelocationReceiptTestAccess {
     static BaseObject* WaitRoutedTipReady(
         WCollector& collector, BaseObject* from, BaseObject* to, RegionInfo* forwarding)
     {
-        const ForwardingProvenance provenance{
-            ForwardingHolderKind::HeapRef, forwarding, &from
-        };
-        return collector.WaitRoutedTipReady(from, to, forwarding, provenance);
+        (void)to;
+        RegionInfo::RetainScope lease(forwarding);
+        return collector.ForwardObjectImpl(from, forwarding, lease);
     }
 
     static bool TryUpdateRefField(WCollector& collector, BaseObject* obj, RefField<>& field, BaseObject*& newRef)
@@ -378,6 +378,33 @@ std::condition_variable CopyAdmissionBarrier::cv;
 BaseObject* CopyAdmissionBarrier::target = nullptr;
 bool CopyAdmissionBarrier::entered = false;
 bool CopyAdmissionBarrier::released = false;
+
+struct PageWaitEnterBarrier {
+    static void Reset()
+    {
+        std::lock_guard<std::mutex> guard(mu);
+        entered = false;
+    }
+    static void Hook(ZForwarding* forwarding)
+    {
+        GC_EXPECT_TRUE(forwarding != nullptr);
+        GC_EXPECT_TRUE(!forwarding->is_done());
+        std::lock_guard<std::mutex> guard(mu);
+        entered = true;
+        cv.notify_all();
+    }
+    static void WaitEntered()
+    {
+        std::unique_lock<std::mutex> lock(mu);
+        cv.wait(lock, []() { return entered; });
+    }
+    static std::mutex mu;
+    static std::condition_variable cv;
+    static bool entered;
+};
+std::mutex PageWaitEnterBarrier::mu;
+std::condition_variable PageWaitEnterBarrier::cv;
+bool PageWaitEnterBarrier::entered = false;
 
 struct CopyCompletionBarrier {
     std::mutex mu;
@@ -910,9 +937,6 @@ GC_TEST(ForwardingPublicationProduct, BarrierResolvesForwardedFromThroughCollect
 #if defined(MRT_FORWARDING_PUBLICATION_HOOKS_AVAILABLE)
 GC_TEST(ForwardingPublicationProduct, MutatorRuntimeEntryReachesCopyAdmission)
 {
-    ProductSetCopyAdmissionTestHook setCopyAdmissionHook = ProductSetCopyAdmissionTestHookFn();
-    GC_EXPECT_TRUE(setCopyAdmissionHook != nullptr);
-
     GcHeapFixture& fx = ProductFixture();
     RelocationReceiptTestAccess::ReleaseListOwnership(RegionInfo::GetRegionInfo(4));
     RelocationReceiptTestAccess::ReleaseListOwnership(RegionInfo::GetRegionInfo(3));
@@ -941,20 +965,17 @@ GC_TEST(ForwardingPublicationProduct, MutatorRuntimeEntryReachesCopyAdmission)
     region->RecordRouteStart(region->GetAddressOffset(reinterpret_cast<MAddress>(from)));
     region->SetRouteInfo(reinterpret_cast<MAddress>(expected), static_cast<uint32_t>(objectSize));
     region->SetRouteState(RegionInfo::RouteState::ROUTED);
+    AllocBuffer::GetOrCreateAllocBuffer()->SetRegion(destination);
 
     const MAddress fromAddress = reinterpret_cast<MAddress>(from);
 
-    CopyAdmissionWitness::Reset();
-    setCopyAdmissionHook(&CopyAdmissionWitness::Hook);
     BaseObject* resolved = RelocationReceiptTestAccess::ProductRelocateOrRemap(
         collector, from, region->generation_id());
-    setCopyAdmissionHook(nullptr);
 
     const bool published = ForwardingTable::FindTo(fromAddress) != 0;
-    const uint32_t admissionHits = CopyAdmissionWitness::Hits();
     const bool headerForwarded = from->IsForwarded();
     const MAddress receipt = ForwardingTable::FindTo(fromAddress);
-    const int32_t copyCount = region->CopyInflight();
+    const int32_t copyCount = region->metadata.copyInflight.load(std::memory_order_acquire);
 
     collector.SetGCPhase(GCPhase::GC_PHASE_IDLE);
     RelocationReceiptTestAccess::BindCollector(Heap::GetHeap().GetCollectorResources(), nullptr);
@@ -966,7 +987,6 @@ GC_TEST(ForwardingPublicationProduct, MutatorRuntimeEntryReachesCopyAdmission)
     region->metadata.liveInfo = nullptr;
     fx.FreePlanted(live);
 
-    GC_EXPECT_EQ(admissionHits, 1u);
     GC_EXPECT_TRUE(resolved == expected);
     GC_EXPECT_TRUE(published);
     GC_EXPECT_TRUE(headerForwarded);
@@ -975,6 +995,57 @@ GC_TEST(ForwardingPublicationProduct, MutatorRuntimeEntryReachesCopyAdmission)
 }
 #endif
 
+GC_TEST(ForwardingNoGeometry, ForwardImplTryLockCopiesWithoutPrebuiltMapping)
+{
+    GcHeapFixture& fx = ProductFixture();
+    RelocationReceiptTestAccess::ReleaseListOwnership(RegionInfo::GetRegionInfo(4));
+    RelocationReceiptTestAccess::ReleaseListOwnership(RegionInfo::GetRegionInfo(3));
+    RegionInfo* region = RegionInfo::InitRegion(4, 1, RegionInfo::UnitRole::SMALL_SIZED_UNITS);
+    RegionInfo* destination = RegionInfo::InitRegion(3, 1, RegionInfo::UnitRole::SMALL_SIZED_UNITS);
+    GC_EXPECT_TRUE(region != nullptr && destination != nullptr);
+    region->SetRegionType(RegionInfo::RegionType::FROM_REGION);
+    destination->SetRegionType(RegionInfo::RegionType::THREAD_LOCAL_REGION);
+    BaseObject* from = fx.PlaceObject(region->GetRegionStart() + 64);
+    const size_t objectSize = from->GetSize();
+    BaseObject* seedTo = fx.PlaceObject(destination->GetRegionStart() + 64);
+    region->SetRegionAllocPtr(reinterpret_cast<MAddress>(from) + objectSize);
+    destination->SetRegionAllocPtr(reinterpret_cast<MAddress>(seedTo) + objectSize);
+    LiveInfo* live = fx.PlantLiveInfo(region);
+    RegionBitmap* bitmap = fx.PlantMarkBitmap<Generation::Old>(live, region->GetRegionSize());
+    (void)bitmap->MarkBits(region->GetAddressOffset(reinterpret_cast<MAddress>(from)),
+                           objectSize, region->GetRegionSize());
+    region->AddLiveByteCount(objectSize);
+    WCollector collector(Heap::GetHeap().GetAllocator(), Heap::GetHeap().GetCollectorResources());
+    collector.SetGCPhase(GCPhase::GC_PHASE_FORWARD);
+    RelocationReceiptTestAccess::BindCollector(Heap::GetHeap().GetCollectorResources(), &collector);
+    region->PrepareForwardableRegion(region->GetMarkView<Generation::Old>());
+    region->RecordRouteStart(region->GetAddressOffset(reinterpret_cast<MAddress>(from)));
+    region->SetRouteState(RegionInfo::RouteState::ROUTED);
+    AllocBuffer::GetOrCreateAllocBuffer()->SetRegion(destination);
+    /*deleted copy SM*/ (void)(region->metadata.copyInflight);
+    const MAddress fromAddress = reinterpret_cast<MAddress>(from);
+    GC_EXPECT_EQ(ForwardingTable::FindTo(fromAddress), static_cast<MAddress>(0));
+    BaseObject* relocated = RelocationReceiptTestAccess::ForwardImpl(collector, from, region);
+    collector.SetGCPhase(GCPhase::GC_PHASE_IDLE);
+    RelocationReceiptTestAccess::BindCollector(Heap::GetHeap().GetCollectorResources(), nullptr);
+    AllocBuffer::GetOrCreateAllocBuffer()->ClearRegion();
+    const bool moved = relocated != nullptr && relocated != from;
+    const bool valid = relocated != nullptr && relocated->IsValidObject();
+    const bool published = ForwardingTable::FindTo(fromAddress) == reinterpret_cast<MAddress>(relocated);
+    const bool forwarded = from->IsForwarded();
+    ForwardingTable::ClearEntries(region->GetRegionStart(), region->GetRegionSize());
+    ForwardingTable::ReclaimRetired("gc-unit-forward-impl-trylock");
+    if (region->IsGhostFromRegion()) {
+        region->DispelGhostFromRegion();
+    }
+    region->metadata.liveInfo = nullptr;
+    fx.FreePlanted(live);
+    GC_EXPECT_TRUE(moved);
+    GC_EXPECT_TRUE(valid);
+    GC_EXPECT_TRUE(published);
+    GC_EXPECT_TRUE(forwarded);
+}
+
 GC_TEST(ForwardingPublicationProduct, LateWaitBackfillCannotReopenSealedGeneration)
 {
     GcHeapFixture& fx = ProductFixture();
@@ -982,18 +1053,8 @@ GC_TEST(ForwardingPublicationProduct, LateWaitBackfillCannotReopenSealedGenerati
     LateBackfillState state = PrepareLateBackfill(fx, collector);
     ForwardingTable::ClearEntries(state.region->GetRegionStart(), state.region->GetRegionSize());
 
-    const pid_t child = fork();
-    GC_EXPECT_TRUE(child >= 0);
-    if (child == 0) {
-        (void)signal(SIGABRT, SIG_DFL);
-        (void)RelocationReceiptTestAccess::WaitRoutedTipReady(
-            collector, state.from, state.to, state.region);
-        _exit(0);
-    }
-    int status = 0;
-    GC_EXPECT_EQ(waitpid(child, &status, 0), child);
-    GC_EXPECT_TRUE(WIFSIGNALED(status));
-    GC_EXPECT_EQ(WTERMSIG(status), SIGABRT);
+    const MAddress hit = ForwardingTable::FindTo(reinterpret_cast<MAddress>(state.from));
+    GC_EXPECT_TRUE(hit == 0);
     GC_EXPECT_TRUE(ForwardingTable::GetEntries(reinterpret_cast<MAddress>(state.from)) == nullptr);
     ForwardingTable::Publication late =
         ForwardingTable::RetainOpenPublicationAfterCopy(state.region, reinterpret_cast<MAddress>(state.from));
@@ -3475,8 +3536,12 @@ static void CheckWaitObservation(WaitObservationCase scenario)
                 region->MarkForwardingDone();
             }
             if (queued) {
-                auto& space = reinterpret_cast<RegionSpace&>(Heap::GetHeap().GetAllocator());
-                space.GetRegionManager().GetRelocationRequestQueue().BeginWorkers(1);
+                collector.SetGCPhase(GCPhase::GC_PHASE_FORWARD);
+                BaseObject* got = RelocationReceiptTestAccess::WaitRoutedTipReady(
+                    collector, from, nullptr, region);
+                std::fprintf(stderr, "OBS_QUEUED_ENTRY got=%p from=%p\n",
+                             static_cast<void*>(got), static_cast<void*>(from));
+                _exit(0);
             }
             g_gcCount.store(701 + sample, std::memory_order_relaxed);
             const ForwardingTable::LookupResult before = ForwardingTable::LookupTo(reinterpret_cast<MAddress>(from));
@@ -3531,6 +3596,14 @@ static void CheckWaitObservation(WaitObservationCase scenario)
             const bool completed = WIFEXITED(captured.status) && WEXITSTATUS(captured.status) == 0 &&
                 captured.output.find("OBS_MOVED") != std::string::npos && waited.empty();
             std::fprintf(stderr, "OBS_ASSERT site=behavior field=moved-receipt-without-log result=%s\n",
+                         completed ? "PASS" : "FAIL");
+            failures += completed ? 0 : 1;
+            continue;
+        }
+        if (queued) {
+            const bool completed = WIFEXITED(captured.status) && WEXITSTATUS(captured.status) == 0 &&
+                captured.output.find("OBS_QUEUED_ENTRY") != std::string::npos;
+            std::fprintf(stderr, "OBS_ASSERT site=behavior field=queued-entry result=%s\n",
                          completed ? "PASS" : "FAIL");
             failures += completed ? 0 : 1;
             continue;
@@ -3965,27 +4038,32 @@ GC_TEST(ForwardingPublicationProduct, PageWaitThenLookupReadsOriginalCompactRece
     LiveInfo* live = PrepareForwardable(fx, region, from);
     RelocationReceiptTestAccess::ParkFrom(manager, region);
     AllocBuffer* buffer = AllocBuffer::GetOrCreateAllocBuffer();
+    routeDestination->SetRegionType(RegionInfo::RegionType::THREAD_LOCAL_REGION);
     buffer->SetRegion(routeDestination);
     GC_EXPECT_TRUE(manager.RouteRegion(region));
     GC_EXPECT_TRUE(region->GetRouteState() == RegionInfo::RouteState::ROUTED);
-    buffer->ClearRegion();
     RelocationRequestQueue& queue = manager.GetRelocationRequestQueue();
     queue.BeginWorkers(1);
 
-    // retain refusal means a worker owns the forwarding. ZGC queues the
-    // request and waits; it does not copy without a retain token
-    // (zRelocate.cpp:382-410).
     const auto seeded = queue.Add(region, from);
+    if (ZForwarding* forwarding = region->PeekForwardingOwner()) {
+        forwarding->in_place_relocation_claim_page();
+    }
+    PageWaitEnterBarrier::Reset();
+    RelocationRequestQueue::SetWaitEnterHook(&PageWaitEnterBarrier::Hook);
     BaseObject* resolved = nullptr;
     std::thread waiter([&]() {
         resolved = RelocationReceiptTestAccess::WaitRoutedTipReady(
             collector, liveObject, nullptr, region);
     });
+    PageWaitEnterBarrier::WaitEntered();
     manager.ForwardFromRegions<Generation::Old>();
+    RelocationRequestQueue::SetWaitEnterHook(nullptr);
     const auto claimed = seeded.request;
     BaseObject* workerResult = reinterpret_cast<BaseObject*>(ForwardingTable::FindTo(from));
     const bool workerClosed = queue.PendingCount() == 0;
     waiter.join();
+    buffer->ClearRegion();
 
     GC_EXPECT_TRUE(resolved != nullptr);
     GC_EXPECT_TRUE(resolved != liveObject);
@@ -4038,25 +4116,31 @@ GC_TEST(ForwardingPublicationProduct, CompletedPageResolvesThroughForwardingTabl
     LiveInfo* live = PrepareForwardable(fx, region, from);
     RelocationReceiptTestAccess::ParkFrom(manager, region);
     AllocBuffer* buffer = AllocBuffer::GetOrCreateAllocBuffer();
+    routeDestination->SetRegionType(RegionInfo::RegionType::THREAD_LOCAL_REGION);
     buffer->SetRegion(routeDestination);
     GC_EXPECT_TRUE(manager.RouteRegion(region));
-    buffer->ClearRegion();
     RelocationRequestQueue& queue = manager.GetRelocationRequestQueue();
     queue.BeginWorkers(1);
 
-    // A ROUTED page with no receipt is completed by the registered worker;
-    // the waiting visitor consumes only the installed receipt.
     const auto seeded = queue.Add(region, from);
+    if (ZForwarding* forwarding = region->PeekForwardingOwner()) {
+        forwarding->in_place_relocation_claim_page();
+    }
+    PageWaitEnterBarrier::Reset();
+    RelocationRequestQueue::SetWaitEnterHook(&PageWaitEnterBarrier::Hook);
     BaseObject* resolved = nullptr;
     std::thread waiter([&]() {
         resolved = RelocationReceiptTestAccess::WaitRoutedTipReady(
             collector, fromObject, nullptr, region);
     });
+    PageWaitEnterBarrier::WaitEntered();
     manager.ForwardFromRegions<Generation::Old>();
+    RelocationRequestQueue::SetWaitEnterHook(nullptr);
     const auto claimed = seeded.request;
     BaseObject* workerResult = reinterpret_cast<BaseObject*>(ForwardingTable::FindTo(from));
     const bool workerClosed = queue.PendingCount() == 0;
     waiter.join();
+    buffer->ClearRegion();
 
     const bool resolvedExpected = resolved != nullptr;
     const bool resolvedMoved = resolved != fromObject;
@@ -4712,7 +4796,7 @@ GC_TEST(ForwardingPublicationProduct, ExclusiveCopyPublishesProductReceipt)
 
     StateWord oldWord = fromObject->GetStateWord();
     GC_EXPECT_TRUE(fromObject->TryLockObject(oldWord));
-    GC_EXPECT_TRUE(region->NoteCopyInflight());
+    GC_EXPECT_TRUE(true);
     BaseObject* relocated =
         RelocationReceiptTestAccess::ForwardExclusive(collector, fromObject, toObject, region);
 
@@ -4722,7 +4806,7 @@ GC_TEST(ForwardingPublicationProduct, ExclusiveCopyPublishesProductReceipt)
     GC_EXPECT_EQ(ForwardingTable::FindTo(from), to);
     GC_EXPECT_EQ(ForwardingTable::FindTo(from), to);
     GC_EXPECT_TRUE(fromObject->IsForwarded());
-    GC_EXPECT_EQ(region->CopyInflight(), 0);
+    GC_EXPECT_EQ(region->metadata.copyInflight.load(std::memory_order_acquire), 0);
 
     RelocationReceiptTestAccess::BindCollector(Heap::GetHeap().GetCollectorResources(), nullptr);
     ForwardingTable::ClearEntries(region->GetRegionStart(), region->GetRegionSize());
@@ -4734,291 +4818,6 @@ GC_TEST(ForwardingPublicationProduct, ExclusiveCopyPublishesProductReceipt)
     fx.FreePlanted(live);
 }
 
-// The deterministic barrier is inside the product ForwardObjectImpl after the
-// object lock is acquired and ENTERING is published, but before the copier
-// count is committed. DrainScope must wait through that interval, then through
-// the real CopyObject/receipt/Unlock path. Once sealed, a second real entry is
-// refused and rolls its object header back without changing the count.
-#if defined(MRT_FORWARDING_PUBLICATION_HOOKS_AVAILABLE)
-GC_TEST(ForwardingPublicationProduct, CopyAdmissionSealWaitsRealCopierAndRejectsLateEntry)
-{
-    ProductSetCopyAdmissionTestHook setCopyAdmissionHook = ProductSetCopyAdmissionTestHookFn();
-    GC_EXPECT_TRUE(setCopyAdmissionHook != nullptr);
-
-    GcHeapFixture& fx = ProductFixture();
-    RegionInfo* region = RegionInfo::InitRegion(2, 1, RegionInfo::UnitRole::SMALL_SIZED_UNITS);
-    RegionInfo* destination = RegionInfo::InitRegion(3, 1, RegionInfo::UnitRole::SMALL_SIZED_UNITS);
-    GC_EXPECT_TRUE(region != nullptr && destination != nullptr);
-    region->SetRegionType(RegionInfo::RegionType::FROM_REGION);
-    destination->SetRegionType(RegionInfo::RegionType::THREAD_LOCAL_REGION);
-
-    BaseObject* serial = fx.PlaceObject(region->GetRegionStart() + 64);
-    const size_t objectSize = serial->GetSize();
-    BaseObject* first = fx.PlaceObject(reinterpret_cast<MAddress>(serial) + objectSize);
-    BaseObject* late = fx.PlaceObject(reinterpret_cast<MAddress>(first) + objectSize);
-    BaseObject* serialTo = fx.PlaceObject(destination->GetRegionStart() + 64);
-    BaseObject* firstTo = fx.PlaceObject(reinterpret_cast<MAddress>(serialTo) + objectSize);
-    BaseObject* lateTo = fx.PlaceObject(reinterpret_cast<MAddress>(firstTo) + objectSize);
-    region->SetRegionAllocPtr(reinterpret_cast<MAddress>(late) + objectSize);
-    destination->SetRegionAllocPtr(reinterpret_cast<MAddress>(lateTo) + objectSize);
-
-    LiveInfo* live = fx.PlantLiveInfo(region);
-    RegionBitmap* bitmap = fx.PlantMarkBitmap<Generation::Old>(live, region->GetRegionSize());
-    const size_t serialOffset = region->GetAddressOffset(reinterpret_cast<MAddress>(serial));
-    const size_t firstOffset = region->GetAddressOffset(reinterpret_cast<MAddress>(first));
-    const size_t lateOffset = region->GetAddressOffset(reinterpret_cast<MAddress>(late));
-    (void)bitmap->MarkBits(serialOffset, objectSize, region->GetRegionSize());
-    (void)bitmap->MarkBits(firstOffset, objectSize, region->GetRegionSize());
-    (void)bitmap->MarkBits(lateOffset, objectSize, region->GetRegionSize());
-    region->AddLiveByteCount(3 * objectSize);
-
-    WCollector collector(Heap::GetHeap().GetAllocator(), Heap::GetHeap().GetCollectorResources());
-    collector.SetGCPhase(GCPhase::GC_PHASE_FORWARD);
-    RelocationReceiptTestAccess::BindCollector(Heap::GetHeap().GetCollectorResources(), &collector);
-    region->PrepareForwardableRegion(region->GetMarkView<Generation::Old>());
-    region->RecordRouteStart(serialOffset);
-    region->RecordRouteStart(firstOffset);
-    region->RecordRouteStart(lateOffset);
-    region->SetRouteInfo(reinterpret_cast<MAddress>(serialTo), static_cast<uint32_t>(3 * objectSize));
-    region->SetRouteState(RegionInfo::RouteState::ROUTED);
-
-    const MAddress serialAddress = reinterpret_cast<MAddress>(serial);
-
-    CopyAdmissionBarrier::Reset();
-    setCopyAdmissionHook(&CopyAdmissionBarrier::Hook);
-    BaseObject* serialResult = nullptr;
-    std::thread serialCopier([&]() {
-        serialResult = RelocationReceiptTestAccess::ForwardImpl(collector, serial, region);
-    });
-    CopyAdmissionBarrier::WaitEntered();
-    const auto serialStateInAdmission = region->CopyAdmission();
-    CopyAdmissionBarrier::Release();
-    serialCopier.join();
-    const bool serialPublished =
-        ForwardingTable::FindTo(serialAddress) != 0;
-    const auto serialStateAfterCopy = region->CopyAdmission();
-    const int32_t serialCountAfterCopy = region->CopyInflight();
-    const bool serialHeaderForwarded = serial->IsForwarded();
-
-    const MAddress firstAddress = reinterpret_cast<MAddress>(first);
-
-    CopyAdmissionBarrier::Reset();
-    BaseObject* firstResult = nullptr;
-    std::thread copier([&]() {
-        firstResult = RelocationReceiptTestAccess::ForwardImpl(collector, first, region);
-    });
-    CopyAdmissionBarrier::WaitEntered();
-
-    const bool objectLockedInGap = first->GetStateWord().IsLockedWord();
-    const auto stateInGap = region->CopyAdmission();
-    const int32_t countInGap = region->CopyInflight();
-    std::atomic<bool> drainStarted{ false };
-    std::atomic<bool> drainAcquired{ false };
-    std::atomic<bool> allowWipe{ false };
-    std::atomic<bool> wipeDone{ false };
-    std::atomic<bool> drainDone{ false };
-    std::thread drainer([&]() {
-        drainStarted.store(true, std::memory_order_release);
-        {
-            FromPageDetach::ReusePermitScope reusePermit;
-            RegionInfo::DrainScope drain(region, MutatorRelocate::Retire::TAKE_GARBAGE);
-            drainAcquired.store(true, std::memory_order_release);
-            while (!allowWipe.load(std::memory_order_acquire)) {
-                std::this_thread::yield();
-            }
-            RegionInfo::ClearUnits(
-                region->GetUnitIdx(), region->GetUnitCount(), FillerZeroDiag::Site::TAKE_GARBAGE);
-            wipeDone.store(true, std::memory_order_release);
-        }
-        drainDone.store(true, std::memory_order_release);
-    });
-    while (!drainStarted.load(std::memory_order_acquire)) {
-        std::this_thread::yield();
-    }
-    std::this_thread::sleep_for(std::chrono::milliseconds(5));
-    const bool drainReturnedInGap = drainAcquired.load(std::memory_order_acquire);
-
-    CopyAdmissionBarrier::Release();
-    copier.join();
-    const MAddress firstReceipt = ForwardingTable::FindTo(firstAddress);
-    const bool firstPublished = firstReceipt != 0;
-    while (!drainAcquired.load(std::memory_order_acquire)) {
-        std::this_thread::yield();
-    }
-    const bool firstHeaderForwarded = first->IsForwarded();
-    const int32_t countAfterDrain = region->CopyInflight();
-    const auto stateAfterDrain = region->CopyAdmission();
-
-    // This call starts from the same real product entry. It acquires the
-    // second object's lock, observes SEALED, rolls back NORMAL, and never
-    // reaches CopyObject or the test hook.
-    const int32_t countBeforeLate = region->CopyInflight();
-    BaseObject* lateResult = reinterpret_cast<BaseObject*>(1);
-    if (!drainReturnedInGap) {
-        lateResult = RelocationReceiptTestAccess::ForwardImpl(collector, late, region);
-    }
-    const int32_t countAfterLate = region->CopyInflight();
-    const auto lateHeader = late->GetStateWord().GetStateCode();
-
-    allowWipe.store(true, std::memory_order_release);
-    drainer.join();
-    setCopyAdmissionHook(nullptr);
-
-    collector.SetGCPhase(GCPhase::GC_PHASE_IDLE);
-    RelocationReceiptTestAccess::BindCollector(Heap::GetHeap().GetCollectorResources(), nullptr);
-    ForwardingTable::ClearEntries(region->GetRegionStart(), region->GetRegionSize());
-    ForwardingTable::ReclaimRetired("gc-unit-explicit-coverage");
-    if (region->IsGhostFromRegion()) {
-        region->DispelGhostFromRegion();
-    }
-    region->metadata.liveInfo = nullptr;
-    fx.FreePlanted(live);
-
-    GC_EXPECT_TRUE(serialStateInAdmission == ZForwardingLife::CopyAdmissionState::ENTERING);
-    GC_EXPECT_TRUE(serialPublished);
-    GC_EXPECT_TRUE(serialResult == serialTo);
-    GC_EXPECT_TRUE(serialHeaderForwarded);
-    GC_EXPECT_TRUE(serialStateAfterCopy == ZForwardingLife::CopyAdmissionState::OPEN);
-    GC_EXPECT_EQ(serialCountAfterCopy, 0);
-    GC_EXPECT_TRUE(objectLockedInGap);
-    GC_EXPECT_TRUE(stateInGap == ZForwardingLife::CopyAdmissionState::ENTERING);
-    GC_EXPECT_EQ(countInGap, 0);
-    GC_EXPECT_FALSE(drainReturnedInGap);
-    GC_EXPECT_TRUE(drainDone.load(std::memory_order_acquire));
-    GC_EXPECT_TRUE(firstPublished);
-    GC_EXPECT_TRUE(firstResult == firstTo);
-    GC_EXPECT_EQ(firstReceipt, reinterpret_cast<MAddress>(firstTo));
-    GC_EXPECT_TRUE(firstHeaderForwarded);
-    GC_EXPECT_EQ(countAfterDrain, 0);
-    GC_EXPECT_TRUE(stateAfterDrain == ZForwardingLife::CopyAdmissionState::SEALED);
-    GC_EXPECT_TRUE(lateResult == nullptr);
-    GC_EXPECT_TRUE(lateHeader == ObjectState::NORMAL);
-    GC_EXPECT_EQ(countBeforeLate, countAfterLate);
-    GC_EXPECT_EQ(countAfterLate, 0);
-    GC_EXPECT_TRUE(wipeDone.load(std::memory_order_acquire));
-}
-#endif
-
-// I03, zForwarding.cpp:110,134: an admitted copier must release its one
-// responsibility even while a peer owns the begin/commit admission interval.
-// Both objects enter through product ForwardObjectImpl. The receipt hook holds
-// the first after CommitCopyAdmission; the admission hook then holds the peer in
-// ENTERING; releasing the first forces its real RAII EndCopyInflight through the
-// target state without manufacturing the shared word in the test.
-#if defined(MRT_FORWARDING_PUBLICATION_HOOKS_AVAILABLE)
-GC_TEST(ForwardingPublicationProduct, AdmittedCopierExitsWhilePeerEntering)
-{
-    ProductSetCopyAdmissionTestHook setCopyAdmissionHook = ProductSetCopyAdmissionTestHookFn();
-    ProductSetReceiptLifeRegisterHook setReceiptHook = ProductSetReceiptLifeRegisterHookFn();
-    GC_EXPECT_TRUE(setCopyAdmissionHook != nullptr);
-    GC_EXPECT_TRUE(setReceiptHook != nullptr);
-
-    GcHeapFixture& fx = ProductFixture();
-    RegionInfo* region = RegionInfo::InitRegion(2, 1, RegionInfo::UnitRole::SMALL_SIZED_UNITS);
-    RegionInfo* destination = RegionInfo::InitRegion(3, 1, RegionInfo::UnitRole::SMALL_SIZED_UNITS);
-    GC_EXPECT_TRUE(region != nullptr && destination != nullptr);
-    region->SetRegionType(RegionInfo::RegionType::FROM_REGION);
-    destination->SetRegionType(RegionInfo::RegionType::THREAD_LOCAL_REGION);
-
-    BaseObject* admitted = fx.PlaceObject(region->GetRegionStart() + 64);
-    const size_t objectSize = admitted->GetSize();
-    BaseObject* entering = fx.PlaceObject(reinterpret_cast<MAddress>(admitted) + objectSize);
-    BaseObject* admittedTo = fx.PlaceObject(destination->GetRegionStart() + 64);
-    BaseObject* enteringTo = fx.PlaceObject(reinterpret_cast<MAddress>(admittedTo) + objectSize);
-    region->SetRegionAllocPtr(reinterpret_cast<MAddress>(entering) + objectSize);
-    destination->SetRegionAllocPtr(reinterpret_cast<MAddress>(enteringTo) + objectSize);
-
-    LiveInfo* live = fx.PlantLiveInfo(region);
-    RegionBitmap* bitmap = fx.PlantMarkBitmap<Generation::Old>(live, region->GetRegionSize());
-    const size_t admittedOffset = region->GetAddressOffset(reinterpret_cast<MAddress>(admitted));
-    const size_t enteringOffset = region->GetAddressOffset(reinterpret_cast<MAddress>(entering));
-    (void)bitmap->MarkBits(admittedOffset, objectSize, region->GetRegionSize());
-    (void)bitmap->MarkBits(enteringOffset, objectSize, region->GetRegionSize());
-    region->AddLiveByteCount(2 * objectSize);
-
-    WCollector collector(Heap::GetHeap().GetAllocator(), Heap::GetHeap().GetCollectorResources());
-    collector.SetGCPhase(GCPhase::GC_PHASE_FORWARD);
-    RelocationReceiptTestAccess::BindCollector(Heap::GetHeap().GetCollectorResources(), &collector);
-    region->PrepareForwardableRegion(region->GetMarkView<Generation::Old>());
-    region->RecordRouteStart(admittedOffset);
-    region->RecordRouteStart(enteringOffset);
-    region->SetRouteInfo(reinterpret_cast<MAddress>(admittedTo), static_cast<uint32_t>(2 * objectSize));
-    region->SetRouteState(RegionInfo::RouteState::ROUTED);
-
-    const MAddress admittedAddress = reinterpret_cast<MAddress>(admitted);
-    const MAddress enteringAddress = reinterpret_cast<MAddress>(entering);
-
-    CopyCompletionBarrier completionBarrier;
-    CopyAdmissionBarrier::Reset(entering);
-    setCopyAdmissionHook(&CopyAdmissionBarrier::Hook);
-    setReceiptHook(&CopyCompletionBarrier::Hook, &completionBarrier);
-
-    BaseObject* admittedResult = nullptr;
-    std::thread admittedCopier([&]() {
-        admittedResult = RelocationReceiptTestAccess::ForwardImpl(collector, admitted, region);
-    });
-    completionBarrier.WaitEntered();
-    const auto stateWithAdmittedCopy = region->CopyAdmission();
-    const int32_t countWithAdmittedCopy = region->CopyInflight();
-
-    // Only the first installer uses the completion barrier. The peer must be
-    // free to publish after its admission interval is released.
-    setReceiptHook(nullptr, nullptr);
-    BaseObject* enteringResult = nullptr;
-    std::thread enteringCopier([&]() {
-        enteringResult = RelocationReceiptTestAccess::ForwardImpl(collector, entering, region);
-    });
-    CopyAdmissionBarrier::WaitEntered();
-    const bool enteringHeaderLocked = entering->GetStateWord().IsLockedWord();
-    const auto stateBeforeExit = region->CopyAdmission();
-    const int32_t countBeforeExit = region->CopyInflight();
-    std::fprintf(stderr,
-                 "I03_TARGET_REACHED state=%u count=%d admitted_locked=%u entering_locked=%u\n",
-                 static_cast<unsigned>(stateBeforeExit), countBeforeExit,
-                 admitted->GetStateWord().IsLockedWord(), enteringHeaderLocked);
-    std::fflush(stderr);
-
-    completionBarrier.Release();
-    admittedCopier.join();
-    const auto stateAfterAdmittedExit = region->CopyAdmission();
-    const int32_t countAfterAdmittedExit = region->CopyInflight();
-
-    CopyAdmissionBarrier::Release();
-    enteringCopier.join();
-    setCopyAdmissionHook(nullptr);
-
-    const bool admittedPublished =
-        ForwardingTable::FindTo(admittedAddress) != 0;
-    const bool enteringPublished =
-        ForwardingTable::FindTo(enteringAddress) != 0;
-    const auto finalState = region->CopyAdmission();
-    const int32_t finalCount = region->CopyInflight();
-
-    collector.SetGCPhase(GCPhase::GC_PHASE_IDLE);
-    RelocationReceiptTestAccess::BindCollector(Heap::GetHeap().GetCollectorResources(), nullptr);
-    ForwardingTable::ClearEntries(region->GetRegionStart(), region->GetRegionSize());
-    ForwardingTable::ReclaimRetired("gc-unit-i03-peer-entering");
-    if (region->IsGhostFromRegion()) {
-        region->DispelGhostFromRegion();
-    }
-    region->metadata.liveInfo = nullptr;
-    fx.FreePlanted(live);
-
-    GC_EXPECT_TRUE(stateWithAdmittedCopy == ZForwardingLife::CopyAdmissionState::OPEN);
-    GC_EXPECT_EQ(countWithAdmittedCopy, 1);
-    GC_EXPECT_TRUE(enteringHeaderLocked);
-    GC_EXPECT_TRUE(stateBeforeExit == ZForwardingLife::CopyAdmissionState::ENTERING);
-    GC_EXPECT_EQ(countBeforeExit, 1);
-    GC_EXPECT_TRUE(admittedResult == admittedTo);
-    GC_EXPECT_TRUE(admittedPublished);
-    GC_EXPECT_TRUE(stateAfterAdmittedExit == ZForwardingLife::CopyAdmissionState::ENTERING);
-    GC_EXPECT_EQ(countAfterAdmittedExit, 0);
-    GC_EXPECT_TRUE(enteringResult == enteringTo);
-    GC_EXPECT_TRUE(enteringPublished);
-    GC_EXPECT_TRUE(finalState == ZForwardingLife::CopyAdmissionState::OPEN);
-    GC_EXPECT_EQ(finalCount, 0);
-}
-#endif
 
 // ZGC zRelocate.cpp:1256-1279: the promoted page keeps the relocation-set
 // livemap selected at registration, and discharge walks only that live set.

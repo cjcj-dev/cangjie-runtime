@@ -182,7 +182,7 @@ public:
     void SetTagID(uint16_t id) { currentTagID = id; }
 
     // Replaced by ZForwardingLife: a reader that still holds liveInfo0 has retain_page,
-    // and DrainScope has already waited that count to 0 before the region (and therefore
+    // and in-place claim has already waited that count to 0 before the region (and therefore
     // this arena slot) can be recycled. The two-generation grace gate is gone.
     static void AdvanceGracePeriod() {}
 
