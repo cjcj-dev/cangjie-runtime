@@ -4087,7 +4087,9 @@ private:
         SetUnitRole(uClass);
         zoffset offset;
         CHECK(pageOwners.offset_for_address(GetRegionStart(), &offset));
-        pageOwners.put(offset, nUnit * UNIT_SIZE, this);
+        // zPageTable.cpp:52-77: allocated pages publish their owner; handing
+        // memory back to the cache removes that owner over the same extent.
+        pageOwners.put(offset, nUnit * UNIT_SIZE, uClass == UnitRole::FREE_UNITS ? nullptr : this);
     }
 
     void InitRegion(size_t nUnit, UnitRole uClass)
