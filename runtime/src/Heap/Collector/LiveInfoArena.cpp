@@ -12,11 +12,7 @@
 #endif
 
 #include "Base/ImmortalWrapper.h"
-#include "Heap/Allocator/RegionInfo.h"
-#include "Heap/Allocator/RegionManager.h"
-#include "Heap/Allocator/RegionSpace.h"
 #include "Heap/Heap.h"
-#include "Heap/Verify/TagReuseProbe.h"
 #include "LiveInfo.h"
 #include "LiveInfoArena.h"
 
@@ -25,34 +21,11 @@ namespace MapleRuntime {
 static ImmortalWrapper<LiveInfoArena> liveInfoArena;
 LiveInfoArena& LiveInfoArena::GetLiveInfoArena() { return *liveInfoArena; }
 
-void LiveInfoArena::ClearPreviousForwardData()
-{
-    uint16_t prev = GetPreviousTagID();
-    ForwardDataSpace& space = liveInfoData[prev];
-    uintptr_t rangeStart = space.GetStartAddress();
-    size_t rangeSize = space.GetSize();
-    uintptr_t liveStart = space.GetZoneStart(ForwardDataSpace::Zone::ZoneType::LIVE_INFO);
-    uintptr_t livePos = space.GetZonePos(ForwardDataSpace::Zone::ZoneType::LIVE_INFO);
-    uintptr_t bmStart = space.GetZoneStart(ForwardDataSpace::Zone::ZoneType::BIT_MAP);
-    uintptr_t bmPos = space.GetZonePos(ForwardDataSpace::Zone::ZoneType::BIT_MAP);
-    // Structural guarantee: no region field may still address the range about to be madvise'd.
-    // Order forced here (not by convention): null → probe (optional) → ReleaseMemory.
-    RegionSpace& regionSpace = reinterpret_cast<RegionSpace&>(Heap::GetHeap().GetAllocator());
-    regionSpace.GetRegionManager().NullLiveInfoFieldsInRange(rangeStart, rangeSize);
-    TagReuseProbe::ScanBeforeRelease(rangeStart, rangeSize, prev, liveStart, livePos, bmStart, bmPos);
-    // ZForwardingLife has already drained every from-region that could still hold a
-    // liveInfo0 local into this range (in-place claim on dispel / take-garbage). A late
-    // RouteObject is refused at retain_page (count == 0) and never loads the pointer.
-
-    space.ReleaseMemory();
-}
-
 void LiveInfoArena::InitializeForwardData()
 {
     size_t maxHeapBytes = Heap::GetHeap().GetMaxCapacity();
     size_t liveInfoSize = RoundUp(GetLiveInfoDataSize(maxHeapBytes), MapleRuntime::MRT_PAGE_SIZE);
-    // One liveInfo slot per tag generation (TAG_ID_COUNT).
-    forwardDataSize = liveInfoSize * TAG_ID_COUNT;
+    forwardDataSize = liveInfoSize;
 
 #ifdef _WIN64
     void* startAddress = VirtualAlloc(NULL, forwardDataSize, MEM_RESERVE, PAGE_READWRITE);
@@ -72,21 +45,6 @@ void LiveInfoArena::InitializeForwardData()
 #endif
 
     forwardDataStart = reinterpret_cast<uintptr_t>(startAddress);
-    for (uint16_t i = 0; i < TAG_ID_COUNT; ++i) {
-        liveInfoData[i].InitializeMemory(forwardDataStart + static_cast<size_t>(i) * liveInfoSize, liveInfoSize,
-                                         regionUnitCount);
-    }
-}
-void LiveInfoArena::ForwardDataSpace::UnbindPreviousLiveInfo()
-{
-    auto& zone = allocZone[ForwardDataSpace::Zone::ZoneType::LIVE_INFO];
-    size_t start = zone.zoneStartAddress;
-    size_t pos = zone.zonePosition.load();
-    for (size_t current = start; current < pos; current += sizeof(LiveInfo)) {
-        LiveInfo* currentLiveInfo = reinterpret_cast<LiveInfo*>(current);
-        RegionInfo* bindedRegion = currentLiveInfo->bindedRegion;
-        CHECK(bindedRegion != nullptr);
-        bindedRegion->CheckAndClearLiveInfo(currentLiveInfo);
-    }
+    liveInfoData.InitializeMemory(forwardDataStart, liveInfoSize, regionUnitCount);
 }
 } // namespace MapleRuntime

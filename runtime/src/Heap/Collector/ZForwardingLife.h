@@ -60,15 +60,6 @@ public:
         RELEASE_REGION = 4,
     };
 
-    static bool InMutatorRelocate();
-    class MutatorRelocateScope {
-    public:
-        MutatorRelocateScope();
-        ~MutatorRelocateScope();
-        MutatorRelocateScope(const MutatorRelocateScope&) = delete;
-        MutatorRelocateScope& operator=(const MutatorRelocateScope&) = delete;
-    };
-
     // zForwarding.inline.hpp:67-70 -- constructed with claimed=false, ref=1, done=false.
     // The construction 1 is the relocating worker's token; it is dropped at retire.
     static void ResetForForwarding(std::atomic<int32_t>& refCount, std::atomic<bool>& claimed,

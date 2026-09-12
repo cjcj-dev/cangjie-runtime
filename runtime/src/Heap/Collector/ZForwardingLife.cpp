@@ -17,7 +17,6 @@ namespace MapleRuntime {
 
 namespace {
 thread_local ZForwarding* currentPageWork = nullptr;
-thread_local int mutatorRelocateDepth = 0;
 }
 
 ZForwardingLife::PageWorkScope::PageWorkScope(ZForwarding* forwarding, bool complete)
@@ -36,9 +35,6 @@ ZForwardingLife::PageWorkScope::~PageWorkScope()
     currentPageWork = previous;
 }
 ZForwarding* ZForwardingLife::CurrentPageWork() { return currentPageWork; }
-bool ZForwardingLife::InMutatorRelocate() { return mutatorRelocateDepth != 0; }
-ZForwardingLife::MutatorRelocateScope::MutatorRelocateScope() { ++mutatorRelocateDepth; }
-ZForwardingLife::MutatorRelocateScope::~MutatorRelocateScope() { --mutatorRelocateDepth; }
 
 std::atomic<uint64_t> ZForwardingLife::g_retainRefusedReleased{ 0 };
 std::atomic<uint64_t> ZForwardingLife::g_retainRefusedClaimed{ 0 };
