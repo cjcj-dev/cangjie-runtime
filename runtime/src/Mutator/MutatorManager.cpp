@@ -1293,6 +1293,7 @@ void MutatorManager::TransitionAllMutatorsToCpuProfile()
     VisitAllMutatorsExceptFinalizer([](Mutator& mutator) {
         if (mutator.GetCjthreadPtr() == MutatorManager::Instance().GetMainThreadHandle()) {
             mutator.SetSuspensionFlag(Mutator::SuspensionType::SUSPENSION_FOR_CPU_PROFILE);
+            ArmGlobalPoll();
         }
     });
     if (!worldStopped) {

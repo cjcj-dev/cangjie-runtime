@@ -1400,6 +1400,7 @@ void Mutator::TransitionToCpuProfileExclusive()
 {
     HandleCpuProfile();
     ClearSuspensionFlag(SUSPENSION_FOR_CPU_PROFILE);
+    ReleaseGlobalPoll();
 }
 
 void Mutator::ReleaseForeignThread()

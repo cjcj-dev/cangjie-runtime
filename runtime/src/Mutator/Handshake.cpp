@@ -10,6 +10,7 @@
 namespace MapleRuntime {
 namespace {
 thread_local HandshakeState* tlHandshakeState = nullptr;
+std::atomic<int> g_sampleGlobalPoll{0};
 }
 
 HandshakeState& Handshake::Current()
@@ -255,9 +256,25 @@ void ArmAllThreadPolls()
     MutatorManager::Instance().ForEachMarkFlushTls([](ThreadLocalData* tls) { ArmThreadPoll(tls); });
 }
 
+void ArmGlobalPoll()
+{
+    g_sampleGlobalPoll.fetch_add(1, std::memory_order_seq_cst);
+    ArmAllThreadPolls();
+}
+
+void ReleaseGlobalPoll()
+{
+    int cur = g_sampleGlobalPoll.load(std::memory_order_relaxed);
+    while (cur > 0 &&
+           !g_sampleGlobalPoll.compare_exchange_weak(cur, cur - 1, std::memory_order_seq_cst,
+                                                     std::memory_order_relaxed)) {
+    }
+}
+
 bool GlobalPoll()
 {
-    return MutatorManager::Instance().SyncTriggered() || MutatorManager::Instance().EpochHandshakeActive();
+    return g_sampleGlobalPoll.load(std::memory_order_acquire) > 0 ||
+           MutatorManager::Instance().SyncTriggered() || MutatorManager::Instance().EpochHandshakeActive();
 }
 
 bool HasPendingSafepoint(ThreadLocalData* tls)

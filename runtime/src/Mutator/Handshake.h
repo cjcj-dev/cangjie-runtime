@@ -79,6 +79,8 @@ public:
 
 void ArmThreadPoll(ThreadLocalData* tls);
 void ArmAllThreadPolls();
+void ArmGlobalPoll();
+void ReleaseGlobalPoll();
 void UpdatePollValues(ThreadLocalData* tls);
 bool HasPendingSafepoint(ThreadLocalData* tls);
 bool GlobalPoll();
