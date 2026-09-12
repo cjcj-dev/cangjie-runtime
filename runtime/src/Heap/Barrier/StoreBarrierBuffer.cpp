@@ -12,7 +12,6 @@
 #include "Heap/Collector/Collector.h"
 #include "Heap/Collector/CollectorResources.h"
 #include "Heap/Heap.h"
-#include "Mutator/SatbBuffer.h"
 #include "ObjectModel/RefField.h"
 #include "RememberedSet.h"
 
@@ -21,7 +20,6 @@ namespace MapleRuntime {
 namespace {
 #if defined(MRT_GC_UNIT_TESTS)
 thread_local StoreBarrierFlushObserver g_flushObserver = nullptr;
-thread_local bool g_satbNodeUnavailable = false;
 
 void NotifyFlushObserver(StoreBarrierFlushEvent event, const StoreBarrierEntry& entry)
 {
@@ -64,168 +62,101 @@ void StoreBarrierBuffer::SetFlushObserverForTest(StoreBarrierFlushObserver obser
     g_flushObserver = observer;
 }
 
-void StoreBarrierBuffer::SetSatbNodeUnavailableForTest(bool unavailable)
-{
-    g_satbNodeUnavailable = unavailable;
-}
 #endif
 
-StoreBarrierInstallState StoreBarrierBuffer::CaptureInstallState()
-{
-    Heap& heap = Heap::GetHeap();
-    const bool started = heap.IsGcStarted();
-    const GCPhase phase = started ? heap.GetGCPhase() : GCPhase::GC_PHASE_IDLE;
-    bool youngMark = false;
-    if (started) {
-        // zStoreBarrierBuffer.cpp:161-184: retain the generation tag at
-        // production, before a later cycle can change shared accounting.
-        youngMark = heap.GetCollector().GetCycleReason() == GC_REASON_YOUNG;
-    }
-    return StoreBarrierInstallState { static_cast<uint8_t>(phase), youngMark,
-                                      static_cast<uintptr_t>(::g_cjStoreGoodMask) };
-}
+StoreBarrierBuffer::StoreBarrierBuffer()
+    : current(kStoreBarrierBufferLength), lastProcessedColor(::g_cjStoreGoodMask) {}
 
 void StoreBarrierBuffer::Add(MAddress fieldAddress, BaseObject* fieldBase, RememberedSet& rs)
 {
-    Add(fieldAddress, fieldBase, zpointer::null, CaptureInstallState(), rs);
+    Add(fieldAddress, fieldBase, zpointer::null, rs);
 }
 
 void StoreBarrierBuffer::Add(MAddress fieldAddress, zpointer prev, RememberedSet& rs)
 {
-    Add(fieldAddress, nullptr, prev, CaptureInstallState(), rs);
+    Add(fieldAddress, nullptr, prev, rs);
 }
 
 void StoreBarrierBuffer::Add(MAddress fieldAddress, BaseObject* fieldBase, zpointer prev, RememberedSet& rs)
 {
-    Add(fieldAddress, fieldBase, prev, CaptureInstallState(), rs);
-}
-
-void StoreBarrierBuffer::Add(MAddress fieldAddress, zpointer prev, StoreBarrierInstallState installed,
-                             RememberedSet& rs)
-{
-    Add(fieldAddress, nullptr, prev, installed, rs);
-}
-
-void StoreBarrierBuffer::Add(MAddress fieldAddress, BaseObject* fieldBase, zpointer prev,
-                             StoreBarrierInstallState installed, RememberedSet& rs)
-{
-    if (!kBufferStoreBarriers) {
-        rs.Record(fieldAddress, true);
-        return;
-    }
-    if (current == 0) {
+    // One per-thread buffer and one processed color, as in ZStoreBarrierBuffer.
+    // Consume an earlier phase before appending entries from the new phase.
+    if (current == 0 || lastProcessedColor != static_cast<uintptr_t>(::g_cjStoreGoodMask)) {
         Flush(rs);
     }
     CHECK_DETAIL(fieldBase == nullptr || fieldAddress >= reinterpret_cast<MAddress>(fieldBase),
                  "store-buffer field precedes holder slot=%#zx holder=%p", fieldAddress, fieldBase);
     --current;
-    buffer[current].p = fieldAddress;
-    buffer[current].pBase = fieldBase;
-    buffer[current].pOffset = fieldBase == nullptr ? 0 :
-        static_cast<size_t>(fieldAddress - reinterpret_cast<MAddress>(fieldBase));
-    buffer[current].prev = prev;
-    buffer[current].installed = installed;
+    buffer[current] = { fieldAddress, fieldBase,
+        fieldBase == nullptr ? 0 : fieldAddress - reinterpret_cast<MAddress>(fieldBase), prev };
 }
 
-bool StoreBarrierBuffer::InstalledDuringCurrentMark(const StoreBarrierEntry& entry)
-{
-    const GCPhase phase = static_cast<GCPhase>(entry.installed.phase);
-    if (phase != GCPhase::GC_PHASE_ENUM && phase != GCPhase::GC_PHASE_TRACE &&
-        phase != GCPhase::GC_PHASE_CLEAR_SATB_BUFFER) {
-        return false;
-    }
-    const uintptr_t epochMask = entry.installed.youngMark ? MARKED_YOUNG_MASK : MARKED_OLD_MASK;
-    return (entry.installed.storeGood & epochMask) ==
-        (static_cast<uintptr_t>(::g_cjStoreGoodMask) & epochMask);
-}
-
-StoreBarrierBuffer::PreviousRetirement StoreBarrierBuffer::RetirePrevious(const StoreBarrierEntry& entry,
-                                                                          Collector& collector)
-{
-    if (is_null(entry.prev) || !InstalledDuringCurrentMark(entry)) {
-        return PreviousRetirement::NOT_REQUIRED;
-    }
-    RefField<> previous(entry.prev);
-    const ForwardingProvenance provenance{
-        ForwardingHolderKind::StoreBuffer, entry.pBase, reinterpret_cast<const void*>(entry.p)
-    };
-    BaseObject* const resolved = collector.make_load_good(previous, provenance);
-    if (resolved == nullptr || !Heap::IsHeapAddress(resolved)) {
-        return PreviousRetirement::INVALID_PREVIOUS;
-    }
-    SatbBuffer::Node* node = nullptr;
-    SatbBuffer& satb = SatbBuffer::Instance();
-#if defined(MRT_GC_UNIT_TESTS)
-    satb.EnsureGoodNode(node, !g_satbNodeUnavailable);
-#else
-    satb.EnsureGoodNode(node);
-#endif
-    if (node == nullptr) {
-        return PreviousRetirement::RESOURCE_UNAVAILABLE;
-    }
-    (void)node->Push(resolved, Collector::TryRecoverInteriorBase(resolved));
-    satb.FlushQueue(node);
-    return PreviousRetirement::RETIRED;
-}
-
-void StoreBarrierBuffer::MarkAndRemember(const StoreBarrierEntry& entry, RememberedSet& rs)
+void StoreBarrierBuffer::MarkAndRemember(const StoreBarrierEntry& entry, RememberedSet& rs,
+                                         Collector& collector, bool phaseChanged)
 {
     StoreBarrierEntry remapped = entry;
     remapped.p = RemapPendingField(entry);
-    if (!Heap::IsHeapAddress(remapped.p) || RegionInfo::GetRegionInfoAt(remapped.p)->IsYoungRegion()) {
-        return;
+    const bool oldSlot = Heap::IsHeapAddress(remapped.p) &&
+        !RegionInfo::GetRegionInfoAt(remapped.p)->IsYoungRegion();
+    const GCCycleSnapshot old = collector.GetCycleSnapshot(GCCycleGeneration::OLD);
+    const bool oldMark = old.active && (old.phase == GC_PHASE_ENUM || old.phase == GC_PHASE_TRACE ||
+                                       old.phase == GC_PHASE_CLEAR_SATB_BUFFER);
+    const uintptr_t colors = ::g_cjStoreGoodMask;
+    // zStoreBarrierBuffer.cpp:199-222: at a phase change, only stores made
+    // during this old mark and through an old location belong to the snapshot.
+    const bool storedDuringOldMark = (lastProcessedColor & MARKED_OLD_MASK) == (colors & MARKED_OLD_MASK);
+    if (!is_null(entry.prev) && (!phaseChanged || (oldSlot && oldMark && storedDuringOldMark))) {
+        RefField<> previous(entry.prev);
+        const ForwardingProvenance provenance{
+            ForwardingHolderKind::StoreBuffer, entry.pBase, reinterpret_cast<const void*>(remapped.p)
+        };
+        BaseObject* object = collector.make_load_good(previous, provenance);
+        if (object != nullptr && Heap::IsHeapAddress(object)) {
+            collector.MarkObjectIfActive(object);
+#if defined(MRT_GC_UNIT_TESTS)
+            NotifyFlushObserver(StoreBarrierFlushEvent::PREVIOUS_RETIRED, entry);
+#endif
+        } else {
+#if defined(MRT_GC_UNIT_TESTS)
+            NotifyFlushObserver(StoreBarrierFlushEvent::PREVIOUS_INVALID, entry);
+#endif
+        }
     }
-    rs.Record(remapped.p, true);
+    if (oldSlot) {
+        // zStoreBarrierBuffer.cpp:161-185: a young flip makes the previous
+        // remembered face read-only; scan the current field into young mark.
+        if (phaseChanged && (lastProcessedColor & MARKED_YOUNG_MASK) != (colors & MARKED_YOUNG_MASK)) {
+            RefField<> field(HeapSlotAt<>(remapped.p));
+            const ForwardingProvenance provenance{
+                ForwardingHolderKind::StoreBuffer, entry.pBase, reinterpret_cast<const void*>(remapped.p)
+            };
+            BaseObject* object = collector.make_load_good(field, provenance);
+            if (object != nullptr && Heap::IsHeapAddress(object) &&
+                RegionInfo::GetRegionInfoAt(reinterpret_cast<MAddress>(object))->IsYoungRegion()) {
+                collector.MarkYoungObjectIfActive(object);
+            }
+        }
+        rs.Record(remapped.p, true);
+#if defined(MRT_GC_UNIT_TESTS)
+        NotifyFlushObserver(StoreBarrierFlushEvent::SLOT_REMEMBERED, entry);
+#endif
+    }
 }
 
 void StoreBarrierBuffer::Flush(RememberedSet& rs, Collector& collector)
 {
-    if (!kBufferStoreBarriers) {
-        return;
-    }
+    const bool phaseChanged = lastProcessedColor != static_cast<uintptr_t>(::g_cjStoreGoodMask);
     for (size_t i = current; i < kStoreBarrierBufferLength; ++i) {
-        const StoreBarrierEntry& entry = buffer[i];
-        const PreviousRetirement retirement = RetirePrevious(entry, collector);
-        CHECK_DETAIL(retirement != PreviousRetirement::RESOURCE_UNAVAILABLE,
-                     "store-buffer SATB publication unavailable slot=%#zx prev=%#zx installed_phase=%u "
-                     "installed_store_good=%#zx current=%zu index=%zu",
-                     entry.p, static_cast<size_t>(raw(entry.prev)), static_cast<unsigned>(entry.installed.phase),
-                     static_cast<size_t>(entry.installed.storeGood), current, i);
-        if (retirement == PreviousRetirement::RETIRED) {
-#if defined(MRT_GC_UNIT_TESTS)
-            NotifyFlushObserver(StoreBarrierFlushEvent::PREVIOUS_RETIRED, entry);
-#endif
-        }
-#if defined(MRT_GC_UNIT_TESTS)
-        if (retirement == PreviousRetirement::INVALID_PREVIOUS) {
-            NotifyFlushObserver(StoreBarrierFlushEvent::PREVIOUS_INVALID, entry);
-        }
-#endif
-        MarkAndRemember(entry, rs);
-#if defined(MRT_GC_UNIT_TESTS)
-        NotifyFlushObserver(StoreBarrierFlushEvent::SLOT_REMEMBERED, entry);
-#endif
+        MarkAndRemember(buffer[i], rs, collector, phaseChanged);
         buffer[i] = {};
     }
     current = kStoreBarrierBufferLength;
+    lastProcessedColor = ::g_cjStoreGoodMask;
 }
 
 void StoreBarrierBuffer::Flush(RememberedSet& rs)
 {
-    if (!kBufferStoreBarriers) {
-        return;
-    }
-    for (size_t i = current; i < kStoreBarrierBufferLength; ++i) {
-        if (!is_null(buffer[i].prev) && InstalledDuringCurrentMark(buffer[i])) {
-            Flush(rs, Heap::GetHeap().GetCollector());
-            return;
-        }
-    }
-    for (size_t i = current; i < kStoreBarrierBufferLength; ++i) {
-        MarkAndRemember(buffer[i], rs);
-        buffer[i] = {};
-    }
-    current = kStoreBarrierBufferLength;
+    Flush(rs, Heap::GetHeap().GetCollector());
 }
 
 void StoreBarrierBuffer::Discard()

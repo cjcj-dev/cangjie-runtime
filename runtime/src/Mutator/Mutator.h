@@ -18,7 +18,6 @@
 #include "Heap/Collector/GcInfos.h"
 #include "LoaderManager.h"
 #include "Mutator/ThreadLocal.h"
-#include "SatbBuffer.h"
 #include "schedule.h"
 #ifdef _WIN64
 #include "UnwindWin.h"
@@ -102,7 +101,6 @@ public:
     {
         tid = 0;
         stackBoundAddr = nullptr;
-        SatbBuffer::Instance().FlushQueue(satbNode);
 
 #ifdef INTERPRETER_ENABLED
         DestroyInterpreterPart();
@@ -468,30 +466,10 @@ public:
 
     void SetManagedContext(bool isManagedContext);
 
-    ATTR_NO_INLINE void RememberObjectInSatbBuffer(const BaseObject* target);
-    ATTR_NO_INLINE void RememberObjectInSatbBuffer(const BaseObject* target, const BaseObject* knownBase);
-
-    // Publish a TRACE-window young allocate-black target into the same
-    // retired/in-flight termination domain as SATB. The follow bit is kept
-    // even though the object is already painted, so its children are scanned.
+    // An already painted allocation still owes a field-follow entry.
     ATTR_NO_INLINE void PublishYoungAllocBlack(BaseObject* target)
     {
-        if (target == nullptr) {
-            return;
-        }
-        if (LIKELY(satbNode != nullptr && satbNode->Push(target, nullptr, true))) {
-            return;
-        }
-        SatbBuffer::Instance().EnsureGoodNode(satbNode);
-        // EnsureGoodNode may leave the node null when this mutator has no
-        // SATB arena available (for example during runtime-thread setup or
-        // after the collector has handed the last node back).  Publishing a
-        // young edge is best-effort in that context; never dereference the
-        // absent node here.
-        if (satbNode == nullptr) {
-            return;
-        }
-        (void)satbNode->Push(target, nullptr, true);
+        Heap::GetHeap().GetCollector().MarkYoungObjectIfActive(target, true);
     }
 
     inline uintptr_t GetStackTopAddr() { return stackTopAddr; }
@@ -625,16 +603,8 @@ public:
 
     // Observe-only: in-flight SATB node (not yet FlushQueue'd). STW2 CLEAR_SATB
     // flushes before Census; peek still covers a node that HandleGCPhase missed.
-    SatbBuffer::Node* PeekSatbNode() const { return satbNode; }
-
-    // Hand this mutator's in-flight SATB node over unconditionally.
-    // ZMark::flush(Thread*) (zMark.cpp:998-1006) is what the mark-termination
-    // handshake calls on every thread, and it does not ask whether that thread
-    // already ran a phase transition. HandleGCPhase(CLEAR_SATB_BUFFER) is not a
-    // substitute: EnsurePhaseTransition (MutatorManager.cpp:806-811) erases any
-    // mutator already parked in the target phase without re-running the handler,
-    // so a second transition to the same phase flushes nobody.
-    void FlushSatbBuffer(bool flushStoreBarrier = true)
+    // ZMark::flush publishes this thread's single store buffer.
+    void FlushStoreBarrierBuffer(bool flushStoreBarrier = true)
     {
         std::lock_guard<std::mutex> lg(mutatorLock);
         RememberedSet* rememberedSet = storeBarrierRememberedSet;
@@ -644,7 +614,6 @@ public:
         if (flushStoreBarrier && markFlushAllocBuffer != nullptr && rememberedSet->IsInitialized()) {
             markFlushAllocBuffer->GetStoreBarrierBuffer().Flush(*rememberedSet);
         }
-        SatbBuffer::Instance().FlushQueue(satbNode);
     }
 
 protected:
@@ -661,39 +630,6 @@ protected:
     void CreateCurrentGCInfo();
 
 private:
-    void RememberObjectImpl(const BaseObject* target, const BaseObject* knownBase)
-    {
-        GCPhase phase = GetMutatorPhase();
-        // Marking is still consuming satb records in GC_PHASE_CLEAR_SATB_BUFFER: MarkSatbBuffer keeps
-        // tracing after the first CLEAR_SATB handshake and re-flushes every mutator's node once per
-        // remark iteration, so records written in this phase are both needed and consumed. Dropping
-        // them here loses deletion-barrier records inside the live remark window and lets a hidden
-        // object survive unmarked with previous-cycle tags in its fields, which PostTrace's
-        // PrepareForwardTable then makes unresolvable (tripping PostTraceBarrier's
-        // CHECK(IsCurrentPointer)). Records written after the remark fixpoint still land here and in
-        // the buffers, but they can only reference already-marked objects, objects in non-collected
-        // trace regions, or non-heap/null values. ClearBuffer/the FORWARD-transition clear can discard
-        // those records safely, so accepting them is cheap and correct.
-        GCPhase heapPhase = Heap::GetHeap().GetGCPhase();
-        // FOLLOW / major TRACE publishes the heap phase before mutators handshake.
-        // The heap-phase fallback used to accept only ENUM, so a concurrent store
-        // dropped SATB: seen as Stw2CurrentAudit uncovered (old→young, FOLLOW) and
-        // as SD256 CSet-empty residual pages stuck nullFace (major, ke=0). ZGC
-        // heap_store_slow_path marks the new address regardless
-        // (zBarrier.cpp:253-261). Accept every marking phase.
-        const bool mutatorMarking = phase == GCPhase::GC_PHASE_ENUM || phase == GCPhase::GC_PHASE_TRACE ||
-            phase == GCPhase::GC_PHASE_CLEAR_SATB_BUFFER;
-        const bool heapMarking = heapPhase == GCPhase::GC_PHASE_ENUM || heapPhase == GCPhase::GC_PHASE_TRACE ||
-            heapPhase == GCPhase::GC_PHASE_CLEAR_SATB_BUFFER;
-        if (UNLIKELY(!mutatorMarking && !heapMarking)) {
-            return;
-        }
-        if (LIKELY(satbNode != nullptr && satbNode->Push(target, knownBase))) {
-            return;
-        }
-        SatbBuffer::Instance().EnsureGoodNode(satbNode);
-        (void)satbNode->Push(target, knownBase);
-    }
     ManagedList<RootSlot>& GetLocalFinalizers() { return localFinalizers; }
     // Indicate the current mutator phase and use which barrier in concurrent gc
     // ATTENTION: THE LAYOUT FOR GCPHASE MUST NOT BE CHANGED!
@@ -730,7 +666,6 @@ private:
 
     ManagedList<RootSlot> localFinalizers;
 
-    SatbBuffer::Node* satbNode = nullptr;
 #if defined(GCINFO_DEBUG) && GCINFO_DEBUG
     GCInfos gcInfos;
 #endif

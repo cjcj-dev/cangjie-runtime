@@ -26,7 +26,6 @@
 #include "Heap/WCollector/PreforwardBarrier.h"
 #include "Heap/WCollector/TraceBarrier.h"
 #include "Mutator/Mutator.h"
-#include "Mutator/SatbBuffer.h"
 #include "ObjectModel/Field.inline.h"
 #include "ObjectModel/MArray.h"
 #include "ObjectModel/RefField.inline.h"
@@ -387,118 +386,13 @@ inline bool HasYoungRegionsForRecording()
 // target. Concurrent old→young stores therefore landed on the remset current face
 // with a white young target (Stw2CurrentAudit uncovered, REPORT-youngconcstw2).
 //
-// Window: BarrierPhase::TRACE only (InstallBarrier maps TRACE and CLEAR_SATB onto
-// TraceBarrier). Idle/Enum/STW/PostTrace/Preforward/Forward are no-ops.
+// ZBarrier::mark uses the target generation's mark phase, independently of
+// the phase currently executed by the other generation.
 // gc_unit never Heap::Init — IsGcStarted is false, so this is a no-op there.
 //
 // Young: paint + PushYoungAllocBlack (STW2 MergeYoungAllocBlack follows children).
 // Major: SATB-enqueue the new target (TraceBarrier RememberNewReference can still
 // lose it when ShouldEnqueue treats an unmarked isTraceRegion as allocate-black).
-void MarkAndRememberNewValue(BarrierPhase barrierPhase, BaseObject* ref)
-{
-    if (ref == nullptr || !Heap::IsHeapAddress(ref)) {
-        return;
-    }
-    CollectorResources& resources = Heap::GetHeap().GetCollectorResources();
-    if (!resources.IsGcStarted()) {
-        return;
-    }
-    // FOLLOW publishes TRACE on the heap then handshakes mutators
-    // (WCollector.cpp:8042). Until the handshake, Heap::GetBarrier() is still
-    // Idle/Enum (phase != TRACE) while concurrent old→young stores already land
-    // on the remset current face. Same heap-phase fallback as SATB G3b
-    // (Mutator.h:588-597). gc_unit never Init — IsGcStarted is false, so this
-    // does not call GetGCPhase (CollectorProxy::currentCollector is null).
-    if (barrierPhase != BarrierPhase::TRACE) {
-        GCPhase heapPhase = Heap::GetHeap().GetGCPhase();
-        if (heapPhase != GCPhase::GC_PHASE_TRACE && heapPhase != GCPhase::GC_PHASE_CLEAR_SATB_BUFFER) {
-            return;
-        }
-    }
-    if (!Collector::PlausibleManagedObjectGate("mark_and_remember", ref)) {
-        return;
-    }
-    RegionInfo* region = RegionInfo::TryGetRegionInfoAt(reinterpret_cast<MAddress>(ref));
-    if (region == nullptr) {
-        return;
-    }
-    if (resources.GetGCStats().reason == GC_REASON_YOUNG) {
-        if (!region->IsYoungRegion()) {
-            return;
-        }
-        bool already = region->MarkObjectByOwner(ref, ref->GetSize());
-        if (already) {
-            return;
-        }
-        AllocBuffer* buffer = AllocBuffer::GetAllocBuffer();
-        if (buffer != nullptr) {
-            buffer->PushYoungAllocBlack(ref);
-        }
-        // Publish the same child work into the SATB termination domain.  The
-        // explicit follow bit is required because allocate-black has already
-        // claimed the young mark bit and a plain SATB consumer would skip it.
-        // This barrier can run in gc_unit and during runtime bootstrap, where
-        // no CJ thread model is installed.  Mutator::GetMutator() falls back
-        // to CJ_CJThreadGetMutator in that state; the optional entry point is
-        // not initialized and calling it raises signal 11 before a null
-        // mutator can be observed.  The publication producer must be the
-        // mutator bound to this OS thread, so read that binding directly.
-        Mutator* mutator = ThreadLocal::GetMutator();
-        // Runtime/GC threads can expose a runtime mutator object through the
-        // concurrency model, but they are not managed mutator contexts and do
-        // not own an in-flight SATB node.  The publication contract is only
-        // valid on a managed producer thread.
-        if (mutator != nullptr && mutator->IsManagedContext()) {
-            mutator->PublishYoungAllocBlack(ref);
-        }
-        return;
-    }
-    Mutator* mutator = Mutator::GetMutator();
-    if (mutator != nullptr) {
-        mutator->RememberObjectInSatbBuffer(ref);
-    }
-}
-
-// A thread without an AllocBuffer still owes the same SATB deletion receipt as
-// a buffered mutator.  Publish directly to the global SATB owner instead of
-// letting the batching optimization decide whether the pre-value survives.
-// This is the no-buffer peer of ZBarrier::heap_store_slow_path's direct
-// mark_and_remember arm (zBarrier.cpp:253-261).
-void RetirePreviousWithoutAllocBuffer(BarrierPhase barrierPhase, zpointer prev, Collector& collector)
-{
-    if (is_null(prev)) {
-        return;
-    }
-    CollectorResources& resources = Heap::GetHeap().GetCollectorResources();
-    if (!resources.IsGcStarted()) {
-        return;
-    }
-    if (barrierPhase != BarrierPhase::ENUM && barrierPhase != BarrierPhase::TRACE) {
-        const GCPhase heapPhase = Heap::GetHeap().GetGCPhase();
-        if (heapPhase != GCPhase::GC_PHASE_ENUM && heapPhase != GCPhase::GC_PHASE_TRACE &&
-            heapPhase != GCPhase::GC_PHASE_CLEAR_SATB_BUFFER) {
-            return;
-        }
-    }
-
-    RefField<> previous(prev);
-    const ForwardingProvenance provenance{ ForwardingHolderKind::HeapRef, nullptr, &previous };
-    BaseObject* const resolved = collector.make_load_good(previous, provenance);
-    if (resolved == nullptr || !Heap::IsHeapAddress(resolved)) {
-        return;
-    }
-
-    SatbBuffer& satb = SatbBuffer::Instance();
-    SatbBuffer::Node* node = nullptr;
-    satb.EnsureGoodNode(node);
-    CHECK_DETAIL(node != nullptr,
-                 "direct SATB publication unavailable prev=%#zx barrier_phase=%u",
-                 static_cast<size_t>(raw(prev)), static_cast<unsigned>(barrierPhase));
-    CHECK_DETAIL(node->Push(resolved, Collector::TryRecoverInteriorBase(resolved)),
-                 "fresh direct SATB node unexpectedly full prev=%#zx resolved=%p",
-                 static_cast<size_t>(raw(prev)), resolved);
-    satb.FlushQueue(node);
-}
 } // namespace
 
 extern "C" MRT_EXPORT uint64_t MRT_StoreBarrierFastPathCount()
@@ -743,9 +637,8 @@ void Barrier::WriteReference(BaseObject* obj, RefField<false>& field, BaseObject
     WriteReferenceImpl(obj, field, ref);
     SurvNodeDiag::NoteStore(&field, to_object(prev.GetTargetObject()), ref, SurvNodeDiag::STORE_WRITE_REF);
     NoteInstalledSlot(field, theCollector, static_cast<uint8_t>(phase));
-    // zBarrier.inline.hpp:735-739 mark_and_remember: mark the new target on every
-    // heap store, not only the remset slow path. A store-good rewrite of a
-    // different object still needs keep-alive (survnode visitSame=0).
+    // zBarrier.inline.hpp:695-705 passes prev through make_load_good to the
+    // store slow path; both buffering and direct marking carry that old value.
     if (prevStoreGood) {
         NoteStoreFastPath();
     } else {
@@ -846,6 +739,9 @@ void Barrier::WriteStructImpl(BaseObject* obj, MAddress dst, size_t dstLen, MAdd
 
 void Barrier::WriteStaticRef(RootSlot& field, BaseObject* ref) const
 {
+    // Native root stores have a direct previous-value mark barrier.
+    // ZBarrier::native_store_slow_path (zBarrier.cpp:272-278).
+    theCollector.MarkObjectIfActive(ReadStaticRef(field));
     const ForwardingProvenance provenance{ ForwardingHolderKind::Static, nullptr, &field };
     ref = theCollector.ResolveStoreValue(ref, provenance);
     if (phase != BarrierPhase::STW) {
@@ -863,15 +759,14 @@ void Barrier::WriteStaticRefPlain(RootSlot& field, BaseObject* ref) const
     StorePlain(field, from_object(ref));
 #if defined(MRT_REMSET_BITMAP_CROSSCHECK)
     RecordCrossGenEdge(nullptr, reinterpret_cast<MAddress>(&field), ref);
-#else
-    // SATB mark of the new value is independent of remembered-set maintenance;
-    // the default product does not compile the cross-check RecordCrossGenEdge call.
-    MarkAndRememberNewValue(this->phase, ref);
 #endif
 }
 
 void Barrier::WriteStaticStruct(MAddress dst, size_t dstLen, MAddress src, size_t srcLen, const GCTib gctib) const
 {
+    gctib.ForEachBitmapWord(dst, [this](RefField<>& field) {
+        theCollector.MarkObjectIfActive(ReadReference(nullptr, field));
+    });
     if (phase != BarrierPhase::STW) {
         return DispatchPhase(phase, *this, [&](const auto& barrier) {
             return barrier.WriteStaticStruct(dst, dstLen, src, srcLen, gctib);
@@ -2021,75 +1916,32 @@ void Barrier::ReadGenericImpl(const ObjectPtr dstObj, ObjectPtr obj, void* field
 
 void Barrier::RecordCrossGenEdge(BaseObject* obj, MAddress fieldAddress, BaseObject* ref, zpointer prev) const
 {
-    // Keep mark and remset recording independent for the single-field store
-    // exits that call this function directly: Write/PostWrite/AtomicWrite,
-    // AtomicSwap, and successful CAS. Their new value must be marked even when
-    // there are no young regions, while slot recording may return early below.
-    // Bulk aggregation paths reach this function per field and no longer gate
-    // on young regions before it, so their new values are marked here too.
-    if (ref != nullptr && Heap::IsHeapAddress(ref)) {
-        MarkAndRememberNewValue(this->phase, ref);
-    }
-
-    AllocBuffer* alloc = AllocBuffer::GetAllocBuffer();
-    // The slot address is authoritative for storage class.  Some compiler
-    // calls have no recoverable holder object, but a heap-resident slot still
-    // needs the same remembered-set bit and previous-value retirement.
+    // ZBarrier::heap_store_slow_path (zBarrier.cpp:253-261): buffer (p, prev)
+    // when possible; otherwise mark(addr) and remember(p) directly.
     const bool heapSlot = Heap::IsHeapAddress(fieldAddress);
-    // ZStoreBarrierBuffer installs a base pointer for every pending slot on a
-    // relocating page (zStoreBarrierBuffer.cpp:67-102,130-153).  Our buffer
-    // carries that base at insertion time, so an absent/opaque holder cannot be
-    // admitted: pBase=null would make RemapPendingField retain a from-slot.
-    // Such calls perform their SATB/remset duty immediately; a young source has
-    // the separate slot-grey handoff below.
-    const bool bufferableHolder = obj != nullptr && Heap::IsHeapAddress(obj);
-    bool buffered = false;
-    if (alloc != nullptr && heapSlot && bufferableHolder && !is_null(prev)) {
-        alloc->GetStoreBarrierBuffer().Add(fieldAddress, obj, prev, theRememberedSet);
-        buffered = true;
-    } else if (heapSlot && !is_null(prev) && (alloc == nullptr || !bufferableHolder)) {
-        RetirePreviousWithoutAllocBuffer(this->phase, prev, theCollector);
-    }
-
-    if (ref == nullptr || !Heap::IsHeapAddress(ref)) {
+    AllocBuffer* buffer = AllocBuffer::GetAllocBuffer();
+    if (kBufferStoreBarriers && buffer != nullptr && heapSlot && obj != nullptr && Heap::IsHeapAddress(obj)) {
+        buffer->GetStoreBarrierBuffer().Add(fieldAddress, obj, prev, theRememberedSet);
         return;
     }
-
-    if (!HasYoungRegionsForRecording()) {
-        return;
+    // addr in ZGC's heap_store_slow_path is make_load_good(prev), not the
+    // incoming value (zBarrier.inline.hpp:324-334,695-705).
+    if (!is_null(prev)) {
+        RefField<> previous(prev);
+        const ForwardingProvenance provenance{
+            ForwardingHolderKind::HeapRef, obj, reinterpret_cast<const void*>(fieldAddress)
+        };
+        theCollector.MarkObjectIfActive(theCollector.make_load_good(previous, provenance));
     }
-
-    // OpenJDK keys its remembered set on the slot, whose generation is stable,
-    // rather than on the target, whose generation can change during promotion.
-    if (Heap::IsHeapAddress(fieldAddress)) {
-        RegionInfo* sourceRegion = RegionInfo::GetRegionInfoAt(fieldAddress);
-        if (sourceRegion->IsYoungRegion()) {
-            // Preserve the holder list when the ABI carries one.  Otherwise
-            // hand the exact slot to the same young-mark merge boundary; young
-            // slots are intentionally not represented in the remembered set.
-            AllocBuffer* buffer = AllocBuffer::GetAllocBuffer();
-            if (buffer != nullptr) {
-                if (bufferableHolder) {
-                    buffer->PushY2yDirtyHolder(obj);
-                } else {
-                    buffer->PushY2yDirtySlot(fieldAddress);
-                }
-            }
-            return;
-        }
-        if (alloc != nullptr && bufferableHolder && !buffered) {
-            alloc->GetStoreBarrierBuffer().Add(fieldAddress, obj, prev, theRememberedSet);
-        } else if (!buffered) {
-            theRememberedSet.Record(fieldAddress, /*fromMutatorBarrier=*/true);
-        }
-        return;
+    (void)ref;
+    if (heapSlot && !RegionInfo::GetRegionInfoAt(fieldAddress)->IsYoungRegion()) {
+        theRememberedSet.Record(fieldAddress, true);
     }
-
-    // Static/global slots are visited as roots in every minor collection.
-    (void)obj;
 #if defined(MRT_REMSET_BITMAP_CROSSCHECK)
-    theRememberedSet.RecordStaticForCrossCheck(
-        fieldAddress, reinterpret_cast<MAddress>(__builtin_return_address(0)));
+    if (!heapSlot) {
+        theRememberedSet.RecordStaticForCrossCheck(
+            fieldAddress, reinterpret_cast<MAddress>(__builtin_return_address(0)));
+    }
 #endif
 }
 

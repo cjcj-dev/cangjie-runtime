@@ -7,7 +7,7 @@
 // survnode: split markport §6.1 SurvivalNode deadFrom into frame (a) vs (b).
 //
 // (a) TRACE-window store of an unmarked heap target (LEAD-NOTE U1:
-//     MarkAndRememberNewValue remember-without-mark, zBarrier.inline.hpp:735-739).
+//     store-buffer previous-value marking, zBarrier.inline.hpp:735-739).
 //     storeSeen=0 on the first probe was the from-unmarked filter, not "no stores".
 // (b) the target was painted this cycle then the mark face was cleared without an
 //     epoch bump (ZGC flip_mark_start, zGeneration.cpp:1074-1077, is the only

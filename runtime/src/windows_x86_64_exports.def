@@ -1088,15 +1088,6 @@ EXPORTS
     _ZN12MapleRuntime10RegionList20ClearTraceRegionFlagEv @1081
     _ZN12MapleRuntime10SampleTaskC2ERKS0_ @1082
     _ZN12MapleRuntime10SampleTaskC2EyyRNSt3__16vectorIyNS1_9allocatorIyEEEERNS2_INS_9FrameTypeENS3_IS7_EEEERNS2_IjNS3_IjEEEE @1083
-    _ZN12MapleRuntime10SatbBuffer10FlushQueueERPNS0_4NodeE @1084
-    _ZN12MapleRuntime10SatbBuffer11ClearBufferEv @1085
-    _ZN12MapleRuntime10SatbBuffer13ShouldEnqueueEPKNS_10BaseObjectE @1086
-    _ZN12MapleRuntime10SatbBuffer14EnsureGoodNodeERPNS0_4NodeE @1087
-    _ZN12MapleRuntime10SatbBuffer15ReclaimALLPagesEv @1088
-    _ZN12MapleRuntime10SatbBuffer17GetRetiredObjectsINS_9MarkStackIPNS_10BaseObjectEEEEEvRT_ @1089
-    _ZN12MapleRuntime10SatbBuffer4InitEv @1090
-    _ZN12MapleRuntime10SatbBuffer6FilterEPNS0_4NodeE @1091
-    _ZN12MapleRuntime10SatbBuffer8InstanceEv @1092
     _ZN12MapleRuntime10TraceClear10DumpRecentEy @1093
     _ZN12MapleRuntime10TraceClear10LookupKindEyPKcyPcy @1094
     _ZN12MapleRuntime10TraceClear15NoteRegionEventEyyPKcPvyjjj @1095
@@ -1131,7 +1122,6 @@ EXPORTS
     _ZN12MapleRuntime10WCollector19DoGarbageCollectionEv @1124
     _ZN12MapleRuntime10WCollector19FixMinorObjectSlotsEPNS_10BaseObjectE @1125
     _ZN12MapleRuntime10WCollector19ForwardUpdateRawRefERNS_8RootSlotE @1126
-    _ZN12MapleRuntime10WCollector19MarkYoungSatbBufferERNS_9MarkStackIPNS_10BaseObjectEEEbRNSt3__113unordered_setIS3_NS6_4hashIS3_EENS6_8equal_toIS3_EENS6_9allocatorIS3_EEEERNS6_6vectorIS3_SD_EERNS7_IyNS8_IyEENSA_IyEENSC_IyEEEESN_b @1127
     _ZN12MapleRuntime10WCollector19RescanRememberedSetERNS_9MarkStackIPNS_10BaseObjectEEERKNSt3__113unordered_setIyNS6_4hashIyEENS6_8equal_toIyEENS6_9allocatorIyEEEESG_SG_bPSE_PNS_19DiffPathRemsetStatsE @1128
     _ZN12MapleRuntime10WCollector19ShouldIgnoreRequestERNS_9GCRequestE @1129
     _ZN12MapleRuntime10WCollector19VisitMinorRootSlotsERNSt3__18functionIFvRNS_8RootSlotEEEEy @1130
@@ -1519,8 +1509,6 @@ EXPORTS
     _ZN12MapleRuntime13VerifyRegions23VerifyAfterPrepareYoungERNS_13RegionManagerERKNSt3__113unordered_setIPNS_10RegionInfoENS3_4hashIS6_EENS3_8equal_toIS6_EENS3_9allocatorIS6_EEEEyPKc @1526
     _ZN12MapleRuntime13VerifyRegions7IsFatalEv @1527
     _ZN12MapleRuntime13VerifyRegions9IsEnabledEv @1528
-    _ZN12MapleRuntime13WeakRefBuffer6InsertEPNS_10BaseObjectE @1529
-    _ZN12MapleRuntime13WeakRefBuffer8InstanceEv @1530
     _ZN12MapleRuntime13g_initializedE @1531 DATA
     _ZN12MapleRuntime13g_injectStateE @1532 DATA
     _ZN12MapleRuntime14ATraceEndAsyncEPKci @1533
@@ -1735,7 +1723,6 @@ EXPORTS
     _ZN12MapleRuntime16TracingCollector13DoEnumerationERNS_9MarkStackIPNS_10BaseObjectEEES5_ @1753
     _ZN12MapleRuntime16TracingCollector13UpdateGCStatsEv @1754
     _ZN12MapleRuntime16TracingCollector14DoResurrectionERNS_9MarkStackIPNS_10BaseObjectEEE @1755
-    _ZN12MapleRuntime16TracingCollector14MarkSatbBufferERNS_9MarkStackIPNS_10BaseObjectEEE @1756
     _ZN12MapleRuntime16TracingCollector15GetAndTryTagObjENS0_11RefSlotKindEPNS_10BaseObjectERNS_8HeapSlotILb0EEE @1757
     _ZN12MapleRuntime16TracingCollector15GetCurrentTagIDEv @1758
     _ZN12MapleRuntime16TracingCollector15ResurrectObjectEPNS_10BaseObjectEyPNS_10RegionInfoE @1759
@@ -1750,8 +1737,6 @@ EXPORTS
     _ZN12MapleRuntime16TracingCollector20DFSTraceExportObjectEPNS_10BaseObjectE @1768
     _ZN12MapleRuntime16TracingCollector20PreGarbageCollectionEb @1769
     _ZN12MapleRuntime16TracingCollector20TraceObjectRefFieldsEPNS_10BaseObjectERNS_9MarkStackIS2_EE @1770
-    _ZN12MapleRuntime16TracingCollector21MAX_MARKING_WORK_SIZEE @1771 DATA
-    _ZN12MapleRuntime16TracingCollector21MIN_MARKING_WORK_SIZEE @1772 DATA
     _ZN12MapleRuntime16TracingCollector21PostGarbageCollectionEy @1773
     _ZN12MapleRuntime16TracingCollector21RecordStubAllRegisterERNS_11RegSlotsMapEy @1774
     _ZN12MapleRuntime16TracingCollector21RecordStubCalleeSavedERNS_11RegSlotsMapEy @1775
@@ -2103,7 +2088,6 @@ EXPORTS
     _ZN12MapleRuntime7Mutator21RequestEpochHandshakeEy @2139
     _ZN12MapleRuntime7Mutator23HandleSuspensionRequestEv @2140
     _ZN12MapleRuntime7Mutator25AcknowledgeEpochHandshakeEyb @2141
-    _ZN12MapleRuntime7Mutator26RememberObjectInSatbBufferEPKNS_10BaseObjectE @2142
     _ZN12MapleRuntime7Mutator26VisitHeapReferencesOnStackERKNSt3__18functionIFvRNS_8RootSlotEEEERKNS2_IFvNS_15zaddress_unsafeERNS_11DerivedSlotEEEE @2143
     _ZN12MapleRuntime7Mutator26VisitHeapReferencesOnStackERKNSt3__18functionIFvRNS_8RootSlotEEEES8_RKNS2_IFvNS_15zaddress_unsafeERNS_11DerivedSlotEEEES8_ @2144
     _ZN12MapleRuntime7Mutator28TransitionToGCPhaseExclusiveENS_7GCPhaseE @2145

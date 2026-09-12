@@ -19,6 +19,9 @@ namespace MapleRuntime {
 // one of these collectors.
 // CollectorProxy should inherit collector interfaces, but no datas
 class CollectorProxy : public Collector {
+#if defined(MRT_TESTABLE_INTERNALS)
+    friend struct MarkPublicationFixture;
+#endif
 public:
     explicit CollectorProxy(Allocator& allocator, CollectorResources& resources) : wCollector(allocator, resources)
     {
@@ -39,6 +42,16 @@ public:
     {
         return currentCollector != nullptr ? currentCollector->GetCycleSnapshot(generation)
                                            : Collector::GetCycleSnapshot(generation);
+    }
+
+    void MarkYoungObjectIfActive(BaseObject* object, bool followOnly = false) const override
+    {
+        currentCollector->MarkYoungObjectIfActive(object, followOnly);
+    }
+
+    void MarkOldObjectIfActive(BaseObject* object, bool gcThread = false) const override
+    {
+        currentCollector->MarkOldObjectIfActive(object, gcThread);
     }
 
     void SetGCPhase(const GCPhase phase) override { currentCollector->SetGCPhase(phase); }
