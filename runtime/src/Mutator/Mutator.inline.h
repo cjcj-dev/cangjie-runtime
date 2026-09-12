@@ -13,7 +13,7 @@
 namespace MapleRuntime {
 inline void Mutator::DoEnterSaferegion()
 {
-    // set current mutator in saferegion.
+    FlushHolderThreadMarkProducers();
     SetInSaferegion(SAFE_REGION_TRUE);
 }
 

@@ -35,6 +35,7 @@
 #include "Base/SysCall.h"
 #endif
 #include "Concurrency/Concurrency.h"
+#include "Heap/Allocator/AllocBuffer.h"
 #include "Heap/Barrier/StoreBarrierBuffer.h"
 #include "Heap/Collector/GcTriggerFlags.h"
 #include "Heap/Collector/MarkEngine.h"
@@ -177,6 +178,12 @@ bool WCollector::ResurrectObject(BaseObject* obj, size_t offset, RegionInfo* reg
     if (!resurrected) {
         DLOG(TRACE, "resurrect region %p@%#zx obj %p<%p>(%zu), live bytes %zu", region, region->GetRegionStart(),
              obj, obj->GetTypeInfo(), obj->GetSize(), region->GetLiveByteCount());
+        if (youngMarkDomain != nullptr) {
+            youngMarkDomain->Terminate().SetResurrected(true);
+        }
+        if (majorMarkDomain != nullptr) {
+            majorMarkDomain->Terminate().SetResurrected(true);
+        }
     }
     return resurrected;
 }
@@ -1458,12 +1465,6 @@ void WCollector::TraceYoungClosureStriped(WorkStack& workStack, bool fullYoungSc
     VerifyMarkingStacks::VerifyEmpty(VerifyMarkingStacks::MarkingGeneration::YOUNG,
                                      VerifyMarkingStacks::MarkingBoundary::START,
                                      VerifyMarkingStacks::MarkingContainer::LOCAL, seed.Population(), 0);
-    VerifyMarkingStacks::VerifyEmpty(VerifyMarkingStacks::MarkingGeneration::YOUNG,
-                                     VerifyMarkingStacks::MarkingBoundary::START,
-                                     VerifyMarkingStacks::MarkingContainer::STRIPE,
-                                      shared.Stripes().Population(), VerifyMarkingStacks::NO_MARKING_INDEX,
-                                      VerifyMarkingStacks::NO_MARKING_INDEX,
-                                      shared.Stripes().FirstNonEmptyStripe());
     while (!workStack.empty()) {
         const MarkStackEntry entry = workStack.back();
         workStack.pop_back();
@@ -1477,7 +1478,8 @@ void WCollector::TraceYoungClosureStriped(WorkStack& workStack, bool fullYoungSc
         seed.Push(shared.Stripes(), shared.StripeFor(reinterpret_cast<BaseObject*>(address)), entry, true);
         ++rootCount;
     }
-    CHECK_DETAIL(rootCount != 0, "striped mark requires a non-empty root stack");
+    CHECK_DETAIL(rootCount != 0 || !shared.Stripes().IsEmpty(),
+                 "striped mark requires owner roots or published stripe work");
     VerifyMarkingStacks::NoteProducer(VerifyMarkingStacks::MarkingGeneration::YOUNG,
                                       VerifyMarkingStacks::MarkingContainer::LOCAL, seed.Population());
     (void)seed.Flush(shared.Stripes(), true);
@@ -1554,7 +1556,7 @@ void WCollector::TraceYoungClosure(WorkStack& workStack, bool fullYoungScan,
         NoteTraceYoungClosureDuringPause();
     }
 #endif
-    if (workStack.empty()) {
+    if (workStack.empty() && (youngMarkDomain == nullptr || youngMarkDomain->Stripes().IsEmpty())) {
         return;
     }
     VerifyMarkingStacks::NoteProducer(VerifyMarkingStacks::MarkingGeneration::YOUNG,
@@ -1619,27 +1621,27 @@ bool WCollector::MarkYoungSatbBuffer(WorkStack& workStack, bool fullYoungScan,
 #if defined(MRT_TESTABLE_INTERNALS)
     PublishConcurrentYoungProducersTestReceipt();
 #endif
-    theAllocator.VisitAllocBuffers([this, &workStack](AllocBuffer& buffer) {
-        buffer.MergeRoots(workStack);
-        buffer.MergeYoungAllocBlackFollow(workStack);
-        buffer.MergeY2yDirtyHolders(workStack);
-        buffer.MergeY2yDirtySlots([this, &workStack](MAddress slot) {
-            RefField<>& field = HeapSlotAt<>(slot);
-            BaseObject* target = ResolveMinorReference(field);
-            PushYoungObject(target, workStack, "y2y_slot");
-        });
-    });
-    visitSatbObj();
-    if (windowStats != nullptr) {
-        ++windowStats->satbIters;
-    }
-    if (!workStack.empty()) {
+    for (;;) {
+        visitSatbObj();
         if (windowStats != nullptr) {
-            ++windowStats->closureCalls;
+            ++windowStats->satbIters;
         }
-        TraceYoungClosure(workStack, fullYoungScan, reachableVec, reachableSlots, weakSlots);
+        const bool stripeWork = youngMarkDomain != nullptr && !youngMarkDomain->Stripes().IsEmpty();
+        if (!workStack.empty() || stripeWork) {
+            if (windowStats != nullptr) {
+                ++windowStats->closureCalls;
+            }
+            TraceYoungClosure(workStack, fullYoungScan, reachableVec, reachableSlots, weakSlots);
+        }
+        CHECK_DETAIL(workStack.empty(), "young concurrent follow returned with owner work");
+        const bool more = FlushMarkProducers(youngMarkDomain.get());
+        visitSatbObj();
+        const bool resurrected =
+            youngMarkDomain != nullptr && youngMarkDomain->Terminate().Resurrected();
+        if (!more && workStack.empty() && !resurrected) {
+            break;
+        }
     }
-    CHECK_DETAIL(workStack.empty(), "young concurrent follow returned with owner work");
     return true;
 }
 
@@ -1648,7 +1650,7 @@ bool WCollector::TryEndYoungMark(WorkStack& workStack, YoungConcWindowStats* win
     CHECK_DETAIL(MutatorManager::Instance().WorldStopped(), "young mark-end flush requires stopped mutators");
     NoteMarkTerminatePause();
     size_t flushed = 0;
-    MutatorManager::Instance().VisitAllMutators([](Mutator& mutator) { mutator.FlushSatbBuffer(); });
+    (void)MutatorManager::Instance().HandshakeFlushMarkProducers(youngMarkDomain.get());
     SatbBuffer::Instance().GetRetiredEntries([this, &workStack, windowStats, &flushed](BaseObject* object,
                                                                                      bool follow) {
         ++flushed;
@@ -1662,7 +1664,13 @@ bool WCollector::TryEndYoungMark(WorkStack& workStack, YoungConcWindowStats* win
         }
     });
     NoteMarkTerminateFlushed(flushed);
-    return workStack.empty();
+    if (!workStack.empty()) {
+        return false;
+    }
+    if (youngMarkDomain != nullptr) {
+        return youngMarkDomain->TryEnd();
+    }
+    return true;
 }
 void WCollector::MarkNewObject(BaseObject* obj)
 {
@@ -1677,5 +1685,66 @@ void WCollector::ProcessFinalizers()
 {
     FinalizerProcessor& fp = collectorResources.GetFinalizerProcessor();
     fp.ProcessReferences([this](BaseObject* obj) { return IsMarkedObject<Generation::Old>(obj); });
+}
+
+bool WCollector::PublishHandshakeMarkWork(WorkStack& work, MarkDomain* domain)
+{
+    if (domain == nullptr || work.empty()) {
+        return false;
+    }
+    MarkThreadLocalStacks seed(domain->Stripes().Count());
+    bool published = false;
+    while (!work.empty()) {
+        const MarkStackEntry entry = work.back();
+        work.pop_back();
+        MAddress address = 0;
+        if (entry.partialArray()) {
+            size_t length = 0;
+            MarkPartialArray::Decode(entry, address, length);
+        } else {
+            address = reinterpret_cast<MAddress>(entry.object());
+        }
+        if (address == 0) {
+            continue;
+        }
+        seed.Push(domain->Stripes(), domain->Stripes().StripeForAddress(address), entry, true);
+        published = true;
+    }
+    if (published) {
+        (void)seed.Flush(domain->Stripes(), true);
+        domain->Terminate().Wake();
+    }
+    return published;
+}
+
+bool WCollector::FlushAllocBufferMarkProducers(AllocBuffer* buffer)
+{
+    MarkDomain* domain = MutatorManager::Instance().MarkFlushDomain();
+    if (domain == nullptr) {
+        domain = youngMarkDomain.get();
+    }
+    if (domain == nullptr) {
+        domain = majorMarkDomain.get();
+    }
+    return FlushAllocBufferMarkProducers(buffer, domain);
+}
+
+bool WCollector::FlushAllocBufferMarkProducers(AllocBuffer* buffer, MarkDomain* domain)
+{
+    if (buffer == nullptr || domain == nullptr) {
+        return false;
+    }
+    WorkStack work;
+    buffer->MergeRoots(work);
+    buffer->MergeYoungAllocBlackFollow(work);
+    buffer->MergeY2yDirtyHolders(work);
+    buffer->MergeY2yDirtySlots([this, &work](MAddress slot) {
+        RefField<>& field = HeapSlotAt<>(slot);
+        BaseObject* target = ResolveMinorReference(field);
+        if (target != nullptr && Heap::IsHeapAddress(target)) {
+            work.push_back(MarkStackEntry::MarkAndFollow(target, false));
+        }
+    });
+    return PublishHandshakeMarkWork(work, domain);
 }
 } // namespace MapleRuntime
