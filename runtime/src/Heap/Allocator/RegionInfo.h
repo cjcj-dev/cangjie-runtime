@@ -2009,8 +2009,8 @@ public:
         RegionInfo* region = LoadUnitRole0(unit) == UnitRole::SUBORDINATE_UNIT
             ? unit->GetMetadata().ownerRegion0 : reinterpret_cast<RegionInfo*>(unit);
         if (region == nullptr ||
-            !(__atomic_load_n(&unit->GetMetadata().ghostLifeId == __ATOMIC_ACQUIRE),
-                                       region->GetRegionLifeId())) {
+            __atomic_load_n(&unit->GetMetadata().ghostLifeId, __ATOMIC_ACQUIRE) !=
+                region->GetRegionLifeId()) {
             return nullptr;
         }
 #if defined(MRT_GC_UNIT_TESTS)
@@ -2718,8 +2718,7 @@ public:
         if (!ghost) {
             return false;
         }
-        return (__atomic_load_n(&metadata.ghostLifeId == __ATOMIC_ACQUIRE),
-                                         GetRegionLifeId());
+        return __atomic_load_n(&metadata.ghostLifeId, __ATOMIC_ACQUIRE) == GetRegionLifeId();
     }
 
     // After TakeRegion re-init, every unit must have ghost cleared (payload wipe does not touch metadata).
@@ -3947,6 +3946,7 @@ private:
         // at ClearLiveInfo / mark-start, are implicitly live (zPage.inline.hpp:180-185
         // is_allocating). 0 = no mark-start yet.
         uintptr_t markStartAllocPtr;
+        uint8_t routeInfoPad[32] = {};
         uint64_t snapshotEpoch = 0;
         // used to traverse ghost region.
         uint32_t nextRegionIdx0;
