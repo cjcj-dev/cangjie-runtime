@@ -100,6 +100,11 @@ public:
     size_t SynchronizedWorkerCount() const;
     uint64_t CompletionCount() const { return completionCount.load(std::memory_order_relaxed); }
 
+#if defined(MRT_TESTABLE_INTERNALS)
+    using WaitEnterHook = void (*)();
+    static void SetWaitEnterHook(WaitEnterHook hook);
+#endif
+
 private:
     Handle PruneAndClaimLocked();
     void PruneDoneLocked();

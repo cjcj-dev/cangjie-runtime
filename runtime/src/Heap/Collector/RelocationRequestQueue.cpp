@@ -6,11 +6,22 @@
 
 #include "Heap/Collector/RelocationRequestQueue.h"
 
+#include <atomic>
 #include <chrono>
 #include "Heap/Allocator/RegionInfo.h"
 #include "Mutator/Mutator.inline.h"
 
 namespace MapleRuntime {
+
+#if defined(MRT_TESTABLE_INTERNALS)
+namespace {
+std::atomic<RelocationRequestQueue::WaitEnterHook> g_waitEnterHook{ nullptr };
+}
+void RelocationRequestQueue::SetWaitEnterHook(WaitEnterHook hook)
+{
+    g_waitEnterHook.store(hook, std::memory_order_release);
+}
+#endif
 
 void RelocationRequestQueue::BeginWorkers(size_t workers)
 {
@@ -59,6 +70,11 @@ MAddress RelocationRequestQueue::WaitUntil(const Handle& request, size_t maxSpin
 {
     if (timedOut != nullptr) *timedOut = false;
     if (request == nullptr) return 0;
+#if defined(MRT_TESTABLE_INTERNALS)
+    if (WaitEnterHook hook = g_waitEnterHook.load(std::memory_order_acquire)) {
+        hook();
+    }
+#endif
     Mutator* mutator = ThreadLocal::GetMutator();
     const ThreadType type = ThreadLocal::GetThreadType();
     const bool changed = mutator != nullptr && type != ThreadType::FP_THREAD && type != ThreadType::GC_THREAD &&

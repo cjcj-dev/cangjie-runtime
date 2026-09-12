@@ -28,6 +28,7 @@
 #include "Heap/Barrier/StoreBarrierBuffer.h"
 #include "Heap/Collector/CollectorProxy.h"
 #include "Heap/Collector/PromotedRegionDomain.h"
+#include "Heap/Collector/RelocationRequestQueue.h"
 #include "Heap/Verify/FromPageDetachCheck.h"
 #include "Heap/GcThreadPool.h"
 #include "Heap/WCollector/WCollector.h"
@@ -377,6 +378,31 @@ std::condition_variable CopyAdmissionBarrier::cv;
 BaseObject* CopyAdmissionBarrier::target = nullptr;
 bool CopyAdmissionBarrier::entered = false;
 bool CopyAdmissionBarrier::released = false;
+
+struct PageWaitEnterBarrier {
+    static void Reset()
+    {
+        std::lock_guard<std::mutex> guard(mu);
+        entered = false;
+    }
+    static void Hook()
+    {
+        std::lock_guard<std::mutex> guard(mu);
+        entered = true;
+        cv.notify_all();
+    }
+    static void WaitEntered()
+    {
+        std::unique_lock<std::mutex> lock(mu);
+        cv.wait(lock, []() { return entered; });
+    }
+    static std::mutex mu;
+    static std::condition_variable cv;
+    static bool entered;
+};
+std::mutex PageWaitEnterBarrier::mu;
+std::condition_variable PageWaitEnterBarrier::cv;
+bool PageWaitEnterBarrier::entered = false;
 
 struct CopyCompletionBarrier {
     std::mutex mu;
@@ -4018,12 +4044,19 @@ GC_TEST(ForwardingPublicationProduct, PageWaitThenLookupReadsOriginalCompactRece
     queue.BeginWorkers(1);
 
     const auto seeded = queue.Add(region, from);
+    if (ZForwarding* forwarding = region->PeekForwardingOwner()) {
+        forwarding->in_place_relocation_claim_page();
+    }
+    PageWaitEnterBarrier::Reset();
+    RelocationRequestQueue::SetWaitEnterHook(&PageWaitEnterBarrier::Hook);
     BaseObject* resolved = nullptr;
     std::thread waiter([&]() {
         resolved = RelocationReceiptTestAccess::WaitRoutedTipReady(
             collector, liveObject, nullptr, region);
     });
+    PageWaitEnterBarrier::WaitEntered();
     manager.ForwardFromRegions<Generation::Old>();
+    RelocationRequestQueue::SetWaitEnterHook(nullptr);
     const auto claimed = seeded.request;
     BaseObject* workerResult = reinterpret_cast<BaseObject*>(ForwardingTable::FindTo(from));
     const bool workerClosed = queue.PendingCount() == 0;
@@ -4088,12 +4121,19 @@ GC_TEST(ForwardingPublicationProduct, CompletedPageResolvesThroughForwardingTabl
     queue.BeginWorkers(1);
 
     const auto seeded = queue.Add(region, from);
+    if (ZForwarding* forwarding = region->PeekForwardingOwner()) {
+        forwarding->in_place_relocation_claim_page();
+    }
+    PageWaitEnterBarrier::Reset();
+    RelocationRequestQueue::SetWaitEnterHook(&PageWaitEnterBarrier::Hook);
     BaseObject* resolved = nullptr;
     std::thread waiter([&]() {
         resolved = RelocationReceiptTestAccess::WaitRoutedTipReady(
             collector, fromObject, nullptr, region);
     });
+    PageWaitEnterBarrier::WaitEntered();
     manager.ForwardFromRegions<Generation::Old>();
+    RelocationRequestQueue::SetWaitEnterHook(nullptr);
     const auto claimed = seeded.request;
     BaseObject* workerResult = reinterpret_cast<BaseObject*>(ForwardingTable::FindTo(from));
     const bool workerClosed = queue.PendingCount() == 0;
