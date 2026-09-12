@@ -1507,8 +1507,6 @@ EXPORTS
     _ZN12MapleRuntime13StackMapTableD0Ev @1514
     _ZN12MapleRuntime13TagReuseProbe15TagReuseEnabledEv @1515
     _ZN12MapleRuntime13TagReuseProbe17ScanBeforeReleaseEyytyyyy @1516
-    _ZN12MapleRuntime13TagReuseProbe18NoteMarkBitsStickyEPNS_10RegionInfoEybPKc @1517
-    _ZN12MapleRuntime13TagReuseProbe21MarkBitsStickyEnabledEv @1518
     _ZN12MapleRuntime13UnwindContext16GoIntoNativeCodeEPKjPv @1519
     _ZN12MapleRuntime13UnwindContext17GoIntoManagedCodeEv @1520
     _ZN12MapleRuntime13UnwindContextD0Ev @1521

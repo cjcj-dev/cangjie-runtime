@@ -3,7 +3,11 @@
 
 #include "DriverPort.h"
 
+#include <chrono>
 #include <limits>
+
+#include "Mutator/Mutator.h"
+#include "Mutator/MutatorManager.h"
 
 namespace MapleRuntime {
 
@@ -117,7 +121,18 @@ bool GCDriverPort::WaitForAck(const GCDriverReceipt& receipt)
     ++waitingReceipts;
     condition.notify_all();
 #endif
-    condition.wait(lock, [this, &receipt] { return stopped || receipt.state->resolved; });
+    while (!stopped && !receipt.state->resolved) {
+        lock.unlock();
+        Mutator* mutator = Mutator::GetMutator();
+        if (mutator != nullptr &&
+            mutator->HasSuspensionRequest(Mutator::SUSPENSION_FOR_MARK_FLUSH)) {
+            (void)mutator->AcknowledgeMarkFlushHandshake(
+                MutatorManager::Instance().MarkFlushDomain());
+        }
+        lock.lock();
+        condition.wait_for(lock, std::chrono::milliseconds(1),
+                           [this, &receipt] { return stopped || receipt.state->resolved; });
+    }
 #if defined(MRT_GC_UNIT_TESTS)
     --waitingReceipts;
     condition.notify_all();

@@ -31,6 +31,7 @@
 #include "Heap/Verify/MutatorRelocate.h"
 #include "Mutator/MutatorManager.h"
 namespace MapleRuntime {
+class AllocBuffer;
 class MarkLiveCache;
 class ScopedStopTheWorld;
 
@@ -207,6 +208,9 @@ public:
     void Init() override { ForwardDataManager::GetForwardDataManager().InitializeForwardData(); }
 
     void MarkNewObject(BaseObject* obj) override;
+    bool FlushAllocBufferMarkProducers(AllocBuffer* buffer, MarkDomain* domain);
+    bool FlushAllocBufferMarkProducers(AllocBuffer* buffer);
+    bool PublishHandshakeMarkWork(WorkStack& work, MarkDomain* domain);
 
     bool ShouldIgnoreRequest(GCRequest& request) override;
     bool MarkObject(BaseObject* obj) const override;
