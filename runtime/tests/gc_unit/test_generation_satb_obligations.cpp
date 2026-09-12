@@ -4,8 +4,8 @@
 // See https://cangjie-lang.cn/pages/LICENSE for license information.
 // Per-generation publication and independent product mark consumption.
 #include "Common/Runtime.h"
-#include "Concurrency/Concurrency.h"
 #include "gc_heap_fixture.hpp"
+#include "Concurrency/Concurrency.h"
 #include "gc_unittest.hpp"
 #include "mark_publication_fixture.hpp"
 using namespace MapleRuntime;
