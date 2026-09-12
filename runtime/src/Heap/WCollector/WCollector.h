@@ -800,8 +800,6 @@ public:
             witness.fromPageLifeId = lookupQueried ? lookup.fromPageLifeId : 0;
             witness.forwardingSnapshotValid = lookupQueried && lookup.forwardingSnapshotValid;
             witness.gcPhase = static_cast<uint8_t>(GetGCPhase());
-            // Route-state remains a separate witness axis from region/table
-            // snapshots so LookupUnavailable vs NoGhostForwarded stay distinct.
         };
         const auto unavailable = [&](FindToVersionResult::UnavailableRoute route, bool forwardedValid,
                                      bool forwarded, bool fromRegionInfoNullValid,

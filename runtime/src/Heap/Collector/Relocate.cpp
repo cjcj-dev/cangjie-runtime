@@ -2509,17 +2509,28 @@ void WCollector::UpdateRemsetForFields(BaseObject* from, BaseObject* to)
     if (!to->HasRefField()) {
         return;
     }
-    Collector& collector = Heap::GetHeap().GetCollector();
-    to->ForEachRefField([&rememberedSet, &collector](RefField<>& field) {
-        const ForwardingProvenance provenance{ ForwardingHolderKind::Remset, nullptr, &field };
-        BaseObject* target = collector.make_load_good(field, provenance);
+    to->ForEachRefField([&rememberedSet](RefField<>& field) {
+        BaseObject* target = to_object(field.GetTargetObject());
         if (target == nullptr || !Heap::IsHeapAddress(target)) {
             return;
         }
-        RegionInfo* targetRegion = RegionInfo::TryGetRegionInfoAt(reinterpret_cast<MAddress>(target));
-        if (targetRegion != nullptr && targetRegion->IsYoungRegion()) {
-            rememberedSet.Record(reinterpret_cast<MAddress>(&field));
+        const MAddress fieldAddr = reinterpret_cast<MAddress>(&field);
+        if (Heap::GetHeap().GetCollector().is_load_good(field)) {
+            RegionInfo* targetRegion = RegionInfo::TryGetRegionInfoAt(reinterpret_cast<MAddress>(target));
+            if (targetRegion != nullptr && targetRegion->IsYoungRegion()) {
+                rememberedSet.Record(fieldAddr);
+            }
+            return;
         }
+        const MAddress hit = ForwardingTable::FindTo(reinterpret_cast<MAddress>(target));
+        if (hit != 0) {
+            RegionInfo* winnerRegion = RegionInfo::TryGetRegionInfoAt(hit);
+            if (winnerRegion != nullptr && winnerRegion->IsYoungRegion()) {
+                rememberedSet.Record(fieldAddr);
+            }
+            return;
+        }
+        rememberedSet.Record(fieldAddr);
     });
 }
 

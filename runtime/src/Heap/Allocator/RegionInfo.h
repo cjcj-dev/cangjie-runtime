@@ -13,6 +13,7 @@
 #include <cstdlib>
 #include <cstring>
 #include <limits>
+#include <sched.h>
 #include <list>
 #include <map>
 #include <mutex>
@@ -1157,14 +1158,25 @@ public:
                 continue;
             }
             if (LIKELY(bitmap != nullptr)) {
-                if (face.epoch.load(std::memory_order_acquire) != view.GetEpoch()) {
-                    if (IsGhostFromRegion()) {
+                if (IsGhostFromRegion()) {
+                    return bitmap;
+                }
+                constexpr uint64_t kInitializing = std::numeric_limits<uint64_t>::max();
+                for (;;) {
+                    uint64_t seq = face.epoch.load(std::memory_order_acquire);
+                    if (seq == view.GetEpoch()) {
                         return bitmap;
                     }
-                    bitmap->Reset();
-                    face.epoch.store(view.GetEpoch(), std::memory_order_release);
+                    if (seq != kInitializing) {
+                        if (face.epoch.compare_exchange_strong(seq, kInitializing, std::memory_order_acq_rel,
+                                                               std::memory_order_acquire)) {
+                            bitmap->Reset();
+                            face.epoch.store(view.GetEpoch(), std::memory_order_release);
+                            return bitmap;
+                        }
+                    }
+                    sched_yield();
                 }
-                return bitmap;
             }
             RegionBitmap* newValue = reinterpret_cast<RegionBitmap*>(LiveInfo::TEMPORARY_PTR);
             if (__atomic_compare_exchange_n(&face.bitmap, &bitmap, newValue, false, std::memory_order_seq_cst,
@@ -3015,7 +3027,6 @@ public:
         CHECK_DETAIL(IsYoungRegion(), "cannot promote an old region %p", this);
         CHECK_DETAIL(youngView.GetEpoch() == GetMarkSnapshotEpoch<Generation::Young>(),
                      "cannot promote region %p through a stale young mark view", this);
-        __atomic_store_n(&metadata.liveInfo, static_cast<LiveInfo*>(nullptr), std::memory_order_release);
         SetOldMarkedRegionFlag(0);
         SetEnqueuedRegionFlag(0);
         SetResurrectedRegionFlag(0);
@@ -4047,7 +4058,6 @@ private:
         __atomic_store_n(&metadata.liveByteCount, 0, std::memory_order_release);
         __atomic_store_n(&metadata.liveObjectCount, 0, __ATOMIC_RELEASE);
         __atomic_store_n(&metadata.largeLiveClaim, 0, __ATOMIC_RELEASE);
-        metadata.liveInfo = nullptr;
         ClearCurrentMarkFace();
         FreeCompactRouteTable();
         FreeRouteStartTable();
