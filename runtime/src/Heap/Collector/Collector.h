@@ -60,6 +60,7 @@ public:
     explicit GenerationCycle(GCCycleGeneration generation) : generation(generation) {}
     GCCycleSnapshot Snapshot() const;
     GCPhase Phase() const { return phase.load(std::memory_order_acquire); }
+    uint64_t Sequence() const { return Snapshot().sequence; }
     GCReason Reason() const { return reason.load(std::memory_order_acquire); }
     void SelectReason(GCReason value);
     void Begin(uint64_t index);
@@ -500,6 +501,10 @@ public:
     virtual GCCycleSnapshot GetCycleSnapshot(GCCycleGeneration generation) const
     {
         return (generation == GCCycleGeneration::YOUNG ? youngCycle : oldCycle).Snapshot();
+    }
+    void PublishGenerationPhase(GCCycleGeneration generation, GCPhase value)
+    {
+        (generation == GCCycleGeneration::YOUNG ? youngCycle : oldCycle).PublishPhase(value);
     }
     GCReason GetCycleReason() const { return ActiveCycle().Reason(); }
 

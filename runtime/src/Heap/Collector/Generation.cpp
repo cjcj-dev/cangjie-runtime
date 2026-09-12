@@ -1266,7 +1266,6 @@ void WCollector::DoYoungGarbageCollection()
         // filled during marking is an ordinary candidate next cycle; it is never removed
         // from the structure the selector iterates.
         space.GetRegionManager().HandleTraceRegions();
-        ForwardingTable::PublishMarkCoverage(Generation::Young);
         ForwardingTable::ReclaimRetired("young-mark-coverage");
     }
 
