@@ -375,7 +375,7 @@ void WCollector::DoGarbageCollection()
     MergeResurrectExportObjects();
     PostResolveCycleTask();
     FlipTagID();
-    ForwardDataManager::GetForwardDataManager().SetTagID(currentTagID);
+    LiveInfoArena::GetLiveInfoArena().SetTagID(currentTagID);
     if (HealCoverage::kHealCoverageCensus) {
         HealCoverage::CensusAfterPublication(
             currentRemapColour, FlipSeq().load(std::memory_order_relaxed), "major-postflip");
@@ -389,7 +389,7 @@ void WCollector::DoGarbageCollection()
     // Flush/Stamp/Promote in these STWs reintroduces 0/5 or residual 甲 under
     // FYS=0 SKIP_PINNED=1 512MB. Retained-liveness still applies on residual and
     // in-place promote paths that already Preserve + RecordPromotedCrossGenEdges.
-    ForwardDataManager::GetForwardDataManager().UnbindPreviousLiveInfo();
+    LiveInfoArena::GetLiveInfoArena().UnbindPreviousLiveInfo();
     Collector::ReportMarkGoodHeapGateCounts();
 
 }

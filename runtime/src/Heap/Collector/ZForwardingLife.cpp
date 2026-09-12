@@ -7,9 +7,7 @@
 #include "Heap/Collector/ZForwardingLife.h"
 
 #include "Heap/Allocator/RegionInfo.h"
-#include "Heap/Verify/MutatorRelocate.h"
 #include "Heap/Collector/ZForwarding.h"
-#include "Base/TimeUtils.h"
 
 #include <cstdio>
 #include <cstdlib>
@@ -19,6 +17,7 @@ namespace MapleRuntime {
 
 namespace {
 thread_local ZForwarding* currentPageWork = nullptr;
+thread_local int mutatorRelocateDepth = 0;
 }
 
 ZForwardingLife::PageWorkScope::PageWorkScope(ZForwarding* forwarding, bool complete)
@@ -37,6 +36,9 @@ ZForwardingLife::PageWorkScope::~PageWorkScope()
     currentPageWork = previous;
 }
 ZForwarding* ZForwardingLife::CurrentPageWork() { return currentPageWork; }
+bool ZForwardingLife::InMutatorRelocate() { return mutatorRelocateDepth != 0; }
+ZForwardingLife::MutatorRelocateScope::MutatorRelocateScope() { ++mutatorRelocateDepth; }
+ZForwardingLife::MutatorRelocateScope::~MutatorRelocateScope() { --mutatorRelocateDepth; }
 
 std::atomic<uint64_t> ZForwardingLife::g_retainRefusedReleased{ 0 };
 std::atomic<uint64_t> ZForwardingLife::g_retainRefusedClaimed{ 0 };
@@ -74,13 +76,12 @@ void ZForwardingLife::WaitUntilRef(std::atomic<int32_t>& refCount, int32_t expec
     }
 }
 
-RegionInfo::InPlaceClaimScope::InPlaceClaimScope(RegionInfo* region, MutatorRelocate::Retire site)
+RegionInfo::InPlaceClaimScope::InPlaceClaimScope(RegionInfo* region, ZForwardingLife::Retire site)
     : owner(ForwardingTable::RetainPageOwner(region))
 {
+    (void)site;
     if (region == nullptr) return;
-    const uint64_t start = TimeUtil::NanoSeconds();
     if (!owner) {
-        MutatorRelocate::NoteDrain(site, TimeUtil::NanoSeconds() - start, false);
         return;
     }
     const int32_t before = owner->ref_count().load(std::memory_order_acquire);
@@ -91,7 +92,6 @@ RegionInfo::InPlaceClaimScope::InPlaceClaimScope(RegionInfo* region, MutatorRelo
         owner->in_place_relocation_claim_page();
         retiring = true;
     }
-    MutatorRelocate::NoteDrain(site, TimeUtil::NanoSeconds() - start, before != 0 && before != 1);
 }
 
 void ZForwardingLife::WaitPageDone(ZForwarding* forwarding)

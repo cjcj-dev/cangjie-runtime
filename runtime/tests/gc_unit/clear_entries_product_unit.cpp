@@ -624,7 +624,6 @@ LateBackfillState PrepareLateBackfill(GcHeapFixture& fx, WCollector& collector)
     RelocationReceiptTestAccess::BindCollector(Heap::GetHeap().GetCollectorResources(), &collector);
     LiveInfo* live = PrepareForwardable(fx, region, reinterpret_cast<MAddress>(from));
 
-    region->SetRouteInfo(destination->GetRegionStart(), static_cast<uint32_t>(from->GetSize()));
     region->MarkForwardingDone();
     from->SetStateCode(ObjectState::FORWARDED);
     ZForwarding* table = ForwardingTable::GetEntries(reinterpret_cast<MAddress>(from));
@@ -963,7 +962,6 @@ GC_TEST(ForwardingPublicationProduct, MutatorRuntimeEntryReachesCopyAdmission)
     RelocationReceiptTestAccess::BindCollector(Heap::GetHeap().GetCollectorResources(), &collector);
     region->PrepareForwardableRegion(region->GetMarkView<Generation::Old>());
     region->RecordRouteStart(region->GetAddressOffset(reinterpret_cast<MAddress>(from)));
-    region->SetRouteInfo(reinterpret_cast<MAddress>(expected), static_cast<uint32_t>(objectSize));
     region->MarkForwardingDone();
     AllocBuffer::GetOrCreateAllocBuffer()->SetRegion(destination);
 
@@ -3529,7 +3527,6 @@ static void CheckWaitObservation(WaitObservationCase scenario)
             collector.flip_old_relocate_start();
             RelocationReceiptTestAccess::BindCollector(Heap::GetHeap().GetCollectorResources(), &collector);
             (void)PrepareForwardable(fx, region, reinterpret_cast<MAddress>(from));
-            region->SetRouteInfo(reinterpret_cast<MAddress>(fx.obj1), static_cast<uint32_t>(from->GetSize()));
             region->SetRouteState(miss ? RegionInfo::RouteState::COMPACTED : RegionInfo::RouteState::ROUTED);
             if (miss || (scenario == WaitObservationCase::InitialIdentity && sample != 0)) {
                 region->MarkForwardingDone();

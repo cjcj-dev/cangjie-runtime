@@ -195,7 +195,6 @@ ValueRootRoute PrepareValueRootRoute(GcHeapFixture& fx, bool destinationYoung)
     route.source->AddLiveByteCount(route.from->GetSize());
     route.source->PrepareForwardableRegion(route.source->GetMarkView<Generation::Old>());
     route.source->RecordRouteStart(sourceOffset);
-    route.source->SetRouteInfo(route.destination->GetRegionStart(),
                                static_cast<uint32_t>(route.from->GetSize()));
     route.source->SetRouteState(RegionInfo::RouteState::FORWARDED);
     route.from->SetStateCode(ObjectState::FORWARDED);

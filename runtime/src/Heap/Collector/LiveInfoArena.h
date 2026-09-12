@@ -5,8 +5,8 @@
 // See https://cangjie-lang.cn/pages/LICENSE for license information.
 
 
-#ifndef MRT_FORWARD_DATA_MANAGER_H
-#define MRT_FORWARD_DATA_MANAGER_H
+#ifndef MRT_LIVE_INFO_ARENA_H
+#define MRT_LIVE_INFO_ARENA_H
 
 #include "Base/ImmortalWrapper.h"
 #include "Heap/Heap.h"
@@ -35,7 +35,7 @@
 
 namespace MapleRuntime {
 
-class ForwardDataManager {
+class LiveInfoArena {
     class ForwardDataSpace {
     public:
         struct Zone {
@@ -138,21 +138,21 @@ class ForwardDataManager {
     };
 
 public:
-    ForwardDataManager() = default;
-    ~ForwardDataManager()
+    LiveInfoArena() = default;
+    ~LiveInfoArena()
     {
 #ifdef _WIN64
         if (!VirtualFree(reinterpret_cast<void*>(forwardDataStart), 0, MEM_RELEASE)) {
-            LOG(RTLOG_ERROR, "VirtualFree error for ForwardDataManager");
+            LOG(RTLOG_ERROR, "VirtualFree error for live-info arena");
         }
 #else
         if (munmap(reinterpret_cast<void*>(forwardDataStart), forwardDataSize) != 0) {
-            LOG(RTLOG_ERROR, "munmap error for ForwardDataManager");
+            LOG(RTLOG_ERROR, "munmap error for live-info arena");
         }
 #endif
     }
 
-    static ForwardDataManager& GetForwardDataManager();
+    static LiveInfoArena& GetLiveInfoArena();
 
     void InitializeForwardData();
 
@@ -181,11 +181,6 @@ public:
 
     void SetTagID(uint16_t id) { currentTagID = id; }
 
-    // Replaced by ZForwardingLife: a reader that still holds liveInfo0 has retain_page,
-    // and in-place claim has already waited that count to 0 before the region (and therefore
-    // this arena slot) can be recycled. The two-generation grace gate is gone.
-    static void AdvanceGracePeriod() {}
-
 public:
     // Recycle the slot that just left the one-generation window (same timing as N=2).
     void UnbindPreviousLiveInfo() { liveInfoData[GetPreviousTagID()].UnbindPreviousLiveInfo(); }
@@ -211,4 +206,4 @@ private:
     uint16_t currentTagID = 0; // propagate from collector.
 };
 } // namespace MapleRuntime
-#endif // MRT_FORWARD_DATA_MANAGER_H
+#endif // MRT_LIVE_INFO_ARENA_H

@@ -32,7 +32,7 @@
 #include "Base/MemUtils.h"
 #include "Base/Panic.h"
 #include "Base/RwLock.h"
-#include "Heap/Collector/ForwardDataManager.h"
+#include "Heap/Collector/LiveInfoArena.h"
 #include "Heap/Collector/ZForwardingLife.h"
 #include "Heap/Collector/GcInfos.h"
 #include "Heap/Collector/LiveInfo.h"
@@ -49,7 +49,7 @@
 #include "Heap/Verify/FromPageDetachCheck.h"
 #include "Heap/Allocator/ForwardingTable.h"
 #include "Heap/Allocator/MemMap.h"
-#include "Heap/Verify/MutatorRelocate.h"
+
 #include "Heap/Verify/M0Correlation.h"
 #include "Base/TimeUtils.h"
 #include "securec.h"
@@ -673,17 +673,6 @@ public:
         return face->GetBitmapLiveBytes(view);
     }
 
-    // permhit, probe-only: the route's own to-side plan. RouteInfo records a bare start
-    // address plus a used-bytes split (LiveInfo.h:246-248) and carries no epoch, so a
-    // to-region that was reclaimed and re-taken keeps answering the same geometry. Only
-    // the recorded plan, next to the region that lives at that address now, separates
-    // "no path ever filled this tip" from "a tip was filled and the memory was reused".
-    // Precedent: GetLiveInfo0ForProbe.
-    RouteInfo GetRouteInfoForProbe() const
-    {
-        return IsRouteInfoLifeCurrent() ? metadata.routeInfo : RouteInfo{};
-    }
-
     // installdomain: if PrepareForwardable snapshotted a null liveInfo, GetRoute always
     // rejects. After MarkObject created current liveInfo, bind it as ghost while still
     // FORWARDABLE so the paint is route-visible (pointer-share, same as PrepareForwardable).
@@ -761,7 +750,7 @@ public:
     // holderlive (F2): the retained snapshot has to answer "was this holder live at the last
     // mark" during every minor until the next major re-marks the region. It cannot do that as a
     // borrowed LiveInfo*: LiveInfo lives in a per-tag arena that is recycled one GC cycle later
-    // (ForwardDataManager::ClearPreviousForwardData → ReleaseMemory), and UnbindPreviousLiveInfo
+    // (LiveInfoArena::ClearPreviousForwardData → ReleaseMemory), and UnbindPreviousLiveInfo
     // (DoGarbageCollection, WCollector.cpp:6122 at 7924d28f) drops every borrowed pointer
     // into it at the end of each major.
     // Measured: 100% of remset holders read NEVER_EXAMINED, and for 2113/2115 of them the last
@@ -1124,7 +1113,7 @@ public:
             LiveInfo* newValue = reinterpret_cast<LiveInfo*>(LiveInfo::TEMPORARY_PTR);
             if (__atomic_compare_exchange_n(&metadata.liveInfo, &liveInfo, newValue, false, std::memory_order_seq_cst,
                                             std::memory_order_relaxed)) {
-                LiveInfo* allocatedLiveInfo = ForwardDataManager::GetForwardDataManager().AllocateLiveInfo();
+                LiveInfo* allocatedLiveInfo = LiveInfoArena::GetLiveInfoArena().AllocateLiveInfo();
                 allocatedLiveInfo->bindedRegion = this;
                 allocatedLiveInfo->GetMarkFace().epoch = 0;
                 allocatedLiveInfo->GetMarkFace().bitmap = nullptr;
@@ -1181,7 +1170,7 @@ public:
             if (__atomic_compare_exchange_n(&face.bitmap, &bitmap, newValue, false, std::memory_order_seq_cst,
                                             std::memory_order_relaxed)) {
                 RegionBitmap* allocated =
-                    ForwardDataManager::GetForwardDataManager().AllocateRegionBitmap(GetRegionSize());
+                    LiveInfoArena::GetLiveInfoArena().AllocateRegionBitmap(GetRegionSize());
                 face.epoch.store(view.GetEpoch(), std::memory_order_release);
                 __atomic_store_n(&face.bitmap, allocated, std::memory_order_release);
                 DLOG(REGION, "region %p@%#zx markbitmap generation=%s bitmap=%p", this, GetRegionStart(),
@@ -1221,7 +1210,7 @@ public:
             if (__atomic_compare_exchange_n(&liveInfo->resurrectBitmap, &bitmap, newValue, false,
                                             std::memory_order_seq_cst, std::memory_order_relaxed)) {
                 RegionBitmap* allocated =
-                    ForwardDataManager::GetForwardDataManager().AllocateRegionBitmap(GetRegionSize());
+                    LiveInfoArena::GetLiveInfoArena().AllocateRegionBitmap(GetRegionSize());
                 __atomic_store_n(&liveInfo->resurrectBitmap, allocated, std::memory_order_release);
                 DLOG(REGION, "region %p@%#zx resurrectbitmap %p", this, GetRegionStart(),
                      metadata.liveInfo->resurrectBitmap);
@@ -1260,7 +1249,7 @@ public:
             if (__atomic_compare_exchange_n(&liveInfo->enqueueBitmap, &bitmap, newValue, false,
                                             std::memory_order_seq_cst, std::memory_order_relaxed)) {
                 RegionBitmap* allocated =
-                    ForwardDataManager::GetForwardDataManager().AllocateRegionBitmap(GetRegionSize());
+                    LiveInfoArena::GetLiveInfoArena().AllocateRegionBitmap(GetRegionSize());
                 __atomic_store_n(&liveInfo->enqueueBitmap, allocated, std::memory_order_release);
                 DLOG(REGION, "region %p@%#zx enqueuebitmap %p", this, GetRegionStart(),
                      metadata.liveInfo->enqueueBitmap);
@@ -2227,16 +2216,7 @@ public:
         }
     }
 
-    void SetRouteInfo(uintptr_t to1, uint32_t to1used = 0, uint32_t to2 = RouteInfo::INVALID_VALUE)
-    {
-        const RegionLifeId life = GetRegionLifeId();
-        metadata.routeInfo.SetRouteInfo(to1, to1used, to2, life);
-    }
 
-    bool IsRouteInfoLifeCurrent() const
-    {
-        return (metadata.routeInfo.GetLifeId() == GetRegionLifeId());
-    }
 
     // Sole mint of RouteTicket. Coverage bits paint every 8B slot of an object,
     // so they cannot prove an exact start. Terminal states consume only exact
@@ -2292,17 +2272,7 @@ public:
         if (lookup.to != 0 && lookup.answer == ForwardingTable::ToAnswer::ArmedHit) {
             return from_region_addr(lookup.to);
         }
-        CompactRouteTable* compactRouteTable = LoadCompactRouteTable();
-        if (compactRouteTable != nullptr) {
-            BaseObject* packed = LookupCompactRoute(GetAddressOffset(fromAddress), compactRouteTable);
-            // Exact miss is terminal. Identity requires an explicit from→from receipt.
-            return packed;
-        }
-        // FreeCompactRouteTable publishes NORMAL before detaching a compact table. An
-        // already-admitted reader that loses the detach race must soft-miss rather than
-        // reinterpret a compact destination as prefix-sum geometry.
-        // zRelocate.cpp:361/:627 allocate by object size then insert; dest is the
-        // table/compact record, not live-bit prefix-sum (zLiveMap.inline.hpp:117-119).
+        (void)fromObj;
         return nullptr;
     }
 
@@ -2445,14 +2415,7 @@ public:
         return GetRoute(ticket.value());
     }
 
-    // Probe-only: pure RouteInfo geometry for a preLiveBytes rank (no survivor gate).
-    MAddress GetRoutePlanAddr(uint64_t preLiveBytes)
-    {
-        if (!IsRouteInfoLifeCurrent()) {
-            return 0;
-        }
-        return metadata.routeInfo.GetRoute(preLiveBytes);
-    }
+
 
     ZGenerationId generation_id() const { return metadata._generation_id; }
 
@@ -2484,7 +2447,6 @@ public:
         // by this single product operation.
         ClearForwardingFaceReset();
         ClearCurrentMarkFace();
-        metadata.routeInfo.Clear();
         metadata._generation_id = G == Generation::Young ? ZGenerationId::young : ZGenerationId::old;
         // Always install ghost membership, including a zero-live page. This is
         // what keeps the from-page carrier reachable until forwarding drain.
@@ -2626,7 +2588,7 @@ public:
         // portmutreloc: hold the forwarding drain across the whole body. It is held
         // for the whole body so that FreeCompactRouteTable below -- ZGC's free_page -- cannot
         // run while a retained reader is inside the route lookup or a mutator copy.
-        InPlaceClaimScope drain(this, MutatorRelocate::Retire::DISPEL_GHOST);
+        InPlaceClaimScope drain(this, ZForwardingLife::Retire::DISPEL_GHOST);
         // PORT_ZFORWARDING step 1: the retirement edge.  ZGC's equivalent is refcount-driven
         // (ZForwarding::detach_page waits for _ref_count == 0); recording the removal here first
         // lets step 3 change *when* it happens without changing *where*.
@@ -2997,7 +2959,7 @@ public:
     // zForwarding.cpp:110-181 in_place_relocation_claim_page + detach_page.
     class InPlaceClaimScope {
     public:
-        MRT_EXPORT InPlaceClaimScope(RegionInfo* region, MutatorRelocate::Retire site);
+        MRT_EXPORT InPlaceClaimScope(RegionInfo* region, ZForwardingLife::Retire site);
 
         ~InPlaceClaimScope()
         {
@@ -3079,11 +3041,7 @@ public:
     {
         return __atomic_load_n(&metadata.notRelocatableThisCycle, __ATOMIC_ACQUIRE) != 0;
     }
-    // routedest: destination-side hold. Idempotent by construction, and it has to be:
-    // RouteOrCompactRegionImpl publishes the split plan twice for the same holder when the
-    // toRegion2 allocation fails (SetRouteInfo at RegionManager.cpp:1992, then again at
-    // :1999), so the stamp on toRegion1 runs twice. Stamping a byte twice is a no-op.
-    // Do NOT turn this into a reference count without handling that double publish.
+    // routedest: destination-side hold. Idempotent stamp.
     void SetRouteDestHold(uint8_t flag)
     {
         uint8_t cur = __atomic_load_n(&metadata.routeDestHold, __ATOMIC_RELAXED);
@@ -3825,9 +3783,7 @@ private:
         uint32_t retainedPreserveCnt = 0;
         uint32_t retainedClearCnt = 0;
         uint8_t retainedLastOp = RETAINED_OP_NONE;
-        // routedest: 1 while some from-region's published RouteInfo still names this region
-        // as a destination. Stamped inside the ROUTING critical section by
-        // RouteOrCompactRegionImpl, dropped once per route generation by
+        // routedest: 1 while this region is a relocation destination. Dropped by
         // ClearRouteDestHoldFlags after PrepareFromRegionList's dispel walk has retired every
         // route that could name it. Read by the reclaim entry points, which refuse a held
         // region — the to-side counterpart of ZGC's per-page reference count, expressed as a
@@ -3869,7 +3825,6 @@ private:
         // at ClearLiveInfo / mark-start, are implicitly live (zPage.inline.hpp:180-185
         // is_allocating). 0 = no mark-start yet.
         uintptr_t markStartAllocPtr;
-        RouteInfo routeInfo;
         uint64_t snapshotEpoch = 0;
         // used to traverse ghost region.
         uint32_t nextRegionIdx0;
@@ -4102,14 +4057,6 @@ private:
             unit->GetMetadata().unitRoleBitField.GetAtomicValue(BIT_LENGTH, BIT_LENGTH) >> BIT_LENGTH);
     }
 
-    void ObserveLifeBoundary() const
-    {
-
-
-        const ZForwarding::FromPageView* from = GetFromPageView();
-
-    }
-
     void BumpRegionLifeId()
     {
         RegionLifeId old = metadata.regionLifeId.load(std::memory_order_relaxed);
@@ -4152,7 +4099,6 @@ private:
         // Invalidate every old-life carrier before clearing any of its payload.
         // Readers either retain the old page (detachgate) or observe this bump and
         // reject the old incarnation; there is no wraparound fallback.
-        ObserveLifeBoundary();
         BumpRegionLifeId();
         {
             uint8_t cur = __atomic_load_n(&metadata.routeDestHold, __ATOMIC_RELAXED);
@@ -4214,8 +4160,6 @@ private:
         // between a reused region and answering a route out of the previous life's geometry.
         // The whole design rests on "the ghost bit bounds route readability"; this is the
         // one hole in that obligation.
-        // Route state was reset before FreeCompactRouteTable; clear the geometry here.
-        metadata.routeInfo.Clear();
         // Ghost lives in unit metadata, not payload: ClearUnits cannot clear it.
         // TakeRegion reuses garbage without DispelGhostFromRegion (RegionInfo.h:667-698).
         SetInGhostRegion(0);

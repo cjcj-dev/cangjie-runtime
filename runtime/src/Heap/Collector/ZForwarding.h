@@ -45,9 +45,6 @@ public:
         enum class Status : uint8_t {
             INSTALLED,
             EXISTING,
-            DESTINATION_UNTRACKED,
-            LIFE_REGISTRY_FULL,
-            DESTINATION_LIFE_CONFLICT,
         };
 
         MAddress address;

@@ -829,28 +829,35 @@ public:
                  static_cast<unsigned>(fromRegionInfo->IsLiveCountAuthoritative()));
             return false;
         }
-        do {
-            auto owner = ForwardingTable::RetainPageOwner(fromRegionInfo);
-            if (owner && owner->is_done()) {
-                return !owner->in_place();
-            }
-            if (owner && owner->is_claimed() && !owner->is_done()) {
-                if (!mayWait) return false;
-                sched_yield();
-                continue;
-            }
-            if (!fromRegionInfo->ClaimForwarding()) {
-                continue;
-            }
+        // zRelocate.cpp:1155-1158 claimant runs page work; consumers wait (zRelocate.cpp:403-409).
+        auto owner = ForwardingTable::RetainPageOwner(fromRegionInfo);
+        if (owner && owner->is_done()) {
+            return !owner->in_place();
+        }
+        if (owner && ZForwardingLife::CurrentPageWork() == owner.get()) {
             if (RouteOrCompactRegionImpl(fromRegionInfo)) {
                 return true;
             }
-            auto after = ForwardingTable::RetainPageOwner(fromRegionInfo);
-            if (after) {
-                after->set_in_place();
-            }
+            owner->set_in_place();
             return false;
-        } while (true);
+        }
+        if (!mayWait) {
+            return false;
+        }
+        while (true) {
+            owner = ForwardingTable::RetainPageOwner(fromRegionInfo);
+            if (owner && owner->is_done()) {
+                return !owner->in_place();
+            }
+            if (owner && ZForwardingLife::CurrentPageWork() == owner.get()) {
+                if (RouteOrCompactRegionImpl(fromRegionInfo)) {
+                    return true;
+                }
+                owner->set_in_place();
+                return false;
+            }
+            sched_yield();
+        }
     }
 
     template<Generation G>

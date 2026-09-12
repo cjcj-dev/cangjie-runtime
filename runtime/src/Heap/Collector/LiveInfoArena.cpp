@@ -18,14 +18,14 @@
 #include "Heap/Heap.h"
 #include "Heap/Verify/TagReuseProbe.h"
 #include "LiveInfo.h"
-#include "ForwardDataManager.h"
+#include "LiveInfoArena.h"
 
 namespace MapleRuntime {
 
-static ImmortalWrapper<ForwardDataManager> forwardDataManager;
-ForwardDataManager& ForwardDataManager::GetForwardDataManager() { return *forwardDataManager; }
+static ImmortalWrapper<LiveInfoArena> liveInfoArena;
+LiveInfoArena& LiveInfoArena::GetLiveInfoArena() { return *liveInfoArena; }
 
-void ForwardDataManager::ClearPreviousForwardData()
+void LiveInfoArena::ClearPreviousForwardData()
 {
     uint16_t prev = GetPreviousTagID();
     ForwardDataSpace& space = liveInfoData[prev];
@@ -47,7 +47,7 @@ void ForwardDataManager::ClearPreviousForwardData()
     space.ReleaseMemory();
 }
 
-void ForwardDataManager::InitializeForwardData()
+void LiveInfoArena::InitializeForwardData()
 {
     size_t maxHeapBytes = Heap::GetHeap().GetMaxCapacity();
     size_t liveInfoSize = RoundUp(GetLiveInfoDataSize(maxHeapBytes), MapleRuntime::MRT_PAGE_SIZE);
@@ -57,12 +57,12 @@ void ForwardDataManager::InitializeForwardData()
 #ifdef _WIN64
     void* startAddress = VirtualAlloc(NULL, forwardDataSize, MEM_RESERVE, PAGE_READWRITE);
     if (startAddress == NULL) {
-        LOG(RTLOG_FATAL, "failed to initialize ForwardDataManager");
+        LOG(RTLOG_FATAL, "failed to initialize live-info arena");
     }
 #else
     void* startAddress = mmap(nullptr, forwardDataSize, PROT_READ | PROT_WRITE, MAP_PRIVATE | MAP_ANONYMOUS, -1, 0);
     if (startAddress == MAP_FAILED) {
-        LOG(RTLOG_FATAL, "failed to initialize ForwardDataManager");
+        LOG(RTLOG_FATAL, "failed to initialize live-info arena");
     } else {
 #ifndef __APPLE__
         (void)madvise(startAddress, forwardDataSize, MADV_NOHUGEPAGE);
@@ -77,7 +77,7 @@ void ForwardDataManager::InitializeForwardData()
                                          regionUnitCount);
     }
 }
-void ForwardDataManager::ForwardDataSpace::UnbindPreviousLiveInfo()
+void LiveInfoArena::ForwardDataSpace::UnbindPreviousLiveInfo()
 {
     auto& zone = allocZone[ForwardDataSpace::Zone::ZoneType::LIVE_INFO];
     size_t start = zone.zoneStartAddress;
