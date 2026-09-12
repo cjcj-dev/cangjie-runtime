@@ -43,7 +43,7 @@
 #include "Heap/Verify/DiagGate.h"
 #include "Heap/Verify/TraceClear.h"
 #include "Heap/Verify/FillerZeroDiag.h"
-#include "Heap/Verify/TagReuseProbe.h"
+
 #include "Heap/Verify/SurvNodeDiag.h"
 #include "Heap/Allocator/RouteDestHold.h"
 #include "Heap/Verify/FromPageDetachCheck.h"
@@ -1536,7 +1536,6 @@ public:
             PublishCurrentMarkFace();
             NotePageOwnerFirstPaint<G>();
         }
-        (void)TagReuseProbe::NoteMarkBitsSticky(this, offset, true, "MarkObject_sized0", G);
         CHECK(IsMarkedObject(view, offset));
         return already;
     }
@@ -1579,7 +1578,6 @@ public:
             PublishCurrentMarkFace();
             NotePageOwnerFirstPaint<G>();
         }
-        (void)TagReuseProbe::NoteMarkBitsSticky(this, offset, true, "MarkObject_sized", G);
         CHECK(IsMarkedObject(view, offset));
         return already;
     }
@@ -1716,8 +1714,7 @@ public:
     }
 
     // markepoch: count reads of a LiveInfo whose markEpoch != region snapshotEpoch.
-    // Default product still returns false (same as "no bit"); MRT_GCV2_MARK_EPOCH_ASSERT=1 aborts.
-    // Design: ops/design/MARK_EPOCH_DISCIPLINE.md §5 (ZGC zLiveMap.inline.hpp:41-43).
+    // Stale face is unmarked (ZGC zLiveMap.inline.hpp:41-43).
     // Hot path: epoch match is load+cmp only (no atomic). Stale path always counts.
     static std::atomic<size_t> markEpochStaleReadCount;
     static std::atomic<bool> markEpochAtexitInstalled;
@@ -1742,16 +1739,11 @@ public:
     static std::atomic<size_t> ikeEpochKeep;
     static std::atomic<bool> ikeAtexitInstalled;
 
-    static bool MarkEpochAssertEnabled()
-    {
-        return false;
-    }
-
     static void ReportMarkEpochCounts(const char* point)
     {
         const size_t stale = markEpochStaleReadCount.load(std::memory_order_relaxed);
-        std::fprintf(stderr, "[GCV2][mark-epoch] point=%s stale_read=%zu env_assert=%d\n",
-                     point != nullptr ? point : "?", stale, MarkEpochAssertEnabled() ? 1 : 0);
+        std::fprintf(stderr, "[GCV2][mark-epoch] point=%s stale_read=%zu\n",
+                     point != nullptr ? point : "?", stale);
         std::fflush(stderr);
     }
 
