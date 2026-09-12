@@ -19,7 +19,10 @@
 
 #include "Base/Log.h"
 #include "Base/LogFile.h"
+#include "Heap/Allocator/ForwardingTable.h"
+#include "Heap/Collector/Collector.h"
 #include "Heap/Collector/ZForwarding.h"
+#include "Heap/Heap.h"
 #include "Heap/Verify/ProbeReadRouteDiag.h"
 
 namespace MapleRuntime {
@@ -283,30 +286,64 @@ size_t RememberedSet::ScanPreviousForMinor(std::unordered_set<MAddress>& records
     const size_t expectedRecords = recordCounts[scanBuffer].load(std::memory_order_relaxed);
     records.reserve(expectedRecords);
 
+    const GCPhase phase = Heap::GetHeap().GetGCPhase();
+    const bool oldRelocating =
+        phase == GCPhase::GC_PHASE_PREFORWARD || phase == GCPhase::GC_PHASE_FORWARD;
+    auto shouldScanSlot = [oldRelocating](MAddress slot) -> bool {
+        if (!oldRelocating) {
+            return true;
+        }
+        ZForwarding* forwarding = ForwardingTable::GetCovering(slot);
+        if (forwarding == nullptr) {
+            return true;
+        }
+        return !forwarding->relocated_remembered_fields_is_concurrently_scanned();
+    };
+
+    size_t consumed = 0;
     for (size_t dirtyIdx = 0; dirtyIdx < dirtyWordCount; ++dirtyIdx) {
-        uint64_t dirty = dirtyMaps[scanBuffer][dirtyIdx].exchange(0, std::memory_order_relaxed);
-        while (dirty != 0) {
-            unsigned wordInDirty = static_cast<unsigned>(__builtin_ctzll(dirty));
+        uint64_t dirty = dirtyMaps[scanBuffer][dirtyIdx].load(std::memory_order_relaxed);
+        if (dirty == 0) {
+            continue;
+        }
+        uint64_t remainingDirty = 0;
+        uint64_t workDirty = dirty;
+        while (workDirty != 0) {
+            unsigned wordInDirty = static_cast<unsigned>(__builtin_ctzll(workDirty));
             size_t wordIdx = dirtyIdx * kBitsPerWord + wordInDirty;
             if (wordIdx < wordCount) {
-                uint64_t word = bitmaps[scanBuffer][wordIdx].exchange(0, std::memory_order_relaxed);
-                while (word != 0) {
-                    unsigned bitInWord = static_cast<unsigned>(__builtin_ctzll(word));
+                uint64_t word = bitmaps[scanBuffer][wordIdx].load(std::memory_order_relaxed);
+                uint64_t keep = 0;
+                uint64_t scanWord = word;
+                while (scanWord != 0) {
+                    unsigned bitInWord = static_cast<unsigned>(__builtin_ctzll(scanWord));
                     size_t bit = wordIdx * kBitsPerWord + bitInWord;
+                    uint64_t mask = static_cast<uint64_t>(1) << bitInWord;
                     if (bit < bitCount) {
                         MAddress slot = heapStart + bit * kFieldBytes;
-                        ProbeReadRouteDiag::NoteRemsetEvent(
-                            slot, ProbeReadRouteDiag::REMSET_CONSUME, static_cast<uint8_t>(scanBuffer));
-                        records.insert(slot);
+                        if (shouldScanSlot(slot)) {
+                            ProbeReadRouteDiag::NoteRemsetEvent(
+                                slot, ProbeReadRouteDiag::REMSET_CONSUME, static_cast<uint8_t>(scanBuffer));
+                            records.insert(slot);
+                            ++consumed;
+                        } else {
+                            keep |= mask;
+                        }
                     }
-                    word &= word - 1;
+                    scanWord &= scanWord - 1;
+                }
+                bitmaps[scanBuffer][wordIdx].store(keep, std::memory_order_relaxed);
+                if (keep != 0) {
+                    remainingDirty |= static_cast<uint64_t>(1) << wordInDirty;
                 }
             }
-            dirty &= dirty - 1;
+            workDirty &= workDirty - 1;
         }
+        dirtyMaps[scanBuffer][dirtyIdx].store(remainingDirty, std::memory_order_relaxed);
     }
-    size_t recorded = recordCounts[scanBuffer].exchange(0, std::memory_order_relaxed);
-    CHECK_DETAIL(recorded == records.size(), "remembered-set count mismatch: bitmap=%zu records=%zu", recorded,
+    size_t remaining = expectedRecords > consumed ? expectedRecords - consumed : 0;
+    recordCounts[scanBuffer].store(remaining, std::memory_order_relaxed);
+    CHECK_DETAIL(consumed == records.size(), "remembered-set count mismatch: bitmap=%zu records=%zu", consumed,
                  records.size());
 
 #if defined(MRT_REMSET_BITMAP_CROSSCHECK)

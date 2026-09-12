@@ -1034,11 +1034,6 @@ void WCollector::DoYoungGarbageCollection()
         concWindow.remsetSlots =
             Heap::GetHeap().GetRememberedSet().ScanPreviousForMinor(pageSlots);
         for (MAddress slot : pageSlots) {
-            ZForwarding* forwarding = ForwardingTable::GetCovering(slot);
-            if (forwarding != nullptr &&
-                forwarding->relocated_remembered_fields_is_concurrently_scanned()) {
-                continue;
-            }
             rememberedSlots.insert(slot);
         }
     }
