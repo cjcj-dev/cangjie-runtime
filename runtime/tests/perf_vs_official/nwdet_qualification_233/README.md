@@ -1,5 +1,70 @@
 # NW qualification recheck for #233
 
+## Current input contract (#281)
+
+**NOT_RUN: 负载链接了无色官方 std.** The retained ELF links official
+`libcangjie-std-core.a`, SHA256
+`9619dc3e2b3ab335a340d9d7b2e6e86c8e0103704a152b953a20a56bf5eab9cb`.
+Its OOME constructor has a phase<9 branch that publishes the reference without
+colouring. The slow branch's `CJ_MCC_WriteRefField` symbol does not qualify the
+fast branch. This digest is a forbidden input, including when the archive is
+renamed. Other digests still require producer evidence; they are not an allowlist.
+
+The replacement recipe requires a complete std install produced by stage1 using
+the coloured backend, as specified in `/root/cj_build/ops/design/BOOTSTRAP_PATH.md:39`.
+With cjcj `ba3e47ed39cfecf858af4423f0bb8dd63867cf48`, step31 runs bootstrap
+stage0, step32 runs stage1 and produces `stdlib-stage2`, and step33 produces
+`final-std-stage2`. The directory called `stdlib-stage1` is a **stage0 uncoloured
+output**. Neither its name nor a source-built core archive alone proves a complete
+coloured install. Complete production and its receipt are tracked by **cjcj#32**;
+**#233** rebuilds and requalifies NW after that dependency is delivered.
+
+| Input | Retained #233 recipe | Required rebuild |
+|---|---|---|
+| Compiler/backend | Official nightly cjc/LLVM | Stage1 compiler with its recorded host runtime/bounds/LLVM, and coloured target LLVM tuple |
+| std | Official nightly static archives | Complete stage1-produced coloured install: modules, static/shared std and FFI from one recorded build |
+| Target runtime | Historical c920770… pair | Runtime and boundscheck from frozen `c86df5e9d9ed1b7bdfface915ad5b64ac7b20fd7`, with stamps and SHA256 |
+| Options | `-O2 --static-std --save-temps -V`, linker map | Same options, with explicit coloured std input; never link official nightly std |
+| Qualification entry | Direct repeated gate calls | `requalify.py` checks link identities before calling the unchanged gate |
+
+Build in a fresh lane-owned SDK on kkk2. Use the pinned `sdk_build.sh --target`
+with explicit `--cjc`, `--llvm-tuple`, `--std`, `--runtime`, `--runtime-commit`
+and `--verify-host-rt`, then its paired `stage1_host_runner.sh`. The compiler
+host and target backend have separate loader environments. Compare the installed
+std file set with the producer receipt so the SDK overlay cannot retain official
+packages. Keep `-Map`/`-t`, input hashes and the ELF hash captured at link completion.
+Read the final ELF's OOME, delegated Error and bootstrap OOME reference stores;
+an inline store after StoreGood is valid, so a blanket ban on `mov` is incorrect.
+
+Record `linkage.elf_sha256`, every linked static std archive's `path`/`sha256`,
+`std_origin: "stage1-coloured"`, and `std_build_receipt: {"path": "/absolute/receipt",
+"sha256": "<receipt digest>"}` in the new manifest. The reviewed receipt must bind
+the compiler, host libraries, coloured LLVM tuple, std source, platform, full
+install file list and build result. The preflight checks identities, not receipt
+semantics or all machine-code paths; independent review and the existing gate's
+qualification file remain required. The retained manifest intentionally fails.
+
+```bash
+ulimit -c 0
+# Run through box.sh on kkk2. SHA/RUN/CORES and the qualification file retain
+# their existing gate meanings; requalify.py binds BIN to the explicit ELF.
+python3 requalify.py --manifest /absolute/new-manifest.json \
+  --elf /absolute/retained/natural_wave_notime --gate /absolute/gate_nwdet.py
+# To inspect identities without running the gate, use --preflight-only instead.
+```
+
+The forbidden archive produces exit 3 and the reason above before gate invocation.
+Missing/mismatched link records or missing producer receipts also return NOT_RUN.
+Passing this identity preflight does not set `qualified=true`. This repository
+ships the #233 entry; shared gate deployment is outside this change.
+
+Planning estimate, not a measured completion time: allow 10–30 minutes for SDK
+assembly, one NW compile and identity inspection once qualified inputs exist.
+Production of missing inputs has no demonstrated successful current-DAG timing;
+budget hours and record the actual first failure under #32.
+
+## Historical post-P3 observations (not eligible for new qualification)
+
 Qualification remains **false** after the post-P3 recheck on frozen runtime `c92077024634a07274e67659e254853cc3f3e200`. All five real workload processes started, returned `-6` (SIGABRT), and were rejected by the gate (`rc=1`). Each first fatal check was `ColourCensus.cpp:26`, with `plain_holder_type=std.core:OutOfMemoryError`. This records the first stop, not its root cause. The merge gate's NW segment remains unqualified.
 
 ## Reproduction and identities
