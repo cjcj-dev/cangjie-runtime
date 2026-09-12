@@ -536,8 +536,6 @@ void RunMajorWeakGraph(MajorRootFamily family, bool runtimeEntry = false, size_t
         space.GetRegionManager().AddRawPointerObject(graph.referent);
     }
 
-    // MarkStack::size() counts 64-entry buffers. Seventeen buffers cross the
-    // product's MAX_MARKING_WORK_SIZE=16 parallel admission threshold.
     constexpr size_t kParallelRootCount = 17 * 64;
     std::unique_ptr<RootSlot[]> commonRootStorage = std::make_unique<RootSlot[]>(kParallelRootCount);
     std::vector<RootSlot*> commonRoots(kParallelRootCount);

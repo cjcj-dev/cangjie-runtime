@@ -4,16 +4,10 @@
 //
 // See https://cangjie-lang.cn/pages/LICENSE for license information.
 
-#include <cerrno>
-#include <cstdio>
 #include <type_traits>
-#if defined(__linux__)
-#include <sys/wait.h>
-#include <unistd.h>
-#endif
 
-#include "Common/MarkWorkStack.h"
 #include "Heap/Collector/MarkStackEntry.h"
+#include "Heap/Collector/MarkStripe.h"
 #include "gc_unittest.hpp"
 
 using namespace MapleRuntime;
@@ -59,135 +53,27 @@ GC_TEST(MarkStackEntry, PartialArrayIsASeparateKind)
     GC_EXPECT_EQ(entry.partialArrayLength(), length);
 }
 
-GC_TEST(MarkStackEntry, StackSplitPreservesPolicy)
+GC_TEST(MarkStackEntry, StripePublishPreservesPolicy)
 {
     BaseObject* const first = reinterpret_cast<BaseObject*>(static_cast<uintptr_t>(0x1000));
     BaseObject* const second = reinterpret_cast<BaseObject*>(static_cast<uintptr_t>(0x2000));
-    MarkStack<MarkStackEntry> stack;
-    stack.push_back(MarkStackEntry::MarkOnly(first));
-    // Fill a second buffer so split(1) transfers one complete ownership node.
-    for (size_t i = 0; i < 64; ++i) {
-        stack.push_back(MarkStackEntry::FollowOnly(second));
-    }
+    MarkStripeSet stripes(1);
+    MarkingSMR smr(1);
+    MarkThreadLocalStacks producer(1);
+    producer.Push(stripes, 0, MarkStackEntry::MarkOnly(first), true);
+    producer.Push(stripes, 0, MarkStackEntry::FollowOnly(second), true);
+    GC_EXPECT_TRUE(producer.Flush(stripes, true));
+    GC_EXPECT_TRUE(producer.IsEmpty());
 
-    MarkStack<MarkStackEntry> split(stack.split(1));
-    GC_EXPECT_FALSE(split.empty());
-    const MarkStackEntry transferred = split.back();
-    GC_EXPECT_TRUE(transferred.follow());
-    GC_EXPECT_FALSE(transferred.mark());
-    GC_EXPECT_EQ(reinterpret_cast<uintptr_t>(transferred.object()), reinterpret_cast<uintptr_t>(second));
-
-    // Production marking tasks drain their owned stack before destruction.
-    // Keep that ownership protocol here; MarkStack::clear() is not a substitute
-    // for draining a non-empty tail buffer.
-    while (!split.empty()) {
-        split.pop_back();
-    }
-    while (!stack.empty()) {
-        stack.pop_back();
-    }
-}
-
-namespace {
-#if defined(__linux__)
-int WaitChild(pid_t child)
-{
-    int childStatus = 0;
-    pid_t waited;
-    do {
-        waited = waitpid(child, &childStatus, 0);
-    } while (waited < 0 && errno == EINTR);
-    GC_EXPECT_EQ(waited, child);
-    return childStatus;
-}
-#endif
-
-void ExpectClearCompletes(size_t entries, size_t buffers)
-{
-#if defined(__linux__)
-    std::fflush(nullptr);
-    const pid_t child = fork();
-    GC_EXPECT_TRUE(child >= 0);
-    if (child == 0) {
-        MarkStack<MarkStackEntry> stack;
-        for (size_t i = 0; i < entries; ++i) {
-            stack.push_back(MarkStackEntry::PartialArray(i, 1));
-        }
-        if (stack.size() != buffers) {
-            std::fprintf(stderr, "MARK_STACK_CLEAR_SETUP_FAILED entries=%zu buffers=%zu\n", entries, stack.size());
-            _exit(2);
-        }
-        std::fprintf(stderr, "MARK_STACK_CLEAR_ENTER entries=%zu buffers=%zu\n", entries, stack.size());
-        stack.clear();
-        const bool cleared = stack.empty() && stack.size() == 0 &&
-            stack.head() == nullptr && stack.tail() == nullptr;
-        std::fprintf(stderr, "MARK_STACK_CLEAR_RESULT empty=%d\n", cleared);
-        _exit(cleared ? 0 : 3);
-    }
-    const int childStatus = WaitChild(child);
-    std::fprintf(stderr, "MARK_STACK_CLEAR_STATUS entries=%zu status=%d\n", entries, childStatus);
-    const bool clearCompletedAndEmpty = WIFEXITED(childStatus) && WEXITSTATUS(childStatus) == 0;
-    GC_EXPECT_TRUE(clearCompletedAndEmpty);
-#else
-    MarkStack<MarkStackEntry> stack;
-    for (size_t i = 0; i < entries; ++i) {
-        stack.push_back(MarkStackEntry::PartialArray(i, 1));
-    }
-    GC_EXPECT_EQ(stack.size(), buffers);
-    stack.clear();
-    GC_EXPECT_TRUE(stack.empty());
-    GC_EXPECT_EQ(stack.size(), 0U);
-    GC_EXPECT_TRUE(stack.head() == nullptr && stack.tail() == nullptr);
-#endif
-}
-} // namespace
-
-GC_TEST(MarkStackClear, Empty)
-{
-    ExpectClearCompletes(0, 0);
-}
-
-GC_TEST(MarkStackClear, SingleBuffer)
-{
-    ExpectClearCompletes(1, 1);
-}
-
-GC_TEST(MarkStackClear, MultipleBuffers)
-{
-    ExpectClearCompletes(129, 3);
-}
-
-GC_TEST(MarkStackClear, DestructorAfterMultipleBuffers)
-{
-#if defined(__linux__)
-    std::fflush(nullptr);
-    const pid_t child = fork();
-    GC_EXPECT_TRUE(child >= 0);
-    if (child == 0) {
-        {
-            MarkStack<MarkStackEntry> stack;
-            for (size_t i = 0; i < 129; ++i) {
-                stack.push_back(MarkStackEntry::PartialArray(i, 1));
-            }
-            if (stack.size() != 3) {
-                _exit(2);
-            }
-            std::fprintf(stderr, "MARK_STACK_DTOR_ENTER buffers=3\n");
-        }
-        std::fprintf(stderr, "MARK_STACK_DTOR_RESULT empty=1\n");
-        _exit(0);
-    }
-    const int childStatus = WaitChild(child);
-    std::fprintf(stderr, "MARK_STACK_DTOR_STATUS status=%d\n", childStatus);
-    const bool destructorCompleted = WIFEXITED(childStatus) && WEXITSTATUS(childStatus) == 0;
-    GC_EXPECT_TRUE(destructorCompleted);
-#else
-    {
-        MarkStack<MarkStackEntry> stack;
-        for (size_t i = 0; i < 129; ++i) {
-            stack.push_back(MarkStackEntry::PartialArray(i, 1));
-        }
-        GC_EXPECT_EQ(stack.size(), 3U);
-    }
-#endif
+    MarkThreadLocalStacks consumer(1);
+    MarkStackEntry entry;
+    GC_EXPECT_TRUE(consumer.Pop(smr, 0, stripes, 0, entry));
+    GC_EXPECT_TRUE(entry.follow());
+    GC_EXPECT_FALSE(entry.mark());
+    GC_EXPECT_EQ(reinterpret_cast<uintptr_t>(entry.object()), reinterpret_cast<uintptr_t>(second));
+    GC_EXPECT_TRUE(consumer.Pop(smr, 0, stripes, 0, entry));
+    GC_EXPECT_TRUE(entry.mark());
+    GC_EXPECT_FALSE(entry.follow());
+    GC_EXPECT_EQ(reinterpret_cast<uintptr_t>(entry.object()), reinterpret_cast<uintptr_t>(first));
+    GC_EXPECT_FALSE(consumer.Pop(smr, 0, stripes, 0, entry));
 }

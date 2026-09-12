@@ -48,8 +48,8 @@ public:
     static constexpr uint64_t MAX_PARTIAL_ARRAY_OFFSET =
         (static_cast<uint64_t>(1) << PARTIAL_ARRAY_OFFSET_BITS) - 1;
 
-    // Like ZMarkStackEntry, do not initialize the backing word: every new
-    // MarkStackBuf contains 64 entries and only its populated prefix is read.
+    // Like ZMarkStackEntry, do not initialize the backing word: stripe
+    // stacks only read the populated prefix (zMarkStack.hpp:35-54).
     MarkStackEntry() {}
 
     // Ordinary pushes retain the old work-stack meaning. Deliberately implicit

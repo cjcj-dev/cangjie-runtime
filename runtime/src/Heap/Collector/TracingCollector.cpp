@@ -1395,7 +1395,8 @@ void TracingCollector::EnumAllCommonRoots(GCWorkers& workers, RootSet& rootSet)
     workers.Run(task);
     MergeMutatorRoots(rootSet);
     for (auto& result : roots) {
-        rootSet.insert(result);
+        rootSet.insert(rootSet.end(), result.begin(), result.end());
+        result.clear();
     }
 #if defined(MRT_TESTABLE_INTERNALS)
     if (testRootsResult) {

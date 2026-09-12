@@ -198,11 +198,9 @@ void* Exercise(void*)
     };
     tracing.testRootsResult = [&](GCWorkers::Generation generation, TracingCollector::RootSet& result) {
         std::set<BaseObject*> observed;
-        for (auto* node = result.head(); node != nullptr; node = node->next) {
-            auto copy = *node;
-            while (!copy.empty()) {
-                observed.insert(copy.back().object());
-                copy.pop_back();
+        for (const MarkStackEntry& entry : result) {
+            if (!entry.partialArray() && entry.object() != nullptr) {
+                observed.insert(entry.object());
             }
         }
         size_t expected = 0;

@@ -10,18 +10,15 @@
 
 #include <cstdint>
 #include <map>
+#include <vector>
 
 #include "Collector.h"
 #include "Heap/Collector/MarkEngine.h"
 #include "CollectorResources.h"
-#include "Common/MarkWorkStack.h"
 #include "Heap/Allocator/RegionSpace.h"
 #include "Heap/Collector/LiveInfoArena.h"
 #include "Heap/Collector/MarkStackEntry.h"
 #include "Mutator/MutatorManager.h"
-
-// set 1 to enable concurrent mark test.
-#define MRT_TEST_CONCURRENT_MARK (false)
 
 namespace MapleRuntime {
 class MarkLiveCache;
@@ -306,12 +303,10 @@ public:
     static void RecordExclusiveStubCalleeSaved(RegSlotsMap& regSlotsMap, Uptr fp);
 #endif
     static void RecordStubAllRegister(RegSlotsMap& regSlotsMap, Uptr fp);
-    // Types, so that we don't confuse root sets and working stack.
-    // The policy is: we simply `push_back` into root set,
-    // but we use Enqueue to add into work stack.
-    using RootSet = MarkStack<MarkStackEntry>;
-    using WorkStack = MarkStack<MarkStackEntry>;
-    using WorkStackBuf = MarkStackBuf<MarkStackEntry>;
+    // Staging only: roots and follow overflow before stripe publish
+    // (zMark.cpp:635 follow_work consumes stripe stacks, not this vector).
+    using RootSet = std::vector<MarkStackEntry>;
+    using WorkStack = std::vector<MarkStackEntry>;
 #if defined(MRT_TESTABLE_INTERNALS)
     // Observers see the product result after dispatch; neither supplies work.
     // Static storage keeps the instance layout identical in both build shapes.

@@ -12,7 +12,6 @@
 #include <mutex>
 #include <unordered_set>
 
-#include "Common/MarkWorkStack.h"
 #include "Heap/Barrier/StoreBarrierBuffer.h"
 #include "Heap/Collector/MarkStackEntry.h"
 #include "RegionList.h"
