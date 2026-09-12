@@ -550,7 +550,6 @@ void WCollector::RemapYoungRoots()
     // roots, and the current remembered set before old relocate-start
     // (zGeneration.cpp:1458-1523). Only that coverage completion retires the
     // forwarding authority; a cycle count is not a lifetime proof.
-    ForwardingTable::ReclaimRetired("old-remap-young-roots-complete");
     // A8 triggers reclaim; it does not publish mark coverage.
 
     LOG(RTLOG_ERROR,
@@ -562,8 +561,6 @@ void WCollector::RemapYoungRoots()
         staticRemapped, staticDoubleBad, stackSeen, stackColoured, stackRemapped,
         otherSeen, otherColoured, otherRemapped, otherDoubleBad,
         static_cast<unsigned long>(FlipSeq().load(std::memory_order_relaxed)));
-    // Table destroy ⇔ remap coverage finished (zRelocationSet.cpp:191-200).
-    ForwardingTable::ReclaimRetired("post-remap-reset-relocation-set");
 }
 void WCollector::PreforwardFinalizerProcessorRoots()
 {
@@ -1809,11 +1806,7 @@ void WCollector::EvacuateYoungRegions(const std::vector<BaseObject*>& reachableV
                                                 GCPhase::GC_PHASE_FORWARD);
     {
         MRT_PHASE_TIMER("young.evac_retire");
-        {
-        // PROBE evacct: how much of young.evac_finish is the second PrepareForwardTable<Young>?
-        MRT_PHASE_TIMER("young.evac_prepare_next");
-        fwdTable.PrepareForwardTable<Generation::Young>();
-        }
+        // zGeneration.cpp:563: keep this set until the next young mark-end reset.
         // zRelocate.cpp:1041-1047 cycle-end completeness: no ROUTED-unfinished page.
         manager.FinishIncompleteFromRegions();
         manager.ReassembleFromSpace();

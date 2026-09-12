@@ -65,7 +65,6 @@ public:
                     // InitRegionInfo before returning the selected extent.
                     // Carry a structural permit only across that maintenance;
                     // the selected extent is checked immediately afterwards.
-                    FromPageDetach::ReusePermitScope treePermit;
 #if defined(__OHOS__)
                     dirtyOk = dirtyUnitTree.TakeUnitsLowAddr(num, idx);
 #else
@@ -73,14 +72,6 @@ public:
 #endif
                 }
                 if (dirtyOk) {
-                    MAddress start = RegionInfo::GetUnitAddress(idx);
-                    RegionInfo* dirtyRegion = RegionInfo::TryGetRegionInfoAt(start);
-                    if (!FromPageDetach::FromPageDetachCheck(dirtyRegion,
-                                                             FromPageDetach::Site::TAKE_DIRTY_REUSE)) {
-                        cacheLock.unlock();
-                        AddDetachQuarantineUnits(idx, num, false, false);
-                        continue;
-                    }
                     memory = PageMemory{ idx, num, partition, true };
                     return true;
                 }
@@ -92,7 +83,6 @@ public:
                 std::unique_lock<std::mutex> cacheLock(releasedUnitTreeMutex);
                 bool releasedOk = false;
                 {
-                    FromPageDetach::ReusePermitScope treePermit;
 #if defined(__OHOS__)
                     releasedOk = releasedUnitTree.TakeUnitsLowAddr(num, idx);
 #else
@@ -100,14 +90,6 @@ public:
 #endif
                 }
                 if (releasedOk) {
-                    RegionInfo* releasedRegion =
-                        RegionInfo::TryGetRegionInfoAt(RegionInfo::GetUnitAddress(idx));
-                    if (!FromPageDetach::FromPageDetachCheck(releasedRegion,
-                                                             FromPageDetach::Site::TAKE_RELEASED_REUSE)) {
-                        cacheLock.unlock();
-                        AddDetachQuarantineUnits(idx, num, true, false);
-                        continue;
-                    }
                     memory = PageMemory{ idx, num, partition, false };
                     return true;
                 }
@@ -127,7 +109,6 @@ public:
         const size_t idx = memory.index;
         const size_t num = memory.units;
         const bool wasCommitted = memory.committed;
-        FromPageDetach::ReusePermitScope reusePermit;
         if (!wasCommitted) {
             RegionInfo::CommitUnits(idx, num);
             memory.committed = true;
@@ -203,8 +184,7 @@ public:
         if (region->ForwardingRefCount() != 0) {
             return false;
         }
-        return !ForwardingTable::HasLiveCarrier(region->GetRegionStart(),
-                                                region->GetRegionSizeForDetachCheck());
+        return true;
     }
 
     void AddReleaseUnits(UnitIndex idx, UnitCount num)
@@ -261,29 +241,8 @@ public:
     size_t ReleaseGarbageRegions(size_t targetCachedSize);
     size_t UncommitIdleUnits(size_t maxBytes, uint64_t idleBeforeNs, bool honorCancel = true);
 
-    // Phase-2 FROM_PAGE_DETACH_GATE. Entries are withheld from both allocator
-    // trees until a major mark closure rechecks the same central predicate.
-    void AddDetachQuarantineRegion(RegionInfo* region, bool releasePhysical = false);
-    void AddDetachQuarantineUnits(UnitIndex idx, UnitCount num, bool released, bool needsInit,
-                                  bool releasePhysical = false);
-    size_t ReleaseDetachQuarantineAfterMajor();
-    bool HasDetachQuarantine() const
-    {
-        std::lock_guard<std::mutex> lock(detachQuarantineMutex);
-        return !detachQuarantine.empty();
-    }
-
 private:
     size_t UncommitIdleUnitsImpl(size_t maxBytes, uint64_t idleBeforeNs, bool honorCancel);
-
-    struct DetachQuarantineEntry {
-        UnitIndex idx;
-        UnitCount num;
-        uint8_t rechecks;
-        bool released;
-        bool needsInit;
-        bool releasePhysical;
-    };
 
     inline void PrehandleReleasedUnit(bool expectPhysicalMem, size_t idx, size_t num) const
     {
@@ -305,8 +264,6 @@ private:
     mutable std::mutex markQuarantineTreeMutex;
     CartesianTree markQuarantineTree;
 
-    mutable std::mutex detachQuarantineMutex;
-    std::vector<DetachQuarantineEntry> detachQuarantine;
 };
 } // namespace MapleRuntime
 #endif // MRT_FREE_REGION_MANAGER_H

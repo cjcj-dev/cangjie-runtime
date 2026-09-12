@@ -47,7 +47,6 @@
 #include "Heap/Verify/FillerZeroDiag.h"
 #include "Heap/Verify/SurvNodeDiag.h"
 #include "Heap/Allocator/RouteDestHold.h"
-#include "Heap/Verify/FromPageDetachCheck.h"
 #include "Heap/Allocator/ForwardingTable.h"
 #include "Heap/Allocator/MemMap.h"
 #include "Heap/Allocator/ZGranuleMap.h"
@@ -2100,9 +2099,7 @@ public:
         CHECK(ContainsUnitRange(unitAddress, size));
         RegionInfo* wipeRegion = RegionInfo::TryGetRegionInfoAt(unitAddress);
         WaitCopiedBeforePayloadWipe(wipeRegion, "ClearUnits");
-        CHECK_DETAIL(FromPageDetach::FromPageDetachCheck(wipeRegion,
-                                                        FromPageDetach::Site::CLEAR_UNITS),
-                     "CJRT_FROM_REUSE_GATE bypass reached ClearUnits idx=%zu units=%zu", idx, cnt);
+
         DLOG(REGION, "clear dirty units[%zu+%zu, %zu) @[%#zx+%zu, %#zx)", idx, cnt, idx + cnt, unitAddress, size,
              unitAddress + size);
         // gcfwdfix: ring of zeroed ranges for WAS_LIVE_BEFORE_CLEAR (MRT_GCV2_TRACE_CLEAR=1).
@@ -2147,9 +2144,7 @@ public:
         CHECK(ContainsUnitRange(reinterpret_cast<uintptr_t>(unitAddress), size));
         RegionInfo* wipeRegion = RegionInfo::TryGetRegionInfoAt(reinterpret_cast<uintptr_t>(unitAddress));
         WaitCopiedBeforePayloadWipe(wipeRegion, "ReleaseUnits");
-        CHECK_DETAIL(FromPageDetach::FromPageDetachCheck(wipeRegion,
-                         FromPageDetach::Site::RELEASE_UNITS),
-                     "CJRT_FROM_REUSE_GATE bypass reached ReleaseUnits idx=%zu units=%zu", idx, cnt);
+
         DLOG(REGION, "release physical memory for units [%zu+%zu, %zu) @[%p+%zu, 0x%zx)", idx, cnt, idx + cnt,
              unitAddress, size, reinterpret_cast<uintptr_t>(unitAddress) + size);
         const size_t released = UnitInfo::memoryOwner == nullptr ? 0 :
@@ -2308,9 +2303,7 @@ public:
     // reset so that this region can be reused for allocation
     void InitFreeUnits()
     {
-        CHECK_DETAIL(FromPageDetach::FromPageDetachCheck(this, FromPageDetach::Site::INIT_FREE_UNITS),
-                     "CJRT_FROM_REUSE_GATE bypass reached InitFreeUnits region=%p", this);
-        FromPageDetach::ReusePermitScope permit;
+
         size_t nUnit = GetUnitCount();
         UnitInfo* unit = reinterpret_cast<UnitInfo*>(this);
         UnitInfo::UnitInfoArray array = UnitInfo::UnitInfoArray(unit, nUnit);
@@ -2578,16 +2571,7 @@ public:
         // marklate: freeze last-alloc phase before ghost snapshot (survives reuse).
         AllocPhaseDiag::FreezeRegion(GetRegionStart());
         (void)IsForwardingDone();
-        // After-copy Exempt keeps the page (zRelocate.cpp:1041-1047) but the
-        // forwarding table must not survive into the next install.
-        // EnsureEntries returns early if a table is already armed, so a kept
-        // page would carry last cycle's mappings (REPORT-trainbisect §6 knife B;
-        // [IKEKEEP-01] same shape). ZGC destroys forwarding at the next
-        // ZRelocationSetInstallTask (zRelocationSet.cpp:91-96).
-        ForwardingTable::ClearEntries(GetRegionStart(), GetRegionSize());
-        CHECK_DETAIL(ForwardingTable::PreparePublicationGeneration(GetRegionStart(), GetRegionSize()),
-                     "forwarding generation prepare failed region=%p range=[%#zx,%#zx)",
-                     this, static_cast<size_t>(GetRegionStart()), static_cast<size_t>(GetRegionEnd()));
+        // The preceding generation reset removed its forwarding set.
         ClearRelocationResiduals();
         // PORT_ZFORWARDING step 1: same event, recorded address-keyed as well.  Populated in
         // parallel with the region machinery so the two answers can be compared before either is
@@ -2694,9 +2678,8 @@ public:
         // (ZForwarding::detach_page waits for _ref_count == 0); recording the removal here first
         // lets step 3 change *when* it happens without changing *where*.
         const size_t nUnit = GetGhostRegionUnitCount();
-        ForwardingTable::RetireMembershipAtDispel(GetRegionStart(), GetRegionSize());
-        // Ghost bits are cleared under g_retiredLock inside RetireMembershipAtDispel
-        // so ReclaimRetired's GhostCarrierHeld sample cannot race the clear.
+        ClearGhostFromRegionBits();
+        LiveInfoArena::GetLiveInfoArena().RecycleOwnerBitmaps(GetLiveInfo());
         dispelGhostCount.fetch_add(1, std::memory_order_relaxed);
         TraceClear::NoteRegionEvent(GetRegionStart(), nUnit * UNIT_SIZE, "dispel", this, GetLiveByteCount(),
                                     static_cast<unsigned int>(IsGhostFromRegion()),
@@ -3016,33 +2999,6 @@ public:
     {
         metadata.regionStateBitField.SetAtomicValue(RegionStateBitPos::REGION_TYPE_FLAG, BIT_LENGTH,
                                                     static_cast<uint8_t>(type));
-        // PORT_ZFORWARDING step 1, continued.  Inserting only at PrepareForwardableRegion left the
-        // table 15.6% short of what the region predicates answer (legacyOnly=2.6M of 16.8M), because
-        // membership of the relocation set is established at many scattered sites here --
-        // fromRegionList.PrependRegion(..., FROM_REGION) appears in AssembleSmallGarbageCandidates,
-        // PrepareYoungGarbageCandidates and several others -- while ZGC establishes it once, in
-        // ZRelocationSet::install.
-        //
-        // Rather than chase those sites one by one, hook the single place the type actually
-        // changes.  That is the convergence the port is for: one writer of membership instead of N.
-        if (type == RegionType::FROM_REGION || type == RegionType::LONE_FROM_REGION ||
-            type == RegionType::UNMOVABLE_FROM_REGION || type == RegionType::RAW_POINTER_PINNED_REGION) {
-            // Best-effort comparison carrier. Correctness is established by
-            // the checked full install in PrepareForwardableRegion; tests and
-            // pre-heap metadata transitions may legitimately have no map yet.
-            (void)ForwardingTable::InsertProvisional(GetRegionStart(), GetRegionSize(), this);
-        } else if (type == RegionType::FREE_REGION || type == RegionType::GARBAGE_REGION ||
-                   type == RegionType::TO_REGION) {
-            // The ghost bit is part of membership and outlives the type change: all six residual
-            // legacyOnly disagreements were rtype=14 (GARBAGE_REGION) with ghost still set, i.e.
-            // the type moved on while IsGhostFromObject still answered yes.  Dropping the entry
-            // there is exactly the "membership has no single source of truth" problem this port
-            // exists to remove, so keep it until the ghost is actually dispelled
-            // (DispelGhostFromRegion already calls Remove).
-            if (!IsGhostFromRegion()) {
-                ForwardingTable::Remove(GetRegionStart(), GetRegionSize());
-            }
-        }
     }
     void SetTraceRegionFlag(uint8_t flag)
     {
@@ -4076,8 +4032,7 @@ private:
         CHECK(ContainsUnitRange(GetRegionStart(), nUnit * UNIT_SIZE));
         CHECK(TryGetRegionInfoAt(GetRegionStart()) == nullptr);
         CHECK_DETAIL(GetRegionListOwner() == nullptr, "reinitializing a region still owned by a list");
-        CHECK_DETAIL(FromPageDetach::FromPageDetachCheck(this, FromPageDetach::Site::INIT_REGION_INFO),
-                     "CJRT_FROM_REUSE_GATE bypass reached InitRegionInfo region=%p units=%zu", this, nUnit);
+
         M0Correlation::InvalidateRegionBindings(GetRegionStart(), GetRegionLifeId());
         SetUnitRole(UnitRole::FREE_UNITS);
         // Invalidate every old-life carrier before clearing any of its payload.
@@ -4093,7 +4048,6 @@ private:
         // See DispelGhostFromRegion: retire the route before detaching its compact table.
         ForwardingTable::ClearPageOwner(this);
         WaitCopiedBeforePayloadWipe(this, "InitRegionInfo");
-        ForwardingTable::ClearEntries(GetRegionStart(), nUnit * RegionInfo::UNIT_SIZE);
         LiveInfoArena::GetLiveInfoArena().RecycleOwnerBitmaps(GetLiveInfo());
         metadata.allocPtr = GetRegionStart();
         metadata.regionEnd = metadata.allocPtr + nUnit * RegionInfo::UNIT_SIZE;

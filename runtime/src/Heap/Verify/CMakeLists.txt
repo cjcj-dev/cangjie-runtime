@@ -33,7 +33,6 @@ set(SRC_LIST
     "CsetEmptyWho.cpp"
     "FillerZeroDiag.cpp"
     "HoleWhoDiag.cpp"
-    "FromPageDetachCheck.cpp"
 )
 
 include_directories(${CMAKE_CURRENT_SOURCE_DIR}/../)
