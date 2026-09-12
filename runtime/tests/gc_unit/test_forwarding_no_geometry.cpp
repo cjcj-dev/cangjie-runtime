@@ -299,10 +299,9 @@ GC_TEST(ForwardingNoGeometry, ForwardImplTryLockCopiesWithoutPrebuiltMapping)
     (void)fx.PlantMarkBitmap<Generation::Old>(live, fx.region0->GetRegionSize());
     fx.region0->PublishForwardingCarrier(fx.region0->GetMarkView<Generation::Old>());
     BaseObject* copyFrom = fx.PlaceObject(fx.region0->GetRegionStart() + 128);
+    BaseObject* copyTo = fx.PlaceObject(fx.region1->GetRegionStart() + 128);
     fx.region0->SetRegionAllocPtr(reinterpret_cast<MAddress>(copyFrom) + 64);
-    BaseObject* seedTo = fx.PlaceObject(fx.region1->GetRegionStart() + 128);
-    fx.region1->SetRegionType(RegionInfo::RegionType::THREAD_LOCAL_REGION);
-    fx.region1->SetRegionAllocPtr(reinterpret_cast<MAddress>(seedTo) + 64);
+    fx.region1->SetRegionAllocPtr(reinterpret_cast<MAddress>(copyTo) + 64);
     const MAddress copyFromAddr = reinterpret_cast<MAddress>(copyFrom);
     ForwardingTable::ClearEntries(fx.region0->GetRegionStart(), fx.region0->GetRegionSize());
     ForwardingTable::ReclaimRetired("gc-unit-forward-impl-trylock");
