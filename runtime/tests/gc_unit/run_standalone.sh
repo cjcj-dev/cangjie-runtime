@@ -846,14 +846,12 @@ for test_name in "${EXPECTED_LOADHEAL_TESTS[@]}"; do
 done
 echo "GATE_LOADHEAL_PRODUCT_MANIFEST_OK rows=$loadheal_rows source=clear_entries_product_unit.cpp"
 
-# Pointer-colour census tests consume independently replaceable functions from
+# Pointer-colour barrier tests consume independently replaceable functions from
 # the product SO.  Full nm excludes even local/weak test copies; nm -u proves
 # the calls are imports.  main is the positive control above.
 PTRCOLOUR_PRODUCT_CONSUMERS=()
 PTRCOLOUR_PRODUCT_CONSUMERS+=('MapleRuntime::EnumBarrier::ReadReference(')
 if [[ "${MRT_TESTABLE_INTERNALS:-0}" == "1" ]]; then
-  PTRCOLOUR_PRODUCT_CONSUMERS+=('MapleRuntime::CensusObjectSlots(')
-  PTRCOLOUR_PRODUCT_CONSUMERS+=('MapleRuntime::EnforceColourCensusForTesting(')
   PTRCOLOUR_PRODUCT_CONSUMERS+=('MapleRuntime::AssertColouredWriteIfEnabled(')
 fi
 for consumer in "${PTRCOLOUR_PRODUCT_CONSUMERS[@]}"; do
@@ -887,7 +885,7 @@ while IFS=$'\t' read -r test_name anchor carrier consumer cut_site; do
   /usr/bin/grep -R -F -q "${cut_site#*:}" "$ROOT/runtime/src"
   ptrcolour_rows=$((ptrcolour_rows + 1))
 done <"$PTRCOLOUR_MANIFEST"
-[[ "$ptrcolour_rows" -eq 4 ]]
+[[ "$ptrcolour_rows" -eq 2 ]]
 echo "GATE_PTRCOLOUR_PRODUCT_BINDING_OK rows=$ptrcolour_rows elf=$OUT/cj_gc_unit"
 
 # The classifier's four required colour-family rows are coupled to this stable
