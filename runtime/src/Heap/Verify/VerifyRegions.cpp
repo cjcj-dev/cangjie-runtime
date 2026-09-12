@@ -378,15 +378,15 @@ void VerifyRegions::VerifyAfterPrepareYoung(RegionManager& manager, const Candid
         }
     }
 
-    // R6 light: RouteState vs region type sanity on from-space lists.
+    // R6 light: PageRelocate vs region type sanity on from-space lists.
     size_t routeStateAnomalies = 0;
     auto checkRoute = [&routeStateAnomalies](RegionInfo* region) {
         if (region == nullptr) {
             return;
         }
-        auto rs = region->GetRouteState();
+        auto rs = region->GetPageRelocate();
         if (region->IsGarbageRegion() &&
-            (rs == RegionInfo::RouteState::ROUTING || rs == RegionInfo::RouteState::ROUTED)) {
+            (rs == RegionInfo::PageRelocate::ROUTING || rs == RegionInfo::PageRelocate::ROUTED)) {
             ++routeStateAnomalies;
         }
     };

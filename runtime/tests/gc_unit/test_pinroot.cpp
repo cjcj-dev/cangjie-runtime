@@ -169,7 +169,7 @@ GC_TEST(RegionRetirement, StayYoungAfterCompactInPlaceDoesNotRelinkRecentFull)
     // the unit fixture has no CollectorProxy, so plant only the state consumed
     // by FinishStayYoungInPlace/DispelGhostFromRegion.
     region->SetInGhostRegion(1);
-    region->SetRouteState(RegionInfo::RouteState::COMPACTED);
+    region->SetPageRelocate(RegionInfo::PageRelocate::COMPACTED);
 
     PinRootTestAccess::ParkOnThreadLocal(manager, region);
     manager.RehomeCompactedInPlaceRegion(region);
@@ -190,7 +190,7 @@ GC_TEST(RegionRetirement, StayYoungTransfersCompletedCompactTailFromThreadLocal)
     RegionInfo* region = fx.region0;
     region->SetYoungRegionFlag(1);
     region->SetInGhostRegion(1);
-    region->SetRouteState(RegionInfo::RouteState::COMPACTED);
+    region->SetPageRelocate(RegionInfo::PageRelocate::COMPACTED);
 
     PinRootTestAccess::ParkOnThreadLocal(manager, region);
     manager.EnlistStayYoungSurvivor(region);

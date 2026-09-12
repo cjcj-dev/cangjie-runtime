@@ -144,7 +144,7 @@ public:
         RETAINED_OP_COUNT = 7,
     };
 
-    enum RouteState : uint8_t {
+    enum PageRelocate : uint8_t {
         NORMAL = 0,
         FORWARDABLE,
         ROUTING,
@@ -155,28 +155,28 @@ public:
 
     // State and life are one publication. A reader must never validate an old
     // terminal state with a new-life stamp (zForwarding.inline.hpp:226-251).
-    static constexpr unsigned ROUTE_STATE_BITS = 3;
-    static constexpr uint64_t ROUTE_STATE_MASK = (uint64_t(1) << ROUTE_STATE_BITS) - 1;
+    static constexpr unsigned PAGE_RELOCATE_BITS = 3;
+    static constexpr uint64_t PAGE_RELOCATE_MASK = (uint64_t(1) << PAGE_RELOCATE_BITS) - 1;
 
-    static uint64_t PackRouteState(RouteState state, RegionLifeId life)
+    static uint64_t PackPageRelocate(PageRelocate state, RegionLifeId life)
     {
-        if (UNLIKELY(life > (std::numeric_limits<uint64_t>::max() >> ROUTE_STATE_BITS))) {
+        if (UNLIKELY(life > (std::numeric_limits<uint64_t>::max() >> PAGE_RELOCATE_BITS))) {
             LOG(RTLOG_FATAL,
                 "[LIFECLOCK][ROUTE_SNAPSHOT_OVERFLOW] life=%llu; packed route life cannot wrap",
                 static_cast<unsigned long long>(life));
             return 0;
         }
-        return (life << ROUTE_STATE_BITS) | static_cast<uint64_t>(state);
+        return (life << PAGE_RELOCATE_BITS) | static_cast<uint64_t>(state);
     }
 
-    static RouteState RouteStateFromSnapshot(uint64_t snapshot)
+    static PageRelocate PageRelocateFromSnapshot(uint64_t snapshot)
     {
-        return static_cast<RouteState>(snapshot & ROUTE_STATE_MASK);
+        return static_cast<PageRelocate>(snapshot & PAGE_RELOCATE_MASK);
     }
 
-    static RegionLifeId RouteLifeFromSnapshot(uint64_t snapshot)
+    static RegionLifeId PageRelocateLifeFromSnapshot(uint64_t snapshot)
     {
-        return snapshot >> ROUTE_STATE_BITS;
+        return snapshot >> PAGE_RELOCATE_BITS;
     }
 
     static const size_t UNIT_SIZE; // same as system page size
@@ -187,36 +187,36 @@ public:
     // release a large object when the size is greater than 4096KB.
     static constexpr size_t LARGE_OBJECT_RELEASE_THRESHOLD = 4096 * KB;
 
-    bool CompareExchangeRouteState(RouteState expected, RouteState newWord)
+    bool CompareExchangePageRelocate(PageRelocate expected, PageRelocate newWord)
     {
         const RegionLifeId life = GetRegionLifeId();
-        uint64_t expectedSnapshot = PackRouteState(expected, life);
-        const uint64_t newSnapshot = PackRouteState(newWord, life);
-        bool success = metadata.routeStateSnapshot.compare_exchange_strong(
+        uint64_t expectedSnapshot = PackPageRelocate(expected, life);
+        const uint64_t newSnapshot = PackPageRelocate(newWord, life);
+        bool success = metadata.pageRelocateSnapshot.compare_exchange_strong(
             expectedSnapshot, newSnapshot, std::memory_order_acq_rel, std::memory_order_acquire);
         if (success) {
         }
         return success;
     }
 
-    RouteState GetRouteState() const;
+    PageRelocate GetPageRelocate() const;
 
-    // Observation only: unlike GetRouteState, this neither validates the
+    // Observation only: unlike GetPageRelocate, this neither validates the
     // carrier life nor invokes a test hook. Never use it to decide a route.
-    uint64_t GetRouteStateSnapshotForDiagnostics() const
+    uint64_t GetPageRelocateSnapshotForDiagnostics() const
     {
-        return metadata.routeStateSnapshot.load(std::memory_order_acquire);
+        return metadata.pageRelocateSnapshot.load(std::memory_order_acquire);
     }
 
-    void SetRouteState(RouteState state)
+    void SetPageRelocate(PageRelocate state)
     {
         const RegionLifeId life = GetRegionLifeId();
-        metadata.routeStateSnapshot.store(PackRouteState(state, life), std::memory_order_release);
+        metadata.pageRelocateSnapshot.store(PackPageRelocate(state, life), std::memory_order_release);
     }
 
-    RegionLifeId GetRouteStateLifeId() const
+    RegionLifeId GetPageRelocateLifeId() const
     {
-        return RouteLifeFromSnapshot(metadata.routeStateSnapshot.load(std::memory_order_acquire));
+        return PageRelocateLifeFromSnapshot(metadata.pageRelocateSnapshot.load(std::memory_order_acquire));
     }
 
     // sealcheck: mark face frozen for geometry (M3). Set at RouteRegion ROUTING entry.
@@ -249,9 +249,9 @@ public:
         return metadata.regionLifeId.load(std::memory_order_acquire);
     }
 
-    bool IsRouteStateLifeCurrent() const
+    bool IsPageRelocateLifeCurrent() const
     {
-        const RegionLifeId stamp = GetRouteStateLifeId();
+        const RegionLifeId stamp = GetPageRelocateLifeId();
         const RegionLifeId current = GetRegionLifeId();
         return stamp == current;
     }
@@ -367,9 +367,9 @@ public:
     static void EnsureOneseqAtexit();
     static void ReportOneseqCounts(const char* point);
 
-    bool IsCompacted() { return GetRouteState() == RouteState::COMPACTED; }
+    bool IsCompacted() { return GetPageRelocate() == PageRelocate::COMPACTED; }
 
-    bool IsRoutingState() { return GetRouteState() == RouteState::ROUTING; }
+    bool IsPageRelocateClaimed() { return GetPageRelocate() == PageRelocate::ROUTING; }
 
     // enroltime: when does a region actually join the relocation set?
     //
@@ -379,11 +379,11 @@ public:
     // "painted with the current colour, after the flip" is equivalent to "names an object that
     // will not move this cycle", and ZGC's whole colour-epoch argument rests on that equivalence.
     //
-    // Ours enrols lazily: RouteRegion drives each region's RouteState out of NORMAL as forwarding
+    // Ours enrols lazily: RouteRegion drives each region's PageRelocate out of NORMAL as forwarding
     // reaches it.  If that happens after the flip, the equivalence breaks -- a value painted
     // store-good in between is load-good and later names a from-version, which is exactly the
     // measured FORWARD population (afterFlip=1, slotGood=1, hasTo=1, 20/20) whose targets must have
-    // had RouteState == NORMAL when they were painted, since every non-NORMAL target is already
+    // had PageRelocate == NORMAL when they were painted, since every non-NORMAL target is already
     // caught by the staleness predicate (ROUTEASK: 105 triggers, 100% covered).
     //
     // GCPhase is the cheap witness: PREFORWARD/FORWARD mean the relocate-start flip has run.
@@ -400,13 +400,13 @@ public:
     }
     void NoteEnrolPhase();
 
-    bool TryLockRouting(RouteState curState)
+    bool TryLockRouting(PageRelocate curState)
     {
-        if (IsRoutingState()) {
+        if (IsPageRelocateClaimed()) {
             return false;
         }
-        const bool locked = CompareExchangeRouteState(curState, RouteState::ROUTING);
-        if (kEnrolTimeProbe && locked && curState == RouteState::NORMAL) {
+        const bool locked = CompareExchangePageRelocate(curState, PageRelocate::ROUTING);
+        if (kEnrolTimeProbe && locked && curState == PageRelocate::NORMAL) {
             NoteEnrolPhase();
         }
         return locked;
@@ -2022,9 +2022,9 @@ public:
     MRT_EXPORT static void SetGhostLookupTestHook(GhostLookupTestHook hook);
     MRT_EXPORT static size_t GhostLookupTestHookCalls();
 
-    using RouteStateReadTestHook = void (*)(RegionInfo*);
-    MRT_EXPORT static void SetRouteStateReadTestHook(RouteStateReadTestHook hook);
-    MRT_EXPORT static size_t RouteStateReadTestHookCalls();
+    using PageRelocateReadTestHook = void (*)(RegionInfo*);
+    MRT_EXPORT static void SetPageRelocateReadTestHook(PageRelocateReadTestHook hook);
+    MRT_EXPORT static size_t PageRelocateReadTestHookCalls();
 #endif
 
     static void InitFreeRegion(size_t unitIdx, size_t nUnit)
@@ -2300,9 +2300,9 @@ public:
             return OptionalRouteTicket();
         }
         size_t offset = GetAddressOffset(fromAddress);
-        const RouteState routeState = GetRouteState();
-        if (routeState != RouteState::ROUTED && routeState != RouteState::COMPACTED &&
-            routeState != RouteState::FORWARDED) {
+        const PageRelocate pageRelocate = GetPageRelocate();
+        if (pageRelocate != PageRelocate::ROUTED && pageRelocate != PageRelocate::COMPACTED &&
+            pageRelocate != PageRelocate::FORWARDED) {
             return OptionalRouteTicket();
         }
 
@@ -2315,7 +2315,7 @@ public:
         }
 
         CompactRouteTable* compact = LoadCompactRouteTable();
-        if (routeState == RouteState::COMPACTED) {
+        if (pageRelocate == PageRelocate::COMPACTED) {
             if (compact == nullptr) {
                 return OptionalRouteTicket();
             }
@@ -2335,11 +2335,11 @@ public:
     // Compacted: dest is the dense pack slot recorded by CompactRegion, not prefix-sum.
     BaseObject* GetRoute(RouteTicket t)
     {
-        if (!IsRouteStateLifeCurrent()) {
+        if (!IsPageRelocateLifeCurrent()) {
             LOG(RTLOG_FATAL,
                 "[LIFECLOCK][MUTATOR_STALE_ROUTE_STATE] region=%p current=%llu stamp=%llu",
                 this, static_cast<unsigned long long>(GetRegionLifeId()),
-                static_cast<unsigned long long>(GetRouteStateLifeId()));
+                static_cast<unsigned long long>(GetPageRelocateLifeId()));
         }
         BaseObject* fromObj = t.From();
         MAddress fromAddress = reinterpret_cast<MAddress>(fromObj);
@@ -2444,11 +2444,11 @@ public:
 
     bool IsCompactRouteDestination(MAddress address) const
     {
-        // RouteState::COMPACTED is published only after CompactRegion has
+        // PageRelocate::COMPACTED is published only after CompactRegion has
         // finished recording the dense-pack table. ZGC similarly blocks page
         // access until in-place relocation is complete, then exposes the
         // relocated objects (zRelocate.cpp:862-925,1013-1037).
-        if (GetRouteState() != RouteState::COMPACTED) {
+        if (GetPageRelocate() != PageRelocate::COMPACTED) {
             return false;
         }
         const CompactRouteTable* table = LoadCompactRouteTable();
@@ -2559,8 +2559,8 @@ public:
         CHECK(metadata.inGhostFromRegion == 0);
         // marklate: freeze last-alloc phase before ghost snapshot (survives reuse).
         AllocPhaseDiag::FreezeRegion(GetRegionStart());
-        const RouteState prevRoute = GetRouteState();
-        SetRouteState(FORWARDABLE);
+        const PageRelocate prevRoute = GetPageRelocate();
+        SetPageRelocate(FORWARDABLE);
         // After-copy Exempt keeps the page (zRelocate.cpp:1041-1047) but the
         // forwarding table must not survive into the next install.
         // EnsureEntries returns early if a table is already armed, so a kept
@@ -2626,7 +2626,7 @@ public:
             size_t nUnit = GetUnitCount();
             TraceClear::NoteRegionEvent(GetRegionStart(), nUnit * UNIT_SIZE, "clear_ghost", this,
                                         GetLiveByteCount(), 1, static_cast<unsigned int>(GetRegionType()),
-                                        static_cast<unsigned int>(GetRouteState()));
+                                        static_cast<unsigned int>(GetPageRelocate()));
             UnitInfo* unit = reinterpret_cast<UnitInfo*>(this);
             UnitInfo::UnitInfoArray array = UnitInfo::UnitInfoArray(unit, nUnit);
             for (size_t i = 0; i < nUnit; i++) {
@@ -2645,9 +2645,9 @@ public:
     static std::atomic<GhostLookupTestHook> ghostLookupTestHook;
     static std::atomic<size_t> ghostLookupTestHookCalls;
     static void RunGhostLookupTestHook(RegionInfo* region);
-    static std::atomic<RouteStateReadTestHook> routeStateReadTestHook;
-    static std::atomic<size_t> routeStateReadTestHookCalls;
-    static void RunRouteStateReadTestHook(RegionInfo* region);
+    static std::atomic<PageRelocateReadTestHook> pageRelocateReadTestHook;
+    static std::atomic<size_t> pageRelocateReadTestHookCalls;
+    static void RunPageRelocateReadTestHook(RegionInfo* region);
 #endif
 
     static size_t GetDispelGhostCount()
@@ -2693,16 +2693,16 @@ public:
         TraceClear::NoteRegionEvent(GetRegionStart(), nUnit * UNIT_SIZE, "dispel", this, GetLiveByteCount(),
                                     static_cast<unsigned int>(IsGhostFromRegion()),
                                     static_cast<unsigned int>(GetRegionType()),
-                                    static_cast<unsigned int>(GetRouteState()));
+                                    static_cast<unsigned int>(GetPageRelocate()));
         // fysfixb: name who clears the ghost bit (PrepareFromRegionList peer path).
         VLOG(REPORT,
              "[GCV2][ghost-dispel] region=%p start=%#zx nUnit=%zu live=%zu route=%u young=%u",
              this, GetRegionStart(), nUnit, GetLiveByteCount(),
-             static_cast<unsigned int>(GetRouteState()),
+             static_cast<unsigned int>(GetPageRelocate()),
              static_cast<unsigned>(IsYoungRegion()));
         // Publish route retirement before detaching the table. A reader that observes
         // the atomic nullptr then also observes NORMAL and soft-misses in GetRoute.
-        SetRouteState(NORMAL);
+        SetPageRelocate(NORMAL);
         FreeCompactRouteTable();
         SetMarkFaceSealed(false);
         // The old top/livemap disappeared with the forwarding carrier above;
@@ -3029,9 +3029,9 @@ public:
         if (IsGhostFromRegion()) {
             DispelGhostFromRegion();
         } else {
-            const RouteState rs = GetRouteState();
-            if (rs != RouteState::FORWARDED && rs != RouteState::COMPACTED && rs != RouteState::NORMAL) {
-                SetRouteState(NORMAL);
+            const PageRelocate rs = GetPageRelocate();
+            if (rs != PageRelocate::FORWARDED && rs != PageRelocate::COMPACTED && rs != PageRelocate::NORMAL) {
+                SetPageRelocate(NORMAL);
             }
             // The non-ghost expiry arm is still a forwarding-life boundary.
             // Seal before resetting the carrier words so an admitted copier
@@ -3983,7 +3983,7 @@ private:
         };
         // One atomic snapshot binds state to region life. The exact-start table
         // reuses the old split-field footprint, preserving UnitInfo size.
-        std::atomic<uint64_t> routeStateSnapshot{ 0 };
+        std::atomic<uint64_t> pageRelocateSnapshot{ 0 };
         void* routeStartTable = nullptr;
         RegionLifeId ghostLifeId = 0;
         // twoflags: orthogonal to isTraceRegion.
@@ -4179,7 +4179,7 @@ private:
 
     void ObserveLifeBoundary() const
     {
-        const uint64_t routeSnapshot = metadata.routeStateSnapshot.load(std::memory_order_acquire);
+        const uint64_t routeSnapshot = metadata.pageRelocateSnapshot.load(std::memory_order_acquire);
         const ZForwarding::FromPageView* from = GetFromPageView();
     }
 
@@ -4234,7 +4234,7 @@ private:
             __atomic_store_n(&metadata.routeDestHold, next, __ATOMIC_RELEASE);
         }
         // See DispelGhostFromRegion: retire the route before detaching its compact table.
-        SetRouteState(NORMAL);
+        SetPageRelocate(NORMAL);
         ForwardingTable::ClearPageOwner(this);
         WaitCopiedBeforePayloadWipe(this, "InitRegionInfo");
         ForwardingTable::ClearEntries(GetRegionStart(), nUnit * RegionInfo::UNIT_SIZE);

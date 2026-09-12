@@ -302,8 +302,8 @@ public:
     const char* unavailable_lookup_active_answer() const { return unavailableLookupActiveAnswer; }
     const char* unavailable_lookup_retired_answer() const { return unavailableLookupRetiredAnswer; }
     bool unavailable_lookup_publication_closed() const { return unavailableLookupPublicationClosed; }
-    bool unavailable_route_state_valid() const { return unavailableRouteStateValid; }
-    uint8_t unavailable_route_state() const { return unavailableRouteState; }
+    bool unavailable_page_relocate_valid() const { return unavailablePageRelocateValid; }
+    uint8_t unavailable_page_relocate() const { return unavailablePageRelocate; }
     uintptr_t unavailable_from() const { return unavailableFrom; }
     uintptr_t unavailable_from_region() const { return unavailableFromRegion; }
     bool unavailable_region_snapshot_valid() const { return unavailableRegionSnapshotValid; }
@@ -351,13 +351,13 @@ public:
         const char* retiredLookup = unavailableLookupSnapshotValid ? unavailableLookupRetiredAnswer : "n/a";
         const char* publicationClosed = unavailableLookupSnapshotValid
             ? (unavailableLookupPublicationClosed ? "1" : "0") : "n/a";
-        const char* routeState = unavailableRouteStateValid
-            ? (unavailableRouteState == 0 ? "0" :
-               unavailableRouteState == 1 ? "1" :
-               unavailableRouteState == 2 ? "2" :
-               unavailableRouteState == 3 ? "3" :
-               unavailableRouteState == 4 ? "4" :
-               unavailableRouteState == 5 ? "5" : "invalid")
+        const char* routeState = unavailablePageRelocateValid
+            ? (unavailablePageRelocate == 0 ? "0" :
+               unavailablePageRelocate == 1 ? "1" :
+               unavailablePageRelocate == 2 ? "2" :
+               unavailablePageRelocate == 3 ? "3" :
+               unavailablePageRelocate == 4 ? "4" :
+               unavailablePageRelocate == 5 ? "5" : "invalid")
             : "n/a";
         const char* regionType = unavailableRegionSnapshotValid ? "present" : "n/a";
         CHECK_DETAIL(lookupState != State::Unavailable,
@@ -403,8 +403,8 @@ private:
           unavailableLookupAnswer("not_queried"), unavailableLookupSnapshotValid(false),
           unavailableLookupCause("n/a"), unavailableLookupActiveCandidate(false),
           unavailableLookupActiveAnswer("n/a"), unavailableLookupRetiredAnswer("n/a"),
-          unavailableLookupPublicationClosed(false), unavailableRouteStateValid(false),
-          unavailableRouteState(0), unavailableFrom(0), unavailableFromRegion(0),
+          unavailableLookupPublicationClosed(false), unavailablePageRelocateValid(false),
+          unavailablePageRelocate(0), unavailableFrom(0), unavailableFromRegion(0),
           unavailableRegionSnapshotValid(false), unavailableRegionType(0), unavailableGeneration(0),
           unavailableInCurrentRelocationSet(false), unavailableTableId(0),
           unavailablePublicationGeneration(0), unavailableFromPageEpoch(0), unavailableFromPageLifeId(0),
@@ -427,8 +427,8 @@ private:
           unavailableLookupRetiredAnswer(witness.lookupRetiredAnswer == nullptr ? "unknown"
                                                                                 : witness.lookupRetiredAnswer),
           unavailableLookupPublicationClosed(witness.lookupPublicationClosed),
-          unavailableRouteStateValid(witness.routeStateValid),
-          unavailableRouteState(witness.routeState), unavailableFrom(witness.from),
+          unavailablePageRelocateValid(witness.routeStateValid),
+          unavailablePageRelocate(witness.routeState), unavailableFrom(witness.from),
           unavailableFromRegion(witness.fromRegion),
           unavailableRegionSnapshotValid(witness.regionSnapshotValid),
           unavailableRegionType(witness.regionType), unavailableGeneration(witness.generation),
@@ -457,8 +457,8 @@ private:
     const char* unavailableLookupActiveAnswer;
     const char* unavailableLookupRetiredAnswer;
     bool unavailableLookupPublicationClosed;
-    bool unavailableRouteStateValid;
-    uint8_t unavailableRouteState;
+    bool unavailablePageRelocateValid;
+    uint8_t unavailablePageRelocate;
     uintptr_t unavailableFrom;
     uintptr_t unavailableFromRegion;
     bool unavailableRegionSnapshotValid;

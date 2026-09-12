@@ -156,7 +156,7 @@ void FillRegionClass(Entry& e, void* region, unsigned collectGen, unsigned freeP
     }
     RegionInfo* r = static_cast<RegionInfo*>(region);
     e.regionType = static_cast<unsigned>(r->GetRegionType());
-    e.routeState = static_cast<unsigned>(r->GetRouteState());
+    e.routeState = static_cast<unsigned>(r->GetPageRelocate());
     e.isGhost = r->IsGhostFromRegion() ? 1u : 0u;
     e.wasYoung = r->IsYoungRegion() ? 1u : 0u;
     e.routeMarkYoung = r->GetRouteMarkGeneration() == Generation::Young ? 1u : 0u;

@@ -40,9 +40,9 @@ bool RegionIsInRelocationSet(const RegionInfo* reg)
     if (reg->IsFromRegion() || reg->IsLoneFromRegion()) {
         return true;
     }
-    RegionInfo::RouteState rs = reg->GetRouteState();
-    return rs == RegionInfo::RouteState::FORWARDABLE || rs == RegionInfo::RouteState::ROUTING ||
-        rs == RegionInfo::RouteState::ROUTED;
+    RegionInfo::PageRelocate rs = reg->GetPageRelocate();
+    return rs == RegionInfo::PageRelocate::FORWARDABLE || rs == RegionInfo::PageRelocate::ROUTING ||
+        rs == RegionInfo::PageRelocate::ROUTED;
 }
 
 void NoteAllocIntoCSet(RegionInfo* reg, const char* where)

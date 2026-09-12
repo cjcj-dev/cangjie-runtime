@@ -268,7 +268,7 @@ void ReportDeadEdge(Stats& stats, size_t maxSamples, const char* point, BaseObje
         holderResurrected, &field, BaseObject::FieldOffset(holder, &field), target, RegionKindName(targetRegion),
         targetRegion == nullptr ? nullptr : reinterpret_cast<void*>(targetRegion->GetRegionStart()), targetMarkedBit,
         targetResurrected, targetForwardedBit,
-        targetRegion == nullptr ? 0u : static_cast<unsigned>(targetRegion->GetRouteState()), targetViewEpoch,
+        targetRegion == nullptr ? 0u : static_cast<unsigned>(targetRegion->GetPageRelocate()), targetViewEpoch,
         targetSnapEpoch, static_cast<unsigned>(knownEmpty), stats.deadTarget);
     if (targetRegion != nullptr &&
         (targetRegion->IsFromRegion() || targetRegion->IsLoneFromRegion() ||

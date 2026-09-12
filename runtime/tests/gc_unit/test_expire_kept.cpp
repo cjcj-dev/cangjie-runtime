@@ -57,13 +57,13 @@ GC_TEST(IkeKeep, ExpireClearsKeptButLeavesForwarded)
     RegionManager manager;
 
     RegionInfo* kept = fx.region0;
-    kept->SetRouteState(RegionInfo::RouteState::ROUTED);
+    kept->SetPageRelocate(RegionInfo::PageRelocate::ROUTED);
     fx.InstallPageOwner(kept);
     kept->MarkForwardingDone();
     IkeKeepTestAccess::ParkUnmovable(manager, kept);
 
     RegionInfo* forwarded = fx.region1;
-    forwarded->SetRouteState(RegionInfo::RouteState::FORWARDED);
+    forwarded->SetPageRelocate(RegionInfo::PageRelocate::FORWARDED);
     fx.InstallPageOwner(forwarded);
     forwarded->MarkForwardingDone();
     IkeKeepTestAccess::ParkFrom(manager, forwarded);
@@ -75,13 +75,13 @@ GC_TEST(IkeKeep, ExpireClearsKeptButLeavesForwarded)
     manager.ExpireKeptFromPreviousCycle();
 
     GC_EXPECT_FALSE(kept->IsForwardingDone());
-    GC_EXPECT_EQ(static_cast<unsigned>(kept->GetRouteState()),
-                 static_cast<unsigned>(RegionInfo::RouteState::NORMAL));
+    GC_EXPECT_EQ(static_cast<unsigned>(kept->GetPageRelocate()),
+                 static_cast<unsigned>(RegionInfo::PageRelocate::NORMAL));
     GC_EXPECT_TRUE(IkeKeepTestAccess::OnUnmovable(manager, kept));
 
     GC_EXPECT_TRUE(forwarded->IsForwardingDone());
-    GC_EXPECT_EQ(static_cast<unsigned>(forwarded->GetRouteState()),
-                  static_cast<unsigned>(RegionInfo::RouteState::FORWARDED));
+    GC_EXPECT_EQ(static_cast<unsigned>(forwarded->GetPageRelocate()),
+                  static_cast<unsigned>(RegionInfo::PageRelocate::FORWARDED));
     GC_EXPECT_TRUE(IkeKeepTestAccess::OnFrom(manager, forwarded));
 }
 

@@ -122,11 +122,11 @@ void ForwardDomainHook(unsigned point, RegionInfo* region, BaseObject* object)
             ForwardingTable::ForcePublicationClosedForTest(from);
         }
     } else if (state.domain == ForwardDomain::WrongLife) {
-        const auto route = state.kept->GetRouteState();
+        const auto route = state.kept->GetPageRelocate();
         state.kept->BumpRegionLifeId();
         // Keep the diagnostic route carrier current; the table and receipt
         // retain their original, now mismatching lifecycle stamps.
-        state.kept->SetRouteState(route);
+        state.kept->SetPageRelocate(route);
     }
     const auto consumed = ForwardingTable::LookupTo(from);
     std::fprintf(stderr, "DOMAIN input answer=%u active=%u retired=%u cause=%u to=%#zx done=%d\n",

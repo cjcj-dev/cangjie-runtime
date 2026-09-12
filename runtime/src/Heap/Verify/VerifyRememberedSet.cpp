@@ -118,17 +118,17 @@ void CollectNonYoungFieldSlots(std::unordered_set<MAddress>& fieldSlots, RemsetV
                         VLOG(REPORT,
                              "[GCV2][verify][remset][MISSING_EDGE] point=%s invoke=%zu failure=%zu max=%zu "
                              "holder=%p holderType=%s holderRegion=%p holderRegionType=%u holderYoungAge=%u "
-                             "holderRouteState=%u holderMarkBitmap=%p holderMarked=%u holderResurrected=%u "
+                             "holderPageRelocate=%u holderMarkBitmap=%p holderMarked=%u holderResurrected=%u "
                              "holderRegionStart=%p holderRegionOffset=0x%zx "
                              "slot=%p fieldOffset=0x%zx slotRegionOffset=0x%zx "
                              "target=%p targetValid=%u targetType=%s targetRegion=%p targetRegionType=%u "
-                             "targetYoungAge=%u targetRouteState=%u targetRegionStart=%p targetRegionOffset=0x%zx",
+                             "targetYoungAge=%u targetPageRelocate=%u targetRegionStart=%p targetRegionOffset=0x%zx",
                              point == nullptr ? "?" : point, invoke, correctnessFailure, maxFailures, holder,
                              typeInfo == nullptr || typeInfo->GetName() == nullptr ? "?" : typeInfo->GetName(),
                              holderRegion,
                              static_cast<unsigned int>(holderRegion->GetRegionType()),
                              static_cast<unsigned int>(holderRegion->GetYoungAge()),
-                             static_cast<unsigned int>(holderRegion->GetRouteState()),
+                             static_cast<unsigned int>(holderRegion->GetPageRelocate()),
                              holderRegion->GetMarkBitmap(holderRegion->GetMarkView<Generation::Old>()),
                              static_cast<unsigned int>(holderRegion->IsMarkedObject(
                                  holderRegion->GetMarkView<Generation::Old>(), holder)),
@@ -142,7 +142,7 @@ void CollectNonYoungFieldSlots(std::unordered_set<MAddress>& fieldSlots, RemsetV
                                                                                                targetTypeInfo->GetName(),
                              targetRegion, static_cast<unsigned int>(targetRegion->GetRegionType()),
                              static_cast<unsigned int>(targetRegion->GetYoungAge()),
-                             static_cast<unsigned int>(targetRegion->GetRouteState()),
+                             static_cast<unsigned int>(targetRegion->GetPageRelocate()),
                              reinterpret_cast<void*>(targetRegion->GetRegionStart()),
                              static_cast<size_t>(reinterpret_cast<MAddress>(target) - targetRegion->GetRegionStart()));
                     }

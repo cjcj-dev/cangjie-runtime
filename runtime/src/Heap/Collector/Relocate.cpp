@@ -749,8 +749,8 @@ void EnsureRouteDomainMembership(WCollector* collector, BaseObject* obj)
     }
     if (isGhost) {
         // Only paint while FORWARDABLE: RouteOrCompactRegionImpl freezes liveByteCount.
-        RegionInfo::RouteState rs = region->GetRouteState();
-        if (rs != RegionInfo::RouteState::FORWARDABLE) {
+        RegionInfo::PageRelocate rs = region->GetPageRelocate();
+        if (rs != RegionInfo::PageRelocate::FORWARDABLE) {
             g_installDomainTooLate.fetch_add(1, std::memory_order_relaxed);
             return;
         }
@@ -821,7 +821,7 @@ bool ForceRootRouteDomainWhileForwardable(WCollector* collector, BaseObject* obj
     }
     // Only paint while FORWARDABLE — after ROUTING/ROUTED/COMPACTED liveByteCount is
     // frozen (S2); late MarkBits would desync Admit from geometry.
-    if (region->GetRouteState() != RegionInfo::RouteState::FORWARDABLE) {
+    if (region->GetPageRelocate() != RegionInfo::PageRelocate::FORWARDABLE) {
         LiveInfo* g0 = region->GetLiveInfo0ForProbe();
         size_t offset = region->GetAddressOffset(reinterpret_cast<MAddress>(obj));
         return g0 != nullptr && region->IsRouteSurvivedObject(offset);
@@ -2137,7 +2137,7 @@ BaseObject* WCollector::ResolveStoreValue(BaseObject* ref, const ForwardingProve
                 static_cast<unsigned long long>(lookup.fromPageLifeId),
                 static_cast<unsigned>(lookup.retiredAnswer), static_cast<unsigned>(GetGCPhase()),
                 live != nullptr && live->IsCompacted() ? 1u : 0u,
-                live != nullptr ? static_cast<unsigned>(live->GetRouteState()) : 0u,
+                live != nullptr ? static_cast<unsigned>(live->GetPageRelocate()) : 0u,
                 reinterpret_cast<void*>(lookup.to),
                 lookup.publicationClosed ? 1u : 0u,
                 static_cast<unsigned>(Collector::JudgeHandOutTarget(current)));
@@ -2528,7 +2528,7 @@ BaseObject* WCollector::RelocateObjectInner(BaseObject* obj, BaseObject* planned
         LOG(RTLOG_ERROR,
             "[GCV2][first-visitor] publication refused obj=%p page=%p pageStart=%#zx entries=%llu route=%u done=%u ref=%d",
             obj, copyPage, static_cast<size_t>(pageStart), static_cast<unsigned long long>(entries),
-            copyPage == nullptr ? 0U : static_cast<unsigned>(copyPage->GetRouteState()),
+            copyPage == nullptr ? 0U : static_cast<unsigned>(copyPage->GetPageRelocate()),
             copyPage == nullptr ? 0U : static_cast<unsigned>(copyPage->IsForwardingDone()),
             copyPage == nullptr ? 0 : copyPage->ForwardingRefCount());
     }

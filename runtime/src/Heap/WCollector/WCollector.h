@@ -533,7 +533,7 @@ public:
                      obj, static_cast<int>(MapleRuntime::GetTid()), static_cast<void*>(obj),
                      static_cast<void*>(forwarding), g_gcCount.load(std::memory_order_relaxed),
                      static_cast<unsigned long long>(
-                         forwarding->GetRouteStateSnapshotForDiagnostics()),
+                         forwarding->GetPageRelocateSnapshotForDiagnostics()),
                      static_cast<unsigned>(forwarding->IsForwardingDone()));
         return nullptr;
     }
@@ -640,7 +640,7 @@ public:
             RegionInfo* region = RegionInfo::GetGhostFromRegionAt(reinterpret_cast<MAddress>(obj));
             return region != nullptr &&
                 (region->GetLiveInfo0ForProbe() != nullptr ||
-                 region->GetRouteState() != RegionInfo::RouteState::NORMAL ||
+                 region->GetPageRelocate() != RegionInfo::PageRelocate::NORMAL ||
                  region->IsForwardingDone());
         }
         // filter const string object.
@@ -1172,8 +1172,8 @@ protected:
         if (region == nullptr) {
             return;
         }
-        const RegionInfo::RouteState rs = region->GetRouteState();
-        if (rs == RegionInfo::RouteState::NORMAL) {
+        const RegionInfo::PageRelocate rs = region->GetPageRelocate();
+        if (rs == RegionInfo::PageRelocate::NORMAL) {
             return;
         }
         if (predicateSaidStale) {

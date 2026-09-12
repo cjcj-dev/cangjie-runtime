@@ -536,7 +536,7 @@ public:
                          "live=%zu residual=%zu validObjs=%zu markedObjs=%zu route=%u BYPASS=1",
                          region, start, alloc, end, region->GetRegionType(),
                          static_cast<unsigned>(region->IsYoungRegion()), region->GetLiveByteCount(), residual,
-                         validObjs, markedObjs, static_cast<unsigned>(region->GetRouteState()));
+                         validObjs, markedObjs, static_cast<unsigned>(region->GetPageRelocate()));
                 }
             }
         }
@@ -784,8 +784,8 @@ public:
         if (fromRegionInfo == nullptr) {
             return false;
         }
-        RegionInfo::RouteState rs = fromRegionInfo->GetRouteState();
-        return rs == RegionInfo::RouteState::FORWARDED || rs == RegionInfo::RouteState::COMPACTED;
+        RegionInfo::PageRelocate rs = fromRegionInfo->GetPageRelocate();
+        return rs == RegionInfo::PageRelocate::FORWARDED || rs == RegionInfo::PageRelocate::COMPACTED;
     }
 
     PublishedRoute FindPublishedRoute(BaseObject* fromObj, RegionInfo* fromRegionInfo)
@@ -823,20 +823,20 @@ public:
                  "[GCV2][ghost-softnull] region=%p start=%#zx live=%zu route=%u young=%u "
                  "auth=%u — RouteRegion soft-miss (ghost cleared or never installed)",
                  fromRegionInfo, fromRegionInfo->GetRegionStart(), fromRegionInfo->GetLiveByteCount(),
-                 static_cast<unsigned>(fromRegionInfo->GetRouteState()),
+                 static_cast<unsigned>(fromRegionInfo->GetPageRelocate()),
                  static_cast<unsigned>(fromRegionInfo->IsYoungRegion()),
                  static_cast<unsigned>(fromRegionInfo->IsLiveCountAuthoritative()));
             return false;
         }
         do {
-            RegionInfo::RouteState oldState = fromRegionInfo->GetRouteState();
-            if (oldState == RegionInfo::RouteState::ROUTED || oldState == RegionInfo::RouteState::FORWARDED) {
+            RegionInfo::PageRelocate oldState = fromRegionInfo->GetPageRelocate();
+            if (oldState == RegionInfo::PageRelocate::ROUTED || oldState == RegionInfo::PageRelocate::FORWARDED) {
                 return true;
             }
-            if (oldState == RegionInfo::RouteState::COMPACTED) {
+            if (oldState == RegionInfo::PageRelocate::COMPACTED) {
                 return false;
             }
-            if (oldState == RegionInfo::RouteState::ROUTING) {
+            if (oldState == RegionInfo::PageRelocate::ROUTING) {
                 if (!mayWait) return false;
                 sched_yield();
                 continue;
@@ -848,11 +848,11 @@ public:
                 // RouteOrCompactRegionImpl reads GetLiveByteCount / VisitLiveObjects next.
 
                 if (RouteOrCompactRegionImpl(fromRegionInfo)) {
-                    fromRegionInfo->SetRouteState(RegionInfo::RouteState::ROUTED);
+                    fromRegionInfo->SetPageRelocate(RegionInfo::PageRelocate::ROUTED);
                     return true;
                 } else {
-                    if (fromRegionInfo->GetRouteState() != RegionInfo::RouteState::FORWARDABLE) {
-                        fromRegionInfo->SetRouteState(RegionInfo::RouteState::COMPACTED);
+                    if (fromRegionInfo->GetPageRelocate() != RegionInfo::PageRelocate::FORWARDABLE) {
+                        fromRegionInfo->SetPageRelocate(RegionInfo::PageRelocate::COMPACTED);
                     }
                     return false;
                 }

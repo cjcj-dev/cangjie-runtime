@@ -146,17 +146,17 @@ size_t RegionInfo::UnitInfo::GetUnitIdxAtOOB(uintptr_t allocAddr)
         ra0, s0, ra1, s1, ra2, s2);
     return 0;
 }
-RegionInfo::RouteState RegionInfo::GetRouteState() const
+RegionInfo::PageRelocate RegionInfo::GetPageRelocate() const
 {
-    const uint64_t snapshot = metadata.routeStateSnapshot.load(std::memory_order_acquire);
+    const uint64_t snapshot = metadata.pageRelocateSnapshot.load(std::memory_order_acquire);
 #if defined(MRT_GC_UNIT_TESTS)
-    RunRouteStateReadTestHook(const_cast<RegionInfo*>(this));
+    RunPageRelocateReadTestHook(const_cast<RegionInfo*>(this));
 #endif
-    const RouteState state = RouteStateFromSnapshot(snapshot);
-    const RegionLifeId stamp = RouteLifeFromSnapshot(snapshot);
+    const PageRelocate state = PageRelocateFromSnapshot(snapshot);
+    const RegionLifeId stamp = PageRelocateLifeFromSnapshot(snapshot);
     const RegionLifeId current = GetRegionLifeId();
     if (stamp != current) {
-        return RouteState::NORMAL;
+        return PageRelocate::NORMAL;
     }
     return state;
 }
@@ -166,8 +166,8 @@ std::atomic<size_t> RegionInfo::dispelGhostCount { 0 };
 #if defined(MRT_GC_UNIT_TESTS)
 std::atomic<RegionInfo::GhostLookupTestHook> RegionInfo::ghostLookupTestHook { nullptr };
 std::atomic<size_t> RegionInfo::ghostLookupTestHookCalls { 0 };
-std::atomic<RegionInfo::RouteStateReadTestHook> RegionInfo::routeStateReadTestHook { nullptr };
-std::atomic<size_t> RegionInfo::routeStateReadTestHookCalls { 0 };
+std::atomic<RegionInfo::PageRelocateReadTestHook> RegionInfo::pageRelocateReadTestHook { nullptr };
+std::atomic<size_t> RegionInfo::pageRelocateReadTestHookCalls { 0 };
 
 void RegionInfo::SetGhostLookupTestHook(GhostLookupTestHook hook)
 {
@@ -189,22 +189,22 @@ void RegionInfo::RunGhostLookupTestHook(RegionInfo* region)
     }
 }
 
-void RegionInfo::SetRouteStateReadTestHook(RouteStateReadTestHook hook)
+void RegionInfo::SetPageRelocateReadTestHook(PageRelocateReadTestHook hook)
 {
-    routeStateReadTestHookCalls.store(0, std::memory_order_relaxed);
-    routeStateReadTestHook.store(hook, std::memory_order_release);
+    pageRelocateReadTestHookCalls.store(0, std::memory_order_relaxed);
+    pageRelocateReadTestHook.store(hook, std::memory_order_release);
 }
 
-size_t RegionInfo::RouteStateReadTestHookCalls()
+size_t RegionInfo::PageRelocateReadTestHookCalls()
 {
-    return routeStateReadTestHookCalls.load(std::memory_order_acquire);
+    return pageRelocateReadTestHookCalls.load(std::memory_order_acquire);
 }
 
-void RegionInfo::RunRouteStateReadTestHook(RegionInfo* region)
+void RegionInfo::RunPageRelocateReadTestHook(RegionInfo* region)
 {
-    RouteStateReadTestHook hook = routeStateReadTestHook.load(std::memory_order_acquire);
+    PageRelocateReadTestHook hook = pageRelocateReadTestHook.load(std::memory_order_acquire);
     if (hook != nullptr) {
-        routeStateReadTestHookCalls.fetch_add(1, std::memory_order_relaxed);
+        pageRelocateReadTestHookCalls.fetch_add(1, std::memory_order_relaxed);
         hook(region);
     }
 }
@@ -1290,8 +1290,8 @@ void RegionManager::ExpireKeptFromPreviousCycle()
             if (region == nullptr || !region->IsForwardingDone()) {
                 return;
             }
-            const RegionInfo::RouteState rs = region->GetRouteState();
-            if (rs == RegionInfo::RouteState::FORWARDED || rs == RegionInfo::RouteState::COMPACTED) {
+            const RegionInfo::PageRelocate rs = region->GetPageRelocate();
+            if (rs == RegionInfo::PageRelocate::FORWARDED || rs == RegionInfo::PageRelocate::COMPACTED) {
                 // After-copy Exempt parks FORWARDED+done on unmovableFrom.
                 // Keep its receipt through ONE subsequent mark/ref-fix closure
                 // (ab0e2b397). The next ExpireKept after that closure retires
@@ -1549,7 +1549,7 @@ bool ClaimFromRegion(RegionList& fromList, RegionInfo* del, RegionInfo::RegionTy
         return true;
     }
     const unsigned t = static_cast<unsigned>(del->GetRegionType());
-    const unsigned rs = static_cast<unsigned>(del->GetRouteState());
+    const unsigned rs = static_cast<unsigned>(del->GetPageRelocate());
     LOG(RTLOG_ERROR, "[GCV2][isfromreg] site=%s skip type=%u route=%u young=%u", site, t, rs,
         static_cast<unsigned>(del->IsYoungRegion()));
     CHECK_DETAIL(del->GetRegionType() == RegionInfo::RegionType::RAW_POINTER_PINNED_REGION ||
@@ -1669,7 +1669,7 @@ size_t RegionManager::ExemptFromRegions()
         if (kFreeEmptyAtCSetSelect && liveBytes == 0 && rawPtrCnt == 0 &&
             !fromRegion->HasMarkStartAllocGap() && !fromRegion->IsYoungRegion()) {
             RegionInfo* del = fromRegion;
-            const unsigned rs = static_cast<unsigned>(del->GetRouteState());
+            const unsigned rs = static_cast<unsigned>(del->GetPageRelocate());
             const unsigned ke = del->IsKnownEmpty(del->GetMarkView<Generation::Old>()) ? 1u : 0u;
             size_t residual = 0;
             size_t residualFwd = 0;
@@ -2047,7 +2047,7 @@ RegionInfo* RegionManager::TakeRegion(size_t num, RegionInfo::UnitRole type, boo
                                         head->GetLiveByteCount(),
                                         static_cast<unsigned int>(head->IsGhostFromRegion()),
                                         static_cast<unsigned int>(head->GetRegionType()),
-                                        static_cast<unsigned int>(head->GetRouteState()));
+                                        static_cast<unsigned int>(head->GetPageRelocate()));
             // promodomain obligation①: undischarged flip-promoted region must not ClearUnits.
             PromotedRegionDomain::CheckNotUndischargedForReuse(head, "TakeRegion.garbage_reuse");
             // fwdinflight: the reuse edge. ClearUnits zeroes the payload with no region
@@ -2357,7 +2357,7 @@ bool VerifyForwardingReceiptsClosed(RegionInfo* region, const char* site)
                      "%s receipt gap region=%p exactStart=%#zx answer=%u cause=%u route=%u fwdDone=%u refs=%d copy=%d",
                      site, region, static_cast<size_t>(from), static_cast<unsigned>(lookup.answer),
                      static_cast<unsigned>(lookup.unavailableCause),
-                     static_cast<unsigned>(region->GetRouteState()),
+                     static_cast<unsigned>(region->GetPageRelocate()),
                      static_cast<unsigned>(region->IsForwardingDone()), region->ForwardingRefCount(),
                       region->CopyInflightWord());
         if (hit) {
@@ -2366,7 +2366,7 @@ bool VerifyForwardingReceiptsClosed(RegionInfo* region, const char* site)
     }
     CHECK_DETAIL(receipts == survivors,
                  "%s receipt count mismatch region=%p survivors=%zu receipts=%zu route=%u fwdDone=%u refs=%d copy=%d",
-                 site, region, survivors, receipts, static_cast<unsigned>(region->GetRouteState()),
+                 site, region, survivors, receipts, static_cast<unsigned>(region->GetPageRelocate()),
                  static_cast<unsigned>(region->IsForwardingDone()), region->ForwardingRefCount(),
                   region->CopyInflightWord());
     return true;
@@ -2404,7 +2404,7 @@ void RegionManager::ExemptFromRegion(RegionInfo* region)
             LOG(RTLOG_ERROR,
                 "[GCV2][exempt-kept] n=%zu region=%p start=%#zx route=%u live=%zu identity=%zu",
                 n, region, region->GetRegionStart(),
-                static_cast<unsigned>(region->GetRouteState()), region->GetLiveByteCount(), identityReceipts);
+                static_cast<unsigned>(region->GetPageRelocate()), region->GetLiveByteCount(), identityReceipts);
         }
         region->MarkForwardingDone();
     }
@@ -2420,9 +2420,9 @@ bool IncompleteRouteUnpublished(RegionInfo* region)
     if (region->IsForwardingDone()) {
         return false;
     }
-    const RegionInfo::RouteState rs = region->GetRouteState();
-    return rs == RegionInfo::RouteState::FORWARDABLE || rs == RegionInfo::RouteState::ROUTING ||
-        rs == RegionInfo::RouteState::ROUTED;
+    const RegionInfo::PageRelocate rs = region->GetPageRelocate();
+    return rs == RegionInfo::PageRelocate::FORWARDABLE || rs == RegionInfo::PageRelocate::ROUTING ||
+        rs == RegionInfo::PageRelocate::ROUTED;
 }
 } // namespace
 
@@ -2474,7 +2474,7 @@ void RegionManager::FinishIncompleteFromRegions()
                                            RegionInfo::RegionType::LONE_FROM_REGION);
         }
         const bool canForward = region->IsLoneFromRegion() ||
-            (region->IsThreadLocalRegion() && (region->IsRoutingState() || region->IsCompacted()));
+            (region->IsThreadLocalRegion() && (region->IsPageRelocateClaimed() || region->IsCompacted()));
         if (canForward) {
             if (young) {
                 ForwardRegion<Generation::Young>(region);
@@ -2523,7 +2523,7 @@ void RegionManager::FinishIncompleteFromRegions()
         CHECK_DETAIL(!IncompleteRouteUnpublished(region),
                      "[GCV2][zombie] fourth state region=%p start=%#zx route=%u done=%u type=%u live=%zu "
                      "— cycle-end from-page not in {FORWARDED,COMPACTED,Exempt-kept}",
-                     region, region->GetRegionStart(), static_cast<unsigned>(region->GetRouteState()),
+                     region, region->GetRegionStart(), static_cast<unsigned>(region->GetPageRelocate()),
                      static_cast<unsigned>(region->IsForwardingDone()),
                      static_cast<unsigned>(region->GetRegionType()), region->GetLiveByteCount());
     }
@@ -2538,9 +2538,9 @@ void RegionManager::CollectFromSpaceGarbage()
     static std::atomic<size_t> g_fromGarbageSkip{ 0 };
     RegionInfo* region = fromRegionList.TakeHeadRegion();
     while (region != nullptr) {
-        const RegionInfo::RouteState rs = region->GetRouteState();
-        const bool complete = rs == RegionInfo::RouteState::FORWARDED ||
-            rs == RegionInfo::RouteState::COMPACTED || region->IsForwardingDone();
+        const RegionInfo::PageRelocate rs = region->GetPageRelocate();
+        const bool complete = rs == RegionInfo::PageRelocate::FORWARDED ||
+            rs == RegionInfo::PageRelocate::COMPACTED || region->IsForwardingDone();
         if (!complete) {
             const size_t n = g_fromGarbageSkip.fetch_add(1, std::memory_order_relaxed) + 1;
             if (n <= 8 || (n & (n - 1)) == 0) {
@@ -2747,8 +2747,8 @@ void RegionManager::DumpRegionStats(const char* msg) const
         if (region == nullptr || !region->IsForwardingDone()) {
             return;
         }
-        const RegionInfo::RouteState rs = region->GetRouteState();
-        if (rs == RegionInfo::RouteState::FORWARDED || rs == RegionInfo::RouteState::COMPACTED) {
+        const RegionInfo::PageRelocate rs = region->GetPageRelocate();
+        if (rs == RegionInfo::PageRelocate::FORWARDED || rs == RegionInfo::PageRelocate::COMPACTED) {
             return;
         }
         ++keptRegions;
@@ -3025,7 +3025,7 @@ static void FillPublishedRouteGaps(RegionInfo* fromRegion)
 
 bool RegionManager::RouteOrCompactRegionImpl(RegionInfo* region)
 {
-    CHECK(region->IsRoutingState());
+    CHECK(region->IsPageRelocateClaimed());
     CHECK_DETAIL(region->GetRawPointerObjectCount() <= 0, "pinned region shouldn't be moved");
 
     // Ordinary product flow freezes starts in PrepareForwardableRegion. Keep
@@ -3079,7 +3079,7 @@ bool RegionManager::RouteOrCompactRegionImpl(RegionInfo* region)
         if (toRegion1 == nullptr) {
             auto owner = ForwardingTable::RetainPageOwner(region);
             if (owner && ZForwardingLife::CurrentPageWork() != owner.get()) {
-                region->SetRouteState(RegionInfo::RouteState::FORWARDABLE);
+                region->SetPageRelocate(RegionInfo::PageRelocate::FORWARDABLE);
                 return false;
             }
             // routedest: the immune arm. This plan names the from-region as its own
@@ -3167,7 +3167,7 @@ bool RegionManager::RouteOrCompactRegionImpl(RegionInfo* region)
         auto owner = ForwardingTable::RetainPageOwner(region);
         if (owner && ZForwardingLife::CurrentPageWork() != owner.get()) {
             buffer->ClearRegion();
-            region->SetRouteState(RegionInfo::RouteState::FORWARDABLE);
+            region->SetPageRelocate(RegionInfo::PageRelocate::FORWARDABLE);
             return false;
         }
         // Publish the split plan before Compact so leftover objects land at GetRoute dests.
@@ -3499,7 +3499,7 @@ template<Generation G>
 void RegionManager::ForwardRegion(RegionInfo* region)
 {
     CHECK_DETAIL(region->IsFromRegion() || region->IsLoneFromRegion() || (region->IsThreadLocalRegion() &&
-        (region->IsRoutingState() || region->IsCompacted())), "region type %u", region->GetRegionType());
+        (region->IsPageRelocateClaimed() || region->IsCompacted())), "region type %u", region->GetRegionType());
 
     DLOG(FORWARD, "try forward region %p @[0x%zx+%zu, 0x%zx) type %u, live bytes %zu",
         region, region->GetRegionStart(), region->GetRegionAllocatedSize(), region->GetRegionEnd(),
@@ -3537,9 +3537,9 @@ void RegionManager::ForwardRegion(RegionInfo* region)
     // the two cjpmnull classes — residual live bytes, or a published plan
     // that has not been copied (route=3). live==0 FORWARDABLE is true dead.
     {
-        RegionInfo::RouteState rsKeep = region->GetRouteState();
-        const bool incompleteRoute = rsKeep == RegionInfo::RouteState::ROUTING ||
-            rsKeep == RegionInfo::RouteState::ROUTED;
+        RegionInfo::PageRelocate rsKeep = region->GetPageRelocate();
+        const bool incompleteRoute = rsKeep == RegionInfo::PageRelocate::ROUTING ||
+            rsKeep == RegionInfo::PageRelocate::ROUTED;
         const bool liveResidual = region->GetLiveByteCount() > 0;
         // hangfloor: young neverExamined×keep fills the heap. Old from-pages
         // with payload are the 59-class (route=1 liveinfo_null, live-slots>0).
@@ -3570,7 +3570,7 @@ void RegionManager::ForwardRegion(RegionInfo* region)
                 "[GCV2][fwd-unmarked-keep] n=%zu region=%p start=%#zx alloc=%#zx "
                 "route=%u live=%zu — ExemptFromRegion (not marked this cycle)",
                 n, region, region->GetRegionStart(), region->GetRegionAllocPtr(),
-                static_cast<unsigned>(region->GetRouteState()), region->GetLiveByteCount());
+                static_cast<unsigned>(region->GetPageRelocate()), region->GetLiveByteCount());
         }
         if (youngRegion && StayYoungThisCycle(region)) {
             EnlistStayYoungSurvivor(region);
@@ -3844,7 +3844,7 @@ void RegionManager::ForwardRegion(RegionInfo* region)
     {
         // zRelocate.cpp:1137-1152: the page worker finishes objects then
         // mark_done last (ForwardClaimedPage). Do not wait for own done here.
-        region->SetRouteState(RegionInfo::RouteState::FORWARDED);
+        region->SetPageRelocate(RegionInfo::PageRelocate::FORWARDED);
         FillPublishedRouteGaps(region);
         // zRelocate.cpp:1152 — last act after every object on the page is relocated.
         VerifyForwardingReceiptsClosed(region, "ForwardRegion");

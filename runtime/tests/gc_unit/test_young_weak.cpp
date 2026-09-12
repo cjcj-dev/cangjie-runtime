@@ -195,7 +195,7 @@ ValueRootRoute PrepareValueRootRoute(GcHeapFixture& fx, bool destinationYoung)
     route.source->AddLiveByteCount(route.from->GetSize());
     route.source->PrepareForwardableRegion(route.source->GetMarkView<Generation::Old>());
     route.source->RecordRouteStart(sourceOffset);
-    route.source->SetRouteState(RegionInfo::RouteState::FORWARDED);
+    route.source->SetPageRelocate(RegionInfo::PageRelocate::FORWARDED);
     route.from->SetStateCode(ObjectState::FORWARDED);
     ForwardingTable::Publication publication = ForwardingTable::EnsurePublicationBeforeCopy(
         route.source, reinterpret_cast<MAddress>(route.from));

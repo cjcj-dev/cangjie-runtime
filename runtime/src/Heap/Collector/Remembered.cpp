@@ -301,8 +301,8 @@ void NoteResolveRootNull(void* rootSlot, BaseObject* from, BaseObject* to, Regio
     GCPhase phase = Heap::GetHeap().GetGCPhase();
     unsigned fromRtype = fromRegion != nullptr ? static_cast<unsigned>(fromRegion->GetRegionType()) : 0xffu;
     unsigned toRtype = toRegion != nullptr ? static_cast<unsigned>(toRegion->GetRegionType()) : 0xffu;
-    unsigned fromRoute = fromRegion != nullptr ? static_cast<unsigned>(fromRegion->GetRouteState()) : 0xffu;
-    unsigned toRoute = toRegion != nullptr ? static_cast<unsigned>(toRegion->GetRouteState()) : 0xffu;
+    unsigned fromRoute = fromRegion != nullptr ? static_cast<unsigned>(fromRegion->GetPageRelocate()) : 0xffu;
+    unsigned toRoute = toRegion != nullptr ? static_cast<unsigned>(toRegion->GetPageRelocate()) : 0xffu;
     unsigned fromYoung = fromRegion != nullptr ? static_cast<unsigned>(fromRegion->IsYoungRegion()) : 0xffu;
     unsigned toYoung = toRegion != nullptr ? static_cast<unsigned>(toRegion->IsYoungRegion()) : 0xffu;
     int fromMarked = -1;

@@ -14,5 +14,5 @@
 #                                         scan time instead.
 #   RouteInfo.MissingDomainReturnsNullNotGarbage
 #                                         its positive arm asked for a destination from a region in
-#                                         RouteState NORMAL; a forwarding that was never installed
+#                                         PageRelocate NORMAL; a forwarding that was never installed
 #                                         has nothing to answer with (zForwarding.inline.hpp:248-252).
