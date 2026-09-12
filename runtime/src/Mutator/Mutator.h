@@ -197,11 +197,13 @@ public:
                 (void)sched_yield();
                 continue;
             }
+            MarkFlushBeginLeaveSaferegion();
             SetInSaferegion(SAFE_REGION_FALSE);
+            MarkFlushEndLeaveSaferegion();
             MutatorUnlock();
             break;
         }
-        if (UNLIKELY(HasAnySuspensionRequest())) {
+        if (UNLIKELY(HasAnySuspensionRequest() || MarkFlushPendingForCurrentThread())) {
             HandleSuspensionRequest();
         }
     }
@@ -529,9 +531,10 @@ public:
         if (UNLIKELY(tlData->buffer == nullptr)) {
             (void)AllocBuffer::GetOrCreateAllocBuffer();
         }
+        RegisterCurrentMarkFlushThread();
         SetEpochHandshakeLifecycle(EPOCH_HANDSHAKE_RUNNING);
         SetSafepointStatePtr(&tlData->safepointState);
-        SetSafepointActive(HasAnySuspensionRequest());
+        SetSafepointActive(HasAnySuspensionRequest() || MarkFlushPendingForCurrentThread());
         DoLeaveSaferegion();
     }
 
@@ -541,6 +544,7 @@ public:
         stackWatermark.OnPark();
         if (UNLIKELY((uwContext.GetUnwindContextStatus() == UnwindContextStatus::RISKY) || InSaferegion())) {
             SetInSaferegion(SaferegionState::SAFE_REGION_TRUE);
+            MarkFlushOnEnterSaferegion();
             SetEpochHandshakeLifecycle(EPOCH_HANDSHAKE_PARKED);
             return;
         }
@@ -561,6 +565,7 @@ public:
         }
 #endif // platform
         SetInSaferegion(SaferegionState::SAFE_REGION_TRUE);
+        MarkFlushOnEnterSaferegion();
         SetEpochHandshakeLifecycle(EPOCH_HANDSHAKE_PARKED);
     }
 
@@ -572,11 +577,9 @@ public:
         foreignThreadInfo.isForeignThread = true;
         foreignThreadInfo.isExit = false;
         foreignThreadInfo.allocBuffer = ThreadLocal::GetAllocBuffer();
-        markFlushAllocBuffer = foreignThreadInfo.allocBuffer;
         foreignThreadInfo.schedule = ThreadLocal::GetThreadLocalData()->schedule;
+        RegisterCurrentMarkFlushThread();
     }
-
-    void SetMarkFlushAllocBuffer(AllocBuffer* buffer) { markFlushAllocBuffer = buffer; }
 #if defined(MRT_TESTABLE_INTERNALS)
     void SetStoreBarrierRememberedSetForTest(RememberedSet* rememberedSet)
     {
@@ -611,8 +614,14 @@ public:
         if (rememberedSet == nullptr) {
             rememberedSet = &Heap::GetHeap().GetRememberedSet();
         }
-        if (flushStoreBarrier && markFlushAllocBuffer != nullptr && rememberedSet->IsInitialized()) {
-            markFlushAllocBuffer->GetStoreBarrierBuffer().Flush(*rememberedSet);
+        AllocBuffer* buffer = nullptr;
+        if (flushStoreBarrier && Mutator::GetMutator() == this) {
+            buffer = ThreadLocal::GetAllocBuffer();
+        } else if (flushStoreBarrier && IsForeignThread()) {
+            buffer = foreignThreadInfo.allocBuffer;
+        }
+        if (buffer != nullptr && rememberedSet->IsInitialized()) {
+            buffer->GetStoreBarrierBuffer().Flush(*rememberedSet);
         }
     }
 
@@ -687,7 +696,6 @@ private:
         ScheduleHandle schedule = { nullptr };
     } foreignThreadInfo;
 
-    AllocBuffer* markFlushAllocBuffer = nullptr;
     RememberedSet* storeBarrierRememberedSet = nullptr;
 
     // Step-0 no-op epoch handshake state. Keep these fields at the end of Mutator's
