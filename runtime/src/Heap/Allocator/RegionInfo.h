@@ -1947,11 +1947,7 @@ public:
 
     static RegionInfo* GetRegionInfo(uint32_t idx)
     {
-        UnitInfo* unit = RegionInfo::UnitInfo::GetUnitInfo(idx);
-        if (LoadUnitRole(unit) == UnitRole::SUBORDINATE_UNIT) {
-            return unit->GetMetadata().ownerRegion;
-        }
-        return reinterpret_cast<RegionInfo*>(unit);
+        return TryGetRegionInfoAt(GetUnitAddress(idx));
     }
 
     // Safely query a heap address whose unit may no longer have a live owning region.
@@ -3979,13 +3975,9 @@ private:
         UnitMetadata metadata;
     };
 
-    // unitRole selects the ownerRegion/liveInfo payload, and its writers publish it with an acq_rel
-    // compare-exchange (UnitInfo::InitSubordinateUnit, InitRegionInfo below). Read it with
-    // acquire so that the selected payload read which follows in GetRegionInfo/GetRegionInfoAt/
-    // GetGhostFromRegionAt cannot be hoisted above the discriminator: a plain pair of loads may
-    // be reordered, or folded into an unconditional load plus a select, either of which would
-    // defeat the writer's ordering. On x86_64 an acquire load is the same instruction as a
-    // relaxed one, so this constrains the compiler and costs nothing at run time.
+    // The metadata role remains an ABI/ghost-lifetime discriminator. Current
+    // page ownership is published and read through pageOwners, independently
+    // of subordinate metadata placement.
     static UnitRole LoadUnitRole(UnitInfo* unit)
     {
         return static_cast<UnitRole>(unit->GetMetadata().unitRoleBitField.GetAtomicValue(0, BIT_LENGTH));
@@ -4017,18 +4009,9 @@ private:
         }
     }
 
-    // unitRole selects between the ownerRegion/liveInfo payloads and allocPtr/regionEnd:
-    // a reader that observes SUBORDINATE_UNIT dereferences metadata.ownerRegion (:530-546),
-    // and a reader that observes SMALL_SIZED_UNITS or LARGE_SIZED_UNITS treats this unit as a
-    // region head and reads metadata.regionEnd (IsValidRegion :1018-1022). This function both
-    // leaves the first state and enters the second, and the readers are not stopped by
-    // ScopedStopTheWorld -- the collector's own promotion walk (RegionManager.cpp:549-551) runs
-    // while the finalizer thread reclaims regions through here. So the role is moved to the
-    // neutral FREE_UNITS first, the payload is rewritten, and only then is the real role
-    // published. FREE_UNITS is safe to expose at any moment: it makes readers treat the unit as
-    // itself, and it is neither a valid region nor a subordinate one.
-    // SetUnitRole is an acq_rel compare-exchange (BitField::SetAtomicValue :46-58), so neither
-    // bracket can be reordered with the payload stores between them.
+    // Retire the previous metadata role before rewriting a page's state, then
+    // publish the initialized owner over every covered granule. Metadata-only
+    // readers retain the role protocol; address readers use the page table.
     void InitRegionInfo(size_t nUnit, UnitRole uClass)
     {
         CHECK(ContainsUnitRange(GetRegionStart(), nUnit * UNIT_SIZE));
