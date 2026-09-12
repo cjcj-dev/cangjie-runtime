@@ -419,12 +419,6 @@ public:
         return locked;
     }
 
-    // Probe-only: ghost preLiveBytes (product callers must hold a RouteTicket).
-    size_t GetPreLiveBytesInGhostRegionForProbe(MAddress address)
-    {
-        return GetPreLiveBytesInGhostRegion(address);
-    }
-
     RegionInfo()
     {
         metadata.allocPtr = reinterpret_cast<uintptr_t>(nullptr);
@@ -3820,21 +3814,6 @@ private:
     {
         std::lock_guard<std::mutex> lock(CompactRouteTableRetireMutex());
         RetiredCompactRouteTables().push_back({ table, CompactRouteTableGraceGeneration() });
-    }
-
-    // Product geometry only — reachable from GetRoute(RouteTicket). External product
-    // callers cannot reach preLiveBytes without a ticket (ROUTE_DOMAIN.md §2).
-    size_t GetPreLiveBytesInGhostRegion(MAddress address)
-    {
-        const ZForwarding::FromPageView* from = GetFromPageView();
-        DCHECK(from != nullptr && from->liveInfo != nullptr);
-        size_t offset = GetAddressOffset(address);
-        if (GetRouteMarkGeneration() == Generation::Young) {
-            MarkView<Generation::Young> view = GetRouteMarkView<Generation::Young>();
-            return from->liveInfo->GetPreLiveBytes(view, offset, GetGhostRegionSize());
-        }
-        MarkView<Generation::Old> view = GetRouteMarkView<Generation::Old>();
-        return from->liveInfo->GetPreLiveBytes(view, offset, GetGhostRegionSize());
     }
 
     ALWAYS_INLINE void CheckObjectSize(
