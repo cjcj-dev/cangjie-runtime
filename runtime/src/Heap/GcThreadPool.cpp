@@ -108,6 +108,8 @@ void GCWorkers::WorkerLoop(uint32_t id)
         TsanPosCtrlMaybeRace(id);
 #endif
         task->Work(id);
+        // ZMarkTask::work: publish both generations before reporting completion.
+        ThreadLocal::FlushCurrentThreadMarkStacks();
         lock.lock();
         --remainingWorkers;
         if (remainingWorkers == 0) {
@@ -120,6 +122,8 @@ void GCWorkers::WorkerLoop(uint32_t id)
 // mutex is released while waiting, so worker polls and external requests work.
 void GCWorkers::RunBatch(GCWorkerTask& task)
 {
+    // The coordinating GC thread cannot publish while waiting for this batch.
+    ThreadLocal::FlushCurrentThreadMarkStacks();
     std::unique_lock<std::mutex> lock(mutex);
     currentTask = &task;
     runningWorkers = activeWorkers;
@@ -336,6 +340,8 @@ void RuntimeWorkers::WorkerLoop(uint32_t id)
         Sanitizer::TsanAttachNativeThread();
 #endif
         task->Work(id);
+        // ZMarkTask::work: publish both generations before reporting completion.
+        ThreadLocal::FlushCurrentThreadMarkStacks();
         lock.lock();
         if (--remainingWorkers == 0) {
             completed.notify_one();
@@ -345,6 +351,7 @@ void RuntimeWorkers::WorkerLoop(uint32_t id)
 
 void RuntimeWorkers::Run(GCWorkerTask& task)
 {
+    ThreadLocal::FlushCurrentThreadMarkStacks();
     std::lock_guard<std::mutex> coordinator(coordinatorMutex);
     std::unique_lock<std::mutex> lock(mutex);
     currentTask = &task;

@@ -590,6 +590,7 @@ public:
         foreignThreadInfo.isForeignThread = true;
         foreignThreadInfo.isExit = false;
         foreignThreadInfo.allocBuffer = ThreadLocal::GetAllocBuffer();
+        foreignThreadInfo.tls = ThreadLocal::GetThreadLocalData();
         foreignThreadInfo.schedule = ThreadLocal::GetThreadLocalData()->schedule;
         RegisterCurrentMarkFlushThread();
     }
@@ -627,14 +628,14 @@ public:
         if (rememberedSet == nullptr) {
             rememberedSet = &Heap::GetHeap().GetRememberedSet();
         }
-        AllocBuffer* buffer = nullptr;
+        ThreadLocalData* tls = nullptr;
         if (flushStoreBarrier && Mutator::GetMutator() == this) {
-            buffer = ThreadLocal::GetAllocBuffer();
+            tls = ThreadLocal::GetThreadLocalData();
         } else if (flushStoreBarrier && IsForeignThread()) {
-            buffer = foreignThreadInfo.allocBuffer;
+            tls = foreignThreadInfo.tls;
         }
-        if (buffer != nullptr && rememberedSet->IsInitialized()) {
-            buffer->GetStoreBarrierBuffer().Flush(*rememberedSet);
+        if (tls != nullptr && tls->gcData != nullptr && rememberedSet->IsInitialized()) {
+            tls->gcData->storeBarrierBuffer.Flush(*rememberedSet);
         }
     }
 
@@ -707,6 +708,7 @@ private:
         bool isForeignThread = { false };
         bool isExit = { false };
         AllocBuffer* allocBuffer = { nullptr };
+        ThreadLocalData* tls = nullptr;
         ScheduleHandle schedule = { nullptr };
     } foreignThreadInfo;
 

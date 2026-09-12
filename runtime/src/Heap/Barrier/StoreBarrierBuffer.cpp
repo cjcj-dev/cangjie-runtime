@@ -164,14 +164,4 @@ void StoreBarrierBuffer::Discard()
     current = kStoreBarrierBufferLength;
 }
 
-void StoreBarrierBuffer::FlushAll(RememberedSet& rs)
-{
-    if (!kBufferStoreBarriers) {
-        return;
-    }
-    Heap::GetHeap().GetAllocator().VisitAllocBuffers([&rs](AllocBuffer& alloc) {
-        alloc.GetStoreBarrierBuffer().Flush(rs);
-    });
-}
-
 } // namespace MapleRuntime

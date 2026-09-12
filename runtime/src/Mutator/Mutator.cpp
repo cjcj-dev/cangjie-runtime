@@ -223,9 +223,6 @@ void Mutator::HandleSuspensionRequest()
         Handshake::Current().process_by_self();
         SetInSaferegion(SAFE_REGION_TRUE);
         MarkFlushOnEnterSaferegion();
-        if (MutatorManager::Instance().MarkFlushHandshakeActive() || MarkFlushPendingForCurrentThread()) {
-            (void)MutatorManager::Instance().AcknowledgeMarkFlushForCurrentThread();
-        }
         if (HasSuspensionRequest(SUSPENSION_FOR_GC_PHASE)) {
             TransitionGCPhase(true);
         } else if (HasSuspensionRequest(SUSPENSION_FOR_CPU_PROFILE)) {
@@ -911,12 +908,8 @@ static bool PushHeapRootIfPlausible(BaseObject* obj, const char* site, bool youn
 
         return false;
     }
-    AllocBuffer* buffer = AllocBuffer::GetOrCreateAllocBuffer();
-    if (follow) {
-        buffer->PushRoot(plain, young);
-    } else {
-        buffer->PushInvisibleRoot(plain, young);
-    }
+    auto& collector = static_cast<WCollector&>(Heap::GetHeap().GetCollector());
+    collector.PublishThreadRoot(plain, young, follow);
 
     return true;
 }

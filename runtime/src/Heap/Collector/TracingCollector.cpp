@@ -302,7 +302,7 @@ struct MajorMarkShared {
     MarkStripeSet& Stripes() { return domain->Stripes(); }
     MarkingSMR& Smr() { return domain->Smr(); }
     MarkTerminate& Terminate() { return domain->Terminate(); }
-    MarkThreadLocalStacks& Stacks(size_t workerId) { return domain->Stacks(workerId); }
+    MarkThreadLocalStacks& Stacks() { return domain->Stacks(); }
 
     size_t StripeFor(const MarkStackEntry& entry) const
     {
@@ -329,7 +329,7 @@ public:
 
     void Work(uint32_t workerId) override
     {
-        MarkContext local(shared.workerCount, workerId, shared.Stripes(), shared.Stacks(workerId));
+        MarkContext local(shared.workerCount, workerId, shared.Stripes(), shared.Stacks());
         size_t nNewlyMarked = 0;
         TracingCollector::WorkStack staging;
         (void)MarkEngine::FollowWork(local, shared.Smr(), shared.Stripes(), shared.Terminate(), workerId,
@@ -696,13 +696,8 @@ void TracingCollector::EnumStaticRoots(RootSet& rootSet) const
 
 void TracingCollector::MergeMutatorRoots(WorkStack& workStack)
 {
-    MutatorManager& mutatorManager = MutatorManager::Instance();
-    // hold mutator list lock to freeze mutator liveness, otherwise may access dead mutator fatally
-    mutatorManager.MutatorManagementWLock();
-    theAllocator.VisitAllocBuffers([&workStack](AllocBuffer& buffer) {
-        buffer.MergeRootsGeneration(workStack, false);
-    });
-    mutatorManager.MutatorManagementWUnlock();
+    (void)workStack;
+    (void)MutatorManager::Instance().HandshakeFlushMarkProducers(majorMarkDomain.get());
 }
 
 void TracingCollector::EnumAllExportRoots(RootSet &foreignRootsSet)
@@ -768,10 +763,9 @@ void TracingCollector::MarkOldObjectIfActive(BaseObject* object, bool gcThread) 
     // carries FollowOnly so old workers still traverse an already marked root.
     CHECK_DETAIL(majorMarkDomain != nullptr, "old mark domain must start before publication");
     MarkStripeSet& stripes = majorMarkDomain->Stripes();
-    MarkThreadLocalStacks publication(stripes.Count());
+    MarkThreadLocalStacks& publication = ThreadLocal::GetMarkStacks(*majorMarkDomain);
     publication.Push(stripes, stripes.StripeForAddress(reinterpret_cast<uintptr_t>(object)),
                      gcThread ? MarkStackEntry::FollowOnly(object) : MarkStackEntry::MarkAndFollow(object), true);
-    (void)publication.Flush(stripes, true);
 }
 
 size_t TracingCollector::RunMajorStripeMark(WorkStack& workStack, bool partial)
@@ -790,7 +784,7 @@ size_t TracingCollector::RunMajorStripeMark(WorkStack& workStack, bool partial)
     shared.partial = partial;
     shared.domain = majorMarkDomain.get();
 
-    MarkThreadLocalStacks seed(shared.Stripes().Count());
+    MarkThreadLocalStacks& seed = majorMarkDomain->Stacks();
     while (!workStack.empty()) {
         const MarkStackEntry entry = workStack.back();
         workStack.pop_back();
@@ -951,7 +945,6 @@ bool TracingCollector::FinishOldMark(WorkStack& workStack)
             ScopedStopTheWorld stw("old mark end", true, GC_PHASE_CLEAR_SATB_BUFFER);
             NoteMarkTerminatePause();
             const size_t before = stripes.Population();
-            StoreBarrierBuffer::FlushAll(Heap::GetHeap().GetRememberedSet());
             (void)MutatorManager::Instance().HandshakeFlushMarkProducers(majorMarkDomain.get());
             const size_t after = stripes.Population();
             NoteMarkTerminateFlushed(after >= before ? after - before : 0);
@@ -981,7 +974,8 @@ void TracingCollector::ConcurrentReMark(WorkStack& remarkStack)
 
 bool TracingCollector::FlushMarkProducers(MarkDomain* domain)
 {
-    bool flushed = MutatorManager::Instance().HandshakeFlushMarkProducers(domain);
+    bool flushed = domain != nullptr ? domain->TryTerminateFlush() :
+        MutatorManager::Instance().HandshakeFlushMarkProducers(nullptr);
     if (domain != nullptr) {
         flushed = domain->FlushStacks() || flushed || !domain->Stripes().IsEmpty();
     }

@@ -167,16 +167,9 @@ public:
     void VisitAllMutators(MutatorVisitor func);
     void VisitAllMutatorsExceptFinalizer(MutatorVisitor func);
     bool HandshakeFlushMarkProducers(class MarkDomain* domain);
+    // Waiting driver/finalizer threads service the same M4 operation queue.
+    bool MarkFlushHandshakeActive() const { return Handshake::Current().has_operation(); }
     bool AcknowledgeMarkFlushForCurrentThread();
-    bool AcknowledgeMarkFlushForTls(ThreadLocalData* tls);
-    class MarkDomain* MarkFlushDomain() const
-    {
-        return markFlushDomain.load(std::memory_order_acquire);
-    }
-    bool MarkFlushHandshakeActive() const
-    {
-        return markFlushHandshakeActive.load(std::memory_order_acquire) != 0;
-    }
     void RegisterMarkFlushThread(ThreadLocalData* tls);
     void UnregisterMarkFlushThread(ThreadLocalData* tls);
     bool TlsHasMarkFlushPending(ThreadLocalData* tls);
@@ -348,9 +341,6 @@ public:
 
     struct MarkFlushThread {
         ThreadLocalData* tls = nullptr;
-        std::mutex mutex;
-        std::atomic<int> inSafe = { 1 };
-        std::atomic<int> pending = { 0 };
         std::atomic<int> refs = { 0 };
         std::atomic<int> dying = { 0 };
         std::atomic<int> bufferLive = { 1 };
@@ -433,8 +423,6 @@ public:
     // keep them in the same participant inventory explicitly.
     std::mutex runtimeMutatorRegistryMutex;
     std::unordered_set<Mutator*> runtimeMutators;
-    std::atomic<int> markFlushHandshakeActive = { 0 };
-    std::atomic<class MarkDomain*> markFlushDomain = { nullptr };
     std::mutex markFlushThreadMutex;
     std::unordered_map<ThreadLocalData*, std::unique_ptr<MarkFlushThread>> markFlushThreads;
 

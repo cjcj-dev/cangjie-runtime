@@ -860,7 +860,7 @@ void WCollector::DoYoungGarbageCollection()
         // above drains into this same minor. Ask here, before the drain, how many D1 edges the
         // walk put back — the residual is what FYS=0 really loses. Observe only, default off.
 
-        StoreBarrierBuffer::FlushAll(rememberedSet);
+        (void)MutatorManager::Instance().HandshakeFlushMarkProducers(nullptr);
         // S5 flip only (YOUNG_CONCURRENT.md). ScanPreviousForMinor runs after
         // world-release with mark_follow (zRemembered.cpp:561-576).
         rememberedSet.FlipForMinor();
@@ -951,35 +951,21 @@ void WCollector::DoYoungGarbageCollection()
     auto produceYoungRoots = [&]() {
         // minortime: ③ root enum (alloc buffers + VisitMinorRoots)
         MRT_PHASE_TIMER("young.root_enum");
-        WorkStack enumRoots = NewWorkStack();
-        theAllocator.VisitAllocBuffers([&enumRoots](AllocBuffer& buffer) {
-            buffer.MergeRootsGeneration(enumRoots, true);
-        });
-        while (!enumRoots.empty()) {
-            const MarkStackEntry entry = enumRoots.back();
-            BaseObject* object = entry.object();
-            enumRoots.pop_back();
+        (void)MutatorManager::Instance().HandshakeFlushMarkProducers(youngMarkDomain.get());
+        VisitMinorRoots([this, &workStack, &currentMinorRoots, &allocationRoots](BaseObject* object) {
             if (Heap::IsHeapAddress(object)) {
                 allocationRoots.insert(object);
-            }
-            if (entry.follow()) {
-                PushYoungObject(object, workStack, "alloc_buffer");
-            } else if (Heap::IsHeapAddress(object)) {
-                workStack.push_back(MarkStackEntry::MarkOnly(object));
-            }
-        }
-        VisitMinorRoots([this, &workStack, &currentMinorRoots](BaseObject* object) {
-            if (Heap::IsHeapAddress(object)) {
                 RegionInfo* region = RegionInfo::TryGetRegionInfoAt(reinterpret_cast<MAddress>(object));
                 if (region != nullptr && !region->IsYoungRegion()) {
                     currentMinorRoots.insert(object);
                 }
             }
             PushYoungObject(object, workStack, "minor_root");
-        }, [&workStack, &currentMinorRoots](BaseObject* object) {
+        }, [&workStack, &currentMinorRoots, &allocationRoots](BaseObject* object) {
             if (!Heap::IsHeapAddress(object)) {
                 return;
             }
+            allocationRoots.insert(object);
             RegionInfo* region = RegionInfo::TryGetRegionInfoAt(reinterpret_cast<MAddress>(object));
             if (region != nullptr && !region->IsYoungRegion()) {
                 currentMinorRoots.insert(object);
@@ -987,7 +973,7 @@ void WCollector::DoYoungGarbageCollection()
             workStack.push_back(MarkStackEntry::MarkOnly(object));
         }, stackScanEpoch);
 #if defined(MRT_TESTABLE_INTERNALS)
-        NoteY2yAfterRootTestReceipt(enumRoots.size());
+        NoteY2yAfterRootTestReceipt(youngMarkDomain->Stripes().Population());
 #endif
     };
     // ZGC zGeneration.cpp:665-692: roots and follow are the single concurrent
@@ -1129,7 +1115,6 @@ void WCollector::DoYoungGarbageCollection()
             NoteMarkTerminatePauseProducers(buffer.YoungAllocBlackCount(),
                                             buffer.Y2yDirtyHolderCount() + buffer.Y2yDirtySlotCount());
 #endif
-            buffer.MergeRootsGeneration(workStack, true);
             buffer.MergeYoungAllocBlackFollow(workStack);
         });
         mergeY2yDirtyWork(workStack);
