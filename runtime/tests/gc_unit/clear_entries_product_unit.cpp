@@ -967,6 +967,57 @@ GC_TEST(ForwardingPublicationProduct, MutatorRuntimeEntryReachesCopyAdmission)
 }
 #endif
 
+GC_TEST(ForwardingNoGeometry, ForwardImplTryLockCopiesWithoutPrebuiltMapping)
+{
+    GcHeapFixture& fx = ProductFixture();
+    RelocationReceiptTestAccess::ReleaseListOwnership(RegionInfo::GetRegionInfo(4));
+    RelocationReceiptTestAccess::ReleaseListOwnership(RegionInfo::GetRegionInfo(3));
+    RegionInfo* region = RegionInfo::InitRegion(4, 1, RegionInfo::UnitRole::SMALL_SIZED_UNITS);
+    RegionInfo* destination = RegionInfo::InitRegion(3, 1, RegionInfo::UnitRole::SMALL_SIZED_UNITS);
+    GC_EXPECT_TRUE(region != nullptr && destination != nullptr);
+    region->SetRegionType(RegionInfo::RegionType::FROM_REGION);
+    destination->SetRegionType(RegionInfo::RegionType::THREAD_LOCAL_REGION);
+    BaseObject* from = fx.PlaceObject(region->GetRegionStart() + 64);
+    const size_t objectSize = from->GetSize();
+    BaseObject* seedTo = fx.PlaceObject(destination->GetRegionStart() + 64);
+    region->SetRegionAllocPtr(reinterpret_cast<MAddress>(from) + objectSize);
+    destination->SetRegionAllocPtr(reinterpret_cast<MAddress>(seedTo) + objectSize);
+    LiveInfo* live = fx.PlantLiveInfo(region);
+    RegionBitmap* bitmap = fx.PlantMarkBitmap<Generation::Old>(live, region->GetRegionSize());
+    (void)bitmap->MarkBits(region->GetAddressOffset(reinterpret_cast<MAddress>(from)),
+                           objectSize, region->GetRegionSize());
+    region->AddLiveByteCount(objectSize);
+    WCollector collector(Heap::GetHeap().GetAllocator(), Heap::GetHeap().GetCollectorResources());
+    collector.SetGCPhase(GCPhase::GC_PHASE_FORWARD);
+    RelocationReceiptTestAccess::BindCollector(Heap::GetHeap().GetCollectorResources(), &collector);
+    region->PrepareForwardableRegion(region->GetMarkView<Generation::Old>());
+    region->RecordRouteStart(region->GetAddressOffset(reinterpret_cast<MAddress>(from)));
+    region->SetRouteState(RegionInfo::RouteState::ROUTED);
+    AllocBuffer::GetOrCreateAllocBuffer()->SetRegion(destination);
+    ZForwardingLife::reset_copy_open(region->metadata.copyInflight);
+    const MAddress fromAddress = reinterpret_cast<MAddress>(from);
+    GC_EXPECT_EQ(ForwardingTable::FindTo(fromAddress), static_cast<MAddress>(0));
+    BaseObject* relocated = RelocationReceiptTestAccess::ForwardImpl(collector, from, region);
+    collector.SetGCPhase(GCPhase::GC_PHASE_IDLE);
+    RelocationReceiptTestAccess::BindCollector(Heap::GetHeap().GetCollectorResources(), nullptr);
+    AllocBuffer::GetOrCreateAllocBuffer()->ClearRegion();
+    const bool moved = relocated != nullptr && relocated != from;
+    const bool valid = relocated != nullptr && relocated->IsValidObject();
+    const bool published = ForwardingTable::FindTo(fromAddress) == reinterpret_cast<MAddress>(relocated);
+    const bool forwarded = from->IsForwarded();
+    ForwardingTable::ClearEntries(region->GetRegionStart(), region->GetRegionSize());
+    ForwardingTable::ReclaimRetired("gc-unit-forward-impl-trylock");
+    if (region->IsGhostFromRegion()) {
+        region->DispelGhostFromRegion();
+    }
+    region->metadata.liveInfo = nullptr;
+    fx.FreePlanted(live);
+    GC_EXPECT_TRUE(moved);
+    GC_EXPECT_TRUE(valid);
+    GC_EXPECT_TRUE(published);
+    GC_EXPECT_TRUE(forwarded);
+}
+
 GC_TEST(ForwardingPublicationProduct, LateWaitBackfillCannotReopenSealedGeneration)
 {
     GcHeapFixture& fx = ProductFixture();
@@ -3963,14 +4014,16 @@ GC_TEST(ForwardingPublicationProduct, PageWaitThenLookupReadsOriginalCompactRece
     buffer->SetRegion(routeDestination);
     GC_EXPECT_TRUE(manager.RouteRegion(region));
     GC_EXPECT_TRUE(region->GetRouteState() == RegionInfo::RouteState::ROUTED);
-    buffer->ClearRegion();
     RelocationRequestQueue& queue = manager.GetRelocationRequestQueue();
     queue.BeginWorkers(1);
 
     const auto seeded = queue.Add(region, from);
     manager.ForwardFromRegions<Generation::Old>();
+    routeDestination->SetRegionType(RegionInfo::RegionType::THREAD_LOCAL_REGION);
+    buffer->SetRegion(routeDestination);
     BaseObject* resolved = RelocationReceiptTestAccess::WaitRoutedTipReady(
         collector, liveObject, nullptr, region);
+    buffer->ClearRegion();
     const auto claimed = seeded.request;
     BaseObject* workerResult = reinterpret_cast<BaseObject*>(ForwardingTable::FindTo(from));
     const bool workerClosed = queue.PendingCount() == 0;
@@ -4029,14 +4082,16 @@ GC_TEST(ForwardingPublicationProduct, CompletedPageResolvesThroughForwardingTabl
     routeDestination->SetRegionType(RegionInfo::RegionType::THREAD_LOCAL_REGION);
     buffer->SetRegion(routeDestination);
     GC_EXPECT_TRUE(manager.RouteRegion(region));
-    buffer->ClearRegion();
     RelocationRequestQueue& queue = manager.GetRelocationRequestQueue();
     queue.BeginWorkers(1);
 
     const auto seeded = queue.Add(region, from);
     manager.ForwardFromRegions<Generation::Old>();
+    routeDestination->SetRegionType(RegionInfo::RegionType::THREAD_LOCAL_REGION);
+    buffer->SetRegion(routeDestination);
     BaseObject* resolved = RelocationReceiptTestAccess::WaitRoutedTipReady(
         collector, fromObject, nullptr, region);
+    buffer->ClearRegion();
     const auto claimed = seeded.request;
     BaseObject* workerResult = reinterpret_cast<BaseObject*>(ForwardingTable::FindTo(from));
     const bool workerClosed = queue.PendingCount() == 0;
