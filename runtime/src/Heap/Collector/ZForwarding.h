@@ -26,6 +26,8 @@
 
 namespace MapleRuntime {
 
+using RegionLifeId = uint64_t;
+
 class RegionInfo;
 class LiveInfo;
 
