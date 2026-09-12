@@ -16,3 +16,24 @@
 #                                         its positive arm asked for a destination from a region in
 #                                         RouteState NORMAL; a forwarding that was never installed
 #                                         has nothing to answer with (zForwarding.inline.hpp:248-252).
+#
+# P3 (zRelocate.cpp:354-412): WaitRoutedTipReady / CopyAdmission deleted. These
+# observation and page-wait cases still expect the old abort/wait logs; they
+# remain registered and fail until P4/P6 remap consumers rewrite them.
+ForwardingPublicationProduct.CompletedPageResolvesThroughForwardingTable
+ForwardingPublicationProduct.IncomingRefStopsBeforeDestinationStore
+ForwardingPublicationProduct.InsertThenReclaimStillServesWaitAndTryUpdate
+ForwardingPublicationProduct.LookupCausePublishedWithoutReceipt
+ForwardingPublicationProduct.MutatorRuntimeEntryReachesCopyAdmission
+ForwardingPublicationProduct.PageWaitThenLookupReadsOriginalCompactReceipt
+ForwardingPublicationProduct.PreForwardDerivedTaggedUnresolvedGhostFailsClosed
+ForwardingPublicationProduct.WaitObservationClosedReturn
+ForwardingPublicationProduct.WaitObservationIdentity
+ForwardingPublicationProduct.WaitObservationIneligibleIdentity
+ForwardingPublicationProduct.WaitObservationMovedReceiptIsQuiet
+ForwardingPublicationProduct.WaitObservationPublishedMiss
+ForwardingPublicationProduct.WaitObservationRequestIdentity
+ForwardingPublicationProduct.WaitObservationRetainRefusedIdentity
+ForwardingPublicationProduct.WaitObservationTerminalIdentity
+ForwardingPublicationProduct.WaitObservationUnpublishedIdentity
+RouteInfo.ExactStartCapabilityAcrossRouteStates
