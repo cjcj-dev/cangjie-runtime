@@ -972,8 +972,10 @@ void WCollector::DoYoungGarbageCollection()
             }
             workStack.push_back(MarkStackEntry::MarkOnly(object));
         }, stackScanEpoch);
+        // ZMarkYoungRootsTask::work publishes its own root stacks before follow.
+        (void)ThreadLocal::FlushMarkStacks(ThreadLocal::GetThreadLocalData(), *youngMarkDomain);
 #if defined(MRT_TESTABLE_INTERNALS)
-        NoteY2yAfterRootTestReceipt(youngMarkDomain->Stripes().Population());
+        NoteY2yAfterRootTestReceipt(youngMarkDomain->Stacks().Population());
 #endif
     };
     // ZGC zGeneration.cpp:665-692: roots and follow are the single concurrent

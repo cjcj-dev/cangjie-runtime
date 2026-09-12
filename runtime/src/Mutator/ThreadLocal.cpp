@@ -87,33 +87,28 @@ CleanThreadLocalData::CleanThreadLocalData()
 CleanThreadLocalData::~CleanThreadLocalData()
 {
     ThreadLocalData* local = ThreadLocal::GetThreadLocalData();
-    if (Runtime::CurrentRef() != nullptr) {
-        MutatorManager::Instance().UnregisterMarkFlushThread(local);
-    }
-    ThreadLocal::FlushCurrentThreadMarkStacks();
-    delete local->gcData;
-    local->gcData = nullptr;
     void* cache = local->threadCache;
     local->threadCache = nullptr;
 
     if (!ThreadLocal::TryGetRdLock()) {
-        // Runtime Fini already holds the write lock; PagePool may be torn down next.
-        // Process exit reclaims the last caches.
+        // Runtime shutdown owns the write lock; process exit reclaims TLS.
         return;
     }
-
+    if (Runtime::CurrentRef() != nullptr) {
+        if (!local->isCJProcessor && local->foreignCJThread != nullptr) {
+            MRT_StopSubScheduler(local->schedule);
+            CJForeignThreadExit(reinterpret_cast<CJThreadHandle>(local->foreignCJThread));
+        }
+        // Foreign exit is the last possible producer. Publish before removing
+        // the owner from the handshake inventory (ZMark::flush, zMark.cpp:998).
+        MutatorManager::Instance().UnregisterMarkFlushThread(local);
+        ThreadLocal::FlushCurrentThreadMarkStacks();
+    }
+    delete local->gcData;
+    local->gcData = nullptr;
     if (cache != nullptr) {
         delete reinterpret_cast<ThreadCache*>(cache);
     }
-
-    if (Runtime::CurrentRef() == nullptr ||
-        local->isCJProcessor || local->foreignCJThread == nullptr) {
-        ThreadLocal::UnlockRdLock();
-        return;
-    }
-
-    MRT_StopSubScheduler(local->schedule);
-    CJForeignThreadExit(reinterpret_cast<CJThreadHandle>(local->foreignCJThread));
     ThreadLocal::UnlockRdLock();
 }
 
