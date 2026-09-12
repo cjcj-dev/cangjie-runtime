@@ -419,5 +419,31 @@
     },
     "comparison_limits": "Same official compiler recipe and byte-identical gate scripts; new runtime and relinked ELF; historical core domain 16-31 vs current reserved 32-47. First-stop comparison only, not a controlled P2 causality or performance comparison."
   },
-  "comparison_limits": "Same official compiler recipe and byte-identical NW gate; new runtime and relinked ELF. Historical cores: pre-P2 16-31, post-P2 32-47; post-P3 reserved 0-15. Historical arms were not rerun. First-stop comparison only, not controlled P2/P3 causality or performance evidence."
+  "comparison_limits": "Same official compiler recipe and byte-identical NW gate; new runtime and relinked ELF. Historical cores: pre-P2 16-31, post-P2 32-47; post-P3 reserved 0-15. Historical arms were not rerun. First-stop comparison only, not controlled P2/P3 causality or performance evidence.",
+  "input_contract": {
+    "required_std_origin": "stage1-coloured",
+    "producer_issue": "cjcj#32",
+    "rebuild_issue": "cangjie-runtime#233",
+    "runtime_commit": "c86df5e9d9ed1b7bdfface915ad5b64ac7b20fd7",
+    "forbidden_static_std_sha256": [
+      "9619dc3e2b3ab335a340d9d7b2e6e86c8e0103704a152b953a20a56bf5eab9cb"
+    ],
+    "requirement": "Complete std install produced by stage1 with the coloured backend; official nightly static std archives are forbidden. stdlib-stage1 from bootstrap stage0 is uncoloured; the stage1-produced install is stdlib-stage2.",
+    "preflight_entry": "requalify.py",
+    "status": "NOT_RUN",
+    "reason": "负载链接了无色官方 std",
+    "blocked_by": "cjcj#32"
+  },
+  "linkage": {
+    "elf_sha256": "4930d5e7995f4c3b079689dfe042486c59d520e87cd78a753951c03a10e27bf6",
+    "std_origin": "official-nightly",
+    "static_std_archives": [
+      {
+        "path": "/root/sym_cangjie_runtime_233_implement_r5643268249/sdk/lib/linux_x86_64_cjnative/libcangjie-std-core.a",
+        "sha256": "9619dc3e2b3ab335a340d9d7b2e6e86c8e0103704a152b953a20a56bf5eab9cb"
+      }
+    ],
+    "record_scope": "Identified core archive from the retained linker map; sufficient to reject this ELF, not a complete accepted-closure manifest.",
+    "evidence": "local:/root/cj_build/reports/EVIDENCE-sym_cangjie_runtime_278_implement_r5643407596/link-map.txt:541"
+  }
 }
