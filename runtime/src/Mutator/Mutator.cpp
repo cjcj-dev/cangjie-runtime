@@ -326,14 +326,14 @@ bool Mutator::AcknowledgeEpochHandshake(uint64_t epoch, bool bySelf)
         CHECK_DETAIL(Heap::GetHeap().GetGCPhase() == GCPhase::GC_PHASE_ENUM,
                      "concurrent stack scan ack before ENUM barrier publication");
         size_t frames = 0;
-        bool scanned = GcPhaseEnum(GCPhase::GC_PHASE_ENUM, epoch, bySelf, &frames);
+        bool scanned = GcPhaseEnum(GCPhase::GC_PHASE_ENUM, MutatorManager::Instance().EpochHandshakeYoung(),
+                                  epoch, bySelf, &frames);
         MutatorManager::Instance().RecordEpochHandshakeStackScan(scanned, frames);
         if (scanned) {
             SetMutatorPhase(GCPhase::GC_PHASE_ENUM);
         }
     }
     ClearSuspensionFlag(SUSPENSION_FOR_EPOCH_HANDSHAKE);
-    SetSafepointActive(HasAnySuspensionRequest());
     MutatorManager::Instance().RecordEpochHandshakeAck(*this, epoch, bySelf);
     epochHandshakeCompletion.store(epoch, std::memory_order_release);
     epochHandshakeState.store(EPOCH_HANDSHAKE_ACKNOWLEDGED, std::memory_order_release);
@@ -896,7 +896,7 @@ static void StripRootObjectColour(ObjectRef& root)
     }
 }
 
-static bool PushHeapRootIfPlausible(BaseObject* obj, const char* site, bool follow = true)
+static bool PushHeapRootIfPlausible(BaseObject* obj, const char* site, bool young, bool follow = true)
 {
     BaseObject* plain = PlainRootObject(to_zaddress_unsafe(reinterpret_cast<MAddress>(obj)));
     if (!Heap::IsHeapAddress(plain)) {
@@ -909,16 +909,6 @@ static bool PushHeapRootIfPlausible(BaseObject* obj, const char* site, bool foll
         return false;
     }
     AllocBuffer* buffer = AllocBuffer::GetOrCreateAllocBuffer();
-    bool young = true;
-    MarkDomain* handshake = MutatorManager::Instance().MarkFlushDomain();
-    if (handshake != nullptr) {
-        young = handshake->Generation() == VerifyMarkingStacks::MarkingGeneration::YOUNG;
-    } else {
-        auto& collector = static_cast<WCollector&>(Heap::GetHeap().GetCollector());
-        if (collector.MajorMarkDomain() != nullptr && collector.YoungMarkDomain() == nullptr) {
-            young = false;
-        }
-    }
     if (follow) {
         buffer->PushRoot(plain, young);
     } else {
@@ -928,14 +918,14 @@ static bool PushHeapRootIfPlausible(BaseObject* obj, const char* site, bool foll
     return true;
 }
 
-static bool PushHeaderlessRecordField(BaseObject* record, const char* site)
+static bool PushHeaderlessRecordField(BaseObject* record, const char* site, bool young)
 {
     if (record == nullptr) {
         return false;
     }
     zaddress_unsafe word;
     memcpy(&word, record, sizeof(word));
-    return PushHeapRootIfPlausible(PlainRootObject(word), site);
+    return PushHeapRootIfPlausible(PlainRootObject(word), site, young);
 }
 
 // Argument-form struct-live: `root` holds a pointer to a headerless record
@@ -986,7 +976,7 @@ void VisitTaggedOopSlot(ObjectRef& root)
             }
             (*remappedBases)[obj] = PlainRootObject(root.LoadPlain());
         } else {
-            PushHeapRootIfPlausible(obj, "OopSlot");
+            PushHeapRootIfPlausible(obj, "OopSlot", MutatorManager::Instance().EpochHandshakeYoung());
         }
         return;
     }
@@ -998,7 +988,7 @@ void VisitTaggedOopSlot(ObjectRef& root)
         std::set<void*> once;
         PreForwardHeaderlessRecord(obj, collector, once);
     } else {
-        PushHeaderlessRecordField(obj, "OopSlot.headerless");
+        PushHeaderlessRecordField(obj, "OopSlot.headerless", MutatorManager::Instance().EpochHandshakeYoung());
     }
 }
 
@@ -1075,7 +1065,7 @@ bool Mutator::DrainStackWatermark(const RootVisitor& visitor, const RootVisitor&
     return complete;
 }
 
-bool Mutator::GcPhaseEnum(GCPhase newPhase, uint64_t stackScanEpoch, bool bySelf, size_t* scannedFrames)
+bool Mutator::GcPhaseEnum(GCPhase newPhase, bool young, uint64_t stackScanEpoch, bool bySelf, size_t* scannedFrames)
 {
     MutatorLock();
     auto& localFins = GetLocalFinalizers();
@@ -1085,36 +1075,36 @@ bool Mutator::GcPhaseEnum(GCPhase newPhase, uint64_t stackScanEpoch, bool bySelf
     MutatorUnlock();
     std::set<BaseObject*> rootSet;
     std::stack<BaseObject*> rootStack;
-    HeapSlotVisitor refVisitor = [&rootSet, &rootStack, this](HeapSlot<>& refFieldAddr) {
+    HeapSlotVisitor refVisitor = [&rootSet, &rootStack, this, young](HeapSlot<>& refFieldAddr) {
         // The containing object is stack allocated, so metadata exposes this word as a root slot.
         RootSlot& rootField = RootSlotAt(
             static_cast<void*>(&refFieldAddr)); // Stack-object field metadata denotes a root word.
         BaseObject* obj = PlainRootObject(rootField.LoadPlain());
-        if (PushHeapRootIfPlausible(obj, "GcPhaseEnum.ref")) {
+        if (PushHeapRootIfPlausible(obj, "GcPhaseEnum.ref", young)) {
 
             DLOG(ENUM, "enum stack root HeapSlot @%p: %p", &refFieldAddr, obj);
         } else if (IsStackAddr(reinterpret_cast<uintptr_t>(obj))) {
             if (IsHeaderedStackObject(obj)) {
                 CheckAndPush(obj, rootSet, rootStack, this);
             } else {
-                PushHeaderlessRecordField(obj, "GcPhaseEnum.ref.headerless");
+                PushHeaderlessRecordField(obj, "GcPhaseEnum.ref.headerless", young);
             }
         }
     };
 
-    RootVisitor visitor = [&rootSet, &rootStack, this, &refVisitor](ObjectRef& root) {
+    RootVisitor visitor = [&rootSet, &rootStack, this, &refVisitor, young](ObjectRef& root) {
         // Peel colour so IsHeapAddress/gate see the real address; leave plain in the slot
         // so mutator restore after STW does not reload a non-canonical pointer (si_code=128).
         StripRootObjectColour(root);
         BaseObject* obj = PlainRootObject(root.LoadPlain());
-        if (PushHeapRootIfPlausible(obj, "GcPhaseEnum.root")) {
+        if (PushHeapRootIfPlausible(obj, "GcPhaseEnum.root", young)) {
 
             DLOG(ENUM, "enum stack root @%p: %p", &root, obj);
         } else if (IsStackAddr(reinterpret_cast<uintptr_t>(obj))) {
             if (IsHeaderedStackObject(obj)) {
                 CheckAndPush(obj, rootSet, rootStack, this);
             } else {
-                PushHeaderlessRecordField(obj, "GcPhaseEnum.root.headerless");
+                PushHeaderlessRecordField(obj, "GcPhaseEnum.root.headerless", young);
             }
         } else if (Heap::IsHeapAddress(obj) &&
                    !Collector::PlausibleManagedObjectGate("GcPhaseEnum.interior", obj)) {
@@ -1122,7 +1112,7 @@ bool Mutator::GcPhaseEnum(GCPhase newPhase, uint64_t stackScanEpoch, bool bySelf
             // closure reaches the live array; leave the slot plain (not object-head).
             BaseObject* host = Collector::TryRecoverInteriorBase(obj);
             if (host != nullptr) {
-                (void)PushHeapRootIfPlausible(host, "GcPhaseEnum.interiorBase");
+                (void)PushHeapRootIfPlausible(host, "GcPhaseEnum.interiorBase", young);
 
                 DLOG(ENUM, "enum interior stack root @%p: interior=%p host=%p", &root, obj, host);
             } else {
@@ -1135,15 +1125,15 @@ bool Mutator::GcPhaseEnum(GCPhase newPhase, uint64_t stackScanEpoch, bool bySelf
             obj->ForEachRefField(refVisitor);
         }
     };
-    RootVisitor invisibleRootVisitor = [](ObjectRef& root) {
+    RootVisitor invisibleRootVisitor = [young](ObjectRef& root) {
         StripRootObjectColour(root);
         BaseObject* obj = PlainRootObject(root.LoadPlain());
-        (void)PushHeapRootIfPlausible(obj, "GcPhaseEnum.invisible", false);
+        (void)PushHeapRootIfPlausible(obj, "GcPhaseEnum.invisible", young, false);
     };
     // introot: Enum previously used VisitMutatorRoots → RootMap (reg/slot only), so
     // base/derived pairs never entered. VisitHeapReferences builds HeapReferenceMap and
     // visits derived; the derived visitor marks the base and keeps the derived slot plain.
-    DerivedPtrVisitor derivedVisitor = [](BasePtrType basePtr, DerivedSlot& derivedPtr) {
+    DerivedPtrVisitor derivedVisitor = [young](BasePtrType basePtr, DerivedSlot& derivedPtr) {
         BaseObject* base = PlainRootObject(basePtr);
         BaseObject* derivedObj = PlainRootObject(derivedPtr.LoadDerived());
         if (base != nullptr && derivedObj != nullptr &&
@@ -1154,7 +1144,7 @@ bool Mutator::GcPhaseEnum(GCPhase newPhase, uint64_t stackScanEpoch, bool bySelf
                           reinterpret_cast<MAddress>(derivedObj) - reinterpret_cast<MAddress>(base));
         }
         if (base != nullptr && Heap::IsHeapAddress(base)) {
-            (void)PushHeapRootIfPlausible(base, "GcPhaseEnum.derivedBase");
+            (void)PushHeapRootIfPlausible(base, "GcPhaseEnum.derivedBase", young);
 
         }
     };
@@ -1351,7 +1341,7 @@ inline void Mutator::HandleGCPhase(GCPhase newPhase)
 inline void Mutator::HandleGCPhase(GCPhase newPhase, bool bySelf)
 {
     if (newPhase == GCPhase::GC_PHASE_ENUM) {
-        GcPhaseEnum(newPhase);
+        GcPhaseEnum(newPhase, MutatorManager::Instance().EpochHandshakeYoung());
     } else if (newPhase == GCPhase::GC_PHASE_PREFORWARD) {
         GCPhasePreForward(newPhase);
     } else if (newPhase == GCPhase::GC_PHASE_CLEAR_SATB_BUFFER || newPhase == GCPhase::GC_PHASE_RECLAIM_SATB_NODE) {
@@ -1385,8 +1375,6 @@ void Mutator::TransitionToGCPhaseExclusive(GCPhase newPhase)
 void Mutator::TransitionToGCPhaseExclusive(GCPhase newPhase, bool bySelf)
 {
     HandleGCPhase(newPhase, bySelf);
-    SetSafepointActive(false);
-    // Clear mutator's suspend request after phase transition
     ClearSuspensionFlag(SUSPENSION_FOR_GC_PHASE);
     mutatorPhase.store(newPhase, std::memory_order_release); // handshake between mutator & mainGC thread
 }
@@ -1408,7 +1396,6 @@ inline void Mutator::HandleCpuProfile()
 void Mutator::TransitionToCpuProfileExclusive()
 {
     HandleCpuProfile();
-    SetSafepointActive(false);
     ClearSuspensionFlag(SUSPENSION_FOR_CPU_PROFILE);
 }
 
