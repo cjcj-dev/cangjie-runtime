@@ -22,6 +22,7 @@
 #include "Common/ScopedObjectAccess.h"
 #include "Common/ColourEncoding.h"
 #include "Heap.h"
+#include "Heap/Allocator/ForwardingTable.h"
 #include "Heap/Verify/AllocPhaseDiag.h"
 #include "Heap/Verify/MinorGCALot.h"
 #include "Heap/Verify/Zap.h"
@@ -40,9 +41,7 @@ bool RegionIsInRelocationSet(const RegionInfo* reg)
     if (reg->IsFromRegion() || reg->IsLoneFromRegion()) {
         return true;
     }
-    RegionInfo::RouteState rs = reg->GetRouteState();
-    return rs == RegionInfo::RouteState::FORWARDABLE || rs == RegionInfo::RouteState::ROUTING ||
-        rs == RegionInfo::RouteState::ROUTED;
+    return ForwardingTable::GetEntries(reg->GetRegionStart()) != nullptr && !reg->IsForwardingDone();
 }
 
 void NoteAllocIntoCSet(RegionInfo* reg, const char* where)
