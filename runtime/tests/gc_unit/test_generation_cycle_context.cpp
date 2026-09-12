@@ -111,7 +111,10 @@ void* Exercise(void*)
     Expect(resources.GetGCThreadCount(false) == static_cast<int>(parallel), "worker_parallel_budget");
     auto youngWorkers0 = resources.GetWorkers(GCCycleGeneration::YOUNG).GetSnapshot();
     auto oldWorkers0 = resources.GetWorkers(GCCycleGeneration::OLD).GetSnapshot();
-    Expect(youngWorkers0.capacity == parallel && oldWorkers0.capacity == parallel, "worker_generation_capacity");
+    Expect(youngWorkers0.capacity == concurrent && oldWorkers0.capacity == concurrent, "worker_generation_capacity");
+    // ZWorkers initializes each generation with all concurrent workers active.
+    Expect(youngWorkers0.activeWorkers == concurrent && oldWorkers0.activeWorkers == concurrent,
+           "worker_startup_active_budget");
     Expect(!youngWorkers0.cycleActive && !oldWorkers0.cycleActive, "worker_startup_inactive");
     std::printf("WORKER_INPUT cpu=%zu heap=%zu region=%zu concurrent=%zu parallel=%zu\n",
                 cpuCount, heapBytes, regionBytes, concurrent, parallel);
@@ -174,6 +177,7 @@ void* Exercise(void*)
             .GetSnapshot();
         std::printf("WORKER_PREPARED generation=%s active=%u other_active=%u workers=%u\n",
                     young ? "young" : "old", current.cycleActive, other.cycleActive, current.activeWorkers);
+        Expect(current.activeWorkers == concurrent, "worker_prepared_concurrent_budget");
         Expect(current.cycleActive, young ? "worker_young_active_during_cycle" : "worker_old_active_during_cycle");
         Expect(!other.cycleActive, "worker_other_inactive_during_cycle");
         if (young) {
@@ -246,7 +250,7 @@ void* Exercise(void*)
     collector.RequestGC(GC_REASON_USER, false);
     auto youngWorkers1 = resources.GetWorkers(GCCycleGeneration::YOUNG).GetSnapshot();
     auto oldWorkers1 = resources.GetWorkers(GCCycleGeneration::OLD).GetSnapshot();
-    Expect(youngWorkers1.activeWorkers == parallel && oldWorkers1.activeWorkers == concurrent,
+    Expect(youngWorkers1.activeWorkers == concurrent && oldWorkers1.activeWorkers == concurrent,
            "worker_major_phase_budget");
     Expect(!youngWorkers1.cycleActive && !oldWorkers1.cycleActive, "worker_major_completion");
     auto y1 = collector.GetCycleSnapshot(GCCycleGeneration::YOUNG);
@@ -257,7 +261,7 @@ void* Exercise(void*)
     collector.RequestGC(GC_REASON_YOUNG, false);
     auto youngWorkers2 = resources.GetWorkers(GCCycleGeneration::YOUNG).GetSnapshot();
     auto oldWorkers2 = resources.GetWorkers(GCCycleGeneration::OLD).GetSnapshot();
-    Expect(youngWorkers2.activeWorkers == parallel && !youngWorkers2.cycleActive, "worker_minor_phase_budget");
+    Expect(youngWorkers2.activeWorkers == concurrent && !youngWorkers2.cycleActive, "worker_minor_phase_budget");
     Expect(oldWorkers2.batch == oldWorkers1.batch && oldWorkers2.activeWorkers == oldWorkers1.activeWorkers &&
            oldWorkers2.cycleActive == oldWorkers1.cycleActive, "worker_minor_preserves_old");
     auto y2 = collector.GetCycleSnapshot(GCCycleGeneration::YOUNG);
