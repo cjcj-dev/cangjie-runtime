@@ -388,8 +388,8 @@ inline bool HasYoungRegionsForRecording()
 // target. Concurrent old→young stores therefore landed on the remset current face
 // with a white young target (Stw2CurrentAudit uncovered, REPORT-youngconcstw2).
 //
-// Window: BarrierPhase::TRACE only (InstallBarrier maps TRACE and CLEAR_SATB onto
-// TraceBarrier). Idle/Enum/STW/PostTrace/Preforward/Forward are no-ops.
+// ZBarrier::mark uses the target generation's mark phase, independently of
+// the phase currently executed by the other generation.
 // gc_unit never Heap::Init — IsGcStarted is false, so this is a no-op there.
 //
 // Young: paint + PushYoungAllocBlack (STW2 MergeYoungAllocBlack follows children).
@@ -404,18 +404,6 @@ void MarkAndRememberNewValue(BarrierPhase barrierPhase, BaseObject* ref)
     if (!resources.IsGcStarted()) {
         return;
     }
-    // FOLLOW publishes TRACE on the heap then handshakes mutators
-    // (WCollector.cpp:8042). Until the handshake, Heap::GetBarrier() is still
-    // Idle/Enum (phase != TRACE) while concurrent old→young stores already land
-    // on the remset current face. Same heap-phase fallback as SATB G3b
-    // (Mutator.h:588-597). gc_unit never Init — IsGcStarted is false, so this
-    // does not call GetGCPhase (CollectorProxy::currentCollector is null).
-    if (barrierPhase != BarrierPhase::TRACE) {
-        GCPhase heapPhase = Heap::GetHeap().GetGCPhase();
-        if (heapPhase != GCPhase::GC_PHASE_TRACE && heapPhase != GCPhase::GC_PHASE_CLEAR_SATB_BUFFER) {
-            return;
-        }
-    }
     if (!Collector::PlausibleManagedObjectGate("mark_and_remember", ref)) {
         return;
     }
@@ -423,10 +411,14 @@ void MarkAndRememberNewValue(BarrierPhase barrierPhase, BaseObject* ref)
     if (region == nullptr) {
         return;
     }
-    if (resources.GetGCStats().reason == GC_REASON_YOUNG) {
-        if (!region->IsYoungRegion()) {
-            return;
-        }
+    const GCCycleGeneration generation = region->IsYoungRegion()
+        ? GCCycleGeneration::YOUNG : GCCycleGeneration::OLD;
+    const GCCycleSnapshot cycle = Heap::GetHeap().GetCollector().GetCycleSnapshot(generation);
+    if (!cycle.active || (cycle.phase != GC_PHASE_ENUM && cycle.phase != GC_PHASE_TRACE &&
+                          cycle.phase != GC_PHASE_CLEAR_SATB_BUFFER)) {
+        return;
+    }
+    if (region->IsYoungRegion()) {
         bool already = region->MarkObjectByOwner(ref, ref->GetSize());
         if (already) {
             return;
@@ -474,14 +466,6 @@ void RetirePreviousWithoutAllocBuffer(BarrierPhase barrierPhase, zpointer prev, 
     if (!resources.IsGcStarted()) {
         return;
     }
-    if (barrierPhase != BarrierPhase::ENUM && barrierPhase != BarrierPhase::TRACE) {
-        const GCPhase heapPhase = Heap::GetHeap().GetGCPhase();
-        if (heapPhase != GCPhase::GC_PHASE_ENUM && heapPhase != GCPhase::GC_PHASE_TRACE &&
-            heapPhase != GCPhase::GC_PHASE_CLEAR_SATB_BUFFER) {
-            return;
-        }
-    }
-
     RefField<> previous(prev);
     const ForwardingProvenance provenance{ ForwardingHolderKind::HeapRef, nullptr, &previous };
     BaseObject* const resolved = collector.make_load_good(previous, provenance);
@@ -489,7 +473,14 @@ void RetirePreviousWithoutAllocBuffer(BarrierPhase barrierPhase, zpointer prev, 
         return;
     }
 
-    SatbBuffer& satb = SatbBuffer::Instance();
+    const bool young = RegionInfo::GetRegionInfoAt(reinterpret_cast<MAddress>(resolved))->IsYoungRegion();
+    const GCCycleGeneration generation = young ? GCCycleGeneration::YOUNG : GCCycleGeneration::OLD;
+    const GCCycleSnapshot cycle = collector.GetCycleSnapshot(generation);
+    if (!cycle.active || (cycle.phase != GC_PHASE_ENUM && cycle.phase != GC_PHASE_TRACE &&
+                          cycle.phase != GC_PHASE_CLEAR_SATB_BUFFER)) {
+        return;
+    }
+    SatbBuffer& satb = SatbBuffer::Instance(generation);
     SatbBuffer::Node* node = nullptr;
     satb.EnsureGoodNode(node);
     CHECK_DETAIL(node != nullptr,

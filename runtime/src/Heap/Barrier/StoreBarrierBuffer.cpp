@@ -230,7 +230,7 @@ void StoreBarrierBuffer::Flush(RememberedSet& rs)
         return;
     }
     for (size_t i = current; i < kStoreBarrierBufferLength; ++i) {
-        if (!is_null(buffer[i].prev) && InstalledDuringCurrentMark(buffer[i])) {
+        if (!is_null(buffer[i].prev) && (InstalledDuringCurrentMark(buffer[i], true) || InstalledDuringCurrentMark(buffer[i], false))) {
             Flush(rs, Heap::GetHeap().GetCollector());
             return;
         }
