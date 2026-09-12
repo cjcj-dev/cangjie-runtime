@@ -1406,7 +1406,6 @@ private:
     bool FixMinorEvacuatedSlot(DerivedSlot& derived, BaseObject* knownBase = nullptr,
                                const ScopedStopTheWorld* stw = nullptr) const;
     void FixMinorRootSlots(const ScopedStopTheWorld* stw = nullptr);
-    void FixMinorRootSlotsParallel(GCThreadPool* threadPool, const ScopedStopTheWorld* stw = nullptr);
     void FixMinorObjectSlots(BaseObject* object, const ScopedStopTheWorld* stw = nullptr);
     // stw: live handle lets relocate follow ZGC Phase 7/8 (zGeneration.cpp:573-580):
     // pause = flip + phase + root fix; concurrent = ForwardFromSpace; re-STW = heap

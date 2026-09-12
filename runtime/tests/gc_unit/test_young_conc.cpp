@@ -91,6 +91,12 @@ struct RelocationReceiptTestAccess {
         resources.gcThreadPool = threadPool;
     }
 
+    static void BindWorkers(CollectorResources& resources, GCWorkers* young, GCWorkers* old)
+    {
+        resources.youngWorkers = young;
+        resources.oldWorkers = old;
+    }
+
 
     static bool ConsumeYoungSatbAndReach(WCollector& collector, BaseObject* expected)
     {

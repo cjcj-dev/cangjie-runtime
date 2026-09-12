@@ -682,29 +682,12 @@ void WCollector::StartRelocationTasks()
 {
     RegionSpace& space = reinterpret_cast<RegionSpace&>(theAllocator);
     RegionManager& manager = space.GetRegionManager();
-    GCThreadPool* workers = GetThreadPool();
-    size_t tasks = workers == nullptr ? 1 : static_cast<size_t>(workers->GetMaxActiveThreadNum() + 1);
-    if (GetCycleReason() == GC_REASON_YOUNG) {
-        const char* serial = std::getenv("MRT_GCV2_EVACPAR_FORCE_SERIAL");
-        const bool forceSerial = serial != nullptr && std::strcmp(serial, "1") == 0;
-        GCThreadPool* evacuation = collectorResources.GetThreadPool();
-        if (!forceSerial && evacuation != nullptr) workers = evacuation;
-        const size_t maxWorkers = workers == nullptr ? 1 : static_cast<size_t>(workers->GetMaxThreadNum() + 1);
-        tasks = forceSerial ? 1 : maxWorkers;
-        const char* gate = std::getenv("MRT_GCV2_EVACPAR_WORK_GATE");
-        if (!forceSerial && gate != nullptr && std::strcmp(gate, "1") == 0) {
-            tasks = std::min(maxWorkers, std::max<size_t>(space.FromSpaceSize() / MB, 1));
-        }
-        if constexpr (kGcTriggerDynamicWorkersEnabled) {
-            const size_t selected = g_gcTriggerYoungWorkers.load(std::memory_order_relaxed);
-            if (!forceSerial && selected >= 1) tasks = std::min(tasks, selected);
-        }
-    }
+    GCWorkers& workers = GetWorkers();
 #if defined(MRT_TESTABLE_INTERNALS)
     if (GetCycleReason() == GC_REASON_YOUNG) RunRemapWindowTestHook(1, nullptr, nullptr);
 #endif
-    if (GetCycleReason() == GC_REASON_YOUNG) manager.StartForwardFromRegions<Generation::Young>(workers, tasks);
-    else manager.StartForwardFromRegions<Generation::Old>(workers, tasks);
+    if (GetCycleReason() == GC_REASON_YOUNG) manager.StartForwardFromRegions<Generation::Young>(workers);
+    else manager.StartForwardFromRegions<Generation::Old>(workers);
 }
 
 void WCollector::Preforward()
@@ -738,19 +721,47 @@ void WCollector::Preforward()
         StartRelocationTasks();
     }
 
-    GCThreadPool* threadPool = GetThreadPool();
-    MRT_ASSERT(threadPool != nullptr, "thread pool is null");
-    // forward and fix cj future objects
-    threadPool->AddWork(new (std::nothrow) LambdaWork([this](size_t) { PreforwardConcurrencyModelRoots(); }));
-
-    // forward and fix finalizer roots.
-    threadPool->AddWork(new (std::nothrow) LambdaWork([this](size_t) { PreforwardFinalizerProcessorRoots(); }));
-    threadPool->AddWork(new (std::nothrow) LambdaWork([this](size_t) { PreforwardAllExportFromRoots(); }));
-    threadPool->AddWork(new (std::nothrow) LambdaWork([this](size_t) { PreforwardStaticRoots(); }));
-    threadPool->AddWork(new (std::nothrow) LambdaWork([this](size_t) { PreforwardDiscoveredExternObjects(); }));
-    threadPool->AddWork(new (std::nothrow) LambdaWork([this](size_t) { PreforwardAllResurrectExportFromObjects(); }));
-    threadPool->Start();
-    threadPool->WaitFinish();
+    RegionManager& manager = reinterpret_cast<RegionSpace&>(theAllocator).GetRegionManager();
+    if (GetCycleReason() == GC_REASON_YOUNG) {
+        manager.DrainForwardFromRegions<Generation::Young>();
+    } else {
+        manager.DrainForwardFromRegions<Generation::Old>();
+    }
+    GCWorkers& workers = GetWorkers();
+    std::atomic<unsigned> next{ 0 };
+    class RootsTask final : public GCWorkerTask {
+    public:
+        RootsTask(WCollector& collector, std::atomic<unsigned>& cursor) : collector(collector), next(cursor) {}
+        void Work(uint32_t) override
+        {
+            for (unsigned family = next.fetch_add(1); family < 6; family = next.fetch_add(1)) {
+                switch (family) {
+                    case 0:
+                        collector.PreforwardConcurrencyModelRoots();
+                        break;
+                    case 1:
+                        collector.PreforwardFinalizerProcessorRoots();
+                        break;
+                    case 2:
+                        collector.PreforwardAllExportFromRoots();
+                        break;
+                    case 3:
+                        collector.PreforwardStaticRoots();
+                        break;
+                    case 4:
+                        collector.PreforwardDiscoveredExternObjects();
+                        break;
+                    default:
+                        collector.PreforwardAllResurrectExportFromObjects();
+                        break;
+                }
+            }
+        }
+    private:
+        WCollector& collector;
+        std::atomic<unsigned>& next;
+    } roots(static_cast<WCollector&>(*this), next);
+    workers.Run(roots);
     if (HealCoverage::kHealCoverageCensus) {
         HealCoverage::CensusAfterPublication(
             currentRemapColour, FlipSeq().load(std::memory_order_relaxed), "major-preforward");
@@ -1491,80 +1502,6 @@ void WCollector::FixMinorObjectSlots(BaseObject* object, const ScopedStopTheWorl
 
 }
 
-// R2: parallel ⑦ young.ref_fix — index-shard reachableObjects + remset slots;
-// root families = 6 family-level tasks (static not split). Template = A2 stwpar2.
-// Env: MRT_GCV2_REFFIX_WORKERS, MRT_GCV2_REFFIX_FORCE_SERIAL.
-void WCollector::FixMinorRootSlotsParallel(GCThreadPool* threadPool, const ScopedStopTheWorld* stw)
-{
-    // statresid: serial grant-before-route for all root families (must complete before
-    // any parallel Forward/Route freezes a shared region's geometry).
-    RootVisitor grantVisitor = [this](ObjectRef& root) {
-        zaddress_unsafe observed = root.LoadPlain();
-        if (is_null(observed)) {
-            return;
-        }
-        HeapSlot<> bits(to_zpointer(raw(observed)));
-        BaseObject* obj = to_object(bits.GetTargetObject());
-        if (obj == nullptr || !Heap::IsHeapAddress(obj)) {
-            return;
-        }
-        if (IsGhostFromObject(obj) && !IsUnmovableFromObject(obj)) {
-            (void)ForceRootRouteDomainWhileForwardable(const_cast<WCollector*>(this), obj);
-
-        } else if (!Collector::PlausibleManagedObjectGate("statresid.grant_pass.par", obj)) {
-            BaseObject* host = Collector::TryRecoverInteriorBase(obj);
-            if (host != nullptr && IsGhostFromObject(host) && !IsUnmovableFromObject(host)) {
-                (void)ForceRootRouteDomainWhileForwardable(const_cast<WCollector*>(this), host);
-            }
-        }
-    };
-    MutatorManager::Instance().VisitAllMutators(
-        [&grantVisitor](Mutator& mutator) { mutator.VisitMutatorRoots(grantVisitor); });
-    Heap::GetHeap().VisitStaticRoots(grantVisitor);
-    Runtime::Current().GetConcurrencyModel().VisitGCRoots(&grantVisitor);
-    collectorResources.GetFinalizerProcessor().VisitRawPointers(grantVisitor);
-    Heap::GetHeap().VisitAllExportRoots(grantVisitor);
-
-    // 5 root families as separate tasks (static kept whole — mutex+dedup set).
-    // Order matches serial FixMinorRootSlots.
-    auto rootFix = [this, stw](ObjectRef& root) {
-#if defined(MRT_GC_UNIT_TESTS)
-        NoteLargeArrayInitRootVisit(LargeArrayRootVisitSite::MINOR_RELOCATE,
-                                    to_object(safe(root.LoadPlain(std::memory_order_acquire))));
-#endif
-        (void)FixMinorEvacuatedSlot(root, stw);
-    };
-    DerivedPtrVisitor derivedFix = [this, stw](BasePtrType basePtr, DerivedSlot& derived) {
-        BaseObject* knownBase = is_null(basePtr) ? nullptr :
-            to_object(safe(uncolor_bits(to_zpointer(raw(basePtr)))));
-        (void)FixMinorEvacuatedSlot(derived, knownBase, stw);
-    };
-    threadPool->AddWork(new (std::nothrow) LambdaWork([this, rootFix, derivedFix](size_t) {
-        RootVisitor rawRootVisitor = rootFix;
-        DerivedPtrVisitor derivedVisitor = derivedFix;
-        MutatorManager::Instance().VisitAllMutators(
-            [&rawRootVisitor, &derivedVisitor](Mutator& mutator) {
-                mutator.VisitHeapReferences(rawRootVisitor, derivedVisitor);
-            });
-    }));
-    threadPool->AddWork(new (std::nothrow) LambdaWork([this, rootFix](size_t) {
-        RootVisitor rawRootVisitor = rootFix;
-        Heap::GetHeap().VisitStaticRoots(rawRootVisitor);
-    }));
-    threadPool->AddWork(new (std::nothrow) LambdaWork([this, rootFix](size_t) {
-        RootVisitor rawRootVisitor = rootFix;
-        Runtime::Current().GetConcurrencyModel().VisitGCRoots(&rawRootVisitor);
-    }));
-    threadPool->AddWork(new (std::nothrow) LambdaWork([this, rootFix](size_t) {
-        RootVisitor rawRootVisitor = rootFix;
-        collectorResources.GetFinalizerProcessor().VisitRawPointers(rawRootVisitor);
-    }));
-    threadPool->AddWork(new (std::nothrow) LambdaWork([this, rootFix](size_t) {
-        RootVisitor rawRootVisitor = rootFix;
-        Heap::GetHeap().VisitAllExportRoots(rawRootVisitor);
-    }));
-}
-
 void WCollector::EvacuateYoungRegions(const std::vector<BaseObject*>& reachableVec,
                                        const MinorSlotSet& rememberedSlots,
                                        const MinorObjectSet& currentMinorRoots,
@@ -1607,12 +1544,7 @@ void WCollector::EvacuateYoungRegions(const std::vector<BaseObject*>& reachableV
         return (stw != nullptr && *stw != nullptr) ? stw->get() : nullptr;
     };
     const bool doYoungFlip = true;
-    GCThreadPool* threadPool = GetThreadPool();
-    static const bool forceSerial = []() {
-        const char* value = std::getenv("MRT_GCV2_REFFIX_FORCE_SERIAL");
-        return value != nullptr && std::strcmp(value, "1") == 0;
-    }();
-    const bool useParallel = threadPool != nullptr && !forceSerial;
+    GCWorkers& workers = GetWorkers();
 
     std::vector<MAddress> remsetVec;
     remsetVec.assign(rememberedSlots.begin(), rememberedSlots.end());
@@ -1648,69 +1580,69 @@ void WCollector::EvacuateYoungRegions(const std::vector<BaseObject*>& reachableV
         }
     };
 
-    auto fixHeapParallelOnly = [this, &reachableVec, &remsetVec, &fixHeapSlice](GCThreadPool* pool) {
-        // Heap+remset only (roots already fixed under STW). Used by concurrent ref_fix window.
+    auto fixHeapParallelOnly = [this, &reachableVec, &remsetVec, &fixHeapSlice](GCWorkers& pool) {
         const size_t dispelAtEntry = RegionInfo::GetDispelGhostCount();
         const size_t nObj = reachableVec.size();
         const size_t nSlot = remsetVec.size();
-        const int32_t helperNum = pool->GetMaxThreadNum();
-        int32_t heapWorkers = helperNum + 1;
-        {
-            const char* value = std::getenv("MRT_GCV2_REFFIX_WORKERS");
-            if (value != nullptr && value[0] != '\0') {
-                int32_t requested = static_cast<int32_t>(std::strtol(value, nullptr, 10));
-                if (requested >= 1 && requested < heapWorkers) {
-                    heapWorkers = requested;
-                }
-            }
-        }
-        if (heapWorkers < 1) {
-            heapWorkers = 1;
-        }
-        std::vector<size_t> objectsTaken(static_cast<size_t>(heapWorkers), 0);
+        const uint32_t heapWorkers = pool.ActiveWorkers();
+        std::vector<size_t> objectsTaken(heapWorkers, 0);
         std::atomic<size_t> objCursor{ 0 };
         std::atomic<size_t> slotCursor{ 0 };
         const size_t objChunk = std::max<size_t>(64, (nObj + static_cast<size_t>(heapWorkers) * 4 - 1) /
                                                         (static_cast<size_t>(heapWorkers) * 4 + 1));
         const size_t slotChunk = std::max<size_t>(64, (nSlot + static_cast<size_t>(heapWorkers) * 4 - 1) /
                                                          (static_cast<size_t>(heapWorkers) * 4 + 1));
-        for (int32_t w = 0; w < heapWorkers; ++w) {
-            size_t* taken = &objectsTaken[static_cast<size_t>(w)];
-            pool->AddWork(new (std::nothrow) LambdaWork(
-                [fixHeapSlice, &objCursor, &slotCursor, nObj, nSlot, objChunk, slotChunk, taken](size_t) {
-                    for (;;) {
-                        size_t o0 = nObj;
-                        size_t o1 = nObj;
-                        size_t s0 = nSlot;
-                        size_t s1 = nSlot;
-                        bool got = false;
-                        if (objCursor.load(std::memory_order_relaxed) < nObj) {
-                            o0 = objCursor.fetch_add(objChunk, std::memory_order_relaxed);
-                            if (o0 < nObj) {
-                                o1 = std::min(o0 + objChunk, nObj);
-                                got = true;
-                            } else {
-                                o0 = o1 = nObj;
-                            }
+        class HeapTask final : public GCWorkerTask {
+        public:
+            HeapTask(decltype(fixHeapSlice) slice, std::atomic<size_t>& objs, std::atomic<size_t>& slots,
+                     size_t nObjects, size_t nSlots, size_t objectChunk, size_t slotChunk,
+                     std::vector<size_t>& taken)
+                : fixHeapSlice(slice), objCursor(objs), slotCursor(slots), nObj(nObjects), nSlot(nSlots),
+                  objChunk(objectChunk), slotChunk(slotChunk), objectsTaken(taken) {}
+            void Work(uint32_t id) override
+            {
+                size_t* taken = &objectsTaken[id];
+                for (;;) {
+                    size_t o0 = nObj;
+                    size_t o1 = nObj;
+                    size_t s0 = nSlot;
+                    size_t s1 = nSlot;
+                    bool got = false;
+                    if (objCursor.load(std::memory_order_relaxed) < nObj) {
+                        o0 = objCursor.fetch_add(objChunk, std::memory_order_relaxed);
+                        if (o0 < nObj) {
+                            o1 = std::min(o0 + objChunk, nObj);
+                            got = true;
+                        } else {
+                            o0 = o1 = nObj;
                         }
-                        if (slotCursor.load(std::memory_order_relaxed) < nSlot) {
-                            s0 = slotCursor.fetch_add(slotChunk, std::memory_order_relaxed);
-                            if (s0 < nSlot) {
-                                s1 = std::min(s0 + slotChunk, nSlot);
-                                got = true;
-                            } else {
-                                s0 = s1 = nSlot;
-                            }
-                        }
-                        if (!got) {
-                            break;
-                        }
-                        fixHeapSlice(o0, o1, s0, s1, *taken);
                     }
-                }));
-        }
-        pool->Start();
-        pool->WaitFinish();
+                    if (slotCursor.load(std::memory_order_relaxed) < nSlot) {
+                        s0 = slotCursor.fetch_add(slotChunk, std::memory_order_relaxed);
+                        if (s0 < nSlot) {
+                            s1 = std::min(s0 + slotChunk, nSlot);
+                            got = true;
+                        } else {
+                            s0 = s1 = nSlot;
+                        }
+                    }
+                    if (!got) {
+                        break;
+                    }
+                    fixHeapSlice(o0, o1, s0, s1, *taken);
+                }
+            }
+        private:
+            decltype(fixHeapSlice) fixHeapSlice;
+            std::atomic<size_t>& objCursor;
+            std::atomic<size_t>& slotCursor;
+            size_t nObj;
+            size_t nSlot;
+            size_t objChunk;
+            size_t slotChunk;
+            std::vector<size_t>& objectsTaken;
+        } task(fixHeapSlice, objCursor, slotCursor, nObj, nSlot, objChunk, slotChunk, objectsTaken);
+        pool.Run(task);
         const size_t dispelAtExit = RegionInfo::GetDispelGhostCount();
         CHECK_DETAIL(dispelAtExit == dispelAtEntry,
                      "T-D ghost dispel during concurrent heap ref_fix entry=%zu exit=%zu",
@@ -1727,7 +1659,7 @@ void WCollector::EvacuateYoungRegions(const std::vector<BaseObject*>& reachableV
             takenStr += std::to_string(objectsTaken[i]);
         }
         VLOG(REPORT,
-             "[GCV2][reffix][conc_heap] workers_active=%zu workers_scheduled=%d objects_taken=[%s] "
+             "[GCV2][reffix][conc_heap] workers_active=%zu workers_scheduled=%u objects_taken=[%s] "
              "nObj=%zu nSlot=%zu cas_ok=%zu cas_fail=%zu concurrent=1",
              active, heapWorkers, takenStr.c_str(), nObj, nSlot,
              g_minorRefCasOk.load(std::memory_order_relaxed),
@@ -1860,18 +1792,7 @@ void WCollector::EvacuateYoungRegions(const std::vector<BaseObject*>& reachableV
                      "[GCV2][relocate][conc_stw] remset pre=%zu conc_new=%zu total=%zu",
                      rememberedSlots.size(), concRemset.size(), remsetVec.size());
             }
-            if (useParallel) {
-                fixHeapParallelOnly(threadPool);
-            } else {
-                size_t taken = 0;
-                fixHeapSlice(0, reachableVec.size(), 0, remsetVec.size(), taken);
-                VLOG(REPORT,
-                     "[GCV2][relocate][conc_stw] slot_fix objects_taken=%zu nObj=%zu nSlot=%zu "
-                     "cas_ok=%zu cas_fail=%zu",
-                     taken, reachableVec.size(), remsetVec.size(),
-                     g_minorRefCasOk.load(std::memory_order_relaxed),
-                     g_minorRefCasFail.load(std::memory_order_relaxed));
-            }
+            fixHeapParallelOnly(workers);
         }
         {
             size_t rej = g_fixinputReject.load(std::memory_order_relaxed);
