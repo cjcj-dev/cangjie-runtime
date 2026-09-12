@@ -1554,12 +1554,15 @@ bool WCollector::PublishHandshakeMarkWork(WorkStack& work, MarkDomain* domain)
     return published;
 }
 
-void WCollector::DrainAllocBufferMarkProducers(AllocBuffer* buffer, WorkStack& work)
+void WCollector::DrainAllocBufferMarkProducers(AllocBuffer* buffer, WorkStack& work, bool young)
 {
     if (buffer == nullptr) {
         return;
     }
-    buffer->MergeRoots(work);
+    buffer->MergeRootsGeneration(work, young);
+    if (!young) {
+        return;
+    }
     buffer->MergeYoungAllocBlackFollow(work);
     buffer->MergeY2yDirtyHolders(work);
     buffer->MergeY2yDirtySlots([this, &work](MAddress slot) {
@@ -1576,25 +1579,17 @@ bool WCollector::FlushAllocBufferMarkProducers(AllocBuffer* buffer)
     if (buffer == nullptr) {
         return false;
     }
-    WorkStack work;
-    DrainAllocBufferMarkProducers(buffer, work);
-    if (work.empty()) {
-        return false;
+    bool published = false;
+    if (youngMarkDomain != nullptr) {
+        WorkStack youngWork;
+        DrainAllocBufferMarkProducers(buffer, youngWork, true);
+        published = PublishHandshakeMarkWork(youngWork, youngMarkDomain.get()) || published;
     }
-    std::vector<MarkStackEntry> entries;
-    while (!work.empty()) {
-        entries.push_back(work.back());
-        work.pop_back();
+    if (majorMarkDomain != nullptr) {
+        WorkStack oldWork;
+        DrainAllocBufferMarkProducers(buffer, oldWork, false);
+        published = PublishHandshakeMarkWork(oldWork, majorMarkDomain.get()) || published;
     }
-    auto publish = [this, &entries](MarkDomain* domain) {
-        WorkStack copy;
-        for (const MarkStackEntry& entry : entries) {
-            copy.push_back(entry);
-        }
-        return PublishHandshakeMarkWork(copy, domain);
-    };
-    bool published = publish(youngMarkDomain.get());
-    published = publish(majorMarkDomain.get()) || published;
     return published;
 }
 
@@ -1604,7 +1599,8 @@ bool WCollector::FlushAllocBufferMarkProducers(AllocBuffer* buffer, MarkDomain* 
         return false;
     }
     WorkStack work;
-    DrainAllocBufferMarkProducers(buffer, work);
+    const bool young = domain->Generation() == VerifyMarkingStacks::MarkingGeneration::YOUNG;
+    DrainAllocBufferMarkProducers(buffer, work, young);
     return PublishHandshakeMarkWork(work, domain);
 }
 } // namespace MapleRuntime

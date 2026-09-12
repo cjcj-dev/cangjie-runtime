@@ -7,6 +7,7 @@
 
 #include "MutatorManager.h"
 
+#include <atomic>
 #include <thread>
 #include <cstdlib>
 #include <cstring>
@@ -86,9 +87,7 @@ bool IsGcThread()
 
 extern "C" void HandleSafepoint(ThreadLocalData* tlData)
 {
-    if (MutatorManager::Instance().MarkFlushHandshakeActive()) {
-        (void)MutatorManager::Instance().AcknowledgeMarkFlushForTls(tlData);
-    }
+    (void)MutatorManager::Instance().AcknowledgeMarkFlushForTls(tlData);
     Mutator* mutator = tlData->mutator;
     if (mutator == nullptr) {
         return;
@@ -106,9 +105,7 @@ extern "C" void HandleSafepointForArm(ThreadLocalData* tlData)
     if (tlData->safepointState == 0) {
         return;
     }
-    if (MutatorManager::Instance().MarkFlushHandshakeActive()) {
-        (void)MutatorManager::Instance().AcknowledgeMarkFlushForTls(tlData);
-    }
+    (void)MutatorManager::Instance().AcknowledgeMarkFlushForTls(tlData);
     Mutator* mutator = tlData->mutator;
     if (mutator == nullptr) {
         return;
@@ -729,20 +726,21 @@ void ArmMarkFlushPoll(ThreadLocalData* tls)
     }
 }
 
-void DisarmMarkFlushPoll(MutatorManager::MarkFlushThread* target)
+void UpdateMarkFlushPollSelf(MutatorManager::MarkFlushThread* target)
 {
-    ThreadLocalData* tls = target->tls;
-    if (tls == nullptr) {
+    ThreadLocalData* self = ThreadLocal::GetThreadLocalData();
+    if (target == nullptr || target->tls == nullptr || target->tls != self) {
         return;
     }
-    if (target->pending.load(std::memory_order_acquire) != 0) {
-        tls->safepointState = 1;
-        return;
+    for (;;) {
+        const bool armed = target->pending.load(std::memory_order_acquire) != 0;
+        target->tls->safepointState = armed ? 1 : 0;
+        std::atomic_thread_fence(std::memory_order_seq_cst);
+        if (!armed && target->pending.load(std::memory_order_acquire) != 0) {
+            continue;
+        }
+        break;
     }
-    Mutator* mutator = tls->mutator;
-    const bool other = mutator != nullptr && mutator->GetSafepointPage() == &tls->safepointState &&
-        mutator->HasAnySuspensionRequest();
-    tls->safepointState = other ? 1 : 0;
 }
 } // namespace
 
@@ -828,7 +826,7 @@ bool MutatorManager::TlsHasMarkFlushPending(ThreadLocalData* tls)
 
 bool MutatorManager::AcknowledgeMarkFlushForTls(ThreadLocalData* tls)
 {
-    if (tls == nullptr || markFlushHandshakeActive.load(std::memory_order_acquire) == 0) {
+    if (tls == nullptr) {
         return false;
     }
     MarkFlushThread* target = nullptr;
@@ -841,17 +839,21 @@ bool MutatorManager::AcknowledgeMarkFlushForTls(ThreadLocalData* tls)
         }
     }
     if (target == nullptr) {
+        if (markFlushHandshakeActive.load(std::memory_order_acquire) == 0) {
+            return false;
+        }
         return FlushTlsMarkProducers(tls, markFlushDomain.load(std::memory_order_acquire));
     }
     std::lock_guard<std::mutex> claim(target->mutex);
     bool published = false;
-    if (target->pending.load(std::memory_order_acquire) != 0) {
+    if (markFlushHandshakeActive.load(std::memory_order_acquire) != 0 &&
+        target->pending.load(std::memory_order_acquire) != 0) {
         if (target->bufferLive.load(std::memory_order_acquire) != 0) {
             published = FlushTlsMarkProducers(tls, markFlushDomain.load(std::memory_order_acquire));
         }
         target->pending.store(0, std::memory_order_release);
-        DisarmMarkFlushPoll(target);
     }
+    UpdateMarkFlushPollSelf(target);
     target->refs.fetch_sub(1, std::memory_order_acq_rel);
     return published;
 }
@@ -917,7 +919,9 @@ bool MutatorManager::HandshakeFlushMarkProducers(MarkDomain* domain)
                 flushed = true;
             }
             target->pending.store(0, std::memory_order_release);
-            DisarmMarkFlushPoll(target);
+            if (self) {
+                UpdateMarkFlushPollSelf(target);
+            }
             claim.unlock();
             target->refs.fetch_sub(1, std::memory_order_acq_rel);
             it = pending.erase(it);

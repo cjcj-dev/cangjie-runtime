@@ -909,10 +909,20 @@ static bool PushHeapRootIfPlausible(BaseObject* obj, const char* site, bool foll
         return false;
     }
     AllocBuffer* buffer = AllocBuffer::GetOrCreateAllocBuffer();
-    if (follow) {
-        buffer->PushRoot(plain);
+    bool young = true;
+    MarkDomain* handshake = MutatorManager::Instance().MarkFlushDomain();
+    if (handshake != nullptr) {
+        young = handshake->Generation() == VerifyMarkingStacks::MarkingGeneration::YOUNG;
     } else {
-        buffer->PushInvisibleRoot(plain);
+        auto& collector = static_cast<WCollector&>(Heap::GetHeap().GetCollector());
+        if (collector.MajorMarkDomain() != nullptr && collector.YoungMarkDomain() == nullptr) {
+            young = false;
+        }
+    }
+    if (follow) {
+        buffer->PushRoot(plain, young);
+    } else {
+        buffer->PushInvisibleRoot(plain, young);
     }
 
     return true;
