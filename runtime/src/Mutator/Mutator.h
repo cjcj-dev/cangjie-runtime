@@ -25,6 +25,8 @@
 #endif
 #include "Interpreter/Options.h"
 #include "Interpreter/RTInterface.h"
+#include "Common/MarkWorkStack.h"
+#include "Heap/Collector/MarkStackEntry.h"
 #include "ObjectModel/RefField.h"
 #include "UnwindStack/StackWatermark.h"
 
@@ -749,6 +751,7 @@ private:
 
     AllocBuffer* markFlushAllocBuffer = nullptr;
     RememberedSet* storeBarrierRememberedSet = nullptr;
+    MarkStack<MarkStackEntry> parkedMarkWork;
 
     // Step-0 no-op epoch handshake state. Keep these fields at the end of Mutator's
     // existing product layout: compiler-generated code has hard-coded offsets in the

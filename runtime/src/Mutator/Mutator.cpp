@@ -1481,19 +1481,23 @@ void Mutator::FlushHolderThreadMarkProducers()
     if (Mutator::GetMutator() != this) {
         return;
     }
+    std::lock_guard<std::mutex> lg(mutatorLock);
     AllocBuffer* buffer = ThreadLocal::GetAllocBuffer();
-    if (buffer == nullptr) {
-        return;
-    }
     RememberedSet* rememberedSet = storeBarrierRememberedSet;
     if (rememberedSet == nullptr) {
         rememberedSet = &Heap::GetHeap().GetRememberedSet();
     }
-    if (rememberedSet->IsInitialized()) {
-        buffer->GetStoreBarrierBuffer().Flush(*rememberedSet);
-    }
     auto& collector = static_cast<WCollector&>(Heap::GetHeap().GetCollector());
-    (void)collector.FlushAllocBufferMarkProducers(buffer);
+    if (buffer != nullptr) {
+        if (rememberedSet->IsInitialized()) {
+            buffer->GetStoreBarrierBuffer().Flush(*rememberedSet);
+        }
+        collector.DrainAllocBufferMarkProducers(buffer, parkedMarkWork);
+    }
+    MarkDomain* domain = MutatorManager::Instance().MarkFlushDomain();
+    if (domain != nullptr) {
+        (void)collector.PublishHandshakeMarkWork(parkedMarkWork, domain);
+    }
 }
 
 Mutator::MarkFlushClaim Mutator::TryClaimMarkFlush(bool self, MarkDomain* domain)
@@ -1520,16 +1524,17 @@ Mutator::MarkFlushClaim Mutator::TryClaimMarkFlush(bool self, MarkDomain* domain
     } else if (exclusiveForeign) {
         buffer = foreignThreadInfo.allocBuffer;
     }
+    auto& collector = static_cast<WCollector&>(Heap::GetHeap().GetCollector());
     if (buffer != nullptr) {
         if (rememberedSet->IsInitialized()) {
             buffer->GetStoreBarrierBuffer().Flush(*rememberedSet);
         }
-        auto& collector = static_cast<WCollector&>(Heap::GetHeap().GetCollector());
-        if (collector.FlushAllocBufferMarkProducers(buffer, domain)) {
-            published = true;
-        }
+        collector.DrainAllocBufferMarkProducers(buffer, parkedMarkWork);
     } else if (!self && !exclusiveForeign && !parkedOwner) {
         return MarkFlushClaim::NotSafe;
+    }
+    if (collector.PublishHandshakeMarkWork(parkedMarkWork, domain)) {
+        published = true;
     }
     ClearSuspensionFlag(SUSPENSION_FOR_MARK_FLUSH);
     SetSafepointActive(HasAnySuspensionRequest());
