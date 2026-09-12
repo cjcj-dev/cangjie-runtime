@@ -60,7 +60,7 @@ void PublishRootDuringMerge(void* context)
         return;
     }
     pub.fired = true;
-    pub.buffer->PushRoot(pub.late);
+    pub.buffer->PushRoot(pub.late, true);
 }
 
 void PublishAllocBlackDuringMerge(void* context)
@@ -115,16 +115,16 @@ GC_TEST(AllocBufferHandoff, StackRootPublishedDuringMergeIsDelivered)
     AllocBuffer& buffer = *bufferOwner;
     LatePublication pub{ &buffer, fx.obj1, false };
 
-    buffer.PushRoot(fx.obj0);
+    buffer.PushRoot(fx.obj0, true);
     buffer.SetStackRootsHandoffHookForTest(PublishRootDuringMerge, &pub);
 
     std::vector<MarkStackEntry> firstBatch;
-    buffer.MergeRoots(firstBatch);
+    buffer.MergeRootsGeneration(firstBatch, true);
     buffer.SetStackRootsHandoffHookForTest(nullptr, nullptr);
     GC_EXPECT_TRUE(pub.fired);
 
     std::vector<MarkStackEntry> secondBatch;
-    buffer.MergeRoots(secondBatch);
+    buffer.MergeRootsGeneration(secondBatch, true);
 
     GC_EXPECT_EQ(CountEntry(firstBatch, fx.obj0), 1u);
     // obj1 was published while the consumer owned the buffer.  Either batch is
@@ -210,7 +210,7 @@ GC_OTHER_VM_TEST(AllocBufferHandoff, StackRootPublishDuringRetireKeepsHeapIntact
     BurstGate gate;
 
     for (size_t i = 0; i < kBurst; ++i) {
-        buffer.PushRoot(fx.obj0);
+        buffer.PushRoot(fx.obj0, true);
     }
     buffer.SetStackRootsHandoffHookForTest(ReleaseBurstAtRetire, &gate);
 
@@ -220,18 +220,18 @@ GC_OTHER_VM_TEST(AllocBufferHandoff, StackRootPublishDuringRetireKeepsHeapIntact
             gate.changed.wait(lock, [&gate]() { return gate.consumerAtRetire; });
         }
         for (size_t i = 0; i < kBurst; ++i) {
-            buffer.PushRoot(fx.obj1);
+            buffer.PushRoot(fx.obj1, true);
         }
     });
     JoinGuard join(producer);
 
     std::vector<MarkStackEntry> batch;
-    buffer.MergeRoots(batch);
+    buffer.MergeRootsGeneration(batch, true);
     producer.join();
     buffer.SetStackRootsHandoffHookForTest(nullptr, nullptr);
 
     std::vector<MarkStackEntry> drain;
-    buffer.MergeRoots(drain);
+    buffer.MergeRootsGeneration(drain, true);
 
     GC_EXPECT_EQ(CountEntry(batch, fx.obj0) + CountEntry(drain, fx.obj0), kBurst);
     GC_EXPECT_EQ(CountEntry(batch, fx.obj1) + CountEntry(drain, fx.obj1), kBurst);
