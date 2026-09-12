@@ -1719,13 +1719,9 @@ bool WCollector::PublishHandshakeMarkWork(WorkStack& work, MarkDomain* domain)
 
 bool WCollector::FlushAllocBufferMarkProducers(AllocBuffer* buffer)
 {
+    // zMark.cpp:588/1002: flush is bound to the ZMark instance (generation)
+    // that started the handshake. No handshake ⇒ keep private producers.
     MarkDomain* domain = MutatorManager::Instance().MarkFlushDomain();
-    if (domain == nullptr) {
-        domain = youngMarkDomain.get();
-    }
-    if (domain == nullptr) {
-        domain = majorMarkDomain.get();
-    }
     return FlushAllocBufferMarkProducers(buffer, domain);
 }
 
