@@ -518,6 +518,10 @@ public:
 
     // determine how we treat new object during gc.
     virtual void MarkNewObject(BaseObject*) {}
+    virtual void MarkOldObjectIfActive(BaseObject*, bool = false) const
+    {
+        AbortUnimplemented("Collector::MarkOldObjectIfActive");
+    }
 
     virtual void FixObject(BaseObject&) const {}
 

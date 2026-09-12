@@ -167,8 +167,12 @@ StoreBarrierBuffer::PreviousRetirement StoreBarrierBuffer::RetirePrevious(const 
          cycle.phase != GC_PHASE_CLEAR_SATB_BUFFER)) {
         return PreviousRetirement::NOT_REQUIRED;
     }
+    if (!young) {
+        collector.MarkOldObjectIfActive(resolved);
+        return PreviousRetirement::RETIRED;
+    }
     SatbBuffer::Node* node = nullptr;
-    SatbBuffer& satb = SatbBuffer::Instance(generation);
+    SatbBuffer& satb = SatbBuffer::Young();
 #if defined(MRT_GC_UNIT_TESTS)
     satb.EnsureGoodNode(node, !g_satbNodeUnavailable);
 #else

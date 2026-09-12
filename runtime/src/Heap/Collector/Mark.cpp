@@ -603,26 +603,6 @@ BaseObject* WCollector::GetAndTryTagObj(RefSlotKind kind, BaseObject* obj, RefFi
     }
     return latest;
 }
-void WCollector::MarkOldFromYoung(BaseObject* object) const
-{
-    // ZBarrier::mark routes a young traversal's old target to the active old
-    // mark domain (zBarrier.inline.hpp:742-750), never a later heap rescan.
-    const GCCycleSnapshot old = GetCycleSnapshot(GCCycleGeneration::OLD);
-    if (!old.active || (old.phase != GC_PHASE_ENUM && old.phase != GC_PHASE_TRACE &&
-                        old.phase != GC_PHASE_CLEAR_SATB_BUFFER)) {
-        return;
-    }
-    if (MarkObject(object)) {
-        return;
-    }
-    SatbBuffer& satb = SatbBuffer::Instance(GCCycleGeneration::OLD);
-    SatbBuffer::Node* node = nullptr;
-    satb.EnsureGoodNode(node);
-    CHECK_DETAIL(node != nullptr, "old mark publication requires a SATB node");
-    (void)node->Push(object, nullptr, true);
-    satb.FlushQueue(node);
-}
-
 void WCollector::TraceHeap()
 {
     WorkStack workStack = NewWorkStack();
@@ -972,7 +952,7 @@ void WCollector::PushYoungObject(BaseObject* object, WorkStack& workStack, const
     }
     RegionInfo* region = RegionInfo::GetRegionInfoAt(reinterpret_cast<MAddress>(object));
     if (!region->IsYoungRegion()) {
-        MarkOldFromYoung(object);
+        MarkOldObjectIfActive(object, true);
         return;
     }
     if (region->IsYoungRegion() &&
@@ -1202,7 +1182,7 @@ private:
         }
         RegionInfo* targetRegion = RegionInfo::TryGetRegionInfoAt(reinterpret_cast<MAddress>(target));
         if (targetRegion != nullptr && !targetRegion->IsYoungRegion()) {
-            collector->MarkOldFromYoung(target);
+            collector->MarkOldObjectIfActive(target, true);
             return;
         }
         if (targetRegion == nullptr ||
@@ -1232,7 +1212,7 @@ private:
         }
         RegionInfo* region = RegionInfo::GetRegionInfoAt(reinterpret_cast<MAddress>(object));
         if (!region->IsYoungRegion()) {
-            shared.collector->MarkOldFromYoung(object);
+            shared.collector->MarkOldObjectIfActive(object, true);
             return;
         }
         if (region->IsMarkedObject(region->GetMarkView<Generation::Young>(), object)) {
@@ -1471,7 +1451,7 @@ void WCollector::TraceYoungClosure(WorkStack& workStack, bool fullYoungScan,
 }
 
 // youngconc: SATB termination for concurrent young mark — same loop shape as
-// TracingCollector::MarkSatbBuffer, but feeds TraceYoungClosure (young claim + FYS).
+// TracingCollector::FinishOldMark, but feeds TraceYoungClosure (young claim + FYS).
 // Mutators run under TraceBarrier (InstallBarrier TRACE).
 // Termination: ZMark::end -> try_end (zMark.cpp:954-971) + ZMark::flush
 // (zMark.cpp:587-605 / :998-1006). Young mark uses the same ZMark
@@ -1490,7 +1470,7 @@ bool WCollector::MarkYoungSatbBuffer(WorkStack& workStack, bool fullYoungScan,
     size_t satbSeen = 0;
     auto visitSatbObj = [this, &workStack, windowStats, &satbSeen]() {
         WorkStack remarkStack;
-        SatbBuffer::Instance(GCCycleGeneration::YOUNG).GetRetiredEntries([&](BaseObject* obj, bool follow) {
+        SatbBuffer::Young().GetRetiredEntries([&](BaseObject* obj, bool follow) {
             ++satbSeen;
             if (windowStats != nullptr) {
                 ++windowStats->satbObjects;
@@ -1556,7 +1536,7 @@ bool WCollector::TryEndYoungMark(WorkStack& workStack, YoungConcWindowStats* win
     NoteMarkTerminatePause();
     size_t flushed = 0;
     MutatorManager::Instance().VisitAllMutators([](Mutator& mutator) { mutator.FlushSatbBuffer(); });
-    SatbBuffer::Instance(GCCycleGeneration::YOUNG).GetRetiredEntries([this, &workStack, windowStats, &flushed](BaseObject* object,
+    SatbBuffer::Young().GetRetiredEntries([this, &workStack, windowStats, &flushed](BaseObject* object,
                                                                                      bool follow) {
         ++flushed;
         if (windowStats != nullptr) {

@@ -21,14 +21,8 @@ class SatbBuffer {
 public:
     static constexpr size_t INITIAL_PAGES = 64;    // 64 pages of initial satb buffer
     static constexpr size_t CACHE_LINE_ALIGN = 64; // for most hardware platfrom, the cache line is 64-byte aigned.
-    static SatbBuffer& Instance() noexcept;
-    static SatbBuffer& Instance(GCCycleGeneration generation) noexcept;
-    // Serial bridge. Dual-generation obligations are wired by the successor
-    // batch after the shared mark consumers have migrated.
-    static void SelectGeneration(GCCycleGeneration generation) noexcept;
-    static void FiniGenerations();
-    explicit SatbBuffer(GCCycleGeneration generation = GCCycleGeneration::OLD) : generation(generation) {}
-    GCCycleGeneration GetGeneration() const { return generation; }
+    static SatbBuffer& Young() noexcept;
+    SatbBuffer() = default;
     class Node {
         friend class SatbBuffer;
 
@@ -359,7 +353,6 @@ public:
     }
 
 private:
-    const GCCycleGeneration generation;
     Page* GetPages(size_t bytes)
     {
         Page* page = new (PagePool::Instance().GetPage(bytes)) Page(nullptr, bytes);

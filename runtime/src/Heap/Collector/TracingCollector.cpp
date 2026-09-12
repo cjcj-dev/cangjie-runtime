@@ -738,6 +738,44 @@ void TracingCollector::AddExportObjectsTracingWork(RootSet &exportRoots)
     GetWorkers().Run(task);
 }
 
+void TracingCollector::StartOldMarkWork()
+{
+    // ZGenerationOld::mark_start -> ZMark::start. Initialize the existing M3
+    // domain before publishing old's mark phase to mutators and young workers.
+    if (majorMarkDomain == nullptr) {
+        majorMarkDomain = std::make_unique<MarkDomain>(64, VerifyMarkingStacks::MarkingGeneration::MAJOR);
+    }
+    GCWorkers& workers = collectorResources.GetWorkers(GCCycleGeneration::OLD);
+    workers.SetActiveWorkers(static_cast<uint32_t>(GetGCThreadCount(true)));
+    majorMarkDomain->BindWorkers(&workers);
+    majorMarkDomain->BindAbort(&collectorResources.GetMajorDriverPort().Abort());
+    majorMarkDomain->PrepareWork(workers.ActiveWorkers());
+}
+
+void TracingCollector::MarkOldObjectIfActive(BaseObject* object, bool gcThread) const
+{
+    const GCCycleSnapshot old = GetCycleSnapshot(GCCycleGeneration::OLD);
+    if (!old.active || (old.phase != GC_PHASE_ENUM && old.phase != GC_PHASE_TRACE &&
+                        old.phase != GC_PHASE_CLEAR_SATB_BUFFER)) {
+        return;
+    }
+    if (!Heap::IsHeapAddress(object)) {
+        return;
+    }
+    const bool marked = gcThread ? MarkObject(object) : IsMarkedObject<Generation::Old>(object);
+    if (marked) {
+        return;
+    }
+    // ZMark::mark_object marks before publishing GC-thread work. The entry
+    // carries FollowOnly so old workers still traverse an already marked root.
+    CHECK_DETAIL(majorMarkDomain != nullptr, "old mark domain must start before publication");
+    MarkStripeSet& stripes = majorMarkDomain->Stripes();
+    MarkThreadLocalStacks publication(stripes.Count());
+    publication.Push(stripes, stripes.StripeForAddress(reinterpret_cast<uintptr_t>(object)),
+                     gcThread ? MarkStackEntry::FollowOnly(object) : MarkStackEntry::MarkAndFollow(object), true);
+    (void)publication.Flush(stripes, true);
+}
+
 size_t TracingCollector::RunMajorStripeMark(WorkStack& workStack, bool partial)
 {
     GCWorkers& workersSet = GetWorkers();
@@ -780,11 +818,11 @@ void TracingCollector::TracingImpl(WorkStack& workStack, WorkStack& foreignRoots
                                       VerifyMarkingStacks::MarkingContainer::OWNER, workStack.size());
     VerifyMarkingStacks::NoteProducer(VerifyMarkingStacks::MarkingGeneration::MAJOR,
                                       VerifyMarkingStacks::MarkingContainer::FOREIGN, foreignRootsSet.size());
-    if (workStack.empty() && foreignRootsSet.empty()) {
+    if (workStack.empty() && foreignRootsSet.empty() && majorMarkDomain->Stripes().IsEmpty()) {
         return;
     }
 
-    if (!workStack.empty()) {
+    if (!workStack.empty() || !majorMarkDomain->Stripes().IsEmpty()) {
         markedObjectCount.fetch_add(RunMajorStripeMark(workStack), std::memory_order_relaxed);
         VerifyMarkingStacks::VerifyEmpty(VerifyMarkingStacks::MarkingGeneration::MAJOR,
                                          VerifyMarkingStacks::MarkingBoundary::JOIN,
@@ -877,104 +915,43 @@ void TracingCollector::DoTracing(WorkStack& workStack, WorkStack& foreignRootsSe
     VLOG(REPORT, "mark %zu objects", markedObjectCount.load(std::memory_order_relaxed));
 }
 
-bool TracingCollector::MarkSatbBuffer(WorkStack& workStack)
+bool TracingCollector::FinishOldMark(WorkStack& workStack)
 {
-    MRT_PHASE_TIMER("MarkSatbBuffer");
-    if (!workStack.empty()) {
-        workStack.clear();
-    }
-
-    // satbSeen counts every entry the drain took delivery of, marked or not. Without
-    // it an ncontinue of 0 cannot be told apart from "the pause was handed nothing":
-    // the first says the concurrent termination test was right, the second says the
-    // flush is not reaching the mutators' nodes at all.
-    size_t satbSeen = 0;
-    auto visitSatbObj = [this, &workStack, &satbSeen]() {
-        SatbBuffer::Instance(GCCycleGeneration::OLD).GetRetiredEntries(
-            [this, &workStack, &satbSeen](BaseObject* object, bool follow) {
-                ++satbSeen;
-                if (!Heap::IsHeapAddress(object)) {
-                    return;
-                }
-                if (follow) {
-                    workStack.push_back(MarkStackEntry::FollowOnly(object));
-                } else if (!IsMarkedObject<Generation::Old>(object)) {
-                    workStack.push_back(object);
-                }
-            });
-    };
-
-    visitSatbObj();
-    do {
-        if (LIKELY(!workStack.empty())) {
-            markedObjectCount.fetch_add(RunMajorStripeMark(workStack, true),
-                                        std::memory_order_relaxed);
+    // ZMark::end/try_end and ZGenerationOld::concurrent_mark_continue
+    // (zMark.cpp:940-989; zGeneration.cpp:1015-1030).
+    MarkStripeSet& stripes = majorMarkDomain->Stripes();
+    for (;;) {
+        if (!workStack.empty() || !stripes.IsEmpty()) {
+            markedObjectCount.fetch_add(RunMajorStripeMark(workStack), std::memory_order_relaxed);
         }
-        visitSatbObj();
-        if (!workStack.empty()) {
-            continue;
-        }
-        // Publish CLEAR_SATB so mutators stop treating this as plain TRACE. This is a
-        // handshake, not a pause, so it can never be the termination test: a mutator
-        // that has already acknowledged it runs on and may enqueue again.
-        if (Heap::GetHeap().GetGCPhase() != GCPhase::GC_PHASE_CLEAR_SATB_BUFFER) {
-            TransitionToGCPhase(GCPhase::GC_PHASE_CLEAR_SATB_BUFFER, true);
-            visitSatbObj();
-            if (!workStack.empty()) {
+        if (Heap::GetHeap().GetGCPhase() != GC_PHASE_CLEAR_SATB_BUFFER) {
+            TransitionToGCPhase(GC_PHASE_CLEAR_SATB_BUFFER, true);
+            if (!stripes.IsEmpty()) {
                 continue;
             }
         }
-        // ZMark::end -> try_end (zMark.cpp:940-971) makes the termination decision from
-        // inside the ZMarkEnd VM operation -- that is, with the Java threads already
-        // stopped -- flushes the threads it can still reach, and only then tests for
-        // emptiness. If anything turns up it returns false, _ncontinue++, and the whole
-        // concurrent mark resumes (zMark.cpp:973-989).
-        //
-        // Deciding this while mutators run cannot be repaired by draining again. A
-        // record pushed into a mutator's own node after that mutator flushed sits in a
-        // node that is not full, so EnsureGoodNode never retires it and no number of
-        // GetRetiredObjects passes can see it. The record is a deletion barrier's
-        // pre-value, so losing it leaves a still-reachable object unmarked -- and an
-        // unmarked live object is exactly what makes its region look empty.
-        // GCWorkers::Run has joined the generation's stripe workers before
-        // the mark-end pause (zMark.cpp:940-971).
-        CHECK_DETAIL(workStack.empty(), "strict mark termination with owner work");
-        CHECK_DETAIL(GetWorkers().GetSnapshot().remainingWorkers == 0,
-                     "strict mark termination with published worker work");
-        VerifyMarkingStacks::VerifyEmpty(VerifyMarkingStacks::MarkingGeneration::MAJOR,
-                                         VerifyMarkingStacks::MarkingBoundary::TERMINATION,
-                                         VerifyMarkingStacks::MarkingContainer::OWNER,
-                                         workStack.size(), 0);
-        VerifyMarkingStacks::VerifyEmpty(VerifyMarkingStacks::MarkingGeneration::MAJOR,
-                                         VerifyMarkingStacks::MarkingBoundary::TERMINATION,
-                                         VerifyMarkingStacks::MarkingContainer::POOL,
-                                         GetWorkers().GetSnapshot().remainingWorkers, 0);
-        bool terminated = false;
+        bool terminated;
         {
-            ScopedStopTheWorld stw("mark terminate", true, GCPhase::GC_PHASE_CLEAR_SATB_BUFFER);
+            ScopedStopTheWorld stw("old mark end", true, GC_PHASE_CLEAR_SATB_BUFFER);
             NoteMarkTerminatePause();
-            const size_t seenBefore = satbSeen;
+            const size_t before = stripes.Population();
             StoreBarrierBuffer::FlushAll(Heap::GetHeap().GetRememberedSet());
             MutatorManager::Instance().VisitAllMutators([](Mutator& mutator) { mutator.FlushSatbBuffer(false); });
-            visitSatbObj();
-            NoteMarkTerminateFlushed(satbSeen - seenBefore);
-            terminated = workStack.empty();
+            const size_t after = stripes.Population();
+            NoteMarkTerminateFlushed(after >= before ? after - before : 0);
+            terminated = workStack.empty() && stripes.IsEmpty();
         }
         if (terminated) {
-            break;
+            ReportMarkTerminateContinue();
+            return true;
         }
-        // ZMark::_ncontinue: the pause found work the concurrent phase had declared
-        // absent. Report it -- a non-zero here is the direct measurement of records
-        // the pre-pause termination test used to drop.
-        NoteMarkTerminateContinue(workStack.size());
-    } while (true);
-    ReportMarkTerminateContinue();
-    return true;
+        NoteMarkTerminateContinue(workStack.size() + stripes.Population());
+    }
 }
 
 void TracingCollector::ConcurrentReMark(WorkStack& remarkStack)
 {
-    CHECK_DETAIL(MarkSatbBuffer(remarkStack), "not cleared\n");
+    CHECK_DETAIL(FinishOldMark(remarkStack), "not cleared\n");
 }
 
 void TracingCollector::DoResurrection(WorkStack& workStack)
@@ -1228,11 +1205,8 @@ void TracingCollector::PreGarbageCollection(bool isConcurrent, uint64_t gcIndex)
          Pretty(Heap::GetHeap().GetCollector().GetGCStats().GetThreshold()).Str(),
          static_cast<unsigned>(GetCurrentTagID()));
 
-    // SatbBuffer should be initialized before concurrent enumeration.
-    SatbBuffer::SelectGeneration(GetCycleReason() == GC_REASON_YOUNG
-        ? GCCycleGeneration::YOUNG : GCCycleGeneration::OLD);
-    if (!continuingPrelude) {
-        SatbBuffer::Instance().Init();
+    if (GetCycleReason() == GC_REASON_YOUNG) {
+        SatbBuffer::Young().Init();
     }
     const int32_t threadCount = GetGCThreadCount(isConcurrent);
     GetWorkers().SetActive();
@@ -1271,7 +1245,9 @@ void TracingCollector::PostGarbageCollection(uint64_t gcIndex)
     // release pages in PagePool
     TransitionToGCPhase(GCPhase::GC_PHASE_RECLAIM_SATB_NODE, true);
     NwDropAudit::Report("reclaim_satb");
-    SatbBuffer::Instance().ReclaimALLPages();
+    if (GetCycleReason() == GC_REASON_YOUNG) {
+        SatbBuffer::Young().ReclaimALLPages();
+    }
     PagePool::Instance().Trim();
     (void)gcIndex;
 

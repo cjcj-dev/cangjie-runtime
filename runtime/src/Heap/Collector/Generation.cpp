@@ -768,7 +768,7 @@ void WCollector::DoYoungGarbageCollection()
     if (const GCDriverRequest* request = collectorResources.YoungPreludeRequest()) {
         oldCycle.SelectReason(request->reason);
         oldCycle.Begin(request->asynchronous ? GCTask::ASYNC_TASK_INDEX : request->sequence);
-        SatbBuffer::Instance(GCCycleGeneration::OLD).Init();
+        StartOldMarkWork();
         flip_old_mark_start();
         // Reset the old mark face before young roots can publish old work.
         // ZGenerationOld::mark_start -> ZMark::start (zGeneration.cpp:1212-1237).
@@ -960,7 +960,7 @@ void WCollector::DoYoungGarbageCollection()
         WorkStack enumRoots = NewWorkStack();
         theAllocator.VisitAllocBuffers([&enumRoots](AllocBuffer& buffer) { buffer.MergeRoots(enumRoots); });
         if (stackScanEpoch != 0) {
-            SatbBuffer::Instance(GCCycleGeneration::YOUNG).GetRetiredObjects(enumRoots);
+            SatbBuffer::Young().GetRetiredObjects(enumRoots);
         }
         while (!enumRoots.empty()) {
             const MarkStackEntry entry = enumRoots.back();
@@ -1281,7 +1281,7 @@ void WCollector::DoYoungGarbageCollection()
         // filled during marking is an ordinary candidate next cycle; it is never removed
         // from the structure the selector iterates.
         space.GetRegionManager().HandleTraceRegions();
-        SatbBuffer::Instance(GCCycleGeneration::YOUNG).ClearBuffer();
+        SatbBuffer::Young().ClearBuffer();
         ForwardingTable::PublishMarkCoverage(Generation::Young);
         ForwardingTable::ReclaimRetired("young-mark-coverage");
     }

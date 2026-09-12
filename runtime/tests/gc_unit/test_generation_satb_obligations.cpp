@@ -10,21 +10,23 @@
 #include "gc_heap_fixture.hpp"
 #include "gc_unittest.hpp"
 #include "Mutator/SatbBuffer.h"
+#include "Heap/Collector/MarkEngine.h"
 using namespace MapleRuntime;
 using namespace MapleRuntime::GcUnit;
 
 GC_TEST(GenerationSatb, YoungCleanupPreservesOldEntries)
 {
     GcHeapFixture heap;
-    auto& old = SatbBuffer::Instance(GCCycleGeneration::OLD);
-    auto& young = SatbBuffer::Instance(GCCycleGeneration::YOUNG);
-    old.Init();
+    // Old publications now use the actual M3 mark domain, not an old SATB
+    // instance. This component test retains the original cleanup invariant.
+    MarkDomain old(64, VerifyMarkingStacks::MarkingGeneration::MAJOR);
+    old.PrepareWork(1);
+    MarkThreadLocalStacks publication(old.Stripes().Count());
+    publication.Push(old.Stripes(), 0, MarkStackEntry::FollowOnly(heap.obj0), true);
+    publication.Flush(old.Stripes(), true);
+    auto& young = SatbBuffer::Young();
     young.Init();
     SatbBuffer::Node* node = nullptr;
-    old.EnsureGoodNode(node);
-    GC_EXPECT_TRUE(node != nullptr);
-    node->Push(heap.obj0, nullptr, true);
-    old.FlushQueue(node);
     young.EnsureGoodNode(node);
     node->Push(heap.obj1, nullptr, true);
     young.FlushQueue(node);
@@ -32,27 +34,26 @@ GC_TEST(GenerationSatb, YoungCleanupPreservesOldEntries)
     young.GetRetiredEntries([&](BaseObject* object, bool) { youngObject = object; });
     young.ClearBuffer();
     young.ReclaimALLPages();
-    BaseObject* oldObject = nullptr;
-    old.GetRetiredEntries([&](BaseObject* object, bool) { oldObject = object; });
-    old.Fini();
-    std::printf("OBSERVED young=%p old=%p expected_young=%p expected_old=%p\n",
-                youngObject, oldObject, heap.obj1, heap.obj0);
+    MarkStackEntry entry;
+    const bool found = old.Stacks(0).Pop(old.Smr(), 0, old.Stripes(), 0, entry);
+    GC_EXPECT_TRUE(found);
+    GC_EXPECT_TRUE(found && entry.object() == heap.obj0 && entry.follow() && !entry.mark());
     GC_EXPECT_TRUE(youngObject == heap.obj1);
-    GC_EXPECT_TRUE(oldObject == heap.obj0);
+
 }
 
 GC_TEST(GenerationSatb, FlushReturnsNodeToItsOwner)
 {
     GcHeapFixture heap;
-    auto& old = SatbBuffer::Instance(GCCycleGeneration::OLD);
-    auto& young = SatbBuffer::Instance(GCCycleGeneration::YOUNG);
+    SatbBuffer old;
+    SatbBuffer young;
     old.Init();
     young.Init();
     SatbBuffer::Node* node = nullptr;
     old.EnsureGoodNode(node);
     GC_EXPECT_TRUE(node != nullptr);
     node->Push(heap.obj0, nullptr, true);
-    // A serial selector change must not relabel already allocated storage.
+    // Passing a different queue must not relabel already allocated storage.
     young.FlushQueue(node);
     BaseObject* oldObject = nullptr;
     BaseObject* youngObject = nullptr;

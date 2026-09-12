@@ -29,7 +29,7 @@ class MarkLiveCache;
 constexpr uint64_t NS_PER_US = 1000;
 constexpr uint64_t NS_PER_S = 1000000000;
 
-// Strict mark-end cut shared by major MarkSatbBuffer and young
+// Strict mark-end cut shared by major FinishOldMark and young
 // MarkYoungSatbBuffer. ZMark::end -> try_end (zMark.cpp:954-971) decides
 // termination with mutators stopped, after ZMark::flush (zMark.cpp:587-605,
 // :998-1006), and resumes concurrent follow when that cut exposes work
@@ -389,6 +389,8 @@ public:
             (G == Generation::Old && RegionSpace::IsResurrectedObject(obj));
     }
     void DFSTraceExportObject(BaseObject* exportObj, bool finalizable = false);
+    void StartOldMarkWork();
+    void MarkOldObjectIfActive(BaseObject* object, bool gcThread = false) const override;
     virtual bool MarkObject(BaseObject* obj) const
     {
         // getsize7: base path uses unsized RegionInfo::MarkObject → GetSize without gate.
@@ -556,7 +558,7 @@ protected:
     void MergeMutatorRoots(WorkStack& workStack);
     void DoEnumeration(WorkStack& workStack, WorkStack& foreignRootsSet);
     void DoTracing(WorkStack& workStack, WorkStack& foreignRootsSet);
-    bool MarkSatbBuffer(WorkStack& workStack);
+    bool FinishOldMark(WorkStack& workStack);
 
     // concurrent marking.
     void TracingImpl(WorkStack& workStack, WorkStack& foreignRootsSet);

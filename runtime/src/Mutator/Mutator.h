@@ -102,8 +102,7 @@ public:
     {
         tid = 0;
         stackBoundAddr = nullptr;
-        SatbBuffer::Instance(GCCycleGeneration::YOUNG).FlushQueue(satbNode);
-        SatbBuffer::Instance(GCCycleGeneration::OLD).FlushQueue(oldSatbNode);
+        SatbBuffer::Young().FlushQueue(satbNode);
 
 #ifdef INTERPRETER_ENABLED
         DestroyInterpreterPart();
@@ -483,7 +482,7 @@ public:
         if (LIKELY(satbNode != nullptr && satbNode->Push(target, nullptr, true))) {
             return;
         }
-        SatbBuffer::Instance(GCCycleGeneration::YOUNG).EnsureGoodNode(satbNode);
+        SatbBuffer::Young().EnsureGoodNode(satbNode);
         // EnsureGoodNode may leave the node null when this mutator has no
         // SATB arena available (for example during runtime-thread setup or
         // after the collector has handed the last node back).  Publishing a
@@ -646,8 +645,7 @@ public:
         if (flushStoreBarrier && markFlushAllocBuffer != nullptr && rememberedSet->IsInitialized()) {
             markFlushAllocBuffer->GetStoreBarrierBuffer().Flush(*rememberedSet);
         }
-        SatbBuffer::Instance(GCCycleGeneration::YOUNG).FlushQueue(satbNode);
-        SatbBuffer::Instance(GCCycleGeneration::OLD).FlushQueue(oldSatbNode);
+        SatbBuffer::Young().FlushQueue(satbNode);
     }
 
 protected:
@@ -683,11 +681,15 @@ private:
                               cycle.phase != GC_PHASE_CLEAR_SATB_BUFFER)) {
             return;
         }
-        SatbBuffer::Node*& node = generation == GCCycleGeneration::YOUNG ? satbNode : oldSatbNode;
+        if (generation == GCCycleGeneration::OLD) {
+            Heap::GetHeap().GetCollector().MarkOldObjectIfActive(const_cast<BaseObject*>(object));
+            return;
+        }
+        SatbBuffer::Node*& node = satbNode;
         if (LIKELY(node != nullptr && node->Push(target, knownBase))) {
             return;
         }
-        SatbBuffer::Instance(generation).EnsureGoodNode(node);
+        SatbBuffer::Young().EnsureGoodNode(node);
         CHECK_DETAIL(node != nullptr, "mark publication requires a generation SATB node");
         (void)node->Push(target, knownBase);
     }
@@ -729,7 +731,6 @@ private:
     ManagedList<RootSlot> localFinalizers;
 
     SatbBuffer::Node* satbNode = nullptr;
-    SatbBuffer::Node* oldSatbNode = nullptr;
 #if defined(GCINFO_DEBUG) && GCINFO_DEBUG
     GCInfos gcInfos;
 #endif

@@ -207,7 +207,7 @@ GC_TEST(StoreBuf, ProductWriteCarriesOldValueOnlyInPrevArm)
     std::vector<BaseObject*> retired;
     // The independently required new-value closure is still in the mutator's
     // direct node.  GetRetiredObjects therefore measures only the paired flush.
-    SatbBuffer::Instance().GetRetiredObjects(retired);
+    SatbBuffer::Young().GetRetiredObjects(retired);
     retired.clear();
     GC_EXPECT_EQ(pending, 1u);
     if (pending != 1u) {
@@ -224,7 +224,7 @@ GC_TEST(StoreBuf, ProductWriteCarriesOldValueOnlyInPrevArm)
         return;
     }
     buf.Flush(rs, collector);
-    SatbBuffer::Instance().GetRetiredObjects(retired);
+    SatbBuffer::Young().GetRetiredObjects(retired);
     // The product TraceBarrier path contributes exactly one SATB retirement;
     // its former direct enqueue was removed, leaving the paired flush as the
     // sole producer for this runtime-domain write.
@@ -258,7 +258,7 @@ GC_TEST(StoreBuf, ProductPhaseFlushHandsPairedPrevToSatb)
     heap.SetGCPhase(GCPhase::GC_PHASE_TRACE);
 
     std::vector<BaseObject*> retired;
-    SatbBuffer::Instance().GetRetiredObjects(retired);
+    SatbBuffer::Young().GetRetiredObjects(retired);
     retired.clear();
     Mutator mutator;
     mutator.SetMutatorPhase(GCPhase::GC_PHASE_TRACE);
@@ -277,7 +277,7 @@ GC_TEST(StoreBuf, ProductPhaseFlushHandsPairedPrevToSatb)
     resources.GetGCStats().reason = reasonBefore;
     resources.SetGcStarted(startedBefore);
 
-    SatbBuffer::Instance().GetRetiredObjects(retired);
+    SatbBuffer::Young().GetRetiredObjects(retired);
     size_t oldCount = 0;
     size_t newCount = 0;
     for (BaseObject* object : retired) {
@@ -375,7 +375,7 @@ GC_TEST(StoreBuf, CompilerFastOverwriteHandsObservedOldToSatb)
     heap.SetGCPhase(GCPhase::GC_PHASE_TRACE);
 
     std::vector<BaseObject*> retired;
-    SatbBuffer::Instance().GetRetiredObjects(retired);
+    SatbBuffer::Young().GetRetiredObjects(retired);
     retired.clear();
     Mutator mutator;
     mutator.SetMutatorPhase(GCPhase::GC_PHASE_TRACE);
@@ -397,7 +397,7 @@ GC_TEST(StoreBuf, CompilerFastOverwriteHandsObservedOldToSatb)
     resources.GetGCStats().reason = reasonBefore;
     resources.SetGcStarted(startedBefore);
 
-    SatbBuffer::Instance().GetRetiredObjects(retired);
+    SatbBuffer::Young().GetRetiredObjects(retired);
     size_t oldReceipts = 0;
     size_t newReceipts = 0;
     for (BaseObject* object : retired) {
@@ -479,7 +479,7 @@ GC_TEST(StoreBuf, NonNullPrevPublishesSatbBeforeRememberingSlot)
     StoreBufferCollector collector;
     StoreBarrierBuffer buf;
     std::vector<BaseObject*> retired;
-    SatbBuffer::Instance().GetRetiredObjects(retired);
+    SatbBuffer::Young().GetRetiredObjects(retired);
     retired.clear();
 
     const MAddress slot = SlotAt(fx, 8);
@@ -492,7 +492,7 @@ GC_TEST(StoreBuf, NonNullPrevPublishesSatbBeforeRememberingSlot)
 #endif
     buf.Add(slot, prev, installed, rs);
     buf.Flush(rs, collector);
-    SatbBuffer::Instance().GetRetiredObjects(retired);
+    SatbBuffer::Young().GetRetiredObjects(retired);
 
     GC_EXPECT_EQ(retired.size(), 1u);
     GC_EXPECT_EQ(reinterpret_cast<MAddress>(retired[0]), reinterpret_cast<MAddress>(fx.obj0));
@@ -511,7 +511,7 @@ GC_TEST(StoreBuf, NullPrevOnlyRemembersSlot)
     rs.Initialize(fx.heapStart, 2 * RegionInfo::UNIT_SIZE);
     StoreBarrierBuffer buf;
     std::vector<BaseObject*> retired;
-    SatbBuffer::Instance().GetRetiredObjects(retired);
+    SatbBuffer::Young().GetRetiredObjects(retired);
     retired.clear();
 
     const MAddress slot = SlotAt(fx, 8);
@@ -519,7 +519,7 @@ GC_TEST(StoreBuf, NullPrevOnlyRemembersSlot)
                                                static_cast<uintptr_t>(::g_cjStoreGoodMask) };
     buf.Add(slot, zpointer::null, installed, rs);
     buf.Flush(rs);
-    SatbBuffer::Instance().GetRetiredObjects(retired);
+    SatbBuffer::Young().GetRetiredObjects(retired);
 
     GC_EXPECT_TRUE(retired.empty());
     GC_EXPECT_TRUE(rs.Contains(slot));
@@ -533,7 +533,7 @@ GC_TEST(StoreBuf, NullAndNonCurrentPreviousAreNormalSkips)
     StoreBufferCollector collector;
     StoreBarrierBuffer buf;
     std::vector<BaseObject*> retired;
-    SatbBuffer::Instance().GetRetiredObjects(retired);
+    SatbBuffer::Young().GetRetiredObjects(retired);
     retired.clear();
 
     const uintptr_t currentColour = static_cast<uintptr_t>(::g_cjStoreGoodMask);
@@ -547,7 +547,7 @@ GC_TEST(StoreBuf, NullAndNonCurrentPreviousAreNormalSkips)
                                        currentColour ^ MARKED_OLD_MASK }, rs);
 
     buf.Flush(rs, collector);
-    SatbBuffer::Instance().GetRetiredObjects(retired);
+    SatbBuffer::Young().GetRetiredObjects(retired);
     std::fprintf(stderr,
                  "DETAIL arm=normal_skip null_prev=1 non_current=1 retired_receipts=%zu current=%zu "
                  "null_remembered=%u non_current_remembered=%u\n",
@@ -569,7 +569,7 @@ GC_TEST(StoreBuf, ResolvedInvalidPreviousIsClassifiedAndCleared)
     StoreBufferCollector collector;
     StoreBarrierBuffer buf;
     std::vector<BaseObject*> retired;
-    SatbBuffer::Instance().GetRetiredObjects(retired);
+    SatbBuffer::Young().GetRetiredObjects(retired);
     retired.clear();
 
     uintptr_t outsideHeap = 0;
@@ -584,7 +584,7 @@ GC_TEST(StoreBuf, ResolvedInvalidPreviousIsClassifiedAndCleared)
     buf.Add(slot, previous,
             StoreBarrierInstallState { static_cast<uint8_t>(GCPhase::GC_PHASE_TRACE), false, colour }, rs);
     buf.Flush(rs, collector);
-    SatbBuffer::Instance().GetRetiredObjects(retired);
+    SatbBuffer::Young().GetRetiredObjects(retired);
 
     std::fprintf(stderr,
                  "DETAIL arm=resolved_invalid prev=%#zx installed_phase=%u installed_store_good=%#zx "
@@ -613,7 +613,7 @@ GC_TEST(StoreBuf, SatbNodeUnavailableFailsClosedBeforeClear)
     AllocBufferScope allocScope(alloc);
     StoreBarrierBuffer& buf = alloc.GetStoreBarrierBuffer();
     std::vector<BaseObject*> retired;
-    SatbBuffer::Instance().GetRetiredObjects(retired);
+    SatbBuffer::Young().GetRetiredObjects(retired);
     retired.clear();
 
     const uintptr_t colour = static_cast<uintptr_t>(::g_cjStoreGoodMask);
@@ -653,7 +653,7 @@ GC_TEST(StoreBuf, SatbNodeUnavailableFailsClosedBeforeClear)
                      static_cast<size_t>(entry.installed.storeGood), currentBefore);
         std::fflush(stderr);
         mutator.TransitionToGCPhaseExclusive(GCPhase::GC_PHASE_CLEAR_SATB_BUFFER);
-        SatbBuffer::Instance().GetRetiredObjects(retired);
+        SatbBuffer::Young().GetRetiredObjects(retired);
         std::fprintf(stderr,
                      "DETAIL arm=node_null stage=after_flush retired_receipts=%zu current=%zu slot_remembered=%u\n",
                      retired.size(), buf.Current(), static_cast<unsigned>(rs.Contains(slot)));
@@ -687,7 +687,7 @@ GC_TEST(StoreBuf, YoungHolderRetiresPrevWithoutRememberingSlot)
     StoreBufferCollector collector;
     StoreBarrierBuffer buf;
     std::vector<BaseObject*> retired;
-    SatbBuffer::Instance().GetRetiredObjects(retired);
+    SatbBuffer::Young().GetRetiredObjects(retired);
     retired.clear();
 
     const MAddress slot = reinterpret_cast<MAddress>(fx.obj1) + TYPEINFO_PTR_SIZE;
@@ -696,7 +696,7 @@ GC_TEST(StoreBuf, YoungHolderRetiresPrevWithoutRememberingSlot)
     buf.Add(slot, prev,
             StoreBarrierInstallState { static_cast<uint8_t>(GCPhase::GC_PHASE_TRACE), false, colour }, rs);
     buf.Flush(rs, collector);
-    SatbBuffer::Instance().GetRetiredObjects(retired);
+    SatbBuffer::Young().GetRetiredObjects(retired);
 
     GC_EXPECT_EQ(retired.size(), 1u);
     GC_EXPECT_EQ(reinterpret_cast<MAddress>(retired[0]), reinterpret_cast<MAddress>(fx.obj0));
@@ -711,7 +711,7 @@ GC_TEST(StoreBuf, PhaseFlipRetainsOnlyCurrentEpochPrev)
     StoreBufferCollector collector;
     StoreBarrierBuffer buf;
     std::vector<BaseObject*> retired;
-    SatbBuffer::Instance().GetRetiredObjects(retired);
+    SatbBuffer::Young().GetRetiredObjects(retired);
     retired.clear();
 
     const uintptr_t current = static_cast<uintptr_t>(::g_cjStoreGoodMask);
@@ -724,7 +724,7 @@ GC_TEST(StoreBuf, PhaseFlipRetainsOnlyCurrentEpochPrev)
             StoreBarrierInstallState { static_cast<uint8_t>(GCPhase::GC_PHASE_TRACE), false, current }, rs);
 
     buf.Flush(rs, collector);
-    SatbBuffer::Instance().GetRetiredObjects(retired);
+    SatbBuffer::Young().GetRetiredObjects(retired);
 
     GC_EXPECT_EQ(retired.size(), 1u);
     GC_EXPECT_EQ(reinterpret_cast<MAddress>(retired[0]), reinterpret_cast<MAddress>(fx.obj1));
@@ -738,7 +738,7 @@ GC_TEST(StoreBuf, PendingEntryFromOldEpochIsRejectedAfterOldMarkFlip)
     StoreBufferCollector collector;
     StoreBarrierBuffer buf;
     std::vector<BaseObject*> retired;
-    SatbBuffer::Instance().GetRetiredObjects(retired);
+    SatbBuffer::Young().GetRetiredObjects(retired);
     retired.clear();
 
     const uintptr_t before = static_cast<uintptr_t>(::g_cjStoreGoodMask);
@@ -750,7 +750,7 @@ GC_TEST(StoreBuf, PendingEntryFromOldEpochIsRejectedAfterOldMarkFlip)
     ::g_cjStoreGoodMask = before ^ MARKED_OLD_MASK;
     buf.Flush(rs, collector);
     ::g_cjStoreGoodMask = before;
-    SatbBuffer::Instance().GetRetiredObjects(retired);
+    SatbBuffer::Young().GetRetiredObjects(retired);
 
     GC_EXPECT_TRUE(retired.empty());
     GC_EXPECT_TRUE(rs.Contains(SlotAt(fx, 12)));
@@ -764,7 +764,7 @@ GC_TEST(StoreBuf, PendingOldMarkEntrySurvivesYoungMarkFlip)
     StoreBufferCollector collector;
     StoreBarrierBuffer buf;
     std::vector<BaseObject*> retired;
-    SatbBuffer::Instance().GetRetiredObjects(retired);
+    SatbBuffer::Young().GetRetiredObjects(retired);
     retired.clear();
 
     const uintptr_t before = static_cast<uintptr_t>(::g_cjStoreGoodMask);
@@ -776,7 +776,7 @@ GC_TEST(StoreBuf, PendingOldMarkEntrySurvivesYoungMarkFlip)
     ::g_cjStoreGoodMask = before ^ MARKED_YOUNG_MASK;
     buf.Flush(rs, collector);
     ::g_cjStoreGoodMask = before;
-    SatbBuffer::Instance().GetRetiredObjects(retired);
+    SatbBuffer::Young().GetRetiredObjects(retired);
 
     GC_EXPECT_EQ(retired.size(), 1u);
     GC_EXPECT_EQ(reinterpret_cast<MAddress>(retired[0]), reinterpret_cast<MAddress>(fx.obj0));

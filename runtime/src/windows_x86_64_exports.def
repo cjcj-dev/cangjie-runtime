@@ -1096,7 +1096,6 @@ EXPORTS
     _ZN12MapleRuntime10SatbBuffer17GetRetiredObjectsINS_9MarkStackIPNS_10BaseObjectEEEEEvRT_ @1089
     _ZN12MapleRuntime10SatbBuffer4InitEv @1090
     _ZN12MapleRuntime10SatbBuffer6FilterEPNS0_4NodeE @1091
-    _ZN12MapleRuntime10SatbBuffer8InstanceEv @1092
     _ZN12MapleRuntime10TraceClear10DumpRecentEy @1093
     _ZN12MapleRuntime10TraceClear10LookupKindEyPKcyPcy @1094
     _ZN12MapleRuntime10TraceClear15NoteRegionEventEyyPKcPvyjjj @1095
@@ -1736,7 +1735,6 @@ EXPORTS
     _ZN12MapleRuntime16TracingCollector13DoEnumerationERNS_9MarkStackIPNS_10BaseObjectEEES5_ @1753
     _ZN12MapleRuntime16TracingCollector13UpdateGCStatsEv @1754
     _ZN12MapleRuntime16TracingCollector14DoResurrectionERNS_9MarkStackIPNS_10BaseObjectEEE @1755
-    _ZN12MapleRuntime16TracingCollector14MarkSatbBufferERNS_9MarkStackIPNS_10BaseObjectEEE @1756
     _ZN12MapleRuntime16TracingCollector15GetAndTryTagObjENS0_11RefSlotKindEPNS_10BaseObjectERNS_8HeapSlotILb0EEE @1757
     _ZN12MapleRuntime16TracingCollector15GetCurrentTagIDEv @1758
     _ZN12MapleRuntime16TracingCollector15ResurrectObjectEPNS_10BaseObjectEyPNS_10RegionInfoE @1759

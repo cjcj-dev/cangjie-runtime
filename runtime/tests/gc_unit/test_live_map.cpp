@@ -824,8 +824,8 @@ GC_TEST(ZLiveMapPort, DuplicateSatbPublicationConvergesAtStrongMark)
     RegionBitmap* bitmap = fx.PlantMarkBitmap(live, fx.region0->GetRegionSize());
     const size_t offset = fx.region0->GetAddressOffset(reinterpret_cast<MAddress>(fx.obj0));
 
-    GC_EXPECT_TRUE(SatbBuffer::Instance().ShouldEnqueue(fx.obj0));
-    GC_EXPECT_TRUE(SatbBuffer::Instance().ShouldEnqueue(fx.obj0));
+    GC_EXPECT_TRUE(SatbBuffer::Young().ShouldEnqueue(fx.obj0));
+    GC_EXPECT_TRUE(SatbBuffer::Young().ShouldEnqueue(fx.obj0));
 
     bool firstIncLive = false;
     bool secondIncLive = false;
@@ -841,7 +841,7 @@ GC_TEST(ZLiveMapPort, DuplicateSatbPublicationConvergesAtStrongMark)
     GC_EXPECT_TRUE(receiptOnce && incLiveOnce && bytesOnce);
     GC_EXPECT_TRUE(bitmap->IsMarked(offset));
     GC_EXPECT_EQ(liveBytes, static_cast<size_t>(8));
-    GC_EXPECT_FALSE(SatbBuffer::Instance().ShouldEnqueue(fx.obj0));
+    GC_EXPECT_FALSE(SatbBuffer::Young().ShouldEnqueue(fx.obj0));
 
     fx.region0->metadata.liveInfo = nullptr;
     fx.FreePlanted(live);

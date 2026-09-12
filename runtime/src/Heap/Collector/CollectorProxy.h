@@ -41,6 +41,11 @@ public:
                                            : Collector::GetCycleSnapshot(generation);
     }
 
+    void MarkOldObjectIfActive(BaseObject* object, bool gcThread = false) const override
+    {
+        currentCollector->MarkOldObjectIfActive(object, gcThread);
+    }
+
     void SetGCPhase(const GCPhase phase) override { currentCollector->SetGCPhase(phase); }
 
     // dispatch garbage collection to the right collector

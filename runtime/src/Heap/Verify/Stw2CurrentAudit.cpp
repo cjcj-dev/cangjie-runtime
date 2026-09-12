@@ -127,7 +127,7 @@ void Census(const std::unordered_set<MAddress>& currentSlots, Allocator* allocat
     }
 
     std::unordered_set<BaseObject*> satbSet;
-    SatbBuffer::Instance().PeekRetired([&satbSet](BaseObject* obj) {
+    SatbBuffer::Young().PeekRetired([&satbSet](BaseObject* obj) {
         if (obj != nullptr) {
             satbSet.insert(obj);
         }

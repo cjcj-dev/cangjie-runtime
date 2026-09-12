@@ -256,7 +256,7 @@ void* Exercise(void*)
     Expect(y1.sequence == y0.sequence + 1, "major_prelude_young_sequence");
     Expect(o1.sequence == o0.sequence + 1, "major_old_sequence");
     Expect(o1.reason == GC_REASON_USER && !o1.active, "major_reason_completion");
-    Expect(SatbBuffer::Instance().GetGeneration() == GCCycleGeneration::OLD, "major_satb_owner");
+    Expect(SatbBuffer::Young().IsRetiredEmpty(), "major_preserves_completed_young_queue");
     collector.RequestGC(GC_REASON_YOUNG, false);
     auto youngWorkers2 = resources.GetWorkers(GCCycleGeneration::YOUNG).GetSnapshot();
     auto oldWorkers2 = resources.GetWorkers(GCCycleGeneration::OLD).GetSnapshot();
@@ -269,7 +269,7 @@ void* Exercise(void*)
     Expect(Same(o1, o2), "minor_preserves_old_state");
     Expect(y2.reason == GC_REASON_YOUNG && !y2.active, "minor_reason_completion");
     Expect(y2.phase == GC_PHASE_RECLAIM_SATB_NODE, "minor_phase_consumer");
-    Expect(SatbBuffer::Instance().GetGeneration() == GCCycleGeneration::YOUNG, "minor_satb_owner");
+    Expect(SatbBuffer::Young().IsRetiredEmpty(), "minor_completes_young_queue");
     std::printf("PRODUCT_STATE young_seq=%llu old_seq=%llu young_phase=%u old_phase=%u\n",
         (unsigned long long)y2.sequence, (unsigned long long)o2.sequence,
         (unsigned)y2.phase, (unsigned)o2.phase);

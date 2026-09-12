@@ -446,10 +446,7 @@ void MarkAndRememberNewValue(BarrierPhase barrierPhase, BaseObject* ref)
         }
         return;
     }
-    Mutator* mutator = Mutator::GetMutator();
-    if (mutator != nullptr) {
-        mutator->RememberObjectInSatbBuffer(ref);
-    }
+    Heap::GetHeap().GetCollector().MarkOldObjectIfActive(ref);
 }
 
 // A thread without an AllocBuffer still owes the same SATB deletion receipt as
@@ -480,7 +477,11 @@ void RetirePreviousWithoutAllocBuffer(BarrierPhase barrierPhase, zpointer prev, 
                           cycle.phase != GC_PHASE_CLEAR_SATB_BUFFER)) {
         return;
     }
-    SatbBuffer& satb = SatbBuffer::Instance(generation);
+    if (!young) {
+        collector.MarkOldObjectIfActive(resolved);
+        return;
+    }
+    SatbBuffer& satb = SatbBuffer::Young();
     SatbBuffer::Node* node = nullptr;
     satb.EnsureGoodNode(node);
     CHECK_DETAIL(node != nullptr,

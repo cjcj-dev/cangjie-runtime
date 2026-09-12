@@ -192,7 +192,7 @@ struct ReceiptCounts {
 ReceiptCounts DrainReceipts(BaseObject* oldValue, BaseObject* newValue)
 {
     std::vector<BaseObject*> retired;
-    SatbBuffer::Instance().GetRetiredObjects(retired);
+    SatbBuffer::Young().GetRetiredObjects(retired);
     ReceiptCounts counts;
     for (BaseObject* object : retired) {
         counts.oldValue += object == oldValue ? 1u : 0u;

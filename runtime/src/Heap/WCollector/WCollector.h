@@ -1384,7 +1384,7 @@ private:
                                   std::vector<BaseObject*>& reachableVec, MinorSlotSet& reachableSlots,
                                   MinorSlotSet& weakSlots,
                                   const MinorSlotSet* reachableSlotDomain = nullptr);
-    // youngconc: drain SATB into TraceYoungClosure (major MarkSatbBuffer sibling; young-only filter).
+    // youngconc: drain SATB into TraceYoungClosure (major FinishOldMark sibling; young-only filter).
     bool MarkYoungSatbBuffer(WorkStack& workStack, bool fullYoungScan,
                              std::vector<BaseObject*>& reachableVec, MinorSlotSet& reachableSlots,
                              MinorSlotSet& weakSlots,
@@ -1425,7 +1425,6 @@ private:
     // After nested young, remaining young survivors hold young→old edges the
     // young closure skipped. ZGC overlapping mark paints old targets from those
     // stores (zBarrier.inline.hpp:742-749). Seed them into the old TRACE stack.
-    void MarkOldFromYoung(BaseObject* object) const;
     void FlushAllocationRegions();
     template<bool forward>
     bool TryUpdateRefFieldImpl(BaseObject* obj, RefField<>& ref, BaseObject*& oldRef, BaseObject*& newRef,
