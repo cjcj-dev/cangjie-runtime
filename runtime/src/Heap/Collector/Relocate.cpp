@@ -870,14 +870,20 @@ bool WCollector::CasInstallResolvedTarget(RefField<>& field, MAddress expected, 
     if (expected == raw(desired)) {
         return true;
     }
-    if (HealSlot(field, to_zpointer(expected), desired, site, allowNull)) {
+    const zpointer observed = to_zpointer(expected);
+    auto loadGood = [this](zpointer value) {
+        RefField<> probe(value);
+        return is_null(probe.GetTargetObject()) || is_load_good(probe);
+    };
+    if (loadGood(observed)) {
+        return true;
+    }
+    const bool healed = ZgcSelfHeal(field, observed, desired, loadGood, site, allowNull);
+    if (healed) {
         g_minorRefCasOk.fetch_add(1, std::memory_order_relaxed);
         return true;
     }
     g_minorRefCasFail.fetch_add(1, std::memory_order_relaxed);
-    if (is_load_good(field)) {
-        return true;
-    }
     return true;
 }
 

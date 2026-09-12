@@ -124,16 +124,11 @@ public:
 
     RegionBitmap* AllocateRegionBitmap(size_t regionSize)
     {
-        if (RegionBitmap* recycled = TakeRecycledRegionBitmap(regionSize)) {
-            new (recycled) RegionBitmap(regionSize);
-            recycled->Reset();
-            return recycled;
-        }
-        uintptr_t addr = liveInfoData.Allocate(ForwardDataSpace::Zone::ZoneType::BIT_MAP,
-                                               RegionBitmap::GetRegionBitmapSize(regionSize));
-        RegionBitmap* bitmap = reinterpret_cast<RegionBitmap*>(addr);
-        CHECK(bitmap != nullptr);
-        new (bitmap) RegionBitmap(regionSize);
+        const size_t bytes = RegionBitmap::GetRegionBitmapSize(regionSize);
+        void* addr = std::malloc(bytes);
+        CHECK(addr != nullptr);
+        std::memset(addr, 0, bytes);
+        RegionBitmap* bitmap = new (addr) RegionBitmap(regionSize);
         return bitmap;
     }
 
@@ -142,9 +137,7 @@ public:
         if (bitmap == nullptr || reinterpret_cast<MAddress>(bitmap) == LiveInfo::TEMPORARY_PTR) {
             return;
         }
-        const size_t regionSize = bitmap->CoveredRegionSize();
-        std::lock_guard<std::mutex> guard(recycleMutex);
-        recycledBySize[regionSize].push_back(bitmap);
+        std::free(bitmap);
     }
 
     void RetireUntilOwnerExit(LiveInfo* owner, RegionBitmap* bitmap)
@@ -201,37 +194,19 @@ public:
     }
 
 private:
-    RegionBitmap* TakeRecycledRegionBitmap(size_t regionSize)
-    {
-        std::lock_guard<std::mutex> guard(recycleMutex);
-        auto it = recycledBySize.find(regionSize);
-        if (it == recycledBySize.end() || it->second.empty()) {
-            return nullptr;
-        }
-        RegionBitmap* bitmap = it->second.back();
-        it->second.pop_back();
-        return bitmap;
-    }
-
     size_t GetLiveInfoDataSize(size_t heapSize)
     {
-        const size_t REGION_UNIT_SIZE = MapleRuntime::MRT_PAGE_SIZE; // must be equal to RegionInfo::UNIT_SIZE
+        const size_t REGION_UNIT_SIZE = MapleRuntime::MRT_PAGE_SIZE;
         heapSize = RoundUp<size_t>(heapSize, REGION_UNIT_SIZE);
         size_t unitCnt = heapSize / REGION_UNIT_SIZE;
         regionUnitCount = unitCnt;
-        // 64: bitmap 1 bit marks the 64 bits in region.
-        constexpr uint8_t bitMarksSize = 64;
-        // 4 bitmaps for each region: young mark, old mark, resurrect, enqueue.
-        constexpr uint8_t bitmapNum = 4;
-        return unitCnt * sizeof(LiveInfo) +
-            unitCnt * (sizeof(RegionBitmap) + (REGION_UNIT_SIZE / bitMarksSize)) * bitmapNum;
+        return unitCnt * sizeof(LiveInfo);
     }
     ForwardDataSpace liveInfoData;
     size_t regionUnitCount = 0;
     uintptr_t forwardDataStart = 0;
     size_t forwardDataSize = 0;
     std::mutex recycleMutex;
-    std::unordered_map<size_t, std::vector<RegionBitmap*>> recycledBySize;
     std::unordered_map<LiveInfo*, std::vector<RegionBitmap*>> retiredByOwner;
 };
 } // namespace MapleRuntime
