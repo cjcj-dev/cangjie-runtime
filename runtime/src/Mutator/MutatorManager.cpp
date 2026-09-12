@@ -656,6 +656,49 @@ void MutatorManager::VisitAllMutatorsExceptFinalizer(MutatorVisitor func)
     ScheduleAllCJThreadVisitMutator(VisitMuatorHelper, &func);
 }
 
+bool MutatorManager::HandshakeFlushMarkProducers()
+{
+    bool flushed = false;
+    if (WorldStopped()) {
+        VisitAllMutators([&flushed](Mutator& mutator) {
+            if (mutator.FlushSatbBuffer(true)) {
+                flushed = true;
+            }
+        });
+        return flushed;
+    }
+    std::list<Mutator*> pending;
+    VisitAllMutators([&pending](Mutator& mutator) {
+        mutator.SetSuspensionFlag(Mutator::SuspensionType::SUSPENSION_FOR_MARK_FLUSH);
+        mutator.SetSafepointActive(true);
+        pending.push_back(&mutator);
+    });
+    Mutator* self = Mutator::GetMutator();
+    while (!pending.empty()) {
+        for (auto it = pending.begin(); it != pending.end();) {
+            Mutator* mutator = *it;
+            if (!mutator->HasSuspensionRequest(Mutator::SuspensionType::SUSPENSION_FOR_MARK_FLUSH)) {
+                it = pending.erase(it);
+                continue;
+            }
+            if (mutator == self || mutator->InSaferegion()) {
+                if (mutator->FlushSatbBuffer(true)) {
+                    flushed = true;
+                }
+                mutator->ClearSuspensionFlag(Mutator::SuspensionType::SUSPENSION_FOR_MARK_FLUSH);
+                mutator->SetSafepointActive(mutator->HasAnySuspensionRequest());
+                it = pending.erase(it);
+                continue;
+            }
+            ++it;
+        }
+        if (!pending.empty()) {
+            std::this_thread::yield();
+        }
+    }
+    return flushed;
+}
+
 void MutatorManager::StopTheWorld(bool syncGCPhase, GCPhase phase)
 {
     // stackwm #5: exposure-hook slow path must not introduce STW (assertion ④).

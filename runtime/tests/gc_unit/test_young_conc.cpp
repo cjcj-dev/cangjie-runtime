@@ -1568,11 +1568,6 @@ GC_TEST(YoungConc, YoungAllocBlackCleanupLedgerIsOneShot)
     GC_EXPECT_TRUE(second.empty());
 }
 
-GC_TEST(YoungConc, MarkTerminateProtocolDefault)
-{
-    GC_EXPECT_TRUE(true);
-}
-
 // Negative control for the exact pre-fix termination decision. Leave one SATB
 // deletion-barrier pre-value in a mutator-local, non-full node. Retired-only
 // sampling reports global-empty and would commit termination, while the target

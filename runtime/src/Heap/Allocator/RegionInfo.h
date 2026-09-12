@@ -1824,6 +1824,35 @@ public:
     }
 
     template<Generation G>
+    bool IsLiveObject(MarkView<G> view, const BaseObject* obj)
+    {
+        CHECK(view.GetRegion() == this);
+        if (!ValidateMarkView(view)) {
+            return false;
+        }
+        size_t offset = GetAddressOffset(reinterpret_cast<MAddress>(obj));
+        if (view.GetEpoch() == GetMarkSnapshotEpoch<G>() && AllocatedAfterMarkStart(offset)) {
+            return true;
+        }
+        if (IsLargeRegion()) {
+            return GetMarkedRegionFlag(view) == 1;
+        }
+        LiveInfo* liveInfo = GetLiveInfoForView(view);
+        if (liveInfo == nullptr) {
+            return false;
+        }
+        if (!NoteMarkEpochOnRead(view, liveInfo)) {
+            return false;
+        }
+        RegionBitmap* markBitmap =
+            __atomic_load_n(&liveInfo->GetMarkFace().bitmap, std::memory_order_acquire);
+        if (markBitmap == nullptr || reinterpret_cast<MAddress>(markBitmap) == LiveInfo::TEMPORARY_PTR) {
+            return false;
+        }
+        return markBitmap->IsLive(offset);
+    }
+
+    template<Generation G>
     bool IsMarkedObject(MarkView<G> view, size_t offset)
     {
         CHECK(view.GetRegion() == this);

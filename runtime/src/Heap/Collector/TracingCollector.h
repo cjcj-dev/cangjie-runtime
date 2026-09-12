@@ -373,6 +373,11 @@ public:
     template<Generation G>
     bool IsMarkedObject(const BaseObject* obj) const { return RegionSpace::IsMarkedObject<G>(obj); }
 
+    template<Generation G>
+    bool IsLiveObject(const BaseObject* obj) const { return RegionSpace::IsLiveObject<G>(obj); }
+
+    bool FlushMarkProducers(MarkDomain* domain);
+
     // live or resurrected object.
     template<Generation G>
     inline bool IsSurvivedObject(const BaseObject* obj) const
