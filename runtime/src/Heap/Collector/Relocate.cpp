@@ -2719,8 +2719,15 @@ BaseObject* WCollector::RelocateObjectInner(BaseObject* obj, BaseObject* planned
     BaseObject* toObj = planned;
     if (toObj == nullptr) {
         const size_t size = RegionSpace::GetAllocSize(*obj);
-        toObj = reinterpret_cast<BaseObject*>(
-            AllocBuffer::GetOrCreateAllocBuffer()->Allocate(size, AllocType::MOVEABLE_OBJECT));
+        AllocBuffer* buf = AllocBuffer::GetOrCreateAllocBuffer();
+        RegionInfo* tl = buf->GetRegion();
+        if (tl != nullptr && tl != RegionInfo::NullRegion()) {
+            toObj = reinterpret_cast<BaseObject*>(tl->Alloc(size));
+        }
+        if (toObj == nullptr) {
+            toObj = reinterpret_cast<BaseObject*>(
+                buf->Allocate(size, AllocType::MOVEABLE_OBJECT));
+        }
         if (toObj == nullptr) {
             if (obj->GetStateWord().IsLockedWord()) {
                 obj->UnlockObject(ObjectState::NORMAL);
