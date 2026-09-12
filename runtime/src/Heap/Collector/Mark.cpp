@@ -702,7 +702,6 @@ void WCollector::TraceHeap()
                                          VerifyMarkingStacks::MarkingContainer::POOL,
                                          GetWorkers().GetSnapshot().remainingWorkers, 0);
 
-        ProcessFinalizers();
     }
 
     // ZVerify::after_mark (zVerify.cpp:496-506) runs here, between mark completing and

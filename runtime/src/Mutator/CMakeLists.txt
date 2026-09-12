@@ -6,7 +6,6 @@
 
 set(SRC_LIST
     "Mutator.cpp"
-    "WeakRefBuffer.cpp"
     "MutatorManager.cpp"
     "ThreadLocal.cpp"
 )

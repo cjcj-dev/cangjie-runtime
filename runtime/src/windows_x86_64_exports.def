@@ -1509,8 +1509,6 @@ EXPORTS
     _ZN12MapleRuntime13VerifyRegions23VerifyAfterPrepareYoungERNS_13RegionManagerERKNSt3__113unordered_setIPNS_10RegionInfoENS3_4hashIS6_EENS3_8equal_toIS6_EENS3_9allocatorIS6_EEEEyPKc @1526
     _ZN12MapleRuntime13VerifyRegions7IsFatalEv @1527
     _ZN12MapleRuntime13VerifyRegions9IsEnabledEv @1528
-    _ZN12MapleRuntime13WeakRefBuffer6InsertEPNS_10BaseObjectE @1529
-    _ZN12MapleRuntime13WeakRefBuffer8InstanceEv @1530
     _ZN12MapleRuntime13g_initializedE @1531 DATA
     _ZN12MapleRuntime13g_injectStateE @1532 DATA
     _ZN12MapleRuntime14ATraceEndAsyncEPKci @1533
