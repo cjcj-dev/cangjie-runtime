@@ -4554,7 +4554,8 @@ GC_TEST(ForwardingPublicationProduct, CoverageEpochAdvancesOnlyAtMarkEnd)
     const GCCycleSnapshot after =
         Heap::GetHeap().GetCollector().GetCycleSnapshot(GCCycleGeneration::YOUNG);
     GC_EXPECT_EQ(after.phase, GC_PHASE_MARK_COMPLETE);
-    GC_EXPECT_TRUE(after.sequence >= required || after.phase == GC_PHASE_MARK_COMPLETE);
+    GC_EXPECT_TRUE(after.sequence > required ||
+                   (after.sequence == required && after.phase == GC_PHASE_MARK_COMPLETE));
     ForwardingTable::ClearEntries(region->GetRegionStart(), region->GetRegionSize());
     if (region->IsGhostFromRegion()) {
         region->DispelGhostFromRegion();

@@ -617,7 +617,7 @@ void ForwardingTable::Retire(ZForwarding* tab)
     g_retiredTotal.fetch_add(1, std::memory_order_relaxed);
 }
 
-void ForwardingTable::ReclaimRetired(const char* why)
+static void ReclaimRetiredImpl(const char* why, const Generation* only)
 {
     std::vector<ZForwarding*> candidates;
     std::vector<ZForwarding*> deferred;
@@ -640,6 +640,10 @@ void ForwardingTable::ReclaimRetired(const char* why)
         g_retiredPrev.clear();
         for (ZForwarding* tab : candidates) {
             if (tab == nullptr) {
+                continue;
+            }
+            if (only != nullptr && static_cast<Generation>(tab->table_generation()) != *only) {
+                deferred.push_back(tab);
                 continue;
             }
             const bool ghostHeldNow = GhostCarrierHeld(tab);
@@ -678,6 +682,18 @@ void ForwardingTable::ReclaimRetired(const char* why)
             why == nullptr ? "?" : why, victims.size(), stillHeld, stillHeld == 0 ? 1u : 0u,
             g_retiredTotal.load(std::memory_order_relaxed), done);
     }
+}
+
+void ForwardingTable::ReclaimRetired(const char* why)
+{
+    ReclaimRetiredImpl(why, nullptr);
+}
+
+void ForwardingTable::ResetRelocationSet(Generation gen)
+{
+    const char* why =
+        gen == Generation::Old ? "old-reset-relocation-set" : "young-reset-relocation-set";
+    ReclaimRetiredImpl(why, &gen);
 }
 
 size_t ForwardingTable::RetiredQueueSize()
