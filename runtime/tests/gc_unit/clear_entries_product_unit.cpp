@@ -5022,7 +5022,11 @@ GC_TEST(LoadHealDeliveryProduct, CrossGenRangeGateRecordsLegalAndRejectsBeyondTo
     EmptyBothRememberedFaces(remembered);
     RegionManager manager;
     manager.EnlistFullThreadLocalRegion(holderRegion);
+    RuntimeWorkers runtimeWorkers(2);
+    CollectorResources& resources = Heap::GetHeap().GetCollectorResources();
+    RelocationReceiptTestAccess::BindRuntimeWorkers(resources, &runtimeWorkers);
     const size_t recorded = manager.RecordPinnedCrossGenEdges();
+    RelocationReceiptTestAccess::BindRuntimeWorkers(resources, nullptr);
     const std::unordered_set<MAddress> snapshot = remembered.Snapshot();
     const size_t legalRecorded = snapshot.count(reinterpret_cast<MAddress>(legalField));
     const size_t invalidRecorded = snapshot.count(reinterpret_cast<MAddress>(invalidField));

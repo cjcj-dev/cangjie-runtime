@@ -34,7 +34,6 @@
 #include "Common/ScopedObjectAccess.h"
 #include "Heap.h"
 #include "Heap/Barrier/RememberedSet.h"
-#include "Heap/HeapWork.h"
 #include "Heap/Verify/DiagGate.h"
 #include "Heap/Verify/CsetEmptyWho.h"
 #include "Heap/Verify/TraceClear.h"
@@ -378,7 +377,7 @@ size_t RegionManager::RecordPinnedCrossGenEdges()
     class PinnedScanTask : public GCWorkerTask {
     public:
         PinnedScanTask(const std::vector<RegionInfo*>& regions,
-                       const std::function<void(RegionInfo*)>& scan, uint32_t workers)
+                       const std::function<void(RegionInfo*)>& scan, size_t workers)
             : regions(regions), scan(scan),
               chunk(std::max<size_t>(1, (regions.size() + workers * 4 - 1) / (workers * 4 + 1))) {}
 
