@@ -1145,7 +1145,6 @@ EXPORTS
     _ZN12MapleRuntime10WCollector22ForwardObjectExclusiveEPNS_10BaseObjectE @1139
     _ZN12MapleRuntime10WCollector22RemoveRawPointerObjectEPNS_10BaseObjectE @1140
     _ZN12MapleRuntime10WCollector24DoYoungGarbageCollectionEv @1144
-    _ZN12MapleRuntime10WCollector25FixMinorRootSlotsParallelEPNS_12GCThreadPoolE @1145
     _ZN12MapleRuntime10WCollector27MergeResurrectExportObjectsEv @1147
     _ZN12MapleRuntime10WCollector28PreforwardAllExportFromRootsEv @1148
     _ZN12MapleRuntime10WCollector31PreforwardConcurrencyModelRootsEv @1149

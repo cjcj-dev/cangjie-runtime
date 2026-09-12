@@ -165,12 +165,10 @@ void CopyCollector::ForwardFromSpace()
     stats.liveBytesBeforeGC = space.AllocatedBytes();
     stats.fromSpaceSize = space.FromSpaceSize();
     GarbRegionDiag::CensusBeforeForward("pre-forward");
-    // RegionManager's existing consumer remains until its owning package
-    // migrates ForwardFromRegions to the generation worker set.
     if (GetCycleReason() == GC_REASON_YOUNG) {
-        space.ForwardFromSpace<Generation::Young>(GetThreadPool());
+        space.ForwardFromSpace<Generation::Young>(GetWorkers());
     } else {
-        space.ForwardFromSpace<Generation::Old>(GetThreadPool());
+        space.ForwardFromSpace<Generation::Old>(GetWorkers());
     }
 
 }

@@ -11,7 +11,6 @@ set(SRC_LIST
     "MarkCompleteVerify.cpp"
     "VerifyMarkingStacks.cpp"
     "SurvNodeDiag.cpp"
-    "StatHealDiag.cpp"
     "VerifyOption.cpp"
     "Zap.cpp"
     "VerifyRegions.cpp"

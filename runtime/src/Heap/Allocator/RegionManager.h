@@ -212,7 +212,7 @@ public:
                                           bool allowSaferegion = true);
 
     template<Generation G>
-    void ForwardFromRegions(GCThreadPool* threadPool);
+    void ForwardFromRegions(GCWorkers& workers);
     template<Generation G>
     void ForwardFromRegions();
     template<Generation G>
@@ -235,7 +235,9 @@ public:
     template<Generation G>
     void ForwardClaimedPage(RegionInfo* region, ForwardingTable::Owner owner, bool claimed = false);
     template<Generation G>
-    void StartForwardFromRegions(GCThreadPool* threadPool, size_t tasks = 0);
+    void StartForwardFromRegions(GCWorkers& workers);
+    template<Generation G>
+    void DrainForwardFromRegions();
     bool RelocationStarted() const { return relocationStarted; }
     // Before clearing the young flag on a promoted region, record every live
     // old→young out-edge that mutators skipped while the source was still young.
@@ -1190,8 +1192,9 @@ private:
     // region type must be FROM_REGION.
     RegionList fromRegionList;
     RelocationRequestQueue relocationRequestQueue;
-    GCThreadPool* relocationPool{ nullptr }; // #204 current-generation worker-set adapter
+    GCWorkers* relocationWorkers{ nullptr };
     bool relocationStarted{ false };
+    bool relocationDrained{ false };
     AllocationStallQueue allocationStallQueue;
 #if defined(MRT_ALLOCATION_STALL_OBSERVE)
     AllocationStallTestHook allocationStallBeforeWaveTestHook;

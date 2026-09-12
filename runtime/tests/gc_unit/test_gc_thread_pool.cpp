@@ -115,10 +115,11 @@ bool RunParallelProductEntryClosesGeneration()
 
     RelocationRequestQueue& queue = manager.GetRelocationRequestQueue();
     RelocationReceiptTestAccess::ParkFrom(manager, fx.region0);
-    GCThreadPool pool("gc-unit-product-parallel", 2, GCPoolThread::GC_THREAD_PRIORITY);
-    manager.ForwardFromRegions<Generation::Old>(&pool);
+    GCWorkers workers(GCWorkers::Generation::OLD, 3);
+    workers.SetActive();
+    manager.ForwardFromRegions<Generation::Old>(workers);
+    workers.SetInactive();
     const bool closed = !queue.IsActive() && queue.PendingCount() == 0;
-    pool.Exit();
     return closed;
 }
 
@@ -130,7 +131,7 @@ bool RunSerialProductEntryClosesGeneration()
 
     RelocationRequestQueue& queue = manager.GetRelocationRequestQueue();
     RelocationReceiptTestAccess::ParkFrom(manager, fx.region0);
-    manager.ForwardFromRegions<Generation::Old>(nullptr);
+    manager.ForwardFromRegions<Generation::Old>();
     return !queue.IsActive() && queue.PendingCount() == 0;
 }
 

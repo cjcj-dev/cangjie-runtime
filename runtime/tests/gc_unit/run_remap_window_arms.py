@@ -97,7 +97,7 @@ def main():
                 cut = patch(originals[ENTRY], current[ENTRY], ENTRY)
             elif arm == "cut_copy":
                 current[COPY] = replace_one(originals[COPY],
-                    "        space.ForwardFromSpace<Generation::Young>(copyPool);", "        (void)copyPool;")
+                    "        space.ForwardFromSpace<Generation::Young>(GetWorkers());", "        (void)0;")
                 cut = patch(originals[COPY], current[COPY], COPY)
             arm_dir = out / arm
             arm_dir.mkdir()
