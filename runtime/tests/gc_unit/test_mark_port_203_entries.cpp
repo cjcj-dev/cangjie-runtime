@@ -368,15 +368,15 @@ void RunArrayCollection(const char* variant, size_t helpers, bool allocateBlack 
             // Two snapshots of one root use the actual private producers.
             // MergeRoots and the GC decide the consumer order, not this test.
             if (duplicateRootOrder < 0) {
-                invisibleBuffer->PushRoot(array);
+                invisibleBuffer->PushRoot(array, true);
             }
-            invisibleBuffer->PushInvisibleRoot(array);
+            invisibleBuffer->PushInvisibleRoot(array, true);
             if (duplicateRootOrder > 0) {
-                invisibleBuffer->PushRoot(array);
+                invisibleBuffer->PushRoot(array, true);
             }
         } else {
             array->SetInvisibleObject(true);
-            invisibleBuffer->PushInvisibleRoot(array);
+            invisibleBuffer->PushInvisibleRoot(array, true);
         }
     } else if (commonRoot) {
         for (size_t i = 0; i < rootCount; ++i) {
