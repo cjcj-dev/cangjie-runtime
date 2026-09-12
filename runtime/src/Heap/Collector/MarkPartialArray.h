@@ -26,9 +26,8 @@ class BaseObject;
 //   push_partial_array          :185-196
 // and the constants at reference/jdk/src/hotspot/share/gc/z/zGlobals.hpp:82-84.
 //
-// Why: our mark work stack only forks between whole objects --
-// ConcurrentMarkingWork::TryForkTask runs after TraceObjectRefFields has
-// returned -- so one large array is traced start-to-end by a single thread.
+// Why: without this split, one large array is traced start-to-end by a
+// single worker after TraceObjectRefFields returns.
 // ZGC splits the array and pushes the remainder back onto the mark stack,
 // which makes the tail stealable by the other mark workers.
 //

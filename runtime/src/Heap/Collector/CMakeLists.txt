@@ -15,6 +15,7 @@ set(SRC_LIST
     "TracingCollector.cpp"
     "MarkPartialArray.cpp"
     "MarkStripe.cpp"
+    "MarkEngine.cpp"
     "TaskQueue.cpp"
     "FinalizerProcessor.cpp"
     "ReferenceProcessor.cpp"

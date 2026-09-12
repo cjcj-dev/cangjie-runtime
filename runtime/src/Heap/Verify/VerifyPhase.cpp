@@ -59,8 +59,7 @@ bool VerifyFaceEnabled(VerifyFace face)
         }
         case VerifyFace::Objects: {
             static const bool enabled = BuildDefault(face) || ValueIsOne(std::getenv("MRT_GCV2_VERIFY_HEAP")) ||
-                ValueIsOne(std::getenv("MRT_GCV2_VERIFY_OBJECTS")) ||
-                ValueIsOne(std::getenv("MRT_GCV2_MARKCOMPLETE")) || DiagGate::TokenOn("objects");
+                ValueIsOne(std::getenv("MRT_GCV2_VERIFY_OBJECTS")) || DiagGate::TokenOn("objects");
             return enabled;
         }
         case VerifyFace::Marking: {
