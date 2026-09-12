@@ -43,16 +43,19 @@ struct MarkPublicationFixture {
         resources.oldWorkers = previousOld;
         current = previousFixture;
     }
-    template<class Visitor> void Drain(Visitor&& visitor)
+    template<class Visitor> void DrainDomain(MarkDomain& domain, Visitor&& visitor)
     {
-        for (MarkDomain* domain : {collector.youngMarkDomain.get(), collector.majorMarkDomain.get()}) {
-            MarkStackEntry entry;
-            for (size_t stripe = 0; stripe < domain->Stripes().Count(); ++stripe) {
-                while (domain->Stacks(0).Pop(domain->Smr(), 0, domain->Stripes(), stripe, entry)) {
-                    visitor(entry.object(), entry.follow());
-                }
+        MarkStackEntry entry;
+        for (size_t stripe = 0; stripe < domain.Stripes().Count(); ++stripe) {
+            while (domain.Stacks(0).Pop(domain.Smr(), 0, domain.Stripes(), stripe, entry)) {
+                visitor(entry.object(), entry.follow());
             }
         }
+    }
+    template<class Visitor> void Drain(Visitor&& visitor)
+    {
+        DrainDomain(*collector.youngMarkDomain, visitor);
+        DrainDomain(*collector.majorMarkDomain, visitor);
     }
     template<class Stack> void DrainObjects(Stack& stack)
     {
