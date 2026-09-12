@@ -99,6 +99,10 @@ void ZForwardingLife::WaitPageDone(ZForwarding* forwarding)
     if (forwarding == nullptr) {
         return;
     }
+    // zForwarding.cpp:110-130: the page worker never waits for its own done.
+    if (CurrentPageWork() == forwarding) {
+        return;
+    }
     WaitUntilDone(forwarding->ref_count(), forwarding->done());
 }
 

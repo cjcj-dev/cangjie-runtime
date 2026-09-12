@@ -4036,10 +4036,8 @@ void RegionManager::ForwardRegion(RegionInfo* region)
         return;
     }
     {
-        // insert-before-unlock (MutatorRelocate.h:124): a concurrent copier may
-        // still hold LOCKED after insert. Do not publish FORWARDED/done while
-        // those headers remain LOCKED — waiters treat done as "no live copier".
-        WaitCopiedObjectsUnlocked(region);
+        // zRelocate.cpp:1137-1152: the page worker finishes objects then
+        // mark_done last (ForwardClaimedPage). Do not wait for own done here.
         region->SetRouteState(RegionInfo::RouteState::FORWARDED);
         FillPublishedRouteGaps(region);
         // zRelocate.cpp:1152 — last act after every object on the page is relocated.
