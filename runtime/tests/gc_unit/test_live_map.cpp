@@ -183,7 +183,6 @@ GC_TEST(LiveMap, RetainedMarkWordsSurviveUnbindAndForwardEpochBump)
     GC_EXPECT_TRUE(region->HasRetainedMarkWords());
     GC_EXPECT_TRUE(region->RetainedMarkWordsSay(holderOffset));
 
-    region->CheckAndClearLiveInfo(live);
     GC_EXPECT_FALSE(region->IsMarkedObject(region->GetMarkView<Generation::Old>(), holderOffset));
     GC_EXPECT_TRUE(region->IsRetainedSnapshotValid());
     GC_EXPECT_TRUE(region->RetainedMarkWordsSay(holderOffset));
@@ -351,11 +350,8 @@ GC_TEST(LiveMap, ExaminedPageWithoutSnapshotStillAborts)
     GC_EXPECT_TRUE(region->HasEverPreservedRetainedLiveInfo());
     GC_EXPECT_EQ(static_cast<unsigned>(region->GetRetainedLiveInfoState()),
                  static_cast<unsigned>(RegionInfo::RetainedLiveInfoState::SNAPSHOT_VALID));
-    // The production unbind path may have no owned carrier (for example
-    // after its arena is retired); exercise that borrowed-pointer loss path
-    // explicitly before CheckAndClearLiveInfo stamps SNAPSHOT_LOST.
     region->FreeRetainedMarkWords();
-    region->CheckAndClearLiveInfo(live);
+    region->BeginRetainedPreserve();
     region->AddLiveByteCount(64);
     GC_EXPECT_EQ(static_cast<unsigned>(region->GetRetainedLiveInfoState()),
                  static_cast<unsigned>(RegionInfo::RetainedLiveInfoState::SNAPSHOT_LOST));
@@ -374,10 +370,8 @@ GC_TEST(LiveMap, ExaminedPageWithoutSnapshotStillAborts)
     fx.FreePlanted(live);
 }
 
-// Owned-copy positive arm: CheckAndClearLiveInfo deliberately returns early
-// while the private bitmap still carries the valid snapshot.  The following
-// bounded Preserve replaces that owned carrier, finds no current LiveInfo,
-// and must derive LOST from the monotonic ever-preserved bit.
+// Owned-copy positive arm: retained words stay valid until a later Preserve
+// replaces the carrier.
 GC_TEST(LiveMap, OwnedCopyExaminedPageWithoutSnapshotStillAborts)
 {
     GcHeapFixture fx;
@@ -393,7 +387,6 @@ GC_TEST(LiveMap, OwnedCopyExaminedPageWithoutSnapshotStillAborts)
     GC_EXPECT_EQ(static_cast<unsigned>(region->GetRetainedLiveInfoState()),
                  static_cast<unsigned>(RegionInfo::RetainedLiveInfoState::SNAPSHOT_VALID));
 
-    region->CheckAndClearLiveInfo(live);
     GC_EXPECT_TRUE(region->HasRetainedMarkWords());
     GC_EXPECT_EQ(static_cast<unsigned>(region->GetRetainedLiveInfoState()),
                  static_cast<unsigned>(RegionInfo::RetainedLiveInfoState::SNAPSHOT_VALID));

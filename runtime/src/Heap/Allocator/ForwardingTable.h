@@ -277,10 +277,6 @@ public:
     // Fault injection for the NeverInstalled state-machine assertion. Product
     // ClearEntries never leaves a closed carrier in the active map.
     static void ForcePublicationClosedForTest(MAddress address);
-    // Deterministic rendezvous immediately before a fresh receipt enters the
-    // destination-life registration critical section.
-    using ReceiptLifeRegisterHook = void (*)(void*);
-    static void SetReceiptLifeRegisterHook(ReceiptLifeRegisterHook hook, void* context);
 #endif
 
     static void NoteCompare(MAddress addr, bool legacy);

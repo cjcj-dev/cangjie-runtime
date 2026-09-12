@@ -136,8 +136,8 @@ const char* ClearName(uint8_t site)
 {
     switch (site) {
         case CLEAR_LIVE_INFO: return "ClearLiveInfo";
-        case CLEAR_CHECK_AND_CLEAR: return "CheckAndClearLiveInfo";
-        case CLEAR_NULL_IN_RANGE: return "NullLiveInfoFieldsInRange";
+        case CLEAR_CHECK_AND_CLEAR: return "clear-checked";
+        case CLEAR_NULL_IN_RANGE: return "clear-range";
         case CLEAR_RESET_MARK_BIT: return "ResetMarkBit";
         default: return "?";
     }
