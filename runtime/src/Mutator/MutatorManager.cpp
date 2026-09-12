@@ -762,6 +762,47 @@ void MutatorManager::EnqueueHandshakeOnAll(HandshakeClosure* cl, std::list<Hands
     }
 }
 
+void MutatorManager::EnqueueHandshakeOn(ThreadLocalData* target, HandshakeClosure* cl,
+                                        std::list<HandshakeOperation*>& ops, std::vector<MarkFlushThread*>& handle)
+{
+    if (target == nullptr || cl == nullptr) {
+        return;
+    }
+    std::lock_guard<std::mutex> lock(markFlushThreadMutex);
+    auto it = markFlushThreads.find(target);
+    if (it == markFlushThreads.end() || it->second->dying.load(std::memory_order_acquire) != 0) {
+        return;
+    }
+    HandshakeState* state = it->second->handshake;
+    if (state == nullptr) {
+        it->second->ownedHandshake = std::make_unique<HandshakeState>(it->first);
+        it->second->handshake = it->second->ownedHandshake.get();
+        state = it->second->handshake;
+    }
+    it->second->refs.fetch_add(1, std::memory_order_acq_rel);
+    handle.push_back(it->second.get());
+    auto* op = new HandshakeOperation(cl, it->first);
+    state->add_operation(op);
+    ops.push_back(op);
+}
+
+ThreadLocalData* MutatorManager::TlsBoundToMutator(Mutator* mutator)
+{
+    if (mutator == nullptr) {
+        return nullptr;
+    }
+    std::lock_guard<std::mutex> lock(markFlushThreadMutex);
+    for (auto& kv : markFlushThreads) {
+        if (kv.first == nullptr || kv.second->dying.load(std::memory_order_acquire) != 0) {
+            continue;
+        }
+        if (kv.first->mutator == mutator) {
+            return kv.first;
+        }
+    }
+    return nullptr;
+}
+
 void MutatorManager::ReleaseHandshakeHandle(std::vector<MarkFlushThread*>& handle)
 {
     for (MarkFlushThread* target : handle) {
@@ -1302,13 +1343,15 @@ void MutatorManager::TransitionAllMutatorsToCpuProfile()
         void do_thread(ThreadLocalData* tls) override
         {
             Mutator* mutator = tls != nullptr ? tls->mutator : nullptr;
-            if (mutator == nullptr) {
+            if (mutator == nullptr || !mutator->HasSuspensionRequest(Mutator::SUSPENSION_FOR_CPU_PROFILE)) {
                 return;
             }
             (void)mutator->TransitionToCpuProfile(tls == ThreadLocal::GetThreadLocalData());
         }
     } cpuCl;
-    Handshake::execute(&cpuCl);
+    if (!undoneMutators.empty()) {
+        Handshake::execute(&cpuCl, TlsBoundToMutator(undoneMutators.front()));
+    }
     EnsureCpuProfileFinish(undoneMutators);
     if (!worldStopped) {
         MutatorManagementWUnlock();

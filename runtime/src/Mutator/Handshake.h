@@ -73,6 +73,7 @@ public:
     static void BindCurrent(HandshakeState* state);
     static HandshakeState* ForTls(ThreadLocalData* tls);
     static void execute(HandshakeClosure* cl);
+    static void execute(HandshakeClosure* cl, ThreadLocalData* target);
 };
 
 void ArmThreadPoll(ThreadLocalData* tls);

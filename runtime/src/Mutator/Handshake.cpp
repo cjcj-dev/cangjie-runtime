@@ -175,20 +175,15 @@ void HandshakeState::process_queued_then_detach(void (*flush)(ThreadLocalData*))
     inSafe_.store(1, std::memory_order_release);
 }
 
-void Handshake::execute(HandshakeClosure* cl)
+namespace {
+void WaitHandshakeOps(std::list<HandshakeOperation*>& ops)
 {
-    if (cl == nullptr) {
-        return;
-    }
-    std::list<HandshakeOperation*> ops;
-    std::vector<MutatorManager::MarkFlushThread*> handle;
-    MutatorManager::Instance().EnqueueHandshakeOnAll(cl, ops, handle);
-    HandshakeState& self = Current();
+    HandshakeState& self = Handshake::Current();
     self.process_by_self();
     while (!ops.empty()) {
         for (auto it = ops.begin(); it != ops.end();) {
             HandshakeOperation* op = *it;
-            HandshakeState* state = ForTls(op->target());
+            HandshakeState* state = Handshake::ForTls(op->target());
             if (state == nullptr || !state->operation_pending(op)) {
                 delete op;
                 it = ops.erase(it);
@@ -205,6 +200,30 @@ void Handshake::execute(HandshakeClosure* cl)
             std::this_thread::yield();
         }
     }
+}
+} // namespace
+
+void Handshake::execute(HandshakeClosure* cl)
+{
+    if (cl == nullptr) {
+        return;
+    }
+    std::list<HandshakeOperation*> ops;
+    std::vector<MutatorManager::MarkFlushThread*> handle;
+    MutatorManager::Instance().EnqueueHandshakeOnAll(cl, ops, handle);
+    WaitHandshakeOps(ops);
+    MutatorManager::Instance().ReleaseHandshakeHandle(handle);
+}
+
+void Handshake::execute(HandshakeClosure* cl, ThreadLocalData* target)
+{
+    if (cl == nullptr || target == nullptr) {
+        return;
+    }
+    std::list<HandshakeOperation*> ops;
+    std::vector<MutatorManager::MarkFlushThread*> handle;
+    MutatorManager::Instance().EnqueueHandshakeOn(target, cl, ops, handle);
+    WaitHandshakeOps(ops);
     MutatorManager::Instance().ReleaseHandshakeHandle(handle);
 }
 
