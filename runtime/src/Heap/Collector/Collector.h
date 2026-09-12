@@ -731,7 +731,6 @@ public:
     }
 
     // zc7fix: is_mark_good admits plain (uncoloured) non-null; those may be non-heap.
-    // Gate before IsValidObject/IsMarkedObject. Count rejects under MRT_GCV2_MARKGOOD_HEAP_GATE=1.
     static bool MarkGoodHeapGate(const char* site, BaseObject* target);
     static void ReportMarkGoodHeapGateCounts();
 
@@ -741,7 +740,6 @@ public:
     // look like a TypeInfo tip and trip INVALID_OBJECT_SIZE at MarkObject).
     // tailslot: reject when obj+GetSize crosses regionEnd on any live region
     // (zMarkStackEntry.hpp:81 object_address bits 63-5; zPage.inline.hpp:188 is_in).
-    // Count rejects under MRT_GCV2_MARKFLOOR_OBJ_GATE=1.
     static bool PlausibleManagedObjectGate(const char* site, BaseObject* obj);
     static void ReportPlausibleManagedObjectGateCounts();
     // introot: if obj is a heap interior (RawArray+8/...), return host object base; else nullptr.

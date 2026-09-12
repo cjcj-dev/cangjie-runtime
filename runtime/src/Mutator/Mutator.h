@@ -45,6 +45,7 @@ public:
         SUSPENSION_FOR_EXIT = 4,
         SUSPENSION_FOR_CPU_PROFILE = 8,
         SUSPENSION_FOR_EPOCH_HANDSHAKE = 16,
+        SUSPENSION_FOR_MARK_FLUSH = 32,
     };
 
     enum GCPhaseTransitionState : uint32_t {
@@ -634,18 +635,10 @@ public:
     // substitute: EnsurePhaseTransition (MutatorManager.cpp:806-811) erases any
     // mutator already parked in the target phase without re-running the handler,
     // so a second transition to the same phase flushes nobody.
-    void FlushSatbBuffer(bool flushStoreBarrier = true)
-    {
-        std::lock_guard<std::mutex> lg(mutatorLock);
-        RememberedSet* rememberedSet = storeBarrierRememberedSet;
-        if (rememberedSet == nullptr) {
-            rememberedSet = &Heap::GetHeap().GetRememberedSet();
-        }
-        if (flushStoreBarrier && markFlushAllocBuffer != nullptr && rememberedSet->IsInitialized()) {
-            markFlushAllocBuffer->GetStoreBarrierBuffer().Flush(*rememberedSet);
-        }
-        SatbBuffer::Instance().FlushQueue(satbNode);
-    }
+    bool FlushSatbBuffer(bool flushStoreBarrier = true, class MarkDomain* domain = nullptr);
+    enum class MarkFlushClaim : uint8_t { NotPending, NotSafe, Empty, Published };
+    MarkFlushClaim TryClaimMarkFlush(bool self, class MarkDomain* domain);
+    bool AcknowledgeMarkFlushHandshake(class MarkDomain* domain);
 
 protected:
     // for managed stack

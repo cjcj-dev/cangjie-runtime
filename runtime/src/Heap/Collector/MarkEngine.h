@@ -36,6 +36,8 @@ public:
     bool Saturated() const;
     bool Terminated() const;
     size_t WorkerCount() const;
+    void SetResurrected(bool value);
+    bool Resurrected() const;
 
 private:
     void MaybeReduceStripes(MarkStripeSet& stripes, size_t usedNStripes);
@@ -45,6 +47,7 @@ private:
     size_t working = 0;
     size_t awakening = 0;
     bool terminated = false;
+    bool resurrected = false;
     mutable std::mutex mutex;
     std::condition_variable condition;
 };
@@ -73,6 +76,9 @@ public:
     void BindWorkers(GCWorkers* workers) { gcWorkers = workers; }
     void BindAbort(ZAbort* token) { abortToken = token; }
     bool PollStop();
+    bool FlushStacks();
+    bool TryTerminateFlush();
+    bool TryEnd();
     MarkStripeSet& Stripes() { return stripes; }
     MarkTerminate& Terminate() { return terminate; }
     MarkingSMR& Smr() { return *smr; }

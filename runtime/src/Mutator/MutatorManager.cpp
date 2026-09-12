@@ -16,6 +16,8 @@
 #include "Heap/Collector/FinalizerProcessor.h"
 #include "Heap/Collector/TracingCollector.h"
 #include "Heap/Heap.h"
+#include "Heap/Allocator/Allocator.h"
+#include "Heap/WCollector/WCollector.h"
 #include "Mutator.inline.h"
 #include "UnwindStack/StackExposureHook.h"
 #include "schedule.h"
@@ -186,7 +188,7 @@ void MutatorManager::DestroyMutator(Mutator* mutator)
     // dynjoin: while an epoch handshake is active, never free a participant (or a
     // racing create) under the old R-lock path — that used to be serialised by the
     // full-handshake W-lock. Defer to expiringMutators; PostGC drains them.
-    if (EpochHandshakeActive()) {
+    if (EpochHandshakeActive() || MarkFlushHandshakeActive()) {
         epochHandshakeDestroyDeferred.fetch_add(1, std::memory_order_relaxed);
         expiringMutatorListLock.lock();
         expiringMutators.push_back(mutator);
@@ -654,6 +656,58 @@ void MutatorManager::VisitAllMutators(MutatorVisitor func)
 void MutatorManager::VisitAllMutatorsExceptFinalizer(MutatorVisitor func)
 {
     ScheduleAllCJThreadVisitMutator(VisitMuatorHelper, &func);
+}
+
+bool MutatorManager::HandshakeFlushMarkProducers(MarkDomain* domain)
+{
+    bool flushed = false;
+    markFlushDomain.store(domain, std::memory_order_release);
+    if (WorldStopped()) {
+        VisitAllMutators([&flushed](Mutator& mutator) {
+            if (mutator.FlushSatbBuffer(false, nullptr)) {
+                flushed = true;
+            }
+        });
+        auto& collector = static_cast<WCollector&>(Heap::GetHeap().GetCollector());
+        Heap::GetHeap().GetAllocator().VisitAllocBuffers([&flushed, &collector, domain](AllocBuffer& buffer) {
+            if (collector.FlushAllocBufferMarkProducers(&buffer, domain)) {
+                flushed = true;
+            }
+        });
+        markFlushDomain.store(nullptr, std::memory_order_release);
+        return flushed;
+    }
+    markFlushHandshakeActive.store(1, std::memory_order_release);
+    std::list<Mutator*> pending;
+    VisitAllMutators([&pending](Mutator& mutator) {
+        mutator.SetSuspensionFlag(Mutator::SuspensionType::SUSPENSION_FOR_MARK_FLUSH);
+        mutator.SetSafepointActive(true);
+        mutator.IncObserver();
+        pending.push_back(&mutator);
+    });
+    Mutator* self = Mutator::GetMutator();
+    while (!pending.empty()) {
+        for (auto it = pending.begin(); it != pending.end();) {
+            Mutator* mutator = *it;
+            const Mutator::MarkFlushClaim claim = mutator->TryClaimMarkFlush(mutator == self, domain);
+            if (claim == Mutator::MarkFlushClaim::NotSafe) {
+                ++it;
+                continue;
+            }
+            mutator->DecObserver();
+            if (claim == Mutator::MarkFlushClaim::Published) {
+                flushed = true;
+            }
+            it = pending.erase(it);
+        }
+        if (!pending.empty()) {
+            std::this_thread::yield();
+        }
+    }
+    markFlushHandshakeActive.store(0, std::memory_order_release);
+    markFlushDomain.store(nullptr, std::memory_order_release);
+    DestroyExpiredMutators();
+    return flushed;
 }
 
 void MutatorManager::StopTheWorld(bool syncGCPhase, GCPhase phase)
