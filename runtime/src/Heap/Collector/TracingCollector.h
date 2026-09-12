@@ -10,8 +10,10 @@
 
 #include <cstdint>
 #include <map>
+#include <memory>
 
 #include "Collector.h"
+#include "Heap/Collector/MarkEngine.h"
 #include "CollectorResources.h"
 #include "Common/MarkWorkStack.h"
 #include "Heap/Allocator/RegionSpace.h"
@@ -489,6 +491,7 @@ protected:
     bool fixReferences = false;
 
     std::atomic<size_t> markedObjectCount = { 0 };
+    std::unique_ptr<MarkDomain> majorMarkDomain;
     std::mutex externMtx;
     std::unordered_map<BaseObject*, std::list<BaseObject*>> discoveredExternObjects;
     // Resolver callbacks may enter managed code and therefore must not own the
@@ -550,7 +553,6 @@ protected:
     // concurrent marking.
     void TracingImpl(WorkStack& workStack, WorkStack& foreignRootsSet, bool parallel);
 
-    bool AddConcurrentTracingWork(RootSet& rs);
     void AddExportObjectsTracingWork(RootSet& exportRoots);
     virtual void EnumAndTagRawRoot(ObjectRef& root, RootSet& rootSet) const
     {
@@ -560,6 +562,7 @@ protected:
     void FindUselessExternObjects();
 
 private:
+    size_t RunMajorStripeMark(WorkStack& workStack, GCThreadPool* threadPool, bool parallel);
     void ConcurrentReMark(WorkStack& remarkStack, bool parallel);
     void EnumMutatorRoot(ObjectPtr& obj, RootSet& rootSet) const;
     void EnumConcurrencyModelRoots(RootSet& rootSet) const;

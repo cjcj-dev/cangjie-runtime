@@ -199,7 +199,6 @@ GC_OTHER_VM_TEST(VerifyMarkingStacks, ObjectsFaceOwnsMarkCompleteAdmission)
 {
     GC_EXPECT_EQ(setenv("MRT_GCV2_VERIFY_OBJECTS", "1", 1), 0);
     GC_EXPECT_EQ(unsetenv("MRT_GCV2_VERIFY_MARKING"), 0);
-    GC_EXPECT_EQ(unsetenv("MRT_GCV2_MARKCOMPLETE"), 0);
     GC_EXPECT_TRUE(MarkCompleteVerify::Enabled());
     GC_EXPECT_FALSE(Enabled());
 }

@@ -347,7 +347,6 @@ void RunRemapWindow(bool copyOnly, ForwardDomain domain = ForwardDomain::None, b
         return;
     }
     GC_EXPECT_EQ(CJ_ScheduleManagerInit(), 0);
-    GC_EXPECT_EQ(setenv("MRT_GCV2_MARKPAR_FORCE_SERIAL", "1", 1), 0);
     GC_EXPECT_EQ(setenv("MRT_GCV2_EVACPAR_FORCE_SERIAL", parallel ? "0" : "1", 1), 0);
     MutatorManager mutatorManager;
     YoungConcTestRuntime runtime(mutatorManager);

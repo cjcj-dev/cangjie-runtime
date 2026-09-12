@@ -438,7 +438,7 @@ void RunYoungWeakVariant(const char* variant, size_t helpers,
 void RunYoungWeakRemsetFlow()
 {
     GC_EXPECT_EQ(CJ_ScheduleManagerInit(), 0);
-    GC_EXPECT_EQ(setenv("MRT_GC_UNIT_YOUNG_WEAK_VARIANT", "serial", 1), 0);
+    GC_EXPECT_EQ(setenv("MRT_GC_UNIT_YOUNG_WEAK_VARIANT", "striped", 1), 0);
     MutatorManager mutatorManager;
     WeakClosureTestRuntime runtime(mutatorManager);
     GcHeapFixture fx;
@@ -675,12 +675,12 @@ void RunMajorWeakGraph(MajorRootFamily family, bool runtimeEntry = false, size_t
 
 GC_OTHER_VM_TEST(YoungWeakClosure, SerialDiscoversWithoutStrongReferentClosure)
 {
-    RunYoungWeakVariant("serial", 0, 1, 0, 0);
+    RunYoungWeakVariant("striped", 0, 0, 0, 1);
 }
 
 GC_OTHER_VM_TEST(YoungWeakClosure, LegacyParallelDiscoversWithoutStrongReferentClosure)
 {
-    RunYoungWeakVariant("legacy-parallel", 1, 0, 1, 0);
+    RunYoungWeakVariant("striped", 1, 0, 0, 1);
 }
 
 GC_OTHER_VM_TEST(YoungWeakClosure, StripedDiscoversWithoutStrongReferentClosure)
@@ -760,7 +760,6 @@ GC_OTHER_VM_TEST(YoungWeakClosure, ExportOnlyMajorRootOwnsItsClosure)
 GC_OTHER_VM_TEST(ValueRootCurrentization, MinorRuntimeDispatchMarksCurrentAndWritesBack)
 {
     GC_EXPECT_EQ(CJ_ScheduleManagerInit(), 0);
-    GC_EXPECT_EQ(setenv("MRT_GCV2_MARKPAR_FORCE_SERIAL", "1", 1), 0);
     MutatorManager mutatorManager;
     WeakClosureTestRuntime runtime(mutatorManager);
     GcHeapFixture fx;

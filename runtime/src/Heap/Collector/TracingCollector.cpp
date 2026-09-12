@@ -4,8 +4,12 @@
 //
 // See https://cangjie-lang.cn/pages/LICENSE for license information.
 
+#include "Heap/Collector/MarkEngine.h"
 #include "Heap/Collector/MarkStripe.h"
 #include "TracingCollector.h"
+
+#include <algorithm>
+#include <memory>
 
 #include "Base/CString.h"
 #include "Common/Runtime.h"
@@ -290,130 +294,115 @@ void ExportRootTable::VisitGCRoots(const RootVisitor& visitor)
         visitor(rootInfo.exportObj);
     }
 }
+struct MajorMarkShared {
+    TracingCollector* collector = nullptr;
+    size_t workerCount = 0;
+    MarkDomain* domain = nullptr;
+    bool partial = false;
+    std::atomic<size_t> newlyMarked{ 0 };
+
+    MarkStripeSet& Stripes() { return domain->Stripes(); }
+    MarkingSMR& Smr() { return domain->Smr(); }
+    MarkTerminate& Terminate() { return domain->Terminate(); }
+    MarkThreadLocalStacks& Stacks(size_t workerId) { return domain->Stacks(workerId); }
+
+    size_t StripeFor(const MarkStackEntry& entry) const
+    {
+        MAddress address = 0;
+        if (entry.partialArray()) {
+            size_t length = 0;
+            MarkPartialArray::Decode(entry, address, length);
+        } else {
+            address = reinterpret_cast<MAddress>(entry.object());
+        }
+        return domain->Stripes().StripeForAddress(address);
+    }
+};
+
 class ConcurrentMarkingWork : public HeapWork {
 public:
-    ConcurrentMarkingWork(TracingCollector& tc, GCThreadPool* pool, TracingCollector::WorkStack&& stack)
-        : collector(tc), threadPool(pool), workStack(std::move(stack))
-    {
-        VerifyMarkingStacks::NoteProducer(VerifyMarkingStacks::MarkingGeneration::MAJOR,
-                                          VerifyMarkingStacks::MarkingContainer::TASK, workStack.size());
-    }
-
-    // create concurrent mark task without thread pool.
-    ConcurrentMarkingWork(TracingCollector& tc, TracingCollector::WorkStack&& stack)
-        : collector(tc), threadPool(nullptr), workStack(std::move(stack))
-    {
-        VerifyMarkingStacks::NoteProducer(VerifyMarkingStacks::MarkingGeneration::MAJOR,
-                                          VerifyMarkingStacks::MarkingContainer::TASK, workStack.size());
-    }
+    ConcurrentMarkingWork(MajorMarkShared& shared, size_t workerSlot)
+        : shared(shared), workerSlot(workerSlot),
+          context(shared.workerCount, workerSlot, shared.Stripes(), shared.Stacks(workerSlot))
+    {}
 
     ~ConcurrentMarkingWork() override
     {
         VerifyMarkingStacks::VerifyEmpty(VerifyMarkingStacks::MarkingGeneration::MAJOR,
                                          VerifyMarkingStacks::MarkingBoundary::TASK_EXIT,
-                                         VerifyMarkingStacks::MarkingContainer::TASK, workStack.size(), 0,
-                                         workerId);
-        threadPool = nullptr;
+                                         VerifyMarkingStacks::MarkingContainer::TASK, 0, 0, workerSlot);
+        VerifyMarkingStacks::VerifyEmpty(VerifyMarkingStacks::MarkingGeneration::MAJOR,
+                                         VerifyMarkingStacks::MarkingBoundary::TASK_EXIT,
+                                         VerifyMarkingStacks::MarkingContainer::LOCAL,
+                                         context.Stacks().Population(), 0, workerSlot);
     }
 
-    // when parallel is enabled, fork new task if work stack overflow.
-    void TryForkTask()
+    void Execute(size_t) override
     {
-        size_t size = workStack.size();
-        if (size > TracingCollector::MIN_MARKING_WORK_SIZE) {
-            bool doFork = false;
-            size_t newSize = 0;
-            if (size > TracingCollector::MAX_MARKING_WORK_SIZE) {
-                newSize = size >> 1; // give 1/2 the stack to the thread pool as a new work task
-                doFork = true;
-            } else if (size > TracingCollector::MIN_MARKING_WORK_SIZE && threadPool->GetWaitingThreadNumber() > 0) {
-                constexpr uint8_t shiftForEight = 3;
-                newSize = size >> shiftForEight; // give 1/8 the stack to the thread pool as a new work task
-                doFork = true;
-            }
-
-            if (doFork) {
-                TracingCollector::WorkStackBuf* hSplit = workStack.split(newSize);
-                threadPool->AddWork(
-                    new ConcurrentMarkingWork(collector, threadPool, TracingCollector::WorkStack(hSplit)));
-            }
-        }
-    }
-
-    // run concurrent marking task.
-    void Execute(size_t executingWorkerId) override
-    {
-        workerId = executingWorkerId;
-        // One task-wide origin scope lets the existing 0->1 hook identify a
-        // major claim without adding work to the common !wasMarked branch.
         size_t nNewlyMarked = 0;
-        // loop until work stack empty.
-        MarkLiveCache liveCache(1);
-        for (;;) {
-            if (workStack.empty()) {
-                break;
-            }
-            // get next object from work stack.
-            const MarkStackEntry entry = workStack.back();
-            workStack.pop_back();
-            // A partial-array chunk is a continuation of an array that was
-            // already marked, so it skips MarkObject entirely -- same order as
-            // ZGC's ZMark::mark_and_follow (zMark.cpp:392-400), which dispatches
-            // on the partial_array flag before the mark step. Forking still runs
-            // below, which is the point: the chunk makes the tail stealable.
-            if (UNLIKELY(MarkPartialArray::IsPartialArrayEntry(entry))) {
-                collector.FollowPartialArray(entry, workStack);
-                if (threadPool != nullptr) {
-                    TryForkTask();
-                }
-                continue;
-            }
-            BaseObject* obj = entry.object();
-            if (!Collector::PlausibleManagedObjectGate("ConcurrentMarkingWork.pop", obj)) {
-                BaseObject* host = Collector::TryRecoverInteriorBase(obj);
-                if (host == nullptr || host == obj ||
-                    !Collector::PlausibleManagedObjectGate("ConcurrentMarkingWork.host", host)) {
-                    continue;
-                }
-                obj = host;
-            }
-            const bool wasMarked = collector.MarkEntryObject(obj, entry, &liveCache);
-            if ((!entry.mark() || !wasMarked) && entry.follow()) {
-                if (entry.mark()) {
-                    nNewlyMarked++;
-                }
-                if (!obj->HasRefField()) {
-                    continue;
-                }
-                SurvNodeDiag::NoteFollowHolder(obj, SurvNodeDiag::FOLLOW_SCAN);
-                // A weak referent is only discovery input.  Any strong work
-                // published here would keep the referent graph alive.
-                if (UNLIKELY(obj->IsWeakRef())) {
-                    collector.DiscoverWeakReference(obj, workStack);
-                } else {
-                    if (entry.finalizable()) {
-                        collector.TraceObjectRefFields(obj, workStack, true);
-                    } else {
-                        collector.TraceObjectRefFields(obj, workStack);
-                    }
-                }
-            } else if (entry.mark() && wasMarked) {
-                SurvNodeDiag::NoteFollowHolder(obj, SurvNodeDiag::FOLLOW_SKIP_MARKED);
-            }
-            // try to fork new task if needed.
-            if (threadPool != nullptr) {
-                TryForkTask();
-            }
-        } // end of mark loop.
-        // newly marked statistics.
-        (void)collector.markedObjectCount.fetch_add(nNewlyMarked, std::memory_order_relaxed);
+        TracingCollector::WorkStack staging;
+        (void)MarkEngine::FollowWork(context, shared.Smr(), shared.Stripes(), shared.Terminate(), workerSlot,
+                                     shared.partial,
+                                     [this, &nNewlyMarked, &staging](const MarkStackEntry& entry) {
+                                         ProcessEntry(entry, nNewlyMarked, staging);
+                                     },
+                                     nullptr, nullptr, &shared.domain->Abort());
+        shared.newlyMarked.fetch_add(nNewlyMarked, std::memory_order_relaxed);
     }
 
 private:
-    TracingCollector& collector;
-    GCThreadPool* threadPool;
-    TracingCollector::WorkStack workStack;
-    size_t workerId = 0;
+    void PublishStaging(TracingCollector::WorkStack& staging)
+    {
+        while (!staging.empty()) {
+            const MarkStackEntry next = staging.back();
+            staging.pop_back();
+            const size_t stripeIndex = shared.StripeFor(next);
+            const bool publish = stripeIndex != context.StripeId();
+            context.Stacks().Push(shared.Stripes(), stripeIndex, next, publish);
+        }
+    }
+
+    void ProcessEntry(const MarkStackEntry& entry, size_t& nNewlyMarked, TracingCollector::WorkStack& staging)
+    {
+        TracingCollector& collector = *shared.collector;
+        if (UNLIKELY(MarkPartialArray::IsPartialArrayEntry(entry))) {
+            collector.FollowPartialArray(entry, staging);
+            PublishStaging(staging);
+            return;
+        }
+        BaseObject* obj = entry.object();
+        if (!Collector::PlausibleManagedObjectGate("ConcurrentMarkingWork.pop", obj)) {
+            BaseObject* host = Collector::TryRecoverInteriorBase(obj);
+            if (host == nullptr || host == obj ||
+                !Collector::PlausibleManagedObjectGate("ConcurrentMarkingWork.host", host)) {
+                return;
+            }
+            obj = host;
+        }
+        const bool wasMarked = collector.MarkEntryObject(obj, entry, &context.Cache());
+        if ((!entry.mark() || !wasMarked) && entry.follow()) {
+            if (entry.mark()) {
+                nNewlyMarked++;
+            }
+            if (!obj->HasRefField()) {
+                return;
+            }
+            SurvNodeDiag::NoteFollowHolder(obj, SurvNodeDiag::FOLLOW_SCAN);
+            TracingCollector::WorkStack& workStack = staging;
+            if (UNLIKELY(obj->IsWeakRef())) {
+                collector.DiscoverWeakReference(obj, workStack);
+            } else {
+                collector.TraceObjectRefFields(obj, staging, entry.finalizable());
+            }
+            PublishStaging(staging);
+        } else if (entry.mark() && wasMarked) {
+            SurvNodeDiag::NoteFollowHolder(obj, SurvNodeDiag::FOLLOW_SKIP_MARKED);
+        }
+    }
+
+    MajorMarkShared& shared;
+    size_t workerSlot;
+    MarkContext context;
 };
 
 class ExportRootsTracingWork : public HeapWork {
@@ -750,6 +739,58 @@ void TracingCollector::AddExportObjectsTracingWork(RootSet &exportRoots)
     threadPool->AddWork(new (std::nothrow) ExportRootsTracingWork(*this, std::move(exportRoots)));
 }
 
+size_t TracingCollector::RunMajorStripeMark(WorkStack& workStack, GCThreadPool* threadPool, bool parallel)
+{
+    size_t workers = 1;
+    if (parallel && threadPool != nullptr) {
+        workers = static_cast<size_t>(threadPool->GetMaxActiveThreadNum()) + 1;
+        workers = std::max(workers, static_cast<size_t>(1));
+    }
+    if (majorMarkDomain == nullptr) {
+        majorMarkDomain = std::make_unique<MarkDomain>(64, VerifyMarkingStacks::MarkingGeneration::MAJOR);
+    }
+    majorMarkDomain->PrepareWork(workers);
+    MajorMarkShared shared;
+    shared.collector = this;
+    shared.workerCount = workers;
+    shared.domain = majorMarkDomain.get();
+
+    MarkThreadLocalStacks seed(shared.Stripes().Count());
+    while (!workStack.empty()) {
+        const MarkStackEntry entry = workStack.back();
+        workStack.pop_back();
+        seed.Push(shared.Stripes(), shared.StripeFor(entry), entry, true);
+    }
+    (void)seed.Flush(shared.Stripes(), true);
+    VerifyMarkingStacks::NoteProducer(VerifyMarkingStacks::MarkingGeneration::MAJOR,
+                                      VerifyMarkingStacks::MarkingContainer::TASK, shared.Stripes().Population());
+
+    for (;;) {
+        majorMarkDomain->Abort().store(false, std::memory_order_relaxed);
+        if (workers > 1) {
+            threadPool->Start();
+            for (size_t worker = 1; worker < workers; ++worker) {
+                threadPool->AddWork(new ConcurrentMarkingWork(shared, worker));
+            }
+        }
+        ConcurrentMarkingWork mainTask(shared, 0);
+        mainTask.Execute(0);
+        if (workers > 1) {
+            threadPool->WaitFinish();
+        } else if (threadPool != nullptr) {
+            threadPool->DrainWorkQueue();
+        }
+        if (majorMarkDomain->Terminate().Terminated()) {
+            break;
+        }
+        majorMarkDomain->ResizeWorkers(workers);
+    }
+    majorMarkDomain->FinishWork();
+    CHECK_DETAIL(shared.Terminate().Terminated(),
+                 "major striped closure returned without coordinated worker termination");
+    return shared.newlyMarked.load(std::memory_order_relaxed);
+}
+
 void TracingCollector::TracingImpl(WorkStack& workStack, WorkStack& foreignRootsSet, bool parallel)
 {
     VerifyMarkingStacks::NoteProducer(VerifyMarkingStacks::MarkingGeneration::MAJOR,
@@ -760,30 +801,21 @@ void TracingCollector::TracingImpl(WorkStack& workStack, WorkStack& foreignRoots
         return;
     }
 
-    // enable parallel marking if we have thread pool.
     GCThreadPool* threadPool = GetThreadPool();
     MRT_ASSERT(threadPool != nullptr, "thread pool is null");
-    if (!workStack.empty() && parallel) { // parallel marking.
-        threadPool->Start();
-        // add work fails, let mainGC run init task & fork tasks to poolThread for workload balance
-        if (!AddConcurrentTracingWork(workStack)) {
-            ConcurrentMarkingWork markTask(*this, threadPool, std::move(workStack));
-            markTask.Execute(0);
-        }
-        threadPool->WaitFinish();
+    if (!workStack.empty()) {
+        markedObjectCount.fetch_add(RunMajorStripeMark(workStack, threadPool, parallel),
+                                    std::memory_order_relaxed);
         VerifyMarkingStacks::VerifyEmpty(VerifyMarkingStacks::MarkingGeneration::MAJOR,
                                          VerifyMarkingStacks::MarkingBoundary::JOIN,
                                          VerifyMarkingStacks::MarkingContainer::POOL,
                                          threadPool->GetWorkCount(), 0);
-    } else if (!workStack.empty()) {
-        // serial marking with a single mark task.
-        ConcurrentMarkingWork markTask(*this, std::move(workStack));
-        markTask.Execute(0);
-        threadPool->DrainWorkQueue(); // drain stack roots task
         VerifyMarkingStacks::VerifyEmpty(VerifyMarkingStacks::MarkingGeneration::MAJOR,
                                          VerifyMarkingStacks::MarkingBoundary::JOIN,
-                                         VerifyMarkingStacks::MarkingContainer::POOL,
-                                         threadPool->GetWorkCount(), 0);
+                                         VerifyMarkingStacks::MarkingContainer::STRIPE,
+                                         0, VerifyMarkingStacks::NO_MARKING_INDEX,
+                                         VerifyMarkingStacks::NO_MARKING_INDEX,
+                                         VerifyMarkingStacks::NO_MARKING_INDEX);
     }
     AddExportObjectsTracingWork(foreignRootsSet);
     threadPool->WaitFinish();
@@ -791,22 +823,6 @@ void TracingCollector::TracingImpl(WorkStack& workStack, WorkStack& foreignRoots
                                      VerifyMarkingStacks::MarkingBoundary::JOIN,
                                      VerifyMarkingStacks::MarkingContainer::POOL,
                                      threadPool->GetWorkCount(), 0);
-}
-
-bool TracingCollector::AddConcurrentTracingWork(RootSet& rs)
-{
-    GCThreadPool* threadPool = GetThreadPool();
-    size_t threadCount = threadPool->GetMaxActiveThreadNum() + 1;
-    if (rs.size() <= threadCount * MIN_MARKING_WORK_SIZE) {
-        return false; // too less init tasks, which may lead to workload imbalance, add work rejected
-    }
-    const size_t chunkSize = std::min(rs.size() / threadCount + 1, MIN_MARKING_WORK_SIZE);
-    // Split the current work stack into work tasks.
-    while (!rs.empty()) {
-        TracingCollector::WorkStackBuf* hSplit = rs.split(chunkSize);
-        threadPool->AddWork(new (std::nothrow) ConcurrentMarkingWork(*this, threadPool, WorkStack(hSplit)));
-    }
-    return true;
 }
 
 void TracingCollector::FindUselessExternObjects()

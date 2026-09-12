@@ -48,7 +48,6 @@ common_env=(
     LD_LIBRARY_PATH="$runtime_lib"
     cjHeapSize="$heap"
     MRT_GCV2_FULL_YOUNG_SCAN="$fys"
-    MRT_GCV2_MARKPAR_FORCE_SERIAL=1
     MRT_LOG_LEVEL=i
     MRT_LOG_PATH="$out_dir/runtime.log"
     MRT_REPORT="$out_dir/report.log"

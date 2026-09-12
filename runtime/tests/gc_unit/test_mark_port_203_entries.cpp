@@ -472,11 +472,11 @@ void RunArrayCollection(const char* variant, size_t helpers, bool allocateBlack 
 
 GC_OTHER_VM_TEST(MarkPort203Entries, SerialCollectionConsumesArrayTails)
 {
-    RunArrayCollection("serial", 0);
+    RunArrayCollection("striped", 0);
 }
 GC_OTHER_VM_TEST(MarkPort203Entries, LegacyParallelCollectionConsumesArrayTails)
 {
-    RunArrayCollection("legacy-parallel", 1);
+    RunArrayCollection("striped", 1);
 }
 GC_OTHER_VM_TEST(MarkPort203Entries, StripedCollectionConsumesArrayTails)
 {
@@ -509,7 +509,7 @@ GC_OTHER_VM_TEST(MarkPort203Entries, AllocateBlackFollowKeepsSingleLiveCount)
 #if defined(MRT_TESTABLE_INTERNALS)
 GC_OTHER_VM_TEST(MarkPort203Entries, SerialInvisibleRootIsLiveWithoutFollowingFields)
 {
-    RunArrayCollection("serial", 0, false, true);
+    RunArrayCollection("striped", 0, false, true);
 }
 GC_OTHER_VM_TEST(MarkPort203Entries, StripedInvisibleRootIsLiveWithoutFollowingFields)
 {
@@ -527,11 +527,11 @@ GC_OTHER_VM_TEST(MarkPort203Entries, FinalizableArrayClosureAccountsWithoutStron
 #if defined(MRT_TESTABLE_INTERNALS)
 GC_OTHER_VM_TEST(MarkPort203Entries, SerialCollectionHandlesExactArrayThreshold)
 {
-    RunArrayCollection("serial", 0, false, false, MarkPartialArray::MIN_LENGTH);
+    RunArrayCollection("striped", 0, false, false, MarkPartialArray::MIN_LENGTH);
 }
 GC_OTHER_VM_TEST(MarkPort203Entries, SerialCollectionHandlesOnePastArrayThreshold)
 {
-    RunArrayCollection("serial", 0, false, false, MarkPartialArray::MIN_LENGTH + 1);
+    RunArrayCollection("striped", 0, false, false, MarkPartialArray::MIN_LENGTH + 1);
 }
 #endif
 
@@ -545,19 +545,19 @@ GC_OTHER_VM_TEST(MarkPort203Entries, StructArrayCollectionVisitsBothFields)
 #if defined(MRT_TESTABLE_INTERNALS)
 GC_OTHER_VM_TEST(MarkPort203Entries, SerialInvisibleThenNormalAccountsOnce)
 {
-    RunArrayCollection("serial", 0, false, false, 3 * MarkPartialArray::MIN_LENGTH + 17, false, 1);
+    RunArrayCollection("striped", 0, false, false, 3 * MarkPartialArray::MIN_LENGTH + 17, false, 1);
 }
 GC_OTHER_VM_TEST(MarkPort203Entries, SerialNormalThenInvisibleAccountsOnce)
 {
-    RunArrayCollection("serial", 0, false, false, 3 * MarkPartialArray::MIN_LENGTH + 17, false, -1);
+    RunArrayCollection("striped", 0, false, false, 3 * MarkPartialArray::MIN_LENGTH + 17, false, -1);
 }
 GC_OTHER_VM_TEST(MarkPort203Entries, ParallelInvisibleThenNormalAccountsOnce)
 {
-    RunArrayCollection("legacy-parallel", 1, false, false, 3 * MarkPartialArray::MIN_LENGTH + 17, false, 1);
+    RunArrayCollection("striped", 1, false, false, 3 * MarkPartialArray::MIN_LENGTH + 17, false, 1);
 }
 GC_OTHER_VM_TEST(MarkPort203Entries, ParallelNormalThenInvisibleAccountsOnce)
 {
-    RunArrayCollection("legacy-parallel", 1, false, false, 3 * MarkPartialArray::MIN_LENGTH + 17, false, -1);
+    RunArrayCollection("striped", 1, false, false, 3 * MarkPartialArray::MIN_LENGTH + 17, false, -1);
 }
 GC_OTHER_VM_TEST(MarkPort203Entries, StripedInvisibleThenNormalAccountsOnce)
 {

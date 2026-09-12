@@ -112,11 +112,13 @@ private:
     std::atomic<ptrdiff_t> length{ 0 };
 };
 
+class MarkTerminate;
+
 class MarkStripe {
 public:
     bool IsEmpty() const { return published.IsEmpty() && overflowed.IsEmpty(); }
     size_t Population() const { return published.Length() + overflowed.Length(); }
-    void PublishStack(MarkStripeStack* stack, bool publish);
+    void PublishStack(MarkStripeStack* stack, bool publish, MarkTerminate* terminate = nullptr);
     MarkStripeStack* StealStack(MarkingSMR& smr, size_t workerId);
 
 private:
@@ -133,17 +135,28 @@ public:
     MarkStripeSet& operator=(const MarkStripeSet&) = delete;
 
     size_t Count() const { return stripes.size(); }
+    size_t NStripes() const { return nstripesMask.load(std::memory_order_relaxed) + 1; }
+    size_t NStripesMask() const { return nstripesMask.load(std::memory_order_relaxed); }
+    void SetNStripes(size_t value);
+    bool TrySetNStripes(size_t oldNStripes, size_t newNStripes);
+    size_t CalculateNStripes(size_t nworkers) const;
+    bool IsCrowded() const;
+    void SetTerminate(MarkTerminate* value) { terminate = value; }
+    MarkTerminate* Terminate() const { return terminate; }
     bool IsEmpty() const;
     size_t Population() const;
     size_t FirstNonEmptyStripe() const;
     size_t StripeForAddress(uintptr_t address) const;
     size_t StripeForWorker(size_t workerCount, size_t workerId) const;
-    size_t Next(size_t stripeId) const { return (stripeId + 1) & mask; }
+    size_t Next(size_t stripeId) const { return (stripeId + 1) & capacityMask; }
+    size_t Next(size_t stripeId, size_t offset) const { return (stripeId + offset) & capacityMask; }
     MarkStripe& At(size_t stripeId) { return *stripes[stripeId]; }
     const MarkStripe& At(size_t stripeId) const { return *stripes[stripeId]; }
 
 private:
-    size_t mask;
+    size_t capacityMask;
+    std::atomic<size_t> nstripesMask;
+    MarkTerminate* terminate = nullptr;
     std::vector<std::unique_ptr<MarkStripe>> stripes;
 };
 
@@ -201,20 +214,23 @@ private:
 // Per-worker follow-work context: natural stripe + private stacks + live cache.
 class MarkContext {
 public:
-    MarkContext(size_t workerCount, size_t workerId, MarkStripeSet& stripes);
+    MarkContext(size_t workerCount, size_t workerId, MarkStripeSet& stripes, MarkThreadLocalStacks& stacks);
 
     size_t StripeId() const { return stripeId; }
+    size_t NStripes() const { return nstripes; }
+    void SetNStripes(size_t value) { nstripes = value; }
     void SetStripeId(size_t value)
     {
         cache.Flush();
         stripeId = value;
     }
-    MarkThreadLocalStacks& Stacks() { return stacks; }
+    MarkThreadLocalStacks& Stacks() { return *stacks; }
     MarkLiveCache& Cache() { return cache; }
 
 private:
     size_t stripeId;
-    MarkThreadLocalStacks stacks;
+    size_t nstripes;
+    MarkThreadLocalStacks* stacks;
     MarkLiveCache cache;
 };
 
