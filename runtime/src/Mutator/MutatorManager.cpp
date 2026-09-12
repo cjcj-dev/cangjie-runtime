@@ -188,6 +188,7 @@ void MutatorManager::DestroyExpiredMutators()
 
 void MutatorManager::DestroyMutator(Mutator* mutator)
 {
+    ConsumeCpuProfileRequest(mutator);
     // dynjoin: while an epoch handshake is active, never free a participant (or a
     // racing create) under the old R-lock path — that used to be serialised by the
     // full-handshake W-lock. Defer to expiringMutators; PostGC drains them.
@@ -1292,8 +1293,7 @@ void MutatorManager::TransitionAllMutatorsToCpuProfile()
     }
     VisitAllMutatorsExceptFinalizer([](Mutator& mutator) {
         if (mutator.GetCjthreadPtr() == MutatorManager::Instance().GetMainThreadHandle()) {
-            mutator.SetSuspensionFlag(Mutator::SuspensionType::SUSPENSION_FOR_CPU_PROFILE);
-            ArmGlobalPoll();
+            PublishCpuProfileRequest(&mutator);
         }
     });
     if (!worldStopped) {

@@ -1,6 +1,8 @@
 #include "Handshake.h"
 
+#include <mutex>
 #include <thread>
+#include <unordered_set>
 
 #include "Mutator.h"
 #include "Mutator.inline.h"
@@ -10,7 +12,8 @@
 namespace MapleRuntime {
 namespace {
 thread_local HandshakeState* tlHandshakeState = nullptr;
-std::atomic<int> g_sampleGlobalPoll{0};
+std::mutex g_cpuProfilePendingLock;
+std::unordered_set<Mutator*> g_cpuProfilePending;
 }
 
 HandshakeState& Handshake::Current()
@@ -256,24 +259,38 @@ void ArmAllThreadPolls()
     MutatorManager::Instance().ForEachMarkFlushTls([](ThreadLocalData* tls) { ArmThreadPoll(tls); });
 }
 
-void ArmGlobalPoll()
+void PublishCpuProfileRequest(Mutator* mutator)
 {
-    g_sampleGlobalPoll.fetch_add(1, std::memory_order_seq_cst);
-    ArmAllThreadPolls();
+    if (mutator == nullptr) {
+        return;
+    }
+    {
+        std::lock_guard<std::mutex> lock(g_cpuProfilePendingLock);
+        mutator->SetSuspensionFlag(Mutator::SUSPENSION_FOR_CPU_PROFILE);
+        g_cpuProfilePending.insert(mutator);
+        ArmAllThreadPolls();
+    }
 }
 
-void ReleaseGlobalPoll()
+void ConsumeCpuProfileRequest(Mutator* mutator)
 {
-    int cur = g_sampleGlobalPoll.load(std::memory_order_relaxed);
-    while (cur > 0 &&
-           !g_sampleGlobalPoll.compare_exchange_weak(cur, cur - 1, std::memory_order_seq_cst,
-                                                     std::memory_order_relaxed)) {
+    if (mutator == nullptr) {
+        return;
     }
+    std::lock_guard<std::mutex> lock(g_cpuProfilePendingLock);
+    mutator->ClearSuspensionFlag(Mutator::SUSPENSION_FOR_CPU_PROFILE);
+    g_cpuProfilePending.erase(mutator);
+}
+
+bool HasPendingCpuProfileRequest()
+{
+    std::lock_guard<std::mutex> lock(g_cpuProfilePendingLock);
+    return !g_cpuProfilePending.empty();
 }
 
 bool GlobalPoll()
 {
-    return g_sampleGlobalPoll.load(std::memory_order_acquire) > 0 ||
+    return HasPendingCpuProfileRequest() ||
            MutatorManager::Instance().SyncTriggered() || MutatorManager::Instance().EpochHandshakeActive();
 }
 

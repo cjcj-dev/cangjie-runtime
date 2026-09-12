@@ -79,10 +79,11 @@ public:
 
 void ArmThreadPoll(ThreadLocalData* tls);
 void ArmAllThreadPolls();
-void ArmGlobalPoll();
-void ReleaseGlobalPoll();
+void PublishCpuProfileRequest(Mutator* mutator);
+void ConsumeCpuProfileRequest(Mutator* mutator);
 void UpdatePollValues(ThreadLocalData* tls);
 bool HasPendingSafepoint(ThreadLocalData* tls);
 bool GlobalPoll();
+bool HasPendingCpuProfileRequest();
 } // namespace MapleRuntime
 #endif
