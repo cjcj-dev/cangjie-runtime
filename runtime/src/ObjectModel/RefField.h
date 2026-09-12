@@ -80,7 +80,6 @@ enum class HealSite : uint16_t {
     TraceCopyStructArrayRecolour,
     TraceReadReference,
     TracingCollectorResurrectFinalizer,
-    TracingCollectorTraceRefField,
     WCollectorEnumRawInteriorRoot,
     WCollectorEnumRawRoot,
     WCollectorEnumRefFieldRoot,
