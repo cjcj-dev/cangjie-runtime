@@ -18,9 +18,9 @@ from run_remap_window_arms import sha, replace_one, patch, HEADER, PRODUCER, ENT
 
 TABLE = 'runtime/src/Heap/Allocator/ForwardingTable.cpp'
 WAIT = 'runtime/src/Heap/Collector/Relocate.cpp'
-TESTS = ('Identity', 'NonIdentityCopy', 'RetiredHit', 'MissingEntry', 'WrongLifecycle', 'Unavailable')
+TESTS = ('Identity', 'NonIdentityCopy', 'RetiredHit', 'MissingEntry', 'Unavailable')
 ARMS = ('baseline', 'cut_identity', 'cut_copy_return', 'cut_retired',
-        'cut_missing', 'cut_life', 'cut_unavailable', 'cut_wait', 'cut_entry', 'restored')
+        'cut_missing', 'cut_unavailable', 'cut_wait', 'cut_entry', 'restored')
 
 
 def mutate(originals, arm):
@@ -39,10 +39,9 @@ def mutate(originals, arm):
     elif arm == 'cut_retired':
         texts[TABLE] = replace_one(texts[TABLE], '    if (retired != 0) {\n        g_armedHit',
                                    '    if (retired != 0 && false) {\n        g_armedHit')
-    elif arm in ('cut_missing', 'cut_life', 'cut_unavailable'):
+    elif arm in ('cut_missing', 'cut_unavailable'):
         condition = {
             'cut_missing': 'lastLookup.answer == ForwardingTable::ToAnswer::ArmedMiss',
-            'cut_life': '(static_cast<unsigned>(lastLookup.unavailableCause) & 1u) != 0',
             'cut_unavailable': '(static_cast<unsigned>(lastLookup.unavailableCause) & 16u) != 0',
         }[arm]
         before = '        CHECK_DETAIL(false,\n                     "WCollector::WaitRoutedTipReady.%s consumer='
@@ -122,27 +121,23 @@ def main():
             item['lineage'] = [s for s in subprocess.check_output(['strings', str(dest / 'libcangjie-runtime.so')],
                                 text=True).splitlines() if 'CJRT-COMMIT:' in s]
             item['uptime_before'] = subprocess.check_output(['uptime'], text=True).strip()
-            env.update(LD_LIBRARY_PATH=str(dest), CJ_GC_UNIT_FORWARD_DOMAIN='1', CJRT_LIFECLOCK_ENFORCE='1')
+            env.update(LD_LIBRARY_PATH=str(dest), CJ_GC_UNIT_FORWARD_DOMAIN='1')
             env.pop('GC_UNIT_OTHER_VM_CHILD', None)
-            cases = [(t, 'enforce') for t in selected_tests]
-            if 'WrongLifecycle' in selected_tests: cases.append(('WrongLifecycle', 'audit'))
+            cases = [(t, 'product') for t in selected_tests]
             cases.append(('ColourAddress.UncolorRoundTripAllRemapOneHot', 'control'))
             for sample in range(a.samples):
                 for name, mode in cases:
                     test = name if mode == 'control' else 'ForwardReturnDomain.' + name
-                    env['CJRT_LIFECLOCK_ENFORCE'] = '0' if mode == 'audit' else '1'
-                    env['LIFECLOCK_AUDIT'] = '1' if mode == 'audit' else '0'
                     path = dest / f'{name}.{mode}.{sample}.log'
                     with path.open('w') as log:
                         run = subprocess.run(['taskset', '-c', a.cores, 'timeout', '35', str(elf),
                                               '--gtest_filter=' + test], env=env, stdout=log, stderr=subprocess.STDOUT)
                     output = path.read_text()
                     fails = ((arm == 'cut_identity' and
-                              (name in ('Identity', 'RetiredHit') or mode == 'audit')) or
+                              name in ('Identity', 'RetiredHit')) or
                              (arm == 'cut_copy_return' and name == 'NonIdentityCopy') or
                              (arm == 'cut_retired' and name == 'RetiredHit') or
                              (arm == 'cut_missing' and name == 'MissingEntry') or
-                             (arm == 'cut_life' and name == 'WrongLifecycle' and mode == 'enforce') or
                              (arm == 'cut_unavailable' and name == 'Unavailable') or
                              (arm in ('cut_wait', 'cut_entry') and mode != 'control'))
                     expected = 1 if fails else 0
@@ -165,7 +160,7 @@ def main():
                             rec['valid'] &= rec['wait_entries'] == 2 and rec['producer_receipts'] == 2
                         if fails and arm in ('cut_identity', 'cut_copy_return'):
                             rec['valid'] &= rec['outer_guard_checks'] == 2
-                        if fails and arm in ('cut_missing', 'cut_life', 'cut_unavailable'):
+                        if fails and arm in ('cut_missing', 'cut_unavailable'):
                             # A lost death assertion is only causal evidence if
                             # the product actually returned an invented answer.
                             rec['valid'] &= rec['consumer_returns'] == 2

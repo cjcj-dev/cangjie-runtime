@@ -8,7 +8,7 @@ The baseline uses a full `--clean-first` product build. Every arm disables the
 compiler cache and its path-rewriting environment, so a supplied build cannot
 mix cached debug information with newly compiled mutation objects. Source bytes
 and the fixed test ELF are preserved; build commands and environment are recorded.
-`CJ_GC_UNIT_FORWARD_DOMAIN=1` enables the six `ForwardReturnDomain` tests.
+`CJ_GC_UNIT_FORWARD_DOMAIN=1` enables the remaining five `ForwardReturnDomain` tests.
 Ordinary unit invocations print `DOMAIN NOT_RUN`; that is not contract coverage.
 The frozen main is `5ee81066e5493eea3a198fe9dba701dc7dd42023`, including
 #62. `baseline` and `restored` run its unchanged `resolved != nullptr` guard.
@@ -23,7 +23,6 @@ There is no accept-arm source replacement and no old-guard baseline assumption.
 | NonIdentityCopy | Real GC copy, ArmedHit, to!=from: return receipt | Both legal | Reject non-identity at outer guard |
 | RetiredHit | Retired ArmedHit of current lifetime: return receipt | Both legal | Suppress retired hit return in LookupTo |
 | MissingEntry | ArmedMiss after removal of the real receipt: fail closed | retain-refused-without-receipt / published-without-receipt | Bypass ArmedMiss permanentHole |
-| WrongLifecycle | Enforce=1: Unavailable after life mismatch, fail closed; audit-only: ArmedHit, legal identity | Both, in each enforcement mode | Bypass ActiveRetainRejected permanentHole; audit remains control |
 | Unavailable | Receipt removed, publication closed: Unavailable, fail closed | publication-closed-never-installed on both sides | Bypass NeverInstalled permanentHole |
 
 The negative cases check the exact inner reason plus
@@ -46,16 +45,18 @@ Each case observes the real producer receipt, releases a driver already parked
 inside WaitRoutedTipReady, and checks the value returned by the product remap
 entry. Identity, real non-identity copy, and retired identity each run before
 and after the product writes done. Negative inputs are constructed only after
-real publication: remove the selected receipt, change its region life while
-keeping the diagnostic route current, or seal publication after removal. They
+real publication: remove the selected receipt or seal publication after removal. They
 must terminate at the actual product CHECK, with the specific reason and
 consumer text; an arbitrary signal or a different earlier CHECK does not pass.
 The parent records both done scenarios before asserting the combined verdict.
 
-WrongLifecycle rejection is limited to CJRT_LIFECLOCK_ENFORCE=1. The same case
-also runs with LIFECLOCK_AUDIT=1 and enforcement off, requiring ArmedHit and the
-returned identity. This is the existing staged life-clock contract, not a new
-default-enforcement claim.
+The P6 migration (#402) removes the lifecycle enforcement/audit scenario and
+its runner arm: the product no longer has that switch or validation domain.
+Identity/moved winners, done and page retain/release are checked in
+`ForwardingPublicationProduct.ForwardingIdentityWinnerSurvivesDoneAndRelease`
+and `ForwardingPublicationProduct.ForwardingMovedWinnerSurvivesDoneAndRelease`.
+The inventory below is historical; it does not describe the current product
+entry points or establish current runtime coverage.
 
 ## WaitRoutedTipReady return-point inventory
 
