@@ -163,6 +163,7 @@ public:
     // Visit all mutators, hold mutatorListLock firstly
     void VisitAllMutators(MutatorVisitor func);
     void VisitAllMutatorsExceptFinalizer(MutatorVisitor func);
+    bool HandshakeFlushMarkProducers(class MarkDomain* domain);
 
     // Some functions about stw
     void StopTheWorld(bool syncGCPhase, GCPhase phase);
@@ -236,6 +237,14 @@ public:
     bool EpochHandshakeActive() const
     {
         return epochHandshakeActive.load(std::memory_order_acquire) != 0;
+    }
+    bool MarkFlushHandshakeActive() const
+    {
+        return markFlushHandshakeActive.load(std::memory_order_acquire) != 0;
+    }
+    class MarkDomain* MarkFlushDomain() const
+    {
+        return markFlushDomain.load(std::memory_order_acquire);
     }
 #if defined(MRT_TESTABLE_INTERNALS)
     uint64_t BeginEpochHandshakeLifecycleTest();
@@ -368,6 +377,8 @@ private:
 
     std::atomic<uint64_t> epochHandshakeSequence = { 0 };
     std::atomic<uint64_t> epochHandshakeActive = { 0 };
+    std::atomic<uint32_t> markFlushHandshakeActive = { 0 };
+    std::atomic<class MarkDomain*> markFlushDomain = { nullptr };
     std::atomic<size_t> epochHandshakeAcked = { 0 };
     std::atomic<size_t> epochHandshakeAckedTwice = { 0 };
     std::atomic<size_t> epochHandshakeSelfAck = { 0 };

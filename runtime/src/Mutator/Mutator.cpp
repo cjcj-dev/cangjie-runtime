@@ -16,6 +16,8 @@
 #include "Collector/CopyCollector.h"
 #include "Common/ScopedObjectAccess.h"
 #include "Concurrency/ConcurrencyModel.h"
+#include "Heap/Heap.h"
+#include "Heap/Allocator/AllocBuffer.h"
 #include "Heap/Collector/FinalizerProcessor.h"
 #include "Heap/Verify/VerifyRoots.h"
 #include "Heap/Verify/StackExposureOracle.h"
@@ -262,6 +264,8 @@ void Mutator::HandleSuspensionRequest()
         } else if (HasSuspensionRequest(SUSPENSION_FOR_EPOCH_HANDSHAKE)) {
             uint64_t epoch = epochHandshakeRequest.load(std::memory_order_acquire);
             (void)AcknowledgeEpochHandshake(epoch, true);
+        } else if (HasSuspensionRequest(SUSPENSION_FOR_MARK_FLUSH)) {
+            (void)AcknowledgeMarkFlushHandshake(MutatorManager::Instance().MarkFlushDomain());
         } else if (HasSuspensionRequest(SUSPENSION_FOR_SYNC)) {
             SuspendForSync();
             if (HasSuspensionRequest(SUSPENSION_FOR_GC_PHASE)) {
@@ -1446,5 +1450,67 @@ void Mutator::ReleaseForeignThread()
         delete buffer;
     }
     // We can remove foreign thread c-heap resource here.
+}
+
+bool Mutator::FlushSatbBuffer(bool flushStoreBarrier, MarkDomain* domain)
+{
+    std::lock_guard<std::mutex> lg(mutatorLock);
+    RememberedSet* rememberedSet = storeBarrierRememberedSet;
+    if (rememberedSet == nullptr) {
+        rememberedSet = &Heap::GetHeap().GetRememberedSet();
+    }
+    bool published = satbNode != nullptr && !satbNode->IsEmpty();
+    SatbBuffer::Instance().FlushQueue(satbNode);
+    if (flushStoreBarrier && Mutator::GetMutator() == this) {
+        AllocBuffer* buffer = ThreadLocal::GetAllocBuffer();
+        if (buffer != nullptr) {
+            if (rememberedSet->IsInitialized()) {
+                buffer->GetStoreBarrierBuffer().Flush(*rememberedSet);
+            }
+            auto& collector = static_cast<WCollector&>(Heap::GetHeap().GetCollector());
+            if (collector.FlushAllocBufferMarkProducers(buffer, domain)) {
+                published = true;
+            }
+        }
+    }
+    return published;
+}
+
+Mutator::MarkFlushClaim Mutator::TryClaimMarkFlush(bool self, MarkDomain* domain)
+{
+    std::lock_guard<std::mutex> lg(mutatorLock);
+    if (!HasSuspensionRequest(SUSPENSION_FOR_MARK_FLUSH)) {
+        return MarkFlushClaim::NotPending;
+    }
+    if (!self && !InSaferegion()) {
+        return MarkFlushClaim::NotSafe;
+    }
+    RememberedSet* rememberedSet = storeBarrierRememberedSet;
+    if (rememberedSet == nullptr) {
+        rememberedSet = &Heap::GetHeap().GetRememberedSet();
+    }
+    bool published = satbNode != nullptr && !satbNode->IsEmpty();
+    SatbBuffer::Instance().FlushQueue(satbNode);
+    if (self) {
+        AllocBuffer* buffer = ThreadLocal::GetAllocBuffer();
+        if (buffer != nullptr) {
+            if (rememberedSet->IsInitialized()) {
+                buffer->GetStoreBarrierBuffer().Flush(*rememberedSet);
+            }
+            auto& collector = static_cast<WCollector&>(Heap::GetHeap().GetCollector());
+            if (collector.FlushAllocBufferMarkProducers(buffer, domain)) {
+                published = true;
+            }
+        }
+    }
+    ClearSuspensionFlag(SUSPENSION_FOR_MARK_FLUSH);
+    SetSafepointActive(HasAnySuspensionRequest());
+    return published ? MarkFlushClaim::Published : MarkFlushClaim::Empty;
+}
+
+bool Mutator::AcknowledgeMarkFlushHandshake(MarkDomain* domain)
+{
+    const MarkFlushClaim claim = TryClaimMarkFlush(true, domain);
+    return claim == MarkFlushClaim::Published || claim == MarkFlushClaim::Empty;
 }
 } // namespace MapleRuntime
