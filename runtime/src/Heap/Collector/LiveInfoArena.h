@@ -90,40 +90,6 @@ class LiveInfoArena {
             return allocZone[type].zonePosition.fetch_add(sz);
 #endif
         }
-        void ReleaseMemory()
-        {
-#if defined(_WIN64)
-            CHECK_E(UNLIKELY(!VirtualFree(reinterpret_cast<void*>(startAddress), size, MEM_DECOMMIT)),
-                    "VirtualFree failed in ReturnPage, errno: %s", GetLastError());
-#elif defined(__APPLE__)
-            MapleRuntime::MemorySet(startAddress, size, 0, size);
-            void* ret = mmap(reinterpret_cast<void*>(startAddress), size,
-                            PROT_READ | PROT_WRITE, MAP_PRIVATE | MAP_ANONYMOUS | MAP_FIXED, -1 , 0);
-            if (ret == MAP_FAILED) {
-                LOG(RTLOG_ERROR, "forwarding fata mmap ixed failed");
-            } else if (ret != reinterpret_cast<void*>(startAddress)) {
-                LOG(RTLOG_ERROR, "mmap fixed at wrong addr %p -> %p", startAddress, ret);
-            }
-#else
-            if (madvise(reinterpret_cast<void*>(startAddress), size, MADV_DONTNEED) == 0) {
-                DLOG(REGION, "release forward-data @[%#zx+%zu, %#zx)", startAddress, size, startAddress + size);
-            } else {
-                MapleRuntime::MemorySet(startAddress, size, 0, size);
-                DLOG(REGION, "clear forward-data @[%#zx+%zu, %#zx)", startAddress, size, startAddress + size);
-            }
-#endif
-            for (size_t i = Zone::ZoneType::LIVE_INFO; i < Zone::ZoneType::TOTAL_NUM; ++i) {
-                allocZone[i].zonePosition = allocZone[i].zoneStartAddress;
-#if defined(_WIN64)
-                lastCommitEndAddr[i].store(allocZone[i].zoneStartAddress);
-#endif
-            }
-        }
-
-        uintptr_t GetStartAddress() const { return startAddress; }
-        size_t GetSize() const { return size; }
-        uintptr_t GetZoneStart(Zone::ZoneType type) const { return allocZone[type].zoneStartAddress; }
-        uintptr_t GetZonePos(Zone::ZoneType type) const { return allocZone[type].zonePosition.load(); }
 
     private:
         Zone allocZone[Zone::TOTAL_NUM];

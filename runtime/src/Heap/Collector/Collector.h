@@ -254,8 +254,6 @@ public:
         const char* lookupActiveAnswer{ "n/a" };
         const char* lookupRetiredAnswer{ "n/a" };
         bool lookupPublicationClosed{ false };
-        bool routeStateValid{ false };
-        uint8_t routeState{ 0 };
         uintptr_t from{ 0 };
         uintptr_t fromRegion{ 0 };
         bool regionSnapshotValid{ false };
@@ -302,8 +300,6 @@ public:
     const char* unavailable_lookup_active_answer() const { return unavailableLookupActiveAnswer; }
     const char* unavailable_lookup_retired_answer() const { return unavailableLookupRetiredAnswer; }
     bool unavailable_lookup_publication_closed() const { return unavailableLookupPublicationClosed; }
-    bool unavailable_route_state_valid() const { return unavailableRouteStateValid; }
-    uint8_t unavailable_route_state() const { return unavailableRouteState; }
     uintptr_t unavailable_from() const { return unavailableFrom; }
     uintptr_t unavailable_from_region() const { return unavailableFromRegion; }
     bool unavailable_region_snapshot_valid() const { return unavailableRegionSnapshotValid; }
@@ -351,14 +347,6 @@ public:
         const char* retiredLookup = unavailableLookupSnapshotValid ? unavailableLookupRetiredAnswer : "n/a";
         const char* publicationClosed = unavailableLookupSnapshotValid
             ? (unavailableLookupPublicationClosed ? "1" : "0") : "n/a";
-        const char* routeState = unavailableRouteStateValid
-            ? (unavailableRouteState == 0 ? "0" :
-               unavailableRouteState == 1 ? "1" :
-               unavailableRouteState == 2 ? "2" :
-               unavailableRouteState == 3 ? "3" :
-               unavailableRouteState == 4 ? "4" :
-               unavailableRouteState == 5 ? "5" : "invalid")
-            : "n/a";
         const char* regionType = unavailableRegionSnapshotValid ? "present" : "n/a";
         CHECK_DETAIL(lookupState != State::Unavailable,
                      "[FINDTO][fail-closed] consumer=%s forwarding carrier unavailable "
@@ -369,7 +357,7 @@ public:
                      "publication_generation=%llu from_page_epoch=%llu lifeId=%llu "
                      "lookup_state=%s route=%s forwarded=%s fromRegionInfo_null=%s lookup=%s "
                      "lookup_snapshot_valid=%u cause=%s active_candidate=%s active_lookup=%s "
-                     "retired_lookup=%s publication_closed=%s route_state=%s never_installed_event=%llu gc_phase=%u",
+                      "retired_lookup=%s publication_closed=%s never_installed_event=%llu gc_phase=%u",
                      consumer == nullptr ? "unknown" : consumer,
                      ForwardingProvenance::KindName(provenance.kind), provenance.holder, provenance.slot,
                      ForwardingProvenance::StageName(provenance.stage),
@@ -389,8 +377,8 @@ public:
                      unavailable_route_name(),
                      forwarded, fromRegionInfoNull, lookup,
                      static_cast<unsigned>(unavailableLookupSnapshotValid), lookupCause,
-                     activeCandidate, activeLookup, retiredLookup, publicationClosed, routeState,
-                     static_cast<unsigned long long>(unavailableNeverInstalledEvent),
+                      activeCandidate, activeLookup, retiredLookup, publicationClosed,
+                      static_cast<unsigned long long>(unavailableNeverInstalledEvent),
                      static_cast<unsigned>(unavailableGcPhase));
         return found();
     }
@@ -403,8 +391,7 @@ private:
           unavailableLookupAnswer("not_queried"), unavailableLookupSnapshotValid(false),
           unavailableLookupCause("n/a"), unavailableLookupActiveCandidate(false),
           unavailableLookupActiveAnswer("n/a"), unavailableLookupRetiredAnswer("n/a"),
-          unavailableLookupPublicationClosed(false), unavailableRouteStateValid(false),
-          unavailableRouteState(0), unavailableFrom(0), unavailableFromRegion(0),
+          unavailableLookupPublicationClosed(false), unavailableFrom(0), unavailableFromRegion(0),
           unavailableRegionSnapshotValid(false), unavailableRegionType(0), unavailableGeneration(0),
           unavailableInCurrentRelocationSet(false), unavailableTableId(0),
           unavailablePublicationGeneration(0), unavailableFromPageEpoch(0), unavailableFromPageLifeId(0),
@@ -427,8 +414,7 @@ private:
           unavailableLookupRetiredAnswer(witness.lookupRetiredAnswer == nullptr ? "unknown"
                                                                                 : witness.lookupRetiredAnswer),
           unavailableLookupPublicationClosed(witness.lookupPublicationClosed),
-          unavailableRouteStateValid(witness.routeStateValid),
-          unavailableRouteState(witness.routeState), unavailableFrom(witness.from),
+          unavailableFrom(witness.from),
           unavailableFromRegion(witness.fromRegion),
           unavailableRegionSnapshotValid(witness.regionSnapshotValid),
           unavailableRegionType(witness.regionType), unavailableGeneration(witness.generation),
@@ -457,8 +443,6 @@ private:
     const char* unavailableLookupActiveAnswer;
     const char* unavailableLookupRetiredAnswer;
     bool unavailableLookupPublicationClosed;
-    bool unavailableRouteStateValid;
-    uint8_t unavailableRouteState;
     uintptr_t unavailableFrom;
     uintptr_t unavailableFromRegion;
     bool unavailableRegionSnapshotValid;

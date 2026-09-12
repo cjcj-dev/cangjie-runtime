@@ -1196,8 +1196,6 @@ GC_OTHER_VM_TEST(FindToRouteDiagnostics, DistinguishesLookupUnavailableFromNoGho
     GC_EXPECT_TRUE(std::strcmp(lookup.unavailable_lookup_retired_answer(), "unarmed") == 0);
     GC_EXPECT_TRUE(lookup.unavailable_lookup_publication_closed());
     GC_EXPECT_TRUE(std::strcmp(lookup.unavailable_route_name(), "lookup_unavailable") == 0);
-    GC_EXPECT_FALSE(lookup.unavailable_route_state_valid());
-    GC_EXPECT_EQ(lookup.unavailable_route_state(), static_cast<uint8_t>(0));
 
     RegionInfo* noGhostRegion = fx.region1;
     BaseObject* noGhostFrom = fx.PlaceObject(noGhostRegion->GetRegionStart() + 64);
@@ -1224,8 +1222,6 @@ GC_OTHER_VM_TEST(FindToRouteDiagnostics, DistinguishesLookupUnavailableFromNoGho
     GC_EXPECT_TRUE(std::strcmp(noGhost.unavailable_lookup_retired_answer(), "unarmed") == 0);
     GC_EXPECT_FALSE(noGhost.unavailable_lookup_publication_closed());
     GC_EXPECT_TRUE(std::strcmp(noGhost.unavailable_route_name(), "no_ghost_forwarded") == 0);
-    GC_EXPECT_FALSE(noGhost.unavailable_route_state_valid());
-    GC_EXPECT_EQ(noGhost.unavailable_route_state(), static_cast<uint8_t>(0));
     GC_EXPECT_NE(lookup.unavailable_route(), noGhost.unavailable_route());
 
     noGhostFrom->SetStateCode(ObjectState::NORMAL);
