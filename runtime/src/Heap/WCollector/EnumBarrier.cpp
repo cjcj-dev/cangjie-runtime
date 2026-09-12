@@ -122,12 +122,6 @@ void EnumBarrier::WriteStructImpl(BaseObject* obj, MAddress dst, size_t dstLen, 
 {
     if (obj != nullptr) {
         MRT_ASSERT(dst > reinterpret_cast<MAddress>(obj), "WriteStruct struct addr is less than obj!");
-            obj->ForEachRefInStruct(
-            [=](RefField<>& dstField) {
-                MAddress offset = reinterpret_cast<MAddress>(&dstField) - dst;
-                HeapSlot<> srcField(HeapSlotAt<>(src + offset));
-            },
-            dst, dst + srcLen);
     }
     std::atomic_thread_fence(std::memory_order_seq_cst);
     if (obj != nullptr && Heap::IsHeapAddress(obj)) {
@@ -145,10 +139,6 @@ void EnumBarrier::WriteStructImpl(BaseObject* obj, MAddress dst, size_t dstLen, 
 
 void EnumBarrier::WriteStaticStruct(MAddress dst, size_t dstLen, MAddress src, size_t srcLen, const GCTib gctib) const
 {
-    gctib.ForEachBitmapWord(dst, [=](RefField<>& dstField) {
-        uint32_t offset = reinterpret_cast<MAddress>(&dstField) - dst;
-        HeapSlot<> srcField(HeapSlotAt<>(src + offset));
-    });
     std::atomic_thread_fence(std::memory_order_seq_cst);
     CHECK_DETAIL(memcpy_s(reinterpret_cast<void*>(dst), dstLen, reinterpret_cast<void*>(src), srcLen) == EOK,
                  "memcpy_s failed");

@@ -1386,7 +1386,7 @@ private:
                                   std::vector<BaseObject*>& reachableVec, MinorSlotSet& reachableSlots,
                                   MinorSlotSet& weakSlots,
                                   const MinorSlotSet* reachableSlotDomain = nullptr);
-    // youngconc: drain SATB into TraceYoungClosure (major FinishOldMark sibling; young-only filter).
+    // Follow this generation's published mark work through TraceYoungClosure.
     bool FollowYoungMark(WorkStack& workStack, bool fullYoungScan,
                              std::vector<BaseObject*>& reachableVec, MinorSlotSet& reachableSlots,
                              MinorSlotSet& weakSlots,
