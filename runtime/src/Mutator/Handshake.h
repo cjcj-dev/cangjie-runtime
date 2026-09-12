@@ -54,6 +54,7 @@ public:
     bool try_process();
     bool claim_handshake();
     bool possibly_can_process();
+    void process_queued_then_detach(void (*flush)(ThreadLocalData*));
 
     void enter_safe();
     void leave_safe();

@@ -498,6 +498,25 @@ EpochHandshakeStats MutatorManager::RunEpochHandshake(const char* source, bool y
         }
         mutator->RequestEpochHandshake(stats.epoch, young);
     }
+    class EpochHandshakeClosure : public HandshakeClosure {
+    public:
+        EpochHandshakeClosure(uint64_t epoch, bool young)
+            : HandshakeClosure("Epoch"), epoch_(epoch), young_(young) {}
+        void do_thread(ThreadLocalData* tls) override
+        {
+            (void)young_;
+            Mutator* mutator = tls != nullptr ? tls->mutator : nullptr;
+            if (mutator == nullptr) {
+                return;
+            }
+            bool bySelf = tls == ThreadLocal::GetThreadLocalData();
+            (void)mutator->AcknowledgeEpochHandshake(epoch_, bySelf);
+        }
+    private:
+        uint64_t epoch_;
+        bool young_;
+    } epochCl(stats.epoch, young);
+    Handshake::execute(&epochCl);
 
     uint64_t waitStart = TimeUtil::MilliSeconds();
     bool runningMutatorsHadSelfOpportunity = false;
@@ -821,13 +840,15 @@ void MutatorManager::UnregisterMarkFlushThread(ThreadLocalData* tls)
         target->dying.store(1, std::memory_order_release);
         target->refs.fetch_add(1, std::memory_order_acq_rel);
     }
-    {
-        std::lock_guard<std::mutex> claim(target->mutex);
+    HandshakeState* hs = target->handshake;
+    if (hs != nullptr) {
+        hs->process_queued_then_detach([](ThreadLocalData* t) { (void)FlushTlsMarkProducersDetach(t); });
+    } else {
         (void)FlushTlsMarkProducersDetach(tls);
-        target->pending.store(0, std::memory_order_release);
-        target->bufferLive.store(0, std::memory_order_release);
-        target->inSafe.store(1, std::memory_order_release);
     }
+    target->pending.store(0, std::memory_order_release);
+    target->bufferLive.store(0, std::memory_order_release);
+    target->inSafe.store(1, std::memory_order_release);
     target->refs.fetch_sub(1, std::memory_order_acq_rel);
     for (;;) {
         {
@@ -1220,7 +1241,14 @@ void MutatorManager::TransitionAllMutatorsToGCPhase(GCPhase phase, bool young)
     class PhaseHandshakeClosure : public HandshakeClosure {
     public:
         PhaseHandshakeClosure() : HandshakeClosure("GCPhase") {}
-        void do_thread(ThreadLocalData* tls) override { (void)tls; }
+        void do_thread(ThreadLocalData* tls) override
+        {
+            Mutator* mutator = tls != nullptr ? tls->mutator : nullptr;
+            if (mutator == nullptr) {
+                return;
+            }
+            (void)mutator->TransitionGCPhase(tls == ThreadLocal::GetThreadLocalData());
+        }
     } phaseCl;
     Handshake::execute(&phaseCl);
     EnsurePhaseTransition(phase, undoneMutators);
@@ -1271,7 +1299,14 @@ void MutatorManager::TransitionAllMutatorsToCpuProfile()
     class CpuProfileHandshakeClosure : public HandshakeClosure {
     public:
         CpuProfileHandshakeClosure() : HandshakeClosure("CpuProfile") {}
-        void do_thread(ThreadLocalData* tls) override { (void)tls; }
+        void do_thread(ThreadLocalData* tls) override
+        {
+            Mutator* mutator = tls != nullptr ? tls->mutator : nullptr;
+            if (mutator == nullptr) {
+                return;
+            }
+            (void)mutator->TransitionToCpuProfile(tls == ThreadLocal::GetThreadLocalData());
+        }
     } cpuCl;
     Handshake::execute(&cpuCl);
     EnsureCpuProfileFinish(undoneMutators);
