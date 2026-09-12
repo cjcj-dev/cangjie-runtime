@@ -1487,16 +1487,7 @@ bool WCollector::FollowYoungMark(WorkStack& workStack, bool fullYoungScan,
 #if defined(MRT_TESTABLE_INTERNALS)
     PublishConcurrentYoungProducersTestReceipt();
 #endif
-    theAllocator.VisitAllocBuffers([this, &workStack](AllocBuffer& buffer) {
-        buffer.MergeRoots(workStack);
-        buffer.MergeYoungAllocBlackFollow(workStack);
-        buffer.MergeY2yDirtyHolders(workStack);
-        buffer.MergeY2yDirtySlots([this, &workStack](MAddress slot) {
-            RefField<>& field = HeapSlotAt<>(slot);
-            BaseObject* target = ResolveMinorReference(field);
-            PushYoungObject(target, workStack, "y2y_slot");
-        });
-    });
+    (void)MutatorManager::Instance().HandshakeFlushMarkProducers(youngMarkDomain.get());
     if (!workStack.empty() || !youngMarkDomain->Stripes().IsEmpty()) {
         if (windowStats != nullptr) {
             ++windowStats->closureCalls;
@@ -1513,6 +1504,7 @@ bool WCollector::TryEndYoungMark(WorkStack& workStack, YoungConcWindowStats* win
     NoteMarkTerminatePause();
     const size_t before = youngMarkDomain->Stripes().Population();
     StoreBarrierBuffer::FlushAll(Heap::GetHeap().GetRememberedSet());
+    (void)MutatorManager::Instance().HandshakeFlushMarkProducers(youngMarkDomain.get());
     const size_t after = youngMarkDomain->Stripes().Population();
     NoteMarkTerminateFlushed(after >= before ? after - before : 0);
     return workStack.empty() && youngMarkDomain->Stripes().IsEmpty();
@@ -1530,5 +1522,89 @@ void WCollector::ProcessFinalizers()
 {
     FinalizerProcessor& fp = collectorResources.GetFinalizerProcessor();
     fp.ProcessReferences([this](BaseObject* obj) { return IsMarkedObject<Generation::Old>(obj); });
+}
+
+bool WCollector::PublishHandshakeMarkWork(WorkStack& work, MarkDomain* domain)
+{
+    if (domain == nullptr || work.empty()) {
+        return false;
+    }
+    MarkThreadLocalStacks seed(domain->Stripes().Count());
+    bool published = false;
+    while (!work.empty()) {
+        const MarkStackEntry entry = work.back();
+        work.pop_back();
+        MAddress address = 0;
+        if (entry.partialArray()) {
+            size_t length = 0;
+            MarkPartialArray::Decode(entry, address, length);
+        } else {
+            address = reinterpret_cast<MAddress>(entry.object());
+        }
+        if (address == 0) {
+            continue;
+        }
+        seed.Push(domain->Stripes(), domain->Stripes().StripeForAddress(address), entry, true);
+        published = true;
+    }
+    if (published) {
+        (void)seed.Flush(domain->Stripes(), true);
+        domain->Terminate().Wake();
+    }
+    return published;
+}
+
+void WCollector::DrainAllocBufferMarkProducers(AllocBuffer* buffer, WorkStack& work)
+{
+    if (buffer == nullptr) {
+        return;
+    }
+    buffer->MergeRoots(work);
+    buffer->MergeYoungAllocBlackFollow(work);
+    buffer->MergeY2yDirtyHolders(work);
+    buffer->MergeY2yDirtySlots([this, &work](MAddress slot) {
+        RefField<>& field = HeapSlotAt<>(slot);
+        BaseObject* target = ResolveMinorReference(field);
+        if (target != nullptr && Heap::IsHeapAddress(target)) {
+            work.push_back(MarkStackEntry::MarkAndFollow(target, false));
+        }
+    });
+}
+
+bool WCollector::FlushAllocBufferMarkProducers(AllocBuffer* buffer)
+{
+    if (buffer == nullptr) {
+        return false;
+    }
+    WorkStack work;
+    DrainAllocBufferMarkProducers(buffer, work);
+    if (work.empty()) {
+        return false;
+    }
+    std::vector<MarkStackEntry> entries;
+    while (!work.empty()) {
+        entries.push_back(work.back());
+        work.pop_back();
+    }
+    auto publish = [this, &entries](MarkDomain* domain) {
+        WorkStack copy;
+        for (const MarkStackEntry& entry : entries) {
+            copy.push_back(entry);
+        }
+        return PublishHandshakeMarkWork(copy, domain);
+    };
+    bool published = publish(youngMarkDomain.get());
+    published = publish(majorMarkDomain.get()) || published;
+    return published;
+}
+
+bool WCollector::FlushAllocBufferMarkProducers(AllocBuffer* buffer, MarkDomain* domain)
+{
+    if (buffer == nullptr || domain == nullptr) {
+        return false;
+    }
+    WorkStack work;
+    DrainAllocBufferMarkProducers(buffer, work);
+    return PublishHandshakeMarkWork(work, domain);
 }
 } // namespace MapleRuntime
