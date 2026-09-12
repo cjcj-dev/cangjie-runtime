@@ -348,7 +348,6 @@ void RunRemapWindow(bool copyOnly, ForwardDomain domain = ForwardDomain::None, b
     }
     GC_EXPECT_EQ(CJ_ScheduleManagerInit(), 0);
     GC_EXPECT_EQ(setenv("MRT_GCV2_MARKPAR_FORCE_SERIAL", "1", 1), 0);
-    GC_EXPECT_EQ(setenv("MRT_GCV2_EVACPAR_FORCE_SERIAL", parallel ? "0" : "1", 1), 0);
     MutatorManager mutatorManager;
     YoungConcTestRuntime runtime(mutatorManager);
     auto& fx = *new GcHeapFixture(true);
@@ -412,6 +411,10 @@ void RunRemapWindow(bool copyOnly, ForwardDomain domain = ForwardDomain::None, b
     collector.SetGCPhase(GCPhase::GC_PHASE_CLEAR_SATB_BUFFER);
     GCThreadPool pool("gc-unit-remap-window", parallel ? 1 : 0, GCPoolThread::GC_THREAD_PRIORITY);
     RelocationReceiptTestAccess::BindThreadPool(resources, &pool);
+    GCWorkers youngWorkers(GCWorkers::Generation::YOUNG, parallel ? 2u : 1u);
+    GCWorkers oldWorkers(GCWorkers::Generation::OLD, 1u);
+    youngWorkers.SetActive();
+    RelocationReceiptTestAccess::BindWorkers(resources, &youngWorkers, &oldWorkers);
     Heap::GetHeap().GetRememberedSet().Initialize(fx.heapStart, GcHeapFixture::kUnits * RegionInfo::UNIT_SIZE);
     RememberedSet producerRememberedSet;
     producerRememberedSet.Initialize(fx.heapStart, GcHeapFixture::kUnits * RegionInfo::UNIT_SIZE);
@@ -561,6 +564,7 @@ void RunRemapWindow(bool copyOnly, ForwardDomain domain = ForwardDomain::None, b
     // OTHER_VM owns the mapped heap and product metadata until exit.
     // No teardown may re-interpret a page whose forwarding life was retired.
     pool.WaitFinish();
+    RelocationReceiptTestAccess::BindWorkers(resources, nullptr, nullptr);
     RelocationReceiptTestAccess::BindThreadPool(resources, nullptr);
     pool.Exit();
     RelocationReceiptTestAccess::BindCollector(resources, nullptr);
