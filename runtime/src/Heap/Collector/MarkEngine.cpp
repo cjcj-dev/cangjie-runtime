@@ -233,7 +233,13 @@ void MarkDomain::PrepareWork(size_t workers)
 
 void MarkDomain::ResizeWorkers(size_t workers)
 {
-    PrepareWork(workers);
+    // ZMark::resize_workers keeps this task's proactive flush budget.
+    CHECK_DETAIL(workers != 0, "mark domain needs a worker");
+    nworkers = workers;
+    targetNStripes = stripes.CalculateNStripes(workers);
+    stripes.SetNStripes(targetNStripes);
+    EnsureWorkers(workers);
+    terminate.Reset(workers, generation);
 }
 
 void MarkDomain::FinishWork() {}
