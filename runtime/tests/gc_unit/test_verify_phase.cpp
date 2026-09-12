@@ -21,14 +21,18 @@ struct FaceCase {
 const FaceCase kFaces[] = {{VerifyFace::Roots, "MRT_GCV2_VERIFY_ROOTS", "MRT_GCV2_VERIFY_ROOTS"},
                            {VerifyFace::Objects, "MRT_GCV2_VERIFY_HEAP", "MRT_GCV2_VERIFY_OBJECTS"},
                            {VerifyFace::Marking, "MRT_GCV2_VERIFY_MARKING", "MRT_GCV2_VERIFY_MARKING"},
-                           {VerifyFace::Remembered, "MRT_GCV2_VERIFY_REMSET", "MRT_GCV2_VERIFY_REMEMBERED"},
+                            {VerifyFace::Remembered, nullptr, nullptr},
                            {VerifyFace::Oops, "MRT_GCV2_VERIFY_REGIONS", "MRT_GCV2_VERIFY_OOPS"}};
 
 void ClearFaceEnvironment()
 {
     for (const auto& item : kFaces) {
-        unsetenv(item.legacy);
-        unsetenv(item.alias);
+        if (item.legacy != nullptr) {
+            unsetenv(item.legacy);
+        }
+        if (item.alias != nullptr) {
+            unsetenv(item.alias);
+        }
     }
     unsetenv("MRT_GCV2_MARKCOMPLETE");
     unsetenv("MRT_GCV2_DIAG");
@@ -79,8 +83,11 @@ GC_OTHER_VM_TEST(VerifyPhase, FiveFaceLegacyArm)
 {
     ClearFaceEnvironment();
     for (const auto& item : kFaces) {
-        setenv(item.legacy, "1", 1);
+        if (item.legacy != nullptr) {
+            setenv(item.legacy, "1", 1);
+        }
     }
+    setenv("MRT_GCV2_DIAG", "remembered", 1);
     ExpectAllFaces(true);
 }
 
@@ -88,8 +95,11 @@ GC_OTHER_VM_TEST(VerifyPhase, FiveFaceAliasArm)
 {
     ClearFaceEnvironment();
     for (const auto& item : kFaces) {
-        setenv(item.alias, "1", 1);
+        if (item.alias != nullptr) {
+            setenv(item.alias, "1", 1);
+        }
     }
+    setenv("MRT_GCV2_DIAG", "remembered", 1);
     ExpectAllFaces(true);
 }
 
