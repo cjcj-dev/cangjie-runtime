@@ -2200,8 +2200,7 @@ public:
     bool VisitLiveObjectsUntilFalse(const std::function<bool(BaseObject*)>&& func);
 
     // zRememberedSet.cpp:144-152 / zLiveMap.inline.hpp:181-221 find_base:
-    // nearest object-start bit at or before a field. Strong bits are object
-    // starts (MarkBits); interiors keep live coverage only.
+    // nearest object-start pair (strong or finalizable) at or before a field.
     RegionBitmap* GetLiveStartBitmap()
     {
         const ZForwarding::FromPageView* from = GetFromPageView();
@@ -2219,7 +2218,7 @@ public:
         }
         if (IsLargeRegion()) {
             RegionBitmap* bitmap = GetLiveStartBitmap();
-            if (bitmap != nullptr && bitmap->IsMarked(0)) {
+            if (bitmap != nullptr && bitmap->IsObjectStart(0)) {
                 return start;
             }
             if (fromPageLargeMarked()) {
@@ -2237,7 +2236,7 @@ public:
         size_t off = field - start;
         off -= off % kMarkedBytesPerBit;
         for (;;) {
-            if (bitmap->IsMarked(off)) {
+            if (bitmap->IsObjectStart(off)) {
                 return start + off;
             }
             if (off < kMarkedBytesPerBit) {
@@ -2276,7 +2275,7 @@ public:
         const uintptr_t allocPtr = GetRegionAllocPtr();
         const size_t regionBytes = allocPtr > start ? (allocPtr - start) : 0;
         for (size_t off = 0; off < regionBytes; off += kMarkedBytesPerBit) {
-            if (bitmap->IsMarked(off)) {
+            if (bitmap->IsObjectStart(off)) {
                 out.push_back(start + off);
             }
         }
