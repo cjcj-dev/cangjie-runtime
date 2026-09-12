@@ -1069,14 +1069,11 @@ void RegionManager::ReclaimRegion(RegionInfo* region)
     // gcvroot Z2: poison reclaimed payload so use-after-free roots are identifiable (MRT_GCV2_ZAP_RECLAIM=1).
     HeapZap::ZapReclaimedRegion(region->GetRegionStart(), region->GetRegionEnd());
     region->InitFreeUnits();
-    freeRegionManager.AddGarbageUnits(unitIndex, num);
-    SatisfyStalledAllocations();
+    ReturnPageMemory(PageMemory{ unitIndex, num, 0, true });
 }
 
-size_t RegionManager::StallAllocation(size_t size)
+bool RegionManager::StallAllocation(AllocationStallRequest& request, bool requestGc)
 {
-    AllocationStallRequest request(size);
-    const bool requestGc = allocationStallQueue.Enqueue(request);
     if (requestGc) {
         bool anotherWave = false;
         do {
@@ -1099,9 +1096,7 @@ size_t RegionManager::StallAllocation(size_t size)
         } while (anotherWave);
     }
 
-#if !defined(MRT_ALLOCATION_STALL_CUT_SAFEREGION)
     ScopedEnterSaferegion enterSaferegion(false);
-#endif
 #if defined(MRT_ALLOCATION_STALL_OBSERVE)
     const bool satisfied = request.Wait(allocationStallBeforeWaitTestHook
         ? [this] { allocationStallBeforeWaitTestHook(*this); }
@@ -1109,13 +1104,31 @@ size_t RegionManager::StallAllocation(size_t size)
 #else
     const bool satisfied = request.Wait();
 #endif
-    return satisfied ? request.GetClaimedUnits() : 0;
+    // Pair with the posting owner before the caller destroys its request.
+    // zPageAllocator.cpp:1454-1464.
+    std::lock_guard<std::mutex> lock(pageAllocatorMutex);
+    return satisfied;
 }
 
-void RegionManager::FinishStalledAllocation(size_t claimedUnits)
+void RegionManager::ReturnPageMemory(const PageMemory& memory)
 {
-    allocationStallQueue.ReleaseClaim(claimedUnits);
-    SatisfyStalledAllocations();
+    // zPageAllocator.cpp:1999 / 2150: hand back memory, decrease used and
+    // satisfy the FIFO in one allocator-owner critical section. Enter the
+    // saferegion before the owner, including nested cache hand-back calls.
+    ScopedEnterSaferegion enterSaferegion(true);
+    std::lock_guard<std::mutex> lock(pageAllocatorMutex);
+    CHECK(memory.partition == 0);
+    if (memory.committed) {
+        freeRegionManager.AddGarbageUnits(memory.index, memory.units);
+    } else {
+        freeRegionManager.AddReleaseUnits(memory.index, memory.units);
+    }
+    const size_t bytes = memory.units * RegionInfo::UNIT_SIZE;
+    CHECK(pageAllocatorUsed >= bytes);
+    pageAllocatorUsed -= bytes;
+    allocationStallQueue.SatisfyAvailableLocked([this](AllocationStallRequest& request) {
+        return ClaimAllocationLocked(request);
+    });
 }
 
 #if defined(MRT_ALLOCATION_STALL_OBSERVE)
@@ -1137,18 +1150,34 @@ size_t RegionManager::FailedStalledAllocations() const { return allocationStallQ
 
 void RegionManager::SatisfyStalledAllocations()
 {
-    allocationStallQueue.SatisfyAvailable([this](size_t bytes, size_t alreadyClaimed) {
-        const size_t units = (bytes + RegionInfo::UNIT_SIZE - 1) / RegionInfo::UNIT_SIZE;
-        const size_t largestExtent = std::max(
-            GetInactiveUnitCount(),
-            std::max<size_t>(freeRegionManager.GetDirtyMaxBlock(), freeRegionManager.GetReleasedMaxBlock()));
-#if defined(MRT_ALLOCATION_STALL_CUT_CLAIM)
-        (void)alreadyClaimed;
-        return units <= largestExtent ? units : 0;
-#else
-        return units <= largestExtent && alreadyClaimed <= largestExtent - units ? units : 0;
-#endif
+    // zPageAllocator.cpp:2167: claim the actual resource and update used
+    // under the ordinary allocation owner, then dequeue and notify.
+    allocationStallQueue.SatisfyAvailable([this](AllocationStallRequest& request) {
+        return ClaimAllocationLocked(request);
     });
+}
+
+bool RegionManager::ClaimAllocationLocked(AllocationStallRequest& request)
+{
+    const size_t size = request.GetSize();
+    const size_t num = size / RegionInfo::UNIT_SIZE;
+    PageMemory& memory = request.Memory();
+    // Single logical partition for the current cache. A02c owns round-robin
+    // selection and harvested multi-partition vmems (advisor 0913 03:4x).
+    constexpr uint32_t partition = 0;
+    if (!freeRegionManager.ClaimPageMemory(num, partition, memory)) {
+        const uintptr_t addr = inactiveZone.load(std::memory_order_relaxed);
+        if (size > regionHeapEnd - addr) {
+            return false;
+        }
+        inactiveZone.store(addr + size, std::memory_order_release);
+        memory = PageMemory{ (addr - regionHeapStart) / RegionInfo::UNIT_SIZE, num, partition, false };
+    }
+    if (!memory.committed) {
+        Uncommitter::CancelCycle();
+    }
+    pageAllocatorUsed += size;
+    return true;
 }
 
 void RegionManager::ReclaimRegionToMarkQuarantine(RegionInfo* region)
@@ -1170,7 +1199,11 @@ void RegionManager::ReclaimRegionToMarkQuarantine(RegionInfo* region)
     }
     HeapZap::ZapReclaimedRegion(region->GetRegionStart(), region->GetRegionEnd());
     region->InitFreeUnits();
+    ScopedEnterSaferegion enterSaferegion(true);
+    std::lock_guard<std::mutex> lock(pageAllocatorMutex);
     freeRegionManager.AddMarkQuarantineUnits(unitIndex, num);
+    CHECK(pageAllocatorUsed >= num * RegionInfo::UNIT_SIZE);
+    pageAllocatorUsed -= num * RegionInfo::UNIT_SIZE;
 }
 
 size_t RegionManager::ReleaseRegion(RegionInfo* region)
@@ -1205,7 +1238,7 @@ size_t RegionManager::ReleaseRegion(RegionInfo* region)
         FromPageDetach::ReusePermitScope reusePermit;
         RegionInfo::ReleaseUnits(unitIndex, num);
     }
-    freeRegionManager.AddReleaseUnits(unitIndex, num);
+    ReturnPageMemory(PageMemory{ unitIndex, num, 0, false });
     return res;
 }
 
@@ -1939,102 +1972,41 @@ RegionInfo* RegionManager::TakeRegion(size_t num, RegionInfo::UnitRole type, boo
 
 #if !defined(__OHOS__)
     size_t gatedBytes = 0;
-    // routefix: ReclaimRegion → AddGarbageUnits ScopedEnterSaferegion; skip under ROUTING.
-    RegionInfo* head = allowSaferegion ? TakeReclaimableGarbageRegion(&gatedBytes) : nullptr;
-    if (head != nullptr) {
-        DLOG(REGION, "take garbage region %p@[%#zx, %#zx)", head, head->GetRegionStart(), head->GetRegionEnd());
-        if (head->GetUnitCount() == num &&
-            !FromPageDetach::FromPageDetachCheck(head, FromPageDetach::Site::TAKE_GARBAGE_REUSE)) {
-            freeRegionManager.AddDetachQuarantineRegion(head);
-            head = nullptr;
-        }
-        // The ON arm makes the implicit active-table -> retired-table
-        // transition explicit before allocation. ReclaimRegion drains the
-        // current readers, retires the table, and detaches that now-closed
-        // answer before publishing the range to the free tree.
-        if (head != nullptr && head->GetUnitCount() == num) {
-            ReclaimRegion(head);
-            head = nullptr;
-        }
-        if (head != nullptr && head->GetUnitCount() == num) {
-            FromPageDetach::ReusePermitScope reusePermit;
-            TraceClear::NoteRegionEvent(head->GetRegionStart(), head->GetRegionSize(), "garbage_reuse", head,
-                                        head->GetLiveByteCount(),
-                                        static_cast<unsigned int>(head->IsGhostFromRegion()),
-                                        static_cast<unsigned int>(head->GetRegionType()),
-                                        static_cast<unsigned int>(head->RelocateObserve()));
-            // promodomain obligation①: undischarged flip-promoted region must not ClearUnits.
-            PromotedRegionDomain::CheckNotUndischargedForReuse(head, "TakeRegion.garbage_reuse");
-            // fwdinflight: the reuse edge. ClearUnits zeroes the payload with no region
-            // rwLock held -- CollectRegion's write lock (RegionManager.h:436-447) covers only
-            // the list move, not this. Count readers still inside a route lookup on it.
-
-            auto idx = head->GetUnitIdx();
-            {
-                // portmutreloc: ZForwarding::detach_page before the page goes back to the
-                // allocator. Reuse overwrites the payload a retained reader may still be
-                // copying out of, regardless of whether that overwrite starts here or in
-                // the segmented array initializer, so the drain must always precede reuse.
-                // Scoped tight: it ends before InitRegion, which re-initialises the metadata
-                // the lock lives in. ClearUnits is still conditional because segmented
-                // reference arrays deliberately clear the payload at yield boundaries.
-                RegionInfo::InPlaceClaimScope drain(head, ZForwardingLife::Retire::TAKE_GARBAGE);
-                if (clearPayload) {
-                    RegionInfo::ClearUnits(idx, num, FillerZeroDiag::Site::TAKE_GARBAGE);
-                }
-            }
-            DLOG(REGION, "reuse garbage region %p@[%#zx, %#zx)", head, head->GetRegionStart(), head->GetRegionEnd());
-            MutatorAllocRate::sample_allocation(size);
-            return RegionInfo::InitRegion(idx, num, type);
-        } else if (head != nullptr) {
-            DLOG(REGION, "reclaim garbage region %p@[%#zx, %#zx)", head, head->GetRegionStart(), head->GetRegionEnd());
-            ReclaimRegion(head);
-        }
+    RegionInfo* garbage = allowSaferegion ? TakeReclaimableGarbageRegion(&gatedBytes) : nullptr;
+    if (garbage != nullptr) {
+        ReclaimRegion(garbage);
     }
 #else
     size_t gatedBytes = GetGatedGarbageBytes();
 #endif
 
-    RegionInfo* region = freeRegionManager.TakeRegion(
-        num, type, expectPhysicalMem, allowSaferegion, clearPayload);
-    if (region != nullptr) {
+    AllocationStallRequest request(size, static_cast<uint8_t>(type), expectPhysicalMem, clearPayload);
+    bool claimed = false;
+    bool requestGc = false;
+    {
+        std::lock_guard<std::mutex> lock(pageAllocatorMutex);
+        claimed = ClaimAllocationLocked(request);
+        if (!claimed && allowSaferegion && !IsGcThread()) {
+            requestGc = allocationStallQueue.EnqueueLocked(request);
+        }
+    }
+    if (!claimed && allowSaferegion && !IsGcThread()) {
+        claimed = StallAllocation(request, requestGc);
+    }
+    if (claimed) {
+        RegionInfo* region = freeRegionManager.MaterializePageMemory(
+            request.Memory(), type, request.ExpectsPhysicalMemory(), request.ClearsPayload());
+        if (region == nullptr) {
+            // A02p will make partial commit failure return here. Return the
+            // owned memory before reporting failure; no capacity promise leaks.
+            ReturnPageMemory(request.Memory());
+            return nullptr;
+        }
         if (num >= HUGE_PAGE) {
             TagHugePage(region, num);
         }
         MutatorAllocRate::sample_allocation(size);
         return region;
-    }
-
-    // when free regions are not enough for allocation
-    if (num <= GetInactiveUnitCount()) {
-        // Reserve the extent with CAS. A failed fetch_add reservation cannot be rolled back
-        // with fetch_sub: another thread may have committed a later extent in between, so
-        // subtracting here would move inactiveZone back over that live allocation.
-        uintptr_t addr = inactiveZone.load(std::memory_order_relaxed);
-        bool reserved = false;
-        while (addr <= regionHeapEnd - size) {
-            if (inactiveZone.compare_exchange_weak(addr, addr + size, std::memory_order_acq_rel,
-                                                   std::memory_order_relaxed)) {
-                reserved = true;
-                break;
-            }
-        }
-        if (reserved) {
-            region = RegionInfo::InitRegionAt(addr, num, type);
-            size_t idx = region->GetUnitIdx();
-            RegionInfo::CommitUnits(idx, num);
-            (void)idx; // eliminate compilation warning
-            DLOG(REGION, "take inactive units [%zu+%zu, %zu) at [0x%zx, 0x%zx)", idx, num, idx + num,
-                 RegionInfo::GetUnitAddress(idx), RegionInfo::GetUnitAddress(idx + num));
-            if (num >= HUGE_PAGE) {
-                TagHugePage(region, num);
-            }
-            if (expectPhysicalMem && clearPayload) {
-                RegionInfo::ClearUnits(idx, num, FillerZeroDiag::Site::TAKE_INACTIVE);
-            }
-            MutatorAllocRate::sample_allocation(size);
-            return region;
-        }
     }
 
     if (gatedBytes > 0) {

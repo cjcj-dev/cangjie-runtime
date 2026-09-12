@@ -216,8 +216,9 @@ public:
     template<Generation G>
     void ForwardRegion(RegionInfo* region);
     RelocationRequestQueue& GetRelocationRequestQueue() { return relocationRequestQueue; }
-    size_t StallAllocation(size_t size);
-    void FinishStalledAllocation(size_t claimedUnits);
+    bool StallAllocation(AllocationStallRequest& request, bool requestGc);
+    bool ClaimAllocationLocked(AllocationStallRequest& request);
+    void ReturnPageMemory(const PageMemory& memory);
     void SatisfyStalledAllocations();
 #if defined(MRT_ALLOCATION_STALL_OBSERVE)
     using AllocationStallTestHook = std::function<void(RegionManager&)>;
@@ -1162,7 +1163,10 @@ private:
     GCWorkers* relocationWorkers{ nullptr };
     bool relocationStarted{ false };
     bool relocationDrained{ false };
-    AllocationStallQueue allocationStallQueue;
+    // zPageAllocator.cpp:1518: ordinary allocation and stall share one owner.
+    std::mutex pageAllocatorMutex;
+    AllocationStallQueue allocationStallQueue{ pageAllocatorMutex };
+    size_t pageAllocatorUsed{ 0 };
 #if defined(MRT_ALLOCATION_STALL_OBSERVE)
     AllocationStallTestHook allocationStallBeforeWaveTestHook;
     AllocationStallTestHook allocationStallGcTestHook;

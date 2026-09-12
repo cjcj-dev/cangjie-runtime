@@ -10,6 +10,7 @@
 
 #include <vector>
 
+#include "AllocationStallQueue.h"
 #include "CartesianTree.h"
 #include "RegionInfo.h"
 #include "Common/ScopedObjectAccess.h"
@@ -40,18 +41,24 @@ public:
         markQuarantineTree.Init(regionCnt);
     }
 
-    // allowSaferegion: when false, never ScopedEnterSaferegion. Best-effort one pass.
-    RegionInfo* TakeRegion(size_t num, RegionInfo::UnitRole uclass, bool expectPhysicalMem,
-                           bool allowSaferegion = true, bool clearPayload = true)
+    // zPageAllocator.cpp:702: remove cached vmem while the page allocator
+    // owner is held. Cache readers and maintenance retain their cache locks,
+    // so acquire those locks before deciding whether capacity is available.
+    // Lock order is allocator owner -> cache; never enter a saferegion here.
+    // A02c owns the tree/partition selection implementation.
+    bool ClaimPageMemory(size_t num, uint32_t partition, PageMemory& memory)
     {
+        CHECK(partition == 0);
         UnitIndex idx = 0;
         bool tryDirtyTree = true;
         bool tryReleasedTree = true;
 
-        // try as hard as we can to take free regions for allocation.
+        // Inspect each cache to completion; a rejected extent is quarantined
+        // before continuing the same scan (zMappedCache.cpp:621).
         while (tryDirtyTree || tryReleasedTree) {
             // first try to get a dirty region.
-            if (tryDirtyTree && dirtyUnitTreeMutex.try_lock()) {
+            if (tryDirtyTree) {
+                std::unique_lock<std::mutex> cacheLock(dirtyUnitTreeMutex);
                 bool dirtyOk = false;
                 {
                     // TakeUnits may refresh the residual free-tree node via
@@ -70,34 +77,19 @@ public:
                     RegionInfo* dirtyRegion = RegionInfo::TryGetRegionInfoAt(start);
                     if (!FromPageDetach::FromPageDetachCheck(dirtyRegion,
                                                              FromPageDetach::Site::TAKE_DIRTY_REUSE)) {
-                        dirtyUnitTreeMutex.unlock();
+                        cacheLock.unlock();
                         AddDetachQuarantineUnits(idx, num, false, false);
                         continue;
                     }
-                    FromPageDetach::ReusePermitScope reusePermit;
-                    TraceClear::NoteRegionEvent(start, num * RegionInfo::UNIT_SIZE, "dirty_take", dirtyRegion, 0,
-                                                static_cast<unsigned int>(dirtyRegion->IsGhostFromRegion()),
-                                                static_cast<unsigned int>(dirtyRegion->GetRegionType()),
-                                                static_cast<unsigned int>(dirtyRegion->RelocateObserve()));
-                    DLOG(REGION, "c-tree %p alloc dirty units[%u+%u, %u) @[0x%zx, 0x%zx), %u dirty-units left",
-                        &dirtyUnitTree, idx, num, idx + num, RegionInfo::GetUnitAddress(idx),
-                        RegionInfo::GetUnitAddress(idx + num), dirtyUnitTree.GetTotalCount());
-
-                    if (clearPayload) {
-                        // Ordinary allocations require zero-filled reused payload. A segmented
-                        // large reference array establishes that state itself after publication.
-                        RegionInfo::ClearUnits(idx, num, FillerZeroDiag::Site::DIRTY_TAKE);
-                    }
-                    RegionInfo* region = RegionInfo::InitRegion(idx, num, uclass);
-                    dirtyUnitTreeMutex.unlock();
-                    return region;
+                    memory = PageMemory{ idx, num, partition, true };
+                    return true;
                 }
                 tryDirtyTree = false; // once we fail to take units, stop trying.
-                dirtyUnitTreeMutex.unlock();
             }
 
             // then try to get a released region.
-            if (tryReleasedTree && releasedUnitTreeMutex.try_lock()) {
+            if (tryReleasedTree) {
+                std::unique_lock<std::mutex> cacheLock(releasedUnitTreeMutex);
                 bool releasedOk = false;
                 {
                     FromPageDetach::ReusePermitScope treePermit;
@@ -112,32 +104,42 @@ public:
                         RegionInfo::TryGetRegionInfoAt(RegionInfo::GetUnitAddress(idx));
                     if (!FromPageDetach::FromPageDetachCheck(releasedRegion,
                                                              FromPageDetach::Site::TAKE_RELEASED_REUSE)) {
-                        releasedUnitTreeMutex.unlock();
+                        cacheLock.unlock();
                         AddDetachQuarantineUnits(idx, num, true, false);
                         continue;
                     }
-                    FromPageDetach::ReusePermitScope reusePermit;
-                    RegionInfo::CommitUnits(idx, num);
-                    Uncommitter::CancelCycle();
-                    DLOG(REGION, "c-tree %p alloc released units[%u+%u, %u) @[0x%zx, 0x%zx), %u released-units left",
-                        &releasedUnitTree, idx, num, idx + num, RegionInfo::GetUnitAddress(idx),
-                        RegionInfo::GetUnitAddress(idx + num), releasedUnitTree.GetTotalCount());
-                    RegionInfo* region = RegionInfo::InitRegion(idx, num, uclass);
-                    releasedUnitTreeMutex.unlock();
-                    PrehandleReleasedUnit(expectPhysicalMem && clearPayload, idx, num);
-                    return region;
+                    memory = PageMemory{ idx, num, partition, false };
+                    return true;
                 }
                 tryReleasedTree = false; // once we fail to take units, stop trying.
-                releasedUnitTreeMutex.unlock();
             }
-            // routefix: ROUTING holders must not park here (LeaveSaferegion → WaitForPhaseTransition).
-            if (!allowSaferegion) {
-                return nullptr;
-            }
-            ScopedEnterSaferegion enterSaferegion(true);
+            // Both caches have now answered under their locks, and neither
+            // supplied an eligible contiguous extent.
         }
+        return false;
+    }
 
-        return nullptr;
+    // zPageAllocator.cpp:1470-1515: consume the already-owned vmem outside
+    // the allocator lock. A02p owns partial-commit results and suffix cleanup.
+    RegionInfo* MaterializePageMemory(PageMemory& memory, RegionInfo::UnitRole role,
+                                     bool expectPhysicalMem, bool clearPayload)
+    {
+        const size_t idx = memory.index;
+        const size_t num = memory.units;
+        const bool wasCommitted = memory.committed;
+        FromPageDetach::ReusePermitScope reusePermit;
+        if (!wasCommitted) {
+            RegionInfo::CommitUnits(idx, num);
+            memory.committed = true;
+        }
+        if (wasCommitted && clearPayload) {
+            RegionInfo::ClearUnits(idx, num, FillerZeroDiag::Site::DIRTY_TAKE);
+        }
+        RegionInfo* region = RegionInfo::InitRegion(idx, num, role);
+        if (!wasCommitted) {
+            PrehandleReleasedUnit(expectPhysicalMem && clearPayload, idx, num);
+        }
+        return region;
     }
 
     // add units [idx, idx + num)

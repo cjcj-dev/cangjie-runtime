@@ -83,11 +83,8 @@ void RunWaiter(RegionManager& manager, std::atomic<size_t>& claimed)
     Mutator mutator;
     mutator.SetInSaferegion(Mutator::SAFE_REGION_FALSE);
     ThreadLocal::SetMutator(&mutator);
-    const size_t units = manager.StallAllocation(RegionInfo::UNIT_SIZE);
-    claimed.store(units, std::memory_order_release);
-    if (units != 0) {
-        manager.FinishStalledAllocation(units);
-    }
+    RegionInfo* region = manager.TakeRegion(1, RegionInfo::UnitRole::SMALL_SIZED_UNITS);
+    claimed.store(region == nullptr ? 0 : region->GetUnitCount(), std::memory_order_release);
     ThreadLocal::SetMutator(nullptr);
 }
 
@@ -100,7 +97,7 @@ struct TwoWaiterResult {
     bool saferegionOk;
     size_t saferegionChecks;
     size_t gcCalls;
-    size_t claimedUnits;
+    size_t allocatedUnits;
     size_t enqueued;
     size_t dequeued;
     size_t satisfied;
@@ -154,8 +151,32 @@ GC_OTHER_VM_TEST(AllocationStall, OneFreeTreeUnitClaimsOnlyOneOfTwoWaiters)
     const TwoWaiterResult result = RunTwoWaiterCapacityScenario();
     GC_EXPECT_TRUE(result.beforeWaveReady);
     GC_EXPECT_EQ(result.gcCalls, static_cast<size_t>(1));
-    GC_EXPECT_EQ(result.claimedUnits, static_cast<size_t>(1));
+    GC_EXPECT_EQ(result.allocatedUnits, static_cast<size_t>(1));
     GC_EXPECT_EQ(result.satisfied, static_cast<size_t>(1));
+}
+
+// ZGC zPageAllocator.cpp:1518 / 2167: a satisfied page is already removed
+// from the same supply ordinary allocation uses. Do not return it until the
+// stalled caller has consumed it.
+GC_OTHER_VM_TEST(AllocationStall, OrdinaryAllocationCannotTakeSatisfiedPage)
+{
+    OneUnitStallFixture fixture;
+    RegionInfo* competing = nullptr;
+    bool supplied = false;
+    fixture.manager.SetAllocationStallTestHooks(
+        [](RegionManager&) {},
+        [&](RegionManager& manager) {
+            fixture.PublishCapacity();
+            supplied = true;
+            competing = manager.TakeRegion(1, RegionInfo::UnitRole::SMALL_SIZED_UNITS, false, false);
+        },
+        {});
+    std::atomic<size_t> allocated{ 0 };
+    std::thread waiter([&] { RunWaiter(fixture.manager, allocated); });
+    waiter.join();
+    GC_EXPECT_TRUE(supplied);
+    GC_EXPECT_TRUE(competing == nullptr);
+    GC_EXPECT_EQ(allocated.load(std::memory_order_acquire), static_cast<size_t>(1));
 }
 
 GC_OTHER_VM_TEST(AllocationStall, WaiterBlocksInSaferegion)
