@@ -82,6 +82,7 @@ public:
     bool FlushStacks();
     bool TryTerminateFlush();
     bool TryEnd();
+    VerifyMarkingStacks::MarkingGeneration Generation() const { return generation; }
 
 private:
     void EnsureWorkers(size_t nworkers);
