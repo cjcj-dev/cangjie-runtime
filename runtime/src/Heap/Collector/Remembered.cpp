@@ -7,7 +7,6 @@
 
 #include "Heap/WCollector/WCollector.h"
 #include "Heap/WCollector/RememberedHolderPolicy.h"
-#include "Heap/Verify/ProbeReadRouteDiag.h"
 
 #include <array>
 #include <atomic>
@@ -407,25 +406,6 @@ void WCollector::RescanRememberedSet(WorkStack& workStack, const MinorSlotSet& r
                                       MinorInteriorBaseMap* interiorBasesOut, const ScopedStopTheWorld* stw)
 {
     (void)stw;
-    auto noteRemsetOutcome = [](MAddress slot, uint8_t outcome, MAddress target) {
-        if (!ProbeReadRouteDiag::RootTrackingEnabled() || slot == 0) {
-            return;
-        }
-        const size_t start = ProbeReadRouteDiag::EdgeStoreLedger::Hash(slot);
-        for (size_t n = 0; n < 8; ++n) {
-            auto& record = ProbeReadRouteDiag::EdgeStoreLedger::Records()[
-                (start + n) & ProbeReadRouteDiag::EdgeStoreLedger::kMask];
-            if (record.slot.load(std::memory_order_acquire) != slot) {
-                continue;
-            }
-            record.remsetEpoch.store(
-                ProbeReadRouteDiag::RemsetEpoch().load(std::memory_order_relaxed), std::memory_order_relaxed);
-            record.remsetTarget.store(target, std::memory_order_relaxed);
-            record.remsetFace.store(0xff, std::memory_order_relaxed);
-            record.remsetEvent.store(static_cast<uint8_t>(64 + outcome), std::memory_order_release);
-            return;
-        }
-    };
     auto plannedTo = [this](BaseObject* from) -> BaseObject* {
         FindToVersionResult resolved = FindToVersion(from);
         if (resolved.is_unavailable()) {
@@ -469,7 +449,6 @@ void WCollector::RescanRememberedSet(WorkStack& workStack, const MinorSlotSet& r
     std::unordered_set<RegionInfo*> originRegions;
     for (MAddress slot : rememberedSlots) {
         if (!Heap::IsHeapAddress(slot)) {
-            noteRemsetOutcome(slot, 1, 0);
             continue;
         }
         RegionInfo* region = RegionInfo::TryGetRegionInfoAt(slot);
@@ -594,7 +573,6 @@ void WCollector::RescanRememberedSet(WorkStack& workStack, const MinorSlotSet& r
             continue;
         }
         if (LedgerCount(weakSlots, slot) != 0) {
-            noteRemsetOutcome(slot, 2, 0);
             if (statsOut != nullptr) {
                 ++statsOut->skippedWeak;
             }
@@ -606,7 +584,6 @@ void WCollector::RescanRememberedSet(WorkStack& workStack, const MinorSlotSet& r
 #if defined(MRT_TESTABLE_INTERNALS)
             NoteRemsetFilterTestReceipt(slot, RemsetFilterReceiptReason::kDeadHolder, false);
 #endif
-            noteRemsetOutcome(slot, 3, 0);
             ++scrubbedDeadHolder;
             NwDropAudit::Note(NwDropAudit::kDeadHolder);
             size_t n = g_remsetScrubLogged.fetch_add(1, std::memory_order_relaxed);
@@ -725,10 +702,8 @@ void WCollector::RescanRememberedSet(WorkStack& workStack, const MinorSlotSet& r
                     if (!holderLiveBySnapshot && keepByCurrentRoot) {
                         ++rootedStalePreserved;
                     }
-                    noteRemsetOutcome(slot, 5, reinterpret_cast<MAddress>(rawTarget));
                     continue;
                 }
-                noteRemsetOutcome(slot, 6, reinterpret_cast<MAddress>(rawTarget));
                 ++scrubbedStaleOldTag;
 #if defined(MRT_TESTABLE_INTERNALS)
                 NoteRemsetFilterTestReceipt(slot, RemsetFilterReceiptReason::kStale, false);
@@ -756,7 +731,6 @@ void WCollector::RescanRememberedSet(WorkStack& workStack, const MinorSlotSet& r
             ++rootedStalePreserved;
         }
         if (target == nullptr || !Heap::IsHeapAddress(target)) {
-            noteRemsetOutcome(slot, 7, reinterpret_cast<MAddress>(target));
             ++scrubbedStale;
             if (rawTarget != nullptr && Heap::IsHeapAddress(rawTarget) && plannedTo(rawTarget) == nullptr) {
                 NwDropAudit::Note(NwDropAudit::kFindToMiss);
@@ -773,7 +747,6 @@ void WCollector::RescanRememberedSet(WorkStack& workStack, const MinorSlotSet& r
 #if defined(MRT_TESTABLE_INTERNALS)
             NoteRemsetFilterTestReceipt(slot, RemsetFilterReceiptReason::kNoOrigin, false);
 #endif
-            noteRemsetOutcome(slot, 8, reinterpret_cast<MAddress>(target));
             ++scrubbedNoTargetOrigin;
             NwDropAudit::Note(NwDropAudit::kNoOrigin);
             continue;
@@ -789,7 +762,6 @@ void WCollector::RescanRememberedSet(WorkStack& workStack, const MinorSlotSet& r
 #if defined(MRT_TESTABLE_INTERNALS)
             NoteRemsetFilterTestReceipt(slot, RemsetFilterReceiptReason::kBadTarget, false);
 #endif
-            noteRemsetOutcome(slot, 9, reinterpret_cast<MAddress>(target));
             ++scrubbedBadTarget;
             NwDropAudit::Note(NwDropAudit::kBadTarget);
             size_t n = g_remsetScrubLogged.fetch_add(1, std::memory_order_relaxed);
@@ -841,7 +813,6 @@ void WCollector::RescanRememberedSet(WorkStack& workStack, const MinorSlotSet& r
             Heap::GetHeap().GetRememberedSet().Record(slot);
             ++reRemembered;
         } else {
-            noteRemsetOutcome(slot, 10, reinterpret_cast<MAddress>(target));
         }
     }
     if (scrubbedStale != 0 || scrubbedDeadHolder != 0 || scrubbedNoTargetOrigin != 0 ||

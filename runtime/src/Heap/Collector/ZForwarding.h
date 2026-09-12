@@ -180,9 +180,6 @@ public:
     // Record the to-region start+regionLifeSeq at insert; consume rejects when
     // InitRegionInfo has bumped that seq (RegionInfo.h:InitRegionInfo).
     static bool DestUsable(MAddress to);
-    // Validate only the destination region incarnation. Header/route consumers
-    // keep their existing object-shape checks after this life gate.
-    MAddress resolve_life(MAddress to) const;
     MAddress resolve_live(MAddress to) const;
     bool receipt_live(MAddress to) const;
 
@@ -408,11 +405,6 @@ public:
         return Receipt{ inserted.first->second, inserted.second,
                         inserted.second ? Receipt::Status::INSTALLED : Receipt::Status::EXISTING };
     }
-
-    // The destination life is committed before the receipt's release CAS.  A
-    // consumer that observes the receipt can therefore never outrun its life
-    // registry entry.  Product callers enter through ForwardingTable::InstallMapping.
-    Receipt install_receipt_with_life(MAddress from, MAddress to, const std::function<void()>& beforeRegister = {});
 
     MAddress insert(MAddress from, MAddress to)
     {
