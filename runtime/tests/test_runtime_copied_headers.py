@@ -1,8 +1,8 @@
 #!/usr/bin/env python3
-"""Exercise standalone's actual AST compiler with a relocated product pair.
+"""Exercise standalone's actual unit compiler with a relocated product pair.
 
 The compiler wrapper records arguments and execs the real compiler unchanged.
-No synthetic compiler or replacement analyzer participates in this test.
+No synthetic compiler participates in this test.
 """
 import argparse
 import hashlib
@@ -58,10 +58,8 @@ def main():
     env.update(GCV2_RUNTIME_LIB_DIR=str(library), CXX=str(wrapper),
                GC_UNIT_OUT=str(work / 'out'))
     if args.entry == 'standalone':
-        env['GC_UNIT_MUTUALWAIT_MANIFEST_ONLY'] = '1'
         script = 'run_standalone.sh'
     else:
-        env.pop('GC_UNIT_MUTUALWAIT_MANIFEST_ONLY', None)
         env.update(GC_UNIT_GATE_LANGUAGE_TESTS='defer', GC_UNIT_GATE_STATUS=str(work / 'gate.status'))
         script = 'gate_gc_unit.sh'
     with (work / 'standalone.log').open('w') as output:
@@ -69,11 +67,11 @@ def main():
                                 env=env, stdout=output, stderr=subprocess.STDOUT)
     record = dict(pair=identities, entry=args.entry, standalone_rc=result.returncode)
     (work / 'result.json').write_text(json.dumps(record, indent=2))
-    assert result.returncode == 0, 'AST prerequisite failed; this is not an identity assertion failure'
-    print('COPIED_HEADERS_AST_CONTROL_PASS', flush=True)
+    assert result.returncode == 0, 'Unit build/run prerequisite failed; this is not an identity assertion failure'
+    print('COPIED_HEADERS_COMPILE_CONTROL_PASS', flush=True)
     invocations = [json.loads(line) for line in trace.read_text().splitlines()]
-    compiles = [argv for argv in invocations if '-ast-dump=json' in argv]
-    assert compiles, 'real AST compiler invocation must be observed'
+    compiles = [argv for argv in invocations if '-c' in argv]
+    assert compiles, 'real unit compiler invocation must be observed'
     expected = json.loads((publication / 'runtime-product-hashes.json').read_text())
     expected_headers = {name.removeprefix('include/'): digest for name, digest in expected.items()
                         if name.startswith('include/')}

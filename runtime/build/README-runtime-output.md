@@ -54,9 +54,9 @@ builds without a local publication must supply `GCV2_RUNTIME_OUTPUT_ROOT`.
 The library selection itself remains the caller's explicitly supplied pair.
 
 `tests/test_runtime_copied_headers.py --runtime runtime --publication <root>
---work <isolated-work>` runs the real standalone AST entry with a copied pair,
+--work <isolated-work>` runs the real standalone unit build and suite with a copied pair,
 records the actual compiler arguments, and compares consumed header hashes to
-the publication inventory. A compatible stale-header control permits AST
+the publication inventory. A compatible stale-header control permits unit
 compilation to finish so the identity assertion can detect a wrong consumer.
 Add `--entry gate` to exercise the GC gate's selection and complete C++ suite.
 

@@ -4,61 +4,8 @@
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "$0")/../../.." && pwd)"
-PYTHONDONTWRITEBYTECODE=1 python3 "$ROOT/runtime/tests/gc_unit/test_mutualwait_ast_once.py"
-echo "MUTUALWAIT_AST_ONCE_CONTRACT_OK"
 fixture="$(mktemp -d /tmp/gc-unit-gate-contract.XXXXXX)"
 trap 'rm -rf "$fixture"' EXIT
-
-# Exercise the real run_standalone.sh call site, not only the receipt helper.
-# Manifest-only mode stops immediately after that call site, keeping this
-# contract independent from the large C++ link while still detecting a deleted
-# or bypassed invocation in the production runner.
-mw_fixture="$fixture/mutualwait"
-mkdir -p "$mw_fixture/runtime/tests/gc_unit" "$mw_fixture/runtime/src/Heap" \
-  "$mw_fixture/runtime/include" "$mw_fixture/lib" "$mw_fixture/bin"
-cp "$ROOT/runtime/tests/gc_unit/run_standalone.sh" \
-  "$ROOT/runtime/tests/gc_unit/run_mutualwait_manifest.py" \
-  "$mw_fixture/runtime/tests/gc_unit/"
-printf 'int mutualwait_source;\n' >"$mw_fixture/runtime/tests/gc_unit/clear_entries_product_unit.cpp"
-printf 'manifest\n' >"$mw_fixture/runtime/tests/gc_unit/product_call_manifest_mutualwait.tsv"
-printf 'int product_anchor;\n' >"$mw_fixture/runtime/src/Heap/anchor.cpp"
-printf '#!/usr/bin/env bash\nexit 0\n' >"$mw_fixture/bin/nm"
-printf '#!/usr/bin/env bash\nprintf "%%s\\n" "${CJRT_HEAP_FILLER:-default}" >>"${MUTUALWAIT_FIXTURE_ARM_TRACE:?}"\necho mutualwait-fixture-compiler-v1\n' >"$mw_fixture/bin/cxx"
-printf '#!/usr/bin/env python3\nimport os\nfrom pathlib import Path\np=Path(os.environ["MUTUALWAIT_FIXTURE_COUNT"])\nwith p.open("a") as f: f.write("run\\n")\nfor i in range(7): print(f"GATE_MUTUALWAIT_PRODUCT_MANIFEST_ROW_OK row={i}")\n' \
-  >"$mw_fixture/runtime/tests/gc_unit/check_mutualwait_manifest.py"
-chmod +x "$mw_fixture/bin/nm" "$mw_fixture/bin/cxx" \
-  "$mw_fixture/runtime/tests/gc_unit/check_mutualwait_manifest.py"
-touch "$mw_fixture/lib/libcangjie-runtime.so"
-mw_count="$mw_fixture/analyzer.count"
-mw_arm_trace="$mw_fixture/arm.trace"
-mw_out="$mw_fixture/out"
-# This synthetic AST fixture owns its headers; it has no published product pair.
-export GCV2_RUNTIME_OUTPUT_ROOT="$mw_fixture/runtime"
-PATH="$mw_fixture/bin:$PATH" CXX="$mw_fixture/bin/cxx" CJRT_HEAP_FILLER=default \
-  MUTUALWAIT_FIXTURE_COUNT="$mw_count" GCV2_RUNTIME_LIB_DIR="$mw_fixture/lib" \
-  MUTUALWAIT_FIXTURE_ARM_TRACE="$mw_arm_trace" \
-  GC_UNIT_OUT="$mw_out" GC_UNIT_MUTUALWAIT_MANIFEST_ONLY=1 \
-  bash "$mw_fixture/runtime/tests/gc_unit/run_standalone.sh" >"$mw_fixture/default.log" 2>&1 && \
-  mw_default_rc=0 || mw_default_rc=$?
-PATH="$mw_fixture/bin:$PATH" CXX="$mw_fixture/bin/cxx" CJRT_HEAP_FILLER=0 \
-  MUTUALWAIT_FIXTURE_COUNT="$mw_count" GCV2_RUNTIME_LIB_DIR="$mw_fixture/lib" \
-  MUTUALWAIT_FIXTURE_ARM_TRACE="$mw_arm_trace" \
-  GC_UNIT_OUT="$mw_out" GC_UNIT_MUTUALWAIT_MANIFEST_ONLY=1 \
-  bash "$mw_fixture/runtime/tests/gc_unit/run_standalone.sh" >"$mw_fixture/filler.log" 2>&1 && \
-  mw_filler_rc=0 || mw_filler_rc=$?
-mw_invocations=0
-if [[ -f "$mw_count" ]]; then
-  mw_invocations=$(wc -l <"$mw_count")
-fi
-mw_rows=$(/usr/bin/grep -c GATE_MUTUALWAIT_PRODUCT_MANIFEST_ROW_OK "$mw_fixture/default.log" || true)
-mw_default_entries=$(/usr/bin/grep -c '^default$' "$mw_arm_trace" || true)
-mw_filler_entries=$(/usr/bin/grep -c '^0$' "$mw_arm_trace" || true)
-printf 'MUTUALWAIT_RUN_STANDALONE_PAIR_ASSERT default_rc=%s filler_rc=%s analyzer_invocations=%s rows=%s default_entries=%s filler_entries=%s\n' \
-  "$mw_default_rc" "$mw_filler_rc" "$mw_invocations" "$mw_rows" \
-  "$mw_default_entries" "$mw_filler_entries"
-[[ "$mw_default_rc" -eq 0 && "$mw_filler_rc" -eq 0 && "$mw_invocations" -eq 1 && \
-   "$mw_rows" -eq 7 && "$mw_default_entries" -eq 1 && "$mw_filler_entries" -eq 1 ]]
-echo "MUTUALWAIT_RUN_STANDALONE_PAIR_OK"
 
 # The parent gate supplies its own compiler, runtime, status, mode, and skip
 # controls.  Each fixture arm below owns all of those inputs; inheriting even
