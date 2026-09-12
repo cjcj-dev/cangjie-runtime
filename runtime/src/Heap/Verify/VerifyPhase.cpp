@@ -68,8 +68,7 @@ bool VerifyFaceEnabled(VerifyFace face)
             return enabled;
         }
         case VerifyFace::Remembered: {
-            static const bool enabled = BuildDefault(face) || ValueIsOne(std::getenv("MRT_GCV2_VERIFY_REMSET")) ||
-                ValueIsOne(std::getenv("MRT_GCV2_VERIFY_REMEMBERED")) || DiagGate::TokenOn("remembered");
+            static const bool enabled = BuildDefault(face) || DiagGate::TokenOn("remembered");
             return enabled;
         }
         case VerifyFace::Oops: {

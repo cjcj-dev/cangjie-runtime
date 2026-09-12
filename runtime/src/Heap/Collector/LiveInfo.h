@@ -180,13 +180,19 @@ struct RegionBitmap {
     {
         BitMaskInfo maskInfo;
         GetBitMaskInfo(start, byteCnt, maskInfo);
-        // ZGC zBitMap.inline.hpp:60-83: one pair RMW decides strong ownership
-        // and inc_live. The tail describes the same object's byte range; the
-        // start pair remains the only arbitration point.
-        const uint64_t old = markWords[maskInfo.headWordIdx].fetch_or(maskInfo.headMaskBits);
+        // ZGC zBitMap.inline.hpp:60-83 / zLiveMap: only the object-start pair is
+        // a start bit. Strong bit stays on the start slot; interior coverage uses
+        // live bits only so find_base can walk start bits (zLiveMap.inline.hpp:181-221).
+        const uint64_t startPair = maskInfo.liveStartBitMask | maskInfo.strongStartBitMask;
+        const uint64_t old = markWords[maskInfo.headWordIdx].fetch_or(startPair);
         const bool already = (old & maskInfo.strongStartBitMask) != 0;
         incLive = !already && (old & maskInfo.liveStartBitMask) == 0;
-        SetTailMask(maskInfo, ~static_cast<uint64_t>(0));
+        const uint64_t interiorLive =
+            (maskInfo.headMaskBits & kLiveBitMask) & ~maskInfo.liveStartBitMask;
+        if (interiorLive != 0) {
+            markWords[maskInfo.headWordIdx].fetch_or(interiorLive);
+        }
+        SetTailMask(maskInfo, kLiveBitMask);
         if (incLive) {
             AddLiveBytesForMask(maskInfo, byteCnt, regionSize);
         }

@@ -8,6 +8,7 @@
 #include "Heap/Barrier/RememberedSet.h"
 
 #include <cstdlib>
+#include <functional>
 #include <cstring>
 #include <new>
 #include <vector>
@@ -18,6 +19,10 @@
 
 #include "Base/Log.h"
 #include "Base/LogFile.h"
+#include "Heap/Allocator/ForwardingTable.h"
+#include "Heap/Collector/Collector.h"
+#include "Heap/Collector/ZForwarding.h"
+#include "Heap/Heap.h"
 #include "Heap/Verify/ProbeReadRouteDiag.h"
 
 namespace MapleRuntime {
@@ -58,30 +63,7 @@ void RememberedSet::Initialize(MAddress start, size_t size)
             dirtyMaps[buffer][word].store(0, std::memory_order_relaxed);
         }
     }
-    const char* ever = std::getenv("MRT_GCV2_REMSET_EVER");
-    if (ever != nullptr && std::strcmp(ever, "1") == 0) {
-        everRecorded.reset(new (std::nothrow) std::atomic<uint64_t>[wordCount]);
-        CHECK_DETAIL(everRecorded != nullptr, "failed to allocate sticky remembered-set bitmap");
-        for (size_t word = 0; word < wordCount; ++word) {
-            everRecorded[word].store(0, std::memory_order_relaxed);
-        }
-    }
     initialized = true;
-}
-
-bool RememberedSet::WasEverRecorded(MAddress fieldAddress) const
-{
-    if (everRecorded == nullptr) {
-        return false;
-    }
-    if (fieldAddress < heapStart || fieldAddress >= heapStart + heapSize ||
-        fieldAddress % kFieldBytes != 0) {
-        return false;
-    }
-    size_t bit = (fieldAddress - heapStart) / kFieldBytes;
-    size_t word = bit / kBitsPerWord;
-    uint64_t mask = static_cast<uint64_t>(1) << (bit % kBitsPerWord);
-    return (everRecorded[word].load(std::memory_order_relaxed) & mask) != 0;
 }
 
 void RememberedSet::CheckInitialized() const
@@ -121,9 +103,6 @@ void RememberedSet::Record(MAddress fieldAddress, bool fromMutatorBarrier)
     uint64_t mask = static_cast<uint64_t>(1) << (bit % kBitsPerWord);
     size_t buffer = activeBuffer.load(std::memory_order_acquire);
     uint64_t old = bitmaps[buffer][word].fetch_or(mask, std::memory_order_relaxed);
-    if (fromMutatorBarrier && everRecorded != nullptr) {
-        everRecorded[word].fetch_or(mask, std::memory_order_relaxed);
-    }
     MarkWordDirty(buffer, word);
     if ((old & mask) == 0) {
         recordCounts[buffer].fetch_add(1, std::memory_order_relaxed);
@@ -229,11 +208,10 @@ size_t RememberedSet::MoveInPlaceSlots(const std::vector<InPlaceSlot>& taken, MA
     return moved;
 }
 
-size_t RememberedSet::TransferObjectSlots(MAddress fromBase, MAddress toBase, size_t size)
+size_t RememberedSet::TransferObjectSlots(MAddress fromBase, MAddress toBase, size_t size,
+                                          ZForwarding* forwarding, bool youngMarking)
 {
     CheckInitialized();
-    // ForwardRegion old→old never in-places (RouteObject allocates a distinct to-space).
-    // CompactRegion is a separate path and does not call this.
     if (size < kFieldBytes || fromBase == toBase) {
         return 0;
     }
@@ -245,7 +223,6 @@ size_t RememberedSet::TransferObjectSlots(MAddress fromBase, MAddress toBase, si
     if (toBase < heapStart || toEnd > heapStart + heapSize) {
         return 0;
     }
-    // Field-aligned addresses in [fromBase, fromEnd).
     size_t firstBit = (fromBase - heapStart + kFieldBytes - 1) / kFieldBytes;
     size_t endBit = (fromEnd - heapStart) / kFieldBytes;
     if (firstBit >= endBit || firstBit >= bitCount) {
@@ -254,23 +231,31 @@ size_t RememberedSet::TransferObjectSlots(MAddress fromBase, MAddress toBase, si
     if (endBit > bitCount) {
         endBit = bitCount;
     }
-    size_t buffer = activeBuffer.load(std::memory_order_acquire);
+    const size_t current = activeBuffer.load(std::memory_order_acquire);
+    const size_t previous = current ^ 1U;
     const ptrdiff_t delta = static_cast<ptrdiff_t>(toBase) - static_cast<ptrdiff_t>(fromBase);
     size_t transferred = 0;
-    for (size_t bit = firstBit; bit < endBit; ++bit) {
-        size_t word = bit / kBitsPerWord;
-        uint64_t mask = static_cast<uint64_t>(1) << (bit % kBitsPerWord);
-        uint64_t w = bitmaps[buffer][word].load(std::memory_order_relaxed);
-        if ((w & mask) == 0) {
-            continue;
+    auto transferFace = [&](size_t buffer) {
+        for (size_t bit = firstBit; bit < endBit; ++bit) {
+            size_t word = bit / kBitsPerWord;
+            uint64_t mask = static_cast<uint64_t>(1) << (bit % kBitsPerWord);
+            uint64_t w = bitmaps[buffer][word].load(std::memory_order_relaxed);
+            if ((w & mask) == 0) {
+                continue;
+            }
+            MAddress fromSlot = heapStart + bit * kFieldBytes;
+            MAddress toSlot = static_cast<MAddress>(static_cast<ptrdiff_t>(fromSlot) + delta);
+            ProbeReadRouteDiag::NoteRemsetEvent(
+                fromSlot, ProbeReadRouteDiag::REMSET_TRANSFER_OUT, static_cast<uint8_t>(buffer), toSlot);
+            if (youngMarking && forwarding != nullptr) {
+                forwarding->relocated_remembered_fields_register(toSlot);
+            } else {
+                Record(toSlot, false);
+            }
+            ++transferred;
         }
-        MAddress fromSlot = heapStart + bit * kFieldBytes;
-        MAddress toSlot = static_cast<MAddress>(static_cast<ptrdiff_t>(fromSlot) + delta);
-        ProbeReadRouteDiag::NoteRemsetEvent(
-            fromSlot, ProbeReadRouteDiag::REMSET_TRANSFER_OUT, static_cast<uint8_t>(buffer), toSlot);
-        Record(toSlot, false);
-        ++transferred;
-    }
+    };
+    transferFace(youngMarking ? previous : current);
     return transferred;
 }
 
@@ -286,6 +271,7 @@ void RememberedSet::FlipForMinor()
     // operation only publishes the other face. ScanPreviousForMinor is the
     // owner of consuming and clearing the face selected before this flip.
     activeBuffer.store(static_cast<uint8_t>(nextBuffer), std::memory_order_release);
+    ZForwarding::bump_young_seqnum();
     ProbeReadRouteDiag::NoteRemsetFlip();
 #if defined(MRT_GC_UNIT_TESTS)
     flipTouchAccountingActive = false;
@@ -297,40 +283,58 @@ size_t RememberedSet::ScanPreviousForMinor(std::unordered_set<MAddress>& records
     CheckInitialized();
     CHECK_DETAIL(records.empty(), "minor remembered-set destination must be empty");
     size_t scanBuffer = activeBuffer.load(std::memory_order_acquire) ^ 1U;
-
-    static const bool reserveDestination = []() {
-        const char* value = std::getenv("MRT_GCV2_REMSET_HASH_OPT");
-        return value == nullptr || std::strcmp(value, "1") == 0;
-    }();
     const size_t expectedRecords = recordCounts[scanBuffer].load(std::memory_order_relaxed);
-    if (reserveDestination) {
-        records.reserve(expectedRecords);
-    }
+    records.reserve(expectedRecords);
 
+    auto shouldScanPage = [](MAddress slot) -> bool {
+        ZForwarding* forwarding = ForwardingTable::GetCovering(slot);
+        if (forwarding == nullptr) {
+            return true;
+        }
+        return !forwarding->relocated_remembered_fields_is_concurrently_scanned();
+    };
+
+    size_t consumed = 0;
     for (size_t dirtyIdx = 0; dirtyIdx < dirtyWordCount; ++dirtyIdx) {
-        uint64_t dirty = dirtyMaps[scanBuffer][dirtyIdx].exchange(0, std::memory_order_relaxed);
-        while (dirty != 0) {
-            unsigned wordInDirty = static_cast<unsigned>(__builtin_ctzll(dirty));
+        uint64_t dirty = dirtyMaps[scanBuffer][dirtyIdx].load(std::memory_order_relaxed);
+        if (dirty == 0) {
+            continue;
+        }
+        uint64_t remainingDirty = 0;
+        uint64_t workDirty = dirty;
+        while (workDirty != 0) {
+            unsigned wordInDirty = static_cast<unsigned>(__builtin_ctzll(workDirty));
             size_t wordIdx = dirtyIdx * kBitsPerWord + wordInDirty;
             if (wordIdx < wordCount) {
-                uint64_t word = bitmaps[scanBuffer][wordIdx].exchange(0, std::memory_order_relaxed);
-                while (word != 0) {
-                    unsigned bitInWord = static_cast<unsigned>(__builtin_ctzll(word));
+                MAddress wordStart = heapStart + wordIdx * kBitsPerWord * kFieldBytes;
+                if (!shouldScanPage(wordStart)) {
+                    remainingDirty |= static_cast<uint64_t>(1) << wordInDirty;
+                    workDirty &= workDirty - 1;
+                    continue;
+                }
+                uint64_t word = bitmaps[scanBuffer][wordIdx].load(std::memory_order_relaxed);
+                uint64_t scanWord = word;
+                while (scanWord != 0) {
+                    unsigned bitInWord = static_cast<unsigned>(__builtin_ctzll(scanWord));
                     size_t bit = wordIdx * kBitsPerWord + bitInWord;
                     if (bit < bitCount) {
                         MAddress slot = heapStart + bit * kFieldBytes;
                         ProbeReadRouteDiag::NoteRemsetEvent(
                             slot, ProbeReadRouteDiag::REMSET_CONSUME, static_cast<uint8_t>(scanBuffer));
                         records.insert(slot);
+                        ++consumed;
                     }
-                    word &= word - 1;
+                    scanWord &= scanWord - 1;
                 }
+                bitmaps[scanBuffer][wordIdx].store(0, std::memory_order_relaxed);
             }
-            dirty &= dirty - 1;
+            workDirty &= workDirty - 1;
         }
+        dirtyMaps[scanBuffer][dirtyIdx].store(remainingDirty, std::memory_order_relaxed);
     }
-    size_t recorded = recordCounts[scanBuffer].exchange(0, std::memory_order_relaxed);
-    CHECK_DETAIL(recorded == records.size(), "remembered-set count mismatch: bitmap=%zu records=%zu", recorded,
+    size_t remaining = expectedRecords > consumed ? expectedRecords - consumed : 0;
+    recordCounts[scanBuffer].store(remaining, std::memory_order_relaxed);
+    CHECK_DETAIL(consumed == records.size(), "remembered-set count mismatch: bitmap=%zu records=%zu", consumed,
                  records.size());
 
 #if defined(MRT_REMSET_BITMAP_CROSSCHECK)
@@ -351,6 +355,42 @@ size_t RememberedSet::ScanPreviousForMinor(std::unordered_set<MAddress>& records
     ++bitmapCrossCheckCount;
 #endif
     return records.size();
+}
+
+void RememberedSet::VisitPreviousInRange(MAddress start, size_t size,
+                                         const std::function<void(MAddress)>& visitor) const
+{
+    if (!initialized || visitor == nullptr || size < kFieldBytes) {
+        return;
+    }
+    MAddress end = start + size;
+    if (start < heapStart) {
+        start = heapStart;
+    }
+    if (end > heapStart + heapSize) {
+        end = heapStart + heapSize;
+    }
+    if (start >= end) {
+        return;
+    }
+    size_t firstBit = (start - heapStart + kFieldBytes - 1) / kFieldBytes;
+    size_t endBit = (end - heapStart) / kFieldBytes;
+    if (firstBit >= endBit || firstBit >= bitCount) {
+        return;
+    }
+    if (endBit > bitCount) {
+        endBit = bitCount;
+    }
+    const size_t previous = activeBuffer.load(std::memory_order_acquire) ^ 1U;
+    for (size_t bit = firstBit; bit < endBit; ++bit) {
+        size_t word = bit / kBitsPerWord;
+        uint64_t mask = static_cast<uint64_t>(1) << (bit % kBitsPerWord);
+        uint64_t w = bitmaps[previous][word].load(std::memory_order_relaxed);
+        if ((w & mask) == 0) {
+            continue;
+        }
+        visitor(heapStart + bit * kFieldBytes);
+    }
 }
 
 size_t RememberedSet::DrainForMinor(std::unordered_set<MAddress>& records)

@@ -25,7 +25,7 @@ class BaseObject;
 // MISSING_ROOT_REACHABLE count the correctness-relevant root-reachable subset.
 // Counts direct field edges only (no reachability cascade).
 //
-// Gate: unified VerifyFace::Remembered (legacy MRT_GCV2_VERIFY_REMSET=1 is an alias).
+// Gate: unified VerifyFace::Remembered (DiagGate token remembered; z_globals.hpp:105 ZVerifyRemembered).
 // Reports the bounded inventory and then fails closed on correctness-relevant
 // missing entries; the historical detail cap stays fixed at its default of 20.
 //

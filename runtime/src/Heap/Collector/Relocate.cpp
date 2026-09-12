@@ -148,95 +148,6 @@ void RunRemapWindowTestHook(unsigned point, RegionInfo* region, BaseObject* obje
 #endif
 namespace WCollectorInternal {
 } // namespace WCollectorInternal
-// Frame-colour census after relocate-start flip. Compile-time off; no MRT_GCV2_ env.
-//
-// It answered its question and the answer is stable: across 550 flips the stack roots held
-// zero old-epoch colours and zero current-epoch colours, because runtime stack roots are
-// plain by ABI (BaseObject.h, "Stack/runtime roots are uncoloured RootSlots"). Leaving it
-// compiled in would put a full walk of every mutator stack, plus a log line per mutator,
-// inside the relocate-start pause.
-//
-// Kept rather than deleted because the same walk answers the follow-up question -- whether a
-// plain stack root still names a from-object after relocation, which no colour bit can flag.
-static constexpr bool kFrameColourCensus = false;
-
-static void CensusFrameColoursAfterFlip(const char* site, uintptr_t prevRemap)
-{
-    if (!kFrameColourCensus) {
-        return;
-    }
-    const uintptr_t loadBad = ::g_cjLoadBadMask;
-    const uintptr_t curRemap = ColourPredicates::current_remapped(loadBad);
-    size_t nMut = 0;
-    size_t nManaged = 0;
-    size_t nSlot = 0;
-    size_t nOld = 0;
-    size_t nNew = 0;
-    size_t nPlainNull = 0;
-    size_t nOther = 0;
-    size_t oldD0 = 0;
-    size_t oldD1 = 0;
-    size_t oldD2 = 0;
-    size_t oldD3p = 0;
-    size_t maxOldDepth = 0;
-    MutatorManager::Instance().VisitAllMutators([&](Mutator& mutator) {
-        ++nMut;
-        if (!mutator.IsManagedContext()) {
-            return;
-        }
-        mutator.MutatorLock();
-        StackFrameCursor cursor(mutator.GetUnwindContext());
-        size_t depth = 0;
-        RootVisitor visitor = [&](ObjectRef& root) {
-            const uintptr_t value = raw(root.LoadPlain());
-            ++nSlot;
-            const uintptr_t remap = value & REMAP_COLOUR_MASK;
-            if (value == 0 || remap == 0) {
-                ++nPlainNull;
-            } else if (ColourPredicates::is_load_good(value, loadBad)) {
-                ++nNew;
-            } else if (prevRemap != 0 && remap == prevRemap) {
-                ++nOld;
-                if (depth <= 3) {
-                    ++oldD0;
-                } else if (depth <= 7) {
-                    ++oldD1;
-                } else if (depth <= 15) {
-                    ++oldD2;
-                } else {
-                    ++oldD3p;
-                }
-                if (depth > maxOldDepth) {
-                    maxOldDepth = depth;
-                }
-            } else {
-                ++nOther;
-            }
-        };
-        while (!cursor.Done()) {
-            const FrameInfo* frame = cursor.CurrentFrame();
-            const bool managed = frame != nullptr && frame->GetFrameType() == FrameType::MANAGED;
-            if (managed) {
-                ++nManaged;
-                ++depth;
-            }
-            cursor.ProcessOne(visitor, mutator);
-        }
-        mutator.MutatorUnlock();
-    });
-    static std::atomic<size_t> cycle{0};
-    const size_t n = cycle.fetch_add(1, std::memory_order_relaxed) + 1;
-    LOG(RTLOG_ERROR,
-        "[FRAMECOLOUR] site=%s cycle=%zu mut=%zu managedFrames=%zu slots=%zu "
-        "oldColour=%zu newColour=%zu plainNull=%zu other=%zu "
-        "prevRemap=%#lx curRemap=%#lx loadBad=%#lx "
-        "oldDepth[0-3]=%zu [4-7]=%zu [8-15]=%zu [16+]=%zu maxOldDepth=%zu stw=%d",
-        site, n, nMut, nManaged, nSlot, nOld, nNew, nPlainNull, nOther,
-        static_cast<unsigned long>(prevRemap), static_cast<unsigned long>(curRemap),
-        static_cast<unsigned long>(loadBad), oldD0, oldD1, oldD2, oldD3p, maxOldDepth,
-        MutatorManager::Instance().WorldStopped() ? 1 : 0);
-}
-
 // installdomain: positive control — how often Resolve/Fix would install a ghost-from that is
 // outside GetRoute's liveInfo0 survivor domain. Grant paints that bit before route geometry.
 // Report with MRT_GCV2_INSTALLDOMAIN_ACCOUNT=1 (also always VLOG once per minor if >0).
@@ -715,9 +626,6 @@ void WCollector::Preforward()
         CsetEmptyWho::ClassifyCycle();
         flip_young_relocate_start();
         flip_old_relocate_start();
-        CensusFrameColoursAfterFlip("full",
-            (ZPointerRemappedYoungMask ^ REMAP_COLOUR_MASK) &
-                (ZPointerRemappedOldMask ^ REMAP_COLOUR_MASK));
         StartRelocationTasks();
     }
 
@@ -1696,19 +1604,6 @@ void WCollector::EvacuateYoungRegions(const std::vector<BaseObject*>& reachableV
         //
         // Our own major path already has the ZGC order: PrepareForwardTable<Old> at :2533 runs
         // before flip_young/old_relocate_start at :2552-2553.  The two paths disagreed.
-        static constexpr bool kFlipAfterFromSpace = true;
-        const auto doFlip = [this]() {
-            // Arm self-check: "I edited the source" is not evidence that this arm ran.  One line,
-            // once per flip, naming which side of PrepareForwardTable<Young> we are on.
-            LOG(RTLOG_ERROR, "[FLIPORDER] young flip arm=%s", kFlipAfterFromSpace ? "after-fromspace" : "before");
-            flip_young_relocate_start();
-            CensusFrameColoursAfterFlip("young",
-                (ZPointerRemappedYoungMask ^ REMAP_COLOUR_MASK) & ZPointerRemappedOldMask);
-        };
-        if (doYoungFlip && !kFlipAfterFromSpace) {
-            doFlip();
-        }
-
         {
             MRT_PHASE_TIMER("young.ref_fix_prepare");
 
@@ -1717,9 +1612,9 @@ void WCollector::EvacuateYoungRegions(const std::vector<BaseObject*>& reachableV
             // Prior order let FixMinorRootSlots RouteRegion before the domain snapshot.
             TransitionToGCPhase(GCPhase::GC_PHASE_POST_TRACE, true);
             fwdTable.PrepareForwardTable<Generation::Young>();
-            // fliporder: from-space is now published, so flip here -- ZGC's install-then-flip order.
-            if (doYoungFlip && kFlipAfterFromSpace) {
-                doFlip();
+            // zGeneration.cpp:1503-1508: install forwarding then flip remap bits.
+            if (doYoungFlip) {
+                flip_young_relocate_start();
             }
 #if defined(MRT_TESTABLE_INTERNALS)
             // Prepared and flipped, still POST_TRACE: a test driver can enter
