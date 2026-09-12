@@ -53,8 +53,6 @@ public:
     void CommitRawPointerRegions();
 
     // Record roots while the mutator enumerates its stack concurrently with GC.
-    void PushRoot(BaseObject* root) { PushRoot(root, true); }
-
     void PushRoot(BaseObject* root, bool young)
     {
         std::lock_guard<std::mutex> lock(handoffLock);
@@ -63,30 +61,10 @@ public:
 
     // An incomplete large reference array is live but its dirty suffix must not
     // be traversed. This is ZUncoloredRoot::mark_invisible_object's DontFollow.
-    void PushInvisibleRoot(BaseObject* root) { PushInvisibleRoot(root, true); }
-
     void PushInvisibleRoot(BaseObject* root, bool young)
     {
         std::lock_guard<std::mutex> lock(handoffLock);
         (young ? stackRootsYoung : stackRootsOld).emplace_back(MarkStackEntry::MarkOnly(root));
-    }
-
-    // move the stack roots to other container so that other threads can visit them.
-    template<class WorkStack>
-    inline void MergeRoots(WorkStack& workStack)
-    {
-        std::list<MarkStackEntry> pending;
-        {
-            std::lock_guard<std::mutex> lock(handoffLock);
-            pending.splice(pending.end(), stackRootsYoung);
-            pending.splice(pending.end(), stackRootsOld);
-        }
-#if defined(MRT_GC_UNIT_TESTS)
-        FireHandoffHook(stackRootsHandoffHook, stackRootsHandoffHookContext);
-#endif
-        for (const MarkStackEntry& entry : pending) {
-            workStack.push_back(entry);
-        }
     }
 
     template<class WorkStack>
