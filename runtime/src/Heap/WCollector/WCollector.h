@@ -518,9 +518,6 @@ public:
         }
         // ③ find-miss: wait for the page task then find again
         // (zRelocate.cpp:401-415 relocate_object / forward_object).
-        if (MutatorRelocate::StatsOn()) {
-            MutatorRelocate::NoteWaitEnter();
-        }
         BaseObject* resolved =
             WaitForPageForwarding(obj, ForwardingTable::RetainPageOwner(forwarding));
         if (resolved != nullptr) {

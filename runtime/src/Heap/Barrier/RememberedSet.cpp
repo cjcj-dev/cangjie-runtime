@@ -23,7 +23,6 @@
 #include "Heap/Collector/Collector.h"
 #include "Heap/Collector/ZForwarding.h"
 #include "Heap/Heap.h"
-#include "Heap/Verify/ProbeReadRouteDiag.h"
 
 namespace MapleRuntime {
 #if defined(MRT_GC_UNIT_TESTS)
@@ -107,10 +106,6 @@ void RememberedSet::Record(MAddress fieldAddress, bool fromMutatorBarrier)
     if ((old & mask) == 0) {
         recordCounts[buffer].fetch_add(1, std::memory_order_relaxed);
     }
-    ProbeReadRouteDiag::NoteRemsetEvent(
-        fieldAddress,
-        fromMutatorBarrier ? ProbeReadRouteDiag::REMSET_MUTATOR_RECORD : ProbeReadRouteDiag::REMSET_GC_RECORD,
-        static_cast<uint8_t>(buffer));
 #if defined(MRT_REMSET_BITMAP_CROSSCHECK)
     std::lock_guard<std::mutex> guard(oracleLock);
     oracleRecords[buffer].insert(fieldAddress);
@@ -195,8 +190,6 @@ size_t RememberedSet::MoveInPlaceSlots(const std::vector<InPlaceSlot>& taken, MA
         if ((old & mask) == 0) {
             recordCounts[buffer].fetch_add(1, std::memory_order_relaxed);
         }
-        ProbeReadRouteDiag::NoteRemsetEvent(it->field, ProbeReadRouteDiag::REMSET_TRANSFER_OUT,
-                                            static_cast<uint8_t>(buffer), toSlot);
 #if defined(MRT_REMSET_BITMAP_CROSSCHECK)
         {
             std::lock_guard<std::mutex> guard(oracleLock);
@@ -245,8 +238,6 @@ size_t RememberedSet::TransferObjectSlots(MAddress fromBase, MAddress toBase, si
             }
             MAddress fromSlot = heapStart + bit * kFieldBytes;
             MAddress toSlot = static_cast<MAddress>(static_cast<ptrdiff_t>(fromSlot) + delta);
-            ProbeReadRouteDiag::NoteRemsetEvent(
-                fromSlot, ProbeReadRouteDiag::REMSET_TRANSFER_OUT, static_cast<uint8_t>(buffer), toSlot);
             if (youngMarking && forwarding != nullptr) {
                 forwarding->relocated_remembered_fields_register(toSlot);
             } else {
@@ -272,7 +263,6 @@ void RememberedSet::FlipForMinor()
     // owner of consuming and clearing the face selected before this flip.
     activeBuffer.store(static_cast<uint8_t>(nextBuffer), std::memory_order_release);
     ZForwarding::bump_young_seqnum();
-    ProbeReadRouteDiag::NoteRemsetFlip();
 #if defined(MRT_GC_UNIT_TESTS)
     flipTouchAccountingActive = false;
 #endif
@@ -319,8 +309,6 @@ size_t RememberedSet::ScanPreviousForMinor(std::unordered_set<MAddress>& records
                     size_t bit = wordIdx * kBitsPerWord + bitInWord;
                     if (bit < bitCount) {
                         MAddress slot = heapStart + bit * kFieldBytes;
-                        ProbeReadRouteDiag::NoteRemsetEvent(
-                            slot, ProbeReadRouteDiag::REMSET_CONSUME, static_cast<uint8_t>(scanBuffer));
                         records.insert(slot);
                         ++consumed;
                     }
@@ -485,9 +473,6 @@ size_t RememberedSet::ClearRangeInBuffer(size_t buffer, size_t firstBit, size_t 
         while (cleared != 0) {
             const unsigned bitInWord = static_cast<unsigned>(__builtin_ctzll(cleared));
             const size_t bit = wordIdx * kBitsPerWord + bitInWord;
-            ProbeReadRouteDiag::NoteRemsetEvent(
-                heapStart + bit * kFieldBytes, ProbeReadRouteDiag::REMSET_REGION_CLEAR,
-                static_cast<uint8_t>(buffer));
             cleared &= cleared - 1;
         }
         if ((old & ~mask) == 0) {

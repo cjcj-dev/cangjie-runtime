@@ -31,7 +31,7 @@ CUTS = {
                '        owner->in_place_relocation_claim_page();',
                '        (void)owner;', 2),
     'find': ('runtime/src/Heap/Collector/Relocate.cpp',
-             '    return reinterpret_cast<BaseObject*>(owner->resolve_life(owner->find(from)));',
+             '    return reinterpret_cast<BaseObject*>(owner->find(from));',
              '    return obj;', 1),
     'done': ('runtime/src/Heap/Allocator/RegionManager.cpp',
              '    ForwardRegion<G>(region);\n#if defined(MRT_TESTABLE_INTERNALS)',

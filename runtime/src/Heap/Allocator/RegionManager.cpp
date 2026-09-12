@@ -1238,32 +1238,6 @@ void RegionManager::ReassembleFromSpace()
     fromRegionList.MergeRegionList(unmovableFromRegionList, RegionInfo::RegionType::FROM_REGION);
 }
 
-void RegionManager::ExpireKeptFromPreviousCycle()
-{
-    // zGeneration.cpp:276-284 reset relocation set; zRelocate.cpp:1023-1047
-    // release/detach then in-place reuse or free. No extra kept round.
-    size_t expired = 0;
-    size_t expiredBytes = 0;
-    auto expireList = [&expired, &expiredBytes](RegionList& list) {
-        list.VisitAllRegions([&expired, &expiredBytes](RegionInfo* region) {
-            if (region == nullptr || !region->IsForwardingDone()) {
-                return;
-            }
-            ++expired;
-            expiredBytes += region->GetRegionSize();
-            ForwardingTable::ClearEntries(region->GetRegionStart(), region->GetRegionSize());
-            region->ExpireKeptPublish();
-        });
-    };
-    expireList(unmovableFromRegionList);
-    expireList(fromRegionList);
-    expireList(recentFullRegionList);
-    expireList(tlRegionList);
-    if (expired != 0) {
-        LOG(RTLOG_ERROR, "[GCV2][expire-kept] n=%zu bytes=%zu", expired, expiredBytes);
-    }
-}
-
 void RegionManager::CountLiveObject(const BaseObject* obj)
 {
     RegionInfo* region = RegionInfo::GetRegionInfoAt(reinterpret_cast<MAddress>(obj));
@@ -2207,79 +2181,6 @@ void ForEachLiveObjectStart(RegionInfo* region, MAddress start, MAddress allocPt
     }
 }
 
-size_t PublishKeptInPlaceReceipts(RegionInfo* region)
-{
-    if (region == nullptr || !region->IsGhostFromRegion()) {
-        return 0;
-    }
-    // ZGC iterates object-start bits. Consume the exact set frozen before any
-    // header rewrite; coverage cannot distinguish object interiors.
-    size_t published = 0;
-    const MAddress start = region->GetRegionStart();
-    ZForwarding* active = ForwardingTable::GetEntries(start);
-    const ZForwarding::FromPageView* fromPage = active == nullptr ? nullptr : active->from_page_snapshot();
-    const MAddress frozenTop = fromPage == nullptr ? region->GetRegionEnd() : fromPage->topAtStart;
-    const RegionInfo::RouteStartTable* starts = region->LoadRouteStartTable();
-    CHECK_DETAIL(starts != nullptr || !region->HasFromPageMetadata(),
-                 "published kept page lacks exact-start capability region=%p", region);
-    if (starts == nullptr) {
-        return 0;
-    }
-    for (const auto& entry : *starts) {
-        const size_t offset = entry.first;
-        // RouteStartTable is the frozen live exact-start set built from this
-        // forwarding generation's from-page view. Re-reading the mutable mark
-        // carrier here can disagree with that snapshot after the current face
-        // advances, which silently drops the identity receipt the frozen set
-        // requires (zRelocate.cpp:1137-1153).
-        if (entry.second == 0 || frozenTop < start ||
-            offset >= static_cast<size_t>(frozenTop - start)) {
-            continue;
-        }
-        BaseObject* object = from_region_addr(start + offset);
-        CHECK_DETAIL(active != nullptr,
-                     "kept page lacks active forwarding table before identity publish object=%p region=%p",
-                     object, region);
-        const MAddress pos = reinterpret_cast<MAddress>(object);
-        const MAddress existing = active->find(pos);
-        if (object->IsForwarded()) {
-            // A previous generation can still own the receipt after the next
-            // active generation is installed. ZGC removes old forwarding from
-            // the lookup table before destroying it (zGeneration.cpp:276-285;
-            // zRelocationSet.cpp:191-200); do not shadow that provenance with
-            // a guessed identity receipt.
-            const MAddress receipt = existing != 0 ? existing : ForwardingTable::RequireRetiredTo(pos);
-            CHECK_DETAIL(receipt != 0,
-                         "forwarded object lacks receipt before kept-page retirement object=%p region=%p",
-                         object, region);
-            if (existing != 0) {
-                // The kept producer consumed this active carrier. Preserve that
-                // requirement when ClearEntries subsequently retires the table.
-                active->note_retired_required();
-            }
-            continue;
-        }
-        if (existing != 0) {
-            continue;
-        }
-        // Identity is a producer receipt for a survivor that was not copied,
-        // matching ZGC's copy-then-insert(from, allocated) ordering even when
-        // allocated==from (zRelocate.cpp:610-649).
-        ForwardingTable::Publication publication =
-            ForwardingTable::RetainOpenPublicationAfterCopy(region, pos);
-        CHECK_DETAIL(static_cast<bool>(publication),
-                     "kept page lost forwarding carrier before identity publish object=%p region=%p",
-                     object, region);
-        const ZForwarding::Receipt receipt =
-            ForwardingTable::InstallMapping(publication, pos, pos);
-        CHECK_DETAIL(receipt.address == pos,
-                     "kept identity receipt changed address from=%#zx to=%#zx",
-                     static_cast<size_t>(pos), static_cast<size_t>(receipt.address));
-        ++published;
-    }
-    return published;
-}
-
 // ZGC's relocate() marks a forwarding life done only after every survivor has
 // a forwarding receipt (zRelocate.cpp:1137-1153). Header state and compact
 // geometry are not receipts: kept/in-place survivors must have an explicit
@@ -2354,17 +2255,6 @@ void RegionManager::ParkUnmovableFromRegion(RegionInfo* region)
 
 void RegionManager::ExemptFromRegion(RegionInfo* region)
 {
-    // zRelocate.cpp:1023-1047: in-place identity then mark_done. Ordinary
-    // unmovable pin remains; no extra kept expire latch.
-    WaitCopiedObjectsUnlocked(region);
-    (void)PublishKeptInPlaceReceipts(region);
-    auto owner = ForwardingTable::RetainPageOwner(region);
-    if (owner) {
-        owner->set_in_place();
-    }
-    if (region != nullptr && !region->IsForwardingDone()) {
-        region->MarkForwardingDone();
-    }
     ParkUnmovableFromRegion(region);
 }
 
@@ -2409,10 +2299,6 @@ void RegionManager::FinishIncompleteFromRegions()
             continue;
         }
         if (region->IsUnmovableFromRegion()) {
-            WaitCopiedObjectsUnlocked(region);
-            (void)PublishKeptInPlaceReceipts(region);
-            VerifyForwardingReceiptsClosed(region, "FinishIncompleteFromRegions.unmovable");
-            region->MarkForwardingDone();
             ++kept;
             continue;
         }
@@ -2441,19 +2327,12 @@ void RegionManager::FinishIncompleteFromRegions()
                 continue;
             }
         }
-        // Residual: publish kept in place. Do not Prepend if the region is still
-        // on another live list (recentFull / TL) — that would double-link.
         if (region->IsFromRegion()) {
             fromRegionList.TryDeleteRegion(region, RegionInfo::RegionType::FROM_REGION,
                                            RegionInfo::RegionType::UNMOVABLE_FROM_REGION);
         }
         if (region->IsLoneFromRegion() || region->IsFromRegion() || wasFrom) {
             ExemptFromRegion(region);
-        } else {
-            WaitCopiedObjectsUnlocked(region);
-            (void)PublishKeptInPlaceReceipts(region);
-            VerifyForwardingReceiptsClosed(region, "FinishIncompleteFromRegions.kept");
-            region->MarkForwardingDone();
         }
         ++kept;
     }
@@ -3415,7 +3294,6 @@ void RegionManager::FinishStayYoungInPlace(RegionInfo* region, bool advanceAge)
         BumpYoungSurvivorAge(region);
     }
     WaitCopiedObjectsUnlocked(region);
-    (void)PublishKeptInPlaceReceipts(region);
     VerifyForwardingReceiptsClosed(region, "FinishStayYoungInPlace");
 #if defined(MRT_TESTABLE_INTERNALS)
     // zRelocate.cpp:1137-1153: the real producer has published its receipts;
