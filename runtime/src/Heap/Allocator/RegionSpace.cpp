@@ -199,7 +199,10 @@ void RegionSpace::Init(const HeapParam& vmHeapParam)
     // Metadata remains a contiguous reverse-indexed ABI array, independent of
     // the payload reservations (zPage metadata lives outside virtual memory).
     const size_t metadataSize = RegionManager::GetMetadataSize(RegionInfo::IndexedUnitCount(reservations));
-    metadataMap = MemMap::MapMemory(metadataSize, metadataSize);
+    size_t totalSize = 0;
+    CHECK(CheckedAddSize(map->GetMappedSize(), metadataSize, totalSize) && addressBudget.Allows(totalSize));
+    metadataMap = MemMap::MapMemory(metadataSize, metadataSize, MemMap::DEFAULT_OPTIONS,
+                                    addressBudget, numaTopology);
     CHECK(metadataMap->GetReservationRegistry().Contains(
         reinterpret_cast<uintptr_t>(metadataMap->GetBaseAddr()), metadataSize));
     Logger::GetLogger().SetMinimumLogLevel(CangjieRuntime::GetLogParam().logLevel);
