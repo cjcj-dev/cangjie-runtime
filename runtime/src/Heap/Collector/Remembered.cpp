@@ -361,24 +361,29 @@ void WCollector::ScanRelocatedRememberedFields(MinorSlotSet& rememberedSlots)
         if (forwarding->retain_page()) {
             forwarding->relocated_remembered_fields_notify_concurrent_scan_of();
             std::vector<Containing> containing;
-            std::unordered_set<MAddress> previousFields;
-            remset.VisitPreviousInRange(forwarding->start(), forwarding->size(),
-                                        [&](MAddress field) { previousFields.insert(field); });
+            std::vector<MAddress> liveStarts;
             RegionInfo* page = forwarding->page();
             if (page != nullptr && !page->IsFreeRegion() && !page->IsGarbageRegion()) {
-                page->VisitAllObjects([&](BaseObject* holder) {
-                    if (holder == nullptr || !holder->HasRefField()) {
-                        return;
+                page->VisitLiveObjectsUntilFalse([&](BaseObject* holder) {
+                    if (holder != nullptr) {
+                        liveStarts.push_back(reinterpret_cast<MAddress>(holder));
                     }
-                    MAddress fromAddr = reinterpret_cast<MAddress>(holder);
-                    holder->ForEachRefField([&](RefField<>& field) {
-                        MAddress fieldAddr = reinterpret_cast<MAddress>(&field);
-                        if (previousFields.count(fieldAddr) != 0) {
-                            containing.push_back(Containing{ fromAddr, fieldAddr });
-                        }
-                    });
+                    return true;
                 });
             }
+            remset.VisitPreviousInRange(forwarding->start(), forwarding->size(), [&](MAddress field) {
+                MAddress base = 0;
+                for (MAddress start : liveStarts) {
+                    if (start <= field) {
+                        base = start;
+                    } else {
+                        break;
+                    }
+                }
+                if (base != 0) {
+                    containing.push_back(Containing{ base, field });
+                }
+            });
             forwarding->release_page();
             MAddress cachedFrom = 0;
             MAddress cachedTo = 0;
