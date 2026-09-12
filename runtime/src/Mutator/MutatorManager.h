@@ -191,14 +191,12 @@ public:
     {
         VisitAllMutators([](Mutator& mutator) {
             mutator.SetSuspensionFlag(Mutator::SuspensionType::SUSPENSION_FOR_SYNC);
-            mutator.SetSafepointActive(true);
         });
     }
 
     void CancelSuspensionAfterSync()
     {
         VisitAllMutators([](Mutator& mutator) {
-            mutator.SetSafepointActive(false);
             mutator.ClearSuspensionFlag(Mutator::SuspensionType::SUSPENSION_FOR_SYNC);
         });
     }
@@ -210,7 +208,7 @@ public:
 
     void RemoveMutatorSuspensionTrigger(Mutator& mutator) const
     {
-        mutator.SetSafepointActive(false);
+        mutator.ClearSuspensionFlag(Mutator::SuspensionType::SUSPENSION_FOR_SYNC);
     }
 
     void BindMutator(Mutator& mutator) const;
@@ -240,7 +238,11 @@ public:
 
     static bool EpochHandshakeEnabled();
     static bool ConcurrentStackScanEnabled();
-    EpochHandshakeStats RunEpochHandshake(const char* source);
+    EpochHandshakeStats RunEpochHandshake(const char* source, bool young);
+    bool EpochHandshakeYoung() const
+    {
+        return epochHandshakeYoung.load(std::memory_order_acquire) != 0;
+    }
     void RecordEpochHandshakeAck(Mutator& mutator, uint64_t epoch, bool bySelf);
     void RecordEpochHandshakeStackScan(bool scanned, size_t frames);
     void RecordEpochHandshakeCreateAttempt();
@@ -419,6 +421,7 @@ private:
     // keep them in the same participant inventory explicitly.
     std::mutex runtimeMutatorRegistryMutex;
     std::unordered_set<Mutator*> runtimeMutators;
+    std::atomic<int> epochHandshakeYoung = { 1 };
     std::atomic<int> markFlushHandshakeActive = { 0 };
     std::atomic<class MarkDomain*> markFlushDomain = { nullptr };
     std::mutex markFlushThreadMutex;

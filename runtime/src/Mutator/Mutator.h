@@ -267,6 +267,26 @@ public:
         cpuProfileState.store(state, std::memory_order_relaxed);
     }
 
+    static uint64_t PollBitFor(SuspensionType flag)
+    {
+        if (flag == SUSPENSION_FOR_SYNC) {
+            return POLL_REQ_SYNC;
+        }
+        if (flag == SUSPENSION_FOR_GC_PHASE) {
+            return POLL_REQ_GC_PHASE;
+        }
+        if (flag == SUSPENSION_FOR_CPU_PROFILE) {
+            return POLL_REQ_CPU_PROFILE;
+        }
+        if (flag == SUSPENSION_FOR_EPOCH_HANDSHAKE) {
+            return POLL_REQ_EPOCH;
+        }
+        if (flag == SUSPENSION_FOR_EXIT) {
+            return POLL_REQ_EXIT;
+        }
+        return 0;
+    }
+
     __attribute__((always_inline)) inline void SetSuspensionFlag(SuspensionType flag)
     {
         if (flag == SUSPENSION_FOR_GC_PHASE) {
@@ -275,11 +295,22 @@ public:
             cpuProfileState.store(NEED_CPUPROFILE, std::memory_order_relaxed);
         }
         suspensionFlag.fetch_or(flag, std::memory_order_seq_cst);
+        const uint64_t bit = PollBitFor(flag);
+        if (bit != 0) {
+            AddTlsPollRequest(boundTls, bit);
+        }
     }
 
     __attribute__((always_inline)) inline void ClearSuspensionFlag(SuspensionType flag)
     {
         suspensionFlag.fetch_and(~flag, std::memory_order_seq_cst);
+        const uint64_t bit = PollBitFor(flag);
+        if (bit != 0) {
+            ClearTlsPollRequest(boundTls, bit);
+        }
+        if (boundTls != nullptr && boundTls == ThreadLocal::GetThreadLocalData()) {
+            UpdatePollValues(boundTls);
+        }
     }
 
     __attribute__((always_inline)) inline uint32_t GetSuspensionFlag() const
@@ -333,15 +364,35 @@ public:
         epochHandshakeLifecycle.store(state, std::memory_order_release);
     }
 
-    void SetSafepointStatePtr(uint64_t* slot) { safepointStatePtr = slot; }
+    void SetSafepointStatePtr(uint64_t* slot)
+    {
+        safepointStatePtr = slot;
+        boundTls = nullptr;
+    }
+
+    void BindPollTls(ThreadLocalData* tls)
+    {
+        boundTls = tls;
+        safepointStatePtr = tls == nullptr ? nullptr : &tls->safepointState;
+    }
 
     void SetSafepointActive(bool value)
     {
-        uint64_t* statePtr = safepointStatePtr;
-        if (statePtr == nullptr) {
+        ThreadLocalData* tls = boundTls;
+        if (tls == nullptr) {
+            uint64_t* statePtr = safepointStatePtr;
+            if (statePtr != nullptr && value) {
+                *statePtr = 1;
+            }
             return;
         }
-        *statePtr = static_cast<uint64_t>(value);
+        if (value) {
+            ArmThreadPoll(tls);
+            return;
+        }
+        if (tls == ThreadLocal::GetThreadLocalData()) {
+            UpdatePollValues(tls);
+        }
     }
 
     // Spin wait phase transition finished when GC is tranverting this mutator's phase
@@ -367,7 +418,7 @@ public:
         }
     }
 
-    bool GcPhaseEnum(GCPhase newPhase, uint64_t stackScanEpoch = 0, bool bySelf = false,
+    bool GcPhaseEnum(GCPhase newPhase, bool young, uint64_t stackScanEpoch = 0, bool bySelf = false,
                      size_t* scannedFrames = nullptr);
     bool DrainStackWatermark(const RootVisitor& visitor, const RootVisitor& invisibleRootVisitor,
                              uint64_t epoch, StackWatermark::Owner owner,
@@ -533,14 +584,14 @@ public:
         }
         RegisterCurrentMarkFlushThread();
         SetEpochHandshakeLifecycle(EPOCH_HANDSHAKE_RUNNING);
-        SetSafepointStatePtr(&tlData->safepointState);
-        SetSafepointActive(HasAnySuspensionRequest() || MarkFlushPendingForCurrentThread());
+        BindPollTls(tlData);
+        UpdatePollValues(tlData);
         DoLeaveSaferegion();
     }
 
     void PreparedToPark(void* pc, void* fa)
     {
-        SetSafepointStatePtr(nullptr);
+        BindPollTls(nullptr);
         stackWatermark.OnPark();
         if (UNLIKELY((uwContext.GetUnwindContextStatus() == UnwindContextStatus::RISKY) || InSaferegion())) {
             SetInSaferegion(SaferegionState::SAFE_REGION_TRUE);
@@ -662,6 +713,7 @@ private:
 #endif // __WIN64
 
     uint64_t* safepointStatePtr = nullptr; // state: active or not
+    ThreadLocalData* boundTls = nullptr;
 #ifdef _WIN64
     uint32_t stackGrowFrameSize = 0;
 #endif
