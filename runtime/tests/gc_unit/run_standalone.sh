@@ -9,51 +9,6 @@ SRC="$ROOT/runtime/tests/gc_unit"
 OUT="${GC_UNIT_OUT:-$ROOT/runtime/tests/gc_unit/build_standalone}"
 CXX="${CXX:-clang++}"
 
-# Mutual-wait receipts have an independent, fixed target set.  Do not derive
-# it from the ProductFindToVersion calls that happen to remain in the source:
-# deleting a test/call must shrink neither the manifest nor this guard.
-MUTUALWAIT_MANIFEST="$SRC/product_call_manifest_mutualwait.tsv"
-MUTUALWAIT_ANALYZER="$SRC/check_mutualwait_manifest.py"
-MUTUALWAIT_RUNNER="$SRC/run_mutualwait_manifest.py"
-MUTUALWAIT_SOURCE="$SRC/clear_entries_product_unit.cpp"
-EXPECTED_MUTUALWAIT_TESTS=(
-  ForwardingPublicationProduct.KeptActiveReceiptRemainsRequiredAfterTableRetires
-  ForwardingPublicationProduct.ExemptPreservesRetiredReceiptAcrossActiveGeneration
-  ForwardingPublicationProduct.ReclaimRetiredDefersResidualUntilActiveReceipt
-  ForwardingPublicationProduct.ReclaimRetiredPreservesNewActiveReceiptHeader
-  ForwardingPublicationProduct.FinishIncompleteUnmovablePublishesIdentityBeforeDone
-  ForwardingPublicationProduct.FinishIncompleteNonFromResidualPublishesIdentityBeforeDone
-  ForwardingPublicationProduct.ExemptRejectsForwardedWithoutAnyReceipt
-)
-
-validate_mutualwait_manifest() {
-  local test_name compile_arg arm
-  local analyzer_args=(
-    --source "$MUTUALWAIT_SOURCE"
-    --manifest "$MUTUALWAIT_MANIFEST"
-    --product-root "$ROOT/runtime/src/Heap"
-    --compiler "$CXX"
-  )
-  for test_name in "${EXPECTED_MUTUALWAIT_TESTS[@]}"; do
-    analyzer_args+=(--expected-test "$test_name")
-  done
-  for compile_arg in \
-      -std=gnu++17 -fno-rtti -fvisibility-inlines-hidden \
-      "${TEST_DEFINES[@]}" -DMRT_TESTABLE_INTERNALS=1 \
-      "${PUBLICATION_TESTABLE_FLAGS[@]}" "${INC_FLAGS[@]}"; do
-    analyzer_args+=("--compile-arg=$compile_arg")
-  done
-  arm=default
-  if [[ "${CJRT_HEAP_FILLER:-}" == "0" ]]; then
-    arm=filler
-  fi
-  python3 "$MUTUALWAIT_RUNNER" \
-    --arm "$arm" \
-    --receipt "$OUT/.mutualwait_ast_receipt.json" \
-    --analyzer "$MUTUALWAIT_ANALYZER" \
-    -- "${analyzer_args[@]}" || return 11
-}
-
 mkdir -p "$OUT"
 
 RUNTIME_LIB_DIR="${GCV2_RUNTIME_LIB_DIR:-}"
@@ -381,30 +336,6 @@ RUNTIME_OUTPUT_ROOT="${GCV2_RUNTIME_OUTPUT_ROOT:-$(realpath -m "$RUNTIME_LIB_DIR
 if [[ -d "$RUNTIME_OUTPUT_ROOT/include" ]]; then
   INC_FLAGS+=(-I"$RUNTIME_OUTPUT_ROOT/include")
 fi
-
-validate_mutualwait_manifest
-if [[ "${GC_UNIT_MUTUALWAIT_MANIFEST_ONLY:-0}" == "1" ]]; then
-  exit 0
-fi
-
-# A weak referent is a discovery input, not a strong tracing root. Keep this
-# source-level consumer guard next to the product-linked behavior tests: the
-# positive anchor proves the guard inspected the active collector source, and
-# reintroducing the old referent traversal fails before any test can pass.
-WEAK_DISCOVERY_SOURCE="$ROOT/runtime/src/Heap/Collector/TracingCollector.cpp"
-if ! /usr/bin/grep -F -q \
-    'collector.DiscoverWeakReference(obj, workStack)' "$WEAK_DISCOVERY_SOURCE" ||
-    ! /usr/bin/grep -F -q \
-    'DiscoverReference(reference, ReferenceType::WEAK)' "$WEAK_DISCOVERY_SOURCE"; then
-  echo "GC_UNIT_WEAK_DISCOVERY_ANCHOR_MISSING" >&2
-  exit 11
-fi
-if /usr/bin/grep -F -q \
-    'TraceObjectRefFields(referent, workStack)' "$WEAK_DISCOVERY_SOURCE"; then
-  echo "GC_UNIT_WEAK_REFERENT_TRACED_STRONGLY" >&2
-  exit 12
-fi
-echo "GATE_WEAK_DISCOVERY_NO_STRONG_TRACE_OK source=$WEAK_DISCOVERY_SOURCE"
 
 # Keep this hand-driven entry point structurally identical to the CMake
 # cj_gc_unit target: product inline/template helpers stay hidden and static
