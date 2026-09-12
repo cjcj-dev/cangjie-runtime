@@ -981,9 +981,6 @@ void TracingCollector::ConcurrentReMark(WorkStack& remarkStack)
 
 bool TracingCollector::FlushMarkProducers(MarkDomain* domain)
 {
-    if (domain != nullptr) {
-        domain->Terminate().SetResurrected(false);
-    }
     bool flushed = MutatorManager::Instance().HandshakeFlushMarkProducers(domain);
     if (domain != nullptr) {
         flushed = domain->FlushStacks() || flushed || !domain->Stripes().IsEmpty();

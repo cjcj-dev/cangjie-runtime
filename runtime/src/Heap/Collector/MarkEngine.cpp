@@ -260,16 +260,12 @@ bool MarkDomain::FlushStacks()
 
 bool MarkDomain::TryTerminateFlush()
 {
-    terminate.SetResurrected(false);
     const bool flushed = FlushStacks();
-    return flushed || !stripes.IsEmpty() || terminate.Resurrected();
+    return flushed || !stripes.IsEmpty();
 }
 
 bool MarkDomain::TryEnd()
 {
-    if (terminate.Resurrected()) {
-        return false;
-    }
     (void)FlushStacks();
     return stripes.IsEmpty();
 }

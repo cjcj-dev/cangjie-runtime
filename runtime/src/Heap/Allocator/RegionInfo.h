@@ -2662,7 +2662,6 @@ public:
         // Start of a mark cycle for this region: live=0 is authoritative until proven otherwise.
         __atomic_store_n(&metadata.liveByteCount, LIVE_AUTHORITY_BIT, std::memory_order_release);
         __atomic_store_n(&metadata.liveObjectCount, 0, __ATOMIC_RELEASE);
-        __atomic_store_n(&metadata.largeLiveClaim, 0, __ATOMIC_RELEASE);
 
         SetMarkFaceSealed(false);
     }
@@ -3005,7 +3004,6 @@ public:
         SetResurrectedRegionFlag(0);
         __atomic_store_n(&metadata.liveByteCount, LIVE_AUTHORITY_BIT, std::memory_order_release);
         __atomic_store_n(&metadata.liveObjectCount, 0, __ATOMIC_RELEASE);
-        __atomic_store_n(&metadata.largeLiveClaim, 0, __ATOMIC_RELEASE);
 
         metadata.markStartAllocPtr = 0;
         BumpSnapshotEpoch();
@@ -3436,7 +3434,6 @@ public:
         // densify rebuild: clear byte counter only (mark face rewritten in place next).
         __atomic_store_n(&metadata.liveByteCount, LIVE_AUTHORITY_BIT, std::memory_order_release);
         __atomic_store_n(&metadata.liveObjectCount, 0, __ATOMIC_RELEASE);
-        __atomic_store_n(&metadata.largeLiveClaim, 0, __ATOMIC_RELEASE);
 
     }
 
@@ -3457,7 +3454,6 @@ public:
         ClearCurrentMarkFace();
         __atomic_store_n(&metadata.liveByteCount, LIVE_AUTHORITY_BIT, std::memory_order_release);
         __atomic_store_n(&metadata.liveObjectCount, 0, __ATOMIC_RELEASE);
-        __atomic_store_n(&metadata.largeLiveClaim, 0, __ATOMIC_RELEASE);
 
         if (IsLargeRegion()) {
             SetMarkedRegionFlag(view, 0);
@@ -3674,7 +3670,6 @@ private:
         // Monotonic within a retained-snapshot cycle: only successful
         // Preserve arms it; old-mark start or region-life bump disarms it.
         uint8_t retainedEverPreserved = 0;
-        uint8_t largeLiveClaim = 0;
         // Per-current-page live objects, alongside liveByteCount. This uses
         // the padding before retainedLiveInfoEpoch (the size guard below
         // still checks the complete UnitInfo layout).
@@ -4032,7 +4027,6 @@ private:
         metadata.censusBoundaryOffset = 0;
         __atomic_store_n(&metadata.liveByteCount, 0, std::memory_order_release);
         __atomic_store_n(&metadata.liveObjectCount, 0, __ATOMIC_RELEASE);
-        __atomic_store_n(&metadata.largeLiveClaim, 0, __ATOMIC_RELEASE);
         metadata.liveInfo = nullptr;
         ClearCurrentMarkFace();
         FreeCompactRouteTable();

@@ -36,8 +36,6 @@ public:
     bool Saturated() const;
     bool Terminated() const;
     size_t WorkerCount() const;
-    void SetResurrected(bool value) { resurrected.store(value, std::memory_order_relaxed); }
-    bool Resurrected() const { return resurrected.load(std::memory_order_relaxed); }
 
 private:
     void MaybeReduceStripes(MarkStripeSet& stripes, size_t usedNStripes);
@@ -47,7 +45,6 @@ private:
     size_t working = 0;
     size_t awakening = 0;
     bool terminated = false;
-    std::atomic<bool> resurrected{ false };
     mutable std::mutex mutex;
     std::condition_variable condition;
 };
