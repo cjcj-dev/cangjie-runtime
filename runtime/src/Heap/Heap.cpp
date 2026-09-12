@@ -30,6 +30,7 @@ Barrier** Heap::currentBarrierPtr = nullptr;
 Barrier* Heap::stwBarrierPtr = nullptr;
 MAddress Heap::heapStartAddr = 0;
 MAddress Heap::heapCurrentEnd = 0;
+std::vector<HeapSlotAddressRange> Heap::heapReservations;
 
 void Heap::CheckHeapStartAlignment(MAddress startAddr)
 {

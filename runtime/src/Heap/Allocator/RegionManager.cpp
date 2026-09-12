@@ -104,6 +104,8 @@ void Report(size_t listRegions, size_t listBytes)
 uintptr_t RegionInfo::UnitInfo::totalUnitCount = 0;
 uintptr_t RegionInfo::UnitInfo::heapStartAddress = 0;
 MemMap* RegionInfo::UnitInfo::memoryOwner = nullptr;
+std::vector<RegionInfo::UnitSegment> RegionInfo::unitSegments;
+ZGranuleMap<RegionInfo*> RegionInfo::pageOwners;
 
 std::atomic<size_t> RegionInfo::youngRegionCount { 0 };
 std::atomic<size_t> RegionInfo::dispelGhostCount { 0 };

@@ -49,6 +49,7 @@
 #include "Heap/Verify/FromPageDetachCheck.h"
 #include "Heap/Allocator/ForwardingTable.h"
 #include "Heap/Allocator/MemMap.h"
+#include "Heap/Allocator/ZGranuleMap.h"
 
 #include "Heap/Verify/M0Correlation.h"
 #include "Base/TimeUtils.h"
@@ -100,13 +101,9 @@ private:
 // sizeof(RegionInfo) must be equal to sizeof(UnitInfo). We rely on this fact to calculate region-related address.
 
 
-/*
-    the layout of unitInfo(UI) and unit(U):
-    ...|UI(n+2)|UI(n+1)|UI(n)|.........|.........|U(n)|U(n+1)|U(n+2)|...
-                       ↑               ↑         ↑
-                  RegionInfo  heapStartAddress  Region
-    the offset of unit index and unitInfo index is 1
-*/
+// Metadata ABI: UI(i) is stored below the exported heapStartAddress anchor at
+// anchor - (i + 1) * sizeof(UnitInfo). The anchor is the metadata array end;
+// payload addresses come from unitSegments, independently of this array.
 // region info is stored in the metadata of its primary unit (i.e. the first unit).
 class RegionInfo {
     // The table serializes publication/unbinding of this facade's owner.
@@ -1861,8 +1858,8 @@ public:
         size_t firstIndex;
     };
 
-    inline static std::vector<UnitSegment> unitSegments;
-    inline static ZGranuleMap<RegionInfo*> pageOwners;
+    static std::vector<UnitSegment> unitSegments;
+    static ZGranuleMap<RegionInfo*> pageOwners;
 
     static size_t IndexedUnitCount(const std::vector<MemoryRange>& ranges)
     {
@@ -2039,13 +2036,14 @@ public:
     {
         uintptr_t unitAddress = RegionInfo::GetUnitAddress(idx);
         size_t size = cnt * RegionInfo::UNIT_SIZE;
+        CHECK(ContainsUnitRange(unitAddress, size));
         RegionInfo* wipeRegion = RegionInfo::TryGetRegionInfoAt(unitAddress);
         WaitCopiedBeforePayloadWipe(wipeRegion, "ClearUnits");
         CHECK_DETAIL(FromPageDetach::FromPageDetachCheck(wipeRegion,
                                                         FromPageDetach::Site::CLEAR_UNITS),
                      "CJRT_FROM_REUSE_GATE bypass reached ClearUnits idx=%zu units=%zu", idx, cnt);
         DLOG(REGION, "clear dirty units[%zu+%zu, %zu) @[%#zx+%zu, %#zx)", idx, cnt, idx + cnt, unitAddress, size,
-             RegionInfo::GetUnitAddress(idx + cnt));
+             unitAddress + size);
         // gcfwdfix: ring of zeroed ranges for WAS_LIVE_BEFORE_CLEAR (MRT_GCV2_TRACE_CLEAR=1).
         TraceClear::NoteRange(static_cast<MAddress>(unitAddress), size, "clear_units", nullptr, 0);
 
@@ -2085,13 +2083,14 @@ public:
 #endif
         void* unitAddress = reinterpret_cast<void*>(RegionInfo::GetUnitAddress(idx));
         size_t size = cnt * RegionInfo::UNIT_SIZE;
+        CHECK(ContainsUnitRange(unitAddress, size));
         RegionInfo* wipeRegion = RegionInfo::TryGetRegionInfoAt(reinterpret_cast<uintptr_t>(unitAddress));
         WaitCopiedBeforePayloadWipe(wipeRegion, "ReleaseUnits");
         CHECK_DETAIL(FromPageDetach::FromPageDetachCheck(wipeRegion,
                          FromPageDetach::Site::RELEASE_UNITS),
                      "CJRT_FROM_REUSE_GATE bypass reached ReleaseUnits idx=%zu units=%zu", idx, cnt);
         DLOG(REGION, "release physical memory for units [%zu+%zu, %zu) @[%p+%zu, 0x%zx)", idx, cnt, idx + cnt,
-             unitAddress, size, RegionInfo::GetUnitAddress(idx + cnt));
+             unitAddress, size, unitAddress + size);
         const size_t released = UnitInfo::memoryOwner == nullptr ? 0 :
                                 UnitInfo::memoryOwner->ReleaseMemory(unitAddress, size);
 #ifdef CANGJIE_ASAN_SUPPORT
@@ -3745,8 +3744,8 @@ private:
         //
         // Durability, and the reason this works at all: UnitInfo lives BELOW heapStartAddress
         // (UnitInfo::GetUnitInfo returns heapStartAddress - (idx + 1) * sizeof(UnitInfo)),
-        // while ClearUnits MemorySets and ReleaseUnits madvises only payload at
-        // heapStartAddress + idx * UNIT_SIZE. A flag in UnitMetadata therefore survives both
+        // while ClearUnits and ReleaseUnits touch only the payload returned by
+        // GetUnitAddress(idx). A flag in UnitMetadata therefore survives both
         // zeroing writers. Do not "fix" this on the assumption that ClearUnits wipes it.
         //
         // Placement: deliberately here, in the padding after retainedLastOp and before the
@@ -3835,7 +3834,7 @@ private:
     class UnitInfo {
     public:
         // propgated from RegionManager
-        static uintptr_t heapStartAddress; // the address of the first region space to allocate objects
+        static uintptr_t heapStartAddress; // exported ABI anchor: end of the reverse metadata array
         static size_t totalUnitCount;
         static MemMap* memoryOwner;
         constexpr static uint32_t INVALID_IDX = std::numeric_limits<uint32_t>::max();
@@ -3875,7 +3874,10 @@ private:
         {
             uintptr_t ptr = reinterpret_cast<uintptr_t>(unit);
             if (ptr < heapStartAddress) {
-                return (heapStartAddress - ptr) / sizeof(UnitInfo) - 1;
+                const size_t distance = heapStartAddress - ptr;
+                if (distance % sizeof(UnitInfo) == 0 && distance / sizeof(UnitInfo) <= totalUnitCount) {
+                    return distance / sizeof(UnitInfo) - 1;
+                }
             }
 
             LOG(RTLOG_FATAL, "UnitInfo::GetUnitIdx() Should not execute here, abort.");
@@ -4024,6 +4026,7 @@ private:
     // bracket can be reordered with the payload stores between them.
     void InitRegionInfo(size_t nUnit, UnitRole uClass)
     {
+        CHECK(ContainsUnitRange(GetRegionStart(), nUnit * UNIT_SIZE));
         CHECK_DETAIL(GetRegionListOwner() == nullptr, "reinitializing a region still owned by a list");
         CHECK_DETAIL(FromPageDetach::FromPageDetachCheck(this, FromPageDetach::Site::INIT_REGION_INFO),
                      "CJRT_FROM_REUSE_GATE bypass reached InitRegionInfo region=%p units=%zu", this, nUnit);
@@ -4095,7 +4098,6 @@ private:
         __atomic_store_n(&metadata.rawPointerObjectCount, 0, __ATOMIC_SEQ_CST);
         SetUnitRole(uClass);
         zoffset offset;
-        CHECK(ContainsUnitRange(GetRegionStart(), nUnit * UNIT_SIZE));
         CHECK(pageOwners.offset_for_address(GetRegionStart(), &offset));
         pageOwners.put(offset, nUnit * UNIT_SIZE, this);
     }
