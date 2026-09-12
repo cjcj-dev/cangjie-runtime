@@ -300,8 +300,9 @@ GC_TEST(ForwardingNoGeometry, ForwardImplTryLockCopiesWithoutPrebuiltMapping)
     fx.region0->PublishForwardingCarrier(fx.region0->GetMarkView<Generation::Old>());
     BaseObject* copyFrom = fx.PlaceObject(fx.region0->GetRegionStart() + 128);
     fx.region0->SetRegionAllocPtr(reinterpret_cast<MAddress>(copyFrom) + 64);
+    BaseObject* seedTo = fx.PlaceObject(fx.region1->GetRegionStart() + 128);
     fx.region1->SetRegionType(RegionInfo::RegionType::THREAD_LOCAL_REGION);
-    fx.region1->SetRegionAllocPtr(fx.region1->GetRegionStart());
+    fx.region1->SetRegionAllocPtr(reinterpret_cast<MAddress>(seedTo) + 64);
     AllocBuffer* buffer = AllocBuffer::GetOrCreateAllocBuffer();
     buffer->SetRegion(fx.region1);
     const MAddress copyFromAddr = reinterpret_cast<MAddress>(copyFrom);
