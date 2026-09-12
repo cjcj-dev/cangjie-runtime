@@ -44,11 +44,11 @@ public:
     // an array whose only root was RawArray+8 went unmarked and its region was
     // reclaimed under it.
     bool ProcessOne(const RootVisitor& visitor, Mutator& mutator,
-                    const DerivedPtrVisitor* derivedPtrVisitor = nullptr);
+                    const DerivedPtrVisitor* derivedPtrVisitor = nullptr, bool young = false);
 
     // Drain remaining frames.
     void ProcessAll(const RootVisitor& visitor, Mutator& mutator,
-                    const DerivedPtrVisitor* derivedPtrVisitor = nullptr);
+                    const DerivedPtrVisitor* derivedPtrVisitor = nullptr, bool young = false);
 
     // Resume from a watermark-published frame index (stackwm #1).
     // Replays stub bookkeeping for frames [0, resumeIndex) so RegSlotsMap matches a
@@ -61,7 +61,8 @@ public:
 
     // Shared per-frame dispatch used by the legacy full-stack loop and this cursor.
     static void ProcessFrame(const FrameInfo& frame, RegSlotsMap& regSlotsMap, const RootVisitor& visitor,
-                             Mutator& mutator, const DerivedPtrVisitor* derivedPtrVisitor = nullptr);
+                             Mutator& mutator, const DerivedPtrVisitor* derivedPtrVisitor = nullptr,
+                             bool young = false);
 
 private:
     std::vector<FrameInfo> frames;

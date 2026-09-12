@@ -284,6 +284,7 @@ public:
     {}
 
     ~TracingCollector() override = default;
+    MarkDomain* MajorMarkDomain() const { return majorMarkDomain.get(); }
     virtual void PreGarbageCollection(bool isConcurrent, uint64_t gcIndex);
     virtual void PostGarbageCollection(uint64_t gcIndex);
 
@@ -292,11 +293,12 @@ public:
     static size_t CurrentThreadRootMapMissCount();
 
     static void VisitHeapReferencesOnStack(const RootVisitor& rootVisitor, const DerivedPtrVisitor& derivedPtrVisitor,
-                                           RegSlotsMap& regSlotsMap, const FrameInfo& frame, Mutator& mutator);
+                                           RegSlotsMap& regSlotsMap, const FrameInfo& frame, Mutator& mutator,
+                                           bool young = false);
 
     static void VisitHeapReferencesOnStack(const RootVisitor& regRootVisitor, const RootVisitor& slotRootVisitor,
                                            const DerivedPtrVisitor& derivedPtrVisitor, RegSlotsMap& regSlotsMap,
-                                           const FrameInfo& frame, Mutator& mutator);
+                                           const FrameInfo& frame, Mutator& mutator, bool young = false);
 
     static void RecordStubCalleeSaved(RegSlotsMap& regSlotsMap, Uptr fp);
 #ifdef __arm__
@@ -463,9 +465,9 @@ public:
 
     void RunGarbageCollection(uint64_t, GCReason) override = 0;
 
-    void TransitionToGCPhase(const GCPhase phase, const bool)
+    void TransitionToGCPhase(const GCPhase phase, const bool, bool young = false)
     {
-        MutatorManager::Instance().TransitionAllMutatorsToGCPhase(phase);
+        MutatorManager::Instance().TransitionAllMutatorsToGCPhase(phase, young);
         RegionInfo::AdvanceCompactRouteTableGracePeriod();
     }
 
@@ -559,6 +561,7 @@ protected:
     void DoEnumeration(WorkStack& workStack, WorkStack& foreignRootsSet);
     void DoTracing(WorkStack& workStack, WorkStack& foreignRootsSet);
     bool FinishOldMark(WorkStack& workStack);
+    bool FlushMarkProducers(MarkDomain* domain);
     void ProcessOldNonStrongReferences(WorkStack& workStack);
 
     // concurrent marking.

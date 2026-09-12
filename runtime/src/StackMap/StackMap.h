@@ -66,12 +66,15 @@ public:
     }
 
     // ATTENTION: VisitRegRoots VisitSlotRoots VisitDerivedPtr must be invoked in a fixed order
-    virtual bool VisitRegRoots(const RootVisitor& visitor, const RegDebugVisitor& debugFunc, RegSlotsMap& regSlotsMap)
+    virtual bool VisitRegRoots(const RootVisitor& visitor, const RegDebugVisitor& debugFunc, RegSlotsMap& regSlotsMap,
+                              bool young = false)
     {
+        (void)young;
         return regRoot.VisitGCRoots(visitor, debugFunc, regSlotsMap);
     }
-    virtual void VisitSlotRoots(const RootVisitor& visitor, const SlotDebugVisitor& debugFunc)
+    virtual void VisitSlotRoots(const RootVisitor& visitor, const SlotDebugVisitor& debugFunc, bool young = false)
     {
+        (void)young;
         slotRoot.VisitGCRoots(visitor, debugFunc, stackBase);
     }
 
@@ -109,18 +112,19 @@ public:
         return *this;
     }
     ~HeapReferenceMap() override = default;
-    bool VisitRegRoots(const RootVisitor& visitor, const RegDebugVisitor& debugFunc, RegSlotsMap& regSlotsMap) override
+    bool VisitRegRoots(const RootVisitor& visitor, const RegDebugVisitor& debugFunc, RegSlotsMap& regSlotsMap,
+                       bool young = false) override
     {
-        RootVisitor oopVisitor = [](ObjectRef& root) { VisitTaggedOopSlot(root); };
+        RootVisitor oopVisitor = [young](ObjectRef& root) { VisitTaggedOopSlot(root, young); };
         bool ok = regRoot.VisitGCRoots(visitor, debugFunc, regSlotsMap, &rootsList);
         oopRegRoot.VisitGCRoots(oopVisitor, debugFunc, regSlotsMap, &rootsList);
         return ok;
     }
 
-    void VisitSlotRoots(const RootVisitor& visitor, const SlotDebugVisitor& debugFunc) override
+    void VisitSlotRoots(const RootVisitor& visitor, const SlotDebugVisitor& debugFunc, bool young = false) override
     {
         slotRoot.VisitGCRoots(visitor, debugFunc, stackBase, &rootsList);
-        RootVisitor oopVisitor = [](ObjectRef& root) { VisitTaggedOopSlot(root); };
+        RootVisitor oopVisitor = [young](ObjectRef& root) { VisitTaggedOopSlot(root, young); };
         oopSlotRoot.VisitGCRoots(oopVisitor, debugFunc, stackBase, &rootsList);
     }
 

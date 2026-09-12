@@ -79,6 +79,10 @@ public:
     MarkThreadLocalStacks& Stacks(size_t workerId) { return *stacks[workerId]; }
     size_t NWorkers() const { return nworkers; }
     size_t TargetNStripes() const { return targetNStripes; }
+    bool FlushStacks();
+    bool TryTerminateFlush();
+    bool TryEnd();
+    VerifyMarkingStacks::MarkingGeneration Generation() const { return generation; }
 
 private:
     void EnsureWorkers(size_t nworkers);

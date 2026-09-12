@@ -578,15 +578,15 @@ void TracingCollector::DiscoverWeakReference(BaseObject* reference, WorkStack& w
 
 void TracingCollector::VisitHeapReferencesOnStack(const RootVisitor& rootVisitor,
                                                   const DerivedPtrVisitor& derivedPtrVisitor, RegSlotsMap& regSlotsMap,
-                                                  const FrameInfo& frame, Mutator& mutator)
+                                                  const FrameInfo& frame, Mutator& mutator, bool young)
 {
-    VisitHeapReferencesOnStack(rootVisitor, rootVisitor, derivedPtrVisitor, regSlotsMap, frame, mutator);
+    VisitHeapReferencesOnStack(rootVisitor, rootVisitor, derivedPtrVisitor, regSlotsMap, frame, mutator, young);
 }
 
 void TracingCollector::VisitHeapReferencesOnStack(const RootVisitor& regRootVisitor,
                                                   const RootVisitor& slotRootVisitor,
                                                   const DerivedPtrVisitor& derivedPtrVisitor, RegSlotsMap& regSlotsMap,
-                                                  const FrameInfo& frame, Mutator& mutator)
+                                                  const FrameInfo& frame, Mutator& mutator, bool young)
 {
     uintptr_t startIP = reinterpret_cast<uintptr_t>(frame.GetStartProc());
     uintptr_t frameIP = reinterpret_cast<uintptr_t>(frame.mFrame.GetIP());
@@ -621,14 +621,14 @@ void TracingCollector::VisitHeapReferencesOnStack(const RootVisitor& regRootVisi
 #endif
     DLOG(ENUM, "visit heap-ref 0x%zx-@0x%zx, fp 0x%zx", startIP, frameIP, frameAddress);
     if (heapMap.IsValid()) {
-        if (!heapMap.VisitRegRoots(regRootVisitor, regDebugFunc, regSlotsMap)) {
+        if (!heapMap.VisitRegRoots(regRootVisitor, regDebugFunc, regSlotsMap, young)) {
 #if defined(GCINFO_DEBUG) && GCINFO_DEBUG
             mutator.PushFrameInfoForFix(infoNode);
 #endif
             LOG(RTLOG_FATAL, "wrong reg info, start ip: %p frame pc: %p", reinterpret_cast<void*>(startIP),
                 reinterpret_cast<void*>(frameIP));
         }
-        heapMap.VisitSlotRoots(slotRootVisitor, slotDebugFunc);
+        heapMap.VisitSlotRoots(slotRootVisitor, slotDebugFunc, young);
         // VisitDerivedPtr must be invoked after VisitRegRoots and VisitSlotRoots;
         heapMap.VisitDerivedPtr(derivedPtrVisitor, derivedPtrDebugFunc, regSlotsMap);
     } else {
@@ -699,7 +699,9 @@ void TracingCollector::MergeMutatorRoots(WorkStack& workStack)
     MutatorManager& mutatorManager = MutatorManager::Instance();
     // hold mutator list lock to freeze mutator liveness, otherwise may access dead mutator fatally
     mutatorManager.MutatorManagementWLock();
-    theAllocator.VisitAllocBuffers([&workStack](AllocBuffer& buffer) { buffer.MergeRoots(workStack); });
+    theAllocator.VisitAllocBuffers([&workStack](AllocBuffer& buffer) {
+        buffer.MergeRootsGeneration(workStack, false);
+    });
     mutatorManager.MutatorManagementWUnlock();
 }
 
@@ -920,7 +922,7 @@ void TracingCollector::ProcessOldNonStrongReferences(WorkStack& workStack)
     // zGeneration.cpp:1344-1373: finish in-flight weak loads before unblocking.
     // A serial driver and synchronous GCWorkers::Run have already joined GC
     // work here; mutators (including the finalizer thread) need a rendezvous.
-    MutatorManager::Instance().RunEpochHandshake("old non-strong references");
+    MutatorManager::Instance().RunEpochHandshake("old non-strong references", false);
     collectorResources.UnblockResurrection();
     collectorResources.GetFinalizerProcessor().EnqueueReferences();
 }
@@ -940,13 +942,17 @@ bool TracingCollector::FinishOldMark(WorkStack& workStack)
                 continue;
             }
         }
+        bool more = FlushMarkProducers(majorMarkDomain.get());
+        if (more) {
+            continue;
+        }
         bool terminated;
         {
             ScopedStopTheWorld stw("old mark end", true, GC_PHASE_CLEAR_SATB_BUFFER);
             NoteMarkTerminatePause();
             const size_t before = stripes.Population();
             StoreBarrierBuffer::FlushAll(Heap::GetHeap().GetRememberedSet());
-            MutatorManager::Instance().VisitAllMutators([](Mutator& mutator) { mutator.FlushStoreBarrierBuffer(false); });
+            (void)MutatorManager::Instance().HandshakeFlushMarkProducers(majorMarkDomain.get());
             const size_t after = stripes.Population();
             NoteMarkTerminateFlushed(after >= before ? after - before : 0);
             terminated = workStack.empty() && stripes.IsEmpty();
@@ -971,6 +977,18 @@ bool TracingCollector::FinishOldMark(WorkStack& workStack)
 void TracingCollector::ConcurrentReMark(WorkStack& remarkStack)
 {
     CHECK_DETAIL(FinishOldMark(remarkStack), "not cleared\n");
+}
+
+bool TracingCollector::FlushMarkProducers(MarkDomain* domain)
+{
+    if (domain != nullptr) {
+        domain->Terminate().SetResurrected(false);
+    }
+    bool flushed = MutatorManager::Instance().HandshakeFlushMarkProducers(domain);
+    if (domain != nullptr) {
+        flushed = domain->FlushStacks() || flushed || !domain->Stripes().IsEmpty();
+    }
+    return flushed;
 }
 
 void TracingCollector::DoResurrection(WorkStack& workStack)

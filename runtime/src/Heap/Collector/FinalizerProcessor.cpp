@@ -8,6 +8,7 @@
 #include "Collector/FinalizerProcessor.h"
 
 #include <algorithm>
+#include <chrono>
 #include "Base/Macros.h"
 #include "Collector/Uncommitter.h"
 #include "Common/ScopedObjectAccess.h"
@@ -16,6 +17,7 @@
 #include "Heap/Allocator/HeapFiller.h"
 #include "Heap/Barrier/Barrier.h"
 #include "Mutator/Mutator.h"
+#include "Mutator/MutatorManager.h"
 #include "ObjectModel/MObject.h"
 #include "CjScheduler.h"
 
@@ -196,17 +198,32 @@ void FinalizerProcessor::Notify()
 void FinalizerProcessor::Wait()
 {
     std::unique_lock<std::mutex> lock(wakeLock);
-    wakeCondition.wait(lock, [this] {
-        return !running.load(std::memory_order_acquire) ||
-            HasFinalizableJob() ||
-            shouldReclaimHeapGarbage.load(std::memory_order_acquire) ||
-            shouldFeedHungryBuffers.load(std::memory_order_acquire);
-    });
+    while (running.load(std::memory_order_acquire) &&
+           !HasFinalizableJob() &&
+           !shouldReclaimHeapGarbage.load(std::memory_order_acquire) &&
+           !shouldFeedHungryBuffers.load(std::memory_order_acquire)) {
+        lock.unlock();
+        if (MutatorManager::Instance().MarkFlushHandshakeActive()) {
+            (void)MutatorManager::Instance().AcknowledgeMarkFlushForCurrentThread();
+        }
+        lock.lock();
+        wakeCondition.wait_for(lock, std::chrono::milliseconds(1), [this] {
+            return !running.load(std::memory_order_acquire) ||
+                HasFinalizableJob() ||
+                shouldReclaimHeapGarbage.load(std::memory_order_acquire) ||
+                shouldFeedHungryBuffers.load(std::memory_order_acquire);
+        });
+    }
 }
 
 void FinalizerProcessor::Wait(U32 timeoutMilliSeconds)
 {
     std::unique_lock<std::mutex> lock(wakeLock);
+    lock.unlock();
+    if (MutatorManager::Instance().MarkFlushHandshakeActive()) {
+        (void)MutatorManager::Instance().AcknowledgeMarkFlushForCurrentThread();
+    }
+    lock.lock();
     std::chrono::milliseconds epoch(timeoutMilliSeconds);
     wakeCondition.wait_for(lock, epoch);
 }

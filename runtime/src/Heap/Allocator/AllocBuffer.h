@@ -53,28 +53,27 @@ public:
     void CommitRawPointerRegions();
 
     // Record roots while the mutator enumerates its stack concurrently with GC.
-    void PushRoot(BaseObject* root)
+    void PushRoot(BaseObject* root, bool young)
     {
         std::lock_guard<std::mutex> lock(handoffLock);
-        stackRoots.emplace_back(MarkStackEntry::MarkAndFollow(root));
+        (young ? stackRootsYoung : stackRootsOld).emplace_back(MarkStackEntry::MarkAndFollow(root));
     }
 
     // An incomplete large reference array is live but its dirty suffix must not
     // be traversed. This is ZUncoloredRoot::mark_invisible_object's DontFollow.
-    void PushInvisibleRoot(BaseObject* root)
+    void PushInvisibleRoot(BaseObject* root, bool young)
     {
         std::lock_guard<std::mutex> lock(handoffLock);
-        stackRoots.emplace_back(MarkStackEntry::MarkOnly(root));
+        (young ? stackRootsYoung : stackRootsOld).emplace_back(MarkStackEntry::MarkOnly(root));
     }
 
-    // move the stack roots to other container so that other threads can visit them.
     template<class WorkStack>
-    inline void MergeRoots(WorkStack& workStack)
+    inline void MergeRootsGeneration(WorkStack& workStack, bool young)
     {
         std::list<MarkStackEntry> pending;
         {
             std::lock_guard<std::mutex> lock(handoffLock);
-            pending.swap(stackRoots);
+            pending.swap(young ? stackRootsYoung : stackRootsOld);
         }
 #if defined(MRT_GC_UNIT_TESTS)
         FireHandoffHook(stackRootsHandoffHook, stackRootsHandoffHookContext);
@@ -273,7 +272,8 @@ private:
     RegionList tlRawPointerRegions;
     RegionList tlLargeRawPointerRegions;
     // Record stack roots in concurrent enum phase, waiting for GC to merge these roots
-    std::list<MarkStackEntry> stackRoots;
+    std::list<MarkStackEntry> stackRootsYoung;
+    std::list<MarkStackEntry> stackRootsOld;
     // youngconc allocate-black greys (see PushYoungAllocBlack)
     std::list<BaseObject*> youngAllocBlack;
     // h3seed2: mutator-local young→young dirty holders (see PushY2yDirtyHolder)

@@ -7,6 +7,7 @@
 
 #include "MutatorManager.h"
 
+#include <atomic>
 #include <thread>
 #include <cstdlib>
 #include <cstring>
@@ -16,6 +17,8 @@
 #include "Heap/Collector/FinalizerProcessor.h"
 #include "Heap/Collector/TracingCollector.h"
 #include "Heap/Heap.h"
+#include "Heap/WCollector/WCollector.h"
+#include "Handshake.h"
 #include "Mutator.inline.h"
 #include "UnwindStack/StackExposureHook.h"
 #include "schedule.h"
@@ -85,11 +88,13 @@ bool IsGcThread()
 
 extern "C" void HandleSafepoint(ThreadLocalData* tlData)
 {
+    Handshake::Current().process_by_self();
     Mutator* mutator = tlData->mutator;
-    // Current mutator enter saferegion
-    mutator->DoEnterSaferegion();
-    // Current mutator block before leaving saferegion
-    mutator->DoLeaveSaferegion();
+    if (mutator != nullptr) {
+        mutator->DoEnterSaferegion();
+        mutator->DoLeaveSaferegion();
+    }
+    UpdatePollValues(tlData);
     DLOG(SIGNAL, "HandleSafepoint, thread restarted.");
 }
 
@@ -99,11 +104,13 @@ extern "C" void HandleSafepointForArm(ThreadLocalData* tlData)
     if (tlData->safepointState == 0) {
         return;
     }
+    Handshake::Current().process_by_self();
     Mutator* mutator = tlData->mutator;
-    // Current mutator enter saferegion
-    mutator->DoEnterSaferegion();
-    // Current mutator block before leaving saferegion
-    mutator->DoLeaveSaferegion();
+    if (mutator != nullptr) {
+        mutator->DoEnterSaferegion();
+        mutator->DoLeaveSaferegion();
+    }
+    UpdatePollValues(tlData);
     DLOG(SIGNAL, "HandleSafepoint, thread restarted.");
 }
 #endif
@@ -114,10 +121,9 @@ void MutatorManager::BindMutator(Mutator& mutator) const
     if (UNLIKELY(tlData->buffer == nullptr)) {
         (void)AllocBuffer::GetOrCreateAllocBuffer();
     }
-    mutator.SetMarkFlushAllocBuffer(tlData->buffer);
-    mutator.SetSafepointStatePtr(&tlData->safepointState);
-    mutator.SetSafepointActive(false);
+    MutatorManager::Instance().RegisterMarkFlushThread(tlData);
     tlData->SetMutator(&mutator);
+    UpdatePollValues(tlData);
 }
 
 void MutatorManager::UnbindMutator(Mutator& mutator) const
@@ -125,8 +131,7 @@ void MutatorManager::UnbindMutator(Mutator& mutator) const
     ThreadLocalData* tlData = ThreadLocal::GetThreadLocalData();
     MRT_ASSERT(tlData->mutator == &mutator, "mutator in ThreadLocalData doesn't match in cjthread");
     tlData->SetMutator(nullptr);
-    mutator.SetMarkFlushAllocBuffer(nullptr);
-    mutator.SetSafepointStatePtr(nullptr);
+    UpdatePollValues(tlData);
 }
 
 Mutator* MutatorManager::CreateMutator()
@@ -183,6 +188,7 @@ void MutatorManager::DestroyExpiredMutators()
 
 void MutatorManager::DestroyMutator(Mutator* mutator)
 {
+    ConsumeCpuProfileRequest(mutator);
     // dynjoin: while an epoch handshake is active, never free a participant (or a
     // racing create) under the old R-lock path — that used to be serialised by the
     // full-handshake W-lock. Defer to expiringMutators; PostGC drains them.
@@ -268,6 +274,8 @@ void MutatorManager::DestroyRuntimeMutator(ThreadType threadType)
         std::lock_guard<std::mutex> lock(runtimeMutatorRegistryMutex);
         runtimeMutators.erase(mutator);
     }
+    ThreadLocalData* tls = ThreadLocal::GetThreadLocalData();
+    UnregisterMarkFlushThread(tls);
     ThreadLocal::SetAllocBuffer(nullptr);
     ThreadLocal::SetCJProcessorFlag(false);
     if (threadType != ThreadType::FP_THREAD) {
@@ -419,7 +427,7 @@ size_t MutatorManager::RuntimeMutatorRegistrySizeForTest()
 }
 #endif
 
-EpochHandshakeStats MutatorManager::RunEpochHandshake(const char* source)
+EpochHandshakeStats MutatorManager::RunEpochHandshake(const char* source, bool young)
 {
     EpochHandshakeStats stats;
     if (!EpochHandshakeEnabled()) {
@@ -490,8 +498,27 @@ EpochHandshakeStats MutatorManager::RunEpochHandshake(const char* source)
         if (mutator->FinishedEpochHandshake(stats.epoch)) {
             continue;
         }
-        mutator->RequestEpochHandshake(stats.epoch);
+        mutator->RequestEpochHandshake(stats.epoch, young);
     }
+    class EpochHandshakeClosure : public HandshakeClosure {
+    public:
+        EpochHandshakeClosure(uint64_t epoch, bool young)
+            : HandshakeClosure("Epoch"), epoch_(epoch), young_(young) {}
+        void do_thread(ThreadLocalData* tls) override
+        {
+            (void)young_;
+            Mutator* mutator = tls != nullptr ? tls->mutator : nullptr;
+            if (mutator == nullptr) {
+                return;
+            }
+            bool bySelf = tls == ThreadLocal::GetThreadLocalData();
+            (void)mutator->AcknowledgeEpochHandshake(epoch_, bySelf);
+        }
+    private:
+        uint64_t epoch_;
+        bool young_;
+    } epochCl(stats.epoch, young);
+    Handshake::execute(&epochCl);
 
     uint64_t waitStart = TimeUtil::MilliSeconds();
     bool runningMutatorsHadSelfOpportunity = false;
@@ -583,7 +610,7 @@ EpochHandshakeStats MutatorManager::RunEpochHandshake(const char* source)
 
 extern "C" MRT_EXPORT uint64_t MRT_RunEpochHandshake()
 {
-    return MutatorManager::Instance().RunEpochHandshake("explicit").epoch;
+    return MutatorManager::Instance().RunEpochHandshake("explicit", true).epoch;
 }
 
 void MutatorManager::AcquireMutatorManagementWLock()
@@ -654,6 +681,331 @@ void MutatorManager::VisitAllMutators(MutatorVisitor func)
 void MutatorManager::VisitAllMutatorsExceptFinalizer(MutatorVisitor func)
 {
     ScheduleAllCJThreadVisitMutator(VisitMuatorHelper, &func);
+}
+
+thread_local MutatorManager::MarkFlushThread* tlMarkFlushSelf = nullptr;
+
+namespace {
+
+bool FlushTlsMarkProducers(ThreadLocalData* tls, MarkDomain* domain)
+{
+    if (tls == nullptr) {
+        return false;
+    }
+    bool published = false;
+    AllocBuffer* buffer = tls->buffer;
+    RememberedSet* rememberedSet = &Heap::GetHeap().GetRememberedSet();
+    if (buffer != nullptr && rememberedSet->IsInitialized()) {
+        buffer->GetStoreBarrierBuffer().Flush(*rememberedSet);
+    }
+    if (buffer != nullptr) {
+        auto& collector = static_cast<WCollector&>(Heap::GetHeap().GetCollector());
+        if (collector.FlushAllocBufferMarkProducers(buffer, domain)) {
+            published = true;
+        }
+    }
+    return published;
+}
+
+bool FlushTlsMarkProducersDetach(ThreadLocalData* tls)
+{
+    if (tls == nullptr) {
+        return false;
+    }
+    bool published = false;
+    AllocBuffer* buffer = tls->buffer;
+    RememberedSet* rememberedSet = &Heap::GetHeap().GetRememberedSet();
+    if (buffer != nullptr && rememberedSet->IsInitialized()) {
+        buffer->GetStoreBarrierBuffer().Flush(*rememberedSet);
+    }
+    if (buffer != nullptr) {
+        auto& collector = static_cast<WCollector&>(Heap::GetHeap().GetCollector());
+        if (collector.FlushAllocBufferMarkProducers(buffer)) {
+            published = true;
+        }
+    }
+    return published;
+}
+
+} // namespace
+
+HandshakeState* MutatorManager::HandshakeStateForTls(ThreadLocalData* tls)
+{
+    if (tls == nullptr) {
+        return nullptr;
+    }
+    std::lock_guard<std::mutex> lock(markFlushThreadMutex);
+    auto it = markFlushThreads.find(tls);
+    if (it == markFlushThreads.end()) {
+        return nullptr;
+    }
+    return it->second->handshake;
+}
+
+void MutatorManager::EnqueueHandshakeOnAll(HandshakeClosure* cl, std::list<HandshakeOperation*>& ops,
+                                           std::vector<MarkFlushThread*>& handle)
+{
+    std::lock_guard<std::mutex> lock(markFlushThreadMutex);
+    for (auto& kv : markFlushThreads) {
+        if (kv.first == nullptr || kv.second->dying.load(std::memory_order_acquire) != 0) {
+            continue;
+        }
+        HandshakeState* state = kv.second->handshake;
+        if (state == nullptr) {
+            kv.second->ownedHandshake = std::make_unique<HandshakeState>(kv.first);
+            kv.second->handshake = kv.second->ownedHandshake.get();
+            state = kv.second->handshake;
+        }
+        kv.second->refs.fetch_add(1, std::memory_order_acq_rel);
+        handle.push_back(kv.second.get());
+        auto* op = new HandshakeOperation(cl, kv.first);
+        state->add_operation(op);
+        ops.push_back(op);
+    }
+}
+
+void MutatorManager::EnqueueHandshakeOn(ThreadLocalData* target, HandshakeClosure* cl,
+                                        std::list<HandshakeOperation*>& ops, std::vector<MarkFlushThread*>& handle)
+{
+    if (target == nullptr || cl == nullptr) {
+        return;
+    }
+    std::lock_guard<std::mutex> lock(markFlushThreadMutex);
+    auto it = markFlushThreads.find(target);
+    if (it == markFlushThreads.end() || it->second->dying.load(std::memory_order_acquire) != 0) {
+        return;
+    }
+    HandshakeState* state = it->second->handshake;
+    if (state == nullptr) {
+        it->second->ownedHandshake = std::make_unique<HandshakeState>(it->first);
+        it->second->handshake = it->second->ownedHandshake.get();
+        state = it->second->handshake;
+    }
+    it->second->refs.fetch_add(1, std::memory_order_acq_rel);
+    handle.push_back(it->second.get());
+    auto* op = new HandshakeOperation(cl, it->first);
+    state->add_operation(op);
+    ops.push_back(op);
+}
+
+void MutatorManager::ReleaseHandshakeHandle(std::vector<MarkFlushThread*>& handle)
+{
+    for (MarkFlushThread* target : handle) {
+        if (target != nullptr) {
+            target->refs.fetch_sub(1, std::memory_order_acq_rel);
+        }
+    }
+    handle.clear();
+}
+
+void MutatorManager::DemandSuspensionForSync()
+{
+    VisitAllMutators([](Mutator& mutator) {
+        mutator.SetSuspensionFlag(Mutator::SuspensionType::SUSPENSION_FOR_SYNC);
+    });
+    ArmAllThreadPolls();
+    class SyncHandshakeClosure : public HandshakeClosure {
+    public:
+        SyncHandshakeClosure() : HandshakeClosure("STW") {}
+        void do_thread(ThreadLocalData* tls) override { (void)tls; }
+    } cl;
+    Handshake::execute(&cl);
+}
+
+bool MutatorManager::TlsObservedSafe(ThreadLocalData* tls)
+{
+    HandshakeState* state = HandshakeStateForTls(tls);
+    if (state == nullptr) {
+        return tls == ThreadLocal::GetThreadLocalData();
+    }
+    return state->observed_safe();
+}
+
+void MutatorManager::RegisterMarkFlushThread(ThreadLocalData* tls)
+{
+    if (tls == nullptr) {
+        return;
+    }
+    std::lock_guard<std::mutex> lock(markFlushThreadMutex);
+    auto& slot = markFlushThreads[tls];
+    if (slot == nullptr) {
+        slot = std::make_unique<MarkFlushThread>();
+        slot->tls = tls;
+        slot->ownedHandshake = std::make_unique<HandshakeState>(tls);
+        slot->handshake = slot->ownedHandshake.get();
+    }
+    if (slot->handshake == nullptr) {
+        slot->ownedHandshake = std::make_unique<HandshakeState>(tls);
+        slot->handshake = slot->ownedHandshake.get();
+    }
+    slot->handshake->set_handshakee(tls);
+    Handshake::BindCurrent(slot->handshake);
+    slot->dying.store(0, std::memory_order_release);
+    slot->bufferLive.store(1, std::memory_order_release);
+    if (tls == ThreadLocal::GetThreadLocalData()) {
+        tlMarkFlushSelf = slot.get();
+    }
+}
+
+void MutatorManager::UnregisterMarkFlushThread(ThreadLocalData* tls)
+{
+    if (tls == nullptr) {
+        return;
+    }
+    MarkFlushThread* target = nullptr;
+    {
+        std::lock_guard<std::mutex> lock(markFlushThreadMutex);
+        auto it = markFlushThreads.find(tls);
+        if (it == markFlushThreads.end()) {
+            if (tls == ThreadLocal::GetThreadLocalData()) {
+                tlMarkFlushSelf = nullptr;
+            }
+            return;
+        }
+        target = it->second.get();
+        target->dying.store(1, std::memory_order_release);
+        target->refs.fetch_add(1, std::memory_order_acq_rel);
+    }
+    HandshakeState* hs = target->handshake;
+    if (hs != nullptr) {
+        hs->process_queued_then_detach([](ThreadLocalData* t) { (void)FlushTlsMarkProducersDetach(t); });
+    } else {
+        (void)FlushTlsMarkProducersDetach(tls);
+    }
+    target->pending.store(0, std::memory_order_release);
+    target->bufferLive.store(0, std::memory_order_release);
+    target->inSafe.store(1, std::memory_order_release);
+    target->refs.fetch_sub(1, std::memory_order_acq_rel);
+    for (;;) {
+        {
+            std::lock_guard<std::mutex> lock(markFlushThreadMutex);
+            auto it = markFlushThreads.find(tls);
+            if (it == markFlushThreads.end()) {
+                break;
+            }
+            if (it->second->refs.load(std::memory_order_acquire) == 0) {
+                markFlushThreads.erase(it);
+                break;
+            }
+        }
+        std::this_thread::yield();
+    }
+    if (tls == ThreadLocal::GetThreadLocalData()) {
+        tlMarkFlushSelf = nullptr;
+        Handshake::BindCurrent(nullptr);
+    }
+}
+
+bool MutatorManager::TlsHasMarkFlushPending(ThreadLocalData* tls)
+{
+    if (tls == nullptr) {
+        return false;
+    }
+    if (tlMarkFlushSelf != nullptr && tlMarkFlushSelf->tls == tls) {
+        return tlMarkFlushSelf->pending.load(std::memory_order_acquire) != 0;
+    }
+    std::lock_guard<std::mutex> lock(markFlushThreadMutex);
+    auto it = markFlushThreads.find(tls);
+    if (it == markFlushThreads.end()) {
+        return false;
+    }
+    return it->second->pending.load(std::memory_order_acquire) != 0;
+}
+
+bool MutatorManager::AcknowledgeMarkFlushForTls(ThreadLocalData* tls)
+{
+    if (tls == nullptr) {
+        return false;
+    }
+    MarkFlushThread* target = nullptr;
+    {
+        std::lock_guard<std::mutex> lock(markFlushThreadMutex);
+        auto it = markFlushThreads.find(tls);
+        if (it != markFlushThreads.end()) {
+            target = it->second.get();
+            target->refs.fetch_add(1, std::memory_order_acq_rel);
+        }
+    }
+    if (target == nullptr) {
+        if (markFlushHandshakeActive.load(std::memory_order_acquire) == 0) {
+            return false;
+        }
+        return FlushTlsMarkProducers(tls, markFlushDomain.load(std::memory_order_acquire));
+    }
+    std::lock_guard<std::mutex> claim(target->mutex);
+    bool published = false;
+    if (markFlushHandshakeActive.load(std::memory_order_acquire) != 0 &&
+        target->pending.load(std::memory_order_acquire) != 0) {
+        if (target->bufferLive.load(std::memory_order_acquire) != 0) {
+            published = FlushTlsMarkProducers(tls, markFlushDomain.load(std::memory_order_acquire));
+        }
+        target->pending.store(0, std::memory_order_release);
+    }
+    UpdatePollValues(target->tls);
+    target->refs.fetch_sub(1, std::memory_order_acq_rel);
+    return published;
+}
+
+bool MutatorManager::AcknowledgeMarkFlushForCurrentThread()
+{
+    return AcknowledgeMarkFlushForTls(ThreadLocal::GetThreadLocalData());
+}
+
+bool MutatorManager::HandshakeFlushMarkProducers(MarkDomain* domain)
+{
+    bool flushed = false;
+    markFlushDomain.store(domain, std::memory_order_release);
+    if (WorldStopped()) {
+        {
+            std::lock_guard<std::mutex> lock(markFlushThreadMutex);
+            for (auto& entry : markFlushThreads) {
+                if (entry.second->bufferLive.load(std::memory_order_acquire) == 0) {
+                    continue;
+                }
+                if (FlushTlsMarkProducers(entry.first, domain)) {
+                    flushed = true;
+                }
+            }
+        }
+        markFlushDomain.store(nullptr, std::memory_order_release);
+        return flushed;
+    }
+
+    markFlushHandshakeActive.store(1, std::memory_order_release);
+    class MarkFlushHandshakeClosure : public HandshakeClosure {
+    public:
+        explicit MarkFlushHandshakeClosure(MarkDomain* d)
+            : HandshakeClosure("ZMarkFlushStacks"), domain_(d), flushed_(false) {}
+        void do_thread(ThreadLocalData* tls) override
+        {
+            if (FlushTlsMarkProducers(tls, domain_)) {
+                flushed_ = true;
+            }
+        }
+        bool flushed() const { return flushed_; }
+    private:
+        MarkDomain* domain_;
+        bool flushed_;
+    } cl(domain);
+    Heap::GetHeap().GetFinalizerProcessor().Notify();
+    Handshake::execute(&cl);
+    if (cl.flushed()) {
+        flushed = true;
+    }
+    markFlushHandshakeActive.store(0, std::memory_order_release);
+    markFlushDomain.store(nullptr, std::memory_order_release);
+    {
+        std::lock_guard<std::mutex> lock(markFlushThreadMutex);
+        for (auto it = markFlushThreads.begin(); it != markFlushThreads.end();) {
+            if (it->second->dying.load(std::memory_order_acquire) != 0 &&
+                it->second->refs.load(std::memory_order_acquire) == 0) {
+                it = markFlushThreads.erase(it);
+            } else {
+                ++it;
+            }
+        }
+    }
+    return flushed;
 }
 
 void MutatorManager::StopTheWorld(bool syncGCPhase, GCPhase phase)
@@ -784,9 +1136,9 @@ void MutatorManager::StartLightSync(bool syncGCPhase, GCPhase phase)
     // Broadcast mutator phase transition signal to all mutators
     VisitAllMutators([this](Mutator& mutator) {
         mutator.SetSuspensionFlag(Mutator::SuspensionType::SUSPENSION_FOR_GC_PHASE);
-        mutator.SetSafepointActive(true);
         this->undoneLightSyncMutators.push_back(&mutator);
     });
+    ArmAllThreadPolls();
 }
 
 void MutatorManager::StopLightSync() noexcept
@@ -889,7 +1241,7 @@ void MutatorManager::EnsurePhaseTransition(GCPhase phase, std::list<Mutator*> &u
     }
 }
 
-void MutatorManager::TransitionAllMutatorsToGCPhase(GCPhase phase)
+void MutatorManager::TransitionAllMutatorsToGCPhase(GCPhase phase, bool young)
 {
     // Try to occupy mutatorListLock prevent some mutators from exiting
     bool worldStopped = WorldStopped();
@@ -907,38 +1259,27 @@ void MutatorManager::TransitionAllMutatorsToGCPhase(GCPhase phase)
 
     std::list<Mutator*> undoneMutators;
     // Broadcast mutator phase transition signal to all mutators
-    VisitAllMutators([&undoneMutators](Mutator& mutator) {
+    VisitAllMutators([&undoneMutators, young](Mutator& mutator) {
+        mutator.SetEnumYoung(young);
         mutator.SetSuspensionFlag(Mutator::SuspensionType::SUSPENSION_FOR_GC_PHASE);
-        mutator.SetSafepointActive(true);
         undoneMutators.push_back(&mutator);
     });
+    class PhaseHandshakeClosure : public HandshakeClosure {
+    public:
+        PhaseHandshakeClosure() : HandshakeClosure("GCPhase") {}
+        void do_thread(ThreadLocalData* tls) override
+        {
+            Mutator* mutator = tls != nullptr ? tls->mutator : nullptr;
+            if (mutator == nullptr) {
+                return;
+            }
+            (void)mutator->TransitionGCPhase(tls == ThreadLocal::GetThreadLocalData());
+        }
+    } phaseCl;
+    Handshake::execute(&phaseCl);
     EnsurePhaseTransition(phase, undoneMutators);
     if (!worldStopped) {
         MutatorManagementWUnlock();
-    }
-}
-
-void MutatorManager::EnsureCpuProfileFinish(std::list<Mutator*> &undoneMutators)
-{
-    while (undoneMutators.size() > 0) {
-        for (auto it = undoneMutators.begin(); it != undoneMutators.end();) {
-            Mutator* mutator = *it;
-            if (mutator->FinishedCpuProfile()) {
-                it = undoneMutators.erase(it);
-                continue;
-            }
-            if (mutator->InSaferegion() && mutator->TransitionToCpuProfile(false)) {
-                it = undoneMutators.erase(it);
-                continue;
-            }
-            if (!CpuProfiler::GetInstance().GetGenerator().GetIsStart()) {
-                mutator->ClearSuspensionFlag(Mutator::SUSPENSION_FOR_CPU_PROFILE);
-                mutator->SetCpuProfileState(Mutator::FINISH_CPUPROFILE);
-                it = undoneMutators.erase(it);
-                continue;
-            }
-            ++it;
-        }
     }
 }
 
@@ -950,15 +1291,11 @@ void MutatorManager::TransitionAllMutatorsToCpuProfile()
             return;
         }
     }
-    std::list<Mutator*> undoneMutators;
-    VisitAllMutatorsExceptFinalizer([&undoneMutators](Mutator& mutator) {
+    VisitAllMutatorsExceptFinalizer([](Mutator& mutator) {
         if (mutator.GetCjthreadPtr() == MutatorManager::Instance().GetMainThreadHandle()) {
-            mutator.SetSuspensionFlag(Mutator::SuspensionType::SUSPENSION_FOR_CPU_PROFILE);
-            mutator.SetSafepointActive(true);
-            undoneMutators.push_back(&mutator);
+            PublishCpuProfileRequest(&mutator);
         }
     });
-    EnsureCpuProfileFinish(undoneMutators);
     if (!worldStopped) {
         MutatorManagementWUnlock();
     }
@@ -1026,6 +1363,30 @@ extern "C" void MRT_FlushGCInfo()
     // MutatorManager::Instance().DumpAllGcInfos();
     Mutator::GetMutator()->DumpGCInfos();
 #endif
+}
+
+void MarkFlushOnEnterSaferegion()
+{
+    Handshake::Current().enter_safe();
+}
+
+void MarkFlushBeginLeaveSaferegion()
+{
+    Handshake::Current().leave_safe();
+}
+
+void MarkFlushEndLeaveSaferegion()
+{
+}
+
+bool MarkFlushPendingForCurrentThread()
+{
+    return tlMarkFlushSelf != nullptr && tlMarkFlushSelf->pending.load(std::memory_order_acquire) != 0;
+}
+
+void RegisterCurrentMarkFlushThread()
+{
+    MutatorManager::Instance().RegisterMarkFlushThread(ThreadLocal::GetThreadLocalData());
 }
 
 #ifdef __APPLE__

@@ -13,6 +13,7 @@
 #include <set>
 #include <atomic>
 #include <list>
+#include <mutex>
 #include "Common/StackType.h"
 
 namespace MapleRuntime {
@@ -144,6 +145,7 @@ private:
     uint32_t timeDeltaThreshold {2000}; // 2000 : default timeDeltaThreshold 2000us
     std::atomic_bool isStart {false};
     CString sampleData {""};
+    std::mutex sampleMonitor;
     std::list<SampleTask> taskQueue;
     ProfileInfo* profileInfo {nullptr};
     std::map<CString, uint64_t> scriptIdMap {{"", 0}}; // {filePath, id}: each filePath has a unique id.

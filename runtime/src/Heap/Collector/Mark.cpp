@@ -626,7 +626,7 @@ void WCollector::TraceHeap()
 
     if (concurrentStackScan) {
 
-        EpochHandshakeStats handshake = MutatorManager::Instance().RunEpochHandshake("pre-major-stack");
+        EpochHandshakeStats handshake = MutatorManager::Instance().RunEpochHandshake("pre-major-stack", false);
         stackScanEpoch = handshake.epoch;
         CHECK_DETAIL(stackScanEpoch != 0 && handshake.stackScanned + handshake.stackFallback == handshake.requested,
                      "major concurrent stack scan accounting failed: epoch=%llu requested=%zu scanned=%zu "
@@ -648,10 +648,10 @@ void WCollector::TraceHeap()
                 TransitionToGCPhase(GCPhase::GC_PHASE_CLEAR_SATB_BUFFER, true);
                 MutatorManager::Instance().VisitAllMutators([stackScanEpoch](Mutator& mutator) {
                     if (!mutator.GetStackWatermark().IsDone(stackScanEpoch)) {
-                        (void)mutator.GcPhaseEnum(GCPhase::GC_PHASE_ENUM, stackScanEpoch, false);
+                        (void)mutator.GcPhaseEnum(GCPhase::GC_PHASE_ENUM, false, stackScanEpoch, false);
                     }
                     if (!mutator.GetStackWatermark().IsDone(stackScanEpoch)) {
-                        (void)mutator.GcPhaseEnum(GCPhase::GC_PHASE_ENUM);
+                        (void)mutator.GcPhaseEnum(GCPhase::GC_PHASE_ENUM, false);
                     }
 #if defined(MRT_GC_UNIT_TESTS)
                     NoteLargeArrayInitRootPhase(LargeArrayRootPhase::MAJOR_MARK, &mutator,
@@ -673,7 +673,7 @@ void WCollector::TraceHeap()
 
             TransitionToGCPhase(GCPhase::GC_PHASE_TRACE, true);
         } else {
-            TransitionToGCPhase(GCPhase::GC_PHASE_ENUM, true);
+            TransitionToGCPhase(GCPhase::GC_PHASE_ENUM, true, false);
             DoEnumeration(workStack, foreignStack);
         }
     }
@@ -1477,16 +1477,7 @@ bool WCollector::FollowYoungMark(WorkStack& workStack, bool fullYoungScan,
 #if defined(MRT_TESTABLE_INTERNALS)
     PublishConcurrentYoungProducersTestReceipt();
 #endif
-    theAllocator.VisitAllocBuffers([this, &workStack](AllocBuffer& buffer) {
-        buffer.MergeRoots(workStack);
-        buffer.MergeYoungAllocBlackFollow(workStack);
-        buffer.MergeY2yDirtyHolders(workStack);
-        buffer.MergeY2yDirtySlots([this, &workStack](MAddress slot) {
-            RefField<>& field = HeapSlotAt<>(slot);
-            BaseObject* target = ResolveMinorReference(field);
-            PushYoungObject(target, workStack, "y2y_slot");
-        });
-    });
+    (void)MutatorManager::Instance().HandshakeFlushMarkProducers(youngMarkDomain.get());
     if (!workStack.empty() || !youngMarkDomain->Stripes().IsEmpty()) {
         if (windowStats != nullptr) {
             ++windowStats->closureCalls;
@@ -1503,6 +1494,7 @@ bool WCollector::TryEndYoungMark(WorkStack& workStack, YoungConcWindowStats* win
     NoteMarkTerminatePause();
     const size_t before = youngMarkDomain->Stripes().Population();
     StoreBarrierBuffer::FlushAll(Heap::GetHeap().GetRememberedSet());
+    (void)MutatorManager::Instance().HandshakeFlushMarkProducers(youngMarkDomain.get());
     const size_t after = youngMarkDomain->Stripes().Population();
     NoteMarkTerminateFlushed(after >= before ? after - before : 0);
     return workStack.empty() && youngMarkDomain->Stripes().IsEmpty();
@@ -1520,5 +1512,85 @@ void WCollector::ProcessFinalizers()
 {
     FinalizerProcessor& fp = collectorResources.GetFinalizerProcessor();
     fp.ProcessReferences([this](BaseObject* obj) { return IsMarkedObject<Generation::Old>(obj); });
+}
+
+bool WCollector::PublishHandshakeMarkWork(WorkStack& work, MarkDomain* domain)
+{
+    if (domain == nullptr || work.empty()) {
+        return false;
+    }
+    MarkThreadLocalStacks seed(domain->Stripes().Count());
+    bool published = false;
+    while (!work.empty()) {
+        const MarkStackEntry entry = work.back();
+        work.pop_back();
+        MAddress address = 0;
+        if (entry.partialArray()) {
+            size_t length = 0;
+            MarkPartialArray::Decode(entry, address, length);
+        } else {
+            address = reinterpret_cast<MAddress>(entry.object());
+        }
+        if (address == 0) {
+            continue;
+        }
+        seed.Push(domain->Stripes(), domain->Stripes().StripeForAddress(address), entry, true);
+        published = true;
+    }
+    if (published) {
+        (void)seed.Flush(domain->Stripes(), true);
+        domain->Terminate().Wake();
+    }
+    return published;
+}
+
+void WCollector::DrainAllocBufferMarkProducers(AllocBuffer* buffer, WorkStack& work, bool young)
+{
+    if (buffer == nullptr) {
+        return;
+    }
+    buffer->MergeRootsGeneration(work, young);
+    if (!young) {
+        return;
+    }
+    buffer->MergeYoungAllocBlackFollow(work);
+    buffer->MergeY2yDirtyHolders(work);
+    buffer->MergeY2yDirtySlots([this, &work](MAddress slot) {
+        RefField<>& field = HeapSlotAt<>(slot);
+        BaseObject* target = ResolveMinorReference(field);
+        if (target != nullptr && Heap::IsHeapAddress(target)) {
+            work.push_back(MarkStackEntry::MarkAndFollow(target, false));
+        }
+    });
+}
+
+bool WCollector::FlushAllocBufferMarkProducers(AllocBuffer* buffer)
+{
+    if (buffer == nullptr) {
+        return false;
+    }
+    bool published = false;
+    if (youngMarkDomain != nullptr) {
+        WorkStack youngWork;
+        DrainAllocBufferMarkProducers(buffer, youngWork, true);
+        published = PublishHandshakeMarkWork(youngWork, youngMarkDomain.get()) || published;
+    }
+    if (majorMarkDomain != nullptr) {
+        WorkStack oldWork;
+        DrainAllocBufferMarkProducers(buffer, oldWork, false);
+        published = PublishHandshakeMarkWork(oldWork, majorMarkDomain.get()) || published;
+    }
+    return published;
+}
+
+bool WCollector::FlushAllocBufferMarkProducers(AllocBuffer* buffer, MarkDomain* domain)
+{
+    if (buffer == nullptr || domain == nullptr) {
+        return false;
+    }
+    WorkStack work;
+    const bool young = domain->Generation() == VerifyMarkingStacks::MarkingGeneration::YOUNG;
+    DrainAllocBufferMarkProducers(buffer, work, young);
+    return PublishHandshakeMarkWork(work, domain);
 }
 } // namespace MapleRuntime
