@@ -67,7 +67,7 @@ bool ThreadLocal::FlushMarkStacks(ThreadLocalData* tls, MarkDomain& domain)
 
 void ThreadLocal::FlushCurrentThreadMarkStacks()
 {
-    if (Runtime::CurrentRef() != nullptr && GetThreadLocalData()->gcData != nullptr) {
+    if (GetThreadLocalData()->gcData != nullptr) {
         auto& collector = static_cast<WCollector&>(Heap::GetHeap().GetCollector());
         (void)collector.FlushThreadMarkProducers(GetThreadLocalData());
     }
