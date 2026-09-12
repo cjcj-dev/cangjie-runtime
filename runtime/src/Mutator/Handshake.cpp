@@ -264,12 +264,10 @@ void PublishCpuProfileRequest(Mutator* mutator)
     if (mutator == nullptr) {
         return;
     }
-    {
-        std::lock_guard<std::mutex> lock(g_cpuProfilePendingLock);
-        mutator->SetSuspensionFlag(Mutator::SUSPENSION_FOR_CPU_PROFILE);
-        g_cpuProfilePending.insert(mutator);
-        ArmAllThreadPolls();
-    }
+    std::lock_guard<std::mutex> lock(g_cpuProfilePendingLock);
+    mutator->SetSuspensionFlag(Mutator::SUSPENSION_FOR_CPU_PROFILE);
+    g_cpuProfilePending.insert(mutator);
+    ArmAllThreadPolls();
 }
 
 void ConsumeCpuProfileRequest(Mutator* mutator)
@@ -278,8 +276,45 @@ void ConsumeCpuProfileRequest(Mutator* mutator)
         return;
     }
     std::lock_guard<std::mutex> lock(g_cpuProfilePendingLock);
-    mutator->ClearSuspensionFlag(Mutator::SUSPENSION_FOR_CPU_PROFILE);
     g_cpuProfilePending.erase(mutator);
+    mutator->ClearSuspensionFlag(Mutator::SUSPENSION_FOR_CPU_PROFILE);
+    mutator->SetCpuProfileState(Mutator::FINISH_CPUPROFILE);
+}
+
+bool ClaimCpuProfileRequest(Mutator* mutator)
+{
+    if (mutator == nullptr) {
+        return false;
+    }
+    std::lock_guard<std::mutex> lock(g_cpuProfilePendingLock);
+    const bool queued = g_cpuProfilePending.erase(mutator) != 0;
+    Mutator::CpuProfileState state = mutator->GetCpuProfileState();
+    if (!queued && state != Mutator::NEED_CPUPROFILE) {
+        return false;
+    }
+    mutator->SetCpuProfileState(Mutator::IN_CPUPROFILING);
+    return true;
+}
+
+void CompleteCpuProfileRequest(Mutator* mutator)
+{
+    if (mutator == nullptr) {
+        return;
+    }
+    std::lock_guard<std::mutex> lock(g_cpuProfilePendingLock);
+    if (g_cpuProfilePending.find(mutator) == g_cpuProfilePending.end()) {
+        mutator->ClearSuspensionFlag(Mutator::SUSPENSION_FOR_CPU_PROFILE);
+        mutator->SetCpuProfileState(Mutator::FINISH_CPUPROFILE);
+    }
+}
+
+bool CpuProfileRequestQueued(const Mutator* mutator)
+{
+    if (mutator == nullptr) {
+        return false;
+    }
+    std::lock_guard<std::mutex> lock(g_cpuProfilePendingLock);
+    return g_cpuProfilePending.find(const_cast<Mutator*>(mutator)) != g_cpuProfilePending.end();
 }
 
 bool HasPendingCpuProfileRequest()

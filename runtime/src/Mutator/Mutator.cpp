@@ -1396,10 +1396,42 @@ inline void Mutator::HandleCpuProfile()
     MutatorUnlock();
 }
 
+void Mutator::WaitForCpuProfiling() const
+{
+    while (GetCpuProfileState() != FINISH_CPUPROFILE || CpuProfileRequestQueued(this)) {
+        (void)sched_yield();
+    }
+}
+
+bool Mutator::TransitionToCpuProfile(bool bySelf)
+{
+    for (;;) {
+        CpuProfileState state = GetCpuProfileState();
+        if (state == FINISH_CPUPROFILE && !CpuProfileRequestQueued(this)) {
+            return true;
+        }
+        if (state == IN_CPUPROFILING) {
+            if (bySelf) {
+                WaitForCpuProfiling();
+                return true;
+            }
+            return false;
+        }
+        if (!bySelf && state == NO_CPUPROFILE && !CpuProfileRequestQueued(this)) {
+            return true;
+        }
+        if (!ClaimCpuProfileRequest(this)) {
+            continue;
+        }
+        TransitionToCpuProfileExclusive();
+        CompleteCpuProfileRequest(this);
+        return true;
+    }
+}
+
 void Mutator::TransitionToCpuProfileExclusive()
 {
     HandleCpuProfile();
-    ConsumeCpuProfileRequest(this);
 }
 
 void Mutator::ReleaseForeignThread()

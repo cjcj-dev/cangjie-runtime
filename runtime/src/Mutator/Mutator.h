@@ -260,7 +260,13 @@ public:
 
     __attribute__((always_inline)) inline bool FinishedCpuProfile() const
     {
-        return cpuProfileState.load(std::memory_order_acquire) == FINISH_CPUPROFILE;
+        return cpuProfileState.load(std::memory_order_acquire) == FINISH_CPUPROFILE &&
+               !CpuProfileRequestQueued(this);
+    }
+
+    __attribute__((always_inline)) inline CpuProfileState GetCpuProfileState() const
+    {
+        return cpuProfileState.load(std::memory_order_acquire);
     }
 
     __attribute__((always_inline)) inline void SetCpuProfileState(CpuProfileState state)
@@ -369,13 +375,7 @@ public:
         }
     }
 
-    __attribute__((always_inline)) inline void WaitForCpuProfiling() const
-    {
-        while (cpuProfileState.load(std::memory_order_acquire) != FINISH_CPUPROFILE) {
-            // Give up CPU to avoid overloading
-            (void)sched_yield();
-        }
-    }
+    void WaitForCpuProfiling() const;
 
     bool GcPhaseEnum(GCPhase newPhase, bool young, uint64_t stackScanEpoch = 0, bool bySelf = false,
                      size_t* scannedFrames = nullptr);
@@ -400,7 +400,7 @@ public:
     // Ensure that mutator phase is changed only once by mutator itself or GC
     __attribute__((always_inline)) inline bool TransitionGCPhase(bool bySelf);
 
-    __attribute__((always_inline)) inline bool TransitionToCpuProfile(bool bySelf);
+    bool TransitionToCpuProfile(bool bySelf);
 
     __attribute__((always_inline)) inline void SetMutatorPhase(const GCPhase newPhase)
     {
