@@ -6,17 +6,18 @@
 
 #ifndef MRT_LIVE_INFO_H
 #define MRT_LIVE_INFO_H
+#include <cstdint>
 #include "Base/ImmortalWrapper.h"
 #include "Base/Log.h"
 #include "Base/MemUtils.h"
 #include "Base/SysCall.h"
 #include "Heap/Heap.h"
-#include "Heap/Collector/RegionLifeClock.h"
 #if defined(__linux__) || defined(hongmeng) || defined(__APPLE__)
 #include <sys/mman.h>
 #endif
 
 namespace MapleRuntime {
+using RegionLifeId = uint64_t;
 constexpr size_t kBitsPerByte = 8;
 constexpr size_t kMarkedBytesPerBit = 8;
 constexpr size_t kBitsPerWord = sizeof(uint64_t) * kBitsPerByte;
