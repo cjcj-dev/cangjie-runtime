@@ -14,6 +14,7 @@
 #include "schdpoll.h"
 #include "basetime.h"
 #include "log.h"
+#include "Mutator/ThreadLocal.h"
 #if defined(CANGJIE_SANITIZER_SUPPORT)
 #include "Sanitizer/SanitizerInterface.h"
 #endif
@@ -745,6 +746,7 @@ void ProcessorSchedule(void)
     struct Processor *processor;
     struct Thread *thread;
     do {
+        MapleRuntime::RegisterCurrentMarkFlushThread();
         processor = ProcessorGet();
         schedule = static_cast<struct Schedule *>(processor->schedule);
         thread = processor->thread;

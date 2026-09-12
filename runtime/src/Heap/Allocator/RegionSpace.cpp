@@ -239,6 +239,7 @@ AllocBuffer* AllocBuffer::GetOrCreateAllocBuffer()
         CHECK_DETAIL(buffer != nullptr, "new region alloc buffer fail");
         buffer->Init();
         ThreadLocal::SetAllocBuffer(buffer);
+        RegisterCurrentMarkFlushThread();
     }
     return buffer;
 }

@@ -12,6 +12,7 @@
 #include "schedule.h"
 #include "Base/Globals.h"
 #include "Mutator/Mutator.h"
+#include "Mutator/MutatorManager.h"
 
 namespace MapleRuntime {
 RwLock ThreadLocal::tlEnableLock;
@@ -45,6 +46,9 @@ CleanThreadLocalData::CleanThreadLocalData()
 CleanThreadLocalData::~CleanThreadLocalData()
 {
     ThreadLocalData* local = ThreadLocal::GetThreadLocalData();
+    if (Runtime::CurrentRef() != nullptr) {
+        MutatorManager::Instance().UnregisterMarkFlushThread(local);
+    }
     void* cache = local->threadCache;
     local->threadCache = nullptr;
 
