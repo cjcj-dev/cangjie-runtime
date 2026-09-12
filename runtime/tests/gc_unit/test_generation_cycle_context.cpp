@@ -121,6 +121,32 @@ void* Exercise(void*)
     unsigned youngLabels = 0;
     unsigned oldLabels = 0;
     unsigned rootResults = 0;
+    unsigned combinedMarkStarts = 0;
+    unsigned minorMarkStarts = 0;
+    GCCycleSnapshot preludeOld {};
+    uintptr_t preludeOldColor = 0;
+    // Port the VM_ZMarkStartYoungAndOld/VM_ZMarkStartYoung phase invariants
+    // (zGeneration.cpp:583-659) through the real driver request below.
+    tracing.testYoungMarkStarted = [&]() {
+        const auto young = collector.GetCycleSnapshot(GCCycleGeneration::YOUNG);
+        const auto old = collector.GetCycleSnapshot(GCCycleGeneration::OLD);
+        Expect(young.active, "young_mark_start_active");
+        if (resources.YoungPreludeRequest() != nullptr) {
+            ++combinedMarkStarts;
+            preludeOld = old;
+            preludeOldColor = ::g_cjMarkBadMask & MARKED_OLD_MASK;
+            Expect(old.active && old.phase == GC_PHASE_ENUM && old.reason == GC_REASON_USER,
+                   "prelude_starts_old_mark");
+            StoreBarrierBuffer buffer;
+            RootSlot slot;
+            buffer.Add(reinterpret_cast<MAddress>(&slot), zpointer::null, Heap::GetHeap().GetRememberedSet());
+            Expect(buffer.LastInstalledStateForTest().oldMark, "prelude_store_buffer_old_obligation");
+            buffer.Discard();
+        } else {
+            ++minorMarkStarts;
+            Expect(!old.active, "independent_minor_does_not_start_old");
+        }
+    };
     // Allocate actual product objects, with an independent export-table root
     // keeping each alive even when a common-root consumer is deliberately cut.
     alignas(TypeInfo) static unsigned char typeStorage[sizeof(TypeInfo)] {};
@@ -156,6 +182,11 @@ void* Exercise(void*)
             Expect(stored.youngMark, "store_buffer_young_label");
         } else {
             ++oldLabels;
+            const auto old = collector.GetCycleSnapshot(GCCycleGeneration::OLD);
+            Expect(old.sequence == preludeOld.sequence && old.requestIndex == preludeOld.requestIndex,
+                   "old_body_keeps_prelude_identity");
+            Expect((::g_cjMarkBadMask & MARKED_OLD_MASK) == preludeOldColor,
+                   "old_body_keeps_prelude_color");
             for (size_t i = 0; i < handles.size(); ++i) witnesses[i] = Heap::GetHeap().GetExportObject(handles[i]);
             GenerationCycleRootTestAccess::Install(tracing, witnesses);
             Expect(!stored.youngMark, "store_buffer_old_label");
@@ -245,6 +276,8 @@ void* Exercise(void*)
 #if defined(MRT_TESTABLE_INTERNALS)
     Expect(youngLabels == 2 && oldLabels == 1, "store_buffer_real_cycle_inputs");
     Expect(rootResults > 0, "worker_root_result_observed");
+    Expect(combinedMarkStarts == 1 && minorMarkStarts == 1, "real_mark_start_variants_observed");
+    tracing.testYoungMarkStarted = nullptr;
     tracing.testCyclePrepared = nullptr;
     tracing.testRootsResult = nullptr;
     for (auto handle : handles) Heap::GetHeap().RemoveExportObject(handle);

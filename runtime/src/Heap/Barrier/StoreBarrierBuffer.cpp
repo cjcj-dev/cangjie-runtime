@@ -81,8 +81,11 @@ StoreBarrierInstallState StoreBarrierBuffer::CaptureInstallState()
         // production, before a later cycle can change shared accounting.
         youngMark = heap.GetCollector().GetCycleReason() == GC_REASON_YOUNG;
     }
+    const GCCycleSnapshot old = heap.GetCollector().GetCycleSnapshot(GCCycleGeneration::OLD);
+    const bool oldMark = old.active && (old.phase == GC_PHASE_ENUM || old.phase == GC_PHASE_TRACE ||
+                                        old.phase == GC_PHASE_CLEAR_SATB_BUFFER);
     return StoreBarrierInstallState { static_cast<uint8_t>(phase), youngMark,
-                                      static_cast<uintptr_t>(::g_cjStoreGoodMask) };
+                                      static_cast<uintptr_t>(::g_cjStoreGoodMask), oldMark };
 }
 
 void StoreBarrierBuffer::Add(MAddress fieldAddress, BaseObject* fieldBase, RememberedSet& rs)
@@ -127,14 +130,17 @@ void StoreBarrierBuffer::Add(MAddress fieldAddress, BaseObject* fieldBase, zpoin
     buffer[current].installed = installed;
 }
 
-bool StoreBarrierBuffer::InstalledDuringCurrentMark(const StoreBarrierEntry& entry)
+bool StoreBarrierBuffer::InstalledDuringCurrentMark(const StoreBarrierEntry& entry, bool young)
 {
     const GCPhase phase = static_cast<GCPhase>(entry.installed.phase);
-    if (phase != GCPhase::GC_PHASE_ENUM && phase != GCPhase::GC_PHASE_TRACE &&
-        phase != GCPhase::GC_PHASE_CLEAR_SATB_BUFFER) {
+    const bool marking = young
+        ? entry.installed.youngMark && (phase == GC_PHASE_ENUM || phase == GC_PHASE_TRACE ||
+                                       phase == GC_PHASE_CLEAR_SATB_BUFFER)
+        : entry.installed.oldMark;
+    if (!marking) {
         return false;
     }
-    const uintptr_t epochMask = entry.installed.youngMark ? MARKED_YOUNG_MASK : MARKED_OLD_MASK;
+    const uintptr_t epochMask = young ? MARKED_YOUNG_MASK : MARKED_OLD_MASK;
     return (entry.installed.storeGood & epochMask) ==
         (static_cast<uintptr_t>(::g_cjStoreGoodMask) & epochMask);
 }
@@ -142,7 +148,7 @@ bool StoreBarrierBuffer::InstalledDuringCurrentMark(const StoreBarrierEntry& ent
 StoreBarrierBuffer::PreviousRetirement StoreBarrierBuffer::RetirePrevious(const StoreBarrierEntry& entry,
                                                                           Collector& collector)
 {
-    if (is_null(entry.prev) || !InstalledDuringCurrentMark(entry)) {
+    if (is_null(entry.prev)) {
         return PreviousRetirement::NOT_REQUIRED;
     }
     RefField<> previous(entry.prev);
@@ -153,8 +159,16 @@ StoreBarrierBuffer::PreviousRetirement StoreBarrierBuffer::RetirePrevious(const 
     if (resolved == nullptr || !Heap::IsHeapAddress(resolved)) {
         return PreviousRetirement::INVALID_PREVIOUS;
     }
+    const bool young = RegionInfo::GetRegionInfoAt(reinterpret_cast<MAddress>(resolved))->IsYoungRegion();
+    const GCCycleGeneration generation = young ? GCCycleGeneration::YOUNG : GCCycleGeneration::OLD;
+    const GCCycleSnapshot cycle = collector.GetCycleSnapshot(generation);
+    if (!InstalledDuringCurrentMark(entry, young) || !cycle.active ||
+        (cycle.phase != GC_PHASE_ENUM && cycle.phase != GC_PHASE_TRACE &&
+         cycle.phase != GC_PHASE_CLEAR_SATB_BUFFER)) {
+        return PreviousRetirement::NOT_REQUIRED;
+    }
     SatbBuffer::Node* node = nullptr;
-    SatbBuffer& satb = SatbBuffer::Instance();
+    SatbBuffer& satb = SatbBuffer::Instance(generation);
 #if defined(MRT_GC_UNIT_TESTS)
     satb.EnsureGoodNode(node, !g_satbNodeUnavailable);
 #else

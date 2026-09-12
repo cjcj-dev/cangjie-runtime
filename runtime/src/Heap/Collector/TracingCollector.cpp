@@ -29,6 +29,7 @@ namespace MapleRuntime {
 #if defined(MRT_TESTABLE_INTERNALS)
 std::function<void(GCWorkers::Generation, TracingCollector::RootSet&)> TracingCollector::testRootsResult;
 std::function<void()> TracingCollector::testCyclePrepared;
+std::function<void()> TracingCollector::testYoungMarkStarted;
 #endif
 
 // ZMark::_ncontinue (zMark.cpp:975-981). Always on so a zero is readable as
@@ -890,18 +891,18 @@ bool TracingCollector::MarkSatbBuffer(WorkStack& workStack)
     // flush is not reaching the mutators' nodes at all.
     size_t satbSeen = 0;
     auto visitSatbObj = [this, &workStack, &satbSeen]() {
-        WorkStack remarkStack;
-        SatbBuffer::Instance().GetRetiredObjects(remarkStack);
-
-        while (!remarkStack.empty()) {
-            BaseObject* obj = remarkStack.back().object();
-            remarkStack.pop_back();
-            ++satbSeen;
-            if (Heap::IsHeapAddress(obj) && !this->IsMarkedObject<Generation::Old>(obj)) {
-                workStack.push_back(obj);
-                DLOG(TRACE, "satb buffer add obj %p", obj);
-            }
-        }
+        SatbBuffer::Instance(GCCycleGeneration::OLD).GetRetiredEntries(
+            [this, &workStack, &satbSeen](BaseObject* object, bool follow) {
+                ++satbSeen;
+                if (!Heap::IsHeapAddress(object)) {
+                    return;
+                }
+                if (follow) {
+                    workStack.push_back(MarkStackEntry::FollowOnly(object));
+                } else if (!IsMarkedObject<Generation::Old>(object)) {
+                    workStack.push_back(object);
+                }
+            });
     };
 
     visitSatbObj();
@@ -1218,7 +1219,10 @@ void TracingCollector::DumpRoots(LogType logType)
 
 void TracingCollector::PreGarbageCollection(bool isConcurrent, uint64_t gcIndex)
 {
-    ActiveCycle().Begin(gcIndex);
+    const bool continuingPrelude = ActiveCycle().Snapshot().active;
+    if (!continuingPrelude) {
+        ActiveCycle().Begin(gcIndex);
+    }
     ResetSkippedStackMapCounts();
     VLOG(REPORT, "Begin GC log. GCReason: %s, Current allocated %s, Current threshold %s, current tag %u",
          g_gcRequests[GetCycleReason()].name, Pretty(Heap::GetHeap().GetAllocatedSize()).Str(),
@@ -1228,7 +1232,9 @@ void TracingCollector::PreGarbageCollection(bool isConcurrent, uint64_t gcIndex)
     // SatbBuffer should be initialized before concurrent enumeration.
     SatbBuffer::SelectGeneration(GetCycleReason() == GC_REASON_YOUNG
         ? GCCycleGeneration::YOUNG : GCCycleGeneration::OLD);
-    SatbBuffer::Instance().Init();
+    if (!continuingPrelude) {
+        SatbBuffer::Instance().Init();
+    }
     const int32_t threadCount = GetGCThreadCount(isConcurrent);
     GetWorkers().SetActive();
     GetWorkers().SetActiveWorkers(static_cast<uint32_t>(threadCount));

@@ -756,7 +756,9 @@ void WCollector::DoYoungGarbageCollection()
     std::unique_ptr<ScopedStopTheWorld> stw =
         std::make_unique<ScopedStopTheWorld>("young prepare", false);
     // Full-colour gate: reject any plain HeapSlot before young mark mutates colours.
-    // This STW entry is the young-only mark start; old marking does not participate in a minor.
+    // VM_ZMarkStartYoungAndOld / VM_ZMarkStartYoung (zGeneration.cpp:583-659).
+    // A major starts old exactly once in this young pause. An independent
+    // minor leaves the old cycle identity and mark color untouched.
     flip_young_mark_start();
 
     // minortime: STW rendezvous cost is already logged by ScopedStopTheWorld dtor
@@ -774,6 +776,23 @@ void WCollector::DoYoungGarbageCollection()
         MRT_PHASE_TIMER("young.flush_alloc");
         FlushAllocationRegions();
     }
+
+    if (const GCDriverRequest* request = collectorResources.YoungPreludeRequest()) {
+        oldCycle.SelectReason(request->reason);
+        oldCycle.Begin(request->asynchronous ? GCTask::ASYNC_TASK_INDEX : request->sequence);
+        SatbBuffer::Instance(GCCycleGeneration::OLD).Init();
+        flip_old_mark_start();
+        // Reset the old mark face before young roots can publish old work.
+        // ZGenerationOld::mark_start -> ZMark::start (zGeneration.cpp:1212-1237).
+        reinterpret_cast<RegionSpace&>(theAllocator).AssembleGarbageCandidates();
+        oldCycle.PublishPhase(GCPhase::GC_PHASE_ENUM);
+    }
+
+#if defined(MRT_TESTABLE_INTERNALS)
+    if (testYoungMarkStarted) {
+        testYoungMarkStarted();
+    }
+#endif
 
     RegionSpace& space = reinterpret_cast<RegionSpace&>(theAllocator);
     RegionManager& manager = space.GetRegionManager();
@@ -910,7 +929,7 @@ void WCollector::DoYoungGarbageCollection()
     VerifyMarkingStacks::VerifyEmpty(VerifyMarkingStacks::MarkingGeneration::YOUNG,
                                      VerifyMarkingStacks::MarkingBoundary::START,
                                      VerifyMarkingStacks::MarkingContainer::POOL,
-                                     GetThreadPool()->GetWorkCount(), 0);
+                                     GetWorkers().GetSnapshot().remainingWorkers, 0);
     std::vector<BaseObject*> reachableVec;
     reachableVec.reserve(1 << 17); // ~128k; real_load ~155k reachable
     MinorObjectSet allocationRoots;
@@ -953,7 +972,7 @@ void WCollector::DoYoungGarbageCollection()
         WorkStack enumRoots = NewWorkStack();
         theAllocator.VisitAllocBuffers([&enumRoots](AllocBuffer& buffer) { buffer.MergeRoots(enumRoots); });
         if (stackScanEpoch != 0) {
-            SatbBuffer::Instance().GetRetiredObjects(enumRoots);
+            SatbBuffer::Instance(GCCycleGeneration::YOUNG).GetRetiredObjects(enumRoots);
         }
         while (!enumRoots.empty()) {
             const MarkStackEntry entry = enumRoots.back();
@@ -1156,7 +1175,7 @@ void WCollector::DoYoungGarbageCollection()
             VerifyMarkingStacks::VerifyEmpty(VerifyMarkingStacks::MarkingGeneration::YOUNG,
                                              VerifyMarkingStacks::MarkingBoundary::END,
                                              VerifyMarkingStacks::MarkingContainer::POOL,
-                                             GetThreadPool()->GetWorkCount(), 0);
+                                             GetWorkers().GetSnapshot().remainingWorkers, 0);
 #if defined(MRT_TESTABLE_INTERNALS)
             NoteExportRootPublicationAtT2TestReceipt();
 #endif
@@ -1274,7 +1293,7 @@ void WCollector::DoYoungGarbageCollection()
         // filled during marking is an ordinary candidate next cycle; it is never removed
         // from the structure the selector iterates.
         space.GetRegionManager().HandleTraceRegions();
-        SatbBuffer::Instance().ClearBuffer();
+        SatbBuffer::Instance(GCCycleGeneration::YOUNG).ClearBuffer();
         ForwardingTable::PublishMarkCoverage(Generation::Young);
         ForwardingTable::ReclaimRetired("young-mark-coverage");
     }

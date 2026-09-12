@@ -783,7 +783,11 @@ protected:
     void SelectCycle(GCReason reason)
     {
         GenerationCycle* cycle = reason == GC_REASON_YOUNG ? &youngCycle : &oldCycle;
-        cycle->SelectReason(reason);
+        if (!cycle->Snapshot().active) {
+            cycle->SelectReason(reason);
+        } else {
+            CHECK(cycle->Reason() == reason);
+        }
         activeCycle.store(cycle, std::memory_order_release);
     }
     GenerationCycle youngCycle { GCCycleGeneration::YOUNG };

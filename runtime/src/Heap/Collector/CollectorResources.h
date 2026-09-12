@@ -59,6 +59,9 @@ public:
         return *(generation == GCCycleGeneration::YOUNG ? youngWorkers : oldWorkers);
     }
 
+    // ZYoungType::major_full_roots selects the combined mark-start pause.
+    const GCDriverRequest* YoungPreludeRequest() const { return youngPreludeRequest; }
+
     bool IsHeapMarked() const { return isHeapMarked; }
 
     void SetHeapMarked(bool value) { isHeapMarked = value; }
@@ -150,6 +153,7 @@ private:
     // retirement epochs single-writer.
     std::mutex driverLock;
     bool driverRequestActive = false;
+    const GCDriverRequest* youngPreludeRequest = nullptr;
 #if defined(MRT_GC_UNIT_TESTS)
     // Deterministic unit builds can replace only the task executor.  The
     // default product retains CollectorProxy as its sole owner and ABI shape.

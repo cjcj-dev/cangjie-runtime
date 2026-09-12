@@ -23,6 +23,7 @@ struct StoreBarrierInstallState {
     uint8_t phase = 0;
     bool youngMark = false;
     uintptr_t storeGood = 0;
+    bool oldMark = false;
 };
 
 // ZGC ZStoreBarrierEntry is (p, prev), with a parallel _base_pointers array.
@@ -87,7 +88,7 @@ private:
     };
 
     static StoreBarrierInstallState CaptureInstallState();
-    static bool InstalledDuringCurrentMark(const StoreBarrierEntry& entry);
+    static bool InstalledDuringCurrentMark(const StoreBarrierEntry& entry, bool young);
     static PreviousRetirement RetirePrevious(const StoreBarrierEntry& entry, Collector& collector);
     static void MarkAndRemember(const StoreBarrierEntry& entry, RememberedSet& rs);
     void Add(MAddress fieldAddress, zpointer prev, StoreBarrierInstallState installed, RememberedSet& rs);

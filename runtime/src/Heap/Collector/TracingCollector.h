@@ -312,6 +312,7 @@ public:
     // Static storage keeps the instance layout identical in both build shapes.
     static std::function<void(GCWorkers::Generation, RootSet&)> testRootsResult;
     static std::function<void()> testCyclePrepared;
+    static std::function<void()> testYoungMarkStarted;
 #endif
 
     void Init() override;

@@ -223,7 +223,8 @@ void Mutator::ResetMutator()
     }
     SetManagedContext(false);
     StorePlain(rawObject, zaddress::null);
-    SatbBuffer::Instance().FlushQueue(satbNode);
+    SatbBuffer::Instance(GCCycleGeneration::YOUNG).FlushQueue(satbNode);
+    SatbBuffer::Instance(GCCycleGeneration::OLD).FlushQueue(oldSatbNode);
     if (!localFinalizers.empty()) {
         Heap::GetHeap().GetFinalizerProcessor().RegisterFinalizers(localFinalizers);
     }
@@ -1370,8 +1371,10 @@ inline void Mutator::HandleGCPhase(GCPhase newPhase, bool bySelf)
 {
     if (newPhase == GCPhase::GC_PHASE_FINISH || newPhase == GCPhase::GC_PHASE_FORWARD) {
         std::lock_guard<std::mutex> lg(mutatorLock);
-        if (satbNode != nullptr) {
-            satbNode->Clear();
+        SatbBuffer::Node* node = Heap::GetHeap().GetCollector().GetCycleReason() == GC_REASON_YOUNG
+            ? satbNode : oldSatbNode;
+        if (node != nullptr) {
+            node->Clear();
         }
     } else if (newPhase == GCPhase::GC_PHASE_ENUM) {
         GcPhaseEnum(newPhase);
