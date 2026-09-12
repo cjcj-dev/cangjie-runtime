@@ -2321,40 +2321,47 @@ RegionInfo* RegionManager::TakeRegion(size_t num, RegionInfo::UnitRole type, boo
 }
 
 template<Generation G>
-void RegionManager::StartForwardFromRegions(GCThreadPool* threadPool, size_t tasks)
+void RegionManager::StartForwardFromRegions(GCWorkers& workers)
 {
     CHECK(!relocationStarted);
     relocationStarted = true;
-    relocationPool = threadPool;
-    const size_t count = tasks != 0 ? tasks :
-        (threadPool == nullptr ? 1 : static_cast<size_t>(threadPool->GetMaxActiveThreadNum() + 1));
-    relocationRequestQueue.BeginWorkers(count);
-    if (threadPool == nullptr) {
-        ForwardFromRegions<G>();
-        return;
-    }
-    // Count submitted page tasks, never a separate implicit driver token.
-    // Submission precedes root tasks on the shared worker set (#204 adapter).
-    for (size_t i = 0; i < count; ++i) {
-        auto* task = new (std::nothrow) ForwardTask<G>(*this, fromRegionList);
-        CHECK(task != nullptr);
-        threadPool->AddWork(task);
-    }
-    threadPool->Start();
-    if (threadPool->GetMaxActiveThreadNum() == 0) {
-        // No background worker can serve a synchronous root request. Finish
-        // the submitted page task here before entering root processing.
-        threadPool->WaitFinish();
-    }
+    relocationDrained = false;
+    relocationWorkers = &workers;
+    relocationRequestQueue.BeginWorkers(workers.ActiveWorkers());
 }
 
 template<Generation G>
-void RegionManager::ForwardFromRegions(GCThreadPool* threadPool)
+void RegionManager::DrainForwardFromRegions()
 {
-    if (!relocationStarted) StartForwardFromRegions<G>(threadPool);
-    if (relocationPool != nullptr) relocationPool->WaitFinish();
-    relocationPool = nullptr;
+    if (relocationDrained) {
+        return;
+    }
+    relocationDrained = true;
+    if (relocationWorkers == nullptr) {
+        ForwardFromRegions<G>();
+        return;
+    }
+    class Task final : public GCWorkerTask {
+    public:
+        Task(RegionManager& manager, RegionList& fromSpace) : regionManager(manager), fromRegionList(fromSpace) {}
+        void Work(uint32_t) override { detail::ExecuteForwardTask<G>(regionManager, fromRegionList); }
+    private:
+        RegionManager& regionManager;
+        RegionList& fromRegionList;
+    } task(*this, fromRegionList);
+    relocationWorkers->Run(task);
+}
+
+template<Generation G>
+void RegionManager::ForwardFromRegions(GCWorkers& workers)
+{
+    if (!relocationStarted) {
+        StartForwardFromRegions<G>(workers);
+    }
+    DrainForwardFromRegions<G>();
+    relocationWorkers = nullptr;
     relocationStarted = false;
+    relocationDrained = false;
 }
 
 template<Generation G>
@@ -4120,16 +4127,18 @@ uintptr_t RegionManager::AllocPinnedFromFreeList(size_t size)
     return allocPtr;
 }
 
-template void RegionManager::ForwardFromRegions<Generation::Young>(GCThreadPool*);
-template void RegionManager::ForwardFromRegions<Generation::Old>(GCThreadPool*);
+template void RegionManager::ForwardFromRegions<Generation::Young>(GCWorkers&);
+template void RegionManager::ForwardFromRegions<Generation::Old>(GCWorkers&);
 template void RegionManager::ForwardFromRegions<Generation::Young>();
 template void RegionManager::ForwardFromRegions<Generation::Old>();
 #if defined(MRT_TESTABLE_INTERNALS)
 template class ForwardTask<Generation::Young>;
 template class ForwardTask<Generation::Old>;
 #endif
-template void RegionManager::StartForwardFromRegions<Generation::Young>(GCThreadPool*, size_t);
-template void RegionManager::StartForwardFromRegions<Generation::Old>(GCThreadPool*, size_t);
+template void RegionManager::StartForwardFromRegions<Generation::Young>(GCWorkers&);
+template void RegionManager::StartForwardFromRegions<Generation::Old>(GCWorkers&);
+template void RegionManager::DrainForwardFromRegions<Generation::Young>();
+template void RegionManager::DrainForwardFromRegions<Generation::Old>();
 template void RegionManager::ForwardClaimedPage<Generation::Young>(RegionInfo*, ForwardingTable::Owner, bool);
 template void RegionManager::ForwardClaimedPage<Generation::Old>(RegionInfo*, ForwardingTable::Owner, bool);
 template void RegionManager::ForwardRegion<Generation::Young>(RegionInfo*);

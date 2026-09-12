@@ -172,10 +172,10 @@ public:
     void ClearAllLiveInfo() { regionManager.ClearAllLiveInfo(); }
 
     template<Generation G>
-    void ForwardFromSpace(GCThreadPool* threadPool)
+    void ForwardFromSpace(GCWorkers& workers)
     {
         MRT_PHASE_TIMER("ForwardFromRegions");
-        regionManager.ForwardFromRegions<G>(threadPool);
+        regionManager.ForwardFromRegions<G>(workers);
     }
 
     size_t CollectLargeGarbage() { return regionManager.CollectLargeGarbage(); }
