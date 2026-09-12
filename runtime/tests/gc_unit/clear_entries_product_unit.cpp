@@ -562,6 +562,12 @@ void PinOwnerGeneration(RegionInfo* region, Generation gen)
     region->SetYoungRegionFlag(gen == Generation::Young ? 1 : 0);
 }
 
+void PublishGenerationMarkComplete(Generation gen)
+{
+    Heap::GetHeap().GetCollector().PublishGenerationPhase(
+        gen == Generation::Old ? GCCycleGeneration::OLD : GCCycleGeneration::YOUNG, GC_PHASE_MARK_COMPLETE);
+}
+
 LiveInfo* PrepareForwardable(GcHeapFixture& fx, RegionInfo* region, MAddress liveObject)
 {
     region->SetRegionType(RegionInfo::RegionType::FROM_REGION);
@@ -584,8 +590,8 @@ void DestroyAfterGhostCleared(RegionInfo* region, const char* why)
     if (region != nullptr && region->IsGhostFromRegion()) {
         region->DispelGhostFromRegion();
     }
-    ForwardingTable::PublishMarkCoverage(Generation::Young);
-    ForwardingTable::PublishMarkCoverage(Generation::Old);
+    PublishGenerationMarkComplete(Generation::Young);
+    PublishGenerationMarkComplete(Generation::Old);
     ForwardingTable::ReclaimRetired(why);
 }
 
@@ -777,8 +783,8 @@ bool AllVisitedEqual(const std::vector<BaseObject*>& visited, BaseObject* expect
 
 void CompleteValueRootCoverage()
 {
-    ForwardingTable::PublishMarkCoverage(Generation::Young);
-    ForwardingTable::PublishMarkCoverage(Generation::Old);
+    PublishGenerationMarkComplete(Generation::Young);
+    PublishGenerationMarkComplete(Generation::Old);
     ForwardingTable::ReclaimRetired("value-root-mark-coverage");
 }
 
@@ -1244,8 +1250,8 @@ GC_OTHER_VM_TEST(LookupDecisionSnapshot, SurvivesPostReturnGhostAndHeaderMutatio
     RelocationReceiptTestAccess::BindCollector(Heap::GetHeap().GetCollectorResources(), &collector);
     LiveInfo* live = PrepareForwardable(fx, region, reinterpret_cast<MAddress>(from));
     ForwardingTable::ClearEntries(region->GetRegionStart(), region->GetRegionSize());
-    ForwardingTable::PublishMarkCoverage(Generation::Young);
-    ForwardingTable::PublishMarkCoverage(Generation::Old);
+    PublishGenerationMarkComplete(Generation::Young);
+    PublishGenerationMarkComplete(Generation::Old);
     ForwardingTable::ReclaimRetired("young-mark-coverage");
     GC_EXPECT_TRUE(RegionInfo::GetGhostFromRegionAt(reinterpret_cast<MAddress>(from)) == region);
     GC_EXPECT_FALSE(from->IsForwarded());
@@ -4330,7 +4336,7 @@ GC_TEST(ForwardingPublicationProduct, PostRemapResetDestroysAfterA8Coverage)
     GC_EXPECT_EQ(ForwardingTable::LookupTo(from).to, to);
     GC_EXPECT_TRUE(ForwardingTable::LookupTo(from).answer == ForwardingTable::ToAnswer::ArmedHit);
 
-    ForwardingTable::PublishMarkCoverage(Generation::Young);
+    PublishGenerationMarkComplete(Generation::Young);
     ForwardingTable::ReclaimRetired("young-mark-coverage");
     GC_EXPECT_TRUE(region->IsGhostFromRegion());
     GC_EXPECT_EQ(ForwardingTable::LookupTo(from).to, to);
@@ -4374,7 +4380,7 @@ GC_TEST(ForwardingPublicationProduct, RetiredYoungTableSurvivesA8UntilNextYoungM
     FindToVersionResult found = RelocationReceiptTestAccess::ProductFindToVersion(collector, liveObject);
     GC_EXPECT_TRUE(found.state() == FindToVersionResult::State::Found);
     GC_EXPECT_TRUE(found.found() == reinterpret_cast<BaseObject*>(to));
-    ForwardingTable::PublishMarkCoverage(Generation::Young);
+    PublishGenerationMarkComplete(Generation::Young);
     ForwardingTable::ReclaimRetired("young-mark-coverage");
     GC_EXPECT_TRUE(region->IsGhostFromRegion());
     GC_EXPECT_EQ(ForwardingTable::LookupTo(from).to, to);
@@ -4411,11 +4417,11 @@ GC_TEST(ForwardingPublicationProduct, RetiredOldTableNotFreedByYoungCoverage)
     GC_EXPECT_TRUE(tab != nullptr);
     GC_EXPECT_EQ(tab->table_generation(), static_cast<uint8_t>(Generation::Old));
     ForwardingTable::ClearEntries(region->GetRegionStart(), region->GetRegionSize());
-    ForwardingTable::PublishMarkCoverage(Generation::Young);
+    PublishGenerationMarkComplete(Generation::Young);
     ForwardingTable::ReclaimRetired("young-mark-coverage");
     GC_EXPECT_EQ(ForwardingTable::LookupTo(from).to, to);
     GC_EXPECT_TRUE(ForwardingTable::LookupTo(from).answer == ForwardingTable::ToAnswer::ArmedHit);
-    ForwardingTable::PublishMarkCoverage(Generation::Old);
+    PublishGenerationMarkComplete(Generation::Old);
     ForwardingTable::ReclaimRetired("old-mark-coverage");
     GC_EXPECT_TRUE(region->IsGhostFromRegion());
     GC_EXPECT_EQ(ForwardingTable::LookupTo(from).to, to);
@@ -4452,11 +4458,11 @@ GC_TEST(ForwardingPublicationProduct, RetiredYoungTableNotFreedByOldCoverage)
     GC_EXPECT_TRUE(tab != nullptr);
     GC_EXPECT_EQ(tab->table_generation(), static_cast<uint8_t>(Generation::Young));
     ForwardingTable::ClearEntries(region->GetRegionStart(), region->GetRegionSize());
-    ForwardingTable::PublishMarkCoverage(Generation::Old);
+    PublishGenerationMarkComplete(Generation::Old);
     ForwardingTable::ReclaimRetired("old-mark-coverage");
     GC_EXPECT_EQ(ForwardingTable::LookupTo(from).to, to);
     GC_EXPECT_TRUE(ForwardingTable::LookupTo(from).answer == ForwardingTable::ToAnswer::ArmedHit);
-    ForwardingTable::PublishMarkCoverage(Generation::Young);
+    PublishGenerationMarkComplete(Generation::Young);
     ForwardingTable::ReclaimRetired("young-mark-coverage");
     GC_EXPECT_TRUE(region->IsGhostFromRegion());
     GC_EXPECT_EQ(ForwardingTable::LookupTo(from).to, to);
@@ -4493,7 +4499,7 @@ GC_TEST(ForwardingPublicationProduct, HeldLookupReaderDefersEligibleDestroy)
     GC_EXPECT_TRUE(youngTab != nullptr);
     GC_EXPECT_EQ(youngTab->table_generation(), static_cast<uint8_t>(Generation::Young));
     ForwardingTable::ClearEntries(region->GetRegionStart(), region->GetRegionSize());
-    ForwardingTable::PublishMarkCoverage(Generation::Young);
+    PublishGenerationMarkComplete(Generation::Young);
     {
         ForwardingTable::Publication reader = ForwardingTable::RetainCovering(from);
         GC_EXPECT_TRUE(static_cast<bool>(reader));
@@ -4534,14 +4540,21 @@ GC_TEST(ForwardingPublicationProduct, CoverageEpochAdvancesOnlyAtMarkEnd)
     GC_EXPECT_TRUE(tab != nullptr);
     GC_EXPECT_EQ(tab->table_generation(), static_cast<uint8_t>(Generation::Young));
     const uint64_t required = tab->required_mark_epoch();
-    const uint64_t before = ForwardingTable::MarkCoverageEpoch(Generation::Young);
-    GC_EXPECT_TRUE(before < required);
+    const GCCycleSnapshot before =
+        Heap::GetHeap().GetCollector().GetCycleSnapshot(GCCycleGeneration::YOUNG);
+    GC_EXPECT_TRUE(before.phase != GC_PHASE_MARK_COMPLETE);
+    GC_EXPECT_TRUE(before.sequence < required || !((before.phase == GC_PHASE_MARK_COMPLETE) ||
+                                                   (before.phase == GC_PHASE_POST_TRACE)));
     ForwardingTable::ReclaimRetired("old-remap-young-roots-complete");
-    GC_EXPECT_EQ(ForwardingTable::MarkCoverageEpoch(Generation::Young), before);
-    ForwardingTable::PublishMarkCoverage(Generation::Young);
-    const uint64_t after = ForwardingTable::MarkCoverageEpoch(Generation::Young);
-    GC_EXPECT_TRUE(after > before);
-    GC_EXPECT_TRUE(after >= required);
+    const GCCycleSnapshot afterA8 =
+        Heap::GetHeap().GetCollector().GetCycleSnapshot(GCCycleGeneration::YOUNG);
+    GC_EXPECT_EQ(afterA8.sequence, before.sequence);
+    GC_EXPECT_EQ(afterA8.phase, before.phase);
+    PublishGenerationMarkComplete(Generation::Young);
+    const GCCycleSnapshot after =
+        Heap::GetHeap().GetCollector().GetCycleSnapshot(GCCycleGeneration::YOUNG);
+    GC_EXPECT_EQ(after.phase, GC_PHASE_MARK_COMPLETE);
+    GC_EXPECT_TRUE(after.sequence >= required || after.phase == GC_PHASE_MARK_COMPLETE);
     ForwardingTable::ClearEntries(region->GetRegionStart(), region->GetRegionSize());
     if (region->IsGhostFromRegion()) {
         region->DispelGhostFromRegion();
@@ -4576,7 +4589,7 @@ GC_TEST(ForwardingPublicationProduct, ResolveStoreValueNoForwardingAfterGhostDis
     GC_EXPECT_EQ(tab->table_generation(), static_cast<uint8_t>(Generation::Young));
 
     ForwardingTable::ClearEntries(region->GetRegionStart(), region->GetRegionSize());
-    ForwardingTable::PublishMarkCoverage(Generation::Young);
+    PublishGenerationMarkComplete(Generation::Young);
     ForwardingTable::ReclaimRetired("young-mark-coverage");
     DestroyAfterGhostCleared(region, "young-mark-coverage");
     GC_EXPECT_TRUE(RegionInfo::GetGhostFromRegionAt(from) == nullptr);
@@ -5262,7 +5275,7 @@ GC_TEST(ForwardingPublicationProduct, GhostHeldRetainsResolvableCarrier)
     const MAddress to = ForwardingTable::FindTo(from);
     GC_EXPECT_TRUE(to != 0);
     ForwardingTable::ClearEntries(region->GetRegionStart(), region->GetRegionSize());
-    ForwardingTable::PublishMarkCoverage(Generation::Young);
+    PublishGenerationMarkComplete(Generation::Young);
     // Force every release condition except the independent ghost-held guard.
     ForwardingTable::ReclaimRetired("gc-unit-explicit-coverage");
     const ForwardingTable::LookupResult kept = ForwardingTable::LookupTo(from);
@@ -5304,7 +5317,7 @@ GC_TEST(ForwardingPublicationProduct, GhostClearedAllowsEligibleCarrierReclaim)
     const MAddress to = ForwardingTable::FindTo(from);
     GC_EXPECT_TRUE(to != 0);
     ForwardingTable::ClearEntries(region->GetRegionStart(), region->GetRegionSize());
-    ForwardingTable::PublishMarkCoverage(Generation::Young);
+    PublishGenerationMarkComplete(Generation::Young);
     GC_EXPECT_TRUE(region->IsGhostFromRegion());
     GC_EXPECT_TRUE(ForwardingTable::RetiredCovers(region->GetRegionStart(), region->GetRegionSize()));
 

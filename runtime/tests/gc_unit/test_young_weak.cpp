@@ -787,7 +787,7 @@ GC_OTHER_VM_TEST(ValueRootCurrentization, MinorRuntimeDispatchMarksCurrentAndWri
     const bool currentMarked = IsValueRootMarked(route);
     const bool carrierCurrent =
         RelocationReceiptTestAccess::MinorFinishedValueRootsEqual(collector, route.to);
-    ForwardingTable::PublishMarkCoverage(Generation::Old);
+    Heap::GetHeap().GetCollector().PublishGenerationPhase(GCCycleGeneration::OLD, GC_PHASE_MARK_COMPLETE);
     ForwardingTable::ReclaimRetired("value-root-minor-runtime-dispatch");
     const auto afterCoverage = ForwardingTable::LookupTo(reinterpret_cast<MAddress>(route.from));
     const bool independentAfterCoverage =

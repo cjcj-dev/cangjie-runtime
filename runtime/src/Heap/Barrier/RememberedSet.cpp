@@ -262,7 +262,6 @@ void RememberedSet::FlipForMinor()
     // operation only publishes the other face. ScanPreviousForMinor is the
     // owner of consuming and clearing the face selected before this flip.
     activeBuffer.store(static_cast<uint8_t>(nextBuffer), std::memory_order_release);
-    ZForwarding::bump_young_seqnum();
 #if defined(MRT_GC_UNIT_TESTS)
     flipTouchAccountingActive = false;
 #endif
