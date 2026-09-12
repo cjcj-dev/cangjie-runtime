@@ -55,7 +55,7 @@ void* CollectorResources::GCMainThreadEntry(void* arg)
 
 #if defined(__linux__) || defined(hongmeng)
     // set thread priority.
-    GCPoolThread::SetThreadPriority(MapleRuntime::GetTid(), GCPoolThread::GC_THREAD_PRIORITY);
+    RuntimeWorkers::SetThreadPriority(MapleRuntime::GetTid());
 #endif
 
     // run event loop in this thread.
@@ -148,12 +148,9 @@ void CollectorResources::StopGCThreads()
     CHECK_E(UNLIKELY(ret != 0), "::pthread_join(minor) in StopGCThreads() return %d", ret);
     ret = ::pthread_join(majorDriverThread, nullptr);
     CHECK_E(UNLIKELY(ret != 0), "::pthread_join(major) in StopGCThreads() return %d", ret);
-    // wait the thread pool stopped.
-    if (gcThreadPool != nullptr) {
-        gcThreadPool->Exit();
-        delete gcThreadPool;
-        gcThreadPool = nullptr;
-    }
+    // Drivers have joined; no new safepoint work can be submitted.
+    delete runtimeWorkers;
+    runtimeWorkers = nullptr;
     delete youngWorkers;
     youngWorkers = nullptr;
     delete oldWorkers;
@@ -452,8 +449,8 @@ void CollectorResources::StartGCThreads()
     if (gcThreadRunning.compare_exchange_strong(expected, true, std::memory_order_acquire) == false) {
         return;
     }
-    // starts the thread pool.
-    if (gcThreadPool == nullptr) {
+    // Initialize the heap-owned runtime set and both generation sets.
+    if (runtimeWorkers == nullptr) {
         unsigned int activeProcessorCount = std::thread::hardware_concurrency();
         bool affinityDetected = false;
 #if defined(__linux__) || defined(hongmeng)
@@ -481,14 +478,14 @@ void CollectorResources::StartGCThreads()
             std::min<size_t>((cpus * 3 + 4) / 5, heapWorkers)));
         concurrentGcThreadCount = static_cast<int32_t>(std::max<size_t>(1,
             std::min<size_t>((cpus + 3) / 4, heapWorkers)));
-        int32_t helperThreads = gcThreadCount - 1;
         VLOG(REPORT,
-             "total gc thread count %d, helper thread count %d, concurrent gc thread count %d, "
+             "runtime worker count %d, concurrent gc thread count %d, "
              "active processor count %u, affinity detected %d, region bytes %zu",
-             gcThreadCount, helperThreads, concurrentGcThreadCount, activeProcessorCount, affinityDetected,
+             gcThreadCount, concurrentGcThreadCount, activeProcessorCount, affinityDetected,
              regionBytes);
-        gcThreadPool = new (std::nothrow) GCThreadPool("gc", helperThreads, GCPoolThread::GC_THREAD_PRIORITY);
-        CHECK_DETAIL(gcThreadPool != nullptr, "new GCThreadPool failed");
+        // zRuntimeWorkers.cpp:29-39: use the full parallel budget; the
+        // coordinating driver is not one of the task participants.
+        runtimeWorkers = new RuntimeWorkers(gcThreadCount);
 
         // zArguments.cpp:67-99, zWorkers.cpp:45-64: each generation uses
         // the concurrent budget as its maximum and initial active count.
@@ -521,7 +518,7 @@ void CollectorResources::StartGCThreads()
 
 int32_t CollectorResources::GetGCThreadCount(const bool isConcurrent) const
 {
-    if (GetThreadPool() == nullptr) {
+    if (runtimeWorkers == nullptr) {
         return 1;
     }
     return isConcurrent ? concurrentGcThreadCount : gcThreadCount;

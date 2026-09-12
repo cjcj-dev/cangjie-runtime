@@ -25,7 +25,7 @@ class CollectorProxy;
 class CollectorResourcesTestPeer;
 #endif
 // CollectorResources provides the resources that a functional collector need,
-// such as gc thread/threadPool, gc task queue...
+// such as GC drivers/runtime workers, gc task queue...
 class CollectorResources {
 #if defined(MRT_TESTABLE_INTERNALS)
     friend struct MarkPublicationFixture;
@@ -55,7 +55,7 @@ public:
     void NotifyGCPhaseFinished(uint64_t gcIndex);
     int32_t GetGCThreadCount(const bool isConcurrent) const;
 
-    GCThreadPool* GetThreadPool() const { return gcThreadPool; }
+    RuntimeWorkers& GetRuntimeWorkers() const { return *runtimeWorkers; }
 
     GCWorkers& GetWorkers(GCCycleGeneration generation) const
     {
@@ -153,8 +153,8 @@ private:
     }
 #endif
 
-    // the thread pool for parallel tracing.
-    GCThreadPool* gcThreadPool = nullptr;
+    // zCollectedHeap.hpp: heap-owned safepoint workers, separate from both generations.
+    RuntimeWorkers* runtimeWorkers = nullptr;
     GCWorkers* youngWorkers = nullptr;
     GCWorkers* oldWorkers = nullptr;
     int32_t gcThreadCount = 1;

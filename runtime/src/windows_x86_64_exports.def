@@ -1284,23 +1284,6 @@ EXPORTS
     _ZN12MapleRuntime12FixedCStringD1Ev @1296
     _ZN12MapleRuntime12FixedCStringD2Ev @1297
     _ZN12MapleRuntime12FixedCStringaSERKS0_ @1298
-    _ZN12MapleRuntime12GCPoolThread10WorkerFuncEPv @1299
-    _ZN12MapleRuntime12GCPoolThreadC1EPNS_12GCThreadPoolEPKcyy @1300
-    _ZN12MapleRuntime12GCPoolThreadC2EPNS_12GCThreadPoolEPKcyy @1301
-    _ZN12MapleRuntime12GCPoolThreadD1Ev @1302
-    _ZN12MapleRuntime12GCPoolThreadD2Ev @1303
-    _ZN12MapleRuntime12GCThreadPool10WaitFinishEv @1304
-    _ZN12MapleRuntime12GCThreadPool12ClearAllWorkEv @1305
-    _ZN12MapleRuntime12GCThreadPool14DrainWorkQueueEv @1306
-    _ZN12MapleRuntime12GCThreadPool21SetMaxActiveThreadNumEi @1307
-    _ZN12MapleRuntime12GCThreadPool4ExitEv @1308
-    _ZN12MapleRuntime12GCThreadPool4StopEv @1309
-    _ZN12MapleRuntime12GCThreadPool5StartEv @1310
-    _ZN12MapleRuntime12GCThreadPool7AddWorkEPNS_8HeapWorkE @1311
-    _ZN12MapleRuntime12GCThreadPoolC1EPKcii @1312
-    _ZN12MapleRuntime12GCThreadPoolC2EPKcii @1313
-    _ZN12MapleRuntime12GCThreadPoolD1Ev @1314
-    _ZN12MapleRuntime12GCThreadPoolD2Ev @1315
     _ZN12MapleRuntime12GetCallerRspERNS_16WinModuleManagerERKNS_12MachineFrameE @1316
     _ZN12MapleRuntime12InitLogLevelEv @1321
     _ZN12MapleRuntime12LineNumTableD0Ev @1322
@@ -1405,7 +1388,6 @@ EXPORTS
     _ZN12MapleRuntime13RegionManager16RequestForRegionEy @1421
     _ZN12MapleRuntime13RegionManager17ExemptFromRegionsEv @1422
     _ZN12MapleRuntime13RegionManager17PromoteAllRegionsEv @1423
-    _ZN12MapleRuntime13RegionManager18ForwardFromRegionsEPNS_12GCThreadPoolE @1424
     _ZN12MapleRuntime13RegionManager18ForwardFromRegionsEv @1425
     _ZN12MapleRuntime13RegionManager19AddRawPointerObjectEPNS_10BaseObjectE @1426
     _ZN12MapleRuntime13RegionManager19CollectLargeGarbageEv @1427
@@ -1726,7 +1708,6 @@ EXPORTS
     _ZN12MapleRuntime16TracingCollector17MergeMutatorRootsERNS_9MarkStackIPNS_10BaseObjectEEE @1762
     _ZN12MapleRuntime16TracingCollector17ProcessFinalizersEv @1763
     _ZN12MapleRuntime16TracingCollector17RequestGCInternalENS_8GCReasonEb @1764
-    _ZN12MapleRuntime16TracingCollector18EnumAllCommonRootsEPNS_12GCThreadPoolERNS_9MarkStackIPNS_10BaseObjectEEE @1765
     _ZN12MapleRuntime16TracingCollector18EnumAllExportRootsERNS_9MarkStackIPNS_10BaseObjectEEE @1766
     _ZN12MapleRuntime16TracingCollector19ShouldIgnoreRequestERNS_9GCRequestE @1767
     _ZN12MapleRuntime16TracingCollector20DFSTraceExportObjectEPNS_10BaseObjectE @1768

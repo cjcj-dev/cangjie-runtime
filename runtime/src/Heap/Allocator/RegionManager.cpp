@@ -357,75 +357,52 @@ size_t RegionManager::RecordPinnedCrossGenEdges()
             });
         });
     };
-    // STW-parallel of the same conservative walk. Record is fetch_or, so order
-    // does not change the remset. Default ON — mutator-visible state is identical.
-    // Env MRT_GCV2_PINNED_SCAN_PARALLEL=0 keeps the serial walk.
-    static const bool parallelEnv = []() {
-        const char* v = std::getenv("MRT_GCV2_PINNED_SCAN_PARALLEL");
-        return v == nullptr || std::strcmp(v, "0") != 0;
-    }();
-    GCThreadPool* pool = parallelEnv ? Heap::GetHeap().GetCollectorResources().GetThreadPool() : nullptr;
-    if (pool != nullptr) {
-        MRT_PHASE_TIMER("young.pinned_scan.parallel");
-        std::vector<RegionInfo*> regions;
-        auto collect = [&regions, &skipPinnedScanRegion](RegionInfo* region) {
-            if (!skipPinnedScanRegion(region)) {
-                regions.push_back(region);
+    // zCollectedHeap.cpp:310-311: public safepoint work uses the heap's
+    // runtime workers, independently of either generation's GC workers.
+    RuntimeWorkers& workers = Heap::GetHeap().GetCollectorResources().GetRuntimeWorkers();
+    std::vector<RegionInfo*> regions;
+    auto collect = [&regions, &skipPinnedScanRegion](RegionInfo* region) {
+        if (!skipPinnedScanRegion(region)) {
+            regions.push_back(region);
+        }
+    };
+    recentPinnedRegionList.VisitAllRegions(collect);
+    oldPinnedRegionList.VisitAllRegions(collect);
+    rawPointerPinnedRegionList.VisitAllRegions(collect);
+    recentLargeRegionList.VisitAllRegions(collect);
+    oldLargeRegionList.VisitAllRegions(collect);
+    largeTraceRegions.VisitAllRegions(collect);
+    recentFullRegionList.VisitAllRegions(collect);
+    fullTraceRegions.VisitAllRegions(collect);
+
+    class PinnedScanTask : public GCWorkerTask {
+    public:
+        PinnedScanTask(const std::vector<RegionInfo*>& regions,
+                       const std::function<void(RegionInfo*)>& scan, uint32_t workers)
+            : regions(regions), scan(scan),
+              chunk(std::max<size_t>(1, (regions.size() + workers * 4 - 1) / (workers * 4 + 1))) {}
+
+        void Work(uint32_t) override
+        {
+            for (;;) {
+                const size_t first = cursor.fetch_add(chunk, std::memory_order_relaxed);
+                if (first >= regions.size()) {
+                    return;
+                }
+                const size_t end = std::min(first + chunk, regions.size());
+                for (size_t i = first; i < end; ++i) {
+                    scan(regions[i]);
+                }
             }
-        };
-        recentPinnedRegionList.VisitAllRegions(collect);
-        oldPinnedRegionList.VisitAllRegions(collect);
-        rawPointerPinnedRegionList.VisitAllRegions(collect);
-        recentLargeRegionList.VisitAllRegions(collect);
-        oldLargeRegionList.VisitAllRegions(collect);
-        largeTraceRegions.VisitAllRegions(collect);
-        recentFullRegionList.VisitAllRegions(collect);
-        fullTraceRegions.VisitAllRegions(collect);
-        const size_t n = regions.size();
-        if (n == 0) {
-            return 0;
         }
-        int32_t workers = pool->GetMaxThreadNum() + 1;
-        if (workers < 1) {
-            workers = 1;
-        }
-        std::atomic<size_t> cursor{ 0 };
-        const size_t chunk = std::max<size_t>(1, (n + static_cast<size_t>(workers) * 4 - 1) /
-                                                    (static_cast<size_t>(workers) * 4 + 1));
-        for (int32_t w = 0; w < workers; ++w) {
-            pool->AddWork(new (std::nothrow) LambdaWork(
-                [&scanRegion, &regions, &cursor, n, chunk](size_t) {
-                    for (;;) {
-                        size_t i0 = cursor.fetch_add(chunk, std::memory_order_relaxed);
-                        if (i0 >= n) {
-                            break;
-                        }
-                        size_t i1 = std::min(i0 + chunk, n);
-                        for (size_t i = i0; i < i1; ++i) {
-                            scanRegion(regions[i]);
-                        }
-                    }
-                }));
-        }
-        pool->Start();
-        pool->WaitFinish();
-        size_t nRec = recorded.load(std::memory_order_relaxed);
-        VLOG(REPORT, "[GCV2][pinned_scan] parallel=1 regions=%zu workers=%d recorded=%zu", n, workers, nRec);
-        return nRec;
-    }
-    // Old holders only (pinned/large/full). from/tl/unmovable-from are the young
-    // cset; walking them stamped deadHolder slots (zRemembered.cpp:347-387).
-    {
-        MRT_PHASE_TIMER("young.pinned_scan.serial");
-        recentPinnedRegionList.VisitAllRegions(scanRegion);
-        oldPinnedRegionList.VisitAllRegions(scanRegion);
-        rawPointerPinnedRegionList.VisitAllRegions(scanRegion);
-        recentLargeRegionList.VisitAllRegions(scanRegion);
-        oldLargeRegionList.VisitAllRegions(scanRegion);
-        largeTraceRegions.VisitAllRegions(scanRegion);
-        recentFullRegionList.VisitAllRegions(scanRegion);
-        fullTraceRegions.VisitAllRegions(scanRegion);
-    }
+
+    private:
+        const std::vector<RegionInfo*>& regions;
+        const std::function<void(RegionInfo*)> scan;
+        const size_t chunk;
+        std::atomic<size_t> cursor { 0 };
+    } task(regions, scanRegion, workers.ActiveWorkers());
+    workers.Run(task);
     return recorded.load(std::memory_order_relaxed);
 }
 
@@ -492,7 +469,7 @@ const size_t RegionManager::HUGE_PAGE = (2048 * KB) / MapleRuntime::MRT_PAGE_SIZ
 
 #if defined(MRT_TESTABLE_INTERNALS)
 template<Generation G>
-void ForwardTask<G>::Execute(size_t)
+void ForwardTask<G>::Work(uint32_t)
 {
     detail::ExecuteForwardTask<G>(regionManager, fromRegionList);
 }
@@ -2102,14 +2079,7 @@ void RegionManager::DrainForwardFromRegions()
         ForwardFromRegions<G>();
         return;
     }
-    class Task final : public GCWorkerTask {
-    public:
-        Task(RegionManager& manager, RegionList& fromSpace) : regionManager(manager), fromRegionList(fromSpace) {}
-        void Work(uint32_t) override { detail::ExecuteForwardTask<G>(regionManager, fromRegionList); }
-    private:
-        RegionManager& regionManager;
-        RegionList& fromRegionList;
-    } task(*this, fromRegionList);
+    ForwardTask<G> task(*this, fromRegionList);
     relocationWorkers->Run(task);
 }
 

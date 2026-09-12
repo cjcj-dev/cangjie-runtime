@@ -147,10 +147,10 @@ extern "C" int CJ_ScheduleManagerInit();
 
 namespace MapleRuntime {
 struct MarkPort203TestAccess {
-    static void Bind(CollectorResources& resources, TracingCollector* collector, GCThreadPool* pool, int32_t count = 1)
+    static void Bind(CollectorResources& resources, TracingCollector* collector, RuntimeWorkers* pool, int32_t count = 1)
     {
         resources.collectorProxy.currentCollector = collector;
-        resources.gcThreadPool = pool;
+        resources.runtimeWorkers = pool;
         resources.gcThreadCount = count;
         resources.concurrentGcThreadCount = count;
     }
@@ -346,7 +346,7 @@ void RunArrayCollection(const char* variant, size_t helpers, bool allocateBlack 
 
     CollectorResources& resources = Heap::GetHeap().GetCollectorResources();
     WCollector collector(Heap::GetHeap().GetAllocator(), resources);
-    GCThreadPool pool("gc-unit-m2-array", static_cast<int32_t>(helpers), GCPoolThread::GC_THREAD_PRIORITY);
+    RuntimeWorkers pool(helpers + 1u);
     MarkPort203TestAccess::Bind(resources, &collector, &pool, static_cast<int32_t>(helpers + 1));
     collector.SetGCPhase(major ? GCPhase::GC_PHASE_IDLE : GCPhase::GC_PHASE_CLEAR_SATB_BUFFER);
     auto& space = reinterpret_cast<RegionSpace&>(Heap::GetHeap().GetAllocator());
@@ -438,7 +438,6 @@ void RunArrayCollection(const char* variant, size_t helpers, bool allocateBlack 
     resources.SetGcStarted(wasStarted);
     resources.GetGCStats().reason = oldReason;
     MarkPort203TestAccess::Bind(resources, nullptr, nullptr);
-    pool.Exit();
     if (result.allocationBuffer != nullptr) {
         result.allocationBuffer->SetRegion(result.previousRegion);
         if (result.previousBuffer == nullptr) {
