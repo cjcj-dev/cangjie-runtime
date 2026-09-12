@@ -80,7 +80,8 @@ void WCollector::PostTrace()
     // old-mark coverage is the point after which ReclaimRetired may remove it.
     PrepareCycleRef();
     ForwardingTable::PublishMarkCoverage(Generation::Old);
-    ForwardingTable::ReclaimRetired("old-mark-coverage");
+    // zGeneration.cpp:1261-1271: old mark_end already published MARK_COMPLETE
+    // on oldCycle (TracingCollector.cpp FinishOldMark). Do not retire forwarding.
     // reclaim large objects immediately after tracing is done.
     CollectLargeGarbage();
     CollectPinnedGarbage();
