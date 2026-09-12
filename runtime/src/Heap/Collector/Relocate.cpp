@@ -1732,12 +1732,13 @@ void WCollector::EvacuateYoungRegions(const std::vector<BaseObject*>& reachableV
             Heap::GetHeap().InstallBarrier(GCPhase::GC_PHASE_PREFORWARD);
             Heap::GetHeap().SetGCPhase(GCPhase::GC_PHASE_PREFORWARD);
             StartRelocationTasks();
-            TransitionToGCPhase(GCPhase::GC_PHASE_PREFORWARD, true);
-            // zRelocate.cpp:1289-1305 workers()->run(relocate_task) before consumers
-            // wait (zRelocate.cpp:393-405 add_and_wait). GCWorkers::Run is the
-            // coordinator join, so Drain here starts page work before root
-            // consumers; waiters only wait for already-started tasks.
+            // zRelocate.cpp:1289-1300 generation workers run relocate_task before
+            // any consumer add_and_wait (zRelocate.cpp:393-405). Drain is
+            // GCWorkers::Run: it publishes and joins page work. TransitionToGCPhase
+            // synchronously visits mutator roots (TracingCollector.h:463) which
+            // may WaitForPageForwarding, so workers must already be running.
             manager.DrainForwardFromRegions<Generation::Young>();
+            TransitionToGCPhase(GCPhase::GC_PHASE_PREFORWARD, true);
             postEvacPoint("pre-fix-forwarded", false);
         }
 
