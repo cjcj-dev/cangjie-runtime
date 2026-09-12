@@ -748,7 +748,7 @@ void EnsureRouteDomainMembership(WCollector* collector, BaseObject* obj)
         return;
     }
     if (isGhost) {
-        // Only paint while FORWARDABLE: RouteOrCompactRegionImpl freezes liveByteCount.
+        // Only paint while FORWARDABLE: RelocateClaimedPage freezes liveByteCount.
         if (region->IsForwardingDone() || region->IsRoutingState()) {
             g_installDomainTooLate.fetch_add(1, std::memory_order_relaxed);
             return;
@@ -1994,12 +1994,7 @@ BaseObject* WCollector::TryMutatorRelocate(BaseObject* obj, RegionInfo* forwardi
     // terminated. Admit it before copying; a next-minor remset entry is too late.
     // This is the late-store leg corresponding to zBarrier.inline.hpp:695-716.
     EnsureRouteDomainMembership(const_cast<WCollector*>(this), obj);
-    // The scope is what lets ForwardObjectExclusive attribute the copy to this thread. Counting
-    // at this call site instead would conflate "this mutator copied the object" with "this
-    // mutator retained and then found a worker had already copied it" -- and only the first of
-    // those is evidence that the ported leg does anything.
-    ZForwardingLife::MutatorRelocateScope relocateScope;
-    BaseObject* toVersion = const_cast<WCollector*>(this)->ForwardObjectImpl(obj, forwarding, lease);
+    BaseObject* toVersion = const_cast<WCollector*>(this)->RelocateObjectInner(obj, nullptr, forwarding);
     lease.Release(); // release_page
     if (toVersion == nullptr) {
         return WaitForPageForwarding(obj, lease.HoldForwarding());
@@ -2208,6 +2203,17 @@ BaseObject* WCollector::ForwardObject(BaseObject* obj)
                     return obj;
                 }
             }
+            BaseObject* waited = WaitForPageForwarding(obj, ForwardingTable::RetainPageOwner(ghostRegion));
+            if (waited != nullptr) {
+                return waited;
+            }
+            if (const MAddress hit = ForwardingTable::FindTo(reinterpret_cast<MAddress>(obj))) {
+                return reinterpret_cast<BaseObject*>(hit);
+            }
+            if (ZForwardingLife::CurrentPageWork() != nullptr) {
+                return nullptr;
+            }
+            CHECK_DETAIL(false, "should be forwarded from=%p", obj);
             return nullptr;
         }
         return obj;
@@ -2366,7 +2372,7 @@ BaseObject* WCollector::TryForwardObject(BaseObject* obj)
     //
     // RegionManager::RouteRegion returning false is exactly that case.  It answers false in two
     // structurally different ways (RegionManager.h:806-825): the page is already COMPACTED, or
-    // RouteOrCompactRegionImpl just compacted it in place and set COMPACTED.  Neither means "no
+    // RelocateClaimedPage just compacted it in place and set COMPACTED.  Neither means "no
     // to-version"; both mean "the to-version is an insert from in-place compact".  The
     // IsCompacted() test above cannot cover it -- it runs *before* this call, and this call is
     // what makes the page compacted.

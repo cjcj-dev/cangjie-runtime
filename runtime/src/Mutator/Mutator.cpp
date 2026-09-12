@@ -941,7 +941,8 @@ static void PreForwardHeaderlessRecord(BaseObject* record, Collector& collector,
         return;
     }
     BaseObject* toObj = collector.ForwardObject(oldObj);
-    if (toObj != nullptr && oldObj != toObj) {
+    CHECK_DETAIL(toObj != nullptr, "preforward headerless missing winner oldObj=%p", oldObj);
+    if (oldObj != toObj) {
         HealRoot(field, from_object(toObj), HealSite::MutatorPreForwardHeaderlessRecord);
     }
 }
@@ -961,9 +962,7 @@ void VisitTaggedOopSlot(ObjectRef& root)
             Collector& collector = Heap::GetHeap().GetCollector();
             if (collector.IsGhostFromObject(obj) && !collector.IsUnmovableFromObject(obj)) {
                 BaseObject* toObj = collector.ForwardObject(obj);
-                if (toObj == nullptr) {
-                    return;
-                }
+                CHECK_DETAIL(toObj != nullptr, "preforward tagged oop missing winner obj=%p", obj);
                 if (obj != toObj) {
                     HealRoot(root, from_object(toObj), HealSite::MutatorPreForwardRoot);
                 }
@@ -1195,9 +1194,7 @@ DerivedPtrVisitor Mutator::MakePreForwardDerivedVisitor(const PreForwardBaseReso
         if (currentBase == nullptr) {
             currentBase = Heap::GetHeap().GetCollector().ForwardObject(oldBase);
         }
-        if (currentBase == nullptr) {
-            return;
-        }
+        CHECK_DETAIL(currentBase != nullptr, "preforward derived missing winner oldBase=%p", oldBase);
         RootSlot fixedBase;
         StorePlain(fixedBase, from_object(currentBase));
         RebaseDerived(derivedPtr, fixedBase, offset);
@@ -1220,9 +1217,7 @@ inline void Mutator::GCPhasePreForward(GCPhase newPhase)
             !collector.IsUnmovableFromObject(oldObj)) {
             if (!rootFieldSet.insert((void*)(&refFieldAddr)).second) { return; }
             BaseObject* toObj = collector.ForwardObject(oldObj);
-            if (toObj == nullptr) {
-                return;
-            }
+            CHECK_DETAIL(toObj != nullptr, "preforward stack field missing winner oldObj=%p", oldObj);
             HealRoot(rootField, from_object(toObj), HealSite::MutatorPreForwardStackField);
         } else if (IsStackAddr(reinterpret_cast<uintptr_t>(oldObj))) {
             if (IsHeaderedStackObject(oldObj)) {
@@ -1247,9 +1242,7 @@ inline void Mutator::GCPhasePreForward(GCPhase newPhase)
                 !collector.IsUnmovableFromObject(host)) {
                 if (rootFieldSet.insert((void*)(&root)).second) {
                     BaseObject* toHost = collector.ForwardObject(host);
-                    if (toHost == nullptr) {
-                        return;
-                    }
+                    CHECK_DETAIL(toHost != nullptr, "preforward interior missing winner host=%p", host);
                     HealRoot(root, to_zaddress(reinterpret_cast<MAddress>(toHost) +
                         (reinterpret_cast<MAddress>(oldObj) - reinterpret_cast<MAddress>(host))),
                         HealSite::MutatorPreForwardInterior);
@@ -1278,9 +1271,7 @@ inline void Mutator::GCPhasePreForward(GCPhase newPhase)
             // (zRelocate.cpp:412-416) encodes the same invariant: an address a root names is a
             // live object start, or the collector is already wrong.
             BaseObject* toObj = collector.ForwardObject(oldObj);
-            if (toObj == nullptr) {
-                return;
-            }
+            CHECK_DETAIL(toObj != nullptr, "preforward root missing winner oldObj=%p", oldObj);
             HealRoot(root, from_object(toObj), HealSite::MutatorPreForwardRoot);
             remappedBases[oldObj] = toObj;
         } else if (oldObj != nullptr) {

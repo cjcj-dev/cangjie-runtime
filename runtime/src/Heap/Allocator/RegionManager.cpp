@@ -2814,11 +2814,30 @@ void RegionManager::RequestForRegion(size_t size)
     prevRegionAllocTime = TimeUtil::NanoSeconds();
 }
 
-bool RegionManager::RouteOrCompactRegionImpl(RegionInfo* region)
+bool RegionManager::RelocateClaimedPage(RegionInfo* region)
 {
     CHECK_DETAIL(region->GetRawPointerObjectCount() <= 0, "pinned region shouldn't be moved");
-    CompactRegion(region);
-    return false;
+    MAddress regionStart = region->GetRegionStart();
+    MAddress regionLimit = region->GetRegionAllocPtr();
+    CopyCollector& collector = reinterpret_cast<CopyCollector&>(Heap::GetHeap().GetCollector());
+    bool allocFailed = false;
+    ForEachLiveObjectStart(region, regionStart, regionLimit, [&](BaseObject* currentObj, size_t) {
+        if (allocFailed) {
+            return;
+        }
+        if (ForwardingTable::FindTo(reinterpret_cast<MAddress>(currentObj))) {
+            return;
+        }
+        if (collector.ForwardObjectExclusive(currentObj) == nullptr) {
+            allocFailed = true;
+        }
+    });
+    if (allocFailed) {
+        CompactRegion(region);
+        return false;
+    }
+    VerifyForwardingReceiptsClosed(region, "RelocateClaimedPage");
+    return true;
 }
 
 void RegionManager::CompactRegion(RegionInfo* region)
@@ -2855,6 +2874,9 @@ void RegionManager::CompactRegion(RegionInfo* region)
     rememberedSet.TakeInPlaceSlots(regionStart, region->GetRegionEnd(), takenSlots);
     ForEachLiveObjectStart(region, regionStart, regionLimit, [&](BaseObject* currentObj, size_t offset) {
         const MAddress currentPtr = regionStart + offset;
+        if (ForwardingTable::FindTo(currentPtr)) {
+            return;
+        }
         size_t size = currentObj->GetSize();
         MAddress toAddress = region->Alloc(size);
         BaseObject* toObj = from_region_addr(toAddress);
@@ -3003,6 +3025,9 @@ void RegionManager::CompactRegion(RegionInfo* region, RegionInfo* toRegion1)
     rememberedSet.TakeInPlaceSlots(regionStart, region->GetRegionEnd(), takenSlots);
     ForEachLiveObjectStart(region, regionStart, regionLimit, [&](BaseObject* currentObj, size_t offset) {
         const MAddress currentPtr = regionStart + offset;
+        if (ForwardingTable::FindTo(currentPtr)) {
+            return;
+        }
         size_t size = currentObj->GetSize();
         MAddress toAddress = toRegion1->Alloc(size);
         if (toAddress == 0) {
