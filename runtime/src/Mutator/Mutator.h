@@ -560,6 +560,7 @@ public:
 
     void PreparedToPark(void* pc, void* fa)
     {
+        FlushHolderThreadMarkProducers();
         SetSafepointStatePtr(nullptr);
         stackWatermark.OnPark();
         if (UNLIKELY((uwContext.GetUnwindContextStatus() == UnwindContextStatus::RISKY) || InSaferegion())) {
@@ -639,6 +640,7 @@ public:
     enum class MarkFlushClaim : uint8_t { NotPending, NotSafe, Empty, Published };
     MarkFlushClaim TryClaimMarkFlush(bool self, class MarkDomain* domain);
     bool AcknowledgeMarkFlushHandshake(class MarkDomain* domain);
+    void FlushHolderThreadMarkProducers();
 
 protected:
     // for managed stack
