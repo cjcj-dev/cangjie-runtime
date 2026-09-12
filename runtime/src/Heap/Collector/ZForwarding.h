@@ -189,8 +189,7 @@ public:
     MAddress resolve_life(MAddress to) const;
     MAddress resolve_live(MAddress to) const;
     bool receipt_live(MAddress to) const;
-    void note_kept_expire() { _kept_seen_expire = true; }
-    bool kept_seen_expire() const { return _kept_seen_expire; }
+
     void note_retired_required() { _retired_required.store(true, std::memory_order_release); }
     bool retired_required() const { return _retired_required.load(std::memory_order_acquire); }
     static std::atomic<uint64_t>& StaleToLifeCount();
@@ -536,6 +535,9 @@ public:
 
     // zForwarding.cpp:51-53 / :86-194. Source-page ownership only.
     bool claim() { return ZForwardingLife::claim(_claimed); }
+    bool is_claimed() const { return _claimed.load(std::memory_order_acquire); }
+    bool in_place() const { return _in_place.load(std::memory_order_acquire); }
+    void set_in_place() { _in_place.store(true, std::memory_order_release); }
     bool retain_page() { return ZForwardingLife::retain_page(_ref_count, _done); }
     void release_page()
     {
@@ -591,6 +593,7 @@ private:
           _birth_flip(0),
           _required_mark_epoch(0),
           _claimed(false),
+          _in_place(false),
           _ref_lock(),
           _ref_count(1),
           _done(false),
@@ -598,7 +601,6 @@ private:
           _overflow(),
           _receiptInstallLock(),
           _to_life_n(0),
-          _kept_seen_expire(false),
           _retired_required(false),
           _provisional(provisional),
           _from_page(),
@@ -624,6 +626,7 @@ private:
     uint64_t _birth_flip;
     uint64_t _required_mark_epoch;
     std::atomic<bool> _claimed;
+    std::atomic<bool> _in_place;
     mutable std::mutex _ref_lock;
     std::condition_variable _ref_changed;
     std::atomic<int32_t> _ref_count;
@@ -642,7 +645,6 @@ private:
     Receipt::Status register_to_life_locked(MAddress to, uint8_t optimisticCount);
     ToLife _to_lives[kToLifeCapacity];
     std::atomic<uint8_t> _to_life_n;
-    bool _kept_seen_expire;
     std::atomic<bool> _retired_required;
     const bool _provisional;
     FromPageView _from_page;
