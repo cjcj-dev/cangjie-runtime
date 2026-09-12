@@ -23,7 +23,6 @@
 // Legacy per-probe envs remain authoritative aliases (in-flight recipes must keep working):
 //   MRT_GCV2_PROMOTEGAP_PROBE=1
 //   MRT_GCV2_NULLSLOT=1
-//   MRT_GCV2_MARKCOMPLETE=1
 //   MRT_GCV2_STATHEAL=1
 //   MRT_GCV2_DIAG_SELFTEST=1
 //

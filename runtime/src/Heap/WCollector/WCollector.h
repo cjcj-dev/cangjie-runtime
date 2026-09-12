@@ -26,6 +26,7 @@
 #include "Allocator/RegionSpace.h"
 #include "Heap/Allocator/ForwardingTable.h"
 #include "Collector/CopyCollector.h"
+#include "Heap/Collector/MarkEngine.h"
 #include "Heap/Collector/RemsetScanStats.h"
 #include "Heap/Verify/MutatorRelocate.h"
 #include "Mutator/MutatorManager.h"
@@ -1375,19 +1376,10 @@ private:
     void PushYoungObject(BaseObject* object, WorkStack& workStack, const char* origin, bool finalizable) const;
     // setbitmap O1③: claim young via MarkObject (region mark bitmap) + collect vector;
     // FYS=0 skips reachableSlots inserts (slots never looked up). Object claims use the bitmap.
-    // R3 markpar: STW-parallel claim+steal (sibling of ConcurrentMarkingWork); env MARKPAR_*.
     void TraceYoungClosure(WorkStack& workStack, bool fullYoungScan,
                            std::vector<BaseObject*>& reachableVec, MinorSlotSet& reachableSlots,
                            MinorSlotSet& weakSlots,
                            const MinorSlotSet* reachableSlotDomain = nullptr);
-    void TraceYoungClosureSerial(WorkStack& workStack, bool fullYoungScan,
-                                 std::vector<BaseObject*>& reachableVec, MinorSlotSet& reachableSlots,
-                                 MinorSlotSet& weakSlots,
-                                 const MinorSlotSet* reachableSlotDomain = nullptr);
-    void TraceYoungClosureParallel(WorkStack& workStack, bool fullYoungScan,
-                                   std::vector<BaseObject*>& reachableVec, MinorSlotSet& reachableSlots,
-                                   MinorSlotSet& weakSlots, GCThreadPool* threadPool,
-                                   const MinorSlotSet* reachableSlotDomain = nullptr);
     void TraceYoungClosureStriped(WorkStack& workStack, bool fullYoungScan,
                                   std::vector<BaseObject*>& reachableVec, MinorSlotSet& reachableSlots,
                                   MinorSlotSet& weakSlots, GCThreadPool* threadPool,
@@ -1400,7 +1392,6 @@ private:
     // ZMark::try_end sibling: called with mutators stopped; performs exactly one
     // local-buffer flush and reports whether concurrent-mark-continue is needed.
     bool TryEndYoungMark(WorkStack& workStack, YoungConcWindowStats* windowStats = nullptr);
-    friend class YoungMarkingWork;
     friend class YoungStripedMarkingWork;
     void RescanRememberedSet(WorkStack& workStack, const MinorSlotSet& rememberedSlots,
                              const MinorSlotSet& reachableSlots, const MinorSlotSet& weakSlots,
@@ -1459,6 +1450,7 @@ private:
     CrossRefHandler cycleRefHandlerForTest = nullptr;
 #endif
 
+    std::unique_ptr<MarkDomain> youngMarkDomain;
     ForwardTable fwdTable;
     // gc index 0 or 1 is used to distinguish previous gc and current gc.
     uint16_t currentTagID = 0;
