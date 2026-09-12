@@ -2627,7 +2627,7 @@ BaseObject* WCollector::ForwardObjectImpl(BaseObject* obj, RegionInfo* ghostFrom
 #endif
     // zRelocate.cpp:382-410 relocate_object: find hit → return; else retain
     // already held by the caller lease; inner allocate→copy→insert (CAS
-    // winner, loser undo). No object-header TryLock admission.
+    // winner). No object-header TryLock admission.
     const MAddress fromAddr = reinterpret_cast<MAddress>(obj);
     if (const MAddress hit = ForwardingTable::FindTo(fromAddr)) {
         return reinterpret_cast<BaseObject*>(hit);
@@ -2682,15 +2682,7 @@ BaseObject* WCollector::RelocateObjectInner(BaseObject* obj, BaseObject* planned
             return nullptr;
         }
     }
-    BaseObject* winner = ForwardObjectExclusive(obj, toObj, copyPage);
-    // zRelocate.cpp:372-376: insert returns the winner; if it is not this
-    // allocation, undo the bump (zHeap.cpp:298-311). Undo may fail.
-    if (winner != toObj && toObj != obj && toObj != nullptr) {
-        if (RegionInfo* dest = RegionInfo::TryGetRegionInfoAt(reinterpret_cast<MAddress>(toObj))) {
-            (void)dest->UndoAllocObjectAtomic(reinterpret_cast<uintptr_t>(toObj), size);
-        }
-    }
-    return winner;
+    return ForwardObjectExclusive(obj, toObj, copyPage);
 }
 
 BaseObject* WCollector::ForwardObjectExclusive(BaseObject* obj, BaseObject* toObj, RegionInfo* copyPage)
@@ -2714,14 +2706,6 @@ BaseObject* WCollector::ForwardObjectExclusive(BaseObject* obj, BaseObject* toOb
             copyPage == nullptr ? 0U : static_cast<unsigned>(copyPage->GetRouteState()),
             copyPage == nullptr ? 0U : static_cast<unsigned>(copyPage->IsForwardingDone()),
             copyPage == nullptr ? 0 : copyPage->ForwardingRefCount());
-        // Installation/allocation failure is propagated before CopyObject. Once
-        // bytes are copied, publication is an invariant and cannot be a miss.
-        if (toObj != obj) {
-            const size_t size = RegionSpace::GetAllocSize(*obj);
-            if (RegionInfo* dest = RegionInfo::TryGetRegionInfoAt(reinterpret_cast<MAddress>(toObj))) {
-                (void)dest->UndoAllocObjectAtomic(reinterpret_cast<uintptr_t>(toObj), size);
-            }
-        }
         return nullptr;
     }
     size_t size = RegionSpace::GetAllocSize(*obj);
@@ -2745,13 +2729,9 @@ BaseObject* WCollector::ForwardObjectExclusive(BaseObject* obj, BaseObject* toOb
         publication, reinterpret_cast<MAddress>(obj), reinterpret_cast<MAddress>(toObj));
     const MAddress mapped = receipt.address;
     if (!ForwardingTable::ReceiptAllowsForwarded(mapped)) {
-        if (toObj != obj) {
-            if (RegionInfo* dest = RegionInfo::TryGetRegionInfoAt(reinterpret_cast<MAddress>(toObj))) {
-                (void)dest->UndoAllocObjectAtomic(reinterpret_cast<uintptr_t>(toObj), size);
-            }
-        }
         return nullptr;
     }
+    // zRelocate.cpp:372-376: undo this allocation when insert picked another winner.
     if (mapped != reinterpret_cast<MAddress>(toObj) && toObj != obj) {
         if (RegionInfo* dest = RegionInfo::TryGetRegionInfoAt(reinterpret_cast<MAddress>(toObj))) {
             (void)dest->UndoAllocObjectAtomic(reinterpret_cast<uintptr_t>(toObj), size);
