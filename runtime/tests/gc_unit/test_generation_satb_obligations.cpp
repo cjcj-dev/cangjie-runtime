@@ -50,9 +50,7 @@ GC_OTHER_VM_TEST(GenerationMark, YoungMarkWorkDoesNotConsumeOldStripes)
     GC_EXPECT_EQ(mark.YoungPending(), 1u);
     TracingCollector::WorkStack work;
     std::vector<BaseObject*> reached;
-    WCollector::MinorSlotSet slots;
-    WCollector::MinorSlotSet weakSlots;
-    GC_EXPECT_TRUE(mark.collector.FollowYoungMark(work, false, reached, slots, weakSlots));
+    GC_EXPECT_TRUE(mark.FollowYoung(work, reached));
     GC_EXPECT_TRUE(work.empty());
     GC_EXPECT_EQ(mark.YoungPending(), 0u);
     GC_EXPECT_EQ(reached.size(), 1u);
@@ -61,8 +59,7 @@ GC_OTHER_VM_TEST(GenerationMark, YoungMarkWorkDoesNotConsumeOldStripes)
     GC_EXPECT_TRUE(mark.collector.IsMarkedObject<Generation::Young>(fx.obj1));
     GC_EXPECT_EQ(mark.OldPending(), 1u);
     std::vector<BaseObject*> oldObjects;
-    mark.DrainDomain(*mark.collector.majorMarkDomain,
-                    [&](BaseObject* object, bool) { oldObjects.push_back(object); });
+    mark.DrainOld([&](BaseObject* object, bool) { oldObjects.push_back(object); });
     GC_EXPECT_EQ(oldObjects.size(), 1u);
     GC_EXPECT_TRUE(oldObjects.front() == fx.obj0);
     fx.region1->metadata.liveInfo = nullptr;
@@ -78,12 +75,11 @@ GC_TEST(GenerationMark, MarkCompleteStopsOldPublication)
     MarkPublicationFixture mark;
     mark.collector.MarkObjectIfActive(fx.obj0);
     GC_EXPECT_EQ(mark.OldPending(), 1u);
-    mark.collector.oldCycle.PublishPhase(GC_PHASE_MARK_COMPLETE);
+    mark.CompleteOldMarkForAdmissionTest();
     mark.collector.MarkObjectIfActive(fx.obj1);
     GC_EXPECT_EQ(mark.OldPending(), 1u);
     std::vector<BaseObject*> oldObjects;
-    mark.DrainDomain(*mark.collector.majorMarkDomain,
-                    [&](BaseObject* object, bool) { oldObjects.push_back(object); });
+    mark.DrainOld([&](BaseObject* object, bool) { oldObjects.push_back(object); });
     GC_EXPECT_EQ(oldObjects.size(), 1u);
     GC_EXPECT_TRUE(oldObjects.front() == fx.obj0);
 }

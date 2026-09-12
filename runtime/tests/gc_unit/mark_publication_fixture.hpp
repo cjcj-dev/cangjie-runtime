@@ -52,6 +52,20 @@ struct MarkPublicationFixture {
             }
         }
     }
+    template<class Visitor> void DrainOld(Visitor&& visitor)
+    {
+        DrainDomain(*collector.majorMarkDomain, std::forward<Visitor>(visitor));
+    }
+    bool FollowYoung(TracingCollector::WorkStack& work, std::vector<BaseObject*>& reached)
+    {
+        WCollector::MinorSlotSet slots;
+        WCollector::MinorSlotSet weakSlots;
+        return collector.FollowYoungMark(work, false, reached, slots, weakSlots);
+    }
+    void CompleteOldMarkForAdmissionTest()
+    {
+        collector.oldCycle.PublishPhase(GC_PHASE_MARK_COMPLETE);
+    }
     template<class Visitor> void Drain(Visitor&& visitor)
     {
         DrainDomain(*collector.youngMarkDomain, visitor);
