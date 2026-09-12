@@ -3973,6 +3973,7 @@ GC_TEST(ForwardingPublicationProduct, PageWaitThenLookupReadsOriginalCompactRece
     BaseObject* resolved = nullptr;
     std::thread waiter([&]() {
         AllocBuffer* waiterBuf = AllocBuffer::GetOrCreateAllocBuffer();
+        routeDestination->SetRegionType(RegionInfo::RegionType::THREAD_LOCAL_REGION);
         waiterBuf->SetRegion(routeDestination);
         resolved = RelocationReceiptTestAccess::WaitRoutedTipReady(
             collector, liveObject, nullptr, region);
@@ -4047,6 +4048,7 @@ GC_TEST(ForwardingPublicationProduct, CompletedPageResolvesThroughForwardingTabl
     BaseObject* resolved = nullptr;
     std::thread waiter([&]() {
         AllocBuffer* waiterBuf = AllocBuffer::GetOrCreateAllocBuffer();
+        routeDestination->SetRegionType(RegionInfo::RegionType::THREAD_LOCAL_REGION);
         waiterBuf->SetRegion(routeDestination);
         resolved = RelocationReceiptTestAccess::WaitRoutedTipReady(
             collector, fromObject, nullptr, region);

@@ -303,8 +303,6 @@ GC_TEST(ForwardingNoGeometry, ForwardImplTryLockCopiesWithoutPrebuiltMapping)
     BaseObject* seedTo = fx.PlaceObject(fx.region1->GetRegionStart() + 128);
     fx.region1->SetRegionType(RegionInfo::RegionType::THREAD_LOCAL_REGION);
     fx.region1->SetRegionAllocPtr(reinterpret_cast<MAddress>(seedTo) + 64);
-    AllocBuffer* buffer = AllocBuffer::GetOrCreateAllocBuffer();
-    buffer->SetRegion(fx.region1);
     const MAddress copyFromAddr = reinterpret_cast<MAddress>(copyFrom);
     ForwardingTable::ClearEntries(fx.region0->GetRegionStart(), fx.region0->GetRegionSize());
     ForwardingTable::ReclaimRetired("gc-unit-forward-impl-trylock");
@@ -316,6 +314,9 @@ GC_TEST(ForwardingNoGeometry, ForwardImplTryLockCopiesWithoutPrebuiltMapping)
     WCollector collector(Heap::GetHeap().GetAllocator(), Heap::GetHeap().GetCollectorResources());
     collector.SetGCPhase(GCPhase::GC_PHASE_FORWARD);
     ZForwardingLife::reset_copy_open(fx.region0->metadata.copyInflight);
+    AllocBuffer* buffer = AllocBuffer::GetOrCreateAllocBuffer();
+    fx.region1->SetRegionType(RegionInfo::RegionType::THREAD_LOCAL_REGION);
+    buffer->SetRegion(fx.region1);
     BaseObject* relocated = MutatorPublishTestAccess::ForwardImpl(collector, copyFrom, fx.region0);
     GC_EXPECT_TRUE(relocated != nullptr);
     GC_EXPECT_TRUE(relocated != copyFrom);
