@@ -29,15 +29,6 @@ class MarkLiveCache;
 constexpr uint64_t NS_PER_US = 1000;
 constexpr uint64_t NS_PER_S = 1000000000;
 
-// Strict mark-end cut shared by major MarkSatbBuffer and young
-// MarkYoungSatbBuffer. ZMark::end -> try_end (zMark.cpp:954-971) decides
-// termination with mutators stopped, after ZMark::flush (zMark.cpp:587-605,
-// :998-1006), and resumes concurrent follow when that cut exposes work
-// (zMark.cpp:973-990). This must stay compile-time and default-on: retired-only
-// sampling cannot see a mutator's non-full SATB node.
-constexpr bool kMarkTerminateInPause = true;
-inline bool MarkTerminateInPauseEnabled() { return kMarkTerminateInPause; }
-
 void NoteMarkTerminatePause();
 void NoteMarkTerminateFlushed(size_t n);
 void NoteMarkTerminateContinue(size_t stackSize);
@@ -381,6 +372,11 @@ public:
     // there is intentionally no IsMarkedObject(BaseObject*) compatibility API.
     template<Generation G>
     bool IsMarkedObject(const BaseObject* obj) const { return RegionSpace::IsMarkedObject<G>(obj); }
+
+    template<Generation G>
+    bool IsLiveObject(const BaseObject* obj) const { return RegionSpace::IsLiveObject<G>(obj); }
+
+    bool FlushMarkProducers(MarkDomain* domain);
 
     // live or resurrected object.
     template<Generation G>
