@@ -368,9 +368,6 @@ void WCollector::TraceRefField(BaseObject* obj, RefField<>& field, WorkStack& wo
     {
         const MAddress fromAddr = reinterpret_cast<MAddress>(latest);
         MAddress stored = ForwardingTable::FindTo(fromAddr);
-        if (stored == 0) {
-            stored = ForwardingTable::FindRetiredTo(fromAddr);
-        }
         if (stored != 0) {
             BaseObject* to = reinterpret_cast<BaseObject*>(stored);
             if (ToHeaderCovered(to)) {

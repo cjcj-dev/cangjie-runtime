@@ -264,9 +264,9 @@ void RemapWindowHook(unsigned point, RegionInfo* region, BaseObject* object)
         if (state.checkArena) {
             auto* keptTable = ForwardingTable::GetEntries(reinterpret_cast<MAddress>(state.from));
             auto* copyTable = ForwardingTable::GetEntries(reinterpret_cast<MAddress>(state.copyFrom));
-            const auto* arena = keptTable == nullptr ? nullptr : keptTable->arena_for_test();
+            const auto* arena = keptTable == nullptr ? nullptr : ForwardingTable::ArenaForTest(static_cast<Generation>(keptTable->table_generation()));
             state.arenaInstalled = arena != nullptr && copyTable != nullptr &&
-                copyTable->arena_for_test() == arena &&
+                ForwardingTable::ArenaForTest(static_cast<Generation>(copyTable->table_generation())) == arena &&
                 arena->contains_for_test(keptTable, ZForwarding::AttachedArray::object_size() +
                     ZForwarding::AttachedArray::array_size(keptTable->length())) &&
                 arena->contains_for_test(copyTable, ZForwarding::AttachedArray::object_size() +

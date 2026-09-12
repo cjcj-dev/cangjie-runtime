@@ -187,9 +187,9 @@ void WCollector::CheckStoreGoodTarget(const char* consumer, BaseObject* target,
     CHECK_DETAIL(false,
                  "%s consumer=%s target=%p holder_kind=%s holder=%p slot=%p stage=%s "
                  "writer_kind=%s incoming_source_kind=%s source_slot=%p working_copy_slot=%p "
-                 "field_type=%s field_offset=%zu table_id=%#zx publication_generation=%llu "
-                 "from_page_epoch=%llu lifeId=%llu lookup_state=%u lookup_cause=%u "
-                 "publication_closed=%u",
+                 "field_type=%s field_offset=%zu table_id=%#zx "
+                 "from_page_epoch=%llu lifeId=%llu lookup_state=%u "
+                 "",
                  verdict != HandVerdict::Usable
                      ? "store-good requires a usable resolved address"
                      : "store-good must not colour a relocation-set address",
@@ -200,11 +200,9 @@ void WCollector::CheckStoreGoodTarget(const char* consumer, BaseObject* target,
                  ForwardingProvenance::SourceName(provenance.incomingSourceKind), provenance.sourceSlot,
                  provenance.workingCopySlot, ForwardingProvenance::FieldName(provenance.fieldKind),
                  provenance.fieldOffset, static_cast<size_t>(lookup.tableId),
-                 static_cast<unsigned long long>(lookup.publicationGeneration),
                  static_cast<unsigned long long>(lookup.fromPageEpoch),
                  static_cast<unsigned long long>(lookup.fromPageLifeId),
-                 static_cast<unsigned>(lookup.answer), static_cast<unsigned>(lookup.unavailableCause),
-                 lookup.publicationClosed ? 1u : 0u);
+                 static_cast<unsigned>(lookup.answer));
 }
 
 template<bool forward>
@@ -2095,10 +2093,7 @@ BaseObject* WCollector::ResolveStoreValue(BaseObject* ref, const ForwardingProve
             }
             const ForwardingTable::LookupResult lookup =
                 Collector::JudgeHandOutTarget(current) == HandVerdict::ZeroHeader
-                    ? ForwardingTable::LookupResult{ 0, ForwardingTable::ToAnswer::Unarmed,
-                                                     ForwardingTable::ToUnavailableCause::None, false, false,
-                                                     ForwardingTable::ToAnswer::Unarmed,
-                                                     ForwardingTable::ToAnswer::Unarmed, false, false, 0 }
+                    ? ForwardingTable::LookupResult{}
                     : ForwardingTable::LookupTo(currentAddr);
             LOG(RTLOG_ERROR,
                 "[FWDTABLE][resolve-miss] site=no-forwarding consumer=WCollector::ResolveStoreValue "
@@ -2106,10 +2101,10 @@ BaseObject* WCollector::ResolveStoreValue(BaseObject* ref, const ForwardingProve
                 "incoming_source_kind=%s source_slot=%p working_copy_slot=%p "
                 "field_type=%s field_offset=%zu "
                 "from=%p from_region=%p region_type=%u generation=%u "
-                "in_current_relocation_set=%u table_id=%#zx lookup_state=%u lookup_cause=%u "
-                "publication_generation=%llu from_page_epoch=%llu lifeId=%llu "
-                "retired_lookup=%u gc_phase=%u ghost=0 compacted=%u route=%u lookup.to=%p "
-                "publication_closed=%u verdict=%u",
+                "in_current_relocation_set=%u table_id=%#zx lookup_state=%u "
+                "from_page_epoch=%llu lifeId=%llu "
+                "gc_phase=%u ghost=0 compacted=%u route=%u lookup.to=%p "
+                " verdict=%u",
                 ForwardingProvenance::KindName(provenance.kind), provenance.holder, provenance.slot,
                 ForwardingProvenance::StageName(provenance.stage),
                 ForwardingProvenance::WriterName(provenance.writerKind),
@@ -2120,15 +2115,13 @@ BaseObject* WCollector::ResolveStoreValue(BaseObject* ref, const ForwardingProve
                 live != nullptr ? static_cast<unsigned>(live->GetRegionType()) : 0xffu,
                 live != nullptr ? static_cast<unsigned>(live->generation_id()) : 0xffu,
                 lookup.currentMembership ? 1u : 0u, static_cast<size_t>(lookup.tableId),
-                static_cast<unsigned>(lookup.answer), static_cast<unsigned>(lookup.unavailableCause),
-                static_cast<unsigned long long>(lookup.publicationGeneration),
+                static_cast<unsigned>(lookup.answer),
                 static_cast<unsigned long long>(lookup.fromPageEpoch),
                 static_cast<unsigned long long>(lookup.fromPageLifeId),
-                static_cast<unsigned>(lookup.retiredAnswer), static_cast<unsigned>(GetGCPhase()),
+                static_cast<unsigned>(GetGCPhase()),
                 live != nullptr && live->IsCompacted() ? 1u : 0u,
                 live != nullptr ? live->RelocateObserve() : 0u,
                 reinterpret_cast<void*>(lookup.to),
-                lookup.publicationClosed ? 1u : 0u,
                 static_cast<unsigned>(Collector::JudgeHandOutTarget(current)));
             FailClosedLoad("WCollector::ResolveStoreValue.no-forwarding", current, 0, provenance);
         }

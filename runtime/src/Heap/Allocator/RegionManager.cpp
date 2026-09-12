@@ -2046,12 +2046,10 @@ bool VerifyForwardingReceiptsClosed(RegionInfo* region, const char* site)
         const MAddress from = start + offset;
         const ForwardingTable::LookupResult lookup = ForwardingTable::LookupTo(from);
         const bool hit = lookup.to != 0 &&
-            (lookup.answer == ForwardingTable::ToAnswer::ArmedHit ||
-             lookup.retiredAnswer == ForwardingTable::ToAnswer::ArmedHit);
+            lookup.answer == ForwardingTable::ToAnswer::ArmedHit;
         CHECK_DETAIL(hit,
-                     "%s receipt gap region=%p exactStart=%#zx answer=%u cause=%u route=%u fwdDone=%u refs=%d copy=%d",
+                     "%s receipt gap region=%p exactStart=%#zx answer=%u route=%u fwdDone=%u refs=%d copy=%d",
                      site, region, static_cast<size_t>(from), static_cast<unsigned>(lookup.answer),
-                     static_cast<unsigned>(lookup.unavailableCause),
                      static_cast<unsigned>(region->RelocateObserve()),
                      static_cast<unsigned>(region->IsForwardingDone()), region->ForwardingRefCount(),
                       region->CopyInflightWord());

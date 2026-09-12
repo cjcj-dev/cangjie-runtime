@@ -692,7 +692,7 @@ uint64_t NextCausalSeq()
 }
 
 void RecordM0(uint64_t causalSeq, uint64_t m0Seq, const char* exitName, const char* classification,
-              BaseObject* target, MAddress activeTo, MAddress retiredTo, uint8_t phase)
+              BaseObject* target, MAddress activeTo, uint8_t phase)
 {
     if (!Enabled()) {
         return;
@@ -701,10 +701,8 @@ void RecordM0(uint64_t causalSeq, uint64_t m0Seq, const char* exitName, const ch
     g_m0Seen.fetch_add(1, std::memory_order_relaxed);
     EndpointEvidence targetEvidence { true, 0, CaptureStamp(target) };
     EndpointEvidence activeEvidence { activeTo != 0, 0, CaptureStamp(activeTo) };
-    EndpointEvidence retiredEvidence { retiredTo != 0, 0, CaptureStamp(retiredTo) };
     bool valid = causalSeq != 0 && EndpointValid(targetEvidence.present, targetEvidence.stamp) &&
-        EndpointValid(activeEvidence.present, activeEvidence.stamp) &&
-        EndpointValid(retiredEvidence.present, retiredEvidence.stamp);
+        EndpointValid(activeEvidence.present, activeEvidence.stamp);
     AllocationToken token = 0;
     if (valid) {
         std::lock_guard<std::mutex> lock(g_registryLock);
@@ -716,21 +714,13 @@ void RecordM0(uint64_t causalSeq, uint64_t m0Seq, const char* exitName, const ch
                 activeEvidence.token = active;
             }
         }
-        if (retiredTo != 0) {
-            const AllocationToken retired = ResolveStampLocked(targetEvidence.stamp, retiredTo, true);
-            if (retired != 0) {
-                candidates.insert(retired);
-                retiredEvidence.token = retired;
-            }
-        }
-        if ((activeEvidence.present && activeEvidence.token == 0) ||
-            (retiredEvidence.present && retiredEvidence.token == 0)) {
+        if (activeEvidence.present && activeEvidence.token == 0) {
             valid = false;
         }
         // S0 genuinely has no to endpoint and may resolve its current target.
         // S1 with only a painted header has no receipt relation and therefore
         // cannot use a naked historical stamp as an identity fallback.
-        if (activeTo == 0 && retiredTo == 0 && std::strcmp(classification, "S0") == 0) {
+        if (activeTo == 0 && std::strcmp(classification, "S0") == 0) {
             const AllocationToken direct = ResolveStampLocked(targetEvidence.stamp, 0, false);
             if (direct != 0) {
                 candidates.insert(direct);
@@ -758,8 +748,7 @@ void RecordM0(uint64_t causalSeq, uint64_t m0Seq, const char* exitName, const ch
         "target.present=1 target.token=%llu target.valid=%s target.address=%#llx target.region_start=%#llx "
         "target.region_life=%llu target.offset=%#llx active_to.present=%s active_to.valid=%s "
         "active_to.token=%llu active_to.address=%#llx active_to.region_start=%#llx active_to.region_life=%llu "
-        "active_to.offset=%#llx retired_to.present=%s retired_to.valid=%s retired_to.token=%llu "
-        "retired_to.address=%#llx retired_to.region_start=%#llx retired_to.region_life=%llu retired_to.offset=%#llx",
+        "active_to.offset=%#llx",
         static_cast<unsigned long long>(causalSeq), static_cast<unsigned long long>(m0Seq), exitName,
         outputClass, static_cast<unsigned>(phase), static_cast<unsigned long long>(token),
         static_cast<unsigned long long>(targetEvidence.token), BoolDigit(targetEvidence.stamp.valid),
@@ -771,12 +760,7 @@ void RecordM0(uint64_t causalSeq, uint64_t m0Seq, const char* exitName, const ch
         static_cast<unsigned long long>(activeEvidence.stamp.address),
         static_cast<unsigned long long>(activeEvidence.stamp.regionStart),
         static_cast<unsigned long long>(activeEvidence.stamp.regionLife),
-        static_cast<unsigned long long>(activeEvidence.stamp.offset), BoolDigit(retiredEvidence.present),
-        BoolDigit(retiredEvidence.stamp.valid), static_cast<unsigned long long>(retiredEvidence.token),
-        static_cast<unsigned long long>(retiredEvidence.stamp.address),
-        static_cast<unsigned long long>(retiredEvidence.stamp.regionStart),
-        static_cast<unsigned long long>(retiredEvidence.stamp.regionLife),
-        static_cast<unsigned long long>(retiredEvidence.stamp.offset));
+        static_cast<unsigned long long>(activeEvidence.stamp.offset));
     if (ledger != 0) {
         g_m0Written.fetch_add(1, std::memory_order_relaxed);
     }

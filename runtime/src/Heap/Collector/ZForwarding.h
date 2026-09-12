@@ -34,8 +34,8 @@ class LiveInfo;
 
 // zForwarding.hpp:44-110 — one off-heap object per relocated page.
 // _entries is a ZAttachedArray sitting after this object (zAttachedArray.inline.hpp:44-54).
-// Lifetime: _ref_count / _ref_lock / _done (zForwarding.cpp:34-194). Product retain/release
-// still runs on RegionInfo's copies (step ③); these fields are dual-inited at alloc.
+// Source-page retention: _ref_count / _ref_lock / _done (zForwarding.cpp:34-194).
+// Forwarding storage belongs to the generation relocation set.
 class ZForwarding {
 public:
     using AttachedArray = ZAttachedArray<ZForwarding, std::atomic<uint64_t>>;
@@ -85,7 +85,7 @@ public:
     }
 
     static ZForwarding* alloc(size_t liveObjects, MAddress start, MAddress heapBase, size_t regionSize,
-                              RegionInfo* page, RegionLifeId pageLifeId = 0, bool provisional = false,
+                              RegionInfo* page, RegionLifeId pageLifeId = 0,
                               ForwardingAllocator* arena = nullptr)
     {
         const size_t n = nentries(liveObjects);
@@ -103,11 +103,11 @@ public:
         if (arena) {
             AttachedArray::initialize(addr, n);
         }
-        auto* forwarding = ::new (addr) ZForwarding(page, start, heapBase, regionSize, n, pageLifeId, provisional);
+        auto* forwarding = ::new (addr) ZForwarding(page, start, heapBase, regionSize, n, pageLifeId);
         return forwarding;
     }
 
-    // Kept name so existing tests / ClearEntries continue to compile.
+    // Standalone storage for focused forwarding tests. Product objects use the set arena.
     static ZForwarding* Create(size_t liveObjects, MAddress start, MAddress heapBase, size_t regionSize = 0)
     {
         return alloc(liveObjects, start, heapBase, regionSize, nullptr);
@@ -124,13 +124,10 @@ public:
     size_t regionSize() const { return _size; }
     RegionInfo* page() const { return _page; }
     RegionLifeId page_life_id() const { return _page_life_id; }
-    uint64_t publication_generation() const { return _publication_generation; }
-    void set_publication_generation(uint64_t generation) { _publication_generation = generation; }
     uint8_t table_generation() const { return _table_generation; }
     void set_table_generation(uint8_t generation) { _table_generation = generation; }
     bool page_life_current() const;
     size_t length() const { return _entries.length(); }
-    bool is_provisional() const { return _provisional; }
 
     void publish_from_page_view(LiveInfo* liveInfo, uint64_t epoch, MAddress topAtStart,
                                 MAddress markStartAllocPtr, uint64_t liveByteCount,
@@ -522,14 +519,13 @@ public:
 private:
     // zForwarding.inline.hpp:59-76
     ZForwarding(RegionInfo* page, MAddress start, MAddress heapBase, size_t regionSize, size_t nentries,
-                RegionLifeId pageLifeId, bool provisional)
+                RegionLifeId pageLifeId)
         : _start(start),
           _size(regionSize),
           _heapBase(heapBase),
           _entries(nentries),
           _page(page),
           _page_life_id(pageLifeId),
-          _publication_generation(0),
           _table_generation(0),
           _claimed(false),
           _in_place(false),
@@ -539,7 +535,6 @@ private:
           _overflowLock(),
           _overflow(),
           _receiptInstallLock(),
-          _provisional(provisional),
           _from_page(),
           _relocated_remembered_fields_state(ZPublishState::none),
           _relocated_remembered_fields_publish_young_seqnum(0)
@@ -553,7 +548,6 @@ private:
     const RegionLifeId _page_life_id;
     // Monotonic per-region-span generation. Written before the table pointer is
     // published, then immutable for the table's lifetime.
-    uint64_t _publication_generation;
     uint8_t _table_generation;
     std::atomic<bool> _claimed;
     std::atomic<bool> _in_place;
@@ -564,7 +558,6 @@ private:
     mutable std::mutex _overflowLock;
     std::unordered_map<MAddress, MAddress> _overflow;
     mutable std::mutex _receiptInstallLock;
-    const bool _provisional;
     FromPageView _from_page;
     std::atomic<ZPublishState> _relocated_remembered_fields_state;
     std::vector<MAddress> _relocated_remembered_fields_array;
@@ -572,7 +565,7 @@ private:
     mutable std::mutex _relocated_fields_lock;
 };
 
-// Existing tests and ClearEntries still spell this name.
+// Attached-entry spelling used by existing consumers.
 using ForwardingEntries = ZForwarding;
 
 } // namespace MapleRuntime

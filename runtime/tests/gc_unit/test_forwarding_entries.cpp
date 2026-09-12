@@ -370,8 +370,8 @@ GC_TEST(ZForwardingEntries, ArenaOwnerOutlivesForwardings)
     GC_EXPECT_TRUE(ForwardingAllocator::add_to_budget(bytes, &budget));
     auto arena = std::make_unique<ForwardingAllocator>(budget);
     GC_EXPECT_TRUE(arena->valid());
-    auto* a = ZForwarding::alloc(4, 0x1000, 0, 0x1000, nullptr, 0, false, arena.get());
-    auto* b = ZForwarding::alloc(4, 0x2000, 0, 0x1000, nullptr, 0, false, arena.get());
+    auto* a = ZForwarding::alloc(4, 0x1000, 0, 0x1000, nullptr, 0, arena.get());
+    auto* b = ZForwarding::alloc(4, 0x2000, 0, 0x1000, nullptr, 0, arena.get());
     GC_EXPECT_TRUE(a != nullptr && b != nullptr && a != b);
     GC_EXPECT_EQ(arena->used(), budget);
     GC_EXPECT_TRUE(arena->allocate(1) == nullptr);
