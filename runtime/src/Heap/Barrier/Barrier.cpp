@@ -18,7 +18,6 @@
 #include "Heap/Heap.h"
 #include "Heap/Verify/SurvNodeDiag.h"
 #include "Heap/Verify/ProbeReadRouteDiag.h"
-#include "Heap/Verify/StatHealDiag.h"
 #include "Heap/Verify/ZgcSelfHealDiag.h"
 #include "Heap/WCollector/EnumBarrier.h"
 #include "Heap/WCollector/ForwardBarrier.h"
@@ -1266,27 +1265,19 @@ BaseObject* Barrier::ReadStaticRef(RootSlot& field) const
     BaseObject* target = to_object(observedBits.GetTargetObject());
     const bool ghost =
         target != nullptr && Heap::IsHeapAddress(target) && theCollector.IsGhostFromObject(target);
-    BaseObject* beforeRoute = target;
     const ForwardingProvenance provenance{ ForwardingHolderKind::Static, nullptr, &field };
     if (ghost) {
         target = theCollector.FindLatestVersion(target, provenance);
     }
-    const bool resolvedChanged = target != beforeRoute;
     // loadfc: static roots share the same hand-out postcondition; a cleared/re-used static target
     // must resolve or stop, never be handed back (zBarrier.inline.hpp:294-344).
     BaseObject* finalized =
         FinalizeLoadForMutator(target, nullptr, nullptr, "Barrier::ReadStaticRef", provenance);
     target = finalized;
     const bool healAttempted = target != nullptr && raw(observed) != reinterpret_cast<uintptr_t>(target);
-    const bool statHealDiagEnabled = UNLIKELY(StatHealDiag::Enabled());
-    bool healSucceeded = false;
-    if (healAttempted && !(statHealDiagEnabled && StatHealDiag::SuppressHealForAB())) {
-        healSucceeded = HealRootIfObserved(field, observed, from_object(target),
-                                           HealSite::BarrierReadStaticReference);
-    }
-    if (statHealDiagEnabled) {
-        StatHealDiag::NoteStaticRead(field, raw(observed), (raw(observed) & ::g_cjLoadBadMask) != 0,
-                                     ghost, resolvedChanged, healAttempted, healSucceeded);
+    if (healAttempted) {
+        (void)HealRootIfObserved(field, observed, from_object(target),
+                                 HealSite::BarrierReadStaticReference);
     }
     return target;
 }
