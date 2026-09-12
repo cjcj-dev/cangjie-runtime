@@ -451,8 +451,8 @@ void WCollector::TraceRefField(BaseObject* obj, RefField<>& field, WorkStack& wo
 
 // Ported from ZGC ZMark::push_partial_array (zMark.cpp:185-196). ZGC pushes a
 // tagged entry onto its mark stack; we push the same descriptor encoded into a
-// BaseObject* slot of our work stack, so TryForkTask can hand it to another
-// worker. If the descriptor does not fit one word we trace the chunk here
+// BaseObject* slot of our work stack so another stripe worker can steal it.
+// If the descriptor does not fit one word we trace the chunk here
 // rather than drop it -- correctness never depends on the encoding succeeding.
 void WCollector::PushPartialArray(RefField<>* addr, size_t length, WorkStack& workStack, bool finalizable) const
 {

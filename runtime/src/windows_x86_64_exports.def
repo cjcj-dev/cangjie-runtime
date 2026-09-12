@@ -1915,8 +1915,6 @@ EXPORTS
     _ZN12MapleRuntime20StackWatermarkOracle8ExerciseERKNS_13UnwindContextERNS_7MutatorE @1946
     _ZN12MapleRuntime20VerifyMarkSourceNameENS_16VerifyMarkSourceE @1947
     _ZN12MapleRuntime20g_installDomainGrantE @1948 DATA
-    _ZN12MapleRuntime21ConcurrentMarkingWork11TryForkTaskEv @1949
-    _ZN12MapleRuntime21ConcurrentMarkingWork7ExecuteEy @1950
     _ZN12MapleRuntime21ConcurrentMarkingWorkD0Ev @1951
     _ZN12MapleRuntime21ConcurrentMarkingWorkD2Ev @1952
     _ZN12MapleRuntime21ParseVerifyMarkSourceEv @1953
