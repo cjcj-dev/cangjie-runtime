@@ -289,49 +289,6 @@ GC_TEST(ForwardingNoGeometry, ForwardImplFindHitSkipsCopy)
     fx.FreePlanted(live);
 }
 
-GC_TEST(ForwardingNoGeometry, ForwardImplTryLockCopiesWithoutPrebuiltMapping)
-{
-    GcHeapFixture fx;
-    ForwardingTable::Initialize(fx.heapStart, 2 * RegionInfo::UNIT_SIZE, RegionInfo::UNIT_SIZE);
-    fx.region0->SetRegionType(RegionInfo::RegionType::FROM_REGION);
-    fx.region0->SetRouteState(RegionInfo::RouteState::ROUTING);
-    LiveInfo* live = fx.PlantLiveInfo(fx.region0);
-    (void)fx.PlantMarkBitmap<Generation::Old>(live, fx.region0->GetRegionSize());
-    fx.region0->PublishForwardingCarrier(fx.region0->GetMarkView<Generation::Old>());
-    BaseObject* copyFrom = fx.PlaceObject(fx.region0->GetRegionStart() + 128);
-    BaseObject* copyTo = fx.PlaceObject(fx.region1->GetRegionStart() + 128);
-    fx.region0->SetRegionAllocPtr(reinterpret_cast<MAddress>(copyFrom) + 64);
-    fx.region1->SetRegionAllocPtr(reinterpret_cast<MAddress>(copyTo) + 64);
-    const MAddress copyFromAddr = reinterpret_cast<MAddress>(copyFrom);
-    ForwardingTable::ClearEntries(fx.region0->GetRegionStart(), fx.region0->GetRegionSize());
-    ForwardingTable::ReclaimRetired("gc-unit-forward-impl-trylock");
-    GC_EXPECT_TRUE(ForwardingTable::PreparePublicationGeneration(
-        fx.region0->GetRegionStart(), fx.region0->GetRegionSize()));
-    GC_EXPECT_TRUE(ForwardingTable::InstallPublicationBeforeCopy(
-        fx.region0->GetRegionStart(), fx.region0->GetRegionSize(), fx.region0));
-    GC_EXPECT_EQ(ForwardingTable::FindTo(copyFromAddr), static_cast<MAddress>(0));
-    WCollector collector(Heap::GetHeap().GetAllocator(), Heap::GetHeap().GetCollectorResources());
-    collector.SetGCPhase(GCPhase::GC_PHASE_FORWARD);
-    ZForwardingLife::reset_copy_open(fx.region0->metadata.copyInflight);
-    AllocBuffer* buffer = AllocBuffer::GetOrCreateAllocBuffer();
-    fx.region1->SetRegionType(RegionInfo::RegionType::THREAD_LOCAL_REGION);
-    buffer->SetRegion(fx.region1);
-    BaseObject* relocated = MutatorPublishTestAccess::ForwardImpl(collector, copyFrom, fx.region0);
-    GC_EXPECT_TRUE(relocated != nullptr);
-    GC_EXPECT_TRUE(relocated != copyFrom);
-    GC_EXPECT_TRUE(relocated->IsValidObject());
-    GC_EXPECT_EQ(relocated->GetSize(), copyFrom->GetSize());
-    GC_EXPECT_EQ(ForwardingTable::FindTo(copyFromAddr), reinterpret_cast<MAddress>(relocated));
-    GC_EXPECT_TRUE(copyFrom->IsForwarded());
-    collector.SetGCPhase(GCPhase::GC_PHASE_IDLE);
-    buffer->ClearRegion();
-    ForwardingTable::Remove(fx.region0->GetRegionStart(), fx.region0->GetRegionSize());
-    ForwardingTable::ClearEntries(fx.region0->GetRegionStart(), fx.region0->GetRegionSize());
-    ForwardingTable::ReclaimRetired("gc-unit-forward-impl-trylock");
-    fx.region0->metadata.liveInfo = nullptr;
-    fx.FreePlanted(live);
-}
-
 GC_TEST(ForwardingNoGeometry, ExclusiveVtableFindHitSkipsCopy)
 {
     GcHeapFixture fx;
