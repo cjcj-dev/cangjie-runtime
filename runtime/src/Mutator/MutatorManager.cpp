@@ -1293,11 +1293,6 @@ void MutatorManager::TransitionAllMutatorsToCpuProfile()
     VisitAllMutatorsExceptFinalizer([](Mutator& mutator) {
         if (mutator.GetCjthreadPtr() == MutatorManager::Instance().GetMainThreadHandle()) {
             mutator.SetSuspensionFlag(Mutator::SuspensionType::SUSPENSION_FOR_CPU_PROFILE);
-            MutatorManager::Instance().ForEachMarkFlushTls([&mutator](ThreadLocalData* tls) {
-                if (tls != nullptr && tls->mutator == &mutator) {
-                    ArmThreadPoll(tls);
-                }
-            });
         }
     });
     if (!worldStopped) {
