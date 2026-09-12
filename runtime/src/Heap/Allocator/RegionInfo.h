@@ -314,9 +314,9 @@ public:
     static void EnsureOneseqAtexit();
     static void ReportOneseqCounts(const char* point);
 
-    bool IsCompacted()
+    bool IsCompacted() const
     {
-        auto owner = ForwardingTable::RetainPageOwner(this);
+        auto owner = ForwardingTable::RetainPageOwner(const_cast<RegionInfo*>(this));
         return owner && owner->is_done() && owner->in_place();
     }
 
@@ -2525,13 +2525,7 @@ public:
         CHECK_DETAIL(ForwardingTable::PreparePublicationGeneration(GetRegionStart(), GetRegionSize()),
                      "forwarding generation prepare failed region=%p range=[%#zx,%#zx)",
                      this, static_cast<size_t>(GetRegionStart()), static_cast<size_t>(GetRegionEnd()));
-        // A retained page can re-enter with its route generation already
-        // normalized even though copied-object headers still say FORWARDED.
-        // Clear only route states known to carry such residuals; walking every
-        // from is the rec=stw tax (B2.1 |Δ|=+4.53%). Snapshot prevRoute before paint.
-        if (prevRoute == NORMAL || prevRoute == FORWARDED || prevRoute == COMPACTED) {
-            ClearRelocationResiduals();
-        }
+        ClearRelocationResiduals();
         // PORT_ZFORWARDING step 1: same event, recorded address-keyed as well.  Populated in
         // parallel with the region machinery so the two answers can be compared before either is
         // trusted; nothing reads it for decisions yet.
