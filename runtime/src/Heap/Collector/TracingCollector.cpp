@@ -944,7 +944,7 @@ bool TracingCollector::MarkSatbBuffer(WorkStack& workStack)
         if (!workStack.empty()) {
             continue;
         }
-        bool more = FlushMarkProducers(majorMarkDomain);
+        bool more = FlushMarkProducers(majorMarkDomain.get());
         visitSatbObj();
         DoResurrection(workStack);
         more = more || !workStack.empty();
