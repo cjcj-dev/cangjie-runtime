@@ -1187,7 +1187,7 @@ protected:
         const uint64_t e = routeAskEscaped.fetch_add(1, std::memory_order_relaxed) + 1;
         LOG(RTLOG_ERROR, "[ROUTEASK][ESCAPED] e=%lu covered=%lu target=%p routeState=%d isFrom=%d isGhost=%d fwd=%d",
             e, routeAskCovered.load(std::memory_order_relaxed), static_cast<void*>(target),
-            static_cast<int>(rs), IsFromObject(target) ? 1 : 0, IsGhostFromObject(target) ? 1 : 0,
+            static_cast<int>(region->RelocateObserve()), IsFromObject(target) ? 1 : 0, IsGhostFromObject(target) ? 1 : 0,
             target->IsForwarded() ? 1 : 0);
     }
 
