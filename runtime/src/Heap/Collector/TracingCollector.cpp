@@ -4,6 +4,7 @@
 //
 // See https://cangjie-lang.cn/pages/LICENSE for license information.
 
+#include "Mutator/WeakRefBuffer.h"
 #include "Heap/Collector/MarkEngine.h"
 #include "Heap/Collector/MarkStripe.h"
 #include "TracingCollector.h"
@@ -914,6 +915,9 @@ void TracingCollector::ProcessOldNonStrongReferences(WorkStack& workStack)
         MRT_PHASE_TIMER("concurrent resurrection");
         DoResurrection(workStack);
     }
+    // ZGenerationOld::process_non_strong_references: weak roots follow the
+    // finalizable closure, before relocation-set processing.
+    WeakRefBuffer::Instance().ClearWeakRefBuffer();
 }
 
 bool TracingCollector::FinishOldMark(WorkStack& workStack)
