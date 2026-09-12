@@ -3825,6 +3825,7 @@ private:
         // at ClearLiveInfo / mark-start, are implicitly live (zPage.inline.hpp:180-185
         // is_allocating). 0 = no mark-start yet.
         uintptr_t markStartAllocPtr;
+        alignas(8) char routeInfoPad[24]{};
         uint64_t snapshotEpoch = 0;
         // used to traverse ghost region.
         uint32_t nextRegionIdx0;
