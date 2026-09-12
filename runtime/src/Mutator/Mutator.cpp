@@ -221,6 +221,10 @@ void Mutator::HandleSuspensionRequest()
 {
     for (;;) {
         SetInSaferegion(SAFE_REGION_TRUE);
+        MarkFlushOnEnterSaferegion();
+        if (MutatorManager::Instance().MarkFlushHandshakeActive() || MarkFlushPendingForCurrentThread()) {
+            (void)MutatorManager::Instance().AcknowledgeMarkFlushForCurrentThread();
+        }
         if (HasSuspensionRequest(SUSPENSION_FOR_GC_PHASE)) {
             TransitionGCPhase(true);
         } else if (HasSuspensionRequest(SUSPENSION_FOR_CPU_PROFILE)) {
@@ -242,7 +246,9 @@ void Mutator::HandleSuspensionRequest()
                 sleep(INT_MAX);
             }
         }
+        MarkFlushBeginLeaveSaferegion();
         SetInSaferegion(SAFE_REGION_FALSE);
+        MarkFlushEndLeaveSaferegion();
         if (MutatorManager::Instance().SyncTriggered()) {
             // entering this branch means a second request has been broadcasted, we need to reset this flag to avoid
             // missing the request. And this must be after the behaviour that set saferegion state to false, because
@@ -1400,7 +1406,6 @@ void Mutator::ReleaseForeignThread()
 {
     AllocBuffer* buffer = foreignThreadInfo.allocBuffer;
     foreignThreadInfo.allocBuffer = nullptr;
-    markFlushAllocBuffer = nullptr;
     storeBarrierRememberedSet = nullptr;
     if (buffer != nullptr) {
         buffer->Fini();

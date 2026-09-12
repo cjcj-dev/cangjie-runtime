@@ -940,13 +940,17 @@ bool TracingCollector::FinishOldMark(WorkStack& workStack)
                 continue;
             }
         }
+        bool more = FlushMarkProducers(majorMarkDomain.get());
+        if (more) {
+            continue;
+        }
         bool terminated;
         {
             ScopedStopTheWorld stw("old mark end", true, GC_PHASE_CLEAR_SATB_BUFFER);
             NoteMarkTerminatePause();
             const size_t before = stripes.Population();
             StoreBarrierBuffer::FlushAll(Heap::GetHeap().GetRememberedSet());
-            MutatorManager::Instance().VisitAllMutators([](Mutator& mutator) { mutator.FlushStoreBarrierBuffer(false); });
+            (void)MutatorManager::Instance().HandshakeFlushMarkProducers(majorMarkDomain.get());
             const size_t after = stripes.Population();
             NoteMarkTerminateFlushed(after >= before ? after - before : 0);
             terminated = workStack.empty() && stripes.IsEmpty();
@@ -971,6 +975,18 @@ bool TracingCollector::FinishOldMark(WorkStack& workStack)
 void TracingCollector::ConcurrentReMark(WorkStack& remarkStack)
 {
     CHECK_DETAIL(FinishOldMark(remarkStack), "not cleared\n");
+}
+
+bool TracingCollector::FlushMarkProducers(MarkDomain* domain)
+{
+    if (domain != nullptr) {
+        domain->Terminate().SetResurrected(false);
+    }
+    bool flushed = MutatorManager::Instance().HandshakeFlushMarkProducers(domain);
+    if (domain != nullptr) {
+        flushed = domain->FlushStacks() || flushed || !domain->Stripes().IsEmpty();
+    }
+    return flushed;
 }
 
 void TracingCollector::DoResurrection(WorkStack& workStack)

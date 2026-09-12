@@ -46,6 +46,12 @@ public:
     void SetMutator(Mutator* newMutator);
 };
 
+void MarkFlushOnEnterSaferegion();
+void MarkFlushBeginLeaveSaferegion();
+void MarkFlushEndLeaveSaferegion();
+bool MarkFlushPendingForCurrentThread();
+void RegisterCurrentMarkFlushThread();
+
 struct CleanThreadLocalData {
     CleanThreadLocalData() noexcept;
     ~CleanThreadLocalData();

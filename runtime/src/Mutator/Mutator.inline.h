@@ -13,8 +13,8 @@
 namespace MapleRuntime {
 inline void Mutator::DoEnterSaferegion()
 {
-    // set current mutator in saferegion.
     SetInSaferegion(SAFE_REGION_TRUE);
+    MarkFlushOnEnterSaferegion();
 }
 
 inline bool Mutator::EnterSaferegion(bool updateUnwindContext) noexcept
