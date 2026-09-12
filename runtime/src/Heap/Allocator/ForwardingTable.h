@@ -204,6 +204,7 @@ public:
     // drained every retained publication owner (zGeneration.cpp:1458-1523;
     // zForwarding.cpp:171-181).
     static void ReclaimRetired(const char* why);
+    static void ReclaimRetiredImpl(const char* why, const Generation* only);
     // zGeneration.cpp:276-284 / :699-701 / :1131-1133: each generation
     // resets only its own previous relocation set after that generation's
     // last mark consumers and before the next select.

@@ -617,7 +617,7 @@ void ForwardingTable::Retire(ZForwarding* tab)
     g_retiredTotal.fetch_add(1, std::memory_order_relaxed);
 }
 
-static void ReclaimRetiredImpl(const char* why, const Generation* only)
+void ForwardingTable::ReclaimRetiredImpl(const char* why, const Generation* only)
 {
     std::vector<ZForwarding*> candidates;
     std::vector<ZForwarding*> deferred;
@@ -653,10 +653,10 @@ static void ReclaimRetiredImpl(const char* why, const Generation* only)
             }
             if ((forceCoverageComplete || CoverageEpochSatisfied(tab)) && tab->page() != nullptr &&
                 tab->page()->metadata.fwdOwner.load(std::memory_order_acquire) == tab) {
-                (void)UnbindPageOwnerLocked(tab->page(), false);
+                (void)ForwardingTable::UnbindPageOwnerLocked(tab->page(), false);
             }
             if (tab->table_readers() == 0 && tab->external_owners() == 0 &&
-                (forceCoverageComplete || RetiredDestroyEligible(tab))) {
+                (forceCoverageComplete || ForwardingTable::RetiredDestroyEligible(tab))) {
                 // Prevent a new table user before dropping the install lock.
                 // Destruction may run outside the lock only after both maps
                 // and the retired lists have relinquished this identity.
