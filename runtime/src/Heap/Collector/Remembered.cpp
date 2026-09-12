@@ -56,6 +56,8 @@
 #include "Heap/Verify/Stw2CurrentAudit.h"
 #include "Heap/Verify/SurvNodeDiag.h"
 #include "Heap/Collector/PromotedRegionDomain.h"
+#include "Heap/Allocator/ForwardingTable.h"
+#include "Heap/Collector/ZForwarding.h"
 #include "Heap/Verify/CsetEmptyWho.h"
 #include "Common/ColourPredicates.h"
 #include "Heap/WCollector/RemapYoungRoots.h"
@@ -343,6 +345,26 @@ void NoteResolveRootNull(void* rootSlot, BaseObject* from, BaseObject* to, Regio
 #if defined(__GNUC__)
 #pragma GCC visibility pop
 #endif
+void WCollector::ScanRelocatedRememberedFields(MinorSlotSet& rememberedSlots)
+{
+    std::unordered_set<ZForwarding*> forwardings;
+    for (MAddress slot : rememberedSlots) {
+        if (ZForwarding* forwarding = ForwardingTable::GetCovering(slot)) {
+            forwardings.insert(forwarding);
+        }
+    }
+    for (ZForwarding* forwarding : forwardings) {
+        if (forwarding->retain_page()) {
+            forwarding->relocated_remembered_fields_notify_concurrent_scan_of();
+            forwarding->release_page();
+        } else {
+            forwarding->relocated_remembered_fields_apply_to_published([&](MAddress field) {
+                rememberedSlots.insert(field);
+            });
+        }
+    }
+}
+
 void WCollector::RescanRememberedSet(WorkStack& workStack, const MinorSlotSet& rememberedSlots,
                                      const MinorSlotSet& reachableSlots, const MinorSlotSet& weakSlots,
                                      const MinorObjectSet& currentMinorRoots, bool fullYoungScan,
@@ -391,7 +413,6 @@ void WCollector::RescanRememberedSet(WorkStack& workStack, const MinorSlotSet& r
     //   4) post-resolve null / bad_target drops
     // Does not relax IsValidObject / FindLatestVersion CHECK_DETAIL.
     static std::atomic<size_t> g_remsetScrubLogged{ 0 };
-    static std::atomic<size_t> g_remsetLifeClearLogged{ 0 };
     size_t scrubbedStale = 0;
     size_t scrubbedDeadHolder = 0;
     size_t scrubbedNoTargetOrigin = 0;

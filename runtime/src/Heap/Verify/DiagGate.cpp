@@ -92,7 +92,7 @@ void MaybeAnnounce()
     const char* csv = DiagEnv();
     if (wantHelp) {
         LOG(RTLOG_ERROR,
-            "[GCV2][diag] tokens: roots objects marking remembered oops promote promotegap nullslot stackref "
+            "[GCV2][diag] tokens: roots objects marking remembered oops nullslot stackref "
             "fromver oneseq rootgate reffixwalk markcomplete statheal m0corr probereadroute neverinstalled "
             "selftest all | "
             "legacy: MRT_GCV2_<NAME>=1");

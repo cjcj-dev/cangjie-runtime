@@ -200,12 +200,12 @@ void VerifyRememberedSetInvariant(const char* point, const std::unordered_set<MA
     stats.costNs = TimeUtil::NanoSeconds() - startNs;
 
     // MISSING = correctness-relevant subset. When the independent root closure was
-    // not supplied (POST_EVAC path, or VERIFY_REMSET unset), that subset is
+     // not supplied (POST_EVAC path, or remembered verify unset), that subset is
     // the full inventory — do not print missingRootReachable (stays 0) as MISSING.
     size_t correctnessMissing = rootReachableHolders == nullptr ? stats.missing : stats.missingRootReachable;
 
     VLOG(REPORT,
-         "[GCV2][verify][remset] point=%s invoke=%zu env=MRT_GCV2_VERIFY_REMSET=1 "
+         "[GCV2][verify][remset] point=%s invoke=%zu token=remembered "
          "remsetSize=%zu holdersScanned=%zu oldToYoungEdges=%zu "
          "MISSING=%zu MISSING_TOTAL=%zu MISSING_ROOT_REACHABLE=%zu rootReachabilityKnown=%d "
          "(totalArrayHolder=%zu totalNonArray=%zu) STALE=%zu DANGLING=%zu "
