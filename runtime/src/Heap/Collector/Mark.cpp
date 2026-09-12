@@ -1717,20 +1717,11 @@ bool WCollector::PublishHandshakeMarkWork(WorkStack& work, MarkDomain* domain)
     return published;
 }
 
-bool WCollector::FlushAllocBufferMarkProducers(AllocBuffer* buffer)
+void WCollector::DrainAllocBufferMarkProducers(AllocBuffer* buffer, WorkStack& work)
 {
-    // zMark.cpp:588/1002: flush is bound to the ZMark instance (generation)
-    // that started the handshake. No handshake ⇒ keep private producers.
-    MarkDomain* domain = MutatorManager::Instance().MarkFlushDomain();
-    return FlushAllocBufferMarkProducers(buffer, domain);
-}
-
-bool WCollector::FlushAllocBufferMarkProducers(AllocBuffer* buffer, MarkDomain* domain)
-{
-    if (buffer == nullptr || domain == nullptr) {
-        return false;
+    if (buffer == nullptr) {
+        return;
     }
-    WorkStack work;
     buffer->MergeRoots(work);
     buffer->MergeYoungAllocBlackFollow(work);
     buffer->MergeY2yDirtyHolders(work);
@@ -1741,6 +1732,21 @@ bool WCollector::FlushAllocBufferMarkProducers(AllocBuffer* buffer, MarkDomain* 
             work.push_back(MarkStackEntry::MarkAndFollow(target, false));
         }
     });
+}
+
+bool WCollector::FlushAllocBufferMarkProducers(AllocBuffer* buffer)
+{
+    MarkDomain* domain = MutatorManager::Instance().MarkFlushDomain();
+    return FlushAllocBufferMarkProducers(buffer, domain);
+}
+
+bool WCollector::FlushAllocBufferMarkProducers(AllocBuffer* buffer, MarkDomain* domain)
+{
+    if (buffer == nullptr || domain == nullptr) {
+        return false;
+    }
+    WorkStack work;
+    DrainAllocBufferMarkProducers(buffer, work);
     return PublishHandshakeMarkWork(work, domain);
 }
 } // namespace MapleRuntime
