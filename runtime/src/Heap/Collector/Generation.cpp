@@ -1266,8 +1266,9 @@ void WCollector::DoYoungGarbageCollection()
         // filled during marking is an ordinary candidate next cycle; it is never removed
         // from the structure the selector iterates.
         space.GetRegionManager().HandleTraceRegions();
-        ForwardingTable::PublishMarkCoverage(Generation::Young);
-        ForwardingTable::ReclaimRetired("young-mark-coverage");
+        // zGeneration.cpp:563 / :699-701: after this young mark_end, reset
+        // the previous young relocation set. Independent of old remap.
+        ForwardingTable::ResetRelocationSet(Generation::Young);
     }
 
     size_t allocatedBefore = space.AllocatedBytes();

@@ -23,6 +23,7 @@
 #include "Heap/Allocator/ForwardingAllocator.h"
 #include "Heap/Allocator/ZAttachedArray.h"
 #include "Heap/Collector/ZForwardingLife.h"
+#include "Heap/Heap.h"
 
 namespace MapleRuntime {
 
@@ -445,11 +446,8 @@ public:
 
     static uint32_t young_seqnum()
     {
-        return YoungSeqnum().load(std::memory_order_acquire);
-    }
-    static void bump_young_seqnum()
-    {
-        YoungSeqnum().fetch_add(1, std::memory_order_acq_rel);
+        return static_cast<uint32_t>(
+            Heap::GetHeap().GetCollector().GetCycleSnapshot(GCCycleGeneration::YOUNG).sequence);
     }
 
     void relocated_remembered_fields_register(MAddress field)
@@ -626,12 +624,6 @@ private:
     std::vector<MAddress> _relocated_remembered_fields_array;
     uint32_t _relocated_remembered_fields_publish_young_seqnum;
     mutable std::mutex _relocated_fields_lock;
-
-    static std::atomic<uint32_t>& YoungSeqnum()
-    {
-        static std::atomic<uint32_t> seq{ 1 };
-        return seq;
-    }
 };
 
 // Existing tests and ClearEntries still spell this name.

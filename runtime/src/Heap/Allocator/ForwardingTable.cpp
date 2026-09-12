@@ -23,6 +23,7 @@
 #include "Common/BaseObject.h"
 #include "Heap.h"
 #include "Heap/Allocator/RegionInfo.h"
+#include "Heap/Collector/Collector.h"
 #include "Heap/Allocator/ZGranuleMap.h"
 #include "Heap/Verify/M0Correlation.h"
 #include "Heap/WCollector/WCollector.h"
@@ -118,7 +119,30 @@ std::atomic<uint64_t> g_armedHit{ 0 };
 std::atomic<uint64_t> g_armedMiss{ 0 };
 std::atomic<uint64_t> g_unavailable{ 0 };
 std::atomic<uint64_t> g_unarmed{ 0 };
-std::atomic<uint64_t> g_markCoverageEpoch[2] = { { 0 }, { 0 } };
+
+GCCycleGeneration CycleOf(Generation gen)
+{
+    return gen == Generation::Old ? GCCycleGeneration::OLD : GCCycleGeneration::YOUNG;
+}
+
+bool IsPostMarkPhase(GCPhase phase)
+{
+    return phase == GC_PHASE_MARK_COMPLETE || phase == GC_PHASE_POST_TRACE ||
+           phase == GC_PHASE_PREFORWARD || phase == GC_PHASE_FORWARD || phase == GC_PHASE_FINISH;
+}
+
+uint64_t RequiredMarkSeq(const GCCycleSnapshot& snap)
+{
+    return IsPostMarkPhase(snap.phase) ? snap.sequence + 1 : snap.sequence;
+}
+
+bool CycleMarkSatisfied(const GCCycleSnapshot& snap, uint64_t required)
+{
+    if (snap.sequence > required) {
+        return true;
+    }
+    return snap.sequence == required && IsPostMarkPhase(snap.phase);
+}
 
 void StampTableCoverage(ZForwarding* tab, RegionInfo* region)
 {
@@ -126,10 +150,9 @@ void StampTableCoverage(ZForwarding* tab, RegionInfo* region)
         return;
     }
     const Generation gen = region == nullptr ? Generation::Young : region->GetOwnerGeneration();
-    const size_t idx = static_cast<size_t>(gen);
-    const uint64_t birth = g_markCoverageEpoch[idx].load(std::memory_order_acquire);
+    const GCCycleSnapshot snap = Heap::GetHeap().GetCollector().GetCycleSnapshot(CycleOf(gen));
     tab->note_table_epoch(static_cast<uint8_t>(gen),
-                         WCollector::FlipSeq().load(std::memory_order_relaxed), birth + 1);
+                         WCollector::FlipSeq().load(std::memory_order_relaxed), RequiredMarkSeq(snap));
 }
 
 #if defined(MRT_TESTABLE_INTERNALS)
@@ -556,11 +579,9 @@ static bool CoverageEpochSatisfied(ZForwarding* tab)
     if (tab == nullptr) {
         return false;
     }
-    const size_t idx = static_cast<size_t>(tab->table_generation());
-    if (idx > 1) {
-        return false;
-    }
-    return g_markCoverageEpoch[idx].load(std::memory_order_acquire) >= tab->required_mark_epoch();
+    const Generation gen = static_cast<Generation>(tab->table_generation());
+    const GCCycleSnapshot snap = Heap::GetHeap().GetCollector().GetCycleSnapshot(CycleOf(gen));
+    return CycleMarkSatisfied(snap, tab->required_mark_epoch());
 }
 
 static bool GhostCarrierHeld(ZForwarding* tab)
@@ -596,7 +617,7 @@ void ForwardingTable::Retire(ZForwarding* tab)
     g_retiredTotal.fetch_add(1, std::memory_order_relaxed);
 }
 
-void ForwardingTable::ReclaimRetired(const char* why)
+void ForwardingTable::ReclaimRetiredImpl(const char* why, const Generation* only)
 {
     std::vector<ZForwarding*> candidates;
     std::vector<ZForwarding*> deferred;
@@ -621,6 +642,10 @@ void ForwardingTable::ReclaimRetired(const char* why)
             if (tab == nullptr) {
                 continue;
             }
+            if (only != nullptr && static_cast<Generation>(tab->table_generation()) != *only) {
+                deferred.push_back(tab);
+                continue;
+            }
             const bool ghostHeldNow = GhostCarrierHeld(tab);
             if (ghostHeldNow) {
                 deferred.push_back(tab);
@@ -628,10 +653,10 @@ void ForwardingTable::ReclaimRetired(const char* why)
             }
             if ((forceCoverageComplete || CoverageEpochSatisfied(tab)) && tab->page() != nullptr &&
                 tab->page()->metadata.fwdOwner.load(std::memory_order_acquire) == tab) {
-                (void)UnbindPageOwnerLocked(tab->page(), false);
+                (void)ForwardingTable::UnbindPageOwnerLocked(tab->page(), false);
             }
             if (tab->table_readers() == 0 && tab->external_owners() == 0 &&
-                (forceCoverageComplete || RetiredDestroyEligible(tab))) {
+                (forceCoverageComplete || ForwardingTable::RetiredDestroyEligible(tab))) {
                 // Prevent a new table user before dropping the install lock.
                 // Destruction may run outside the lock only after both maps
                 // and the retired lists have relinquished this identity.
@@ -659,22 +684,16 @@ void ForwardingTable::ReclaimRetired(const char* why)
     }
 }
 
-void ForwardingTable::PublishMarkCoverage(Generation gen)
+void ForwardingTable::ReclaimRetired(const char* why)
 {
-    const size_t idx = static_cast<size_t>(gen);
-    if (idx > 1) {
-        return;
-    }
-    g_markCoverageEpoch[idx].fetch_add(1, std::memory_order_acq_rel);
+    ReclaimRetiredImpl(why, nullptr);
 }
 
-uint64_t ForwardingTable::MarkCoverageEpoch(Generation gen)
+void ForwardingTable::ResetRelocationSet(Generation gen)
 {
-    const size_t idx = static_cast<size_t>(gen);
-    if (idx > 1) {
-        return 0;
-    }
-    return g_markCoverageEpoch[idx].load(std::memory_order_acquire);
+    const char* why =
+        gen == Generation::Old ? "old-reset-relocation-set" : "young-reset-relocation-set";
+    ReclaimRetiredImpl(why, &gen);
 }
 
 size_t ForwardingTable::RetiredQueueSize()

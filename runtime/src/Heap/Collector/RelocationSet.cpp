@@ -75,18 +75,17 @@ void WCollector::PostTrace()
     RegionSpace& space = reinterpret_cast<RegionSpace&>(theAllocator);
     space.GetRegionManager().HandleTraceRegions();
     // Value-only cycle roots still depend on the preceding relocation receipts.
-    // Complete their owner handoff while that authority is queryable; publishing
-    // old-mark coverage is the point after which ReclaimRetired may remove it.
+    // Complete their owner handoff while that authority is queryable.
+    // zGeneration.cpp:1261 mark_end does not reset forwarding.
     PrepareCycleRef();
-    ForwardingTable::PublishMarkCoverage(Generation::Old);
-    ForwardingTable::ReclaimRetired("old-mark-coverage");
     // reclaim large objects immediately after tracing is done.
     CollectLargeGarbage();
     CollectPinnedGarbage();
     RefineFromSpace();
-    // Destroy prev-generation tables after RemapYoungRoots/A8REMAP
-    // (Relocate.cpp post-remap reset), not here: remap still needs the
-    // receipts (zRelocationSet.cpp:191-200; zGeneration.cpp:276-285).
+    // zGeneration.cpp:1042 / :1131-1133: old resets its own previous set
+    // after non-strong processing and before select. Young tables stay
+    // until young's ResetRelocationSet.
+    ForwardingTable::ResetRelocationSet(Generation::Old);
     fwdTable.PrepareForwardTable<Generation::Old>();
     // OPTION_2 mark-epoch release: TRACE+CLEAR_SATB done; publish quarantined post-dispel
     // units (from this PrepareForwardTable and any prior minor) to dirty for reuse.
