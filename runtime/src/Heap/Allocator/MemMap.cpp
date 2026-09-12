@@ -31,6 +31,9 @@
 #include "Base/SysCall.h"
 
 namespace MapleRuntime {
+// C++14 default arguments bind this option by reference (metadata mapping).
+constexpr MemMap::Option MemMap::DEFAULT_OPTIONS;
+
 namespace {
 
 constexpr size_t kDefaultSafeFraction = 2;
