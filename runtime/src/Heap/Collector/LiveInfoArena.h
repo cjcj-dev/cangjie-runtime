@@ -17,6 +17,8 @@
 #include <cstdlib>
 #include <cstring>
 #include <mutex>
+#include <unordered_map>
+#include <vector>
 
 #include "Base/Log.h"
 #include "Base/LogFile.h"
@@ -122,12 +124,43 @@ public:
 
     RegionBitmap* AllocateRegionBitmap(size_t regionSize)
     {
+        if (RegionBitmap* recycled = TakeRecycledRegionBitmap(regionSize)) {
+            new (recycled) RegionBitmap(regionSize);
+            recycled->Reset();
+            return recycled;
+        }
         uintptr_t addr = liveInfoData.Allocate(ForwardDataSpace::Zone::ZoneType::BIT_MAP,
                                                RegionBitmap::GetRegionBitmapSize(regionSize));
         RegionBitmap* bitmap = reinterpret_cast<RegionBitmap*>(addr);
         CHECK(bitmap != nullptr);
         new (bitmap) RegionBitmap(regionSize);
         return bitmap;
+    }
+
+    void RecycleRegionBitmap(RegionBitmap* bitmap)
+    {
+        if (bitmap == nullptr) {
+            return;
+        }
+        const size_t regionSize = bitmap->CoveredRegionSize();
+        std::lock_guard<std::mutex> guard(recycleMutex);
+        recycledBySize[regionSize].push_back(bitmap);
+    }
+
+    RegionBitmap* PublishMatchingBitmap(RegionBitmap** slot, RegionBitmap* current, size_t regionSize)
+    {
+        if (current->CoversRegionSize(regionSize)) {
+            return current;
+        }
+        RegionBitmap* replacement = AllocateRegionBitmap(regionSize);
+        RegionBitmap* expected = current;
+        if (__atomic_compare_exchange_n(slot, &expected, replacement, false, std::memory_order_seq_cst,
+                                        std::memory_order_relaxed)) {
+            RecycleRegionBitmap(current);
+            return replacement;
+        }
+        RecycleRegionBitmap(replacement);
+        return expected;
     }
 
     LiveInfo* AllocateLiveInfo()
@@ -137,6 +170,18 @@ public:
     }
 
 private:
+    RegionBitmap* TakeRecycledRegionBitmap(size_t regionSize)
+    {
+        std::lock_guard<std::mutex> guard(recycleMutex);
+        auto it = recycledBySize.find(regionSize);
+        if (it == recycledBySize.end() || it->second.empty()) {
+            return nullptr;
+        }
+        RegionBitmap* bitmap = it->second.back();
+        it->second.pop_back();
+        return bitmap;
+    }
+
     size_t GetLiveInfoDataSize(size_t heapSize)
     {
         const size_t REGION_UNIT_SIZE = MapleRuntime::MRT_PAGE_SIZE; // must be equal to RegionInfo::UNIT_SIZE
@@ -154,6 +199,8 @@ private:
     size_t regionUnitCount = 0;
     uintptr_t forwardDataStart = 0;
     size_t forwardDataSize = 0;
+    std::mutex recycleMutex;
+    std::unordered_map<size_t, std::vector<RegionBitmap*>> recycledBySize;
 };
 } // namespace MapleRuntime
 #endif // MRT_LIVE_INFO_ARENA_H

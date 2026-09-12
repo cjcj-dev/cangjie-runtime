@@ -1160,16 +1160,9 @@ public:
                 if (IsGhostFromRegion()) {
                     return bitmap;
                 }
-                if (!bitmap->CoversRegionSize(GetRegionSize())) {
-                    RegionBitmap* replacement =
-                        LiveInfoArena::GetLiveInfoArena().AllocateRegionBitmap(GetRegionSize());
-                    RegionBitmap* expected = bitmap;
-                    if (__atomic_compare_exchange_n(&face.bitmap, &expected, replacement, false,
-                                                    std::memory_order_seq_cst, std::memory_order_relaxed)) {
-                        bitmap = replacement;
-                    } else {
-                        bitmap = expected;
-                    }
+                while (!bitmap->CoversRegionSize(GetRegionSize())) {
+                    bitmap = LiveInfoArena::GetLiveInfoArena().PublishMatchingBitmap(
+                        &face.bitmap, bitmap, GetRegionSize());
                 }
                 constexpr uint64_t kInitializing = std::numeric_limits<uint64_t>::max();
                 for (;;) {
@@ -1226,16 +1219,9 @@ public:
                 continue;
             }
             if (LIKELY(bitmap != nullptr)) {
-                if (!IsGhostFromRegion() && !bitmap->CoversRegionSize(GetRegionSize())) {
-                    RegionBitmap* replacement =
-                        LiveInfoArena::GetLiveInfoArena().AllocateRegionBitmap(GetRegionSize());
-                    RegionBitmap* expected = bitmap;
-                    if (__atomic_compare_exchange_n(&liveInfo->resurrectBitmap, &expected, replacement, false,
-                                                    std::memory_order_seq_cst, std::memory_order_relaxed)) {
-                        bitmap = replacement;
-                    } else {
-                        bitmap = expected;
-                    }
+                while (!IsGhostFromRegion() && !bitmap->CoversRegionSize(GetRegionSize())) {
+                    bitmap = LiveInfoArena::GetLiveInfoArena().PublishMatchingBitmap(
+                        &liveInfo->resurrectBitmap, bitmap, GetRegionSize());
                 }
                 return bitmap;
             }
@@ -1276,16 +1262,9 @@ public:
                 continue;
             }
             if (LIKELY(bitmap != nullptr)) {
-                if (!IsGhostFromRegion() && !bitmap->CoversRegionSize(GetRegionSize())) {
-                    RegionBitmap* replacement =
-                        LiveInfoArena::GetLiveInfoArena().AllocateRegionBitmap(GetRegionSize());
-                    RegionBitmap* expected = bitmap;
-                    if (__atomic_compare_exchange_n(&liveInfo->enqueueBitmap, &expected, replacement, false,
-                                                    std::memory_order_seq_cst, std::memory_order_relaxed)) {
-                        bitmap = replacement;
-                    } else {
-                        bitmap = expected;
-                    }
+                while (!IsGhostFromRegion() && !bitmap->CoversRegionSize(GetRegionSize())) {
+                    bitmap = LiveInfoArena::GetLiveInfoArena().PublishMatchingBitmap(
+                        &liveInfo->enqueueBitmap, bitmap, GetRegionSize());
                 }
                 return bitmap;
             }
