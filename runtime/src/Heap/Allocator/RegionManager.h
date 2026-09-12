@@ -774,9 +774,6 @@ public:
     // twoflags: walk live region lists and clear notRelocatableThisCycle.
     void ClearNotRelocatableThisCycleFlags();
 
-    // routedest: walk the same lists and drop routeDestHold for one route generation.
-    void ClearRouteDestHoldFlags();
-
     bool RouteOrCompactRegionImpl(RegionInfo* region);
 
     static bool RouteIsPublished(BaseObject* fromObj, RegionInfo* fromRegionInfo)
@@ -912,8 +909,6 @@ public:
         // reclaim schedules that are not phase-driven — the mutator garbage fast path and
         // the finalizer both reach a live region only through TakeReclaimableGarbageRegion,
         // and a held region never reaches garbageRegionList in the first place.
-        ClearRouteDestHoldFlags();
-
         // markwater2: ZGC select_relocation_set skips !is_relocatable (allocating)
         // pages before install. Do this before PrepareForwardable so no ghost/route
         // is published for a watermark-gap region (915e6348 ForwardRegion Exempt

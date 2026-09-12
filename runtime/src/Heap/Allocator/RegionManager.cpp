@@ -1407,8 +1407,6 @@ void RegionManager::ClearNotRelocatableThisCycleFlags()
 // Walks the same eleven lists as ClearNotRelocatableThisCycleFlags, and reports the gauge
 // before clearing: holds that leak never get dropped and show up as monotonic growth in
 // held_regions, which is the only way to tell that failure apart from the opposite one.
-void RegionManager::ClearRouteDestHoldFlags() {}
-
 void RegionManager::AssemblePinnedGarbageCandidates(bool collectAll)
 {
     oldPinnedRegionList.MergeRegionList(recentPinnedRegionList, RegionInfo::RegionType::FULL_PINNED_REGION);
