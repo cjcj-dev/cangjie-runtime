@@ -24,6 +24,11 @@
 
 namespace MapleRuntime {
 
+#if defined(MRT_TESTABLE_INTERNALS)
+std::function<void(GCWorkers::Generation, TracingCollector::RootSet&)> TracingCollector::testRootsResult;
+std::function<void()> TracingCollector::testCyclePrepared;
+#endif
+
 // ZMark::_ncontinue (zMark.cpp:975-981). Always on so a zero is readable as
 // "the pre-pause test was right every time" rather than "nobody is counting".
 std::atomic<size_t> g_markTerminateContinue{ 0 };
@@ -737,7 +742,7 @@ void TracingCollector::EnumAllExportRoots(RootSet &foreignRootsSet)
 void TracingCollector::DoEnumeration(WorkStack& workStack, WorkStack& foreignRootsSet)
 {
     ScopedEntryTrace trace("CJRT_GC_ENUM");
-    EnumAllCommonRoots(GetThreadPool(), workStack);
+    EnumAllCommonRoots(GetWorkers(), workStack);
     EnumAllExportRoots(foreignRootsSet);
 }
 
@@ -1295,6 +1300,8 @@ void TracingCollector::PreGarbageCollection(bool isConcurrent, uint64_t gcIndex)
     // prepare thread pool.
     GCThreadPool* threadPool = GetThreadPool();
     const int32_t threadCount = GetGCThreadCount(isConcurrent);
+    GetWorkers().SetActive();
+    GetWorkers().SetActiveWorkers(static_cast<uint32_t>(threadCount));
     MRT_ASSERT(threadCount >= 1, "unexpected thread count");
 #if defined(__linux__) || defined(hongmeng)
     threadPool->SetPriority(GCPoolThread::GC_THREAD_STW_PRIORITY);
@@ -1306,6 +1313,11 @@ void TracingCollector::PreGarbageCollection(bool isConcurrent, uint64_t gcIndex)
     GetGCStats().reason = GetCycleReason();
     GetGCStats().async = (gcIndex == GCTask::ASYNC_TASK_INDEX);
     GetGCStats().isConcurrentMark = isConcurrent;
+#if defined(MRT_TESTABLE_INTERNALS)
+    if (testCyclePrepared) {
+        testCyclePrepared();
+    }
+#endif
 #if defined(MRT_DEBUG) && (MRT_DEBUG == 1)
     DumpBeforeGC();
 #endif
@@ -1314,6 +1326,7 @@ void TracingCollector::PreGarbageCollection(bool isConcurrent, uint64_t gcIndex)
 
 void TracingCollector::PostGarbageCollection(uint64_t gcIndex)
 {
+    GetWorkers().SetInactive();
     // Periodic persistence: timeout/ABRT/SIGKILL cannot erase counters from
     // completed GC cycles. Both probes self-gate and remain default off.
     // holdercapture: periodic persistence, so ABRT/kill cannot erase the snapshot census.
@@ -1423,49 +1436,39 @@ void TracingCollector::DFSTraceExportObject(BaseObject *exportObj, bool finaliza
     std::lock_guard<std::mutex> lg(externMtx);
     discoveredExternObjects[exportObj] = externObjs;
 }
-void TracingCollector::EnumAllCommonRoots(GCThreadPool* threadPool, RootSet& rootSet)
+void TracingCollector::EnumAllCommonRoots(GCWorkers& workers, RootSet& rootSet)
 {
-    MRT_ASSERT(threadPool != nullptr, "thread pool is null");
-
-    const size_t threadCount = threadPool->GetMaxThreadNum() + 1;
-    // 10 is the max root set count, this is for vla warning
-    constexpr size_t maxStackRootSetCount = 10;
-    RootSet rootSetsInstance[maxStackRootSetCount];
-    RootSet* dynamicRootSets = nullptr;
-    RootSet* rootSets = rootSetsInstance; // work_around the crash of clang parser
-    if (threadCount > maxStackRootSetCount) {
-        dynamicRootSets = new (std::nothrow) RootSet[threadCount];
-        if (dynamicRootSets == nullptr) {
-            LOG(RTLOG_FATAL, "new root sets failed");
-            return;
+    // zRootsIterator.cpp: generation workers claim independent root families.
+    const uint32_t count = workers.ActiveWorkers();
+    std::vector<RootSet> roots(count);
+    std::atomic<unsigned> next { 0 };
+    class RootsTask final : public GCWorkerTask {
+    public:
+        explicit RootsTask(std::function<void(uint32_t)> body) : body(std::move(body)) {}
+        void Work(uint32_t id) override { body(id); }
+    private:
+        std::function<void(uint32_t)> body;
+    } task([&](uint32_t id) {
+        for (unsigned family = next.fetch_add(1); family < 4; family = next.fetch_add(1)) {
+            switch (family) {
+                case 0: EnumStaticRoots(roots[id]); break;
+                case 1: EnumConcurrencyModelRoots(roots[id]); break;
+                case 2: EnumFinalizerProcessorRoots(roots[id]); break;
+                case 3: EnumAllSurrectedExportRoots(roots[id]); break;
+            }
         }
-        rootSets = dynamicRootSets;
-    }
-
-    // task to enum static field roots.
-    threadPool->AddWork(new (std::nothrow)
-                            LambdaWork([this, rootSets](size_t workerID) { EnumStaticRoots(rootSets[workerID]); }));
-
-    // task to enum cj future objects
-    threadPool->AddWork(new (std::nothrow) LambdaWork(
-        [this, rootSets](size_t workerID) { EnumConcurrencyModelRoots(rootSets[workerID]); }));
-
-    // task to enum finalizer roots.
-    threadPool->AddWork(new (std::nothrow) LambdaWork(
-        [this, rootSets](size_t workerID) { EnumFinalizerProcessorRoots(rootSets[workerID]); }));
-
-    threadPool->AddWork(new (std::nothrow) LambdaWork(
-        [this, rootSets](size_t workerID) { EnumAllSurrectedExportRoots(rootSets[workerID]); }));
-    threadPool->Start();
-    threadPool->WaitFinish();
-
+    });
+    workers.Run(task);
     MergeMutatorRoots(rootSet);
-
-    for (size_t i = 0; i < threadCount; ++i) {
-        rootSet.insert(rootSets[i]);
+    for (auto& result : roots) {
+        rootSet.insert(result);
     }
+#if defined(MRT_TESTABLE_INTERNALS)
+    if (testRootsResult) {
+        testRootsResult(workers.GetSnapshot().generation, rootSet);
+    }
+#endif
     VLOG(REPORT, "Total roots: %zu(exclude stack roots)", rootSet.size());
-    delete[] dynamicRootSets;
 }
 
 void TracingCollector::VisitStaticRoots(const RootSlotVisitor& visitor) const

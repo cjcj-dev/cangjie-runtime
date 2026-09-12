@@ -22,6 +22,9 @@
 namespace MapleRuntime {
 
 class FinalizerProcessor {
+#if defined(MRT_TESTABLE_INTERNALS)
+    friend struct GenerationCycleRootTestAccess;
+#endif
 public:
     FinalizerProcessor();
     ~FinalizerProcessor() = default;

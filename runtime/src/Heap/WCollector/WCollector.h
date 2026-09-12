@@ -726,11 +726,10 @@ public:
     //
     // Old-tagged fields are exactly where non-heap payloads appear -- a TypeInfo*, a binary
     // constant, immortal metadata: after Flip their colour is IsOldPointer while the payload is
-    // still the live non-heap pointer (FixOldTaggedRefField says so in its own comment).  Every
+    // still the live non-heap pointer. Every
     // caller's *load-good* arm gated on Heap::IsHeapAddress before looking the route up; none of
-    // the *old-tag* arms did.  Guarding here rather than at each arm is one fix instead of four:
+    // the *old-tag* arms did.  Guarding here rather than at each arm is a shared guard:
     //
-    //   FixOldTaggedRefField             ra1=FixOldTaggedRefField     (first abort seen)
     //   ResolveMinorReference(RefField&) ra1=ResolveMinorReference    (where it moved to)
     //   ResolveMinorReference(RootSlot&) same shape
     //   RescanRememberedSet              same shape
@@ -754,7 +753,7 @@ public:
     {
         // Mirror IsGhostFromObject: GetGhostFromRegionAt → GetUnitIdxAt has no heap range
         // check, so null / non-heap (incl. colour-only null after flip) aborts as
-        // "GetUnitIdxAt OOB addr=0". FixOldTaggedRefField then nulls the slot.
+        // "GetUnitIdxAt OOB addr=0".
         // nullptr here is dual: non-heap/null gate OR unpublished / no to-version.
         // Soft-resolve paths must not CAS-null on the non-heap reading (RO static).
         if (obj == nullptr || !Heap::IsHeapAddress(obj)) {
@@ -1465,14 +1464,6 @@ private:
     bool TryUpdateRefFieldImpl(BaseObject* obj, RefField<>& ref, BaseObject*& oldRef, BaseObject*& newRef,
                                const ForwardingProvenance& provenance) const;
     void TraceHeap();
-    // F3: rewrite IsOldPointer slots to plain/to so one-gen-stale tags cannot
-    // outlive the route table (REPORT-tagaba F3).
-    // requireSurvivedMark=true  → pre-dispel (PostTrace; marks still on from).
-    // requireSurvivedMark=false → post-Flip after Forward (to-space has no marks).
-    // Anchor main 9ad991c4e8660c26d6bfe575f6425e1b227bdf94 + bfb5e8b24fa7c462321709c0c5af8290dccb38a6.
-    void InvalidateOldTaggedRefsBeforeDispel();
-    void InvalidateOldTaggedRefs(bool requireSurvivedMark);
-    void FixOldTaggedRefField(BaseObject* holder, RefField<>& field, const ScopedStopTheWorld& stw);
     void PreforwardConcurrencyModelRoots();
     void PostTrace();
     // OpenJDK ZGenerationOld::remap_young_roots (zGeneration.cpp:1503-1523):

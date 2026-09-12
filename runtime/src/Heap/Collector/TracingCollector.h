@@ -269,6 +269,7 @@ class TracingCollector : public Collector {
     friend ExportRootsTracingWork;
 #if defined(MRT_TESTABLE_INTERNALS)
     friend struct RelocationReceiptTestAccess;
+    friend struct GenerationCycleRootTestAccess;
 #endif
 public:
     enum class RefSlotKind : U8 {
@@ -307,6 +308,12 @@ public:
     using RootSet = MarkStack<MarkStackEntry>;
     using WorkStack = MarkStack<MarkStackEntry>;
     using WorkStackBuf = MarkStackBuf<MarkStackEntry>;
+#if defined(MRT_TESTABLE_INTERNALS)
+    // Observers see the product result after dispatch; neither supplies work.
+    // Static storage keeps the instance layout identical in both build shapes.
+    static std::function<void(GCWorkers::Generation, RootSet&)> testRootsResult;
+    static std::function<void()> testCyclePrepared;
+#endif
 
     void Init() override;
     void Fini() override;
@@ -534,7 +541,12 @@ protected:
 
     GCThreadPool* GetThreadPool() const { return collectorResources.GetThreadPool(); }
     // enum all common roots.
-    void EnumAllCommonRoots(GCThreadPool* threadPool, RootSet& rootSet);
+    void EnumAllCommonRoots(GCWorkers& workers, RootSet& rootSet);
+    GCWorkers& GetWorkers() const
+    {
+        return collectorResources.GetWorkers(GetCycleReason() == GC_REASON_YOUNG
+            ? GCCycleGeneration::YOUNG : GCCycleGeneration::OLD);
+    }
     // enum roots referenced by foreign languages.
     void EnumAllExportRoots(RootSet& foreignRootsSet);
     // let finalizerProcessor process finalizers, and mark resurrected if in light sync gc

@@ -19,6 +19,7 @@
 #include "Base/SysCall.h"
 #include "CangjieRuntime.h"
 #include "CollectorProxy.h"
+#include "Heap/Allocator/RegionSpace.h"
 #include "Common/Runtime.h"
 #include "MutatorAllocRate.h"
 #include "Collector/Uncommitter.h"
@@ -153,11 +154,10 @@ void CollectorResources::StopGCThreads()
         delete gcThreadPool;
         gcThreadPool = nullptr;
     }
-    if (evacuationThreadPool != nullptr) {
-        evacuationThreadPool->Exit();
-        delete evacuationThreadPool;
-        evacuationThreadPool = nullptr;
-    }
+    delete youngWorkers;
+    youngWorkers = nullptr;
+    delete oldWorkers;
+    oldWorkers = nullptr;
     gcThreadRunning.store(false, std::memory_order_release);
 }
 
@@ -454,11 +454,6 @@ void CollectorResources::StartGCThreads()
     }
     // starts the thread pool.
     if (gcThreadPool == nullptr) {
-        // Off by default: on real_load the formula picks 23 workers on a 32-core
-        // domain and costs 2.22x task-clock for 1.14x wall (REPORT-jvmparam),
-        // which reproduces the earlier no-headroom result from REPORT-gcthreads.
-        const char* jvmThreadsEnv = std::getenv("MRT_GCV2_JVM_GC_THREADS");
-        const bool useJvmThreads = jvmThreadsEnv != nullptr && std::strcmp(jvmThreadsEnv, "1") == 0;
         unsigned int activeProcessorCount = std::thread::hardware_concurrency();
         bool affinityDetected = false;
 #if defined(__linux__) || defined(hongmeng)
@@ -473,53 +468,33 @@ void CollectorResources::StartGCThreads()
         }
 #endif
         activeProcessorCount = std::max(activeProcessorCount, 1U);
-        if (useJvmThreads) {
-            constexpr unsigned int parallelThreadSwitchPoint = 8;
-            constexpr unsigned int parallelThreadNumerator = 5;
-            constexpr unsigned int parallelThreadDenominator = 8;
-            unsigned int parallelThreads = activeProcessorCount <= parallelThreadSwitchPoint ?
-                activeProcessorCount : parallelThreadSwitchPoint +
-                    (activeProcessorCount - parallelThreadSwitchPoint) * parallelThreadNumerator /
-                        parallelThreadDenominator;
-            gcThreadCount = static_cast<int32_t>(parallelThreads);
-            concurrentGcThreadCount = std::max(static_cast<int32_t>((parallelThreads + 2) / 4), 1);
-        } else {
-            gcThreadCount = 2;
-            concurrentGcThreadCount = 2;
-        }
+        // zHeuristics.cpp:77-107: CPU shares are rounded up, while the
+        // relocation-buffer budget is capped at 2% of the maximum heap.
+        // Dividing before multiplying avoids overflow at the size_t boundary.
+        const size_t maxHeap = Heap::GetHeap().GetMaxCapacity();
+        const auto& regions = static_cast<RegionSpace&>(Heap::GetHeap().GetAllocator()).GetRegionManager();
+        const size_t regionBytes = regions.GetThreadLocalRegionSize();
+        CHECK_DETAIL(regionBytes != 0, "worker region budget must be initialized");
+        const size_t heapWorkers = maxHeap / 50 / regionBytes;
+        const uint64_t cpus = activeProcessorCount;
+        gcThreadCount = static_cast<int32_t>(std::max<size_t>(1,
+            std::min<size_t>((cpus * 3 + 4) / 5, heapWorkers)));
+        concurrentGcThreadCount = static_cast<int32_t>(std::max<size_t>(1,
+            std::min<size_t>((cpus + 3) / 4, heapWorkers)));
         int32_t helperThreads = gcThreadCount - 1;
         VLOG(REPORT,
              "total gc thread count %d, helper thread count %d, concurrent gc thread count %d, "
-             "active processor count %u, affinity detected %d, jvm formula %d",
+             "active processor count %u, affinity detected %d, region bytes %zu",
              gcThreadCount, helperThreads, concurrentGcThreadCount, activeProcessorCount, affinityDetected,
-             useJvmThreads);
+             regionBytes);
         gcThreadPool = new (std::nothrow) GCThreadPool("gc", helperThreads, GCPoolThread::GC_THREAD_PRIORITY);
         CHECK_DETAIL(gcThreadPool != nullptr, "new GCThreadPool failed");
 
-        // evacpar: copy already owns work by region, but the shared product pool
-        // is normally fixed at two total workers.  A dedicated opt-in pool lets
-        // the copy phase scale without also widening ref-fix/mark work.  Unset,
-        // malformed, one, and out-of-affinity values preserve the old pool.
-        const char* evacWorkersEnv = std::getenv("MRT_GCV2_EVACPAR_WORKERS");
-        if (evacWorkersEnv != nullptr && evacWorkersEnv[0] != '\0') {
-            char* end = nullptr;
-            long requested = std::strtol(evacWorkersEnv, &end, 10);
-            bool valid = end != evacWorkersEnv && *end == '\0' && requested >= 2 &&
-                static_cast<unsigned long>(requested) <= activeProcessorCount;
-            if (valid) {
-                int32_t evacHelpers = static_cast<int32_t>(requested) - 1;
-                evacuationThreadPool =
-                    new (std::nothrow) GCThreadPool("evac", evacHelpers, GCPoolThread::GC_THREAD_STW_PRIORITY);
-                CHECK_DETAIL(evacuationThreadPool != nullptr, "new evacuation GCThreadPool failed");
-                VLOG(REPORT,
-                     "[GCV2][evacpar][config] workers=%ld activeProcessorCount=%u dedicated=1",
-                     requested, activeProcessorCount);
-            } else {
-                VLOG(REPORT,
-                     "[GCV2][evacpar][config] invalid workers=%s activeProcessorCount=%u dedicated=0",
-                     evacWorkersEnv, activeProcessorCount);
-            }
-        }
+        // zGeneration.cpp:141-152: each generation owns an independent set.
+        // GCWorkers counts participants, excluding the coordinating driver.
+        youngWorkers = new GCWorkers(GCWorkers::Generation::YOUNG, gcThreadCount);
+        oldWorkers = new GCWorkers(GCWorkers::Generation::OLD, gcThreadCount);
+
     }
 
     // ZGC shape: two independent drivers, each consuming only its generation
