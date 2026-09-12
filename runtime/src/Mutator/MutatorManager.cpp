@@ -186,7 +186,7 @@ void MutatorManager::DestroyMutator(Mutator* mutator)
     // dynjoin: while an epoch handshake is active, never free a participant (or a
     // racing create) under the old R-lock path — that used to be serialised by the
     // full-handshake W-lock. Defer to expiringMutators; PostGC drains them.
-    if (EpochHandshakeActive()) {
+    if (EpochHandshakeActive() || MarkFlushHandshakeActive()) {
         epochHandshakeDestroyDeferred.fetch_add(1, std::memory_order_relaxed);
         expiringMutatorListLock.lock();
         expiringMutators.push_back(mutator);
@@ -667,35 +667,35 @@ bool MutatorManager::HandshakeFlushMarkProducers()
         });
         return flushed;
     }
+    markFlushHandshakeActive.store(1, std::memory_order_release);
     std::list<Mutator*> pending;
     VisitAllMutators([&pending](Mutator& mutator) {
         mutator.SetSuspensionFlag(Mutator::SuspensionType::SUSPENSION_FOR_MARK_FLUSH);
         mutator.SetSafepointActive(true);
+        mutator.IncObserver();
         pending.push_back(&mutator);
     });
     Mutator* self = Mutator::GetMutator();
     while (!pending.empty()) {
         for (auto it = pending.begin(); it != pending.end();) {
             Mutator* mutator = *it;
-            if (!mutator->HasSuspensionRequest(Mutator::SuspensionType::SUSPENSION_FOR_MARK_FLUSH)) {
-                it = pending.erase(it);
+            const Mutator::MarkFlushClaim claim = mutator->TryClaimMarkFlush(mutator == self);
+            if (claim == Mutator::MarkFlushClaim::NotSafe) {
+                ++it;
                 continue;
             }
-            if (mutator == self || mutator->InSaferegion()) {
-                if (mutator->FlushSatbBuffer(true)) {
-                    flushed = true;
-                }
-                mutator->ClearSuspensionFlag(Mutator::SuspensionType::SUSPENSION_FOR_MARK_FLUSH);
-                mutator->SetSafepointActive(mutator->HasAnySuspensionRequest());
-                it = pending.erase(it);
-                continue;
+            mutator->DecObserver();
+            if (claim == Mutator::MarkFlushClaim::Published) {
+                flushed = true;
             }
-            ++it;
+            it = pending.erase(it);
         }
         if (!pending.empty()) {
             std::this_thread::yield();
         }
     }
+    markFlushHandshakeActive.store(0, std::memory_order_release);
+    DestroyExpiredMutators();
     return flushed;
 }
 

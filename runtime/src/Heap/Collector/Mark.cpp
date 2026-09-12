@@ -35,6 +35,7 @@
 #include "Base/SysCall.h"
 #endif
 #include "Concurrency/Concurrency.h"
+#include "Heap/Allocator/AllocBuffer.h"
 #include "Heap/Barrier/StoreBarrierBuffer.h"
 #include "Heap/Collector/GcTriggerFlags.h"
 #include "Heap/Collector/MarkEngine.h"
@@ -1688,5 +1689,60 @@ void WCollector::ProcessFinalizers()
 {
     FinalizerProcessor& fp = collectorResources.GetFinalizerProcessor();
     fp.ProcessReferences([this](BaseObject* obj) { return IsMarkedObject<Generation::Old>(obj); });
+}
+
+bool WCollector::PublishHandshakeMarkWork(WorkStack& work)
+{
+    MarkDomain* domain = nullptr;
+    if (youngMarkDomain != nullptr && youngMarkDomain->NWorkers() != 0) {
+        domain = youngMarkDomain.get();
+    } else if (majorMarkDomain != nullptr && majorMarkDomain->NWorkers() != 0) {
+        domain = majorMarkDomain.get();
+    }
+    if (domain == nullptr || work.empty()) {
+        return !work.empty();
+    }
+    MarkThreadLocalStacks seed(domain->Stripes().Count());
+    bool published = false;
+    while (!work.empty()) {
+        const MarkStackEntry entry = work.back();
+        work.pop_back();
+        MAddress address = 0;
+        if (entry.partialArray()) {
+            size_t length = 0;
+            MarkPartialArray::Decode(entry, address, length);
+        } else {
+            address = reinterpret_cast<MAddress>(entry.object());
+        }
+        if (address == 0) {
+            continue;
+        }
+        seed.Push(domain->Stripes(), domain->Stripes().StripeForAddress(address), entry, true);
+        published = true;
+    }
+    if (published) {
+        (void)seed.Flush(domain->Stripes(), true);
+        domain->Terminate().Wake();
+    }
+    return published;
+}
+
+bool WCollector::FlushAllocBufferMarkProducers(AllocBuffer* buffer)
+{
+    if (buffer == nullptr) {
+        return false;
+    }
+    WorkStack work;
+    buffer->MergeRoots(work);
+    buffer->MergeYoungAllocBlackFollow(work);
+    buffer->MergeY2yDirtyHolders(work);
+    buffer->MergeY2yDirtySlots([this, &work](MAddress slot) {
+        RefField<>& field = HeapSlotAt<>(slot);
+        BaseObject* target = ResolveMinorReference(field);
+        if (target != nullptr && Heap::IsHeapAddress(target)) {
+            work.push_back(MarkStackEntry::MarkAndFollow(target, false));
+        }
+    });
+    return PublishHandshakeMarkWork(work);
 }
 } // namespace MapleRuntime

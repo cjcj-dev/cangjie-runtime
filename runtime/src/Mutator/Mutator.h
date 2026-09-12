@@ -635,31 +635,10 @@ public:
     // substitute: EnsurePhaseTransition (MutatorManager.cpp:806-811) erases any
     // mutator already parked in the target phase without re-running the handler,
     // so a second transition to the same phase flushes nobody.
-    bool FlushSatbBuffer(bool flushStoreBarrier = true)
-    {
-        std::lock_guard<std::mutex> lg(mutatorLock);
-        RememberedSet* rememberedSet = storeBarrierRememberedSet;
-        if (rememberedSet == nullptr) {
-            rememberedSet = &Heap::GetHeap().GetRememberedSet();
-        }
-        if (flushStoreBarrier && markFlushAllocBuffer != nullptr && rememberedSet->IsInitialized()) {
-            markFlushAllocBuffer->GetStoreBarrierBuffer().Flush(*rememberedSet);
-        }
-        const bool published = satbNode != nullptr && !satbNode->IsEmpty();
-        SatbBuffer::Instance().FlushQueue(satbNode);
-        return published;
-    }
-
-    bool AcknowledgeMarkFlushHandshake()
-    {
-        if (!HasSuspensionRequest(SUSPENSION_FOR_MARK_FLUSH)) {
-            return false;
-        }
-        const bool published = FlushSatbBuffer(true);
-        ClearSuspensionFlag(SUSPENSION_FOR_MARK_FLUSH);
-        SetSafepointActive(HasAnySuspensionRequest());
-        return published;
-    }
+    bool FlushSatbBuffer(bool flushStoreBarrier = true);
+    enum class MarkFlushClaim : uint8_t { NotPending, NotSafe, Empty, Published };
+    MarkFlushClaim TryClaimMarkFlush(bool self);
+    bool AcknowledgeMarkFlushHandshake();
 
 protected:
     // for managed stack

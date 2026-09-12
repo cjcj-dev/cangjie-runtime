@@ -238,6 +238,10 @@ public:
     {
         return epochHandshakeActive.load(std::memory_order_acquire) != 0;
     }
+    bool MarkFlushHandshakeActive() const
+    {
+        return markFlushHandshakeActive.load(std::memory_order_acquire) != 0;
+    }
 #if defined(MRT_TESTABLE_INTERNALS)
     uint64_t BeginEpochHandshakeLifecycleTest();
     void EndEpochHandshakeLifecycleTest();
@@ -369,6 +373,7 @@ private:
 
     std::atomic<uint64_t> epochHandshakeSequence = { 0 };
     std::atomic<uint64_t> epochHandshakeActive = { 0 };
+    std::atomic<uint32_t> markFlushHandshakeActive = { 0 };
     std::atomic<size_t> epochHandshakeAcked = { 0 };
     std::atomic<size_t> epochHandshakeAckedTwice = { 0 };
     std::atomic<size_t> epochHandshakeSelfAck = { 0 };

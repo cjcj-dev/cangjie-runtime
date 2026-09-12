@@ -16,6 +16,8 @@
 #include "Collector/CopyCollector.h"
 #include "Common/ScopedObjectAccess.h"
 #include "Concurrency/ConcurrencyModel.h"
+#include "Heap/Heap.h"
+#include "Heap/Allocator/AllocBuffer.h"
 #include "Heap/Collector/FinalizerProcessor.h"
 #include "Heap/Verify/VerifyRoots.h"
 #include "Heap/Verify/StackExposureOracle.h"
@@ -1448,5 +1450,61 @@ void Mutator::ReleaseForeignThread()
         delete buffer;
     }
     // We can remove foreign thread c-heap resource here.
+}
+
+bool Mutator::FlushSatbBuffer(bool flushStoreBarrier)
+{
+    std::lock_guard<std::mutex> lg(mutatorLock);
+    RememberedSet* rememberedSet = storeBarrierRememberedSet;
+    if (rememberedSet == nullptr) {
+        rememberedSet = &Heap::GetHeap().GetRememberedSet();
+    }
+    bool published = satbNode != nullptr && !satbNode->IsEmpty();
+    SatbBuffer::Instance().FlushQueue(satbNode);
+    if (flushStoreBarrier && markFlushAllocBuffer != nullptr) {
+        if (rememberedSet->IsInitialized()) {
+            markFlushAllocBuffer->GetStoreBarrierBuffer().Flush(*rememberedSet);
+        }
+        auto& collector = static_cast<WCollector&>(Heap::GetHeap().GetCollector());
+        if (collector.FlushAllocBufferMarkProducers(markFlushAllocBuffer)) {
+            published = true;
+        }
+    }
+    return published;
+}
+
+Mutator::MarkFlushClaim Mutator::TryClaimMarkFlush(bool self)
+{
+    std::lock_guard<std::mutex> lg(mutatorLock);
+    if (!HasSuspensionRequest(SUSPENSION_FOR_MARK_FLUSH)) {
+        return MarkFlushClaim::NotPending;
+    }
+    if (!self && !InSaferegion()) {
+        return MarkFlushClaim::NotSafe;
+    }
+    RememberedSet* rememberedSet = storeBarrierRememberedSet;
+    if (rememberedSet == nullptr) {
+        rememberedSet = &Heap::GetHeap().GetRememberedSet();
+    }
+    bool published = satbNode != nullptr && !satbNode->IsEmpty();
+    SatbBuffer::Instance().FlushQueue(satbNode);
+    if (markFlushAllocBuffer != nullptr) {
+        if (rememberedSet->IsInitialized()) {
+            markFlushAllocBuffer->GetStoreBarrierBuffer().Flush(*rememberedSet);
+        }
+        auto& collector = static_cast<WCollector&>(Heap::GetHeap().GetCollector());
+        if (collector.FlushAllocBufferMarkProducers(markFlushAllocBuffer)) {
+            published = true;
+        }
+    }
+    ClearSuspensionFlag(SUSPENSION_FOR_MARK_FLUSH);
+    SetSafepointActive(HasAnySuspensionRequest());
+    return published ? MarkFlushClaim::Published : MarkFlushClaim::Empty;
+}
+
+bool Mutator::AcknowledgeMarkFlushHandshake()
+{
+    const MarkFlushClaim claim = TryClaimMarkFlush(true);
+    return claim == MarkFlushClaim::Published || claim == MarkFlushClaim::Empty;
 }
 } // namespace MapleRuntime
