@@ -47,8 +47,6 @@ extern WCOLLECTOR_INTERNAL_HIDDEN std::atomic<size_t> g_findtoPostLifecycleSoft;
 
 WCOLLECTOR_INTERNAL_HIDDEN bool HolderObjectIsLive(BaseObject* holder);
 WCOLLECTOR_INTERNAL_HIDDEN bool SlotHeldByLiveObject(const void* slot);
-WCOLLECTOR_INTERNAL_HIDDEN void ReportF3DeadarmCounts(const char* point);
-WCOLLECTOR_INTERNAL_HIDDEN const char* NoteF3DeadarmHit(const char* reason, BaseObject* holder);
 WCOLLECTOR_INTERNAL_HIDDEN void NoteNullslotWrite(const char* path, BaseObject* holder, void* field,
                                                  BaseObject* from, BaseObject* latest,
                                                  std::atomic<size_t>* pathCount);

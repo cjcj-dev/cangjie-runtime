@@ -256,7 +256,6 @@ RTErrorCode InitCJRuntime(const struct RuntimeParam* param)
             .backupGCInterval = param->gcParam.backupGCInterval == 0 ? 240 * MapleRuntime::SECOND_TO_NANO_SECOND :
                 param->gcParam.backupGCInterval * MapleRuntime::SECOND_TO_NANO_SECOND,
             // Default GC threads factor is 2.
-            .gcThreads = param->gcParam.gcThreads == 0 ? 2 : param->gcParam.gcThreads,
         },
         .logParam = {
             .logLevel = param->logParam.logLevel,

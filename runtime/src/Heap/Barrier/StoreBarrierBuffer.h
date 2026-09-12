@@ -70,6 +70,9 @@ public:
     void Discard();
 
     static void FlushAll(RememberedSet& rs);
+#if defined(MRT_TESTABLE_INTERNALS)
+    StoreBarrierInstallState LastInstalledStateForTest() const { return buffer[current].installed; }
+#endif
 #if defined(MRT_GC_UNIT_TESTS)
     static void SetFlushObserverForTest(StoreBarrierFlushObserver observer);
     static void SetSatbNodeUnavailableForTest(bool unavailable);

@@ -84,8 +84,6 @@ enum class HealSite : uint16_t {
     WCollectorEnumRawInteriorRoot,
     WCollectorEnumRawRoot,
     WCollectorEnumRefFieldRoot,
-    WCollectorFixOldTaggedLive,
-    WCollectorFixOldTaggedNonHeap,
     WCollectorFixRootForwarded,
     WCollectorFixRootInteriorForward,
     WCollectorFixRootPostForwardInterior,

@@ -283,13 +283,6 @@ struct GCParam {
      */
     uint64_t backupGCInterval;
 
-    /*
-     * Parameters for adjusting the number of GC threads.
-     * The number of gc threads is ((the hardware concurrency / this value) - 1).
-     * default to 8, must be > 0.
-     * It will be set default value if the value is 0.
-     */
-    int32_t gcThreads;
 };
 
 /*
