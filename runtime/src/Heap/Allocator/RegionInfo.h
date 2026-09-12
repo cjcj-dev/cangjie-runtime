@@ -3025,6 +3025,16 @@ public:
         ClearCurrentMarkFace();
     }
 
+    ZForwarding* PeekForwardingOwner() const
+    {
+        return metadata.fwdOwner.load(std::memory_order_acquire);
+    }
+
+    int32_t CopyInflightWord() const
+    {
+        return metadata.copyInflight.load(std::memory_order_acquire);
+    }
+
     int32_t ForwardingRefCount() const
     {
         auto owner = ForwardingTable::RetainPageOwner(this);

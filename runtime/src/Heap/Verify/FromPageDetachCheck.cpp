@@ -123,7 +123,7 @@ bool FromPageDetachCheck(const RegionInfo* region, Site site, Action action)
     // the census, but only a claim that still owns a non-zero ref is evidence.
     const bool forwardingClaimActive = refCount < 0 || (region->ForwardingClaimed() && refCount != 0);
     const bool forwardingReleased = refCount == 0 && region->IsForwardingDone();
-    const bool copyInflight = region->metadata.copyInflight.load(std::memory_order_acquire) != 0;
+    const bool copyInflight = region->CopyInflightWord() != 0;
     // Forwarding objects are off-page metadata. Keep active and retired tables
     // visible in the census, but page reuse depends only on page-local detach
     // state. The retired object remains queryable until relocation-set coverage

@@ -2388,7 +2388,7 @@ void WaitCopiedObjectsUnlocked(RegionInfo* region)
     if (region == nullptr || region->IsFreeRegion()) {
         return;
     }
-    ZForwardingLife::WaitPageDone(region->metadata.fwdOwner.load(std::memory_order_acquire));
+    ZForwardingLife::WaitPageDone(region->PeekForwardingOwner());
 }
 
 template<typename Fn>
@@ -2530,7 +2530,7 @@ bool VerifyForwardingReceiptsClosed(RegionInfo* region, const char* site)
                      static_cast<unsigned>(lookup.unavailableCause),
                      static_cast<unsigned>(region->GetRouteState()),
                      static_cast<unsigned>(region->IsForwardingDone()), region->ForwardingRefCount(),
-                      region->metadata.copyInflight.load(std::memory_order_acquire));
+                      region->CopyInflightWord());
         if (hit) {
             ++receipts;
         }
@@ -2539,7 +2539,7 @@ bool VerifyForwardingReceiptsClosed(RegionInfo* region, const char* site)
                  "%s receipt count mismatch region=%p survivors=%zu receipts=%zu route=%u fwdDone=%u refs=%d copy=%d",
                  site, region, survivors, receipts, static_cast<unsigned>(region->GetRouteState()),
                  static_cast<unsigned>(region->IsForwardingDone()), region->ForwardingRefCount(),
-                  region->metadata.copyInflight.load(std::memory_order_acquire));
+                  region->CopyInflightWord());
     return true;
 }
 } // namespace

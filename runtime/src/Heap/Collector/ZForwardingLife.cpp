@@ -7,7 +7,7 @@
 #include "Heap/Collector/ZForwardingLife.h"
 
 #include "Heap/Allocator/RegionInfo.h"
-#include "Heap/Collector/MutatorRelocate.h"
+#include "Heap/Verify/MutatorRelocate.h"
 #include "Heap/Collector/ZForwarding.h"
 #include "Base/TimeUtils.h"
 
