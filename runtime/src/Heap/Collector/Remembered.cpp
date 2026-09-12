@@ -57,6 +57,8 @@
 #include "Heap/Verify/SurvNodeDiag.h"
 #include "Heap/Collector/PromotedRegionDomain.h"
 #include "Heap/Allocator/ForwardingTable.h"
+#include "Heap/Allocator/RegionSpace.h"
+#include "Heap/Barrier/RememberedSet.h"
 #include "Heap/Collector/ZForwarding.h"
 #include "Heap/Verify/CsetEmptyWho.h"
 #include "Common/ColourPredicates.h"
@@ -347,22 +349,62 @@ void NoteResolveRootNull(void* rootSlot, BaseObject* from, BaseObject* to, Regio
 #endif
 void WCollector::ScanRelocatedRememberedFields(MinorSlotSet& rememberedSlots)
 {
-    std::unordered_set<ZForwarding*> forwardings;
-    for (MAddress slot : rememberedSlots) {
-        if (ZForwarding* forwarding = ForwardingTable::GetCovering(slot)) {
-            forwardings.insert(forwarding);
+    struct Containing {
+        MAddress addr;
+        MAddress field;
+    };
+    RememberedSet& remset = Heap::GetHeap().GetRememberedSet();
+    ForwardingTable::VisitAll([&](ZForwarding* forwarding) {
+        if (forwarding == nullptr) {
+            return;
         }
-    }
-    for (ZForwarding* forwarding : forwardings) {
         if (forwarding->retain_page()) {
             forwarding->relocated_remembered_fields_notify_concurrent_scan_of();
+            std::vector<Containing> containing;
+            std::unordered_set<MAddress> previousFields;
+            remset.VisitPreviousInRange(forwarding->start(), forwarding->size(),
+                                        [&](MAddress field) { previousFields.insert(field); });
+            RegionInfo* page = forwarding->page();
+            if (page != nullptr && !page->IsFreeRegion() && !page->IsGarbageRegion()) {
+                page->VisitAllObjects([&](BaseObject* holder) {
+                    if (holder == nullptr || !holder->HasRefField()) {
+                        return;
+                    }
+                    MAddress fromAddr = reinterpret_cast<MAddress>(holder);
+                    holder->ForEachRefField([&](RefField<>& field) {
+                        MAddress fieldAddr = reinterpret_cast<MAddress>(&field);
+                        if (previousFields.count(fieldAddr) != 0) {
+                            containing.push_back(Containing{ fromAddr, fieldAddr });
+                        }
+                    });
+                });
+            }
             forwarding->release_page();
+            MAddress cachedFrom = 0;
+            MAddress cachedTo = 0;
+            size_t cachedSize = 0;
+            for (const Containing& entry : containing) {
+                if (entry.addr != cachedFrom) {
+                    cachedFrom = entry.addr;
+                    BaseObject* from = reinterpret_cast<BaseObject*>(entry.addr);
+                    BaseObject* to = relocate_or_remap_object(from, ZGenerationId::old);
+                    if (to == nullptr) {
+                        to = from;
+                    }
+                    cachedTo = reinterpret_cast<MAddress>(to);
+                    cachedSize = RegionSpace::GetAllocSize(*to);
+                }
+                const uintptr_t fieldOffset = entry.field - entry.addr;
+                if (fieldOffset < cachedSize) {
+                    rememberedSlots.insert(cachedTo + fieldOffset);
+                }
+            }
         } else {
             forwarding->relocated_remembered_fields_apply_to_published([&](MAddress field) {
                 rememberedSlots.insert(field);
             });
         }
-    }
+    });
 }
 
 void WCollector::RescanRememberedSet(WorkStack& workStack, const MinorSlotSet& rememberedSlots,

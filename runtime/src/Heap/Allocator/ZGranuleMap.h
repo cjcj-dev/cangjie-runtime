@@ -113,6 +113,19 @@ public:
     size_t size() const { return _size; }
     MAddress base() const { return _base; }
 
+    template<typename Function>
+    void visit_unique(Function function) const
+    {
+        T last{};
+        for (size_t i = 0; i < _size; ++i) {
+            T value = at(i);
+            if (value != T() && value != last) {
+                function(value);
+                last = value;
+            }
+        }
+    }
+
 private:
     T at(size_t index) const
     {
