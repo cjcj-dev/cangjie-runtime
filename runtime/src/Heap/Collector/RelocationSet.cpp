@@ -75,12 +75,11 @@ void WCollector::PostTrace()
     TransitionToGCPhase(GC_PHASE_POST_TRACE, true);
     RegionSpace& space = reinterpret_cast<RegionSpace&>(theAllocator);
     space.GetRegionManager().HandleTraceRegions();
-    // Value-only cycle roots still depend on the preceding relocation receipts.
-    // Complete their owner handoff while that authority is queryable; publishing
-    // old-mark coverage is the point after which ReclaimRetired may remove it.
     PrepareCycleRef();
     ForwardingTable::PublishMarkCoverage(Generation::Old);
-    ForwardingTable::ReclaimRetired("old-mark-coverage");
+    if (majorMarkDomain != nullptr) {
+        (void)majorMarkDomain->NoteMarkComplete();
+    }
     // reclaim large objects immediately after tracing is done.
     CollectLargeGarbage();
     CollectPinnedGarbage();

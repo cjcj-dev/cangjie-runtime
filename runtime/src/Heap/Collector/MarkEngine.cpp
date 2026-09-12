@@ -270,4 +270,12 @@ bool MarkDomain::TryEnd()
     return stripes.IsEmpty();
 }
 
+MarkClosure MarkDomain::NoteMarkComplete()
+{
+    lastClosure.generation = generation;
+    lastClosure.seq = ++closureSeq;
+    lastClosure.completed = true;
+    return lastClosure;
+}
+
 } // namespace MapleRuntime

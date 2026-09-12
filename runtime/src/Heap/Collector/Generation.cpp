@@ -1268,7 +1268,9 @@ void WCollector::DoYoungGarbageCollection()
         // from the structure the selector iterates.
         space.GetRegionManager().HandleTraceRegions();
         ForwardingTable::PublishMarkCoverage(Generation::Young);
-        ForwardingTable::ReclaimRetired("young-mark-coverage");
+        if (youngMarkDomain != nullptr) {
+            (void)youngMarkDomain->NoteMarkComplete();
+        }
     }
 
     size_t allocatedBefore = space.AllocatedBytes();

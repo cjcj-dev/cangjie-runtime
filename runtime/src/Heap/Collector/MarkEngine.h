@@ -64,6 +64,14 @@ public:
 };
 
 // Per-generation mark ownership (zMark.cpp:80, zGeneration.hpp:70, zThreadLocalData.hpp:43).
+// zGeneration.cpp:897-915 / 1261-1271: mark_end success only sets Phase::MarkComplete.
+// reset_relocation_set (zGeneration.cpp:276-285) is a later last-consumer, not this answer.
+struct MarkClosure {
+    VerifyMarkingStacks::MarkingGeneration generation = VerifyMarkingStacks::MarkingGeneration::YOUNG;
+    uint64_t seq = 0;
+    bool completed = false;
+};
+
 class MarkDomain {
 public:
     explicit MarkDomain(size_t capacity, VerifyMarkingStacks::MarkingGeneration generation);
@@ -82,6 +90,8 @@ public:
     bool FlushStacks();
     bool TryTerminateFlush();
     bool TryEnd();
+    MarkClosure NoteMarkComplete();
+    const MarkClosure& LastClosure() const { return lastClosure; }
     VerifyMarkingStacks::MarkingGeneration Generation() const { return generation; }
 
 private:
@@ -96,6 +106,8 @@ private:
     std::vector<std::unique_ptr<MarkThreadLocalStacks>> stacks;
     GCWorkers* gcWorkers = nullptr;
     ZAbort* abortToken = nullptr;
+    uint64_t closureSeq = 0;
+    MarkClosure lastClosure;
 };
 
 } // namespace MapleRuntime
