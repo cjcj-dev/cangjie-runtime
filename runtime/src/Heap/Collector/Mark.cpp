@@ -177,6 +177,8 @@ bool WCollector::ResurrectObject(BaseObject* obj, size_t offset, RegionInfo* reg
     if (!resurrected) {
         DLOG(TRACE, "resurrect region %p@%#zx obj %p<%p>(%zu), live bytes %zu", region, region->GetRegionStart(),
              obj, obj->GetTypeInfo(), obj->GetSize(), region->GetLiveByteCount());
+    } else if (youngMarkDomain != nullptr) {
+        youngMarkDomain->Terminate().SetResurrected(true);
     }
     return resurrected;
 }
@@ -1630,6 +1632,9 @@ bool WCollector::MarkYoungSatbBuffer(WorkStack& workStack, bool fullYoungScan,
         });
     });
     visitSatbObj();
+    if (youngMarkDomain != nullptr) {
+        (void)youngMarkDomain->TryTerminateFlush();
+    }
     if (windowStats != nullptr) {
         ++windowStats->satbIters;
     }
@@ -1662,7 +1667,13 @@ bool WCollector::TryEndYoungMark(WorkStack& workStack, YoungConcWindowStats* win
         }
     });
     NoteMarkTerminateFlushed(flushed);
-    return workStack.empty();
+    if (!workStack.empty()) {
+        return false;
+    }
+    if (youngMarkDomain != nullptr) {
+        return youngMarkDomain->TryEnd();
+    }
+    return true;
 }
 void WCollector::MarkNewObject(BaseObject* obj)
 {
