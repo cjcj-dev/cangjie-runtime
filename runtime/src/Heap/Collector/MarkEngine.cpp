@@ -21,6 +21,7 @@ void MarkTerminate::Reset(size_t workers, VerifyMarkingStacks::MarkingGeneration
     working = workers;
     awakening = 0;
     terminated = false;
+    resurrected = false;
 }
 
 void MarkTerminate::Leave()
@@ -96,6 +97,18 @@ size_t MarkTerminate::WorkerCount() const
 {
     std::lock_guard<std::mutex> lock(mutex);
     return workerCount;
+}
+
+void MarkTerminate::SetResurrected(bool value)
+{
+    std::lock_guard<std::mutex> lock(mutex);
+    resurrected = value;
+}
+
+bool MarkTerminate::Resurrected() const
+{
+    std::lock_guard<std::mutex> lock(mutex);
+    return resurrected;
 }
 
 static bool StealLocalRound(MarkContext& context, MarkStripeSet& stripes)
@@ -245,6 +258,33 @@ bool MarkDomain::PollStop()
         return true;
     }
     return false;
+}
+
+bool MarkDomain::FlushStacks()
+{
+    bool flushed = false;
+    for (auto& stack : stacks) {
+        if (stack != nullptr && stack->Flush(stripes, true)) {
+            flushed = true;
+        }
+    }
+    return flushed;
+}
+
+bool MarkDomain::TryTerminateFlush()
+{
+    terminate.SetResurrected(false);
+    const bool flushed = FlushStacks();
+    return flushed || !stripes.IsEmpty() || terminate.Resurrected();
+}
+
+bool MarkDomain::TryEnd()
+{
+    if (terminate.Resurrected()) {
+        return false;
+    }
+    (void)FlushStacks();
+    return stripes.IsEmpty();
 }
 
 } // namespace MapleRuntime

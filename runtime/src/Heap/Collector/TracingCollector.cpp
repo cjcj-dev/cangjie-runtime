@@ -887,16 +887,6 @@ void TracingCollector::DoTracing(WorkStack& workStack, WorkStack& foreignRootsSe
         FindUselessExternObjects();
     }
 
-    {
-        // ZGC breaks termination on resurrection (zMarkTerminate.inline.hpp:125-139)
-        // and follows the resurrected closure before accepting mark end. Our
-        // finalizer discovery is controller-owned (no shared stripe): it follows
-        // that closure to empty here, after strict SATB termination and before
-        // the collector can leave the marking phase.
-        MRT_PHASE_TIMER("concurrent resurrection");
-        DoResurrection(workStack);
-    }
-
     // restore thread pool max workers and priority after concurrent marking.
     if (maxWorkers > 0) {
         threadPool->SetMaxActiveThreadNum(stwWorkers);
@@ -922,12 +912,6 @@ bool TracingCollector::MarkSatbBuffer(WorkStack& workStack)
         workStack.clear();
     }
 
-    constexpr uint64_t maxIterationTime = 120ULL * 1000 * 1000 * 1000; // 2 mins.
-    constexpr uint64_t maxIterationLoopNum = 1000;
-    // satbSeen counts every entry the drain took delivery of, marked or not. Without
-    // it an ncontinue of 0 cannot be told apart from "the pause was handed nothing":
-    // the first says the concurrent termination test was right, the second says the
-    // flush is not reaching the mutators' nodes at all.
     size_t satbSeen = 0;
     auto visitSatbObj = [this, &workStack, &satbSeen]() {
         WorkStack remarkStack;
@@ -945,24 +929,14 @@ bool TracingCollector::MarkSatbBuffer(WorkStack& workStack)
     };
 
     visitSatbObj();
-    uint64_t iterationCnt = 0;
-    uint64_t iterationStartTime = TimeUtil::NanoSeconds();
     do {
-        if (++iterationCnt > maxIterationLoopNum && (TimeUtil::NanoSeconds() - iterationStartTime) > maxIterationTime) {
-            ScopedStopTheWorld stw("MarkSatbBuffer timeout", true, GCPhase::GC_PHASE_CLEAR_SATB_BUFFER);
-            VLOG(REPORT, "MarkSatbBuffer is done for timeout");
-            visitSatbObj();
+        const bool stripeWork =
+            majorMarkDomain != nullptr && !majorMarkDomain->Stripes().IsEmpty();
+        if (LIKELY(!workStack.empty()) || stripeWork) {
             GCThreadPool* threadPool = GetThreadPool();
             const bool parallel =
-                (workStack.size() > MAX_MARKING_WORK_SIZE) || (threadPool->GetWorkCount() > 0);
-            markedObjectCount.fetch_add(RunMajorStripeMark(workStack, parallel, true),
-                                        std::memory_order_relaxed);
-            return workStack.empty();
-        }
-        if (LIKELY(!workStack.empty())) {
-            GCThreadPool* threadPool = GetThreadPool();
-            const bool parallel =
-                (workStack.size() > MAX_MARKING_WORK_SIZE) || (threadPool->GetWorkCount() > 0);
+                (workStack.size() > MAX_MARKING_WORK_SIZE) || (threadPool->GetWorkCount() > 0) ||
+                stripeWork;
             markedObjectCount.fetch_add(RunMajorStripeMark(workStack, parallel, true),
                                         std::memory_order_relaxed);
         }
@@ -970,71 +944,45 @@ bool TracingCollector::MarkSatbBuffer(WorkStack& workStack)
         if (!workStack.empty()) {
             continue;
         }
-        // Publish CLEAR_SATB so mutators stop treating this as plain TRACE. This is a
-        // handshake, not a pause, so it can never be the termination test: a mutator
-        // that has already acknowledged it runs on and may enqueue again.
-        if (Heap::GetHeap().GetGCPhase() != GCPhase::GC_PHASE_CLEAR_SATB_BUFFER) {
-            TransitionToGCPhase(GCPhase::GC_PHASE_CLEAR_SATB_BUFFER, true);
-            visitSatbObj();
-            if (!workStack.empty()) {
-                continue;
-            }
+        bool more = FlushMarkProducers(majorMarkDomain);
+        visitSatbObj();
+        DoResurrection(workStack);
+        more = more || !workStack.empty();
+        if (majorMarkDomain != nullptr) {
+            more = more || !majorMarkDomain->Stripes().IsEmpty() ||
+                majorMarkDomain->Terminate().Resurrected();
         }
-        // ZMark::end -> try_end (zMark.cpp:940-971) makes the termination decision from
-        // inside the ZMarkEnd VM operation -- that is, with the Java threads already
-        // stopped -- flushes the threads it can still reach, and only then tests for
-        // emptiness. If anything turns up it returns false, _ncontinue++, and the whole
-        // concurrent mark resumes (zMark.cpp:973-989).
-        //
-        // Deciding this while mutators run cannot be repaired by draining again. A
-        // record pushed into a mutator's own node after that mutator flushed sits in a
-        // node that is not full, so EnsureGoodNode never retires it and no number of
-        // GetRetiredObjects passes can see it. The record is a deletion barrier's
-        // pre-value, so losing it leaves a still-reachable object unmarked -- and an
-        // unmarked live object is exactly what makes its region look empty.
-        if (!MarkTerminateInPauseEnabled()) {
-            // Fault-injection/negative-control arm. The product constant is true;
-            // setting it false reconstructs the retired-only termination bug.
-            TransitionToGCPhase(GCPhase::GC_PHASE_CLEAR_SATB_BUFFER, true);
-            visitSatbObj();
-            if (workStack.empty()) {
-                break;
-            }
+        if (more) {
             continue;
         }
-        // Our worker-termination barrier is the stronger owner/join invariant,
-        // not ZGC's shared-stripe condition variable: TracingImpl returned only
-        // after WaitFinish(), every split MarkStack node has one owner, and there
-        // can be no queued publication at this cut. There are no shared lock-free
-        // stripes, hence no ZMarkingSMR object to protect.
         CHECK_DETAIL(workStack.empty(), "strict mark termination with owner work");
         CHECK_DETAIL(GetThreadPool()->GetWorkCount() == 0,
                      "strict mark termination with published worker work");
         VerifyMarkingStacks::VerifyEmpty(VerifyMarkingStacks::MarkingGeneration::MAJOR,
-                                         VerifyMarkingStacks::MarkingBoundary::TERMINATION,
-                                         VerifyMarkingStacks::MarkingContainer::OWNER,
-                                         workStack.size(), 0);
+                                          VerifyMarkingStacks::MarkingBoundary::TERMINATION,
+                                          VerifyMarkingStacks::MarkingContainer::OWNER,
+                                          workStack.size(), 0);
         VerifyMarkingStacks::VerifyEmpty(VerifyMarkingStacks::MarkingGeneration::MAJOR,
-                                         VerifyMarkingStacks::MarkingBoundary::TERMINATION,
-                                         VerifyMarkingStacks::MarkingContainer::POOL,
-                                         GetThreadPool()->GetWorkCount(), 0);
+                                          VerifyMarkingStacks::MarkingBoundary::TERMINATION,
+                                          VerifyMarkingStacks::MarkingContainer::POOL,
+                                          GetThreadPool()->GetWorkCount(), 0);
         bool terminated = false;
         {
             ScopedStopTheWorld stw("mark terminate", true, GCPhase::GC_PHASE_CLEAR_SATB_BUFFER);
             NoteMarkTerminatePause();
             const size_t seenBefore = satbSeen;
             StoreBarrierBuffer::FlushAll(Heap::GetHeap().GetRememberedSet());
-            MutatorManager::Instance().VisitAllMutators([](Mutator& mutator) { mutator.FlushSatbBuffer(false); });
+            (void)MutatorManager::Instance().HandshakeFlushMarkProducers(majorMarkDomain.get());
             visitSatbObj();
             NoteMarkTerminateFlushed(satbSeen - seenBefore);
             terminated = workStack.empty();
+            if (terminated && majorMarkDomain != nullptr) {
+                terminated = majorMarkDomain->TryEnd();
+            }
         }
         if (terminated) {
             break;
         }
-        // ZMark::_ncontinue: the pause found work the concurrent phase had declared
-        // absent. Report it -- a non-zero here is the direct measurement of records
-        // the pre-pause termination test used to drop.
         NoteMarkTerminateContinue(workStack.size());
     } while (true);
     ReportMarkTerminateContinue();
@@ -1046,16 +994,30 @@ void TracingCollector::ConcurrentReMark(WorkStack& remarkStack, bool parallel)
     CHECK_DETAIL(MarkSatbBuffer(remarkStack), "not cleared\n");
 }
 
+bool TracingCollector::FlushMarkProducers(MarkDomain* domain)
+{
+    if (domain != nullptr) {
+        domain->Terminate().SetResurrected(false);
+    }
+    bool flushed = MutatorManager::Instance().HandshakeFlushMarkProducers(domain);
+    if (domain != nullptr) {
+        flushed = domain->FlushStacks() || flushed || !domain->Stripes().IsEmpty();
+    }
+    return flushed;
+}
+
 void TracingCollector::DoResurrection(WorkStack& workStack)
 {
-    workStack.clear();
-    RootVisitor func = [&workStack, this](ObjectRef& ref) {
+    size_t published = 0;
+    RootVisitor func = [&workStack, this, &published](ObjectRef& ref) {
         HeapSlot<> tmpField(to_zpointer(raw(ref.LoadPlain())));
         BaseObject* finalizerObj = to_object(tmpField.GetTargetObject());
-        if (!IsMarkedObject<Generation::Old>(finalizerObj)) {
+        if (!IsMarkedObject<Generation::Old>(finalizerObj) &&
+            !IsLiveObject<Generation::Old>(finalizerObj)) {
             DLOG(TRACE, "resurrectable obj @%p:%p", &ref, finalizerObj);
             CHECK(DiscoverReference(finalizerObj, ReferenceType::FINAL) == ReferenceStatus::DISCOVERED);
             workStack.push_back(MarkStackEntry::MarkAndFollow(finalizerObj, true));
+            ++published;
         }
         if (raw(ref.LoadPlain()) != reinterpret_cast<MAddress>(finalizerObj)) {
             HealRoot(ref, from_object(finalizerObj), HealSite::TracingCollectorResurrectFinalizer);
@@ -1063,34 +1025,10 @@ void TracingCollector::DoResurrection(WorkStack& workStack)
         }
     };
     (void)collectorResources.GetFinalizerProcessor().VisitFinalizers(func);
-
-    size_t resurrectdObjects = 0;
-    MarkLiveCache liveCache(1);
-    while (!workStack.empty()) {
-        const MarkStackEntry entry = workStack.back();
-        workStack.pop_back();
-
-        // TraceObjectRefFields below can push partial-array chunks onto this
-        // stack too, so this loop has to decode them as well.
-        if (UNLIKELY(MarkPartialArray::IsPartialArrayEntry(entry))) {
-            FollowPartialArray(entry, workStack);
-            continue;
-        }
-        BaseObject* obj = entry.object();
-
-        if (MarkEntryObject(obj, entry, &liveCache)) {
-            continue;
-        }
-        if (entry.mark()) {
-            ++resurrectdObjects;
-        }
-        if (entry.follow() && obj->HasRefField()) {
-            TraceObjectRefFields(obj, workStack, entry.finalizable());
-        }
+    if (published != 0 && majorMarkDomain != nullptr) {
+        majorMarkDomain->Terminate().SetResurrected(true);
     }
-    liveCache.Flush();
-    markedObjectCount.fetch_add(resurrectdObjects, std::memory_order_relaxed);
-    VLOG(REPORT, "resurrected objects %zu", resurrectdObjects);
+    VLOG(REPORT, "resurrected objects %zu", published);
 }
 
 bool TracingCollector::MarkEntryObject(BaseObject* obj, const MarkStackEntry& entry,

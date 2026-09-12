@@ -228,6 +228,14 @@ public:
     }
 
     template<Generation G>
+    static bool IsLiveObject(const BaseObject* obj)
+    {
+        RegionInfo* regionInfo = RegionInfo::GetRegionInfoAt(reinterpret_cast<MAddress>(obj));
+        MarkView<G> view = regionInfo->GetMarkView<G>();
+        return regionInfo->IsLiveObject(view, obj);
+    }
+
+    template<Generation G>
     static bool ShouldEnqueue(const BaseObject* obj)
     {
         RegionInfo* regionInfo = RegionInfo::TryGetRegionInfoAt(reinterpret_cast<MAddress>(obj));
