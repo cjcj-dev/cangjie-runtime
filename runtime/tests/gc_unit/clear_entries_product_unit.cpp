@@ -2921,11 +2921,10 @@ void RunDerivedBaseProducer(bool interior, bool tagged, bool moving = false,
         collector.SetGCPhase(GCPhase::GC_PHASE_FORWARD);
         auto& manager = static_cast<RegionSpace&>(Heap::GetHeap().GetAllocator()).GetRegionManager();
         RelocationReceiptTestAccess::ParkFrom(manager, state.region);
-        GCThreadPool pool("derived-base-page", 0, GCPoolThread::GC_THREAD_PRIORITY);
-        RelocationReceiptTestAccess::BindThreadPool(Heap::GetHeap().GetCollectorResources(), &pool);
-        manager.ForwardFromRegions<Generation::Old>(&pool);
-        pool.Exit();
-        RelocationReceiptTestAccess::BindThreadPool(Heap::GetHeap().GetCollectorResources(), nullptr);
+        GCWorkers workers(GCWorkers::Generation::OLD, 1);
+        workers.SetActive();
+        manager.ForwardFromRegions<Generation::Old>(workers);
+        workers.SetInactive();
         auto owner = ForwardingTable::RetainPageOwner(state.region);
         const MAddress fromAddr = reinterpret_cast<MAddress>(state.from);
         const MAddress produced = owner ? owner->find(fromAddr) : 0;
