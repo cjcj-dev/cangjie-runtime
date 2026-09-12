@@ -192,6 +192,7 @@ public:
         VisitAllMutators([](Mutator& mutator) {
             mutator.SetSuspensionFlag(Mutator::SuspensionType::SUSPENSION_FOR_SYNC);
         });
+        ArmPollOnAllOsThreads();
     }
 
     void CancelSuspensionAfterSync()
@@ -234,15 +235,11 @@ public:
     void SyncMutexUnlock() noexcept { syncMutex.unlock(); }
 
     void EnsurePhaseTransition(GCPhase phase, std::list<Mutator*> &undoneMutators);
-    void TransitionAllMutatorsToGCPhase(GCPhase phase);
+    void TransitionAllMutatorsToGCPhase(GCPhase phase, bool young = false);
 
     static bool EpochHandshakeEnabled();
     static bool ConcurrentStackScanEnabled();
     EpochHandshakeStats RunEpochHandshake(const char* source, bool young);
-    bool EpochHandshakeYoung() const
-    {
-        return epochHandshakeYoung.load(std::memory_order_acquire) != 0;
-    }
     void RecordEpochHandshakeAck(Mutator& mutator, uint64_t epoch, bool bySelf);
     void RecordEpochHandshakeStackScan(bool scanned, size_t frames);
     void RecordEpochHandshakeCreateAttempt();
@@ -365,7 +362,18 @@ public:
         std::atomic<int> bufferLive = { 1 };
     };
 
-private:
+    template<typename Fn>
+    void ForEachMarkFlushTls(Fn&& fn)
+    {
+        std::lock_guard<std::mutex> lock(markFlushThreadMutex);
+        for (auto& kv : markFlushThreads) {
+            if (kv.first != nullptr) {
+                fn(kv.first);
+            }
+        }
+    }
+
+    private:
     using ExpiredMutatorList = std::list<Mutator*, StdContainerAllocator<Mutator*, MUTATOR_LIST>>;
     ExpiredMutatorList expiringMutators;
     std::mutex expiringMutatorListLock;
@@ -421,7 +429,6 @@ private:
     // keep them in the same participant inventory explicitly.
     std::mutex runtimeMutatorRegistryMutex;
     std::unordered_set<Mutator*> runtimeMutators;
-    std::atomic<int> epochHandshakeYoung = { 1 };
     std::atomic<int> markFlushHandshakeActive = { 0 };
     std::atomic<class MarkDomain*> markFlushDomain = { nullptr };
     std::mutex markFlushThreadMutex;

@@ -33,9 +33,10 @@ public:
     void FillInStackTrace() override;
     void VisitStackRoots(const RootVisitor& func, Mutator& mutator) const;
     void VisitHeapReferencesOnStack(const RootVisitor& rootVisitor, const DerivedPtrVisitor& derivedPtrVisitor,
-                                    Mutator& mutator) const;
+                                    Mutator& mutator, bool young = false) const;
     void VisitHeapReferencesOnStack(const RootVisitor& regRootVisitor, const RootVisitor& slotRootVisitor,
-                                    const DerivedPtrVisitor& derivedPtrVisitor, Mutator& mutator) const;
+                                    const DerivedPtrVisitor& derivedPtrVisitor, Mutator& mutator,
+                                    bool young = false) const;
 };
 
 class RecordStackInfo : public GCStackInfo {
