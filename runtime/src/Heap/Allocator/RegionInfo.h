@@ -1863,10 +1863,15 @@ public:
 
     static size_t IndexedUnitCount(const std::vector<MemoryRange>& ranges)
     {
+        CHECK(UNIT_SIZE != 0 && (UNIT_SIZE & (UNIT_SIZE - 1)) == 0);
         size_t count = 0;
+        uintptr_t previousEnd = 0;
         for (const auto& range : ranges) {
+            CHECK(!range.IsNull() && IsRepresentableLow48Range(range.start, range.size));
+            CHECK(range.start >= previousEnd);
             CHECK(range.start % UNIT_SIZE == 0 && range.size % UNIT_SIZE == 0);
-            count += range.size / UNIT_SIZE + 1;
+            CHECK(CheckedAddSize(count, range.size / UNIT_SIZE + 1, count));
+            previousEnd = range.End();
         }
         CHECK(count != 0 && count - 1 < std::numeric_limits<uint32_t>::max());
         return count - 1;
@@ -2083,14 +2088,14 @@ public:
 #endif
         void* unitAddress = reinterpret_cast<void*>(RegionInfo::GetUnitAddress(idx));
         size_t size = cnt * RegionInfo::UNIT_SIZE;
-        CHECK(ContainsUnitRange(unitAddress, size));
+        CHECK(ContainsUnitRange(reinterpret_cast<uintptr_t>(unitAddress), size));
         RegionInfo* wipeRegion = RegionInfo::TryGetRegionInfoAt(reinterpret_cast<uintptr_t>(unitAddress));
         WaitCopiedBeforePayloadWipe(wipeRegion, "ReleaseUnits");
         CHECK_DETAIL(FromPageDetach::FromPageDetachCheck(wipeRegion,
                          FromPageDetach::Site::RELEASE_UNITS),
                      "CJRT_FROM_REUSE_GATE bypass reached ReleaseUnits idx=%zu units=%zu", idx, cnt);
         DLOG(REGION, "release physical memory for units [%zu+%zu, %zu) @[%p+%zu, 0x%zx)", idx, cnt, idx + cnt,
-             unitAddress, size, unitAddress + size);
+             unitAddress, size, reinterpret_cast<uintptr_t>(unitAddress) + size);
         const size_t released = UnitInfo::memoryOwner == nullptr ? 0 :
                                 UnitInfo::memoryOwner->ReleaseMemory(unitAddress, size);
 #ifdef CANGJIE_ASAN_SUPPORT
