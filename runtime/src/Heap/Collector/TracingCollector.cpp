@@ -408,7 +408,13 @@ private:
 class ExportRootsTracingWork : public GCWorkerTask {
 public:
     ExportRootsTracingWork(TracingCollector& tc, TracingCollector::WorkStack&& stack)
-        : collector(tc), roots(std::move(stack)) {}
+        : collector(tc)
+    {
+        while (!stack.empty()) {
+            roots.push_back(stack.back());
+            stack.pop_back();
+        }
+    }
 
     void Work(uint32_t workerId) override
     {
@@ -441,7 +447,7 @@ public:
     }
 private:
     TracingCollector& collector;
-    const TracingCollector::WorkStack roots;
+    std::vector<MarkStackEntry> roots;
     std::atomic<size_t> cursor { 0 };
 };
 void TracingCollector::VisitStackRoots(const RootVisitor& visitor, RegSlotsMap& regSlotsMap, const FrameInfo& frame,
