@@ -335,13 +335,10 @@ public:
 
     void SetSafepointActive(bool value)
     {
-        ThreadLocalData* tls = ThreadLocal::GetThreadLocalData();
-        if (tls == nullptr) {
-            return;
-        }
         if (value) {
-            ArmThreadPoll(tls);
+            ArmAllThreadPolls();
         } else {
+            ThreadLocalData* tls = ThreadLocal::GetThreadLocalData();
             UpdatePollValues(tls);
         }
     }

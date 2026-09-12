@@ -220,6 +220,7 @@ void Mutator::SetManagedContext(bool isManagedContext)
 void Mutator::HandleSuspensionRequest()
 {
     for (;;) {
+        Handshake::Current().process_by_self();
         SetInSaferegion(SAFE_REGION_TRUE);
         MarkFlushOnEnterSaferegion();
         if (MutatorManager::Instance().MarkFlushHandshakeActive() || MarkFlushPendingForCurrentThread()) {

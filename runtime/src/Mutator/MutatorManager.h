@@ -14,6 +14,7 @@
 #include <mutex>
 #include <unordered_map>
 #include <unordered_set>
+#include <vector>
 
 #include "Base/AtomicSpinLock.h"
 #include "Base/GcLog.h"
@@ -187,12 +188,7 @@ public:
     void StopLightSync() noexcept;
     void WaitUntilAllMutatorStopped();
     void DumpMutators(uint32_t timeoutTimes);
-    void DemandSuspensionForSync()
-    {
-        VisitAllMutators([](Mutator& mutator) {
-            mutator.SetSuspensionFlag(Mutator::SuspensionType::SUSPENSION_FOR_SYNC);
-        });
-    }
+    void DemandSuspensionForSync();
 
     void CancelSuspensionAfterSync()
     {
@@ -360,11 +356,14 @@ public:
         std::atomic<int> dying = { 0 };
         std::atomic<int> bufferLive = { 1 };
         HandshakeState* handshake = nullptr;
+        std::unique_ptr<HandshakeState> ownedHandshake;
     };
 
     HandshakeState* HandshakeStateForTls(ThreadLocalData* tls);
     bool TlsObservedSafe(ThreadLocalData* tls);
-    void EnqueueHandshakeOnAll(HandshakeClosure* cl, std::list<HandshakeOperation*>& ops);
+    void EnqueueHandshakeOnAll(HandshakeClosure* cl, std::list<HandshakeOperation*>& ops,
+                               std::vector<MarkFlushThread*>& handle);
+    void ReleaseHandshakeHandle(std::vector<MarkFlushThread*>& handle);
 
     template<typename Fn>
     void ForEachMarkFlushTls(Fn&& fn)

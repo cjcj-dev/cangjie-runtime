@@ -7,14 +7,26 @@
 
 namespace MapleRuntime {
 namespace {
-thread_local HandshakeState tlHandshakeState(nullptr);
+thread_local HandshakeState* tlHandshakeState = nullptr;
 }
 
 HandshakeState& Handshake::Current()
 {
-    ThreadLocalData* tls = ThreadLocal::GetThreadLocalData();
-    tlHandshakeState.set_handshakee(tls);
-    return tlHandshakeState;
+    if (tlHandshakeState != nullptr) {
+        tlHandshakeState->set_handshakee(ThreadLocal::GetThreadLocalData());
+        return *tlHandshakeState;
+    }
+    MutatorManager::Instance().RegisterMarkFlushThread(ThreadLocal::GetThreadLocalData());
+    if (tlHandshakeState == nullptr) {
+        static HandshakeState fallback(ThreadLocal::GetThreadLocalData());
+        return fallback;
+    }
+    return *tlHandshakeState;
+}
+
+void Handshake::BindCurrent(HandshakeState* state)
+{
+    tlHandshakeState = state;
 }
 
 HandshakeState* Handshake::ForTls(ThreadLocalData* tls)
@@ -93,7 +105,7 @@ void HandshakeState::process_by_self()
 
 bool HandshakeState::possibly_can_process()
 {
-    return MutatorManager::Instance().TlsObservedSafe(handshakee_);
+    return observed_safe();
 }
 
 bool HandshakeState::claim_handshake()
@@ -134,13 +146,26 @@ bool HandshakeState::try_process()
     return true;
 }
 
+void HandshakeState::enter_safe()
+{
+    std::lock_guard<std::mutex> lock(lock_);
+    inSafe_.store(1, std::memory_order_release);
+}
+
+void HandshakeState::leave_safe()
+{
+    std::lock_guard<std::mutex> lock(lock_);
+    inSafe_.store(0, std::memory_order_release);
+}
+
 void Handshake::execute(HandshakeClosure* cl)
 {
     if (cl == nullptr) {
         return;
     }
     std::list<HandshakeOperation*> ops;
-    MutatorManager::Instance().EnqueueHandshakeOnAll(cl, ops);
+    std::vector<MutatorManager::MarkFlushThread*> handle;
+    MutatorManager::Instance().EnqueueHandshakeOnAll(cl, ops, handle);
     HandshakeState& self = Current();
     self.process_by_self();
     while (!ops.empty()) {
@@ -163,6 +188,7 @@ void Handshake::execute(HandshakeClosure* cl)
             std::this_thread::yield();
         }
     }
+    MutatorManager::Instance().ReleaseHandshakeHandle(handle);
 }
 
 void ArmThreadPoll(ThreadLocalData* tls)
@@ -172,8 +198,21 @@ void ArmThreadPoll(ThreadLocalData* tls)
     }
 }
 
+void ArmAllThreadPolls()
+{
+    MutatorManager::Instance().ForEachMarkFlushTls([](ThreadLocalData* tls) { ArmThreadPoll(tls); });
+}
+
+bool GlobalPoll()
+{
+    return MutatorManager::Instance().SyncTriggered();
+}
+
 bool HasPendingSafepoint(ThreadLocalData* tls)
 {
+    if (GlobalPoll()) {
+        return true;
+    }
     HandshakeState* state = Handshake::ForTls(tls);
     if (state != nullptr && state->has_operation()) {
         return true;

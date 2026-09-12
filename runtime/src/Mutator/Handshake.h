@@ -1,8 +1,10 @@
 #ifndef MRT_HANDSHAKE_H
 #define MRT_HANDSHAKE_H
 
+#include <atomic>
 #include <list>
 #include <mutex>
+#include <vector>
 
 namespace MapleRuntime {
 struct ThreadLocalData;
@@ -53,21 +55,29 @@ public:
     bool claim_handshake();
     bool possibly_can_process();
 
+    void enter_safe();
+    void leave_safe();
+    bool observed_safe() const { return inSafe_.load(std::memory_order_acquire) != 0; }
+
 private:
     ThreadLocalData* handshakee_;
     std::mutex lock_;
     std::list<HandshakeOperation*> queue_;
+    std::atomic<int> inSafe_ = { 1 };
 };
 
 class Handshake {
 public:
     static HandshakeState& Current();
+    static void BindCurrent(HandshakeState* state);
     static HandshakeState* ForTls(ThreadLocalData* tls);
     static void execute(HandshakeClosure* cl);
 };
 
 void ArmThreadPoll(ThreadLocalData* tls);
+void ArmAllThreadPolls();
 void UpdatePollValues(ThreadLocalData* tls);
 bool HasPendingSafepoint(ThreadLocalData* tls);
+bool GlobalPoll();
 } // namespace MapleRuntime
 #endif
