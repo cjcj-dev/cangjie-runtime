@@ -1707,7 +1707,6 @@ EXPORTS
     _ZN12MapleRuntime16TracingCollector17RequestGCInternalENS_8GCReasonEb @1764
     _ZN12MapleRuntime16TracingCollector18EnumAllExportRootsERNS_9MarkStackIPNS_10BaseObjectEEE @1766
     _ZN12MapleRuntime16TracingCollector19ShouldIgnoreRequestERNS_9GCRequestE @1767
-    _ZN12MapleRuntime16TracingCollector20DFSTraceExportObjectEPNS_10BaseObjectE @1768
     _ZN12MapleRuntime16TracingCollector20PreGarbageCollectionEb @1769
     _ZN12MapleRuntime16TracingCollector20TraceObjectRefFieldsEPNS_10BaseObjectERNS_9MarkStackIS2_EE @1770
     _ZN12MapleRuntime16TracingCollector21PostGarbageCollectionEy @1773
@@ -1716,7 +1715,6 @@ EXPORTS
     _ZN12MapleRuntime16TracingCollector24FindUselessExternObjectsEv @1777
     _ZN12MapleRuntime16TracingCollector26VisitHeapReferencesOnStackERKNSt3__18functionIFvRNS_8RootSlotEEEERKNS2_IFvNS_15zaddress_unsafeERNS_11DerivedSlotEEEERNS_11RegSlotsMapERKNS_9FrameInfoERNS_7MutatorEb @1778
     _ZN12MapleRuntime16TracingCollector26VisitHeapReferencesOnStackERKNSt3__18functionIFvRNS_8RootSlotEEEES8_RKNS2_IFvNS_15zaddress_unsafeERNS_11DerivedSlotEEEERNS_11RegSlotsMapERKNS_9FrameInfoERNS_7MutatorEb @1779
-    _ZN12MapleRuntime16TracingCollector27AddExportObjectsTracingWorkERNS_9MarkStackIPNS_10BaseObjectEEE @1780
     _ZN12MapleRuntime16TracingCollector27EnumAllSurrectedExportRootsERNS_9MarkStackIPNS_10BaseObjectEEE @1781
     _ZN12MapleRuntime16TracingCollector29CurrentThreadRootMapMissCountEv @1782
     _ZN12MapleRuntime16TracingCollector4FiniEv @1783
@@ -1877,9 +1875,6 @@ EXPORTS
     _ZN12MapleRuntime21ParseVerifyMarkSourceEv @1953
     _ZN12MapleRuntime21ScopedEnterSaferegionC2Eb @1954
     _ZN12MapleRuntime22CompressedStackMapHead15GetStackMapHeadEyRKNSt3__18functionIFvNS_23PrologueRegisterClosure4TypeEjEEEPy @1955
-    _ZN12MapleRuntime22ExportRootsTracingWork7ExecuteEy @1957
-    _ZN12MapleRuntime22ExportRootsTracingWorkD0Ev @1958
-    _ZN12MapleRuntime22ExportRootsTracingWorkD2Ev @1959
     _ZN12MapleRuntime22IsHaveCommandInjectionERKNS_7CStringE @1960
     _ZN12MapleRuntime22g_installDomainAlreadyE @1961 DATA
     _ZN12MapleRuntime22g_installDomainTooLateE @1962 DATA
@@ -3066,7 +3061,6 @@ EXPORTS
     _ZTVN12MapleRuntime19SigHandlerFrameinfoE @3182 DATA
     _ZTVN12MapleRuntime20PrintSignalStackInfoE @3183 DATA
     _ZTVN12MapleRuntime21ConcurrentMarkingWorkE @3184 DATA
-    _ZTVN12MapleRuntime22ExportRootsTracingWorkE @3185 DATA
     _ZTVN12MapleRuntime6CJFileE @3186 DATA
     _ZTVN12MapleRuntime6GCTaskE @3187 DATA
     _ZTVN12MapleRuntime7BarrierE @3188 DATA

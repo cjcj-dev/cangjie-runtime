@@ -261,11 +261,9 @@ private:
 
 class MarkingWork;
 class ConcurrentMarkingWork;
-class ExportRootsTracingWork;
 class TracingCollector : public Collector {
     friend MarkingWork;
     friend ConcurrentMarkingWork;
-    friend ExportRootsTracingWork;
 #if defined(MRT_TESTABLE_INTERNALS)
     friend struct RelocationReceiptTestAccess;
     friend struct GenerationCycleRootTestAccess;
@@ -393,7 +391,6 @@ public:
         return RegionSpace::IsMarkedObject<G>(obj) ||
             (G == Generation::Old && RegionSpace::IsResurrectedObject(obj));
     }
-    void DFSTraceExportObject(BaseObject* exportObj, bool finalizable = false);
     void StartOldMarkWork();
     void MarkOldObjectIfActive(BaseObject* object, bool gcThread = false) const override;
     virtual bool MarkObject(BaseObject* obj) const
@@ -566,7 +563,6 @@ protected:
     // concurrent marking.
     void TracingImpl(WorkStack& workStack, WorkStack& foreignRootsSet);
 
-    void AddExportObjectsTracingWork(RootSet& exportRoots);
     virtual void EnumAndTagRawRoot(ObjectRef& root, RootSet& rootSet) const
     {
         Collector::AbortUnimplemented("TracingCollector::EnumAndTagRawRoot");
@@ -575,7 +571,7 @@ protected:
     void FindUselessExternObjects();
 
 private:
-    size_t RunMajorStripeMark(WorkStack& workStack, bool partial = false);
+    size_t RunMajorStripeMark(WorkStack& workStack, bool partial = false, BaseObject* exportOwner = nullptr);
     void ConcurrentReMark(WorkStack& remarkStack);
     void EnumMutatorRoot(ObjectPtr& obj, RootSet& rootSet) const;
     void EnumConcurrencyModelRoots(RootSet& rootSet) const;

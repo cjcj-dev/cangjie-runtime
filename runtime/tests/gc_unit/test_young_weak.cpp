@@ -844,7 +844,7 @@ GC_OTHER_VM_TEST(ValueRootCurrentization, MajorProducerConsumerCurrentizesBefore
     GC_EXPECT_TRUE(producerCarrier);
     GC_EXPECT_TRUE(rootMarked);
     // This is the target invariant: only the real FindUselessExternObjects
-    // consumer paints the foreign value emitted by DFSTraceExportObject.
+    // consumer paints the foreign value recorded by the export ABI view.
     GC_EXPECT_TRUE(consumerMarked);
     GC_EXPECT_TRUE(handoffCurrent);
 }
