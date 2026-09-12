@@ -158,6 +158,23 @@ void HandshakeState::leave_safe()
     inSafe_.store(0, std::memory_order_release);
 }
 
+void HandshakeState::process_queued_then_detach(void (*flush)(ThreadLocalData*))
+{
+    std::lock_guard<std::mutex> lock(lock_);
+    for (;;) {
+        HandshakeOperation* op = get_op_for_self();
+        if (op == nullptr) {
+            break;
+        }
+        op->do_handshake(handshakee_);
+        remove_op(op);
+    }
+    if (flush != nullptr) {
+        flush(handshakee_);
+    }
+    inSafe_.store(1, std::memory_order_release);
+}
+
 void Handshake::execute(HandshakeClosure* cl)
 {
     if (cl == nullptr) {
@@ -205,7 +222,7 @@ void ArmAllThreadPolls()
 
 bool GlobalPoll()
 {
-    return MutatorManager::Instance().SyncTriggered();
+    return MutatorManager::Instance().SyncTriggered() || MutatorManager::Instance().EpochHandshakeActive();
 }
 
 bool HasPendingSafepoint(ThreadLocalData* tls)
