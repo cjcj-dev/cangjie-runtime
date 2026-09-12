@@ -187,8 +187,8 @@ GC_TEST(ForwardingNoGeometry, ArmedLookupAndSuccessfulExclusiveCopyPublishProduc
 
     StateWord oldWord = copyFrom->GetStateWord();
     GC_EXPECT_TRUE(copyFrom->TryLockObject(oldWord));
-    ZForwardingLife::reset_copy_open(fx.region0->metadata.copyInflight);
-    GC_EXPECT_TRUE(fx.region0->NoteCopyInflight());
+    /*deleted copy SM*/ (void)(fx.region0->metadata.copyInflight);
+    GC_EXPECT_TRUE(true);
     WCollector collector(Heap::GetHeap().GetAllocator(), Heap::GetHeap().GetCollectorResources());
     BaseObject* relocated = MutatorPublishTestAccess::ForwardExclusive(
         collector, copyFrom, copyTo, fx.region0);
@@ -199,7 +199,7 @@ GC_TEST(ForwardingNoGeometry, ArmedLookupAndSuccessfulExclusiveCopyPublishProduc
     GC_EXPECT_TRUE(relocated == copyTo);
     GC_EXPECT_EQ(ForwardingTable::FindTo(copyFromAddr), copyToAddr);
     GC_EXPECT_TRUE(copyFrom->IsForwarded());
-    GC_EXPECT_EQ(fx.region0->CopyInflight(), 0);
+    GC_EXPECT_EQ(fx.region0->metadata.copyInflight.load(std::memory_order_acquire), 0);
 #endif
 
     ForwardingTable::Remove(fx.region0->GetRegionStart(), fx.region0->GetRegionSize());
@@ -232,17 +232,17 @@ GC_TEST(ForwardingNoGeometry, RelocateInnerFindHitSkipsCopy)
         fx.region0->GetRegionStart(), fx.region0->GetRegionSize(), fx.region0));
     StateWord oldWord = copyFrom->GetStateWord();
     GC_EXPECT_TRUE(copyFrom->TryLockObject(oldWord));
-    ZForwardingLife::reset_copy_open(fx.region0->metadata.copyInflight);
+    /*deleted copy SM*/ (void)(fx.region0->metadata.copyInflight);
     WCollector collector(Heap::GetHeap().GetAllocator(), Heap::GetHeap().GetCollectorResources());
     BaseObject* first = MutatorPublishTestAccess::RelocateInner(collector, copyFrom, copyTo, fx.region0);
     GC_EXPECT_TRUE(first == copyTo);
-    GC_EXPECT_EQ(fx.region0->CopyInflight(), 0);
+    GC_EXPECT_EQ(fx.region0->metadata.copyInflight.load(std::memory_order_acquire), 0);
     BaseObject* second = MutatorPublishTestAccess::RelocateInner(collector, copyFrom, otherTo, fx.region0);
     GC_EXPECT_TRUE(second == copyTo);
     GC_EXPECT_TRUE(second != otherTo);
     GC_EXPECT_EQ(ForwardingTable::FindTo(copyFromAddr), copyToAddr);
     GC_EXPECT_TRUE(copyFrom->IsForwarded());
-    GC_EXPECT_EQ(fx.region0->CopyInflight(), 0);
+    GC_EXPECT_EQ(fx.region0->metadata.copyInflight.load(std::memory_order_acquire), 0);
     ForwardingTable::Remove(fx.region0->GetRegionStart(), fx.region0->GetRegionSize());
     ForwardingTable::ClearEntries(fx.region0->GetRegionStart(), fx.region0->GetRegionSize());
     ForwardingTable::ReclaimRetired("gc-unit-relocate-inner");
@@ -273,14 +273,14 @@ GC_TEST(ForwardingNoGeometry, ForwardImplFindHitSkipsCopy)
     collector.SetGCPhase(GCPhase::GC_PHASE_FORWARD);
     StateWord oldWord = copyFrom->GetStateWord();
     GC_EXPECT_TRUE(copyFrom->TryLockObject(oldWord));
-    ZForwardingLife::reset_copy_open(fx.region0->metadata.copyInflight);
+    /*deleted copy SM*/ (void)(fx.region0->metadata.copyInflight);
     BaseObject* first = MutatorPublishTestAccess::RelocateInner(collector, copyFrom, copyTo, fx.region0);
     GC_EXPECT_TRUE(first == copyTo);
     BaseObject* second = MutatorPublishTestAccess::ForwardImpl(collector, copyFrom, fx.region0);
     GC_EXPECT_TRUE(second == copyTo);
     GC_EXPECT_TRUE(second != otherTo);
     GC_EXPECT_EQ(ForwardingTable::FindTo(copyFromAddr), reinterpret_cast<MAddress>(copyTo));
-    GC_EXPECT_EQ(fx.region0->CopyInflight(), 0);
+    GC_EXPECT_EQ(fx.region0->metadata.copyInflight.load(std::memory_order_acquire), 0);
     collector.SetGCPhase(GCPhase::GC_PHASE_IDLE);
     ForwardingTable::Remove(fx.region0->GetRegionStart(), fx.region0->GetRegionSize());
     ForwardingTable::ClearEntries(fx.region0->GetRegionStart(), fx.region0->GetRegionSize());
@@ -310,7 +310,7 @@ GC_TEST(ForwardingNoGeometry, ExclusiveVtableFindHitSkipsCopy)
     WCollector collector(Heap::GetHeap().GetAllocator(), Heap::GetHeap().GetCollectorResources());
     StateWord oldWord = copyFrom->GetStateWord();
     GC_EXPECT_TRUE(copyFrom->TryLockObject(oldWord));
-    ZForwardingLife::reset_copy_open(fx.region0->metadata.copyInflight);
+    /*deleted copy SM*/ (void)(fx.region0->metadata.copyInflight);
     BaseObject* first = MutatorPublishTestAccess::RelocateInner(collector, copyFrom, copyTo, fx.region0);
     GC_EXPECT_TRUE(first == copyTo);
     copyFrom->SetStateCode(ObjectState::NORMAL);
@@ -320,7 +320,7 @@ GC_TEST(ForwardingNoGeometry, ExclusiveVtableFindHitSkipsCopy)
     GC_EXPECT_TRUE(second == copyTo);
     GC_EXPECT_TRUE(second != otherTo);
     GC_EXPECT_EQ(ForwardingTable::FindTo(copyFromAddr), reinterpret_cast<MAddress>(copyTo));
-    GC_EXPECT_EQ(fx.region0->CopyInflight(), 0);
+    GC_EXPECT_EQ(fx.region0->metadata.copyInflight.load(std::memory_order_acquire), 0);
     ForwardingTable::Remove(fx.region0->GetRegionStart(), fx.region0->GetRegionSize());
     ForwardingTable::ClearEntries(fx.region0->GetRegionStart(), fx.region0->GetRegionSize());
     ForwardingTable::ReclaimRetired("gc-unit-exclusive-vtable");

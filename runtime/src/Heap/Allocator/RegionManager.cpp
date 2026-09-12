@@ -1276,7 +1276,7 @@ void RegionManager::ReclaimRegion(RegionInfo* region)
     // must not re-scan O(N) under remset mutex.
 
     {
-        RegionInfo::DrainScope drain(region, MutatorRelocate::Retire::RECLAIM_DIRTY);
+        RegionInfo::InPlaceClaimScope drain(region, MutatorRelocate::Retire::RECLAIM_DIRTY);
     }
     // gcvroot Z2: poison reclaimed payload so use-after-free roots are identifiable (MRT_GCV2_ZAP_RECLAIM=1).
     HeapZap::ZapReclaimedRegion(region->GetRegionStart(), region->GetRegionEnd());
@@ -1378,7 +1378,7 @@ void RegionManager::ReclaimRegionToMarkQuarantine(RegionInfo* region)
     DLOG(REGION, "mark-quarantine region %p @[%#zx+%zu, %#zx) type %u", region, region->GetRegionStart(),
          region->GetRegionAllocatedSize(), region->GetRegionEnd(), region->GetRegionType());
     {
-        RegionInfo::DrainScope drain(region, MutatorRelocate::Retire::RECLAIM_MARK_QUARANTINE);
+        RegionInfo::InPlaceClaimScope drain(region, MutatorRelocate::Retire::RECLAIM_MARK_QUARANTINE);
     }
     HeapZap::ZapReclaimedRegion(region->GetRegionStart(), region->GetRegionEnd());
     region->InitFreeUnits();
@@ -1410,7 +1410,7 @@ size_t RegionManager::ReleaseRegion(RegionInfo* region)
         region->GetRegionAllocatedSize(), region->GetRegionEnd(), region->GetRegionType());
 
     {
-        RegionInfo::DrainScope drain(region, MutatorRelocate::Retire::RELEASE_REGION);
+        RegionInfo::InPlaceClaimScope drain(region, MutatorRelocate::Retire::RELEASE_REGION);
     }
     region->InitFreeUnits();
     {
@@ -1877,7 +1877,7 @@ size_t RegionManager::ExemptFromRegions()
             }
             const bool deadFromCopy = residual == residualFwd;
             // zGeneration.cpp:216-221 register_empty_page iff !is_marked.
-            // Held until DrainScope waits copyInflight even at fwdRefCount==0
+            // Held until in-place claim waits readers even at fwdRefCount==0
             // (LEAD-NOTE 0820 21:1x / PORT_ZFORWARDING step 3). oldroots2
             // 152ccd59 SEGV+drift was ClearUnits racing a naked mutator ref.
             const bool unmarkedResidual = residual != 0 && marked == 0;
@@ -2241,7 +2241,7 @@ RegionInfo* RegionManager::TakeRegion(size_t num, RegionInfo::UnitRole type, boo
                 // Scoped tight: it ends before InitRegion, which re-initialises the metadata
                 // the lock lives in. ClearUnits is still conditional because segmented
                 // reference arrays deliberately clear the payload at yield boundaries.
-                RegionInfo::DrainScope drain(head, MutatorRelocate::Retire::TAKE_GARBAGE);
+                RegionInfo::InPlaceClaimScope drain(head, MutatorRelocate::Retire::TAKE_GARBAGE);
                 if (clearPayload) {
                     RegionInfo::ClearUnits(idx, num, FillerZeroDiag::Site::TAKE_GARBAGE);
                 }
@@ -2383,17 +2383,12 @@ void RegionManager::ForwardClaimedPage(RegionInfo* region, ForwardingTable::Owne
 
 
 namespace {
-// Wait until in-flight copiers drop to 0 (zForwarding.cpp:171-181 detach_page).
-// Copiers NoteCopyInflight on TryLock success (Exclusive entry) and
-// EndCopyInflight on every UnlockObject (WCollector.cpp ForwardObjectExclusive).
-// find() hits do not enter the count (zRelocate.cpp:382-410). Page walks miss
-// LOCKED past VisitAllObjects holes (REPORT-exemptlife §4 B2.3/B2.4).
 void WaitCopiedObjectsUnlocked(RegionInfo* region)
 {
     if (region == nullptr || region->IsFreeRegion()) {
         return;
     }
-    region->WaitCopiedInflight();
+    ZForwardingLife::WaitPageDone(region->metadata.fwdOwner.load(std::memory_order_acquire));
 }
 
 template<typename Fn>
@@ -2535,7 +2530,7 @@ bool VerifyForwardingReceiptsClosed(RegionInfo* region, const char* site)
                      static_cast<unsigned>(lookup.unavailableCause),
                      static_cast<unsigned>(region->GetRouteState()),
                      static_cast<unsigned>(region->IsForwardingDone()), region->ForwardingRefCount(),
-                     region->CopyInflight());
+                      region->metadata.copyInflight.load(std::memory_order_acquire));
         if (hit) {
             ++receipts;
         }
@@ -2544,7 +2539,7 @@ bool VerifyForwardingReceiptsClosed(RegionInfo* region, const char* site)
                  "%s receipt count mismatch region=%p survivors=%zu receipts=%zu route=%u fwdDone=%u refs=%d copy=%d",
                  site, region, survivors, receipts, static_cast<unsigned>(region->GetRouteState()),
                  static_cast<unsigned>(region->IsForwardingDone()), region->ForwardingRefCount(),
-                 region->CopyInflight());
+                  region->metadata.copyInflight.load(std::memory_order_acquire));
     return true;
 }
 } // namespace

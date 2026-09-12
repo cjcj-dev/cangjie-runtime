@@ -2078,31 +2078,8 @@ public:
         if (region == nullptr) {
             return;
         }
-        const int32_t inflight = region->CopyInflight();
-        const unsigned admission = static_cast<unsigned>(region->CopyAdmission());
-        const int32_t fwdRef = region->ForwardingRefCount();
-        const unsigned fwdClaimed = static_cast<unsigned>(region->ForwardingClaimed());
-        const unsigned route = static_cast<unsigned>(region->GetRouteState());
-        const unsigned long long life = static_cast<unsigned long long>(region->GetRegionLifeId());
-        DLOG(REGION,
-             "[GCV2][lockstate] payload-drain site=%s copyAdmission=%u copyCount=%d fwdRef=%d "
-             "fwdClaimed=%u route=%u life=%llu region=%p",
-             site != nullptr ? site : "?", admission, inflight, fwdRef, fwdClaimed, route, life,
-             static_cast<void*>(region));
-        if (inflight != 0) {
-            std::fprintf(stderr,
-                         "[GCV2][lockstate] ZERO_UNDER_COPY site=%s copyAdmission=%u copyCount=%d "
-                         "fwdRef=%d fwdClaimed=%u route=%u life=%llu region=%p start=%#zx "
-                         "regionType=%u unitRole=%u copyWait=1\n",
-                         site != nullptr ? site : "?", admission, inflight, fwdRef, fwdClaimed, route, life,
-                         static_cast<void*>(region), static_cast<size_t>(region->GetRegionStart()),
-                         static_cast<unsigned>(region->GetRegionType()),
-                         static_cast<unsigned>(region->GetUnitRole()));
-            std::fflush(stderr);
-        }
-        // Even an OPEN gate with count 0 must be sealed. A zero snapshot does
-        // not prevent a copier from entering after this read.
-        region->WaitCopiedInflight();
+        (void)site;
+        ZForwardingLife::WaitPageDone(region->metadata.fwdOwner.load(std::memory_order_acquire));
     }
 
     static void ClearUnits(size_t idx, size_t cnt,
@@ -2231,7 +2208,7 @@ public:
     // After-copy Exempt parks FORWARDED residuals (zRelocate.cpp:1041-1047).
     // CSet empty-select still needs those headers; strip only at the next install,
     // after the table is retired (zRelocationSet.cpp:91-96). A leftover FORWARDED
-    // with no table entry makes ForwardObjectImpl return PlanRoute's uncopied dest
+    // with no table entry makes ForwardObjectImpl recopy rather than return dest
     // (si_addr=0x8 / near-golden drift). Does not touch LOCKED (live copier).
     void ClearRelocationResiduals();
 
@@ -2528,7 +2505,6 @@ public:
         // by this single product operation.
         ClearForwardingFaceReset();
         ClearCurrentMarkFace();
-        ZForwardingLife::reset_copy_open(metadata.copyInflight);
         metadata.routeInfo.Clear();
         metadata._generation_id = G == Generation::Young ? ZGenerationId::young : ZGenerationId::old;
         // Always install ghost membership, including a zero-live page. This is
@@ -2681,7 +2657,7 @@ public:
         // portmutreloc: hold the forwarding drain across the whole body. It is held
         // for the whole body so that FreeCompactRouteTable below -- ZGC's free_page -- cannot
         // run while a retained reader is inside the route lookup or a mutator copy.
-        DrainScope drain(this, MutatorRelocate::Retire::DISPEL_GHOST);
+        InPlaceClaimScope drain(this, MutatorRelocate::Retire::DISPEL_GHOST);
         // PORT_ZFORWARDING step 1: the retirement edge.  ZGC's equivalent is refcount-driven
         // (ZForwarding::detach_page waits for _ref_count == 0); recording the removal here first
         // lets step 3 change *when* it happens without changing *where*.
@@ -3042,25 +3018,11 @@ public:
             // The non-ghost expiry arm is still a forwarding-life boundary.
             // Seal before resetting the carrier words so an admitted copier
             // cannot be relabelled as belonging to the next life.
-            DrainScope drain(this, MutatorRelocate::Retire::DISPEL_GHOST);
+            InPlaceClaimScope drain(this, MutatorRelocate::Retire::DISPEL_GHOST);
         }
         ForwardingTable::ClearPageOwner(this);
         ClearForwardingFaceReset();
         ClearCurrentMarkFace();
-        ZForwardingLife::reset_copy_sealed(metadata.copyInflight);
-    }
-
-    bool NoteCopyInflight() { return ZForwardingLife::note_copy(metadata.copyInflight); }
-
-    void EndCopyInflight() { ZForwardingLife::end_copy(metadata.copyInflight); }
-
-    void WaitCopiedInflight() { ZForwardingLife::wait_copied(metadata.copyInflight); }
-
-    int32_t CopyInflight() const { return ZForwardingLife::copy_count(metadata.copyInflight); }
-
-    ZForwardingLife::CopyAdmissionState CopyAdmission() const
-    {
-        return ZForwardingLife::copy_admission_state(metadata.copyInflight);
     }
 
     int32_t ForwardingRefCount() const
@@ -3079,29 +3041,22 @@ public:
 
     void UnlockWriteRegion() { metadata.rwLock.UnlockWrite(); }
 
-    // ZForwarding in_place_relocation_claim_page + detach_page (zForwarding.cpp:110-181).
-    // Invert the count (n → -n) so new retainers refuse, wait until -1 (every reader
-    // has released), then the retire body runs exclusive. Destructor publishes done
-    // and drops the construction token to 0. Always on.
-    class DrainScope {
+    // zForwarding.cpp:110-181 in_place_relocation_claim_page + detach_page.
+    class InPlaceClaimScope {
     public:
-        // Keep the retire-side admission/drain linearization in the product
-        // library. A header definition lets every consumer, including a test
-        // executable, instantiate a private weak copy that a rebuilt runtime
-        // cannot control or verify.
-        MRT_EXPORT DrainScope(RegionInfo* region, MutatorRelocate::Retire site);
+        MRT_EXPORT InPlaceClaimScope(RegionInfo* region, MutatorRelocate::Retire site);
 
-        ~DrainScope()
+        ~InPlaceClaimScope()
         {
             if (!retiring) return;
             owner->release_page();
             if (ZForwardingLife::CurrentPageWork() != owner.get()) owner->mark_done();
         }
 
-        DrainScope(const DrainScope&) = delete;
-        DrainScope& operator=(const DrainScope&) = delete;
-        DrainScope(DrainScope&&) = delete;
-        DrainScope& operator=(DrainScope&&) = delete;
+        InPlaceClaimScope(const InPlaceClaimScope&) = delete;
+        InPlaceClaimScope& operator=(const InPlaceClaimScope&) = delete;
+        InPlaceClaimScope(InPlaceClaimScope&&) = delete;
+        InPlaceClaimScope& operator=(InPlaceClaimScope&&) = delete;
 
     private:
         ForwardingTable::Owner owner;
@@ -3975,7 +3930,7 @@ private:
         uint32_t retainedMarkWordCnt = 0;
         // In-flight copiers that hold LOCKED (TryLock success → Unlock). Fills the
         // 4-byte hole after retainedMarkWordCnt; sizeof(UnitInfo) stays 208.
-        std::atomic<int32_t> copyInflight{ ZForwardingLife::CopyAdmissionSealedWord() };
+        std::atomic<int32_t> copyInflight{ 0 };
 
         // resolveto: Compact packs densely; GetRoute prefix-sum dests are holes.
         // Table maps from-offset → actual dest for COMPACTED regions only.
@@ -4295,7 +4250,6 @@ private:
         SetRouteState(NORMAL);
         ForwardingTable::ClearPageOwner(this);
         WaitCopiedBeforePayloadWipe(this, "InitRegionInfo");
-        ZForwardingLife::reset_copy_sealed(metadata.copyInflight);
         ForwardingTable::ClearEntries(GetRegionStart(), nUnit * RegionInfo::UNIT_SIZE);
         metadata.allocPtr = GetRegionStart();
         metadata.regionEnd = metadata.allocPtr + nUnit * RegionInfo::UNIT_SIZE;

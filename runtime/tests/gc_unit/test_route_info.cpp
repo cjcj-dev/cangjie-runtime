@@ -111,7 +111,7 @@ struct ExactRouteFixture {
         const MAddress start = region->GetRegionStart();
         unsigned admittedMask = 0;
         for (size_t offset = 0; offset <= 40; offset += 8) {
-            auto result = collector.PlanRouteLookupForTest(from_region_addr(start + offset));
+            auto result = collector.RouteLookupForTest(from_region_addr(start + offset));
             GC_EXPECT_TRUE(result.phaseAllowed);
             GC_EXPECT_TRUE(result.heapAddress);
             GC_EXPECT_TRUE(result.gatePassed);
@@ -125,7 +125,7 @@ struct ExactRouteFixture {
             admittedMask |= result.plan.dest != nullptr ? (1U << (offset / 8)) : 0U;
             GC_EXPECT_EQ(result.plan.dest != nullptr, offset == 0);
         }
-        auto secondResult = collector.PlanRouteLookupForTest(second);
+        auto secondResult = collector.RouteLookupForTest(second);
         GC_EXPECT_TRUE(secondResult.phaseAllowed);
         GC_EXPECT_TRUE(secondResult.heapAddress);
         GC_EXPECT_TRUE(secondResult.gatePassed);
@@ -174,7 +174,7 @@ GC_TEST(RouteInfo, ExactStartCapabilityAcrossRouteStates)
         WCollector collector(Heap::GetHeap().GetAllocator(), Heap::GetHeap().GetCollectorResources());
 #if defined(MRT_GC_UNIT_TESTS)
         collector.SetGCPhase(GCPhase::GC_PHASE_IDLE);
-        auto idle = collector.PlanRouteLookupForTest(route.first);
+        auto idle = collector.RouteLookupForTest(route.first);
         GC_EXPECT_TRUE(idle.gatePassed);
         GC_EXPECT_TRUE(idle.receiptChecked);
         GC_EXPECT_TRUE(idle.compactedChecked);
@@ -183,14 +183,14 @@ GC_TEST(RouteInfo, ExactStartCapabilityAcrossRouteStates)
         GC_EXPECT_FALSE(idle.retained);
         GC_EXPECT_FALSE(idle.hookReached);
         GC_EXPECT_TRUE(idle.plan.dest == nullptr);
-        const auto nonHeap = collector.PlanRouteLookupForTest(reinterpret_cast<BaseObject*>(0x1234));
+        const auto nonHeap = collector.RouteLookupForTest(reinterpret_cast<BaseObject*>(0x1234));
         GC_EXPECT_FALSE(nonHeap.heapAddress);
         GC_EXPECT_FALSE(nonHeap.gatePassed);
         GC_EXPECT_FALSE(nonHeap.phaseAllowed);
         GC_EXPECT_FALSE(nonHeap.retained);
         GC_EXPECT_FALSE(nonHeap.hookReached);
         collector.SetGCPhase(GCPhase::GC_PHASE_TRACE);
-        auto trace = collector.PlanRouteLookupForTest(route.first);
+        auto trace = collector.RouteLookupForTest(route.first);
         GC_EXPECT_TRUE(trace.gatePassed);
         GC_EXPECT_FALSE(trace.phaseAllowed);
         GC_EXPECT_FALSE(trace.retained);

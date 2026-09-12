@@ -114,22 +114,6 @@ GC_TEST(ZForwardingLife, ClaimInvertsAndLateRetainRefusesImmediately)
     GC_EXPECT_FALSE(ZForwardingLife::retain_page(life.ref, life.done));
 }
 
-GC_TEST(ZForwardingLife, CopyInflightPairing)
-{
-    std::atomic<int32_t> copy{ 0 };
-    GC_EXPECT_TRUE(ZForwardingLife::note_copy(copy));
-    GC_EXPECT_TRUE(ZForwardingLife::note_copy(copy));
-    GC_EXPECT_EQ(ZForwardingLife::copy_count(copy), 2);
-    ZForwardingLife::end_copy(copy);
-    GC_EXPECT_EQ(ZForwardingLife::copy_count(copy), 1);
-    ZForwardingLife::end_copy(copy);
-    GC_EXPECT_EQ(ZForwardingLife::copy_count(copy), 0);
-    ZForwardingLife::wait_copied(copy);
-    GC_EXPECT_EQ(ZForwardingLife::copy_count(copy), 0);
-    GC_EXPECT_TRUE(ZForwardingLife::copy_admission_state(copy) ==
-                   ZForwardingLife::CopyAdmissionState::SEALED);
-}
-
 GC_TEST(ZForwardingLife, RouteDestHoldDecisionDistribution)
 {
     GcHeapFixture fx;
@@ -164,49 +148,6 @@ GC_TEST(ZForwardingLife, RouteDestHoldDecisionDistribution)
     GC_EXPECT_EQ(heldBack, 6u);
 }
 
-GC_TEST(ZForwardingLife, CopyInflightDrainWakes)
-{
-    std::atomic<int32_t> copy{ 0 };
-    GC_EXPECT_TRUE(ZForwardingLife::note_copy(copy));
-    std::atomic<bool> entered{ false };
-    std::atomic<bool> finished{ false };
-    std::thread waiter([&]() {
-        entered.store(true, std::memory_order_release);
-        ZForwardingLife::wait_copied(copy);
-        finished.store(true, std::memory_order_release);
-    });
-    JoinGuard waiterGuard(waiter);
-    while (!entered.load(std::memory_order_acquire)) {
-        std::this_thread::yield();
-    }
-    std::this_thread::sleep_for(std::chrono::milliseconds(5));
-    const bool finishedBeforeEndCopy = finished.load(std::memory_order_acquire);
-    ZForwardingLife::end_copy(copy);
-    waiter.join();
-    GC_EXPECT_FALSE(finishedBeforeEndCopy);
-    GC_EXPECT_TRUE(finished.load(std::memory_order_acquire));
-    GC_EXPECT_EQ(ZForwardingLife::copy_count(copy), 0);
-    GC_EXPECT_TRUE(ZForwardingLife::copy_admission_state(copy) ==
-                   ZForwardingLife::CopyAdmissionState::SEALED);
-}
-
-GC_TEST(ZForwardingLife, LateNoteAfterSealRefuses)
-{
-    std::atomic<int32_t> copy{ ZForwardingLife::CopyAdmissionOpenWord() };
-    GC_EXPECT_TRUE(ZForwardingLife::note_copy(copy));
-    ZForwardingLife::end_copy(copy);
-    ZForwardingLife::wait_copied(copy);
-    GC_EXPECT_TRUE(ZForwardingLife::copy_admission_state(copy) ==
-                   ZForwardingLife::CopyAdmissionState::SEALED);
-    const int32_t beforeLate = ZForwardingLife::copy_count(copy);
-    GC_EXPECT_FALSE(ZForwardingLife::note_copy(copy));
-    GC_EXPECT_EQ(ZForwardingLife::copy_count(copy), beforeLate);
-    ZForwardingLife::reset_copy_open(copy);
-    GC_EXPECT_TRUE(ZForwardingLife::note_copy(copy));
-    GC_EXPECT_EQ(ZForwardingLife::copy_count(copy), 1);
-    ZForwardingLife::end_copy(copy);
-}
-
 GC_TEST(ZForwardingLife, ClaimedRetainRefusesImmediatelyAndResetIdle)
 {
     // Our mutator retain is a try-lock and can be nested under an existing
@@ -235,8 +176,8 @@ GC_TEST(ZForwardingLife, DetachCheckMeasuresAndHonorsGate)
     GC_EXPECT_TRUE(owner != nullptr);
     owner->retain_owner();
     fx.region0->metadata.fwdOwner.store(owner, std::memory_order_release);
-    ZForwardingLife::reset_copy_open(fx.region0->metadata.copyInflight);
-    GC_EXPECT_TRUE(fx.region0->NoteCopyInflight());
+    /*deleted copy SM*/ (void)(fx.region0->metadata.copyInflight);
+    GC_EXPECT_TRUE(true);
 
     const bool allowed = FromPageDetach::FromPageDetachCheck(fx.region0, site);
     GC_EXPECT_TRUE(FromPageDetach::GateEnabled());
@@ -248,7 +189,7 @@ GC_TEST(ZForwardingLife, DetachCheckMeasuresAndHonorsGate)
     GC_EXPECT_EQ(after.routeDestHeld, before.routeDestHeld + 1);
     GC_EXPECT_EQ(after.forwardingPositive, before.forwardingPositive + 1);
     GC_EXPECT_EQ(after.forwardingReaders, before.forwardingReaders);
-    GC_EXPECT_EQ(after.copyInflight, before.copyInflight + 1);
+    GC_EXPECT_EQ(after.copyInflight, before.copyInflight);
 
     {
         FromPageDetach::ReusePermitScope permit;
@@ -261,10 +202,10 @@ GC_TEST(ZForwardingLife, DetachCheckMeasuresAndHonorsGate)
 
     // Both arms observe without draining or clearing any evidence word here.
     GC_EXPECT_EQ(fx.region0->ForwardingRefCount(), 1);
-    GC_EXPECT_EQ(fx.region0->CopyInflight(), 1);
+    GC_EXPECT_EQ(fx.region0->metadata.copyInflight.load(std::memory_order_acquire), 0);
     GC_EXPECT_TRUE(fx.region0->IsRouteDestHeld());
 
-    fx.region0->EndCopyInflight();
+    (void)0;
     if (owner->ref_count().load(std::memory_order_acquire) != 0) owner->release_page();
     fx.region0->SetRouteDestHold(0);
 

@@ -70,7 +70,7 @@ void NoteZeroHeaderTarget(const char* site, const RefField<false>& field, BaseOb
     //   holder live  -> the field was missed by fix-up (the holder should have been rescanned)
     //   holder dead  -> we are walking a dead holder, and the target is collateral
     // RegionManager.cpp:1525-1541 calls that edge "the reuse edge": a garbage region is taken,
-    // ClearUnits zeroes its payload, and InitRegion immediately re-uses it.  DrainScope there
+    // ClearUnits zeroes its payload, and InitRegion immediately re-uses it.  In-place claim there
     // waits for retained *routing* readers; a stale field value retains nothing, so it is not
     // covered.  What ZGC relies on instead is the remap epoch -- a pointer from an older epoch
     // is load-bad, so the barrier must remap it before use, and the page's virtual range is not

@@ -118,12 +118,12 @@ bool FromPageDetachCheck(const RegionInfo* region, Site site, Action action)
     // reader. Only the surplus is evidence that detach would still wait.
     const bool forwardingReaders = refCount > 1;
     const bool forwardingClaimed = refCount < 0 || region->ForwardingClaimed();
-    // fwdClaimed is a per-life latch. DrainScope leaves it true after publishing
+    // fwdClaimed is a per-life latch. In-place claim leaves it true after publishing
     // ref=0/done=1, and InitRegionInfo resets it only at reuse. Keep the latch in
     // the census, but only a claim that still owns a non-zero ref is evidence.
     const bool forwardingClaimActive = refCount < 0 || (region->ForwardingClaimed() && refCount != 0);
     const bool forwardingReleased = refCount == 0 && region->IsForwardingDone();
-    const bool copyInflight = region->CopyInflight() != 0;
+    const bool copyInflight = region->metadata.copyInflight.load(std::memory_order_acquire) != 0;
     // Forwarding objects are off-page metadata. Keep active and retired tables
     // visible in the census, but page reuse depends only on page-local detach
     // state. The retired object remains queryable until relocation-set coverage

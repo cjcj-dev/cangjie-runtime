@@ -879,9 +879,10 @@ void WCollector::InvalidateOldTaggedRefs(bool requireSurvivedMark)
 void WCollector::RescanRememberedSet(WorkStack& workStack, const MinorSlotSet& rememberedSlots,
                                      const MinorSlotSet& reachableSlots, const MinorSlotSet& weakSlots,
                                      const MinorObjectSet& currentMinorRoots, bool fullYoungScan,
-                                     MinorSlotSet* consumedOut, RemsetScanStats* statsOut,
-                                     MinorInteriorBaseMap* interiorBasesOut, const ScopedStopTheWorld* stw)
+                                      MinorSlotSet* consumedOut, RemsetScanStats* statsOut,
+                                      MinorInteriorBaseMap* interiorBasesOut, const ScopedStopTheWorld* stw)
 {
+    (void)stw;
     auto noteRemsetOutcome = [](MAddress slot, uint8_t outcome, MAddress target) {
         if (!ProbeReadRouteDiag::RootTrackingEnabled() || slot == 0) {
             return;
@@ -901,10 +902,7 @@ void WCollector::RescanRememberedSet(WorkStack& workStack, const MinorSlotSet& r
             return;
         }
     };
-    auto plannedTo = [this, stw](BaseObject* from) -> BaseObject* {
-        if (stw != nullptr) {
-            return PlanRouteUnderStw(from, *stw).dest;
-        }
+    auto plannedTo = [this](BaseObject* from) -> BaseObject* {
         FindToVersionResult resolved = FindToVersion(from);
         if (resolved.is_unavailable()) {
             // The remembered-set scrub is the third non-dereference consumer:

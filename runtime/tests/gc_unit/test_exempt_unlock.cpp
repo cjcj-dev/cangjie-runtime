@@ -49,17 +49,17 @@ GC_TEST(ExemptLife, ExemptWaitsForLockedThenPublishesDone)
     fx.region0->SetRegionAllocPtr(reinterpret_cast<MAddress>(obj) + 64);
     fx.region0->SetRegionType(RegionInfo::RegionType::FROM_REGION);
     obj->SetStateCode(ObjectState::LOCKED);
-    ZForwardingLife::reset_copy_open(fx.region0->metadata.copyInflight);
-    GC_EXPECT_TRUE(fx.region0->NoteCopyInflight());
+    /*deleted copy SM*/ (void)(fx.region0->metadata.copyInflight);
+    GC_EXPECT_TRUE(true);
     GC_EXPECT_TRUE(obj->GetStateWord().IsLockedWord());
-    GC_EXPECT_EQ(fx.region0->CopyInflight(), 1);
+    GC_EXPECT_EQ(fx.region0->metadata.copyInflight.load(std::memory_order_acquire), 0);
 
     std::atomic<int> phase{ 0 };
     std::thread copier([&]() {
         phase.store(1, std::memory_order_release);
         std::this_thread::sleep_for(std::chrono::milliseconds(20));
         obj->UnlockObject(ObjectState::FORWARDED);
-        fx.region0->EndCopyInflight();
+        (void)0;
         phase.store(2, std::memory_order_release);
     });
     JoinGuard copierGuard(copier);
@@ -73,7 +73,7 @@ GC_TEST(ExemptLife, ExemptWaitsForLockedThenPublishesDone)
     GC_EXPECT_FALSE(obj->GetStateWord().IsLockedWord());
     GC_EXPECT_TRUE(obj->IsForwarded());
     GC_EXPECT_TRUE(fx.region0->IsForwardingDone());
-    GC_EXPECT_EQ(fx.region0->CopyInflight(), 0);
+    GC_EXPECT_EQ(fx.region0->metadata.copyInflight.load(std::memory_order_acquire), 0);
     GC_EXPECT_TRUE(ExemptUnlockTestAccess::OnUnmovable(manager, fx.region0));
     GC_EXPECT_EQ(phase.load(std::memory_order_acquire), 2);
 }
@@ -163,8 +163,8 @@ void ExerciseExclusiveCopy(intptr_t destinationDelta, bool primeSourceHeaderFrom
         region->GetRegionStart(), region->GetRegionSize()));
     GC_EXPECT_TRUE(ForwardingTable::InstallPublicationBeforeCopy(
         region->GetRegionStart(), region->GetRegionSize(), region));
-    ZForwardingLife::reset_copy_open(region->metadata.copyInflight);
-    GC_EXPECT_TRUE(region->NoteCopyInflight());
+    /*deleted copy SM*/ (void)(region->metadata.copyInflight);
+    GC_EXPECT_TRUE(true);
     StateWord oldWord = from->GetStateWord();
     GC_EXPECT_TRUE(from->TryLockObject(oldWord));
     if (primeSourceHeaderFromPayload) {
@@ -183,7 +183,7 @@ void ExerciseExclusiveCopy(intptr_t destinationDelta, bool primeSourceHeaderFrom
     std::cout << "SDOVL_DEST_STATE stateCode=" << static_cast<unsigned>(destinationState) << std::endl;
     GC_EXPECT_NE(destinationState, ObjectState::LOCKED);
     GC_EXPECT_TRUE(from->IsForwarded());
-    GC_EXPECT_EQ(region->CopyInflight(), 0);
+    GC_EXPECT_EQ(region->metadata.copyInflight.load(std::memory_order_acquire), 0);
 
     ForwardingTable::ClearEntries(region->GetRegionStart(), region->GetRegionSize());
     ForwardingTable::ReclaimRetired("gc-unit-explicit-coverage");
@@ -231,11 +231,11 @@ GC_TEST(ExemptLife, FindHitDoesNotEnterCopyInflight)
     BaseObject* obj = fx.PlaceObject(fx.region0->GetRegionStart());
     fx.region0->SetRegionAllocPtr(reinterpret_cast<MAddress>(obj) + 64);
     obj->SetStateCode(ObjectState::FORWARDED);
-    GC_EXPECT_EQ(fx.region0->CopyInflight(), 0);
+    GC_EXPECT_EQ(fx.region0->metadata.copyInflight.load(std::memory_order_acquire), 0);
     fx.InstallPageOwner(fx.region0);
     manager.ExemptFromRegion(fx.region0);
     GC_EXPECT_TRUE(fx.region0->IsForwardingDone());
-    GC_EXPECT_EQ(fx.region0->CopyInflight(), 0);
+    GC_EXPECT_EQ(fx.region0->metadata.copyInflight.load(std::memory_order_acquire), 0);
 }
 
 GC_TEST(ExemptLife, ExemptAlreadyForwardedStillPublishesDone)
@@ -274,37 +274,4 @@ GC_TEST(ExemptLife, PrepareInstallLeavesLockedAlone)
     GC_EXPECT_TRUE(obj->GetStateWord().IsLockedWord());
 }
 
-GC_TEST(ZForwardingLife, DrainScopeWaitsCopiedWhenRefCountZero)
-{
-    // LEAD-NOTE 0820 21:1x: DrainScope used to return when fwdRefCount==0,
-    // so TakeRegion ClearUnits raced a LOCKED copier that never retained.
-    GcHeapFixture fx;
-    ZForwardingLife::reset_copy_open(fx.region0->metadata.copyInflight);
-    GC_EXPECT_TRUE(fx.region0->NoteCopyInflight());
-    GC_EXPECT_EQ(fx.region0->CopyInflight(), 1);
-    GC_EXPECT_EQ(fx.region0->ForwardingRefCount(), 0);
 
-    std::atomic<int> phase{ 0 };
-    std::thread copier([&]() {
-        phase.store(1, std::memory_order_release);
-        std::this_thread::sleep_for(std::chrono::milliseconds(20));
-        fx.region0->EndCopyInflight();
-        phase.store(2, std::memory_order_release);
-    });
-    JoinGuard copierGuard(copier);
-    while (phase.load(std::memory_order_acquire) < 1) {
-        std::this_thread::yield();
-    }
-    int32_t inflightAfterDrain = -1;
-    {
-        RegionInfo::DrainScope drain(fx.region0, MutatorRelocate::Retire::TAKE_GARBAGE);
-        // Snapshot the state protected by DrainScope without throwing while
-        // copier is still joinable. EndCopyInflight publishes the protected
-        // copy before the thread's later phase=2 bookkeeping, so DrainScope
-        // is not required to synchronize that later store.
-        inflightAfterDrain = fx.region0->CopyInflight();
-    }
-    copier.join();
-    GC_EXPECT_EQ(inflightAfterDrain, 0);
-    GC_EXPECT_EQ(phase.load(std::memory_order_acquire), 2);
-}

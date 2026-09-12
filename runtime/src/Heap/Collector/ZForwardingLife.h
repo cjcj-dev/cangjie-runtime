@@ -52,19 +52,6 @@ public:
     };
     static ZForwarding* CurrentPageWork();
 
-    // In-flight copier count shares one word with SEALED. OPEN+count is live
-    // copiers (zForwarding.cpp:110,134). SEALED closes new admissions.
-    enum class CopyAdmissionState : uint8_t {
-        OPEN = 0,
-        SEALED = 2,
-    };
-
-    static constexpr int32_t CopyAdmissionOpenWord() { return 0; }
-    static constexpr int32_t CopyAdmissionSealedWord()
-    {
-        return static_cast<int32_t>(uint32_t{ 2 } << 30);
-    }
-
     // zForwarding.inline.hpp:67-70 -- constructed with claimed=false, ref=1, done=false.
     // The construction 1 is the relocating worker's token; it is dropped at retire.
     static void ResetForForwarding(std::atomic<int32_t>& refCount, std::atomic<bool>& claimed,
@@ -118,8 +105,8 @@ public:
             if (n < 0) {
                 // Try-lock: refuse claimed pages immediately. Waiting here deadlocks
                 // when this thread already holds a retain on the same count
-                // (TryMutatorRelocate retain + PlanRoute nested RetainScope) while
-                // DrainScope inverted n→-n and WaitUntilRef(-1). ZGC's retain_page
+                // (TryMutatorRelocate retain nested RetainScope) while
+                // in-place claim inverted n→-n and WaitUntilRef(-1). ZGC's retain_page
                 // waits because the caller does not already pin; our mutator path
                 // is a try-lock (WCollector.cpp:9976-9977). zForwarding.cpp:95-100.
                 g_retainRefusedClaimed.fetch_add(1, std::memory_order_relaxed);
@@ -183,69 +170,6 @@ public:
         WaitUntilRef(refCount, 0);
     }
 
-    static void reset_copy_open(std::atomic<int32_t>& copyWord)
-    {
-        copyWord.store(CopyAdmissionOpenWord(), std::memory_order_release);
-    }
-
-    static void reset_copy_sealed(std::atomic<int32_t>& copyWord)
-    {
-        copyWord.store(CopyAdmissionSealedWord(), std::memory_order_release);
-        NotifyAll();
-    }
-
-    static bool note_copy(std::atomic<int32_t>& copyWord)
-    {
-        for (;;) {
-            int32_t word = copyWord.load(std::memory_order_acquire);
-            if (copy_admission_state(word) == CopyAdmissionState::SEALED) {
-                return false;
-            }
-            const int32_t count = copy_count(word);
-            CHECK(count < static_cast<int32_t>(kCopyCountMask));
-            const int32_t next = PackCopyWord(CopyAdmissionState::OPEN, count + 1);
-            if (copyWord.compare_exchange_weak(
-                    word, next, std::memory_order_acq_rel, std::memory_order_acquire)) {
-                return true;
-            }
-        }
-    }
-
-    static void end_copy(std::atomic<int32_t>& copyWord)
-    {
-        for (;;) {
-            int32_t word = copyWord.load(std::memory_order_acquire);
-            const CopyAdmissionState state = copy_admission_state(word);
-            const int32_t count = copy_count(word);
-            CHECK(count > 0);
-            const int32_t ended = PackCopyWord(state, count - 1);
-            if (!copyWord.compare_exchange_weak(
-                    word, ended, std::memory_order_acq_rel, std::memory_order_acquire)) {
-                continue;
-            }
-            if (count == 1) {
-                NotifyAll();
-            }
-            return;
-        }
-    }
-
-    // Linearization point for payload retirement. OPEN->SEALED closes future
-    // admissions; ENTERING means a copier already owns an object lock and must
-    // finish admission before the drain can close the gate. SEALED remains
-    // terminal until the next forwarding life explicitly calls reset_copy_open.
-    static void wait_copied(std::atomic<int32_t>& copyWord);
-
-    static CopyAdmissionState copy_admission_state(const std::atomic<int32_t>& copyWord)
-    {
-        return copy_admission_state(copyWord.load(std::memory_order_acquire));
-    }
-
-    static int32_t copy_count(const std::atomic<int32_t>& copyWord)
-    {
-        return copy_count(copyWord.load(std::memory_order_acquire));
-    }
-
     static uint64_t RetainRefusedReleased()
     {
         return g_retainRefusedReleased.load(std::memory_order_relaxed);
@@ -256,28 +180,10 @@ public:
     }
     static uint64_t DetachWaited() { return g_detachWaited.load(std::memory_order_relaxed); }
 
+    static void WaitUntilDone(std::atomic<int32_t>& refCount, const std::atomic<bool>& done);
+    static void WaitPageDone(ZForwarding* forwarding);
+
 private:
-    static constexpr uint32_t kCopyCountMask = (uint32_t{ 1 } << 30) - 1;
-    static constexpr uint32_t kCopyStateShift = 30;
-
-    static CopyAdmissionState copy_admission_state(int32_t word)
-    {
-        return static_cast<CopyAdmissionState>(static_cast<uint32_t>(word) >> kCopyStateShift);
-    }
-
-    static int32_t copy_count(int32_t word)
-    {
-        return static_cast<int32_t>(static_cast<uint32_t>(word) & kCopyCountMask);
-    }
-
-    static int32_t PackCopyWord(CopyAdmissionState state, int32_t count)
-    {
-        CHECK(count >= 0 && static_cast<uint32_t>(count) <= kCopyCountMask);
-        const uint32_t bits = (static_cast<uint32_t>(state) << kCopyStateShift) |
-            static_cast<uint32_t>(count);
-        return static_cast<int32_t>(bits);
-    }
-
     struct Monitor {
         std::mutex mu;
         std::condition_variable cv;
@@ -299,12 +205,6 @@ private:
     }
 
     static void WaitUntilRef(std::atomic<int32_t>& refCount, int32_t expect);
-
-    // zForwarding.cpp:96-100: wait until is_done, then refuse. Also exit on
-    // ref==0 (ResetIdle / detach) — ZGC destroys the forwarding instead.
-    // Defined in ZForwardingLife.cpp so the waiter can enter a saferegion
-    // (mutator cv.wait without it blocks STW: all-futex fifth face).
-    static void WaitUntilDone(std::atomic<int32_t>& refCount, const std::atomic<bool>& done);
 
     static std::atomic<uint64_t> g_retainRefusedReleased;
     static std::atomic<uint64_t> g_retainRefusedClaimed;

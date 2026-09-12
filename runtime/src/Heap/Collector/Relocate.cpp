@@ -130,14 +130,6 @@ static void NoteRemapYoungRootsTestReceipt(RefField<>& field, uintptr_t before, 
 static thread_local WCollector::RouteLookupTestResult* g_routeLookupTestContext = nullptr;
 #endif
 #if defined(MRT_TESTABLE_INTERNALS)
-using CopyAdmissionTestHook = void (*)(RegionInfo*, BaseObject*);
-static std::atomic<CopyAdmissionTestHook> g_copyAdmissionTestHook{ nullptr };
-extern "C" MRT_EXPORT void MRT_SetCopyAdmissionTestHook(CopyAdmissionTestHook hook)
-{
-    g_copyAdmissionTestHook.store(hook, std::memory_order_release);
-}
-#endif
-#if defined(MRT_TESTABLE_INTERNALS)
 // Scheduling only: install a barrier after flip, at wait entry, and before
 // post-copy cleanup. The callback never supplies a forwarding answer.
 using RemapWindowTestHook = void (*)(unsigned, RegionInfo*, BaseObject*);
@@ -2593,7 +2585,7 @@ BaseObject* WCollector::TryForwardObject(BaseObject* obj)
 }
 
 #if defined(MRT_GC_UNIT_TESTS)
-WCollector::RouteLookupTestResult WCollector::PlanRouteLookupForTest(BaseObject* fromObj)
+WCollector::RouteLookupTestResult WCollector::RouteLookupForTest(BaseObject* fromObj)
 {
     RouteLookupTestResult result;
     struct ContextScope {
@@ -2639,7 +2631,7 @@ BaseObject* WCollector::ForwardObjectImpl(BaseObject* obj, RegionInfo* ghostFrom
         // 1. object has already been forwarded. Table hit is the publish
         // (zRelocate.cpp:371, MutatorRelocate.h:124). A FORWARDED header with no
         // entry is last cycle's residual after the table was retired
-        // (zRelocationSet.cpp:91-96); PlanRoute's dest is uncopied — do not
+        // (zRelocationSet.cpp:91-96); do not
         // return it. Fall through and recopy this cycle.
         if (obj->IsForwarded()) {
             auto toObj = GetForwardPointer(obj, ghostFromRegion);
@@ -2669,7 +2661,7 @@ BaseObject* WCollector::ForwardObjectImpl(BaseObject* obj, RegionInfo* ghostFrom
             }
             if (ans == MutatorRelocate::LockedWaiterAnswer::InvariantFailure) {
                 // Page done + leftover LOCKED is not a live copier
-                // (zForwarding.cpp:138-151). PlanRoute dest is uncopied after
+                // (zForwarding.cpp:138-151). dest is uncopied after
                 // the table was retired (zRelocationSet.cpp:91-96). Keep from
                 // A published page without the corresponding receipt cannot
                 // produce a load-good answer.
@@ -2684,9 +2676,6 @@ BaseObject* WCollector::ForwardObjectImpl(BaseObject* obj, RegionInfo* ghostFrom
 
         // 3. hope we can forward this object
         if (obj->TryLockObject(oldWord)) {
-            // zForwarding.cpp:86-131: admission and drain share one linearized
-            // state. ENTERING is published immediately after TryLockObject so
-            // DrainScope cannot pass the lock->count interval.
             RegionInfo* page = ghostFromRegion;
             if (page == nullptr) {
                 page = RegionInfo::GetGhostFromRegionAt(reinterpret_cast<MAddress>(obj));
@@ -2741,29 +2730,11 @@ BaseObject* WCollector::RelocateObjectInner(BaseObject* obj, BaseObject* planned
             return nullptr;
         }
     }
-    if (copyPage != nullptr && !copyPage->NoteCopyInflight()) {
-        if (obj->GetStateWord().IsLockedWord()) {
-            obj->UnlockObject(ObjectState::NORMAL);
-        }
-        return FindToVersion(obj).found();
-    }
     return ForwardObjectExclusive(obj, toObj, copyPage);
 }
 
 BaseObject* WCollector::ForwardObjectExclusive(BaseObject* obj, BaseObject* toObj, RegionInfo* copyPage)
 {
-    // EndCopy on the same page NoteCopy ran on (zForwarding.cpp:134-169).
-    // find() hits never enter (zRelocate.cpp:382-410).
-    struct EndCopyInflight {
-        RegionInfo* region;
-        ~EndCopyInflight()
-        {
-            if (region != nullptr) {
-                region->EndCopyInflight();
-            }
-        }
-    } endCopy{ copyPage };
-
     if (!Collector::PlausibleManagedObjectGate("WCollector::ForwardObjectExclusive", obj)) {
         // Caller locked for a real object; unlock without claiming FORWARDED.
         obj->UnlockObject(ObjectState::NORMAL);
