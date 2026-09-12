@@ -8,6 +8,7 @@
 #include "Heap/Collector/MarkStripe.h"
 #include "TracingCollector.h"
 
+#include <algorithm>
 #include "Base/CString.h"
 #include "Common/Runtime.h"
 #include "Concurrency/Concurrency.h"
@@ -959,14 +960,18 @@ bool TracingCollector::MarkSatbBuffer(WorkStack& workStack)
             VLOG(REPORT, "MarkSatbBuffer is done for timeout");
             visitSatbObj();
             GCThreadPool* threadPool = GetThreadPool();
-            WorkStack tmp;
-            TracingImpl(workStack, tmp, (workStack.size() > MAX_MARKING_WORK_SIZE) || (threadPool->GetWorkCount() > 0));
+            const bool parallel =
+                (workStack.size() > MAX_MARKING_WORK_SIZE) || (threadPool->GetWorkCount() > 0);
+            markedObjectCount.fetch_add(RunMajorStripeMark(workStack, parallel, true),
+                                        std::memory_order_relaxed);
             return workStack.empty();
         }
         if (LIKELY(!workStack.empty())) {
             GCThreadPool* threadPool = GetThreadPool();
-            WorkStack tmp;
-            TracingImpl(workStack, tmp, (workStack.size() > MAX_MARKING_WORK_SIZE) || (threadPool->GetWorkCount() > 0));
+            const bool parallel =
+                (workStack.size() > MAX_MARKING_WORK_SIZE) || (threadPool->GetWorkCount() > 0);
+            markedObjectCount.fetch_add(RunMajorStripeMark(workStack, parallel, true),
+                                        std::memory_order_relaxed);
         }
         visitSatbObj();
         if (!workStack.empty()) {
