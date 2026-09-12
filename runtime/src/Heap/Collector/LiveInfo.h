@@ -328,8 +328,7 @@ private:
         return markFace;
     }
 
-    // Geometry prefix-sum: only RegionInfo::GetPreLiveBytesInGhostRegion (ticket path).
-    // Anchor: ops/design/ROUTE_DOMAIN.md §2.
+    // Prefix geometry retired: GetRoute dest is insert (zRelocate.cpp:361).
     friend class RegionInfo;
     template<Generation G>
     uint64_t GetPreLiveBytes(MarkView<G> view, size_t offset, size_t regionSize)
