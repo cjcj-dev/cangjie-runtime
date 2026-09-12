@@ -2625,69 +2625,27 @@ BaseObject* WCollector::ForwardObjectImpl(BaseObject* obj, RegionInfo* ghostFrom
         return nullptr;
     }
 #endif
-    do {
-        StateWord oldWord = obj->GetStateWord();
-
-        // 1. object has already been forwarded. Table hit is the publish
-        // (zRelocate.cpp:371, MutatorRelocate.h:124). A FORWARDED header with no
-        // entry is last cycle's residual after the table was retired
-        // (zRelocationSet.cpp:91-96); do not
-        // return it. Fall through and recopy this cycle.
-        if (obj->IsForwarded()) {
-            auto toObj = GetForwardPointer(obj, ghostFromRegion);
-            if (toObj != nullptr) {
-                DLOG(FORWARD, "skip forwarded obj %p -> %p<%p>(%zu)", obj, toObj, toObj->GetTypeInfo(),
-                     toObj->GetSize());
-                return toObj;
-            }
+    // zRelocate.cpp:382-410 relocate_object: find hit → return; else retain
+    // already held by the caller lease; inner allocate→copy→insert (CAS
+    // winner, loser undo). No object-header TryLock admission.
+    const MAddress fromAddr = reinterpret_cast<MAddress>(obj);
+    if (const MAddress hit = ForwardingTable::FindTo(fromAddr)) {
+        return reinterpret_cast<BaseObject*>(hit);
+    }
+    if (obj->IsForwarded()) {
+        auto toObj = GetForwardPointer(obj, ghostFromRegion);
+        if (toObj != nullptr) {
+            return toObj;
         }
-
-        // 2. object is being forwarded. zRelocate.cpp:386-389 find() hit → already
-        // relocated; insert (the publish) happens before UnlockObject(FORWARDED), so
-        // waiters must not require the lock to drop. A yield-only loop here is what
-        // hung gc-main at WCollector.cpp:9570 while the mutator sat in SuspendForSync
-        // (REPORT-llstore hang_live).
-        if (oldWord.IsLockedWord()) {
-            auto toObj = GetForwardPointer(obj, ghostFromRegion);
-            const bool tableHit = toObj != nullptr;
-            const bool pagePublished = ghostFromRegion != nullptr &&
-                (ghostFromRegion->IsForwardingDone() ||
-                 ghostFromRegion->GetRouteState() == RegionInfo::RouteState::FORWARDED ||
-                 ghostFromRegion->GetRouteState() == RegionInfo::RouteState::COMPACTED);
-            const MutatorRelocate::LockedWaiterAnswer ans =
-                MutatorRelocate::AnswerLockedWaiter(tableHit, pagePublished);
-            if (ans == MutatorRelocate::LockedWaiterAnswer::UseTo) {
-                return toObj;
-            }
-            if (ans == MutatorRelocate::LockedWaiterAnswer::InvariantFailure) {
-                // Page done + leftover LOCKED is not a live copier
-                // (zForwarding.cpp:138-151). dest is uncopied after
-                // the table was retired (zRelocationSet.cpp:91-96). Keep from
-                // A published page without the corresponding receipt cannot
-                // produce a load-good answer.
-                CHECK_DETAIL(false,
-                             "published forwarding page has no object receipt from=%p page=%p",
-                             obj, ghostFromRegion);
-                return nullptr;
-            }
-            sched_yield();
-            continue;
+    }
+    RegionInfo* page = ghostFromRegion;
+    if (page == nullptr) {
+        page = RegionInfo::GetGhostFromRegionAt(reinterpret_cast<MAddress>(obj));
+        if (page == nullptr) {
+            page = RegionInfo::TryGetRegionInfoAt(reinterpret_cast<MAddress>(obj));
         }
-
-        // 3. hope we can forward this object
-        if (obj->TryLockObject(oldWord)) {
-            RegionInfo* page = ghostFromRegion;
-            if (page == nullptr) {
-                page = RegionInfo::GetGhostFromRegionAt(reinterpret_cast<MAddress>(obj));
-                if (page == nullptr) {
-                    page = RegionInfo::TryGetRegionInfoAt(reinterpret_cast<MAddress>(obj));
-                }
-            }
-            return RelocateObjectInner(obj, nullptr, page);
-        }
-    } while (true);
-    LOG(RTLOG_FATAL, "forwardObject exit in wrong path");
-    return nullptr;
+    }
+    return RelocateObjectInner(obj, nullptr, page);
 }
 
 BaseObject* WCollector::ForwardObjectExclusive(BaseObject* obj)
@@ -2706,14 +2664,11 @@ BaseObject* WCollector::RelocateObjectInner(BaseObject* obj, BaseObject* planned
 {
     const MAddress fromAddr = reinterpret_cast<MAddress>(obj);
     if (const MAddress hit = ForwardingTable::FindTo(fromAddr)) {
-        if (obj->GetStateWord().IsLockedWord()) {
-            obj->UnlockObject(ObjectState::FORWARDED);
-        }
         return reinterpret_cast<BaseObject*>(hit);
     }
     BaseObject* toObj = planned;
+    const size_t size = RegionSpace::GetAllocSize(*obj);
     if (toObj == nullptr) {
-        const size_t size = RegionSpace::GetAllocSize(*obj);
         AllocBuffer* buf = AllocBuffer::GetOrCreateAllocBuffer();
         RegionInfo* tl = buf->GetRegion();
         if (tl != nullptr && tl != RegionInfo::NullRegion()) {
@@ -2724,9 +2679,6 @@ BaseObject* WCollector::RelocateObjectInner(BaseObject* obj, BaseObject* planned
                 buf->Allocate(size, AllocType::MOVEABLE_OBJECT));
         }
         if (toObj == nullptr) {
-            if (obj->GetStateWord().IsLockedWord()) {
-                obj->UnlockObject(ObjectState::NORMAL);
-            }
             return nullptr;
         }
     }
@@ -2736,13 +2688,10 @@ BaseObject* WCollector::RelocateObjectInner(BaseObject* obj, BaseObject* planned
 BaseObject* WCollector::ForwardObjectExclusive(BaseObject* obj, BaseObject* toObj, RegionInfo* copyPage)
 {
     if (!Collector::PlausibleManagedObjectGate("WCollector::ForwardObjectExclusive", obj)) {
-        // Caller locked for a real object; unlock without claiming FORWARDED.
-        obj->UnlockObject(ObjectState::NORMAL);
         return nullptr;
     }
     if (toObj == nullptr) {
         LOG(RTLOG_ERROR, "[GCV2][first-visitor] destination null obj=%p page=%p", obj, copyPage);
-        obj->UnlockObject(ObjectState::NORMAL);
         return nullptr;
     }
     ForwardingTable::Publication publication = ForwardingTable::EnsurePublicationBeforeCopy(
@@ -2759,7 +2708,6 @@ BaseObject* WCollector::ForwardObjectExclusive(BaseObject* obj, BaseObject* toOb
             copyPage == nullptr ? 0 : copyPage->ForwardingRefCount());
         // Installation/allocation failure is propagated before CopyObject. Once
         // bytes are copied, publication is an invariant and cannot be a miss.
-        obj->UnlockObject(ObjectState::NORMAL);
         return nullptr;
     }
     size_t size = RegionSpace::GetAllocSize(*obj);
@@ -2777,17 +2725,12 @@ BaseObject* WCollector::ForwardObjectExclusive(BaseObject* obj, BaseObject* toOb
     }
     std::atomic_thread_fence(std::memory_order_release);
     if (toObj != obj && !ToHeaderCovered(toObj)) {
-        obj->UnlockObject(ObjectState::NORMAL);
         return nullptr;
     }
     const ZForwarding::Receipt receipt = ForwardingTable::InstallMapping(
         publication, reinterpret_cast<MAddress>(obj), reinterpret_cast<MAddress>(toObj));
     const MAddress mapped = receipt.address;
     if (!ForwardingTable::ReceiptAllowsForwarded(mapped)) {
-        // FORWARDED is a publication of the receipt, not merely of CopyObject.
-        // If the table itself could not be installed, restore a retryable header;
-        // never expose a forwarded object whose answer is the retiring from slot.
-        obj->UnlockObject(ObjectState::NORMAL);
         return nullptr;
     }
     // portmutreloc: the copy just happened on this thread. InScope() is set only by
@@ -2809,7 +2752,7 @@ BaseObject* WCollector::ForwardObjectExclusive(BaseObject* obj, BaseObject* toOb
             MutatorRelocate::NoteSelfCopy(size, role);
         }
     }
-    obj->UnlockObject(ObjectState::FORWARDED);
+    obj->SetStateCode(ObjectState::FORWARDED);
 #if defined(MRT_TESTABLE_INTERNALS)
     RunRemapWindowTestHook(6, copyPage, obj);
 #endif
