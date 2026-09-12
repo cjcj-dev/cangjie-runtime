@@ -685,6 +685,7 @@ bool MutatorManager::HandshakeFlushMarkProducers(MarkDomain* domain)
         mutator.IncObserver();
         pending.push_back(&mutator);
     });
+    Heap::GetHeap().GetFinalizerProcessor().Notify();
     Mutator* self = Mutator::GetMutator();
     while (!pending.empty()) {
         for (auto it = pending.begin(); it != pending.end();) {
