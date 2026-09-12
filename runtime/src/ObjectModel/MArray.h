@@ -19,7 +19,7 @@ class ATTR_PACKED(4) MArray : public BaseObject {
 public:
     // OpenJDK ZObjArrayAllocator uses the same 64 KiB maximum segment
     // (zObjArrayAllocator.cpp:55-63). The threshold includes the array header.
-    static constexpr MSize LARGE_REF_ARRAY_INIT_SEGMENT_SIZE = 64 * 1024;
+    static constexpr MSize LARGE_ARRAY_INIT_SEGMENT_SIZE = 64 * 1024;
 
     static constexpr MOffset GetContentOffset(); // in Bytes
 
@@ -54,7 +54,7 @@ public:
     void ForEachRefFieldInRange(const RefFieldVisitor& visitor, MAddress fieldStart, MIndex fieldEnd) const;
 
 private:
-    static MArray* InitializeLargeRefArray(MAddress address, MSize arraySize, MIndex nElems,
+    static MArray* InitializeLargeArray(MAddress address, MSize arraySize, MIndex nElems,
                                            TypeInfo& arrayClass);
 
     // use MIndex because length is the upper boundary of all indices

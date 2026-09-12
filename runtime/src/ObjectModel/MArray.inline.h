@@ -129,20 +129,21 @@ inline MArray* MArray::NewKnownWidthArray(MIndex nElems, TypeInfo& arrayClass, c
         ExceptionManager::OutOfMemory();
         return nullptr;
     }
-    const bool isLargeRefArray = arraySize > LARGE_REF_ARRAY_INIT_SEGMENT_SIZE &&
-        allocType == AllocType::MOVEABLE_OBJECT && elemBytes == RefField<>::GetSize() &&
-        arrayClass.GetComponentTypeInfo()->IsRef();
+    const bool useSegmentedClear = arraySize > LARGE_ARRAY_INIT_SEGMENT_SIZE &&
+        allocType == AllocType::MOVEABLE_OBJECT &&
+        (arrayClass.GetComponentTypeInfo()->IsPrimitiveType() ||
+         (elemBytes == RefField<>::GetSize() && arrayClass.GetComponentTypeInfo()->IsRef()));
     MAddress address;
 #if defined(MRT_GC_UNIT_TESTS)
     address = CJ_MRT_TestAllocateArrayStorage(
-        arraySize, isLargeRefArray ? AllocType::MOVEABLE_OBJECT_SEGMENTED_CLEAR : allocType);
+        arraySize, useSegmentedClear ? AllocType::MOVEABLE_OBJECT_SEGMENTED_CLEAR : allocType);
 #else
     address = HeapManager::Allocate(
-        arraySize, isLargeRefArray ? AllocType::MOVEABLE_OBJECT_SEGMENTED_CLEAR : allocType);
+        arraySize, useSegmentedClear ? AllocType::MOVEABLE_OBJECT_SEGMENTED_CLEAR : allocType);
 #endif
     if (LIKELY(address != NULL_ADDRESS)) {
-        if (UNLIKELY(isLargeRefArray)) {
-            return InitializeLargeRefArray(address, arraySize, nElems, arrayClass);
+        if (UNLIKELY(useSegmentedClear)) {
+            return InitializeLargeArray(address, arraySize, nElems, arrayClass);
         }
         MArray* newArray = reinterpret_cast<MArray*>(SetClassInfo(address, &arrayClass));
         newArray->SetLength(nElems);

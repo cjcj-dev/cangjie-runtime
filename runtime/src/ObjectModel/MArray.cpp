@@ -89,12 +89,13 @@ void NoteLargeArrayInitRootPhase(LargeArrayRootPhase phase, Mutator* mutator, bo
 
 #endif
 
-MArray* MArray::InitializeLargeRefArray(MAddress address, MSize arraySize, MIndex nElems,
+MArray* MArray::InitializeLargeArray(MAddress address, MSize arraySize, MIndex nElems,
                                         TypeInfo& arrayClass)
 {
 #if defined(MRT_GC_UNIT_TESTS)
     const ManagedSegmentedGc managedTestGc = GetManagedSegmentedGc();
-    const bool managedTest = managedTestGc != ManagedSegmentedGc::NONE;
+    const bool managedTest = managedTestGc != ManagedSegmentedGc::NONE &&
+        arrayClass.GetComponentTypeInfo()->IsRef();
     bool managedTestRequested = false;
     if (managedTest) {
         bool expectedInactive = false;
@@ -115,7 +116,7 @@ MArray* MArray::InitializeLargeRefArray(MAddress address, MSize arraySize, MInde
     array->SetInvisibleObject(true);
 
     Mutator* mutator = Mutator::GetMutator();
-    CHECK_DETAIL(mutator != nullptr, "large reference array initialization requires a mutator");
+    CHECK_DETAIL(mutator != nullptr, "large array initialization requires a mutator");
     mutator->PublishInvisibleRoot(array);
 #if defined(MRT_GC_UNIT_TESTS)
     if (g_largeArrayInitTestHooks.onPublish != nullptr) {
@@ -124,59 +125,69 @@ MArray* MArray::InitializeLargeRefArray(MAddress address, MSize arraySize, MInde
 #endif
 
     const size_t contentOffset = GetContentOffset();
-    CHECK_DETAIL(arraySize >= contentOffset, "large reference array size is smaller than its header");
+    CHECK_DETAIL(arraySize >= contentOffset, "large array size is smaller than its header");
     // Clear through the aligned object end, including tail padding. The allocator
     // deliberately leaves a reused extent dirty for this path.
     const size_t contentSize = static_cast<size_t>(arraySize) - contentOffset;
-    size_t processed = 0;
-    size_t segmentIndex = 0;
-    size_t epoch = g_gcCount.load(std::memory_order_acquire);
-    while (processed < contentSize) {
-        MArray* current = static_cast<MArray*>(mutator->LoadInvisibleRoot());
-        CHECK_DETAIL(current != nullptr, "large reference array lost its invisible root");
-        const size_t segment = std::min(contentSize - processed,
-                                        static_cast<size_t>(LARGE_REF_ARRAY_INIT_SEGMENT_SIZE));
-        const MAddress start = reinterpret_cast<MAddress>(current->ConvertToCArray()) + processed;
-        // RefField raw null is the all-zero word (RefField.h:427-433); unlike ZGC,
-        // no epoch-coloured null fill is needed in this runtime.
-        MemorySet(start, segment, 0, segment);
+    const bool isRefArray = arrayClass.GetComponentTypeInfo()->IsRef();
+    const size_t epochBefore = g_gcCount.load(std::memory_order_acquire);
+    const uintptr_t colorBefore = ::g_cjStoreGoodMask;
+    bool seenGcSafepoint = false;
+    // ZObjArrayAllocator::initialize (zObjArrayAllocator.cpp:140-200):
+    // only the first pass can request a restart. Primitive payloads never do.
+    auto initializeMemory = [&]() {
+        size_t segmentIndex = 0;
+        for (size_t processed = 0; processed < contentSize; ++segmentIndex) {
+            MArray* current = static_cast<MArray*>(mutator->LoadInvisibleRoot());
+            CHECK_DETAIL(current != nullptr, "large array lost its invisible root");
+            const size_t segment = std::min(contentSize - processed,
+                                            static_cast<size_t>(LARGE_ARRAY_INIT_SEGMENT_SIZE));
+            const MAddress start = reinterpret_cast<MAddress>(current->ConvertToCArray()) + processed;
+            // RefField raw null is the all-zero word (RefField.h:427-433); unlike ZGC,
+            // no epoch-coloured null fill is needed in this runtime.
+            MemorySet(start, segment, 0, segment);
 
-        {
-            // Entering a saferegion is this runtime's mutator/GC handshake edge.
-            // The root stays published throughout the whole interval.
-            ScopedEnterSaferegion yield(true);
+            {
+                // Entering a saferegion is this runtime's mutator/GC handshake edge.
+                // The root stays published throughout the whole interval.
+                ScopedEnterSaferegion yield(true);
 #if defined(MRT_GC_UNIT_TESTS)
-            if (g_largeArrayInitTestHooks.onYield != nullptr) {
-                g_largeArrayInitTestHooks.onYield(segmentIndex);
-            }
-            if (managedTest && !managedTestRequested && segmentIndex == 0) {
-                managedTestRequested = true;
-                CHECK_DETAIL(mutator->IsManagedContext(),
-                             "language-level segmented-array test must retain managed context");
-                const size_t gcCountBefore = g_gcCount.load(std::memory_order_acquire);
-                if (managedTestGc == ManagedSegmentedGc::YOUNG) {
-                    Heap::GetHeap().GetCollector().RequestGC(GC_REASON_YOUNG, false);
-                } else {
-                    Heap::GetHeap().GetCollector().RequestGC(GC_REASON_FORCE, false);
+                if (g_largeArrayInitTestHooks.onYield != nullptr) {
+                    g_largeArrayInitTestHooks.onYield(segmentIndex);
                 }
-                CHECK_DETAIL(g_gcCount.load(std::memory_order_acquire) > gcCountBefore,
-                             "language-level segmented-array GC did not advance the epoch");
-            }
+                if (managedTest && !managedTestRequested && segmentIndex == 0) {
+                    managedTestRequested = true;
+                    CHECK_DETAIL(mutator->IsManagedContext(),
+                                 "language-level segmented-array test must retain managed context");
+                    const size_t gcCountBefore = g_gcCount.load(std::memory_order_acquire);
+                    if (managedTestGc == ManagedSegmentedGc::YOUNG) {
+                        Heap::GetHeap().GetCollector().RequestGC(GC_REASON_YOUNG, false);
+                    } else {
+                        Heap::GetHeap().GetCollector().RequestGC(GC_REASON_FORCE, false);
+                    }
+                    CHECK_DETAIL(g_gcCount.load(std::memory_order_acquire) > gcCountBefore,
+                                 "language-level segmented-array GC did not advance the epoch");
+                }
 #endif
-        }
+            }
 
-        const size_t observedEpoch = g_gcCount.load(std::memory_order_acquire);
-        if (UNLIKELY(observedEpoch != epoch)) {
-            // GC may have copied a version containing a block from before this
-            // initializer's last write. Reacquire through the healed root and
-            // rewrite every block in the new version.
-            epoch = observedEpoch;
-            processed = 0;
-            segmentIndex = 0;
-            continue;
+            if (isRefArray && !seenGcSafepoint &&
+                (g_gcCount.load(std::memory_order_acquire) != epochBefore ||
+                 static_cast<uintptr_t>(::g_cjStoreGoodMask) != colorBefore)) {
+                seenGcSafepoint = true;
+                return false;
+            }
+            processed += segment;
         }
-        processed += segment;
-        ++segmentIndex;
+        return true;
+    };
+
+    if (!initializeMemory()) {
+        // Raw zero remains a legal null across every color flip in this runtime.
+        // The second pass therefore needs no remembered-bit fill, and cannot
+        // restart. Each segment still reloads the GC-healed invisible root.
+        const bool complete = initializeMemory();
+        CHECK_DETAIL(complete, "array initialization must complete on the second pass");
     }
 
     MArray* complete = static_cast<MArray*>(mutator->WithdrawInvisibleRoot());
