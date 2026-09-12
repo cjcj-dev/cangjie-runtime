@@ -1224,7 +1224,9 @@ void TracingCollector::PreGarbageCollection(bool isConcurrent, uint64_t gcIndex)
          Pretty(Heap::GetHeap().GetCollector().GetGCStats().GetThreshold()).Str(),
          static_cast<unsigned>(GetCurrentTagID()));
 
-    const int32_t threadCount = GetGCThreadCount(isConcurrent);
+    // zDriver.cpp:183,399-400: generation workers use their concurrent
+    // budget for both pause and concurrent work. Parallel workers are separate.
+    const int32_t threadCount = GetGCThreadCount(true);
     GetWorkers().SetActive();
     GetWorkers().SetActiveWorkers(static_cast<uint32_t>(threadCount));
     VLOG(REPORT, "GC generation active workers: %d", threadCount);

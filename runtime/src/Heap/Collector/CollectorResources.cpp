@@ -490,10 +490,11 @@ void CollectorResources::StartGCThreads()
         gcThreadPool = new (std::nothrow) GCThreadPool("gc", helperThreads, GCPoolThread::GC_THREAD_PRIORITY);
         CHECK_DETAIL(gcThreadPool != nullptr, "new GCThreadPool failed");
 
-        // zGeneration.cpp:141-152: each generation owns an independent set.
+        // zArguments.cpp:67-99, zWorkers.cpp:45-64: each generation uses
+        // the concurrent budget as its maximum and initial active count.
         // GCWorkers counts participants, excluding the coordinating driver.
-        youngWorkers = new GCWorkers(GCWorkers::Generation::YOUNG, gcThreadCount);
-        oldWorkers = new GCWorkers(GCWorkers::Generation::OLD, gcThreadCount);
+        youngWorkers = new GCWorkers(GCWorkers::Generation::YOUNG, concurrentGcThreadCount);
+        oldWorkers = new GCWorkers(GCWorkers::Generation::OLD, concurrentGcThreadCount);
 
     }
 
