@@ -1256,7 +1256,7 @@ inline void Mutator::GCPhasePreForward(GCPhase newPhase)
                 }
             }
             // Only publish a proven host solution. An unrecovered interior is
-            // not identity: derived must fail closed at base-not-remapped.
+            // not identity: derived waits for the remapped base.
             if (host != nullptr) {
                 remappedBases[oldObj] = PlainRootObject(root.LoadPlain());
             }

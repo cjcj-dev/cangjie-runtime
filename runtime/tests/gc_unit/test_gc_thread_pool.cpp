@@ -76,7 +76,7 @@ void PrepareOwnerRegion(GcHeapFixture& fx)
                            fx.obj0->GetSize(), region->GetRegionSize());
     region->AddLiveByteCount(fx.obj0->GetSize());
     region->PrepareForwardableRegion(region->GetMarkView<Generation::Old>());
-    region->SetRouteState(RegionInfo::RouteState::COMPACTED);
+    region->MarkForwardingDone();
 }
 
 bool InstallOwnerReceipt(GcHeapFixture& fx, MAddress& from, MAddress& to)
@@ -103,7 +103,7 @@ bool InstallOwnerReceipt(GcHeapFixture& fx, MAddress& from, MAddress& to)
     // exit, after which the real task must consume this active receipt through
     // CompleteRelocationRequests.
     region->SetInGhostRegion(1);
-    region->SetRouteState(RegionInfo::RouteState::COMPACTED);
+    region->MarkForwardingDone();
     return true;
 }
 

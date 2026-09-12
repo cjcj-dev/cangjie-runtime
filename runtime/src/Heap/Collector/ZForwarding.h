@@ -23,7 +23,6 @@
 #include "Heap/Allocator/ForwardingAllocator.h"
 #include "Heap/Allocator/ZAttachedArray.h"
 #include "Heap/Collector/ZForwardingLife.h"
-#include "Heap/Collector/RegionLifeClock.h"
 
 namespace MapleRuntime {
 
@@ -53,8 +52,6 @@ public:
         bool installed;
         Status status;
     };
-
-    static constexpr uint8_t kToLifeCapacity = 3;
 
     // zForwarding.cpp:55-84 — the old top and livemap belong to the
     // forwarding/from-page incarnation, not to the reusable page metadata.
@@ -147,7 +144,7 @@ public:
         _birth_flip = birthFlip;
         _required_mark_epoch = requiredMarkEpoch;
     }
-    bool page_life_current(RegionLifeClock::Carrier carrier) const;
+    bool page_life_current() const;
     size_t length() const { return _entries.length(); }
     bool is_provisional() const { return _provisional; }
 
@@ -182,7 +179,6 @@ public:
     // zPage.inline.hpp:176-185 seqnum bounds livemap/forwarding to one page life.
     // Record the to-region start+regionLifeSeq at insert; consume rejects when
     // InitRegionInfo has bumped that seq (RegionInfo.h:InitRegionInfo).
-    void note_to_life(MAddress to);
     static bool DestUsable(MAddress to);
     // Validate only the destination region incarnation. Header/route consumers
     // keep their existing object-shape checks after this life gate.
@@ -600,17 +596,12 @@ private:
           _overflowLock(),
           _overflow(),
           _receiptInstallLock(),
-          _to_life_n(0),
           _retired_required(false),
           _provisional(provisional),
           _from_page(),
           _relocated_remembered_fields_state(ZPublishState::none),
           _relocated_remembered_fields_publish_young_seqnum(0)
-    {
-        _to_lives[0] = ToLife{};
-        _to_lives[1] = ToLife{};
-        _to_lives[2] = ToLife{};
-    }
+    {}
 
     std::shared_ptr<ForwardingAllocator> _arena;
     const MAddress _start;
@@ -637,14 +628,6 @@ private:
     mutable std::mutex _overflowLock;
     std::unordered_map<MAddress, MAddress> _overflow;
     mutable std::mutex _receiptInstallLock;
-    struct ToLife {
-        MAddress start;
-        uint8_t legacySeq;
-        RegionLifeId lifeId;
-    };
-    Receipt::Status register_to_life_locked(MAddress to, uint8_t optimisticCount);
-    ToLife _to_lives[kToLifeCapacity];
-    std::atomic<uint8_t> _to_life_n;
     std::atomic<bool> _retired_required;
     const bool _provisional;
     FromPageView _from_page;
