@@ -1281,30 +1281,6 @@ void MutatorManager::TransitionAllMutatorsToGCPhase(GCPhase phase, bool young)
     }
 }
 
-void MutatorManager::EnsureCpuProfileFinish(std::list<Mutator*> &undoneMutators)
-{
-    while (undoneMutators.size() > 0) {
-        for (auto it = undoneMutators.begin(); it != undoneMutators.end();) {
-            Mutator* mutator = *it;
-            if (mutator->FinishedCpuProfile()) {
-                it = undoneMutators.erase(it);
-                continue;
-            }
-            if (mutator->InSaferegion() && mutator->TransitionToCpuProfile(false)) {
-                it = undoneMutators.erase(it);
-                continue;
-            }
-            if (!CpuProfiler::GetInstance().GetGenerator().GetIsStart()) {
-                mutator->ClearSuspensionFlag(Mutator::SUSPENSION_FOR_CPU_PROFILE);
-                mutator->SetCpuProfileState(Mutator::FINISH_CPUPROFILE);
-                it = undoneMutators.erase(it);
-                continue;
-            }
-            ++it;
-        }
-    }
-}
-
 void MutatorManager::TransitionAllMutatorsToCpuProfile()
 {
     bool worldStopped = WorldStopped();
@@ -1313,27 +1289,11 @@ void MutatorManager::TransitionAllMutatorsToCpuProfile()
             return;
         }
     }
-    std::list<Mutator*> undoneMutators;
-    VisitAllMutatorsExceptFinalizer([&undoneMutators](Mutator& mutator) {
+    VisitAllMutatorsExceptFinalizer([](Mutator& mutator) {
         if (mutator.GetCjthreadPtr() == MutatorManager::Instance().GetMainThreadHandle()) {
             mutator.SetSuspensionFlag(Mutator::SuspensionType::SUSPENSION_FOR_CPU_PROFILE);
-            undoneMutators.push_back(&mutator);
         }
     });
-    class CpuProfileHandshakeClosure : public HandshakeClosure {
-    public:
-        CpuProfileHandshakeClosure() : HandshakeClosure("CpuProfile") {}
-        void do_thread(ThreadLocalData* tls) override
-        {
-            Mutator* mutator = tls != nullptr ? tls->mutator : nullptr;
-            if (mutator == nullptr || !mutator->HasSuspensionRequest(Mutator::SUSPENSION_FOR_CPU_PROFILE)) {
-                return;
-            }
-            (void)mutator->TransitionToCpuProfile(tls == ThreadLocal::GetThreadLocalData());
-        }
-    } cpuCl;
-    Handshake::execute(&cpuCl);
-    EnsureCpuProfileFinish(undoneMutators);
     if (!worldStopped) {
         MutatorManagementWUnlock();
     }

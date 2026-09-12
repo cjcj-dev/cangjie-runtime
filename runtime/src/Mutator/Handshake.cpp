@@ -2,6 +2,8 @@
 
 #include <thread>
 
+#include "Mutator.h"
+#include "Mutator.inline.h"
 #include "MutatorManager.h"
 #include "ThreadLocal.h"
 
@@ -102,6 +104,10 @@ void HandshakeState::process_by_self()
         }
         op->do_handshake(handshakee_);
         remove_op(op);
+    }
+    Mutator* mutator = handshakee_ != nullptr ? handshakee_->mutator : nullptr;
+    if (mutator != nullptr && mutator->HasSuspensionRequest(Mutator::SUSPENSION_FOR_CPU_PROFILE)) {
+        (void)mutator->TransitionToCpuProfile(true);
     }
     UpdatePollValues(handshakee_);
 }
@@ -261,6 +267,10 @@ bool HasPendingSafepoint(ThreadLocalData* tls)
     }
     HandshakeState* state = Handshake::ForTls(tls);
     if (state != nullptr && state->has_operation()) {
+        return true;
+    }
+    if (tls != nullptr && tls->mutator != nullptr &&
+        tls->mutator->HasSuspensionRequest(Mutator::SUSPENSION_FOR_CPU_PROFILE)) {
         return true;
     }
     return MutatorManager::Instance().TlsHasMarkFlushPending(tls);

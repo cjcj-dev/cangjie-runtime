@@ -1562,7 +1562,6 @@ EXPORTS
     _ZN12MapleRuntime14MutatorManager21EnsurePhaseTransitionENS_7GCPhaseERNSt3__14listIPNS_7MutatorENS2_9allocatorIS5_EEEE @1583
     _ZN12MapleRuntime14MutatorManager21EpochHandshakeEnabledEv @1584
     _ZN12MapleRuntime14MutatorManager22DestroyExpiredMutatorsEv @1585
-    _ZN12MapleRuntime14MutatorManager22EnsureCpuProfileFinishERNSt3__14listIPNS_7MutatorENS1_9allocatorIS4_EEEE @1586
     _ZN12MapleRuntime14MutatorManager23RecordEpochHandshakeAckERNS_7MutatorEyb @1587
     _ZN12MapleRuntime14MutatorManager26ConcurrentStackScanEnabledEv @1588
     _ZN12MapleRuntime14MutatorManager26WaitUntilAllMutatorStoppedEv @1589

@@ -257,7 +257,6 @@ public:
     }
 #endif
 
-    void EnsureCpuProfileFinish(std::list<Mutator*> &undoneMutators);
     void TransitionAllMutatorsToCpuProfile();
 
 #if defined(GCINFO_DEBUG) && GCINFO_DEBUG
