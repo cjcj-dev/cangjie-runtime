@@ -93,7 +93,6 @@ extern "C" void HandleSafepoint(ThreadLocalData* tlData)
         mutator->DoEnterSaferegion();
         mutator->DoLeaveSaferegion();
     }
-    tlData->pollRequests.store(0, std::memory_order_release);
     UpdatePollValues(tlData);
     DLOG(SIGNAL, "HandleSafepoint, thread restarted.");
 }
@@ -110,7 +109,6 @@ extern "C" void HandleSafepointForArm(ThreadLocalData* tlData)
         mutator->DoEnterSaferegion();
         mutator->DoLeaveSaferegion();
     }
-    tlData->pollRequests.store(0, std::memory_order_release);
     UpdatePollValues(tlData);
     DLOG(SIGNAL, "HandleSafepoint, thread restarted.");
 }
