@@ -37,6 +37,7 @@
 #include "Concurrency/Concurrency.h"
 #include "Heap/Barrier/StoreBarrierBuffer.h"
 #include "Heap/Collector/GcTriggerFlags.h"
+#include "Heap/Collector/MarkEngine.h"
 #include "Heap/Collector/MarkPartialArray.h"
 #include "Heap/Collector/MarkStripe.h"
 #include "Heap/Collector/TenuringThreshold.h"
@@ -1432,165 +1433,66 @@ struct alignas(64) YoungStripedWorkerOutput {
     bool touched = false;
 };
 
-// ZMarkTerminate.inline.hpp:66-123 analogue. A worker becomes non-working
-// while it waits; the last non-working worker may terminate only after the
-// published stripe set is empty. Publishing work wakes one waiter instead of
-// relying on yield polling.
-class YoungMarkTerminate {
-public:
-    void Reset(size_t workers)
-    {
-        CHECK_DETAIL(workers != 0, "young mark termination needs a worker");
-        std::lock_guard<std::mutex> lock(mutex);
-        workerCount = workers;
-        working = workers;
-        awakening = 0;
-        terminated = false;
-    }
-
-    bool TryTerminate(const MarkStripeSet& stripes)
-    {
-        std::unique_lock<std::mutex> lock(mutex);
-        CHECK_DETAIL(working != 0, "young mark worker left termination twice");
-        --working;
-        if (working == 0 && stripes.IsEmpty()) {
-            VerifyMarkingStacks::VerifyEmpty(VerifyMarkingStacks::MarkingGeneration::YOUNG,
-                                             VerifyMarkingStacks::MarkingBoundary::TERMINATION,
-                                             VerifyMarkingStacks::MarkingContainer::STRIPE,
-                                             stripes.Population(), VerifyMarkingStacks::NO_MARKING_INDEX,
-                                             VerifyMarkingStacks::NO_MARKING_INDEX,
-                                             stripes.FirstNonEmptyStripe());
-            terminated = true;
-            condition.notify_all();
-            return true;
-        }
-        if (!stripes.IsEmpty()) {
-            ++working;
-            return false;
-        }
-        condition.wait(lock, [this]() { return terminated || awakening != 0; });
-        if (terminated) {
-            return true;
-        }
-        --awakening;
-        ++working;
-        return false;
-    }
-
-    void WakeUp()
-    {
-        std::lock_guard<std::mutex> lock(mutex);
-        if (terminated || working == 0 || working + awakening == workerCount) {
-            return;
-        }
-        ++awakening;
-        condition.notify_one();
-    }
-
-    bool Saturated() const
-    {
-        std::lock_guard<std::mutex> lock(mutex);
-        return terminated && working == 0;
-    }
-
-private:
-    size_t workerCount = 0;
-    size_t working = 0;
-    size_t awakening = 0;
-    bool terminated = false;
-    mutable std::mutex mutex;
-    std::condition_variable condition;
-};
-
 struct YoungStripedShared {
     WCollector* collector = nullptr;
     const std::unordered_set<MAddress>* reachableSlotDomain = nullptr;
     bool fullYoungScan = false;
     bool recordSlots = false;
+    bool partial = false;
     size_t workerCount = 0;
-    std::unique_ptr<MarkStripeSet> stripes;
-    std::unique_ptr<MarkingSMR> smr;
+    MarkDomain* domain = nullptr;
     std::vector<std::unique_ptr<YoungStripedWorkerOutput>> outputs;
-    YoungMarkTerminate terminate;
     std::atomic<size_t> stealSuccess{ 0 };
     std::atomic<size_t> stealFailure{ 0 };
 
+    MarkStripeSet& Stripes() { return domain->Stripes(); }
+    MarkingSMR& Smr() { return domain->Smr(); }
+    MarkTerminate& Terminate() { return domain->Terminate(); }
+    MarkThreadLocalStacks& Stacks(size_t workerId) { return domain->Stacks(workerId); }
+
     size_t StripeFor(BaseObject* object) const
     {
-        return stripes->StripeForAddress(reinterpret_cast<uintptr_t>(object));
+        return domain->Stripes().StripeForAddress(reinterpret_cast<uintptr_t>(object));
     }
 };
 
-class YoungStripedMarkingWork : public HeapWork {
+class YoungStripedMarkingWork : public GCRestartableWorkerTask {
 public:
-    YoungStripedMarkingWork(YoungStripedShared& shared, size_t workerSlot)
-        : shared(shared), workerSlot(workerSlot),
-          context(shared.workerCount, workerSlot, *shared.stripes)
-    {}
+    explicit YoungStripedMarkingWork(YoungStripedShared& shared) : shared(shared) {}
 
-    ~YoungStripedMarkingWork() override
+    void ResizeWorkers(uint32_t workers) override
     {
+        shared.workerCount = workers;
+        shared.domain->ResizeWorkers(workers);
+        while (shared.outputs.size() < workers) {
+            shared.outputs.emplace_back(std::make_unique<YoungStripedWorkerOutput>());
+        }
+    }
+
+    void Work(uint32_t workerId) override
+    {
+        workerSlot = workerId;
+        MarkContext local(shared.workerCount, workerId, shared.Stripes(), shared.Stacks(workerId));
+        context = &local;
+        size_t nMarked = 0;
+        (void)MarkEngine::FollowWork(local, shared.Smr(), shared.Stripes(), shared.Terminate(), workerId,
+                                     shared.partial,
+                                     [this, &nMarked](const MarkStackEntry& entry) {
+                                         shared.outputs[workerSlot]->touched = true;
+                                         ProcessObject(entry, nMarked);
+                                     },
+                                     &shared.stealSuccess, &shared.stealFailure, shared.domain);
+        (void)local.Stacks().Flush(shared.Stripes(), true);
+        local.Cache().Flush();
+        shared.outputs[workerSlot]->objectsMarked += nMarked;
         VerifyMarkingStacks::VerifyEmpty(VerifyMarkingStacks::MarkingGeneration::YOUNG,
                                          VerifyMarkingStacks::MarkingBoundary::WORKER_EXIT,
                                          VerifyMarkingStacks::MarkingContainer::LOCAL,
-                                         context.Stacks().Population(), 0, workerSlot);
-    }
-
-    void Execute(size_t) override
-    {
-        size_t nMarked = 0;
-        MarkingSMR& smr = *shared.smr;
-        MarkStripeSet& stripes = *shared.stripes;
-        for (;;) {
-            MarkStackEntry entry;
-            if (context.Stacks().Pop(smr, workerSlot, stripes, context.StripeId(), entry)) {
-                shared.outputs[workerSlot]->touched = true;
-                ProcessObject(entry, nMarked);
-                continue;
-            }
-            if (TrySteal()) {
-                continue;
-            }
-            if (context.Stacks().Flush(stripes, false)) {
-                shared.terminate.WakeUp();
-            }
-            if (WaitForWorkOrDone()) {
-                break;
-            }
-        }
-        context.Cache().Flush();
-        smr.Reclaim(workerSlot);
-        shared.outputs[workerSlot]->objectsMarked += nMarked;
+                                         local.Stacks().Population(), 0, workerSlot);
+        context = nullptr;
     }
 
 private:
-    bool TrySteal()
-    {
-        MarkingSMR& smr = *shared.smr;
-        MarkStripeSet& stripes = *shared.stripes;
-        const size_t home = context.StripeId();
-        for (size_t victim = stripes.Next(home); victim != home; victim = stripes.Next(victim)) {
-            MarkStripeStack* stack = context.Stacks().StealLocal(victim);
-            if (stack == nullptr) {
-                stack = stripes.At(victim).StealStack(smr, workerSlot);
-                if (stack != nullptr) {
-                    shared.stealSuccess.fetch_add(1, std::memory_order_relaxed);
-                } else {
-                    shared.stealFailure.fetch_add(1, std::memory_order_relaxed);
-                }
-            }
-            if (stack != nullptr) {
-                context.Stacks().Install(home, stack);
-                return true;
-            }
-        }
-        return false;
-    }
-
-    bool WaitForWorkOrDone()
-    {
-        return shared.terminate.TryTerminate(*shared.stripes);
-    }
 
     void PushObject(BaseObject* object, bool finalizable = false)
     {
@@ -1607,10 +1509,10 @@ private:
             address = reinterpret_cast<MAddress>(entry.object());
         }
         const size_t stripeIndex = shared.StripeFor(reinterpret_cast<BaseObject*>(address));
-        const bool publish = stripeIndex != context.StripeId();
-        context.Stacks().Push(*shared.stripes, stripeIndex, entry, publish);
+        const bool publish = stripeIndex != context->StripeId();
+        context->Stacks().Push(shared.Stripes(), stripeIndex, entry, publish);
         if (publish) {
-            shared.terminate.WakeUp();
+            shared.Terminate().Wake();
         }
     }
 
@@ -1705,7 +1607,7 @@ private:
         const bool isYoung = region->IsYoungRegion();
 
         if (isYoung) {
-            bool wasMarked = collector->MarkEntryObject(object, entry, &context.Cache());
+            bool wasMarked = collector->MarkEntryObject(object, entry, &context->Cache());
             if (wasMarked) {
                 if (!entry.follow()) {
                     return;
@@ -1744,8 +1646,8 @@ private:
     }
 
     YoungStripedShared& shared;
-    size_t workerSlot;
-    MarkContext context;
+    size_t workerSlot = 0;
+    MarkContext* context = nullptr;
 };
 
 void WCollector::TraceYoungClosureSerial(WorkStack& workStack, bool fullYoungScan,
@@ -1973,63 +1875,44 @@ void WCollector::TraceYoungClosureStriped(WorkStack& workStack, bool fullYoungSc
     g_markStripeArmed.fetch_add(1, std::memory_order_relaxed);
     const size_t dispelAtEntry = RegionInfo::GetDispelGhostCount();
 
-    int32_t workers = threadPool->GetMaxThreadNum() + 1;
-    {
-        const char* value = std::getenv("MRT_GCV2_MARKPAR_WORKERS");
-        if (value != nullptr && value[0] != '\0') {
-            int32_t requested = static_cast<int32_t>(std::strtol(value, nullptr, 10));
-            if (requested >= 1 && requested < workers) {
-                workers = requested;
-            }
-        }
-    }
-    if constexpr (kGcTriggerDynamicWorkersEnabled) {
-        // zDirector.cpp:783-793 — initial_workers selected each cycle.
-        const uint32_t selected = g_gcTriggerYoungWorkers.load(std::memory_order_relaxed);
-        if (selected >= 1 && selected < static_cast<uint32_t>(workers)) {
-            workers = static_cast<int32_t>(selected);
-        }
-    }
-    workers = std::max(workers, 1);
-    if (workers == 1) {
-        TraceYoungClosureSerial(workStack, fullYoungScan, reachableVec, reachableSlots, weakSlots,
-                                reachableSlotDomain);
-        VLOG(REPORT,
-             "[GCV2][markpar][striped] workers_active=1 workers_scheduled=1 stripes=1 stripe_shift=%zu "
-             "objects_marked=[%zu] reachable_n=%zu parallel=0 armed=%zu turned=%zu",
-             kMarkStripeShift, reachableVec.size(), reachableVec.size(),
-             g_markStripeArmed.load(std::memory_order_relaxed),
-             g_markStripeTurned.load(std::memory_order_relaxed));
-        return;
+    GCWorkers& workersSet = GetWorkers();
+    size_t workers = workersSet.ActiveWorkers();
+    if (workers == 0) {
+        workers = 1;
+        workersSet.SetActiveWorkers(1);
     }
     g_markStripeTurned.fetch_add(1, std::memory_order_relaxed);
 
-    const size_t stripeCount = MarkStripeCount(static_cast<size_t>(workers));
+    if (youngMarkDomain == nullptr) {
+        youngMarkDomain = std::make_unique<MarkDomain>(kMarkStripeMax, VerifyMarkingStacks::MarkingGeneration::YOUNG);
+    }
+    youngMarkDomain->BindWorkers(&workersSet);
+    youngMarkDomain->BindAbort(&collectorResources.GetMinorDriverPort().Abort());
+    youngMarkDomain->PrepareWork(workers);
+    const size_t stripeCount = youngMarkDomain->Stripes().Count();
     YoungStripedShared shared;
     shared.collector = this;
     shared.reachableSlotDomain = reachableSlotDomain;
     shared.fullYoungScan = fullYoungScan;
     shared.recordSlots = fullYoungScan;
-    shared.workerCount = static_cast<size_t>(workers);
-    shared.terminate.Reset(shared.workerCount);
-    shared.stripes = std::make_unique<MarkStripeSet>(stripeCount);
-    shared.smr = std::make_unique<MarkingSMR>(shared.workerCount);
+    shared.workerCount = workers;
+    shared.domain = youngMarkDomain.get();
     shared.outputs.reserve(shared.workerCount);
     for (size_t i = 0; i < shared.workerCount; ++i) {
         shared.outputs.emplace_back(std::make_unique<YoungStripedWorkerOutput>());
     }
 
     size_t rootCount = 0;
-    MarkThreadLocalStacks seed(stripeCount);
+    MarkThreadLocalStacks seed(youngMarkDomain->Stripes().Count());
     VerifyMarkingStacks::VerifyEmpty(VerifyMarkingStacks::MarkingGeneration::YOUNG,
                                      VerifyMarkingStacks::MarkingBoundary::START,
                                      VerifyMarkingStacks::MarkingContainer::LOCAL, seed.Population(), 0);
     VerifyMarkingStacks::VerifyEmpty(VerifyMarkingStacks::MarkingGeneration::YOUNG,
                                      VerifyMarkingStacks::MarkingBoundary::START,
                                      VerifyMarkingStacks::MarkingContainer::STRIPE,
-                                     shared.stripes->Population(), VerifyMarkingStacks::NO_MARKING_INDEX,
-                                     VerifyMarkingStacks::NO_MARKING_INDEX,
-                                     shared.stripes->FirstNonEmptyStripe());
+                                      shared.Stripes().Population(), VerifyMarkingStacks::NO_MARKING_INDEX,
+                                      VerifyMarkingStacks::NO_MARKING_INDEX,
+                                      shared.Stripes().FirstNonEmptyStripe());
     while (!workStack.empty()) {
         const MarkStackEntry entry = workStack.back();
         workStack.pop_back();
@@ -2040,46 +1923,32 @@ void WCollector::TraceYoungClosureStriped(WorkStack& workStack, bool fullYoungSc
         } else {
             address = reinterpret_cast<MAddress>(entry.object());
         }
-        seed.Push(*shared.stripes, shared.StripeFor(reinterpret_cast<BaseObject*>(address)), entry, true);
+        seed.Push(shared.Stripes(), shared.StripeFor(reinterpret_cast<BaseObject*>(address)), entry, true);
         ++rootCount;
     }
     CHECK_DETAIL(rootCount != 0, "striped mark requires a non-empty root stack");
     VerifyMarkingStacks::NoteProducer(VerifyMarkingStacks::MarkingGeneration::YOUNG,
                                       VerifyMarkingStacks::MarkingContainer::LOCAL, seed.Population());
-    (void)seed.Flush(*shared.stripes, true);
+    (void)seed.Flush(shared.Stripes(), true);
     VerifyMarkingStacks::NoteProducer(VerifyMarkingStacks::MarkingGeneration::YOUNG,
                                       VerifyMarkingStacks::MarkingContainer::STRIPE,
-                                      shared.stripes->Population());
+                                      shared.Stripes().Population());
     VerifyMarkingStacks::VerifyEmpty(VerifyMarkingStacks::MarkingGeneration::YOUNG,
                                      VerifyMarkingStacks::MarkingBoundary::SEED_PUBLISH,
                                      VerifyMarkingStacks::MarkingContainer::LOCAL, seed.Population(), 0);
 
-    const int32_t prevActive = threadPool->GetMaxActiveThreadNum();
-    const int32_t wantActive = workers - 1;
-    if (wantActive != prevActive) {
-        threadPool->SetMaxActiveThreadNum(wantActive);
-    }
-    for (int32_t worker = 1; worker < workers; ++worker) {
-        threadPool->AddWork(new YoungStripedMarkingWork(shared, static_cast<size_t>(worker)));
-    }
-    threadPool->Start();
-    YoungStripedMarkingWork mainTask(shared, 0);
-    mainTask.Execute(0);
-    threadPool->WaitFinish();
+    YoungStripedMarkingWork task(shared);
+    workersSet.Run(task);
+    youngMarkDomain->FinishWork();
     VerifyMarkingStacks::VerifyEmpty(VerifyMarkingStacks::MarkingGeneration::YOUNG,
                                      VerifyMarkingStacks::MarkingBoundary::JOIN,
                                      VerifyMarkingStacks::MarkingContainer::STRIPE,
-                                     shared.stripes->Population(), VerifyMarkingStacks::NO_MARKING_INDEX,
+                                     shared.Stripes().Population(), VerifyMarkingStacks::NO_MARKING_INDEX,
                                      VerifyMarkingStacks::NO_MARKING_INDEX,
-                                     shared.stripes->FirstNonEmptyStripe());
-    VerifyMarkingStacks::VerifyEmpty(VerifyMarkingStacks::MarkingGeneration::YOUNG,
-                                     VerifyMarkingStacks::MarkingBoundary::JOIN,
-                                     VerifyMarkingStacks::MarkingContainer::POOL,
-                                     threadPool->GetWorkCount(), 0);
-    CHECK_DETAIL(shared.terminate.Saturated(),
-                 "young striped closure returned without coordinated worker termination");
-    if (wantActive != prevActive) {
-        threadPool->SetMaxActiveThreadNum(prevActive);
+                                     shared.Stripes().FirstNonEmptyStripe());
+    if (!collectorResources.GetMinorDriverPort().Abort().Poll()) {
+        CHECK_DETAIL(shared.Terminate().Terminated(),
+                     "young striped closure returned without coordinated worker termination");
     }
 
     const size_t dispelAtExit = RegionInfo::GetDispelGhostCount();
@@ -2108,7 +1977,7 @@ void WCollector::TraceYoungClosureStriped(WorkStack& workStack, bool fullYoungSc
     }
 
     VLOG(REPORT,
-         "[GCV2][markpar][striped] workers_active=%zu workers_scheduled=%d stripes=%zu stripe_shift=%zu "
+         "[GCV2][markpar][striped] workers_active=%zu workers_scheduled=%zu stripes=%zu stripe_shift=%zu "
          "objects_marked=[%s] reachable_n=%zu parallel=1 armed=%zu turned=%zu steal_ok=%zu steal_fail=%zu",
          active, workers, stripeCount, kMarkStripeShift, markedStr.c_str(), reachableVec.size(),
          g_markStripeArmed.load(std::memory_order_relaxed),
@@ -2139,64 +2008,8 @@ void WCollector::TraceYoungClosure(WorkStack& workStack, bool fullYoungScan,
     }
     VerifyMarkingStacks::NoteProducer(VerifyMarkingStacks::MarkingGeneration::YOUNG,
                                       VerifyMarkingStacks::MarkingContainer::OWNER, workStack.size());
-    GCThreadPool* threadPool = GetThreadPool();
-#if defined(MRT_TESTABLE_INTERNALS)
-    // The unit product SO reaches each shipping closure through the real minor
-    // dispatcher.  Default builds have no selector and retain the production
-    // striped decision below.
-    if (const char* variant = std::getenv("MRT_GC_UNIT_YOUNG_WEAK_VARIANT")) {
-        if (std::strcmp(variant, "serial") == 0) {
-            TraceYoungClosureSerial(workStack, fullYoungScan, reachableVec, reachableSlots,
-                                    weakSlots, reachableSlotDomain);
-            return;
-        }
-        CHECK_DETAIL(threadPool != nullptr, "young weak variant %s requires a GC thread pool", variant);
-        if (std::strcmp(variant, "legacy-parallel") == 0) {
-            TraceYoungClosureParallel(workStack, fullYoungScan, reachableVec, reachableSlots,
-                                      weakSlots, threadPool, reachableSlotDomain);
-            return;
-        }
-        if (std::strcmp(variant, "striped") == 0) {
-            TraceYoungClosureStriped(workStack, fullYoungScan, reachableVec, reachableSlots,
-                                     weakSlots, threadPool, reachableSlotDomain);
-            return;
-        }
-        CHECK_DETAIL(false, "unknown MRT_GC_UNIT_YOUNG_WEAK_VARIANT=%s", variant);
-    }
-#endif
-    static const bool forceSerial = []() {
-        const char* value = std::getenv("MRT_GCV2_MARKPAR_FORCE_SERIAL");
-        return value != nullptr && std::strcmp(value, "1") == 0;
-    }();
-    const bool workersSet = std::getenv("MRT_GCV2_MARKPAR_WORKERS") != nullptr;
-    if (kMarkStriped && threadPool != nullptr && !forceSerial) {
-        TraceYoungClosureStriped(workStack, fullYoungScan, reachableVec, reachableSlots, weakSlots,
-                                 threadPool, reachableSlotDomain);
-        return;
-    }
-    const bool useParallel = threadPool != nullptr && workersSet && !forceSerial;
-    if (!useParallel) {
-        const char* reason = "workers_unset";
-        if (threadPool == nullptr) {
-            reason = "pool_unavailable";
-        } else if (forceSerial) {
-            reason = "force_serial";
-        } else if (!kMarkStriped) {
-            reason = "striped_off";
-        }
-        VLOG(REPORT, "[GCV2][markpar][parallel] fallback=serial %s kMarkStriped=%d armed=%zu turned=%zu", reason,
-             static_cast<int>(kMarkStriped), g_markStripeArmed.load(std::memory_order_relaxed),
-             g_markStripeTurned.load(std::memory_order_relaxed));
-        TraceYoungClosureSerial(workStack, fullYoungScan, reachableVec, reachableSlots, weakSlots,
-                                reachableSlotDomain);
-        VLOG(REPORT,
-             "[GCV2][markpar][parallel] workers_active=1 workers_scheduled=1 objects_marked=[%zu] "
-             "reachable_n=%zu parallel=0",
-             reachableVec.size(), reachableVec.size());
-        return;
-    }
-    TraceYoungClosureParallel(workStack, fullYoungScan, reachableVec, reachableSlots, weakSlots,
-                              threadPool, reachableSlotDomain);
+    TraceYoungClosureStriped(workStack, fullYoungScan, reachableVec, reachableSlots, weakSlots,
+                             GetThreadPool(), reachableSlotDomain);
 }
 
 // youngconc: SATB termination for concurrent young mark — same loop shape as

@@ -26,6 +26,7 @@
 #include "Allocator/RegionSpace.h"
 #include "Heap/Allocator/ForwardingTable.h"
 #include "Collector/CopyCollector.h"
+#include "Heap/Collector/MarkEngine.h"
 #include "Heap/Collector/RemsetScanStats.h"
 #include "Heap/Verify/MutatorRelocate.h"
 #include "Mutator/MutatorManager.h"
@@ -1483,6 +1484,7 @@ private:
     CrossRefHandler cycleRefHandlerForTest = nullptr;
 #endif
 
+    std::unique_ptr<MarkDomain> youngMarkDomain;
     ForwardTable fwdTable;
     // gc index 0 or 1 is used to distinguish previous gc and current gc.
     uint16_t currentTagID = 0;

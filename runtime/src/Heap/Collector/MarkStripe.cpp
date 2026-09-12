@@ -5,6 +5,7 @@
 // See https://cangjie-lang.cn/pages/LICENSE for license information.
 
 #include "Heap/Collector/MarkStripe.h"
+#include "Heap/Collector/MarkEngine.h"
 
 #include <limits>
 
@@ -230,12 +231,15 @@ MarkStripeStack* MarkStripeStackList::Pop(MarkingSMR& smr, size_t workerId)
     }
 }
 
-void MarkStripe::PublishStack(MarkStripeStack* stack, bool publish)
+void MarkStripe::PublishStack(MarkStripeStack* stack, bool publish, MarkTerminate* terminate)
 {
     if (publish) {
         published.Push(stack);
     } else {
         overflowed.Push(stack);
+    }
+    if (terminate != nullptr) {
+        terminate->Wake();
     }
 }
 
@@ -245,7 +249,8 @@ MarkStripeStack* MarkStripe::StealStack(MarkingSMR& smr, size_t workerId)
     return overflow != nullptr ? overflow : published.Pop(smr, workerId);
 }
 
-MarkStripeSet::MarkStripeSet(size_t stripeCount) : mask(stripeCount - 1)
+MarkStripeSet::MarkStripeSet(size_t stripeCount)
+    : capacityMask(stripeCount - 1), nstripesMask(stripeCount - 1)
 {
     CHECK_DETAIL(IsPowerOfTwo(stripeCount), "mark stripe count must be a power of two: %zu", stripeCount);
     stripes.reserve(stripeCount);
@@ -253,6 +258,45 @@ MarkStripeSet::MarkStripeSet(size_t stripeCount) : mask(stripeCount - 1)
         stripes.emplace_back(new (std::nothrow) MarkStripe());
         CHECK_DETAIL(stripes.back() != nullptr, "failed to allocate mark stripe index=%zu", i);
     }
+}
+
+void MarkStripeSet::SetNStripes(size_t value)
+{
+    CHECK_DETAIL(IsPowerOfTwo(value) && value <= stripes.size(),
+                 "nstripes=%zu must be power of two within capacity=%zu", value, stripes.size());
+    nstripesMask.store(value - 1, std::memory_order_relaxed);
+}
+
+bool MarkStripeSet::TrySetNStripes(size_t oldNStripes, size_t newNStripes)
+{
+    CHECK_DETAIL(IsPowerOfTwo(newNStripes) && newNStripes >= 1 && newNStripes <= stripes.size(),
+                 "nstripes=%zu must be power of two within capacity=%zu", newNStripes, stripes.size());
+    size_t expected = oldNStripes - 1;
+    return nstripesMask.compare_exchange_strong(expected, newNStripes - 1, std::memory_order_relaxed);
+}
+
+size_t MarkStripeSet::CalculateNStripes(size_t nworkers) const
+{
+    constexpr size_t multiplier = 4;
+    size_t target = std::max(nworkers * multiplier, multiplier);
+    size_t count = 1;
+    while (count < target && count < stripes.size()) {
+        count <<= 1;
+    }
+    return count;
+}
+
+bool MarkStripeSet::IsCrowded() const
+{
+    size_t population = 0;
+    const size_t crowdedThreshold = NStripes() << 4;
+    for (const auto& stripe : stripes) {
+        population += stripe->Population();
+        if (population > crowdedThreshold) {
+            return true;
+        }
+    }
+    return false;
 }
 
 bool MarkStripeSet::IsEmpty() const
@@ -286,22 +330,23 @@ size_t MarkStripeSet::FirstNonEmptyStripe() const
 
 size_t MarkStripeSet::StripeForAddress(uintptr_t address) const
 {
-    return (address >> MARK_STRIPE_SHIFT) & mask;
+    return (address >> MARK_STRIPE_SHIFT) & NStripesMask();
 }
 
 size_t MarkStripeSet::StripeForWorker(size_t nworkers, size_t workerId) const
 {
     CHECK_DETAIL(nworkers != 0 && workerId < nworkers, "invalid mark worker id=%zu count=%zu", workerId,
                  nworkers);
-    const size_t nstripes = Count();
-    const size_t spilloverLimit = (nworkers / nstripes) * nstripes;
+    const size_t mask = NStripesMask();
+    const size_t active = mask + 1;
+    const size_t spilloverLimit = (nworkers / active) * active;
     if (workerId < spilloverLimit) {
         return workerId & mask;
     }
     const size_t spilloverWorkers = nworkers - spilloverLimit;
     const size_t spilloverId = workerId - spilloverLimit;
     return static_cast<size_t>(static_cast<double>(spilloverId) *
-                               (static_cast<double>(nstripes) / static_cast<double>(spilloverWorkers)));
+                               (static_cast<double>(active) / static_cast<double>(spilloverWorkers)));
 }
 
 MarkThreadLocalStacks::MarkThreadLocalStacks(size_t stripeCount) : stacks(stripeCount, nullptr) {}
@@ -348,7 +393,7 @@ void MarkThreadLocalStacks::Push(MarkStripeSet& stripes, size_t stripeId, const 
             previous->Push(entry);
             return;
         }
-        stripes.At(stripeId).PublishStack(previous, publish);
+        stripes.At(stripeId).PublishStack(previous, publish, stripes.Terminate());
         slot = nullptr;
     }
 
@@ -399,7 +444,7 @@ bool MarkThreadLocalStacks::Flush(MarkStripeSet& stripes, bool publish)
         if (stack == nullptr) {
             continue;
         }
-        stripes.At(i).PublishStack(stack, publish);
+        stripes.At(i).PublishStack(stack, publish, stripes.Terminate());
         stack = nullptr;
         flushed = true;
     }
@@ -460,8 +505,9 @@ void MarkLiveCache::Flush()
     }
 }
 
-MarkContext::MarkContext(size_t workerCount, size_t workerId, MarkStripeSet& stripes)
-    : stripeId(stripes.StripeForWorker(workerCount, workerId)), stacks(stripes.Count()), cache(stripes.Count())
+MarkContext::MarkContext(size_t workerCount, size_t workerId, MarkStripeSet& stripes, MarkThreadLocalStacks& stacks)
+    : stripeId(stripes.StripeForWorker(workerCount, workerId)), nstripes(stripes.NStripes()), stacks(&stacks),
+      cache(stripes.Count())
 {}
 
 } // namespace MapleRuntime
