@@ -2615,7 +2615,13 @@ WCollector::RouteLookupTestResult WCollector::PlanRouteLookupForTest(BaseObject*
 BaseObject* WCollector::ForwardObjectImpl(BaseObject* obj, RegionInfo* ghostFromRegion,
                                           const RegionInfo::RetainScope& lease)
 {
-    CHECK(lease.covers(ghostFromRegion));
+    if (!lease.covers(ghostFromRegion)) {
+        const MAddress fromAddr = reinterpret_cast<MAddress>(obj);
+        if (const MAddress hit = ForwardingTable::FindTo(fromAddr)) {
+            return reinterpret_cast<BaseObject*>(hit);
+        }
+        return WaitForPageForwarding(obj, lease.HoldForwarding());
+    }
 #if defined(MRT_TESTABLE_INTERNALS)
     RunRemapWindowTestHook(8, ghostFromRegion, obj);
 #endif
