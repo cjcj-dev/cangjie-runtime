@@ -43,7 +43,6 @@ class LiveInfoArena {
         struct Zone {
             enum ZoneType : size_t {
                 LIVE_INFO,
-                BIT_MAP,
                 TOTAL_NUM,
             };
             uintptr_t zoneStartAddress = 0;
@@ -64,12 +63,7 @@ class LiveInfoArena {
 #if defined(_WIN64)
             lastCommitEndAddr[Zone::ZoneType::LIVE_INFO].store(start);
 #endif
-            start += unitCount * sizeof(LiveInfo);
-            allocZone[Zone::ZoneType::BIT_MAP].zoneStartAddress = start;
-            allocZone[Zone::ZoneType::BIT_MAP].zonePosition = start;
-#if defined(_WIN64)
-            lastCommitEndAddr[Zone::ZoneType::BIT_MAP].store(start);
-#endif
+            (void)unitCount;
         }
         uintptr_t Allocate(Zone::ZoneType type, size_t sz)
         {
