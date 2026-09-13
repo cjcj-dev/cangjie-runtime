@@ -21,7 +21,7 @@
 #include "Heap/Collector/Collector.h"
 #include "Heap/Collector/FinalizerProcessor.h"
 #include "Heap/Heap.h"
-#include "Heap/WCollector/IdleBarrier.h"
+#include "Heap/Barrier/Barrier.h"
 #include "ObjectModel/RefField.inline.h"
 #include "gc_unittest.hpp"
 
@@ -109,7 +109,7 @@ struct LoadFcFixture {
     GcHeapFixture heap;
     NoAnswerCollector collector;
     RememberedSet rememberedSet;
-    IdleBarrier barrier;
+    Barrier barrier;
     InstalledBarrierScope installed;
     RefField<false>* field = nullptr;
 };

@@ -352,22 +352,6 @@ extern "C" ArrayRef MCC_NewArray64(const TypeInfo* arrayInfo, MIndex nElems)
     return array;
 }
 
-// stackarr: default-off guard — stack value must not be written into a heap ref
-// field. Catches PEA stack-promoted RawArray/NewObject later stored via
-// WriteRefField (HashMap.init buckets). Gate: MRT_GCV2_STACKREF=1 or
-// MRT_GCV2_DIAG=stackref. Probe-only abort; product path unchanged when off.
-namespace {
-bool StackrefGuardEnabled()
-{
-    static const bool on = []() {
-        return MapleRuntime::DiagGate::LegacyOrToken("MRT_GCV2_STACKREF", "stackref");
-    }();
-    return on;
-}
-std::atomic<uint64_t> g_stackrefChecks{ 0 };
-std::atomic<uint64_t> g_stackrefHits{ 0 };
-} // namespace
-
 extern "C" void MCC_WriteRefField(const ObjectPtr ref, const ObjectPtr obj, RefField<false>* field)
 {
     // arrayinit2: compiler GEP of coloured base yields coloured field place; strip before use.
@@ -383,26 +367,6 @@ extern "C" void MCC_WriteRefField(const ObjectPtr ref, const ObjectPtr obj, RefF
     // forms are outside Heap.  Keeping the heap-slot decision authoritative
     // also fails safe for a malformed contradictory pair.
     if (Heap::IsHeapAddress(plainField)) {
-        // Heap holder + stack value: PEA stack-promoted RawArray/NewObject stored
-        // via WriteRefField (HashMap.init buckets). Use Mutator::IsStackAddr so
-        // legitimate non-heap constants / image pointers are not false-positive.
-        if (StackrefGuardEnabled()) {
-            g_stackrefChecks.fetch_add(1, std::memory_order_relaxed);
-            Mutator* mu = Mutator::GetMutator();
-            if (plainRef != nullptr && mu != nullptr &&
-                mu->IsStackAddr(reinterpret_cast<uintptr_t>(plainRef))) {
-                g_stackrefHits.fetch_add(1, std::memory_order_relaxed);
-                fprintf(stderr,
-                        "[GCV2][stackref] stack value written into heap field: "
-                        "ref=%p obj=%p field=%p checks=%llu hits=%llu\n",
-                        reinterpret_cast<void*>(plainRef), reinterpret_cast<void*>(plainObj),
-                        reinterpret_cast<void*>(plainField),
-                        static_cast<unsigned long long>(g_stackrefChecks.load(std::memory_order_relaxed)),
-                        static_cast<unsigned long long>(g_stackrefHits.load(std::memory_order_relaxed)));
-                fflush(stderr);
-                abort();
-            }
-        }
         Heap::GetBarrier().WriteReference(plainObj, *plainField, plainRef);
         return;
     }
@@ -1948,303 +1912,12 @@ extern "C" void* MCC_GetParameterAnnotations(ParameterInfo* parameterInfo, TypeI
     return parameterInfo->GetAnnotations(arrayTi);
 }
 
-// readnull: when ReadRefField returns null, record slot addr / raw 64-bit / return.
-// Gate MRT_GCV2_NULLSLOT (default off). Cap 64 samples. Probe-only; no product path change.
-namespace {
-bool ReadnullProbeEnabled()
-{
-    static const bool on = []() {
-        return MapleRuntime::DiagGate::LegacyOrToken("MRT_GCV2_NULLSLOT", "nullslot");
-    }();
-    return on;
-}
-std::atomic<size_t> g_readRefNullN{ 0 };
-} // namespace
-
-
-// fromver: split "the read barrier was skipped" from "the read barrier returned a
-// from-version". Census of CJ_MCC_ReadRefField's return value + the pre-barrier slot.
-// Gate MRT_GCV2_FROMVER (default off). Probe-only; no product path change.
-namespace {
-bool FromverProbeEnabled()
-{
-    static const bool on = []() {
-        return MapleRuntime::DiagGate::LegacyOrToken("MRT_GCV2_FROMVER", "fromver");
-    }();
-    return on;
-}
-
-// positive controls (calls / normal returns / consumer reachability) sit next to the
-// signature counters so a zero cannot be read as "the instrument never ran".
-std::atomic<uint64_t> g_fvCalls{ 0 };
-std::atomic<uint64_t> g_fvRetNull{ 0 };
-std::atomic<uint64_t> g_fvRetNonHeap{ 0 };
-std::atomic<uint64_t> g_fvRetNormal{ 0 };
-std::atomic<uint64_t> g_fvRetLocked{ 0 };
-std::atomic<uint64_t> g_fvRetForwarding{ 0 };
-std::atomic<uint64_t> g_fvRetForwarded{ 0 };
-std::atomic<uint64_t> g_fvSlotPlain{ 0 };
-std::atomic<uint64_t> g_fvSlotColoured{ 0 };
-std::atomic<uint64_t> g_fvSlotPlainFwd{ 0 };
-std::atomic<uint64_t> g_fvFwdLogged{ 0 };
-std::atomic<uint64_t> g_fvPlainFwdLogged{ 0 };
-std::atomic<uint64_t> g_fvMccCalls{ 0 };
-std::atomic<uint64_t> g_fvMccDirty{ 0 };
-std::atomic<uint64_t> g_fvMccLogged{ 0 };
-// which ForwardBarrier::ReadReference exit produced a from-version. Reconstructed from the
-// pre-barrier slot snapshot with the barrier's own predicates, so no barrier file is touched:
-//   is_load_good(oldField) true  -> ForwardBarrier.cpp:26-29 `return oldTarget` (fast return)
-//   false                        -> it went through make_load_good / ForwardObject and still
-//                                   came back with the from address
-std::atomic<uint64_t> g_fvFwdViaLoadGood{ 0 };
-std::atomic<uint64_t> g_fvFwdViaSlow{ 0 };
-// control on the reconstructed predicate itself: both outcomes must be non-degenerate,
-// otherwise the split above is measuring my RefField reconstruction, not the barrier.
-std::atomic<uint64_t> g_fvAllLoadGood{ 0 };
-std::atomic<uint64_t> g_fvAllNotLoadGood{ 0 };
-
-constexpr uint64_t FV_LOG_CAP = 4096;
-constexpr uint64_t FV_HEARTBEAT = 1ull << 22;
-
-#define FV_LD(c) static_cast<unsigned long long>((c).load(std::memory_order_relaxed))
-void FromverCensus(const char* why)
-{
-    std::fprintf(stderr,
-                 "[GCV2][fromver][census] why=%s calls=%llu ret_null=%llu ret_nonheap=%llu "
-                 "ret_normal=%llu ret_locked=%llu ret_forwarding=%llu ret_FORWARDED=%llu "
-                 "slot_plain=%llu slot_coloured=%llu slot_plain_FORWARDED=%llu "
-                 "fwd_via_loadgood=%llu fwd_via_slow=%llu all_loadgood=%llu all_notloadgood=%llu "
-                 "mcc_calls=%llu mcc_dirty=%llu\n",
-                 why, FV_LD(g_fvCalls), FV_LD(g_fvRetNull), FV_LD(g_fvRetNonHeap),
-                 FV_LD(g_fvRetNormal), FV_LD(g_fvRetLocked), FV_LD(g_fvRetForwarding),
-                 FV_LD(g_fvRetForwarded), FV_LD(g_fvSlotPlain), FV_LD(g_fvSlotColoured),
-                 FV_LD(g_fvSlotPlainFwd), FV_LD(g_fvFwdViaLoadGood), FV_LD(g_fvFwdViaSlow),
-                 FV_LD(g_fvAllLoadGood), FV_LD(g_fvAllNotLoadGood), FV_LD(g_fvMccCalls),
-                 FV_LD(g_fvMccDirty));
-    std::fflush(stderr);
-}
-
-// state code of the word the mutator is about to load as TypeInfo*; -1 = not a heap object.
-int FromverStateOf(const void* p)
-{
-    if (p == nullptr || !Heap::IsHeapAddress(const_cast<void*>(p))) {
-        return -1;
-    }
-    uint64_t hdr = __atomic_load_n(reinterpret_cast<const uint64_t*>(p), __ATOMIC_RELAXED);
-    return static_cast<int>((hdr >> 48) & 0x3u);
-}
-
-uint64_t FromverHeaderOf(const void* p)
-{
-    return __atomic_load_n(reinterpret_cast<const uint64_t*>(p), __ATOMIC_RELAXED);
-}
-
-// Called once per CJ_MCC_ReadRefField, after the barrier has produced `result`.
-void FromverAfterRead(ObjectPtr result, MAddress rawBefore, MAddress addrBefore, bool isGlobal,
-                      GCPhase phaseBefore, bool loadGoodBefore)
-{
-    uint64_t n = g_fvCalls.fetch_add(1, std::memory_order_relaxed);
-    GCPhase phaseAfter = Heap::GetHeap().GetGCPhase();
-    if (loadGoodBefore) {
-        g_fvAllLoadGood.fetch_add(1, std::memory_order_relaxed);
-    } else {
-        g_fvAllNotLoadGood.fetch_add(1, std::memory_order_relaxed);
-    }
-
-    // pre-barrier slot: hi16==0 is exactly the emitted fast path's skip condition
-    // (cjpm 0x765230 `shr $0x30` + `je`), so such a slot is read *without* this barrier
-    // everywhere the compiler inlined the test.
-    unsigned hi16 = static_cast<unsigned>((static_cast<uint64_t>(rawBefore) >> 48) & 0xffffu);
-    if (rawBefore != 0) {
-        if (hi16 == 0u) {
-            g_fvSlotPlain.fetch_add(1, std::memory_order_relaxed);
-            int st = FromverStateOf(reinterpret_cast<void*>(addrBefore));
-            if (st == static_cast<int>(ObjectState::FORWARDED)) {
-                uint64_t k = g_fvSlotPlainFwd.fetch_add(1, std::memory_order_relaxed);
-                if (g_fvPlainFwdLogged.fetch_add(1, std::memory_order_relaxed) < FV_LOG_CAP) {
-                    std::fprintf(stderr,
-                                 "[GCV2][fromver][plainfwd] k=%llu slot_target=%#llx hdr=%#llx "
-                                 "phase=%s(%u)\n",
-                                 static_cast<unsigned long long>(k),
-                                 static_cast<unsigned long long>(addrBefore),
-                                 static_cast<unsigned long long>(
-                                     FromverHeaderOf(reinterpret_cast<void*>(addrBefore))),
-                                 Collector::GetGCPhaseName(phaseBefore),
-                                 static_cast<unsigned>(phaseBefore));
-                    std::fflush(stderr);
-                }
-            }
-        } else {
-            g_fvSlotColoured.fetch_add(1, std::memory_order_relaxed);
-        }
-    }
-
-    if (result == nullptr) {
-        g_fvRetNull.fetch_add(1, std::memory_order_relaxed);
-    } else {
-        int st = FromverStateOf(result);
-        if (st < 0) {
-            g_fvRetNonHeap.fetch_add(1, std::memory_order_relaxed);
-        } else if (st == static_cast<int>(ObjectState::NORMAL)) {
-            g_fvRetNormal.fetch_add(1, std::memory_order_relaxed);
-        } else {
-            if (st == static_cast<int>(ObjectState::LOCKED)) {
-                g_fvRetLocked.fetch_add(1, std::memory_order_relaxed);
-            } else if (st == static_cast<int>(ObjectState::FORWARDING)) {
-                g_fvRetForwarding.fetch_add(1, std::memory_order_relaxed);
-            } else {
-                g_fvRetForwarded.fetch_add(1, std::memory_order_relaxed);
-            }
-            if (loadGoodBefore) {
-                g_fvFwdViaLoadGood.fetch_add(1, std::memory_order_relaxed);
-            } else {
-                g_fvFwdViaSlow.fetch_add(1, std::memory_order_relaxed);
-            }
-            if (g_fvFwdLogged.fetch_add(1, std::memory_order_relaxed) < FV_LOG_CAP) {
-                // region predicates are read after the call; phase_before/phase_after in the
-                // same line say whether a flip could have moved them under us.
-                Collector& fvC = Heap::GetHeap().GetCollector();
-                RefField<> fvSlot(rawBefore);
-                std::fprintf(stderr,
-                             "[GCV2][fromver][retstate] state=%d ret=%p hdr=%#llx "
-                             "raw_before=%#llx hi16=%#x tagged=%u tagid=%u addr_before=%#llx "
-                             "moved=%u is_global=%u load_good=%u unmovable=%u ghost=%u fromobj=%u "
-                             "phase_before=%s(%u) phase_after=%s(%u)\n",
-                             st, static_cast<void*>(result),
-                             static_cast<unsigned long long>(FromverHeaderOf(result)),
-                             static_cast<unsigned long long>(rawBefore), hi16,
-                              (raw(fvSlot.GetFieldValue()) & ::g_cjLoadBadMask) != 0 ? 1u : 0u,
-                              0u,
-                             static_cast<unsigned long long>(addrBefore),
-                             addrBefore == reinterpret_cast<MAddress>(result) ? 0u : 1u,
-                             isGlobal ? 1u : 0u, loadGoodBefore ? 1u : 0u,
-                             fvC.IsUnmovableFromObject(result) ? 1u : 0u,
-                             fvC.IsGhostFromObject(result) ? 1u : 0u,
-                             fvC.IsFromObject(result) ? 1u : 0u,
-                             Collector::GetGCPhaseName(phaseBefore),
-                             static_cast<unsigned>(phaseBefore),
-                             Collector::GetGCPhaseName(phaseAfter),
-                             static_cast<unsigned>(phaseAfter));
-                std::fflush(stderr);
-            }
-        }
-    }
-
-    if (n == 0) {
-        std::fprintf(stderr, "[GCV2][fromver] armed\n");
-        std::fflush(stderr);
-    } else if ((n & (FV_HEARTBEAT - 1)) == 0) {
-        FromverCensus("heartbeat");
-    }
-}
-
-// Consumer side: the three MCC entries that take a TypeInfo* straight out of an object
-// header word. A dirty arg (stateCode != 0) *is* the crash signature; dumping the census
-// at that instant is the correlator -- it says how many from-versions the barrier had
-// handed out by then.
-void FromverMccEntry(const char* where, const void* ti)
-{
-    if (!FromverProbeEnabled()) {
-        return;
-    }
-    g_fvMccCalls.fetch_add(1, std::memory_order_relaxed);
-    if (ti == nullptr) {
-        return;
-    }
-    unsigned hi16 = static_cast<unsigned>((reinterpret_cast<uint64_t>(ti) >> 48) & 0xffffu);
-    if (hi16 == 0u) {
-        return;
-    }
-    g_fvMccDirty.fetch_add(1, std::memory_order_relaxed);
-    if (g_fvMccLogged.fetch_add(1, std::memory_order_relaxed) < FV_LOG_CAP) {
-        std::fprintf(stderr, "[GCV2][fromver][mccdirty] where=%s arg=%p hi16=%#x state=%u\n", where,
-                     ti, hi16, hi16 & 3u);
-        std::fflush(stderr);
-        FromverCensus("mccdirty");
-    }
-}
-#undef FV_LD
-} // namespace
-
 extern "C" ObjectPtr CJ_MCC_ReadRefField(const ObjectPtr obj, RefField<false>* field)
 {
-    const bool isGlobal = IsGlobalStruct(obj, reinterpret_cast<MAddress>(field));
-    // Snapshot raw slot BEFORE barrier may self-heal (CAS) the field.
-    const MAddress rawBefore =
-        field != nullptr ? static_cast<MAddress>(raw(field->GetFieldValue())) : 0;
-    const MAddress addrBefore =
-        field != nullptr ? field->GetAddress() : 0;
-    const bool fvOn = FromverProbeEnabled();
-    const GCPhase fvPhaseBefore = fvOn ? Heap::GetHeap().GetGCPhase()
-                                       : GCPhase::GC_PHASE_IDLE;
-    // the barrier's own fast-return predicate, on the exact value the barrier
-    // is about to read (ForwardBarrier.cpp:26-29).
-    bool fvLoadGoodBefore = false;
-    if (fvOn) {
-        RefField<> fvSlotBefore(rawBefore);
-        fvLoadGoodBefore = Heap::GetHeap().GetCollector().is_load_good(fvSlotBefore);
+    if (IsGlobalStruct(obj, reinterpret_cast<MAddress>(field))) {
+        return Heap::GetBarrier().ReadStaticRef(RootSlotAt(static_cast<void*>(field)));
     }
-    ObjectPtr result = nullptr;
-    if (isGlobal) {
-        result = Heap::GetBarrier().ReadStaticRef(
-            RootSlotAt(static_cast<void*>(field))); // isGlobal classifies this ABI field as root storage.
-    } else {
-        result = Heap::GetBarrier().ReadReference(obj, *field);
-    }
-    // Log when ret is null. 乙 (raw/addr non-zero → barrier null) always logged (rare).
-    // 甲 (slot already 0) only in concurrent GC windows so idle Option nulls don't exhaust cap.
-    if (result == nullptr && ReadnullProbeEnabled()) {
-        GCPhase phase = Heap::GetHeap().GetGCPhase();
-        const bool yiCandidate = (addrBefore != 0) || (rawBefore != 0);
-        const bool inModeAWindow =
-            phase == GCPhase::GC_PHASE_PREFORWARD || phase == GCPhase::GC_PHASE_FORWARD ||
-            phase == GCPhase::GC_PHASE_ENUM || phase == GCPhase::GC_PHASE_TRACE ||
-            phase == GCPhase::GC_PHASE_CLEAR_SATB_BUFFER ||
-            phase == GCPhase::GC_PHASE_POST_TRACE ||
-            phase == GCPhase::GC_PHASE_RECLAIM_SATB_NODE ||
-            phase == GCPhase::GC_PHASE_IDLE;
-        if (yiCandidate || inModeAWindow) {
-            size_t n = g_readRefNullN.fetch_add(1, std::memory_order_relaxed);
-            if (n < 256) {
-                const MAddress rawAfter =
-                    field != nullptr ? static_cast<MAddress>(raw(field->GetFieldValue())) : 0;
-                const unsigned fieldInHeap =
-                    field != nullptr && Heap::IsHeapAddress(reinterpret_cast<void*>(field)) ? 1u : 0u;
-                const unsigned holderInHeap =
-                    obj != nullptr && Heap::IsHeapAddress(obj) ? 1u : 0u;
-                const MAddress off =
-                    (obj != nullptr && field != nullptr)
-                        ? (reinterpret_cast<MAddress>(field) - reinterpret_cast<MAddress>(obj))
-                        : 0;
-                // 甲: raw address bits already 0; 乙: non-null raw decoded to null by barrier;
-                // 丙 candidate: field not in heap / holder not in heap (address-side).
-                const char* kind = "jia";
-                if (addrBefore != 0) {
-                    kind = "yi";
-                } else if (rawBefore != 0) {
-                    kind = "yi_coloured_null";
-                } else if (!fieldInHeap || (obj != nullptr && !holderInHeap)) {
-                    kind = "bing_addr";
-                }
-                std::fprintf(stderr,
-                             "[GCV2][nullslot] path=read_ref_null n=%zu field=%p raw_before=%#lx "
-                             "addr_before=%#lx ret=%p raw_after=%#lx holder=%p off=%#lx is_global=%u "
-                             "field_in_heap=%u holder_in_heap=%u phase=%s(%u) kind=%s\n",
-                             n, static_cast<void*>(field), static_cast<unsigned long>(rawBefore),
-                             static_cast<unsigned long>(addrBefore), static_cast<void*>(result),
-                             static_cast<unsigned long>(rawAfter), static_cast<void*>(obj),
-                             static_cast<unsigned long>(off), isGlobal ? 1u : 0u, fieldInHeap,
-                             holderInHeap, Collector::GetGCPhaseName(phase),
-                             static_cast<unsigned>(phase), kind);
-                std::fflush(stderr);
-            }
-        }
-    }
-    if (fvOn) {
-        FromverAfterRead(result, rawBefore, addrBefore, isGlobal, fvPhaseBefore,
-                         fvLoadGoodBefore);
-    }
-    return result;
+    return Heap::GetBarrier().ReadReference(obj, *field);
 }
 
 extern "C" ObjectPtr CJ_MCC_ReadWeakRef(const ObjectPtr obj, RefField<false>* field)
@@ -2307,7 +1980,6 @@ extern "C" bool CJ_MCC_IsSubType(TypeInfo* typeInfo, TypeInfo* superTypeInfo)
 {
     typeInfo = PlainTypeInfoPtr(typeInfo);
     superTypeInfo = PlainTypeInfoPtr(superTypeInfo);
-    FromverMccEntry("IsSubType", typeInfo);
     if (typeInfo == nullptr || superTypeInfo == nullptr) {
         return false;
     }
@@ -2515,7 +2187,6 @@ extern "C" FuncPtr* CJ_MCC_GetMTable(TypeInfo* ti, TypeInfo* itf)
 {
     ti = PlainTypeInfoPtr(ti);
     itf = PlainTypeInfoPtr(itf);
-    FromverMccEntry("GetMTable", ti);
     return ti->GetMTable(itf);
 }
 
@@ -2523,7 +2194,6 @@ extern "C" TypeInfo* CJ_MCC_GetMethodOuterTI(TypeInfo* ti, TypeInfo* itf, U64 in
 {
     ti = PlainTypeInfoPtr(ti);
     itf = PlainTypeInfoPtr(itf);
-    FromverMccEntry("GetMethodOuterTI", ti);
     return ti->GetMethodOuterTI(itf, index);
 }
 

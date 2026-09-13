@@ -33,11 +33,9 @@ public:
 #ifdef MRT_TESTABLE_INTERNALS
     static size_t GetStaticRootCountForTesting();
 #endif
-    static Barrier& GetBarrier() { return **currentBarrierPtr; }
+    static Barrier& GetBarrier() { return *barrierPtr; }
     virtual RememberedSet& GetRememberedSet() = 0;
 
-    // concurrent gc uses barrier to access heap.
-    static bool UseBarrier() { return *currentBarrierPtr != stwBarrierPtr; }
 
     virtual void Init(const HeapParam& vmHeapParam) = 0;
     virtual void Fini() = 0;
@@ -92,7 +90,6 @@ public:
 
     static bool IsHeapAddress(const void* addr) { return IsHeapAddress(reinterpret_cast<MAddress>(addr)); }
 
-    virtual void InstallBarrier(const GCPhase) = 0;
 
     virtual GCPhase GetGCPhase() const = 0;
 
@@ -171,8 +168,7 @@ public:
     }
 
     virtual ~Heap() {}
-    static Barrier** currentBarrierPtr; // record ptr for fast access
-    static Barrier* stwBarrierPtr;      // record nonGC barrier
+    static Barrier* barrierPtr;
     static MAddress heapCurrentEnd;
 
 private:

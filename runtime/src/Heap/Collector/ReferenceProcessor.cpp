@@ -122,7 +122,7 @@ ReferenceProcessor::WeakCleanResult ReferenceProcessor::CleanWeakReferenceWithRe
 {
     HeapSlot<>& referentField = HeapSlotAt<>(reinterpret_cast<uintptr_t>(reference) + TYPEINFO_PTR_SIZE);
     const zpointer observed = referentField.GetFieldValue(std::memory_order_acquire);
-    BaseObject* referent = to_object(referentField.GetTargetObject(std::memory_order_acquire));
+    BaseObject* referent = to_object(RefField<>(observed).GetTargetObject());
     if (referent == nullptr) {
         return { false, false, nullptr };
     }
@@ -145,7 +145,7 @@ ReferenceProcessor::WeakCleanResult ReferenceProcessor::CleanWeakReferenceWithRe
         g_beforeWeakCleanCasForTest();
     }
 #endif
-    if (HealSlot(referentField, observed, to_zpointer(0), HealSite::PostTraceReadReference,
+    if (HealSlot(referentField, observed, to_zpointer(0), HealSite::BarrierWeakClean,
                  HealNull::Allow, std::memory_order_acq_rel, std::memory_order_acquire)) {
         return { true, false, nullptr };
     }

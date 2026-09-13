@@ -4,7 +4,6 @@
 //
 // See https://cangjie-lang.cn/pages/LICENSE for license information.
 
-
 #ifndef MRT_REF_FIELD_H
 #define MRT_REF_FIELD_H
 
@@ -32,53 +31,22 @@ namespace MapleRuntime {
 class BaseObject;
 class WCollector;
 
-namespace HealPairDiag {
-void NoteZeroWrite(const void* slot, uintptr_t oldRaw, uintptr_t newRaw, uint16_t site);
-}
-
-// Instrumentation for the ZBarrier::self_heal port below. Declared rather than
-// included for the same reason HealPairDiag is: this header sits under Heap/ in
-// the include graph, not above it. Full contract in Heap/Verify/ZgcSelfHealDiag.h.
-namespace ZgcSelfHealDiag {
-void CheckTransitionMonotonicity(zpointer oldPtr, zpointer healPtr);
-void NotePreconditions(bool ptrFastPath, bool healFastPath, zpointer healPtr);
-void NoteEnter();
-void NoteNullSkip();
-void NoteHealed(unsigned iterations);
-void NoteFastPathExit(unsigned iterations);
-void NoteRetry(unsigned iterations);
-}
+// ZBarrier assertion is owned by the barrier, independently of diagnostics.
+void AssertBarrierTransitionMonotonicity(zpointer oldPtr, zpointer newPtr);
 
 // Every heap/root healing write names its owning algorithm.  This is deliberately
 // exhaustive: a catch-all value would recreate the attribution gap HealSlot closes.
 enum class HealSite : uint16_t {
     BaseObjectCompareExchangeRefField,
+    BarrierReadReference,
+    BarrierWeakClean,
     BarrierReadStaticReference,
     BarrierCompareAndSwapReference,
-    EnumCompareAndSwapReference,
-    EnumCopyStructArrayRecolour,
-    EnumReadReference,
-    ForwardAtomicReadReference,
-    ForwardCompareAndSwapReference,
-    ForwardReadReference,
-    IdleAtomicReadReference,
-    IdleCompareAndSwapReference,
-    IdleReadReference,
     MutatorPreForwardHeaderlessRecord,
     MutatorPreForwardInterior,
     MutatorPreForwardRoot,
     MutatorPreForwardStackField,
     MutatorStripRootColour,
-    PostTraceAtomicReadReference,
-    PostTraceCompareAndSwapReference,
-    PostTraceCopyStructArrayRecolour,
-    PostTraceReadReference,
-    PreforwardAtomicReadReference,
-    PreforwardCompareAndSwapReference,
-    PreforwardReadReference,
-    TraceCompareAndSwapReference,
-    TraceCopyStructArrayRecolour,
-    TraceReadReference,
     TracingCollectorResurrectFinalizer,
     WCollectorEnumRawInteriorRoot,
     WCollectorEnumRawRoot,
@@ -329,33 +297,11 @@ inline bool HealSlot(HeapSlot<isAtomic>& slot, zpointer expected, zpointer desir
         return false;
     }
     bool ok = slot.CompareExchange(expected, desired, succOrder, failOrder, observedOut);
-    if (ok && is_null(desired)) {
-        HealPairDiag::NoteZeroWrite(&slot, raw(expected), raw(desired), static_cast<uint16_t>(site));
-    }
     return ok;
 }
 
-// ZBarrier::self_heal is the product path (zBarrier.inline.hpp:72-110). The
-// bounded kSelfHealAttempts loop is gone: ZGC's loop is unbounded and
-// terminates on colour monotonicity.
-
-// OpenJDK ZBarrier::self_heal, zBarrier.inline.hpp:72-110, transcribed.
-//
-// Two things it does that the bounded kSelfHealAttempts loop does not:
-//   * :89       assert_transition_monotonicity before every CAS attempt;
-//   * :103-107  on a lost CAS it re-applies the *same* heal value to the newly observed
-//               word, so a slot another barrier left on weaker (remapped or finalizable)
-//               metadata still gets upgraded. The bounded loop instead re-resolves from
-//               scratch and, once kSelfHealAttempts is spent, returns the payload without
-//               writing the slot at all -- which is how a slot can stay weak indefinitely.
-//
-// fastPath is the barrier's own ZBarrierFastPath, passed in rather than assumed: the tree
-// carries two definitions of load-good (Collector.h:161-182) and the exit test has to be
-// the one this caller would itself have accepted.
-//
-// The loop is unbounded, exactly as ZGC's is. Entry enforces ZGC's value
-// qualification: the observed word is load-bad and the resolved heal word is
-// load-good. Transition diagnostics then witness monotonic convergence.
+// ZBarrier::self_heal, zBarrier.inline.hpp:72-110. CAS retries only upgrade
+// metadata, and stop when another writer has already satisfied this predicate.
 template<bool isAtomic, typename FastPath>
 inline bool ZgcSelfHeal(HeapSlot<isAtomic>& slot, zpointer ptr, zpointer healPtr, FastPath fastPath,
                         HealSite site, HealNull allowNull = HealNull::Disallow)
@@ -364,24 +310,24 @@ inline bool ZgcSelfHeal(HeapSlot<isAtomic>& slot, zpointer ptr, zpointer healPtr
     // ZGC's guard is `is_null_assert_load_good(heal_ptr) && !is_null_any(ptr)`; is_null_any
     // tests the address bits rather than the whole word, and ColourPredicates::has_address
     // (ColourPredicates.h:37-40) is that test.
-    if (allowNull == HealNull::Disallow && is_null(healPtr) &&
+    if (allowNull == HealNull::Disallow && !ColourPredicates::has_address(raw(healPtr)) &&
         ColourPredicates::has_address(static_cast<uintptr_t>(raw(ptr)))) {
-        ZgcSelfHealDiag::NoteNullSkip();
+
         return false;
     }
 
-    ZgcSelfHealDiag::NoteEnter();
     // :82-87  assert_is_valid / assert(!fast_path(ptr)) / assert(fast_path(heal_ptr)) /
     //         assert(ZPointer::is_remapped(heal_ptr))
     const bool ptrFastPath = fastPath(ptr);
     const bool healFastPath = fastPath(healPtr);
-    ZgcSelfHealDiag::NotePreconditions(ptrFastPath, healFastPath, healPtr);
+
     CHECK_DETAIL(!ptrFastPath, "ZBarrier::self_heal input must be load-bad");
-    CHECK_DETAIL(healFastPath, "ZBarrier::self_heal value must be load-good");
+    CHECK_DETAIL(healFastPath, "ZBarrier::self_heal value must satisfy fast path");
+    CHECK(ColourPredicates::is_remapped(raw(healPtr), ::g_cjLoadBadMask));
 
     // :89
-    for (unsigned iterations = 0;; ++iterations) {
-        ZgcSelfHealDiag::CheckTransitionMonotonicity(ptr, healPtr);
+    for (;;) {
+        AssertBarrierTransitionMonotonicity(ptr, healPtr);
 
         // :91-92  Heal.
         // HealNull::Allow: the :73-79 guard above is ZGC's and has already been applied once
@@ -391,20 +337,20 @@ inline bool ZgcSelfHeal(HeapSlot<isAtomic>& slot, zpointer ptr, zpointer healPtr
         if (HealSlot(slot, ptr, healPtr, site, HealNull::Allow, std::memory_order_relaxed,
                      std::memory_order_relaxed, &prevPtr)) {
             // :93-96  Success
-            ZgcSelfHealDiag::NoteHealed(iterations);
+
             return true;
         }
 
         if (fastPath(prevPtr)) {
             // :98-101  Must not self heal
-            ZgcSelfHealDiag::NoteFastPathExit(iterations);
+
             return false;
         }
 
         // :103-107  The oop location was healed by another barrier, but still needs upgrading.
         // Re-apply healing to make sure the oop is not left with weaker (remapped or
         // finalizable) metadata bits than what this barrier tried to apply.
-        ZgcSelfHealDiag::NoteRetry(iterations);
+
         ptr = prevPtr;
     }
 }
@@ -413,7 +359,7 @@ template<bool isAtomic = false>
 inline void StoreColoured(HeapSlot<isAtomic>& slot, zaddress value, MAddress colour,
                           std::memory_order order = std::memory_order_relaxed)
 {
-    zpointer coloured = is_null(value) ? zpointer::null : to_zpointer(raw(value) | colour);
+    zpointer coloured = to_zpointer(raw(value) | colour);
     slot.StoreColoured(coloured, order);
 }
 
@@ -425,6 +371,7 @@ using RefField = HeapSlot<isAtomic>;
 // OpenJDK ZUncoloredRoot stores an unsafe, uncoloured address in the root and
 // carries colour metadata outside the slot (zUncoloredRoot.hpp:32-54).
 class RootSlot {
+    friend class Barrier;
 public:
     RootSlot() : rootValue(zaddress_unsafe::null) {}
 
@@ -440,6 +387,14 @@ private:
     {
         zaddress_unsafe unsafeValue = to_zaddress_unsafe(raw(value));
         __atomic_store(&rootValue, &unsafeValue, order);
+    }
+
+    zaddress_unsafe ExchangePlain(zaddress desired, std::memory_order order)
+    {
+        zaddress_unsafe value = to_zaddress_unsafe(raw(desired));
+        zaddress_unsafe previous;
+        __atomic_exchange(&rootValue, &value, &previous, order);
+        return previous;
     }
 
     bool CompareExchangePlain(zaddress_unsafe expected, zaddress desired,

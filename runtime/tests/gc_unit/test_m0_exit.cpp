@@ -26,7 +26,7 @@
 #include "Heap/Collector/Collector.h"
 #include "Heap/Heap.h"
 #include "Heap/Verify/M0ExitDiagnostics.h"
-#include "Heap/WCollector/IdleBarrier.h"
+#include "Heap/Barrier/Barrier.h"
 #include "Mutator/MutatorManager.h"
 #include "ObjectModel/MArray.inline.h"
 #include "ObjectModel/RefField.inline.h"
@@ -213,7 +213,7 @@ struct ReadEntryFixture {
     GcHeapFixture heap;
     NoAnswerCollector collector;
     RememberedSet rememberedSet;
-    IdleBarrier barrier;
+    Barrier barrier;
     InstalledBarrierScope installed;
     RefField<>* field = nullptr;
 };

@@ -87,7 +87,8 @@ __attribute__((visibility("hidden"))) constexpr bool ColourFamilyHasExactlyOneBi
 }
 
 // Single source of truth for the full-colour producer/consumer contract.  A
-// non-null HeapSlot word contains exactly one bit from every row.  Tests derive
+// HeapSlot word contains one epoch bit per row, except remembered may hold
+// both bits after a load/mark heal. Coloured null uses the same metadata. Tests derive
 // both the accepted cardinality and the missing-family negatives from this
 // table, so removing a wired family cannot silently weaken the oracle.
 constexpr uintptr_t kHeapSlotRequiredColourFamilies[] = {
@@ -108,10 +109,9 @@ __attribute__((visibility("hidden"))) constexpr bool IsPlainNonNullSlotWord(uint
 }
 
 // Fail-closed admission for the full-colour HeapSlot carrier.  The producer
-// matrix has two non-null rows (current store-good and stale-load-bad); both
-// write exactly one bit from every wired family.  Keeping the accepted set as
-// the conjunction of those family rows makes a removed/partial producer shrink
-// the test oracle instead of silently widening this classifier.
+// includes store-good, load/mark-healed and stale-load-bad words. Remembered=11
+// is the ZGC state that forces the next store slow path; other families carry
+// exactly one epoch bit. Raw null remains valid for uninitialized storage.
 __attribute__((visibility("hidden"))) constexpr SlotWordVerdict ClassifySlotWord(uintptr_t value)
 {
     if (value == 0) {
@@ -119,12 +119,15 @@ __attribute__((visibility("hidden"))) constexpr SlotWordVerdict ClassifySlotWord
     }
     constexpr uintptr_t unusedHighMask = uintptr_t(0xf) << 60u;
     if ((value & unusedHighMask) != 0 ||
-        (!kFinalizableWired && (value & FINALIZABLE_MASK) != 0) ||
-        (value & kPointerAddressMask) == 0) {
+        (!kFinalizableWired && (value & FINALIZABLE_MASK) != 0)) {
         return SlotWordVerdict::kIllegal;
     }
     for (size_t i = 0; i < kHeapSlotRequiredColourFamilyCount; ++i) {
-        if (!ColourFamilyHasExactlyOneBit(value, kHeapSlotRequiredColourFamilies[i])) {
+        const uintptr_t family = kHeapSlotRequiredColourFamilies[i];
+        // ZAddress::load_good/mark_good set both remembered bits. That state
+        // intentionally trips the next store barrier (zAddress.inline.hpp:752-780).
+        if (family == REMEMBERED_MASK ? (value & family) == 0
+                                     : !ColourFamilyHasExactlyOneBit(value, family)) {
             return SlotWordVerdict::kIllegal;
         }
     }
@@ -138,7 +141,7 @@ __attribute__((visibility("hidden"))) constexpr uintptr_t MakeStoreGoodSlotWord(
     uintptr_t address, uintptr_t storeGoodMask)
 {
     const uintptr_t payload = address & kPointerAddressMask;
-    return payload == 0 ? 0 : payload | storeGoodMask;
+    return payload | storeGoodMask;
 }
 
 } // namespace MapleRuntime

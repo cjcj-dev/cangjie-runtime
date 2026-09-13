@@ -61,7 +61,7 @@ Uptr BrokenNullNonHeap(Uptr /*slotVal*/, Uptr nonHeapTarget, bool isHeapTarget)
 }
 
 // Model of relroroot / rostatic self-heal gate: non-heap loadGood ⇒ skip CAS write-back.
-// Product: EnumBarrier/TraceBarrier/ForwardBarrier ReadReference (822b0d64).
+// Product: EnumBarrier/TraceBarrier/Barrier ReadReference (822b0d64).
 bool ModelShouldSelfHealCas(bool loadGoodIsHeap)
 {
     return loadGoodIsHeap;

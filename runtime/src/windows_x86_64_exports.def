@@ -1170,7 +1170,6 @@ EXPORTS
     _ZN12MapleRuntime11EHFrameInfoD2Ev @1183
     _ZN12MapleRuntime11EHStackInfo16FillInStackTraceEv @1184
     _ZN12MapleRuntime11EHStackInfoD0Ev @1185
-    _ZN12MapleRuntime11EnumBarrierD0Ev @1186
     _ZN12MapleRuntime11GCStackInfo16FillInStackTraceEv @1189
     _ZN12MapleRuntime11GCStackInfoD0Ev @1190
     _ZN12MapleRuntime11HeapManager4FiniEv @1191
@@ -1178,7 +1177,6 @@ EXPORTS
     _ZN12MapleRuntime11HeapManager8AllocateEyNS_9AllocTypeE @1193
     _ZN12MapleRuntime11HeapManagerC1Ev @1194
     _ZN12MapleRuntime11HeapManagerC2Ev @1195
-    _ZN12MapleRuntime11IdleBarrierD0Ev @1196
     _ZN12MapleRuntime11MinorGCALot10AllocCountEv @1197
     _ZN12MapleRuntime11MinorGCALot12TriggerCountEv @1198
     _ZN12MapleRuntime11MinorGCALot20AfterSuccessfulAllocEy @1199
@@ -1311,7 +1309,6 @@ EXPORTS
     _ZN12MapleRuntime12StackManager9rtEndAddrE @1347 DATA
     _ZN12MapleRuntime12StackManagerC1Ev @1348
     _ZN12MapleRuntime12StackManagerC2Ev @1349
-    _ZN12MapleRuntime12TraceBarrierD0Ev @1350
     _ZN12MapleRuntime12TypeTemplate12GetFieldTypeEtjPPNS_8TypeInfoE @1351
     _ZN12MapleRuntime12TypeTemplate15GetTypeInfoNameEjPPNS_8TypeInfoE @1352
     _ZN12MapleRuntime12TypeTemplate16GetSuperTypeInfoEjPPNS_8TypeInfoE @1353
@@ -1519,7 +1516,6 @@ EXPORTS
     _ZN12MapleRuntime14CollectorProxyD0Ev @1563
     _ZN12MapleRuntime14CollectorProxyD2Ev @1564
     _ZN12MapleRuntime14FastULEBDecodeERNS_7CStringEy @1565
-    _ZN12MapleRuntime14ForwardBarrierD0Ev @1566
     _ZN12MapleRuntime14GetStackOffsetERNS_10UnwindInfoE @1567
     _ZN12MapleRuntime14LOG_TYPE_NAMESE @1568 DATA
     _ZN12MapleRuntime14MutatorManager12DumpMutatorsEj @1569
@@ -1676,7 +1672,6 @@ EXPORTS
     _ZN12MapleRuntime16MangleNameHelper21RemoveGenericTypeNameERKNS_7CStringE @1722
     _ZN12MapleRuntime16MangleNameHelper8DemangleEv @1723
     _ZN12MapleRuntime16MangleNameHelperC2ENS_7CStringENS_20StackTraceFormatFlagE @1724
-    _ZN12MapleRuntime16PostTraceBarrierD0Ev @1725
     _ZN12MapleRuntime16StackFrameCursor10ProcessAllERKNSt3__18functionIFvRNS_8RootSlotEEEERNS_7MutatorE @1736
     _ZN12MapleRuntime16StackFrameCursor10ProcessOneERKNSt3__18functionIFvRNS_8RootSlotEEEERNS_7MutatorE @1737
     _ZN12MapleRuntime16StackFrameCursor12ProcessFrameERKNS_9FrameInfoERNS_11RegSlotsMapERKNSt3__18functionIFvRNS_8RootSlotEEEERNS_7MutatorE @1738
@@ -1756,7 +1751,6 @@ EXPORTS
     _ZN12MapleRuntime17InstanceFieldInfo14GetAnnotationsEPNS_8TypeInfoE @1823
     _ZN12MapleRuntime17InstanceFieldInfo8GetValueEPNS_8TypeInfoEPNS_7MObjectE @1824
     _ZN12MapleRuntime17InstanceFieldInfo8SetValueEPNS_8TypeInfoEPNS_7MObjectES4_ @1825
-    _ZN12MapleRuntime17PreforwardBarrierD0Ev @1826
     _ZN12MapleRuntime17ScopedAllocBufferD1Ev @1827
     _ZN12MapleRuntime17ScopedAllocBufferD2Ev @1828
     _ZN12MapleRuntime17StackExposureHook10ResetStatsEv @1833
@@ -1904,9 +1898,7 @@ EXPORTS
     _ZN12MapleRuntime3Cki16cjthreadKeyItemsE @1987 DATA
     _ZN12MapleRuntime3Cki9CreateCKIEv @1988
     _ZN12MapleRuntime4Heap13heapStartAddrE @1989 DATA
-    _ZN12MapleRuntime4Heap13stwBarrierPtrE @1990 DATA
     _ZN12MapleRuntime4Heap14heapCurrentEndE @1991 DATA
-    _ZN12MapleRuntime4Heap17currentBarrierPtrE @1992 DATA
     _ZN12MapleRuntime4Heap7GetHeapEv @1993
     _ZN12MapleRuntime4SLRU33MigrateFromProbationalToProtectedEjRKNSt3__16vectorINS_7CStringENS1_9allocatorIS3_EEEE @1994
     _ZN12MapleRuntime4SLRU3GetEj @1995
@@ -2087,7 +2079,6 @@ EXPORTS
     _ZN12MapleRuntime8HeapImpl10StopGCWorkEv @2172
     _ZN12MapleRuntime8HeapImpl12GetAllocatorEv @2173
     _ZN12MapleRuntime8HeapImpl12GetCollectorEv @2174
-    _ZN12MapleRuntime8HeapImpl14InstallBarrierENS_7GCPhaseE @2175
     _ZN12MapleRuntime8HeapImpl15GetExportObjectEy @2176
     _ZN12MapleRuntime8HeapImpl15WaitForGCFinishEv @2177
     _ZN12MapleRuntime8HeapImpl16GetRememberedSetEv @2178
@@ -2369,40 +2360,9 @@ EXPORTS
     _ZNK12MapleRuntime11EHFrameInfo22RestoreToCallerContextERNS_26CalleeSavedRegisterContextEj @2456
     _ZNK12MapleRuntime11EHFrameInfo5GetFAEv @2457
     _ZNK12MapleRuntime11EHFrameInfo5GetIPEv @2458
-    _ZNK12MapleRuntime11EnumBarrier10ReadStructEyPNS_10BaseObjectEyy @2459
-    _ZNK12MapleRuntime11EnumBarrier11ReadWeakRefEPNS_10BaseObjectERNS_8HeapSlotILb0EEE @2460
-    _ZNK12MapleRuntime11EnumBarrier13ReadReferenceEPNS_10BaseObjectERNS_8HeapSlotILb0EEE @2461
-    _ZNK12MapleRuntime11EnumBarrier13ReadStaticRefERNS_8RootSlotE @2462
-    _ZNK12MapleRuntime11EnumBarrier14WriteStaticRefERNS_8RootSlotEPNS_10BaseObjectE @2463
-    _ZNK12MapleRuntime11EnumBarrier15ReadGenericImplEPNS_10BaseObjectES2_Pvy @2464
-    _ZNK12MapleRuntime11EnumBarrier15WriteStructImplEPNS_10BaseObjectEyyyy @2465
-    _ZNK12MapleRuntime11EnumBarrier16ReadStaticStructEyyyNS_5GCTibE @2466
-    _ZNK12MapleRuntime11EnumBarrier16WriteGenericImplEPNS_10BaseObjectEPvS2_y @2467
-    _ZNK12MapleRuntime11EnumBarrier17WriteStaticStructEyyyyNS_5GCTibE @2468
-    _ZNK12MapleRuntime11EnumBarrier18WriteReferenceImplEPNS_10BaseObjectERNS_8HeapSlotILb0EEES2_ @2469
-    _ZNK12MapleRuntime11EnumBarrier19AtomicReadReferenceEPNS_10BaseObjectERNS_8HeapSlotILb1EEENSt3__112memory_orderE @2470
-    _ZNK12MapleRuntime11EnumBarrier19CopyStructArrayImplEPNS_10BaseObjectEyyS2_yy @2471
-    _ZNK12MapleRuntime11EnumBarrier23AtomicSwapReferenceImplEPNS_10BaseObjectERNS_8HeapSlotILb1EEES2_NSt3__112memory_orderE @2472
-    _ZNK12MapleRuntime11EnumBarrier24AtomicWriteReferenceImplEPNS_10BaseObjectERNS_8HeapSlotILb1EEES2_NSt3__112memory_orderE @2473
-    _ZNK12MapleRuntime11EnumBarrier27CompareAndSwapReferenceImplEPNS_10BaseObjectERNS_8HeapSlotILb1EEES2_S2_NSt3__112memory_orderES7_ @2474
     _ZNK12MapleRuntime11GCStackInfo15VisitStackRootsERKNSt3__18functionIFvRNS_8RootSlotEEEERNS_7MutatorE @2475
     _ZNK12MapleRuntime11GCStackInfo26VisitHeapReferencesOnStackERKNSt3__18functionIFvRNS_8RootSlotEEEERKNS2_IFvNS_15zaddress_unsafeERNS_11DerivedSlotEEEERNS_7MutatorEb @2476
     _ZNK12MapleRuntime11GCStackInfo26VisitHeapReferencesOnStackERKNSt3__18functionIFvRNS_8RootSlotEEEES8_RKNS2_IFvNS_15zaddress_unsafeERNS_11DerivedSlotEEEERNS_7MutatorEb @2477
-    _ZNK12MapleRuntime11IdleBarrier10ReadStructEyPNS_10BaseObjectEyy @2478
-    _ZNK12MapleRuntime11IdleBarrier11ReadWeakRefEPNS_10BaseObjectERNS_8HeapSlotILb0EEE @2479
-    _ZNK12MapleRuntime11IdleBarrier13ReadReferenceEPNS_10BaseObjectERNS_8HeapSlotILb0EEE @2480
-    _ZNK12MapleRuntime11IdleBarrier13ReadStaticRefERNS_8RootSlotE @2481
-    _ZNK12MapleRuntime11IdleBarrier14WriteStaticRefERNS_8RootSlotEPNS_10BaseObjectE @2482
-    _ZNK12MapleRuntime11IdleBarrier15WriteStructImplEPNS_10BaseObjectEyyyy @2483
-    _ZNK12MapleRuntime11IdleBarrier16CopyRefArrayImplEPNS_10BaseObjectEyyS2_yy @2484
-    _ZNK12MapleRuntime11IdleBarrier16ReadStaticStructEyyyNS_5GCTibE @2485
-    _ZNK12MapleRuntime11IdleBarrier17WriteStaticStructEyyyyNS_5GCTibE @2486
-    _ZNK12MapleRuntime11IdleBarrier18WriteReferenceImplEPNS_10BaseObjectERNS_8HeapSlotILb0EEES2_ @2487
-    _ZNK12MapleRuntime11IdleBarrier19AtomicReadReferenceEPNS_10BaseObjectERNS_8HeapSlotILb1EEENSt3__112memory_orderE @2488
-    _ZNK12MapleRuntime11IdleBarrier19CopyStructArrayImplEPNS_10BaseObjectEyyS2_yy @2489
-    _ZNK12MapleRuntime11IdleBarrier23AtomicSwapReferenceImplEPNS_10BaseObjectERNS_8HeapSlotILb1EEES2_NSt3__112memory_orderE @2490
-    _ZNK12MapleRuntime11IdleBarrier24AtomicWriteReferenceImplEPNS_10BaseObjectERNS_8HeapSlotILb1EEES2_NSt3__112memory_orderE @2491
-    _ZNK12MapleRuntime11IdleBarrier27CompareAndSwapReferenceImplEPNS_10BaseObjectERNS_8HeapSlotILb1EEES2_S2_NSt3__112memory_orderES7_ @2492
     _ZNK12MapleRuntime11ReflectInfo12GetFieldNameEj @2493
     _ZNK12MapleRuntime11ReflectInfo17GetReflectVersionEv @2494
     _ZNK12MapleRuntime11ReflectInfo21GetInstanceMethodInfoEj @2495
@@ -2432,22 +2392,6 @@ EXPORTS
     _ZNK12MapleRuntime12MachineFrame26UnwindToCallerMachineFrameERNS_9FrameInfoERNS_19UnwindContextStatusE @2520
     _ZNK12MapleRuntime12MachineFrame27IsSafepointHandlerStubFrameEv @2521
     _ZNK12MapleRuntime12StackManager4FiniEv @2522
-    _ZNK12MapleRuntime12TraceBarrier10ReadStructEyPNS_10BaseObjectEyy @2523
-    _ZNK12MapleRuntime12TraceBarrier11ReadWeakRefEPNS_10BaseObjectERNS_8HeapSlotILb0EEE @2524
-    _ZNK12MapleRuntime12TraceBarrier13ReadReferenceEPNS_10BaseObjectERNS_8HeapSlotILb0EEE @2525
-    _ZNK12MapleRuntime12TraceBarrier13ReadStaticRefERNS_8RootSlotE @2526
-    _ZNK12MapleRuntime12TraceBarrier14WriteStaticRefERNS_8RootSlotEPNS_10BaseObjectE @2527
-    _ZNK12MapleRuntime12TraceBarrier15ReadGenericImplEPNS_10BaseObjectES2_Pvy @2528
-    _ZNK12MapleRuntime12TraceBarrier15WriteStructImplEPNS_10BaseObjectEyyyy @2529
-    _ZNK12MapleRuntime12TraceBarrier16ReadStaticStructEyyyNS_5GCTibE @2530
-    _ZNK12MapleRuntime12TraceBarrier16WriteGenericImplEPNS_10BaseObjectEPvS2_y @2531
-    _ZNK12MapleRuntime12TraceBarrier17WriteStaticStructEyyyyNS_5GCTibE @2532
-    _ZNK12MapleRuntime12TraceBarrier18WriteReferenceImplEPNS_10BaseObjectERNS_8HeapSlotILb0EEES2_ @2533
-    _ZNK12MapleRuntime12TraceBarrier19AtomicReadReferenceEPNS_10BaseObjectERNS_8HeapSlotILb1EEENSt3__112memory_orderE @2534
-    _ZNK12MapleRuntime12TraceBarrier19CopyStructArrayImplEPNS_10BaseObjectEyyS2_yy @2535
-    _ZNK12MapleRuntime12TraceBarrier23AtomicSwapReferenceImplEPNS_10BaseObjectERNS_8HeapSlotILb1EEES2_NSt3__112memory_orderE @2536
-    _ZNK12MapleRuntime12TraceBarrier24AtomicWriteReferenceImplEPNS_10BaseObjectERNS_8HeapSlotILb1EEES2_NSt3__112memory_orderE @2537
-    _ZNK12MapleRuntime12TraceBarrier27CompareAndSwapReferenceImplEPNS_10BaseObjectERNS_8HeapSlotILb1EEES2_S2_NSt3__112memory_orderES7_ @2538
     _ZNK12MapleRuntime12TypeTemplate10IsEnumCtorEv @2539
     _ZNK12MapleRuntime12TypeTemplate15ReflectIsEnableEv @2540
     _ZNK12MapleRuntime13CJThreadModel18GetThreadSchedulerEv @2541
@@ -2496,16 +2440,6 @@ EXPORTS
     _ZNK12MapleRuntime14CollectorProxy20GetAndTryTagRefFieldEPNS_10BaseObjectE @2584
     _ZNK12MapleRuntime14CollectorProxy21IsUnmovableFromObjectEPNS_10BaseObjectE @2585
     _ZNK12MapleRuntime14CollectorProxy24relocate_or_remap_objectEPNS_10BaseObjectENS_13ZGenerationIdE @2586
-    _ZNK12MapleRuntime14ForwardBarrier10ReadStructEyPNS_10BaseObjectEyy @2587
-    _ZNK12MapleRuntime14ForwardBarrier11ReadWeakRefEPNS_10BaseObjectERNS_8HeapSlotILb0EEE @2588
-    _ZNK12MapleRuntime14ForwardBarrier13ReadReferenceEPNS_10BaseObjectERNS_8HeapSlotILb0EEE @2589
-    _ZNK12MapleRuntime14ForwardBarrier13ReadStaticRefERNS_8RootSlotE @2590
-    _ZNK12MapleRuntime14ForwardBarrier16ReadStaticStructEyyyNS_5GCTibE @2591
-    _ZNK12MapleRuntime14ForwardBarrier19AtomicReadReferenceEPNS_10BaseObjectERNS_8HeapSlotILb1EEENSt3__112memory_orderE @2592
-    _ZNK12MapleRuntime14ForwardBarrier19CopyStructArrayImplEPNS_10BaseObjectEyyS2_yy @2593
-    _ZNK12MapleRuntime14ForwardBarrier23AtomicSwapReferenceImplEPNS_10BaseObjectERNS_8HeapSlotILb1EEES2_NSt3__112memory_orderE @2594
-    _ZNK12MapleRuntime14ForwardBarrier24AtomicWriteReferenceImplEPNS_10BaseObjectERNS_8HeapSlotILb1EEES2_NSt3__112memory_orderE @2595
-    _ZNK12MapleRuntime14ForwardBarrier27CompareAndSwapReferenceImplEPNS_10BaseObjectERNS_8HeapSlotILb1EEES2_S2_NSt3__112memory_orderES7_ @2596
     _ZNK12MapleRuntime14MutatorManager11BindMutatorERNS_7MutatorE @2597
     _ZNK12MapleRuntime14MutatorManager13UnbindMutatorERNS_7MutatorE @2598
     _ZNK12MapleRuntime14PrintStackInfo15PrintStackTraceEv @2599
@@ -2521,20 +2455,6 @@ EXPORTS
     _ZNK12MapleRuntime16MangleNameHelper10IsNeedFiltEv @2609
     _ZNK12MapleRuntime16MangleNameHelper16GetPackClassNameEv @2610
     _ZNK12MapleRuntime16MangleNameHelper18GetSimpleClassNameEv @2611
-    _ZNK12MapleRuntime16PostTraceBarrier10ReadStructEyPNS_10BaseObjectEyy @2612
-    _ZNK12MapleRuntime16PostTraceBarrier11ReadWeakRefEPNS_10BaseObjectERNS_8HeapSlotILb0EEE @2613
-    _ZNK12MapleRuntime16PostTraceBarrier13ReadReferenceEPNS_10BaseObjectERNS_8HeapSlotILb0EEE @2614
-    _ZNK12MapleRuntime16PostTraceBarrier13ReadStaticRefERNS_8RootSlotE @2615
-    _ZNK12MapleRuntime16PostTraceBarrier14WriteStaticRefERNS_8RootSlotEPNS_10BaseObjectE @2616
-    _ZNK12MapleRuntime16PostTraceBarrier15WriteStructImplEPNS_10BaseObjectEyyyy @2617
-    _ZNK12MapleRuntime16PostTraceBarrier16ReadStaticStructEyyyNS_5GCTibE @2618
-    _ZNK12MapleRuntime16PostTraceBarrier17WriteStaticStructEyyyyNS_5GCTibE @2619
-    _ZNK12MapleRuntime16PostTraceBarrier18WriteReferenceImplEPNS_10BaseObjectERNS_8HeapSlotILb0EEES2_ @2620
-    _ZNK12MapleRuntime16PostTraceBarrier19AtomicReadReferenceEPNS_10BaseObjectERNS_8HeapSlotILb1EEENSt3__112memory_orderE @2621
-    _ZNK12MapleRuntime16PostTraceBarrier19CopyStructArrayImplEPNS_10BaseObjectEyyS2_yy @2622
-    _ZNK12MapleRuntime16PostTraceBarrier23AtomicSwapReferenceImplEPNS_10BaseObjectERNS_8HeapSlotILb1EEES2_NSt3__112memory_orderE @2623
-    _ZNK12MapleRuntime16PostTraceBarrier24AtomicWriteReferenceImplEPNS_10BaseObjectERNS_8HeapSlotILb1EEES2_NSt3__112memory_orderE @2624
-    _ZNK12MapleRuntime16PostTraceBarrier27CompareAndSwapReferenceImplEPNS_10BaseObjectERNS_8HeapSlotILb1EEES2_S2_NSt3__112memory_orderES7_ @2625
     _ZNK12MapleRuntime16TracingCollector10MarkObjectEPNS_10BaseObjectE @2626
     _ZNK12MapleRuntime16TracingCollector15EnumStaticRootsERNS_9MarkStackIPNS_10BaseObjectEEE @2627
     _ZNK12MapleRuntime16TracingCollector16EnumRefFieldRootERNS_8HeapSlotILb0EEERNS_9MarkStackIPNS_10BaseObjectEEE @2628
@@ -2549,16 +2469,6 @@ EXPORTS
     _ZNK12MapleRuntime17ExceptionHandling19ChangeEHStackInfoLREv @2637
     _ZNK12MapleRuntime17InstanceFieldInfo11GetModifierEv @2638
     _ZNK12MapleRuntime17InstanceFieldInfo7GetNameEPNS_8TypeInfoE @2639
-    _ZNK12MapleRuntime17PreforwardBarrier10ReadStructEyPNS_10BaseObjectEyy @2640
-    _ZNK12MapleRuntime17PreforwardBarrier11ReadWeakRefEPNS_10BaseObjectERNS_8HeapSlotILb0EEE @2641
-    _ZNK12MapleRuntime17PreforwardBarrier13ReadReferenceEPNS_10BaseObjectERNS_8HeapSlotILb0EEE @2642
-    _ZNK12MapleRuntime17PreforwardBarrier13ReadStaticRefERNS_8RootSlotE @2643
-    _ZNK12MapleRuntime17PreforwardBarrier16ReadStaticStructEyyyNS_5GCTibE @2644
-    _ZNK12MapleRuntime17PreforwardBarrier19AtomicReadReferenceEPNS_10BaseObjectERNS_8HeapSlotILb1EEENSt3__112memory_orderE @2645
-    _ZNK12MapleRuntime17PreforwardBarrier19CopyStructArrayImplEPNS_10BaseObjectEyyS2_yy @2646
-    _ZNK12MapleRuntime17PreforwardBarrier23AtomicSwapReferenceImplEPNS_10BaseObjectERNS_8HeapSlotILb1EEES2_NSt3__112memory_orderE @2647
-    _ZNK12MapleRuntime17PreforwardBarrier24AtomicWriteReferenceImplEPNS_10BaseObjectERNS_8HeapSlotILb1EEES2_NSt3__112memory_orderE @2648
-    _ZNK12MapleRuntime17PreforwardBarrier27CompareAndSwapReferenceImplEPNS_10BaseObjectERNS_8HeapSlotILb1EEES2_S2_NSt3__112memory_orderES7_ @2649
     _ZNK12MapleRuntime18CollectorResources16GetGCThreadCountEb @2650
     _ZNK12MapleRuntime19SigHandlerFrameinfo14PrintFrameInfoEj @2651
     _ZNK12MapleRuntime19StackMetadataHelper13GetLineNumberEv @2652
@@ -3031,31 +2941,25 @@ EXPORTS
     _ZTVN12MapleRuntime11ConcurrencyE @3150 DATA
     _ZTVN12MapleRuntime11EHFrameInfoE @3151 DATA
     _ZTVN12MapleRuntime11EHStackInfoE @3152 DATA
-    _ZTVN12MapleRuntime11EnumBarrierE @3153 DATA
     _ZTVN12MapleRuntime11GCStackInfoE @3155 DATA
-    _ZTVN12MapleRuntime11IdleBarrierE @3156 DATA
     _ZTVN12MapleRuntime11RegionSpaceE @3157 DATA
     _ZTVN12MapleRuntime11StackPtrMapE @3158 DATA
     _ZTVN12MapleRuntime12CJFileLoaderE @3159 DATA
     _ZTVN12MapleRuntime12LineNumTableE @3160 DATA
     _ZTVN12MapleRuntime12MachineFrameE @3161 DATA
-    _ZTVN12MapleRuntime12TraceBarrierE @3162 DATA
     _ZTVN12MapleRuntime13CJThreadModelE @3163 DATA
     _ZTVN12MapleRuntime13CopyCollectorE @3164 DATA
     _ZTVN12MapleRuntime13StackMapTableE @3165 DATA
     _ZTVN12MapleRuntime13UnwindContextE @3166 DATA
     _ZTVN12MapleRuntime14CangjieRuntimeE @3167 DATA
     _ZTVN12MapleRuntime14CollectorProxyE @3168 DATA
-    _ZTVN12MapleRuntime14ForwardBarrierE @3169 DATA
     _ZTVN12MapleRuntime14PrintStackInfoE @3170 DATA
     _ZTVN12MapleRuntime15DerivedPtrTableE @3171 DATA
     _ZTVN12MapleRuntime15RecordStackInfoE @3172 DATA
     _ZTVN12MapleRuntime16HeapReferenceMapE @3173 DATA
-    _ZTVN12MapleRuntime16PostTraceBarrierE @3174 DATA
     _ZTVN12MapleRuntime16TracingCollectorE @3175 DATA
     _ZTVN12MapleRuntime17CJThreadStackInfoE @3177 DATA
     _ZTVN12MapleRuntime17FreeRegionManagerE @3178 DATA
-    _ZTVN12MapleRuntime17PreforwardBarrierE @3179 DATA
     _ZTVN12MapleRuntime18CollectorResourcesE @3180 DATA
     _ZTVN12MapleRuntime18StackGrowStackInfoE @3181 DATA
     _ZTVN12MapleRuntime19SigHandlerFrameinfoE @3182 DATA

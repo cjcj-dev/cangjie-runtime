@@ -38,7 +38,7 @@
 #include "Heap/Barrier/Barrier.h"
 #include "Heap/Collector/Collector.h"
 #include "Heap/Heap.h"
-#include "Heap/WCollector/IdleBarrier.h"
+#include "Heap/Barrier/Barrier.h"
 #include "Heap/WCollector/RememberedHolderPolicy.h"
 #include "Heap/Verify/NwDropAudit.h"
 #include "ObjectModel/RefField.inline.h"
@@ -657,7 +657,7 @@ GC_TEST(Remset, IdleBarrierOldToYoungRecorded)
     TestCollector collector;
     RememberedSet rs;
     rs.Initialize(fx.heapStart, 2 * RegionInfo::UNIT_SIZE);
-    IdleBarrier idle(collector, rs);
+    Barrier idle(collector, rs);
 
     field->StoreColoured(zpointer::null);
     idle.WriteReference(fx.obj0, *field, fx.obj1);

@@ -873,7 +873,6 @@ void WCollector::DoYoungGarbageCollection()
         // Publish S1/S3/S5 while every mutator is stopped. SetGCPhase is the
         // release publication point; AcknowledgeEpochHandshake asserts ENUM
         // before it is allowed to snapshot a single frame.
-        Heap::GetHeap().InstallBarrier(GCPhase::GC_PHASE_ENUM);
         Heap::GetHeap().SetGCPhase(GCPhase::GC_PHASE_ENUM);
         stw.reset();
 

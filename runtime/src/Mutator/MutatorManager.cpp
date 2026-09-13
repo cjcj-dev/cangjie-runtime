@@ -522,7 +522,6 @@ EpochHandshakeStats MutatorManager::RunEpochHandshake(const char* source, bool y
 
     uint64_t waitStart = TimeUtil::MilliSeconds();
     bool runningMutatorsHadSelfOpportunity = false;
-    // K-bound: timeout is the exit condition (ForwardBarrier.cpp:23-24 discipline).
     // Wait set is fixed at snapshot; born-clean joiners never enlarge it.
     while (!pending.empty()) {
         for (auto it = pending.begin(); it != pending.end();) {
@@ -1075,7 +1074,6 @@ void MutatorManager::StartLightSync(bool syncGCPhase, GCPhase phase)
          Collector::GetGCPhaseName(phase), phase);
 
     // Set global gc phase in the scope of mutatorlist lock
-    Heap::GetHeap().InstallBarrier(phase);
     Heap::GetHeap().SetGCPhase(phase);
     lightSyncGCPhase = phase;
     undoneLightSyncMutators.clear();
@@ -1200,7 +1198,6 @@ void MutatorManager::TransitionAllMutatorsToGCPhase(GCPhase phase, bool young)
          Collector::GetGCPhaseName(phase), phase);
 
     // Set global gc phase in the scope of mutatorlist lock
-    Heap::GetHeap().InstallBarrier(phase);
     Heap::GetHeap().SetGCPhase(phase);
 
     std::list<Mutator*> undoneMutators;

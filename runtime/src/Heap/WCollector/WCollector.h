@@ -536,7 +536,6 @@ public:
     // barrier's fast path hands the from-version straight to the mutator, which reads its header
     // as one 64-bit word and gets ObjectState::FORWARDED in bits 48-49.
     //
-    // Measured before this change, N=5, BarrierPhase::FORWARD hand-outs: 20/20 carry
     // afterFlip=1 (slot colour == current good colour, i.e. painted after the relocate-start flip),
     // slotGood=1, hasTo=1 (a to-version exists), unmov=0 -- and unmov=0 is itself explained here,
     // since IsUnmovableFromObject covers UNMOVABLE_FROM/RAW_POINTER_PINNED and not LONE_FROM.
@@ -834,7 +833,6 @@ protected:
     // level up, and it let the colouring code paint a from-version with the current remap colour.
     // Measured, N=5 on cjcj::cjc --package packages/basic/src: every run installs load-good slots
     // naming FORWARDED targets (>=1, >=16, >=16, >=16, >=32 by the powers-of-two sampler), 21 of
-    // 22 samples in BarrierPhase::TRACE.
     //
     // So the colouring code is now reachable only through this typed pair.  To paint the current
     // colour a caller must hold a zaddress, and the only producer is ClassifyStoreValue below,
