@@ -61,7 +61,9 @@ struct RelocationReceiptTestAccess {
 
     static void RunYoungCollection(WCollector& collector)
     {
-        collector.GetGenerationCycle(GCCycleGeneration::YOUNG).SelectReason(GC_REASON_YOUNG);
+        auto& cycle = collector.GetGenerationCycle(GCCycleGeneration::YOUNG);
+        if (!cycle.Snapshot().active) cycle.SelectReason(GC_REASON_YOUNG);
+        YoungTypeSetter type(cycle, ZYoungType::minor);
         collector.DoGarbageCollection(GCCycleGeneration::YOUNG);
     }
 
