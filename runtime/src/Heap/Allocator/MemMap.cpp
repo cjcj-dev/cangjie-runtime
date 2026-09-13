@@ -788,6 +788,12 @@ void MemMap::RestoreSegments(const std::vector<MemoryRange>& ranges, const std::
     size_t stashed = 0;
     for (const auto& segment : stash) { stashed += segment.size; }
     CHECK(total == stashed);
+    for (const auto& target : ranges) {
+        CHECK(reservationRegistry.Contains(target.start, target.size));
+        for (const auto& existing : committedRanges) {
+            CHECK(!existing.mapped || existing.End() <= target.start || existing.start >= target.End());
+        }
+    }
     // Each token names exactly one detached entry, which remains capacity-owned
     // throughout the virtual registry shuffle (zPhysicalMemoryManager.cpp:384).
     for (const auto& segment : stash) {
