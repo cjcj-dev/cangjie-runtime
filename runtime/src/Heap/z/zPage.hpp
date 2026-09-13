@@ -40,13 +40,11 @@
 #include "Heap/z/zLiveMap.hpp"
 #include "Heap/Collector/ManagedObjectGate.h"
 #include "Heap/z/zUncommitter.hpp"
-#include "Heap/Allocator/RouteTicket.h"
 #include "Heap/Verify/AllocPhaseDiag.h"
 #include "Heap/Verify/DiagGate.h"
 #include "Heap/Verify/TraceClear.h"
 #include "Heap/Verify/FillerZeroDiag.h"
 #include "Heap/Verify/SurvNodeDiag.h"
-#include "Heap/Allocator/RouteDestHold.h"
 #include "Heap/z/zForwardingTable.hpp"
 #include "Heap/z/zVirtualMemoryManager.hpp"
 #include "Heap/z/zGranuleMap.hpp"
@@ -74,8 +72,6 @@ class RegionInfo {
     // The table serializes publication/unbinding of this facade's owner.
     friend class ForwardingTable;
 public:
-    using CompactRouteTable = std::unordered_map<size_t, MAddress>;
-    using RouteStartTable = std::unordered_map<size_t, uint8_t>;
 
     enum class RetainedLiveInfoState : uint8_t {
         NEVER_EXAMINED,
@@ -130,7 +126,7 @@ public:
 
     uint8_t GetRegionLifeSeq() const
     {
-        return static_cast<uint8_t>(__atomic_load_n(&metadata.routeDestHold, __ATOMIC_ACQUIRE) >> 1);
+        return static_cast<uint8_t>(__atomic_load_n(&metadata.regionLifeSequence, __ATOMIC_ACQUIRE));
     }
 
     RegionLifeId GetRegionLifeId() const
@@ -693,56 +689,7 @@ public:
 
 
 
-    // Sole mint of RouteTicket. Coverage bits paint every 8B slot of an object,
-    // so they cannot prove an exact start. Terminal states consume only exact
-    // compact keys, forwarding receipts, or the frozen start set.
-    // Anchor: ops/design/ROUTE_DOMAIN.md §2; former guard RegionInfo.h GetRoute.
-    ATTR_WARN_UNUSED OptionalRouteTicket AdmitForRoute(BaseObject* fromObj);
-
-    // Geometric derive; domain is guaranteed by RouteTicket. No survivor re-check.
-    // Anchor: LiveInfo.h:230-245; LiveInfo.cpp:15-24; ops/design/ROUTE_DOMAIN.md §2.
-    // Compacted: dest is the dense pack slot recorded by CompactRegion, not prefix-sum.
-    BaseObject* GetRoute(RouteTicket t);
-
-    void FreeCompactRouteTable();
-
-    void EnsureCompactRouteTable();
-
-    void RecordCompactRoute(size_t fromOff, MAddress dest);
-
-    void EnsureRouteStartTable();
-
-    void RecordRouteStart(size_t fromOff);
-
-    // Called only while the collector owns the route transition. Readers see
-    // the table after ROUTED/FORWARDED release publication.
-    void ResetRouteStartTable();
-
-    RouteStartTable* LoadRouteStartTable() const
-    {
-        return static_cast<RouteStartTable*>(__atomic_load_n(&metadata.routeStartTable, __ATOMIC_ACQUIRE));
-    }
-
-    void FreeRouteStartTable();
-
-    BaseObject* LookupCompactRoute(size_t fromOff, const CompactRouteTable* table) const;
-
     bool IsCompactRouteDestination(MAddress address) const;
-
-    // A phase transition is a mutator grace period. Tables detached in generation N
-    // survive two completed transitions so a detach racing the transition boundary is
-    // conservatively assigned to either side without endangering a reader.
-    static void AdvanceCompactRouteTableGracePeriod();
-
-    // Deleted: asking for a route with a bare BaseObject* is unspellable.
-    // Call AdmitForRoute first; product miss arms name nullopt; probes use GetRouteForProbe.
-    BaseObject* GetRoute(BaseObject* fromObj) = delete;
-
-    // Probe/diagnostics only — same Admit+derive as product, never a public bypass.
-    // Precedent: GetLiveInfo0ForProbe. Anchor: ops/design/ROUTE_DOMAIN.md §2.
-    BaseObject* GetRouteForProbe(BaseObject* fromObj);
-
-
 
     ZGenerationId generation_id() const;
 
@@ -932,12 +879,6 @@ public:
     {
         return __atomic_load_n(&metadata.notRelocatableThisCycle, __ATOMIC_ACQUIRE) != 0;
     }
-    // routedest: destination-side hold. Idempotent stamp.
-    void SetRouteDestHold(uint8_t flag);
-    bool IsRouteDestHeld() const
-    {
-        return (__atomic_load_n(&metadata.routeDestHold, __ATOMIC_ACQUIRE) & 1u) != 0;
-    }
     void SetInGhostRegion(uint8_t flag);
 
     void SetOldMarkedRegionFlag(uint8_t flag)
@@ -1105,20 +1046,7 @@ public:
     void RemoveFromList();
 
 private:
-    struct RetiredCompactRouteTable {
-        CompactRouteTable* table;
-        uint64_t generation;
-    };
 
-    CompactRouteTable* LoadCompactRouteTable() const;
-
-    static std::mutex& CompactRouteTableRetireMutex();
-
-    static uint64_t& CompactRouteTableGraceGeneration();
-
-    static std::vector<RetiredCompactRouteTable>& RetiredCompactRouteTables();
-
-    static void RetireCompactRouteTable(CompactRouteTable* table);
 
     ALWAYS_INLINE void CheckObjectSize(
         const BaseObject* obj, size_t objSize, MAddress regionStart, MAddress regionEnd) const;
@@ -1190,29 +1118,7 @@ private:
         uint32_t retainedPreserveCnt = 0;
         uint32_t retainedClearCnt = 0;
         uint8_t retainedLastOp = RETAINED_OP_NONE;
-        // routedest: 1 while this region is a relocation destination. Dropped by
-        // ClearRouteDestHoldFlags after PrepareFromRegionList's dispel walk has retired every
-        // route that could name it. Read by the reclaim entry points, which refuse a held
-        // region — the to-side counterpart of ZGC's per-page reference count, expressed as a
-        // gate rather than a count because the answer only has to change once per generation.
-        //
-        // Durability, and the reason this works at all: UnitInfo lives BELOW heapStartAddress
-        // (UnitInfo::GetUnitInfo returns heapStartAddress - (idx + 1) * sizeof(UnitInfo)),
-        // while ClearUnits and ReleaseUnits touch only the payload returned by
-        // GetUnitAddress(idx). A flag in UnitMetadata therefore survives both
-        // zeroing writers. Do not "fix" this on the assumption that ClearUnits wipes it.
-        //
-        // Placement: deliberately here, in the padding after retainedLastOp and before the
-        // 8-aligned retainedMarkWords pointer, not beside markFaceSealed where it reads more
-        // naturally. Measured: beside markFaceSealed it grew sizeof(UnitInfo) 192 -> 200,
-        // and per-unit metadata is per-page (UNIT_SIZE is the system page size), so that is
-        // +0.195% of the whole heap for one byte. Here it is free.
-        //
-        // Plain uint8_t rather than a regionStateBitField slot: bitfield writes are not
-        // atomic (see the comment on that union above) and this is written by a routing
-        // thread while reclaim threads read it. Same reason notRelocatableThisCycle and
-        // markFaceSealed are plain bytes.
-        uint8_t routeDestHold = 0;
+        uint8_t regionLifeSequence = 0;
         // Borrow the immutable forwarding identity. Its owner reference is
         // released at the page lifecycle boundary, never reset in place.
         std::atomic<ZForwarding*> fwdOwner{ nullptr };
@@ -1226,7 +1132,6 @@ private:
 
         // resolveto: Compact packs densely; GetRoute prefix-sum dests are holes.
         // Table maps from-offset → actual dest for COMPACTED regions only.
-        void* compactRouteTable = nullptr;
 
         // ZGC zPage allocate-black: objects at offset >= this allocPtr, snapshotted
         // at ClearLiveInfo / mark-start, are implicitly live (zPage.inline.hpp:180-185
@@ -1271,7 +1176,6 @@ private:
         // One atomic snapshot binds state to region life. The exact-start table
         // reuses the old split-field footprint, preserving UnitInfo size.
         std::atomic<uint64_t> routeStateSnapshot{ 0 };
-        void* routeStartTable = nullptr;
         RegionLifeId ghostLifeId = 0;
         // twoflags: orthogonal to isTraceRegion.
         // isTraceRegion = implicit-black / ShouldEnqueue skip (cleared by HandleTraceRegions).

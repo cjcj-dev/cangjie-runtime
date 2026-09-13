@@ -577,7 +577,6 @@ LiveInfo* PrepareForwardable(GcHeapFixture& fx, RegionInfo* region, MAddress liv
     // This synthetic fixture leaves an unmaterialized allocation prefix.
     // Record the known object start explicitly; production freezes a dense
     // allocation walk inside PrepareForwardableRegion.
-    region->RecordRouteStart(offset);
     return live;
 }
 
@@ -951,7 +950,6 @@ GC_TEST(ForwardingPublicationProduct, MutatorRuntimeEntryReachesCopyAdmission)
     collector.SetGCPhase(GCPhase::GC_PHASE_FORWARD);
     RelocationReceiptTestAccess::BindCollector(Heap::GetHeap().GetCollectorResources(), &collector);
     region->PrepareForwardableRegion(region->GetMarkView<Generation::Old>());
-    region->RecordRouteStart(region->GetAddressOffset(reinterpret_cast<MAddress>(from)));
     region->MarkForwardingDone();
     AllocBuffer::GetOrCreateAllocBuffer()->SetRegion(destination);
 
@@ -1006,7 +1004,6 @@ GC_TEST(ForwardingNoGeometry, ForwardImplTryLockCopiesWithoutPrebuiltMapping)
     collector.SetGCPhase(GCPhase::GC_PHASE_FORWARD);
     RelocationReceiptTestAccess::BindCollector(Heap::GetHeap().GetCollectorResources(), &collector);
     region->PrepareForwardableRegion(region->GetMarkView<Generation::Old>());
-    region->RecordRouteStart(region->GetAddressOffset(reinterpret_cast<MAddress>(from)));
     region->MarkForwardingDone();
     AllocBuffer::GetOrCreateAllocBuffer()->SetRegion(destination);
     /*deleted copy SM*/ (void)(region->metadata.copyInflight);
@@ -1512,7 +1509,6 @@ GC_TEST(ForwardingPublicationProduct, KeptInPlaceLivemapStartsSurviveOverwritten
     GC_EXPECT_TRUE(bitmap != nullptr);
     (void)bitmap->MarkBits(region->GetAddressOffset(reinterpret_cast<MAddress>(second)),
                            second->GetSize(), region->GetRegionSize());
-    region->RecordRouteStart(region->GetAddressOffset(reinterpret_cast<MAddress>(second)));
     *reinterpret_cast<uint64_t*>(first) = 0;
     region->MarkForwardingDone();
 
@@ -3216,7 +3212,7 @@ GC_TEST(ForwardingPublicationProduct, ResolveStoreValueAlreadyToStartRejectsNonU
 
     RegionManager manager;
     RelocationReceiptTestAccess::ParkFrom(manager, state.region);
-    manager.CompactRegion(state.region, state.destination);
+    manager.CompactRegion(state.region);
     state.region->MarkForwardingDone();
 
     BaseObject* compactedStart = from_region_addr(state.region->GetRegionStart());
@@ -3240,7 +3236,7 @@ GC_TEST(ForwardingPublicationProduct, ResolveStoreValueAlreadyToStartWithUsableT
 
     RegionManager manager;
     RelocationReceiptTestAccess::ParkFrom(manager, state.region);
-    manager.CompactRegion(state.region, state.destination);
+    manager.CompactRegion(state.region);
     state.region->MarkForwardingDone();
 
     BaseObject* compactedStart = from_region_addr(state.region->GetRegionStart());
@@ -3304,8 +3300,6 @@ GC_TEST(ForwardingPublicationProduct, MarkForwardingDoneRejectsReceiptCountMisma
     const size_t thirdOff = region->GetAddressOffset(reinterpret_cast<MAddress>(third));
     (void)bitmap->MarkBits(secondOff, second->GetSize(), region->GetRegionSize());
     (void)bitmap->MarkBits(thirdOff, third->GetSize(), region->GetRegionSize());
-    region->RecordRouteStart(secondOff);
-    region->RecordRouteStart(thirdOff);
 
     RegionManager manager;
     manager.ExemptFromRegion(region);
@@ -3766,7 +3760,7 @@ GC_TEST(ForwardingPublicationProduct, PartialCompactFirstDestinationKeepsReceipt
     const auto request = queue.Add(state.region, from);
     GC_EXPECT_TRUE(request.accepted);
 
-    manager.CompactRegion(state.region, state.destination);
+    manager.CompactRegion(state.region);
 
     (void)queue.Wait(request.request);
     const MAddress receipt = request.request->page_forwarding()->find(from);
@@ -3795,7 +3789,7 @@ GC_TEST(ForwardingPublicationProduct, PartialCompactSelfFallbackKeepsReceipt)
     const auto request = queue.Add(state.region, from);
     GC_EXPECT_TRUE(request.accepted);
 
-    manager.CompactRegion(state.region, state.destination);
+    manager.CompactRegion(state.region);
     state.region->MarkForwardingDone();
 
     (void)queue.Wait(request.request);
@@ -3891,7 +3885,6 @@ GC_TEST(ForwardingPublicationProduct, PageWaitThenLookupReadsOriginalCompactRece
     if (region->IsGhostFromRegion()) {
         region->DispelGhostFromRegion();
     }
-    routeDestination->SetRouteDestHold(0);
     region->metadata.liveInfo = nullptr;
     fx.FreePlanted(live);
 }
@@ -3928,7 +3921,7 @@ GC_TEST(ForwardingPublicationProduct, CompletedPageResolvesThroughForwardingTabl
     AllocBuffer* buffer = AllocBuffer::GetOrCreateAllocBuffer();
     routeDestination->SetRegionType(RegionInfo::RegionType::THREAD_LOCAL_REGION);
     buffer->SetRegion(routeDestination);
-    GC_EXPECT_TRUE(manager.RouteRegion(region));
+    GC_EXPECT_TRUE(manager.RelocateClaimedPage(region));
     RelocationRequestQueue& queue = manager.GetRelocationRequestQueue();
     queue.BeginWorkers(1);
 
@@ -3968,7 +3961,6 @@ GC_TEST(ForwardingPublicationProduct, CompletedPageResolvesThroughForwardingTabl
     if (region->IsGhostFromRegion()) {
         region->DispelGhostFromRegion();
     }
-    routeDestination->SetRouteDestHold(0);
     region->metadata.liveInfo = nullptr;
     fx.FreePlanted(live);
 

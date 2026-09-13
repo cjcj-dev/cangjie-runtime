@@ -407,7 +407,6 @@ public:
     void TransitionToGCPhase(const GCPhase phase, const bool, bool young = false)
     {
         MutatorManager::Instance().TransitionAllMutatorsToGCPhase(phase, young);
-        RegionInfo::AdvanceCompactRouteTableGracePeriod();
     }
 
     GCStats& GetGCStats() override { return collectorResources.GetGCStats(); }

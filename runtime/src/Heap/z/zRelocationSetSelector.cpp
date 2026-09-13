@@ -81,8 +81,7 @@ void RegionManager::AssembleSmallGarbageCandidates()
             // set. Unlike notRelocatableThisCycle this is not about liveness — the region may
             // well be dead — it is about address ownership: reclaiming it hands its units back
             // for ClearUnits while the route keeps answering the old geometry.
-            if (!region->IsNotRelocatableThisCycle() &&
-                !RouteDestHold::HoldsBack(region, RouteDestHold::Site::ASSEMBLE_RECENT_FULL)) {
+            if (!region->IsNotRelocatableThisCycle()) {
                 const size_t units = region->GetUnitCount();
                 recentFullRegionList.DeleteRegion(region);
                 RecentFullAccounting::Dequeue(1, units);
@@ -95,8 +94,7 @@ void RegionManager::AssembleSmallGarbageCandidates()
         RegionInfo* region = unmovableFromRegionList.GetHeadRegion();
         while (region != nullptr) {
             RegionInfo* next = region->GetNextRegion();
-            if (!region->IsNotRelocatableThisCycle() &&
-                !RouteDestHold::HoldsBack(region, RouteDestHold::Site::ASSEMBLE_UNMOVABLE)) {
+            if (!region->IsNotRelocatableThisCycle()) {
                 unmovableFromRegionList.DeleteRegion(region);
                 fromRegionList.PrependRegion(region, RegionInfo::RegionType::FROM_REGION);
             }
@@ -148,27 +146,7 @@ void RegionManager::ClearNotRelocatableThisCycleFlags()
 // Walks the same eleven lists as ClearNotRelocatableThisCycleFlags, and reports the gauge
 // before clearing: holds that leak never get dropped and show up as monotonic growth in
 // held_regions, which is the only way to tell that failure apart from the opposite one.
-void RegionManager::ClearRouteDestHoldFlags()
-{
-    auto clearList = [](RegionList& list) {
-        list.VisitAllRegions([](RegionInfo* region) {
-            if (region->IsRouteDestHeld()) {
-                region->SetRouteDestHold(0);
-            }
-        });
-    };
-    clearList(tlRegionList);
-    clearList(recentFullRegionList);
-    clearList(unmovableFromRegionList);
-    clearList(fromRegionList);
-    clearList(recentPinnedRegionList);
-    clearList(oldPinnedRegionList);
-    clearList(rawPointerPinnedRegionList);
-    clearList(recentLargeRegionList);
-    clearList(oldLargeRegionList);
-    clearList(fullTraceRegions);
-    clearList(largeTraceRegions);
-}
+
 
 void RegionManager::AssemblePinnedGarbageCandidates(bool collectAll)
 {
@@ -221,14 +199,6 @@ YoungCollectionStats RegionManager::PrepareYoungGarbageCandidates(const std::fun
         // young (RegionSpace.cpp takes the youngRegion = true default), and the destination
         // recorded at RegionManager.cpp:1957 is exactly such a region — so before this gate a
         // minor collected a live route's destination while honouring nothing.
-        const uint64_t holdStart = TimeUtil::NanoSeconds();
-        const bool held = RouteDestHold::HoldsBack(region, RouteDestHold::Site::YOUNG_UNMOVABLE);
-        stats.holdCheckNs += TimeUtil::NanoSeconds() - holdStart;
-        if (held) {
-            ++stats.unmovableHeld;
-            region = next;
-            continue;
-        }
         MarkView<Generation::Young> view = region->GetMarkView<Generation::Young>();
         const uint64_t clearStart = TimeUtil::NanoSeconds();
         region->ClearLiveInfo(view);
@@ -262,14 +232,6 @@ YoungCollectionStats RegionManager::PrepareYoungGarbageCandidates(const std::fun
         }
         ++stats.recentFullYoung;
         // routedest: same exclusion as the unmovable young loop above.
-        const uint64_t holdStart = TimeUtil::NanoSeconds();
-        const bool held = RouteDestHold::HoldsBack(region, RouteDestHold::Site::YOUNG_RECENT_FULL);
-        stats.holdCheckNs += TimeUtil::NanoSeconds() - holdStart;
-        if (held) {
-            ++stats.recentFullHeld;
-            region = next;
-            continue;
-        }
         MarkView<Generation::Young> view = region->GetMarkView<Generation::Young>();
         const uint64_t clearStart = TimeUtil::NanoSeconds();
         region->ClearLiveInfo(view);
