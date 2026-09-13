@@ -112,3 +112,4 @@ perf_vs_official                          manual     built subject/official SDKs
 interp_sentinel_probe.cpp                 manual     built runtime SO; hunt-stackmap BUG2 interpreter-sentinel decode (pre-fix SEGV / post-fix FillInterpretedFrameDesc)
 signal_stack_guard_preinit.cpp            manual     product runtime/boundscheck SO pair; run_signal_stack_guard_preinit.sh checks pre-TLS guard queries and separate native hard-fault cases
 run_signal_stack_guard_preinit.sh         manual     GCV2_RUNTIME_LIB_DIR and SIGNAL_TEST_OUTPUT; compiles and runs signal_stack_guard_preinit.cpp against the built product pair
+z_index_distributor_unit.cpp             manual     cj_z_index_distributor_unit CMake/CTest target; needs MRT_GC_UNIT_TESTS=ON and pthread; ZGC claim-tree geometry plus sparse serial/parallel page-set comparison
