@@ -18,6 +18,9 @@
 #include <sched.h>
 #include <unistd.h>
 #include <vector>
+#if defined(_WIN64)
+#include <processthreadsapi.h>
+#endif
 
 #include "Allocator/RegionSpace.h"
 #include "Base/CString.h"
@@ -567,16 +570,18 @@ void FreeRegionManager::ReturnMemory(UnitIndex index, UnitCount count)
     }
 }
 
-void FreeRegionManager::AddGarbageUnits(UnitIndex index, UnitCount count)
+void FreeRegionManager::AddGarbageUnits(UnitIndex index, UnitCount count, bool allowSaferegion)
 {
-    ScopedEnterSaferegion saferegion(true);
+    std::unique_ptr<ScopedEnterSaferegion> saferegion;
+    if (allowSaferegion) { saferegion.reset(new ScopedEnterSaferegion(true)); }
     std::lock_guard<std::mutex> lock(cacheMutex);
     ReturnMemory(index, count);
 }
 
-void FreeRegionManager::AddReleaseUnits(UnitIndex index, UnitCount count)
+void FreeRegionManager::AddReleaseUnits(UnitIndex index, UnitCount count, bool allowSaferegion)
 {
-    ScopedEnterSaferegion saferegion(true);
+    std::unique_ptr<ScopedEnterSaferegion> saferegion;
+    if (allowSaferegion) { saferegion.reset(new ScopedEnterSaferegion(true)); }
     std::lock_guard<std::mutex> lock(cacheMutex);
     ReturnMemory(index, count);
 }
@@ -1009,17 +1014,20 @@ void RegionManager::ReturnPageMemory(const PageMemory& memory)
     ReturnRetiredPageMemory(memory);
 }
 
-void RegionManager::ReturnRetiredPageMemory(const PageMemory& memory)
+void RegionManager::ReturnRetiredPageMemory(const PageMemory& memory, bool allowSaferegion)
 {
     // zPageAllocator.cpp:1999 / 2150: hand back memory, decrease used and
     // satisfy the FIFO in one allocator-owner critical section. Enter the
     // saferegion before the owner, including nested cache hand-back calls.
-    ScopedEnterSaferegion enterSaferegion(true);
+    // A shared-page publication loser already has an object allocated in
+    // the winner. It must return its unused page without a safepoint.
+    std::unique_ptr<ScopedEnterSaferegion> enterSaferegion;
+    if (allowSaferegion) { enterSaferegion.reset(new ScopedEnterSaferegion(true)); }
     std::lock_guard<std::mutex> lock(pageAllocatorMutex);
     if (memory.committed) {
-        freeRegionManager.AddGarbageUnits(memory.index, memory.units);
+        freeRegionManager.AddGarbageUnits(memory.index, memory.units, allowSaferegion);
     } else {
-        freeRegionManager.AddReleaseUnits(memory.index, memory.units);
+        freeRegionManager.AddReleaseUnits(memory.index, memory.units, allowSaferegion);
     }
     const size_t bytes = memory.units * RegionInfo::UNIT_SIZE;
     CHECK(pageAllocatorUsed >= bytes);
@@ -1143,6 +1151,8 @@ void RegionManager::CountLiveObject(const BaseObject* obj)
 
 void RegionManager::AssembleSmallGarbageCandidates()
 {
+    // ZGenerationOld::mark_start, zGeneration.cpp:1222.
+    RetireSharedPages(kPageAgeRangeOld);
     fromRegionList.MergeRegionList(rawPointerPinnedRegionList, RegionInfo::RegionType::FROM_REGION);
     // twoflags: regions stamped post-mark-start of the previous major stay off from-space
     // until PrepareTrace clears the stamp (after this Assemble).
@@ -1273,6 +1283,8 @@ void RegionManager::InitializeTLAB(AllocBuffer& buffer)
 // regions in young mark-start (zGeneration.cpp:862).
 void RegionManager::ResetTLABUsage()
 {
+    // ZGenerationYoung::mark_start, zGeneration.cpp:865.
+    RetireSharedPages(kPageAgeRangeYoung);
     std::lock_guard<std::mutex> lock(tlabStatisticsLock);
     const size_t used = tlabUsed.exchange(0, std::memory_order_relaxed);
     if (used != 0) {
@@ -1832,12 +1844,13 @@ RegionInfo* RegionManager::TakeRegion(size_t num, RegionInfo::UnitRole type, boo
             // zPageAllocator.cpp:1906: preserve the succeeded prefix in the
             // committed cache and return only the failed suffix uncommitted.
             // No page descriptor has been published for this allocation.
-            ScopedEnterSaferegion enterSaferegion(true);
+            std::unique_ptr<ScopedEnterSaferegion> enterSaferegion;
+            if (allowSaferegion) { enterSaferegion.reset(new ScopedEnterSaferegion(true)); }
             std::lock_guard<std::mutex> lock(pageAllocatorMutex);
             const size_t index = request.Memory().index;
             if (request.Memory().virtualClaimed) {
-                if (committedUnits != 0) { freeRegionManager.AddGarbageUnits(index, committedUnits); }
-                if (committedUnits != num) { freeRegionManager.AddReleaseUnits(index + committedUnits, num - committedUnits); }
+                if (committedUnits != 0) { freeRegionManager.AddGarbageUnits(index, committedUnits, allowSaferegion); }
+                if (committedUnits != num) { freeRegionManager.AddReleaseUnits(index + committedUnits, num - committedUnits, allowSaferegion); }
             }
             CHECK(pageAllocatorUsed >= size);
             pageAllocatorUsed -= size;
@@ -2521,6 +2534,170 @@ void RegionManager::DumpRegionStats(const char* msg) const
     [[maybe_unused]] constexpr size_t decimalPrecision = 10000;
     TRACE_COUNT("CJRT_GC_objectCapacity", static_cast<size_t>(objectCapacity * decimalPrecision));
     TRACE_COUNT("CJRT_GC_unitCapacity", static_cast<size_t>(unitCapacity * decimalPrecision));
+}
+
+// zValue.inline.hpp:80-89 / zCPU.cpp:69-81. Use the configured CPU domain,
+// not the caller's affinity-mask population (CPU ids can be sparse).
+size_t RegionManager::SharedPageCPUCount()
+{
+    static const size_t count = [] {
+#if defined(__linux__) || defined(hongmeng)
+        const long configured = sysconf(_SC_NPROCESSORS_CONF);
+        if (configured > 0) { return static_cast<size_t>(configured); }
+#endif
+        return static_cast<size_t>(std::max(1U, std::thread::hardware_concurrency()));
+    }();
+    return count;
+}
+
+size_t RegionManager::CurrentSharedPageCPU()
+{
+#if defined(__linux__) || defined(hongmeng)
+    const int cpu = sched_getcpu();
+    if (cpu >= 0 && static_cast<size_t>(cpu) < SharedPageCPUCount()) {
+        return static_cast<size_t>(cpu);
+    }
+#elif defined(_WIN64)
+    // os_windows.cpp:1090: Windows reports the current processor number.
+    const size_t cpu = static_cast<size_t>(GetCurrentProcessorNumber());
+    if (cpu < SharedPageCPUCount()) { return cpu; }
+#elif defined(__APPLE__) && defined(__x86_64__)
+    // os_bsd.cpp:2228-2261: compact the initial APIC id into the CPU domain.
+    struct ProcessorMap {
+        std::atomic<int> ids[256];
+        std::atomic<unsigned> next{0};
+        ProcessorMap() { for (auto& id : ids) { id.store(-1, std::memory_order_relaxed); } }
+    };
+    static ProcessorMap processors;
+    unsigned eax = 1, ebx = 0, ecx = 0, edx = 0;
+    __asm__("cpuid" : "+a"(eax), "+b"(ebx), "+c"(ecx), "+d"(edx));
+    auto& entry = processors.ids[(ebx >> 24) & 255];
+    int cpu = entry.load(std::memory_order_acquire);
+    while (cpu < 0) {
+        int expected = -1;
+        if (entry.compare_exchange_strong(expected, -2, std::memory_order_acq_rel)) {
+            cpu = static_cast<int>(processors.next.fetch_add(1, std::memory_order_relaxed) % SharedPageCPUCount());
+            entry.store(cpu, std::memory_order_release);
+        } else {
+            cpu = entry.load(std::memory_order_acquire);
+        }
+    }
+    return static_cast<size_t>(cpu);
+#endif
+    // os_bsd.cpp:2262-2266 / os_linux.cpp:4994-5009: unsupported or invalid
+    // processor ids share slot zero; every page allocation remains atomic.
+    return 0;
+}
+
+RegionManager::PerAgeObjectAllocator::PerAgeObjectAllocator(PageAge pageAge)
+    : age(pageAge), smallPages(new SharedSmallPage[SharedPageCPUCount()]) {}
+
+// zHeap.cpp:229: shared-page TLAB accounting includes only small eden pages.
+static bool IsSmallEdenPage(const RegionInfo* page)
+{
+    return page->IsSmallRegion() && page->IsYoungRegion() &&
+           page->GetYoungAge() == static_cast<uint8_t>(untype(PageAge::eden));
+}
+
+// ZObjectAllocator::PerAge::alloc_page, ZHeap::alloc_page/account_alloc_page.
+RegionInfo* RegionManager::AllocateSharedPage(size_t units, RegionInfo::UnitRole role,
+                                             PageAge age, bool nonBlocking)
+{
+    RegionInfo* page = TakeRegion(units, role, false, !nonBlocking);
+    if (page == nullptr) { return nullptr; }
+    page->SetYoungRegionFlag(age != PageAge::old);
+    page->SetYoungAge(age == PageAge::old ? 0 : static_cast<uint8_t>(untype(age)));
+    if (IsSmallEdenPage(page)) {
+        tlabUsed.fetch_add(page->GetRegionSize(), std::memory_order_relaxed);
+    }
+    const GCPhase phase = Heap::GetHeap().GetCollector().GetGCPhase();
+    if (phase == GC_PHASE_TRACE || phase == GC_PHASE_CLEAR_SATB_BUFFER) {
+        page->SetTraceRegionFlag(1);
+    }
+    if (phase == GC_PHASE_POST_TRACE || phase == GC_PHASE_PREFORWARD || phase == GC_PHASE_FORWARD) {
+        page->SetNotRelocatableThisCycle(1);
+    }
+    // Register with the page lifecycle, never with tlRegionList. Registration
+    // precedes object allocation, as RegionList's byte accounting requires.
+    if (role == RegionInfo::UnitRole::LARGE_SIZED_UNITS) {
+        recentLargeRegionList.PrependRegion(page, RegionInfo::RegionType::RECENT_LARGE_REGION);
+    } else {
+        recentFullRegionList.PrependRegion(page, RegionInfo::RegionType::RECENT_FULL_REGION);
+        RecentFullAccounting::Enqueue(1, page->GetUnitCount());
+    }
+    return page;
+}
+
+// ZObjectAllocator::PerAge::undo_alloc_page: this unpublished candidate was
+// never used by a caller. Undo its page charge, not a TLAB's ownership.
+void RegionManager::UndoSharedPage(RegionInfo* page)
+{
+    recentFullRegionList.DeleteRegion(page);
+    RecentFullAccounting::Dequeue(1, page->GetUnitCount());
+    if (IsSmallEdenPage(page)) {
+        tlabUsed.fetch_sub(page->GetRegionSize(), std::memory_order_relaxed);
+    }
+    // ZHeap::undo_alloc_page: remove the unused page-table entry and return
+    // the extent without suspending a caller holding an unpublished object.
+    RegionInfo::RetirePage(page, [this, page] {
+        const size_t units = page->GetUnitCount();
+        const size_t index = page->GetUnitIdx();
+        if (units >= HUGE_PAGE) { UntagHugePage(page, units); }
+        page->InitFreeUnits();
+        ReturnRetiredPageMemory(PageMemory{index, units, 0, true}, false);
+    });
+}
+
+uintptr_t RegionManager::AllocSharedObject(size_t size, PageAge age, bool nonBlocking)
+{
+    CHECK(untype(age) < kPageAgeCount);
+    PerAgeObjectAllocator& allocator = *objectAllocators[untype(age)];
+    if (size > GetLargeObjectThreshold()) {
+        // ZObjectAllocator::PerAge::alloc_large_object. This runtime has no
+        // medium page class; objects above its small limit use dedicated pages.
+        const size_t units = AlignUp(size, RegionInfo::UNIT_SIZE) / RegionInfo::UNIT_SIZE;
+        RegionInfo* page = AllocateSharedPage(units, RegionInfo::UnitRole::LARGE_SIZED_UNITS,
+                                               allocator.age, nonBlocking);
+        return page == nullptr ? 0 : page->Alloc(size);
+    }
+    // ZObjectAllocator::PerAge::shared_small_page_addr / alloc_small_object.
+    // Keep this stable slot address across refill; a safepoint can retire its
+    // value, and the compare-exchange below explicitly handles that case.
+    auto& shared = allocator.smallPages[CurrentSharedPageCPU()].page;
+    RegionInfo* page = shared.load(std::memory_order_acquire);
+    uintptr_t addr = page == nullptr ? 0 : page->AtomicAlloc(size);
+    if (addr != 0) { return addr; }
+
+    // zObjectAllocator.cpp:78-116: allocate before publishing the candidate,
+    // retry after retirement or exhaustion, and undo a losing page allocation.
+    RegionInfo* fresh = AllocateSharedPage(maxUnitCountPerRegion, RegionInfo::UnitRole::SMALL_SIZED_UNITS,
+                                           allocator.age, nonBlocking);
+    if (fresh == nullptr) { return 0; }
+    addr = fresh->Alloc(size);
+    CHECK(addr != 0);
+    for (;;) {
+        if (shared.compare_exchange_strong(page, fresh, std::memory_order_acq_rel,
+                                            std::memory_order_acquire)) {
+            return addr;
+        }
+        if (page == nullptr) { continue; }
+        const uintptr_t previous = page->AtomicAlloc(size);
+        if (previous == 0) { continue; }
+        UndoSharedPage(fresh);
+        return previous;
+    }
+}
+
+// ZObjectAllocator::retire_pages / PerAge::retire_pages (cpp:208-237).
+// Called in the corresponding generation's mark-start pause. The lifecycle
+// lists retain pages; retirement only removes allocation shortcuts.
+void RegionManager::RetireSharedPages(PageAgeRange ages)
+{
+    for (PageAge age : ages) {
+        for (size_t cpu = 0; cpu < SharedPageCPUCount(); ++cpu) {
+            objectAllocators[untype(age)]->smallPages[cpu].page.store(nullptr, std::memory_order_release);
+        }
+    }
 }
 
 RegionInfo* RegionManager::AllocateThreadLocalRegion(size_t size, bool expectPhysicalMem, bool youngRegion,

@@ -6,6 +6,7 @@
 
 
 #include "Heap/Verify/ZVerify.h"
+#include "Heap/Collector/StringDedup.h"
 #include "Heap/WCollector/WCollector.h"
 #include "Heap/WCollector/RememberedHolderPolicy.h"
 
@@ -489,6 +490,7 @@ void WCollector::Preforward()
         std::atomic<unsigned>& next;
     } roots(families, next);
     workers.Run(roots);
+    StringDedup::Instance().Remap();
     if (HealCoverage::kHealCoverageCensus) {
         HealCoverage::CensusAfterPublication(
             currentRemapColour, FlipSeq().load(std::memory_order_relaxed), "major-preforward");
@@ -1282,6 +1284,7 @@ void WCollector::EvacuateYoungRegions(const std::vector<BaseObject*>& reachableV
             manager.FinishIncompleteFromRegions();
         }
         VLOG(REPORT, "[GCV2][relocate][conc] concurrent_relocate done; STW re-entered");
+        StringDedup::Instance().Remap();
         {
             MRT_PHASE_TIMER(ZStatPhases::PYoungRefFixBulk);
             g_minorRefCasFail.store(0, std::memory_order_relaxed);
@@ -1370,6 +1373,7 @@ void WCollector::EvacuateYoungRegions(const std::vector<BaseObject*>& reachableV
     {
         MRT_PHASE_TIMER(ZStatPhases::PYoungConcPromoteWalk);
         manager.RememberFlipPromotedPages(workers);
+
     }
 
     *stw = std::make_unique<ScopedStopTheWorld>("young retire forwarding", true,
@@ -2186,6 +2190,7 @@ void WCollector::UpdateRemsetForFields(BaseObject* from, BaseObject* to)
         return;
     }
     RegionManager::RememberPromotedObject(to);
+
 }
 
 BaseObject* WCollector::RelocateObjectInner(BaseObject* obj, BaseObject* planned, RegionInfo* copyPage)
@@ -2203,15 +2208,12 @@ BaseObject* WCollector::RelocateObjectInner(BaseObject* obj, BaseObject* planned
     const size_t size = RegionSpace::GetAllocSize(*obj);
     bool allocatedHere = false;
     if (toObj == nullptr) {
-        AllocBuffer* buf = AllocBuffer::GetOrCreateAllocBuffer();
-        RegionInfo* tl = buf->GetRegion();
-        if (tl != nullptr && tl != RegionInfo::NullRegion()) {
-            toObj = reinterpret_cast<BaseObject*>(tl->Alloc(size));
-        }
-        if (toObj == nullptr) {
-            toObj = reinterpret_cast<BaseObject*>(
-                buf->Allocate(size, AllocType::MOVEABLE_OBJECT));
-        }
+        // ZHeap::alloc_object_for_relocation / ZObjectAllocator::alloc_for_relocation:
+        // destination age owns the shared allocator; relocation never refills a TLAB.
+        const PageAge fromAge = copyPage->IsYoungRegion() ? to_pageage(copyPage->GetYoungAge()) : PageAge::old;
+        const PageAge toAge = ComputeToAge(fromAge, GetGCStats().tenuringThreshold);
+        auto& manager = reinterpret_cast<RegionSpace&>(theAllocator).GetRegionManager();
+        toObj = reinterpret_cast<BaseObject*>(manager.AllocSharedObject(size, toAge, true));
         if (toObj == nullptr) {
             return nullptr;
         }

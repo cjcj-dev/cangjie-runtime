@@ -2855,15 +2855,20 @@ public:
     // for regions shared by multithreads
     uintptr_t AtomicAlloc(size_t size)
     {
-        uintptr_t addr = __atomic_fetch_add(&metadata.allocPtr, size, __ATOMIC_ACQ_REL);
-        // should not check allocPtr, because it might be shared
-        if ((addr < GetRegionEnd()) && (size <= GetRegionEnd() - addr)) {
-            return addr;
+        // zPage.inline.hpp:451-479: reject an out-of-page top before CAS.
+        // Failed allocations must never move the published allocation frontier.
+        uintptr_t addr = __atomic_load_n(&metadata.allocPtr, __ATOMIC_ACQUIRE);
+        const uintptr_t limit = GetRegionEnd();
+        for (;;) {
+            if (addr > limit || size > limit - addr) {
+                return 0;
+            }
+            const uintptr_t next = addr + size;
+            if (__atomic_compare_exchange_n(&metadata.allocPtr, &addr, next, false,
+                                             __ATOMIC_ACQ_REL, __ATOMIC_ACQUIRE)) {
+                return addr;
+            }
         }
-        if (addr <= GetRegionEnd()) {
-            __atomic_store_n(&metadata.allocPtr, addr, __ATOMIC_SEQ_CST);
-        }
-        return 0;
     }
 
     // zHeap.cpp:298-311 undo_alloc_object_for_relocation / zPage undo_alloc_object_atomic:

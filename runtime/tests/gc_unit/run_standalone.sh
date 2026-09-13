@@ -381,6 +381,7 @@ MAIN_SOURCES=(
   "$SRC/test_young_conc.cpp"
   "$SRC/test_alloc_buffer_handoff.cpp"
   "$SRC/test_tlab_usage.cpp"
+  "$SRC/test_shared_small_page.cpp"
   "$SRC/test_young_weak.cpp"
   "$SRC/test_relocation_set_selector.cpp"
   "$SRC/test_store_barrier_buffer.cpp"
@@ -393,6 +394,7 @@ MAIN_SOURCES=(
   "$SRC/test_gc_director.cpp"
   "$SRC/test_gc_request_sync.cpp"
 
+  "$SRC/test_string_dedup.cpp"
   "$SRC/test_uncommitter.cpp"
   "$SRC/test_relocation_request_queue.cpp"
   "$SRC/test_gc_thread_pool.cpp"

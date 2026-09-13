@@ -242,8 +242,8 @@ public struct String <: Collection<Byte> & Comparable<String> & Hashable & ToStr
     }
 
     /**
-     * Returns a String whose effective UTF-8 byte range is shared with an
-     * already deduplicated equal String, when one exists.
+     * Registers the effective UTF-8 backing as a weak deduplication candidate.
+     * Returns the candidate while managed canonical-backing return is unavailable.
      *
      * This operation is explicit and functional: it does not change this
      * String value. Callers must retain the returned value. A sliced String is
