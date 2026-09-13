@@ -28,7 +28,7 @@
 #include "Collector/CopyCollector.h"
 #include "Collector/GcTrigger.h"
 #include "Collector/Uncommitter.h"
-#include "Collector/MutatorAllocRate.h"
+#include "Base/ZStat.h"
 #include "Collector/TenuringThreshold.h"
 #include "Common/BaseObject.h"
 #include "Common/ScopedObjectAccess.h"
@@ -220,7 +220,7 @@ size_t RegionManager::ConsumePromotedCrossGenEdgeCount()
 
 size_t RegionManager::RecordPinnedCrossGenEdges()
 {
-    MRT_PHASE_TIMER("young.pinned_scan");
+    MRT_PHASE_TIMER(ZStatPhases::PYoungPinnedScan);
     RememberedSet& rememberedSet = Heap::GetHeap().GetRememberedSet();
     std::atomic<size_t> recorded{ 0 };
     auto skipPinnedScanRegion = [](RegionInfo* region) {
@@ -2011,7 +2011,7 @@ RegionInfo* RegionManager::TakeRegion(size_t num, RegionInfo::UnitRole type, boo
         if (num >= HUGE_PAGE) {
             TagHugePage(region, num);
         }
-        MutatorAllocRate::sample_allocation(size);
+        ZStatMutatorAllocRate::sample_allocation(size);
         return region;
     }
 

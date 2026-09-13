@@ -631,7 +631,7 @@ void WCollector::TraceHeap()
     }
 
     {
-        MRT_PHASE_TIMER("enum roots & update old pointers within");
+        MRT_PHASE_TIMER(ZStatPhases::PEnumRootsUpdateOldPointersWithin);
         if (concurrentStackScan) {
             // This is major's root-enumeration closing edge. StopTheWorld establishes
             // InSaferegion for the fixed mutator roster, so WM_OWNER_GC may finish a
@@ -674,7 +674,7 @@ void WCollector::TraceHeap()
     }
 
     {
-        MRT_PHASE_TIMER("trace live objects & update old pointers in ref-fields");
+        MRT_PHASE_TIMER(ZStatPhases::PTraceLiveObjectsUpdateOldPointersInRefFields);
         markedObjectCount.store(0, std::memory_order_relaxed);
         if (!concurrentStackScan) {
             TransitionToGCPhase(GCPhase::GC_PHASE_TRACE, true);
@@ -1463,7 +1463,7 @@ bool WCollector::FollowYoungMark(WorkStack& workStack, bool fullYoungScan,
                                      MinorSlotSet& weakSlots,
                                      YoungConcWindowStats* windowStats)
 {
-    MRT_PHASE_TIMER("young.mark_follow");
+    MRT_PHASE_TIMER(ZStatPhases::PYoungMarkFollow);
     // Follow explicit roots and allocation work; young has no SATB queue.
 #if defined(MRT_TESTABLE_INTERNALS)
     PublishConcurrentYoungProducersTestReceipt();

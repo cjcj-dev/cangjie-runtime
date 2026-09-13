@@ -276,14 +276,19 @@ void EmitTimerRecords(uint64_t seq, const char* name, uint64_t startNs, uint64_t
 
 class Timer {
 public:
-    explicit Timer(const CString& pName, LogType type = REPORT) : name(pName), logType(type)
+    explicit Timer(const CString& pName, LogType type = REPORT) : Timer(pName, type, nullptr) {}
+    explicit Timer(const ZStatPhase& phase, LogType type = REPORT) : Timer(phase.Name(), type, &phase) {}
+
+private:
+    Timer(const CString& pName, LogType type, const ZStatPhase* phase)
+        : name(pName), logType(type), statPhase(phase)
     {
         // Time when either the human VLOG channel or structured GC log needs the duration.
         // ENABLE_LOG alone used to gate phase records; under DEFAULT_MRT_REPORT=0 that
         // silently dropped rec=phase even with MRT_GC_LOG=1.
-        zstatActive = ZStat::Enabled();
+
         gcLogActive = GcLog::Enabled();
-        if (ENABLE_LOG(type) || gcLogActive || zstatActive) {
+        if (ENABLE_LOG(type) || gcLogActive || statPhase != nullptr) {
             startTimeNs = TimeUtil::NanoSeconds();
             active = true;
             // FINALIZE timers run on a lifecycle thread that does not participate in the active
@@ -292,11 +297,8 @@ public:
             // timers use the default REPORT type and retain the active cycle, including nonpillar
             // phases such as young.flush_alloc.
             cycleSeq = logType == FINALIZE ? 0 : GcLog::CurrentSeq();
-            // ZStatPhase kind (pause vs concurrent, zStat.hpp:257/270) is sampled at scope
-            // entry: a phase that straddles the world-release is booked where its work began.
-            if (zstatActive) {
-                zstatPauseAtStart = ZStat::WorldStoppedNow();
-            }
+            // Preserve the GCLOG observation contract independently of static stat identity.
+            zstatPauseAtStart = ZStat::WorldStoppedNow();
             if (gcLogActive) {
                 parent = CurrentLeafTimer();
                 if (parent != nullptr) {
@@ -307,6 +309,7 @@ public:
         }
     }
 
+public:
     Timer(const Timer&) = delete;
     Timer& operator=(const Timer&) = delete;
     Timer(Timer&&) = delete;
@@ -334,11 +337,9 @@ public:
             BuildLeafPath(path, sizeof(path), depth, pathOk);
         }
         EmitTimerRecords(cycleSeq, name.Str(), startTimeNs, diffTimeNs, isLeaf,
-                         zstatActive ? (zstatPauseAtStart ? 1 : 0) : -1, depth, pathOk, path);
-        // Keep ZStat as an adjacent independent downstream: cutting GCLOG emission must not cut
-        // the positive-control account.
-        if (zstatActive) {
-            ZStat::NotePhase(name.Str(), zstatPauseAtStart, diffTimeNs);
+                         (zstatPauseAtStart ? 1 : 0), depth, pathOk, path);
+        if (statPhase != nullptr) {
+            statPhase->RegisterEnd(diffTimeNs);
         }
     }
 
@@ -396,7 +397,7 @@ private:
     LogType logType;
     bool active = false;
     bool gcLogActive = false;
-    bool zstatActive = false;
+    const ZStatPhase* statPhase = nullptr;
     bool zstatPauseAtStart = false;
     bool hasChild = false;
     Timer* parent = nullptr;

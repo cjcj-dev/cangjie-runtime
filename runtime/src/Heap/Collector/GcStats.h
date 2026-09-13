@@ -105,31 +105,6 @@ public:
 
     std::atomic<size_t> heapThreshold{ 0 };
 
-    // Last completed minor collection statistics.
-    std::atomic<size_t> lastYoungCandidateBytes{ 0 };
-    std::atomic<size_t> lastYoungPromotedBytes{ 0 };
-    std::atomic<size_t> lastYoungCollectedBytes{ 0 };
-    std::atomic<uint64_t> lastYoungDurationNs{ 0 };
-    std::atomic<bool> hasYoungSample{ false };
-
-    std::atomic<uint32_t> warmupCyclesDone{ 0 };
-    std::atomic<bool> isWarm{ false };
-    std::atomic<bool> isTimeTrustable{ false };
-    std::atomic<uint64_t> lastGcDurationNs{ 0 };
-    // zDirector R4 snapshots. Static so GCStats (embedded in HeapImpl next
-    // to barriers) stays the 13d5fee2 size. TruncatedSeq windows live in
-    // GcStats.cpp and only publish these atomics at cycle end.
-    static std::atomic<uint64_t> lastOldDurationNs;
-    static std::atomic<uint64_t> lastMajorFinishNs;
-    static std::atomic<size_t> usedAtLastMajorEnd;
-    static std::atomic<size_t> oldLiveAtMarkEnd;
-    static std::atomic<double> reclaimedPerYoungAvg;
-    static std::atomic<double> reclaimedPerOldAvg;
-    static std::atomic<double> lastYoungGcDurationAvgSec;
-    static std::atomic<double> lastOldGcDurationAvgSec;
-
-    void RecordYoungStats(size_t candidateBytes, size_t promotedBytes, size_t collectedBytes, uint64_t durationNs,
-                          size_t maxCapacity);
 
 private:
     // A minor may extend the HEU finish-time throttle once after a major. A
