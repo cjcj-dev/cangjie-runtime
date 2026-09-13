@@ -1248,19 +1248,6 @@ bool WCollector::FixMinorEvacuatedSlot(DerivedSlot& derived, BaseObject* knownBa
 
 void WCollector::FixMinorRootSlots(const ScopedStopTheWorld* stw)
 {
-    size_t callN = g_fixMinorRootSlotsCalls.fetch_add(1, std::memory_order_relaxed);
-    const size_t entryBefore = g_resolveRootEntry.load(std::memory_order_relaxed);
-    const size_t oldBefore = g_resolveRootOld.load(std::memory_order_relaxed);
-    const size_t nullBefore = g_resolveRootHealNull.load(std::memory_order_relaxed);
-    if (NullslotProbeEnabled() && callN < 32) {
-        GCPhase phase = Heap::GetHeap().GetGCPhase();
-        std::fprintf(stderr,
-                     "[GCV2][nullslot] path=fix_minor_roots begin n=%zu phase=%s(%u) "
-                     "entry=%zu old=%zu healNull=%zu\n",
-                     callN, Collector::GetGCPhaseName(phase), static_cast<unsigned>(phase), entryBefore, oldBefore,
-                     nullBefore);
-        std::fflush(stderr);
-    }
     // statresid grant-before-route: paint every root-named young ghost into liveInfo0
     // *before* any Forward/Route. Per-slot Ensure+Forward (old shape) Routes the whole
     // region on the first root of a shared region, freezes liveByteCount (COMPACTED/ROUTED),
@@ -1316,18 +1303,7 @@ void WCollector::FixMinorRootSlots(const ScopedStopTheWorld* stw)
     Runtime::Current().GetConcurrencyModel().VisitGCRoots(&rawRootVisitor);
     collectorResources.GetFinalizerProcessor().VisitRawPointers(rawRootVisitor);
     Heap::GetHeap().VisitAllExportRoots(rawRootVisitor);
-    if (NullslotProbeEnabled() && callN < 32) {
-        std::fprintf(stderr,
-                     "[GCV2][nullslot] path=fix_minor_roots end n=%zu dEntry=%zu dOld=%zu dHealNull=%zu "
-                     "entry=%zu old=%zu healNull=%zu\n",
-                     callN, g_resolveRootEntry.load(std::memory_order_relaxed) - entryBefore,
-                     g_resolveRootOld.load(std::memory_order_relaxed) - oldBefore,
-                     g_resolveRootHealNull.load(std::memory_order_relaxed) - nullBefore,
-                     g_resolveRootEntry.load(std::memory_order_relaxed),
-                     g_resolveRootOld.load(std::memory_order_relaxed),
-                     g_resolveRootHealNull.load(std::memory_order_relaxed));
-        std::fflush(stderr);
-    }
+
 }
 
 // fixinput: FixMinorObjectSlots reader-side accounting (default on, cheap atomics).
@@ -1944,8 +1920,8 @@ BaseObject* WCollector::TryMutatorRelocate(BaseObject* obj, RegionInfo::RetainSc
     if (phase != GCPhase::GC_PHASE_PREFORWARD && phase != GCPhase::GC_PHASE_FORWARD) {
         return nullptr;
     }
-    // retain_page. A try-lock, so a losing mutator falls back instead of blocking -- ZGC's
-    // retain_page also gives up (returns false) when the page is claimed or released.
+    // zForwarding.cpp:86-108: a claimed page waits for its task before
+    // retain_page returns false; no source access follows a failed retain.
     if (!lease.ok()) {
         return WaitForPageForwarding(obj, lease.HoldForwarding());
     }
@@ -2463,11 +2439,10 @@ void WCollector::UpdateRemsetForFields(BaseObject* from, BaseObject* to)
         fromRegion = RegionInfo::TryGetRegionInfoAt(reinterpret_cast<MAddress>(from));
     }
     if (fromRegion != nullptr && !fromRegion->IsYoungRegion()) {
-        const size_t sz = RegionSpace::GetAllocSize(*from);
+        const size_t sz = RegionSpace::GetAllocSize(*to);
         ZForwarding* forwarding = ForwardingTable::get(reinterpret_cast<MAddress>(from), Generation::Old);
-        const bool youngMarking = Heap::GetHeap().GetGCPhase() == GCPhase::GC_PHASE_TRACE;
         rememberedSet.TransferObjectSlots(reinterpret_cast<MAddress>(from), reinterpret_cast<MAddress>(to), sz,
-                                          forwarding, youngMarking);
+                                          forwarding);
         return;
     }
     if (!to->HasRefField()) {
