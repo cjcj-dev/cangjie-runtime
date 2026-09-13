@@ -15,7 +15,7 @@
 #include "Heap/Collector/Collector.h"
 #include "Heap/Collector/ManagedObjectGate.h"
 #include "gc_heap_fixture.hpp"
-#include "Heap/Allocator/RegionManager.h"
+#include "Heap/Allocator/PageAllocator.h"
 #include "gc_unittest.hpp"
 
 using namespace MapleRuntime;

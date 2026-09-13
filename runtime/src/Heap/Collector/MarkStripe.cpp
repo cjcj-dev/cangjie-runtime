@@ -14,7 +14,7 @@
 #include <type_traits>
 
 #include "Base/Log.h"
-#include "Heap/Allocator/RegionInfo.h"
+#include "Heap/Allocator/Page.h"
 
 namespace MapleRuntime {
 namespace {

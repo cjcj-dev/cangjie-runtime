@@ -13,7 +13,7 @@
 #include "Base/Log.h"
 #include "Common/BaseObject.h"
 #include "Heap/Heap.h"
-#include "Heap/Allocator/RegionInfo.h"
+#include "Heap/Allocator/Page.h"
 #include "Heap/Barrier/RememberedSet.h"
 #include "Heap/Collector/Collector.h"
 #include "Common/ColourMask.h"

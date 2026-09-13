@@ -12,7 +12,7 @@
 
 #include "gc_unittest.hpp"
 #include "Heap/Allocator/MemMap.h"
-#include "Heap/Allocator/RegionManager.h"
+#include "Heap/Allocator/PageAllocator.h"
 #include "Mutator/Mutator.h"
 #include "Mutator/ThreadLocal.h"
 

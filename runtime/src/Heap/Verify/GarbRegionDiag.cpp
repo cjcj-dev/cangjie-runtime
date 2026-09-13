@@ -7,7 +7,7 @@
 
 #include "Base/Log.h"
 #include "Common/BaseObject.h"
-#include "Heap/Allocator/RegionInfo.h"
+#include "Heap/Allocator/Page.h"
 #include "Heap/Collector/Collector.h"
 #include "Heap/Collector/GcStats.h"
 #include "Heap/Collector/LiveInfo.h"

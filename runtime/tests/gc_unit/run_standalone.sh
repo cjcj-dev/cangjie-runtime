@@ -660,7 +660,7 @@ while IFS=$'\t' read -r test_name anchor carrier consumer cut_site; do
   [[ "$anchor" == "_ZN12MapleRuntime10RegionInfo28PreserveRetainedLiveInfoUpToEm" ]]
   [[ "$carrier" == "product_so" ]]
   [[ "$consumer" == "ProductPreserveRetainedUpToFn" ]]
-  /usr/bin/grep -F -q "$cut_site" "$ROOT/runtime/src/Heap/Allocator/RegionInfo.h"
+  /usr/bin/grep -F -q "$cut_site" "$ROOT/runtime/src/Heap/Allocator/Page.inline.h"
   suite="${test_name%%.*}"
   name="${test_name#*.}"
   /usr/bin/grep -F -q "GC_TEST($suite, $name)" "$SRC/test_live_map.cpp"

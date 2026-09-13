@@ -4,7 +4,7 @@
 //
 // See https://cangjie-lang.cn/pages/LICENSE for license information.
 
-#include "Heap/WCollector/RelocationSetSelector.h"
+#include "Heap/Collector/RelocationSetSelector.h"
 #include "gc_unittest.hpp"
 
 #include <algorithm>

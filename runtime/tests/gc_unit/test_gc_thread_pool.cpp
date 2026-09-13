@@ -13,7 +13,7 @@
 #include "gc_heap_fixture.hpp"
 #include "Heap/GcThreadPool.h"
 #include "Heap/Allocator/ForwardingTable.h"
-#include "Heap/Allocator/RegionManager.h"
+#include "Heap/Allocator/PageAllocator.h"
 #include "Heap/Collector/RelocationRequestQueue.h"
 #include "Heap/Collector/CollectorProxy.h"
 #include "Heap/WCollector/WCollector.h"

@@ -25,7 +25,7 @@
 #endif
 
 #include "Heap/Allocator/MemMap.h"
-#include "Heap/Allocator/RegionManager.h"
+#include "Heap/Allocator/PageAllocator.h"
 
 namespace MapleRuntime {
 namespace {

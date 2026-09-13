@@ -6,7 +6,7 @@
 
 
 #include "Base/ImmortalWrapper.h"
-#include "Heap/Allocator/RegionInfo.h"
+#include "Heap/Allocator/Page.h"
 #include "Heap/Allocator/RegionSpace.h"
 #include "LiveInfoArena.h"
 #include "LiveInfo.h"

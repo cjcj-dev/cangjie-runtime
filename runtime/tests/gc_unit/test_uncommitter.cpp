@@ -12,7 +12,7 @@
 #include "Heap/Allocator/CartesianTree.h"
 #define private public
 #include "Heap/Allocator/FreeRegionManager.h"
-#include "Heap/Allocator/RegionManager.h"
+#include "Heap/Allocator/PageAllocator.h"
 #undef private
 #include "Heap/Allocator/ForwardingTable.h"
 #include "Heap/Allocator/MemMap.h"

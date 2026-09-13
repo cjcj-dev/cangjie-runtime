@@ -8,7 +8,7 @@
 
 #include "Heap/Allocator/AllocBuffer.h"
 #include "Heap/Allocator/Allocator.h"
-#include "Heap/Allocator/RegionInfo.h"
+#include "Heap/Allocator/Page.h"
 #include "Heap/Collector/Collector.h"
 #include "Heap/Collector/CollectorResources.h"
 #include "Heap/Heap.h"

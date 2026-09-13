@@ -19,7 +19,7 @@
 #include "Common/ColourPredicates.h"
 #include "Common/StateWord.h"
 #include "Heap/Allocator/ForwardingTable.h"
-#include "Heap/Allocator/RegionInfo.h"
+#include "Heap/Allocator/Page.h"
 #include "Heap/Allocator/RegionSpace.h"
 #include "Heap/Collector/CollectorResources.h"
 #include "Heap/Collector/ManagedObjectGate.h"

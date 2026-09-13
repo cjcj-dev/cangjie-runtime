@@ -8,7 +8,7 @@
 
 #include <cstdint>
 
-#include "Heap/Allocator/RegionInfo.h"
+#include "Heap/Allocator/Page.h"
 #include "gc_unittest.hpp"
 
 using namespace MapleRuntime;

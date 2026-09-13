@@ -29,7 +29,7 @@ PREFIX = 'runtime/src/'
 CUTS = {
     'entry': (PREFIX+'Heap/WCollector/WCollector.cpp',
               '        DoYoungGarbageCollection();', '        (void)0;'),
-    'arena_begin': (PREFIX+'Heap/Allocator/RegionManager.h',
+    'arena_begin': (PREFIX+'Heap/Collector/RelocationSet.inline.h',
         '        CHECK_DETAIL(ForwardingTable::BeginForwardingArena(fromRegionList),\n'
         '                     "forwarding arena budget allocation failed");',
         '        (void)fromRegionList;'),

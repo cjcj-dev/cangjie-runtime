@@ -14,7 +14,7 @@
 
 #include "AllocationStallQueue.h"
 #include "CartesianTree.h"
-#include "RegionInfo.h"
+#include "Page.h"
 #include "Common/ScopedObjectAccess.h"
 #include "Heap/Collector/Uncommitter.h"
 

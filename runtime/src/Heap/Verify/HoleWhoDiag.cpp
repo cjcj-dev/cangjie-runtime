@@ -7,7 +7,7 @@
 #include "Common/BaseObject.h"
 #include "Common/ColourTypes.h"
 #include "Heap/Allocator/HeapFiller.h"
-#include "Heap/Allocator/RegionInfo.h"
+#include "Heap/Allocator/Page.h"
 #include "Heap/Collector/ManagedObjectGate.h"
 
 namespace MapleRuntime {

@@ -9,7 +9,7 @@
 
 #include <cstdlib>
 
-#include "Allocator/RegionInfo.h"
+#include "Allocator/Page.h"
 
 namespace MapleRuntime {
 int MappedCache::SizeClass(Count count)

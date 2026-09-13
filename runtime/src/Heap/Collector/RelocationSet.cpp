@@ -118,3 +118,14 @@ void WCollector::CollectSmallSpace()
     collectorResources.GetFinalizerProcessor().NotifyToReclaimGarbage();
 }
 } // namespace MapleRuntime
+
+namespace MapleRuntime {
+void RegionManager::AddFlipPromotedPage(RegionInfo* region)
+{
+    // zRelocationSet.cpp: register_flip_promoted. No per-page copy of liveness.
+    std::lock_guard<std::mutex> lock(flipPromotedMutex);
+    flipPromotedPages.push_back(region);
+}
+
+
+} // namespace MapleRuntime

@@ -16,7 +16,7 @@
 #include "Common/BaseObject.h"
 #include "Common/Runtime.h"
 #include "Concurrency/ConcurrencyModel.h"
-#include "Heap/Allocator/RegionInfo.h"
+#include "Heap/Allocator/Page.h"
 #include "Heap/Collector/Collector.h"
 #include "Heap/Collector/FinalizerProcessor.h"
 #include "Heap/Heap.h"
