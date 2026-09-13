@@ -124,3 +124,34 @@ GC_OTHER_VM_TEST(ZVerify, ForwardingTableChecksLiveAccounting)
     });
     owner->verify();
 }
+
+// zVerify.cpp:531-609: the source field must be represented in the active
+// remembered face. This exercises the actual verifier, not just bitmap reads.
+GC_OTHER_VM_TEST(ZVerify, BeforeRelocationRejectsMissingRememberedField)
+{
+    if (!ZVerifyRemembered) {
+        GC_EXPECT_EQ(setenv("ZVerifyRemembered", "1", 1), 0);
+        RunInOtherVm("ZVerify.BeforeRelocationRejectsMissingRememberedField");
+        return;
+    }
+    GcHeapFixture fixture;
+    fixture.region0->SetYoungRegionFlag(0);
+    fixture.region1->SetYoungRegionFlag(0);
+    LiveInfo* live = fixture.PlantLiveInfo(fixture.region0);
+    (void)fixture.PlantMarkBitmap<Generation::Old>(live, fixture.region0->GetRegionSize());
+    (void)RegionSpace::MarkObject<Generation::Old>(fixture.obj0);
+    fixture.region0->PrepareForwardableRegion(fixture.region0->GetMarkView<Generation::Old>());
+    auto publication = ForwardingTable::EnsurePublicationBeforeCopy(
+        fixture.region0, reinterpret_cast<MAddress>(fixture.obj0));
+    GC_EXPECT_TRUE(static_cast<bool>(publication));
+    auto owner = ForwardingTable::RetainPageOwner(fixture.region0);
+    GC_EXPECT_TRUE(static_cast<bool>(owner));
+    const MAddress slot = reinterpret_cast<MAddress>(fixture.obj0) + TYPEINFO_PTR_SIZE;
+    HeapSlotAt<>(slot).StoreColoured(StoreGoodPointer(fixture.obj1));
+    RememberedSet& remset = Heap::GetHeap().GetRememberedSet();
+    remset.Initialize(fixture.heapStart, 2 * RegionInfo::UNIT_SIZE);
+    ExpectSceneAbort("Missing remembered field", [&] { ZVerify::BeforeRelocation(owner.get()); });
+    remset.Record(slot);
+    if (!Heap::GetHeap().GetCollector().OldActiveRemsetIsCurrent()) { remset.FlipForMinor(); }
+    ZVerify::BeforeRelocation(owner.get());
+}
