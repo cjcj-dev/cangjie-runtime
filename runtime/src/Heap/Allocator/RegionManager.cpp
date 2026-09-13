@@ -17,6 +17,9 @@
 #include <sched.h>
 #include <unistd.h>
 #include <vector>
+#if defined(_WIN64)
+#include <processthreadsapi.h>
+#endif
 
 #include "Allocator/RegionSpace.h"
 #include "Base/CString.h"
@@ -2716,8 +2719,35 @@ size_t RegionManager::CurrentSharedPageCPU()
     if (cpu >= 0 && static_cast<size_t>(cpu) < SharedPageCPUCount()) {
         return static_cast<size_t>(cpu);
     }
+#elif defined(_WIN64)
+    // os_windows.cpp:1090: Windows reports the current processor number.
+    const size_t cpu = static_cast<size_t>(GetCurrentProcessorNumber());
+    if (cpu < SharedPageCPUCount()) { return cpu; }
+#elif defined(__APPLE__) && defined(__x86_64__)
+    // os_bsd.cpp:2228-2261: compact the initial APIC id into the CPU domain.
+    struct ProcessorMap {
+        std::atomic<int> ids[256];
+        std::atomic<unsigned> next{0};
+        ProcessorMap() { for (auto& id : ids) { id.store(-1, std::memory_order_relaxed); } }
+    };
+    static ProcessorMap processors;
+    unsigned eax = 1, ebx = 0, ecx = 0, edx = 0;
+    __asm__("cpuid" : "+a"(eax), "+b"(ebx), "+c"(ecx), "+d"(edx));
+    auto& entry = processors.ids[(ebx >> 24) & 255];
+    int cpu = entry.load(std::memory_order_acquire);
+    while (cpu < 0) {
+        int expected = -1;
+        if (entry.compare_exchange_strong(expected, -2, std::memory_order_acq_rel)) {
+            cpu = static_cast<int>(processors.next.fetch_add(1, std::memory_order_relaxed) % SharedPageCPUCount());
+            entry.store(cpu, std::memory_order_release);
+        } else {
+            cpu = entry.load(std::memory_order_acquire);
+        }
+    }
+    return static_cast<size_t>(cpu);
 #endif
-    // ZGC's os::processor_id fallback: unsupported ids share slot zero.
+    // os_bsd.cpp:2262-2266 / os_linux.cpp:4994-5009: unsupported or invalid
+    // processor ids share slot zero; every page allocation remains atomic.
     return 0;
 }
 
