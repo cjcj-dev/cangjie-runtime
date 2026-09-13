@@ -521,11 +521,6 @@ protected:
     void CurrentizeValueRootSet(std::unordered_set<BaseObject*>& roots, Generation generation) const;
     void CurrentizeValueRootMap(std::unordered_map<BaseObject*, std::list<BaseObject*>>& roots, Generation generation) const;
 
-    void ResetBitmap(bool heapMarked)
-    {
-        // if heap is marked and tracing result will be used during next gc, we should not reset liveInfo.
-    }
-
     int32_t GetGCThreadCount(const bool isConcurrent) const
     {
         return collectorResources.GetGCThreadCount(isConcurrent);

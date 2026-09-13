@@ -7,6 +7,7 @@
 #ifndef MRT_LIVE_INFO_H
 #define MRT_LIVE_INFO_H
 #include <cstdint>
+#include <algorithm>
 #include "Base/ImmortalWrapper.h"
 #include "Base/Log.h"
 #include "Base/MemUtils.h"
@@ -63,6 +64,9 @@ struct RegionBitmap {
     static constexpr size_t kRegionBytesPerWord =
         (kMarkedBytesPerBit * kBitsPerWord) / 2;
     std::atomic<size_t> liveBytes;
+    std::atomic<size_t> liveObjects;
+    std::atomic<uint64_t> segmentLiveBits;
+    std::atomic<uint64_t> segmentClaimBits;
     // Two adjacent bits describe each 8-byte slot: live/finalizable then
     // strong. One word therefore covers 32 slots (256 region bytes).
     std::atomic<size_t> wordCnt;
@@ -89,13 +93,16 @@ struct RegionBitmap {
         maskInfo.strongStartBitMask = static_cast<uint64_t>(1) << (headMaskBitStart + 1);
     }
 
-    void AddLiveBytes(size_t byteCnt)
+    // ZLiveMap::inc_live: consumed by direct marking or the worker live cache.
+    void AddLiveCounts(size_t objects, size_t bytes)
     {
-        liveBytes.fetch_add(byteCnt);
+        liveObjects.fetch_add(objects, std::memory_order_relaxed);
+        liveBytes.fetch_add(bytes, std::memory_order_relaxed);
     }
 
     explicit RegionBitmap(size_t regionSize)
-        : liveBytes(0), wordCnt(regionSize / kRegionBytesPerWord)
+        : liveBytes(0), liveObjects(0), segmentLiveBits(0), segmentClaimBits(0),
+          wordCnt(regionSize / kRegionBytesPerWord)
     {}
 
     bool CoversRegionSize(size_t regionSize) const
@@ -108,52 +115,96 @@ struct RegionBitmap {
         return wordCnt.load(std::memory_order_relaxed) * kRegionBytesPerWord;
     }
 
-    // Reset the bitmap state without exposing markWords/wordCnt to tests.
-    // Keeping this operation on the carrier makes the concurrent invariant
-    // independent of the number of words or any future pair packing.
+    // ZLiveMap::reset: metadata only; bitmap storage is cleared on first touch.
     void Reset()
     {
         liveBytes.store(0, std::memory_order_relaxed);
-        const size_t words = wordCnt.load(std::memory_order_relaxed);
-        for (size_t idx = 0; idx < words; ++idx) {
-            markWords[idx].store(0, std::memory_order_relaxed);
-        }
+        liveObjects.store(0, std::memory_order_relaxed);
+        segmentLiveBits.store(0, std::memory_order_relaxed);
+        segmentClaimBits.store(0, std::memory_order_relaxed);
     }
+
+    static constexpr size_t kNumSegments = 64;
+
+    size_t SegmentBits() const
+    {
+        // Small runtime regions use a full atomic word as the minimum clear range.
+        const size_t words = wordCnt.load(std::memory_order_relaxed);
+        return std::max(size_t(1), (words + kNumSegments - 1) / kNumSegments) * kBitsPerWord;
+    }
+
+    bool IsSegmentLive(size_t segment) const
+    {
+        return (segmentLiveBits.load(std::memory_order_acquire) & (uint64_t(1) << segment)) != 0;
+    }
+
+    // ZLiveMap::reset_segment: claim -> clear range -> release live bit.
+    void EnsureSegmentLive(size_t pairBit)
+    {
+        const size_t segmentBits = SegmentBits();
+        const size_t segment = pairBit / segmentBits;
+        const uint64_t bit = uint64_t(1) << segment;
+        if (IsSegmentLive(segment)) {
+            return;
+        }
+        if ((segmentClaimBits.fetch_or(bit, std::memory_order_acq_rel) & bit) != 0) {
+            while (!IsSegmentLive(segment)) {}
+            return;
+        }
+        const size_t firstWord = segment * segmentBits / kBitsPerWord;
+        const size_t endWord = std::min(firstWord + segmentBits / kBitsPerWord,
+                                        wordCnt.load(std::memory_order_relaxed));
+        for (size_t word = firstWord; word < endWord; ++word) {
+            markWords[word].store(0, std::memory_order_relaxed);
+        }
+        segmentLiveBits.fetch_or(bit, std::memory_order_release);
+    }
+
+    // Iterators and snapshot consumers must skip segments not live this cycle.
+    uint64_t GetLiveWord(size_t word) const
+    {
+        return IsSegmentLive(word * kBitsPerWord / SegmentBits())
+            ? markWords[word].load(std::memory_order_relaxed) : 0;
+    }
+
+    size_t GetLiveObjects() const { return liveObjects.load(std::memory_order_relaxed); }
 
     bool MarkBits(size_t start, size_t byteCnt, size_t regionSize, bool& incLive)
     {
         (void)regionSize;
+        (void)byteCnt;
         BitMaskInfo maskInfo;
         GetBitMaskInfo(start, maskInfo);
+        EnsureSegmentLive(2 * (start / kMarkedBytesPerBit));
         // ZGC zBitMap.inline.hpp:60-83 / zLiveMap: only the object-start pair.
         // find_base_bit finds last set bit then aligns to the pair (zLiveMap.inline.hpp:219-221).
         const uint64_t startPair = maskInfo.liveStartBitMask | maskInfo.strongStartBitMask;
         const uint64_t old = markWords[maskInfo.headWordIdx].fetch_or(startPair);
         const bool already = (old & maskInfo.strongStartBitMask) != 0;
         incLive = !already && (old & maskInfo.liveStartBitMask) == 0;
-        if (incLive) {
-            AddLiveBytes(byteCnt);
-        }
         return already;
     }
 
     bool MarkBits(size_t start, size_t byteCnt, size_t regionSize)
     {
         bool incLive = false;
-        return MarkBits(start, byteCnt, regionSize, incLive);
+        const bool already = MarkBits(start, byteCnt, regionSize, incLive);
+        if (incLive) {
+            AddLiveCounts(1, byteCnt);
+        }
+        return already;
     }
 
     bool MarkFinalizableBits(size_t start, size_t byteCnt, size_t regionSize, bool& incLive)
     {
         (void)regionSize;
+        (void)byteCnt;
         BitMaskInfo maskInfo;
         GetBitMaskInfo(start, maskInfo);
+        EnsureSegmentLive(2 * (start / kMarkedBytesPerBit));
         const uint64_t old = markWords[maskInfo.headWordIdx].fetch_or(maskInfo.liveStartBitMask);
         const bool already = (old & maskInfo.liveStartBitMask) != 0;
         incLive = !already;
-        if (incLive) {
-            AddLiveBytes(byteCnt);
-        }
         return already;
     }
 
@@ -162,7 +213,8 @@ struct RegionBitmap {
         const size_t pairBit = 2 * (start / kMarkedBytesPerBit);
         const size_t wordIdx = pairBit / kBitsPerWord;
         const uint64_t mask = static_cast<uint64_t>(2) << (pairBit % kBitsPerWord);
-        return (markWords[wordIdx].load(std::memory_order_acquire) & mask) != 0;
+        return IsSegmentLive(pairBit / SegmentBits()) &&
+            (markWords[wordIdx].load(std::memory_order_relaxed) & mask) != 0;
     }
 
     bool IsLive(size_t start) const
@@ -170,7 +222,8 @@ struct RegionBitmap {
         const size_t pairBit = 2 * (start / kMarkedBytesPerBit);
         const size_t wordIdx = pairBit / kBitsPerWord;
         const uint64_t mask = static_cast<uint64_t>(1) << (pairBit % kBitsPerWord);
-        return (markWords[wordIdx].load(std::memory_order_acquire) & mask) != 0;
+        return IsSegmentLive(pairBit / SegmentBits()) &&
+            (markWords[wordIdx].load(std::memory_order_relaxed) & mask) != 0;
     }
 
     bool IsFinalizable(size_t start) const { return IsLive(start) && !IsMarked(start); }
@@ -183,7 +236,6 @@ struct RegionBitmap {
     size_t RecomputeLiveBytes() const { return GetLiveBytes(); }
 };
 struct LiveInfo {
-    static constexpr MAddress TEMPORARY_PTR = 0x1234;
     RegionInfo* bindedRegion = nullptr;
     RegionBitmap* resurrectBitmap = nullptr;
     RegionBitmap* enqueueBitmap = nullptr;
@@ -192,23 +244,26 @@ struct LiveInfo {
     bool IsSurvivedObject(MarkView<G> view, size_t offset) const
     {
         const MarkFace& face = GetMarkFace();
-        RegionBitmap* markBitmap = __atomic_load_n(&face.bitmap, std::memory_order_acquire);
-        if (face.epoch.load(std::memory_order_acquire) == view.GetEpoch() && markBitmap != nullptr &&
-            reinterpret_cast<MAddress>(markBitmap) != TEMPORARY_PTR && markBitmap->IsLive(offset)) {
+        const bool current = view.GetEpoch() != 0 &&
+            face.epoch.load(std::memory_order_acquire) == view.GetEpoch();
+        RegionBitmap* markBitmap = __atomic_load_n(&face.bitmap, std::memory_order_relaxed);
+        if (current && markBitmap != nullptr &&
+            markBitmap->IsLive(offset)) {
             return true;
         }
         // Resurrection is a major/old decision.  A young closure is not complete
         // for old/large objects and must not inherit an old resurrection verdict.
         return G == Generation::Old && resurrectBitmap != nullptr &&
-            reinterpret_cast<MAddress>(resurrectBitmap) != TEMPORARY_PTR && resurrectBitmap->IsMarked(offset);
+            resurrectBitmap->IsMarked(offset);
     }
 
     template<Generation G>
     size_t GetBitmapLiveBytes(MarkView<G> view) const
     {
         const MarkFace& face = GetMarkFace();
-        RegionBitmap* markBitmap = __atomic_load_n(&face.bitmap, std::memory_order_acquire);
-        const bool current = face.epoch.load(std::memory_order_acquire) == view.GetEpoch();
+        const bool current = view.GetEpoch() != 0 &&
+            face.epoch.load(std::memory_order_acquire) == view.GetEpoch();
+        RegionBitmap* markBitmap = __atomic_load_n(&face.bitmap, std::memory_order_relaxed);
         return (!current || markBitmap == nullptr ? 0 : markBitmap->GetLiveBytes()) +
             (G != Generation::Old || resurrectBitmap == nullptr ? 0 : resurrectBitmap->GetLiveBytes());
     }
@@ -217,8 +272,9 @@ struct LiveInfo {
     size_t RecomputeBitmapLiveBytes(MarkView<G> view) const
     {
         const MarkFace& face = GetMarkFace();
-        RegionBitmap* markBitmap = __atomic_load_n(&face.bitmap, std::memory_order_acquire);
-        const bool current = face.epoch.load(std::memory_order_acquire) == view.GetEpoch();
+        const bool current = view.GetEpoch() != 0 &&
+            face.epoch.load(std::memory_order_acquire) == view.GetEpoch();
+        RegionBitmap* markBitmap = __atomic_load_n(&face.bitmap, std::memory_order_relaxed);
         return (!current || markBitmap == nullptr ? 0 : markBitmap->RecomputeLiveBytes()) +
             (G != Generation::Old || resurrectBitmap == nullptr ? 0 : resurrectBitmap->RecomputeLiveBytes());
     }
@@ -246,6 +302,7 @@ private:
     }
 
     friend class RegionInfo;
+    friend class LiveInfoArena;
 };
 
 } // namespace MapleRuntime

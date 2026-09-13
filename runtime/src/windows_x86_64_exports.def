@@ -1060,11 +1060,9 @@ EXPORTS
     _ZN12MapleRuntime10RegionInfo20GetOrAllocMarkBitmapEv @1056
     _ZN12MapleRuntime10RegionInfo20youngRegionFlagMutexE @1057 DATA
     _ZN12MapleRuntime10RegionInfo21DispelGhostFromRegionEv @1058
-    _ZN12MapleRuntime10RegionInfo23GetOrAllocEnqueueBitmapEv @1059
     _ZN12MapleRuntime10RegionInfo24IncRawPointerObjectCountEv @1060
     _ZN12MapleRuntime10RegionInfo24PrepareForwardableRegionEv @1061
     _ZN12MapleRuntime10RegionInfo24PreserveRetainedLiveInfoEv @1062
-    _ZN12MapleRuntime10RegionInfo25GetOrAllocResurrectBitmapEv @1063
     _ZN12MapleRuntime10RegionInfo26VisitLiveObjectsUntilFalseEOKNSt3__18functionIFbPNS_10BaseObjectEEEE @1064
     _ZN12MapleRuntime10RegionInfo27BindLiveInfo0FromLiveIfNullEv @1065
     _ZN12MapleRuntime10RegionInfo13AdmitForRouteEPNS_10BaseObjectE @1066
@@ -1820,11 +1818,9 @@ EXPORTS
     _ZN12MapleRuntime18FinalizerProcessorC1Ev @1892
     _ZN12MapleRuntime18FinalizerProcessorC2Ev @1893
     _ZN12MapleRuntime18FinalizerProcessorD2Ev @1894
-    _ZN12MapleRuntime13LiveInfoArena16AllocateLiveInfoEv @1895
 
     _ZN12MapleRuntime13LiveInfoArena20AllocateRegionBitmapEy @1897
     _ZN12MapleRuntime13LiveInfoArena15GetLiveInfoArenaEv @1898
-    _ZN12MapleRuntime13LiveInfoArena21InitializeForwardDataEv @1899
 
     _ZN12MapleRuntime18GetCallerFrameInfoERNS_16WinModuleManagerERKNS_12MachineFrameERNS_19UnwindContextStatusE @1901
     _ZN12MapleRuntime18RemoveRegionLockedEPNS_10RegionListEPNS_10RegionInfoE @1903
