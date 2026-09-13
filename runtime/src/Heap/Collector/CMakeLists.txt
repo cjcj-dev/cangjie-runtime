@@ -20,7 +20,6 @@ set(SRC_LIST
     "../z/zDriverPort.cpp"
     "TracingCollector.cpp"
     "../z/zRootsIterator.cpp"
-    "MarkPartialArray.cpp"
     "../z/zMarkStack.cpp"
     "MarkStripe.cpp"
     "../z/zMarkingSMR.cpp"

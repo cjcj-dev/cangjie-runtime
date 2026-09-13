@@ -16,7 +16,7 @@ namespace MapleRuntime {
 class Collector;
 class RememberedSet;
 
-// Compile-time switch (ZGC ZBufferStoreBarriers). No MRT_GCV2_* env var.
+// Compile-time switch (ZGC ZBufferStoreBarriers).
 constexpr bool kBufferStoreBarriers = true;
 constexpr size_t kStoreBarrierBufferLength = 32;
 

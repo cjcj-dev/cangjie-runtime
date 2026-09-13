@@ -3,7 +3,7 @@
 
 Expected layout below ROOT:
   reasons/rNN-subject/  production-shaped timing arm
-  census/rNN-subject/   MRT_GCV2_HAPILLAR_CENSUS=1 population arm
+  census/rNN-subject/   archived population arm (retired diagnostic)
 
 GCLOG is read once from stderr.  REPORT lines are read once from report.log*.
 """

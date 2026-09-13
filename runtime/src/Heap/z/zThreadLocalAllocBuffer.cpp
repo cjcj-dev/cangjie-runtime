@@ -27,8 +27,6 @@
 #include "Mutator/Mutator.h"
 
 namespace MapleRuntime {
-extern std::atomic<size_t> g_allocIntoCSetRetired;
-void NoteAllocIntoCSet(RegionInfo* reg, const char* where);
 
 namespace {
 
@@ -196,8 +194,6 @@ MAddress AllocBuffer::Allocate(size_t totalSize, AllocType allocType)
     // Mirror pin path's "no reuse after POST_TRACE" rule (RegionManager.cpp free-list).
     // If tlRegion was reclassified to FROM while we still hold it, retire and slow-path.
     if (UNLIKELY(tlRegion != RegionInfo::NullRegion() && RegionIsInRelocationSet(tlRegion))) {
-        NoteAllocIntoCSet(tlRegion, "fast-retire");
-        g_allocIntoCSetRetired.fetch_add(1, std::memory_order_relaxed);
         // FROM/LONE_FROM are already off tlRegionList — only drop the local shortcut.
         // Still-THREAD_LOCAL but routing: flush to recentFull so it can be handled by GC lists.
         if (tlRegion->IsThreadLocalRegion()) {
@@ -306,8 +302,6 @@ MAddress AllocBuffer::AllocateImpl(size_t totalSize, AllocType allocType)
     // allocate from thread local region
     if (LIKELY(tlRegion != RegionInfo::NullRegion())) {
         if (UNLIKELY(RegionIsInRelocationSet(tlRegion))) {
-            NoteAllocIntoCSet(tlRegion, "impl-retire");
-            g_allocIntoCSetRetired.fetch_add(1, std::memory_order_relaxed);
             if (tlRegion->IsThreadLocalRegion()) {
                 manager.RemoveThreadLocalRegion(tlRegion);
                 manager.EnlistFullThreadLocalRegion(tlRegion);
@@ -335,7 +329,6 @@ MAddress AllocBuffer::AllocateImpl(size_t totalSize, AllocType allocType)
     if (r != nullptr && r->GetAvailableSize() >= totalSize) {
         preparedRegion.store(nullptr, std::memory_order_release);
         if (UNLIKELY(RegionIsInRelocationSet(r))) {
-            NoteAllocIntoCSet(r, "prepared-reject");
             // prepared region must not be a CSet member; reclaim path via flush semantics.
             if (r->IsThreadLocalRegion()) {
                 manager.RemoveThreadLocalRegion(r);

@@ -369,7 +369,7 @@ public:
     }
     // Follow one partial-array chunk popped off the work stack. Ported from
     // ZGC's ZMark::follow_partial_array (zMark.cpp:265-270). Only reachable
-    // when MarkPartialArray::Enabled(), since nothing pushes chunks otherwise.
+    // for typed partial-array entries published by the array traversal.
     virtual void FollowPartialArray(const MarkStackEntry& entry, WorkStack& workStack);
     virtual BaseObject* GetAndTryTagObj(RefSlotKind kind, BaseObject* obj, RefField<>& field)
     {

@@ -1176,10 +1176,8 @@ EXPORTS
     _ZN12MapleRuntime11RegionSpace14IsMarkedObjectEPKNS_10BaseObjectE @1218
     _ZN12MapleRuntime11RegionSpace15TryAllocateOnceEyNS_9AllocTypeE @1219
     _ZN12MapleRuntime11RegionSpace17FeedHungryBuffersEv @1220
-    _ZN12MapleRuntime11RegionSpace18AllocIntoCSetCountEv @1221
     _ZN12MapleRuntime11RegionSpace19IsResurrectedObjectEPKNS_10BaseObjectE @1222
     _ZN12MapleRuntime11RegionSpace20ReclaimGarbageMemoryEb @1223
-    _ZN12MapleRuntime11RegionSpace25AllocIntoCSetRetiredCountEv @1224
     _ZN12MapleRuntime11RegionSpace4InitERK9HeapParam @1225
     _ZN12MapleRuntime11RegionSpace8AllocateEyNS_9AllocTypeE @1226
     _ZN12MapleRuntime11RegionSpaceD0Ev @1227
@@ -1349,7 +1347,6 @@ EXPORTS
     _ZN12MapleRuntime13RegionManager19ReassembleFromSpaceEv @1428
     _ZN12MapleRuntime13RegionManager19SetGarbageThresholdEv @1429
     _ZN12MapleRuntime13RegionManager20CollectPinnedGarbageEv @1430
-    _ZN12MapleRuntime13RegionManager21DumpScrubCostAndResetEPKc @1431
     _ZN12MapleRuntime13RegionManager21PrepareFromRegionListEv @1432
     _ZN12MapleRuntime13RegionManager21ReleaseMarkQuarantineEv @1433
     _ZN12MapleRuntime13RegionManager21StampCensusBoundariesEv @1434
@@ -1500,7 +1497,6 @@ EXPORTS
     _ZN12MapleRuntime14PrologueVarInt15ResolvePrologueERKNSt3__18functionIFvNS_23PrologueRegisterClosure4TypeEjEEE @1604
     _ZN12MapleRuntime14STACK_ADDR_MAXE @1606 DATA
     _ZN12MapleRuntime14StackWatermark11OnStackGrowEx @1607
-    _ZN12MapleRuntime14StackWatermark13VerifyEnabledEv @1608
     _ZN12MapleRuntime14StackWatermark16FinishIncompleteENS0_5OwnerE @1609
     _ZN12MapleRuntime14StackWatermark6FinishENS0_5OwnerE @1610
     _ZN12MapleRuntime14StackWatermark6OnExitEv @1611
@@ -2068,8 +2064,6 @@ EXPORTS
     _ZN12MapleRuntime9Collector22RemoveRawPointerObjectEPNS_10BaseObjectE @2272
     _ZN12MapleRuntime9Collector22TryRecoverInteriorBaseEPNS_10BaseObjectES2_ @2273
     _ZN12MapleRuntime9Collector26PlausibleManagedObjectGateEPKcPNS_10BaseObjectE @2274
-    _ZN12MapleRuntime9Collector28ReportMarkGoodHeapGateCountsEv @2275
-    _ZN12MapleRuntime9Collector38ReportPlausibleManagedObjectGateCountsEv @2276
     _ZN12MapleRuntime9Collector4FiniEv @2277
     _ZN12MapleRuntime9Collector9RequestGCENS_8GCReasonEb @2278
     _ZN12MapleRuntime9CollectorC2Ev @2279
@@ -2211,7 +2205,6 @@ EXPORTS
     _ZNK12MapleRuntime10GCExecutor10NeedFilterEv @2416
     _ZNK12MapleRuntime10RegionInfo13GetRegionSizeEv @2417
     _ZNK12MapleRuntime10RegionInfo14GetRegionStartEv @2418
-    _ZNK12MapleRuntime10RegionInfo20ReportTypeInfoInHeapEPKNS_10BaseObjectEPNS_8TypeInfoEyyy @2419
     _ZNK12MapleRuntime10RegionInfo23ReportInvalidObjectSizeEPKNS_10BaseObjectEyyy @2420
     _ZNK12MapleRuntime10RegionInfo28AssertGhostClearedAfterReuseEy @2421
     _ZNK12MapleRuntime10WCollector10MarkObjectEPNS_10BaseObjectE @2422

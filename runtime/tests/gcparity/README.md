@@ -1,6 +1,8 @@
-# GC parity release benchmark
+# Archived GC parity workloads
 
-This directory contains the fixed workloads used by `REPORT-gcparity.md`.
+This directory preserves the workloads and analyzer used by `REPORT-gcparity.md`.
+The old runner was removed with its retired runtime controls; the contract below
+describes archived measurements and is not a current release gate.
 They intentionally exercise different ends of the survival spectrum:
 
 - `allocation_dense.cj` allocates short-lived objects while retaining only a
@@ -13,8 +15,8 @@ is correct only when it exits zero and the SHA-256 of stdout is identical
 between the subject and official arms.  Runtime logs must therefore be sent to
 separate files rather than mixed into stdout.
 
-The release gate is evaluated independently for every workload, heap size, and
-`MRT_GCV2_FULL_YOUNG_SCAN` value.  It does not average a losing workload away:
+The archived comparison evaluated each workload, heap size, and full-young-scan
+configuration separately:
 
 1. each arm has at least 20 interleaved attempts and every attempt is correct;
 2. subject/control median wall-time is at most `1.00`;

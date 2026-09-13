@@ -557,7 +557,6 @@ public:
 
     void PreparedToPark(void* pc, void* fa)
     {
-        stackWatermark.OnPark();
         if (UNLIKELY((uwContext.GetUnwindContextStatus() == UnwindContextStatus::RISKY) || InSaferegion())) {
             SetInSaferegion(SaferegionState::SAFE_REGION_TRUE);
             MarkFlushOnEnterSaferegion();

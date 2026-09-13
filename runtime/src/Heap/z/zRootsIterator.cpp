@@ -462,7 +462,6 @@ void TracingCollector::PostGarbageCollection(uint64_t gcIndex)
     // cross-table has to be on stderr before the crash, not only at exit.
 
     // portarray: positive control for large-array chunking; self-gates, default off.
-    MarkPartialArray::Report("gc_end");
     ReportSkippedStackMapCounts();
     // release pages in PagePool
     TransitionToGCPhase(GCPhase::GC_PHASE_RECLAIM_SATB_NODE, true);

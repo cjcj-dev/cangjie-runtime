@@ -1,0 +1,8 @@
+# kkk2_build_two lane=sym_cangjie_runtime_493_implement_r5655345453 head=9b65bf6fbb417a91c84a8a2a225dc43563b9e2dd dirty_files=1 source_sha256=d691f457ca0b36fa…
+== default configure_rc=1 build_rc=NOT_RUN wall=11s
+-- first errors (default):
+-- SO (default):
+== testable configure_rc=1 build_rc=NOT_RUN wall=11s
+-- first errors (testable):
+-- SO (testable):
+-- logs: /root/sym_cangjie_runtime_493_implement_r5655345453/{default,testable}-{configure,build}.log

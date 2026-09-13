@@ -27,21 +27,9 @@ namespace MapleRuntime {
 namespace {
 thread_local bool inEpochHandshake = false;
 
-uint64_t GetEpochHandshakeTimeoutMillis()
-{
-    static const uint64_t timeout = []() -> uint64_t {
-        const char* value = std::getenv("MRT_GCV2_EPOCH_HANDSHAKE_TIMEOUT_MS");
-        if (value != nullptr) {
-            char* end = nullptr;
-            unsigned long long parsed = std::strtoull(value, &end, 10);
-            if (end != value && parsed > 0) {
-                return static_cast<uint64_t>(parsed);
-            }
-        }
-        return 30000;
-    }();
-    return timeout;
-}
+// HotSpot runtime/globals.hpp:176 and handshake.cpp:223-230.
+// A zero diagnostic timeout leaves handshake completion unbounded.
+constexpr uint64_t HandshakeTimeout = 0;
 } // namespace
 // Mutator-list write-lock watchdog timeout (seconds). Read once from env
 // cjMutatorLockTimeout, falling back to WAIT_LOCK_TIMEOUT, so heavy CPU-oversubscribed
@@ -542,14 +530,14 @@ EpochHandshakeStats MutatorManager::RunEpochHandshake(const char* source, bool y
             }
             ++it;
         }
-        if (UNLIKELY(TimeUtil::MilliSeconds() - waitStart > GetEpochHandshakeTimeoutMillis())) {
+        if (UNLIKELY(HandshakeTimeout > 0 && TimeUtil::MilliSeconds() - waitStart > HandshakeTimeout)) {
             LOG(RTLOG_ERROR,
                 "[GCV2][epoch-handshake] source=%s epoch=%llu requested=%zu acked=%zu acked_twice=%zu "
                 "missing=%zu timeout_ms=%llu",
                 source, static_cast<unsigned long long>(stats.epoch), stats.requested,
                 epochHandshakeAcked.load(std::memory_order_relaxed),
                 epochHandshakeAckedTwice.load(std::memory_order_relaxed), pending.size(),
-                static_cast<unsigned long long>(GetEpochHandshakeTimeoutMillis()));
+                static_cast<unsigned long long>(HandshakeTimeout));
             CHECK_DETAIL(false, "epoch handshake timed out");
         }
         if (!pending.empty()) {
@@ -609,7 +597,7 @@ EpochHandshakeStats MutatorManager::RunEpochHandshake(const char* source, bool y
          stats.exitingAck, stats.deferredCreates, stats.bornCleanJoins, stats.exitTransitions,
          stats.destroyDeferred, stats.stopTheWorldCalls, stats.stackScanned, stats.stackFallback, stats.stackFrames,
          static_cast<unsigned long long>(stats.managementLockNanos / 1000),
-         static_cast<unsigned long long>(GetEpochHandshakeTimeoutMillis()));
+         static_cast<unsigned long long>(HandshakeTimeout));
     return stats;
 }
 

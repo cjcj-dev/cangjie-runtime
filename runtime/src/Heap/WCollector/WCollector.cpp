@@ -224,7 +224,6 @@ void WCollector::DoGarbageCollection()
 {
     if (GetCycleReason() == GC_REASON_YOUNG) {
         DoYoungGarbageCollection();
-        Collector::ReportMarkGoodHeapGateCounts();
         return;
     }
     TraceHeap();
@@ -264,7 +263,6 @@ void WCollector::DoGarbageCollection()
     // Flush/Stamp/Promote in these STWs reintroduces 0/5 or residual 甲 under
     // FYS=0 SKIP_PINNED=1 512MB. Retained-liveness still applies on residual and
     // in-place promote paths that already preserve page liveness.
-    Collector::ReportMarkGoodHeapGateCounts();
 
 }
 bool WCollector::ShouldIgnoreRequest(GCRequest& request) { return request.ShouldBeIgnored(); }
