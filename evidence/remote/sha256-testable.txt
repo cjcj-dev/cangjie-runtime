@@ -1,2 +1,0 @@
-ae53ec4698e51f64596dd4bb74f254f476b1b3e5764663e54dd5e8ae37b0413a  /root/sym_cangjie_runtime_465_implement_r5651041991/build-testable/runtime-staging/lib/x86_64_Release/libcangjie-runtime.so
-31cec902ab00f30d64aef5d04bdc54a2d91579689d94db4d5bf4108015025514  /root/sym_cangjie_runtime_465_implement_r5651041991/build-testable/runtime-staging/lib/x86_64_Release/libboundscheck.so
