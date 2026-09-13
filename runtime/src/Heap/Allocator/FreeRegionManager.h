@@ -9,6 +9,8 @@
 #define MRT_FREE_REGION_MANAGER_H
 
 #include <vector>
+#include <memory>
+#include "RangeRegistry.h"
 
 #include "AllocationStallQueue.h"
 #include "CartesianTree.h"
@@ -27,97 +29,10 @@ class FreeRegionManager {
 public:
     explicit FreeRegionManager(RegionManager& manager) : regionManager(manager) {}
 
-    virtual ~FreeRegionManager()
-    {
-        dirtyUnitTree.Fini();
-        releasedUnitTree.Fini();
-        markQuarantineTree.Fini();
-    }
-
-    void Initialize(UnitCount regionCnt)
-    {
-        releasedUnitTree.Init(regionCnt);
-        dirtyUnitTree.Init(regionCnt);
-        markQuarantineTree.Init(regionCnt);
-    }
-
-    // zPageAllocator.cpp:702: remove cached vmem while the page allocator
-    // owner is held. Cache readers and maintenance retain their cache locks,
-    // so acquire those locks before deciding whether capacity is available.
-    // Lock order is allocator owner -> cache; never enter a saferegion here.
-    // A02c owns the tree/partition selection implementation.
-    bool ClaimPageMemory(size_t num, uint32_t partition, PageMemory& memory)
-    {
-        CHECK(partition == 0);
-        UnitIndex idx = 0;
-        bool tryDirtyTree = true;
-        bool tryReleasedTree = true;
-
-        // Inspect each cache to completion; a rejected extent is quarantined
-        // before continuing the same scan (zMappedCache.cpp:621).
-        while (tryDirtyTree || tryReleasedTree) {
-            // first try to get a dirty region.
-            if (tryDirtyTree) {
-                std::unique_lock<std::mutex> cacheLock(dirtyUnitTreeMutex);
-                bool dirtyOk = false;
-                {
-                    // TakeUnits may refresh the residual free-tree node via
-                    // InitRegionInfo before returning the selected extent.
-                    // Carry a structural permit only across that maintenance;
-                    // the selected extent is checked immediately afterwards.
-                    FromPageDetach::ReusePermitScope treePermit;
-#if defined(__OHOS__)
-                    dirtyOk = dirtyUnitTree.TakeUnitsLowAddr(num, idx);
-#else
-                    dirtyOk = dirtyUnitTree.TakeUnits(num, idx);
-#endif
-                }
-                if (dirtyOk) {
-                    MAddress start = RegionInfo::GetUnitAddress(idx);
-                    RegionInfo* dirtyRegion = RegionInfo::TryGetRegionInfoAt(start);
-                    if (!FromPageDetach::FromPageDetachCheck(dirtyRegion,
-                                                             FromPageDetach::Site::TAKE_DIRTY_REUSE)) {
-                        cacheLock.unlock();
-                        AddDetachQuarantineUnits(idx, num, false, false);
-                        continue;
-                    }
-                    memory = PageMemory{ idx, num, partition, true };
-                    return true;
-                }
-                tryDirtyTree = false; // once we fail to take units, stop trying.
-            }
-
-            // then try to get a released region.
-            if (tryReleasedTree) {
-                std::unique_lock<std::mutex> cacheLock(releasedUnitTreeMutex);
-                bool releasedOk = false;
-                {
-                    FromPageDetach::ReusePermitScope treePermit;
-#if defined(__OHOS__)
-                    releasedOk = releasedUnitTree.TakeUnitsLowAddr(num, idx);
-#else
-                    releasedOk = releasedUnitTree.TakeUnits(num, idx);
-#endif
-                }
-                if (releasedOk) {
-                    RegionInfo* releasedRegion =
-                        RegionInfo::TryGetRegionInfoAt(RegionInfo::GetUnitAddress(idx));
-                    if (!FromPageDetach::FromPageDetachCheck(releasedRegion,
-                                                             FromPageDetach::Site::TAKE_RELEASED_REUSE)) {
-                        cacheLock.unlock();
-                        AddDetachQuarantineUnits(idx, num, true, false);
-                        continue;
-                    }
-                    memory = PageMemory{ idx, num, partition, false };
-                    return true;
-                }
-                tryReleasedTree = false; // once we fail to take units, stop trying.
-            }
-            // Both caches have now answered under their locks, and neither
-            // supplied an eligible contiguous extent.
-        }
-        return false;
-    }
+    virtual ~FreeRegionManager() { markQuarantineTree.Fini(); }
+    void Initialize(UnitCount regionCnt, const std::vector<MemoryRange>& reservations, MemMap& owner);
+    bool ClaimPageMemory(size_t num, uint32_t partition, PageMemory& memory);
+    bool PreparePageMemory(PageMemory& memory);
 
     // zPageAllocator.cpp:1470-1515: consume the already-owned vmem outside
     // the allocator lock. A02p owns partial-commit results and suffix cleanup.
@@ -125,6 +40,8 @@ public:
                                      bool expectPhysicalMem, bool clearPayload, size_t& committedUnits)
     {
         (void)expectPhysicalMem;
+        committedUnits = 0;
+        if (!PreparePageMemory(memory)) { return nullptr; }
         const size_t idx = memory.index;
         const size_t num = memory.units;
         committedUnits = memory.committed ? num : 0;
@@ -139,7 +56,7 @@ public:
             }
             memory.committed = true;
         }
-        if (wasCommitted && clearPayload) {
+        if ((wasCommitted || memory.harvestedUnits != 0) && clearPayload) {
             RegionInfo::ClearUnits(idx, num, FillerZeroDiag::Site::DIRTY_TAKE);
         }
         RegionInfo* region = RegionInfo::InitRegion(idx, num, role);
@@ -149,15 +66,7 @@ public:
         return region;
     }
 
-    // add units [idx, idx + num)
-    void AddGarbageUnits(UnitIndex idx, UnitCount num)
-    {
-        ScopedEnterSaferegion enterSaferegion(true);
-        std::lock_guard<std::mutex> lg(dirtyUnitTreeMutex);
-        if (UNLIKELY(!dirtyUnitTree.MergeInsert(idx, num, true))) {
-            LOG(RTLOG_FATAL, "tid %d: failed to add dirty units [%u+%u, %u)", GetTid(), idx, num, idx + num);
-        }
-    }
+    void AddGarbageUnits(UnitIndex idx, UnitCount num);
 
     // mark-epoch quarantine: units reclaimed after DispelGhost must not enter the dirty
     // tree (mutator TakeRegion → ClearUnits) until the next major concurrent mark ends.
@@ -173,28 +82,7 @@ public:
 
     // Release point = major PostTrace entry (TRACE+CLEAR_SATB done). Moves all quarantined
     // units into the dirty tree so allocation may ClearUnits them again.
-    size_t ReleaseMarkQuarantineToDirty()
-    {
-        size_t releasedUnits = 0;
-        ScopedEnterSaferegion enterSaferegion(true);
-        std::lock_guard<std::mutex> lockQ(markQuarantineTreeMutex);
-        std::lock_guard<std::mutex> lockD(dirtyUnitTreeMutex);
-        while (true) {
-            auto node = markQuarantineTree.RootNode();
-            if (node == nullptr) {
-                break;
-            }
-            UnitIndex idx = node->GetIndex();
-            UnitCount num = node->GetCount();
-            markQuarantineTree.ReleaseRootNode();
-            if (UNLIKELY(!dirtyUnitTree.MergeInsert(idx, num, true))) {
-                LOG(RTLOG_FATAL, "tid %d: failed to promote mark-quarantine units [%u+%u, %u) to dirty",
-                    GetTid(), idx, num, idx + num);
-            }
-            releasedUnits += num;
-        }
-        return releasedUnits;
-    }
+    size_t ReleaseMarkQuarantineToDirty();
 
     UnitCount GetMarkQuarantineUnitCount() const
     {
@@ -214,57 +102,13 @@ public:
                                                 region->GetRegionSizeForDetachCheck());
     }
 
-    void AddReleaseUnits(UnitIndex idx, UnitCount num)
-    {
-        ScopedEnterSaferegion enterSaferegion(true);
-        std::lock_guard<std::mutex> lg(releasedUnitTreeMutex);
-        if (UNLIKELY(!releasedUnitTree.MergeInsert(idx, num, true))) {
-            LOG(RTLOG_FATAL, "tid %d: failed to add release units [%u+%u, %u)", GetTid(), idx, num, idx + num);
-        }
-    }
-
-    UnitCount GetDirtyUnitCount() const
-    {
-        std::lock_guard<std::mutex> lg(dirtyUnitTreeMutex);
-        return dirtyUnitTree.GetTotalCount();
-    }
-
-    UnitCount GetReleasedUnitCount() const
-    {
-        std::lock_guard<std::mutex> lg(releasedUnitTreeMutex);
-        return releasedUnitTree.GetTotalCount();
-    }
-
-    // Return the largest contiguous block in released/dirty tree (root node = max-heap top)
-    UnitCount GetReleasedMaxBlock() const
-    {
-        std::lock_guard<std::mutex> lg(releasedUnitTreeMutex);
-        const auto* r = releasedUnitTree.RootNode();
-        return r ? r->GetCount() : 0;
-    }
-    UnitCount GetDirtyMaxBlock() const
-    {
-        std::lock_guard<std::mutex> lg(dirtyUnitTreeMutex);
-        const auto* r = dirtyUnitTree.RootNode();
-        return r ? r->GetCount() : 0;
-    }
-    size_t GetReleasedNodeCount() const
-    {
-        std::lock_guard<std::mutex> lg(releasedUnitTreeMutex);
-        return releasedUnitTree.GetNodeCount();
-    }
-    size_t GetDirtyNodeCount() const
-    {
-        std::lock_guard<std::mutex> lg(dirtyUnitTreeMutex);
-        return dirtyUnitTree.GetNodeCount();
-    }
-
-#if defined(MRT_DEBUG)
-    void DumpReleasedUnitTree() const { releasedUnitTree.DumpTree("released-unit tree"); }
-    void DumpDirtyUnitTree() const { dirtyUnitTree.DumpTree("dirty-unit tree"); }
-#endif
-
-    size_t CalculateBytesToRelease() const;
+    void AddReleaseUnits(UnitIndex idx, UnitCount num);
+    UnitCount GetDirtyUnitCount() const;
+    UnitCount GetReleasedUnitCount() const;
+    UnitCount GetReleasedMaxBlock() const;
+    UnitCount GetDirtyMaxBlock() const;
+    size_t GetReleasedNodeCount() const;
+    size_t GetDirtyNodeCount() const;
     size_t ReleaseGarbageRegions(size_t targetCachedSize);
     size_t UncommitIdleUnits(size_t maxBytes, uint64_t idleBeforeNs, bool honorCancel = true);
 
@@ -300,13 +144,21 @@ private:
     }
     RegionManager& regionManager;
 
-    // physical pages of released units are probably released and they are prepared for allocation.
-    mutable std::mutex releasedUnitTreeMutex;
-    CartesianTree releasedUnitTree;
-
-    // dirty units are neither cleared nor released, thus must be zeroed explicitly for allocation.
-    mutable std::mutex dirtyUnitTreeMutex;
-    CartesianTree dirtyUnitTree;
+    struct Partition {
+        uint32_t node;
+        std::vector<MemoryRange> reservations;
+        RangeRegistry virtualMemory;
+        MappedCache cache;
+        size_t pendingGrowth{ 0 };
+        explicit Partition(uint32_t id) : node(id) {}
+    };
+    Partition& PartitionFor(uintptr_t address);
+    void InsertCommitted(Partition& partition, UnitIndex index, UnitCount count);
+    void ReturnMemory(UnitIndex index, UnitCount count);
+    mutable std::mutex cacheMutex;
+    std::vector<std::unique_ptr<Partition>> partitions;
+    MemMap* backingOwner{ nullptr };
+    size_t nextPartition{ 0 };
 
     // Post-dispel units held until major mark ends (see AddMarkQuarantineUnits).
     mutable std::mutex markQuarantineTreeMutex;

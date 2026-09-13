@@ -700,9 +700,9 @@ public:
         return freeRegionManager.UncommitIdleUnits(maxBytes, idleBeforeNs, honorCancel);
     }
 
-    size_t GetInactiveUnitCount() const { return heapUnitCount - activeUnitCount.load(std::memory_order_acquire); }
+    size_t GetInactiveUnitCount() const { return freeRegionManager.GetReleasedUnitCount(); }
 
-    size_t GetActiveUnitCount() const { return activeUnitCount.load(std::memory_order_acquire); }
+    size_t GetActiveUnitCount() const { return heapUnitCount - GetInactiveUnitCount(); }
 
     inline size_t GetLargeObjectSize() const
     {
@@ -1231,9 +1231,7 @@ private:
 
     // heap space not allocated yet for even once. this value should not be decreased.
     std::atomic<uintptr_t> inactiveZone = { 0 }; // highest handed-out address, diagnostic envelope only
-    RangeRegistry inactiveRanges;
     size_t heapUnitCount = 0;
-    std::atomic<size_t> activeUnitCount{ 0 };
     size_t maxUnitCountPerRegion = MAX_UNIT_COUNT_PER_REGION;   // max units count for threadLocal buffer.
     size_t maxUnitCountPerPinnedRegion = maxUnitCountPerRegion; // max units count for pinned region.
     size_t largeObjectThreshold;

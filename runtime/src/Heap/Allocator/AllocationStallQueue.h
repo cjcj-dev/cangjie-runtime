@@ -11,6 +11,8 @@
 #include <deque>
 #include <functional>
 #include <mutex>
+#include <vector>
+#include "MemMap.h"
 
 #if defined(MRT_GC_UNIT_TESTS) || defined(MRT_TESTABLE_INTERNALS)
 #define MRT_ALLOCATION_STALL_OBSERVE 1
@@ -26,6 +28,12 @@ struct PageMemory {
     size_t units{ 0 };
     uint32_t partition{ 0 };
     bool committed{ false };
+    // ZMemoryAllocation::partial_vmems: these extents leave the mapped cache
+    // under the allocator owner and travel with the allocation request.
+    std::vector<MemoryRange> partialMappings;
+    bool virtualClaimed{ true };
+    size_t harvestedUnits{ 0 };
+
 };
 
 // One object represents one blocked allocation.  It is deliberately owned by
