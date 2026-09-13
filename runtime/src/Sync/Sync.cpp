@@ -647,7 +647,7 @@ void* MRT_GetCurrentCJThreadObject()
 #if defined(CANGJIE_TSAN_SUPPORT)
     Sanitizer::TsanAcquire();
 #endif
-    auto res = Heap::GetBarrier().ReadStaticRef(root);
+    auto res = Heap::GetBarrier().ReadPlainRoot(root);
 #if defined(CANGJIE_TSAN_SUPPORT)
     Sanitizer::TsanRelease(Sanitizer::ReleaseType::K_RELEASE_MERGE);
 #endif
@@ -663,7 +663,7 @@ void MCC_SetCurrentCJThreadObject(void* ptr)
 #if defined(CANGJIE_TSAN_SUPPORT)
     Sanitizer::TsanAcquire();
 #endif
-    Heap::GetBarrier().WriteStaticRef(RootSlotAt(&data->threadObject), from_native_ref(ptr));
+    Heap::GetBarrier().WritePlainRoot(RootSlotAt(&data->threadObject), from_native_ref(ptr));
 #if defined(CANGJIE_TSAN_SUPPORT)
     Sanitizer::TsanRelease(Sanitizer::ReleaseType::K_RELEASE_MERGE);
 #endif

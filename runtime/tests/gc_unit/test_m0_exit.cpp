@@ -176,15 +176,14 @@ public:
 
 class InstalledBarrierScope {
 public:
-    explicit InstalledBarrierScope(Barrier& barrier) : previous(Heap::currentBarrierPtr), installed(&barrier)
+    explicit InstalledBarrierScope(Barrier& barrier) : previous(Heap::barrierPtr)
     {
-        Heap::currentBarrierPtr = &installed;
+        Heap::barrierPtr = &barrier;
     }
-    ~InstalledBarrierScope() { Heap::currentBarrierPtr = previous; }
+    ~InstalledBarrierScope() { Heap::barrierPtr = previous; }
 
 private:
-    Barrier** previous;
-    Barrier* installed;
+    Barrier* previous;
 };
 
 struct ReadEntryFixture {
@@ -269,7 +268,7 @@ struct RootEntryFixture {
         Concurrency concurrency;
     };
 
-    explicit RootEntryFixture(RootSlot* externalRoot = nullptr)
+    explicit RootEntryFixture(NativeSlot* externalRoot = nullptr)
         : collector(Heap::GetHeap().GetAllocator(), Heap::GetHeap().GetCollectorResources())
     {
         registeredRoot = externalRoot != nullptr ? externalRoot : &root;
@@ -287,7 +286,8 @@ struct RootEntryFixture {
             GC_EXPECT_TRUE(forwarding.InstallPublicationBeforeCopy(
                 heap.region0->GetRegionStart(), heap.region0->GetRegionSize(), heap.region0));
         }
-        StorePlain(*registeredRoot, from_object(heap.obj0));
+        registeredRoot->StoreColoured(ColouredPointer(heap.obj0,
+            (::g_cjStoreGoodMask ^ ZPointerRemappedYoungMask) & REMAP_COLOUR_MASK));
         registeredRoots[0] = registeredRoot;
         Heap::GetHeap().RegisterStaticRoots(reinterpret_cast<Uptr>(registeredRoots), 1);
     }
@@ -332,9 +332,9 @@ struct RootEntryFixture {
 
     GcHeapFixture heap;
     WCollector collector;
-    RootSlot root;
-    RootSlot* registeredRoot = nullptr;
-    RootSlot* registeredRoots[1] = {};
+    NativeSlot root{zpointer::null};
+    NativeSlot* registeredRoot = nullptr;
+    NativeSlot* registeredRoots[1] = {};
 };
 
 } // namespace
@@ -361,27 +361,27 @@ void ExpectControlledAbort(const std::function<void()>& body)
 struct SharedRootSlot {
     SharedRootSlot()
     {
-        storage = mmap(nullptr, sizeof(RootSlot), PROT_READ | PROT_WRITE,
+        storage = mmap(nullptr, sizeof(NativeSlot), PROT_READ | PROT_WRITE,
                        MAP_SHARED | MAP_ANONYMOUS, -1, 0);
         GC_EXPECT_TRUE(storage != MAP_FAILED);
-        slot = new (storage) RootSlot();
+        slot = new (storage) NativeSlot(zpointer::null);
     }
 
     ~SharedRootSlot()
     {
         if (slot != nullptr) {
-            slot->~RootSlot();
+            slot->~NativeSlot();
         }
         if (storage != MAP_FAILED) {
-            (void)munmap(storage, sizeof(RootSlot));
+            (void)munmap(storage, sizeof(NativeSlot));
         }
     }
 
     void* storage = MAP_FAILED;
-    RootSlot* slot = nullptr;
+    NativeSlot* slot = nullptr;
 };
 
-void ExpectRootFixControlledAbort(RootEntryFixture& fx, RootSlot& sharedRoot,
+void ExpectRootFixControlledAbort(RootEntryFixture& fx, NativeSlot& sharedRoot,
                                   MAddress expectedFrom)
 {
     const pid_t child = fork();
@@ -397,7 +397,7 @@ void ExpectRootFixControlledAbort(RootEntryFixture& fx, RootSlot& sharedRoot,
     GC_EXPECT_EQ(WTERMSIG(status), SIGABRT);
     // The shared slot lets the parent verify the safety invariant across the
     // controlled termination: unresolved forwarding never writes a fabricated to.
-    GC_EXPECT_EQ(static_cast<uintptr_t>(raw(sharedRoot.LoadPlain())),
+    GC_EXPECT_EQ(static_cast<uintptr_t>(raw(sharedRoot.GetTargetObject())),
                  static_cast<uintptr_t>(expectedFrom));
 }
 } // namespace
@@ -640,8 +640,9 @@ GC_OTHER_VM_TEST(M0Exit, WriteStaticStructRuntimeEntryFailsClosedOnZeroHeaderFro
 {
     ReadEntryFixture fx;
     *reinterpret_cast<uint64_t*>(fx.heap.obj0) = 0;
-    RefField<> source(fx.field->GetFieldValue());
-    RootSlot copied;
+    RootSlot source;
+    StorePlain(source, from_object(fx.heap.obj0));
+    NativeSlot copied(zpointer::null);
 
     ExpectControlledAbort([&]() {
         MCC_WriteStaticStruct(reinterpret_cast<MAddress>(&copied), sizeof(copied),
@@ -653,13 +654,14 @@ GC_TEST(M0Exit, WriteStaticStructRuntimeEntryHealthyTargetStillReturnsNormally)
 {
     ReadEntryFixture fx;
     GC_EXPECT_TRUE(fx.heap.obj0->IsValidObject());
-    RefField<> source(fx.field->GetFieldValue());
-    RootSlot copied;
+    RootSlot source;
+    StorePlain(source, from_object(fx.heap.obj0));
+    NativeSlot copied(zpointer::null);
 
     MCC_WriteStaticStruct(reinterpret_cast<MAddress>(&copied), sizeof(copied),
                           reinterpret_cast<MAddress>(&source), sizeof(source), fx.heap.obj1->GetGCTib());
 
-    GC_EXPECT_EQ(static_cast<uintptr_t>(raw(copied.LoadPlain())), reinterpret_cast<uintptr_t>(fx.heap.obj0));
+    GC_EXPECT_EQ(static_cast<uintptr_t>(raw(copied.GetTargetObject())), reinterpret_cast<uintptr_t>(fx.heap.obj0));
 }
 
 GC_TEST(M0Exit, ReadRuntimeEntryResolvedNormalPathIsSilent)

@@ -96,7 +96,7 @@ public:
     MAddress GetSpaceEndAddress() const override;
     void RegisterStaticRoots(Uptr addr, U32) override;
     void UnregisterStaticRoots(Uptr addr, U32) override;
-    void VisitStaticRoots(const RootSlotVisitor& visitor) override;
+    void VisitStaticRoots(const NativeSlotVisitor& visitor) override;
 #ifdef MRT_TESTABLE_INTERNALS
     size_t GetStaticRootCountForTesting() { return staticRootTable.RootCountForTesting(); }
 #endif
@@ -108,7 +108,7 @@ public:
     void RegisterAllocBuffer(AllocBuffer& buffer) override;
     void RemoveAllocBuffer(AllocBuffer& buffer) override;
     U64 RegisterExportRoot(BaseObject* obj) override;
-    void VisitAllExportRoots(const RootVisitor& visitor) override;
+    void VisitAllExportRoots(const NativeSlotVisitor& visitor) override;
     BaseObject* GetExportObject(U64 id) override;
     void RemoveExportObject(U64 id) override;
     void StopGCWork() override;
@@ -219,7 +219,7 @@ void HeapImpl::UnregisterStaticRoots(Uptr addr, U32 size)
     staticRootTable.UnregisterRoots(reinterpret_cast<StaticRootTable::StaticRootArray*>(addr), size);
 }
 
-void HeapImpl::VisitStaticRoots(const RootSlotVisitor& visitor)
+void HeapImpl::VisitStaticRoots(const NativeSlotVisitor& visitor)
 {
     staticRootTable.VisitRoots(visitor);
 #ifdef INTERPRETER_ENABLED
@@ -318,7 +318,7 @@ void HeapImpl::RegisterAllocBuffer(AllocBuffer& buffer) { GetAllocator().Registe
 
 void HeapImpl::RemoveAllocBuffer(AllocBuffer &buffer) { GetAllocator().RemoveAllocBuffer(buffer); }
 
-void HeapImpl::VisitAllExportRoots(const RootVisitor &visitor)
+void HeapImpl::VisitAllExportRoots(const NativeSlotVisitor &visitor)
 {
     exportRootsTable.VisitGCRoots(visitor);
 }

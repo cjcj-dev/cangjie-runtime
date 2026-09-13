@@ -38,7 +38,7 @@ extern "C" MapleRuntime::ObjectPtr CJ_MCC_ReadRefField(
     MapleRuntime::ObjectPtr obj, MapleRuntime::RefField<false>* field);
 extern "C" MapleRuntime::ObjectPtr CJ_MCC_ReadWeakRef(
     MapleRuntime::ObjectPtr obj, MapleRuntime::RefField<false>* field);
-extern "C" MapleRuntime::ObjectPtr CJ_MCC_ReadStaticRef(MapleRuntime::RootSlot* field);
+extern "C" MapleRuntime::ObjectPtr CJ_MCC_ReadStaticRef(MapleRuntime::NativeSlot* field);
 extern "C" MapleRuntime::ObjectPtr CJ_MCC_AtomicReadReference(
     MapleRuntime::ObjectPtr obj, MapleRuntime::RefField<true>* field, MapleRuntime::MemoryOrder order);
 extern "C" MapleRuntime::ObjectPtr CJ_MCC_AtomicSwapReference(
@@ -72,15 +72,14 @@ public:
 
 class InstalledBarrierScope {
 public:
-    explicit InstalledBarrierScope(Barrier& barrier) : previous(Heap::currentBarrierPtr), installed(&barrier)
+    explicit InstalledBarrierScope(Barrier& barrier) : previous(Heap::barrierPtr)
     {
-        Heap::currentBarrierPtr = &installed;
+        Heap::barrierPtr = &barrier;
     }
-    ~InstalledBarrierScope() { Heap::currentBarrierPtr = previous; }
+    ~InstalledBarrierScope() { Heap::barrierPtr = previous; }
 
 private:
-    Barrier** previous;
-    Barrier* installed;
+    Barrier* previous;
 };
 
 struct LoadFcFixture {
@@ -178,8 +177,7 @@ GC_OTHER_VM_TEST(LoadFc, StaticReadFailsClosedOnZeroHeader)
 {
     LoadFcFixture fx;
     fx.ClearTarget();
-    RootSlot root;
-    StorePlain(root, from_object(fx.heap.obj0));
+    NativeSlot root(StoreGoodPointer(fx.heap.obj0));
 
     ExpectControlledAbort([&]() { (void)CJ_MCC_ReadStaticRef(&root); });
 }
@@ -188,8 +186,7 @@ GC_TEST(LoadFc, StaticReadHealthyTargetReturnsNormally)
 {
     LoadFcFixture fx;
     GC_EXPECT_TRUE(fx.heap.obj0->IsValidObject());
-    RootSlot root;
-    StorePlain(root, from_object(fx.heap.obj0));
+    NativeSlot root(StoreGoodPointer(fx.heap.obj0));
 
     ObjectPtr got = CJ_MCC_ReadStaticRef(&root);
 

@@ -36,7 +36,8 @@ public:
     void WriteF64(BaseObject* obj, Field<double>& field, double val) const;
 
     BaseObject* ReadReference(BaseObject* obj, RefField<false>& field) const;
-    BaseObject* ReadStaticRef(RootSlot& field) const;
+    BaseObject* ReadStaticRef(NativeSlot& field) const;
+    BaseObject* ReadPlainRoot(RootSlot& field) const;
     BaseObject* ReadPhantomRef(BaseObject* obj, RefField<false>& field) const;
     BaseObject* ReadWeakRef(BaseObject* obj, RefField<false>& field) const;
     void ReadStruct(MAddress dst, BaseObject* obj, MAddress src, size_t size) const;
@@ -46,7 +47,8 @@ public:
     // Preloaded compiler store entry carries the overwritten word. Store-good
     // proves its old-value and remembered-set obligations were already discharged.
     void PostWriteReference(BaseObject* obj, RefField<false>& field, BaseObject* ref, zpointer prev) const;
-    void WriteStaticRef(RootSlot& field, BaseObject* ref) const;
+    void WriteStaticRef(NativeSlot& field, BaseObject* ref) const;
+    void WritePlainRoot(RootSlot& field, BaseObject* ref) const;
     void WriteStruct(BaseObject* obj, MAddress dst, size_t dstLen, MAddress src, size_t srcLen) const;
     void WriteStaticStruct(MAddress dst, size_t dstLen, MAddress src, size_t srcLen, const GCTib gctib) const;
 
@@ -71,7 +73,6 @@ public:
 
 protected:
 
-    void WriteStaticRefPlain(RootSlot& field, BaseObject* ref) const;
     void WriteReferenceImpl(BaseObject* obj, RefField<false>& field, BaseObject* ref) const;
     void WriteStructImpl(BaseObject* obj, MAddress dst, size_t dstLen, MAddress src, size_t srcLen) const;
     void CopyRefArrayImpl(BaseObject* dstObj, MAddress dstField, MIndex dstSize,
@@ -111,15 +112,12 @@ protected:
     __attribute__((visibility("hidden"))) void CopyRefArrayColouredToHeap(
         MAddress dst, size_t dstLen, MAddress src, size_t srcLen) const;
 
-    // Shared native struct fixup: resolve forwarding,
-    // store plain. Typed on RootSlot so a coloured write cannot be spelled (see Barrier.cpp).
-    void ResolveStaticStructRoots(MAddress dst, const GCTib gctib) const;
-
     // obj may be null for static/global fields (source treated as old).
     void RecordCrossGenEdge(BaseObject* obj, MAddress fieldAddress, BaseObject* ref,
                             zpointer prev = zpointer::null) const;
 private:
-    BaseObject* ReadNativeValue(zaddress_unsafe observed) const;
+    template<bool atomic>
+    void NativeStoreBarrier(RefField<atomic>& field, bool heal) const;
     template<bool atomic>
     BaseObject* LoadBarrier(BaseObject* obj, RefField<atomic>& field, zpointer observed,
                             ReferenceStrength strength) const;

@@ -101,10 +101,10 @@ public:
 
     virtual void UnregisterStaticRoots(Uptr, U32) = 0;
 
-    virtual void VisitStaticRoots(const RootSlotVisitor& visitor) = 0;
+    virtual void VisitStaticRoots(const NativeSlotVisitor& visitor) = 0;
 
     virtual U64 RegisterExportRoot(BaseObject*) = 0;
-    virtual void VisitAllExportRoots(const RootVisitor& visitor) = 0;
+    virtual void VisitAllExportRoots(const NativeSlotVisitor& visitor) = 0;
 
     virtual BaseObject* GetExportObject(U64) = 0;
     virtual void RemoveExportObject(U64) = 0;

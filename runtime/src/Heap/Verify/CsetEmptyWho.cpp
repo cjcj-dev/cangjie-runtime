@@ -246,7 +246,13 @@ void ClassifyCycle()
     }
     const uint64_t t0 = TimeUtil::NanoSeconds();
 
-    Heap::GetHeap().VisitStaticRoots([](RootSlot& root) { VisitRootSlot(root, Who::Static, g_staticSeen); });
+    Heap::GetHeap().VisitStaticRoots([](NativeSlot& root) {
+        BaseObject* target = to_object(root.GetTargetObject());
+        if (target != nullptr) {
+            g_staticSeen.fetch_add(1, std::memory_order_relaxed);
+            HitTarget(target, Who::Static);
+        }
+    });
 
     // zMark.cpp:827-829 StrongUncolored thread roots include derived bases.
     // VisitHeapReferences = VisitHeapReferencesOnStack (reg/slot/derived/raw) +
@@ -265,10 +271,22 @@ void ClassifyCycle()
         mutator.VisitHeapReferences(stackVisitor, derivedVisitor);
     });
 
-    Heap::GetHeap().GetFinalizerProcessor().VisitRawPointers(
-        [](RootSlot& root) { VisitRootSlot(root, Who::ExtraRoot, g_extraSeen); });
+    Heap::GetHeap().GetFinalizerProcessor().VisitNativePointers(
+        [](NativeSlot& root) {
+            BaseObject* target = to_object(root.GetTargetObject());
+            if (target != nullptr) {
+                g_extraSeen.fetch_add(1, std::memory_order_relaxed);
+                HitTarget(target, Who::ExtraRoot);
+            }
+        });
     Heap::GetHeap().VisitAllExportRoots(
-        [](RootSlot& root) { VisitRootSlot(root, Who::ExtraRoot, g_extraSeen); });
+        [](NativeSlot& root) {
+            BaseObject* target = to_object(root.GetTargetObject());
+            if (target != nullptr) {
+                g_extraSeen.fetch_add(1, std::memory_order_relaxed);
+                HitTarget(target, Who::ExtraRoot);
+            }
+        });
     {
         RootVisitor conc = [](RootSlot& root) { VisitRootSlot(root, Who::ExtraRoot, g_extraSeen); };
         Runtime::Current().GetConcurrencyModel().VisitGCRoots(&conc);

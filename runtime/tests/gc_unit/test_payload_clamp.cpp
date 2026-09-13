@@ -51,15 +51,14 @@ public:
 
 class InstalledBarrierScope {
 public:
-    explicit InstalledBarrierScope(Barrier& barrier) : previous(Heap::currentBarrierPtr), installed(&barrier)
+    explicit InstalledBarrierScope(Barrier& barrier) : previous(Heap::barrierPtr)
     {
-        Heap::currentBarrierPtr = &installed;
+        Heap::barrierPtr = &barrier;
     }
-    ~InstalledBarrierScope() { Heap::currentBarrierPtr = previous; }
+    ~InstalledBarrierScope() { Heap::barrierPtr = previous; }
 
 private:
-    Barrier** previous;
-    Barrier* installed;
+    Barrier* previous;
 };
 
 struct PayloadFixture {

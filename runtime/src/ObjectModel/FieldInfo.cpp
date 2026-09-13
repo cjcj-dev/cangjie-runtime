@@ -180,7 +180,7 @@ void* StaticFieldInfo::GetValue()
 {
     TypeInfo* fieldTi = GetFieldType();
     if (fieldTi->IsRef()) {
-        return Heap::GetBarrier().ReadStaticRef(RootSlotAt(addr));
+        return Heap::GetBarrier().ReadStaticRef(NativeSlotAt(addr));
     } else if (fieldTi->IsStruct() || fieldTi->IsTuple() || fieldTi->IsEnum()) {
         MSize size = MRT_ALIGN(fieldTi->GetInstanceSize() + TYPEINFO_PTR_SIZE, TYPEINFO_PTR_SIZE);
         MSize fieldSize = fieldTi->GetInstanceSize();
@@ -227,7 +227,7 @@ void StaticFieldInfo::SetValue(ObjRef newValue)
 {
     TypeInfo* fieldTi = GetFieldType();
     if (fieldTi->IsRef()) {
-        Heap::GetBarrier().WriteStaticRef(RootSlotAt(addr), newValue);
+        Heap::GetBarrier().WriteStaticRef(NativeSlotAt(addr), newValue);
     } else if (fieldTi->IsStruct() || fieldTi->IsTuple() || fieldTi->IsEnum()) {
         MSize fieldSize = fieldTi->GetInstanceSize();
         if (fieldSize == 0) {

@@ -40,14 +40,12 @@ enum class HealSite : uint16_t {
     BaseObjectCompareExchangeRefField,
     BarrierReadReference,
     BarrierWeakClean,
-    BarrierReadStaticReference,
     BarrierCompareAndSwapReference,
     MutatorPreForwardHeaderlessRecord,
     MutatorPreForwardInterior,
     MutatorPreForwardRoot,
     MutatorPreForwardStackField,
     MutatorStripRootColour,
-    TracingCollectorResurrectFinalizer,
     WCollectorEnumRawInteriorRoot,
     WCollectorEnumRawRoot,
     WCollectorEnumRefFieldRoot,
@@ -368,6 +366,13 @@ inline void StoreColoured(HeapSlot<isAtomic>& slot, zaddress value, MAddress col
 template<bool isAtomic = false>
 using RefField = HeapSlot<isAtomic>;
 
+// ZBarrierSet native access uses the same zpointer representation as heap fields.
+// RootSlot below is reserved for uncolored roots owned by the shared root protocol.
+using NativeSlot = HeapSlot<false>;
+inline NativeSlot& NativeSlotAt(void* address) { return *reinterpret_cast<NativeSlot*>(address); }
+inline NativeSlot& NativeSlotAt(MAddress address) { return *reinterpret_cast<NativeSlot*>(address); }
+using NativeSlotVisitor = std::function<void(NativeSlot&)>;
+
 // OpenJDK ZUncoloredRoot stores an unsafe, uncoloured address in the root and
 // carries colour metadata outside the slot (zUncoloredRoot.hpp:32-54).
 class RootSlot {
@@ -387,14 +392,6 @@ private:
     {
         zaddress_unsafe unsafeValue = to_zaddress_unsafe(raw(value));
         __atomic_store(&rootValue, &unsafeValue, order);
-    }
-
-    zaddress_unsafe ExchangePlain(zaddress desired, std::memory_order order)
-    {
-        zaddress_unsafe value = to_zaddress_unsafe(raw(desired));
-        zaddress_unsafe previous;
-        __atomic_exchange(&rootValue, &value, &previous, order);
-        return previous;
     }
 
     bool CompareExchangePlain(zaddress_unsafe expected, zaddress desired,

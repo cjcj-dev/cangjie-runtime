@@ -709,6 +709,7 @@ thread_local const char* gMinorRootOrigin = "unknown";
 } // namespace
 
 void WCollector::VisitMinorRootSlots(RootVisitor& rawRootVisitor, RootVisitor& invisibleRootVisitor,
+                                     const NativeSlotVisitor& nativeVisitor,
                                      uint64_t stackScanEpoch)
 {
 #if defined(MRT_GC_UNIT_TESTS)
@@ -757,19 +758,19 @@ void WCollector::VisitMinorRootSlots(RootVisitor& rawRootVisitor, RootVisitor& i
     }
     gMinorRootOrigin = "static";
 #if defined(MRT_REMSET_BITMAP_CROSSCHECK)
-    Heap::GetHeap().VisitStaticRoots([&remset, &visitedRawRootVisitor](RootSlot& root) {
+    Heap::GetHeap().VisitStaticRoots([&remset, &nativeVisitor](NativeSlot& root) {
         remset.VisitStaticForCrossCheck(reinterpret_cast<MAddress>(&root));
-        visitedRawRootVisitor(root);
+        nativeVisitor(root);
     });
 #else
-    Heap::GetHeap().VisitStaticRoots(visitedRawRootVisitor);
+    Heap::GetHeap().VisitStaticRoots(nativeVisitor);
 #endif
     gMinorRootOrigin = "concurrency";
     Runtime::Current().GetConcurrencyModel().VisitGCRoots(&visitedRawRootVisitor);
     gMinorRootOrigin = "finalizer";
-    collectorResources.GetFinalizerProcessor().VisitRawPointers(visitedRawRootVisitor);
+    collectorResources.GetFinalizerProcessor().VisitNativePointers(nativeVisitor);
     gMinorRootOrigin = "export";
-    Heap::GetHeap().VisitAllExportRoots(visitedRawRootVisitor);
+    Heap::GetHeap().VisitAllExportRoots(nativeVisitor);
 #if defined(MRT_REMSET_BITMAP_CROSSCHECK)
     remset.CheckStaticCoverageForMinor();
 #endif
@@ -831,7 +832,10 @@ void WCollector::VisitMinorRoots(const std::function<void(BaseObject*)>& visitor
         }
         invisibleVisitor(obj);
     };
-    VisitMinorRootSlots(rawRootVisitor, invisibleRootVisitor, stackScanEpoch);
+    NativeSlotVisitor nativeVisitor = [&visitor](NativeSlot& root) {
+        visitor(Heap::GetBarrier().ReadStaticRef(root));
+    };
+    VisitMinorRootSlots(rawRootVisitor, invisibleRootVisitor, nativeVisitor, stackScanEpoch);
     VisitMinorValueRoots(visitor);
 }
 

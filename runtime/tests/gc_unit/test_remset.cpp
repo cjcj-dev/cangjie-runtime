@@ -178,16 +178,15 @@ GC_TEST(Remset, Wave8FilterReceiptPositiveControls)
 
 class InstalledBarrierScope {
 public:
-    explicit InstalledBarrierScope(Barrier& barrier) : previous(Heap::currentBarrierPtr), installed(&barrier)
+    explicit InstalledBarrierScope(Barrier& barrier) : previous(Heap::barrierPtr)
     {
-        Heap::currentBarrierPtr = &installed;
+        Heap::barrierPtr = &barrier;
     }
 
-    ~InstalledBarrierScope() { Heap::currentBarrierPtr = previous; }
+    ~InstalledBarrierScope() { Heap::barrierPtr = previous; }
 
 private:
-    Barrier** previous;
-    Barrier* installed;
+    Barrier* previous;
 };
 
 class TestCollector final : public Collector {
@@ -676,7 +675,7 @@ GC_TEST(Remset, StaticRootNotRecorded)
     RememberedSet rs;
     rs.Initialize(fx.heapStart, 2 * RegionInfo::UNIT_SIZE);
     Barrier barrier(collector, rs);
-    RootSlot root;
+    NativeSlot root(zpointer::null);
 
     barrier.WriteStaticRef(root, fx.obj1);
     std::unordered_set<MAddress> records;

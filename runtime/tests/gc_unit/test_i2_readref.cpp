@@ -36,15 +36,10 @@ public:
     {
         return obj == from ? FindToVersionResult::Found(to) : FindToVersionResult::NotForwarded();
     }
-    BaseObject* ResolveStoreValue(BaseObject* obj, const ForwardingProvenance& = {}) const override
-    {
-        return obj == from ? to : obj;
-    }
     ZGenerationId remap_generation(RefField<>&) const override { return ZGenerationId::old; }
     BaseObject* relocate_or_remap_object(BaseObject* obj, ZGenerationId) const override
     {
-        return ResolveStoreValue(obj, ForwardingProvenance{
-            ForwardingHolderKind::HeapRef, obj, &obj });
+        return obj == from ? to : obj;
     }
     bool TryUpdateRefField(BaseObject*, RefField<>&, BaseObject*&) const override { return false; }
     bool IsOldPointer(RefField<>&) const override { return false; }

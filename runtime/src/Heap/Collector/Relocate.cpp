@@ -367,12 +367,12 @@ BaseObject* WCollector::ForwardUpdateRawRef(ObjectRef& root, Generation generati
 }
 void WCollector::PreforwardAllExportFromRoots()
 {
-    RootVisitor visitor = [this](ObjectRef& root) { ForwardUpdateRawRef(root, Generation::Old); };
+    NativeSlotVisitor visitor = [](NativeSlot& root) { (void)Heap::GetBarrier().ReadStaticRef(root); };
     Heap::GetHeap().VisitAllExportRoots(visitor);
 }
 void WCollector::PreforwardStaticRoots()
 {
-    RootSlotVisitor visitor = [this](RootSlot& root) { ForwardUpdateRawRef(root, Generation::Old); };
+    NativeSlotVisitor visitor = [](NativeSlot& root) { (void)Heap::GetBarrier().ReadStaticRef(root); };
     Heap::GetHeap().VisitStaticRoots(visitor);
 }
 
@@ -497,8 +497,14 @@ void WCollector::RemapYoungRoots()
         }
     };
 
-    RootSlotVisitor staticVisitor = [&](RootSlot& root) {
-        remapRoot(root, staticSeen, staticColoured, staticRemapped, staticDoubleBad);
+    NativeSlotVisitor staticVisitor = [&](NativeSlot& root) {
+        ++staticSeen;
+        const zpointer observed = root.GetFieldValue();
+        ++staticColoured;
+        (void)Heap::GetBarrier().ReadStaticRef(root);
+        if (root.GetFieldValue() != observed) {
+            ++staticRemapped;
+        }
     };
     Heap::GetHeap().VisitStaticRoots(staticVisitor);
 
@@ -519,8 +525,17 @@ void WCollector::RemapYoungRoots()
         remapRoot(root, otherSeen, otherColoured, otherRemapped, otherDoubleBad);
     };
     Runtime::Current().GetConcurrencyModel().VisitGCRoots(&otherVisitor);
-    collectorResources.GetFinalizerProcessor().VisitRawPointers(otherVisitor);
-    Heap::GetHeap().VisitAllExportRoots(otherVisitor);
+    NativeSlotVisitor retainedVisitor = [&](NativeSlot& root) {
+        ++otherSeen;
+        ++otherColoured;
+        const zpointer observed = root.GetFieldValue();
+        (void)Heap::GetBarrier().ReadStaticRef(root);
+        if (root.GetFieldValue() != observed) {
+            ++otherRemapped;
+        }
+    };
+    collectorResources.GetFinalizerProcessor().VisitNativePointers(retainedVisitor);
+    Heap::GetHeap().VisitAllExportRoots(retainedVisitor);
 
     // ZGenerationOld::remap_young_roots completes colored roots, uncolored
     // roots, and the current remembered set before old relocate-start
@@ -540,8 +555,8 @@ void WCollector::RemapYoungRoots()
 }
 void WCollector::PreforwardFinalizerProcessorRoots()
 {
-    RootVisitor visitor = [this](ObjectRef& root) { ForwardUpdateRawRef(root, Generation::Old); };
-    collectorResources.GetFinalizerProcessor().VisitRawPointers(visitor);
+    NativeSlotVisitor visitor = [](NativeSlot& root) { (void)Heap::GetBarrier().ReadStaticRef(root); };
+    collectorResources.GetFinalizerProcessor().VisitNativePointers(visitor);
 }
 
 void WCollector::PreforwardConcurrencyModelRoots()
@@ -1288,10 +1303,7 @@ void WCollector::FixMinorRootSlots(const ScopedStopTheWorld* stw)
     };
     MutatorManager::Instance().VisitAllMutators(
         [&grantVisitor](Mutator& mutator) { mutator.VisitMutatorRoots(grantVisitor); });
-    Heap::GetHeap().VisitStaticRoots(grantVisitor);
     Runtime::Current().GetConcurrencyModel().VisitGCRoots(&grantVisitor);
-    collectorResources.GetFinalizerProcessor().VisitRawPointers(grantVisitor);
-    Heap::GetHeap().VisitAllExportRoots(grantVisitor);
 
     RootVisitor rawRootVisitor = [this, stw](ObjectRef& root) {
 #if defined(MRT_GC_UNIT_TESTS)
@@ -1312,10 +1324,15 @@ void WCollector::FixMinorRootSlots(const ScopedStopTheWorld* stw)
         [&rawRootVisitor, &derivedVisitor](Mutator& mutator) {
             mutator.VisitHeapReferences(rawRootVisitor, derivedVisitor);
         });
-    Heap::GetHeap().VisitStaticRoots(rawRootVisitor);
+    Heap::GetHeap().VisitStaticRoots([](NativeSlot& root) {
+        (void)Heap::GetBarrier().ReadStaticRef(root);
+    });
     Runtime::Current().GetConcurrencyModel().VisitGCRoots(&rawRootVisitor);
-    collectorResources.GetFinalizerProcessor().VisitRawPointers(rawRootVisitor);
-    Heap::GetHeap().VisitAllExportRoots(rawRootVisitor);
+    NativeSlotVisitor retainedVisitor = [](NativeSlot& root) {
+        (void)Heap::GetBarrier().ReadStaticRef(root);
+    };
+    collectorResources.GetFinalizerProcessor().VisitNativePointers(retainedVisitor);
+    Heap::GetHeap().VisitAllExportRoots(retainedVisitor);
     if (NullslotProbeEnabled() && callN < 32) {
         std::fprintf(stderr,
                      "[GCV2][nullslot] path=fix_minor_roots end n=%zu dEntry=%zu dOld=%zu dHealNull=%zu "

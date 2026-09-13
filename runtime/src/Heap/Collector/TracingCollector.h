@@ -114,14 +114,14 @@ private:
 class StaticRootTable {
 public:
     struct StaticRootArray {
-        RootSlot* content[0];
+        NativeSlot* content[0];
     };
 
     StaticRootTable() { totalRootsCount = 0; }
     ~StaticRootTable() = default;
     void RegisterRoots(StaticRootArray* addr, U32 size);
     void UnregisterRoots(StaticRootArray* addr, U32 size);
-    void VisitRoots(const RootSlotVisitor& visitor);
+    void VisitRoots(const NativeSlotVisitor& visitor);
 #ifdef MRT_TESTABLE_INTERNALS
     USize RootCountForTesting();
 #endif
@@ -141,7 +141,7 @@ private:
 
 struct ExportObjectInfo {
     explicit ExportObjectInfo(bool state) : generation(1), occupied(true), activeState(state) {}
-    RootSlot exportObj;
+    NativeSlot exportObj{zpointer::null};
     U32 generation = 0;
     bool occupied = false;
     bool activeState = true;
@@ -195,12 +195,12 @@ public:
         if (!ResolveLiveIndex(handle, index)) {
             return;
         }
-        StorePlain(exportRoots[index].exportObj, zaddress::null);
+        Heap::GetBarrier().WriteStaticRef(exportRoots[index].exportObj, nullptr);
         exportRoots[index].occupied = false;
         exportRoots[index].activeState = true;
         accessableId.push_back(index);
     }
-    void VisitGCRoots(const RootVisitor& visitor);
+    void VisitGCRoots(const NativeSlotVisitor& visitor);
     void SetActiveState(U64 handle, bool state)
     {
         std::lock_guard<std::mutex> lg(tableMutex);
@@ -219,7 +219,7 @@ public:
         }
         auto info = exportRoots[index];
         // tableMutex excludes GC visitation, so this retained root is live here.
-        if (to_object(safe(info.exportObj.LoadPlain())) != obj) {
+        if (Heap::GetBarrier().ReadStaticRef(info.exportObj) != obj) {
             return false;
         }
         return info.activeState;
@@ -580,8 +580,8 @@ private:
     void EnumFinalizerProcessorRoots(RootSet& rootSet) const;
     void EnumAllSurrectedExportRoots(RootSet& rootSet);
 
-    void VisitStaticRoots(const RootSlotVisitor& visitor) const;
-    void VisitFinalizerRoots(const RootVisitor& visitor) const;
+    void VisitStaticRoots(const NativeSlotVisitor& visitor) const;
+    void VisitFinalizerRoots(const NativeSlotVisitor& visitor) const;
 };
 } // namespace MapleRuntime
 #endif // MRT_COLLECTOR_TRACING_H

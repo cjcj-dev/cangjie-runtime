@@ -17,11 +17,11 @@ GC_TEST(FnlzRoots, RegisteredFinalizerIsRawPointerButNotStrongRoot)
     fp.RegisterFinalizer(obj);
 
     size_t strongRoots = 0;
-    fp.VisitGCRoots([&](RootSlot&) { ++strongRoots; });
+    fp.VisitGCRoots([&](NativeSlot&) { ++strongRoots; });
     GC_EXPECT_EQ(strongRoots, static_cast<size_t>(0));
 
     size_t rawPointers = 0;
-    fp.VisitRawPointers([&](RootSlot&) { ++rawPointers; });
+    fp.VisitNativePointers([&](NativeSlot&) { ++rawPointers; });
     GC_EXPECT_EQ(rawPointers, static_cast<size_t>(1));
 }
 
@@ -33,7 +33,7 @@ GC_TEST(FnlzRoots, VisitFinalizersCountMatchesRegister)
     fp.RegisterFinalizer(reinterpret_cast<BaseObject*>(a));
     fp.RegisterFinalizer(reinterpret_cast<BaseObject*>(b));
 
-    U32 finalizers = fp.VisitFinalizers([](RootSlot&) {});
+    U32 finalizers = fp.VisitFinalizers([](NativeSlot&) {});
     GC_EXPECT_EQ(finalizers, static_cast<U32>(2));
 }
 
@@ -53,7 +53,7 @@ GC_TEST(FnlzRoots, RegistryMissDoesNotCountAsFinalEnqueue)
 
     GC_EXPECT_EQ(processor.Enqueued(ReferenceType::FINAL), static_cast<size_t>(0));
     size_t queuedRoots = 0;
-    fp.VisitGCRoots([&](RootSlot&) { ++queuedRoots; });
+    fp.VisitGCRoots([&](NativeSlot&) { ++queuedRoots; });
     GC_EXPECT_EQ(queuedRoots, static_cast<size_t>(0));
 }
 
@@ -74,9 +74,9 @@ GC_TEST(FnlzRoots, RegisteredFinalizerMovesAndCountsExactlyOnce)
 
     GC_EXPECT_EQ(processor.Enqueued(ReferenceType::FINAL), static_cast<size_t>(1));
     size_t queuedRoots = 0;
-    fp.VisitGCRoots([&](RootSlot&) { ++queuedRoots; });
+    fp.VisitGCRoots([&](NativeSlot&) { ++queuedRoots; });
     GC_EXPECT_EQ(queuedRoots, static_cast<size_t>(1));
-    GC_EXPECT_EQ(fp.VisitFinalizers([](RootSlot&) {}), static_cast<U32>(0));
+    GC_EXPECT_EQ(fp.VisitFinalizers([](NativeSlot&) {}), static_cast<U32>(0));
 }
 
 #if defined(MRT_TESTABLE_INTERNALS)
@@ -114,7 +114,7 @@ GC_TEST(FnlzRoots, EnqueueBetweenIdleCheckAndCommitKeepsJobVisible)
 
     GC_EXPECT_TRUE(fp.HasFinalizableJobForTest());
     size_t queuedRoots = 0;
-    fp.VisitGCRoots([&](RootSlot&) { ++queuedRoots; });
+    fp.VisitGCRoots([&](NativeSlot&) { ++queuedRoots; });
     GC_EXPECT_EQ(queuedRoots, static_cast<size_t>(1));
 }
 #endif

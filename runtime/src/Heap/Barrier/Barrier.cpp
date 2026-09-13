@@ -68,6 +68,62 @@ static zpointer ColourLoadGood(BaseObject* target, zpointer observed)
         (::g_cjLoadBadMask ^ REMAP_COLOUR_MASK));
 }
 
+namespace {
+enum class CopySlotKind { Heap, Native, Uncolored };
+
+void CopyReferenceSlots(const Barrier& barrier,
+                             MAddress dst, size_t dstLen, MAddress src, size_t srcLen,
+                             std::vector<size_t> offsets, CopySlotKind sourceKind, CopySlotKind destinationKind)
+{
+    CHECK_DETAIL(srcLen <= dstLen, "full-colour copy source does not fit: dstLen=%zu srcLen=%zu", dstLen, srcLen);
+    if (srcLen == 0) {
+        return;
+    }
+    std::vector<uint8_t> snapshot(srcLen);
+    CHECK_DETAIL(memcpy_s(snapshot.data(), snapshot.size(), reinterpret_cast<void*>(src), srcLen) == EOK,
+                 "full-colour source snapshot failed");
+    std::sort(offsets.begin(), offsets.end());
+    offsets.erase(std::unique(offsets.begin(), offsets.end()), offsets.end());
+    size_t cursor = 0;
+    for (size_t offset : offsets) {
+        CHECK_DETAIL(offset >= cursor && offset + sizeof(HeapSlot<>) <= srcLen,
+                     "full-colour ref offset outside copy: offset=%zu cursor=%zu srcLen=%zu", offset, cursor, srcLen);
+        if (offset > cursor) {
+            const size_t gap = offset - cursor;
+            CHECK_DETAIL(memcpy_s(reinterpret_cast<void*>(dst + cursor), gap,
+                                  snapshot.data() + cursor, gap) == EOK,
+                         "full-colour primitive-gap copy failed");
+        }
+        uintptr_t sourceWord = 0;
+        std::memcpy(&sourceWord, snapshot.data() + offset, sizeof(sourceWord));
+        BaseObject* target;
+        if (sourceKind == CopySlotKind::Uncolored) {
+            // Mutator-local values are load-good after the shared root protocol.
+            // They are not zpointer words and must never enter a color fast path.
+            target = to_object(safe(to_zaddress_unsafe(sourceWord)));
+        } else {
+            HeapSlot<> source(to_zpointer(sourceWord));
+            target = sourceKind == CopySlotKind::Native
+                ? barrier.ReadStaticRef(source) : barrier.ReadReference(nullptr, source);
+        }
+        if (destinationKind == CopySlotKind::Heap) {
+            barrier.WriteReference(nullptr, HeapSlotAt<>(dst + offset), target);
+        } else if (destinationKind == CopySlotKind::Native) {
+            barrier.WriteStaticRef(NativeSlotAt(dst + offset), target);
+        } else {
+            StorePlain(RootSlotAt(dst + offset), from_object(target));
+        }
+        cursor = offset + sizeof(HeapSlot<>);
+    }
+    if (cursor < srcLen) {
+        const size_t tail = srcLen - cursor;
+        CHECK_DETAIL(memcpy_s(reinterpret_cast<void*>(dst + cursor), tail,
+                              snapshot.data() + cursor, tail) == EOK,
+                     "full-colour primitive-tail copy failed");
+    }
+}
+} // namespace
+
 void Barrier::WriteI8(BaseObject* obj, Field<int8_t>& field, int8_t val) const { field.SetFieldValue(obj, val); }
 
 void Barrier::WriteI16(BaseObject* obj, Field<int16_t>& field, int16_t val) const { field.SetFieldValue(obj, val); }
@@ -175,36 +231,64 @@ void Barrier::WriteStructImpl(BaseObject* obj, MAddress dst, size_t dstLen, MAdd
 #endif
 }
 
-void Barrier::WriteStaticRef(RootSlot& field, BaseObject* ref) const
+// ZBarrier::store_barrier_on_native_oop_field, zBarrier.inline.hpp:709.
+// Native slots carry color but have no heap remembered-set obligation.
+template<bool atomic>
+void Barrier::NativeStoreBarrier(RefField<atomic>& field, bool heal) const
 {
-    // Native root stores have a direct previous-value mark barrier.
-    // ZBarrier::native_store_slow_path (zBarrier.cpp:272-278).
-    theCollector.MarkObjectIfActive(ReadStaticRef(field));
-
-    WriteStaticRefPlain(field, ref);
-
+    const zpointer observed = field.GetFieldValue(std::memory_order_relaxed);
+    auto fastPath = [this, heal](zpointer word) {
+        RefField<> value(word);
+        return theCollector.is_store_good(value) || (!heal && is_null(word));
+    };
+    if (fastPath(observed)) {
+        return;
+    }
+    RefField<> previous(observed);
+    const ForwardingProvenance provenance{ ForwardingHolderKind::Static, nullptr, &field };
+    BaseObject* target = theCollector.make_load_good(previous, provenance);
+    theCollector.MarkObjectIfActive(target);
+    if (heal) {
+        const zpointer good = to_zpointer(MakeStoreGoodSlotWord(
+            reinterpret_cast<uintptr_t>(target), ::g_cjStoreGoodMask));
+        ZgcSelfHeal(field, observed, good, fastPath, HealSite::BarrierReadReference);
+    }
 }
 
-void Barrier::WriteStaticRefPlain(RootSlot& field, BaseObject* ref) const
+void Barrier::WriteStaticRef(NativeSlot& field, BaseObject* ref) const
 {
-    DLOG(BARRIER, "write (barrier) static ref@%p: %p", &field, ref);
+    NativeStoreBarrier(field, false);
+    WriteReferenceImpl(nullptr, field, ref);
+}
+
+BaseObject* Barrier::ReadStaticRef(NativeSlot& field) const
+{
+    return LoadBarrier(nullptr, field, field.GetFieldValue(), ReferenceStrength::Strong);
+}
+
+// Thread-owned uncolored roots are made load-good by the shared root handshake
+// before their mutator resumes (ZStackWatermark). Mutator access does not remap.
+BaseObject* Barrier::ReadPlainRoot(RootSlot& field) const
+{
+    return to_object(safe(field.LoadPlain()));
+}
+
+void Barrier::WritePlainRoot(RootSlot& field, BaseObject* ref) const
+{
     StorePlain(field, from_object(ref));
 }
 
 void Barrier::WriteStaticStruct(MAddress dst, size_t dstLen, MAddress src, size_t srcLen, const GCTib gctib) const
 {
-    gctib.ForEachBitmapWord(dst, [this](RefField<>& field) {
-        theCollector.MarkObjectIfActive(ReadStaticRef(RootSlotAt(static_cast<void*>(&field))));
-    });
-
-    // R9 bulk：静态槽 barrier 可见；post-copy 解析转发（STACK_ROOTS_STAY_PLAIN：写回 plain）。
-    CHECK_DETAIL(memcpy_s(reinterpret_cast<void*>(dst), dstLen, reinterpret_cast<void*>(src), srcLen) == EOK,
-                 "memcpy_s failed");
-    ResolveStaticStructRoots(dst, gctib);
+    std::vector<size_t> offsets;
+    gctib.ForEachBitmapWordInRange(src, [&offsets, src](RefField<>& field) {
+        offsets.push_back(reinterpret_cast<MAddress>(&field) - src);
+    }, src, src + srcLen);
+    CopyReferenceSlots(*this, dst, dstLen, src, srcLen, std::move(offsets),
+        Heap::IsHeapAddress(src) ? CopySlotKind::Heap : CopySlotKind::Uncolored, CopySlotKind::Native);
 #if defined(CANGJIE_TSAN_SUPPORT)
-    size_t copyLen = (dstLen < srcLen ? dstLen : srcLen);
-    Sanitizer::TsanWriteMemoryRange(reinterpret_cast<void*>(dst), copyLen);
-    Sanitizer::TsanReadMemoryRange(reinterpret_cast<void*>(src), copyLen);
+    Sanitizer::TsanWriteMemoryRange(reinterpret_cast<void*>(dst), srcLen);
+    Sanitizer::TsanReadMemoryRange(reinterpret_cast<void*>(src), srcLen);
 #endif
 }
 
@@ -267,33 +351,12 @@ BaseObject* Barrier::ReadPhantomRef(BaseObject* obj, RefField<false>& field) con
     return LoadBarrier(obj, field, field.GetFieldValue(), ReferenceStrength::Phantom);
 }
 
-BaseObject* Barrier::ReadNativeValue(zaddress_unsafe observed) const
-{
-    BaseObject* target = reinterpret_cast<BaseObject*>(raw(observed));
-    if (target != nullptr && Heap::IsHeapAddress(target)) {
-        const ForwardingProvenance provenance{ ForwardingHolderKind::Static, nullptr, nullptr };
-        target = theCollector.FindLatestVersion(target, provenance, theCollector.ActiveForwardingGeneration());
-    }
-    return target;
-}
-
-BaseObject* Barrier::ReadStaticRef(RootSlot& field) const
-{
-    const zaddress_unsafe observed = field.LoadPlain();
-    BaseObject* target = ReadNativeValue(observed);
-    if (target != nullptr && raw(observed) != reinterpret_cast<uintptr_t>(target)) {
-        HealRootIfObserved(field, observed, from_object(target), HealSite::BarrierReadStaticReference);
-    }
-    return target;
-}
-
 // barrier for atomic operation.
 void Barrier::AtomicWriteReference(BaseObject* obj, RefField<true>& field, BaseObject* ref, MemoryOrder order) const
 {
     if (!Heap::IsHeapAddress(&field)) {
-        RootSlot& root = RootSlotAt(static_cast<void*>(&field));
-        theCollector.MarkObjectIfActive(ReadStaticRef(root));
-        StorePlain(root, from_object(ref), order);
+        NativeStoreBarrier(field, true);
+        AtomicWriteReferenceImpl(obj, field, ref, order);
         return;
     }
     StoreBarrier(obj, field, true);
@@ -310,9 +373,8 @@ BaseObject* Barrier::AtomicSwapReference(BaseObject* obj, RefField<true>& field,
                                          MemoryOrder order) const
 {
     if (!Heap::IsHeapAddress(&field)) {
-        RootSlot& root = RootSlotAt(static_cast<void*>(&field));
-        theCollector.MarkObjectIfActive(ReadStaticRef(root));
-        return ReadNativeValue(root.ExchangePlain(from_object(newRef), order));
+        NativeStoreBarrier(field, true);
+        return AtomicSwapReferenceImpl(obj, field, newRef, order);
     }
     StoreBarrier(obj, field, true);
     return AtomicSwapReferenceImpl(obj, field, newRef, order);
@@ -329,10 +391,6 @@ BaseObject* Barrier::AtomicSwapReferenceImpl(BaseObject* obj, RefField<true>& fi
 
 BaseObject* Barrier::AtomicReadReference(BaseObject* obj, RefField<true>& field, MemoryOrder order) const
 {
-    if (!Heap::IsHeapAddress(&field)) {
-        RootSlot& root = RootSlotAt(static_cast<void*>(&field));
-        return ReadNativeValue(root.LoadPlain(order));
-    }
     return LoadBarrier(obj, field, field.GetFieldValue(order), ReferenceStrength::Strong);
 }
 
@@ -340,12 +398,8 @@ bool Barrier::CompareAndSwapReference(BaseObject* obj, RefField<true>& field, Ba
                                       MemoryOrder succOrder, MemoryOrder failOrder) const
 {
     if (!Heap::IsHeapAddress(&field)) {
-        RootSlot& root = RootSlotAt(static_cast<void*>(&field));
-        const zaddress_unsafe observed = root.LoadPlain(std::memory_order_relaxed);
-        BaseObject* previous = ReadNativeValue(observed);
-        theCollector.MarkObjectIfActive(previous);
-        return previous == oldRef && root.CompareExchangePlain(observed, from_object(newRef),
-                                                                succOrder, failOrder);
+        NativeStoreBarrier(field, true);
+        return CompareAndSwapReferenceImpl(obj, field, oldRef, newRef, succOrder, failOrder);
     }
     StoreBarrier(obj, field, true);
     return CompareAndSwapReferenceImpl(obj, field, oldRef, newRef, succOrder, failOrder);
@@ -440,7 +494,8 @@ void Barrier::CopyStructPlainToNonHeap(MAddress dst, BaseObject* srcObj, MAddres
                                           reinterpret_cast<void*>(cursor), gap) == EOK,
                                  "read struct gap memcpy_s failed");
                 }
-                BaseObject* target = ReadReference(srcObj, field);
+                BaseObject* target = Heap::IsHeapAddress(&field) ? ReadReference(srcObj, field)
+                : to_object(safe(RootSlotAt(static_cast<void*>(&field)).LoadPlain()));
                 StorePlain(RootSlotAt(dst + (fieldAddr - src)), from_object(target));
                 cursor = fieldAddr + sizeof(RefField<>);
             },
@@ -458,45 +513,7 @@ void Barrier::CopyStructPlainToNonHeap(MAddress dst, BaseObject* srcObj, MAddres
 #endif
 }
 
-namespace {
-void CopyColouredSlotsToHeap(const Barrier& barrier, Collector& collector,
-                             MAddress dst, size_t dstLen, MAddress src, size_t srcLen,
-                             std::vector<size_t> offsets)
-{
-    CHECK_DETAIL(srcLen <= dstLen, "full-colour copy source does not fit: dstLen=%zu srcLen=%zu", dstLen, srcLen);
-    if (srcLen == 0) {
-        return;
-    }
-    std::vector<uint8_t> snapshot(srcLen);
-    CHECK_DETAIL(memcpy_s(snapshot.data(), snapshot.size(), reinterpret_cast<void*>(src), srcLen) == EOK,
-                 "full-colour source snapshot failed");
-    std::sort(offsets.begin(), offsets.end());
-    offsets.erase(std::unique(offsets.begin(), offsets.end()), offsets.end());
-    size_t cursor = 0;
-    for (size_t offset : offsets) {
-        CHECK_DETAIL(offset >= cursor && offset + sizeof(HeapSlot<>) <= srcLen,
-                     "full-colour ref offset outside copy: offset=%zu cursor=%zu srcLen=%zu", offset, cursor, srcLen);
-        if (offset > cursor) {
-            const size_t gap = offset - cursor;
-            CHECK_DETAIL(memcpy_s(reinterpret_cast<void*>(dst + cursor), gap,
-                                  snapshot.data() + cursor, gap) == EOK,
-                         "full-colour primitive-gap copy failed");
-        }
-        uintptr_t sourceWord = 0;
-        std::memcpy(&sourceWord, snapshot.data() + offset, sizeof(sourceWord));
-        HeapSlot<> source(to_zpointer(sourceWord));
-        BaseObject* target = barrier.ReadReference(nullptr, source);
-        barrier.WriteReference(nullptr, HeapSlotAt<>(dst + offset), target);
-        cursor = offset + sizeof(HeapSlot<>);
-    }
-    if (cursor < srcLen) {
-        const size_t tail = srcLen - cursor;
-        CHECK_DETAIL(memcpy_s(reinterpret_cast<void*>(dst + cursor), tail,
-                              snapshot.data() + cursor, tail) == EOK,
-                     "full-colour primitive-tail copy failed");
-    }
-}
-} // namespace
+
 
 void Barrier::CopyObjectStructColouredToHeap(BaseObject* layoutObj, MAddress layoutStart,
                                               MAddress dst, size_t dstLen,
@@ -511,7 +528,8 @@ void Barrier::CopyObjectStructColouredToHeap(BaseObject* layoutObj, MAddress lay
                 offsets.push_back(static_cast<size_t>(address - layoutStart));
             }
         }, layoutStart, layoutStart + srcLen);
-    CopyColouredSlotsToHeap(*this, theCollector, dst, dstLen, src, srcLen, std::move(offsets));
+    CopyReferenceSlots(*this, dst, dstLen, src, srcLen, std::move(offsets),
+        Heap::IsHeapAddress(src) ? CopySlotKind::Heap : CopySlotKind::Uncolored, CopySlotKind::Heap);
 }
 
 void Barrier::CopyStaticStructColouredToHeap(MAddress dst, size_t dstLen, MAddress src,
@@ -524,7 +542,8 @@ void Barrier::CopyStaticStructColouredToHeap(MAddress dst, size_t dstLen, MAddre
         [&offsets, src](RefField<>& field) {
             offsets.push_back(static_cast<size_t>(reinterpret_cast<MAddress>(&field) - src));
         }, src, src + srcLen);
-    CopyColouredSlotsToHeap(*this, theCollector, dst, dstLen, src, srcLen, std::move(offsets));
+    CopyReferenceSlots(*this, dst, dstLen, src, srcLen, std::move(offsets),
+        CopySlotKind::Native, CopySlotKind::Heap);
 }
 
 void Barrier::CopyStructArrayColouredToHeap(BaseObject* dstObj, MAddress dst, size_t dstLen,
@@ -536,7 +555,8 @@ void Barrier::CopyStructArrayColouredToHeap(BaseObject* dstObj, MAddress dst, si
         [&offsets, dst](RefField<>& field) {
             offsets.push_back(static_cast<size_t>(reinterpret_cast<MAddress>(&field) - dst));
         }, dst, dst + srcLen);
-    CopyColouredSlotsToHeap(*this, theCollector, dst, dstLen, src, srcLen, std::move(offsets));
+    CopyReferenceSlots(*this, dst, dstLen, src, srcLen, std::move(offsets),
+        Heap::IsHeapAddress(src) ? CopySlotKind::Heap : CopySlotKind::Uncolored, CopySlotKind::Heap);
 }
 
 void Barrier::CopyRefArrayColouredToHeap(MAddress dst, size_t dstLen, MAddress src, size_t srcLen) const
@@ -548,54 +568,19 @@ void Barrier::CopyRefArrayColouredToHeap(MAddress dst, size_t dstLen, MAddress s
     for (size_t offset = 0; offset < srcLen; offset += sizeof(HeapSlot<>)) {
         offsets.push_back(offset);
     }
-    CopyColouredSlotsToHeap(*this, theCollector, dst, dstLen, src, srcLen, std::move(offsets));
+    CopyReferenceSlots(*this, dst, dstLen, src, srcLen, std::move(offsets),
+        Heap::IsHeapAddress(src) ? CopySlotKind::Heap : CopySlotKind::Uncolored, CopySlotKind::Heap);
 }
 
 void Barrier::CopyStaticStructPlainToNonHeap(MAddress dst, MAddress src, size_t size, const GCTib gctib) const
 {
     CHECK(!Heap::IsHeapAddress(dst));
-    if (size == 0) {
-        return;
-    }
-    if (!Heap::IsHeapAddress(src) && dst < src + size && src < dst + size) {
-        CHECK_DETAIL(memmove_s(reinterpret_cast<void*>(dst), size, reinterpret_cast<void*>(src), size) == EOK,
-                     "read static struct overlap memmove_s failed");
-#if defined(CANGJIE_TSAN_SUPPORT)
-        Sanitizer::TsanWriteMemoryRange(reinterpret_cast<void*>(dst), size);
-        Sanitizer::TsanReadMemoryRange(reinterpret_cast<void*>(src), size);
-#endif
-        return;
-    }
-    MAddress cursor = src;
-    const MAddress srcEnd = src + size;
-    gctib.ForEachBitmapWordInRange(
-        src,
-        [this, dst, src, srcEnd, &cursor](RefField<>& srcField) {
-            MAddress fieldAddr = reinterpret_cast<MAddress>(&srcField);
-            if (fieldAddr < cursor || fieldAddr >= srcEnd) {
-                return;
-            }
-            if (fieldAddr > cursor) {
-                size_t gap = static_cast<size_t>(fieldAddr - cursor);
-                CHECK_DETAIL(memcpy_s(reinterpret_cast<void*>(dst + (cursor - src)), gap,
-                                      reinterpret_cast<void*>(cursor), gap) == EOK,
-                             "read static struct gap memcpy_s failed");
-            }
-            BaseObject* target = ReadReference(nullptr, srcField);
-            StorePlain(RootSlotAt(dst + (fieldAddr - src)), from_object(target));
-            cursor = fieldAddr + sizeof(RefField<>);
-        },
-        src, srcEnd);
-    if (cursor < srcEnd) {
-        size_t tail = static_cast<size_t>(srcEnd - cursor);
-        CHECK_DETAIL(memcpy_s(reinterpret_cast<void*>(dst + (cursor - src)), tail,
-                              reinterpret_cast<void*>(cursor), tail) == EOK,
-                     "read static struct tail memcpy_s failed");
-    }
-#if defined(CANGJIE_TSAN_SUPPORT)
-    Sanitizer::TsanWriteMemoryRange(reinterpret_cast<void*>(dst), size);
-    Sanitizer::TsanReadMemoryRange(reinterpret_cast<void*>(src), size);
-#endif
+    std::vector<size_t> offsets;
+    gctib.ForEachBitmapWordInRange(src, [&offsets, src](RefField<>& field) {
+        offsets.push_back(reinterpret_cast<MAddress>(&field) - src);
+    }, src, src + size);
+    CopyReferenceSlots(*this, dst, size, src, size, std::move(offsets),
+                       CopySlotKind::Native, CopySlotKind::Uncolored);
 }
 
 void Barrier::CopyStructArrayPlainToNonHeap(MAddress dstField, BaseObject* srcObj, MAddress srcField,
@@ -639,7 +624,8 @@ void Barrier::CopyStructArrayPlainToNonHeap(MAddress dstField, BaseObject* srcOb
                                       reinterpret_cast<void*>(cursor), gap) == EOK,
                              "copy struct array gap memcpy_s failed");
             }
-            BaseObject* target = ReadReference(srcObj, field);
+            BaseObject* target = Heap::IsHeapAddress(&field) ? ReadReference(srcObj, field)
+                : to_object(safe(RootSlotAt(static_cast<void*>(&field)).LoadPlain()));
             StorePlain(RootSlotAt(dstField + (fieldAddr - srcField)), from_object(target));
             cursor = fieldAddr + sizeof(RefField<>);
         },
@@ -673,7 +659,8 @@ void Barrier::CopyRefArrayPlainToNonHeap(MAddress dst, BaseObject* srcObj, MAddr
         MAddress fieldBound = dst + copyLen;
         while (currentDst < fieldBound) {
             HeapSlot<false>& currentSrcField = HeapSlotAt<false>(currentSrc);
-            BaseObject* newRef = ReadReference(srcObj, currentSrcField);
+            BaseObject* newRef = Heap::IsHeapAddress(currentSrc) ? ReadReference(srcObj, currentSrcField)
+                : to_object(safe(RootSlotAt(currentSrc).LoadPlain()));
             StorePlain(RootSlotAt(currentDst), from_object(newRef));
             currentDst += sizeof(RefField<false>);
             currentSrc += sizeof(RefField<false>);
@@ -684,7 +671,8 @@ void Barrier::CopyRefArrayPlainToNonHeap(MAddress dst, BaseObject* srcObj, MAddr
         MAddress fieldBound = dst;
         while (currentDst >= fieldBound) {
             HeapSlot<false>& currentSrcField = HeapSlotAt<false>(currentSrc);
-            BaseObject* newRef = ReadReference(srcObj, currentSrcField);
+            BaseObject* newRef = Heap::IsHeapAddress(currentSrc) ? ReadReference(srcObj, currentSrcField)
+                : to_object(safe(RootSlotAt(currentSrc).LoadPlain()));
             StorePlain(RootSlotAt(currentDst), from_object(newRef));
             currentDst -= sizeof(RefField<false>);
             currentSrc -= sizeof(RefField<false>);
@@ -694,35 +682,6 @@ void Barrier::CopyRefArrayPlainToNonHeap(MAddress dst, BaseObject* srcObj, MAddr
     Sanitizer::TsanWriteMemoryRange(reinterpret_cast<void*>(dst), copyLen);
     Sanitizer::TsanReadMemoryRange(reinterpret_cast<void*>(src), copyLen);
 #endif
-}
-
-// Post-copy fixup for a bulk write into static/global storage.
-//
-// What it must do: the bytes just memcpy'd may name stale (pre-forwarding) objects, so each ref
-// word is resolved through the phase read barrier and the current version is stored back.
-//
-// What it must NOT do: store a *coloured* value. Static words are roots -- StaticRootTable
-// registers them as RootSlot (TracingCollector.cpp:225-243) and WCollector::EnumAndTagRawRoot
-// heals them with StorePlain (WCollector.cpp:962-1001, "the root storage itself is never exposed
-// as a HeapSlot"). Colouring here is overwritten plain by the next root enumeration, and CAS on a
-// static slot sits on the relroroot hazard (B-4 ⑤: those pages can be RELRO r--p).
-//
-// The read barrier may self-heal the slot it is handed; it is handed a *local copy* so the heal
-// cannot leak colour back into the static word.
-void Barrier::ResolveStaticStructRoots(MAddress dst, const GCTib gctib) const
-{
-    gctib.ForEachRootSlot(dst, [this](RootSlot& slot) {
-        zaddress_unsafe observed = slot.LoadPlain();
-        if (is_null(observed)) {
-            return;
-        }
-        // Legacy coloured roots still exist at external ABI edges; decode, never store back.
-        HeapSlot<> observedBits(to_zpointer(raw(observed)));
-        BaseObject* resolved = ReadReference(nullptr, observedBits);
-        if (raw(observed) != reinterpret_cast<MAddress>(resolved)) {
-            StorePlain(slot, from_object(resolved));
-        }
-    });
 }
 
 void Barrier::ReadStruct(MAddress dst, BaseObject* obj, MAddress src, size_t size) const

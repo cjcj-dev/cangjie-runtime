@@ -31,9 +31,9 @@ struct GenerationCycleRootTestAccess {
         auto& processor = Heap::GetHeap().GetFinalizerProcessor();
         {
             std::lock_guard<std::mutex> lock(processor.listLock);
-            RootSlot queued, working;
-            StorePlain(queued, from_object(objects[0]));
-            StorePlain(working, from_object(objects[1]));
+            NativeSlot queued(zpointer::null), working(zpointer::null);
+            Heap::GetBarrier().WriteStaticRef(queued, objects[0]);
+            Heap::GetBarrier().WriteStaticRef(working, objects[1]);
             processor.finalizables.push_back(queued);
             processor.workingFinalizables.push_back(working);
             // Deliberately do not schedule finalization: only the scanner's
@@ -54,9 +54,9 @@ struct GenerationCycleRootTestAccess {
         auto& processor = Heap::GetHeap().GetFinalizerProcessor();
         {
             std::lock_guard<std::mutex> lock(processor.listLock);
-            auto remove = [&](ManagedList<RootSlot>& roots, BaseObject* object) {
+            auto remove = [&](ManagedList<NativeSlot>& roots, BaseObject* object) {
                 for (auto it = roots.begin(); it != roots.end();) {
-                    if (to_object(safe(it->LoadPlain())) == object) it = roots.erase(it);
+                    if (to_object(it->GetTargetObject()) == object) it = roots.erase(it);
                     else ++it;
                 }
             };
@@ -207,8 +207,8 @@ void* Exercise(void*)
         }
         size_t expected = 0;
         bool included = true;
-        Heap::GetHeap().VisitStaticRoots([&](RootSlot& slot) {
-            auto* object = to_object(safe(slot.LoadPlain()));
+        Heap::GetHeap().VisitStaticRoots([&](NativeSlot& slot) {
+            auto* object = to_object(slot.GetTargetObject());
             if (object != nullptr && Heap::IsHeapAddress(object)) {
                 ++expected;
                 included = included && observed.count(object) != 0;
@@ -216,7 +216,7 @@ void* Exercise(void*)
         });
         std::set<BaseObject*> concurrencyRoots;
         RootVisitor concurrentVisitor = [&](ObjectRef& slot) {
-            auto* object = to_object(safe(slot.LoadPlain()));
+            auto* object = to_object(slot.GetTargetObject());
             if (object != nullptr && Heap::IsHeapAddress(object)) concurrencyRoots.insert(object);
         };
         Runtime::Current().GetConcurrencyModel().VisitGCRoots(&concurrentVisitor);

@@ -539,8 +539,8 @@ void RunMajorWeakGraph(MajorRootFamily family, bool runtimeEntry = false, size_t
     // MarkStack::size() counts 64-entry buffers. Seventeen buffers cross the
     // product's MAX_MARKING_WORK_SIZE=16 parallel admission threshold.
     constexpr size_t kParallelRootCount = 17 * 64;
-    std::unique_ptr<RootSlot[]> commonRootStorage = std::make_unique<RootSlot[]>(kParallelRootCount);
-    std::vector<RootSlot*> commonRoots(kParallelRootCount);
+    std::vector<NativeSlot> commonRootStorage(kParallelRootCount, NativeSlot(zpointer::null));
+    std::vector<NativeSlot*> commonRoots(kParallelRootCount);
     for (size_t i = 0; i < commonRoots.size(); ++i) {
         commonRoots[i] = &commonRootStorage[i];
     }
@@ -549,7 +549,7 @@ void RunMajorWeakGraph(MajorRootFamily family, bool runtimeEntry = false, size_t
     U64 exportHandle = 0;
     if (family == MajorRootFamily::COMMON) {
         for (U32 i = 0; i < commonRootCount; ++i) {
-            StorePlain(*commonRoots[i], from_object(graph.strongRoot));
+            commonRoots[i]->StoreColoured(StoreGoodPointer(graph.strongRoot));
         }
         Heap::GetHeap().RegisterStaticRoots(reinterpret_cast<Uptr>(commonRoots.data()), commonRootCount);
         registeredCommonRootCount = commonRootCount;
@@ -561,7 +561,7 @@ void RunMajorWeakGraph(MajorRootFamily family, bool runtimeEntry = false, size_t
             BaseObject* commonSentinel = fx.PlaceObject(fx.region0->GetRegionStart() + 320);
             WeakGraph::Field(commonSentinel).StoreColoured(zpointer::null);
             fx.region0->SetRegionAllocPtr(reinterpret_cast<MAddress>(commonSentinel) + 64);
-            StorePlain(*commonRoots[0], from_object(commonSentinel));
+            commonRoots[0]->StoreColoured(StoreGoodPointer(commonSentinel));
             Heap::GetHeap().RegisterStaticRoots(reinterpret_cast<Uptr>(commonRoots.data()), 1);
             registeredCommonRootCount = 1;
         }

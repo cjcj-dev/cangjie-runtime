@@ -23,6 +23,7 @@
 #include <thread>
 
 #include "gc_heap_fixture.hpp"
+#include "Concurrency/ConcurrencyModel.h"
 #include "gc_unittest.hpp"
 
 #define private public
@@ -139,16 +140,15 @@ private:
 
 class InstalledBarrierScope final {
 public:
-    explicit InstalledBarrierScope(Barrier& barrier) : previous(Heap::currentBarrierPtr), installed(&barrier)
+    explicit InstalledBarrierScope(Barrier& barrier) : previous(Heap::barrierPtr)
     {
-        Heap::currentBarrierPtr = &installed;
+        Heap::barrierPtr = &barrier;
     }
 
-    ~InstalledBarrierScope() { Heap::currentBarrierPtr = previous; }
+    ~InstalledBarrierScope() { Heap::barrierPtr = previous; }
 
 private:
-    Barrier** previous;
-    Barrier* installed;
+    Barrier* previous;
 };
 
 } // namespace
@@ -934,4 +934,74 @@ GC_TEST(StoreBuf, WeakRawNullStoreRetainsRememberedSlot)
             GC_EXPECT_EQ(to_object(field.GetTargetObject()), fx.obj1);
         }
     }
+}
+
+// Derived from ZBarrierSet::oop_atomic_{cmpxchg,xchg}_not_in_heap and
+// ZBarrier::self_heal: native atomics publish store-good, including null.
+GC_TEST(StoreBuf, NativeAtomicUsesColoredHealingAndCompareValue)
+{
+    GcHeapFixture fx;
+    StoreBufferCollector collector;
+    RememberedSet rs;
+    rs.Initialize(fx.heapStart, 2 * RegionInfo::UNIT_SIZE);
+    Barrier barrier(collector, rs);
+    HeapSlot<true> native(zpointer::null);
+    barrier.AtomicWriteReference(nullptr, native, nullptr, std::memory_order_seq_cst);
+    GC_EXPECT_EQ(native.GetFieldValue(), StoreGoodPointer(nullptr));
+    GC_EXPECT_TRUE(barrier.CompareAndSwapReference(nullptr, native, nullptr, fx.obj0,
+        std::memory_order_seq_cst, std::memory_order_seq_cst));
+    GC_EXPECT_EQ(native.GetFieldValue(), StoreGoodPointer(fx.obj0));
+    GC_EXPECT_FALSE(barrier.CompareAndSwapReference(nullptr, native, nullptr, fx.obj1,
+        std::memory_order_seq_cst, std::memory_order_seq_cst));
+    GC_EXPECT_EQ(barrier.AtomicSwapReference(nullptr, native, fx.obj1, std::memory_order_seq_cst), fx.obj0);
+    GC_EXPECT_EQ(barrier.AtomicReadReference(nullptr, native, std::memory_order_seq_cst), fx.obj1);
+    GC_EXPECT_EQ(native.GetFieldValue(), StoreGoodPointer(fx.obj1));
+}
+
+// ZBarrierSet::value_copy_in_heap / oop_copy_one_barriers at the explicit
+// uncolored-local <-> native-zpointer <-> heap-zpointer boundaries.
+GC_TEST(StoreBuf, BulkPreservesSourceStorageProtocol)
+{
+    GcHeapFixture fx;
+    StoreBufferCollector collector;
+    RememberedSet rs;
+    rs.Initialize(fx.heapStart, 2 * RegionInfo::UNIT_SIZE);
+    Barrier barrier(collector, rs);
+    RootSlot local;
+    StorePlain(local, from_object(fx.obj0));
+    NativeSlot native(zpointer::null);
+    const GCTib layout = fx.obj0->GetGCTib();
+    barrier.WriteStaticStruct(reinterpret_cast<MAddress>(&native), sizeof(native),
+        reinterpret_cast<MAddress>(&local), sizeof(local), layout);
+    GC_EXPECT_EQ(native.GetFieldValue(), StoreGoodPointer(fx.obj0));
+    RootSlot result;
+    barrier.ReadStaticStruct(reinterpret_cast<MAddress>(&result), reinterpret_cast<MAddress>(&native),
+        sizeof(native), layout);
+    GC_EXPECT_EQ(raw(result.LoadPlain()), reinterpret_cast<uintptr_t>(fx.obj0));
+    HeapSlot<>& heap = HeapSlotAt<>(reinterpret_cast<MAddress>(fx.obj1) + TYPEINFO_PTR_SIZE);
+    heap.StoreColoured(zpointer::null);
+    barrier.ReadStaticStruct(reinterpret_cast<MAddress>(&heap), reinterpret_cast<MAddress>(&native),
+        sizeof(native), layout);
+    GC_EXPECT_EQ(heap.GetFieldValue(), StoreGoodPointer(fx.obj0));
+    GC_EXPECT_EQ(raw(local.LoadPlain()), reinterpret_cast<uintptr_t>(fx.obj0));
+}
+
+extern "C" void MRT_VisitorCaller(void*, void*);
+
+GC_TEST(StoreBuf, ThreadRootVisitorIncludesExecuteClosure)
+{
+    GcHeapFixture fx;
+    LWTData data {};
+    data.execute = fx.obj0;
+    size_t executeVisits = 0;
+    RootVisitor visitor = [&](RootSlot& root) {
+        if (&root == &RootSlotAt(&data.execute)) {
+            ++executeVisits;
+            GC_EXPECT_EQ(raw(root.LoadPlain()), reinterpret_cast<uintptr_t>(fx.obj0));
+            StorePlain(root, from_object(fx.obj1));
+        }
+    };
+    MRT_VisitorCaller(&data, &visitor);
+    GC_EXPECT_EQ(executeVisits, 1u);
+    GC_EXPECT_EQ(data.execute, static_cast<void*>(fx.obj1));
 }

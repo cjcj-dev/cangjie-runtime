@@ -372,12 +372,12 @@ extern "C" void MCC_WriteRefField(const ObjectPtr ref, const ObjectPtr obj, RefF
     }
     if (IsGlobalStruct(plainObj, reinterpret_cast<MAddress>(plainField))) {
         VLOG(REPORT, "found and writing a global struct ref field");
-        Heap::GetBarrier().WriteStaticRef(RootSlotAt(static_cast<void*>(plainField)), plainRef); // Global field is root storage.
+        Heap::GetBarrier().WriteStaticRef(NativeSlotAt(static_cast<void*>(plainField)), plainRef); // Global field is root storage.
         return;
     }
     // Non-heap destination (static/global): same remset duty as WriteStaticRef.
     // This remains the root path even when the optional holder is null.
-    Heap::GetBarrier().WriteStaticRef(RootSlotAt(static_cast<void*>(plainField)), plainRef);
+    Heap::GetBarrier().WriteStaticRef(NativeSlotAt(static_cast<void*>(plainField)), plainRef);
 }
 
 extern "C" MRT_EXPORT void CJ_MCC_PostWriteRefField(const ObjectPtr ref, const ObjectPtr obj,
@@ -406,10 +406,10 @@ extern "C" void MCC_WriteStructField(ObjectPtr obj, MAddress dst, size_t dstLen,
     Heap::GetBarrier().WriteStruct(plainObj, plainDst, dstLen, plainSrc, srcLen);
 }
 
-extern "C" void MCC_WriteStaticRef(const ObjectPtr ref, RootSlot* field)
+extern "C" void MCC_WriteStaticRef(const ObjectPtr ref, NativeSlot* field)
 {
     MAddress address = PlainManagedAddr(reinterpret_cast<MAddress>(field));
-    Heap::GetBarrier().WriteStaticRef(RootSlotAt(address), PlainObjectPtr(ref));
+    Heap::GetBarrier().WriteStaticRef(NativeSlotAt(address), PlainObjectPtr(ref));
 }
 
 extern "C" void MCC_WriteStaticStruct(MAddress dst, size_t dstLen, MAddress src, size_t srcLen, const GCTib gcTib)
@@ -1915,7 +1915,7 @@ extern "C" void* MCC_GetParameterAnnotations(ParameterInfo* parameterInfo, TypeI
 extern "C" ObjectPtr CJ_MCC_ReadRefField(const ObjectPtr obj, RefField<false>* field)
 {
     if (IsGlobalStruct(obj, reinterpret_cast<MAddress>(field))) {
-        return Heap::GetBarrier().ReadStaticRef(RootSlotAt(static_cast<void*>(field)));
+        return Heap::GetBarrier().ReadStaticRef(NativeSlotAt(static_cast<void*>(field)));
     }
     return Heap::GetBarrier().ReadReference(obj, *field);
 }
@@ -1940,7 +1940,7 @@ extern "C" void CJ_MCC_ReadStructField(MAddress dstPtr, ObjectPtr obj, MAddress 
     }
     Heap::GetBarrier().ReadStruct(dstPtr, obj, srcField, size);
 }
-extern "C" ObjectPtr CJ_MCC_ReadStaticRef(RootSlot* field)
+extern "C" ObjectPtr CJ_MCC_ReadStaticRef(NativeSlot* field)
 {
     return Heap::GetBarrier().ReadStaticRef(*field);
 }

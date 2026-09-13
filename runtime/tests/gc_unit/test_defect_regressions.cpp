@@ -93,16 +93,15 @@ public:
 class InstalledExportHandleBarrier final {
 public:
     explicit InstalledExportHandleBarrier(Barrier& barrier)
-        : previous(Heap::currentBarrierPtr), installed(&barrier)
+        : previous(Heap::barrierPtr)
     {
-        Heap::currentBarrierPtr = &installed;
+        Heap::barrierPtr = &barrier;
     }
 
-    ~InstalledExportHandleBarrier() { Heap::currentBarrierPtr = previous; }
+    ~InstalledExportHandleBarrier() { Heap::barrierPtr = previous; }
 
 private:
-    Barrier** previous;
-    Barrier* installed;
+    Barrier* previous;
 };
 
 class InstalledExportAllocBuffer final {
@@ -257,7 +256,7 @@ GC_TEST(DefectRegress, StaticRootObservedValueHeal)
     StorePlain(root, from_object(fx.obj0));
     zaddress_unsafe observed = root.LoadPlain();
     GC_EXPECT_TRUE(HealRootIfObserved(root, observed, from_object(fx.obj1),
-                                     HealSite::BarrierReadStaticReference));
+                                     HealSite::BarrierReadReference));
     GC_EXPECT_EQ(raw(root.LoadPlain()), reinterpret_cast<Uptr>(fx.obj1));
 }
 
@@ -270,7 +269,7 @@ GC_TEST(DefectRegress, StaticRootHealDoesNotClobberConcurrentStore)
     BaseObject* concurrent = fx.PlaceObject(reinterpret_cast<MAddress>(fx.obj1) + 128);
     StorePlain(root, from_object(concurrent));
     GC_EXPECT_FALSE(HealRootIfObserved(root, observed, from_object(fx.obj1),
-                                      HealSite::BarrierReadStaticReference));
+                                      HealSite::BarrierReadReference));
     GC_EXPECT_EQ(raw(root.LoadPlain()), reinterpret_cast<Uptr>(concurrent));
 }
 
@@ -405,7 +404,7 @@ GC_TEST(DefectRegress, CompilerWriteNonHeapHolderHeapSlotUsesImmediatePath)
 }
 
 // T6 control arm: a non-heap destination remains a root slot even when the
-// optional holder is null, and therefore keeps the plain RootSlot encoding.
+// optional holder is null, and uses the native zpointer encoding.
 GC_TEST(DefectRegress, CompilerWriteNullHolderStaticSlotUsesRootPath)
 {
     ExportHandleFixture fx;
@@ -413,8 +412,8 @@ GC_TEST(DefectRegress, CompilerWriteNullHolderStaticSlotUsesRootPath)
     MCC_WriteRefField(fx.heap.obj0, nullptr, &staticField);
 
     const uintptr_t installed = static_cast<uintptr_t>(raw(staticField.GetFieldValue()));
-    GC_EXPECT_EQ(installed, reinterpret_cast<uintptr_t>(fx.heap.obj0));
-    GC_EXPECT_EQ(ClassifySlotWord(installed), SlotWordVerdict::kIllegal);
+    GC_EXPECT_EQ(installed, raw(StoreGoodPointer(fx.heap.obj0)));
+    GC_EXPECT_EQ(ClassifySlotWord(installed), SlotWordVerdict::kColoured);
 }
 
 // The compiler's global-struct marker is paired with global storage, not a
@@ -435,8 +434,8 @@ GC_TEST(DefectRegress, CompilerWriteTaggedGlobalStructUsesRootPath)
 #endif
     const uintptr_t installed = static_cast<uintptr_t>(raw(globalField.GetFieldValue()));
     GC_EXPECT_FALSE(Heap::IsHeapAddress(&globalField));
-    GC_EXPECT_EQ(installed, reinterpret_cast<uintptr_t>(fx.heap.obj0));
-    GC_EXPECT_EQ(ClassifySlotWord(installed), SlotWordVerdict::kIllegal);
+    GC_EXPECT_EQ(installed, raw(StoreGoodPointer(fx.heap.obj0)));
+    GC_EXPECT_EQ(ClassifySlotWord(installed), SlotWordVerdict::kColoured);
 }
 
 // hunt-coll BUG: GC published finishedGcIndex / isGcStarted before stats and
