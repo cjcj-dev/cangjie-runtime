@@ -245,6 +245,13 @@ Mutator* MutatorManager::CreateRuntimeMutator(ThreadType threadType)
     ThreadLocal::SetThreadType(threadType);
     ThreadLocal::SetCJProcessorFlag(true);
     MutatorManagementRUnlock();
+    if (threadType == ThreadType::UNCOMMITTER_THREAD) {
+        // ZUncommitter joins the suspendible set only for allocator accounting.
+        // This native participant has no CJThread or managed stack. Registration
+        // and born-clean epoch handling above are shared with runtime mutators.
+        mutator->SetEpochHandshakeLifecycle(Mutator::EPOCH_HANDSHAKE_RUNNING);
+        return mutator; // initially in saferegion; ScopedObjectAccess joins STW
+    }
     ThreadLocalData* threadData = reinterpret_cast<ThreadLocalData*>(MRT_GetThreadLocalData());
     // Managed-entry setup may block on sync/STW, so do not hold the mutator
     // management lock across it.

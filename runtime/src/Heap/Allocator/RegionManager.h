@@ -707,10 +707,6 @@ public:
     size_t GetDirtyUnitCount() const { return freeRegionManager.GetDirtyUnitCount(); }
     size_t GetReleasedUnitCount() const { return freeRegionManager.GetReleasedUnitCount(); }
     size_t GetGarbageUnitCount() const { return garbageRegionList.GetUnitCount(); }
-    size_t UncommitIdleUnits(size_t maxBytes, uint64_t idleBeforeNs, bool honorCancel = true)
-    {
-        return freeRegionManager.UncommitIdleUnits(maxBytes, idleBeforeNs, honorCancel);
-    }
 
     size_t GetInactiveUnitCount() const { return heapUnitCount - activeUnitCount.load(std::memory_order_acquire); }
 
@@ -1200,6 +1196,7 @@ private:
     bool relocationStarted{ false };
     bool relocationDrained{ false };
     // zPageAllocator.cpp:1518: ordinary allocation and stall share one owner.
+    friend class Uncommitter;
     std::mutex pageAllocatorMutex;
     AllocationStallQueue allocationStallQueue{ pageAllocatorMutex };
     size_t pageAllocatorUsed{ 0 };
