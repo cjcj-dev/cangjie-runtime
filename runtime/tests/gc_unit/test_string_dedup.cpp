@@ -11,6 +11,15 @@ using namespace MapleRuntime::GcUnit;
 
 namespace MapleRuntime {
 struct StringDedupTestAccess {
+    static uint32_t Hash(MArray* array, uint64_t seed)
+    {
+        auto& dedup = StringDedup::Instance();
+        const auto saved = dedup.hashSeed;
+        dedup.hashSeed = seed;
+        const uint32_t hash = dedup.Hash(array);
+        dedup.hashSeed = saved;
+        return hash;
+    }
     static size_t Pending() { return StringDedup::Instance().requests.size(); }
     static size_t Entries() { return StringDedup::Instance().table.size(); }
     static void ProcessRequests()
@@ -48,8 +57,8 @@ struct ByteArrays {
 };
 }
 
-// TestStringDeduplicationTableResize: hash equality does not establish byte equality.
-GC_TEST(StringDedup, HashCollisionKeepsDistinctBacking)
+// TestStringDeduplicationTableResize: equal-length distinct values stay separate.
+GC_TEST(StringDedup, SameLengthKeepsDistinctBacking)
 {
     ByteArrays arrays;
     arrays.first->SetPrimitiveElement<U8>(0, 0);
@@ -92,4 +101,21 @@ GC_TEST(StringDedup, RejectOrdinaryObject)
     dedup.Request(heap.obj0);
     GC_EXPECT_EQ(StringDedupTestAccess::Pending(), 0U);
     dedup.Stop();
+}
+
+// AltHashingTest.halfsiphash_test_ByteArray: upstream aggregate reference vector.
+GC_TEST(StringDedup, HalfSipHashByteArrayReference)
+{
+    ByteArrays arrays;
+    uint8_t hashes[1024];
+    uint8_t* bytes = arrays.first->ConvertToCArray();
+    for (unsigned i = 0; i < 256; ++i) bytes[i] = static_cast<uint8_t>(i);
+    for (unsigned length = 0; length < 256; ++length) {
+        arrays.first->SetLength(length);
+        const uint32_t hash = StringDedupTestAccess::Hash(arrays.first, 256 - length);
+        for (unsigned byte = 0; byte != 4; ++byte) hashes[length * 4 + byte] = hash >> (byte * 8);
+    }
+    std::memcpy(bytes, hashes, sizeof(hashes));
+    arrays.first->SetLength(sizeof(hashes));
+    GC_EXPECT_EQ(StringDedupTestAccess::Hash(arrays.first, 0), 0xd2be7fd8U);
 }

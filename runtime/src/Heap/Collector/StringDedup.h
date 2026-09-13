@@ -44,10 +44,10 @@ private:
     using Table = std::unordered_multimap<size_t, WeakSlot>;
     static bool IsByteArray(BaseObject* object);
     static BaseObject* Resolve(WeakSlot& slot);
-    static size_t Hash(BaseObject* object);
+    size_t Hash(BaseObject* object) const;
     void Run();
     void Process(WeakSlot slot);
-    StringDedup() = default;
+    StringDedup();
     ~StringDedup() { Stop(); }
     // Resolution can publish another promotion request on the same GC thread.
     std::recursive_mutex mutex;
@@ -56,7 +56,9 @@ private:
     bool stopped = true;
     size_t suspended = 0;
     std::vector<WeakSlot> requests;
+    std::vector<WeakSlot> processing;
     Table table;
+    uint64_t hashSeed;
 };
 } // namespace MapleRuntime
 #endif

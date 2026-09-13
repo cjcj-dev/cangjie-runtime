@@ -1737,13 +1737,13 @@ void WCollector::EvacuateYoungRegions(const std::vector<BaseObject*>& reachableV
 
     }
 
-        // zRelocate.cpp:1272: also request backing on flip/in-place promotion.
-        for (BaseObject* from : reachableVec) {
-            const MAddress mapped = ForwardingTable::FindTo(reinterpret_cast<MAddress>(from), Generation::Young);
-            BaseObject* object = mapped == 0 ? from : reinterpret_cast<BaseObject*>(mapped);
-            RegionInfo* region = RegionInfo::GetRegionInfoAt(reinterpret_cast<MAddress>(object));
-            if (!region->IsYoungRegion()) StringDedup::Instance().Request(object);
-        }
+    // zRelocate.cpp:1272: also request backing on flip/in-place promotion.
+    for (BaseObject* from : reachableVec) {
+        const MAddress mapped = ForwardingTable::FindTo(reinterpret_cast<MAddress>(from), Generation::Young);
+        BaseObject* object = mapped == 0 ? from : reinterpret_cast<BaseObject*>(mapped);
+        RegionInfo* region = RegionInfo::GetRegionInfoAt(reinterpret_cast<MAddress>(object));
+        if (!region->IsYoungRegion()) StringDedup::Instance().Request(object);
+    }
 
     // ZRelocateAddRemsetForFlipPromoted runs after STW3 release, still in FORWARD.
     // Keep the forwarding receipts alive across this concurrent walk: a short retire
