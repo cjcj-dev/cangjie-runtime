@@ -49,6 +49,7 @@ set(GC_UNIT_SOURCES
     test_gc_request_sync.cpp
     test_allocation_stall_queue.cpp
 
+    test_string_dedup.cpp
     test_uncommitter.cpp
     test_relocation_request_queue.cpp
     test_gc_thread_pool.cpp
@@ -215,6 +216,7 @@ add_test(NAME cj_gc_clear_entries_unit COMMAND cj_gc_clear_entries_unit)
 add_executable(cj_gc_uncommit_unit
     gc_unit_main.cpp
     gc_unit_stubs.cpp
+    test_string_dedup.cpp
     test_uncommitter.cpp
 )
 target_include_directories(cj_gc_uncommit_unit PRIVATE

@@ -35,6 +35,9 @@ public:
     };
 
 private:
+#if defined(MRT_TESTABLE_INTERNALS)
+    friend struct StringDedupTestAccess;
+#endif
     struct WeakSlot {
         zpointer value;
     };
