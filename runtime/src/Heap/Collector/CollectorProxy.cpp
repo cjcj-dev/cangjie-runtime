@@ -24,20 +24,8 @@ void CollectorProxy::Fini()
 
 void CollectorProxy::RunGarbageCollection(uint64_t gcIndex, GCReason reason)
 {
-    switch (reason) {
-        case GC_REASON_HEU:
-        case GC_REASON_BACKUP:
-            currentCollector = &wCollector;
-            break;
-        case GC_REASON_OOM:
-        case GC_REASON_FORCE:
-            currentCollector = &wCollector;
-            break;
-        default:
-            currentCollector = &wCollector;
-            break;
-    }
-    currentCollector->SetGcStarted(true);
+    // The collector is bound at Init; concurrent drivers only select a
+    // generation inside it (zGeneration.inline.hpp:66-71).
     currentCollector->RunGarbageCollection(gcIndex, reason);
 }
 } // namespace MapleRuntime

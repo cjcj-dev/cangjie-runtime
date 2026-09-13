@@ -24,7 +24,8 @@ MAddress RemapPendingField(const StoreBarrierEntry& entry, uintptr_t color)
     if (entry.pBase == nullptr) {
         return entry.p;
     }
-    const GCPhase phase = Heap::GetHeap().GetGCPhase();
+    const GCPhase phase = Heap::GetHeap().GetGCPhase(RegionInfo::GetRegionInfoAt(reinterpret_cast<MAddress>(entry.pBase))->IsYoungRegion()
+        ? GCCycleGeneration::YOUNG : GCCycleGeneration::OLD);
     if (phase != GCPhase::GC_PHASE_PREFORWARD && phase != GCPhase::GC_PHASE_FORWARD) {
         return entry.p;
     }

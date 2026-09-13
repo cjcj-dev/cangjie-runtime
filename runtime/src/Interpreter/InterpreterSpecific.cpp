@@ -506,7 +506,11 @@ int IsActiveGCPhase(DYN_ThreadLocalData tld)
     if (mutator == nullptr) {
         return 0;
     }
-    return mutator->GetMutatorPhase() >= GCPhase::GC_PHASE_ENUM ? 1 : 0;
+    // This callback asks whether either generation needs GC barriers, not
+    // which operation this thread acknowledged most recently.
+    const Heap& heap = Heap::GetHeap();
+    return heap.GetGCPhase(GCCycleGeneration::YOUNG) >= GCPhase::GC_PHASE_ENUM ||
+        heap.GetGCPhase(GCCycleGeneration::OLD) >= GCPhase::GC_PHASE_ENUM ? 1 : 0;
 }
 
 DYN_ExceptionWrapper GetExceptionWrapper()

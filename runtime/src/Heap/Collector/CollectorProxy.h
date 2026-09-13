@@ -33,15 +33,27 @@ public:
     void Init() override;
     void Fini() override;
 
-    GCPhase GetGCPhase() const override
+    GCPhase GetGCPhase(GCCycleGeneration generation) const override
     {
-        return currentCollector != nullptr ? currentCollector->GetGCPhase() : GCPhase::GC_PHASE_UNDEF;
+        return currentCollector != nullptr ? currentCollector->GetGCPhase(generation) : GCPhase::GC_PHASE_UNDEF;
+    }
+
+    GenerationCycle& GetGenerationCycle(GCCycleGeneration generation) override
+    {
+        return currentCollector != nullptr ? currentCollector->GetGenerationCycle(generation)
+                                           : wCollector.GetGenerationCycle(generation);
+    }
+
+    const GenerationCycle& GetGenerationCycle(GCCycleGeneration generation) const override
+    {
+        return currentCollector != nullptr ? currentCollector->GetGenerationCycle(generation)
+                                           : wCollector.GetGenerationCycle(generation);
     }
 
     GCCycleSnapshot GetCycleSnapshot(GCCycleGeneration generation) const override
     {
         return currentCollector != nullptr ? currentCollector->GetCycleSnapshot(generation)
-                                           : Collector::GetCycleSnapshot(generation);
+                                           : wCollector.GetCycleSnapshot(generation);
     }
 
     void MarkYoungObjectIfActive(BaseObject* object, bool followOnly = false) const override
@@ -54,7 +66,15 @@ public:
         currentCollector->MarkOldObjectIfActive(object, gcThread);
     }
 
-    void SetGCPhase(const GCPhase phase) override { currentCollector->SetGCPhase(phase); }
+    void PublishGenerationPhase(GCCycleGeneration generation, GCPhase phase) override
+    {
+        (currentCollector != nullptr ? *currentCollector : wCollector).PublishGenerationPhase(generation, phase);
+    }
+
+    void SetGCPhase(GCCycleGeneration generation, const GCPhase phase) override
+    {
+        currentCollector->SetGCPhase(generation, phase);
+    }
 
     // dispatch garbage collection to the right collector
     MRT_EXPORT void RunGarbageCollection(uint64_t gcIndex, GCReason reason) override;
@@ -63,10 +83,6 @@ public:
 
     TracingCollector& GetCurrentCollector() const { return *currentCollector; }
 
-    Generation ActiveForwardingGeneration() const override
-    {
-        return currentCollector->ActiveForwardingGeneration();
-    }
     FindToVersionResult FindToVersion(BaseObject* obj, Generation generation) const override
     {
         return currentCollector->FindToVersion(obj, generation);

@@ -30,7 +30,7 @@ void NoteFwdToGateRefuse(const char* site, BaseObject* toObj)
         });
     }
     if (n <= 8 || (n & (n - 1)) == 0) {
-        GCPhase phase = Heap::GetHeap().GetGCPhase();
+        GCPhase phase = Heap::GetHeap().GetGCPhase(GCCycleGeneration::OLD);
         LOG(RTLOG_ERROR, "[GCV2][fwd-to-gate] refuse n=%zu site=%s to=%p phase=%s", n, site,
             static_cast<void*>(toObj), Collector::GetGCPhaseName(phase));
     }

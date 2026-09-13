@@ -11,6 +11,13 @@ enum class Generation : uint8_t {
     Young = 0,
     Old = 1,
 };
+enum class ZYoungType : uint8_t {
+    minor,
+    major_full_preclean,
+    major_full_roots,
+    major_partial_roots,
+    none,
+};
 enum class ZGenerationId : uint8_t {
     young,
     old,

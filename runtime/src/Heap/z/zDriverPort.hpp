@@ -61,6 +61,7 @@ public:
     uint64_t EnqueueAsync(GCReason reason, uint32_t youngWorkers = 0,
                           uint32_t oldWorkers = 0, bool warmup = false);
     bool TryDequeue(GCDriverRequest& request);
+    bool Receive(GCDriverRequest& request);
     void Acknowledge(const GCDriverRequest& request);
     void Cancel(const GCDriverRequest& request);
     bool WaitForAck(const GCDriverReceipt& receipt);

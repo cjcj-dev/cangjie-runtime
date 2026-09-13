@@ -61,13 +61,15 @@ struct RelocationReceiptTestAccess {
 
     static void RunYoungCollection(WCollector& collector)
     {
-        collector.SetGCReason(GC_REASON_YOUNG);
-        collector.DoGarbageCollection();
+        auto& cycle = collector.GetGenerationCycle(GCCycleGeneration::YOUNG);
+        if (!cycle.Snapshot().active) cycle.SelectReason(GC_REASON_YOUNG);
+        YoungTypeSetter type(cycle, ZYoungType::minor);
+        collector.DoGarbageCollection(GCCycleGeneration::YOUNG);
     }
 
     static void RunMajorMark(WCollector& collector)
     {
-        collector.SetGCReason(GC_REASON_USER);
+        collector.GetGenerationCycle(GCCycleGeneration::OLD).SelectReason(GC_REASON_USER);
         collector.TraceHeap();
     }
 
@@ -140,8 +142,9 @@ struct RelocationReceiptTestAccess {
 
     static void RunMajorCollection(WCollector& collector)
     {
-        collector.SetGCReason(GC_REASON_USER);
-        collector.DoGarbageCollection();
+        collector.GetGenerationCycle(GCCycleGeneration::OLD).SelectReason(GC_REASON_USER);
+        DriverLocker locker(Heap::GetHeap().GetCollectorResources());
+        collector.DoGarbageCollection(GCCycleGeneration::OLD);
     }
 };
 
@@ -335,7 +338,7 @@ void RunYoungWeakVariant(const char* variant, size_t helpers,
     CollectorResources& resources = Heap::GetHeap().GetCollectorResources();
     WCollector collector(Heap::GetHeap().GetAllocator(), resources);
     RelocationReceiptTestAccess::BindCollector(resources, &collector);
-    collector.SetGCPhase(GCPhase::GC_PHASE_CLEAR_SATB_BUFFER);
+    collector.SetGCPhase(GCCycleGeneration::YOUNG, GCPhase::GC_PHASE_CLEAR_SATB_BUFFER);
     RuntimeWorkers threadPool(helpers + 1u);
     RelocationReceiptTestAccess::BindRuntimeWorkers(resources, &threadPool);
     RegionSpace& space = reinterpret_cast<RegionSpace&>(Heap::GetHeap().GetAllocator());
@@ -345,9 +348,11 @@ void RunYoungWeakVariant(const char* variant, size_t helpers,
     const U64 rootHandle = Heap::GetHeap().RegisterExportRoot(graph.strongRoot);
 
     const bool startedBefore = resources.IsGcStarted();
-    const GCReason reasonBefore = resources.GetGCStats().reason;
-    resources.SetGcStarted(true);
-    resources.GetGCStats().reason = GC_REASON_YOUNG;
+    const GCReason reasonBefore = resources.GetGCStats(GCCycleGeneration::YOUNG).reason;
+    auto& activityCycle = Heap::GetHeap().GetCollector().GetGenerationCycle(GCCycleGeneration::YOUNG);
+    const bool ownerWasActive = activityCycle.Snapshot().active;
+    if (!ownerWasActive) activityCycle.Begin(1);
+    resources.GetGCStats(GCCycleGeneration::YOUNG).reason = GC_REASON_YOUNG;
     ResetYoungWeakClosureTestReceipt();
 
     RelocationReceiptTestAccess::RunYoungCollection(collector);
@@ -363,8 +368,8 @@ void RunYoungWeakVariant(const char* variant, size_t helpers,
                  static_cast<size_t>(receipt.striped), static_cast<int>(strongMarked),
                  static_cast<int>(weakMarked), static_cast<int>(referentMarked), static_cast<int>(childMarked));
     Heap::GetHeap().RemoveExportObject(rootHandle);
-    resources.SetGcStarted(startedBefore);
-    resources.GetGCStats().reason = reasonBefore;
+    if (!ownerWasActive) activityCycle.End();
+    resources.GetGCStats(GCCycleGeneration::YOUNG).reason = reasonBefore;
     RelocationReceiptTestAccess::BindRuntimeWorkers(resources, nullptr);
     RelocationReceiptTestAccess::BindCollector(resources, nullptr);
 
@@ -402,7 +407,7 @@ void RunYoungWeakRemsetFlow()
     CollectorResources& resources = Heap::GetHeap().GetCollectorResources();
     WCollector collector(Heap::GetHeap().GetAllocator(), resources);
     RelocationReceiptTestAccess::BindCollector(resources, &collector);
-    collector.SetGCPhase(GCPhase::GC_PHASE_CLEAR_SATB_BUFFER);
+    collector.SetGCPhase(GCCycleGeneration::YOUNG, GCPhase::GC_PHASE_CLEAR_SATB_BUFFER);
     RememberedSet& rememberedSet = Heap::GetHeap().GetRememberedSet();
     rememberedSet.Initialize(fx.heapStart, 2 * RegionInfo::UNIT_SIZE);
     Barrier barrier(collector, rememberedSet);
@@ -427,9 +432,11 @@ void RunYoungWeakRemsetFlow()
     const U64 rootHandle = Heap::GetHeap().RegisterExportRoot(graph.strongRoot);
 
     const bool startedBefore = resources.IsGcStarted();
-    const GCReason reasonBefore = resources.GetGCStats().reason;
-    resources.SetGcStarted(true);
-    resources.GetGCStats().reason = GC_REASON_YOUNG;
+    const GCReason reasonBefore = resources.GetGCStats(GCCycleGeneration::YOUNG).reason;
+    auto& activityCycle = Heap::GetHeap().GetCollector().GetGenerationCycle(GCCycleGeneration::YOUNG);
+    const bool ownerWasActive = activityCycle.Snapshot().active;
+    if (!ownerWasActive) activityCycle.Begin(1);
+    resources.GetGCStats(GCCycleGeneration::YOUNG).reason = GC_REASON_YOUNG;
     RelocationReceiptTestAccess::RunYoungCollection(collector);
     const bool referentMarked = graph.IsMarked(graph.referent);
     std::fprintf(stderr,
@@ -438,8 +445,8 @@ void RunYoungWeakRemsetFlow()
                  static_cast<int>(referentMarked));
 
     Heap::GetHeap().RemoveExportObject(rootHandle);
-    resources.SetGcStarted(startedBefore);
-    resources.GetGCStats().reason = reasonBefore;
+    if (!ownerWasActive) activityCycle.End();
+    resources.GetGCStats(GCCycleGeneration::YOUNG).reason = reasonBefore;
     RelocationReceiptTestAccess::BindRuntimeWorkers(resources, nullptr);
     RelocationReceiptTestAccess::BindCollector(resources, nullptr);
 
@@ -468,7 +475,7 @@ void RunMajorWeakGraph(MajorRootFamily family, bool runtimeEntry = false, size_t
     CollectorResources& resources = Heap::GetHeap().GetCollectorResources();
     WCollector collector(Heap::GetHeap().GetAllocator(), resources);
     RelocationReceiptTestAccess::BindCollector(resources, &collector);
-    collector.SetGCPhase(GCPhase::GC_PHASE_IDLE);
+    collector.SetGCPhase(GCCycleGeneration::OLD, GCPhase::GC_PHASE_IDLE);
     RuntimeWorkers threadPool(helpers + 1u);
     RelocationReceiptTestAccess::BindRuntimeWorkers(resources, &threadPool, static_cast<int32_t>(helpers + 1));
     RegionSpace& space = reinterpret_cast<RegionSpace&>(Heap::GetHeap().GetAllocator());
@@ -668,7 +675,7 @@ GC_OTHER_VM_TEST(YoungWeakClosure, ExportOnlyMajorRootOwnsItsClosure)
     CollectorResources& resources = Heap::GetHeap().GetCollectorResources();
     WCollector collector(Heap::GetHeap().GetAllocator(), resources);
     RelocationReceiptTestAccess::BindCollector(resources, &collector);
-    collector.SetGCPhase(GCPhase::GC_PHASE_IDLE);
+    collector.SetGCPhase(GCCycleGeneration::OLD, GCPhase::GC_PHASE_IDLE);
     RuntimeWorkers threadPool(1u);
     RelocationReceiptTestAccess::BindRuntimeWorkers(resources, &threadPool);
     RegionSpace& space = reinterpret_cast<RegionSpace&>(Heap::GetHeap().GetAllocator());
@@ -701,7 +708,7 @@ GC_OTHER_VM_TEST(ValueRootCurrentization, MinorRuntimeDispatchMarksCurrentAndWri
     CollectorResources& resources = Heap::GetHeap().GetCollectorResources();
     WCollector collector(Heap::GetHeap().GetAllocator(), resources);
     RelocationReceiptTestAccess::BindCollector(resources, &collector);
-    collector.SetGCPhase(GCPhase::GC_PHASE_CLEAR_SATB_BUFFER);
+    collector.SetGCPhase(GCCycleGeneration::YOUNG, GCPhase::GC_PHASE_CLEAR_SATB_BUFFER);
     RuntimeWorkers threadPool(1u);
     RelocationReceiptTestAccess::BindRuntimeWorkers(resources, &threadPool);
     RegionSpace& space = reinterpret_cast<RegionSpace&>(Heap::GetHeap().GetAllocator());
@@ -712,9 +719,11 @@ GC_OTHER_VM_TEST(ValueRootCurrentization, MinorRuntimeDispatchMarksCurrentAndWri
     RelocationReceiptTestAccess::SeedValueRoots(collector, route.from);
 
     const bool startedBefore = resources.IsGcStarted();
-    const GCReason reasonBefore = resources.GetGCStats().reason;
-    resources.SetGcStarted(true);
-    resources.GetGCStats().reason = GC_REASON_YOUNG;
+    const GCReason reasonBefore = resources.GetGCStats(GCCycleGeneration::YOUNG).reason;
+    auto& activityCycle = Heap::GetHeap().GetCollector().GetGenerationCycle(GCCycleGeneration::YOUNG);
+    const bool ownerWasActive = activityCycle.Snapshot().active;
+    if (!ownerWasActive) activityCycle.Begin(1);
+    resources.GetGCStats(GCCycleGeneration::YOUNG).reason = GC_REASON_YOUNG;
     RelocationReceiptTestAccess::RunYoungCollection(collector);
 
     const bool currentMarked = IsValueRootMarked(route);
@@ -732,8 +741,8 @@ GC_OTHER_VM_TEST(ValueRootCurrentization, MinorRuntimeDispatchMarksCurrentAndWri
                  static_cast<int>(independentAfterCoverage),
                  static_cast<unsigned>(afterCoverage.answer));
 
-    resources.SetGcStarted(startedBefore);
-    resources.GetGCStats().reason = reasonBefore;
+    if (!ownerWasActive) activityCycle.End();
+    resources.GetGCStats(GCCycleGeneration::YOUNG).reason = reasonBefore;
     RelocationReceiptTestAccess::BindRuntimeWorkers(resources, nullptr);
     RelocationReceiptTestAccess::BindCollector(resources, nullptr);
     GC_EXPECT_TRUE(currentMarked);
@@ -754,7 +763,7 @@ GC_OTHER_VM_TEST(ValueRootCurrentization, MajorProducerConsumerCurrentizesBefore
     CollectorResources& resources = Heap::GetHeap().GetCollectorResources();
     WCollector collector(Heap::GetHeap().GetAllocator(), resources);
     RelocationReceiptTestAccess::BindCollector(resources, &collector);
-    collector.SetGCPhase(GCPhase::GC_PHASE_IDLE);
+    collector.SetGCPhase(GCCycleGeneration::OLD, GCPhase::GC_PHASE_IDLE);
     RuntimeWorkers threadPool(1u);
     RelocationReceiptTestAccess::BindRuntimeWorkers(resources, &threadPool);
     RegionSpace& space = reinterpret_cast<RegionSpace&>(Heap::GetHeap().GetAllocator());
@@ -800,7 +809,7 @@ GC_OTHER_VM_TEST(HeapIterator, StrongAndWeakInclusiveGraphs)
     CollectorResources& resources = Heap::GetHeap().GetCollectorResources();
     WCollector collector(Heap::GetHeap().GetAllocator(), resources);
     RelocationReceiptTestAccess::BindCollector(resources, &collector);
-    collector.SetGCPhase(GC_PHASE_IDLE);
+    collector.SetGCPhase(GCCycleGeneration::OLD, GC_PHASE_IDLE);
     NativeSlot root(StoreGoodPointer(graph.weak));
     NativeSlot* roots[] = { &root };
     Heap::GetHeap().RegisterStaticRoots(reinterpret_cast<Uptr>(roots), 1);
@@ -842,7 +851,7 @@ GC_OTHER_VM_TEST(HeapIterator, WeakRootIsIncludedOnlyInWeakInclusiveMode)
     CollectorResources& resources = Heap::GetHeap().GetCollectorResources();
     WCollector collector(Heap::GetHeap().GetAllocator(), resources);
     RelocationReceiptTestAccess::BindCollector(resources, &collector);
-    collector.SetGCPhase(GC_PHASE_IDLE);
+    collector.SetGCPhase(GCCycleGeneration::OLD, GC_PHASE_IDLE);
     const U64 handle = Heap::GetHeap().RegisterExportRoot(graph.weak);
     std::unordered_set<BaseObject*> strong;
     std::unordered_set<BaseObject*> inclusive;

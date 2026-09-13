@@ -224,13 +224,6 @@ public:
             resurrectedExportObjectesForwardPhase.end());
         resurrectedExportObjectesForwardPhase.clear();
     }
-    void FlipTagID() { currentTagID = static_cast<uint16_t>((currentTagID + 1) % TAG_ID_COUNT); }
-    uint16_t GetCurrentTagID() override { return currentTagID; }
-    uint16_t GetPreviousTagID() const
-    {
-        return static_cast<uint16_t>((currentTagID + TAG_ID_COUNT - 1) % TAG_ID_COUNT);
-    }
-
     // Phase A of the ZGC-style colouring work (ops/design/G1_WRITE_BARRIER_DESIGN.md §3.6).
     //
     // Today a reference carries no colour unless it is being evacuated, so "needs the barrier"
@@ -464,7 +457,7 @@ public:
         if (obj != nullptr) {
             RegionInfo* ghost = RegionInfo::GetGhostFromRegionAt(reinterpret_cast<MAddress>(obj));
             if (ghost != nullptr && !ghost->IsUnmovableFromRegion()) {
-                const GCPhase p = GetGCPhase();
+                const GCPhase p = GetGCPhase(static_cast<GCCycleGeneration>(ghost->GetOwnerGeneration()));
                 if (p == GCPhase::GC_PHASE_PREFORWARD || p == GCPhase::GC_PHASE_FORWARD) {
                     const ForwardingProvenance provenance{
                         ForwardingHolderKind::HeapRef, this, &obj
@@ -796,7 +789,7 @@ protected:
         }
         LOG(RTLOG_ERROR, "[COLOURWHO] bad=%lu of %lu target=%p sc=%u typeInfo=0x%lx isFrom=%d isGhost=%d phase=%d",
             bad, seen, static_cast<void*>(target), stateCode, typeInfo, IsFromObject(target) ? 1 : 0,
-            IsGhostFromObject(target) ? 1 : 0, static_cast<int>(Heap::GetHeap().GetGCPhase()));
+            IsGhostFromObject(target) ? 1 : 0, static_cast<int>(Heap::GetHeap().GetGCPhase(GCCycleGeneration::OLD)));
     }
     mutable std::atomic<uint64_t> colourWhoTotal{ 0 };
     mutable std::atomic<uint64_t> colourWhoBad{ 0 };
@@ -865,7 +858,7 @@ protected:
 
     void CollectSmallSpace();
 
-    void DoGarbageCollection() override;
+    void DoGarbageCollection(GCCycleGeneration generation) override;
     void ProcessFinalizers() override;
     void EnumAndTagRawRoot(ObjectRef& ref, RootSet& rootSet, Generation generation) const override;
 
@@ -969,7 +962,7 @@ private:
     // two remap-bit errors.
     void RemapYoungRoots();
     bool Preforward();
-    void StartRelocationTasks();
+    void StartRelocationTasks(GCCycleGeneration generation);
     BaseObject* WaitForPageForwarding(BaseObject* obj, ForwardingTable::Owner owner) const;
     void PreforwardDiscoveredExternObjects(Generation generation);
     void PreforwardAllResurrectExportFromObjects(Generation generation);
@@ -981,7 +974,6 @@ private:
     std::unique_ptr<MarkDomain> youngMarkDomain;
     ForwardTable fwdTable;
     // gc index 0 or 1 is used to distinguish previous gc and current gc.
-    uint16_t currentTagID = 0;
     uint64_t minorTotalRuns = 0;
     MinorRegionSet minorCandidateRegions;
 };

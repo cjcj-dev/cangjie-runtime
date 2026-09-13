@@ -221,7 +221,8 @@ MAddress AllocBuffer::Allocate(size_t totalSize, AllocType allocType)
         // TRACE (would exclude most young regions until next major → minor starvation).
         // ⛔ No CLEAR_SATB (minor shares it). Orthogonal to isTraceRegion / ShouldEnqueue.
         if (reg != nullptr && !reg->IsNotRelocatableThisCycle()) {
-            GCPhase heapP = Heap::GetHeap().GetGCPhase();
+            GCPhase heapP = Heap::GetHeap().GetGCPhase(reg->IsYoungRegion()
+                    ? GCCycleGeneration::YOUNG : GCCycleGeneration::OLD);
             if (heapP == GCPhase::GC_PHASE_POST_TRACE || heapP == GCPhase::GC_PHASE_PREFORWARD ||
                 heapP == GCPhase::GC_PHASE_FORWARD) {
                 reg->SetNotRelocatableThisCycle(1);
@@ -236,19 +237,14 @@ MAddress AllocBuffer::Allocate(size_t totalSize, AllocType allocType)
         // paint those objects stay live0Surv=0 at route under concurrent young mark.
         {
             if (reg != nullptr && !reg->IsLargeRegion()) {
-                GCPhase mutP = GCPhase::GC_PHASE_UNDEF;
-                Mutator* m = Mutator::GetMutator();
-                if (m != nullptr) {
-                    mutP = m->GetMutatorPhase();
-                }
-                GCPhase heapP = Heap::GetHeap().GetGCPhase();
+                GCPhase heapP = Heap::GetHeap().GetGCPhase(reg->IsYoungRegion()
+                    ? GCCycleGeneration::YOUNG : GCCycleGeneration::OLD);
                 // concurrent mark window (TRACE/CLEAR) + young region.
                 // Also paint when isTraceRegion (ShouldEnqueue skip) even if mutator phase lags.
                 // Do not paint POST_TRACE/FORWARD (evacuate STW; csetalloc owns that surface).
                 const bool inConcMark = (heapP == GCPhase::GC_PHASE_TRACE ||
                                          heapP == GCPhase::GC_PHASE_CLEAR_SATB_BUFFER ||
-                                         mutP == GCPhase::GC_PHASE_TRACE ||
-                                         mutP == GCPhase::GC_PHASE_CLEAR_SATB_BUFFER);
+                                         heapP == GCPhase::GC_PHASE_ENUM);
                 const bool needBlack = reg->IsYoungRegion() && (inConcMark || reg->IsTraceRegion());
                 if (needBlack) {
                     MAddress regionStart = reg->GetRegionStart();
@@ -274,6 +270,7 @@ MAddress AllocBuffer::Allocate(size_t totalSize, AllocType allocType)
                         // Paint claims the mark bit, so publish an explicit Follow
                         // receipt into the same termination domain as barrier work.
                         BaseObject* allocated = reinterpret_cast<BaseObject*>(addr);
+                        Mutator* m = Mutator::GetMutator();
                         if (m != nullptr && m->IsManagedContext()) {
                             m->PublishYoungAllocBlack(allocated);
                         }

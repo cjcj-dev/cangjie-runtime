@@ -102,8 +102,10 @@ void CollectorResources::EvaluateDirector(uint64_t now)
         return;
     }
     auto& regions = static_cast<RegionSpace&>(Heap::GetHeap().GetAllocator()).GetRegionManager();
-    GcTriggerInputs in = ZStat::SampleDirectorStats(now, youngCycle, oldCycle, regions,
-        *youngWorkers, *oldWorkers);
+    GcTriggerInputs in = ZStat::SampleDirectorStats(now,
+        collectorProxy.GetGenerationCycle(GCCycleGeneration::YOUNG).CycleStats(),
+        collectorProxy.GetGenerationCycle(GCCycleGeneration::OLD).CycleStats(), regions,
+        GetWorkers(GCCycleGeneration::YOUNG), GetWorkers(GCCycleGeneration::OLD));
     in.minorBusy = minorBusy || minorDriverPort.Pending() != 0;
     in.majorBusy = majorBusy || majorDriverPort.Pending() != 0;
     const GcTriggerDecision decision = DecideGcTrigger(in);
@@ -120,7 +122,7 @@ void CollectorResources::EvaluateDirector(uint64_t now)
         } else {
             minorDriverPort.EnqueueAsync(GC_REASON_YOUNG, selection.youngWorkers);
             if (in.oldWorkersActive && in.activeOldWorkers != selection.oldWorkers) {
-                oldWorkers->RequestResize(selection.oldWorkers);
+                GetWorkers(GCCycleGeneration::OLD).RequestResize(selection.oldWorkers);
             }
         }
         return;
@@ -139,10 +141,10 @@ void CollectorResources::EvaluateDirector(uint64_t now)
         desired = std::min(in.workerCapacity, in.activeYoungWorkers + 2 * (desired - in.activeYoungWorkers));
         const auto adjusted = SelectWorkerThreads(in, desired, in.workerCapacity, in.oldWorkersActive);
         if (in.oldWorkersActive && in.activeOldWorkers != adjusted.oldWorkers) {
-            oldWorkers->RequestResize(adjusted.oldWorkers);
+            GetWorkers(GCCycleGeneration::OLD).RequestResize(adjusted.oldWorkers);
         }
         if (in.activeYoungWorkers != adjusted.youngWorkers) {
-            youngWorkers->RequestResize(adjusted.youngWorkers);
+            GetWorkers(GCCycleGeneration::YOUNG).RequestResize(adjusted.youngWorkers);
         }
     }
 }

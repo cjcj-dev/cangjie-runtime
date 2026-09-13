@@ -1,0 +1,6 @@
+lane: sym_cangjie_runtime_494_implement_r5655968840
+主控裁定（0914 04:4x）：三点全批。
+1. zMark.cpp WCollector::MarkNewObject 按 ObjectGeneration(obj) 读该代 GetGCPhase，MarkObject 算法不变（对应 ZGC 按对象所在代取 phase：zGeneration.inline.hpp / zBarrier 的 ZGeneration::generation(addr)）。BaseObject.cpp:182 的调用一并核入对应表。
+2. Interpreter/InterpreterSpecific.cpp IsActiveGCPhase 回调：批准改为 YOUNG/OLD 两代 owner phase 同一谓词取 OR（语义 = 任一代处于 ≥ENUM 的活动相位），保留 tld/mutator 空值检查，不改解释器机制；对应表写明 ZGC 解释器侧无此回调（HotSpot 解释器走屏障不问 phase），这是我方基础设施差异，仅改数据来源。
+3. MutatorManager.cpp:1213 握手完成检测继续读操作上下文，不改。
+⛔ 不新增开关、不恢复整周期串行锁。

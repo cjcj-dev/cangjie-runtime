@@ -57,7 +57,7 @@ inline uintptr_t RegionManager::AllocPinned(size_t size)
         addr = AllocPinnedLocked(size);
         if (addr == 0) {
             // If allocate pinned obj during tracing, set region to traced new region.
-            GCPhase phase = Heap::GetHeap().GetCollector().GetGCPhase();
+            GCPhase phase = Heap::GetHeap().GetGCPhase(region->IsYoungRegion() ? GCCycleGeneration::YOUNG : GCCycleGeneration::OLD);
             if (phase == GC_PHASE_TRACE || phase == GC_PHASE_CLEAR_SATB_BUFFER) {
                 region->SetTraceRegionFlag(1);
             }
@@ -95,7 +95,7 @@ inline uintptr_t RegionManager::AllocLarge(size_t size, bool clearPayload)
              region->GetRegionSize(), region->GetRegionEnd(), region->GetUnitIdx(), region->GetRegionType());
         uintptr_t addr = region->Alloc(size);
 
-        GCPhase phase = Heap::GetHeap().GetCollector().GetGCPhase();
+        GCPhase phase = Heap::GetHeap().GetGCPhase(region->IsYoungRegion() ? GCCycleGeneration::YOUNG : GCCycleGeneration::OLD);
         bool shouldSetTraceRegion = (phase == GC_PHASE_TRACE || phase == GC_PHASE_CLEAR_SATB_BUFFER);
         if (largeTraceRegions.TryPrependRegion(region, RegionInfo::RegionType::RECENT_LARGE_REGION)) {
             if (shouldSetTraceRegion) {

@@ -10,22 +10,15 @@ struct MarkPublicationFixture {
     static MarkPublicationFixture& Current() { CHECK(current != nullptr); return *current; }
     CollectorResources& resources = Heap::GetHeap().GetCollectorResources();
     WCollector collector { Heap::GetHeap().GetAllocator(), resources };
-    GCWorkers young { GCWorkers::Generation::YOUNG, 1 };
-    GCWorkers old { GCWorkers::Generation::OLD, 1 };
-    GCWorkers* previousYoung;
-    GCWorkers* previousOld;
     TracingCollector* previousCollector;
-    bool previousStarted;
     MarkPublicationFixture()
-        : previousYoung(resources.youngWorkers), previousOld(resources.oldWorkers),
-          previousCollector(resources.collectorProxy.currentCollector), previousStarted(resources.IsGcStarted())
+        : previousCollector(resources.collectorProxy.currentCollector)
     {
         current = this;
-        resources.youngWorkers = &young;
-        resources.oldWorkers = &old;
+        collector.youngCycle.InitializeWorkers(1);
+        collector.oldCycle.InitializeWorkers(1);
         resources.collectorProxy.currentCollector = &collector;
-        resources.SetGcStarted(true);
-        collector.SelectCycle(GC_REASON_YOUNG);
+        collector.youngCycle.SelectReason(GC_REASON_YOUNG);
         collector.youngCycle.Begin(1);
         collector.StartYoungMarkWork();
         collector.youngCycle.PublishPhase(GC_PHASE_TRACE);
@@ -37,10 +30,7 @@ struct MarkPublicationFixture {
     ~MarkPublicationFixture()
     {
         Drain([](BaseObject*, bool) {});
-        resources.SetGcStarted(previousStarted);
         resources.collectorProxy.currentCollector = previousCollector;
-        resources.youngWorkers = previousYoung;
-        resources.oldWorkers = previousOld;
         current = previousFixture;
     }
     template<class Visitor> void DrainDomain(MarkDomain& domain, Visitor&& visitor)

@@ -3,6 +3,8 @@
 // with Runtime Library Exception.
 
 #include "Heap/z/zDirector.hpp"
+#include "Heap/z/zGeneration.hpp"
+#include "Heap/z/zRelocationSetSelector.hpp"
 #include "Heap/z/zStat.hpp"
 #include "Heap/z/zPageAllocator.hpp"
 #include "gc_unittest.hpp"
@@ -298,4 +300,62 @@ GC_TEST(GcDirector, MajorRateLookaheadUsesUnsignedCollectionDistance)
     GC_EXPECT_TRUE(!RuleMajorAllocRate(in));
     ++in.totalCollections;
     GC_EXPECT_TRUE(RuleMajorAllocRate(in));
+}
+
+// Source port: zGeneration.cpp:125-170,1212-1237. There is no dedicated
+// zGeneration gtest in this reference; these exercise its owner invariant.
+GC_TEST(GenerationState, IndependentPhaseSequenceAndWorkers)
+{
+    GenerationCycle young(GCCycleGeneration::YOUNG);
+    GenerationCycle old(GCCycleGeneration::OLD);
+    young.InitializeWorkers(2);
+    old.InitializeWorkers(2);
+    young.SelectReason(GC_REASON_YOUNG);
+    young.Begin(1);
+    young.PublishPhase(GC_PHASE_TRACE);
+    young.Workers()->SetActiveWorkers(1);
+    const auto before = young.Snapshot();
+
+    old.SelectReason(GC_REASON_USER);
+    old.Begin(2);
+    old.PublishPhase(GC_PHASE_FORWARD);
+    old.Workers()->SetActiveWorkers(2);
+
+    const auto after = young.Snapshot();
+    GC_EXPECT_EQ(after.sequence, before.sequence);
+    GC_EXPECT_EQ(after.phase, GC_PHASE_TRACE);
+    GC_EXPECT_EQ(after.reason, GC_REASON_YOUNG);
+    GC_EXPECT_TRUE(after.active);
+    GC_EXPECT_EQ(young.Workers()->ActiveWorkers(), 1u);
+    GC_EXPECT_EQ(old.Workers()->ActiveWorkers(), 2u);
+    GC_EXPECT_TRUE(&young.Stats() != &old.Stats());
+    GC_EXPECT_TRUE(&young.CycleStats() != &old.CycleStats());
+
+    old.End();
+    GC_EXPECT_TRUE(young.Snapshot().active);
+    young.End();
+}
+
+GC_TEST(GenerationState, FullPrecleanPromotesAllAndRootsComputeThreshold)
+{
+    GenerationCycle young(GCCycleGeneration::YOUNG);
+    TenuringInputs inputs;
+    inputs.softMaxCapacity = 64 * 1024 * 1024;
+    inputs.youngAllocated = 4096;
+    inputs.youngGarbage = 1024;
+    inputs.liveByAge[1] = 1024;
+    {
+        YoungTypeSetter type(young, ZYoungType::major_full_preclean);
+        young.SelectTenuringThreshold(inputs);
+        GC_EXPECT_EQ(young.Stats().tenuringThreshold, 0u);
+        GC_EXPECT_FALSE(young.IsMajorRoots());
+    }
+    GC_EXPECT_TRUE(young.YoungType() == ZYoungType::none);
+    {
+        YoungTypeSetter type(young, ZYoungType::major_full_roots);
+        young.SelectTenuringThreshold(inputs);
+        GC_EXPECT_TRUE(young.Stats().tenuringThreshold > 0u);
+        GC_EXPECT_TRUE(young.IsMajorRoots());
+    }
+    GC_EXPECT_TRUE(young.YoungType() == ZYoungType::none);
 }

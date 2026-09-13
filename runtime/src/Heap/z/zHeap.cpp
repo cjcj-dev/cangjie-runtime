@@ -119,7 +119,6 @@ public:
 
     bool IsGcStarted() const override { return collectorResources.IsGcStarted(); }
 
-    void WaitForGCFinish() override { return collectorResources.WaitForGCFinish(); }
 
     bool IsGCEnabled() const override { return isGCEnabled.load(); }
 
@@ -127,8 +126,8 @@ public:
 
     MAddress Allocate(size_t size, AllocType allocType) override;
 
-    GCPhase GetGCPhase() const override;
-    void SetGCPhase(const GCPhase phase) override;
+    GCPhase GetGCPhase(GCCycleGeneration generation) const override;
+    void SetGCPhase(GCCycleGeneration generation, const GCPhase phase) override;
     Collector& GetCollector() override;
     Allocator& GetAllocator() override;
 
@@ -230,9 +229,9 @@ Collector& HeapImpl::GetCollector() { return collectorProxy.GetCurrentCollector(
 
 Allocator& HeapImpl::GetAllocator() { return *theSpace; }
 
-GCPhase HeapImpl::GetGCPhase() const { return collectorProxy.GetGCPhase(); }
+GCPhase HeapImpl::GetGCPhase(GCCycleGeneration generation) const { return collectorProxy.GetGCPhase(generation); }
 
-void HeapImpl::SetGCPhase(const GCPhase phase) { collectorProxy.SetGCPhase(phase); }
+void HeapImpl::SetGCPhase(GCCycleGeneration generation, const GCPhase phase) { collectorProxy.SetGCPhase(generation, phase); }
 
 size_t HeapImpl::GetMaxCapacity() const { return theSpace->GetMaxCapacity(); }
 
@@ -387,11 +386,11 @@ void HeapImpl::CrossAccessBarrier(I64 id)
     if (recordObj == nullptr) {
         return;
     }
-    if (GetGCPhase() == GCPhase::GC_PHASE_PREFORWARD) {
+    if (GetGCPhase(static_cast<GCCycleGeneration>(GetCollector().ObjectGeneration(recordObj))) == GCPhase::GC_PHASE_PREFORWARD) {
         auto& collector = GetCollector();
         if (collector.IsGhostFromObject(recordObj) &&
             !collector.IsUnmovableFromObject(recordObj)) {
-            recordObj = collector.ForwardObject(recordObj, collector.ActiveForwardingGeneration());
+            recordObj = collector.ForwardObject(recordObj, collector.ObjectGeneration(recordObj));
         }
     }
 
@@ -443,3 +442,28 @@ void RegionManager::StampCensusBoundaries()
 }
 
 } // namespace MapleRuntime
+
+namespace MapleRuntime {
+// heapDumper.cpp: VM_HeapDumper::doit. The requesting thread executes the
+// safepoint operation; neither generation driver consumes inspector work.
+void Heap::DumpHeap(HeapDumpKind kind)
+{
+    switch (kind) {
+        case HeapDumpKind::NORMAL:
+        case HeapDumpKind::OOM: {
+            CjHeapData dump(kind == HeapDumpKind::OOM);
+            dump.DumpHeap();
+            break;
+        }
+        case HeapDumpKind::IDE: {
+#if defined(__OHOS__) && (__OHOS__ == 1)
+            CjHeapDataForIDE dump;
+            dump.Serialize();
+#endif
+            break;
+        }
+        default:
+            CHECK(false);
+    }
+}
+}
