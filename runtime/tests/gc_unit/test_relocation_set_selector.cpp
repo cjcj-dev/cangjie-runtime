@@ -128,7 +128,7 @@ GC_TEST(RelocationSetSelector, AllocatingPagesNeverSelected)
     GC_EXPECT_TRUE(ContainsId(r, 9u));
 }
 
-// ZRelocationSetSelectorGroup::semi_sort (zRelocationSetSelector.cpp:84).
+// ZRelocationSetSelectorGroup::semi_sort (zRelocationSetSelector.cpp:77).
 // Deliberately reverse live bytes inside a bucket: full sorting changes this result.
 GC_TEST(RelocationSetSelector, SemiSortUsesPartitionFingers)
 {
@@ -141,7 +141,7 @@ GC_TEST(RelocationSetSelector, SemiSortUsesPartitionFingers)
     GC_EXPECT_TRUE(r.selectedIds == expected);
 }
 
-// ZRelocationSetSelectorGroup::partition_index (zRelocationSetSelector.cpp:77).
+// ZRelocationSetSelectorGroup::partition_index (zRelocationSetSelector.cpp:70).
 // Page-size adaptation: order by occupancy bucket, not absolute live bytes.
 GC_TEST(RelocationSetSelector, PartitionUsesEachPageCapacity)
 {
@@ -152,7 +152,7 @@ GC_TEST(RelocationSetSelector, PartitionUsesEachPageCapacity)
     GC_EXPECT_TRUE(r.selectedIds == expected);
 }
 
-// ZRelocationSetSelectorGroup::select_inner (zRelocationSetSelector.cpp:162-174).
+// ZRelocationSetSelectorGroup::select_inner (zRelocationSetSelector.cpp:153-173).
 // Two pages require two destinations; a third amortizes the same two destinations.
 GC_TEST(RelocationSetSelector, SelectionContinuesPastUnprofitablePrefix)
 {

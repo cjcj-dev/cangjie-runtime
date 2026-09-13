@@ -150,7 +150,7 @@ inline bool PreFilterRelocRegion(const RelocRegionDesc& page)
 }
 
 // ZRelocationSetSelectorGroup::partition_index / semi_sort
-// (zRelocationSetSelector.cpp:77-121, zRelocationSetSelector.hpp:86-87).
+// (zRelocationSetSelector.cpp:70-112, zRelocationSetSelector.hpp:81-82).
 inline constexpr size_t kRelocationNumPartitionsShift = 11;
 inline constexpr size_t kRelocationNumPartitions = size_t{1} << kRelocationNumPartitionsShift;
 
@@ -186,7 +186,7 @@ inline void SemiSortRelocationPages(std::vector<RelocRegionDesc>& pages)
     pages.swap(sorted);
 }
 
-// ZRelocationSetSelectorGroup::select_inner (zRelocationSetSelector.cpp:123-219)
+// ZRelocationSetSelectorGroup::select_inner (zRelocationSetSelector.cpp:114-196)
 inline RelocSelectResult SelectRelocationSet(const std::vector<RelocRegionDesc>& pages)
 {
     RelocSelectResult out;
