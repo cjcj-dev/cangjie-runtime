@@ -70,6 +70,15 @@ struct GcHeapFixture {
             cycle.End();
         }
         cycle.Begin(0);
+        if (generation == Generation::Young) {
+            // Young sequence now advances with the remset flip at mark-start.
+            // This liveness-only fixture supplies an empty remembered set;
+            // it does not perform a collection of the synthetic heap.
+            alignas(8) uint64_t storage[16] {};
+            RememberedSet remembered;
+            remembered.Initialize(reinterpret_cast<MAddress>(storage), sizeof(storage));
+            cycle.StartYoungMark(remembered);
+        }
     }
 
     static constexpr size_t kUnits = 6;
