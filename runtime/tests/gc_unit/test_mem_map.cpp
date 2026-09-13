@@ -14,6 +14,16 @@
 #include <unistd.h>
 #endif
 
+#if defined(__linux__) && defined(__LP64__)
+#include <cerrno>
+#include <cstddef>
+#include <linux/falloc.h>
+#include <linux/filter.h>
+#include <linux/seccomp.h>
+#include <sys/prctl.h>
+#include <sys/syscall.h>
+#endif
+
 #include "Heap/Allocator/MemMap.h"
 #include "Heap/Allocator/RegionManager.h"
 
@@ -817,6 +827,122 @@ GC_TEST(MemMapContract, RegionManagerCommitResultsPreserveCapacityAndCache)
     }
 }
 
+#endif
+
+#if defined(__linux__) && defined(__LP64__)
+// Extend gc/z/TestCommitFailure.java's graceful-failure scenario to the native
+// backing error branches in zPhysicalMemoryBacking_linux.cpp:509-690. The
+// filter is confined to a child and changes kernel results, not product code.
+void FilterFallocateError(bool punchHole, int error, uint32_t allowedLength)
+{
+    const uint32_t mode = punchHole ? FALLOC_FL_PUNCH_HOLE | FALLOC_FL_KEEP_SIZE : 0;
+    struct sock_filter instructions[] = {
+        BPF_STMT(BPF_LD | BPF_W | BPF_ABS, offsetof(struct seccomp_data, nr)),
+        BPF_JUMP(BPF_JMP | BPF_JEQ | BPF_K, SYS_fallocate, 0, 5),
+        BPF_STMT(BPF_LD | BPF_W | BPF_ABS, offsetof(struct seccomp_data, args[1])),
+        BPF_JUMP(BPF_JMP | BPF_JEQ | BPF_K, mode, 0, 3),
+        BPF_STMT(BPF_LD | BPF_W | BPF_ABS, offsetof(struct seccomp_data, args[3])),
+        BPF_JUMP(BPF_JMP | BPF_JGT | BPF_K, allowedLength, 0, 1),
+        BPF_STMT(BPF_RET | BPF_K, SECCOMP_RET_ERRNO | static_cast<uint32_t>(error)),
+        BPF_STMT(BPF_RET | BPF_K, SECCOMP_RET_ALLOW),
+    };
+    struct sock_fprog program { static_cast<unsigned short>(sizeof(instructions) / sizeof(instructions[0])),
+                               instructions };
+    GC_EXPECT_EQ(prctl(PR_SET_NO_NEW_PRIVS, 1UL, 0UL, 0UL, 0UL), 0);
+    GC_EXPECT_EQ(prctl(PR_SET_SECCOMP, SECCOMP_MODE_FILTER, &program), 0);
+}
+
+void CheckNativeBackingErrors(int commitError, uint32_t commitLimitPages,
+                              int releaseError, uint32_t releaseLimitPages,
+                              size_t committedPages, size_t releasedPages)
+{
+    const pid_t child = fork();
+    GC_EXPECT_TRUE(child >= 0);
+    if (child == 0) {
+        try {
+            const size_t page = ALLOC_UTIL_PAGE_SIZE;
+            MemMap* map = MemMap::MapMemory(4 * page, 0, MemMap::DEFAULT_OPTIONS,
+                                            LargeBudget(), OneNode());
+            if (commitError != 0) {
+                FilterFallocateError(false, commitError, commitLimitPages * page);
+            }
+            if (releaseError != 0) {
+                FilterFallocateError(true, releaseError, releaseLimitPages * page);
+            }
+            const size_t committed = map->CommitMemory(map->GetBaseAddr(), 4 * page);
+            GC_EXPECT_EQ(committed, committedPages * page);
+            GC_EXPECT_EQ(map->GetCommittedSize(), committed);
+            // Observe that the returned backing really is mapped, and that
+            // retained ranges are reused without changing capacity.
+            auto* base = static_cast<volatile uint8_t*>(map->GetBaseAddr());
+            for (size_t offset = 0; offset < committed; offset += page) {
+                GC_EXPECT_EQ(base[offset], 0U);
+                base[offset] = 0x5a;
+            }
+            if (committed != 0) {
+                GC_EXPECT_EQ(map->CommitMemory(map->GetBaseAddr(), committed), committed);
+                GC_EXPECT_EQ(base[committed - page], 0x5aU);
+                const size_t released = map->ReleaseMemory(map->GetBaseAddr(), committed);
+                GC_EXPECT_EQ(released, releasedPages * page);
+                GC_EXPECT_EQ(map->GetCommittedSize(), committed - released);
+            }
+            MemMap::DestroyMemMap(map);
+            _exit(0);
+        } catch (const std::exception& failure) {
+            std::fprintf(stderr, "native backing assertion: %s\n", failure.what());
+            _exit(1);
+        }
+    }
+    int status = 0;
+    GC_EXPECT_EQ(waitpid(child, &status, 0), child);
+    GC_EXPECT_TRUE(WIFEXITED(status));
+    GC_EXPECT_EQ(WEXITSTATUS(status), 0);
+}
+
+GC_TEST(MemMapContract, NativeBackingCommitAndUncommit)
+{
+    CheckNativeBackingErrors(0, 0, 0, 0, 4, 4);
+}
+
+GC_TEST(MemMapContract, NativeBackingEnosysUsesCompat)
+{
+    CheckNativeBackingErrors(ENOSYS, 0, 0, 0, 4, 4);
+}
+
+GC_TEST(MemMapContract, NativeBackingEopnotsuppUsesCompat)
+{
+    CheckNativeBackingErrors(EOPNOTSUPP, 0, 0, 0, 4, 4);
+}
+
+GC_TEST(MemMapContract, NativeBackingEintrSplitsCommit)
+{
+    CheckNativeBackingErrors(EINTR, 1, 0, 0, 4, 4);
+}
+
+GC_TEST(MemMapContract, NativeBackingBlockEintrReturnsZero)
+{
+    CheckNativeBackingErrors(EINTR, 0, 0, 0, 0, 0);
+}
+
+GC_TEST(MemMapContract, NativeBackingFailureRetainsPrefixDespitePunchError)
+{
+    CheckNativeBackingErrors(ENOSPC, 1, EIO, 0, 1, 0);
+}
+
+GC_TEST(MemMapContract, NativeBackingCommitFailureReturnsZero)
+{
+    CheckNativeBackingErrors(ENOSPC, 0, EIO, 0, 0, 0);
+}
+
+GC_TEST(MemMapContract, NativeBackingEintrSplitsUncommit)
+{
+    CheckNativeBackingErrors(0, 0, EINTR, 1, 4, 4);
+}
+
+GC_TEST(MemMapContract, NativeBackingUncommitErrorRetainsCapacity)
+{
+    CheckNativeBackingErrors(0, 0, EIO, 0, 4, 0);
+}
 #endif
 
 } // namespace

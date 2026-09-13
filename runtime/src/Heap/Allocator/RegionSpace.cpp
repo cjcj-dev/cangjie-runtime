@@ -135,7 +135,7 @@ size_t RegionSpace::UncommitIdleMemory()
         size_t garbageBytes = regionManager.GetGarbageUnitCount() * RegionInfo::UNIT_SIZE;
         size_t minCapacity = Uncommitter::MinCapacity(usedBytes, kGcTriggerYoungFixedBytes);
         size_t chunk = Uncommitter::ChunkLimit(GetMaxCapacity());
-        // zPageAllocator.cpp:827: uncommit uses the same committed capacity that
+        // zUncommitter.cpp:233: uncommit uses the same committed capacity that
         // commit publishes, never the virtual size of a mixed-state cache.
         size_t flush = committedBytes > minCapacity ? std::min(committedBytes - minCapacity, chunk) : 0;
         LOG(RTLOG_INFO,

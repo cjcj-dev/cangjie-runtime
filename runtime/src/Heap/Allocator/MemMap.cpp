@@ -14,6 +14,7 @@
 #if defined(__linux__)
 #include <sys/resource.h>
 #include <sys/syscall.h>
+#include <sys/vfs.h>
 #include <unistd.h>
 #include <fcntl.h>
 #include <linux/falloc.h>
@@ -90,13 +91,16 @@ public:
         // zPhysicalMemoryBacking_linux.cpp: create_fd/fallocate/map. Each
         // reservation owns its backing file; offsets survive decommit.
         const int fd = static_cast<int>(syscall(SYS_memfd_create, "cangjie-heap", 1U));
-        if (fd < 0 || ftruncate(fd, static_cast<off_t>(size)) != 0) {
+        struct statfs backingStat {};
+        if (fd < 0 || ftruncate(fd, static_cast<off_t>(size)) != 0 || fstatfs(fd, &backingStat) != 0 ||
+            backingStat.f_bsize <= 0 || ALLOC_UTIL_PAGE_SIZE % backingStat.f_bsize != 0) {
             if (fd >= 0) { close(fd); }
             munmap(result, size);
             return nullptr;
         }
         std::lock_guard<std::mutex> lock(filesMutex);
-        files.push_back(BackingFile{ reinterpret_cast<uintptr_t>(result), size, fd });
+        files.push_back(BackingFile{ reinterpret_cast<uintptr_t>(result), size, fd,
+                                     static_cast<size_t>(backingStat.f_bsize) });
 #endif
         return result;
 #endif
@@ -123,7 +127,7 @@ public:
             }
         }
         const size_t offset = reinterpret_cast<uintptr_t>(addr) - file->start;
-        const size_t committed = CommitFile(file->fd, offset, size);
+        const size_t committed = CommitFile(*file, offset, size);
         if (bindNuma) {
             if (syscall(SYS_set_mempolicy, kMpolPreferred, nullptr, 0UL) != 0) {
                 LOG(RTLOG_WARNING, "backing NUMA preference reset failed: %d", errno);
@@ -171,9 +175,9 @@ public:
         const BackingFile* file = FindFile(addr, size);
         if (file == nullptr) { return 0; }
         const size_t offset = reinterpret_cast<uintptr_t>(addr) - file->start;
-        if (fallocate(file->fd, FALLOC_FL_PUNCH_HOLE | FALLOC_FL_KEEP_SIZE,
-                      static_cast<off_t>(offset), static_cast<off_t>(size)) != 0) {
-            LOG(RTLOG_ERROR, "failed to uncommit backing: %d", errno);
+        const int error = Fallocate(*file, true, offset, size);
+        if (error != 0) {
+            LOG(RTLOG_ERROR, "failed to uncommit backing: %d", error);
             return 0;
         }
         return size;
@@ -205,9 +209,11 @@ public:
 
 private:
 #if defined(__linux__)
-    struct BackingFile { uintptr_t start; size_t size; int fd; };
+    struct BackingFile { uintptr_t start; size_t size; int fd; size_t blockSize; };
     std::mutex filesMutex;
     std::vector<BackingFile> files;
+    // z_fallocate_supported: capability cached under filesMutex, not an option.
+    bool fallocateSupported{ true };
 
     const BackingFile* FindFile(void* addr, size_t size) const
     {
@@ -219,31 +225,87 @@ private:
         return nullptr;
     }
 
-    static size_t CommitFile(int fd, size_t offset, size_t size)
+    static int FillHoleCompat(const BackingFile& file, size_t offset, size_t size)
+    {
+        // zPhysicalMemoryBacking_linux.cpp:468: ordinary memfd pages use pwrite
+        // to allocate each backing block without relying on madvise or touching
+        // a mapping whose backing allocation has not yet succeeded.
+        const uint8_t data = 0;
+        for (size_t pos = offset; pos < offset + size; pos += file.blockSize) {
+            const ssize_t written = pwrite(file.fd, &data, sizeof(data), static_cast<off_t>(pos));
+            if (written == -1) { return errno; }
+            if (written != static_cast<ssize_t>(sizeof(data))) { return EIO; }
+        }
+        return 0;
+    }
+
+    int FillHole(const BackingFile& file, size_t offset, size_t size)
+    {
+        // zPhysicalMemoryBacking_linux.cpp:509: only unsupported fallocate
+        // selects compatibility allocation; other errors reach the caller.
+        if (fallocateSupported) {
+            if (fallocate(file.fd, 0, static_cast<off_t>(offset), static_cast<off_t>(size)) == 0) {
+                return 0;
+            }
+            const int error = errno;
+            if (error != ENOSYS && error != EOPNOTSUPP) { return error; }
+            fallocateSupported = false;
+        }
+        return FillHoleCompat(file, offset, size);
+    }
+
+    int Fallocate(const BackingFile& file, bool punchHole, size_t offset, size_t size)
+    {
+        int error;
+        if (punchHole) {
+            const int mode = FALLOC_FL_PUNCH_HOLE | FALLOC_FL_KEEP_SIZE;
+            error = fallocate(file.fd, mode, static_cast<off_t>(offset), static_cast<off_t>(size)) == 0
+                ? 0 : errno;
+        } else {
+            error = FillHole(file, offset, size);
+        }
+        // zPhysicalMemoryBacking_linux.cpp:559-592: split interrupted ranges
+        // at backing block boundaries, for both commit and uncommit.
+        if (error == EINTR && size > file.blockSize) {
+            const size_t firstSize = AllocUtilRndUp(size / 2, file.blockSize);
+            const int firstError = Fallocate(file, punchHole, offset, firstSize);
+            if (firstError != 0) { return firstError; }
+            return Fallocate(file, punchHole, offset + firstSize, size - firstSize);
+        }
+        return error;
+    }
+
+    bool CommitFileRange(const BackingFile& file, size_t offset, size_t size)
+    {
+        // zPhysicalMemoryBacking_linux.cpp:598: ordinary-page errors are
+        // reported to commit_default, which can retain a successful prefix.
+        const int error = Fallocate(file, false, offset, size);
+        if (error != 0) {
+            LOG(RTLOG_ERROR, "failed to commit backing: %d", error);
+            return false;
+        }
+        return true;
+    }
+
+    size_t CommitFile(const BackingFile& file, size_t offset, size_t size)
     {
         // zPhysicalMemoryBacking_linux.cpp:639: whole range, then binary
         // subdivision retaining every successful granule-aligned prefix.
-        if (fallocate(fd, 0, offset, size) == 0) { return size; }
-        LOG(RTLOG_ERROR, "failed to commit whole backing range: %d", errno);
+        if (CommitFileRange(file, offset, size)) { return size; }
         size_t start = 0;
         size_t end = size;
         for (;;) {
             const size_t length = AllocUtilRndDown((end - start) / 2,
                                                   static_cast<size_t>(ALLOC_UTIL_PAGE_SIZE));
-            if (length == 0) { break; }
-            if (fallocate(fd, 0, offset + start, length) == 0) {
+            if (length == 0) { return start; }
+            if (CommitFileRange(file, offset + start, length)) {
                 start += length;
             } else {
                 end -= length;
             }
         }
-        // A failed filesystem allocation may have populated part of its
-        // range. Discard only the suffix not included in the returned prefix.
-        CHECK_DETAIL(fallocate(fd, FALLOC_FL_PUNCH_HOLE | FALLOC_FL_KEEP_SIZE,
-                               offset + start, size - start) == 0,
-                     "failed to release uncommitted backing suffix: %d", errno);
-        return start;
     }
+
 #endif
 };
 
