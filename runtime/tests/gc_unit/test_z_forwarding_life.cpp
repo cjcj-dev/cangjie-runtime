@@ -100,6 +100,33 @@ GC_TEST(ZForwardingLife, ClaimedRetainWaitsForPageTask)
     GC_EXPECT_TRUE(returned.load());
 }
 
+// Preserve the original multi-reader claim/drain case while replacing only
+// the late-retain contract (zForwarding.cpp:110-130).
+GC_TEST(ZForwardingLife, ClaimInversionDrainsExistingReader)
+{
+    Life life;
+    ZForwardingLife::ResetForForwarding(life.ref, life.claimed, life.done);
+    GC_EXPECT_TRUE(ZForwardingLife::retain_page(life.ref, [&] { life.Wait(); }));
+    std::atomic<bool> claimed{ false };
+    std::thread worker([&] {
+        ZForwardingLife::in_place_relocation_claim_page(life.ref);
+        claimed.store(true, std::memory_order_release);
+    });
+    JoinGuard guard(worker);
+    while (life.ref.load(std::memory_order_acquire) > 0) std::this_thread::yield();
+    const int32_t beforeRelease = life.ref.load(std::memory_order_acquire);
+    const bool claimedBeforeRelease = claimed.load(std::memory_order_acquire);
+    ZForwardingLife::release_page(life.ref);
+    worker.join();
+    const int32_t afterDrain = life.ref.load(std::memory_order_acquire);
+    ZForwardingLife::release_page(life.ref);
+    ZForwardingLife::mark_done(life.done);
+    GC_EXPECT_EQ(beforeRelease, -2);
+    GC_EXPECT_FALSE(claimedBeforeRelease);
+    GC_EXPECT_EQ(afterDrain, -1);
+    GC_EXPECT_EQ(life.ref.load(), 0);
+}
+
 GC_TEST(ZForwardingLife, RouteDestHoldDecisionDistribution)
 {
     GcHeapFixture fx;
