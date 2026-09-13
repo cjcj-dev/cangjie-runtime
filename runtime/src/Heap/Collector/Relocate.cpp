@@ -2465,9 +2465,8 @@ void WCollector::UpdateRemsetForFields(BaseObject* from, BaseObject* to)
     if (fromRegion != nullptr && !fromRegion->IsYoungRegion()) {
         const size_t sz = RegionSpace::GetAllocSize(*to);
         ZForwarding* forwarding = ForwardingTable::get(reinterpret_cast<MAddress>(from), Generation::Old);
-        const bool youngMarking = ZForwarding::young_marking();
         rememberedSet.TransferObjectSlots(reinterpret_cast<MAddress>(from), reinterpret_cast<MAddress>(to), sz,
-                                          forwarding, youngMarking);
+                                          forwarding);
         return;
     }
     if (!to->HasRefField()) {

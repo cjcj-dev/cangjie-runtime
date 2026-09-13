@@ -3192,8 +3192,7 @@ void RegionManager::ForwardRegion(RegionInfo* region)
                 MAddress fromBase = reinterpret_cast<MAddress>(obj);
                 MAddress toBase = reinterpret_cast<MAddress>(toObj);
                 ZForwarding* forwarding = ForwardingTable::GetCovering(fromBase, Generation::Old);
-                const bool youngMarking = Heap::GetHeap().GetGCPhase() == GCPhase::GC_PHASE_TRACE;
-                size_t moved = rememberedSet.TransferObjectSlots(fromBase, toBase, sz, forwarding, youngMarking);
+                size_t moved = rememberedSet.TransferObjectSlots(fromBase, toBase, sz, forwarding);
                 recordedOnToForOld += moved;
 
                 }

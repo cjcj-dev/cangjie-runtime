@@ -66,12 +66,16 @@ public:
     void SelectReason(GCReason value);
     void Begin(uint64_t index);
     void PublishPhase(GCPhase value);
+    void RecordYoungSequenceAtRelocateStart(uint64_t youngSequence);
+    bool ActiveRemsetIsCurrent(uint64_t youngSequence) const;
     void End();
 private:
     const GCCycleGeneration generation;
     mutable std::mutex mutex;
     uint64_t sequence = 0;
     uint64_t requestIndex = 0;
+    // ZGenerationOld::_young_seqnum_at_reloc_start (zGeneration.hpp:278).
+    std::atomic<uint64_t> youngSequenceAtRelocateStart{ 0 };
     std::atomic<GCReason> reason { GC_REASON_USER };
     std::atomic<GCPhase> phase { GC_PHASE_IDLE };
     bool active = false;
@@ -480,15 +484,19 @@ public:
 
     virtual GCPhase GetGCPhase() const { return ActiveCycle().Phase(); }
 
-    virtual void SetGCPhase(const GCPhase phase) { ActiveCycle().PublishPhase(phase); }
+    virtual void SetGCPhase(const GCPhase phase)
+    {
+        PublishGenerationPhase(ActiveCycle().Snapshot().generation, phase);
+    }
 
     virtual GCCycleSnapshot GetCycleSnapshot(GCCycleGeneration generation) const
     {
         return (generation == GCCycleGeneration::YOUNG ? youngCycle : oldCycle).Snapshot();
     }
-    void PublishGenerationPhase(GCCycleGeneration generation, GCPhase value)
+    void PublishGenerationPhase(GCCycleGeneration generation, GCPhase value);
+    bool OldActiveRemsetIsCurrent() const
     {
-        (generation == GCCycleGeneration::YOUNG ? youngCycle : oldCycle).PublishPhase(value);
+        return oldCycle.ActiveRemsetIsCurrent(youngCycle.Sequence());
     }
     GCReason GetCycleReason() const { return ActiveCycle().Reason(); }
     virtual Generation ActiveForwardingGeneration() const;
