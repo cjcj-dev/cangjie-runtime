@@ -165,21 +165,25 @@ public:
           reason(resources.GetGCStats().reason)
     {
         RelocationReceiptTestAccess::EnsureCollectorProxyBound(resources);
-        phase = Heap::GetHeap().GetGCPhase();
-        resources.SetGcStarted(true);
+        phase = Heap::GetHeap().GetGCPhase(GCCycleGeneration::OLD);
+        activityCycle = &Heap::GetHeap().GetCollector().GetGenerationCycle(GCCycleGeneration::OLD);
+        ownerWasActive = activityCycle->Snapshot().active;
+        if (!ownerWasActive) activityCycle->Begin(1);
         resources.GetGCStats().reason = GC_REASON_USER;
-        Heap::GetHeap().SetGCPhase(GCPhase::GC_PHASE_TRACE);
+        Heap::GetHeap().SetGCPhase(GCCycleGeneration::OLD, GCPhase::GC_PHASE_TRACE);
     }
     ~MarkWindowScope()
     {
-        Heap::GetHeap().SetGCPhase(phase);
+        Heap::GetHeap().SetGCPhase(GCCycleGeneration::OLD, phase);
         resources.GetGCStats().reason = reason;
-        resources.SetGcStarted(started);
+        if (!ownerWasActive) activityCycle->End();
     }
 
 private:
     CollectorResources& resources;
     bool started;
+    GenerationCycle* activityCycle = nullptr;
+    bool ownerWasActive = false;
     GCReason reason;
     GCPhase phase = GCPhase::GC_PHASE_IDLE;
 };

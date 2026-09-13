@@ -33,14 +33,15 @@ public:
     void Init() override;
     void Fini() override;
 
-    GCPhase GetGCPhase() const override
+    GCPhase GetGCPhase(GCCycleGeneration generation) const override
     {
-        return currentCollector != nullptr ? currentCollector->GetGCPhase() : GCPhase::GC_PHASE_UNDEF;
+        return currentCollector != nullptr ? currentCollector->GetGCPhase(generation) : GCPhase::GC_PHASE_UNDEF;
     }
 
     GenerationCycle& GetGenerationCycle(GCCycleGeneration generation) override
     {
-        return wCollector.GetGenerationCycle(generation);
+        return currentCollector != nullptr ? currentCollector->GetGenerationCycle(generation)
+                                           : wCollector.GetGenerationCycle(generation);
     }
 
     GCCycleSnapshot GetCycleSnapshot(GCCycleGeneration generation) const override
@@ -61,10 +62,13 @@ public:
 
     void PublishGenerationPhase(GCCycleGeneration generation, GCPhase phase) override
     {
-        wCollector.PublishGenerationPhase(generation, phase);
+        (currentCollector != nullptr ? *currentCollector : wCollector).PublishGenerationPhase(generation, phase);
     }
 
-    void SetGCPhase(const GCPhase phase) override { currentCollector->SetGCPhase(phase); }
+    void SetGCPhase(GCCycleGeneration generation, const GCPhase phase) override
+    {
+        currentCollector->SetGCPhase(generation, phase);
+    }
 
     // dispatch garbage collection to the right collector
     MRT_EXPORT void RunGarbageCollection(uint64_t gcIndex, GCReason reason) override;

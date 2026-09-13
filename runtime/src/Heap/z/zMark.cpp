@@ -539,7 +539,7 @@ void WCollector::TraceHeap()
     if (concurrentStackScan) {
         ScopedStopTheWorld stw("major stack scan prepare", false);
         ZVerify::BeforeZOperation();
-        Heap::GetHeap().SetGCPhase(GCPhase::GC_PHASE_ENUM);
+        Heap::GetHeap().SetGCPhase(GCCycleGeneration::OLD, GCPhase::GC_PHASE_ENUM);
     }
 
     if (concurrentStackScan) {
@@ -1612,7 +1612,7 @@ void TracingCollector::StartOldMarkWork()
     if (majorMarkDomain == nullptr) {
         majorMarkDomain = std::make_unique<MarkDomain>(64, MarkingStacks::MarkingGeneration::MAJOR);
     }
-    GCWorkers& workers = collectorResources.GetWorkers(GCCycleGeneration::OLD);
+    GCWorkers& workers = GetWorkers(GCCycleGeneration::OLD);
     majorMarkDomain->BindWorkers(&workers);
     majorMarkDomain->BindAbort(&collectorResources.GetMajorDriverPort().Abort());
     majorMarkDomain->PrepareWork(workers.ActiveWorkers());

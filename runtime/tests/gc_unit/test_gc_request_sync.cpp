@@ -61,34 +61,24 @@ class CollectorResourcesTestPeer {
 public:
     static void Init(CollectorResources& resources, Collector& collector, bool startNearReceiptWrap)
     {
-        MRT_ASSERT(resources.taskQueue == nullptr, "gc_unit requires an uninitialized product task queue");
         resources.testCollector = &collector;
         resources.GetMinorDriverPort().Reset();
         resources.GetMajorDriverPort().Reset();
-        resources.taskQueue = new TaskQueue<GCExecutor>;
-        resources.taskQueue->Init();
         if (startNearReceiptWrap) {
             GCDriverPortTestPeer::SetNextSequence(resources.GetMajorDriverPort(),
                                                   std::numeric_limits<uint64_t>::max() - 1);
         }
-        resources.finishedGcIndex.store(resources.taskQueue->syncTaskIndex, std::memory_order_release);
-        resources.isGCActive.store(true, std::memory_order_release);
-    }
-
-    static bool ShouldWaitForIgnoredGcRequest(GCReason reason, bool async)
-    {
-        return CollectorResources::ShouldWaitForIgnoredGcRequest(reason, async);
     }
 
     static void RequestStop(CollectorResources& resources)
     {
-        TaskQueue<GCExecutor>::TaskFilter filter = [](GCExecutor&, GCExecutor&) { return false; };
-        GCExecutor task(GCTask::TaskType::TASK_TYPE_TERMINATE_GC);
-        (void)resources.taskQueue->EnqueueSync(task, filter);
+        resources.GetMinorDriverPort().Stop();
+        resources.GetMajorDriverPort().Stop();
     }
 
     static bool ExecuteDriverRequest(CollectorResources& resources, const GCDriverRequest& request)
     {
+        DriverLocker locker(resources);
         return resources.ExecuteDriverRequest(request);
     }
 
@@ -136,8 +126,6 @@ public:
 
     static void Destroy(CollectorResources& resources)
     {
-        delete resources.taskQueue;
-        resources.taskQueue = nullptr;
         resources.testCollector = nullptr;
         resources.testAfterYoungPrelude = {};
     }
@@ -182,7 +170,6 @@ public:
         }
         if (advanceEpoch) {
             youngCycle.Begin(gcIndex);
-            resources->SetGcStarted(true);
         }
         size_t runNumber = 0;
         {
@@ -191,13 +178,13 @@ public:
             reasons.push_back(reason);
             runNumber = indexes.size();
             entered.notify_all();
+            requestProgress.notify_all();
             release.wait(lock, [this, runNumber] { return releasedRuns >= runNumber; });
         }
         if (advanceEpoch) {
             youngCycle.End();
         }
         activeRuns.fetch_sub(1, std::memory_order_acq_rel);
-        resources->NotifyGCPhaseFinished(gcIndex);
     }
 
     bool WaitForRuns(size_t count)
@@ -235,7 +222,7 @@ public:
     {
         std::unique_lock<std::mutex> lock(mutex);
         return requestProgress.wait_for(lock, kHarnessHangLimit,
-                                        [this] { return ignoreChecks != 0 || requesterReturned; });
+                                        [this] { return !indexes.empty() || requesterReturned; });
     }
 
     bool HasRequesterReturned()
@@ -298,7 +285,8 @@ public:
         Heap::GetHeap().EnableGC(true);
         collector.SetResources(resources);
         CollectorResourcesTestPeer::Init(resources, collector, startNearReceiptWrap);
-        consumer = std::thread([this] { resources.RunTaskLoop(); });
+        consumer = std::thread([this] { CollectorResourcesTestPeer::RunDriverLoop(resources, GCDriverKind::MINOR); });
+        oldConsumer = std::thread([this] { CollectorResourcesTestPeer::RunDriverLoop(resources, GCDriverKind::MAJOR); });
     }
 
     ~RequestHarness() { Stop(); }
@@ -311,6 +299,7 @@ public:
         collector.ReleaseAll();
         CollectorResourcesTestPeer::RequestStop(resources);
         consumer.join();
+        oldConsumer.join();
         CollectorResourcesTestPeer::Destroy(resources);
         Heap::GetHeap().EnableGC(gcWasEnabled);
     }
@@ -321,6 +310,7 @@ public:
 private:
     bool gcWasEnabled;
     std::thread consumer;
+    std::thread oldConsumer;
 };
 
 struct SyncResult {
@@ -869,7 +859,7 @@ GC_TEST(GcRequestSync, DriverWaitInjectsTimeoutBackupRequest)
     CollectorResourcesTestPeer::Destroy(resources);
 }
 
-GC_TEST(GcRequestSync, MinorAndMajorDriversSerializeCollections)
+GC_TEST(GcRequestSync, YoungPreludeAndMinorShareDriverLock)
 {
     CollectorResources& resources = Heap::GetHeap().GetCollectorResources();
     BlockingCollector collector;
@@ -974,104 +964,15 @@ GC_TEST(GcRequestSync, ProfilerCollectGarbageEntryWaitsForOwnCompletion)
 }
 #endif
 
-GC_TEST(GcRequestSync, IgnoredStaticSyncReasonsWaitForCurrentGc)
+// ZDriver sends requests directly to its generation port. Legacy ignore
+// policy cannot replace a caller's synchronous completion with another cycle.
+GC_TEST(GcRequestSync, LegacyIgnorePolicyCannotSuppressSyncRequest)
 {
-    for (GCReason reason : { GC_REASON_OOM, GC_REASON_FORCE }) {
-        RequestHarness harness;
+    SyncResult result = RunSynchronousRequest([](RequestHarness& harness) {
         harness.collector.SetIgnoreRequests(true);
-        harness.resources.SetGcStarted(true);
-
-        std::promise<void> returnedPromise;
-        std::future<void> returned = returnedPromise.get_future();
-        std::atomic<bool> completionPublished{ false };
-        std::atomic<bool> returnedBeforeCompletion{ false };
-        std::thread requester([&] {
-            ThreadLocal::SetThreadType(ThreadType::FP_THREAD);
-            harness.resources.RequestGC(reason, true);
-            returnedBeforeCompletion.store(!completionPublished.load(std::memory_order_acquire),
-                                           std::memory_order_release);
-            returnedPromise.set_value();
-        });
-        JoinGuard requesterGuard(requester);
-
-        bool ignoredPathEntered = harness.collector.WaitForIgnoreChecks(1);
-        bool returnedBeforeFinish = returned.wait_for(std::chrono::seconds(0)) == std::future_status::ready;
-        completionPublished.store(true, std::memory_order_release);
-        harness.resources.NotifyGCFinished(GCTask::SYNC_TASK_MIN_INDEX);
-        bool returnedAfterFinish = returned.wait_for(kHarnessHangLimit) == std::future_status::ready;
-        if (!returnedAfterFinish) {
-            harness.Stop();
-        }
-        requester.join();
-        harness.Stop();
-
-        GC_EXPECT_TRUE(ignoredPathEntered);
-        GC_EXPECT_FALSE(returnedBeforeFinish);
-        GC_EXPECT_FALSE(returnedBeforeCompletion.load(std::memory_order_acquire));
-        GC_EXPECT_TRUE(returnedAfterFinish);
-        GC_EXPECT_TRUE(CollectorResourcesTestPeer::ShouldWaitForIgnoredGcRequest(reason, true));
-    }
-}
-
-GC_TEST(GcRequestSync, IgnoredUserSyncWaitsForCurrentGcCompletion)
-{
-    RequestHarness harness;
-    harness.collector.SetIgnoreRequests(true);
-    harness.resources.SetGcStarted(true);
-
-    std::promise<void> returnedPromise;
-    std::future<void> returned = returnedPromise.get_future();
-    std::atomic<bool> completionPublished{ false };
-    std::atomic<bool> returnedBeforeCompletion{ false };
-    std::thread requester([&] {
-        ThreadLocal::SetThreadType(ThreadType::FP_THREAD);
-        MCC_InvokeGCImpl(true);
-        returnedBeforeCompletion.store(!completionPublished.load(std::memory_order_acquire),
-                                       std::memory_order_release);
-        returnedPromise.set_value();
+        harness.resources.RequestGC(GC_REASON_USER, false);
     });
-    JoinGuard requesterGuard(requester);
-
-    bool ignoredPathEntered = harness.collector.WaitForIgnoreChecks(1);
-    bool returnedWhileGcStarted = returned.wait_for(std::chrono::seconds(0)) == std::future_status::ready;
-    completionPublished.store(true, std::memory_order_release);
-    harness.resources.NotifyGCFinished(GCTask::SYNC_TASK_MIN_INDEX);
-    bool returnedAfterCompletion = returned.wait_for(kHarnessHangLimit) == std::future_status::ready;
-    if (!returnedAfterCompletion) {
-        harness.Stop();
-    }
-    requester.join();
-    harness.Stop();
-
-    GC_EXPECT_TRUE(ignoredPathEntered);
-    GC_EXPECT_FALSE(returnedWhileGcStarted);
-    GC_EXPECT_FALSE(returnedBeforeCompletion.load(std::memory_order_acquire));
-    GC_EXPECT_TRUE(returnedAfterCompletion);
-}
-
-GC_TEST(GcRequestSync, IgnoredUserAsyncReturnsWhileCurrentGcIsActive)
-{
-    RequestHarness harness;
-    harness.collector.SetIgnoreRequests(true);
-    harness.resources.SetGcStarted(true);
-
-    std::promise<void> returnedPromise;
-    std::future<void> returned = returnedPromise.get_future();
-    std::thread requester([&] {
-        MCC_InvokeGCImpl(false);
-        returnedPromise.set_value();
-    });
-    JoinGuard requesterGuard(requester);
-
-    bool ignoredPathEntered = harness.collector.WaitForIgnoreChecks(1);
-    bool returnedWhileGcStarted = returned.wait_for(kHarnessHangLimit) == std::future_status::ready &&
-        harness.resources.IsGcStarted();
-    harness.resources.NotifyGCFinished(GCTask::SYNC_TASK_MIN_INDEX);
-    requester.join();
-    harness.Stop();
-
-    GC_EXPECT_TRUE(ignoredPathEntered);
-    GC_EXPECT_TRUE(returnedWhileGcStarted);
+    ExpectCompletedSync(result, GC_REASON_USER);
 }
 
 GC_TEST(GcRequestSync, SynchronousRequestsWaitForOwnCompletionAcrossReceiptWrap)

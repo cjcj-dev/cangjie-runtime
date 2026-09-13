@@ -73,16 +73,13 @@ void CollectorResources::Init()
 {
     minorDriverPort.Reset();
     majorDriverPort.Reset();
-    taskQueue = new TaskQueue<GCExecutor>;
-    taskQueue->Init();
-    finishedGcIndex = GCTask::SYNC_TASK_MIN_INDEX;
     ZStat::Initialize();
     GetGCStats(GCCycleGeneration::YOUNG).Init();
     GetGCStats(GCCycleGeneration::OLD).Init();
     ZStatMutatorAllocRate::initialize();
     const uint64_t now = TimeUtil::NanoSeconds();
-    youngCycle.Initialize(now);
-    oldCycle.Initialize(now);
+    collectorProxy.GetGenerationCycle(GCCycleGeneration::YOUNG).CycleStats().Initialize(now);
+    collectorProxy.GetGenerationCycle(GCCycleGeneration::OLD).CycleStats().Initialize(now);
     statistics.Start();
     StartGCThreads();
     finalizerProcessor.Start();
@@ -99,9 +96,6 @@ void CollectorResources::Fini()
 {
     MRT_ASSERT(!finalizerProcessor.IsRunning(), "Invalid finalizerProcessor status");
     MRT_ASSERT(!gcThreadRunning.load(std::memory_order_relaxed), "Invalid GC thread status");
-    taskQueue->Fini();
-    delete taskQueue;
-    taskQueue = nullptr;
     minorDriverPort.Stop();
     majorDriverPort.Stop();
 }
@@ -146,50 +140,19 @@ void CollectorResources::StopGCThreads()
 
 void CollectorResources::RunDriverLoop(GCDriverKind kind)
 {
-    gcTid.store(MapleRuntime::GetTid(), std::memory_order_release);
     GCDriverPort& port = kind == GCDriverKind::MINOR ? minorDriverPort : majorDriverPort;
-    const bool ownsControlQueue = kind == GCDriverKind::MAJOR;
-    while (true) {
-        GCDriverRequest request {};
-        if (TakeDriverRequest(port, request)) {
-            (void)ProcessDriverRequest(port, request);
-            continue;
-        }
-        // Stop closes the port and wakes all waiters.  A driver exits once its
-        // in-flight request has reached the acknowledgement point.
-        if (port.IsStopped()) {
-            break;
-        }
-
-        if (ownsControlQueue) {
-            GCExecutor controlTask;
-            if (taskQueue != nullptr && taskQueue->TryDequeue(controlTask)) {
-#if defined(MRT_GC_UNIT_TESTS)
-                void* owner = testCollector != nullptr ? static_cast<void*>(testCollector)
-                                                       : static_cast<void*>(&collectorProxy);
-#else
-                void* owner = static_cast<void*>(&collectorProxy);
-#endif
-                // Heap-dump/control work shares the driver lifecycle lock.
-                std::lock_guard<std::mutex> lock(driverLock);
-                if (!controlTask.Execute(owner)) {
-                    break;
-                }
-                continue;
-            }
-
-        }
-        std::this_thread::sleep_for(std::chrono::milliseconds(1));
+    GCDriverRequest request {};
+    while (TakeDriverRequest(port, request)) {
+        (void)ProcessDriverRequest(port, request);
     }
-    NotifyGCFinished(GCTask::TASK_INDEX_FOR_EXIT);
 }
 
 bool CollectorResources::TakeDriverRequest(GCDriverPort& port, GCDriverRequest& request)
 {
-    std::lock_guard<std::mutex> lock(directorMutex);
-    if (!port.TryDequeue(request)) {
+    if (!port.Receive(request)) {
         return false;
     }
+    std::lock_guard<std::mutex> lock(directorMutex);
     (port.Kind() == GCDriverKind::MINOR ? minorBusy : majorBusy) = true;
     return true;
 }
@@ -215,7 +178,8 @@ void CollectorResources::RunCollection(Collector& collector, uint64_t index, GCR
         return;
     }
 #endif
-    ZStatCycle& cycle = isYoung ? youngCycle : oldCycle;
+    ZStatCycle& cycle = collector.GetGenerationCycle(isYoung
+        ? GCCycleGeneration::YOUNG : GCCycleGeneration::OLD).CycleStats();
     const auto before = workers->GetSnapshot();
     const uint64_t start = TimeUtil::NanoSeconds();
     cycle.AtStart(start, before.elapsedNanos, before.workerNanos);
@@ -229,8 +193,6 @@ void CollectorResources::RunCollection(Collector& collector, uint64_t index, GCR
 bool CollectorResources::ExecuteDriverRequest(const GCDriverRequest& request)
 {
     CHECK(request.reason < GC_REASON_MAX);
-    // ZDriverLocker: old collection temporarily releases this lock.
-    std::lock_guard<std::mutex> lock(driverLock);
 #if defined(MRT_GC_UNIT_TESTS)
     Collector* collector = testCollector != nullptr ? testCollector : static_cast<Collector*>(&collectorProxy);
 #else
@@ -249,9 +211,9 @@ bool CollectorResources::ExecuteDriverRequest(const GCDriverRequest& request)
     const uint32_t oldCount = request.oldWorkers == 0 ? concurrentGcThreadCount : request.oldWorkers;
     const bool warmup = request.warmup;
     if (collector->GetGenerationCycle(GCCycleGeneration::YOUNG).Workers() != nullptr) {
-        GetWorkers(GCCycleGeneration::YOUNG).SetActiveWorkers(youngCount);
+        collector->GetGenerationCycle(GCCycleGeneration::YOUNG).Workers()->SetActiveWorkers(youngCount);
         if (request.reason != GC_REASON_YOUNG) {
-            GetWorkers(GCCycleGeneration::OLD).SetActiveWorkers(oldCount);
+            collector->GetGenerationCycle(GCCycleGeneration::OLD).Workers()->SetActiveWorkers(oldCount);
         }
     }
 
@@ -270,7 +232,7 @@ bool CollectorResources::ExecuteDriverRequest(const GCDriverRequest& request)
         }
 #endif
         if (majorDriverPort.Abort().Poll()) {
-            CancelDriverRequestLifecycle();
+            CancelDriverRequestLifecycle(port.Kind());
             return false;
         }
     }
@@ -284,65 +246,33 @@ bool CollectorResources::ExecuteDriverRequest(const GCDriverRequest& request)
     // A stop during marking or relocation is cancellation, even though the
     // collection call has returned after joining its work and page cleanup.
     if (port.Abort().Poll()) {
-        CancelDriverRequestLifecycle();
+        CancelDriverRequestLifecycle(port.Kind());
         return false;
     }
-    NotifyGCFinished(request.asynchronous ? GCTask::ASYNC_TASK_INDEX : request.sequence);
     return true;
 }
 
 bool CollectorResources::ProcessDriverRequest(GCDriverPort& port, const GCDriverRequest& request)
 {
+    DriverLocker locker(*this);
     if (port.Abort().Poll() || !ExecuteDriverRequest(request)) {
         port.Cancel(request);
         CompleteDriverRequest(port);
         return false;
     }
     port.Acknowledge(request);
+#if defined(MRT_GC_UNIT_TESTS)
+    testCompletionCount.fetch_add(1, std::memory_order_relaxed);
+#endif
     CompleteDriverRequest(port);
     return true;
 }
 
-void CollectorResources::CancelDriverRequestLifecycle()
+void CollectorResources::CancelDriverRequestLifecycle(GCDriverKind kind)
 {
-    std::unique_lock<std::mutex> lock(gcFinishedCondMutex);
-    gcFinishedCondVar.notify_all();
+    collectorProxy.GetGenerationCycle(kind == GCDriverKind::MINOR
+        ? GCCycleGeneration::YOUNG : GCCycleGeneration::OLD).End();
 }
-
-// For the ignored gc request, check whether need to wait for current gc finish
-void CollectorResources::PostIgnoredGcRequest(bool shouldWait)
-{
-    if (shouldWait && IsGcStarted()) {
-        ScopedEnterSaferegion safeRegion(false);
-        WaitForGCFinish();
-    }
-}
-
-#if defined(MRT_TESTABLE_INTERNALS)
-bool CollectorResources::ShouldWaitForIgnoredGcRequest(GCReason reason, bool async)
-{
-    return !async || g_gcRequests[reason].IsSyncGC();
-}
-
-bool CollectorResources::HasSyncTaskCompleted(uint64_t finishedIndex, uint64_t awaitedIndex)
-{
-    if (finishedIndex == GCTask::TASK_INDEX_FOR_EXIT) {
-        return true;
-    }
-    MRT_ASSERT(finishedIndex >= GCTask::SYNC_TASK_MIN_INDEX && finishedIndex < GCTask::ASYNC_TASK_INDEX,
-               "finished sync task index must not be a sentinel");
-    MRT_ASSERT(awaitedIndex >= GCTask::SYNC_TASK_MIN_INDEX && awaitedIndex < GCTask::ASYNC_TASK_INDEX,
-               "awaited sync task index must not be a sentinel");
-    constexpr uint64_t ringSize = GCTask::ASYNC_TASK_INDEX - GCTask::SYNC_TASK_MIN_INDEX;
-    constexpr uint64_t halfRing = ringSize / 2;
-    uint64_t finishedOrdinal = finishedIndex - GCTask::SYNC_TASK_MIN_INDEX;
-    uint64_t awaitedOrdinal = awaitedIndex - GCTask::SYNC_TASK_MIN_INDEX;
-    uint64_t forwardDistance = finishedOrdinal >= awaitedOrdinal
-        ? finishedOrdinal - awaitedOrdinal
-        : ringSize - awaitedOrdinal + finishedOrdinal;
-    return forwardDistance <= halfRing;
-}
-#endif
 
 void CollectorResources::RequestAsyncGC(GCReason reason)
 {
@@ -372,55 +302,12 @@ void CollectorResources::RequestGC(GCReason reason, bool async)
         return;
     }
 
-    GCRequest& request = g_gcRequests[reason];
-    uint64_t curTime = TimeUtil::NanoSeconds();
-    request.SetPrevRequestTime(curTime);
-#if defined(MRT_GC_UNIT_TESTS)
-    Collector& requestOwner = testCollector != nullptr ? *testCollector : static_cast<Collector&>(collectorProxy);
-#else
-    CollectorProxy& requestOwner = collectorProxy;
-#endif
-    if (requestOwner.ShouldIgnoreRequest(request)) {
-        DLOG(ALLOC, "ignore gc request");
-        PostIgnoredGcRequest(ShouldWaitForIgnoredGcRequest(reason, async));
-    } else if (async) {
+    // zDriver.cpp:141-160/337-371: every accepted request goes to its port.
+    if (async) {
         RequestAsyncGC(reason);
     } else {
         RequestGCAndWait(reason);
     }
-}
-
-void CollectorResources::NotifyGCFinished(uint64_t gcIndex)
-{
-#if defined(MRT_GC_UNIT_TESTS)
-    testCompletionCount.fetch_add(1, std::memory_order_relaxed);
-#endif
-    std::unique_lock<std::mutex> lock(gcFinishedCondMutex);
-    if (gcIndex != GCTask::ASYNC_TASK_INDEX) { // sync gc, need set taskIndex
-        finishedGcIndex.store(gcIndex, std::memory_order_release);
-    }
-    gcFinishedCondVar.notify_all();
-    BroadcastGCCompletion();
-}
-
-void CollectorResources::WaitForGCFinish()
-{
-    uint64_t startTime = TimeUtil::MicroSeconds();
-    std::unique_lock<std::mutex> lock(gcFinishedCondMutex);
-    uint64_t curWaitGcIndex = finishedGcIndex.load();
-    std::function<bool()> pred = [this, curWaitGcIndex] {
-        return (!IsGcStarted() || (curWaitGcIndex != finishedGcIndex) ||
-                (finishedGcIndex == GCTask::TASK_INDEX_FOR_EXIT));
-    };
-#ifdef __OHOS__
-    std::chrono::seconds waitTime(2); // 2 seconds
-    gcFinishedCondVar.wait_for(lock, waitTime, pred);
-#else
-    gcFinishedCondVar.wait(lock, pred);
-#endif
-    uint64_t stopTime = TimeUtil::MicroSeconds();
-    uint64_t diffTime = stopTime - startTime;
-    VLOG(REPORT, "WaitForGCFinish cost %zu us", diffTime);
 }
 
 void CollectorResources::StartGCThreads()
@@ -485,9 +372,6 @@ void CollectorResources::StartGCThreads()
         (void)::pthread_join(minorDriverThread, nullptr);
         MRT_ASSERT(0, "pthread_create major driver failed!");
     }
-    // Keep the historical handle as an alias for diagnostics that name the
-    // collector's main thread; shutdown joins both concrete driver handles.
-    gcMainThread = majorDriverThread;
     if (::pthread_create(&directorThread, nullptr, CollectorResources::DirectorThreadEntry, this) != 0) {
         MRT_ASSERT(0, "pthread_create director failed!");
     }
@@ -507,22 +391,6 @@ int32_t CollectorResources::GetGCThreadCount(const bool isConcurrent) const
     return isConcurrent ? concurrentGcThreadCount : gcThreadCount;
 }
 
-void CollectorResources::BroadcastGCCompletion()
-{
-    gcWorking = 0;
-#if defined(_WIN64) || defined(__APPLE__)
-    WakeWhenGCDone();
-#else
-    (void)Futex(&gcWorking, FUTEX_WAKE_PRIVATE, INT_MAX);
-#endif
-}
-
-void CollectorResources::RequestHeapDump(GCTask::TaskType gcTask)
-{
-    TaskQueue<GCExecutor>::TaskFilter filter = [](GCExecutor&, GCExecutor&) { return false; };
-    GCExecutor dumpTask = GCExecutor(gcTask);
-    taskQueue->EnqueueSync(dumpTask, filter);
-}
 
 } // namespace MapleRuntime
 

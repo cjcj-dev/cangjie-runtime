@@ -58,7 +58,7 @@ void RegionInfo::NoteEnrolPhase()
     if (!Heap::GetHeap().GetCollectorResources().IsGcStarted()) {
         return;
     }
-    const GCPhase phase = Heap::GetHeap().GetGCPhase();
+    const GCPhase phase = Heap::GetHeap().GetGCPhase(GCCycleGeneration::OLD);
     const bool afterFlip = (phase == GCPhase::GC_PHASE_PREFORWARD || phase == GCPhase::GC_PHASE_FORWARD);
     std::atomic<uint64_t>& counter = afterFlip ? EnrolAfterFlip() : EnrolBeforeFlip();
     const uint64_t n = counter.fetch_add(1, std::memory_order_relaxed) + 1;

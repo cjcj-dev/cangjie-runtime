@@ -156,8 +156,9 @@ struct MarkPort203TestAccess {
     }
     static void Collect(WCollector& collector, bool major)
     {
-        collector.SetGCReason(major ? GC_REASON_USER : GC_REASON_YOUNG);
-        collector.DoGarbageCollection();
+        collector.GetGenerationCycle(major ? GCCycleGeneration::OLD : GCCycleGeneration::YOUNG)
+            .SelectReason(major ? GC_REASON_USER : GC_REASON_YOUNG);
+        collector.DoGarbageCollection(major ? GCCycleGeneration::OLD : GCCycleGeneration::YOUNG);
     }
 };
 }
@@ -348,7 +349,7 @@ void RunArrayCollection(const char* variant, size_t helpers, bool allocateBlack 
     WCollector collector(Heap::GetHeap().GetAllocator(), resources);
     RuntimeWorkers pool(helpers + 1u);
     MarkPort203TestAccess::Bind(resources, &collector, &pool, static_cast<int32_t>(helpers + 1));
-    collector.SetGCPhase(major ? GCPhase::GC_PHASE_IDLE : GCPhase::GC_PHASE_CLEAR_SATB_BUFFER);
+    collector.SetGCPhase(major ? GCCycleGeneration::OLD : GCCycleGeneration::YOUNG, major ? GCPhase::GC_PHASE_IDLE : GCPhase::GC_PHASE_CLEAR_SATB_BUFFER);
     auto& space = reinterpret_cast<RegionSpace&>(Heap::GetHeap().GetAllocator());
     space.GetRegionManager().EnlistFullThreadLocalRegion(fx.region1);
     space.GetRegionManager().AddRawPointerObject(children.back());
@@ -396,7 +397,9 @@ void RunArrayCollection(const char* variant, size_t helpers, bool allocateBlack 
     }
     const bool wasStarted = resources.IsGcStarted();
     const GCReason oldReason = resources.GetGCStats().reason;
-    resources.SetGcStarted(true);
+    auto& activityCycle = Heap::GetHeap().GetCollector().GetGenerationCycle(major ? GCCycleGeneration::OLD : GCCycleGeneration::YOUNG);
+    const bool ownerWasActive = activityCycle.Snapshot().active;
+    if (!ownerWasActive) activityCycle.Begin(1);
     resources.GetGCStats().reason = major ? GC_REASON_USER : GC_REASON_YOUNG;
     ArrayClosureResult result;
     result.region = fx.region1;
@@ -436,7 +439,7 @@ void RunArrayCollection(const char* variant, size_t helpers, bool allocateBlack 
     } else {
         Heap::GetHeap().RemoveExportObject(handle);
     }
-    resources.SetGcStarted(wasStarted);
+    if (!ownerWasActive) activityCycle.End();
     resources.GetGCStats().reason = oldReason;
     MarkPort203TestAccess::Bind(resources, nullptr, nullptr);
     if (result.allocationBuffer != nullptr) {

@@ -47,11 +47,9 @@ public:
     void LockDriver() { driverLock.lock(); }
     void UnlockDriver() { driverLock.unlock(); }
     void RequestGC(GCReason reason, bool async);
-    void WaitForGCFinish();
     // gc main loop
     // Notify that GC has finished.
     // Must be called by gc thread only
-    void NotifyGCFinished(uint64_t gcIndex);
     // A collector phase completes here. A driver-owned multi-phase request
     // suppresses this intermediate publication and publishes once at its end.
     int32_t GetGCThreadCount(const bool isConcurrent) const;
@@ -74,19 +72,13 @@ public:
     void UnblockResurrection() { resurrectionBlocked.store(false, std::memory_order_release); }
     bool IsResurrectionBlocked() const { return resurrectionBlocked.load(std::memory_order_acquire); }
 
-    bool IsHeapMarked() const { return isHeapMarked; }
-
-    void SetHeapMarked(bool value) { isHeapMarked = value; }
-
     bool IsGcStarted() const;
 
-    bool IsGCActive() const { return Heap::GetHeap().IsGCEnabled() && isGCActive.load(std::memory_order_relaxed); }
+    bool IsGCActive() const { return Heap::GetHeap().IsGCEnabled(); }
 
     FinalizerProcessor& GetFinalizerProcessor() { return finalizerProcessor; }
 
-    void BroadcastGCCompletion();
     GCStats& GetGCStats(GCCycleGeneration generation = GCCycleGeneration::OLD);
-    void RequestHeapDump(GCTask::TaskType gcTask);
 
     // ZGC-style per-generation request ports.  Requests on one port never
     // consume or coalesce requests from the other generation.
@@ -125,43 +117,12 @@ private:
     // reason: The reason for this GC.
     void RequestAsyncGC(GCReason reason);
     void RequestGCAndWait(GCReason reason);
-    void PostIgnoredGcRequest(bool shouldWait);
     bool ExecuteDriverRequest(const GCDriverRequest& request);
     bool ProcessDriverRequest(GCDriverPort& port, const GCDriverRequest& request);
-    void CancelDriverRequestLifecycle();
-#if defined(MRT_TESTABLE_INTERNALS)
-    MRT_EXPORT static bool ShouldWaitForIgnoredGcRequest(GCReason reason, bool async);
-    MRT_EXPORT static bool HasSyncTaskCompleted(uint64_t finishedIndex, uint64_t awaitedIndex);
-#else
-    ALWAYS_INLINE static inline bool ShouldWaitForIgnoredGcRequest(GCReason reason, bool async)
-    {
-        return !async || g_gcRequests[reason].IsSyncGC();
-    }
-
-    ALWAYS_INLINE static inline bool HasSyncTaskCompleted(uint64_t finishedIndex, uint64_t awaitedIndex)
-    {
-        if (finishedIndex == GCTask::TASK_INDEX_FOR_EXIT) {
-            return true;
-        }
-        MRT_ASSERT(finishedIndex >= GCTask::SYNC_TASK_MIN_INDEX && finishedIndex < GCTask::ASYNC_TASK_INDEX,
-                   "finished sync task index must not be a sentinel");
-        MRT_ASSERT(awaitedIndex >= GCTask::SYNC_TASK_MIN_INDEX && awaitedIndex < GCTask::ASYNC_TASK_INDEX,
-                   "awaited sync task index must not be a sentinel");
-        constexpr uint64_t ringSize = GCTask::ASYNC_TASK_INDEX - GCTask::SYNC_TASK_MIN_INDEX;
-        constexpr uint64_t halfRing = ringSize / 2;
-        uint64_t finishedOrdinal = finishedIndex - GCTask::SYNC_TASK_MIN_INDEX;
-        uint64_t awaitedOrdinal = awaitedIndex - GCTask::SYNC_TASK_MIN_INDEX;
-        uint64_t forwardDistance = finishedOrdinal >= awaitedOrdinal
-            ? finishedOrdinal - awaitedOrdinal
-            : ringSize - awaitedOrdinal + finishedOrdinal;
-        return forwardDistance <= halfRing;
-    }
-#endif
-
+    void CancelDriverRequestLifecycle(GCDriverKind kind);
     // zCollectedHeap.hpp: heap-owned safepoint workers, separate from both generations.
     RuntimeWorkers* runtimeWorkers = nullptr;
     int32_t gcThreadCount = 1;
-    TaskQueue<GCExecutor>* taskQueue = nullptr;
     GCDriverPort minorDriverPort { GCDriverKind::MINOR };
     GCDriverPort majorDriverPort { GCDriverKind::MAJOR };
     // zDriver.cpp:59-72: held by young; old releases it for its body.
@@ -184,46 +145,11 @@ private:
     bool minorBusy = false;
     bool majorBusy = false;
     ZStat statistics;
-    ZStatCycle youngCycle;
-    ZStatCycle oldCycle;
-    pthread_t gcMainThread = 0;
     pthread_t minorDriverThread = 0;
     pthread_t majorDriverThread = 0;
     int32_t concurrentGcThreadCount = 1;
-    std::atomic<pid_t> gcTid{ 0 };
     std::atomic<bool> gcThreadRunning = { false };
-    // finishedGcIndex records the currently finished gcIndex
-    // may be read by mutator but only be written by gc thread sequentially
-    std::atomic<uint64_t> finishedGcIndex = { 0 };
-    // protect condition_variable gcFinishedCondVar's status.
-    std::mutex gcFinishedCondMutex;
-    // notified when GC finished, requires gcFinishedCondMutex
-    std::condition_variable gcFinishedCondVar;
-
-    // a switch to disable gc for hotupdate.
-    std::atomic<bool> isGCActive = { true };
-
-    // only gc thread can access it, so we don't use atomic type
-    bool isHeapMarked = false;
     std::atomic<bool> resurrectionBlocked { false };
-    // Represent the number of returned raw pointer
-    std::atomic<int> criticalNum{ 0 };
-    int gcWorking = 0;
-#if defined(_WIN64) || defined(__APPLE__)
-    std::condition_variable gcWorkingCV;
-    std::mutex gcWorkingMtx;
-    __attribute__((always_inline)) inline void WaitUntilGCDone()
-    {
-        std::unique_lock<std::mutex> gcWorkingLck(gcWorkingMtx);
-        gcWorkingCV.wait(gcWorkingLck);
-    }
-
-    __attribute__((always_inline)) inline void WakeWhenGCDone()
-    {
-        std::unique_lock<std::mutex> gcWorkingLck(gcWorkingMtx);
-        gcWorkingCV.notify_all();
-    }
-#endif
     CollectorProxy& collectorProxy;
     FinalizerProcessor finalizerProcessor;
 };

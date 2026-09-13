@@ -171,3 +171,17 @@ size_t GCDriverPort::Pending() const
 }
 
 } // namespace MapleRuntime
+
+namespace MapleRuntime {
+bool GCDriverPort::Receive(GCDriverRequest& request)
+{
+    std::unique_lock<std::mutex> lock(mutex);
+    condition.wait(lock, [this] { return stopped || !requests.empty(); });
+    if (stopped) {
+        return false;
+    }
+    request = std::move(requests.front());
+    requests.pop_front();
+    return true;
+}
+}

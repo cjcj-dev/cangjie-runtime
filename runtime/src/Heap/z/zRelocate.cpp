@@ -276,7 +276,7 @@ BaseObject* WCollector::ForwardUpdateRawRef(ObjectRef& root, Generation generati
             DLOG(FIX, "fix raw-ref @%p: %p -> %p", &root, oldObj, mapped);
             return mapped;
         }
-        const GCPhase phase = GetGCPhase();
+        const GCPhase phase = GetGCPhase(static_cast<GCCycleGeneration>(generation));
         if (phase != GCPhase::GC_PHASE_PREFORWARD && phase != GCPhase::GC_PHASE_FORWARD) {
             Collector::FailClosedLoad(
                 "WCollector::ForwardUpdateRawRef.unresolved", oldObj,
@@ -1208,7 +1208,7 @@ void WCollector::EvacuateYoungRegions(const std::vector<BaseObject*>& reachableV
             MRT_PHASE_TIMER(ZStatPhases::PYoungConcurrentRelocate);
             VLOG(REPORT, "[GCV2][relocate][conc] concurrent_relocate start nObj=%zu flip=1",
                  reachableVec.size());
-            ForwardFromSpace();
+            ForwardFromSpace(GCCycleGeneration::YOUNG);
 #if defined(MRT_TESTABLE_INTERNALS)
             RunRemapWindowTestHook(4, nullptr, nullptr);
 #endif
@@ -1593,7 +1593,7 @@ BaseObject* WCollector::TryMutatorRelocate(BaseObject* obj, RegionInfo::RetainSc
 {
     // ForwardObjectImpl opens with CHECK(phase == PREFORWARD || FORWARD). relocate_or_remap
     // is reachable from barriers in other phases, so screen here rather than trip that CHECK.
-    GCPhase phase = GetGCPhase();
+    GCPhase phase = GetGCPhase(static_cast<GCCycleGeneration>(ObjectGeneration(obj)));
     if (phase != GCPhase::GC_PHASE_PREFORWARD && phase != GCPhase::GC_PHASE_FORWARD) {
         return nullptr;
     }
@@ -1606,7 +1606,7 @@ BaseObject* WCollector::TryMutatorRelocate(BaseObject* obj, RegionInfo::RetainSc
     // SetGCPhase publishes before handshake, so a mutator that retained across
     // FORWARD→IDLE must not enter ForwardObjectImpl's CHECK. Release and let
     // the existing FindToVersion / wait legs consume the published table.
-    phase = GetGCPhase();
+    phase = GetGCPhase(static_cast<GCCycleGeneration>(ObjectGeneration(obj)));
     if (phase != GCPhase::GC_PHASE_PREFORWARD && phase != GCPhase::GC_PHASE_FORWARD) {
         lease.Release();
         return nullptr;
@@ -1741,7 +1741,7 @@ BaseObject* WCollector::ResolveStoreValue(BaseObject* ref, const ForwardingProve
                 static_cast<unsigned>(lookup.answer),
                 static_cast<unsigned long long>(lookup.fromPageEpoch),
                 static_cast<unsigned long long>(lookup.fromPageLifeId),
-                static_cast<unsigned>(GetGCPhase()),
+                static_cast<unsigned>(GetGCPhase(GCCycleGeneration::OLD)),
                 live != nullptr && live->IsCompacted() ? 1u : 0u,
                 live != nullptr ? live->RelocateObserve() : 0u,
                 reinterpret_cast<void*>(lookup.to),
@@ -1872,7 +1872,7 @@ BaseObject* WCollector::TryForwardObject(BaseObject* obj, Generation generation)
     if (BaseObject* winner = FindToVersion(obj, generation).found()) return winner;
     RegionInfo* region = RegionInfo::GetGhostFromRegionAt(reinterpret_cast<MAddress>(obj));
     if (region == nullptr) return nullptr;
-    const GCPhase phase = GetGCPhase();
+    const GCPhase phase = GetGCPhase(static_cast<GCCycleGeneration>(ObjectGeneration(obj)));
     if (phase != GCPhase::GC_PHASE_PREFORWARD && phase != GCPhase::GC_PHASE_FORWARD) return nullptr;
     RegionInfo::RetainScope lease(region);
     if (!lease.ok()) return WaitForPageForwarding(obj, lease.HoldForwarding());
@@ -1894,7 +1894,7 @@ BaseObject* WCollector::ForwardObjectImpl(BaseObject* obj, RegionInfo* ghostFrom
 #if defined(MRT_TESTABLE_INTERNALS)
     RunRemapWindowTestHook(8, ghostFromRegion, obj);
 #endif
-    CHECK(GetGCPhase() == GCPhase::GC_PHASE_PREFORWARD || GetGCPhase() == GCPhase::GC_PHASE_FORWARD);
+    CHECK(GetGCPhase(static_cast<GCCycleGeneration>(ObjectGeneration(obj))) == GCPhase::GC_PHASE_PREFORWARD || GetGCPhase(static_cast<GCCycleGeneration>(ObjectGeneration(obj))) == GCPhase::GC_PHASE_FORWARD);
 
     // zRelocate.cpp:382-410 relocate_object: find hit → return; else retain
     // already held by the caller lease; inner allocate→copy→insert (CAS

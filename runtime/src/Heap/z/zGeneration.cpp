@@ -43,6 +43,8 @@
 #include "Heap/WCollector/WCollectorInternal.h"
 
 namespace MapleRuntime {
+void ResetSkippedStackMapCounts();
+void ReportSkippedStackMapCounts();
 // ZGenerationYoung::mark_start (zGeneration.cpp:871-880). Called under the
 // young mark-start safepoint; sequence readers cannot observe half this event.
 void GenerationCycle::StartYoungMark(RememberedSet& rememberedSet)

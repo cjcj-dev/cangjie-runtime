@@ -115,7 +115,7 @@ inline ATTR_COLD ATTR_NO_INLINE void RegionInfo::ReportTypeInfoInHeap(const Base
     {
         size_t n = tipInHeapHits.fetch_add(1, std::memory_order_relaxed) + 1;
         if (n == 1) {
-            GCPhase phase = Heap::GetHeap().GetGCPhase();
+            GCPhase phase = Heap::GetHeap().GetGCPhase(GCCycleGeneration::OLD);
             LOG(RTLOG_ERROR,
                 "[GCV2][tipguard][TYPEINFO_IN_HEAP] obj=%p tip=%p objSize=%zu region=%p regionStart=%#zx "
                 "regionEnd=%#zx allocPtr=%#zx regionType=%u young=%u phase=%u "
@@ -135,7 +135,7 @@ NO_RETURN inline ATTR_COLD ATTR_NO_INLINE void RegionInfo::ReportInvalidObjectSi
         size_t bitCapacity = (regionEnd - regionStart) / kMarkedBytesPerBit;
         size_t bitIndex = objAddr >= regionStart ? (objAddr - regionStart) / kMarkedBytesPerBit :
                                                    std::numeric_limits<size_t>::max();
-        GCPhase phase = Heap::GetHeap().GetGCPhase();
+        GCPhase phase = Heap::GetHeap().GetGCPhase(GCCycleGeneration::OLD);
         LOG(RTLOG_FATAL,
             "[GCV2][sizeguard][INVALID_OBJECT_SIZE] obj=%p objSize=%zu region=%p regionStart=%#zx "
             "regionEnd=%#zx allocPtr=%#zx regionType=%u unitRole=%u young=%u phase=%u bitCap=%zu bitIdx=%zu align=%zu",

@@ -144,7 +144,7 @@ Mutator* MutatorManager::CreateMutator()
         mutator->Init();
         mutator->InitTid();
         BindMutator(*mutator);
-        mutator->SetMutatorPhase(Heap::GetHeap().GetGCPhase());
+        mutator->SetMutatorPhase(Heap::GetHeap().GetGCPhase(GCCycleGeneration::OLD));
         // dynjoin (乙): under active epoch, born-clean exclude (not wait-set join).
         ExcludeNewMutatorFromActiveEpoch(*mutator);
         ConcurrencyModel::SetMutator(mutator);
@@ -153,7 +153,7 @@ Mutator* MutatorManager::CreateMutator()
         mutator->Init();
         mutator->InitTid();
         BindMutator(*mutator);
-        mutator->SetMutatorPhase(Heap::GetHeap().GetGCPhase());
+        mutator->SetMutatorPhase(Heap::GetHeap().GetGCPhase(GCCycleGeneration::OLD));
         ExcludeNewMutatorFromActiveEpoch(*mutator);
     }
     MutatorManagementRUnlock();
@@ -231,7 +231,7 @@ Mutator* MutatorManager::CreateRuntimeMutator(ThreadType threadType)
     mutator->InitProtectStackAddr();
     mutator->SetManagedContext(false);
     MutatorManager::Instance().BindMutator(*mutator);
-    mutator->SetMutatorPhase(Heap::GetHeap().GetGCPhase());
+    mutator->SetMutatorPhase(Heap::GetHeap().GetGCPhase(GCCycleGeneration::OLD));
     {
         std::lock_guard<std::mutex> lock(runtimeMutatorRegistryMutex);
         runtimeMutators.insert(mutator);
@@ -1115,15 +1115,16 @@ void MutatorManager::StartLightSync(bool syncGCPhase, GCPhase phase)
     }
 
     DLOG(GCPHASE, "transition gc: %s(%u) -> %s(%u)",
-         Collector::GetGCPhaseName(Heap::GetHeap().GetGCPhase()), Heap::GetHeap().GetGCPhase(),
+         Collector::GetGCPhaseName(Heap::GetHeap().GetGCPhase(GCCycleGeneration::OLD)), Heap::GetHeap().GetGCPhase(GCCycleGeneration::OLD),
          Collector::GetGCPhaseName(phase), phase);
 
     // Set global gc phase in the scope of mutatorlist lock
-    Heap::GetHeap().SetGCPhase(young ? GCCycleGeneration::YOUNG : GCCycleGeneration::OLD, phase);
+    Heap::GetHeap().SetGCPhase(GCCycleGeneration::OLD, phase);
     lightSyncGCPhase = phase;
     undoneLightSyncMutators.clear();
     // Broadcast mutator phase transition signal to all mutators
     VisitAllMutators([this](Mutator& mutator) {
+        mutator.SetEnumYoung(false);
         mutator.SetSuspensionFlag(Mutator::SuspensionType::SUSPENSION_FOR_GC_PHASE);
         this->undoneLightSyncMutators.push_back(&mutator);
     });
@@ -1241,7 +1242,7 @@ void MutatorManager::TransitionAllMutatorsToGCPhase(GCPhase phase, bool young)
     }
 
     DLOG(GCPHASE, "transition gc: %s(%u) -> %s(%u)",
-         Collector::GetGCPhaseName(Heap::GetHeap().GetGCPhase()), Heap::GetHeap().GetGCPhase(),
+         Collector::GetGCPhaseName(Heap::GetHeap().GetGCPhase(GCCycleGeneration::OLD)), Heap::GetHeap().GetGCPhase(GCCycleGeneration::OLD),
          Collector::GetGCPhaseName(phase), phase);
 
     // Set global gc phase in the scope of mutatorlist lock

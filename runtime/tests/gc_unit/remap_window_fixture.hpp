@@ -74,7 +74,7 @@ void ForwardDomainHook(unsigned point, RegionInfo* region, BaseObject* object)
     std::unique_lock<std::mutex> lock(state.mutex);
     if (point == 7) {
         GC_EXPECT_FALSE(state.kept->IsForwardingDone());
-        GC_EXPECT_TRUE(state.collector->GetGCPhase() == GCPhase::GC_PHASE_POST_TRACE);
+        GC_EXPECT_TRUE(state.collector->GetGCPhase(GCCycleGeneration::YOUNG) == GCPhase::GC_PHASE_POST_TRACE);
         state.window = true;
         state.cv.notify_all();
         state.Wait(lock, state.entered, "domain-wait-entry");
@@ -248,7 +248,7 @@ void RemapWindowHook(unsigned point, RegionInfo* region, BaseObject* object)
     auto& state = *remapWindow;
     std::unique_lock<std::mutex> lock(state.mutex);
     if (point == 7 && !state.copyOnly) {
-        GC_EXPECT_TRUE(state.collector->GetGCPhase() == GCPhase::GC_PHASE_POST_TRACE);
+        GC_EXPECT_TRUE(state.collector->GetGCPhase(GCCycleGeneration::YOUNG) == GCPhase::GC_PHASE_POST_TRACE);
         state.window = true;
         state.cv.notify_all();
         state.Wait(lock, state.entered, "WaitRouted-entry");
@@ -410,20 +410,21 @@ void RunRemapWindow(bool copyOnly, ForwardDomain domain = ForwardDomain::None, b
     CollectorResources& resources = Heap::GetHeap().GetCollectorResources();
     WCollector collector(Heap::GetHeap().GetAllocator(), resources);
     RelocationReceiptTestAccess::BindCollector(resources, &collector);
-    collector.SetGCPhase(GCPhase::GC_PHASE_CLEAR_SATB_BUFFER);
+    collector.SetGCPhase(GCCycleGeneration::YOUNG, GCPhase::GC_PHASE_CLEAR_SATB_BUFFER);
     RuntimeWorkers pool(parallel ? 2u : 1u);
     RelocationReceiptTestAccess::BindRuntimeWorkers(resources, &pool);
-    GCWorkers youngWorkers(GCWorkers::Generation::YOUNG, parallel ? 2u : 1u);
-    GCWorkers oldWorkers(GCWorkers::Generation::OLD, 1u);
-    youngWorkers.SetActive();
-    RelocationReceiptTestAccess::BindWorkers(resources, &youngWorkers, &oldWorkers);
+    collector.GetGenerationCycle(GCCycleGeneration::YOUNG).InitializeWorkers(parallel ? 2u : 1u);
+    collector.GetGenerationCycle(GCCycleGeneration::OLD).InitializeWorkers(1);
+    collector.GetGenerationCycle(GCCycleGeneration::YOUNG).Workers()->SetActive();
     Heap::GetHeap().GetRememberedSet().Initialize(fx.heapStart, GcHeapFixture::kUnits * RegionInfo::UNIT_SIZE);
     RememberedSet producerRememberedSet;
     producerRememberedSet.Initialize(fx.heapStart, GcHeapFixture::kUnits * RegionInfo::UNIT_SIZE);
     TestTraceBarrier barrier(collector, producerRememberedSet);
     Mutator producer;
     ThreadLocal::SetMutator(&producer);
-    resources.SetGcStarted(true);
+    auto& activityCycle = Heap::GetHeap().GetCollector().GetGenerationCycle(GCCycleGeneration::OLD);
+    const bool ownerWasActive = activityCycle.Snapshot().active;
+    if (!ownerWasActive) activityCycle.Begin(1);
     resources.GetGCStats().reason = GC_REASON_YOUNG;
     auto* field = &HeapSlotAt<>(reinterpret_cast<MAddress>(fx.obj0) + TYPEINFO_PTR_SIZE);
     barrier.Record(fx.obj0, reinterpret_cast<MAddress>(field), fx.obj1);
@@ -564,7 +565,8 @@ void RunRemapWindow(bool copyOnly, ForwardDomain domain = ForwardDomain::None, b
     }
     // OTHER_VM owns the mapped heap and product metadata until exit.
     // No teardown may re-interpret a page whose forwarding life was retired.
-    RelocationReceiptTestAccess::BindWorkers(resources, nullptr, nullptr);
+    collector.GetGenerationCycle(GCCycleGeneration::YOUNG).StopWorkers();
+    collector.GetGenerationCycle(GCCycleGeneration::OLD).StopWorkers();
     RelocationReceiptTestAccess::BindRuntimeWorkers(resources, nullptr);
     RelocationReceiptTestAccess::BindCollector(resources, nullptr);
     std::fflush(stderr);

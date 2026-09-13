@@ -313,7 +313,7 @@ public:
 
     void ResurrectExportObject(BaseObject* obj)
     {
-        auto phase = GetGCPhase();
+        auto phase = GetGCPhase(static_cast<GCCycleGeneration>(ObjectGeneration(obj)));
         std::lock_guard<std::mutex> lg(resurrectExportMtx);
         if (phase != GCPhase::GC_PHASE_PREFORWARD && phase != GCPhase::GC_PHASE_FORWARD) {
             resurrectedExportObjectes.insert(ResolveCurrentValueRoot(
@@ -396,10 +396,6 @@ public:
 
     Allocator& GetAllocator() const { return theAllocator; }
 
-    bool IsHeapMarked() const { return collectorResources.IsHeapMarked(); }
-
-    void SetHeapMarked(bool value) { collectorResources.SetHeapMarked(value); }
-
 
     void RunGarbageCollection(uint64_t, GCReason) override = 0;
 
@@ -480,7 +476,7 @@ protected:
     void EnumAllCommonRoots(GCWorkers& workers, RootSet& rootSet);
     GCWorkers& GetWorkers(GCCycleGeneration generation) const
     {
-        return collectorResources.GetWorkers(generation);
+        return *(generation == GCCycleGeneration::YOUNG ? youngCycle : oldCycle).Workers();
     }
     // enum roots referenced by foreign languages.
     void EnumAllExportRoots(RootSet& foreignRootsSet);

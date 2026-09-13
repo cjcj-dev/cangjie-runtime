@@ -340,7 +340,7 @@ bool FreeRegionManager::TakeUncommitMemory(size_t maxBytes, uint64_t idleBeforeN
         RegionInfo* region = RegionInfo::TryGetRegionInfoAt(RegionInfo::GetUnitAddress(extent.index));
         bool inRelocate = false;
         if (Heap::GetHeap().IsGcStarted()) {
-            const GCPhase phase = Heap::GetHeap().GetGCPhase();
+            const GCPhase phase = Heap::GetHeap().GetGCPhase(region->IsYoungRegion() ? GCCycleGeneration::YOUNG : GCCycleGeneration::OLD);
             inRelocate = phase == GCPhase::GC_PHASE_POST_TRACE ||
                          phase == GCPhase::GC_PHASE_PREFORWARD ||
                          phase == GCPhase::GC_PHASE_FORWARD;

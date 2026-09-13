@@ -468,7 +468,7 @@ public:
         if (obj != nullptr) {
             RegionInfo* ghost = RegionInfo::GetGhostFromRegionAt(reinterpret_cast<MAddress>(obj));
             if (ghost != nullptr && !ghost->IsUnmovableFromRegion()) {
-                const GCPhase p = GetGCPhase();
+                const GCPhase p = GetGCPhase(static_cast<GCCycleGeneration>(ghost->GetOwnerGeneration()));
                 if (p == GCPhase::GC_PHASE_PREFORWARD || p == GCPhase::GC_PHASE_FORWARD) {
                     const ForwardingProvenance provenance{
                         ForwardingHolderKind::HeapRef, this, &obj
@@ -800,7 +800,7 @@ protected:
         }
         LOG(RTLOG_ERROR, "[COLOURWHO] bad=%lu of %lu target=%p sc=%u typeInfo=0x%lx isFrom=%d isGhost=%d phase=%d",
             bad, seen, static_cast<void*>(target), stateCode, typeInfo, IsFromObject(target) ? 1 : 0,
-            IsGhostFromObject(target) ? 1 : 0, static_cast<int>(Heap::GetHeap().GetGCPhase()));
+            IsGhostFromObject(target) ? 1 : 0, static_cast<int>(Heap::GetHeap().GetGCPhase(GCCycleGeneration::OLD)));
     }
     mutable std::atomic<uint64_t> colourWhoTotal{ 0 };
     mutable std::atomic<uint64_t> colourWhoBad{ 0 };

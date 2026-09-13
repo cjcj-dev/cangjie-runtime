@@ -79,7 +79,7 @@ void ExceptionManager::OutOfMemory()
                 }
             }
 #else
-            Heap::GetHeap().GetCollectorResources().RequestHeapDump(GCTask::TaskType::TASK_TYPE_DUMP_HEAP_OOM);
+            Heap::GetHeap().DumpHeap(HeapDumpKind::OOM);
 #endif
         }
 #if defined(__OHOS__) && (__OHOS__ == 1)

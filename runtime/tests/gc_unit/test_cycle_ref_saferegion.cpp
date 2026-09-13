@@ -113,7 +113,7 @@ void FlipToPreforwardAfterFirstHandler(BaseObject*, BaseObject*)
     if (call == 1) {
         // Publish the product phase value that can change while the carrier
         // lock is released around a managed callback.
-        context->collector->SetGCPhase(GCPhase::GC_PHASE_PREFORWARD);
+        context->collector->SetGCPhase(GCCycleGeneration::OLD, GCPhase::GC_PHASE_PREFORWARD);
     }
 }
 
@@ -339,14 +339,14 @@ GC_TEST(CycleRefSaferegion, PreforwardRepostResumesRemainingCallbacksExactlyOnce
     context.collector = &collector;
     phaseFlipContext = &context;
     collector.SetCycleRefHandlerForTest(&FlipToPreforwardAfterFirstHandler);
-    collector.SetGCPhase(GCPhase::GC_PHASE_IDLE);
+    collector.SetGCPhase(GCCycleGeneration::OLD, GCPhase::GC_PHASE_IDLE);
     ThreadLocal::SetMutator(&resolverMutator);
 
     collector.ResolveCycleRef();
     const size_t callsBeforeResume = context.calls.load(std::memory_order_acquire);
-    const auto phaseBeforeResume = collector.GetGCPhase();
+    const auto phaseBeforeResume = collector.GetGCPhase(GCCycleGeneration::OLD);
 
-    collector.SetGCPhase(GCPhase::GC_PHASE_IDLE);
+    collector.SetGCPhase(GCCycleGeneration::OLD, GCPhase::GC_PHASE_IDLE);
     collector.ResolveCycleRef();
     const size_t callsAfterResume = context.calls.load(std::memory_order_acquire);
     collector.ResolveCycleRef();

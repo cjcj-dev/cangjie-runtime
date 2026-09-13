@@ -102,7 +102,9 @@ void CollectorResources::EvaluateDirector(uint64_t now)
         return;
     }
     auto& regions = static_cast<RegionSpace&>(Heap::GetHeap().GetAllocator()).GetRegionManager();
-    GcTriggerInputs in = ZStat::SampleDirectorStats(now, youngCycle, oldCycle, regions,
+    GcTriggerInputs in = ZStat::SampleDirectorStats(now,
+        collectorProxy.GetGenerationCycle(GCCycleGeneration::YOUNG).CycleStats(),
+        collectorProxy.GetGenerationCycle(GCCycleGeneration::OLD).CycleStats(), regions,
         GetWorkers(GCCycleGeneration::YOUNG), GetWorkers(GCCycleGeneration::OLD));
     in.minorBusy = minorBusy || minorDriverPort.Pending() != 0;
     in.majorBusy = majorBusy || majorDriverPort.Pending() != 0;

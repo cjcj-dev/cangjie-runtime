@@ -274,6 +274,7 @@ MAddress AllocBuffer::Allocate(size_t totalSize, AllocType allocType)
                         // Paint claims the mark bit, so publish an explicit Follow
                         // receipt into the same termination domain as barrier work.
                         BaseObject* allocated = reinterpret_cast<BaseObject*>(addr);
+                        Mutator* m = Mutator::GetMutator();
                         if (m != nullptr && m->IsManagedContext()) {
                             m->PublishYoungAllocBlack(allocated);
                         }

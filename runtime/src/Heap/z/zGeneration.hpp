@@ -9,6 +9,7 @@
 #include <mutex>
 #include <memory>
 #include "Heap/z/zWorkers.hpp"
+#include "Heap/z/zStat.hpp"
 #include "Heap/Collector/GcStats.h"
 #include "Heap/z/zGlobals.hpp"
 #include "Heap/Collector/GcRequest.h"
@@ -34,6 +35,7 @@ public:
     void StopWorkers();
     GCWorkers* Workers() const { return workers.get(); }
     GCStats& Stats() { return stats; }
+    ZStatCycle& CycleStats() { return cycleStats; }
     GCPhase Phase() const { return phase.load(std::memory_order_acquire); }
     uint64_t Sequence() const { return Snapshot().sequence; }
     GCReason Reason() const { return reason.load(std::memory_order_acquire); }
@@ -48,6 +50,7 @@ private:
     const GCCycleGeneration generation;
     std::unique_ptr<GCWorkers> workers;
     GCStats stats;
+    ZStatCycle cycleStats;
     mutable std::mutex mutex;
     uint64_t sequence = 0;
     uint64_t requestIndex = 0;
