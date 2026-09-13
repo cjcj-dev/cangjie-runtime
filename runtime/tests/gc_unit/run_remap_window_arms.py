@@ -18,7 +18,7 @@ import subprocess
 import time
 
 HEADER = "runtime/src/Heap/WCollector/WCollector.h"
-PRODUCER = "runtime/src/Heap/Allocator/RegionManager.cpp"
+PRODUCER = "runtime/src/Heap/Collector/zRelocate.cpp"
 ENTRY = "runtime/src/Heap/WCollector/WCollector.cpp"
 COPY = "runtime/src/Heap/Collector/CopyCollector.cpp"
 TESTS = (

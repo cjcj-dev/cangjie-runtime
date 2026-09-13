@@ -19,8 +19,8 @@
 
 #include "Base/Log.h"
 #include "Base/LogFile.h"
-#include "Heap/Allocator/ForwardingTable.h"
-#include "Heap/Allocator/RegionInfo.h"
+#include "Heap/Allocator/zForwardingTable.hpp"
+#include "Heap/Allocator/zPage.hpp"
 #include "Heap/Collector/LiveInfo.h"
 #include "Heap/Collector/Collector.h"
 #include "Heap/Collector/ZForwarding.h"

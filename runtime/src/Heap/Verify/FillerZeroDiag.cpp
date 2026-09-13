@@ -4,7 +4,7 @@
 #include <cstdio>
 #include <cstdlib>
 
-#include "Heap/Allocator/RegionInfo.h"
+#include "Heap/Allocator/zPage.hpp"
 
 namespace MapleRuntime {
 namespace FillerZeroDiag {

@@ -23,7 +23,7 @@
 #include "Base/TimeUtils.h"
 #include "Common/BaseObject.h"
 #include "Common/StateWord.h"
-#include "Heap/Allocator/RegionInfo.h"
+#include "Heap/Allocator/zPage.hpp"
 #include "Heap/Heap.h"
 #include "ObjectModel/MClass.inline.h"
 #include "ObjectModel/RefField.h"

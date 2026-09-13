@@ -12,9 +12,9 @@
 #include "Heap/Allocator/CartesianTree.h"
 #define private public
 #include "Heap/Allocator/FreeRegionManager.h"
-#include "Heap/Allocator/RegionManager.h"
+#include "Heap/Allocator/zPageAllocator.hpp"
 #undef private
-#include "Heap/Allocator/ForwardingTable.h"
+#include "Heap/Allocator/zForwardingTable.hpp"
 #include "Heap/Allocator/MemMap.h"
 #include "Heap/Allocator/RegionSpace.h"
 #include "Heap/Collector/Uncommitter.h"

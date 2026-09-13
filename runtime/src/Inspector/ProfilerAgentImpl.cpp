@@ -11,7 +11,7 @@
 #include "Heap/Collector/GcRequest.h"
 #include "Inspector/FileStream.h"
 #include "Inspector/CjAllocData.h"
-#include "Heap/Allocator/RegionInfo.h"
+#include "Heap/Allocator/zPage.hpp"
 #include "Heap/Allocator/AllocBuffer.h"
 #include "Inspector/ProfilerAgentImpl.h"
 namespace MapleRuntime {

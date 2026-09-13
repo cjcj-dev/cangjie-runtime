@@ -112,7 +112,7 @@ def main() -> int:
                 if re.search(r"\bsite\b", arguments) and path in {
                     REF_FIELD,
                     SRC / "Heap" / "WCollector" / "WCollector.cpp",
-                    SRC / "Heap" / "Collector" / "Relocate.cpp",
+                    SRC / "Heap" / "Collector" / "zRelocate.cpp",
                 }:
                     continue
                 failures.append(f"{function} call lacks explicit HealSite: {path.relative_to(REPO)}:{line}")

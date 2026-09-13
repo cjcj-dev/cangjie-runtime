@@ -7,7 +7,7 @@
 #include "Common/ColourEncoding.h"
 #include "Base/Log.h"
 #include "BaseObject.h"
-#include "Heap/Allocator/RegionInfo.h"
+#include "Heap/Allocator/zPage.hpp"
 #include "Heap/Collector/Collector.h"
 #include "Heap/Collector/FinalizerProcessor.h"
 #include "Heap/Heap.h"

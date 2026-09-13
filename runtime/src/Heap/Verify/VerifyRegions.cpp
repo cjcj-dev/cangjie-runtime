@@ -20,7 +20,7 @@
 #include <vector>
 
 #include "Allocator/RegionList.h"
-#include "Allocator/RegionManager.h"
+#include "Allocator/zPageAllocator.hpp"
 #include "Base/Log.h"
 #include "Base/LogFile.h"
 #include "Base/TimeUtils.h"
