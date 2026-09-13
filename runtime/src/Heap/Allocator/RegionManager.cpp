@@ -1976,6 +1976,14 @@ void ForEachLiveObjectStart(RegionInfo* region, MAddress start, MAddress allocPt
 // producer boundary so a receipt-less publication fails loudly.
 bool VerifyForwardingReceiptsClosed(RegionInfo* region, const char* site)
 {
+    // zRelocate.cpp:1006: verify before MarkForwardingDone/reset releases the
+    // source livemap. ForwardRegion's outer return is too late for this check.
+    if (ZVerifyForwarding && region != nullptr) {
+        auto forwarding = ForwardingTable::RetainPageOwner(region);
+        CHECK_DETAIL(static_cast<bool>(forwarding), "Missing forwarding at %s", site);
+        forwarding->verify();
+    }
+
     if (region == nullptr || !region->IsGhostFromRegion()) {
         return true;
     }
@@ -3141,7 +3149,6 @@ void RegionManager::ForwardRegion(RegionInfo* region)
         ~VerifyAfterRelocation()
         {
             ZVerify::AfterRelocation(forwarding);
-            if (ZVerifyForwarding && forwarding != nullptr) { forwarding->verify(); }
         }
     } verifyAfterRelocation { verifyForwarding.get() };
 
