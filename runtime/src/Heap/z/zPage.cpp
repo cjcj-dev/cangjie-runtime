@@ -276,12 +276,14 @@ bool RegionInfo::VisitLiveObjectsUntilFalse(const std::function<bool(BaseObject*
     return true;
 }
 
-// Keep both generation instantiations in the product carrier. Standalone
-// tests import the same mark-cycle implementation in every product configuration
-// instead of materializing a second inline copy in the test executable.
+#if defined(MRT_GC_UNIT_TESTS)
+// mc-r6: keep the unit-test-only mark-cycle entry points in the product
+// carrier.  Tests must import these instantiations from libcangjie-runtime.so
+// instead of instantiating a second copy in the test executable.
 template void RegionInfo::ClearLiveInfo<Generation::Young>(MarkView<Generation::Young>);
 template void RegionInfo::ClearLiveInfo<Generation::Old>(MarkView<Generation::Old>);
 
+#endif
 } // namespace MapleRuntime
 
 
