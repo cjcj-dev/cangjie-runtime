@@ -491,10 +491,7 @@ void RegionManager::ScrubRememberedSetForRegion(RegionInfo* region)
     (void)Heap::GetHeap().GetRememberedSet().ClearRegion(rStart, rEnd, nullptr);
 }
 
-void RegionManager::DumpScrubCostAndReset(const char* point)
-{
-    (void)point;
-}
+
 
 void RegionManager::ReclaimRegion(RegionInfo* region)
 {

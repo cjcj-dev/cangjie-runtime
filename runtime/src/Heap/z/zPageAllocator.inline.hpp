@@ -53,74 +53,8 @@ inline __attribute__((visibility("hidden"))) size_t RegionManager::GetMetadataSi
     template<Generation G>
 inline size_t RegionManager::CollectRegion(RegionInfo* region)
     {
-        MarkView<G> view = region->GetRouteMarkView<G>();
-        const bool knownEmpty = IsKnownEmptyForView(region, view);
         DLOG(REGION, "collect region %p@[%#zx+%zu, %#zx) type %u", region, region->GetRegionStart(),
              region->GetLiveByteCount(), region->GetRegionEnd(), region->GetRegionType());
-        // f3why2/livesame: always-on enter + knownEmpty_marked class.
-
-        // emptylive: epoch-split size-walk on knownEmpty (gate MRT_GCV2_EMPTYLIVE).
-
-        // Probe: knownEmpty region still holds valid object headers (gcreclaim / B2 H1).
-        {
-            // gcreclaim was written for exactly the question now in hand -- does a region we are
-            // about to declare empty still contain valid object headers, and are any of them
-            // marked. This live census stays until the corresponding blocker closes.
-            //
-            // What it decides: 45 of 45 unusable zero-header targets sit in regions this call
-            // classified knownEmpty with a real GetLiveByteCount() of 0.  validObjs > 0 there means
-            // the region was not empty at all, and markedObjs separates the two causes -- objects
-            // present but unmarked (the mark closure missed them) from objects marked while the
-            // emptiness test still said empty (the test and the bitmap disagree).
-            static constexpr bool probe = true;
-            if (probe && region != nullptr && knownEmpty) {
-                size_t start = region->GetRegionStart();
-                size_t alloc = region->GetRegionAllocPtr();
-                size_t end = region->GetRegionEnd();
-                size_t residual = alloc > start ? (alloc - start) : 0;
-                size_t validObjs = 0;
-                size_t markedObjs = 0;
-                if (residual > 0 && !region->IsLargeRegion()) {
-                    uintptr_t pos = start;
-                    while (pos < alloc) {
-                        BaseObject* o = from_region_addr(pos);
-                        if (!o->IsValidObject()) {
-                            break;
-                        }
-                        size_t sz = o->GetSize();
-                        if (sz == 0) {
-                            break;
-                        }
-                        ++validObjs;
-                        if (region->IsMarkedObject(view, o)) {
-                            ++markedObjs;
-                        }
-                        pos += sz;
-                    }
-                }
-                // A from-region that has finished evacuating legitimately looks like this: its
-                // from-copies are still readable and none of them are marked in the new view,
-                // because they moved.  35,498 of these were logged in one N=10 run, all with
-                // type=4 (LONE_FROM) route=5 (FORWARDED) markedObjs=0 -- correct behaviour, not a
-                // defect, and reporting it as one would have been a wrong conclusion drawn from a
-                // big number.  Narrow to the case that cannot be explained that way: a region
-                // holding valid objects that is not from-space at all.
-                const bool fromSpace = region->IsFromRegion() || region->IsLoneFromRegion() ||
-                    region->IsUnmovableFromRegion() || region->IsGhostFromRegion();
-                if (validObjs > 0 && !fromSpace) {
-                    // LOG rather than VLOG(REPORT): REPORT is gated on MRT_REPORT and lands in a
-                    // separate report.log.<pid> sink, which cost a turn earlier this session when a
-                    // probe looked silent because its output had gone somewhere else.
-                    LOG(RTLOG_ERROR,
-                         "[GCRECLAIM][empty-notfrom] region=%p start=%#zx alloc=%#zx end=%#zx type=%u young=%u "
-                         "live=%zu residual=%zu validObjs=%zu markedObjs=%zu route=%u BYPASS=1",
-                         region, start, alloc, end, region->GetRegionType(),
-                         static_cast<unsigned>(region->IsYoungRegion()), region->GetLiveByteCount(), residual,
-                         validObjs, markedObjs, static_cast<unsigned>(region->RelocateObserve()));
-                }
-            }
-        }
-
         // STEER3 CALLSITE_AUDIT: scrub HERE (once), not at ReclaimRegion.
         // Linux TakeRegion often reuses garbage via ClearUnits WITHOUT ReclaimRegion
         // (RegionManager.cpp TakeRegion same-size head path). Scrub-only-at-Reclaim
@@ -198,7 +132,6 @@ inline void RegionManager::ReclaimGarbageRegions()
             garbage = TakeReclaimableGarbageRegion();
         }
         // STEER3: scrub runs here (async reclaim), not inside young STW.
-        DumpScrubCostAndReset("post-reclaim-batch");
         SatisfyStalledAllocations();
     }
 
@@ -491,16 +424,6 @@ inline void ExecuteForwardTask(RegionManager& regionManager, RegionList& fromReg
         }
 
         RegionInfo* region = static_cast<RegionInfo*>(selected.request->owner());
-#if defined(MRT_GCV2_REGION_WAIT_DIAG)
-        static std::atomic<size_t> g_regionWaitClaim{ 0 };
-        const size_t claimN = g_regionWaitClaim.fetch_add(1, std::memory_order_relaxed) + 1;
-        if (claimN <= 8 || (claimN & (claimN - 1)) == 0) {
-            LOG(RTLOG_ERROR,
-                "[GCV2][region-wait-claim] n=%zu from=%p claim=1 pending=%zu",
-                claimN, reinterpret_cast<void*>(selected.request->from()),
-                regionManager.GetRelocationRequestQueue().PendingCount());
-        }
-#endif
         // If an ordinary iterator already removed the page, its worker will
         // lose the forwarding claim. This claimant still owns the page task.
         (void)fromRegionList.TryDeleteRegion(region, RegionInfo::RegionType::FROM_REGION,

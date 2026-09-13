@@ -87,7 +87,6 @@ begin=$(date --iso-8601=ns)
         printf 'env.MRT_REPORT=UNSET\n'
         printf 'env.MRT_GC_LOG=1\n'
     fi
-    printf 'env.MRT_GCV2_*=UNSET\n'
 } >"$out/meta.txt"
 
 observer_env=()

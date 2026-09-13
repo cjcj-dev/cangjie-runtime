@@ -2761,9 +2761,7 @@ void RegionManager::ForwardRegion(RegionInfo* region)
         // livesame ORDER + ZGC reset_livemap (zForwarding.cpp:71-74): one publish for
         // live bytes + mark face (ResetLiveMapAfterForward).
         {
-            region->VerifyLiveBooks(markView, "pre-ResetLiveMapAfterForward");
             region->ResetLiveMapAfterForward(markView);
-            region->VerifyLiveBooks(markView, "post-ResetLiveMapAfterForward");
             if (youngRegion) {
                 MarkView<Generation::Young> promotionView = region->GetMarkView<Generation::Young>();
                 (void)region->PromoteYoungRegion(promotionView);

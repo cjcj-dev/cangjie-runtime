@@ -480,6 +480,10 @@ void CopyCollector::RunGarbageCollection(uint64_t gcIndex, GCReason reason)
     g_gcTotalTimeUs.fetch_add(gcTimeNs / NS_PER_US, std::memory_order_release);
     g_gcCollectedTotalBytes.fetch_add(gcStats.collectedBytes, std::memory_order_release);
     gcStats.collectionRate = rate;
+    if (reason != GC_REASON_YOUNG) {
+        gcStats.RecordMajorGCFinish(TimeUtil::NanoSeconds(), gcTimeNs, Heap::GetHeap().GetAllocatedSize(),
+                                    gcStats.collectedBytes);
+    }
     // zStatHeap::at_relocate_end: publish only to the generation being collected.
     const bool young = reason == GC_REASON_YOUNG;
     const size_t usedAfter = Heap::GetHeap().GetAllocatedSize();

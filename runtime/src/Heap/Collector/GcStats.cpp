@@ -33,7 +33,6 @@ void GCStats::Init()
     for (size_t i = 0; i < 16; ++i) {
         liveByAge[i] = 0;
     }
-    youngHeuDeferralUsed = false;
 
     fromSpaceSize = 0;
     smallGarbageSize = 0;
@@ -58,66 +57,14 @@ void GCStats::Init()
          heapThreshold.load(std::memory_order_relaxed), maxCapacity);
 }
 
-GCStats::YoungHeuThrottleDecision GCStats::RecordYoungGCFinish(uint64_t timestamp, size_t allocatedAfter,
-                                                               size_t promotedBytes, size_t candidateBytes,
-                                                               size_t maxCapacity, uint64_t durationNs,
-                                                               uint64_t heuMinIntervalNs, bool deferralEnabled)
-{
-    if (!deferralEnabled) {
-        return YoungHeuThrottleDecision::DISABLED;
-    }
-    if (candidateBytes == 0) {
-        return YoungHeuThrottleDecision::NO_COLLECTION_SET;
-    }
 
-    // Stay well inside the copying major's half-heap to-space reserve. The
-    // quarter-heap limit is the measured safe point for bounded deferral.
-    const size_t majorSafetyLimit = maxCapacity / 4;
-    const bool oldPressureHigh = allocatedAfter >= majorSafetyLimit ||
-        promotedBytes >= majorSafetyLimit - allocatedAfter;
-    if (oldPressureHigh) {
-        return YoungHeuThrottleDecision::OLD_PRESSURE_HIGH;
-    }
-    // A short minor completed inside the suppression budget that was already
-    // established by the preceding major. Restarting the full window here
-    // would add latency without closing the slow-minor hole.
-    if (durationNs < heuMinIntervalNs) {
-        return YoungHeuThrottleDecision::WITHIN_EXISTING_HEU_WINDOW;
-    }
-    if (youngHeuDeferralUsed) {
-        return YoungHeuThrottleDecision::DEFERRAL_ALREADY_USED;
-    }
-
-    youngHeuDeferralUsed = true;
-    SetPrevGCFinishTime(timestamp);
-    return YoungHeuThrottleDecision::REFRESHED;
-}
 
 void GCStats::RecordMajorGCFinish(uint64_t timestamp, uint64_t, size_t, size_t)
 {
-    youngHeuDeferralUsed = false;
     SetPrevGCFinishTime(timestamp);
 }
 
-const char* GCStats::YoungHeuThrottleDecisionName(YoungHeuThrottleDecision decision)
-{
-    switch (decision) {
-        case YoungHeuThrottleDecision::REFRESHED:
-            return "refreshed";
-        case YoungHeuThrottleDecision::DISABLED:
-            return "disabled";
-        case YoungHeuThrottleDecision::NO_COLLECTION_SET:
-            return "no-collection-set";
-        case YoungHeuThrottleDecision::DEFERRAL_ALREADY_USED:
-            return "deferral-already-used";
-        case YoungHeuThrottleDecision::OLD_PRESSURE_HIGH:
-            return "old-pressure-high";
-        case YoungHeuThrottleDecision::WITHIN_EXISTING_HEU_WINDOW:
-            return "within-existing-window";
-        default:
-            return "invalid";
-    }
-}
+
 
 void GCStats::Dump() const
 {

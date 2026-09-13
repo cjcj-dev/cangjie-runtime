@@ -32,14 +32,12 @@ class BaseObject;
 // ZGC splits the array and pushes the remainder back onto the mark stack,
 // which makes the tail stealable by the other mark workers.
 //
-// Default ON; MRT_GCV2_PARTIAL_ARRAY=0 keeps the complete inline control path.
 namespace MarkPartialArray {
 
 // Partial-array payload bounds come from the typed MarkStackEntry layout.
 constexpr size_t MAX_LENGTH = static_cast<size_t>(MarkStackEntry::MAX_PARTIAL_ARRAY_LENGTH);
 constexpr size_t MAX_OFFSET = static_cast<size_t>(MarkStackEntry::MAX_PARTIAL_ARRAY_OFFSET);
 
-bool Enabled();
 
 using FieldVisitor = std::function<void(MAddress)>;
 using EntryPublisher = std::function<void(const MarkStackEntry&)>;
@@ -66,13 +64,6 @@ inline bool IsPartialArrayEntry(const MarkStackEntry& entry)
 bool Encodable(const void* chunkStart, size_t length);
 MarkStackEntry Encode(const void* chunkStart, size_t length, bool finalizable = false);
 void Decode(const MarkStackEntry& entry, MAddress& chunkStart, size_t& length);
-
-// Positive control: shows whether chunking actually happened.
-void NoteArraySplit();
-void NoteChunkPushed();
-void NoteChunkFollowed();
-void NoteNotEncodable();
-void Report(const char* point);
 
 } // namespace MarkPartialArray
 } // namespace MapleRuntime

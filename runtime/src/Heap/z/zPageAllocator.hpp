@@ -680,7 +680,6 @@ public:
     // Called on both CollectRegion and the direct large-region release path.
     static void ScrubRememberedSetForRegion(RegionInfo* region);
     // Emit + reset process-local scrub cost counters (STEER3).
-    static void DumpScrubCostAndReset(const char* point);
 
     void ReclaimGarbageRegions();
 

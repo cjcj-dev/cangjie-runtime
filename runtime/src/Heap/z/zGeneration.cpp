@@ -611,18 +611,6 @@ void WCollector::DoYoungGarbageCollection()
          "remembered=%zu reclaimedBytes=%zu pause=%zu us",
          minorTotalRuns, static_cast<unsigned>(fullYoungScan), stats.candidateRegions, stats.candidateBytes,
          liveBytes, liveRememberedCount, stats.reclaimedBytes, pauseUs);
-    // csetalloc: surface cumulative "would allocate into CSet" count (always-on counter,
-    // zero-cost when no hits; LOG only if non-zero so default noise stays quiet).
-    {
-        size_t into = RegionSpace::AllocIntoCSetCount();
-        size_t retired = RegionSpace::AllocIntoCSetRetiredCount();
-        if (into != 0 || retired != 0) {
-            VLOG(REPORT, "[GCV2][csetalloc] cumulative intoCSet=%zu retired=%zu (post-minor run=%zu)",
-                 into, retired, minorTotalRuns);
-        }
-    }
-    // STEER4: DumpScrubCostAndReset is a no-op unless MRT_GCV2_SCRUB_COST=1.
-    RegionManager::DumpScrubCostAndReset("post-minor");
 
 
 
@@ -974,7 +962,6 @@ void WCollector::DoGarbageCollection(GCCycleGeneration generation)
 {
     if (generation == GCCycleGeneration::YOUNG) {
         DoYoungGarbageCollection();
-        Collector::ReportMarkGoodHeapGateCounts();
         return;
     }
     // ZGenerationCollectionScopeOld: overlap young with the old body.
@@ -1016,7 +1003,6 @@ void WCollector::DoGarbageCollection(GCCycleGeneration generation)
     // Flush/Stamp/Promote in these STWs reintroduces 0/5 or residual 甲 under
     // FYS=0 SKIP_PINNED=1 512MB. Retained-liveness still applies on residual and
     // in-place promote paths that already preserve page liveness.
-    Collector::ReportMarkGoodHeapGateCounts();
 
 }
 }
@@ -1067,7 +1053,6 @@ void TracingCollector::PostGarbageCollection(GCCycleGeneration generation, uint6
     // cross-table has to be on stderr before the crash, not only at exit.
 
     // portarray: positive control for large-array chunking; self-gates, default off.
-    MarkPartialArray::Report("gc_end");
     ReportSkippedStackMapCounts();
     // release pages in PagePool
     TransitionToGCPhase(GCPhase::GC_PHASE_RECLAIM_SATB_NODE, true, generation == GCCycleGeneration::YOUNG);

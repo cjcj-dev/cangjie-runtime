@@ -22,15 +22,6 @@ namespace MapleRuntime {
 // statistics for previous gc.
 class GCStats {
 public:
-    enum class YoungHeuThrottleDecision : uint8_t {
-        REFRESHED,
-        DISABLED,
-        NO_COLLECTION_SET,
-        DEFERRAL_ALREADY_USED,
-        OLD_PRESSURE_HIGH,
-        WITHIN_EXISTING_HEU_WINDOW,
-    };
-
     GCStats() = default;
     ~GCStats() = default;
 
@@ -54,11 +45,6 @@ public:
         prevGcFinishTime.store(timestamp, std::memory_order_release);
     }
 
-    YoungHeuThrottleDecision RecordYoungGCFinish(uint64_t timestamp, size_t allocatedAfter,
-                                                 size_t promotedBytes, size_t candidateBytes,
-                                                 size_t maxCapacity, uint64_t durationNs,
-                                                 uint64_t heuMinIntervalNs, bool deferralEnabled);
-
     void RecordMajorGCFinish(uint64_t timestamp)
     {
         RecordMajorGCFinish(timestamp, 0, 0, 0);
@@ -67,7 +53,6 @@ public:
     void RecordMajorGCFinish(uint64_t timestamp, uint64_t durationNs, size_t usedAfter,
                              size_t collectedBytes);
 
-    static const char* YoungHeuThrottleDecisionName(YoungHeuThrottleDecision decision);
 
     static std::atomic<uint64_t> prevGcStartTime;
     static std::atomic<uint64_t> prevGcFinishTime;
@@ -110,7 +95,6 @@ private:
     // A minor may extend the HEU finish-time throttle once after a major. A
     // second consecutive minor must leave the clock alone so a major cannot be
     // starved by a stream of young collections.
-    bool youngHeuDeferralUsed = false;
 };
 extern std::atomic<uint64_t> g_gcTotalTimeUs;
 extern std::atomic<size_t> g_gcCollectedTotalBytes;

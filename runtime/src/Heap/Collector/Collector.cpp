@@ -33,10 +33,7 @@ namespace {
 
 // zc7fix: is_mark_good fast path may admit plain non-heap slots (g_cjMarkBadMask all-zero on
 // uncoloured non-null). Count rejects before IsValidObject/IsMarkedObject.
-std::atomic<size_t> g_markGoodHeapGateReject{ 0 };
 
-std::atomic<size_t> g_geomCrossEndReject{ 0 };
-std::atomic<bool> g_geomAtexit{ false };
 std::atomic<uint64_t> g_neverInstalledEvent{ 0 };
 
 HandVerdict ClassifyRawHeader(uint64_t header)
@@ -106,17 +103,7 @@ private:
     bool truncated{ false };
 };
 
-void EnsureGeomAtexit()
-{
-    bool expected = false;
-    if (g_geomAtexit.compare_exchange_strong(expected, true, std::memory_order_relaxed)) {
-        std::atexit([]() {
-            std::fprintf(stderr, "[GCV2][tailslot] geom_cross_end=%zu\n",
-                         g_geomCrossEndReject.load(std::memory_order_relaxed));
-            std::fflush(stderr);
-        });
-    }
-}
+
 
 // Smallest plausible TypeInfo / binary address without touching tip payload.
 //
@@ -248,37 +235,18 @@ BaseObject* RecoverInteriorBaseImpl(BaseObject* obj, BaseObject* knownBase)
 }
 } // namespace
 
-void MaskEquivAtexitReport() {}
-
-bool MaskEquivOn()
-{
-    return false;
-}
-
-bool MaskEquivInjectOn()
-{
-    return false;
-}
-
-void MaskEquivCheck(const EpochColours& e, const BadMasks& m)
-{
-    (void)e;
-    (void)m;
-}
-
 bool Collector::MarkGoodHeapGate(const char* site, BaseObject* target)
 {
     (void)site;
     if (Heap::IsHeapAddress(target)) {
         return true;
     }
-    g_markGoodHeapGateReject.fetch_add(1, std::memory_order_relaxed);
     return false;
 }
 
-void Collector::ReportMarkGoodHeapGateCounts() {}
 
-bool PlausibleManagedObjectGate(const char* site, BaseObject* obj)
+
+bool PlausibleManagedObjectGate(const char*, BaseObject* obj)
 {
     if (obj == nullptr) {
         return false;
@@ -300,16 +268,6 @@ bool PlausibleManagedObjectGate(const char* site, BaseObject* obj)
         return false;
     }
     if (!ObjectFitsInRegion(obj, region)) {
-        EnsureGeomAtexit();
-        size_t gn = g_geomCrossEndReject.fetch_add(1, std::memory_order_relaxed) + 1;
-        if (gn <= 16 || (gn & 0x3ffU) == 0) {
-            MAddress objAddr = reinterpret_cast<MAddress>(obj);
-            MAddress rEnd = region->GetRegionEnd();
-            LOG(RTLOG_ERROR,
-                "[GCV2][tailslot] REJECT site=%s obj=%p tip=%p objSize=%zu regionEnd=%#zx remain=%zu n=%zu",
-                site, obj, tip, obj->GetSize(), static_cast<size_t>(rEnd),
-                objAddr < rEnd ? static_cast<size_t>(rEnd - objAddr) : 0, gn);
-        }
         return false;
     }
     return true;
@@ -325,12 +283,7 @@ BaseObject* Collector::TryRecoverInteriorBase(BaseObject* obj, BaseObject* known
     return RecoverInteriorBaseImpl(obj, knownBase);
 }
 
-void Collector::ReportPlausibleManagedObjectGateCounts()
-{
-    std::fprintf(stderr, "[GCV2][tailslot] geom_cross_end=%zu\n",
-                 g_geomCrossEndReject.load(std::memory_order_relaxed));
-    std::fflush(stderr);
-}
+
 
 // F5: when FindToVersion returns null, never silently hand back a dead/zeroed from.
 // Legal null (high-live / raw-pin survivor still at from, ghost=0) keeps returning obj.

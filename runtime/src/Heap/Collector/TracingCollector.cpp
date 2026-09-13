@@ -243,14 +243,8 @@ void RecordRootMapMiss(StackMapInvalidReason reason, const FrameInfo& frame, uin
     ++g_currentThreadRootMapMissCount;
 }
 
-// Per-process sample cap for SKIPPED_WHO lines (HotSpot-style named frames).
-// Default 16 distinct (reason,symbol) pairs; override with MRT_GCV2_SKIPPED_WHO_MAX.
-namespace {
-std::atomic<size_t> g_skippedWhoPrinted{ 0 };
-}
-
-ATTR_NO_INLINE void RecordSkippedStackMap(StackMapInvalidReason reason, const FrameInfo& frame, uintptr_t startIP,
-                                          uintptr_t frameIP)
+ATTR_NO_INLINE void RecordSkippedStackMap(StackMapInvalidReason reason, const FrameInfo&, uintptr_t,
+                                          uintptr_t)
 {
     std::atomic<size_t>* skippedCount = &g_skippedStackMapCounts.zeroRootIndices;
     switch (reason) {
@@ -267,20 +261,6 @@ ATTR_NO_INLINE void RecordSkippedStackMap(StackMapInvalidReason reason, const Fr
     }
     skippedCount->fetch_add(1, std::memory_order_relaxed);
 
-    size_t printed = g_skippedWhoPrinted.load(std::memory_order_relaxed);
-    if (printed < 16) {
-        if (g_skippedWhoPrinted.compare_exchange_strong(printed, printed + 1, std::memory_order_relaxed)) {
-            CString symbol = frame.GetFuncName();
-            uintptr_t fa = reinterpret_cast<uintptr_t>(frame.mFrame.GetFA());
-            U32 pcOff = (frameIP >= startIP) ? static_cast<U32>(frameIP - startIP) : 0;
-            LOG(RTLOG_ERROR,
-                "GC stack map SKIPPED_WHO reason=%s symbol=%s start_ip=%p frame_ip=%p pc_off=%u fa=%p "
-                "frameType=%u (PC_MISS=exact offset not in stackmap; ZERO_ENTRIES=RECORD_NUM=0)",
-                StackMapInvalidReasonName(reason), symbol.IsEmpty() ? "?" : symbol.Str(),
-                reinterpret_cast<void*>(startIP), reinterpret_cast<void*>(frameIP), pcOff,
-                reinterpret_cast<void*>(fa), static_cast<unsigned>(frame.GetFrameType()));
-        }
-    }
 }
 
 void ReportSkippedStackMapCounts()

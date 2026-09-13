@@ -30,15 +30,6 @@ namespace MapleRuntime {
 // stackGeneration so any in-flight StackFrameCursor (absolute FA cache) is known
 // stale and must be rebuilt.
 //
-// Invariants (asserted when MRT_GCV2_STACK_WATERMARK_VERIFY=1, or always for
-// structural CHECK on illegal transitions when verify is on):
-//   ① phase order: NOT_STARTED → SCANNING → DONE; DONE(incomplete) may
-//      retry SCANNING in the same epoch, but DONE(complete) has no back-edge
-//   ② single owner while SCANNING
-//   ③ create/exit close to NOT_STARTED; park leaves a stable publishable state
-//   ④ cursorIndex is a valid resume token for StackFrameCursor::ResumeAt
-//   ⑤ after OnStackGrow, cursorIndex still names the same logical frame; stack
-//      generation has advanced (absolute-FA cursors must rebuild)
 class StackWatermark {
 public:
     enum Phase : uint32_t {
@@ -74,40 +65,13 @@ public:
     // Create lifecycle: brand-new mutator starts NOT_STARTED with no owner.
     void OnCreate()
     {
-        AssertClosedOrReset("CREATE");
         Reset();
     }
 
     // Exit lifecycle: must not leave SCANNING owned work dangling for a dead mutator.
     void OnExit()
     {
-        Phase p = phase.load(std::memory_order_acquire);
-        if (p == WM_SCANNING) {
-            // Close by abandoning mid-scan: GC will not touch a destroyed mutator.
-            // Verify mode requires explicit Finish before exit (positive control injects fail).
-            if (VerifyEnabled()) {
-                CHECK_DETAIL(false,
-                             "[GCV2][stack-watermark] EXIT_WHILE_SCANNING mutator_wm=%p phase=%u owner=%u epoch=%llu",
-                             this, static_cast<unsigned>(p),
-                             static_cast<unsigned>(owner.load(std::memory_order_relaxed)),
-                             static_cast<unsigned long long>(epoch.load(std::memory_order_relaxed)));
-            }
-        }
         Reset();
-    }
-
-    // Park lifecycle: stack top is stable; SCANNING may continue under GC owner later (#5).
-    // Step #1 only records that park is allowed in any phase and does not regress state.
-    void OnPark()
-    {
-        Phase p = phase.load(std::memory_order_acquire);
-        if (p == WM_SCANNING) {
-            // Owner stays; parked mutator is not running managed code, so GC may later
-            // re-claim (not implemented here). Phase must not go back to NOT_STARTED.
-            CHECK_DETAIL(p == WM_SCANNING,
-                         "[GCV2][stack-watermark] PARK_REGRESS phase became %u", static_cast<unsigned>(p));
-        }
-        // NOT_STARTED / DONE: no-op publish.
     }
 
     // Movable-stack grow (#7). Called from Mutator::FixExtendedStack after a successful
@@ -131,26 +95,10 @@ public:
         if (stackOffset == 0) {
             return;
         }
-        size_t prevCursor = cursorIndex.load(std::memory_order_acquire);
-        size_t prevFrames = frameCount.load(std::memory_order_acquire);
         lastGrowOffset.store(stackOffset, std::memory_order_relaxed);
-        size_t n = growCount.fetch_add(1, std::memory_order_relaxed) + 1;
+        (void)growCount.fetch_add(1, std::memory_order_relaxed);
         // Release so a reader that observes generation N+1 also sees cursor/offset.
-        uint64_t gen = stackGeneration.fetch_add(1, std::memory_order_release) + 1;
-        if (VerifyEnabled()) {
-            size_t afterCursor = cursorIndex.load(std::memory_order_relaxed);
-            size_t afterFrames = frameCount.load(std::memory_order_relaxed);
-            CHECK_DETAIL(afterCursor == prevCursor,
-                         "[GCV2][stack-watermark] GROW_CURSOR_MUTATED %zu -> %zu", prevCursor, afterCursor);
-            CHECK_DETAIL(afterFrames == prevFrames,
-                         "[GCV2][stack-watermark] GROW_FRAMECOUNT_MUTATED %zu -> %zu", prevFrames, afterFrames);
-            // Observable grow proof (stackgrow delivery gate): always log under verify.
-            LOG(RTLOG_ERROR,
-                "[GCV2][stack-watermark] GROW offset=%lld cursor=%zu frames=%zu gen=%llu count=%zu "
-                "env=MRT_GCV2_STACK_WATERMARK_VERIFY=1",
-                static_cast<long long>(stackOffset), afterCursor, afterFrames,
-                static_cast<unsigned long long>(gen), n);
-        }
+        (void)stackGeneration.fetch_add(1, std::memory_order_release);
     }
 
     // Begin a scan for `scanEpoch`. Exactly one owner may claim.
@@ -166,36 +114,17 @@ public:
 
         Phase expected = phase.load(std::memory_order_acquire);
         if (expected == WM_SCANNING) {
-            if (VerifyEnabled()) {
-                CHECK_DETAIL(false,
-                             "[GCV2][stack-watermark] ILLEGAL_TRANSITION begin while SCANNING "
-                             "epoch=%llu owner=%u claim=%u",
-                             static_cast<unsigned long long>(epoch.load(std::memory_order_relaxed)),
-                             static_cast<unsigned>(owner.load(std::memory_order_relaxed)),
-                             static_cast<unsigned>(claimOwner));
-            }
             return false;
         }
         if (expected == WM_DONE && processingPhase.load(std::memory_order_acquire) == workPhase &&
             epoch.load(std::memory_order_acquire) == scanEpoch &&
             complete.load(std::memory_order_acquire)) {
-            if (VerifyEnabled()) {
-                CHECK_DETAIL(false,
-                             "[GCV2][stack-watermark] ILLEGAL_TRANSITION begin after DONE same epoch=%llu",
-                             static_cast<unsigned long long>(scanEpoch));
-            }
             return false;
         }
 
         // Claim owner first (must be NONE).
         Owner none = WM_OWNER_NONE;
         if (!owner.compare_exchange_strong(none, claimOwner, std::memory_order_acq_rel, std::memory_order_acquire)) {
-            if (VerifyEnabled()) {
-                CHECK_DETAIL(false,
-                             "[GCV2][stack-watermark] OWNER_NOT_UNIQUE existing=%u claim=%u epoch=%llu",
-                             static_cast<unsigned>(none), static_cast<unsigned>(claimOwner),
-                             static_cast<unsigned long long>(scanEpoch));
-            }
             return false;
         }
 
@@ -210,34 +139,18 @@ public:
 
     // Advance after processing frames. index is exclusive end of processed range
     // (same meaning as StackFrameCursor::Cursor after ProcessOne).
-    void AdvanceTo(size_t index, Owner claimOwner)
+    void AdvanceTo(size_t index, Owner)
     {
-        RequireOwnerScanning(claimOwner, "AdvanceTo");
-        size_t total = frameCount.load(std::memory_order_relaxed);
-        if (VerifyEnabled()) {
-            CHECK_DETAIL(index <= total,
-                         "[GCV2][stack-watermark] AdvanceTo OOB index=%zu total=%zu", index, total);
-            size_t prev = cursorIndex.load(std::memory_order_relaxed);
-            CHECK_DETAIL(index >= prev,
-                         "[GCV2][stack-watermark] ILLEGAL_TRANSITION AdvanceTo regress %zu -> %zu", prev, index);
-        }
         cursorIndex.store(index, std::memory_order_release);
     }
 
     void Finish(Owner claimOwner)
     {
-        RequireOwnerScanning(claimOwner, "Finish");
         size_t idx = cursorIndex.load(std::memory_order_relaxed);
         size_t total = frameCount.load(std::memory_order_relaxed);
         if (idx != total) {
-            if (VerifyEnabled()) {
-                CHECK_DETAIL(false,
-                             "[GCV2][stack-watermark] Finish with residual frames cursor=%zu total=%zu",
-                             idx, total);
-            }
-            // DONE is a postcondition, not a claim by the caller.  Even with
-            // verification disabled, a partial frame traversal must remain
-            // observably incomplete so the closing STW can retry it.
+
+            // A partial traversal remains incomplete so the closing pause can retry it.
             FinishIncomplete(claimOwner);
             return;
         }
@@ -249,32 +162,11 @@ public:
     // Close a traversal that cannot establish the frame-coverage postcondition.
     // IsDone(epoch) stays false so the closing STW can retry the epoch; if that
     // still cannot start, the consumer takes the legacy fallback.
-    void FinishIncomplete(Owner claimOwner)
+    void FinishIncomplete(Owner)
     {
-        RequireOwnerScanning(claimOwner, "FinishIncomplete");
         owner.store(WM_OWNER_NONE, std::memory_order_relaxed);
         complete.store(false, std::memory_order_relaxed);
         phase.store(WM_DONE, std::memory_order_release);
-    }
-
-    // Positive-control injectors (only meaningful under verify flag).
-    // Called from harness / oracle; never from product GC path.
-    void InjectIllegalPhaseBack()
-    {
-        // Force SCANNING → NOT_STARTED (forbidden back-edge).
-        phase.store(WM_SCANNING, std::memory_order_relaxed);
-        owner.store(WM_OWNER_SELF, std::memory_order_relaxed);
-        epoch.store(1, std::memory_order_relaxed);
-        // Next TryBegin of same/other epoch while SCANNING must fire.
-    }
-
-    void InjectDualOwner(Owner second)
-    {
-        phase.store(WM_SCANNING, std::memory_order_relaxed);
-        owner.store(WM_OWNER_SELF, std::memory_order_relaxed);
-        epoch.store(1, std::memory_order_relaxed);
-        // Second claim must fire OWNER_NOT_UNIQUE.
-        (void)second;
     }
 
     Phase GetPhase() const { return phase.load(std::memory_order_acquire); }
@@ -291,41 +183,7 @@ public:
     bool IsScanning() const { return GetPhase() == WM_SCANNING; }
     bool IsDone() const;
     bool IsDone(uint64_t scanEpoch, ProcessingPhase workPhase = ProcessingPhase::MARK) const;
-
-    static bool VerifyEnabled();
-
-    // Positive-control helper (harness only): pretend resume token was an absolute FA
-    // and "rebase" by adding offset to a synthetic address. Used to prove that treating
-    // watermark as SP would desync from logical frame identity after grow.
-    static uintptr_t InjectAbsoluteResumeToken(uintptr_t absoluteFa, intptr_t growOffset)
-    {
-        return static_cast<uintptr_t>(static_cast<intptr_t>(absoluteFa) + growOffset);
-    }
-
 private:
-    void AssertClosedOrReset(const char* why)
-    {
-        if (!VerifyEnabled()) {
-            return;
-        }
-        Phase p = phase.load(std::memory_order_acquire);
-        CHECK_DETAIL(p == WM_NOT_STARTED || p == WM_DONE,
-                     "[GCV2][stack-watermark] %s expected closed phase, got %u", why, static_cast<unsigned>(p));
-    }
-
-    void RequireOwnerScanning(Owner claimOwner, const char* op)
-    {
-        Phase p = phase.load(std::memory_order_acquire);
-        Owner o = owner.load(std::memory_order_acquire);
-        if (p != WM_SCANNING || o != claimOwner) {
-            if (VerifyEnabled()) {
-                CHECK_DETAIL(false,
-                             "[GCV2][stack-watermark] ILLEGAL_TRANSITION %s phase=%u owner=%u claim=%u",
-                             op, static_cast<unsigned>(p), static_cast<unsigned>(o),
-                             static_cast<unsigned>(claimOwner));
-            }
-        }
-    }
 
     std::atomic<ProcessingPhase> processingPhase;
     std::atomic<uint64_t> epoch;
@@ -339,7 +197,6 @@ private:
     std::atomic<intptr_t> lastGrowOffset;
     std::atomic<size_t> growCount;
 };
-
 } // namespace MapleRuntime
 
 #endif // MRT_STACK_WATERMARK_H
