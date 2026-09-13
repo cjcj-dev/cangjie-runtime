@@ -74,7 +74,6 @@ void GCStats::Init()
     lastYoungCollectedBytes.store(0, std::memory_order_relaxed);
     lastYoungDurationNs.store(0, std::memory_order_relaxed);
     hasYoungSample.store(false, std::memory_order_relaxed);
-    youngTriggerBytes.store(kGcTriggerYoungFixedBytes, std::memory_order_relaxed);
     warmupCyclesDone.store(0, std::memory_order_relaxed);
     isWarm.store(false, std::memory_order_relaxed);
     isTimeTrustable.store(false, std::memory_order_relaxed);
@@ -145,22 +144,11 @@ void GCStats::RecordYoungStats(size_t candidateBytes, size_t promotedBytes, size
     lastYoungDurationNs.store(durationNs, std::memory_order_relaxed);
     lastGcDurationNs.store(durationNs, std::memory_order_relaxed);
     hasYoungSample.store(true, std::memory_order_relaxed);
-    YoungTriggerInputs in;
-    in.capacityBytes = maxCapacity;
-    in.heapThresholdBytes = GetThreshold();
-    in.lastYoungCandidateBytes = candidateBytes;
-    in.lastYoungPromotedBytes = promotedBytes;
-    in.lastYoungCollectedBytes = collectedBytes;
-    in.hasYoungSample = true;
-    const size_t trigger = ComputeYoungTriggerBytes(in);
-    youngTriggerBytes.store(trigger, std::memory_order_release);
     g_youngDurationSeq.add(static_cast<double>(durationNs) / static_cast<double>(SECOND_TO_NANO_SECOND));
     g_youngReclaimedSeq.add(static_cast<double>(collectedBytes));
     lastYoungGcDurationAvgSec.store(g_youngDurationSeq.avg(), std::memory_order_relaxed);
     reclaimedPerYoungAvg.store(g_youngReclaimedSeq.avg(), std::memory_order_relaxed);
-    VLOG(REPORT,
-         "[GCV2][gctrigger] young-watermark candidate=%zu promoted=%zu collected=%zu trigger=%zu cap=%zu heu=%zu",
-         candidateBytes, promotedBytes, collectedBytes, trigger, maxCapacity, GetThreshold());
+
 }
 
 void GCStats::RecordMajorGCFinish(uint64_t timestamp, uint64_t durationNs, size_t usedAfter,

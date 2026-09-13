@@ -6,6 +6,113 @@
 
 #include "Base/ZStat.h"
 
+#include <algorithm>
+#include <cmath>
+#include "CangjieRuntime.h"
+#include "Heap/Heap.h"
+#include "Heap/Allocator/RegionManager.h"
+#include "Heap/Collector/GcStats.h"
+#include "Heap/Collector/GcTrigger.h"
+#include "Heap/Collector/MutatorAllocRate.h"
+
+namespace MapleRuntime {
+void ZStatCycle::Sequence::Add(double value)
+{
+    if (!initialized) {
+        average = value;
+        initialized = true;
+        return;
+    }
+    const double difference = value - average;
+    average += 0.7 * difference;
+    variance = 0.3 * (variance + 0.7 * difference * difference);
+}
+
+void ZStatCycle::Initialize(uint64_t now)
+{
+    std::lock_guard<std::mutex> guard(lock);
+    start = end = now;
+    initialWorkerDuration = initialWorkerTime = 0;
+    warmupCycles = 0;
+    lastActiveWorkers = 1;
+    serial = Sequence{};
+    parallel = Sequence{};
+}
+
+void ZStatCycle::AtStart(uint64_t now, uint64_t workerDuration, uint64_t workerTime)
+{
+    std::lock_guard<std::mutex> guard(lock);
+    start = now;
+    initialWorkerDuration = workerDuration;
+    initialWorkerTime = workerTime;
+}
+
+void ZStatCycle::AtEnd(uint64_t now, uint64_t workerDuration, uint64_t workerTime, bool warmup)
+{
+    std::lock_guard<std::mutex> guard(lock);
+    end = now;
+    if (warmup && warmupCycles < 3) {
+        ++warmupCycles;
+    }
+    const uint64_t duration = now - start;
+    const uint64_t parallelDuration = workerDuration - initialWorkerDuration;
+    const uint64_t parallelTime = workerTime - initialWorkerTime;
+    serial.Add(static_cast<double>(duration - std::min(duration, parallelDuration)) / SECOND_TO_NANO_SECOND);
+    parallel.Add(static_cast<double>(parallelTime) / SECOND_TO_NANO_SECOND);
+    lastActiveWorkers = parallelDuration == 0 ? 1.0 :
+        static_cast<double>(parallelTime) / parallelDuration;
+}
+
+ZStatCycleStats ZStatCycle::Stats(uint64_t now) const
+{
+    std::lock_guard<std::mutex> guard(lock);
+    return {warmupCycles, static_cast<double>(now - std::min(now, end)) / SECOND_TO_NANO_SECOND,
+            serial.average, std::sqrt(serial.variance), parallel.average, std::sqrt(parallel.variance),
+            lastActiveWorkers};
+}
+
+GcTriggerInputs ZStat::SampleDirectorStats(uint64_t now, ZStatCycle& young, ZStatCycle& old,
+                                    RegionManager& regions, uint32_t concurrentWorkers,
+                                    uint32_t collectionsAtMajorStart)
+{
+    const auto rate = MutatorAllocRate::stats();
+    const auto youngCycle = young.Stats(now);
+    const auto oldCycle = old.Stats(now);
+    GcTriggerInputs in;
+    in.allocRateAvgBps = rate.avg;
+    in.allocRatePredictBps = rate.predict;
+    in.allocRateSdBps = rate.sd;
+    in.usedBytes = Heap::GetHeap().GetAllocator().AllocatedBytes();
+    in.youngUsedBytes = regions.GetYoungAllocatedSize();
+    in.oldUsedBytes = in.usedBytes - std::min(in.usedBytes, in.youngUsedBytes);
+    in.capacityBytes = Heap::GetHeap().GetMaxCapacity();
+    in.softMaxBytes = MutatorAllocRate::soft_max_heap_size();
+    // zHeuristics.cpp:61-66: one small relocation page per concurrent
+    // worker. This allocator has no shared medium-page/NUMA allocation tier.
+    in.relocationHeadroomBytes = concurrentWorkers * regions.GetThreadLocalRegionSize();
+    in.youngSerialTimeSec = youngCycle.serialTime + youngCycle.serialTimeSd * kGcTriggerOneIn1000;
+    in.youngParallelTimeSec = youngCycle.parallelTime + youngCycle.parallelTimeSd * kGcTriggerOneIn1000;
+    in.lastYoungGcDurationSec = in.youngSerialTimeSec + in.youngParallelTimeSec;
+    in.lastOldGcDurationSec = oldCycle.serialTime + oldCycle.serialTimeSd * kGcTriggerOneIn1000 +
+        oldCycle.parallelTime + oldCycle.parallelTimeSd * kGcTriggerOneIn1000;
+    in.lastGcDurationSec = in.youngSerialTimeSec + in.youngParallelTimeSec / concurrentWorkers;
+    in.timeSinceLastGcSec = youngCycle.timeSinceLast;
+    in.timeSinceLastMajorSec = oldCycle.timeSinceLast;
+    in.collectionIntervalSec = static_cast<double>(CangjieRuntime::GetGCParam().backupGCInterval) /
+        SECOND_TO_NANO_SECOND;
+    in.warmupCyclesDone = oldCycle.warmupCycles;
+    in.isWarm = oldCycle.warmupCycles >= 3;
+    in.isTimeTrustable = oldCycle.warmupCycles > 0;
+    in.totalCollections = static_cast<uint32_t>(g_gcCount.load(std::memory_order_relaxed));
+    in.collectionsAtLastMajor = collectionsAtMajorStart;
+    in.usedAtLastMajorEnd = GCStats::usedAtLastMajorEnd.load(std::memory_order_relaxed);
+    in.oldLiveAtMarkEnd = GCStats::oldLiveAtMarkEnd.load(std::memory_order_relaxed);
+    in.reclaimedPerYoungAvg = GCStats::reclaimedPerYoungAvg.load(std::memory_order_relaxed);
+    in.reclaimedPerOldAvg = GCStats::reclaimedPerOldAvg.load(std::memory_order_relaxed);
+    return in;
+}
+} // namespace MapleRuntime
+
 #if MRT_ZSTAT_COMPILED
 
 #include <cstdarg>

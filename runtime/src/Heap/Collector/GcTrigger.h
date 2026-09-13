@@ -19,26 +19,35 @@
 
 namespace MapleRuntime {
 
-// L3: product consumes DecideGcTrigger. Flip false to restore occupancy+interval.
-constexpr bool kGcTriggerAllocRateEnabled = true;
-// L1 perturbation: pin the young watermark back to 32MB (zDirector still runs).
-constexpr bool kGcTriggerPinYoung32MB = false;
-// zDirector.cpp:331-363 / :365-381 — alloc-rate and high-usage re-evaluate
-// every tick. Product keeps the occupancy watermark gate (gctrigger2): a
-// high-survival young set still latches occupancy young off so HEU takes over.
-// Flip true to let director MINOR ignore that latch (survival wall regresses).
-constexpr bool kGcTriggerDirectorMinorIgnoresWatermark = false;
-// gctrigger2 latched occupancy to cap when last collected ≤5% of heap.
-// That treated a fully-dead 32MB young set on a 1GB heap as "not worth it".
-// Product requires the young set itself to still be live. Flip true to restore
-// the 1GB RSS regression.
-constexpr bool kGcTriggerLatchOnSmallCollect = false;
-// zDirector.cpp:401-424 warmup is a ZGC *old* collection (duration sample).
-// Our MAJOR is a copying full-heap GC. Firing it at 10/20/30% used on the
-// 12-wave NW shape OOMs, then ReclaimGarbageMemory walks a mixed garbage list
-// and SEGV in DeleteRegionLocked. Product does not consume the warmup rule.
-// Flip true only to restore the three early full GCs.
-constexpr bool kGcTriggerWarmupRequestsGc = false;
+// zMetronome.cpp:36-68. The caller supplies a monotonic clock, so the
+// same deadline arithmetic is usable by the director and deterministic tests.
+class GcMetronome {
+public:
+    explicit GcMetronome(uint64_t startNs, uint64_t intervalNs = 10000000)
+        : startNs(startNs), intervalNs(intervalNs) {}
+
+    uint64_t DeadlineNs() const { return startNs + intervalNs * ticks; }
+
+    bool Poll(uint64_t nowNs)
+    {
+        const uint64_t deadline = DeadlineNs();
+        if (nowNs < deadline) {
+            return false;
+        }
+        const uint64_t overslept = nowNs - deadline;
+        if (overslept > intervalNs) {
+            ticks += overslept / intervalNs;
+        }
+        ++ticks;
+        return true;
+    }
+
+private:
+    const uint64_t startNs;
+    const uint64_t intervalNs;
+    uint64_t ticks = 1;
+};
+
 constexpr size_t kGcTriggerYoungFixedBytes = 32 * MB;
 
 // zDirector.cpp:39 — P(sample outside CI) ≈ 1/1000 for a normal.
@@ -85,7 +94,10 @@ struct GcTriggerInputs {
     size_t oldUsedBytes = 0;
     size_t capacityBytes = 0;
     size_t softMaxBytes = 0;
+    size_t relocationHeadroomBytes = 0;
     double lastGcDurationSec = 0.0;
+    double youngSerialTimeSec = 0.0;
+    double youngParallelTimeSec = 0.0;
     double lastYoungGcDurationSec = 0.0;
     double lastOldGcDurationSec = 0.0;
     double timeSinceLastGcSec = 0.0;
@@ -98,6 +110,10 @@ struct GcTriggerInputs {
     size_t oldLiveAtMarkEnd = 0;
     double reclaimedPerYoungAvg = 0.0;
     double reclaimedPerOldAvg = 0.0;
+    bool minorBusy = false;
+    bool majorBusy = false;
+    bool oldWorkersActive = false;
+    uint32_t workerCapacity = 1;
     bool isWarm = false;
     bool isTimeTrustable = false;
 };
@@ -111,64 +127,6 @@ struct GcTriggerDecision {
     GcTriggerKind kind = GcTriggerKind::NONE;
     GcTriggerRule rule = GcTriggerRule::NONE;
 };
-
-struct YoungTriggerInputs {
-    size_t capacityBytes = 0;
-    size_t heapThresholdBytes = 0;
-    size_t lastYoungCandidateBytes = 0;
-    size_t lastYoungPromotedBytes = 0;
-    size_t lastYoungCollectedBytes = 0;
-    bool hasYoungSample = false;
-};
-
-// zDirector.cpp:331-363 — convert soft/hard minor rules into a young watermark.
-// Soft: keep collecting while last minor reclaimed enough. Hard: if survival is
-// high, raise the line to the HEU budget so young/HEU stop interleaving.
-inline size_t ComputeYoungTriggerBytes(const YoungTriggerInputs& in, bool pin32 = kGcTriggerPinYoung32MB)
-{
-    if (pin32) {
-        return kGcTriggerYoungFixedBytes;
-    }
-    if (in.capacityBytes == 0) {
-        return kGcTriggerYoungFixedBytes;
-    }
-    const size_t youngSmall =
-        static_cast<size_t>(static_cast<double>(in.capacityBytes) * kGcTriggerYoungSmallPercent / 100.0);
-    // Occupancy floor stays at 32MB. zDirector.cpp:296-306 uses 5% as a now-gate
-    // on the current young set, not as the next occupancy line. max(5% heap, 32MB)
-    // raised the 1GB line to 51MB and left RSS at 1.23× after the latch fix.
-    size_t floorBytes = kGcTriggerYoungFixedBytes;
-    size_t ceilingBytes = in.heapThresholdBytes == 0 ? in.capacityBytes : in.heapThresholdBytes;
-    if (ceilingBytes < floorBytes) {
-        ceilingBytes = floorBytes;
-    }
-    if (!in.hasYoungSample || in.lastYoungCandidateBytes == 0) {
-        return floorBytes;
-    }
-    const double survival = static_cast<double>(in.lastYoungPromotedBytes) /
-        static_cast<double>(in.lastYoungCandidateBytes);
-    // zDirector.cpp:296-306 is a NOW gate (young_used <= 5% of heap → skip this
-    // minor), not a latch. Raising the occupancy watermark to cap when last
-    // collected <= 5% of heap latched young off on allocation/1GB: a fully-dead
-    // 32MB young set is 3% of 1GB but ~100% of young. Only latch that occupancy
-    // line when the young set itself came back at least 5% live — then another
-    // floor-sized minor cannot be expected to free 5% of the heap
-    // (zDirector.cpp:303-306). Fully-dead young stays on the floor / 5% line.
-    constexpr double highSurvival = 1.0 - (kGcTriggerYoungSmallPercent / 100.0);
-    constexpr double stillLive = kGcTriggerYoungSmallPercent / 100.0;
-    const bool smallCollect = in.lastYoungCollectedBytes <= youngSmall;
-    if (survival >= highSurvival ||
-        (smallCollect && (kGcTriggerLatchOnSmallCollect || survival >= stillLive))) {
-        return in.capacityBytes;
-    }
-    const double reclaim = 1.0 - survival;
-    size_t adaptive = in.lastYoungCollectedBytes;
-    if (reclaim > 0.0) {
-        adaptive = static_cast<size_t>(static_cast<double>(in.lastYoungCollectedBytes) / reclaim);
-    }
-    adaptive = std::max(adaptive, floorBytes);
-    return std::min(adaptive, ceilingBytes);
-}
 
 inline double GcTriggerMaxAllocRateBps(const GcTriggerInputs& in)
 {
@@ -191,7 +149,9 @@ inline double GcTriggerFreeBytes(const GcTriggerInputs& in)
 {
     const size_t cap = GcTriggerSoftMaxBytes(in);
     const size_t used = std::min(in.usedBytes, cap);
-    return static_cast<double>(cap - used);
+    const size_t freeIncludingHeadroom = cap - used;
+    return static_cast<double>(freeIncludingHeadroom -
+                               std::min(freeIncludingHeadroom, in.relocationHeadroomBytes));
 }
 
 inline double GcTriggerTimeUntilOomSec(const GcTriggerInputs& in)
@@ -264,24 +224,17 @@ inline bool RuleTimer(const GcTriggerInputs& in)
     if (in.collectionIntervalSec <= 0.0) {
         return false;
     }
-    return in.timeSinceLastGcSec >= in.collectionIntervalSec;
+    return in.timeSinceLastMajorSec >= in.collectionIntervalSec;
 }
 
-inline bool RuleWarmup(const GcTriggerInputs& in, bool requestGc = kGcTriggerWarmupRequestsGc)
+inline bool RuleWarmup(const GcTriggerInputs& in)
 {
-    // zDirector.cpp:401-424. Product does not consume this as a copying full GC.
-    if (!requestGc) {
+    // zDirector.cpp:401-424: warmup is driven by old-cycle samples.
+    if (in.isWarm || GcTriggerSoftMaxBytes(in) == 0) {
         return false;
     }
-    if (in.isWarm || in.capacityBytes == 0) {
-        return false;
-    }
-    if (in.warmupCyclesDone >= kGcTriggerWarmupCycles) {
-        return false;
-    }
-    const double usedThresholdPct = (static_cast<double>(in.warmupCyclesDone) + 1.0) * kGcTriggerWarmupStepPercent;
-    const double usedPct = 100.0 * static_cast<double>(in.usedBytes) / static_cast<double>(in.capacityBytes);
-    return usedPct >= usedThresholdPct;
+    const double threshold = (in.warmupCyclesDone + 1) * 0.1 * GcTriggerSoftMaxBytes(in);
+    return in.usedBytes >= threshold;
 }
 
 inline bool RuleAllocRate(const GcTriggerInputs& in)
@@ -304,13 +257,10 @@ inline bool RuleHighUsage(const GcTriggerInputs& in)
     return GcTriggerHighUsage(in);
 }
 
-inline bool RuleMajorAllocRate(const GcTriggerInputs& in, bool enabled = kGcTriggerMajorAllocRateEnabled)
+inline bool RuleMajorAllocRate(const GcTriggerInputs& in)
 {
     // zDirector.cpp:470-519. Consumed as a minor-to-major upgrade
     // (zDirector.cpp:830-833), not as a standalone old-exhaustion timer.
-    if (!enabled) {
-        return false;
-    }
     if (!in.isTimeTrustable) {
         return false;
     }
@@ -330,12 +280,9 @@ inline bool RuleMajorAllocRate(const GcTriggerInputs& in, bool enabled = kGcTrig
     return canAmortizeTimeCost || oldGarbageIsCheaper || GcTriggerMajorUrgent(in);
 }
 
-inline bool RuleMajorProactive(const GcTriggerInputs& in, bool enabled = kGcTriggerProactiveEnabled)
+inline bool RuleMajorProactive(const GcTriggerInputs& in)
 {
     // zDirector.cpp:550-605
-    if (!enabled) {
-        return false;
-    }
     if (!in.isWarm) {
         return false;
     }
@@ -411,25 +358,69 @@ inline double SelectYoungGcWorkers(const GcTriggerInputs& in, double serialGcTim
     return gcWorkers;
 }
 
-inline GcWorkerSelection SelectGcWorkers(const GcTriggerInputs& in, uint32_t poolCap, double lastGcWorkers,
-                                         bool enabled = kGcTriggerDynamicWorkersEnabled)
+struct GcDynamicRequest {
+    bool trigger;
+    uint32_t workers;
+};
+
+// zDirector.cpp:147-216: soft/semi-hard use the sampled average, hard
+// uses the existing prediction plus variance. No second rate estimator.
+inline GcDynamicRequest RuleDynamicAllocRate(const GcTriggerInputs& in, uint32_t cap,
+                                            double lastWorkers, bool conservative)
 {
-    // zDirector.cpp:783-793 initial_workers — soft/hard minor-alloc-rate workers.
-    GcWorkerSelection out;
-    const uint32_t cap = poolCap == 0 ? 1 : poolCap;
-    out.youngWorkers = cap;
-    out.oldWorkers = cap;
-    if (!enabled) {
-        return out;
+    if (!in.isTimeTrustable) {
+        return {false, cap};
     }
-    const double serialGcTime = in.lastYoungGcDurationSec * 0.25;
-    const double parallelizableGcTime = in.lastYoungGcDurationSec * 0.75;
-    const double timeUntilOom = GcTriggerTimeUntilOomSec(in);
-    const double workers =
-        SelectYoungGcWorkers(in, serialGcTime, parallelizableGcTime, timeUntilOom, cap, lastGcWorkers);
-    out.youngWorkers = DiscreteGcWorkers(workers, cap);
-    out.oldWorkers = out.youngWorkers;
-    return out;
+    const double deviation = in.allocRateSdBps / (in.allocRateAvgBps + 1.0);
+    const double rate = conservative ?
+        std::max(in.allocRatePredictBps, in.allocRateAvgBps) * kGcTriggerSpikeTolerance +
+            in.allocRateSdBps * kGcTriggerOneIn1000 + 1.0 : in.allocRateAvgBps;
+    const double untilOom = (GcTriggerFreeBytes(in) / rate) / (1.0 + deviation);
+    const uint32_t workers = DiscreteGcWorkers(SelectYoungGcWorkers(in, in.youngSerialTimeSec,
+        in.youngParallelTimeSec, untilOom, cap, lastWorkers), cap);
+    const double duration = in.youngSerialTimeSec + in.youngParallelTimeSec / workers;
+    return {untilOom - duration <= untilOom * 0.05, workers};
+}
+
+// zDirector.cpp:521-548,682-722: allocate the existing concurrent budget
+// according to each generation's reclaimed bytes per unit GC time.
+inline GcWorkerSelection SelectWorkerThreads(const GcTriggerInputs& in, uint32_t youngWorkers,
+                                              uint32_t cap, bool shareBudget)
+{
+    double ratio = 1.0;
+    if (in.isTimeTrustable) {
+        const double youngEfficiency = in.reclaimedPerYoungAvg / in.lastYoungGcDurationSec;
+        const double oldEfficiency = in.reclaimedPerOldAvg / in.lastOldGcDurationSec;
+        if (youngEfficiency == 0.0) {
+            ratio = oldEfficiency == 0.0 ? 1.0 : cap;
+        } else {
+            ratio = std::min(oldEfficiency / youngEfficiency, static_cast<double>(cap));
+        }
+    }
+    // Zero-time samples cannot order generation costs.
+    if (!std::isfinite(ratio)) {
+        ratio = 1.0;
+    }
+    const auto clamp = [cap](double count) {
+        return static_cast<uint32_t>(std::max(1.0, std::min(count, static_cast<double>(cap))));
+    };
+    uint32_t oldWorkers = clamp(youngWorkers * ratio);
+    if (shareBudget && oldWorkers + youngWorkers > cap) {
+        const uint32_t youngClamped = clamp(cap / (1.0 + ratio));
+        oldWorkers = std::max(1u, cap - youngClamped);
+        youngWorkers = in.majorBusy ? youngClamped : std::max(oldWorkers, youngWorkers);
+    }
+    return {youngWorkers, oldWorkers};
+}
+
+inline GcWorkerSelection SelectGcWorkers(const GcTriggerInputs& in, uint32_t poolCap, double lastGcWorkers)
+{
+    const uint32_t cap = std::max(poolCap, 1u);
+    GcTriggerInputs hard = in;
+    hard.softMaxBytes = in.capacityBytes;
+    const auto softRequest = RuleDynamicAllocRate(in, cap, lastGcWorkers, false);
+    const auto hardRequest = RuleDynamicAllocRate(hard, cap, lastGcWorkers, true);
+    return SelectWorkerThreads(in, std::max(softRequest.workers, hardRequest.workers), cap, true);
 }
 
 // zDirector.cpp:820-840 — major rules first (timer/warmup), then minor
@@ -471,58 +462,37 @@ inline void NoteGcTriggerRule(GcTriggerRule rule)
     }
 }
 
-inline GcTriggerDecision MaybeUpgradeMinorToMajor(const GcTriggerInputs& in, GcTriggerRule minorRule)
-{
-    // zDirector.cpp:830-833 — merge minor into major when rule_major_allocation_rate.
-    if constexpr (kGcTriggerMajorAllocRateEnabled) {
-        g_gcTriggerRuleMajorAllocRateArmed.fetch_add(1, std::memory_order_relaxed);
-        if (RuleMajorAllocRate(in)) {
-            return { GcTriggerKind::MAJOR, GcTriggerRule::MAJOR_ALLOC_RATE };
-        }
-    }
-    return { GcTriggerKind::MINOR, minorRule };
-}
-
 inline GcTriggerDecision DecideGcTrigger(const GcTriggerInputs& in)
 {
-    // zDirector.cpp:820-840 — major (timer/warmup/proactive) first, then minor,
-    // then maybe upgrade the minor via rule_major_allocation_rate.
-    if (RuleTimer(in)) {
-        return { GcTriggerKind::MAJOR, GcTriggerRule::TIMER };
-    }
-    if (RuleWarmup(in)) {
-        return { GcTriggerKind::MAJOR, GcTriggerRule::WARMUP };
-    }
-    if constexpr (kGcTriggerProactiveEnabled) {
-        g_gcTriggerRuleProactiveArmed.fetch_add(1, std::memory_order_relaxed);
+    // zDirector.cpp:607-650,820-840: busy checks belong to each generation.
+    if (!in.majorBusy) {
+        if (RuleTimer(in)) {
+            return {GcTriggerKind::MAJOR, GcTriggerRule::TIMER};
+        }
+        if (RuleWarmup(in)) {
+            return {GcTriggerKind::MAJOR, GcTriggerRule::WARMUP};
+        }
         if (RuleMajorProactive(in)) {
-            return { GcTriggerKind::MAJOR, GcTriggerRule::PROACTIVE };
+            return {GcTriggerKind::MAJOR, GcTriggerRule::PROACTIVE};
         }
     }
-    if (RuleAllocRate(in)) {
-        return MaybeUpgradeMinorToMajor(in, GcTriggerRule::ALLOC_RATE);
+    if (in.minorBusy || (in.majorBusy && !in.oldWorkersActive)) {
+        return {};
     }
-    if (RuleHighUsage(in)) {
-        return MaybeUpgradeMinorToMajor(in, GcTriggerRule::HIGH_USAGE);
+    GcTriggerInputs hard = in;
+    hard.softMaxBytes = in.capacityBytes;
+    const bool allocationRate = !GcTriggerYoungSmall(in) &&
+        (RuleDynamicAllocRate(in, in.workerCapacity, 1.0, false).trigger ||
+         RuleDynamicAllocRate(hard, in.workerCapacity, 1.0, true).trigger);
+    const GcTriggerRule minorRule = allocationRate ? GcTriggerRule::ALLOC_RATE :
+        RuleHighUsage(in) ? GcTriggerRule::HIGH_USAGE : GcTriggerRule::NONE;
+    if (minorRule != GcTriggerRule::NONE) {
+        if (!in.majorBusy && RuleMajorAllocRate(in)) {
+            return {GcTriggerKind::MAJOR, GcTriggerRule::MAJOR_ALLOC_RATE};
+        }
+        return {GcTriggerKind::MINOR, minorRule};
     }
-    if (GcTriggerYoungSmall(in) && GcTriggerHighUsage(in) && in.isTimeTrustable) {
-        return { GcTriggerKind::MAJOR, GcTriggerRule::HIGH_USAGE };
-    }
-    return { GcTriggerKind::NONE, GcTriggerRule::NONE };
-}
-
-// zDirector.cpp:331-381 — director minor is not gated by a raised watermark.
-// The occupancy young path in TakeRegion still uses the watermark.
-inline bool ShouldRequestDirectorMinor(GcTriggerKind kind, size_t youngAllocated, size_t watermark,
-                                       bool ignoreWatermark = kGcTriggerDirectorMinorIgnoresWatermark)
-{
-    if (kind != GcTriggerKind::MINOR) {
-        return false;
-    }
-    if (ignoreWatermark) {
-        return true;
-    }
-    return youngAllocated >= watermark;
+    return {};
 }
 
 } // namespace MapleRuntime

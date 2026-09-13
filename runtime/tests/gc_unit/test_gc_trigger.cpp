@@ -18,111 +18,16 @@ static GcTriggerInputs BaseWarmHeap()
     in.usedBytes = 400 * 1024 * 1024;
     in.youngUsedBytes = 200 * 1024 * 1024;
     in.lastGcDurationSec = 0.050;
+    in.youngSerialTimeSec = 0.050;
+    in.lastYoungGcDurationSec = 0.050;
+    in.lastOldGcDurationSec = 1.0;
+    in.reclaimedPerYoungAvg = 100 * MB;
+    in.reclaimedPerOldAvg = 100 * MB;
     in.timeSinceLastGcSec = 0.2;
     in.isWarm = true;
     in.isTimeTrustable = true;
     in.warmupCyclesDone = 3;
     return in;
-}
-
-GC_TEST(GcTrigger, SwitchDefaultOn)
-{
-    GC_EXPECT_EQ(kGcTriggerAllocRateEnabled, true);
-    GC_EXPECT_EQ(kGcTriggerPinYoung32MB, false);
-    GC_EXPECT_EQ(kGcTriggerDirectorMinorIgnoresWatermark, false);
-    GC_EXPECT_EQ(kGcTriggerLatchOnSmallCollect, false);
-    GC_EXPECT_EQ(kGcTriggerWarmupRequestsGc, false);
-    GC_EXPECT_EQ(kGcTriggerProactiveEnabled, true);
-    GC_EXPECT_EQ(kGcTriggerMajorAllocRateEnabled, false);
-    GC_EXPECT_EQ(kGcTriggerDynamicWorkersEnabled, false);
-}
-
-GC_TEST(GcTrigger, YoungTriggerPinsAt32WhenAsked)
-{
-    YoungTriggerInputs in;
-    in.capacityBytes = 256 * 1024 * 1024;
-    in.heapThresholdBytes = 64 * 1024 * 1024;
-    in.hasYoungSample = true;
-    in.lastYoungCandidateBytes = 64 * 1024 * 1024;
-    in.lastYoungPromotedBytes = 60 * 1024 * 1024;
-    in.lastYoungCollectedBytes = 4 * 1024 * 1024;
-    GC_EXPECT_EQ(ComputeYoungTriggerBytes(in, true), kGcTriggerYoungFixedBytes);
-}
-
-GC_TEST(GcTrigger, YoungTriggerFloorWithoutSample)
-{
-    YoungTriggerInputs in;
-    in.capacityBytes = 256 * 1024 * 1024;
-    in.heapThresholdBytes = 64 * 1024 * 1024;
-    in.hasYoungSample = false;
-    const size_t got = ComputeYoungTriggerBytes(in, false);
-    GC_EXPECT_EQ(got, kGcTriggerYoungFixedBytes);
-}
-
-GC_TEST(GcTrigger, YoungTriggerRaisesOnHighSurvival)
-{
-    YoungTriggerInputs in;
-    in.capacityBytes = 256 * 1024 * 1024;
-    in.heapThresholdBytes = 64 * 1024 * 1024;
-    in.hasYoungSample = true;
-    in.lastYoungCandidateBytes = 64 * 1024 * 1024;
-    in.lastYoungPromotedBytes = 62 * 1024 * 1024;
-    in.lastYoungCollectedBytes = 2 * 1024 * 1024;
-    GC_EXPECT_EQ(ComputeYoungTriggerBytes(in, false), in.capacityBytes);
-}
-
-GC_TEST(GcTrigger, YoungTriggerHoldsFloorOnLowSurvival)
-{
-    YoungTriggerInputs in;
-    in.capacityBytes = 256 * 1024 * 1024;
-    in.heapThresholdBytes = 64 * 1024 * 1024;
-    in.hasYoungSample = true;
-    in.lastYoungCandidateBytes = 32 * 1024 * 1024;
-    in.lastYoungPromotedBytes = 1 * 1024 * 1024;
-    in.lastYoungCollectedBytes = 31 * 1024 * 1024;
-    const size_t got = ComputeYoungTriggerBytes(in, false);
-    GC_EXPECT_TRUE(got >= kGcTriggerYoungFixedBytes);
-    GC_EXPECT_TRUE(got <= in.heapThresholdBytes);
-}
-
-GC_TEST(GcTrigger, YoungTriggerRaisesWhenLastMinorFreedLessThanFivePercent)
-{
-    YoungTriggerInputs in;
-    in.capacityBytes = 256 * 1024 * 1024;
-    in.heapThresholdBytes = 64 * 1024 * 1024;
-    in.hasYoungSample = true;
-    in.lastYoungCandidateBytes = 32 * 1024 * 1024;
-    in.lastYoungPromotedBytes = 28 * 1024 * 1024;
-    in.lastYoungCollectedBytes = 4 * 1024 * 1024;
-    GC_EXPECT_EQ(ComputeYoungTriggerBytes(in, false), in.capacityBytes);
-}
-
-GC_TEST(GcTrigger, YoungTriggerHoldsFloorWhenDeadYoungIsSmallFractionOfHeap)
-{
-    // allocation/1GB: a fully-dead 32MB young set is 3% of heap but 97% of young.
-    // zDirector.cpp:296-306 would skip only while young_used is still ≤5%; it
-    // does not latch the occupancy watermark to cap after one cheap minor.
-    YoungTriggerInputs in;
-    in.capacityBytes = 1024 * 1024 * 1024;
-    in.heapThresholdBytes = 200 * 1024 * 1024;
-    in.hasYoungSample = true;
-    in.lastYoungCandidateBytes = 32 * 1024 * 1024;
-    in.lastYoungPromotedBytes = 1 * 1024 * 1024;
-    in.lastYoungCollectedBytes = 31 * 1024 * 1024;
-    const size_t got = ComputeYoungTriggerBytes(in, false);
-    GC_EXPECT_EQ(got, kGcTriggerYoungFixedBytes);
-}
-
-GC_TEST(GcTrigger, DirectorMinorIgnoresRaisedWatermark)
-{
-    GC_EXPECT_TRUE(ShouldRequestDirectorMinor(GcTriggerKind::MINOR, 4 * 1024 * 1024,
-                                              1024 * 1024 * 1024, true));
-    GC_EXPECT_TRUE(!ShouldRequestDirectorMinor(GcTriggerKind::MINOR, 4 * 1024 * 1024,
-                                               1024 * 1024 * 1024, false));
-    GC_EXPECT_TRUE(!ShouldRequestDirectorMinor(GcTriggerKind::MAJOR, 4 * 1024 * 1024,
-                                               32 * 1024 * 1024, true));
-    GC_EXPECT_TRUE(!ShouldRequestDirectorMinor(GcTriggerKind::NONE, 64 * 1024 * 1024,
-                                               32 * 1024 * 1024, true));
 }
 
 GC_TEST(TruncatedSeq, EmptyIsZero)
@@ -210,6 +115,7 @@ GC_TEST(GcTrigger, RateSpikeFiresViaSigma)
     in.allocRateAvgBps = 80.0 * 1024 * 1024;
     in.allocRateSdBps = 200.0 * 1024 * 1024;
     in.lastGcDurationSec = 0.20;
+    in.youngSerialTimeSec = 0.20;
     const double timeUntil = GcTriggerTimeUntilOomSec(in);
     GC_EXPECT_TRUE(timeUntil <= in.lastGcDurationSec);
     const GcTriggerDecision d = DecideGcTrigger(in);
@@ -239,13 +145,9 @@ GC_TEST(GcTrigger, WarmupAtTenPercent)
     in.usedBytes = 100 * 1024 * 1024;
     in.allocRateAvgBps = 0.0;
     const GcTriggerDecision d = DecideGcTrigger(in);
-    // Product RuleWarmup is off (kGcTriggerWarmupRequestsGc=false): a copying
-    // full-heap MAJOR at 10/20/30% used OOMs the 12-wave NW shape.
-    GC_EXPECT_EQ(kGcTriggerWarmupRequestsGc, false);
-    GC_EXPECT_EQ(static_cast<int>(d.rule), static_cast<int>(GcTriggerRule::NONE));
-    GC_EXPECT_EQ(static_cast<int>(d.kind), static_cast<int>(GcTriggerKind::NONE));
-    GC_EXPECT_TRUE(RuleWarmup(in) == false);
-    GC_EXPECT_TRUE(RuleWarmup(in, true) == true);
+    GC_EXPECT_EQ(static_cast<int>(d.rule), static_cast<int>(GcTriggerRule::WARMUP));
+    GC_EXPECT_EQ(static_cast<int>(d.kind), static_cast<int>(GcTriggerKind::MAJOR));
+    GC_EXPECT_TRUE(RuleWarmup(in));
 }
 
 GC_TEST(GcTrigger, WarmupBelowTenPercentSilent)
@@ -264,7 +166,7 @@ GC_TEST(GcTrigger, TwoRulesTimerBeatsAllocRate)
 {
     GcTriggerInputs in = BaseWarmHeap();
     in.collectionIntervalSec = 1.0;
-    in.timeSinceLastGcSec = 2.0;
+    in.timeSinceLastMajorSec = 2.0;
     in.usedBytes = 980 * 1024 * 1024;
     in.youngUsedBytes = 200 * 1024 * 1024;
     in.allocRateAvgBps = 4000.0 * 1024 * 1024;
@@ -344,8 +246,7 @@ GC_TEST(GcTrigger, MajorAllocRateAmortizesExtraYoungTime)
     in.lastOldGcDurationSec = 0.20;
     in.totalCollections = 8;
     in.collectionsAtLastMajor = 5;
-    GC_EXPECT_TRUE(RuleMajorAllocRate(in, true));
-    GC_EXPECT_TRUE(!RuleMajorAllocRate(in, false));
+    GC_EXPECT_TRUE(RuleMajorAllocRate(in));
 }
 
 GC_TEST(GcTrigger, MajorAllocRateOldGarbageCheaper)
@@ -360,7 +261,7 @@ GC_TEST(GcTrigger, MajorAllocRateOldGarbageCheaper)
     in.lastOldGcDurationSec = 0.10;
     in.totalCollections = 1;
     in.collectionsAtLastMajor = 1;
-    GC_EXPECT_TRUE(RuleMajorAllocRate(in, true));
+    GC_EXPECT_TRUE(RuleMajorAllocRate(in));
 }
 
 GC_TEST(GcTrigger, MajorAllocRateUrgentWhenYoungSmallAndHighUsage)
@@ -378,7 +279,7 @@ GC_TEST(GcTrigger, MajorAllocRateUrgentWhenYoungSmallAndHighUsage)
     in.totalCollections = 1;
     in.collectionsAtLastMajor = 1;
     GC_EXPECT_TRUE(GcTriggerMajorUrgent(in));
-    GC_EXPECT_TRUE(RuleMajorAllocRate(in, true));
+    GC_EXPECT_TRUE(RuleMajorAllocRate(in));
 }
 
 GC_TEST(GcTrigger, MajorAllocRateDisabledWhenNotTrustable)
@@ -410,15 +311,10 @@ GC_TEST(GcTrigger, MinorUpgradesToMajorAllocRate)
     in.totalCollections = 8;
     in.collectionsAtLastMajor = 5;
     GC_EXPECT_TRUE(RuleAllocRate(in));
-    GC_EXPECT_TRUE(RuleMajorAllocRate(in, true));
-    GC_EXPECT_EQ(kGcTriggerMajorAllocRateEnabled, false);
+    GC_EXPECT_TRUE(RuleMajorAllocRate(in));
     const GcTriggerDecision product = DecideGcTrigger(in);
-    GC_EXPECT_EQ(static_cast<int>(product.rule), static_cast<int>(GcTriggerRule::ALLOC_RATE));
-    GC_EXPECT_EQ(static_cast<int>(product.kind), static_cast<int>(GcTriggerKind::MINOR));
-    const GcTriggerDecision upgraded = MaybeUpgradeMinorToMajor(in, GcTriggerRule::ALLOC_RATE);
-    // MaybeUpgrade still consults the product switch; force the predicate.
-    GC_EXPECT_TRUE(RuleMajorAllocRate(in, true));
-    (void)upgraded;
+    GC_EXPECT_EQ(static_cast<int>(product.rule), static_cast<int>(GcTriggerRule::MAJOR_ALLOC_RATE));
+    GC_EXPECT_EQ(static_cast<int>(product.kind), static_cast<int>(GcTriggerKind::MAJOR));
 }
 
 GC_TEST(GcTrigger, ProactiveFiresAfterAcceptableInterval)
@@ -457,18 +353,17 @@ GC_TEST(GcTrigger, ProactiveDisabledWhenCold)
     in.lastYoungGcDurationSec = 0.10;
     in.lastOldGcDurationSec = 0.10;
     GC_EXPECT_TRUE(!RuleMajorProactive(in));
-    GC_EXPECT_TRUE(!RuleMajorProactive(in, false));
 }
 
-GC_TEST(GcTrigger, DynamicWorkersDefaultOffUsesPoolCap)
+GC_TEST(GcTrigger, DynamicWorkersUseMeasuredSerialAndParallelTime)
 {
     GcTriggerInputs in = BaseWarmHeap();
-    in.lastYoungGcDurationSec = 0.50;
-    in.allocRateAvgBps = 4000.0 * 1024 * 1024;
-    in.usedBytes = 900 * 1024 * 1024;
-    const GcWorkerSelection off = SelectGcWorkers(in, 8, 8.0, false);
-    GC_EXPECT_EQ(off.youngWorkers, 8u);
-    GC_EXPECT_EQ(off.oldWorkers, 8u);
-    const GcWorkerSelection on = SelectGcWorkers(in, 8, 8.0, true);
-    GC_EXPECT_TRUE(on.youngWorkers >= 1u && on.youngWorkers <= 8u);
+    in.youngSerialTimeSec = 0.01;
+    in.youngParallelTimeSec = 0.50;
+    in.allocRateAvgBps = 4000.0 * MB;
+    in.usedBytes = 900 * MB;
+    const GcWorkerSelection selection = SelectGcWorkers(in, 8, 8.0);
+    GC_EXPECT_TRUE(selection.youngWorkers >= 1u && selection.youngWorkers <= 8u);
+    in.isWarm = false;
+    GC_EXPECT_EQ(SelectGcWorkers(in, 8, 8.0).youngWorkers, 8u);
 }
