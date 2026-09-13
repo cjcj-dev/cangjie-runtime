@@ -454,7 +454,7 @@ MAddress AllocBuffer::AllocateImpl(size_t totalSize, AllocType allocType)
     // AllocateThreadLocalRegion is a safepoint, in which cj thread rescheule may happen.
     // tlRegion is bound to specific thread, so we need to forbid reschedule.
     CJThreadPreemptOffCntAdd();
-    r = manager.AllocateThreadLocalRegion();
+    r = manager.AllocateThreadLocalRegion(manager.GetThreadLocalRegionSize());
     CJThreadPreemptOffCntSub();
     if (UNLIKELY(r == nullptr)) {
         return 0;
@@ -534,7 +534,7 @@ void RegionSpace::FeedHungryBuffers()
     for (auto* buffer : hungryBuffers) {
         if (buffer->GetPreparedRegion() != nullptr) { continue; }
         if (region == nullptr) {
-            region = regionManager.AllocateThreadLocalRegion(true);
+            region = regionManager.AllocateThreadLocalRegion(regionManager.GetThreadLocalRegionSize(), true);
             if (region == nullptr) { return; }
         }
         if (buffer->SetPreparedRegion(region)) {
