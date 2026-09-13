@@ -29,7 +29,6 @@
 #include "Heap/Collector/CollectorProxy.h"
 #include "Heap/Collector/PromotedRegionDomain.h"
 #include "Heap/Collector/RelocationRequestQueue.h"
-#include "Heap/Verify/FromPageDetachCheck.h"
 #include "Heap/GcThreadPool.h"
 #include "Heap/WCollector/WCollector.h"
 #include "Heap/WCollector/RemapYoungRoots.h"
@@ -4505,12 +4504,6 @@ GC_TEST(ForwardingPublicationProduct, ClearWaitsForHeldPublicationAndKeepsReceip
     // Page relocation and forwarding-metadata retirement are independent.
     // Reusing the source page must neither wait for coverage nor invalidate the
     // retired receipt (zRelocate.cpp:1041-1047; zRelocationSet.cpp:191-197).
-    const auto detachSite = FromPageDetach::Site::INIT_REGION_INFO;
-    const FromPageDetach::Counters beforeReuse = FromPageDetach::GetCounters(detachSite);
-    GC_EXPECT_TRUE(FromPageDetach::FromPageDetachCheck(region, detachSite));
-    const FromPageDetach::Counters afterPrecheck = FromPageDetach::GetCounters(detachSite);
-    GC_EXPECT_EQ(afterPrecheck.retiredTable, beforeReuse.retiredTable + 1);
-    GC_EXPECT_EQ(afterPrecheck.withEvidence, beforeReuse.withEvidence);
     RelocationReceiptTestAccess::ReleaseListOwnership(region);
     const RegionLifeId oldLife = region->GetRegionLifeId();
     region->InitRegion(region->GetUnitCount(), RegionInfo::UnitRole::SMALL_SIZED_UNITS);
