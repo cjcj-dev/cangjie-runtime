@@ -38,8 +38,12 @@ extern template bool RegionInfo::MarkObject<Generation::Young>(
     MarkView<Generation::Young>, const BaseObject*);
 extern template bool RegionInfo::MarkObject<Generation::Old>(
     MarkView<Generation::Old>, const BaseObject*);
+// The product emits these explicit instantiations only in its GC-unit build.
+// Other configurations exercise the same product header template directly.
+#if defined(MRT_GC_UNIT_TESTS)
 extern template void RegionInfo::ClearLiveInfo<Generation::Young>(MarkView<Generation::Young>);
 extern template void RegionInfo::ClearLiveInfo<Generation::Old>(MarkView<Generation::Old>);
+#endif
 } // namespace MapleRuntime
 
 namespace {
