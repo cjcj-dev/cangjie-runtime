@@ -57,9 +57,7 @@ void StackFrameCursor::ProcessFrame(const FrameInfo& frame, RegSlotsMap& regSlot
     switch (frame.GetFrameType()) {
         case FrameType::MANAGED: {
             if (derivedPtrVisitor != nullptr) {
-                // Same per-frame walk the non-epoch Enum leg uses, and the only one
-                // that honours the fixed VisitRegRoots -> VisitSlotRoots ->
-                // VisitDerivedPtr order (StackMap.h:67, :116-117).
+                // The shared frame closure processes derived values before ordinary bases.
                 TracingCollector::VisitHeapReferencesOnStack(visitor, *derivedPtrVisitor, regSlotsMap, frame, mutator,
                                                              young);
             } else {
@@ -90,9 +88,7 @@ void StackFrameCursor::ProcessFrame(const FrameInfo& frame, RegSlotsMap& regSlot
     switch (frame.GetFrameType()) {
         case FrameType::MANAGED: {
             if (derivedPtrVisitor != nullptr) {
-                // Same per-frame walk the non-epoch Enum leg uses, and the only one
-                // that honours the fixed VisitRegRoots -> VisitSlotRoots ->
-                // VisitDerivedPtr order (StackMap.h:67, :116-117).
+                // The shared frame closure processes derived values before ordinary bases.
                 TracingCollector::VisitHeapReferencesOnStack(visitor, *derivedPtrVisitor, regSlotsMap, frame, mutator,
                                                              young);
             } else {

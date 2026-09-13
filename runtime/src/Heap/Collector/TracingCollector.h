@@ -111,6 +111,24 @@ private:
 }; // PrefetchQueue
 
 // For managing gc roots
+#if defined(MRT_TESTABLE_INTERNALS)
+// One-shot receipt for the actual DoGarbageCollection -> Preforward path. The
+// target slot is armed by a test, but the observed word is produced and sampled
+// inside the product remap loop before relocate-start changes the good masks.
+struct RemapYoungRootsTestReceipt {
+    uintptr_t targetSlot = 0;
+    uintptr_t before = 0;
+    uintptr_t after = 0;
+    uintptr_t resolvedAddress = 0;
+    uint64_t visits = 0;
+    uint64_t heals = 0;
+    bool storeGoodAfter = false;
+};
+
+void ResetRemapYoungRootsTestReceipt(uintptr_t targetSlot);
+RemapYoungRootsTestReceipt ReadRemapYoungRootsTestReceipt();
+#endif
+
 class StaticRootTable {
 public:
     struct StaticRootArray {
@@ -320,6 +338,14 @@ public:
 
     void Init() override;
     void Fini() override;
+
+    // zRootsIterator.cpp:159-220. The language has no weak plain code-cache roots.
+    void VisitExportColoredRoots(const NativeSlotVisitor& visitor) const;
+    void VisitStrongColoredRoots(const NativeSlotVisitor& visitor) const;
+    void VisitWeakColoredRoots(const NativeSlotVisitor& visitor) const;
+    void VisitAllColoredRoots(const NativeSlotVisitor& visitor) const;
+    void VisitStrongPlainRoots(const RootVisitor& visitor,
+                              const std::function<void(Mutator&)>& threadVisitor) const;
 
 #if defined(MRT_DEBUG) && (MRT_DEBUG == 1)
     void DumpRoots(LogType logType);
@@ -570,9 +596,6 @@ private:
     size_t RunMajorStripeMark(WorkStack& workStack, bool partial = false, BaseObject* exportOwner = nullptr);
     void ConcurrentReMark(WorkStack& remarkStack, WorkStack& foreignRootsSet);
     void EnumMutatorRoot(ObjectPtr& obj, RootSet& rootSet) const;
-    void EnumConcurrencyModelRoots(RootSet& rootSet) const;
-    void EnumStaticRoots(RootSet& rootSet) const;
-    void EnumFinalizerProcessorRoots(RootSet& rootSet) const;
     void EnumAllSurrectedExportRoots(RootSet& rootSet);
 
     void VisitStaticRoots(const NativeSlotVisitor& visitor) const;

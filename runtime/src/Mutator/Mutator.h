@@ -381,14 +381,14 @@ public:
                      size_t* scannedFrames = nullptr);
     bool DrainStackWatermark(const RootVisitor& visitor, const RootVisitor& invisibleRootVisitor,
                              uint64_t epoch, StackWatermark::Owner owner,
-                             const DerivedPtrVisitor* derivedPtrVisitor, size_t& scannedFrames, bool young);
+                             const DerivedPtrVisitor* derivedPtrVisitor, size_t& scannedFrames, bool young,
+                             StackWatermark::ProcessingPhase workPhase = StackWatermark::ProcessingPhase::MARK);
     inline void GCPhasePreForward(GCPhase newPhase);
     inline void HandleGCPhase(GCPhase newPhase);
     inline void HandleGCPhase(GCPhase newPhase, bool bySelf);
     inline void HandleGCPhaseIDLE();
     inline void ForwardLocalFinalizers(Collector& collector);
-    using PreForwardBaseResolver = std::function<BaseObject*(BaseObject*)>;
-    static DerivedPtrVisitor MakePreForwardDerivedVisitor(const PreForwardBaseResolver& resolveBase);
+    static DerivedPtrVisitor MakeDerivedRootVisitor(const RootVisitor& visitor);
 
     inline void HandleCpuProfile();
 

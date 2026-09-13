@@ -18,16 +18,12 @@
 #include "Concurrency/ConcurrencyModel.h"
 #include "Heap/Collector/FinalizerProcessor.h"
 #include "Heap/Verify/VerifyRoots.h"
-#include "Heap/Verify/StackExposureOracle.h"
-#include "Heap/Verify/StackFrameOracle.h"
-#include "Heap/Verify/StackWatermarkOracle.h"
 #include "Heap/WCollector/WCollector.h"
 #include "ObjectModel/RefField.inline.h"
 #if defined(MRT_GC_UNIT_TESTS)
 #include "ObjectModel/MArray.h"
 #endif
 #include "MutatorManager.h"
-#include "PreForwardBaseMap.h"
 #include "StackManager.h"
 #include "UnwindStack/StackFrameCursor.h"
 #include "ExceptionManager.h"
@@ -386,38 +382,6 @@ void Mutator::VisitStackRoots(const RootVisitor& func, const RootVisitor& invisi
 #if defined(GCINFO_DEBUG) && GCINFO_DEBUG
     CreateCurrentGCInfo();
 #endif
-    // STW frame-cursor oracle (default off). Does not replace the product visitor.
-    // Call Enabled() first so a non-STW refuse log is observable (minorconc A4).
-    if (StackFrameOracle::Enabled()) {
-        if (MutatorManager::Instance().WorldStopped()) {
-            StackFrameOracle::CompareWithLegacy(uwContext, *this);
-        } else {
-            LOG(RTLOG_ERROR,
-                "[GCV2][stack-frame-oracle] refused: world not stopped env=MRT_GCV2_STACK_FRAME_ORACLE=1");
-        }
-    }
-    // STW stack-watermark state oracle (default off). Exercises begin/advance/finish +
-    // ResumeAt alignment; no concurrent scan; does not replace the product visitor.
-    if (StackWatermarkOracle::Enabled()) {
-        if (MutatorManager::Instance().WorldStopped()) {
-            StackWatermarkOracle::Exercise(uwContext, *this);
-        } else {
-            LOG(RTLOG_ERROR,
-                "[GCV2][stack-watermark-oracle] refused: world not stopped "
-                "env=MRT_GCV2_STACK_WATERMARK_VERIFY=1");
-        }
-    }
-    // STW frame-exposure oracle (default off). Exercises OnBeforeUnwind + cursor process;
-    // no concurrent scan; does not replace the product visitor.
-    if (StackExposureOracle::Enabled()) {
-        if (MutatorManager::Instance().WorldStopped()) {
-            StackExposureOracle::Exercise(uwContext, *this);
-        } else {
-            LOG(RTLOG_ERROR,
-                "[GCV2][stack-exposure-oracle] refused: world not stopped "
-                "env=MRT_GCV2_STACK_EXPOSURE_VERIFY=1");
-        }
-    }
     StackManager::VisitStackRoots(uwContext, func, *this);
     VisitRawObjects(visitedInvisibleRootVisitor);
     DecObserver();
@@ -527,6 +491,7 @@ void Mutator::VisitHeapReferences(const RootVisitor& regRootVisitor, const RootV
 {
     VisitHeapReferencesOnStack(regRootVisitor, slotRootVisitor, derivedPtrVisitor, rawObjectVisitor, young);
     VisitExceptionRoots(exceptionRootVisitor);
+    VisitNativeFrameRoots(exceptionRootVisitor);
 }
 
 Mutator* Mutator::GetMutator() noexcept
@@ -948,47 +913,10 @@ static void PreForwardHeaderlessRecord(BaseObject* record, Collector& collector,
     }
 }
 
-void VisitTaggedOopSlot(ObjectRef& root, bool young)
-{
-    GCPhase phase = Heap::GetHeap().GetGCPhase();
-    BaseObject* obj = PlainRootObject(root.LoadPlain());
-    if (Heap::IsHeapAddress(obj)) {
-        if (phase == GCPhase::GC_PHASE_PREFORWARD) {
-            auto* remappedBases = PreForwardBaseMapScope::Current();
-            if (remappedBases == nullptr) {
-                Collector::FailClosedLoad("VisitTaggedOopSlot.preforward-base-map-missing", obj,
-                    reinterpret_cast<uintptr_t>(&root),
-                    ForwardingProvenance{ ForwardingHolderKind::StackSlot, nullptr, &root });
-            }
-            Collector& collector = Heap::GetHeap().GetCollector();
-            if (collector.IsGhostFromObject(obj) && !collector.IsUnmovableFromObject(obj)) {
-                BaseObject* toObj = collector.ForwardObject(obj, collector.ActiveForwardingGeneration());
-                CHECK_DETAIL(toObj != nullptr, "preforward tagged oop missing winner obj=%p", obj);
-                if (obj != toObj) {
-                    HealRoot(root, from_object(toObj), HealSite::MutatorPreForwardRoot);
-                }
-            }
-            (*remappedBases)[obj] = PlainRootObject(root.LoadPlain());
-        } else {
-            PushHeapRootIfPlausible(obj, "OopSlot", young);
-        }
-        return;
-    }
-    if (obj == nullptr) {
-        return;
-    }
-    if (phase == GCPhase::GC_PHASE_PREFORWARD) {
-        Collector& collector = Heap::GetHeap().GetCollector();
-        std::set<void*> once;
-        PreForwardHeaderlessRecord(obj, collector, once);
-    } else {
-        PushHeaderlessRecordField(obj, "OopSlot.headerless", young);
-    }
-}
-
 bool Mutator::DrainStackWatermark(const RootVisitor& visitor, const RootVisitor& invisibleRootVisitor,
                                   uint64_t epoch, StackWatermark::Owner owner,
-                                  const DerivedPtrVisitor* derivedPtrVisitor, size_t& scannedFrames, bool young)
+                                  const DerivedPtrVisitor* derivedPtrVisitor, size_t& scannedFrames, bool young,
+                                  StackWatermark::ProcessingPhase workPhase)
 {
     scannedFrames = 0;
     MutatorLock();
@@ -1007,16 +935,19 @@ bool Mutator::DrainStackWatermark(const RootVisitor& visitor, const RootVisitor&
         MutatorUnlock();
         return false;
     }
+    if (stackWatermark.IsDone(epoch, workPhase)) {
+        MutatorUnlock();
+        return true;
+    }
     if (!IsManagedContext()) {
-        bool began = stackWatermark.TryBegin(epoch, owner, 0);
+        bool began = stackWatermark.TryBegin(epoch, owner, 0, workPhase);
         if (began) {
+            VisitExceptionRoots(visitor);
+            VisitNativeFrameRoots(visitor);
             VisitRawObjects(visitedInvisibleRootVisitor);
             stackWatermark.Finish(owner);
         }
         MutatorUnlock();
-        if (began) {
-            VisitExceptionRoots(visitor);
-        }
         return began;
     }
     // A managed stack without a usable address range cannot classify stack
@@ -1032,12 +963,14 @@ bool Mutator::DrainStackWatermark(const RootVisitor& visitor, const RootVisitor&
     CreateCurrentGCInfo();
 #endif
     StackFrameCursor cursor(uwContext);
-    bool began = stackWatermark.TryBegin(epoch, owner, cursor.FrameCount());
+    bool began = stackWatermark.TryBegin(epoch, owner, cursor.FrameCount(), workPhase);
     if (began) {
+        VisitExceptionRoots(visitor);
+        VisitNativeFrameRoots(visitor);
+        VisitRawObjects(visitedInvisibleRootVisitor);
         while (cursor.ProcessOne(visitor, *this, derivedPtrVisitor, young)) {
             stackWatermark.AdvanceTo(cursor.Cursor(), owner);
         }
-        VisitRawObjects(visitedInvisibleRootVisitor);
         // Frame coverage is the completion quantity.  FrameCount alone is the
         // size of the snapshot and therefore cannot prove that the cursor
         // actually processed it.
@@ -1053,9 +986,6 @@ bool Mutator::DrainStackWatermark(const RootVisitor& visitor, const RootVisitor&
     }
     DecObserver();
     MutatorUnlock();
-    if (began) {
-        VisitExceptionRoots(visitor);
-    }
     return complete;
 }
 
@@ -1124,24 +1054,7 @@ bool Mutator::GcPhaseEnum(GCPhase newPhase, bool young, uint64_t stackScanEpoch,
         BaseObject* obj = PlainRootObject(root.LoadPlain());
         (void)PushHeapRootIfPlausible(obj, "GcPhaseEnum.invisible", young, false);
     };
-    // introot: Enum previously used VisitMutatorRoots → RootMap (reg/slot only), so
-    // base/derived pairs never entered. VisitHeapReferences builds HeapReferenceMap and
-    // visits derived; the derived visitor marks the base and keeps the derived slot plain.
-    DerivedPtrVisitor derivedVisitor = [young](BasePtrType basePtr, DerivedSlot& derivedPtr) {
-        BaseObject* base = PlainRootObject(basePtr);
-        BaseObject* derivedObj = PlainRootObject(derivedPtr.LoadDerived());
-        if (base != nullptr && derivedObj != nullptr &&
-            reinterpret_cast<MAddress>(derivedObj) >= reinterpret_cast<MAddress>(base)) {
-            RootSlot plainBase;
-            StorePlain(plainBase, from_object(base));
-            RebaseDerived(derivedPtr, plainBase,
-                          reinterpret_cast<MAddress>(derivedObj) - reinterpret_cast<MAddress>(base));
-        }
-        if (base != nullptr && Heap::IsHeapAddress(base)) {
-            (void)PushHeapRootIfPlausible(base, "GcPhaseEnum.derivedBase", young);
-
-        }
-    };
+    DerivedPtrVisitor derivedVisitor = MakeDerivedRootVisitor(visitor);
     if (stackScanEpoch == 0) {
         VisitHeapReferences(visitor, visitor, derivedVisitor, visitor, invisibleRootVisitor, young);
         return true;
@@ -1175,31 +1088,23 @@ inline void Mutator::ForwardLocalFinalizers(Collector& collector)
     }
 }
 
-DerivedPtrVisitor Mutator::MakePreForwardDerivedVisitor(const PreForwardBaseResolver& resolveBase)
+DerivedPtrVisitor Mutator::MakeDerivedRootVisitor(const RootVisitor& visitor)
 {
-    return [resolveBase](BasePtrType basePtr, DerivedSlot& derivedPtr) {
-        // ProcessDerivedOop preserves the offset against the old base, remaps the base as an
-        // ordinary oop, then rebuilds the derived value (oopMap.cpp:412-421).  HeapReferenceMap
-        // deliberately captures basePtr before its root visitor runs, so resolveBase joins that
-        // old value to the value already written by the preceding ordinary-root pass.  Do not
-        // reopen forwarding lookup here: A8REMAP has already closed that authority.
-        BaseObject* oldBase = PlainRootObject(basePtr);
-        BaseObject* oldDerived = PlainRootObject(derivedPtr.LoadDerived());
-        if (oldBase == nullptr || oldDerived == nullptr ||
-            reinterpret_cast<MAddress>(oldDerived) < reinterpret_cast<MAddress>(oldBase)) {
+    // oopMap.cpp:400-421, ProcessDerivedOop: retain the old offset and apply
+    // the same ordinary-root closure to a copy of the base in the derived slot.
+    return [visitor](BasePtrType base, DerivedSlot& derived) {
+        if (is_null(base) || is_null(derived.LoadDerived())) {
             return;
         }
-        const size_t offset = reinterpret_cast<MAddress>(oldDerived) - reinterpret_cast<MAddress>(oldBase);
-
-        BaseObject* currentBase = resolveBase(oldBase);
-        if (currentBase == nullptr) {
-            currentBase = Heap::GetHeap().GetCollector().ForwardObject(
-                oldBase, Heap::GetHeap().GetCollector().ActiveForwardingGeneration());
-        }
-        CHECK_DETAIL(currentBase != nullptr, "preforward derived missing winner oldBase=%p", oldBase);
-        RootSlot fixedBase;
-        StorePlain(fixedBase, from_object(currentBase));
-        RebaseDerived(derivedPtr, fixedBase, offset);
+        const uintptr_t offset = raw(derived.LoadDerived()) - raw(base);
+        RootSlot baseValue;
+        StorePlain(baseValue, safe(base));
+        RebaseDerived(derived, baseValue, 0);
+        // ProcessDerivedOop temporarily treats this very derived word as an oop.
+        // Preserve its slot identity for closures that deduplicate physical roots.
+        RootSlot& currentBase = RootSlotAt(static_cast<void*>(&derived));
+        visitor(currentBase);
+        RebaseDerived(derived, currentBase, offset);
     };
 }
 
@@ -1208,7 +1113,6 @@ inline void Mutator::GCPhasePreForward(GCPhase newPhase)
     std::set<BaseObject*> rootSet;
     std::set<void*> rootFieldSet;
     std::stack<BaseObject*> rootStack;
-    std::map<BaseObject*, BaseObject*> remappedBases;
     Collector& collector = reinterpret_cast<Collector&>(Heap::GetHeap().GetCollector());
     HeapSlotVisitor refVisitor = [&rootSet, &rootFieldSet, &rootStack, &collector, this](HeapSlot<>& refFieldAddr) {
         // The containing object is stack allocated, so this metadata field is a RootSlot.
@@ -1230,7 +1134,7 @@ inline void Mutator::GCPhasePreForward(GCPhase newPhase)
         }
     };
 
-    RootVisitor visitor = [&rootSet, &rootFieldSet, &rootStack, &remappedBases, &collector, this,
+    RootVisitor visitor = [&rootSet, &rootFieldSet, &rootStack, &collector, this,
                            &refVisitor](ObjectRef& root) {
         // interiorsrc2: peel colour before ghost/forward checks; write plain back so mutator
         // does not resume with a coloured interior (si_code=128 in arrayInitByFunction).
@@ -1249,11 +1153,6 @@ inline void Mutator::GCPhasePreForward(GCPhase newPhase)
                         (reinterpret_cast<MAddress>(oldObj) - reinterpret_cast<MAddress>(host))),
                         HealSite::MutatorPreForwardInterior);
                 }
-            }
-            // Only publish a proven host solution. An unrecovered interior is
-            // not identity: derived waits for the remapped base.
-            if (host != nullptr) {
-                remappedBases[oldObj] = PlainRootObject(root.LoadPlain());
             }
             return;
         }
@@ -1275,11 +1174,7 @@ inline void Mutator::GCPhasePreForward(GCPhase newPhase)
             BaseObject* toObj = collector.ForwardObject(oldObj, collector.ActiveForwardingGeneration());
             CHECK_DETAIL(toObj != nullptr, "preforward root missing winner oldObj=%p", oldObj);
             HealRoot(root, from_object(toObj), HealSite::MutatorPreForwardRoot);
-            remappedBases[oldObj] = toObj;
         } else if (oldObj != nullptr) {
-            // HeapReferenceMap saved this value before invoking us.  Record the identity arm as
-            // well, so the later derived pass consumes one uniform old-base -> current-base map.
-            remappedBases[oldObj] = oldObj;
             if (IsStackAddr(reinterpret_cast<uintptr_t>(oldObj))) {
                 if (IsHeaderedStackObject(oldObj)) {
                     CheckAndPush(oldObj, rootSet, rootStack, this);
@@ -1295,16 +1190,16 @@ inline void Mutator::GCPhasePreForward(GCPhase newPhase)
         }
     };
 
-    DerivedPtrVisitor derivedPtrVisitor = MakePreForwardDerivedVisitor(
-        [&remappedBases](BaseObject* oldBase) -> BaseObject* {
-            const auto found = remappedBases.find(oldBase);
-            return found == remappedBases.end() ? nullptr : found->second;
-        });
-    {
-        PreForwardBaseMapScope scope(remappedBases);
+    DerivedPtrVisitor derivedPtrVisitor = MakeDerivedRootVisitor(visitor);
+    ForwardLocalFinalizers(collector);
+    size_t frames = 0;
+    const uint64_t epoch = WCollector::FlipSeq().load(std::memory_order_acquire) + 1;
+    const auto owner = GetMutator() == this ? StackWatermark::WM_OWNER_SELF : StackWatermark::WM_OWNER_GC;
+    if (!DrainStackWatermark(visitor, visitor, epoch, owner, &derivedPtrVisitor, frames, false,
+                             StackWatermark::ProcessingPhase::REMAP)) {
+        // Complete under the phase handshake before publishing mutatorPhase.
         VisitHeapReferences(visitor, derivedPtrVisitor);
     }
-    ForwardLocalFinalizers(collector);
 }
 
 inline void Mutator::HandleGCPhase(GCPhase newPhase)

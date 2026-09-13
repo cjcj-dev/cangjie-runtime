@@ -8,7 +8,7 @@
 // Remap space is four one-hots; a flip is xor, so a colour published at N is
 // load-good again at N+2 unless roots are remapped between young flips.
 
-#include "Heap/WCollector/RemapYoungRoots.h"
+#include "UnwindStack/StackWatermark.h"
 #include "Heap/Collector/PromotedRegionDomain.h"
 #include "gc_unittest.hpp"
 
@@ -28,77 +28,36 @@ GC_TEST(PromotedRegionDomain, YoungPromotionDefersItsOnlyFieldScan)
     GC_EXPECT_TRUE(PromotedRegionDomain::DeferPromotedFieldScan(true));
     GC_EXPECT_FALSE(PromotedRegionDomain::DeferPromotedFieldScan(false));
 }
-using namespace MapleRuntime::RemapYoungRootsLogic;
-
-namespace {
-constexpr uintptr_t kAddr = 0x00007f00'00001000ULL;
-} // namespace
-
-GC_TEST(RemapYoungRoots, IntersectionIsOneHot)
+// zStackWatermark.cpp: start_processing_impl/process; mark and remap are
+// separate processing phases, even when their generation counters coincide.
+GC_TEST(StackWatermark, MarkCompletionDoesNotCompleteRemap)
 {
-    GC_EXPECT_EQ(CurrentRemapBit(kYoungMask0, kOldMask0), ZPointerRemapped00);
-    GC_EXPECT_EQ(CurrentRemapBit(kYoungMask1, kOldMask0), ZPointerRemapped01);
-    GC_EXPECT_EQ(CurrentRemapBit(kYoungMask0, kOldMask1), ZPointerRemapped10);
-    GC_EXPECT_EQ(CurrentRemapBit(kYoungMask1, kOldMask1), ZPointerRemapped11);
+    StackWatermark watermark;
+    using P = StackWatermark::ProcessingPhase;
+    GC_EXPECT_TRUE(watermark.TryBegin(7, StackWatermark::WM_OWNER_SELF, 1, P::MARK));
+    watermark.AdvanceTo(1, StackWatermark::WM_OWNER_SELF);
+    watermark.Finish(StackWatermark::WM_OWNER_SELF);
+    GC_EXPECT_TRUE(watermark.IsDone(7, P::MARK));
+    GC_EXPECT_FALSE(watermark.IsDone(7, P::REMAP));
+    GC_EXPECT_TRUE(watermark.TryBegin(7, StackWatermark::WM_OWNER_SELF, 1, P::REMAP));
+    GC_EXPECT_FALSE(watermark.IsDone(7, P::REMAP));
+    watermark.AdvanceTo(1, StackWatermark::WM_OWNER_SELF);
+    watermark.Finish(StackWatermark::WM_OWNER_SELF);
+    GC_EXPECT_TRUE(watermark.IsDone(7, P::REMAP));
+    GC_EXPECT_FALSE(watermark.IsDone(7, P::MARK));
 }
 
-GC_TEST(RemapYoungRoots, YoungFlipXorWrapsAcceptedPair)
+GC_TEST(StackWatermark, RemapRetainsLogicalStackIdentityAcrossGrow)
 {
-    GC_EXPECT_EQ(FlipYoungMask(kYoungMask0), kYoungMask1);
-    GC_EXPECT_EQ(FlipYoungMask(kYoungMask1), kYoungMask0);
-    GC_EXPECT_EQ(FlipOldMask(kOldMask0), kOldMask1);
-}
-
-GC_TEST(RemapYoungRoots, TwoYoungFlipsWithoutRemapMakeOldColourGoodAgain)
-{
-    const uintptr_t published = kAddr | CurrentRemapBit(kYoungMask0, kOldMask0);
-    GC_EXPECT_TRUE(ColourWrapsWithoutRemap(published, kYoungMask0, kOldMask0));
-    GC_EXPECT_EQ(Classify(published, kYoungMask0, kOldMask0), Kind::LoadGood);
-    GC_EXPECT_EQ(Classify(published, FlipYoungMask(kYoungMask0), kOldMask0), Kind::OldOnlyGood);
-    GC_EXPECT_EQ(Classify(published, FlipYoungMask(FlipYoungMask(kYoungMask0)), kOldMask0),
-                 Kind::LoadGood);
-}
-
-GC_TEST(RemapYoungRoots, OnlyLoadBadColoursEnterForwardingLookup)
-{
-    const uintptr_t published = kAddr | CurrentRemapBit(kYoungMask0, kOldMask0);
-    const uintptr_t wrappedYoung = FlipYoungMask(FlipYoungMask(kYoungMask0));
-    const Kind wrapped = Classify(published, wrappedYoung, kOldMask0);
-    GC_EXPECT_EQ(wrapped, Kind::LoadGood);
-    GC_EXPECT_FALSE(NeedsForwardingLookup(wrapped));
-    GC_EXPECT_FALSE(NeedsForwardingLookup(Kind::Uncoloured));
-    GC_EXPECT_TRUE(NeedsForwardingLookup(Kind::YoungOnlyGood));
-    GC_EXPECT_TRUE(NeedsForwardingLookup(Kind::OldOnlyGood));
-    GC_EXPECT_TRUE(NeedsForwardingLookup(Kind::DoubleBad));
-}
-
-GC_TEST(RemapYoungRoots, Phase8KeepsRootsFromWrappingToGood)
-{
-    const uintptr_t published = kAddr | CurrentRemapBit(kYoungMask0, kOldMask0);
-    GC_EXPECT_TRUE(kEnableRemapYoungRoots);
-    GC_EXPECT_TRUE(RootsStayAtMostOneBeatStale(published, kYoungMask0, kOldMask0, true));
-    GC_EXPECT_FALSE(RootsStayAtMostOneBeatStale(published, kYoungMask0, kOldMask0, false));
-}
-
-GC_TEST(RemapYoungRoots, RemapClearsDoubleBadOnColouredSlot)
-{
-    const uintptr_t doubleBad = kAddr | ZPointerRemapped11;
-    GC_EXPECT_TRUE(IsDoubleRemapBad(doubleBad, kYoungMask0, kOldMask0));
-    const uintptr_t healed = RemapToCurrent(doubleBad, kYoungMask0, kOldMask0, true);
-    GC_EXPECT_EQ(Classify(healed, kYoungMask0, kOldMask0), Kind::LoadGood);
-    GC_EXPECT_FALSE(IsDoubleRemapBad(healed, kYoungMask0, kOldMask0));
-}
-
-GC_TEST(RemapYoungRoots, UncolouredStackRootIsNotPainted)
-{
-    const uintptr_t plain = kAddr;
-    GC_EXPECT_EQ(Classify(plain, kYoungMask0, kOldMask0), Kind::Uncoloured);
-    GC_EXPECT_EQ(RemapToCurrent(plain, kYoungMask0, kOldMask0, true), plain);
-}
-
-GC_TEST(RemapYoungRoots, DisabledPassLeavesDoubleBad)
-{
-    const uintptr_t doubleBad = kAddr | ZPointerRemapped11;
-    GC_EXPECT_EQ(RemapToCurrent(doubleBad, kYoungMask0, kOldMask0, false), doubleBad);
-    GC_EXPECT_TRUE(IsDoubleRemapBad(doubleBad, kYoungMask0, kOldMask0));
+    StackWatermark watermark;
+    using P = StackWatermark::ProcessingPhase;
+    GC_EXPECT_TRUE(watermark.TryBegin(9, StackWatermark::WM_OWNER_SELF, 2, P::REMAP));
+    watermark.AdvanceTo(1, StackWatermark::WM_OWNER_SELF);
+    watermark.OnStackGrow(4096);
+    GC_EXPECT_EQ(watermark.GetCursorIndex(), size_t(1));
+    GC_EXPECT_EQ(watermark.GetFrameCount(), size_t(2));
+    GC_EXPECT_FALSE(watermark.IsDone(9, P::REMAP));
+    watermark.AdvanceTo(2, StackWatermark::WM_OWNER_SELF);
+    watermark.Finish(StackWatermark::WM_OWNER_SELF);
+    GC_EXPECT_TRUE(watermark.IsDone(9, P::REMAP));
 }
