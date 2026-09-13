@@ -54,6 +54,25 @@ private:
     Sequence parallel;
 };
 
+// zGeneration.cpp:600-602,637,1248: total collections count young
+// mark starts, including the young part of a major. Old completion is
+// not another collection start. Keep the total and old baseline together
+// so a director sample cannot combine opposite sides of a major start.
+struct ZStatCollectionStats {
+    uint32_t totalCollections = 0;
+    uint32_t collectionsAtMajorStart = 0;
+};
+
+class ZStatCollection {
+public:
+    void AtYoungMarkStart(bool startsOld);
+    ZStatCollectionStats Stats() const;
+
+private:
+    mutable std::mutex lock;
+    ZStatCollectionStats counts;
+};
+
 struct GcTriggerInputs;
 class GCWorkers;
 class RegionManager;
@@ -87,7 +106,7 @@ class ZStat {
 public:
     static GcTriggerInputs SampleDirectorStats(uint64_t now, ZStatCycle& young, ZStatCycle& old,
                                               RegionManager& regions, GCWorkers& youngWorkers, GCWorkers& oldWorkers,
-                                              uint32_t collectionsAtMajorStart);
+                                              const ZStatCollection& collections);
     struct PhaseTotals {
         uint64_t pauseNs = 0;    // sum of samples that started with the world stopped
         uint64_t concNs = 0;     // sum of samples that started with the world running
@@ -152,7 +171,7 @@ class ZStat {
 public:
     static GcTriggerInputs SampleDirectorStats(uint64_t now, ZStatCycle& young, ZStatCycle& old,
                                               RegionManager& regions, GCWorkers& youngWorkers, GCWorkers& oldWorkers,
-                                              uint32_t collectionsAtMajorStart);
+                                              const ZStatCollection& collections);
     static constexpr bool Enabled() { return false; }
     static void EnterStwScope() {}
     static void ExitStwScope() {}

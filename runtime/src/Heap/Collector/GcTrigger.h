@@ -271,8 +271,7 @@ inline bool RuleMajorAllocRate(const GcTriggerInputs& in)
     const double reclaimedPerYoungGc = in.reclaimedPerYoungAvg;
     const double reclaimedPerOldGc = in.reclaimedPerOldAvg;
     const double extraYoungGcTime = CalculateExtraYoungGcTime(in);
-    const uint32_t lookahead = in.totalCollections >= in.collectionsAtLastMajor ?
-        in.totalCollections - in.collectionsAtLastMajor : 0;
+    const uint32_t lookahead = in.totalCollections - in.collectionsAtLastMajor;
     const double extraYoungGcTimeForLookahead = extraYoungGcTime * static_cast<double>(lookahead);
     const bool canAmortizeTimeCost = extraYoungGcTimeForLookahead > oldGcTime;
     // zDirector.cpp:485-516 — 0/0 is NaN (false); young 0 / old >0 is +inf (true).

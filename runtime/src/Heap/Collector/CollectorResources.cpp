@@ -303,7 +303,7 @@ void CollectorResources::EvaluateDirector(uint64_t now)
     }
     auto& regions = static_cast<RegionSpace&>(Heap::GetHeap().GetAllocator()).GetRegionManager();
     GcTriggerInputs in = ZStat::SampleDirectorStats(now, youngCycle, oldCycle, regions,
-        *youngWorkers, *oldWorkers, collectionsAtMajorStart.load(std::memory_order_relaxed));
+        *youngWorkers, *oldWorkers, collections);
     in.minorBusy = minorBusy || minorDriverPort.Pending() != 0;
     in.majorBusy = majorBusy || majorDriverPort.Pending() != 0;
     const GcTriggerDecision decision = DecideGcTrigger(in);
@@ -360,10 +360,6 @@ void CollectorResources::RunCollection(Collector& collector, uint64_t index, GCR
     ZStatCycle& cycle = isYoung ? youngCycle : oldCycle;
     const auto before = workers->GetSnapshot();
     cycle.AtStart(TimeUtil::NanoSeconds(), before.elapsedNanos, before.workerNanos);
-    if (!isYoung) {
-        collectionsAtMajorStart.store(static_cast<uint32_t>(g_gcCount.load(std::memory_order_relaxed)),
-                                      std::memory_order_relaxed);
-    }
     collector.RunGarbageCollection(index, reason);
     const auto after = workers->GetSnapshot();
     cycle.AtEnd(TimeUtil::NanoSeconds(), after.elapsedNanos, after.workerNanos, warmup);

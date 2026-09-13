@@ -209,3 +209,93 @@ GC_TEST(GcDirector, StallingBoostsAndRetainsActiveWorkerBudgets)
     GC_EXPECT_EQ(idle.youngWorkers, 1u);
     GC_EXPECT_EQ(idle.oldWorkers, 1u);
 }
+
+// zGeneration.cpp:600-602,637,1248 and zDirector.cpp:495. These are
+// source-level statistics/rule scenarios, not a driver integration test.
+GC_TEST(GcDirector, CollectionCountsFollowYoungMarkStarts)
+{
+    ZStatCollection collections;
+    ZStatCycle young;
+    ZStatCycle old;
+    young.Initialize(0);
+    old.Initialize(0);
+    collections.AtYoungMarkStart(false);
+    const auto prior = collections.Stats();
+    collections.AtYoungMarkStart(true);
+    const auto combined = collections.Stats();
+    GC_EXPECT_EQ(combined.totalCollections - prior.totalCollections, 1u);
+    GC_EXPECT_EQ(combined.collectionsAtMajorStart, combined.totalCollections);
+
+    young.AtStart(1, 0, 0);
+    young.AtEnd(2, 0, 0, true);
+    old.AtStart(2, 0, 0);
+    old.AtEnd(3, 0, 0, true);
+    const auto completed = collections.Stats();
+    GC_EXPECT_EQ(completed.totalCollections, combined.totalCollections);
+    GC_EXPECT_EQ(completed.collectionsAtMajorStart, combined.collectionsAtMajorStart);
+
+    // The next young start counts immediately, before its completion.
+    collections.AtYoungMarkStart(false);
+    const auto next = collections.Stats();
+    GC_EXPECT_EQ(next.totalCollections - completed.totalCollections, 1u);
+    GC_EXPECT_EQ(next.collectionsAtMajorStart, completed.collectionsAtMajorStart);
+    collections.AtYoungMarkStart(false);
+    const auto second = collections.Stats();
+    GC_EXPECT_EQ(second.totalCollections - next.totalCollections, 1u);
+    GC_EXPECT_EQ(second.collectionsAtMajorStart, next.collectionsAtMajorStart);
+
+    collections.AtYoungMarkStart(true);
+    const auto nextMajor = collections.Stats();
+    GC_EXPECT_EQ(nextMajor.totalCollections - second.totalCollections, 1u);
+    GC_EXPECT_EQ(nextMajor.collectionsAtMajorStart, nextMajor.totalCollections);
+}
+
+GC_TEST(GcDirector, MajorRateLookaheadStartsAfterCombinedPause)
+{
+    ZStatCollection collections;
+    GcTriggerInputs in;
+    in.capacityBytes = 1000;
+    in.usedBytes = 800;
+    in.youngUsedBytes = 200;
+    in.oldUsedBytes = 600;
+    in.oldLiveAtMarkEnd = 100;
+    in.isTimeTrustable = true;
+    in.lastYoungGcDurationSec = 2;
+    in.lastOldGcDurationSec = 3;
+    in.reclaimedPerYoungAvg = 100;
+    in.reclaimedPerOldAvg = 100;
+    const auto sampleRule = [&] {
+        const auto counts = collections.Stats();
+        in.totalCollections = counts.totalCollections;
+        in.collectionsAtLastMajor = counts.collectionsAtMajorStart;
+        return RuleMajorAllocRate(in);
+    };
+    GC_EXPECT_TRUE(CalculateExtraYoungGcTime(in) > in.lastOldGcDurationSec);
+    collections.AtYoungMarkStart(true);
+    GC_EXPECT_TRUE(!sampleRule());
+    // Sampling again at old completion must not count the old phase.
+    GC_EXPECT_TRUE(!sampleRule());
+    collections.AtYoungMarkStart(false);
+    GC_EXPECT_TRUE(sampleRule());
+    collections.AtYoungMarkStart(true);
+    GC_EXPECT_TRUE(!sampleRule());
+}
+
+GC_TEST(GcDirector, MajorRateLookaheadUsesUnsignedCollectionDistance)
+{
+    GcTriggerInputs in;
+    in.capacityBytes = 1000;
+    in.youngUsedBytes = 200;
+    in.oldUsedBytes = 600;
+    in.oldLiveAtMarkEnd = 100;
+    in.isTimeTrustable = true;
+    in.lastYoungGcDurationSec = 2;
+    in.lastOldGcDurationSec = 3;
+    in.reclaimedPerYoungAvg = 100;
+    in.reclaimedPerOldAvg = 100;
+    in.collectionsAtLastMajor = std::numeric_limits<uint32_t>::max();
+    in.totalCollections = in.collectionsAtLastMajor;
+    GC_EXPECT_TRUE(!RuleMajorAllocRate(in));
+    ++in.totalCollections;
+    GC_EXPECT_TRUE(RuleMajorAllocRate(in));
+}

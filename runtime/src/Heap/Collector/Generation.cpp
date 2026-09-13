@@ -746,6 +746,7 @@ void WCollector::DoYoungGarbageCollection()
     // VM_ZMarkStartYoungAndOld / VM_ZMarkStartYoung (zGeneration.cpp:583-659).
     // A major starts old exactly once in this young pause. An independent
     // minor leaves the old cycle identity and mark color untouched.
+    collectorResources.NoteYoungMarkStart();
     flip_young_mark_start();
     StartYoungMarkWork();
 
