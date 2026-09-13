@@ -1392,6 +1392,16 @@ void RegionManager::AssemblePinnedGarbageCandidates(bool collectAll)
     }
 }
 
+// ThreadLocalAllocBuffer::initial_desired_size (cpp:265): a new thread
+// starts with the published allocation fraction instead of a fixed extent.
+void RegionManager::InitializeTLAB(AllocBuffer& buffer)
+{
+    std::lock_guard<std::mutex> lock(tlabStatisticsLock);
+    const size_t threads = std::max(static_cast<size_t>(tlabAllocatingThreads.Average() + 0.5), size_t{1});
+    buffer.ResizeTLAB(static_cast<size_t>(tlabCapacity), tlabRequestedFraction.Average() / threads,
+                      GetThreadLocalRegionSize());
+}
+
 // zTLABUsage.cpp:46 reset and zThreadLocalAllocBuffer.cpp:59 publish_statistics.
 // Called in the young mark-start pause, after every active TLAB was retired.
 void RegionManager::PublishTLABStatistics()

@@ -250,6 +250,8 @@ void AllocBuffer::Init()
                   "need to modify the offset of this value in llvm-project at the same time");
     tlRegion = RegionInfo::NullRegion();
     ThreadLocal::InitializeCleaner();
+    auto& manager = reinterpret_cast<RegionSpace&>(Heap::GetHeap().GetAllocator()).GetRegionManager();
+    manager.InitializeTLAB(*this);
     Heap::GetHeap().RegisterAllocBuffer(*this);
 }
 

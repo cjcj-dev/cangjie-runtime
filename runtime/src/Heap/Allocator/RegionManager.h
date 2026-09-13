@@ -227,6 +227,7 @@ public:
     // returned on retirement, including compiler-generated fast allocations.
     void IncreaseTLABUsed(size_t size) { tlabUsed.fetch_add(size, std::memory_order_relaxed); }
     void DecreaseTLABUsed(size_t size) { tlabUsed.fetch_sub(size, std::memory_order_relaxed); }
+    void InitializeTLAB(AllocBuffer& buffer);
     void PublishTLABStatistics();
     void RetireTLABStatistics(AllocBuffer& buffer);
 
