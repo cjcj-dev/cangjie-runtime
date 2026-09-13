@@ -199,6 +199,8 @@ public:
         RegionInfo::VisitPageOwners(visitor);
     }
 
+    size_t GetCommittedCapacity() const { return RegionInfo::GetCommittedCapacity(); }
+
     size_t GetHeapCapacity() const { return heapUnitCount * RegionInfo::UNIT_SIZE; }
 
 

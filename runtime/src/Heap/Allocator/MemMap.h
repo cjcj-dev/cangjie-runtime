@@ -11,6 +11,7 @@
 #include <cstddef>
 #include <cstdint>
 #include <vector>
+#include <mutex>
 
 #ifdef _WIN64
 #include <handleapi.h>
@@ -93,9 +94,9 @@ class MemMapBackend {
 public:
     virtual ~MemMapBackend() = default;
     virtual void* Reserve(void* requested, size_t size, unsigned int flags, const char* tag, bool exact) = 0;
-    virtual bool Commit(void* addr, size_t size, int prot, uint32_t numaNode, bool bindNuma) = 0;
+    virtual size_t Commit(void* addr, size_t size, int prot, uint32_t numaNode, bool bindNuma) = 0;
     virtual bool Protect(void* addr, size_t size, int prot) = 0;
-    virtual bool Release(void* addr, size_t size, uint32_t numaNode) = 0;
+    virtual size_t Release(void* addr, size_t size, uint32_t numaNode) = 0;
     virtual bool Unreserve(void* addr, size_t size) = 0;
 };
 
@@ -148,6 +149,8 @@ public:
     size_t ReleaseMemory(void* addr, size_t size);
     size_t ReleaseMemory(void* addr, size_t size, uint32_t numaNode);
     bool ProtectMemory(void* addr, size_t size, int prot);
+    size_t GetCommittedSize() const;
+    size_t GetCommittedSize(uintptr_t start, size_t size) const;
 
     void* GetBaseAddr() const { return memBaseAddr; }
     void* GetCurrEnd() const { return memCurrEndAddr; }
@@ -177,6 +180,9 @@ private:
     NumaPartitionRegistry numaPartitions;
     MemMapBackend* backend{ nullptr };
     bool bindNuma{ false };
+    mutable std::mutex backingMutex;
+    std::vector<MemoryRange> committedRanges;
+    void RecordBacking(uintptr_t start, size_t size, bool release);
 
     MemMap(void* baseAddr, size_t initSize, size_t mappedSize, int prot, ReservationRegistry&& registry,
            NumaPartitionRegistry&& partitions, MemMapBackend& osBackend, bool shouldBindNuma);

@@ -777,8 +777,13 @@ size_t FreeRegionManager::UncommitIdleUnitsImpl(size_t maxBytes, uint64_t idleBe
             break;
         }
         const size_t requestedBytes = static_cast<size_t>(num) * RegionInfo::UNIT_SIZE;
+        const size_t before = RegionInfo::GetCommittedUnitBytes(idx, num);
         const size_t backendReleased = RegionInfo::ReleaseUnitsPartial(idx, num);
-        const size_t released = Uncommitter::AccountReleased(requestedBytes, backendReleased);
+        const size_t after = RegionInfo::GetCommittedUnitBytes(idx, num);
+        // zNMT.cpp:65: capacity is the backing owner's actual range delta,
+        // including retries of already uncommitted cache extents.
+        CHECK(after <= before);
+        const size_t released = before - after;
         {
             std::lock_guard<std::mutex> lock2(releasedUnitTreeMutex);
             CHECK_DETAIL(releasedUnitTree.MergeInsert(idx, num, true),
@@ -1987,12 +1992,25 @@ RegionInfo* RegionManager::TakeRegion(size_t num, RegionInfo::UnitRole type, boo
         claimed = StallAllocation(request, requestGc);
     }
     if (claimed) {
+        size_t committedUnits = 0;
         RegionInfo* region = freeRegionManager.MaterializePageMemory(
-            request.Memory(), type, request.ExpectsPhysicalMemory(), request.ClearsPayload());
+            request.Memory(), type, request.ExpectsPhysicalMemory(), request.ClearsPayload(), committedUnits);
         if (region == nullptr) {
-            // A02p will make partial commit failure return here. Return the
-            // owned memory before reporting failure; no capacity promise leaks.
-            ReturnPageMemory(request.Memory());
+            // zPageAllocator.cpp:1906: preserve the succeeded prefix in the
+            // committed cache and return only the failed suffix uncommitted.
+            // No page descriptor has been published for this allocation.
+            ScopedEnterSaferegion enterSaferegion(true);
+            std::lock_guard<std::mutex> lock(pageAllocatorMutex);
+            const size_t index = request.Memory().index;
+            if (committedUnits != 0) {
+                freeRegionManager.AddGarbageUnits(index, committedUnits);
+            }
+            freeRegionManager.AddReleaseUnits(index + committedUnits, num - committedUnits);
+            CHECK(pageAllocatorUsed >= size);
+            pageAllocatorUsed -= size;
+            allocationStallQueue.SatisfyAvailableLocked([this](AllocationStallRequest& pending) {
+                return ClaimAllocationLocked(pending);
+            });
             return nullptr;
         }
         if (num >= HUGE_PAGE) {
@@ -2484,6 +2502,7 @@ void RegionManager::DumpRegionInfo() const
 void RegionManager::DumpRegionStats(const char* msg) const
 {
     size_t totalSize = GetHeapCapacity();
+    VLOG(REPORT, "heap backing capacity %zu bytes", GetCommittedCapacity());
     size_t totalUnits = totalSize / RegionInfo::UNIT_SIZE;
     size_t activeSize = GetActiveUnitCount() * RegionInfo::UNIT_SIZE;
     size_t activeUnits = activeSize / RegionInfo::UNIT_SIZE;
