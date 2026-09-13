@@ -13,7 +13,7 @@
 #include "Heap/z/zUncommitter.hpp"
 #include "Common/ScopedObjectAccess.h"
 #include "ExceptionManager.inline.h"
-#include "Heap/Heap.h"
+#include "Heap/z/zHeap.hpp"
 #include "Heap/Allocator/HeapFiller.h"
 #include "Heap/z/zBarrier.hpp"
 #include "Mutator/Mutator.h"

@@ -32,16 +32,16 @@
 #include "Heap/Collector/GcTriggerFlags.h"
 #include "Heap/Collector/MarkPartialArray.h"
 #include "Heap/Collector/TenuringThreshold.h"
-#include "Heap/GcThreadPool.h"
+#include "Heap/z/zWorkers.hpp"
 #include "Heap/Verify/TraceClear.h"
-#include "Heap/Collector/MarkingStacks.h"
+#include "Heap/z/zMark.hpp"
 #include "Heap/Verify/Zap.h"
 #include "Heap/Verify/DiagGate.h"
 #include "Heap/Verify/NwDropAudit.h"
 #include "Heap/Verify/GarbRegionDiag.h"
 #include "Heap/Verify/SurvNodeDiag.h"
 #include "Heap/Verify/CsetEmptyWho.h"
-#include "Common/ColourPredicates.h"
+#include "Heap/z/zAddress.inline.hpp"
 #include "Mutator/MutatorManager.h"
 #include "ObjectModel/MArray.inline.h"
 #include "UnwindStack/StackFrameCursor.h"
@@ -857,3 +857,359 @@ void WCollector::DoYoungGarbageCollection()
 
 }
 } // namespace MapleRuntime
+
+// Copyright (c) Huawei Technologies Co., Ltd. 2025. All rights reserved.
+// This source file is part of the Cangjie project, licensed under Apache-2.0
+// with Runtime Library Exception.
+//
+// See https://cangjie-lang.cn/pages/LICENSE for license information.
+
+#include "Heap/z/zVerify.hpp"
+#include "Heap/Collector/StringDedup.h"
+#include "Heap/z/zMark.hpp"
+#include "Heap/z/zMarkStack.hpp"
+#include "Heap/z/zMark.hpp"
+
+#include <algorithm>
+#include "Base/CString.h"
+#include "Common/Runtime.h"
+#include "Concurrency/Concurrency.h"
+#include "Heap/z/zThreadLocalAllocBuffer.hpp"
+#include "Heap/z/zStoreBarrierBuffer.hpp"
+#include "Heap/Collector/MarkPartialArray.h"
+#include "Heap/Verify/NwDropAudit.h"
+#include "Heap/Verify/M0ExitDiagnostics.h"
+#include "Heap/Verify/SurvNodeDiag.h"
+#include "Heap/z/zMark.hpp"
+#include "ObjectModel/RefField.inline.h"
+
+
+namespace MapleRuntime {
+void TracingCollector::ProcessOldNonStrongReferences(WorkStack& workStack)
+{
+    CHECK_DETAIL(oldCycle.Phase() == GC_PHASE_MARK_COMPLETE,
+                 "non-strong references require completed old marking");
+    {
+        MRT_PHASE_TIMER(ZStatPhases::PIdentifyUselessExternRef);
+        FindUselessExternObjects();
+    }
+    {
+        // This explicit finalizable closure may mark after ordinary mark work
+        // is closed, like ZGenerationOld::process_non_strong_references.
+        MRT_PHASE_TIMER(ZStatPhases::PConcurrentResurrection);
+        DoResurrection(workStack);
+    }
+    // Process the discovered references after the finalizable closure, before
+    // relocation-set processing (zGeneration.cpp:1330-1335).
+    ProcessFinalizers();
+    StringDedup::Instance().Clean([this](BaseObject* object) {
+        RegionInfo* region = RegionInfo::GetRegionInfoAt(reinterpret_cast<MAddress>(object));
+        return region->IsYoungRegion() || IsMarkedObject<Generation::Old>(object);
+    });
+    // zGeneration.cpp:1344-1373: finish in-flight weak loads before unblocking.
+    // A serial driver and synchronous GCWorkers::Run have already joined GC
+    // work here; mutators (including the finalizer thread) need a rendezvous.
+    MutatorManager::Instance().RunEpochHandshake("old non-strong references", false);
+    collectorResources.UnblockResurrection();
+    collectorResources.GetFinalizerProcessor().EnqueueReferences();
+    // zGeneration.cpp:1147-1168: the serial driver excludes young collections
+    // while this verification safepoint observes the weak-inclusive graph.
+    if (ZVerifyRoots || ZVerifyObjects) {
+        ScopedStopTheWorld stw("verify after weak processing", false);
+        ZVerify::BeforeZOperation();
+        ZVerify::AfterWeakProcessing();
+    }
+}
+
+bool TracingCollector::FinishOldMark(WorkStack& workStack, WorkStack& foreignRootsSet)
+{
+    // ZMark::end/try_end and ZGenerationOld::concurrent_mark_continue
+    // (zMark.cpp:940-989; zGeneration.cpp:1015-1030).
+    MarkStripeSet& stripes = majorMarkDomain->Stripes();
+    for (;;) {
+        if (!workStack.empty() || !stripes.IsEmpty()) {
+            markedObjectCount.fetch_add(RunMajorStripeMark(workStack), std::memory_order_relaxed);
+        }
+        if (Heap::GetHeap().GetGCPhase() != GC_PHASE_CLEAR_SATB_BUFFER) {
+            TransitionToGCPhase(GC_PHASE_CLEAR_SATB_BUFFER, true);
+            if (!stripes.IsEmpty()) {
+                continue;
+            }
+        }
+        bool more = FlushMarkProducers(majorMarkDomain.get());
+        if (more) {
+            continue;
+        }
+        bool terminated;
+        {
+            ScopedStopTheWorld stw("old mark end", true, GC_PHASE_CLEAR_SATB_BUFFER);
+            ZVerify::BeforeZOperation();
+            NoteMarkTerminatePause();
+            const size_t before = stripes.Population();
+            (void)MutatorManager::Instance().HandshakeFlushMarkProducers(majorMarkDomain.get());
+            const size_t after = stripes.Population();
+            NoteMarkTerminateFlushed(after >= before ? after - before : 0);
+            terminated = workStack.empty() && stripes.IsEmpty();
+            if (terminated) {
+                ProcessExportRoots(foreignRootsSet);
+                // zMark.cpp:982,1022: verify all thread-private stacks, then
+                // shared stripes, while the safepoint excludes publication.
+                MarkingStacks::VerifyAllEmpty(*majorMarkDomain);
+                oldCycle.PublishPhase(GC_PHASE_MARK_COMPLETE);
+                ZVerify::AfterMark();
+                collectorResources.BlockResurrection();
+            }
+        }
+        if (terminated) {
+            ReportMarkTerminateContinue();
+            return true;
+        }
+        NoteMarkTerminateContinue(workStack.size() + stripes.Population());
+    }
+}
+
+void TracingCollector::ConcurrentReMark(WorkStack& remarkStack, WorkStack& foreignRootsSet)
+{
+    CHECK_DETAIL(FinishOldMark(remarkStack, foreignRootsSet), "not cleared\n");
+}
+
+bool TracingCollector::FlushMarkProducers(MarkDomain* domain)
+{
+    bool flushed = domain != nullptr ? domain->TryTerminateFlush() :
+        MutatorManager::Instance().HandshakeFlushMarkProducers(nullptr);
+    if (domain != nullptr) {
+        flushed = domain->FlushStacks() || flushed || !domain->Stripes().IsEmpty();
+    }
+    return flushed;
+}
+
+void TracingCollector::DoResurrection(WorkStack& workStack)
+{
+    workStack.clear();
+    NativeSlotVisitor func = [&workStack, this](NativeSlot& ref) {
+        BaseObject* finalizerObj = Heap::GetBarrier().ReadStaticRef(ref);
+        if (!IsMarkedObject<Generation::Old>(finalizerObj)) {
+            DLOG(TRACE, "resurrectable obj @%p:%p", &ref, finalizerObj);
+            CHECK(DiscoverReference(finalizerObj, ReferenceType::FINAL) == ReferenceStatus::DISCOVERED);
+            workStack.push_back(MarkStackEntry::MarkAndFollow(finalizerObj, true));
+        }
+    };
+    (void)collectorResources.GetFinalizerProcessor().VisitFinalizers(func);
+
+    if (!workStack.empty()) {
+        const size_t resurrectdObjects = RunMajorStripeMark(workStack);
+        markedObjectCount.fetch_add(resurrectdObjects, std::memory_order_relaxed);
+        VLOG(REPORT, "resurrected objects %zu", resurrectdObjects);
+    }
+}
+
+
+} // namespace MapleRuntime
+
+// Copyright (c) Huawei Technologies Co., Ltd. 2025. All rights reserved.
+// This source file is part of the Cangjie project, licensed under Apache-2.0
+// with Runtime Library Exception.
+//
+// See https://cangjie-lang.cn/pages/LICENSE for license information.
+
+#include "Heap/z/zVerify.hpp"
+#include "Heap/Collector/StringDedup.h"
+#include "Heap/z/zMark.hpp"
+#include "Heap/z/zMarkStack.hpp"
+#include "Heap/z/zMark.hpp"
+
+#include <algorithm>
+#include "Base/CString.h"
+#include "Common/Runtime.h"
+#include "Concurrency/Concurrency.h"
+#include "Heap/z/zThreadLocalAllocBuffer.hpp"
+#include "Heap/z/zStoreBarrierBuffer.hpp"
+#include "Heap/Collector/MarkPartialArray.h"
+#include "Heap/Verify/NwDropAudit.h"
+#include "Heap/Verify/M0ExitDiagnostics.h"
+#include "Heap/Verify/SurvNodeDiag.h"
+#include "Heap/z/zMark.hpp"
+#include "ObjectModel/RefField.inline.h"
+
+
+namespace MapleRuntime {
+void TracingCollector::Init() {}
+
+void TracingCollector::Fini() { Collector::Fini(); }
+
+BaseObject* TracingCollector::ResolveCurrentValueRoot(BaseObject* value, const void* owner, Generation generation,
+                                                      ForwardingStage stage) const
+{
+    if (value == nullptr || !Heap::IsHeapAddress(value)) {
+        return value;
+    }
+    const ForwardingProvenance provenance{
+        ForwardingHolderKind::Static, owner, nullptr, stage, ForwardingWriterKind::CollectorHeal,
+        ForwardingSourceKind::CallerValue, nullptr, nullptr, ForwardingFieldKind::RootSlot
+    };
+    BaseObject* current = stage == ForwardingStage::IncomingNew
+        ? ValidateCurrentValue(value, provenance) : ResolveStoreValue(value, provenance, generation);
+    CHECK_DETAIL(current != nullptr && Heap::IsHeapAddress(current),
+                 "value root resolve requires a heap to-address from=%p current=%p", value, current);
+    CHECK_DETAIL(Collector::JudgeHandOutTarget(current) == HandVerdict::Usable,
+                 "value root resolve requires a usable target from=%p current=%p", value, current);
+    return current;
+}
+
+void TracingCollector::CurrentizeValueRootSet(std::unordered_set<BaseObject*>& roots, Generation generation) const
+{
+    std::unordered_set<BaseObject*> current;
+    current.reserve(roots.size());
+    for (BaseObject* value : roots) {
+        current.insert(ResolveCurrentValueRoot(value, &roots, generation));
+    }
+    roots.swap(current);
+}
+
+void TracingCollector::CurrentizeValueRootMap(
+    std::unordered_map<BaseObject*, std::list<BaseObject*>>& roots, Generation generation) const
+{
+    std::unordered_map<BaseObject*, std::list<BaseObject*>> current;
+    current.reserve(roots.size());
+    for (const auto& entry : roots) {
+        BaseObject* key = ResolveCurrentValueRoot(entry.first, &roots, generation);
+        std::list<BaseObject*>& values = current[key];
+        for (BaseObject* value : entry.second) {
+            values.push_back(ResolveCurrentValueRoot(value, &roots, generation));
+        }
+    }
+    roots.swap(current);
+}
+
+// Registered finalizers are discovered by DoResurrection and fixed by
+// VisitNativePointers. Only queued/running finalizables are strong mark roots.
+
+
+void TracingCollector::EnumAllSurrectedExportRoots(RootSet &rootSet)
+{
+    {
+        std::lock_guard<std::mutex> lg(resurrectExportMtx);
+        CurrentizeValueRootSet(resurrectedExportObjectes, Generation::Old);
+        CurrentizeValueRootSet(resurrectedExportObjectesForwardPhase, Generation::Old);
+        for (auto* obj : resurrectedExportObjectes) {
+            rootSet.push_back(obj);
+        }
+        for (auto* obj : resurrectedExportObjectesForwardPhase) {
+            rootSet.push_back(obj);
+        }
+    }
+    std::lock_guard<std::mutex> lg(cycleWorkStackMtx);
+    CurrentizeValueRootMap(cycleRefWorkStack, Generation::Old);
+    auto it = cycleRefWorkStack.begin();
+    while (it != cycleRefWorkStack.end()) {
+        BaseObject* exportObj = it->first;
+        rootSet.push_back(exportObj);
+        for (auto &externObj : it->second) {
+            rootSet.push_back(externObj);
+        }
+        it++;
+    }
+}
+
+} // namespace MapleRuntime
+
+// Copyright (c) Huawei Technologies Co., Ltd. 2025. All rights reserved.
+// This source file is part of the Cangjie project, licensed under Apache-2.0
+// with Runtime Library Exception.
+//
+// See https://cangjie-lang.cn/pages/LICENSE for license information.
+
+#include "Heap/z/zVerify.hpp"
+#include "Heap/Collector/StringDedup.h"
+#include "Heap/z/zMark.hpp"
+#include "Heap/z/zMarkStack.hpp"
+#include "Heap/z/zMark.hpp"
+
+#include <algorithm>
+#include "Base/CString.h"
+#include "Common/Runtime.h"
+#include "Concurrency/Concurrency.h"
+#include "Heap/z/zThreadLocalAllocBuffer.hpp"
+#include "Heap/z/zStoreBarrierBuffer.hpp"
+#include "Heap/Collector/MarkPartialArray.h"
+#include "Heap/Verify/NwDropAudit.h"
+#include "Heap/Verify/M0ExitDiagnostics.h"
+#include "Heap/Verify/SurvNodeDiag.h"
+#include "Heap/z/zMark.hpp"
+#include "ObjectModel/RefField.inline.h"
+
+
+namespace MapleRuntime {
+} // namespace MapleRuntime
+
+// Copyright (c) Huawei Technologies Co., Ltd. 2025. All rights reserved.
+// This source file is part of the Cangjie project, licensed under Apache-2.0
+// with Runtime Library Exception.
+//
+// See https://cangjie-lang.cn/pages/LICENSE for license information.
+
+
+#include "Heap/z/zCollectedHeap.hpp"
+
+#include <atomic>
+#include <cstdarg>
+#include <cstdio>
+#include <cstdlib>
+
+#include "Base/Log.h"
+#include "Base/LogFile.h"
+#include "Heap/Collector/GcStats.h"
+#include "Common/BaseObject.h"
+#include "Heap/z/zAddress.inline.hpp"
+#include "Common/StateWord.h"
+#include "Heap/z/zForwardingTable.hpp"
+#include "Heap/z/zPage.hpp"
+#include "Heap/Allocator/RegionSpace.h"
+#include "Heap/z/zDriver.hpp"
+#include "Heap/Collector/ManagedObjectGate.h"
+#include "Heap/z/zHeap.hpp"
+#include "Mutator/Mutator.h"
+#include "TypeInfoManager.h"
+
+namespace MapleRuntime {
+GCCycleSnapshot GenerationCycle::Snapshot() const
+{
+    std::lock_guard<std::mutex> lock(mutex);
+    return { generation, sequence, requestIndex, reason.load(std::memory_order_relaxed),
+             phase.load(std::memory_order_relaxed), active };
+}
+
+void GenerationCycle::SelectReason(GCReason value)
+{
+    std::lock_guard<std::mutex> lock(mutex);
+    CHECK(!active);
+    reason.store(value, std::memory_order_release);
+}
+
+void GenerationCycle::Begin(uint64_t index)
+{
+    std::lock_guard<std::mutex> lock(mutex);
+    CHECK(!active);
+    // Young sequence belongs to mark_start together with the remset flip
+    // (zGeneration.cpp:871-880), not to the earlier request preparation.
+    if (generation == GCCycleGeneration::OLD) {
+        CHECK(sequence != UINT64_MAX);
+        ++sequence;
+    }
+    requestIndex = index;
+    active = true;
+}
+
+void GenerationCycle::PublishPhase(GCPhase value)
+{
+    std::lock_guard<std::mutex> lock(mutex);
+    phase.store(value, std::memory_order_release);
+}
+
+void GenerationCycle::End()
+{
+    std::lock_guard<std::mutex> lock(mutex);
+    active = false;
+}
+
+}

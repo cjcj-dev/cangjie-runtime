@@ -11,8 +11,8 @@ set(GC_UNIT_SOURCES
     gc_unit_main.cpp
     gc_unit_stubs.cpp
     test_colour_address.cpp
-    test_z_bit_field.cpp
-    test_z_list.cpp
+    test_zBitField.cpp
+    test_zList.cpp
     test_zstat.cpp
     test_trustp1_phase1.cpp
 
@@ -21,7 +21,7 @@ set(GC_UNIT_SOURCES
     test_object_gate.cpp
     test_remset.cpp
     test_defect_regressions.cpp
-    test_region_bitmap.cpp
+    test_zLiveMap.cpp
     test_region_age.cpp
     test_unwind_regressions.cpp
     test_gctibzero.cpp
@@ -30,7 +30,7 @@ set(GC_UNIT_SOURCES
     test_z_forwarding_life.cpp
     test_colour_is_checks.cpp
     test_remap_young_roots.cpp
-    test_forwarding_entries.cpp
+    test_zForwarding.cpp
     test_forwarding_no_geometry.cpp
     test_z_forwarding_table.cpp
     test_young_conc.cpp
@@ -41,7 +41,7 @@ set(GC_UNIT_SOURCES
     test_relocation_set_selector.cpp
     test_store_barrier_buffer.cpp
     test_barrier_old_atomic.cpp
-    test_page_age.cpp
+    test_zPageAge.cpp
     test_range_registry.cpp
     test_mapped_cache.cpp
     test_stay_young.cpp

@@ -7,8 +7,8 @@
 #ifndef MRT_HEAL_COVERAGE_H
 #define MRT_HEAL_COVERAGE_H
 
-#include "Common/ColourMask.h"
-#include "Common/ColourPredicates.h"
+#include "Heap/z/zAddress.hpp"
+#include "Heap/z/zAddress.inline.hpp"
 
 #include <cstddef>
 #include <cstdint>

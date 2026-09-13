@@ -20,7 +20,7 @@
 #include "Cangjie.h"
 #include "Common/BaseObject.h"
 #include "Heap/z/zPage.hpp"
-#include "Heap/Heap.h"
+#include "Heap/z/zHeap.hpp"
 #include "Heap/Verify/DiagGate.h"
 
 namespace MapleRuntime {

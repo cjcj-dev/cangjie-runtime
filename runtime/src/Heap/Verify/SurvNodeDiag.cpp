@@ -17,9 +17,9 @@
 #include "Heap/z/zPage.hpp"
 #include "Heap/Allocator/RegionSpace.h"
 #include "Heap/z/zRememberedSet.hpp"
-#include "Heap/Collector/Collector.h"
+#include "Heap/z/zCollectedHeap.hpp"
 #include "Heap/Collector/GcStats.h"
-#include "Heap/Heap.h"
+#include "Heap/z/zHeap.hpp"
 
 namespace MapleRuntime {
 namespace SurvNodeDiag {

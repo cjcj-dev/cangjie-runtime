@@ -9,7 +9,7 @@
 
 #include <type_traits>
 
-#include "Heap/Collector/LiveInfo.h"
+#include "Heap/z/zLiveMap.hpp"
 
 using MapleRuntime::Generation;
 using MapleRuntime::MarkView;

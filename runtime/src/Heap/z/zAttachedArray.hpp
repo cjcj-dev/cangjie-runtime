@@ -20,59 +20,31 @@ namespace MapleRuntime {
 template <typename ObjectT, typename ArrayT>
 class ZAttachedArray {
 public:
-    static size_t object_size()
-    {
-        const size_t alignment = alignof(ArrayT);
-        return (sizeof(ObjectT) + alignment - 1) & ~(alignment - 1);
-    }
+    static size_t object_size();
 
-    static size_t array_size(size_t length) { return sizeof(ArrayT) * length; }
+    static size_t array_size(size_t length);
 
     // Check before multiplication/addition, including the caller's arena budget.
-    static bool allocation_size(size_t length, size_t* size)
-    {
-        if (length > (std::numeric_limits<size_t>::max() - object_size()) / sizeof(ArrayT)) {
-            return false;
-        }
-        *size = object_size() + array_size(length);
-        return true;
-    }
+    static bool allocation_size(size_t length, size_t* size);
 
-    static void initialize(void* addr, size_t length)
-    {
-        void* const arrayAddr = reinterpret_cast<char*>(addr) + object_size();
-        ::new (arrayAddr) ArrayT[length]();
-    }
+    static void initialize(void* addr, size_t length);
 
-    static void* alloc(size_t length)
-    {
-        size_t size;
-        if (!allocation_size(length, &size)) {
-            return nullptr;
-        }
-        void* const addr = std::malloc(size);
-        if (addr == nullptr) {
-            return nullptr;
-        }
-        initialize(addr, length);
-        return addr;
-    }
+    static void* alloc(size_t length);
 
-    static void free(ObjectT* obj) { std::free(obj); }
+    static void free(ObjectT* obj);
 
-    explicit ZAttachedArray(size_t length) : _length(length) {}
+    explicit ZAttachedArray(size_t length);
 
-    size_t length() const { return _length; }
+    size_t length() const;
 
-    ArrayT* operator()(const ObjectT* obj) const
-    {
-        return reinterpret_cast<ArrayT*>(reinterpret_cast<uintptr_t>(obj) + object_size());
-    }
+    ArrayT* operator()(const ObjectT* obj) const;
 
 private:
     const size_t _length;
 };
 
 } // namespace MapleRuntime
+
+#include "Heap/z/zAttachedArray.inline.hpp"
 
 #endif // MRT_Z_ATTACHED_ARRAY_H

@@ -11,10 +11,10 @@
 #include <limits>
 #include <cstring>
 #include "CangjieRuntime.h"
-#include "Heap/Heap.h"
-#include "Heap/GcThreadPool.h"
+#include "Heap/z/zHeap.hpp"
+#include "Heap/z/zWorkers.hpp"
 #include "Heap/z/zPageAllocator.hpp"
-#include "Heap/Collector/GcTrigger.h"
+#include "Heap/z/zDirector.hpp"
 
 namespace MapleRuntime {
 void ZStatCycle::Sequence::Add(double value)
@@ -564,4 +564,102 @@ ZStatHeapStats ZStatHeap::Stats() const
     result.reclaimedAverage += std::numeric_limits<double>::denorm_min();
     return result;
 }
+} // namespace MapleRuntime
+
+// Copyright (c) Huawei Technologies Co., Ltd. 2025. All rights reserved.
+// This source file is part of the Cangjie project, licensed under Apache-2.0
+// with Runtime Library Exception.
+//
+// See https://cangjie-lang.cn/pages/LICENSE for license information.
+
+#include "Heap/z/zVerify.hpp"
+#include "Heap/Collector/StringDedup.h"
+#include "Heap/z/zMark.hpp"
+#include "Heap/z/zMarkStack.hpp"
+#include "Heap/z/zMark.hpp"
+
+#include <algorithm>
+#include "Base/CString.h"
+#include "Common/Runtime.h"
+#include "Concurrency/Concurrency.h"
+#include "Heap/z/zThreadLocalAllocBuffer.hpp"
+#include "Heap/z/zStoreBarrierBuffer.hpp"
+#include "Heap/Collector/MarkPartialArray.h"
+#include "Heap/Verify/NwDropAudit.h"
+#include "Heap/Verify/M0ExitDiagnostics.h"
+#include "Heap/Verify/SurvNodeDiag.h"
+#include "Heap/z/zMark.hpp"
+#include "ObjectModel/RefField.inline.h"
+
+
+namespace MapleRuntime {
+void TracingCollector::UpdateGCStats()
+{
+    RegionSpace& space = reinterpret_cast<RegionSpace&>(theAllocator);
+    GCStats& gcStats = GetGCStats();
+    gcStats.Dump();
+
+    size_t oldThreshold = gcStats.GetThreshold();
+    size_t liveBytes = space.AllocatedBytes();
+    size_t heapSize = space.GetMaxCapacity();
+    size_t recentBytes = space.GetRecentAllocatedSize();
+
+    // 2 / 3: when live bytes is over 2/3 heap size, the async allocation need to be closed.
+    if (liveBytes > heapSize * 2 / 3) {
+        space.EnableAsyncAllocation(false);
+    } else {
+        space.EnableAsyncAllocation(true);
+    }
+    // 4 ways to estimate heap next threshold.
+#if defined (__OHOS__)
+    constexpr double lowUtilGrowth = 1.8;
+    constexpr double lowUtilRatio = 0.25;
+    double heapGrowth = liveBytes < heapSize * lowUtilRatio ?
+        lowUtilGrowth : 1 + (CangjieRuntime::GetHeapParam().heapGrowth);
+#else
+    double heapGrowth = 1 + (CangjieRuntime::GetHeapParam().heapGrowth);
+#endif
+    size_t threshold1 = static_cast<size_t>(liveBytes * heapGrowth);
+    size_t threshold2 = static_cast<size_t>(oldThreshold * heapGrowth);
+    size_t threshold3 = static_cast<size_t>(liveBytes * 1.2 / (1.0 + gcStats.garbageRatio));
+    size_t threshold4 = space.GetTargetSize();
+    size_t newThreshold = 0;
+    uint64_t gcInterval = CangjieRuntime::GetGCParam().gcInterval;
+    // 2 : We regard the half of heap size as a limit because of copying algorithm.
+    if (liveBytes < oldThreshold && oldThreshold < (heapSize / 2)) {
+#if defined (__OHOS__)
+        // When the ulitization is low, we can give the old threshold a larger weight to compute average value.
+        // 1, 4, 2, 1: These are the weights of the different parameters.
+        // 8: It is the total weight.
+        newThreshold = (threshold1 * 1 + threshold2 * 4 + threshold3 * 2 + threshold4 * 1) / 8;
+        // 2s: We set the max waiting time to 2s to avoid memory increasing too fast.
+        auto maxAdaptiveInterval = static_cast<uint64_t>(2) * MapleRuntime::SECOND_TO_NANO_SECOND;
+        uint64_t gcAdaptiveInterval = maxAdaptiveInterval;
+        if (gcStats.collectionRate > 0.0) {
+            double estimatedInterval = static_cast<double>(newThreshold - liveBytes) / MB /
+                gcStats.collectionRate * MapleRuntime::SECOND_TO_NANO_SECOND;
+            gcAdaptiveInterval = static_cast<uint64_t>(
+                std::min(estimatedInterval, static_cast<double>(maxAdaptiveInterval)));
+        }
+        gcInterval = std::max(gcInterval, gcAdaptiveInterval);
+#else
+        // 4: Computing arithmetic mean
+        newThreshold = (threshold1 + threshold2 + threshold3 + threshold4) / 4;
+#endif
+    } else {
+        // When the ulitization is high, we try to avoid threshold increasing and give it a small weight.
+        // 2, 1, 2, 3: These are the weights of the different parameters.
+        // 8: It is the total weight.
+        newThreshold = (threshold1 * 2 + threshold2 * 1 + threshold3 * 2 + threshold4 * 3) / 8;
+    }
+    // 0.98: make sure new threshold does not exceed reasonable limit.
+    newThreshold = std::min(newThreshold, static_cast<size_t>(space.GetMaxCapacity() * 0.98));
+    gcStats.heapThreshold.store(std::min(newThreshold, CangjieRuntime::GetGCParam().gcThreshold),
+                                std::memory_order_release);
+    g_gcRequests[GC_REASON_HEU].SetMinInterval(gcInterval);
+    VLOG(REPORT, "live bytes %zu (survived %zu, recent-allocated %zu), update gc threshold %zu -> %zu", liveBytes,
+         liveBytes - recentBytes, recentBytes, oldThreshold, gcStats.GetThreshold());
+    TRACE_COUNT("CJRT_post_GC_HeapSize", Heap::GetHeap().GetAllocatedSize());
+}
+
 } // namespace MapleRuntime

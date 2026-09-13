@@ -19,7 +19,7 @@
 #include <cstdint>
 #include <cstdlib>
 
-#include "Heap/Collector/Collector.h"
+#include "Heap/z/zCollectedHeap.hpp"
 
 namespace MapleRuntime {
 namespace AllocPhaseDiag {

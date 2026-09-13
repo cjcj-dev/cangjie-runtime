@@ -4,9 +4,9 @@ runtime/src/Sync/Sync.cpp:570	CJMonitor embeds a managed mutex field; the read b
 runtime/src/Sync/Sync.cpp:605	CJMultiConditionMonitor embeds the same managed mutex field and uses the same holder representation.
 runtime/src/Heap/z/zBarrier.cpp:503	The bulk struct-array copy contract identifies dstObj as the destination MArray before field recolouring.
 runtime/src/Heap/Collector/FinalizerProcessor.cpp:235	workingFinalizables contains finalizable class instances; MObject exposes their finalizer TypeInfo.
-runtime/src/Heap/Collector/Collector.cpp:215	Interior-base probing forms a candidate object start and validates its heap address and TypeInfo before use.
-runtime/src/Heap/Collector/Collector.cpp:262	The validated interior offset is subtracted to recover the already-checked host object start.
-runtime/src/Heap/Collector/TracingCollector.h:307	The resurrected-export set entry is presented through the legacy ObjectRef root-visitor representation.
+runtime/src/Heap/z/zCollectedHeap.cpp:215	Interior-base probing forms a candidate object start and validates its heap address and TypeInfo before use.
+runtime/src/Heap/z/zCollectedHeap.cpp:262	The validated interior offset is subtracted to recover the already-checked host object start.
+runtime/src/Heap/z/zGeneration.hpp:307	The resurrected-export set entry is presented through the legacy ObjectRef root-visitor representation.
 runtime/src/Heap/WCollector/PostTraceBarrier.cpp:246	CopyStructArrayImpl receives an array destination; debug code checks its struct component type.
 runtime/src/Heap/WCollector/PostTraceBarrier.cpp:260	CopyStructArrayImpl receives an array source and must enumerate its reference-bearing elements.
 runtime/src/Heap/WCollector/WCollector.cpp:1210	TypeInfo::IsRawArray establishes the MArray layout used to trace array elements.
@@ -54,7 +54,7 @@ runtime/src/Inspector/CjHeapData.cpp:630	WritePrimitiveArray is called only for 
 runtime/src/Inspector/HeapSnapshotJsonSerializer.cpp:452	The object-array serializer receives an array object and needs MArray length/content access.
 runtime/src/Inspector/HeapSnapshotJsonSerializer.cpp:508	The struct-array serializer receives an array object and needs MArray layout access.
 runtime/src/Inspector/HeapSnapshotJsonSerializer.cpp:561	The primitive-array serializer receives an array object and needs MArray length access.
-runtime/src/Common/ColourTypes.h:75	to_object is the named conversion from a proven uncoloured zaddress to BaseObject pointer form.
+runtime/src/Heap/z/zAddress.inline.hpp:75	to_object is the named conversion from a proven uncoloured zaddress to BaseObject pointer form.
 runtime/src/Common/BaseObject.cpp:106	ForEachElementInArray is an array-only helper and needs MArray length/component layout.
 runtime/src/Common/BaseObject.cpp:155	ForEachAggRefFieldInArray is an array-only member path and needs MArray aggregate layout.
 runtime/src/Common/BaseObject.cpp:187	TypeInfo::IsArrayType establishes MArray layout for BaseObject::GetSize.

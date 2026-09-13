@@ -26,28 +26,12 @@ public:
     ForwardingAllocator(const ForwardingAllocator&) = delete;
     ForwardingAllocator& operator=(const ForwardingAllocator&) = delete;
 
-    static bool aligned_size(size_t size, size_t* aligned)
-    {
-        constexpr size_t alignment = alignof(std::max_align_t);
-        if (size > std::numeric_limits<size_t>::max() - (alignment - 1)) {
-            return false;
-        }
-        *aligned = (size + alignment - 1) & ~(alignment - 1);
-        return true;
-    }
+    static bool aligned_size(size_t size, size_t* aligned);
 
-    static bool add_to_budget(size_t size, size_t* budget)
-    {
-        size_t aligned;
-        if (!aligned_size(size, &aligned) || aligned > std::numeric_limits<size_t>::max() - *budget) {
-            return false;
-        }
-        *budget += aligned;
-        return true;
-    }
+    static bool add_to_budget(size_t size, size_t* budget);
 
-    bool valid() const { return start_ != nullptr || capacity_ == 0; }
-    size_t capacity() const { return capacity_; }
+    bool valid() const;
+    size_t capacity() const;
 #if defined(MRT_TESTABLE_INTERNALS)
     bool contains_for_test(const void* address, size_t size) const
     {
@@ -56,24 +40,9 @@ public:
         return at >= start && at - start <= capacity_ && size <= capacity_ - (at - start);
     }
 #endif
-    size_t used() const { return top_.load(std::memory_order_relaxed); }
+    size_t used() const;
 
-    void* allocate(size_t size)
-    {
-        size_t aligned;
-        if (start_ == nullptr || size == 0 || !aligned_size(size, &aligned)) {
-            return nullptr;
-        }
-        size_t top = top_.load(std::memory_order_relaxed);
-        for (;;) {
-            if (aligned > capacity_ - top) {
-                return nullptr;
-            }
-            if (top_.compare_exchange_weak(top, top + aligned, std::memory_order_relaxed)) {
-                return static_cast<char*>(start_) + top;
-            }
-        }
-    }
+    void* allocate(size_t size);
 
 private:
     void* const start_;
@@ -82,4 +51,6 @@ private:
 };
 
 } // namespace MapleRuntime
+#include "Heap/z/zForwardingAllocator.inline.hpp"
+
 #endif // MRT_FORWARDING_ALLOCATOR_H

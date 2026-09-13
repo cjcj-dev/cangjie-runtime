@@ -6,8 +6,8 @@
 #include "Base/Log.h"
 #include "Common/BaseObject.h"
 #include "Heap/z/zPage.hpp"
-#include "Heap/Collector/Collector.h"
-#include "Heap/Heap.h"
+#include "Heap/z/zCollectedHeap.hpp"
+#include "Heap/z/zHeap.hpp"
 #include "ObjectModel/RefField.h"
 
 namespace MapleRuntime {

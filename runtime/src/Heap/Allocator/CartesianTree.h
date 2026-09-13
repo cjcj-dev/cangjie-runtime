@@ -42,50 +42,10 @@
 // the art of automatic memory management. Chapman and Hall/CRC, 2016.
 // This data structure doesn't guarantee the multi-thread safety, so the external invoker should take some
 // policy to avoid competition problems.
+#include "Heap/z/zMappedCache.hpp"
 namespace MapleRuntime {
 // zMappedCache.cpp: entries have one address index and non-owning size-class
 // lists. The allocator/cache owner supplies synchronization.
-class MappedCache {
-public:
-    using Index = uint32_t;
-    using Count = uint32_t;
-    struct Extent {
-        Index index{ 0 };
-        Count count{ 0 };
-        bool IsNull() const { return count == 0; }
-    };
-
-    void SetRefresh(const std::function<void(Extent)>& callback) { refresh = callback; }
-    void Insert(Extent extent);
-    Extent RemoveContiguous(Count count);
-    Count RemoveDiscontiguous(Count count, std::vector<Extent>& out);
-    Count RemoveForUncommit(Count count, std::vector<Extent>& out);
-    Count Size() const { return size; }
-    Count MinSizeWatermark() const { return minSizeWatermark; }
-    void ResetMinSizeWatermark() { minSizeWatermark = size; }
-    size_t EntryCount() const { return entries.size(); }
-    Count MaxExtent() const;
-    uint64_t LastUsedNs() const { return lastUsedNs; }
-
-private:
-    static constexpr int NUM_SIZE_CLASSES = 31;
-    struct Entry {
-        Count count;
-        std::list<Index>::iterator sizeClassPosition;
-    };
-    std::map<Index, Entry> entries;
-    std::array<std::list<Index>, NUM_SIZE_CLASSES> sizeClasses;
-    Count size{ 0 };
-    Count minSizeWatermark{ 0 };
-    uint64_t lastUsedNs{ 0 };
-    std::function<void(Extent)> refresh;
-    static int SizeClass(Count count);
-    void AddEntry(Index index, Count count);
-    void EraseEntry(std::map<Index, Entry>::iterator entry);
-    Extent Remove(Index index, Count count, bool high = false);
-    Index Select(Count minimum, Count maximum) const;
-};
-
 class CartesianTree {
 public:
     using Index = uint32_t; // abstract index for free memory in tree node.

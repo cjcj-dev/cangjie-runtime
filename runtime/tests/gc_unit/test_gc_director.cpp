@@ -2,7 +2,7 @@
 // This source file is part of the Cangjie project, licensed under Apache-2.0
 // with Runtime Library Exception.
 
-#include "Heap/Collector/GcTrigger.h"
+#include "Heap/z/zDirector.hpp"
 #include "Heap/z/zStat.hpp"
 #include "Heap/Allocator/AllocationStallQueue.h"
 #include "gc_unittest.hpp"

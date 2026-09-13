@@ -13,7 +13,7 @@
 namespace MapleRuntime {
 
 // Input contract for replacing GCPhase-dependent decisions with the pure
-// predicates in Common/ColourPredicates.h.
+// predicates in Heap/z/zAddress.inline.hpp.
 //
 // Epoch bits alternate, so a phase can never mean a fixed *_0 or *_1 value.
 // Each row instead says what happens to the current epoch while that phase is

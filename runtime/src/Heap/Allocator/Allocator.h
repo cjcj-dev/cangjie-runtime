@@ -10,8 +10,8 @@
 
 #include "AllocBufferManager.h"
 #include "Heap/z/zUncommitter.hpp"
-#include "Heap/GcThreadPool.h"
-#include "Heap/Heap.h"
+#include "Heap/z/zWorkers.hpp"
+#include "Heap/z/zHeap.hpp"
 
 namespace MapleRuntime {
 // Allocator abstract class

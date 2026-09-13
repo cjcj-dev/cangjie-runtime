@@ -12,7 +12,7 @@
 #include <cstring>
 
 #include "Heap/Allocator/SlotList.h"
-#include "Heap/Collector/Collector.h"
+#include "Heap/z/zCollectedHeap.hpp"
 #include "Heap/Collector/ManagedObjectGate.h"
 #include "gc_heap_fixture.hpp"
 #include "Heap/z/zPageAllocator.hpp"

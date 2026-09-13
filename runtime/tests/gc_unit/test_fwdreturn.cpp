@@ -10,7 +10,7 @@
 #include <sys/wait.h>
 #include <unistd.h>
 
-#include "Common/ColourMask.h"
+#include "Heap/z/zAddress.hpp"
 #include "Heap/z/zBarrier.hpp"
 #include "Heap/Verify/ZgcInvariants.h"
 #include "gc_heap_fixture.hpp"

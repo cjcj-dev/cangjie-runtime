@@ -38,7 +38,7 @@
 #endif
 #endif
 #include "Inspector/CjHeapData.h"
-#include "Heap/Allocator/AllocBuffer.h"
+#include "Heap/z/zThreadLocalAllocBuffer.hpp"
 #ifdef CANGJIE_SANITIZER_SUPPORT
 #include "Sanitizer/SanitizerInterface.h"
 #include "StackMap/StackMap.h"

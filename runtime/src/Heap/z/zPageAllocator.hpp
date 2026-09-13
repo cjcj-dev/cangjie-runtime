@@ -17,7 +17,7 @@
 #include <unordered_set>
 #include <vector>
 
-#include "Heap/Allocator/AllocBuffer.h"
+#include "Heap/z/zThreadLocalAllocBuffer.hpp"
 #include "Heap/Allocator/AllocationStallQueue.h"
 #include "Heap/Allocator/Allocator.h"
 #include "Base/Log.h"
@@ -28,8 +28,8 @@
 #include "Heap/Allocator/FreeRegionManager.h"
 #include "Heap/z/zRangeRegistry.hpp"
 #include "Heap/z/zPageAge.hpp"
-#include "Heap/GcThreadPool.h"
-#include "Heap/Collector/RelocationRequestQueue.h"
+#include "Heap/z/zWorkers.hpp"
+#include "Heap/z/zRelocate.hpp"
 #include "Heap/Allocator/RegionList.h"
 #include "Heap/Verify/GarbRegionDiag.h"
 #include "Heap/Verify/TraceClear.h"

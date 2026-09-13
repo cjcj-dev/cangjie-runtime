@@ -6,7 +6,7 @@
 
 
 #include "GcRequest.h"
-#include "GcTrigger.h"
+#include "Heap/z/zDirector.hpp"
 
 #include "Base/TimeUtils.h"
 #include "GcStats.h"

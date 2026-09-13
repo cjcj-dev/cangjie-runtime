@@ -1,0 +1,169 @@
+// Copyright (c) Huawei Technologies Co., Ltd. 2025. All rights reserved.
+// This source file is part of the Cangjie project, licensed under Apache-2.0
+// with Runtime Library Exception.
+//
+// See https://cangjie-lang.cn/pages/LICENSE for license information.
+
+
+#ifndef MRT_ALLOC_MEM_MAP_H
+#define MRT_ALLOC_MEM_MAP_H
+
+#include <cstddef>
+#include <cstdint>
+#include <vector>
+#include <mutex>
+
+#ifdef _WIN64
+#include <handleapi.h>
+#include <memoryapi.h>
+#else
+#include <sys/mman.h>
+#endif
+
+#include "Heap/Allocator/AllocUtil.h"
+#include "Common/TypeDef.h"
+
+#include "Heap/z/zAddressSpaceLimit.hpp"
+#include "Heap/z/zNUMA.hpp"
+#include "Heap/z/zVirtualMemory.hpp"
+#include "Heap/z/zPhysicalMemoryManager.hpp"
+
+namespace MapleRuntime {
+
+class ReservationRegistry {
+public:
+    bool Insert(MemoryRange range);
+    bool Contains(uintptr_t start, size_t size) const;
+    size_t TotalSize() const;
+    const std::vector<MemoryRange>& Ranges() const { return ranges; }
+
+private:
+    std::vector<MemoryRange> ranges;
+};
+
+class MemMapBackend {
+public:
+    virtual ~MemMapBackend() = default;
+    virtual void* Reserve(void* requested, size_t size, unsigned int flags, const char* tag, bool exact) = 0;
+    virtual size_t Commit(void* addr, size_t size, int prot, uint32_t numaNode, bool bindNuma) = 0;
+    virtual bool Protect(void* addr, size_t size, int prot) = 0;
+    virtual size_t Release(void* addr, size_t size, uint32_t numaNode) = 0;
+    virtual bool Unreserve(void* addr, size_t size) = 0;
+    // zPhysicalMemoryManager separates committing backing from mapping it.
+    virtual size_t CommitBacking(void* backing, size_t size, int prot, uint32_t node, bool bind)
+    { return Commit(backing, size, prot, node, bind); }
+    virtual bool MapBacking(void* addr, void* backing, size_t, int) { return addr == backing; }
+    virtual bool UnmapBacking(void*, size_t) { return true; }
+    virtual bool CanRemapBacking() const { return false; }
+
+};
+
+class MemMap {
+public:
+#ifdef _WIN64
+    static constexpr int MAP_PRIVATE = 2;
+    static constexpr int MAP_FIXED = 0x10;
+    static constexpr int MAP_ANONYMOUS = 0x20;
+    static constexpr int PROT_NONE = 0;
+    static constexpr int PROT_READ = 1;
+    static constexpr int PROT_WRITE = 2;
+    static constexpr int PROT_EXEC = 4;
+    static constexpr int DEFAULT_MEM_FLAGS = MAP_PRIVATE | MAP_ANONYMOUS;
+#else
+    static constexpr int DEFAULT_MEM_FLAGS = MAP_PRIVATE | MAP_ANONYMOUS | MAP_NORESERVE;
+#endif
+    static constexpr int DEFAULT_MEM_PROT = PROT_READ | PROT_WRITE;
+
+    struct Option {
+        const char* tag;
+        void* reqBase;
+        unsigned int flags;
+        int prot;
+        bool protAll;
+    };
+    static constexpr Option DEFAULT_OPTIONS = { "maple_unnamed", nullptr, DEFAULT_MEM_FLAGS, DEFAULT_MEM_PROT, false };
+
+    static MemMap* MapMemory(size_t reqSize, size_t initSize, const Option& opt = DEFAULT_OPTIONS);
+    static MemMap* MapMemory(size_t reqSize, size_t initSize, const Option& opt,
+                             const AddressSpaceBudget& budget, const NumaTopology& topology);
+    static MemMap* TryMapMemory(size_t reqSize, size_t initSize, const Option& opt,
+                               const AddressSpaceBudget& budget, const NumaTopology& topology,
+                               MemMapBackend& backend, size_t fallbackSegmentSize = 64U * 1024U * 1024U);
+
+    static void DestroyMemMap(MemMap*& memMap) noexcept
+    {
+        if (memMap != nullptr) {
+            delete memMap;
+            memMap = nullptr;
+        }
+    }
+
+    // Return the number of bytes whose backing operation completed.  A value
+    // smaller than `size` is a real partial outcome: callers must account for
+    // (and, where appropriate, clean up) that prefix instead of treating the
+    // multi-partition operation as an atomic bool.
+    size_t CommitMemory(void* addr, size_t size);
+    size_t CommitMemory(void* addr, size_t size, uint32_t numaNode);
+    size_t ReleaseMemory(void* addr, size_t size);
+    size_t ReleaseMemory(void* addr, size_t size, uint32_t numaNode);
+    // A13: the claimed range remains owned until its completed prefix is published.
+    size_t ReleaseMemoryDeferred(void* addr, size_t size);
+    size_t PublishMemoryRelease(void* addr, size_t completed);
+    bool ProtectMemory(void* addr, size_t size, int prot);
+    struct BackingSegment {
+        uintptr_t backing;
+        size_t size;
+        uint32_t node;
+    };
+    // Detached segments remain in committedRanges and count towards capacity.
+    bool StashSegments(const std::vector<MemoryRange>& ranges, std::vector<BackingSegment>& stash);
+    void RestoreSegments(const std::vector<MemoryRange>& ranges, const std::vector<BackingSegment>& stash);
+    size_t GetCommittedSize() const;
+    size_t GetCommittedSize(uintptr_t start, size_t size) const;
+
+    void* GetBaseAddr() const { return memBaseAddr; }
+    void* GetCurrEnd() const { return memCurrEndAddr; }
+    void* GetMappedEndAddr() const { return memMappedEndAddr; }
+    size_t GetCurrSize() const { return memCurrSize; }
+    size_t GetMappedSize() const { return memMappedSize; }
+    const ReservationRegistry& GetReservationRegistry() const { return reservationRegistry; }
+    const NumaPartitionRegistry& GetNumaPartitionRegistry() const { return numaPartitions; }
+
+    ~MemMap();
+    MemMap(const MemMap& that) = delete;
+    MemMap(MemMap&& that) = delete;
+    MemMap& operator=(const MemMap& that) = delete;
+    MemMap& operator=(MemMap&& that) = delete;
+
+private:
+    static bool IsValidRange(uintptr_t start, size_t size);
+    size_t ApplyByPartition(void* addr, size_t size, uint32_t* requiredNode, bool release, bool publish = true);
+
+    void* memBaseAddr{ nullptr };
+    void* memCurrEndAddr{ nullptr };
+    void* memMappedEndAddr{ nullptr };
+    size_t memCurrSize{ 0 };
+    size_t memMappedSize{ 0 };
+    int commitProt{ DEFAULT_MEM_PROT };
+    ReservationRegistry reservationRegistry;
+    NumaPartitionRegistry numaPartitions;
+    MemMapBackend* backend{ nullptr };
+    bool bindNuma{ false };
+    mutable std::mutex backingMutex;
+    struct CommittedRange {
+        uintptr_t start;
+        size_t size;
+        uintptr_t backing;
+        uint32_t node;
+        bool mapped;
+        uintptr_t End() const { return start + size; }
+    };
+    std::vector<CommittedRange> committedRanges;
+    void SplitBackingAt(uintptr_t address);
+    MemoryRange FindFreeBacking(uintptr_t preferred, size_t size, uint32_t node) const;
+
+    MemMap(void* baseAddr, size_t initSize, size_t mappedSize, int prot, ReservationRegistry&& registry,
+           NumaPartitionRegistry&& partitions, MemMapBackend& osBackend, bool shouldBindNuma);
+};
+} // namespace MapleRuntime
+#endif // MRT_ALLOC_MEM_MAP_H

@@ -36,7 +36,7 @@
 #include "Heap/Collector/GcTriggerFlags.h"
 #include "Heap/Collector/MarkPartialArray.h"
 #include "Heap/Collector/TenuringThreshold.h"
-#include "Heap/GcThreadPool.h"
+#include "Heap/z/zWorkers.hpp"
 #if defined(MRT_GCV2_UNTAG_BREADCRUMB)
 #include "Heap/WCollector/UntagRefFieldBreadcrumb.h"
 #endif
@@ -48,7 +48,7 @@
 #include "Heap/Verify/Stw2CurrentAudit.h"
 #include "Heap/Verify/SurvNodeDiag.h"
 #include "Heap/Verify/CsetEmptyWho.h"
-#include "Common/ColourPredicates.h"
+#include "Heap/z/zAddress.inline.hpp"
 #include "Mutator/MutatorManager.h"
 #include "ObjectModel/MArray.inline.h"
 #include "UnwindStack/StackFrameCursor.h"

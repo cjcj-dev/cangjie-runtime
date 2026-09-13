@@ -11,7 +11,7 @@
 #include <chrono>
 
 #include "Heap/Allocator/RegionSpace.h"
-#include "Heap/Collector/GcTrigger.h"
+#include "Heap/z/zDirector.hpp"
 #include "Common/ScopedObjectAccess.h"
 #include "Mutator/MutatorManager.h"
 

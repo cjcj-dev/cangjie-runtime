@@ -8,7 +8,7 @@
 #include <list>
 
 #include "Cangjie.h"
-#include "Heap/Heap.h"
+#include "Heap/z/zHeap.hpp"
 #include "Heap/WCollector/WCollector.h"
 #include "gc_unittest.hpp"
 

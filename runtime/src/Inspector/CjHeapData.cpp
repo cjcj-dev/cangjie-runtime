@@ -13,14 +13,14 @@
 #include <Common/Runtime.h>
 #include <Common/ScopedObjectAccess.h>
 #include <Heap/Collector/TaskQueue.h>
-#include <Heap/Collector/TracingCollector.h>
+#include <Heap/z/zMark.hpp>
 #include <sys/time.h>
 
 #include "ObjectModel/MArray.inline.h"
 #include "Common/BaseObject.h"
 #include "Common/StackType.h"
 #include "Concurrency/ConcurrencyModel.h"
-#include "Heap/Heap.h"
+#include "Heap/z/zHeap.hpp"
 #include "ObjectModel/RefField.h"
 #include "Sync/Sync.h"
 #include "UnwindStack/PrintStackInfo.h"

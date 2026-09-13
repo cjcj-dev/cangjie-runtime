@@ -10,7 +10,7 @@
 #include "Base/Types.h"
 #include "CjFileMeta.h"
 #include "Common/TypeDef.h"
-#include "Heap/Heap.h"
+#include "Heap/z/zHeap.hpp"
 #include "Utils/Demangler.h"
 namespace MapleRuntime {
 void CJFile::RegisterFile() { LoadCJFileMeta(); }

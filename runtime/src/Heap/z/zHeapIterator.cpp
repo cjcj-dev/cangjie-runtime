@@ -2,8 +2,8 @@
 // This source file is part of the Cangjie project, licensed under Apache-2.0
 // with Runtime Library Exception.
 #include "Heap/z/zHeapIterator.hpp"
-#include "Heap/Collector/TracingCollector.h"
-#include "Heap/Heap.h"
+#include "Heap/z/zMark.hpp"
+#include "Heap/z/zHeap.hpp"
 #include "Mutator/Mutator.h"
 #include "Mutator/MutatorManager.h"
 

@@ -11,7 +11,7 @@
 #include <thread>
 
 #include "gc_unittest.hpp"
-#include "Heap/Allocator/MemMap.h"
+#include "Heap/z/zVirtualMemoryManager.hpp"
 #include "Heap/z/zPageAllocator.hpp"
 #include "Mutator/Mutator.h"
 #include "Mutator/ThreadLocal.h"

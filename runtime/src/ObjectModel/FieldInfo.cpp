@@ -9,7 +9,7 @@
 #include "Base/Log.h"
 #include "Base/Globals.h"
 #include "Loader/ILoader.h"
-#include "Heap/Heap.h"
+#include "Heap/z/zHeap.hpp"
 #include "ExceptionManager.inline.h"
 #include "ObjectModel/MObject.inline.h"
 #include "ObjectManager.inline.h"

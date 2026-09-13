@@ -4,191 +4,124 @@
 //
 // See https://cangjie-lang.cn/pages/LICENSE for license information.
 
-#ifndef MRT_RELOCATE_H
-#define MRT_RELOCATE_H
+#ifndef MRT_RELOCATION_REQUEST_QUEUE_H
+#define MRT_RELOCATION_REQUEST_QUEUE_H
 
-#include "Heap/z/zPageAllocator.hpp"
+#include <atomic>
+#include <condition_variable>
+#include <cstdint>
+#include <deque>
+#include <functional>
+#include <memory>
+#include <mutex>
+#include <unordered_map>
+
+#include "Common/TypeDef.h"
+#include "Heap/z/zForwardingTable.hpp"
 
 namespace MapleRuntime {
-namespace detail {
 
-// A single algorithm body serves both compile-time shapes below.  The default
-// product inlines it through ForwardTask::Execute; the testable shape calls it
-// from the exported out-of-line Execute instantiated in RegionManager.cpp.
-template<Generation G>
-inline void ExecuteForwardTask(RegionManager& regionManager, RegionList& fromRegionList)
-{
-    while (true) {
-        // zRelocate.cpp:1193-1203: serve a mutator's requested receipt
-        // before advancing the ordinary relocation iterator.
-        RelocationRequestQueue::Selection selected =
-            regionManager.GetRelocationRequestQueue().SelectBeforeOrdinary([&fromRegionList]() -> void* {
-                return fromRegionList.TakeHeadRegion(RegionInfo::RegionType::LONE_FROM_REGION);
-            });
-        if (!selected) {
-            selected = regionManager.GetRelocationRequestQueue().SynchronizePoll();
-            if (selected.workersDone) {
-                break;
-            }
-            if (!selected) {
-                continue;
-            }
-        }
-        if (!selected.is_request()) {
-            RegionInfo* region = static_cast<RegionInfo*>(selected.ordinary);
-            regionManager.ForwardClaimedPage<G>(region, ForwardingTable::RetainPageOwner(region));
-            continue;
-        }
-
-        RegionInfo* region = static_cast<RegionInfo*>(selected.request->owner());
-#if defined(MRT_GCV2_REGION_WAIT_DIAG)
-        static std::atomic<size_t> g_regionWaitClaim{ 0 };
-        const size_t claimN = g_regionWaitClaim.fetch_add(1, std::memory_order_relaxed) + 1;
-        if (claimN <= 8 || (claimN & (claimN - 1)) == 0) {
-            LOG(RTLOG_ERROR,
-                "[GCV2][region-wait-claim] n=%zu from=%p claim=1 pending=%zu",
-                claimN, reinterpret_cast<void*>(selected.request->from()),
-                regionManager.GetRelocationRequestQueue().PendingCount());
-        }
-#endif
-        // If an ordinary iterator already removed the page, its worker will
-        // lose the forwarding claim. This claimant still owns the page task.
-        (void)fromRegionList.TryDeleteRegion(region, RegionInfo::RegionType::FROM_REGION,
-                                             RegionInfo::RegionType::LONE_FROM_REGION);
-        regionManager.ForwardClaimedPage<G>(region,
-            ForwardingTable::RetainPageOwner(region), true);
-    }
-}
-
-} // namespace detail
-
-// The relocation worker task submitted by DrainForwardFromRegions. Test builds
-// export Work so the unit runner binds the product SO; default builds retain
-// the implicit inline virtual with no MRT_EXPORT and no dynamic export.
-template<Generation G>
-class ForwardTask : public GCWorkerTask {
+// ZRelocateQueue::add_and_wait/prune_and_claim (zRelocate.cpp:134-191).
+// One handle per forwarding, shared by every object on the page. Claim and
+// completion live in ZForwarding; the queue stores neither an object address
+// nor an independent answer. Worker rendezvous is atomic with enqueue.
+class RelocationRequestQueue {
 public:
-    ForwardTask(RegionManager& manager, RegionList& fromSpace)
-        : regionManager(manager), fromRegionList(fromSpace) {}
+    enum class State : uint8_t { QUEUED, CLAIMED, COMPLETED };
 
-    ~ForwardTask() override = default;
-#if defined(MRT_TESTABLE_INTERNALS)
-    MRT_EXPORT void Work(uint32_t) override;
-#else
-    __attribute__((visibility("hidden"))) void Work(uint32_t) override
+    class Request {
+    public:
+        MAddress from() const { return forwarding ? forwarding->start() : 0; }
+        void* owner() const { return forwarding ? forwarding->page() : nullptr; }
+        ZForwarding* page_forwarding() const { return forwarding.get(); }
+        State state() const
+        {
+            if (forwarding->is_done()) return State::COMPLETED;
+            return forwarding->claimed().load(std::memory_order_acquire) ? State::CLAIMED : State::QUEUED;
+        }
+    private:
+        friend class RelocationRequestQueue;
+        explicit Request(ForwardingTable::Owner value) : forwarding(std::move(value)) {}
+        ForwardingTable::Owner forwarding;
+    };
+
+    using Handle = std::shared_ptr<Request>;
+
+    struct EnqueueResult {
+        Handle request;
+        bool inserted;
+        bool accepted;
+    };
+
+    struct Selection {
+        Handle request;
+        void* ordinary;
+        bool workersDone{ false };
+
+        bool is_request() const { return request != nullptr; }
+        explicit operator bool() const { return request != nullptr || ordinary != nullptr; }
+    };
+
+    // ZRelocateQueue::activate(nworkers) (zRelocate.cpp:80-83) makes queue
+    // acceptance and worker registration one lifetime transition. There is no
+    // preparation-only opener: accepting requests without a registered worker
+    // generation would leave a waiter with no completion owner.
+    void BeginWorkers(size_t workers);
+    EnqueueResult Add(void* owner, MAddress from);
+    EnqueueResult Add(ForwardingTable::Owner forwarding);
+    MAddress Wait(const Handle& request);
+
+    // Wait for the canonical forwarding completion. Always returns zero;
+    // callers resolve their own object through the forwarding table afterward.
+    // Preserve the caller's non-safepoint barrier context until that lookup
+    // finishes: Request borrows forwarding storage owned by the relocation set.
+    // GC worker callers are instead bounded by the joined relocation task.
+    MAddress WaitUntil(const Handle& request, size_t maxSpins = 0, bool* timedOut = nullptr);
+
+    size_t Complete(ZForwarding* forwarding);
+
+    Handle PruneAndClaim();
+
+    // This is the worker ordering point corresponding to zRelocate.cpp:1193-1203:
+    // a queued request is claimed before the ordinary relocation iterator runs.
+    Selection SelectBeforeOrdinary(const std::function<void*()>& claimOrdinary)
     {
-        detail::ExecuteForwardTask<G>(regionManager, fromRegionList);
+        Handle request = PruneAndClaim();
+        if (request != nullptr) {
+            return Selection{ request, nullptr, false };
+        }
+        return Selection{ nullptr, claimOrdinary(), false };
     }
+
+    // Called only after both request and ordinary polls were empty. Idle
+    // workers rendezvous here. Add wakes them while any worker remains; the
+    // last synchronized worker closes the generation atomically with Add.
+    Selection SynchronizePoll();
+
+    bool IsActive() const;
+    size_t PendingCount() const;
+    size_t SynchronizedWorkerCount() const;
+    uint64_t CompletionCount() const { return completionCount.load(std::memory_order_relaxed); }
+
+#if defined(MRT_TESTABLE_INTERNALS)
+    using WaitEnterHook = void (*)(ZForwarding* forwarding);
+    static void SetWaitEnterHook(WaitEnterHook hook);
 #endif
 
 private:
-    RegionManager& regionManager;
-    RegionList& fromRegionList;
+    Handle PruneAndClaimLocked();
+    void PruneDoneLocked();
+
+    mutable std::mutex queueMutex;
+    std::condition_variable queueAttention;
+    std::deque<Handle> queue;
+    std::unordered_map<ZForwarding*, Handle> byPage;
+    bool accepting{ false };
+    size_t workerCount{ 0 };
+    size_t synchronizedWorkers{ 0 };
+    std::atomic<uint64_t> completionCount{ 0 };
 };
-inline bool RegionManager::RouteIsPublished(BaseObject* fromObj, RegionInfo* fromRegionInfo)
-    {
-        if (fromObj != nullptr && fromObj->IsForwarded()) {
-            return true;
-        }
-        if (fromRegionInfo == nullptr) {
-            return false;
-        }
-        return fromRegionInfo->IsForwardingDone();
-    }
-
-inline PublishedRoute RegionManager::FindPublishedRoute(BaseObject* fromObj, RegionInfo* fromRegionInfo)
-    {
-        BaseObject* to = ComputeRoute(fromObj, fromRegionInfo);
-        if (to == nullptr || !RouteIsPublished(fromObj, fromRegionInfo)) {
-            return PublishedRoute{ nullptr };
-        }
-        return PublishedRoute{ to };
-    }
-
-inline PublishedRoute RegionManager::FindPublishedRoute(BaseObject* fromObj)
-    {
-        RegionInfo* fromRegionInfo = RegionInfo::GetGhostFromRegionAt(reinterpret_cast<MAddress>(fromObj));
-        if (fromRegionInfo == nullptr) {
-            return PublishedRoute{ nullptr };
-        }
-        BaseObject* to = ComputeRoute(fromObj, fromRegionInfo);
-        if (to == nullptr || !RouteIsPublished(fromObj, fromRegionInfo)) {
-            return PublishedRoute{ nullptr };
-        }
-        return PublishedRoute{ to };
-    }
-
-inline bool RegionManager::RouteRegion(RegionInfo* fromRegionInfo, bool mayWait)
-    {
-        // fysfixb / 352ed4e8: non-ghost is a defined negative answer, not invariant break.
-        // Producers that clear ghost: DispelGhostFromRegion (PrepareFromRegionList),
-        // ClearGhostRegionBit (raw-pin POST_TRACE), TakeRegion reuse. Consumers
-        // (ForwardRegion / TryForwardObject) may still hold a region* after the
-        // carrier retired or after liveBytes==0 skipped install (pre-a2e7ee37).
-        // Soft-null matches RouteObject's GetGhostFromRegionAt==null path.
-        if (UNLIKELY(!fromRegionInfo->IsGhostFromRegion())) {
-            VLOG(REPORT,
-                 "[GCV2][ghost-softnull] region=%p start=%#zx live=%zu route=%u young=%u "
-                 "auth=%u — RouteRegion soft-miss (ghost cleared or never installed)",
-                 fromRegionInfo, fromRegionInfo->GetRegionStart(), fromRegionInfo->GetLiveByteCount(),
-                 static_cast<unsigned>(fromRegionInfo->RelocateObserve()),
-                 static_cast<unsigned>(fromRegionInfo->IsYoungRegion()),
-                 static_cast<unsigned>(fromRegionInfo->IsLiveCountAuthoritative()));
-            return false;
-        }
-        // zRelocate.cpp:1155-1158 claimant runs page work; consumers wait (zRelocate.cpp:403-409).
-        auto owner = ForwardingTable::RetainPageOwner(fromRegionInfo);
-        if (owner && owner->is_done()) {
-            return !owner->in_place();
-        }
-        if (owner && ZForwardingLife::CurrentPageWork() == owner.get()) {
-            if (RelocateClaimedPage(fromRegionInfo)) {
-                return true;
-            }
-            owner->set_in_place();
-            return false;
-        }
-        if (!mayWait) {
-            return false;
-        }
-        while (true) {
-            owner = ForwardingTable::RetainPageOwner(fromRegionInfo);
-            if (owner && owner->is_done()) {
-                return !owner->in_place();
-            }
-            if (owner && ZForwardingLife::CurrentPageWork() == owner.get()) {
-                if (RelocateClaimedPage(fromRegionInfo)) {
-                    return true;
-                }
-                owner->set_in_place();
-                return false;
-            }
-            sched_yield();
-        }
-    }
-
-inline BaseObject* RegionManager::ComputeRoute(BaseObject* fromObj, RegionInfo* fromRegionInfo)
-    {
-        RegionInfo::RetainScope retain(fromRegionInfo);
-        if (!retain.ok()) {
-            return nullptr;
-        }
-
-        return ComputeRouteBorrowed(fromObj, fromRegionInfo);
-    }
-
-inline BaseObject* RegionManager::ComputeRouteBorrowed(BaseObject* fromObj, RegionInfo* fromRegionInfo)
-    {
-        if (RouteRegion(fromRegionInfo, false) || fromRegionInfo->IsCompacted()) {
-            OptionalRouteTicket ticket = fromRegionInfo->AdmitForRoute(fromObj);
-            if (!ticket) {
-                return nullptr;
-            }
-            BaseObject* to = fromRegionInfo->GetRoute(ticket.value());
-            return to;
-        }
-        return nullptr;
-    }
 
 } // namespace MapleRuntime
-#endif
+
+#endif // MRT_RELOCATION_REQUEST_QUEUE_H

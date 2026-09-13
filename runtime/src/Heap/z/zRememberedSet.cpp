@@ -21,10 +21,10 @@
 #include "Base/LogFile.h"
 #include "Heap/z/zForwardingTable.hpp"
 #include "Heap/z/zPage.hpp"
-#include "Heap/Collector/LiveInfo.h"
-#include "Heap/Collector/Collector.h"
+#include "Heap/z/zLiveMap.hpp"
+#include "Heap/z/zCollectedHeap.hpp"
 #include "Heap/z/zForwarding.hpp"
-#include "Heap/Heap.h"
+#include "Heap/z/zHeap.hpp"
 
 namespace MapleRuntime {
 #if defined(MRT_GC_UNIT_TESTS)

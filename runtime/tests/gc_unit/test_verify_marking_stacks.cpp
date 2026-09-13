@@ -6,8 +6,8 @@
 #include <limits>
 #include <sys/wait.h>
 #include <unistd.h>
-#include "Heap/Collector/MarkStripe.h"
-#include "Heap/Collector/MarkingStacks.h"
+#include "Heap/z/zMarkStack.hpp"
+#include "Heap/z/zMark.hpp"
 #include "Heap/z/zVerify.hpp"
 #include "gc_unittest.hpp"
 using namespace MapleRuntime;

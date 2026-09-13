@@ -14,7 +14,7 @@
 #include "Interpreter/Options.h"
 #include "Interpreter/RTInterface.h"
 #include "Heap/z/zStoreBarrierBuffer.hpp"
-#include "Heap/Collector/MarkStripe.h"
+#include "Heap/z/zMarkStack.hpp"
 
 namespace MapleRuntime {
 class AllocBuffer;

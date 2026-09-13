@@ -9,8 +9,8 @@
 //   U1 STACK_ROOTS_STAY_PLAIN (layers 2/3/4) — root slots must hold plain
 //   U2 g_cjLoadBadMask bit layout (48,49,51-53 + young/old mark)
 
-#include "Common/ColourMask.h"
-#include "Common/ColourTypes.h"
+#include "Heap/z/zAddress.hpp"
+#include "Heap/z/zAddress.inline.hpp"
 #include "gc_unittest.hpp"
 
 using namespace MapleRuntime;

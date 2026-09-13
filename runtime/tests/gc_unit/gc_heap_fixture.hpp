@@ -25,8 +25,8 @@
 #include "Heap/Allocator/RegionSpace.h"
 #undef private
 #include "Heap/Collector/LiveInfoArena.h"
-#include "Heap/Collector/LiveInfo.h"
-#include "Heap/Heap.h"
+#include "Heap/z/zLiveMap.hpp"
+#include "Heap/z/zHeap.hpp"
 #include "ObjectModel/Flags.h"
 #include "ObjectModel/MClass.h"
 #include "TypeInfoManager.h"

@@ -2,14 +2,14 @@
 // This source file is part of the Cangjie project, licensed under Apache-2.0
 // with Runtime Library Exception.
 #include "Heap/z/zVerify.hpp"
-#include "Heap/Collector/CollectorResources.h"
+#include "Heap/z/zDriver.hpp"
 #include <unordered_set>
 #include <vector>
 #include "Heap/z/zPage.hpp"
 #include "Heap/Allocator/RegionSpace.h"
 #include "Heap/z/zHeapIterator.hpp"
 #include "Heap/z/zForwarding.hpp"
-#include "Heap/Heap.h"
+#include "Heap/z/zHeap.hpp"
 #include "Mutator/MutatorManager.h"
 
 namespace MapleRuntime {

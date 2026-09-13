@@ -13,7 +13,7 @@
 #include "Common/StackType.h"
 #include "Common/TypeDef.h"
 #include "ExceptionManager.inline.h"
-#include "Heap/Collector/Collector.h"
+#include "Heap/z/zCollectedHeap.hpp"
 #include "Interpreter/RTInterface.h"
 #include "LoaderManager.h"
 #include "Mutator/Mutator.h"

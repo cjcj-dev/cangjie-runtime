@@ -11,9 +11,9 @@
 #include <cstring>
 
 #include "Base/LogFile.h"
-#include "Collector/Collector.h"
+#include "Heap/z/zCollectedHeap.hpp"
 #include "Collector/GcRequest.h"
-#include "Heap/Heap.h"
+#include "Heap/z/zHeap.hpp"
 #include "Mutator/MutatorManager.h"
 
 namespace MapleRuntime {

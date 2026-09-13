@@ -33,17 +33,17 @@
 
 #define private public
 #include "Heap/z/zRememberedSet.hpp"
-#include "Heap/Collector/LiveInfo.h"
+#include "Heap/z/zLiveMap.hpp"
 #include "Mutator/Mutator.h"
 #undef private
 
-#include "Heap/Allocator/AllocBuffer.h"
+#include "Heap/z/zThreadLocalAllocBuffer.hpp"
 #include "Heap/Allocator/RegionSpace.h"
 #include "Heap/z/zBarrier.hpp"
-#include "Heap/Collector/Collector.h"
+#include "Heap/z/zCollectedHeap.hpp"
 #include "Heap/Collector/CollectorProxy.h"
-#include "Heap/Collector/CollectorResources.h"
-#include "Heap/Collector/TracingCollector.h"
+#include "Heap/z/zDriver.hpp"
+#include "Heap/z/zMark.hpp"
 #include "Heap/WCollector/WCollector.h"
 #include "mark_publication_fixture.hpp"
 #include "Mutator/ThreadLocal.h"

@@ -2,13 +2,13 @@
 // This source file is part of the Cangjie project, licensed under Apache-2.0
 // with Runtime Library Exception.
 #include "Heap/z/zVerify.hpp"
-#include "Heap/Collector/CollectorResources.h"
-#include "Common/ColourPredicates.h"
+#include "Heap/z/zDriver.hpp"
+#include "Heap/z/zAddress.inline.hpp"
 #include "Heap/z/zPage.hpp"
 #include "Heap/Allocator/RegionSpace.h"
 #include "Heap/z/zHeapIterator.hpp"
-#include "Heap/Collector/Collector.h"
-#include "Heap/Heap.h"
+#include "Heap/z/zCollectedHeap.hpp"
+#include "Heap/z/zHeap.hpp"
 #include "Mutator/MutatorManager.h"
 #include "TypeInfoManager.h"
 

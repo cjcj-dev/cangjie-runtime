@@ -12,7 +12,7 @@
 #include <thread>
 
 #include "Heap/Allocator/RouteDestHold.h"
-#include "Heap/Collector/ZForwardingLife.h"
+#include "Heap/z/zForwarding.hpp"
 #include "gc_heap_fixture.hpp"
 #include "gc_unittest.hpp"
 

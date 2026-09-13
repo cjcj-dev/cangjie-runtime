@@ -5,8 +5,9 @@
 # See https://cangjie-lang.cn/pages/LICENSE for license information.
 
 set(SRC_LIST
-    "Heap.cpp"
-    "GcThreadPool.cpp"
+    "z/zHeap.cpp"
+    "z/zWorkers.cpp"
+    "z/zRuntimeWorkers.cpp"
 )
 
 include_directories(${CMAKE_CURRENT_SOURCE_DIR})

@@ -11,10 +11,10 @@
 #include <unistd.h>
 
 #include "gc_heap_fixture.hpp"
-#include "Heap/GcThreadPool.h"
+#include "Heap/z/zWorkers.hpp"
 #include "Heap/z/zForwardingTable.hpp"
 #include "Heap/z/zPageAllocator.hpp"
-#include "Heap/Collector/RelocationRequestQueue.h"
+#include "Heap/z/zRelocate.hpp"
 #include "Heap/Collector/CollectorProxy.h"
 #include "Heap/WCollector/WCollector.h"
 #include "Common/Runtime.h"

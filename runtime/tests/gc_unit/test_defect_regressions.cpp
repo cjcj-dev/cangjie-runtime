@@ -14,13 +14,13 @@
 #include <sys/mman.h>
 #include <unistd.h>
 
-#include "Common/ColourMask.h"
-#include "Common/ColourTypes.h"
+#include "Heap/z/zAddress.hpp"
+#include "Heap/z/zAddress.inline.hpp"
 #include "Heap/z/zBarrier.hpp"
 #include "Heap/z/zRememberedSet.hpp"
-#include "Heap/Collector/Collector.h"
+#include "Heap/z/zCollectedHeap.hpp"
 #include "Heap/Collector/GcStats.h"
-#include "Heap/Heap.h"
+#include "Heap/z/zHeap.hpp"
 #include "ObjectModel/RefField.h"
 
 extern "C" size_t MCC_GetGCCount();
@@ -28,8 +28,8 @@ extern "C" void MCC_WriteRefField(const MapleRuntime::ObjectPtr ref, const Maple
                                    MapleRuntime::RefField<false>* field);
 #include "gc_heap_fixture.hpp"
 #include "gc_unittest.hpp"
-#include "Heap/Allocator/AllocBuffer.h"
-#include "Heap/Collector/TracingCollector.h"
+#include "Heap/z/zThreadLocalAllocBuffer.hpp"
+#include "Heap/z/zMark.hpp"
 #include "Mutator/ThreadLocal.h"
 
 using namespace MapleRuntime;

@@ -7,8 +7,8 @@
 // TRUST_STATE_KILL_PLAN Phase 1 contracts (header-level positive/negative).
 // The model below is the positive control for the live coloured-write assertion.
 
-#include "Common/ColourMask.h"
-#include "Common/ColourTypes.h"
+#include "Heap/z/zAddress.hpp"
+#include "Heap/z/zAddress.inline.hpp"
 #include "gc_unittest.hpp"
 
 using namespace MapleRuntime;

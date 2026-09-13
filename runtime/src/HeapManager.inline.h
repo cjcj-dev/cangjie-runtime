@@ -15,8 +15,8 @@
 #include "Mutator/MutatorManager.h"
 #include "schedule.h"
 // module internal headers
-#include "Heap/Collector/Collector.h"
-#include "Heap/Heap.h"
+#include "Heap/z/zCollectedHeap.hpp"
+#include "Heap/z/zHeap.hpp"
 #include "HeapManager.h"
 
 namespace MapleRuntime {

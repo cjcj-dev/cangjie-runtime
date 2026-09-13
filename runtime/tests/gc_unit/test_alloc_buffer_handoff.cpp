@@ -35,9 +35,9 @@
 #include "gc_heap_fixture.hpp"
 #include "gc_unittest.hpp"
 
-#include "Heap/Allocator/AllocBuffer.h"
+#include "Heap/z/zThreadLocalAllocBuffer.hpp"
 #include "Heap/z/zMarkStackEntry.hpp"
-#include "Heap/Collector/MarkEngine.h"
+#include "Heap/z/zMark.hpp"
 #include "Mutator/ThreadLocal.h"
 
 using namespace MapleRuntime;

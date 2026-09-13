@@ -4,7 +4,7 @@
 //
 // See https://cangjie-lang.cn/pages/LICENSE for license information.
 
-#include "Heap/Collector/GcTrigger.h"
+#include "Heap/z/zDirector.hpp"
 #include "Heap/Collector/TruncatedSeq.h"
 #include "gc_unittest.hpp"
 

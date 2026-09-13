@@ -9,7 +9,7 @@
 #include "Base/Panic.h"
 #include "Heap/z/zPage.hpp"
 #include "Heap/Allocator/RegionSpace.h"
-#include "Heap/Heap.h"
+#include "Heap/z/zHeap.hpp"
 #include "ObjectModel/RefField.inline.h"
 
 namespace MapleRuntime {

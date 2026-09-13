@@ -6,7 +6,7 @@
 
 
 #include "Base/Log.h"
-#include "Heap/Heap.h"
+#include "Heap/z/zHeap.hpp"
 #include "ObjectManager.inline.h"
 #include "ExceptionManager.inline.h"
 #include "Mutator/Mutator.h"

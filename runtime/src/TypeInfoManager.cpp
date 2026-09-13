@@ -10,7 +10,7 @@
 #include "Base/MemUtils.h"
 #include "Common/ColourEncoding.h"
 #include "Common/StateWord.h"
-#include "Heap/Heap.h"
+#include "Heap/z/zHeap.hpp"
 #include "ObjectModel/MClass.h"
 #include "ObjectModel/RefField.h"
 #include "ObjectManager.inline.h"

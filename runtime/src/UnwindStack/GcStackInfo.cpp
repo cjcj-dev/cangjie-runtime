@@ -9,7 +9,7 @@
 
 #include <stack>
 
-#include "Collector/TracingCollector.h"
+#include "Heap/z/zMark.hpp"
 #include "Common/StackType.h"
 #include "Interpreter/InterpreterSpecific.h"
 #include "UnwindStack/StackFrameCursor.h"

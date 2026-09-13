@@ -4,7 +4,7 @@
 #include "Collector/StringDedup.h"
 #include <cstring>
 #include <random>
-#include "Heap/Heap.h"
+#include "Heap/z/zHeap.hpp"
 #include "ObjectModel/MArray.inline.h"
 #include "ObjectModel/RefField.inline.h"
 

@@ -9,7 +9,7 @@
 
 #include <cstdint>
 
-#include "Common/ColourTypes.h"
+#include "Heap/z/zAddress.inline.hpp"
 
 // Instrumentation for the OpenJDK ZBarrier::self_heal port in
 // ObjectModel/RefField.h (zBarrier.inline.hpp:72-110). Two gates:

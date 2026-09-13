@@ -11,9 +11,9 @@
 #include <cstdlib>
 #include <cstring>
 
-#include "Collector/Collector.h"
-#include "Collector/CollectorResources.h"
-#include "Collector/GcTrigger.h"
+#include "Heap/z/zCollectedHeap.hpp"
+#include "Heap/z/zDriver.hpp"
+#include "Heap/z/zDirector.hpp"
 #include "Heap/z/zUncommitter.hpp"
 #include "Base/TimeUtils.h"
 #if defined(CANGJIE_SANITIZER_SUPPORT) || defined(CANGJIE_GWPASAN_SUPPORT)
@@ -21,7 +21,7 @@
 #endif
 #include "Common/ScopedObjectAccess.h"
 #include "Common/ColourEncoding.h"
-#include "Heap.h"
+#include "Heap/z/zHeap.hpp"
 #include "Heap/z/zForwardingTable.hpp"
 #include "Heap/Verify/AllocPhaseDiag.h"
 #include "Heap/Verify/MinorGCALot.h"

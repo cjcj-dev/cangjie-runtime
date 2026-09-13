@@ -11,7 +11,7 @@
 #include <thread>
 #include <vector>
 
-#include "Heap/Collector/MarkStripe.h"
+#include "Heap/z/zMarkStack.hpp"
 #include "gc_unittest.hpp"
 
 using namespace MapleRuntime;

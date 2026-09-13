@@ -12,7 +12,7 @@
 
 // cross module dependence
 #include "Heap/z/zBarrier.inline.hpp"
-#include "Heap/Heap.h"
+#include "Heap/z/zHeap.hpp"
 #include "HeapManager.inline.h"
 
 // module internal dependence

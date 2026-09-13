@@ -21,9 +21,9 @@
 
 #include "Base/Log.h"
 #include "Common/BaseObject.h"
-#include "Heap.h"
+#include "Heap/z/zHeap.hpp"
 #include "Heap/z/zPage.hpp"
-#include "Heap/Collector/Collector.h"
+#include "Heap/z/zCollectedHeap.hpp"
 #include "Heap/z/zGranuleMap.hpp"
 #include "Heap/Verify/M0Correlation.h"
 #include "Heap/WCollector/WCollector.h"

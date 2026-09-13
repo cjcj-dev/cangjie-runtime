@@ -6,7 +6,7 @@
 #include <memory>
 #include "gc_heap_fixture.hpp"
 #include "gc_unittest.hpp"
-#include "Heap/Collector/MarkStripe.h"
+#include "Heap/z/zMarkStack.hpp"
 #include "Heap/WCollector/WCollector.h"
 
 using namespace MapleRuntime;
@@ -138,7 +138,7 @@ GC_TEST(MarkPort203Entries, CacheCollisionAndExitWriteBothPageCounts)
 #include "Common/Runtime.h"
 #include "Concurrency/Concurrency.h"
 #include "Heap/Collector/CollectorProxy.h"
-#include "Heap/GcThreadPool.h"
+#include "Heap/z/zWorkers.hpp"
 #include "ObjectModel/MArray.inline.h"
 #include "ObjectModel/RefField.inline.h"
 #include "Heap/Collector/MarkPartialArray.h"

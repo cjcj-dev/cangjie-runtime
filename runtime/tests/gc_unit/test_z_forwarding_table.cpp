@@ -24,7 +24,7 @@
 #include <type_traits>
 #include <chrono>
 #include <thread>
-#include "Heap/Collector/RelocationRequestQueue.h"
+#include "Heap/z/zRelocate.hpp"
 
 using namespace MapleRuntime;
 using namespace MapleRuntime::GcUnit;

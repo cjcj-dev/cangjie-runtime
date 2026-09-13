@@ -6,12 +6,12 @@
 
 #include "Heap/z/zStoreBarrierBuffer.hpp"
 
-#include "Heap/Allocator/AllocBuffer.h"
+#include "Heap/z/zThreadLocalAllocBuffer.hpp"
 #include "Heap/Allocator/Allocator.h"
 #include "Heap/z/zPage.hpp"
-#include "Heap/Collector/Collector.h"
-#include "Heap/Collector/CollectorResources.h"
-#include "Heap/Heap.h"
+#include "Heap/z/zCollectedHeap.hpp"
+#include "Heap/z/zDriver.hpp"
+#include "Heap/z/zHeap.hpp"
 #include "ObjectModel/RefField.h"
 #include "Heap/z/zRememberedSet.hpp"
 

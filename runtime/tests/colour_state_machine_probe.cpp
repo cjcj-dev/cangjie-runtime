@@ -33,7 +33,7 @@
 // MRT_C4TABLE_PRINT_WITNESS is defined, which the manual arm
 // (runtime/tests/run_colour_table_witness.sh) uses to print the witness colours for a human.
 
-#include "Common/ColourMask.h"
+#include "Heap/z/zAddress.hpp"
 
 namespace {
 using MapleRuntime::BadMasks;

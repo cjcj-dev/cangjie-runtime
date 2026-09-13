@@ -31,13 +31,13 @@
 #include "Concurrency/Concurrency.h"
 #include "Heap/z/zStoreBarrierBuffer.hpp"
 #include "Heap/Collector/GcTriggerFlags.h"
-#include "Heap/Collector/MarkEngine.h"
+#include "Heap/z/zMark.hpp"
 #include "Heap/Collector/MarkPartialArray.h"
-#include "Heap/Collector/MarkStripe.h"
+#include "Heap/z/zMarkStack.hpp"
 #include "Heap/Collector/TenuringThreshold.h"
-#include "Heap/GcThreadPool.h"
+#include "Heap/z/zWorkers.hpp"
 #include "Heap/Verify/TraceClear.h"
-#include "Heap/Collector/MarkingStacks.h"
+#include "Heap/z/zMark.hpp"
 #include "Heap/Verify/Zap.h"
 #include "Heap/Verify/DiagGate.h"
 #include "Heap/Verify/NwDropAudit.h"
@@ -45,7 +45,7 @@
 #include "Heap/Verify/Stw2CurrentAudit.h"
 #include "Heap/Verify/SurvNodeDiag.h"
 #include "Heap/Verify/CsetEmptyWho.h"
-#include "Common/ColourPredicates.h"
+#include "Heap/z/zAddress.inline.hpp"
 #include "Mutator/MutatorManager.h"
 #include "ObjectModel/MArray.inline.h"
 #include "UnwindStack/StackFrameCursor.h"
@@ -1535,3 +1535,740 @@ bool WCollector::FlushThreadMarkProducers(ThreadLocalData* tls, MarkDomain* doma
     return ThreadLocal::FlushMarkStacks(tls, *domain) || published;
 }
 } // namespace MapleRuntime
+
+// Copyright (c) Huawei Technologies Co., Ltd. 2025. All rights reserved.
+// This source file is part of the Cangjie project, licensed under Apache-2.0
+// with Runtime Library Exception.
+//
+// See https://cangjie-lang.cn/pages/LICENSE for license information.
+
+#include "Heap/z/zVerify.hpp"
+#include "Heap/Collector/StringDedup.h"
+#include "Heap/z/zMark.hpp"
+#include "Heap/z/zMarkStack.hpp"
+#include "Heap/z/zMark.hpp"
+
+#include <algorithm>
+#include "Base/CString.h"
+#include "Common/Runtime.h"
+#include "Concurrency/Concurrency.h"
+#include "Heap/z/zThreadLocalAllocBuffer.hpp"
+#include "Heap/z/zStoreBarrierBuffer.hpp"
+#include "Heap/Collector/MarkPartialArray.h"
+#include "Heap/Verify/NwDropAudit.h"
+#include "Heap/Verify/M0ExitDiagnostics.h"
+#include "Heap/Verify/SurvNodeDiag.h"
+#include "Heap/z/zMark.hpp"
+#include "ObjectModel/RefField.inline.h"
+
+
+namespace MapleRuntime {
+struct MajorMarkShared {
+    TracingCollector* collector = nullptr;
+    size_t workerCount = 0;
+    MarkDomain* domain = nullptr;
+    bool partial = false;
+    BaseObject* exportOwner = nullptr;
+    std::atomic<size_t> newlyMarked{ 0 };
+
+    MarkStripeSet& Stripes() { return domain->Stripes(); }
+    MarkingSMR& Smr() { return domain->Smr(); }
+    MarkTerminate& Terminate() { return domain->Terminate(); }
+    MarkThreadLocalStacks& Stacks() { return domain->Stacks(); }
+
+    size_t StripeFor(const MarkStackEntry& entry) const
+    {
+        MAddress address = 0;
+        if (entry.partialArray()) {
+            size_t length = 0;
+            MarkPartialArray::Decode(entry, address, length);
+        } else {
+            address = reinterpret_cast<MAddress>(entry.object());
+        }
+        return domain->Stripes().StripeForAddress(address);
+    }
+};
+
+class ConcurrentMarkingWork : public GCRestartableWorkerTask {
+public:
+    explicit ConcurrentMarkingWork(MajorMarkShared& shared) : shared(shared) {}
+
+    void ResizeWorkers(uint32_t workers) override
+    {
+        shared.workerCount = workers;
+        shared.domain->ResizeWorkers(workers);
+    }
+
+    void Work(uint32_t workerId) override
+    {
+        MarkContext local(shared.workerCount, workerId, shared.Stripes(), shared.Stacks());
+        size_t nNewlyMarked = 0;
+        TracingCollector::WorkStack staging;
+        (void)MarkEngine::FollowWork(local, shared.Smr(), shared.Stripes(), shared.Terminate(), workerId,
+                                     shared.partial,
+                                     [this, &nNewlyMarked, &staging, &local](const MarkStackEntry& entry) {
+                                         ProcessEntry(local, entry, nNewlyMarked, staging);
+                                     },
+                                     nullptr, nullptr, shared.domain);
+        (void)local.Stacks().Flush(shared.Stripes(), true);
+        local.Cache().Flush();
+        shared.newlyMarked.fetch_add(nNewlyMarked, std::memory_order_relaxed);
+        MarkingStacks::VerifyEmpty(local.Stacks().Population());
+    }
+
+private:
+    void PublishStaging(MarkContext& ctx, TracingCollector::WorkStack& staging)
+    {
+        while (!staging.empty()) {
+            const MarkStackEntry next = staging.back();
+            staging.pop_back();
+            const size_t stripeIndex = shared.StripeFor(next);
+            const bool publish = stripeIndex != ctx.StripeId();
+            ctx.Stacks().Push(shared.Stripes(), stripeIndex, next, publish);
+        }
+    }
+
+    void ProcessEntry(MarkContext& ctx, const MarkStackEntry& entry, size_t& nNewlyMarked,
+                      TracingCollector::WorkStack& staging)
+    {
+        TracingCollector& collector = *shared.collector;
+        if (UNLIKELY(MarkPartialArray::IsPartialArrayEntry(entry))) {
+            collector.FollowPartialArray(entry, staging);
+            PublishStaging(ctx, staging);
+            return;
+        }
+        BaseObject* obj = entry.object();
+        if (!Collector::PlausibleManagedObjectGate("ConcurrentMarkingWork.pop", obj)) {
+            BaseObject* host = Collector::TryRecoverInteriorBase(obj);
+            if (host == nullptr || host == obj ||
+                !Collector::PlausibleManagedObjectGate("ConcurrentMarkingWork.host", host)) {
+                return;
+            }
+            obj = host;
+        }
+        const bool wasMarked = collector.MarkEntryObject(obj, entry, &ctx.Cache());
+        if (shared.exportOwner != nullptr && entry.mark() && !wasMarked) {
+            TypeInfo* typeInfo = obj->GetTypeInfo();
+            if (typeInfo != nullptr && typeInfo->IsForeignType()) {
+                std::lock_guard<std::mutex> lock(collector.externMtx);
+                collector.discoveredExternObjects[shared.exportOwner].push_back(obj);
+            }
+        }
+        if ((!entry.mark() || !wasMarked) && entry.follow()) {
+            if (entry.mark()) {
+                nNewlyMarked++;
+            }
+            if (!obj->HasRefField()) {
+                return;
+            }
+            SurvNodeDiag::NoteFollowHolder(obj, SurvNodeDiag::FOLLOW_SCAN);
+            if (UNLIKELY(obj->IsWeakRef())) {
+                collector.DiscoverWeakReference(obj, staging);
+            } else {
+                collector.TraceObjectRefFields(obj, staging, entry.finalizable());
+            }
+            PublishStaging(ctx, staging);
+        } else if (entry.mark() && wasMarked) {
+            SurvNodeDiag::NoteFollowHolder(obj, SurvNodeDiag::FOLLOW_SKIP_MARKED);
+        }
+    }
+
+    MajorMarkShared& shared;
+};
+
+
+} // namespace MapleRuntime
+
+// Copyright (c) Huawei Technologies Co., Ltd. 2025. All rights reserved.
+// This source file is part of the Cangjie project, licensed under Apache-2.0
+// with Runtime Library Exception.
+//
+// See https://cangjie-lang.cn/pages/LICENSE for license information.
+
+#include "Heap/z/zVerify.hpp"
+#include "Heap/Collector/StringDedup.h"
+#include "Heap/z/zMark.hpp"
+#include "Heap/z/zMarkStack.hpp"
+#include "Heap/z/zMark.hpp"
+
+#include <algorithm>
+#include "Base/CString.h"
+#include "Common/Runtime.h"
+#include "Concurrency/Concurrency.h"
+#include "Heap/z/zThreadLocalAllocBuffer.hpp"
+#include "Heap/z/zStoreBarrierBuffer.hpp"
+#include "Heap/Collector/MarkPartialArray.h"
+#include "Heap/Verify/NwDropAudit.h"
+#include "Heap/Verify/M0ExitDiagnostics.h"
+#include "Heap/Verify/SurvNodeDiag.h"
+#include "Heap/z/zMark.hpp"
+#include "ObjectModel/RefField.inline.h"
+
+
+namespace MapleRuntime {
+void TracingCollector::StartOldMarkWork()
+{
+    // ZGenerationOld::mark_start -> ZMark::start. Initialize the existing M3
+    // domain before publishing old's mark phase to mutators and young workers.
+    if (majorMarkDomain == nullptr) {
+        majorMarkDomain = std::make_unique<MarkDomain>(64, MarkingStacks::MarkingGeneration::MAJOR);
+    }
+    GCWorkers& workers = collectorResources.GetWorkers(GCCycleGeneration::OLD);
+    majorMarkDomain->BindWorkers(&workers);
+    majorMarkDomain->BindAbort(&collectorResources.GetMajorDriverPort().Abort());
+    majorMarkDomain->PrepareWork(workers.ActiveWorkers());
+}
+
+void TracingCollector::MarkOldObjectIfActive(BaseObject* object, bool gcThread) const
+{
+    const GCCycleSnapshot old = GetCycleSnapshot(GCCycleGeneration::OLD);
+    if (!old.active || (old.phase != GC_PHASE_ENUM && old.phase != GC_PHASE_TRACE &&
+                        old.phase != GC_PHASE_CLEAR_SATB_BUFFER)) {
+        return;
+    }
+    if (!Heap::IsHeapAddress(object)) {
+        return;
+    }
+    const bool marked = gcThread ? MarkObject(object) : IsMarkedObject<Generation::Old>(object);
+    if (marked) {
+        return;
+    }
+    // ZMark::mark_object marks before publishing GC-thread work. The entry
+    // carries FollowOnly so old workers still traverse an already marked root.
+    CHECK_DETAIL(majorMarkDomain != nullptr, "old mark domain must start before publication");
+    MarkStripeSet& stripes = majorMarkDomain->Stripes();
+    MarkThreadLocalStacks& publication = ThreadLocal::GetMarkStacks(*majorMarkDomain);
+    publication.Push(stripes, stripes.StripeForAddress(reinterpret_cast<uintptr_t>(object)),
+                     gcThread ? MarkStackEntry::FollowOnly(object) : MarkStackEntry::MarkAndFollow(object), true);
+}
+
+size_t TracingCollector::RunMajorStripeMark(WorkStack& workStack, bool partial, BaseObject* exportOwner)
+{
+    GCWorkers& workersSet = GetWorkers();
+    const uint32_t workers = workersSet.ActiveWorkers();
+    if (majorMarkDomain == nullptr) {
+        majorMarkDomain = std::make_unique<MarkDomain>(64, MarkingStacks::MarkingGeneration::MAJOR);
+    }
+    majorMarkDomain->BindWorkers(&workersSet);
+    majorMarkDomain->BindAbort(&collectorResources.GetMajorDriverPort().Abort());
+    majorMarkDomain->PrepareWork(workers);
+    MajorMarkShared shared;
+    shared.collector = this;
+    shared.workerCount = workers;
+    shared.partial = partial;
+    shared.exportOwner = exportOwner;
+    shared.domain = majorMarkDomain.get();
+
+    MarkThreadLocalStacks& seed = majorMarkDomain->Stacks();
+    while (!workStack.empty()) {
+        const MarkStackEntry entry = workStack.back();
+        workStack.pop_back();
+        seed.Push(shared.Stripes(), shared.StripeFor(entry), entry, true);
+    }
+    (void)seed.Flush(shared.Stripes(), true);
+
+
+    ConcurrentMarkingWork task(shared);
+    workersSet.Run(task);
+    majorMarkDomain->FinishWork();
+    if (!partial && !collectorResources.GetMajorDriverPort().Abort().Poll()) {
+        CHECK_DETAIL(shared.Terminate().Terminated(),
+                     "major striped closure returned without coordinated worker termination");
+    }
+    return shared.newlyMarked.load(std::memory_order_relaxed);
+}
+
+void TracingCollector::TracingImpl(WorkStack& workStack, WorkStack& foreignRootsSet)
+{
+
+
+    if (workStack.empty() && foreignRootsSet.empty() && majorMarkDomain->Stripes().IsEmpty()) {
+        return;
+    }
+
+    if (!workStack.empty() || !majorMarkDomain->Stripes().IsEmpty()) {
+        markedObjectCount.fetch_add(RunMajorStripeMark(workStack), std::memory_order_relaxed);
+    }
+    MarkingStacks::VerifyEmpty(GetWorkers().GetSnapshot().remainingWorkers);
+}
+
+void TracingCollector::ProcessExportRoots(WorkStack& foreignRootsSet)
+{
+    while (!foreignRootsSet.empty()) {
+        const MarkStackEntry entry = foreignRootsSet.back();
+        foreignRootsSet.pop_back();
+        BaseObject* exportObj = entry.object();
+        if (exportObj == nullptr) {
+            continue;
+        }
+        if (IsMarkedObject<Generation::Old>(exportObj)) {
+            continue;
+        }
+        {
+            std::lock_guard<std::mutex> lock(externMtx);
+            (void)discoveredExternObjects[exportObj];
+        }
+        WorkStack exportSeed;
+        exportSeed.push_back(entry);
+        markedObjectCount.fetch_add(RunMajorStripeMark(exportSeed, false, exportObj), std::memory_order_relaxed);
+    }
+}
+
+void TracingCollector::FindUselessExternObjects()
+{
+    std::lock_guard<std::mutex> lock(externMtx);
+    CurrentizeValueRootMap(discoveredExternObjects, Generation::Old);
+}
+void TracingCollector::DoTracing(WorkStack& workStack, WorkStack& foreignRootsSet)
+{
+    ScopedEntryTrace trace("CJRT_GC_TRACE");
+    MRT_PHASE_TIMER(ZStatPhases::PDoTracing);
+    VLOG(REPORT, "roots size: %zu", workStack.size());
+
+    {
+        MRT_PHASE_TIMER(ZStatPhases::PConcurrentMarking);
+        TracingImpl(workStack, foreignRootsSet);
+    }
+
+    {
+        MRT_PHASE_TIMER(ZStatPhases::PConcurrentReMarking);
+        ConcurrentReMark(workStack, foreignRootsSet);
+    }
+
+    // ZGenerationOld::collect processes non-strong references only after the
+    // successful mark-end pause has closed ordinary mark publication.
+    ProcessOldNonStrongReferences(workStack);
+
+#if defined(MRT_TESTABLE_INTERNALS)
+    // All major tasks and finalizer work have flushed before page selection.
+    // Major has no reachableVec carrier; observers read the actual page state.
+    ObserveMarkClosureForTest(nullptr);
+#endif
+    VLOG(REPORT, "mark %zu objects", markedObjectCount.load(std::memory_order_relaxed));
+}
+
+
+} // namespace MapleRuntime
+
+// Copyright (c) Huawei Technologies Co., Ltd. 2025. All rights reserved.
+// This source file is part of the Cangjie project, licensed under Apache-2.0
+// with Runtime Library Exception.
+//
+// See https://cangjie-lang.cn/pages/LICENSE for license information.
+
+#include "Heap/z/zVerify.hpp"
+#include "Heap/Collector/StringDedup.h"
+#include "Heap/z/zMark.hpp"
+#include "Heap/z/zMarkStack.hpp"
+#include "Heap/z/zMark.hpp"
+
+#include <algorithm>
+#include "Base/CString.h"
+#include "Common/Runtime.h"
+#include "Concurrency/Concurrency.h"
+#include "Heap/z/zThreadLocalAllocBuffer.hpp"
+#include "Heap/z/zStoreBarrierBuffer.hpp"
+#include "Heap/Collector/MarkPartialArray.h"
+#include "Heap/Verify/NwDropAudit.h"
+#include "Heap/Verify/M0ExitDiagnostics.h"
+#include "Heap/Verify/SurvNodeDiag.h"
+#include "Heap/z/zMark.hpp"
+#include "ObjectModel/RefField.inline.h"
+
+
+namespace MapleRuntime {
+bool TracingCollector::MarkEntryObject(BaseObject* obj, const MarkStackEntry& entry,
+                                       MarkLiveCache* cache) const
+{
+    if (!Collector::PlausibleManagedObjectGate("MarkEntryObject", obj)) {
+        return true;
+    }
+    RegionInfo* region = RegionInfo::GetRegionInfoAt(reinterpret_cast<MAddress>(obj));
+    bool firstLive = entry.incLive();
+    bool already = false;
+    if (entry.mark()) {
+        if (entry.finalizable()) {
+            already = region->ResurrectObjectWithLiveClaim(
+                obj, region->GetAddressOffset(reinterpret_cast<MAddress>(obj)), false, firstLive);
+        } else {
+            already = region->MarkObjectByOwnerWithLiveClaim(obj, obj->GetSize(), false, firstLive);
+        }
+    }
+    if (!already && firstLive) {
+        if (cache != nullptr) {
+            cache->IncLive(region, obj->GetSize());
+        } else {
+            region->AddLiveCounts(1, obj->GetSize());
+        }
+    }
+    return already;
+}
+
+
+} // namespace MapleRuntime
+
+// Copyright (c) Huawei Technologies Co., Ltd. 2025. All rights reserved.
+// This source file is part of the Cangjie project, licensed under Apache-2.0
+// with Runtime Library Exception.
+//
+// See https://cangjie-lang.cn/pages/LICENSE for license information.
+
+#include "Heap/z/zMark.hpp"
+
+#include "Base/Log.h"
+#include "Heap/z/zWorkers.hpp"
+#include "Mutator/MutatorManager.h"
+#include "Heap/z/zMark.hpp"
+
+namespace MapleRuntime {
+
+static bool StealLocalRound(MarkContext& context, MarkStripeSet& stripes)
+{
+    MarkThreadLocalStacks& stacks = context.Stacks();
+    const size_t home = context.StripeId();
+    for (size_t victim = stripes.Next(home); victim != home; victim = stripes.Next(victim)) {
+        MarkStripeStack* stack = stacks.StealLocal(victim);
+        if (stack != nullptr) {
+            stacks.Install(home, stack);
+            return true;
+        }
+    }
+    return false;
+}
+
+static bool StealGlobalRound(MarkContext& context, MarkingSMR& smr, MarkStripeSet& stripes, size_t workerId,
+                             std::atomic<size_t>* stealSuccess, std::atomic<size_t>* stealFailure)
+{
+    MarkThreadLocalStacks& stacks = context.Stacks();
+    const size_t home = context.StripeId();
+    for (size_t victim = stripes.Next(home); victim != home; victim = stripes.Next(victim)) {
+        MarkStripeStack* stack = stripes.At(victim).StealStack(smr, workerId);
+        if (stack != nullptr) {
+            if (stealSuccess != nullptr) {
+                stealSuccess->fetch_add(1, std::memory_order_relaxed);
+            }
+            stacks.Install(home, stack);
+            return true;
+        }
+        if (stealFailure != nullptr) {
+            stealFailure->fetch_add(1, std::memory_order_relaxed);
+        }
+    }
+    return false;
+}
+
+static bool RebalanceWork(MarkContext& context, MarkStripeSet& stripes, MarkTerminate& terminate, size_t workerId,
+                          MarkDomain* domain)
+{
+    const size_t assumed = context.NStripes();
+    const size_t nstripes = stripes.NStripes();
+    if (assumed != nstripes) {
+        context.SetNStripes(nstripes);
+    } else if (nstripes < stripes.CalculateNStripes(terminate.WorkerCount()) && stripes.IsCrowded()) {
+        const size_t restored = nstripes << 1;
+        if (stripes.TrySetNStripes(nstripes, restored)) {
+            context.SetNStripes(restored);
+        }
+    }
+    const size_t stripe = stripes.StripeForWorker(terminate.WorkerCount(), workerId);
+    if (context.StripeId() != stripe) {
+        context.SetStripeId(stripe);
+        (void)context.Stacks().Flush(stripes, false);
+        terminate.Wake();
+    } else if (!terminate.Saturated()) {
+        (void)context.Stacks().Flush(stripes, false);
+        terminate.Wake();
+    }
+    return domain != nullptr && domain->PollStop();
+}
+
+static bool Drain(MarkContext& context, MarkingSMR& smr, MarkStripeSet& stripes, MarkTerminate& terminate,
+                  size_t workerId, const MarkEngine::Process& process, MarkDomain* domain)
+{
+    MarkStackEntry entry;
+    size_t processed = 0;
+    context.SetStripeId(stripes.StripeForWorker(terminate.WorkerCount(), workerId));
+    context.SetNStripes(stripes.NStripes());
+    while (context.Stacks().Pop(smr, workerId, stripes, context.StripeId(), entry)) {
+        process(entry);
+        if ((processed++ & 31) == 0 && RebalanceWork(context, stripes, terminate, workerId, domain)) {
+            return false;
+        }
+    }
+    return true;
+}
+
+MarkEngine::Result MarkEngine::FollowWork(MarkContext& context, MarkingSMR& smr, MarkStripeSet& stripes,
+                                          MarkTerminate& terminate, size_t workerId, bool partial,
+                                          const Process& process, std::atomic<size_t>* stealSuccess,
+                                          std::atomic<size_t>* stealFailure, MarkDomain* domain)
+{
+    for (;;) {
+        if (!Drain(context, smr, stripes, terminate, workerId, process, domain)) {
+            terminate.Leave();
+            return Result::Aborted;
+        }
+        if (StealLocalRound(context, stripes) ||
+            StealGlobalRound(context, smr, stripes, workerId, stealSuccess, stealFailure)) {
+            continue;
+        }
+        if (context.Stacks().Flush(stripes, false)) {
+            terminate.Wake();
+            continue;
+        }
+        if (partial) {
+            return Result::Partial;
+        }
+        if (domain != nullptr && domain->TryProactiveFlush(workerId)) {
+            continue;
+        }
+        if (terminate.TryTerminate(stripes, context.NStripes())) {
+            context.Cache().Flush();
+            smr.Reclaim(workerId);
+            return Result::Completed;
+        }
+    }
+}
+
+MarkDomain::MarkDomain(size_t capacity, MarkingStacks::MarkingGeneration generation)
+    : generation(generation), stripes(capacity)
+{
+    stripes.SetTerminate(&terminate);
+}
+
+void MarkDomain::EnsureWorkers(size_t workers)
+{
+    if (smr == nullptr || smr->WorkerCount() < workers) {
+        smr = std::make_unique<MarkingSMR>(workers);
+    }
+}
+
+void MarkDomain::PrepareWork(size_t workers)
+{
+    CHECK_DETAIL(workers != 0, "mark domain needs a worker");
+    nworkers = workers;
+    targetNStripes = stripes.CalculateNStripes(workers);
+    stripes.SetNStripes(targetNStripes);
+    EnsureWorkers(workers);
+    terminate.Reset(workers);
+    proactiveFlushes = 0;
+}
+
+void MarkDomain::ResizeWorkers(size_t workers)
+{
+    // ZMark::resize_workers keeps this task's proactive flush budget.
+    CHECK_DETAIL(workers != 0, "mark domain needs a worker");
+    nworkers = workers;
+    targetNStripes = stripes.CalculateNStripes(workers);
+    stripes.SetNStripes(targetNStripes);
+    EnsureWorkers(workers);
+    terminate.Reset(workers);
+}
+
+void MarkDomain::FinishWork() {}
+
+bool MarkDomain::PollStop()
+{
+    if (abortToken != nullptr && abortToken->Poll()) {
+        return true;
+    }
+    if (gcWorkers != nullptr && gcWorkers->ShouldWorkerResize()) {
+        return true;
+    }
+    return false;
+}
+
+MarkThreadLocalStacks& MarkDomain::Stacks()
+{
+    return ThreadLocal::GetMarkStacks(*this);
+}
+
+bool MarkDomain::FlushStacks()
+{
+    return ThreadLocal::FlushMarkStacks(ThreadLocal::GetThreadLocalData(), *this);
+}
+
+bool MarkDomain::TryProactiveFlush(size_t workerId)
+{
+    // zMark.cpp:608-623, zGlobals.hpp:87. Only worker zero changes this count.
+    constexpr size_t proactiveFlushMax = 10;
+    if (workerId != 0 || proactiveFlushes == proactiveFlushMax) {
+        return false;
+    }
+    ++proactiveFlushes;
+    return MutatorManager::Instance().HandshakeFlushMarkProducers(this) || !stripes.IsEmpty();
+}
+
+bool MarkDomain::TryTerminateFlush()
+{
+    // Called by the coordinator after every worker has flushed at its task exit.
+    return MutatorManager::Instance().HandshakeFlushMarkProducers(this) || !stripes.IsEmpty();
+}
+
+bool MarkDomain::TryEnd()
+{
+    (void)FlushStacks();
+    return stripes.IsEmpty();
+}
+
+} // namespace MapleRuntime
+
+#include "Heap/z/zMarkTerminate.inline.hpp"
+
+// Copyright (c) Huawei Technologies Co., Ltd. 2026. All rights reserved.
+// This source file is part of the Cangjie project, licensed under Apache-2.0
+// with Runtime Library Exception.
+#include "Heap/z/zMark.hpp"
+#include "Heap/z/zVerify.hpp"
+#include "Heap/z/zMark.hpp"
+#include "Mutator/MutatorManager.h"
+#include "Mutator/ThreadLocal.h"
+namespace MapleRuntime {
+namespace MarkingStacks {
+// zMark.cpp:1016-1028. Inspect the same per-generation containers used by
+// ThreadLocal::GetMarkStacks; verification must not flush or create a stack.
+void VerifyAllEmpty(MarkDomain& domain)
+{
+    if (!ZVerifyMarking) { return; }
+    const size_t index = domain.Generation() == MarkingGeneration::YOUNG ? 0 : 1;
+    MutatorManager::Instance().VisitMarkingThreads([&](const ThreadLocalData* tls) {
+        if (tls == nullptr || tls->gcData == nullptr) { return; }
+        const auto& stacks = tls->gcData->markStacks[index];
+        CHECK_DETAIL(stacks == nullptr || stacks->IsEmpty(),
+                     "Thread marking stack is not empty: thread=%p generation=%zu", tls, index);
+    });
+    CHECK_DETAIL(domain.Stripes().IsEmpty(), "Shared marking stripes are not empty");
+}
+
+void VerifyEmpty(size_t pending)
+{
+    if (ZVerifyMarking) { CHECK_DETAIL(pending == 0, "Marking stack is not empty: %zu", pending); }
+}
+}
+}
+
+// Copyright (c) Huawei Technologies Co., Ltd. 2025. All rights reserved.
+// This source file is part of the Cangjie project, licensed under Apache-2.0
+// with Runtime Library Exception.
+//
+// See https://cangjie-lang.cn/pages/LICENSE for license information.
+
+#include "Heap/Collector/MarkPartialArray.h"
+
+#include <atomic>
+#include <cstdio>
+#include <cstdlib>
+
+#include "Base/Log.h"
+#include "Common/BaseObject.h"
+#include "Heap/z/zHeap.hpp"
+#include "ObjectModel/MArray.inline.h"
+#include "ObjectModel/RefField.inline.h"
+
+namespace MapleRuntime {
+namespace MarkPartialArray {
+bool Encodable(const void* chunkStart, size_t length)
+{
+    const MAddress addr = reinterpret_cast<MAddress>(chunkStart);
+    const MAddress base = Heap::GetHeapStartAddress();
+    if (addr < base) {
+        return false;
+    }
+    // Encode/Decode store (addr - base) >> MIN_SIZE_SHIFT and reconstruct
+    // base + (offset << MIN_SIZE_SHIFT).  Keep this predicate relative to
+    // that same base (zMark.cpp:177-186).
+    if (((addr - base) & (MIN_SIZE - 1)) != 0) {
+        return false;
+    }
+    if (length == 0 || length > MAX_LENGTH) {
+        return false;
+    }
+    return ((addr - base) >> MIN_SIZE_SHIFT) <= MAX_OFFSET;
+}
+
+MarkStackEntry Encode(const void* chunkStart, size_t length, bool finalizable)
+{
+    const MAddress addr = reinterpret_cast<MAddress>(chunkStart);
+    const size_t offset = static_cast<size_t>((addr - Heap::GetHeapStartAddress()) >> MIN_SIZE_SHIFT);
+    return MarkStackEntry::PartialArray(offset, length, finalizable);
+}
+
+void Decode(const MarkStackEntry& entry, MAddress& chunkStart, size_t& length)
+{
+    const size_t offset = entry.partialArrayOffset();
+    length = entry.partialArrayLength();
+    chunkStart = Heap::GetHeapStartAddress() + (offset << MIN_SIZE_SHIFT);
+}
+
+// ZGC zMark.cpp:216-270. Always visit the leading range locally; only
+// publish ranges whose complete descriptor can be represented. The inline
+// fallback visits every field of a legal but unencodable array.
+void FollowElements(MAddress start, size_t length, bool finalizable,
+                    const FieldVisitor& visit, const EntryPublisher& publish)
+{
+    const MAddress end = start + length * sizeof(MAddress);
+    const MAddress middleStart = AlignUp(start + sizeof(MAddress), MIN_SIZE);
+    if (!Enabled() || length <= MIN_LENGTH || length > MAX_LENGTH ||
+        !Encodable(reinterpret_cast<const void*>(AlignDown(end, MIN_SIZE)), 1)) {
+        if (Enabled() && length > MIN_LENGTH) {
+            NoteNotEncodable();
+        }
+        for (size_t i = 0; i < length; ++i) {
+            visit(start + i * sizeof(MAddress));
+        }
+        return;
+    }
+    const size_t middleLength = AlignDown((end - middleStart) / sizeof(MAddress), MIN_LENGTH);
+    const MAddress middleEnd = middleStart + middleLength * sizeof(MAddress);
+    auto push = [&](MAddress address, size_t count) {
+        if (!Encodable(reinterpret_cast<const void*>(address), count)) {
+            NoteNotEncodable();
+            for (size_t i = 0; i < count; ++i) {
+                visit(address + i * sizeof(MAddress));
+            }
+            return;
+        }
+        NoteChunkPushed();
+        publish(Encode(reinterpret_cast<const void*>(address), count, finalizable));
+    };
+    NoteArraySplit();
+    if (end > middleEnd) {
+        push(middleEnd, (end - middleEnd) / sizeof(MAddress));
+    }
+    MAddress part = middleEnd;
+    while (part > middleStart) {
+        const size_t count = AlignUp((part - middleStart) / sizeof(MAddress) / 2, MIN_LENGTH);
+        part -= count * sizeof(MAddress);
+        push(part, count);
+    }
+    for (MAddress field = start; field < middleStart; field += sizeof(MAddress)) {
+        visit(field);
+    }
+}
+
+void FollowObjectReferences(BaseObject* object, bool finalizable,
+                            const FieldVisitor& visit, const EntryPublisher& publish)
+{
+    if (object->GetTypeInfo()->IsRawArray()) {
+        MArray* array = reinterpret_cast<MArray*>(object);
+        TypeInfo* component = array->GetComponentTypeInfo();
+        if (component->IsObjectType() || component->IsArrayType() || component->IsInterface()) {
+            FollowElements(reinterpret_cast<MAddress>(array->ConvertToCArray()), array->GetLength(), finalizable, visit, publish);
+            return;
+        }
+    }
+    object->ForEachRefField([&](RefField<>& field) { visit(reinterpret_cast<MAddress>(&field)); });
+}
+
+void FollowPartialReferences(const MarkStackEntry& entry,
+                             const FieldVisitor& visit, const EntryPublisher& publish)
+{
+    MAddress start = 0;
+    size_t length = 0;
+    Decode(entry, start, length);
+    NoteChunkFollowed();
+    FollowElements(start, length, entry.finalizable(), visit, publish);
+}
+
+}
+}

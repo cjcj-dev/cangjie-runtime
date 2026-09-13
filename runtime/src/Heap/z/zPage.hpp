@@ -35,9 +35,9 @@
 #include "Base/Panic.h"
 #include "Base/RwLock.h"
 #include "Heap/Collector/LiveInfoArena.h"
-#include "Heap/Collector/ZForwardingLife.h"
+#include "Heap/z/zForwarding.hpp"
 #include "Heap/Collector/GcInfos.h"
-#include "Heap/Collector/LiveInfo.h"
+#include "Heap/z/zLiveMap.hpp"
 #include "Heap/Collector/ManagedObjectGate.h"
 #include "Heap/z/zUncommitter.hpp"
 #include "Heap/Allocator/RouteTicket.h"
@@ -48,7 +48,7 @@
 #include "Heap/Verify/SurvNodeDiag.h"
 #include "Heap/Allocator/RouteDestHold.h"
 #include "Heap/z/zForwardingTable.hpp"
-#include "Heap/Allocator/MemMap.h"
+#include "Heap/z/zVirtualMemoryManager.hpp"
 #include "Heap/z/zGranuleMap.hpp"
 
 #include "Heap/Verify/M0Correlation.h"
@@ -58,44 +58,9 @@
 #include "Sanitizer/SanitizerInterface.h"
 #endif
 
+#include "Heap/z/zBitField.hpp"
 namespace MapleRuntime {
 class RegionList;
-template<typename T>
-class BitField {
-public:
-    // pos: the position where the bit locates. It starts from 0.
-    // bitLen: the length that is to be read.
-    T GetAtomicValue(size_t pos, size_t bitLen) const
-    {
-        T value = __atomic_load_n(&fieldVal, __ATOMIC_ACQUIRE);
-        T bitMask = FieldMask(pos, bitLen);
-        return value & bitMask;
-    }
-    void SetAtomicValue(size_t pos, size_t bitLen, T newValue)
-    {
-        do {
-            T oldValue = fieldVal;
-            T bitMask = FieldMask(pos, bitLen);
-            T unchangedBitMask = ~bitMask;
-            T newFieldValue = (static_cast<T>(newValue << pos) & bitMask) | (oldValue & unchangedBitMask);
-            if (__atomic_compare_exchange_n(&fieldVal, &oldValue, newFieldValue, false, __ATOMIC_ACQ_REL,
-                                            __ATOMIC_ACQUIRE)) {
-                return;
-            }
-        } while (true);
-    }
-
-private:
-    static constexpr T FieldMask(size_t pos, size_t bitLen)
-    {
-        constexpr size_t width = std::numeric_limits<T>::digits;
-        const T lowMask = bitLen >= width ? static_cast<T>(~T(0))
-                                          : static_cast<T>((T(1) << bitLen) - T(1));
-        return static_cast<T>(lowMask << pos);
-    }
-
-    T fieldVal;
-};
 // this class is the metadata of region, it contains all the information needed to manage its corresponding memory.
 // Region memory is composed of several Units, described by UnitInfo.
 // sizeof(RegionInfo) must be equal to sizeof(UnitInfo). We rely on this fact to calculate region-related address.

@@ -12,7 +12,7 @@
 #include <functional>
 #include <mutex>
 #include <vector>
-#include "MemMap.h"
+#include "Heap/z/zVirtualMemoryManager.hpp"
 
 #if defined(MRT_GC_UNIT_TESTS) || defined(MRT_TESTABLE_INTERNALS)
 #define MRT_ALLOCATION_STALL_OBSERVE 1

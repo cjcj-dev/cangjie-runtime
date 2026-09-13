@@ -7,7 +7,10 @@
 set(SRC_LIST
     "Allocator.cpp"
     "zForwardingTable.cpp"
-    "MemMap.cpp"
+    "../z/zVirtualMemoryManager.cpp"
+    "../z/zAddressSpaceLimit.cpp"
+    "../z/zNUMA.cpp"
+    "../z/zPhysicalMemoryManager.cpp"
     "RegionSpace.cpp"
     "../z/zPageAllocator.cpp"
     "../z/zPage.cpp"
@@ -15,6 +18,7 @@ set(SRC_LIST
     "../z/zRelocationSetSelector.cpp"
     "RouteDestHold.cpp"
     "CartesianTree.cpp"
+    "../z/zMappedCache.cpp"
     "HeapFiller.cpp"
 )
 
@@ -27,7 +31,7 @@ endif()
 if (MRT_GC_UNIT_TESTS)
     # Product claim-tree and page-table templates; use the runtime page size.
     add_executable(cj_z_index_distributor_unit
-        ${CMAKE_CURRENT_SOURCE_DIR}/../../../tests/z_index_distributor_unit.cpp)
+        ${CMAKE_CURRENT_SOURCE_DIR}/../../../tests/test_zIndexDistributor.cpp)
     target_include_directories(cj_z_index_distributor_unit PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/../..)
     target_link_libraries(cj_z_index_distributor_unit PRIVATE cangjie-runtime pthread)
     add_test(NAME cj_z_index_distributor_unit COMMAND cj_z_index_distributor_unit)

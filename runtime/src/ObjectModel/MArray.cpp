@@ -14,15 +14,15 @@
 #include <cstdlib>
 #include <cstring>
 #include <thread>
-#include "Heap/Collector/CollectorResources.h"
+#include "Heap/z/zDriver.hpp"
 #include "Heap/Collector/GcRequest.h"
-#include "Heap/Heap.h"
+#include "Heap/z/zHeap.hpp"
 #endif
 
 #include "Base/MemUtils.h"
 #include "Common/ScopedObjectAccess.h"
-#include "Heap/Collector/Collector.h"
-#include "Heap/Heap.h"
+#include "Heap/z/zCollectedHeap.hpp"
+#include "Heap/z/zHeap.hpp"
 #include "Mutator/Mutator.h"
 
 namespace MapleRuntime {

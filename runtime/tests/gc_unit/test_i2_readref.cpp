@@ -12,9 +12,9 @@
 #include <sys/wait.h>
 #include <unistd.h>
 
-#include "Common/ColourPredicates.h"
+#include "Heap/z/zAddress.inline.hpp"
 #include "Heap/z/zRememberedSet.hpp"
-#include "Heap/Collector/Collector.h"
+#include "Heap/z/zCollectedHeap.hpp"
 #include "Heap/z/zBarrier.hpp"
 #include "ObjectModel/RefField.inline.h"
 #include "gc_heap_fixture.hpp"

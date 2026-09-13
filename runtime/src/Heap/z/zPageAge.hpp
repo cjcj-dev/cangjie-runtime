@@ -84,23 +84,8 @@ constexpr PageAgeRange kPageAgeRangeRelocation = PageAgeRange::create<PageAge::s
 constexpr PageAgeRange kPageAgeRangeOld = PageAgeRange::create<PageAge::old, kPageAgeLastPlusOne>();
 constexpr PageAgeRange kPageAgeRangeAll = PageAgeRange();
 
-constexpr uint32_t untype(PageAge age) { return static_cast<uint32_t>(age); }
-
-constexpr PageAge to_pageage(uint32_t age)
-{
-    return static_cast<PageAge>(age);
-}
-
-inline PageAge operator+(PageAge age, size_t size)
-{
-    return to_pageage(untype(age) + static_cast<uint32_t>(size));
-}
-
-inline PageAge operator-(PageAge age, size_t size)
-{
-    return to_pageage(untype(age) - static_cast<uint32_t>(size));
-}
-
 } // namespace MapleRuntime
+
+#include "Heap/z/zPageAge.inline.hpp"
 
 #endif
