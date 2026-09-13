@@ -107,9 +107,6 @@ public:
     UnitCount GetDirtyMaxBlock() const;
     size_t GetVirtualNodeCount() const;
     size_t GetDirtyNodeCount() const;
-    size_t ReleaseGarbageRegions(size_t targetCachedSize);
-    size_t UncommitIdleUnits(size_t maxBytes, uint64_t idleBeforeNs, bool honorCancel = true);
-    size_t UncommitIdleUnitsImpl(size_t maxBytes, uint64_t idleBeforeNs, bool honorCancel);
     // Both calls require the owning RegionManager page allocator lock.
     bool TakeUncommitMemory(size_t maxBytes, uint64_t idleBeforeNs, PageMemory& memory);
     void ReturnUncommitMemory(const PageMemory& memory);

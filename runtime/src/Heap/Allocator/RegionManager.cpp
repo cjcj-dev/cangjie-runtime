@@ -910,12 +910,6 @@ size_t FreeRegionManager::GetVirtualNodeCount() const
     return count;
 }
 
-size_t FreeRegionManager::ReleaseGarbageRegions(size_t targetCachedSize)
-{
-    const size_t cached = GetDirtyUnitCount() * RegionInfo::UNIT_SIZE;
-    return cached > targetCachedSize ? UncommitIdleUnits(cached - targetCachedSize, UINT64_MAX, false) : 0;
-}
-
 bool FreeRegionManager::TakeUncommitMemory(size_t maxBytes, uint64_t idleBeforeNs, PageMemory& memory)
 {
     if (maxBytes < RegionInfo::UNIT_SIZE) {
@@ -948,49 +942,6 @@ bool FreeRegionManager::TakeUncommitMemory(size_t maxBytes, uint64_t idleBeforeN
         return true;
     }
     return false;
-}
-
-size_t FreeRegionManager::UncommitIdleUnits(size_t maxBytes, uint64_t idleBeforeNs, bool honorCancel)
-{
-    ScopedEnterSaferegion saferegion(true);
-    return UncommitIdleUnitsImpl(maxBytes, idleBeforeNs, honorCancel);
-}
-
-size_t FreeRegionManager::UncommitIdleUnitsImpl(size_t maxBytes, uint64_t idleBeforeNs, bool honorCancel)
-{
-    std::lock_guard<std::mutex> lock(cacheMutex);
-    size_t released = 0;
-    for (auto& partition : partitions) {
-        if (partition->cache.LastUsedNs() > idleBeforeNs) { continue; }
-        std::vector<MappedCache::Extent> extents;
-        partition->cache.RemoveForUncommit((maxBytes - released) / RegionInfo::UNIT_SIZE, extents);
-        bool stop = false;
-        for (const auto& extent : extents) {
-            RegionInfo* region = RegionInfo::TryGetRegionInfoAt(RegionInfo::GetUnitAddress(extent.index));
-            const GCPhase phase = Heap::GetHeap().GetGCPhase();
-            const bool inRelocate = Heap::GetHeap().IsGcStarted() &&
-                (phase == GCPhase::GC_PHASE_POST_TRACE || phase == GCPhase::GC_PHASE_PREFORWARD ||
-                 phase == GCPhase::GC_PHASE_FORWARD);
-            if (stop || inRelocate || !ExtentReadyForReleasedCache(region)) {
-                InsertCommitted(*partition, extent.index, extent.count);
-                stop = true;
-                continue;
-            }
-            const size_t requested = extent.count * RegionInfo::UNIT_SIZE;
-            const size_t done = RegionInfo::ReleaseUnitsPartial(extent.index, extent.count);
-            CHECK(done <= requested && done % RegionInfo::UNIT_SIZE == 0);
-            const UnitCount units = done / RegionInfo::UNIT_SIZE;
-            if (units != 0) {
-                CHECK(partition->virtualMemory.Insert(Range(RegionInfo::GetUnitAddress(extent.index), done)));
-                released += done;
-            }
-            if (units != extent.count) { InsertCommitted(*partition, extent.index + units, extent.count - units); }
-            stop = done != requested;
-            (void)honorCancel;
-        }
-        if (stop || released + RegionInfo::UNIT_SIZE > maxBytes) { break; }
-    }
-    return released;
 }
 
 void FreeRegionManager::ReturnUncommitMemory(const PageMemory& memory)

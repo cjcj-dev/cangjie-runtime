@@ -289,7 +289,9 @@ static void ExercisePartitionWorker(bool enabled)
     RegionInfo* region = regions.TakeRegion(n, RegionInfo::UnitRole::LARGE_SIZED_UNITS, true, false);
     GC_EXPECT_TRUE(region != nullptr);
     regions.ReturnPageMemory(PageMemory{region->GetUnitIdx(), n, 0, true});
-    regions.ReleaseGarbageRegions(0);
+    const size_t beforeReclaim = regions.GetCommittedCapacity();
+    space.ReclaimGarbageMemory(true);
+    GC_EXPECT_EQ(regions.GetCommittedCapacity(), beforeReclaim);
     const size_t before = regions.GetCommittedCapacity();
     const uint64_t start = TimeUtil::NanoSeconds();
     Uncommitter& worker = space.GetUncommitter();
