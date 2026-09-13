@@ -81,8 +81,6 @@ public:
     // YOUNG_CONC_FOLLOW is this plus root handoff (zGeneration.cpp:855-884);
     // the previous face is scanned later by ScanPreviousForMinor.
     void FlipForMinor();
-    // Actual face identity, also used by old relocation (zGeneration.inline.hpp:174).
-    uint8_t CurrentBuffer() const { return activeBuffer.load(std::memory_order_acquire); }
     // zRemembered.cpp:561-576 scan_and_follow: consume the previous face with
     // mutators alive. Callers must FlipForMinor first. DrainForMinor = Flip + Scan.
     size_t ScanPreviousForMinor(std::unordered_set<MAddress>& records);

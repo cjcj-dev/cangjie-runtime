@@ -65,6 +65,11 @@ struct RemsetRearmTestAccess {
         RemsetScanStats stats;
     };
 
+    static GenerationCycle& YoungCycle(WCollector& collector)
+    {
+        return collector.youngCycle;
+    }
+
     static RefField<> Tag(WCollector& collector, BaseObject* object)
     {
         return collector.GetAndTryTagRefField(object);
@@ -1041,28 +1046,30 @@ GC_TEST(Remset, FlipIsConstantTimeAndPreservesFaceEpochs)
 }
 #endif
 
-// zGeneration.inline.hpp:174-182 and zGeneration.cpp:871-880: face identity
-// changes with FlipForMinor, including when Begin() has no following flip.
-GC_TEST(Remset, OldRelocationTracksActualRemsetFace)
+// zGeneration.cpp:871-880: preparing a request changes neither sequence nor
+// face; every mark-start advances both, even when the remembered set is empty.
+GC_TEST(Remset, YoungMarkStartAdvancesSequenceAndFlipsTogether)
 {
     alignas(8) uint64_t storage[16] {};
     RememberedSet rs;
     rs.Initialize(reinterpret_cast<MAddress>(storage), sizeof(storage));
     GenerationCycle young(GCCycleGeneration::YOUNG);
     GenerationCycle old(GCCycleGeneration::OLD);
-    for (uint8_t initial = 0; initial != 2; ++initial) {
-        old.RecordRemsetAtRelocateStart(rs.CurrentBuffer());
+    for (uint64_t cycle = 0; cycle != 4; ++cycle) {
         const uint64_t sequence = young.Sequence();
-        young.Begin(initial + 1);
+        const uint8_t face = rs.activeBuffer.load(std::memory_order_acquire);
+        old.RecordYoungSequenceAtRelocateStart(sequence);
+        young.Begin(cycle + 1);
+        GC_EXPECT_EQ(young.Sequence(), sequence);
+        GC_EXPECT_EQ(rs.activeBuffer.load(std::memory_order_acquire), face);
+        young.StartYoungMark(rs);
         GC_EXPECT_EQ(young.Sequence(), sequence + 1);
-        GC_EXPECT_TRUE(old.ActiveRemsetIsCurrent(rs.CurrentBuffer()));
-        young.End(); // Empty collection: no remembered-set flip.
-        GC_EXPECT_TRUE(old.ActiveRemsetIsCurrent(rs.CurrentBuffer()));
-        rs.FlipForMinor();
-        GC_EXPECT_FALSE(old.ActiveRemsetIsCurrent(rs.CurrentBuffer()));
-        rs.FlipForMinor();
-        GC_EXPECT_TRUE(old.ActiveRemsetIsCurrent(rs.CurrentBuffer()));
-        rs.FlipForMinor(); // Next relocation starts from the other face.
+        GC_EXPECT_EQ(rs.activeBuffer.load(std::memory_order_acquire), face ^ 1U);
+        GC_EXPECT_FALSE(old.ActiveRemsetIsCurrent(young.Sequence()));
+        std::unordered_set<MAddress> previous;
+        rs.ScanPreviousForMinor(previous);
+        GC_EXPECT_TRUE(previous.empty());
+        young.End();
     }
 }
 
@@ -1071,22 +1078,28 @@ GC_TEST(Remset, OldRelocationTracksActualRemsetFace)
 GC_OTHER_VM_TEST(Remset, OldRelocationSelectsCapturedFaceAcrossFlips)
 {
     GcHeapFixture heap;
-    auto& collector = Heap::GetHeap().GetCollector();
+    auto& collector = static_cast<WCollector&>(Heap::GetHeap().GetCollector());
+    GenerationCycle& young = RemsetRearmTestAccess::YoungCycle(collector);
     RememberedSet& rs = Heap::GetHeap().GetRememberedSet();
+    auto markStart = [&] {
+        young.Begin(young.Sequence() + 1);
+        young.StartYoungMark(rs);
+        young.End();
+    };
     const MAddress from = heap.heapStart + 256;
     const MAddress to = heap.heapStart + 128;
     collector.PublishGenerationPhase(GCCycleGeneration::YOUNG, GCPhase::GC_PHASE_IDLE);
     for (uint8_t initial = 0; initial != 2; ++initial) {
         for (size_t flips = 0; flips != 4; ++flips) {
             rs.Initialize(heap.heapStart, 2 * RegionInfo::UNIT_SIZE);
-            if (initial != 0) rs.FlipForMinor();
+            if (initial != 0) markStart();
             collector.PublishGenerationPhase(GCCycleGeneration::OLD, GCPhase::GC_PHASE_IDLE);
             collector.PublishGenerationPhase(GCCycleGeneration::OLD, GCPhase::GC_PHASE_PREFORWARD);
             rs.Record(from + sizeof(void*));
-            for (size_t flip = 0; flip != flips; ++flip) rs.FlipForMinor();
+            for (size_t flip = 0; flip != flips; ++flip) markStart();
             // FORWARD is the same relocation: it must not replace the snapshot.
             collector.PublishGenerationPhase(GCCycleGeneration::OLD, GCPhase::GC_PHASE_FORWARD);
-            GC_EXPECT_EQ(collector.OldActiveRemsetIsCurrent(rs.CurrentBuffer()), flips % 2 == 0);
+            GC_EXPECT_EQ(collector.OldActiveRemsetIsCurrent(), flips % 2 == 0);
             GC_EXPECT_EQ(rs.TransferObjectSlots(from, to, 32), 1u);
             GC_EXPECT_TRUE(rs.Contains(to + sizeof(void*)));
         }
