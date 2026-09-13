@@ -1761,7 +1761,6 @@ void RegionManager::ForEachObjSafe(const std::function<void(BaseObject*)>& visit
 {
     ScopedEnterSaferegion enterSaferegion(false);
     ScopedStopTheWorld stw("visit all objects");
-    ZVerify::BeforeZOperation();
     ForEachObjUnsafe(visitor);
 }
 

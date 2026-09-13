@@ -672,7 +672,6 @@ void TracingCollector::TracingImpl(WorkStack& workStack, WorkStack& foreignRoots
 
     if (!workStack.empty() || !majorMarkDomain->Stripes().IsEmpty()) {
         markedObjectCount.fetch_add(RunMajorStripeMark(workStack), std::memory_order_relaxed);
-        MarkingStacks::VerifyEmpty(0);
     }
     MarkingStacks::VerifyEmpty(GetWorkers().GetSnapshot().remainingWorkers);
 }
@@ -799,6 +798,9 @@ bool TracingCollector::FinishOldMark(WorkStack& workStack, WorkStack& foreignRoo
             terminated = workStack.empty() && stripes.IsEmpty();
             if (terminated) {
                 ProcessExportRoots(foreignRootsSet);
+                // zMark.cpp:982-983: shared stripes are checked at successful
+                // mark end, while the safepoint excludes new publication.
+                MarkingStacks::VerifyEmpty(majorMarkDomain->Stripes().Population());
                 oldCycle.PublishPhase(GC_PHASE_MARK_COMPLETE);
                 ZVerify::AfterMark();
                 collectorResources.BlockResurrection();
