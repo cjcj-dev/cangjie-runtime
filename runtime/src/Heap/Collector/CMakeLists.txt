@@ -5,6 +5,8 @@
 # See https://cangjie-lang.cn/pages/LICENSE for license information.
 
 set(SRC_LIST
+    "../z/zBreakpoint.cpp"
+    "../z/concurrentGCBreakpoints.cpp"
     "../z/zAbort.cpp"
     "../z/zMetronome.cpp"
     "zRelocate.cpp"

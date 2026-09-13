@@ -1620,5 +1620,5 @@ GC_TEST(YoungConc, Y2yPendingCountVisibleForTerminate)
 }
 
 #if defined(MRT_TESTABLE_INTERNALS)
-#include "remap_window_fixture.hpp"
+
 #endif

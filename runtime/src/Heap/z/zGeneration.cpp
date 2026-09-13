@@ -5,6 +5,7 @@
 // See https://cangjie-lang.cn/pages/LICENSE for license information.
 
 
+#include "Heap/z/zBreakpoint.hpp"
 #include "Heap/z/zVerify.hpp"
 #include "Heap/Collector/StringDedup.h"
 #include "Heap/WCollector/WCollector.h"
@@ -642,6 +643,7 @@ void WCollector::DoYoungGarbageCollection()
 namespace MapleRuntime {
 void TracingCollector::ProcessOldNonStrongReferences(WorkStack& workStack)
 {
+    ZBreakpoint::AtAfterReferenceProcessingStarted();
     CHECK_DETAIL(oldCycle.Phase() == GC_PHASE_MARK_COMPLETE,
                  "non-strong references require completed old marking");
     {
@@ -1091,5 +1093,52 @@ void GenerationCycle::SelectTenuringThreshold(const TenuringInputs& inputs)
     // zGeneration.cpp:704-715: preclean promotes all, other types compute.
     stats.tenuringThreshold = YoungType() == ZYoungType::major_full_preclean
         ? 0 : ComputeTenuringThreshold(inputs);
+}
+}
+
+namespace MapleRuntime {
+void TracingCollector::DoTracing(WorkStack& workStack, WorkStack& foreignRootsSet)
+{
+    ScopedEntryTrace trace("CJRT_GC_TRACE");
+    MRT_PHASE_TIMER(ZStatPhases::PDoTracing);
+    VLOG(REPORT, "roots size: %zu", workStack.size());
+
+    {
+        MRT_PHASE_TIMER(ZStatPhases::PConcurrentMarking);
+        TracingImpl(workStack);
+    }
+
+    ZBreakpoint::AtBeforeMarkingCompleted();
+
+    // ZGenerationOld::collect (zGeneration.cpp:1020-1030): mark-follow
+    // returns to the phase owner before any mark-end retry consumes stripes.
+    if (collectorResources.GetMajorDriverPort().Abort().Poll()) {
+        return;
+    }
+    while (!TryEndOldMark(workStack, foreignRootsSet)) {
+        if (collectorResources.GetMajorDriverPort().Abort().Poll()) {
+            return;
+        }
+        MRT_PHASE_TIMER(ZStatPhases::PConcurrentReMarking);
+        TransitionToGCPhase(GC_PHASE_TRACE, true);
+        TracingImpl(workStack);
+        if (collectorResources.GetMajorDriverPort().Abort().Poll()) {
+            return;
+        }
+    }
+
+    if (collectorResources.GetMajorDriverPort().Abort().Poll()) {
+        return;
+    }
+    // ZGenerationOld::collect processes non-strong references only after the
+    // successful mark-end pause has closed ordinary mark publication.
+    ProcessOldNonStrongReferences(workStack);
+
+#if defined(MRT_TESTABLE_INTERNALS)
+    // All major tasks and finalizer work have flushed before page selection.
+    // Major has no reachableVec carrier; observers read the actual page state.
+    ObserveMarkClosureForTest(nullptr);
+#endif
+    VLOG(REPORT, "mark %zu objects", markedObjectCount.load(std::memory_order_relaxed));
 }
 }

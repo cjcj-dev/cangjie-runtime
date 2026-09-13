@@ -1,0 +1,2 @@
+lane: sym_cangjie_runtime_496_implement_r5656148950
+主控裁定（0914 05:2x）：两点都确认。① 授权在 WCollector::TraceHeap 入口（mark_roots 之前，对应 zGeneration.cpp:1088 AFTER MARKING STARTED 在 mark_roots 前的位置）加 AtAfterMarkingStarted，DoTracing 不重复通知；其余函数体不动。② pending 处理照 shared 原协议：at() 暂停保留控制，周期结束时 pending run_to 转 want_idle 并返回 false；zDriver terminate/abortpoint 不调 notify_active_to_idle（与参考一致），⛔ 不发明 shutdown cancel 状态。对应表给 concurrentGCBreakpoints.cpp 的 at/run_to/release_control 行锚。

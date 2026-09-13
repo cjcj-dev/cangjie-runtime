@@ -96,9 +96,6 @@ void NoteRemapYoungRootsTestReceipt(RefField<>& field, uintptr_t before, bool he
 #endif
 
 
-#if defined(MRT_TESTABLE_INTERNALS)
-void RunRemapWindowTestHook(unsigned point, RegionInfo* region, BaseObject* object);
-#endif
 
 namespace WCollectorInternal {
 } // namespace WCollectorInternal
@@ -364,9 +361,6 @@ void WCollector::StartRelocationTasks(GCCycleGeneration generation)
     RegionSpace& space = reinterpret_cast<RegionSpace&>(theAllocator);
     RegionManager& manager = space.GetRegionManager();
     GCWorkers& workers = GetWorkers(generation);
-#if defined(MRT_TESTABLE_INTERNALS)
-    if (generation == GCCycleGeneration::YOUNG) RunRemapWindowTestHook(1, nullptr, nullptr);
-#endif
     if (generation == GCCycleGeneration::YOUNG) manager.StartForwardFromRegions<Generation::Young>(workers);
     else manager.StartForwardFromRegions<Generation::Old>(workers);
 }
@@ -1170,11 +1164,6 @@ void WCollector::EvacuateYoungRegions(const std::vector<BaseObject*>& reachableV
                 flip_young_relocate_start();
                 ZVerify::OnColorFlip();
             }
-#if defined(MRT_TESTABLE_INTERNALS)
-            // Prepared and flipped, still POST_TRACE: a test driver can enter
-            // the ordinary phase-refused mutator path without sealing copying.
-            RunRemapWindowTestHook(7, nullptr, nullptr);
-#endif
             // Publish the relocate phase and submit page work while the
             // existing young pause still excludes mutator execution. Root
             // transition may now wait for a real page task on allocation failure.
@@ -1209,9 +1198,6 @@ void WCollector::EvacuateYoungRegions(const std::vector<BaseObject*>& reachableV
             VLOG(REPORT, "[GCV2][relocate][conc] concurrent_relocate start nObj=%zu flip=1",
                  reachableVec.size());
             ForwardFromSpace(GCCycleGeneration::YOUNG);
-#if defined(MRT_TESTABLE_INTERNALS)
-            RunRemapWindowTestHook(4, nullptr, nullptr);
-#endif
             *stw = std::make_unique<ScopedStopTheWorld>("young post-relocate", true,
                                                         GCPhase::GC_PHASE_FORWARD);
             ZVerify::BeforeZOperation();
@@ -1891,9 +1877,6 @@ BaseObject* WCollector::ForwardObjectImpl(BaseObject* obj, RegionInfo* ghostFrom
         }
         return WaitForPageForwarding(obj, lease.HoldForwarding());
     }
-#if defined(MRT_TESTABLE_INTERNALS)
-    RunRemapWindowTestHook(8, ghostFromRegion, obj);
-#endif
     CHECK(GetGCPhase(static_cast<GCCycleGeneration>(ObjectGeneration(obj))) == GCPhase::GC_PHASE_PREFORWARD || GetGCPhase(static_cast<GCCycleGeneration>(ObjectGeneration(obj))) == GCPhase::GC_PHASE_FORWARD);
 
     // zRelocate.cpp:382-410 relocate_object: find hit → return; else retain
@@ -1990,9 +1973,6 @@ BaseObject* WCollector::RelocateObjectInner(BaseObject* obj, RegionInfo* copyPag
             const MAddress mapped = receipt.address;
             if (ForwardingTable::ReceiptAllowsForwarded(mapped)) {
                 obj->SetStateCode(ObjectState::FORWARDED);
-#if defined(MRT_TESTABLE_INTERNALS)
-                RunRemapWindowTestHook(6, copyPage, obj);
-#endif
                 result = reinterpret_cast<BaseObject*>(mapped);
             }
         }
@@ -2079,20 +2059,11 @@ void RegionManager::ForwardClaimedPage(RegionInfo* region, ForwardingTable::Owne
     } else {
         ForwardRegion<G>(region);
     }
-#if defined(MRT_TESTABLE_INTERNALS)
-    RunRemapWindowTestHook(12, region, nullptr);
-#endif
     // All page metadata and legacy helper work is finished. A nested drain
     // may already have consumed the construction token; otherwise drop it now.
     if (owner->ref_count().load(std::memory_order_acquire) != 0) owner->release_page();
     owner->detach_page();
-#if defined(MRT_TESTABLE_INTERNALS)
-    RunRemapWindowTestHook(10, region, nullptr);
-#endif
     owner->mark_done();
-#if defined(MRT_TESTABLE_INTERNALS)
-    RunRemapWindowTestHook(5, region, nullptr);
-#endif
     // From here on only forwarding/queue state may be touched.
     (void)relocationRequestQueue.Complete(owner.get());
 }
@@ -2357,9 +2328,6 @@ void RegionManager::CompactRegion(RegionInfo* region)
     if (owner && owner->ref_count().load(std::memory_order_acquire) > 0) {
         owner->in_place_relocation_claim_page();
     }
-#if defined(MRT_TESTABLE_INTERNALS)
-    RunRemapWindowTestHook(9, region, nullptr);
-#endif
 
     const bool fromYoung = region->IsYoungRegion();
     const PageAge fromAge = fromYoung ? to_pageage(region->GetYoungAge()) : PageAge::old;
@@ -2429,9 +2397,6 @@ void RegionManager::CompactRegion(RegionInfo* region)
     VerifyRelocatedPage(region, "CompactRegion.whole");
     WaitCopiedObjectsUnlocked(region);
     region->MarkForwardingDone();
-#if defined(MRT_TESTABLE_INTERNALS)
-    RunRemapWindowTestHook(11, region, nullptr);
-#endif
 
     // zForwarding.cpp:171-181 / zRelocate.cpp:1001-1047: the forwarding table
     // outlives page reuse. Do not put this page on the mutator TLAB list while
@@ -2542,11 +2507,6 @@ void RegionManager::FinishStayYoungInPlace(RegionInfo* region, bool advanceAge)
     }
     WaitCopiedObjectsUnlocked(region);
     VerifyRelocatedPage(region, "FinishStayYoungInPlace");
-#if defined(MRT_TESTABLE_INTERNALS)
-    // zRelocate.cpp:1137-1153: the real producer has published its receipts;
-    // pause before done so a waiting mutator can consume that exact state.
-    RunRemapWindowTestHook(3, region, nullptr);
-#endif
     region->MarkForwardingDone();
     // The selected-set carrier remains queryable after payload release.
     // The next selection/reset retires its ghost/source view; completing this

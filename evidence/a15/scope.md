@@ -1,0 +1,2 @@
+LANE=sym_cangjie_runtime_496_implement_r5656148950
+A15 请求范围裁定：ZBreakpoint.cpp 当前参考委托 gc/shared/concurrentGCBreakpoints.cpp，真实三个 phase 通知在 zGeneration.cpp:1088,1091,1127。拟新增 Heap/z/zBreakpoint.{hpp,cpp} 及共享请求状态机文件，修改 zGeneration.cpp 的旧代 phase 接线与 zDriver.cpp 请求/周期边界，删除 zRelocate.cpp / Heap/Collector/zRelocate.cpp 的 RunRemapWindowTestHook 散点回调及声明。请确认上述文件在 A15 范围；shared 状态机按参考原协议移植，不加开关。HEAD 为冻结 78fc9ce028de705b3ea705b7069759c1036a2796；主线 ref 回读 rc=0 为 403916767341fd0610fdc7a1201f1a0333e0da38，按任务书交付前合入。

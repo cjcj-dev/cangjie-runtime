@@ -66,6 +66,7 @@ GCRequest g_gcRequests[] = {
     { GC_REASON_HEU_SYNC, "heuristic_sync", true, true, { 0 }, { 0 } },
     { GC_REASON_NATIVE_SYNC, "native_alloc_sync", true, true, { 0 }, { 0 } },
     { GC_REASON_FORCE, "force", true, false, { 0 }, { 0 } },
-    { GC_REASON_YOUNG, "young", false, false, { 0 }, { 0 } }
+    { GC_REASON_YOUNG, "young", false, false, { 0 }, { 0 } },
+    { GC_REASON_WB_BREAKPOINT, "wb_breakpoint", false, true, { 0 }, { 0 } }
 };
 } // namespace MapleRuntime

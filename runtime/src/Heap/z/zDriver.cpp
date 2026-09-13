@@ -7,6 +7,7 @@
 
 #include "Heap/Collector/StringDedup.h"
 #include "Heap/z/zDriver.hpp"
+#include "Heap/z/zBreakpoint.hpp"
 
 #include <algorithm>
 #include <chrono>
@@ -267,6 +268,8 @@ bool CollectorResources::ExecuteDriverRequest(const GCDriverRequest& request)
 bool CollectorResources::ProcessDriverRequest(GCDriverPort& port, const GCDriverRequest& request)
 {
     DriverLocker locker(*this);
+    const bool major = port.Kind() == GCDriverKind::MAJOR;
+    if (major) ZBreakpoint::AtBeforeGC();
     if (port.Abort().Poll() || !ExecuteDriverRequest(request)) {
         port.Cancel(request);
         CompleteDriverRequest(port);
@@ -276,6 +279,7 @@ bool CollectorResources::ProcessDriverRequest(GCDriverPort& port, const GCDriver
 #if defined(MRT_GC_UNIT_TESTS)
     testCompletionCount.fetch_add(1, std::memory_order_relaxed);
 #endif
+    if (major) ZBreakpoint::AtAfterGC();
     CompleteDriverRequest(port);
     return true;
 }
@@ -311,6 +315,12 @@ void CollectorResources::RequestGC(GCReason reason, bool async)
 {
     CHECK(reason < GC_REASON_MAX);
     if (!IsGCActive()) {
+        return;
+    }
+
+    if (reason == GC_REASON_WB_BREAKPOINT) {
+        ZBreakpoint::StartGC();
+        majorDriverPort.EnqueueAsync(reason);
         return;
     }
 
@@ -529,6 +539,7 @@ bool CollectorResources::ShouldPrecleanYoung(GCReason reason) const
         case GC_REASON_HEU_SYNC:
         case GC_REASON_NATIVE:
         case GC_REASON_NATIVE_SYNC:
+        case GC_REASON_WB_BREAKPOINT:
             break;
         default:
             CHECK(false);
