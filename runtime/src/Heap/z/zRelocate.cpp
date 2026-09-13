@@ -2404,6 +2404,20 @@ void RegionManager::CompactRegion(RegionInfo* region)
     RememberedSet& rememberedSet = Heap::GetHeap().GetRememberedSet();
     std::vector<RememberedSet::InPlaceSlot> takenSlots;
     rememberedSet.TakeInPlaceSlots(regionStart, region->GetRegionEnd(), takenSlots);
+    // ZGC zRelocate.cpp:862-896: establish the to-page age before publishing
+    // any in-place forwarding entry. The descriptor stays in the page table,
+    // so promotion publishes its old identity here. PublishFromPageMetadata
+    // already saved the source generation, livemap and allocation watermark in
+    // the forwarding carrier; ForEachLiveObjectStart consumes that snapshot,
+    // not the new destination LiveInfo allocated by PromoteYoungRegion.
+    if (fromYoung) {
+        if (toAge == PageAge::old) {
+            MarkView<Generation::Young> view = region->GetMarkView<Generation::Young>();
+            (void)region->PromoteYoungRegion(view);
+        } else {
+            region->SetYoungAge(untype(toAge));
+        }
+    }
     ForEachLiveObjectStart(region, regionStart, regionLimit, [&](BaseObject* currentObj, size_t offset) {
         const MAddress currentPtr = regionStart + offset;
         if (ForwardingTable::LookupForwarding(currentPtr, ForwardingTable::RetainPageOwner(region).get()).to) {
@@ -2446,15 +2460,6 @@ void RegionManager::CompactRegion(RegionInfo* region)
     // zForwarding.cpp:171-181 / zRelocate.cpp:1001-1047: the forwarding table
     // outlives page reuse. Do not put this page on the mutator TLAB list while
     // its table is live — RehomeCompactedInPlaceRegion keeps it collector-visible.
-    // Both workers and eager root helpers finish the same destination-age transition.
-    if (fromYoung) {
-        if (toAge == PageAge::old) {
-            MarkView<Generation::Young> view = region->GetMarkView<Generation::Young>();
-            (void)region->PromoteYoungRegion(view);
-        } else {
-            region->SetYoungAge(untype(toAge));
-        }
-    }
     RehomeCompactedInPlaceRegion(region);
 }
 
