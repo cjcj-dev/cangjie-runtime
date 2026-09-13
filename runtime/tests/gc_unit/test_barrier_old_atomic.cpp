@@ -14,6 +14,13 @@
 #define MRT_TESTABLE_INTERNALS 1
 #endif
 
+// Populate reflection metadata in this TU; the runtime keeps its normal access.
+#include "Common/TypeDef.h"
+#include "Common/Dataref.h"
+#define private public
+#include "ObjectModel/FieldInfo.h"
+#undef private
+
 #include "gc_heap_fixture.hpp"
 #include "gc_unittest.hpp"
 
@@ -34,6 +41,7 @@
 #include "mark_publication_fixture.hpp"
 #include "Mutator/ThreadLocal.h"
 #include "ObjectModel/RefField.inline.h"
+#include "ObjectModel/MObject.h"
 
 using namespace MapleRuntime;
 using namespace MapleRuntime::GcUnit;
@@ -382,4 +390,66 @@ GC_TEST(BarrierOldAtomic, AtomicCasLostPreservesConcurrentWinner)
                  "DETAIL arm=atomic_cas_lost forced_failures=%zu max_heal_cas_per_read=1 winner=%p\n",
                  kForcedCasFailures, winner);
     std::fflush(stderr);
+}
+
+// Derived from zBarrierSet.inline.hpp:473/578: a native value payload retains
+// its source color until each reference has passed the load barrier.
+GC_TEST(BarrierOldAtomic, NativeBulkLoadBadSourceResolvesBeforeHeapPublication)
+{
+    GcHeapFixture heap;
+    BarrierCollector collector;
+    RememberedSet remembered;
+    remembered.Initialize(heap.heapStart, 2 * RegionInfo::UNIT_SIZE);
+    Barrier barrier(collector, remembered);
+    collector.from = heap.obj0;
+    collector.to = heap.obj1;
+    NativeSlot source(LoadBadPointer(heap.obj0));
+    HeapSlot<>& destination = HeapSlotAt<>(reinterpret_cast<MAddress>(heap.obj1) + TYPEINFO_PTR_SIZE);
+    destination.StoreColoured(zpointer::null);
+
+    barrier.ReadStaticStruct(reinterpret_cast<MAddress>(&destination), reinterpret_cast<MAddress>(&source),
+                            sizeof(source), heap.typeInfo->GetGCTib());
+
+    GC_EXPECT_EQ(destination.GetFieldValue(), StoreGoodPointer(heap.obj1));
+    // The same native source copied to a mutator-local value must be plain.
+    RootSlot local;
+    barrier.ReadStaticStruct(reinterpret_cast<MAddress>(&local), reinterpret_cast<MAddress>(&source),
+                            sizeof(source), heap.typeInfo->GetGCTib());
+    GC_EXPECT_EQ(raw(local.LoadPlain()), reinterpret_cast<uintptr_t>(heap.obj1));
+}
+
+// Derived from zBarrierSet.inline.hpp:258/473 and zBarrier.cpp:272:
+// reflection bulk writes perform native old-value work before publishing each
+// reference. Exercise the actual SetValue entry for every aggregate type.
+GC_TEST(BarrierOldAtomic, ReflectionStaticAggregateStoreRetiresNativeOldValue)
+{
+    for (TypeKind kind : {TypeKind::TYPE_KIND_STRUCT, TypeKind::TYPE_KIND_TUPLE,
+                          TypeKind::TYPE_KIND_ENUM, TypeKind::TYPE_KIND_VARRAY}) {
+        GcHeapFixture heap;
+        MarkPublicationFixture marking;
+        heap.region0->SetYoungRegionFlag(0);
+        heap.region1->SetYoungRegionFlag(1);
+        BarrierCollector collector;
+        RememberedSet remembered;
+        remembered.Initialize(heap.heapStart, 2 * RegionInfo::UNIT_SIZE);
+        Barrier barrier(collector, remembered);
+        InstalledBarrierScope installed(barrier);
+        heap.typeInfo->SetType(kind);
+        HeapSlot<>& source = HeapSlotAt<>(reinterpret_cast<MAddress>(heap.obj1) + TYPEINFO_PTR_SIZE);
+        source.StoreColoured(StoreGoodPointer(heap.obj1));
+        NativeSlot destination(LoadBadPointer(heap.obj0));
+        StaticFieldInfo field {};
+        field.fieldTypeInfo = heap.typeInfo;
+        field.addr = reinterpret_cast<MAddress>(&destination);
+
+        field.SetValue(static_cast<ObjRef>(heap.obj1));
+
+        GC_EXPECT_EQ(destination.GetFieldValue(), StoreGoodPointer(heap.obj1));
+        bool oldValueRetained = false;
+        marking.DrainOld([&](BaseObject* object, bool) {
+            oldValueRetained |= object == heap.obj0;
+        });
+        GC_EXPECT_TRUE(oldValueRetained);
+        GC_EXPECT_FALSE(remembered.Contains(reinterpret_cast<MAddress>(&destination)));
+    }
 }
