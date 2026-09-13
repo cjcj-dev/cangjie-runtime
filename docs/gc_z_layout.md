@@ -9,6 +9,8 @@
 
 本包按 ZGC 文件职责搬移定义，保留原类型、函数体、条件编译及已有机制。混合函数整体归主要职责文件；旧诊断、适配器与开关由后续包处理。对应表表示布局职责。
 
+本轮 A1/A2 定义纠正见 [gc_z_layout_verify_rework.md](gc_z_layout_verify_rework.md)。VerifyRoots.cpp、VerifyHeap.cpp、VerifyRememberedSet.cpp 的产品定义已归入 zVerify.cpp / zForwarding.cpp，不属于自有诊断删除清单；停顿测试钩子六个定义留原 Allocator 层。
+
 ## 关键函数对应
 
 | 旧定义 | 新定义 | ZGC 函数锚 |
@@ -157,6 +159,8 @@
 
 逐函数旧/新锚和 body SHA256：[`gc_z_layout_functions.tsv`](gc_z_layout_functions.tsv)。词法扫描的 7,338 个函数体（含内联体、嵌套体）按名字、字节、条件上下文多重集匹配；隐式调用与重载解析不由词法调用清单单独判定。
 
+校验补充来源：`Heap/Verify/VerifyRoots.cpp:13`、`VerifyHeap.cpp:18`、`VerifyRememberedSet.cpp:48` → `runtime/src/Heap/z/zVerify.cpp:71` 起；`VerifyRememberedSet.cpp:18 ZForwarding::verify` → `runtime/src/Heap/z/zForwarding.cpp:276`。精确逐定义锚见 gc_z_layout_verify_rework.md。
+
 ## hpp 声明新增
 
 按 advisor 20260913T121748Z 裁定，原全树名字计数改为调用锚计数；类内定义拆出会增加声明。以下每项增加一个声明位置，函数体保留。
@@ -297,9 +301,6 @@
 | `runtime/src/Heap/Verify/SurvNodeDiag.h:25` | ZGC 无对应独立文件 · 自有诊断和观测；#228 / A06 |
 | `runtime/src/Heap/Verify/TraceClear.cpp:21` | ZGC 无对应独立文件 · 自有诊断和观测；#228 / A06 |
 | `runtime/src/Heap/Verify/TraceClear.h:15` | ZGC 无对应独立文件 · 自有诊断和观测；#228 / A06 |
-| `runtime/src/Heap/Verify/VerifyHeap.cpp:15` | ZGC 无对应独立文件 · 自有诊断和观测；#228 / A06 |
-| `runtime/src/Heap/Verify/VerifyRememberedSet.cpp:15` | ZGC 无对应独立文件 · 自有诊断和观测；#228 / A06 |
-| `runtime/src/Heap/Verify/VerifyRoots.cpp:10` | ZGC 无对应独立文件 · 自有诊断和观测；#228 / A06 |
 | `runtime/src/Heap/Verify/Zap.cpp:15` | ZGC 无对应独立文件 · 自有诊断和观测；#228 / A06 |
 | `runtime/src/Heap/Verify/Zap.h:15` | ZGC 无对应独立文件 · 自有诊断和观测；#228 / A06 |
 | `runtime/src/Heap/Verify/ZgcInvariants.cpp:22` | ZGC 无对应独立文件 · 自有诊断和观测；#228 / A06 |
