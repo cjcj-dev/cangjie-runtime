@@ -186,10 +186,15 @@ std::unique_ptr<RegionInfo::PromotionPage> RegionInfo::CloneForPromotion(MarkVie
 }
 
 // ZPage::object_iterate (zPage.inline.hpp:320): visit the original page's
-// ordinary start bits. There is no second bitmap or post-promotion lookup.
+// ordinary start bits. ZLiveMap::iterate/is_marked (zLiveMap.inline.hpp:41,152)
+// checks the original generation's current sequence before reading any bits.
 void RegionInfo::PromotionPage::ObjectIterate(const std::function<void(BaseObject*)>& visitor) const
 {
-    if (liveInfo == nullptr) {
+    // PromotionPage is always the original young page, even after its RegionInfo
+    // slot becomes old. Do not use that slot's owner or freeze a clone-time epoch.
+    const uint64_t sequence = Heap::GetHeap().GetCollector().GetCycleSnapshot(GCCycleGeneration::YOUNG).sequence;
+    if (liveInfo == nullptr || sequence == 0 ||
+        liveInfo->GetMarkFace().epoch.load(std::memory_order_acquire) != sequence) {
         return;
     }
     RegionBitmap* bitmap = __atomic_load_n(&liveInfo->GetMarkFace().bitmap, std::memory_order_acquire);

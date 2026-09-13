@@ -674,6 +674,55 @@ GC_TEST(ZLiveMapPort, CloneForPromotionKeepsOriginalPageLivemap)
     }
 }
 
+// ZLiveMap::iterate checks is_marked(original_generation) before consuming
+// segments, including when an allocated bitmap still contains previous bits.
+GC_TEST(ZLiveMapPort, PromotionIteratorRequiresCurrentYoungSequence)
+{
+    for (bool large : { false, true }) {
+        for (bool advanceBeforeClone : { false, true }) {
+            GcHeapFixture fx;
+            RegionInfo* region = fx.region0;
+            region->SetYoungRegionFlag(1);
+            if (large) {
+                region->SetUnitRole(RegionInfo::UnitRole::LARGE_SIZED_UNITS);
+            }
+            BaseObject* object = large ? fx.PlaceObject(region->GetRegionStart()) : fx.obj0;
+            const auto mark = ProductMarkObjectFn<Generation::Young>();
+            GC_EXPECT_TRUE(mark != nullptr);
+            GC_EXPECT_FALSE(mark(region, region->GetMarkView<Generation::Young>(),
+                                 object, object->GetSize(), true));
+            LiveInfo* originalLive = region->GetLiveInfo();
+            RegionBitmap* bitmap = originalLive->GetMarkFace().bitmap;
+            const size_t offset = reinterpret_cast<MAddress>(object) - region->GetRegionStart();
+            GC_EXPECT_TRUE(bitmap->IsObjectStart(offset));
+            if (advanceBeforeClone) {
+                GcHeapFixture::AdvanceGeneration(Generation::Young);
+            }
+            auto originalPage = region->CloneForPromotion(region->GetMarkView<Generation::Young>());
+            size_t visits = 0;
+            const auto visit = [&](BaseObject* obj) {
+                GC_EXPECT_TRUE(obj == object);
+                ++visits;
+            };
+            originalPage->ObjectIterate(visit);
+            GC_EXPECT_EQ(visits, advanceBeforeClone ? 0u : 1u);
+            if (!advanceBeforeClone) {
+                // The old owner of the reused slot is irrelevant to this page.
+                GcHeapFixture::AdvanceGeneration(Generation::Old);
+                visits = 0;
+                originalPage->ObjectIterate(visit);
+                GC_EXPECT_EQ(visits, 1u);
+                GcHeapFixture::AdvanceGeneration(Generation::Young);
+            }
+            // Old start bits really remain; sequence mismatch must suppress them.
+            GC_EXPECT_TRUE(bitmap->IsObjectStart(offset));
+            visits = 0;
+            originalPage->ObjectIterate(visit);
+            GC_EXPECT_EQ(visits, 0u);
+        }
+    }
+}
+
 // ZPage::object_iterate (zPage.inline.hpp:320-331) consumes start bits;
 // unmarked storage before and between objects is not an object header.
 GC_TEST(ZLiveMapPort, LiveIteratorVisitsOnlyObjectStarts)
