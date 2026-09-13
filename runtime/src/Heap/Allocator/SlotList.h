@@ -11,7 +11,6 @@
 #include "Common/BaseObject.h"
 #include "Heap/Collector/ManagedObjectGate.h"
 #include "Heap/Allocator/HeapFiller.h"
-#include "Heap/Verify/FillerZeroDiag.h"
 
 namespace MapleRuntime {
 struct ObjectSlot {
@@ -49,7 +48,6 @@ public:
         size_t size = slot->GetSize() - sizeof(ObjectSlot);
         if (size > 0) {
             MAddress start = reinterpret_cast<uintptr_t>(slot) + sizeof(ObjectSlot);
-            FillerZeroDiag::Note(FillerZeroDiag::Site::SLOT_EXTRA, start, size);
             HeapFiller::ZeroAndFill(start, size);
         }
         return true;

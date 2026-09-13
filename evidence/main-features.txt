@@ -1,0 +1,90 @@
+$ git grep -c -F -e in_place_relocation_claim_page 8e1455a55012b2068c7a65b8e3f9cfb3437d086f -- runtime/src
+8e1455a55012b2068c7a65b8e3f9cfb3437d086f:runtime/src/Heap/z/zForwarding.cpp:3
+8e1455a55012b2068c7a65b8e3f9cfb3437d086f:runtime/src/Heap/z/zForwarding.hpp:2
+8e1455a55012b2068c7a65b8e3f9cfb3437d086f:runtime/src/Heap/z/zPage.hpp:1
+8e1455a55012b2068c7a65b8e3f9cfb3437d086f:runtime/src/Heap/z/zRelocate.cpp:1
+rc=0 total=7
+$ git grep -c -F -e in_place_relocation_claim_page HEAD -- runtime/src
+HEAD:runtime/src/Heap/z/zForwarding.cpp:3
+HEAD:runtime/src/Heap/z/zForwarding.hpp:2
+HEAD:runtime/src/Heap/z/zPage.hpp:1
+HEAD:runtime/src/Heap/z/zRelocate.cpp:1
+rc=0 total=7
+comparison in_place_relocation_claim_page: main=7 candidate=7
+
+$ git grep -c -F -e ->detach_page() 8e1455a55012b2068c7a65b8e3f9cfb3437d086f -- runtime/src
+8e1455a55012b2068c7a65b8e3f9cfb3437d086f:runtime/src/Heap/z/zForwarding.cpp:2
+8e1455a55012b2068c7a65b8e3f9cfb3437d086f:runtime/src/Heap/z/zRelocate.cpp:1
+rc=0 total=3
+$ git grep -c -F -e ->detach_page() HEAD -- runtime/src
+HEAD:runtime/src/Heap/z/zForwarding.cpp:2
+HEAD:runtime/src/Heap/z/zRelocate.cpp:1
+rc=0 total=3
+comparison ->detach_page(): main=3 candidate=3
+
+$ git grep -c -F -e set_in_place 8e1455a55012b2068c7a65b8e3f9cfb3437d086f -- runtime/src
+8e1455a55012b2068c7a65b8e3f9cfb3437d086f:runtime/src/Heap/z/zForwarding.hpp:1
+8e1455a55012b2068c7a65b8e3f9cfb3437d086f:runtime/src/Heap/z/zForwarding.inline.hpp:1
+8e1455a55012b2068c7a65b8e3f9cfb3437d086f:runtime/src/Heap/z/zRelocate.cpp:2
+rc=0 total=4
+$ git grep -c -F -e set_in_place HEAD -- runtime/src
+HEAD:runtime/src/Heap/z/zForwarding.hpp:1
+HEAD:runtime/src/Heap/z/zForwarding.inline.hpp:1
+HEAD:runtime/src/Heap/z/zRelocate.cpp:2
+rc=0 total=4
+comparison set_in_place: main=4 candidate=4
+
+$ git grep -c -F -e insert_receipt 8e1455a55012b2068c7a65b8e3f9cfb3437d086f -- runtime/src
+8e1455a55012b2068c7a65b8e3f9cfb3437d086f:runtime/src/Heap/Allocator/zForwardingTable.cpp:1
+8e1455a55012b2068c7a65b8e3f9cfb3437d086f:runtime/src/Heap/z/zForwarding.hpp:1
+8e1455a55012b2068c7a65b8e3f9cfb3437d086f:runtime/src/Heap/z/zForwarding.inline.hpp:1
+rc=0 total=3
+$ git grep -c -F -e insert_receipt HEAD -- runtime/src
+HEAD:runtime/src/Heap/Allocator/zForwardingTable.cpp:1
+HEAD:runtime/src/Heap/z/zForwarding.hpp:1
+HEAD:runtime/src/Heap/z/zForwarding.inline.hpp:1
+rc=0 total=3
+comparison insert_receipt: main=3 candidate=3
+
+$ git grep -c -F -e ForwardObjectImpl 8e1455a55012b2068c7a65b8e3f9cfb3437d086f -- runtime/src
+8e1455a55012b2068c7a65b8e3f9cfb3437d086f:runtime/src/Heap/WCollector/WCollector.h:1
+8e1455a55012b2068c7a65b8e3f9cfb3437d086f:runtime/src/Heap/z/zPage.hpp:1
+8e1455a55012b2068c7a65b8e3f9cfb3437d086f:runtime/src/Heap/z/zRelocate.cpp:5
+8e1455a55012b2068c7a65b8e3f9cfb3437d086f:runtime/src/windows_x86_64_exports.def:1
+rc=0 total=8
+$ git grep -c -F -e ForwardObjectImpl HEAD -- runtime/src
+HEAD:runtime/src/Heap/WCollector/WCollector.h:1
+HEAD:runtime/src/Heap/z/zPage.hpp:1
+HEAD:runtime/src/Heap/z/zRelocate.cpp:5
+HEAD:runtime/src/windows_x86_64_exports.def:1
+rc=0 total=8
+comparison ForwardObjectImpl: main=8 candidate=8
+
+$ git grep -c -F -e ForwardClaimedPage 8e1455a55012b2068c7a65b8e3f9cfb3437d086f -- runtime/src
+8e1455a55012b2068c7a65b8e3f9cfb3437d086f:runtime/src/Heap/z/zPageAllocator.hpp:1
+8e1455a55012b2068c7a65b8e3f9cfb3437d086f:runtime/src/Heap/z/zPageAllocator.inline.hpp:2
+8e1455a55012b2068c7a65b8e3f9cfb3437d086f:runtime/src/Heap/z/zRelocate.cpp:6
+rc=0 total=9
+$ git grep -c -F -e ForwardClaimedPage HEAD -- runtime/src
+HEAD:runtime/src/Heap/z/zPageAllocator.hpp:1
+HEAD:runtime/src/Heap/z/zPageAllocator.inline.hpp:2
+HEAD:runtime/src/Heap/z/zRelocate.cpp:6
+rc=0 total=9
+comparison ForwardClaimedPage: main=9 candidate=9
+
+$ git grep -c -F -e SetYoungAge 8e1455a55012b2068c7a65b8e3f9cfb3437d086f -- runtime/src
+8e1455a55012b2068c7a65b8e3f9cfb3437d086f:runtime/src/Heap/z/zObjectAllocator.cpp:2
+8e1455a55012b2068c7a65b8e3f9cfb3437d086f:runtime/src/Heap/z/zPage.hpp:1
+8e1455a55012b2068c7a65b8e3f9cfb3437d086f:runtime/src/Heap/z/zPage.inline.hpp:2
+8e1455a55012b2068c7a65b8e3f9cfb3437d086f:runtime/src/Heap/z/zPageAllocator.cpp:1
+8e1455a55012b2068c7a65b8e3f9cfb3437d086f:runtime/src/Heap/z/zRelocate.cpp:2
+rc=0 total=8
+$ git grep -c -F -e SetYoungAge HEAD -- runtime/src
+HEAD:runtime/src/Heap/z/zObjectAllocator.cpp:2
+HEAD:runtime/src/Heap/z/zPage.hpp:1
+HEAD:runtime/src/Heap/z/zPage.inline.hpp:2
+HEAD:runtime/src/Heap/z/zPageAllocator.cpp:1
+HEAD:runtime/src/Heap/z/zRelocate.cpp:2
+rc=0 total=8
+comparison SetYoungAge: main=8 candidate=8
+

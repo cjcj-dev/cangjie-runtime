@@ -18,9 +18,6 @@
 #include "Heap/z/zThreadLocalAllocBuffer.hpp"
 #include "Heap/z/zStoreBarrierBuffer.hpp"
 #include "Heap/Collector/MarkPartialArray.h"
-#include "Heap/Verify/NwDropAudit.h"
-#include "Heap/Verify/M0ExitDiagnostics.h"
-#include "Heap/Verify/SurvNodeDiag.h"
 #include "Heap/z/zMark.hpp"
 #include "ObjectModel/RefField.inline.h"
 
@@ -115,9 +112,6 @@ void ExportRootTable::VisitGCRoots(const NativeSlotVisitor& visitor)
 #include "Heap/z/zThreadLocalAllocBuffer.hpp"
 #include "Heap/z/zStoreBarrierBuffer.hpp"
 #include "Heap/Collector/MarkPartialArray.h"
-#include "Heap/Verify/NwDropAudit.h"
-#include "Heap/Verify/M0ExitDiagnostics.h"
-#include "Heap/Verify/SurvNodeDiag.h"
 #include "Heap/z/zMark.hpp"
 #include "ObjectModel/RefField.inline.h"
 
@@ -155,8 +149,6 @@ void TracingCollector::VisitStackRoots(const RootVisitor& visitor, RegSlotsMap& 
     // introot: use HeapReferenceMap so base/derived pairs are available. RootMap only
     // carries reg/slot roots and silently drops derived (RawArray+8 held across safepoint).
     HeapReferenceMap heapMap = builder.Build<HeapReferenceMap>(false);
-    M0ExitDiagnostics::StackMapScope m0StackMap(
-        heapMap.IsValid(), builder.GetInvalidReason(), startIP, frameIP, frameAddress);
     RootVisitor slotVisitor = visitor;
     RootVisitor regVisitor = visitor;
 
@@ -203,9 +195,6 @@ void TracingCollector::VisitStackRoots(const RootVisitor& visitor, RegSlotsMap& 
 #include "Heap/z/zThreadLocalAllocBuffer.hpp"
 #include "Heap/z/zStoreBarrierBuffer.hpp"
 #include "Heap/Collector/MarkPartialArray.h"
-#include "Heap/Verify/NwDropAudit.h"
-#include "Heap/Verify/M0ExitDiagnostics.h"
-#include "Heap/Verify/SurvNodeDiag.h"
 #include "Heap/z/zMark.hpp"
 #include "ObjectModel/RefField.inline.h"
 
@@ -228,8 +217,6 @@ void TracingCollector::VisitHeapReferencesOnStack(const RootVisitor& regRootVisi
     uintptr_t frameAddress = reinterpret_cast<uintptr_t>(frame.mFrame.GetFA());
     StackMapBuilder builder = StackMapBuilder(startIP, frameIP, frameAddress);
     HeapReferenceMap heapMap = builder.Build<HeapReferenceMap>(false);
-    M0ExitDiagnostics::StackMapScope m0StackMap(
-        heapMap.IsValid(), builder.GetInvalidReason(), startIP, frameIP, frameAddress);
 #if defined(GCINFO_DEBUG) && GCINFO_DEBUG
     auto infoNode = GCInfoNodeForFix::BuildNodeForFix(startIP, frameIP, frame.mFrame.GetFA());
     auto slotDebugFunc = [&infoNode](SlotBias off, const BaseObject* root) {
@@ -342,9 +329,6 @@ void TracingCollector::DoEnumeration(WorkStack& workStack, WorkStack& foreignRoo
 #include "Heap/z/zThreadLocalAllocBuffer.hpp"
 #include "Heap/z/zStoreBarrierBuffer.hpp"
 #include "Heap/Collector/MarkPartialArray.h"
-#include "Heap/Verify/NwDropAudit.h"
-#include "Heap/Verify/M0ExitDiagnostics.h"
-#include "Heap/Verify/SurvNodeDiag.h"
 #include "Heap/z/zMark.hpp"
 #include "ObjectModel/RefField.inline.h"
 
@@ -482,7 +466,6 @@ void TracingCollector::PostGarbageCollection(uint64_t gcIndex)
     ReportSkippedStackMapCounts();
     // release pages in PagePool
     TransitionToGCPhase(GCPhase::GC_PHASE_RECLAIM_SATB_NODE, true);
-    NwDropAudit::Report("reclaim_satb");
     PagePool::Instance().Trim();
     (void)gcIndex;
 

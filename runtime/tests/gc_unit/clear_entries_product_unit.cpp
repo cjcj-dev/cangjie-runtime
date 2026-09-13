@@ -2245,7 +2245,6 @@ uintptr_t OneLoadBadRemap()
 
 GC_OTHER_VM_TEST(NeverInstalledDiagnostic, NeverInstalledListsAllCoveringCarriers)
 {
-    GC_EXPECT_EQ(setenv("MRT_GCV2_DIAG", "neverinstalled", 1), 0);
     GcHeapFixture& fx = ProductFixture();
     WCollector collector(Heap::GetHeap().GetAllocator(), Heap::GetHeap().GetCollectorResources());
     LateBackfillState state = PrepareLateBackfill(fx, collector);
@@ -2308,7 +2307,6 @@ GC_OTHER_VM_TEST(NeverInstalledDiagnostic, NeverInstalledListsAllCoveringCarrier
 
 GC_OTHER_VM_TEST(NeverInstalledDiagnostic, NeverInstalledCurrentIncarnationDelta)
 {
-    GC_EXPECT_EQ(setenv("MRT_GCV2_DIAG", "neverinstalled", 1), 0);
     GcHeapFixture& fx = ProductFixture();
     WCollector collector(Heap::GetHeap().GetAllocator(), Heap::GetHeap().GetCollectorResources());
     LateBackfillState state = PrepareLateBackfill(fx, collector);
@@ -2338,7 +2336,6 @@ GC_OTHER_VM_TEST(NeverInstalledDiagnostic, NeverInstalledCurrentIncarnationDelta
 
 GC_OTHER_VM_TEST(NeverInstalledDiagnostic, NeverInstalledRawHeaderVerdict)
 {
-    GC_EXPECT_EQ(setenv("MRT_GCV2_DIAG", "neverinstalled", 1), 0);
     GcHeapFixture& fx = ProductFixture();
     WCollector collector(Heap::GetHeap().GetAllocator(), Heap::GetHeap().GetCollectorResources());
     LateBackfillState state = PrepareLateBackfill(fx, collector);

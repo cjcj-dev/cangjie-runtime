@@ -936,7 +936,6 @@ EXPORTS
     _ZGVZN12MapleRuntime10WCollector17PlainRootsEnabledEvE2on @930 DATA
     _ZGVZN12MapleRuntime11CpuProfiler11GetInstanceEvE8instance @931 DATA
     _ZGVZN12MapleRuntime13RegionManager13CollectRegionEPNS_10RegionInfoEE5probe @932 DATA
-    _ZGVZN12MapleRuntime14AllocPhaseDiag7EnabledEvE2on @933 DATA
     _ZGVZN12MapleRuntime5GcLog7EnabledEvE7enabled @934 DATA
     _ZN12MapleRuntime10BaseObject15ForEachRefFieldERKNSt3__18functionIFvRNS_8HeapSlotILb0EEEEEE @935
     _ZN12MapleRuntime10BaseObject18ForEachRefInStructERKNSt3__18functionIFvRNS_8HeapSlotILb0EEEEEEyy @936
@@ -1080,13 +1079,6 @@ EXPORTS
     _ZN12MapleRuntime10RegionList20ClearTraceRegionFlagEv @1081
     _ZN12MapleRuntime10SampleTaskC2ERKS0_ @1082
     _ZN12MapleRuntime10SampleTaskC2EyyRNSt3__16vectorIyNS1_9allocatorIyEEEERNS2_INS_9FrameTypeENS3_IS7_EEEERNS2_IjNS3_IjEEEE @1083
-    _ZN12MapleRuntime10TraceClear10DumpRecentEy @1093
-    _ZN12MapleRuntime10TraceClear10LookupKindEyPKcyPcy @1094
-    _ZN12MapleRuntime10TraceClear15NoteRegionEventEyyPKcPvyjjj @1095
-    _ZN12MapleRuntime10TraceClear17SkipCompactMemsetEv @1096
-    _ZN12MapleRuntime10TraceClear6LookupEyPcy @1097
-    _ZN12MapleRuntime10TraceClear7EnabledEv @1098
-    _ZN12MapleRuntime10TraceClear9NoteRangeEyyPKcPvy @1099
     _ZN12MapleRuntime10TypeGCInfo11GetGCTibStrEPNS_8TypeInfoE @1100
     _ZN12MapleRuntime10TypeGCInfo14FillTypeGCInfoEPNS_8TypeInfoERNS_7CStringERj @1101
     _ZN12MapleRuntime10TypeGCInfo19FillArrayTypeGCInfoEPNS_8TypeInfoERNS_7CStringERj @1102
@@ -1165,11 +1157,6 @@ EXPORTS
     _ZN12MapleRuntime11HeapManager8AllocateEyNS_9AllocTypeE @1193
     _ZN12MapleRuntime11HeapManagerC1Ev @1194
     _ZN12MapleRuntime11HeapManagerC2Ev @1195
-    _ZN12MapleRuntime11MinorGCALot10AllocCountEv @1197
-    _ZN12MapleRuntime11MinorGCALot12TriggerCountEv @1198
-    _ZN12MapleRuntime11MinorGCALot20AfterSuccessfulAllocEy @1199
-    _ZN12MapleRuntime11MinorGCALot7EnabledEv @1200
-    _ZN12MapleRuntime11MinorGCALot8IntervalEv @1201
     _ZN12MapleRuntime11PackageInfo11GetTypeInfoEPKc @1202
     _ZN12MapleRuntime11PackageInfo11GetTypeInfoEj @1203
     _ZN12MapleRuntime11PackageInfo15GetTypeTemplateEPKc @1204
@@ -1447,11 +1434,6 @@ EXPORTS
     _ZN12MapleRuntime13g_initializedE @1531 DATA
     _ZN12MapleRuntime13g_injectStateE @1532 DATA
     _ZN12MapleRuntime14ATraceEndAsyncEPKci @1533
-    _ZN12MapleRuntime14AllocPhaseDiag4FindEPvy @1534
-    _ZN12MapleRuntime14AllocPhaseDiag6RecordEPvyyhhh @1535
-    _ZN12MapleRuntime14AllocPhaseDiag6g_nearE @1536 DATA
-    _ZN12MapleRuntime14AllocPhaseDiag7g_tableE @1537 DATA
-    _ZN12MapleRuntime14AllocPhaseDiag8FindSlotEyb @1538
     _ZN12MapleRuntime14AllocatorUtils15ALLOC_PAGE_SIZEE @1539 DATA
     _ZN12MapleRuntime14CangjieRuntime13CreateAndInitERK12RuntimeParam @1540
     _ZN12MapleRuntime14CangjieRuntime13FiniAndDeleteEv @1541
@@ -1707,21 +1689,6 @@ EXPORTS
     _ZN12MapleRuntime17InstanceFieldInfo8SetValueEPNS_8TypeInfoEPNS_7MObjectES4_ @1825
     _ZN12MapleRuntime17ScopedAllocBufferD1Ev @1827
     _ZN12MapleRuntime17ScopedAllocBufferD2Ev @1828
-    _ZN12MapleRuntime17StackExposureHook10ResetStatsEv @1833
-    _ZN12MapleRuntime17StackExposureHook11NoopProcessERNS_14StackWatermarkEy @1834
-    _ZN12MapleRuntime17StackExposureHook11RunSlowPathERNS_14StackWatermarkEyRKNSt3__18functionIFyS2_yEEEPKc @1835
-    _ZN12MapleRuntime17StackExposureHook12AdvanceCountEv @1836
-    _ZN12MapleRuntime17StackExposureHook12NeedsProcessERKNS_14StackWatermarkEy @1837
-    _ZN12MapleRuntime17StackExposureHook13OnAfterUnwindERNS_14StackWatermarkEyRKNSt3__18functionIFyS2_yEEE @1838
-    _ZN12MapleRuntime17StackExposureHook13VerifyEnabledEv @1839
-    _ZN12MapleRuntime17StackExposureHook14OnBeforeUnwindERNS_14StackWatermarkEyRKNSt3__18functionIFyS2_yEEE @1840
-    _ZN12MapleRuntime17StackExposureHook14ProductEnabledEv @1841
-    _ZN12MapleRuntime17StackExposureHook18AdvanceOnlyProcessERNS_14StackWatermarkEy @1842
-    _ZN12MapleRuntime17StackExposureHook23StopTheWorldCallsInHookEv @1843
-    _ZN12MapleRuntime17StackExposureHook24CrossWithoutProcessCountEv @1844
-    _ZN12MapleRuntime17StackExposureHook24NoteStopTheWorldFromHookEv @1845
-    _ZN12MapleRuntime17StackExposureHook26ObserveCrossWithoutProcessERKNS_14StackWatermarkEy @1846
-    _ZN12MapleRuntime17StackExposureHook9FireCountEv @1847
     _ZN12MapleRuntime17TYPEINFO_PTR_SIZEE @1848 DATA
     _ZN12MapleRuntime18AggregateAllocator10DeallocateEPvy @1850
     _ZN12MapleRuntime18AggregateAllocator8InstanceENS_13AllocationTagE @1851
@@ -1937,12 +1904,6 @@ EXPORTS
     _ZN12MapleRuntime7GCStats15prevGcStartTimeE @2097 DATA
     _ZN12MapleRuntime7GCStats16prevGcFinishTimeE @2098 DATA
     _ZN12MapleRuntime7GCStats4InitEv @2099
-    _ZN12MapleRuntime7HeapZap12AllocEnabledEv @2100
-    _ZN12MapleRuntime7HeapZap12ZapAllocatedEyy @2101
-    _ZN12MapleRuntime7HeapZap14ReclaimEnabledEv @2102
-    _ZN12MapleRuntime7HeapZap18ZapReclaimedRegionEyy @2103
-    _ZN12MapleRuntime7HeapZap4FillEPvy @2104
-    _ZN12MapleRuntime7HeapZap9IsZapWordEy @2105
     _ZN12MapleRuntime7ILoader12CreateLoaderEv @2106
     _ZN12MapleRuntime7LogFile13CloseLogFilesEv @2107
     _ZN12MapleRuntime7LogFile14SetFlagWithEnvEPKcNS_7LogTypeE @2108
@@ -2942,7 +2903,6 @@ EXPORTS
     _ZZN12MapleRuntime13RegionManager13CollectRegionEPNS_10RegionInfoEE5probe @3239 DATA
     _ZZN12MapleRuntime13RegionManager13CollectRegionEPNS_10RegionInfoEENKUlvE_clEv @3240
     _ZZN12MapleRuntime13RegionManager21PrepareFromRegionListEvENKUlPNS_10RegionInfoEE_clES2_ @3241
-    _ZZN12MapleRuntime14AllocPhaseDiag7EnabledEvE2on @3242 DATA
     _ZZN12MapleRuntime5GcLog12CycleCounterEvE7counter @3244 DATA
     _ZZN12MapleRuntime5GcLog7EnabledEvE7enabled @3245 DATA
     _ZZN12MapleRuntime5GcLog8FatalLenEvE3len @3246 DATA

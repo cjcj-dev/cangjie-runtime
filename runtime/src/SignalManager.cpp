@@ -20,9 +20,6 @@
 #include "Concurrency/ConcurrencyModel.h"
 #include "Heap/z/zMark.hpp"
 #include "Heap/z/zHeap.hpp"
-#if defined(MRT_GCV2_UNTAG_BREADCRUMB)
-#include "Heap/WCollector/UntagRefFieldBreadcrumb.h"
-#endif
 #include "LoaderManager.h"
 // paramzero: avoid #include WCollector.h (its Heap include graph needs WCollector TU paths).
 namespace MapleRuntime {
@@ -32,7 +29,6 @@ namespace MapleRuntime {
 #include "Signal/SignalUtils.h"
 #include "Inspector/CjHeapData.h"
 #include "Heap/Collector/TaskQueue.h"
-#include "Heap/Verify/HealPairDiag.h"
 #include "securec.h"
 #ifdef COV_SIGNALHANDLE
 extern "C" void __gcov_dump(void);
@@ -208,21 +204,6 @@ void EmitCrashRec(int sig, const siginfo_t* info, void* context, uintptr_t sigPc
     if (n > 0) {
         WriteSigDiag(line, static_cast<size_t>(n));
     }
-    if (context != nullptr) {
-        const ucontext_t& uctx = *static_cast<const ucontext_t*>(context);
-#if defined(__x86_64__) && !defined(__APPLE__)
-        uintptr_t rbx = static_cast<uintptr_t>(uctx.uc_mcontext.gregs[REG_RBX]);
-        uintptr_t r12 = static_cast<uintptr_t>(uctx.uc_mcontext.gregs[REG_R12]);
-        uintptr_t rcx = static_cast<uintptr_t>(uctx.uc_mcontext.gregs[REG_RCX]);
-        uintptr_t rsi = static_cast<uintptr_t>(uctx.uc_mcontext.gregs[REG_RSI]);
-        uintptr_t r13 = static_cast<uintptr_t>(uctx.uc_mcontext.gregs[REG_R13]);
-#else
-        uintptr_t rbx = 0;
-#endif
-#if defined(__x86_64__) && !defined(__APPLE__)
-        HealPairDiag::NoteCrashWhoZero(r13, rcx, rsi, rbx, r12);
-#endif
-    }
 }
 } // namespace
 
@@ -307,9 +288,6 @@ void PrintSignalHandlerStack(int sig, const siginfo_t* info, void* context)
     // AS-safe path: key fields via stack buffer + write(2).
     // Full unwind / symbolize / FLOG / pthread_getname_np are deferred out of the
     // signal-context critical path (REPORT-gchang11 §5 D).
-#if defined(MRT_GCV2_UNTAG_BREADCRUMB)
-    PrintUntagRefFieldBreadcrumb();
-#endif
     // Emit once per OS signal delivery (HandlerImpl entry) so a user-registered
     // crash handler on an _exit path cannot suppress the pc line.
     uintptr_t sigPc = 0;

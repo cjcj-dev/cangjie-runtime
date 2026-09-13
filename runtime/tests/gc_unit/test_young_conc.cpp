@@ -1447,22 +1447,6 @@ GC_TEST(YoungConc, IdleStoreDoesNotMarkNewYoungTarget)
     fx.FreePlanted(live);
 }
 
-// Peek must not consume the local cleanup ledger drained after mark termination.
-GC_TEST(YoungConc, PeekYoungAllocBlackDoesNotConsume)
-{
-    GcHeapFixture fx;
-    MarkPublicationFixture markFixture;
-    auto* buf = new AllocBuffer();
-    buf->PushYoungAllocBlack(fx.obj0);
-    std::vector<BaseObject*> peeked;
-    buf->PeekYoungAllocBlack(peeked);
-    GC_EXPECT_EQ(peeked.size(), 1u);
-    std::vector<BaseObject*> merged;
-    buf->MergeYoungAllocBlack(merged);
-    GC_EXPECT_EQ(merged.size(), 1u);
-    GC_EXPECT_EQ(reinterpret_cast<uintptr_t>(merged[0]), reinterpret_cast<uintptr_t>(fx.obj0));
-}
-
 // The three retired runtime switches are not alternate configurations. These
 // guards pin the required predicates even when a parent process still exports
 // a stale value.

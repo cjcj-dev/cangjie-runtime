@@ -52,9 +52,6 @@ void NoteFwdToGateRefuse(const char* site, BaseObject* toObj)
 
 #include <array>
 #include <atomic>
-#if defined(MRT_GCV2_UNTAG_BREADCRUMB)
-#include <csignal>
-#endif
 #include <cstdint>
 #include <cstdio>
 #include <cstdlib>
@@ -71,36 +68,18 @@ void NoteFwdToGateRefuse(const char* site, BaseObject* toObj)
 #include <vector>
 #include <unistd.h>
 
-#if defined(MRT_GCV2_UNTAG_BREADCRUMB)
-#include "Base/SysCall.h"
-#endif
 #include "Concurrency/Concurrency.h"
 #include "Heap/z/zStoreBarrierBuffer.hpp"
 #include "Heap/z/zDirector.hpp"
 #include "Heap/Collector/MarkPartialArray.h"
 #include "Heap/z/zRelocationSetSelector.hpp"
 #include "Heap/z/zWorkers.hpp"
-#if defined(MRT_GCV2_UNTAG_BREADCRUMB)
-#include "Heap/WCollector/UntagRefFieldBreadcrumb.h"
-#endif
-#include "Heap/Verify/M0ExitDiagnostics.h"
-#include "Heap/Verify/TraceClear.h"
-#include "Heap/Verify/Zap.h"
-#include "Heap/Verify/DiagGate.h"
-#include "Heap/Verify/NwDropAudit.h"
-#include "Heap/Verify/GarbRegionDiag.h"
-#include "Heap/Verify/Stw2CurrentAudit.h"
-#include "Heap/Verify/SurvNodeDiag.h"
-#include "Heap/Verify/CsetEmptyWho.h"
 #include "Heap/z/zAddress.inline.hpp"
 #include "Mutator/MutatorManager.h"
 #include "ObjectModel/MArray.inline.h"
 #include "UnwindStack/StackFrameCursor.h"
 #include "ObjectModel/RefField.inline.h"
 #include "TypeInfoManager.h"
-#if defined(MRT_GCV2_UNTAG_BREADCRUMB)
-#include "securec.h"
-#endif
 #include "Heap/z/zThreadLocalAllocBuffer.hpp"
 #include "Heap/z/zRememberedSet.hpp"
 #include "Heap/z/zForwarding.hpp"
@@ -138,15 +117,9 @@ void NoteFwdToGateRefuse(const char* site, BaseObject* toObj)
 #include "Common/ScopedObjectAccess.h"
 #include "Heap/z/zHeap.hpp"
 #include "Heap/z/zRememberedSet.hpp"
-#include "Heap/Verify/DiagGate.h"
-#include "Heap/Verify/CsetEmptyWho.h"
-#include "Heap/Verify/TraceClear.h"
-#include "Heap/Verify/FillerZeroDiag.h"
-#include "Heap/Verify/HoleWhoDiag.h"
 #include "Heap/Allocator/HeapFiller.h"
 #include "Heap/z/zForwardingTable.hpp"
 #include "Heap/z/zRelocationSetSelector.hpp"
-#include "Heap/Verify/Zap.h"
 #include "Mutator/Mutator.inline.h"
 #include "Mutator/MutatorManager.h"
 #include "ObjectModel/RefField.inline.h"
@@ -224,9 +197,6 @@ void NoteRemapYoungRootsTestReceipt(RefField<>& field, uintptr_t before, bool he
 
 #include <array>
 #include <atomic>
-#if defined(MRT_GCV2_UNTAG_BREADCRUMB)
-#include <csignal>
-#endif
 #include <cstdint>
 #include <cstdio>
 #include <cstdlib>
@@ -243,36 +213,18 @@ void NoteRemapYoungRootsTestReceipt(RefField<>& field, uintptr_t before, bool he
 #include <vector>
 #include <unistd.h>
 
-#if defined(MRT_GCV2_UNTAG_BREADCRUMB)
-#include "Base/SysCall.h"
-#endif
 #include "Concurrency/Concurrency.h"
 #include "Heap/z/zStoreBarrierBuffer.hpp"
 #include "Heap/z/zDirector.hpp"
 #include "Heap/Collector/MarkPartialArray.h"
 #include "Heap/z/zRelocationSetSelector.hpp"
 #include "Heap/z/zWorkers.hpp"
-#if defined(MRT_GCV2_UNTAG_BREADCRUMB)
-#include "Heap/WCollector/UntagRefFieldBreadcrumb.h"
-#endif
-#include "Heap/Verify/M0ExitDiagnostics.h"
-#include "Heap/Verify/TraceClear.h"
-#include "Heap/Verify/Zap.h"
-#include "Heap/Verify/DiagGate.h"
-#include "Heap/Verify/NwDropAudit.h"
-#include "Heap/Verify/GarbRegionDiag.h"
-#include "Heap/Verify/Stw2CurrentAudit.h"
-#include "Heap/Verify/SurvNodeDiag.h"
-#include "Heap/Verify/CsetEmptyWho.h"
 #include "Heap/z/zAddress.inline.hpp"
 #include "Mutator/MutatorManager.h"
 #include "ObjectModel/MArray.inline.h"
 #include "UnwindStack/StackFrameCursor.h"
 #include "ObjectModel/RefField.inline.h"
 #include "TypeInfoManager.h"
-#if defined(MRT_GCV2_UNTAG_BREADCRUMB)
-#include "securec.h"
-#endif
 #include "Heap/z/zThreadLocalAllocBuffer.hpp"
 #include "Heap/z/zRememberedSet.hpp"
 #include "Heap/z/zForwarding.hpp"
@@ -310,15 +262,9 @@ void NoteRemapYoungRootsTestReceipt(RefField<>& field, uintptr_t before, bool he
 #include "Common/ScopedObjectAccess.h"
 #include "Heap/z/zHeap.hpp"
 #include "Heap/z/zRememberedSet.hpp"
-#include "Heap/Verify/DiagGate.h"
-#include "Heap/Verify/CsetEmptyWho.h"
-#include "Heap/Verify/TraceClear.h"
-#include "Heap/Verify/FillerZeroDiag.h"
-#include "Heap/Verify/HoleWhoDiag.h"
 #include "Heap/Allocator/HeapFiller.h"
 #include "Heap/z/zForwardingTable.hpp"
 #include "Heap/z/zRelocationSetSelector.hpp"
-#include "Heap/Verify/Zap.h"
 #include "Mutator/Mutator.inline.h"
 #include "Mutator/MutatorManager.h"
 #include "ObjectModel/RefField.inline.h"

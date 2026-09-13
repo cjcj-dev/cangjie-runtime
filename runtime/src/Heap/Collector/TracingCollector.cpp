@@ -18,9 +18,6 @@
 #include "Heap/z/zThreadLocalAllocBuffer.hpp"
 #include "Heap/z/zStoreBarrierBuffer.hpp"
 #include "Heap/Collector/MarkPartialArray.h"
-#include "Heap/Verify/NwDropAudit.h"
-#include "Heap/Verify/M0ExitDiagnostics.h"
-#include "Heap/Verify/SurvNodeDiag.h"
 #include "Heap/z/zMark.hpp"
 #include "ObjectModel/RefField.inline.h"
 

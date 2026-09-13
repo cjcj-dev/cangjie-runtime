@@ -34,15 +34,6 @@
 #include "Heap/Collector/MarkPartialArray.h"
 #include "Heap/z/zRelocationSetSelector.hpp"
 #include "Heap/z/zWorkers.hpp"
-#include "Heap/Verify/M0ExitDiagnostics.h"
-#include "Heap/Verify/TraceClear.h"
-#include "Heap/Verify/Zap.h"
-#include "Heap/Verify/DiagGate.h"
-#include "Heap/Verify/NwDropAudit.h"
-#include "Heap/Verify/GarbRegionDiag.h"
-#include "Heap/Verify/Stw2CurrentAudit.h"
-#include "Heap/Verify/SurvNodeDiag.h"
-#include "Heap/Verify/CsetEmptyWho.h"
 #include "Heap/z/zAddress.inline.hpp"
 #include "Mutator/MutatorManager.h"
 #include "ObjectModel/MArray.inline.h"
@@ -86,15 +77,9 @@
 #include "Common/ScopedObjectAccess.h"
 #include "Heap/z/zHeap.hpp"
 #include "Heap/z/zRememberedSet.hpp"
-#include "Heap/Verify/DiagGate.h"
-#include "Heap/Verify/CsetEmptyWho.h"
-#include "Heap/Verify/TraceClear.h"
-#include "Heap/Verify/FillerZeroDiag.h"
-#include "Heap/Verify/HoleWhoDiag.h"
 #include "Heap/Allocator/HeapFiller.h"
 #include "Heap/z/zForwardingTable.hpp"
 #include "Heap/z/zRelocationSetSelector.hpp"
-#include "Heap/Verify/Zap.h"
 #include "Mutator/Mutator.inline.h"
 #include "Mutator/MutatorManager.h"
 #include "ObjectModel/RefField.inline.h"
@@ -407,7 +392,6 @@ void WCollector::Preforward()
         RemapYoungRoots();
         // zGeneration.cpp:old relocate_start flips only the old remap epoch.
         // RemapYoungRoots above prevents roots from accumulating two bad remap epochs.
-        CsetEmptyWho::ClassifyCycle();
         flip_old_relocate_start();
         ZVerify::OnColorFlip();
         StartRelocationTasks();
@@ -445,10 +429,6 @@ void WCollector::Preforward()
     } roots(families, next);
     workers.Run(roots);
     StringDedup::Instance().Remap();
-    if (HealCoverage::kHealCoverageCensus) {
-        HealCoverage::CensusAfterPublication(
-            currentRemapColour, FlipSeq().load(std::memory_order_relaxed), "major-preforward");
-    }
 }
 
 // N2 (MINOR_CONCURRENCY_0805 §八 T-C): CAS-install resolved target under multi-worker fix.
@@ -1269,11 +1249,6 @@ void WCollector::EvacuateYoungRegions(const std::vector<BaseObject*>& reachableV
                 LOG(RTLOG_ERROR,
                     "[GCV2][fixinput] reject=%zu recover=%zu unrecoverable=%zu",
                     rej, rec, unr);
-            }
-            if (HealCoverage::kHealCoverageCensus) {
-                HealCoverage::CensusAfterPublication(
-                    currentRemapColour, FlipSeq().load(std::memory_order_relaxed),
-                    "young-ref-fix-conc");
             }
         }
     }
@@ -2444,8 +2419,6 @@ void RegionManager::CompactRegion(RegionInfo* region)
     MAddress cur = region->GetRegionAllocPtr();
     if (regionLimit > cur) {
         size_t reclaimSize = regionLimit - cur;
-        TraceClear::NoteRange(cur, reclaimSize, "compact", region, region->GetLiveByteCount());
-        FillerZeroDiag::Note(FillerZeroDiag::Site::COMPACT, cur, reclaimSize);
         HeapFiller::ZeroAndFill(cur, reclaimSize);
     }
 

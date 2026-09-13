@@ -15,7 +15,6 @@
 #include "Heap/z/zStat.hpp"
 #include "Allocator/RegionSpace.h"
 #include "Heap/z/zDirector.hpp"
-#include "Heap/Verify/GarbRegionDiag.h"
 #include "Common/Runtime.h"
 #include "Mutator/MutatorManager.h"
 #include "ObjectModel/RefField.inline.h"
@@ -147,7 +146,6 @@ void CopyCollector::ForwardFromSpace()
     GCStats& stats = GetGCStats();
     stats.liveBytesBeforeGC = space.AllocatedBytes();
     stats.fromSpaceSize = space.FromSpaceSize();
-    GarbRegionDiag::CensusBeforeForward("pre-forward");
     if (GetCycleReason() == GC_REASON_YOUNG) {
         space.ForwardFromSpace<Generation::Young>(GetWorkers());
     } else {

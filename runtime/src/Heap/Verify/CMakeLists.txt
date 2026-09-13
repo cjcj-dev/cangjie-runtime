@@ -4,26 +4,7 @@
 #
 # See https://cangjie-lang.cn/pages/LICENSE for license information.
 
-set(SRC_LIST
-    "../z/zVerify.cpp"
-    "SurvNodeDiag.cpp"
-    "Zap.cpp"
-    "MinorGCALot.cpp"
-    "TraceClear.cpp"
-    "DiagGate.cpp"
-
-    "GarbRegionDiag.cpp"
-    "HealPairDiag.cpp"
-    "ZgcSelfHealDiag.cpp"
-    "ZgcInvariants.cpp"
-    "M0ExitDiagnostics.cpp"
-    "M0Correlation.cpp"
-    "HealCoverage.cpp"
-    "Stw2CurrentAudit.cpp"
-    "CsetEmptyWho.cpp"
-    "FillerZeroDiag.cpp"
-    "HoleWhoDiag.cpp"
-)
+set(SRC_LIST "../z/zVerify.cpp")
 
 include_directories(${CMAKE_CURRENT_SOURCE_DIR}/../)
 add_library(Verify STATIC ${SRC_LIST})

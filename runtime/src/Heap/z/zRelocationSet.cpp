@@ -9,9 +9,6 @@
 
 #include <array>
 #include <atomic>
-#if defined(MRT_GCV2_UNTAG_BREADCRUMB)
-#include <csignal>
-#endif
 #include <cstdint>
 #include <cstdio>
 #include <cstdlib>
@@ -28,35 +25,18 @@
 #include <vector>
 #include <unistd.h>
 
-#if defined(MRT_GCV2_UNTAG_BREADCRUMB)
-#include "Base/SysCall.h"
-#endif
 #include "Concurrency/Concurrency.h"
 #include "Heap/z/zStoreBarrierBuffer.hpp"
 #include "Heap/z/zDirector.hpp"
 #include "Heap/Collector/MarkPartialArray.h"
 #include "Heap/z/zRelocationSetSelector.hpp"
 #include "Heap/z/zWorkers.hpp"
-#if defined(MRT_GCV2_UNTAG_BREADCRUMB)
-#include "Heap/WCollector/UntagRefFieldBreadcrumb.h"
-#endif
-#include "Heap/Verify/TraceClear.h"
-#include "Heap/Verify/Zap.h"
-#include "Heap/Verify/DiagGate.h"
-#include "Heap/Verify/NwDropAudit.h"
-#include "Heap/Verify/GarbRegionDiag.h"
-#include "Heap/Verify/Stw2CurrentAudit.h"
-#include "Heap/Verify/SurvNodeDiag.h"
-#include "Heap/Verify/CsetEmptyWho.h"
 #include "Heap/z/zAddress.inline.hpp"
 #include "Mutator/MutatorManager.h"
 #include "ObjectModel/MArray.inline.h"
 #include "UnwindStack/StackFrameCursor.h"
 #include "ObjectModel/RefField.inline.h"
 #include "TypeInfoManager.h"
-#if defined(MRT_GCV2_UNTAG_BREADCRUMB)
-#include "securec.h"
-#endif
 #include "Heap/WCollector/WCollectorInternal.h"
 
 namespace MapleRuntime {

@@ -252,7 +252,7 @@ public:
             memory.committed = true;
         }
         if ((wasCommitted || memory.harvestedUnits != 0) && clearPayload) {
-            RegionInfo::ClearUnits(idx, num, FillerZeroDiag::Site::DIRTY_TAKE);
+            RegionInfo::ClearUnits(idx, num);
         }
         RegionInfo* region = RegionInfo::InitRegion(idx, num, role);
         if (!wasCommitted) {
@@ -312,7 +312,7 @@ private:
     inline void PrehandleReleasedUnit(bool expectPhysicalMem, size_t idx, size_t num) const
     {
         if (expectPhysicalMem) {
-            RegionInfo::ClearUnits(idx, num, FillerZeroDiag::Site::RELEASED_PRE);
+            RegionInfo::ClearUnits(idx, num);
         }
     }
     RegionManager& regionManager;
@@ -373,8 +373,6 @@ private:
 #include "Heap/z/zWorkers.hpp"
 #include "Heap/z/zRelocate.hpp"
 #include "Heap/Allocator/RegionList.h"
-#include "Heap/Verify/GarbRegionDiag.h"
-#include "Heap/Verify/TraceClear.h"
 #include "securec.h"
 #include "Heap/Allocator/SlotList.h"
 #include "Sync/Sync.h"
