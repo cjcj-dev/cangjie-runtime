@@ -1673,14 +1673,6 @@ EXPORTS
     _ZN12MapleRuntime16StackFrameCursor8ResumeAtEyRNS_7MutatorE @1740
     _ZN12MapleRuntime16StackFrameCursorC1ERKNS_13UnwindContextE @1741
     _ZN12MapleRuntime16StackFrameCursorC2ERKNS_13UnwindContextE @1742
-    _ZN12MapleRuntime16StackFrameOracle10MatchCountEv @1743
-    _ZN12MapleRuntime16StackFrameOracle10ResetStatsEv @1744
-    _ZN12MapleRuntime16StackFrameOracle12CompareCountEv @1745
-    _ZN12MapleRuntime16StackFrameOracle12FatalEnabledEv @1746
-    _ZN12MapleRuntime16StackFrameOracle13MismatchCountEv @1747
-    _ZN12MapleRuntime16StackFrameOracle17CompareWithLegacyERKNS_13UnwindContextERNS_7MutatorE @1748
-    _ZN12MapleRuntime16StackFrameOracle23SkipFirstManagedEnabledEv @1749
-    _ZN12MapleRuntime16StackFrameOracle7EnabledEv @1750
     _ZN12MapleRuntime16TracingCollector10GetGCStatsEv @1751
     _ZN12MapleRuntime16TracingCollector11TracingImplERNS_9MarkStackIPNS_10BaseObjectEEES5_b @1752
     _ZN12MapleRuntime16TracingCollector13DoEnumerationERNS_9MarkStackIPNS_10BaseObjectEEES5_ @1753
@@ -1825,14 +1817,6 @@ EXPORTS
     _ZN12MapleRuntime19SigHandlerFrameinfoD0Ev @1915
     _ZN12MapleRuntime19SigHandlerFrameinfoD2Ev @1916
     _ZN12MapleRuntime19SigHandlerFrameinfoaSERKNS_9FrameInfoE @1917
-    _ZN12MapleRuntime19StackExposureOracle10InjectNameEv @1918
-    _ZN12MapleRuntime19StackExposureOracle10MatchCountEv @1919
-    _ZN12MapleRuntime19StackExposureOracle10ResetStatsEv @1920
-    _ZN12MapleRuntime19StackExposureOracle12FatalEnabledEv @1921
-    _ZN12MapleRuntime19StackExposureOracle13ExerciseCountEv @1922
-    _ZN12MapleRuntime19StackExposureOracle13MismatchCountEv @1923
-    _ZN12MapleRuntime19StackExposureOracle7EnabledEv @1924
-    _ZN12MapleRuntime19StackExposureOracle8ExerciseERKNS_13UnwindContextERNS_7MutatorE @1925
     _ZN12MapleRuntime19StackMetadataHelperC2ERKNS_9FrameInfoE @1926
     _ZN12MapleRuntime19StackMetadataHelperD2Ev @1927
     _ZN12MapleRuntime19ULEBDecodeSingleStrERNSt3__16vectorIhNS0_9allocatorIhEEEE @1928
@@ -1845,14 +1829,6 @@ EXPORTS
     _ZN12MapleRuntime20PrintSignalStackInfoC2EPKNS_13UnwindContextE @1935
     _ZN12MapleRuntime20PrintSignalStackInfoD0Ev @1936
     _ZN12MapleRuntime20PrintSignalStackInfoD2Ev @1937
-    _ZN12MapleRuntime20StackWatermarkOracle10InjectNameEv @1939
-    _ZN12MapleRuntime20StackWatermarkOracle10MatchCountEv @1940
-    _ZN12MapleRuntime20StackWatermarkOracle10ResetStatsEv @1941
-    _ZN12MapleRuntime20StackWatermarkOracle12FatalEnabledEv @1942
-    _ZN12MapleRuntime20StackWatermarkOracle13ExerciseCountEv @1943
-    _ZN12MapleRuntime20StackWatermarkOracle13MismatchCountEv @1944
-    _ZN12MapleRuntime20StackWatermarkOracle7EnabledEv @1945
-    _ZN12MapleRuntime20StackWatermarkOracle8ExerciseERKNS_13UnwindContextERNS_7MutatorE @1946
     _ZN12MapleRuntime20VerifyMarkSourceNameENS_16VerifyMarkSourceE @1947
     _ZN12MapleRuntime20g_installDomainGrantE @1948 DATA
     _ZN12MapleRuntime21ConcurrentMarkingWorkD0Ev @1951

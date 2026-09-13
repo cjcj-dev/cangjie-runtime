@@ -16,9 +16,6 @@ set(SRC_LIST
     "VerifyRegions.cpp"
     "MinorGCALot.cpp"
     "TraceClear.cpp"
-    "StackFrameOracle.cpp"
-    "StackWatermarkOracle.cpp"
-    "StackExposureOracle.cpp"
     "DiagGate.cpp"
     "VerifyPhase.cpp"
 
