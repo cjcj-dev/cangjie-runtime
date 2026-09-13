@@ -78,6 +78,16 @@ void CopyCollector::RunGarbageCollection(uint64_t gcIndex, GCReason reason)
     // after the collector has joined all root work (zVerify.cpp:363-384).
     DoGarbageCollection();
 
+    GCDriverPort& port = reason == GC_REASON_YOUNG ? collectorResources.GetYoungDriverPort() :
+                                                   collectorResources.GetMajorDriverPort();
+    if (port.Abort().Poll()) {
+        // The phase owner already joined any submitted work. Keep mark and
+        // forwarding storage alive for driver shutdown; skip normal reclaim.
+        GetWorkers().SetInactive();
+        GcLog::CompleteCycle(cycleSeq);
+        return;
+    }
+
     if (reason == GC_REASON_OOM) {
         Heap::GetHeap().GetAllocator().ReclaimGarbageMemory(true);
     }

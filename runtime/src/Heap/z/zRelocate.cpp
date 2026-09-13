@@ -422,7 +422,7 @@ void WCollector::StartRelocationTasks()
     else manager.StartForwardFromRegions<Generation::Old>(workers);
 }
 
-void WCollector::Preforward()
+bool WCollector::Preforward()
 {
     ScopedEntryTrace trace("CJRT_GC_PREFORWARD");
     MRT_PHASE_TIMER(ZStatPhases::PPreforward);
@@ -442,6 +442,11 @@ void WCollector::Preforward()
         // OpenJDK zGeneration.cpp:1054-1063: Phase 8 remaps young roots under the driver
         // lock *before* pause_relocate_start flips the old remap bits (zGeneration.cpp:1503-1508).
         RemapYoungRoots();
+        // ZGenerationOld::collect (zGeneration.cpp:1054-1063): the last
+        // abortpoint precedes relocate-start; after the flip all pages finish.
+        if (collectorResources.GetMajorDriverPort().Abort().Poll()) {
+            return false;
+        }
         // zGeneration.cpp:old relocate_start flips only the old remap epoch.
         // RemapYoungRoots above prevents roots from accumulating two bad remap epochs.
         CsetEmptyWho::ClassifyCycle();
@@ -486,6 +491,7 @@ void WCollector::Preforward()
         HealCoverage::CensusAfterPublication(
             currentRemapColour, FlipSeq().load(std::memory_order_relaxed), "major-preforward");
     }
+    return true;
 }
 
 // N2 (MINOR_CONCURRENCY_0805 §八 T-C): CAS-install resolved target under multi-worker fix.

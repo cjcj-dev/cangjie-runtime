@@ -626,6 +626,9 @@ void WCollector::TraceHeap()
         }
         reinterpret_cast<RegionSpace&>(theAllocator).PrepareTrace();
         DoTracing(workStack, foreignStack);
+        if (collectorResources.GetMajorDriverPort().Abort().Poll()) {
+            return;
+        }
 
         MarkingStacks::VerifyEmpty(workStack.size());
         MarkingStacks::VerifyEmpty(foreignStack.size());
@@ -1304,8 +1307,8 @@ void WCollector::TraceYoungClosureStriped(WorkStack& workStack, bool fullYoungSc
     YoungStripedMarkingWork task(shared);
     workersSet.Run(task);
     youngMarkDomain->FinishWork();
-    MarkingStacks::VerifyEmpty(shared.Stripes().Population());
     if (!collectorResources.GetYoungDriverPort().Abort().Poll()) {
+        MarkingStacks::VerifyEmpty(shared.Stripes().Population());
         CHECK_DETAIL(shared.Terminate().Terminated(),
                      "young striped closure returned without coordinated worker termination");
     }
@@ -1391,7 +1394,7 @@ bool WCollector::FollowYoungMark(WorkStack& workStack, bool fullYoungScan,
             TraceYoungClosure(workStack, fullYoungScan, reachableVec, reachableSlots, weakSlots);
         }
         if (collectorResources.GetYoungDriverPort().Abort().Poll()) {
-            break;
+            return false;
         }
     } while (youngMarkDomain->TryTerminateFlush());
     CHECK_DETAIL(workStack.empty(), "young concurrent follow returned with owner work");
@@ -1750,21 +1753,29 @@ size_t TracingCollector::RunMajorStripeMark(WorkStack& workStack, bool partial, 
 
 void TracingCollector::TracingImpl(WorkStack& workStack, WorkStack& foreignRootsSet)
 {
-
-
-    if (workStack.empty() && foreignRootsSet.empty() && majorMarkDomain->Stripes().IsEmpty()) {
+    // ZMark::mark_follow (zMark.cpp:944-952): join workers, check abort,
+    // then flush producers. Stopped stripes never start another follow pass.
+    ProcessExportRoots(foreignRootsSet);
+    if (collectorResources.GetMajorDriverPort().Abort().Poll()) {
         return;
     }
-
-    if (!workStack.empty() || !majorMarkDomain->Stripes().IsEmpty()) {
-        markedObjectCount.fetch_add(RunMajorStripeMark(workStack), std::memory_order_relaxed);
-    }
+    do {
+        if (!workStack.empty() || !majorMarkDomain->Stripes().IsEmpty()) {
+            markedObjectCount.fetch_add(RunMajorStripeMark(workStack), std::memory_order_relaxed);
+        }
+        if (collectorResources.GetMajorDriverPort().Abort().Poll()) {
+            return;
+        }
+    } while (FlushMarkProducers(majorMarkDomain.get()));
     MarkingStacks::VerifyEmpty(GetWorkers().GetSnapshot().remainingWorkers);
 }
 
 void TracingCollector::ProcessExportRoots(WorkStack& foreignRootsSet)
 {
     while (!foreignRootsSet.empty()) {
+        if (collectorResources.GetMajorDriverPort().Abort().Poll()) {
+            return;
+        }
         const MarkStackEntry entry = foreignRootsSet.back();
         foreignRootsSet.pop_back();
         BaseObject* exportObj = entry.object();
@@ -1800,9 +1811,21 @@ void TracingCollector::DoTracing(WorkStack& workStack, WorkStack& foreignRootsSe
         TracingImpl(workStack, foreignRootsSet);
     }
 
-    {
+    // ZGenerationOld::collect (zGeneration.cpp:1020-1030): mark-follow
+    // returns to the phase owner before any mark-end retry consumes stripes.
+    if (collectorResources.GetMajorDriverPort().Abort().Poll()) {
+        return;
+    }
+    while (!TryEndOldMark(workStack)) {
+        if (collectorResources.GetMajorDriverPort().Abort().Poll()) {
+            return;
+        }
         MRT_PHASE_TIMER(ZStatPhases::PConcurrentReMarking);
-        ConcurrentReMark(workStack, foreignRootsSet);
+        TransitionToGCPhase(GC_PHASE_TRACE, true);
+        TracingImpl(workStack, foreignRootsSet);
+        if (collectorResources.GetMajorDriverPort().Abort().Poll()) {
+            return;
+        }
     }
 
     // ZGenerationOld::collect processes non-strong references only after the

@@ -274,3 +274,40 @@ GC_TEST(MarkPort203Engine, AbortAndResizeRequestsStopFollowWork)
     GC_EXPECT_TRUE(domain.PollStop());
     workers.Stop();
 }
+
+// ZMark::drain/rebalance_work (zMark.cpp:468-485): stop following while
+// retaining unpublished work until the worker flushes and the phase joins.
+GC_TEST(MarkPort203Engine, AbortReturnsWithRemainingMarkWorkOwned)
+{
+    ZAbort abort;
+    MarkDomain domain(4, MarkingStacks::MarkingGeneration::MAJOR);
+    domain.BindAbort(&abort);
+    domain.PrepareWork(1);
+    MarkThreadLocalStacks stacks(4);
+    MarkContext context(1, 0, domain.Stripes(), stacks);
+    constexpr size_t count = 64;
+    for (size_t i = 0; i < count; ++i) {
+        stacks.Push(domain.Stripes(), 0, Entry(i), true);
+    }
+    size_t followed = 0;
+    const auto result = MarkEngine::FollowWork(context, domain.Smr(), domain.Stripes(), domain.Terminate(),
+        0, false, [&](const MarkStackEntry&) {
+            ++followed;
+            abort.Request();
+        }, nullptr, nullptr, &domain);
+    GC_EXPECT_TRUE(result == MarkEngine::Result::Aborted);
+    GC_EXPECT_EQ(followed, 1u);
+    (void)stacks.Flush(domain.Stripes(), true);
+    context.Cache().Flush();
+    GC_EXPECT_EQ(domain.Stripes().Population(), count - followed);
+    GC_EXPECT_TRUE(domain.PollStop());
+
+    // Explicitly resume only the test's token. A cancelled product request
+    // returns to the driver and never resets its token to consume this work.
+    abort.Reset();
+    domain.PrepareWork(1);
+    const auto resumed = MarkEngine::FollowWork(context, domain.Smr(), domain.Stripes(), domain.Terminate(),
+        0, false, [&](const MarkStackEntry&) { ++followed; }, nullptr, nullptr, &domain);
+    GC_EXPECT_TRUE(resumed == MarkEngine::Result::Completed);
+    GC_EXPECT_EQ(followed, count);
+}
