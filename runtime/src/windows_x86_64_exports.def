@@ -933,7 +933,6 @@ EXPORTS
     _Z6printfPKcz @926
     _Z7fprintfP6_iobufPKcz @927
     _ZGVZN12MapleRuntime10RegionInfo10NullRegionEvE10nullRegion @928 DATA
-    _ZGVZN12MapleRuntime10RegionInfo13AdmitForRouteEPNS_10BaseObjectEE13nullRouteDiag @929 DATA
     _ZGVZN12MapleRuntime10WCollector17PlainRootsEnabledEvE2on @930 DATA
     _ZGVZN12MapleRuntime11CpuProfiler11GetInstanceEvE8instance @931 DATA
     _ZGVZN12MapleRuntime13RegionManager13CollectRegionEPNS_10RegionInfoEE5probe @932 DATA
@@ -1065,10 +1064,8 @@ EXPORTS
     _ZN12MapleRuntime10RegionInfo24PreserveRetainedLiveInfoEv @1062
     _ZN12MapleRuntime10RegionInfo26VisitLiveObjectsUntilFalseEOKNSt3__18functionIFbPNS_10BaseObjectEEEE @1064
     _ZN12MapleRuntime10RegionInfo27BindLiveInfo0FromLiveIfNullEv @1065
-    _ZN12MapleRuntime10RegionInfo13AdmitForRouteEPNS_10BaseObjectE @1066
     _ZN12MapleRuntime10RegionInfo28PreserveRetainedLiveInfoUpToEy @1067
     _ZN12MapleRuntime10RegionInfo30LARGE_OBJECT_DEFAULT_THRESHOLDE @1068 DATA
-    _ZN12MapleRuntime10RegionInfo8GetRouteENS_11RouteTicketE @1069
     _ZN12MapleRuntime10RegionInfo8UnitInfo12ToFreeRegionEv @1070
     _ZN12MapleRuntime10RegionInfo8UnitInfo13GetUnitInfoAtEy @1071
     _ZN12MapleRuntime10RegionInfo8UnitInfo14totalUnitCountE @1072 DATA
@@ -2942,8 +2939,6 @@ EXPORTS
     _ZThn56_NK12MapleRuntime11EHFrameInfo5GetFAEv @3232
     _ZThn56_NK12MapleRuntime11EHFrameInfo5GetIPEv @3233
     _ZZN12MapleRuntime10RegionInfo10NullRegionEvE10nullRegion @3234 DATA
-    _ZZN12MapleRuntime10RegionInfo13AdmitForRouteEPNS_10BaseObjectEE13nullRouteDiag @3235 DATA
-    _ZZN12MapleRuntime10RegionInfo13AdmitForRouteEPNS_10BaseObjectEE16g_nullRouteDiagN @3236 DATA
     _ZZN12MapleRuntime10WCollector17PlainRootsEnabledEvE2on @3237 DATA
     _ZZN12MapleRuntime11CpuProfiler11GetInstanceEvE8instance @3238 DATA
     _ZZN12MapleRuntime13RegionManager13CollectRegionEPNS_10RegionInfoEE5probe @3239 DATA

@@ -1172,24 +1172,8 @@ inline void RegionInfo::InitializeSegments(uintptr_t metadataEnd, const std::vec
         pageOwners.Reset();
         CHECK(pageOwners.Initialize(ranges.front().start, ranges.back().End() - ranges.front().start, UNIT_SIZE));
         // routedest: per-unit metadata is per-page metadata, so any growth here is a
-        // percentage of the whole heap. Nobody had measured it; report it once so the cost
-        // of routeDestHold (one byte, expected to land in existing padding) is a number
-        // rather than an assumption. Paired with the static_assert below.
-        // routedest: per-unit metadata is per-page metadata, so growth here is a percentage
-        // of the whole heap. Measured on x86_64 at main 0626ab83: 192 bytes without
-        // routeDestHold, and 192 with it at its current placement — the flag is free.
-        // Pinned so that a future field addition has to be a deliberate edit rather than a
-        // silent heap-wide cost, and so that anyone who moves routeDestHold "somewhere more
-        // readable" finds out immediately.
-        // genface: the independent young mark epoch costs 8 bytes per 4 KiB
-        // unit (0.195% of heap capacity); both bitmap faces remain lazy.
-        // markwater: the current mark-start pointer is page-owned; the copied
-        // from-page watermark is carried by ZForwarding.
-        // lifeclock: independent 64-bit region identity plus the five region-local
-        // Moving the old top/livemap view to ZForwarding removes it from every
-        // reusable UnitInfo; pin the resulting heap-wide metadata cost.
-        // A07 stores objects/bytes only in the page livemap.
-        static_assert(sizeof(UnitInfo) == 232, "per-unit metadata size changed; it is per-page, so price it");
+        // D03b removes the two pointer-sized parallel route tables (16 bytes/unit).
+        static_assert(sizeof(UnitInfo) == 216, "per-unit metadata size changed; it is per-page, so price it");
     }
 
 inline size_t RegionInfo::FindUnitIndex(uintptr_t address)
@@ -1480,165 +1464,34 @@ inline void RegionInfo::InitFreeUnits()
         }
     }
 
-inline ATTR_WARN_UNUSED OptionalRouteTicket RegionInfo::AdmitForRoute(BaseObject* fromObj)
-    {
-        if (fromObj == nullptr) {
-            return OptionalRouteTicket();
-        }
-        MAddress fromAddress = reinterpret_cast<MAddress>(fromObj);
-        if (fromAddress < GetRegionStart() || fromAddress >= GetRegionEnd() ||
-            (fromAddress & (kMarkedBytesPerBit - 1)) != 0) {
-            return OptionalRouteTicket();
-        }
-        size_t offset = GetAddressOffset(fromAddress);
-        if (!IsForwardingDone()) {
-            return OptionalRouteTicket();
-        }
 
-        const ForwardingTable::LookupResult lookup = ForwardingTable::LookupForwarding(fromAddress, ForwardingTable::RetainPageOwner(this).get());
-        if (lookup.to != 0 && lookup.answer == ForwardingTable::ToAnswer::ArmedHit) {
-            return OptionalRouteTicket(fromObj);
-        }
 
-        CompactRouteTable* compact = LoadCompactRouteTable();
-        if (IsCompacted()) {
-            if (compact == nullptr) {
-                return OptionalRouteTicket();
-            }
-            return compact->find(offset) == compact->end()
-                ? OptionalRouteTicket() : OptionalRouteTicket(fromObj);
-        }
 
-        const RouteStartTable* starts = LoadRouteStartTable();
-        if (starts == nullptr || starts->find(offset) == starts->end()) {
-            return OptionalRouteTicket();
-        }
-        return OptionalRouteTicket(fromObj);
-    }
 
-inline BaseObject* RegionInfo::GetRoute(RouteTicket t)
-    {
-        BaseObject* fromObj = t.From();
-        MAddress fromAddress = reinterpret_cast<MAddress>(fromObj);
-        const ForwardingTable::LookupResult lookup = ForwardingTable::LookupForwarding(fromAddress, ForwardingTable::RetainPageOwner(this).get());
-        if (lookup.to != 0 && lookup.answer == ForwardingTable::ToAnswer::ArmedHit) {
-            return from_region_addr(lookup.to);
-        }
-        (void)fromObj;
-        return nullptr;
-    }
 
-inline void RegionInfo::FreeCompactRouteTable()
-    {
-        CompactRouteTable* table = static_cast<CompactRouteTable*>(
-            __atomic_exchange_n(&metadata.compactRouteTable, static_cast<void*>(nullptr), __ATOMIC_ACQ_REL));
-        if (table != nullptr) {
-            RetireCompactRouteTable(table);
-        }
-    }
 
-inline void RegionInfo::EnsureCompactRouteTable()
-    {
-        if (LoadCompactRouteTable() == nullptr) {
-            CompactRouteTable* table = new CompactRouteTable();
-            void* expected = nullptr;
-            if (!__atomic_compare_exchange_n(&metadata.compactRouteTable, &expected, static_cast<void*>(table),
-                                             false, __ATOMIC_RELEASE, __ATOMIC_ACQUIRE)) {
-                delete table;
-            }
-        }
-    }
 
-inline void RegionInfo::RecordCompactRoute(size_t fromOff, MAddress dest)
-    {
-        EnsureCompactRouteTable();
-        CompactRouteTable* table = LoadCompactRouteTable();
-        CHECK(table != nullptr);
-        (*table)[fromOff] = dest;
-        RecordRouteStart(fromOff);
-    }
 
-inline void RegionInfo::EnsureRouteStartTable()
-    {
-        if (LoadRouteStartTable() == nullptr) {
-            RouteStartTable* table = new RouteStartTable();
-            void* expected = nullptr;
-            if (!__atomic_compare_exchange_n(&metadata.routeStartTable, &expected, static_cast<void*>(table),
-                                             false, __ATOMIC_RELEASE, __ATOMIC_ACQUIRE)) {
-                delete table;
-            }
-        }
-    }
 
-inline void RegionInfo::RecordRouteStart(size_t fromOff)
-    {
-        EnsureRouteStartTable();
-        RouteStartTable* table = LoadRouteStartTable();
-        CHECK(table != nullptr);
-        (*table)[fromOff] = 1;
-    }
 
-inline void RegionInfo::ResetRouteStartTable()
-    {
-        EnsureRouteStartTable();
-        RouteStartTable* table = LoadRouteStartTable();
-        CHECK(table != nullptr);
-        table->clear();
-    }
 
-inline void RegionInfo::FreeRouteStartTable()
-    {
-        RouteStartTable* table = static_cast<RouteStartTable*>(
-            __atomic_exchange_n(&metadata.routeStartTable, static_cast<void*>(nullptr), __ATOMIC_ACQ_REL));
-        delete table;
-    }
 
-inline BaseObject* RegionInfo::LookupCompactRoute(size_t fromOff, const CompactRouteTable* table) const
-    {
-        auto it = table->find(fromOff);
-        if (it == table->end()) {
-            return nullptr;
-        }
-        return from_region_addr(it->second);
-    }
+
+
+
+
+
+
+
 
 inline bool RegionInfo::IsCompactRouteDestination(MAddress address) const
     {
-        // In-place relocation publishes done after the last insert
-        // (zRelocate.cpp:1137-1152). Compacted destinations are visible then.
-        if (!IsCompacted()) {
-            return false;
-        }
-        const CompactRouteTable* table = LoadCompactRouteTable();
-        if (table == nullptr) {
-            return false;
-        }
-        return std::any_of(table->begin(), table->end(),
-                           [address](const auto& route) { return route.second == address; });
+        // The generation relocation set owns the sole from-to mapping.
+        auto owner = ForwardingTable::RetainPageOwner(this);
+        return IsCompacted() && owner && owner->find_from_by_to(address, nullptr);
     }
 
-inline void RegionInfo::AdvanceCompactRouteTableGracePeriod()
-    {
-        std::vector<CompactRouteTable*> ready;
-        {
-            std::lock_guard<std::mutex> lock(CompactRouteTableRetireMutex());
-            uint64_t& generation = CompactRouteTableGraceGeneration();
-            ++generation;
-            auto& retired = RetiredCompactRouteTables();
-            auto it = retired.begin();
-            while (it != retired.end()) {
-                if (generation - it->generation >= 2) {
-                    ready.push_back(it->table);
-                    it = retired.erase(it);
-                } else {
-                    ++it;
-                }
-            }
-        }
-        for (CompactRouteTable* table : ready) {
-            delete table;
-        }
-    }
+
 
 
 
@@ -1731,13 +1584,7 @@ inline void RegionInfo::PrepareForwardableRegion(MarkView<G> view)
         // Shared boundary: publish immutable from-page metadata, forwarding
         // construction token, and ghost membership through one product edge.
         PublishForwardingCarrier(view);
-        // Freeze exact starts while allocation headers are still readable.
-        // The coverage bitmap cannot reconstruct this set after relocation.
-        ResetRouteStartTable();
-        (void)VisitLiveObjectsUntilFalse([this](BaseObject* object) {
-            RecordRouteStart(GetAddressOffset(reinterpret_cast<MAddress>(object)));
-            return true;
-        });
+
     }
 
 inline void RegionInfo::ClearGhostRegionBit()
@@ -1773,7 +1620,6 @@ inline void RegionInfo::DispelGhostFromRegion()
         // Count what we would be invalidating. Default off; never blocks.
 
         // portmutreloc: hold the forwarding drain across the whole body. It is held
-        // for the whole body so that FreeCompactRouteTable below -- ZGC's free_page -- cannot
         // run while a retained reader is inside the route lookup or a mutator copy.
         InPlaceClaimScope drain(this, ZForwardingLife::Retire::DISPEL_GHOST);
         // PORT_ZFORWARDING step 1: the retirement edge.  ZGC's equivalent is refcount-driven
@@ -1795,7 +1641,6 @@ inline void RegionInfo::DispelGhostFromRegion()
              static_cast<unsigned>(IsYoungRegion()));
         // Publish route retirement before detaching the table. A reader that observes
         // the atomic nullptr then also observes NORMAL and soft-misses in GetRoute.
-        FreeCompactRouteTable();
         SetMarkFaceSealed(false);
         // The old top/livemap disappeared with the forwarding carrier above;
         // only page-owned ghost/route state is reset in this body.
@@ -1964,12 +1809,7 @@ inline void RegionInfo::SetTraceRegionFlag(uint8_t flag)
         }
     }
 
-inline void RegionInfo::SetRouteDestHold(uint8_t flag)
-    {
-        uint8_t cur = __atomic_load_n(&metadata.routeDestHold, __ATOMIC_RELAXED);
-        uint8_t next = static_cast<uint8_t>((cur & ~1u) | (flag != 0 ? 1u : 0u));
-        __atomic_store_n(&metadata.routeDestHold, next, __ATOMIC_RELEASE);
-    }
+
 
 inline void RegionInfo::SetInGhostRegion(uint8_t flag)
     {
@@ -2399,35 +2239,15 @@ inline void RegionInfo::RemoveFromList()
         this->SetPrevRegion(nullptr);
     }
 
-inline RegionInfo::CompactRouteTable* RegionInfo::LoadCompactRouteTable() const
-    {
-        return static_cast<CompactRouteTable*>(
-            __atomic_load_n(&metadata.compactRouteTable, __ATOMIC_ACQUIRE));
-    }
 
-inline std::mutex& RegionInfo::CompactRouteTableRetireMutex()
-    {
-        static std::mutex mutex;
-        return mutex;
-    }
 
-inline uint64_t& RegionInfo::CompactRouteTableGraceGeneration()
-    {
-        static uint64_t generation = 0;
-        return generation;
-    }
 
-inline std::vector<RegionInfo::RetiredCompactRouteTable>& RegionInfo::RetiredCompactRouteTables()
-    {
-        static std::vector<RetiredCompactRouteTable> retired;
-        return retired;
-    }
 
-inline void RegionInfo::RetireCompactRouteTable(CompactRouteTable* table)
-    {
-        std::lock_guard<std::mutex> lock(CompactRouteTableRetireMutex());
-        RetiredCompactRouteTables().push_back({ table, CompactRouteTableGraceGeneration() });
-    }
+
+
+
+
+
 
 inline ALWAYS_INLINE void RegionInfo::CheckObjectSize(
         const BaseObject* obj, size_t objSize, MAddress regionStart, MAddress regionEnd) const
@@ -2488,10 +2308,9 @@ inline void RegionInfo::InitRegionInfo(size_t nUnit, UnitRole uClass)
         // reject the old incarnation; there is no wraparound fallback.
         BumpRegionLifeId();
         {
-            uint8_t cur = __atomic_load_n(&metadata.routeDestHold, __ATOMIC_RELAXED);
-            uint8_t seq = static_cast<uint8_t>(((cur >> 1) + 1) & 0x7f);
-            uint8_t next = static_cast<uint8_t>((cur & 1u) | (seq << 1));
-            __atomic_store_n(&metadata.routeDestHold, next, __ATOMIC_RELEASE);
+            uint8_t cur = __atomic_load_n(&metadata.regionLifeSequence, __ATOMIC_RELAXED);
+            uint8_t next = static_cast<uint8_t>((cur + 1) & 0x7f);
+            __atomic_store_n(&metadata.regionLifeSequence, next, __ATOMIC_RELEASE);
         }
         // See DispelGhostFromRegion: retire the route before detaching its compact table.
         ForwardingTable::ClearPageOwner(this);
@@ -2513,8 +2332,6 @@ inline void RegionInfo::InitRegionInfo(size_t nUnit, UnitRole uClass)
         metadata.censusBoundaryOffset = 0;
         metadata.liveInfo = nullptr;
         ClearCurrentMarkFace();
-        FreeCompactRouteTable();
-        FreeRouteStartTable();
         FreeRetainedMarkWords();
         metadata.retainedLiveInfo = nullptr;
         metadata.retainedLiveInfoEpoch = 0;

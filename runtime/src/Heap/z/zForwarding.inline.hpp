@@ -159,55 +159,31 @@ inline MAddress ZForwarding::find(MAddress from) const
                 return _heapBase + static_cast<MAddress>(entry.to_offset());
             }
         }
-        std::lock_guard<std::mutex> lock(_overflowLock);
-        auto found = _overflow.find(from);
-        return found == _overflow.end() ? 0 : found->second;
+        return 0;
     }
 }
 
 namespace MapleRuntime {
-inline size_t ZForwarding::insert(uintptr_t fromIndex, size_t toOffset, ForwardingCursor* cursor, bool* installed )
+inline size_t ZForwarding::insert(uintptr_t fromIndex, size_t toOffset, ForwardingCursor* cursor, bool* installed)
     {
-        const ForwardingEntry neu(fromIndex, toOffset);
+        const ForwardingEntry entryToInstall(fromIndex, toOffset);
         std::atomic_thread_fence(std::memory_order_release);
-        auto* words = entries();
-        for (size_t attempt = 0; attempt < _entries.length(); ++attempt) {
+        for (;;) {
             uint64_t expected = 0;
-            if (words[*cursor].compare_exchange_strong(expected, neu.raw(), std::memory_order_release,
-                                                       std::memory_order_relaxed)) {
-                if (installed != nullptr) {
-                    *installed = true;
-                }
-                return toOffset;
-            }
-            ForwardingEntry prev = ForwardingEntry::FromRaw(expected);
-            if (!prev.populated()) {
+            if (entries()[*cursor].compare_exchange_strong(expected, entryToInstall.raw(),
+                    std::memory_order_release, std::memory_order_relaxed)) {
+                if (installed != nullptr) *installed = true;
                 return toOffset;
             }
             ForwardingEntry entry = at(cursor);
-            bool full = true;
-            for (size_t probes = 0; probes < _entries.length() && entry.populated(); ++probes) {
+            while (entry.populated()) {
                 if (entry.from_index() == fromIndex) {
-                    if (installed != nullptr) {
-                        *installed = false;
-                    }
+                    if (installed != nullptr) *installed = false;
                     return entry.to_offset();
                 }
                 entry = next(cursor);
             }
-            if (!entry.populated()) {
-                full = false;
-            }
-            if (full) {
-                break;
-            }
         }
-        // Preserve the pre-existing attached-array refusal diagnostic while
-        // separately recording that the total receipt path fell back to the
-        // exact-key map.
-        FullRefusals().fetch_add(1, std::memory_order_relaxed);
-        FullFallbacks().fetch_add(1, std::memory_order_relaxed);
-        return kNotStored;
     }
 }
 
@@ -273,9 +249,6 @@ inline ZForwarding::ZForwarding(RegionInfo* page, MAddress start, MAddress heapB
           _ref_lock(),
           _ref_count(1),
           _done(false),
-          _overflowLock(),
-          _overflow(),
-          _receiptInstallLock(),
           _from_page(),
           _relocated_remembered_fields_state(ZPublishState::none),
           _relocated_remembered_fields_publish_young_seqnum(0)

@@ -347,8 +347,7 @@ inline RegionInfo* RegionManager::TakeReclaimableGarbageRegion(size_t* gatedByte
              region = region->GetNextRegion()) {
             if (region->IsGhostFromRegion()) {
                 bytes += region->GetGhostRegionSize();
-            } else if (candidate == nullptr && region->GetRawPointerObjectCount() == 0 &&
-                       !RouteDestHold::HoldsBack(region, RouteDestHold::Site::TAKE_GARBAGE)) {
+            } else if (candidate == nullptr && region->GetRawPointerObjectCount() == 0) {
                 // routedest: defence in depth. A held region should never have reached
                 // garbageRegionList — the two Assemble gates and the two young gates refuse
                 // it first — so a non-zero count at this site means one of those was
@@ -381,8 +380,7 @@ inline bool RegionManager::TryTakeGarbageRegionAfterDispel(RegionInfo* target)
                 CHECK(!region->IsGhostFromRegion());
                 // routedest: refuse a held region here too, so it is neither quarantined nor
                 // reclaimed. Same defence-in-depth role as TakeReclaimableGarbageRegion.
-                if (region->GetRawPointerObjectCount() > 0 ||
-                    RouteDestHold::HoldsBack(region, RouteDestHold::Site::TAKE_AFTER_DISPEL)) {
+                if (region->GetRawPointerObjectCount() > 0) {
                     return false;
                 }
                 RemoveRegionLocked(&garbageRegionList, region);
@@ -546,38 +544,11 @@ private:
     RegionManager& regionManager;
     RegionList& fromRegionList;
 };
-inline bool RegionManager::RouteIsPublished(BaseObject* fromObj, RegionInfo* fromRegionInfo)
-    {
-        if (fromObj != nullptr && fromObj->IsForwarded()) {
-            return true;
-        }
-        if (fromRegionInfo == nullptr) {
-            return false;
-        }
-        return fromRegionInfo->IsForwardingDone();
-    }
 
-inline PublishedRoute RegionManager::FindPublishedRoute(BaseObject* fromObj, RegionInfo* fromRegionInfo)
-    {
-        BaseObject* to = ComputeRoute(fromObj, fromRegionInfo);
-        if (to == nullptr || !RouteIsPublished(fromObj, fromRegionInfo)) {
-            return PublishedRoute{ nullptr };
-        }
-        return PublishedRoute{ to };
-    }
 
-inline PublishedRoute RegionManager::FindPublishedRoute(BaseObject* fromObj)
-    {
-        RegionInfo* fromRegionInfo = RegionInfo::GetGhostFromRegionAt(reinterpret_cast<MAddress>(fromObj));
-        if (fromRegionInfo == nullptr) {
-            return PublishedRoute{ nullptr };
-        }
-        BaseObject* to = ComputeRoute(fromObj, fromRegionInfo);
-        if (to == nullptr || !RouteIsPublished(fromObj, fromRegionInfo)) {
-            return PublishedRoute{ nullptr };
-        }
-        return PublishedRoute{ to };
-    }
+
+
+
 
 inline bool RegionManager::RouteRegion(RegionInfo* fromRegionInfo, bool mayWait)
     {
@@ -628,28 +599,9 @@ inline bool RegionManager::RouteRegion(RegionInfo* fromRegionInfo, bool mayWait)
         }
     }
 
-inline BaseObject* RegionManager::ComputeRoute(BaseObject* fromObj, RegionInfo* fromRegionInfo)
-    {
-        RegionInfo::RetainScope retain(fromRegionInfo);
-        if (!retain.ok()) {
-            return nullptr;
-        }
 
-        return ComputeRouteBorrowed(fromObj, fromRegionInfo);
-    }
 
-inline BaseObject* RegionManager::ComputeRouteBorrowed(BaseObject* fromObj, RegionInfo* fromRegionInfo)
-    {
-        if (RouteRegion(fromRegionInfo, false) || fromRegionInfo->IsCompacted()) {
-            OptionalRouteTicket ticket = fromRegionInfo->AdmitForRoute(fromObj);
-            if (!ticket) {
-                return nullptr;
-            }
-            BaseObject* to = fromRegionInfo->GetRoute(ticket.value());
-            return to;
-        }
-        return nullptr;
-    }
+
 
 } // namespace MapleRuntime
 #endif

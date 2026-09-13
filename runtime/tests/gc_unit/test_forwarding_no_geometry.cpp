@@ -64,7 +64,6 @@ GC_TEST(ForwardingNoGeometry, ArmedMissIsNullNotGeometry)
     fx.region0->BindLiveInfo0FromLiveIfNull();
 
     const MAddress from = reinterpret_cast<MAddress>(fx.obj0);
-    fx.region0->RecordRouteStart(offset);
     if (!ForwardingTable::EntriesArmed(from)) {
         // The one-shot map may carry the preceding test's sealed generation.
         // Reopening is explicit; SetRegionType must not do it implicitly.
@@ -79,7 +78,7 @@ GC_TEST(ForwardingNoGeometry, ArmedMissIsNullNotGeometry)
     GC_EXPECT_TRUE(ForwardingTable::EntriesArmed(from));
     GC_EXPECT_TRUE(ForwardingTable::GetEntries(from)->is_provisional());
 
-    BaseObject* geometric = fx.region0->GetRouteForProbe(fx.obj0);
+    BaseObject* geometric = reinterpret_cast<BaseObject*>(ForwardingTable::LookupForwarding(reinterpret_cast<MAddress>(fx.obj0), ForwardingTable::RetainPageOwner(fx.region0).get()).to);
     GC_EXPECT_TRUE(geometric == nullptr);
     ForwardingTable::LookupResult lookup = ForwardingTable::LookupTo(from);
     const MAddress looked = lookup.to;
@@ -127,7 +126,6 @@ GC_TEST(ForwardingNoGeometry, ArmedLookupAndSuccessfulExclusiveCopyPublishProduc
     fx.region0->BindLiveInfo0FromLiveIfNull();
 
     const MAddress from = reinterpret_cast<MAddress>(fx.obj0);
-    fx.region0->RecordRouteStart(offset);
     if (!ForwardingTable::EntriesArmed(from)) {
         // The preceding test sealed this address range. Only an explicit cycle
         // boundary may install this test's provisional carrier.
@@ -142,7 +140,7 @@ GC_TEST(ForwardingNoGeometry, ArmedLookupAndSuccessfulExclusiveCopyPublishProduc
     GC_EXPECT_TRUE(ForwardingTable::EntriesArmed(from));
     GC_EXPECT_TRUE(ForwardingTable::GetEntries(from)->is_provisional());
 
-    BaseObject* geometric = fx.region0->GetRouteForProbe(fx.obj0);
+    BaseObject* geometric = reinterpret_cast<BaseObject*>(ForwardingTable::LookupForwarding(reinterpret_cast<MAddress>(fx.obj0), ForwardingTable::RetainPageOwner(fx.region0).get()).to);
     GC_EXPECT_TRUE(geometric == nullptr);
 
     ForwardingTable::LookupResult lookup = ForwardingTable::LookupTo(from);

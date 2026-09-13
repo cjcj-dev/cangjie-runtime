@@ -28,7 +28,6 @@
 #include "SafepointPageManager.h"
 #endif
 #include "ThreadLocal.h"
-#include "Heap/Allocator/RoutePublish.h"
 #include "schedule.h"
 
 namespace MapleRuntime {
@@ -471,7 +470,6 @@ public:
 
     uint64_t GetElapsedTime() const { return TimeUtil::NanoSeconds() - startTime; }
 
-    StwRouteToken route_plan_token() const { return StwRouteToken(); }
 
 private:
     const char* reason = nullptr;

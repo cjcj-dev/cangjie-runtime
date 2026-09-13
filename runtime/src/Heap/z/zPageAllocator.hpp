@@ -366,7 +366,6 @@ private:
 #include "Base/Log.h"
 #include "Common/BaseObject.h"
 #include "Common/ColourEncoding.h"
-#include "Heap/Allocator/RoutePublish.h"
 #include "Common/RunType.h"
 
 #include "Heap/z/zRangeRegistry.hpp"
@@ -757,16 +756,11 @@ public:
     // twoflags: walk live region lists and clear notRelocatableThisCycle.
     void ClearNotRelocatableThisCycleFlags();
 
-    // routedest: walk the same lists and drop routeDestHold for one route generation.
-    void ClearRouteDestHoldFlags();
 
     bool RelocateClaimedPage(RegionInfo* region);
 
-    static bool RouteIsPublished(BaseObject* fromObj, RegionInfo* fromRegionInfo);
 
-    PublishedRoute FindPublishedRoute(BaseObject* fromObj, RegionInfo* fromRegionInfo);
 
-    PublishedRoute FindPublishedRoute(BaseObject* fromObj);
 
     bool RouteRegion(RegionInfo* fromRegionInfo, bool mayWait = true);
 
@@ -795,9 +789,7 @@ private:
     void ReleaseRetiredRegion(RegionInfo* region);
     void ReturnRetiredPageMemory(const PageMemory& memory, bool allowSaferegion = true);
 
-    BaseObject* ComputeRoute(BaseObject* fromObj, RegionInfo* fromRegionInfo);
 
-    BaseObject* ComputeRouteBorrowed(BaseObject* fromObj, RegionInfo* fromRegionInfo);
 
     RegionInfo* TakeReclaimableGarbageRegion(size_t* gatedBytes = nullptr);
 

@@ -185,7 +185,6 @@ class ZForwarding {
 public:
     using AttachedArray = ZAttachedArray<ZForwarding, std::atomic<uint64_t>>;
     static constexpr uint32_t kAlignShift = 3;
-    static constexpr size_t kNotStored = SIZE_MAX;
 
     struct Receipt {
         enum class Status : uint8_t {
@@ -309,15 +308,6 @@ public:
                 return true;
             }
         }
-        std::lock_guard<std::mutex> lock(_overflowLock);
-        for (const auto& kv : _overflow) {
-            if (kv.second == to) {
-                if (fromOut != nullptr) {
-                    *fromOut = kv.first;
-                }
-                return true;
-            }
-        }
         return false;
     }
 
@@ -334,84 +324,27 @@ public:
                 fn(_start + (static_cast<MAddress>(entry.from_index()) << kAlignShift));
             }
         }
-        std::lock_guard<std::mutex> lock(_overflowLock);
-        for (const auto& kv : _overflow) {
-            fn(kv.first);
-        }
+
     }
 
     size_t insert(uintptr_t fromIndex, size_t toOffset, ForwardingCursor* cursor, bool* installed = nullptr);
 
-    static std::atomic<uint64_t>& FullFallbacks()
-    {
-        static std::atomic<uint64_t> n{ 0 };
-        return n;
-    }
-
-    // Preserve the pre-existing diagnostic contract. These count refusal by
-    // the bounded attached array; fallback counters below count the successful
-    // exact-key continuation of that same event.
-    static std::atomic<uint64_t>& FullRefusals()
-    {
-        static std::atomic<uint64_t> n{ 0 };
-        return n;
-    }
-
-    static std::atomic<uint64_t>& OverflowFallbacks()
-    {
-        static std::atomic<uint64_t> n{ 0 };
-        return n;
-    }
-
-    static std::atomic<uint64_t>& OverflowRefusals()
-    {
-        static std::atomic<uint64_t> n{ 0 };
-        return n;
-    }
-
     Receipt insert_receipt(MAddress from, MAddress to, const std::function<void()>& beforeFirstCas = {})
     {
+        // zForwarding.inline.hpp:267-300: one attached array and one CAS winner.
         ForwardingCursor cursor = 0;
         const uintptr_t fromIndex = index(from);
         const size_t toOffset = static_cast<size_t>(to - _heapBase);
-        const bool encodable = fromIndex <= ForwardingEntry::kMaxFromIndex &&
-            toOffset <= ForwardingEntry::kMaxToOffset;
-        if (encodable) {
-            const ForwardingEntry existing = find(fromIndex, &cursor);
-            if (existing.populated()) {
-                return Receipt{ _heapBase + static_cast<MAddress>(existing.to_offset()), false,
-                                Receipt::Status::EXISTING };
-            }
-            if (beforeFirstCas) {
-                beforeFirstCas();
-            }
-            bool installed = false;
-            const size_t finalOff = insert(fromIndex, toOffset, &cursor, &installed);
-            if (finalOff != kNotStored) {
-                return Receipt{ _heapBase + static_cast<MAddress>(finalOff), installed,
-                                installed ? Receipt::Status::INSTALLED : Receipt::Status::EXISTING };
-            }
-        } else {
-            OverflowRefusals().fetch_add(1, std::memory_order_relaxed);
-            OverflowFallbacks().fetch_add(1, std::memory_order_relaxed);
+        const ForwardingEntry existing = find(fromIndex, &cursor);
+        if (existing.populated()) {
+            return Receipt{ _heapBase + static_cast<MAddress>(existing.to_offset()), false,
+                            Receipt::Status::EXISTING };
         }
-
-        // The attached array is deliberately bounded, but receipt installation is
-        // total. Rare estimate/encoding overflow lives in this per-forwarding map;
-        // readers consult it after the lock-free table. Recheck the primary table
-        // under the overflow lock so a concurrent CAS winner cannot be shadowed.
-        std::lock_guard<std::mutex> lock(_overflowLock);
-        if (encodable) {
-            ForwardingCursor retryCursor = 0;
-            const ForwardingEntry existing = find(fromIndex, &retryCursor);
-            if (existing.populated()) {
-                return Receipt{ _heapBase + static_cast<MAddress>(existing.to_offset()), false,
-                                Receipt::Status::EXISTING };
-            }
-        }
-        auto inserted = _overflow.emplace(from, to);
-        return Receipt{ inserted.first->second, inserted.second,
-                        inserted.second ? Receipt::Status::INSTALLED : Receipt::Status::EXISTING };
+        if (beforeFirstCas) beforeFirstCas();
+        bool installed = false;
+        const size_t finalOff = insert(fromIndex, toOffset, &cursor, &installed);
+        return Receipt{ _heapBase + static_cast<MAddress>(finalOff), installed,
+                        installed ? Receipt::Status::INSTALLED : Receipt::Status::EXISTING };
     }
 
     MAddress insert(MAddress from, MAddress to);
@@ -489,9 +422,6 @@ private:
     std::condition_variable _ref_changed;
     std::atomic<int32_t> _ref_count;
     std::atomic<bool> _done;
-    mutable std::mutex _overflowLock;
-    std::unordered_map<MAddress, MAddress> _overflow;
-    mutable std::mutex _receiptInstallLock;
     FromPageView _from_page;
     std::atomic<ZPublishState> _relocated_remembered_fields_state;
     std::vector<MAddress> _relocated_remembered_fields_array;

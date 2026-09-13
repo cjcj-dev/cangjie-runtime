@@ -102,25 +102,6 @@ bool ForwardingTable::Initialize(MAddress heapStart, size_t heapSize, size_t uni
     g_ready.store(true, std::memory_order_release);
     LOG(RTLOG_ERROR, "[FWDTABLE] armed base=%#zx size=%zu unit=%zu entries=%zu", static_cast<size_t>(heapStart),
         heapSize, unitSize, g_relocationSets[0].map.size());
-    static std::atomic<bool> dumped{ false };
-    bool expected = false;
-    if (dumped.compare_exchange_strong(expected, true, std::memory_order_relaxed)) {
-        std::atexit([]() {
-            std::fprintf(stderr,
-                         "[FWDTABLE][refuse] atexit full=%llu overflow=%llu fallbackFull=%llu "
-                         "fallbackOverflow=%llu armedHit=%llu armedMiss=%llu unarmed=%llu\n",
-                         static_cast<unsigned long long>(ZForwarding::FullRefusals().load(std::memory_order_relaxed)),
-                         static_cast<unsigned long long>(
-                             ZForwarding::OverflowRefusals().load(std::memory_order_relaxed)),
-                         static_cast<unsigned long long>(
-                             ZForwarding::FullFallbacks().load(std::memory_order_relaxed)),
-                         static_cast<unsigned long long>(
-                             ZForwarding::OverflowFallbacks().load(std::memory_order_relaxed)),
-                         static_cast<unsigned long long>(ForwardingTable::ArmedHitCount()),
-                         static_cast<unsigned long long>(ForwardingTable::ArmedMissCount()),
-                         static_cast<unsigned long long>(ForwardingTable::UnarmedCount()));
-        });
-    }
     return true;
 }
 
