@@ -23,8 +23,9 @@ struct PageQueueFixture {
     PageQueueFixture()
     {
         auto* page = heap.region0;
+        heap.InstallPageOwner(page);
         GC_EXPECT_TRUE(ForwardingTable::InstallPublicationBeforeCopy(
-            page->GetRegionStart(), page->GetRegionSize(), page, Generation::Young));
+            page->GetRegionStart(), page->GetRegionSize(), page, page->GetOwnerGeneration()));
         GC_EXPECT_TRUE(ForwardingTable::PublishFromPageView(page, nullptr, 1, page->GetRegionAllocPtr(),
             page->GetRegionStart(), 64, 1, 0, page->GetRegionLifeId()));
         owner = ForwardingTable::RetainPageOwner(page);
@@ -155,7 +156,7 @@ GC_TEST(RelocationPageQueue, EntryPublicationDoesNotCompleteThePage)
     (void)f.queue.WaitUntil(request.request, 1, &timedOut);
     GC_EXPECT_TRUE(timedOut);
     GC_EXPECT_FALSE(f.owner->is_done());
-    GC_EXPECT_EQ(ForwardingTable::FindTo(reinterpret_cast<MAddress>(f.heap.obj0), Generation::Young),
+    GC_EXPECT_EQ(ForwardingTable::FindTo(reinterpret_cast<MAddress>(f.heap.obj0), f.heap.region0->GetOwnerGeneration()),
                  reinterpret_cast<MAddress>(f.heap.obj1));
     f.Complete();
     (void)f.queue.WaitUntil(request.request, 1, &timedOut);
@@ -169,7 +170,8 @@ GC_TEST(RelocationPageQueue, ReleasedPageStillHasItsImmutableEntry)
     f.Publish();
     f.owner->release_page();
     GC_EXPECT_FALSE(f.owner->retain_page());
-    const auto answer = ForwardingTable::LookupTo(reinterpret_cast<MAddress>(f.heap.obj0), Generation::Young);
+    const auto answer = ForwardingTable::LookupTo(
+        reinterpret_cast<MAddress>(f.heap.obj0), f.heap.region0->GetOwnerGeneration());
     GC_EXPECT_TRUE(answer.answer == ForwardingTable::ToAnswer::ArmedHit);
     GC_EXPECT_EQ(answer.to, reinterpret_cast<MAddress>(f.heap.obj1));
     GC_EXPECT_FALSE(f.owner->is_done());
