@@ -1,0 +1,3 @@
+Automatic approval review failed: 403 Forbidden: This account only allows Codex official clients
+Actions not executed: supplemental completion adapter cleanup/commit; gh pr create
+Also not executed: exact report/evidence archive; sym_deliver DONE next_stage=Blocked

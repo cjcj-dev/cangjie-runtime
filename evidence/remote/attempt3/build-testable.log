@@ -1,0 +1,344 @@
+[1/9] Refreshing the runtime provenance stamp from the build-time tree state
+[2/9] Checking that a diagnostic documenting a gate is not an all-no-op implementation
+DIAG_HOLLOW_GUARD PASS gated_subsystems=27
+[3/9] Building CXX object CMakeFiles/runtime-provenance.dir/generated/RuntimeProvenance.cpp.o
+[4/9] Building CXX object src/Base/CMakeFiles/Base.dir/ZStat.cpp.o
+In file included from ../source/runtime/src/Base/ZStat.cpp:14:
+In file included from ../source/runtime/src/Heap/Heap.h:18:
+In file included from ../source/runtime/src/Heap/Collector/Collector.h:23:
+In file included from ../source/runtime/src/Heap/Collector/GcStats.h:18:
+In file included from ../source/runtime/src/Base/Panic.h:15:
+In file included from ../source/runtime/src/StackManager.h:15:
+In file included from ../source/runtime/src/StackMap/StackMap.h:11:
+In file included from ../source/runtime/src/StackMap/CompressedStackMap.h:15:
+In file included from ../source/runtime/src/StackMap/DerivedPtr.h:11:
+In file included from ../source/runtime/src/StackMap/StackMapTable.h:13:
+In file included from ../source/runtime/src/Base/LogFile.h:14:
+../source/runtime/src/Base/GcLog.h:263:45: warning: format string is not a string literal [-Wformat-nonliteral]
+        int n = vsnprintf(buf, sizeof(buf), format, args);
+                                            ^~~~~~
+In file included from ../source/runtime/src/Base/ZStat.cpp:16:
+In file included from ../source/runtime/src/Heap/Allocator/RegionManager.h:19:
+In file included from ../source/runtime/src/Heap/Allocator/AllocBuffer.h:18:
+In file included from ../source/runtime/src/Heap/Allocator/RegionList.h:11:
+In file included from ../source/runtime/src/Heap/Allocator/RegionInfo.h:44:
+../source/runtime/src/Heap/Verify/AllocPhaseDiag.h:57:1: warning: inline variables are a C++17 extension [-Wc++17-extensions]
+inline Slot g_table[kCap] = {};
+^
+../source/runtime/src/Heap/Verify/AllocPhaseDiag.h:58:1: warning: inline variables are a C++17 extension [-Wc++17-extensions]
+inline NearEntry g_near[kNearCap] = {};
+^
+In file included from ../source/runtime/src/Base/ZStat.cpp:16:
+In file included from ../source/runtime/src/Heap/Allocator/RegionManager.h:19:
+In file included from ../source/runtime/src/Heap/Allocator/AllocBuffer.h:18:
+In file included from ../source/runtime/src/Heap/Allocator/RegionList.h:11:
+In file included from ../source/runtime/src/Heap/Allocator/RegionInfo.h:50:
+In file included from ../source/runtime/src/Heap/Allocator/ForwardingTable.h:15:
+../source/runtime/src/Heap/Collector/ZForwarding.h:33:1: warning: class 'LiveInfo' was previously declared as a struct; this is valid, but may result in linker errors under the Microsoft C++ ABI [-Wmismatched-tags]
+class LiveInfo;
+^
+../source/runtime/src/Heap/Collector/LiveInfo.h:185:8: note: previous use is here
+struct LiveInfo {
+       ^
+../source/runtime/src/Heap/Collector/ZForwarding.h:33:1: note: did you mean struct here?
+class LiveInfo;
+^~~~~
+struct
+In file included from ../source/runtime/src/Base/ZStat.cpp:16:
+../source/runtime/src/Heap/Allocator/RegionManager.h:948:12: warning: constexpr if is a C++17 extension [-Wc++17-extensions]
+        if constexpr (G == Generation::Old) {
+           ^
+In file included from ../source/runtime/src/Base/ZStat.cpp:17:
+../source/runtime/src/Heap/Collector/GcTrigger.h:216:41: warning: comparing floating point with == or != is unsafe [-Wfloat-equal]
+    if (currentYoungGcTimePerBytesFreed == std::numeric_limits<double>::infinity()) {
+        ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~ ^  ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+6 warnings generated.
+[5/9] Linking CXX static library runtime-staging/ar/x86_64_Release/libBase.a
+[6/9] Building CXX object src/Heap/Collector/CMakeFiles/Collector.dir/CopyCollector.cpp.o
+In file included from ../source/runtime/src/Heap/Collector/CopyCollector.cpp:8:
+In file included from ../source/runtime/src/Heap/Collector/CopyCollector.h:11:
+In file included from ../source/runtime/src/Heap/Allocator/RegionSpace.h:19:
+In file included from ../source/runtime/src/Heap/Allocator/Allocator.h:11:
+In file included from ../source/runtime/src/Heap/Allocator/AllocBufferManager.h:15:
+In file included from ../source/runtime/src/Heap/Allocator/AllocBuffer.h:18:
+In file included from ../source/runtime/src/Heap/Allocator/RegionList.h:11:
+In file included from ../source/runtime/src/Heap/Allocator/RegionInfo.h:35:
+In file included from ../source/runtime/src/Base/Panic.h:15:
+In file included from ../source/runtime/src/StackManager.h:15:
+In file included from ../source/runtime/src/StackMap/StackMap.h:11:
+In file included from ../source/runtime/src/StackMap/CompressedStackMap.h:15:
+In file included from ../source/runtime/src/StackMap/DerivedPtr.h:11:
+In file included from ../source/runtime/src/StackMap/StackMapTable.h:13:
+In file included from ../source/runtime/src/Base/LogFile.h:14:
+../source/runtime/src/Base/GcLog.h:263:45: warning: format string is not a string literal [-Wformat-nonliteral]
+        int n = vsnprintf(buf, sizeof(buf), format, args);
+                                            ^~~~~~
+In file included from ../source/runtime/src/Heap/Collector/CopyCollector.cpp:8:
+In file included from ../source/runtime/src/Heap/Collector/CopyCollector.h:11:
+In file included from ../source/runtime/src/Heap/Allocator/RegionSpace.h:19:
+In file included from ../source/runtime/src/Heap/Allocator/Allocator.h:11:
+In file included from ../source/runtime/src/Heap/Allocator/AllocBufferManager.h:15:
+In file included from ../source/runtime/src/Heap/Allocator/AllocBuffer.h:18:
+In file included from ../source/runtime/src/Heap/Allocator/RegionList.h:11:
+In file included from ../source/runtime/src/Heap/Allocator/RegionInfo.h:44:
+../source/runtime/src/Heap/Verify/AllocPhaseDiag.h:57:1: warning: inline variables are a C++17 extension [-Wc++17-extensions]
+inline Slot g_table[kCap] = {};
+^
+../source/runtime/src/Heap/Verify/AllocPhaseDiag.h:58:1: warning: inline variables are a C++17 extension [-Wc++17-extensions]
+inline NearEntry g_near[kNearCap] = {};
+^
+In file included from ../source/runtime/src/Heap/Collector/CopyCollector.cpp:8:
+In file included from ../source/runtime/src/Heap/Collector/CopyCollector.h:11:
+In file included from ../source/runtime/src/Heap/Allocator/RegionSpace.h:19:
+In file included from ../source/runtime/src/Heap/Allocator/Allocator.h:11:
+In file included from ../source/runtime/src/Heap/Allocator/AllocBufferManager.h:15:
+In file included from ../source/runtime/src/Heap/Allocator/AllocBuffer.h:18:
+In file included from ../source/runtime/src/Heap/Allocator/RegionList.h:11:
+In file included from ../source/runtime/src/Heap/Allocator/RegionInfo.h:50:
+In file included from ../source/runtime/src/Heap/Allocator/ForwardingTable.h:15:
+../source/runtime/src/Heap/Collector/ZForwarding.h:33:1: warning: class 'LiveInfo' was previously declared as a struct; this is valid, but may result in linker errors under the Microsoft C++ ABI [-Wmismatched-tags]
+class LiveInfo;
+^
+../source/runtime/src/Heap/Collector/LiveInfo.h:185:8: note: previous use is here
+struct LiveInfo {
+       ^
+../source/runtime/src/Heap/Collector/ZForwarding.h:33:1: note: did you mean struct here?
+class LiveInfo;
+^~~~~
+struct
+In file included from ../source/runtime/src/Heap/Collector/CopyCollector.cpp:8:
+In file included from ../source/runtime/src/Heap/Collector/CopyCollector.h:11:
+In file included from ../source/runtime/src/Heap/Allocator/RegionSpace.h:22:
+../source/runtime/src/Heap/Allocator/RegionManager.h:948:12: warning: constexpr if is a C++17 extension [-Wc++17-extensions]
+        if constexpr (G == Generation::Old) {
+           ^
+In file included from ../source/runtime/src/Heap/Collector/CopyCollector.cpp:8:
+In file included from ../source/runtime/src/Heap/Collector/CopyCollector.h:13:
+../source/runtime/src/Heap/Collector/TracingCollector.h:407:20: warning: unused variable 'objSize' [-Wunused-variable]
+            size_t objSize = obj->GetSize();
+                   ^
+In file included from ../source/runtime/src/Heap/Collector/CopyCollector.cpp:17:
+../source/runtime/src/Heap/Collector/GcTrigger.h:216:41: warning: comparing floating point with == or != is unsafe [-Wfloat-equal]
+    if (currentYoungGcTimePerBytesFreed == std::numeric_limits<double>::infinity()) {
+        ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~ ^  ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+7 warnings generated.
+[7/9] Linking CXX static library runtime-staging/ar/x86_64_Release/libCollector.a
+[8/9] Checking that HeapSlot compare-exchange writes stay inside HealSlot
+HEAL_SLOT_GUARD PASS direct_calls=1 escaped=0 enum_sites=53 explicit_uses=81 other=0
+[9/9] Linking CXX shared library runtime-staging/lib/x86_64_Release/libcangjie-runtime.so
+RUNTIME_OUTPUT_PUBLISHED config=linux-x86_64-release-gcunit-171716aacd1e083edff6449f1417979ec567d9b9ef61dc03859930e9eb2641e5 lib_dir=/root/sym_cangjie_runtime_465_implement_r5651041991/source/runtime/output/temp/linux-x86_64-release-gcunit-171716aacd1e083edff6449f1417979ec567d9b9ef61dc03859930e9eb2641e5/lib/x86_64_Release runtime_sha256=064b9b447b1627f1fd908d5024e4ac9f160b9c3c60104ab8150e1b4e419f902e boundscheck_sha256=31cec902ab00f30d64aef5d04bdc54a2d91579689d94db4d5bf4108015025514
+OHOS header identity: rc=0 mismatch_rc=1 root=/tmp/gc-unit-gate-contract.9IhRtT/selected-output/include
+OHOS explicit ELF reuse: rc=0 receipt=PASS
+CONFIG selection: rc=0 mismatch_rc=2 id=linux-x86_64-release-default-111111111111
+TESTABLE=1 missing fixture: rc=2 reason=STARTED
+TESTABLE=0 explicit-skip control: rc=0 reason=EXPLICIT_SKIP
+TESTABLE=1 missing hook: rc=2 reason=STARTED
+GATE_TESTABLE_CONTRACT_OK
+DISCOVERY_RUN single/main/1 rc=0
+DISCOVERY_ASSERT_PASS single/main/1 exit-status
+DISCOVERY_ASSERT_PASS single/main/1 names
+DISCOVERY_ASSERT_PASS single/main/1 invalid-count
+DISCOVERY_ASSERT_PASS single/main/1 real-cases-completed
+DISCOVERY_ASSERT_PASS single/main/1 complete
+DISCOVERY_CASE single/main/1 failed=0
+DISCOVERY_RUN clean/main/1 rc=0
+DISCOVERY_ASSERT_PASS clean/main/1 exit-status
+DISCOVERY_ASSERT_PASS clean/main/1 names
+DISCOVERY_ASSERT_PASS clean/main/1 invalid-count
+DISCOVERY_ASSERT_PASS clean/main/1 real-cases-completed
+DISCOVERY_ASSERT_PASS clean/main/1 complete
+DISCOVERY_CASE clean/main/1 failed=0
+DISCOVERY_RUN stdout/main/1 rc=0
+DISCOVERY_ASSERT_PASS stdout/main/1 exit-status
+DISCOVERY_ASSERT_PASS stdout/main/1 names
+DISCOVERY_ASSERT_PASS stdout/main/1 invalid-count
+DISCOVERY_ASSERT_PASS stdout/main/1 real-cases-completed
+DISCOVERY_ASSERT_PASS stdout/main/1 complete
+DISCOVERY_ASSERT_PASS stdout/main/1 diagnostic-preserved
+DISCOVERY_CASE stdout/main/1 failed=0
+DISCOVERY_RUN stdout_plain/main/1 rc=0
+DISCOVERY_ASSERT_PASS stdout_plain/main/1 exit-status
+DISCOVERY_ASSERT_PASS stdout_plain/main/1 names
+DISCOVERY_ASSERT_PASS stdout_plain/main/1 invalid-count
+DISCOVERY_ASSERT_PASS stdout_plain/main/1 real-cases-completed
+DISCOVERY_ASSERT_PASS stdout_plain/main/1 complete
+DISCOVERY_ASSERT_PASS stdout_plain/main/1 diagnostic-preserved
+DISCOVERY_CASE stdout_plain/main/1 failed=0
+DISCOVERY_RUN stderr/main/1 rc=0
+DISCOVERY_ASSERT_PASS stderr/main/1 exit-status
+DISCOVERY_ASSERT_PASS stderr/main/1 names
+DISCOVERY_ASSERT_PASS stderr/main/1 invalid-count
+DISCOVERY_ASSERT_PASS stderr/main/1 real-cases-completed
+DISCOVERY_ASSERT_PASS stderr/main/1 complete
+DISCOVERY_ASSERT_PASS stderr/main/1 stderr-preserved
+DISCOVERY_CASE stderr/main/1 failed=0
+DISCOVERY_RUN empty/main/1 rc=2
+DISCOVERY_ASSERT_PASS empty/main/1 exit-status
+DISCOVERY_ASSERT_PASS empty/main/1 names
+DISCOVERY_ASSERT_PASS empty/main/1 invalid-count
+DISCOVERY_ASSERT_PASS empty/main/1 empty-rejected
+DISCOVERY_CASE empty/main/1 failed=0
+DISCOVERY_RUN grammar/main/1 rc=0
+DISCOVERY_ASSERT_PASS grammar/main/1 exit-status
+DISCOVERY_ASSERT_PASS grammar/main/1 names
+DISCOVERY_ASSERT_PASS grammar/main/1 invalid-count
+DISCOVERY_ASSERT_PASS grammar/main/1 real-cases-completed
+DISCOVERY_ASSERT_PASS grammar/main/1 complete
+DISCOVERY_CASE grammar/main/1 failed=0
+DISCOVERY_RUN single/main/2 rc=0
+DISCOVERY_ASSERT_PASS single/main/2 exit-status
+DISCOVERY_ASSERT_PASS single/main/2 names
+DISCOVERY_ASSERT_PASS single/main/2 invalid-count
+DISCOVERY_ASSERT_PASS single/main/2 real-cases-completed
+DISCOVERY_ASSERT_PASS single/main/2 complete
+DISCOVERY_CASE single/main/2 failed=0
+DISCOVERY_RUN clean/main/2 rc=0
+DISCOVERY_ASSERT_PASS clean/main/2 exit-status
+DISCOVERY_ASSERT_PASS clean/main/2 names
+DISCOVERY_ASSERT_PASS clean/main/2 invalid-count
+DISCOVERY_ASSERT_PASS clean/main/2 real-cases-completed
+DISCOVERY_ASSERT_PASS clean/main/2 complete
+DISCOVERY_CASE clean/main/2 failed=0
+DISCOVERY_RUN stdout/main/2 rc=0
+DISCOVERY_ASSERT_PASS stdout/main/2 exit-status
+DISCOVERY_ASSERT_PASS stdout/main/2 names
+DISCOVERY_ASSERT_PASS stdout/main/2 invalid-count
+DISCOVERY_ASSERT_PASS stdout/main/2 real-cases-completed
+DISCOVERY_ASSERT_PASS stdout/main/2 complete
+DISCOVERY_ASSERT_PASS stdout/main/2 diagnostic-preserved
+DISCOVERY_CASE stdout/main/2 failed=0
+DISCOVERY_RUN stdout_plain/main/2 rc=0
+DISCOVERY_ASSERT_PASS stdout_plain/main/2 exit-status
+DISCOVERY_ASSERT_PASS stdout_plain/main/2 names
+DISCOVERY_ASSERT_PASS stdout_plain/main/2 invalid-count
+DISCOVERY_ASSERT_PASS stdout_plain/main/2 real-cases-completed
+DISCOVERY_ASSERT_PASS stdout_plain/main/2 complete
+DISCOVERY_ASSERT_PASS stdout_plain/main/2 diagnostic-preserved
+DISCOVERY_CASE stdout_plain/main/2 failed=0
+DISCOVERY_RUN stderr/main/2 rc=0
+DISCOVERY_ASSERT_PASS stderr/main/2 exit-status
+DISCOVERY_ASSERT_PASS stderr/main/2 names
+DISCOVERY_ASSERT_PASS stderr/main/2 invalid-count
+DISCOVERY_ASSERT_PASS stderr/main/2 real-cases-completed
+DISCOVERY_ASSERT_PASS stderr/main/2 complete
+DISCOVERY_ASSERT_PASS stderr/main/2 stderr-preserved
+DISCOVERY_CASE stderr/main/2 failed=0
+DISCOVERY_RUN empty/main/2 rc=2
+DISCOVERY_ASSERT_PASS empty/main/2 exit-status
+DISCOVERY_ASSERT_PASS empty/main/2 names
+DISCOVERY_ASSERT_PASS empty/main/2 invalid-count
+DISCOVERY_ASSERT_PASS empty/main/2 empty-rejected
+DISCOVERY_CASE empty/main/2 failed=0
+DISCOVERY_RUN grammar/main/2 rc=0
+DISCOVERY_ASSERT_PASS grammar/main/2 exit-status
+DISCOVERY_ASSERT_PASS grammar/main/2 names
+DISCOVERY_ASSERT_PASS grammar/main/2 invalid-count
+DISCOVERY_ASSERT_PASS grammar/main/2 real-cases-completed
+DISCOVERY_ASSERT_PASS grammar/main/2 complete
+DISCOVERY_CASE grammar/main/2 failed=0
+DISCOVERY_RUN single/publication/1 rc=0
+DISCOVERY_ASSERT_PASS single/publication/1 exit-status
+DISCOVERY_ASSERT_PASS single/publication/1 names
+DISCOVERY_ASSERT_PASS single/publication/1 invalid-count
+DISCOVERY_ASSERT_PASS single/publication/1 real-cases-completed
+DISCOVERY_ASSERT_PASS single/publication/1 complete
+DISCOVERY_CASE single/publication/1 failed=0
+DISCOVERY_RUN clean/publication/1 rc=0
+DISCOVERY_ASSERT_PASS clean/publication/1 exit-status
+DISCOVERY_ASSERT_PASS clean/publication/1 names
+DISCOVERY_ASSERT_PASS clean/publication/1 invalid-count
+DISCOVERY_ASSERT_PASS clean/publication/1 real-cases-completed
+DISCOVERY_ASSERT_PASS clean/publication/1 complete
+DISCOVERY_CASE clean/publication/1 failed=0
+DISCOVERY_RUN stdout/publication/1 rc=0
+DISCOVERY_ASSERT_PASS stdout/publication/1 exit-status
+DISCOVERY_ASSERT_PASS stdout/publication/1 names
+DISCOVERY_ASSERT_PASS stdout/publication/1 invalid-count
+DISCOVERY_ASSERT_PASS stdout/publication/1 real-cases-completed
+DISCOVERY_ASSERT_PASS stdout/publication/1 complete
+DISCOVERY_ASSERT_PASS stdout/publication/1 diagnostic-preserved
+DISCOVERY_CASE stdout/publication/1 failed=0
+DISCOVERY_RUN stdout_plain/publication/1 rc=0
+DISCOVERY_ASSERT_PASS stdout_plain/publication/1 exit-status
+DISCOVERY_ASSERT_PASS stdout_plain/publication/1 names
+DISCOVERY_ASSERT_PASS stdout_plain/publication/1 invalid-count
+DISCOVERY_ASSERT_PASS stdout_plain/publication/1 real-cases-completed
+DISCOVERY_ASSERT_PASS stdout_plain/publication/1 complete
+DISCOVERY_ASSERT_PASS stdout_plain/publication/1 diagnostic-preserved
+DISCOVERY_CASE stdout_plain/publication/1 failed=0
+DISCOVERY_RUN stderr/publication/1 rc=0
+DISCOVERY_ASSERT_PASS stderr/publication/1 exit-status
+DISCOVERY_ASSERT_PASS stderr/publication/1 names
+DISCOVERY_ASSERT_PASS stderr/publication/1 invalid-count
+DISCOVERY_ASSERT_PASS stderr/publication/1 real-cases-completed
+DISCOVERY_ASSERT_PASS stderr/publication/1 complete
+DISCOVERY_ASSERT_PASS stderr/publication/1 stderr-preserved
+DISCOVERY_CASE stderr/publication/1 failed=0
+DISCOVERY_RUN empty/publication/1 rc=2
+DISCOVERY_ASSERT_PASS empty/publication/1 exit-status
+DISCOVERY_ASSERT_PASS empty/publication/1 names
+DISCOVERY_ASSERT_PASS empty/publication/1 invalid-count
+DISCOVERY_ASSERT_PASS empty/publication/1 empty-rejected
+DISCOVERY_CASE empty/publication/1 failed=0
+DISCOVERY_RUN grammar/publication/1 rc=0
+DISCOVERY_ASSERT_PASS grammar/publication/1 exit-status
+DISCOVERY_ASSERT_PASS grammar/publication/1 names
+DISCOVERY_ASSERT_PASS grammar/publication/1 invalid-count
+DISCOVERY_ASSERT_PASS grammar/publication/1 real-cases-completed
+DISCOVERY_ASSERT_PASS grammar/publication/1 complete
+DISCOVERY_CASE grammar/publication/1 failed=0
+DISCOVERY_RUN single/publication/2 rc=0
+DISCOVERY_ASSERT_PASS single/publication/2 exit-status
+DISCOVERY_ASSERT_PASS single/publication/2 names
+DISCOVERY_ASSERT_PASS single/publication/2 invalid-count
+DISCOVERY_ASSERT_PASS single/publication/2 real-cases-completed
+DISCOVERY_ASSERT_PASS single/publication/2 complete
+DISCOVERY_CASE single/publication/2 failed=0
+DISCOVERY_RUN clean/publication/2 rc=0
+DISCOVERY_ASSERT_PASS clean/publication/2 exit-status
+DISCOVERY_ASSERT_PASS clean/publication/2 names
+DISCOVERY_ASSERT_PASS clean/publication/2 invalid-count
+DISCOVERY_ASSERT_PASS clean/publication/2 real-cases-completed
+DISCOVERY_ASSERT_PASS clean/publication/2 complete
+DISCOVERY_CASE clean/publication/2 failed=0
+DISCOVERY_RUN stdout/publication/2 rc=0
+DISCOVERY_ASSERT_PASS stdout/publication/2 exit-status
+DISCOVERY_ASSERT_PASS stdout/publication/2 names
+DISCOVERY_ASSERT_PASS stdout/publication/2 invalid-count
+DISCOVERY_ASSERT_PASS stdout/publication/2 real-cases-completed
+DISCOVERY_ASSERT_PASS stdout/publication/2 complete
+DISCOVERY_ASSERT_PASS stdout/publication/2 diagnostic-preserved
+DISCOVERY_CASE stdout/publication/2 failed=0
+DISCOVERY_RUN stdout_plain/publication/2 rc=0
+DISCOVERY_ASSERT_PASS stdout_plain/publication/2 exit-status
+DISCOVERY_ASSERT_PASS stdout_plain/publication/2 names
+DISCOVERY_ASSERT_PASS stdout_plain/publication/2 invalid-count
+DISCOVERY_ASSERT_PASS stdout_plain/publication/2 real-cases-completed
+DISCOVERY_ASSERT_PASS stdout_plain/publication/2 complete
+DISCOVERY_ASSERT_PASS stdout_plain/publication/2 diagnostic-preserved
+DISCOVERY_CASE stdout_plain/publication/2 failed=0
+DISCOVERY_RUN stderr/publication/2 rc=0
+DISCOVERY_ASSERT_PASS stderr/publication/2 exit-status
+DISCOVERY_ASSERT_PASS stderr/publication/2 names
+DISCOVERY_ASSERT_PASS stderr/publication/2 invalid-count
+DISCOVERY_ASSERT_PASS stderr/publication/2 real-cases-completed
+DISCOVERY_ASSERT_PASS stderr/publication/2 complete
+DISCOVERY_ASSERT_PASS stderr/publication/2 stderr-preserved
+DISCOVERY_CASE stderr/publication/2 failed=0
+DISCOVERY_RUN empty/publication/2 rc=2
+DISCOVERY_ASSERT_PASS empty/publication/2 exit-status
+DISCOVERY_ASSERT_PASS empty/publication/2 names
+DISCOVERY_ASSERT_PASS empty/publication/2 invalid-count
+DISCOVERY_ASSERT_PASS empty/publication/2 empty-rejected
+DISCOVERY_CASE empty/publication/2 failed=0
+DISCOVERY_RUN grammar/publication/2 rc=0
+DISCOVERY_ASSERT_PASS grammar/publication/2 exit-status
+DISCOVERY_ASSERT_PASS grammar/publication/2 names
+DISCOVERY_ASSERT_PASS grammar/publication/2 invalid-count
+DISCOVERY_ASSERT_PASS grammar/publication/2 real-cases-completed
+DISCOVERY_ASSERT_PASS grammar/publication/2 complete
+DISCOVERY_CASE grammar/publication/2 failed=0
+DISCOVERY_FAILURE_DIAGNOSTIC_PASS
+PARALLEL_RUNNER_TEST_OK
+GATE_PARALLEL_RUNNER_CONTRACT_OK
+GC_UNIT_GATE_NOT_RUN reason=EXPLICIT_SKIP status=/root/sym_cangjie_runtime_465_implement_r5651041991/source/runtime/output/temp/linux-x86_64-release-gcunit-171716aacd1e083edff6449f1417979ec567d9b9ef61dc03859930e9eb2641e5/lib/x86_64_Release/gc_unit_gate.status

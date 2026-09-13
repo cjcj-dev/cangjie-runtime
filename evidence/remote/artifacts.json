@@ -1,0 +1,28 @@
+{
+  "default": {
+    "commit": "1361f2896c47e55ea9b96e76313e7afcc3612972",
+    "libraries": {
+      "libcangjie-runtime.so": {
+        "sha256": "d700d58ee824a03893b058aaf724525d10c2867fc50031027717c83b217b7d27",
+        "sodepot": "/root/sodepot/1361f2896c47e55ea9b96e76313e7afcc3612972/libcangjie-runtime.so"
+      },
+      "libboundscheck.so": {
+        "sha256": "31cec902ab00f30d64aef5d04bdc54a2d91579689d94db4d5bf4108015025514",
+        "sodepot": "/root/sodepot/1361f2896c47e55ea9b96e76313e7afcc3612972/libboundscheck.so"
+      }
+    }
+  },
+  "testable": {
+    "commit": "1361f2896c47e55ea9b96e76313e7afcc3612972",
+    "libraries": {
+      "libcangjie-runtime.so": {
+        "sha256": "ae53ec4698e51f64596dd4bb74f254f476b1b3e5764663e54dd5e8ae37b0413a",
+        "sodepot": "/root/sodepot/1361f2896c47e55ea9b96e76313e7afcc3612972/testable/libcangjie-runtime.so"
+      },
+      "libboundscheck.so": {
+        "sha256": "31cec902ab00f30d64aef5d04bdc54a2d91579689d94db4d5bf4108015025514",
+        "sodepot": "/root/sodepot/1361f2896c47e55ea9b96e76313e7afcc3612972/testable/libboundscheck.so"
+      }
+    }
+  }
+}

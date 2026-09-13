@@ -1,0 +1,91 @@
+$ git grep -n MRT_PHASE_TIMER -- runtime/src
+runtime/src/Base/LogFile.h:269:#define MRT_PHASE_TIMER(...) Timer MRT_pt_##__LINE__(__VA_ARGS__)
+runtime/src/Heap/Allocator/RegionManager.cpp:269:    MRT_PHASE_TIMER(ZStatPhases::PYoungPinnedScan);
+runtime/src/Heap/Allocator/RegionSpace.h:107:            MRT_PHASE_TIMER(ZStatPhases::PReclaimGarbageRegions);
+runtime/src/Heap/Allocator/RegionSpace.h:111:        MRT_PHASE_TIMER(ZStatPhases::PReleaseGarbageMemory);
+runtime/src/Heap/Allocator/RegionSpace.h:138:            MRT_PHASE_TIMER(ZStatPhases::PTryReclaimGarbageRegions);
+runtime/src/Heap/Allocator/RegionSpace.h:141:        MRT_PHASE_TIMER(ZStatPhases::PTryReleaseGarbageMemory);
+runtime/src/Heap/Allocator/RegionSpace.h:163:        MRT_PHASE_TIMER(ZStatPhases::PExemptFromRegions);
+runtime/src/Heap/Allocator/RegionSpace.h:180:        MRT_PHASE_TIMER(G == Generation::Young ? ZStatPhases::YoungForwardFromRegions :
+runtime/src/Heap/Collector/FinalizerProcessor.cpp:110:            MRT_PHASE_TIMER(ZStatPhases::PFinalizerProcessorWaittingTime, FINALIZE);
+runtime/src/Heap/Collector/FinalizerProcessor.cpp:359:    MRT_PHASE_TIMER(ZStatPhases::PFinalizer, FINALIZE);
+runtime/src/Heap/Collector/Generation.cpp:765:        MRT_PHASE_TIMER(ZStatPhases::PYoungFlushAlloc);
+runtime/src/Heap/Collector/Generation.cpp:788:        MRT_PHASE_TIMER(ZStatPhases::PYoungPrepareCandidates);
+runtime/src/Heap/Collector/Generation.cpp:855:        MRT_PHASE_TIMER(ZStatPhases::PYoungRemsetDrain);
+runtime/src/Heap/Collector/Generation.cpp:955:        MRT_PHASE_TIMER(ZStatPhases::PYoungRootEnum);
+runtime/src/Heap/Collector/Generation.cpp:1020:        MRT_PHASE_TIMER(ZStatPhases::PYoungMarkClosure);
+runtime/src/Heap/Collector/Generation.cpp:1058:        MRT_PHASE_TIMER(ZStatPhases::PYoungRemsetRescan);
+runtime/src/Heap/Collector/Generation.cpp:1068:        MRT_PHASE_TIMER(ZStatPhases::PYoungMarkFromRemset);
+runtime/src/Heap/Collector/Generation.cpp:1239:        MRT_PHASE_TIMER(ZStatPhases::PYoungPreEvacClear);
+runtime/src/Heap/Collector/Generation.cpp:1314:        MRT_PHASE_TIMER(ZStatPhases::PYoungPostEvacFinish);
+runtime/src/Heap/Collector/Mark.cpp:636:        MRT_PHASE_TIMER(ZStatPhases::PEnumRootsUpdateOldPointersWithin);
+runtime/src/Heap/Collector/Mark.cpp:679:        MRT_PHASE_TIMER(ZStatPhases::PTraceLiveObjectsUpdateOldPointersInRefFields);
+runtime/src/Heap/Collector/Mark.cpp:1472:    MRT_PHASE_TIMER(ZStatPhases::PYoungMarkFollow);
+runtime/src/Heap/Collector/Relocate.cpp:384:    MRT_PHASE_TIMER(ZStatPhases::PRemapYoungRoots);
+runtime/src/Heap/Collector/Relocate.cpp:581:    MRT_PHASE_TIMER(ZStatPhases::PPreforward);
+runtime/src/Heap/Collector/Relocate.cpp:590:        MRT_PHASE_TIMER(ZStatPhases::POldRelocateStart);
+runtime/src/Heap/Collector/Relocate.cpp:1554:        MRT_PHASE_TIMER(ZStatPhases::PYoungRefFix);
+runtime/src/Heap/Collector/Relocate.cpp:1580:            MRT_PHASE_TIMER(ZStatPhases::PYoungRefFixPrepare);
+runtime/src/Heap/Collector/Relocate.cpp:1615:            MRT_PHASE_TIMER(ZStatPhases::PYoungRefFixRootPass1);
+runtime/src/Heap/Collector/Relocate.cpp:1632:            MRT_PHASE_TIMER(ZStatPhases::PYoungConcurrentRelocate);
+runtime/src/Heap/Collector/Relocate.cpp:1646:            MRT_PHASE_TIMER(ZStatPhases::PYoungRefFixBulk);
+runtime/src/Heap/Collector/Relocate.cpp:1689:        MRT_PHASE_TIMER(ZStatPhases::PYoungEvacFinish);
+runtime/src/Heap/Collector/Relocate.cpp:1756:        MRT_PHASE_TIMER(ZStatPhases::PYoungConcPromoteWalk);
+runtime/src/Heap/Collector/Relocate.cpp:1775:        MRT_PHASE_TIMER(ZStatPhases::PYoungEvacRetire);
+runtime/src/Heap/Collector/RelocationSet.cpp:73:    MRT_PHASE_TIMER(ZStatPhases::PPostTrace);
+runtime/src/Heap/Collector/RelocationSet.cpp:100:        MRT_PHASE_TIMER(ZStatPhases::PCollectFromSpaceGarbage);
+runtime/src/Heap/Collector/TracingCollector.cpp:814:    MRT_PHASE_TIMER(ZStatPhases::PDoTracing);
+runtime/src/Heap/Collector/TracingCollector.cpp:818:        MRT_PHASE_TIMER(ZStatPhases::PConcurrentMarking);
+runtime/src/Heap/Collector/TracingCollector.cpp:823:        MRT_PHASE_TIMER(ZStatPhases::PConcurrentReMarking);
+runtime/src/Heap/Collector/TracingCollector.cpp:844:        MRT_PHASE_TIMER(ZStatPhases::PIdentifyUselessExternRef);
+runtime/src/Heap/Collector/TracingCollector.cpp:850:        MRT_PHASE_TIMER(ZStatPhases::PConcurrentResurrection);
+runtime/src/Heap/WCollector/WCollector.h:1033:        MRT_PHASE_TIMER(ZStatPhases::PCollectLargeGarbage);
+rc=0
+$ git grep -n RegisterEnd -- runtime/src
+runtime/src/Base/LogFile.h:342:            statPhase->RegisterEnd(diffTimeNs);
+runtime/src/Base/ZStat.h:229:    void RegisterEnd(uint64_t duration) const { sampler.Sample(duration); }
+runtime/src/Heap/Collector/CollectorResources.cpp:385:    (isYoung ? ZStatPhases::YoungGeneration : ZStatPhases::OldGeneration).RegisterEnd(end - start);
+runtime/src/Heap/Collector/CollectorResources.cpp:445:        .RegisterEnd(TimeUtil::NanoSeconds() - collectionStart);
+rc=0
+$ git grep -n ZStatMutatorAllocRate:: -- runtime/src
+runtime/src/Base/ZStat.cpp:102:    const auto rate = ZStatMutatorAllocRate::stats();
+runtime/src/Base/ZStat.cpp:119:    in.softMaxBytes = ZStatMutatorAllocRate::soft_max_heap_size();
+runtime/src/Base/ZStat.cpp:431:void ZStatMutatorAllocRate::update_sampling_granule()
+runtime/src/Base/ZStat.cpp:448:void ZStatMutatorAllocRate::initialize()
+runtime/src/Base/ZStat.cpp:475:void ZStatMutatorAllocRate::sample_allocation(size_t allocationBytes)
+runtime/src/Base/ZStat.cpp:511:ZStatMutatorAllocRateStats ZStatMutatorAllocRate::stats()
+runtime/src/Base/ZStat.cpp:522:size_t ZStatMutatorAllocRate::soft_max_heap_size()
+runtime/src/Heap/Allocator/RegionManager.cpp:1881:        ZStatMutatorAllocRate::sample_allocation(size);
+runtime/src/Heap/Collector/CollectorResources.cpp:111:    ZStatMutatorAllocRate::initialize();
+rc=0
+$ git grep -n AtRelocateEnd -- runtime/src
+runtime/src/Base/ZStat.cpp:142:    in.usedAtLastMajorEnd = oldHeap.usedAtRelocateEnd;
+runtime/src/Base/ZStat.cpp:540:void ZStatHeap::AtRelocateEnd(size_t used, size_t live, size_t reclaimedBytes)
+runtime/src/Base/ZStat.cpp:543:    stats.usedAtRelocateEnd = used;
+runtime/src/Base/ZStat.h:306:    size_t usedAtRelocateEnd = 0;
+runtime/src/Base/ZStat.h:313:    void AtRelocateEnd(size_t used, size_t live, size_t reclaimedBytes);
+runtime/src/Heap/Collector/CopyCollector.cpp:145:    (young ? ZStat::YoungHeap() : ZStat::OldHeap()).AtRelocateEnd(
+rc=0
+$ git grep -n SampleAndCollect -- runtime/src
+runtime/src/Base/ZStat.cpp:282:void ZStat::SampleAndCollect(std::vector<ZStatSamplerHistory>& history)
+runtime/src/Base/ZStat.cpp:352:        SampleAndCollect(history);
+runtime/src/Base/ZStat.h:338:    static void SampleAndCollect(std::vector<ZStatSamplerHistory>& history);
+rc=0
+$ git grep -n ZStatSamplerHistory -- runtime/src
+runtime/src/Base/ZStat.cpp:282:void ZStat::SampleAndCollect(std::vector<ZStatSamplerHistory>& history)
+runtime/src/Base/ZStat.cpp:292:void ZStat::Print(const std::vector<ZStatSamplerHistory>& history)
+runtime/src/Base/ZStat.cpp:346:    std::vector<ZStatSamplerHistory> history(ZStatSampler::Count());
+runtime/src/Base/ZStat.h:96:class ZStatSamplerHistoryInterval {
+runtime/src/Base/ZStat.h:127:class ZStatSamplerHistory {
+runtime/src/Base/ZStat.h:149:    ZStatSamplerHistoryInterval<10> seconds;
+runtime/src/Base/ZStat.h:150:    ZStatSamplerHistoryInterval<60> minutes;
+runtime/src/Base/ZStat.h:151:    ZStatSamplerHistoryInterval<60> hours;
+runtime/src/Base/ZStat.h:338:    static void SampleAndCollect(std::vector<ZStatSamplerHistory>& history);
+runtime/src/Base/ZStat.h:339:    static void Print(const std::vector<ZStatSamplerHistory>& history);
+rc=0
+$ git grep -n statistics.Start -- runtime/src
+runtime/src/Heap/Collector/CollectorResources.cpp:115:    statistics.Start();
+rc=0
+$ git grep -n statistics.Stop -- runtime/src
+runtime/src/Heap/Collector/CollectorResources.cpp:152:    statistics.Stop();
+rc=0
