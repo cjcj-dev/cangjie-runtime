@@ -424,7 +424,7 @@ void RunRemapWindow(bool copyOnly, ForwardDomain domain = ForwardDomain::None, b
     auto& activityCycle = Heap::GetHeap().GetCollector().GetGenerationCycle(GCCycleGeneration::OLD);
     const bool ownerWasActive = activityCycle.Snapshot().active;
     if (!ownerWasActive) activityCycle.Begin(1);
-    resources.GetGCStats().reason = GC_REASON_YOUNG;
+    resources.GetGCStats(GCCycleGeneration::YOUNG).reason = GC_REASON_YOUNG;
     auto* field = &HeapSlotAt<>(reinterpret_cast<MAddress>(fx.obj0) + TYPEINFO_PTR_SIZE);
     barrier.Record(fx.obj0, reinterpret_cast<MAddress>(field), fx.obj1);
     barrier.Record(fx.obj0, reinterpret_cast<MAddress>(field), copyObject);
