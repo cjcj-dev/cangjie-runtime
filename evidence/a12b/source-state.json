@@ -1,0 +1,57 @@
+{
+  "head": {
+    "command": [
+      "git",
+      "rev-parse",
+      "HEAD"
+    ],
+    "rc": 0,
+    "stdout": "1eb74ee938bfd4b8a6f4b84cc68cec760eb8e8c8\n",
+    "stderr": ""
+  },
+  "main": {
+    "command": [
+      "git",
+      "rev-parse",
+      "cjcjdev/main"
+    ],
+    "rc": 0,
+    "stdout": "403916767341fd0610fdc7a1201f1a0333e0da38\n",
+    "stderr": ""
+  },
+  "diff": {
+    "command": [
+      "git",
+      "diff",
+      "--stat",
+      "cjcjdev/main"
+    ],
+    "rc": 0,
+    "stdout": " runtime/src/Base/CMakeLists.txt                    |   1 +\n runtime/src/Base/GcLog.h                           |  67 ++++----------\n runtime/src/Heap/Allocator/RegionSpace.h           |  12 +++\n runtime/src/Heap/z/zDriver.cpp                     |  50 ++++++++---\n runtime/src/Heap/z/zGCIdPrinter.hpp                |  73 +++++++++++++++\n runtime/src/Heap/z/zHeap.cpp                       |   7 ++\n runtime/src/Heap/z/zHeap.hpp                       |   3 +\n runtime/src/Heap/z/zServiceability.cpp             |  18 ++++\n runtime/src/Heap/z/zServiceability.hpp             |  25 ++++++\n runtime/src/Heap/z/zStat.cpp                       |  69 +++++++++++++-\n runtime/src/Heap/z/zStat.hpp                       |  66 +-------------\n runtime/src/Heap/z/zWorkers.cpp                    |   2 +\n runtime/src/Heap/z/zWorkers.hpp                    |   1 +\n runtime/src/Inspector/ProfilerAgentImpl.cpp        |  28 ++++--\n runtime/src/windows_x86_64_exports.def             |   1 -\n runtime/tests/gc_unit/CMakeLists.txt               |   1 +\n runtime/tests/gc_unit/run_standalone.sh            |   1 +\n runtime/tests/gc_unit/test_zserviceability.cpp     |  77 ++++++++++++++++\n runtime/tests/gc_unit/test_zstat.cpp               | 100 +--------------------\n runtime/tests/gc_unit/timer_ledger_contract.cpp    |  13 ++-\n runtime/tests/perf_vs_official/gclog_schema.py     |  56 ++++++------\n .../perf_vs_official/test_analyze_youngstw.py      |   4 +-\n .../tests/perf_vs_official/test_gclog_schema.py    |  68 ++++++++------\n .../perf_vs_official/test_phase_entry_guard.py     |  10 +--\n .../perf_vs_official/test_phase_leaf_ledger.py     |  14 +--\n 25 files changed, 466 insertions(+), 301 deletions(-)\n",
+    "stderr": ""
+  },
+  "diff_check": {
+    "command": [
+      "git",
+      "diff",
+      "--check"
+    ],
+    "rc": 0,
+    "stdout": "",
+    "stderr": ""
+  },
+  "conflicts": {
+    "command": [
+      "git",
+      "grep",
+      "-n",
+      "-E",
+      "^(<<<<<<< |=======|>>>>>>> )",
+      "--",
+      "runtime/src"
+    ],
+    "rc": 1,
+    "stdout": "",
+    "stderr": ""
+  }
+}
