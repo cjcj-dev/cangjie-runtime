@@ -420,8 +420,11 @@ public:
             return ZGenerationId::old;
         }
         const MAddress address = raw(ref.GetTargetObject());
-        return ForwardingTable::get(address, Generation::Young) != nullptr
-            ? ZGenerationId::young : ZGenerationId::old;
+        if (ForwardingTable::get(address, Generation::Young) != nullptr) {
+            CHECK(ForwardingTable::get(address, Generation::Old) == nullptr);
+            return ZGenerationId::young;
+        }
+        return ZGenerationId::old;
     }
 
     // OpenJDK ZGeneration::relocate_or_remap_object (zGeneration.inline.hpp:131-140): an address
