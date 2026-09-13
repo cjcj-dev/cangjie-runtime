@@ -1694,7 +1694,6 @@ EXPORTS
     _ZN12MapleRuntime18CollectorResources14StartGCThreadsEv @1858
     _ZN12MapleRuntime18CollectorResources15TerminateGCTaskEv @1860
     _ZN12MapleRuntime18CollectorResources16RequestGCAndWaitENS_8GCReasonE @1863
-    _ZN12MapleRuntime18CollectorResources20PostIgnoredGcRequestENS_8GCReasonE @1865
     _ZN12MapleRuntime18CollectorResources4FiniEv @1867
     _ZN12MapleRuntime18CollectorResources4InitEv @1868
     _ZN12MapleRuntime18CollectorResources9RequestGCENS_8GCReasonEb @1869

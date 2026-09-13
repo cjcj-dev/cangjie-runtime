@@ -16,7 +16,6 @@
 #include "Heap/Collector/TaskQueue.h"
 #include "Heap/z/zWorkers.hpp"
 #include "Inspector/CjHeapData.h"
-#include "Heap/Collector/TaskQueue.h"
 #include "Heap/z/zDriverPort.hpp"
 
 namespace MapleRuntime {
@@ -26,7 +25,7 @@ class CollectorProxy;
 class CollectorResourcesTestPeer;
 #endif
 // CollectorResources provides the resources that a functional collector need,
-// such as GC drivers/runtime workers, gc task queue...
+// such as GC drivers and runtime workers.
 class CollectorResources {
 #if defined(MRT_TESTABLE_INTERNALS)
     friend struct MarkPublicationFixture;
@@ -47,11 +46,6 @@ public:
     void LockDriver() { driverLock.lock(); }
     void UnlockDriver() { driverLock.unlock(); }
     void RequestGC(GCReason reason, bool async);
-    // gc main loop
-    // Notify that GC has finished.
-    // Must be called by gc thread only
-    // A collector phase completes here. A driver-owned multi-phase request
-    // suppresses this intermediate publication and publishes once at its end.
     int32_t GetGCThreadCount(const bool isConcurrent) const;
 
     RuntimeWorkers& GetRuntimeWorkers() const { return *runtimeWorkers; }
