@@ -2383,6 +2383,9 @@ void RegionManager::CompactRegion(RegionInfo* region)
     RunRemapWindowTestHook(9, region, nullptr);
 #endif
 
+    const bool fromYoung = region->IsYoungRegion();
+    const PageAge fromAge = fromYoung ? to_pageage(region->GetYoungAge()) : PageAge::old;
+    const PageAge toAge = ComputeToAge(fromAge, Heap::GetHeap().GetCollector().GetGCStats().tenuringThreshold);
     MAddress regionStart = region->GetRegionStart();
     DLOG(REGION, "compact region %p@[%#zx+%zu, %#zx) type %u", region, regionStart,
         region->GetLiveByteCount(), region->GetRegionEnd(), region->GetRegionType());
@@ -2417,9 +2420,9 @@ void RegionManager::CompactRegion(RegionInfo* region)
 
         // ZGC zRelocate.cpp:652-731 update_remset_old_to_old: the bits covering the from copy
         // name field offsets inside this object, so they follow it to its new address.
-        if (region->IsYoungRegion()) {
+        if (fromYoung && toAge == PageAge::old) {
             RememberPromotedObject(toObj);
-        } else {
+        } else if (!fromYoung) {
             rememberedSet.MoveInPlaceSlots(takenSlots, currentPtr, toAddress, size);
         }
     });
@@ -2443,6 +2446,15 @@ void RegionManager::CompactRegion(RegionInfo* region)
     // zForwarding.cpp:171-181 / zRelocate.cpp:1001-1047: the forwarding table
     // outlives page reuse. Do not put this page on the mutator TLAB list while
     // its table is live — RehomeCompactedInPlaceRegion keeps it collector-visible.
+    // Both workers and eager root helpers finish the same destination-age transition.
+    if (fromYoung) {
+        if (toAge == PageAge::old) {
+            MarkView<Generation::Young> view = region->GetMarkView<Generation::Young>();
+            (void)region->PromoteYoungRegion(view);
+        } else {
+            region->SetYoungAge(untype(toAge));
+        }
+    }
     RehomeCompactedInPlaceRegion(region);
 }
 
@@ -2702,12 +2714,7 @@ void RegionManager::ForwardRegion(RegionInfo* region)
         }
     }
 
-    const bool stayYoung = youngRegion && StayYoungThisCycle(region);
-    if (stayYoung || !RelocateClaimedPage(region)) {
-        if (youngRegion && stayYoung) {
-            EnlistStayYoungSurvivor(region);
-            return;
-        }
+    if (!RelocateClaimedPage(region)) {
         // In-place relocation that copied nothing leaves the alloc pointer back at the
         // region start, so the size-walk over [start, start) is empty (RegionManager.cpp:
         // 665-668): the page holds no object to promote, no field to record an edge for and
@@ -2747,7 +2754,7 @@ void RegionManager::ForwardRegion(RegionInfo* region)
             CollectRegion<G>(region);
             return;
         }
-        if (youngRegion) {
+        if (region->IsYoungRegion()) {
             MarkView<Generation::Young> promotionView = region->GetMarkView<Generation::Young>();
             // In-place relocation already visited each destination object.
             // Only a page promoted without compaction needs the later page task.
