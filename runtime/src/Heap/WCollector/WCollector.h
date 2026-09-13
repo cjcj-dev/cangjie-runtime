@@ -444,88 +444,29 @@ public:
     BaseObject* relocate_or_remap_object(BaseObject* obj, ZGenerationId generation,
                                          const ForwardingProvenance& provenance) const override
     {
-        if (!Heap::IsHeapAddress(obj)) {
-            return obj;
-        }
-        const MAddress fromAddr = reinterpret_cast<MAddress>(obj);
+        if (!Heap::IsHeapAddress(obj)) return obj;
+        const MAddress from = reinterpret_cast<MAddress>(obj);
         const Generation ownerGeneration = generation == ZGenerationId::young
             ? Generation::Young : Generation::Old;
-        ZForwarding* record = ForwardingTable::get(fromAddr, ownerGeneration);
-        if (record == nullptr) return obj;
-        if (const MAddress hit = record->find(fromAddr)) {
-            return reinterpret_cast<BaseObject*>(hit);
+        ZForwarding* forwarding = ForwardingTable::get(from, ownerGeneration);
+        if (forwarding == nullptr) return obj;
+
+        // zRelocate.cpp:383-415: lookup, retain/copy/release, then wait/find.
+        // Every leg carries the same set-owned forwarding, including after
+        // the source page has been released and its descriptor reused.
+        if (const MAddress to = forwarding->find(from)) {
+            return reinterpret_cast<BaseObject*>(to);
         }
-        RegionInfo* forwarding = record->page();
-        RegionSpace& space = reinterpret_cast<RegionSpace&>(theAllocator);
-        const bool entriesArmed = ForwardingTable::EntriesArmed(fromAddr, ownerGeneration);
-        if constexpr (ForwardingTable::kEntriesSoleWhenArmed) {
-            if (entriesArmed) {
-                const MAddress stored = ForwardingTable::FindTo(fromAddr, ownerGeneration);
-                if (stored != 0) {
-                    BaseObject* to = reinterpret_cast<BaseObject*>(stored);
-                    if (ToHeaderCovered(to)) {
-                        return to;
-                    }
-                }
-                if (!obj->IsForwarded()) {
-                    // Armed miss on a not-yet-copied object: do not invent geometry.
-                }
-            }
+        RegionInfo::RetainScope lease{ForwardingTable::Owner(forwarding)};
+        if (lease.ok()) {
+            if (BaseObject* to = TryMutatorRelocate(obj, lease)) return to;
         }
-        if (obj->IsForwarded()) {
-            BaseObject* published = GetForwardPointer(obj, forwarding);
-            if (published != nullptr) {
-                return published;
-            }
+        lease.Release();
+        BaseObject* to = WaitForPageForwarding(obj, lease.HoldForwarding());
+        if (to == nullptr) {
+            FailClosedLoad("ZRelocate::forward_object requires a forwarding entry", obj, 0, provenance);
         }
-        BaseObject* to = space.GetRegionManager().FindPublishedRoute(obj, forwarding).dest;
-        if constexpr (ForwardingTable::kEntriesSoleWhenArmed) {
-            if (entriesArmed && !obj->IsForwarded()) {
-                to = nullptr;
-            }
-        }
-        if (to != nullptr) {
-            if (LIKELY(!Heap::IsHeapAddress(to))) {
-                return to;
-            }
-            if ((obj->IsForwarded() || forwarding->IsCompacted()) && to->IsValidObject()) {
-                return to;
-            }
-        } else if (obj->IsForwarded()) {
-            BaseObject* published =
-                FindToVersion(obj, ownerGeneration).GetOrFailClosed("WCollector::ForwardObjectImpl", provenance);
-            if (published != nullptr) {
-                return published;
-            }
-        }
-        // ② retain + copy (zRelocate.cpp:393-400). inner does allocate→copy→insert.
-        BaseObject* self = TryMutatorRelocate(obj, forwarding);
-        if (self != nullptr) {
-            return self;
-        }
-        if (const MAddress hit = ForwardingTable::FindTo(fromAddr, ownerGeneration)) {
-            return reinterpret_cast<BaseObject*>(hit);
-        }
-        // ③ find-miss: wait for the page task then find again
-        // (zRelocate.cpp:401-415 relocate_object / forward_object).
-        BaseObject* resolved =
-            WaitForPageForwarding(obj, ForwardingTable::RetainPageOwner(forwarding));
-        if (resolved != nullptr) {
-            return resolved;
-        }
-        if (const MAddress hit = ForwardingTable::FindTo(fromAddr, ownerGeneration)) {
-            return reinterpret_cast<BaseObject*>(hit);
-        }
-        CHECK_DETAIL(false,
-                     "ZRelocate::forward_object requires a forwarding entry for relocation-set object %p "
-                     "tid=%d obj=%p region=%p gcCycle=%zu "
-                     "route.snapshot=%#llx fwdDone=%u",
-                     obj, static_cast<int>(MapleRuntime::GetTid()), static_cast<void*>(obj),
-                     static_cast<void*>(forwarding), g_gcCount.load(std::memory_order_relaxed),
-                     static_cast<unsigned long long>(
-                         forwarding->RelocateObserve()),
-                     static_cast<unsigned>(forwarding->IsForwardingDone()));
-        return nullptr;
+        return to;
     }
 
     void AddRawPointerObject(BaseObject* obj) override
@@ -865,7 +806,7 @@ protected:
     // portmutreloc: ZRelocate::relocate_object's middle leg (zRelocate.cpp:391-406) --
     // retain the from-region, relocate the object on this thread, release. Returns the
     // to-version, or nullptr when the owning copier must supply the receipt.
-    BaseObject* TryMutatorRelocate(BaseObject* from, RegionInfo* forwarding) const;
+    BaseObject* TryMutatorRelocate(BaseObject* from, RegionInfo::RetainScope& lease) const;
 
     bool TryUntagRefField(BaseObject* obj, RefField<>& field, BaseObject*& target) const override;
 
