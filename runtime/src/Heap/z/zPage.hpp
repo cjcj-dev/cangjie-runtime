@@ -40,16 +40,10 @@
 #include "Heap/z/zLiveMap.hpp"
 #include "Heap/Collector/ManagedObjectGate.h"
 #include "Heap/z/zUncommitter.hpp"
-#include "Heap/Verify/AllocPhaseDiag.h"
-#include "Heap/Verify/DiagGate.h"
-#include "Heap/Verify/TraceClear.h"
-#include "Heap/Verify/FillerZeroDiag.h"
-#include "Heap/Verify/SurvNodeDiag.h"
 #include "Heap/z/zForwardingTable.hpp"
 #include "Heap/z/zVirtualMemoryManager.hpp"
 #include "Heap/z/zGranuleMap.hpp"
 
-#include "Heap/Verify/M0Correlation.h"
 #include "Base/TimeUtils.h"
 #include "securec.h"
 #ifdef CANGJIE_ASAN_SUPPORT
@@ -610,8 +604,7 @@ public:
 
     static void WaitCopiedBeforePayloadWipe(RegionInfo* region, const char* site);
 
-    static void ClearUnits(size_t idx, size_t cnt,
-                           FillerZeroDiag::Site site = FillerZeroDiag::Site::CLEAR_UNITS);
+    static void ClearUnits(size_t idx, size_t cnt);
 
     static size_t CommitUnits(size_t idx, size_t cnt);
 

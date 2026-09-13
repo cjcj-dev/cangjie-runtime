@@ -55,21 +55,12 @@ inline size_t RegionManager::CollectRegion(RegionInfo* region)
     {
         MarkView<G> view = region->GetRouteMarkView<G>();
         const bool knownEmpty = IsKnownEmptyForView(region, view);
-        // whoempty: record the *decision*, with the live-byte count it was made on, into the same
-        // ring ClearUnits writes to.  ClearUnits passes liveBefore as a literal 0
-        // (RegionInfo.h:1429 `TraceClear::NoteRange(unitAddress, size, "clear_units", nullptr, 0)`),
-        // so a `liveBefore=0` in a clear entry says nothing about the region -- it is a constant.
-        // This entry carries the real number, taken at the one edge where a region dies.
-        TraceClear::NoteRange(region->GetRegionStart(), region->GetRegionSize(),
-                              knownEmpty ? "coll_empty" : "coll_live", region, region->GetLiveByteCount(),
-                              static_cast<unsigned>(G), 0);
         DLOG(REGION, "collect region %p@[%#zx+%zu, %#zx) type %u", region, region->GetRegionStart(),
              region->GetLiveByteCount(), region->GetRegionEnd(), region->GetRegionType());
         // f3why2/livesame: always-on enter + knownEmpty_marked class.
 
         // emptylive: epoch-split size-walk on knownEmpty (gate MRT_GCV2_EMPTYLIVE).
 
-        GarbRegionDiag::NoteCollectEnter(region);
         // Probe: knownEmpty region still holds valid object headers (gcreclaim / B2 H1).
         {
             // gcreclaim was written for exactly the question now in hand -- does a region we are

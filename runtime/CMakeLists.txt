@@ -108,9 +108,6 @@ if (MRT_GC_UNIT_TESTS)
     add_compile_definitions(MRT_GC_UNIT_TEST_ACCESS=1)
 endif()
 
-if (MRT_GCV2_UNTAG_BREADCRUMB)
-    add_compile_definitions(MRT_GCV2_UNTAG_BREADCRUMB)
-endif()
 
 # Test-only access remains absent from the default product.  When the explicit
 # GC unit configuration is selected, both the product library and its tests see
@@ -123,9 +120,6 @@ if (MRT_TESTABLE_INTERNALS)
     add_compile_definitions(MRT_TESTABLE_INTERNALS=1)
 endif()
 
-if (MRT_M0_CORRELATION_EXPERIMENT)
-    add_compile_definitions(MRT_M0_CORRELATION_EXPERIMENT=1)
-endif()
 
 message("-- BUILD_CJTHREAD: " ${BUILD_CJTHREAD})
 message("-- BUILD_RUNTIME: "   ${BUILD_RUNTIME})

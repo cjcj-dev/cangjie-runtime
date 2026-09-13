@@ -120,9 +120,6 @@ endif()
 
 enable_testing()
 add_test(NAME cj_gc_unit COMMAND cj_gc_unit)
-if (MRT_M0_CORRELATION_EXPERIMENT)
-    set_tests_properties(cj_gc_unit PROPERTIES ENVIRONMENT "MRT_GCV2_DIAG=m0corr")
-endif()
 
 # Isolated product-path arm for allocation stalls. The aggregate target can be
 # blocked by an unrelated suite link failure; this target still binds every

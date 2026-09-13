@@ -37,15 +37,9 @@
 #include "Common/ScopedObjectAccess.h"
 #include "Heap/z/zHeap.hpp"
 #include "Heap/z/zRememberedSet.hpp"
-#include "Heap/Verify/DiagGate.h"
-#include "Heap/Verify/CsetEmptyWho.h"
-#include "Heap/Verify/TraceClear.h"
-#include "Heap/Verify/FillerZeroDiag.h"
-#include "Heap/Verify/HoleWhoDiag.h"
 #include "Heap/Allocator/HeapFiller.h"
 #include "Heap/z/zForwardingTable.hpp"
 #include "Heap/z/zRelocationSetSelector.hpp"
-#include "Heap/Verify/Zap.h"
 #include "Mutator/Mutator.inline.h"
 #include "Mutator/MutatorManager.h"
 #include "ObjectModel/RefField.inline.h"
@@ -341,7 +335,6 @@ size_t RegionManager::ExemptMarkStartAllocatingFromCSet()
 // Sort key = GetLiveByteCount(); stop = relative reclaimable <= kRelocationFragmentationLimitPercent.
 size_t RegionManager::ExemptFromRegions()
 {
-    CsetEmptyWho::BeginCycle();
     (void)ExemptMarkStartAllocatingFromCSet();
     size_t forwardBytes = 0;
     size_t floatingGarbage = 0;
@@ -362,15 +355,6 @@ size_t RegionManager::ExemptFromRegions()
     for (RegionInfo* fromRegion : snapshot) {
         size_t liveBytes = fromRegion->GetLiveByteCount();
         long rawPtrCnt = fromRegion->GetRawPointerObjectCount();
-        // zGeneration.cpp:216-221 register_empty_page iff !is_marked — sound
-        // only because ZGC mark is complete (zPage.inline.hpp:223-225). Ours
-        // is not: oldroots2 CsetEmptyWho (VisitHeapReferences + uncolor_bits +
-        // derived) still NONE≈99.97% (derivedSeen=0). Freeing unmarked residual
-        // dropped keep to 0 but SD256 N=6: 1×SEGV si_addr=0x8 trace_phase +
-        // 1×checksum drift. Reverted. Bare liveBytes==0 mixes two classes:
-        //   (1) dead from-copies — residual headers all FORWARDED.
-        //   (2) unmarked residual — no incoming edge we can name, but mutator
-        //       still observes them (SEGV/drift). Keep (2) for the selector.
         static constexpr bool kFreeEmptyAtCSetSelect = true;
         if (kFreeEmptyAtCSetSelect && liveBytes == 0 && rawPtrCnt == 0 &&
             !fromRegion->HasMarkStartAllocGap() && !fromRegion->IsYoungRegion()) {
@@ -449,7 +433,6 @@ size_t RegionManager::ExemptFromRegions()
                 }
             }
             if (!freeEmpty) {
-                CsetEmptyWho::NoteKeep(del, residual, residualFwd, marked);
                 continue;
             }
             if (!ClaimFromRegion(fromRegionList, del, RegionInfo::RegionType::GARBAGE_REGION, "cset-empty")) {
@@ -460,10 +443,6 @@ size_t RegionManager::ExemptFromRegions()
                 continue;
             }
 
-            TraceClear::NoteRange(del->GetRegionStart(), del->GetRegionSize(),
-                                  residual != 0 ? "coll_live" : "coll_empty", del, liveBytes,
-                                  static_cast<unsigned>(Generation::Old),
-                                  0);
             ScrubRememberedSetForRegion(del);
             garbageRegionList.PrependRegion(del, RegionInfo::RegionType::GARBAGE_REGION);
             continue;

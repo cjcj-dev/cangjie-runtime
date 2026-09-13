@@ -26,7 +26,7 @@
 #include "gc_unittest.hpp"
 
 // Test-only read of the heap-wide remembered-set init state so repeated fixtures in one process
-// do not double-initialize it (the M0Exit fixtures may already have done so).
+// do not double-initialize it (another fixture may already have done so).
 #define private public
 #include "Heap/z/zRememberedSet.hpp"
 #undef private

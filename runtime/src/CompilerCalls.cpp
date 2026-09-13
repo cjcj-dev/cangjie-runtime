@@ -35,8 +35,6 @@
 #include "Heap/z/zDriver.hpp"
 #include "Heap/Collector/GcStats.h"
 #include "Heap/z/zHeap.hpp"
-#include "Heap/Verify/DiagGate.h"
-#include "Heap/Verify/M0Correlation.h"
 #include "Loader/ElfUnloadQuiescence.h"
 #include "Mutator/Mutator.h"
 #include "HeapManager.inline.h"
@@ -237,7 +235,6 @@ extern "C" ObjRef MCC_NewObject(const TypeInfo* klass, MSize size)
 {
     DCHECK(size == (AlignUp<size_t>(klass->GetInstanceSize(), 8) + TYPEINFO_PTR_SIZE)); // 8-byte alignment
     ObjRef obj = ObjectManager::NewObject(klass, size);
-    M0Correlation::ConsumeMoveableAllocation(obj);
     if (obj == nullptr) {
         VLOG(REPORT, "Allocating object %s (%zu B) failed and throw OutOfMemoryError", klass->GetName(), size);
         ExceptionManager::CheckAndThrowPendingException("ObjectManager::NewObject return nullptr");
@@ -247,7 +244,6 @@ extern "C" ObjRef MCC_NewObject(const TypeInfo* klass, MSize size)
 
 extern "C" ObjRef MCC_NewWeakRefObject(const TypeInfo* klass, MSize size)
 {
-    M0Correlation::RejectPendingTag("weak_reference");
     DCHECK(size == (AlignUp<size_t>(klass->GetInstanceSize(), 8) + TYPEINFO_PTR_SIZE)); // 8-byte alignment
     ObjRef obj = ObjectManager::NewWeakRefObject(klass, size);
     if (obj == nullptr) {
@@ -259,7 +255,6 @@ extern "C" ObjRef MCC_NewWeakRefObject(const TypeInfo* klass, MSize size)
 
 extern "C" ObjRef MCC_NewPinnedObject(const TypeInfo* klass, MSize size, bool isFinalizer)
 {
-    M0Correlation::RejectPendingTag("pinned");
     DCHECK(size == (AlignUp<size_t>(klass->GetInstanceSize(), 8) + TYPEINFO_PTR_SIZE)); // 8-byte alignment
     ObjRef obj = ObjectManager::NewPinnedObject(klass, size, isFinalizer);
     if (obj == nullptr) {
@@ -271,7 +266,6 @@ extern "C" ObjRef MCC_NewPinnedObject(const TypeInfo* klass, MSize size, bool is
 
 extern "C" ObjRef MCC_NewFinalizer(const TypeInfo* klass, MSize size)
 {
-    M0Correlation::RejectPendingTag("finalizer");
     DCHECK(size == (AlignUp<size_t>(klass->GetInstanceSize(), 8) + TYPEINFO_PTR_SIZE)); // 8-byte alignment
     ObjRef obj = ObjectManager::NewFinalizer(klass, size);
     if (obj == nullptr) {
@@ -289,7 +283,6 @@ extern "C" ObjRef MCC_OnFinalizerCreated(ObjRef ref)
 }
 extern "C" ArrayRef MCC_NewArray(const TypeInfo* arrayInfo, MIndex nElems)
 {
-    M0Correlation::RejectPendingTag("array");
     ArrayRef array = ObjectManager::NewArray(static_cast<MIndex>(nElems), arrayInfo);
     if (array == nullptr) {
         VLOG(REPORT, "Allocating array %s length %zu failed and throw OutOfMemoryError", arrayInfo->GetName(), nElems);
@@ -300,7 +293,6 @@ extern "C" ArrayRef MCC_NewArray(const TypeInfo* arrayInfo, MIndex nElems)
 
 extern "C" ArrayRef MCC_NewObjArray(const TypeInfo* arrayInfo, MIndex nElems)
 {
-    M0Correlation::RejectPendingTag("object_array");
     ArrayRef array = ObjectManager::NewObjArray(nElems, arrayInfo);
     if (array == nullptr) {
         VLOG(REPORT, "Allocating array %s length %zu failed and throw OutOfMemoryError", arrayInfo->GetName(), nElems);
@@ -311,7 +303,6 @@ extern "C" ArrayRef MCC_NewObjArray(const TypeInfo* arrayInfo, MIndex nElems)
 
 extern "C" ArrayRef MCC_NewArray8(const TypeInfo* arrayInfo, MIndex nElems)
 {
-    M0Correlation::RejectPendingTag("array8");
     ArrayRef array = ObjectManager::NewKnownWidthArray(nElems, arrayInfo, ObjectManager::ArrayElemBits::ELEM_8B);
     if (array == nullptr) {
         VLOG(REPORT, "Allocating array %s length %zu failed and throw OutOfMemoryError", arrayInfo->GetName(), nElems);
@@ -322,7 +313,6 @@ extern "C" ArrayRef MCC_NewArray8(const TypeInfo* arrayInfo, MIndex nElems)
 
 extern "C" ArrayRef MCC_NewArray16(const TypeInfo* arrayInfo, MIndex nElems)
 {
-    M0Correlation::RejectPendingTag("array16");
     ArrayRef array = ObjectManager::NewKnownWidthArray(nElems, arrayInfo, ObjectManager::ArrayElemBits::ELEM_16B);
     if (array == nullptr) {
         VLOG(REPORT, "Allocating array %s length %zu failed and throw OutOfMemoryError", arrayInfo->GetName(), nElems);
@@ -333,7 +323,6 @@ extern "C" ArrayRef MCC_NewArray16(const TypeInfo* arrayInfo, MIndex nElems)
 
 extern "C" ArrayRef MCC_NewArray32(const TypeInfo* arrayInfo, MIndex nElems)
 {
-    M0Correlation::RejectPendingTag("array32");
     ArrayRef array = ObjectManager::NewKnownWidthArray(nElems, arrayInfo, ObjectManager::ArrayElemBits::ELEM_32B);
     if (array == nullptr) {
         VLOG(REPORT, "Allocating array %s length %zu failed and throw OutOfMemoryError", arrayInfo->GetName(), nElems);
@@ -344,7 +333,6 @@ extern "C" ArrayRef MCC_NewArray32(const TypeInfo* arrayInfo, MIndex nElems)
 
 extern "C" ArrayRef MCC_NewArray64(const TypeInfo* arrayInfo, MIndex nElems)
 {
-    M0Correlation::RejectPendingTag("array64");
     ArrayRef array = ObjectManager::NewKnownWidthArray(nElems, arrayInfo, ObjectManager::ArrayElemBits::ELEM_64B);
     if (array == nullptr) {
         VLOG(REPORT, "Allocating array %s length %zu failed and throw OutOfMemoryError", arrayInfo->GetName(), nElems);
@@ -1700,7 +1688,6 @@ extern "C" TypeInfo** MCC_GetFieldTypes(TypeInfo* ti)
 // 2. Tuple types
 extern "C" ObjRef MCC_NewAndInitEnumTupleObject(TypeInfo* ti, void* args)
 {
-    M0Correlation::RejectPendingTag("enum_tuple");
     if (args == nullptr) {
         return nullptr;
     }
@@ -2209,7 +2196,6 @@ extern "C" void CJ_MCC_UpdateVMT(TypeInfo* ti, TypeInfo* itf, ExtensionData* ext
 
 extern "C" ObjRef MCC_NewGenericObject(const TypeInfo* klass, MSize size)
 {
-    M0Correlation::RejectPendingTag("generic_object");
     ObjRef obj = ObjectManager::NewObject(klass, size);
     if (obj == nullptr) {
         VLOG(REPORT, "Allocation generic object %s (%zu B) failed and throw OutOfMemoryError", klass->GetName(), size);
@@ -2220,7 +2206,6 @@ extern "C" ObjRef MCC_NewGenericObject(const TypeInfo* klass, MSize size)
 
 extern "C" ArrayRef MCC_NewArrayGeneric(const TypeInfo* arrayInfo, MIndex nElems)
 {
-    M0Correlation::RejectPendingTag("generic_array");
     ArrayRef array = nullptr;
     if (!arrayInfo->IsArrayType()) {
         return array;

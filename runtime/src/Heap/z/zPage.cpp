@@ -37,15 +37,9 @@
 #include "Common/ScopedObjectAccess.h"
 #include "Heap/z/zHeap.hpp"
 #include "Heap/z/zRememberedSet.hpp"
-#include "Heap/Verify/DiagGate.h"
-#include "Heap/Verify/CsetEmptyWho.h"
-#include "Heap/Verify/TraceClear.h"
-#include "Heap/Verify/FillerZeroDiag.h"
-#include "Heap/Verify/HoleWhoDiag.h"
 #include "Heap/Allocator/HeapFiller.h"
 #include "Heap/z/zForwardingTable.hpp"
 #include "Heap/z/zRelocationSetSelector.hpp"
-#include "Heap/Verify/Zap.h"
 #include "Mutator/Mutator.inline.h"
 #include "Mutator/MutatorManager.h"
 #include "ObjectModel/RefField.inline.h"
@@ -194,22 +188,17 @@ void RegionInfo::VisitAllObjects(const std::function<void(BaseObject*)>&& func)
     } else if (IsSmallRegion()) {
         uintptr_t position = GetRegionStart();
         uintptr_t allocPtr = GetRegionAllocPtr();
-        BaseObject* prevObj = nullptr;
-        size_t prevSize = 0;
         while (position < allocPtr) {
             BaseObject* obj = from_region_addr(position);
             // getsize7: GetAllocSize → GetSize reads TypeInfo; interiors/holes SEGV here
             // (deadlock_enqfrontier: VisitLiveObjectsUntilFalse ← RouteRegion ← TryForward).
             // Refuse: break without inventing size — remaining stream is unwalkable.
             if (!Collector::PlausibleManagedObjectGate("VisitAllObjects", obj)) {
-                HoleWhoDiag::NoteWalkBreak(this, position, allocPtr, prevObj, prevSize);
                 break;
             }
             // GetAllocSize should before call func, because object maybe destroy in compact gc.
             size_t size = RegionSpace::GetAllocSize(*obj);
             func(obj);
-            prevObj = obj;
-            prevSize = size;
             position += size;
         }
     }

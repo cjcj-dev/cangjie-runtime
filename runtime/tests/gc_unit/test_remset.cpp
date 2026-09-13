@@ -40,7 +40,6 @@
 #include "Heap/z/zHeap.hpp"
 #include "Heap/z/zBarrier.hpp"
 #include "Heap/WCollector/RememberedHolderPolicy.h"
-#include "Heap/Verify/NwDropAudit.h"
 #include "ObjectModel/RefField.inline.h"
 #include "gc_heap_fixture.hpp"
 #include "Heap/WCollector/WCollector.h"
@@ -391,7 +390,6 @@ GC_OTHER_VM_TEST(Remset, StoreGoodAfterProductConsumerRearm)
     const auto firstConsume = RemsetRearmTestAccess::ConsumePrevious(collector, firstMinor, fx.obj0);
 #if defined(MRT_GC_UNIT_TESTS)
     const auto firstReceipt = ReadRemsetFilterTestReceipt();
-    NwDropAudit::Report("wave8_receipt");
 #endif
     const size_t sizeAfterFirstConsume = rs.Size();
 

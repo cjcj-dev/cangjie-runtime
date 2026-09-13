@@ -37,15 +37,9 @@
 #include "Common/ScopedObjectAccess.h"
 #include "Heap/z/zHeap.hpp"
 #include "Heap/z/zRememberedSet.hpp"
-#include "Heap/Verify/DiagGate.h"
-#include "Heap/Verify/CsetEmptyWho.h"
-#include "Heap/Verify/TraceClear.h"
-#include "Heap/Verify/FillerZeroDiag.h"
-#include "Heap/Verify/HoleWhoDiag.h"
 #include "Heap/Allocator/HeapFiller.h"
 #include "Heap/z/zForwardingTable.hpp"
 #include "Heap/z/zRelocationSetSelector.hpp"
-#include "Heap/Verify/Zap.h"
 #include "Mutator/Mutator.inline.h"
 #include "Mutator/MutatorManager.h"
 #include "ObjectModel/RefField.inline.h"
@@ -528,8 +522,6 @@ void RegionManager::ReclaimRetiredRegion(RegionInfo* region)
     {
         RegionInfo::InPlaceClaimScope drain(region, ZForwardingLife::Retire::RECLAIM_DIRTY);
     }
-    // gcvroot Z2: poison reclaimed payload so use-after-free roots are identifiable (MRT_GCV2_ZAP_RECLAIM=1).
-    HeapZap::ZapReclaimedRegion(region->GetRegionStart(), region->GetRegionEnd());
     region->InitFreeUnits();
     ReturnPageMemory(PageMemory{ unitIndex, num, 0, true });
 }
@@ -653,7 +645,6 @@ void RegionManager::ReclaimRetiredRegionToMarkQuarantine(RegionInfo* region)
     {
         RegionInfo::InPlaceClaimScope drain(region, ZForwardingLife::Retire::RECLAIM_MARK_QUARANTINE);
     }
-    HeapZap::ZapReclaimedRegion(region->GetRegionStart(), region->GetRegionEnd());
     region->InitFreeUnits();
     ScopedEnterSaferegion enterSaferegion(true);
     std::lock_guard<std::mutex> lock(pageAllocatorMutex);
@@ -1169,9 +1160,6 @@ void RegionManager::DumpRegionStats(const char* msg) const
 #include "Common/ColourEncoding.h"
 #include "Heap/z/zHeap.hpp"
 #include "Heap/z/zForwardingTable.hpp"
-#include "Heap/Verify/AllocPhaseDiag.h"
-#include "Heap/Verify/MinorGCALot.h"
-#include "Heap/Verify/Zap.h"
 #include "Mutator/Mutator.h"
 
 namespace MapleRuntime {

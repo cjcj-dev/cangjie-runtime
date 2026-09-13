@@ -10,8 +10,6 @@
 #include "Heap/z/zAddress.hpp"
 #include "Base/TimeUtils.h"
 #include "Base/SysCall.h"
-#include "Heap/Verify/HealCoverage.h"
-#include "Heap/Verify/DiagGate.h"
 #include <atomic>
 #include <cstdint>
 #include <cstdio>
@@ -327,20 +325,12 @@ public:
         set_good_masks();
         // Heal coverage before colour reuse (zGeneration.cpp:1503-1508).
         // Gate is a compile-time constant so the product rec=stw arm pays no walk.
-        if (HealCoverage::kHealCoverageCensus) {
-            HealCoverage::CensusAfterPublication(
-                currentRemapColour, FlipSeq().load(std::memory_order_relaxed), "flip-young");
-        }
     }
 
     void flip_old_relocate_start()
     {
         ZPointerRemappedOldMask ^= REMAP_COLOUR_MASK;
         set_good_masks();
-        if (HealCoverage::kHealCoverageCensus) {
-            HealCoverage::CensusAfterPublication(
-                currentRemapColour, FlipSeq().load(std::memory_order_relaxed), "flip-old");
-        }
     }
 
     // OpenJDK zAddress.cpp:132-136: young mark-start flips MarkedYoung and Remembered together.

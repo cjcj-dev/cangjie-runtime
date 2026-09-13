@@ -25,7 +25,6 @@
 #include "Heap/z/zPage.hpp"
 #include "Heap/z/zCollectedHeap.hpp"
 #include "Heap/z/zGranuleMap.hpp"
-#include "Heap/Verify/M0Correlation.h"
 #include "Heap/WCollector/WCollector.h"
 
 namespace MapleRuntime {
@@ -307,7 +306,6 @@ ZForwarding::Receipt ForwardingTable::InstallMapping(
                  "forwarding publication responsibility missing from=%#zx to=%#zx tab=%p",
                  static_cast<size_t>(from), static_cast<size_t>(to), tab);
     const ZForwarding::Receipt receipt = tab->insert_receipt(from, to);
-    M0Correlation::PropagateForwarding(from, receipt.address, receipt.address, receipt.installed);
     return receipt;
 }
 

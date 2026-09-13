@@ -23,9 +23,6 @@
 #include "Common/ColourEncoding.h"
 #include "Heap/z/zHeap.hpp"
 #include "Heap/z/zForwardingTable.hpp"
-#include "Heap/Verify/AllocPhaseDiag.h"
-#include "Heap/Verify/MinorGCALot.h"
-#include "Heap/Verify/Zap.h"
 #include "Mutator/Mutator.h"
 
 namespace MapleRuntime {
@@ -81,9 +78,6 @@ void RegionSpace::FeedHungryBuffers()
 #include "Common/ColourEncoding.h"
 #include "Heap/z/zHeap.hpp"
 #include "Heap/z/zForwardingTable.hpp"
-#include "Heap/Verify/AllocPhaseDiag.h"
-#include "Heap/Verify/MinorGCALot.h"
-#include "Heap/Verify/Zap.h"
 #include "Mutator/Mutator.h"
 
 namespace MapleRuntime {

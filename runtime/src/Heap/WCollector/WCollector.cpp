@@ -9,9 +9,6 @@
 
 #include <array>
 #include <atomic>
-#if defined(MRT_GCV2_UNTAG_BREADCRUMB)
-#include <csignal>
-#endif
 #include <cstdint>
 #include <cstdio>
 #include <cstdlib>
@@ -28,35 +25,18 @@
 #include <vector>
 #include <unistd.h>
 
-#if defined(MRT_GCV2_UNTAG_BREADCRUMB)
-#include "Base/SysCall.h"
-#endif
 #include "Concurrency/Concurrency.h"
 #include "Heap/z/zStoreBarrierBuffer.hpp"
 #include "Heap/z/zDirector.hpp"
 #include "Heap/Collector/MarkPartialArray.h"
 #include "Heap/z/zRelocationSetSelector.hpp"
 #include "Heap/z/zWorkers.hpp"
-#if defined(MRT_GCV2_UNTAG_BREADCRUMB)
-#include "Heap/WCollector/UntagRefFieldBreadcrumb.h"
-#endif
-#include "Heap/Verify/TraceClear.h"
-#include "Heap/Verify/Zap.h"
-#include "Heap/Verify/DiagGate.h"
-#include "Heap/Verify/NwDropAudit.h"
-#include "Heap/Verify/GarbRegionDiag.h"
-#include "Heap/Verify/Stw2CurrentAudit.h"
-#include "Heap/Verify/SurvNodeDiag.h"
-#include "Heap/Verify/CsetEmptyWho.h"
 #include "Heap/z/zAddress.inline.hpp"
 #include "Mutator/MutatorManager.h"
 #include "ObjectModel/MArray.inline.h"
 #include "UnwindStack/StackFrameCursor.h"
 #include "ObjectModel/RefField.inline.h"
 #include "TypeInfoManager.h"
-#if defined(MRT_GCV2_UNTAG_BREADCRUMB)
-#include "securec.h"
-#endif
 #include "Heap/WCollector/WCollectorInternal.h"
 
 namespace MapleRuntime {
@@ -68,37 +48,6 @@ void ReportForwardRaceCounts()
 {
 }
 
-#if defined(MRT_GCV2_UNTAG_BREADCRUMB)
-namespace {
-struct UntagRefFieldBreadcrumb {
-    const void* holder = nullptr;
-    const void* field = nullptr;
-    const void* target = nullptr;
-    const void* caller = nullptr;
-    size_t fieldOffset = 0;
-    volatile sig_atomic_t active = 0;
-};
-
-thread_local UntagRefFieldBreadcrumb untagRefFieldBreadcrumb;
-} // namespace
-
-void PrintUntagRefFieldBreadcrumb() noexcept
-{
-    if (untagRefFieldBreadcrumb.active == 0) {
-        return;
-    }
-    std::atomic_signal_fence(std::memory_order_seq_cst);
-    char buf[320];
-    int n = sprintf_s(buf, sizeof(buf),
-                      "%d E GC untag breadcrumb: holder=%p field=%p field_offset=%zu target=%p caller_pc=%p\n",
-                      static_cast<int>(GetTid()), untagRefFieldBreadcrumb.holder, untagRefFieldBreadcrumb.field,
-                      untagRefFieldBreadcrumb.fieldOffset, untagRefFieldBreadcrumb.target,
-                      untagRefFieldBreadcrumb.caller);
-    if (n > 0) {
-        (void)write(STDERR_FILENO, buf, static_cast<size_t>(n));
-    }
-}
-#endif
 
 
 
@@ -294,10 +243,6 @@ void WCollector::DoGarbageCollection()
     MergeResurrectExportObjects(Generation::Old);
     PostResolveCycleTask();
     FlipTagID();
-    if (HealCoverage::kHealCoverageCensus) {
-        HealCoverage::CensusAfterPublication(
-            currentRemapColour, FlipSeq().load(std::memory_order_relaxed), "major-postflip");
-    }
 
     CollectSmallSpace();
     // domainon: major path coverage dump (Record may fire under non-YOUNG if youngRegion).
@@ -310,18 +255,4 @@ void WCollector::DoGarbageCollection()
 
 }
 bool WCollector::ShouldIgnoreRequest(GCRequest& request) { return request.ShouldBeIgnored(); }
-} // namespace MapleRuntime
-namespace MapleRuntime {
-namespace ZgcInvariants {
-// flipseq bridge: keeps ZgcInvariants.cpp from having to include the collector header.
-uint64_t WCollectorFlipSeqForProbe() { return WCollector::FlipSeq().load(std::memory_order_relaxed); }
-BaseObject* ProbeFindToVersion(BaseObject* obj)
-{
-    Collector& c = Heap::GetHeap().GetCollector();
-    // This diagnostic observer does not consume the object. Keep Unavailable
-    // observable without taking the product consumers' fail-closed exit.
-    const FindToVersionResult observed = c.FindToVersion(obj, c.ActiveForwardingGeneration());
-    return observed.found();
-}
-} // namespace ZgcInvariants
 } // namespace MapleRuntime

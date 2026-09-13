@@ -24,9 +24,6 @@
 #include "Common/ColourEncoding.h"
 #include "Heap/z/zHeap.hpp"
 #include "Heap/z/zForwardingTable.hpp"
-#include "Heap/Verify/AllocPhaseDiag.h"
-#include "Heap/Verify/MinorGCALot.h"
-#include "Heap/Verify/Zap.h"
 #include "Mutator/Mutator.h"
 
 namespace MapleRuntime {
@@ -77,9 +74,6 @@ bool RegionIsInRelocationSet(const RegionInfo* reg)
 #include "Common/ColourEncoding.h"
 #include "Heap/z/zHeap.hpp"
 #include "Heap/z/zForwardingTable.hpp"
-#include "Heap/Verify/AllocPhaseDiag.h"
-#include "Heap/Verify/MinorGCALot.h"
-#include "Heap/Verify/Zap.h"
 #include "Mutator/Mutator.h"
 
 namespace MapleRuntime {
@@ -223,9 +217,7 @@ MAddress AllocBuffer::Allocate(size_t totalSize, AllocType allocType)
         addr = AllocateImpl(totalSize, allocType);
     }
 
-    // gcvroot Z3: poison new object bytes before header install (MRT_GCV2_ZAP_ALLOC=1).
     if (addr != 0) {
-        HeapZap::ZapAllocated(addr, totalSize);
         // The slow path can allocate outside the TLAB in a shared CPU page.
         RegionInfo* reg = RegionInfo::TryGetRegionInfoAt(addr);
         // twoflags: POST_TRACE+ allocs have no mark/isTrace coverage — stamp CSet exclusion.
@@ -238,25 +230,6 @@ MAddress AllocBuffer::Allocate(size_t totalSize, AllocType allocType)
                 heapP == GCPhase::GC_PHASE_FORWARD) {
                 reg->SetNotRelocatableThisCycle(1);
             }
-        }
-        // marklate: per-region last-alloc phase (NULLROUTE_DIAG only; no TLS).
-        // blackmark: also stamp isTraceRegion at alloc for H3.
-        if (AllocPhaseDiag::Enabled()) {
-            uint8_t mutP = static_cast<uint8_t>(GCPhase::GC_PHASE_UNDEF);
-            Mutator* m = Mutator::GetMutator();
-            if (m != nullptr) {
-                mutP = static_cast<uint8_t>(m->GetMutatorPhase());
-            }
-            uint8_t heapP = static_cast<uint8_t>(Heap::GetHeap().GetGCPhase());
-            uintptr_t regionStart = 0;
-            uintptr_t regionEnd = 0;
-            uint8_t isTrace = 0;
-            if (reg != nullptr) {
-                regionStart = reg->GetRegionStart();
-                regionEnd = reg->GetRegionEnd();
-                isTrace = reg->IsTraceRegion() ? 1 : 0;
-            }
-            AllocPhaseDiag::Record(reinterpret_cast<void*>(addr), regionStart, regionEnd, mutP, heapP, isTrace);
         }
         // youngconc allocate-black: paint mark bits + grey-list for TRACE/CLEAR
         // window young allocs. Ordinary MOVEABLE alloc never MarkNewObject; pin reuse did
@@ -312,9 +285,6 @@ MAddress AllocBuffer::Allocate(size_t totalSize, AllocType allocType)
                 }
             }
         }
-        // MinorGCALot: every N mutator allocs force young GC (HotSpot ScavengeALot intent).
-        // Safe: mutator path only; async RequestGC(YOUNG); same surface as TakeRegion heuristic.
-        MinorGCALot::AfterSuccessfulAlloc(totalSize);
     }
     DLOG(ALLOC, "alloc 0x%zx(%zu)", addr, totalSize);
     return addr;
@@ -474,9 +444,6 @@ void AllocBuffer::CommitRawPointerRegions()
 #include "Common/ColourEncoding.h"
 #include "Heap/z/zHeap.hpp"
 #include "Heap/z/zForwardingTable.hpp"
-#include "Heap/Verify/AllocPhaseDiag.h"
-#include "Heap/Verify/MinorGCALot.h"
-#include "Heap/Verify/Zap.h"
 #include "Mutator/Mutator.h"
 
 namespace MapleRuntime {

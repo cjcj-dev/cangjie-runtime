@@ -1,8 +1,7 @@
 diff --git a/runtime/src/Heap/z/zRemembered.cpp b/runtime/src/Heap/z/zRemembered.cpp
 --- a/runtime/src/Heap/z/zRemembered.cpp
 +++ b/runtime/src/Heap/z/zRemembered.cpp
-@@ -1133,7 +1133,7 @@ void WCollector::RescanRememberedSet(WorkStack& workStack, const MinorSlotSet& re
-             NwDropAudit::Note(NwDropAudit::kNotHeap);
+@@ -1134,6 +1134,6 @@ void WCollector::RescanRememberedSet(WorkStack& workStack, const MinorSlotSet& re
              continue;
          }
 -        if (LedgerCount(weakSlots, slot) != 0) {

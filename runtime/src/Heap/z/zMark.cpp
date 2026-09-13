@@ -36,15 +36,7 @@
 #include "Heap/z/zMarkStack.hpp"
 #include "Heap/z/zRelocationSetSelector.hpp"
 #include "Heap/z/zWorkers.hpp"
-#include "Heap/Verify/TraceClear.h"
 #include "Heap/z/zMark.hpp"
-#include "Heap/Verify/Zap.h"
-#include "Heap/Verify/DiagGate.h"
-#include "Heap/Verify/NwDropAudit.h"
-#include "Heap/Verify/GarbRegionDiag.h"
-#include "Heap/Verify/Stw2CurrentAudit.h"
-#include "Heap/Verify/SurvNodeDiag.h"
-#include "Heap/Verify/CsetEmptyWho.h"
 #include "Heap/z/zAddress.inline.hpp"
 #include "Mutator/MutatorManager.h"
 #include "ObjectModel/MArray.inline.h"
@@ -74,7 +66,6 @@ bool WCollector::MarkObjectImpl(BaseObject* obj, bool youngClaim, MarkLiveCache*
     // markfloor: work stack may hold RawArray+8 interiors (tip word = length, e.g. 0x200).
     // Return true ⇒ ConcurrentMarkingWork treats as already-marked and skips HasRefField.
     if (!Collector::PlausibleManagedObjectGate("WCollector::MarkObject", obj)) {
-        SurvNodeDiag::NoteFollowHolder(obj, SurvNodeDiag::FOLLOW_SKIP_GATE);
         return true;
     }
     RegionInfo* region = RegionInfo::GetRegionInfoAt(reinterpret_cast<MAddress>(obj));
@@ -90,10 +81,6 @@ bool WCollector::MarkObjectImpl(BaseObject* obj, bool youngClaim, MarkLiveCache*
     if (firstLive && liveCache != nullptr) {
         liveCache->IncLive(region, objectSize);
     }
-    if (!marked) {
-        SurvNodeDiag::NotePaint(obj, region);
-    }
-
     if (!marked) {
         DLOG(TRACE, "mark obj %p<%p>(%zu) in region %p(%u)@%#zx, live %zu", obj, obj->GetTypeInfo(), objectSize,
              region, region->GetRegionType(), region->GetRegionStart(), region->GetLiveByteCount());
@@ -272,7 +259,6 @@ void WCollector::TraceRefField(BaseObject* obj, RefField<>& field, WorkStack& wo
         if (!Collector::MarkGoodHeapGate("TraceRefField", targetObj)) {
             // gatedrop: reject arm only (default off). leave untraced.
 
-            SurvNodeDiag::NoteTraceVisit(&field, targetObj, SurvNodeDiag::TRACE_SKIP_GATE);
             return;
         }
         // markfloor: skip interiors (RawArray+8 etc.) before IsValidObject/GetSize.
@@ -283,7 +269,6 @@ void WCollector::TraceRefField(BaseObject* obj, RefField<>& field, WorkStack& wo
                 targetObj = host;
             } else {
 
-                SurvNodeDiag::NoteTraceVisit(&field, targetObj, SurvNodeDiag::TRACE_SKIP_GATE);
                 return;
             }
         }
@@ -297,10 +282,7 @@ void WCollector::TraceRefField(BaseObject* obj, RefField<>& field, WorkStack& wo
                      obj == nullptr ? static_cast<ssize_t>(-1) : BaseObject::FieldOffset(obj, &field));
         if (!IsMarkedObject<Generation::Old>(targetObj)) {
 
-            SurvNodeDiag::NoteTraceVisit(&field, targetObj, SurvNodeDiag::TRACE_PUSH);
             workStack.push_back(MarkStackEntry::MarkAndFollow(targetObj, finalizable));
-        } else {
-            SurvNodeDiag::NoteTraceVisit(&field, targetObj, SurvNodeDiag::TRACE_SKIP_MARKED);
         }
         return;
     }
@@ -346,7 +328,6 @@ void WCollector::TraceRefField(BaseObject* obj, RefField<>& field, WorkStack& wo
             latest = host;
         } else {
 
-            SurvNodeDiag::NoteTraceVisit(&field, latest, SurvNodeDiag::TRACE_SKIP_GATE);
             return;
         }
     }
@@ -375,10 +356,7 @@ void WCollector::TraceRefField(BaseObject* obj, RefField<>& field, WorkStack& wo
 
     if (!IsMarkedObject<Generation::Old>(latest)) {
 
-        SurvNodeDiag::NoteTraceVisit(&field, latest, SurvNodeDiag::TRACE_PUSH);
         workStack.push_back(MarkStackEntry::MarkAndFollow(latest, finalizable));
-    } else {
-        SurvNodeDiag::NoteTraceVisit(&field, latest, SurvNodeDiag::TRACE_SKIP_MARKED);
     }
 }
 
@@ -817,49 +795,6 @@ void WCollector::PushYoungObject(BaseObject* object, WorkStack& workStack, const
                                    : static_cast<unsigned>(region->GetMarkBitmap(
                                          region->GetMarkView<Generation::Young>()) == nullptr &&
                                                           region->GetRegionAllocPtr() > region->GetRegionStart()));
-            // HEADER_DUMP: first 64 bytes as hex + field decode + zap check.
-            auto* bytes = reinterpret_cast<const uint8_t*>(object);
-            char hex[64 * 2 + 16];
-            size_t pos = 0;
-            for (size_t i = 0; i < 64 && pos + 2 < sizeof(hex); ++i) {
-                static const char* kHex = "0123456789abcdef";
-                hex[pos++] = kHex[(bytes[i] >> 4) & 0xf];
-                hex[pos++] = kHex[bytes[i] & 0xf];
-            }
-            hex[pos] = '\0';
-            uint64_t w0 = 0;
-            uint64_t w1 = 0;
-            uint64_t w2 = 0;
-            uint64_t w3 = 0;
-            std::memcpy(&w0, bytes + 0, sizeof(w0));
-            std::memcpy(&w1, bytes + 8, sizeof(w1));
-            std::memcpy(&w2, bytes + 16, sizeof(w2));
-            std::memcpy(&w3, bytes + 24, sizeof(w3));
-            bool allZero = true;
-            for (size_t i = 0; i < 64; ++i) {
-                if (bytes[i] != 0) {
-                    allZero = false;
-                    break;
-                }
-            }
-            bool isZap = HeapZap::IsZapWord(static_cast<uintptr_t>(w0));
-            // tipBits: raw first 48 bits of header word (layout-dependent; not GetTypeInfo).
-            uintptr_t tipBits = (static_cast<uintptr_t>(w0) & 0xffffffffffffULL);
-            VLOG(REPORT,
-                 "[GCV2][HEADER_DUMP] obj=%p hex64=%s w0=%#llx w1=%#llx w2=%#llx w3=%#llx "
-                 "allZero=%u isZapWord=%u tipBits48=%#zx ZAP_WORD=%#llx "
-                 "ZAP_VERDICT_%s",
-                 object, hex, static_cast<unsigned long long>(w0), static_cast<unsigned long long>(w1),
-                 static_cast<unsigned long long>(w2), static_cast<unsigned long long>(w3),
-                 static_cast<unsigned>(allZero), static_cast<unsigned>(isZap), tipBits,
-                 static_cast<unsigned long long>(HeapZap::ZAP_WORD),
-                 isZap ? "是毒值_乙" : (allZero ? "非毒值_全零" : "非毒值_有内容"));
-            VLOG(REPORT, "[GCV2][ROOT_ORIGIN] origin=%s obj=%p", src, object);
-            // gcfwdfix: was this address inside a recent CompactRegion/ClearUnits zero range?
-            char clearDetail[256];
-            bool wasCleared = TraceClear::Lookup(reinterpret_cast<MAddress>(object), clearDetail, sizeof(clearDetail));
-            VLOG(REPORT, "[GCV2][WAS_LIVE_BEFORE_CLEAR] hit=%u detail=%s obj=%p",
-                 static_cast<unsigned>(wasCleared), clearDetail, object);
         }
         CHECK_DETAIL(false, "minor root/reference %p is not a valid object origin=%s", object, src);
     }
@@ -1525,9 +1460,6 @@ bool WCollector::FlushThreadMarkProducers(ThreadLocalData* tls, MarkDomain* doma
 #include "Heap/z/zThreadLocalAllocBuffer.hpp"
 #include "Heap/z/zStoreBarrierBuffer.hpp"
 #include "Heap/Collector/MarkPartialArray.h"
-#include "Heap/Verify/NwDropAudit.h"
-#include "Heap/Verify/M0ExitDiagnostics.h"
-#include "Heap/Verify/SurvNodeDiag.h"
 #include "Heap/z/zMark.hpp"
 #include "ObjectModel/RefField.inline.h"
 
@@ -1631,7 +1563,6 @@ private:
             if (!obj->HasRefField()) {
                 return;
             }
-            SurvNodeDiag::NoteFollowHolder(obj, SurvNodeDiag::FOLLOW_SCAN);
             if (UNLIKELY(obj->IsWeakRef())) {
                 collector.DiscoverWeakReference(obj, staging);
             } else {
@@ -1639,7 +1570,6 @@ private:
             }
             PublishStaging(ctx, staging);
         } else if (entry.mark() && wasMarked) {
-            SurvNodeDiag::NoteFollowHolder(obj, SurvNodeDiag::FOLLOW_SKIP_MARKED);
         }
     }
 
@@ -1668,9 +1598,6 @@ private:
 #include "Heap/z/zThreadLocalAllocBuffer.hpp"
 #include "Heap/z/zStoreBarrierBuffer.hpp"
 #include "Heap/Collector/MarkPartialArray.h"
-#include "Heap/Verify/NwDropAudit.h"
-#include "Heap/Verify/M0ExitDiagnostics.h"
-#include "Heap/Verify/SurvNodeDiag.h"
 #include "Heap/z/zMark.hpp"
 #include "ObjectModel/RefField.inline.h"
 
@@ -1839,9 +1766,6 @@ void TracingCollector::DoTracing(WorkStack& workStack, WorkStack& foreignRootsSe
 #include "Heap/z/zThreadLocalAllocBuffer.hpp"
 #include "Heap/z/zStoreBarrierBuffer.hpp"
 #include "Heap/Collector/MarkPartialArray.h"
-#include "Heap/Verify/NwDropAudit.h"
-#include "Heap/Verify/M0ExitDiagnostics.h"
-#include "Heap/Verify/SurvNodeDiag.h"
 #include "Heap/z/zMark.hpp"
 #include "ObjectModel/RefField.inline.h"
 
