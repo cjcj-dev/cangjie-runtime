@@ -93,9 +93,11 @@ struct RegionBitmap {
         maskInfo.strongStartBitMask = static_cast<uint64_t>(1) << (headMaskBitStart + 1);
     }
 
-    void AddLiveBytes(size_t byteCnt)
+    // ZLiveMap::inc_live: consumed by direct marking or the worker live cache.
+    void AddLiveCounts(size_t objects, size_t bytes)
     {
-        liveBytes.fetch_add(byteCnt);
+        liveObjects.fetch_add(objects, std::memory_order_relaxed);
+        liveBytes.fetch_add(bytes, std::memory_order_relaxed);
     }
 
     explicit RegionBitmap(size_t regionSize)
@@ -170,6 +172,7 @@ struct RegionBitmap {
     bool MarkBits(size_t start, size_t byteCnt, size_t regionSize, bool& incLive)
     {
         (void)regionSize;
+        (void)byteCnt;
         BitMaskInfo maskInfo;
         GetBitMaskInfo(start, maskInfo);
         EnsureSegmentLive(2 * (start / kMarkedBytesPerBit));
@@ -179,32 +182,29 @@ struct RegionBitmap {
         const uint64_t old = markWords[maskInfo.headWordIdx].fetch_or(startPair);
         const bool already = (old & maskInfo.strongStartBitMask) != 0;
         incLive = !already && (old & maskInfo.liveStartBitMask) == 0;
-        if (incLive) {
-            liveObjects.fetch_add(1, std::memory_order_relaxed);
-            AddLiveBytes(byteCnt);
-        }
         return already;
     }
 
     bool MarkBits(size_t start, size_t byteCnt, size_t regionSize)
     {
         bool incLive = false;
-        return MarkBits(start, byteCnt, regionSize, incLive);
+        const bool already = MarkBits(start, byteCnt, regionSize, incLive);
+        if (incLive) {
+            AddLiveCounts(1, byteCnt);
+        }
+        return already;
     }
 
     bool MarkFinalizableBits(size_t start, size_t byteCnt, size_t regionSize, bool& incLive)
     {
         (void)regionSize;
+        (void)byteCnt;
         BitMaskInfo maskInfo;
         GetBitMaskInfo(start, maskInfo);
         EnsureSegmentLive(2 * (start / kMarkedBytesPerBit));
         const uint64_t old = markWords[maskInfo.headWordIdx].fetch_or(maskInfo.liveStartBitMask);
         const bool already = (old & maskInfo.liveStartBitMask) != 0;
         incLive = !already;
-        if (incLive) {
-            liveObjects.fetch_add(1, std::memory_order_relaxed);
-            AddLiveBytes(byteCnt);
-        }
         return already;
     }
 

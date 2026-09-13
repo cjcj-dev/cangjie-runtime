@@ -318,7 +318,7 @@ GC_TEST(LiveMap, UnexaminedRelocselPageKeepsWithoutSnapshot)
     GcHeapFixture fx;
     RegionInfo* region = fx.region0;
     region->SetRegionType(RegionInfo::RegionType::UNMOVABLE_FROM_REGION);
-    region->AddLiveByteCount(64);
+    region->GetOrAllocMarkBitmap(region->GetMarkView<Generation::Old>())->AddLiveCounts(0, 64);
     GC_EXPECT_FALSE(region->HasEverPreservedRetainedLiveInfo());
     ProductPreserveRetainedUpToFn()(
         region,
@@ -347,7 +347,7 @@ GC_TEST(LiveMap, ExaminedPageWithoutSnapshotStillAborts)
                  static_cast<unsigned>(RegionInfo::RetainedLiveInfoState::SNAPSHOT_VALID));
     region->FreeRetainedMarkWords();
     region->BeginRetainedPreserve();
-    region->AddLiveByteCount(64);
+    region->GetOrAllocMarkBitmap(region->GetMarkView<Generation::Old>())->AddLiveCounts(0, 64);
     GC_EXPECT_EQ(static_cast<unsigned>(region->GetRetainedLiveInfoState()),
                  static_cast<unsigned>(RegionInfo::RetainedLiveInfoState::SNAPSHOT_LOST));
     pid_t pid = fork();
@@ -385,7 +385,7 @@ GC_TEST(LiveMap, OwnedCopyExaminedPageWithoutSnapshotStillAborts)
     GC_EXPECT_TRUE(region->HasRetainedMarkWords());
     GC_EXPECT_EQ(static_cast<unsigned>(region->GetRetainedLiveInfoState()),
                  static_cast<unsigned>(RegionInfo::RetainedLiveInfoState::SNAPSHOT_VALID));
-    region->AddLiveByteCount(64);
+    region->GetOrAllocMarkBitmap(region->GetMarkView<Generation::Old>())->AddLiveCounts(0, 64);
     pid_t pid = fork();
     GC_EXPECT_TRUE(pid >= 0);
     if (pid == 0) {
@@ -412,7 +412,7 @@ GC_TEST(LiveMap, RetainedCaptureUnionsYoungLargeFlagBeforePromotion)
     MarkView<Generation::Young> young = region->GetMarkView<Generation::Young>();
     region->SetMarkedRegionFlag(young, 1);
     region->SetRegionAllocPtr(region->GetRegionStart() + 64);
-    region->AddLiveByteCount(64);
+    region->AddLiveCounts(1, 64);
 
     ProductPreserveRetainedFn()(region);
     GC_EXPECT_TRUE(region->HasRetainedMarkWords());
@@ -789,6 +789,7 @@ GC_TEST(ZLiveMapPort, FinalizableAndStrongShareOnePair)
 
     GC_EXPECT_FALSE(bitmap->MarkFinalizableBits(64, 16, kPageSize, incLive));
     GC_EXPECT_TRUE(incLive);
+    bitmap->AddLiveCounts(1, 16);
     GC_EXPECT_TRUE(bitmap->IsLive(64));
     GC_EXPECT_TRUE(bitmap->IsFinalizable(64));
     GC_EXPECT_FALSE(bitmap->IsMarked(64));
@@ -893,7 +894,6 @@ GC_TEST(ZLiveMapPort, ConcurrentDuplicateSatbPublicationHasOneStrongReceipt)
     size_t doubleLiveBytesRounds = 0;
     for (size_t round = 1; round <= kRounds; ++round) {
         bitmap->Reset();
-        __atomic_store_n(&region->metadata.liveByteCount, static_cast<uint64_t>(0), __ATOMIC_RELAXED);
 
         phase.store(round, std::memory_order_release);
         while (completed.load(std::memory_order_acquire) < 2 * round) {

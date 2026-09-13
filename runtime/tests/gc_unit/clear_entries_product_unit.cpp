@@ -575,7 +575,6 @@ LiveInfo* PrepareForwardable(GcHeapFixture& fx, RegionInfo* region, MAddress liv
     const size_t offset = region->GetAddressOffset(liveObject);
     BaseObject* object = reinterpret_cast<BaseObject*>(liveObject);
     (void)bitmap->MarkBits(offset, object->GetSize(), region->GetRegionSize());
-    region->AddLiveByteCount(object->GetSize());
     region->PrepareForwardableRegion(region->GetMarkView<Generation::Old>());
     // This synthetic fixture leaves an unmaterialized allocation prefix.
     // Record the known object start explicitly; production freezes a dense
@@ -653,7 +652,7 @@ uint64_t RetireAnotherEmptyCarrier(LateBackfillState& state)
     GC_EXPECT_TRUE(ForwardingTable::PublishFromPageView(
         state.region, state.live, state.region->GetSnapshotEpoch(),
         state.region->GetRegionAllocPtr(), state.region->GetMarkStartAllocPtr(),
-        state.region->GetLiveByteCount(), 1, 0, state.region->GetRegionLifeId()));
+        1, 0, state.region->GetRegionLifeId()));
     ForwardingTable::ClearEntries(state.region->GetRegionStart(), state.region->GetRegionSize());
     return generation;
 }
@@ -949,7 +948,6 @@ GC_TEST(ForwardingPublicationProduct, MutatorRuntimeEntryReachesCopyAdmission)
     RegionBitmap* bitmap = fx.PlantMarkBitmap<Generation::Old>(live, region->GetRegionSize());
     (void)bitmap->MarkBits(region->GetAddressOffset(reinterpret_cast<MAddress>(from)),
                            objectSize, region->GetRegionSize());
-    region->AddLiveByteCount(objectSize);
 
     WCollector collector(Heap::GetHeap().GetAllocator(), Heap::GetHeap().GetCollectorResources());
     collector.SetGCPhase(GCPhase::GC_PHASE_FORWARD);
@@ -1006,7 +1004,6 @@ GC_TEST(ForwardingNoGeometry, ForwardImplTryLockCopiesWithoutPrebuiltMapping)
     RegionBitmap* bitmap = fx.PlantMarkBitmap<Generation::Old>(live, region->GetRegionSize());
     (void)bitmap->MarkBits(region->GetAddressOffset(reinterpret_cast<MAddress>(from)),
                            objectSize, region->GetRegionSize());
-    region->AddLiveByteCount(objectSize);
     WCollector collector(Heap::GetHeap().GetAllocator(), Heap::GetHeap().GetCollectorResources());
     collector.SetGCPhase(GCPhase::GC_PHASE_FORWARD);
     RelocationReceiptTestAccess::BindCollector(Heap::GetHeap().GetCollectorResources(), &collector);
@@ -1518,7 +1515,6 @@ GC_TEST(ForwardingPublicationProduct, KeptInPlaceLivemapStartsSurviveOverwritten
     (void)bitmap->MarkBits(region->GetAddressOffset(reinterpret_cast<MAddress>(second)),
                            second->GetSize(), region->GetRegionSize());
     region->RecordRouteStart(region->GetAddressOffset(reinterpret_cast<MAddress>(second)));
-    region->AddLiveByteCount(second->GetSize());
     *reinterpret_cast<uint64_t*>(first) = 0;
     region->MarkForwardingDone();
 
@@ -2107,7 +2103,7 @@ void CheckLookupWitness(bool retirePublisher, bool addCandidate, bool retireCand
         GC_EXPECT_TRUE(ForwardingTable::PublishFromPageView(
             state.region, state.live, publisher.epoch + 17,
             state.region->GetRegionAllocPtr(), state.region->GetMarkStartAllocPtr(),
-            state.region->GetLiveByteCount(), 1, 0, state.region->GetRegionLifeId()));
+            1, 0, state.region->GetRegionLifeId()));
         const LookupWitnessIdentity candidate = ReadLookupWitnessIdentity(ForwardingTable::GetEntries(from));
         GC_EXPECT_NE(candidate.tableId, publisher.tableId);
         GC_EXPECT_NE(candidate.generation, publisher.generation);
@@ -2301,7 +2297,7 @@ GC_OTHER_VM_TEST(NeverInstalledDiagnostic, NeverInstalledListsAllCoveringCarrier
         GC_EXPECT_TRUE(ForwardingTable::PublishFromPageView(
             state.region, state.live, state.region->GetSnapshotEpoch(),
             state.region->GetRegionAllocPtr(), state.region->GetMarkStartAllocPtr(),
-            state.region->GetLiveByteCount(), 1, 0, state.region->GetRegionLifeId()));
+            1, 0, state.region->GetRegionLifeId()));
         AbortCapture impossibleActive = CaptureNeverInstalledAbort(collector, state.from, [&]() {
             forceClosed(reinterpret_cast<MAddress>(state.from));
         });
@@ -3295,8 +3291,6 @@ GC_TEST(ForwardingPublicationProduct, MarkForwardingDoneRejectsReceiptCountMisma
     const size_t thirdOff = region->GetAddressOffset(reinterpret_cast<MAddress>(third));
     (void)bitmap->MarkBits(secondOff, second->GetSize(), region->GetRegionSize());
     (void)bitmap->MarkBits(thirdOff, third->GetSize(), region->GetRegionSize());
-    region->AddLiveByteCount(second->GetSize());
-    region->AddLiveByteCount(third->GetSize());
     region->RecordRouteStart(secondOff);
     region->RecordRouteStart(thirdOff);
 
@@ -4711,7 +4705,6 @@ GC_TEST(LoadHealDeliveryProduct, PromotedSnapshotDischargesOnlyLiveHolder)
     LiveInfo* live = fx.PlantLiveInfo(holderRegion);
     RegionBitmap* bitmap = fx.PlantMarkBitmap<Generation::Young>(live, holderRegion->GetRegionSize());
     (void)bitmap->MarkBits(0, objectSize, holderRegion->GetRegionSize());
-    holderRegion->AddLiveByteCount(objectSize);
     PromotedRegionDomain::Register(holderRegion, PromotedRegionDomain::RegisterPath::InPlace);
 
     // Registration is the producer boundary.  Remove the current face before
@@ -4932,7 +4925,6 @@ GC_TEST(LoadHealDeliveryProduct, CurrentRemsetRemapsLiveRemoteArrayField)
     LiveInfo* holderLive = fx.PlantLiveInfo(holderRegion);
     RegionBitmap* holderMarks = fx.PlantMarkBitmap<Generation::Old>(holderLive, holderRegion->GetRegionSize());
     (void)holderMarks->MarkBits(0, holder->GetMArraySize(), holderRegion->GetRegionSize());
-    holderRegion->AddLiveByteCount(holder->GetMArraySize());
     holderRegion->SetRegionType(RegionInfo::RegionType::FROM_REGION);
     youngCarrier->SetYoungRegionFlag(1);
 
@@ -5029,7 +5021,6 @@ GC_OTHER_VM_TEST(LoadHealDeliveryProduct, MajorDispatchRemapsLiveRemoteArrayFiel
     LiveInfo* holderLive = fx.PlantLiveInfo(holderRegion);
     RegionBitmap* holderMarks = fx.PlantMarkBitmap<Generation::Old>(holderLive, holderRegion->GetRegionSize());
     (void)holderMarks->MarkBits(0, holder->GetMArraySize(), holderRegion->GetRegionSize());
-    holderRegion->AddLiveByteCount(holder->GetMArraySize());
     holderRegion->SetRegionType(RegionInfo::RegionType::FROM_REGION);
     LateBackfillState forwarding = PrepareLateBackfill(fx, collector);
     farField->StoreColoured(GcUnit::StoreGoodPointer(forwarding.from));

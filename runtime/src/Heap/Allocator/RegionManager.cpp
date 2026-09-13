@@ -3471,24 +3471,8 @@ void RegionManager::ForwardRegion(RegionInfo* region)
         // livesame ORDER + ZGC reset_livemap (zForwarding.cpp:71-74): one publish for
         // live bytes + mark face (ResetLiveMapAfterForward).
         {
-            const uint64_t liveBefore = region->GetLiveByteCount();
-            size_t validBefore = 0;
-            size_t markedBefore = 0;
-
             region->VerifyLiveBooks(markView, "pre-ResetLiveMapAfterForward");
-            // Simulated split for ORDER: live-only then mark-only was the old bug;
-            // measure residual marks after live-zero before joint reset.
-            region->ResetLiveByteCount();
-            const uint64_t liveAfterReset = region->GetLiveByteCount();
-            size_t validAfterReset = 0;
-            size_t markedAfterReset = 0;
-
-            // Joint publish (restores live empty + epoch bump in one API).
             region->ResetLiveMapAfterForward(markView);
-            size_t validAfterInv = 0;
-            size_t markedAfterInv = 0;
-
-
             region->VerifyLiveBooks(markView, "post-ResetLiveMapAfterForward");
             if (youngRegion) {
                 if (promotedRecords != 0) {
@@ -3497,9 +3481,6 @@ void RegionManager::ForwardRegion(RegionInfo* region)
                 MarkView<Generation::Young> promotionView = region->GetMarkView<Generation::Young>();
                 (void)region->PromoteYoungRegion(promotionView);
             }
-            (void)validBefore;
-            (void)validAfterReset;
-            (void)validAfterInv;
         }
         // After-copy Collect zeros the from payload while live holders still name
         // it. ZGC free_page waits for detach (zRelocate.cpp:1041-1047) and keeps

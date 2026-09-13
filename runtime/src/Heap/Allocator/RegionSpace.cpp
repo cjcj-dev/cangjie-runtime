@@ -454,8 +454,9 @@ MAddress AllocBuffer::Allocate(size_t totalSize, AllocType allocType)
                         MarkView<Generation::Young> view = reg->GetMarkView<Generation::Young>();
                         reg->VerifyMarkFaceOwner<Generation::Young>(
                             reinterpret_cast<BaseObject*>(addr), "RegionSpace::AllocBlack.live");
-                        bool already = reg->GetOrAllocMarkBitmap(view)->MarkBits(offset, totalSize, regionSize);
-                        if (!already) {
+                        bool incLive = false;
+                        (void)reg->GetOrAllocMarkBitmap(view)->MarkBits(offset, totalSize, regionSize, incLive);
+                        if (incLive) {
                             reg->AddLiveCounts(1, totalSize);
                         }
                         LiveInfo* ghost = reg->GetLiveInfo0ForProbe();

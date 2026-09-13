@@ -195,7 +195,7 @@ struct GcHeapFixture {
         }
         CHECK(ForwardingTable::InstallPublicationBeforeCopy(region->GetRegionStart(), region->GetRegionSize(), region, region->GetOwnerGeneration()));
         CHECK(ForwardingTable::PublishFromPageView(region, region->GetLiveInfo(), region->GetSnapshotEpoch(),
-            region->GetRegionAllocPtr(), region->metadata.markStartAllocPtr, region->GetLiveByteCount(),
+            region->GetRegionAllocPtr(), region->metadata.markStartAllocPtr,
             static_cast<uint8_t>(region->IsYoungRegion() ? Generation::Young : Generation::Old),
             0, region->GetRegionLifeId()));
     }

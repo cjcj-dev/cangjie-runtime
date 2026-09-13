@@ -37,6 +37,8 @@ GC_TEST(ZLiveMapPort, FinalizableUpgradeAccountsOnce)
     bool incLive = false;
     GC_EXPECT_FALSE(bitmap->MarkFinalizableBits(64, 32, pageSize, incLive));
     GC_EXPECT_TRUE(incLive);
+    GC_EXPECT_EQ(bitmap->GetLiveObjects(), size_t(0));
+    bitmap->AddLiveCounts(1, 32);
     GC_EXPECT_TRUE(bitmap->IsFinalizable(64));
     GC_EXPECT_FALSE(bitmap->MarkBits(64, 32, pageSize, incLive));
     GC_EXPECT_FALSE(incLive);
@@ -104,6 +106,8 @@ GC_TEST(ZLiveMapPort, GenerationChangeLazilyInitializesProductMap)
     auto mark = ProductMark();
     auto first = region->GetMarkView<Generation::Old>();
     GC_EXPECT_FALSE(mark(region, first, object, object->GetSize(), true));
+    GC_EXPECT_EQ(region->GetLiveObjectCount(), uint32_t(1));
+    GC_EXPECT_EQ(region->GetLiveByteCount(), uint64_t(object->GetSize()));
     RegionBitmap* bitmap = region->GetMarkBitmap(first);
     GC_EXPECT_TRUE(bitmap != nullptr);
     const uint64_t youngSequence = LiveMapCycleAccess::Cycle(
@@ -112,9 +116,14 @@ GC_TEST(ZLiveMapPort, GenerationChangeLazilyInitializesProductMap)
     auto next = region->GetMarkView<Generation::Old>();
     GC_EXPECT_EQ(next.GetEpoch(), first.GetEpoch() + 1);
     GC_EXPECT_TRUE(region->GetMarkBitmap(next) == nullptr);
+    // No per-page ClearLiveInfo: the generation sequence invalidates both counts.
+    GC_EXPECT_EQ(region->GetLiveObjectCount(), uint32_t(0));
+    GC_EXPECT_EQ(region->GetLiveByteCount(), uint64_t(0));
     GC_EXPECT_EQ(LiveMapCycleAccess::Cycle(Heap::GetHeap().GetCollector(), Generation::Young).Sequence(), youngSequence);
     GC_EXPECT_FALSE(mark(region, next, object, object->GetSize(), true));
     GC_EXPECT_TRUE(region->GetMarkBitmap(next) == bitmap);
+    GC_EXPECT_EQ(region->GetLiveObjectCount(), uint32_t(1));
+    GC_EXPECT_EQ(region->GetLiveByteCount(), uint64_t(object->GetSize()));
     GC_EXPECT_EQ(bitmap->GetLiveObjects(), size_t(1));
     GC_EXPECT_EQ(bitmap->GetLiveBytes(), size_t(object->GetSize()));
 }
@@ -180,4 +189,67 @@ GC_TEST(ZLiveMapPort, PageRetirementReclaimsMapStorage)
         GC_EXPECT_TRUE(fx.region0->GetLiveInfo() != nullptr);
         GC_EXPECT_TRUE(fx.region0->GetMarkBitmap(fx.region0->GetMarkView<Generation::Old>()) == nullptr);
     }
+}
+
+// ZPage::mark_object -> ZMarkCache::inc_live -> ZPage::inc_live: deferred
+// accounting consumes the first-live claim, then readers use that same map.
+GC_TEST(ZLiveMapPort, DeferredProductCountsUseOnlyLiveMap)
+{
+    GcHeapFixture fx;
+    auto* region = fx.region0;
+    auto* object = fx.obj0;
+    auto view = region->GetMarkView<Generation::Old>();
+    auto mark = ProductMark();
+    GC_EXPECT_FALSE(mark(region, view, object, object->GetSize(), false));
+    RegionBitmap* bitmap = region->GetMarkBitmap(view);
+    GC_EXPECT_TRUE(bitmap != nullptr);
+    GC_EXPECT_EQ(region->GetLiveObjectCount(), uint32_t(0));
+    GC_EXPECT_EQ(region->GetLiveByteCount(), uint64_t(0));
+    GC_EXPECT_EQ(bitmap->GetLiveObjects(), size_t(0));
+    GC_EXPECT_EQ(bitmap->GetLiveBytes(), size_t(0));
+    region->AddLiveCounts(1, object->GetSize());
+    GC_EXPECT_EQ(region->GetLiveObjectCount(), uint32_t(1));
+    GC_EXPECT_EQ(region->GetLiveByteCount(), uint64_t(object->GetSize()));
+    GC_EXPECT_EQ(bitmap->GetLiveObjects(), size_t(1));
+    GC_EXPECT_EQ(bitmap->GetLiveBytes(), size_t(object->GetSize()));
+    GC_EXPECT_TRUE(mark(region, view, object, object->GetSize(), true));
+    GC_EXPECT_EQ(region->GetLiveObjectCount(), uint32_t(1));
+    GC_EXPECT_EQ(region->GetLiveByteCount(), uint64_t(object->GetSize()));
+}
+
+// ZBitMap::par_set_bit_pair_finalizable/strong and ZPage::inc_live: upgrading
+// an object already accounted by finalizable marking cannot add a second entry.
+GC_TEST(ZLiveMapPort, ProductFinalizableUpgradeKeepsSingleCount)
+{
+    GcHeapFixture fx;
+    auto* region = fx.region0;
+    auto* object = fx.obj0;
+    auto view = region->GetMarkView<Generation::Old>();
+    bool firstLive = false;
+    GC_EXPECT_FALSE(region->ResurrectObjectWithLiveClaim(object,
+        region->GetAddressOffset(reinterpret_cast<MAddress>(object)), false, firstLive));
+    GC_EXPECT_TRUE(firstLive);
+    GC_EXPECT_EQ(region->GetLiveObjectCount(), uint32_t(0));
+    region->AddLiveCounts(1, object->GetSize());
+    GC_EXPECT_FALSE(ProductMark()(region, view, object, object->GetSize(), true));
+    GC_EXPECT_EQ(region->GetLiveObjectCount(), uint32_t(1));
+    GC_EXPECT_EQ(region->GetLiveByteCount(), uint64_t(object->GetSize()));
+    GC_EXPECT_EQ(region->GetMarkBitmap(view)->GetLiveObjects(), size_t(1));
+}
+
+GC_TEST(ZLiveMapPort, YoungSequenceInvalidatesCountsWithoutPageClear)
+{
+    GcHeapFixture fx;
+    auto* region = fx.region0;
+    region->SetYoungRegionFlag(1);
+    auto first = region->GetMarkView<Generation::Young>();
+    GC_EXPECT_FALSE(region->MarkObject(first, fx.obj0, fx.obj0->GetSize(), true));
+    GC_EXPECT_EQ(region->GetLiveObjectCount(), uint32_t(1));
+    GcHeapFixture::AdvanceGeneration(Generation::Young);
+    auto next = region->GetMarkView<Generation::Young>();
+    GC_EXPECT_EQ(region->GetLiveByteCount(), uint64_t(0));
+    GC_EXPECT_EQ(region->GetLiveObjectCount(), uint32_t(0));
+    GC_EXPECT_FALSE(region->MarkObject(next, fx.obj0, fx.obj0->GetSize(), true));
+    GC_EXPECT_EQ(region->GetLiveByteCount(), uint64_t(fx.obj0->GetSize()));
+    GC_EXPECT_EQ(region->GetLiveObjectCount(), uint32_t(1));
 }

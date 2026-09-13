@@ -514,16 +514,8 @@ public:
         if (HasFromPageMarkStartAllocGap()) {
             return false;
         }
-        const uint64_t raw = from->liveByteCount;
-        if ((raw & LIVE_AUTHORITY_BIT) == 0) {
-            return false;
-        }
-        if (IsLargeRegion()) {
-            return from->largeMarked == 0;
-        }
-        LiveInfo* live = from->liveInfo;
-        return live != nullptr && live->GetMarkFace().epoch.load(std::memory_order_acquire) ==
-            from->epoch && (raw & LIVE_BYTES_MASK) == 0;
+        RegionBitmap* bitmap = GetRouteMarkBitmap(from->liveInfo);
+        return bitmap != nullptr && bitmap->GetLiveBytes() == 0;
     }
 
     RegionBitmap* GetRouteMarkBitmap(LiveInfo* face = nullptr)
@@ -591,7 +583,6 @@ public:
         const RegionLifeId life = GetRegionLifeId();
         CHECK_DETAIL(ForwardingTable::PublishFromPageView(
                          this, live, epoch, GetRegionAllocPtr(), metadata.markStartAllocPtr,
-                         __atomic_load_n(&metadata.liveByteCount, std::memory_order_acquire),
                          static_cast<uint8_t>(GetOwnerGeneration()),
                          static_cast<uint8_t>((IsLargeRegion() ? IsCurrentFacePublished() : metadata.isMarked != 0) ||
                                               metadata.isResurrected != 0),
@@ -827,15 +818,9 @@ public:
         BeginRetainedPreserve();
         metadata.retainedLiveInfo = GetLiveInfo();
         metadata.retainedLiveInfoEpoch = GetSnapshotEpoch();
-        // Preserve consumes the large face bit and its live bytes as one
-        // snapshot.  They share liveByteCount, so do not split this into two
-        // loads that could manufacture a half-published view.
         const bool largeRegion = IsLargeRegion();
-        const uint64_t largeState = largeRegion
-            ? __atomic_load_n(&metadata.liveByteCount, std::memory_order_acquire) : 0;
-        const uint64_t largeLiveBytes = largeState & LIVE_BYTES_MASK;
-        uint8_t largeMarked = largeRegion
-            ? ((largeState & LIVE_FACE_PUBLISHED_BIT) != 0) : metadata.isMarked;
+        const uint64_t largeLiveBytes = largeRegion ? GetLiveByteCount() : 0;
+        uint8_t largeMarked = largeRegion ? IsCurrentFacePublished() : metadata.isMarked;
         const ZForwarding::FromPageView* from = GetFromPageView();
         if (metadata.retainedLiveInfo == nullptr && from != nullptr) {
             metadata.retainedLiveInfo = from->liveInfo;
@@ -1107,10 +1092,7 @@ public:
         CHECK(view.GetEpoch() == GetMarkSnapshotEpoch<G>());
         if (IsLargeRegion()) {
             if (flag != 0) {
-                // Setup/STW callers do not always have an object size.  The
-                // sized MarkObject path uses TryPublishLargeFace directly so
-                // its first paint and byte accounting are one atomic RMW.
-                (void)TryPublishLargeFace(view, 0);
+                (void)GetOrAllocMarkBitmap(view);
             } else {
                 ClearCurrentMarkFace();
             }
@@ -1753,9 +1735,8 @@ public:
         // lifeclock: independent 64-bit region identity plus the five region-local
         // Moving the old top/livemap view to ZForwarding removes it from every
         // reusable UnitInfo; pin the resulting heap-wide metadata cost.
-        // M2 liveObjectCount on 18825599 (already 240) costs 8 more bytes.
-        // A07 removes the 8-byte region epoch; Clang record layout: 240 bytes.
-        static_assert(sizeof(UnitInfo) == 240, "per-unit metadata size changed; it is per-page, so price it");
+        // A07 stores objects/bytes only in the page livemap.
+        static_assert(sizeof(UnitInfo) == 232, "per-unit metadata size changed; it is per-page, so price it");
     }
 
     static size_t FindUnitIndex(uintptr_t address)
@@ -2305,7 +2286,6 @@ public:
         const RegionLifeId life = view.GetLifeId();
         CHECK_DETAIL(ForwardingTable::PublishFromPageView(
                          this, GetLiveInfo(), view.GetEpoch(), GetRegionAllocPtr(), metadata.markStartAllocPtr,
-                         __atomic_load_n(&metadata.liveByteCount, std::memory_order_acquire),
                          static_cast<uint8_t>(G),
                          static_cast<uint8_t>((IsLargeRegion() ? IsCurrentFacePublished() : metadata.isMarked != 0) ||
                                               metadata.isResurrected != 0),
@@ -2522,10 +2502,8 @@ public:
         // see objects bumped after this point as implicitly live.
         metadata.markStartAllocPtr = GetRegionAllocPtr();
         // GenerationCycle::Begin already advanced the owning generation's seqnum.
-        // Ordinary livemap metadata and segments reset lazily on the first mark.
-        if (IsLargeRegion()) {
-            SetMarkedRegionFlag(view, 0);
-        }
+        // Ordinary livemap metadata and segments reset lazily on the first mark,
+        // including the single-object large-page map.
         if (G == Generation::Old) {
             NoteRetainedClear(RETAINED_OP_CLEAR_ALL);
             // A new major mark supersedes the retained major snapshot.  Young
@@ -2539,10 +2517,6 @@ public:
             // the only same-region-life boundary allowed to disarm the bit.
             metadata.retainedEverPreserved = 0;
         }
-        // Start of a mark cycle for this region: live=0 is authoritative until proven otherwise.
-        __atomic_store_n(&metadata.liveByteCount, LIVE_AUTHORITY_BIT, std::memory_order_release);
-        __atomic_store_n(&metadata.liveObjectCount, 0, __ATOMIC_RELEASE);
-
         SetMarkFaceSealed(false);
     }
 
@@ -2666,9 +2640,6 @@ public:
 
     void ClearCurrentMarkFace()
     {
-        if (IsLargeRegion()) {
-            (void)__atomic_fetch_and(&metadata.liveByteCount, ~LIVE_FACE_PUBLISHED_BIT, __ATOMIC_ACQ_REL);
-        }
         LiveInfo* live = GetLiveInfo();
         if (live != nullptr) {
             live->GetMarkFace().epoch.store(0, std::memory_order_relaxed);
@@ -2677,40 +2648,10 @@ public:
 
     bool IsCurrentFacePublished() const
     {
-        if (IsLargeRegion()) {
-            return (__atomic_load_n(&metadata.liveByteCount, std::memory_order_acquire) &
-                    LIVE_FACE_PUBLISHED_BIT) != 0;
-        }
         LiveInfo* live = GetLiveInfo();
         const uint64_t seqnum = GetSnapshotEpoch();
         return seqnum != 0 && live != nullptr &&
             live->GetMarkFace().epoch.load(std::memory_order_acquire) == seqnum;
-    }
-
-    // Large pages have one liveness bit, but Preserve also consumes their byte
-    // count. Keep publication and count in the same atomic word so a reader
-    // cannot capture SNAPSHOT_VALID between those writes. The old publication
-    // bit identifies the sole first-paint winner.
-    template<Generation G>
-    bool TryPublishLargeFace(MarkView<G> view, uint64_t liveBytes)
-    {
-        CHECK(view.GetRegion() == this);
-        CHECK(view.GetEpoch() == GetMarkSnapshotEpoch<G>());
-        CHECK(liveBytes <= LIVE_BYTES_MASK);
-        uint64_t observed = __atomic_load_n(&metadata.liveByteCount, __ATOMIC_ACQUIRE);
-        for (;;) {
-            if ((observed & LIVE_FACE_PUBLISHED_BIT) != 0) {
-                return false;
-            }
-            const uint64_t bytes = observed & LIVE_BYTES_MASK;
-            CHECK(liveBytes <= LIVE_BYTES_MASK - bytes);
-            const uint64_t next = observed | LIVE_FACE_PUBLISHED_BIT | liveBytes |
-                (liveBytes == 0 ? 0 : LIVE_AUTHORITY_BIT);
-            if (__atomic_compare_exchange_n(&metadata.liveByteCount, &observed, next, true,
-                                            __ATOMIC_ACQ_REL, __ATOMIC_ACQUIRE)) {
-                return true;
-            }
-        }
     }
 
     // ZGC has no terminal kept: a page not selected this cycle is an ordinary
@@ -2858,8 +2799,6 @@ public:
         SetOldMarkedRegionFlag(0);
         SetEnqueuedRegionFlag(0);
         SetResurrectedRegionFlag(0);
-        __atomic_store_n(&metadata.liveByteCount, LIVE_AUTHORITY_BIT, std::memory_order_release);
-        __atomic_store_n(&metadata.liveObjectCount, 0, __ATOMIC_RELEASE);
 
         metadata.markStartAllocPtr = 0;
         __atomic_store_n(&metadata.liveInfo, static_cast<LiveInfo*>(nullptr), std::memory_order_release);
@@ -3079,47 +3018,47 @@ public:
             static_cast<UnitRole>(metadata.unitRole) == UnitRole::LARGE_SIZED_UNITS;
     }
 
-    // liveByteCount: bit63 = LIVE_AUTHORITY, bit62 = large-face publication,
-    // bits0-61 = live bytes.  The large path updates the latter two fields in
-    // one atomic word; small pages continue to use the seqnum publication bit.
-    // densify / fragmentation still use the byte count; reclaim-empty uses IsKnownEmpty()
-    // which mirrors ZGC page->is_marked() (mark face epoch), not the byte counter alone.
-    static constexpr uint64_t LIVE_AUTHORITY_BIT = 1ull << 63;
-    static constexpr uint64_t LIVE_FACE_PUBLISHED_BIT = 1ull << 62;
-    static constexpr uint64_t LIVE_BYTES_MASK = LIVE_FACE_PUBLISHED_BIT - 1ull;
-
     // livesame crosscheck (ZGC ZPage::verify_live): live book vs mark face.
     static std::atomic<size_t> liveCrossMismatchCount;
     static std::atomic<size_t> liveCrossCheckCount;
     static std::atomic<bool> liveCrossAtexitInstalled;
 
+    // ZPage::live_bytes/live_objects use the page's single livemap. A page
+    // not touched in this generation sequence has no published marking data.
+    RegionBitmap* GetCurrentLiveMap() const
+    {
+        LiveInfo* live = GetLiveInfo();
+        const uint64_t seqnum = GetSnapshotEpoch();
+        if (live == nullptr || seqnum == 0 ||
+            live->GetMarkFace().epoch.load(std::memory_order_acquire) != seqnum) {
+            return nullptr;
+        }
+        return __atomic_load_n(&live->GetMarkFace().bitmap, std::memory_order_relaxed);
+    }
+
     uint64_t GetLiveByteCount() const
     {
-        return __atomic_load_n(&metadata.liveByteCount, std::memory_order_acquire) & LIVE_BYTES_MASK;
+        RegionBitmap* bitmap = GetCurrentLiveMap();
+        return bitmap == nullptr ? 0 : bitmap->GetLiveBytes();
     }
 
     uint32_t GetLiveObjectCount() const
     {
-        return __atomic_load_n(&metadata.liveObjectCount, __ATOMIC_ACQUIRE);
+        RegionBitmap* bitmap = GetCurrentLiveMap();
+        return bitmap == nullptr ? 0 : static_cast<uint32_t>(bitmap->GetLiveObjects());
     }
 
-    void AddLiveObjects(uint32_t objects)
-    {
-        // A small page is bounded by its allocation capacity; a large page
-        // contains one object. Cache flushes therefore fit the page counter.
-        const uint32_t before = __atomic_fetch_add(&metadata.liveObjectCount, objects, __ATOMIC_ACQ_REL);
-        CHECK(objects <= std::numeric_limits<uint32_t>::max() - before);
-    }
-
+    // ZPage::inc_live: the mark winner or its worker cache owns this addition.
     void AddLiveCounts(uint32_t objects, uint64_t bytes)
     {
-        AddLiveByteCount(bytes);
-        AddLiveObjects(objects);
+        RegionBitmap* bitmap = GetCurrentLiveMap();
+        CHECK(bitmap != nullptr);
+        bitmap->AddLiveCounts(objects, bytes);
     }
 
     bool IsLiveCountAuthoritative() const
     {
-        return (__atomic_load_n(&metadata.liveByteCount, std::memory_order_acquire) & LIVE_AUTHORITY_BIT) != 0;
+        return IsCurrentFacePublished();
     }
 
     // ZGC zGeneration.cpp:216-221 / zPage.inline.hpp:223-225:
@@ -3138,12 +3077,12 @@ public:
         }
         // ZGC allocate-black: a mark-start watermark gap means objects were
         // born after ClearLiveInfo and are implicitly live. Do not treat the
-        // region empty, and do not AddLiveByteCount for them.
+        // region empty, and do not count them as explicitly marked.
         if (HasMarkStartAllocGap()) {
             return false;
         }
-        uint64_t raw = __atomic_load_n(&metadata.liveByteCount, std::memory_order_acquire);
-        const bool auth = (raw & LIVE_AUTHORITY_BIT) != 0;
+        const uint64_t liveBytes = GetLiveByteCount();
+        const bool auth = IsLiveCountAuthoritative();
         bool markedThisCycle = false;
         bool keepNullFace = false;
         bool keepEpoch = false;
@@ -3169,7 +3108,7 @@ public:
         }
         const bool emptyByMark = markedThisCycle && (IsLargeRegion()
             ? GetMarkedRegionFlag(view) == 0
-            : ((raw & LIVE_BYTES_MASK) == 0));
+            : (liveBytes == 0));
 
         if (!ikeAtexitInstalled.exchange(true, std::memory_order_relaxed)) {
             std::atexit([]() {
@@ -3206,7 +3145,7 @@ public:
                     "live=%llu — not empty (unmarked this cycle)",
                     n, this, GetRegionStart(), static_cast<unsigned>(keepNullFace),
                     static_cast<unsigned>(keepEpoch),
-                    static_cast<unsigned long long>(raw & LIVE_BYTES_MASK));
+                    static_cast<unsigned long long>(liveBytes));
             }
         }
         return false;
@@ -3221,8 +3160,8 @@ public:
         if (HasMarkStartAllocGap()) {
             return false;
         }
-        uint64_t raw = __atomic_load_n(&metadata.liveByteCount, std::memory_order_acquire);
-        const bool auth = (raw & LIVE_AUTHORITY_BIT) != 0;
+        const uint64_t liveBytes = GetLiveByteCount();
+        const bool auth = IsLiveCountAuthoritative();
         bool markedThisCycle = false;
         if (IsLargeRegion()) {
             markedThisCycle = view.GetEpoch() == GetMarkSnapshotEpoch<Generation::Young>();
@@ -3238,7 +3177,7 @@ public:
         }
         const bool emptyByMark = markedThisCycle && (IsLargeRegion()
             ? GetMarkedRegionFlag(view) == 0
-            : ((raw & LIVE_BYTES_MASK) == 0));
+            : (liveBytes == 0));
         return auth && emptyByMark;
     }
 
@@ -3268,17 +3207,8 @@ public:
             __atomic_load_n(&metadata.liveInfo, std::memory_order_acquire) != nullptr;
     }
 
-    void ResetLiveByteCount()
-    {
-        // densify rebuild: clear byte counter only (mark face rewritten in place next).
-        __atomic_store_n(&metadata.liveByteCount, LIVE_AUTHORITY_BIT, std::memory_order_release);
-        __atomic_store_n(&metadata.liveObjectCount, 0, __ATOMIC_RELEASE);
-
-    }
-
-    // ZGC zForwarding.cpp:71-74 reset_livemap after from-page iteration — one publish:
-    // empty live bytes + invalidate mark face (reset livemap seqnum; large clears isMarked).
-    // MARK_EPOCH_DISCIPLINE §4.2: no memset of shared markWords.
+    // ZForwarding::in_place_relocation_finish drops the completed from-page
+    // livemap. The next first mark resets counts before publishing its seqnum.
     template<Generation G>
     void ResetLiveMapAfterForward(MarkView<G> view)
     {
@@ -3291,27 +3221,9 @@ public:
         }
         SetForwardingFaceReset();
         ClearCurrentMarkFace();
-        __atomic_store_n(&metadata.liveByteCount, LIVE_AUTHORITY_BIT, std::memory_order_release);
-        __atomic_store_n(&metadata.liveObjectCount, 0, __ATOMIC_RELEASE);
 
         if (IsLargeRegion()) {
             SetMarkedRegionFlag(view, 0);
-        }
-    }
-
-    void AddLiveByteCount(uint64_t count)
-    {
-        CHECK(count <= LIVE_BYTES_MASK);
-        uint64_t observed = __atomic_load_n(&metadata.liveByteCount, __ATOMIC_ACQUIRE);
-        for (;;) {
-            const uint64_t bytes = observed & LIVE_BYTES_MASK;
-            CHECK(count <= LIVE_BYTES_MASK - bytes);
-            const uint64_t next = (observed & ~LIVE_BYTES_MASK) | (bytes + count) |
-                LIVE_AUTHORITY_BIT;
-            if (__atomic_compare_exchange_n(&metadata.liveByteCount, &observed, next, true,
-                                            __ATOMIC_ACQ_REL, __ATOMIC_ACQUIRE)) {
-                return;
-            }
         }
     }
 
@@ -3487,7 +3399,6 @@ private:
             uint32_t nextRegionIdx;
             uint32_t prevRegionIdx; // support fast deletion for region list.
 
-            uint64_t liveByteCount;
             int32_t rawPointerObjectCount;
             uint32_t censusBoundaryOffset;
         };
@@ -3508,10 +3419,6 @@ private:
         // Monotonic within a retained-snapshot cycle: only successful
         // Preserve arms it; old-mark start or region-life bump disarms it.
         uint8_t retainedEverPreserved = 0;
-        // Per-current-page live objects, alongside liveByteCount. This uses
-        // the padding before retainedLiveInfoEpoch (the size guard below
-        // still checks the complete UnitInfo layout).
-        uint32_t liveObjectCount = 0;
         uint64_t retainedLiveInfoEpoch = 0;
         MAddress retainedLiveInfoCoveredUpTo = 0;
         RegionLifeId retainedLifeId = 0;
@@ -3830,8 +3737,6 @@ private:
         metadata.nextRegionIdx0 = NULLPTR_IDX;
         metadata.regionListOwner.store(nullptr, std::memory_order_relaxed);
         metadata.censusBoundaryOffset = 0;
-        __atomic_store_n(&metadata.liveByteCount, 0, std::memory_order_release);
-        __atomic_store_n(&metadata.liveObjectCount, 0, __ATOMIC_RELEASE);
         metadata.liveInfo = nullptr;
         ClearCurrentMarkFace();
         FreeCompactRouteTable();
