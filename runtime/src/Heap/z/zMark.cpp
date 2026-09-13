@@ -1569,7 +1569,6 @@ private:
                 collector.TraceObjectRefFields(obj, staging, entry.finalizable());
             }
             PublishStaging(ctx, staging);
-        } else if (entry.mark() && wasMarked) {
         }
     }
 
