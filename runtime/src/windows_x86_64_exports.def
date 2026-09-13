@@ -1745,7 +1745,6 @@ EXPORTS
     _ZN12MapleRuntime17FreeRegionManager10TakeRegionEyNS_10RegionInfo8UnitRoleEb @1814
     _ZN12MapleRuntime17FreeRegionManager15AddGarbageUnitsEjj @1815
     _ZN12MapleRuntime17FreeRegionManager15AddReleaseUnitsEjj @1816
-    _ZN12MapleRuntime17FreeRegionManager21ReleaseGarbageRegionsEy @1817
     _ZN12MapleRuntime17FreeRegionManager22AddMarkQuarantineUnitsEjj @1818
     _ZN12MapleRuntime17FreeRegionManager28ReleaseMarkQuarantineToDirtyEv @1819
     _ZN12MapleRuntime17FreeRegionManagerD0Ev @1820
