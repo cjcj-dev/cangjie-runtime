@@ -191,6 +191,7 @@ public:
     static ZStatSampler* First() { return first; }
     const ZStatSampler* Next() const { return next; }
     static uint32_t Count() { return count; }
+    static void Sort();
 private:
     struct alignas(64) CpuData {
         std::atomic<uint64_t> nsamples {0};
@@ -199,7 +200,7 @@ private:
     };
     static ZStatSampler* first;
     static uint32_t count;
-    ZStatSampler* const next;
+    ZStatSampler* next;
     const ZStatUnit unit;
 };
 
@@ -226,10 +227,25 @@ class ZStatPhase {
 public:
     ZStatPhase(const char* group, const char* name) : sampler(group, name, ZStatUnit::TIME) {}
     const char* Name() const { return sampler.Name(); }
-    void RegisterEnd(uint64_t duration) const { sampler.Sample(duration); }
+    virtual void RegisterEnd(uint64_t duration) const { sampler.Sample(duration); }
+    virtual ~ZStatPhase() = default;
     const ZStatSampler& Sampler() const { return sampler; }
 private:
     const ZStatSampler sampler;
+};
+
+// zStat.cpp:848-875: critical phases register both duration and frequency.
+class ZStatCriticalPhase : public ZStatPhase {
+public:
+    explicit ZStatCriticalPhase(const char* name)
+        : ZStatPhase("Critical", name), counter("Critical", name, ZStatUnit::OPS_PER_SECOND) {}
+    void RegisterEnd(uint64_t duration) const override
+    {
+        ZStatPhase::RegisterEnd(duration);
+        counter.Increment();
+    }
+private:
+    const ZStatCounter counter;
 };
 
 namespace ZStatPhases {
@@ -241,20 +257,17 @@ extern const ZStatPhase PConcurrentResurrection;
 extern const ZStatPhase PDoTracing;
 extern const ZStatPhase PEnumRootsUpdateOldPointersWithin;
 extern const ZStatPhase PExemptFromRegions;
-extern const ZStatPhase PFinalizer;
-extern const ZStatPhase PFinalizerProcessorWaittingTime;
+extern const ZStatCriticalPhase PFinalizer;
+extern const ZStatCriticalPhase PFinalizerProcessorWaittingTime;
 extern const ZStatPhase YoungForwardFromRegions;
 extern const ZStatPhase OldForwardFromRegions;
 extern const ZStatPhase PIdentifyUselessExternRef;
 extern const ZStatPhase POldRelocateStart;
 extern const ZStatPhase PPostTrace;
 extern const ZStatPhase PPreforward;
-extern const ZStatPhase PReclaimGarbageRegions;
-extern const ZStatPhase PReleaseGarbageMemory;
+extern const ZStatCriticalPhase PReclaimGarbageRegions;
 extern const ZStatPhase PRemapYoungRoots;
 extern const ZStatPhase PTraceLiveObjectsUpdateOldPointersInRefFields;
-extern const ZStatPhase PTryReclaimGarbageRegions;
-extern const ZStatPhase PTryReleaseGarbageMemory;
 extern const ZStatPhase PYoungConcPromoteWalk;
 extern const ZStatPhase PYoungConcurrentRelocate;
 extern const ZStatPhase PYoungEvacFinish;

@@ -8,16 +8,49 @@
 // ZStat gtest; these exercise its registry and history invariants directly.
 #include "gc_unittest.hpp"
 #include "Base/ZStat.h"
+#include <cstring>
 
 using namespace MapleRuntime;
 using namespace MapleRuntime::GcUnit;
 
 namespace {
+const ZStatCriticalPhase critical("Test critical");
 const ZStatSampler unobserved("Test", "Unobserved", ZStatUnit::TIME);
 const ZStatPhase pause("Young Pause", "Same phase");
 const ZStatPhase concurrent("Young Phase", "Same phase");
 const ZStatSampler zeroDuration("Test", "Zero duration", ZStatUnit::TIME);
 const ZStatCounter counter("Test", "Counter", ZStatUnit::OPS_PER_SECOND);
+
+GC_TEST(ZStat, RegistrySortedWithoutChangingIdentity)
+{
+    const auto id = unobserved.Id();
+    ZStat::Initialize();
+    for (const auto* value = ZStatSampler::First(); value != nullptr && value->Next() != nullptr;
+         value = value->Next()) {
+        const int group = std::strcmp(value->Group(), value->Next()->Group());
+        GC_EXPECT_TRUE(group < 0 || (group == 0 && std::strcmp(value->Name(), value->Next()->Name()) <= 0));
+    }
+    GC_EXPECT_EQ(unobserved.Id(), id);
+}
+
+GC_TEST(ZStat, CriticalPhaseRecordsDurationAndFrequency)
+{
+    ZStat::Initialize();
+    const ZStatPhase& phase = critical;
+    phase.RegisterEnd(17);
+    phase.RegisterEnd(29);
+    std::vector<ZStatSamplerHistory> history(ZStatSampler::Count());
+    ZStat::SampleAndCollect(history);
+    GC_EXPECT_EQ(history[critical.Sampler().Id()].Windows()[3].sum, 46ULL);
+    bool found = false;
+    for (const auto* value = ZStatSampler::First(); value != nullptr; value = value->Next()) {
+        if (std::strcmp(value->Name(), "Test critical") == 0 && value->Unit() == ZStatUnit::OPS_PER_SECOND) {
+            GC_EXPECT_EQ(history[value->Id()].Windows()[3].sum, 2ULL);
+            found = true;
+        }
+    }
+    GC_EXPECT_TRUE(found);
+}
 
 GC_TEST(ZStat, RegistryExistsBeforeSampling)
 {

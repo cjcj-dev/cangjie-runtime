@@ -212,6 +212,25 @@ ZStatSampler::ZStatSampler(const char* group, const char* name, ZStatUnit unit)
     first = this;
 }
 
+// zStat.cpp:421-447: sort the resident registry once, preserving metric ids.
+void ZStatSampler::Sort()
+{
+    auto* unsorted = first;
+    first = nullptr;
+    while (unsorted != nullptr) {
+        auto* value = unsorted;
+        unsorted = value->next;
+        auto** current = &first;
+        while (*current != nullptr) {
+            const int group = std::strcmp((*current)->Group(), value->Group());
+            if (group > 0 || (group == 0 && std::strcmp((*current)->Name(), value->Name()) > 0)) break;
+            current = &(*current)->next;
+        }
+        value->next = *current;
+        *current = value;
+    }
+}
+
 void ZStatSampler::Initialize() const
 {
     for (size_t i = 0; i < CpuCount(); ++i) new (CpuLocal<CpuData>(i)) CpuData();
@@ -270,6 +289,7 @@ void ZStat::Initialize()
     static std::once_flag initialized;
     std::call_once(initialized, [] {
         ZStatValue::InitializeStorage();
+        ZStatSampler::Sort();
         for (const auto* sampler = ZStatSampler::First(); sampler != nullptr; sampler = sampler->Next()) {
             sampler->Initialize();
         }
@@ -293,16 +313,8 @@ void ZStat::Print(const std::vector<ZStatSamplerHistory>& history)
 {
     // zStat.cpp:1052-1064: logging controls output, never collection.
     if (Logger::GetLogger().GetMinimumLogLevel() > RTLOG_INFO) return;
-    std::vector<const ZStatSampler*> sorted;
-    for (const auto* sampler = ZStatSampler::First(); sampler != nullptr; sampler = sampler->Next()) {
-        sorted.push_back(sampler);
-    }
-    std::sort(sorted.begin(), sorted.end(), [](const ZStatSampler* a, const ZStatSampler* b) {
-        const int group = std::strcmp(a->Group(), b->Group());
-        return group < 0 || (group == 0 && std::strcmp(a->Name(), b->Name()) < 0);
-    });
     LOG(RTLOG_INFO, "GC Statistics: Last 10s / Last 10m / Last 10h / Total (average / maximum)");
-    for (const auto* sampler : sorted) {
+    for (const auto* sampler = ZStatSampler::First(); sampler != nullptr; sampler = sampler->Next()) {
         const auto windows = history[sampler->Id()].Windows();
         const char* unit = "ns";
         switch (sampler->Unit()) {
@@ -371,20 +383,17 @@ const ZStatPhase PConcurrentResurrection("Old Subphase", "concurrent resurrectio
 const ZStatPhase PDoTracing("Old Subphase", "DoTracing");
 const ZStatPhase PEnumRootsUpdateOldPointersWithin("Old Subphase", "enum roots & update old pointers within");
 const ZStatPhase PExemptFromRegions("Old Subphase", "ExemptFromRegions");
-const ZStatPhase PFinalizer("Critical", "Finalizer");
-const ZStatPhase PFinalizerProcessorWaittingTime("Critical", "finalizerProcessor waitting time");
+const ZStatCriticalPhase PFinalizer("Finalizer");
+const ZStatCriticalPhase PFinalizerProcessorWaittingTime("finalizerProcessor waitting time");
 const ZStatPhase YoungForwardFromRegions("Young Subphase", "ForwardFromRegions");
 const ZStatPhase OldForwardFromRegions("Old Subphase", "ForwardFromRegions");
 const ZStatPhase PIdentifyUselessExternRef("Old Subphase", "identify useless extern ref");
 const ZStatPhase POldRelocateStart("Old Pause", "old.relocate_start");
 const ZStatPhase PPostTrace("Old Subphase", "PostTrace");
 const ZStatPhase PPreforward("Old Subphase", "Preforward");
-const ZStatPhase PReclaimGarbageRegions("Critical", "ReclaimGarbageRegions");
-const ZStatPhase PReleaseGarbageMemory("Critical", "ReleaseGarbageMemory");
+const ZStatCriticalPhase PReclaimGarbageRegions("ReclaimGarbageRegions");
 const ZStatPhase PRemapYoungRoots("Old Subphase", "RemapYoungRoots");
 const ZStatPhase PTraceLiveObjectsUpdateOldPointersInRefFields("Old Subphase", "trace live objects & update old pointers in ref-fields");
-const ZStatPhase PTryReclaimGarbageRegions("Critical", "TryReclaimGarbageRegions");
-const ZStatPhase PTryReleaseGarbageMemory("Critical", "TryReleaseGarbageMemory");
 const ZStatPhase PYoungConcPromoteWalk("Young Subphase", "young.conc_promote_walk");
 const ZStatPhase PYoungConcurrentRelocate("Young Subphase", "young.concurrent_relocate");
 const ZStatPhase PYoungEvacFinish("Young Subphase", "young.evac_finish");
