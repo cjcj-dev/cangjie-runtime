@@ -1342,9 +1342,11 @@ bool WCollector::TryEndYoungMark(WorkStack& workStack, YoungConcWindowStats* win
 }
 void WCollector::MarkNewObject(BaseObject* obj)
 {
-    GCPhase mutatorPhase = Mutator::GetMutator()->GetMutatorPhase();
-    if (UNLIKELY(mutatorPhase == GCPhase::GC_PHASE_ENUM) || UNLIKELY(mutatorPhase == GCPhase::GC_PHASE_TRACE) ||
-        UNLIKELY(mutatorPhase == GCPhase::GC_PHASE_CLEAR_SATB_BUFFER)) {
+    // Match the page owner used by MarkObjectImpl, independently of the
+    // last young/old operation acknowledged by this mutator.
+    const GCPhase phase = GetGCPhase(static_cast<GCCycleGeneration>(ObjectGeneration(obj)));
+    if (UNLIKELY(phase == GCPhase::GC_PHASE_ENUM) || UNLIKELY(phase == GCPhase::GC_PHASE_TRACE) ||
+        UNLIKELY(phase == GCPhase::GC_PHASE_CLEAR_SATB_BUFFER)) {
         MarkObject(obj);
     }
 }
