@@ -6,9 +6,6 @@
 
 set(SRC_LIST
     "../z/zVerify.cpp"
-    "VerifyRememberedSet.cpp"
-    "VerifyRoots.cpp"
-    "VerifyHeap.cpp"
     "SurvNodeDiag.cpp"
     "Zap.cpp"
     "MinorGCALot.cpp"

@@ -14,6 +14,10 @@
 #include <cstdlib>
 #include <sched.h>
 
+#include "Heap/z/zVerify.hpp"
+#include <unordered_set>
+#include <vector>
+
 namespace MapleRuntime {
 
 namespace {
@@ -264,3 +268,36 @@ void ZForwarding::relocated_remembered_fields_notify_concurrent_scan_of()
         }
     }
 }
+
+namespace MapleRuntime {
+
+// zForwarding.cpp:369-409. Inspect the real table, including the port's
+// overflow entries; never reconstruct mappings from object headers.
+void ZForwarding::verify() const
+{
+    CHECK_DETAIL(_ref_count.load(std::memory_order_acquire) != 0, "Invalid forwarding reference count");
+    CHECK_DETAIL(_page != nullptr, "Invalid forwarding page");
+    std::vector<MAddress> sources;
+    for_each_from([&](MAddress from) { sources.push_back(from); });
+    std::unordered_set<MAddress> uniqueSources;
+    std::unordered_set<MAddress> destinations;
+    size_t bytes = 0;
+    for (MAddress from : sources) {
+        CHECK_DETAIL(from >= start() && from - start() < size(), "Invalid forwarding source");
+        CHECK_DETAIL(uniqueSources.insert(from).second, "Duplicate forwarding source");
+        const MAddress to = find(from);
+        CHECK_DETAIL(to != 0 && destinations.insert(to).second, "Duplicate or null forwarding destination");
+        BaseObject* object = reinterpret_cast<BaseObject*>(to);
+        ZVerify::Object(object, nullptr);
+        bytes += RegionSpace::GetAllocSize(*object);
+    }
+    // The source incarnation's livemap is retained by FromPageView even for
+    // in-place relocation, where reusable page metadata already names to-space.
+    const FromPageView* from = from_page_snapshot();
+    CHECK_DETAIL(from != nullptr && from->liveInfo != nullptr, "Missing forwarding source livemap");
+    RegionBitmap* bitmap = _page->GetOwnerMarkBitmap(from->liveInfo);
+    CHECK_DETAIL(bitmap != nullptr && sources.size() == bitmap->GetLiveObjects() &&
+                 bytes == bitmap->GetLiveBytes(), "Invalid forwarding live objects or bytes");
+}
+
+} // namespace MapleRuntime

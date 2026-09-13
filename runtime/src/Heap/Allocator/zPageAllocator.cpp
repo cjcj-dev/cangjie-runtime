@@ -99,3 +99,22 @@ void Report(size_t listRegions, size_t listBytes)
 }
 } // namespace RecentFullAccounting
 }
+
+namespace MapleRuntime {
+#if defined(MRT_ALLOCATION_STALL_OBSERVE)
+void RegionManager::SetAllocationStallTestHooks(AllocationStallTestHook beforeWave,
+                                                AllocationStallTestHook requestGc,
+                                                AllocationStallTestHook beforeWait)
+{
+    allocationStallBeforeWaveTestHook = std::move(beforeWave);
+    allocationStallGcTestHook = std::move(requestGc);
+    allocationStallBeforeWaitTestHook = std::move(beforeWait);
+}
+
+size_t RegionManager::PendingStalledAllocations() const { return allocationStallQueue.Pending(); }
+size_t RegionManager::EnqueuedStalledAllocations() const { return allocationStallQueue.EnqueuedCount(); }
+size_t RegionManager::DequeuedStalledAllocations() const { return allocationStallQueue.DequeuedCount(); }
+size_t RegionManager::SatisfiedStalledAllocations() const { return allocationStallQueue.SatisfiedCount(); }
+size_t RegionManager::FailedStalledAllocations() const { return allocationStallQueue.FailedCount(); }
+#endif
+} // namespace MapleRuntime
