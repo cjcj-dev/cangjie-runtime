@@ -88,9 +88,10 @@ void Barrier::StoreBarrier(BaseObject* obj, RefField<atomic>& field, bool heal,
 {
     const zpointer observed = field.GetFieldValue(std::memory_order_relaxed);
     RefField<> previous(observed);
-    auto fastPath = [this, heal](zpointer word) {
+    auto fastPath = [this, heal, strength](zpointer word) {
         RefField<> value(word);
-        return theCollector.is_store_good(value) || (!heal && is_null(word));
+        return theCollector.is_store_good(value) ||
+            (strength == ReferenceStrength::Strong && !heal && is_null(word));
     };
     if (fastPath(observed)) {
         return;
@@ -131,10 +132,12 @@ void Barrier::WriteReference(BaseObject* obj, RefField<false>& field, BaseObject
 void Barrier::PostWriteReference(BaseObject* obj, RefField<false>& field, BaseObject* ref, zpointer prev) const
 {
     RefField<> previous(prev);
-    if (!theCollector.is_store_good(previous) && !is_null(prev)) {
-        const MAddress address = reinterpret_cast<MAddress>(&field);
-        const bool weakReferent = obj != nullptr && obj->IsWeakRef() &&
-            address == reinterpret_cast<MAddress>(obj) + TYPEINFO_PTR_SIZE;
+    const MAddress address = reinterpret_cast<MAddress>(&field);
+    const bool weakReferent = obj != nullptr && obj->IsWeakRef() &&
+        address == reinterpret_cast<MAddress>(obj) + TYPEINFO_PTR_SIZE;
+    // ZBarrier::no_keep_alive_store_barrier_on_heap_oop_field uses store-good,
+    // including raw null in the slow path so that remember(p) is not skipped.
+    if (!theCollector.is_store_good(previous) && (weakReferent || !is_null(prev))) {
         if (weakReferent) {
             if (!RegionInfo::GetRegionInfoAt(address)->IsYoungRegion()) {
                 theRememberedSet.Record(address, true);

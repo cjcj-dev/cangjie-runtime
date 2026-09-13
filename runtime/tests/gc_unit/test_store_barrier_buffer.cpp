@@ -905,3 +905,33 @@ GC_OTHER_VM_TEST(StoreBarrierBuffer, DetachPublishesBothGenerationsWithoutAlloca
     GC_EXPECT_EQ(young, 1u);
     GC_EXPECT_EQ(old, 1u);
 }
+
+// ZBarrier::no_keep_alive_store_barrier_on_heap_oop_field (zBarrier.inline.hpp:719):
+// raw null takes remember(p), whereas an ordinary strong store may bypass it.
+GC_TEST(StoreBuf, WeakRawNullStoreRetainsRememberedSlot)
+{
+    for (bool preloaded : {false, true}) {
+        for (bool weak : {false, true}) {
+            GcHeapFixture fx;
+            fx.region0->SetYoungRegionFlag(0);
+            fx.region1->SetYoungRegionFlag(1);
+            if (weak) {
+                fx.typeInfo->SetType(TypeKind::TYPE_KIND_WEAKREF_CLASS);
+            }
+            RememberedSet rs;
+            rs.Initialize(fx.heapStart, 2 * RegionInfo::UNIT_SIZE);
+            StoreBufferCollector collector;
+            Barrier barrier(collector, rs);
+            HeapSlot<>& field = HeapSlotAt<>(reinterpret_cast<MAddress>(fx.obj0) + TYPEINFO_PTR_SIZE);
+            field.StoreColoured(zpointer::null);
+            if (preloaded) {
+                field.StoreColoured(StoreGoodPointer(fx.obj1));
+                barrier.PostWriteReference(fx.obj0, field, fx.obj1, zpointer::null);
+            } else {
+                barrier.WriteReference(fx.obj0, field, fx.obj1);
+            }
+            GC_EXPECT_EQ(rs.Contains(reinterpret_cast<MAddress>(&field)), weak);
+            GC_EXPECT_EQ(to_object(field.GetTargetObject()), fx.obj1);
+        }
+    }
+}
