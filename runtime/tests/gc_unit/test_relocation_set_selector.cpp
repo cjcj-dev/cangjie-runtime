@@ -128,4 +128,42 @@ GC_TEST(RelocationSetSelector, AllocatingPagesNeverSelected)
     GC_EXPECT_TRUE(ContainsId(r, 9u));
 }
 
+// ZRelocationSetSelectorGroup::semi_sort (zRelocationSetSelector.cpp:77).
+// Deliberately reverse live bytes inside a bucket: full sorting changes this result.
+GC_TEST(RelocationSetSelector, SemiSortUsesPartitionFingers)
+{
+    const size_t cap = kRelocationMaxSmallRegionBytes;
+    std::vector<RelocRegionDesc> in{
+        Make(1, 191, cap), Make(2, 127, cap), Make(3, 128, cap), Make(4, 64, cap),
+        Make(5, 0, cap), Make(6, 192, cap)};
+    const RelocSelectResult r = SelectRelocationSet(in);
+    const std::vector<uint32_t> expected{5, 2, 4, 1, 3, 6};
+    GC_EXPECT_TRUE(r.selectedIds == expected);
+}
+
+// ZRelocationSetSelectorGroup::partition_index (zRelocationSetSelector.cpp:70).
+// Page-size adaptation: order by occupancy bucket, not absolute live bytes.
+GC_TEST(RelocationSetSelector, PartitionUsesEachPageCapacity)
+{
+    std::vector<RelocRegionDesc> in{
+        Make(1, 1024, 4096), Make(2, 2048, 16384), Make(3, 1536, 12288)};
+    const RelocSelectResult r = SelectRelocationSet(in);
+    const std::vector<uint32_t> expected{2, 3, 1};
+    GC_EXPECT_TRUE(r.selectedIds == expected);
+}
+
+// ZRelocationSetSelectorGroup::select_inner (zRelocationSetSelector.cpp:153-173).
+// Two pages require two destinations; a third amortizes the same two destinations.
+GC_TEST(RelocationSetSelector, SelectionContinuesPastUnprofitablePrefix)
+{
+    const size_t cap = kRelocationMaxSmallRegionBytes;
+    const size_t live = 60000;
+    std::vector<RelocRegionDesc> in{Make(1, live, cap), Make(2, live, cap)};
+    GC_EXPECT_TRUE(SelectRelocationSet(in).selectedIds.empty());
+    in.push_back(Make(3, live, cap));
+    const RelocSelectResult r = SelectRelocationSet(in);
+    const std::vector<uint32_t> expected{1, 2, 3};
+    GC_EXPECT_TRUE(r.selectedIds == expected);
+}
+
 } // namespace

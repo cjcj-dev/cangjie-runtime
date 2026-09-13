@@ -101,16 +101,13 @@ inline bool ShouldPromoteAge(uint8_t youngAge, uint32_t tenuringThreshold)
 #ifndef MRT_RELOCATION_SET_SELECTOR_H
 #define MRT_RELOCATION_SET_SELECTOR_H
 
-#include <algorithm>
+#include <cassert>
 #include <cmath>
 #include <cstddef>
 #include <cstdint>
 #include <vector>
 
 namespace MapleRuntime {
-
-// Compile-time port of ZFragmentationLimit (z_globals.hpp) — not an MRT_* env.
-inline constexpr bool kUseRelocationSetSelector = true;
 
 // RegionManager::MAX_UNIT_COUNT_PER_REGION * UNIT_SIZE (128KB) — no medium tier.
 inline constexpr size_t kRelocationMaxSmallRegionBytes = 128 * 1024;
@@ -152,14 +149,47 @@ inline bool PreFilterRelocRegion(const RelocRegionDesc& page)
     return garbage > pageFragLimit;
 }
 
+// ZRelocationSetSelectorGroup::partition_index / semi_sort
+// (zRelocationSetSelector.cpp:70-112, zRelocationSetSelector.hpp:81-82).
+inline constexpr size_t kRelocationNumPartitionsShift = 11;
+inline constexpr size_t kRelocationNumPartitions = size_t{1} << kRelocationNumPartitionsShift;
+
+inline size_t RelocationPartitionIndex(const RelocRegionDesc& page)
+{
+    // Region capacities are system-page multiples, not necessarily powers of two.
+    // Division retains ZGC's per-page partition width without requiring log2i_exact.
+    const size_t partitionSize = page.capacity >> kRelocationNumPartitionsShift;
+    assert(partitionSize != 0);
+    const size_t index = page.liveBytes / partitionSize;
+    assert(index < kRelocationNumPartitions);
+    return index;
+}
+
+inline void SemiSortRelocationPages(std::vector<RelocRegionDesc>& pages)
+{
+    size_t partitions[kRelocationNumPartitions]{};
+    for (const RelocRegionDesc& page : pages) {
+        ++partitions[RelocationPartitionIndex(page)];
+    }
+
+    size_t finger = 0;
+    for (size_t& partition : partitions) {
+        const size_t slots = partition;
+        partition = finger;
+        finger += slots;
+    }
+
+    std::vector<RelocRegionDesc> sorted(pages.size());
+    for (const RelocRegionDesc& page : pages) {
+        sorted[partitions[RelocationPartitionIndex(page)]++] = page;
+    }
+    pages.swap(sorted);
+}
+
 // ZRelocationSetSelectorGroup::select_inner (zRelocationSetSelector.cpp:114-196)
 inline RelocSelectResult SelectRelocationSet(const std::vector<RelocRegionDesc>& pages)
 {
     RelocSelectResult out;
-    if (!kUseRelocationSetSelector) {
-        return out;
-    }
-
     std::vector<RelocRegionDesc> live;
     live.reserve(pages.size());
     for (const RelocRegionDesc& p : pages) {
@@ -167,8 +197,7 @@ inline RelocSelectResult SelectRelocationSet(const std::vector<RelocRegionDesc>&
             live.push_back(p);
         }
     }
-    std::stable_sort(live.begin(), live.end(),
-                     [](const RelocRegionDesc& a, const RelocRegionDesc& b) { return a.liveBytes < b.liveBytes; });
+    SemiSortRelocationPages(live);
 
     const int npages = static_cast<int>(live.size());
     int selectedFrom = 0;
