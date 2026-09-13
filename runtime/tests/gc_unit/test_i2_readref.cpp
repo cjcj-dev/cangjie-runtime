@@ -15,7 +15,7 @@
 #include "Common/ColourPredicates.h"
 #include "Heap/Barrier/RememberedSet.h"
 #include "Heap/Collector/Collector.h"
-#include "Heap/WCollector/EnumBarrier.h"
+#include "Heap/Barrier/Barrier.h"
 #include "ObjectModel/RefField.inline.h"
 #include "gc_heap_fixture.hpp"
 #include "gc_unittest.hpp"
@@ -69,7 +69,7 @@ GC_TEST(I2ReadRef, LoadBadForwardedFromResolvesAndHealsTo)
 
     RememberedSet rs;
     rs.Initialize(fx.heapStart, 2 * RegionInfo::UNIT_SIZE);
-    EnumBarrier barrier(collector, rs);
+    Barrier barrier(collector, rs);
 
     auto* field = &HeapSlotAt<>(reinterpret_cast<MAddress>(fx.obj0) + TYPEINFO_PTR_SIZE);
     const uintptr_t staleRemaps = static_cast<uintptr_t>(::g_cjLoadBadMask) & REMAP_COLOUR_MASK;
@@ -98,7 +98,7 @@ GC_TEST(I2ReadRef, ForgedLoadGoodForwardedFromIsRejected)
 
         RememberedSet rs;
         rs.Initialize(fx.heapStart, 2 * RegionInfo::UNIT_SIZE);
-        EnumBarrier barrier(collector, rs);
+        Barrier barrier(collector, rs);
         auto* field = &HeapSlotAt<>(reinterpret_cast<MAddress>(fx.obj0) + TYPEINFO_PTR_SIZE);
         const uintptr_t remap =
             ColourPredicates::current_remapped(static_cast<uintptr_t>(::g_cjLoadBadMask));
@@ -119,7 +119,7 @@ GC_TEST(I2ReadRef, PlainHeapSlotIsHealedToCurrentColour)
     ToCollector collector;
     RememberedSet rs;
     rs.Initialize(fx.heapStart, 2 * RegionInfo::UNIT_SIZE);
-    EnumBarrier barrier(collector, rs);
+    Barrier barrier(collector, rs);
 
     auto* field = &HeapSlotAt<>(reinterpret_cast<MAddress>(fx.obj1) + TYPEINFO_PTR_SIZE);
     const uintptr_t plain = reinterpret_cast<uintptr_t>(fx.obj0);

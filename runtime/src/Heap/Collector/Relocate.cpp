@@ -1570,7 +1570,6 @@ void WCollector::EvacuateYoungRegions(const std::vector<BaseObject*>& reachableV
         // ObjectState::FORWARDED still in its header -- and the compiler reads that header as one
         // 64-bit word, so (3 << 48) enters an address and faults non-canonically.
         //
-        // Measured: BarrierPhase::FORWARD hand-outs are 100% hasTo=1, unmov=0, slotGood=1, i.e. the
         // target really was forwarded, is not in an unmovable region, and the slot was load-good --
         // which after a flip can only mean it was written after that flip.
         //
@@ -1596,7 +1595,6 @@ void WCollector::EvacuateYoungRegions(const std::vector<BaseObject*>& reachableV
             // Publish the relocate phase and submit page work while the
             // existing young pause still excludes mutator execution. Root
             // transition may now wait for a real page task on allocation failure.
-            Heap::GetHeap().InstallBarrier(GCPhase::GC_PHASE_PREFORWARD);
             Heap::GetHeap().SetGCPhase(GCPhase::GC_PHASE_PREFORWARD);
             StartRelocationTasks();
             // zRelocate.cpp:1289-1300 generation workers run relocate_task before
@@ -1781,7 +1779,6 @@ void WCollector::EvacuateYoungRegions(const std::vector<BaseObject*>& reachableV
 }
 // permhole receiptization (steer1): RouteObject is geometric (ROUTED before Copy fills
 // tip). A tip-valid to is a *receipt* (copy happened). A geometric to with tip==0 is only
-// a plan — never hand it to make_load_good / IdleBarrier self-heal (THIRD_mutator hang).
 //
 // Contract of this wait:
 //   ① return tip-valid to (receipt), or

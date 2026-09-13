@@ -32,7 +32,7 @@
 #include "Heap/GcThreadPool.h"
 #include "Heap/WCollector/WCollector.h"
 #include "Heap/WCollector/RemapYoungRoots.h"
-#include "Heap/WCollector/TraceBarrier.h"
+#include "Heap/Barrier/Barrier.h"
 #include "Mutator/Mutator.h"
 #include "Mutator/ThreadLocal.h"
 #include "Mutator/MutatorManager.h"
@@ -2459,7 +2459,7 @@ GC_TEST(ForwardingPublicationProduct, TraceIncomingAlreadyToOutsideFromSkipsLook
     BaseObject* holder = fx.obj0;
     auto& field = HeapSlotAt<>(reinterpret_cast<MAddress>(holder) + TYPEINFO_PTR_SIZE);
     field.StoreColoured(zpointer::null);
-    TraceBarrier barrier(collector, Heap::GetHeap().GetRememberedSet());
+    Barrier barrier(collector, Heap::GetHeap().GetRememberedSet());
     Mutator mutator;
     mutator.SetMutatorPhase(GCPhase::GC_PHASE_TRACE);
     Mutator* const mutatorBefore = ThreadLocal::GetMutator();
@@ -2552,7 +2552,7 @@ GC_TEST(ForwardingPublicationProduct, TraceOverwritePreviousCarriesRealHeapSourc
     BaseObject* holder = fx.obj0;
     auto& actualField = HeapSlotAt<>(reinterpret_cast<MAddress>(holder) + TYPEINFO_PTR_SIZE);
     actualField.StoreColoured(ColouredPointer(state.from, OneLoadBadRemap()));
-    TraceBarrier barrier(collector, Heap::GetHeap().GetRememberedSet());
+    Barrier barrier(collector, Heap::GetHeap().GetRememberedSet());
     AbortCapture aborted = CaptureAbort([&]() { barrier.WriteReference(holder, actualField, nullptr); });
     GC_EXPECT_TRUE(WIFSIGNALED(aborted.status));
     GC_EXPECT_EQ(WTERMSIG(aborted.status), SIGABRT);
@@ -2674,7 +2674,7 @@ GC_TEST(ForwardingPublicationProduct, LiveExactStartReceiptBeforeTraceOverwrite)
     BaseObject* holder = fx.obj0;
     auto& field = HeapSlotAt<>(reinterpret_cast<MAddress>(holder) + TYPEINFO_PTR_SIZE);
     field.StoreColoured(ColouredPointer(from, OneLoadBadRemap()));
-    TraceBarrier barrier(collector, Heap::GetHeap().GetRememberedSet());
+    Barrier barrier(collector, Heap::GetHeap().GetRememberedSet());
     Mutator mutator;
     mutator.SetMutatorPhase(GCPhase::GC_PHASE_TRACE);
     Mutator* const mutatorBefore = ThreadLocal::GetMutator();
@@ -2718,7 +2718,7 @@ GC_TEST(ForwardingPublicationProduct, DeadOrUnselectedFromStillFailsClosed)
     BaseObject* holder = fx.obj0;
     auto& field = HeapSlotAt<>(reinterpret_cast<MAddress>(holder) + TYPEINFO_PTR_SIZE);
     field.StoreColoured(ColouredPointer(dead, OneLoadBadRemap()));
-    TraceBarrier barrier(collector, Heap::GetHeap().GetRememberedSet());
+    Barrier barrier(collector, Heap::GetHeap().GetRememberedSet());
     AbortCapture aborted = CaptureAbort([&]() { barrier.WriteReference(holder, field, nullptr); });
     GC_EXPECT_TRUE(WIFSIGNALED(aborted.status));
     GC_EXPECT_EQ(WTERMSIG(aborted.status), SIGABRT);

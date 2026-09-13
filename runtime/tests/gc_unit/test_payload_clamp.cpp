@@ -16,7 +16,7 @@
 #undef private
 #include "Heap/Collector/Collector.h"
 #include "Heap/Heap.h"
-#include "Heap/WCollector/IdleBarrier.h"
+#include "Heap/Barrier/Barrier.h"
 #include "ObjectModel/MArray.inline.h"
 #include "gc_unittest.hpp"
 
@@ -77,7 +77,7 @@ struct PayloadFixture {
     GcHeapFixture heap;
     NoAnswerCollector collector;
     RememberedSet rememberedSet;
-    IdleBarrier barrier;
+    Barrier barrier;
     InstalledBarrierScope installed;
 };
 

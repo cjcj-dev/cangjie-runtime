@@ -29,7 +29,7 @@
 #include "Heap/Collector/CollectorProxy.h"
 #include "Heap/Collector/CollectorResources.h"
 #include "Heap/Heap.h"
-#include "Heap/WCollector/TraceBarrier.h"
+#include "Heap/Barrier/Barrier.h"
 #include "Mutator/Mutator.h"
 #include "mark_publication_fixture.hpp"
 #include "Mutator/ThreadLocal.h"
@@ -227,7 +227,7 @@ struct StoreFixture {
     GcHeapFixture heap;
     BarrierCollector collector;
     RememberedSet remembered;
-    TraceBarrier barrier;
+    Barrier barrier;
     InstalledBarrierScope installed;
     RegionInfo* regionOld = nullptr;
     RegionInfo* regionNew = nullptr;
@@ -296,7 +296,7 @@ GC_TEST(BarrierOldAtomic, AtomicColourOnlyHealsRealSlot)
     BarrierCollector collector;
     RememberedSet remembered;
     remembered.Initialize(heap.heapStart, 2 * RegionInfo::UNIT_SIZE);
-    TraceBarrier barrier(collector, remembered);
+    Barrier barrier(collector, remembered);
     InstalledBarrierScope installed(barrier);
     RefField<true>& field = HeapSlotAt<true>(reinterpret_cast<MAddress>(heap.obj1) + TYPEINFO_PTR_SIZE);
     const zpointer before = LoadBadPointer(heap.obj0);
@@ -324,7 +324,7 @@ GC_TEST(BarrierOldAtomic, AtomicFromToHealsRealSlot)
     heap.region0->SetRegionAllocPtr(reinterpret_cast<MAddress>(collector.to) + collector.to->GetSize());
     RememberedSet remembered;
     remembered.Initialize(heap.heapStart, 2 * RegionInfo::UNIT_SIZE);
-    TraceBarrier barrier(collector, remembered);
+    Barrier barrier(collector, remembered);
     InstalledBarrierScope installed(barrier);
     RefField<true>& field = HeapSlotAt<true>(reinterpret_cast<MAddress>(heap.obj1) + TYPEINFO_PTR_SIZE);
     const zpointer before = LoadBadPointer(collector.from);
@@ -351,7 +351,7 @@ GC_TEST(BarrierOldAtomic, AtomicCasLostPreservesConcurrentWinner)
     heap.region0->SetRegionAllocPtr(reinterpret_cast<MAddress>(winner) + winner->GetSize());
     RememberedSet remembered;
     remembered.Initialize(heap.heapStart, 2 * RegionInfo::UNIT_SIZE);
-    TraceBarrier barrier(collector, remembered);
+    Barrier barrier(collector, remembered);
     InstalledBarrierScope installed(barrier);
     RefField<true>& field = HeapSlotAt<true>(reinterpret_cast<MAddress>(heap.obj1) + TYPEINFO_PTR_SIZE);
     collector.pauseBeforeHeal = true;

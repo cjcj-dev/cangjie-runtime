@@ -11,12 +11,6 @@
 #include "Collector/CollectorResources.h"
 #include "Interpreter/Options.h"
 #include "Interpreter/InterpreterSpecific.h"
-#include "WCollector/IdleBarrier.h"
-#include "WCollector/EnumBarrier.h"
-#include "WCollector/TraceBarrier.h"
-#include "WCollector/PostTraceBarrier.h"
-#include "WCollector/PreforwardBarrier.h"
-#include "WCollector/ForwardBarrier.h"
 #include "Mutator/MutatorManager.h"
 #if defined(_WIN64)
 #include <windows.h>
@@ -26,8 +20,7 @@
 #include <mach/mach.h>
 #endif
 namespace MapleRuntime {
-Barrier** Heap::currentBarrierPtr = nullptr;
-Barrier* Heap::stwBarrierPtr = nullptr;
+Barrier* Heap::barrierPtr = nullptr;
 MAddress Heap::heapStartAddr = 0;
 MAddress Heap::heapCurrentEnd = 0;
 std::vector<HeapSlotAddressRange> Heap::heapReservations;
@@ -65,14 +58,9 @@ class HeapImpl : public Heap {
 public:
     HeapImpl()
         : theSpace(Allocator::NewAllocator()), collectorResources(collectorProxy),
-          collectorProxy(*theSpace, collectorResources), stwBarrier(collectorProxy, rememberedSet),
-        idleBarrier(collectorProxy, rememberedSet), enumBarrier(collectorProxy, rememberedSet),
-        traceBarrier(collectorProxy, rememberedSet), postTraceBarrier(collectorProxy, rememberedSet),
-        preforwardBarrier(collectorProxy, rememberedSet), forwardBarrier(collectorProxy, rememberedSet)
+          collectorProxy(*theSpace, collectorResources), barrier(collectorProxy, rememberedSet)
     {
-        currentBarrier = &stwBarrier;
-        stwBarrierPtr = &stwBarrier;
-        Heap::currentBarrierPtr = &currentBarrier;
+        Heap::barrierPtr = &barrier;
         RunType::InitRunTypeMap();
     }
 
@@ -114,7 +102,6 @@ public:
 #endif
     bool ForEachObj(const std::function<void(BaseObject*)>&, bool) const override;
     ssize_t GetHeapPhysicalMemorySize() const override;
-    void InstallBarrier(const GCPhase phase) override;
     RememberedSet& GetRememberedSet() override { return rememberedSet; }
     FinalizerProcessor& GetFinalizerProcessor() override;
     CollectorResources& GetCollectorResources() override;
@@ -156,14 +143,7 @@ private:
 
     ExportRootTable exportRootsTable;
     RememberedSet rememberedSet;
-    Barrier stwBarrier;
-    IdleBarrier idleBarrier;
-    EnumBarrier enumBarrier;
-    TraceBarrier traceBarrier;
-    PostTraceBarrier postTraceBarrier;
-    PreforwardBarrier preforwardBarrier;
-    ForwardBarrier forwardBarrier;
-    Barrier* currentBarrier = nullptr;
+    Barrier barrier;
 
     // manage gc roots entry
     StaticRootTable staticRootTable;
@@ -203,24 +183,6 @@ void HeapImpl::Fini()
 Collector& HeapImpl::GetCollector() { return collectorProxy.GetCurrentCollector(); }
 
 Allocator& HeapImpl::GetAllocator() { return *theSpace; }
-
-void HeapImpl::InstallBarrier(const GCPhase phase)
-{
-    if (phase == GCPhase::GC_PHASE_ENUM) {
-        currentBarrier = &enumBarrier;
-    } else if (phase == GCPhase::GC_PHASE_TRACE || phase == GCPhase::GC_PHASE_CLEAR_SATB_BUFFER) {
-        currentBarrier = &traceBarrier;
-    } else if (phase == GCPhase::GC_PHASE_PREFORWARD) {
-        currentBarrier = &preforwardBarrier;
-    } else if (phase == GCPhase::GC_PHASE_FORWARD) {
-        currentBarrier = &forwardBarrier;
-    } else if (phase == GCPhase::GC_PHASE_IDLE) {
-        currentBarrier = &idleBarrier;
-    } else if (phase == GCPhase::GC_PHASE_POST_TRACE) {
-        currentBarrier = &postTraceBarrier;
-    }
-    DLOG(GCPHASE, "install barrier for gc phase %u", phase);
-}
 
 GCPhase HeapImpl::GetGCPhase() const { return collectorProxy.GetGCPhase(); }
 

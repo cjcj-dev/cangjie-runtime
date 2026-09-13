@@ -617,7 +617,6 @@ void WCollector::TraceHeap()
     // begins with concurrent roots/follow (zGeneration.cpp:1015-1020).
     if (concurrentStackScan) {
         ScopedStopTheWorld stw("major stack scan prepare", false);
-        Heap::GetHeap().InstallBarrier(GCPhase::GC_PHASE_ENUM);
         Heap::GetHeap().SetGCPhase(GCPhase::GC_PHASE_ENUM);
     }
 

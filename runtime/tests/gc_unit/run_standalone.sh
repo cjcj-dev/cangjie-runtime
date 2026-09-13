@@ -779,7 +779,7 @@ echo "GATE_LOADHEAL_PRODUCT_MANIFEST_OK rows=$loadheal_rows source=clear_entries
 # the product SO.  Full nm excludes even local/weak test copies; nm -u proves
 # the calls are imports.  main is the positive control above.
 PTRCOLOUR_PRODUCT_CONSUMERS=()
-PTRCOLOUR_PRODUCT_CONSUMERS+=('MapleRuntime::EnumBarrier::ReadReference(')
+PTRCOLOUR_PRODUCT_CONSUMERS+=('MapleRuntime::Barrier::ReadReference(')
 if [[ "${MRT_TESTABLE_INTERNALS:-0}" == "1" ]]; then
   PTRCOLOUR_PRODUCT_CONSUMERS+=('MapleRuntime::AssertColouredWriteIfEnabled(')
 fi

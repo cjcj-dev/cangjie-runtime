@@ -34,7 +34,7 @@
 #include "Heap/Collector/CollectorProxy.h"
 #include "Heap/Collector/CollectorResources.h"
 #include "Heap/Barrier/Barrier.h"
-#include "Heap/WCollector/TraceBarrier.h"
+#include "Heap/Barrier/Barrier.h"
 #include "Heap/Allocator/AllocBuffer.h"
 #include "Mutator/Mutator.h"
 #include "mark_publication_fixture.hpp"
@@ -181,7 +181,7 @@ GC_TEST(StoreBuf, ProductWriteCarriesOldValueOnlyInPrevArm)
     RememberedSet rs;
     rs.Initialize(fx.heapStart, 2 * RegionInfo::UNIT_SIZE);
     StoreBufferCollector collector;
-    TraceBarrier barrier(collector, rs);
+    Barrier barrier(collector, rs);
     AllocBuffer alloc;
     AllocBufferScope allocScope(alloc);
 
@@ -248,7 +248,7 @@ GC_TEST(StoreBuf, ProductPhaseFlushHandsPairedPrevToMark)
     RememberedSet rs;
     rs.Initialize(fx.heapStart, 2 * RegionInfo::UNIT_SIZE);
     StoreBufferCollector collector;
-    TraceBarrier barrier(collector, rs);
+    Barrier barrier(collector, rs);
     AllocBuffer alloc;
     AllocBufferScope allocScope(alloc);
 
@@ -364,7 +364,7 @@ GC_TEST(StoreBuf, CompilerFastOverwriteHandsObservedOldToMark)
     RememberedSet rs;
     rs.Initialize(fx.heapStart, 2 * RegionInfo::UNIT_SIZE);
     StoreBufferCollector collector;
-    TraceBarrier barrier(collector, rs);
+    Barrier barrier(collector, rs);
     InstalledBarrierScope installedBarrier(barrier);
     AllocBuffer alloc;
     AllocBufferScope allocScope(alloc);
@@ -441,7 +441,7 @@ GC_TEST(StoreBuf, GcAssistedPhaseFlushDefersStoreBuffer)
     RememberedSet rs;
     rs.Initialize(fx.heapStart, 2 * RegionInfo::UNIT_SIZE);
     StoreBufferCollector collector;
-    TraceBarrier barrier(collector, rs);
+    Barrier barrier(collector, rs);
     AllocBuffer alloc;
     AllocBufferScope allocScope(alloc);
 

@@ -5,12 +5,6 @@
 # See https://cangjie-lang.cn/pages/LICENSE for license information.
 
 set(SRC_LIST
-    "IdleBarrier.cpp"
-    "EnumBarrier.cpp"
-    "TraceBarrier.cpp"
-    "PostTraceBarrier.cpp"
-    "PreforwardBarrier.cpp"
-    "ForwardBarrier.cpp"
     "WCollector.cpp"
     "../Collector/Generation.cpp"
     "../Collector/Mark.cpp"
