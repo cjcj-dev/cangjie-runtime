@@ -413,6 +413,7 @@ public:
     }
 
     void VisitProcessedRoots(const RootVisitor& visitor);
+    void VisitHeapRootSlots(ObjectRef& root, const RootVisitor& visitor);
 
     void VisitMutatorRoots(const RootVisitor& visitor)
     {

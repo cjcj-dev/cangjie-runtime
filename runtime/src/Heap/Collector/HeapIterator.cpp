@@ -53,7 +53,9 @@ void HeapIterator::Iterate(const ObjectVisitor& objectVisitor, const EdgeVisitor
     collector.VisitStrongPlainRoots(plain, [&](Mutator& mutator) {
         // Complete root processing for graph traversal, after ZVerify's raw-root
         // checks. VisitMutatorRoots enumerates the complete stack and non-frame roots.
-        mutator.VisitMutatorRoots(plain);
+        mutator.VisitMutatorRoots([&](ObjectRef& root) {
+            mutator.VisitHeapRootSlots(root, plain);
+        });
     });
     while (!stack.empty()) {
         BaseObject* object = stack.back();

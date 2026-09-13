@@ -37,7 +37,9 @@ void ZVerify::RootsStrong(bool afterOldMark)
     auto& collector = static_cast<TracingCollector&>(Heap::GetHeap().GetCollector());
     collector.VisitStrongColoredRoots([&](NativeSlot& root) { ColoredRoot(root, afterOldMark); });
     collector.VisitStrongPlainRoots(PlainRoot, [](Mutator& mutator) {
-        mutator.VisitProcessedRoots(PlainRoot);
+        mutator.VisitProcessedRoots([&](ObjectRef& root) {
+            mutator.VisitHeapRootSlots(root, PlainRoot);
+        });
     });
 }
 void ZVerify::RootsWeak()
