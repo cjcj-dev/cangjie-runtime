@@ -110,13 +110,7 @@ struct RegionBitmap {
     }
 
     // ZLiveMap::reset: metadata only; bitmap storage is cleared on first touch.
-    void Reset()
-    {
-        liveBytes.store(0, std::memory_order_relaxed);
-        liveObjects.store(0, std::memory_order_relaxed);
-        segmentLiveBits.store(0, std::memory_order_relaxed);
-        segmentClaimBits.store(0, std::memory_order_relaxed);
-    }
+    void Reset();
 
     static constexpr size_t kNumSegments = 64;
 

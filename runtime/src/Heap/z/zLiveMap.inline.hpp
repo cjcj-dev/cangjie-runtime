@@ -100,3 +100,13 @@ bool RegionBitmap::IsFinalizable(size_t start) const { return IsLive(start) && !
 namespace MapleRuntime {
 size_t RegionBitmap::GetLiveBytes() const { return liveBytes.load(std::memory_order_acquire); }
 }
+
+namespace MapleRuntime {
+void RegionBitmap::Reset()
+    {
+        liveBytes.store(0, std::memory_order_relaxed);
+        liveObjects.store(0, std::memory_order_relaxed);
+        segmentLiveBits.store(0, std::memory_order_relaxed);
+        segmentClaimBits.store(0, std::memory_order_relaxed);
+    }
+}

@@ -306,29 +306,9 @@ public:
 #if defined(MRT_DEBUG) && (MRT_DEBUG == 1)
     void DumpRoots(LogType logType);
     void DumpHeap(const CString& tag);
-    void DumpBeforeGC()
-    {
-        if (ENABLE_LOG(FRAGMENT)) {
-            if (MutatorManager::Instance().WorldStopped()) {
-                DumpHeap("before_gc");
-            } else {
-                ScopedStopTheWorld stw("dump before gc");
-                DumpHeap("before_gc");
-            }
-        }
-    }
+    void DumpBeforeGC();
 
-    void DumpAfterGC()
-    {
-        if (ENABLE_LOG(FRAGMENT)) {
-            if (MutatorManager::Instance().WorldStopped()) {
-                DumpHeap("after_gc");
-            } else {
-                ScopedStopTheWorld stw("dump after gc");
-                DumpHeap("after_gc");
-            }
-        }
-    }
+    void DumpAfterGC();
 #endif
 
     void ResurrectExportObject(BaseObject* obj)

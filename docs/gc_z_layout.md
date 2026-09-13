@@ -1,5 +1,8 @@
 # D09：GC 文件布局搬移表
 
+本轮返工的定义级对应、诊断退回与 advisor 例外见 [gc_z_layout_rework.md](gc_z_layout_rework.md)。完整 TSV 的 ZGC 文件职责锚不代表逐函数等价。
+
+
 待主控登记进 `/root/cj_build/ops/CURRENT_DOCS.manifest`。
 
 旧坐标基于 `3439312e41310da5c961ffa2025642e19081142f`；新坐标为本文件所在候选提交。候选分支：`sym/484-implement-r5653028906`。
@@ -27,7 +30,7 @@
 
 ## 全部文件对应
 
-候选 `Heap/z/` 共 120 个普通文件；每个均有同名 ZGC 文件。ZGC 顶层实读为 234 个普通文件及 2 个目录（236 个目录项）；参考测试目录有 13 个 `test_z*.cpp`。
+候选 `Heap/z/` 共 128 个普通文件；每个均有同名 ZGC 文件。ZGC 顶层实读为 234 个普通文件及 2 个目录（236 个目录项）；参考测试目录有 13 个 `test_z*.cpp`。
 
 | 冻结基线来源（runtime/src 下） | 新文件 | ZGC 文件锚 |
 |---|---|---|
@@ -305,7 +308,7 @@
 | `runtime/src/Heap/Verify/ZgcSelfHealDiag.h:32` | ZGC 无对应独立文件 · 自有诊断和观测；#228 / A06 |
 | `runtime/src/Common/ColourEncoding.h:16` | ZGC 无对应独立文件 · 原编码校验器及地址范围适配；归 A06 |
 
-混合定义示例：`TracingCollector` 的类声明归 zMark.hpp，其 generation/roots 方法分居各职责文件；pre/post 的 root 统计与 root iterator 同一翻译单元。`RegionManager` 的 inline 调用模板保留在 zPageAllocator.inline.hpp；relocation queue 声明/实现归 zRelocate。`MemMap` 保留原类，其分区、NUMA、地址预算、物理提交定义分居对应文件。
+混合定义示例：`TracingCollector` 的类声明归 zMark.hpp，其 generation/roots 方法分居各职责文件；pre/post 的独立 root 统计退回 TracingCollector.cpp，root iterator 留在 zRootsIterator.cpp。`RegionManager` 的 inline 调用模板保留在 zPageAllocator.inline.hpp；relocation queue 声明/实现归 zRelocate。`MemMap` 保留原类，其分区、NUMA、地址预算、物理提交定义分居对应文件。
 
 ## 删除路径与引用
 
@@ -328,3 +331,28 @@
 ## 独立后续项
 
 cangjie-runtime#488：冻结基线的 cast 精确行号白名单已过期；本包保留原白名单，不扩大允许集合。
+
+## 返工补充文件
+
+| 文件 | ZGC 同名参考/原地归属 |
+|---|---|
+| `runtime/src/Heap/z/zAbort.cpp` | `/root/cj_build/reference/jdk/src/hotspot/share/gc/z/zAbort.cpp` |
+| `runtime/src/Heap/z/zAbort.inline.hpp` | `/root/cj_build/reference/jdk/src/hotspot/share/gc/z/zAbort.inline.hpp` |
+| `runtime/src/Heap/z/zForwardingTable.inline.hpp` | `/root/cj_build/reference/jdk/src/hotspot/share/gc/z/zForwardingTable.inline.hpp` |
+| `runtime/src/Heap/z/zLiveMap.cpp` | `/root/cj_build/reference/jdk/src/hotspot/share/gc/z/zLiveMap.cpp` |
+| `runtime/src/Heap/z/zLiveMap.inline.hpp` | `/root/cj_build/reference/jdk/src/hotspot/share/gc/z/zLiveMap.inline.hpp` |
+| `runtime/src/Heap/z/zMark.inline.hpp` | `/root/cj_build/reference/jdk/src/hotspot/share/gc/z/zMark.inline.hpp` |
+| `runtime/src/Heap/z/zMetronome.cpp` | `/root/cj_build/reference/jdk/src/hotspot/share/gc/z/zMetronome.cpp` |
+| `runtime/src/Heap/z/zNUMA.inline.hpp` | `/root/cj_build/reference/jdk/src/hotspot/share/gc/z/zNUMA.inline.hpp` |
+| `runtime/src/Heap/Allocator/RegionInfo.h` | ZGC 无独立对应；#228 / A06 原地保留 |
+| `runtime/src/Heap/Allocator/RegionSpace.cpp` | ZGC 无独立对应；#228 / A06 原地保留 |
+| `runtime/src/Heap/Allocator/zPage.cpp` | ZGC 无独立对应；#228 / A06 原地保留 |
+| `runtime/src/Heap/Allocator/zPageAllocator.cpp` | ZGC 无独立对应；#228 / A06 原地保留 |
+| `runtime/src/Heap/Collector/Generation.cpp` | ZGC 无独立对应；#228 / A06 原地保留 |
+| `runtime/src/Heap/Collector/Mark.cpp` | ZGC 无独立对应；#228 / A06 原地保留 |
+| `runtime/src/Heap/Collector/Remembered.cpp` | ZGC 无独立对应；#228 / A06 原地保留 |
+| `runtime/src/Heap/Collector/TracingCollector.cpp` | ZGC 无独立对应；#228 / A06 原地保留 |
+| `runtime/src/Heap/Collector/zRelocate.cpp` | ZGC 无独立对应；#228 / A06 原地保留 |
+| `runtime/src/UnwindStack/StackWatermark.cpp` | ZGC 无独立对应；#228 / A06 原地保留 |
+
+RecentFullAccounting 的声明原地保留于 `runtime/src/Heap/Allocator/RegionManager.h:9`；本轮不删除诊断或开关。

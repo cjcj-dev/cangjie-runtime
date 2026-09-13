@@ -305,3 +305,31 @@ size_t TracingCollector::CurrentThreadRootMapMissCount()
 
 
 }
+
+namespace MapleRuntime {
+#if defined(MRT_DEBUG) && (MRT_DEBUG == 1)
+void TracingCollector::DumpBeforeGC()
+    {
+        if (ENABLE_LOG(FRAGMENT)) {
+            if (MutatorManager::Instance().WorldStopped()) {
+                DumpHeap("before_gc");
+            } else {
+                ScopedStopTheWorld stw("dump before gc");
+                DumpHeap("before_gc");
+            }
+        }
+    }
+
+void TracingCollector::DumpAfterGC()
+    {
+        if (ENABLE_LOG(FRAGMENT)) {
+            if (MutatorManager::Instance().WorldStopped()) {
+                DumpHeap("after_gc");
+            } else {
+                ScopedStopTheWorld stw("dump after gc");
+                DumpHeap("after_gc");
+            }
+        }
+    }
+#endif
+}

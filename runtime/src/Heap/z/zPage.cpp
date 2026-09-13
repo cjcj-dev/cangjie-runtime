@@ -323,4 +323,3 @@ RegionInfo::RegionInfo()
         metadata.regionEnd = reinterpret_cast<uintptr_t>(nullptr);
     }
 }
-
