@@ -1124,7 +1124,7 @@ GC_TEST(GcRequestSync, CompilerAsyncEntryReturnsAndMergesPendingRequest)
 
 #endif // MRT_GC_UNIT_TESTS
 
-// zDriver.hpp ZDriverRequest / zDirector.cpp:796-817: queued requests own
+// zDriverPort.hpp:33 ZDriverRequest / zDirector.cpp:796-817: queued requests own
 // their selected quotas; a later decision cannot replace a pending budget.
 GC_TEST(GcRequestSync, DriverRequestOwnsDirectorQuota)
 {

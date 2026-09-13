@@ -73,14 +73,14 @@ GC_TEST(TruncatedSeq, WindowDropsOldest)
     GC_EXPECT_TRUE(seq.avg() == 3.5);
 }
 
-GC_TEST(GcTrigger, RateZeroDoesNotFireAllocRate)
+GC_TEST(GcTrigger, StaticRateZeroDoesNotFireAllocRate)
 {
     GcTriggerInputs in = BaseWarmHeap();
     in.allocRateAvgBps = 0.0;
     in.allocRateSdBps = 0.0;
-    const GcTriggerDecision d = DecideGcTrigger(in);
-    GC_EXPECT_EQ(static_cast<int>(d.rule), static_cast<int>(GcTriggerRule::NONE));
-    GC_EXPECT_EQ(static_cast<int>(d.kind), static_cast<int>(GcTriggerKind::NONE));
+    // zDirector.cpp:247-294 static variant; the product director now selects
+    // the dynamic variant, whose soft deadline follows IEEE infinity rules.
+    GC_EXPECT_TRUE(!RuleAllocRate(in));
 }
 
 GC_TEST(GcTrigger, ConstantRateFiresWhenFreeCannotCoverGc)

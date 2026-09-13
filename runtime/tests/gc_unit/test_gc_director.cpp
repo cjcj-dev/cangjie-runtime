@@ -4,6 +4,7 @@
 
 #include "Heap/Collector/GcTrigger.h"
 #include "Base/ZStat.h"
+#include "Heap/Allocator/AllocationStallQueue.h"
 #include "gc_unittest.hpp"
 
 using namespace MapleRuntime;
@@ -156,4 +157,55 @@ GC_TEST(GcDirector, WarmupCountsOnlyWarmupRequests)
         cycle.AtEnd(11 + 2 * i, 0, 0, true);
     }
     GC_EXPECT_EQ(cycle.Stats(20).warmupCycles, 3u);
+}
+
+GC_TEST(GcDirector, StandaloneMinorDoesNotReserveInactiveOldBudget)
+{
+    GcTriggerInputs in;
+    in.isTimeTrustable = true;
+    in.lastYoungGcDurationSec = 1;
+    in.lastOldGcDurationSec = 1;
+    in.reclaimedPerYoungAvg = 1;
+    in.reclaimedPerOldAvg = 8;
+    const auto normal = SelectWorkerThreads(in, 1, 8, false);
+    GC_EXPECT_EQ(normal.youngWorkers, 1u);
+    in.majorBusy = true;
+    const auto duringOld = SelectWorkerThreads(in, 1, 8, true);
+    GC_EXPECT_EQ(duringOld.youngWorkers, 1u);
+    GC_EXPECT_EQ(duringOld.oldWorkers, 7u);
+}
+
+GC_TEST(GcDirector, AllocationStallSnapshotUsesOutstandingRequests)
+{
+    std::mutex mutex;
+    AllocationStallQueue queue(mutex);
+    AllocationStallRequest request(4096, 0, true, true);
+    GC_EXPECT_TRUE(!queue.IsStalling());
+    {
+        std::lock_guard<std::mutex> lock(mutex);
+        queue.EnqueueLocked(request);
+    }
+    GC_EXPECT_TRUE(queue.IsStalling());
+    queue.CompleteWave(queue.CaptureWaveBoundary());
+    GC_EXPECT_TRUE(!queue.IsStalling());
+}
+
+GC_TEST(GcDirector, StallingBoostsAndRetainsActiveWorkerBudgets)
+{
+    GcTriggerInputs in;
+    in.allocationStalling = true;
+    const auto boost = SelectWorkerThreads(in, 1, 8, true);
+    GC_EXPECT_EQ(boost.youngWorkers, 8u);
+    GC_EXPECT_EQ(boost.oldWorkers, 8u);
+    in.allocationStalling = false;
+    in.activeYoungWorkers = 8;
+    in.activeOldWorkers = 8;
+    const auto retained = SelectWorkerThreads(in, 1, 8, true);
+    GC_EXPECT_EQ(retained.youngWorkers, 8u);
+    GC_EXPECT_EQ(retained.oldWorkers, 8u);
+    in.activeYoungWorkers = 0;
+    in.activeOldWorkers = 0;
+    const auto idle = SelectWorkerThreads(in, 1, 8, false);
+    GC_EXPECT_EQ(idle.youngWorkers, 1u);
+    GC_EXPECT_EQ(idle.oldWorkers, 1u);
 }

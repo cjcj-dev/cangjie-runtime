@@ -102,6 +102,13 @@ public:
         return requestGc;
     }
 
+    // zHeap.inline.hpp: is_alloc_stalling; read the actual outstanding FIFO.
+    bool IsStalling() const
+    {
+        std::lock_guard<std::mutex> lock(mutex);
+        return !requests.empty();
+    }
+
     uint64_t CaptureWaveBoundary() const
     {
         std::lock_guard<std::mutex> lock(mutex);

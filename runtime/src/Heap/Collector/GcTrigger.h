@@ -114,6 +114,10 @@ struct GcTriggerInputs {
     bool minorBusy = false;
     bool majorBusy = false;
     bool oldWorkersActive = false;
+    bool youngWorkersActive = false;
+    bool allocationStalling = false;
+    uint32_t activeYoungWorkers = 0;
+    uint32_t activeOldWorkers = 0;
     uint32_t workerCapacity = 1;
     bool isWarm = false;
     bool isTimeTrustable = false;
@@ -372,7 +376,10 @@ inline GcDynamicRequest RuleDynamicAllocRate(const GcTriggerInputs& in, uint32_t
     const uint32_t workers = DiscreteGcWorkers(SelectYoungGcWorkers(in, in.youngSerialTimeSec,
         in.youngParallelTimeSec, untilOom, cap, lastWorkers), cap);
     const double duration = in.youngSerialTimeSec + in.youngParallelTimeSec / workers;
-    return {untilOom - duration <= untilOom * 0.05, workers};
+    if (untilOom - duration > untilOom * 0.05) {
+        return {false, workers};
+    }
+    return {true, workers};
 }
 
 // zDirector.cpp:521-548,682-722: allocate the existing concurrent budget
@@ -380,6 +387,12 @@ inline GcDynamicRequest RuleDynamicAllocRate(const GcTriggerInputs& in, uint32_t
 inline GcWorkerSelection SelectWorkerThreads(const GcTriggerInputs& in, uint32_t youngWorkers,
                                               uint32_t cap, bool shareBudget)
 {
+    if (in.allocationStalling) {
+        return {cap, cap};
+    }
+    if (in.activeYoungWorkers + in.activeOldWorkers > cap) {
+        return {in.activeYoungWorkers, in.activeOldWorkers};
+    }
     double ratio = 1.0;
     if (in.isTimeTrustable) {
         const double youngEfficiency = in.reclaimedPerYoungAvg / in.lastYoungGcDurationSec;
@@ -389,10 +402,6 @@ inline GcWorkerSelection SelectWorkerThreads(const GcTriggerInputs& in, uint32_t
         } else {
             ratio = std::min(oldEfficiency / youngEfficiency, static_cast<double>(cap));
         }
-    }
-    // Zero-time samples cannot order generation costs.
-    if (!std::isfinite(ratio)) {
-        ratio = 1.0;
     }
     const auto clamp = [cap](double count) {
         return static_cast<uint32_t>(std::max(1.0, std::min(count, static_cast<double>(cap))));
@@ -406,14 +415,16 @@ inline GcWorkerSelection SelectWorkerThreads(const GcTriggerInputs& in, uint32_t
     return {youngWorkers, oldWorkers};
 }
 
-inline GcWorkerSelection SelectGcWorkers(const GcTriggerInputs& in, uint32_t poolCap, double lastGcWorkers)
+inline GcWorkerSelection SelectGcWorkers(const GcTriggerInputs& in, uint32_t poolCap, double lastGcWorkers,
+                                         bool startingMajor = false)
 {
     const uint32_t cap = std::max(poolCap, 1u);
     GcTriggerInputs hard = in;
     hard.softMaxBytes = in.capacityBytes;
     const auto softRequest = RuleDynamicAllocRate(in, cap, lastGcWorkers, false);
     const auto hardRequest = RuleDynamicAllocRate(hard, cap, lastGcWorkers, true);
-    return SelectWorkerThreads(in, std::max(softRequest.workers, hardRequest.workers), cap, true);
+    return SelectWorkerThreads(in, std::max(softRequest.workers, hardRequest.workers), cap,
+                               startingMajor || in.majorBusy);
 }
 
 // zDirector.cpp:820-840 — major rules first (timer/warmup), then minor
@@ -474,7 +485,9 @@ inline GcTriggerDecision DecideGcTrigger(const GcTriggerInputs& in)
     }
     GcTriggerInputs hard = in;
     hard.softMaxBytes = in.capacityBytes;
-    const bool allocationRate = !GcTriggerYoungSmall(in) &&
+    // This allocator's stalled requests wait for a major OOM collection
+    // (RegionManager::StallAllocation), matching is_alloc_stalling_for_old.
+    const bool allocationRate = !in.allocationStalling && !GcTriggerYoungSmall(in) &&
         (RuleDynamicAllocRate(in, in.workerCapacity, in.lastYoungWorkers, false).trigger ||
          RuleDynamicAllocRate(hard, in.workerCapacity, in.lastYoungWorkers, true).trigger);
     const GcTriggerRule minorRule = allocationRate ? GcTriggerRule::ALLOC_RATE :

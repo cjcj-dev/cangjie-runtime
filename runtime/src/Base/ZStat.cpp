@@ -10,6 +10,7 @@
 #include <cmath>
 #include "CangjieRuntime.h"
 #include "Heap/Heap.h"
+#include "Heap/GcThreadPool.h"
 #include "Heap/Allocator/RegionManager.h"
 #include "Heap/Collector/GcStats.h"
 #include "Heap/Collector/GcTrigger.h"
@@ -72,13 +73,22 @@ ZStatCycleStats ZStatCycle::Stats(uint64_t now) const
 }
 
 GcTriggerInputs ZStat::SampleDirectorStats(uint64_t now, ZStatCycle& young, ZStatCycle& old,
-                                    RegionManager& regions, uint32_t concurrentWorkers,
+                                    RegionManager& regions, GCWorkers& youngWorkers, GCWorkers& oldWorkers,
                                     uint32_t collectionsAtMajorStart)
 {
+    const auto youngState = youngWorkers.GetSnapshot();
+    const auto oldState = oldWorkers.GetSnapshot();
+    const uint32_t concurrentWorkers = youngState.capacity;
     const auto rate = MutatorAllocRate::stats();
     const auto youngCycle = young.Stats(now);
     const auto oldCycle = old.Stats(now);
     GcTriggerInputs in;
+    in.workerCapacity = concurrentWorkers;
+    in.youngWorkersActive = youngState.cycleActive;
+    in.oldWorkersActive = oldState.cycleActive;
+    in.activeYoungWorkers = youngState.cycleActive ? youngState.activeWorkers : 0;
+    in.activeOldWorkers = oldState.cycleActive ? oldState.activeWorkers : 0;
+    in.allocationStalling = regions.IsAllocationStalling();
     in.allocRateAvgBps = rate.avg;
     in.allocRatePredictBps = rate.predict;
     in.allocRateSdBps = rate.sd;

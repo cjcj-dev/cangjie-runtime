@@ -43,7 +43,7 @@ struct GCDriverRequest {
     GCReason reason;
     bool asynchronous;
     GCDriverReceipt receipt;
-    // zDriver.hpp: ZDriverRequest owns the budgets selected for this request.
+    // zDriverPort.hpp:33: ZDriverRequest owns the budgets selected for this request.
     // Zero lets non-director callers request the full generation capacity.
     uint32_t youngWorkers = 0;
     uint32_t oldWorkers = 0;

@@ -303,16 +303,12 @@ void CollectorResources::EvaluateDirector(uint64_t now)
     }
     auto& regions = static_cast<RegionSpace&>(Heap::GetHeap().GetAllocator()).GetRegionManager();
     GcTriggerInputs in = ZStat::SampleDirectorStats(now, youngCycle, oldCycle, regions,
-        concurrentGcThreadCount, collectionsAtMajorStart.load(std::memory_order_relaxed));
-    const auto young = youngWorkers->GetSnapshot();
-    const auto old = oldWorkers->GetSnapshot();
+        *youngWorkers, *oldWorkers, collectionsAtMajorStart.load(std::memory_order_relaxed));
     in.minorBusy = minorBusy || minorDriverPort.Pending() != 0;
     in.majorBusy = majorBusy || majorDriverPort.Pending() != 0;
-    in.oldWorkersActive = old.cycleActive;
-    in.workerCapacity = young.capacity;
     const GcTriggerDecision decision = DecideGcTrigger(in);
-    const GcWorkerSelection selection = SelectGcWorkers(in, young.capacity,
-        in.lastYoungWorkers);
+    const GcWorkerSelection selection = SelectGcWorkers(in, in.workerCapacity,
+        in.lastYoungWorkers, decision.kind == GcTriggerKind::MAJOR);
     if (decision.kind != GcTriggerKind::NONE) {
         g_gcTriggerYoungWorkers.store(selection.youngWorkers, std::memory_order_relaxed);
         g_gcTriggerOldWorkers.store(selection.oldWorkers, std::memory_order_relaxed);
@@ -323,7 +319,7 @@ void CollectorResources::EvaluateDirector(uint64_t now)
                                          decision.rule == GcTriggerRule::WARMUP);
         } else {
             minorDriverPort.EnqueueAsync(GC_REASON_YOUNG, selection.youngWorkers);
-            if (old.cycleActive && old.activeWorkers != selection.oldWorkers) {
+            if (in.oldWorkersActive && in.activeOldWorkers != selection.oldWorkers) {
                 oldWorkers->RequestResize(selection.oldWorkers);
             }
         }
@@ -331,21 +327,21 @@ void CollectorResources::EvaluateDirector(uint64_t now)
     }
     // zDirector.cpp:725-780: only an active young collection provides the
     // pressure signal for live resizing; the existing worker task consumes it.
-    if (young.cycleActive) {
+    if (in.youngWorkersActive) {
         GcTriggerInputs hard = in;
         hard.softMaxBytes = in.capacityBytes;
-        const auto request = RuleDynamicAllocRate(hard, young.capacity,
+        const auto request = RuleDynamicAllocRate(hard, in.workerCapacity,
             in.lastYoungWorkers, false);
         if (!request.trigger) {
             return;
         }
-        uint32_t desired = std::max(request.workers, young.activeWorkers);
-        desired = std::min(young.capacity, young.activeWorkers + 2 * (desired - young.activeWorkers));
-        const auto adjusted = SelectWorkerThreads(in, desired, young.capacity, old.cycleActive);
-        if (old.cycleActive && old.activeWorkers != adjusted.oldWorkers) {
+        uint32_t desired = std::max(request.workers, in.activeYoungWorkers);
+        desired = std::min(in.workerCapacity, in.activeYoungWorkers + 2 * (desired - in.activeYoungWorkers));
+        const auto adjusted = SelectWorkerThreads(in, desired, in.workerCapacity, in.oldWorkersActive);
+        if (in.oldWorkersActive && in.activeOldWorkers != adjusted.oldWorkers) {
             oldWorkers->RequestResize(adjusted.oldWorkers);
         }
-        if (young.activeWorkers != adjusted.youngWorkers) {
+        if (in.activeYoungWorkers != adjusted.youngWorkers) {
             youngWorkers->RequestResize(adjusted.youngWorkers);
         }
     }
