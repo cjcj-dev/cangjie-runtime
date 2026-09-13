@@ -210,7 +210,10 @@ public:
           oldPinnedRegionList("old pinned regions"), rawPointerPinnedRegionList("raw pointer pinned regions"),
           oldLargeRegionList("old large regions"), recentLargeRegionList("recent large regions"),
           largeTraceRegions("large trace regions")
-    {}
+    {
+        tlabAllocatingThreads.Sample(1);
+        tlabRequestedFraction.Sample(0.1);
+    }
 
     RegionManager(const RegionManager&) = delete;
 
@@ -219,6 +222,13 @@ public:
     // allowSaferegion=false: no ScopedEnterSaferegion under ROUTING (routefix / REPORT-routespin).
     RegionInfo* AllocateThreadLocalRegion(size_t size, bool expectPhysicalMem = false, bool youngRegion = true,
                                           bool allowSaferegion = true);
+
+    // ZTLABUsage: allocation capacity is charged on fill and unused tails
+    // returned on retirement, including compiler-generated fast allocations.
+    void IncreaseTLABUsed(size_t size) { tlabUsed.fetch_add(size, std::memory_order_relaxed); }
+    void DecreaseTLABUsed(size_t size) { tlabUsed.fetch_sub(size, std::memory_order_relaxed); }
+    void PublishTLABStatistics();
+    void RetireTLABStatistics(AllocBuffer& buffer);
 
     template<Generation G>
     void ForwardFromRegions(GCWorkers& workers);
@@ -1232,6 +1242,14 @@ private:
     RangeRegistry inactiveRanges;
     size_t heapUnitCount = 0;
     std::atomic<size_t> activeUnitCount{ 0 };
+    std::atomic<size_t> tlabUsed{ 0 };
+    size_t lastTLABUsed = 0;
+    double tlabCapacity = 0;
+    TLABAllocationAverage tlabAllocatingThreads;
+    TLABAllocationAverage tlabRequestedFraction;
+    std::mutex tlabStatisticsLock;
+    TLABStatistics retiredTLABStatistics;
+
     size_t maxUnitCountPerRegion = MAX_UNIT_COUNT_PER_REGION;   // max units count for threadLocal buffer.
     size_t maxUnitCountPerPinnedRegion = maxUnitCountPerRegion; // max units count for pinned region.
     size_t largeObjectThreshold;

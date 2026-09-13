@@ -1392,8 +1392,48 @@ void RegionManager::AssemblePinnedGarbageCandidates(bool collectAll)
     }
 }
 
+// zTLABUsage.cpp:46 reset and zThreadLocalAllocBuffer.cpp:59 publish_statistics.
+// Called in the young mark-start pause, after every active TLAB was retired.
+void RegionManager::PublishTLABStatistics()
+{
+    std::lock_guard<std::mutex> lock(tlabStatisticsLock);
+    const size_t used = tlabUsed.exchange(0, std::memory_order_relaxed);
+    if (used != 0) {
+        // TruncatedSeq::davg uses AbsSeq's exponential average, alpha=0.3;
+        // its last value and average are stable throughout the next cycle.
+        tlabCapacity = lastTLABUsed == 0 ? used : tlabCapacity + 0.3 * (used - tlabCapacity);
+        lastTLABUsed = used;
+    }
+    const size_t capacity = static_cast<size_t>(tlabCapacity);
+    TLABStatistics total = retiredTLABStatistics;
+    retiredTLABStatistics = TLABStatistics{};
+    const size_t threads = std::max(static_cast<size_t>(tlabAllocatingThreads.Average() + 0.5), size_t{1});
+    const double fallback = tlabRequestedFraction.Average() / threads;
+    Heap::GetHeap().GetAllocator().VisitAllocBuffers([&](AllocBuffer& buffer) {
+        buffer.AccumulateTLABStatistics(total, lastTLABUsed, capacity);
+        buffer.ResizeTLAB(capacity, fallback, GetThreadLocalRegionSize());
+    });
+    if (total.Used() != 0) {
+        tlabAllocatingThreads.Sample(total.allocatingThreads);
+        if (lastTLABUsed > 0.5 * capacity) {
+            tlabRequestedFraction.Sample(std::min(static_cast<double>(total.Used()) /
+                                                 std::max(capacity, size_t{1}), 1.0));
+        }
+    }
+    VLOG(REPORT, "TLAB totals: used=%zu capacity=%zu allocated=%zu refills=%zu refill-waste=%zu gc-waste=%zu threads=%zu",
+         lastTLABUsed, capacity, total.allocatedSize, total.refills, total.refillWaste, total.gcWaste,
+         total.allocatingThreads);
+}
+
+void RegionManager::RetireTLABStatistics(AllocBuffer& buffer)
+{
+    std::lock_guard<std::mutex> lock(tlabStatisticsLock);
+    buffer.AccumulateTLABStatistics(retiredTLABStatistics, lastTLABUsed, static_cast<size_t>(tlabCapacity));
+}
+
 YoungCollectionStats RegionManager::PrepareYoungGarbageCandidates(const std::function<void(RegionInfo*)>& visitor)
 {
+    PublishTLABStatistics();
     YoungCollectionStats stats;
     uint64_t subStart = TimeUtil::NanoSeconds();
     RegionInfo* oldRegion = fromRegionList.GetHeadRegion();
