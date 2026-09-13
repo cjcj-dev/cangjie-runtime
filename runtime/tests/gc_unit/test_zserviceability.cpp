@@ -25,6 +25,16 @@ GC_TEST(ZServiceability, ConcurrentSamplesClampToCapacity)
     GC_EXPECT_EQ(exceeded.old.current, 100U);
 }
 
+GC_TEST(ZServiceability, CapacityBeyondSigned32Bits)
+{
+    const size_t capacity = size_t{1} << 33;
+    const size_t maximum = size_t{1} << 34;
+    const auto info = ComputeMemoryUsageInfo(capacity, maximum, capacity / 4, capacity / 2);
+    GC_EXPECT_EQ(info.young.current + info.old.current, capacity);
+    GC_EXPECT_EQ(info.young.max, maximum);
+    GC_EXPECT_EQ(info.old.max, maximum);
+}
+
 GC_TEST(ZGCIdPrinter, MinorAndMajorCoexist)
 {
     GCIdMark major;
@@ -32,14 +42,15 @@ GC_TEST(ZGCIdPrinter, MinorAndMajorCoexist)
     {
         ZGCIdMajor young(majorId, 'Y');
         GC_EXPECT_EQ(ZGCIdPrinter::Tag(majorId), 'Y');
-        std::thread minor([majorId] {
+        bool minorMatches = false;
+        std::thread minor([majorId, &minorMatches] {
             GCIdMark id;
             ZGCIdMinor tag(GCIdMark::Current());
-            GC_EXPECT_TRUE(GCIdMark::Current() != majorId);
-            GC_EXPECT_EQ(ZGCIdPrinter::Tag(GCIdMark::Current()), 'y');
-            GC_EXPECT_EQ(ZGCIdPrinter::Tag(majorId), 'Y');
+            minorMatches = GCIdMark::Current() != majorId &&
+                ZGCIdPrinter::Tag(GCIdMark::Current()) == 'y' && ZGCIdPrinter::Tag(majorId) == 'Y';
         });
         minor.join();
+        GC_EXPECT_TRUE(minorMatches);
         GC_EXPECT_EQ(GCIdMark::Current(), majorId);
     }
     {
@@ -52,13 +63,15 @@ GC_TEST(ZGCIdPrinter, WorkerScopeRestoresThreadContext)
 {
     GCIdMark submitting;
     const auto id = GCIdMark::Current();
-    std::thread worker([id] {
-        GC_EXPECT_EQ(GCIdMark::Current(), 0U);
+    bool workerMatches = false;
+    std::thread worker([id, &workerMatches] {
+        workerMatches = GCIdMark::Current() == 0;
         {
             GCIdMark task(id);
-            GC_EXPECT_EQ(GCIdMark::Current(), id);
+            workerMatches = workerMatches && GCIdMark::Current() == id;
         }
-        GC_EXPECT_EQ(GCIdMark::Current(), 0U);
+        workerMatches = workerMatches && GCIdMark::Current() == 0;
     });
     worker.join();
+    GC_EXPECT_TRUE(workerMatches);
 }

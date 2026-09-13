@@ -24,22 +24,23 @@ namespace MapleRuntime {
 // record is one line, `key=value` separated by spaces, with a stable field order and a schema
 // version so a reader can refuse a record it does not understand.
 //
-//   [GCLOG] v=3 rec=cycle seq= kind= reason= start_ns= dur_ns= live_before= live_after=
+//   [GCLOG] v=4 rec=cycle seq= gc_tag= kind= reason= start_ns= dur_ns= live_before= live_after=
 //           collected= heap_used= threshold= rss_kb=
-//   [GCLOG] v=3 rec=phase seq= name= kind= start_ns= ns=
-//   [GCLOG] v=3 rec=phase_leaf seq= name= ns= kind= depth= path_ok= path=
-//   [GCLOG] v=3 rec=stw   seq= reason= start_ns= wait_ns= held_ns=
+//   [GCLOG] v=4 rec=phase seq= gc_tag= name= kind= start_ns= ns=
+//   [GCLOG] v=4 rec=phase_leaf seq= gc_tag= name= ns= kind= depth= path_ok= path=
+//   [GCLOG] v=4 rec=stw   seq= gc_tag= reason= start_ns= wait_ns= held_ns=
 //   [GCLOG] v=3 rec=crash ...  (crash signature; always-on via write(2), see Crash())
 //
-// A phase record carries the seq of the cycle it belongs to, so phases join to cycles without
+// gc_tag is y for a minor, Y/O for the young/old parts of a major, and - without a registered ID.
+// A phase record carries the thread context ID, so phases join to collections without
 // relying on line adjacency. Enabled with MRT_GC_LOG=1; the cost when off is one relaxed load.
 // Cycle/phase emit to stderr (always-on when enabled) so MRT_GC_LOG alone is sufficient;
 // they do not depend on MRT_REPORT / WriteLog(REPORT). Crash records are independent of
 // MRT_GC_LOG so a crash before GcLog init still emits.
 class GcLog {
 public:
-    static constexpr uint32_t SCHEMA_VERSION = 3;
-    // Crash records share v3 but remain independently emitted and parsed.
+    static constexpr uint32_t SCHEMA_VERSION = 4;
+    // Crash records remain independently emitted and parsed at v3.
     static constexpr uint32_t CRASH_SCHEMA_VERSION = 3;
     // 128: longest phase name in the tree is well under this; longer ones are truncated.
     // v3: all machine durations are nanoseconds and all names are folded to one token.

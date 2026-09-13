@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Strict, fail-closed readers for the GCLOG v3 and ZSTAT v1 ledgers."""
+"""Strict, fail-closed readers for the GCLOG v4 and ZSTAT v1 ledgers."""
 
 from __future__ import annotations
 
@@ -16,20 +16,20 @@ PATH = r"[-A-Za-z0-9._>]+"
 RECORD_TOKENS = re.compile(r"(?:^| )rec=([^ ]+)")
 
 GC_CYCLE = re.compile(
-    rf"^\[GCLOG\] v=(\S+) rec=cycle seq=(\S+) kind=({TOKEN}) reason=({TOKEN}) "
+    rf"^\[GCLOG\] v=(\S+) rec=cycle seq=(\S+) gc_tag=([yYO-]) kind=({TOKEN}) reason=({TOKEN}) "
     r"start_ns=(\S+) dur_ns=(\S+) live_before=(\S+) live_after=(\S+) collected=(\S+) "
     r"heap_used=(\S+) threshold=(\S+) rss_kb=(\S+)$"
 )
 GC_PHASE = re.compile(
-    rf"^\[GCLOG\] v=(\S+) rec=phase seq=(\S+) name=({TOKEN}) kind=(pause|conc|unknown) "
+    rf"^\[GCLOG\] v=(\S+) rec=phase seq=(\S+) gc_tag=([yYO-]) name=({TOKEN}) kind=(pause|conc|unknown) "
     r"start_ns=(\S+) ns=(\S+)$"
 )
 GC_PHASE_LEAF = re.compile(
-    rf"^\[GCLOG\] v=(\S+) rec=phase_leaf seq=(\S+) name=({TOKEN}) ns=(\S+) "
+    rf"^\[GCLOG\] v=(\S+) rec=phase_leaf seq=(\S+) gc_tag=([yYO-]) name=({TOKEN}) ns=(\S+) "
     rf"kind=(pause|conc|unknown) depth=(\S+) path_ok=(\S+) path=({PATH})$"
 )
 GC_STW = re.compile(
-    rf"^\[GCLOG\] v=(\S+) rec=stw seq=(\S+) reason=({TOKEN}) start_ns=(\S+) wait_ns=(\S+) held_ns=(\S+)$"
+    rf"^\[GCLOG\] v=(\S+) rec=stw seq=(\S+) gc_tag=([yYO-]) reason=({TOKEN}) start_ns=(\S+) wait_ns=(\S+) held_ns=(\S+)$"
 )
 ZSTAT_PHASE = re.compile(
     rf"^\[ZSTAT\] v=(\S+) rec=zphase seq=(\S+) name=({TOKEN}) pause_ns=(\S+) "
@@ -53,6 +53,7 @@ PILLARS = (
 @dataclass(frozen=True)
 class CycleRecord:
     seq: int
+    gc_tag: str
     kind: str
     reason: str
     start_ns: int
@@ -68,6 +69,7 @@ class CycleRecord:
 @dataclass(frozen=True)
 class PhaseRecord:
     seq: int
+    gc_tag: str
     name: str
     kind: str
     start_ns: int
@@ -77,6 +79,7 @@ class PhaseRecord:
 @dataclass(frozen=True)
 class PhaseLeafRecord:
     seq: int
+    gc_tag: str
     name: str
     ns: int
     kind: str
@@ -89,6 +92,7 @@ class PhaseLeafRecord:
 @dataclass(frozen=True)
 class StwRecord:
     seq: int
+    gc_tag: str
     reason: str
     start_ns: int
     wait_ns: int
@@ -167,25 +171,25 @@ def parse_gclog(text: str) -> GcLogRecords:
             family = phase_candidates[0]
             if family == "phase":
                 match = _exact(GC_PHASE, line, "GCLOG phase")
-                _version(match.group(1), 3, "GCLOG phase", line)
+                _version(match.group(1), 4, "GCLOG phase", line)
                 records.phases.append(PhaseRecord(
-                    _u64(match.group(2), "seq", line), match.group(3), match.group(4),
-                    _u64(match.group(5), "start_ns", line),
-                    _u64(match.group(6), "ns", line)))
+                    _u64(match.group(2), "seq", line), match.group(3), match.group(4), match.group(5),
+                    _u64(match.group(6), "start_ns", line),
+                    _u64(match.group(7), "ns", line)))
                 continue
             if family == "phase_leaf":
                 match = _exact(GC_PHASE_LEAF, line, "GCLOG phase_leaf")
-                _version(match.group(1), 3, "GCLOG phase_leaf", line)
+                _version(match.group(1), 4, "GCLOG phase_leaf", line)
                 seq = _u64(match.group(2), "seq", line)
-                ns = _u64(match.group(4), "ns", line)
-                depth = _u64(match.group(6), "depth", line)
-                path_ok = _u64(match.group(7), "path_ok", line)
-                components = tuple(match.group(8).split(">"))
+                ns = _u64(match.group(5), "ns", line)
+                depth = _u64(match.group(7), "depth", line)
+                path_ok = _u64(match.group(8), "path_ok", line)
+                components = tuple(match.group(9).split(">"))
                 if any(not component or re.fullmatch(TOKEN, component) is None for component in components):
                     raise ValueError(f"invalid phase_leaf path component: {line}")
-                if match.group(3) != components[0]:
+                if match.group(4) != components[0]:
                     raise ValueError(
-                        f"phase_leaf name/path mismatch: name={match.group(3)} path={match.group(8)}")
+                        f"phase_leaf name/path mismatch: name={match.group(4)} path={match.group(9)}")
                 if depth != len(components):
                     raise ValueError(
                         f"phase_leaf depth mismatch: depth={depth} components={len(components)}")
@@ -194,30 +198,30 @@ def parse_gclog(text: str) -> GcLogRecords:
                 if path_ok == 0:
                     raise ValueError(f"phase_leaf path overflow marker: {line}")
                 records.phase_leaves.append(PhaseLeafRecord(
-                    seq, match.group(3), ns, match.group(5), depth, path_ok,
-                    match.group(8), components))
+                    seq, match.group(3), match.group(4), ns, match.group(6), depth, path_ok,
+                    match.group(9), components))
                 continue
             raise ValueError(f"unknown GCLOG phase-family record rec={family}")
 
         if "cycle" in rec_tokens:
             match = _exact(GC_CYCLE, line, "GCLOG cycle")
-            _version(match.group(1), 3, "GCLOG cycle", line)
+            _version(match.group(1), 4, "GCLOG cycle", line)
             seq = _u64(match.group(2), "seq", line)
             if seq == 0:
                 raise ValueError("GCLOG cycle seq must be greater than zero")
             numbers = [_u64(match.group(index), name, line) for index, name in zip(
-                range(5, 12),
+                range(6, 13),
                 ("start_ns", "dur_ns", "live_before", "live_after", "collected", "heap_used", "threshold"))]
-            rss_kb = _u64(match.group(12), "rss_kb", line)
-            records.cycles.append(CycleRecord(seq, match.group(3), match.group(4), *numbers, rss_kb))
+            rss_kb = _u64(match.group(13), "rss_kb", line)
+            records.cycles.append(CycleRecord(seq, match.group(3), match.group(4), match.group(5), *numbers, rss_kb))
             continue
         if "stw" in rec_tokens:
             match = _exact(GC_STW, line, "GCLOG stw")
-            _version(match.group(1), 3, "GCLOG stw", line)
+            _version(match.group(1), 4, "GCLOG stw", line)
             records.stw.append(StwRecord(
-                _u64(match.group(2), "seq", line), match.group(3),
-                _u64(match.group(4), "start_ns", line),
-                _u64(match.group(5), "wait_ns", line), _u64(match.group(6), "held_ns", line)))
+                _u64(match.group(2), "seq", line), match.group(3), match.group(4),
+                _u64(match.group(5), "start_ns", line),
+                _u64(match.group(6), "wait_ns", line), _u64(match.group(7), "held_ns", line)))
     return records
 
 

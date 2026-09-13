@@ -12,13 +12,13 @@ GUARD = Path(__file__).with_name("phase_entry_guard.py")
 
 
 def cycle(seq, kind="minor"):
-    return (f"[GCLOG] v=3 rec=cycle seq={seq} kind={kind} reason=young "
+    return (f"[GCLOG] v=4 rec=cycle seq={seq} gc_tag=- kind={kind} reason=young "
             "start_ns=1 dur_ns=100 live_before=9 live_after=8 collected=1 "
             "heap_used=8 threshold=10 rss_kb=11")
 
 
 def entry(seq, ns=1):
-    return (f"[GCLOG] v=3 rec=phase seq={seq} name=young.flush_alloc "
+    return (f"[GCLOG] v=4 rec=phase seq={seq} gc_tag=- name=young.flush_alloc "
             f"kind=pause start_ns=1 ns={ns}")
 
 
@@ -27,9 +27,9 @@ def log(mode="minor"):
     # Keeping them in negative cases isolates the entry assertion.
     return [
         cycle(1),
-        "[GCLOG] v=3 rec=stw seq=1 reason=prepare start_ns=1 wait_ns=1 held_ns=1",
-        "[GCLOG] v=3 rec=phase seq=1 name=outer kind=pause start_ns=1 ns=1",
-        "[GCLOG] v=3 rec=phase_leaf seq=1 name=outer ns=1 kind=pause "
+        "[GCLOG] v=4 rec=stw seq=1 gc_tag=- reason=prepare start_ns=1 wait_ns=1 held_ns=1",
+        "[GCLOG] v=4 rec=phase seq=1 gc_tag=- name=outer kind=pause start_ns=1 ns=1",
+        "[GCLOG] v=4 rec=phase_leaf seq=1 gc_tag=- name=outer ns=1 kind=pause "
         "depth=2 path_ok=1 path=outer>parent",
         f"PHASE_ENTRY_{mode.upper()}_OK checksum=1",
     ] + ([cycle(2, "major")] if mode == "major" else [])

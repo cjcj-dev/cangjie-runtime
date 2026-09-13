@@ -130,7 +130,8 @@ void GetHeapUsage(const std::string &message, SendMsgCB sendMsg)
     writePool(usage.young);
     writer->WriteString(",\"old\":");
     writePool(usage.old);
-    writer->WriteString("}}");
+    // HeapProfilerStream appends the profiler field and closes the envelope.
+    writer->WriteString("}");
     writer->End();
     delete writer;
 }

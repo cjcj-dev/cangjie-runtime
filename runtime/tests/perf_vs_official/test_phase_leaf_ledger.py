@@ -18,14 +18,14 @@ ROOT = Path(__file__).resolve().parents[3]
 
 def cycle(seq: int, dur_ns: int = 100) -> str:
     return (
-        f"[GCLOG] v=3 rec=cycle seq={seq} kind=minor reason=young start_ns=1 dur_ns={dur_ns} "
+        f"[GCLOG] v=4 rec=cycle seq={seq} gc_tag=- kind=minor reason=young start_ns=1 dur_ns={dur_ns} "
         "live_before=9 live_after=8 collected=1 heap_used=8 threshold=10 rss_kb=11"
     )
 
 
 def phase(seq: int, name: str, ns: int, *, kind: str = "pause", start_ns: int = 1) -> str:
     return (
-        f"[GCLOG] v=3 rec=phase seq={seq} name={name} kind={kind} "
+        f"[GCLOG] v=4 rec=phase seq={seq} gc_tag=- name={name} kind={kind} "
         f"start_ns={start_ns} ns={ns}"
     )
 
@@ -33,13 +33,13 @@ def phase(seq: int, name: str, ns: int, *, kind: str = "pause", start_ns: int = 
 def leaf(seq: int, name: str, ns: int, path: str | None = None, kind: str = "unknown") -> str:
     path = path or name
     return (
-        f"[GCLOG] v=3 rec=phase_leaf seq={seq} name={name} ns={ns} kind={kind} "
+        f"[GCLOG] v=4 rec=phase_leaf seq={seq} gc_tag=- name={name} ns={ns} kind={kind} "
         f"depth={len(path.split('>'))} path_ok=1 path={path}"
     )
 
 
 class PhaseLeafLedgerTest(unittest.TestCase):
-    # Preserved leaf-b3 test names, now expressed in the unified v3/ns contract.
+    # Preserved leaf-b3 test names, now expressed in the unified v4/ns contract.
     def test_dynamic_parent_and_leaf_use_runtime_structure(self) -> None:
         text = "\n".join((
             phase(1, "young.ref_fix", 90),
@@ -170,7 +170,7 @@ class PhaseLeafLedgerTest(unittest.TestCase):
             phase(1, "young.copy", 35),
             leaf(1, "young.copy", pillar_ns, kind=leaf_kind),
             leaf(1, "young.flush_alloc", nonpillar_ns, kind=leaf_kind),
-            "[GCLOG] v=3 rec=stw seq=1 reason=young start_ns=1 wait_ns=1 held_ns=40",
+            "[GCLOG] v=4 rec=stw seq=1 gc_tag=- reason=young start_ns=1 wait_ns=1 held_ns=40",
             f"[ZSTAT] v=1 rec=zphase seq=1 name=young.copy pause_ns={zpause_ns} conc_ns=5 n=1",
             f"[ZSTAT] v=1 rec=zcycle seq=1 pause_ns={zpause_ns} conc_ns=5 "
             f"max_pause_ns={zpause_ns} phases=1",
@@ -264,8 +264,8 @@ class PhaseLeafLedgerTest(unittest.TestCase):
             leaf(1, "young.copy", 20, kind="pause"),
             leaf(1, "young.flush_alloc", 10, kind="pause"),
             leaf(2, "young.copy2", 20, kind="pause"),
-            "[GCLOG] v=3 rec=stw seq=1 reason=young start_ns=1005 wait_ns=1 held_ns=40",
-            "[GCLOG] v=3 rec=stw seq=2 reason=young start_ns=1010 wait_ns=1 held_ns=30",
+            "[GCLOG] v=4 rec=stw seq=1 gc_tag=- reason=young start_ns=1005 wait_ns=1 held_ns=40",
+            "[GCLOG] v=4 rec=stw seq=2 gc_tag=- reason=young start_ns=1010 wait_ns=1 held_ns=30",
             "[ZSTAT] v=1 rec=zphase seq=1 name=young.copy pause_ns=30 conc_ns=5 n=1",
             "[ZSTAT] v=1 rec=zphase seq=2 name=young.copy2 pause_ns=15 conc_ns=5 n=1",
             "[ZSTAT] v=1 rec=zcycle seq=1 pause_ns=30 conc_ns=5 max_pause_ns=30 phases=1",
