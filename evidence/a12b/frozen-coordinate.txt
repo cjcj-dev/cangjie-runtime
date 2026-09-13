@@ -1,0 +1,19 @@
+Initial dispatch-coordinate read (tool chunk 884d98):
+$ git -C /root/cj_build/cangjie_runtime rev-parse cjcjdev/main
+78fc9ce028de705b3ea705b7069759c1036a2796
+rc=0
+
+Post-fetch integration main:
+403916767341fd0610fdc7a1201f1a0333e0da38
+$ git rev-parse 78fc9ce028de705b3ea705b7069759c1036a2796^{commit} 78fc9ce028de705b3ea705b7069759c1036a2796:runtime
+78fc9ce028de705b3ea705b7069759c1036a2796
+c76b10ac7bbb6728e0d4a4bb8d9420eb9fa3be83
+rc=0
+$ git rev-parse 403916767341fd0610fdc7a1201f1a0333e0da38^{commit} 403916767341fd0610fdc7a1201f1a0333e0da38:runtime
+403916767341fd0610fdc7a1201f1a0333e0da38
+adad2ecf6f3b5e37c458beec6e386620a39b81f2
+rc=0
+$ git rev-parse HEAD^{commit} HEAD:runtime
+d078479814c75c523e92d43505422335e6516ae3
+3aaa5b7320c7cd33d9e3b7c4797543e45a822796
+rc=0

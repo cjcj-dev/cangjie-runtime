@@ -16,6 +16,7 @@
 #include <vector>
 
 #include "AllocUtil.h"
+#include "Heap/z/zServiceability.hpp"
 #include "Allocator.h"
 #include "ExceptionManager.h"
 #include "Mutator/Mutator.h"
@@ -70,6 +71,17 @@ public:
 
     size_t GetCurrentCapacity() const override { return regionManager.GetActiveUnitCount() * RegionInfo::UNIT_SIZE; }
     size_t GetMaxCapacity() const override { return regionManager.GetHeapCapacity(); }
+
+    ZMemoryUsageInfo GetMemoryUsage() const
+    {
+        // ZHeap::used_generation -> ZPageAllocator::used_generation. Use
+        // page occupancy for both generations, never object bytes minus pages.
+        const size_t young = regionManager.GetYoungAllocatedSize();
+        const size_t used = regionManager.GetUsedRegionSize();
+        const size_t old = used - std::min(used, young);
+        return ComputeMemoryUsageInfo(regionManager.GetCommittedCapacity(), GetMaxCapacity(), young, old);
+    }
+
 
     inline size_t GetRecentAllocatedSize() const { return regionManager.GetRecentAllocatedSize(); }
 

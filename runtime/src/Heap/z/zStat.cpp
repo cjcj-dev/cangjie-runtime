@@ -17,6 +17,71 @@
 #include "Heap/z/zDirector.hpp"
 
 namespace MapleRuntime {
+// zStat.cpp:65-240: rolling ten-second, ten-minute and ten-hour windows.
+struct ZStatSamplerData {
+    uint64_t nsamples = 0;
+    uint64_t sum = 0;
+    uint64_t max = 0;
+    void Add(const ZStatSamplerData& value);
+    uint64_t Average() const { return nsamples == 0 ? 0 : sum / nsamples; }
+};
+
+template<size_t Size>
+class ZStatSamplerHistoryInterval {
+public:
+    bool Add(const ZStatSamplerData& sample)
+    {
+        const auto old = samples[next];
+        samples[next] = sample;
+        accumulated.Add(sample);
+        total.nsamples += sample.nsamples - old.nsamples;
+        total.sum += sample.sum - old.sum;
+        if (total.max < sample.max) {
+            total.max = sample.max;
+        } else if (total.max == old.max) {
+            total.max = 0;
+            for (const auto& value : samples) total.max = std::max(total.max, value.max);
+        }
+        if (++next == Size) {
+            next = 0;
+            accumulated = {};
+            return true;
+        }
+        return false;
+    }
+    const ZStatSamplerData& Total() const { return total; }
+    const ZStatSamplerData& Accumulated() const { return accumulated; }
+private:
+    size_t next = 0;
+    std::array<ZStatSamplerData, Size> samples {};
+    ZStatSamplerData accumulated;
+    ZStatSamplerData total;
+};
+
+class ZStatSamplerHistory {
+public:
+    void Add(const ZStatSamplerData& sample);
+    std::array<ZStatSamplerData, 4> Windows() const
+    {
+        auto minute = minutes.Total();
+        minute.Add(seconds.Accumulated());
+        auto hour = hours.Total();
+        hour.Add(minutes.Accumulated());
+        hour.Add(seconds.Accumulated());
+        auto all = total;
+        all.Add(hours.Accumulated());
+        all.Add(minutes.Accumulated());
+        all.Add(seconds.Accumulated());
+        return {seconds.Total(), minute, hour, all};
+    }
+private:
+    ZStatSamplerHistoryInterval<10> seconds;
+    ZStatSamplerHistoryInterval<60> minutes;
+    ZStatSamplerHistoryInterval<60> hours;
+    ZStatSamplerData total;
+};
+
+
 void ZStatCycle::Sequence::Add(double value)
 {
     if (!initialized) {
@@ -299,7 +364,7 @@ void ZStat::Initialize()
     });
 }
 
-void ZStat::SampleAndCollect(std::vector<ZStatSamplerHistory>& history)
+static void SampleAndCollect(std::vector<ZStatSamplerHistory>& history)
 {
     for (const auto* counter = ZStatCounter::First(); counter != nullptr; counter = counter->Next()) {
         counter->SampleAndReset();
@@ -309,7 +374,7 @@ void ZStat::SampleAndCollect(std::vector<ZStatSamplerHistory>& history)
     }
 }
 
-void ZStat::Print(const std::vector<ZStatSamplerHistory>& history)
+static void Print(const std::vector<ZStatSamplerHistory>& history)
 {
     // zStat.cpp:1052-1064: logging controls output, never collection.
     if (Logger::GetLogger().GetMinimumLogLevel() > RTLOG_INFO) return;

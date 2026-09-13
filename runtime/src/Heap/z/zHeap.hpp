@@ -8,6 +8,8 @@
 #ifndef MRT_HEAP_H
 #define MRT_HEAP_H
 
+#include "Heap/z/zServiceability.hpp"
+
 #include <cstdlib>
 #include <functional>
 #include <vector>
@@ -62,6 +64,7 @@ public:
      * so that inequality size <= capacity <= max capacity always holds.
      */
     virtual size_t GetMaxCapacity() const = 0;
+    virtual ZMemoryUsageInfo GetMemoryUsage() const = 0;
 
     // or current capacity: a continuous address space to help heap management such as GC.
     virtual size_t GetCurrentCapacity() const = 0;
