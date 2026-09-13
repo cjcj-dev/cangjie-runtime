@@ -161,10 +161,7 @@ public:
     // Record the to-region start+regionLifeSeq at insert; consume rejects when
     // InitRegionInfo has bumped that seq (RegionInfo.h:InitRegionInfo).
     static bool DestUsable(MAddress to);
-    MAddress resolve_live(MAddress to) const;
-    bool receipt_live(MAddress to) const;
 
-    static std::atomic<uint64_t>& StaleToLifeCount();
 
     bool covers(MAddress addr) const { return _size != 0 && addr >= _start && addr < _start + _size; }
 

@@ -377,7 +377,7 @@ GC_TEST(ZForwardingEntries, ArenaOwnerOutlivesForwardings)
     GC_EXPECT_TRUE(arena->allocate(1) == nullptr);
     GC_EXPECT_EQ(b->insert(MAddress(0x2000), MAddress(0x3000)), MAddress(0x3000));
     a->~ZForwarding();
-    GC_EXPECT_TRUE(arena->contains_for_test(b, bytes));
+    GC_EXPECT_EQ(arena->used(), budget);
     GC_EXPECT_EQ(b->find(MAddress(0x2000)), MAddress(0x3000));
     b->~ZForwarding();
     arena.reset();
