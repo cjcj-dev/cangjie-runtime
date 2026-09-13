@@ -11,6 +11,8 @@
 #include <deque>
 #include <functional>
 #include <mutex>
+#include <vector>
+#include "MemMap.h"
 
 #if defined(MRT_GC_UNIT_TESTS) || defined(MRT_TESTABLE_INTERNALS)
 #define MRT_ALLOCATION_STALL_OBSERVE 1
@@ -19,13 +21,19 @@
 namespace MapleRuntime {
 
 // ZVirtualMemory represented in heap granules; ownership travels with the
-// page allocation until materialization or hand-back. A02c supplies cache
-// partition selection; the current allocator has one logical partition.
+// page allocation until materialization or hand-back. The partition index
+// selects the cache and virtual registry that own the complete allocation.
 struct PageMemory {
     size_t index{ 0 };
     size_t units{ 0 };
     uint32_t partition{ 0 };
     bool committed{ false };
+    // ZMemoryAllocation::partial_vmems: these extents leave the mapped cache
+    // under the allocator owner and travel with the allocation request.
+    std::vector<MemoryRange> partialMappings;
+    bool virtualClaimed{ true };
+    size_t harvestedUnits{ 0 };
+
 };
 
 // One object represents one blocked allocation.  It is deliberately owned by

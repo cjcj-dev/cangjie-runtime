@@ -706,16 +706,15 @@ public:
     }
 
     size_t GetDirtyUnitCount() const { return freeRegionManager.GetDirtyUnitCount(); }
-    size_t GetReleasedUnitCount() const { return freeRegionManager.GetReleasedUnitCount(); }
     size_t GetGarbageUnitCount() const { return garbageRegionList.GetUnitCount(); }
     size_t UncommitIdleUnits(size_t maxBytes, uint64_t idleBeforeNs, bool honorCancel = true)
     {
         return freeRegionManager.UncommitIdleUnits(maxBytes, idleBeforeNs, honorCancel);
     }
 
-    size_t GetInactiveUnitCount() const { return heapUnitCount - activeUnitCount.load(std::memory_order_acquire); }
+    size_t GetInactiveUnitCount() const { return freeRegionManager.GetVirtualUnitCount(); }
 
-    size_t GetActiveUnitCount() const { return activeUnitCount.load(std::memory_order_acquire); }
+    size_t GetActiveUnitCount() const { return heapUnitCount - GetInactiveUnitCount(); }
 
     inline size_t GetLargeObjectSize() const
     {
@@ -1248,9 +1247,7 @@ private:
 
     // heap space not allocated yet for even once. this value should not be decreased.
     std::atomic<uintptr_t> inactiveZone = { 0 }; // highest handed-out address, diagnostic envelope only
-    RangeRegistry inactiveRanges;
     size_t heapUnitCount = 0;
-    std::atomic<size_t> activeUnitCount{ 0 };
     std::atomic<size_t> tlabUsed{ 0 };
     size_t lastTLABUsed = 0;
     double tlabCapacity = 0;
