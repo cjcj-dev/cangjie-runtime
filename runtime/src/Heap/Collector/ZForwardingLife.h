@@ -27,12 +27,7 @@ class ZForwarding;
 // The three-state count is the ABA answer: a late reader is refused, it is never
 // handed a reused table. 0 is terminal. <0 is claimed (in-place relocate). >0 is live.
 //
-// Always on. This is the mechanism that replaced MRT_GCV2_FWDDATA_GRACE and
-// MRT_GCV2_MUTRELOC_DRAIN, not another gate.
-//
-// The three atomics live in RegionInfo::UnitMetadata (they fit the padding after
-// routeDestHold). The lock is process-wide: waiters are rare (claim drain, detach,
-// a late retain that arrived during claim) and ZGC's notify is already a broadcast.
+// The canonical words belong to ZForwarding, owned by the relocation set.
 class ZForwardingLife {
 public:
     ZForwardingLife() = delete;
@@ -103,11 +98,9 @@ public:
         for (;;) {
             int32_t n = refCount.load(std::memory_order_acquire);
             if (n == 0) {
-                g_retainRefusedReleased.fetch_add(1, std::memory_order_relaxed);
                 return false;
             }
             if (n < 0) {
-                g_retainRefusedClaimed.fetch_add(1, std::memory_order_relaxed);
                 wait();
                 return false;
             }
@@ -165,19 +158,8 @@ public:
         if (refCount.load(std::memory_order_acquire) == 0) {
             return;
         }
-        g_detachWaited.fetch_add(1, std::memory_order_relaxed);
         WaitUntilRef(refCount, 0);
     }
-
-    static uint64_t RetainRefusedReleased()
-    {
-        return g_retainRefusedReleased.load(std::memory_order_relaxed);
-    }
-    static uint64_t RetainRefusedClaimed()
-    {
-        return g_retainRefusedClaimed.load(std::memory_order_relaxed);
-    }
-    static uint64_t DetachWaited() { return g_detachWaited.load(std::memory_order_relaxed); }
 
     static void WaitPageDone(ZForwarding* forwarding);
 
@@ -204,9 +186,6 @@ private:
 
     static void WaitUntilRef(std::atomic<int32_t>& refCount, int32_t expect);
 
-    static std::atomic<uint64_t> g_retainRefusedReleased;
-    static std::atomic<uint64_t> g_retainRefusedClaimed;
-    static std::atomic<uint64_t> g_detachWaited;
 };
 
 } // namespace MapleRuntime

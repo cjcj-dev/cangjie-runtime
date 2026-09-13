@@ -22,6 +22,9 @@
 #include "gc_heap_fixture.hpp"
 
 #include <type_traits>
+#include <chrono>
+#include <thread>
+#include "Heap/Collector/RelocationRequestQueue.h"
 
 using namespace MapleRuntime;
 using namespace MapleRuntime::GcUnit;
@@ -342,4 +345,49 @@ GC_TEST(ZForwardingRemembered, YoungPhaseOwnsPublication)
         collector.PublishGenerationPhase(GCCycleGeneration::OLD, old.phase);
         GC_EXPECT_EQ(count, marking ? 1u : 0u);
     }
+}
+
+namespace {
+std::atomic<bool> rememberedWaitEntered{ false };
+void RememberedWaitEntered(ZForwarding*)
+{
+    rememberedWaitEntered.store(true, std::memory_order_release);
+}
+}
+
+GC_TEST(ZForwardingRemembered, ClaimedRetainUsesPageCompletionQueue)
+{
+    GcHeapFixture heap;
+    auto* fwd = ZForwarding::Create(1, heap.heapStart, heap.heapStart, RegionInfo::UNIT_SIZE);
+    GC_EXPECT_TRUE(fwd->claim());
+    fwd->in_place_relocation_claim_page();
+    rememberedWaitEntered.store(false);
+    RelocationRequestQueue::SetWaitEnterHook(RememberedWaitEntered);
+    std::atomic<bool> returned{ false };
+    bool retained = true;
+    std::thread reader([&] {
+        retained = fwd->retain_page();
+        returned.store(true, std::memory_order_release);
+    });
+    JoinGuard guard(reader);
+    const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(5);
+    while (!rememberedWaitEntered.load(std::memory_order_acquire) &&
+           !returned.load(std::memory_order_acquire) && std::chrono::steady_clock::now() < deadline) {
+        std::this_thread::yield();
+    }
+    const bool queued = rememberedWaitEntered.load(std::memory_order_acquire);
+    const bool returnedBeforeDone = returned.load(std::memory_order_acquire);
+    fwd->release_page();
+    const bool returnedAfterRelease = returned.load(std::memory_order_acquire);
+    fwd->mark_done();
+    reader.join();
+    RelocationRequestQueue::SetWaitEnterHook(nullptr);
+    auto& queue = static_cast<RegionSpace&>(Heap::GetHeap().GetAllocator())
+        .GetRegionManager().GetRelocationRequestQueue();
+    (void)queue.Complete(fwd);
+    fwd->Destroy();
+    GC_EXPECT_TRUE(queued);
+    GC_EXPECT_FALSE(returnedBeforeDone);
+    GC_EXPECT_FALSE(returnedAfterRelease);
+    GC_EXPECT_FALSE(retained);
 }

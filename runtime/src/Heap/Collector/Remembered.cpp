@@ -6,7 +6,6 @@
 
 
 #include "Heap/WCollector/WCollector.h"
-#include "Heap/WCollector/RememberedHolderPolicy.h"
 
 #include <array>
 #include <atomic>
@@ -177,7 +176,6 @@ std::atomic<size_t> g_resolveRootEntry{ 0 };
 std::atomic<size_t> g_resolveRootOld{ 0 };
 std::atomic<size_t> g_resolveRootHealNull{ 0 };
 std::atomic<size_t> g_fixMinorRootSlotsCalls{ 0 };
-std::atomic<size_t> g_findtoPostLifecycleSoft{ 0 };
 
 // ZGC zPage.inline.hpp:254-256: is_object_live = is_allocating || livemap.
 // zBarrier.inline.hpp:73-78: never heal a non-null slot with null.
@@ -209,19 +207,6 @@ bool HolderObjectIsLive(BaseObject* holder)
     }
     if (RegionIsAllocatingPage(region)) {
         return true;
-    }
-    // ZGC answers this from the page livemap until relocation completes
-    // (zPage.inline.hpp:239-240). Our current LiveInfo face can already have
-    // been unbound here, so use the mark-time retained copy while it covers
-    // this holder and still belongs to the current old-generation epoch.
-    MAddress holderAddress = reinterpret_cast<MAddress>(holder);
-    RegionInfo::RetainedLiveInfoState retainedState = region->GetRetainedLiveInfoState();
-    if (retainedState != RegionInfo::RetainedLiveInfoState::NEVER_EXAMINED &&
-        region->IsRetainedSnapshotValid() &&
-        holderAddress < region->GetRetainedLiveInfoCoveredUpTo()) {
-        size_t holderOffset = region->GetAddressOffset(holderAddress);
-        return retainedState == RegionInfo::RetainedLiveInfoState::SNAPSHOT_VALID &&
-            region->HasRetainedMarkWords() && region->RetainedMarkWordsSay(holderOffset);
     }
     if (region->IsYoungRegion()) {
         return RegionSpace::IsMarkedObject<Generation::Young>(holder);
