@@ -176,7 +176,7 @@ void EmitCrashRec(int sig, const siginfo_t* info, void* context, uintptr_t sigPc
     uint64_t seq = 0;
     if (Runtime::CurrentRef() != nullptr) {
         seq = GcLog::CurrentSeq();
-        GCPhase phase = Heap::GetHeap().GetGCPhase();
+        GCPhase phase = Heap::GetHeap().GetGCPhase(GCCycleGeneration::OLD);
         FoldToken(Collector::GetGCPhaseName(phase), phaseTok, sizeof(phaseTok));
         if (phase == GC_PHASE_PREFORWARD || phase == GC_PHASE_FORWARD) {
             inParFix = 1;
@@ -433,7 +433,7 @@ bool SignalManager::HandleUnexpectedSIGUSR2(int sig, siginfo_t* info, void* cont
 
 bool SignalManager::HandleUnexpectedSIGUSR1(int sig, siginfo_t* info, void* context)
 {
-    Heap::GetHeap().GetCollectorResources().RequestHeapDump(GCTask::TaskType::TASK_TYPE_DUMP_HEAP);
+    Heap::GetHeap().DumpHeap(HeapDumpKind::NORMAL);
     return true;
 }
 

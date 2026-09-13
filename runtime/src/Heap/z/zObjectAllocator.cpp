@@ -181,7 +181,7 @@ RegionInfo* RegionManager::AllocateSharedPage(size_t units, RegionInfo::UnitRole
     if (IsSmallEdenPage(page)) {
         tlabUsed.fetch_add(page->GetRegionSize(), std::memory_order_relaxed);
     }
-    const GCPhase phase = Heap::GetHeap().GetCollector().GetGCPhase();
+    const GCPhase phase = Heap::GetHeap().GetGCPhase(page->IsYoungRegion() ? GCCycleGeneration::YOUNG : GCCycleGeneration::OLD);
     if (phase == GC_PHASE_TRACE || phase == GC_PHASE_CLEAR_SATB_BUFFER) {
         page->SetTraceRegionFlag(1);
     }
@@ -291,7 +291,7 @@ RegionInfo* RegionManager::AllocateThreadLocalRegion(size_t size, bool expectPhy
                 tlabUsed.fetch_add(region->GetRegionSize(), std::memory_order_relaxed);
             }
             region->SetYoungAge(0);
-            GCPhase phase = Heap::GetHeap().GetCollector().GetGCPhase();
+            GCPhase phase = Heap::GetHeap().GetGCPhase(region->IsYoungRegion() ? GCCycleGeneration::YOUNG : GCCycleGeneration::OLD);
             if (phase == GC_PHASE_TRACE || phase == GC_PHASE_CLEAR_SATB_BUFFER) {
                 region->SetTraceRegionFlag(1);
             }
@@ -358,9 +358,12 @@ void RegionManager::RequestForRegion(size_t size)
 uintptr_t RegionManager::AllocPinnedFromFreeList(size_t size)
 {
     std::lock_guard<std::mutex> lock(freePinnedSlotListMutex);
-    GCPhase mutatorPhase = Mutator::GetMutator()->GetMutatorPhase();
+    // Pinned slots are reclaimed through the old mark view (CollectFreePinnedSlots).
+    // ZGeneration::generation owns phase; another generation's handshake does not.
+    const auto oldCycle = Heap::GetHeap().GetCollector().GetCycleSnapshot(GCCycleGeneration::OLD);
+    const GCPhase oldPhase = oldCycle.phase;
     // For preventing missing mark, do not allocate object from slot list when gc phase is post trace.
-    if (mutatorPhase == GCPhase::GC_PHASE_POST_TRACE) {
+    if (oldPhase == GCPhase::GC_PHASE_POST_TRACE) {
         return 0;
     }
     uintptr_t allocPtr = freePinnedSlotLists.PopFront(size);
@@ -370,12 +373,12 @@ uintptr_t RegionManager::AllocPinnedFromFreeList(size_t size)
         region->PreserveRetainedLiveInfoUpTo(region->GetRegionStart());
     }
     // For making bitmap comform with live object count, do not mark object repeated.
-    bool barrierClosedMarking = mutatorPhase == GCPhase::GC_PHASE_ENUM ||
-        mutatorPhase == GCPhase::GC_PHASE_TRACE ||
-        mutatorPhase == GCPhase::GC_PHASE_CLEAR_SATB_BUFFER;
-    bool censusSafeMarking = mutatorPhase == GCPhase::GC_PHASE_PREFORWARD ||
-        mutatorPhase == GCPhase::GC_PHASE_FORWARD ||
-        (mutatorPhase == GCPhase::GC_PHASE_IDLE && !Heap::GetHeap().IsGcStarted());
+    bool barrierClosedMarking = oldPhase == GCPhase::GC_PHASE_ENUM ||
+        oldPhase == GCPhase::GC_PHASE_TRACE ||
+        oldPhase == GCPhase::GC_PHASE_CLEAR_SATB_BUFFER;
+    bool censusSafeMarking = oldPhase == GCPhase::GC_PHASE_PREFORWARD ||
+        oldPhase == GCPhase::GC_PHASE_FORWARD ||
+        (oldPhase == GCPhase::GC_PHASE_IDLE && !oldCycle.active);
     if (allocPtr == 0 || (!barrierClosedMarking && !censusSafeMarking)) {
         return allocPtr;
     }

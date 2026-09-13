@@ -857,9 +857,9 @@ GC_OTHER_VM_TEST(ValueRootCurrentization, InsertionAndLateRekeyShareCurrentAutho
     WCollector collector(Heap::GetHeap().GetAllocator(), Heap::GetHeap().GetCollectorResources());
     LateBackfillState state = PrepareValueRootForwarding(fx, collector);
 
-    collector.SetGCPhase(GCPhase::GC_PHASE_IDLE);
+    collector.SetGCPhase(GCCycleGeneration::OLD, GCPhase::GC_PHASE_IDLE);
     collector.ResurrectExportObject(state.from);
-    collector.SetGCPhase(GCPhase::GC_PHASE_PREFORWARD);
+    collector.SetGCPhase(GCCycleGeneration::OLD, GCPhase::GC_PHASE_PREFORWARD);
     collector.ResurrectExportObject(state.from);
     const bool insertCurrent =
         RelocationReceiptTestAccess::BothResurrectionSetsEqual(collector, state.to);
@@ -947,7 +947,7 @@ GC_TEST(ForwardingPublicationProduct, MutatorRuntimeEntryReachesCopyAdmission)
                            objectSize, region->GetRegionSize());
 
     WCollector collector(Heap::GetHeap().GetAllocator(), Heap::GetHeap().GetCollectorResources());
-    collector.SetGCPhase(GCPhase::GC_PHASE_FORWARD);
+    collector.SetGCPhase(GCCycleGeneration::OLD, GCPhase::GC_PHASE_FORWARD);
     RelocationReceiptTestAccess::BindCollector(Heap::GetHeap().GetCollectorResources(), &collector);
     region->PrepareForwardableRegion(region->GetMarkView<Generation::Old>());
     region->MarkForwardingDone();
@@ -963,7 +963,7 @@ GC_TEST(ForwardingPublicationProduct, MutatorRuntimeEntryReachesCopyAdmission)
     const MAddress receipt = ForwardingTable::FindTo(fromAddress);
     const int32_t copyCount = region->metadata.copyInflight.load(std::memory_order_acquire);
 
-    collector.SetGCPhase(GCPhase::GC_PHASE_IDLE);
+    collector.SetGCPhase(GCCycleGeneration::OLD, GCPhase::GC_PHASE_IDLE);
     RelocationReceiptTestAccess::BindCollector(Heap::GetHeap().GetCollectorResources(), nullptr);
     ForwardingTable::ClearEntries(region->GetRegionStart(), region->GetRegionSize());
     ForwardingTable::ReclaimRetired("gc-unit-mutator-entry");
@@ -1001,7 +1001,7 @@ GC_TEST(ForwardingNoGeometry, ForwardImplTryLockCopiesWithoutPrebuiltMapping)
     (void)bitmap->MarkBits(region->GetAddressOffset(reinterpret_cast<MAddress>(from)),
                            objectSize, region->GetRegionSize());
     WCollector collector(Heap::GetHeap().GetAllocator(), Heap::GetHeap().GetCollectorResources());
-    collector.SetGCPhase(GCPhase::GC_PHASE_FORWARD);
+    collector.SetGCPhase(GCCycleGeneration::OLD, GCPhase::GC_PHASE_FORWARD);
     RelocationReceiptTestAccess::BindCollector(Heap::GetHeap().GetCollectorResources(), &collector);
     region->PrepareForwardableRegion(region->GetMarkView<Generation::Old>());
     region->MarkForwardingDone();
@@ -1010,7 +1010,7 @@ GC_TEST(ForwardingNoGeometry, ForwardImplTryLockCopiesWithoutPrebuiltMapping)
     const MAddress fromAddress = reinterpret_cast<MAddress>(from);
     GC_EXPECT_EQ(ForwardingTable::FindTo(fromAddress), static_cast<MAddress>(0));
     BaseObject* relocated = RelocationReceiptTestAccess::ForwardImpl(collector, from, region);
-    collector.SetGCPhase(GCPhase::GC_PHASE_IDLE);
+    collector.SetGCPhase(GCCycleGeneration::OLD, GCPhase::GC_PHASE_IDLE);
     RelocationReceiptTestAccess::BindCollector(Heap::GetHeap().GetCollectorResources(), nullptr);
     AllocBuffer::GetOrCreateAllocBuffer()->ClearRegion();
     const bool moved = relocated != nullptr && relocated != from;
@@ -2418,7 +2418,7 @@ GC_TEST(ForwardingPublicationProduct, TraceIncomingAlreadyToOutsideFromSkipsLook
 {
     GcHeapFixture& fx = ProductFixture();
     WCollector collector(Heap::GetHeap().GetAllocator(), Heap::GetHeap().GetCollectorResources());
-    collector.SetGCPhase(GCPhase::GC_PHASE_TRACE);
+    collector.SetGCPhase(GCCycleGeneration::OLD, GCPhase::GC_PHASE_TRACE);
     LateBackfillState reverse = PrepareLateBackfill(fx, collector);
     LiveInfo* destinationLive = PrepareForwardable(
         fx, reverse.destination, reinterpret_cast<MAddress>(reverse.to));
@@ -2525,7 +2525,7 @@ GC_TEST(ForwardingPublicationProduct, TraceOverwritePreviousCarriesRealHeapSourc
 {
     GcHeapFixture& fx = ProductFixture();
     WCollector collector(Heap::GetHeap().GetAllocator(), Heap::GetHeap().GetCollectorResources());
-    collector.SetGCPhase(GCPhase::GC_PHASE_TRACE);
+    collector.SetGCPhase(GCCycleGeneration::OLD, GCPhase::GC_PHASE_TRACE);
     LateBackfillState state = PrepareLateBackfill(fx, collector);
     ZForwarding* table = ForwardingTable::GetEntries(reinterpret_cast<MAddress>(state.from));
     GC_EXPECT_TRUE(table != nullptr);
@@ -2590,7 +2590,7 @@ GC_TEST(ForwardingPublicationProduct, IncomingRefStopsBeforeDestinationStore)
     BaseObject* incoming = fx.PlaceObject(region->GetRegionStart());
     region->SetRegionAllocPtr(reinterpret_cast<MAddress>(incoming) + incoming->GetSize());
     WCollector collector(Heap::GetHeap().GetAllocator(), Heap::GetHeap().GetCollectorResources());
-    collector.SetGCPhase(GCPhase::GC_PHASE_RECLAIM_SATB_NODE);
+    collector.SetGCPhase(GCCycleGeneration::OLD, GCPhase::GC_PHASE_RECLAIM_SATB_NODE);
     RelocationReceiptTestAccess::BindCollector(Heap::GetHeap().GetCollectorResources(), &collector);
     LiveInfo* live = PrepareForwardable(fx, region, reinterpret_cast<MAddress>(incoming));
     region->MarkForwardingDone();
@@ -2636,7 +2636,7 @@ GC_TEST(ForwardingPublicationProduct, LiveExactStartReceiptBeforeTraceOverwrite)
     BaseObject* from = fx.PlaceObject(region->GetRegionStart());
     region->SetRegionAllocPtr(reinterpret_cast<MAddress>(from) + from->GetSize());
     WCollector collector(Heap::GetHeap().GetAllocator(), Heap::GetHeap().GetCollectorResources());
-    collector.SetGCPhase(GCPhase::GC_PHASE_TRACE);
+    collector.SetGCPhase(GCCycleGeneration::OLD, GCPhase::GC_PHASE_TRACE);
     RelocationReceiptTestAccess::BindCollector(Heap::GetHeap().GetCollectorResources(), &collector);
     LiveInfo* live = PrepareForwardable(fx, region, reinterpret_cast<MAddress>(from));
     RegionBitmap* mutableBitmap = live->GetMarkFace().bitmap;
@@ -2691,7 +2691,7 @@ GC_TEST(ForwardingPublicationProduct, DeadOrUnselectedFromStillFailsClosed)
     BaseObject* liveObject = fx.PlaceObject(region->GetRegionStart() + 64);
     region->SetRegionAllocPtr(reinterpret_cast<MAddress>(liveObject) + liveObject->GetSize());
     WCollector collector(Heap::GetHeap().GetAllocator(), Heap::GetHeap().GetCollectorResources());
-    collector.SetGCPhase(GCPhase::GC_PHASE_TRACE);
+    collector.SetGCPhase(GCCycleGeneration::OLD, GCPhase::GC_PHASE_TRACE);
     RelocationReceiptTestAccess::BindCollector(Heap::GetHeap().GetCollectorResources(), &collector);
     LiveInfo* live = PrepareForwardable(fx, region, reinterpret_cast<MAddress>(liveObject));
     GC_EXPECT_TRUE(region->LoadRouteStartTable()->count(0) == 0);
@@ -2908,7 +2908,7 @@ void RunDerivedBaseProducer(bool interior, bool tagged, bool moving = false,
         state = PrepareLateBackfill(fx, collector);
         state.from->SetStateCode(ObjectState::NORMAL);
         state.region->MarkForwardingDone();
-        collector.SetGCPhase(GCPhase::GC_PHASE_FORWARD);
+        collector.SetGCPhase(GCCycleGeneration::OLD, GCPhase::GC_PHASE_FORWARD);
         auto& manager = static_cast<RegionSpace&>(Heap::GetHeap().GetAllocator()).GetRegionManager();
         RelocationReceiptTestAccess::ParkFrom(manager, state.region);
         GCWorkers workers(GCWorkers::Generation::OLD, 1);
@@ -2931,7 +2931,7 @@ void RunDerivedBaseProducer(bool interior, bool tagged, bool moving = false,
     } else if (moving) {
         state = PrepareValueRootForwarding(fx, collector);
     }
-    collector.SetGCPhase(GCPhase::GC_PHASE_PREFORWARD);
+    collector.SetGCPhase(GCCycleGeneration::OLD, GCPhase::GC_PHASE_PREFORWARD);
     const bool usesState = moving || unresolvedGhost;
     const size_t usedOffset = interior ? interiorOffset : 0;
     const uintptr_t base = reinterpret_cast<uintptr_t>(usesState ? state.from : fx.obj0) + usedOffset;
@@ -2954,7 +2954,7 @@ void RunDerivedBaseProducer(bool interior, bool tagged, bool moving = false,
         std::fprintf(stderr, "DERIVED_BASE_FAILCLOSED status=%d\n%s", aborted.status, aborted.output.c_str());
         fx.typeInfo->SetInstanceSize(savedSize);
         if (usesState) { CleanupLateBackfill(fx, state); }
-        collector.SetGCPhase(GCPhase::GC_PHASE_IDLE);
+        collector.SetGCPhase(GCCycleGeneration::OLD, GCPhase::GC_PHASE_IDLE);
         RelocationReceiptTestAccess::BindCollector(Heap::GetHeap().GetCollectorResources(), nullptr);
         std::fprintf(stderr, "DERIVED_BASE_TARGET target_assertion executed=1 matched=%d\n",
                      aborted.output.find("site=Mutator::MakePreForwardDerivedVisitor.base-not-remapped") !=
@@ -2971,7 +2971,7 @@ void RunDerivedBaseProducer(bool interior, bool tagged, bool moving = false,
     const bool derivedCorrect = frame[1] == expected + 8;
     fx.typeInfo->SetInstanceSize(savedSize);
     if (usesState) { CleanupLateBackfill(fx, state); }
-    collector.SetGCPhase(GCPhase::GC_PHASE_IDLE);
+    collector.SetGCPhase(GCCycleGeneration::OLD, GCPhase::GC_PHASE_IDLE);
     RelocationReceiptTestAccess::BindCollector(Heap::GetHeap().GetCollectorResources(), nullptr);
     GC_EXPECT_TRUE(derivedCorrect);
     GC_EXPECT_TRUE(baseCorrect);
@@ -3329,7 +3329,7 @@ GC_TEST(ForwardingPublicationProduct, LookupCausePublishedWithoutReceipt)
     BaseObject* from = fx.PlaceObject(region->GetRegionStart());
     region->SetRegionAllocPtr(reinterpret_cast<MAddress>(from) + from->GetSize());
     WCollector collector(Heap::GetHeap().GetAllocator(), Heap::GetHeap().GetCollectorResources());
-    collector.SetGCPhase(GCPhase::GC_PHASE_FORWARD);
+    collector.SetGCPhase(GCCycleGeneration::OLD, GCPhase::GC_PHASE_FORWARD);
     RelocationReceiptTestAccess::BindCollector(Heap::GetHeap().GetCollectorResources(), &collector);
     LiveInfo* live = PrepareForwardable(fx, region, reinterpret_cast<MAddress>(from));
     const LookupWitnessIdentity expected = ReadLookupWitnessIdentity(
@@ -3410,7 +3410,7 @@ static void CheckForwardingWinner(bool identity)
     BaseObject* winner = identity ? from : fx.obj1;
     BaseObject* loser = identity ? fx.obj1 : from;
     WCollector collector(Heap::GetHeap().GetAllocator(), Heap::GetHeap().GetCollectorResources());
-    collector.SetGCPhase(GCPhase::GC_PHASE_FORWARD);
+    collector.SetGCPhase(GCCycleGeneration::OLD, GCPhase::GC_PHASE_FORWARD);
     RelocationReceiptTestAccess::BindCollector(Heap::GetHeap().GetCollectorResources(), &collector);
     LiveInfo* live = PrepareForwardable(fx, region, fromAddr);
     GC_EXPECT_EQ(ForwardingTable::FindTo(fromAddr), 0);
@@ -3469,7 +3469,7 @@ GC_TEST(ForwardingPublicationProduct, CompletedForwardingMissRejectsOriginalAddr
         const MAddress fromAddr = reinterpret_cast<MAddress>(from);
         region->SetRegionAllocPtr(fromAddr + from->GetSize());
         WCollector collector(Heap::GetHeap().GetAllocator(), Heap::GetHeap().GetCollectorResources());
-        collector.SetGCPhase(GCPhase::GC_PHASE_IDLE);
+        collector.SetGCPhase(GCCycleGeneration::OLD, GCPhase::GC_PHASE_IDLE);
         RelocationReceiptTestAccess::BindCollector(Heap::GetHeap().GetCollectorResources(), &collector);
         (void)PrepareForwardable(fx, region, fromAddr);
         region->MarkForwardingDone();
@@ -3499,7 +3499,7 @@ GC_TEST(ForwardingPublicationProduct, CompactedWithoutFwdDoneWaitsInProductSO)
     BaseObject* from = fx.PlaceObject(region->GetRegionStart());
     region->SetRegionAllocPtr(reinterpret_cast<MAddress>(from) + from->GetSize());
     WCollector collector(Heap::GetHeap().GetAllocator(), Heap::GetHeap().GetCollectorResources());
-    collector.SetGCPhase(GCPhase::GC_PHASE_FORWARD);
+    collector.SetGCPhase(GCCycleGeneration::OLD, GCPhase::GC_PHASE_FORWARD);
     RelocationReceiptTestAccess::BindCollector(Heap::GetHeap().GetCollectorResources(), &collector);
     LiveInfo* live = PrepareForwardable(fx, region, reinterpret_cast<MAddress>(from));
     GC_EXPECT_FALSE(region->IsForwardingDone());
@@ -3561,7 +3561,7 @@ GC_TEST(ForwardingPublicationProduct, ForwardUpdateRawRefWritesBackMappedTo)
     (void)ForwardingTable::InstallMapping(publication, reinterpret_cast<MAddress>(from),
                                           reinterpret_cast<MAddress>(to));
     region->MarkForwardingDone();
-    collector.SetGCPhase(GCPhase::GC_PHASE_IDLE);
+    collector.SetGCPhase(GCCycleGeneration::OLD, GCPhase::GC_PHASE_IDLE);
     ObjectRef root;
     StorePlain(root, from_object(from));
     BaseObject* resolved = RelocationReceiptTestAccess::ForwardUpdateRawRef(collector, root);
@@ -3594,7 +3594,7 @@ GC_TEST(ForwardingPublicationProduct, ForwardUpdateRawRefFailClosedWhenUnresolve
     WCollector collector(Heap::GetHeap().GetAllocator(), Heap::GetHeap().GetCollectorResources());
     RelocationReceiptTestAccess::BindCollector(Heap::GetHeap().GetCollectorResources(), &collector);
     LiveInfo* live = PrepareForwardable(fx, region, reinterpret_cast<MAddress>(from));
-    collector.SetGCPhase(GCPhase::GC_PHASE_IDLE);
+    collector.SetGCPhase(GCCycleGeneration::OLD, GCPhase::GC_PHASE_IDLE);
     ExpectRootAbortAt("ForwardUpdateRawRef.unresolved", [&]() {
         ObjectRef root;
         StorePlain(root, from_object(from));
@@ -3630,7 +3630,7 @@ GC_TEST(ForwardingPublicationProduct, IdentityForwardStillWritesBackRootWord)
     (void)ForwardingTable::InstallMapping(publication, reinterpret_cast<MAddress>(from),
                                           reinterpret_cast<MAddress>(from));
     region->MarkForwardingDone();
-    collector.SetGCPhase(GCPhase::GC_PHASE_IDLE);
+    collector.SetGCPhase(GCCycleGeneration::OLD, GCPhase::GC_PHASE_IDLE);
     const uintptr_t colored = reinterpret_cast<uintptr_t>(from) |
         (static_cast<uintptr_t>(::g_cjLoadBadMask) ^ REMAP_COLOUR_MASK);
     ObjectRef root;
@@ -3665,7 +3665,7 @@ GC_TEST(ForwardingPublicationProduct, FixRootInteriorFailClosedWhenHostUnresolve
     WCollector collector(Heap::GetHeap().GetAllocator(), Heap::GetHeap().GetCollectorResources());
     RelocationReceiptTestAccess::BindCollector(Heap::GetHeap().GetCollectorResources(), &collector);
     LiveInfo* live = PrepareForwardable(fx, region, reinterpret_cast<MAddress>(from));
-    collector.SetGCPhase(GCPhase::GC_PHASE_IDLE);
+    collector.SetGCPhase(GCCycleGeneration::OLD, GCPhase::GC_PHASE_IDLE);
     ExpectRootAbortAt("FixMinorEvacuatedSlot.interior-unresolved", [&]() {
         ObjectRef root;
         StorePlain(root, to_zaddress(reinterpret_cast<MAddress>(from) + 8));
@@ -3832,7 +3832,7 @@ GC_TEST(ForwardingPublicationProduct, PageWaitThenLookupReadsOriginalCompactRece
     RegionSpace& productSpace = reinterpret_cast<RegionSpace&>(Heap::GetHeap().GetAllocator());
     RegionManager& manager = productSpace.GetRegionManager();
     WCollector collector(Heap::GetHeap().GetAllocator(), Heap::GetHeap().GetCollectorResources());
-    collector.SetGCPhase(GCPhase::GC_PHASE_FORWARD);
+    collector.SetGCPhase(GCCycleGeneration::OLD, GCPhase::GC_PHASE_FORWARD);
     RelocationReceiptTestAccess::BindCollector(Heap::GetHeap().GetCollectorResources(), &collector);
     LiveInfo* live = PrepareForwardable(fx, region, from);
     RelocationReceiptTestAccess::ParkFrom(manager, region);
@@ -3874,7 +3874,7 @@ GC_TEST(ForwardingPublicationProduct, PageWaitThenLookupReadsOriginalCompactRece
     GC_EXPECT_EQ(ForwardingTable::FindTo(from), reinterpret_cast<MAddress>(resolved));
     GC_EXPECT_TRUE(workerClosed);
 
-    collector.SetGCPhase(GCPhase::GC_PHASE_IDLE);
+    collector.SetGCPhase(GCCycleGeneration::OLD, GCPhase::GC_PHASE_IDLE);
     RelocationReceiptTestAccess::BindCollector(Heap::GetHeap().GetCollectorResources(), nullptr);
     RelocationReceiptTestAccess::ReleaseListOwnership(region);
     ForwardingTable::ClearEntries(region->GetRegionStart(), region->GetRegionSize());
@@ -3911,7 +3911,7 @@ GC_TEST(ForwardingPublicationProduct, CompletedPageResolvesThroughForwardingTabl
     RegionSpace& productSpace = reinterpret_cast<RegionSpace&>(Heap::GetHeap().GetAllocator());
     RegionManager& manager = productSpace.GetRegionManager();
     WCollector collector(Heap::GetHeap().GetAllocator(), Heap::GetHeap().GetCollectorResources());
-    collector.SetGCPhase(GCPhase::GC_PHASE_FORWARD);
+    collector.SetGCPhase(GCCycleGeneration::OLD, GCPhase::GC_PHASE_FORWARD);
     RelocationReceiptTestAccess::BindCollector(Heap::GetHeap().GetCollectorResources(), &collector);
     LiveInfo* live = PrepareForwardable(fx, region, from);
     RelocationReceiptTestAccess::ParkFrom(manager, region);
@@ -3950,7 +3950,7 @@ GC_TEST(ForwardingPublicationProduct, CompletedPageResolvesThroughForwardingTabl
     const bool tablePublished = ForwardingTable::FindTo(from) == reinterpret_cast<MAddress>(resolved);
     const bool generationClosed = workerClosed;
 
-    collector.SetGCPhase(GCPhase::GC_PHASE_IDLE);
+    collector.SetGCPhase(GCCycleGeneration::OLD, GCPhase::GC_PHASE_IDLE);
     RelocationReceiptTestAccess::BindCollector(Heap::GetHeap().GetCollectorResources(), nullptr);
     RelocationReceiptTestAccess::ReleaseListOwnership(region);
     ForwardingTable::ClearEntries(region->GetRegionStart(), region->GetRegionSize());
@@ -4087,7 +4087,7 @@ GC_TEST(ForwardingPublicationProduct, InsertThenReclaimStillServesWaitAndTryUpda
     from->SetStateCode(ObjectState::FORWARDED);
     region->MarkForwardingDone();
     region->MarkForwardingDone();
-    collector.SetGCPhase(GCPhase::GC_PHASE_IDLE);
+    collector.SetGCPhase(GCCycleGeneration::OLD, GCPhase::GC_PHASE_IDLE);
 
     ForwardingTable::ClearEntries(region->GetRegionStart(), region->GetRegionSize());
     ForwardingTable::ReclaimRetired("old-remap-young-roots-complete");

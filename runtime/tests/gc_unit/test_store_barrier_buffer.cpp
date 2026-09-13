@@ -194,10 +194,12 @@ GC_TEST(StoreBuf, ProductWriteCarriesOldValueOnlyInPrevArm)
     RelocationReceiptTestAccess::EnsureCollectorProxyBound(resources);
     const bool startedBefore = resources.IsGcStarted();
     const GCReason reasonBefore = resources.GetGCStats().reason;
-    const GCPhase phaseBefore = heap.GetGCPhase();
-    resources.SetGcStarted(true);
+    const GCPhase phaseBefore = heap.GetGCPhase(GCCycleGeneration::OLD);
+    auto& activityCycle = Heap::GetHeap().GetCollector().GetGenerationCycle(GCCycleGeneration::OLD);
+    const bool ownerWasActive = activityCycle.Snapshot().active;
+    if (!ownerWasActive) activityCycle.Begin(1);
     resources.GetGCStats().reason = GC_REASON_USER;
-    heap.SetGCPhase(GCPhase::GC_PHASE_TRACE);
+    heap.SetGCPhase(GCCycleGeneration::OLD, GCPhase::GC_PHASE_TRACE);
 
     Mutator mutator;
     mutator.SetMutatorPhase(GCPhase::GC_PHASE_TRACE);
@@ -205,9 +207,9 @@ GC_TEST(StoreBuf, ProductWriteCarriesOldValueOnlyInPrevArm)
     ThreadLocal::SetMutator(&mutator);
     barrier.WriteReference(fx.obj0, field, fx.obj1);
     ThreadLocal::SetMutator(mutatorBefore);
-    heap.SetGCPhase(phaseBefore);
+    heap.SetGCPhase(GCCycleGeneration::OLD, phaseBefore);
     resources.GetGCStats().reason = reasonBefore;
-    resources.SetGcStarted(startedBefore);
+    if (!ownerWasActive) activityCycle.End();
 
     StoreBarrierBuffer& buf = ThreadLocal::GetGCData().storeBarrierBuffer;
     const size_t pending = buf.Pending();
@@ -260,10 +262,12 @@ GC_TEST(StoreBuf, ProductPhaseFlushHandsPairedPrevToMark)
     RelocationReceiptTestAccess::EnsureCollectorProxyBound(resources);
     const bool startedBefore = resources.IsGcStarted();
     const GCReason reasonBefore = resources.GetGCStats().reason;
-    const GCPhase phaseBefore = heap.GetGCPhase();
-    resources.SetGcStarted(true);
+    const GCPhase phaseBefore = heap.GetGCPhase(GCCycleGeneration::OLD);
+    auto& activityCycle = Heap::GetHeap().GetCollector().GetGenerationCycle(GCCycleGeneration::OLD);
+    const bool ownerWasActive = activityCycle.Snapshot().active;
+    if (!ownerWasActive) activityCycle.Begin(1);
     resources.GetGCStats().reason = GC_REASON_USER;
-    heap.SetGCPhase(GCPhase::GC_PHASE_TRACE);
+    heap.SetGCPhase(GCCycleGeneration::OLD, GCPhase::GC_PHASE_TRACE);
 
     std::vector<BaseObject*> retired;
     DrainPublishedMarkObjects(retired);
@@ -281,9 +285,9 @@ GC_TEST(StoreBuf, ProductPhaseFlushHandsPairedPrevToMark)
     mutator.TransitionToGCPhaseExclusive(GCPhase::GC_PHASE_CLEAR_SATB_BUFFER);
     GC_EXPECT_TRUE(ThreadLocal::GetGCData().storeBarrierBuffer.IsEmpty());
     ThreadLocal::SetMutator(mutatorBefore);
-    heap.SetGCPhase(phaseBefore);
+    heap.SetGCPhase(GCCycleGeneration::OLD, phaseBefore);
     resources.GetGCStats().reason = reasonBefore;
-    resources.SetGcStarted(startedBefore);
+    if (!ownerWasActive) activityCycle.End();
 
     DrainPublishedMarkObjects(retired);
     size_t oldCount = 0;
@@ -380,10 +384,12 @@ GC_TEST(StoreBuf, CompilerFastOverwriteHandsObservedOldToMark)
     RelocationReceiptTestAccess::EnsureCollectorProxyBound(resources);
     const bool startedBefore = resources.IsGcStarted();
     const GCReason reasonBefore = resources.GetGCStats().reason;
-    const GCPhase phaseBefore = heap.GetGCPhase();
-    resources.SetGcStarted(true);
+    const GCPhase phaseBefore = heap.GetGCPhase(GCCycleGeneration::OLD);
+    auto& activityCycle = Heap::GetHeap().GetCollector().GetGenerationCycle(GCCycleGeneration::OLD);
+    const bool ownerWasActive = activityCycle.Snapshot().active;
+    if (!ownerWasActive) activityCycle.Begin(1);
     resources.GetGCStats().reason = GC_REASON_USER;
-    heap.SetGCPhase(GCPhase::GC_PHASE_TRACE);
+    heap.SetGCPhase(GCCycleGeneration::OLD, GCPhase::GC_PHASE_TRACE);
 
     std::vector<BaseObject*> retired;
     DrainPublishedMarkObjects(retired);
@@ -404,9 +410,9 @@ GC_TEST(StoreBuf, CompilerFastOverwriteHandsObservedOldToMark)
     mutator.TransitionToGCPhaseExclusive(GCPhase::GC_PHASE_CLEAR_SATB_BUFFER);
 
     ThreadLocal::SetMutator(mutatorBefore);
-    heap.SetGCPhase(phaseBefore);
+    heap.SetGCPhase(GCCycleGeneration::OLD, phaseBefore);
     resources.GetGCStats().reason = reasonBefore;
-    resources.SetGcStarted(startedBefore);
+    if (!ownerWasActive) activityCycle.End();
 
     DrainPublishedMarkObjects(retired);
     size_t oldReceipts = 0;
@@ -453,10 +459,12 @@ GC_TEST(StoreBuf, GcAssistedPhaseFlushDefersStoreBuffer)
     RelocationReceiptTestAccess::EnsureCollectorProxyBound(resources);
     const bool startedBefore = resources.IsGcStarted();
     const GCReason reasonBefore = resources.GetGCStats().reason;
-    const GCPhase phaseBefore = heap.GetGCPhase();
-    resources.SetGcStarted(true);
+    const GCPhase phaseBefore = heap.GetGCPhase(GCCycleGeneration::OLD);
+    auto& activityCycle = Heap::GetHeap().GetCollector().GetGenerationCycle(GCCycleGeneration::OLD);
+    const bool ownerWasActive = activityCycle.Snapshot().active;
+    if (!ownerWasActive) activityCycle.Begin(1);
     resources.GetGCStats().reason = GC_REASON_USER;
-    heap.SetGCPhase(GCPhase::GC_PHASE_TRACE);
+    heap.SetGCPhase(GCCycleGeneration::OLD, GCPhase::GC_PHASE_TRACE);
 
     Mutator mutator;
     mutator.SetMutatorPhase(GCPhase::GC_PHASE_TRACE);
@@ -478,9 +486,9 @@ GC_TEST(StoreBuf, GcAssistedPhaseFlushDefersStoreBuffer)
     GC_EXPECT_TRUE(ThreadLocal::GetGCData().storeBarrierBuffer.IsEmpty());
 
     ThreadLocal::SetMutator(mutatorBefore);
-    heap.SetGCPhase(phaseBefore);
+    heap.SetGCPhase(GCCycleGeneration::OLD, phaseBefore);
     resources.GetGCStats().reason = reasonBefore;
-    resources.SetGcStarted(startedBefore);
+    if (!ownerWasActive) activityCycle.End();
 }
 
 GC_TEST(StoreBuf, NonNullPrevPublishesMarkBeforeRememberingSlot)

@@ -257,8 +257,8 @@ public:
 
     ~TracingCollector() override = default;
     MarkDomain* MajorMarkDomain() const { return majorMarkDomain.get(); }
-    virtual void PreGarbageCollection(bool isConcurrent, uint64_t gcIndex);
-    virtual void PostGarbageCollection(uint64_t gcIndex);
+    virtual void PreGarbageCollection(GCCycleGeneration generation, bool isConcurrent, uint64_t gcIndex);
+    virtual void PostGarbageCollection(GCCycleGeneration generation, uint64_t gcIndex);
 
     static void VisitStackRoots(const RootVisitor& visitor, RegSlotsMap& regSlotsMap, const FrameInfo& frame,
                                 Mutator& mutator);
@@ -313,15 +313,15 @@ public:
 
     void ResurrectExportObject(BaseObject* obj)
     {
-        auto phase = GetGCPhase();
+        auto phase = GetGCPhase(static_cast<GCCycleGeneration>(ObjectGeneration(obj)));
         std::lock_guard<std::mutex> lg(resurrectExportMtx);
         if (phase != GCPhase::GC_PHASE_PREFORWARD && phase != GCPhase::GC_PHASE_FORWARD) {
             resurrectedExportObjectes.insert(ResolveCurrentValueRoot(
-                obj, &resurrectedExportObjectes, ActiveForwardingGeneration(), ForwardingStage::IncomingNew));
+                obj, &resurrectedExportObjectes, ObjectGeneration(obj), ForwardingStage::IncomingNew));
         } else {
             resurrectedExportObjectesForwardPhase.insert(
                 ResolveCurrentValueRoot(
-                    obj, &resurrectedExportObjectesForwardPhase, ActiveForwardingGeneration(), ForwardingStage::IncomingNew));
+                    obj, &resurrectedExportObjectesForwardPhase, ObjectGeneration(obj), ForwardingStage::IncomingNew));
         }
     }
 
@@ -396,11 +396,6 @@ public:
 
     Allocator& GetAllocator() const { return theAllocator; }
 
-    bool IsHeapMarked() const { return collectorResources.IsHeapMarked(); }
-
-    void SetHeapMarked(bool value) { collectorResources.SetHeapMarked(value); }
-
-    void SetGcStarted(bool val) { collectorResources.SetGcStarted(val); }
 
     void RunGarbageCollection(uint64_t, GCReason) override = 0;
 
@@ -409,13 +404,12 @@ public:
         MutatorManager::Instance().TransitionAllMutatorsToGCPhase(phase, young);
     }
 
-    GCStats& GetGCStats() override { return collectorResources.GetGCStats(); }
+    GCStats& GetGCStats(GCCycleGeneration generation = GCCycleGeneration::OLD) override
+    {
+        return GetGenerationCycle(generation).Stats();
+    }
 
     virtual void UpdateGCStats();
-    virtual uint16_t GetCurrentTagID()
-    {
-        Collector::AbortUnimplemented("TracingCollector::GetCurrentTagID");
-    }
 
 
 protected:
@@ -473,14 +467,12 @@ protected:
         return workStack;
     }
 
-    inline void SetGCReason(const GCReason reason) { SelectCycle(reason); }
 
     // enum all common roots.
     void EnumAllCommonRoots(GCWorkers& workers, RootSet& rootSet);
-    GCWorkers& GetWorkers() const
+    GCWorkers& GetWorkers(GCCycleGeneration generation) const
     {
-        return collectorResources.GetWorkers(GetCycleReason() == GC_REASON_YOUNG
-            ? GCCycleGeneration::YOUNG : GCCycleGeneration::OLD);
+        return *(generation == GCCycleGeneration::YOUNG ? youngCycle : oldCycle).Workers();
     }
     // enum roots referenced by foreign languages.
     void EnumAllExportRoots(RootSet& foreignRootsSet);

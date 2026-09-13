@@ -437,7 +437,7 @@ bool MRT_NewForeignCJThread()
         ThreadLocal::SetProtectAddr(nullptr);
     }
     mutator->InitForeignCJThread();
-    mutator->SetMutatorPhase(Heap::GetHeap().GetGCPhase());
+    mutator->SetMutatorPhase(Heap::GetHeap().GetGCPhase(mutator->EnumYoung() ? GCCycleGeneration::YOUNG : GCCycleGeneration::OLD));
     // dynjoin (乙): foreign attach during active epoch is born-clean exclude.
     mutatorManager.ExcludeNewMutatorFromActiveEpoch(*mutator);
     mutatorManager.MutatorManagementRUnlock();
@@ -579,7 +579,7 @@ void* NewFinalizerCJThread()
     mutator->SetManagedContext(false);
     MutatorManager::Instance().BindMutator(*mutator);
     ThreadLocal::SetMutator(mutator);
-    mutator->SetMutatorPhase(Heap::GetHeap().GetGCPhase());
+    mutator->SetMutatorPhase(Heap::GetHeap().GetGCPhase(mutator->EnumYoung() ? GCCycleGeneration::YOUNG : GCCycleGeneration::OLD));
     MutatorManager::Instance().ExcludeNewMutatorFromActiveEpoch(*mutator);
     MutatorManager::Instance().MutatorManagementRUnlock();
     ThreadLocalData* threadData = reinterpret_cast<ThreadLocalData*>(MRT_GetThreadLocalData());

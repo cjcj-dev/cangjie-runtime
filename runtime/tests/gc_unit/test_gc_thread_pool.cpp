@@ -141,8 +141,8 @@ public:
 
     void ForwardYoungFromRuntimeEntry()
     {
-        SetGCReason(GC_REASON_YOUNG);
-        ForwardFromSpace();
+        GetGenerationCycle(GCCycleGeneration::YOUNG).SelectReason(GC_REASON_YOUNG);
+        ForwardFromSpace(GCCycleGeneration::YOUNG);
     }
 };
 

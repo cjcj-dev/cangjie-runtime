@@ -24,10 +24,10 @@
 #endif
 
 namespace MapleRuntime {
-void CopyCollector::PostGarbageCollection(uint64_t gcIndex)
+void CopyCollector::PostGarbageCollection(GCCycleGeneration generation, uint64_t gcIndex)
 {
     reinterpret_cast<RegionSpace&>(theAllocator).DumpRegionStats("region statistics when gc ends");
-    TracingCollector::PostGarbageCollection(gcIndex);
+    TracingCollector::PostGarbageCollection(generation, gcIndex);
     MutatorManager::Instance().DestroyExpiredMutators();
 }
 
@@ -52,95 +52,21 @@ void CopyCollector::CopyObject(const BaseObject& fromObj, BaseObject& toObj, siz
 
 }
 
-void CopyCollector::RunGarbageCollection(uint64_t gcIndex, GCReason reason)
-{
-    ScopedEntryTrace trace("CJRT_GC_START");
-    const uint64_t cycleSeq = GcLog::CurrentSeq();
-    // prevent other threads stop-the-world during GC.
-    // this may be removed in the future.
-    ScopedSTWLock stwLock;
-    // ScopedStopTheWorld stw;
 
-    SelectCycle(reason);
-    PreGarbageCollection(reason != GC_REASON_YOUNG, gcIndex);
-    ScheduleTraceEvent(TRACE_EV_GC_START, -1, nullptr, 0);
-    VLOG(REPORT, "[GC] Start %s %s gcIndex= %lu", GetCollectorName(), g_gcRequests[GetCycleReason()].name, gcIndex);
-    GCStats& gcStats = GetGCStats();
-    gcStats.collectedBytes = 0;
-    gcStats.youngCandidateBytes = 0;
-    gcStats.youngPromotedBytes = 0;
-    gcStats.tenuringThreshold = 0;
-    gcStats.gcStartTime = TimeUtil::NanoSeconds();
 
-    // One GC cycle is the roots verification scene: it covers both the minor
-    // and major root visitors, including concurrent stack enumeration.  Close
-    // after the collector has joined all root work (zVerify.cpp:363-384).
-    DoGarbageCollection();
-
-    GCDriverPort& port = reason == GC_REASON_YOUNG ? collectorResources.GetYoungDriverPort() :
-                                                   collectorResources.GetMajorDriverPort();
-    if (port.Abort().Poll()) {
-        // The phase owner already joined any submitted work. Keep mark and
-        // forwarding storage alive for driver shutdown; skip normal reclaim.
-        GetWorkers().SetInactive();
-        return;
-    }
-
-    if (reason == GC_REASON_OOM) {
-        Heap::GetHeap().GetAllocator().ReclaimGarbageMemory(true);
-    }
-
-    PostGarbageCollection(gcIndex);
-    gcStats.gcEndTime = TimeUtil::NanoSeconds();
-    // Emitted here rather than from GCStats::Dump, because UpdateGCStats below (and so Dump) is
-    // skipped for young collections: a minor would produce no cycle record and its phases would
-    // be attributed to the next major.
-    GcLog::Cycle(cycleSeq, reason == GC_REASON_YOUNG ? "minor" : "major",
-                 g_gcRequests[reason].name, gcStats.gcStartTime, gcStats.gcEndTime - gcStats.gcStartTime,
-                 gcStats.liveBytesBeforeGC, gcStats.liveBytesAfterGC, gcStats.collectedBytes,
-                 Heap::GetHeap().GetUsedPageSize(), gcStats.GetThreshold());
-    if (reason != GC_REASON_YOUNG) {
-        UpdateGCStats();
-    }
-    uint64_t gcTimeNs = gcStats.gcEndTime - gcStats.gcStartTime;
-    ScheduleTraceEvent(TRACE_EV_GC_DONE, -1, nullptr, 0);
-    double rate = (static_cast<double>(gcStats.collectedBytes) / gcTimeNs) * (static_cast<double>(NS_PER_S) / MB);
-    VLOG(REPORT, "total gc time: %s us, collection rate %.3lf MB/s\n", Pretty(gcTimeNs / NS_PER_US).Str(), rate);
-    g_gcTotalTimeUs.fetch_add(gcTimeNs / NS_PER_US, std::memory_order_release);
-    g_gcCollectedTotalBytes.fetch_add(gcStats.collectedBytes, std::memory_order_release);
-    gcStats.collectionRate = rate;
-    uint64_t finishTime = TimeUtil::NanoSeconds();
-    if (reason != GC_REASON_YOUNG) {
-        gcStats.RecordMajorGCFinish(finishTime, gcTimeNs, Heap::GetHeap().GetAllocatedSize(),
-                                    gcStats.collectedBytes);
-
-    }
-    // zStatHeap::at_relocate_end: publish only to the generation being collected.
-    const bool young = reason == GC_REASON_YOUNG;
-    const size_t usedAfter = Heap::GetHeap().GetAllocatedSize();
-    // A12a scope ruling: preserve the old-generation baseline scalar until
-    // A07's mark-end livemap aggregation replaces it. Do not infer live bytes
-    // from candidate minus reclaimed capacity. Young has an actual mark result.
-    const size_t liveBytes = young ? gcStats.youngPromotedBytes : usedAfter;
-    (young ? ZStat::YoungHeap() : ZStat::OldHeap()).AtRelocateEnd(
-        usedAfter, liveBytes, gcStats.collectedBytes);
-    ActiveCycle().End();
-    collectorResources.NotifyGCPhaseFinished(gcIndex);
-}
-
-void CopyCollector::ForwardFromSpace()
+void CopyCollector::ForwardFromSpace(GCCycleGeneration generation)
 {
     ScopedEntryTrace trace("CJRT_GC_FORWARD");
-    TransitionToGCPhase(GCPhase::GC_PHASE_FORWARD, true);
+    TransitionToGCPhase(GCPhase::GC_PHASE_FORWARD, true, generation == GCCycleGeneration::YOUNG);
 
     RegionSpace& space = reinterpret_cast<RegionSpace&>(theAllocator);
-    GCStats& stats = GetGCStats();
+    GCStats& stats = GetGCStats(generation);
     stats.liveBytesBeforeGC = space.AllocatedBytes();
     stats.fromSpaceSize = space.FromSpaceSize();
-    if (GetCycleReason() == GC_REASON_YOUNG) {
-        space.ForwardFromSpace<Generation::Young>(GetWorkers());
+    if (generation == GCCycleGeneration::YOUNG) {
+        space.ForwardFromSpace<Generation::Young>(GetWorkers(GCCycleGeneration::YOUNG));
     } else {
-        space.ForwardFromSpace<Generation::Old>(GetWorkers());
+        space.ForwardFromSpace<Generation::Old>(GetWorkers(GCCycleGeneration::OLD));
     }
 
 }

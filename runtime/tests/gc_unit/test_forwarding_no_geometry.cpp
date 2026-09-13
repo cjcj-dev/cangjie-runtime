@@ -262,7 +262,7 @@ GC_TEST(ForwardingNoGeometry, ForwardImplFindHitSkipsCopy)
     GC_EXPECT_TRUE(ForwardingTable::InstallPublicationBeforeCopy(
         fx.region0->GetRegionStart(), fx.region0->GetRegionSize(), fx.region0));
     WCollector collector(Heap::GetHeap().GetAllocator(), Heap::GetHeap().GetCollectorResources());
-    collector.SetGCPhase(GCPhase::GC_PHASE_FORWARD);
+    collector.SetGCPhase(GCCycleGeneration::OLD, GCPhase::GC_PHASE_FORWARD);
     StateWord oldWord = copyFrom->GetStateWord();
     GC_EXPECT_TRUE(copyFrom->TryLockObject(oldWord));
     /*deleted copy SM*/ (void)(fx.region0->metadata.copyInflight);
@@ -273,7 +273,7 @@ GC_TEST(ForwardingNoGeometry, ForwardImplFindHitSkipsCopy)
     GC_EXPECT_TRUE(second != otherTo);
     GC_EXPECT_EQ(ForwardingTable::FindTo(copyFromAddr), reinterpret_cast<MAddress>(copyTo));
     GC_EXPECT_EQ(fx.region0->metadata.copyInflight.load(std::memory_order_acquire), 0);
-    collector.SetGCPhase(GCPhase::GC_PHASE_IDLE);
+    collector.SetGCPhase(GCCycleGeneration::OLD, GCPhase::GC_PHASE_IDLE);
     ForwardingTable::Remove(fx.region0->GetRegionStart(), fx.region0->GetRegionSize());
     ForwardingTable::ClearEntries(fx.region0->GetRegionStart(), fx.region0->GetRegionSize());
     ForwardingTable::ReclaimRetired("gc-unit-forward-impl");

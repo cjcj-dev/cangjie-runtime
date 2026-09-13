@@ -88,7 +88,7 @@ GC_TEST(OHOSCycle, MajorEntryPostsResolveTask)
     RegisterEventHandlerCallbacks(&RecordPost, &NoHigherPriorityTask);
     PostResolveProbeCollector collector(Heap::GetHeap().GetAllocator(), Heap::GetHeap().GetCollectorResources());
     collector.SeedCycleWork();
-    collector.DoGarbageCollection();
+    collector.DoGarbageCollection(GCCycleGeneration::OLD);
     ExpectPostState("OHOSCycle.MajorEntryPostsResolveTask", 1U);
     GC_EXPECT_EQ(FiniCJRuntime(), E_OK);
 }

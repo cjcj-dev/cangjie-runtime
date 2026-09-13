@@ -70,8 +70,8 @@ void SetEnd(const std::string &message, MapleRuntime::MsgType type)
 
 void DumpHeapSnapshot(SendMsgCB sendMsg)
 {
-    MapleRuntime::Heap::GetHeap().GetCollectorResources().RequestHeapDump(
-        MapleRuntime::GCTask::TaskType::TASK_TYPE_DUMP_HEAP_IDE);
+    MapleRuntime::Heap::GetHeap().DumpHeap(
+        MapleRuntime::HeapDumpKind::IDE);
 }
 
 void StartTrackingHeapObjects(const std::string &message, SendMsgCB sendMsg)

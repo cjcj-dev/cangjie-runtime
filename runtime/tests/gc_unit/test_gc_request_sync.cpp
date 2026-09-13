@@ -61,35 +61,26 @@ class CollectorResourcesTestPeer {
 public:
     static void Init(CollectorResources& resources, Collector& collector, bool startNearReceiptWrap)
     {
-        MRT_ASSERT(resources.taskQueue == nullptr, "gc_unit requires an uninitialized product task queue");
         resources.testCollector = &collector;
         resources.GetMinorDriverPort().Reset();
         resources.GetMajorDriverPort().Reset();
-        resources.taskQueue = new TaskQueue<GCExecutor>;
-        resources.taskQueue->Init();
         if (startNearReceiptWrap) {
             GCDriverPortTestPeer::SetNextSequence(resources.GetMajorDriverPort(),
                                                   std::numeric_limits<uint64_t>::max() - 1);
         }
-        resources.finishedGcIndex.store(resources.taskQueue->syncTaskIndex, std::memory_order_release);
-        resources.isGCActive.store(true, std::memory_order_release);
-    }
-
-    static bool ShouldWaitForIgnoredGcRequest(GCReason reason, bool async)
-    {
-        return CollectorResources::ShouldWaitForIgnoredGcRequest(reason, async);
     }
 
     static void RequestStop(CollectorResources& resources)
     {
-        TaskQueue<GCExecutor>::TaskFilter filter = [](GCExecutor&, GCExecutor&) { return false; };
-        GCExecutor task(GCTask::TaskType::TASK_TYPE_TERMINATE_GC);
-        (void)resources.taskQueue->EnqueueSync(task, filter);
+        resources.GetMinorDriverPort().Stop();
+        resources.GetMajorDriverPort().Stop();
     }
 
     static bool ExecuteDriverRequest(CollectorResources& resources, const GCDriverRequest& request)
     {
-        return resources.ExecuteDriverRequest(request);
+        GCDriverPort& port = request.reason == GC_REASON_YOUNG
+            ? resources.GetMinorDriverPort() : resources.GetMajorDriverPort();
+        return resources.ProcessDriverRequest(port, request);
     }
 
     static bool ProcessDriverRequest(CollectorResources& resources, GCDriverPort& port,
@@ -136,8 +127,6 @@ public:
 
     static void Destroy(CollectorResources& resources)
     {
-        delete resources.taskQueue;
-        resources.taskQueue = nullptr;
         resources.testCollector = nullptr;
         resources.testAfterYoungPrelude = {};
     }
@@ -182,22 +171,22 @@ public:
         }
         if (advanceEpoch) {
             youngCycle.Begin(gcIndex);
-            resources->SetGcStarted(true);
         }
         size_t runNumber = 0;
         {
             std::unique_lock<std::mutex> lock(mutex);
             indexes.push_back(gcIndex);
             reasons.push_back(reason);
+            types.push_back(reason == GC_REASON_YOUNG ? youngCycle.YoungType() : ZYoungType::none);
             runNumber = indexes.size();
             entered.notify_all();
+            requestProgress.notify_all();
             release.wait(lock, [this, runNumber] { return releasedRuns >= runNumber; });
         }
         if (advanceEpoch) {
             youngCycle.End();
         }
         activeRuns.fetch_sub(1, std::memory_order_acq_rel);
-        resources->NotifyGCPhaseFinished(gcIndex);
     }
 
     bool WaitForRuns(size_t count)
@@ -235,7 +224,7 @@ public:
     {
         std::unique_lock<std::mutex> lock(mutex);
         return requestProgress.wait_for(lock, kHarnessHangLimit,
-                                        [this] { return ignoreChecks != 0 || requesterReturned; });
+                                        [this] { return !indexes.empty() || requesterReturned; });
     }
 
     bool HasRequesterReturned()
@@ -270,6 +259,12 @@ public:
         return reasons.at(position);
     }
 
+    ZYoungType TypeAt(size_t position)
+    {
+        std::lock_guard<std::mutex> lock(mutex);
+        return types.at(position);
+    }
+
     size_t MaxConcurrentRuns() const { return maxActiveRuns.load(std::memory_order_acquire); }
 
 private:
@@ -288,6 +283,7 @@ private:
     size_t releasedRuns = 0;
     std::vector<uint64_t> indexes;
     std::vector<GCReason> reasons;
+    std::vector<ZYoungType> types;
 };
 
 class RequestHarness {
@@ -298,7 +294,8 @@ public:
         Heap::GetHeap().EnableGC(true);
         collector.SetResources(resources);
         CollectorResourcesTestPeer::Init(resources, collector, startNearReceiptWrap);
-        consumer = std::thread([this] { resources.RunTaskLoop(); });
+        consumer = std::thread([this] { CollectorResourcesTestPeer::RunDriverLoop(resources, GCDriverKind::MINOR); });
+        oldConsumer = std::thread([this] { CollectorResourcesTestPeer::RunDriverLoop(resources, GCDriverKind::MAJOR); });
     }
 
     ~RequestHarness() { Stop(); }
@@ -311,6 +308,7 @@ public:
         collector.ReleaseAll();
         CollectorResourcesTestPeer::RequestStop(resources);
         consumer.join();
+        oldConsumer.join();
         CollectorResourcesTestPeer::Destroy(resources);
         Heap::GetHeap().EnableGC(gcWasEnabled);
     }
@@ -321,6 +319,7 @@ public:
 private:
     bool gcWasEnabled;
     std::thread consumer;
+    std::thread oldConsumer;
 };
 
 struct SyncResult {
@@ -356,7 +355,11 @@ SyncResult RunSynchronousRequest(const std::function<void(RequestHarness&)>& req
     if (youngEntered) {
         harness.collector.ReleaseOne();
     }
-    bool oldEntered = youngEntered && harness.collector.WaitForRuns(2);
+    bool secondEntered = youngEntered && harness.collector.WaitForRuns(2);
+    const bool hasPreclean = secondEntered && harness.collector.ReasonAt(1) == GC_REASON_YOUNG;
+    size_t oldIndex = hasPreclean ? 2u : 1u;
+    if (hasPreclean) harness.collector.ReleaseOne();
+    bool oldEntered = secondEntered && (!hasPreclean || harness.collector.WaitForRuns(3));
     bool returnedBeforeOldRelease = returned.wait_for(std::chrono::seconds(0)) == std::future_status::ready;
     if (oldEntered) {
         harness.collector.ReleaseOne();
@@ -368,7 +371,7 @@ SyncResult RunSynchronousRequest(const std::function<void(RequestHarness&)>& req
     requester.join();
     size_t runCount = harness.collector.RunCount();
     GCReason youngReason = youngEntered ? harness.collector.ReasonAt(0) : GC_REASON_INVALID;
-    GCReason oldReason = oldEntered ? harness.collector.ReasonAt(1) : GC_REASON_INVALID;
+    GCReason oldReason = oldEntered ? harness.collector.ReasonAt(oldIndex) : GC_REASON_INVALID;
     harness.Stop();
     return { youngEntered, oldEntered, returnedBeforeYoungRelease, returnedBeforeOldRelease,
              returnedAfterRelease, runCount, youngReason, oldReason };
@@ -381,7 +384,8 @@ void ExpectCompletedSync(const SyncResult& result, GCReason reason)
     GC_EXPECT_FALSE(result.returnedBeforeYoungRelease);
     GC_EXPECT_FALSE(result.returnedBeforeOldRelease);
     GC_EXPECT_TRUE(result.returnedAfterRelease);
-    GC_EXPECT_EQ(result.runCount, 2u);
+    GC_EXPECT_EQ(result.runCount,
+                 reason == GC_REASON_USER || reason == GC_REASON_FORCE || reason == GC_REASON_OOM ? 3u : 2u);
     GC_EXPECT_EQ(result.youngReason, GC_REASON_YOUNG);
     GC_EXPECT_EQ(result.oldReason, reason);
 }
@@ -418,7 +422,11 @@ BoundaryResult RunSynchronousRequestsAcrossReceiptWrap()
         bool entered = harness.collector.WaitForRuns(expectedYoungRun);
         if (entered) {
             harness.collector.ReleaseOne();
-            entered = harness.collector.WaitForRuns(expectedOldRun);
+            entered = harness.collector.WaitForRuns(expectedYoungRun + 1);
+            if (entered) {
+                harness.collector.ReleaseOne();
+                entered = harness.collector.WaitForRuns(expectedOldRun);
+            }
         }
         bool returnedBeforeCompletion = returned.wait_for(std::chrono::seconds(0)) == std::future_status::ready;
         if (entered) {
@@ -432,13 +440,13 @@ BoundaryResult RunSynchronousRequestsAcrossReceiptWrap()
         return RequestCompletionResult{ entered, returnedBeforeCompletion, returnedAfterCompletion };
     };
 
-    RequestCompletionResult first = runOne(1, 2);
+    RequestCompletionResult first = runOne(1, 3);
     if (!first.entered || !first.returnedAfterCompletion) {
         harness.Stop();
         return { first.entered, first.returnedBeforeCompletion, first.returnedAfterCompletion,
                  false, false, false };
     }
-    RequestCompletionResult second = runOne(3, 4);
+    RequestCompletionResult second = runOne(4, 6);
     harness.Stop();
     return { first.entered, first.returnedBeforeCompletion, first.returnedAfterCompletion,
              second.entered, second.returnedBeforeCompletion, second.returnedAfterCompletion };
@@ -735,11 +743,11 @@ GC_TEST(GcRequestSync, MajorPublishesOneCompletionAfterOld)
                  gapObserved, runsAtGap, completionsAtGap, receiptAtGap, executed, runsAfter,
                  completionsAfter, receiptAck);
     GC_EXPECT_TRUE(gapObserved);
-    GC_EXPECT_EQ(runsAtGap, 1u);
+    GC_EXPECT_EQ(runsAtGap, 2u);
     GC_EXPECT_EQ(completionsAtGap, 0u);
     GC_EXPECT_FALSE(receiptAtGap);
     GC_EXPECT_TRUE(executed);
-    GC_EXPECT_EQ(runsAfter, 2u);
+    GC_EXPECT_EQ(runsAfter, 3u);
     GC_EXPECT_EQ(completionsAfter, 1u);
     GC_EXPECT_TRUE(receiptAck);
 }
@@ -836,6 +844,8 @@ GC_TEST(GcRequestSync, AbortDuringOldReturnsCancelledAfterCollectionJoins)
     GC_EXPECT_TRUE(collector.WaitForRuns(1));
     collector.ReleaseOne();
     GC_EXPECT_TRUE(collector.WaitForRuns(2));
+    collector.ReleaseOne();
+    GC_EXPECT_TRUE(collector.WaitForRuns(3));
     port.Abort().Request();
     // The collection still owns its resources until it returns.
     GC_EXPECT_TRUE(result.wait_for(std::chrono::seconds(0)) != std::future_status::ready);
@@ -849,7 +859,7 @@ GC_TEST(GcRequestSync, AbortDuringOldReturnsCancelledAfterCollectionJoins)
     CollectorResourcesTestPeer::Destroy(resources);
 }
 
-GC_TEST(GcRequestSync, DriverWaitInjectsTimeoutBackupRequest)
+GC_TEST(GcRequestSync, DriverWaitReceivesDirectorRequest)
 {
     CollectorResources& resources = Heap::GetHeap().GetCollectorResources();
     BlockingCollector collector;
@@ -858,18 +868,19 @@ GC_TEST(GcRequestSync, DriverWaitInjectsTimeoutBackupRequest)
     collector.ReleaseAll();
     Heap::GetHeap().EnableGC(true);
     std::thread driver([&] { CollectorResourcesTestPeer::RunDriverLoop(resources, GCDriverKind::MAJOR); });
+    resources.GetMajorDriverPort().EnqueueAsync(GC_REASON_HEU);
     const bool youngObserved = collector.WaitForRuns(1);
     const bool backupObserved = collector.WaitForRuns(2);
     GC_EXPECT_TRUE(youngObserved);
     GC_EXPECT_TRUE(backupObserved);
     GC_EXPECT_EQ(collector.ReasonAt(0), GC_REASON_YOUNG);
-    GC_EXPECT_EQ(collector.ReasonAt(1), GC_REASON_BACKUP);
+    GC_EXPECT_EQ(collector.ReasonAt(1), GC_REASON_HEU);
     resources.GetMajorDriverPort().Stop();
     driver.join();
     CollectorResourcesTestPeer::Destroy(resources);
 }
 
-GC_TEST(GcRequestSync, MinorAndMajorDriversSerializeCollections)
+GC_TEST(GcRequestSync, YoungPreludeAndMinorShareDriverLock)
 {
     CollectorResources& resources = Heap::GetHeap().GetCollectorResources();
     BlockingCollector collector;
@@ -885,12 +896,15 @@ GC_TEST(GcRequestSync, MinorAndMajorDriversSerializeCollections)
     collector.ReleaseOne();
     const bool majorYoungEntered = collector.WaitForRuns(2);
     collector.ReleaseOne();
-    const bool majorOldEntered = collector.WaitForRuns(3);
+    const bool majorRootsEntered = collector.WaitForRuns(3);
+    collector.ReleaseOne();
+    const bool majorOldEntered = collector.WaitForRuns(4);
     collector.ReleaseOne();
     const size_t maxConcurrentRuns = collector.MaxConcurrentRuns();
     const GCReason firstReason = collector.ReasonAt(0);
     const GCReason secondReason = collector.ReasonAt(1);
     const GCReason thirdReason = collector.ReasonAt(2);
+    const GCReason fourthReason = collector.ReasonAt(3);
     resources.GetMinorDriverPort().Stop();
     resources.GetMajorDriverPort().Stop();
     minor.join();
@@ -903,11 +917,13 @@ GC_TEST(GcRequestSync, MinorAndMajorDriversSerializeCollections)
     GC_EXPECT_TRUE(minorEntered);
     GC_EXPECT_TRUE(driverLockHeld);
     GC_EXPECT_TRUE(majorYoungEntered);
+    GC_EXPECT_TRUE(majorRootsEntered);
     GC_EXPECT_TRUE(majorOldEntered);
     GC_EXPECT_EQ(maxConcurrentRuns, 1u);
     GC_EXPECT_EQ(firstReason, GC_REASON_YOUNG);
     GC_EXPECT_EQ(secondReason, GC_REASON_YOUNG);
-    GC_EXPECT_EQ(thirdReason, GC_REASON_FORCE);
+    GC_EXPECT_EQ(thirdReason, GC_REASON_YOUNG);
+    GC_EXPECT_EQ(fourthReason, GC_REASON_FORCE);
 }
 
 GC_TEST(GcRequestSync, YoungSyncReturnsAfterEpochAndIdle)
@@ -974,104 +990,15 @@ GC_TEST(GcRequestSync, ProfilerCollectGarbageEntryWaitsForOwnCompletion)
 }
 #endif
 
-GC_TEST(GcRequestSync, IgnoredStaticSyncReasonsWaitForCurrentGc)
+// ZDriver sends requests directly to its generation port. Legacy ignore
+// policy cannot replace a caller's synchronous completion with another cycle.
+GC_TEST(GcRequestSync, LegacyIgnorePolicyCannotSuppressSyncRequest)
 {
-    for (GCReason reason : { GC_REASON_OOM, GC_REASON_FORCE }) {
-        RequestHarness harness;
+    SyncResult result = RunSynchronousRequest([](RequestHarness& harness) {
         harness.collector.SetIgnoreRequests(true);
-        harness.resources.SetGcStarted(true);
-
-        std::promise<void> returnedPromise;
-        std::future<void> returned = returnedPromise.get_future();
-        std::atomic<bool> completionPublished{ false };
-        std::atomic<bool> returnedBeforeCompletion{ false };
-        std::thread requester([&] {
-            ThreadLocal::SetThreadType(ThreadType::FP_THREAD);
-            harness.resources.RequestGC(reason, true);
-            returnedBeforeCompletion.store(!completionPublished.load(std::memory_order_acquire),
-                                           std::memory_order_release);
-            returnedPromise.set_value();
-        });
-        JoinGuard requesterGuard(requester);
-
-        bool ignoredPathEntered = harness.collector.WaitForIgnoreChecks(1);
-        bool returnedBeforeFinish = returned.wait_for(std::chrono::seconds(0)) == std::future_status::ready;
-        completionPublished.store(true, std::memory_order_release);
-        harness.resources.NotifyGCFinished(GCTask::SYNC_TASK_MIN_INDEX);
-        bool returnedAfterFinish = returned.wait_for(kHarnessHangLimit) == std::future_status::ready;
-        if (!returnedAfterFinish) {
-            harness.Stop();
-        }
-        requester.join();
-        harness.Stop();
-
-        GC_EXPECT_TRUE(ignoredPathEntered);
-        GC_EXPECT_FALSE(returnedBeforeFinish);
-        GC_EXPECT_FALSE(returnedBeforeCompletion.load(std::memory_order_acquire));
-        GC_EXPECT_TRUE(returnedAfterFinish);
-        GC_EXPECT_TRUE(CollectorResourcesTestPeer::ShouldWaitForIgnoredGcRequest(reason, true));
-    }
-}
-
-GC_TEST(GcRequestSync, IgnoredUserSyncWaitsForCurrentGcCompletion)
-{
-    RequestHarness harness;
-    harness.collector.SetIgnoreRequests(true);
-    harness.resources.SetGcStarted(true);
-
-    std::promise<void> returnedPromise;
-    std::future<void> returned = returnedPromise.get_future();
-    std::atomic<bool> completionPublished{ false };
-    std::atomic<bool> returnedBeforeCompletion{ false };
-    std::thread requester([&] {
-        ThreadLocal::SetThreadType(ThreadType::FP_THREAD);
-        MCC_InvokeGCImpl(true);
-        returnedBeforeCompletion.store(!completionPublished.load(std::memory_order_acquire),
-                                       std::memory_order_release);
-        returnedPromise.set_value();
+        harness.resources.RequestGC(GC_REASON_USER, false);
     });
-    JoinGuard requesterGuard(requester);
-
-    bool ignoredPathEntered = harness.collector.WaitForIgnoreChecks(1);
-    bool returnedWhileGcStarted = returned.wait_for(std::chrono::seconds(0)) == std::future_status::ready;
-    completionPublished.store(true, std::memory_order_release);
-    harness.resources.NotifyGCFinished(GCTask::SYNC_TASK_MIN_INDEX);
-    bool returnedAfterCompletion = returned.wait_for(kHarnessHangLimit) == std::future_status::ready;
-    if (!returnedAfterCompletion) {
-        harness.Stop();
-    }
-    requester.join();
-    harness.Stop();
-
-    GC_EXPECT_TRUE(ignoredPathEntered);
-    GC_EXPECT_FALSE(returnedWhileGcStarted);
-    GC_EXPECT_FALSE(returnedBeforeCompletion.load(std::memory_order_acquire));
-    GC_EXPECT_TRUE(returnedAfterCompletion);
-}
-
-GC_TEST(GcRequestSync, IgnoredUserAsyncReturnsWhileCurrentGcIsActive)
-{
-    RequestHarness harness;
-    harness.collector.SetIgnoreRequests(true);
-    harness.resources.SetGcStarted(true);
-
-    std::promise<void> returnedPromise;
-    std::future<void> returned = returnedPromise.get_future();
-    std::thread requester([&] {
-        MCC_InvokeGCImpl(false);
-        returnedPromise.set_value();
-    });
-    JoinGuard requesterGuard(requester);
-
-    bool ignoredPathEntered = harness.collector.WaitForIgnoreChecks(1);
-    bool returnedWhileGcStarted = returned.wait_for(kHarnessHangLimit) == std::future_status::ready &&
-        harness.resources.IsGcStarted();
-    harness.resources.NotifyGCFinished(GCTask::SYNC_TASK_MIN_INDEX);
-    requester.join();
-    harness.Stop();
-
-    GC_EXPECT_TRUE(ignoredPathEntered);
-    GC_EXPECT_TRUE(returnedWhileGcStarted);
+    ExpectCompletedSync(result, GC_REASON_USER);
 }
 
 GC_TEST(GcRequestSync, SynchronousRequestsWaitForOwnCompletionAcrossReceiptWrap)
@@ -1137,7 +1064,7 @@ GC_TEST(GcRequestSync, CompilerAsyncEntryReturnsAndMergesPendingRequest)
     }
     bool firstOldEntered = harness.collector.WaitForRuns(2);
     harness.collector.ReleaseOne();
-    bool pendingYoungEntered = harness.collector.WaitForRuns(3);
+    bool pendingYoungEntered = harness.collector.WaitForRuns(6);
     harness.collector.ReleaseOne();
     bool pendingOldEntered = harness.collector.WaitForRuns(4);
     harness.collector.ReleaseOne();
@@ -1183,4 +1110,38 @@ GC_TEST(GcRequestSync, DriverRequestOwnsDirectorQuota)
     GC_EXPECT_EQ(user.youngWorkers, 0u);
     GC_EXPECT_EQ(user.oldWorkers, 0u);
     GC_EXPECT_TRUE(!user.warmup);
+}
+
+GC_TEST(GcRequestSync, MajorFullPrecleanThenCombinedRoots)
+{
+    CollectorResources& resources = Heap::GetHeap().GetCollectorResources();
+    BlockingCollector collector;
+    collector.SetResources(resources);
+    CollectorResourcesTestPeer::Init(resources, collector, false);
+    collector.ReleaseAll();
+    const bool complete = CollectorResourcesTestPeer::ExecuteDriverRequest(
+        resources, GCDriverRequest { 2, GC_REASON_FORCE, false, {} });
+    GC_EXPECT_TRUE(complete);
+    GC_EXPECT_EQ(collector.RunCount(), 3u);
+    GC_EXPECT_TRUE(collector.TypeAt(0) == ZYoungType::major_full_preclean);
+    GC_EXPECT_TRUE(collector.TypeAt(1) == ZYoungType::major_full_roots);
+    GC_EXPECT_TRUE(collector.TypeAt(2) == ZYoungType::none);
+    GC_EXPECT_TRUE(collector.GetGenerationCycle(GCCycleGeneration::YOUNG).YoungType() == ZYoungType::none);
+    CollectorResourcesTestPeer::Destroy(resources);
+}
+
+GC_TEST(GcRequestSync, MajorPartialRootsWithoutPreclean)
+{
+    CollectorResources& resources = Heap::GetHeap().GetCollectorResources();
+    BlockingCollector collector;
+    collector.SetResources(resources);
+    CollectorResourcesTestPeer::Init(resources, collector, false);
+    collector.ReleaseAll();
+    const bool complete = CollectorResourcesTestPeer::ExecuteDriverRequest(
+        resources, GCDriverRequest { 2, GC_REASON_HEU, true, {} });
+    GC_EXPECT_TRUE(complete);
+    GC_EXPECT_EQ(collector.RunCount(), 2u);
+    GC_EXPECT_TRUE(collector.TypeAt(0) == ZYoungType::major_partial_roots);
+    GC_EXPECT_TRUE(collector.TypeAt(1) == ZYoungType::none);
+    CollectorResourcesTestPeer::Destroy(resources);
 }

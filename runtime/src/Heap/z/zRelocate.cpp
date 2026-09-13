@@ -276,7 +276,7 @@ BaseObject* WCollector::ForwardUpdateRawRef(ObjectRef& root, Generation generati
             DLOG(FIX, "fix raw-ref @%p: %p -> %p", &root, oldObj, mapped);
             return mapped;
         }
-        const GCPhase phase = GetGCPhase();
+        const GCPhase phase = GetGCPhase(static_cast<GCCycleGeneration>(generation));
         if (phase != GCPhase::GC_PHASE_PREFORWARD && phase != GCPhase::GC_PHASE_FORWARD) {
             Collector::FailClosedLoad(
                 "WCollector::ForwardUpdateRawRef.unresolved", oldObj,
@@ -359,15 +359,15 @@ void WCollector::PreforwardAllResurrectExportFromObjects(Generation generation)
     CurrentizeValueRootSet(resurrectedExportObjectes, generation);
     CurrentizeValueRootSet(resurrectedExportObjectesForwardPhase, generation);
 }
-void WCollector::StartRelocationTasks()
+void WCollector::StartRelocationTasks(GCCycleGeneration generation)
 {
     RegionSpace& space = reinterpret_cast<RegionSpace&>(theAllocator);
     RegionManager& manager = space.GetRegionManager();
-    GCWorkers& workers = GetWorkers();
+    GCWorkers& workers = GetWorkers(generation);
 #if defined(MRT_TESTABLE_INTERNALS)
-    if (GetCycleReason() == GC_REASON_YOUNG) RunRemapWindowTestHook(1, nullptr, nullptr);
+    if (generation == GCCycleGeneration::YOUNG) RunRemapWindowTestHook(1, nullptr, nullptr);
 #endif
-    if (GetCycleReason() == GC_REASON_YOUNG) manager.StartForwardFromRegions<Generation::Young>(workers);
+    if (generation == GCCycleGeneration::YOUNG) manager.StartForwardFromRegions<Generation::Young>(workers);
     else manager.StartForwardFromRegions<Generation::Old>(workers);
 }
 
@@ -376,6 +376,12 @@ bool WCollector::Preforward()
     ScopedEntryTrace trace("CJRT_GC_PREFORWARD");
     MRT_PHASE_TIMER(ZStatPhases::PPreforward);
     {
+        DriverLocker locker(collectorResources);
+        // zGeneration.cpp:1054-1063: remap under the driver lock before pausing.
+        RemapYoungRoots();
+        if (collectorResources.GetMajorDriverPort().Abort().Poll()) {
+            return false;
+        }
         // OpenJDK zGeneration.cpp:1175-1200: isolate pause_relocate_start from the
         // concurrent root-preforward work below. ScopedLightSync emits its matching
         // rec=stw record, including rendezvous and held time.
@@ -385,30 +391,16 @@ bool WCollector::Preforward()
         // ScopedLightSync first. Destruction order also closes this timer before mutators
         // resume, keeping the whole phase in the pause account.
         MRT_PHASE_TIMER(ZStatPhases::POldRelocateStart);
-        // fwdgrace: this sync does not go through TransitionToGCPhase, so the arena grace
-        // period has to be advanced alongside the route-table one or the two drift apart.
-        // OpenJDK zGeneration.cpp:1054-1063: Phase 8 remaps young roots under the driver
-        // lock *before* pause_relocate_start flips the old remap bits (zGeneration.cpp:1503-1508).
-        RemapYoungRoots();
-        // ZGenerationOld::collect (zGeneration.cpp:1054-1063): the last
-        // abortpoint precedes relocate-start; after the flip all pages finish.
-        if (collectorResources.GetMajorDriverPort().Abort().Poll()) {
-            return false;
-        }
         // zGeneration.cpp:old relocate_start flips only the old remap epoch.
         // RemapYoungRoots above prevents roots from accumulating two bad remap epochs.
         flip_old_relocate_start();
         ZVerify::OnColorFlip();
-        StartRelocationTasks();
+        StartRelocationTasks(GCCycleGeneration::OLD);
     }
 
     RegionManager& manager = reinterpret_cast<RegionSpace&>(theAllocator).GetRegionManager();
-    if (GetCycleReason() == GC_REASON_YOUNG) {
-        manager.DrainForwardFromRegions<Generation::Young>();
-    } else {
-        manager.DrainForwardFromRegions<Generation::Old>();
-    }
-    GCWorkers& workers = GetWorkers();
+    manager.DrainForwardFromRegions<Generation::Old>();
+    GCWorkers& workers = GetWorkers(GCCycleGeneration::OLD);
     std::atomic<unsigned> next{ 0 };
     const std::function<void()> families[] = {
         [&] { VisitAllColoredRoots([](NativeSlot& root) { (void)Heap::GetBarrier().ReadStaticRef(root); }); },
@@ -1092,7 +1084,7 @@ void WCollector::EvacuateYoungRegions(const std::vector<BaseObject*>& reachableV
         return (stw != nullptr && *stw != nullptr) ? stw->get() : nullptr;
     };
     const bool doYoungFlip = true;
-    GCWorkers& workers = GetWorkers();
+    GCWorkers& workers = GetWorkers(GCCycleGeneration::YOUNG);
 
     std::vector<MAddress> remsetVec;
     remsetVec.assign(rememberedSlots.begin(), rememberedSlots.end());
@@ -1166,7 +1158,7 @@ void WCollector::EvacuateYoungRegions(const std::vector<BaseObject*>& reachableV
             // iorfix: PrepareForwardTable FIRST so liveInfo0 snapshots the closed mark
             // domain while every from region is still FORWARDABLE, THEN pass1 Fix/Forward.
             // Prior order let FixMinorRootSlots RouteRegion before the domain snapshot.
-            TransitionToGCPhase(GCPhase::GC_PHASE_POST_TRACE, true);
+            TransitionToGCPhase(GCPhase::GC_PHASE_POST_TRACE, true, true);
             fwdTable.PrepareForwardTable<Generation::Young>();
             // ZGenerationYoung::collect: last abortpoint after selection,
             // before relocate-start. Once flipped, finish every remaining page.
@@ -1186,12 +1178,12 @@ void WCollector::EvacuateYoungRegions(const std::vector<BaseObject*>& reachableV
             // Publish the relocate phase and submit page work while the
             // existing young pause still excludes mutator execution. Root
             // transition may now wait for a real page task on allocation failure.
-            Heap::GetHeap().SetGCPhase(GCPhase::GC_PHASE_PREFORWARD);
-            StartRelocationTasks();
+            Heap::GetHeap().SetGCPhase(GCCycleGeneration::YOUNG, GCPhase::GC_PHASE_PREFORWARD);
+            StartRelocationTasks(GCCycleGeneration::YOUNG);
             // The pause publishes the work domain. Eager roots relocate one
             // object themselves; allocation failure uses the same in-place page
             // task on this thread (advisor 161024, compiler prerequisite #498).
-            TransitionToGCPhase(GCPhase::GC_PHASE_PREFORWARD, true);
+            TransitionToGCPhase(GCPhase::GC_PHASE_PREFORWARD, true, true);
         }
 
         // pass1 root fix after the domain snapshot.
@@ -1210,20 +1202,20 @@ void WCollector::EvacuateYoungRegions(const std::vector<BaseObject*>& reachableV
     }
 
     {
-        TransitionToGCPhase(GCPhase::GC_PHASE_FORWARD, true);
+        TransitionToGCPhase(GCPhase::GC_PHASE_FORWARD, true, true);
         {
             stw->reset();
             MRT_PHASE_TIMER(ZStatPhases::PYoungConcurrentRelocate);
             VLOG(REPORT, "[GCV2][relocate][conc] concurrent_relocate start nObj=%zu flip=1",
                  reachableVec.size());
-            ForwardFromSpace();
+            ForwardFromSpace(GCCycleGeneration::YOUNG);
 #if defined(MRT_TESTABLE_INTERNALS)
             RunRemapWindowTestHook(4, nullptr, nullptr);
 #endif
             *stw = std::make_unique<ScopedStopTheWorld>("young post-relocate", true,
                                                         GCPhase::GC_PHASE_FORWARD);
             ZVerify::BeforeZOperation();
-            manager.FinishIncompleteFromRegions();
+            manager.FinishIncompleteFromRegions(GCCycleGeneration::YOUNG);
         }
         VLOG(REPORT, "[GCV2][relocate][conc] concurrent_relocate done; STW re-entered");
         StringDedup::Instance().Remap();
@@ -1281,7 +1273,7 @@ void WCollector::EvacuateYoungRegions(const std::vector<BaseObject*>& reachableV
                     continue;
                 }
                 if (kPageAgeAdaptiveTenuring &&
-                    !ShouldPromoteAge(region->GetYoungAge(), GetGCStats().tenuringThreshold)) {
+                    !ShouldPromoteAge(region->GetYoungAge(), GetGCStats(GCCycleGeneration::YOUNG).tenuringThreshold)) {
                     if (region->IsLoneFromRegion() || region->IsFromRegion()) {
                         manager.EnlistStayYoungSurvivor(region);
                     } else if (region->GetRegionType() != RegionInfo::RegionType::RECENT_FULL_REGION) {
@@ -1320,7 +1312,7 @@ void WCollector::EvacuateYoungRegions(const std::vector<BaseObject*>& reachableV
         MRT_PHASE_TIMER(ZStatPhases::PYoungEvacRetire);
         // zGeneration.cpp:563: keep this set until the next young mark-end reset.
         // zRelocate.cpp:1041-1047 cycle-end completeness: no ROUTED-unfinished page.
-        manager.FinishIncompleteFromRegions();
+        manager.FinishIncompleteFromRegions(GCCycleGeneration::YOUNG);
         manager.ReassembleFromSpace();
     }
 }
@@ -1601,7 +1593,7 @@ BaseObject* WCollector::TryMutatorRelocate(BaseObject* obj, RegionInfo::RetainSc
 {
     // ForwardObjectImpl opens with CHECK(phase == PREFORWARD || FORWARD). relocate_or_remap
     // is reachable from barriers in other phases, so screen here rather than trip that CHECK.
-    GCPhase phase = GetGCPhase();
+    GCPhase phase = GetGCPhase(static_cast<GCCycleGeneration>(ObjectGeneration(obj)));
     if (phase != GCPhase::GC_PHASE_PREFORWARD && phase != GCPhase::GC_PHASE_FORWARD) {
         return nullptr;
     }
@@ -1614,7 +1606,7 @@ BaseObject* WCollector::TryMutatorRelocate(BaseObject* obj, RegionInfo::RetainSc
     // SetGCPhase publishes before handshake, so a mutator that retained across
     // FORWARD→IDLE must not enter ForwardObjectImpl's CHECK. Release and let
     // the existing FindToVersion / wait legs consume the published table.
-    phase = GetGCPhase();
+    phase = GetGCPhase(static_cast<GCCycleGeneration>(ObjectGeneration(obj)));
     if (phase != GCPhase::GC_PHASE_PREFORWARD && phase != GCPhase::GC_PHASE_FORWARD) {
         lease.Release();
         return nullptr;
@@ -1749,7 +1741,7 @@ BaseObject* WCollector::ResolveStoreValue(BaseObject* ref, const ForwardingProve
                 static_cast<unsigned>(lookup.answer),
                 static_cast<unsigned long long>(lookup.fromPageEpoch),
                 static_cast<unsigned long long>(lookup.fromPageLifeId),
-                static_cast<unsigned>(GetGCPhase()),
+                static_cast<unsigned>(GetGCPhase(GCCycleGeneration::OLD)),
                 live != nullptr && live->IsCompacted() ? 1u : 0u,
                 live != nullptr ? live->RelocateObserve() : 0u,
                 reinterpret_cast<void*>(lookup.to),
@@ -1880,7 +1872,7 @@ BaseObject* WCollector::TryForwardObject(BaseObject* obj, Generation generation)
     if (BaseObject* winner = FindToVersion(obj, generation).found()) return winner;
     RegionInfo* region = RegionInfo::GetGhostFromRegionAt(reinterpret_cast<MAddress>(obj));
     if (region == nullptr) return nullptr;
-    const GCPhase phase = GetGCPhase();
+    const GCPhase phase = GetGCPhase(static_cast<GCCycleGeneration>(ObjectGeneration(obj)));
     if (phase != GCPhase::GC_PHASE_PREFORWARD && phase != GCPhase::GC_PHASE_FORWARD) return nullptr;
     RegionInfo::RetainScope lease(region);
     if (!lease.ok()) return WaitForPageForwarding(obj, lease.HoldForwarding());
@@ -1902,7 +1894,7 @@ BaseObject* WCollector::ForwardObjectImpl(BaseObject* obj, RegionInfo* ghostFrom
 #if defined(MRT_TESTABLE_INTERNALS)
     RunRemapWindowTestHook(8, ghostFromRegion, obj);
 #endif
-    CHECK(GetGCPhase() == GCPhase::GC_PHASE_PREFORWARD || GetGCPhase() == GCPhase::GC_PHASE_FORWARD);
+    CHECK(GetGCPhase(static_cast<GCCycleGeneration>(ObjectGeneration(obj))) == GCPhase::GC_PHASE_PREFORWARD || GetGCPhase(static_cast<GCCycleGeneration>(ObjectGeneration(obj))) == GCPhase::GC_PHASE_FORWARD);
 
     // zRelocate.cpp:382-410 relocate_object: find hit → return; else retain
     // already held by the caller lease; inner allocate→copy→insert (CAS
@@ -1978,7 +1970,7 @@ BaseObject* WCollector::RelocateObjectInner(BaseObject* obj, RegionInfo* copyPag
     const size_t size = RegionSpace::GetAllocSize(*obj);
     // ZObjectAllocator::alloc_for_relocation: per-age shared allocation, non-blocking.
     const PageAge fromAge = copyPage->IsYoungRegion() ? to_pageage(copyPage->GetYoungAge()) : PageAge::old;
-    const PageAge toAge = ComputeToAge(fromAge, GetGCStats().tenuringThreshold);
+    const PageAge toAge = ComputeToAge(fromAge, GetGCStats(GCCycleGeneration::YOUNG).tenuringThreshold);
     auto& manager = reinterpret_cast<RegionSpace&>(theAllocator).GetRegionManager();
     BaseObject* toObj = reinterpret_cast<BaseObject*>(manager.AllocSharedObject(size, toAge, true));
     if (toObj == nullptr) return nullptr;
@@ -2188,7 +2180,7 @@ bool IncompleteRouteUnpublished(RegionInfo* region)
 }
 } // namespace
 
-void RegionManager::FinishIncompleteFromRegions()
+void RegionManager::FinishIncompleteFromRegions(GCCycleGeneration generation)
 {
     // zRelocate.cpp:1041-1047: relocate() does not return with a half-copied page.
     std::vector<RegionInfo*> snap;
@@ -2205,7 +2197,7 @@ void RegionManager::FinishIncompleteFromRegions()
     std::sort(snap.begin(), snap.end());
     snap.erase(std::unique(snap.begin(), snap.end()), snap.end());
 
-    const bool young = Heap::GetHeap().GetCollector().GetGCStats().reason == GC_REASON_YOUNG;
+    const bool young = generation == GCCycleGeneration::YOUNG;
     static std::atomic<size_t> g_zombieFinished{ 0 };
     static std::atomic<size_t> g_zombieKept{ 0 };
     size_t finished = 0;
@@ -2371,7 +2363,7 @@ void RegionManager::CompactRegion(RegionInfo* region)
 
     const bool fromYoung = region->IsYoungRegion();
     const PageAge fromAge = fromYoung ? to_pageage(region->GetYoungAge()) : PageAge::old;
-    const PageAge toAge = ComputeToAge(fromAge, Heap::GetHeap().GetCollector().GetGCStats().tenuringThreshold);
+    const PageAge toAge = ComputeToAge(fromAge, Heap::GetHeap().GetCollector().GetGCStats(GCCycleGeneration::YOUNG).tenuringThreshold);
     MAddress regionStart = region->GetRegionStart();
     DLOG(REGION, "compact region %p@[%#zx+%zu, %#zx) type %u", region, regionStart,
         region->GetLiveByteCount(), region->GetRegionEnd(), region->GetRegionType());
@@ -2529,7 +2521,7 @@ bool StayYoungThisCycle(RegionInfo* region)
     if (!kPageAgeAdaptiveTenuring) {
         return false;
     }
-    const uint32_t thr = Heap::GetHeap().GetCollector().GetGCStats().tenuringThreshold;
+    const uint32_t thr = Heap::GetHeap().GetCollector().GetGCStats(GCCycleGeneration::YOUNG).tenuringThreshold;
     return !ShouldPromoteAge(region->GetYoungAge(), thr);
 }
 

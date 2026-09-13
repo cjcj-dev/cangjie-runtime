@@ -52,7 +52,7 @@ NO_RETURN inline ATTR_COLD ATTR_NO_INLINE void RegionInfo::ReportInvalidObjectSi
         size_t bitCapacity = (regionEnd - regionStart) / kMarkedBytesPerBit;
         size_t bitIndex = objAddr >= regionStart ? (objAddr - regionStart) / kMarkedBytesPerBit :
                                                    std::numeric_limits<size_t>::max();
-        GCPhase phase = Heap::GetHeap().GetGCPhase();
+        GCPhase phase = Heap::GetHeap().GetGCPhase(GCCycleGeneration::OLD);
         LOG(RTLOG_FATAL,
             "[GCV2][sizeguard][INVALID_OBJECT_SIZE] obj=%p objSize=%zu region=%p regionStart=%#zx "
             "regionEnd=%#zx allocPtr=%#zx regionType=%u unitRole=%u young=%u phase=%u bitCap=%zu bitIdx=%zu align=%zu",

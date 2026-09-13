@@ -22,6 +22,7 @@
 
 #include <unordered_set>
 namespace MapleRuntime {
+enum class HeapDumpKind { NORMAL, OOM, IDE };
 class Allocator;
 class AllocBuffer;
 class FinalizerProcessor;
@@ -44,7 +45,6 @@ public:
     bool IsGarbage(const BaseObject* obj) const { return !IsSurvivedObject(obj); }
 
     virtual bool IsGcStarted() const = 0;
-    virtual void WaitForGCFinish() = 0;
 
     virtual bool IsGCEnabled() const = 0;
     virtual void EnableGC(bool val) = 0;
@@ -93,9 +93,10 @@ public:
     static bool IsHeapAddress(const void* addr) { return IsHeapAddress(reinterpret_cast<MAddress>(addr)); }
 
 
-    virtual GCPhase GetGCPhase() const = 0;
+    void DumpHeap(HeapDumpKind kind);
 
-    virtual void SetGCPhase(const GCPhase phase) = 0;
+    virtual GCPhase GetGCPhase(GCCycleGeneration generation) const = 0;
+    virtual void SetGCPhase(GCCycleGeneration generation, GCPhase phase) = 0;
 
     virtual bool ForEachObj(const std::function<void(BaseObject*)>&, bool safe) const = 0;
 

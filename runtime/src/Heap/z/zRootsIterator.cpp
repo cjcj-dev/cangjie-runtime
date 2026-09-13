@@ -303,7 +303,7 @@ void TracingCollector::EnumAllExportRoots(RootSet &foreignRootsSet)
 void TracingCollector::DoEnumeration(WorkStack& workStack, WorkStack& foreignRootsSet)
 {
     ScopedEntryTrace trace("CJRT_GC_ENUM");
-    EnumAllCommonRoots(GetWorkers(), workStack);
+    EnumAllCommonRoots(GetWorkers(GCCycleGeneration::OLD), workStack);
     EnumAllExportRoots(foreignRootsSet);
 }
 
@@ -419,59 +419,9 @@ void TracingCollector::VisitFinalizerRoots(const NativeSlotVisitor& visitor) con
 } // namespace MapleRuntime
 
 namespace MapleRuntime {
-void TracingCollector::PreGarbageCollection(bool isConcurrent, uint64_t gcIndex)
-{
-    const bool continuingPrelude = ActiveCycle().Snapshot().active;
-    if (!continuingPrelude) {
-        ActiveCycle().Begin(gcIndex);
-    }
-    ResetSkippedStackMapCounts();
-    VLOG(REPORT, "Begin GC log. GCReason: %s, Current allocated %s, Current threshold %s, current tag %u",
-         g_gcRequests[GetCycleReason()].name, Pretty(Heap::GetHeap().GetAllocatedSize()).Str(),
-         Pretty(Heap::GetHeap().GetCollector().GetGCStats().GetThreshold()).Str(),
-         static_cast<unsigned>(GetCurrentTagID()));
 
-    // zDriver.cpp:183,399-400: generation workers use their concurrent
-    // budget for both pause and concurrent work. Parallel workers are separate.
-    const int32_t threadCount = static_cast<int32_t>(GetWorkers().ActiveWorkers());
-    GetWorkers().SetActive();
-    VLOG(REPORT, "GC generation active workers: %d", threadCount);
 
-    GetGCStats().reason = GetCycleReason();
-    GetGCStats().async = (gcIndex == GCTask::ASYNC_TASK_INDEX);
-    GetGCStats().isConcurrentMark = isConcurrent;
-#if defined(MRT_TESTABLE_INTERNALS)
-    if (testCyclePrepared) {
-        testCyclePrepared();
-    }
-#endif
-#if defined(MRT_DEBUG) && (MRT_DEBUG == 1)
-    DumpBeforeGC();
-#endif
-    TRACE_COUNT("CJRT_pre_GC_HeapSize", Heap::GetHeap().GetAllocatedSize());
-}
 
-void TracingCollector::PostGarbageCollection(uint64_t gcIndex)
-{
-    GetWorkers().SetInactive();
-    // Periodic persistence: timeout/ABRT/SIGKILL cannot erase counters from
-    // completed GC cycles. Both probes self-gate and remain default off.
-    // holdercapture: periodic persistence, so ABRT/kill cannot erase the snapshot census.
-
-    // loadgood: same reason -- the workload under measurement ends in SIGSEGV, so the
-    // cross-table has to be on stderr before the crash, not only at exit.
-
-    // portarray: positive control for large-array chunking; self-gates, default off.
-    ReportSkippedStackMapCounts();
-    // release pages in PagePool
-    TransitionToGCPhase(GCPhase::GC_PHASE_RECLAIM_SATB_NODE, true);
-    PagePool::Instance().Trim();
-    (void)gcIndex;
-
-#if defined(MRT_DEBUG) && (MRT_DEBUG == 1)
-    DumpAfterGC();
-#endif
-}
 
 
 }

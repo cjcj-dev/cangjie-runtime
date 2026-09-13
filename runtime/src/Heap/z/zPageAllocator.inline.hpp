@@ -99,7 +99,7 @@ inline void RegionManager::AddRawPointerObject(BaseObject* obj)
                                                RegionInfo::RegionType::RAW_POINTER_PINNED_REGION) ||
                 garbageRegionList.TryDeleteRegion(region, RegionInfo::RegionType::GARBAGE_REGION,
                                                   RegionInfo::RegionType::RAW_POINTER_PINNED_REGION)) {
-                GCPhase phase = Heap::GetHeap().GetGCPhase();
+                GCPhase phase = Heap::GetHeap().GetGCPhase(region->IsYoungRegion() ? GCCycleGeneration::YOUNG : GCCycleGeneration::OLD);
                 CHECK(phase != GCPhase::GC_PHASE_FORWARD && phase != GCPhase::GC_PHASE_PREFORWARD);
                 if (phase == GCPhase::GC_PHASE_POST_TRACE) {
                     region->ClearGhostRegionBit();
