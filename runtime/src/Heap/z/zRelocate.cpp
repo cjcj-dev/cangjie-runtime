@@ -1188,6 +1188,11 @@ void WCollector::EvacuateYoungRegions(const std::vector<BaseObject*>& reachableV
             // Prior order let FixMinorRootSlots RouteRegion before the domain snapshot.
             TransitionToGCPhase(GCPhase::GC_PHASE_POST_TRACE, true);
             fwdTable.PrepareForwardTable<Generation::Young>();
+            // ZGenerationYoung::collect: last abortpoint after selection,
+            // before relocate-start. Once flipped, finish every remaining page.
+            if (collectorResources.GetYoungDriverPort().Abort().Poll()) {
+                return;
+            }
             // zGeneration.cpp:1503-1508: install forwarding then flip remap bits.
             if (doYoungFlip) {
                 flip_young_relocate_start();

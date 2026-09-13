@@ -471,6 +471,9 @@ void WCollector::DoYoungGarbageCollection()
         TransitionToGCPhase(GCPhase::GC_PHASE_TRACE, true);
     }
     ReportMarkTerminateContinue();
+    if (collectorResources.GetYoungDriverPort().Abort().Poll()) {
+        return;
+    }
     {
         // Window closes here: the next statement asks every mutator to stop. Read the pair
         // (windowNs, MarkedInWindow) together -- duration alone proves nothing.
@@ -587,6 +590,9 @@ void WCollector::DoYoungGarbageCollection()
     const bool refFixSlotsCoveredByReachable = false;
     EvacuateYoungRegions(reachableVec, consumedSlots, currentMinorRoots, refFixSlotsCoveredByReachable,
                          remsetInteriorBases, &stw);
+    if (collectorResources.GetYoungDriverPort().Abort().Poll()) {
+        return;
+    }
     size_t allocatedAfter = space.AllocatedBytes();
     stats.reclaimedBytes = allocatedBefore > allocatedAfter ? allocatedBefore - allocatedAfter : 0;
     GetGCStats().collectedBytes = stats.reclaimedBytes;

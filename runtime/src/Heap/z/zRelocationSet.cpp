@@ -78,6 +78,11 @@ void WCollector::PostTrace()
     // after non-strong processing and before select. Young tables stay
     // until young's ResetRelocationSet.
     ForwardingTable::ResetRelocationSet(Generation::Old);
+    // ZGenerationOld::collect (zGeneration.cpp:1044): stop after reset,
+    // before selecting the next relocation set.
+    if (collectorResources.GetMajorDriverPort().Abort().Poll()) {
+        return;
+    }
     fwdTable.PrepareForwardTable<Generation::Old>();
     // OPTION_2 mark-epoch release: TRACE+CLEAR_SATB done; publish quarantined post-dispel
     // units (from this PrepareForwardTable and any prior minor) to dirty for reuse.

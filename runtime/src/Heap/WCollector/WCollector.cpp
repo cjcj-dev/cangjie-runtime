@@ -295,6 +295,9 @@ void WCollector::DoGarbageCollection()
 
     ForwardFromSpace();
     reinterpret_cast<RegionSpace&>(theAllocator).GetRegionManager().FinishIncompleteFromRegions();
+    if (collectorResources.GetMajorDriverPort().Abort().Poll()) {
+        return;
+    }
 
     // Preserve young remembered-set faces across old/full collection. ZGC old
     // relocation transfers remembered fields; it does not globally erase the

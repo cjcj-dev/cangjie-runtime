@@ -1828,6 +1828,9 @@ void TracingCollector::DoTracing(WorkStack& workStack, WorkStack& foreignRootsSe
         }
     }
 
+    if (collectorResources.GetMajorDriverPort().Abort().Poll()) {
+        return;
+    }
     // ZGenerationOld::collect processes non-strong references only after the
     // successful mark-end pause has closed ordinary mark publication.
     ProcessOldNonStrongReferences(workStack);
