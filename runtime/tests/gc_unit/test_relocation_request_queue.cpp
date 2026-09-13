@@ -7,10 +7,10 @@
 #include <atomic>
 #include <thread>
 #include "Heap/Collector/RelocationRequestQueue.h"
-#include "Mutator/Handshake.h"
-#include "Mutator/Mutator.h"
 #include "gc_heap_fixture.hpp"
 #include "gc_unittest.hpp"
+#include "Mutator/Handshake.h"
+#include "Mutator/Mutator.h"
 
 using namespace MapleRuntime;
 using namespace MapleRuntime::GcUnit;
