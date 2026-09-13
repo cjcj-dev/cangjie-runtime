@@ -1070,7 +1070,8 @@ BaseObject* TracingCollector::ResolveCurrentValueRoot(BaseObject* value, const v
         ForwardingHolderKind::Static, owner, nullptr, stage, ForwardingWriterKind::CollectorHeal,
         ForwardingSourceKind::CallerValue, nullptr, nullptr, ForwardingFieldKind::RootSlot
     };
-    BaseObject* current = ResolveStoreValue(value, provenance, generation);
+    BaseObject* current = stage == ForwardingStage::IncomingNew
+        ? ValidateCurrentValue(value, provenance) : ResolveStoreValue(value, provenance, generation);
     CHECK_DETAIL(current != nullptr && Heap::IsHeapAddress(current),
                  "value root resolve requires a heap to-address from=%p current=%p", value, current);
     CHECK_DETAIL(Collector::JudgeHandOutTarget(current) == HandVerdict::Usable,

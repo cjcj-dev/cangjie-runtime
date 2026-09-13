@@ -163,7 +163,6 @@ public:
     // Out of line so the unit runner exercises the product SO's publication
     // decision instead of compiling a private test copy.
     static bool ReceiptAllowsForwarded(MAddress mapped);
-    static uint64_t StaleToLifeCount();
     static MAddress FindTo(MAddress from, Generation gen);
     static bool EntriesArmed(MAddress from, Generation gen);
     static LookupResult LookupTo(MAddress from, Generation gen);

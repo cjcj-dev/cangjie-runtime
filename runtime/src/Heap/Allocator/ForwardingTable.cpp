@@ -368,17 +368,6 @@ bool ForwardingTable::ReceiptAllowsForwarded(MAddress mapped)
     return mapped != 0;
 }
 
-std::atomic<uint64_t>& ZForwarding::StaleToLifeCount()
-{
-    static std::atomic<uint64_t> n{ 0 };
-    return n;
-}
-
-uint64_t ForwardingTable::StaleToLifeCount()
-{
-    return ZForwarding::StaleToLifeCount().load(std::memory_order_relaxed);
-}
-
 bool ZForwarding::DestUsable(MAddress to)
 {
     if (to == 0 || !Heap::IsHeapAddress(to)) {
@@ -398,35 +387,6 @@ bool ZForwarding::DestUsable(MAddress to)
     const ObjectState::ObjectStateCode st = obj->GetObjectState().GetStateCode();
     return st != ObjectState::FORWARDED && st != ObjectState::FORWARDING;
 }
-
-MAddress ZForwarding::resolve_live(MAddress to) const
-{
-    if (to == 0) {
-        return 0;
-    }
-    BaseObject* obj = reinterpret_cast<BaseObject*>(to);
-    if (!obj->IsValidObject()) {
-        return 0;
-    }
-    RegionInfo* toRegion = RegionInfo::TryGetRegionInfoAt(to);
-    if (toRegion == nullptr || to < toRegion->GetRegionStart() || to >= toRegion->GetRegionAllocPtr()) {
-        return 0;
-    }
-    if (DestUsable(to)) {
-        return to;
-    }
-    ZForwarding* next = ForwardingTable::RetainPageOwner(toRegion).get();
-    if (next == nullptr || next == this) {
-        return 0;
-    }
-    const MAddress chained = next->find(to);
-    if (chained == 0 || chained == to) {
-        return 0;
-    }
-    return next->resolve_live(chained);
-}
-
-bool ZForwarding::receipt_live(MAddress to) const { return resolve_live(to) != 0; }
 
 struct LookupCarrierWitness {
     MAddress start{ 0 };
