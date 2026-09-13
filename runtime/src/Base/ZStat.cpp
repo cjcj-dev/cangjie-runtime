@@ -199,10 +199,11 @@ size_t ZStatValue::CpuId()
 {
 #if defined(__linux__) || defined(hongmeng)
     const int cpu = sched_getcpu();
-    if (cpu >= 0) return static_cast<size_t>(cpu) % CpuCount();
+    if (cpu >= 0 && static_cast<size_t>(cpu) < CpuCount()) return static_cast<size_t>(cpu);
 #endif
-    // Platforms without a processor-id API retain stable CPU-sized stripes.
-    return std::hash<std::thread::id>{}(std::this_thread::get_id()) % CpuCount();
+    // os_bsd.cpp:2260-2265 / os_linux.cpp:4987-5008: unsupported or invalid
+    // processor ids share CPU zero; all updates remain atomic.
+    return 0;
 }
 
 ZStatSampler::ZStatSampler(const char* group, const char* name, ZStatUnit unit)

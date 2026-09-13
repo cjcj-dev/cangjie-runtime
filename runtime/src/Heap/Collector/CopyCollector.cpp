@@ -137,11 +137,13 @@ void CopyCollector::RunGarbageCollection(uint64_t gcIndex, GCReason reason)
     }
     // zStatHeap::at_relocate_end: publish only to the generation being collected.
     const bool young = reason == GC_REASON_YOUNG;
-    const size_t candidateBytes = young ? gcStats.youngCandidateBytes :
-        gcStats.fromSpaceSize + gcStats.pinnedSpaceSize + gcStats.largeSpaceSize;
-    const size_t liveBytes = candidateBytes - std::min(candidateBytes, gcStats.collectedBytes);
+    const size_t usedAfter = Heap::GetHeap().GetAllocatedSize();
+    // A12a scope ruling: preserve the old-generation baseline scalar until
+    // A07's mark-end livemap aggregation replaces it. Do not infer live bytes
+    // from candidate minus reclaimed capacity. Young has an actual mark result.
+    const size_t liveBytes = young ? gcStats.youngPromotedBytes : usedAfter;
     (young ? ZStat::YoungHeap() : ZStat::OldHeap()).AtRelocateEnd(
-        Heap::GetHeap().GetAllocatedSize(), liveBytes, gcStats.collectedBytes);
+        usedAfter, liveBytes, gcStats.collectedBytes);
     ActiveCycle().End();
     collectorResources.NotifyGCPhaseFinished(gcIndex);
 }
