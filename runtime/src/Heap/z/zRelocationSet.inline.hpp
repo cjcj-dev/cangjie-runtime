@@ -59,7 +59,6 @@ inline void RegionManager::PrepareFromRegionList()
         // reclaim schedules that are not phase-driven — the mutator garbage fast path and
         // the finalizer both reach a live region only through TakeReclaimableGarbageRegion,
         // and a held region never reaches garbageRegionList in the first place.
-        ClearRouteDestHoldFlags();
 
         // markwater2: ZGC select_relocation_set skips !is_relocatable (allocating)
         // pages before install. Do this before PrepareForwardable so no ghost/route

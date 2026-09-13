@@ -102,25 +102,6 @@ bool ForwardingTable::Initialize(MAddress heapStart, size_t heapSize, size_t uni
     g_ready.store(true, std::memory_order_release);
     LOG(RTLOG_ERROR, "[FWDTABLE] armed base=%#zx size=%zu unit=%zu entries=%zu", static_cast<size_t>(heapStart),
         heapSize, unitSize, g_relocationSets[0].map.size());
-    static std::atomic<bool> dumped{ false };
-    bool expected = false;
-    if (dumped.compare_exchange_strong(expected, true, std::memory_order_relaxed)) {
-        std::atexit([]() {
-            std::fprintf(stderr,
-                         "[FWDTABLE][refuse] atexit full=%llu overflow=%llu fallbackFull=%llu "
-                         "fallbackOverflow=%llu armedHit=%llu armedMiss=%llu unarmed=%llu\n",
-                         static_cast<unsigned long long>(ZForwarding::FullRefusals().load(std::memory_order_relaxed)),
-                         static_cast<unsigned long long>(
-                             ZForwarding::OverflowRefusals().load(std::memory_order_relaxed)),
-                         static_cast<unsigned long long>(
-                             ZForwarding::FullFallbacks().load(std::memory_order_relaxed)),
-                         static_cast<unsigned long long>(
-                             ZForwarding::OverflowFallbacks().load(std::memory_order_relaxed)),
-                         static_cast<unsigned long long>(ForwardingTable::ArmedHitCount()),
-                         static_cast<unsigned long long>(ForwardingTable::ArmedMissCount()),
-                         static_cast<unsigned long long>(ForwardingTable::UnarmedCount()));
-        });
-    }
     return true;
 }
 
@@ -162,19 +143,14 @@ const ForwardingAllocator* ForwardingTable::ArenaForTest(Generation gen)
 
 size_t ForwardingTable::ObjectCountUpperBound(RegionInfo* region, size_t regionSize)
 {
-    // zForwarding.inline.hpp:43-50 sizes from live *object* count. GetLiveByteCount
-    // is bytes; liveBytes>>3 counts 8-byte words. Before marking has made zero
-    // authoritative, take the region's capacity so the table cannot fill and spin
-    // (REPORT-fwdentries). A closed zero-live face needs only the minimum table.
-    const uint64_t liveBytes = region->GetLiveByteCount();
-    uint64_t estimate = liveBytes >> ZForwarding::kAlignShift;
-    if (estimate == 0 && !region->IsLiveCountAuthoritative()) {
-        estimate = regionSize >> ZForwarding::kAlignShift;
+    // ZForwarding::nentries sizes the attached array from live object count.
+    // Before a mark count is authoritative (standalone setup), retain the
+    // existing capacity upper bound; selected product pages use their livemap.
+    if (!region->IsLiveCountAuthoritative()) {
+        return regionSize >> ZForwarding::kAlignShift;
     }
-    if (estimate == 0) {
-        estimate = 1;
-    }
-    return static_cast<size_t>(estimate);
+    if (region->IsLargeRegion()) return region->GetLiveByteCount() != 0 ? 1 : 0;
+    return region->GetLiveObjectCount();
 }
 
 void ForwardingTable::insert(ZForwarding* forwarding)

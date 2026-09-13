@@ -108,14 +108,7 @@ inline void RegionInfo::EnsureMarkEpochAtexit()
         }
     }
 
-inline BaseObject* RegionInfo::GetRouteForProbe(BaseObject* fromObj)
-    {
-        OptionalRouteTicket ticket = AdmitForRoute(fromObj);
-        if (!ticket) {
-            return nullptr;
-        }
-        return GetRoute(ticket.value());
-    }
+
 
 inline ATTR_COLD ATTR_NO_INLINE void RegionInfo::ReportTypeInfoInHeap(const BaseObject* obj, TypeInfo* tip, size_t objSize,
                                                        MAddress regionStart, MAddress regionEnd) const

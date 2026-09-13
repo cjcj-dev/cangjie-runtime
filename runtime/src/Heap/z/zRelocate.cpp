@@ -12,9 +12,6 @@
 
 #include <array>
 #include <atomic>
-#if defined(MRT_GCV2_UNTAG_BREADCRUMB)
-#include <csignal>
-#endif
 #include <cstdint>
 #include <cstdio>
 #include <cstdlib>
@@ -31,18 +28,12 @@
 #include <vector>
 #include <unistd.h>
 
-#if defined(MRT_GCV2_UNTAG_BREADCRUMB)
-#include "Base/SysCall.h"
-#endif
 #include "Concurrency/Concurrency.h"
 #include "Heap/z/zStoreBarrierBuffer.hpp"
 #include "Heap/z/zDirector.hpp"
 #include "Heap/Collector/MarkPartialArray.h"
 #include "Heap/z/zRelocationSetSelector.hpp"
 #include "Heap/z/zWorkers.hpp"
-#if defined(MRT_GCV2_UNTAG_BREADCRUMB)
-#include "Heap/WCollector/UntagRefFieldBreadcrumb.h"
-#endif
 #include "Heap/Verify/M0ExitDiagnostics.h"
 #include "Heap/Verify/TraceClear.h"
 #include "Heap/Verify/Zap.h"
@@ -58,9 +49,6 @@
 #include "UnwindStack/StackFrameCursor.h"
 #include "ObjectModel/RefField.inline.h"
 #include "TypeInfoManager.h"
-#if defined(MRT_GCV2_UNTAG_BREADCRUMB)
-#include "securec.h"
-#endif
 #include "Heap/z/zThreadLocalAllocBuffer.hpp"
 #include "Heap/z/zRememberedSet.hpp"
 #include "Heap/z/zForwarding.hpp"
@@ -117,17 +105,12 @@
 
 
 namespace MapleRuntime {
-struct CopierRouteMint {
-    static CopierRouteToken Make() { return CopierRouteToken(); }
-};
-void NoteFwdToGateRefuse(const char* site, BaseObject* toObj);
 #if defined(MRT_TESTABLE_INTERNALS)
 void NoteRemapYoungRootsTestReceipt(RefField<>& field, uintptr_t before, bool healed,
                                            bool storeGoodAfter);
 #endif
 
 
-#include "Heap/Collector/zRelocateTestObservations.h"
 #if defined(MRT_TESTABLE_INTERNALS)
 void RunRemapWindowTestHook(unsigned point, RegionInfo* region, BaseObject* object);
 #endif
@@ -136,7 +119,6 @@ namespace WCollectorInternal {
 } // namespace WCollectorInternal
 // installdomain: positive control — how often Resolve/Fix would install a ghost-from that is
 // outside GetRoute's liveInfo0 survivor domain. Grant paints that bit before route geometry.
-// Report with MRT_GCV2_INSTALLDOMAIN_ACCOUNT=1 (also always VLOG once per minor if >0).
 std::atomic<size_t> g_installDomainGrant{ 0 };
 std::atomic<size_t> g_installDomainAlready{ 0 };
 std::atomic<size_t> g_installDomainTooLate{ 0 };
@@ -242,25 +224,7 @@ bool WCollector::TryUntagRefField(BaseObject* obj, RefField<>& field, BaseObject
             return false;
         }
         target = to_object(oldRef.GetTargetObject());
-#if defined(MRT_GCV2_UNTAG_BREADCRUMB)
-        untagRefFieldBreadcrumb.active = 0;
-        untagRefFieldBreadcrumb.holder = obj;
-        untagRefFieldBreadcrumb.field = &field;
-        untagRefFieldBreadcrumb.target = target;
-        untagRefFieldBreadcrumb.caller = __builtin_return_address(0);
-        untagRefFieldBreadcrumb.fieldOffset =
-            obj == nullptr ? static_cast<size_t>(-1) : BaseObject::FieldOffset(obj, &field);
-        std::atomic_signal_fence(std::memory_order_seq_cst);
-        untagRefFieldBreadcrumb.active = 1;
-        std::atomic_signal_fence(std::memory_order_seq_cst);
-#endif
         const bool isValidTarget = target->IsValidObject();
-#if defined(MRT_GCV2_UNTAG_BREADCRUMB)
-        if (LIKELY(isValidTarget)) {
-            std::atomic_signal_fence(std::memory_order_seq_cst);
-            untagRefFieldBreadcrumb.active = 0;
-        }
-#endif
         // Anchor main 2f1bc8355e92dbf01c063050b5c9a2947c711d64
         CHECK_DETAIL(isValidTarget, "TryUntagRefField encounters invalid tagged target %p at field %p", target,
                      &field);
@@ -436,7 +400,6 @@ void WCollector::Preforward()
         // ScopedLightSync first. Destruction order also closes this timer before mutators
         // resume, keeping the whole phase in the pause account.
         MRT_PHASE_TIMER(ZStatPhases::POldRelocateStart);
-        RegionInfo::AdvanceCompactRouteTableGracePeriod();
         // fwdgrace: this sync does not go through TransitionToGCPhase, so the arena grace
         // period has to be advanced alongside the route-table one or the two drift apart.
         // OpenJDK zGeneration.cpp:1054-1063: Phase 8 remaps young roots under the driver
@@ -1234,12 +1197,9 @@ void WCollector::EvacuateYoungRegions(const std::vector<BaseObject*>& reachableV
             // transition may now wait for a real page task on allocation failure.
             Heap::GetHeap().SetGCPhase(GCPhase::GC_PHASE_PREFORWARD);
             StartRelocationTasks();
-            // zRelocate.cpp:1289-1300 generation workers run relocate_task before
-            // any consumer add_and_wait (zRelocate.cpp:393-405). Drain is
-            // GCWorkers::Run: it publishes and joins page work. TransitionToGCPhase
-            // synchronously visits mutator roots (TracingCollector.h:463) which
-            // may WaitForPageForwarding, so workers must already be running.
-            manager.DrainForwardFromRegions<Generation::Young>();
+            // The pause publishes the work domain. Eager roots relocate one
+            // object themselves; allocation failure uses the same in-place page
+            // task on this thread (advisor 161024, compiler prerequisite #498).
             TransitionToGCPhase(GCPhase::GC_PHASE_PREFORWARD, true);
         }
 
@@ -1497,7 +1457,6 @@ void RegionManager::RememberFlipPromotedPages(GCWorkers& workers)
 // After object/region publish (FORWARDED|COMPACTED) tip must exist if the plan was real;
 // missing tip = permanent hole = invariant violation → CHECK (not hang, not geometric to).
 //
-// Diag: MRT_GCV2_WAITFWD=1 counts enter / tip-ready / give-up (gate before counter work).
 
 // inplaceto: after an in-place compaction the from-layout and the to-layout occupy the *same*
 // page span, so the page-scoped ghost-from predicate cannot tell a stale from-address from an
@@ -1633,7 +1592,19 @@ BaseObject* WCollector::WaitForPageForwarding(BaseObject* obj, ForwardingTable::
     if (const MAddress found = owner->find(from)) {
         return reinterpret_cast<BaseObject*>(found);
     }
-    auto& queue = static_cast<RegionSpace&>(theAllocator).GetRegionManager().GetRelocationRequestQueue();
+    auto& manager = static_cast<RegionSpace&>(theAllocator).GetRegionManager();
+    if (MutatorManager::Instance().WorldStopped() && !owner->is_done()) {
+        // #498: without return barriers roots are completed eagerly. There is
+        // no concurrent page worker in this pause; reuse its in-place task.
+        RegionInfo* page = owner->page();
+        if (owner->table_generation() == static_cast<uint8_t>(Generation::Young)) {
+            manager.ForwardClaimedPage<Generation::Young>(page, owner, false, true);
+        } else {
+            manager.ForwardClaimedPage<Generation::Old>(page, owner, false, true);
+        }
+        if (const MAddress winner = owner->find(from)) return reinterpret_cast<BaseObject*>(winner);
+    }
+    auto& queue = manager.GetRelocationRequestQueue();
     const auto request = queue.Add(owner);
     CHECK_DETAIL(request.accepted, "relocation request has no page task from=%#zx", from);
     (void)queue.Wait(request.request);
@@ -1667,7 +1638,7 @@ BaseObject* WCollector::TryMutatorRelocate(BaseObject* obj, RegionInfo::RetainSc
     // This is the late-store leg corresponding to zBarrier.inline.hpp:695-716.
     EnsureRouteDomainMembership(const_cast<WCollector*>(this), obj);
     BaseObject* toVersion = const_cast<WCollector*>(this)->RelocateObjectInner(
-        obj, nullptr, lease.forwarding()->page());
+        obj, lease.forwarding()->page());
     lease.Release(); // release_page
     if (toVersion == nullptr) {
         return WaitForPageForwarding(obj, lease.HoldForwarding());
@@ -1917,163 +1888,19 @@ BaseObject* WCollector::ForwardObject(BaseObject* obj, Generation generation)
 
 BaseObject* WCollector::TryForwardObject(BaseObject* obj, Generation generation)
 {
-    if (!Collector::PlausibleManagedObjectGate("WCollector::TryForwardObject", obj)) {
-        // receiptfirst: same order as ForwardObject above -- zRelocate.cpp:382-389 reads
-        // the forwarding table before the from copy is touched at all.  TryForwardObject
-        // is the direct entry point for ForwardUpdateRawRef / FixMinorEvacuatedSlot, so
-        // the published receipt has to be reachable from here too.
-        if (IsGhostFromObject(obj) && !IsUnmovableFromObject(obj)) {
-            if (BaseObject* published = FindToVersion(obj, generation).found()) {
-                return published;
-            }
-        }
-        return nullptr;
-    }
-#if defined(MRT_GC_UNIT_TESTS)
-    if (g_routeLookupTestContext != nullptr) {
-        g_routeLookupTestContext->gatePassed = true;
-        g_routeLookupTestContext->heapAddress = true;
-    }
-#endif
+    // ZRelocate::relocate_object (zRelocate.cpp:382-416): find before touching
+    // source memory, then retain, allocate/copy/CAS, release, and wait on failure.
+    if (obj == nullptr || !Heap::IsHeapAddress(obj)) return nullptr;
+    if (BaseObject* winner = FindToVersion(obj, generation).found()) return winner;
     RegionInfo* region = RegionInfo::GetGhostFromRegionAt(reinterpret_cast<MAddress>(obj));
-    if (region == nullptr) {
-        return nullptr;
-    }
-
-#if defined(MRT_GC_UNIT_TESTS)
-    if (g_routeLookupTestContext != nullptr) {
-        g_routeLookupTestContext->receiptChecked = true;
-    }
-#endif
-    if (BaseObject* mapped = FindToVersion(obj, generation).found()) {
-        return mapped;
-    }
-#if defined(MRT_GC_UNIT_TESTS)
-    if (g_routeLookupTestContext != nullptr) {
-        g_routeLookupTestContext->compactedChecked = true;
-    }
-#endif
-    if (region->IsCompacted()) {
-        // Compacted page: CompactRegion inserts for every live object start.
-        // A table miss here is classified by the page's own geometry (see ClassifyCompactedMiss).
-        switch (ClassifyCompactedMiss(region, obj)) {
-            case CompactedMissClass::kAlreadyToStart:
-            case CompactedMissClass::kAlreadyToInterior:
-                return obj;
-            case CompactedMissClass::kReceiptOwed:
-                return nullptr;
-            case CompactedMissClass::kAbandonedTail:
-                return nullptr;
-        }
-    }
+    if (region == nullptr) return nullptr;
     const GCPhase phase = GetGCPhase();
-    if (phase != GCPhase::GC_PHASE_PREFORWARD && phase != GCPhase::GC_PHASE_FORWARD) {
-        return nullptr;
-    }
-#if defined(MRT_GC_UNIT_TESTS)
-    if (g_routeLookupTestContext != nullptr) {
-        g_routeLookupTestContext->phaseAllowed = true;
-    }
-#endif
-
-#if defined(MRT_GC_UNIT_TESTS)
-    const bool routeRegion = fwdTable.RouteRegion(region);
-    if (g_routeLookupTestContext != nullptr) {
-        g_routeLookupTestContext->routeRegionCalled = true;
-        g_routeLookupTestContext->routeRegion = routeRegion;
-    }
-    if (routeRegion) {
-#else
-    if (fwdTable.RouteRegion(region)) {
-#endif
-        // secondclass ①: GetRoute is geometric plan; retain before copying or
-        // consuming from-side state (else null-tip → HasRefField SEGV si_addr=0x8).
-        RegionInfo::RetainScope lease(region);
-        if (lease.ok()) {
-#if defined(MRT_GC_UNIT_TESTS)
-            if (g_routeLookupTestContext != nullptr) {
-                g_routeLookupTestContext->retained = true;
-            }
-#endif
-            // zRelocate.cpp:393-395: retain_page then assert is_phase_relocate.
-            // SetGCPhase can publish IDLE while this thread holds the retain.
-            // Release and consume only the forwarding-table answer in that case.
-            const GCPhase retainedPhase = GetGCPhase();
-            if (retainedPhase != GCPhase::GC_PHASE_PREFORWARD &&
-                retainedPhase != GCPhase::GC_PHASE_FORWARD) {
-#if defined(MRT_GC_UNIT_TESTS)
-                if (g_routeLookupTestContext != nullptr) {
-                    g_routeLookupTestContext->retainedPhaseAllowed = false;
-                }
-#endif
-                lease.Release();
-                const ForwardingProvenance provenance{ ForwardingHolderKind::StackSlot, this, &obj };
-                return FindToVersion(obj, generation).GetOrFailClosed(
-                    "WCollector::TryForwardObject.phase", provenance);
-            }
-#if defined(MRT_GC_UNIT_TESTS)
-            if (g_routeLookupTestContext != nullptr) {
-                g_routeLookupTestContext->retainedPhaseAllowed = true;
-            }
-#endif
-            BaseObject* toVersion = ForwardObjectImpl(obj, region, lease);
-            lease.Release();
-#if defined(MRT_GC_UNIT_TESTS)
-            // The existing plan-only bridge intercepts ForwardObjectImpl before
-            // copying; its miss is an admission observation, not allocation failure.
-            if (g_routeLookupTestContext != nullptr) return toVersion;
-#endif
-            return toVersion != nullptr ? toVersion : WaitForPageForwarding(obj, lease.HoldForwarding());
-        }
-        // ZGC's relocate_object (zRelocate.cpp:362-393) calls forward_object
-        // after retain_page refuses; it never retries the retain with sched_yield.
-        // Our n<0 refusal is immediate (the caller may already hold an outer pin),
-        // so a table miss is allowed here. Returning null makes ForwardRegion's
-        // receipt audit keep the page instead of spinning outside a safepoint.
-        const ForwardingProvenance provenance{ ForwardingHolderKind::StackSlot, this, &obj };
-        return WaitForPageForwarding(obj, lease.HoldForwarding());
-    }
-    // ZRelocate::relocate_object ends *every* path that did not itself produce a to-address with
-    // ZRelocate::forward_object -- one last read of the forwarding table (zRelocate.cpp:382-410,
-    // the trailing `return forward_object(forwarding, from_addr)` at :409).  It has to: the page
-    // may have been relocated in place while we were asking, and in-place relocation is what
-    // populates the table.
-    //
-    // RegionManager::RouteRegion returning false is exactly that case.  It answers false in two
-    // structurally different ways (RegionManager.h:806-825): the page is already COMPACTED, or
-    // RelocateClaimedPage just compacted it in place and set COMPACTED.  Neither means "no
-    // to-version"; both mean "the to-version is an insert from in-place compact".  The
-    // IsCompacted() test above cannot cover it -- it runs *before* this call, and this call is
-    // what makes the page compacted.
-    //
-    // RegionManager::ComputeRoute already spells the predicate as
-    // `RouteRegion(r) || r->IsCompacted()` (RegionManager.h:1012); this consumer read only the
-    // first half, so a root naming a live object on a compacted-in-place page was refused with the
-    // answer sitting in the table.  Observed: NW256/256MB 3/3 abort at
-    // PreForward used to fail-closed on compacted identity; wait/find now answers.
-    if (region->IsCompacted()) {
-        // A miss here is not "unset": RouteRegion answered false because this call is what
-        // compacted the page in place.  Which of the three compacted-miss cases it is comes from
-        // the page geometry, not from the fact that the lookup missed (see ClassifyCompactedMiss).
-        switch (ClassifyCompactedMiss(region, obj)) {
-            case CompactedMissClass::kAlreadyToStart:
-            case CompactedMissClass::kAlreadyToInterior:
-                return obj;
-            case CompactedMissClass::kReceiptOwed:
-                return FindToVersion(obj, generation).GetOrFailClosed(
-                    "WCollector::TryForwardObject.compact-in-place",
-                    ForwardingProvenance{ ForwardingHolderKind::StackSlot, this, &obj });
-            case CompactedMissClass::kAbandonedTail:
-                return FindToVersion(obj, generation).GetOrFailClosed(
-                    "WCollector::TryForwardObject.compact-in-place",
-                    ForwardingProvenance{ ForwardingHolderKind::StackSlot, this, &obj });
-        }
-    }
-    // Not routed and not compacted: RouteRegion took its ghost soft-miss return
-    // (RegionManager.h:796-805), i.e. the ghost bit was cleared under us and this page is no
-    // longer in the route domain at all.  ZGC's counterpart is ZForwardingTable::get == NULL
-    // (zForwardingTable.inline.hpp:36-46): the page was never selected.
-    return WaitForPageForwarding(obj, ForwardingTable::RetainPageOwner(region));
+    if (phase != GCPhase::GC_PHASE_PREFORWARD && phase != GCPhase::GC_PHASE_FORWARD) return nullptr;
+    RegionInfo::RetainScope lease(region);
+    if (!lease.ok()) return WaitForPageForwarding(obj, lease.HoldForwarding());
+    BaseObject* winner = ForwardObjectImpl(obj, region, lease);
+    lease.Release();
+    return winner != nullptr ? winner : WaitForPageForwarding(obj, lease.HoldForwarding());
 }
 
 BaseObject* WCollector::ForwardObjectImpl(BaseObject* obj, RegionInfo* ghostFromRegion,
@@ -2090,13 +1917,7 @@ BaseObject* WCollector::ForwardObjectImpl(BaseObject* obj, RegionInfo* ghostFrom
     RunRemapWindowTestHook(8, ghostFromRegion, obj);
 #endif
     CHECK(GetGCPhase() == GCPhase::GC_PHASE_PREFORWARD || GetGCPhase() == GCPhase::GC_PHASE_FORWARD);
-#if defined(MRT_GC_UNIT_TESTS)
-    if (g_routeLookupTestContext != nullptr) {
-        g_routeLookupTestContext->plan = RoutePlan{ nullptr };
-        g_routeLookupTestContext->hookReached = true;
-        return nullptr;
-    }
-#endif
+
     // zRelocate.cpp:382-410 relocate_object: find hit → return; else retain
     // already held by the caller lease; inner allocate→copy→insert (CAS
     // winner). No object-header TryLock admission.
@@ -2117,7 +1938,7 @@ BaseObject* WCollector::ForwardObjectImpl(BaseObject* obj, RegionInfo* ghostFrom
             page = RegionInfo::TryGetRegionInfoAt(reinterpret_cast<MAddress>(obj));
         }
     }
-    return RelocateObjectInner(obj, nullptr, page);
+    return RelocateObjectInner(obj, page);
 }
 
 BaseObject* WCollector::ForwardObjectExclusive(BaseObject* obj)
@@ -2129,7 +1950,7 @@ BaseObject* WCollector::ForwardObjectExclusive(BaseObject* obj)
     if (page == nullptr) {
         return nullptr;
     }
-    return RelocateObjectInner(obj, nullptr, page);
+    return RelocateObjectInner(obj, page);
 }
 
 void WCollector::UpdateRemsetForFields(BaseObject* from, BaseObject* to)
@@ -2157,7 +1978,7 @@ void WCollector::UpdateRemsetForFields(BaseObject* from, BaseObject* to)
 
 }
 
-BaseObject* WCollector::RelocateObjectInner(BaseObject* obj, BaseObject* planned, RegionInfo* copyPage)
+BaseObject* WCollector::RelocateObjectInner(BaseObject* obj, RegionInfo* copyPage)
 {
     const MAddress fromAddr = reinterpret_cast<MAddress>(obj);
     if (const MAddress hit = ForwardingTable::LookupForwarding(fromAddr, ForwardingTable::RetainPageOwner(copyPage).get()).to) {
@@ -2168,21 +1989,13 @@ BaseObject* WCollector::RelocateObjectInner(BaseObject* obj, BaseObject* planned
     if (!Collector::PlausibleManagedObjectGate("WCollector::RelocateObjectInner", obj)) {
         return nullptr;
     }
-    BaseObject* toObj = planned;
     const size_t size = RegionSpace::GetAllocSize(*obj);
-    bool allocatedHere = false;
-    if (toObj == nullptr) {
-        // ZHeap::alloc_object_for_relocation / ZObjectAllocator::alloc_for_relocation:
-        // destination age owns the shared allocator; relocation never refills a TLAB.
-        const PageAge fromAge = copyPage->IsYoungRegion() ? to_pageage(copyPage->GetYoungAge()) : PageAge::old;
-        const PageAge toAge = ComputeToAge(fromAge, GetGCStats().tenuringThreshold);
-        auto& manager = reinterpret_cast<RegionSpace&>(theAllocator).GetRegionManager();
-        toObj = reinterpret_cast<BaseObject*>(manager.AllocSharedObject(size, toAge, true));
-        if (toObj == nullptr) {
-            return nullptr;
-        }
-        allocatedHere = true;
-    }
+    // ZObjectAllocator::alloc_for_relocation: per-age shared allocation, non-blocking.
+    const PageAge fromAge = copyPage->IsYoungRegion() ? to_pageage(copyPage->GetYoungAge()) : PageAge::old;
+    const PageAge toAge = ComputeToAge(fromAge, GetGCStats().tenuringThreshold);
+    auto& manager = reinterpret_cast<RegionSpace&>(theAllocator).GetRegionManager();
+    BaseObject* toObj = reinterpret_cast<BaseObject*>(manager.AllocSharedObject(size, toAge, true));
+    if (toObj == nullptr) return nullptr;
     BaseObject* result = nullptr;
     ForwardingTable::Publication publication = ForwardingTable::EnsurePublicationBeforeCopy(
         copyPage, reinterpret_cast<MAddress>(obj));
@@ -2215,7 +2028,7 @@ BaseObject* WCollector::RelocateObjectInner(BaseObject* obj, BaseObject* planned
             copyPage == nullptr ? 0U : static_cast<unsigned>(copyPage->IsForwardingDone()),
             copyPage == nullptr ? 0 : copyPage->ForwardingRefCount());
     }
-    if (allocatedHere && toObj != obj && result != toObj) {
+    if (result != toObj) {
         if (RegionInfo* dest = RegionInfo::TryGetRegionInfoAt(reinterpret_cast<MAddress>(toObj))) {
             (void)dest->UndoAllocObjectAtomic(reinterpret_cast<uintptr_t>(toObj), size);
         }
@@ -2226,10 +2039,7 @@ BaseObject* WCollector::RelocateObjectInner(BaseObject* obj, BaseObject* planned
     return result;
 }
 
-BaseObject* WCollector::ForwardObjectExclusive(BaseObject* obj, BaseObject* toObj, RegionInfo* copyPage)
-{
-    return RelocateObjectInner(obj, toObj, copyPage);
-}
+
 } // namespace MapleRuntime
 
 namespace MapleRuntime {
@@ -2279,11 +2089,18 @@ void RegionManager::ForwardFromRegions(GCWorkers& workers)
 }
 
 template<Generation G>
-void RegionManager::ForwardClaimedPage(RegionInfo* region, ForwardingTable::Owner owner, bool claimed)
+void RegionManager::ForwardClaimedPage(RegionInfo* region, ForwardingTable::Owner owner, bool claimed, bool inPlace)
 {
     if (!owner || (!claimed && !owner->claim())) return;
     ZForwardingLife::PageWorkScope work(owner.get());
-    ForwardRegion<G>(region);
+    if (inPlace) {
+        (void)fromRegionList.TryDeleteRegion(region, RegionInfo::RegionType::FROM_REGION,
+                                             RegionInfo::RegionType::LONE_FROM_REGION);
+        owner->set_in_place();
+        CompactRegion(region);
+    } else {
+        ForwardRegion<G>(region);
+    }
 #if defined(MRT_TESTABLE_INTERNALS)
     RunRemapWindowTestHook(12, region, nullptr);
 #endif
@@ -2327,7 +2144,6 @@ void ForEachLiveObjectStart(RegionInfo* region, MAddress start, MAddress allocPt
             break;
         }
         if (region->IsOwnerSurvivedObject(offset)) {
-            region->RecordRouteStart(offset);
             fn(object, offset);
         }
         offset += size;
@@ -2339,7 +2155,7 @@ void ForEachLiveObjectStart(RegionInfo* region, MAddress start, MAddress allocPt
 // geometry are not receipts: kept/in-place survivors must have an explicit
 // from->from entry in the same active/retired table. Keep this check at the
 // producer boundary so a receipt-less publication fails loudly.
-bool VerifyForwardingReceiptsClosed(RegionInfo* region, const char* site)
+bool VerifyRelocatedPage(RegionInfo* region, const char* site)
 {
     // zRelocate.cpp:1006: verify before MarkForwardingDone/reset releases the
     // source livemap. ForwardRegion's outer return is too late for this check.
@@ -2349,51 +2165,7 @@ bool VerifyForwardingReceiptsClosed(RegionInfo* region, const char* site)
         forwarding->verify();
     }
 
-    if (region == nullptr || !region->IsGhostFromRegion()) {
-        return true;
-    }
-    const RegionInfo::RouteStartTable* starts = region->LoadRouteStartTable();
-    if (starts == nullptr) {
-        CHECK_DETAIL(!region->HasFromPageMetadata(),
-                     "%s missing exact-start set before forwarding done region=%p", site, region);
-        return true;
-    }
-    const MAddress start = region->GetRegionStart();
-    const MAddress regionEnd = region->GetRegionEnd();
-    ZForwarding* active = ForwardingTable::RetainPageOwner(region).get();
-    const ZForwarding::FromPageView* fromPage = active == nullptr ? nullptr : active->from_page_snapshot();
-    const MAddress frozenTop = fromPage == nullptr ? regionEnd : fromPage->topAtStart;
-    size_t survivors = 0;
-    size_t receipts = 0;
-    for (const auto& entry : *starts) {
-        const size_t offset = entry.first;
-        // After CompactRegion the bump pointer is the packed top, not the
-        // original from-range. Exact starts are from-offsets; bound by the
-        // region, not the post-compact allocPtr.
-        if (entry.second == 0 || frozenTop < start ||
-            offset >= static_cast<size_t>(frozenTop - start)) {
-            continue;
-        }
-        ++survivors;
-        const MAddress from = start + offset;
-        const ForwardingTable::LookupResult lookup = ForwardingTable::LookupForwarding(from, ForwardingTable::RetainPageOwner(region).get());
-        const bool hit = lookup.to != 0 &&
-            lookup.answer == ForwardingTable::ToAnswer::ArmedHit;
-        CHECK_DETAIL(hit,
-                     "%s receipt gap region=%p exactStart=%#zx answer=%u route=%u fwdDone=%u refs=%d copy=%d",
-                     site, region, static_cast<size_t>(from), static_cast<unsigned>(lookup.answer),
-                     static_cast<unsigned>(region->RelocateObserve()),
-                     static_cast<unsigned>(region->IsForwardingDone()), region->ForwardingRefCount(),
-                      region->CopyInflightWord());
-        if (hit) {
-            ++receipts;
-        }
-    }
-    CHECK_DETAIL(receipts == survivors,
-                 "%s receipt count mismatch region=%p survivors=%zu receipts=%zu route=%u fwdDone=%u refs=%d copy=%d",
-                 site, region, survivors, receipts, static_cast<unsigned>(region->RelocateObserve()),
-                 static_cast<unsigned>(region->IsForwardingDone()), region->ForwardingRefCount(),
-                  region->CopyInflightWord());
+
     return true;
 }
 } // namespace
@@ -2591,10 +2363,11 @@ bool RegionManager::RelocateClaimedPage(RegionInfo* region)
         }
     });
     if (allocFailed) {
+        ForwardingTable::RetainPageOwner(region)->set_in_place();
         CompactRegion(region);
         return false;
     }
-    VerifyForwardingReceiptsClosed(region, "RelocateClaimedPage");
+    VerifyRelocatedPage(region, "RelocateClaimedPage");
     return true;
 }
 
@@ -2610,6 +2383,9 @@ void RegionManager::CompactRegion(RegionInfo* region)
     RunRemapWindowTestHook(9, region, nullptr);
 #endif
 
+    const bool fromYoung = region->IsYoungRegion();
+    const PageAge fromAge = fromYoung ? to_pageage(region->GetYoungAge()) : PageAge::old;
+    const PageAge toAge = ComputeToAge(fromAge, Heap::GetHeap().GetCollector().GetGCStats().tenuringThreshold);
     MAddress regionStart = region->GetRegionStart();
     DLOG(REGION, "compact region %p@[%#zx+%zu, %#zx) type %u", region, regionStart,
         region->GetLiveByteCount(), region->GetRegionEnd(), region->GetRegionType());
@@ -2620,8 +2396,6 @@ void RegionManager::CompactRegion(RegionInfo* region)
                  "compact forwarding table unavailable before copy region=%p range=[%#zx,%#zx)",
                  region, static_cast<size_t>(regionStart), static_cast<size_t>(region->GetRegionEnd()));
     CopyCollector& collector = reinterpret_cast<CopyCollector&>(Heap::GetHeap().GetCollector());
-    region->FreeCompactRouteTable();
-    region->EnsureCompactRouteTable();
     region->SetRegionAllocPtr(regionStart);
     // ZGC zRelocate.cpp:838-861 start_in_place_relocation_prepare_remset: this page is its own
     // to-page, so its old remembered-set bits have to leave the face before the copy walk starts
@@ -2630,6 +2404,20 @@ void RegionManager::CompactRegion(RegionInfo* region)
     RememberedSet& rememberedSet = Heap::GetHeap().GetRememberedSet();
     std::vector<RememberedSet::InPlaceSlot> takenSlots;
     rememberedSet.TakeInPlaceSlots(regionStart, region->GetRegionEnd(), takenSlots);
+    // ZGC zRelocate.cpp:862-896: establish the to-page age before publishing
+    // any in-place forwarding entry. The descriptor stays in the page table,
+    // so promotion publishes its old identity here. PublishFromPageMetadata
+    // already saved the source generation, livemap and allocation watermark in
+    // the forwarding carrier; ForEachLiveObjectStart consumes that snapshot,
+    // not the new destination LiveInfo allocated by PromoteYoungRegion.
+    if (fromYoung) {
+        if (toAge == PageAge::old) {
+            MarkView<Generation::Young> view = region->GetMarkView<Generation::Young>();
+            (void)region->PromoteYoungRegion(view);
+        } else {
+            region->SetYoungAge(untype(toAge));
+        }
+    }
     ForEachLiveObjectStart(region, regionStart, regionLimit, [&](BaseObject* currentObj, size_t offset) {
         const MAddress currentPtr = regionStart + offset;
         if (ForwardingTable::LookupForwarding(currentPtr, ForwardingTable::RetainPageOwner(region).get()).to) {
@@ -2644,12 +2432,11 @@ void RegionManager::CompactRegion(RegionInfo* region)
         std::atomic_thread_fence(std::memory_order_release);
         const MAddress receipt = ForwardingTable::InsertMapping(publication, currentPtr, toAddress);
 
-        region->RecordCompactRoute(offset, toAddress);
         // ZGC zRelocate.cpp:652-731 update_remset_old_to_old: the bits covering the from copy
         // name field offsets inside this object, so they follow it to its new address.
-        if (region->IsYoungRegion()) {
+        if (fromYoung && toAge == PageAge::old) {
             RememberPromotedObject(toObj);
-        } else {
+        } else if (!fromYoung) {
             rememberedSet.MoveInPlaceSlots(takenSlots, currentPtr, toAddress, size);
         }
     });
@@ -2658,17 +2445,12 @@ void RegionManager::CompactRegion(RegionInfo* region)
     if (regionLimit > cur) {
         size_t reclaimSize = regionLimit - cur;
         TraceClear::NoteRange(cur, reclaimSize, "compact", region, region->GetLiveByteCount());
-        if (!TraceClear::SkipCompactMemset()) {
-            FillerZeroDiag::Note(FillerZeroDiag::Site::COMPACT, cur, reclaimSize);
-            HeapFiller::ZeroAndFill(cur, reclaimSize);
-        } else {
-            VLOG(REPORT, "[GCV2][block] skip compact memset range=[%#zx,%#zx) env=MRT_GCV2_SKIP_COMPACT_MEMSET=1",
-                 static_cast<size_t>(cur), static_cast<size_t>(regionLimit));
-        }
+        FillerZeroDiag::Note(FillerZeroDiag::Site::COMPACT, cur, reclaimSize);
+        HeapFiller::ZeroAndFill(cur, reclaimSize);
     }
 
     region->ResetCensusBoundary();
-    VerifyForwardingReceiptsClosed(region, "CompactRegion.whole");
+    VerifyRelocatedPage(region, "CompactRegion.whole");
     WaitCopiedObjectsUnlocked(region);
     region->MarkForwardingDone();
 #if defined(MRT_TESTABLE_INTERNALS)
@@ -2755,88 +2537,7 @@ void RegionManager::RehomeCompactedInPlaceRegion(RegionInfo* region)
     RecentFullAccounting::Enqueue(1, region->GetUnitCount());
 }
 
-void RegionManager::CompactRegion(RegionInfo* region, RegionInfo* toRegion1)
-{
-    auto owner = ForwardingTable::RetainPageOwner(region);
-    ZForwardingLife::PageWorkScope work(owner.get(),
-        owner && ZForwardingLife::CurrentPageWork() != owner.get());
-    if (owner && owner->ref_count().load(std::memory_order_acquire) > 0) {
-        owner->in_place_relocation_claim_page();
-    }
-#if defined(MRT_TESTABLE_INTERNALS)
-    RunRemapWindowTestHook(9, region, nullptr);
-#endif
 
-    MAddress regionStart = region->GetRegionStart();
-    DLOG(REGION, "compact region %p@[%#zx+%zu, %#zx) type %u to region %p@%#zx:%#zx",
-        region, regionStart, region->GetLiveByteCount(), region->GetRegionEnd(), region->GetRegionType(),
-        toRegion1, toRegion1->GetRegionStart(), toRegion1->GetRegionAllocPtr());
-    ForwardingTable::Publication publication =
-        ForwardingTable::EnsurePublicationBeforeCopy(region, regionStart);
-    CHECK_DETAIL(static_cast<bool>(publication),
-                 "partial compact forwarding table unavailable before copy region=%p range=[%#zx,%#zx)",
-                 region, static_cast<size_t>(regionStart), static_cast<size_t>(region->GetRegionEnd()));
-    CopyCollector& collector = reinterpret_cast<CopyCollector&>(Heap::GetHeap().GetCollector());
-    MAddress regionLimit = region->GetRegionAllocPtr();
-    region->FreeCompactRouteTable();
-    region->EnsureCompactRouteTable();
-    region->SetRegionAllocPtr(regionStart);
-    // zRelocate.cpp:838-861, as in the whole-page arm above.
-    RememberedSet& rememberedSet = Heap::GetHeap().GetRememberedSet();
-    std::vector<RememberedSet::InPlaceSlot> takenSlots;
-    rememberedSet.TakeInPlaceSlots(regionStart, region->GetRegionEnd(), takenSlots);
-    ForEachLiveObjectStart(region, regionStart, regionLimit, [&](BaseObject* currentObj, size_t offset) {
-        const MAddress currentPtr = regionStart + offset;
-        if (ForwardingTable::LookupForwarding(currentPtr, ForwardingTable::RetainPageOwner(region).get()).to) {
-            return;
-        }
-        size_t size = currentObj->GetSize();
-        MAddress toAddress = toRegion1->Alloc(size);
-        if (toAddress == 0) {
-            toAddress = region->Alloc(size);
-        }
-        BaseObject* toObj = from_region_addr(toAddress);
-        DLOG(FORWARD, "compact obj %p<%p>(%zu) to %p", currentObj, currentObj->GetTypeInfo(), size, toObj);
-        collector.CopyObject(*currentObj, *toObj, size);
-        toObj->SetStateCode(ObjectState::NORMAL);
-        std::atomic_thread_fence(std::memory_order_release);
-        const MAddress receipt = ForwardingTable::InsertMapping(publication, currentPtr, toAddress);
-
-        region->RecordCompactRoute(offset, toAddress);
-        // zRelocate.cpp:652-731, as in the whole-page arm above.  toAddress may be in toRegion1,
-        // which is what ZGC means by "even with in-place relocation, the to_page could be another
-        // page" (zRelocate.cpp:666-667).
-        if (region->IsYoungRegion()) {
-            RememberPromotedObject(toObj);
-        } else {
-            rememberedSet.MoveInPlaceSlots(takenSlots, currentPtr, toAddress, size);
-        }
-    });
-
-    // clear unused space which is free after compaction.
-    MAddress cur = region->GetRegionAllocPtr();
-    if (regionLimit > cur) {
-        size_t reclaimSize = regionLimit - cur;
-        TraceClear::NoteRange(cur, reclaimSize, "compact_partial", region, region->GetLiveByteCount());
-        if (!TraceClear::SkipCompactMemset()) {
-            FillerZeroDiag::Note(FillerZeroDiag::Site::COMPACT_PARTIAL, cur, reclaimSize);
-            HeapFiller::ZeroAndFill(cur, reclaimSize);
-        } else {
-            VLOG(REPORT, "[GCV2][block] skip compact_partial memset range=[%#zx,%#zx) env=MRT_GCV2_SKIP_COMPACT_MEMSET=1",
-                 static_cast<size_t>(cur), static_cast<size_t>(regionLimit));
-        }
-    }
-
-    region->ResetCensusBoundary();
-    VerifyForwardingReceiptsClosed(region, "CompactRegion.partial");
-    WaitCopiedObjectsUnlocked(region);
-    region->MarkForwardingDone();
-#if defined(MRT_TESTABLE_INTERNALS)
-    RunRemapWindowTestHook(11, region, nullptr);
-#endif
-
-    RehomeCompactedInPlaceRegion(region);
-}
 
 namespace {
 bool StayYoungThisCycle(RegionInfo* region)
@@ -2864,7 +2565,7 @@ void RegionManager::FinishStayYoungInPlace(RegionInfo* region, bool advanceAge)
         BumpYoungSurvivorAge(region);
     }
     WaitCopiedObjectsUnlocked(region);
-    VerifyForwardingReceiptsClosed(region, "FinishStayYoungInPlace");
+    VerifyRelocatedPage(region, "FinishStayYoungInPlace");
 #if defined(MRT_TESTABLE_INTERNALS)
     // zRelocate.cpp:1137-1153: the real producer has published its receipts;
     // pause before done so a waiting mutator can consume that exact state.
@@ -3018,12 +2719,7 @@ void RegionManager::ForwardRegion(RegionInfo* region)
         }
     }
 
-    const bool stayYoung = youngRegion && StayYoungThisCycle(region);
-    if (stayYoung || !RouteRegion(region)) {
-        if (youngRegion && stayYoung) {
-            EnlistStayYoungSurvivor(region);
-            return;
-        }
+    if (!RelocateClaimedPage(region)) {
         // In-place relocation that copied nothing leaves the alloc pointer back at the
         // region start, so the size-walk over [start, start) is empty (RegionManager.cpp:
         // 665-668): the page holds no object to promote, no field to record an edge for and
@@ -3063,180 +2759,28 @@ void RegionManager::ForwardRegion(RegionInfo* region)
             CollectRegion<G>(region);
             return;
         }
-        if (youngRegion) {
-            MarkView<Generation::Young> promotionView = region->GetMarkView<Generation::Young>();
-            // In-place relocation already visited each destination object.
-            // Only a page promoted without compaction needs the later page task.
-            auto forwarding = ForwardingTable::RetainPageOwner(region);
-            if (!forwarding || !forwarding->in_place()) {
-                region->PreserveRetainedLiveInfo();
-                AddFlipPromotedPage(region);
-            }
-            (void)region->PromoteYoungRegion(promotionView);
-        }
+        // ZGC zRelocate.cpp:868-896: in-place relocation uses one destination
+        // age for both the page and its remembered fields. CompactRegion already
+        // applied that age and remembered promoted objects, for workers and root
+        // helpers alike. A surviving young page must keep that result here.
         return;
     }
 
     int32_t rawPointerCount = region->GetRawPointerObjectCount();
     CHECK(rawPointerCount == 0);
-    Collector& collector = Heap::GetHeap().GetCollector();
-    RememberedSet& rememberedSet = Heap::GetHeap().GetRememberedSet();
-    size_t oldObjForwarded = 0;
-    size_t o2yOnToForOld = 0;
-    size_t recordedOnToForOld = 0;
-    bool forwarded = region->VisitLiveObjectsUntilFalse(
-        [&collector, region, youngRegion, &rememberedSet, &oldObjForwarded,
-         &o2yOnToForOld, &recordedOnToForOld](BaseObject* obj) {
-            BaseObject* toObj = collector.ForwardObject(obj,
-                static_cast<Generation>(ForwardingTable::RetainPageOwner(region)->table_generation()));
-            // Remset slots must address the surviving (to-space) holder, not the from copy
-            // that CollectRegion is about to reclaim.
-            //
-            // Young: re-scan to-object and Record O→Y slots (promotion).
-            // Old→old: ZGC update_remset_old_to_old — TransferObjectSlots moves existing
-            // remset bits by field offset (zRelocate.cpp:652-731). From bits are scrubbed
-            // later by CollectRegion → ClearRegion (no in-place overlap on this path:
-            // RouteObject always mints a distinct to address).
-
-            if (youngRegion && toObj != nullptr) {
-                RememberPromotedObject(toObj);
-            } else if (!youngRegion && toObj != nullptr && toObj != obj && obj->IsForwarded()) {
-                if (!Collector::PlausibleManagedObjectGate("ForwardRegion.to", toObj)) {
-                    NoteFwdToGateRefuse("old", toObj);
-                } else {
-                size_t sz = RegionSpace::GetAllocSize(*obj);
-                MAddress fromBase = reinterpret_cast<MAddress>(obj);
-                MAddress toBase = reinterpret_cast<MAddress>(toObj);
-                ZForwarding* forwarding = ForwardingTable::GetCovering(fromBase, Generation::Old);
-                size_t moved = rememberedSet.TransferObjectSlots(fromBase, toBase, sz, forwarding);
-                recordedOnToForOld += moved;
-
-                }
-            }
-            // tipnull arm R: receipt = object FORWARDED (Copy wrote tip), not soft-keep from.
-            return obj->IsForwarded();
-        });
+    // RelocateClaimedPage already copied each object and called
+    // UpdateRemsetForFields for the CAS winner; do not repeat either walk.
     if (!youngRegion) {
         if (ZForwarding* forwarding = ForwardingTable::GetCovering(region->GetRegionStart(), Generation::Old)) {
             forwarding->relocated_remembered_fields_after_relocate();
         }
     }
 
-    // tipnull v5 full coverage: FORWARDED only if every liveInfo0 *live bit* is covered by
-    // a size-walk start that is object-FORWARDED (Copy wrote tip). Prior allSurvivorsForwarded
-    // only checked size-walk starts; multi-bit MarkBits interiors/orphans still Admitted
-    // without ever being Copy'd → region_FORWARDED_tip_null (arm R refuse=0).
-    // Incomplete: DispelGhost (no geometric plan) + Exempt — never FORWARDED empty, never
-    // ROUTED forever (TIMEOUT), never soft-null after Collect (SEGV si_addr=0x8).
-    auto allLiveBitsHaveReceipt = [region]() -> bool {
-        auto survivedAt = [region](size_t offset) -> bool { return region->IsOwnerSurvivedObject(offset); };
-        if (region->IsLargeRegion()) {
-            if (!survivedAt(0)) {
-                return true;
-            }
-            BaseObject* o = from_region_addr(region->GetRegionStart());
-            if (!Collector::PlausibleManagedObjectGate("ForwardRegion-complete", o)) {
-                return false;
-            }
-            return o->IsForwarded();
-        }
-        if (!region->IsSmallRegion()) {
-            return true;
-        }
-        uintptr_t regionStart = region->GetRegionStart();
-        uintptr_t allocPtr = region->GetRegionAllocPtr();
-        size_t regionBytes = allocPtr > regionStart ? (allocPtr - regionStart) : 0;
-        // Pass 1: size-walk starts that are survived must be object-FORWARDED.
-        uintptr_t position = regionStart;
-        while (position < allocPtr) {
-            BaseObject* o = from_region_addr(position);
-            size_t offset = position - regionStart;
-            if (!Collector::PlausibleManagedObjectGate("ForwardRegion-complete", o)) {
-                // Cannot walk further; any later survived bit is uncovered → fail.
-                for (size_t rest = offset; rest < regionBytes; rest += kMarkedBytesPerBit) {
-                    if (survivedAt(rest)) {
-                        return false;
-                    }
-                }
-                return true;
-            }
-            size_t allocSize = RegionSpace::GetAllocSize(*o);
-            if (allocSize == 0) {
-                return false;
-            }
-            if (survivedAt(offset) && !o->IsForwarded()) {
-                return false;
-            }
-            position += allocSize;
-        }
-        // Pass 2: every survived 8B bit must lie in some size-walk object whose start
-        // is object-FORWARDED (covers multi-bit interiors of densify MarkBits ranges).
-        // Orphans (survived bit not inside any size-walk object) ⇒ fail.
-        position = regionStart;
-        size_t walkOff = 0;
-        while (position < allocPtr) {
-            BaseObject* o = from_region_addr(position);
-            if (!Collector::PlausibleManagedObjectGate("ForwardRegion-cover", o)) {
-                break;
-            }
-            size_t allocSize = RegionSpace::GetAllocSize(*o);
-            if (allocSize == 0) {
-                break;
-            }
-            bool startFwd = o->IsForwarded();
-            for (size_t d = 0; d < allocSize; d += kMarkedBytesPerBit) {
-                size_t bitOff = walkOff + d;
-                if (survivedAt(bitOff) && !startFwd) {
-                    return false;
-                }
-            }
-            position += allocSize;
-            walkOff += allocSize;
-        }
-        // Bits past last walkable object must not be survived (orphans / unwalkable tail).
-        for (size_t rest = walkOff; rest < regionBytes; rest += kMarkedBytesPerBit) {
-            if (survivedAt(rest)) {
-                return false;
-            }
-        }
-        return true;
-    };
-
-    if (!forwarded || !allLiveBitsHaveReceipt()) {
-        forwarded = region->VisitLiveObjectsUntilFalse([&collector, region](BaseObject* obj) {
-            if (obj->IsForwarded()) {
-                return true;
-            }
-            (void)collector.ForwardObject(obj,
-                static_cast<Generation>(ForwardingTable::RetainPageOwner(region)->table_generation()));
-            return obj->IsForwarded();
-        });
-    }
-
-    if (!forwarded || !allLiveBitsHaveReceipt()) {
-        if (youngRegion && StayYoungThisCycle(region)) {
-            EnlistStayYoungSurvivor(region);
-            return;
-        }
-        if (youngRegion) {
-            MarkView<Generation::Young> promotionView = region->GetMarkView<Generation::Young>();
-            // Flip-promoted pages are registered here and walked once by the
-            // post-relocation discharge (zRelocate.cpp:1289-1306).
-            region->PreserveRetainedLiveInfo();
-            AddFlipPromotedPage(region);
-            (void)region->PromoteYoungRegion(promotionView);
-        }
-        // Complete the ZGC in-place shape first: Exempt publishes an identity
-        // receipt for every kept object, then Dispel may retire the route.
-        ExemptFromRegion(region);
-        region->DispelGhostFromRegion();
-        return;
-    }
     {
         // zRelocate.cpp:1137-1152: the page worker finishes objects then
         // mark_done last (ForwardClaimedPage). Do not wait for own done here.
         // zRelocate.cpp:1152 — last act after every object on the page is relocated.
-        VerifyForwardingReceiptsClosed(region, "ForwardRegion");
+        VerifyRelocatedPage(region, "ForwardRegion");
         region->MarkForwardingDone();
         // livesame ORDER + ZGC reset_livemap (zForwarding.cpp:71-74): one publish for
         // live bytes + mark face (ResetLiveMapAfterForward).
@@ -3273,8 +2817,8 @@ template void RegionManager::StartForwardFromRegions<Generation::Young>(GCWorker
 template void RegionManager::StartForwardFromRegions<Generation::Old>(GCWorkers&);
 template void RegionManager::DrainForwardFromRegions<Generation::Young>();
 template void RegionManager::DrainForwardFromRegions<Generation::Old>();
-template void RegionManager::ForwardClaimedPage<Generation::Young>(RegionInfo*, ForwardingTable::Owner, bool);
-template void RegionManager::ForwardClaimedPage<Generation::Old>(RegionInfo*, ForwardingTable::Owner, bool);
+template void RegionManager::ForwardClaimedPage<Generation::Young>(RegionInfo*, ForwardingTable::Owner, bool, bool);
+template void RegionManager::ForwardClaimedPage<Generation::Old>(RegionInfo*, ForwardingTable::Owner, bool, bool);
 template void RegionManager::ForwardRegion<Generation::Young>(RegionInfo*);
 template void RegionManager::ForwardRegion<Generation::Old>(RegionInfo*);
 

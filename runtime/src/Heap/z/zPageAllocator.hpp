@@ -366,7 +366,6 @@ private:
 #include "Base/Log.h"
 #include "Common/BaseObject.h"
 #include "Common/ColourEncoding.h"
-#include "Heap/Allocator/RoutePublish.h"
 #include "Common/RunType.h"
 
 #include "Heap/z/zRangeRegistry.hpp"
@@ -402,11 +401,9 @@ struct YoungCollectionStats {
     size_t unmovableVisited = 0;
     size_t unmovableVisitedUnits = 0;
     size_t unmovableYoung = 0;
-    size_t unmovableHeld = 0;
     size_t recentFullVisited = 0;
     size_t recentFullVisitedUnits = 0;
     size_t recentFullYoung = 0;
-    size_t recentFullHeld = 0;
     size_t clearLiveRegions = 0;
     size_t clearLiveUnits = 0;
     size_t objectVisits = 0;
@@ -414,7 +411,6 @@ struct YoungCollectionStats {
     uint64_t reparkNs = 0;
     uint64_t unmovableNs = 0;
     uint64_t recentFullNs = 0;
-    uint64_t holdCheckNs = 0;
     uint64_t clearLiveNs = 0;
     uint64_t visitorNs = 0;
     uint64_t listMoveNs = 0;
@@ -558,7 +554,8 @@ public:
     MRT_EXPORT size_t FailedStalledAllocations() const;
 #endif
     template<Generation G>
-    void ForwardClaimedPage(RegionInfo* region, ForwardingTable::Owner owner, bool claimed = false);
+    void ForwardClaimedPage(RegionInfo* region, ForwardingTable::Owner owner, bool claimed = false,
+                            bool inPlace = false);
     template<Generation G>
     void StartForwardFromRegions(GCWorkers& workers);
     template<Generation G>
@@ -578,7 +575,6 @@ public:
     // will find it; CompactRegion leaves it on tlRegionList, which no builder walks.
     void RehomeCompactedInPlaceRegion(RegionInfo* region);
     void CompactRegion(RegionInfo* region);
-    void CompactRegion(RegionInfo* region, RegionInfo* toRegion1);
 
     void ExemptFromRegion(RegionInfo* region);
     // Rehome onto unmovableFrom without publishing kept. PrepareYoung parks
@@ -757,18 +753,12 @@ public:
     // twoflags: walk live region lists and clear notRelocatableThisCycle.
     void ClearNotRelocatableThisCycleFlags();
 
-    // routedest: walk the same lists and drop routeDestHold for one route generation.
-    void ClearRouteDestHoldFlags();
 
     bool RelocateClaimedPage(RegionInfo* region);
 
-    static bool RouteIsPublished(BaseObject* fromObj, RegionInfo* fromRegionInfo);
 
-    PublishedRoute FindPublishedRoute(BaseObject* fromObj, RegionInfo* fromRegionInfo);
 
-    PublishedRoute FindPublishedRoute(BaseObject* fromObj);
 
-    bool RouteRegion(RegionInfo* fromRegionInfo, bool mayWait = true);
 
     template<Generation G>
     void PrepareFromRegionList();
@@ -795,9 +785,7 @@ private:
     void ReleaseRetiredRegion(RegionInfo* region);
     void ReturnRetiredPageMemory(const PageMemory& memory, bool allowSaferegion = true);
 
-    BaseObject* ComputeRoute(BaseObject* fromObj, RegionInfo* fromRegionInfo);
 
-    BaseObject* ComputeRouteBorrowed(BaseObject* fromObj, RegionInfo* fromRegionInfo);
 
     RegionInfo* TakeReclaimableGarbageRegion(size_t* gatedBytes = nullptr);
 

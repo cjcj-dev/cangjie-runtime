@@ -142,7 +142,6 @@ public:
     explicit ForwardTable(RegionSpace& space) : theSpace(space) {}
 
     // if region is compacted, return false.
-    bool RouteRegion(RegionInfo* region) { return theSpace.GetRegionManager().RouteRegion(region); }
 
     template<Generation G>
     void PrepareForwardTable()
@@ -183,21 +182,7 @@ public:
 
     // Controlled test wrapper for the copier route consumer. It keeps the
     // consumer's preconditions visible (heap address, relocation phase and
-    // read retain) while using the same CopierRouteToken mint as production.
-    struct RouteLookupTestResult {
-        RoutePlan plan{};
-        bool phaseAllowed = false;
-        bool heapAddress = false;
-        bool retained = false;
-        bool gatePassed = false;
-        bool receiptChecked = false;
-        bool compactedChecked = false;
-        bool routeRegionCalled = false;
-        bool routeRegion = false;
-        bool retainedPhaseAllowed = false;
-        bool hookReached = false;
-    };
-    MRT_EXPORT RouteLookupTestResult RouteLookupForTest(BaseObject* fromObj);
+
 #endif
 
     void MarkNewObject(BaseObject* obj) override;
@@ -608,35 +593,9 @@ public:
 
     BaseObject* GetForwardPointer(BaseObject* fromObj, RegionInfo* region) const
     {
-        const MAddress fromAddr = reinterpret_cast<MAddress>(fromObj);
-        BaseObject* to = nullptr;
-        if constexpr (ForwardingTable::kEntriesSoleWhenArmed) {
-            if (auto owner = ForwardingTable::RetainPageOwner(region)) {
-                const MAddress stored = owner->find(fromAddr);
-                to = stored == 0 ? nullptr : reinterpret_cast<BaseObject*>(stored);
-                if (ToHeaderCovered(to)) {
-                    return to;
-                }
-                if (!fromObj->IsForwarded()) {
-                    return nullptr;
-                }
-            }
-        }
-        RegionSpace& space = reinterpret_cast<RegionSpace&>(theAllocator);
-        to = space.GetRegionManager().FindPublishedRoute(fromObj, region).dest;
-        if (!fromObj->IsForwarded() || !ToHeaderCovered(to) ||
-            !ZForwarding::DestUsable(reinterpret_cast<MAddress>(to))) {
-            return nullptr;
-        }
-        ForwardingTable::Publication publication =
-            ForwardingTable::RetainOpenPublicationAfterCopy(region, fromAddr);
-        if (!publication) {
-            return nullptr;
-        }
-        const MAddress receipt = ForwardingTable::InsertMapping(
-            publication, fromAddr, reinterpret_cast<MAddress>(to));
-
-        return reinterpret_cast<BaseObject*>(receipt);
+        // ZRelocate::forward_object consumes only the installed CAS winner.
+        auto owner = ForwardingTable::RetainPageOwner(region);
+        return owner ? reinterpret_cast<BaseObject*>(owner->find(reinterpret_cast<MAddress>(fromObj))) : nullptr;
     }
 
     // Refuses a non-heap address the way FindToVersion does below, and for the same reason:
@@ -660,134 +619,12 @@ public:
     // population was the old-tag paths rather than one call site.
     FindToVersionResult FindToVersion(BaseObject* obj, Generation generation) const override
     {
-        // Mirror IsGhostFromObject: GetGhostFromRegionAt → GetUnitIdxAt has no heap range
-        // check, so null / non-heap (incl. colour-only null after flip) aborts as
-        // "GetUnitIdxAt OOB addr=0".
-        // nullptr here is dual: non-heap/null gate OR unpublished / no to-version.
-        // Soft-resolve paths must not CAS-null on the non-heap reading (RO static).
         if (obj == nullptr || !Heap::IsHeapAddress(obj)) {
             return FindToVersionResult::NotManaged();
         }
-        const MAddress fromAddr = reinterpret_cast<MAddress>(obj);
-        const auto answerName = [](ForwardingTable::ToAnswer answer) -> const char* {
-            switch (answer) {
-                case ForwardingTable::ToAnswer::ArmedHit:
-                    return "armed_hit";
-                case ForwardingTable::ToAnswer::ArmedMiss:
-                    return "armed_miss";
-                case ForwardingTable::ToAnswer::Unarmed:
-                    return "unarmed";
-            }
-            return "unknown";
-        };
-        ForwardingTable::LookupResult lookup{};
-        bool lookupQueried = false;
-        const auto populateDiagnosticSnapshot = [&](FindToVersionResult::UnavailableWitness& witness) {
-            RegionInfo* region = RegionInfo::TryGetRegionInfoAt(fromAddr);
-            witness.from = fromAddr;
-            witness.fromRegion = reinterpret_cast<uintptr_t>(region);
-            witness.regionSnapshotValid = region != nullptr;
-            if (region != nullptr) {
-                witness.regionType = static_cast<uint8_t>(region->GetRegionType());
-                witness.generation = static_cast<uint8_t>(region->generation_id());
-            }
-            witness.inCurrentRelocationSet = lookupQueried && lookup.currentMembership;
-            witness.tableId = lookupQueried ? lookup.tableId : 0;
-            witness.fromPageEpoch = lookupQueried ? lookup.fromPageEpoch : 0;
-            witness.fromPageLifeId = lookupQueried ? lookup.fromPageLifeId : 0;
-            witness.forwardingSnapshotValid = lookupQueried && lookup.forwardingSnapshotValid;
-            witness.gcPhase = static_cast<uint8_t>(GetGCPhase());
-        };
-        const auto unavailable = [&](FindToVersionResult::UnavailableRoute route, bool forwardedValid,
-                                     bool forwarded, bool fromRegionInfoNullValid,
-                                     bool fromRegionInfoNull) -> FindToVersionResult {
-            FindToVersionResult::UnavailableWitness witness;
-            witness.forwardedValid = forwardedValid;
-            witness.forwarded = forwarded;
-            witness.fromRegionInfoNullValid = fromRegionInfoNullValid;
-            witness.fromRegionInfoNull = fromRegionInfoNull;
-            populateDiagnosticSnapshot(witness);
-            // All lookup fields are a single snapshot.  When LookupTo was not
-            // reached (the legacy compile-time route), leave the snapshot
-            // invalid so consumers print n/a instead of defaults.
-            witness.lookupSnapshotValid = lookupQueried;
-            if (lookupQueried) {
-                witness.lookupAnswer = answerName(lookup.answer);
-                witness.lookupActiveCandidate = lookup.activeCandidate;
-                witness.lookupActiveAnswer = answerName(lookup.activeAnswer);
-            }
-            return FindToVersionResult::Unavailable(route, witness);
-        };
-        BaseObject* stored = nullptr;
-        if constexpr (ForwardingTable::kConsumeEntries) {
-            lookup = ForwardingTable::LookupTo(fromAddr, generation);
-            lookupQueried = true;
-            if (lookup.to != 0) {
-                stored = reinterpret_cast<BaseObject*>(lookup.to);
-            }
-            if constexpr (ForwardingTable::kEntriesSoleWhenArmed) {
-                if (lookup.answer == ForwardingTable::ToAnswer::ArmedHit) {
-                    return ToHeaderCovered(stored) ? FindToVersionResult::Found(stored)
-                                                  : FindToVersionResult::NotForwarded();
-                }
-                if (lookup.answer == ForwardingTable::ToAnswer::ArmedMiss && !obj->IsForwarded()) {
-                    return FindToVersionResult::NotForwarded();
-                }
-            }
-        }
-        if (stored != nullptr && !ToHeaderCovered(stored)) {
-            stored = nullptr;
-        }
-        RegionInfo* fromRegionInfo = RegionInfo::GetGhostFromRegionAt(fromAddr);
-        if (fromRegionInfo == nullptr) {
-            if (stored != nullptr) {
-                return FindToVersionResult::Found(stored);
-            }
-            const bool forwarded = obj->IsForwarded();
-            return forwarded
-                ? unavailable(FindToVersionResult::UnavailableRoute::NoGhostForwarded,
-                              true, forwarded, true, true)
-                : FindToVersionResult::NotForwarded();
-        }
-        RegionSpace& space = reinterpret_cast<RegionSpace&>(theAllocator);
-        BaseObject* geometric = space.GetRegionManager().FindPublishedRoute(obj).dest;
-        if (geometric != nullptr) {
-        }
-        if (geometric != nullptr && ZForwarding::DestUsable(reinterpret_cast<MAddress>(geometric)) &&
-            ToHeaderCovered(geometric)) {
-            if (stored == nullptr) {
-                ForwardingTable::Publication publication =
-                    ForwardingTable::RetainOpenPublicationAfterCopy(fromRegionInfo, fromAddr);
-                if (!publication) {
-                    return unavailable(
-                        FindToVersionResult::UnavailableRoute::PublicationRetainFailed,
-                        false, false, true, false);
-                }
-                const MAddress receipt = ForwardingTable::InsertMapping(
-                    publication, fromAddr, reinterpret_cast<MAddress>(geometric));
-
-                geometric = reinterpret_cast<BaseObject*>(receipt);
-            }
-            return FindToVersionResult::Found(geometric);
-        }
-        if constexpr (ForwardingTable::kConsumeEntries) {
-            if (stored != nullptr) {
-                return FindToVersionResult::Found(stored);
-            }
-            const bool forwarded = obj->IsForwarded();
-            return forwarded
-                ? unavailable(FindToVersionResult::UnavailableRoute::GeometricMissForwarded,
-                              true, forwarded, true, false)
-                : FindToVersionResult::NotForwarded();
-        }
-        if (geometric != nullptr && ToHeaderCovered(geometric)) {
-            return FindToVersionResult::Found(geometric);
-        }
-        const bool forwarded = obj->IsForwarded();
-        return forwarded
-            ? unavailable(FindToVersionResult::UnavailableRoute::LegacyGeometricMiss,
-                          true, forwarded, true, false)
-            : FindToVersionResult::NotForwarded();
+        const auto lookup = ForwardingTable::LookupTo(reinterpret_cast<MAddress>(obj), generation);
+        return lookup.to != 0 ? FindToVersionResult::Found(reinterpret_cast<BaseObject*>(lookup.to))
+                              : FindToVersionResult::NotForwarded();
     }
 
 protected:
@@ -797,9 +634,8 @@ protected:
                                   const RegionInfo::RetainScope& lease);
     // zRelocate.cpp:354-379 relocate_object_inner: find hit → return; else
     // alloc (or reuse a prepared dest) → copy → insert; CAS loser uses winner.
-    BaseObject* RelocateObjectInner(BaseObject* obj, BaseObject* planned, RegionInfo* copyPage);
+    BaseObject* RelocateObjectInner(BaseObject* obj, RegionInfo* copyPage);
     void UpdateRemsetForFields(BaseObject* from, BaseObject* to);
-    BaseObject* ForwardObjectExclusive(BaseObject* obj, BaseObject* toObj, RegionInfo* copyPage);
 
     // portmutreloc: ZRelocate::relocate_object's middle leg (zRelocate.cpp:391-406) --
     // retain the from-region, relocate the object on this thread, release. Returns the

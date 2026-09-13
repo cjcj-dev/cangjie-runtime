@@ -166,10 +166,9 @@ GC_TEST(DefectRegress, PregrantBeforeRouteDomainFreeze)
     // Freeze domain face through the product publisher (pointer share + life stamp).
     region->BindLiveInfo0FromLiveIfNull();
     region->MarkForwardingDone();
-    region->RecordRouteStart(offA);
 
-    GC_EXPECT_TRUE(region->GetRouteForProbe(objA) != nullptr);
-    GC_EXPECT_TRUE(region->GetRouteForProbe(objB) == nullptr);
+    GC_EXPECT_TRUE(reinterpret_cast<BaseObject*>(ForwardingTable::LookupForwarding(reinterpret_cast<MAddress>(objA), ForwardingTable::RetainPageOwner(region).get()).to) != nullptr);
+    GC_EXPECT_TRUE(reinterpret_cast<BaseObject*>(ForwardingTable::LookupForwarding(reinterpret_cast<MAddress>(objB), ForwardingTable::RetainPageOwner(region).get()).to) == nullptr);
 
     // Late "grant" paints only a *new* current liveInfo — not the frozen ghost face.
     // This is RouteRegion-before-pregrant: geometry frozen, B never in domain.
@@ -188,7 +187,7 @@ GC_TEST(DefectRegress, PregrantBeforeRouteDomainFreeze)
     MarkView<Generation::Old> view = region->GetMarkView<Generation::Old>();
     GC_EXPECT_TRUE(late->IsSurvivedObject(view, offB));
     // Domain still frozen on ghost without B ⇒ Admit/GetRouteForProbe must miss.
-    GC_EXPECT_TRUE(region->GetRouteForProbe(objB) == nullptr);
+    GC_EXPECT_TRUE(reinterpret_cast<BaseObject*>(ForwardingTable::LookupForwarding(reinterpret_cast<MAddress>(objB), ForwardingTable::RetainPageOwner(region).get()).to) == nullptr);
 
     ForwardingTable::ClearEntries(region->GetRegionStart(), region->GetRegionSize());
     region->metadata.liveInfo = nullptr;

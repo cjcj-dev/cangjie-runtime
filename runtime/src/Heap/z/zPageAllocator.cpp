@@ -509,7 +509,6 @@ void RegionManager::ReclaimRegion(RegionInfo* region)
 
 void RegionManager::ReclaimRetiredRegion(RegionInfo* region)
 {
-    // routedest: census, not a guard. The graft asked for CHECK(!IsRouteDestHeld()) here to
     // convert "I traced the paths" into a machine check, but none of the designs proved the
     // caller enumeration and five of the six ReclaimRegion callers have already detached the
     // region, so an abort here would trade an unproven assumption for a hard stop. Count and
