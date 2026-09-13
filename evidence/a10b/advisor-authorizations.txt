@@ -1,0 +1,13 @@
+lane: sym_cangjie_runtime_494_implement_r5655389950
+主控裁定（0914 03:0x）：批准。CopyCollector.cpp RunGarbageCollection（整周期 ScopedSTWLock、SelectCycle、无 generation 的 GetWorkers/GetGCStats）、WCollector.cpp DoGarbageCollection、MutatorManager.cpp 的 phase 握手、CollectorProxy.h 代理及其头声明与直接调用点，都在本包范围内——它们就是 ZGC zDriver/zGeneration 对应物在我方的旧位置。落法：driver 周期逻辑按 zDriver.cpp（young/old 各一循环、pause/collect 骨架）与 zGeneration.cpp（generation 拥有 phase/seqnum/workers/stats）落到 Heap/z/zDriver.cpp、zGeneration.cpp，旧层只留必须的入口转发或直接删除；⛔ 不许「只放锁留共享状态」——被替代的整周期锁与无代共享状态要一起删。其余机制（标记、搬移、remset、屏障）不动。没有后续包负责这块，本包闭合。交付前 merge cjcjdev/main。
+
+
+lane: sym_cangjie_runtime_494_implement_r5655389950
+主控裁定（0914 03:2x）：允许本包删掉 driver 的 heap-dump 任务路由（TaskQueue<GCExecutor> 的非 GC 消费），driver 循环按 zDriver 只阻塞接收 GC 请求。三个调用点（SignalManager.cpp:436、ExceptionManager.cpp:82、ProfilerAgentImpl.cpp:73）改为在请求线程上用既有 STW 机制（ScopedStopTheWorld / 现有握手）同步执行底层 Inspector dump —— 这对应 HotSpot 里 VM_HeapDumper 作为 safepoint 操作由 VMThread 执行、与 GC driver 无关（heapDumper.cpp）；我方没有 VMThread，请求线程持 STW 执行是最近的等价形态，不是新机制。⛔ 不新增轮询/唤醒队列、不让 dump 静默不执行；底层 Inspector 实现保留。对应表写明 zDriver 无此消费 + heapDumper 调用层锚；调用点改动入本包范围。
+
+
+lane: sym_cangjie_runtime_494_implement_r5655389950
+主控裁定（0914 03:4x）：属于本包必要范围，不另开 issue。zDriver.cpp:282-325 should_preclean_young 与 :416-436 collect_young 里「某些 major cause 先 major_full_preclean（young 全晋升）再 major_full_roots」是 driver 循环的一部分，用户令是形态完全对齐，driver 包必须把它做齐：
+1. 按 zDriver 引入 young 收集类型（zGenerationId / ZYoungType：minor、major_full_preclean、major_full_roots、major_partial_roots）与 should_preclean_young 判定；major 前奏按 cause 先 preclean 再 roots，删掉我方「一次 combined roots young」的自有前奏（它是比 ZGC 少也不同的形态）。
+2. 允许把 young type 接到既有 tenuring / promote-all 消费端（zGeneration.cpp 中 young type 决定 tenuring threshold=0 即全晋升的那条路径，对应我方 selector/relocation set 的年龄决策入口），只接消费不改机制本体；对应表给两侧锚。
+3. 若本轮时间不够，把已落的 driver/generation 状态部分先交付送审并在报告「后续项」列明 preclean/promote-all 未做，主控会以同一 issue 第二轮返工完成，⛔ 不拆 issue。

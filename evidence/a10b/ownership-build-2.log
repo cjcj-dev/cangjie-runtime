@@ -1,0 +1,26 @@
+# kkk2_build_two lane=sym_cangjie_runtime_494_implement_r5655389950 head=3c3216a7293b28690411a6283c7fd74076bdcd1b dirty_files=32 source_sha256=342b779130bdce2d…
+== default configure_rc=0 build_rc=2 wall=54s
+-- first errors (default):
+default-build.log:1559:../../../../runtime/src/Heap/z/zThreadLocalAllocBuffer.cpp:277:29: error: use of undeclared identifier 'm'
+default-build.log:1562:../../../../runtime/src/Heap/z/zThreadLocalAllocBuffer.cpp:277:45: error: use of undeclared identifier 'm'
+default-build.log:1565:../../../../runtime/src/Heap/z/zThreadLocalAllocBuffer.cpp:278:29: error: use of undeclared identifier 'm'
+default-build.log:1696:../../../runtime/src/Mutator/MutatorManager.cpp:1122:32: error: use of undeclared identifier 'young'
+default-build.log:2795:../../../../runtime/src/Heap/z/zRelocate.cpp:1211:30: error: too few arguments to function call, single argument 'generation' was not specified
+default-build.log:2975:../../../../runtime/src/Heap/z/zGeneration.cpp:1029:5: error: use of undeclared identifier 'ResetSkippedStackMapCounts'
+default-build.log:2978:../../../../runtime/src/Heap/z/zGeneration.cpp:1069:5: error: use of undeclared identifier 'ReportSkippedStackMapCounts'
+-- SO (default):
+5e25ea529f9a963956fe0c814058b4ddd5ab741bd39693b0ae73e406ffaab2b5  build/runtime-staging/lib/x86_64_Release/libcangjie-trace.so
+f18a1393f84d56a455c71c0c28bf1752c1778af06c0648c1b7cffa91c585c883  build/runtime-staging/lib/x86_64_Release/libboundscheck.so
+== testable configure_rc=0 build_rc=2 wall=54s
+-- first errors (testable):
+testable-build.log:1396:../../../runtime/src/Mutator/MutatorManager.cpp:1122:32: error: use of undeclared identifier 'young'
+testable-build.log:1583:../../../../runtime/src/Heap/z/zThreadLocalAllocBuffer.cpp:277:29: error: use of undeclared identifier 'm'
+testable-build.log:1586:../../../../runtime/src/Heap/z/zThreadLocalAllocBuffer.cpp:277:45: error: use of undeclared identifier 'm'
+testable-build.log:1589:../../../../runtime/src/Heap/z/zThreadLocalAllocBuffer.cpp:278:29: error: use of undeclared identifier 'm'
+testable-build.log:2476:../../../../runtime/src/Heap/z/zRelocate.cpp:1211:30: error: too few arguments to function call, single argument 'generation' was not specified
+testable-build.log:2559:../../../../runtime/src/Heap/z/zGeneration.cpp:1029:5: error: use of undeclared identifier 'ResetSkippedStackMapCounts'
+testable-build.log:2562:../../../../runtime/src/Heap/z/zGeneration.cpp:1069:5: error: use of undeclared identifier 'ReportSkippedStackMapCounts'
+-- SO (testable):
+5e25ea529f9a963956fe0c814058b4ddd5ab741bd39693b0ae73e406ffaab2b5  build/runtime-staging/lib/x86_64_Release/libcangjie-trace.so
+f18a1393f84d56a455c71c0c28bf1752c1778af06c0648c1b7cffa91c585c883  build/runtime-staging/lib/x86_64_Release/libboundscheck.so
+-- logs: /root/sym_cangjie_runtime_494_implement_r5655389950/{default,testable}-{configure,build}.log

@@ -1,0 +1,24 @@
+# kkk2_build_two lane=sym_cangjie_runtime_494_implement_r5655389950 head=db159a90789cc083170dc5659ee0be798d678823 dirty_files=52 source_sha256=0c0c4a792b3a2731…
+== default configure_rc=1 build_rc=NOT_RUN wall=7s
+-- first errors (default):
+default-configure.log:129:../../../../../runtime/src/Heap/z/zHeap.hpp:93:19: error: use of undeclared identifier 'GCTask'
+default-configure.log:177:../../../../../runtime/src/Heap/z/zHeap.hpp:93:19: error: use of undeclared identifier 'GCTask'
+default-configure.log:225:../../../../../runtime/src/Heap/z/zHeap.hpp:93:19: error: use of undeclared identifier 'GCTask'
+default-configure.log:274:../../../../../runtime/src/Heap/z/zHeap.hpp:93:19: error: use of undeclared identifier 'GCTask'
+default-configure.log:321:../../../../../runtime/src/Heap/z/zHeap.hpp:93:19: error: use of undeclared identifier 'GCTask'
+default-configure.log:368:../../../../../runtime/src/Heap/z/zHeap.hpp:93:19: error: use of undeclared identifier 'GCTask'
+default-configure.log:415:../../../../../runtime/src/Heap/z/zHeap.hpp:93:19: error: use of undeclared identifier 'GCTask'
+default-configure.log:529:  ../../../../../runtime/src/Heap/z/zHeap.hpp:93:19: error: use of undeclared
+-- SO (default):
+== testable configure_rc=1 build_rc=NOT_RUN wall=7s
+-- first errors (testable):
+testable-configure.log:129:../../../../../runtime/src/Heap/z/zHeap.hpp:93:19: error: use of undeclared identifier 'GCTask'
+testable-configure.log:179:../../../../../runtime/src/Heap/z/zHeap.hpp:93:19: error: use of undeclared identifier 'GCTask'
+testable-configure.log:227:../../../../../runtime/src/Heap/z/zHeap.hpp:93:19: error: use of undeclared identifier 'GCTask'
+testable-configure.log:273:../../../../../runtime/src/Heap/z/zHeap.hpp:93:19: error: use of undeclared identifier 'GCTask'
+testable-configure.log:319:../../../../../runtime/src/Heap/z/zHeap.hpp:93:19: error: use of undeclared identifier 'GCTask'
+testable-configure.log:368:../../../../../runtime/src/Heap/z/zHeap.hpp:93:19: error: use of undeclared identifier 'GCTask'
+testable-configure.log:415:../../../../../runtime/src/Heap/z/zHeap.hpp:93:19: error: use of undeclared identifier 'GCTask'
+testable-configure.log:529:  ../../../../../runtime/src/Heap/z/zHeap.hpp:93:19: error: use of undeclared
+-- SO (testable):
+-- logs: /root/sym_cangjie_runtime_494_implement_r5655389950/{default,testable}-{configure,build}.log
