@@ -53,11 +53,14 @@ public:
     GCWorkers& GetWorkers(GCCycleGeneration generation) const;
 
     // ZYoungType::major_full_roots selects the combined mark-start pause.
-    const GCDriverRequest* YoungPreludeRequest() const { return youngPreludeRequest; }
 
     // Called once in the young mark-start pause, for both minor and
     // combined young/old starts (zGeneration.cpp:600-602,637).
-    void NoteYoungMarkStart() { ZStat::Collections().AtYoungMarkStart(youngPreludeRequest != nullptr); }
+    void NoteYoungMarkStart(ZYoungType type)
+    {
+        ZStat::Collections().AtYoungMarkStart(type == ZYoungType::major_full_roots ||
+                                             type == ZYoungType::major_partial_roots);
+    }
 
     // ZResurrection (zResurrection.cpp:35-47): shared by both generations.
     // Block only in the successful old mark-end pause; unblock after the
@@ -78,10 +81,7 @@ public:
     // consume or coalesce requests from the other generation.
     GCDriverPort& GetMinorDriverPort() { return minorDriverPort; }
     GCDriverPort& GetMajorDriverPort() { return majorDriverPort; }
-    GCDriverPort& GetYoungDriverPort()
-    {
-        return youngPreludeRequest != nullptr ? majorDriverPort : minorDriverPort;
-    }
+    GCDriverPort& GetYoungDriverPort();
     void RequestAbort(GCDriverKind kind)
     {
         (kind == GCDriverKind::MINOR ? minorDriverPort : majorDriverPort).Abort().Request();
@@ -105,6 +105,8 @@ private:
     bool TakeDriverRequest(GCDriverPort& port, GCDriverRequest& request);
     void CompleteDriverRequest(GCDriverPort& port);
     void RunCollection(Collector& collector, uint64_t index, GCReason reason, bool warmup);
+    void RunYoungCollection(Collector& collector, uint64_t index, ZYoungType type, bool warmup);
+    bool ShouldPrecleanYoung(GCReason reason) const;
 
     // Notify the GC thread to start GC, and doesn't wait.
     // Called by mutator.
@@ -121,7 +123,6 @@ private:
     GCDriverPort majorDriverPort { GCDriverKind::MAJOR };
     // zDriver.cpp:59-72: held by young; old releases it for its body.
     std::mutex driverLock;
-    const GCDriverRequest* youngPreludeRequest = nullptr;
 #if defined(MRT_GC_UNIT_TESTS)
     // Deterministic unit builds can replace only the task executor.  The
     // default product retains CollectorProxy as its sole owner and ABI shape.

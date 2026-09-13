@@ -182,11 +182,13 @@ void CollectorResources::RunCollection(Collector& collector, uint64_t index, GCR
         ? GCCycleGeneration::YOUNG : GCCycleGeneration::OLD).CycleStats();
     const auto before = workers->GetSnapshot();
     const uint64_t start = TimeUtil::NanoSeconds();
-    cycle.AtStart(start, before.elapsedNanos, before.workerNanos);
+    const ZYoungType type = collector.GetGenerationCycle(GCCycleGeneration::YOUNG).YoungType();
+    const bool recordStats = !isYoung || type == ZYoungType::minor || type == ZYoungType::major_partial_roots;
+    if (recordStats) cycle.AtStart(start, before.elapsedNanos, before.workerNanos);
     collector.RunGarbageCollection(index, reason);
     const auto after = workers->GetSnapshot();
     const uint64_t end = TimeUtil::NanoSeconds();
-    cycle.AtEnd(end, after.elapsedNanos, after.workerNanos, warmup);
+    if (recordStats) cycle.AtEnd(end, after.elapsedNanos, after.workerNanos, warmup);
     (isYoung ? ZStatPhases::YoungGeneration : ZStatPhases::OldGeneration).RegisterEnd(end - start);
 }
 
@@ -217,15 +219,21 @@ bool CollectorResources::ExecuteDriverRequest(const GCDriverRequest& request)
         }
     }
 
-    // A major request owns its young prelude while holding the driver lock,
-    // exactly like ZDriverMajor::collect_young followed by collect_old
-    // (zDriver.cpp:416-452). Sending a synchronous request back through the
-    // minor port would deadlock once both drivers share the ZGC lock.
+    // zDriver.cpp:416-436: full causes preclean with promote-all, then
+    // establish the combined young/old roots cycle. Other causes use partial roots.
     if (request.reason != GC_REASON_YOUNG) {
-        youngPreludeRequest = &request;
-        RunCollection(*collector, GCTask::ASYNC_TASK_INDEX, GC_REASON_YOUNG,
-                      warmup);
-        youngPreludeRequest = nullptr;
+        collector->GetGenerationCycle(GCCycleGeneration::OLD).SelectReason(
+            request.reason, request.asynchronous ? GCTask::ASYNC_TASK_INDEX : request.sequence);
+        const bool preclean = ShouldPrecleanYoung(request.reason);
+        if (preclean) {
+            RunYoungCollection(*collector, GCTask::ASYNC_TASK_INDEX, ZYoungType::major_full_preclean, warmup);
+            if (majorDriverPort.Abort().Poll()) {
+                CancelDriverRequestLifecycle(port.Kind());
+                return false;
+            }
+        }
+        RunYoungCollection(*collector, GCTask::ASYNC_TASK_INDEX,
+                           preclean ? ZYoungType::major_full_roots : ZYoungType::major_partial_roots, warmup);
 #if defined(MRT_GC_UNIT_TESTS)
         if (testAfterYoungPrelude) {
             testAfterYoungPrelude();
@@ -239,8 +247,12 @@ bool CollectorResources::ExecuteDriverRequest(const GCDriverRequest& request)
     VLOG(GCPHASE, "[GCV2][driver] kind=%s seq=%llu reason=%u ack=pending",
          request.reason == GC_REASON_YOUNG ? "minor" : "major",
          static_cast<unsigned long long>(request.sequence), request.reason);
-    RunCollection(*collector, request.asynchronous ? GCTask::ASYNC_TASK_INDEX : request.sequence,
-                  request.reason, warmup);
+    const uint64_t index = request.asynchronous ? GCTask::ASYNC_TASK_INDEX : request.sequence;
+    if (request.reason == GC_REASON_YOUNG) {
+        RunYoungCollection(*collector, index, ZYoungType::minor, warmup);
+    } else {
+        RunCollection(*collector, index, request.reason, warmup);
+    }
     (request.reason == GC_REASON_YOUNG ? ZStatPhases::MinorCollection : ZStatPhases::MajorCollection)
         .RegisterEnd(TimeUtil::NanoSeconds() - collectionStart);
     // A stop during marking or relocation is cancellation, even though the
@@ -494,5 +506,42 @@ void CopyCollector::RunGarbageCollection(uint64_t gcIndex, GCReason reason)
     (young ? ZStat::YoungHeap() : ZStat::OldHeap()).AtRelocateEnd(
         usedAfter, liveBytes, gcStats.collectedBytes);
     cycle.End();
+}
+}
+
+namespace MapleRuntime {
+void CollectorResources::RunYoungCollection(Collector& collector, uint64_t index, ZYoungType type, bool warmup)
+{
+    YoungTypeSetter typeSetter(collector.GetGenerationCycle(GCCycleGeneration::YOUNG), type);
+    RunCollection(collector, index, GC_REASON_YOUNG, warmup);
+}
+
+bool CollectorResources::ShouldPrecleanYoung(GCReason reason) const
+{
+    // zDriver.cpp:282-325: explicit full collections and allocation failure.
+    switch (reason) {
+        case GC_REASON_USER:
+        case GC_REASON_OOM:
+        case GC_REASON_FORCE:
+            return true;
+        case GC_REASON_BACKUP:
+        case GC_REASON_HEU:
+        case GC_REASON_HEU_SYNC:
+        case GC_REASON_NATIVE:
+        case GC_REASON_NATIVE_SYNC:
+            break;
+        default:
+            CHECK(false);
+    }
+    // All requests in this existing allocation FIFO wait for a major
+    // (zPageAllocator.cpp:StallAllocation requests GC_REASON_OOM).
+    const auto& manager = static_cast<RegionSpace&>(Heap::GetHeap().GetAllocator()).GetRegionManager();
+    return manager.IsAllocationStalling();
+}
+
+GCDriverPort& CollectorResources::GetYoungDriverPort()
+{
+    return collectorProxy.GetGenerationCycle(GCCycleGeneration::YOUNG).YoungType() == ZYoungType::minor
+        ? minorDriverPort : majorDriverPort;
 }
 }

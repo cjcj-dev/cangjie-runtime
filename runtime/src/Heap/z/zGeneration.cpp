@@ -100,7 +100,7 @@ void WCollector::DoYoungGarbageCollection()
     // VM_ZMarkStartYoungAndOld / VM_ZMarkStartYoung (zGeneration.cpp:583-659).
     // A major starts old exactly once in this young pause. An independent
     // minor leaves the old cycle identity and mark color untouched.
-    collectorResources.NoteYoungMarkStart();
+    collectorResources.NoteYoungMarkStart(youngCycle.YoungType());
     flip_young_mark_start();
     ZVerify::OnColorFlip();
     StartYoungMarkWork();
@@ -112,9 +112,8 @@ void WCollector::DoYoungGarbageCollection()
         FlushAllocationRegions();
     }
 
-    if (const GCDriverRequest* request = collectorResources.YoungPreludeRequest()) {
-        oldCycle.SelectReason(request->reason);
-        oldCycle.Begin(request->asynchronous ? GCTask::ASYNC_TASK_INDEX : request->sequence);
+    if (youngCycle.IsMajorRoots()) {
+        oldCycle.Begin(oldCycle.Snapshot().requestIndex);
         StartOldMarkWork();
         flip_old_mark_start();
         ZVerify::OnColorFlip();
@@ -527,7 +526,7 @@ void WCollector::DoYoungGarbageCollection()
     for (uint32_t i = 0; i < kPageAgeCount; ++i) {
         gcStats.liveByAge[i] = tenuringIn.liveByAge[i];
     }
-    gcStats.tenuringThreshold = ComputeTenuringThreshold(tenuringIn);
+    youngCycle.SelectTenuringThreshold(tenuringIn);
     {
         // minortime: ⑧ pre-evac finish (phase + weak/satb clear)
         MRT_PHASE_TIMER(ZStatPhases::PYoungPreEvacClear);
@@ -908,10 +907,11 @@ GCCycleSnapshot GenerationCycle::Snapshot() const
              phase.load(std::memory_order_relaxed), active };
 }
 
-void GenerationCycle::SelectReason(GCReason value)
+void GenerationCycle::SelectReason(GCReason value, uint64_t index)
 {
     std::lock_guard<std::mutex> lock(mutex);
     CHECK(!active);
+    requestIndex = index;
     reason.store(value, std::memory_order_release);
 }
 
@@ -1060,5 +1060,36 @@ void TracingCollector::PostGarbageCollection(GCCycleGeneration generation, uint6
 #if defined(MRT_DEBUG) && (MRT_DEBUG == 1)
     DumpAfterGC();
 #endif
+}
+}
+
+namespace MapleRuntime {
+void GenerationCycle::SetYoungType(ZYoungType type)
+{
+    CHECK(generation == GCCycleGeneration::YOUNG);
+    youngType.store(type, std::memory_order_release);
+}
+
+YoungTypeSetter::YoungTypeSetter(GenerationCycle& cycle, ZYoungType type) : cycle(cycle)
+{
+    CHECK(type != ZYoungType::none);
+    CHECK(cycle.YoungType() == ZYoungType::none);
+    cycle.SetYoungType(type);
+}
+
+YoungTypeSetter::~YoungTypeSetter()
+{
+    CHECK(cycle.YoungType() != ZYoungType::none);
+    cycle.SetYoungType(ZYoungType::none);
+}
+}
+
+namespace MapleRuntime {
+void GenerationCycle::SelectTenuringThreshold(const TenuringInputs& inputs)
+{
+    CHECK(generation == GCCycleGeneration::YOUNG);
+    // zGeneration.cpp:704-715: preclean promotes all, other types compute.
+    stats.tenuringThreshold = YoungType() == ZYoungType::major_full_preclean
+        ? 0 : ComputeTenuringThreshold(inputs);
 }
 }

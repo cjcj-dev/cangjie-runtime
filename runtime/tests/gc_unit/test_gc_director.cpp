@@ -4,6 +4,7 @@
 
 #include "Heap/z/zDirector.hpp"
 #include "Heap/z/zGeneration.hpp"
+#include "Heap/z/zRelocationSetSelector.hpp"
 #include "Heap/z/zStat.hpp"
 #include "Heap/z/zPageAllocator.hpp"
 #include "gc_unittest.hpp"
@@ -333,4 +334,28 @@ GC_TEST(GenerationState, IndependentPhaseSequenceAndWorkers)
     old.End();
     GC_EXPECT_TRUE(young.Snapshot().active);
     young.End();
+}
+
+GC_TEST(GenerationState, FullPrecleanPromotesAllAndRootsComputeThreshold)
+{
+    GenerationCycle young(GCCycleGeneration::YOUNG);
+    TenuringInputs inputs;
+    inputs.softMaxCapacity = 64 * 1024 * 1024;
+    inputs.youngAllocated = 4096;
+    inputs.youngGarbage = 1024;
+    inputs.liveByAge[1] = 1024;
+    {
+        YoungTypeSetter type(young, ZYoungType::major_full_preclean);
+        young.SelectTenuringThreshold(inputs);
+        GC_EXPECT_EQ(young.Stats().tenuringThreshold, 0u);
+        GC_EXPECT_FALSE(young.IsMajorRoots());
+    }
+    GC_EXPECT_TRUE(young.YoungType() == ZYoungType::none);
+    {
+        YoungTypeSetter type(young, ZYoungType::major_full_roots);
+        young.SelectTenuringThreshold(inputs);
+        GC_EXPECT_TRUE(young.Stats().tenuringThreshold > 0u);
+        GC_EXPECT_TRUE(young.IsMajorRoots());
+    }
+    GC_EXPECT_TRUE(young.YoungType() == ZYoungType::none);
 }

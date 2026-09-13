@@ -792,7 +792,7 @@ void WCollector::PushYoungObject(BaseObject* object, WorkStack& workStack, const
     }
     RegionInfo* region = RegionInfo::GetRegionInfoAt(reinterpret_cast<MAddress>(object));
     if (!region->IsYoungRegion()) {
-        if (collectorResources.YoungPreludeRequest() != nullptr) {
+        if (GetGenerationCycle(GCCycleGeneration::YOUNG).IsMajorRoots()) {
             MarkOldObjectIfActive(object, true);
         }
         return;
@@ -1021,7 +1021,7 @@ private:
         }
         RegionInfo* targetRegion = RegionInfo::TryGetRegionInfoAt(reinterpret_cast<MAddress>(target));
         if (targetRegion != nullptr && !targetRegion->IsYoungRegion()) {
-            if (collector->collectorResources.YoungPreludeRequest() != nullptr) {
+            if (collector->GetGenerationCycle(GCCycleGeneration::YOUNG).IsMajorRoots()) {
                 collector->MarkOldObjectIfActive(target, true);
             }
             return;
@@ -1053,7 +1053,7 @@ private:
         }
         RegionInfo* region = RegionInfo::GetRegionInfoAt(reinterpret_cast<MAddress>(object));
         if (!region->IsYoungRegion()) {
-            if (shared.collector->collectorResources.YoungPreludeRequest() != nullptr) {
+            if (shared.collector->GetGenerationCycle(GCCycleGeneration::YOUNG).IsMajorRoots()) {
                 shared.collector->MarkOldObjectIfActive(object, true);
             }
             return;
