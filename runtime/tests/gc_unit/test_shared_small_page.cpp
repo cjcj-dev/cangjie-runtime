@@ -161,6 +161,29 @@ GC_OTHER_VM_TEST(SharedSmallPage, AgeRefillAndRetirement)
     GC_EXPECT_TRUE(RegionInfo::GetRegionInfoAt(newOld) != old);
 }
 
+// ZHeap::account_alloc_page / is_small_eden_page (zHeap.cpp:229-237).
+GC_OTHER_VM_TEST(SharedSmallPage, TLABAccountingOnlySmallEden)
+{
+    CPUAffinity affinity;
+    SharedPageFixture fixture;
+    auto& manager = fixture.manager;
+    size_t expected = 0;
+    for (PageAge age : kPageAgeRangeAll) {
+        const uintptr_t address = manager.AllocSharedObject(16, age, true);
+        GC_EXPECT_TRUE(address != 0);
+        if (age == PageAge::eden) {
+            expected += RegionInfo::GetRegionInfoAt(address)->GetRegionSize();
+        }
+    }
+    const uintptr_t large = manager.AllocSharedObject(manager.GetLargeObjectThreshold() + 16,
+                                                      PageAge::eden, true);
+    GC_EXPECT_TRUE(large != 0);
+    GC_EXPECT_TRUE(!RegionInfo::GetRegionInfoAt(large)->IsSmallRegion());
+    GC_EXPECT_TRUE(expected != 0);
+    manager.ResetTLABUsage();
+    GC_EXPECT_EQ(manager.GetTLABUsed(), expected);
+}
+
 GC_OTHER_VM_TEST(SharedSmallPage, MigrationUsesCurrentCPU)
 {
     CPUAffinity affinity;

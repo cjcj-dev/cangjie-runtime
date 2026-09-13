@@ -2754,6 +2754,13 @@ size_t RegionManager::CurrentSharedPageCPU()
 RegionManager::PerAgeObjectAllocator::PerAgeObjectAllocator(PageAge pageAge)
     : age(pageAge), smallPages(new SharedSmallPage[SharedPageCPUCount()]) {}
 
+// zHeap.cpp:229: shared-page TLAB accounting includes only small eden pages.
+static bool IsSmallEdenPage(const RegionInfo* page)
+{
+    return page->IsSmallRegion() && page->IsYoungRegion() &&
+           page->GetYoungAge() == static_cast<uint8_t>(untype(PageAge::eden));
+}
+
 // ZObjectAllocator::PerAge::alloc_page, ZHeap::alloc_page/account_alloc_page.
 RegionInfo* RegionManager::AllocateSharedPage(size_t units, RegionInfo::UnitRole role,
                                              PageAge age, bool nonBlocking)
@@ -2762,7 +2769,7 @@ RegionInfo* RegionManager::AllocateSharedPage(size_t units, RegionInfo::UnitRole
     if (page == nullptr) { return nullptr; }
     page->SetYoungRegionFlag(age != PageAge::old);
     page->SetYoungAge(age == PageAge::old ? 0 : static_cast<uint8_t>(untype(age)));
-    if (age != PageAge::old) {
+    if (IsSmallEdenPage(page)) {
         tlabUsed.fetch_add(page->GetRegionSize(), std::memory_order_relaxed);
     }
     const GCPhase phase = Heap::GetHeap().GetCollector().GetGCPhase();
@@ -2789,7 +2796,7 @@ void RegionManager::UndoSharedPage(RegionInfo* page)
 {
     recentFullRegionList.DeleteRegion(page);
     RecentFullAccounting::Dequeue(1, page->GetUnitCount());
-    if (page->IsYoungRegion()) {
+    if (IsSmallEdenPage(page)) {
         tlabUsed.fetch_sub(page->GetRegionSize(), std::memory_order_relaxed);
     }
     // ZHeap::undo_alloc_page: remove the unused page-table entry and return
