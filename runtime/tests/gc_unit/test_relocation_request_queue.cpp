@@ -7,6 +7,8 @@
 #include <atomic>
 #include <thread>
 #include "Heap/Collector/RelocationRequestQueue.h"
+#include "Mutator/Handshake.h"
+#include "Mutator/Mutator.h"
 #include "gc_heap_fixture.hpp"
 #include "gc_unittest.hpp"
 
@@ -21,7 +23,8 @@ struct PageQueueFixture {
     PageQueueFixture()
     {
         auto* page = heap.region0;
-        GC_EXPECT_TRUE(ForwardingTable::InstallPublicationBeforeCopy(page->GetRegionStart(), page->GetRegionSize(), page));
+        GC_EXPECT_TRUE(ForwardingTable::InstallPublicationBeforeCopy(
+            page->GetRegionStart(), page->GetRegionSize(), page, Generation::Young));
         GC_EXPECT_TRUE(ForwardingTable::PublishFromPageView(page, nullptr, 1, page->GetRegionAllocPtr(),
             page->GetRegionStart(), 64, 1, 0, page->GetRegionLifeId()));
         owner = ForwardingTable::RetainPageOwner(page);
@@ -48,6 +51,78 @@ struct PageQueueFixture {
         (void)queue.Complete(owner.get());
     }
 };
+
+// Observe the product wait predicate without registering a synthetic mutator
+// with the runtime's global thread list. The two states are the actual inputs
+// to EnsurePhaseTransition and HandshakeState::try_process respectively.
+struct WaitContext {
+    Mutator mutator;
+    Mutator* savedMutator = ThreadLocal::GetMutator();
+    ThreadType savedType = ThreadLocal::GetThreadType();
+    HandshakeState& handshake = Handshake::Current();
+    bool savedSafe = handshake.observed_safe();
+    bool entered = false;
+    bool mutatorSafe = true;
+    bool handshakeSafe = true;
+    ZForwarding* observed = nullptr;
+    static thread_local WaitContext* current;
+
+    WaitContext()
+    {
+        ThreadLocal::SetMutator(&mutator);
+        ThreadLocal::SetThreadType(ThreadType::CJ_PROCESSOR);
+        mutator.SetInSaferegion(Mutator::SAFE_REGION_FALSE);
+        handshake.leave_safe();
+        current = this;
+        RelocationRequestQueue::SetWaitEnterHook(&Observe);
+    }
+    ~WaitContext()
+    {
+        RelocationRequestQueue::SetWaitEnterHook(nullptr);
+        current = nullptr;
+        if (savedSafe) handshake.enter_safe();
+        ThreadLocal::SetMutator(savedMutator);
+        ThreadLocal::SetThreadType(savedType);
+    }
+    static void Observe(ZForwarding* forwarding)
+    {
+        current->entered = true;
+        current->observed = forwarding;
+        current->mutatorSafe = ThreadLocal::GetMutator()->InSaferegion();
+        current->handshakeSafe = Handshake::Current().observed_safe();
+    }
+};
+thread_local WaitContext* WaitContext::current = nullptr;
+}
+
+// ZRelocateQueue::add_and_wait (zRelocate.cpp:134-151), called from the
+// JRT_LEAF barrier (zBarrierSetRuntime.cpp:29): waiting preserves the context
+// that prevents reset until the final forwarding lookup has returned.
+GC_TEST(RelocationPageQueue, WaitPreservesMutatorAndHandshakeContext)
+{
+    PageQueueFixture f;
+    f.queue.BeginWorkers(1);
+    auto request = f.queue.Add(f.owner);
+    WaitContext context;
+    bool timedOut = false;
+    (void)f.queue.WaitUntil(request.request, 1, &timedOut);
+    GC_EXPECT_TRUE(context.entered);
+    GC_EXPECT_TRUE(context.observed == f.owner.get());
+    GC_EXPECT_TRUE(timedOut);
+    GC_EXPECT_FALSE(context.mutatorSafe);
+    GC_EXPECT_FALSE(context.handshakeSafe);
+    GC_EXPECT_FALSE(context.mutator.InSaferegion());
+    GC_EXPECT_FALSE(context.handshake.observed_safe());
+
+    f.Publish();
+    f.owner->release_page();
+    f.Complete();
+    (void)f.queue.Wait(request.request);
+    GC_EXPECT_EQ(request.request->page_forwarding()->find(reinterpret_cast<MAddress>(f.heap.obj0)),
+                 reinterpret_cast<MAddress>(f.heap.obj1));
+    GC_EXPECT_FALSE(context.mutator.InSaferegion());
+    GC_EXPECT_FALSE(context.handshake.observed_safe());
+    GC_EXPECT_TRUE(f.queue.SynchronizePoll().workersDone);
 }
 
 // zRelocate.cpp:134-191: objects on one page share one forwarding/claim/done.
@@ -80,7 +155,7 @@ GC_TEST(RelocationPageQueue, EntryPublicationDoesNotCompleteThePage)
     (void)f.queue.WaitUntil(request.request, 1, &timedOut);
     GC_EXPECT_TRUE(timedOut);
     GC_EXPECT_FALSE(f.owner->is_done());
-    GC_EXPECT_EQ(ForwardingTable::FindTo(reinterpret_cast<MAddress>(f.heap.obj0)),
+    GC_EXPECT_EQ(ForwardingTable::FindTo(reinterpret_cast<MAddress>(f.heap.obj0), Generation::Young),
                  reinterpret_cast<MAddress>(f.heap.obj1));
     f.Complete();
     (void)f.queue.WaitUntil(request.request, 1, &timedOut);
@@ -94,7 +169,7 @@ GC_TEST(RelocationPageQueue, ReleasedPageStillHasItsImmutableEntry)
     f.Publish();
     f.owner->release_page();
     GC_EXPECT_FALSE(f.owner->retain_page());
-    const auto answer = ForwardingTable::LookupTo(reinterpret_cast<MAddress>(f.heap.obj0));
+    const auto answer = ForwardingTable::LookupTo(reinterpret_cast<MAddress>(f.heap.obj0), Generation::Young);
     GC_EXPECT_TRUE(answer.answer == ForwardingTable::ToAnswer::ArmedHit);
     GC_EXPECT_EQ(answer.to, reinterpret_cast<MAddress>(f.heap.obj1));
     GC_EXPECT_FALSE(f.owner->is_done());

@@ -9,7 +9,6 @@
 #include <atomic>
 #include <chrono>
 #include "Heap/Allocator/RegionInfo.h"
-#include "Mutator/Mutator.inline.h"
 
 namespace MapleRuntime {
 
@@ -70,10 +69,13 @@ MAddress RelocationRequestQueue::WaitUntil(const Handle& request, size_t maxSpin
 {
     if (timedOut != nullptr) *timedOut = false;
     if (request == nullptr) return 0;
-    Mutator* mutator = ThreadLocal::GetMutator();
-    const ThreadType type = ThreadLocal::GetThreadType();
-    const bool changed = mutator != nullptr && type != ThreadType::FP_THREAD && type != ThreadType::GC_THREAD &&
-                         mutator->EnterSaferegion(true);
+    // ZRelocateQueue::add_and_wait runs in the barrier's non-safepoint
+    // context (zBarrierSetRuntime.cpp:29, zRelocate.cpp:134-151). Preserve
+    // that context through the wait and the caller's final forwarding find.
+    // Entering a saferegion here would let GC complete the next phase on
+    // behalf of this mutator and reset the set owning this borrowed pointer.
+    // The page retain has already been released (zRelocate.cpp:396-405);
+    // it must not prevent the worker from claiming the page in place.
     {
         // zRelocate.cpp:136-150: enqueue and the not-done predicate share one
         // queue lock; wait only after is_done is false under that lock.
@@ -95,7 +97,6 @@ MAddress RelocationRequestQueue::WaitUntil(const Handle& request, size_t maxSpin
             }
         }
     }
-    if (changed) (void)mutator->LeaveSaferegion();
     return 0;
 }
 
