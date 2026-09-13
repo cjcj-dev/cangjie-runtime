@@ -927,6 +927,22 @@ public:
         // left from-copies). zGeneration.cpp:211-213, zPage.inline.hpp:180-185.
         (void)ExemptMarkStartAllocatingFromCSet();
 
+        // zGeneration.cpp:205-215: selection visits only this generation's pages.
+        // The shared candidate list can contain young pages during an old cycle;
+        // return them to the existing allocation list without installing forwarding.
+        if constexpr (G == Generation::Old) {
+            RegionInfo* region = fromRegionList.GetHeadRegion();
+            while (region != nullptr) {
+                RegionInfo* next = region->GetNextRegion();
+                if (region->IsYoungRegion()) {
+                    fromRegionList.DeleteRegion(region);
+                    recentFullRegionList.PrependRegion(region, RegionInfo::RegionType::RECENT_FULL_REGION);
+                    RecentFullAccounting::Enqueue(1, region->GetUnitCount());
+                }
+                region = next;
+            }
+        }
+
         CHECK_DETAIL(ForwardingTable::BeginForwardingArena(G, fromRegionList),
                      "forwarding arena budget allocation failed");
         fromRegionList.VisitAllRegions([](RegionInfo* region) {

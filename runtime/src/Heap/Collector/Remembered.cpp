@@ -352,7 +352,7 @@ void WCollector::ScanRelocatedRememberedFields(MinorSlotSet& rememberedSlots)
         MAddress field;
     };
     RememberedSet& remset = Heap::GetHeap().GetRememberedSet();
-    ForwardingTable::VisitAll([&](ZForwarding* forwarding) {
+    ForwardingTable::VisitAll(Generation::Old, [&](ZForwarding* forwarding) {
         if (forwarding == nullptr) {
             return;
         }
@@ -406,7 +406,7 @@ void WCollector::RescanRememberedSet(WorkStack& workStack, const MinorSlotSet& r
 {
     (void)stw;
     auto plannedTo = [this](BaseObject* from) -> BaseObject* {
-        FindToVersionResult resolved = FindToVersion(from);
+        FindToVersionResult resolved = FindToVersion(from, Generation::Young);
         if (resolved.is_unavailable()) {
             // The remembered-set scrub is the third non-dereference consumer:
             // an unavailable carrier drops this scan item and never installs a

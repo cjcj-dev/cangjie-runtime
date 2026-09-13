@@ -20,6 +20,7 @@
 #include "Base/Log.h"
 #include "Base/LogFile.h"
 #include "Heap/Allocator/ForwardingTable.h"
+#include "Heap/Collector/LiveInfo.h"
 #include "Heap/Collector/Collector.h"
 #include "Heap/Collector/ZForwarding.h"
 #include "Heap/Heap.h"
@@ -276,7 +277,7 @@ size_t RememberedSet::ScanPreviousForMinor(std::unordered_set<MAddress>& records
     records.reserve(expectedRecords);
 
     auto shouldScanPage = [](MAddress slot) -> bool {
-        ZForwarding* forwarding = ForwardingTable::GetCovering(slot);
+        ZForwarding* forwarding = ForwardingTable::GetCovering(slot, Generation::Old);
         if (forwarding == nullptr) {
             return true;
         }

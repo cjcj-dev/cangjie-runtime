@@ -161,7 +161,7 @@ struct GcHeapFixture {
     void InstallPageOwner(RegionInfo* region)
     {
         if (region->metadata.fwdOwner.load(std::memory_order_acquire) != nullptr) return;
-        if (ForwardingTable::GetEntries(region->GetRegionStart()) == nullptr) {
+        if (ForwardingTable::GetEntries(region->GetRegionStart(), region->GetOwnerGeneration()) == nullptr) {
             RegionList selected("fixture-forwardings");
             const Generation generation = region->GetOwnerGeneration();
             if (region0->GetOwnerGeneration() == generation) {
@@ -173,7 +173,7 @@ struct GcHeapFixture {
             CHECK(ForwardingTable::BeginForwardingArena(generation, selected));
             while (selected.TakeHeadRegion() != nullptr) {}
         }
-        CHECK(ForwardingTable::InstallPublicationBeforeCopy(region->GetRegionStart(), region->GetRegionSize(), region));
+        CHECK(ForwardingTable::InstallPublicationBeforeCopy(region->GetRegionStart(), region->GetRegionSize(), region, region->GetOwnerGeneration()));
         CHECK(ForwardingTable::PublishFromPageView(region, region->GetLiveInfo(), region->GetSnapshotEpoch(),
             region->GetRegionAllocPtr(), region->metadata.markStartAllocPtr, region->GetLiveByteCount(),
             static_cast<uint8_t>(region->IsYoungRegion() ? Generation::Young : Generation::Old),

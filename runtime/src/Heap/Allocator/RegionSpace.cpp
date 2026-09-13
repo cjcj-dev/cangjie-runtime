@@ -41,7 +41,7 @@ bool RegionIsInRelocationSet(const RegionInfo* reg)
     if (reg->IsFromRegion() || reg->IsLoneFromRegion()) {
         return true;
     }
-    return ForwardingTable::GetEntries(reg->GetRegionStart()) != nullptr && !reg->IsForwardingDone();
+    return ForwardingTable::RetainPageOwner(reg).get() != nullptr && !reg->IsForwardingDone();
 }
 
 void NoteAllocIntoCSet(RegionInfo* reg, const char* where)

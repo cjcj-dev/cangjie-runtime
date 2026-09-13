@@ -162,7 +162,7 @@ public:
         requestProgress.notify_all();
         return ignoreRequests;
     }
-    FindToVersionResult FindToVersion(BaseObject*) const override
+    FindToVersionResult FindToVersion(BaseObject*, Generation) const override
     {
         return FindToVersionResult::NotForwarded();
     }

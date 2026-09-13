@@ -635,7 +635,7 @@ void TracingCollector::EnumConcurrencyModelRoots(RootSet& rootSet) const
             ctx.hasRawValue = true;
             VerifyRoots::VerifyRootPayload(ctx, &root, nullptr);
         }
-        EnumAndTagRawRoot(root, rootSet);
+        EnumAndTagRawRoot(root, rootSet, Generation::Old);
     };
     Runtime::Current().GetConcurrencyModel().VisitGCRoots(&visitor);
 }
@@ -651,7 +651,7 @@ void TracingCollector::EnumStaticRoots(RootSet& rootSet) const
             ctx.hasRawValue = true;
             VerifyRoots::VerifyRootPayload(ctx, &root, nullptr);
         }
-        EnumAndTagRawRoot(root, rootSet);
+        EnumAndTagRawRoot(root, rootSet, Generation::Old);
     };
     VisitStaticRoots(visitor);
 }
@@ -673,7 +673,7 @@ void TracingCollector::EnumAllExportRoots(RootSet &foreignRootsSet)
             ctx.hasRawValue = true;
             VerifyRoots::VerifyRootPayload(ctx, &root, nullptr);
         }
-        EnumAndTagRawRoot(root, foreignRootsSet);
+        EnumAndTagRawRoot(root, foreignRootsSet, Generation::Old);
     });
 }
 void TracingCollector::DoEnumeration(WorkStack& workStack, WorkStack& foreignRootsSet)
@@ -807,7 +807,7 @@ void TracingCollector::ProcessExportRoots(WorkStack& foreignRootsSet)
 void TracingCollector::FindUselessExternObjects()
 {
     std::lock_guard<std::mutex> lock(externMtx);
-    CurrentizeValueRootMap(discoveredExternObjects);
+    CurrentizeValueRootMap(discoveredExternObjects, Generation::Old);
 }
 void TracingCollector::DoTracing(WorkStack& workStack, WorkStack& foreignRootsSet)
 {
@@ -975,7 +975,7 @@ void TracingCollector::Init() {}
 
 void TracingCollector::Fini() { Collector::Fini(); }
 
-BaseObject* TracingCollector::ResolveCurrentValueRoot(BaseObject* value, const void* owner,
+BaseObject* TracingCollector::ResolveCurrentValueRoot(BaseObject* value, const void* owner, Generation generation,
                                                       ForwardingStage stage) const
 {
     if (value == nullptr || !Heap::IsHeapAddress(value)) {
@@ -985,7 +985,7 @@ BaseObject* TracingCollector::ResolveCurrentValueRoot(BaseObject* value, const v
         ForwardingHolderKind::Static, owner, nullptr, stage, ForwardingWriterKind::CollectorHeal,
         ForwardingSourceKind::CallerValue, nullptr, nullptr, ForwardingFieldKind::RootSlot
     };
-    BaseObject* current = ResolveStoreValue(value, provenance);
+    BaseObject* current = ResolveStoreValue(value, provenance, generation);
     CHECK_DETAIL(current != nullptr && Heap::IsHeapAddress(current),
                  "value root resolve requires a heap to-address from=%p current=%p", value, current);
     CHECK_DETAIL(Collector::JudgeHandOutTarget(current) == HandVerdict::Usable,
@@ -993,26 +993,26 @@ BaseObject* TracingCollector::ResolveCurrentValueRoot(BaseObject* value, const v
     return current;
 }
 
-void TracingCollector::CurrentizeValueRootSet(std::unordered_set<BaseObject*>& roots) const
+void TracingCollector::CurrentizeValueRootSet(std::unordered_set<BaseObject*>& roots, Generation generation) const
 {
     std::unordered_set<BaseObject*> current;
     current.reserve(roots.size());
     for (BaseObject* value : roots) {
-        current.insert(ResolveCurrentValueRoot(value, &roots));
+        current.insert(ResolveCurrentValueRoot(value, &roots, generation));
     }
     roots.swap(current);
 }
 
 void TracingCollector::CurrentizeValueRootMap(
-    std::unordered_map<BaseObject*, std::list<BaseObject*>>& roots) const
+    std::unordered_map<BaseObject*, std::list<BaseObject*>>& roots, Generation generation) const
 {
     std::unordered_map<BaseObject*, std::list<BaseObject*>> current;
     current.reserve(roots.size());
     for (const auto& entry : roots) {
-        BaseObject* key = ResolveCurrentValueRoot(entry.first, &roots);
+        BaseObject* key = ResolveCurrentValueRoot(entry.first, &roots, generation);
         std::list<BaseObject*>& values = current[key];
         for (BaseObject* value : entry.second) {
-            values.push_back(ResolveCurrentValueRoot(value, &roots));
+            values.push_back(ResolveCurrentValueRoot(value, &roots, generation));
         }
     }
     roots.swap(current);
@@ -1031,7 +1031,7 @@ void TracingCollector::EnumFinalizerProcessorRoots(RootSet& rootSet) const
             ctx.hasRawValue = true;
             VerifyRoots::VerifyRootPayload(ctx, &root, nullptr);
         }
-        EnumAndTagRawRoot(root, rootSet);
+        EnumAndTagRawRoot(root, rootSet, Generation::Old);
     };
     collectorResources.GetFinalizerProcessor().VisitGCRoots(visitor);
 }
@@ -1040,8 +1040,8 @@ void TracingCollector::EnumAllSurrectedExportRoots(RootSet &rootSet)
 {
     {
         std::lock_guard<std::mutex> lg(resurrectExportMtx);
-        CurrentizeValueRootSet(resurrectedExportObjectes);
-        CurrentizeValueRootSet(resurrectedExportObjectesForwardPhase);
+        CurrentizeValueRootSet(resurrectedExportObjectes, Generation::Old);
+        CurrentizeValueRootSet(resurrectedExportObjectesForwardPhase, Generation::Old);
         for (auto* obj : resurrectedExportObjectes) {
             rootSet.push_back(obj);
         }
@@ -1050,7 +1050,7 @@ void TracingCollector::EnumAllSurrectedExportRoots(RootSet &rootSet)
         }
     }
     std::lock_guard<std::mutex> lg(cycleWorkStackMtx);
-    CurrentizeValueRootMap(cycleRefWorkStack);
+    CurrentizeValueRootMap(cycleRefWorkStack, Generation::Old);
     auto it = cycleRefWorkStack.begin();
     while (it != cycleRefWorkStack.end()) {
         BaseObject* exportObj = it->first;

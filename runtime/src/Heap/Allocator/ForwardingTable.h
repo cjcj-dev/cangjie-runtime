@@ -129,22 +129,22 @@ public:
     // The generation set owns every allocation through reset.
     static bool BeginForwardingArena(Generation gen, RegionList& regions);
 
-    static bool InstallPublicationBeforeCopy(MAddress regionStart, size_t regionSize, RegionInfo* region);
+    static bool InstallPublicationBeforeCopy(MAddress regionStart, size_t regionSize, RegionInfo* region, Generation gen);
     // zGeneration.cpp:276-284: unlink every member, then destroy the set.
     static void ResetRelocationSet(Generation gen);
 #if defined(MRT_TESTABLE_INTERNALS)
     static const ForwardingAllocator* ArenaForTest(Generation gen);
 #endif
     // zForwardingTable.inline.hpp:43-62
-    static ZForwarding* get(MAddress addr);
+    static ZForwarding* get(MAddress addr, Generation gen);
     static void insert(ZForwarding* forwarding);
     static void remove(ZForwarding* forwarding);
 
-    static ZForwarding* Get(MAddress addr) { return get(addr); }
-    static ZForwarding* GetEntries(MAddress addr);
+    static ZForwarding* Get(MAddress addr, Generation gen) { return get(addr, gen); }
+    static ZForwarding* GetEntries(MAddress addr, Generation gen);
     // All queries use the same map (zForwardingTable.inline.hpp:36-46).
-    static ZForwarding* GetCovering(MAddress addr);
-    static void VisitAll(const std::function<void(ZForwarding*)>& visitor);
+    static ZForwarding* GetCovering(MAddress addr, Generation gen);
+    static void VisitAll(Generation generation, const std::function<void(ZForwarding*)>& visitor);
     // Product connection points for the dual carrier. Publication copies the
     // from-page view into the already-installed ZForwarding; every consumer
     // resolves the view back through the table rather than RegionInfo storage.
@@ -164,9 +164,10 @@ public:
     // decision instead of compiling a private test copy.
     static bool ReceiptAllowsForwarded(MAddress mapped);
     static uint64_t StaleToLifeCount();
-    static MAddress FindTo(MAddress from);
-    static bool EntriesArmed(MAddress from);
-    static LookupResult LookupTo(MAddress from);
+    static MAddress FindTo(MAddress from, Generation gen);
+    static bool EntriesArmed(MAddress from, Generation gen);
+    static LookupResult LookupTo(MAddress from, Generation gen);
+    static LookupResult LookupForwarding(MAddress from, ZForwarding* forwarding);
     // Fail-closed diagnostic only: enumerate all live carriers which cover the
     // target and, conditionally needed for an already-to target, reverse-scan
     // existing receipts.  This does not retain, publish, retire or destroy.
@@ -177,9 +178,6 @@ public:
 
 
 
-    static void NoteCompare(MAddress addr, bool legacy);
-    static void NoteDestCompare(MAddress from, MAddress geometricTo);
-    static void DumpCompare(const char* why);
 
     static bool Ready();
 

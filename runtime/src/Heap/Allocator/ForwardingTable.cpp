@@ -34,8 +34,8 @@ namespace {
 // zGeneration.cpp:276-284 / zRelocationSet.cpp:172-200.
 // Each generation owns its installed forwarding objects and their common arena.
 // The map borrows them until that generation resets its relocation set.
-ZGranuleMap<ZForwarding*> g_entries;
 struct RelocationSet {
+    ZGranuleMap<ZForwarding*> map;
     std::unique_ptr<ForwardingAllocator> arena;
     std::vector<ZForwarding*> forwardings;
 };
@@ -61,19 +61,6 @@ void MapPut(ZGranuleMap<ZForwarding*>& map, MAddress addr, size_t size, ZForward
 std::atomic<bool> g_ready{ false };
 // Serialize page facade publication with generation reset.
 std::mutex g_installLock;
-std::atomic<uint64_t> g_cmpTotal{ 0 };
-std::atomic<uint64_t> g_cmpAgree{ 0 };
-std::atomic<uint64_t> g_cmpTableOnly{ 0 };
-std::atomic<uint64_t> g_cmpLegacyOnly{ 0 };
-constexpr unsigned kTypeBuckets = 16;
-std::atomic<uint64_t> g_tableOnlyByType[kTypeBuckets] = {};
-std::atomic<uint64_t> g_legacyOnlyByType[kTypeBuckets] = {};
-
-std::atomic<uint64_t> g_destTotal{ 0 };
-std::atomic<uint64_t> g_destAgree{ 0 };
-std::atomic<uint64_t> g_destDisagree{ 0 };
-std::atomic<uint64_t> g_destPending{ 0 };
-std::atomic<uint64_t> g_destDisagreeByType[kTypeBuckets] = {};
 std::atomic<uint64_t> g_armedHit{ 0 };
 std::atomic<uint64_t> g_armedMiss{ 0 };
 std::atomic<uint64_t> g_unarmed{ 0 };
@@ -88,12 +75,13 @@ bool ForwardingTable::Initialize(MAddress heapStart, size_t heapSize, size_t uni
 {
     if (g_ready.load(std::memory_order_acquire)) {
 #if defined(MRT_GC_UNIT_TESTS)
-        if (g_entries.base() != heapStart) {
+        if (g_relocationSets[0].map.base() != heapStart) {
             // Aggregate gc_unit creates a fresh synthetic mmap per test. Each
             // fixture destructor has already drained/reclaimed its carriers;
             // rebase only the test build so the next fixture exercises the
             // same product address checks rather than an obsolete map base.
-            g_entries.ResetForTest();
+            g_relocationSets[0].map.ResetForTest();
+            g_relocationSets[1].map.ResetForTest();
             g_ready.store(false, std::memory_order_release);
         } else {
             return true;
@@ -105,14 +93,15 @@ bool ForwardingTable::Initialize(MAddress heapStart, size_t heapSize, size_t uni
     if (unitSize == 0 || heapSize == 0) {
         return false;
     }
-    if (!g_entries.Initialize(heapStart, heapSize, unitSize)) {
+    if (!g_relocationSets[0].map.Initialize(heapStart, heapSize, unitSize) ||
+        !g_relocationSets[1].map.Initialize(heapStart, heapSize, unitSize)) {
         LOG(RTLOG_ERROR, "[FWDTABLE] granule map init failed size=%zu unit=%zu -- table stays off", heapSize,
             unitSize);
         return false;
     }
     g_ready.store(true, std::memory_order_release);
     LOG(RTLOG_ERROR, "[FWDTABLE] armed base=%#zx size=%zu unit=%zu entries=%zu", static_cast<size_t>(heapStart),
-        heapSize, unitSize, g_entries.size());
+        heapSize, unitSize, g_relocationSets[0].map.size());
     static std::atomic<bool> dumped{ false };
     bool expected = false;
     if (dumped.compare_exchange_strong(expected, true, std::memory_order_relaxed)) {
@@ -143,6 +132,7 @@ bool ForwardingTable::BeginForwardingArena(Generation gen, RegionList& regions)
     size_t budget = 0;
     bool valid = true;
     regions.VisitAllRegions([&](RegionInfo* region) {
+        CHECK(region->GetOwnerGeneration() == gen);
         const size_t entries = ZForwarding::nentries(ObjectCountUpperBound(region, region->GetRegionSize()));
         size_t bytes;
         valid = valid && entries != 0 && ZForwarding::AttachedArray::allocation_size(entries, &bytes) &&
@@ -154,7 +144,7 @@ bool ForwardingTable::BeginForwardingArena(Generation gen, RegionList& regions)
     regions.VisitAllRegions([&](RegionInfo* region) {
         ZForwarding* forwarding = ZForwarding::alloc(
             ObjectCountUpperBound(region, region->GetRegionSize()), region->GetRegionStart(),
-            g_entries.base(), region->GetRegionSize(), region, region->GetRegionLifeId(), set.arena.get());
+            set.map.base(), region->GetRegionSize(), region, region->GetRegionLifeId(), set.arena.get());
         CHECK(forwarding != nullptr);
         forwarding->set_table_generation(static_cast<uint8_t>(gen));
         set.forwardings.push_back(forwarding);
@@ -193,27 +183,28 @@ void ForwardingTable::insert(ZForwarding* forwarding)
     if (forwarding == nullptr || !Ready()) {
         return;
     }
-    MapPut(g_entries, forwarding->start(), forwarding->size(), forwarding);
+    auto& map = g_relocationSets[forwarding->table_generation()].map;
+    CHECK(MapGet(map, forwarding->start()) == nullptr);
+    MapPut(map, forwarding->start(), forwarding->size(), forwarding);
 }
 
 void ForwardingTable::remove(ZForwarding* forwarding)
 {
-    if (forwarding != nullptr && Ready() && MapGet(g_entries, forwarding->start()) == forwarding) {
-        MapPut(g_entries, forwarding->start(), forwarding->size(), nullptr);
-    }
+    if (forwarding == nullptr || !Ready()) return;
+    auto& map = g_relocationSets[forwarding->table_generation()].map;
+    CHECK(MapGet(map, forwarding->start()) == forwarding);
+    MapPut(map, forwarding->start(), forwarding->size(), nullptr);
 }
 
-
-ZForwarding* ForwardingTable::get(MAddress addr)
+ZForwarding* ForwardingTable::get(MAddress addr, Generation gen)
 {
-    return Ready() ? MapGet(g_entries, addr) : nullptr;
+    return Ready() ? MapGet(g_relocationSets[static_cast<size_t>(gen)].map, addr) : nullptr;
 }
-
 
 bool ForwardingTable::InstallPublicationBeforeCopy(
-    MAddress regionStart, size_t regionSize, RegionInfo* region)
+    MAddress regionStart, size_t regionSize, RegionInfo* region, Generation gen)
 {
-    ZForwarding* forwarding = get(regionStart);
+    ZForwarding* forwarding = get(regionStart, gen);
     return forwarding != nullptr && forwarding->start() == regionStart &&
         forwarding->size() == regionSize && forwarding->page() == region && forwarding->page_life_current();
 }
@@ -238,13 +229,14 @@ void ForwardingTable::ResetRelocationSet(Generation gen)
     set.arena.reset();
 }
 
-ZForwarding* ForwardingTable::GetEntries(MAddress addr) { return get(addr); }
+ZForwarding* ForwardingTable::GetEntries(MAddress addr, Generation gen) { return get(addr, gen); }
 
-ZForwarding* ForwardingTable::GetCovering(MAddress addr) { return get(addr); }
+ZForwarding* ForwardingTable::GetCovering(MAddress addr, Generation gen) { return get(addr, gen); }
 
-void ForwardingTable::VisitAll(const std::function<void(ZForwarding*)>& visitor)
+void ForwardingTable::VisitAll(Generation generation, const std::function<void(ZForwarding*)>& visitor)
 {
-    if (Ready() && visitor != nullptr) g_entries.visit_unique(visitor);
+    if (!Ready() || visitor == nullptr) return;
+    g_relocationSets[static_cast<size_t>(generation)].map.visit_unique(visitor);
 }
 
 bool ForwardingTable::PublishFromPageView(RegionInfo* region, LiveInfo* liveInfo, uint64_t epoch,
@@ -256,7 +248,7 @@ bool ForwardingTable::PublishFromPageView(RegionInfo* region, LiveInfo* liveInfo
         return false;
     }
     std::lock_guard<std::mutex> lock(g_installLock);
-    ZForwarding* carrier = GetEntries(region->GetRegionStart());
+    ZForwarding* carrier = get(region->GetRegionStart(), static_cast<Generation>(owner));
     if (carrier == nullptr || carrier->page() != region) {
         return false;
     }
@@ -303,14 +295,9 @@ void ForwardingTable::ClearPageOwner(RegionInfo* region)
 
 const ZForwarding::FromPageView* ForwardingTable::GetFromPageView(RegionInfo* region)
 {
-    if (region == nullptr) {
-        return nullptr;
-    }
-    ZForwarding* carrier = GetEntries(region->GetRegionStart());
-    if (carrier == nullptr || carrier->page() != region) {
-        return nullptr;
-    }
-    return carrier->from_page_view(region->GetRegionLifeId());
+    if (region == nullptr) return nullptr;
+    auto carrier = RetainPageOwner(region);
+    return carrier ? carrier->from_page_view(region->GetRegionLifeId()) : nullptr;
 }
 
 bool ZForwarding::page_life_current() const
@@ -330,8 +317,9 @@ ForwardingTable::Publication ForwardingTable::EnsurePublicationBeforeCopy(
 ForwardingTable::Publication ForwardingTable::RetainOpenPublicationAfterCopy(
     RegionInfo* region, MAddress from)
 {
-    ZForwarding* forwarding = get(from);
-    return forwarding != nullptr && forwarding->page() == region && forwarding->page_life_current()
+    auto owner = RetainPageOwner(region);
+    ZForwarding* forwarding = owner.get();
+    return forwarding != nullptr && forwarding->covers(from) && forwarding->page_life_current()
         ? Publication(forwarding) : Publication();
 }
 
@@ -427,7 +415,7 @@ MAddress ZForwarding::resolve_live(MAddress to) const
     if (DestUsable(to)) {
         return to;
     }
-    ZForwarding* next = ForwardingTable::GetEntries(to);
+    ZForwarding* next = ForwardingTable::RetainPageOwner(toRegion).get();
     if (next == nullptr || next == this) {
         return 0;
     }
@@ -461,10 +449,10 @@ static void CaptureLookupCarrier(ZForwarding* table, LookupCarrierWitness* witne
     witness->valid = true;
 }
 
-MAddress ForwardingTable::FindTo(MAddress from)
+MAddress ForwardingTable::FindTo(MAddress from, Generation gen)
 {
     std::lock_guard<std::mutex> lock(g_installLock);
-    ZForwarding* tab = GetEntries(from);
+    ZForwarding* tab = get(from, gen);
     if (tab != nullptr) {
         if (!tab->covers(from)) {
             static std::atomic<uint64_t> g_findToUncovered{ 0 };
@@ -483,11 +471,15 @@ MAddress ForwardingTable::FindTo(MAddress from)
     return 0;
 }
 
-bool ForwardingTable::EntriesArmed(MAddress from) { return GetEntries(from) != nullptr; }
+bool ForwardingTable::EntriesArmed(MAddress from, Generation gen) { return get(from, gen) != nullptr; }
 
-ForwardingTable::LookupResult ForwardingTable::LookupTo(MAddress from)
+ForwardingTable::LookupResult ForwardingTable::LookupTo(MAddress from, Generation gen)
 {
-    ZForwarding* forwarding = get(from);
+    return LookupForwarding(from, get(from, gen));
+}
+
+ForwardingTable::LookupResult ForwardingTable::LookupForwarding(MAddress from, ZForwarding* forwarding)
+{
     LookupCarrierWitness witness;
     CaptureLookupCarrier(forwarding, &witness);
     const MAddress to = forwarding == nullptr ? 0 : forwarding->find(from);
@@ -560,7 +552,7 @@ ForwardingTable::NeverInstalledSnapshot ForwardingTable::CaptureNeverInstalledSn
         }
     };
     // The lookup domain is precisely the installed forwarding map.
-    visitActiveMap(g_entries);
+    for (const auto& set : g_relocationSets) visitActiveMap(set.map);
     return snapshot;
 }
 
@@ -570,92 +562,4 @@ uint64_t ForwardingTable::UnarmedCount() { return g_unarmed.load(std::memory_ord
 
 
 
-void ForwardingTable::NoteCompare(MAddress addr, bool legacy)
-{
-    if (!Ready()) {
-        return;
-    }
-    const bool table = get(addr) != nullptr;
-    const uint64_t n = g_cmpTotal.fetch_add(1, std::memory_order_relaxed) + 1;
-    if (table == legacy) {
-        g_cmpAgree.fetch_add(1, std::memory_order_relaxed);
-    } else {
-        RegionInfo* region = RegionInfo::TryGetRegionInfoAt(addr);
-        const unsigned rtype = region == nullptr ? kTypeBuckets - 1
-                                                 : static_cast<unsigned>(region->GetRegionType());
-        const unsigned bucket = rtype < kTypeBuckets ? rtype : kTypeBuckets - 1;
-        const unsigned ghost = (region != nullptr && region->IsGhostFromRegion()) ? 1u : 0u;
-        if (table) {
-            const uint64_t c = g_cmpTableOnly.fetch_add(1, std::memory_order_relaxed) + 1;
-            g_tableOnlyByType[bucket].fetch_add(1, std::memory_order_relaxed);
-            if (c <= 64) {
-                LOG(RTLOG_ERROR, "[FWDTABLE][tableOnly] n=%lu addr=%#zx rtype=%u ghost=%u", c,
-                    static_cast<size_t>(addr), rtype, ghost);
-            }
-        } else {
-            const uint64_t c = g_cmpLegacyOnly.fetch_add(1, std::memory_order_relaxed) + 1;
-            g_legacyOnlyByType[bucket].fetch_add(1, std::memory_order_relaxed);
-            if (c <= 64) {
-                LOG(RTLOG_ERROR, "[FWDTABLE][legacyOnly] n=%lu addr=%#zx rtype=%u ghost=%u", c,
-                    static_cast<size_t>(addr), rtype, ghost);
-            }
-        }
-    }
-    if ((n & (n - 1)) == 0) {
-        DumpCompare("periodic");
-    }
-}
-
-void ForwardingTable::NoteDestCompare(MAddress from, MAddress geometricTo)
-{
-    if (!Ready()) {
-        return;
-    }
-    const MAddress stored = FindTo(from);
-    const uint64_t n = g_destTotal.fetch_add(1, std::memory_order_relaxed) + 1;
-    if (stored == 0) {
-        g_destPending.fetch_add(1, std::memory_order_relaxed);
-    } else if (stored == geometricTo) {
-        g_destAgree.fetch_add(1, std::memory_order_relaxed);
-    } else {
-        g_destDisagree.fetch_add(1, std::memory_order_relaxed);
-        RegionInfo* region = RegionInfo::TryGetRegionInfoAt(from);
-        const unsigned rtype = region == nullptr ? kTypeBuckets - 1
-                                                 : static_cast<unsigned>(region->GetRegionType());
-        const unsigned bucket = rtype < kTypeBuckets ? rtype : kTypeBuckets - 1;
-        g_destDisagreeByType[bucket].fetch_add(1, std::memory_order_relaxed);
-        LOG(RTLOG_ERROR, "[FWDENT][disagree] from=%#zx table=%#zx geo=%#zx rtype=%u", static_cast<size_t>(from),
-            static_cast<size_t>(stored), static_cast<size_t>(geometricTo), rtype);
-    }
-    if ((n & (n - 1)) == 0) {
-        DumpCompare("dest-periodic");
-    }
-}
-
-void ForwardingTable::DumpCompare(const char* why)
-{
-    if (!Ready()) {
-        return;
-    }
-    LOG(RTLOG_ERROR, "[FWDTABLE][cmp] why=%s total=%lu agree=%lu tableOnly=%lu legacyOnly=%lu",
-        why == nullptr ? "?" : why, g_cmpTotal.load(std::memory_order_relaxed),
-        g_cmpAgree.load(std::memory_order_relaxed), g_cmpTableOnly.load(std::memory_order_relaxed),
-        g_cmpLegacyOnly.load(std::memory_order_relaxed));
-    LOG(RTLOG_ERROR, "[FWDENT][dest] why=%s total=%lu agree=%lu disagree=%lu pending=%lu",
-        why == nullptr ? "?" : why, g_destTotal.load(std::memory_order_relaxed),
-        g_destAgree.load(std::memory_order_relaxed), g_destDisagree.load(std::memory_order_relaxed),
-        g_destPending.load(std::memory_order_relaxed));
-    LOG(RTLOG_ERROR, "[FWDENT][sole] why=%s armedHit=%lu armedMiss=%lu unarmed=%lu", why == nullptr ? "?" : why,
-        g_armedHit.load(std::memory_order_relaxed), g_armedMiss.load(std::memory_order_relaxed),
-        g_unarmed.load(std::memory_order_relaxed));
-    for (unsigned t = 0; t < kTypeBuckets; ++t) {
-        const uint64_t to = g_tableOnlyByType[t].load(std::memory_order_relaxed);
-        const uint64_t lo = g_legacyOnlyByType[t].load(std::memory_order_relaxed);
-        const uint64_t dd = g_destDisagreeByType[t].load(std::memory_order_relaxed);
-        if (to != 0 || lo != 0 || dd != 0) {
-            LOG(RTLOG_ERROR, "[FWDTABLE][bytype] rtype=%u tableOnly=%lu legacyOnly=%lu destDisagree=%lu", t, to, lo,
-                dd);
-        }
-    }
-}
 } // namespace MapleRuntime

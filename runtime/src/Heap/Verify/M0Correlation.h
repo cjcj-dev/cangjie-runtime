@@ -89,8 +89,7 @@ AllocationToken ExternalTokenForTest(uint64_t externalKey);
 bool ValidateEndpointForTest(bool present, const ObjectStamp& stamp);
 const char* ClassifyEvidenceForTest(bool targetPresent, const ObjectStamp& target,
                                     bool consumerPresent, const ObjectStamp& consumer,
-                                    bool activeToPresent, const ObjectStamp& activeTo,
-                                    bool retiredToPresent, const ObjectStamp& retiredTo);
+                                    bool activeToPresent, const ObjectStamp& activeTo);
 void DropNextM0WriteForTest();
 bool FooterValidForTest();
 TestSnapshot SnapshotForTest();

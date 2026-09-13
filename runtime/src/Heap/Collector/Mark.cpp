@@ -238,7 +238,7 @@ void WCollector::EnumRefFieldRoot(RefField<>& field, RootSet& rootSet) const
     rootSet.push_back(latest);
 }
 
-void WCollector::EnumAndTagRawRoot(ObjectRef& ref, RootSet& rootSet) const
+void WCollector::EnumAndTagRawRoot(ObjectRef& ref, RootSet& rootSet, Generation generation) const
 {
     zaddress_unsafe observed = ref.LoadPlain();
     if (is_null(observed)) {
@@ -255,7 +255,7 @@ void WCollector::EnumAndTagRawRoot(ObjectRef& ref, RootSet& rootSet) const
     }
     if (IsGhostFromObject(root)) {
         const ForwardingProvenance provenance{ ForwardingHolderKind::StackSlot, this, &ref };
-        BaseObject* to = FindToVersion(root).GetOrFailClosed(
+        BaseObject* to = FindToVersion(root, generation).GetOrFailClosed(
             "WCollector::MarkStackRoots", provenance);
         if (to != nullptr) {
             root = to;
@@ -367,7 +367,8 @@ void WCollector::TraceRefField(BaseObject* obj, RefField<>& field, WorkStack& wo
     // not relocate phase, so do not TryMutatorRelocate / forward_object here.
     {
         const MAddress fromAddr = reinterpret_cast<MAddress>(latest);
-        MAddress stored = ForwardingTable::FindTo(fromAddr);
+        MAddress stored = is_load_good(oldField) ? 0 : ForwardingTable::FindTo(
+            raw(oldField.GetTargetObject()), static_cast<Generation>(remap_generation(oldField)));
         if (stored != 0) {
             BaseObject* to = reinterpret_cast<BaseObject*>(stored);
             if (ToHeaderCovered(to)) {
@@ -780,8 +781,8 @@ void WCollector::VisitMinorValueRoots(const std::function<void(BaseObject*)>& vi
 {
     {
         std::lock_guard<std::mutex> lock(resurrectExportMtx);
-        CurrentizeValueRootSet(resurrectedExportObjectes);
-        CurrentizeValueRootSet(resurrectedExportObjectesForwardPhase);
+        CurrentizeValueRootSet(resurrectedExportObjectes, Generation::Young);
+        CurrentizeValueRootSet(resurrectedExportObjectesForwardPhase, Generation::Young);
         gMinorRootOrigin = "value_export";
         for (BaseObject* object : resurrectedExportObjectes) {
             visitor(object);
@@ -792,7 +793,7 @@ void WCollector::VisitMinorValueRoots(const std::function<void(BaseObject*)>& vi
         }
     }
     std::lock_guard<std::mutex> lock(cycleWorkStackMtx);
-    CurrentizeValueRootMap(cycleRefWorkStack);
+    CurrentizeValueRootMap(cycleRefWorkStack, Generation::Young);
     gMinorRootOrigin = "value_cycle";
     for (const auto& entry : cycleRefWorkStack) {
         visitor(entry.first);

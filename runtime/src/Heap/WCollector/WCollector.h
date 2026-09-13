@@ -224,26 +224,27 @@ public:
     void TraceObjectRefFields(BaseObject* obj, WorkStack& workStack, bool finalizable = false) override;
     void FollowPartialArray(const MarkStackEntry& entry, WorkStack& workStack) override;
     BaseObject* GetAndTryTagObj(RefSlotKind kind, BaseObject* obj, RefField<>& field) override;
-    BaseObject* ForwardObject(BaseObject* fromVersion) override;
+    BaseObject* ForwardObject(BaseObject* fromVersion, Generation generation) override;
     BaseObject* ForwardObjectExclusive(BaseObject* obj) override;
-    BaseObject* ResolveStoreValue(BaseObject* ref, const ForwardingProvenance& provenance) const override;
+    BaseObject* ResolveStoreValue(BaseObject* ref, const ForwardingProvenance& provenance,
+                                  Generation generation) const override;
     void PostResolveCycleTask();
     void PrepareCycleRef()
     {
         std::lock_guard<std::mutex> lg(cycleWorkStackMtx);
-        CurrentizeValueRootMap(cycleRefWorkStack);
-        CurrentizeValueRootMap(discoveredExternObjects);
+        CurrentizeValueRootMap(cycleRefWorkStack, Generation::Old);
+        CurrentizeValueRootMap(discoveredExternObjects, Generation::Old);
         for (auto& entry : discoveredExternObjects) {
             std::list<BaseObject*>& destination = cycleRefWorkStack[entry.first];
             destination.splice(destination.end(), entry.second);
         }
         discoveredExternObjects.clear();
     }
-    void MergeResurrectExportObjects()
+    void MergeResurrectExportObjects(Generation generation)
     {
         std::lock_guard<std::mutex> lg(resurrectExportMtx);
-        CurrentizeValueRootSet(resurrectedExportObjectes);
-        CurrentizeValueRootSet(resurrectedExportObjectesForwardPhase);
+        CurrentizeValueRootSet(resurrectedExportObjectes, generation);
+        CurrentizeValueRootSet(resurrectedExportObjectesForwardPhase, generation);
         resurrectedExportObjectes.insert(resurrectedExportObjectesForwardPhase.begin(),
             resurrectedExportObjectesForwardPhase.end());
         resurrectedExportObjectesForwardPhase.clear();
@@ -411,24 +412,16 @@ public:
     ZGenerationId remap_generation(RefField<>& ref) const override
     {
         CHECK_DETAIL(!is_load_good(ref), "load-good reference does not need remap");
-        bool youngLoadGood = is_young_load_good(ref);
-        bool oldLoadGood = is_old_load_good(ref);
-        if (oldLoadGood && !youngLoadGood) {
-            return ZGenerationId::young;
-        }
-        if (youngLoadGood && !oldLoadGood) {
+        if (is_old_load_good(ref)) return ZGenerationId::young;
+        if (is_young_load_good(ref)) return ZGenerationId::old;
+        // zBarrier.inline.hpp:124-136: the remembered bits disambiguate old
+        // heap fields; otherwise test the young generation's forwarding map.
+        if ((raw(ref.GetFieldValue()) & REMEMBERED_MASK) == REMEMBERED_MASK) {
             return ZGenerationId::old;
         }
-
-        BaseObject* target = to_object(ref.GetTargetObject());
-        if (!Heap::IsHeapAddress(target)) {
-            return ZGenerationId::old;
-        }
-        RegionInfo* forwarding = RegionInfo::GetGhostFromRegionAt(reinterpret_cast<MAddress>(target));
-        if (forwarding != nullptr && forwarding->generation_id() == ZGenerationId::young) {
-            return ZGenerationId::young;
-        }
-        return ZGenerationId::old;
+        const MAddress address = raw(ref.GetTargetObject());
+        return ForwardingTable::get(address, Generation::Young) != nullptr
+            ? ZGenerationId::young : ZGenerationId::old;
     }
 
     // OpenJDK ZGeneration::relocate_or_remap_object (zGeneration.inline.hpp:131-140): an address
@@ -455,22 +448,19 @@ public:
             return obj;
         }
         const MAddress fromAddr = reinterpret_cast<MAddress>(obj);
-        RegionInfo* forwarding = RegionInfo::GetGhostFromRegionAt(fromAddr);
-        if (forwarding == nullptr || forwarding->generation_id() != generation) {
-            const MAddress retired = ForwardingTable::FindTo(fromAddr);
-            if (retired != 0) {
-                BaseObject* to = reinterpret_cast<BaseObject*>(retired);
-                if (ToHeaderCovered(to)) {
-                    return to;
-                }
-            }
-            return obj;
+        const Generation ownerGeneration = generation == ZGenerationId::young
+            ? Generation::Young : Generation::Old;
+        ZForwarding* record = ForwardingTable::get(fromAddr, ownerGeneration);
+        if (record == nullptr) return obj;
+        if (const MAddress hit = record->find(fromAddr)) {
+            return reinterpret_cast<BaseObject*>(hit);
         }
+        RegionInfo* forwarding = record->page();
         RegionSpace& space = reinterpret_cast<RegionSpace&>(theAllocator);
-        const bool entriesArmed = ForwardingTable::EntriesArmed(fromAddr);
+        const bool entriesArmed = ForwardingTable::EntriesArmed(fromAddr, ownerGeneration);
         if constexpr (ForwardingTable::kEntriesSoleWhenArmed) {
             if (entriesArmed) {
-                const MAddress stored = ForwardingTable::FindTo(fromAddr);
+                const MAddress stored = ForwardingTable::FindTo(fromAddr, ownerGeneration);
                 if (stored != 0) {
                     BaseObject* to = reinterpret_cast<BaseObject*>(stored);
                     if (ToHeaderCovered(to)) {
@@ -503,7 +493,7 @@ public:
             }
         } else if (obj->IsForwarded()) {
             BaseObject* published =
-                FindToVersion(obj).GetOrFailClosed("WCollector::ForwardObjectImpl", provenance);
+                FindToVersion(obj, ownerGeneration).GetOrFailClosed("WCollector::ForwardObjectImpl", provenance);
             if (published != nullptr) {
                 return published;
             }
@@ -513,7 +503,7 @@ public:
         if (self != nullptr) {
             return self;
         }
-        if (const MAddress hit = ForwardingTable::FindTo(fromAddr)) {
+        if (const MAddress hit = ForwardingTable::FindTo(fromAddr, ownerGeneration)) {
             return reinterpret_cast<BaseObject*>(hit);
         }
         // ③ find-miss: wait for the page task then find again
@@ -523,7 +513,7 @@ public:
         if (resolved != nullptr) {
             return resolved;
         }
-        if (const MAddress hit = ForwardingTable::FindTo(fromAddr)) {
+        if (const MAddress hit = ForwardingTable::FindTo(fromAddr, ownerGeneration)) {
             return reinterpret_cast<BaseObject*>(hit);
         }
         CHECK_DETAIL(false,
@@ -568,7 +558,7 @@ public:
                     const ForwardingProvenance provenance{
                         ForwardingHolderKind::HeapRef, this, &obj
                     };
-                    obj = ResolveStoreValue(obj, provenance);
+                    obj = ValidateCurrentValue(obj, provenance);
                 }
             }
         }
@@ -586,7 +576,7 @@ public:
     void ResolveCycleRef() override;
 
     // BaseObject* ForwardFixRefField(RefField<>& field) const;
-    BaseObject* ForwardUpdateRawRef(ObjectRef& ref);
+    BaseObject* ForwardUpdateRawRef(ObjectRef& ref, Generation generation);
 
     // lonefrom: "is this object being relocated in this cycle" must not be asked as
     // "is its region still typed FROM_REGION".  ForwardFromRegions takes each region off the
@@ -629,9 +619,6 @@ public:
             if (!Heap::IsHeapAddress(obj)) {
                 return false;
             }
-            if (ForwardingTable::Get(reinterpret_cast<MAddress>(obj)) == nullptr) {
-                return false;
-            }
             // The table is installed over a heap span; membership still
             // requires the per-region forwarding publication.  Unselected
             // regions retain a NORMAL route and no forwarding face, and must
@@ -640,7 +627,7 @@ public:
             RegionInfo* region = RegionInfo::GetGhostFromRegionAt(reinterpret_cast<MAddress>(obj));
             return region != nullptr &&
                 (region->GetLiveInfo0ForProbe() != nullptr ||
-                 ForwardingTable::GetEntries(region->GetRegionStart()) != nullptr ||
+                 ForwardingTable::RetainPageOwner(region).get() != nullptr ||
                  region->IsForwardingDone());
         }
         // filter const string object.
@@ -685,8 +672,8 @@ public:
         const MAddress fromAddr = reinterpret_cast<MAddress>(fromObj);
         BaseObject* to = nullptr;
         if constexpr (ForwardingTable::kEntriesSoleWhenArmed) {
-            if (ForwardingTable::EntriesArmed(fromAddr)) {
-                const MAddress stored = ForwardingTable::FindTo(fromAddr);
+            if (auto owner = ForwardingTable::RetainPageOwner(region)) {
+                const MAddress stored = owner->find(fromAddr);
                 to = stored == 0 ? nullptr : reinterpret_cast<BaseObject*>(stored);
                 if (ToHeaderCovered(to)) {
                     return to;
@@ -732,7 +719,7 @@ public:
     // 0x6282f2... is the compiler's own image, the same range as start_ip in that run's stack-map
     // lines.  Gating only the first site moved the abort to the second, which is what showed the
     // population was the old-tag paths rather than one call site.
-    FindToVersionResult FindToVersion(BaseObject* obj) const override
+    FindToVersionResult FindToVersion(BaseObject* obj, Generation generation) const override
     {
         // Mirror IsGhostFromObject: GetGhostFromRegionAt → GetUnitIdxAt has no heap range
         // check, so null / non-heap (incl. colour-only null after flip) aborts as
@@ -794,7 +781,7 @@ public:
         };
         BaseObject* stored = nullptr;
         if constexpr (ForwardingTable::kConsumeEntries) {
-            lookup = ForwardingTable::LookupTo(fromAddr);
+            lookup = ForwardingTable::LookupTo(fromAddr, generation);
             lookupQueried = true;
             if (lookup.to != 0) {
                 stored = reinterpret_cast<BaseObject*>(lookup.to);
@@ -826,7 +813,6 @@ public:
         RegionSpace& space = reinterpret_cast<RegionSpace&>(theAllocator);
         BaseObject* geometric = space.GetRegionManager().FindPublishedRoute(obj).dest;
         if (geometric != nullptr) {
-            ForwardingTable::NoteDestCompare(fromAddr, reinterpret_cast<MAddress>(geometric));
         }
         if (geometric != nullptr && ZForwarding::DestUsable(reinterpret_cast<MAddress>(geometric)) &&
             ToHeaderCovered(geometric)) {
@@ -883,7 +869,7 @@ protected:
 
     bool TryUntagRefField(BaseObject* obj, RefField<>& field, BaseObject*& target) const override;
 
-    BaseObject* TryForwardObject(BaseObject* fromVersion);
+    BaseObject* TryForwardObject(BaseObject* fromVersion, Generation generation);
 
     bool TryUpdateRefField(BaseObject* obj, RefField<>& field, BaseObject*& newRef) const override;
     bool TryUpdateRefFieldWithProvenance(BaseObject* obj, RefField<>& field, BaseObject*& newRef,
@@ -998,7 +984,7 @@ protected:
         // (zAddress.inline.hpp:609-624,806-811). ResolveStoreValue is our
         // make-load-good producer: a relocation-set address is looked up or copied
         // by this thread; an unresolved address never reaches colouring.
-        target = ResolveStoreValue(target, provenance);
+        target = ValidateCurrentValue(target, provenance);
         CHECK_DETAIL(target != nullptr && Heap::IsHeapAddress(target),
                      "store-good requires a resolved heap address");
         CheckStoreGoodTarget("GetAndTryTagRefField", target, provenance);
@@ -1058,70 +1044,6 @@ protected:
     // A store value is stale if *either* authority says so: the region it sits in is from-space,
     // or the object's own state word says it has been forwarded.  Region type moves; the state
     // word does not, so asking only the region is what let load-good slots name FORWARDED targets.
-    // kAskObjectState: compile-time arm switch, same reason as StateWord::kInitStateAtAlloc.
-    static constexpr bool kAskObjectState = true;
-
-    // routeask: OpenJDK never asks a region-type enum whether an object is being relocated.
-    // ZGeneration::relocate_or_remap_object (zGeneration.inline.hpp:131-140) asks the *address*:
-    //     ZForwarding* const forwarding = _forwarding_table.get(addr);
-    //     if (forwarding == nullptr) { return safe(addr); }
-    //     return _relocate.relocate_object(forwarding, addr);
-    // The table is installed once with the relocation set and does not change under a concurrent
-    // reader, and when the address *is* in it the load barrier relocates the object right there --
-    // so a caller can never come away holding a not-yet-relocated relocation-set object.
-    //
-    // Ours asks IsFromObject -> regionInfo->IsFromRegion(), a mutable enum that is false both
-    // before the region is enrolled and after ForwardFromRegions retypes it to LONE_FROM.  That is
-    // the same defect shape as the remset condition (abe3c4d8) and the stillFrom predicate: a
-    // question answered by a property that moves, rather than by the authority.
-    //
-    // This counts, without changing behaviour, how often we are about to paint the current colour
-    // on a target whose region already has a route state other than NORMAL -- i.e. exactly the
-    // objects ZGC's table would have caught.  Trigger count, not `armed`, is the evidence.
-    static constexpr bool kRouteAskProbe = true;
-    mutable std::atomic<uint64_t> routeAskHits{ 0 };
-
-    // Full counts, not a sample.  The previous version logged on powers of two and every one of the
-    // 105 sampled lines happened to be covered, which was written up as "100% covered" -- a
-    // population claim from a sample of the head of the distribution.  An escaping case is by
-    // definition rare, so sampling is exactly the wrong instrument for it: count both arms for
-    // every call and log only when the uncovered arm moves.
-    //
-    // routeState numbering matters here and I got it wrong once already:
-    // RegionInfo.h:136-143 is NORMAL=0, FORWARDABLE=1, ROUTING=2, ROUTED=3, COMPACTED=4,
-    // FORWARDED=5 -- so the enrolment mark is FORWARDABLE, set by PrepareForwardableRegion inside
-    // PrepareFromRegionList, which runs from PrepareForwardTable<Old> before the relocate flip.
-    mutable std::atomic<uint64_t> routeAskCovered{ 0 };
-    mutable std::atomic<uint64_t> routeAskEscaped{ 0 };
-
-    void NoteRouteAsk(BaseObject* target, bool predicateSaidStale) const
-    {
-        if (!kRouteAskProbe || target == nullptr || !Heap::IsHeapAddress(target)) {
-            return;
-        }
-        RegionInfo* region = RegionInfo::TryGetRegionInfoAt(reinterpret_cast<MAddress>(target));
-        if (region == nullptr) {
-            return;
-        }
-        if (ForwardingTable::GetEntries(region->GetRegionStart()) == nullptr) {
-            return;
-        }
-        if (predicateSaidStale) {
-            const uint64_t c = routeAskCovered.fetch_add(1, std::memory_order_relaxed) + 1;
-            if ((c & (c - 1)) == 0) {
-                // Positive control on the covered arm, so an escaped=0 cannot mean "probe dead".
-                LOG(RTLOG_ERROR, "[ROUTEASK] covered=%lu escaped=%lu", c,
-                    routeAskEscaped.load(std::memory_order_relaxed));
-            }
-            return;
-        }
-        const uint64_t e = routeAskEscaped.fetch_add(1, std::memory_order_relaxed) + 1;
-        LOG(RTLOG_ERROR, "[ROUTEASK][ESCAPED] e=%lu covered=%lu target=%p routeState=%d isFrom=%d isGhost=%d fwd=%d",
-            e, routeAskCovered.load(std::memory_order_relaxed), static_cast<void*>(target),
-            static_cast<int>(region->RelocateObserve()), IsFromObject(target) ? 1 : 0, IsGhostFromObject(target) ? 1 : 0,
-            target->IsForwarded() ? 1 : 0);
-    }
-
     // ZBarrier::is_good_or_null_fast_path keeps an already-remapped value out
     // of the from-side slow path (zBarrier.inline.hpp:294-343).  The equivalent
     // invariant here is content plus current relocation-set membership: a
@@ -1131,89 +1053,14 @@ protected:
     // current to-version as a historical from-version.  Do not turn a lookup
     // miss into success here: current from-range members remain on the normal
     // receipt/relocate path and therefore retain fail-closed handling.
-    bool IsAlreadyToStoreValue(BaseObject* target) const
+    bool IsAlreadyToStoreValue(BaseObject* target, Generation generation) const
     {
         return target != nullptr && Heap::IsHeapAddress(target) &&
             Collector::JudgeHandOutTarget(target) == HandVerdict::Usable &&
-            !IsFromObject(target);
+            ForwardingTable::get(reinterpret_cast<MAddress>(target), generation) == nullptr;
     }
 
-    bool IsStaleStoreValue(BaseObject* target) const
-    {
-        // FindToVersion / IsFromObject / IsGhostFromObject all
-        // refuse a non-heap address.  kAskObjectState used to read
-        // target->IsForwarded() (StateWord objectState at +6) with no heap gate.
-        // GetAndTryTagRefField is handed TypeInfo* / binary constants / immortal
-        // metadata after Flip.  cjpm N=5 r1 on
-        // 1f8730a54: target=0x646e65706564 ASCII "depend", si_addr=target+6,
-        // insn=movzx 0x6(%r12),%eax @ IsStaleStoreValue, forward/fix.
-        if (target == nullptr || !Heap::IsHeapAddress(target)) {
-            return false;
-        }
-        if (IsAlreadyToStoreValue(target)) {
-            return false;
-        }
-        RegionInfo* region = RegionInfo::GetGhostFromRegionAt(reinterpret_cast<MAddress>(target));
-        if (region != nullptr &&
-            region->IsCompactRouteDestination(reinterpret_cast<MAddress>(target)) &&
-            Collector::JudgeHandOutTarget(target) == HandVerdict::Usable) {
-            // A completed compact-in-place route is positive to-address
-            // provenance. ZGC exposes the reset page only after every
-            // forwarding entry has been installed (zRelocate.cpp:1013-1037).
-            return false;
-        }
-        FindToVersionResult mapped = FindToVersion(target);
-        if (mapped.found() == target && Collector::JudgeHandOutTarget(target) == HandVerdict::Usable) {
-            // ZGC's allocation-failure path can relocate a page in place, but
-            // still inserts one forwarding entry per live object before
-            // detach_page (zRelocate.cpp:862-925,1013-1037).
-            return false;
-        }
-        // Membership is "this page will move", not "this address has moved", and only the second
-        // is staleness.  ZGeneration::relocate_or_remap_object hands every member address to
-        // ZRelocate::relocate_object, whose first act is forwarding->find(from_addr): a hit means
-        // the object already moved, so the from-address is stale; a miss means it has not moved,
-        // and relocate_object copies it and returns the new address
-        // (zGeneration.inline.hpp:131-140; zRelocate.cpp:382-416).  A page enters the relocation
-        // set full of live objects whose own addresses are still the only correct ones, so ZGC has
-        // no predicate anywhere that reads membership as staleness, and cannot have one.
-        //
-        // The leg deleted here was `region != nullptr || IsFromObject(target)`.  Measured on
-        // NW256/256MB, verbatim in the two shots that reached the refusal (SO ea3c92943e1714a6 and
-        // 965d7c2417a721b9): the refused address had entriesArmed=1 with lookupTo=0
-        // toAnswer=ArmedMiss, header stateCode=0 and FindToVersion=NotForwarded -- an object
-        // nothing had moved -- while the producer that had just handed it back recorded
-        // resolveExit=4 (a forwarding-table hit) with exitTableArmed=0 exitGhost=0.  The
-        // relocation-set enrolment walk ran on another thread in between.  A predicate whose
-        // answer flips under a concurrent enrolment is not an invariant of the value.
-        //
-        // The two provenance exits above stay: under compact-in-place the from- and to-layouts
-        // share one span, so the same address can be both a published destination and a from-index
-        // that the table maps elsewhere, and only the page's own record separates them
-        // (zForwarding.cpp:55-64).  Dropping them made a compacted-page destination read as stale
-        // 3/3 at gc=0 (SO 12e241ab16cb4bd1, from=resolved=regionStart+33480).
-        //
-        // The "has moved" answer has to come from the *current* forwarding for this address, not
-        // from FindToVersion: that one falls back to a retired-table scan, and ZGC has no such
-        // tail -- a ZForwarding exists only for the relocation that created it and is detached at
-        // its end (zForwarding.cpp:171-181).  Under compact-in-place a retired entry indexes a
-        // live current from-address and answers with the destination some other object was moved
-        // to a cycle ago (ForwardingTable.cpp retiredserve).  Measured 2/2 at gc=0 on SO
-        // 342125e11f1d5fc6: a NORMAL, non-member region (route=0 ghost=nil isFrom=0
-        // entriesArmed=0) whose retired table mapped regionStart+8968 onto regionStart+4856 --
-        // the address was current and the answer a cycle old.
-        const bool unmovable = IsUnmovableFromObject(target);
-        const MAddress targetAddr = reinterpret_cast<MAddress>(target);
-        MAddress publishedAddr = 0;
-        if (ZForwarding* entries = ForwardingTable::GetEntries(targetAddr)) {
-            publishedAddr = entries->find(targetAddr);
-        }
-        const bool stale = !unmovable &&
-            ((publishedAddr != 0 && publishedAddr != targetAddr) ||
-             (kAskObjectState && target->IsForwarded()));
-        NoteRouteAsk(target, stale);
-        return stale;
-    }
+
 
     // Typed, unconditional boundary: HeapSlot write-back is coloured while
     // stack/register/static RootSlot write-back stays plain, matching ZGC's
@@ -1260,7 +1107,7 @@ protected:
 
     void DoGarbageCollection() override;
     void ProcessFinalizers() override;
-    void EnumAndTagRawRoot(ObjectRef& ref, RootSet& rootSet) const override;
+    void EnumAndTagRawRoot(ObjectRef& ref, RootSet& rootSet, Generation generation) const override;
 
 private:
     using MinorObjectSet = std::unordered_set<BaseObject*>;
@@ -1371,8 +1218,8 @@ private:
     void PreforwardAllExportFromRoots();
     void PreforwardStaticRoots();
     void PreforwardFinalizerProcessorRoots();
-    void PreforwardDiscoveredExternObjects();
-    void PreforwardAllResurrectExportFromObjects();
+    void PreforwardDiscoveredExternObjects(Generation generation);
+    void PreforwardAllResurrectExportFromObjects(Generation generation);
     CrossRefHandler GetCrossRefHandler(BaseObject* foreignProxy);
 #if defined(MRT_GC_UNIT_TESTS)
     CrossRefHandler cycleRefHandlerForTest = nullptr;

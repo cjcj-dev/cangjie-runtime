@@ -23,6 +23,7 @@
 #include "GcStats.h"
 
 namespace MapleRuntime {
+enum class Generation : uint8_t;
 // GCPhase describes phases for stw/concurrent gc.
 enum GCPhase : uint8_t {
     GC_PHASE_UNDEF = 0,
@@ -490,6 +491,7 @@ public:
         (generation == GCCycleGeneration::YOUNG ? youngCycle : oldCycle).PublishPhase(value);
     }
     GCReason GetCycleReason() const { return ActiveCycle().Reason(); }
+    virtual Generation ActiveForwardingGeneration() const;
 
     // determine how we treat new object during gc.
     virtual void MarkNewObject(BaseObject*) {}
@@ -526,7 +528,7 @@ public:
 
     virtual GCStats& GetGCStats() { AbortUnimplemented("Collector::GetGCStats"); }
 
-    virtual BaseObject* ForwardObject(BaseObject*) { AbortUnimplemented("Collector::ForwardObject"); }
+    virtual BaseObject* ForwardObject(BaseObject*, Generation) { AbortUnimplemented("Collector::ForwardObject"); }
 
     virtual bool ShouldIgnoreRequest(GCRequest& quest) = 0;
     virtual bool IsFromObject(BaseObject*) const { AbortUnimplemented("Collector::IsFromObject"); }
@@ -538,16 +540,17 @@ public:
     // Every miss has a public state. Consumers may treat NotManaged and
     // NotForwarded as their existing soft misses; Unavailable must never fall
     // through to object-field access.
-    virtual FindToVersionResult FindToVersion(BaseObject* obj) const = 0;
+    virtual FindToVersionResult FindToVersion(BaseObject* obj, Generation generation) const = 0;
 
     // OpenJDK zBarrier.inline.hpp:695-716 store_barrier / color_store_good:
     // a stored reference must already be the current version (remap included).
-    // Default identity so gc_unit Collector stubs do not abort.
-    virtual BaseObject* ResolveStoreValue(BaseObject* ref,
-                                          const ForwardingProvenance& provenance) const
+    // New raw values are already current; validate without selecting a forwarding map.
+    BaseObject* ValidateCurrentValue(BaseObject* ref, const ForwardingProvenance& provenance) const;
+
+    virtual BaseObject* ResolveStoreValue(BaseObject* ref, const ForwardingProvenance& provenance,
+                                          Generation generation) const
     {
-        (void)provenance;
-        return ref;
+        return relocate_or_remap_object(ref, static_cast<ZGenerationId>(generation), provenance);
     }
 
     virtual bool TryUpdateRefField(BaseObject*, RefField<>&, BaseObject*&) const
@@ -755,7 +758,7 @@ public:
     // F5: to==nullptr must not silently return a dead/zeroed from (REPORT-tagaba F5).
     // Implementation in Collector.cpp — needs complete BaseObject + CHECK_DETAIL.
     // Anchor main 9ad991c4e8660c26d6bfe575f6425e1b227bdf94.
-    BaseObject* FindLatestVersion(BaseObject* obj, const ForwardingProvenance& provenance) const;
+    BaseObject* FindLatestVersion(BaseObject* obj, const ForwardingProvenance& provenance, Generation generation) const;
 
 protected:
     virtual void RequestGCInternal(GCReason, bool) { AbortUnimplemented("Collector::RequestGCInternal"); }

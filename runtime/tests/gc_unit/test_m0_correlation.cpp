@@ -283,7 +283,7 @@ GC_TEST(M0Correlation, InvalidPresentEndpointInvalidatesCandidate)
 {
     const M0Correlation::ObjectStamp good = ValidStamp(0x200030u, 0x200000u, 9);
     GC_EXPECT_TRUE(IsClass(M0Correlation::ClassifyEvidenceForTest(
-        true, good, true, good, false, {}, false, {}), "VALID"));
+        true, good, true, good, false, {}), "VALID"));
 
     M0Correlation::ObjectStamp zeroLife = good;
     zeroLife.regionLife = 0;
@@ -292,26 +292,22 @@ GC_TEST(M0Correlation, InvalidPresentEndpointInvalidatesCandidate)
 
     const auto invalid = [&](bool targetPresent, const M0Correlation::ObjectStamp& target,
                              bool consumerPresent, const M0Correlation::ObjectStamp& consumer,
-                             bool activePresent, const M0Correlation::ObjectStamp& active,
-                             bool retiredPresent, const M0Correlation::ObjectStamp& retired) {
+                             bool activePresent, const M0Correlation::ObjectStamp& active) {
         GC_EXPECT_TRUE(IsClass(M0Correlation::ClassifyEvidenceForTest(
-            targetPresent, target, consumerPresent, consumer, activePresent, active,
-            retiredPresent, retired), "INVALID_EVIDENCE"));
+            targetPresent, target, consumerPresent, consumer, activePresent, active), "INVALID_EVIDENCE"));
     };
 
-    invalid(true, zeroLife, true, good, false, {}, false, {});
-    invalid(true, inconsistent, true, good, false, {}, false, {});
-    invalid(true, good, true, zeroLife, false, {}, false, {});
-    invalid(true, good, true, inconsistent, false, {}, false, {});
-    invalid(true, good, true, good, true, zeroLife, false, {});
-    invalid(true, good, true, good, true, inconsistent, false, {});
-    invalid(true, good, true, good, false, {}, true, zeroLife);
-    invalid(true, good, true, good, false, {}, true, inconsistent);
+    invalid(true, zeroLife, true, good, false, {});
+    invalid(true, inconsistent, true, good, false, {});
+    invalid(true, good, true, zeroLife, false, {});
+    invalid(true, good, true, inconsistent, false, {});
+    invalid(true, good, true, good, true, zeroLife);
+    invalid(true, good, true, good, true, inconsistent);
 
-    // S0 carries no active/retired endpoint; absence is evidence, not an
+    // S0 carries no forwarding endpoint; absence is evidence, not an
     // invented invalid stamp.
     GC_EXPECT_TRUE(IsClass(M0Correlation::ClassifyEvidenceForTest(
-        true, good, true, good, false, zeroLife, false, inconsistent), "VALID"));
+        true, good, true, good, false, zeroLife), "VALID"));
 }
 
 GC_TEST(M0Correlation, RegionResetReuseMintsNewToken)
