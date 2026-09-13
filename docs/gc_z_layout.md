@@ -37,7 +37,7 @@
 | `Common/ColourMask.h:204` · `Common/ColourPredicates.h:35` · `Common/ColourTypes.h:44` | `runtime/src/Heap/z/zAddress.inline.hpp:1` | `/root/cj_build/reference/jdk/src/hotspot/share/gc/z/zAddress.inline.hpp:49` |
 | `Heap/Allocator/MemMap.cpp:361` | `runtime/src/Heap/z/zAddressSpaceLimit.cpp:1` | `/root/cj_build/reference/jdk/src/hotspot/share/gc/z/zAddressSpaceLimit.cpp:33` |
 | `Heap/Allocator/MemMap.h:34` | `runtime/src/Heap/z/zAddressSpaceLimit.hpp:1` | `/root/cj_build/reference/jdk/src/hotspot/share/gc/z/zAddressSpaceLimit.hpp:30` |
-| `Heap/Allocator/ZAttachedArray.h:24` | `runtime/src/Heap/z/zAttachedArray.hpp:1` | `/root/cj_build/reference/jdk/src/hotspot/share/gc/z/zAttachedArray.hpp:29` |
+| `Heap/Allocator/ZAttachedArray.h:16` | `runtime/src/Heap/z/zAttachedArray.hpp:1` | `/root/cj_build/reference/jdk/src/hotspot/share/gc/z/zAttachedArray.hpp:29` |
 | `Heap/Allocator/ZAttachedArray.h:24` | `runtime/src/Heap/z/zAttachedArray.inline.hpp:1` | `/root/cj_build/reference/jdk/src/hotspot/share/gc/z/zAttachedArray.inline.hpp:32` |
 | `Heap/Barrier/Barrier.cpp:37` | `runtime/src/Heap/z/zBarrier.cpp:1` | `/root/cj_build/reference/jdk/src/hotspot/share/gc/z/zBarrier.cpp:36` |
 | `Heap/Barrier/Barrier.h:25` | `runtime/src/Heap/z/zBarrier.hpp:1` | `/root/cj_build/reference/jdk/src/hotspot/share/gc/z/zBarrier.hpp:72` |
@@ -46,7 +46,7 @@
 | `Heap/Collector/Collector.cpp:39` | `runtime/src/Heap/z/zCollectedHeap.cpp:1` | `/root/cj_build/reference/jdk/src/hotspot/share/gc/z/zCollectedHeap.cpp:58` |
 | `Heap/Collector/Collector.h:487` · `StackManager.cpp:97` | `runtime/src/Heap/z/zCollectedHeap.hpp:1` | `/root/cj_build/reference/jdk/src/hotspot/share/gc/z/zCollectedHeap.hpp:35` |
 | `Heap/Collector/CollectorResources.cpp:274` | `runtime/src/Heap/z/zDirector.cpp:1` | `/root/cj_build/reference/jdk/src/hotspot/share/gc/z/zDirector.cpp:37` |
-| `Heap/Collector/GcTrigger.h:137` | `runtime/src/Heap/z/zDirector.hpp:1` | `/root/cj_build/reference/jdk/src/hotspot/share/gc/z/zDirector.hpp:30` |
+| `Heap/Collector/GcTrigger.h:137` · `Heap/Collector/GcTriggerFlags.h:13` | `runtime/src/Heap/z/zDirector.hpp:1` | `/root/cj_build/reference/jdk/src/hotspot/share/gc/z/zDirector.hpp:30` |
 | `Heap/Collector/CollectorResources.cpp:49` | `runtime/src/Heap/z/zDriver.cpp:1` | `/root/cj_build/reference/jdk/src/hotspot/share/gc/z/zDriver.cpp:39` |
 | `Heap/Collector/CollectorResources.h:42` | `runtime/src/Heap/z/zDriver.hpp:1` | `/root/cj_build/reference/jdk/src/hotspot/share/gc/z/zDriver.hpp:43` |
 | `Heap/Collector/DriverPort.cpp:13` | `runtime/src/Heap/z/zDriverPort.cpp:1` | `/root/cj_build/reference/jdk/src/hotspot/share/gc/z/zDriverPort.cpp:30` |
@@ -77,7 +77,7 @@
 | `Heap/Allocator/CartesianTree.cpp:16` | `runtime/src/Heap/z/zMappedCache.cpp:1` | `/root/cj_build/reference/jdk/src/hotspot/share/gc/z/zMappedCache.cpp:36` |
 | `Heap/Allocator/CartesianTree.h:55` | `runtime/src/Heap/z/zMappedCache.hpp:1` | `/root/cj_build/reference/jdk/src/hotspot/share/gc/z/zMappedCache.hpp:35` |
 | `Heap/Collector/Mark.cpp:73` · `Heap/Collector/MarkEngine.cpp:99` · `Heap/Collector/MarkPartialArray.cpp:46` · `Heap/Collector/MarkingStacks.cpp:14` · `Heap/Collector/TracingCollector.cpp:303` | `runtime/src/Heap/z/zMark.cpp:1` | `/root/cj_build/reference/jdk/src/hotspot/share/gc/z/zMark.cpp:75` |
-| `Heap/Collector/MarkEngine.h:71` · `Heap/Collector/MarkStripe.h:145` · `Heap/Collector/TracingCollector.h:79` | `runtime/src/Heap/z/zMark.hpp:1` | `/root/cj_build/reference/jdk/src/hotspot/share/gc/z/zMark.hpp:36` |
+| `Heap/Collector/MarkEngine.h:71` · `Heap/Collector/MarkStripe.h:145` · `Heap/Collector/MarkingStacks.h:8` · `Heap/Collector/TracingCollector.h:79` | `runtime/src/Heap/z/zMark.hpp:1` | `/root/cj_build/reference/jdk/src/hotspot/share/gc/z/zMark.hpp:36` |
 | `Heap/Collector/MarkStripe.cpp:471` | `runtime/src/Heap/z/zMarkCache.cpp:1` | `/root/cj_build/reference/jdk/src/hotspot/share/gc/z/zMarkCache.cpp:28` |
 | `Heap/Collector/MarkStripe.h:191` | `runtime/src/Heap/z/zMarkCache.hpp:1` | `/root/cj_build/reference/jdk/src/hotspot/share/gc/z/zMarkCache.hpp:30` |
 | `Heap/Collector/MarkStripe.cpp:479` | `runtime/src/Heap/z/zMarkCache.inline.hpp:1` | `/root/cj_build/reference/jdk/src/hotspot/share/gc/z/zMarkCache.inline.hpp:31` |
@@ -87,7 +87,7 @@
 | `Heap/Collector/MarkEngine.h:75` · `Heap/Collector/MarkStripe.h:33` | `runtime/src/Heap/z/zMarkStack.hpp:1` | `/root/cj_build/reference/jdk/src/hotspot/share/gc/z/zMarkStack.hpp:33` |
 | `Heap/Collector/MarkStripe.cpp:81` | `runtime/src/Heap/z/zMarkStack.inline.hpp:1` | `/root/cj_build/reference/jdk/src/hotspot/share/gc/z/zMarkStack.inline.hpp:33` |
 | `Heap/Collector/MarkStackEntry.h:53` | `runtime/src/Heap/z/zMarkStackEntry.hpp:1` | `/root/cj_build/reference/jdk/src/hotspot/share/gc/z/zMarkStackEntry.hpp:74` |
-| `Heap/Collector/MarkEngine.cpp:17` | `runtime/src/Heap/z/zMarkTerminate.hpp:1` | `/root/cj_build/reference/jdk/src/hotspot/share/gc/z/zMarkTerminate.hpp:31` |
+| `Heap/Collector/MarkEngine.h:23` | `runtime/src/Heap/z/zMarkTerminate.hpp:1` | `/root/cj_build/reference/jdk/src/hotspot/share/gc/z/zMarkTerminate.hpp:31` |
 | `Heap/Collector/MarkEngine.cpp:17` | `runtime/src/Heap/z/zMarkTerminate.inline.hpp:1` | `/root/cj_build/reference/jdk/src/hotspot/share/gc/z/zMarkTerminate.inline.hpp:36` |
 | `Heap/Collector/MarkStripe.cpp:104` | `runtime/src/Heap/z/zMarkingSMR.cpp:1` | `/root/cj_build/reference/jdk/src/hotspot/share/gc/z/zMarkingSMR.cpp:29` |
 | `Heap/Collector/MarkStripe.h:71` | `runtime/src/Heap/z/zMarkingSMR.hpp:1` | `/root/cj_build/reference/jdk/src/hotspot/share/gc/z/zMarkingSMR.hpp:32` |
@@ -108,12 +108,12 @@
 | `Heap/Allocator/ZGranuleMap.h:288` | `runtime/src/Heap/z/zPageTable.inline.hpp:1` | `/root/cj_build/reference/jdk/src/hotspot/share/gc/z/zPageTable.inline.hpp:36` |
 | `Heap/Allocator/MemMap.cpp:476` | `runtime/src/Heap/z/zPhysicalMemoryManager.cpp:1` | `/root/cj_build/reference/jdk/src/hotspot/share/gc/z/zPhysicalMemoryManager.cpp:48` |
 | `Heap/Allocator/MemMap.h:78` | `runtime/src/Heap/z/zPhysicalMemoryManager.hpp:1` | `/root/cj_build/reference/jdk/src/hotspot/share/gc/z/zPhysicalMemoryManager.hpp:36` |
-| `Heap/Allocator/MemMap.cpp:49` · `Heap/Allocator/RangeRegistry.inline.h:25` | `runtime/src/Heap/z/zRangeRegistry.hpp:1` | `/root/cj_build/reference/jdk/src/hotspot/share/gc/z/zRangeRegistry.hpp:33` |
+| `Heap/Allocator/RangeRegistry.h:15` | `runtime/src/Heap/z/zRangeRegistry.hpp:1` | `/root/cj_build/reference/jdk/src/hotspot/share/gc/z/zRangeRegistry.hpp:33` |
 | `Heap/Allocator/MemMap.cpp:49` · `Heap/Allocator/RangeRegistry.inline.h:25` | `runtime/src/Heap/z/zRangeRegistry.inline.hpp:1` | `/root/cj_build/reference/jdk/src/hotspot/share/gc/z/zRangeRegistry.inline.hpp:34` |
 | `Heap/Collector/ReferenceProcessor.cpp:24` · `Heap/Collector/TracingCollector.cpp:467` | `runtime/src/Heap/z/zReferenceProcessor.cpp:1` | `/root/cj_build/reference/jdk/src/hotspot/share/gc/z/zReferenceProcessor.cpp:42` |
 | `Heap/Collector/ReferenceProcessor.h:48` | `runtime/src/Heap/z/zReferenceProcessor.hpp:1` | `/root/cj_build/reference/jdk/src/hotspot/share/gc/z/zReferenceProcessor.hpp:31` |
 | `Heap/Collector/RelocationRequestQueue.cpp:20` · `Heap/Collector/zRelocate.cpp:121` | `runtime/src/Heap/z/zRelocate.cpp:1` | `/root/cj_build/reference/jdk/src/hotspot/share/gc/z/zRelocate.cpp:54` |
-| `Heap/Collector/RelocationRequestQueue.h:34` | `runtime/src/Heap/z/zRelocate.hpp:1` | `/root/cj_build/reference/jdk/src/hotspot/share/gc/z/zRelocate.hpp:33` |
+| `Heap/Collector/RelocationRequestQueue.h:34` · `Heap/Collector/zRelocate.hpp:12` | `runtime/src/Heap/z/zRelocate.hpp:1` | `/root/cj_build/reference/jdk/src/hotspot/share/gc/z/zRelocate.hpp:33` |
 | `Heap/Collector/zRelocationSet.cpp:64` | `runtime/src/Heap/z/zRelocationSet.cpp:1` | `/root/cj_build/reference/jdk/src/hotspot/share/gc/z/zRelocationSet.cpp:39` |
 | `Heap/Collector/zRelocationSet.inline.hpp:15` | `runtime/src/Heap/z/zRelocationSet.inline.hpp:1` | `/root/cj_build/reference/jdk/src/hotspot/share/gc/z/zRelocationSet.inline.hpp:31` |
 | `Heap/Collector/zRelocationSetSelector.cpp:59` | `runtime/src/Heap/z/zRelocationSetSelector.cpp:1` | `/root/cj_build/reference/jdk/src/hotspot/share/gc/z/zRelocationSetSelector.cpp:36` |
@@ -143,13 +143,13 @@
 | `Heap/Collector/Uncommitter.h:24` | `runtime/src/Heap/z/zUncommitter.hpp:1` | `/root/cj_build/reference/jdk/src/hotspot/share/gc/z/zUncommitter.hpp:31` |
 | `Heap/Collector/MarkStripe.cpp:29` | `runtime/src/Heap/z/zUtils.inline.hpp:1` | `/root/cj_build/reference/jdk/src/hotspot/share/gc/z/zUtils.inline.hpp:37` |
 | `Heap/Verify/ZVerify.cpp:15` | `runtime/src/Heap/z/zVerify.cpp:1` | `/root/cj_build/reference/jdk/src/hotspot/share/gc/z/zVerify.cpp:116` |
-| `Heap/Verify/ZVerify.cpp:15` | `runtime/src/Heap/z/zVerify.hpp:1` | `/root/cj_build/reference/jdk/src/hotspot/share/gc/z/zVerify.hpp:29` |
+| `Heap/Verify/ZVerify.h:8` | `runtime/src/Heap/z/zVerify.hpp:1` | `/root/cj_build/reference/jdk/src/hotspot/share/gc/z/zVerify.hpp:29` |
 | `Heap/Allocator/MemMap.h:64` | `runtime/src/Heap/z/zVirtualMemory.hpp:1` | `/root/cj_build/reference/jdk/src/hotspot/share/gc/z/zVirtualMemory.hpp:31` |
 | `Heap/Allocator/RangeRegistry.inline.h:20` | `runtime/src/Heap/z/zVirtualMemory.inline.hpp:1` | `/root/cj_build/reference/jdk/src/hotspot/share/gc/z/zVirtualMemory.inline.hpp:35` |
 | `Heap/Allocator/MemMap.cpp:56` | `runtime/src/Heap/z/zVirtualMemoryManager.cpp:1` | `/root/cj_build/reference/jdk/src/hotspot/share/gc/z/zVirtualMemoryManager.cpp:39` |
 | `Heap/Allocator/MemMap.h:63` | `runtime/src/Heap/z/zVirtualMemoryManager.hpp:1` | `/root/cj_build/reference/jdk/src/hotspot/share/gc/z/zVirtualMemoryManager.hpp:35` |
 | `Heap/GcThreadPool.cpp:39` | `runtime/src/Heap/z/zWorkers.cpp:1` | `/root/cj_build/reference/jdk/src/hotspot/share/gc/z/zWorkers.cpp:33` |
-| `Heap/GcThreadPool.cpp:39` | `runtime/src/Heap/z/zWorkers.hpp:1` | `/root/cj_build/reference/jdk/src/hotspot/share/gc/z/zWorkers.hpp:32` |
+| `Heap/GcThreadPool.h:21` | `runtime/src/Heap/z/zWorkers.hpp:1` | `/root/cj_build/reference/jdk/src/hotspot/share/gc/z/zWorkers.hpp:32` |
 | `Heap/Collector/GcTrigger.h:56` · `Heap/Collector/zRelocationSetSelector.hpp:14` | `runtime/src/Heap/z/z_globals.hpp:1` | `/root/cj_build/reference/jdk/src/hotspot/share/gc/z/z_globals.hpp:27` |
 
 逐函数旧/新锚和 body SHA256：[`gc_z_layout_functions.tsv`](gc_z_layout_functions.tsv)。词法扫描的 7,338 个函数体（含内联体、嵌套体）按名字、字节、条件上下文多重集匹配；隐式调用与重载解析不由词法调用清单单独判定。
