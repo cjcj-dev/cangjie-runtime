@@ -111,7 +111,6 @@ public:
     std::atomic<size_t> lastYoungCollectedBytes{ 0 };
     std::atomic<uint64_t> lastYoungDurationNs{ 0 };
     std::atomic<bool> hasYoungSample{ false };
-    std::atomic<size_t> youngTriggerBytes{ 32 * MB };
 
     std::atomic<uint32_t> warmupCyclesDone{ 0 };
     std::atomic<bool> isWarm{ false };

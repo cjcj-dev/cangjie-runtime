@@ -691,7 +691,6 @@ void TracingCollector::StartOldMarkWork()
         majorMarkDomain = std::make_unique<MarkDomain>(64, VerifyMarkingStacks::MarkingGeneration::MAJOR);
     }
     GCWorkers& workers = collectorResources.GetWorkers(GCCycleGeneration::OLD);
-    workers.SetActiveWorkers(static_cast<uint32_t>(GetGCThreadCount(true)));
     majorMarkDomain->BindWorkers(&workers);
     majorMarkDomain->BindAbort(&collectorResources.GetMajorDriverPort().Abort());
     majorMarkDomain->PrepareWork(workers.ActiveWorkers());
@@ -1150,9 +1149,8 @@ void TracingCollector::PreGarbageCollection(bool isConcurrent, uint64_t gcIndex)
 
     // zDriver.cpp:183,399-400: generation workers use their concurrent
     // budget for both pause and concurrent work. Parallel workers are separate.
-    const int32_t threadCount = GetGCThreadCount(true);
+    const int32_t threadCount = static_cast<int32_t>(GetWorkers().ActiveWorkers());
     GetWorkers().SetActive();
-    GetWorkers().SetActiveWorkers(static_cast<uint32_t>(threadCount));
     VLOG(REPORT, "GC generation active workers: %d", threadCount);
 
     GetGCStats().reason = GetCycleReason();

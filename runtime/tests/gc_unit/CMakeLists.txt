@@ -43,6 +43,7 @@ set(GC_UNIT_SOURCES
     test_range_registry.cpp
     test_stay_young.cpp
     test_gc_trigger.cpp
+    test_gc_director.cpp
     test_gc_request_sync.cpp
     test_allocation_stall_queue.cpp
 

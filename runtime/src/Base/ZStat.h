@@ -15,6 +15,48 @@
 #include <vector>
 
 namespace MapleRuntime {
+// zStat.cpp:1226-1330: cycle inputs used by the director are always
+// collected, independently of the optional phase-log instrumentation below.
+struct ZStatCycleStats {
+    uint32_t warmupCycles = 0;
+    double timeSinceLast = 0;
+    double serialTime = 0;
+    double serialTimeSd = 0;
+    double parallelTime = 0;
+    double parallelTimeSd = 0;
+    double lastActiveWorkers = 1;
+};
+
+class ZStatCycle {
+public:
+    void Initialize(uint64_t now);
+    void AtStart(uint64_t now, uint64_t workerDuration, uint64_t workerTime);
+    void AtEnd(uint64_t now, uint64_t workerDuration, uint64_t workerTime, bool warmup);
+    ZStatCycleStats Stats(uint64_t now) const;
+
+private:
+    // utilities/numberSeq.cpp:35-49,79-94: exponentially decaying mean
+    // and variance, alpha=0.7 as used by ZStatCycle.
+    struct Sequence {
+        void Add(double value);
+        bool initialized = false;
+        double average = 0;
+        double variance = 0;
+    };
+    mutable std::mutex lock;
+    uint64_t start = 0;
+    uint64_t end = 0;
+    uint64_t initialWorkerDuration = 0;
+    uint64_t initialWorkerTime = 0;
+    uint32_t warmupCycles = 0;
+    double lastActiveWorkers = 1;
+    Sequence serial;
+    Sequence parallel;
+};
+
+struct GcTriggerInputs;
+class GCStats;
+class RegionManager;
 // Two-level gate (0823 二轮): a default-OFF runtime env check still costs ~4ns per Timer scope
 // (measured, kkk2 20M-op pairs) and that was enough to push the natural_wave gold cliff at 320MB
 // up by one heap step.  So the first level is compile-time, same shape as kGcTrigger* in
@@ -46,6 +88,9 @@ namespace MapleRuntime {
 // before touching anything -- the default-path rec=cycle/rec=phase/rec=stw stream is unchanged.
 class ZStat {
 public:
+    static GcTriggerInputs SampleDirectorStats(uint64_t now, ZStatCycle& young, ZStatCycle& old,
+                                              RegionManager& regions, uint32_t concurrentWorkers,
+                                              uint32_t collectionsAtMajorStart);
     struct PhaseTotals {
         uint64_t pauseNs = 0;    // sum of samples that started with the world stopped
         uint64_t concNs = 0;     // sum of samples that started with the world running
@@ -108,6 +153,9 @@ private:
 
 class ZStat {
 public:
+    static GcTriggerInputs SampleDirectorStats(uint64_t now, ZStatCycle& young, ZStatCycle& old,
+                                              RegionManager& regions, uint32_t concurrentWorkers,
+                                              uint32_t collectionsAtMajorStart);
     static constexpr bool Enabled() { return false; }
     static void EnterStwScope() {}
     static void ExitStwScope() {}
