@@ -1101,7 +1101,7 @@ EXPORTS
     _ZN12MapleRuntime10WCollector18GetCrossRefHandlerEPNS_10BaseObjectE @1121
     _ZN12MapleRuntime10WCollector19AddRawPointerObjectEPNS_10BaseObjectE @1122
     _ZN12MapleRuntime10WCollector19CollectLargeGarbageEv @1123
-    _ZN12MapleRuntime10WCollector19DoGarbageCollectionEv @1124
+    _ZN12MapleRuntime10WCollector19DoGarbageCollectionENS_17GCCycleGenerationE @1124
     _ZN12MapleRuntime10WCollector19FixMinorObjectSlotsEPNS_10BaseObjectE @1125
     _ZN12MapleRuntime10WCollector19ForwardUpdateRawRefERNS_8RootSlotE @1126
     _ZN12MapleRuntime10WCollector19RescanRememberedSetERNS_9MarkStackIPNS_10BaseObjectEEERKNSt3__113unordered_setIyNS6_4hashIyEENS6_8equal_toIyEENS6_9allocatorIyEEEESG_SG_bPSE_PNS_19DiffPathRemsetStatsE @1128
@@ -1620,7 +1620,7 @@ EXPORTS
     _ZN12MapleRuntime16StackFrameCursor8ResumeAtEyRNS_7MutatorE @1740
     _ZN12MapleRuntime16StackFrameCursorC1ERKNS_13UnwindContextE @1741
     _ZN12MapleRuntime16StackFrameCursorC2ERKNS_13UnwindContextE @1742
-    _ZN12MapleRuntime16TracingCollector10GetGCStatsEv @1751
+    _ZN12MapleRuntime16TracingCollector10GetGCStatsENS_17GCCycleGenerationE @1751
     _ZN12MapleRuntime16TracingCollector11TracingImplERNS_9MarkStackIPNS_10BaseObjectEEES5_b @1752
     _ZN12MapleRuntime16TracingCollector13DoEnumerationERNS_9MarkStackIPNS_10BaseObjectEEES5_ @1753
     _ZN12MapleRuntime16TracingCollector13UpdateGCStatsEv @1754
@@ -1695,10 +1695,8 @@ EXPORTS
     _ZN12MapleRuntime18CollectorResources14RequestAsyncGCENS_8GCReasonE @1857
     _ZN12MapleRuntime18CollectorResources14StartGCThreadsEv @1858
     _ZN12MapleRuntime18CollectorResources15TerminateGCTaskEv @1860
-    _ZN12MapleRuntime18CollectorResources16NotifyGCFinishedEy @1862
     _ZN12MapleRuntime18CollectorResources16RequestGCAndWaitENS_8GCReasonE @1863
     _ZN12MapleRuntime18CollectorResources20PostIgnoredGcRequestENS_8GCReasonE @1865
-    _ZN12MapleRuntime18CollectorResources21BroadcastGCCompletionEv @1866
     _ZN12MapleRuntime18CollectorResources4FiniEv @1867
     _ZN12MapleRuntime18CollectorResources4InitEv @1868
     _ZN12MapleRuntime18CollectorResources9RequestGCENS_8GCReasonEb @1869
@@ -2046,7 +2044,7 @@ EXPORTS
     _ZN12MapleRuntime9AllocatorC2Ev @2259
     _ZN12MapleRuntime9AllocatorD0Ev @2260
     _ZN12MapleRuntime9AllocatorD2Ev @2261
-    _ZN12MapleRuntime9Collector10GetGCStatsEv @2262
+    _ZN12MapleRuntime9Collector10GetGCStatsENS_17GCCycleGenerationE @2262
     _ZN12MapleRuntime9Collector10SetGCPhaseENS_17GCCycleGenerationENS_7GCPhaseE @2263
     _ZN12MapleRuntime9Collector13ForwardObjectEPNS_10BaseObjectE @2264
     _ZN12MapleRuntime9Collector13MarkNewObjectEPNS_10BaseObjectE @2265

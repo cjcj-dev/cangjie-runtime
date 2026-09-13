@@ -65,14 +65,20 @@ public:
         return generation == GCCycleGeneration::YOUNG ? youngCycle : oldCycle;
     }
 
+    virtual const GenerationCycle& GetGenerationCycle(GCCycleGeneration generation) const
+    {
+        return generation == GCCycleGeneration::YOUNG ? youngCycle : oldCycle;
+    }
+
     virtual GCCycleSnapshot GetCycleSnapshot(GCCycleGeneration generation) const
     {
-        return (generation == GCCycleGeneration::YOUNG ? youngCycle : oldCycle).Snapshot();
+        return GetGenerationCycle(generation).Snapshot();
     }
     virtual void PublishGenerationPhase(GCCycleGeneration generation, GCPhase value);
     bool OldActiveRemsetIsCurrent() const
     {
-        return oldCycle.ActiveRemsetIsCurrent(youngCycle.Sequence());
+        return GetGenerationCycle(GCCycleGeneration::OLD).ActiveRemsetIsCurrent(
+            GetGenerationCycle(GCCycleGeneration::YOUNG).Sequence());
     }
     Generation ObjectGeneration(BaseObject* object) const;
 

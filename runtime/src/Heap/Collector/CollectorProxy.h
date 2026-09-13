@@ -44,10 +44,16 @@ public:
                                            : wCollector.GetGenerationCycle(generation);
     }
 
+    const GenerationCycle& GetGenerationCycle(GCCycleGeneration generation) const override
+    {
+        return currentCollector != nullptr ? currentCollector->GetGenerationCycle(generation)
+                                           : wCollector.GetGenerationCycle(generation);
+    }
+
     GCCycleSnapshot GetCycleSnapshot(GCCycleGeneration generation) const override
     {
         return currentCollector != nullptr ? currentCollector->GetCycleSnapshot(generation)
-                                           : Collector::GetCycleSnapshot(generation);
+                                           : wCollector.GetCycleSnapshot(generation);
     }
 
     void MarkYoungObjectIfActive(BaseObject* object, bool followOnly = false) const override
