@@ -457,7 +457,6 @@ MAddress AllocBuffer::Allocate(size_t totalSize, AllocType allocType)
                         bool already = reg->GetOrAllocMarkBitmap(view)->MarkBits(offset, totalSize, regionSize);
                         if (!already) {
                             reg->AddLiveCounts(1, totalSize);
-                            reg->PublishCurrentMarkFace();
                         }
                         LiveInfo* ghost = reg->GetLiveInfo0ForProbe();
                         RegionBitmap* ghostBitmap = ghost == nullptr ? nullptr : reg->GetOwnerMarkBitmap(ghost);

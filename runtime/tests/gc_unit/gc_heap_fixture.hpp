@@ -50,10 +50,28 @@ inline zpointer StoreGoodPointer(BaseObject* object)
                                              static_cast<uintptr_t>(::g_cjStoreGoodMask)));
 }
 
+// Access the product generation state for the same setup used by ZLiveMapTest.
+struct LiveMapCycleAccess : Collector {
+    static GenerationCycle& Cycle(Collector& collector, Generation generation)
+    {
+        return generation == Generation::Young ? collector.*&LiveMapCycleAccess::youngCycle
+                                               : collector.*&LiveMapCycleAccess::oldCycle;
+    }
+};
+
 struct GcHeapFixture {
     // Six permits the intrusive RegionList port to exercise the same six-node
     // order/removal matrix as OpenJDK test_zList.  Existing fixtures still
     // initialize and use region0/region1 only.
+    static void AdvanceGeneration(Generation generation)
+    {
+        auto& cycle = LiveMapCycleAccess::Cycle(Heap::GetHeap().GetCollector(), generation);
+        if (cycle.Snapshot().active) {
+            cycle.End();
+        }
+        cycle.Begin(0);
+    }
+
     static constexpr size_t kUnits = 6;
 
     explicit GcHeapFixture(bool withMemoryOwner = false)
@@ -72,11 +90,16 @@ struct GcHeapFixture {
             std::abort();
         }
         heapStart = reinterpret_cast<MAddress>(mapping) + metadataSize;
+        EnsureForwardData(heapStart);
+        for (Generation generation : {Generation::Young, Generation::Old}) {
+            if (LiveMapCycleAccess::Cycle(Heap::GetHeap().GetCollector(), generation).Sequence() == 0) {
+                AdvanceGeneration(generation);
+            }
+        }
         RegionInfo::Initialize(kUnits, heapStart, memoryOwner);
         region0 = RegionInfo::InitRegion(0, 1, RegionInfo::UnitRole::SMALL_SIZED_UNITS);
         region1 = RegionInfo::InitRegion(1, 1, RegionInfo::UnitRole::SMALL_SIZED_UNITS);
         ForwardingTable::Initialize(heapStart, kUnits * RegionInfo::UNIT_SIZE, RegionInfo::UNIT_SIZE);
-        EnsureForwardData(heapStart);
 
         std::memset(typeInfoStorage, 0, sizeof(typeInfoStorage));
         typeInfo = reinterpret_cast<TypeInfo*>(typeInfoStorage);

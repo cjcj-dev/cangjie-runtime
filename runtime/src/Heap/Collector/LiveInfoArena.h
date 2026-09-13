@@ -121,14 +121,13 @@ public:
         const size_t bytes = RegionBitmap::GetRegionBitmapSize(regionSize);
         void* addr = std::malloc(bytes);
         CHECK(addr != nullptr);
-        std::memset(addr, 0, bytes);
         RegionBitmap* bitmap = new (addr) RegionBitmap(regionSize);
         return bitmap;
     }
 
     void RecycleRegionBitmap(RegionBitmap* bitmap)
     {
-        if (bitmap == nullptr || reinterpret_cast<MAddress>(bitmap) == LiveInfo::TEMPORARY_PTR) {
+        if (bitmap == nullptr) {
             return;
         }
         std::free(bitmap);
@@ -136,8 +135,7 @@ public:
 
     void RetireUntilOwnerExit(LiveInfo* owner, RegionBitmap* bitmap)
     {
-        if (owner == nullptr || bitmap == nullptr ||
-            reinterpret_cast<MAddress>(bitmap) == LiveInfo::TEMPORARY_PTR) {
+        if (owner == nullptr || bitmap == nullptr) {
             return;
         }
         std::lock_guard<std::mutex> guard(recycleMutex);

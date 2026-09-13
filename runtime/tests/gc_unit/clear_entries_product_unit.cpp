@@ -2325,7 +2325,7 @@ GC_OTHER_VM_TEST(NeverInstalledDiagnostic, NeverInstalledCurrentIncarnationDelta
     ForwardingTable::ClearEntries(state.region->GetRegionStart(), state.region->GetRegionSize());
 
     AbortCapture sameLife = CaptureNeverInstalledAbort(collector, state.from, [&]() {
-        state.region->BumpSnapshotEpoch();
+        GcHeapFixture::AdvanceGeneration(state.region->GetOwnerGeneration());
     });
     GC_EXPECT_TRUE(WIFSIGNALED(sameLife.status));
     GC_EXPECT_EQ(WTERMSIG(sameLife.status), SIGABRT);

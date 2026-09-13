@@ -83,7 +83,6 @@ ProductMarkObject<Generation::Old> ProductMarkObjectFn<Generation::Old>()
 using ProductClearLiveInfo = void (*)(RegionInfo*, MarkView<Generation::Young>);
 using ProductPreserveRetained = void (*)(RegionInfo*);
 using ProductPreserveRetainedUpTo = void (*)(RegionInfo*, MAddress);
-using ProductBumpEpoch = void (*)(RegionInfo*);
 
 ProductClearLiveInfo ProductClearLiveInfoFn()
 {
@@ -107,12 +106,6 @@ ProductPreserveRetainedUpTo ProductPreserveRetainedUpToFn()
     return fn;
 }
 
-ProductBumpEpoch ProductBumpEpochFn()
-{
-    static auto fn = reinterpret_cast<ProductBumpEpoch>(dlsym(
-        ProductRuntimeHandle(), "_ZN12MapleRuntime10RegionInfo31BumpSnapshotEpochFromInitRegionEv"));
-    return fn;
-}
 
 } // namespace
 
@@ -736,18 +729,18 @@ GC_TEST(LiveMap, LargeFirstPaintHasSingleWinner)
     GC_EXPECT_TRUE(region->IsCurrentFacePublished());
 }
 
-// The tagged generation skips raw zero at its only wrap point, keeping the
-// non-zero publication invariant intact for the following first paint.
-GC_TEST(LiveMap, SnapshotEpochWrapSkipsZero)
+// ZLiveMapTest::SetUp and ZGeneration::mark_start: pages share their owner's
+// sequence; clearing one page cannot advance the generation or invalidate another.
+GC_TEST(LiveMap, GenerationSequenceSharedByPages)
 {
     GcHeapFixture fx;
-    RegionInfo* region = fx.region0;
-    region->metadata.snapshotEpoch = std::numeric_limits<uint64_t>::max() - 1;
-    ProductBumpEpochFn()(region);
-    GC_EXPECT_EQ(region->metadata.snapshotEpoch, 2ULL);
-    GC_EXPECT_EQ(region->GetSnapshotEpoch(), 1ULL);
-    region->PublishCurrentMarkFace();
-    GC_EXPECT_TRUE((region->metadata.snapshotEpoch & 1ULL) != 0);
+    const uint64_t oldSequence = fx.region0->GetSnapshotEpoch();
+    GC_EXPECT_EQ(fx.region1->GetSnapshotEpoch(), oldSequence);
+    fx.region0->ClearLiveInfo(fx.region0->GetMarkView<Generation::Old>());
+    GC_EXPECT_EQ(fx.region0->GetSnapshotEpoch(), oldSequence);
+    GcHeapFixture::AdvanceGeneration(Generation::Old);
+    GC_EXPECT_EQ(fx.region0->GetSnapshotEpoch(), oldSequence + 1);
+    GC_EXPECT_EQ(fx.region1->GetSnapshotEpoch(), oldSequence + 1);
 }
 
 // markwater: ClearLiveInfo snapshots allocPtr. Objects at offset ≥ water
@@ -940,3 +933,95 @@ GC_TEST(ZLiveMapPort, CollectorMarkObjectConsumesProductPair)
 }
 
 // U4: product mark then IsSurvivedObject.
+
+// Extension of ZLiveMapTest.strongly_live_for_large_zpage: the live/strong pair
+// shares one segment; promotion to strong does not claim objects/bytes again.
+GC_TEST(ZLiveMapPort, FinalizableUpgradeAccountsOnce)
+{
+    constexpr size_t pageSize = 4096;
+    RegionBitmap* bitmap = GcHeapFixture::AllocPlantedBitmap(pageSize);
+    bool incLive = false;
+    GC_EXPECT_FALSE(bitmap->MarkFinalizableBits(64, 32, pageSize, incLive));
+    GC_EXPECT_TRUE(incLive);
+    GC_EXPECT_TRUE(bitmap->IsFinalizable(64));
+    GC_EXPECT_FALSE(bitmap->MarkBits(64, 32, pageSize, incLive));
+    GC_EXPECT_FALSE(incLive);
+    GC_EXPECT_TRUE(bitmap->IsMarked(64));
+    GC_EXPECT_EQ(bitmap->GetLiveObjects(), size_t(1));
+    GC_EXPECT_EQ(bitmap->GetLiveBytes(), size_t(32));
+    GcHeapFixture::FreePlantedBitmap(bitmap);
+}
+
+// ZLiveMap::reset_segment contention: same segment has one clearer; independent
+// segments publish separately. All marks must survive both kinds of first touch.
+GC_TEST(ZLiveMapPort, ConcurrentFirstTouchSameAndDifferentSegments)
+{
+    constexpr size_t pageSize = 16384;
+    constexpr size_t workers = 8;
+    RegionBitmap* bitmap = GcHeapFixture::AllocPlantedBitmap(pageSize);
+    std::atomic<bool> go {false};
+    std::thread threads[workers];
+    for (size_t worker = 0; worker < workers; ++worker) {
+        threads[worker] = std::thread([&, worker]() {
+            while (!go.load(std::memory_order_acquire)) {}
+            bitmap->MarkBits(worker * 8, 8, pageSize);
+            bitmap->MarkBits((worker + 1) * RegionBitmap::kRegionBytesPerWord, 8, pageSize);
+        });
+    }
+    go.store(true, std::memory_order_release);
+    for (auto& thread : threads) {
+        thread.join();
+    }
+    for (size_t worker = 0; worker < workers; ++worker) {
+        GC_EXPECT_TRUE(bitmap->IsMarked(worker * 8));
+        GC_EXPECT_TRUE(bitmap->IsMarked((worker + 1) * RegionBitmap::kRegionBytesPerWord));
+    }
+    GC_EXPECT_EQ(bitmap->GetLiveObjects(), workers * 2);
+    GC_EXPECT_EQ(bitmap->GetLiveBytes(), workers * 16);
+    GcHeapFixture::FreePlantedBitmap(bitmap);
+}
+
+// ZLiveMap::reset does not clear backing words. Unpublished segments are absent
+// from both point queries and snapshot iteration until their first mark.
+GC_TEST(ZLiveMapPort, MetadataResetHidesUntouchedSegments)
+{
+    constexpr size_t pageSize = 4096;
+    RegionBitmap* bitmap = GcHeapFixture::AllocPlantedBitmap(pageSize);
+    bitmap->MarkBits(0, 8, pageSize);
+    bitmap->MarkBits(1024, 8, pageSize);
+    const uint64_t previous = bitmap->markWords[4].load(std::memory_order_relaxed);
+    bitmap->Reset();
+    GC_EXPECT_EQ(bitmap->markWords[4].load(std::memory_order_relaxed), previous);
+    GC_EXPECT_FALSE(bitmap->IsMarked(1024));
+    GC_EXPECT_EQ(bitmap->GetLiveWord(4), uint64_t(0));
+    bitmap->MarkBits(0, 8, pageSize);
+    GC_EXPECT_TRUE(bitmap->IsMarked(0));
+    GC_EXPECT_FALSE(bitmap->IsMarked(1024));
+    GC_EXPECT_EQ(bitmap->GetLiveObjects(), size_t(1));
+    GC_EXPECT_EQ(bitmap->GetLiveBytes(), size_t(8));
+    GcHeapFixture::FreePlantedBitmap(bitmap);
+}
+
+GC_TEST(ZLiveMapPort, GenerationChangeLazilyInitializesProductMap)
+{
+    GcHeapFixture fx;
+    auto* region = fx.region0;
+    auto* object = fx.obj0;
+    auto mark = ProductMarkObjectFn<Generation::Old>();
+    GC_EXPECT_TRUE(mark != nullptr);
+    auto first = region->GetMarkView<Generation::Old>();
+    GC_EXPECT_FALSE(mark(region, first, object, object->GetSize(), true));
+    RegionBitmap* bitmap = region->GetMarkBitmap(first);
+    GC_EXPECT_TRUE(bitmap != nullptr);
+    const uint64_t youngSequence = LiveMapCycleAccess::Cycle(
+        Heap::GetHeap().GetCollector(), Generation::Young).Sequence();
+    GcHeapFixture::AdvanceGeneration(Generation::Old);
+    auto next = region->GetMarkView<Generation::Old>();
+    GC_EXPECT_EQ(next.GetEpoch(), first.GetEpoch() + 1);
+    GC_EXPECT_TRUE(region->GetMarkBitmap(next) == nullptr);
+    GC_EXPECT_EQ(LiveMapCycleAccess::Cycle(Heap::GetHeap().GetCollector(), Generation::Young).Sequence(), youngSequence);
+    GC_EXPECT_FALSE(mark(region, next, object, object->GetSize(), true));
+    GC_EXPECT_TRUE(region->GetMarkBitmap(next) == bitmap);
+    GC_EXPECT_EQ(bitmap->GetLiveObjects(), size_t(1));
+    GC_EXPECT_EQ(bitmap->GetLiveBytes(), size_t(object->GetSize()));
+}

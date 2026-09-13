@@ -185,10 +185,8 @@ public:
         }
     }
 
-    uint64_t GetSnapshotEpoch() const
-    {
-        return __atomic_load_n(&metadata.snapshotEpoch, std::memory_order_acquire) >> 1;
-    }
+    // ZPage::generation()->seqnum(), shared by all pages in that generation.
+    uint64_t GetSnapshotEpoch() const;
 
     uint8_t GetRegionLifeSeq() const
     {
@@ -226,90 +224,6 @@ public:
         return (view.GetLifeId() == GetRegionLifeId());
     }
 
-    void BumpSnapshotEpoch()
-    {
-        uint64_t observed = __atomic_load_n(&metadata.snapshotEpoch, __ATOMIC_ACQUIRE);
-        uint64_t next;
-        do {
-            // One monotonic value carries both generation and publication:
-            // even = no first paint, odd = current face published. Advancing
-            // always lands on the next even generation and retires publication.
-            next = (((observed >> 1) + 1) << 1);
-            // Raw zero is reserved for an uninitialized region.  Skip it on
-            // the sole tagged-generation wrap so the next first paint still
-            // satisfies PublishCurrentMarkFace's non-zero generation check.
-            if (next == 0) {
-                next = 2;
-            }
-        } while (!__atomic_compare_exchange_n(&metadata.snapshotEpoch, &observed, next, true,
-                                              __ATOMIC_ACQ_REL, __ATOMIC_ACQUIRE));
-    }
-
-    template<Generation G>
-    void BumpMarkSnapshotEpoch()
-    {
-        (void)G;
-        BumpSnapshotEpoch();
-    }
-
-    // oneseq: tagged bumps so atexit/milestones show whether epoch advances per-list / per-region.
-    // Default off; enable with MRT_GCV2_ONESEQ=1 or MRT_GCV2_DIAG=oneseq.
-    static bool OneseqDiagEnabled()
-    {
-        static const bool enabled = DiagGate::LegacyOrToken("MRT_GCV2_ONESEQ", "oneseq");
-        return enabled;
-    }
-
-    template<Generation G>
-    void BumpSnapshotEpochFromClearLiveInfo()
-    {
-        if (!OneseqDiagEnabled()) {
-            BumpMarkSnapshotEpoch<G>();
-            return;
-        }
-        size_t n;
-        if (G == Generation::Young) {
-            n = oneseqBumpClearYoung.fetch_add(1, std::memory_order_relaxed) + 1;
-        } else {
-            n = oneseqBumpClearOld.fetch_add(1, std::memory_order_relaxed) + 1;
-        }
-        BumpMarkSnapshotEpoch<G>();
-        EnsureOneseqAtexit();
-        // Milestone dump so timeout-killed ALOT runs still leave a line (atexit may not run).
-        if (n == 1 || n == 8 || n == 64 || n == 256 || n == 1024 || (n >= 4096 && (n & (n - 1)) == 0)) {
-            ReportOneseqCounts(G == Generation::Young ? "clear_young_milestone" : "clear_old_milestone");
-        }
-    }
-    void BumpSnapshotEpochFromInitRegion()
-    {
-        if (!OneseqDiagEnabled()) {
-            BumpSnapshotEpoch();
-            return;
-        }
-        size_t n = oneseqBumpInitRegion.fetch_add(1, std::memory_order_relaxed) + 1;
-        BumpSnapshotEpoch();
-        EnsureOneseqAtexit();
-        if (n == 1 || n == 64 || n == 1024 || (n >= 4096 && (n & (n - 1)) == 0)) {
-            ReportOneseqCounts("init_milestone");
-        }
-    }
-    template<Generation G>
-    void BumpSnapshotEpochFromResetAfterForward()
-    {
-        if (!OneseqDiagEnabled()) {
-            BumpMarkSnapshotEpoch<G>();
-            return;
-        }
-        size_t n = oneseqBumpResetAfterForward.fetch_add(1, std::memory_order_relaxed) + 1;
-        BumpMarkSnapshotEpoch<G>();
-        EnsureOneseqAtexit();
-        if (n == 1 || n == 64 || n == 1024 || (n >= 4096 && (n & (n - 1)) == 0)) {
-            ReportOneseqCounts("reset_fwd_milestone");
-        }
-    }
-
-    static void EnsureOneseqAtexit();
-    static void ReportOneseqCounts(const char* point);
 
     bool IsCompacted() const
     {
@@ -363,18 +277,12 @@ public:
     LiveInfo* GetLiveInfo()
     {
         LiveInfo* liveInfo = __atomic_load_n(&metadata.liveInfo, std::memory_order_acquire);
-        if (reinterpret_cast<MAddress>(liveInfo) == LiveInfo::TEMPORARY_PTR) {
-            return nullptr;
-        }
         return liveInfo;
     }
 
     LiveInfo* GetLiveInfo() const
     {
         LiveInfo* liveInfo = __atomic_load_n(&metadata.liveInfo, std::memory_order_acquire);
-        if (reinterpret_cast<MAddress>(liveInfo) == LiveInfo::TEMPORARY_PTR) {
-            return nullptr;
-        }
         return liveInfo;
     }
 
@@ -382,7 +290,7 @@ public:
     LiveInfo* GetLiveInfoForView(MarkView<G> view) const
     {
         LiveInfo* current = __atomic_load_n(&metadata.liveInfo, std::memory_order_acquire);
-        if (reinterpret_cast<MAddress>(current) != LiveInfo::TEMPORARY_PTR && current != nullptr &&
+        if (current != nullptr && view.GetEpoch() != 0 && view.GetEpoch() == GetSnapshotEpoch() &&
             current->GetMarkFace().epoch.load(std::memory_order_acquire) == view.GetEpoch()) {
             return current;
         }
@@ -454,13 +362,13 @@ public:
         if (!ValidateMarkView(view)) {
             return nullptr;
         }
-        if (liveInfo == nullptr ||
+        if (liveInfo == nullptr || view.GetEpoch() == 0 ||
             liveInfo->GetMarkFace().epoch.load(std::memory_order_acquire) != view.GetEpoch()) {
             return nullptr;
         }
         RegionBitmap* bitmap =
             __atomic_load_n(&liveInfo->GetMarkFace().bitmap, std::memory_order_acquire);
-        return reinterpret_cast<MAddress>(bitmap) == LiveInfo::TEMPORARY_PTR ? nullptr : bitmap;
+        return bitmap;
     }
 
     template<Generation G>
@@ -782,9 +690,6 @@ public:
         LiveInfo::MarkFace& markFace = liveInfo->GetMarkFace();
         RegionBitmap* mark = markFace.epoch.load(std::memory_order_acquire) == view.GetEpoch()
             ? __atomic_load_n(&markFace.bitmap, std::memory_order_acquire) : nullptr;
-        if (reinterpret_cast<MAddress>(mark) == LiveInfo::TEMPORARY_PTR) {
-            mark = nullptr;
-        }
         RegionBitmap* resurrect = liveInfo->resurrectBitmap;
         size_t markWords = mark == nullptr ? 0 : mark->wordCnt.load(std::memory_order_acquire);
         size_t resurrectWords = resurrect == nullptr ? 0 : resurrect->wordCnt.load(std::memory_order_acquire);
@@ -796,10 +701,10 @@ public:
         for (size_t i = 0; i < wordCnt; ++i) {
             uint64_t bits = 0;
             if (i < markWords) {
-                bits |= mark->markWords[i].load(std::memory_order_acquire);
+                bits |= mark->GetLiveWord(i);
             }
             if (i < resurrectWords) {
-                bits |= resurrect->markWords[i].load(std::memory_order_acquire);
+                bits |= resurrect->GetLiveWord(i);
             }
             out[i] = bits;
         }
@@ -856,10 +761,10 @@ public:
         for (size_t i = 0; i < wordCnt; ++i) {
             uint64_t bits = 0;
             if (i < markWords) {
-                bits |= mark->markWords[i].load(std::memory_order_acquire);
+                bits |= mark->GetLiveWord(i);
             }
             if (i < resurrectWords) {
-                bits |= resurrect->markWords[i].load(std::memory_order_acquire);
+                bits |= resurrect->GetLiveWord(i);
             }
             words[i] = bits;
         }
@@ -1091,32 +996,14 @@ public:
         return metadata.retainedLiveInfoEpoch == GetSnapshotEpoch();
     }
 
-    LiveInfo* GetOrAllocLiveInfo()
+    // ZPage constructs its livemap before publishing the page in the page table.
+    void InitializeLiveInfo()
     {
-        do {
-            LiveInfo* liveInfo = __atomic_load_n(&metadata.liveInfo, std::memory_order_acquire);
-            if (UNLIKELY(reinterpret_cast<uintptr_t>(liveInfo) == LiveInfo::TEMPORARY_PTR)) {
-                continue;
-            }
-            if (LIKELY(liveInfo != nullptr)) {
-                return liveInfo;
-            }
-            LiveInfo* newValue = reinterpret_cast<LiveInfo*>(LiveInfo::TEMPORARY_PTR);
-            if (__atomic_compare_exchange_n(&metadata.liveInfo, &liveInfo, newValue, false, std::memory_order_seq_cst,
-                                            std::memory_order_relaxed)) {
-                LiveInfo* allocatedLiveInfo = LiveInfoArena::GetLiveInfoArena().AllocateLiveInfo();
-                allocatedLiveInfo->bindedRegion = this;
-                allocatedLiveInfo->GetMarkFace().epoch = 0;
-                allocatedLiveInfo->GetMarkFace().bitmap = nullptr;
-                allocatedLiveInfo->resurrectBitmap = nullptr;
-                allocatedLiveInfo->enqueueBitmap = nullptr;
-                __atomic_store_n(&metadata.liveInfo, allocatedLiveInfo, std::memory_order_release);
-                DLOG(REGION, "region %p@%#zx liveinfo %p", this, GetRegionStart(), metadata.liveInfo);
-                return allocatedLiveInfo;
-            }
-        } while (true);
-
-        return nullptr;
+        LiveInfo* live = new (LiveInfoArena::GetLiveInfoArena().AllocateLiveInfo()) LiveInfo();
+        live->bindedRegion = this;
+        live->resurrectBitmap = LiveInfoArena::GetLiveInfoArena().AllocateRegionBitmap(GetRegionSize());
+        live->enqueueBitmap = LiveInfoArena::GetLiveInfoArena().AllocateRegionBitmap(GetRegionSize());
+        __atomic_store_n(&metadata.liveInfo, live, std::memory_order_release);
     }
 
     template<Generation G>
@@ -1135,9 +1022,6 @@ public:
             return nullptr;
         }
         RegionBitmap* bitmap = __atomic_load_n(&face.bitmap, std::memory_order_acquire);
-        if (reinterpret_cast<MAddress>(bitmap) == LiveInfo::TEMPORARY_PTR) {
-            return nullptr;
-        }
         return bitmap;
     }
 
@@ -1145,53 +1029,34 @@ public:
     RegionBitmap* GetOrAllocMarkBitmap(MarkView<G> view)
     {
         CHECK(view.GetRegion() == this);
-        CHECK(view.GetEpoch() == GetMarkSnapshotEpoch<G>());
-        LiveInfo* liveInfo = GetOrAllocLiveInfo();
+        CHECK(view.GetEpoch() != 0 && view.GetEpoch() == GetMarkSnapshotEpoch<G>());
+        LiveInfo* liveInfo = GetLiveInfo();
+        CHECK(liveInfo != nullptr);
         LiveInfo::MarkFace& face = liveInfo->GetMarkFace();
-        do {
-            RegionBitmap* bitmap = __atomic_load_n(&face.bitmap, std::memory_order_acquire);
-            if (UNLIKELY(reinterpret_cast<uintptr_t>(bitmap) == LiveInfo::TEMPORARY_PTR)) {
-                continue;
+        constexpr uint64_t kInitializing = std::numeric_limits<uint64_t>::max();
+        for (;;) {
+            uint64_t seq = face.epoch.load(std::memory_order_acquire);
+            if (seq == view.GetEpoch()) {
+                return __atomic_load_n(&face.bitmap, std::memory_order_acquire);
             }
-            if (LIKELY(bitmap != nullptr)) {
-                if (IsGhostFromRegion()) {
-                    return bitmap;
-                }
-                while (!bitmap->CoversRegionSize(GetRegionSize())) {
+            if (seq != kInitializing &&
+                face.epoch.compare_exchange_strong(seq, kInitializing, std::memory_order_acq_rel,
+                                                   std::memory_order_acquire)) {
+                RegionBitmap* bitmap = __atomic_load_n(&face.bitmap, std::memory_order_relaxed);
+                if (bitmap == nullptr) {
+                    bitmap = LiveInfoArena::GetLiveInfoArena().AllocateRegionBitmap(GetRegionSize());
+                    __atomic_store_n(&face.bitmap, bitmap, std::memory_order_relaxed);
+                } else if (!bitmap->CoversRegionSize(GetRegionSize())) {
                     bitmap = LiveInfoArena::GetLiveInfoArena().PublishMatchingBitmap(
                         &face.bitmap, bitmap, GetRegionSize(), liveInfo);
                 }
-                constexpr uint64_t kInitializing = std::numeric_limits<uint64_t>::max();
-                for (;;) {
-                    uint64_t seq = face.epoch.load(std::memory_order_acquire);
-                    if (seq == view.GetEpoch()) {
-                        return bitmap;
-                    }
-                    if (seq != kInitializing) {
-                        if (face.epoch.compare_exchange_strong(seq, kInitializing, std::memory_order_acq_rel,
-                                                               std::memory_order_acquire)) {
-                            bitmap->Reset();
-                            face.epoch.store(view.GetEpoch(), std::memory_order_release);
-                            return bitmap;
-                        }
-                    }
-                    sched_yield();
-                }
-            }
-            RegionBitmap* newValue = reinterpret_cast<RegionBitmap*>(LiveInfo::TEMPORARY_PTR);
-            if (__atomic_compare_exchange_n(&face.bitmap, &bitmap, newValue, false, std::memory_order_seq_cst,
-                                            std::memory_order_relaxed)) {
-                RegionBitmap* allocated =
-                    LiveInfoArena::GetLiveInfoArena().AllocateRegionBitmap(GetRegionSize());
+                bitmap->Reset();
+                // ZLiveMap::reset: publish only after allocation and metadata reset.
                 face.epoch.store(view.GetEpoch(), std::memory_order_release);
-                __atomic_store_n(&face.bitmap, allocated, std::memory_order_release);
-                DLOG(REGION, "region %p@%#zx markbitmap generation=%s bitmap=%p", this, GetRegionStart(),
-                     G == Generation::Young ? "young" : "old", allocated);
-                return allocated;
+                return bitmap;
             }
-        } while (true);
-
-        return nullptr;
+            sched_yield();
+        }
     }
 
     RegionBitmap* GetResurrectBitmap()
@@ -1201,40 +1066,7 @@ public:
             return nullptr;
         }
         RegionBitmap* bitmap = __atomic_load_n(&liveInfo->resurrectBitmap, std::memory_order_acquire);
-        if (reinterpret_cast<MAddress>(bitmap) == LiveInfo::TEMPORARY_PTR) {
-            return nullptr;
-        }
         return bitmap;
-    }
-
-    RegionBitmap* GetOrAllocResurrectBitmap()
-    {
-        LiveInfo* liveInfo = GetOrAllocLiveInfo();
-        do {
-            RegionBitmap* bitmap = __atomic_load_n(&liveInfo->resurrectBitmap, std::memory_order_acquire);
-            if (UNLIKELY(reinterpret_cast<uintptr_t>(bitmap) == LiveInfo::TEMPORARY_PTR)) {
-                continue;
-            }
-            if (LIKELY(bitmap != nullptr)) {
-                while (!IsGhostFromRegion() && !bitmap->CoversRegionSize(GetRegionSize())) {
-                    bitmap = LiveInfoArena::GetLiveInfoArena().PublishMatchingBitmap(
-                        &liveInfo->resurrectBitmap, bitmap, GetRegionSize(), liveInfo);
-                }
-                return bitmap;
-            }
-            RegionBitmap* newValue = reinterpret_cast<RegionBitmap*>(LiveInfo::TEMPORARY_PTR);
-            if (__atomic_compare_exchange_n(&liveInfo->resurrectBitmap, &bitmap, newValue, false,
-                                            std::memory_order_seq_cst, std::memory_order_relaxed)) {
-                RegionBitmap* allocated =
-                    LiveInfoArena::GetLiveInfoArena().AllocateRegionBitmap(GetRegionSize());
-                __atomic_store_n(&liveInfo->resurrectBitmap, allocated, std::memory_order_release);
-                DLOG(REGION, "region %p@%#zx resurrectbitmap %p", this, GetRegionStart(),
-                     metadata.liveInfo->resurrectBitmap);
-                return allocated;
-            }
-        } while (true);
-
-        return nullptr;
     }
 
     RegionBitmap* GetEnqueueBitmap()
@@ -1244,40 +1076,7 @@ public:
             return nullptr;
         }
         RegionBitmap* bitmap = __atomic_load_n(&liveInfo->enqueueBitmap, std::memory_order_acquire);
-        if (reinterpret_cast<MAddress>(bitmap) == LiveInfo::TEMPORARY_PTR) {
-            return nullptr;
-        }
         return bitmap;
-    }
-
-    RegionBitmap* GetOrAllocEnqueueBitmap()
-    {
-        LiveInfo* liveInfo = GetOrAllocLiveInfo();
-        do {
-            RegionBitmap* bitmap = __atomic_load_n(&liveInfo->enqueueBitmap, std::memory_order_acquire);
-            if (UNLIKELY(reinterpret_cast<uintptr_t>(bitmap) == LiveInfo::TEMPORARY_PTR)) {
-                continue;
-            }
-            if (LIKELY(bitmap != nullptr)) {
-                while (!IsGhostFromRegion() && !bitmap->CoversRegionSize(GetRegionSize())) {
-                    bitmap = LiveInfoArena::GetLiveInfoArena().PublishMatchingBitmap(
-                        &liveInfo->enqueueBitmap, bitmap, GetRegionSize(), liveInfo);
-                }
-                return bitmap;
-            }
-            RegionBitmap* newValue = reinterpret_cast<RegionBitmap*>(LiveInfo::TEMPORARY_PTR);
-            if (__atomic_compare_exchange_n(&liveInfo->enqueueBitmap, &bitmap, newValue, false,
-                                            std::memory_order_seq_cst, std::memory_order_relaxed)) {
-                RegionBitmap* allocated =
-                    LiveInfoArena::GetLiveInfoArena().AllocateRegionBitmap(GetRegionSize());
-                __atomic_store_n(&liveInfo->enqueueBitmap, allocated, std::memory_order_release);
-                DLOG(REGION, "region %p@%#zx enqueuebitmap %p", this, GetRegionStart(),
-                     metadata.liveInfo->enqueueBitmap);
-                return allocated;
-            }
-        } while (true);
-
-        return nullptr;
     }
 
     template<Generation G>
@@ -1312,7 +1111,6 @@ public:
                 // sized MarkObject path uses TryPublishLargeFace directly so
                 // its first paint and byte accounting are one atomic RMW.
                 (void)TryPublishLargeFace(view, 0);
-                PublishCurrentMarkFace();
             } else {
                 ClearCurrentMarkFace();
             }
@@ -1436,7 +1234,6 @@ public:
             if (accountLive) {
                 AddLiveCounts(1, size);
             }
-            PublishCurrentMarkFace();
             NotePageOwnerFirstPaint<G>();
         }
         return already;
@@ -1470,7 +1267,6 @@ public:
         bool already = writeBm->MarkBits(offset, objSize, regionSize, incLive);
         if (incLive) {
             AddLiveCounts(1, objSize);
-            PublishCurrentMarkFace();
             NotePageOwnerFirstPaint<G>();
         }
         CHECK(IsMarkedObject(view, offset));
@@ -1512,7 +1308,6 @@ public:
             if (accountLive) {
                 AddLiveCounts(1, objSize);
             }
-            PublishCurrentMarkFace();
             NotePageOwnerFirstPaint<G>();
         }
         CHECK(IsMarkedObject(view, offset));
@@ -1568,7 +1363,6 @@ public:
             if (accountLive) {
                 AddLiveCounts(1, objSize);
             }
-            PublishCurrentMarkFace();
         }
         CHECK(bitmap->IsLive(offset));
         return already;
@@ -1599,7 +1393,7 @@ public:
         CheckObjectSize(obj, objSize, regionStart, regionEnd);
         size_t regionSize = regionEnd - regionStart;
         CHECK(regionSize > 0);
-        RegionBitmap* bitmap = GetOrAllocEnqueueBitmap();
+        RegionBitmap* bitmap = GetEnqueueBitmap();
         // enqueue face is not the route geometry face; still report if mark-face sealed.
 
         bool marked = bitmap->MarkBits(offset, objSize, regionSize);
@@ -1633,17 +1427,7 @@ public:
     static std::atomic<size_t> markEpochStaleReadCount;
     static std::atomic<bool> markEpochAtexitInstalled;
 
-    // oneseq: per-region epoch / LIVE_AUTHORITY currency probes (default-off counters and dump).
-    static std::atomic<size_t> oneseqBumpClearYoung;
-    static std::atomic<size_t> oneseqBumpClearOld;
-    static std::atomic<size_t> oneseqBumpInitRegion;
-    static std::atomic<size_t> oneseqBumpResetAfterForward;
-    static std::atomic<size_t> oneseqIsKnownEmptyCalls;
-    static std::atomic<size_t> oneseqAuthBlocksReclaim;   // !auth && emptyByEpoch
-    static std::atomic<size_t> oneseqAuthAndEmpty;        // auth && emptyByEpoch (= IsKnownEmpty true)
-    static std::atomic<size_t> oneseqAuthNotEmpty;        // auth && !emptyByEpoch
-    static std::atomic<size_t> oneseqNoAuthNotEmpty;      // !auth && !emptyByEpoch
-    static std::atomic<bool> oneseqAtexitInstalled;
+
     // cjpmnull2: ZGC empty = this-cycle marked ∧ live==0. Epoch mismatch / no face
     // is "not marked this cycle", not empty (zPage.inline.hpp:223-225).
     static std::atomic<size_t> ikeTrueEmpty;
@@ -1683,7 +1467,7 @@ public:
         LiveInfo::MarkFace& markFace = liveInfo->GetMarkFace();
         RegionBitmap* bitmap = __atomic_load_n(&markFace.bitmap, std::memory_order_acquire);
         // Absence is ordinary "unmarked", not a stale-livemap read.
-        if (bitmap == nullptr || reinterpret_cast<MAddress>(bitmap) == LiveInfo::TEMPORARY_PTR) {
+        if (bitmap == nullptr) {
             return false;
         }
         const uint64_t face = markFace.epoch.load(std::memory_order_acquire);
@@ -1728,7 +1512,7 @@ public:
         }
         RegionBitmap* markBitmap =
             __atomic_load_n(&liveInfo->GetMarkFace().bitmap, std::memory_order_acquire);
-        if (markBitmap == nullptr || reinterpret_cast<MAddress>(markBitmap) == LiveInfo::TEMPORARY_PTR) {
+        if (markBitmap == nullptr) {
             return false;
         }
         return markBitmap->IsMarked(offset);
@@ -1753,7 +1537,7 @@ public:
         }
         RegionBitmap* markBitmap =
             __atomic_load_n(&liveInfo->GetMarkFace().bitmap, std::memory_order_acquire);
-        if (markBitmap == nullptr || reinterpret_cast<MAddress>(markBitmap) == LiveInfo::TEMPORARY_PTR) {
+        if (markBitmap == nullptr) {
             return false;
         }
         return markBitmap->IsMarked(offset);
@@ -1777,7 +1561,7 @@ public:
         if (NoteMarkEpochOnRead(view, liveInfo)) {
             RegionBitmap* markBitmap =
                 __atomic_load_n(&liveInfo->GetMarkFace().bitmap, std::memory_order_acquire);
-            if (markBitmap != nullptr && reinterpret_cast<MAddress>(markBitmap) != LiveInfo::TEMPORARY_PTR &&
+            if (markBitmap != nullptr &&
                 markBitmap->IsLive(offset)) {
                 return true;
             }
@@ -1786,7 +1570,6 @@ public:
             RegionBitmap* resurrectBitmap =
                 __atomic_load_n(&liveInfo->resurrectBitmap, std::memory_order_acquire);
             if (resurrectBitmap != nullptr &&
-                reinterpret_cast<MAddress>(resurrectBitmap) != LiveInfo::TEMPORARY_PTR &&
                 resurrectBitmap->IsMarked(offset)) {
                 return true;
             }
@@ -1971,7 +1754,8 @@ public:
         // Moving the old top/livemap view to ZForwarding removes it from every
         // reusable UnitInfo; pin the resulting heap-wide metadata cost.
         // M2 liveObjectCount on 18825599 (already 240) costs 8 more bytes.
-        static_assert(sizeof(UnitInfo) == 248, "per-unit metadata size changed; it is per-page, so price it");
+        // A07 removes the 8-byte region epoch; Clang record layout: 240 bytes.
+        static_assert(sizeof(UnitInfo) == 240, "per-unit metadata size changed; it is per-page, so price it");
     }
 
     static size_t FindUnitIndex(uintptr_t address)
@@ -2737,20 +2521,11 @@ public:
         // before the epoch bump so VisitLive / IsKnownEmpty / IsMarkedObject
         // see objects bumped after this point as implicitly live.
         metadata.markStartAllocPtr = GetRegionAllocPtr();
-        // Clear a large face while the supplied view still names the current
-        // epoch; only then publish the epoch bump that makes old views stale.
+        // GenerationCycle::Begin already advanced the owning generation's seqnum.
+        // Ordinary livemap metadata and segments reset lazily on the first mark.
         if (IsLargeRegion()) {
             SetMarkedRegionFlag(view, 0);
         }
-        BumpSnapshotEpochFromClearLiveInfo<G>();
-        // As in ZLiveMap::set(), a new cycle owns no current face until its
-        // first object is actually painted.  Clear retires the prior cycle's
-        // publication; MarkObject/allocate-black publish on
-        // their first 0→1 liveness write.
-        ClearCurrentMarkFace();
-        // zLiveMap.cpp:47-89: keep the allocated livemap on the page and reset
-        // bits on the next GetOrAllocMarkBitmap epoch mismatch. Ghost from-pages
-        // still referenced by forwarding keep the current LiveInfo pointer.
         if (G == Generation::Old) {
             NoteRetainedClear(RETAINED_OP_CLEAR_ALL);
             // A new major mark supersedes the retained major snapshot.  Young
@@ -2889,18 +2664,15 @@ public:
         (void)__atomic_fetch_and(&metadata.retainedPreserveCnt, ~FORWARDING_FACE_RESET_BIT, __ATOMIC_ACQ_REL);
     }
 
-    void PublishCurrentMarkFace()
-    {
-        CHECK(GetSnapshotEpoch() != 0);
-        (void)__atomic_fetch_or(&metadata.snapshotEpoch, 1ULL, __ATOMIC_RELEASE);
-    }
-
     void ClearCurrentMarkFace()
     {
         if (IsLargeRegion()) {
             (void)__atomic_fetch_and(&metadata.liveByteCount, ~LIVE_FACE_PUBLISHED_BIT, __ATOMIC_ACQ_REL);
         }
-        (void)__atomic_fetch_and(&metadata.snapshotEpoch, ~1ULL, __ATOMIC_ACQ_REL);
+        LiveInfo* live = GetLiveInfo();
+        if (live != nullptr) {
+            live->GetMarkFace().epoch.store(0, std::memory_order_relaxed);
+        }
     }
 
     bool IsCurrentFacePublished() const
@@ -2909,7 +2681,10 @@ public:
             return (__atomic_load_n(&metadata.liveByteCount, std::memory_order_acquire) &
                     LIVE_FACE_PUBLISHED_BIT) != 0;
         }
-        return (__atomic_load_n(&metadata.snapshotEpoch, __ATOMIC_ACQUIRE) & 1ULL) != 0;
+        LiveInfo* live = GetLiveInfo();
+        const uint64_t seqnum = GetSnapshotEpoch();
+        return seqnum != 0 && live != nullptr &&
+            live->GetMarkFace().epoch.load(std::memory_order_acquire) == seqnum;
     }
 
     // Large pages have one liveness bit, but Preserve also consumes their byte
@@ -3087,9 +2862,10 @@ public:
         __atomic_store_n(&metadata.liveObjectCount, 0, __ATOMIC_RELEASE);
 
         metadata.markStartAllocPtr = 0;
-        BumpSnapshotEpoch();
+        __atomic_store_n(&metadata.liveInfo, static_cast<LiveInfo*>(nullptr), std::memory_order_release);
         SetYoungRegionFlag(0);
         SetYoungAge(0);
+        InitializeLiveInfo();
         return GetMarkView<Generation::Old>();
     }
 
@@ -3379,7 +3155,7 @@ public:
             }
         } else {
             LiveInfo* liveInfo = __atomic_load_n(&metadata.liveInfo, std::memory_order_acquire);
-            if (liveInfo == nullptr || reinterpret_cast<MAddress>(liveInfo) == LiveInfo::TEMPORARY_PTR) {
+            if (liveInfo == nullptr) {
                 markedThisCycle = false;
                 keepNullFace = true;
             } else if (liveInfo->GetMarkFace().epoch.load(std::memory_order_acquire) !=
@@ -3394,18 +3170,7 @@ public:
         const bool emptyByMark = markedThisCycle && (IsLargeRegion()
             ? GetMarkedRegionFlag(view) == 0
             : ((raw & LIVE_BYTES_MASK) == 0));
-        if (OneseqDiagEnabled()) {
-            oneseqIsKnownEmptyCalls.fetch_add(1, std::memory_order_relaxed);
-            if (!auth && emptyByMark) {
-                oneseqAuthBlocksReclaim.fetch_add(1, std::memory_order_relaxed);
-            } else if (auth && emptyByMark) {
-                oneseqAuthAndEmpty.fetch_add(1, std::memory_order_relaxed);
-            } else if (auth && !emptyByMark) {
-                oneseqAuthNotEmpty.fetch_add(1, std::memory_order_relaxed);
-            } else {
-                oneseqNoAuthNotEmpty.fetch_add(1, std::memory_order_relaxed);
-            }
-        }
+
         if (!ikeAtexitInstalled.exchange(true, std::memory_order_relaxed)) {
             std::atexit([]() {
                 std::fprintf(stderr,
@@ -3463,7 +3228,7 @@ public:
             markedThisCycle = view.GetEpoch() == GetMarkSnapshotEpoch<Generation::Young>();
         } else {
             LiveInfo* liveInfo = __atomic_load_n(&metadata.liveInfo, std::memory_order_acquire);
-            if (liveInfo == nullptr || reinterpret_cast<MAddress>(liveInfo) == LiveInfo::TEMPORARY_PTR) {
+            if (liveInfo == nullptr) {
                 markedThisCycle = false;
             } else {
                 markedThisCycle = liveInfo->GetMarkFace().epoch.load(std::memory_order_acquire) ==
@@ -3512,7 +3277,7 @@ public:
     }
 
     // ZGC zForwarding.cpp:71-74 reset_livemap after from-page iteration — one publish:
-    // empty live bytes + invalidate mark face (bump snapshotEpoch; large clears isMarked).
+    // empty live bytes + invalidate mark face (reset livemap seqnum; large clears isMarked).
     // MARK_EPOCH_DISCIPLINE §4.2: no memset of shared markWords.
     template<Generation G>
     void ResetLiveMapAfterForward(MarkView<G> view)
@@ -3532,7 +3297,6 @@ public:
         if (IsLargeRegion()) {
             SetMarkedRegionFlag(view, 0);
         }
-        BumpSnapshotEpochFromResetAfterForward<G>();
     }
 
     void AddLiveByteCount(uint64_t count)
@@ -3800,7 +3564,6 @@ private:
         // is_allocating). 0 = no mark-start yet.
         uintptr_t markStartAllocPtr;
         alignas(8) char routeInfoPad[24]{};
-        uint64_t snapshotEpoch = 0;
         // used to traverse ghost region.
         uint32_t nextRegionIdx0;
 
@@ -4083,7 +3846,6 @@ private:
         metadata.retainedPreserveCnt = 0;
         metadata.retainedClearCnt = 0;
         metadata.retainedLastOp = RETAINED_OP_NONE;
-        BumpSnapshotEpochFromInitRegion();
         // routedest: this is the reuse edge named in the defect. TakeRegion has already run
         // ClearUnits over this payload; if a published route still names this region, the
         // route now answers into zeroed (or freshly re-allocated) memory. Count it here
@@ -4102,6 +3864,9 @@ private:
         SetResurrectedRegionFlag(0);
         SetMarkFaceSealed(false);
         __atomic_store_n(&metadata.rawPointerObjectCount, 0, __ATOMIC_SEQ_CST);
+        if (uClass != UnitRole::FREE_UNITS) {
+            InitializeLiveInfo();
+        }
         SetUnitRole(uClass);
     }
 
