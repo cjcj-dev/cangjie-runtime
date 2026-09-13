@@ -6,10 +6,13 @@
 #include <cstddef>
 #include <cstdint>
 namespace MapleRuntime {
+class MarkDomain;
 namespace MarkingStacks {
 enum class MarkingGeneration : uint8_t { MAJOR, YOUNG };
 // zMark.cpp:104,601,982,1022-1038: an empty stack at the product boundary.
 void VerifyEmpty(size_t pending);
+// zMark.cpp:1022: thread-private stacks followed by shared stripes.
+void VerifyAllEmpty(MarkDomain& domain);
 }
 }
 #endif

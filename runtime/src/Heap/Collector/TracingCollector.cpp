@@ -798,9 +798,9 @@ bool TracingCollector::FinishOldMark(WorkStack& workStack, WorkStack& foreignRoo
             terminated = workStack.empty() && stripes.IsEmpty();
             if (terminated) {
                 ProcessExportRoots(foreignRootsSet);
-                // zMark.cpp:982-983: shared stripes are checked at successful
-                // mark end, while the safepoint excludes new publication.
-                MarkingStacks::VerifyEmpty(majorMarkDomain->Stripes().Population());
+                // zMark.cpp:982,1022: verify all thread-private stacks, then
+                // shared stripes, while the safepoint excludes publication.
+                MarkingStacks::VerifyAllEmpty(*majorMarkDomain);
                 oldCycle.PublishPhase(GC_PHASE_MARK_COMPLETE);
                 ZVerify::AfterMark();
                 collectorResources.BlockResurrection();

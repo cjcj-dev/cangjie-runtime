@@ -732,6 +732,25 @@ bool FlushTlsMarkProducersDetach(ThreadLocalData* tls)
 
 } // namespace
 
+// zMark.cpp:1025, Threads::threads_do. At mark-end the world is stopped;
+// the registry lock keeps each OS-thread TLS alive throughout the read.
+void MutatorManager::VisitMarkingThreads(const std::function<void(const ThreadLocalData*)>& visitor)
+{
+    DCHECK(WorldStopped());
+    const ThreadLocalData* current = ThreadLocal::GetThreadLocalData();
+    std::lock_guard<std::mutex> lock(markFlushThreadMutex);
+    for (const auto& entry : markFlushThreads) {
+        if (entry.first == nullptr || entry.first == current ||
+            entry.second->bufferLive.load(std::memory_order_acquire) == 0) {
+            continue;
+        }
+        visitor(entry.first);
+    }
+    // GC executors are excluded from the handshake registry. Workers have
+    // their independent task-boundary check; include this executor here.
+    visitor(current);
+}
+
 // zVerify.cpp:576-596 and zStoreBarrierBuffer.cpp:is_in. The registry is
 // OS-thread-owned; coroutine/mutator enumeration is not a buffer inventory.
 void MutatorManager::VisitStoreBarrierBuffers(const std::function<void(MAddress)>& visitor)

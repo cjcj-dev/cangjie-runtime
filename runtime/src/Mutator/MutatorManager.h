@@ -170,6 +170,7 @@ public:
     // Waiting driver/finalizer threads service the same M4 operation queue.
     bool MarkFlushHandshakeActive() const { return Handshake::Current().has_operation(); }
     bool AcknowledgeMarkFlushForCurrentThread();
+    void VisitMarkingThreads(const std::function<void(const ThreadLocalData*)>& visitor);
     void VisitStoreBarrierBuffers(const std::function<void(MAddress)>& visitor);
     bool StoreBarrierBufferContains(MAddress slot);
     void RegisterMarkFlushThread(ThreadLocalData* tls);
