@@ -1,0 +1,2 @@
+lane: sym_cangjie_runtime_503_implement_r5656150642
+主控裁定（0914 05:1x）：确认。① 精确活数/字节数比较已在 zForwarding.cpp:276-304 存在（我在 #503 追加项里写的前提被你实读证伪，以你的读证为准），按 ZGC 形态把这段比较下沉为页级 RegionInfo::VerifyLive（对应 zPage.cpp:196 verify_live）并由 ZForwarding::verify 调用（对应 zForwarding.cpp:369-406），⛔ 不建第二条校验链；报告 FALSIFIED 节记下 #503 追加项的错误前提。② retained 载体全链、剩余死字段/标志方法按删除令删；报告逐项区分「冻结前已删」与「本轮删」。③ 根启发式（MarkGoodHeapGate / PlausibleManagedObjectGate / TryRecoverInteriorBase）按包书：判基础设施差异要写出栈对象/无头记录的事实与 ZGC 锚，否则删。
