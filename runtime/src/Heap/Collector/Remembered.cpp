@@ -39,7 +39,7 @@
 #include "Heap/Verify/GarbRegionDiag.h"
 #include "Heap/Verify/Stw2CurrentAudit.h"
 #include "Heap/Verify/SurvNodeDiag.h"
-#include "Heap/Allocator/ForwardingTable.h"
+#include "Heap/Allocator/zForwardingTable.hpp"
 #include "Heap/Allocator/RegionSpace.h"
 #include "Heap/Barrier/RememberedSet.h"
 #include "Heap/Collector/ZForwarding.h"

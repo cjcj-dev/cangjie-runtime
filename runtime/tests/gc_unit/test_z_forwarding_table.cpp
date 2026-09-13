@@ -14,7 +14,7 @@
 // no-op, so these tests exercise ZGranuleMap locally and ZForwarding without
 // rebinding the product map.
 
-#include "Heap/Allocator/ForwardingTable.h"
+#include "Heap/Allocator/zForwardingTable.hpp"
 #include "Heap/Allocator/ZAttachedArray.h"
 #include "Heap/Allocator/ZGranuleMap.h"
 #include "Heap/Collector/ZForwarding.h"

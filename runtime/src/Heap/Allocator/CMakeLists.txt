@@ -6,10 +6,13 @@
 
 set(SRC_LIST
     "Allocator.cpp"
-    "ForwardingTable.cpp"
+    "zForwardingTable.cpp"
     "MemMap.cpp"
     "RegionSpace.cpp"
-    "RegionManager.cpp"
+    "zPageAllocator.cpp"
+    "zPage.cpp"
+    "zObjectAllocator.cpp"
+    "../Collector/zRelocationSetSelector.cpp"
     "RouteDestHold.cpp"
     "CartesianTree.cpp"
     "HeapFiller.cpp"

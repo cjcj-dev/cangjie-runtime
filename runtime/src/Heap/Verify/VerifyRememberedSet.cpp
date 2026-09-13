@@ -5,7 +5,7 @@
 #include "Heap/Collector/CollectorResources.h"
 #include <unordered_set>
 #include <vector>
-#include "Heap/Allocator/RegionInfo.h"
+#include "Heap/Allocator/zPage.hpp"
 #include "Heap/Allocator/RegionSpace.h"
 #include "Heap/Collector/HeapIterator.h"
 #include "Heap/Collector/ZForwarding.h"

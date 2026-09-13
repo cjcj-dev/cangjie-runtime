@@ -21,7 +21,7 @@
 // RegionInfo::metadata and RegionSpace reserved span are private; unit tests
 // need them to Init FDM without Heap::Init / InitCJRuntime.
 #define private public
-#include "Heap/Allocator/RegionInfo.h"
+#include "Heap/Allocator/zPage.hpp"
 #include "Heap/Allocator/RegionSpace.h"
 #undef private
 #include "Heap/Collector/LiveInfoArena.h"

@@ -5,7 +5,7 @@
 #include "gc_unittest.hpp"
 #include "Heap/Allocator/CartesianTree.h"
 #include "Heap/Allocator/MemMap.h"
-#include "Heap/Allocator/RegionManager.h"
+#include "Heap/Allocator/zPageAllocator.hpp"
 
 namespace MapleRuntime {
 namespace GcUnit {

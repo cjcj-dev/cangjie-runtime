@@ -8,7 +8,7 @@
 
 #include <atomic>
 #include <chrono>
-#include "Heap/Allocator/RegionInfo.h"
+#include "Heap/Allocator/zPage.hpp"
 
 namespace MapleRuntime {
 

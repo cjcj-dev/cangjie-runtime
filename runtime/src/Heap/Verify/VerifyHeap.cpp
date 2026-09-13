@@ -4,7 +4,7 @@
 #include "Heap/Verify/ZVerify.h"
 #include "Heap/Collector/CollectorResources.h"
 #include "Common/ColourPredicates.h"
-#include "Heap/Allocator/RegionInfo.h"
+#include "Heap/Allocator/zPage.hpp"
 #include "Heap/Allocator/RegionSpace.h"
 #include "Heap/Collector/HeapIterator.h"
 #include "Heap/Collector/Collector.h"
