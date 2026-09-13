@@ -29,45 +29,11 @@ public:
     FinalizerProcessor();
     ~FinalizerProcessor() = default;
 
-    // mainly for resurrection.
-    U32 VisitFinalizers(const NativeSlotVisitor& visitor)
-    {
-        U32 count = 0;
-        std::lock_guard<std::mutex> l(listLock);
-        for (NativeSlot& obj : finalizers) {
-            visitor(obj);
-            ++count;
-        }
-        return count;
-    }
-
-    // Registered finalizers are weak until DoResurrection selects them. Only
-    // queued/running finalizables are ordinary liveness roots.
-    void VisitGCRoots(const NativeSlotVisitor& visitor)
-    {
-        std::lock_guard<std::mutex> l(listLock);
-        for (NativeSlot& obj : finalizables) {
-            visitor(obj);
-        }
-        for (NativeSlot& obj : workingFinalizables) {
-            visitor(obj);
-        }
-    }
-
-    // mainly for fixing old pointers
-    void VisitNativePointers(const NativeSlotVisitor& visitor)
-    {
-        std::lock_guard<std::mutex> l(listLock);
-        for (NativeSlot& obj : finalizables) {
-            visitor(obj);
-        }
-        for (NativeSlot& obj : workingFinalizables) {
-            visitor(obj);
-        }
-        for (NativeSlot& obj : finalizers) {
-            visitor(obj);
-        }
-    }
+    // zRootsIterator: strong queued/running roots and weak registrations
+    // share one physical enumeration, with distinct closures.
+    U32 VisitFinalizers(const NativeSlotVisitor& visitor) { return VisitRootLists({}, visitor); }
+    void VisitGCRoots(const NativeSlotVisitor& visitor) { VisitRootLists(visitor, {}); }
+    void VisitNativePointers(const NativeSlotVisitor& visitor) { VisitRootLists(visitor, visitor); }
 
     // notify for finalizer processing loop, invoked after GC
     void Notify();
@@ -111,6 +77,20 @@ public:
     }
 
 private:
+    U32 VisitRootLists(const NativeSlotVisitor& strong, const NativeSlotVisitor& weak)
+    {
+        std::lock_guard<std::mutex> lock(listLock);
+        if (strong) {
+            for (NativeSlot& root : finalizables) { strong(root); }
+            for (NativeSlot& root : workingFinalizables) { strong(root); }
+        }
+        U32 count = 0;
+        if (weak) {
+            for (NativeSlot& root : finalizers) { weak(root); ++count; }
+        }
+        return count;
+    }
+
     void InitFinalizerCJThread();
     void NotifyStarted();
     void Wait();

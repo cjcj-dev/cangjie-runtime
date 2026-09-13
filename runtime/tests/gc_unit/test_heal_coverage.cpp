@@ -12,7 +12,6 @@
 
 #include "Common/ColourMask.h"
 #include "Heap/Verify/HealCoverage.h"
-#include "Heap/WCollector/RemapYoungRoots.h"
 #include "gc_unittest.hpp"
 
 using namespace MapleRuntime;
@@ -26,11 +25,6 @@ using HealCoverage::PaintStale;
 using HealCoverage::InjectStaleOnce;
 using HealCoverage::CensusWords;
 using HealCoverage::FaceOf;
-using RemapYoungRootsLogic::CurrentRemapBit;
-using RemapYoungRootsLogic::kYoungMask0;
-using RemapYoungRootsLogic::kOldMask0;
-using RemapYoungRootsLogic::ColourWrapsWithoutRemap;
-using RemapYoungRootsLogic::FlipYoungMask;
 
 namespace {
 constexpr uintptr_t kAddr = 0x00007f00'00001000ULL;
@@ -43,7 +37,7 @@ constexpr uintptr_t LoadBad(uintptr_t remap)
 
 GC_TEST(HealCoverage, NullAndPlainAreNotMisses)
 {
-    const uintptr_t remap = CurrentRemapBit(kYoungMask0, kOldMask0);
+    const uintptr_t remap = ZPointerRemapped00;
     const uintptr_t bad = LoadBad(remap);
     GC_EXPECT_EQ(Classify(0, bad), Kind::Null);
     GC_EXPECT_EQ(Classify(kAddr, bad), Kind::Plain);
@@ -53,14 +47,14 @@ GC_TEST(HealCoverage, NullAndPlainAreNotMisses)
 
 GC_TEST(HealCoverage, CurrentColourIsLoadGood)
 {
-    const uintptr_t remap = CurrentRemapBit(kYoungMask0, kOldMask0);
+    const uintptr_t remap = ZPointerRemapped00;
     const uintptr_t word = kAddr | remap;
     GC_EXPECT_EQ(Classify(word, LoadBad(remap)), Kind::LoadGood);
 }
 
 GC_TEST(HealCoverage, PreviousYoungColourIsStaleBeforeWrap)
 {
-    const uintptr_t remap = CurrentRemapBit(kYoungMask0, kOldMask0);
+    const uintptr_t remap = ZPointerRemapped00;
     const uintptr_t stale = PaintStale(kAddr, remap);
     GC_EXPECT_EQ(Classify(stale, LoadBad(remap)), Kind::Stale);
     GC_EXPECT_TRUE(IsCoverageMiss(Classify(stale, LoadBad(remap))));
@@ -68,8 +62,8 @@ GC_TEST(HealCoverage, PreviousYoungColourIsStaleBeforeWrap)
 
 GC_TEST(HealCoverage, InjectPositiveControlRings)
 {
-    uintptr_t slot = kAddr | CurrentRemapBit(kYoungMask0, kOldMask0);
-    const uintptr_t remap = CurrentRemapBit(kYoungMask0, kOldMask0);
+    uintptr_t slot = kAddr | ZPointerRemapped00;
+    const uintptr_t remap = ZPointerRemapped00;
     InjectStaleOnce(&slot, remap);
     const uintptr_t words[] = { slot };
     const Counts c = CensusWords(words, 1, LoadBad(remap));
@@ -79,11 +73,11 @@ GC_TEST(HealCoverage, InjectPositiveControlRings)
 
 GC_TEST(HealCoverage, TwoYoungFlipsWrapStaleIntoLookingGood)
 {
-    const uintptr_t remap0 = CurrentRemapBit(kYoungMask0, kOldMask0);
+    const uintptr_t remap0 = ZPointerRemapped00;
     const uintptr_t published = kAddr | remap0;
-    GC_EXPECT_TRUE(ColourWrapsWithoutRemap(published, kYoungMask0, kOldMask0));
-    const uintptr_t y2 = FlipYoungMask(FlipYoungMask(kYoungMask0));
-    const uintptr_t remap2 = CurrentRemapBit(y2, kOldMask0);
+    const uintptr_t y0 = ZPointerRemapped00 | ZPointerRemapped10;
+    const uintptr_t y2 = (y0 ^ REMAP_COLOUR_MASK) ^ REMAP_COLOUR_MASK;
+    const uintptr_t remap2 = y2 & (ZPointerRemapped00 | ZPointerRemapped01);
     GC_EXPECT_EQ(Classify(published, LoadBad(remap2)), Kind::LoadGood);
 }
 
@@ -103,7 +97,7 @@ GC_TEST(HealCoverage, FaceOfSplitsTheFiveHealSurfaces)
 
 GC_TEST(HealCoverage, CensusWordsCountsEachKind)
 {
-    const uintptr_t remap = CurrentRemapBit(kYoungMask0, kOldMask0);
+    const uintptr_t remap = ZPointerRemapped00;
     const uintptr_t bad = LoadBad(remap);
     const uintptr_t words[] = {
         0,

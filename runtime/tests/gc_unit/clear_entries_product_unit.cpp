@@ -30,12 +30,11 @@
 #include "Heap/Collector/RelocationRequestQueue.h"
 #include "Heap/GcThreadPool.h"
 #include "Heap/WCollector/WCollector.h"
-#include "Heap/WCollector/RemapYoungRoots.h"
+#include "Heap/Collector/TracingCollector.h"
 #include "Heap/Barrier/Barrier.h"
 #include "Mutator/Mutator.h"
 #include "Mutator/ThreadLocal.h"
 #include "Mutator/MutatorManager.h"
-#include "Mutator/PreForwardBaseMap.h"
 #include "Loader/ElfUnloadQuiescence.h"
 #include "ObjectModel/RefField.inline.h"
 #include "ObjectModel/MArray.inline.h"
@@ -2797,52 +2796,66 @@ GC_TEST(ForwardingPublicationProduct, ArmedMissAfterPublicationCloseFailsClosed)
     RelocationReceiptTestAccess::BindCollector(Heap::GetHeap().GetCollectorResources(), nullptr);
 }
 
-GC_OTHER_VM_TEST(ForwardingPublicationProduct, PreForwardTaggedMissingScopeFailsClosed)
+// zStackWatermark.cpp:159-186: process the head before phase completion.
+GC_TEST(ForwardingPublicationProduct, WatermarkRemapsInvisibleAndNativeHeadBeforeCompletion)
 {
-    GcHeapFixture& fx = ProductFixture();
-    WCollector collector(Heap::GetHeap().GetAllocator(), Heap::GetHeap().GetCollectorResources());
-    RelocationReceiptTestAccess::BindCollector(Heap::GetHeap().GetCollectorResources(), &collector);
-    collector.SetGCPhase(GCPhase::GC_PHASE_PREFORWARD);
-    RootSlot root;
-    StorePlain(root, from_object(fx.obj0));
-    AbortCapture result = CaptureAbort([&]() { VisitTaggedOopSlot(root, false); });
-    std::fprintf(stderr, "MISSING_BASE_MAP_RESULT status=%d\n%s", result.status, result.output.c_str());
-    collector.SetGCPhase(GCPhase::GC_PHASE_IDLE);
-    RelocationReceiptTestAccess::BindCollector(Heap::GetHeap().GetCollectorResources(), nullptr);
-    GC_EXPECT_TRUE(result.output.find("site=VisitTaggedOopSlot.preforward-base-map-missing") != std::string::npos);
-    GC_EXPECT_TRUE(WIFSIGNALED(result.status));
-    GC_EXPECT_EQ(WTERMSIG(result.status), SIGABRT);
+    auto& fixture = ProductFixture();
+    Mutator mutator;
+    mutator.PublishInvisibleRoot(fixture.obj0);
+    ObjectRef* native = mutator.AddNativeFrameRoot(fixture.obj0);
+    size_t nativeVisits = 0;
+    size_t invisibleVisits = 0;
+    using P = StackWatermark::ProcessingPhase;
+    RootVisitor ordinary = [&](RootSlot& slot) {
+        if (!is_null(slot.LoadPlain())) {
+            ++nativeVisits;
+            StorePlain(slot, from_object(fixture.obj1));
+        }
+    };
+    RootVisitor invisible = [&](RootSlot& slot) {
+        GC_EXPECT_FALSE(mutator.GetStackWatermark().IsDone(17, P::REMAP));
+        GC_EXPECT_EQ(raw(slot.LoadPlain()), reinterpret_cast<uintptr_t>(fixture.obj0));
+        StorePlain(slot, from_object(fixture.obj1));
+        ++invisibleVisits;
+    };
+    auto derived = Mutator::MakeDerivedRootVisitor(ordinary);
+    size_t frames = 0;
+    bool complete = mutator.DrainStackWatermark(ordinary, invisible, 17, StackWatermark::WM_OWNER_SELF,
+                                               &derived, frames, false, P::REMAP);
+    GC_EXPECT_TRUE(complete);
+    GC_EXPECT_TRUE(mutator.GetStackWatermark().IsDone(17, P::REMAP));
+    GC_EXPECT_EQ(nativeVisits, size_t(1));
+    GC_EXPECT_EQ(invisibleVisits, size_t(1));
+    GC_EXPECT_TRUE(mutator.WithdrawInvisibleRoot() == fixture.obj1);
+    GC_EXPECT_EQ(raw(native->LoadPlain()), reinterpret_cast<uintptr_t>(fixture.obj1));
+    mutator.RemoveNativeFrameRoot(native);
 }
 
-GC_TEST(ForwardingPublicationProduct, PreForwardBaseMapScopeRestoresNestedScan)
+// ProcessDerivedOop (oopMap.cpp:400-421): shared base, two distinct offsets.
+GC_TEST(ForwardingPublicationProduct, DerivedClosurePreservesSharedBaseOffsets)
 {
-    PreForwardBaseMapScope::Map outer;
-    PreForwardBaseMapScope::Map inner;
-    auto* previous = PreForwardBaseMapScope::Current();
-    bool restoredOuter = false;
-    bool isolatedThread = false;
-    {
-        PreForwardBaseMapScope outerScope(outer);
-        GC_EXPECT_TRUE(PreForwardBaseMapScope::Current() == &outer);
-        {
-            PreForwardBaseMapScope innerScope(inner);
-            GC_EXPECT_TRUE(PreForwardBaseMapScope::Current() == &inner);
-        }
-        restoredOuter = PreForwardBaseMapScope::Current() == &outer;
-        std::thread worker([&]() {
-            isolatedThread = PreForwardBaseMapScope::Current() == nullptr;
-            PreForwardBaseMapScope workerScope(inner);
-            isolatedThread = isolatedThread && PreForwardBaseMapScope::Current() == &inner;
-        });
-        worker.join();
-        GC_EXPECT_TRUE(PreForwardBaseMapScope::Current() == &outer);
-    }
-    std::fprintf(stderr, "BASE_MAP_SCOPE_RESULT nested=%d isolated=%d restored=%d\n",
-                 restoredOuter, isolatedThread, PreForwardBaseMapScope::Current() == previous);
-    GC_EXPECT_TRUE(restoredOuter);
-    GC_EXPECT_TRUE(isolatedThread);
-    GC_EXPECT_TRUE(PreForwardBaseMapScope::Current() == previous);
+    RootSlot base;
+    StorePlain(base, to_zaddress(0x10000));
+    DerivedSlot first;
+    DerivedSlot second;
+    RebaseDerived(first, base, 8);
+    RebaseDerived(second, base, 24);
+    size_t visits = 0;
+    RootVisitor root = [&](RootSlot& slot) {
+        GC_EXPECT_EQ(raw(slot.LoadPlain()), uintptr_t(0x10000));
+        StorePlain(slot, to_zaddress(0x20000));
+        ++visits;
+    };
+    auto derived = Mutator::MakeDerivedRootVisitor(root);
+    derived(base.LoadPlain(), first);
+    derived(base.LoadPlain(), second);
+    GC_EXPECT_EQ(raw(base.LoadPlain()), uintptr_t(0x10000));
+    root(base);
+    GC_EXPECT_EQ(raw(first.LoadDerived()), uintptr_t(0x20008));
+    GC_EXPECT_EQ(raw(second.LoadDerived()), uintptr_t(0x20018));
+    GC_EXPECT_EQ(visits, size_t(3));
 }
+
 
 // A managed frame is input data to the real mutator phase entry. Keep the
 // descriptor in the loaded test image so the product metadata lifetime check
@@ -3026,11 +3039,12 @@ GC_TEST(ForwardingPublicationProduct, PreForwardDerivedRebasesFromRemappedBaseWi
     const uint64_t unavailableBefore = ForwardingTable::UnavailableCount();
     const uint64_t unarmedBefore = ForwardingTable::UnarmedCount();
     size_t resolverCalls = 0;
-    DerivedPtrVisitor visitor = Mutator::MakePreForwardDerivedVisitor(
-        [&](BaseObject* old) -> BaseObject* {
+    DerivedPtrVisitor visitor = Mutator::MakeDerivedRootVisitor(
+        [&](RootSlot& slot) {
+            BaseObject* old = to_object(safe(slot.LoadPlain()));
             ++resolverCalls;
             GC_EXPECT_TRUE(old == state.from);
-            return state.to;
+            StorePlain(slot, from_object(state.to));
         });
     visitor(oldBase.LoadPlain(), derived);
 

@@ -65,7 +65,7 @@ public:
         return *this;
     }
 
-    // ATTENTION: VisitRegRoots VisitSlotRoots VisitDerivedPtr must be invoked in a fixed order
+    // HeapReferenceMap processes derived values before either ordinary-root pass.
     virtual bool VisitRegRoots(const RootVisitor& visitor, const RegDebugVisitor& debugFunc, RegSlotsMap& regSlotsMap,
                               bool young = false)
     {
@@ -97,8 +97,7 @@ public:
           oopSlotRoot(entry.BuildOopSlotRoot()), oopRegRoot(entry.BuildOopRegRoot()) {}
     HeapReferenceMap(HeapReferenceMap&& other)
         : RootMap(std::move(other)), derivedPtr(other.derivedPtr),
-          oopSlotRoot(std::move(other.oopSlotRoot)), oopRegRoot(other.oopRegRoot),
-          rootsList(std::move(other.rootsList)) {}
+          oopSlotRoot(std::move(other.oopSlotRoot)), oopRegRoot(other.oopRegRoot) {}
     HeapReferenceMap& operator=(HeapReferenceMap&& other)
     {
         if (this == &other) {
@@ -108,32 +107,38 @@ public:
         this->derivedPtr = other.derivedPtr;
         this->oopSlotRoot = std::move(other.oopSlotRoot);
         this->oopRegRoot = other.oopRegRoot;
-        this->rootsList = std::move(other.rootsList);
         return *this;
     }
     ~HeapReferenceMap() override = default;
     bool VisitRegRoots(const RootVisitor& visitor, const RegDebugVisitor& debugFunc, RegSlotsMap& regSlotsMap,
                        bool young = false) override
     {
-        RootVisitor oopVisitor = [young](ObjectRef& root) { VisitTaggedOopSlot(root, young); };
-        bool ok = regRoot.VisitGCRoots(visitor, debugFunc, regSlotsMap, &rootsList);
-        oopRegRoot.VisitGCRoots(oopVisitor, debugFunc, regSlotsMap, &rootsList);
+        (void)young;
+        bool ok = regRoot.VisitGCRoots(visitor, debugFunc, regSlotsMap);
+        oopRegRoot.VisitGCRoots(visitor, debugFunc, regSlotsMap);
         return ok;
     }
 
     void VisitSlotRoots(const RootVisitor& visitor, const SlotDebugVisitor& debugFunc, bool young = false) override
     {
-        slotRoot.VisitGCRoots(visitor, debugFunc, stackBase, &rootsList);
-        RootVisitor oopVisitor = [young](ObjectRef& root) { VisitTaggedOopSlot(root, young); };
-        oopSlotRoot.VisitGCRoots(oopVisitor, debugFunc, stackBase, &rootsList);
+        slotRoot.VisitGCRoots(visitor, debugFunc, stackBase);
+        (void)young;
+        oopSlotRoot.VisitGCRoots(visitor, debugFunc, stackBase);
     }
 
-    // VisitDerivedPtr must be invoked after VisitRegRoots and VisitSlotRoots;
+    // oopMap.cpp:413: process every derived value before updating any base.
     void VisitDerivedPtr(const DerivedPtrVisitor& derivedVisitor, const DerivedPtrDebugVisitor debugVisitor,
                          RegSlotsMap& regSlotsMap)
     {
+        std::list<BasePtrType> rootsList;
+        RootVisitor capture = [](ObjectRef&) {};
+        regRoot.VisitGCRoots(capture, nullptr, regSlotsMap, &rootsList);
+        oopRegRoot.VisitGCRoots(capture, nullptr, regSlotsMap, &rootsList);
+        slotRoot.VisitGCRoots(capture, nullptr, stackBase, &rootsList);
+        oopSlotRoot.VisitGCRoots(capture, nullptr, stackBase, &rootsList);
+        DerivedPtr derived = derivedPtr;
         for (auto it = rootsList.begin(); it != rootsList.end(); ++it) {
-            if (!derivedPtr.VisitDerivedPtr(derivedVisitor, debugVisitor, regSlotsMap, *it, stackBase)) {
+            if (!derived.VisitDerivedPtr(derivedVisitor, debugVisitor, regSlotsMap, *it, stackBase)) {
                 break;
             }
         }
@@ -154,7 +159,6 @@ private:
     DerivedPtr derivedPtr;
     SlotRoot oopSlotRoot;
     RegRoot oopRegRoot;
-    std::list<BasePtrType> rootsList;
 };
 
 class MethodMap : public StackMap {

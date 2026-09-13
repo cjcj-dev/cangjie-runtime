@@ -56,7 +56,6 @@
 #include "Heap/Verify/SurvNodeDiag.h"
 #include "Heap/Verify/CsetEmptyWho.h"
 #include "Common/ColourPredicates.h"
-#include "Heap/WCollector/RemapYoungRoots.h"
 #include "Mutator/MutatorManager.h"
 #include "ObjectModel/MArray.inline.h"
 #include "UnwindStack/StackFrameCursor.h"
@@ -364,205 +363,52 @@ BaseObject* WCollector::ForwardUpdateRawRef(ObjectRef& root, Generation generati
 
     return oldObj;
 }
-void WCollector::PreforwardAllExportFromRoots()
-{
-    NativeSlotVisitor visitor = [](NativeSlot& root) { (void)Heap::GetBarrier().ReadStaticRef(root); };
-    Heap::GetHeap().VisitAllExportRoots(visitor);
-}
-void WCollector::PreforwardStaticRoots()
-{
-    NativeSlotVisitor visitor = [](NativeSlot& root) { (void)Heap::GetBarrier().ReadStaticRef(root); };
-    Heap::GetHeap().VisitStaticRoots(visitor);
-}
+
+
 
 void WCollector::RemapYoungRoots()
 {
-    if (!RemapYoungRootsLogic::kEnableRemapYoungRoots) {
-        return;
-    }
     MRT_PHASE_TIMER(ZStatPhases::PRemapYoungRoots);
-    const uintptr_t youngMask = ZPointerRemappedYoungMask;
-    const uintptr_t oldMask = ZPointerRemappedOldMask;
-    size_t remsetSeen = 0;
-    size_t remsetColoured = 0;
-    size_t remsetRemapped = 0;
-    size_t remsetDoubleBad = 0;
-    size_t staticSeen = 0;
-    size_t staticColoured = 0;
-    size_t staticRemapped = 0;
-    size_t staticDoubleBad = 0;
-    size_t stackSeen = 0;
-    size_t stackColoured = 0;
-    size_t stackRemapped = 0;
-    size_t otherSeen = 0;
-    size_t otherColoured = 0;
-    size_t otherRemapped = 0;
-    size_t otherDoubleBad = 0;
-
-    auto remapField = [&](RefField<>& field, size_t& seen, size_t& coloured, size_t& remapped,
-                          size_t& doubleBad) {
-        ++seen;
-        RefField<> oldField(field);
-        const uintptr_t rawVal = raw(oldField.GetFieldValue());
-        const auto kind = RemapYoungRootsLogic::Classify(rawVal, youngMask, oldMask);
-        if (!RemapYoungRootsLogic::NeedsForwardingLookup(kind)) {
-            return;
-        }
-        ++coloured;
-        if (kind == RemapYoungRootsLogic::Kind::DoubleBad) {
-            ++doubleBad;
-        }
-        BaseObject* observed = to_object(oldField.GetTargetObject());
-        if (!Heap::IsHeapAddress(observed)) {
-            return;
-        }
-        // ZRemapOopClosure calls load_barrier_on_oop_field for every coloured
-        // root (zGeneration.cpp:1408-1418,1483-1499).  Do the address-level
-        // forwarding lookup even when the four-value colour has wrapped back
-        // to load-good; only an absent forwarding may preserve `observed`.
-        const ForwardingProvenance provenance{ ForwardingHolderKind::Remset, nullptr, &field };
-        BaseObject* latest = make_load_good(oldField, provenance);
-        if (!Heap::IsHeapAddress(latest)) {
-            return;
-        }
-        if (!Collector::PlausibleManagedObjectGate("RemapYoungRoots", latest)) {
-            return;
-        }
-        // ZGC resolves a field word exactly once: ZBarrier::barrier runs one make_load_good
-        // (zBarrier.inline.hpp:294-343) and then rebuilds the word with ZPointer::uncolor /
-        // ZAddress::store_good, which never consult a forwarding table
-        // (zAddress.inline.hpp:609-624,806-811).  GetAndTryTagRefField resolves a second time,
-        // and under in-place compaction that second resolve is not idempotent: from- and
-        // to-addresses share one page span, so an address this page already produced is itself a
-        // from-index of the same table.  `latest` above is already the make-load-good answer, so
-        // colour it -- ColourResolvedRefField keeps all three checks and drops only the repeat
-        // lookup, the same shape already used by the mark closure (Mark.cpp:361).
-        RefField<> newField = ColourResolvedRefField(latest, provenance);
-        bool healed = false;
-        if (oldField.GetFieldValue() != newField.GetFieldValue()) {
-            healed = HealSlot(field, oldField.GetFieldValue(), newField.GetFieldValue(),
-                              HealSite::WCollectorRemapYoungRoots);
-            if (healed) {
-                ++remapped;
-            }
-        }
-#if defined(MRT_TESTABLE_INTERNALS)
-        NoteRemapYoungRootsTestReceipt(field, rawVal, healed, is_store_good(field));
-#endif
-    };
-
-    std::unordered_set<MAddress> remset = Heap::GetHeap().GetRememberedSet().Snapshot();
+    // zGeneration.cpp:1483-1523: remembered fields, all colored roots, then threads.
+    const auto remset = Heap::GetHeap().GetRememberedSet().Snapshot();
     for (MAddress slot : remset) {
-        if (slot == 0) {
+        RegionInfo* page = RegionInfo::TryGetRegionInfoAt(slot);
+        if (page == nullptr || !page->IsValidRegion() || page->IsFreeRegion() ||
+            page->IsGarbageRegion() || page->IsYoungRegion()) {
             continue;
         }
-        // ZRemsetTableIterator admits the current old page, then remap_current applies the
-        // load barrier to every bit in that page's current remembered face; it does not ask
-        // whether the containing object is live (zRemembered.cpp:395-458). Our remembered
-        // bitmap is heap-wide instead of page-local, so reproduce only that page admission.
-        // ClearRegion removes both faces before reuse; reject slots whose old carrier has
-        // already left the page table before dereferencing the recorded address.
-        RegionInfo* holderPage = RegionInfo::TryGetRegionInfoAt(slot);
-        if (holderPage == nullptr || !holderPage->IsValidRegion() || holderPage->IsFreeRegion() ||
-            holderPage->IsGarbageRegion() || holderPage->IsYoungRegion()) {
+        RefField<>& field = HeapSlotAt<>(slot);
+        RefField<> observed(field);
+        const ForwardingProvenance provenance{ ForwardingHolderKind::Remset, nullptr, &field };
+        BaseObject* resolved = make_load_good(observed, provenance);
+        if (resolved == nullptr) {
             continue;
         }
-        // slotwitness: the fail-closed records reached from here print tag/edge/host/slot and the
-        // slot owner's region facts, and this walk was the only remap producer that set none of
-        // them -- every permhole witness from RemapYoungRoots reads `tag=none slot=0`, so the
-        // record cannot say whether the refused value came out of a live holder or out of a
-        // from-copy this cycle already compacted.  ZGC never has to ask: remap_current iterates
-        // per *page* out of the page table and a page's remembered bitmap dies with the page
-        // (zGeneration.cpp:1483-1499; zRemembered.cpp:451-461).  Ours is a flat address set, so
-        // the holder has to be named on the record.
-        remapField(*reinterpret_cast<RefField<>*>(slot), remsetSeen, remsetColoured, remsetRemapped,
-                   remsetDoubleBad);
+        RefField<> current = ColourResolvedRefField(resolved, provenance);
+        bool healed = HealSlot(field, observed.GetFieldValue(), current.GetFieldValue(),
+                               HealSite::WCollectorRemapYoungRoots);
+#if defined(MRT_TESTABLE_INTERNALS)
+        NoteRemapYoungRootsTestReceipt(field, raw(observed.GetFieldValue()), healed, is_store_good(field));
+#else
+        (void)healed;
+#endif
     }
-
-    auto remapRoot = [this, youngMask, oldMask](ObjectRef& root, size_t& seen, size_t& coloured,
-                                                size_t& remapped, size_t& doubleBad) {
-        ++seen;
-        const uintptr_t rawVal = raw(root.LoadPlain());
-        const auto kind = RemapYoungRootsLogic::Classify(rawVal, youngMask, oldMask);
-        if (kind != RemapYoungRootsLogic::Kind::Uncoloured) {
-            ++coloured;
+    VisitAllColoredRoots([](NativeSlot& root) { (void)Heap::GetBarrier().ReadStaticRef(root); });
+    RootVisitor visitor = [this](ObjectRef& root) { ForwardUpdateRawRef(root, Generation::Young); };
+    VisitStrongPlainRoots(visitor, [&](Mutator& mutator) {
+        DerivedPtrVisitor derived = Mutator::MakeDerivedRootVisitor(visitor);
+        size_t frames = 0;
+        if (!mutator.DrainStackWatermark(visitor, visitor, FlipSeq().load(std::memory_order_acquire) + 1,
+                                         StackWatermark::WM_OWNER_GC, &derived, frames, true,
+                                         StackWatermark::ProcessingPhase::REMAP)) {
+            mutator.VisitHeapReferences(visitor, derived);
         }
-        if (kind == RemapYoungRootsLogic::Kind::DoubleBad) {
-            ++doubleBad;
-        }
-        ForwardUpdateRawRef(root, Generation::Young);
-        if (raw(root.LoadPlain()) != rawVal) {
-            ++remapped;
-        }
-    };
-
-    NativeSlotVisitor staticVisitor = [&](NativeSlot& root) {
-        ++staticSeen;
-        const zpointer observed = root.GetFieldValue();
-        ++staticColoured;
-        (void)Heap::GetBarrier().ReadStaticRef(root);
-        if (root.GetFieldValue() != observed) {
-            ++staticRemapped;
-        }
-    };
-    Heap::GetHeap().VisitStaticRoots(staticVisitor);
-
-    MutatorManager::Instance().VisitAllMutators([&](Mutator& mutator) {
-        RootVisitor visitor = [&](ObjectRef& root) {
-            size_t doubleBad = 0;
-            remapRoot(root, stackSeen, stackColoured, stackRemapped, doubleBad);
-        };
-        DerivedPtrVisitor derivedVisitor = [this](BasePtrType basePtr, DerivedSlot& derived) {
-            BaseObject* knownBase = is_null(basePtr) ? nullptr :
-                to_object(safe(uncolor_bits(to_zpointer(raw(basePtr)))));
-            (void)FixMinorEvacuatedSlot(derived, knownBase, nullptr);
-        };
-        mutator.VisitHeapReferences(visitor, derivedVisitor);
     });
-
-    RootVisitor otherVisitor = [&](ObjectRef& root) {
-        remapRoot(root, otherSeen, otherColoured, otherRemapped, otherDoubleBad);
-    };
-    Runtime::Current().GetConcurrencyModel().VisitGCRoots(&otherVisitor);
-    NativeSlotVisitor retainedVisitor = [&](NativeSlot& root) {
-        ++otherSeen;
-        ++otherColoured;
-        const zpointer observed = root.GetFieldValue();
-        (void)Heap::GetBarrier().ReadStaticRef(root);
-        if (root.GetFieldValue() != observed) {
-            ++otherRemapped;
-        }
-    };
-    collectorResources.GetFinalizerProcessor().VisitNativePointers(retainedVisitor);
-    Heap::GetHeap().VisitAllExportRoots(retainedVisitor);
-
-    // ZGenerationOld::remap_young_roots completes colored roots, uncolored
-    // roots, and the current remembered set before old relocate-start
-    // (zGeneration.cpp:1458-1523). Only that coverage completion retires the
-    // forwarding authority; a cycle count is not a lifetime proof.
-    // A8 triggers reclaim; it does not publish mark coverage.
-
-    LOG(RTLOG_ERROR,
-        "[A8REMAP] remset seen=%zu coloured=%zu remapped=%zu doubleBad=%zu "
-        "static seen=%zu coloured=%zu remapped=%zu doubleBad=%zu "
-        "stack seen=%zu coloured=%zu remapped=%zu "
-        "other seen=%zu coloured=%zu remapped=%zu doubleBad=%zu flipSeq=%lu",
-        remsetSeen, remsetColoured, remsetRemapped, remsetDoubleBad, staticSeen, staticColoured,
-        staticRemapped, staticDoubleBad, stackSeen, stackColoured, stackRemapped,
-        otherSeen, otherColoured, otherRemapped, otherDoubleBad,
-        static_cast<unsigned long>(FlipSeq().load(std::memory_order_relaxed)));
-}
-void WCollector::PreforwardFinalizerProcessorRoots()
-{
-    NativeSlotVisitor visitor = [](NativeSlot& root) { (void)Heap::GetBarrier().ReadStaticRef(root); };
-    collectorResources.GetFinalizerProcessor().VisitNativePointers(visitor);
 }
 
-void WCollector::PreforwardConcurrencyModelRoots()
-{
-    RootVisitor visitor = [this](ObjectRef& root) { ForwardUpdateRawRef(root, Generation::Old); };
-    Runtime::Current().GetConcurrencyModel().VisitGCRoots(&visitor);
-}
+
+
+
 
 void WCollector::PreforwardDiscoveredExternObjects(Generation generation)
 {
@@ -623,38 +469,28 @@ void WCollector::Preforward()
     }
     GCWorkers& workers = GetWorkers();
     std::atomic<unsigned> next{ 0 };
+    const std::function<void()> families[] = {
+        [&] { VisitAllColoredRoots([](NativeSlot& root) { (void)Heap::GetBarrier().ReadStaticRef(root); }); },
+        [&] { VisitStrongPlainRoots([this](ObjectRef& root) {
+            ForwardUpdateRawRef(root, Generation::Old);
+        }, {}); },
+        [&] { PreforwardDiscoveredExternObjects(Generation::Old); },
+        [&] { PreforwardAllResurrectExportFromObjects(Generation::Old); }
+    };
     class RootsTask final : public GCWorkerTask {
     public:
-        RootsTask(WCollector& collector, std::atomic<unsigned>& cursor) : collector(collector), next(cursor) {}
+        RootsTask(const std::function<void()>* families, std::atomic<unsigned>& next)
+            : families(families), next(next) {}
         void Work(uint32_t) override
         {
-            for (unsigned family = next.fetch_add(1); family < 6; family = next.fetch_add(1)) {
-                switch (family) {
-                    case 0:
-                        collector.PreforwardConcurrencyModelRoots();
-                        break;
-                    case 1:
-                        collector.PreforwardFinalizerProcessorRoots();
-                        break;
-                    case 2:
-                        collector.PreforwardAllExportFromRoots();
-                        break;
-                    case 3:
-                        collector.PreforwardStaticRoots();
-                        break;
-                    case 4:
-                        collector.PreforwardDiscoveredExternObjects(Generation::Old);
-                        break;
-                    default:
-                        collector.PreforwardAllResurrectExportFromObjects(Generation::Old);
-                        break;
-                }
+            for (unsigned i = next.fetch_add(1); i < 4; i = next.fetch_add(1)) {
+                families[i]();
             }
         }
     private:
-        WCollector& collector;
+        const std::function<void()>* families;
         std::atomic<unsigned>& next;
-    } roots(static_cast<WCollector&>(*this), next);
+    } roots(families, next);
     workers.Run(roots);
     if (HealCoverage::kHealCoverageCensus) {
         HealCoverage::CensusAfterPublication(
@@ -1221,76 +1057,20 @@ bool WCollector::FixMinorEvacuatedSlot(RootSlot& root, const ScopedStopTheWorld*
 bool WCollector::FixMinorEvacuatedSlot(DerivedSlot& derived, BaseObject* knownBase,
                                       const ScopedStopTheWorld* stw) const
 {
-    (void)stw;
-
-    zaddress_unsafe observed = derived.LoadDerived();
-    if (knownBase == nullptr || is_null(observed)) {
+    const zaddress_unsafe observed = derived.LoadDerived();
+    if (knownBase == nullptr) {
         return false;
     }
-    BaseObject* derivedObject = to_object(safe(uncolor_bits(to_zpointer(raw(observed)))));
-    MAddress baseAddress = reinterpret_cast<MAddress>(knownBase);
-    MAddress derivedAddress = reinterpret_cast<MAddress>(derivedObject);
-    if (derivedObject == nullptr || derivedAddress < baseAddress) {
-        return false;
-    }
-    size_t offset = derivedAddress - baseAddress;
-
-    // fixenum: the mark visitor turns a derived pair into a temporary base root. The
-    // fix visitor must instead preserve the pair's offset and rewrite its real slot,
-    // exactly as GCPhasePreForward does after forwarding the host.
-    BaseObject* currentBase = knownBase;
-    RegionInfo* baseRegion = RegionInfo::GetGhostFromRegionAt(reinterpret_cast<MAddress>(knownBase));
-    if (Heap::IsHeapAddress(knownBase) &&
-        Collector::PlausibleManagedObjectGate("FixMinorEvacuatedSlot.derivedBase", knownBase) &&
-        baseRegion != nullptr && baseRegion->GetLiveInfo0ForProbe() != nullptr &&
-        IsGhostFromObject(knownBase) && !IsUnmovableFromObject(knownBase)) {
-        (void)ForceRootRouteDomainWhileForwardable(const_cast<WCollector*>(this), knownBase);
-        currentBase = const_cast<WCollector*>(this)->ForwardObject(knownBase, Generation::Young);
-        if (currentBase == nullptr) {
-            Collector::FailClosedLoad(
-                "WCollector::FixMinorEvacuatedSlot.derived-base-unresolved", knownBase,
-                reinterpret_cast<uintptr_t>(&derived),
-                ForwardingProvenance{ ForwardingHolderKind::Derived, knownBase, &derived });
-        }
-    }
-
-    RootSlot fixedBase;
-    HealRootWriteback(fixedBase, currentBase, HealSite::WCollectorFixRootForwarded);
-    RebaseDerived(derived, fixedBase, offset);
+    RootVisitor root = [this, stw](RootSlot& slot) { (void)FixMinorEvacuatedSlot(slot, stw); };
+    auto closure = Mutator::MakeDerivedRootVisitor(root);
+    closure(to_zaddress_unsafe(reinterpret_cast<MAddress>(knownBase)), derived);
     return raw(observed) != raw(derived.LoadDerived());
 }
 
 void WCollector::FixMinorRootSlots(const ScopedStopTheWorld* stw)
 {
-    // statresid grant-before-route: paint every root-named young ghost into liveInfo0
-    // *before* any Forward/Route. Per-slot Ensure+Forward (old shape) Routes the whole
-    // region on the first root of a shared region, freezes liveByteCount (COMPACTED/ROUTED),
-    // then later roots in the same region hit admit_miss + leave-alone → reclaim UAF
-    // (GetSize si_addr=0xffff…). Two-pass: grant all, then fix.
-    RootVisitor grantVisitor = [this](ObjectRef& root) {
-        zaddress_unsafe observed = root.LoadPlain();
-        if (is_null(observed)) {
-            return;
-        }
-        HeapSlot<> bits(to_zpointer(raw(observed)));
-        BaseObject* obj = to_object(bits.GetTargetObject());
-        if (obj == nullptr || !Heap::IsHeapAddress(obj)) {
-            return;
-        }
-        if (IsGhostFromObject(obj) && !IsUnmovableFromObject(obj)) {
-            (void)ForceRootRouteDomainWhileForwardable(const_cast<WCollector*>(this), obj);
-
-        } else if (!Collector::PlausibleManagedObjectGate("statresid.grant_pass", obj)) {
-            BaseObject* host = Collector::TryRecoverInteriorBase(obj);
-            if (host != nullptr && IsGhostFromObject(host) && !IsUnmovableFromObject(host)) {
-                (void)ForceRootRouteDomainWhileForwardable(const_cast<WCollector*>(this), host);
-            }
-        }
-    };
-    MutatorManager::Instance().VisitAllMutators(
-        [&grantVisitor](Mutator& mutator) { mutator.VisitMutatorRoots(grantVisitor); });
-    Runtime::Current().GetConcurrencyModel().VisitGCRoots(&grantVisitor);
-
+    // The phase handshake has already completed each stack watermark. Only
+    // non-frame plain carriers and colored storage remain at this entry.
     RootVisitor rawRootVisitor = [this, stw](ObjectRef& root) {
 #if defined(MRT_GC_UNIT_TESTS)
         NoteLargeArrayInitRootVisit(LargeArrayRootVisitSite::MINOR_RELOCATE,
@@ -1298,27 +1078,9 @@ void WCollector::FixMinorRootSlots(const ScopedStopTheWorld* stw)
 #endif
         (void)FixMinorEvacuatedSlot(root, stw);
     };
-    DerivedPtrVisitor derivedVisitor = [this, stw](BasePtrType basePtr, DerivedSlot& derived) {
-        BaseObject* knownBase = is_null(basePtr) ? nullptr :
-            to_object(safe(uncolor_bits(to_zpointer(raw(basePtr)))));
-        (void)FixMinorEvacuatedSlot(derived, knownBase, stw);
-    };
-    // fixenum: VisitMutatorRoots exposes derived pairs only as temporary base roots and
-    // deliberately leaves their real slots for PreForward. Minor fix needs the typed
-    // HeapReferenceMap callback so its root set matches mark without losing writeback.
-    MutatorManager::Instance().VisitAllMutators(
-        [&rawRootVisitor, &derivedVisitor](Mutator& mutator) {
-            mutator.VisitHeapReferences(rawRootVisitor, derivedVisitor);
-        });
-    Heap::GetHeap().VisitStaticRoots([](NativeSlot& root) {
-        (void)Heap::GetBarrier().ReadStaticRef(root);
-    });
-    Runtime::Current().GetConcurrencyModel().VisitGCRoots(&rawRootVisitor);
-    NativeSlotVisitor retainedVisitor = [](NativeSlot& root) {
-        (void)Heap::GetBarrier().ReadStaticRef(root);
-    };
-    collectorResources.GetFinalizerProcessor().VisitNativePointers(retainedVisitor);
-    Heap::GetHeap().VisitAllExportRoots(retainedVisitor);
+    VisitStrongPlainRoots(rawRootVisitor, {});
+    VisitAllColoredRoots([](NativeSlot& root) { (void)Heap::GetBarrier().ReadStaticRef(root); });
+
 }
 
 // fixinput: FixMinorObjectSlots reader-side accounting (default on, cheap atomics).
@@ -1392,21 +1154,8 @@ void WCollector::EvacuateYoungRegions(const std::vector<BaseObject*>& reachableV
             VLOG(REPORT, "[GCV2][verify][post-evac] point=%s run=%zu", point, minorTotalRuns + 1);
         }
     };
-    // ZGC scans holders only through load-good addresses after relocate
-    // (zBarrier.inline.hpp:294-343; zGeneration.cpp:1490-1523). reachableVec
-    // was captured before Compact/Forward and therefore contains from-space
-    // object addresses; passing those directly to ForwardObject after compact
-    // reinterprets a cleared old location as a new relocation request.
-    auto currentObject = [this](BaseObject* object) {
-        const ForwardingProvenance provenance{ ForwardingHolderKind::HeapRef, object, &object };
-        BaseObject* const resolved = ResolveStoreValue(object, provenance, Generation::Young);
-        CHECK_DETAIL(resolved != nullptr && Heap::IsHeapAddress(resolved) &&
-                         Collector::JudgeHandOutTarget(resolved) == HandVerdict::Usable,
-                     "minor holder must resolve load-good before field scan from=%p resolved=%p",
-                     object, resolved);
-        return resolved;
-    };
-
+    (void)reachableVec;
+    (void)refFixSlotsCoveredByReachable;
     // ZGC Phase 7/8 (zGeneration.cpp:573-580, 918-931, 850-853): pause_relocate_start
     // is flip + set_phase(Relocate) + _relocate.start(); object copy is concurrent.
     // Flip is the trap that makes mutator loads take the self-heal / relocate_object
@@ -1431,110 +1180,28 @@ void WCollector::EvacuateYoungRegions(const std::vector<BaseObject*>& reachableV
                            [slot](const auto& range) { return slot >= range.first && slot < range.second; });
     };
 
-    auto fixHeapSlice = [this, &reachableVec, &remsetVec, &interiorBases, &currentObject, &liveStw,
-                         &holderIsCurrentRoot](
-                            size_t beginObj, size_t endObj, size_t beginSlot, size_t endSlot,
-                            size_t& objectsTaken) {
-        const ScopedStopTheWorld* evacStw = liveStw();
-        for (size_t i = beginObj; i < endObj; ++i) {
-            FixMinorObjectSlots(currentObject(reachableVec[i]), evacStw);
-            ++objectsTaken;
-        }
-        for (size_t i = beginSlot; i < endSlot; ++i) {
-            MAddress slot = remsetVec[i];
-            if (Heap::IsHeapAddress(slot)) {
-                auto known = interiorBases.find(slot);
-                BaseObject* knownBase = known != interiorBases.end() ? known->second : nullptr;
-                (void)FixMinorEvacuatedSlot(HeapSlotAt<>(slot), knownBase, evacStw,
-                                            holderIsCurrentRoot(slot));
-            }
-        }
-    };
-
-    auto fixHeapParallelOnly = [this, &reachableVec, &remsetVec, &fixHeapSlice](GCWorkers& pool) {
-        const size_t dispelAtEntry = RegionInfo::GetDispelGhostCount();
-        const size_t nObj = reachableVec.size();
-        const size_t nSlot = remsetVec.size();
-        const uint32_t heapWorkers = pool.ActiveWorkers();
-        std::vector<size_t> objectsTaken(heapWorkers, 0);
-        std::atomic<size_t> objCursor{ 0 };
-        std::atomic<size_t> slotCursor{ 0 };
-        const size_t objChunk = std::max<size_t>(64, (nObj + static_cast<size_t>(heapWorkers) * 4 - 1) /
-                                                        (static_cast<size_t>(heapWorkers) * 4 + 1));
-        const size_t slotChunk = std::max<size_t>(64, (nSlot + static_cast<size_t>(heapWorkers) * 4 - 1) /
-                                                         (static_cast<size_t>(heapWorkers) * 4 + 1));
-        class HeapTask final : public GCWorkerTask {
+    // zRemembered.cpp:remap_current visits remembered slots. Stack completion
+    // belongs to the phase watermark; it does not require a reachable-heap sweep.
+    auto remapRemembered = [&](GCWorkers& pool) {
+        std::atomic<size_t> next{ 0 };
+        class RememberedTask final : public GCWorkerTask {
         public:
-            HeapTask(decltype(fixHeapSlice) slice, std::atomic<size_t>& objs, std::atomic<size_t>& slots,
-                     size_t nObjects, size_t nSlots, size_t objectChunk, size_t slotChunk,
-                     std::vector<size_t>& taken)
-                : sliceFn(slice), objCursor(objs), slotCursor(slots), nObj(nObjects), nSlot(nSlots),
-                  objChunk(objectChunk), slotChunk(slotChunk), objectsTaken(taken) {}
-            void Work(uint32_t id) override
-            {
-                size_t* taken = &objectsTaken[id];
-                for (;;) {
-                    size_t o0 = nObj;
-                    size_t o1 = nObj;
-                    size_t s0 = nSlot;
-                    size_t s1 = nSlot;
-                    bool got = false;
-                    if (objCursor.load(std::memory_order_relaxed) < nObj) {
-                        o0 = objCursor.fetch_add(objChunk, std::memory_order_relaxed);
-                        if (o0 < nObj) {
-                            o1 = std::min(o0 + objChunk, nObj);
-                            got = true;
-                        } else {
-                            o0 = o1 = nObj;
-                        }
-                    }
-                    if (slotCursor.load(std::memory_order_relaxed) < nSlot) {
-                        s0 = slotCursor.fetch_add(slotChunk, std::memory_order_relaxed);
-                        if (s0 < nSlot) {
-                            s1 = std::min(s0 + slotChunk, nSlot);
-                            got = true;
-                        } else {
-                            s0 = s1 = nSlot;
-                        }
-                    }
-                    if (!got) {
-                        break;
-                    }
-                    sliceFn(o0, o1, s0, s1, *taken);
-                }
-            }
+            explicit RememberedTask(std::function<void()> body) : body(std::move(body)) {}
+            void Work(uint32_t) override { body(); }
         private:
-            decltype(fixHeapSlice) sliceFn;
-            std::atomic<size_t>& objCursor;
-            std::atomic<size_t>& slotCursor;
-            size_t nObj;
-            size_t nSlot;
-            size_t objChunk;
-            size_t slotChunk;
-            std::vector<size_t>& objectsTaken;
-        } task(fixHeapSlice, objCursor, slotCursor, nObj, nSlot, objChunk, slotChunk, objectsTaken);
+            std::function<void()> body;
+        } task([&] {
+            for (size_t i = next.fetch_add(1); i < remsetVec.size(); i = next.fetch_add(1)) {
+                MAddress slot = remsetVec[i];
+                if (!Heap::IsHeapAddress(slot)) {
+                    continue;
+                }
+                auto known = interiorBases.find(slot);
+                BaseObject* base = known == interiorBases.end() ? nullptr : known->second;
+                (void)FixMinorEvacuatedSlot(HeapSlotAt<>(slot), base, liveStw(), holderIsCurrentRoot(slot));
+            }
+        });
         pool.Run(task);
-        const size_t dispelAtExit = RegionInfo::GetDispelGhostCount();
-        CHECK_DETAIL(dispelAtExit == dispelAtEntry,
-                     "T-D ghost dispel during concurrent heap ref_fix entry=%zu exit=%zu",
-                     dispelAtEntry, dispelAtExit);
-        size_t active = 0;
-        std::string takenStr;
-        for (size_t i = 0; i < objectsTaken.size(); ++i) {
-            if (objectsTaken[i] != 0) {
-                ++active;
-            }
-            if (i != 0) {
-                takenStr += ',';
-            }
-            takenStr += std::to_string(objectsTaken[i]);
-        }
-        VLOG(REPORT,
-             "[GCV2][reffix][conc_heap] workers_active=%zu workers_scheduled=%u objects_taken=[%s] "
-             "nObj=%zu nSlot=%zu cas_ok=%zu cas_fail=%zu concurrent=1",
-             active, heapWorkers, takenStr.c_str(), nObj, nSlot,
-             g_minorRefCasOk.load(std::memory_order_relaxed),
-             g_minorRefCasFail.load(std::memory_order_relaxed));
     };
 
     // Earliest post-mark checkpoint: still before any fix/forward mutates refs.
@@ -1654,7 +1321,7 @@ void WCollector::EvacuateYoungRegions(const std::vector<BaseObject*>& reachableV
                      "[GCV2][relocate][conc_stw] remset pre=%zu conc_new=%zu total=%zu",
                      rememberedSlots.size(), concRemset.size(), remsetVec.size());
             }
-            fixHeapParallelOnly(workers);
+            remapRemembered(workers);
         }
         {
             size_t rej = g_fixinputReject.load(std::memory_order_relaxed);

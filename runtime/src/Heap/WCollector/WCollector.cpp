@@ -54,7 +54,6 @@
 #include "Heap/Verify/SurvNodeDiag.h"
 #include "Heap/Verify/CsetEmptyWho.h"
 #include "Common/ColourPredicates.h"
-#include "Heap/WCollector/RemapYoungRoots.h"
 #include "Mutator/MutatorManager.h"
 #include "ObjectModel/MArray.inline.h"
 #include "UnwindStack/StackFrameCursor.h"

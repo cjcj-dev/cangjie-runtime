@@ -51,7 +51,6 @@
 #include "Heap/Verify/SurvNodeDiag.h"
 #include "Heap/Verify/CsetEmptyWho.h"
 #include "Common/ColourPredicates.h"
-#include "Heap/WCollector/RemapYoungRoots.h"
 #include "Mutator/MutatorManager.h"
 #include "ObjectModel/MArray.inline.h"
 #include "UnwindStack/StackFrameCursor.h"
@@ -734,7 +733,7 @@ void WCollector::VisitMinorRootSlots(RootVisitor& rawRootVisitor, RootVisitor& i
     gMinorRootOrigin = "mutator_stack";
     size_t concurrentDone = 0;
     size_t stwFallback = 0;
-    MutatorManager::Instance().VisitAllMutators([&](Mutator& mutator) {
+    VisitStrongPlainRoots(visitedRawRootVisitor, [&](Mutator& mutator) {
         bool watermarkDone =
             stackScanEpoch != 0 && mutator.GetStackWatermark().IsDone(stackScanEpoch);
 #if defined(MRT_GC_UNIT_TESTS)
@@ -755,23 +754,15 @@ void WCollector::VisitMinorRootSlots(RootVisitor& rawRootVisitor, RootVisitor& i
             "stack_scan=required",
             static_cast<unsigned long long>(stackScanEpoch), concurrentDone, stwFallback);
     }
-    gMinorRootOrigin = "static";
+    gMinorRootOrigin = "colored";
 #if defined(MRT_REMSET_BITMAP_CROSSCHECK)
-    Heap::GetHeap().VisitStaticRoots([&remset, &nativeVisitor](NativeSlot& root) {
+    VisitAllColoredRoots([&remset, &nativeVisitor](NativeSlot& root) {
         remset.VisitStaticForCrossCheck(reinterpret_cast<MAddress>(&root));
         nativeVisitor(root);
     });
-#else
-    Heap::GetHeap().VisitStaticRoots(nativeVisitor);
-#endif
-    gMinorRootOrigin = "concurrency";
-    Runtime::Current().GetConcurrencyModel().VisitGCRoots(&visitedRawRootVisitor);
-    gMinorRootOrigin = "finalizer";
-    collectorResources.GetFinalizerProcessor().VisitNativePointers(nativeVisitor);
-    gMinorRootOrigin = "export";
-    Heap::GetHeap().VisitAllExportRoots(nativeVisitor);
-#if defined(MRT_REMSET_BITMAP_CROSSCHECK)
     remset.CheckStaticCoverageForMinor();
+#else
+    VisitAllColoredRoots(nativeVisitor);
 #endif
     gMinorRootOrigin = "unknown";
 }

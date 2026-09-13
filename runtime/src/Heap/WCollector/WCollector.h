@@ -12,7 +12,6 @@
 #include "Base/SysCall.h"
 #include "Heap/Verify/HealCoverage.h"
 #include "Heap/Verify/DiagGate.h"
-#include "Heap/WCollector/RemapYoungRoots.h"
 #include <atomic>
 #include <cstdint>
 #include <cstdio>
@@ -1146,7 +1145,6 @@ private:
     bool TryUpdateRefFieldImpl(BaseObject* obj, RefField<>& ref, BaseObject*& oldRef, BaseObject*& newRef,
                                const ForwardingProvenance& provenance) const;
     void TraceHeap();
-    void PreforwardConcurrencyModelRoots();
     void PostTrace();
     // OpenJDK ZGenerationOld::remap_young_roots (zGeneration.cpp:1503-1523):
     // before old relocate-start flip, remap young roots + remset so none carry
@@ -1155,9 +1153,6 @@ private:
     void Preforward();
     void StartRelocationTasks();
     BaseObject* WaitForPageForwarding(BaseObject* obj, ForwardingTable::Owner owner) const;
-    void PreforwardAllExportFromRoots();
-    void PreforwardStaticRoots();
-    void PreforwardFinalizerProcessorRoots();
     void PreforwardDiscoveredExternObjects(Generation generation);
     void PreforwardAllResurrectExportFromObjects(Generation generation);
     CrossRefHandler GetCrossRefHandler(BaseObject* foreignProxy);

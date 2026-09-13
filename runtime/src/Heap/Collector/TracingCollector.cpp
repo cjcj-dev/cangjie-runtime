@@ -484,6 +484,8 @@ void TracingCollector::VisitStackRoots(const RootVisitor& visitor, RegSlotsMap& 
     RootVisitor regVisitor = visitor;
 
     if (heapMap.IsValid()) {
+        auto derived = Mutator::MakeDerivedRootVisitor(visitor);
+        heapMap.VisitDerivedPtr(derived, nullptr, regSlotsMap);
         heapMap.VisitSlotRoots(slotVisitor, slotDebugFunc);
         if (!heapMap.VisitRegRoots(regVisitor, regDebugFunc, regSlotsMap)) {
 #if defined(GCINFO_DEBUG) && GCINFO_DEBUG
@@ -492,24 +494,6 @@ void TracingCollector::VisitStackRoots(const RootVisitor& visitor, RegSlotsMap& 
             LOG(RTLOG_FATAL, "wrong reg info, start ip: %p frame pc: %p", reinterpret_cast<void*>(startIP),
                 reinterpret_cast<void*>(frameIP));
         }
-        // Mark the base of each derived pair. Derived slot itself is not an object root;
-        // leave it for PreForward's derived visitor to rewrite after evacuation.
-        DerivedPtrVisitor derivedMark = [&visitor](BasePtrType basePtr, DerivedSlot& derivedPtr) {
-            (void)derivedPtr;
-            if (is_null(basePtr)) {
-                return;
-            }
-            // Peel colour if present so gate/PushRoot see the real address.
-            // The stack-map base remains committed until this root pass completes.
-            BaseObject* base = to_object(safe(uncolor_bits(to_zpointer(raw(basePtr)))));
-            if (base == nullptr) {
-                return;
-            }
-            ObjectRef baseRef;
-            StorePlain(baseRef, from_object(base));
-            visitor(baseRef);
-        };
-        heapMap.VisitDerivedPtr(derivedMark, nullptr, regSlotsMap);
     } else {
         RecordRootMapMiss(builder.GetInvalidReason(), frame, startIP, frameIP, mutator);
     }
@@ -583,6 +567,7 @@ void TracingCollector::VisitHeapReferencesOnStack(const RootVisitor& regRootVisi
 #endif
     DLOG(ENUM, "visit heap-ref 0x%zx-@0x%zx, fp 0x%zx", startIP, frameIP, frameAddress);
     if (heapMap.IsValid()) {
+        heapMap.VisitDerivedPtr(derivedPtrVisitor, derivedPtrDebugFunc, regSlotsMap);
         if (!heapMap.VisitRegRoots(regRootVisitor, regDebugFunc, regSlotsMap, young)) {
 #if defined(GCINFO_DEBUG) && GCINFO_DEBUG
             mutator.PushFrameInfoForFix(infoNode);
@@ -591,8 +576,6 @@ void TracingCollector::VisitHeapReferencesOnStack(const RootVisitor& regRootVisi
                 reinterpret_cast<void*>(frameIP));
         }
         heapMap.VisitSlotRoots(slotRootVisitor, slotDebugFunc, young);
-        // VisitDerivedPtr must be invoked after VisitRegRoots and VisitSlotRoots;
-        heapMap.VisitDerivedPtr(derivedPtrVisitor, derivedPtrDebugFunc, regSlotsMap);
     } else {
         RecordSkippedStackMap(builder.GetInvalidReason(), frame, startIP, frameIP);
     }
@@ -624,37 +607,9 @@ void TracingCollector::RecordStubAllRegister(RegSlotsMap& regSlotsMap, Uptr fp)
     RegRoot::RecordStubAllRegister(regSlotsMap, fp);
 }
 
-void TracingCollector::EnumConcurrencyModelRoots(RootSet& rootSet) const
-{
-    RootVisitor visitor = [&rootSet, this](ObjectRef& root) {
-        if (VerifyRoots::Enabled()) {
-            RootVerifyContext ctx;
-            ctx.phase = "EnumConcurrencyModelRoots";
-            ctx.kind = RootKind::RUNTIME_ROOT;
-            ctx.rawValue = raw(root.LoadPlain());
-            ctx.hasRawValue = true;
-            VerifyRoots::VerifyRootPayload(ctx, &root, nullptr);
-        }
-        EnumAndTagRawRoot(root, rootSet, Generation::Old);
-    };
-    Runtime::Current().GetConcurrencyModel().VisitGCRoots(&visitor);
-}
 
-void TracingCollector::EnumStaticRoots(RootSet& rootSet) const
-{
-    const NativeSlotVisitor& visitor = [&rootSet, this](NativeSlot& root) {
-        if (VerifyRoots::Enabled()) {
-            RootVerifyContext ctx;
-            ctx.phase = "EnumStaticRoots";
-            ctx.kind = RootKind::STATIC_ROOT;
-            ctx.rawValue = raw(root.GetFieldValue());
-            ctx.hasRawValue = true;
-            VerifyRoots::VerifyRootPayload(ctx, &root, nullptr);
-        }
-        EnumRefFieldRoot(root, rootSet);
-    };
-    VisitStaticRoots(visitor);
-}
+
+
 
 void TracingCollector::MergeMutatorRoots(WorkStack& workStack)
 {
@@ -664,7 +619,7 @@ void TracingCollector::MergeMutatorRoots(WorkStack& workStack)
 
 void TracingCollector::EnumAllExportRoots(RootSet &foreignRootsSet)
 {
-    Heap::GetHeap().VisitAllExportRoots([&foreignRootsSet, this](NativeSlot& root) {
+    VisitExportColoredRoots([&foreignRootsSet, this](NativeSlot& root) {
         if (VerifyRoots::Enabled()) {
             RootVerifyContext ctx;
             ctx.phase = "EnumAllExportRoots";
@@ -1015,21 +970,7 @@ void TracingCollector::CurrentizeValueRootMap(
 
 // Registered finalizers are discovered by DoResurrection and fixed by
 // VisitNativePointers. Only queued/running finalizables are strong mark roots.
-void TracingCollector::EnumFinalizerProcessorRoots(RootSet& rootSet) const
-{
-    NativeSlotVisitor visitor = [this, &rootSet](NativeSlot& root) {
-        if (VerifyRoots::Enabled()) {
-            RootVerifyContext ctx;
-            ctx.phase = "EnumFinalizerProcessorRoots";
-            ctx.kind = RootKind::RUNTIME_ROOT;
-            ctx.rawValue = raw(root.GetFieldValue());
-            ctx.hasRawValue = true;
-            VerifyRoots::VerifyRootPayload(ctx, &root, nullptr);
-        }
-        EnumRefFieldRoot(root, rootSet);
-    };
-    collectorResources.GetFinalizerProcessor().VisitGCRoots(visitor);
-}
+
 
 void TracingCollector::EnumAllSurrectedExportRoots(RootSet &rootSet)
 {
@@ -1188,6 +1129,40 @@ void TracingCollector::PostGarbageCollection(uint64_t gcIndex)
 #endif
 }
 
+void TracingCollector::VisitExportColoredRoots(const NativeSlotVisitor& visitor) const
+{
+    Heap::GetHeap().VisitAllExportRoots(visitor);
+}
+
+// Each physical root family is enumerated here, shared by mark and remap.
+void TracingCollector::VisitStrongColoredRoots(const NativeSlotVisitor& visitor) const
+{
+    VisitStaticRoots(visitor);
+    VisitFinalizerRoots(visitor);
+}
+
+void TracingCollector::VisitWeakColoredRoots(const NativeSlotVisitor& visitor) const
+{
+    collectorResources.GetFinalizerProcessor().VisitFinalizers(visitor);
+    VisitExportColoredRoots(visitor);
+}
+
+void TracingCollector::VisitAllColoredRoots(const NativeSlotVisitor& visitor) const
+{
+    VisitStrongColoredRoots(visitor);
+    VisitWeakColoredRoots(visitor);
+}
+
+void TracingCollector::VisitStrongPlainRoots(
+    const RootVisitor& visitor, const std::function<void(Mutator&)>& threadVisitor) const
+{
+    if (threadVisitor) {
+        MutatorManager::Instance().VisitAllMutators(threadVisitor);
+    }
+    RootVisitor plainVisitor = visitor;
+    Runtime::Current().GetConcurrencyModel().VisitGCRoots(&plainVisitor);
+}
+
 void TracingCollector::EnumAllCommonRoots(GCWorkers& workers, RootSet& rootSet)
 {
     // zRootsIterator.cpp: generation workers claim independent root families.
@@ -1201,13 +1176,15 @@ void TracingCollector::EnumAllCommonRoots(GCWorkers& workers, RootSet& rootSet)
     private:
         std::function<void(uint32_t)> body;
     } task([&](uint32_t id) {
-        for (unsigned family = next.fetch_add(1); family < 4; family = next.fetch_add(1)) {
-            switch (family) {
-                case 0: EnumStaticRoots(roots[id]); break;
-                case 1: EnumConcurrencyModelRoots(roots[id]); break;
-                case 2: EnumFinalizerProcessorRoots(roots[id]); break;
-                case 3: EnumAllSurrectedExportRoots(roots[id]); break;
-            }
+        const std::function<void()> families[] = {
+            [&] { VisitStrongColoredRoots([&](NativeSlot& root) { EnumRefFieldRoot(root, roots[id]); }); },
+            [&] { VisitStrongPlainRoots([&](ObjectRef& root) {
+                EnumAndTagRawRoot(root, roots[id], Generation::Old);
+            }, {}); },
+            [&] { EnumAllSurrectedExportRoots(roots[id]); }
+        };
+        for (unsigned family = next.fetch_add(1); family < 3; family = next.fetch_add(1)) {
+            families[family]();
         }
     });
     workers.Run(task);

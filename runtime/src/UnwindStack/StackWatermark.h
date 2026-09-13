@@ -15,15 +15,13 @@
 
 namespace MapleRuntime {
 
-// Per-Mutator stack-scan watermark (stackwm #1 / minorconc Step 2 substrate).
-//
-// State only — no concurrent stack scanning. Exposure hooks (#5) and grow rebase (#7)
-// are separate verticals. OpenJDK correspondence (ref 5b2d6991 stackWatermark.hpp):
-//   _state (epoch, is_done)  ↔  epoch + phase
-//   _watermark (SP)          ↔  cursorIndex (logical frame index; not SP — movable stacks)
-//   processing lock/claim    ↔  owner (SELF vs GC)
-// Differences from OpenJDK: owned by Mutator/CJThread not JavaThread; no return-poll
-// fast path yet; cursor is frame-index not frame-pointer SP.
+// Per-coroutine phase processing state (zStackWatermark.cpp:175-215).
+// Mark and remap have separate completion identities. The phase handshake
+// eagerly drains the stack before it can resume; movable stacks retain logical
+// frame indices instead of absolute stack addresses.
+//   ZGC state/epoch  -> processingPhase, epoch, phase
+//   ZGC watermark    -> cursorIndex
+//   processing owner -> SELF or GC under MutatorLock
 //
 // Movable-stack (#7): CJThreadStackAdjust relocates the whole stack (new mmap +
 // memmove). Product grow (Mutator::FixExtendedStack) rewrites stack pointers and
@@ -49,6 +47,8 @@ public:
         WM_DONE = 2,
     };
 
+    enum class ProcessingPhase : uint32_t { MARK, REMAP };
+
     enum Owner : uint32_t {
         WM_OWNER_NONE = 0,
         WM_OWNER_SELF = 1,
@@ -60,6 +60,7 @@ public:
     void Reset()
     {
         epoch.store(0, std::memory_order_relaxed);
+        processingPhase.store(ProcessingPhase::MARK, std::memory_order_relaxed);
         phase.store(WM_NOT_STARTED, std::memory_order_relaxed);
         owner.store(WM_OWNER_NONE, std::memory_order_relaxed);
         cursorIndex.store(0, std::memory_order_relaxed);
@@ -156,7 +157,8 @@ public:
     // Legal: NOT_STARTED → SCANNING, or DONE of a prior epoch → SCANNING of a new epoch.
     // Illegal: SCANNING → SCANNING (double begin), DONE(complete) same epoch
     // → SCANNING. DONE(incomplete) may be retried by the closing STW.
-    bool TryBegin(uint64_t scanEpoch, Owner claimOwner, size_t totalFrames)
+    bool TryBegin(uint64_t scanEpoch, Owner claimOwner, size_t totalFrames,
+                  ProcessingPhase workPhase = ProcessingPhase::MARK)
     {
         CHECK_DETAIL(scanEpoch != 0, "[GCV2][stack-watermark] epoch must not be zero");
         CHECK_DETAIL(claimOwner == WM_OWNER_SELF || claimOwner == WM_OWNER_GC,
@@ -174,7 +176,8 @@ public:
             }
             return false;
         }
-        if (expected == WM_DONE && epoch.load(std::memory_order_acquire) == scanEpoch &&
+        if (expected == WM_DONE && processingPhase.load(std::memory_order_acquire) == workPhase &&
+            epoch.load(std::memory_order_acquire) == scanEpoch &&
             complete.load(std::memory_order_acquire)) {
             if (VerifyEnabled()) {
                 CHECK_DETAIL(false,
@@ -196,6 +199,7 @@ public:
             return false;
         }
 
+        processingPhase.store(workPhase, std::memory_order_relaxed);
         epoch.store(scanEpoch, std::memory_order_relaxed);
         cursorIndex.store(0, std::memory_order_relaxed);
         frameCount.store(totalFrames, std::memory_order_relaxed);
@@ -286,9 +290,10 @@ public:
     bool IsNotStarted() const { return GetPhase() == WM_NOT_STARTED; }
     bool IsScanning() const { return GetPhase() == WM_SCANNING; }
     bool IsDone() const { return GetPhase() == WM_DONE; }
-    bool IsDone(uint64_t scanEpoch) const
+    bool IsDone(uint64_t scanEpoch, ProcessingPhase workPhase = ProcessingPhase::MARK) const
     {
-        return GetPhase() == WM_DONE && GetEpoch() == scanEpoch && complete.load(std::memory_order_acquire);
+        return GetPhase() == WM_DONE && GetEpoch() == scanEpoch &&
+            processingPhase.load(std::memory_order_acquire) == workPhase && complete.load(std::memory_order_acquire);
     }
 
     static bool VerifyEnabled();
@@ -326,6 +331,7 @@ private:
         }
     }
 
+    std::atomic<ProcessingPhase> processingPhase;
     std::atomic<uint64_t> epoch;
     std::atomic<Phase> phase;
     std::atomic<Owner> owner;
