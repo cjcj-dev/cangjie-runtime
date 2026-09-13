@@ -9,11 +9,11 @@
 #include <cstring>
 #include <limits>
 #include "Cangjie.h"
+#include "gc_heap_fixture.hpp"
 #include "Heap/Allocator/RegionSpace.h"
 #include "Heap/Collector/Collector.h"
 #include "TypeInfoManager.h"
 #include "gc_unittest.hpp"
-#include "gc_heap_fixture.hpp"
 
 using namespace MapleRuntime;
 using namespace MapleRuntime::GcUnit;
