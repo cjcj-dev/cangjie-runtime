@@ -372,6 +372,7 @@ MAIN_SOURCES=(
   "$SRC/test_gc_request_sync.cpp"
 
   "$SRC/test_string_dedup.cpp"
+  "$SRC/test_concurrent_gc_breakpoints.cpp"
   "$SRC/test_uncommitter.cpp"
   "$SRC/test_relocation_request_queue.cpp"
   "$SRC/test_gc_thread_pool.cpp"
