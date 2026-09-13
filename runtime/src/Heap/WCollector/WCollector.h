@@ -968,7 +968,7 @@ private:
     // before old relocate-start flip, remap young roots + remset so none carry
     // two remap-bit errors.
     void RemapYoungRoots();
-    void Preforward();
+    bool Preforward();
     void StartRelocationTasks();
     BaseObject* WaitForPageForwarding(BaseObject* obj, ForwardingTable::Owner owner) const;
     void PreforwardDiscoveredExternObjects(Generation generation);

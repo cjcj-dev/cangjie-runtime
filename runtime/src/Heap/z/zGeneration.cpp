@@ -336,6 +336,9 @@ void WCollector::DoYoungGarbageCollection()
         TraceYoungClosure(workStack, fullYoungScan, reachableVec, reachableSlots, weakSlots,
                           reachableSlotDomain);
     }
+    if (collectorResources.GetYoungDriverPort().Abort().Poll()) {
+        return;
+    }
     const bool remsetConsumedLedgerElideActive = false;
 
     if (rememberedSlots.empty()) {
@@ -390,6 +393,9 @@ void WCollector::DoYoungGarbageCollection()
     // and the concurrent mark-follow consumer has not started yet.
     PublishExportRootAfterT1TestReceipt();
 #endif
+    if (collectorResources.GetYoungDriverPort().Abort().Poll()) {
+        return;
+    }
     for (;;) {
         // Concurrent mark-follow drains work published by the previous pause.
         // Its worker completion is coordinated by YoungMarkTerminate (the
@@ -397,7 +403,9 @@ void WCollector::DoYoungGarbageCollection()
         const bool workersTerminated =
             FollowYoungMark(workStack, fullYoungScan, reachableVec, reachableSlots,
                                 weakSlots, &concWindow);
-        CHECK_DETAIL(workersTerminated, "young concurrent mark workers did not terminate");
+        if (!workersTerminated) {
+            return;
+        }
 #if defined(MRT_TESTABLE_INTERNALS)
         FlushExportRootAfterT1TestReceipt();
         // Adversarial mutator publication point: workers have terminated, but
@@ -456,6 +464,9 @@ void WCollector::DoYoungGarbageCollection()
         TransitionToGCPhase(GCPhase::GC_PHASE_TRACE, true);
     }
     ReportMarkTerminateContinue();
+    if (collectorResources.GetYoungDriverPort().Abort().Poll()) {
+        return;
+    }
     {
         // Window closes here: the next statement asks every mutator to stop. Read the pair
         // (windowNs, MarkedInWindow) together -- duration alone proves nothing.
@@ -543,6 +554,9 @@ void WCollector::DoYoungGarbageCollection()
         ForwardingTable::ResetRelocationSet(Generation::Young);
     }
 
+    if (collectorResources.GetYoungDriverPort().Abort().Poll()) {
+        return;
+    }
     size_t allocatedBefore = space.AllocatedBytes();
     // ⑥⑦⑧ inside EvacuateYoungRegions: pause relocate_start / concurrent copy / evac_finish
     // Pass STW so Phase 8 can release the world for concurrent_relocate.
@@ -569,6 +583,9 @@ void WCollector::DoYoungGarbageCollection()
     const bool refFixSlotsCoveredByReachable = false;
     EvacuateYoungRegions(reachableVec, consumedSlots, currentMinorRoots, refFixSlotsCoveredByReachable,
                          remsetInteriorBases, &stw);
+    if (collectorResources.GetYoungDriverPort().Abort().Poll()) {
+        return;
+    }
     size_t allocatedAfter = space.AllocatedBytes();
     stats.reclaimedBytes = allocatedBefore > allocatedAfter ? allocatedBefore - allocatedAfter : 0;
     GetGCStats().collectedBytes = stats.reclaimedBytes;
@@ -658,56 +675,35 @@ void TracingCollector::ProcessOldNonStrongReferences(WorkStack& workStack)
     }
 }
 
-bool TracingCollector::FinishOldMark(WorkStack& workStack, WorkStack& foreignRootsSet)
+bool TracingCollector::TryEndOldMark(WorkStack& workStack, WorkStack& foreignRootsSet)
 {
-    // ZMark::end/try_end and ZGenerationOld::concurrent_mark_continue
-    // (zMark.cpp:940-989; zGeneration.cpp:1015-1030).
+    // ZGenerationOld::pause_mark_end / ZMark::end: a single pause attempt.
     MarkStripeSet& stripes = majorMarkDomain->Stripes();
-    for (;;) {
-        if (!workStack.empty() || !stripes.IsEmpty()) {
-            markedObjectCount.fetch_add(RunMajorStripeMark(workStack), std::memory_order_relaxed);
-        }
-        if (Heap::GetHeap().GetGCPhase() != GC_PHASE_CLEAR_SATB_BUFFER) {
-            TransitionToGCPhase(GC_PHASE_CLEAR_SATB_BUFFER, true);
-            if (!stripes.IsEmpty()) {
-                continue;
-            }
-        }
-        bool more = FlushMarkProducers(majorMarkDomain.get());
-        if (more) {
-            continue;
-        }
-        bool terminated;
-        {
-            ScopedStopTheWorld stw("old mark end", true, GC_PHASE_CLEAR_SATB_BUFFER);
-            ZVerify::BeforeZOperation();
-            NoteMarkTerminatePause();
-            const size_t before = stripes.Population();
-            (void)MutatorManager::Instance().HandshakeFlushMarkProducers(majorMarkDomain.get());
-            const size_t after = stripes.Population();
-            NoteMarkTerminateFlushed(after >= before ? after - before : 0);
-            terminated = workStack.empty() && stripes.IsEmpty();
-            if (terminated) {
-                ProcessExportRoots(foreignRootsSet);
-                // zMark.cpp:982,1022: verify all thread-private stacks, then
-                // shared stripes, while the safepoint excludes publication.
-                MarkingStacks::VerifyAllEmpty(*majorMarkDomain);
-                oldCycle.PublishPhase(GC_PHASE_MARK_COMPLETE);
-                ZVerify::AfterMark();
-                collectorResources.BlockResurrection();
-            }
-        }
-        if (terminated) {
-            ReportMarkTerminateContinue();
-            return true;
-        }
+    ScopedStopTheWorld stw("old mark end", true, GC_PHASE_CLEAR_SATB_BUFFER);
+    ZVerify::BeforeZOperation();
+    NoteMarkTerminatePause();
+    const size_t before = stripes.Population();
+    (void)MutatorManager::Instance().HandshakeFlushMarkProducers(majorMarkDomain.get());
+    const size_t after = stripes.Population();
+    NoteMarkTerminateFlushed(after >= before ? after - before : 0);
+    if (!workStack.empty() || !stripes.IsEmpty()) {
         NoteMarkTerminateContinue(workStack.size() + stripes.Population());
+        return false;
     }
-}
-
-void TracingCollector::ConcurrentReMark(WorkStack& remarkStack, WorkStack& foreignRootsSet)
-{
-    CHECK_DETAIL(FinishOldMark(remarkStack, foreignRootsSet), "not cleared\n");
+    // Preserve export ownership discovery after the ordinary root closure,
+    // while the mark-end pause excludes new mutator publication.
+    ProcessExportRoots(foreignRootsSet);
+    // ZMark::mark_follow (zMark.cpp:948): after workers join, return abort
+    // to the phase owner before verification or publishing mark completion.
+    if (collectorResources.GetMajorDriverPort().Abort().Poll()) {
+        return false;
+    }
+    MarkingStacks::VerifyAllEmpty(*majorMarkDomain);
+    oldCycle.PublishPhase(GC_PHASE_MARK_COMPLETE);
+    ZVerify::AfterMark();
+    collectorResources.BlockResurrection();
+    ReportMarkTerminateContinue();
+    return true;
 }
 
 bool TracingCollector::FlushMarkProducers(MarkDomain* domain)

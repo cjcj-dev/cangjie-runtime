@@ -371,6 +371,12 @@ bool CollectorResources::ExecuteDriverRequest(const GCDriverRequest& request)
     (request.reason == GC_REASON_YOUNG ? ZStatPhases::MinorCollection : ZStatPhases::MajorCollection)
         .RegisterEnd(TimeUtil::NanoSeconds() - collectionStart);
     driverRequestActive = false;
+    // A stop during marking or relocation is cancellation, even though the
+    // collection call has returned after joining its work and page cleanup.
+    if (port.Abort().Poll()) {
+        CancelDriverRequestLifecycle();
+        return false;
+    }
     NotifyGCFinished(request.asynchronous ? GCTask::ASYNC_TASK_INDEX : request.sequence);
     return true;
 }

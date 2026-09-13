@@ -135,7 +135,7 @@ class MarkLiveCache;
 constexpr uint64_t NS_PER_US = 1000;
 constexpr uint64_t NS_PER_S = 1000000000;
 
-// Strict mark-end cut shared by major FinishOldMark and young
+// Strict mark-end cut shared by major mark-end and young
 // FollowYoungMark. ZMark::end -> try_end (zMark.cpp:954-971) decides
 // termination with mutators stopped, after ZMark::flush (zMark.cpp:587-605,
 // :998-1006), and resumes concurrent follow when that cut exposes work
@@ -492,13 +492,13 @@ protected:
     void MergeMutatorRoots(WorkStack& workStack);
     void DoEnumeration(WorkStack& workStack, WorkStack& foreignRootsSet);
     void DoTracing(WorkStack& workStack, WorkStack& foreignRootsSet);
-    bool FinishOldMark(WorkStack& workStack, WorkStack& foreignRootsSet);
+    bool TryEndOldMark(WorkStack& workStack, WorkStack& foreignRootsSet);
     bool FlushMarkProducers(MarkDomain* domain);
     void ProcessOldNonStrongReferences(WorkStack& workStack);
     void ProcessExportRoots(WorkStack& foreignRootsSet);
 
     // concurrent marking.
-    void TracingImpl(WorkStack& workStack, WorkStack& foreignRootsSet);
+    void TracingImpl(WorkStack& workStack);
 
     virtual void EnumAndTagRawRoot(ObjectRef& root, RootSet& rootSet, Generation generation) const
     {
@@ -509,7 +509,6 @@ protected:
 
 private:
     size_t RunMajorStripeMark(WorkStack& workStack, bool partial = false, BaseObject* exportOwner = nullptr);
-    void ConcurrentReMark(WorkStack& remarkStack, WorkStack& foreignRootsSet);
     void EnumMutatorRoot(ObjectPtr& obj, RootSet& rootSet) const;
     void EnumAllSurrectedExportRoots(RootSet& rootSet);
 

@@ -371,7 +371,7 @@ void WCollector::StartRelocationTasks()
     else manager.StartForwardFromRegions<Generation::Old>(workers);
 }
 
-void WCollector::Preforward()
+bool WCollector::Preforward()
 {
     ScopedEntryTrace trace("CJRT_GC_PREFORWARD");
     MRT_PHASE_TIMER(ZStatPhases::PPreforward);
@@ -390,6 +390,11 @@ void WCollector::Preforward()
         // OpenJDK zGeneration.cpp:1054-1063: Phase 8 remaps young roots under the driver
         // lock *before* pause_relocate_start flips the old remap bits (zGeneration.cpp:1503-1508).
         RemapYoungRoots();
+        // ZGenerationOld::collect (zGeneration.cpp:1054-1063): the last
+        // abortpoint precedes relocate-start; after the flip all pages finish.
+        if (collectorResources.GetMajorDriverPort().Abort().Poll()) {
+            return false;
+        }
         // zGeneration.cpp:old relocate_start flips only the old remap epoch.
         // RemapYoungRoots above prevents roots from accumulating two bad remap epochs.
         flip_old_relocate_start();
@@ -429,6 +434,7 @@ void WCollector::Preforward()
     } roots(families, next);
     workers.Run(roots);
     StringDedup::Instance().Remap();
+    return true;
 }
 
 // N2 (MINOR_CONCURRENCY_0805 §八 T-C): CAS-install resolved target under multi-worker fix.
@@ -1162,6 +1168,11 @@ void WCollector::EvacuateYoungRegions(const std::vector<BaseObject*>& reachableV
             // Prior order let FixMinorRootSlots RouteRegion before the domain snapshot.
             TransitionToGCPhase(GCPhase::GC_PHASE_POST_TRACE, true);
             fwdTable.PrepareForwardTable<Generation::Young>();
+            // ZGenerationYoung::collect: last abortpoint after selection,
+            // before relocate-start. Once flipped, finish every remaining page.
+            if (collectorResources.GetYoungDriverPort().Abort().Poll()) {
+                return;
+            }
             // zGeneration.cpp:1503-1508: install forwarding then flip remap bits.
             if (doYoungFlip) {
                 flip_young_relocate_start();

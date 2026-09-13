@@ -815,6 +815,40 @@ GC_TEST(GcRequestSync, MajorAbortpointSkipsOldAfterYoungPrelude)
     CollectorResourcesTestPeer::Destroy(resources);
 }
 
+// ZDriverMajor::gc / ZGenerationOld::collect: completion follows the phase
+// return (including relocation cleanup), and abort resolves as cancellation.
+GC_TEST(GcRequestSync, AbortDuringOldReturnsCancelledAfterCollectionJoins)
+{
+    CollectorResources& resources = Heap::GetHeap().GetCollectorResources();
+    BlockingCollector collector;
+    collector.SetResources(resources);
+    CollectorResourcesTestPeer::Init(resources, collector, false);
+    CollectorResourcesTestPeer::ResetCompletionCount(resources);
+    GCDriverPort& port = resources.GetMajorDriverPort();
+    const GCDriverReceipt receipt = port.EnqueueSync(GC_REASON_FORCE);
+    GCDriverRequest request {};
+    GC_EXPECT_TRUE(port.TryDequeue(request));
+    std::promise<bool> resultPromise;
+    auto result = resultPromise.get_future();
+    std::thread driver([&] {
+        resultPromise.set_value(CollectorResourcesTestPeer::ProcessDriverRequest(resources, port, request));
+    });
+    GC_EXPECT_TRUE(collector.WaitForRuns(1));
+    collector.ReleaseOne();
+    GC_EXPECT_TRUE(collector.WaitForRuns(2));
+    port.Abort().Request();
+    // The collection still owns its resources until it returns.
+    GC_EXPECT_TRUE(result.wait_for(std::chrono::seconds(0)) != std::future_status::ready);
+    collector.ReleaseOne();
+    GC_EXPECT_TRUE(result.wait_for(kHarnessHangLimit) == std::future_status::ready);
+    driver.join();
+    GC_EXPECT_FALSE(result.get());
+    GC_EXPECT_FALSE(port.WaitForAck(receipt));
+    GC_EXPECT_EQ(CollectorResourcesTestPeer::CompletionCount(resources), 0u);
+    port.Abort().Reset();
+    CollectorResourcesTestPeer::Destroy(resources);
+}
+
 GC_TEST(GcRequestSync, DriverWaitInjectsTimeoutBackupRequest)
 {
     CollectorResources& resources = Heap::GetHeap().GetCollectorResources();

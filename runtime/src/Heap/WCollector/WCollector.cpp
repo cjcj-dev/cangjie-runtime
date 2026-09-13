@@ -227,12 +227,25 @@ void WCollector::DoGarbageCollection()
         return;
     }
     TraceHeap();
+    if (collectorResources.GetMajorDriverPort().Abort().Poll()) {
+        return;
+    }
     PostTrace();
+    if (collectorResources.GetMajorDriverPort().Abort().Poll()) {
+        return;
+    }
 
-    Preforward();
+    if (!Preforward()) {
+        return;
+    }
+    // ZGenerationOld::collect: no abort boundary after relocate-start.
+    // Complete the remaining pages before returning to the request owner.
 
     ForwardFromSpace();
     reinterpret_cast<RegionSpace&>(theAllocator).GetRegionManager().FinishIncompleteFromRegions();
+    if (collectorResources.GetMajorDriverPort().Abort().Poll()) {
+        return;
+    }
 
     // Preserve young remembered-set faces across old/full collection. ZGC old
     // relocation transfers remembered fields; it does not globally erase the
