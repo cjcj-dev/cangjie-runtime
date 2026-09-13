@@ -168,6 +168,72 @@ GC_OTHER_VM_TEST(MappedCache, ProductFailedVirtualClaimRestoresOwners)
     ProductFragmentedAllocation(false);
 }
 
+
+// TestMappedCacheHarvest.java: keep allocations between reclaimed extents.
+// zPageAllocator.cpp:723-743 additionally fixes the owner split: with growth
+// room of two units, a four-unit request harvests only two of six cached units.
+static void ProductPartialGrowth(bool provideContiguousVirtual)
+{
+    const size_t unit = RegionInfo::UNIT_SIZE;
+    const size_t metadata = RegionManager::GetMetadataSize(12);
+    MemMap* map = MemMap::MapMemory(metadata + 12 * unit, metadata, MemMap::DEFAULT_OPTIONS,
+                                   AddressSpaceBudget::Seal(8 * (metadata + 12 * unit)), NumaTopology::Seal({0}));
+    GC_EXPECT_TRUE(map != nullptr);
+    {
+        RegionManager manager;
+        HeapParam parameters{};
+        parameters.regionSize = unit / 1024;
+        parameters.exemptionThreshold = 0.8;
+        manager.Initialize(12, reinterpret_cast<uintptr_t>(map->GetBaseAddr()), *map, parameters, 0.5);
+        const auto role = RegionInfo::UnitRole::SMALL_SIZED_UNITS;
+        RegionInfo* regions[6];
+        for (auto& region : regions) {
+            region = manager.TakeRegion(2, role, false, false, false);
+            GC_EXPECT_TRUE(region != nullptr);
+        }
+        const uintptr_t expectedStart = regions[4]->GetRegionStart();
+        // Same-class cache entries are harvested most recently inserted first.
+        manager.ReclaimRegion(regions[0]);
+        manager.ReclaimRegion(regions[2]);
+        manager.ReclaimRegion(regions[4]);
+        manager.ReleaseRegion(regions[provideContiguousVirtual ? 5 : 1]);
+        GC_EXPECT_EQ(manager.GetDirtyUnitCount(), 6U);
+        const size_t capacity = map->GetCommittedSize();
+        RegionInfo* result = manager.TakeRegion(4, role, false, false, false);
+        if (provideContiguousVirtual) {
+            GC_EXPECT_TRUE(result != nullptr);
+            GC_EXPECT_EQ(result->GetRegionStart(), expectedStart);
+            GC_EXPECT_EQ(result->GetUnitCount(), 4U);
+            GC_EXPECT_EQ(manager.GetDirtyUnitCount(), 4U);
+            GC_EXPECT_EQ(map->GetCommittedSize(), capacity + 2 * unit);
+            GC_EXPECT_EQ(map->GetCommittedSize(expectedStart, 4 * unit), 4 * unit);
+        } else {
+            GC_EXPECT_TRUE(result == nullptr);
+            GC_EXPECT_EQ(manager.GetDirtyUnitCount(), 6U);
+            GC_EXPECT_EQ(map->GetCommittedSize(), capacity);
+            // Failure must return the pending capacity as well as the backing.
+            // Drain all cached units, then use the two units of growth again.
+            for (size_t i = 0; i < 3; ++i) {
+                GC_EXPECT_TRUE(manager.TakeRegion(2, role, false, false, false) != nullptr);
+                GC_EXPECT_EQ(map->GetCommittedSize(), capacity);
+            }
+            GC_EXPECT_TRUE(manager.TakeRegion(2, role, false, false, false) != nullptr);
+            GC_EXPECT_EQ(map->GetCommittedSize(), capacity + 2 * unit);
+        }
+    }
+    MemMap::DestroyMemMap(map);
+}
+
+GC_OTHER_VM_TEST(MappedCache, ProductPartialGrowthHarvestsOnlyRemainder)
+{
+    ProductPartialGrowth(true);
+}
+
+GC_OTHER_VM_TEST(MappedCache, ProductPartialGrowthFailureReturnsBothOwners)
+{
+    ProductPartialGrowth(false);
+}
+
 #endif
 
 } // namespace GcUnit

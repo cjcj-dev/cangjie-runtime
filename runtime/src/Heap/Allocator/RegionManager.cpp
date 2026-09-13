@@ -817,20 +817,19 @@ bool FreeRegionManager::ClaimPageMemory(size_t num, PageMemory& memory)
             return true;
         }
         const size_t virtualUnits = partition.virtualMemory.TotalSize() / RegionInfo::UNIT_SIZE;
-        const size_t available = partition.cache.Size() + virtualUnits;
-        if (available < num + partition.pendingGrowth) { continue; }
-        if (virtualUnits >= num + partition.pendingGrowth) {
-            const Range range = partition.virtualMemory.ClaimLow(num * RegionInfo::UNIT_SIZE);
-            if (!range.IsNull()) {
-                memory = PageMemory{RegionInfo::FindUnitIndex(range.Start()), num,
-                                    static_cast<uint32_t>(selected), false};
-                nextPartition = (selected + 1) % partitions.size();
-                return true;
-            }
-        }
+        CHECK(virtualUnits >= partition.pendingGrowth);
+        const size_t growthAvailable = virtualUnits - partition.pendingGrowth;
+        if (partition.cache.Size() + growthAvailable < num) { continue; }
+
+        // zPageAllocator.cpp:723-743: claim all available growth first, then
+        // harvest only the remaining capacity. Neither claim selects a new
+        // virtual range; PreparePageMemory performs that step later.
+        const size_t increased = std::min(num, growthAvailable);
+        partition.pendingGrowth += increased;
+        const UnitCount remaining = static_cast<UnitCount>(num - increased);
         std::vector<MappedCache::Extent> extents;
-        const UnitCount harvested = partition.cache.RemoveDiscontiguous(static_cast<UnitCount>(num), extents);
-        if (harvested == 0) { continue; }
+        const UnitCount harvested = remaining == 0 ? 0 : partition.cache.RemoveDiscontiguous(remaining, extents);
+        CHECK(harvested + increased == num);
         bool eligible = true;
         for (const auto& extent : extents) {
             RegionInfo* region = RegionInfo::TryGetRegionInfoAt(RegionInfo::GetUnitAddress(extent.index));
@@ -847,6 +846,7 @@ bool FreeRegionManager::ClaimPageMemory(size_t num, PageMemory& memory)
                 InsertCommitted(partition, RegionInfo::FindUnitIndex(range.start), range.size / RegionInfo::UNIT_SIZE);
             }
             memory.partialMappings.clear();
+            partition.pendingGrowth -= increased;
             continue;
         }
         memory.index = 0;
@@ -855,7 +855,6 @@ bool FreeRegionManager::ClaimPageMemory(size_t num, PageMemory& memory)
         memory.committed = harvested == num;
         memory.virtualClaimed = false;
         memory.harvestedUnits = harvested;
-        partition.pendingGrowth += num - harvested;
         nextPartition = (selected + 1) % partitions.size();
         return true;
     }
@@ -871,6 +870,14 @@ bool FreeRegionManager::PreparePageMemory(PageMemory& memory)
     const size_t growth = memory.units - memory.harvestedUnits;
     CHECK(partition.pendingGrowth >= growth);
     partition.pendingGrowth -= growth;
+    if (memory.harvestedUnits == 0) {
+        // Full capacity increase needs only a virtual claim, not remapping.
+        const Range result = partition.virtualMemory.ClaimLow(memory.units * RegionInfo::UNIT_SIZE);
+        if (result.IsNull()) { return false; }
+        memory.index = RegionInfo::FindUnitIndex(result.Start());
+        memory.virtualClaimed = true;
+        return true;
+    }
     if (!backingOwner->StashSegments(memory.partialMappings, stash)) {
         for (const auto& range : memory.partialMappings) {
             InsertCommitted(partition, RegionInfo::FindUnitIndex(range.start), range.size / RegionInfo::UNIT_SIZE);
@@ -1368,10 +1375,6 @@ bool RegionManager::ClaimAllocationLocked(AllocationStallRequest& request)
     const size_t num = size / RegionInfo::UNIT_SIZE;
     PageMemory& memory = request.Memory();
     if (!freeRegionManager.ClaimPageMemory(num, memory)) { return false; }
-    if (memory.virtualClaimed) {
-        const uintptr_t end = RegionInfo::GetUnitAddress(memory.index) + size;
-        inactiveZone.store(std::max(inactiveZone.load(std::memory_order_relaxed), end), std::memory_order_release);
-    }
     if (!memory.committed) {
         Uncommitter::CancelCycle();
     }
@@ -2187,6 +2190,13 @@ RegionInfo* RegionManager::TakeRegion(size_t num, RegionInfo::UnitRole type, boo
         size_t committedUnits = 0;
         RegionInfo* region = freeRegionManager.MaterializePageMemory(
             request.Memory(), type, request.ExpectsPhysicalMemory(), request.ClearsPayload(), committedUnits);
+        if (request.Memory().virtualClaimed) {
+            // The address is known only after materialization; keep the existing
+            // diagnostic envelope update under its allocator lock.
+            std::lock_guard<std::mutex> lock(pageAllocatorMutex);
+            const uintptr_t end = RegionInfo::GetUnitAddress(request.Memory().index) + size;
+            inactiveZone.store(std::max(inactiveZone.load(std::memory_order_relaxed), end), std::memory_order_release);
+        }
         if (region == nullptr) {
             // zPageAllocator.cpp:1906: preserve the succeeded prefix in the
             // committed cache and return only the failed suffix uncommitted.
