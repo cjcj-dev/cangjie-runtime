@@ -18,7 +18,7 @@ class Collector;
 enum class ReferenceStrength : uint8_t { Strong, Weak, Phantom };
 struct ForwardingProvenance;
 
-// Barrier is the base class to define read/write barriers.
+// One color-predicate barrier implementation for runtime and compiler accesses.
 class Barrier {
 public:
     Barrier(Collector& collector, RememberedSet& rememberedSet)
@@ -91,9 +91,9 @@ protected:
     Collector& theCollector;
 
 protected:
-    // STACK_ROOTS_STAY_PLAIN / zUncoloredRoot: non-heap dst never receives a
-    // coloured word. Each GC pointer is ReadReference (load-good) then StorePlain;
-    // primitive gaps memcpy. Heap dst still memcpy's coloured slots.
+    // Copy to mutator-local uncolored storage: load colored source slots through
+    // the barrier, then store plain values. Native static destinations use the
+    // separate typed static entry and remain colored.
     void CopyStructPlainToNonHeap(MAddress dst, BaseObject* srcObj, MAddress src, size_t size) const;
     void CopyStaticStructPlainToNonHeap(MAddress dst, MAddress src, size_t size, const GCTib gctib) const;
     void CopyStructArrayPlainToNonHeap(MAddress dstField, BaseObject* srcObj, MAddress srcField, size_t srcSize) const;

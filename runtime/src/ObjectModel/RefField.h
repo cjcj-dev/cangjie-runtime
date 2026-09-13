@@ -376,7 +376,6 @@ using NativeSlotVisitor = std::function<void(NativeSlot&)>;
 // OpenJDK ZUncoloredRoot stores an unsafe, uncoloured address in the root and
 // carries colour metadata outside the slot (zUncoloredRoot.hpp:32-54).
 class RootSlot {
-    friend class Barrier;
 public:
     RootSlot() : rootValue(zaddress_unsafe::null) {}
 
@@ -438,10 +437,8 @@ inline bool HealRoot(RootSlot& slot, zaddress good, HealSite site,
     return true;
 }
 
-// ZUncoloredRoot::barrier writes the same load-good address that it hands to
-// its closure (zUncoloredRoot.inline.hpp:35-60). ReadStaticRef runs in mutator
-// context, so preserve a concurrent WriteStaticRef by replacing only the exact
-// word this read observed.
+// Conditional repair for an uncolored-root owner. Colored native mutator
+// accesses use ZgcSelfHeal instead; this helper never accepts colored values.
 inline bool HealRootIfObserved(RootSlot& slot, zaddress_unsafe observed, zaddress good, HealSite site,
                                HealNull allowNull = HealNull::Disallow,
                                std::memory_order succOrder = std::memory_order_relaxed,
