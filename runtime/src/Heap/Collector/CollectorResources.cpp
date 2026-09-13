@@ -96,8 +96,8 @@ void CollectorResources::Init()
     gcStats.Init();
     MutatorAllocRate::initialize();
     if (Uncommitter::Enabled()) {
-        LOG(RTLOG_INFO, "Uncommit: Enabled delay=%zus tick=%ums",
-            static_cast<size_t>(Uncommitter::DelayNs() / SECOND_TO_NANO_SECOND), Uncommitter::TickMs());
+        LOG(RTLOG_INFO, "Uncommit: Enabled delay=%zus",
+            static_cast<size_t>(Uncommitter::DelayNs() / SECOND_TO_NANO_SECOND));
     } else {
         LOG(RTLOG_INFO, "Uncommit: Disabled");
     }

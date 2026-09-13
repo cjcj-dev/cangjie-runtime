@@ -2141,11 +2141,6 @@ public:
 
     static size_t ReleaseUnitsPartial(size_t idx, size_t cnt)
     {
-#if defined(MRT_GC_UNIT_TESTS)
-        if (Uncommitter::CutReleaseBackend()) {
-            return 0;
-        }
-#endif
         void* unitAddress = reinterpret_cast<void*>(RegionInfo::GetUnitAddress(idx));
         size_t size = cnt * RegionInfo::UNIT_SIZE;
         CHECK(ContainsUnitRange(reinterpret_cast<uintptr_t>(unitAddress), size));

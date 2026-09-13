@@ -5,6 +5,8 @@
 // See https://cangjie-lang.cn/pages/LICENSE for license information.
 
 #include <limits>
+#include <future>
+#include <chrono>
 
 #include "Heap/Allocator/CartesianTree.h"
 #define private public
@@ -20,6 +22,22 @@
 #include "Mutator/ThreadLocal.h"
 #include "gc_unittest.hpp"
 
+namespace MapleRuntime {
+struct UncommitterTestAccess {
+    static void ResetCancel()
+    {
+        Uncommitter& worker = Heap::GetHeap().GetAllocator().GetUncommitter();
+        worker.canceled.store(false);
+        worker.stopped.store(false);
+    }
+    static bool Activate(Uncommitter& worker) { return worker.Activate(); }
+    static size_t Budget(Uncommitter& worker) { return worker.toUncommit; }
+    static size_t Uncommit(Uncommitter& worker) { return worker.Uncommit(); }
+    static void Register(Uncommitter& worker, size_t size) { worker.RegisterUncommit(size); }
+    static bool Wait(Uncommitter& worker, uint64_t deadline) { return worker.WaitUntil(deadline); }
+};
+}
+
 using namespace MapleRuntime;
 using namespace MapleRuntime::GcUnit;
 
@@ -33,43 +51,45 @@ GC_TEST(Uncommitter, ParseDelayDefaultAndOff)
     GC_EXPECT_EQ(Uncommitter::ParseDelayNs("300s"), 300ULL * SECOND_TO_NANO_SECOND);
 }
 
-GC_TEST(Uncommitter, TickIsMinDelayOverTenAnd30s)
-{
-    GC_EXPECT_EQ(Uncommitter::ComputeTickNs(0), 0ULL);
-    GC_EXPECT_EQ(Uncommitter::ComputeTickNs(20ULL * SECOND_TO_NANO_SECOND), 2ULL * SECOND_TO_NANO_SECOND);
-    GC_EXPECT_EQ(Uncommitter::ComputeTickNs(300ULL * SECOND_TO_NANO_SECOND), 30ULL * SECOND_TO_NANO_SECOND);
-    GC_EXPECT_EQ(Uncommitter::ComputeTickNs(600ULL * SECOND_TO_NANO_SECOND), 30ULL * SECOND_TO_NANO_SECOND);
-}
-
 GC_TEST(Uncommitter, MinCapacityIsLivePlusYoungReserve)
 {
     GC_EXPECT_EQ(Uncommitter::MinCapacity(10 * MB, 32 * MB), 42 * MB);
     GC_EXPECT_EQ(Uncommitter::MinCapacity(0, 32 * MB), 32 * MB);
 }
 
-GC_TEST(Uncommitter, FlushKeepsMinCapacityAndCapsChunk)
+// Port of gc/z/TestNoUncommit.java: a partition at its capacity floor
+// cannot supply any uncommit budget.
+GC_OTHER_VM_TEST(Uncommitter, TestNoUncommitAtCapacityFloor)
 {
-    size_t used = 10 * MB;
-    size_t dirty = 2 * GB;
-    size_t minCap = Uncommitter::MinCapacity(used, 32 * MB);
-    size_t chunk = 256 * MB;
-    size_t flush = Uncommitter::FlushBytes(used, dirty, minCap, chunk);
-    GC_EXPECT_EQ(flush, chunk);
-    GC_EXPECT_TRUE(used + dirty - flush >= minCap);
+    Uncommitter worker(Heap::GetHeap().GetAllocator());
+    GC_EXPECT_TRUE(UncommitterTestAccess::Activate(worker));
+    GC_EXPECT_EQ(UncommitterTestAccess::Budget(worker), 0U);
+    GC_EXPECT_EQ(UncommitterTestAccess::Uncommit(worker), 0U);
 }
 
-GC_TEST(Uncommitter, FlushZeroWhenAlreadyAtFloor)
+// ZUncommitter::terminate must wake a worker even during a long delay.
+GC_OTHER_VM_TEST(Uncommitter, StopWakesDelayedWorker)
 {
-    size_t used = 10 * MB;
-    size_t dirty = 20 * MB;
-    size_t minCap = Uncommitter::MinCapacity(used, 32 * MB);
-    GC_EXPECT_EQ(Uncommitter::FlushBytes(used, dirty, minCap, 256 * MB), 0ULL);
+    Uncommitter worker(Heap::GetHeap().GetAllocator());
+    std::promise<void> entered;
+    auto result = std::async(std::launch::async, [&] {
+        entered.set_value();
+        return UncommitterTestAccess::Wait(worker, TimeUtil::NanoSeconds() + 3600ULL * SECOND_TO_NANO_SECOND);
+    });
+    entered.get_future().wait();
+    worker.Stop();
+    GC_EXPECT_TRUE(result.wait_for(std::chrono::seconds(5)) == std::future_status::ready);
+    GC_EXPECT_FALSE(result.get());
 }
 
-GC_TEST(Uncommitter, FlushZeroWhenDisabledChunk)
+GC_OTHER_VM_TEST(Uncommitter, StartStopRestartPartitionWorker)
 {
-    GC_EXPECT_EQ(Uncommitter::FlushBytes(10 * MB, 2 * GB, 42 * MB, 0), 0ULL);
-    GC_EXPECT_EQ(Uncommitter::FlushBytes(10 * MB, 0, 42 * MB, 256 * MB), 0ULL);
+    Uncommitter worker(Heap::GetHeap().GetAllocator());
+    worker.Start();
+    worker.Stop();
+    worker.Start();
+    worker.Stop();
+    GC_EXPECT_FALSE(UncommitterTestAccess::Wait(worker, TimeUtil::NanoSeconds()));
 }
 
 GC_TEST(Uncommitter, ChunkLimitAtLeastPageAndAtMost256M)
@@ -99,11 +119,11 @@ GC_TEST(Uncommitter, IdleTreeHonorsVirtualClockAndChunkOwnership)
 
 GC_TEST(Uncommitter, CycleCancelStopsUncommit)
 {
-    Uncommitter::ActivateCycle();
+    UncommitterTestAccess::ResetCancel();
     GC_EXPECT_FALSE(Uncommitter::ShouldStopUncommit());
     Uncommitter::CancelCycle();
     GC_EXPECT_TRUE(Uncommitter::ShouldStopUncommit());
-    Uncommitter::ActivateCycle();
+    UncommitterTestAccess::ResetCancel();
     GC_EXPECT_FALSE(Uncommitter::ShouldStopUncommit());
 }
 
@@ -111,21 +131,8 @@ GC_TEST(Uncommitter, PartialPrefixIsRetainedNotRounded)
 {
     const size_t requested = 4 * 4096;
     const size_t prefix = 4096;
-    GC_EXPECT_EQ(Uncommitter::AccountReleased(requested, prefix), prefix);
     GC_EXPECT_TRUE(Uncommitter::ShouldRetryPartial(requested, prefix));
     GC_EXPECT_FALSE(Uncommitter::ShouldRetryPartial(requested, requested));
-}
-
-GC_TEST(Uncommitter, DrainClockIgnoresDelayThreshold)
-{
-    CartesianTree tree;
-    tree.Init(16);
-    GC_EXPECT_TRUE(tree.MergeInsert(0, 4, false));
-    CartesianTree::Index idx = 0;
-    CartesianTree::Count count = 0;
-    GC_EXPECT_TRUE(tree.TakeIdleUnits(static_cast<uint64_t>(-1), 4, idx, count));
-    GC_EXPECT_EQ(count, 4U);
-    tree.Fini();
 }
 
 GC_TEST(Uncommitter, AllocationTakeBumpsIdleClock)
@@ -173,7 +180,7 @@ static size_t ProbeProductUncommit(bool cancelFirst, bool honorCancel)
     GC_EXPECT_TRUE(frm.releasedUnitTree.MergeInsert(0, 1, false));
     std::fprintf(stderr, "DETAIL probe releasedCount=%u\n", frm.GetReleasedUnitCount());
     std::fflush(stderr);
-    Uncommitter::ActivateCycle();
+    UncommitterTestAccess::ResetCancel();
     if (cancelFirst) {
         Uncommitter::CancelCycle();
     }
@@ -193,37 +200,13 @@ GC_OTHER_VM_TEST(Uncommitter, UncommitIdleUnitsReleasesPhysical)
     GC_EXPECT_TRUE(backendReleased > 0);
 }
 
-static size_t ProbeProductDrainAfterCancel()
+GC_OTHER_VM_TEST(Uncommitter, CancelDelaysActivation)
 {
-    BindUncommitWorkerThread();
-    const size_t n = 8;
-    const size_t meta = RegionManager::GetMetadataSize(n);
-    const size_t heapBytes = n * RegionInfo::UNIT_SIZE;
-    const size_t total = meta + heapBytes;
-    MemMap* map = MemMap::MapMemory(total, total);
-    GC_EXPECT_TRUE(map != nullptr);
-    const uintptr_t heapStart = reinterpret_cast<uintptr_t>(map->GetBaseAddr()) + meta;
-    RegionInfo::Initialize(n, heapStart, map);
-    RegionSpace& space = static_cast<RegionSpace&>(Heap::GetHeap().GetAllocator());
-    FreeRegionManager& frm = space.GetRegionManager().freeRegionManager;
-    frm.Initialize(n);
-    (void)RegionInfo::InitRegion(0, 1, RegionInfo::UnitRole::FREE_UNITS);
-    GC_EXPECT_TRUE(frm.releasedUnitTree.MergeInsert(0, 1, false));
-    Uncommitter::ActivateCycle();
+    UncommitterTestAccess::ResetCancel();
     Uncommitter::CancelCycle();
-    const size_t backendReleased = space.RegionSpace::DrainUncommitIdleMemory();
-    std::fprintf(stderr,
-                 "DETAIL backendReleased=%zu honorCancel=drain cancelFirst=1 unit=%zu\n",
-                 backendReleased, RegionInfo::UNIT_SIZE);
-    std::fflush(stderr);
-    MemMap::DestroyMemMap(map);
-    return backendReleased;
-}
-
-GC_OTHER_VM_TEST(Uncommitter, DrainAfterCancelStillReleasesPhysical)
-{
-    const size_t backendReleased = ProbeProductDrainAfterCancel();
-    GC_EXPECT_TRUE(backendReleased > 0);
+    Uncommitter& worker = Heap::GetHeap().GetAllocator().GetUncommitter();
+    GC_EXPECT_FALSE(UncommitterTestAccess::Activate(worker));
+    GC_EXPECT_TRUE(Uncommitter::ShouldStopUncommit());
 }
 
 GC_OTHER_VM_TEST(Uncommitter, PeriodicUncommitStopsAfterCancel)

@@ -145,8 +145,6 @@ public:
         return;
     }
 #endif
-    size_t UncommitIdleMemory() override;
-    size_t DrainUncommitIdleMemory() override;
     bool ForEachObj(const std::function<void(BaseObject*)>& visitor, bool safe) const override
     {
         if (UNLIKELY(safe)) {
