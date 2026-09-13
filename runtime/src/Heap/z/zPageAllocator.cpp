@@ -49,9 +49,6 @@
 #include "Sync/Sync.h"
 
 namespace MapleRuntime {
-#if defined(MRT_TESTABLE_INTERNALS)
-void RunRemapWindowTestHook(unsigned point, RegionInfo* region, BaseObject* object);
-#endif
 
 
 

@@ -51,6 +51,7 @@ set(GC_UNIT_SOURCES
     test_allocation_stall_queue.cpp
 
     test_string_dedup.cpp
+    test_concurrent_gc_breakpoints.cpp
     test_uncommitter.cpp
     test_relocation_request_queue.cpp
     test_gc_thread_pool.cpp
@@ -209,6 +210,7 @@ add_executable(cj_gc_uncommit_unit
     gc_unit_main.cpp
     gc_unit_stubs.cpp
     test_string_dedup.cpp
+    test_concurrent_gc_breakpoints.cpp
     test_uncommitter.cpp
 )
 target_include_directories(cj_gc_uncommit_unit PRIVATE

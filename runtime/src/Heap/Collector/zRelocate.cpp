@@ -273,21 +273,5 @@ void NoteRemapYoungRootsTestReceipt(RefField<>& field, uintptr_t before, bool he
 
 
 namespace MapleRuntime {
-#if defined(MRT_TESTABLE_INTERNALS)
-// Scheduling only: install a barrier after flip, at wait entry, and before
-// post-copy cleanup. The callback never supplies a forwarding answer.
-using RemapWindowTestHook = void (*)(unsigned, RegionInfo*, BaseObject*);
-static std::atomic<RemapWindowTestHook> g_remapWindowTestHook{ nullptr };
-extern "C" MRT_EXPORT void MRT_SetRemapWindowTestHook(RemapWindowTestHook hook)
-{
-    g_remapWindowTestHook.store(hook, std::memory_order_release);
-}
-void RunRemapWindowTestHook(unsigned point, RegionInfo* region, BaseObject* object)
-{
-    auto hook = g_remapWindowTestHook.load(std::memory_order_acquire);
-    if (hook != nullptr) {
-        hook(point, region, object);
-    }
-}
-#endif
+
 }
