@@ -5,6 +5,7 @@
 // See https://cangjie-lang.cn/pages/LICENSE for license information.
 
 
+#include "Heap/Collector/StringDedup.h"
 #include "Heap/WCollector/WCollector.h"
 #include "Heap/WCollector/RememberedHolderPolicy.h"
 
@@ -492,6 +493,7 @@ void WCollector::Preforward()
         std::atomic<unsigned>& next;
     } roots(families, next);
     workers.Run(roots);
+    StringDedup::Instance().Remap();
     if (HealCoverage::kHealCoverageCensus) {
         HealCoverage::CensusAfterPublication(
             currentRemapColour, FlipSeq().load(std::memory_order_relaxed), "major-preforward");
@@ -1297,6 +1299,7 @@ void WCollector::EvacuateYoungRegions(const std::vector<BaseObject*>& reachableV
             manager.FinishIncompleteFromRegions();
         }
         VLOG(REPORT, "[GCV2][relocate][conc] concurrent_relocate done; STW re-entered");
+        StringDedup::Instance().Remap();
         postEvacPoint("post-forward-pre-reclaim", true);
         {
             MRT_PHASE_TIMER(ZStatPhases::PYoungRefFixBulk);
@@ -1386,6 +1389,7 @@ void WCollector::EvacuateYoungRegions(const std::vector<BaseObject*>& reachableV
     {
         MRT_PHASE_TIMER(ZStatPhases::PYoungConcPromoteWalk);
         manager.RememberFlipPromotedPages(workers);
+
     }
 
     *stw = std::make_unique<ScopedStopTheWorld>("young retire forwarding", true,
@@ -2201,6 +2205,7 @@ void WCollector::UpdateRemsetForFields(BaseObject* from, BaseObject* to)
         return;
     }
     RegionManager::RememberPromotedObject(to);
+
 }
 
 BaseObject* WCollector::RelocateObjectInner(BaseObject* obj, BaseObject* planned, RegionInfo* copyPage)
