@@ -70,7 +70,7 @@
 namespace MapleRuntime {
 void WCollector::PostTrace()
 {
-    MRT_PHASE_TIMER("PostTrace");
+    MRT_PHASE_TIMER(ZStatPhases::PPostTrace);
     TransitionToGCPhase(GC_PHASE_POST_TRACE, true);
     RegionSpace& space = reinterpret_cast<RegionSpace&>(theAllocator);
     space.GetRegionManager().HandleTraceRegions();
@@ -97,7 +97,7 @@ void WCollector::CollectSmallSpace()
     GCStats& stats = GetGCStats();
     RegionSpace& space = reinterpret_cast<RegionSpace&>(theAllocator);
     {
-        MRT_PHASE_TIMER("CollectFromSpaceGarbage");
+        MRT_PHASE_TIMER(ZStatPhases::PCollectFromSpaceGarbage);
         stats.collectedBytes += stats.smallGarbageSize;
         space.CollectFromSpaceGarbage();
     }

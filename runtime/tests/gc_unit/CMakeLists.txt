@@ -100,10 +100,8 @@ target_compile_options(cj_gc_unit PRIVATE -fno-rtti -fexceptions -std=gnu++17)
 # this prevents unrelated fixture TUs from exporting weak inline copies.
 target_compile_options(cj_gc_unit PRIVATE -fvisibility-inlines-hidden)
 target_link_options(cj_gc_unit PRIVATE -Wl,--exclude-libs,ALL)
-# The suite tests the real ZStat implementation regardless of whether the product .so was
-# built with MRT_ZSTAT: it compiles Base/ZStat.cpp itself with the compile-time gate open.
+# The suite compiles the always-present ZStat implementation.
 target_compile_definitions(cj_gc_unit PRIVATE
-    MRT_ZSTAT_COMPILED=1
     MRT_TESTABLE_INTERNALS=1
     MRT_GC_UNIT_TESTS=1)
 # Prefer in-tree runtime library when building as part of the product tree.

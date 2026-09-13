@@ -1030,7 +1030,7 @@ protected:
 
     void CollectLargeGarbage()
     {
-        MRT_PHASE_TIMER("Collect large garbage");
+        MRT_PHASE_TIMER(ZStatPhases::PCollectLargeGarbage);
         RegionSpace& space = reinterpret_cast<RegionSpace&>(theAllocator);
         GCStats& stats = GetGCStats();
         stats.largeSpaceSize = space.LargeObjectBytes();

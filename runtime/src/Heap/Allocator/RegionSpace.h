@@ -104,11 +104,11 @@ public:
     {
         size_t dirtyHeapBefore = regionManager.GetDirtyUnitCount() * RegionInfo::UNIT_SIZE;
         {
-            MRT_PHASE_TIMER("ReclaimGarbageRegions");
+            MRT_PHASE_TIMER(ZStatPhases::PReclaimGarbageRegions);
             regionManager.ReclaimGarbageRegions();
         }
 
-        MRT_PHASE_TIMER("ReleaseGarbageMemory");
+        MRT_PHASE_TIMER(ZStatPhases::PReleaseGarbageMemory);
         if (releaseAll) {
             return regionManager.ReleaseGarbageRegions(0);
         } else {
@@ -135,10 +135,10 @@ public:
             return;
         }
         {
-            MRT_PHASE_TIMER("TryReclaimGarbageRegions");
+            MRT_PHASE_TIMER(ZStatPhases::PTryReclaimGarbageRegions);
             regionManager.ReclaimGarbageRegions();
         }
-        MRT_PHASE_TIMER("TryReleaseGarbageMemory");
+        MRT_PHASE_TIMER(ZStatPhases::PTryReleaseGarbageMemory);
         size_t size = regionManager.GetAllocatedSize();
         size_t targetCachedSize = static_cast<size_t>(size * cachedRatio);
         regionManager.ReleaseGarbageRegions(targetCachedSize);
@@ -160,7 +160,7 @@ public:
     // Return the garbage size of from space.
     size_t RefineFromSpace()
     {
-        MRT_PHASE_TIMER("ExemptFromRegions");
+        MRT_PHASE_TIMER(ZStatPhases::PExemptFromRegions);
         return regionManager.ExemptFromRegions();
     }
 
@@ -177,7 +177,7 @@ public:
     template<Generation G>
     void ForwardFromSpace(GCWorkers& workers)
     {
-        MRT_PHASE_TIMER("ForwardFromRegions");
+        MRT_PHASE_TIMER(ZStatPhases::PForwardFromRegions);
         regionManager.ForwardFromRegions<G>(workers);
     }
 

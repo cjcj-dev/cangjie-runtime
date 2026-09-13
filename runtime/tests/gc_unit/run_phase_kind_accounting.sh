@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# End-to-end phase-kind check through a product runtime built with MRT_ZSTAT=ON.
+# End-to-end phase-kind check through the product phase timer and always-present statistics.
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "$0")/../../.." && pwd)"
@@ -20,10 +20,9 @@ for library in libcangjie-runtime.so libboundscheck.so; do
     exit 2
   fi
 done
-# Versioned dynamic symbols are accepted; the same predicate is exercised against the
-# default-ZStat-off product in the integration evidence as its false-side control.
-if ! nm -D "$RUNTIME_LIB_DIR/libcangjie-runtime.so" | awk '$0 ~ /ZStat/ { found=1 } END { exit !found }'; then
-  echo "PHASE_KIND_ACCOUNTING_FAIL: product runtime was not built with MRT_ZSTAT=ON" >&2
+# Read the full product symbol table, including local statistics definitions.
+if ! nm --defined-only "$RUNTIME_LIB_DIR/libcangjie-runtime.so" | awk '$0 ~ /ZStat/ { found=1 } END { exit !found }'; then
+  echo "PHASE_KIND_ACCOUNTING_FAIL: product runtime has no ZStat implementation" >&2
   exit 2
 fi
 
@@ -52,7 +51,7 @@ ldd "$BIN" >"$OUT/ldd.txt"
 
 set +e
 LD_LIBRARY_PATH="$RUNTIME_LIB_DIR:$SDK_RUNTIME${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}" \
-  MRT_GC_LOG=1 MRT_ZSTAT=1 MRT_LOG_LEVEL=e cjGCInterval=3600s cjHeapSize=1GB \
+  MRT_GC_LOG=1 MRT_LOG_LEVEL=e cjGCInterval=3600s cjHeapSize=1GB \
   /usr/bin/time -f $'wall_s=%e\tmaxrss_kb=%M\ttime_exit=%x' -o "$OUT/time.tsv" \
   taskset -c "$CORES" timeout 60s "$BIN" >"$OUT/stdout" 2>"$RUN_LOG"
 run_rc=$?
