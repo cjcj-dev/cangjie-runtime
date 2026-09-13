@@ -169,7 +169,7 @@ tools/entry_cut_check.py --repo <工作树> --base <基线sha> --head <候选sha
 
 ## ⛔ 五 · 硬边界
 
-- ⛔ **不 push**、⛔ **不动主分支**（⭐ 那是合并 agent 的事）
+- ⭐ **可以、也应该把自己的候选分支 `sym/<n>-<stage>-r<run>` 推到 cjcjdev 并开/复用 PR**（0908 用户令；0913 起返工轮推同一分支）；⛔ **不 push 主分支、不动 main**（⭐ 那是合并 agent 的事）。⭐ 沙箱若拒推，交 DONE 并写明，主控代推。
   ⇒ ⭐⭐⭐ **`ROLE=merge` 的棒就是那个合并 agent**：组合门绿（⛔⛔ ⭐⭐⭐ **0907 起：`NWDET_BASELINE_DEVIATIONS` 差分档的 `GATE_ALL_OK` 【不再独立构成准入证据】，见下方 D-6 注**）之后，push 与 `pin_delivery` 是它任务书里的职责项，⭐ 本条硬边界对它不适用；⭐ 0902 用户令「推送总是批准」：门绿+过审后推送不再逐次问用户
 
 ⛔⛔ ⭐⭐⭐⭐ **D-6（gpt-6 Q65-B，0907 15:1x 起生效）**
